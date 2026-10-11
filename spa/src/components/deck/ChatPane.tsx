@@ -4,7 +4,7 @@
 // pane switches to it (the input first), and hands its footer the same context the deck does.
 import { useCallback, useEffect, useMemo, useRef, type KeyboardEvent } from 'react'
 import { focusSessionInput } from './focus-input'
-import { fromRightPanel } from './FindBar'
+import { fromRightPanel } from './find-target'
 import { isFindShortcut } from '../../lib/find-shortcut'
 import { findKey, requestFind } from '../../lib/conversations/find-memory'
 import { useActivationFocus } from '../../hooks/useActivationFocus'

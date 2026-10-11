@@ -3,7 +3,7 @@
 // moment, or the deck. Takes focus when the pane switches to it, as the placeholder did.
 import { useCallback, useEffect, useRef, type KeyboardEvent } from 'react'
 import { focusSessionInput } from './focus-input'
-import { fromRightPanel } from './FindBar'
+import { fromRightPanel } from './find-target'
 import { isFindShortcut } from '../../lib/find-shortcut'
 import { findKey, requestFind } from '../../lib/conversations/find-memory'
 import { useActivationFocus } from '../../hooks/useActivationFocus'

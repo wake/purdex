@@ -57,11 +57,6 @@ function finder(units: readonly SearchUnit[]) {
   }
 }
 
-/** A ⌘F that came from the right panel (or its overlay) is the panel's, not the stream's: the stream may be inert behind a modal one. */
-export function fromRightPanel(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest('[data-testid="session-right-panel"], [data-testid="split-overlay"]') !== null
-}
-
 const BUTTON = 'p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-hover disabled:opacity-40 disabled:pointer-events-none'
 
 export function FindBar({ memoryKey, owner, container, units, fold, onClose, onJump }: FindBarProps) {

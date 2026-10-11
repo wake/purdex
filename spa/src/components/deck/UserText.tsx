@@ -18,7 +18,7 @@ function SentImageTag({ path }: { path: string }) {
   const [ref, seen] = useInView<HTMLSpanElement>()
   const image = useFsImage(hostId ?? '', path, hostId !== null && seen)
   return (
-    <span ref={ref} data-testid="sent-image-tag" className="mx-0.5 inline-block align-middle">
+    <span ref={ref} data-testid="sent-image-tag" data-search-skip className="mx-0.5 inline-block align-middle">
       <AttachmentThumb name={baseName(path)} image src={image.status === 'ready' ? image.url : null} loading={image.status === 'loading' || (!seen && hostId !== null)} />
     </span>
   )
