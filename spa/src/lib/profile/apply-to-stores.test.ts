@@ -1077,12 +1077,12 @@ describe('applySectionToStores — tabs.<id>', () => {
     seedTabWorld()
     const from = { sessionCode: 'zk16vd', tmuxInstance: 'inst-1', cachedName: 'purdex' }
     const chat: PaneLayout = { type: 'leaf', pane: { id: 'p-x', content: { kind: 'execution', executionId: 'e1', host: M, from, mode: 'chat' } } }
-    const room: PaneLayout = { type: 'leaf', pane: { id: 'p-y', content: { kind: 'execution', executionId: 'e2', host: M, mode: 'deck' } } }
-    const payload = incomingFor([tab('a6', chat), tab('a7', room)])
+    const deck: PaneLayout = { type: 'leaf', pane: { id: 'p-y', content: { kind: 'execution', executionId: 'e2', host: M, mode: 'deck' } } }
+    const payload = incomingFor([tab('a6', chat), tab('a7', deck)])
     const outcome = await applySectionToStores('tabs.wa', payload, ctx)
     const t = useTabStore.getState()
     expect((t.tabs.a6.layout as Extract<PaneLayout, { type: 'leaf' }>).pane.content).toEqual({ kind: 'execution', executionId: 'e1', host: M, from, mode: 'chat' })
-    expect((t.tabs.a7.layout as Extract<PaneLayout, { type: 'leaf' }>).pane.content).toEqual({ kind: 'execution', executionId: 'e2', host: M, mode: 'room' })
+    expect((t.tabs.a7.layout as Extract<PaneLayout, { type: 'leaf' }>).pane.content).toEqual({ kind: 'execution', executionId: 'e2', host: M, mode: 'deck' })
     // …and back: the stores rebuild the very payload that arrived
     expect(outcome).toMatchObject({ ok: true, hash: await hashSection(payload) })
     expect(buildTabsSection(useWorkspaceStore.getState().workspaces[0], t.tabs)).toEqual(payload)
