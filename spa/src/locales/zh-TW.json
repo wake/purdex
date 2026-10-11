@@ -2426,6 +2426,7 @@
   "deck.send.resend_no": "取消",
   "deck.send.dismiss": "略過",
   "deck.send.switch_terminal": "切到終端機",
+  "deck.send.sending": "你 · 傳送中…",
   "deck.send.waiting": "你 · 等 agent 空閒",
   "deck.send.confirm": "真的要送出？5 秒內再按一次送出。",
   "deck.send.accepted": "已送出",

@@ -2426,6 +2426,7 @@
   "deck.send.resend_no": "Cancel",
   "deck.send.dismiss": "Dismiss",
   "deck.send.switch_terminal": "Switch to terminal",
+  "deck.send.sending": "You · sending…",
   "deck.send.waiting": "You · waiting for the agent",
   "deck.send.confirm": "Really send this? Press send again within 5 seconds.",
   "deck.send.accepted": "Sent",

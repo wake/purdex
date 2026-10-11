@@ -7,7 +7,7 @@ import { clearAllDrafts, draftKey, readDraft } from '../../lib/conversations/dra
 import { clearAllAttachments, readAttachments } from '../../lib/conversations/attachment-memory'
 import { clearAllUploads } from '../../lib/conversations/attachment-upload'
 import { clearFsImages } from '../../lib/conversations/fs-image'
-import { clearAllSendQueues } from '../../lib/conversations/send-queue'
+import { clearAllSendQueues, releaseSendQueues } from '../../lib/conversations/send-queue'
 
 const mocks = vi.hoisted(() => ({ fetch: vi.fn(), upload: vi.fn() }))
 vi.mock('../../lib/host-api', () => ({ pinnedHostFetch: mocks.fetch, agentUploadToPath: mocks.upload }))
@@ -219,12 +219,14 @@ describe('undo brings the attachment back', () => {
     expect(sent().textContent).not.toContain('source')
   })
 
-  it('a send takes every attachment with it, the hidden ones too (their pictures are let go)', async () => {
+  it('a send takes every attachment with it, the hidden ones too (their pictures stay alive while the App holds the message, then are let go)', async () => {
     render(ui())
     await attach(png('a.png'), png('b.png'))
     type('[Image #2]')
     enter()
     expect(readAttachments(KEY)).toEqual([])
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled() // the queue holds the box for a recall
+    releaseSendQueues(() => true) // the pane is gone: nothing is coming back
     expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2)
   })
 

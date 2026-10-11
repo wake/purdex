@@ -7,6 +7,7 @@
 // `unknown`, a lost connection and `not_owner` leave the entry `maybe`: it is settled by the transcript (the user item
 // carries the client_msg_id, or the same text within 30 s) and otherwise stays 「可能已送出」 until the person decides.
 import { mayHaveRun, newClientMsgId, type SendOutcome, type SendPort } from './send'
+import { revokePreviewUrl, type Attachment } from './attachment-memory'
 import { normalizePrompt } from './send-plan'
 import type { UserItem } from './types'
 
@@ -22,6 +23,12 @@ const HAND_TIMEOUT_MS = 10_000
 const BACKOFF_BASE_MS = 1000
 const BACKOFF_MAX = 3
 
+/** What the box held when the message was sent: the draft as typed (`[Image #N]` placeholders and all) and its chips (previews still alive). */
+export interface HeldDraft {
+  draft: string
+  chips: readonly Attachment[]
+}
+
 export type EntryState = 'undo' | 'sending' | 'waiting' | 'sent' | 'maybe' | 'failed' | 'superseded'
 
 export interface QueueEntry {
@@ -36,6 +43,8 @@ export interface QueueEntry {
   /** When the latest submit got its answer. */
   settledAt?: number
   outcome?: SendOutcome
+  /** The box as it was when this was queued, kept while the App still holds the message (undo window, waiting for idle): what a recall puts back. */
+  held?: HeldDraft
   /** The id of the message that replaced this one after a manual resend (the old entry is kept for the audit trail). */
   supersededBy?: string
   /** An idle was observed while THIS entry's request was in flight and not yet used: its busy answer is resent at once (once). Gone with the entry. */
@@ -82,24 +91,51 @@ export class SendQueue {
     this.listeners.forEach((l) => l())
   }
 
-  /** Queue a message (already planned / normalized). Returns its client_msg_id. */
-  enqueue(text: string): string {
+  /** Let the held box go (the message left the App's hands, or was dropped): its previews are revoked, nothing of it comes back. */
+  private release(e: QueueEntry): void {
+    if (!e.held) return
+    for (const a of e.held.chips) revokePreviewUrl(a.previewUrl)
+    e.held = undefined
+  }
+
+  /** Queue a message (already planned / normalized). `held` is the box it came from, for a recall. Returns its client_msg_id. */
+  enqueue(text: string, held?: HeldDraft): string {
     const at = this.now()
     const id = newClientMsgId()
-    this.list.push({ id, text, state: 'undo', createdAt: at, undoUntil: at + UNDO_MS, startedAt: at })
+    this.list.push({ id, text, state: 'undo', createdAt: at, undoUntil: at + UNDO_MS, startedAt: at, ...(held ? { held } : {}) })
     this.emit()
     this.pump()
     return id
   }
 
-  /** Take a message back inside its undo window (or cancel one waiting for idle): returns its text for the box. */
-  undo(id: string): string | undefined {
-    const e = this.list.find((x) => x.id === id)
-    if (!e || (e.state !== 'undo' && e.state !== 'waiting')) return undefined
-    this.list = this.list.filter((x) => x !== e)
+  /**
+   * Take messages back from the App: only entries still in its hands (`undo`, `waiting`) can go; one the driver has handed out
+   * (`sending` and later) cannot. The check and the removal are one synchronous step, so a message is either taken here or handed
+   * out by `pump`, never both. Returns what the box held, in sending order.
+   */
+  private take(match: (e: QueueEntry) => boolean): Array<{ text: string; held?: HeldDraft }> {
+    const taken = this.list.filter((e) => (e.state === 'undo' || e.state === 'waiting') && match(e))
+    if (taken.length === 0) return []
+    this.list = this.list.filter((e) => !taken.includes(e))
     this.emit()
     this.pump()
-    return e.text
+    return taken.map((e) => ({ text: e.text, ...(e.held ? { held: e.held } : {}) })) // the previews now belong to the caller
+  }
+
+  /** Take one message back (the Undo button, inside its undo window or while it waits for idle): its box, or undefined when it has left. */
+  takeBack(id: string): { text: string; held?: HeldDraft } | undefined { return this.take((e) => e.id === id)[0] }
+
+  /** Take every message the App still holds back (the Up key in an empty box), oldest first. */
+  takeAllHeld(): Array<{ text: string; held?: HeldDraft }> { return this.take(() => true) }
+
+  /** How many messages the App still holds (undo window or waiting for idle). */
+  heldCount(): number { return this.list.filter((e) => e.state === 'undo' || e.state === 'waiting').length }
+
+  /** Take a message back inside its undo window (or cancel one waiting for idle): returns its text for the box. */
+  undo(id: string): string | undefined {
+    const back = this.takeBack(id)
+    if (back?.held) for (const a of back.held.chips) revokePreviewUrl(a.previewUrl) // a caller that only wants the text lets the previews go
+    return back?.text
   }
 
   /**
@@ -191,6 +227,7 @@ export class SendQueue {
    * `onDone` (at once when nothing is in flight).
    */
   retire(onDone: () => void): void {
+    for (const e of this.list) if (e.state !== 'sending') this.release(e)
     this.list = this.list.filter((e) => e.state === 'sending')
     this.clearBackoff()
     if (this.timer) clearTimeout(this.timer)
@@ -208,6 +245,7 @@ export class SendQueue {
   dispose(): void {
     this.disposed = true
     this.clearBackoff()
+    for (const e of this.list) this.release(e)
     this.list = []
     this.view = []
     if (this.timer) clearTimeout(this.timer)
@@ -234,6 +272,7 @@ export class SendQueue {
     const left = head.undoUntil - this.now()
     if (left > 0) { this.timer = setTimeout(() => this.pump(), left); return }
     head.state = 'sending'
+    this.release(head) // handed out: it can no longer be taken back, so its box is not coming back either
     head.startedAt = this.now()
     this.emit()
     void this.port.submit(head.text, head.id).then((o) => this.settle(head, o))
@@ -267,7 +306,7 @@ export class SendQueue {
     else {
       e.state = 'failed'
       if (o.kind === 'no_mod') {
-        for (const x of this.list) if (x.state === 'undo' || x.state === 'waiting') { x.state = 'failed'; x.outcome = o }
+        for (const x of this.list) if (x.state === 'undo' || x.state === 'waiting') { x.state = 'failed'; x.outcome = o; this.release(x) }
       }
     }
     this.emit()
