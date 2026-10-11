@@ -119,6 +119,7 @@ const fresh = () => ({
   envIdleMinutes: 0, // PDX_RELAY_IDLE_MINUTES, honoured only when hello advertised the feature
   envIdleThreshold: 0, // PDX_RELAY_IDLE_THRESHOLD
   idleTimer: undefined, // { gen, handle }: the armed idle timer; a fire acts only while it is still s.idleTimer
+  idleWanted: false, // a main turn ended before hello answered: the answer arms the timer if the session is still idle
   idleAsk: false, // an idle ask is out (beginning / awaiting): it holds no prompt, a prompt withdraws it (D6)
   idleWithdraw: false, // a prompt arrived while the idle begin was out: the op it opens is withdrawn at once
   askEpoch: 0, // bumped by everything that makes an ask in the air stale (a /clear, a session reset, a compaction); never reset, like gen
@@ -237,6 +238,7 @@ async function hello($, seq) {
       s.idleThreshold = 0
       disarmIdle()
     }
+    if (s.idleWanted && s.state === 'idle') armIdle($) // the turn that ended before this answer (a new turn.start cleared the wish)
     if (h.active_relay && typeof h.active_relay === 'object') recoverLater($, h.active_relay, sid)
   } finally {
     if (seq === s.helloSeq) s.helloBusy = false
@@ -1080,6 +1082,7 @@ function compactedAfter($, e, result, trigger = e.trigger) {
 function disarmIdle() {
   const t = s.idleTimer
   s.idleTimer = undefined
+  s.idleWanted = false
   if (t && t.handle && typeof t.handle.cancel === 'function') t.handle.cancel()
 }
 
@@ -1406,7 +1409,10 @@ export function register(on) {
       else if (s.pending && s.seedTurnId !== undefined && e.turnId === s.seedTurnId) await onSeedTurnDone($)
       else if (resumeRecovery($)) { /* the relay a reload left is finished first: no new ask this turn */ }
       else if (s.state === 'idle') await maybeBegin($)
-      if (s.state === 'idle') armIdle($) // idle relay: the stretch of idleness starts at the end of a main turn
+      if (s.state === 'idle') { // idle relay: the stretch of idleness starts at the end of a main turn
+        armIdle($)
+        if (!s.helloOK) s.idleWanted = true // hello has not answered yet: its answer arms the timer
+      }
     } catch (err) {
       log($, 'turn.complete failed: ' + String(err))
     }

@@ -944,6 +944,7 @@ function compactEnded($, e, ok) {
 
 async function onSessionStart($, e, next) {
   const r = await next(e)
+  ev.background = null // a session's own: forgotten even when the reporter is off (idle relay D8 reads it)
   await startReporter($, e)
   return r
 }

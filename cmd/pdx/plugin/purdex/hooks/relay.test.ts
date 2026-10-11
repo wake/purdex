@@ -3523,3 +3523,46 @@ test('IR-2: a member’s idle compaction is reported idle too', async ($, on) =>
   await f.clock.settle()
   expect(compactedCalls(f)).toEqual(['relay compacted --session sid-old --trigger idle'])
 })
+
+// Codex R1: a hello that answers after the first turn ended still arms the timer (the session is already idle).
+// Mutation gate: no arm at hello → red.
+test('IR-2: a hello that answers after the first turn ended arms the idle timer then', async ($, on) => {
+  const g = gated()
+  const { f } = idleWorld(on)
+  const base = f.pdx
+  f.pdx = async (argv) => { if (argv[1] === 'hello') await g.p; return base(argv) }
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await f.clock.settle() // the hello is out
+  await turnAndSettle($, f, 't1') // the turn ends before hello answered: nothing to arm with yet
+  g.release()
+  await f.clock.settle()
+  await f.clock.advance(40 * MIN)
+  expect(idleBegins(f)).toEqual([IDLE_BEGIN])
+})
+
+test('IR-2: a hello that answers after a new turn started arms nothing', async ($, on) => {
+  const g = gated()
+  const { f } = idleWorld(on)
+  const base = f.pdx
+  f.pdx = async (argv) => { if (argv[1] === 'hello') await g.p; return base(argv) }
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await f.clock.settle()
+  await turnAndSettle($, f, 't1')
+  await $.turn.start({ text: 'x', turnId: 't2' })
+  g.release()
+  await f.clock.settle()
+  await f.clock.advance(60 * MIN)
+  expect(count(f, 'begin')).toBe(0)
+})
+
+// Codex R1: the background snapshot is a session's own: a new session.start forgets it even with the reporter off.
+test('IR-2: a new session.start forgets the previous session’s running background task', async ($, on) => {
+  const w = idleWorld(on)
+  on('classic.Stop', async () => ({}))
+  await start($, w.f)
+  await $.classic.Stop(STOP([{ id: 'b1', type: 'shell', status: 'running' }]))
+  await start($, w.f) // a second session in the same load
+  await turnAndSettle($, w.f, 't1')
+  await w.f.clock.advance(40 * MIN)
+  expect(count(w.f, 'begin')).toBe(1)
+})
