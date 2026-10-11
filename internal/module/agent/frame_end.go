@@ -16,8 +16,8 @@ var (
 	projectPaneFn = func(m *Module, paneID string) (*SessionProjection, error) { return m.projectPane(paneID) }
 	// claimDeleteFn is the claim itself, a seam so a test can make a caller
 	// lose it without staging the race.
-	claimDeleteFn = func(m *Module, frameID, sessionID string) (bool, error) {
-		return m.frames.ClaimDelete(frameID, sessionID)
+	claimDeleteFn = func(m *Module, frameID, sessionID string, end *store.RunEnd) (bool, error) {
+		return m.frames.ClaimEnd(frameID, sessionID, end)
 	}
 )
 
@@ -45,8 +45,12 @@ func logAfterClaim(where string, frameID string, err error) {
 //
 // exit is built by the caller from its pre-delete snapshot (nil for a child
 // frame) and is returned only on a successful claim.
-func (m *Module) claimFrameEnd(frame store.Frame, requireSessionID string, exit *Exit) (*Exit, bool, error) {
-	claimed, err := claimDeleteFn(m, frame.FrameID, requireSessionID)
+//
+// end, when non-nil, asks the claim to record the session's last agent run IN THE SAME TRANSACTION as the delete
+// (NA-0a): the SessionEnd passes it, the sweep passes nil. Only the caller that wins the delete writes, and the
+// store records a root frame only, with the frame's own tmux generation.
+func (m *Module) claimFrameEnd(frame store.Frame, requireSessionID string, exit *Exit, end *store.RunEnd) (*Exit, bool, error) {
+	claimed, err := claimDeleteFn(m, frame.FrameID, requireSessionID, end)
 	if err != nil || !claimed {
 		return nil, false, err
 	}

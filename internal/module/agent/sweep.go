@@ -477,7 +477,7 @@ func (m *Module) clearFrame(frame store.Frame, reason string) error {
 		return nil
 	}
 	exit := exitForFrame(frame, m.sessionTmuxInstance(), ExitReasonProcessDead, nowFn().UnixMilli())
-	exit, claimed, err := m.claimFrameEnd(frame, "", exit)
+	exit, claimed, err := m.claimFrameEnd(frame, "", exit, nil)
 	if err != nil {
 		return err
 	}

@@ -271,7 +271,10 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			if exit != nil {
 				exit.SessionID = payloadSID
 			}
-			exit, claimed, cerr := m.claimFrameEnd(*frame, payloadSID, exit)
+			// The session's last run (NA-0a) is recorded by the claim itself, from the frame's own facts; only the code
+			// is the hook's. An unresolved code records nothing.
+			code, _ := m.resolveSessionCodeFromHook(req)
+			exit, claimed, cerr := m.claimFrameEnd(*frame, payloadSID, exit, &store.RunEnd{Code: code, EndedAt: broadcastTs / int64(time.Millisecond)})
 			if cerr != nil {
 				return nil, FrameTraceMeta{}, cerr
 			}
@@ -1171,6 +1174,11 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		verdict == VerdictRoot && stored.ParentFrameID == "" {
 		p := buildProvenance(req, result, m.sessionTmuxInstance(), stored.FrameID)
 		prov = &p
+		// The frame keeps the generation it was created or taken over under: the SessionEnd that ends it writes THAT
+		// into the session's last run, whatever tmux's generation is when the SessionEnd arrives (NA-0a).
+		if serr := m.frames.SetTmuxInstance(stored.FrameID, p.TmuxInstance); serr != nil && !errors.Is(serr, sql.ErrNoRows) {
+			log.Printf("[agent] stamp tmux_instance on frame %s: %v", stored.FrameID, serr)
+		}
 	}
 	return projection, FrameTraceMeta{
 		FrameID:          stored.FrameID,
