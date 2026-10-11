@@ -163,7 +163,7 @@ export async function fetchExecutionTasks(
   return { items, cursor }
 }
 
-/** `signal` aborts the request (a stint's enrichment walk whose pane is gone). */
+/** `signal` aborts the request. */
 export function fetchExecutionEvents(
   hostId: string,
   executionId: string,
