@@ -1,5 +1,5 @@
 // spa/src/stores/useAgentStore.test.ts
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useAgentStore, sanitizeOscTitle } from './useAgentStore'
 import { useTabStore } from './useTabStore'
 import { createTab } from '../types/tab'
@@ -533,6 +533,23 @@ describe('useAgentStore.setOscTitle', () => {
 })
 
 describe('useAgentStore.ccStatus', () => {
+  describe('receivedAt range', () => {
+    const NOW = 1_800_000_000_000
+    const at = () => useAgentStore.getState().ccStatus[`${H}:dev`]?.receivedAt
+    const put = (v: number) => { useAgentStore.getState().setCcStatus(H, 'dev', {}, v) }
+    beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(NOW) })
+    afterEach(() => { vi.useRealTimers() })
+
+    it('keeps a normal past millisecond value', () => { put(NOW - 3_600_000); expect(at()).toBe(NOW - 3_600_000) })
+    it('clamps a small future skew to now', () => { put(NOW + 5_000); expect(at()).toBe(NOW) })
+    it('distrusts a far-future value', () => { put(NOW + 86_400_000); expect(at()).toBe(NOW) })
+    it('treats a seconds-looking value as untrusted', () => { put(1_800_000_000); expect(at()).toBe(NOW) })
+    it('rejects NaN and Infinity', () => {
+      put(NaN); expect(at()).toBe(NOW)
+      put(Infinity); expect(at()).toBe(NOW)
+    })
+  })
+
   it('setCcStatus stores snapshot under composite key', () => {
     const raw = { model: { display_name: 'Sonnet' } }
     useAgentStore.getState().setCcStatus(H, 'dev', raw)

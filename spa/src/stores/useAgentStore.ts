@@ -427,7 +427,10 @@ export const useAgentStore = create<AgentState>()(
     setCcStatus: (hostId, sessionCode, raw, receivedAt) => {
       const key = compositeKey(hostId, sessionCode)
       // The daemon's own receive time when it sent one (a snapshot replayed after a restart is old), else now.
-      const at = typeof receivedAt === 'number' && Number.isFinite(receivedAt) && receivedAt > 0 ? receivedAt : Date.now()
+      // Only a finite millisecond value (>= 1e12; a smaller one looks like seconds) counts; one from the future (a small skew, or
+      // an untrustworthy far-future value) is pinned to now so it can never make the line look fresher than it is.
+      const now = Date.now()
+      const at = typeof receivedAt === 'number' && Number.isFinite(receivedAt) && receivedAt >= 1e12 ? Math.min(receivedAt, now) : now
       const entry: CcStatusEntry = { receivedAt: at, raw }
       set((s) => ({ ccStatus: { ...s.ccStatus, [key]: entry } }))
     },
