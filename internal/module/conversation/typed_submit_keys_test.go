@@ -14,6 +14,7 @@ func keysEnv(t *testing.T) *tenv {
 	te := newTEnv(t)
 	te.owners.drop()
 	te.mod.tune.keysAfter = time.Millisecond
+	te.mod.tune.keysSettle = time.Millisecond
 	time.Sleep(5 * time.Millisecond)
 	return te
 }
@@ -41,20 +42,76 @@ func TestKeysSubmit_NeedsAnOwnerlessWindowAndAnIdleLight(t *testing.T) {
 	errOf(t, te.submit("k4", "/help"), 400, "needs_terminal")
 }
 
-// The text and the Enter go out in ONE guarded send-keys call, never two calls apart.
-func TestKeysSubmit_TextAndEnterAreOneGuardedCall(t *testing.T) {
+// Measured (K-1c): the text and the Enter must be two writes with a settle between them, or Claude Code reads the Enter as
+// part of a paste and swallows it. Multi-line text keeps its LF bytes (they stay newlines in the composer).
+func TestKeysSubmit_TextThenSettleThenEnterAsTwoGuardedCalls(t *testing.T) {
 	te := keysEnv(t)
+	te.mod.tune.keysSettle = 40 * time.Millisecond
+	var at []time.Time
+	te.keys.onCall = func(keyCall) { at = append(at, time.Now()) }
 	answer(t, te.submit("k5", "line1\nline2 @src"), 200, "handed", "keys", "")
-	if te.keys.n() != 1 {
-		t.Fatalf("calls = %d, want one", te.keys.n())
+	if te.keys.n() != 2 {
+		t.Fatalf("calls = %d, want text then Enter", te.keys.n())
 	}
-	c := te.keys.calls[0]
-	if len(c.keys) != 2 || c.keys[0] != "line1\nline2 @src " || c.keys[1] != tmux.KeyEnter || c.pane != "%5" {
-		t.Fatalf("call = %+v", c)
+	c0, c1 := te.keys.calls[0], te.keys.calls[1]
+	if len(c0.keys) != 1 || c0.keys[0] != "line1\nline2 @src " || c0.pane != "%5" {
+		t.Fatalf("text call = %+v", c0)
+	}
+	if len(c1.keys) != 1 || c1.keys[0] != tmux.KeyEnter || c1.pane != "%5" || c1.sid != c0.sid || c1.inst != c0.inst {
+		t.Fatalf("enter call = %+v", c1)
+	}
+	if gap := at[1].Sub(at[0]); gap < 40*time.Millisecond {
+		t.Fatalf("settle between the text and the Enter = %v, want >= 40ms", gap)
 	}
 	answer(t, te.submit("k5", "line1\nline2 @src"), 200, "handed", "keys", "") // the same id never types twice
-	if te.keys.n() != 1 {
+	if te.keys.n() != 2 {
 		t.Fatalf("a replay typed again: %d calls", te.keys.n())
+	}
+}
+
+// The default settle is the measured one plus margin.
+func TestKeysTuning_DefaultSettle(t *testing.T) {
+	if got := (&Module{}).tuning().keysSettle; got != 150*time.Millisecond {
+		t.Fatalf("default keysSettle = %v", got)
+	}
+}
+
+// Measured: Claude Code reads a trailing backslash (odd or even run) plus Enter as a newline, so keys mode pads every one.
+func TestKeysSubmit_AnyTrailingBackslashGetsASpace(t *testing.T) {
+	te := keysEnv(t)
+	answer(t, te.submit("kb1", `two \\`), 200, "handed", "keys", "")
+	if te.keys.calls[0].keys[0] != `two \\ ` {
+		t.Fatalf("keys got %q", te.keys.calls[0].keys[0])
+	}
+}
+
+// The light is read once more after the text and before the Enter: a dialog that opened meanwhile must not get the Enter.
+// The text is in the terminal then, so the answer is text_left_in_terminal and the id stays recorded as unknown.
+func TestKeysSubmit_LightNotIdleAfterTheTextSendsNoEnter(t *testing.T) {
+	for _, light := range []string{"waiting", "running", "!"} {
+		te := keysEnv(t)
+		te.light.seq = []string{"idle", "idle", light} // after the locks, pre-type, pre-Enter
+		answer(t, te.submit("kl1", "hello"), 409, "refused", "", "text_left_in_terminal")
+		if te.keys.n() != 1 || te.keys.calls[0].keys[0] != "hello" {
+			t.Fatalf("%s: calls = %+v", light, te.keys.calls)
+		}
+		answer(t, te.submit("kl1", "hello"), 200, "unknown", "keys", "")
+		if te.keys.n() != 1 {
+			t.Fatalf("%s: a replay typed again", light)
+		}
+	}
+}
+
+// A guard refusal on the Enter step means the text is in the terminal unsent: not a clean refusal.
+func TestKeysSubmit_EnterGuardRefusedLeavesTheTextInTheTerminal(t *testing.T) {
+	for _, e := range []error{tmux.ErrPaneBusy, tmux.ErrGenerationMismatch, tmux.ErrPaneMismatch, context.DeadlineExceeded} {
+		te := keysEnv(t)
+		te.keys.errs = []error{nil, e}
+		answer(t, te.submit("ke1", "hello"), 409, "refused", "", "text_left_in_terminal")
+		answer(t, te.submit("ke1", "hello"), 200, "unknown", "keys", "")
+		if te.keys.n() != 2 {
+			t.Fatalf("%v: calls = %d", e, te.keys.n())
+		}
 	}
 }
 
@@ -70,13 +127,13 @@ func TestKeysSubmit_LightIsReadAgainRightBeforeSending(t *testing.T) {
 	answer(t, te.submit("k6", "x"), 200, "handed", "keys", "") // nothing went out, so the id is free again
 }
 
-// A guard refusal of the single call means nothing was typed: the id is free for a retry.
+// A guard refusal of the text call means nothing was typed: the id is free for a retry.
 func TestKeysSubmit_GuardRefusalTypedNothing(t *testing.T) {
 	te := keysEnv(t)
 	te.keys.errs = []error{tmux.ErrPaneBusy}
 	answer(t, te.submit("k7", "x"), 409, "refused", "", "pane_busy")
 	answer(t, te.submit("k7", "x"), 200, "handed", "keys", "")
-	if te.keys.n() != 2 {
+	if te.keys.n() != 3 { // the refused text, then the retry's text and Enter
 		t.Fatalf("calls = %d", te.keys.n())
 	}
 }

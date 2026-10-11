@@ -34,7 +34,10 @@ spec §2 before any code. **If (a) blocks, stop and report — the fill route do
 - M2/M3 Reuse the existing `sanitizePrompt` (one copy); `@token` padding only in keys mode; compare fill's returned text with the
   same normalised string; leading `/` and `!` stay refused in both modes (Enter would still run them as a command / bash).
 - M4 Keys fallback only when no mod owner has been seen for ≥ 10 s and the light is `idle` or `running`; answer `mode:"keys"`; the
-  deck labels such sends 「未經 mod 確認」.
+  deck labels such sends 「未經 mod 確認」. **K-1c (measured 2026-10-11, Claude Code 2.1.296):** one `send-keys` with text+Enter
+  swallows the Enter for ≥ 90 chars or multi-line, so it is text, 150 ms settle (`keysSettle`), light re-read (not idle → no Enter,
+  `text_left_in_terminal`), then a separate guarded Enter (any refusal there → `text_left_in_terminal`); LF stays LF; any trailing
+  `\` gets a space. Spec §5 has the table.
 - I5/I6 Recall: until step 0 (f) is known, a queue holding non-user items → `409 recall_unsupported`; the input must be empty
   first; the join over `promptq.MaxTextBytes` or an item at the feed's 2000-rune cap → `409 recall_too_long` (nothing pressed);
   Up under the same guard and pane target; reads on a detached deadline (poll every `recallSettle` up to a 1 s budget). Only a read

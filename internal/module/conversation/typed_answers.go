@@ -93,6 +93,15 @@ func padTrailingBackslash(s string) string {
 	return s
 }
 
+// padAnyTrailingBackslash appends one space after any trailing backslash. Keys mode only: measured on Claude Code 2.1.296, a
+// run of two or three backslashes plus Enter does not submit either (padTrailingBackslash pads odd runs only).
+func padAnyTrailingBackslash(s string) string {
+	if strings.HasSuffix(s, `\`) {
+		return s + " "
+	}
+	return s
+}
+
 // padTrailingMention appends a space after a final "@token" (the completion menu would take the Enter).
 func padTrailingMention(s string) string {
 	if i := strings.LastIndexAny(s, " \n"); strings.HasPrefix(s[i+1:], "@") {

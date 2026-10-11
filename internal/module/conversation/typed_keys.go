@@ -2,15 +2,25 @@ package conversation
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/wake/purdex/internal/tmux"
 )
 
 // keysSubmit is the no-mod fallback (M4): blind typing into the owner pane, marked mode "keys". Allowed only when the light
-// is `idle` (not running, not waiting) and no owner was seen for keysAfter (10 s). The light is read again immediately before
-// the send, and the text and the Enter go out in ONE guarded send-keys call (one if-shell), so a refusal of the guard means
-// nothing was typed and any other error means the text may have landed (409 text_left_in_terminal, the id stays unknown).
-// Typed literally: LF stays a newline, a trailing @token gets a space so the completion menu does not take the Enter.
+// is `idle` (not running, not waiting) and no owner was seen for keysAfter (10 s).
+//
+// Typing scheme, measured on Claude Code 2.1.296 (2026-10-11, isolated tmux server, spec docs/specs/2026-10-11-keystroke-submit-spec.md
+// §2): text and Enter in ONE send-keys call are read as a paste and the Enter is swallowed (a single line of 90 chars or more,
+// or multi-line text), so it is three steps: (1) the text alone, LF bytes kept (they stay newlines in the composer), (2) a
+// settle (typedTuning.keysSettle, 150 ms; 0 ms already worked, the rest is margin) and the light read once more, (3) the Enter
+// as its own guarded send. The light is read before the text and again before the Enter: a dialog that opened in between must
+// not get the Enter. A trailing @token and any trailing backslash get a space (backslash plus Enter is a newline, and a
+// completion menu would take the Enter).
+//
+// Failure classes: a guard refusal of the TEXT call typed nothing (clean refusal, the id is forgotten). Anything that goes
+// wrong after the text may have left it in the terminal unsent (409 text_left_in_terminal, the id stays unknown and a repeat
+// never types again): a tmux error on the text, a light that is no longer idle, and any refusal or error on the Enter.
 //
 // Residual risks of keys mode (spec §5), accepted because the fallback only runs when the mod is absent:
 //   - there is no dialog detection (only the light): a permission or trust dialog the light does not show would take the keys;
@@ -47,14 +57,24 @@ func (m *Module) keysSubmit(w http.ResponseWriter, c *typedCtx, light string, tu
 		refuse(w, http.StatusConflict, "no_owner_yet")
 		return
 	}
-	err := c.td.keys.SendKeysIfInstanceAndMode(c.tmuxID, c.expected, c.owner.TmuxPaneID, padTrailingMention(c.text), tmux.KeyEnter)
-	if err != nil {
+	text := padAnyTrailingBackslash(padTrailingMention(c.text))
+	if err := c.td.keys.SendKeysIfInstanceAndMode(c.tmuxID, c.expected, c.owner.TmuxPaneID, text); err != nil {
 		if reason, ok := guardReason(err); ok {
-			m.keysSeen.forget(c.id) // the guard declined the whole call: nothing was typed, a retry is safe
+			m.keysSeen.forget(c.id) // the guard declined the text call: nothing was typed, a retry is safe
 			refuse(w, http.StatusConflict, reason)
 			return
 		}
 		// tmux could not be completed: the text may be in the terminal. The id stays recorded as unknown.
+		refuse(w, http.StatusConflict, "text_left_in_terminal")
+		return
+	}
+	time.Sleep(tune.keysSettle)
+	// From here the text is in the terminal: anything but a clean Enter leaves it there unsent (the id stays unknown).
+	if st, ok := m.freshLight(c.owner); !ok || st != "idle" || q.HasOwner(c.owner.SessionID) {
+		refuse(w, http.StatusConflict, "text_left_in_terminal")
+		return
+	}
+	if err := c.td.keys.SendKeysIfInstanceAndMode(c.tmuxID, c.expected, c.owner.TmuxPaneID, tmux.KeyEnter); err != nil {
 		refuse(w, http.StatusConflict, "text_left_in_terminal")
 		return
 	}

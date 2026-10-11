@@ -44,7 +44,8 @@ Claude Code's state); the residual risks of §5 are accepted by the user.
    typing in the terminal); `$.prompt.fill({text, mode:'replace'})` must return `isFilled` with `text` equal to ours (`refusal:
    dialog` → `409 dialog_open`); a second zero-length check (`read` still equals ours) immediately before Enter; then Enter through
    tmux (`send-keys Enter` under the generation `if-shell` guard). **Without a mod:** fall back to today's iOS literal typing (status
-   not waiting, generation guard), marked `mode: "keys"` in the answer.
+   not waiting, generation guard), marked `mode: "keys"` in the answer: the text alone (LF bytes kept), a 150 ms settle, the light read
+   once more (not `idle` → no Enter, `text_left_in_terminal`), then the Enter as its own guarded send (see §5, measured K-1c).
 6. Answer `{outcome: handed | refused(reason) | unknown, mode: fill|keys}`. After Enter the message belongs to Claude Code: a lost
    answer is `unknown` and is **never** retyped automatically.
 
@@ -88,7 +89,8 @@ Claude Code's state); the residual risks of §5 are accepted by the user.
 - A cleanup (`clear_if` / `ClearFilled`) clears the composer when it still equals our text: a person who typed exactly the
   same text in that moment would lose it (accepted, negligible).
 - Sessions without the mod (keys mode): blind typing, allowed only when the light is `idle` and no mod owner was seen for 10 s;
-  the light is read again right before the send and the text and Enter go out in ONE guarded `send-keys` call. Residual risks:
+  the light is read again right before the text and once more before the Enter, and the text and the Enter are two guarded `send-keys`
+  calls 150 ms apart (K-1c, below). Residual risks:
   there is no dialog detection (only the light), a draft already in the composer would be prefixed to our text, and with Claude
   Code's vim mode the text would be read as normal-mode commands.
 - The Enter goes out even if the client disconnected after the fill was accepted: sending beats leaving our text behind in the
@@ -98,9 +100,18 @@ Claude Code's state); the residual risks of §5 are accepted by the user.
   (`409 pane_mismatch`) when that one pane is not the resolved owner's.
 - Trailing backslashes: Claude Code reads `\` + Enter as a newline, so text ending in an odd run of `\` gets one space appended.
 - Every non-2xx answer is `{outcome?, reason, error}` (`reason` = `error` = the code), so the apps parse one shape.
-- Keys mode sends text and Enter in one guarded `send-keys` (no half-typed text on a refusal). If Claude Code treats that one
-  write as a paste, the trailing Enter could become a newline: **verify on a real session (short and long text)** before K-2/K-3;
-  if it fails, split into text then Enter (losing the all-or-nothing property) and document it.
+- Keys mode: **measured 2026-10-11 on Claude Code 2.1.296 (K-1c, isolated tmux server)**. Text and Enter in ONE `send-keys` call
+  (as K-1a-2 first shipped it) is read as a paste and the Enter is swallowed: single lines of 10 and 50 chars submit, 90, 200 and
+  600 chars never do (3/3 each), and a three-line text is swallowed even with short lines. Written as two calls the Enter submits at
+  every settle from 0 ms (just the process-spawn gap) to 400 ms, for 10 to 2000 chars, 3/3 each. So keys mode is: text alone, settle
+  150 ms (`typedTuning.keysSettle`; iOS uses the same 150 ms), light read again, Enter as its own guarded send. Consequences: the
+  all-or-nothing property is gone. A guard refusal of the TEXT call typed nothing (clean refusal); anything after it (light no longer
+  idle, a refusal or error on the Enter) leaves the text unsent in the terminal: `409 text_left_in_terminal`, id unknown, never retyped.
+  Multi-line: LF bytes (0x0a, `send-keys -H 0a`, same byte as Ctrl-J) stay newlines in the composer and one Enter submits; `-l`, `C-j`,
+  backslash+Enter, Alt-Enter and bracketed paste do too, `S-Enter` does not (tmux sends a plain CR, early submit). The reported
+  "lines arrive joined" was not reproduced. Trailing backslashes: runs of 1, 2 and 3 all keep the Enter from submitting until a space
+  follows, so keys mode pads any trailing `\` (the mod/fill path still pads odd runs only; not measured there). Trailing `@token`
+  submitted fine with and without the space; the padding stays as a precaution.
 - A replayed `client_msg_id` is answered from the ledger before the session is checked; ids are client UUIDs, so another session
   reusing one is not expected (not bound to the session code). (`/submit` only; the recall ledger is session-bound.)
 - Recall: a mismatch (a draft typed during the recall, or history recalled because the turn took the queue) leaves the text in

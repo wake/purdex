@@ -33,7 +33,7 @@ func TestTypedSubmit_ReplayAnswersEvenWhenTheSessionVanished(t *testing.T) {
 	answer(t, te2.submit("rp2", "x"), 200, "handed", "keys", "")
 	te2.mod.td.owners = tResolver{}
 	answer(t, te2.post("/api/sessions/gone/submit", body("rp2", "x", tInst)), 200, "handed", "keys", "")
-	if te2.keys.n() != 1 {
+	if te2.keys.n() != 2 { // the text and the Enter, once
 		t.Fatal("a keys replay typed")
 	}
 }
