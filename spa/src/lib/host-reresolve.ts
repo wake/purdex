@@ -257,8 +257,7 @@ function passBody(only: string | null, parent: OperationLockGrant | null): HostR
   // (spec §4.3, plan §0.12) — computed from the hosts alone, as its own step: never inside `planRewrite`, the
   // explicit-map rewrite a deletion (local → wire) reuses and that must move no look (decision 9). It changes the
   // `settings` payload: one push (plan §0.13).
-  const lookRekey = rekeyWireKeyedStores(hosts)
-  if (lookRekey !== null) writes.push({ key: 'host looks and quick-reply prefs', ...lookRekey })
+  writes.push(...rekeyWireKeyedStores(hosts))
   // The shown-hosts ids are WIRE ids too (H2d-1): same direction, same rule, its own step — never in `planRewrite`.
   const shownRekey = rekeyShownHosts(hosts)
   if (shownRekey !== null) writes.push({ key: 'shown hosts', ...shownRekey })

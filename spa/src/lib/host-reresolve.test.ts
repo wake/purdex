@@ -638,6 +638,21 @@ describe('a store write fails half-way', () => {
     expect(Object.keys(useHostSettingsStore.getState().hosts)).not.toContain(WIRE)
   })
 
+  // QR-2b (attack review): the look re-key and the quick-reply prefs re-key are separate steps — one failing puts the other back too, and the retry lands both
+  it('the quick-reply prefs write fails once after the look store moved → the look is put back; the retry moves both', () => {
+    vi.useFakeTimers()
+    useHostLookStore.setState({ looks: { [LOCAL]: { name: 'L' } } })
+    useQuickReplyPrefsStore.setState({ disabled: { [LOCAL]: ['a'] } })
+    failWrites(STORAGE_KEYS.QUICK_REPLY_PREFS, 1)
+    // the hosts have a daemon id (seed) but the entries are still under the local id: this pass moves them
+    requestHostReresolve()
+    expect(useHostLookStore.getState().looks).toEqual({ [LOCAL]: { name: 'L' } })
+    expect(useQuickReplyPrefsStore.getState().disabled).toEqual({ [LOCAL]: ['a'] })
+    vi.advanceTimersByTime(HOST_RERESOLVE_RETRY_MS)
+    expect(useHostLookStore.getState().looks).toEqual({ [WIRE]: { name: 'L' } })
+    expect(useQuickReplyPrefsStore.getState().disabled).toEqual({ [WIRE]: ['a'] })
+  })
+
   it('the pass answers write-failed; it never throws', () => {
     failWrites(STORAGE_KEYS.HOST_SETTINGS, 1)
     expect(runHostReresolve()).toBe('write-failed')
