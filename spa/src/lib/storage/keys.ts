@@ -41,6 +41,9 @@ export const STORAGE_KEYS = {
    *  `settings` like the other appearance stores — all three fields travel; `customIcon` is a plain string (`''` = none)
    *  (PROJECTIONS.settings, settings ordinal 9) */
   WORKER_SETTINGS: 'purdex-worker-settings',
+  /** The Mac App's quick-reply switches (useQuickReplyPrefsStore, quick-replies v2 spec §3): `{ rowEnabled, disabled: { [wireHostId]: itemId[] } }` —
+   *  off-lists; the keys are WIRE host ids like HOST_LOOKS. Registered with syncManager and projected into Profile Sync `settings` (ordinal 10). */
+  QUICK_REPLY_PREFS: 'purdex-quick-reply-prefs',
   SYNC_STATE: 'purdex-sync-state',
   PATH_CACHE_V1: 'purdex-path-cache-v1',
   RECENT_FILES: 'purdex-recent-files',

@@ -27,6 +27,7 @@ import { useHostSettingsStore } from '../../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../../stores/useNewTabLayoutStore'
 import { useLayoutStore } from '../../stores/useLayoutStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
+import { useQuickReplyPrefsStore } from '../../stores/useQuickReplyPrefsStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { compareShape, profileLock } from './profile-state'
@@ -276,7 +277,7 @@ describe('PROJECTIONS', () => {
     const real = new Set<string>(Object.values(STORAGE_KEYS))
     for (const key of real) expect(key).not.toContain('.')
     const prefixes = Object.keys(settingsFieldsByStore())
-    expect(prefixes).toHaveLength(11)
+    expect(prefixes).toHaveLength(12)
     for (const prefix of prefixes) expect(real.has(prefix)).toBe(true)
   })
 
@@ -337,6 +338,7 @@ describe('PROJECTIONS', () => {
       [STORAGE_KEYS.HOST_LOOKS]: useHostLookStore.getState,
       [STORAGE_KEYS.SHOWN_HOSTS]: useShownHostsStore.getState,
       [STORAGE_KEYS.WORKER_SETTINGS]: useWorkerSettingsStore.getState,
+      [STORAGE_KEYS.QUICK_REPLY_PREFS]: useQuickReplyPrefsStore.getState,
     }
     const fields = settingsFieldsByStore()
     expect(Object.keys(fields).sort()).toEqual(Object.keys(stores).sort())
@@ -731,11 +733,11 @@ describe('shape: fingerprint and ordinal', () => {
       }
     }
 
-    it('theme, iconStyle and customIcon are all listed; no new marker; ordinal 9', () => {
+    it('theme, iconStyle and customIcon are all listed; no new marker; settings ordinal 10 (QR-2b)', () => {
       expect(PROJECTIONS.settings.filter((p) => p.startsWith('purdex-worker-settings.')).sort()).toEqual([...WORKER].sort())
       expect(Object.keys(useWorkerSettingsStore.getState())).toContain('customIcon')
       expect(WIRE_MARKERS.settings).toEqual(['@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1', '@wire:hosts-retired=1'])
-      expect(SECTION_SCHEMA_ORDINAL.settings).toBe(9)
+      expect(SECTION_SCHEMA_ORDINAL.settings).toBe(10)
     })
 
     it('the two shapes differ by exactly the worker paths', async () => {
@@ -777,8 +779,8 @@ describe('shape: fingerprint and ordinal', () => {
           3,
         ],
         "settings": [
-          "bcb5398db0064a8b7832b1cc1b04df1fb4e66d0851f670a4b9ff322658e743b6",
-          9,
+          "331b7b525166cd52317426c587d59d1a60c5a281296c6a4092bda2996cfd486b",
+          10,
         ],
         "tabs": [
           "ce81d1cfb4d3f20253306eab14a9be981fb0eecedab2599f07baccf0238a286f",

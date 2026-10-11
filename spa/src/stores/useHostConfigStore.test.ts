@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { emptyHostConfigEntry, useHostConfigStore } from './useHostConfigStore'
 import { useHostStore } from './useHostStore'
+import { useQuickReplyPrefsStore } from './useQuickReplyPrefsStore'
+import { wireIdOfHost } from '../lib/profile/host-identity'
 import * as api from '../lib/host-config-api'
 import { HostConfigApiError, HostConfigConflictError } from '../lib/host-config-api'
 
@@ -379,4 +381,62 @@ it('forget drops the host entry', () => {
   useHostConfigStore.setState({ byHost: { [H]: emptyHostConfigEntry('ready') } })
   useHostConfigStore.getState().forget(H)
   expect(useHostConfigStore.getState().byHost[H]).toBeUndefined()
+})
+
+// QR-2b: the Mac's quick-reply switches (useQuickReplyPrefsStore) lose the ids a stored answer no longer holds — and only then
+describe('pruning the quick-reply switches', () => {
+  const loaded = { projects: { items: [], revision: 0 }, commands: { items: [], revision: 0 }, resumeTemplates: { items: {}, revision: 0 }, quickReplies: { items: [{ id: 'a', title: 'A', content: 'a' }, { id: 'b', title: 'B', content: 'b' }], revision: 1 } }
+  const items = [{ id: 'a', title: 'A', content: 'a' }]
+
+  async function ready() {
+    vi.mocked(api.fetchHostConfig).mockResolvedValue(loaded)
+    await useHostConfigStore.getState().load(H)
+    useQuickReplyPrefsStore.setState({ rowEnabled: true, disabled: { [H]: ['a', 'b', 'gone'], d1_other: ['b'] } })
+  }
+
+  it('a 200 (an edit or a delete) shrinks the host\'s off-list to the answer\'s ids; another host\'s is untouched', async () => {
+    await ready()
+    vi.mocked(api.putHostConfig).mockResolvedValueOnce({ items, revision: 2 })
+    await useHostConfigStore.getState().saveQuickReplies(H, items)
+    expect(useQuickReplyPrefsStore.getState().disabled).toEqual({ [H]: ['a'], d1_other: ['b'] })
+  })
+
+  it('the key is the host\'s WIRE id once it has a daemon id', async () => {
+    await ready()
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [H]: { ...s.hosts[H], daemonId: 'abc123' } } }))
+    const wire = wireIdOfHost(useHostStore.getState().hosts[H])
+    expect(wire).not.toBe(H)
+    useQuickReplyPrefsStore.setState({ disabled: { [wire]: ['a', 'b'], [H]: ['b'] } })
+    vi.mocked(api.putHostConfig).mockResolvedValueOnce({ items, revision: 2 })
+    await useHostConfigStore.getState().saveQuickReplies(H, items)
+    expect(useQuickReplyPrefsStore.getState().disabled).toEqual({ [wire]: ['a'], [H]: ['b'] })
+  })
+
+  it('a 409 prunes nothing', async () => {
+    await ready()
+    vi.mocked(api.putHostConfig).mockRejectedValueOnce(new HostConfigConflictError({ items, revision: 2 }))
+    await expect(useHostConfigStore.getState().saveQuickReplies(H, items)).rejects.toBeInstanceOf(HostConfigConflictError)
+    expect(useQuickReplyPrefsStore.getState().disabled[H]).toEqual(['a', 'b', 'gone'])
+  })
+
+  it('a 400 prunes nothing', async () => {
+    await ready()
+    vi.mocked(api.putHostConfig).mockRejectedValueOnce(new HostConfigApiError(400, 'bad'))
+    await expect(useHostConfigStore.getState().saveQuickReplies(H, items)).rejects.toBeInstanceOf(HostConfigApiError)
+    expect(useQuickReplyPrefsStore.getState().disabled[H]).toEqual(['a', 'b', 'gone'])
+  })
+
+  it('a network failure prunes nothing', async () => {
+    await ready()
+    vi.mocked(api.putHostConfig).mockRejectedValueOnce(new TypeError('network down'))
+    await expect(useHostConfigStore.getState().saveQuickReplies(H, items)).rejects.toThrow('network down')
+    expect(useQuickReplyPrefsStore.getState().disabled[H]).toEqual(['a', 'b', 'gone'])
+  })
+
+  it('saving another collection prunes nothing', async () => {
+    await ready()
+    vi.mocked(api.putHostConfig).mockResolvedValueOnce({ items: [], revision: 4 })
+    await useHostConfigStore.getState().saveProjects(H, [])
+    expect(useQuickReplyPrefsStore.getState().disabled[H]).toEqual(['a', 'b', 'gone'])
+  })
 })
