@@ -92,6 +92,7 @@ func followRelayOp(ctx context.Context, client *daemonclient.Client, op team.Rel
 	bound := time.AfterFunc(wait, cancel)
 	defer bound.Stop()
 	hung, told := 0, false
+	progress := newRelayProgress(stderr, op)
 	for {
 		if op.State == team.RelayAwaitingApproval && !told {
 			fmt.Fprintln(stderr, awaitingApprovalLine)
@@ -142,8 +143,74 @@ func followRelayOp(ctx context.Context, client *daemonclient.Client, op team.Rel
 			return relayReportErr(err, stdout, stderr)
 		}
 		hung = 0
+		progress.report(polled)
 		op = polled
 	}
+}
+
+// relayNow is the clock of the progress lines; a var so tests can step it.
+var relayNow = time.Now
+
+// relayHeartbeat is how long a state may last without a line before one says the relay is still going.
+const relayHeartbeat = time.Minute
+
+// relayProgress prints, on stderr, one line per change of a --wait op (state, or the member's mod having seen the control
+// message) with the seconds since the wait began, and a line every relayHeartbeat while a state lasts: the seed turn after
+// `cleared` can run for many minutes, and a terminal that stays silent that long looks hung and gets interrupted (Aigora,
+// 2026-10-11). Output only: the exit code and stdout are the op's, not this.
+type relayProgress struct {
+	w       io.Writer
+	start   time.Time
+	lastOut time.Time
+	state   team.RelayState
+	seen    bool
+}
+
+func newRelayProgress(w io.Writer, op team.RelayOp) *relayProgress {
+	now := relayNow()
+	return &relayProgress{w: w, start: now, lastOut: now, state: op.State, seen: op.SeenAt != 0}
+}
+
+func (p *relayProgress) report(op team.RelayOp) {
+	now := relayNow()
+	elapsed := int(now.Sub(p.start).Seconds())
+	switch {
+	case op.State != p.state:
+		fmt.Fprintf(p.w, "接力 %s → %s（%s，%ds）\n", p.state, op.State, relayStateNote(op.State), elapsed)
+		p.state, p.lastOut = op.State, now
+	case op.SeenAt != 0 && !p.seen:
+		fmt.Fprintf(p.w, "接力 %s：member 的 mod 已看到控制訊息（%ds）\n", op.State, elapsed)
+		p.lastOut = now
+	case now.Sub(p.lastOut) >= relayHeartbeat && !op.State.Terminal():
+		fmt.Fprintf(p.w, "接力仍在進行（%s，%s，已 %ds）\n", op.State, relayStateNote(op.State), elapsed)
+		p.lastOut = now
+	}
+	p.seen = p.seen || op.SeenAt != 0
+}
+
+// relayStateNote says what a state means to the lead.
+func relayStateNote(s team.RelayState) string {
+	switch s {
+	case team.RelayAwaitingApproval:
+		return "等待核准"
+	case team.RelayRequested:
+		return "已送出，等 member 接手"
+	case team.RelayClaimed:
+		return "member 已接手"
+	case team.RelayWriting:
+		return "member 正在寫交接檔"
+	case team.RelayWritten:
+		return "交接檔已寫好，清除中"
+	case team.RelayCleared:
+		return "已換新 session，等它的第一輪結束"
+	case team.RelayDone:
+		return "完成"
+	case team.RelayFailed:
+		return "失敗"
+	case team.RelayCancelled:
+		return "已取消"
+	}
+	return string(s)
 }
 
 // finishRelayOp prints the terminal op and maps it to the exit code.
