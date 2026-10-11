@@ -9,7 +9,7 @@ import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 import { clearAllDrafts, draftKey, readDraft } from '../lib/conversations/draft-memory'
 import { emptyDoc } from '../lib/conversations/model'
 import { clearAllAdapters } from '../lib/conversations/deck-adapter'
-import { clearAllSendQueues } from '../lib/conversations/send-queue'
+import { UNDO_MS, clearAllSendQueues } from '../lib/conversations/send-queue'
 import type { Capabilities, ConversationItem } from '../lib/conversations/types'
 import { useHostStore } from '../stores/useHostStore'
 import { useTabStore } from '../stores/useTabStore'
@@ -42,7 +42,7 @@ const submits = () => fetchMock.mock.calls.filter((c) => String(c[1]).endsWith('
 const tick = (ms: number) => act(() => vi.advanceTimersByTimeAsync(ms))
 
 const user = (id: string, text: string, extra: object = {}): ConversationItem => ({ type: 'user', id, at: Date.now(), index: 0, text, source: 'user', ...extra }) as ConversationItem
-function ready(over: { status?: string; capabilities?: Capabilities | null; items?: ConversationItem[]; sessionId?: string } = {}): PaneConversation {
+function ready(over: { status?: string; queued?: Array<{ text: string; at: number; source: string }>; capabilities?: Capabilities | null; items?: ConversationItem[]; sessionId?: string } = {}): PaneConversation {
   const items = over.items ?? [user('u0', 'earlier')]
   return {
     state: 'ready', hostId: H, sessionId: over.sessionId ?? SID,
@@ -50,7 +50,7 @@ function ready(over: { status?: string; capabilities?: Capabilities | null; item
       doc: {
         ...emptyDoc(),
         turns: [{ id: 't0', index: 0, started_at: 1, outcome: 'done', items }],
-        header: { title: 'x', status: over.status ?? 'idle', backend: 'terminal', live: true },
+        header: { title: 'x', status: over.status ?? 'idle', backend: 'terminal', live: true, ...(over.queued ? { queued: over.queued } : {}) },
         capabilities: over.capabilities === undefined ? PROMPT : over.capabilities,
       },
       status: 'live', reason: '', paging: false, subagents: {},
@@ -93,7 +93,7 @@ describe.each(['deck', 'chat'] as const)('the input wired into the %s', (view) =
     const ui = mount()
     type('hello agent'); enter()
     expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'undo')
-    await tick(3000)
+    await tick(UNDO_MS)
     expect(submits()).toHaveLength(1)
     expect(submits()[0]).toMatchObject({ host: H, text: 'hello agent', path: `/api/sessions/${CODE}/submit`, expected_tmux_instance: 'i' })
     expect(submits()[0].client_msg_id).toBeTruthy()
@@ -112,7 +112,7 @@ describe.each(['deck', 'chat'] as const)('the input wired into the %s', (view) =
     setView(view)
     mount()
     type('blocked'); enter()
-    await tick(3000)
+    await tick(UNDO_MS)
     expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'failed')
     await tick(30_000)
     expect(submits()).toHaveLength(1)
@@ -136,7 +136,7 @@ describe.each(['deck', 'chat'] as const)('the input wired into the %s', (view) =
     mount()
     expect(screen.queryByTestId('session-input-disabled')).toBeNull()
     type('typed by keys'); enter()
-    await tick(3000)
+    await tick(UNDO_MS)
     expect(submits()).toHaveLength(1)
     expect(submits()[0]).toMatchObject({ path: `/api/sessions/${CODE}/submit`, text: 'typed by keys' })
   })
@@ -149,7 +149,7 @@ describe.each(['deck', 'chat'] as const)('the input wired into the %s', (view) =
     render(<TabContent activeTab={legacy} allTabs={[legacy]} />)
     type('late stamp'); enter() // the queue now exists, the instance is still unknown
     act(() => useTabStore.getState().adoptTmuxInstance(H, CODE, 'g-late'))
-    await tick(3000)
+    await tick(UNDO_MS)
     expect(submits()).toHaveLength(1)
     expect(submits()[0].expected_tmux_instance).toBe('g-late')
   })
@@ -161,7 +161,7 @@ describe.each(['deck', 'chat'] as const)('the input wired into the %s', (view) =
     act(() => useSessionViewStore.getState().setView(legacy.id, legacyPane, sessionBinding(H, CODE), view))
     render(<TabContent activeTab={legacy} allTabs={[legacy]} />)
     type('who am i'); enter()
-    await tick(3000)
+    await tick(UNDO_MS)
     expect(fetchMock).not.toHaveBeenCalled()
     expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'failed')
   })
@@ -174,7 +174,7 @@ describe.each(['deck', 'chat'] as const)('the input wired into the %s', (view) =
     act(() => useSessionViewStore.getState().setView(legacy.id, legacyPane, sessionBinding(H, CODE), view))
     render(<TabContent activeTab={legacy} allTabs={[legacy]} />)
     type('from the list'); enter()
-    await tick(3000)
+    await tick(UNDO_MS)
     expect(submits()[0].expected_tmux_instance).toBe('g-list')
   })
 
@@ -187,7 +187,7 @@ describe.each(['deck', 'chat'] as const)('the input wired into the %s', (view) =
     remount(ui)
     expect(box().value).toBe('') // the input is mounted afresh for the new session
     type('new thought'); enter()
-    await tick(3000)
+    await tick(UNDO_MS)
     expect(submits()[0].path).toBe(`/api/sessions/${CODE}/submit`) // the route names the tmux session, whichever conversation it shows
     expect(submits()[0].text).toBe('new thought')
   })
@@ -200,7 +200,7 @@ describe('the queue is driven by the pane, not by the input (every view)', () =>
     const ui = mount()
     type('hello'); enter()
     setView('terminal')
-    await tick(3000)
+    await tick(UNDO_MS)
     conv.value = ready({ items: [user('u0', 'earlier'), user('u1', 'hello', { client_msg_id: submits()[0].client_msg_id })] })
     remount(ui)
     await tick(0)
@@ -221,15 +221,77 @@ describe('the remount race: the pane is away while a request is in flight', () =
     setView('deck')
     const ui = render(<TabContent activeTab={sessionTab} allTabs={both} />)
     type('slow one'); enter()
-    await tick(3000)
+    await tick(UNDO_MS)
     expect(submits()).toHaveLength(1) // in flight
     ui.rerender(<TabContent activeTab={dashTab} allTabs={both} />)
     expect(screen.queryByTestId('session-footer')).toBeNull() // really unmounted
     ui.rerender(<TabContent activeTab={sessionTab} allTabs={both} />)
     await tick(0)
     await act(async () => { answerLate(new Response(JSON.stringify({ outcome: 'handed', mode: 'fill' }), { status: 200 })) })
-    await tick(10_000)
+    await tick(5000)
     expect(submits()).toHaveLength(1)
     expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'sent')
+  })
+})
+
+describe('across a tab switch (the real TabContent)', () => {
+  const dashTab: Tab = { ...createTab({ kind: 'dashboard' }), id: 't-dash2' }
+  const both = [sessionTab, dashTab]
+  const away = (ui: ReturnType<typeof render>) => { ui.rerender(<TabContent activeTab={dashTab} allTabs={both} />); expect(screen.queryByTestId('session-footer')).toBeNull() }
+  const back = (ui: ReturnType<typeof render>) => ui.rerender(<TabContent activeTab={sessionTab} allTabs={both} />)
+  beforeEach(() => {
+    useTabStore.setState({ tabs: { [sessionTab.id]: sessionTab, [dashTab.id]: dashTab }, tabOrder: [sessionTab.id, dashTab.id], activeTabId: sessionTab.id, visitHistory: [] })
+    registerModule({ id: 'dashboard', name: 'Dashboard', panes: [{ kind: 'dashboard', component: () => <div data-testid="other-tab" /> }] })
+  })
+
+  it('a message still in its 1.5 s buffer is sent although the tab is away, and is shown as sent on return', async () => {
+    conv.value = ready({ status: 'running' })
+    setView('deck')
+    const ui = render(<TabContent activeTab={sessionTab} allTabs={both} />)
+    type('mid-turn'); enter()
+    await tick(500)
+    away(ui)
+    await tick(1000)
+    expect(submits()).toHaveLength(1)
+    expect(submits()[0].text).toBe('mid-turn')
+    back(ui)
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'sent')
+  })
+
+  it('a handed message survives the switch and still de-duplicates on return: Claude Code\'s line is shown, the entry is not', async () => {
+    conv.value = ready({ status: 'running' })
+    setView('deck')
+    const ui = render(<TabContent activeTab={sessionTab} allTabs={both} />)
+    type('queued one'); enter()
+    await tick(UNDO_MS)
+    expect(submits()).toHaveLength(1)
+    away(ui)
+    conv.value = ready({ status: 'running', queued: [{ text: 'queued one', at: Date.now(), source: 'user' }] }) // the header changed while the pane was away
+    back(ui)
+    await tick(0)
+    expect(screen.getAllByTestId('header-queued')).toHaveLength(1)
+    expect(screen.queryByTestId('queued-message')).toBeNull()
+    // the transcript echo (any id of the entry) settles it for good
+    conv.value = ready({ status: 'running', items: [user('u0', 'earlier'), user('u1', 'queued one', { client_msg_id: submits()[0].client_msg_id })] })
+    back(ui)
+    await tick(0)
+    expect(screen.queryByTestId('queued-message')).toBeNull()
+  })
+
+  it('a handed message with no line and no echo is shown again on return (not hidden by a stale match)', async () => {
+    conv.value = ready({ status: 'running', queued: [] })
+    setView('deck')
+    const ui = render(<TabContent activeTab={sessionTab} allTabs={both} />)
+    type('queued one'); enter()
+    await tick(UNDO_MS)
+    conv.value = ready({ status: 'running', queued: [{ text: 'queued one', at: Date.now(), source: 'user' }] })
+    back(ui)
+    await tick(0)
+    expect(screen.queryByTestId('queued-message')).toBeNull()
+    away(ui)
+    conv.value = ready({ status: 'running', queued: [] })
+    back(ui)
+    await tick(0)
+    expect(screen.getByTestId('queued-message')).toBeInTheDocument()
   })
 })
