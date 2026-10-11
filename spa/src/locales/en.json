@@ -763,7 +763,6 @@
   "status.usage.five_hour": "5-hour limit: {{left}}% left ({{pct}}% used)",
   "status.usage.seven_day": "Weekly limit: {{left}}% left ({{pct}}% used)",
   "status.usage.resets_in": "resets in {{time}}",
-  "status.usage.stale": "last update over 10 minutes ago",
   "status.mode.label": "Pane mode",
   "status.mode.terminal": "Terminal",
   "status.mode.worker": "Worker room",

@@ -763,7 +763,6 @@
   "status.usage.five_hour": "5 小時額度：剩 {{left}}%（已用 {{pct}}%）",
   "status.usage.seven_day": "每週額度：剩 {{left}}%（已用 {{pct}}%）",
   "status.usage.resets_in": "{{time}}後重置",
-  "status.usage.stale": "超過 10 分鐘未更新",
   "status.mode.label": "窗格模式",
   "status.mode.terminal": "終端機",
   "status.mode.worker": "指揮室",
