@@ -5,6 +5,7 @@
 // Closing the lead is NOT here: it must hold for every close path, so it is TI-1c's subscriber.
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useTabStore } from '../../stores/useTabStore'
@@ -12,6 +13,7 @@ import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { collectLeaves } from '../pane-tree'
 import { activateTab, activateTabPane, openSessionTabAt } from '../open-session-tab'
+import { hostLabel, hostLookOf } from '../host-look'
 import { isRefShownNow, setHostShown } from '../shown-hosts'
 import { currentTeamState } from './team-state'
 import { hiddenMemberIds } from './team-runs'
@@ -66,7 +68,8 @@ function hostHidden(teamKey: string, sessionId: string, hostIds: readonly (strin
   const t = useI18nStore.getState().t
   const hidden = [...new Set(hostIds)].filter((h): h is string => h !== null && !isRefShownNow(h))
   const hosts = useHostStore.getState().hosts
-  const name = hidden.map((h) => hosts[h]?.name).filter(Boolean).join(', ') || t('team.seat_host_unknown')
+  const looks = useHostLookStore.getState().looks
+  const name = hidden.map((h) => hostLabel(h, hostLookOf(h, hosts, looks))).join(', ') || t('team.seat_host_unknown')
   const showAndOpen = () => {
     if (!hidden.every((h) => setHostShown(h, true))) {
       // nothing written (an unsettled world, a host the App no longer has): say it again, without the button that cannot work
