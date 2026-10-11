@@ -117,7 +117,7 @@ func (m *Module) handleRootsChange(w http.ResponseWriter, r *http.Request) {
 
 	// A removal judges "kept" from the roots the pre-check read, so the write must apply to that same set: the closure
 	// refuses when the revision moved since (another request, an admin), and the attempt starts over with a fresh read and a
-	// fresh pre-check. Bounded; past it the caller gets team_roots_conflict, as the admin route does for a stale revision.
+	// fresh pre-check. Bounded; past it the caller gets 503 not_ready — a transient class (5xx) for HostCaller, so the lead host keeps the row pending and sends it again, where a JSON 4xx would settle it as refused.
 	var resp team.RootsChangeResponse
 	var err error
 	for attempt := 0; attempt < maxRootsAttempts; attempt++ {
@@ -145,7 +145,7 @@ func (m *Module) handleRootsChange(w http.ResponseWriter, r *http.Request) {
 		if !errors.As(err, &stale) {
 			break
 		}
-		err = &rootsHTTPError{http.StatusConflict, "team_roots_conflict", "the roots changed while the request was checked; send it again"}
+		err = &rootsHTTPError{http.StatusServiceUnavailable, team.ErrNotReady, "the roots changed while the request was checked; retry"}
 	}
 	var done *rootsDone
 	var herr *rootsHTTPError

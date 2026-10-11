@@ -532,8 +532,8 @@ func TestRootsChange_TheSetMovingBetweenPreCheckAndWriteRunsThePreCheckAgain(t *
 	}
 }
 
-// A set that keeps moving does not loop forever: after the bounded attempts the caller gets team_roots_conflict and sends it again.
-func TestRootsChange_ASetThatKeepsMovingEndsInAConflict(t *testing.T) {
+// A set that keeps moving does not loop forever: after the bounded attempts the caller gets 503 not_ready (a transient class: the lead host keeps the row pending and sends it again).
+func TestRootsChange_ASetThatKeepsMovingEndsInATransientRefusal(t *testing.T) {
 	f := newFixture(t)
 	root := realTemp(t)
 	f.setLeadGrant(true, []string{root}, 1)
@@ -542,7 +542,7 @@ func TestRootsChange_ASetThatKeepsMovingEndsInAConflict(t *testing.T) {
 		rev++
 		f.setLeadGrant(true, []string{root}, rev)
 	}
-	f.refusal(rootsReq(cmdUUID1, team.RootsOpRemove, root), leadPrincipal(), http.StatusConflict, "team_roots_conflict")
+	f.refusal(rootsReq(cmdUUID1, team.RootsOpRemove, root), leadPrincipal(), http.StatusServiceUnavailable, team.ErrNotReady)
 	if _, roots, _ := f.leadGrant(); len(roots) != 1 {
 		t.Fatalf("a conflicting removal changed the grant: %v", roots)
 	}
