@@ -19,6 +19,10 @@ describe('formatTokens', () => {
     expect([0, 7, 842, 999, 1000, 1049, 1050, 9149, 9200, 12_400, 103_000].map(formatTokens))
       .toEqual(['0', '7', '842', '999', '1.0k', '1.0k', '1.1k', '9.1k', '9.2k', '12.4k', '103.0k'])
   })
+  it('a million is M, never "1000.0k"; a value that is not a count is empty', () => {
+    expect([999_940, 999_960, 1_000_000, 2_500_000].map(formatTokens)).toEqual(['999.9k', '1.0M', '1.0M', '2.5M'])
+    expect([Number.NaN, Number.POSITIVE_INFINITY, -3].map(formatTokens)).toEqual(['', '', ''])
+  })
 })
 
 describe('the data rules', () => {

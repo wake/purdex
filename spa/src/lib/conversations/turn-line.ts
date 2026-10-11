@@ -34,8 +34,10 @@ const tokensOf = (n: unknown): number | null => (typeof n === 'number' && Number
 
 /** `842` below a thousand, then thousands with one decimal: `9.2k`, `12.4k`, `103.0k` (the terminal's `↓ 9.2k tokens`, without the word). */
 export function formatTokens(n: number): string {
-  if (n < 1000) return String(n)
-  return `${(n / 1000).toFixed(1)}k`
+  if (!Number.isFinite(n) || n < 0) return ''
+  if (n < 1000) return String(Math.floor(n))
+  const k = Math.round(n / 100) / 10
+  return k < 1000 ? `${k.toFixed(1)}k` : `${(Math.round(n / 100_000) / 10).toFixed(1)}M` // 999.96k is 1.0M, not 1000.0k
 }
 /**
  * The live line, or null when the agent is not working. `status` is the conversation header's (`running` | `waiting` | …): `running` and

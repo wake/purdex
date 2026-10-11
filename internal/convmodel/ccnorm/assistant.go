@@ -100,7 +100,8 @@ func (n *Normalizer) assistantRow(l *rawLine, off int64) {
 
 // countTokens adds the row's message to the turn's output tokens. Claude Code writes one content block per row, so one message.id spans
 // several rows that all carry the message's final usage: the count is kept per id (never summed over rows) and the turn's total is the sum
-// over ids. A row without an id counts under its own uuid. The turn header is reported again only when the total moved.
+// over ids (per turn: a message whose rows straddle two turns counts in each). A row without an id counts under its own uuid. The turn header is
+// reported again only when the total moved.
 func (n *Normalizer) countTokens(tr *turnRec, l *rawLine, msg object, off int64) {
 	usage, ok := parseObject(msg.get("usage"))
 	if !ok {
@@ -117,18 +118,12 @@ func (n *Normalizer) countTokens(tr *turnRec, l *rawLine, msg object, off int64)
 	if tr.msgTokens == nil {
 		tr.msgTokens = map[string]int64{}
 	}
-	if prev, seen := tr.msgTokens[id]; seen && prev >= out {
+	prev, seen := tr.msgTokens[id]
+	if seen && prev >= out {
 		return
 	}
 	tr.msgTokens[id] = out
-	var total int64
-	for _, v := range tr.msgTokens {
-		total += v
-	}
-	if total == tr.t.OutputTokens {
-		return
-	}
-	tr.t.OutputTokens = total
+	tr.t.OutputTokens += out - prev // a running total: a long turn is not re-summed on every row (prev is 0 for a new id)
 	tr.updated = off
 	n.add(Change{tr.t.ID, "", off})
 }
