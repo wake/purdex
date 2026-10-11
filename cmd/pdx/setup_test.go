@@ -212,7 +212,7 @@ func TestSetupRelayGuard(t *testing.T) {
 		if code := setupRelayGuard(only.Client(), only.URL, "", false, &note); code != ExitOK {
 			t.Fatalf("only a settling relay: code = %d, want ok", code)
 		}
-		if !strings.Contains(note.String(), "1 relay(s)") || !strings.Contains(note.String(), "settling") || !strings.Contains(note.String(), "reaper") {
+		if !strings.Contains(note.String(), "1 relay(s)") || !strings.Contains(note.String(), "settling") || !strings.Contains(note.String(), "15 minutes") {
 			t.Errorf("a settling relay goes ahead with a note, got %q", note.String())
 		}
 	})

@@ -179,7 +179,7 @@ func setupRelayGuard(client *http.Client, baseURL, token string, force bool, std
 			}
 		}
 		if settling > 0 { // cleared into a live session: the relay itself is done, only its `done` report rides on the mod
-			fmt.Fprintf(stderr, "setup: %d relay(s) cleared into a live session are settling; a mod reload now leaves their done to the 15 minute reaper.\n", settling)
+			fmt.Fprintf(stderr, "setup: %d relay(s) cleared into a live session are settling; if a mod reload loses their done report, the daemon settles them 15 minutes after they cleared, by whether the new session is still alive then.\n", settling)
 		}
 		return ExitOK
 	}

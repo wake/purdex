@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/wake/purdex/internal/module/agent"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/team"
 )
@@ -269,37 +268,39 @@ func (m *Module) newSessionPresence(op team.RelayOp) peersmod.Presence {
 	return m.newSessionPresenceFrom(op, m.liveFramesOnce(context.Background()))
 }
 
-// liveFramesOnce reads the live cc frames at the first call and answers every later call from that read, so a caller judging
-// several ops scans once. A failed read is not retried: the registry then decides for all of them.
-func (m *Module) liveFramesOnce(ctx context.Context) func() []agent.TerminalSession {
+// liveFramesOnce reads the live cc frames at the first call and answers every later question from an index of that one read (a
+// verified frame's pane + session), so a caller judging several ops scans the frames once, not once per op. A failed read is
+// not retried: the registry then decides for all of them.
+func (m *Module) liveFramesOnce(ctx context.Context) func(pane, sessionID string) bool {
 	var (
-		once   sync.Once
-		frames []agent.TerminalSession
+		once sync.Once
+		live map[[2]string]bool
 	)
-	return func() []agent.TerminalSession {
+	return func(pane, sessionID string) bool {
 		once.Do(func() {
 			if m.frames == nil {
 				return
 			}
-			if got, err := m.frames.LiveSessions(ctx, "cc"); err == nil {
-				frames = got
+			if frames, err := m.frames.LiveSessions(ctx, "cc"); err == nil {
+				live = make(map[[2]string]bool, len(frames))
+				for _, f := range frames {
+					if f.Verified {
+						live[[2]string{f.PaneID, f.SessionID}] = true
+					}
+				}
 			}
 		})
-		return frames
+		return live[[2]string{pane, sessionID}]
 	}
 }
 
-// newSessionPresenceFrom is newSessionPresence over the frames liveFrames reads (called only for an op that has a pane).
-func (m *Module) newSessionPresenceFrom(op team.RelayOp, liveFrames func() []agent.TerminalSession) peersmod.Presence {
+// newSessionPresenceFrom is newSessionPresence over the frame index liveFrame answers from (asked only for an op with a pane).
+func (m *Module) newSessionPresenceFrom(op team.RelayOp, liveFrame func(pane, sessionID string) bool) peersmod.Presence {
 	if op.NewSessionID == "" {
 		return peersmod.PresenceGone
 	}
-	if _, pane, _ := m.opBinding(op); pane != "" {
-		for _, f := range liveFrames() {
-			if f.PaneID == pane && f.Verified && f.SessionID == op.NewSessionID {
-				return peersmod.PresenceLive
-			}
-		}
+	if _, pane, _ := m.opBinding(op); pane != "" && liveFrame(pane, op.NewSessionID) {
+		return peersmod.PresenceLive
 	}
 	return m.origins.SessionPresence(op.NewSessionID)
 }
