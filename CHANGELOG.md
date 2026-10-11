@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.0-alpha.721] - 2026-10-12
+
+> 只有 SPA 改動：daemon 只是為了版號重啟，mod 沒有改。Mac 按 dev update（或 dev server 的 HMR）就生效。
+
+### Fixed：Mac 從終端機也能切到啟動面板（NA-1 後續，#2730，介面線）
+
+- 在沒有 agent 在跑的 session 上，狀態列的指揮台／聊天按鈕不再鎖住，點了就會看到啟動面板。720 的已知限制就此解除。
+- 狀態列和面板共用同一份啟動計畫：同一個 session、同一個 tmux 世代只讀一次。停在終端機畫面時就先讀好。計畫讀好、確認沒有 agent 在跑，按鈕才放行；讀取中按鈕提示「正在確認」。codex 在跑時，按鈕維持原本的灰色。
+
 ## [1.0.0-alpha.720] - 2026-10-12
 
 > daemon 與 mod 都有改：兩台都跑了 pdx setup。Mac 的啟動面板是 SPA，按 dev update（或 dev server 的 HMR）就生效；iOS 是 0.6.71。
