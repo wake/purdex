@@ -3,10 +3,10 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { SessionInput } from './SessionInput'
 import { useSendQueueDriver } from '../../hooks/useSendQueueDriver'
 import { clearAllDrafts, draftKey, readDraft } from '../../lib/conversations/draft-memory'
-import { clearAllSendQueues } from '../../lib/conversations/send-queue'
+import { UNDO_MS, clearAllSendQueues } from '../../lib/conversations/send-queue'
 import { bindAdapter, clearAllAdapters } from '../../lib/conversations/deck-adapter'
 import { terminalAdapter } from '../../lib/conversations/terminal-adapter'
-import type { Capabilities, ConversationItem } from '../../lib/conversations/types'
+import type { Capabilities, ConversationItem, HeaderQueued } from '../../lib/conversations/types'
 
 const fetchMock = vi.hoisted(() => vi.fn())
 vi.mock('../../lib/host-api', () => ({ pinnedHostFetch: fetchMock }))
@@ -16,12 +16,12 @@ const PROMPT: Capabilities = { send: 'prompt', interrupt: 'prompt' }
 const answer = (status: number, body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status }))
 const sends = () => fetchMock.mock.calls.filter((c) => String(c[1]).endsWith('/submit')).map((c) => JSON.parse(c[2].body) as { text: string; client_msg_id: string })
 
-interface Over { capabilities?: Capabilities; items?: ConversationItem[]; idle?: boolean; onSwitchToTerminal?: () => void }
-// The input only types and shows; the pane drives the queue (idle, echoes). The pane's driver stands next to it here.
+interface Over { queued?: HeaderQueued[]; capabilities?: Capabilities; items?: ConversationItem[]; onSwitchToTerminal?: () => void }
+// The input only types and shows; the pane drives the queue (echoes, the queue line). The pane's driver stands next to it here.
 function Pane({ o }: { o: Over }) {
   // the pane binds its terminal adapter before any queue access (SessionPaneContent does the same), with a live target
   bindAdapter(draftKey('p1', 'h', SID), terminalAdapter('h', SID, undefined, () => ({ code: 'dev001', instance: 'g1' })))
-  useSendQueueDriver('p1', 'h', SID, o.idle ?? true, o.items ?? [])
+  useSendQueueDriver('p1', 'h', SID, o.items ?? [], o.queued)
   return <SessionInput paneKey="p1" hostId="h" sessionId={SID} capabilities={o.capabilities ?? PROMPT} onSwitchToTerminal={o.onSwitchToTerminal ?? (() => {})} />
 }
 const ui = (o: Over = {}) => <Pane o={o} />
@@ -39,14 +39,14 @@ beforeEach(() => {
 afterEach(() => { cleanup(); clearAllDrafts(); clearAllSendQueues(); clearAllAdapters(); vi.useRealTimers() })
 
 describe('SessionInput sending', () => {
-  it('Enter queues the message (local echo, box cleared), and it goes out after the 3 s undo window', async () => {
+  it('Enter queues the message (local echo, box cleared), and it goes out after the 1.5 s send buffer', async () => {
     render(ui())
     type('hello')
     enter()
     expect(box().value).toBe('')
     expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'undo')
     expect(sends()).toHaveLength(0)
-    await tick(3000)
+    await tick(UNDO_MS)
     expect(sends()).toMatchObject([{ text: 'hello' }])
     expect(sends()[0].client_msg_id).toMatch(/\S+/)
     expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'sent')
@@ -87,7 +87,7 @@ describe('SessionInput sending', () => {
     render(ui())
     type('one'); enter()
     type('two'); enter()
-    await tick(3000)
+    await tick(UNDO_MS)
     expect(sends().map((s) => s.text)).toEqual(['one'])
     await act(async () => { first?.(new Response(JSON.stringify({ outcome: 'handed', mode: 'fill' }))) })
     await tick(0)
@@ -125,23 +125,30 @@ describe('SessionInput sending', () => {
 })
 
 describe('SessionInput outcomes', () => {
-  it('busy (429): the message fails with the busy text (K-2a-3 replaces this with new-id retries)', async () => {
+  it('busy (429): retried after 1 s under a NEW client_msg_id, and it goes through', async () => {
     fetchMock.mockImplementationOnce(() => answer(429, { outcome: 'refused', reason: 'busy', error: 'busy' }))
-    render(ui({ idle: false }))
+    render(ui())
     type('later'); enter()
-    await tick(3000)
-    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'failed')
-    expect(screen.getByTestId('queued-message')).toHaveTextContent('Busy')
+    await tick(UNDO_MS)
+    expect(sends()).toHaveLength(1)
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'sending') // still pending, framed
+    await tick(999)
+    expect(sends()).toHaveLength(1)
+    await tick(1)
+    expect(sends()).toHaveLength(2)
+    expect(sends()[1].text).toBe('later')
+    expect(sends()[1].client_msg_id).not.toBe(sends()[0].client_msg_id)
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'sent')
   })
 
   it('unknown: shown as possibly sent, never resent by itself, settled by the transcript echo', async () => {
     fetchMock.mockImplementationOnce(() => answer(200, { outcome: 'unknown', mode: 'fill' }))
-    const { rerender } = render(ui({ idle: false }))
+    const { rerender } = render(ui())
     type('did it go'); enter()
-    await tick(3000)
+    await tick(UNDO_MS)
     expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'maybe')
     expect(screen.getByTestId('queued-message')).toHaveTextContent('May have been sent')
-    rerender(ui({ idle: true })); rerender(ui({ idle: false })); rerender(ui({ idle: true }))
+    rerender(ui())
     await tick(60_000)
     expect(sends()).toHaveLength(1)
     rerender(ui({ items: [userItem('u1', 'did it go', { client_msg_id: sends()[0].client_msg_id })] }))
@@ -152,7 +159,7 @@ describe('SessionInput outcomes', () => {
     fetchMock.mockImplementationOnce(() => answer(409, { outcome: 'refused', reason: 'pane_busy', error: 'pane_busy' }))
     render(ui())
     type('x'); enter()
-    await tick(3000)
+    await tick(UNDO_MS)
     expect(screen.getByTestId('queued-message')).toHaveTextContent('scroll or copy mode')
   })
 
@@ -160,7 +167,7 @@ describe('SessionInput outcomes', () => {
     fetchMock.mockImplementationOnce(() => Promise.reject(new TypeError('down')))
     render(ui())
     type('restart'); enter()
-    await tick(3000)
+    await tick(UNDO_MS)
     expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'maybe')
     expect(screen.queryByText('Check again')).toBeNull()
     fireEvent.click(screen.getByText('Send again (may duplicate)'))
@@ -183,7 +190,7 @@ describe('SessionInput outcomes', () => {
     fetchMock.mockImplementationOnce(() => answer(409, { outcome: 'refused', reason: 'dialog_open', error: 'dialog_open' }))
     render(ui())
     type('x'); enter()
-    await tick(3000)
+    await tick(UNDO_MS)
     fireEvent.click(screen.getByText('Try again'))
     await tick(0)
     expect(sends()).toHaveLength(2)
@@ -194,7 +201,7 @@ describe('SessionInput outcomes', () => {
     fetchMock.mockImplementationOnce(() => answer(409, { outcome: 'refused', reason: 'input_not_empty', error: 'input_not_empty' }))
     const { rerender } = render(ui())
     type('x'); enter()
-    await tick(3000)
+    await tick(UNDO_MS)
     expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'failed')
     expect(screen.getByTestId('queued-message')).toHaveTextContent('terminal input has text')
     expect(screen.getByRole('textbox')).toBeInTheDocument()

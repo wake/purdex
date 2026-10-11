@@ -116,7 +116,7 @@ describe('releasePane', () => {
     const dk = fill(A, 's1', port)
     const q = sendQueueFor(dk, () => port)
     q.enqueue('first')
-    await vi.advanceTimersByTimeAsync(3000)
+    await vi.advanceTimersByTimeAsync(1500)
     q.enqueue('second')
     expect(calls).toHaveLength(1)
     releasePane(A)
@@ -132,11 +132,10 @@ describe('releasePane', () => {
     const dk = fill(A, 's1', port)
     const q = sendQueueFor(dk, () => port)
     q.enqueue('lost link')
-    await vi.advanceTimersByTimeAsync(3000)
+    await vi.advanceTimersByTimeAsync(1500)
     calls[0].resolve({ kind: 'unknown' } as SendOutcome)
     await vi.advanceTimersByTimeAsync(0)
     releasePane(A)
-    q.setIdle(true)
     await vi.advanceTimersByTimeAsync(10_000)
     expect(calls).toHaveLength(1)
   })
@@ -370,7 +369,7 @@ describe('retireStaleSessions: the pane shows another conversation now', () => {
     const dk = fill(A, 's1', port)
     const q = sendQueueFor(dk, () => port)
     q.enqueue('in flight')
-    await vi.advanceTimersByTimeAsync(3000)
+    await vi.advanceTimersByTimeAsync(1500)
     q.enqueue('in the undo window')
     retireStaleSessions(A, H, 's2')
     expect(hasSendQueue(dk)).toBe(false) // detached at once; only the old queue waits for its request
@@ -388,13 +387,13 @@ describe('retireStaleSessions: the pane shows another conversation now', () => {
     const dk = fill(A, 's1', port)
     const old = sendQueueFor(dk, () => port)
     old.enqueue('old')
-    await vi.advanceTimersByTimeAsync(3000)
+    await vi.advanceTimersByTimeAsync(1500)
     retireStaleSessions(A, H, 's2')
     retireStaleSessions(A, H, 's1') // and back
     const fresh = sendQueueFor(dk, () => port)
     expect(fresh).not.toBe(old)
     fresh.enqueue('new')
-    await vi.advanceTimersByTimeAsync(3000)
+    await vi.advanceTimersByTimeAsync(1500)
     expect(calls.map((c) => c.text)).toEqual(['old', 'new'])
     calls[0].resolve({ kind: 'accepted' })
     await vi.advanceTimersByTimeAsync(0)
@@ -406,18 +405,19 @@ describe('retireStaleSessions: the pane shows another conversation now', () => {
     expect(fresh.entries().map((e) => e.state)).toEqual(['sent'])
   })
 
-  it('a waiting (busy) message of the old session is dropped, not stranded', async () => {
+  it('a message waiting to retry a busy refusal in the old session is dropped, not stranded', async () => {
     const { calls, port } = fakePort()
     const dk = fill(A, 's1', port)
     const q = sendQueueFor(dk, () => port)
     q.enqueue('busy one')
-    await vi.advanceTimersByTimeAsync(3000)
-    calls[0].resolve({ kind: 'busy' } as SendOutcome)
+    await vi.advanceTimersByTimeAsync(1500)
+    calls[0].resolve({ kind: 'refused', reason: 'busy', status: 429 })
     await vi.advanceTimersByTimeAsync(0)
-    expect(q.entries()[0].state).toBe('waiting')
+    expect(q.entries()[0].state).toBe('sending') // waiting for its 1 s retry
     retireStaleSessions(A, H, 's2')
     expect(hasSendQueue(dk)).toBe(false)
-    expect(calls).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(calls).toHaveLength(1) // the retry never fires
   })
 
   it('switching session over and over leaves the registry bounded, and going back finds a fresh start', async () => {

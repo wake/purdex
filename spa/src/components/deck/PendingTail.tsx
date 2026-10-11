@@ -44,7 +44,7 @@ interface Props {
 export function PendingTail({ paneKey, hostId, sessionId, entries, queued }: Props) {
   const key = draftKey(paneKey, hostId, sessionId)
   const queue = sendQueueFor(key, () => unboundSendPort(hostId, sessionId))
-  const shownEntries = entries.filter((e) => e.state !== 'superseded')
+  const shownEntries = entries.filter((e) => e.state !== 'superseded' && !e.matched)
   if (queued.length === 0 && shownEntries.length === 0) return null
   return (
     <div data-testid="pending-tail" className="space-y-3">
@@ -52,7 +52,6 @@ export function PendingTail({ paneKey, hostId, sessionId, entries, queued }: Pro
       <QueuedMessages
         entries={entries}
         className="flex flex-col gap-2"
-        frameUntilEchoed={adapterOf(key)?.kind === 'worker'}
         canUndo={adapterOf(key)?.recall !== false}
         onUndo={(id) => { recallHeld(key, queue, id) }}
         onResend={(id) => { queue.resend(id) }}

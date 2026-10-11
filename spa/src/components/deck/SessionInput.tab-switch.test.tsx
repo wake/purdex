@@ -12,7 +12,7 @@ import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import { createTab } from '../../types/tab'
 import type { Tab } from '../../types/tab'
 import { clearAllDrafts, draftKey, readDraft } from '../../lib/conversations/draft-memory'
-import { clearAllSendQueues } from '../../lib/conversations/send-queue'
+import { UNDO_MS, clearAllSendQueues } from '../../lib/conversations/send-queue'
 import { bindAdapter, clearAllAdapters } from '../../lib/conversations/deck-adapter'
 import { terminalAdapter } from '../../lib/conversations/terminal-adapter'
 
@@ -77,7 +77,7 @@ describe('session input across tab switches', () => {
     rerender(<TabContent activeTab={sessionTab} allTabs={all} />)
     expect(box().value).toBe('')
     expect(screen.getByTestId('queued-message')).toHaveTextContent('ship it')
-    await act(() => vi.advanceTimersByTimeAsync(3000))
+    await act(() => vi.advanceTimersByTimeAsync(UNDO_MS))
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

@@ -9,6 +9,9 @@ import { findPane } from '../pane-tree'
 import type { DeckAdapter } from './deck-adapter'
 import { typedSendPort, type SubmitTarget } from './send'
 
+/** How a terminal message comes back when Claude Code queued it: whenever it reads it, as `user` or `queued`. Same as a worker's. */
+const ECHO = { sources: ['user', 'queued'], afterMs: 10 * 60_000 } as const
+
 /**
  * The live target of a pane showing tmux session `code` on `hostId`: the generation on the pane's content (`''` = unknown, a legacy record,
  * stamped later by `adoptTmuxInstance`), else the session list's `tmux_instance` for that code. Null when neither knows it.
@@ -35,7 +38,8 @@ export function terminalAdapter(hostId: string, sessionId: string, sessionCode?:
     // a live mod owner says `prompt`; a live conversation with none says `keys` (the daemon decides per request); the live capability is the only authority
     canSend: (capabilities) => capabilities?.send === 'prompt' || capabilities?.send === 'keys',
     recall: true,
-    port: () => typedSendPort(hostId, sessionId, target),
+    // a message Claude Code queued while busy is written to the transcript when it reads it (source `queued`, no client_msg_id), minutes later
+    port: () => ({ ...typedSendPort(hostId, sessionId, target), echo: ECHO }),
     upload: sessionCode ? (file, o) => agentUploadToPath(hostId, file, sessionCode, o) : null,
   }
 }
