@@ -28,8 +28,11 @@ export const outputKey = (id: string): string => `${id}:out`
 export const outputUnitId = (id: string, scope = ''): string => `${scope}${id}:out`
 /** The key a task line's chevron toggles to show the agent's own steps. */
 export const subagentKey = (stepId: string): string => `${stepId}:sub`
-/** The key a collapsed peer message toggles (the Mac peer-message collapse and the chat's peer line use it): a hit in its cut lines opens it. */
-export const peerKey = (id: string): string => `${id}:peer`
+/**
+ * The key a collapsed peer message toggles (the peer-message collapse, #2694): a hit in its cut lines opens it. Not `${id}:peer`, which the
+ * chat's PeerLine already uses for its summary row in the same fold store.
+ */
+export const peerKey = (id: string): string => `${id}:peerfold`
 
 /**
  * The text of a message the way UserText draws it: an image reference that names an image file is a thumbnail (no text of its own), any

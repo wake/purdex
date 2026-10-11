@@ -109,5 +109,6 @@ describe('deckUnits: what hides behind a fold', () => {
   it('a peer message opens its collapse (the peer-message fold) when a hit is in it', () => {
     const [p] = deckUnits([turn(0, [user('p', 'from a peer', 'peer')])], 20)
     expect(p.reveal).toEqual([peerKey('p')])
+    expect(peerKey('p')).toBe('p:peerfold') // the chat's PeerLine keeps `p:peer` for its summary row
   })
 })
