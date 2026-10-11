@@ -56,9 +56,9 @@ Claude Code's state); the residual risks of §5 are accepted by the user.
 - The App-side "wait for idle" queue (#2617 ledger) is removed; messages go out immediately. The iOS 3-second undo buffer stays
   (iOS only) unless decided otherwise.
 - **Recall (Up on an empty deck input) / undo of a pending message:** `POST /api/sessions/{code}/recall` under the same lock:
-  requires `$.prompt.read` empty and `header.queued` non-empty; sends Up; reads the input; it must equal the queued texts joined
-  as Claude Code joins them, else put nothing back and report `recall_mismatch`; clears the TUI input (`fill('')`); returns the text
-  to the deck input. Claude Code pops **all** queued items at once, so recall returns all of them (same as the terminal). A turn
+  requires `$.prompt.read` empty and `header.queued` non-empty; sends Up; reads the input; after Up, any non-empty read is what Up produced (the input was empty before): it is cleared with `clear_if(exactly that text)`
+  and returned as `200 {text, matched}`; `matched` = equals the queued texts joined as Claude Code joins them, else `reason`
+  `history_recalled` (queue now empty) or `recall_mismatch` — the deck puts the text into its input, nothing is lost. Claude Code pops **all** queued items at once, so recall returns all of them (same as the terminal). A turn
   ending between Up and read → `already_sent`.
 - Interrupt: unchanged (mod `$.turn.abort` where present, else Esc).
 

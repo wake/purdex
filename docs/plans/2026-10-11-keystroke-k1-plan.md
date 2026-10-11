@@ -36,8 +36,9 @@ spec §2 before any code. **If (a) blocks, stop and report — the fill route do
 - M4 Keys fallback only when no mod owner has been seen for ≥ 10 s and the light is `idle` or `running`; answer `mode:"keys"`; the
   deck labels such sends 「未經 mod 確認」.
 - I5/I6 Recall: until step 0 (f) is known, a queue holding non-user items → `409 recall_unsupported`; the input must be empty
-  first; Up under the same guard and pane target; any mismatch / empty read → `fill('')` (the input was empty before) and
-  `409 recall_mismatch` / `already_sent` — never leave history text in the TUI input.
+  first; Up under the same guard and pane target; any non-empty read → `clear_if(exactly that text)` and `200 {text, matched}` (`reason` `recall_mismatch` /
+  `history_recalled` when unmatched, `input_not_cleared` when the clear was refused) — never delete what Up popped; an empty
+  read → `409 already_sent`.
 
 ## K-1a-1 — promptq kinds + mod
 promptq job kinds `fill {text}`, `clear_if {text}`, `read` (K-1b); outcomes with `filled_at`; ledger state machine (I3). mod

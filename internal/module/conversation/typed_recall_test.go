@@ -3,6 +3,7 @@ package conversation
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -157,13 +158,70 @@ func TestRecall_GuardRefusalsAreMapped(t *testing.T) {
 	}
 }
 
-func TestRecall_MismatchClearsWhateverUpPutThere(t *testing.T) {
-	re := newRecallEnv(t, queueRow("enqueue", "queued one"))
-	re.popped = "an old history line" // the turn ended: Up recalled history
-	errOf(t, re.recall(""), 409, "recall_mismatch")
-	if cl := re.comp.clears(); re.comp.now() != "" || len(cl) != 1 || cl[0] != "an old history line" {
-		t.Fatalf("input %q clears %q: history text must not stay in the input", re.comp.now(), cl)
+// full parses a 200 answer; matched is a pointer so absence is visible.
+func (re *recallEnv) full(t *testing.T, w *httptest.ResponseRecorder, text string, matched bool, reason string) {
+	t.Helper()
+	var a struct {
+		Text    string
+		Matched *bool
+		Reason  string
 	}
+	_ = json.Unmarshal(w.Body.Bytes(), &a)
+	if w.Code != 200 || a.Text != text || a.Matched == nil || *a.Matched != matched || a.Reason != reason {
+		t.Fatalf("got %d %s, want 200 text=%q matched=%v reason=%q", w.Code, w.Body.String(), text, matched, reason)
+	}
+}
+
+func TestRecall_HappyPathIsMatched(t *testing.T) {
+	re := newRecallEnv(t, queueRow("enqueue", "a"))
+	re.popped = "a"
+	re.full(t, re.recall(""), "a", true, "")
+}
+
+func TestRecall_MismatchReturnsTheTextAndClears(t *testing.T) {
+	re := newRecallEnv(t, queueRow("enqueue", "queued one"))
+	re.popped = "something else" // queue still non-empty: a join difference
+	re.full(t, re.recall(""), "something else", false, "recall_mismatch")
+	if cl := re.comp.clears(); re.comp.now() != "" || len(cl) != 1 || cl[0] != "something else" {
+		t.Fatalf("input %q clears %q", re.comp.now(), cl)
+	}
+}
+
+func TestRecall_QueueEmptiedMeansHistoryRecalled(t *testing.T) {
+	re := newRecallEnv(t, queueRow("enqueue", "queued one"))
+	re.popped = "an old history line"
+	re.keys.onCall = func(c keyCall) { // the turn takes the queue as Up lands
+		if len(c.keys) == 1 && c.keys[0] == tmux.KeyUp {
+			appendRows(t, re.path, queueRow("dequeue", ""))
+			re.comp.set(re.popped)
+		}
+	}
+	re.full(t, re.recall(""), "an old history line", false, "history_recalled")
+	if cl := re.comp.clears(); re.comp.now() != "" || len(cl) != 1 {
+		t.Fatalf("input %q clears %q", re.comp.now(), cl)
+	}
+}
+
+func TestRecall_LongItemIsReturnedWholeNotDestroyed(t *testing.T) {
+	long := strings.Repeat("長", 2500) // over the header's 2000-rune cap, so the join differs from what Up popped
+	re := newRecallEnv(t, queueRow("enqueue", long))
+	re.popped = long
+	re.full(t, re.recall(""), long, false, "recall_mismatch")
+	if re.comp.now() != "" {
+		t.Fatalf("input %q", re.comp.now())
+	}
+}
+
+func TestRecall_ClearRefusedKeepsTheText(t *testing.T) {
+	re := newRecallEnv(t, queueRow("enqueue", "q"))
+	re.popped = "other"
+	re.fm.onJob = func(j promptq.Job) promptq.Outcome {
+		if j.Kind == promptq.KindClearIf {
+			return promptq.Outcome{Status: promptq.Dropped, Reason: "not_ours"}
+		}
+		return re.comp.job(j)
+	}
+	re.full(t, re.recall(""), "other", false, "input_not_cleared")
 }
 
 func TestRecall_EmptyReadIsAlreadySent(t *testing.T) {
@@ -185,9 +243,9 @@ func TestRecall_ReplayNeverPressesUpTwice(t *testing.T) {
 	}
 	re2 := newRecallEnv(t, queueRow("enqueue", "q"))
 	re2.popped = "history"
-	errOf(t, re2.recall("r2"), 409, "recall_mismatch")
+	re2.full(t, re2.recall("r2"), "history", false, "recall_mismatch")
 	re2.popped = "q"
-	errOf(t, re2.recall("r2"), 409, "recall_mismatch") // the recorded answer, not a fresh try
+	re2.full(t, re2.recall("r2"), "history", false, "recall_mismatch") // the recorded answer, not a fresh try
 	if re2.upCount() != 1 {
 		t.Fatalf("replay pressed Up: %d", re2.upCount())
 	}

@@ -17,7 +17,8 @@ import (
 
 // POST /api/sessions/{code}/recall (K-1b; plan I5/I6, spec §2 step 0): take the messages waiting in Claude Code's queue back
 // out of the TUI. Up on an EMPTY input pops all queued items joined by one "\n" (each trailing-whitespace trimmed); the daemon
-// reads the input through the mod, checks it is exactly that, clears it (clear_if, so only our text) and answers {text}.
+// reads the input through the mod, clears exactly what it read (clear_if, so only that text) and answers 200 {text, matched};
+// matched=false (reason recall_mismatch / history_recalled) still carries the text: it came from Up, so it is returned, never deleted.
 // Mod owner required (no keys fallback). Whatever Up left in the input, the input is never left holding it.
 
 type recallRequest struct {
@@ -130,20 +131,22 @@ func (m *Module) handleSessionRecall(w http.ResponseWriter, r *http.Request) {
 		done(http.StatusConflict, typedAnswer{Outcome: "refused", Reason: "read_failed", Error: "read_failed"})
 	case got.text == "":
 		done(http.StatusConflict, typedAnswer{Outcome: "refused", Reason: "already_sent", Error: "already_sent"})
-	case got.text == want:
-		a := typedAnswer{Text: want}
-		if !clearOurs(td, again.SessionID, want) {
+	default:
+		// The input was empty before Up, so whatever is there came from Up: the queued messages, or history when the queue
+		// emptied meanwhile. Never judge it by comparing: clear exactly that text and hand it to the deck, nothing is lost.
+		matched := got.text == want
+		a := typedAnswer{Text: got.text, Matched: &matched}
+		cleared := clearOurs(td, again.SessionID, got.text)
+		switch {
+		case !cleared:
 			a.Reason = "input_not_cleared" // the text is returned but still sits in the TUI input
+		case !matched:
+			a.Reason = "recall_mismatch"
+			if q2, h2, ok2 := m.queuedNow(r.Context(), again.SessionID); ok2 && len(q2) == 0 && h2 == 0 {
+				a.Reason = "history_recalled" // the turn took the queue meanwhile and Up recalled history
+			}
 		}
 		done(http.StatusOK, a)
-	default:
-		// The input was empty before Up, so this came from Up: history, or part of a queue that moved. Clear it.
-		clearOurs(td, again.SessionID, got.text)
-		reason := "recall_mismatch"
-		if q2, h2, ok2 := m.queuedNow(r.Context(), again.SessionID); ok2 && len(q2) == 0 && h2 == 0 {
-			reason = "already_sent" // the turn took the queue meanwhile and Up recalled history
-		}
-		done(http.StatusConflict, typedAnswer{Outcome: "refused", Reason: reason, Error: reason})
 	}
 }
 
