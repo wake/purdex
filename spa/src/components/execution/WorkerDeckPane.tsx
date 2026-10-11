@@ -63,8 +63,14 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
   const readyItems = useMemo(() => (readyDoc ? readyDoc.turns.flatMap((turn) => turn.items) : []), [readyDoc])
   useSendQueueDriver(paneId, hostId, readSession, readyDoc?.header?.status === 'idle', readyItems)
 
-  // The live line speaks from the worker's own events: the tool that runs and the background work (U4-4a), fresher than the transcript's steps.
-  const live = useMemo(() => ({ tool: runningToolName(st.tools), background: workerBackground(st.tasks) }), [st.tools, st.tasks])
+  // The live line speaks from the worker's own events: the tool that runs and the background work (U4-4a), fresher than the transcript's steps — once the
+  // event history is in (before that the tables are empty, which is not "nothing runs": the transcript speaks). A worker that ended runs nothing, and
+  // its task table may still hold a task whose end never came: no live line at all.
+  const endedNow = st.summary !== null && workerEndedKind(st.summary) !== null
+  const live = useMemo(() => {
+    if (endedNow) return { tool: null, background: undefined, hidden: true }
+    return st.historyLoaded ? { tool: runningToolName(st.tools), background: workerBackground(st.tasks) } : undefined
+  }, [endedNow, st.historyLoaded, st.tools, st.tasks])
 
   const [menuOpen, setMenuOpen] = useState(false)
   const menuAnchor = useRef<HTMLButtonElement>(null)
@@ -113,7 +119,7 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
       {st.leaseError?.code === 'lease_held' && (
         <div data-testid="lease-held" className="mx-2 mb-1 text-xs text-status-warning-text">{t('execution.lease_held', { principal: st.leaseError.heldBy ?? '' })}</div>
       )}
-      {endedFooter ?? <SessionInput {...ctx} asking={ctx.asking || permissionShown} pendingInStream />}
+      {!ended && <SessionInput {...ctx} asking={ctx.asking || permissionShown} pendingInStream />}
       <div className="flex items-center">
         <div className="min-w-0 flex-1">
           <StatusRow cwd={st.summary?.cwd} model={ctx.usage?.model ?? null} effort={ctx.usage?.effort ?? null} cost={st.summary?.cost_usd ?? null} />
@@ -129,6 +135,17 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
     </div>
   )
 
-  return <DeckPane paneId={paneId} conversation={conversation} isActive={isActive} isFocusTarget={isFocusTarget} footer={footer} live={live}
-    tail={st.summary ? <WorkerLifecycleRow summary={st.summary} /> : undefined} />
+  const deck = (
+    <DeckPane paneId={paneId} conversation={conversation} isActive={isActive} isFocusTarget={isFocusTarget} footer={footer} live={live}
+      tail={st.summary ? <WorkerLifecycleRow summary={st.summary} /> : undefined} />
+  )
+  // The ended footer sits below the deck pane, not inside the deck's own footer slot: a conversation that cannot be read draws no footer, and the way to
+  // rebuild, exit or close must never be lost with it.
+  if (!endedFooter) return deck
+  return (
+    <div className="relative flex h-full flex-col">
+      <div className="relative min-h-0 flex-1">{deck}</div>
+      {endedFooter}
+    </div>
+  )
 }

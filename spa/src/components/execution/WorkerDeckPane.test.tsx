@@ -356,6 +356,45 @@ describe('WorkerDeckPane', () => {
     expect(screen.getByTestId('worker-ended-footer')).toBeInTheDocument()
   })
 
+  it('an ended worker whose conversation cannot be read still has its ended footer (the way to rebuild, exit or close is never lost)', () => {
+    seed(summary({ state: 'terminated' }))
+    useConversationStore.setState({ byKey: { [`${H}\0${SID}`]: { ...entry(), status: 'unreadable', reason: 'not_found' } } } as never)
+    render(ui())
+    expect(screen.getByTestId('deck-unreadable')).toBeInTheDocument()
+    expect(screen.getByTestId('worker-ended-footer')).toBeInTheDocument()
+  })
+
+  it('an ended worker draws no live line, though its header still says running, and no stale background work', () => {
+    seed(summary({ state: 'terminated' }))
+    const task = { task_id: 'a', turn_id: 't', kind: 'shell', task_type: 'x', tool_use_id: null, parent_tool_use_id: null, description: '', backgrounded: true, status: 'running', provider_status: null, closed_by: null, started_at: 1, ended_at: null, startSeq: 1 }
+    useExecutionStore.setState((st) => ({ executions: { ...st.executions, [`${H}:${E}`]: { ...st.executions[`${H}:${E}`], tasks: { a: task } } } }) as never)
+    render(ui())
+    expect(screen.queryByTestId('turn-live')).toBeNull()
+    expect(screen.getByTestId('worker-lifecycle')).toBeInTheDocument()
+  })
+
+  it('the lifecycle row is the last thing in the stream: after a message still waiting to be read', () => {
+    vi.useFakeTimers()
+    seed(summary({ state: 'idle' }))
+    render(ui())
+    typeAndSend('last words')
+    act(() => { useExecutionStore.getState().setSummary(H, E, summary({ state: 'terminated' }) as never) })
+    const msg = screen.getByTestId('queued-message')
+    const row = screen.getByTestId('worker-lifecycle')
+    expect(msg.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('until the event history is loaded the transcript speaks for the live line (empty events are not "nothing runs")', () => {
+    seed(summary({ state: 'running' }), false)
+    const e = entry()
+    const running = { type: 'step', id: 's1', at: 1, index: 1, kind: 'execute', tool: 'Bash', status: 'running', summary: 'ls', started_at: 1, input: {} } as ConversationItem
+    useConversationStore.setState({ byKey: { [`${H}\0${SID}`]: { ...e, doc: { ...e.doc, turns: [{ ...turn, outcome: 'running', items: [item, running] }] } } } } as never)
+    render(ui())
+    expect(live()).toContain('Running · Bash')
+    act(() => { useExecutionStore.getState().setHistoryLoaded(H, E, true) })
+    expect(live()).toContain('Thinking…') // now the events are in, and name no tool
+  })
+
   it('a worker still queued is a lifecycle line, not a deck (and has no ended footer)', () => {
     seed(summary({ state: 'queued', session_id: undefined }))
     render(ui())

@@ -42,8 +42,8 @@ export interface DeckViewProps {
    * What the backend's own events say runs now, when they speak for the live line (a worker's Nexen events, U4-4a): the running tool (null: none)
    * and the background work. They replace what the transcript's steps and the header say.
    */
-  live?: { tool: string | null; background?: HeaderBackground }
-  /** Drawn at the end of the stream, after the live line and before what is waiting to be read: a back-end's own system rows (a worker's lifecycle, U4-4a). */
+  live?: { tool: string | null; background?: HeaderBackground; /** The back-end says nothing runs any more (a worker that ended): no live line, whatever the header still says. */ hidden?: boolean }
+  /** Drawn at the very end of the stream, after the live line and what is waiting to be read: a back-end's own system rows (a worker's lifecycle, U4-4a). */
   tail?: ReactNode
 }
 
@@ -158,9 +158,9 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
             ) : (
               doc.turns.map((turn, i) => <TurnView key={turn.id} turn={turn} eager={i >= doc.turns.length - EAGER_TURNS} onOpenPanel={onOpenPanel} agentModel={doc.header?.usage?.model} subagents={entry.subagents} loadSubagent={loadSubagent} background={i === doc.turns.length - 1 ? background : undefined} />)
             )}
-            {!empty && <LiveTurnLine turns={doc.turns} status={doc.header?.status} background={background} tool={live?.tool} />}
-            {tail}
+            {!empty && !live?.hidden && <LiveTurnLine turns={doc.turns} status={doc.header?.status} background={background} tool={live?.tool} />}
             <PendingTail paneKey={paneId} hostId={hostId} sessionId={sessionId} entries={pending} queued={headerQueued} />
+            {tail}
           </DeckRevealContext.Provider>
         </FoldContext.Provider>
         </ConversationHostContext.Provider>
