@@ -29,6 +29,24 @@ describe('dispatchAgentWsEvent — wire-format guards', () => {
     expect(entry?.raw).toEqual(status)
   })
 
+  it('agent.status with a valid "at" stores it as receivedAt (a replayed old snapshot ages by its own time)', () => {
+    const at = Date.now() - 3 * 60 * 60 * 1000
+    const wire = { agent_type: 'cc', status: { cwd: '/x' }, at }
+    dispatchAgentWsEvent(H, { type: 'agent.status', session: 'dev', value: JSON.stringify(wire) })
+    expect(useAgentStore.getState().ccStatus[`${H}:dev`]?.receivedAt).toBe(at)
+  })
+
+  it('agent.status without "at" (or a bad one) falls back to now', () => {
+    const before = Date.now()
+    for (const at of [undefined, 0, -5, 'x', null]) {
+      useAgentStore.setState({ ccStatus: {} })
+      const wire = { agent_type: 'cc', status: { cwd: '/x' }, at }
+      dispatchAgentWsEvent(H, { type: 'agent.status', session: 'dev', value: JSON.stringify(wire) })
+      const got = useAgentStore.getState().ccStatus[`${H}:dev`]?.receivedAt ?? 0
+      expect(got).toBeGreaterThanOrEqual(before)
+    }
+  })
+
   it('agent.status with malformed value is silently ignored', () => {
     dispatchAgentWsEvent(H, { type: 'agent.status', session: 'dev', value: 'not-json' })
     expect(useAgentStore.getState().ccStatus[`${H}:dev`]).toBeUndefined()

@@ -231,7 +231,7 @@ interface AgentState {
   markRead: (hostId: string, sessionCode: string) => void
   removeHost: (hostId: string) => void
   setOscTitle: (hostId: string, sessionCode: string, title: string) => void
-  setCcStatus: (hostId: string, sessionCode: string, raw: Record<string, unknown>) => void
+  setCcStatus: (hostId: string, sessionCode: string, raw: Record<string, unknown>, receivedAt?: number) => void
   clearHostAgentStatus: (hostId: string) => void
 }
 
@@ -424,9 +424,14 @@ export const useAgentStore = create<AgentState>()(
       return { oscTitles: { ...s.oscTitles, [key]: cleaned } }
     }),
 
-    setCcStatus: (hostId, sessionCode, raw) => {
+    setCcStatus: (hostId, sessionCode, raw, receivedAt) => {
       const key = compositeKey(hostId, sessionCode)
-      const entry: CcStatusEntry = { receivedAt: Date.now(), raw }
+      // The daemon's own receive time when it sent one (a snapshot replayed after a restart is old), else now.
+      // Only a finite millisecond value (>= 1e12; a smaller one looks like seconds) counts; one from the future (a small skew, or
+      // an untrustworthy far-future value) is pinned to now so it can never make the line look fresher than it is.
+      const now = Date.now()
+      const at = typeof receivedAt === 'number' && Number.isFinite(receivedAt) && receivedAt >= 1e12 ? Math.min(receivedAt, now) : now
+      const entry: CcStatusEntry = { receivedAt: at, raw }
       set((s) => ({ ccStatus: { ...s.ccStatus, [key]: entry } }))
     },
 

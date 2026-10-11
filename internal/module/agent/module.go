@@ -36,7 +36,8 @@ type Module struct {
 	events    *store.AgentEventStore
 	frames    *store.FramesStore
 	traces    *store.TraceStore
-	usage     *store.ContextUsageStore // persisted statusline readings (#2406); nil without an events DB
+	snaps     *store.StatusSnapshotStore // persisted UI statusLine snapshots; nil without an events DB
+	usage     *store.ContextUsageStore   // persisted statusline readings (#2406); nil without an events DB
 	sessions  session.SessionProvider
 	registry  *agentpkg.Registry
 	uploadDir string
@@ -119,6 +120,14 @@ type Module struct {
 	usageDeleted       map[string]struct{}
 	usagePersistedAt   map[string]int64
 
+	// Persistence of statusSnapshots (status_snapshot_persist.go), also under snapshotMu; same roles as the usage* fields.
+	snapDirty       map[string]struct{}
+	snapDeleted     map[string]struct{}
+	snapPersistedAt map[string]int64
+	snapFlushMu     sync.Mutex
+	snapClearOwed   bool
+	snapDeleteAllFn func() error // test seam; nil = the store's DeleteAll
+
 	// testObservers: per-nonce channel for the statusline self-test endpoint.
 	// Guarded by testMu (separate from snapshotMu and mu so test traffic
 	// cannot block production hook / status writes).
@@ -172,6 +181,7 @@ func New(events *store.AgentEventStore) (*Module, error) {
 	var frames *store.FramesStore
 	var traces *store.TraceStore
 	var usage *store.ContextUsageStore
+	var snaps *store.StatusSnapshotStore
 	if events != nil {
 		var err error
 		frames, err = framesInitFn(events)
@@ -187,12 +197,20 @@ func New(events *store.AgentEventStore) (*Module, error) {
 			log.Printf("[agent] context usage persistence unavailable, readings stay in memory only: %v", err)
 			usage = nil
 		}
+		if snaps, err = events.StatusSnapshots(); err != nil {
+			log.Printf("[agent] status snapshot persistence unavailable, snapshots stay in memory only: %v", err)
+			snaps = nil
+		}
 	}
 	m := &Module{
 		events:             events,
 		frames:             frames,
 		traces:             traces,
 		usage:              usage,
+		snaps:              snaps,
+		snapDirty:          make(map[string]struct{}),
+		snapDeleted:        make(map[string]struct{}),
+		snapPersistedAt:    make(map[string]int64),
 		registry:           agentpkg.NewRegistry(),
 		currentStatus:      make(map[string]agentpkg.Status),
 		subagents:          make(map[string][]agentpkg.SubagentRef),
@@ -404,6 +422,7 @@ func (m *Module) Start(_ context.Context) error {
 	// Outside the step timer, whose line is a fixed set (#1767): the persisted statusline readings come back for the
 	// sessions that are live, then the flusher starts (#2406).
 	m.restoreContextUsage(context.Background())
+	m.restoreStatusSnapshots(context.Background())
 	m.applyPendingStatuslines(context.Background())
 	m.startContextUsageFlush()
 	log.Printf("[agent] start: %s", st)
@@ -466,6 +485,10 @@ func (m *Module) Stop(_ context.Context) error {
 // probe-intent consumer tail) has already been queued; Close then flushes the
 // trace sink. Idempotent: hookTraceSink.Close is sync.Once-guarded.
 func (m *Module) Close() error {
+	// The flusher ended in Stop, but a status/statusline POST still draining then only reached memory: write it now (the
+	// events DB is closed after CloseModules). Dirty-only, so nothing is rewritten.
+	m.flushContextUsage()
+	m.flushStatusSnapshots()
 	m.traceSink.Close() // nil-safe
 	return nil
 }

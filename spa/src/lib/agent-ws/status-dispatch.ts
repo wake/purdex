@@ -50,7 +50,7 @@ export function handleStatusEvent(hostId: string, event: HostEvent): void {
         return
       }
       const rawStatus = status as Record<string, unknown>
-      useAgentStore.getState().setCcStatus(hostId, event.session, rawStatus)
+      useAgentStore.getState().setCcStatus(hostId, event.session, rawStatus, typeof wire.at === 'number' ? wire.at : undefined)
       if (isTestNonce) {
         debugStatuslineTest('dispatch.emit-bus', { nonce: event.session })
         statuslineTestBus.emit({ nonce: event.session, hostId, raw: rawStatus })

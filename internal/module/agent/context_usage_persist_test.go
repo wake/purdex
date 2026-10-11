@@ -23,7 +23,7 @@ import (
 // Mutation gates: no flush / restore of a dead session / a write per statusline → red.
 
 // moduleOn is an agent module over the events DB at path, as a restarted daemon would open it.
-func moduleOn(t *testing.T, path string) *Module {
+func moduleOn(t testing.TB, path string) *Module {
 	t.Helper()
 	events, err := store.OpenAgentEvent(path)
 	if err != nil {
