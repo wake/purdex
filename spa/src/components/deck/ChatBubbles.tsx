@@ -13,17 +13,17 @@ import { CjkText } from './CjkText'
 /** Sources that are not the person's own message: they keep the deck's block (a bash input, a wake-up, a background report, a peer's message). */
 const NOT_THE_PERSON = new Set(['peer', 'bash', 'command_output', 'background', 'task', 'schedule', 'scheduled'])
 
-export function UserBubble({ item }: { item: UserItem }) {
+export function UserBubble({ item, midTurn }: { item: UserItem; /** not the first user message of its turn */ midTurn?: boolean }) {
   const t = useI18nStore((s) => s.t)
   // A source this build does not know reads as the person (as the deck's caption does).
-  if (NOT_THE_PERSON.has(item.source)) return <UserBlock item={item} />
+  if (NOT_THE_PERSON.has(item.source)) return <UserBlock item={item} midTurn={midTurn} />
   return (
     <div data-testid="chat-user" data-source={item.source} className="flex flex-col items-end">
       <div data-testid="chat-user-bubble" className="max-w-[80%] whitespace-pre-wrap break-words rounded-2xl rounded-br-sm bg-accent px-3 py-2 deck-t-up text-white">
         {OWN_TEXT_SOURCES.has(item.source) ? <UserText text={item.text} /> : <CjkText text={item.text} />}{item.truncated && '…'}
       </div>
       <div data-testid="chat-user-time" className="mt-0.5 deck-t-down text-text-muted">
-        {item.source === 'queued' ? t('deck.user.queued') : formatClock(item.at)}
+        {item.source === 'queued' && midTurn ? t('chat.user.delivered', { time: formatClock(item.at) }) : formatClock(item.at)}
       </div>
       {item.images && item.images.length > 0 && <div className="mt-0.5 deck-t-down text-text-muted">{t('deck.user.images', { n: item.images.length })}</div>}
     </div>

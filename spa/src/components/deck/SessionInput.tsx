@@ -6,14 +6,14 @@ import { Paperclip, PaperPlaneRight, Stop } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useDeckTypeStore } from '../../stores/useDeckTypeStore'
 import { expandPlaceholders, removePlaceholderText } from '../../lib/conversations/image-placeholder'
-import { reconcileAttachments, readAttachments, removeAttachment, removeAttachmentText, forgetAttachmentsWhere, visibleAttachments, type Attachment } from '../../lib/conversations/attachment-memory'
+import { addAttachment, reconcileAttachments, readAttachments, removeAttachment, removeAttachmentText, takeAttachments, visibleAttachments, type Attachment } from '../../lib/conversations/attachment-memory'
 import { startUploads, subscribeUploads, takeUnseenFailures, useUploads } from '../../lib/conversations/attachment-upload'
 import { draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
 import { clearDraft, discardCleared, hasCleared, undoClear, useHasCleared } from '../../lib/conversations/draft-clear'
 import { uploadFailureText } from '../../lib/upload-failure'
 import { DestructiveGuard, hostSendPort, outcomeMessage, type OutcomeMessage } from '../../lib/conversations/send'
 import { planSend } from '../../lib/conversations/send-plan'
-import { sendQueueFor } from '../../lib/conversations/send-queue'
+import { sendQueueFor, type HeldDraft } from '../../lib/conversations/send-queue'
 import type { Capabilities } from '../../lib/conversations/types'
 import { useFsImage } from '../../lib/conversations/fs-image'
 import { AttachmentThumb } from './AttachmentThumb'
@@ -155,15 +155,24 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
     const plan = planSend(expandPlaceholders(draft, shown))
     if (!plan.ok) { if (plan.refusal !== 'empty') setHint({ key: REFUSAL_KEY[plan.refusal], tone: 'warn' }); return }
     if (guard.current.check(plan.text) === 'confirm') { setHint({ key: 'deck.send.confirm', tone: 'warn' }); return }
-    queue.enqueue(plan.text)
+    // the queue keeps the box as typed (placeholders) and its chips (previews alive) while the App holds the message: Undo and Up bring it back whole
+    queue.enqueue(plan.text, { draft, chips: takeAttachments(dKey) })
     discardCleared(dKey)
-    forgetAttachmentsWhere((key) => key === dKey)
     setChips([])
     change('')
   }
+  // Puts messages the queue gave back into the box (before what is typed there), chips and `[Image #N]` placeholders with them.
+  const restore = (taken: Array<{ text: string; held?: HeldDraft }>) => {
+    if (taken.length === 0) return
+    for (const x of taken) for (const a of x.held?.chips ?? []) addAttachment(dKey, { ...a, hiddenSince: undefined })
+    const back = taken.map((x) => x.held?.draft ?? x.text).join('\n')
+    change(draft ? `${back}\n${draft}` : back) // writes the memory and hides a chip whose marker is not in the text
+    setChips(readAttachments(dKey))
+    box.current?.focus()
+  }
   const undo = (id: string) => {
-    const text = queue.undo(id)
-    if (text !== undefined) change(draft ? `${text}\n${draft}` : text)
+    const back = queue.takeBack(id)
+    if (back) restore([back])
   }
   const interrupt = async () => setHint(outcomeMessage(await queue.interrupt()))
 
@@ -237,6 +246,12 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
                   return
                 }
                 if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z' && hasCleared(dKey)) { e.preventDefault(); restoreCleared() }
+                // Up in an empty box (nothing typed, no chip, no upload on its way) calls back every message the App still holds, as the terminal does;
+                // anywhere else Up is the caret's
+                if (e.key === 'ArrowUp' && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && draft === '' && shown.length === 0 && uploading.length === 0 && !hasCleared(dKey) && queue.heldCount() > 0) { // (a draft Esc just cleared is not overwritten: its undo window is the box's)
+                  e.preventDefault()
+                  restore(queue.takeAllHeld())
+                }
               }}
               style={{ overflowWrap: 'anywhere' }}
               className={`relative block w-full resize-none rounded-none border-0 px-0 pb-1.5 pt-0 deck-t-base text-text-primary placeholder:text-text-secondary outline-none focus:outline-none focus:ring-0 focus-visible:outline-none ${

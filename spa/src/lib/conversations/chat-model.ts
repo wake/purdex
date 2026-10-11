@@ -4,9 +4,10 @@
 import type { AgentTextItem, StepItem, SystemItem, UserItem } from './types'
 import type { PanelTurn } from './panel-resolve'
 import { turnRows, type TurnRun } from './turn-row'
+import { firstUserId } from './deck-format'
 
 export type ChatEntry =
-  | { kind: 'user'; key: string; turnIndex: number; item: UserItem }
+  | { kind: 'user'; key: string; turnIndex: number; item: UserItem; /** not the first user message of its turn */ midTurn: boolean }
   | { kind: 'peer'; key: string; turnIndex: number; items: UserItem[] }
   | { kind: 'agent'; key: string; turnIndex: number; item: AgentTextItem }
   | { kind: 'work'; key: string; turnIndex: number; turnId: string; run: TurnRun }
@@ -34,6 +35,7 @@ export function buildChat(turns: PanelTurn[]): ChatEntry[] {
   const out: ChatEntry[] = []
   for (const turn of turns) {
     const rows = turnRows(turn)
+    const firstUser = firstUserId(turn.items, turn.omitted_items)
     for (const seg of rows.segments) {
       if (seg.kind === 'run') {
         out.push({ kind: 'work', key: `w:${seg.run.stepIds[0]}`, turnIndex: turn.index, turnId: turn.id, run: seg.run })
@@ -49,7 +51,7 @@ export function buildChat(turns: PanelTurn[]): ChatEntry[] {
           // between them (a reply, a work row, a user message) or a turn boundary splits them.
           if (last?.kind === 'peer' && last.turnIndex === turn.index) last.items.push(user)
           else out.push({ kind: 'peer', key: `p:${user.id}`, turnIndex: turn.index, items: [user] })
-        } else out.push({ kind: 'user', key: `u:${user.id}`, turnIndex: turn.index, item: user })
+        } else out.push({ kind: 'user', key: `u:${user.id}`, turnIndex: turn.index, item: user, midTurn: user.id !== firstUser })
       } else if (it.type === 'agent_text') out.push({ kind: 'agent', key: `a:${it.id}`, turnIndex: turn.index, item: it as AgentTextItem })
       else if (it.type === 'system' && CHAT_SYSTEM.has((it as SystemItem).kind)) out.push({ kind: 'system', key: `s:${it.id}`, turnIndex: turn.index, item: it as SystemItem })
     }

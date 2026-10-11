@@ -7,7 +7,7 @@ import { clearAllDrafts, draftKey, readDraft, writeDraft } from '../../lib/conve
 import { addAttachment, clearAllAttachments, readAttachments } from '../../lib/conversations/attachment-memory'
 import { clearAllUploads } from '../../lib/conversations/attachment-upload'
 import { clearFsImages } from '../../lib/conversations/fs-image'
-import { clearAllSendQueues } from '../../lib/conversations/send-queue'
+import { clearAllSendQueues, releaseSendQueues } from '../../lib/conversations/send-queue'
 import { releasePane } from '../../lib/conversations/pane-release'
 import { PNG_BYTES } from '../../lib/conversations/image-fixtures'
 
@@ -251,6 +251,8 @@ describe('blob: URLs are revoked', () => {
     await flush()
     fireEvent.keyDown(box(), { key: 'Enter' })
     expect(readAttachments(KEY)).toEqual([])
+    expect(revoked).toEqual([]) // held by the queue for a recall while the App holds the message
+    releaseSendQueues(() => true) // the message is handed out / the pane released: the previews go
     expect(revoked).toEqual(made)
   })
 
