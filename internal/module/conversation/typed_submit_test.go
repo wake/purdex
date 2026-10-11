@@ -148,7 +148,7 @@ func (l *tLight) LightStatus(string, string) (string, bool) {
 	if len(l.seq) > 1 {
 		l.seq = l.seq[1:]
 	}
-	return s, true
+	return s, s != "!" // "!" is a failed read
 }
 
 type tSessions struct{ inst string }

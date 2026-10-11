@@ -149,3 +149,16 @@ func (m *Module) lightOf(o agent.PaneOwner) string {
 	}
 	return o.Status
 }
+
+// freshLight is the light read right before a key goes out. ok is false when the cheap source exists but cannot answer (or
+// answers unknown): the caller fails closed and types nothing. Without a cheap source the owner lookup's status is all there is.
+func (m *Module) freshLight(o agent.PaneOwner) (string, bool) {
+	if m.light == nil {
+		return o.Status, o.Status != "" && o.Status != "unknown"
+	}
+	st, ok := m.light.LightStatus(o.SessionID, o.FrameID)
+	if !ok || st == "" || st == "unknown" {
+		return "", false
+	}
+	return st, true
+}

@@ -21,7 +21,8 @@ type keysLedger struct {
 }
 
 type keysRow struct {
-	handed bool // false: the text may have landed (unknown)
+	handed bool   // false: the text may have landed (unknown)
+	sid    string // the session that claimed the id
 	at     time.Time
 }
 
@@ -39,6 +40,10 @@ func (k *keysLedger) get(id string, now time.Time) (keysRow, bool) {
 func (k *keysLedger) put(id string, r keysRow, now time.Time) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	k.putLocked(id, r, now)
+}
+
+func (k *keysLedger) putLocked(id string, r keysRow, now time.Time) {
 	if k.m == nil {
 		k.m = map[string]keysRow{}
 	}
@@ -67,4 +72,16 @@ func (k *keysLedger) forget(id string) {
 	k.mu.Lock()
 	delete(k.m, id)
 	k.mu.Unlock()
+}
+
+// claim is the atomic check-and-insert before typing: the first caller records the id (unknown until it is handed) under the
+// ledger mutex and gets claimed=true; any other caller gets the row that is there and must not type.
+func (k *keysLedger) claim(id, sid string, now time.Time) (row keysRow, claimed bool) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if r, ok := k.m[id]; ok && now.Sub(r.at) <= keysTombstoneTTL {
+		return r, false
+	}
+	k.putLocked(id, keysRow{sid: sid}, now)
+	return keysRow{sid: sid}, true
 }
