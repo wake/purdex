@@ -656,6 +656,25 @@ func (f *FakeExecutor) SendKeysIfInstanceTarget(sessionID, window, expectedInsta
 	return true, nil
 }
 
+// SendKeysIfInstanceAndShell models the real contract: the generation and the pane's foreground command (SetPaneCommand on
+// the target "<sessionID>:") are both judged at the moment of the send, generation first; a refusal records nothing. A pane
+// with no command set counts as a shell prompt.
+func (f *FakeExecutor) SendKeysIfInstanceAndShell(sessionID, expectedInstance string, keys ...string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.FailSendKeys {
+		return fmt.Errorf("send-keys: simulated failure")
+	}
+	if expectedInstance == "" || expectedInstance != f.instance {
+		return ErrGenerationMismatch
+	}
+	if cmd, ok := f.paneCommands[sessionID+":"]; ok && !IsShellCommand(cmd) {
+		return ErrPaneBusy
+	}
+	f.rawKeysCalls = append(f.rawKeysCalls, RawKeysCall{Target: sessionID + ":", Keys: keys})
+	return nil
+}
+
 func (f *FakeExecutor) PasteText(target, text string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

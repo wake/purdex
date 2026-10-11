@@ -96,6 +96,10 @@ type Executor interface {
 	// — that window's active pane — so a caller whose liveness checks read
 	// `<name>:0` sends to the pane it checked. window must be an index.
 	SendKeysIfInstanceTarget(sessionID, window, expectedInstance string, keys ...string) (sent bool, err error)
+	// SendKeysIfInstanceAndShell types keys into the session's active pane only when the server generation equals
+	// expectedInstance AND the pane's foreground command is a shell, decided by the one server connection that sends
+	// (the launch panel, send_keys_shell.go). nil: sent; ErrGenerationMismatch (first) / ErrPaneBusy: declined, nothing typed.
+	SendKeysIfInstanceAndShell(sessionID, expectedInstance string, keys ...string) error
 	// KillSessionIfInstance kills the session id only when the tmux server's
 	// generation equals expectedInstance, evaluated by the SAME server
 	// connection that performs the kill — so a session created under one
