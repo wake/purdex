@@ -17,6 +17,8 @@ import { StatusOverlay } from './StatusOverlay'
 import { DeckItem } from './DeckItem'
 import { firstUserId } from '../../lib/conversations/deck-format'
 import { DoneTurnLine, LiveTurnLine } from './TurnLines'
+import { PendingTail } from './PendingTail'
+import { shownHeaderQueue, usePendingEntries } from '../../hooks/usePending'
 import { liveLine } from '../../lib/conversations/turn-line'
 import { DeckRevealContext, EAGER_TURNS, useDeckReveal } from './deck-reveal'
 import { footerContext, type DeckFooterContext } from './footer-context'
@@ -98,7 +100,10 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
   const empty = doc.turns.every((turn) => turn.items.length === 0)
   // The live line appearing or going is a change of the end of the stream: a reader at the bottom stays there (no jump).
   const liveOn = liveLine(doc.turns, doc.header?.status) !== null
-  useEffect(() => { if (!empty) follow() }, [follow, doc.turns, empty, liveOn])
+  // What waits to be read is the last thing in the stream: it coming and going moves the end like the live line does, so a reader at the bottom follows it.
+  const pending = usePendingEntries(paneId, hostId, sessionId)
+  const headerQueued = shownHeaderQueue(doc.header?.queued, doc.header?.status)
+  useEffect(() => { if (!empty) follow() }, [follow, doc.turns, empty, liveOn, pending, headerQueued])
 
   // Older pages (see useOlderTurns): asked for at the top, again when a page landed and the reader is still there, with a back-off
   // when one fails; the place kept across the page landing above.
@@ -140,6 +145,7 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
               doc.turns.map((turn, i) => <TurnView key={turn.id} turn={turn} eager={i >= doc.turns.length - EAGER_TURNS} onOpenPanel={onOpenPanel} agentModel={doc.header?.usage?.model} subagents={entry.subagents} loadSubagent={loadSubagent} />)
             )}
             {!empty && <LiveTurnLine turns={doc.turns} status={doc.header?.status} />}
+            <PendingTail paneKey={paneId} hostId={hostId} sessionId={sessionId} entries={pending} queued={headerQueued} />
           </DeckRevealContext.Provider>
         </FoldContext.Provider>
         </ConversationHostContext.Provider>

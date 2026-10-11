@@ -22,6 +22,9 @@ import { SystemRow } from './ThinkingSystem'
 import { StatusOverlay } from './StatusOverlay'
 import { DoneTurnLine, LiveTurnLine } from './TurnLines'
 import { liveLine } from '../../lib/conversations/turn-line'
+import { PendingTail } from './PendingTail'
+import { shownHeaderQueue, usePendingEntries } from '../../hooks/usePending'
+import type { HeaderQueued } from '../../lib/conversations/types'
 import { UnreadableState, type UnreadableReason } from './UnreadableState'
 
 export interface ChatViewProps {
@@ -33,6 +36,8 @@ export interface ChatViewProps {
   title: string
   /** Header status: running | waiting | idle | error | ended | unknown. */
   status: string
+  /** Claude Code's own queue from the header (B-read); only drawn while the status is running / waiting. */
+  queued?: readonly HeaderQueued[]
   turns: PanelTurn[]
   /** Why the conversation cannot be read (D11); absent when it can. An empty conversation says 「還沒有內容」 by itself. */
   unreadable?: UnreadableReason
@@ -84,7 +89,7 @@ export function ChatView(props: ChatViewProps) {
   return <ChatViewBody key={binding} binding={binding} {...props} />
 }
 
-function ChatViewBody({ binding, paneKey, hostId, title, status, turns, unreadable, onRetry, onSwitchToTerminal, input, active, hasMoreBefore, paging, onLoadOlder, generation }: ChatViewProps & { binding: string }) {
+function ChatViewBody({ binding, paneKey, hostId, sessionId, title, status, queued, turns, unreadable, onRetry, onSwitchToTerminal, input, active, hasMoreBefore, paging, onLoadOlder, generation }: ChatViewProps & { binding: string }) {
   const t = useI18nStore((s) => s.t)
   const fold = usePaneFoldStore(`${paneKey}\0${binding}`)
   const entries = useMemo(() => buildChat(turns), [turns])
@@ -97,7 +102,10 @@ function ChatViewBody({ binding, paneKey, hostId, title, status, turns, unreadab
   const scroll = useTranscriptScroll(undefined, false, { paneId: chatScrollKey(paneKey, binding), view: 'chat' })
   const { attach, onScroll: onBoxScroll, follow, shiftBy } = scroll
   const liveOn = liveLine(turns, status) !== null
-  useEffect(() => { follow() }, [follow, entries, liveOn])
+  // What waits to be read ends the stream: it coming and going moves the end like the live line does, so a reader at the bottom follows it.
+  const pending = usePendingEntries(paneKey, hostId, sessionId ?? '')
+  const headerQueued = shownHeaderQueue(queued, status)
+  useEffect(() => { follow() }, [follow, entries, liveOn, pending, headerQueued])
   const [boxEl, setBoxEl] = useState<HTMLDivElement | null>(null)
   const setBox = useCallback((node: HTMLDivElement | null) => { setBoxEl(node); attach(node) }, [attach])
   // Older pages as the reader goes up (the deck's rule, useOlderTurns); the place is kept when one lands above.
@@ -132,6 +140,7 @@ function ChatViewBody({ binding, paneKey, hostId, title, status, turns, unreadab
                 </div>
               ))}
               <LiveTurnLine turns={turns} status={status} />
+              <PendingTail paneKey={paneKey} hostId={hostId} sessionId={sessionId ?? ''} entries={pending} queued={headerQueued} />
             </div>
             {input}
           </SessionPanelSplit>

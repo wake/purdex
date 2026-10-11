@@ -5,14 +5,15 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } fr
 import { Paperclip, PaperPlaneRight, Stop } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { expandPlaceholders, removePlaceholderText } from '../../lib/conversations/image-placeholder'
-import { addAttachment, reconcileAttachments, readAttachments, removeAttachment, removeAttachmentText, takeAttachments, visibleAttachments, type Attachment } from '../../lib/conversations/attachment-memory'
+import { reconcileAttachments, readAttachments, removeAttachment, removeAttachmentText, takeAttachments, visibleAttachments, type Attachment } from '../../lib/conversations/attachment-memory'
 import { startUploads, subscribeUploads, takeUnseenFailures, useUploads } from '../../lib/conversations/attachment-upload'
 import { draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
 import { clearDraft, discardCleared, hasCleared, undoClear, useHasCleared } from '../../lib/conversations/draft-clear'
 import { uploadFailureText } from '../../lib/upload-failure'
 import { DestructiveGuard, hostSendPort, outcomeMessage, type OutcomeMessage } from '../../lib/conversations/send'
 import { planSend } from '../../lib/conversations/send-plan'
-import { sendQueueFor, type HeldDraft } from '../../lib/conversations/send-queue'
+import { sendQueueFor } from '../../lib/conversations/send-queue'
+import { recallHeld, subscribeRecall } from '../../lib/conversations/draft-recall'
 import type { Capabilities } from '../../lib/conversations/types'
 import { useFsImage } from '../../lib/conversations/fs-image'
 import { AttachmentThumb } from './AttachmentThumb'
@@ -28,6 +29,8 @@ interface Props {
   capabilities?: Capabilities
   /** A question waits in the dock: the placeholder says to answer there. */
   asking?: boolean
+  /** The held and in-flight messages are drawn at the end of the stream (PendingTail), not above this box (the deck and the chat do; a bare input keeps them here). */
+  pendingInStream?: boolean
   onSwitchToTerminal: () => void
 }
 
@@ -74,7 +77,7 @@ function ChipThumb({ hostId, a, onRemove, removeLabel }: { hostId: string; a: At
   return <AttachmentThumb name={a.name} image={image} src={src} loading={remote.status === 'loading'} size={a.size} onRemove={onRemove} removeLabel={removeLabel} />
 }
 
-function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilities, asking, onSwitchToTerminal }: Props) {
+function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilities, asking, pendingInStream, onSwitchToTerminal }: Props) {
   const t = useI18nStore((s) => s.t)
   const dKey = draftKey(paneKey, hostId, sessionId)
   const queue = sendQueueFor(dKey, () => hostSendPort(hostId, sessionId))
@@ -157,25 +160,20 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
     setChips([])
     change('')
   }
-  // Puts messages the queue gave back into the box (before what is typed there), chips and `[Image #N]` placeholders with them.
-  const restore = (taken: Array<{ text: string; held?: HeldDraft }>) => {
-    if (taken.length === 0) return
-    for (const x of taken) for (const a of x.held?.chips ?? []) addAttachment(dKey, { ...a, hiddenSince: undefined })
-    const back = taken.map((x) => x.held?.draft ?? x.text).join('\n')
-    change(draft ? `${back}\n${draft}` : back) // writes the memory and hides a chip whose marker is not in the text
+  // Messages the queue gave back (the Up key here, or an Undo wherever the held messages are drawn) land in the memories (draft-recall); read them again.
+  useEffect(() => subscribeRecall(dKey, () => {
+    setDraft(readDraft(dKey) ?? '')
     setChips(readAttachments(dKey))
+    setHint(null)
     box.current?.focus()
-  }
-  const undo = (id: string) => {
-    const back = queue.takeBack(id)
-    if (back) restore([back])
-  }
+  }), [dKey])
+  const undo = (id: string) => { recallHeld(dKey, queue, id) }
   const interrupt = async () => setHint(outcomeMessage(await queue.interrupt()))
 
   const hintText = hint ? t(hint.key, hint.params) : ''
   return (
     <div data-testid="session-input">
-      <QueuedMessages entries={entries} onUndo={undo} onResend={(id) => { queue.resend(id) }} onDismiss={(id) => queue.dismiss(id)} />
+      {!pendingInStream && <QueuedMessages entries={entries} onUndo={undo} onResend={(id) => { queue.resend(id) }} onDismiss={(id) => queue.dismiss(id)} />}
       {noMod ? (
         <div data-testid="session-input-disabled" className="flex items-center gap-2 border-t border-border-subtle px-3 py-2 text-sm text-text-muted">
           <span>{t('deck.send.no_mod')}</span>
@@ -246,7 +244,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
                 // anywhere else Up is the caret's
                 if (e.key === 'ArrowUp' && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && draft === '' && shown.length === 0 && uploading.length === 0 && !hasCleared(dKey) && queue.heldCount() > 0) { // (a draft Esc just cleared is not overwritten: its undo window is the box's)
                   e.preventDefault()
-                  restore(queue.takeAllHeld())
+                  recallHeld(dKey, queue)
                 }
               }}
               style={{ overflowWrap: 'anywhere' }}

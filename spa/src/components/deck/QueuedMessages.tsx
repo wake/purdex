@@ -12,16 +12,18 @@ interface Props {
   /** Resend as a NEW message (a new client_msg_id). */
   onResend: (id: string) => void
   onDismiss: (id: string) => void
+  /** The wrapper's classes (the stream's tail draws it without the footer's side padding). */
+  className?: string
 }
 
-export function QueuedMessages({ entries, onUndo, onResend, onDismiss }: Props) {
+export function QueuedMessages({ entries, onUndo, onResend, onDismiss, className = 'flex flex-col gap-1 px-3 pb-1' }: Props) {
   const t = useI18nStore((s) => s.t)
   const [confirming, setConfirming] = useState<string | null>(null)
   const shown = entries.filter((e) => e.state !== 'superseded')
   if (shown.length === 0) return null
   const btn = 'rounded px-1.5 text-xs text-accent hover:underline'
   return (
-    <div data-testid="queued-messages" className="flex flex-col gap-1 px-3 pb-1">
+    <div data-testid="queued-messages" className={className}>
       {shown.map((e) => {
         const m = e.outcome && (e.state === 'maybe' || e.state === 'failed') ? outcomeMessage(e.outcome) : null
         const asking = confirming === e.id && e.state === 'maybe'
