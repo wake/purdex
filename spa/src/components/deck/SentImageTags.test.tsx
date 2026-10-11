@@ -43,7 +43,9 @@ describe('the deck block', () => {
     const body = container.querySelector('.whitespace-pre-wrap') as HTMLElement
     expect(body.textContent).not.toContain('source:')
     expect(body.textContent).not.toContain('/up/dev001')
-    const kinds = [...body.childNodes].map((n) => (n.nodeType === 3 ? `t:${n.textContent}` : (n as HTMLElement).dataset.testid ?? (n as HTMLElement).tagName))
+    // (the message's text sits in the search unit's span, #2665)
+    const unit = body.querySelector('[data-search-unit]') as HTMLElement
+    const kinds = [...unit.childNodes].map((n) => (n.nodeType === 3 ? `t:${n.textContent}` : (n as HTMLElement).dataset.testid ?? (n as HTMLElement).tagName))
     expect(kinds).toEqual(['t:before ', 'sent-image-tag', 't: after'])
     expect(within(body).getByRole('img', { name: 'a.png' })).toHaveAttribute('src', made[0])
     expect(mocks.backend).toHaveBeenCalledWith('h')

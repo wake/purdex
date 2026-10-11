@@ -18,6 +18,7 @@ import type { ConversationItem, Turn } from '../../lib/conversations/types'
 import { useConversationStore, type ConversationEntry } from '../../stores/useConversationStore'
 import { useExecutionStore } from '../../stores/useExecutionStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
+import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
@@ -59,7 +60,11 @@ beforeEach(() => {
   cleanup(); clearAllPanels(); clearAllSendQueues(); clearAllAdapters(); clearAllWorkerLeases(); clearAllUploads(); clearAllAttachments(); clearAllDrafts(); clearAllWorkerDrafts(); clearAllPermissionCards()
   useExecutionStore.setState({ executions: {} })
   useNexHostStore.setState({ ensure: async () => {}, byHost: { [H]: { phase: 'ready', capabilities: {} } } } as never)
-  useHostConfigStore.setState({ byHost: {}, ensureLoaded: async () => {} })
+  useHostConfigStore.setState({
+    byHost: { [H]: { status: 'ready', quickRepliesSupported: true, quickReplies: [{ id: 'a', text: 'continue' }, { id: 'b', text: 'run the tests' }], revisions: { quickReplies: 1 }, problems: {} } },
+    ensureLoaded: async () => {},
+  } as never)
+  useWorkerSettingsStore.setState({ quickRepliesCollapsed: false })
   vi.mocked(lease.useExecutionLease).mockReturnValue({ ensureLease: vi.fn(async () => 'lease-1'), release: vi.fn(), forget: vi.fn(), touch: vi.fn() } as never)
   vi.mocked(api.sendMessage).mockReset().mockResolvedValue({} as never)
   vi.mocked(api.answerPermission).mockReset()
@@ -304,6 +309,82 @@ describe('WorkerDeckPane', () => {
     rerender(ui({ view: 'chat' }))
     expect(screen.getByRole('textbox')).toHaveValue('half a thought')
     expect(acquire).toHaveBeenCalledTimes(1)
+  })
+
+  // --- #2664: the quick replies above the worker's input, in the deck and in the chat, through the same adapter as the Send button ---
+  describe.each(['deck', 'chat'] as const)('quick replies in the %s', (view) => {
+    const pills = () => screen.queryAllByTestId('quick-reply')
+
+    it('a row above the input; a tap queues that text and Nexen gets it under the lease after the buffer; the typed draft stays', async () => {
+      vi.useFakeTimers()
+      seed(summary())
+      render(ui({ view }))
+      expect(pills().map((b) => b.textContent)).toEqual(['continue', 'run the tests'])
+      const footer = view === 'chat' ? screen.getByTestId('worker-deck-footer') : screen.getByTestId('worker-deck-footer')
+      expect([...footer.querySelectorAll('[data-testid="quick-replies"],[data-testid="session-input"]')].map((e) => e.getAttribute('data-testid'))).toEqual(['quick-replies', 'session-input'])
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: 'half a thought' } })
+      fireEvent.click(pills()[1])
+      expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'undo')
+      expect(screen.getByRole('textbox')).toHaveValue('half a thought')
+      expect(api.sendMessage).not.toHaveBeenCalled()
+      await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_MS) })
+      expect(vi.mocked(api.sendMessage).mock.calls[0].slice(0, 4)).toEqual([H, E, 'lease-1', 'run the tests'])
+    })
+
+    it('a reply inside its buffer is taken back with Undo: the text goes in front of the draft, nothing is sent', async () => {
+      vi.useFakeTimers()
+      seed(summary())
+      render(ui({ view }))
+      fireEvent.change(screen.getByRole('textbox'), { target: { value: 'typed' } })
+      fireEvent.click(pills()[0])
+      fireEvent.click(screen.getByText('Undo'))
+      expect(screen.queryByTestId('queued-message')).toBeNull()
+      expect(screen.getByRole('textbox')).toHaveValue('continue\ntyped')
+      await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_MS) })
+      expect(api.sendMessage).not.toHaveBeenCalled()
+    })
+
+    it('steps aside while a permission request waits above the input, and is back when it is answered elsewhere', () => {
+      seed(summary({ state: 'running' }))
+      render(ui({ view }))
+      expect(pills()).toHaveLength(2)
+      ask()
+      expect(screen.getByTestId('permission-card')).toBeInTheDocument()
+      expect(screen.queryByTestId('quick-replies')).toBeNull()
+      act(() => { useExecutionStore.getState().applyEvents(H, E, [{ seq: 2, execution_id: E, kind: 'permission.resolved', payload: { request_id: 'req_a', turn_id: 'trn_1', outcome: 'allowed' }, created_at: 2 }]) })
+      expect(screen.queryByTestId('permission-card')).toBeNull()
+      expect(pills()).toHaveLength(2)
+    })
+
+    it('hidden when the stream is dead (nothing could be sent), and back with the stream', () => {
+      seed(summary({ state: 'running' }))
+      setSlice({ sse: 'closed', sseError: 'unauthorized' })
+      render(ui({ view }))
+      expect(screen.queryByTestId('quick-replies')).toBeNull()
+      act(() => { useExecutionStore.getState().setSse(H, E, 'open', null) })
+      expect(pills()).toHaveLength(2)
+    })
+
+    it('an ended worker has no input and so no row', () => {
+      seed(summary({ state: 'terminated', terminal_reason: 'idle timeout' }))
+      render(ui({ view }))
+      expect(screen.queryByTestId('quick-replies')).toBeNull()
+    })
+  })
+
+  it('the fold choice outlives the pane (a tab switch unmounts it); a reply whose buffer ends meanwhile is refused and shown as failed, never lost', async () => {
+    vi.useFakeTimers()
+    seed(summary())
+    const { unmount } = render(ui())
+    fireEvent.click(screen.getAllByTestId('quick-reply')[0])
+    fireEvent.click(screen.getByTestId('quick-reply-toggle'))
+    unmount()
+    await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_MS) })
+    expect(api.sendMessage).not.toHaveBeenCalled() // the lease belongs to the mounted view (worker-adapter): the same rule as the Send button
+    render(ui())
+    expect(screen.queryAllByTestId('quick-reply')).toHaveLength(0)
+    expect(screen.getByTestId('quick-reply-toggle')).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'failed')
   })
 
   // coverage G: a stream that died for good (the SSE closed with an error after the history loaded) leaves nothing to send into: nothing is sent, and the box says why.
