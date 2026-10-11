@@ -54,6 +54,18 @@ owner: fill → C1 checks → `entering` → Enter (I1/M7 guard) → `entered` /
 waiting → no Enter, fill dropped reasons → 409 no Enter, timeout → unknown + clear_if, keys fallback gating; tmux test server with
 `-L <label>` and `unset TMUX` (never a bare kill-server).
 
+Contracts K-1a-1 hands to this PR (review fixes):
+- **Freshness uses `Result.ReceivedAt`** (the daemon's clock when the mod's accepted fill result arrived), never the mod's
+  `filled_at` (clamped to [handed out, ReceivedAt] and informational): the 1.5 s check is `now - ReceivedAt`.
+- **Phase `unknown`** (reasons `no_result` / `not_owner` / `client_gone`, or the mod's own `unknown`/`fill_error`) means our
+  text may be in the composer. The route sends one best-effort `ClearFilled(id)` (= `ClearIf(row text)`, which marks the row
+  `cleared` on accept; `unknown -> cleared` is allowed only if `MarkEntering` never ran). A caller that went away
+  (`client_gone`) leaves a **background finaliser** behind: it waits for the entry to settle (`Lookup` until the phase leaves
+  the in-flight state or HandTimeout passes) and, for a row in `filled` whose Enter was never sent, calls `ClearFilled`.
+- `SubmitFill` / `ClearIf` answer `dropped/bad_text` at once for blank text or text over `promptq.MaxTextBytes` (16384 BYTES, the
+  mod's parse limit is the same); more than 256 open typed rows (filled / entering / unknown, never evicted) answers `busy`.
+- The mod may report `unknown` (could not tell what its fill left behind): treat like a lost result.
+
 ## K-1b — recall
 `POST /api/sessions/{code}/recall {expected_tmux_instance}` per I5/I6 and step 0 (f)/(g) results.
 

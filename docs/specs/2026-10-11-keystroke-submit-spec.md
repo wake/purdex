@@ -67,6 +67,9 @@ Claude Code's state); the residual risks of §5 are accepted by the user.
   refusal and the immediate re-check; cannot be made atomic.
 - A background task / scheduled wake-up starting a turn: the message simply queues (now the intended behaviour).
 - Someone typing in the terminal at the same moment: `input_not_empty` refuses instead of mixing.
+- `read -> fill` and `read -> clear_if` are not atomic: a person typing in the terminal in that instant can be overwritten (fill) or
+  have their draft cleared (clear_if compares first, but the write follows the read). Minimised by doing the read and the write back to back in one mod job;
+  cannot be removed.
 - Sessions without the mod: blind typing as iOS does today.
 
 ## 6. Phases
