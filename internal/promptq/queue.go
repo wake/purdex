@@ -17,6 +17,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 )
@@ -57,6 +58,10 @@ const (
 	LedgerTTL          = 10 * time.Minute
 	maxQueued          = 16 // requests waiting per session
 	maxLedger          = 4096
+	maxOpenTyped       = 256 // typed rows in filled / entering / unknown: never forgotten, so bounded by count
+	// MaxTextBytes is the largest text a fill / clear_if carries and a read reports, in UTF-8 BYTES. The mod parses jobs
+	// with the same limit (workbook.js MAX_TYPED_TEXT_BYTES): its limit must never be smaller than this one.
+	MaxTextBytes = 16 << 10
 )
 
 // Errors of the mod-facing calls.
@@ -84,8 +89,10 @@ type Job struct {
 type Outcome struct {
 	Status   string // accepted | dropped | busy
 	Reason   string // dropped: the mod's drop reason
-	FilledAt int64  // accepted fill: unix ms, from the mod
+	FilledAt int64  // accepted fill: unix ms, from the mod's clock (clamped, never trusted: see Result.ReceivedAt)
 	Text     string // accepted read: the composer's text
+	// Truncated: accepted read whose text was cut to MaxTextBytes by the mod.
+	Truncated bool
 }
 
 // Result is what the App is answered.
@@ -93,9 +100,14 @@ type Result struct {
 	Status string `json:"status"`
 	Reason string `json:"reason,omitempty"`
 	// Phase is the ledger phase of a typed submit (fill) at the time of the answer; "" for any other kind.
-	Phase    string `json:"phase,omitempty"`
-	FilledAt int64  `json:"filled_at,omitempty"`
-	Text     string `json:"text,omitempty"`
+	Phase string `json:"phase,omitempty"`
+	// FilledAt is when the fill happened (unix ms) clamped to [handed out, ReceivedAt]; the mod's clock is not trusted.
+	FilledAt int64 `json:"filled_at,omitempty"`
+	// ReceivedAt is the DAEMON's time (unix ms) when the mod's accepted fill result arrived: the freshness check of the
+	// Enter (1.5 s) counts from here.
+	ReceivedAt int64  `json:"received_at,omitempty"`
+	Text       string `json:"text,omitempty"`
+	Truncated  bool   `json:"truncated,omitempty"` // read: Text was cut to MaxTextBytes
 }
 
 type state int
@@ -113,6 +125,7 @@ type entry struct {
 	state      state
 	res        Result
 	phase      string        // fill only
+	enterMark  bool          // fill only: MarkEntering was written, so the text may have been sent
 	done       chan struct{} // closed when state becomes stDone
 	stream     string        // the stream it was handed to
 	queuedAt   time.Time
@@ -225,7 +238,7 @@ func (q *Queue) removeQueued(e *entry) {
 func (q *Queue) sweepLedger() {
 	now := q.Now()
 	for k, e := range q.ledger {
-		if e.state == stDone && now.Sub(e.finishedAt) > LedgerTTL {
+		if forgettable(e) && now.Sub(e.finishedAt) > LedgerTTL {
 			delete(q.ledger, k)
 		}
 	}
@@ -235,12 +248,12 @@ func (q *Queue) sweepLedger() {
 		var oldest string
 		var at time.Time
 		for k, e := range q.ledger {
-			if e.state == stDone && (oldest == "" || e.finishedAt.Before(at)) {
+			if forgettable(e) && (oldest == "" || e.finishedAt.Before(at)) {
 				oldest, at = k, e.finishedAt
 			}
 		}
 		if oldest == "" {
-			return // nothing settled to forget: the open rows are bounded by the per-session queue
+			return // nothing settled to forget: the open rows are bounded by the per-session queue and maxOpenTyped
 		}
 		delete(q.ledger, oldest)
 	}
@@ -256,6 +269,9 @@ func (q *Queue) Submit(ctx context.Context, sessionID, clientMsgID, text string)
 // FilledAt and Phase "filled". It shares Submit's ledger and key space: a repeat of the id answers the recorded phase and
 // never types again. The route drives the later phases with MarkEntering / MarkEntered / MarkCleared / MarkUnknown.
 func (q *Queue) SubmitFill(ctx context.Context, sessionID, clientMsgID, text string) (Result, error) {
+	if badText(text) {
+		return Result{Status: Dropped, Reason: "bad_text"}, nil
+	}
 	return q.submitKeyed(ctx, KindFill, sessionID, clientMsgID, text)
 }
 
@@ -282,6 +298,10 @@ func (q *Queue) submitKeyed(ctx context.Context, kind, sessionID, clientMsgID, t
 		q.mu.Unlock()
 		return Result{}, ErrBusy
 	}
+	if kind == KindFill && q.openTyped() >= maxOpenTyped {
+		q.mu.Unlock()
+		return Result{Status: Busy}, nil // rows that may hold our text are never forgotten, so they are capped instead
+	}
 	e := &entry{key: clientMsgID, job: Job{ID: newID(), Kind: kind, SessionID: sessionID, Text: text}, done: make(chan struct{}), queuedAt: q.Now()}
 	if clientMsgID != "" {
 		q.ledger[clientMsgID] = e
@@ -300,6 +320,9 @@ func (q *Queue) Interrupt(ctx context.Context, sessionID string) (Result, error)
 // ClearIf asks the mod to clear the composer only if it still holds exactly text (the cleanup of a fill that was not
 // sent; never clears someone else's draft). No ledger: it is best effort and harmless twice.
 func (q *Queue) ClearIf(ctx context.Context, sessionID, text string) (Result, error) {
+	if badText(text) {
+		return Result{Status: Dropped, Reason: "bad_text"}, nil
+	}
 	return q.transient(ctx, KindClearIf, sessionID, text)
 }
 
@@ -487,18 +510,31 @@ func (q *Queue) Result(stream, jobID string, o Outcome) error {
 		res := Result{Status: Accepted}
 		switch e.job.Kind {
 		case KindFill:
+			// The mod's clock is not trusted: the freshness of the Enter counts from the daemon's own arrival time.
+			recv, handed := q.Now().UnixMilli(), e.handedAt.UnixMilli()
+			res.ReceivedAt = recv
 			res.FilledAt = o.FilledAt
-			if res.FilledAt <= 0 {
-				res.FilledAt = q.Now().UnixMilli()
+			if res.FilledAt <= 0 || res.FilledAt > recv {
+				res.FilledAt = recv
+			}
+			if res.FilledAt < handed {
+				res.FilledAt = handed
 			}
 		case KindRead:
-			res.Text = o.Text
+			res.Text, res.Truncated = o.Text, o.Truncated
 		}
 		q.finish(e, res)
 	case Busy:
 		q.finish(e, Result{Status: Busy})
+	case Unknown: // the mod could not tell what its job left in the composer
+		q.finish(e, Result{Status: Unknown, Reason: o.Reason})
 	default:
 		q.finish(e, Result{Status: Dropped, Reason: o.Reason})
 	}
 	return nil
+}
+
+// badText: a fill / clear_if text the mod would refuse (blank, or over MaxTextBytes bytes) is refused here at once.
+func badText(text string) bool {
+	return strings.TrimSpace(text) == "" || len(text) > MaxTextBytes
 }
