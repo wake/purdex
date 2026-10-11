@@ -126,6 +126,7 @@ type Module struct {
 	snapPersistedAt map[string]int64
 	snapFlushMu     sync.Mutex
 	snapClearOwed   bool
+	snapDeleteAllFn func() error // test seam; nil = the store's DeleteAll
 
 	// testObservers: per-nonce channel for the statusline self-test endpoint.
 	// Guarded by testMu (separate from snapshotMu and mu so test traffic
@@ -484,6 +485,10 @@ func (m *Module) Stop(_ context.Context) error {
 // probe-intent consumer tail) has already been queued; Close then flushes the
 // trace sink. Idempotent: hookTraceSink.Close is sync.Once-guarded.
 func (m *Module) Close() error {
+	// The flusher ended in Stop, but a status/statusline POST still draining then only reached memory: write it now (the
+	// events DB is closed after CloseModules). Dirty-only, so nothing is rewritten.
+	m.flushContextUsage()
+	m.flushStatusSnapshots()
 	m.traceSink.Close() // nil-safe
 	return nil
 }
