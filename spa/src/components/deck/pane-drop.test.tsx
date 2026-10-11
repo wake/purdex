@@ -62,6 +62,25 @@ describe('pane-wide file drop', () => {
     expect(mocks.upload).toHaveBeenCalledTimes(1)
   })
 
+  it('moving over a child (leave then enter) keeps it lit; leaving the pane puts it out', () => {
+    render(<Pane />)
+    const stream = screen.getByTestId('stream')
+    fireEvent.dragEnter(screen.getByTestId('pane'), files([]))
+    fireEvent.dragEnter(stream, files([]))
+    fireEvent.dragLeave(screen.getByTestId('pane'), files([]))
+    expect(screen.getByTestId('pane-drop-overlay')).toBeInTheDocument()
+    fireEvent.dragLeave(stream, files([]))
+    expect(screen.queryByTestId('pane-drop-overlay')).toBeNull()
+  })
+
+  it('Esc puts the highlight out', () => {
+    render(<Pane />)
+    fireEvent.dragEnter(screen.getByTestId('stream'), files([]))
+    expect(screen.getByTestId('pane-drop-overlay')).toBeInTheDocument()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(screen.queryByTestId('pane-drop-overlay')).toBeNull()
+  })
+
   it('a drag that carries no files does nothing', () => {
     render(<Pane />)
     fireEvent.dragEnter(screen.getByTestId('stream'), { dataTransfer: { files: [], types: ['text/plain'] } })

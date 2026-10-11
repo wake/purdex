@@ -16,10 +16,13 @@ export function usePaneFileDrop(root: RefObject<HTMLElement | null>) {
     window.addEventListener('drop', off)
     return () => { window.removeEventListener('keydown', off); window.removeEventListener('dragend', off); window.removeEventListener('drop', off) }
   }, [dragging])
-  const takes = (e: DragEvent) => e.dataTransfer.types.includes('Files') && dropTargetIn(root.current) !== null
+  // enter / leave are counted for every file drag (an input that appears or goes mid-drag must not unbalance the count); whether the pane
+  // reacts is decided where it matters: the highlight, the drop
+  const carries = (e: DragEvent) => e.dataTransfer.types.includes('Files')
+  const takes = (e: DragEvent) => carries(e) && dropTargetIn(root.current) !== null
   const handlers = {
-    onDragEnter: (e: DragEvent) => { if (takes(e)) { depth.current++; setDragging(true) } },
-    onDragLeave: (e: DragEvent) => { if (takes(e) && --depth.current <= 0) end() },
+    onDragEnter: (e: DragEvent) => { if (carries(e)) { depth.current++; setDragging(true) } },
+    onDragLeave: (e: DragEvent) => { if (carries(e) && --depth.current <= 0) end() },
     onDragOver: (e: DragEvent) => { if (takes(e)) e.preventDefault() },
     onDrop: (e: DragEvent) => {
       end()
@@ -31,7 +34,7 @@ export function usePaneFileDrop(root: RefObject<HTMLElement | null>) {
       attach(files)
     },
   }
-  const overlay = dragging
+  const overlay = dragging && dropTargetIn(root.current) !== null
     ? <div data-testid="pane-drop-overlay" className="pointer-events-none absolute inset-0 z-10 border-2 border-dashed border-accent bg-accent/10" />
     : null
   return { handlers, overlay }
