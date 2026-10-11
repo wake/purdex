@@ -2,6 +2,7 @@
 // the session's Claude Code statusLine snapshot (`useAgentStore.ccStatus`, the one the Mac status bar reads) for model, effort,
 // cost, the usage rings (context from this session, 5h / 7d the host's freshest: `usageFor`) and (when it carries them) cwd / worktree / branch; the pane's rebuild record for the cwd otherwise. No new data path.
 import { useAgentStore } from '../../stores/useAgentStore'
+import { useSessionStore } from '../../stores/useSessionStore'
 import { compositeKey } from '../../lib/composite-key'
 import { useHostTint } from '../../lib/host-tint'
 import { parseCcExtras } from '../../lib/usage-display'
@@ -23,13 +24,15 @@ export function SessionStatusRow({ sessionCode, cwd, ctx }: Props) {
   const agentType = useAgentStore((s) => s.agentTypes[compositeKey(ctx.hostId, sessionCode)])
   // the same colour set the tab badge reads: an agent session's terminal colours, a plain terminal's console colours
   const tint = useHostTint(ctx.hostId, agentType ? 'terminal' : 'console')
+  // the daemon reads the session cwd's git branch (no git process); used when the statusLine snapshot has no worktree.branch
+  const listBranch = useSessionStore((s) => s.sessions[ctx.hostId]?.find((x) => x.code === sessionCode)?.branch)
   const extras = parseCcExtras(entry?.raw)
   const where = readWhere(entry?.raw)
   return (
     <StatusRow
       cwd={where.cwd ?? cwd}
       worktree={where.worktree}
-      branch={where.branch}
+      branch={where.branch ?? listBranch ?? null}
       model={extras.model ?? ctx.usage?.model ?? null}
       effort={extras.effort ?? ctx.usage?.effort ?? null}
       cost={extras.cost}

@@ -29,20 +29,24 @@ export interface CcUsage {
 export function usageFor(
   hostId: string,
   sessionCode: string,
-  ccStatus: Record<string, { receivedAt: number; raw: Record<string, unknown> }>,
+  ccStatus: Record<string, { receivedAt: number; atTrusted?: boolean; raw: Record<string, unknown> }>,
 ): CcUsage | null {
   const prefix = `${hostId}:`
   const own = ccStatus[`${hostId}:${sessionCode}`]
   const context = parseCcUsage(own?.raw)?.context ?? null
+  // A snapshot whose time is only its local arrival (no daemon `at`) must not beat a trusted one: compare trusted
+  // entries first; untrusted ones are only a fallback (among themselves by receivedAt). `atTrusted` unset counts as trusted.
   let fiveHour: UsageWindow | null = null
   let sevenDay: UsageWindow | null = null
-  let fhAt = -Infinity
-  let sdAt = -Infinity
+  let fhRank = -Infinity
+  let sdRank = -Infinity
+  const BIG = 1e15
   for (const [key, entry] of Object.entries(ccStatus)) {
     if (!key.startsWith(prefix) || key.slice(prefix.length).includes(':')) continue
     const u = parseCcUsage(entry.raw)
-    if (u?.fiveHour && entry.receivedAt > fhAt) { fiveHour = u.fiveHour; fhAt = entry.receivedAt }
-    if (u?.sevenDay && entry.receivedAt > sdAt) { sevenDay = u.sevenDay; sdAt = entry.receivedAt }
+    const rank = entry.receivedAt + (entry.atTrusted === false ? 0 : BIG)
+    if (u?.fiveHour && rank > fhRank) { fiveHour = u.fiveHour; fhRank = rank }
+    if (u?.sevenDay && rank > sdRank) { sevenDay = u.sevenDay; sdRank = rank }
   }
   return context === null && !fiveHour && !sevenDay ? null : { context, fiveHour, sevenDay }
 }

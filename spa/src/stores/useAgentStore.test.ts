@@ -544,6 +544,13 @@ describe('useAgentStore.ccStatus', () => {
     it('clamps a small future skew to now', () => { put(NOW + 5_000); expect(at()).toBe(NOW) })
     it('distrusts a far-future value', () => { put(NOW + 86_400_000); expect(at()).toBe(NOW) })
     it('treats a seconds-looking value as untrusted', () => { put(1_800_000_000); expect(at()).toBe(NOW) })
+    it('marks atTrusted only when the payload carried a valid at', () => {
+      const trusted = () => useAgentStore.getState().ccStatus[`${H}:dev`]?.atTrusted
+      put(NOW - 1000); expect(trusted()).toBe(true)
+      put(NaN); expect(trusted()).toBe(false)
+      put(1_800_000_000); expect(trusted()).toBe(false)
+      useAgentStore.getState().setCcStatus(H, 'dev', {}); expect(trusted()).toBe(false)
+    })
     it('rejects NaN and Infinity', () => {
       put(NaN); expect(at()).toBe(NOW)
       put(Infinity); expect(at()).toBe(NOW)

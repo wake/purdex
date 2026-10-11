@@ -34,6 +34,8 @@ func TestRelayContract_Literals(t *testing.T) {
 		"RelayReasonDenied":             RelayReasonDenied,
 		"RelayReasonTimeout":            RelayReasonTimeout,
 		"RelayReasonCompacted":          RelayReasonCompacted,
+		"RelayReasonResumed":            RelayReasonResumed,
+		"RelayBeginReasonIdle":          RelayBeginReasonIdle,
 		"RelayReasonAbandoned":          RelayReasonAbandoned,
 
 		"ErrMemberRelayIsLeads": ErrMemberRelayIsLeads,
@@ -60,6 +62,7 @@ func TestRelayContract_Literals(t *testing.T) {
 			"RelayReasonMemberGone": "member_gone", "RelayReasonMemberUnseen": "member_unseen",
 			"RelayReasonMemberBusyTimeout": "member_busy_timeout", "RelayReasonMemberBlocked": "member_blocked", "RelayReasonDaemonUnavailable": "daemon_unavailable",
 			"RelayReasonDenied": "denied", "RelayReasonTimeout": "timeout", "RelayReasonCompacted": "compacted",
+			"RelayReasonResumed": "resumed", "RelayBeginReasonIdle": "idle",
 			"RelayReasonAbandoned":  "abandoned",
 			"ErrMemberRelayIsLeads": "member_relay_is_leads", "ErrSelfRelayOff": "self_relay_off",
 			"ErrSelfRelayPaused": "self_relay_paused", "ErrRelayOpen": "relay_open",
