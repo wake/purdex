@@ -56,7 +56,7 @@ const savedConfig: NexConfig = {
   service_roots: [],
   claude_bin: '',
   path_prepend: [],
-  sandbox: { max_profile: 'standard', default_profile: 'standard' },
+  sandbox: { max_profile: 'standard', default_profile: 'standard', extra_profiles: [] },
   timeouts: { lease_ttl: '', interrupt: '', turn: '' },
   peer: { enabled: true, max_pending: 0, wake_template: '', reply_line: '' },
 }
@@ -340,7 +340,7 @@ describe('NexHostSection', () => {
     // readyInfo carries no restart_required — no notice yet.
     expect(screen.queryByTestId('nex-restart-required')).not.toBeInTheDocument()
 
-    const changed: NexConfig = { ...savedConfig, sandbox: { max_profile: 'standard', default_profile: 'readonly' } }
+    const changed: NexConfig = { ...savedConfig, sandbox: { max_profile: 'standard', default_profile: 'readonly', extra_profiles: [] } }
     // The daemon now reports the saved section differs from its boot snapshot.
     mockFetchInfo.mockImplementation(() => Promise.resolve(infoResponse({ ...readyInfo, restart_required: true })))
     const infoCallsBeforeSave = mockFetchInfo.mock.calls.length
