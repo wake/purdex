@@ -3,6 +3,7 @@ package conversation
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 	"time"
 
@@ -63,7 +64,13 @@ func (m *Module) enter(w http.ResponseWriter, c *typedCtx, res promptq.Result, t
 		refuse(w, http.StatusConflict, "stale")
 		return
 	}
-	if m.lightOf(c.owner) == "waiting" {
+	st, lightOK := m.freshLight(c.owner)
+	if !lightOK { // fail closed: a dialog may have appeared during the fill
+		m.cleanup(td, c.id)
+		refuse(w, http.StatusConflict, "light_unavailable")
+		return
+	}
+	if st == "waiting" {
 		m.cleanup(td, c.id)
 		refuse(w, http.StatusConflict, "waiting")
 		return
@@ -89,9 +96,18 @@ func (m *Module) enter(w http.ResponseWriter, c *typedCtx, res promptq.Result, t
 	// tmux could not be completed: the Enter may or may not have gone. The row is unknown; our text is cleared best effort
 	// (safe: clear_if only clears the composer when it still holds exactly our text, so a sent message is untouched).
 	_ = td.q.MarkUnknown(c.id)
-	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
-	_, _ = td.q.ClearIf(ctx, c.owner.SessionID, c.text)
-	cancel()
+	cleared := false
+	for i := 0; i < 2 && !cleared; i++ { // one retry; a clear_if that is dropped (not_ours) or unanswered did not clear
+		ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+		res, err := td.q.ClearIf(ctx, c.owner.SessionID, c.text)
+		cancel()
+		cleared = err == nil && res.Status == promptq.Accepted
+	}
+	if !cleared {
+		// The row is unknown with its Enter marked, so MarkGaveUp (never-entering rows only) does not apply; the ledger sweep
+		// settles such a row at once, so it does not count as open. The text itself may be stuck: say so.
+		log.Printf("typed submit %s: clean-up after an unknown Enter failed twice; the text may be stuck in the composer", c.id)
+	}
 	writeTyped(w, http.StatusOK, typedAnswer{Outcome: "unknown", Mode: "fill"})
 }
 

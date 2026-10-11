@@ -22,8 +22,27 @@ func (m *Module) keysSubmit(w http.ResponseWriter, c *typedCtx, light string, tu
 		refuse(w, http.StatusConflict, "no_owner_yet")
 		return
 	}
-	m.keysSeen.put(c.id, keysRow{}, tune.now()) // before the send: a repeat never types again
-	if m.lightOf(c.owner) != "idle" || q.HasOwner(c.owner.SessionID) {
+	// Atomic claim before anything is typed: a concurrent request with the same id (even on another session, which holds a
+	// different lock) gets the recorded answer and never types.
+	if row, claimed := m.keysSeen.claim(c.id, c.owner.SessionID, tune.now()); !claimed {
+		if row.sid != c.owner.SessionID {
+			refuse(w, http.StatusConflict, "client_msg_id_reused")
+			return
+		}
+		out := "unknown"
+		if row.handed {
+			out = "handed"
+		}
+		writeTyped(w, http.StatusOK, typedAnswer{Outcome: out, Mode: "keys"})
+		return
+	}
+	st, ok := m.freshLight(c.owner)
+	if !ok { // fail closed: an unreadable light is not an idle one
+		m.keysSeen.forget(c.id) // nothing went out
+		refuse(w, http.StatusConflict, "light_unavailable")
+		return
+	}
+	if st != "idle" || q.HasOwner(c.owner.SessionID) {
 		m.keysSeen.forget(c.id) // nothing went out
 		refuse(w, http.StatusConflict, "no_owner_yet")
 		return
@@ -39,6 +58,6 @@ func (m *Module) keysSubmit(w http.ResponseWriter, c *typedCtx, light string, tu
 		refuse(w, http.StatusConflict, "text_left_in_terminal")
 		return
 	}
-	m.keysSeen.put(c.id, keysRow{handed: true}, tune.now())
+	m.keysSeen.put(c.id, keysRow{handed: true, sid: c.owner.SessionID}, tune.now())
 	writeTyped(w, http.StatusOK, typedAnswer{Outcome: "handed", Mode: "keys"})
 }

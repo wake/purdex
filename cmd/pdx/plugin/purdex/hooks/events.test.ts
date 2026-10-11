@@ -2047,9 +2047,10 @@ for (const [name, job] of [
 
 const FTEXT = 'typed\nby the app '
 
-// Mutation gate: skip the clean-up after a failed report -> red (our text would block every later submit).
-for (const [name, answer] of [['503', { status: 503, text: '{}' }], ['409', { status: 409, text: '{"error":"not_leased"}' }]] as [string, Answer][]) {
-  test(`a fill whose single report fails (${name}) clears our text from the composer`, async ($, on) => {
+// Mutation gate: skip the clean-up after a definitive refusal -> red (our text would block every later submit). Only a
+// received 4xx answer proves the daemon did not take the result; anything ambiguous leaves the text to the daemon (codex R1-1).
+for (const [name, answer] of [['409 not leased', { status: 409, text: '{"error":"not_leased"}' }], ['403 not owner', { status: 403, text: '{"error":"not_owner"}' }]] as [string, Answer][]) {
+  test(`a fill whose single report is refused (${name}) clears our text from the composer`, async ($, on) => {
     const w = evWorld(on, { promptNext: nextOnce(FJOB()), promptResult: () => answer })
     await start($, w)
     await w.clock.settle()
@@ -2059,16 +2060,37 @@ for (const [name, answer] of [['503', { status: 503, text: '{}' }], ['409', { st
   })
 }
 
-test('a fill whose report is lost (timeout) clears our text too', async ($, on) => {
+// Mutation gate: clear on an unknown outcome -> red (the daemon may have the result and be about to press Enter: an empty Enter).
+for (const [name, answer] of [['503', { status: 503, text: '{}' }], ['500', { status: 500, text: '{}' }]] as [string, Answer][]) {
+  test(`a fill whose single report got a ${name} leaves the text for the daemon to decide`, async ($, on) => {
+    const w = evWorld(on, { promptNext: nextOnce(FJOB()), promptResult: () => answer })
+    await start($, w)
+    await w.clock.settle()
+    expect(pqResult(w)).toHaveLength(1)
+    expect(w.composer).toBe(FTEXT)
+    expect(w.fillCalls).toHaveLength(1)
+  })
+}
+
+test('a fill whose report is lost (timeout) leaves the text for the daemon to decide', async ($, on) => {
   const w = evWorld(on, { promptNext: nextOnce(FJOB()), promptResult: () => never() })
   await start($, w)
   await w.clock.advance(5000)
   await w.clock.settle()
-  expect(w.composer).toBe('')
+  expect(w.composer).toBe(FTEXT)
+  expect(w.fillCalls).toHaveLength(1)
+})
+
+test('a fill whose report hit a network error leaves the text for the daemon to decide', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(FJOB()), promptResult: () => ({ deny: 'socket gone' }) })
+  await start($, w)
+  await w.clock.settle()
+  expect(w.composer).toBe(FTEXT)
+  expect(w.fillCalls).toHaveLength(1)
 })
 
 test('a fill whose report failed does not clear a composer that no longer holds our text', async ($, on) => {
-  const w = evWorld(on, { promptNext: nextOnce(FJOB()), promptResult: () => { w.composer = 'someone typed this'; return { status: 503, text: '{}' } } })
+  const w = evWorld(on, { promptNext: nextOnce(FJOB()), promptResult: () => { w.composer = 'someone typed this'; return { status: 409, text: '{}' } } })
   await start($, w)
   await w.clock.settle()
   expect(w.composer).toBe('someone typed this')

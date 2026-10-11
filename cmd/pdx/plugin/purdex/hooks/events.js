@@ -499,19 +499,23 @@ async function pqRun($, job) {
   // stale anyway (the daemon types Enter only while filled_at is fresh and cleans the composer otherwise).
   const tries = job.kind === 'fill' ? 1 : PROMPT_RESULT_TRIES
   let delivered = false
+  let refusedCode = 0
   for (let attempt = 0; attempt < tries; attempt++) {
     if (attempt > 0) await $.clock.sleep(PROMPT_RESULT_RETRY_MS * attempt)
     if ((await $.clock.now()) - t0 >= PROMPT_RESULT_BUDGET_MS) break
     const res = await wbRequest($, PROMPT_RESULT_URL, promptResultBody(ev.stream, job.id, out.status, out.reason, out.extra), 0, PROMPT_RESULT_POST_MS)
     const code = res && res !== TIMEOUT && res.res ? res.res.status : 0
     if (code === 200) delivered = true
+    refusedCode = code
     if (code === 200 || code === 409) break
   }
   if (delivered) return
   log($, 'prompt result not accepted for ' + job.kind)
-  // A fill the daemon never heard about (the single report failed) would leave our text in the composer, and any text there
-  // blocks every later submit: take it back, only if it is still exactly ours.
-  if (job.kind === 'fill' && out.status === 'accepted') {
+  // A fill the daemon definitely did not take (a received 4xx: not leased, not owner) would leave our text in the composer, and
+  // any text there blocks every later submit: take it back, only if it is still exactly ours. A timeout, a network error or
+  // a 5xx is ambiguous: the daemon may have the result and be about to press Enter, so clearing now would turn that into an
+  // empty Enter and lose the message; the text stays and the daemon's own clean-up (which only clears our exact text) decides.
+  if (job.kind === 'fill' && out.status === 'accepted' && refusedCode >= 400 && refusedCode < 500) {
     const c = await clearIfOurs($, job.text)
     log($, 'fill report lost; composer clean-up: ' + c)
   }
