@@ -202,13 +202,23 @@ func remoteLiveState(s team.MemberState) bool {
 	return false
 }
 
+// remoteTmuxOf is a remote member's tmux session name: the stored one, else — for a spawned row written before the
+// registered fact stored it (#2630) — the name its host gave the spawn, derived from the op id.
+func remoteTmuxOf(mr memberRow) string {
+	if name := tmuxName(mr.TmuxSession); name != "" || mr.Origin == team.MemberOriginAdopted || mr.SpawnOp == "" {
+		return name
+	}
+	name, _ := team.SpawnTmuxName(mr.SpawnOp)
+	return name
+}
+
 // remoteRosterMember is a remote member's roster entry: addressed by its host's alias, its state as the lead host holds
 // it (joining / releasing / killing show as such), context and model from the cache. It is not "live" in the registry
 // sense (the registry is this host's); Live follows whether its host answered with the session.
 func (m *Module) remoteRosterMember(mr memberRow, open map[string][]TaskRow, teamID string) team.RosterMember {
 	alias := m.remoteAlias(mr.HostID)
 	s := team.RosterSession{SessionID: mr.SessionID, Ref: mr.Ref, Address: firstNonEmpty(alias, mr.HostID) + "/" + mr.Ref,
-		Title: firstNonEmpty(m.remoteTitleOf(mr.HostID, mr.SessionID), mr.Title), TmuxSession: tmuxName(mr.TmuxSession), HostID: mr.HostID, HostAlias: alias}
+		Title: firstNonEmpty(m.remoteTitleOf(mr.HostID, mr.SessionID), mr.Title), TmuxSession: remoteTmuxOf(mr), HostID: mr.HostID, HostAlias: alias}
 	s.Context, s.ContextUnavailable = m.remoteContextOf(mr.HostID, mr.SessionID)
 	if s.Context == nil && !s.ContextUnavailable {
 		s.Context = mr.Usage // the reading synced onto the row, when the host's answer has none
