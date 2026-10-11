@@ -94,7 +94,13 @@ export function saveAppPrefs(path: string, p: AppPrefs, fs: PrefsFs = REAL_FS): 
   let fd: number | null = null
   try {
     fd = fs.openSync(tmp, 'wx', 0o600)
-    fs.writeSync(fd, serializeAppPrefs(p))
+    const buf = Buffer.from(serializeAppPrefs(p), 'utf8')
+    let offset = 0
+    while (offset < buf.length) {
+      const n = fs.writeSync(fd, buf, offset, buf.length - offset)
+      if (n <= 0) throw new Error('short write: 0 bytes written with data remaining')
+      offset += n
+    }
     fs.fsyncSync(fd)
     const done = fd
     fd = null

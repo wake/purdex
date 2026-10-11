@@ -216,6 +216,36 @@ describe('saveAppPrefs atomicity', () => {
       }
     })
   }
+  it('keeps writing after a short write until every byte is out', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'app-prefs-atomic-'))
+    try {
+      const path = join(dir, 'app-prefs.json')
+      const half: PrefsFs = {
+        ...real,
+        writeSync: ((fd: number, buf: Uint8Array, off: number, len: number) =>
+          real.writeSync(fd, buf, off, Math.max(1, Math.floor(len / 2)))) as typeof writeSync,
+      }
+      saveAppPrefs(path, P({ showTray: false, installId: UUID }), half)
+      expect(readFileSync(path, 'utf8')).toBe(serializeAppPrefs(P({ showTray: false, installId: UUID })))
+      expect(readdirSync(dir)).toEqual(['app-prefs.json'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+  it('a zero-byte write with bytes left throws, keeps the old file and leaves no temp', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'app-prefs-atomic-'))
+    try {
+      const path = join(dir, 'app-prefs.json')
+      saveAppPrefs(path, P({ showTray: false, installId: UUID }))
+      const before = readFileSync(path, 'utf8')
+      const stuck: PrefsFs = { ...real, writeSync: (() => 0) as unknown as typeof writeSync }
+      expect(() => saveAppPrefs(path, P({ showTray: true, installId: UUID }), stuck)).toThrow()
+      expect(readFileSync(path, 'utf8')).toBe(before)
+      expect(readdirSync(dir)).toEqual(['app-prefs.json'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
   it('a successful write leaves no temp files behind', () => {
     const dir = mkdtempSync(join(tmpdir(), 'app-prefs-atomic-'))
     try {
