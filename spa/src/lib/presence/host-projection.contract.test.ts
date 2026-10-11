@@ -67,7 +67,7 @@ describe('which host mutation paths bump hostsRev', () => {
   })
 
   it('applyHostTransfer that no longer fits (stale) changes nothing', () => {
-    const r = useHostStore.getState().applyHostTransfer({ create: [], overwrite: [{ hostId: 'ha', expect: { endpoint: 'x:1', token: null, daemonId: 'mlab:aaaaaa' }, name: 'n', ip: 'x', port: 1, token: null }] })
+    const r = useHostStore.getState().applyHostTransfer({ create: [], overwrite: [{ hostId: 'ha', expect: { endpoint: 'x:1', token: '', daemonId: 'mlab:aaaaaa' }, name: 'n', ip: 'x', port: 1, token: '' }] })
     expect(r.kind).toBe('stale')
     expect(rev()).toBe(5)
   })
