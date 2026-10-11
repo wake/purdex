@@ -62,6 +62,9 @@ type TeamCaps struct {
 	// FactKinds are the member-host facts this host applies as a lead host (POST /api/peers/team/facts, X3b-2). Absent:
 	// an older daemon, which has no facts route.
 	FactKinds []string `json:"fact_kinds,omitempty"`
+	// RootsChange: this daemon applies POST /api/peers/team/roots-change (cross-host roots spec 2026-10-12): a capability
+	// boolean, not a team-command kind. Absent: an older daemon, where a lead host keeps its root changes pending.
+	RootsChange bool `json:"roots_change,omitempty"`
 }
 
 // AddressVersionV5 is Envelope.AddressVersion for Peer Address v5 (peer
