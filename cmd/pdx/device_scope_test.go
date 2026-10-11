@@ -61,7 +61,7 @@ func TestDeviceAllowed_ExactSet(t *testing.T) {
 	want := []string{
 		"GET /api/info", "POST /api/ws-ticket", "GET /api/hostconfig",
 		"/ws/host-events", "/ws/terminal/{code}", "GET /ws/conversations/{provider}/{session_id}",
-		"POST /api/sessions", "POST /api/sessions/{code}/send-keys", "GET /api/sessions/{code}/provenance", "GET /api/sessions/{code}/transcript",
+		"POST /api/sessions", "POST /api/sessions/{code}/send-keys", "POST /api/sessions/{code}/submit", "GET /api/sessions/{code}/provenance", "GET /api/sessions/{code}/transcript",
 		"GET /api/conversations/{provider}/{session_id}", "GET /api/conversations/{provider}/{session_id}/subagents/{agent_id}",
 		"GET /api/team/approvals/{id}", "GET /api/team/adoptions/{id}", "POST /api/team/approvals/{id}/decide", "GET /api/team/unattended", "PUT /api/team/unattended", "PUT /api/team/relay-quota", "PUT /api/team/max-members", "POST /api/relay/self",
 		"GET /api/nex/v1/executions", "/api/nex/",

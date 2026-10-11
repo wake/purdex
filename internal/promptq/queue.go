@@ -59,6 +59,11 @@ const (
 	maxQueued          = 16 // requests waiting per session
 	maxLedger          = 4096
 	maxOpenTyped       = 256 // typed rows in filled / entering / unknown: never forgotten, so bounded by count
+	// A typed row still open after OpenTypedMaxAge (or an unknown one whose Enter may have gone) is settled by the sweep;
+	// its id is then kept as a tombstone (at most maxTombstones, TombstoneTTL) so a replay never types again.
+	OpenTypedMaxAge = 10 * time.Minute
+	maxTombstones   = 4096
+	TombstoneTTL    = 24 * time.Hour
 	// MaxTextBytes is the largest text a fill / clear_if carries and a read reports, in UTF-8 BYTES. The mod parses jobs
 	// with the same limit (workbook.js MAX_TYPED_TEXT_BYTES): its limit must never be smaller than this one.
 	MaxTextBytes = 16 << 10
@@ -126,6 +131,7 @@ type entry struct {
 	res        Result
 	phase      string        // fill only
 	enterMark  bool          // fill only: MarkEntering was written, so the text may have been sent
+	settled    bool          // fill only: an open row the sweep gave up on (phase unknown); no longer counted as open
 	done       chan struct{} // closed when state becomes stDone
 	stream     string        // the stream it was handed to
 	queuedAt   time.Time
@@ -146,12 +152,18 @@ type Queue struct {
 	busy   map[string]*entry   // session -> the entry handed out (one at a time)
 	ledger map[string]*entry   // client_msg_id -> entry (submits)
 	wake   map[string]chan struct{}
+	// seen: when a mod owner was last seen per session (HasOwner, NoOwnerFor, Next); started: the queue's start, the first
+	// sighting of every session (NoOwnerFor).
+	seen    map[string]time.Time
+	started time.Time
+	tombs   map[string]tomb // client_msg_id -> the evicted typed row's recorded answer
 }
 
 // New returns a queue over the owners.
 func New(o Owners) *Queue {
 	return &Queue{owners: o, Now: time.Now, queues: map[string][]*entry{}, leases: map[string]*entry{},
-		busy: map[string]*entry{}, ledger: map[string]*entry{}, wake: map[string]chan struct{}{}}
+		busy: map[string]*entry{}, ledger: map[string]*entry{}, wake: map[string]chan struct{}{},
+		seen: map[string]time.Time{}, started: time.Now(), tombs: map[string]tomb{}}
 }
 
 func (q *Queue) wait() time.Duration {
@@ -170,8 +182,30 @@ func (q *Queue) handTimeout() time.Duration {
 
 // HasOwner: some live mod stream can take a prompt for the session now (the conversation's `send` capability).
 func (q *Queue) HasOwner(sessionID string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
 	_, ok := q.owners.OwnerOf(sessionID)
+	if ok {
+		q.seen[sessionID] = q.Now()
+	}
 	return ok
+}
+
+// NoOwnerFor is 0 while a mod owns the session, else how long it has been since one was last seen (the queue's start counts
+// as the first sighting, so a daemon that just started does not call a session ownerless before its mod could connect).
+func (q *Queue) NoOwnerFor(sessionID string) time.Duration {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	now := q.Now()
+	if _, ok := q.owners.OwnerOf(sessionID); ok {
+		q.seen[sessionID] = now
+		return 0
+	}
+	at := q.seen[sessionID]
+	if at.Before(q.started) {
+		at = q.started
+	}
+	return now.Sub(at)
 }
 
 func newID() string {
@@ -237,9 +271,25 @@ func (q *Queue) removeQueued(e *entry) {
 // sweepLedger drops old settled rows. q.mu held.
 func (q *Queue) sweepLedger() {
 	now := q.Now()
+	for _, e := range q.ledger {
+		if e.job.Kind == KindFill && e.state == stDone && openPhase(e.phase) && !e.settled &&
+			((e.phase == PhaseUnknown && e.enterMark) || now.Sub(e.finishedAt) > OpenTypedMaxAge) {
+			e.phase, e.settled = PhaseUnknown, true // it may or may not have been sent; nothing more will be done for it
+		}
+	}
 	for k, e := range q.ledger {
 		if forgettable(e) && now.Sub(e.finishedAt) > LedgerTTL {
-			delete(q.ledger, k)
+			q.evict(k, e)
+		}
+	}
+	for k, t := range q.tombs {
+		if now.Sub(t.at) > TombstoneTTL {
+			delete(q.tombs, k)
+		}
+	}
+	for k, at := range q.seen {
+		if now.Sub(at) > LedgerTTL {
+			delete(q.seen, k)
 		}
 	}
 	// A flood of distinct ids: forget the OLDEST settled rows first; an open (queued or handed-out) row is never forgotten,
@@ -255,8 +305,43 @@ func (q *Queue) sweepLedger() {
 		if oldest == "" {
 			return // nothing settled to forget: the open rows are bounded by the per-session queue and maxOpenTyped
 		}
-		delete(q.ledger, oldest)
+		q.evict(oldest, q.ledger[oldest])
 	}
+}
+
+// evict forgets a ledger row; EVERY typed row leaves a tombstone holding its recorded answer, so a replay of its id is
+// answered the same and never types again. q.mu held.
+func (q *Queue) evict(k string, e *entry) {
+	delete(q.ledger, k)
+	if e.job.Kind == KindFill && k != "" {
+		res := q.view(e)
+		res.Text = "" // the answer, not the user's text
+		if res.Phase == PhaseUnknown {
+			res.Status = Unknown // a row the sweep settled: it may or may not have been sent
+		}
+		q.tombstone(k, res)
+	}
+}
+
+// tomb is an evicted typed row's answer and when it was evicted.
+type tomb struct {
+	at  time.Time
+	res Result
+}
+
+// tombstone remembers an id, dropping the oldest when full. q.mu held.
+func (q *Queue) tombstone(id string, res Result) {
+	for len(q.tombs) >= maxTombstones {
+		var oldest string
+		var at time.Time
+		for k, t := range q.tombs {
+			if oldest == "" || t.at.Before(at) {
+				oldest, at = k, t.at
+			}
+		}
+		delete(q.tombs, oldest)
+	}
+	q.tombs[id] = tomb{at: q.Now(), res: res}
 }
 
 // Submit queues a prompt for the session and waits for the mod's report (or the wait to end). clientMsgID identifies the
@@ -289,6 +374,10 @@ func (q *Queue) submitKeyed(ctx context.Context, kind, sessionID, clientMsgID, t
 			q.mu.Unlock()
 			return q.await(ctx, e), nil // joins the first request's wait, or answers the settled ledger row
 		}
+	}
+	if t, dead := q.tombs[clientMsgID]; dead && clientMsgID != "" && kind == KindFill {
+		q.mu.Unlock() // an evicted typed row: its recorded answer, never typed again
+		return t.res, nil
 	}
 	if _, ok := q.owners.OwnerOf(sessionID); !ok {
 		q.mu.Unlock()
@@ -426,6 +515,9 @@ func (q *Queue) Next(ctx context.Context, stream, sessionID string, wait time.Du
 		// an owner read before another poll or an expiry changed the queue. (The registry itself can still move on right
 		// after: the mod re-reads its session id before it submits, and the result's owner re-check settles the rest.)
 		owner, ok := q.owners.OwnerOf(sessionID)
+		if ok {
+			q.seen[sessionID] = q.Now()
+		}
 		// A handed-out request whose result never came is unknown after HandTimeout whether or not its caller is still
 		// waiting (a caller that went away leaves nobody to enforce it): the session must not stay blocked for good.
 		if b := q.busy[sessionID]; b != nil && q.Now().Sub(b.handedAt) >= q.handTimeout() {
