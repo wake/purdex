@@ -103,6 +103,7 @@ func (m *SessionModule) listSessions(ctx context.Context) ([]SessionInfo, error)
 			Mode:         "terminal", // default
 			Cwd:          s.Cwd,
 			TmuxInstance: instance,
+			Branch:       branchOf(s.Cwd),
 		}
 		if err := m.applyActivePaneMetadata(ctx, &info); err != nil {
 			return nil, err
@@ -169,6 +170,7 @@ func (m *SessionModule) getSession(ctx context.Context, code string) (*SessionIn
 				Mode:         "terminal",
 				Cwd:          s.Cwd,
 				TmuxInstance: m.tmuxInstance(ctx),
+				Branch:       branchOf(s.Cwd),
 			}
 			if err := m.applyActivePaneMetadata(ctx, info); err != nil {
 				return nil, err
