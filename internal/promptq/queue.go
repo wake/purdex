@@ -28,7 +28,32 @@ const Key = "prompt.queue"
 const (
 	KindSubmit    = "submit"
 	KindInterrupt = "interrupt"
+	KindFill      = "fill"     // type text into the empty composer without pressing Enter (K-1)
+	KindClearIf   = "clear_if" // clear the composer only if it still holds exactly the job's text
+	KindRead      = "read"     // report the composer's text
 )
+
+// Phases of a typed submit (kind fill), one per client_msg_id, in the same ledger as submit:
+//
+//	queued -> filled -> entering -> entered | unknown      filled -> cleared      (a refused fill is cleared)
+//
+// `entering` is written BEFORE the daemon presses Enter (the at-most-once line): from there the text may have been sent,
+// so it can no longer be cleared, and a repeat of the id never types again.
+const (
+	PhaseQueued   = "queued"
+	PhaseFilled   = "filled"
+	PhaseEntering = "entering"
+	PhaseEntered  = "entered"
+	PhaseCleared  = "cleared"
+	PhaseUnknown  = "unknown"
+)
+
+// Wire format (daemon <-> mod). prompt/next answers {"job":{"id","kind","session_id","text"?}} with kind submit |
+// interrupt | fill | clear_if | read (text: submit, fill, clear_if). The mod reports with prompt/result
+// {"stream","job_id","status":"accepted|dropped|busy","reason"?,"filled_at"?,"text"?}: filled_at (unix ms, read from the
+// mod's clock right after a successful fill) on an accepted fill; text on an accepted read. Drop reasons of a fill:
+// session_changed, input_not_empty, dialog_open, no_composer, refused, fill_mismatch; of a clear_if: not_ours.
+// A fill result is posted once by the mod (no retries): a lost report is `unknown` here.
 
 // Statuses an App is answered, and a mod reports (accepted | dropped | busy).
 const (
@@ -51,9 +76,10 @@ const (
 
 // Errors of the mod-facing calls.
 var (
-	ErrNotLeased = errors.New("promptq: the job is not leased to this stream")
-	ErrNotOwner  = errors.New("promptq: the stream is no longer the owner of the session")
-	ErrBusy      = errors.New("promptq: too many requests waiting for the session")
+	ErrBadTransition = errors.New("promptq: the ledger row is not in a state that allows this step")
+	ErrNotLeased     = errors.New("promptq: the job is not leased to this stream")
+	ErrNotOwner      = errors.New("promptq: the stream is no longer the owner of the session")
+	ErrBusy          = errors.New("promptq: too many requests waiting for the session")
 )
 
 // Owners says which stream owns a session's prompts now ("" / false: none).
@@ -71,14 +97,20 @@ type Job struct {
 
 // Outcome is the mod's report.
 type Outcome struct {
-	Status string // accepted | dropped | busy
-	Reason string // dropped: the mod's drop reason
+	Status   string // accepted | dropped | busy
+	Reason   string // dropped: the mod's drop reason
+	FilledAt int64  // accepted fill: unix ms, from the mod
+	Text     string // accepted read: the composer's text
 }
 
 // Result is what the App is answered.
 type Result struct {
 	Status string `json:"status"`
 	Reason string `json:"reason,omitempty"`
+	// Phase is the ledger phase of a typed submit (fill) at the time of the answer; "" for any other kind.
+	Phase    string `json:"phase,omitempty"`
+	FilledAt int64  `json:"filled_at,omitempty"`
+	Text     string `json:"text,omitempty"`
 }
 
 type state int
@@ -95,6 +127,7 @@ type entry struct {
 	job        Job
 	state      state
 	res        Result
+	phase      string        // fill only
 	done       chan struct{} // closed when state becomes stDone
 	stream     string        // the stream it was handed to
 	queuedAt   time.Time
@@ -172,6 +205,16 @@ func (q *Queue) finish(e *entry, res Result) {
 		return
 	}
 	e.state, e.res, e.finishedAt = stDone, res, q.Now()
+	if e.job.Kind == KindFill {
+		switch res.Status {
+		case Accepted:
+			e.phase = PhaseFilled
+		case Unknown:
+			e.phase = PhaseUnknown
+		default: // dropped | busy | timeout: nothing was left in the composer
+			e.phase = PhaseCleared
+		}
+	}
 	close(e.done)
 	if q.leases[e.job.ID] == e {
 		delete(q.leases, e.job.ID)
@@ -221,11 +264,22 @@ func (q *Queue) sweepLedger() {
 // Submit queues a prompt for the session and waits for the mod's report (or the wait to end). clientMsgID identifies the
 // request for the at-most-once ledger. The Result's status is accepted | dropped | busy | timeout | unknown | no_mod.
 func (q *Queue) Submit(ctx context.Context, sessionID, clientMsgID, text string) (Result, error) {
+	return q.submitKeyed(ctx, KindSubmit, sessionID, clientMsgID, text)
+}
+
+// SubmitFill types text into the session's composer through the mod (no Enter) and waits for the report: accepted carries
+// FilledAt and Phase "filled". It shares Submit's ledger and key space: a repeat of the id answers the recorded phase and
+// never types again. The route drives the later phases with MarkEntering / MarkEntered / MarkCleared / MarkUnknown.
+func (q *Queue) SubmitFill(ctx context.Context, sessionID, clientMsgID, text string) (Result, error) {
+	return q.submitKeyed(ctx, KindFill, sessionID, clientMsgID, text)
+}
+
+func (q *Queue) submitKeyed(ctx context.Context, kind, sessionID, clientMsgID, text string) (Result, error) {
 	q.mu.Lock()
 	q.sweepLedger()
 	if e, ok := q.ledger[clientMsgID]; ok && clientMsgID != "" {
 		switch {
-		case e.job.SessionID != sessionID || e.job.Text != text:
+		case e.job.SessionID != sessionID || e.job.Text != text || e.job.Kind != kind:
 			q.mu.Unlock() // the same id for a different request is a client bug, not a repeat
 			return Result{Status: Dropped, Reason: "client_msg_id_reused"}, nil
 		case e.state == stDone && e.res.Status == Busy:
@@ -243,7 +297,7 @@ func (q *Queue) Submit(ctx context.Context, sessionID, clientMsgID, text string)
 		q.mu.Unlock()
 		return Result{}, ErrBusy
 	}
-	e := &entry{key: clientMsgID, job: Job{ID: newID(), Kind: KindSubmit, SessionID: sessionID, Text: text}, done: make(chan struct{}), queuedAt: q.Now()}
+	e := &entry{key: clientMsgID, job: Job{ID: newID(), Kind: kind, SessionID: sessionID, Text: text}, done: make(chan struct{}), queuedAt: q.Now()}
 	if clientMsgID != "" {
 		q.ledger[clientMsgID] = e
 	}
@@ -255,6 +309,21 @@ func (q *Queue) Submit(ctx context.Context, sessionID, clientMsgID, text string)
 
 // Interrupt asks the mod to abort the session's running turn; there is no ledger (an abort twice is harmless).
 func (q *Queue) Interrupt(ctx context.Context, sessionID string) (Result, error) {
+	return q.transient(ctx, KindInterrupt, sessionID, "")
+}
+
+// ClearIf asks the mod to clear the composer only if it still holds exactly text (the cleanup of a fill that was not
+// sent; never clears someone else's draft). No ledger: it is best effort and harmless twice.
+func (q *Queue) ClearIf(ctx context.Context, sessionID, text string) (Result, error) {
+	return q.transient(ctx, KindClearIf, sessionID, text)
+}
+
+// Read asks the mod for the composer's text (accepted: Result.Text).
+func (q *Queue) Read(ctx context.Context, sessionID string) (Result, error) {
+	return q.transient(ctx, KindRead, sessionID, "")
+}
+
+func (q *Queue) transient(ctx context.Context, kind, sessionID, text string) (Result, error) {
 	q.mu.Lock()
 	if _, ok := q.owners.OwnerOf(sessionID); !ok {
 		q.mu.Unlock()
@@ -264,7 +333,7 @@ func (q *Queue) Interrupt(ctx context.Context, sessionID string) (Result, error)
 		q.mu.Unlock()
 		return Result{}, ErrBusy
 	}
-	e := &entry{job: Job{ID: newID(), Kind: KindInterrupt, SessionID: sessionID}, done: make(chan struct{}), queuedAt: q.Now()}
+	e := &entry{job: Job{ID: newID(), Kind: kind, SessionID: sessionID, Text: text}, done: make(chan struct{}), queuedAt: q.Now()}
 	q.queues[sessionID] = append(q.queues[sessionID], e)
 	q.signal(sessionID)
 	q.mu.Unlock()
@@ -279,7 +348,7 @@ func (q *Queue) await(ctx context.Context, e *entry) Result {
 	for {
 		q.mu.Lock()
 		if e.state == stDone {
-			r := e.res
+			r := q.view(e)
 			q.mu.Unlock()
 			return r
 		}
@@ -316,7 +385,7 @@ func (q *Queue) await(ctx context.Context, e *entry) Result {
 				q.finish(e, Result{Status: Timeout})
 			}
 			done := e.state == stDone
-			r := e.res
+			r := q.view(e)
 			q.mu.Unlock()
 			if handTimer != nil {
 				handTimer.Stop()
@@ -429,10 +498,72 @@ func (q *Queue) Result(stream, jobID string, o Outcome) error {
 		return ErrNotOwner
 	}
 	switch o.Status {
-	case Accepted, Busy:
-		q.finish(e, Result{Status: o.Status})
+	case Accepted:
+		res := Result{Status: Accepted}
+		switch e.job.Kind {
+		case KindFill:
+			res.FilledAt = o.FilledAt
+			if res.FilledAt <= 0 {
+				res.FilledAt = q.Now().UnixMilli()
+			}
+		case KindRead:
+			res.Text = o.Text
+		}
+		q.finish(e, res)
+	case Busy:
+		q.finish(e, Result{Status: Busy})
 	default:
 		q.finish(e, Result{Status: Dropped, Reason: o.Reason})
 	}
 	return nil
+}
+
+// view is the entry's answer with its current phase. q.mu held.
+func (q *Queue) view(e *entry) Result {
+	r := e.res
+	r.Phase = e.phase
+	return r
+}
+
+// Lookup returns the recorded state of a typed submit by client_msg_id (never runs anything), false if the id is not in
+// the ledger.
+func (q *Queue) Lookup(clientMsgID string) (Result, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	e, ok := q.ledger[clientMsgID]
+	if !ok || e.job.Kind != KindFill || clientMsgID == "" {
+		return Result{}, false
+	}
+	return q.view(e), true
+}
+
+// step moves a settled fill row from one of the allowed phases to the next; anything else is ErrBadTransition.
+func (q *Queue) step(clientMsgID, to string, from ...string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	e, ok := q.ledger[clientMsgID]
+	if !ok || clientMsgID == "" || e.job.Kind != KindFill || e.state != stDone {
+		return ErrBadTransition
+	}
+	for _, f := range from {
+		if e.phase == f {
+			e.phase = to
+			return nil
+		}
+	}
+	return ErrBadTransition
+}
+
+// MarkEntering is written BEFORE Enter is pressed: it succeeds once, from filled only.
+func (q *Queue) MarkEntering(id string) error { return q.step(id, PhaseEntering, PhaseFilled) }
+
+// MarkEntered: Enter went out.
+func (q *Queue) MarkEntered(id string) error { return q.step(id, PhaseEntered, PhaseEntering) }
+
+// MarkCleared: the fill was not sent (guard refused, stale, waiting) and the composer is being cleaned up. Not after entering.
+func (q *Queue) MarkCleared(id string) error { return q.step(id, PhaseCleared, PhaseFilled) }
+
+// MarkUnknown: it may or may not have been sent.
+func (q *Queue) MarkUnknown(id string) error {
+	return q.step(id, PhaseUnknown, PhaseFilled, PhaseEntering)
 }

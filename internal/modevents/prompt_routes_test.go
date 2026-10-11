@@ -128,6 +128,24 @@ func TestPromptResult_Reported(t *testing.T) {
 	}
 }
 
+// K-1a-1: filled_at and text ride the result; a text over the bound or a negative filled_at is refused.
+func TestPromptResult_FilledAtAndText(t *testing.T) {
+	f := &fakePrompt{}
+	h := promptHandler(f)
+	body := `{"stream":"` + testStream + `","job_id":"pj-1","status":"accepted","filled_at":1700000000123,"text":"a\nb"}`
+	if rec := post(t, h, http.MethodPost, PromptResultPath, body); rec.Code != http.StatusOK || f.results[0].FilledAt != 1700000000123 || f.results[0].Text != "a\nb" {
+		t.Fatalf("%+v", f.results)
+	}
+	for name, b := range map[string]string{
+		"huge text":   `{"stream":"` + testStream + `","job_id":"pj-1","status":"accepted","text":"` + strings.Repeat("x", 33<<10) + `"}`,
+		"negative at": `{"stream":"` + testStream + `","job_id":"pj-1","status":"accepted","filled_at":-1}`,
+	} {
+		if rec := post(t, h, http.MethodPost, PromptResultPath, b); rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: %d", name, rec.Code)
+		}
+	}
+}
+
 func TestPromptResult_Conflicts(t *testing.T) {
 	for _, c := range []struct {
 		err  error

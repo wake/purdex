@@ -13,15 +13,18 @@ import (
 const (
 	PromptNextPath   = "/mod/v1/prompt/next"
 	PromptResultPath = "/mod/v1/prompt/result"
+	maxPromptText    = 32 << 10    // the largest fill or read text accepted
 	CapPromptV1      = "prompt.v1" // announced by a mod that can run a prompt job
 )
 
 // PromptResult is the body of POST /mod/v1/prompt/result.
 type PromptResult struct {
-	Stream string `json:"stream"`
-	JobID  string `json:"job_id"`
-	Status string `json:"status"` // accepted | dropped | busy
-	Reason string `json:"reason"`
+	Stream   string `json:"stream"`
+	JobID    string `json:"job_id"`
+	Status   string `json:"status"` // accepted | dropped | busy
+	Reason   string `json:"reason"`
+	FilledAt int64  `json:"filled_at,omitempty"` // accepted fill: unix ms
+	Text     string `json:"text,omitempty"`      // accepted read: the composer text
 }
 
 // Errors of a PromptService.
@@ -113,7 +116,7 @@ func (h *handler) promptResult(w http.ResponseWriter, r *http.Request) {
 	if !h.readJSON(w, r, &in) {
 		return
 	}
-	if !ValidStream(in.Stream) || in.JobID == "" || len(in.JobID) > maxJobID || len(in.Reason) > 128 ||
+	if !ValidStream(in.Stream) || in.JobID == "" || len(in.JobID) > maxJobID || len(in.Reason) > 128 || len(in.Text) > maxPromptText || in.FilledAt < 0 ||
 		(in.Status != "accepted" && in.Status != "dropped" && in.Status != "busy") {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad_request"})
 		return
