@@ -1,5 +1,50 @@
 # Changelog
 
+## [1.0.0-alpha.711] - 2026-10-11
+
+> daemon、mod、SPA 都有改：**要部署 daemon，並重跑 `pdx setup`**（#2662 改了 mod 的 pdx-team skill）。
+
+### Internal：沒裝 mod 的終端機對話宣告可以直接打字（K-2a-1，#2654）
+
+- 對 live、沒有 mod owner 的終端機對話，daemon 的 capabilities 宣告 `send: keys`（之後 App 送出時改用直接打字的路徑）；WS 推送的 capabilities 改用刷新後的 header 計算，並排在 header 訊框之前。App 要等 K-2a-2 才會用到，這一版行為不變。
+
+### Changed：worker 指揮台的即時列與結束狀態改用 Nexen 事件（U4-4a，#2650）
+
+- worker 分頁的指揮台：即時列與背景工作提示改由 Nexen 事件驅動，生命週期變化顯示成系統列；worker 結束後保留指揮台內容並在底部顯示已結束。
+
+### Fixed：同一個 member 不會被連續接力兩次（#2653）
+
+- lead 對 member 的舊 ref 下 `pdx relay` 時，daemon 會經接力紀錄找到新 session；若前一次接力還在收尾（新 session 的第一輪還沒結束），現在回 409 `relay_open` 並附上前一個 op，不再對新 session 再接力一次。跨主機的 member 由成員主機在同一個交易裡擋下（lead 端會看到這次接力失敗）。
+
+### Changed：部署前檢查不被「正在收尾」的接力擋住（#2657）
+
+- `GET /api/team/inflight` 的 `relays_active` 不再計入「已清掉舊 session、新 session 正在跑」的接力（只差新 session 第一輪結束的回報，或 15 分鐘後由 daemon 自行結算）；它仍列在 `relays` 裡並標 `settling: true`。新 session 不在線或狀態不明的照計。`pdx setup` 遇到只剩收尾中的接力會放行並提示。
+
+### Changed：`pdx relay --wait` 等待時印進度（#2662）
+
+- 等待期間每次狀態變化在 stderr 印一行（例如「接力 claimed → writing（member 正在寫交接檔，12s）」），同一狀態超過一分鐘再印「接力仍在進行」，讓前景跑的終端機不會看起來像卡死；exit code 與 stdout 不變。pdx-team skill 補充：lead 也可以用背景執行，但要讀背景任務的結果，「接力完成」通知只是輔助訊號。
+
+
+### Fixed：直接打字送出的長文字不再被吞掉 Enter（K-1c，#2660）
+
+- 沒裝 mod 的 session 走直接打字時，改成先打字、等 150 ms、重新確認燈號，再單獨送 Enter。真機實測文字和 Enter 一起送時，90 字以上 Enter 會被吞掉，daemon 卻回報已送出。
+- 結尾是反斜線的文字一律補一個空格（避免被當成換行接續），填字與打字兩條路一致；補完超過 4000 bytes 回 `too_long`。進行中的打字認領不會被淘汰或過期。
+
+### Added：worker 指揮台補上狀態 chips 與交接控制（U4-4b，#2658）
+
+- 狀態列右側顯示事件串流狀態、觀察者數與控制權持有者（例如「● live · 2 observers · lease: you」）。
+- 指揮台也能「帶回終端機」與「退出」：狀態列的終端機鈕、檢視選單的「終端機」項、狀態列的「退出」鈕，流程與確認對話框跟原本的房間檢視相同。
+
+### Changed：worker 分頁預設打開指揮台，聊天改用共用的聊天元件（U4-5a，#2668）
+
+- worker（Nexen 執行體）分頁預設顯示指揮台；聊天檢視改用跟一般 session 同一套聊天元件，舊的 room 檢視退場。
+
+### Changed：在電腦前時不推到手機（daemon 端，PA-1，#2670）
+
+- Mac 回報新增「整台電腦閒置多久、有沒有鎖螢幕、幾分鐘算離開」（`PUT /api/push/presence` 的 `v:2` 欄位），新增 capability `push.presence.v2`。只要有一台 Mac 判定你在電腦前（閒置未達你設的分鐘數，或鎖螢幕未滿 1 分鐘），**手機一律不推**——agent 事件與核准請求都一樣、不論 session 或分頁；推播延遲送出前會再確認一次。舊版 App 照舊用原本的規則（正在看的 session 不推）。
+- AskUserQuestion 的去重只算「真的推出去」的那一則；daemon 重啟時不再把當時開著的提問當成已推過（寧可重複一次，也不漏掉唯一的提醒）。
+- App 端（Mac 回報新欄位、設定「離開電腦幾分鐘後推到手機」）是下一階段；這一版部署後，新版 App 上線前行為照舊。規格：`docs/specs/2026-10-11-push-away-presence-spec.md`。
+
 ## [1.0.0-alpha.710] - 2026-10-11
 
 > daemon、mod、SPA 都有改：**要部署 daemon，並重跑 `pdx setup`**（#2633 改了 mod）。
