@@ -2,6 +2,7 @@
 package teammod
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -182,5 +183,33 @@ func TestPause_LiveLocalMembersOfLead(t *testing.T) {
 	s.localHostID = ""
 	if got, _ := s.LiveLocalMembersOfLead("lead-1"); len(got) != 2 {
 		t.Fatalf("with no local host id: %d members, want the active local and the active remote", len(got))
+	}
+}
+
+// Codex attack (high): the roster asks about every session it lists; a host with very many sessions must not meet SQLite's
+// limit on bound variables and silently show nobody as paused. Mutation gate: an IN (?, ?, ...) per id -> the error (red).
+func TestPause_PausesAmongTakesAnyNumberOfSessions(t *testing.T) {
+	s := openTestStore(t)
+	if _, err := s.AddPause(pauseRow("sid-paused", team.PauseCauseQuota, team.PauseRoleSolo, 7)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddPause(pauseRow("sid-paused", team.PauseCauseLead, team.PauseRoleSolo, 3)); err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, 70000)
+	for i := 0; i < 70000; i++ {
+		ids = append(ids, fmt.Sprintf("sid-%d", i))
+	}
+	ids = append(ids, "sid-paused")
+	got, err := s.PausesAmong(ids)
+	if err != nil {
+		t.Fatalf("70001 ids: %v", err)
+	}
+	p, ok := got["sid-paused"]
+	if !ok || len(got) != 1 || p.Since != 3 || len(p.Causes) != 2 || p.Causes[0] != team.PauseCauseLead || p.Causes[1] != team.PauseCauseQuota {
+		t.Fatalf("pauses = %+v", got)
+	}
+	if none, err := s.PausesAmong(nil); err != nil || none == nil || len(none) != 0 {
+		t.Fatalf("no ids: %#v err=%v", none, err)
 	}
 }

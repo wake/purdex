@@ -4,7 +4,6 @@ package teammod
 import (
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -157,46 +156,37 @@ func (s *Store) bounceCounts() (map[string]int, error) {
 }
 
 // PausesAmong maps each of ids that is paused to its causes (sorted) and earliest since; a session that is not paused is
-// absent. The roster reads it once for every session it lists.
+// absent. The roster reads it once for every session it lists. It reads the pause rows (few: only paused sessions have any)
+// and keeps the ones asked for, so the number of ids never meets SQLite's limit on bound variables.
 func (s *Store) PausesAmong(ids []string) (map[string]team.RosterPause, error) {
 	out := map[string]team.RosterPause{}
 	if len(ids) == 0 {
 		return out, nil
 	}
-	rows, err := s.db.Query(`SELECT session_id, cause, since FROM session_pauses WHERE session_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")+`)`, anySlice(ids)...)
+	want := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		want[id] = struct{}{}
+	}
+	rows, err := s.Pauses()
 	if err != nil {
-		return nil, fmt.Errorf("pauses among sessions: %w", err)
+		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var sid, cause string
-		var since int64
-		if err := rows.Scan(&sid, &cause, &since); err != nil {
-			return nil, fmt.Errorf("pauses among sessions: %w", err)
+	for _, r := range rows { // by since: the first row of a session is its earliest
+		if _, ok := want[r.SessionID]; !ok {
+			continue
 		}
-		p := out[sid]
-		if len(p.Causes) == 0 || since < p.Since {
-			p.Since = since
+		p, seen := out[r.SessionID]
+		if !seen {
+			p.Since = r.Since
 		}
-		p.Causes = append(p.Causes, cause)
-		out[sid] = p
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("pauses among sessions: %w", err)
+		p.Causes = append(p.Causes, r.Cause)
+		out[r.SessionID] = p
 	}
 	for sid, p := range out {
 		slices.Sort(p.Causes)
 		out[sid] = p
 	}
 	return out, nil
-}
-
-func anySlice(in []string) []any {
-	out := make([]any, len(in))
-	for i, v := range in {
-		out[i] = v
-	}
-	return out
 }
 
 // LiveLocalMembersOfLead is the members a lead's pause takes with it: the rows of the lead's live team that are `active` and
