@@ -39,7 +39,8 @@ func (m *Module) onNotify(ev agent.NotifyEvent) {
 	content := push.AgentInput{SessionCode: ev.SessionCode, SessionID: ev.SessionID, SessionName: ev.SessionName, EventName: ev.Event.RawEventName, Detail: ev.Event.Detail}
 	// Rules 0-7 first, for every frame: freshness (rule 0) records a probe's or sweep's newer timestamp too, so an older
 	// frame that arrives late is not pushed behind it. Rule 9 (there is something to say) comes last, as in the spec.
-	recipients := m.gate.Decide(in, m.snapshot(), m.presence.ShowsCode)
+	// Rule 4′ (PA-1 §4.2): a person at the computer gets no phone push; else an older App's window that shows the session.
+	recipients := m.gate.Decide(in, m.snapshot(), func(code string) bool { return m.presence.AtComputer() || m.presence.ShowsCode(code) })
 	if len(recipients) == 0 {
 		return
 	}
@@ -62,6 +63,13 @@ func (m *Module) onNotify(ev agent.NotifyEvent) {
 	// The sender of this run, not whatever is current when a hold ends: a held event of a run that was stopped must not
 	// be delivered by the next run (enqueueing onto a stopped sender is harmless).
 	sendWith := func(base push.AgentInput) {
+		// The holds (rule 8's 2 s, the workbook's push_wait_s) sit between the gate and here: the person may have come
+		// back since. Checked again right before the enqueue, with no side effect (rule 7 already ran at arrival).
+		if m.presence.AtComputer() {
+			return
+		}
+		// The holds (rule 8's 2 s, the workbook's push_wait_s) sit between the gate and here: the person may have come
+		// back since. Checked again right before the enqueue, with no side effect (rule 7 already ran at arrival).
 		snd.Enqueue(Job{DeviceIDs: ids, Make: func(d push.Device) (push.Content, bool) {
 			c := base
 			c.HostLabel = d.HostLabel
