@@ -16,7 +16,7 @@ export interface LiveLine {
   kind: 'running' | 'waiting'
   /** When the turn that is running began (ms); null when the conversation does not say (the line then shows no clock). */
   since: number | null
-  /** The tool of the step that runs now (the latest running one), if any. */
+  /** The tool of the step that runs now (the latest running one that is not an Agent/Task), if any. */
   tool: string | null
   /** How many Agent/Task steps are running now. */
   subagents: number
@@ -34,7 +34,7 @@ export function liveLine(turns: readonly LineTurn[], status: string | undefined)
   const running = last !== undefined && (last.outcome === 'running' || last.outcome === undefined) ? last : undefined
   const steps = (running?.items ?? []).filter(isStep).filter((s) => s.status === 'running')
   const subagents = steps.filter((s) => s.kind === 'task').length
-  const latest = [...steps].reverse().find((s) => s.kind !== 'task') ?? steps[steps.length - 1]
+  const latest = [...steps].reverse().find((s) => s.kind !== 'task') // subagents are counted, not named
   return {
     kind: status,
     since: typeof running?.started_at === 'number' && running.started_at > 0 ? running.started_at : null,
