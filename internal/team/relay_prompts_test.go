@@ -50,16 +50,16 @@ func varsOf(s string) []string {
 // saved back) and use only the public variables of U21 (d): {{path}} in
 // all three, {{old_ref}} in the seed, nothing the mod alone fills.
 func TestRelayPromptDefaults_ValidAndPublicVariablesOnly(t *testing.T) {
-	if !slices.Equal(RelayPromptVariables, []string{"path", "old_ref", "old_session", "context", "whoami", "git"}) {
+	if !slices.Equal(RelayPromptVariables, []string{"path", "old_ref", "old_session", "context", "whoami", "git", "why"}) {
 		t.Fatalf("RelayPromptVariables = %v", RelayPromptVariables)
 	}
 	for kind, c := range map[string]struct {
 		body string
 		vars []string
 	}{
-		"write": {DefaultRelayPromptBodies.Write, []string{"git", "path"}},
+		"write": {DefaultRelayPromptBodies.Write, []string{"git", "path", "why"}},
 		"fix":   {DefaultRelayPromptBodies.Fix, []string{"path"}},
-		"seed":  {DefaultRelayPromptBodies.Seed, []string{"old_ref", "path"}},
+		"seed":  {DefaultRelayPromptBodies.Seed, []string{"old_ref", "path", "why"}},
 	} {
 		if err := ValidateRelayPromptBody(c.body); err != nil {
 			t.Errorf("%s default: %v", kind, err)
@@ -220,5 +220,34 @@ func TestRelayPromptFixedParts_WriteTailHoldsTheOneWriteRule(t *testing.T) {
 	}
 	if !strings.Contains(DefaultRelayPromptBodies.Write, "機器提供的 git 狀態（照抄進 §3）：\n{{git}}") {
 		t.Errorf("the default write body lacks the git block")
+	}
+}
+
+// Relay prompt why spec §3.2: the default write and seed bodies name the real cause through {{why}} and tell a new
+// conversation to stop when the next step is a wait. Pinned text; fix is unchanged.
+func TestRelayPromptDefaults_WhyText(t *testing.T) {
+	wantWrite := "這個 session 要接力了：{{why}}。接力已核准（之後會 /clear）。\n" +
+		"請用你完整的工具撰寫接力檔：{{path}}（手邊有工作就先停下）\n" +
+		"\n" +
+		"要求：\n" +
+		"- 接力檔必須自成一體：讀它的是一個完全沒有這段對話記憶的新對話。\n" +
+		"- 如果現在是在等使用者、lead 或其他 session（例如等決定、等 merge 通知），§2 的「下一步」要寫清楚在等什麼、等誰、等到之後的第一個動作（具體到指令）。\n" +
+		"\n" +
+		"機器提供的 git 狀態（照抄進 §3）：\n" +
+		"{{git}}"
+	wantSeed := "你是接手的新對話：前一段對話已接力並清空（{{why}}）。\n" +
+		"請先讀接力檔 {{path}}，然後：\n" +
+		"1. 用三行複述：目標、下一步第一個動作、目前有哪些檔案異動。\n" +
+		"2. 跑 `git status` 確認與接力檔一致，不一致就指出來。\n" +
+		"3. 如果「下一步」是在等使用者、lead 或其他 session，就停在這裡等，不要自己開始新的工作；否則接著從「下一步」繼續原本的工作。\n" +
+		"回覆的第一行請寫「↪ 接手自 {{old_ref}}」。"
+	if DefaultRelayPromptBodies.Write != wantWrite {
+		t.Errorf("write default =\n%s", DefaultRelayPromptBodies.Write)
+	}
+	if DefaultRelayPromptBodies.Seed != wantSeed {
+		t.Errorf("seed default =\n%s", DefaultRelayPromptBodies.Seed)
+	}
+	if DefaultRelayPromptBodies.Fix != "接力檔 {{path}} 不完整。" {
+		t.Errorf("fix default = %q", DefaultRelayPromptBodies.Fix)
 	}
 }

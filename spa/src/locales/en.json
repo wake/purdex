@@ -1495,6 +1495,7 @@
   "hosts.relay.prompts.var.old_session": "the old session id",
   "hosts.relay.prompts.var.context": "the context used at the relay",
   "hosts.relay.prompts.var.whoami": "the pdx identity",
+  "hosts.relay.prompts.var.why": "Why this relay happened (the mod fills it: idle, threshold, manual, arranged by the lead)",
   "hosts.relay.prompts.save": "Save",
   "hosts.relay.prompts.restore_default": "Restore default",
   "hosts.relay.prompts.custom": "Custom",

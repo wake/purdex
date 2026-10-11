@@ -360,11 +360,31 @@ function fill(text, vars) {
 // the mod's own op, nonce and missing are for the fixed parts. A body's
 // trailing newlines are dropped, so one newline stands before the tail.
 function compose(kind, body, p, extra = {}) {
-  const pub = { path: p.path, old_ref: p.oldRef, old_session: p.oldSession, context: p.before, whoami: p.who, git: p.git ?? '' }
+  const pub = { path: p.path, old_ref: p.oldRef, old_session: p.oldSession, context: p.before, whoami: p.who, git: p.git ?? '', why: whyOf(p) }
   const all = { ...pub, op: p.op.id, nonce: p.nonce, team: p.team ?? '', ...extra }
   const { head, tail } = FIXED[kind]
   const t = fill(tail, all) // a tail that fills to nothing (the seed's, with no task) is left out
   return fill(head, all) + fill(body.replace(/\n+$/, ''), pub) + (t === '' ? '' : '\n' + t)
+}
+
+// whyOf is {{why}}: the cause of this relay as a clause (no final 。), from the `p.cause` its constructor stamped (relay
+// prompt why spec §3.1). A missing or unknown cause reads as a recovery (the cause was not kept); an idle cause with
+// minutes that are not an integer 1–59, or a percentage that is not a number, says only that the session was idle. Pure; never throws.
+export function whyOf(p) {
+  switch (p && p.cause) {
+    case 'idle': {
+      const n = p.idleMinutes
+      const pct = p.idlePct
+      if (Number.isInteger(n) && n >= 1 && n <= 59 && typeof pct === 'number' && Number.isFinite(pct)) {
+        return '已閒置 ' + n + ' 分鐘（context ' + Math.round(pct) + '%），趁快取還沒過期先接力'
+      }
+      return '已閒置一段時間，趁快取還沒過期先接力'
+    }
+    case 'manual': return '使用者手動要求接力'
+    case 'threshold': return 'context 已達接力門檻'
+    case 'lead': return 'lead 安排接力'
+    default: return 'mod 重新載入過，原因沒有保留'
+  }
 }
 
 // utf8Bytes is text's length in UTF-8, as the daemon counts a body.
@@ -710,6 +730,8 @@ async function begin($, sid, gen, u, adopted, manual = false, idle = false) {
   s.pending = {
     idle, // an idle ask never holds a prompt (D6); a denial or timeout is remembered for the +10 rule at settle
     idlePct: u.percent,
+    idleMinutes: idle ? idleMinutes : undefined, // what the ask was opened with (s.idleMinutes is overwritten by a later hello)
+    cause: idle ? 'idle' : manual ? 'manual' : 'threshold', // {{why}} (whyOf)
     op: body.op,
     requestId: body.request_id,
     path: body.op.handoff_path,
@@ -1049,6 +1071,7 @@ async function claim($, gen) {
   const answer = deferred()
   answer.resolve('approved')
   const p = {
+    cause: 'lead',
     op, requestId: undefined, path: op.handoff_path, oldSession: sid, oldRef: op.ref, before: usageLine(u),
     nonce: undefined, nonceState: undefined, who: '', lead: body.lead && typeof body.lead === 'object' ? body.lead : undefined, answer,
   }
@@ -1248,6 +1271,7 @@ async function recover($, active, sid) {
     return 'done'
   }
   const p = {
+    cause: 'recovered',
     op, requestId: op.request_id || undefined, path: op.handoff_path, oldSession: sid, oldRef: op.ref, before: '',
     nonce: undefined, nonceState: undefined, who: '', // the seed names neither the lead nor the team (the write prompt did): only the old ref, the path and the tasks
     answer: deferred(), locked: true, // the old mod may have left the relay lock up: unlockRelay lowers it (fail-open) before the /clear
