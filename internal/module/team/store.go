@@ -260,6 +260,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (mod hello): %w", err)
 	}
+	if _, err := db.Exec(pauseSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (pauses): %w", err)
+	}
 	return &Store{db: db}, nil
 }
 

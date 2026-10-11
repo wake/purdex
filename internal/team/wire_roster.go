@@ -31,6 +31,9 @@ type RosterSession struct {
 	Context *MemberContext `json:"context,omitempty"`
 	// RelayQuota is the numbers of the session's relay chain (#2062); always present.
 	RelayQuota RelayQuota `json:"relay_quota"`
+	// Paused is the session's pause (unattended quota pause spec §3.1): its causes and since when; null when it is not paused.
+	// Always present, so a client tells "not paused" from a daemon that predates the field only by the capability.
+	Paused *RosterPause `json:"paused"`
 	// HostID and HostAlias name the host a remote member runs on (cross-host team spec §8); both absent for a session on
 	// the lead's own host. A remote member's Address is "<host_alias>/<ref>". ContextUnavailable: its host did not answer,
 	// so Model / Context are blank for that reason.

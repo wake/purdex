@@ -1,0 +1,83 @@
+// internal/module/team/pause_handler.go — GET /api/team/paused (unattended quota pause spec §3.1, UP-1a).
+package teammod
+
+import (
+	"net/http"
+
+	"github.com/wake/purdex/internal/team"
+)
+
+// handlePausedGet is GET /api/team/paused: the sessions that are paused now, earliest first. A session's ref and title are
+// the registry's while it lists the session, else what team.db has (a member's row, the team's lead ref and recorded
+// request); lead_ref is the ref of the team's lead ("" for a solo session, the session's own ref for a lead). A registry
+// that cannot be read only costs the live values: the list is still answered from team.db.
+func (m *Module) handlePausedGet(w http.ResponseWriter, r *http.Request) {
+	if m.stopping() {
+		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "daemon is stopping", nil)
+		return
+	}
+	paused, err := m.store.PausedSessions()
+	if err != nil {
+		m.logf("[team] paused: %v", err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	}
+	ids := make([]string, len(paused))
+	for i, p := range paused {
+		ids[i] = p.SessionID
+	}
+	var origins map[string]team.Origin
+	if len(ids) > 0 {
+		if origins, err = m.origins.ResolveOriginsBySession(ids); err != nil {
+			m.logf("[team] paused: registry unavailable, answering from team.db: %v", err)
+			origins = nil
+		}
+	}
+	alias, _ := m.selfHost()
+	out := team.PausedView{Sessions: make([]team.PausedSession, 0, len(paused))}
+	for _, p := range paused {
+		ps := team.PausedSession{SessionID: p.SessionID, Role: p.Role, Causes: p.Causes, Since: p.Since, Bounced: p.Bounced}
+		var t team.Team
+		haveTeam := false
+		if p.TeamID != "" {
+			var terr error
+			if t, haveTeam, terr = m.store.TeamByID(p.TeamID); terr != nil {
+				m.logf("[team] paused: team %s: %v", p.TeamID, terr)
+				haveTeam = false
+			}
+		}
+		if o, ok := origins[p.SessionID]; ok {
+			ps.Ref, ps.Title = o.Ref, o.Title
+		}
+		if haveTeam {
+			switch p.Role {
+			case team.PauseRoleLead:
+				ps.LeadRef = t.LeadRef
+				if ps.Ref == "" {
+					ps.Ref = t.LeadRef
+				}
+				if ps.Title == "" {
+					ps.Title = m.leadStoredSession(t, alias).Title
+				}
+			case team.PauseRoleMember:
+				ps.LeadRef = t.LeadRef
+				if ps.Ref == "" || ps.Title == "" {
+					if rows, merr := m.store.MembersOf(p.TeamID); merr == nil {
+						for _, mr := range rows {
+							if mr.SessionID == p.SessionID && mr.State == team.MemberActive {
+								if ps.Ref == "" {
+									ps.Ref = mr.Ref
+								}
+								if ps.Title == "" {
+									ps.Title = mr.Title
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		out.Sessions = append(out.Sessions, ps)
+	}
+	m.writeJSON(w, http.StatusOK, out)
+}
