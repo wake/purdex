@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildSentHistory } from './sent-history'
+import { buildSentHistory, splitAttachmentLines } from './sent-history'
 import type { StreamMessage } from './message-types'
 
 const user = (text: string, extra: object = {}) =>
@@ -34,5 +34,18 @@ describe('buildSentHistory', () => {
     const h = buildSentHistory([user('a'), user('a'), user('b')], { text: 'c', delivery: null })
     expect(h.map((e) => e.text)).toEqual(['a', 'b', 'c'])
     expect(buildSentHistory([user('b')], { text: 'b', delivery: 'queued' }).map((e) => e.text)).toEqual(['b'])
+  })
+})
+
+describe('splitAttachmentLines', () => {
+  it('splits a trailing run of [file:] lines (and the blank line before it) off the typed text', () => {
+    for (const text of ['hello', 'two\nlines', '']) {
+      const composed = text ? `${text}\n\n[file: /a/x.txt]\n[file: /b/y z.png]` : '[file: /a/x.txt]\n[file: /b/y z.png]'
+      expect(splitAttachmentLines(composed)).toEqual({ text, paths: ['/a/x.txt', '/b/y z.png'] })
+    }
+  })
+  it('leaves text without trailing file lines alone, and a file line in the middle', () => {
+    expect(splitAttachmentLines('plain')).toEqual({ text: 'plain', paths: [] })
+    expect(splitAttachmentLines('[file: /a]\nthen text')).toEqual({ text: '[file: /a]\nthen text', paths: [] })
   })
 })

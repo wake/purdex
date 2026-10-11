@@ -1,13 +1,10 @@
 // spa/src/stores/useNexHostStore.test.ts
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { renderHook } from '@testing-library/react'
 import {
   NEX_HOST_TTL_MS,
   selectHandoffReady,
   selectPermissionAskReady,
   selectPermissionTimeoutMax,
-  selectAttachmentFetch,
-  selectImageAttachments,
   selectConversationsScope,
   selectReady,
   selectRollupCostShown,
@@ -609,137 +606,6 @@ describe('selectors', () => {
 
   it('selectHandoffReady is false for an unknown host', () => {
     expect(selectHandoffReady('ghost')(useNexHostStore.getState())).toBe(false)
-  })
-
-  const imageCaps = (over: Partial<NonNullable<NonNullable<NexCapabilities['send']['attachments']>['image']>> = {}) => ({
-    media_types: ['image/png', 'image/jpeg', 'image/gif', 'image/webp'],
-    max_bytes: 5242880,
-    max_count: 10,
-    max_total_bytes: 20971520,
-    providers: ['claude'],
-    fetch: { method: 'GET', path: '/api/nex/v1/executions/{id}/attachments/{sha256}' },
-    ...over,
-  })
-
-  const v15Send = (overImage: Partial<ReturnType<typeof imageCaps>> = {}) => ({
-    delivery: ['text'],
-    max_text_bytes: 1,
-    max_request_bytes: 33554432,
-    attachments: { image: imageCaps(overImage) },
-  })
-
-  describe('selectAttachmentFetch (E4)', () => {
-    it('is the capability fetch route itself (stable), whatever the provider list', () => {
-      seed({ capabilities: caps({ send: v15Send({ providers: [] }) }) })
-      const st = useNexHostStore.getState()
-      const route = selectAttachmentFetch(H)(st)
-      expect(route).toEqual({ method: 'GET', path: '/api/nex/v1/executions/{id}/attachments/{sha256}' })
-      expect(selectAttachmentFetch(H)(st)).toBe(route)
-    })
-
-    it('null when not ready, unknown, an older daemon, or a malformed route', () => {
-      seed({ phase: 'unavailable', capabilities: caps({ send: v15Send() }) })
-      expect(selectAttachmentFetch(H)(useNexHostStore.getState())).toBeNull()
-      expect(selectAttachmentFetch('ghost')(useNexHostStore.getState())).toBeNull()
-      seed({ capabilities: caps({ send: { delivery: ['text'], max_text_bytes: 1 } }) })
-      expect(selectAttachmentFetch(H)(useNexHostStore.getState())).toBeNull()
-      seed({ capabilities: caps({ send: v15Send({ fetch: { method: 'GET' } as never }) }) })
-      expect(selectAttachmentFetch(H)(useNexHostStore.getState())).toBeNull()
-    })
-
-    it('stays the same reference across a capabilities refetch when method+path are unchanged (fix round 1)', () => {
-      // A fresh `caps(...)` call is a brand-new object graph, as a real
-      // refetch's `commitLoaded` would install — content-equal but not
-      // identical to the first. The route must still come back `===`, or
-      // an effect keyed on it (AttachmentThumbs) revokes and refetches on
-      // every 60s capability refresh.
-      seed({ capabilities: caps({ send: v15Send() }) })
-      const first = selectAttachmentFetch(H)(useNexHostStore.getState())
-      seed({ capabilities: caps({ send: v15Send() }), generation: 2 })
-      const second = selectAttachmentFetch(H)(useNexHostStore.getState())
-      expect(second).toEqual(first)
-      expect(second).toBe(first)
-    })
-
-    it('a genuinely different path gets a new reference', () => {
-      seed({ capabilities: caps({ send: v15Send() }) })
-      const first = selectAttachmentFetch(H)(useNexHostStore.getState())
-      seed({ capabilities: caps({ send: v15Send({ fetch: { method: 'GET', path: '/elsewhere/{sha256}' } }) }), generation: 2 })
-      const second = selectAttachmentFetch(H)(useNexHostStore.getState())
-      expect(second).not.toBe(first)
-      expect(second).toEqual({ method: 'GET', path: '/elsewhere/{sha256}' })
-    })
-  })
-
-  describe('selectImageAttachments (E1)', () => {
-    it('v0.13.2-shaped caps (no send.attachments) → null', () => {
-      seed({ capabilities: caps({ send: { delivery: ['text'], max_text_bytes: 1 } }) })
-      expect(selectImageAttachments(H, 'claude')(useNexHostStore.getState())).toBeNull()
-    })
-
-    it('v0.15.0 caps, provider claude → the capability plus maxRequestBytes', () => {
-      seed({ capabilities: caps({ send: v15Send() }) })
-      expect(selectImageAttachments(H, 'claude')(useNexHostStore.getState())).toEqual({
-        ...imageCaps(),
-        maxRequestBytes: 33554432,
-      })
-    })
-
-    it('v0.15.0 caps, provider codex (not in providers) → null', () => {
-      seed({ capabilities: caps({ send: v15Send() }) })
-      expect(selectImageAttachments(H, 'codex')(useNexHostStore.getState())).toBeNull()
-    })
-
-    it.each([
-      ['max_bytes', { max_bytes: 0 }],
-      ['max_count', { max_count: Number.NaN }],
-      ['max_total_bytes', { max_total_bytes: -1 }],
-      ['max_bytes infinite', { max_bytes: Infinity }],
-    ] as const)('malformed image.%s → null (fail-closed)', (_label, overImage) => {
-      seed({ capabilities: caps({ send: v15Send(overImage) }) })
-      expect(selectImageAttachments(H, 'claude')(useNexHostStore.getState())).toBeNull()
-    })
-
-    it.each([
-      ['missing', undefined],
-      ['zero', 0],
-      ['negative', -1],
-      ['NaN', Number.NaN],
-      ['Infinity', Infinity],
-    ] as const)('malformed send.max_request_bytes (%s) → null (fail-closed)', (_label, malformed) => {
-      seed({ capabilities: caps({ send: { ...v15Send(), max_request_bytes: malformed } }) })
-      expect(selectImageAttachments(H, 'claude')(useNexHostStore.getState())).toBeNull()
-    })
-
-    it('not ready or unknown host → null', () => {
-      seed({ phase: 'unavailable', capabilities: caps({ send: v15Send() }) })
-      expect(selectImageAttachments(H, 'claude')(useNexHostStore.getState())).toBeNull()
-      expect(selectImageAttachments('ghost', 'claude')(useNexHostStore.getState())).toBeNull()
-    })
-
-    it('stable reference: two calls on the same state return the same object', () => {
-      seed({ capabilities: caps({ send: v15Send() }) })
-      const first = selectImageAttachments(H, 'claude')(useNexHostStore.getState())
-      const second = selectImageAttachments(H, 'claude')(useNexHostStore.getState())
-      expect(first).not.toBeNull()
-      expect(second).toBe(first)
-    })
-
-    it('renders a bounded number of times with no "getSnapshot should be cached" console error', () => {
-      seed({ capabilities: caps({ send: v15Send() }) })
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-      let renderCount = 0
-      const { result } = renderHook(() => {
-        renderCount += 1
-        return useNexHostStore(selectImageAttachments(H, 'claude'))
-      })
-      expect(result.current).not.toBeNull()
-      expect(renderCount).toBeLessThan(5)
-      const cachingWarning = errorSpy.mock.calls.some((call) =>
-        call.some((arg) => typeof arg === 'string' && arg.includes('getSnapshot should be cached')))
-      expect(cachingWarning).toBe(false)
-      errorSpy.mockRestore()
-    })
   })
 
   describe('selectSessionTitleSupported (E1)', () => {

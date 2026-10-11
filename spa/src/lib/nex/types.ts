@@ -219,28 +219,6 @@ export interface PermissionResolvedPayload {
   timeout_s?: number
 }
 
-/**
- * `capabilities.send.attachments.image` (nexen contract §0/§1.9). The whole
- * object being absent = this daemon does not accept images; presence plus
- * `providers` including the execution's `provider` is the ONLY feature
- * detect (never a version compare). Numbers are the daemon's actual caps —
- * a client must never hard-code them.
- */
-export interface ImageAttachmentCaps {
-  /** Accepted `media_type`s; anything else → 400 `attachment_type_unsupported`. */
-  media_types: string[]
-  /** Per-image **decoded** byte cap (not the base64 length); over → 400 `attachment_too_large`. */
-  max_bytes: number
-  /** Max images in one message; over → 400 `too_many_attachments`. */
-  max_count: number
-  /** Sum of all images' **decoded** bytes in one message; over → 400 `attachments_too_large`. */
-  max_total_bytes: number
-  /** Providers this host currently has a runner for AND that support image input. */
-  providers: string[]
-  /** Route to fetch the original image back; `path` is origin-relative and already carries `PublicPrefix`. */
-  fetch: { method: string; path: string }
-}
-
 export interface NexCapabilities {
   phase: string
   host_id: string
@@ -268,8 +246,6 @@ export interface NexCapabilities {
      * Absent on a daemon older than 2026-09-28.
      */
     max_request_bytes?: number
-    /** Absent object, or `image` absent inside it, ⇒ this daemon does not accept images (fail-closed). */
-    attachments?: { image?: ImageAttachmentCaps }
   }
   brief?: { max_bytes: number }
   origin?: { max_bytes: number }
