@@ -72,6 +72,21 @@ func TestApprovalContent_ThreeKindsInBothLocales(t *testing.T) {
 		t.Fatalf("self_relay en = %+v", c)
 	}
 
+	idle := approvalOpened("self_relay", map[string]any{"used_percentage": 55.4, "reason": "idle", "idle_minutes": 40}, "", "worker-7")
+	c, ok = ApprovalContent(idle, "mlab", "zh-TW")
+	if !ok || c.Title != "mlab：worker-7 閒置 40 分鐘，申請接力（已用 55%）" || !strings.Contains(c.Body, "趁快取還在時接力最省") || c.Kind != "self_relay" {
+		t.Fatalf("idle self_relay zh-TW = %+v", c)
+	}
+	c, _ = ApprovalContent(idle, "mlab", "en")
+	if c.Title != "mlab: worker-7 has been idle 40 min and requests a relay (55% used)" || !strings.Contains(c.Body, "cache is warm") {
+		t.Fatalf("idle self_relay en = %+v", c)
+	}
+	// Any other reason keeps the ordinary text.
+	other := approvalOpened("self_relay", map[string]any{"used_percentage": 71.6, "reason": "x", "idle_minutes": 40}, "", "worker-7")
+	if c, _ = ApprovalContent(other, "mlab", "zh-TW"); c.Title != "mlab：worker-7 申請接力（已用 72%）" {
+		t.Fatalf("non-idle reason title = %q", c.Title)
+	}
+
 	ask := approvalOpened("hook_ask", map[string]any{"questions": []any{map[string]any{"question": "Which `branch`?"}, map[string]any{"question": "second"}}}, "", "")
 	c, ok = ApprovalContent(ask, "mlab", "zh-TW")
 	if !ok || c.Title != "mlab：_abc123 在等你回答" || c.Body != "Which branch?" || c.Kind != "hook_ask" {
@@ -230,5 +245,23 @@ func TestPayload_FixedFieldsOverTheLimitAreAnError(t *testing.T) {
 	raw, err := big.Payload(strings.Repeat("h", 100))
 	if err != nil || len(raw) > 4096 {
 		t.Fatalf("a long body must be cut to fit: %d bytes, %v", len(raw), err)
+	}
+}
+
+// Codex attack: only a well-formed idle payload (minutes 1–59) gets the idle text; a damaged one reads as an ordinary ask.
+func TestApprovalContent_SelfRelayIdleNeedsSaneMinutes(t *testing.T) {
+	for _, mins := range []any{0, -3, 60, 1440, nil} {
+		payload := map[string]any{"used_percentage": 55.4, "reason": "idle"}
+		if mins != nil {
+			payload["idle_minutes"] = mins
+		}
+		c, ok := ApprovalContent(approvalOpened("self_relay", payload, "", "worker-7"), "mlab", "zh-TW")
+		if !ok || c.Title != "mlab：worker-7 申請接力（已用 55%）" {
+			t.Fatalf("idle_minutes %v: title = %q, want the ordinary text", mins, c.Title)
+		}
+	}
+	c, _ := ApprovalContent(approvalOpened("self_relay", map[string]any{"used_percentage": 55.4, "reason": "idle", "idle_minutes": 40}, "", "worker-7"), "mlab", "fr")
+	if c.Title != "mlab：worker-7 閒置 40 分鐘，申請接力（已用 55%）" {
+		t.Fatalf("unknown locale falls back to zh-TW: %q", c.Title)
 	}
 }
