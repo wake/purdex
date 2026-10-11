@@ -65,6 +65,9 @@ Contracts K-1a-1 hands to this PR (review fixes):
 - `SubmitFill` / `ClearIf` answer `dropped/bad_text` at once for blank text or text over `promptq.MaxTextBytes` (16384 BYTES, the
   mod's parse limit is the same); more than 256 open typed rows (filled / entering / unknown, never evicted) answers `busy`.
 - The mod may report `unknown` (could not tell what its fill left behind): treat like a lost result.
+- A row whose cleanup does not succeed (`ClearIf` dropped `not_ours`, or no answer) must still reach an end state: after one
+  retry the route marks it settled (e.g. `cleared` with reason `cleanup_gave_up`, or a dedicated terminal phase) so it stops
+  counting against the 256 open typed rows. Test the finaliser and this end state in K-1a-2.
 
 ## K-1b — recall
 `POST /api/sessions/{code}/recall {expected_tmux_instance}` per I5/I6 and step 0 (f)/(g) results.

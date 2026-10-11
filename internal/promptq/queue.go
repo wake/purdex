@@ -36,7 +36,7 @@ const (
 
 // Wire format (daemon <-> mod). prompt/next answers {"job":{"id","kind","session_id","text"?}} with kind submit |
 // interrupt | fill | clear_if | read (text: submit, fill, clear_if). The mod reports with prompt/result
-// {"stream","job_id","status":"accepted|dropped|busy","reason"?,"filled_at"?,"text"?}: filled_at (unix ms, read from the
+// {"stream","job_id","status":"accepted|dropped|busy|unknown","reason"?,"filled_at"?,"text"?}: filled_at (unix ms, read from the
 // mod's clock right after a successful fill) on an accepted fill; text on an accepted read. Drop reasons of a fill:
 // session_changed, input_not_empty, dialog_open, no_composer, refused, fill_mismatch; of a clear_if: not_ours.
 // A fill result is posted once by the mod (no retries): a lost report is `unknown` here.

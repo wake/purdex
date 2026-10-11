@@ -70,6 +70,8 @@ Claude Code's state); the residual risks of §5 are accepted by the user.
 - `read -> fill` and `read -> clear_if` are not atomic: a person typing in the terminal in that instant can be overwritten (fill) or
   have their draft cleared (clear_if compares first, but the write follows the read). Minimised by doing the read and the write back to back in one mod job;
   cannot be removed.
+- A cleanup (`clear_if` / `ClearFilled`) clears the composer when it still equals our text: a person who typed exactly the
+  same text in that moment would lose it (accepted, negligible).
 - Sessions without the mod: blind typing as iOS does today.
 
 ## 6. Phases
