@@ -138,6 +138,10 @@ type Module struct {
 	factLimit *peersmod.HostLimiter
 	// proxyLimit is the same for the member-report proxy route (X6).
 	proxyLimit *peersmod.HostLimiter
+	// rootsLimit is the same for the roots-change route (cross-host roots spec, XR-1).
+	rootsLimit *peersmod.HostLimiter
+	// rootsPrecheckHook, when set, runs at the start of a removal's in-use pre-check (test seam: proves it runs outside the config lock).
+	rootsPrecheckHook func()
 	// afterTargetResolved, when set, runs in the commands route between the target's resolution and the apply (test
 	// seam for a consent revoked meanwhile). nil in production.
 	afterTargetResolved func()
@@ -408,6 +412,7 @@ func (m *Module) Init(c *core.Core) error {
 	m.cmdLimit = newCommandLimiter()
 	m.factLimit = newCommandLimiter()
 	m.proxyLimit = newCommandLimiter()
+	m.rootsLimit = newCommandLimiter()
 	svc, ok := c.Registry.Get(peersmod.OriginResolverKey)
 	if !ok {
 		return fmt.Errorf("team: service %q not registered", peersmod.OriginResolverKey)
@@ -515,6 +520,7 @@ func (m *Module) Init(c *core.Core) error {
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+FactsRoute, m.handleTeamFact)                     // cross-host team facts (X3b-2); a host principal's, not the admin's
 	mux.HandleFunc("POST "+team.ProxyRoute, m.handleTeamProxy)               // a remote member's report / task calls, owner-scoped (X6)
+	mux.HandleFunc("POST "+team.RootsChangeRoute, m.handleRootsChange)       // a lead host adds / removes / reads its roots (cross-host roots spec, XR-1); a host principal's
 	mux.HandleFunc("POST "+CommandsRoute, m.handleTeamCommand)               // cross-host team commands (X2b); a host principal's, not the admin's
 	mux.HandleFunc("GET "+team.RemoteMembersRoute, m.handleRemoteMembersGet) // the admin's view of remote members (X2c)
 	mux.HandleFunc("POST "+team.RemoteMembersEndRoute, m.handleRemoteMembersEnd)

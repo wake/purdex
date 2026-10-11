@@ -41,7 +41,7 @@ func teamEntryFor(hosts []config.PeerHost, p middleware.Principal) (config.PeerH
 
 // teamCapsFor is the Envelope.Team value for the asking principal.
 func teamCapsFor(hosts []config.PeerHost, p middleware.Principal, known bool) *ipeers.TeamCaps {
-	caps := &ipeers.TeamCaps{Kinds: teamKinds(), FactKinds: teamFactKinds()}
+	caps := &ipeers.TeamCaps{Kinds: teamKinds(), FactKinds: teamFactKinds(), RootsChange: true}
 	if known {
 		if h, ok := teamEntryFor(hosts, p); ok {
 			caps.AllowTeam = h.AllowTeam
@@ -79,7 +79,8 @@ func (m *Module) handleTeamRoots(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"host_id": snap.hostID,
-		"roots":   append([]string{}, h.TeamRoots...),
+		"host_id":        snap.hostID,
+		"roots":          append([]string{}, h.TeamRoots...),
+		"team_roots_rev": h.TeamRootsRev, // additive: a lead host that predates it ignores it
 	})
 }

@@ -18,7 +18,7 @@ func hostPrincipalID(alias, hostID string) *middleware.Principal {
 
 func teamHosts() []config.PeerHost {
 	return []config.PeerHost{
-		{Alias: "lead", URL: "https://l.example", HostID: "lead:1", InboundToken: "i1", AllowTeam: true, TeamRoots: []string{"/srv/a", "/srv/b"}},
+		{Alias: "lead", URL: "https://l.example", HostID: "lead:1", InboundToken: "i1", AllowTeam: true, TeamRoots: []string{"/srv/a", "/srv/b"}, TeamRootsRev: 7},
 		{Alias: "other", URL: "https://o.example", HostID: "other:1", InboundToken: "i2"},
 	}
 }
@@ -48,9 +48,10 @@ func TestInventory_TeamCapsPerPrincipal(t *testing.T) {
 			rr := doHostsRequest(t, m, http.MethodGet, "/api/peers", nil, tc.p)
 			var env struct {
 				Team *struct {
-					Kinds     []string `json:"kinds"`
-					AllowTeam bool     `json:"allow_team"`
-					FactKinds []string `json:"fact_kinds"`
+					Kinds       []string `json:"kinds"`
+					AllowTeam   bool     `json:"allow_team"`
+					FactKinds   []string `json:"fact_kinds"`
+					RootsChange bool     `json:"roots_change"`
 				} `json:"team"`
 			}
 			if err := json.Unmarshal(rr.Body.Bytes(), &env); err != nil || env.Team == nil {
@@ -59,6 +60,10 @@ func TestInventory_TeamCapsPerPrincipal(t *testing.T) {
 			// Every principal reads the same kinds (X3d-3): what this daemon applies, which is everything this version applies.
 			if !reflect.DeepEqual(env.Team.Kinds, wantTeamKinds) || !reflect.DeepEqual(env.Team.FactKinds, wantFactKinds) || env.Team.AllowTeam != tc.want {
 				t.Fatalf("team = %+v", env.Team)
+			}
+			// roots_change is a capability of this daemon, announced to every principal (a lead reads it before it sends one)
+			if !env.Team.RootsChange {
+				t.Fatalf("team.roots_change = false: %+v", env.Team)
 			}
 		})
 	}
@@ -75,7 +80,7 @@ func TestTeamRoots_Route(t *testing.T) {
 	}
 
 	code, body := get(hostPrincipalID("lead", "lead:1"))
-	if code != 200 || body["host_id"] != "local:1" || !reflect.DeepEqual(body["roots"], []any{"/srv/a", "/srv/b"}) {
+	if code != 200 || body["host_id"] != "local:1" || !reflect.DeepEqual(body["roots"], []any{"/srv/a", "/srv/b"}) || body["team_roots_rev"] != float64(7) {
 		t.Fatalf("allowed: %d %v", code, body)
 	}
 	for name, tc := range map[string]struct {
