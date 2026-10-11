@@ -46,6 +46,8 @@ export function QueuedMessages({ entries, onUndo, onResend, onDismiss, className
             <div key={e.id} data-testid="queued-message" data-state={e.state} className={`${PENDING_USER_BOX} px-3 py-2`}>
               <div className={`mb-1 deck-t-down font-medium ${PENDING_USER_CAPTION}`}>{e.state === 'sent' ? t('deck.send.accepted') : t('deck.send.sending')}</div>
               <div className="whitespace-pre-wrap break-words deck-t-up text-text-primary">{e.text}</div>
+              {/* the transcript's row is what takes it away; a worker whose row never comes (or reads differently) must not leave it here for good */}
+              {e.state === 'sent' && <button type="button" className={btn} onClick={() => onDismiss(e.id)}>{t('deck.send.dismiss')}</button>}
             </div>
           )
         }

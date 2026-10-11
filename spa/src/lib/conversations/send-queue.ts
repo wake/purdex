@@ -191,7 +191,8 @@ export class SendQueue {
 
   /** The transcript's user messages: an entry whose echo is there is done (the transcript shows it from now on). */
   reconcile(items: readonly UserItem[]): void {
-    const users = items.filter((i) => i.source === 'user' && !this.claimed.has(i.id))
+    const sources = this.port.echo?.sources ?? ['user']
+    const users = items.filter((i) => sources.includes(i.source) && !this.claimed.has(i.id))
     const open = this.list.filter((e) => e.state === 'sent' || e.state === 'maybe' || e.state === 'sending')
     const done = new Set<QueueEntry>()
     const take = (e: QueueEntry, u: UserItem) => { this.claimed.add(u.id); done.add(e) }
@@ -205,7 +206,7 @@ export class SendQueue {
     const pairs: Array<{ e: QueueEntry; u: UserItem; d: number }> = []
     for (const e of open) {
       if (e.state === 'sending' || done.has(e)) continue
-      const to = e.state === 'sent' ? (e.settledAt ?? e.startedAt) + ECHO_BEFORE_MS : e.startedAt + HAND_TIMEOUT_MS + ECHO_AFTER_MS
+      const to = e.state === 'sent' ? (e.settledAt ?? e.startedAt) + (this.port.echo?.afterMs ?? ECHO_BEFORE_MS) : e.startedAt + HAND_TIMEOUT_MS + ECHO_AFTER_MS
       for (const u of users) {
         if (this.claimed.has(u.id) || u.client_msg_id !== undefined) continue
         if (u.at < e.startedAt - ECHO_BEFORE_MS || u.at > to || normalizePrompt(u.text) !== e.text) continue

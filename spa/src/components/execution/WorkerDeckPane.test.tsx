@@ -2,7 +2,7 @@
 // before that id exists, no way to a terminal, the worker's own input and send path in the footer, model and cost in the status row, and the way
 // back to the room.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { UNDO_MS, clearAllSendQueues } from '../../lib/conversations/send-queue'
 import { clearAllAdapters } from '../../lib/conversations/deck-adapter'
 import { clearAllWorkerLeases } from '../../lib/conversations/worker-adapter'
@@ -172,6 +172,17 @@ describe('WorkerDeckPane', () => {
     expect(screen.getByTestId('queued-message').className).toContain('border-accent') // still not accepted: the transcript has not got it
     act(() => { withUser('run the tests', Date.now()) })
     expect(screen.queryByTestId('queued-message')).toBeNull() // the transcript's own row takes over
+  })
+
+  it('a message handed over that is never echoed can be dismissed (it does not stay in the frame for good)', async () => {
+    vi.useFakeTimers()
+    seed(summary())
+    render(ui())
+    typeAndSend('never echoed')
+    await act(async () => { await vi.advanceTimersByTimeAsync(UNDO_MS) })
+    expect(screen.getByTestId('queued-message')).toHaveAttribute('data-state', 'sent')
+    fireEvent.click(within(screen.getByTestId('queued-message')).getByRole('button', { name: 'Dismiss' }))
+    expect(screen.queryByTestId('queued-message')).toBeNull()
   })
 
   it('the typed text is the worker\'s own draft (the room view shares it)', () => {

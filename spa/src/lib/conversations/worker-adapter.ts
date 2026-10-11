@@ -10,7 +10,7 @@ import { interruptExecution, sendMessage, uploadWorkerFile } from '../nex/nex-ap
 import { NexApiError } from '../nex/types'
 import { forgetWorkerDraft, readWorkerDraft, workerDraftKey, writeWorkerDraft } from '../nex/worker-draft-memory'
 import type { DeckAdapter } from './deck-adapter'
-import type { SendOutcome } from './send'
+import { SUBMIT_TIMEOUT_MS, type SendOutcome } from './send'
 
 /** What the port needs of the worker's lease (`ExecutionLeaseApi`). */
 export interface WorkerLease {
@@ -18,13 +18,19 @@ export interface WorkerLease {
   forget(): void
 }
 
-const leases = new Map<string, WorkerLease>()
+// A stack per worker: two views of one execution (a split) each offer theirs, the newest answers, and the one left answers when the newest goes.
+const leases = new Map<string, WorkerLease[]>()
+const leaseOf = (key: string): WorkerLease | undefined => leases.get(key)?.at(-1)
 
-/** The mounted worker view of `hostId` + `executionId` offers its lease; the returned function takes it back (only if it is still this one). */
+/** The mounted worker view of `hostId` + `executionId` offers its lease; the returned function takes it back. */
 export function registerWorkerLease(hostId: string, executionId: string, lease: WorkerLease): () => void {
   const key = workerDraftKey(hostId, executionId)
-  leases.set(key, lease)
-  return () => { if (leases.get(key) === lease) leases.delete(key) }
+  leases.set(key, [...(leases.get(key) ?? []), lease])
+  return () => {
+    const rest = (leases.get(key) ?? []).filter((l) => l !== lease)
+    if (rest.length === 0) leases.delete(key)
+    else leases.set(key, rest)
+  }
 }
 
 /** Tests only: module state outlives a test. */
@@ -33,33 +39,48 @@ export const clearAllWorkerLeases = (): void => { leases.clear() }
 /** The lease codes the daemon answers when the lease this client holds is no longer valid (it is dropped locally, the next send re-acquires). */
 const STALE_LEASE = new Set(['lease_expired', 'lease_mismatch', 'lease_required'])
 
+/**
+ * Nexen's answer is a refusal with its code. A request that got NO answer (the connection dropped, it timed out) may have run: `network`, which the
+ * queue leaves `maybe` — the person confirms before it is sent again, since Nexen would take it twice.
+ */
 function outcomeOf(e: unknown, lease: WorkerLease | undefined): SendOutcome {
-  if (!(e instanceof NexApiError)) return { kind: 'network' }
+  if (!(e instanceof NexApiError) || e.code === 'network') return { kind: 'network' }
   if (STALE_LEASE.has(e.code)) lease?.forget()
-  // a request that never reached the daemon was not run: a plain refusal the person may retry; anything the daemon answered is refused too
   return { kind: 'rejected', status: e.status, code: e.code }
 }
+
+/** A request with no answer for this long is let go (its message is `maybe`), so one hung request cannot hold every message behind it. */
+function within<T>(p: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout')), SUBMIT_TIMEOUT_MS)
+    p.then((v) => { clearTimeout(timer); resolve(v) }, (e) => { clearTimeout(timer); reject(e) })
+  })
+}
+
+/** How a worker's message comes back in the transcript: whenever Nexen hands it to the worker (a busy worker's queue holds it for the turn), as `user` or `queued`. */
+const ECHO = { sources: ['user', 'queued'], afterMs: 10 * 60_000 } as const
 
 export function workerAdapter(hostId: string, executionId: string): DeckAdapter {
   const draftKey = workerDraftKey(hostId, executionId)
   return {
     kind: 'worker',
     port: () => ({
+      echo: ECHO,
       async submit(text) {
-        const lease = leases.get(draftKey)
+        const lease = leaseOf(draftKey)
         if (!lease) return { kind: 'rejected', status: 0, code: 'pane_closed' }
         try {
-          await sendMessage(hostId, executionId, await lease.ensureLease(), text)
+          await within((async () => sendMessage(hostId, executionId, await lease.ensureLease(), text))())
           return { kind: 'accepted' }
         } catch (e) {
           return outcomeOf(e, lease)
         }
       },
       async interrupt() {
-        const lease = leases.get(draftKey)
+        const lease = leaseOf(draftKey)
         if (!lease) return { kind: 'rejected', status: 0, code: 'pane_closed' }
         try {
-          await interruptExecution(hostId, executionId, await lease.ensureLease())
+          await within((async () => interruptExecution(hostId, executionId, await lease.ensureLease()))())
           return { kind: 'accepted' }
         } catch (e) {
           return outcomeOf(e, lease)

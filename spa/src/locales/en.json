@@ -2460,6 +2460,7 @@
   "deck.send.needs_terminal": "This needs to be typed in the terminal",
   "deck.send.too_long": "Too long (4000 bytes at most)",
   "deck.send.empty": "Nothing to send",
+  "deck.send.pane_closed": "Left this view before it went out — not sent (you can resend)",
   "deck.send.rejected": "Not sent ({{code}})",
   "deck.send.network": "Connection lost; may have been sent, check the transcript",
   "deck.attach.add": "Attach files",

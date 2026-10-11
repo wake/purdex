@@ -28,6 +28,12 @@ export const mayHaveRun = (o: SendOutcome): boolean => o.kind === 'unknown' || o
 export interface SendPort {
   submit(text: string, clientMsgId: string): Promise<SendOutcome>
   interrupt(): Promise<SendOutcome>
+  /**
+   * How the transcript echoes a message this port handed over, when it is not the terminal's (a row stamped within seconds of the hand-out, source
+   * `user`): the sources that count as the echo, and how long after the answer a row may still be taken for it. A worker's message may wait in
+   * Nexen's own queue for a whole turn, so its row comes late and may be `queued`.
+   */
+  echo?: { sources: readonly string[]; afterMs: number }
 }
 
 const path = (sessionId: string, verb: 'submit' | 'interrupt') => `/api/conversations/claude/${encodeURIComponent(sessionId)}/${verb}`
@@ -89,6 +95,7 @@ export interface OutcomeMessage {
 
 /** The message for an outcome (i18n keys; zh-TW and en in the locale files). */
 export function outcomeMessage(o: SendOutcome): OutcomeMessage {
+  if (o.kind === 'rejected' && o.code === 'pane_closed') return { key: 'deck.send.pane_closed', tone: 'warn' }
   switch (o.kind) {
     case 'accepted': return { key: 'deck.send.accepted', tone: 'ok' }
     case 'dropped': return { key: 'deck.send.dropped', params: { reason: o.reason || '-' }, tone: 'error' }

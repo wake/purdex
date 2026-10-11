@@ -2,7 +2,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { adapterOf, bindAdapter, clearAllAdapters, forgetAdaptersWhere } from './deck-adapter'
 import { draftKey, forgetDraft, readDraft, writeDraft, clearAllDrafts } from './draft-memory'
-import { clearAllSendQueues, sendQueueFor } from './send-queue'
+import { SendQueue, UNDO_MS, clearAllSendQueues, sendQueueFor } from './send-queue'
+import { SUBMIT_TIMEOUT_MS, outcomeMessage } from './send'
+import type { UserItem } from './types'
 import { releasePane, retireStaleSessions } from './pane-release'
 import { terminalAdapter } from './terminal-adapter'
 import { clearAllWorkerLeases, registerWorkerLease, workerAdapter } from './worker-adapter'
@@ -51,6 +53,46 @@ describe('workerAdapter', () => {
     expect(await workerAdapter(H, E).port().submit('hi', 'cm1')).toEqual({ kind: 'network' })
   })
 
+  it('a request that got no answer may have run: network (the queue leaves it `maybe`), also when it is Nexen\'s own network error', async () => {
+    registerWorkerLease(H, E, lease())
+    vi.mocked(api.sendMessage).mockRejectedValueOnce(new NexApiError(0, 'network', 'dropped'))
+    expect(await workerAdapter(H, E).port().submit('hi', 'cm1')).toEqual({ kind: 'network' })
+  })
+
+  it('a request that never answers lets go after the submit timeout, so the messages behind it are not held for good', async () => {
+    vi.useFakeTimers()
+    try {
+      registerWorkerLease(H, E, lease())
+      vi.mocked(api.sendMessage).mockReturnValueOnce(new Promise(() => {}))
+      const out = workerAdapter(H, E).port().submit('hi', 'cm1')
+      await vi.advanceTimersByTimeAsync(SUBMIT_TIMEOUT_MS + 1)
+      expect(await out).toEqual({ kind: 'network' })
+    } finally { vi.useRealTimers() }
+  })
+
+  it('two views of one worker each offer a lease: the newest answers, and the older one when the newest goes', async () => {
+    const older = lease(), newer = { ensureLease: vi.fn(async () => 'lease-2'), forget: vi.fn() }
+    registerWorkerLease(H, E, older)
+    const takeBack = registerWorkerLease(H, E, newer)
+    await workerAdapter(H, E).port().submit('a', 'c1')
+    expect(vi.mocked(api.sendMessage).mock.calls.at(-1)![2]).toBe('lease-2')
+    takeBack()
+    await workerAdapter(H, E).port().submit('b', 'c2')
+    expect(vi.mocked(api.sendMessage).mock.calls.at(-1)![2]).toBe('lease-1')
+  })
+
+  it('a send refused because the view is gone has its own plain wording, not a bare code', () => {
+    expect(outcomeMessage({ kind: 'rejected', status: 0, code: 'pane_closed' })).toEqual({ key: 'deck.send.pane_closed', tone: 'warn' })
+    expect(outcomeMessage({ kind: 'rejected', status: 409, code: 'lease_held' }).key).toBe('deck.send.rejected')
+  })
+
+  it('declares how its echo comes back: `user` or `queued`, however late Nexen hands the message over', () => {
+    const echo = workerAdapter(H, E).port().echo!
+    expect(echo.sources).toEqual(['user', 'queued'])
+    expect(echo.afterMs).toBeGreaterThanOrEqual(5 * 60_000)
+    expect(terminalAdapter(H, 's1', 'c').port().echo).toBeUndefined() // the terminal's window is unchanged
+  })
+
   it('with no worker view mounted (its lease is gone) a send is refused, not lost: nothing is sent', async () => {
     expect(await workerAdapter(H, E).port().submit('hi', 'cm1')).toEqual({ kind: 'rejected', status: 0, code: 'pane_closed' })
     expect(await workerAdapter(H, E).port().interrupt()).toEqual({ kind: 'rejected', status: 0, code: 'pane_closed' })
@@ -78,6 +120,40 @@ describe('workerAdapter', () => {
     expect(readWorkerDraft(`${H}:${E}`)).toBe('from the deck')
     d.write('')
     expect(readWorkerDraft(`${H}:${E}`)).toBeUndefined()
+  })
+})
+
+describe('the worker\'s echo in the send queue', () => {
+  const row = (text: string, at: number, source = 'user'): UserItem => ({ type: 'user', id: `u${at}`, at, index: 0, text, source } as UserItem)
+  async function sentAt(start: number) {
+    vi.useFakeTimers(); vi.setSystemTime(start)
+    registerWorkerLease(H, E, lease())
+    const q = new SendQueue(workerAdapter(H, E).port())
+    q.enqueue('run the tests')
+    await vi.advanceTimersByTimeAsync(UNDO_MS + 10)
+    expect(q.entries()[0].state).toBe('sent')
+    return q
+  }
+  const stop = () => vi.useRealTimers()
+
+  it('a row that comes a whole turn later, as `user` or `queued`, still settles it (Nexen held the message while the worker was busy)', async () => {
+    for (const source of ['user', 'queued']) {
+      const q = await sentAt(1_000_000)
+      vi.setSystemTime(1_000_000 + 90_000)
+      q.reconcile([row('run the tests', 1_000_000 + 90_000, source)])
+      expect(q.entries()).toEqual([])
+      stop()
+    }
+  })
+
+  it('the same late row does NOT settle a terminal message (its window is the mod\'s: seconds)', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(1_000_000)
+    const q = new SendQueue({ submit: async () => ({ kind: 'accepted' }), interrupt: async () => ({ kind: 'accepted' }) })
+    q.enqueue('run the tests')
+    await vi.advanceTimersByTimeAsync(UNDO_MS + 10)
+    q.reconcile([row('run the tests', 1_000_000 + 90_000)])
+    expect(q.entries()).toHaveLength(1)
+    stop()
   })
 })
 
