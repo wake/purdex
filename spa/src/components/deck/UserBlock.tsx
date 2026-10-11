@@ -3,6 +3,7 @@
 import { useI18nStore } from '../../stores/useI18nStore'
 import { textOutput, userCaption, userTone, type UserTone } from '../../lib/conversations/deck-format'
 import type { UserItem } from '../../lib/conversations/types'
+import { userUnitId } from '../../lib/conversations/find-units'
 import { OutputFold } from './OutputFold'
 import { OWN_TEXT_SOURCES } from '../../lib/conversations/image-sniff'
 import { UserText } from './UserText'
@@ -47,7 +48,7 @@ export function UserBlock({ item, midTurn }: { item: UserItem; /** Not the first
     <div data-testid="deck-user" data-source={item.source} data-tone={tone} className={`${c.box} px-3 py-2`}>
       <div data-testid="deck-user-caption" className={`mb-1 deck-t-down font-medium ${c.caption}`}>{caption}</div>
       <div className={`whitespace-pre-wrap break-words deck-t-up ${c.body} ${bash ? 'font-mono' : ''}`}>
-        {bash ? `! ${item.text}` : OWN_TEXT_SOURCES.has(item.source) ? <UserText text={item.text} /> : <CjkText text={item.text} />}
+        <span data-search-unit={userUnitId(item.id)}>{bash ? `! ${item.text}` : OWN_TEXT_SOURCES.has(item.source) ? <UserText text={item.text} /> : <CjkText text={item.text} />}</span>
         {item.truncated && <span className="text-text-muted">…</span>}
       </div>
       {item.images && item.images.length > 0 && (

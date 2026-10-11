@@ -2,8 +2,11 @@
 // pane holds (`useConversationOfPane`, mounted by SessionPaneContent for every view) as the chat, or why it cannot be read,
 // or the loading moment. The twin of DeckPane: same states, the chat's own wording (UnreadableState). Takes focus when the
 // pane switches to it (the input first), and hands its footer the same context the deck does.
-import { useCallback, useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, type KeyboardEvent } from 'react'
 import { focusSessionInput } from './focus-input'
+import { fromRightPanel } from './find-target'
+import { isFindShortcut } from '../../lib/find-shortcut'
+import { findKey, requestFind } from '../../lib/conversations/find-memory'
 import { useActivationFocus } from '../../hooks/useActivationFocus'
 import type { PaneConversation, PaneConversationUnreadable } from '../../hooks/useConversationOfPane'
 import { useConversationStore } from '../../stores/useConversationStore'
@@ -61,6 +64,14 @@ export function ChatPane({ paneId, conversation, title, isActive, isFocusTarget,
   const sessionId = ready?.sessionId
   const onLoadOlder = useCallback(() => { if (hostId && sessionId) void useConversationStore.getState().loadBefore(hostId, sessionId) }, [hostId, sessionId])
 
+  // ⌘F searches this conversation — only while the focus is in this pane (the terminal's and the editor's ⌘F are not ours).
+  const onFindKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (conversation.state !== 'ready' || !isFindShortcut(e.nativeEvent) || fromRightPanel(e.target)) return
+    e.preventDefault()
+    e.stopPropagation()
+    requestFind(findKey(paneId, conversation.sessionId))
+  }
+
   const frame = (reason: UnreadableReason, onRetry?: () => void) => (
     <div data-testid="chat-view" className="flex h-full min-h-0 flex-col">
       <ChatHeader title={title} status="unknown" />
@@ -88,7 +99,7 @@ export function ChatPane({ paneId, conversation, title, isActive, isFocusTarget,
     )
   }
   return (
-    <div ref={ref} tabIndex={-1} data-testid="session-view-chat" style={typeStyle} className="absolute inset-0 bg-surface-primary outline-none" {...drop.handlers}>
+    <div ref={ref} tabIndex={-1} data-testid="session-view-chat" style={typeStyle} className="absolute inset-0 bg-surface-primary outline-none" onKeyDown={onFindKey} {...drop.handlers}>
       {body}
       {drop.overlay}
     </div>

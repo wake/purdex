@@ -78,6 +78,15 @@ describe('highlightSearch', () => {
     expect(texts('search-match')).toEqual(['needle', 'needle'])
   })
 
+  it('text under data-search-skip is drawn but not counted (a thumbnail\'s file name): the ordinal still lands on the indexed word', () => {
+    installApi()
+    const root = dom('<div data-search-unit="a">see <span data-search-skip><span>needle.png</span></span> the needle</div>')
+    const { matches } = findMatches([{ id: 'a', text: 'see  the needle', reveal: [] }], 'needle')
+    highlightSearch('p1', root, 'needle', matches, 0)
+    expect(texts('search-current')).toEqual(['needle'])
+    expect((highlights.get('search-current')?.ranges[0].startContainer.parentElement?.closest('[data-search-skip]'))).toBeNull()
+  })
+
   it('skips a match whose unit is not on screen', () => {
     installApi()
     const root = dom('<pre data-search-unit="a">needle</pre>')
