@@ -63,7 +63,7 @@ func revisionOf(t *testing.T, m *Module) string {
 // Mutation gate: drop rejectDuplicateKeys from normalizeWorkbook → red.
 func TestWorkbook_AStoredDuplicateKeyIsInvalid(t *testing.T) {
 	m := newTestModule(t)
-	_, _, err := m.store.Put(KeyWorkbook, 0, func() (json.RawMessage, error) {
+	_, _, err := m.store.Put(KeyWorkbook, 0, func(Entry) (json.RawMessage, error) {
 		return json.RawMessage(`{"push_wait_s":0,"push_wait_s":30}`), nil
 	})
 	require.NoError(t, err)
@@ -89,7 +89,7 @@ func TestWorkbook_RefusesNonIntegerSpellings(t *testing.T) {
 
 func TestWorkbook_AStoredGarbageValueIsAnError(t *testing.T) {
 	m := newTestModule(t)
-	_, _, err := m.store.Put(KeyWorkbook, 0, func() (json.RawMessage, error) { return json.RawMessage(`{"push_wait_s":"x"}`), nil })
+	_, _, err := m.store.Put(KeyWorkbook, 0, func(Entry) (json.RawMessage, error) { return json.RawMessage(`{"push_wait_s":"x"}`), nil })
 	require.NoError(t, err)
 	_, err = m.WorkbookSettings()
 	assert.Error(t, err)

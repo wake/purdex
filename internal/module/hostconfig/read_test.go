@@ -38,7 +38,7 @@ func TestRead_AValidValueReadsAsNormalized(t *testing.T) {
 			`{"id":"c2","name":"Shell","command":"echo hi && ls","icon":{"kind":"phosphor","value":"Terminal"}}]`,
 			readCommands, func(r json.RawMessage) (any, error) { return normalizeCommands(r) }},
 		{"quick replies", `[{"id":"go","text":"  go on \n"},{"id":"t","text":"請跑測試"}]`,
-			readQuickReplies, func(r json.RawMessage) (any, error) { return normalizeQuickReplies(r) }},
+			readQuickReplies, func(r json.RawMessage) (any, error) { return normalizeQuickReplies(r, Entry{}) }},
 		{"resume templates", `{"cc":{"exact":"cld --resume {id}","fallback":""},"codex":{"exact":"","fallback":"cx"}}`,
 			readResumeTemplates, func(r json.RawMessage) (any, error) { return normalizeResumeTemplates(r) }},
 		{"empty resume templates", `{}`, readResumeTemplates, func(r json.RawMessage) (any, error) { return normalizeResumeTemplates(r) }},
@@ -121,10 +121,10 @@ func TestReadCommands_DropsTheRowThatBreaksARule(t *testing.T) {
 
 func TestReadQuickReplies_DropsTheRowThatBreaksARule(t *testing.T) {
 	const first, last = `{"id":"q0","text":" a "}`, `{"id":"q9","text":"z"}`
-	want := []QuickReply{{ID: "q0", Text: "a"}, {ID: "q9", Text: "z"}}
+	want := []QuickReply{{ID: "q0", Title: "a", Content: "a", Text: "a"}, {ID: "q9", Title: "z", Content: "z", Text: "z"}}
 	for row, why := range map[string]string{
 		`1`:                       `not a quick reply`,
-		`{"id":"q1","text":42}`:   `not a quick reply`,
+		`{"id":"q1","text":42}`:   `invalid text for quick reply "q1"`,
 		`{"id":"q1"}`:             `invalid text for quick reply "q1"`,
 		`{"id":"q1","text":"  "}`: `invalid text for quick reply "q1"`,
 		`{"id":"q1","text":"` + strings.Repeat("x", 1001) + `"}`: `invalid text for quick reply "q1"`,
@@ -151,7 +151,7 @@ func TestRead_ADroppedRowReservesNothing(t *testing.T) {
 	assert.Equal(t, []Command{{ID: "c1", Name: "n", Command: "y", Icon: CommandIcon{Kind: "agent", Value: "codex"}}}, r.items)
 
 	r = readQuickReplies(json.RawMessage(`[{"id":"q1","text":""},{"id":"q1","text":"ok"}]`))
-	assert.Equal(t, []QuickReply{{ID: "q1", Text: "ok"}}, r.items)
+	assert.Equal(t, []QuickReply{{ID: "q1", Title: "ok", Content: "ok", Text: "ok"}}, r.items)
 }
 
 // Over a list's max, the first max VALID rows are kept and the rest dropped.

@@ -115,7 +115,7 @@ func (m *Module) handleGet(w http.ResponseWriter, _ *http.Request) {
 }
 
 // putHandler replaces one collection guarded by baseRevision.
-func (m *Module) putHandler(key string, normalize func([]byte) (any, error)) http.HandlerFunc {
+func (m *Module) putHandler(key string, normalize func([]byte, Entry) (any, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, ok := readBody(w, r)
 		if !ok {
@@ -140,8 +140,8 @@ func (m *Module) putHandler(key string, normalize func([]byte) (any, error)) htt
 		// Normalize inside the store's CAS so a stale revision yields 409 with
 		// the server copy even when the payload is invalid.
 		var marshalErr error
-		entry, stored, err := m.store.Put(key, *req.BaseRevision, func() (json.RawMessage, error) {
-			normalized, err := normalize(req.Items)
+		entry, stored, err := m.store.Put(key, *req.BaseRevision, func(cur Entry) (json.RawMessage, error) {
+			normalized, err := normalize(req.Items, cur)
 			if err != nil {
 				return nil, err
 			}

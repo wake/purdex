@@ -23,8 +23,8 @@ func openTestStore(t *testing.T) *Store {
 }
 
 // raw returns a build callback yielding v.
-func raw(v string) func() (json.RawMessage, error) {
-	return func() (json.RawMessage, error) { return json.RawMessage(v), nil }
+func raw(v string) func(Entry) (json.RawMessage, error) {
+	return func(Entry) (json.RawMessage, error) { return json.RawMessage(v), nil }
 }
 
 func TestStoreGetMissingIsRevisionZero(t *testing.T) {
@@ -75,7 +75,7 @@ func TestStorePutConflictDoesNotCallBuild(t *testing.T) {
 	require.True(t, ok)
 
 	called := false
-	cur, ok, err := s.Put(KeyCommands, 0, func() (json.RawMessage, error) {
+	cur, ok, err := s.Put(KeyCommands, 0, func(Entry) (json.RawMessage, error) {
 		called = true
 		return nil, errors.New("invalid")
 	})
@@ -92,7 +92,7 @@ func TestStorePutBuildErrorIsValidationErrorAndRollsBack(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	_, ok, err = s.Put(KeyCommands, 1, func() (json.RawMessage, error) {
+	_, ok, err = s.Put(KeyCommands, 1, func(Entry) (json.RawMessage, error) {
 		return nil, errors.New("bad slug")
 	})
 	require.Error(t, err)
@@ -147,7 +147,7 @@ func TestStorePutConcurrentSameBaseOneWins(t *testing.T) {
 	var builds atomic.Int32
 	for _, v := range []string{`["a"]`, `["b"]`} {
 		go func(v string) {
-			e, ok, err := s.Put(KeyProjects, 0, func() (json.RawMessage, error) {
+			e, ok, err := s.Put(KeyProjects, 0, func(Entry) (json.RawMessage, error) {
 				builds.Add(1)
 				return json.RawMessage(v), nil
 			})

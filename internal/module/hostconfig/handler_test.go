@@ -35,7 +35,7 @@ func TestHandlerPutQuickRepliesRoundTrip(t *testing.T) {
 	rr := serve(m, http.MethodPut, "/api/hostconfig/quick-replies",
 		`{"items":[{"id":"continue","text":" continue "}],"baseRevision":0}`)
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
-	assert.JSONEq(t, `{"items":[{"id":"continue","text":"continue"}],"revision":1}`, rr.Body.String())
+	assert.JSONEq(t, `{"items":[{"id":"continue","title":"continue","content":"continue","text":"continue"}],"revision":1}`, rr.Body.String())
 
 	rr = serve(m, http.MethodPut, "/api/hostconfig/quick-replies", `{"items":[],"baseRevision":1}`)
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
@@ -55,7 +55,7 @@ func TestHandlerPutQuickRepliesConflict(t *testing.T) {
 
 	rr := serve(m, http.MethodPut, "/api/hostconfig/quick-replies", `{"items":[],"baseRevision":0}`)
 	require.Equal(t, http.StatusConflict, rr.Code, rr.Body.String())
-	assert.JSONEq(t, `{"items":[{"id":"a","text":"hi"}],"revision":1}`, rr.Body.String())
+	assert.JSONEq(t, `{"items":[{"id":"a","title":"hi","content":"hi","text":"hi"}],"revision":1}`, rr.Body.String())
 }
 
 func TestHandlerPutQuickRepliesRejectsInvalid(t *testing.T) {

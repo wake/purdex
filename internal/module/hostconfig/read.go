@@ -68,13 +68,13 @@ func clipReason(why string) string {
 // as the PUT stores it; a row that fails is dropped as "item N: <why>", N
 // its index in the stored array from 0. Once limit rows are kept, every
 // later one is dropped as over the cap.
-func readRows[T any](raw json.RawMessage, one, many string, limit int, check func(T) (T, error)) readout {
+func readRows[T, U any](raw json.RawMessage, one, many string, limit int, check func(T) (U, error)) readout {
 	var elems []json.RawMessage
 	if err := decodeArray(raw, &elems); err != nil {
-		return readout{items: []T{}, invalid: err}
+		return readout{items: []U{}, invalid: err}
 	}
 	var r readout
-	kept := make([]T, 0, min(len(elems), limit))
+	kept := make([]U, 0, min(len(elems), limit))
 	for i, elem := range elems {
 		if len(kept) == limit {
 			r.drop(fmt.Sprintf("item %d: at most %d %s", i, limit, many))
@@ -85,12 +85,12 @@ func readRows[T any](raw json.RawMessage, one, many string, limit int, check fun
 			r.drop(fmt.Sprintf("item %d: not a %s", i, one))
 			continue
 		}
-		row, err := check(row)
+		checked, err := check(row)
 		if err != nil {
 			r.drop(fmt.Sprintf("item %d: %v", i, err))
 			continue
 		}
-		kept = append(kept, row)
+		kept = append(kept, checked)
 	}
 	r.items = kept
 	return r
