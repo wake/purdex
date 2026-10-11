@@ -1,5 +1,5 @@
 // spa/src/hooks/useTranscriptScroll.ts — a transcript's stick-to-bottom, shared
-// by RoomTranscript and ChatTranscript.
+// by the deck and the chat.
 //
 // The transcript calls `follow()` from its own effect whenever it grows (its
 // deps say what growth is). The first call (mount, or a view switch
@@ -73,7 +73,7 @@
 // counts as the bottom (A4).
 // **Keying.** The caller's `memory.paneId` is whatever key it composes — a
 // worker pane's transcript keys it by pane *and* execution
-// (ExecutionView), since a handoff / take-back can swap a pane's content to
+// (WorkerDeckPane), since a handoff / take-back can swap a pane's content to
 // a different execution while keeping its paneId.
 import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type Ref, type UIEvent } from 'react'
 import { readScrollMemo, writeScrollMemo, SCROLL_ANCHOR_CLASS, type ScrollAnchor, type ScrollMemo } from '../lib/nex/transcript-scroll-memory'

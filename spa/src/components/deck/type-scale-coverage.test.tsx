@@ -28,7 +28,7 @@ const src = (rel: string): string => readFileSync(resolve(__dirname, rel), 'utf8
 
 const SCALED = [
   './StepViews.tsx', './OutputFold.tsx', './ThinkingSystem.tsx', './ChatWorkRow.tsx', './ChatPeerLine.tsx', './DeckItem.tsx', './DeckView.tsx', './ChatView.tsx',
-  './SessionInput.tsx', './StatusSlot.tsx', '../room/FoldedOutput.tsx', './UserBlock.tsx', './AgentHeader.tsx', './TurnLines.tsx', './QueuedMessages.tsx', './PendingTail.tsx',
+  './SessionInput.tsx', './StatusSlot.tsx', './UserBlock.tsx', './AgentHeader.tsx', './TurnLines.tsx', './QueuedMessages.tsx', './PendingTail.tsx',
   '../dock/QuestionDock.tsx', '../room/ToolDiffView.tsx',
 ]
 

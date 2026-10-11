@@ -202,11 +202,11 @@ describe('handToNex', () => {
       expect(paneContent(a.tabId)).toEqual({ kind: 'execution', executionId: 'exc_1', host: H, from, mode: 'chat' })
     })
 
-    it('mode room → room; no mode → no mode field (reads as room)', async () => {
+    it('mode deck → deck; no mode → no mode field (reads as the deck)', async () => {
       mockedHandoff.mockResolvedValueOnce(handoffOk)
-      const room = { ...args(), mode: 'room' as const }
-      await handToNex(room)
-      expect(paneContent(room.tabId)).toEqual({ kind: 'execution', executionId: 'exc_1', host: H, from, mode: 'room' })
+      const deck = { ...args(), mode: 'deck' as const }
+      await handToNex(deck)
+      expect(paneContent(deck.tabId)).toEqual({ kind: 'execution', executionId: 'exc_1', host: H, from, mode: 'deck' })
       mockedHandoff.mockResolvedValueOnce({ ...handoffOk, execution_id: 'exc_2' })
       const none = args()
       await handToNex(none)
@@ -227,7 +227,7 @@ describe('handToNex', () => {
 
     it('executionContentFor carries the mode it is given, and none when not', () => {
       expect(executionContentFor(H, 'e', from, 'T', 'chat')).toEqual({ kind: 'execution', executionId: 'e', host: H, from, fromTitle: 'T', mode: 'chat' })
-      expect(executionContentFor(H, 'e', undefined, undefined, 'room')).toEqual({ kind: 'execution', executionId: 'e', host: H, mode: 'room' })
+      expect(executionContentFor(H, 'e', undefined, undefined, 'deck')).toEqual({ kind: 'execution', executionId: 'e', host: H, mode: 'deck' })
       expect(executionContentFor(H, 'e', from, 'T')).not.toHaveProperty('mode')
     })
   })

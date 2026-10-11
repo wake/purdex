@@ -21,7 +21,7 @@
 // "Closed here" outlives the pane (A2): a tab switch right after an answer,
 // before its `permission.resolved` arrives, unmounts the pane while the store
 // still reads pending. The mark lives in `lib/nex/permission-card-memory`, read
-// on mount and on every answer; ExecutionView prunes it with the card drafts.
+// on mount and on every answer; WorkerDeckPane prunes it with the card drafts.
 import { useCallback, useRef, useState } from 'react'
 import { answerPermission } from '../lib/nex/nex-api'
 import { NexApiError } from '../lib/nex/types'
@@ -74,7 +74,7 @@ export function usePermissionAnswer(
 
   const close = useCallback((requestId: string) => {
     // The stream may have outrun the HTTP reply: a request the store no longer lists as pending was already pruned
-    // by ExecutionView (permissions never change again, so nothing would drop a mark added now) — no mark.
+    // by WorkerDeckPane (permissions never change again, so nothing would drop a mark added now) — no mark.
     if (useExecutionStore.getState().executions[executionKey(hostId, executionId)]?.permissions[requestId]?.status !== 'pending') return
     closePermissionCard(permissionCardKey(hostId, executionId, requestId))
     setClosed(closedPermissionRequests(hostId, executionId))

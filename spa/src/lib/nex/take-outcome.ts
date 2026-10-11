@@ -1,5 +1,5 @@
 // spa/src/lib/nex/take-outcome.ts — the user-facing outcome of a take-to-terminal /
-// take-back that the daemon accepted: shared by ExecutionView.runTakeBack and the
+// take-back that the daemon accepted: shared by useWorkerHandoff.runTakeBack and the
 // ended-worker pane. Global stores only, so it works after the pane unmounted.
 import { useUndoToast } from '../../stores/useUndoToast'
 import type { TFunction } from '../pane-labels'

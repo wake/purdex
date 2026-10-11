@@ -10,9 +10,6 @@
 // first) and which DOM element will then hold it (`id`, carried by the
 // component as `data-search-unit`).
 //
-// A loaded worker prelude is walked first (it is drawn above the live list),
-// by its stable ids, mirroring PreludeSection.
-//
 // The walk mirrors what each view draws, block for block:
 // - room: every message through MessageRow's rules;
 // - chat: ChatTranscript's rules at the top level (no thinking, a turn's plain
@@ -24,7 +21,7 @@
 // A unit's text is what is drawn: agent prose is `proseText` of its markdown
 // (the rendered text), everything else is drawn verbatim.
 // Pure: no React, no store.
-import { blockKey, indexOperations, toolResultText, type BlockKey, type OperationIndex } from './operations'
+import { blockKey, toolResultText, type BlockKey, type OperationIndex } from './operations'
 import { classifyTurnOperations, toolEntryFor, type TurnOperation } from './operation-status'
 import { groupTurns, INTERRUPT_TEXT } from './turns'
 import { pathBasename, showsRawInput, toolSummary } from './tool-summary'
@@ -32,7 +29,6 @@ import { diffRows } from './diff-lines'
 import { proseText } from './markdown-text'
 import { isPeerMessage, type ContentBlock, type StreamMessage } from './message-types'
 import type { ToolActivity } from './tool-activity'
-import { preludeBlocks, preludeId, type PreludeEntry, type PreludeView } from './prelude'
 
 /**
  * Which text of a block a unit is. `path` is a diff's full path on its stat
@@ -73,15 +69,13 @@ export interface SearchUnitOptions {
   index: OperationIndex
   tools?: Record<string, ToolActivity>
   view: 'room' | 'chat'
-  /** The transcript's keyPrefix: chat's tools line folds at `${keyPrefix}-turn-${ti}:chat-tools` (a prelude span: `${keyPrefix}-prelude-turn-${last message id}:chat-tools`). */
+  /** The transcript's keyPrefix: chat's tools line folds at `${keyPrefix}-turn-${ti}:chat-tools`. */
   keyPrefix: string
   /** ExecutionState.turnStarts — chat groups plain operations per turn. */
   turnStarts: readonly number[]
-  /** The loaded prelude: searched first, in the order PreludeSection draws it. */
-  prelude?: PreludeView
 }
 
-/** The fold key of a chat turn's tools line (ChatTranscript); `turn` is a turn index, or a prelude span's last message id. */
+/** The fold key of a chat turn's tools line (ChatTranscript); `turn` is a turn index (or a message id). */
 export function chatToolsKey(keyPrefix: string, turn: number | string): string {
   return `${keyPrefix}-turn-${turn}:chat-tools`
 }
@@ -98,7 +92,7 @@ interface Walk {
   index: OperationIndex
   tools?: Record<string, ToolActivity>
   push: Push
-  /** The stable name of message `m` in keys (the prelude's `p<pos>`); default: the index. */
+  /** The stable name of message `m` in keys; default: the index. */
   idOf?: (m: number) => string
 }
 
@@ -158,7 +152,7 @@ function operationUnits(w: Walk, mi: number, bj: number, reveal: string[]) {
 
 /**
  * A peer's line (peer mailbox spec §7): PeerMessageBlock draws its text as
- * prose at block 0, never folded — the pattern of the prelude's peer note.
+ * prose at block 0, never folded.
  * The sender's name is the block's header, not a search unit. True when
  * `msg` was one.
  */
@@ -259,34 +253,6 @@ function chatOperationLine(w: Walk, op: TurnOperation) {
   operationUnits(w, op.msgIndex, op.blockIndex, [`${op.key}:chat-failed`])
 }
 
-/** The prelude as PreludeSection draws it (spec 5.5): entries in order, notes by their own anchor. */
-function preludeUnits(opts: SearchUnitOptions, prelude: PreludeView, push: Push) {
-  const idOf = (m: number) => prelude.ids[m]
-  const w: Walk = { messages: prelude.messages, index: indexOperations(prelude.messages, idOf), tools: prelude.tools, push, idOf }
-  const note = (e: Extract<PreludeEntry, { kind: 'note' }>) => {
-    const id = preludeId(e.pos)
-    // As PreludeNote draws it: bash_input and task_notification whole (the
-    // anchor holds the text only, never the "! " prefix); peer_message as
-    // prose (never folded); the rest inside a fold.
-    if (e.source === 'peer_message') { push(searchUnitId(`${id}:note`, 'text'), proseText(e.text), []); return }
-    const folded = e.source !== 'bash_input' && e.source !== 'task_notification'
-    push(searchUnitId(`${id}:note`, 'text'), e.text, folded ? [`${id}:note`] : [])
-  }
-  if (opts.view === 'chat') {
-    for (const b of preludeBlocks(prelude)) {
-      if (b.kind === 'entry') { if (b.entry.kind === 'note') note(b.entry); continue }
-      // Keyed by the span's LAST message: pages grow only at the front, so a
-      // span's end never moves while its start can.
-      chatTurnUnits(w, [b], () => chatToolsKey(`${opts.keyPrefix}-prelude`, prelude.ids[b.end - 1]))
-    }
-    return
-  }
-  for (const e of prelude.entries) {
-    if (e.kind === 'message') { if (!w.index.childIndexes.has(e.m)) messageUnits(w, e.m, []) }
-    else if (e.kind === 'note') note(e)
-  }
-}
-
 /** Every searchable text of the transcript, in the order the view draws it. */
 export function buildSearchUnits(opts: SearchUnitOptions): SearchUnit[] {
   const units: SearchUnit[] = []
@@ -298,7 +264,6 @@ export function buildSearchUnits(opts: SearchUnitOptions): SearchUnit[] {
     // offsets into this text, whatever form the transcript arrived in.
     push: (id, text, reveal) => { if (text) units.push({ id, text: text.normalize('NFC'), reveal }) },
   }
-  if (opts.prelude) preludeUnits(opts, opts.prelude, w.push)
   if (opts.view === 'chat') {
     chatUnits(w, opts.keyPrefix, opts.turnStarts)
   } else {

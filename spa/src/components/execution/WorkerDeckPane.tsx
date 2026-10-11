@@ -55,7 +55,6 @@ function FooterMark({ onChange }: { onChange: (shown: boolean) => void }) {
   return null
 }
 
-const WORKER_VIEWS: readonly ExecutionViewMode[] = ['deck', 'chat']
 const NO_ENTRIES: readonly QueueEntry[] = []
 const noSubscribe = () => () => {}
 
@@ -132,7 +131,7 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
         <ViewModeLabel mode={view} /> <CaretDown size={10} />
       </button>
       {menuOpen && (
-        <ViewModeMenu anchorRef={menuAnchor} mode={view} views={WORKER_VIEWS} onModeChange={onModeChange} onClose={() => setMenuOpen(false)}
+        <ViewModeMenu anchorRef={menuAnchor} mode={view} onModeChange={onModeChange} onClose={() => setMenuOpen(false)}
           onTakeBack={handoff.takeOffered ? handoff.onTakeBack : undefined} takeBackBusy={handoff.takeBusy} />
       )}
       <button type="button" data-testid="worker-deck-exit" aria-label={t('worker.exit.button')} title={t('worker.exit.button')}

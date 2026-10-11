@@ -169,7 +169,7 @@ describe('WorkerEndedPane', () => {
 
   describe('exit on a failed stint', () => {
     const failed = () => sum({ state: 'rejected', reject_reason: 'x', resume_session_id: 'S', cwd: '/w' })
-    // Reads the summary from the store like ExecutionView does, so the patch re-renders the pane.
+    // Reads the summary from the store like WorkerDeckPane does, so the patch re-renders the pane.
     function Live() {
       const s = useExecutionStore((x) => x.executions[`${H}:${E}`]?.summary)
       return <WorkerEndedPane hostId={H} executionId={E} summary={s as ExecutionSummary} tabId={tabId} paneId={paneId} />
@@ -230,7 +230,7 @@ describe('WorkerEndedPane', () => {
     })
   })
 
-  describe('terminal take outcome (as ExecutionView.runTakeBack)', () => {
+  describe('terminal take outcome (as useWorkerHandoff.runTakeBack)', () => {
     const ended = () => sum({ state: 'terminated', archived: true, session_id: 'S', cwd: '/w' })
     const take = async () => {
       renderPane(ended())

@@ -13,8 +13,6 @@ import {
   selectRollupCostShown,
   selectSessionTitleSupported,
   selectSessionFilter,
-  selectPreludeItemOffset,
-  selectTranscriptPrelude,
   selectWorkerRollup,
   startNexHostInvalidation,
   useNexHostStore,
@@ -519,21 +517,16 @@ describe('selectors', () => {
     expect(selectHandoffReady(H)(useNexHostStore.getState())).toBe(expected)
   })
 
-  it('selectSessionFilter / selectPreludeItemOffset go by key presence', () => {
-    const cap = { route: { method: 'GET', path: '/p' }, page_max_items: 1, page_max_bytes: 1, max_block_bytes: 1 }
+  it('selectSessionFilter goes by key presence', () => {
     const st = () => useNexHostStore.getState()
-    seed({ capabilities: caps({ transcript_prelude: cap }) })
+    seed({ capabilities: caps({}) })
     expect(selectSessionFilter(H)(st())).toBe(false)
-    expect(selectPreludeItemOffset(H)(st())).toBe(false)
-    seed({ capabilities: caps({ list: { session_filter: true }, transcript_prelude: { ...cap, item_offset: true } }) })
+    seed({ capabilities: caps({ list: { session_filter: true } }) })
     expect(selectSessionFilter(H)(st())).toBe(true)
-    expect(selectPreludeItemOffset(H)(st())).toBe(true)
-    seed({ capabilities: caps({ list: { session_filter: false }, transcript_prelude: { ...cap, item_offset: false } }) })
+    seed({ capabilities: caps({ list: { session_filter: false } }) })
     expect(selectSessionFilter(H)(st())).toBe(false)
-    expect(selectPreludeItemOffset(H)(st())).toBe(false)
-    seed({ phase: 'unavailable', capabilities: caps({ list: { session_filter: true }, transcript_prelude: { ...cap, item_offset: true } }) })
+    seed({ phase: 'unavailable', capabilities: caps({ list: { session_filter: true } }) })
     expect(selectSessionFilter(H)(st())).toBe(false)
-    expect(selectPreludeItemOffset(H)(st())).toBe(false)
     expect(selectSessionFilter('ghost')(st())).toBe(false)
   })
 
@@ -597,19 +590,6 @@ describe('selectors', () => {
       expect(selectPermissionTimeoutMax(H)(st())).toBeNull()
       expect(selectPermissionTimeoutMax('ghost')(st())).toBeNull()
     })
-  })
-
-  it('selectTranscriptPrelude returns the capability object when present and ready, else null', () => {
-    const cap = { route: { method: 'GET', path: '/api/nex/v1/executions/{id}/prelude' }, page_max_items: 500, page_max_bytes: 1048576, max_block_bytes: 65536 }
-    seed({ capabilities: caps({ transcript_prelude: cap }) })
-    const got = selectTranscriptPrelude(H)(useNexHostStore.getState())
-    expect(got).toEqual(cap)
-    expect(selectTranscriptPrelude(H)(useNexHostStore.getState())).toBe(got)
-    seed({})
-    expect(selectTranscriptPrelude(H)(useNexHostStore.getState())).toBeNull()
-    seed({ phase: 'unavailable', capabilities: caps({ transcript_prelude: cap }) })
-    expect(selectTranscriptPrelude(H)(useNexHostStore.getState())).toBeNull()
-    expect(selectTranscriptPrelude('ghost')(useNexHostStore.getState())).toBeNull()
   })
 
   it('selectRollupCostShown: only cost_basis "result_evidence" shows the rollup cost (v0.13.1 session_cumulative under-counts)', () => {

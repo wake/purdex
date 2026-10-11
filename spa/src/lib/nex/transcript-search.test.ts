@@ -5,7 +5,6 @@ import {
   type SearchUnit, type SearchUnitOptions,
 } from './transcript-search'
 import { indexOperations } from './operations'
-import { derivePrelude } from './prelude'
 import type { ContentBlock, StreamMessage } from './message-types'
 import type { ToolActivity } from './tool-activity'
 
@@ -440,48 +439,3 @@ describe('toolUseUnit', () => {
   })
 })
 
-describe('buildSearchUnits — the loaded prelude (worker prelude P3b)', () => {
-  const prelude = derivePrelude([
-    { offset: null, pos: '2', at: 0, kind: 'user', msg: said('needle early') },
-    { offset: null, pos: '3', at: 0, kind: 'prelude.note', source: 'command_output', text: 'needle note', truncated: false, totalBytes: null, stream: null },
-  ])
-
-  it('walks the prelude first, by its stable ids, in both views', () => {
-    for (const view of ['room', 'chat'] as const) {
-      const live = [said('needle late')]
-      const list = buildSearchUnits({ messages: live, index: indexOperations(live), view, keyPrefix: 'k', turnStarts: [], prelude })
-      expect(list.map((u) => u.id)).toEqual(['p2:0:text', 'p3:note:text', '0:0:text'])
-      expect(list[1].reveal).toEqual(['p3:note'])
-    }
-  })
-
-  it('draws bash input whole, a peer message as prose, and folds the rest', () => {
-    const notes = derivePrelude([
-      { offset: null, pos: '1', at: 0, kind: 'prelude.note', source: 'bash_input', text: 'ls', truncated: false, totalBytes: null, stream: null },
-      { offset: null, pos: '2', at: 0, kind: 'prelude.note', source: 'peer_message', text: 'hi **there**', truncated: false, totalBytes: null, stream: null },
-      { offset: null, pos: '3', at: 0, kind: 'prelude.note', source: 'task_notification', text: 'done', truncated: false, totalBytes: null, stream: null },
-    ])
-    const list = buildSearchUnits({ messages: [], index: indexOperations([]), view: 'room', keyPrefix: 'k', turnStarts: [], prelude: notes })
-    expect(list.map((u) => [u.id, u.text, u.reveal])).toEqual([
-      ['p1:note:text', 'ls', []], ['p2:note:text', 'hi there', []], ['p3:note:text', 'done', []],
-    ])
-  })
-})
-
-describe('buildSearchUnits — pasted text in the prelude (U3)', () => {
-  const body = 'needle 1\nneedle 2'
-  const prelude = derivePrelude([
-    { offset: null, pos: '1', at: 0, kind: 'user', msg: said(`before\n<pasted_content id="000a">\n${body}\n</pasted_content id="000a">\nafter`) },
-  ])
-
-  it('typed + paste + typed: three ordered, distinct block units; the paste is verbatim and reveals its fold', () => {
-    for (const view of ['room', 'chat'] as const) {
-      const list = buildSearchUnits({ messages: [], index: indexOperations([]), view, keyPrefix: 'k', turnStarts: [], prelude })
-      expect(list.map((u) => [u.id, u.text, u.reveal]), view).toEqual([
-        ['p1:0:text', 'before', []],
-        ['p1:1:text', body, ['p1:1:paste']],
-        ['p1:2:text', 'after', []],
-      ])
-    }
-  })
-})

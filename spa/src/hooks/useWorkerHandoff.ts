@@ -1,6 +1,6 @@
 // spa/src/hooks/useWorkerHandoff.ts — the controls that hand a worker over or end it: 帶回終端機 (take back to the session it came from, or to a new terminal)
-// and 退出 (exit), with their busy flags, the running-turn confirms, and the status bar's terminal button (`registerTakeToTerminal`). Moved out of
-// ExecutionView unchanged (U4-4b): the room / chat view and the deck's WorkerDeckPane both call it; one worker view is mounted at a time.
+// and 退出 (exit), with their busy flags, the running-turn confirms, and the status bar's terminal button (`registerTakeToTerminal`). The worker pane
+// (WorkerDeckPane, as deck or chat) calls it; one worker view is mounted at a time.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { executionKey, useExecutionStore } from '../stores/useExecutionStore'
@@ -32,7 +32,7 @@ export interface WorkerHandoffInput {
   st: ExecutionState
   /** The view shows a problem instead of the worker (no header, no confirm dialog): the terminal button is not offered then. */
   problem: unknown
-  /** An interrupt / reply-box write is on its way (the room's `useExecutionActions`); the deck has none. */
+  /** An interrupt / reply-box write is on its way (the deck's send queue). */
   actionPending: boolean
 }
 
