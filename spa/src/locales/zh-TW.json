@@ -1495,6 +1495,7 @@
   "hosts.relay.prompts.var.old_session": "舊 session id",
   "hosts.relay.prompts.var.context": "接力時的 context 用量",
   "hosts.relay.prompts.var.whoami": "pdx 身分",
+  "hosts.relay.prompts.var.why": "接力原因（mod 依觸發方式填入：閒置、達門檻、手動、lead 安排）",
   "hosts.relay.prompts.save": "儲存",
   "hosts.relay.prompts.restore_default": "還原預設",
   "hosts.relay.prompts.custom": "自訂",

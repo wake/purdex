@@ -4,6 +4,7 @@
 // raises. The P5b-1 hello tests come first, the P5b-2 relay after them.
 import { test, expect, mock } from 'claude-code/testing'
 import { FIXED } from './prompts.js'
+import { whyOf } from './register.js'
 
 // The pdx.json the extractor writes: the installing daemon's config is the
 // `--config` every `pdx relay` call carries (P5b-1 review).
@@ -2245,12 +2246,16 @@ test('/relay runs the installed pdx with --config and an 8 s bound; a timeout, 2
 // pdx msg whoami answer, `n` the nonce of that one prompt.
 const EMPTY_GIT_BLOCK = ['```', '$ git status --short', '（無輸出）', '', '$ git diff --stat', '（無輸出）', '', '$ git log --oneline -10', '（無輸出）', '```'].join('\n')
 const GIT_BLOCK = EMPTY_GIT_BLOCK
-const PRE_P9A_WRITE = (n: string, who = 'mlab/purdex-x [abc123]') => [
-  '[pdx-relay op=op-1 n=' + n + '] 這個 session 的 context 已達接力門檻，使用者已核准接力（之後會 /clear）。',
-  '請先停下手邊工作，用你完整的工具撰寫接力檔：/data/relay/op-1.md',
+// Relay prompt why spec (2026-10-12): the default bodies name the cause through {{why}}; the constants keep their
+// names (the old text was pre-P9a). `why` is the clause whyOf gives: a threshold ask unless a test says otherwise.
+const WHY_THRESHOLD = 'context 已達接力門檻'
+const PRE_P9A_WRITE = (n: string, who = 'mlab/purdex-x [abc123]', why = WHY_THRESHOLD) => [
+  '[pdx-relay op=op-1 n=' + n + '] 這個 session 要接力了：' + why + '。接力已核准（之後會 /clear）。',
+  '請用你完整的工具撰寫接力檔：/data/relay/op-1.md（手邊有工作就先停下）',
   '',
   '要求：',
   '- 接力檔必須自成一體：讀它的是一個完全沒有這段對話記憶的新對話。',
+  '- 如果現在是在等使用者、lead 或其他 session（例如等決定、等 merge 通知），§2 的「下一步」要寫清楚在等什麼、等誰、等到之後的第一個動作（具體到指令）。',
   '',
   '機器提供的 git 狀態（照抄進 §3）：',
   GIT_BLOCK,
@@ -2275,13 +2280,13 @@ const PRE_P9A_WRITE = (n: string, who = 'mlab/purdex-x [abc123]') => [
   '- 接力時 context：144000 tokens / 200000 (72%)',
   '- pdx 身分：' + who,
 ].join('\n')
-const PRE_P9A_SEED = (n: string) => [
+const PRE_P9A_SEED = (n: string, why = WHY_THRESHOLD) => [
   '↪ 接手自 _abc123',
-  '[pdx-relay seed op=op-1 n=' + n + '] 你是接手的新對話：前一段對話 context 已滿並已清空。',
+  '[pdx-relay seed op=op-1 n=' + n + '] 你是接手的新對話：前一段對話已接力並清空（' + why + '）。',
   '請先讀接力檔 /data/relay/op-1.md，然後：',
   '1. 用三行複述：目標、下一步第一個動作、目前有哪些檔案異動。',
   '2. 跑 `git status` 確認與接力檔一致，不一致就指出來。',
-  '3. 接著從「下一步」繼續原本的工作。',
+  '3. 如果「下一步」是在等使用者、lead 或其他 session，就停在這裡等，不要自己開始新的工作；否則接著從「下一步」繼續原本的工作。',
   '回覆的第一行請寫「↪ 接手自 _abc123」。',
 ].join('\n')
 
@@ -2368,7 +2373,7 @@ test('an edited write body lands between the fixed head and tail; the tag, the r
   const text = f.submits[0].text
   expect(text).toBe('[pdx-relay op=op-1 n=' + nonceOf(text) + '] 接力\n' + WRITE_TAIL())
   for (const s of ['寫完後只回一行「HANDOFF-WRITTEN」', '\n# HANDOFF\n', '## 1.', '## 2.', '## 3.', '## 4.', '## 5.', '## 6.', '## 7.', '## 8.', '- 舊 session id：sid-old', '- 舊 ref：_abc123', '- 接力時 context：144000 tokens / 200000 (72%)', '- pdx 身分：mlab/purdex-x [abc123]']) expect(text).toContain(s)
-  expect(text).not.toContain('這個 session 的 context 已達接力門檻')
+  expect(text).not.toContain('這個 session 要接力了')
   await toDone($, f) // the nonce in the head is still how the turns are told
   expect(reports(f)).toEqual(DONE)
 })
@@ -3565,4 +3570,97 @@ test('IR-2: a new session.start forgets the previous session’s running backgro
   await turnAndSettle($, w.f, 't1')
   await w.f.clock.advance(40 * MIN)
   expect(count(w.f, 'begin')).toBe(1)
+})
+
+
+// ---------- relay prompt {{why}} (docs/specs/2026-10-12-relay-prompt-why-spec-plan.md) ----------
+
+const WHY_IDLE = (n: number, pct: number) => '已閒置 ' + n + ' 分鐘（context ' + pct + '%），趁快取還沒過期先接力'
+const WHY_WRITE = (why: string) => '這個 session 要接力了：' + why + '。接力已核准（之後會 /clear）。'
+const WHY_SEED = (why: string) => '前一段對話已接力並清空（' + why + '）。'
+
+// Mutation gate: swap two rows / drop the idle numbers → red.
+test('whyOf: one clause per cause; a missing or unknown cause reads as a recovery; bad idle numbers say only "idle"; never throws', () => {
+  expect(whyOf({ cause: 'idle', idleMinutes: 40, idlePct: 55 })).toBe(WHY_IDLE(40, 55))
+  expect(whyOf({ cause: 'idle', idleMinutes: 2, idlePct: 25.4 })).toBe(WHY_IDLE(2, 25))
+  expect(whyOf({ cause: 'manual' })).toBe('使用者手動要求接力')
+  expect(whyOf({ cause: 'threshold' })).toBe('context 已達接力門檻')
+  expect(whyOf({ cause: 'lead' })).toBe('lead 安排接力')
+  expect(whyOf({ cause: 'recovered' })).toBe('mod 重新載入過，原因沒有保留')
+  const RECOVERED = 'mod 重新載入過，原因沒有保留'
+  for (const p of [{}, undefined, null, { cause: 'bogus' }, { cause: 7 }]) expect(whyOf(p as any)).toBe(RECOVERED)
+  const IDLE_ONLY = '已閒置一段時間，趁快取還沒過期先接力'
+  for (const bad of [
+    { idleMinutes: 0, idlePct: 55 }, { idleMinutes: 60, idlePct: 55 }, { idleMinutes: 1.5, idlePct: 55 }, { idleMinutes: '40', idlePct: 55 },
+    { idleMinutes: undefined, idlePct: 55 }, { idleMinutes: 40, idlePct: Number.NaN }, { idleMinutes: 40, idlePct: undefined }, { idleMinutes: 40, idlePct: '55' },
+  ]) expect(whyOf({ cause: 'idle', ...bad } as any)).toBe(IDLE_ONLY)
+})
+
+test('{{why}}: an idle begin names the minutes and percent in the write prompt and, after /clear, in the seed prompt', async ($, on) => {
+  const { f, row } = await idleSession($, on)
+  await f.clock.advance(40 * MIN)
+  row.decide('approved')
+  await f.clock.advance(100)
+  await toDone($, f)
+  const [write, seed] = f.submits.map((x) => x.text)
+  expect(write).toBe(PRE_P9A_WRITE(nonceOf(write), undefined, WHY_IDLE(40, 55)).replace('144000 tokens / 200000 (72%)', '110000 tokens / 200000 (55%)')) // this session was at 55 %
+  expect(seed).toBe(PRE_P9A_SEED(nonceOf(seed), WHY_IDLE(40, 55)))
+})
+
+test('{{why}}: the idle minutes are the ones the ask was opened with, not whatever a later hello says', async ($, on) => {
+  const { f, row } = await idleSession($, on)
+  await f.clock.advance(40 * MIN)
+  const base = f.pdx
+  f.pdx = (argv) => (argv[1] === 'hello' ? { exitCode: 0, stdout: HELLO('none', { idle_minutes: 30, idle_threshold: 40 }) } : base(argv))
+  row.decide('approved')
+  await f.clock.advance(100)
+  expect(f.submits[0].text).toContain(WHY_WRITE(WHY_IDLE(40, 55)))
+})
+
+test('{{why}}: a threshold begin says the context reached the threshold', async ($, on) => {
+  const a = await approvedRelay($, on)
+  expect(a.f.submits[0].text).toContain(WHY_WRITE('context 已達接力門檻'))
+})
+
+test('{{why}}: /relay now says the person asked for it, in both prompts', async ($, on) => {
+  const f = relayWorld(on, { usage: { tokens: 10000, window: 200000, percent: 5 } })
+  const row = rowDaemon(f)
+  await start($, f)
+  await relayCmd($, 'now')
+  row.decide('approved')
+  await f.clock.advance(150)
+  await toDone($, f)
+  const [write, seed] = f.submits.map((x) => x.text)
+  expect(write).toContain(WHY_WRITE('使用者手動要求接力'))
+  expect(seed).toContain(WHY_SEED('使用者手動要求接力'))
+})
+
+test('{{why}}: a recovery after a mod reload says the cause was not kept', async ($, on) => {
+  const f = reloadedWorld(on, ACTIVE('written'), { '/data/relay/op-1.md': GOOD_FILE })
+  await start($, f)
+  await f.clock.advance(100)
+  f.switchTo = 'sid-new'
+  await $.classic.SessionStart({ source: 'clear' })
+  await f.clock.settle()
+  await f.clock.advance(50)
+  expect(f.submits[0].text).toContain(WHY_SEED('mod 重新載入過，原因沒有保留'))
+})
+
+// Mutation gate: leave `why` out of the public variables → the clause stays as typed → red.
+test('{{why}}: a body may use it, in write, fix and seed alike', async ($, on) => {
+  const { f } = await approvedRelay($, on, undefined, { prompts: answers({ write: 'W {{why}}', fix: 'F {{why}}', seed: 'S {{why}}' }) })
+  await toDone($, f, 1)
+  const [write, fix, seed] = f.submits.map((x) => x.text)
+  expect(write).toContain('] W context 已達接力門檻\n')
+  expect(fix).toContain('] F context 已達接力門檻\n')
+  expect(seed).toContain('] S context 已達接力門檻')
+})
+
+test('{{why}}: a body without it composes as before — the clause appears nowhere', async ($, on) => {
+  const { f } = await approvedRelay($, on, undefined, { prompts: answers({ write: '接力', fix: '', seed: '補' }) })
+  await toDone($, f)
+  const [write, seed] = f.submits.map((x) => x.text)
+  expect(write).toBe('[pdx-relay op=op-1 n=' + nonceOf(write) + '] 接力\n' + WRITE_TAIL())
+  expect(seed).toBe('↪ 接手自 _abc123\n[pdx-relay seed op=op-1 n=' + nonceOf(seed) + '] 補')
+  expect(write + seed).not.toContain('context 已達接力門檻')
 })

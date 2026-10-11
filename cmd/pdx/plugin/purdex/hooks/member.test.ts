@@ -142,6 +142,19 @@ test('a control that arrives while idle is claimed at once', async ($, on) => {
   expect(f.submits.length).toBe(1)
 })
 
+// Relay prompt why spec §3.1: a claimed member relay says the lead arranged it (a claim with or without a lead object).
+// Mutation gate: no `cause: 'lead'` on the claim's p → the recovered text → red.
+for (const [name, claim] of [['with a lead', CLAIM], ['without a lead', JSON.stringify({ op: OP })]] as const) {
+  test(`the member's write prompt says the lead arranged the relay (${name})`, async ($, on) => {
+    const f = memberWorld(on, 'member', (argv) => (argv[0] === 'relay' && argv[1] === 'claim' ? { exitCode: 0, stdout: claim } : memberPdx()(argv)))
+    await start($, f)
+    await receive($, ENVELOPE(CONTROL))
+    await f.clock.advance(150)
+    expect(f.submits.length).toBe(1)
+    expect(f.submits[0].text).toContain('這個 session 要接力了：lead 安排接力。接力已核准（之後會 /clear）。')
+  })
+}
+
 test('a claim that fails does nothing: no write prompt, no report, and a later turn is ordinary', async ($, on) => {
   const f = memberWorld(on, 'member', (argv) => (argv[1] === 'claim' ? { exitCode: 13, stderr: 'pdx relay: not_your_op\n' } : undefined))
   await start($, f)

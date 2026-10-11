@@ -6,8 +6,8 @@ import { clearAllRelayPromptDrafts, readRelayPromptDraft, relayPromptDraftKey, w
 
 const H = 'h1'
 const KEY = relayPromptDraftKey(H, 'write')
-const DEF = '這個 session 的 context 已達接力門檻。\n請撰寫接力檔：{{path}}'
-const VARS = ['path', 'old_ref', 'old_session', 'context', 'whoami']
+const DEF = '這個 session 要接力了：{{why}}。接力已核准（之後會 /clear）。\n請用你完整的工具撰寫接力檔：{{path}}（手邊有工作就先停下）'
+const VARS = ['path', 'old_ref', 'old_session', 'context', 'whoami', 'why']
 const FIXED = { head: '[pdx-relay op={{op}} n={{nonce}}] ', tail: '- 寫完後只回一行「HANDOFF-WRITTEN」\n# HANDOFF\n- 舊 ref：{{old_ref}}' }
 
 function setup(over: Partial<RelayPromptEditorProps> = {}) {
@@ -62,6 +62,8 @@ describe('RelayPromptEditor', () => {
     expect(list.textContent).toContain('{{path}}')
     expect(list.textContent).toContain('接力檔路徑')
     expect(list.textContent).toContain('{{whoami}}')
+    expect(list.textContent).toContain('{{why}}')
+    expect(list.textContent).toContain('接力原因')
     expect(list.textContent).toContain('{{git}}') // a newer daemon's variable: listed, without a description
     expect(list.textContent).not.toContain('hosts.relay.prompts.var.git')
   })
