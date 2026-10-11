@@ -29,7 +29,7 @@ func (s promptSvc) NextPrompt(ctx context.Context, stream, sessionID string, wai
 }
 
 func (s promptSvc) PromptResult(stream string, r modevents.PromptResult) error {
-	err := s.q.Result(stream, r.JobID, promptq.Outcome{Status: r.Status, Reason: r.Reason, FilledAt: r.FilledAt, Text: r.Text})
+	err := s.q.Result(stream, r.JobID, promptq.Outcome{Status: r.Status, Reason: r.Reason, FilledAt: r.FilledAt, Text: r.Text, Truncated: r.Truncated})
 	switch {
 	case errors.Is(err, promptq.ErrNotLeased):
 		return modevents.ErrPromptNotLeased
