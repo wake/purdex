@@ -195,6 +195,12 @@ func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "unavailable")
 		return
 	}
+	release, ok := m.locks.acquire(r.Context(), sid, m.tuning().lockWait) // the lock the typed route holds too (M1)
+	if !ok {
+		writeError(w, http.StatusTooManyRequests, "busy")
+		return
+	}
+	defer release()
 	res, err := ps.Submit(r.Context(), sid, in.ClientMsgID, text)
 	m.writeSendAnswer(w, res, err, in.ClientMsgID)
 }
@@ -232,22 +238,29 @@ func (m *Module) sendTarget(w http.ResponseWriter, r *http.Request) (string, boo
 }
 
 func decodeBody(w http.ResponseWriter, r *http.Request, v any) bool {
+	status, code := decodeBodyErr(w, r, v)
+	if code != "" {
+		writeError(w, status, code)
+		return false
+	}
+	return true
+}
+
+// decodeBodyErr decodes exactly one JSON value; code is "" on success, else the error code and its HTTP status.
+func decodeBodyErr(w http.ResponseWriter, r *http.Request, v any) (status int, code string) {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSubmitBody))
 	if err := dec.Decode(v); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			writeError(w, http.StatusRequestEntityTooLarge, "too_large")
-		} else {
-			writeError(w, http.StatusBadRequest, "bad_json")
+			return http.StatusRequestEntityTooLarge, "too_large"
 		}
-		return false
+		return http.StatusBadRequest, "bad_json"
 	}
 	var extra json.RawMessage // exactly one JSON value: a second one, or trailing garbage, is a malformed request
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
-		writeError(w, http.StatusBadRequest, "bad_json")
-		return false
+		return http.StatusBadRequest, "bad_json"
 	}
-	return true
+	return 0, ""
 }
 
 func (m *Module) writeSendAnswer(w http.ResponseWriter, res promptq.Result, err error, clientMsgID string) {

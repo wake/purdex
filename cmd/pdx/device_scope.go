@@ -23,6 +23,7 @@ var deviceAllowed = map[string]bool{
 	// sessions
 	"POST /api/sessions":                  true,
 	"POST /api/sessions/{code}/send-keys": true,
+	"POST /api/sessions/{code}/submit":    true, // typing into Claude Code through the daemon's guard (K-1a-2)
 	"GET /api/sessions/{code}/provenance": true,
 	"GET /api/sessions/{code}/transcript": true,
 	// conversations
