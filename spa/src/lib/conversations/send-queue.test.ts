@@ -276,6 +276,47 @@ describe('handed: seen on Claude Code\'s queue line, or echoed, or maybe after 1
     expect(q.entries()[0]).toMatchObject({ state: 'maybe', matched: false })
   })
 
+  describe('queued echo: Claude Code read a message it queued while busy, minutes after the hand-out', () => {
+    const queuedPort = () => { const f = fakePort(); return { ...f, port: { ...f.port, echo: { sources: ['user', 'queued'], afterMs: 10 * 60_000 } } as SendPort } }
+
+    it('header match, row gone, then a queued item with client_msg_id null 3 min later settles it (no maybe, no duplicate)', async () => {
+      const { calls, port } = queuedPort()
+      const q = new SendQueue(port)
+      await sendHanded(q, calls)
+      q.setHeaderQueue(['hi'])
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(q.entries()[0]).toMatchObject({ state: 'sent', matched: true })
+      q.setHeaderQueue([]) // Claude Code took it off its queue line; the echo has not been written yet
+      await vi.advanceTimersByTimeAsync(180_000)
+      const item = user('u9', 'hi', Date.now(), { source: 'queued', client_msg_id: null })
+      q.reconcile([item])
+      expect(q.entries()).toHaveLength(0)
+      q.reconcile([item])
+      expect(q.entries()).toHaveLength(0)
+      expect(calls).toHaveLength(1)
+    })
+
+    it('a queued item with different text does not settle it', async () => {
+      const { calls, port } = queuedPort()
+      const q = new SendQueue(port)
+      await sendHanded(q, calls)
+      q.setHeaderQueue(['hi'])
+      q.setHeaderQueue([])
+      await vi.advanceTimersByTimeAsync(180_000)
+      q.reconcile([user('u9', 'other', Date.now(), { source: 'queued', client_msg_id: null })])
+      expect(q.entries()).toHaveLength(1)
+    })
+
+    it('the 10 s timer does not fire while the header still renders the match', async () => {
+      const { calls, port } = queuedPort()
+      const q = new SendQueue(port)
+      await sendHanded(q, calls)
+      q.setHeaderQueue(['hi'])
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(q.entries()[0]).toMatchObject({ state: 'sent', matched: true })
+    })
+  })
+
   it('lines pair one to one: two identical entries need two lines', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)

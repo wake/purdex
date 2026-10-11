@@ -216,7 +216,7 @@ export class SendQueue {
     const take = (e: QueueEntry, u: UserItem) => { this.claimed.add(u.id); done.add(e) }
     // 1. an item that carries a client_msg_id is paired by that id and by nothing else (the daemon already paired it)
     for (const u of users) {
-      const e = u.client_msg_id !== undefined ? open.find((x) => x.ids.includes(u.client_msg_id!) && !done.has(x)) : undefined
+      const e = u.client_msg_id != null ? open.find((x) => x.ids.includes(u.client_msg_id!) && !done.has(x)) : undefined
       if (e) take(e, u)
     }
     // 2. the rest by text, in the daemon's window (2 s before the request, 30 s after it was handed out), nearest first.
@@ -224,9 +224,10 @@ export class SendQueue {
     const pairs: Array<{ e: QueueEntry; u: UserItem; d: number }> = []
     for (const e of open) {
       if (e.state === 'sending' || done.has(e)) continue
-      const to = e.state === 'sent' ? (e.settledAt ?? e.startedAt) + (this.port.echo?.afterMs ?? ECHO_BEFORE_MS) : e.startedAt + HAND_TIMEOUT_MS + ECHO_AFTER_MS
+      // a handed message's echo may come minutes later (Claude Code read it off its queue), even after the 10 s `maybe`
+      const to = e.state === 'sent' || (e.state === 'maybe' && e.handedAt !== undefined) ? (e.settledAt ?? e.startedAt) + (this.port.echo?.afterMs ?? ECHO_BEFORE_MS) : e.startedAt + HAND_TIMEOUT_MS + ECHO_AFTER_MS
       for (const u of users) {
-        if (this.claimed.has(u.id) || u.client_msg_id !== undefined) continue
+        if (this.claimed.has(u.id) || u.client_msg_id != null) continue
         if (u.at < e.startedAt - ECHO_BEFORE_MS || u.at > to || normalizePrompt(u.text) !== e.text) continue
         pairs.push({ e, u, d: Math.abs(u.at - e.startedAt) })
       }

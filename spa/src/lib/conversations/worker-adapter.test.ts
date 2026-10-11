@@ -90,7 +90,7 @@ describe('workerAdapter', () => {
     const echo = workerAdapter(H, E).port().echo!
     expect(echo.sources).toEqual(['user', 'queued'])
     expect(echo.afterMs).toBeGreaterThanOrEqual(5 * 60_000)
-    expect(terminalAdapter(H, 's1', 'c').port().echo).toBeUndefined() // the terminal's window is unchanged
+    expect(terminalAdapter(H, 's1', 'c').port().echo).toEqual(echo) // Claude Code's own queue comes back late as `queued` too
   })
 
   it('with no worker view mounted (its lease is gone) a send is refused, not lost: nothing is sent', async () => {
