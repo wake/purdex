@@ -93,3 +93,21 @@ func TestSendKeysIfInstanceAndMode_RejectsUnsafeArguments(t *testing.T) {
 		}
 	}
 }
+
+// Text and Enter travel in ONE guarded call: a refusal types neither, and an accepted call lands both (the Enter ends the line).
+func TestSendKeysIfInstanceAndMode_TextAndEnterAreAllOrNothing(t *testing.T) {
+	p := catPane(t)
+	ex := &tmux.RealExecutor{}
+	if err := ex.SendKeysIfInstanceAndMode(p.sessionID, "1:2", p.paneID, "refused-text", tmux.KeyEnter); !errors.Is(err, tmux.ErrGenerationMismatch) {
+		t.Fatalf("err = %v, want ErrGenerationMismatch", err)
+	}
+	if err := ex.SendKeysIfInstanceAndMode(p.sessionID, p.inst, p.paneID, "landed-text", tmux.KeyEnter); err != nil {
+		t.Fatal(err)
+	}
+	if !p.screen(t, "landed-text") {
+		t.Fatal("the accepted call never arrived")
+	}
+	if strings.Contains(p.run("capture-pane", "-p", "-t", p.paneID), "refused-text") {
+		t.Fatal("a refused call typed its text")
+	}
+}
