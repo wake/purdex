@@ -83,6 +83,17 @@ describe('stepHistory', () => {
     expect(stepHistory(K, 'up', 'two', true)?.draft).toBe('one')
     expect(stepHistory(K, 'up', 'one', true)?.draft).toBe('zero-b')
   })
+  it('a prepended page whose newest message duplicates the shown oldest item: the walk survives (Up goes older, Down still works)', () => {
+    const [a, b] = [user('same'), user('two')]
+    setHistorySource(K, [a, b])
+    stepHistory(K, 'up', '', true)
+    stepHistory(K, 'up', 'two', true) // showing same (a)
+    setHistorySource(K, [user('zero'), user('same'), a, b]) // the older page ends with the same text: the group's first member changes
+    expect(stepHistory(K, 'down', 'same', true)?.draft).toBe('two')
+    setHistorySource(K, [user('zero'), user('same'), a, b])
+    stepHistory(K, 'up', 'two', true) // back to same
+    expect(stepHistory(K, 'up', 'same', true)?.draft).toBe('zero')
+  })
   it('older items removed while one is shown: Up is null at the new oldest, Down still the true newer neighbour', () => {
     const [a, b, c] = [user('one'), user('two'), user('three')]
     setHistorySource(K, [a, b, c])

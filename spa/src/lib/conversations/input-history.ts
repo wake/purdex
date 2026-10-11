@@ -9,16 +9,19 @@ import { writeDraft } from './draft-memory'
 import { imagePlaceholder, splitImageRefs } from './image-placeholder'
 import type { ConversationItem, UserItem } from './types'
 
-interface Sent { id: string; text: string }
+interface Sent { id: string; ids: string[]; text: string }
 
-/** The messages the person sent, oldest first: typed (`user`) or delivered from Claude Code's queue (`queued`); consecutive duplicates collapse (the first one's identity stands). */
+/** The messages the person sent, oldest first: typed (`user`) or delivered from Claude Code's queue (`queued`); consecutive duplicates collapse (the item carries every member's id). */
 function sentEntries(items: readonly ConversationItem[]): Sent[] {
   const out: Sent[] = []
   for (const i of items) {
     if (i.type !== 'user') continue
     const u = i as UserItem
     if ((u.source !== 'user' && u.source !== 'queued') || u.truncated || u.text.trim() === '') continue
-    if (out[out.length - 1]?.text !== u.text) out.push({ id: u.id || `text:${u.text}`, text: u.text })
+    const id = u.id || `text:${u.text}`
+    const last = out[out.length - 1]
+    if (last?.text === u.text) last.ids.push(id)
+    else out.push({ id, ids: [id], text: u.text })
   }
   return out
 }
@@ -75,7 +78,7 @@ export function stepHistory(key: string, dir: 'up' | 'down', draft: string, canS
     if (dir === 'down' || !canStart || list.length === 0) return null
     pos = list.length - 1
   } else {
-    const at = list.findIndex((e) => e.id === w.id) // relocate by identity: pages, removals and collapses shift positions
+    const at = list.findIndex((e) => e.ids.includes(w.id)) // relocate by any member id: pages, removals and collapses shift positions
     if (at < 0) { walks.delete(key); return null } // the item is gone: the walk ends, the box stays as it is
     if (dir === 'up') {
       if (at <= 0) return null
