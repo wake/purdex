@@ -57,6 +57,16 @@ describe('applySnapshot', () => {
 })
 
 describe('applyChanges — upsert by id, place by index', () => {
+  it('a turn header that carries output_tokens updates the held turn (items kept); a later one without it clears it', () => {
+    const d1 = applyChanges(base(), inc([{ turn: turn(0, [], { output_tokens: 120 }), items: [agent('a0', 1, 'hello')] }]))
+    expect(d1.turns[0].output_tokens).toBe(120)
+    const d2 = applyChanges(d1, inc([{ turn: turn(0, [], { output_tokens: 150 }), items: [] }], 'e:3'))
+    expect(d2.turns[0].output_tokens).toBe(150)
+    expect(d2.turns[0].items.map((i) => i.id)).toEqual(['u0', 'a0'])
+    const d3 = applyChanges(d2, inc([{ turn: turn(0, []), items: [] }], 'e:4'))
+    expect(d3.turns[0].output_tokens).toBeUndefined()
+  })
+
   const base = () => applySnapshot(emptyDoc(), snap([turn(0, [user('u0', 0), agent('a0', 1, 'hel')])], { cursor: 'e:1' }))
 
   it('updates an item in place and moves the cursor and header', () => {

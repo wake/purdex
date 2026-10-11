@@ -87,6 +87,7 @@ func (n *Normalizer) assistantRow(l *rawLine, off int64) {
 	tr := n.turns[ti]
 	tr.hasModel = true
 	tr.apiErr = nil // the turn's last assistant row is a reply, not an error
+	n.countTokens(tr, l, msg, off)
 	n.modelChanged(ti, model, l.at, off)
 	for _, it := range items {
 		if it.Step != nil {
@@ -95,6 +96,41 @@ func (n *Normalizer) assistantRow(l *rawLine, off int64) {
 		n.upsert(tr.t.ID, it, off)
 	}
 	n.attribute(ti, l.at)
+}
+
+// countTokens adds the row's message to the turn's output tokens. Claude Code writes one content block per row, so one message.id spans
+// several rows that all carry the message's final usage: the count is kept per id (never summed over rows) and the turn's total is the sum
+// over ids. A row without an id counts under its own uuid. The turn header is reported again only when the total moved.
+func (n *Normalizer) countTokens(tr *turnRec, l *rawLine, msg object, off int64) {
+	usage, ok := parseObject(msg.get("usage"))
+	if !ok {
+		return
+	}
+	out, ok := jsonInt(usage.get("output_tokens"))
+	if !ok {
+		return
+	}
+	id := msg.str("id")
+	if id == "" {
+		id = l.uuid
+	}
+	if tr.msgTokens == nil {
+		tr.msgTokens = map[string]int64{}
+	}
+	if prev, seen := tr.msgTokens[id]; seen && prev >= out {
+		return
+	}
+	tr.msgTokens[id] = out
+	var total int64
+	for _, v := range tr.msgTokens {
+		total += v
+	}
+	if total == tr.t.OutputTokens {
+		return
+	}
+	tr.t.OutputTokens = total
+	tr.updated = off
+	n.add(Change{tr.t.ID, "", off})
 }
 
 // apiError records the synthetic assistant row of an API error as the turn's

@@ -4,11 +4,11 @@
 import { useNow } from '../../hooks/useNow'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { formatClock } from '../../lib/conversations/deck-format'
-import { doneLine, formatDuration, liveLine, type LineTurn } from '../../lib/conversations/turn-line'
+import { doneLine, formatDuration, formatTokens, liveLine, type LineTurn } from '../../lib/conversations/turn-line'
 
 const ROW = 'flex items-center gap-1.5 text-left deck-t-down text-text-system'
 
-/** The turn's closing line: `✻ Done · 20s · 02:58`. Draws nothing for a turn that did not finish as `done`. */
+/** The turn's closing line: `✻ Done · 20s · ↓ 3.1k · 02:58` (the tokens when the turn reports them). Draws nothing for a turn that did not finish as `done`. */
 export function DoneTurnLine({ turn }: { turn: LineTurn }) {
   const t = useI18nStore((s) => s.t)
   const done = doneLine(turn)
@@ -16,12 +16,12 @@ export function DoneTurnLine({ turn }: { turn: LineTurn }) {
   return (
     <div data-testid="turn-done" className={ROW}>
       <span aria-hidden="true">✻</span>
-      <span>{[t('deck.done'), formatDuration(done.durationMs, t), formatClock(done.endedAt)].join(' · ')}</span>
+      <span>{[t('deck.done'), formatDuration(done.durationMs, t), ...(done.outputTokens !== null ? [`↓ ${formatTokens(done.outputTokens)}`] : []), formatClock(done.endedAt)].join(' · ')}</span>
     </div>
   )
 }
 
-/** The live line: `✻ Running · Bash · 2 subagents · 3m 03s`, `✻ Thinking… · 3m 03s` when no tool or subagent runs, or `✻ Waiting for you`. Draws nothing while the agent is idle. */
+/** The live line: `✻ Running · Bash · 2 subagents · ↓ 9.2k · 3m 03s`, `✻ Thinking… · 3m 03s` when no tool or subagent runs, or `✻ Waiting for you`. Draws nothing while the agent is idle. */
 export function LiveTurnLine({ turns, status }: { turns: readonly LineTurn[]; status: string | undefined }) {
   const t = useI18nStore((s) => s.t)
   const live = liveLine(turns, status)
@@ -39,6 +39,7 @@ export function LiveTurnLine({ turns, status }: { turns: readonly LineTurn[]; st
   const parts = [t(live.busy ? 'deck.live.running' : 'deck.live.thinking')]
   if (live.tool) parts.push(live.tool)
   if (live.subagents > 0) parts.push(t('deck.live.subagents', { n: live.subagents }))
+  if (live.outputTokens !== null) parts.push(`↓ ${formatTokens(live.outputTokens)}`)
   if (live.since !== null) parts.push(formatDuration(Math.max(0, now - live.since), t))
   return (
     <div data-testid="turn-live" data-kind="running" className={ROW}>

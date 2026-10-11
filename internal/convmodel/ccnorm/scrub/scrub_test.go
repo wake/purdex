@@ -96,7 +96,7 @@ func TestScrub_DropsRowsTheNormalizerIgnores(t *testing.T) {
 func TestScrub_KeepsOnlyReadFields(t *testing.T) {
 	m := one(t, `{"type":"assistant","uuid":"u1","parentUuid":"p","requestId":"req_1","timestamp":"2026-10-07T13:00:00.000Z",
 		"isSidechain":false,"userType":"external","entrypoint":"cli","apiBlockIndex":0,"perTurnEffort":"high",
-		"message":{"id":"msg_1","model":"claude-opus-5-5","role":"assistant","usage":{"input_tokens":5},
+		"message":{"id":"msg_1","model":"claude-opus-5-5","role":"assistant","usage":{"input_tokens":5,"output_tokens":7,"service_tier":"standard"},
 		  "content":[{"type":"thinking","thinking":"hmm","signature":"c2lnbmF0dXJl"},
 		             {"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls","extra":{"deep":[1,2]}},"caller":{"type":"direct"}}]}}`)
 	for _, gone := range []string{"parentUuid", "requestId", "userType", "apiBlockIndex"} {
@@ -105,8 +105,10 @@ func TestScrub_KeepsOnlyReadFields(t *testing.T) {
 		}
 	}
 	msg := m["message"].(map[string]any)
-	if _, ok := msg["usage"]; ok {
-		t.Error("message.usage kept")
+	// message.usage is read for output_tokens only (a turn's output tokens): that scalar stays, the other counts and fields go
+	usage, _ := msg["usage"].(map[string]any)
+	if usage["output_tokens"] != float64(7) || len(usage) != 1 {
+		t.Errorf("message.usage = %v, want only output_tokens: 7", msg["usage"])
 	}
 	if msg["model"] != "claude-opus-5-5" {
 		t.Errorf("model = %v", msg["model"])
