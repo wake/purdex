@@ -5,7 +5,8 @@
 // for as long as the pane is mounted, so every view of the pane (terminal, deck, chat) shares one stream.
 import { useCallback, useEffect, useState } from 'react'
 import { fetchSessionProvenance } from '../lib/host-api'
-import { selectConversation, useConversationStore, type ConversationEntry } from '../stores/useConversationStore'
+import type { ConversationEntry } from '../stores/useConversationStore'
+import { useHeldConversation } from './useHeldConversation'
 import type { PaneContent } from '../types/tab'
 
 export type PaneConversationUnreadable =
@@ -52,12 +53,7 @@ export function useConversationOfPane(content: PaneContent | null | undefined, e
   const answer = active && resolved?.for === askKey ? resolved.value : null
   const sessionId = answer && 'sessionId' in answer ? answer.sessionId : ''
 
-  useEffect(() => {
-    if (!sessionId) return
-    return useConversationStore.getState().acquire(hostId, sessionId)
-  }, [hostId, sessionId])
-
-  const entry = useConversationStore(sessionId ? selectConversation(hostId, sessionId) : () => undefined)
+  const entry = useHeldConversation(hostId, sessionId)
 
   if (!active) return { state: 'off' }
   if (!answer) return { state: 'resolving' }
