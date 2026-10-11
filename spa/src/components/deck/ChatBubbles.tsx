@@ -35,11 +35,11 @@ export function AgentBubble({ item }: { item: AgentTextItem }) {
   // RoomProse carries the --wt-* theme vars itself (#2463); `.chat-md` (index.css) only fixes inline code (the deck's `.deck-md` shares the rule; room and execution are untouched).
   return (
     <div data-testid="chat-agent" className="flex justify-start">
-      <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-surface-secondary px-3 py-2 text-sm text-text-primary">
+      <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-surface-secondary px-3 py-2 deck-t-up text-text-primary">
         <div data-testid="chat-agent-md" className="chat-md">
           <RoomProse content={item.markdown} streaming={item.streaming} cjk />
         </div>
-        {item.truncated && <div className="text-xs text-text-muted">{t('deck.output.cut')}</div>}
+        {item.truncated && <div className="deck-t-down text-text-muted">{t('deck.output.cut')}</div>}
       </div>
     </div>
   )

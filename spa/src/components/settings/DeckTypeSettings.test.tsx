@@ -67,7 +67,9 @@ describe('the style on the pane root', () => {
   it('sets nothing for an untouched setting, only what was chosen otherwise', () => {
     expect(deckTypeStyle(null, null)).toBeUndefined()
     expect(deckTypeStyle(15, null)).toEqual({ '--deck-font-size': '15px' })
-    expect(deckTypeStyle(null, 1.8)).toEqual({ '--deck-line-height': '1.8' })
+    // the small rows' leading keeps its ratio to the body's: at 1.65 it is exactly the built-in 20/14 and 16/12
+    expect(deckTypeStyle(null, 1.65)).toEqual({ '--deck-line-height': '1.65', '--deck-lh-up': '1.4286', '--deck-lh-down': '1.3333' })
+    expect(deckTypeStyle(null, 1.8)).toEqual({ '--deck-line-height': '1.8', '--deck-lh-up': '1.5584', '--deck-lh-down': '1.4545' })
   })
 })
 
@@ -108,6 +110,7 @@ describe('the panes follow the setting live', () => {
     act(() => { useDeckTypeStore.getState().setFontSize(16); useDeckTypeStore.getState().setLineHeight(1.8) })
     expect(root.style.getPropertyValue('--deck-font-size')).toBe('16px')
     expect(root.style.getPropertyValue('--deck-line-height')).toBe('1.8')
+    expect(root.style.getPropertyValue('--deck-lh-up')).toBe('1.5584')
     act(() => { useDeckTypeStore.getState().resetFontSize(); useDeckTypeStore.getState().resetLineHeight() })
     expect(root.style.getPropertyValue('--deck-font-size')).toBe('')
   })
@@ -121,8 +124,8 @@ describe('the panes follow the setting live', () => {
 describe('what reads the scale', () => {
   it('the built-in look is every fallback: 13px / 1.65 for the body, +1px for user text, -1px for the small rows', () => {
     expect(css).toMatch(/\.deck-t-base \{ font-size: var\(--deck-font-size, 13px\); line-height: var\(--deck-line-height, 1\.65\); \}/)
-    expect(css).toMatch(/\.deck-t-up \{ font-size: calc\(var\(--deck-font-size, 13px\) \+ 1px\); line-height: var\(--deck-line-height, 1\.4286\); \}/)
-    expect(css).toMatch(/\.deck-t-down \{ font-size: calc\(var\(--deck-font-size, 13px\) - 1px\); line-height: var\(--deck-line-height, 1\.3333\); \}/)
+    expect(css).toMatch(/\.deck-t-up \{ font-size: calc\(var\(--deck-font-size, 13px\) \+ 1px\); line-height: var\(--deck-lh-up, 1\.428571\); \}/)
+    expect(css).toMatch(/\.deck-t-down \{ font-size: calc\(var\(--deck-font-size, 13px\) - 1px\); line-height: var\(--deck-lh-down, 1\.333333\); \}/)
   })
   it('the prose keeps the theme\'s size (minus 1px) and 1.65 as its fallbacks, and code follows the prose (1em)', () => {
     expect(css).toMatch(/line-height: var\(--deck-line-height, 1\.65\);\s*font-size: var\(--deck-font-size, calc\(var\(--wt-font-size\) - 1px\)\);/)

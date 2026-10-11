@@ -4,11 +4,16 @@
 import type { CSSProperties } from 'react'
 import { useDeckTypeStore } from '../../stores/useDeckTypeStore'
 
+// The small rows' leading keeps the ratio it has at the built-in 1.65 (text-sm's 20px/14px and text-xs's 16px/12px).
+const UP_RATIO = (20 / 14) / 1.65
+const DOWN_RATIO = (16 / 12) / 1.65
+const round = (n: number) => String(Math.round(n * 10000) / 10000)
+
 export function deckTypeStyle(fontSize: number | null, lineHeight: number | null): CSSProperties | undefined {
   if (fontSize === null && lineHeight === null) return undefined
   return {
     ...(fontSize !== null ? { '--deck-font-size': `${fontSize}px` } : {}),
-    ...(lineHeight !== null ? { '--deck-line-height': String(lineHeight) } : {}),
+    ...(lineHeight !== null ? { '--deck-line-height': String(lineHeight), '--deck-lh-up': round(lineHeight * UP_RATIO), '--deck-lh-down': round(lineHeight * DOWN_RATIO) } : {}),
   } as CSSProperties
 }
 

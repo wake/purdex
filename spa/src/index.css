@@ -279,10 +279,11 @@ button:disabled {
 
 /* === deck / chat type scale (c9d9c7-60). `--deck-font-size` / `--deck-line-height` are set on the pane root only when the reader chose a value
    (lib/conversations/deck-type.ts); every fallback below is the look the deck always had, so nothing moves until then. The small rows keep
-   their step: `up` is body + 1px (what text-sm was beside 13px text), `down` is body - 1px (text-xs). === */
+   their step: `up` is body + 1px (what text-sm was beside 13px text), `down` is body - 1px (text-xs). Their leading keeps its ratio to the body's
+   (1.4286/1.65, 1.3333/1.65): the pane root sets --deck-lh-up / --deck-lh-down from the chosen line height, so 1.65 on the slider IS the built-in look. === */
 .deck-t-base { font-size: var(--deck-font-size, 13px); line-height: var(--deck-line-height, 1.65); }
-.deck-t-up { font-size: calc(var(--deck-font-size, 13px) + 1px); line-height: var(--deck-line-height, 1.4286); }
-.deck-t-down { font-size: calc(var(--deck-font-size, 13px) - 1px); line-height: var(--deck-line-height, 1.3333); }
+.deck-t-up { font-size: calc(var(--deck-font-size, 13px) + 1px); line-height: var(--deck-lh-up, 1.428571); }
+.deck-t-down { font-size: calc(var(--deck-font-size, 13px) - 1px); line-height: var(--deck-lh-down, 1.333333); }
 
 /* === deck / chat agent text: one size, one weight, one colour, one leading, in the normal (sans) face. ===
    Headings and strong are body-size and the same weight as the text (nothing is bold); lists keep marker and indent at body size / leading; inline code stays a chip (rule above). */
