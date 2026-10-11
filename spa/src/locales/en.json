@@ -323,6 +323,8 @@
   "tab.unpin": "Unpin tab",
   "tab.pin_team_disabled": "Tabs in a team group cannot be pinned",
   "team.seat_not_listed": "This session is not in the host's session list yet",
+  "team.seat_host_hidden": "{{name}} is hidden in this workbench",
+  "team.seat_host_show_open": "Show and open",
   "team.seat_host_unknown": "that host",
   "team.seat_state_suffix": "{{alias}}: {{state}}",
   "team.seat_state.joining": "joining",

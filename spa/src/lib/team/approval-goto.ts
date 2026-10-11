@@ -47,7 +47,7 @@ export function gotoRequester(hostId: string, approval: Approval): GotoOutcome {
     activateTabPane(hit.tabId, hit.paneId)
     return 'activated'
   }
-  const tabId = openSessionTab(hostId, session)
+  const tabId = openSessionTab(hostId, session, { quiet: true }) // a decision is not a request to navigate: no toast (decision 2)
   if (tabId === null) return 'none'
   // As the notification's new-tab branch: `insertTab` with no target always finds or makes a workspace.
   const ws = useWorkspaceStore.getState().findWorkspaceByTab(tabId)
