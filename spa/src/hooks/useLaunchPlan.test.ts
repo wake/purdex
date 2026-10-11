@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
 import type { LaunchPlan } from '../lib/launch-plan'
 import { useLaunchPlan } from './useLaunchPlan'
-import { useLaunchPlanStore } from '../stores/useLaunchPlanStore'
+import { useLaunchPlanStore, resetLaunchPlanFlights } from '../stores/useLaunchPlanStore'
 
 const fetchPlan = vi.hoisted(() => vi.fn())
 vi.mock('../lib/launch-plan', async (orig) => ({ ...(await orig<typeof import('../lib/launch-plan')>()), fetchLaunchPlan: fetchPlan }))
@@ -20,6 +20,7 @@ const deferred = () => {
 beforeEach(() => {
   fetchPlan.mockReset()
   useLaunchPlanStore.setState({ entries: {} })
+  resetLaunchPlanFlights()
 })
 
 describe('useLaunchPlan', () => {
@@ -27,7 +28,7 @@ describe('useLaunchPlan', () => {
     const older = deferred()
     const newer = deferred()
     fetchPlan.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise)
-    const { result } = renderHook(() => useLaunchPlan(true, 'h', 'abc', 'k'))
+    const { result } = renderHook(() => useLaunchPlan(true, 'h', 'abc', 'k', ''))
     act(() => result.current.refresh())
     expect(fetchPlan).toHaveBeenCalledTimes(2)
     await act(async () => { newer.resolve(mk('NEW')) })
@@ -38,7 +39,7 @@ describe('useLaunchPlan', () => {
 
   it('does not read while disabled, reads when enabled turns on', async () => {
     fetchPlan.mockResolvedValue(mk('A'))
-    const { result, rerender } = renderHook(({ on }) => useLaunchPlan(on, 'h', 'abc', 'k'), { initialProps: { on: false } })
+    const { result, rerender } = renderHook(({ on }) => useLaunchPlan(on, 'h', 'abc', 'k', ''), { initialProps: { on: false } })
     expect(fetchPlan).not.toHaveBeenCalled()
     expect(result.current.entry).toBeUndefined()
     rerender({ on: true })
@@ -49,7 +50,7 @@ describe('useLaunchPlan', () => {
 
   it('re-reads when changeKey changes', async () => {
     fetchPlan.mockResolvedValue(mk('A'))
-    const { rerender } = renderHook(({ k }) => useLaunchPlan(true, 'h', 'abc', k), { initialProps: { k: 'a' } })
+    const { rerender } = renderHook(({ k }) => useLaunchPlan(true, 'h', 'abc', k, ''), { initialProps: { k: 'a' } })
     await act(async () => {})
     rerender({ k: 'b' })
     await act(async () => {})

@@ -20,7 +20,7 @@ import { useHandoffGate } from '../../hooks/useHandoffCandidate'
 import { useTakeToTerminal } from '../../lib/nex/take-to-terminal-registry'
 import { setExecutionPaneMode, viewModeOf } from '../../lib/nex/view-mode'
 import { resolveExecutionHostId } from '../../lib/nex/resolve-host'
-import { selectLaunchPlanEntry, useLaunchPlanStore } from '../../stores/useLaunchPlanStore'
+import { useLaunchPlanEntry } from '../../hooks/useLaunchPlan'
 import { useHandoffDialogStore } from '../../stores/useHandoffDialogStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { selectSessionView, sessionBinding, useSessionViewStore, type SessionView } from '../../stores/useSessionViewStore'
@@ -77,8 +77,9 @@ export function PaneModeButtons({ tabId, pane }: { tabId: string; pane: Pane }) 
   // A live session with no Claude Code reaches deck / chat only when the daemon's plan (read by the pane, whatever its view)
   // is ready and says no agent is running. Same candidate rule as the pane; the answer is the shared store's.
   const planCandidate = useLaunchPlanCandidate(content, viewGate)
-  const planEntry = useLaunchPlanStore(selectLaunchPlanEntry(
-    content.kind === 'tmux-session' ? content.hostId : '', content.kind === 'tmux-session' ? content.sessionCode : ''))
+  const planEntry = useLaunchPlanEntry(
+    content.kind === 'tmux-session' ? content.hostId : '', content.kind === 'tmux-session' ? content.sessionCode : '',
+    content.kind === 'tmux-session' ? content.tmuxInstance : '')
   const launchReady = planCandidate && planEntry?.status === 'ready' && planEntry.plan?.agentRunning === false
   const launchChecking = planCandidate && (planEntry === undefined || planEntry.status === 'loading')
   const take = useTakeToTerminal(pane.id)

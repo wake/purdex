@@ -10,7 +10,7 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useAgentStore } from '../../stores/useAgentStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
-import { useLaunchPlanStore, launchPlanKey, type LaunchPlanEntry } from '../../stores/useLaunchPlanStore'
+import { useLaunchPlanStore, resetLaunchPlanFlights, launchPlanKey, type LaunchPlanEntry } from '../../stores/useLaunchPlanStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useHandoffDialogStore } from '../../stores/useHandoffDialogStore'
 import { useSessionViewStore, selectSessionView, sessionBinding } from '../../stores/useSessionViewStore'
@@ -90,6 +90,7 @@ beforeEach(() => {
   useHandoffDialogStore.setState({ target: null })
   useSessionViewStore.setState({ byPane: {} })
   useLaunchPlanStore.setState({ entries: {} })
+  resetLaunchPlanFlights()
 })
 
 afterEach(() => {
@@ -232,7 +233,7 @@ describe('PaneModeButtons — a live session with no Claude Code (the launch pan
     agentRunning, tmuxInstance: 'inst-1', dir: null, resume: { line: null, reason: 'no_record' }, fresh: { line: 'claude' }, busy: null,
   })
   const seedPlan = (entry: LaunchPlanEntry | null, code = 'targ01') =>
-    useLaunchPlanStore.setState({ entries: entry ? { [launchPlanKey(H, code)]: entry } : {} })
+    useLaunchPlanStore.setState({ entries: entry ? { [launchPlanKey(H, code, 'inst-1')]: entry } : {} })
   const ready = (agentRunning = false): LaunchPlanEntry => ({ status: 'ready', plan: plan(agentRunning) })
 
   it('candidate + ready plan with no agent running: deck and chat are actions; deck switches the view', () => {

@@ -12,7 +12,7 @@ import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import { useSessionViewStore, sessionBinding } from '../stores/useSessionViewStore'
-import { useLaunchPlanStore } from '../stores/useLaunchPlanStore'
+import { useLaunchPlanStore, resetLaunchPlanFlights } from '../stores/useLaunchPlanStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { createTab } from '../types/tab'
 import type { Tab } from '../types/tab'
@@ -58,6 +58,7 @@ beforeEach(() => {
   gate.value = { ok: false, reason: 'not_agent' }
   plans.fetch.mockReset()
   useLaunchPlanStore.setState({ entries: {} })
+  resetLaunchPlanFlights()
   plans.fetch.mockResolvedValue(plan())
   clearModuleRegistry()
   registerModule({ id: 'terminal', name: 'Terminal', panes: [{ kind: 'tmux-session', component: SessionPaneContent }] })
@@ -304,5 +305,71 @@ describe('refresh', () => {
     plans.fetch.mockResolvedValue(plan({ agentRunning: true }))
     fireEvent.click(await screen.findByTestId('launch-fresh'))
     await waitFor(() => expect(screen.queryByTestId('launch-panel')).toBeNull())
+  })
+})
+
+describe('one answer per tmux generation, no stale plan', () => {
+  const content = (sessionTab.layout as { pane: { content: import('../types/tab').PaneContent } }).pane.content
+  const both = () => (
+    <>
+      <PaneModeButtons tabId={sessionTab.id} pane={{ id: paneIdOf(sessionTab), content }} />
+      <TabContent activeTab={sessionTab} allTabs={[sessionTab]} />
+    </>
+  )
+  const sessionRow = (inst: string) => ({ code: CODE, name: CODE, cwd: '/w/proj', mode: 'terminal' as const, branch: 'main', tmux_instance: inst })
+
+  it('(a) the same code reused by a new generation: checking and an empty pane until that generation answers', async () => {
+    setView('deck')
+    plans.fetch.mockResolvedValue(plan({ tmuxInstance: '' })) // no generation named: only the key tells the two apart
+    render(both())
+    await screen.findByTestId('launch-panel')
+    expect(screen.getByRole('button', { name: 'Chat' })).toBeEnabled()
+    let resolveB!: (p: LaunchPlan) => void
+    plans.fetch.mockReturnValue(new Promise<LaunchPlan>((r) => { resolveB = r }))
+    act(() => useSessionStore.getState().replaceHost(H, [sessionRow('j')]))
+    await act(async () => { await Promise.resolve() })
+    expect(screen.getByRole('button', { name: 'Chat' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Chat' }).getAttribute('title')).toBe('Checking this session…')
+    expect(screen.queryByTestId('launch-panel')).toBeNull()
+    expect(screen.getByTestId('session-view-launch').childElementCount).toBe(0)
+    await act(async () => { resolveB(plan({ tmuxInstance: 'j' })) })
+    expect(await screen.findByTestId('launch-panel')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Chat' })).toBeEnabled()
+  })
+
+  it('(b) a gate flip (an agent ran and ended) drops the old plan: checking, no stale panel', async () => {
+    setView('deck')
+    const { rerender } = render(both())
+    await screen.findByTestId('launch-panel')
+    conv.value = { state: 'loading' } // the agent is running: not a candidate any more
+    rerender(both())
+    expect(screen.queryByTestId('launch-panel')).toBeNull()
+    plans.fetch.mockReturnValue(new Promise(() => {}))
+    conv.value = { state: 'off' } // and it ended
+    rerender(both())
+    await act(async () => { await Promise.resolve() })
+    expect(screen.getByRole('button', { name: 'Chat' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Chat' }).getAttribute('title')).toBe('Checking this session…')
+    expect(screen.queryByTestId('launch-panel')).toBeNull()
+    expect(screen.getByTestId('session-view-launch').childElementCount).toBe(0)
+  })
+
+  it('(c) a tab remount with a ready entry shows the panel at once, re-reading in the background', async () => {
+    setView('deck')
+    const first = mount()
+    await screen.findByTestId('launch-panel')
+    first.unmount()
+    plans.fetch.mockClear()
+    plans.fetch.mockReturnValue(new Promise(() => {}))
+    mount()
+    expect(screen.getByTestId('launch-panel')).toBeInTheDocument()
+    expect(plans.fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('(d) two panes of the same session mounted together ask once', async () => {
+    setView('deck')
+    render(<><TabContent activeTab={sessionTab} allTabs={[sessionTab]} /><TabContent activeTab={sessionTab} allTabs={[sessionTab]} /></>)
+    await act(async () => { await Promise.resolve() })
+    expect(plans.fetch).toHaveBeenCalledTimes(1)
   })
 })

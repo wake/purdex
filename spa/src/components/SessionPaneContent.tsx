@@ -24,7 +24,7 @@ import { openAsks } from '../lib/conversations/asks'
 import { DeckPane } from './deck/DeckPane'
 import { LaunchPanel } from './LaunchPanel'
 import { LaunchPlanError } from './LaunchPlanError'
-import { useLaunchPlan } from '../hooks/useLaunchPlan'
+import { useLaunchPlan, useLaunchPlanInstance } from '../hooks/useLaunchPlan'
 import { useSessionStore } from '../stores/useSessionStore'
 import { QuickReplies } from './deck/QuickReplies'
 import { SessionInput } from './deck/SessionInput'
@@ -117,7 +117,8 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   const sessionBranch = useSessionStore((s) => (Object.hasOwn(s.sessions, hostId) ? s.sessions[hostId] : undefined)?.find((c) => c.code === sessionCode)?.branch)
   const planCandidate = content.kind === 'tmux-session' && !terminated && hostKnown
     && conversation.state === 'off' && launchRule
-  const launchPlan = useLaunchPlan(planCandidate, hostId, sessionCode, sessionKey)
+  const planInstance = useLaunchPlanInstance(hostId, sessionCode, tmuxInstance)
+  const launchPlan = useLaunchPlan(planCandidate, hostId, sessionCode, sessionKey, planInstance)
   // Not asked yet (the effect has not run) reads as loading. In deck / chat the pane never falls through to DeckPane /
   // ChatPane while the plan is unknown (no flash of "no_session" / an empty chat); a plan that says an agent is running
   // (it started after the user got here) is the one answer that leaves today's views.
