@@ -1,18 +1,18 @@
 // spa/src/components/deck/StepViews.tsx — a step as the deck draws it (U3 spec §4 table): edit and execute are cards, read
 // / search / fetch / other / task are one line, a question step is its options card. Every one ends in the fixed status
 // slot. A task line hands its step to `onOpenSubagent` (the right panel, U3-3) and its chevron unfolds the agent's own steps in place.
-import { FilePlus, FileText, Globe, MagnifyingGlass, PencilSimple, Robot, Terminal, Wrench, Question } from '@phosphor-icons/react'
+import { CaretDown, CaretUp, FilePlus, FileText, Globe, MagnifyingGlass, PencilSimple, Robot, Terminal, Wrench, Question } from '@phosphor-icons/react'
 import { useEffect, type ReactNode } from 'react'
 import { useNow } from '../../hooks/useNow'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { SubagentState } from '../../stores/useConversationStore'
 import { formatDuration } from '../../lib/conversations/turn-line'
-import { capDiff, readRange, toActivityDiff } from '../../lib/conversations/deck-format'
+import { capDiff, readRange, stepFailed, toActivityDiff } from '../../lib/conversations/deck-format'
 import type { ConversationItem, StepItem } from '../../lib/conversations/types'
 import ToolDiffView from '../room/ToolDiffView'
 import { useFold } from '../room/fold-context'
 import { OutputFold } from './OutputFold'
-import { StatusSlot } from './StatusSlot'
+import { StatusSlot, StepDot } from './StatusSlot'
 
 export interface StepActions {
   /** 「顯示全部」 of an output or a diff: the right panel (a placeholder until U3-3). */
@@ -25,6 +25,7 @@ export interface StepActions {
   renderSubagent?: (items: ConversationItem[]) => ReactNode
 }
 
+const DIFF_PREVIEW_LINES = 3
 const ICON = 'shrink-0 text-text-muted'
 
 /** A subagent's time: how long it ran (done), or how long so far (running, ticking). Nothing when the conversation does not say. */
@@ -62,6 +63,7 @@ function Line({ step, icon, verb, subject, extra, children, testId = 'deck-step-
   return (
     <div data-testid={testId} data-kind={step.kind} data-status={step.status} className="rounded-md border border-border-default bg-surface-secondary/50 px-3 py-1.5 text-sm">
       <div className="flex items-center gap-2">
+        <StepDot step={step} />
         {icon}
         <span className="shrink-0 font-mono text-xs font-medium text-text-secondary">{verb}</span>
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-text-secondary" title={subject}>{subject}</span>
@@ -73,13 +75,15 @@ function Line({ step, icon, verb, subject, extra, children, testId = 'deck-step-
   )
 }
 
-function Card({ step, icon, title, children }: { step: StepItem; icon: ReactNode; title: ReactNode; children: ReactNode }) {
+function Card({ step, icon, title, headerExtra, children }: { step: StepItem; icon: ReactNode; title: ReactNode; headerExtra?: ReactNode; children: ReactNode }) {
   return (
     <div data-testid="deck-step-card" data-kind={step.kind} data-status={step.status} className="rounded-md border border-border-default bg-surface-secondary/50 text-sm">
       <div className="flex items-center gap-2 px-3 py-1.5">
+        <StepDot step={step} />
         {icon}
-        <span className="min-w-0 flex-1 truncate"><span className="mr-2 font-mono text-xs font-medium text-text-secondary">{step.tool}</span>{title}</span>
+        <span className="min-w-0 flex-1 truncate text-text-secondary"><span className="mr-2 font-mono text-xs font-medium text-text-secondary">{step.tool}</span>{title}</span>
         <StatusSlot step={step} />
+        {headerExtra}
       </div>
       <div className="space-y-1 px-3 pb-2">{children}</div>
     </div>
@@ -88,22 +92,33 @@ function Card({ step, icon, title, children }: { step: StepItem; icon: ReactNode
 
 function EditCard({ step, actions }: { step: StepItem; actions: StepActions }) {
   const t = useI18nStore((s) => s.t)
+  const [open, toggle] = useFold(`${step.id}:diff`)
   const created = step.diff?.created === true
   const path = step.diff?.path ?? step.summary
   if (!step.diff) {
     return <Line step={step} icon={<PencilSimple className={ICON} size={16} />} verb={t('deck.step.edit')} subject={step.summary} />
   }
   // The deck draws the first 16 lines and sends the rest to the right panel (spec §4); the room's own fold is switched off.
-  const capped = capDiff(step.diff)
+  const capped = capDiff(step.diff, open ? undefined : DIFF_PREVIEW_LINES)
+  // Expandable only when there is more than the 3-line preview to show.
+  const expandable = open || capped.cut
   const { onShowAll } = actions
   return (
     <Card
       step={step}
       icon={created ? <FilePlus className={ICON} size={16} /> : <PencilSimple className={ICON} size={16} />}
+      headerExtra={expandable && (
+        <button type="button" data-testid="diff-expand" aria-expanded={open} aria-label={t(open ? 'deck.diff.collapse' : 'deck.diff.expand')} onClick={toggle}
+          className="shrink-0 cursor-pointer rounded text-text-muted hover:text-text-primary">
+          {open ? <CaretUp size={14} /> : <CaretDown size={14} />}
+        </button>
+      )}
       title={<><span className="text-text-muted">{created ? t('deck.step.create') : t('deck.step.edit')}</span> <span className="font-mono text-xs" title={path}>{path}</span></>}
     >
-      <ToolDiffView diff={toActivityDiff(capped.diff)} foldKey={step.id} unfolded />
-      {capped.cut && onShowAll && (
+      <div data-testid="diff-body" className="opacity-60 transition-opacity hover:opacity-100">
+        <ToolDiffView diff={toActivityDiff(capped.diff)} foldKey={step.id} unfolded />
+      </div>
+      {open && capped.cut && onShowAll && (
         <button type="button" data-testid="diff-show-all" onClick={() => onShowAll(step)} className="cursor-pointer text-xs text-text-muted hover:text-text-primary">
           {t('deck.diff.show_all', { n: capped.totalLines })}
         </button>
@@ -117,9 +132,9 @@ function ExecuteCard({ step, actions }: { step: StepItem; actions: StepActions }
   const command = step.command?.text ?? step.summary
   return (
     <Card step={step} icon={<Terminal className={ICON} size={16} />} title={<span className="text-text-muted">{step.command?.description ?? t('deck.step.execute')}</span>}>
-      <pre data-testid="exec-command" className="line-clamp-6 overflow-hidden whitespace-pre-wrap break-all rounded bg-black/60 px-2 py-1 font-mono text-xs text-neutral-300 transition-colors hover:text-neutral-100">{`$ ${command}`}</pre>
+      <pre data-testid="exec-command" className="line-clamp-6 overflow-hidden whitespace-pre-wrap break-all rounded bg-black/60 px-2 py-1 font-mono text-xs text-neutral-400 transition-colors hover:text-neutral-200">{`$ ${command}`}</pre>
       {step.output && (
-        <OutputFold foldKey={`${step.id}:out`} output={step.output} tone={step.status === 'failed' ? 'error' : 'normal'} onShowAll={showAll(step, actions)} />
+        <OutputFold foldKey={`${step.id}:out`} output={step.output} tone={stepFailed(step) ? 'error' : 'normal'} onShowAll={showAll(step, actions)} />
       )}
     </Card>
   )
@@ -191,7 +206,7 @@ function OutputLine({ step, icon, verb, actions }: { step: StepItem; icon: React
   return (
     <Line step={step} icon={icon} verb={verb} subject={step.summary}
       extra={where ? <span data-testid="search-where" className="shrink-0 truncate text-xs text-text-muted">{where}</span> : null}>
-      {step.output && <OutputFold foldKey={`${step.id}:out`} output={step.output} tone={step.status === 'failed' ? 'error' : 'normal'} onShowAll={showAll(step, actions)} />}
+      {step.output && <OutputFold foldKey={`${step.id}:out`} output={step.output} tone={stepFailed(step) ? 'error' : 'normal'} onShowAll={showAll(step, actions)} />}
     </Line>
   )
 }
@@ -214,6 +229,7 @@ function TaskStep({ step, actions }: { step: StepItem; actions: StepActions }) {
         )}
         <button type="button" data-testid="deck-step-task" data-status={step.status} onClick={() => actions.onOpenSubagent?.(step)}
           className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md border border-border-default bg-surface-secondary/50 px-3 py-1.5 text-left text-sm hover:bg-surface-secondary">
+          <StepDot step={step} />
           <Robot className={ICON} size={16} />
           <span className="shrink-0 text-text-muted">{sub?.type ? t('deck.step.task_type', { type: sub.type }) : t('deck.step.task')}</span>
           <span className="min-w-0 flex-1 truncate text-xs text-text-secondary">{sub?.description ?? step.summary}</span>

@@ -37,7 +37,8 @@ describe('the Agent step line', () => {
   it('a running one counts up from its start, once a second, with the running dot', () => {
     vi.useFakeTimers({ now: NOW })
     show(task({ status: 'running', duration_ms: undefined, started_at: NOW - 5_000 }))
-    expect(screen.getByTestId('step-running')).toBeInTheDocument()
+    expect(screen.getByTestId('step-dot')).toHaveAttribute('data-state', 'running')
+    expect(screen.queryByTestId('step-running')).toBeNull()
     expect(screen.getByTestId('subagent-time').textContent).toBe('5s')
     act(() => { vi.advanceTimersByTime(3_000) })
     expect(screen.getByTestId('subagent-time').textContent).toBe('8s')

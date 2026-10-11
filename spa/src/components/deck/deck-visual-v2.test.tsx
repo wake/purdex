@@ -107,7 +107,9 @@ describe('the three voices are told apart (c9d9c7-52 pt 7)', () => {
 describe('a tool\'s command block (pt 6)', () => {
   it('is one step dimmer than before and comes back to full on hover, with a transition', () => {
     const src = read('StepViews.tsx')
-    expect(src).toMatch(/exec-command[^>]*text-neutral-300 transition-colors hover:text-neutral-100/)
+    expect(src).toMatch(/exec-command[^>]*text-neutral-400 transition-colors hover:text-neutral-200/)
+    expect(src).toMatch(/diff-body[^>]*opacity-60 transition-opacity hover:opacity-100/)
+    expect(src).toMatch(/min-w-0 flex-1 truncate text-text-secondary/)
   })
 })
 
