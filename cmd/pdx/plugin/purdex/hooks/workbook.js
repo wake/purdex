@@ -144,6 +144,9 @@ export const PROMPT_RESULT_RETRY_MS = 700
 export const PROMPT_RESULT_POST_MS = 2000 // one try of a result waits at most this long
 export const PROMPT_RESULT_BUDGET_MS = 6500 // no try starts later than this after the job arrived (the daemon's lease is 10 s)
 const MAX_PROMPT_TEXT = 8000 // characters; the daemon sends at most 4000 bytes
+// A fill / clear_if text and a read's text are bounded in UTF-8 BYTES, the daemon's own unit (promptq.MaxTextBytes): this
+// limit must never be smaller than the daemon's.
+export const MAX_TYPED_TEXT_BYTES = 16384
 const JOB_ID_RE = /^pj-[0-9a-f]{32}$/
 const SID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
@@ -164,7 +167,7 @@ export function parsePromptJob(res) {
   if (j.kind === 'submit' && typeof j.text === 'string' && j.text.trim() !== '' && j.text.length <= MAX_PROMPT_TEXT) {
     return { id: j.id, kind: 'submit', sessionId: j.session_id, text: j.text }
   }
-  if ((j.kind === 'fill' || j.kind === 'clear_if') && typeof j.text === 'string' && j.text.trim() !== '' && j.text.length <= MAX_PROMPT_TEXT) {
+  if ((j.kind === 'fill' || j.kind === 'clear_if') && typeof j.text === 'string' && j.text.trim() !== '' && cutUtf8(j.text, MAX_TYPED_TEXT_BYTES).length === j.text.length) {
     return { id: j.id, kind: j.kind, sessionId: j.session_id, text: j.text }
   }
   if (j.kind === 'read') return { id: j.id, kind: 'read', sessionId: j.session_id, text: '' }
@@ -197,12 +200,13 @@ export function cutUtf8(s, max) {
   return out
 }
 
-// promptResultBody is the request of `prompt/result`: status accepted | dropped | busy, and for dropped the reason.
-// `extra` carries {filledAt} of an accepted fill (unix ms) and {text} of an accepted read.
+// promptResultBody is the request of `prompt/result`: status accepted | dropped | busy | unknown, and for dropped / unknown the reason.
+// `extra` carries {filledAt} of an accepted fill (unix ms) and {text, truncated} of an accepted read.
 export function promptResultBody(stream, jobId, status, reason, extra) {
   const b = { stream, job_id: jobId, status }
   if (reason) b.reason = cutUtf8(String(reason), MAX_REASON_BYTES)
   if (extra && Number.isFinite(extra.filledAt)) b.filled_at = Math.trunc(extra.filledAt)
   if (extra && typeof extra.text === 'string') b.text = extra.text
+  if (extra && extra.truncated === true) b.truncated = true
   return JSON.stringify(b)
 }

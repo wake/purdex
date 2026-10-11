@@ -7,7 +7,7 @@
 // Every POST goes out from a $.clock.after timer, so each step settles or advances the mocked
 // clock before it looks at what was posted.
 import { test, expect, mock } from 'claude-code/testing'
-import { fillRefusal } from './workbook.js'
+import { fillRefusal, parsePromptJob } from './workbook.js'
 
 const SID1 = 'aaaaaaaa-1111-4111-8111-111111111111'
 const SID2 = 'bbbbbbbb-2222-4222-8222-222222222222'
@@ -1947,11 +1947,11 @@ test('a fill whose returned text differs is cleaned up (fill empty) and dropped 
   expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'fill_mismatch' })
 })
 
-test('a fill the engine throws on is dropped refused', async ($, on) => {
+test('a fill the engine throws on is dropped fill_error', async ($, on) => {
   const w = evWorld(on, { promptNext: nextOnce(FJOB()), fill: () => { throw new Error('engine says no') } })
   await start($, w)
   await w.clock.settle()
-  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'refused' })
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'fill_error' })
 })
 
 test('a fill made for another session id is dropped session_changed and touches nothing', async ($, on) => {
@@ -2029,7 +2029,7 @@ test('a read the engine throws on is dropped refused', async ($, on) => {
 
 for (const [name, job] of [
   ['a fill with blank text', FJOB({ text: '  ' })],
-  ['a fill with over-long text', FJOB({ text: 'x'.repeat(8001) })],
+  ['a fill with over-long text', FJOB({ text: 'x'.repeat(16385) })],
   ['a fill with text that is not a string', FJOB({ text: 5 })],
   ['a clear_if without text', PJOB({ kind: 'clear_if', text: undefined })],
 ] as [string, any][]) {
@@ -2042,3 +2042,125 @@ for (const [name, job] of [
     expect(pqResult(w)).toHaveLength(0)
   })
 }
+
+// ---- K-1a-1 review fixes: no text of ours left behind, fail closed, byte limits ----
+
+const FTEXT = 'typed\nby the app '
+
+// Mutation gate: skip the clean-up after a failed report -> red (our text would block every later submit).
+for (const [name, answer] of [['503', { status: 503, text: '{}' }], ['409', { status: 409, text: '{"error":"not_leased"}' }]] as [string, Answer][]) {
+  test(`a fill whose single report fails (${name}) clears our text from the composer`, async ($, on) => {
+    const w = evWorld(on, { promptNext: nextOnce(FJOB()), promptResult: () => answer })
+    await start($, w)
+    await w.clock.settle()
+    expect(pqResult(w)).toHaveLength(1)
+    expect(w.composer).toBe('')
+    expect(w.fillCalls.map(fillOf)).toEqual([{ text: FTEXT, mode: 'replace' }, { text: '', mode: 'replace' }])
+  })
+}
+
+test('a fill whose report is lost (timeout) clears our text too', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(FJOB()), promptResult: () => never() })
+  await start($, w)
+  await w.clock.advance(5000)
+  await w.clock.settle()
+  expect(w.composer).toBe('')
+})
+
+test('a fill whose report failed does not clear a composer that no longer holds our text', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(FJOB()), promptResult: () => { w.composer = 'someone typed this'; return { status: 503, text: '{}' } } })
+  await start($, w)
+  await w.clock.settle()
+  expect(w.composer).toBe('someone typed this')
+  expect(w.fillCalls).toHaveLength(1)
+})
+
+test('a fill whose report got through leaves the composer to the daemon', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(FJOB()) })
+  await start($, w)
+  await w.clock.settle()
+  expect(w.composer).toBe(FTEXT)
+  expect(w.fillCalls).toHaveLength(1)
+})
+
+// Mutation gate: report dropped although the clean-up failed -> red.
+test('a fill that throws after our text went in: read, clear, report dropped fill_error', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(FJOB()), fill: (e: any, n: number) => { w.composer = e.text; if (n === 1) throw new Error('boom after the text went in'); return { isFilled: true, text: e.text, cursor: 0 } } })
+  await start($, w)
+  await w.clock.settle()
+  expect(w.composer).toBe('')
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'fill_error' })
+})
+
+test('a fill that throws and leaves nothing of ours reports dropped fill_error without a second fill', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(FJOB()), fill: () => { throw new Error('no') } })
+  await start($, w)
+  await w.clock.settle()
+  expect(w.fillCalls).toHaveLength(1)
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'fill_error' })
+})
+
+test('a fill that throws and whose clean-up fill also fails reports unknown, never dropped', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(FJOB()), fill: (e: any) => { w.composer = e.text; throw new Error('always') } })
+  await start($, w)
+  await w.clock.settle()
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'unknown', reason: 'fill_error' })
+})
+
+test('a fill that throws and whose read-back fails reports unknown', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(FJOB()), fill: () => { throw new Error('no') }, read: (_e: any, n: number) => { if (n === 1) return { text: '', cursor: 0 }; throw new Error('read broke') } })
+  await start($, w)
+  await w.clock.settle()
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'unknown', reason: 'fill_error' })
+})
+
+test('a fill_mismatch whose clean-up fails reports unknown, not dropped', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(FJOB()), fill: (e: any, n: number) => { if (n === 1) { w.composer = 'typed by the app'; return { isFilled: true, text: w.composer, cursor: 1 } } throw new Error('cannot clear') } })
+  await start($, w)
+  await w.clock.settle()
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'unknown', reason: 'fill_mismatch' })
+})
+
+// Fail closed: a read that does not say what the composer holds is no_composer; nothing is filled.
+for (const [name, bad] of [['null', null], ['an array', []], ['no text field', { cursor: 0 }], ['a non-string text', { text: 5 }]] as [string, any][]) {
+  test(`a fill whose read returns ${name} is dropped no_composer and fills nothing`, async ($, on) => {
+    const w = evWorld(on, { promptNext: nextOnce(FJOB()), read: () => bad })
+    await start($, w)
+    await w.clock.settle()
+    expect(w.fillCalls).toHaveLength(0)
+    expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'no_composer' })
+  })
+}
+
+test('a read job whose read returns nothing usable is dropped no_composer, not an empty text', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(PJOB({ kind: 'read', text: undefined })), read: () => ({ cursor: 0 }) })
+  await start($, w)
+  await w.clock.settle()
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'no_composer' })
+})
+
+// The limit is in BYTES (the daemon's): 16384 fits, one more does not, whatever the character count.
+test('job text is bounded by UTF-8 bytes, 16384', () => {
+  const job = (text: string) => parsePromptJob({ status: 200, text: JSON.stringify({ job: { id: 'pj-' + PJ, kind: 'fill', session_id: SID1, text } }) })
+  expect(job('a'.repeat(16384))).not.toBeNull()
+  expect(job('a'.repeat(16385))).toBeNull()
+  expect(job('中'.repeat(5461))).not.toBeNull() // 16383 bytes
+  expect(job('中'.repeat(5462))).toBeNull() // 16386 bytes, far fewer than 8000 characters
+})
+
+// A huge composer is cut to the daemon's limit on a character boundary and flagged, not refused.
+test('a read of a huge composer is truncated to 16384 bytes with truncated:true', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(PJOB({ kind: 'read', text: undefined })), composer: '中'.repeat(9000) })
+  await start($, w)
+  await w.clock.settle()
+  const b = pqResult(w)[0].body
+  expect(b).toMatchObject({ status: 'accepted', truncated: true })
+  expect(b.text).toBe('中'.repeat(5461))
+})
+
+test('a read within the limit carries no truncated flag', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(PJOB({ kind: 'read', text: undefined })), composer: 'short' })
+  await start($, w)
+  await w.clock.settle()
+  expect(pqResult(w)[0].body.truncated).toBeUndefined()
+})
