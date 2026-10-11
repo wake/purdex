@@ -31,7 +31,7 @@ spec §2 before any code. **If (a) blocks, stop and report — the fill route do
   `resolveSessionOwner` lives; "waiting" = `LightStatus(sid, frameID)`.
 - M1 One per-code lock shared with the old `/api/conversations/claude/{sid}/submit` route (still used until K-2/K-3 switch); bounded
   wait 2 s → `429 busy` (Mac + phone at once must not hang 8 s).
-- M2/M3 Reuse the existing `sanitizePrompt` (one copy); `@token` padding only in keys mode; compare fill's returned text with the
+- M2/M3 Reuse the existing `sanitizePrompt` (one copy); any trailing backslash run → one space, both paths (measured 2026-10-11, CC 2.1.296), padded once at the shared normalisation; `@token` padding only in keys mode; compare fill's returned text with the
   same normalised string; leading `/` and `!` stay refused in both modes (Enter would still run them as a command / bash).
 - M4 Keys fallback only when no mod owner has been seen for ≥ 10 s and the light is `idle` or `running`; answer `mode:"keys"`; the
   deck labels such sends 「未經 mod 確認」. **K-1c (measured 2026-10-11, Claude Code 2.1.296):** one `send-keys` with text+Enter

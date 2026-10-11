@@ -98,7 +98,7 @@ Claude Code's state); the residual risks of §5 are accepted by the user.
 - The mod's owner stream carries no frame id or pid, so the pane that did the fill cannot be compared with the pane that gets the
   Enter. Instead the route refuses (`409 ambiguous_pane`) when more than one live Claude Code pane has the session id, and
   (`409 pane_mismatch`) when that one pane is not the resolved owner's.
-- Trailing backslashes: Claude Code reads `\` + Enter as a newline, so text ending in an odd run of `\` gets one space appended.
+- Trailing backslashes: Claude Code reads `\` + Enter as a newline, so text ending in any run of `\` gets one space appended (any trailing backslash run → one space, both paths; measured 2026-10-11, CC 2.1.296).
 - Every non-2xx answer is `{outcome?, reason, error}` (`reason` = `error` = the code), so the apps parse one shape.
 - Keys mode: **measured 2026-10-11 on Claude Code 2.1.296 (K-1c, isolated tmux server)**. Text and Enter in ONE `send-keys` call
   (as K-1a-2 first shipped it) is read as a paste and the Enter is swallowed: single lines of 10 and 50 chars submit, 90, 200 and
@@ -110,7 +110,7 @@ Claude Code's state); the residual risks of §5 are accepted by the user.
   Multi-line: LF bytes (0x0a, `send-keys -H 0a`, same byte as Ctrl-J) stay newlines in the composer and one Enter submits; `-l`, `C-j`,
   backslash+Enter, Alt-Enter and bracketed paste do too, `S-Enter` does not (tmux sends a plain CR, early submit). The reported
   "lines arrive joined" was not reproduced. Trailing backslashes: runs of 1, 2 and 3 all keep the Enter from submitting until a space
-  follows, so keys mode pads any trailing `\` (the mod/fill path still pads odd runs only; not measured there). Trailing `@token`
+  follows, so both the fill and the keys path pad any trailing `\` run with one space, once, at the shared normalisation (measured 2026-10-11, CC 2.1.296). Trailing `@token`
   submitted fine with and without the space; the padding stays as a precaution.
 - A replayed `client_msg_id` is answered from the ledger before the session is checked; ids are client UUIDs, so another session
   reusing one is not expected (not bound to the session code). (`/submit` only; the recall ledger is session-bound.)

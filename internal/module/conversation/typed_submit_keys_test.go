@@ -83,6 +83,11 @@ func TestKeysSubmit_AnyTrailingBackslashGetsASpace(t *testing.T) {
 	if te.keys.calls[0].keys[0] != `two \\ ` {
 		t.Fatalf("keys got %q", te.keys.calls[0].keys[0])
 	}
+	// padded once at the shared normalisation: exactly one trailing space, never two
+	answer(t, te.submit("kb2", `x\\\`), 200, "handed", "keys", "")
+	if te.keys.calls[2].keys[0] != `x\\\ ` {
+		t.Fatalf("keys got %q", te.keys.calls[2].keys[0])
+	}
 }
 
 // The light is read once more after the text and before the Enter: a dialog that opened meanwhile must not get the Enter.

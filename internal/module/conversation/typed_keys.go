@@ -57,7 +57,7 @@ func (m *Module) keysSubmit(w http.ResponseWriter, c *typedCtx, light string, tu
 		refuse(w, http.StatusConflict, "no_owner_yet")
 		return
 	}
-	text := padAnyTrailingBackslash(padTrailingMention(c.text))
+	text := padTrailingMention(c.text) // c.text is already backslash-padded in typed_submit.go
 	if err := c.td.keys.SendKeysIfInstanceAndMode(c.tmuxID, c.expected, c.owner.TmuxPaneID, text); err != nil {
 		if reason, ok := guardReason(err); ok {
 			m.keysSeen.forget(c.id) // the guard declined the text call: nothing was typed, a retry is safe
