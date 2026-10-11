@@ -60,6 +60,41 @@ func TestPauseTables_MigrateAnExistingDB(t *testing.T) {
 	}
 }
 
+// Codex re-review (P1): a session_pauses written by the first shape of this phase (no ref / title) gets both columns.
+// Mutation gate: no ensureColumn -> "no such column" (red).
+func TestPauseTables_AnOlderSessionPausesTableGetsRefAndTitle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "team.db")
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`DROP TABLE session_pauses`,
+		`CREATE TABLE session_pauses (session_id TEXT NOT NULL, cause TEXT NOT NULL CHECK (cause IN ('quota', 'lead')), role TEXT NOT NULL CHECK (role IN ('solo', 'lead', 'member')),
+			team_id TEXT NOT NULL DEFAULT '', lead_session_id TEXT NOT NULL DEFAULT '', on_since INTEGER NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (session_id, cause))`,
+		`INSERT INTO session_pauses (session_id, cause, role, on_since, since) VALUES ('sid-old', 'quota', 'solo', 5, 6)`,
+	} {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = OpenStore(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s.Close()
+	rows, err := s.Pauses()
+	if err != nil || len(rows) != 1 || rows[0].SessionID != "sid-old" || rows[0].Ref != "" || rows[0].Title != "" {
+		t.Fatalf("rows = %+v err=%v", rows, err)
+	}
+	if _, err := s.AddPause(pauseRow("sid-new", team.PauseCauseQuota, team.PauseRoleSolo, 9)); err != nil {
+		t.Fatalf("a write with ref / title: %v", err)
+	}
+}
+
 func TestPause_CausesAreConstrained(t *testing.T) {
 	s := openTestStore(t)
 	for name, p := range map[string]PauseRow{

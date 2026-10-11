@@ -264,6 +264,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (pauses): %w", err)
 	}
+	if err := migratePauseRefTitle(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (pause ref / title): %w", err)
+	}
 	return &Store{db: db}, nil
 }
 

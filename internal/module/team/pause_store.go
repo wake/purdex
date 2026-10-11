@@ -2,6 +2,7 @@
 package teammod
 
 import (
+	"database/sql"
 	"fmt"
 	"slices"
 
@@ -50,6 +51,17 @@ const pauseSchema = `
 		session_id TEXT    NOT NULL,
 		created_at INTEGER NOT NULL
 	);`
+
+// migratePauseRefTitle gives a session_pauses written before ref and title existed (an earlier build of the pause phase) the two
+// columns; the CREATE above already has them for a new team.db.
+func migratePauseRefTitle(db *sql.DB) error {
+	for _, c := range []string{"ref", "title"} {
+		if err := ensureColumn(db, "session_pauses", c, "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // PauseRow is one row of session_pauses. OnSince is the unattended switch's Since at the time of the pause (the host-config
 // value changes on every off → on); Since is when this row was written. Ref and Title are the session's own at that moment,
