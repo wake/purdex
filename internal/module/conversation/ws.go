@@ -342,6 +342,7 @@ func (c *wsConn) follow() {
 		// for the frame the last full lookup confirmed, and applied only to that same source.
 		lightAt := time.Now() // before the query: the Entry compares readings by this
 		light, lightOK, lightFrame := c.m.cheapLight(src, have, c.sid)
+		execLight, execOK := c.m.cheapExecLight(c.ctx, src, have, c.sid)
 		err := c.entry.Exclusive(c.ctx, func() error {
 			if !have || time.Since(resolvedAt) >= c.m.reresolveEvery() {
 				dropSrc()
@@ -352,6 +353,8 @@ func (c *wsConn) follow() {
 				src, have, resolvedAt = s, true, time.Now()
 			} else if lightOK && src.Live && src.FrameID == lightFrame {
 				src.Status, src.StatusAt = light, lightAt
+			} else if execOK && src.Live && src.Backend == "execution" {
+				src.Status, src.StatusAt = execLight, lightAt
 			}
 			if _, err := c.entry.Refresh(c.ctx, src); err != nil {
 				return err

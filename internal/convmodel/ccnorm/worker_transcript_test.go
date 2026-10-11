@@ -61,6 +61,15 @@ func TestWorkerTranscript_SDKRowsSidechainAndPeerMailbox(t *testing.T) {
 	}
 }
 
+// A live execution-owned conversation whose turn already ended (turn_duration written): SetLive(true) leaves it done.
+func TestWorkerTranscript_EndedTurnStaysDoneWhileLive(t *testing.T) {
+	n := norm(t, workerRows()[:6]...)
+	n.SetLive(true)
+	if tr := validated(t, n).Turns[0]; tr.Outcome != convmodel.OutcomeDone {
+		t.Errorf("outcome = %q, want done", tr.Outcome)
+	}
+}
+
 // A live execution-owned conversation: the worker's last turn ends with no turn_duration row until the process ends, and
 // SetLive(false) (the resolver's answer once the execution is not live) still closes it as done at the last row.
 func TestWorkerTranscript_LastTurnClosesWhenTheExecutionEnds(t *testing.T) {

@@ -163,7 +163,7 @@ func (m *Module) Init(c *core.Core) error {
 		return fmt.Errorf("conversation: home directory: %w", err)
 	}
 	m.cache = convfeed.NewCache(convfeed.CacheOptions{})
-	m.resolver = &convfeed.Resolver{Home: home, Owners: ownerAdapter{owners}, Index: m.index}
+	m.resolver = &convfeed.Resolver{Home: home, Owners: ownerAdapter{owners}, Index: m.index, ExecOwners: execAdapter{m}}
 	c.Registry.Register(convturns.Key, convturns.Reader(m)) // the session workbook reads a session's last turns
 	return nil
 }

@@ -146,6 +146,11 @@ func (m *Module) capabilitiesFor(sessionID string) *convmodel.Capabilities {
 		c.Send, c.Interrupt = "prompt", "prompt"
 		delete(c.Reasons, "send")
 		delete(c.Reasons, "interrupt")
+	} else if m.execOwned(sessionID) { // a headless worker runs it: the SPA picks the worker adapter by these values
+		c.Send, c.Interrupt, c.AnswerPermission, c.BackgroundTasks = "execution", "execution", "execution", "execution"
+		for _, k := range []string{"send", "interrupt", "answer_permission", "background_tasks"} {
+			delete(c.Reasons, k)
+		}
 	}
 	return &c
 }
