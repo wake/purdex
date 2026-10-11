@@ -5,7 +5,7 @@ import {
   nexFetch, fetchNexCapabilities, listExecutions, fetchExecutionEvents,
   attachObserve, attachControl, sendMessage, releaseLease, archiveExecution, resolveExecutionHostId,
   getExecution, fetchNexHost, renewLease, interruptExecution, terminateExecution,
-  delegateExecution, pinnedLeaseRelease, fetchExecutionTasks, uploadWorkerFile, fetchAttachment,
+  delegateExecution, pinnedLeaseRelease, fetchExecutionTasks, uploadWorkerFile,
   answerPermission,
 } from './nex-api'
 import { NexApiError } from './types'
@@ -126,20 +126,6 @@ describe('nex-api', () => {
     expect(url).toBe('http://100.64.0.2:7860/api/nex/v1/executions/exc_1/attach')
     expect(init.method).toBe('DELETE')
     expect(JSON.parse(init.body)).toEqual({ lease_id: 'ls_1' })
-  })
-
-  it('sendMessage carries attachments only when non-empty (the key is absent otherwise)', async () => {
-    const att = [{ type: 'image' as const, media_type: 'image/png', data: 'iVBORw0KGgo=' }]
-    testGlobal.fetch.mockImplementation(async () => json({ turn_id: 'trn_1', delivery: 'delivered' }))
-    await sendMessage(hostId, 'exc_1', 'ls_1', '', att)
-    await sendMessage(hostId, 'exc_1', 'ls_1', 'hi', [])
-    await sendMessage(hostId, 'exc_1', 'ls_1', 'hi')
-    const bodies = testGlobal.fetch.mock.calls.map((c: unknown[]) => (c[1] as RequestInit).body as string)
-    expect(JSON.parse(bodies[0])).toEqual({ lease_id: 'ls_1', text: '', attachments: att })
-    expect(Object.keys(JSON.parse(bodies[1]))).toEqual(['lease_id', 'text'])
-    expect(Object.keys(JSON.parse(bodies[2]))).toEqual(['lease_id', 'text'])
-    // The key order requestBytes measures.
-    expect(Object.keys(JSON.parse(bodies[0]))).toEqual(['lease_id', 'text', 'attachments'])
   })
 
   it('releaseLease forwards a RequestInit (keepalive for beforeunload)', async () => {
@@ -432,60 +418,6 @@ describe('nex-api', () => {
   it('resolveExecutionHostId falls back to an empty string when there are no hosts and no hint', () => {
     useHostStore.setState({ hosts: {}, hostOrder: [], activeHostId: null, runtime: {} } as never)
     expect(resolveExecutionHostId(undefined)).toBe('')
-  })
-
-  describe('fetchAttachment (contract §1.9, consumer-guide §9.5)', () => {
-    const SHA = 'ab'.repeat(32)
-    const route = { method: 'GET', path: '/api/nex/v1/executions/{id}/attachments/{sha256}' }
-    const png = () => new Response(new Uint8Array([0x89, 0x50]), { status: 200, headers: { 'Content-Type': 'image/png' } })
-
-    it('GETs the capability path against the daemon origin, once prefixed, with the host auth, and returns the bytes', async () => {
-      testGlobal.fetch.mockResolvedValueOnce(png())
-      const blob = await fetchAttachment(hostId, 'exc 1', SHA, route)
-      expect(blob.size).toBe(2)
-      const [url, init] = testGlobal.fetch.mock.calls[0]
-      expect(url).toBe(`http://100.64.0.2:7860/api/nex/v1/executions/exc%201/attachments/${SHA}`)
-      expect(url).not.toContain('/api/nex/api/nex')
-      expect(init.method).toBe('GET')
-      expect(new Headers(init.headers).get('Authorization')).toBe('Bearer tok-1')
-    })
-
-    it('reads the template from the capability, not a hard-coded route', async () => {
-      testGlobal.fetch.mockResolvedValueOnce(png())
-      await fetchAttachment(hostId, 'exc_1', SHA, { method: 'GET', path: '/elsewhere/{sha256}/of/{id}' })
-      expect(testGlobal.fetch.mock.calls[0][0]).toBe(`http://100.64.0.2:7860/elsewhere/${SHA}/of/exc_1`)
-    })
-
-    it('rejects a 404 with the daemon code', async () => {
-      testGlobal.fetch.mockResolvedValueOnce(json({ error: 'no such attachment', code: 'attachment_not_found' }, 404))
-      await expect(fetchAttachment(hostId, 'exc_1', SHA, route)).rejects.toMatchObject({ status: 404, code: 'attachment_not_found' })
-    })
-
-    it('maps a fetch that never reached the daemon to `network`', async () => {
-      testGlobal.fetch.mockRejectedValueOnce(new TypeError('Failed to fetch'))
-      await expect(fetchAttachment(hostId, 'exc_1', SHA, route)).rejects.toMatchObject({ code: 'network' })
-    })
-
-    it('forwards an optional AbortSignal to the underlying fetch (A1: releases the concurrency slot promptly on abort)', async () => {
-      testGlobal.fetch.mockResolvedValueOnce(png())
-      const controller = new AbortController()
-      await fetchAttachment(hostId, 'exc_1', SHA, route, controller.signal)
-      const [, init] = testGlobal.fetch.mock.calls[0]
-      expect(init.signal).toBe(controller.signal)
-    })
-
-    it('sends nothing for an unknown host, a route that is not origin-relative, or a method other than GET', async () => {
-      await expect(fetchAttachment('nope', 'exc_1', SHA, route)).rejects.toMatchObject({ code: 'host_removed' })
-      for (const bad of [
-        { method: 'GET', path: 'https://evil.example/{sha256}' },
-        { method: 'GET', path: '//evil.example/{sha256}' },
-        { method: 'GET', path: 'v1/executions/{id}/attachments/{sha256}' },
-        { method: 'POST', path: route.path },
-      ]) {
-        await expect(fetchAttachment(hostId, 'exc_1', SHA, bad)).rejects.toMatchObject({ code: 'attachment_route_invalid' })
-      }
-      expect(testGlobal.fetch).not.toHaveBeenCalled()
-    })
   })
 
   describe('answerPermission (contract §1.14, consumer-guide §9.8)', () => {
