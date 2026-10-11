@@ -101,10 +101,11 @@ export function createSampler(deps: SamplerDeps): Sampler {
       // A lock we cannot date: the monotonic clock may not have counted a sleep, and Electron
       // gives no lock start. Report "already locked a minute" (away at once).
       lockStart = null
-    } else {
+    } else if (state === 'active' || state === 'idle') {
       locked = false
       lockStart = null
     }
+    // 'unknown' cannot reconcile: keep the current lock state and its start.
   }
 
   const onLock = () => {

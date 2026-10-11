@@ -244,3 +244,48 @@ describe('sampler: callbacks', () => {
     expect(s.snapshot().locked).toBe(true)
   })
 })
+
+describe('sampler: unknown idle state on reconcile', () => {
+  it('lock -> suspend -> resume reading unknown keeps the lock and its start', () => {
+    const h = setup()
+    h.sampler.start()
+    h.pm.emit('lock-screen')
+    h.tick(3000)
+    h.pm.emit('suspend')
+    h.pm.state = 'unknown'
+    h.pm.emit('resume')
+    const s = h.sampler.snapshot()
+    expect(s.locked).toBe(true)
+    expect(s.lockedMs).toBe(3000)
+  })
+  it('a later unlock-screen clears it', () => {
+    const h = setup()
+    h.sampler.start()
+    h.pm.emit('lock-screen')
+    h.pm.state = 'unknown'
+    h.pm.emit('resume')
+    h.pm.emit('unlock-screen')
+    expect(h.sampler.snapshot().locked).toBe(false)
+  })
+  it('an explicit active read on resume clears the lock', () => {
+    const h = setup()
+    h.sampler.start()
+    h.pm.emit('lock-screen')
+    h.pm.state = 'active'
+    h.pm.emit('resume')
+    expect(h.sampler.snapshot().locked).toBe(false)
+  })
+  it('an explicit idle read on resume clears the lock', () => {
+    const h = setup()
+    h.sampler.start()
+    h.pm.emit('lock-screen')
+    h.pm.state = 'idle'
+    h.pm.emit('resume')
+    expect(h.sampler.snapshot().locked).toBe(false)
+  })
+  it('starting with unknown and no prior lock is not locked', () => {
+    const h = setup({ state: 'unknown' })
+    h.sampler.start()
+    expect(h.sampler.snapshot().locked).toBe(false)
+  })
+})
