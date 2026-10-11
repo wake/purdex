@@ -59,14 +59,25 @@ func (m *Module) flushStatusSnapshots() int {
 	m.snapFlushMu.Lock() // a clear waits for a flush to finish, and the other way round
 	defer m.snapFlushMu.Unlock()
 	if m.snapClearOwed {
+		// The table must be emptied before anything is written: a DeleteAll that succeeds later would erase a row written
+		// meanwhile, and the row would not be rewritten. Still failing: abort, every dirty/deleted mark stays.
 		m.deleteAllSnapshotRows()
+		if m.snapClearOwed {
+			return 0
+		}
 	}
-	inst := m.sessionTmuxInstance() // outside snapshotMu: it may reach tmux
+	m.snapshotMu.Lock()
+	hasDirty := len(m.snapDirty) > 0
+	m.snapshotMu.Unlock()
+	inst := ""
+	if hasDirty {
+		inst = m.sessionTmuxInstance() // outside snapshotMu: it may reach tmux; only when a row will be written
+	}
 	m.snapshotMu.Lock()
 	rows := make([]store.StatusSnapshotRow, 0, len(m.snapDirty))
 	for code := range m.snapDirty {
 		s, ok := m.statusSnapshots[code]
-		if !ok {
+		if !ok || inst == "" { // fail closed: a row without the tmux generation could never be restored safely
 			continue
 		}
 		v, err := snapshotRowValue(s)
@@ -79,7 +90,9 @@ func (m *Module) flushStatusSnapshots() int {
 	for code := range m.snapDeleted {
 		gone = append(gone, code)
 	}
-	m.snapDirty = make(map[string]struct{})
+	if inst != "" {
+		m.snapDirty = make(map[string]struct{})
+	} // generation unknown: the dirty marks stay for the next flush
 	m.snapDeleted = make(map[string]struct{})
 	m.snapshotMu.Unlock()
 
@@ -134,7 +147,11 @@ func (m *Module) deleteAllSnapshotRows() {
 	if m.snaps == nil {
 		return
 	}
-	if err := m.snaps.DeleteAll(); err != nil {
+	del := m.snaps.DeleteAll
+	if m.snapDeleteAllFn != nil {
+		del = m.snapDeleteAllFn
+	}
+	if err := del(); err != nil {
 		log.Printf("[agent] clear persisted status snapshots (retried at the next flush): %v", err)
 		m.snapClearOwed = true
 		return
@@ -143,7 +160,7 @@ func (m *Module) deleteAllSnapshotRows() {
 }
 
 // restoreStatusSnapshots reads the persisted snapshots back at boot for the tmux sessions that still exist (same tmux server
-// generation when both sides know it); every other row is dropped. A snapshot that arrived since boot is newer and stays.
+// generation, both sides known: fail closed otherwise); every other row is dropped. A snapshot that arrived since boot is newer and stays.
 // At most statusSnapshotCap are restored, newest first. Any read failure only logs: there is just nothing to restore.
 func (m *Module) restoreStatusSnapshots(_ context.Context) {
 	if m.snaps == nil || m.sessions == nil {
@@ -167,11 +184,14 @@ func (m *Module) restoreStatusSnapshots(_ context.Context) {
 		live[s.Code] = true
 	}
 	inst := m.sessionTmuxInstance()
+	if inst == "" {
+		return // fail closed, and not knowing the generation is no reason to delete anything
+	}
 	var drop []string
 	m.snapshotMu.Lock()
 	kept := 0
 	for _, r := range rows {
-		if !live[r.Code] || kept >= statusSnapshotCap || (inst != "" && r.TmuxInstance != "" && inst != r.TmuxInstance) {
+		if !live[r.Code] || kept >= statusSnapshotCap || r.TmuxInstance == "" || inst != r.TmuxInstance {
 			drop = append(drop, r.Code)
 			continue
 		}
