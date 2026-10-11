@@ -172,11 +172,23 @@ func setupRelayGuard(client *http.Client, baseURL, token string, force bool, std
 		return ExitRefused
 	}
 	if inf.RelaysActive == 0 {
+		settling := 0
+		for _, r := range inf.Relays {
+			if r.Settling {
+				settling++
+			}
+		}
+		if settling > 0 { // cleared into a live session: the relay itself is done, only its `done` report rides on the mod
+			fmt.Fprintf(stderr, "setup: %d relay(s) cleared into a live session are settling; if a mod reload loses their done report, the daemon settles them 15 minutes after they cleared, by whether the new session is still alive then.\n", settling)
+		}
 		return ExitOK
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "setup: %d relay(s) under way would lose their mod:\n", inf.RelaysActive)
 	for _, r := range inf.Relays {
+		if r.Settling {
+			continue // cleared into a live session: not counted above, so not listed as stranded
+		}
 		fmt.Fprintf(&b, "  %s  %s %s  %s\n", r.ID, r.Kind, r.Ref, r.State)
 	}
 	b.WriteString("wait for them to finish, or run again with --force.\nrelay_active\n")
