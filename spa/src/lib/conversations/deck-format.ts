@@ -189,6 +189,14 @@ export function readRange(step: Pick<StepItem, 'read'>): { from: number; to: num
 // eslint-disable-next-line no-control-regex
 const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g
 
+// eslint-disable-next-line no-control-regex
+const INVISIBLE = /[‪-‮⁦-⁩‎‏\u0000-\u0008\u000B-\u001F\u007F]/g
+
+/** A bash command as drawn: ANSI escapes and invisible bidi / control characters removed; newlines and tabs stay, nothing is cut. */
+export function cleanCommandText(text: string): string {
+  return text.replace(ANSI, '').replace(INVISIBLE, '')
+}
+
 export type SystemView =
   | { kind: 'interrupted' }
   | { kind: 'compacted'; time: string }
