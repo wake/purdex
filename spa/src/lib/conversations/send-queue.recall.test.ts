@@ -55,15 +55,15 @@ describe('taking back what the App holds', () => {
     expect(q.takeAllHeld()).toEqual([])
   })
 
-  it('a message the mod refused as busy (waiting for idle) is still the App\'s and can be taken', async () => {
+  it('a message in its busy retries has left the App\'s hands: it is not taken', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
     q.enqueue('busy one')
     await vi.advanceTimersByTimeAsync(UNDO_MS)
-    calls[0].resolve({ kind: 'busy' })
+    calls[0].resolve({ kind: 'refused', reason: 'busy', status: 429 })
     await vi.advanceTimersByTimeAsync(0)
-    expect(q.entries()[0].state).toBe('waiting')
-    expect(q.takeAllHeld().map((x) => x.text)).toEqual(['busy one'])
+    expect(q.entries()[0].state).toBe('sending')
+    expect(q.takeAllHeld()).toEqual([])
   })
 
   it('accepted (waiting for the transcript) and maybe / failed entries are not taken', async () => {
@@ -100,20 +100,21 @@ describe('the previews of a held box', () => {
     expect(revoke).not.toHaveBeenCalled()
   })
 
-  it('stay alive while the message is in flight and waiting for idle (it can still come back whole), and go once the mod takes it', async () => {
+  it('stay alive while the message is in flight and between busy retries, and go once the daemon takes it', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
     q.enqueue('x', { draft: '[Image #1]', chips: [chip('a', 1)] })
     await vi.advanceTimersByTimeAsync(UNDO_MS)
     expect(q.entries()[0].state).toBe('sending')
     expect(revoke).not.toHaveBeenCalled()
-    calls[0].resolve({ kind: 'busy' })
+    calls[0].resolve({ kind: 'refused', reason: 'busy', status: 429 })
     await vi.advanceTimersByTimeAsync(0)
-    expect(q.entries()[0].state).toBe('waiting')
+    expect(q.entries()[0].state).toBe('sending')
     expect(revoke).not.toHaveBeenCalled()
-    const taken = q.takeAllHeld() // a recall of a waiting message brings the chips back too
-    expect(taken[0].held?.chips.map((a) => a.id)).toEqual(['a'])
-    expect(revoke).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1000)
+    calls[1].resolve({ kind: 'handed', mode: 'fill' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(revoke).toHaveBeenCalledTimes(1)
   })
 
   it('are let go exactly once when the mod accepts the message', async () => {

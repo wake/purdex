@@ -1,8 +1,9 @@
 // spa/src/lib/conversations/send.ts — sending (K-2): the daemon types a message through POST /api/sessions/{code}/submit; interrupt is still the session mod's (POST …/interrupt). What each answer means, and the destructive guard.
 // The queue is in send-queue.ts.
 //
-// At most once: a submit carries a client_msg_id; only `busy` (and a `timeout`, which the daemon withdrew unhanded) did not
-// run. `unknown`, a lost connection and `not_owner` MAY have run: the caller never resends those by itself.
+// At most once: a submit carries a client_msg_id; a `refused` answer did not run anything (except `text_left_in_terminal`). `unknown`, a lost
+// connection and `text_left_in_terminal` MAY have run: the caller never resends those by itself. The mod-route kinds (dropped / busy / timeout /
+// no_mod / not_owner) are what the INTERRUPT route still answers; no submit produces them any more.
 import { pinnedHostFetch } from '../host-api'
 import { isDestructive } from './send-plan'
 
@@ -30,7 +31,7 @@ export type SendOutcome =
 
 /** The request may have run (or still run): never resent automatically, settled from the transcript. */
 export const mayHaveRun = (o: SendOutcome): boolean =>
-  o.kind === 'unknown' || o.kind === 'not_owner' || o.kind === 'network' || (o.kind === 'refused' && o.reason === 'text_left_in_terminal')
+  o.kind === 'unknown' || o.kind === 'network' || (o.kind === 'refused' && o.reason === 'text_left_in_terminal')
 
 export interface SendPort {
   submit(text: string, clientMsgId: string): Promise<SendOutcome>

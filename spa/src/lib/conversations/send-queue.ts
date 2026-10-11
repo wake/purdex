@@ -1,28 +1,29 @@
-// spa/src/lib/conversations/send-queue.ts — the App-side send queue (U3 plan D7; iOS `SendQueue` ported): a 3 s undo window,
-// ONE serial chain (a message goes out only after the one before it settled), a local echo (「你 · 排隊中」) until the
-// transcript's user item for it appears, and `busy` kept in the App until the agent is idle. Framework-free; the port is
-// injected. Module-level registry per pane so the queue outlives the component (tab-hosted rule).
+// spa/src/lib/conversations/send-queue.ts — the App-side send queue (U3 plan D7; K-2 plan D3–D6): a 1.5 s send buffer (`undo`), ONE serial
+// chain (a message goes out only after the one before it settled), and a local echo (framed 「你 · 排隊中」) until the transcript's user item
+// for it appears. The App does not wait for the agent to be idle: Claude Code queues a busy session's message itself. Framework-free; the
+// port is injected. Module-level registry per pane so the queue outlives the component (tab-hosted rule).
 //
-// At most once: every message has ONE client_msg_id, reused by any resend. Only `busy` is resent by the queue itself.
-// `unknown`, a lost connection and `not_owner` leave the entry `maybe`: it is settled by the transcript (the user item
-// carries the client_msg_id, or the same text within 30 s) and otherwise stays 「可能已送出」 until the person decides.
+// At most once: a message has ONE client_msg_id per attempt. Only a `busy` refusal (nothing was sent) is retried by the queue itself, 1 s /
+// 2 s / 4 s, each attempt under a NEW id (the daemon records a fill refusal under its id and replays it); the entry keeps every id it used
+// and an echo carrying any of them settles it. `unknown`, a lost connection and `text_left_in_terminal` leave the entry `maybe`: it is
+// settled by the transcript and otherwise stays 「可能已送出」 until the person decides.
 import { mayHaveRun, newClientMsgId, type SendOutcome, type SendPort } from './send'
 import { revokePreviewUrl, type Attachment } from './attachment-memory'
 import { adapterOf } from './deck-adapter'
 import { normalizePrompt } from './send-plan'
 import type { UserItem } from './types'
 
-export const UNDO_MS = 3000
+export const UNDO_MS = 1500
 // The daemon's echo pairing window (internal/promptq/echo.go): a row may be stamped 2 s before the hand-out, up to 30 s after
 // a result that never came (the hand timeout, 10 s, plus 30 s).
 const ECHO_BEFORE_MS = 2000
 const ECHO_AFTER_MS = 30_000
 const HAND_TIMEOUT_MS = 10_000
-// The mod may keep answering busy for about a second after the header went idle: a busy answer while the queue believes the
-// agent is idle is retried after 1 s, 2 s, 4 s (same client_msg_id: busy means the daemon did not run it), then it waits for the
-// next idle edge.
-const BACKOFF_BASE_MS = 1000
-const BACKOFF_MAX = 3
+// A `busy` refusal (the pane / session lock, or Claude Code's queue is full for a moment) did not send anything: retried after 1 s, 2 s, 4 s.
+const BUSY_RETRY_BASE_MS = 1000
+const BUSY_RETRIES = 3
+// A message the daemon handed over (`handed`) that is neither on Claude Code's queue line nor echoed by the transcript after this long is `maybe`.
+const HANDED_SEEN_MS = 10_000
 
 /** What the box held when the message was sent: the draft as typed (`[Image #N]` placeholders and all) and its chips (previews still alive). */
 export interface HeldDraft {
@@ -30,11 +31,13 @@ export interface HeldDraft {
   chips: readonly Attachment[]
 }
 
-export type EntryState = 'undo' | 'sending' | 'waiting' | 'sent' | 'maybe' | 'failed' | 'superseded'
+export type EntryState = 'undo' | 'sending' | 'sent' | 'maybe' | 'failed' | 'superseded'
 
 export interface QueueEntry {
-  /** The client_msg_id. */
+  /** The entry's identity (its first client_msg_id). */
   id: string
+  /** Every client_msg_id this entry used, oldest first (a busy retry takes a new one); the last is the one in use. An echo carrying any of them settles it. */
+  ids: string[]
   text: string
   state: EntryState
   createdAt: number
@@ -44,16 +47,18 @@ export interface QueueEntry {
   /** When the latest submit got its answer. */
   settledAt?: number
   outcome?: SendOutcome
-  /** The box as it was when this was queued, kept while the message can still come back (undo window, in flight, waiting for idle after a busy answer): what a recall puts back. Let go when the mod takes the message or it is dropped. */
+  /** The box as it was when this was queued, kept while the message can still come back (the send buffer, in flight): what a recall puts back. Let go when the daemon takes the message or it is dropped. */
   held?: HeldDraft
   /** The id of the message that replaced this one after a manual resend (the old entry is kept for the audit trail). */
   supersededBy?: string
-  /** An idle was observed while THIS entry's request was in flight and not yet used: its busy answer is resent at once (once). Gone with the entry. */
-  idleSeen?: boolean
-  /** Backoff retries used since the last idle edge. */
-  retries?: number
-  /** The one wake-up request after the quota ran out (a remount) has been used; a real idle edge gives it back. */
-  woken?: boolean
+  /** Busy retries used. */
+  busyRetries?: number
+  /** `handed`: how the daemon put it in (`keys` = no mod confirmed it). */
+  mode?: 'fill' | 'keys'
+  /** When the daemon handed it over. */
+  handedAt?: number
+  /** Claude Code's own queue line (header.queued) renders this text right now: the entry is hidden, the line stands for it. */
+  matched?: boolean
 }
 
 export class SendQueue {
@@ -62,10 +67,10 @@ export class SendQueue {
   private timer: ReturnType<typeof setTimeout> | null = null
   private claimed = new Set<string>()
   private disposed = false
-  /** The latest observation of the header (`setIdle`). */
-  private idleNow = false
-  /** At most one: only the head waits, and only it can be backing off. */
-  private backoff: { id: string; timer: ReturnType<typeof setTimeout> } | null = null
+  /** At most one: only the head can be waiting to retry a busy refusal. */
+  private retry: { id: string; timer: ReturnType<typeof setTimeout> } | null = null
+  /** Per `handed` entry: the timer that turns it `maybe` when nothing showed it. */
+  private seen = new Map<string, ReturnType<typeof setTimeout>>()
   private retiredDone: (() => void) | null = null
   private listeners = new Set<() => void>()
 
@@ -80,14 +85,22 @@ export class SendQueue {
   subscribe = (fn: () => void): (() => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn) } }
   entries = (): readonly QueueEntry[] => this.view
 
-  private clearBackoff(): void {
-    if (this.backoff) clearTimeout(this.backoff.timer)
-    this.backoff = null
+  private clearRetry(): void {
+    if (this.retry) clearTimeout(this.retry.timer)
+    this.retry = null
+  }
+
+  private clearSeen(): void {
+    for (const t of this.seen.values()) clearTimeout(t)
+    this.seen.clear()
   }
 
   private emit(): void {
-    // the backoff belongs to a message that is still waiting: any way out of it (undo, dismiss, echo, resend) takes the timer too
-    if (this.backoff && !this.list.some((e) => e.id === this.backoff!.id && e.state === 'waiting')) this.clearBackoff()
+    // timers belong to entries still in the list in the state they wait in: any way out (echo, dismiss, resend) takes the timer too
+    if (this.retry && !this.list.some((e) => e.id === this.retry!.id && e.state === 'sending')) this.clearRetry()
+    for (const [id, t] of [...this.seen]) {
+      if (!this.list.some((e) => e.id === id && e.state === 'sent')) { clearTimeout(t); this.seen.delete(id) }
+    }
     this.view = this.list.map((e) => ({ ...e }))
     this.listeners.forEach((l) => l())
   }
@@ -103,19 +116,19 @@ export class SendQueue {
   enqueue(text: string, held?: HeldDraft): string {
     const at = this.now()
     const id = newClientMsgId()
-    this.list.push({ id, text, state: 'undo', createdAt: at, undoUntil: at + UNDO_MS, startedAt: at, ...(held ? { held } : {}) })
+    this.list.push({ id, ids: [id], text, state: 'undo', createdAt: at, undoUntil: at + UNDO_MS, startedAt: at, ...(held ? { held } : {}) })
     this.emit()
     this.pump()
     return id
   }
 
   /**
-   * Take messages back from the App: only entries still in its hands (`undo`, `waiting`) can go; one the driver has handed out
+   * Take messages back from the App: only entries still in its hands (the send buffer, `undo`) can go; one the driver has handed out
    * (`sending` and later) cannot. The check and the removal are one synchronous step, so a message is either taken here or handed
    * out by `pump`, never both. Returns what the box held, in sending order.
    */
   private take(match: (e: QueueEntry) => boolean): Array<{ text: string; held?: HeldDraft }> {
-    const taken = this.list.filter((e) => (e.state === 'undo' || e.state === 'waiting') && match(e))
+    const taken = this.list.filter((e) => e.state === 'undo' && match(e))
     if (taken.length === 0) return []
     this.list = this.list.filter((e) => !taken.includes(e))
     this.emit()
@@ -123,16 +136,16 @@ export class SendQueue {
     return taken.map((e) => ({ text: e.text, ...(e.held ? { held: e.held } : {}) })) // the previews now belong to the caller
   }
 
-  /** Take one message back (the Undo button, inside its undo window or while it waits for idle): its box, or undefined when it has left. */
+  /** Take one message back (the Undo button, inside the send buffer): its box, or undefined when it has left. */
   takeBack(id: string): { text: string; held?: HeldDraft } | undefined { return this.take((e) => e.id === id)[0] }
 
   /** Take every message the App still holds back (the Up key in an empty box), oldest first. */
   takeAllHeld(): Array<{ text: string; held?: HeldDraft }> { return this.take(() => true) }
 
-  /** How many messages the App still holds (undo window or waiting for idle). */
-  heldCount(): number { return this.list.filter((e) => e.state === 'undo' || e.state === 'waiting').length }
+  /** How many messages the App still holds (the send buffer). */
+  heldCount(): number { return this.list.filter((e) => e.state === 'undo').length }
 
-  /** Take a message back inside its undo window (or cancel one waiting for idle): returns its text for the box. */
+  /** Take a message back inside the send buffer: returns its text for the box. */
   undo(id: string): string | undefined {
     const back = this.takeBack(id)
     if (back?.held) for (const a of back.held.chips) revokePreviewUrl(a.previewUrl) // a caller that only wants the text lets the previews go
@@ -153,7 +166,7 @@ export class SendQueue {
     const next = newClientMsgId()
     e.state = 'superseded'
     e.supersededBy = next
-    this.list.splice(i + 1, 0, { id: next, text: e.text, state: 'undo', createdAt: at, undoUntil: at, startedAt: at })
+    this.list.splice(i + 1, 0, { id: next, ids: [next], text: e.text, state: 'undo', createdAt: at, undoUntil: at, startedAt: at })
     this.emit()
     this.pump()
     return next
@@ -166,27 +179,32 @@ export class SendQueue {
   }
 
   /**
-   * An observation of the header status. A message the mod refused as `busy` is resent ONCE by the first idle observed after
-   * the busy answer (not by an edge: the pane may have been unmounted when the answer came, so the remount reports an
-   * idle that never changed). The caller reports on change and on mount, so a stale header cannot loop: the entry goes
-   * back to waiting if the mod says busy again, and needs a new observation.
+   * An observation of Claude Code's own queue line (header.queued, only the lines the deck actually renders: `shownHeaderQueue`, the `user`
+   * ones): a `handed` entry whose text (trailing whitespace trimmed) is on a rendered line is `matched` (hidden: the line stands for it), one
+   * to one in order; when the line stops being rendered without an echo it shows again, and past `HANDED_SEEN_MS` it is `maybe`. Idempotent:
+   * it emits only on a change (the caller reports on every header change and on every queue change).
    */
-  setIdle(idle: boolean): void {
-    const edge = idle && !this.idleNow // false -> true; the pane reports the SAME value again on every remount, which is no edge
-    this.idleNow = idle
-    if (!idle) { for (const e of this.list) e.idleSeen = false; this.clearBackoff(); return }
-    const w = this.list.find((e) => e.state === 'waiting') // a waiting entry was refused before this observation, so it is "after the busy answer"
-    if (w) {
-      if (edge) { this.clearBackoff(); w.retries = 0; w.woken = false } // a real edge: resend now, with a fresh quota
-      else if (this.backoff === null && (w.retries ?? 0) >= BACKOFF_MAX && !w.woken) w.woken = true // a remount over a spent quota: ONE request, no refill
-      else return // same idle again: a pending backoff keeps its schedule, a spent wake-up stays spent
-      w.state = 'undo'; w.undoUntil = this.now(); this.emit(); this.pump(); return
+  setHeaderQueue(userTexts: readonly string[]): void {
+    const rest = userTexts.map((x) => x.trimEnd())
+    let changed = false
+    for (const e of this.list) {
+      if (e.state !== 'sent' || e.mode === undefined) { if (e.matched) { e.matched = false; changed = true } continue }
+      const i = rest.indexOf(e.text.trimEnd())
+      const hit = i >= 0
+      if (hit) rest.splice(i, 1)
+      if (hit !== (e.matched === true)) { e.matched = hit; changed = true }
+      if (!hit && this.staleHanded(e)) { this.markUnseen(e); changed = true }
     }
-    // The observation came while a request is still out (a pane remounted mid-flight): when that request answers busy this idle
-    // is "after the request started", so the answer is resent at once instead of waiting for an edge that will not come.
-    // Only a real edge counts: the same idle reported again (a remount) during a request, a wake-up included, must not buy a free resend.
-    const flying = edge ? this.list.find((e) => e.state === 'sending') : undefined
-    if (flying) flying.idleSeen = true
+    if (changed) this.emit()
+  }
+
+  private staleHanded(e: QueueEntry): boolean {
+    return e.state === 'sent' && e.handedAt !== undefined && !e.matched && this.now() - e.handedAt >= HANDED_SEEN_MS
+  }
+
+  private markUnseen(e: QueueEntry): void {
+    e.state = 'maybe'
+    e.outcome = { kind: 'unknown', reason: 'not_seen' }
   }
 
   /** The transcript's user messages: an entry whose echo is there is done (the transcript shows it from now on). */
@@ -198,7 +216,7 @@ export class SendQueue {
     const take = (e: QueueEntry, u: UserItem) => { this.claimed.add(u.id); done.add(e) }
     // 1. an item that carries a client_msg_id is paired by that id and by nothing else (the daemon already paired it)
     for (const u of users) {
-      const e = u.client_msg_id !== undefined ? open.find((x) => x.id === u.client_msg_id && !done.has(x)) : undefined
+      const e = u.client_msg_id !== undefined ? open.find((x) => x.ids.includes(u.client_msg_id!) && !done.has(x)) : undefined
       if (e) take(e, u)
     }
     // 2. the rest by text, in the daemon's window (2 s before the request, 30 s after it was handed out), nearest first.
@@ -231,9 +249,12 @@ export class SendQueue {
    * `onDone` (at once when nothing is in flight).
    */
   retire(onDone: () => void): void {
-    for (const e of this.list) if (e.state !== 'sending') this.release(e)
-    this.list = this.list.filter((e) => e.state === 'sending')
-    this.clearBackoff()
+    // an entry waiting to retry a busy refusal has no request in flight: it goes with the rest
+    const waiting = this.retry?.id
+    for (const e of this.list) if (e.state !== 'sending' || e.id === waiting) this.release(e)
+    this.list = this.list.filter((e) => e.state === 'sending' && e.id !== waiting)
+    this.clearRetry()
+    this.clearSeen()
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
     this.listeners.clear()
@@ -248,7 +269,8 @@ export class SendQueue {
    */
   dispose(): void {
     this.disposed = true
-    this.clearBackoff()
+    this.clearRetry()
+    this.clearSeen()
     for (const e of this.list) this.release(e)
     this.list = []
     this.view = []
@@ -257,28 +279,30 @@ export class SendQueue {
     this.listeners.clear()
   }
 
-  /** The backoff timer fired: resend the waiting message if the header is still idle (one request at a time, same id). */
-  private retryBusy(e: QueueEntry): void {
-    this.backoff = null
-    if (this.disposed || this.retiredDone || !this.idleNow || e.state !== 'waiting' || !this.list.includes(e)) return
-    e.state = 'undo'
-    e.undoUntil = this.now()
-    this.emit()
-    this.pump()
-  }
-
   // One at a time: the first entry that has not settled is the head.
   private pump(): void {
     if (this.disposed || this.retiredDone) return
     if (this.timer) { clearTimeout(this.timer); this.timer = null }
-    const head = this.list.find((e) => e.state === 'undo' || e.state === 'sending' || e.state === 'waiting')
+    const head = this.list.find((e) => e.state === 'undo' || e.state === 'sending')
     if (!head || head.state !== 'undo') return
     const left = head.undoUntil - this.now()
     if (left > 0) { this.timer = setTimeout(() => this.pump(), left); return }
-    head.state = 'sending'
-    head.startedAt = this.now()
+    this.dispatch(head)
+  }
+
+  /** One attempt under the entry's current id. */
+  private dispatch(e: QueueEntry): void {
+    e.state = 'sending'
+    e.startedAt = this.now()
     this.emit()
-    void this.port.submit(head.text, head.id).then((o) => this.settle(head, o))
+    void this.port.submit(e.text, e.ids[e.ids.length - 1]).then((o) => this.settle(e, o))
+  }
+
+  /** The retry timer fired: the next attempt, under the id chosen when it was scheduled. */
+  private retryBusy(e: QueueEntry): void {
+    this.retry = null
+    if (this.disposed || this.retiredDone || e.state !== 'sending' || !this.list.includes(e)) return
+    this.dispatch(e)
   }
 
   private settle(e: QueueEntry, o: SendOutcome): void {
@@ -293,29 +317,37 @@ export class SendQueue {
     if (e.state !== 'sending' || !this.list.includes(e)) return // already echoed by the transcript
     e.outcome = o
     e.settledAt = this.now()
-    if (o.kind !== 'busy') this.release(e) // the mod took it (or it failed): its box is not coming back; a busy answer leaves it the App's, so it can still be recalled whole
-    const seenIdle = e.idleSeen === true
-    e.idleSeen = false // used by this answer or stale after it: one observation, at most one resend
-    if (o.kind === 'accepted' || o.kind === 'handed') e.state = 'sent' // handed (K-2: the daemon typed it) is settled by the echo like accepted
-    else if (o.kind === 'busy') {
-      e.state = 'waiting'
-      if (seenIdle) { e.state = 'undo'; e.undoUntil = this.now() }
-      else if (this.idleNow && (e.retries ?? 0) < BACKOFF_MAX) {
-        const delay = BACKOFF_BASE_MS * 2 ** (e.retries ?? 0)
-        e.retries = (e.retries ?? 0) + 1
-        this.clearBackoff()
-        this.backoff = { id: e.id, timer: setTimeout(() => this.retryBusy(e), delay) }
-      }
+    if (o.kind === 'refused' && o.reason === 'busy' && (e.busyRetries ?? 0) < BUSY_RETRIES) {
+      // nothing was sent: try again, under a NEW id (a fill refusal is recorded under its id and would replay itself). The entry stays `sending`.
+      const delay = BUSY_RETRY_BASE_MS * 2 ** (e.busyRetries ?? 0)
+      e.busyRetries = (e.busyRetries ?? 0) + 1
+      const next = newClientMsgId()
+      e.ids.push(next)
+      this.clearRetry()
+      this.retry = { id: e.id, timer: setTimeout(() => this.retryBusy(e), delay) }
+      this.emit()
+      return
+    }
+    this.release(e) // the daemon took it (or it failed): its box is not coming back
+    if (o.kind === 'accepted') e.state = 'sent'
+    else if (o.kind === 'handed') {
+      e.state = 'sent'
+      e.mode = o.mode
+      e.handedAt = this.now()
+      this.seen.set(e.id, setTimeout(() => this.handedTimeout(e), HANDED_SEEN_MS))
     }
     else if (mayHaveRun(o)) e.state = 'maybe'
-    else {
-      e.state = 'failed'
-      if (o.kind === 'no_mod') {
-        for (const x of this.list) if (x.state === 'undo' || x.state === 'waiting') { x.state = 'failed'; x.outcome = o; this.release(x) }
-      }
-    }
+    else e.state = 'failed'
     this.emit()
     this.pump()
+  }
+
+  /** `handed` and nothing showed it for `HANDED_SEEN_MS`: neither the queue line nor the transcript. */
+  private handedTimeout(e: QueueEntry): void {
+    this.seen.delete(e.id)
+    if (this.disposed || !this.list.includes(e) || !this.staleHanded(e)) return
+    this.markUnseen(e)
+    this.emit()
   }
 }
 
