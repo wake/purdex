@@ -17,7 +17,8 @@ export interface DeckFooterContext {
   status: string
   /** The model and effort the conversation itself reports (the status row's fallback when no statusLine snapshot has them). */
   usage: { model?: string; effort?: string } | undefined
-  onSwitchToTerminal: () => void
+  /** Absent for a worker (no terminal view). */
+  onSwitchToTerminal?: () => void
   /** The conversation WebSocket's open approvals (the dock draws the `hook_ask` ones). */
   approvals: readonly ConversationApproval[]
   /** A question is waiting for the person: the input says so in its placeholder. */
@@ -25,7 +26,7 @@ export interface DeckFooterContext {
 }
 
 /** `items` is the caller's memo of the document's items (a new array each render would re-run the input's reconcile). */
-export function footerContext(paneId: string, hostId: string, sessionId: string, doc: ConversationDoc, items: readonly ConversationItem[], onSwitchToTerminal: () => void): DeckFooterContext {
+export function footerContext(paneId: string, hostId: string, sessionId: string, doc: ConversationDoc, items: readonly ConversationItem[], onSwitchToTerminal?: () => void): DeckFooterContext {
   return {
     paneKey: paneId, hostId, sessionId,
     capabilities: doc.capabilities ?? undefined,

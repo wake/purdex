@@ -2146,6 +2146,7 @@
   "room.info.archived": "Archived",
   "room.view.label": "View",
   "room.view.room": "Room",
+  "room.view.deck": "Deck",
   "room.view.chat": "Chat",
   "chat.tools_used_one": "Used {{count}} tool",
   "chat.tools_used_other": "Used {{count}} tools",

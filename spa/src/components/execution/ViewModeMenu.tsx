@@ -6,7 +6,7 @@
 // ref, so its anchor-lost effect can close this panel too. `ViewModeItems` is
 // the bare list, reused by the header's overflow panel.
 import type { RefObject } from 'react'
-import { ChatsCircle, ListBullets, Terminal } from '@phosphor-icons/react'
+import { ChatsCircle, ListBullets, SquaresFour, Terminal } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { FloatingPanel } from '../FloatingPanel'
@@ -17,6 +17,7 @@ const MENU_ITEM = 'flex items-center gap-2 w-full px-2 py-1 rounded text-left ho
 /** The views in menu order, with their icon and label key. */
 const VIEW_MODES: ReadonlyArray<{ mode: ExecutionViewMode; icon: Icon; labelKey: string }> = [
   { mode: 'room', icon: ListBullets, labelKey: 'room.view.room' },
+  { mode: 'deck', icon: SquaresFour, labelKey: 'room.view.deck' },
   { mode: 'chat', icon: ChatsCircle, labelKey: 'room.view.chat' },
 ]
 

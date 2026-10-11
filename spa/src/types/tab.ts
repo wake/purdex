@@ -151,7 +151,7 @@ export type PaneContent =
   | { kind: 'execution'; executionId: string; host?: string; from?: ExecutionFrom; mode?: ExecutionViewMode; fromTitle?: string }
 
 /** The two views of one worker (spec §1): room（指揮室）and chat（聊天模式）. */
-export type ExecutionViewMode = 'room' | 'chat'
+export type ExecutionViewMode = 'room' | 'chat' | 'deck'
 
 /** The tmux session an execution pane was handed off from (spec §4.4). */
 export interface ExecutionFrom {

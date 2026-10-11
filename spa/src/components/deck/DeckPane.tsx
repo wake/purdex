@@ -18,7 +18,8 @@ interface Props {
   conversation: PaneConversation
   isActive: boolean
   isFocusTarget: boolean
-  onSwitchToTerminal: () => void
+  /** Absent for a worker (no terminal view): the deck then offers no way to switch to one. */
+  onSwitchToTerminal?: () => void
   footer?: DeckViewProps['footer']
 }
 

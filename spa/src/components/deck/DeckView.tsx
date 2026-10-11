@@ -33,7 +33,8 @@ export interface DeckViewProps {
   hostId: string
   sessionId: string
   entry: ConversationEntry
-  onSwitchToTerminal: () => void
+  /** Absent for a worker (no terminal view). */
+  onSwitchToTerminal?: () => void
   footer?: (ctx: DeckFooterContext) => ReactNode
   /** 「顯示全部」 and a subagent line open the pane's right panel on that step (the turn is known here, not to the step). */
   onOpenPanel?: (content: PanelContent) => void

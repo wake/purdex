@@ -1,3 +1,4 @@
+import type { ExecutionViewMode } from '../../types/tab'
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { useState } from 'react'
 import { render, screen, fireEvent, act, within } from '@testing-library/react'
@@ -696,7 +697,7 @@ describe('ExecutionHeader', () => {
     const panels = ['worker-info-panel', 'view-mode-menu', 'cost-panel', 'header-overflow-panel']
     const openPanels = () => panels.filter((id) => screen.queryByTestId(id))
 
-    function Pane({ start = 'room' as 'room' | 'chat' }) {
+    function Pane({ start = 'room' as ExecutionViewMode }) {
       const [mode, setMode] = useState(start)
       return <ExecutionHeader {...baseProps} summary={summary()} cost={costSummary(fixturePayloads)} onTakeBack={vi.fn()} mode={mode} onModeChange={setMode} />
     }

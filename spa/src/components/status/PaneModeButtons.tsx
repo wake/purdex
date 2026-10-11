@@ -104,6 +104,7 @@ export function PaneModeButtons({ tabId, pane }: { tabId: string; pane: Pane }) 
       : { kind: 'action', run: () => setExecutionPaneMode(tabId, pane.id, worker, mode) })
     group = [
       { id: 'room', icon: Robot, label: 'status.mode.worker', state: switchTo('room'), toggle: true },
+      { id: 'deck', icon: SquaresFour, label: 'status.mode.deck', state: switchTo('deck'), toggle: true },
       { id: 'chat', icon: ChatCircle, label: 'status.mode.chat', state: switchTo('chat'), toggle: true },
     ]
     const takeState: ButtonState = !take || !take.canTake

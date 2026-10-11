@@ -33,7 +33,7 @@ const port: SendPort = {
   submit: (text) => new Promise<SendOutcome>((resolve) => { calls.push({ text, resolve }) }),
   interrupt: () => Promise.resolve<SendOutcome>({ kind: 'accepted' }),
 }
-const footer = (ctx: ReturnType<typeof footerContext>) => <SessionInput {...ctx} sessionCode="c" pendingInStream />
+const footer = (ctx: ReturnType<typeof footerContext>) => <SessionInput {...ctx} onSwitchToTerminal={() => {}} sessionCode="c" pendingInStream />
 const props = { paneId: P, hostId: H, sessionId: S, onSwitchToTerminal: () => {} }
 const mountDeck = (h: Header) => render(<DeckView {...props} entry={entry(h)} footer={footer} />)
 const box = () => screen.getByRole('textbox') as HTMLTextAreaElement

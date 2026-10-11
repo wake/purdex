@@ -21,6 +21,7 @@ import { BrowserNewTabSection } from '../../components/BrowserNewTabSection'
 import { MemoryMonitorPage } from '../../components/MemoryMonitorPage'
 import { HostPage } from '../../components/HostPage'
 import ExecutionView from '../../components/execution/ExecutionView'
+import WorkerDeckPane from '../../components/execution/WorkerDeckPane'
 import { resolveExecutionHostId } from '../nex/resolve-host'
 import { setExecutionPaneMode, viewModeOf } from '../nex/view-mode'
 import { AppearanceSection } from '../../components/settings/AppearanceSection'
@@ -115,13 +116,17 @@ function ExecutionPaneWrapper({ pane, isActive, isFocusTarget = false }: PaneRen
   // absent); a stored host that no longer exists must surface as "Host
   // removed", never as another daemon (spec §4.3.2 step 5).
   const hostId = resolveExecutionHostId(content.host)
-  // The view (room / chat, R2 plan T1.1) lives on the pane content, so it is
+  // The view (room / chat / deck, R2 plan T1.1, U4-1b) lives on the pane content, so it is
   // persisted and travels with the tab (D1). `setExecutionPaneMode` (shared
   // with the status bar's mode buttons) reads the content the store holds
   // *now*, so a `from` rewrite that landed since is kept, and leaves a pane
   // that no longer shows this execution — this id on this host, the view's
   // own key (P6 review A2) — alone. The mode stays out of the `key`:
-  // switching must not remount the view (no resubscribe, no refetch).
+  // switching room ⇄ chat must not remount the view (no resubscribe, no
+  // refetch). The deck (指揮台) is a different component on the same worker
+  // (`useWorkerSession`): going to or from it remounts and subscribes again —
+  // one worker view is mounted at a time, so there is never a second lease or
+  // a second SSE.
   const executionId = content.executionId
   const onModeChange = (mode: ExecutionViewMode) => {
     if (!tabId) return
@@ -129,10 +134,17 @@ function ExecutionPaneWrapper({ pane, isActive, isFocusTarget = false }: PaneRen
   }
   // No owning tab (should not happen for a rendered pane) → nothing to swap
   // back into, so no take-back is offered.
+  const mode = viewModeOf(content)
+  if (mode === 'deck') {
+    return (
+      <WorkerDeckPane key={`deck:${hostId}:${executionId}`} hostId={hostId} executionId={executionId} isActive={isActive}
+        isFocusTarget={isFocusTarget} tabId={tabId ?? ''} paneId={pane.id} onModeChange={onModeChange} />
+    )
+  }
   return (
     <ExecutionView key={`${hostId}:${executionId}`} hostId={hostId} executionId={executionId} isActive={isActive}
       isFocusTarget={isFocusTarget} tabId={tabId ?? ''} paneId={pane.id} from={tabId ? content.from : undefined}
-      mode={viewModeOf(content)} onModeChange={onModeChange} />
+      mode={mode} onModeChange={onModeChange} />
   )
 }
 

@@ -2146,6 +2146,7 @@
   "room.info.archived": "已歸檔",
   "room.view.label": "顯示方式",
   "room.view.room": "指揮室",
+  "room.view.deck": "指揮台",
   "room.view.chat": "聊天",
   "chat.tools_used_one": "使用了 {{count}} 個工具",
   "chat.tools_used_other": "使用了 {{count}} 個工具",
