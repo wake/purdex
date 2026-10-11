@@ -30,9 +30,9 @@ export function QueuedMessages({ entries, onUndo, onResend, onDismiss }: Props) 
         if (e.state === 'undo' || e.state === 'waiting') {
           return (
             <div key={e.id} data-testid="queued-message" data-state={e.state} className="text-text-system">
-              <div className="text-xs">{e.state === 'waiting' ? t('deck.send.waiting') : t('deck.user.queued')}</div>
-              <div className="whitespace-pre-wrap break-words text-sm">{e.text}</div>
-              <button type="button" className="rounded px-0 text-xs underline-offset-2 hover:underline" onClick={() => onUndo(e.id)}>{t('deck.send.undo')}</button>
+              <div className="deck-t-down">{e.state === 'waiting' ? t('deck.send.waiting') : t('deck.user.queued')}</div>
+              <div className="whitespace-pre-wrap break-words deck-t-up">{e.text}</div>
+              <button type="button" className="rounded px-0 deck-t-down underline-offset-2 hover:underline" onClick={() => onUndo(e.id)}>{t('deck.send.undo')}</button>
             </div>
           )
         }
