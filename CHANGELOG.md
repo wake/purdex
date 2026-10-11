@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.722] - 2026-10-12
+
+> 只有 daemon 改動，mod 沒有改。這一版是跨主機授權的第一段，只做「被授權的那台主機」那一端；lead 主機和 App 那兩端還沒上，所以目前看不出差別。
+
+### Added：別台 lead 主機可以增減自己在這台的授權資料夾（跨主機授權 XR-1，#2732）
+
+- 新的 peer 路由 `POST /api/peers/team/roots-change`：已配對、而且這台已經對它開了「允許開 member」的 lead 主機，可以新增、移除或讀取自己在這台的授權資料夾。「允許開 member」這個開關本身仍然只能在這台切換。
+- 移除時，如果還有那台 lead 的 member 在這個資料夾裡跑，就拒絕（`roots_in_use`，附上 member）。重複送同一個請求，結果都一樣。
+- 新增的路徑在這台檢查：路徑要存在、要是資料夾，捷徑會解析成實際路徑，最多 16 個。只有真的有變動才寫入，版號才加一，並記一行 log。
+- `GET /api/peers/team/roots` 多回 `team_roots_rev`；這台主機回報的 capability 多一項 `roots_change`。
+- 跨主機 team 規格同步修訂：「同意只能收回」改成「`allow_team` 只能收回，在它之下 lead 主機可以增減自己的資料夾」（使用者 2026-10-12），並加註收斂式請求的例外。
+- 規格：`docs/specs/2026-10-12-host-roots-from-lead-spec-plan.md`。
+
 ## [1.0.0-alpha.721] - 2026-10-12
 
 > 只有 SPA 改動：daemon 只是為了版號重啟，mod 沒有改。Mac 按 dev update（或 dev server 的 HMR）就生效。
