@@ -17,12 +17,12 @@ import type { Session } from './host-api'
  * Unsorted) and activate it. `tmux-session` is never a singleton (`lib/pane-utils.ts`), so a second call adds a second
  * tab. A host hidden in this workbench opens nothing (plan H2d-2, §0.21 user rules 1 / 5) → `null`.
  */
-export function openSessionTab(hostId: string, session: Session): string | null {
+export function openSessionTab(hostId: string, session: Session, opts?: { quiet?: boolean }): string | null {
   // R11 (team interface): a session that is a MEMBER of a live team opens inside its lead's group (or switches to the tab
   // it already has); a lead and any other session open a new tab as always.
   const hit = currentTeamState().index.bySession.get(`${hostId}\u0000${session.name}`)
   if (hit && hit.role === 'member') {
-    const { outcome, tabId } = openTeamSeat(hit.key, hit.seat.session.session_id)
+    const { outcome, tabId } = openTeamSeat(hit.key, hit.seat.session.session_id, opts)
     // Whatever the team answered stands: a stale `session` the host no longer lists ('unlisted') opens no tab to nowhere.
     if (outcome !== 'unknown') return tabId
   }

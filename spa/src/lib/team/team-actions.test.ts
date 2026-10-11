@@ -1,6 +1,6 @@
 // spa/src/lib/team/team-actions.test.ts — what a click on a team surface does (spec R3, R8–R11, §4.5; plan TI-1b). Real
 // stores throughout.
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { act, renderHook } from '@testing-library/react'
 import { useTeamViews } from '../../hooks/useTeamViews'
 import { openTeamSeat, toggleTeamCollapse, visibleTabIds } from './team-actions'
@@ -12,6 +12,7 @@ import { currentTeamState } from './team-state'
 import { member } from './__tests__/team-fixture'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useUndoToast } from '../../stores/useUndoToast'
+import { isRefShownNow } from '../shown-hosts'
 import { useWorkspaceStore } from '../../features/workspace/store'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { usePaneFocusStore } from '../../stores/usePaneFocusStore'
@@ -123,10 +124,12 @@ describe('openTeamSeat', () => {
     expect(Object.keys(useTabStore.getState().tabs)).toEqual(['x'])
   })
 
-  it('a host hidden in this workbench opens nothing', () => {
+  it('a host hidden in this workbench opens nothing, and says so (never a silent click)', () => {
     seedScene({ members, tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }] })
     useShownHostsStore.setState({ ids: [] })
     expect(openTeamSeat(KEY, 'B')).toEqual({ outcome: 'hidden', tabId: null })
+    expect(useUndoToast.getState().toast?.message).toMatch(/hidden in this workbench/)
+    expect(useUndoToast.getState().toast?.actionLabel).toBe('Show and open')
   })
 
   it('an unknown team or seat is a no-op', () => {
@@ -207,6 +210,55 @@ describe('openTeamSeat — a member on another host (TI-2a)', () => {
     expect(wsTabs('w1')).toEqual(['lead', 'ma', r.tabId])
     expect(wsTabs('w2')).toEqual(['rTab'])
     expect(useTabStore.getState().activeTabId).toBe(r.tabId)
+  })
+
+  // c9d9c7-71: a member on another host, that host hidden in this workbench, no tab of its own: the click used to do nothing and say nothing
+  describe('the remote member\'s host is hidden in this workbench', () => {
+    const hide = () => { seedRemote(true); useShownHostsStore.setState({ ids: [HOST] }) }
+
+    it('opens nothing, and the toast names the host and offers to show it', () => {
+      hide()
+      const before = Object.keys(useTabStore.getState().tabs)
+      expect(openTeamSeat(KEY, 'R')).toEqual({ outcome: 'hidden', tabId: null })
+      expect(Object.keys(useTabStore.getState().tabs)).toEqual(before)
+      const toast = useUndoToast.getState().toast
+      expect(toast?.message).toBe('b26 is hidden in this workbench')
+      expect(toast?.actionLabel).toBe('Show and open')
+      expect(toast?.action).toBeTypeOf('function')
+    })
+
+    it('"Show and open" shows the host, reads its sessions and opens the seat', async () => {
+      hide()
+      const fetchHost = vi.fn(async () => {})
+      useSessionStore.setState({ fetchHost })
+      openTeamSeat(KEY, 'R')
+      useUndoToast.getState().toast!.action!()
+      await vi.waitFor(() => expect(Object.values(useTabStore.getState().tabs).some((t) => JSON.stringify(t.layout).includes('code-r-tm'))).toBe(true))
+      expect(fetchHost).toHaveBeenCalledWith('h2')
+      expect(isRefShownNow('h2')).toBe(true)
+    })
+
+    it('quiet (the approval dialog\'s goto): nothing opens and nothing is said', () => {
+      hide()
+      expect(openTeamSeat(KEY, 'R', { quiet: true })).toEqual({ outcome: 'hidden', tabId: null })
+      expect(useUndoToast.getState().toast).toBeNull()
+    })
+
+    it('when the host can no longer be shown the button says so again, without an action that cannot work', () => {
+      hide()
+      openTeamSeat(KEY, 'R')
+      useHostStore.setState({ hosts: {} as never })
+      useUndoToast.getState().toast!.action!()
+      expect(useUndoToast.getState().toast?.message).toMatch(/hidden in this workbench/)
+      expect(useUndoToast.getState().toast?.action).toBeUndefined()
+    })
+
+    it('shown again but its session is not listed yet: the old "not in the list" toast, not a silent click', () => {
+      seedRemote(true)
+      useSessionStore.setState({ sessions: { ...useSessionStore.getState().sessions, h2: [] } })
+      expect(openTeamSeat(KEY, 'R').outcome).toBe('unlisted')
+      expect(useUndoToast.getState().toast?.message).toMatch(/not in the host's session list/)
+    })
   })
 
   it('a remote seat with a mapped host opens its tab on that host, after the group\'s last tab in the lead\'s workspace', () => {
