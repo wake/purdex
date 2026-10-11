@@ -44,7 +44,8 @@ export interface ChatViewProps {
   /** Why the conversation cannot be read (D11); absent when it can. An empty conversation says 「還沒有內容」 by itself. */
   unreadable?: UnreadableReason
   onRetry?: () => void
-  onSwitchToTerminal: () => void
+  /** Absent for a worker (no terminal view). */
+  onSwitchToTerminal?: () => void
   /** Older turns exist on the daemon (absent: the caller does not page). */
   hasMoreBefore?: boolean
   /** An older page is being read. */

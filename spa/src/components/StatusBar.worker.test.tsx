@@ -83,7 +83,7 @@ describe('StatusBar worker bar', () => {
     const modes = screen.getByTestId('status-mode-buttons')
     expect(controls).toContainElement(modes)
     expect(modes.className).toContain('max-[500px]:hidden')
-    expect(screen.getByRole('button', { name: 'Worker room' }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: 'Deck' }).getAttribute('aria-pressed')).toBe('true')
     expect(controls.className).toContain('shrink-0')
     expect(screen.getByTestId('status-segments').className).toContain('min-w-0')
     expect(screen.getByTestId('status-copy-feedback')).toBeInTheDocument()

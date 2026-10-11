@@ -13,7 +13,7 @@
 // the same guarded write as the pane's view menu (`setExecutionPaneMode`), and Take to terminal calls the mounted
 // view's own handler (`take-to-terminal-registry`), with its running-turn confirm and busy guards.
 import type { Icon } from '@phosphor-icons/react'
-import { ArrowLeft, ArrowRight, ChatCircle, Robot, SquaresFour, TerminalWindow } from '@phosphor-icons/react'
+import { ArrowLeft, ArrowRight, ChatCircle, SquaresFour, TerminalWindow } from '@phosphor-icons/react'
 import { useConversationViewGate } from '../../hooks/useConversationViewGate'
 import { useHandoffGate } from '../../hooks/useHandoffCandidate'
 import { useTakeToTerminal } from '../../lib/nex/take-to-terminal-registry'
@@ -103,7 +103,6 @@ export function PaneModeButtons({ tabId, pane }: { tabId: string; pane: Pane }) 
       ? PRESSED
       : { kind: 'action', run: () => setExecutionPaneMode(tabId, pane.id, worker, mode) })
     group = [
-      { id: 'room', icon: Robot, label: 'status.mode.worker', state: switchTo('room'), toggle: true },
       { id: 'deck', icon: SquaresFour, label: 'status.mode.deck', state: switchTo('deck'), toggle: true },
       { id: 'chat', icon: ChatCircle, label: 'status.mode.chat', state: switchTo('chat'), toggle: true },
     ]

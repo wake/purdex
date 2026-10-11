@@ -7,20 +7,21 @@ import { useHostStore } from '../../stores/useHostStore'
 import { setExecutionPaneMode, viewModeOf, withViewMode } from './view-mode'
 
 describe('viewModeOf', () => {
-  it('reads an absent mode as room', () => {
-    expect(viewModeOf({ kind: 'execution', executionId: 'e1' })).toBe('room')
+  it('reads an absent mode as the deck (U4-5a: the interface has the deck and the chat)', () => {
+    expect(viewModeOf({ kind: 'execution', executionId: 'e1' })).toBe('deck')
     expect(viewModeOf({ kind: 'execution', executionId: 'e1', mode: 'chat' })).toBe('chat')
   })
 
-  it('knows the deck (指揮台, U4-1b); a build that predates it reads that same stored mode as room, like any unknown one', () => {
+  it('knows the deck (指揮台, U4-1b)', () => {
     expect(viewModeOf({ kind: 'execution', executionId: 'e1', mode: 'deck' })).toBe('deck')
     expect(withViewMode({ kind: 'execution', executionId: 'e1', host: 'h1' }, 'deck')).toEqual({ kind: 'execution', executionId: 'e1', host: 'h1', mode: 'deck' })
   })
 
-  it('reads an unknown mode as room', () => {
+  it('reads the retired room, and any mode this build does not know, as the deck', () => {
+    expect(viewModeOf({ kind: 'execution', executionId: 'e1', mode: 'room' })).toBe('deck')
     // an older or newer client may have written a mode this build does not know
     const content = { kind: 'execution', executionId: 'e1', mode: 'terminal' as unknown as ExecutionViewMode } satisfies ExecutionContent
-    expect(viewModeOf(content)).toBe('room')
+    expect(viewModeOf(content)).toBe('deck')
   })
 })
 

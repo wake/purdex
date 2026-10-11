@@ -23,7 +23,8 @@ interface Props {
   title: string
   isActive: boolean
   isFocusTarget: boolean
-  onSwitchToTerminal: () => void
+  /** Absent for a worker (no terminal view). */
+  onSwitchToTerminal?: () => void
   footer?: DeckViewProps['footer']
 }
 

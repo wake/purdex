@@ -2,7 +2,7 @@
 //
 // Renders TabContent → PaneLayoutRenderer → the REAL registered renderers (`registerBuiltinModules`):
 //   - tmux-session: SessionPaneContent → TerminalView (useTerminal, useTerminalWs and its reveal(), useActivationFocus);
-//   - execution: the execution pane wrapper → ExecutionView → WorkerInput;
+//   - execution: the execution pane wrapper → WorkerDeckPane → the deck's SessionInput;
 //   - editor: EditorPane → MonacoWrapper.
 // Only what sits below the focus logic is mocked: xterm (one Terminal per pane, each with its own `focus` spy),
 // `@monaco-editor/react` (one editor per instance, each with its own `focus` spy), the terminal socket
@@ -22,6 +22,8 @@ import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useExecutionStore } from '../stores/useExecutionStore'
+import { useConversationStore, type ConversationEntry } from '../stores/useConversationStore'
+import { emptyDoc } from '../lib/conversations/model'
 import { useHostConfigStore } from '../stores/useHostConfigStore'
 import { useEditorStore } from '../stores/useEditorStore'
 import { bufferKey } from '../lib/editor-buffer-key'
@@ -117,6 +119,13 @@ vi.mock('../lib/nex/client-id', () => ({ getNexClientId: () => 't-me000000' }))
 // --- fixtures ----------------------------------------------------------------------------------------------------
 
 const H = 'h'
+const readyEntry = (): ConversationEntry => ({
+  doc: { ...emptyDoc(), turns: [{ id: 't0', index: 0, started_at: 1, outcome: 'done', items: [{ type: 'user', id: 'u1', at: 1, index: 0, text: 'hello', source: 'user' }] }],
+    header: { status: 'idle', title: '', backend: 'execution' } as never },
+  status: 'live', reason: '', paging: false, subagents: {},
+})
+
+const setConversation = (e: ConversationEntry) => useConversationStore.setState({ byKey: { [`${H}\0sid-${EXEC}`]: e } } as never)
 const EXEC = 'exc_1'
 const EXEC2 = 'exc_2'
 const FILE = '/notes/a.txt'
@@ -172,7 +181,7 @@ async function firstData(): Promise<void> {
   await settle()
 }
 
-const workerBox = () => screen.getByTestId('execution-view').querySelector('textarea')!
+const workerBox = () => screen.getByTestId('session-view-deck').querySelector('textarea')!
 const monaco = () => {
   const live = leaves.editors.at(-1)
   expect(live).toBeDefined()
@@ -214,11 +223,15 @@ beforeEach(() => {
   useHostConfigStore.setState({ byHost: {}, ensureLoaded: async () => {} })
 
   useExecutionStore.setState({ executions: {} })
+  useConversationStore.setState({
+    byKey: Object.fromEntries([EXEC, EXEC2].map((id) => [`${H}\0sid-${id}`, readyEntry()])),
+    acquire: vi.fn(() => vi.fn()),
+  } as never)
   for (const id of [EXEC, EXEC2]) {
     useExecutionStore.getState().setSummary(H, id, {
       id, state: 'idle', provider: 'claude', principal_id: 'p', cwd: '/Users/w/repo', mount_kind: 'dev', brief: 'b',
       labels: {}, created_at: 0, updated_at: 0, duration_ms: null, event_count: 0, observers: 1, archived: false,
-      effective_profile: 'standard', turn_count: 0,
+      effective_profile: 'standard', turn_count: 0, session_id: `sid-${id}`,
     } as never)
     useExecutionStore.getState().setHistoryLoaded(H, id, true)
   }
@@ -399,30 +412,29 @@ describe('pane focus — first mount as the active tab (spec §8.3 path 2)', () 
     expect(monaco().focus).not.toHaveBeenCalled()
   })
 
-  // P5 review follow-up: the activation finds the reply box disabled while the history loads; its focus waits
-  // for the box to be usable, and is dropped if the user moved to another pane meanwhile.
-  it('worker + editor, no record, the history still loading → the reply box focuses once, when it has loaded', async () => {
-    useExecutionStore.getState().setHistoryLoaded(H, EXEC, false)
+  // P5 review follow-up: the activation finds no input while the conversation loads; its focus waits
+  // for the box to be there, and is dropped if the user moved to another pane meanwhile.
+  it('worker + editor, no record, the conversation still loading → the reply box focuses once, when it is there', async () => {
+    useConversationStore.setState({ byKey: {} } as never)
     show(TW)
     await settle()
-    expect(workerBox()).toHaveAttribute('aria-disabled', 'true')
-    expect(domFocusOn(workerBox())).toBe(0)
+    expect(screen.getByTestId('session-view-deck').querySelector('textarea')).toBeNull()
 
-    act(() => { useExecutionStore.getState().setHistoryLoaded(H, EXEC, true) })
+    act(() => { setConversation(readyEntry()) })
     await settle()
     expect(domFocusOn(workerBox())).toBe(1)
     expect(monaco().focus).not.toHaveBeenCalled()
   })
 
-  it('worker + editor, the history still loading, a pointerdown on the editor before it loads → no focus from any site', async () => {
-    useExecutionStore.getState().setHistoryLoaded(H, EXEC, false)
+  it('worker + editor, the conversation still loading, a pointerdown on the editor before it loads → no focus from any site', async () => {
+    useConversationStore.setState({ byKey: {} } as never)
     show(TW)
     await settle()
     fireEvent.pointerDown(screen.getByTestId('monaco-editor'))
     expect(usePaneFocusStore.getState().recent.tW?.[0]).toBe('editor')
     clearFocusCalls()
 
-    act(() => { useExecutionStore.getState().setHistoryLoaded(H, EXEC, true) })
+    act(() => { setConversation(readyEntry()) })
     await settle()
     expect(domFocusOn(workerBox())).toBe(0)
     expect(monaco().focus).not.toHaveBeenCalled()
@@ -460,7 +472,7 @@ describe('pane focus — click inside a visible tab (spec §8.3 path 3)', () => 
     fireEvent.pointerDown(screen.getByTestId('monaco-editor'))
     await settle()
     expect(usePaneFocusStore.getState().recent.tW?.[0]).toBe('editor')
-    fireEvent.pointerDown(screen.getByTestId('execution-view'))
+    fireEvent.pointerDown(screen.getByTestId('session-view-deck'))
     await settle()
     expect(usePaneFocusStore.getState().recent.tW?.[0]).toBe('worker')
 
@@ -471,33 +483,21 @@ describe('pane focus — click inside a visible tab (spec §8.3 path 3)', () => 
 
 // --- the worker's post-send refocus ------------------------------------------------------------------------------
 
-describe('pane focus — a worker send coming back (spec §8.3)', () => {
+// U4-5a: the old reply box (WorkerInput) locked itself while a send was in flight and took the focus back when it came back. The deck's input
+// never locks (a message waits in the send queue), so there is no focus to take back: a send's flags move no focus, whoever the target is.
+describe('pane focus — a worker send does not move the focus (spec §8.3)', () => {
   const sending = (v: boolean) => act(() => { useExecutionStore.getState().setPendingSend(H, EXEC, v); useExecutionStore.getState().setSendLocked(H, EXEC, v) })
 
-  it('the worker is not the target (the user moved to the editor) → its reply box does not take focus', async () => {
+  it('the worker is not the target (the user moved to the editor) → a send coming and going moves no focus', async () => {
     show(TW)
     await settle()
     fireEvent.pointerDown(screen.getByTestId('monaco-editor'))
     sending(true)
-    expect(workerBox()).toHaveAttribute('aria-disabled', 'true')
     clearFocusCalls()
 
     sending(false)
     await settle()
     expect(domFocusOn(workerBox())).toBe(0)
-    expect(monaco().focus).not.toHaveBeenCalled()
-  })
-
-  it('control: the worker is the target → its reply box takes focus back', async () => {
-    show(TW)
-    await settle()
-    fireEvent.pointerDown(screen.getByTestId('execution-view'))
-    sending(true)
-    clearFocusCalls()
-
-    sending(false)
-    await settle()
-    expect(domFocusOn(workerBox())).toBe(1)
     expect(monaco().focus).not.toHaveBeenCalled()
   })
 })
@@ -558,7 +558,7 @@ describe('pane focus — a notification click focuses the notified pane (#1840 r
   it('two workers, the tab on screen, typing in the first: a notification for the second → its reply box has the focus', async () => {
     mountShell('tWW')
     await settle()
-    const [box1, box2] = screen.getAllByTestId('execution-view').map((v) => v.querySelector('textarea')!)
+    const [box1, box2] = screen.getAllByTestId('session-view-deck').map((v) => v.querySelector('textarea')!)
     fireEvent.pointerDown(box1)
     act(() => box1.focus())
     clearFocusCalls()

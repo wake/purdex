@@ -20,7 +20,6 @@ import { BrowserPane } from '../../components/BrowserPane'
 import { BrowserNewTabSection } from '../../components/BrowserNewTabSection'
 import { MemoryMonitorPage } from '../../components/MemoryMonitorPage'
 import { HostPage } from '../../components/HostPage'
-import ExecutionView from '../../components/execution/ExecutionView'
 import WorkerDeckPane from '../../components/execution/WorkerDeckPane'
 import { resolveExecutionHostId } from '../nex/resolve-host'
 import { setExecutionPaneMode, viewModeOf } from '../nex/view-mode'
@@ -134,17 +133,12 @@ function ExecutionPaneWrapper({ pane, isActive, isFocusTarget = false }: PaneRen
   }
   // No owning tab (should not happen for a rendered pane) → nothing to swap
   // back into, so no take-back is offered.
+  // The deck and the chat are the one component on the one worker (U4-5a): a switch between them re-draws, it does not resubscribe.
   const mode = viewModeOf(content)
-  if (mode === 'deck') {
-    return (
-      <WorkerDeckPane key={`deck:${hostId}:${executionId}`} hostId={hostId} executionId={executionId} isActive={isActive}
-        isFocusTarget={isFocusTarget} tabId={tabId ?? ''} paneId={pane.id} from={tabId ? content.from : undefined} onModeChange={onModeChange} />
-    )
-  }
   return (
-    <ExecutionView key={`${hostId}:${executionId}`} hostId={hostId} executionId={executionId} isActive={isActive}
+    <WorkerDeckPane key={`deck:${hostId}:${executionId}`} hostId={hostId} executionId={executionId} isActive={isActive}
       isFocusTarget={isFocusTarget} tabId={tabId ?? ''} paneId={pane.id} from={tabId ? content.from : undefined}
-      mode={mode} onModeChange={onModeChange} />
+      view={mode === 'chat' ? 'chat' : 'deck'} onModeChange={onModeChange} />
   )
 }
 

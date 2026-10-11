@@ -37,6 +37,8 @@ interface Props {
   pendingInStream?: boolean
   /** Absent for a worker (no terminal view). */
   onSwitchToTerminal?: () => void
+  /** Why the box cannot take a message now (a worker's stream is gone): it is locked, and this is its placeholder. */
+  lockedReason?: string
 }
 
 const REFUSAL_KEY = { empty: 'deck.send.empty', too_long: 'deck.send.too_long', needs_terminal: 'deck.send.needs_terminal' } as const
@@ -82,7 +84,7 @@ function ChipThumb({ hostId, a, onRemove, removeLabel }: { hostId: string; a: At
   return <AttachmentThumb name={a.name} image={image} src={src} loading={remote.status === 'loading'} size={a.size} onRemove={onRemove} removeLabel={removeLabel} />
 }
 
-function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilities, asking, pendingInStream, onSwitchToTerminal }: Props) {
+function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilities, asking, pendingInStream, onSwitchToTerminal, lockedReason }: Props) {
   const t = useI18nStore((s) => s.t)
   const dKey = draftKey(paneKey, hostId, sessionId)
   // The back-end this input runs on: the adapter its pane bound to the key (a worker's), else a terminal session's (U4-2)
@@ -166,6 +168,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
   }
 
   const send = () => {
+    if (lockedReason) { setHint({ key: 'execution.input.disconnected', tone: 'warn' }); return }
     // a message sent while a file is still on its way would leave without it
     if (uploading.length > 0) { setHint({ key: 'deck.attach.busy', tone: 'warn' }); return }
     // the draft holds the short `[Image #N]`; what is sent is the marker the agent reads (the draft itself stays as it is until it is sent)
@@ -177,6 +180,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
     discardCleared(dKey)
     setChips([])
     change('')
+    box.current?.focus() // a click on Send left the focus on the button: the next keystroke goes on typing
   }
   // Messages the queue gave back (the Up key here, or an Undo wherever the held messages are drawn) land in the memories (draft-recall); read them again.
   useEffect(() => subscribeRecall(dKey, () => {
@@ -237,7 +241,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
               ref={box}
               value={draft}
               rows={1}
-              placeholder={t(asking ? 'deck.dock.input_placeholder' : 'deck.send.placeholder')}
+              placeholder={lockedReason ?? t(asking ? 'deck.dock.input_placeholder' : 'deck.send.placeholder')}
               onChange={(e) => change(e.target.value)}
               onPaste={(e) => {
                 // only files are taken over; a plain-text paste goes into the box as usual
@@ -280,7 +284,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
               </>
             )}
             <button type="button" aria-label={t('deck.send.interrupt')} title={t('deck.send.interrupt')} onClick={() => void interrupt()} className="flex h-8 w-8 items-center justify-center rounded text-text-muted hover:text-text-primary"><Stop size={18} /></button>
-            <button type="button" aria-label={t('deck.send.send')} title={t('deck.send.send')} onClick={send} className="flex h-8 w-8 items-center justify-center rounded text-accent hover:opacity-80"><PaperPlaneRight size={18} /></button>
+            <button type="button" aria-label={t('deck.send.send')} title={t('deck.send.send')} onClick={send} disabled={!!lockedReason} className="flex h-8 w-8 items-center justify-center rounded text-accent hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-40"><PaperPlaneRight size={18} /></button>
           </div>
           {canUndoClear && (
             <button type="button" data-testid="draft-cleared" onClick={restoreCleared} className="block w-full cursor-pointer px-3 pb-1 text-left deck-t-down text-text-muted hover:text-text-primary">
