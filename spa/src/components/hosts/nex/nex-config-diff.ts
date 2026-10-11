@@ -54,7 +54,7 @@ export function normalizeNexConfig(raw: Partial<NexConfig> | null | undefined): 
     path_prepend: r.path_prepend ?? [],
     claude_bin: r.claude_bin ?? '',
     enabled: r.enabled ?? false,
-    sandbox: { ...base.sandbox, ...(r.sandbox ?? {}), extra_profiles: r.sandbox?.extra_profiles ?? [] },
+    sandbox: { ...base.sandbox, ...(r.sandbox ?? {}), extra_profiles: Array.isArray(r.sandbox?.extra_profiles) ? [...new Set(r.sandbox.extra_profiles)] : [] },
     timeouts: { ...base.timeouts, ...(r.timeouts ?? {}) },
     peer: { ...base.peer, ...(r.peer ?? {}) },
   }

@@ -48,6 +48,11 @@ describe('extra sandbox profiles: what the form shows', () => {
     expect(confined().checked).toBe(false)
   })
 
+  it('a repeated name is shown once, and a non-array value reads as none', () => {
+    expect(normalizeNexConfig({ sandbox: { max_profile: '', default_profile: '', extra_profiles: ['sealed', 'sealed', 'confined'] } }).sandbox.extra_profiles).toEqual(['sealed', 'confined'])
+    expect(normalizeNexConfig({ sandbox: { max_profile: '', default_profile: '', extra_profiles: 'confined' as never } }).sandbox.extra_profiles).toEqual([])
+  })
+
   it('an opt-in profile is never an option of the max / default selects', () => {
     expect(SANDBOX_PROFILES.some((p) => (EXTRA_SANDBOX_PROFILES as readonly string[]).includes(p))).toBe(false)
     render(<NexConfigForm hostId="h" config={withExtra(['confined'])} info={info} onSaved={() => {}} />)

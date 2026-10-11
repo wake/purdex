@@ -1458,7 +1458,7 @@
   "hosts.nex.config.default_profile": "Default profile",
   "hosts.nex.config.extra_profiles": "Extra sandbox profiles (opt-in)",
   "hosts.nex.config.extra_profile.confined": "Stricter isolation: no git info, no skills / slash commands / plugin directories. Once on, it can be picked when a new tab starts a worker.",
-  "hosts.nex.config.extra_profile_unknown": "Not a profile this form knows; kept as is. Untick to remove it.",
+  "hosts.nex.config.extra_profile_unknown": "Not a profile this form knows; it is sent back as is, and the host may refuse to save it. Untick to remove it.",
   "hosts.nex.config.lease_ttl": "Lease TTL",
   "hosts.nex.config.interrupt": "Interrupt timeout",
   "hosts.nex.config.turn": "Turn timeout",
