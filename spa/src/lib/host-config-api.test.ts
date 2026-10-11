@@ -52,6 +52,17 @@ describe('fetchHostConfig', () => {
 })
 
 describe('putHostConfig', () => {
+  it('quick-replies: every item goes out as {id, title, content, text: content}', async () => {
+    const fetchMock = vi.fn(async () => json({ items: [], revision: 1 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await putHostConfig(H, 'quick-replies', [{ id: 'a', title: 'A', content: 'do a' }, { id: 'b', title: 'B', content: 'do b' }], 0)
+    const init = (fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]
+    expect(JSON.parse(init.body as string)).toEqual({
+      items: [{ id: 'a', title: 'A', content: 'do a', text: 'do a' }, { id: 'b', title: 'B', content: 'do b', text: 'do b' }],
+      baseRevision: 0,
+    })
+  })
+
   it('PUTs items + baseRevision and returns the stored copy', async () => {
     const fetchMock = vi.fn(async () => json({ items: [], revision: 4 }))
     vi.stubGlobal('fetch', fetchMock)
