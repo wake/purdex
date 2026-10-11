@@ -46,11 +46,11 @@ describe('system rows', () => {
 })
 
 describe('deck user block', () => {
-  it('the person: accent border, a firmer accent tint (12%), accent caption, primary text', () => {
+  it('the person: the sidebar active-workspace frame and tint (purple ring, 25%), primary caption and text', () => {
     render(<UserBlock item={user()} />)
     const box = screen.getByTestId('deck-user')
-    expect(box).toHaveClass('border', 'border-accent', 'bg-accent/12')
-    expect(screen.getByTestId('deck-user-caption')).toHaveClass('text-accent')
+    expect(box).toHaveClass('ring-1', 'ring-purple-400', 'bg-[#8b5cf6]/25')
+    expect(screen.getByTestId('deck-user-caption')).toHaveClass('text-text-primary')
     expect(box.querySelector('.text-text-primary')).not.toBeNull()
   })
 })
@@ -107,7 +107,9 @@ describe('the three voices are told apart (c9d9c7-52 pt 7)', () => {
 describe('a tool\'s command block (pt 6)', () => {
   it('is one step dimmer than before and comes back to full on hover, with a transition', () => {
     const src = read('StepViews.tsx')
-    expect(src).toMatch(/exec-command[^>]*text-neutral-300 transition-colors hover:text-neutral-100/)
+    expect(src).toMatch(/exec-command[^>]*text-neutral-400 transition-colors hover:text-neutral-200/)
+    expect(src).toMatch(/diff-body[^>]*opacity-60 transition-opacity hover:opacity-100 focus-within:opacity-100/)
+    expect(src).toMatch(/min-w-0 flex-1 truncate text-text-secondary/)
   })
 })
 

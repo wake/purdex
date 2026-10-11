@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { capDiff, formatClock, outputTail, readRange, stepChip, systemView, textOutput, toActivityDiff, userCaption } from './deck-format'
+import { capDiff, formatClock, outputTail, readRange, stepChip, stepDot, stepFailed, systemView, textOutput, toActivityDiff, userCaption } from './deck-format'
 import type { StepOutput } from './types'
 
 const out = (text: string, over: Partial<StepOutput> = {}): StepOutput => ({
@@ -111,7 +111,41 @@ describe('toActivityDiff', () => {
   })
 })
 
+describe('stepDot / stepFailed', () => {
+  it('running, ok, failed, muted', () => {
+    expect(stepDot({ status: 'running' })).toBe('running')
+    expect(stepDot({ status: 'done' })).toBe('ok')
+    expect(stepDot({ status: 'done', command: { text: 'x', exit_code: 0 } })).toBe('ok')
+    expect(stepDot({ status: 'failed' })).toBe('failed')
+    expect(stepDot({ status: 'done', command: { text: 'x', exit_code: 2 } })).toBe('failed')
+    expect(stepDot({ status: 'denied' })).toBe('muted')
+    expect(stepDot({ status: 'denied', denial: 'interrupted' })).toBe('muted')
+  })
+  it('any unknown or missing status is muted, never green', () => {
+    for (const status of [undefined, '', 'pending', 'weird'] as const) {
+      expect(stepDot({ status } as never)).toBe('muted')
+    }
+  })
+  it('any unknown or missing status is muted, never green', () => {
+    for (const status of [undefined, '', 'pending', 'weird']) {
+      expect(stepDot({ status } as never)).toBe('muted')
+    }
+  })
+  it('stepFailed is the same rule the red text uses', () => {
+    expect(stepFailed({ status: 'done', command: { text: 'x', exit_code: 1 } })).toBe(true)
+    expect(stepFailed({ status: 'failed' })).toBe(true)
+    expect(stepFailed({ status: 'done' })).toBe(false)
+    expect(stepFailed({ status: 'running' })).toBe(false)
+  })
+})
+
 describe('capDiff', () => {
+  it('takes a line limit', () => {
+    const h = { old_start: 1, old_lines: 5, new_start: 1, new_lines: 5, lines: ['+a', '+b', '+c', '+d', '+e'] }
+    const r = capDiff({ path: '/a', added: 5, removed: 0, exact: true, hunks: [h] }, 3)
+    expect(r.diff.hunks![0].lines).toEqual(['+a', '+b', '+c'])
+    expect(r).toMatchObject({ totalLines: 5, cut: true })
+  })
   const hunk = (n: number, start = 1) => ({ old_start: start, old_lines: n, new_start: start, new_lines: n, lines: Array.from({ length: n }, (_, i) => `+${start}:${i}`) })
   const diff = (hunks: ReturnType<typeof hunk>[], over: object = {}) => ({ path: '/a', added: 0, removed: 0, exact: true, hunks, ...over })
   it('cuts at 16 lines across hunks and reports the whole', () => {

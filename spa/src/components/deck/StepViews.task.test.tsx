@@ -1,7 +1,7 @@
 // An Agent/Task step in the deck (c9d9c7-54 pt 4): type, description, time and state on the line; the line opens the panel, the chevron
 // unfolds the agent's own steps in place (read on demand, kept by the conversation).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { FoldContext } from '../room/fold-context'
 import { usePaneFoldStore, forgetFolds } from '../../lib/conversations/fold-memory'
@@ -37,7 +37,8 @@ describe('the Agent step line', () => {
   it('a running one counts up from its start, once a second, with the running dot', () => {
     vi.useFakeTimers({ now: NOW })
     show(task({ status: 'running', duration_ms: undefined, started_at: NOW - 5_000 }))
-    expect(screen.getByTestId('step-running')).toBeInTheDocument()
+    expect(screen.getByTestId('step-dot')).toHaveAttribute('data-state', 'running')
+    expect(within(screen.getByTestId('status-slot')).queryByRole('img')).toBeNull()
     expect(screen.getByTestId('subagent-time').textContent).toBe('5s')
     act(() => { vi.advanceTimersByTime(3_000) })
     expect(screen.getByTestId('subagent-time').textContent).toBe('8s')

@@ -26,7 +26,7 @@ export function OutputFold({ foldKey, output, tone = 'normal', onShowAll }: Prop
   }
   return (
     <div data-testid="output-fold" className="text-xs">
-      <button type="button" data-testid="output-toggle" aria-expanded={open} onClick={toggle} className="cursor-pointer text-text-muted hover:text-text-primary">
+      <button type="button" data-testid="output-toggle" aria-expanded={open} onClick={toggle} className={`cursor-pointer ${tone === 'error' ? 'text-status-error' : 'text-text-muted hover:text-text-primary'}`}>
         {open ? '▾' : '▸'} {t('deck.output', { n: tail.totalLines })}
       </button>
       {open && (
