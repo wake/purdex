@@ -2174,7 +2174,6 @@
   "room.search.close": "關閉搜尋",
   "worker.exit.button": "退出",
   "worker.exit.confirm_title": "退出 worker？",
-  "worker.deck.permission_waiting": "Worker 正在等待許可，請切到指揮室回答",
   "worker.exit.confirm_running": "這一輪會被中斷。",
   "worker.exit.held_by": "被 {{principal}} 控制中，無法退出。",
   "worker.exit.failed": "退出失敗：{{reason}}",

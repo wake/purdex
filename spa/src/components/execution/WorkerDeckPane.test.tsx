@@ -10,6 +10,7 @@ import { clearAllUploads } from '../../lib/conversations/attachment-upload'
 import { clearAllAttachments } from '../../lib/conversations/attachment-memory'
 import { clearAllDrafts } from '../../lib/conversations/draft-memory'
 import { clearAllWorkerDrafts, readWorkerDraft } from '../../lib/nex/worker-draft-memory'
+import { clearAllPermissionCards } from '../../lib/nex/permission-card-memory'
 import WorkerDeckPane from './WorkerDeckPane'
 import { emptyDoc } from '../../lib/conversations/model'
 import { clearAllPanels } from '../../lib/conversations/panel-memory'
@@ -22,7 +23,7 @@ import * as api from '../../lib/nex/nex-api'
 import * as lease from '../../hooks/useExecutionLease'
 import { NexApiError } from '../../lib/nex/types'
 
-vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn(), listExecutions: vi.fn() }))
+vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn(), listExecutions: vi.fn(), answerPermission: vi.fn() }))
 vi.mock('../../hooks/useExecutionSubscription', () => ({ useExecutionSubscription: vi.fn(() => ({ problem: null, paused: false })) }))
 vi.mock('../../hooks/useExecutionLease', () => ({ useExecutionLease: vi.fn() }))
 
@@ -46,12 +47,13 @@ function seed(sum: Record<string, unknown>, loaded = true) {
 const realEnsure = useNexHostStore.getState().ensure
 
 beforeEach(() => {
-  cleanup(); clearAllPanels(); clearAllSendQueues(); clearAllAdapters(); clearAllWorkerLeases(); clearAllUploads(); clearAllAttachments(); clearAllDrafts(); clearAllWorkerDrafts()
+  cleanup(); clearAllPanels(); clearAllSendQueues(); clearAllAdapters(); clearAllWorkerLeases(); clearAllUploads(); clearAllAttachments(); clearAllDrafts(); clearAllWorkerDrafts(); clearAllPermissionCards()
   useExecutionStore.setState({ executions: {} })
   useNexHostStore.setState({ ensure: async () => {}, byHost: { [H]: { phase: 'ready', capabilities: {} } } } as never)
   useHostConfigStore.setState({ byHost: {}, ensureLoaded: async () => {} })
   vi.mocked(lease.useExecutionLease).mockReturnValue({ ensureLease: vi.fn(async () => 'lease-1'), release: vi.fn(), forget: vi.fn(), touch: vi.fn() } as never)
   vi.mocked(api.sendMessage).mockReset().mockResolvedValue({} as never)
+  vi.mocked(api.answerPermission).mockReset()
   vi.mocked(api.interruptExecution).mockReset().mockResolvedValue({} as never)
   vi.mocked(api.uploadWorkerFile).mockReset().mockImplementation(async (_h, _e, f) => ({ path: `/w/purdex/${f.name}`, name: f.name, size: 1 }) as never)
   acquire.mockClear()
@@ -112,17 +114,88 @@ describe('WorkerDeckPane', () => {
     expect(onModeChange).toHaveBeenCalledWith('room')
   })
 
-  it('a request the worker waits on is not shown here (U4-3), so the deck says so and offers the way to the room', () => {
+  // --- U4-3: the permission request is a dock card, in the place a question's is (above the input), answered through Nexen's permission channel ---
+  const ask = (id = 'req_a', seq = 1) => act(() => {
+    useExecutionStore.getState().applyEvents(H, E, [{ seq, execution_id: E, kind: 'permission.requested', payload: { request_id: id, turn_id: 'trn_1', tool_name: 'Bash', input: { command: 'rm -rf build' } }, created_at: seq }])
+  })
+
+  it('no request, no card (and no dock)', () => {
     seed(summary({ state: 'running' }))
-    const onModeChange = vi.fn()
-    render(ui({ onModeChange }))
-    expect(screen.queryByTestId('worker-deck-permission')).toBeNull()
+    render(ui())
+    expect(screen.queryByTestId('permission-card')).toBeNull()
+    expect(screen.queryByTestId('permission-dock')).toBeNull()
+  })
+
+  it('a request the worker waits on is a card in the dock: above the input, with the tool and what it wants to run; the input says to answer above', () => {
+    seed(summary({ state: 'running' }))
+    render(ui())
+    ask()
+    const dock = screen.getByTestId('permission-dock')
+    expect(within(dock).getByTestId('permission-card')).toBeInTheDocument()
+    expect(within(dock).getByTestId('permission-tool')).toHaveTextContent('Bash')
+    expect(within(dock).getByTestId('permission-input')).toHaveTextContent('rm -rf build')
+    expect(dock.compareDocumentPosition(screen.getByTestId('session-input')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy() // the input is below it
+    expect(screen.getByRole('textbox')).toHaveAttribute('placeholder', expect.stringContaining('answer above'))
+  })
+
+  it('allow answers through Nexen\'s permission channel under the lease, and the card goes', async () => {
+    vi.mocked(api.answerPermission).mockReset().mockResolvedValue({ request_id: 'req_a', outcome: 'allowed' } as never)
+    seed(summary({ state: 'running' }))
+    render(ui())
+    ask()
+    fireEvent.click(screen.getByTestId('permission-allow'))
+    await vi.waitFor(() => expect(api.answerPermission).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.answerPermission).mock.calls[0].slice(0, 4)).toEqual([H, E, 'req_a', { decision: 'allow', leaseId: 'lease-1' }])
+    await vi.waitFor(() => expect(screen.queryByTestId('permission-card')).toBeNull())
+  })
+
+  it('deny opens a note first, then sends it as the reason; the card goes', async () => {
+    vi.mocked(api.answerPermission).mockReset().mockResolvedValue({ request_id: 'req_a', outcome: 'denied' } as never)
+    seed(summary({ state: 'running' }))
+    render(ui())
+    ask()
+    fireEvent.click(screen.getByTestId('permission-deny'))
+    fireEvent.change(screen.getByTestId('permission-deny-note'), { target: { value: 'not in prod' } })
+    fireEvent.click(screen.getByTestId('permission-deny'))
+    await vi.waitFor(() => expect(api.answerPermission).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.answerPermission).mock.calls[0].slice(0, 4)).toEqual([H, E, 'req_a', { decision: 'deny', message: 'not in prod', leaseId: 'lease-1' }])
+    await vi.waitFor(() => expect(screen.queryByTestId('permission-card')).toBeNull())
+  })
+
+  it('another client answered first: the resolution closes the card here too (and no answer is sent from here)', () => {
+    seed(summary({ state: 'running' }))
+    render(ui())
+    ask()
+    expect(screen.getByTestId('permission-card')).toBeInTheDocument()
     act(() => {
-      useExecutionStore.getState().applyEvents(H, E, [{ seq: 1, execution_id: E, kind: 'permission.requested', payload: { request_id: 'req_a', turn_id: 'trn_1', tool_name: 'Bash', input: { command: 'ls' } }, created_at: 1 }])
+      useExecutionStore.getState().applyEvents(H, E, [{ seq: 2, execution_id: E, kind: 'permission.resolved', payload: { request_id: 'req_a', turn_id: 'trn_1', outcome: 'allowed' }, created_at: 2 }])
     })
-    expect(screen.getByTestId('worker-deck-permission')).toHaveTextContent('waiting for a permission answer')
-    fireEvent.click(screen.getByTestId('worker-deck-to-room'))
-    expect(onModeChange).toHaveBeenCalledWith('room')
+    expect(screen.queryByTestId('permission-card')).toBeNull()
+    expect(api.answerPermission).not.toHaveBeenCalled()
+  })
+
+  it('a request that expired leaves the muted line the room leaves', () => {
+    seed(summary({ state: 'running' }))
+    render(ui())
+    ask()
+    act(() => {
+      useExecutionStore.getState().applyEvents(H, E, [{ seq: 2, execution_id: E, kind: 'permission.resolved', payload: { request_id: 'req_a', turn_id: 'trn_1', outcome: 'expired', timeout_s: 300 }, created_at: 2 }])
+    })
+    expect(screen.queryByTestId('permission-card')).toBeNull()
+    expect(screen.getByTestId('permission-expired')).toBeInTheDocument()
+  })
+
+  it('the next request waiting shows after the first is answered (one card at a time, the earliest first)', async () => {
+    vi.mocked(api.answerPermission).mockReset().mockResolvedValue({ request_id: 'req_a', outcome: 'allowed' } as never)
+    seed(summary({ state: 'running' }))
+    render(ui())
+    ask('req_a', 1)
+    ask('req_b', 2)
+    expect(screen.getAllByTestId('permission-card')).toHaveLength(1)
+    fireEvent.click(screen.getByTestId('permission-allow'))
+    await vi.waitFor(() => expect(api.answerPermission).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(screen.getByTestId('permission-card')).toBeInTheDocument()) // req_b
+    expect(vi.mocked(api.answerPermission).mock.calls[0][2]).toBe('req_a')
   })
 
   it('a lease another principal holds is said, not swallowed', () => {
