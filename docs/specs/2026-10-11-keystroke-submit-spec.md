@@ -83,6 +83,11 @@ Claude Code's state); the residual risks of §5 are accepted by the user.
   (`409 pane_mismatch`) when that one pane is not the resolved owner's.
 - Trailing backslashes: Claude Code reads `\` + Enter as a newline, so text ending in an odd run of `\` gets one space appended.
 - Every non-2xx answer is `{outcome?, reason, error}` (`reason` = `error` = the code), so the apps parse one shape.
+- Keys mode sends text and Enter in one guarded `send-keys` (no half-typed text on a refusal). If Claude Code treats that one
+  write as a paste, the trailing Enter could become a newline: **verify on a real session (short and long text)** before K-2/K-3;
+  if it fails, split into text then Enter (losing the all-or-nothing property) and document it.
+- A replayed `client_msg_id` is answered from the ledger before the session is checked; ids are client UUIDs, so another session
+  reusing one is not expected (not bound to the session code).
 
 ## 6. Phases
 - K-1 daemon: `/submit` with lock, ledger, sanitise, guards, mod fill path, keys fallback; `/recall`. Tests with a fake mod and a
