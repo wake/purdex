@@ -6,7 +6,9 @@
 // Parsing is lenient: anything missing or malformed falls back to defaults,
 // and only the exact expected type is accepted per field.
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync,
+} from 'node:fs'
 import { dirname } from 'node:path'
 
 /** Minutes away from the computer before a push goes to the phone (PA-2). */
@@ -71,9 +73,40 @@ export function loadAppPrefs(path: string): AppPrefs {
   return parseAppPrefs(text)
 }
 
-export function saveAppPrefs(path: string, p: AppPrefs): void {
+/** The fs calls saveAppPrefs uses; injectable so a failing write can be tested. */
+export interface PrefsFs {
+  openSync: typeof openSync
+  writeSync: typeof writeSync
+  fsyncSync: typeof fsyncSync
+  closeSync: typeof closeSync
+  renameSync: typeof renameSync
+  unlinkSync: typeof unlinkSync
+}
+const REAL_FS: PrefsFs = { openSync, writeSync, fsyncSync, closeSync, renameSync, unlinkSync }
+
+/**
+ * Atomic save: write a unique temp file in the same directory, fsync, then rename over the
+ * target. On failure the temp file is removed and the error rethrown; the old file stays intact.
+ */
+export function saveAppPrefs(path: string, p: AppPrefs, fs: PrefsFs = REAL_FS): void {
   mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, serializeAppPrefs(p), 'utf8')
+  const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`
+  let fd: number | null = null
+  try {
+    fd = fs.openSync(tmp, 'wx', 0o600)
+    fs.writeSync(fd, serializeAppPrefs(p))
+    fs.fsyncSync(fd)
+    const done = fd
+    fd = null
+    fs.closeSync(done)
+    fs.renameSync(tmp, path)
+  } catch (err) {
+    if (fd !== null) {
+      try { fs.closeSync(fd) } catch { /* already failing */ }
+    }
+    try { fs.unlinkSync(tmp) } catch { /* temp may not exist */ }
+    throw err
+  }
 }
 
 /**

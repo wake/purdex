@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  closeSync, existsSync, fsyncSync, mkdtempSync, openSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync,
+  writeFileSync, writeSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   AWAY_MINUTES_OPTIONS, DEFAULT_APP_PREFS, ensureInstallId, loadAppPrefs, parseAppPrefs, saveAppPrefs, serializeAppPrefs,
-  type AppPrefs,
+  type AppPrefs, type PrefsFs,
 } from './app-prefs'
 
 const P = (over: Partial<AppPrefs> = {}): AppPrefs => ({ ...DEFAULT_APP_PREFS, ...over })
@@ -184,6 +187,43 @@ describe('installId', () => {
       const text = readFileSync(path, 'utf8')
       expect(text).not.toContain('secret')
       expect(Object.keys(JSON.parse(text)).sort()).toEqual(['installId', 'presenceAwayMinutes', 'showTray'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('saveAppPrefs atomicity', () => {
+  const real = { openSync, writeSync, fsyncSync, closeSync, renameSync, unlinkSync }
+  const failing = (which: keyof typeof real): PrefsFs => ({
+    ...real,
+    [which]: () => { throw new Error('disk full') },
+  })
+  for (const which of ['writeSync', 'fsyncSync', 'renameSync'] as const) {
+    it(`a failing ${which} leaves the previous file intact and no temp file`, () => {
+      const dir = mkdtempSync(join(tmpdir(), 'app-prefs-atomic-'))
+      try {
+        const path = join(dir, 'app-prefs.json')
+        saveAppPrefs(path, P({ showTray: false, installId: UUID }))
+        const before = readFileSync(path, 'utf8')
+        expect(() => saveAppPrefs(path, P({ showTray: true, installId: UUID }), failing(which))).toThrow('disk full')
+        expect(readFileSync(path, 'utf8')).toBe(before)
+        expect(loadAppPrefs(path).installId).toBe(UUID)
+        expect(loadAppPrefs(path).showTray).toBe(false)
+        expect(readdirSync(dir)).toEqual(['app-prefs.json'])
+      } finally {
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
+  }
+  it('a successful write leaves no temp files behind', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'app-prefs-atomic-'))
+    try {
+      const path = join(dir, 'app-prefs.json')
+      saveAppPrefs(path, P({ installId: UUID }))
+      saveAppPrefs(path, P({ installId: UUID, showTray: false }))
+      expect(readdirSync(dir)).toEqual(['app-prefs.json'])
+      expect(loadAppPrefs(path).showTray).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
