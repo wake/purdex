@@ -57,15 +57,15 @@ func (m *Module) Init(c *core.Core) error {
 // RegisterRoutes wires up all /api/hostconfig endpoints.
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/hostconfig", m.handleGet)
-	mux.HandleFunc("PUT /api/hostconfig/projects", m.putHandler(KeyProjects, func(raw []byte) (any, error) { return normalizeProjects(raw) }))
-	mux.HandleFunc("PUT /api/hostconfig/commands", m.putHandler(KeyCommands, func(raw []byte) (any, error) { return normalizeCommands(raw) }))
-	mux.HandleFunc("PUT /api/hostconfig/resume-templates", m.putHandler(KeyResumeTemplates, func(raw []byte) (any, error) { return normalizeResumeTemplates(raw) }))
-	mux.HandleFunc("PUT /api/hostconfig/quick-replies", m.putHandler(KeyQuickReplies, func(raw []byte) (any, error) { return normalizeQuickReplies(raw) }))
-	mux.HandleFunc("PUT /api/hostconfig/relay", m.putHandler(KeyRelay, func(raw []byte) (any, error) { return normalizeRelay(raw) }))
-	mux.HandleFunc("PUT /api/hostconfig/team", m.putHandler(KeyTeam, func(raw []byte) (any, error) { return normalizeTeam(raw) }))
-	mux.HandleFunc("PUT /api/hostconfig/relay_quota", m.putHandler(KeyRelayQuota, func(raw []byte) (any, error) { return normalizeRelayQuota(raw) }))
-	mux.HandleFunc("PUT /api/hostconfig/workbook", m.putHandler(KeyWorkbook, func(raw []byte) (any, error) { return normalizeWorkbook(raw) }))
-	mux.HandleFunc("PUT /api/hostconfig/resources", m.putHandler(KeyResources, func(raw []byte) (any, error) { return normalizeResources(raw) }))
+	mux.HandleFunc("PUT /api/hostconfig/projects", m.putHandler(KeyProjects, func(raw []byte, _ Entry) (any, error) { return normalizeProjects(raw) }))
+	mux.HandleFunc("PUT /api/hostconfig/commands", m.putHandler(KeyCommands, func(raw []byte, _ Entry) (any, error) { return normalizeCommands(raw) }))
+	mux.HandleFunc("PUT /api/hostconfig/resume-templates", m.putHandler(KeyResumeTemplates, func(raw []byte, _ Entry) (any, error) { return normalizeResumeTemplates(raw) }))
+	mux.HandleFunc("PUT /api/hostconfig/quick-replies", m.putHandler(KeyQuickReplies, func(raw []byte, cur Entry) (any, error) { return normalizeQuickReplies(raw, cur) }))
+	mux.HandleFunc("PUT /api/hostconfig/relay", m.putHandler(KeyRelay, func(raw []byte, _ Entry) (any, error) { return normalizeRelay(raw) }))
+	mux.HandleFunc("PUT /api/hostconfig/team", m.putHandler(KeyTeam, func(raw []byte, _ Entry) (any, error) { return normalizeTeam(raw) }))
+	mux.HandleFunc("PUT /api/hostconfig/relay_quota", m.putHandler(KeyRelayQuota, func(raw []byte, _ Entry) (any, error) { return normalizeRelayQuota(raw) }))
+	mux.HandleFunc("PUT /api/hostconfig/workbook", m.putHandler(KeyWorkbook, func(raw []byte, _ Entry) (any, error) { return normalizeWorkbook(raw) }))
+	mux.HandleFunc("PUT /api/hostconfig/resources", m.putHandler(KeyResources, func(raw []byte, _ Entry) (any, error) { return normalizeResources(raw) }))
 	mux.HandleFunc("POST /api/hostconfig/check-path", m.handleCheckPath)
 }
 

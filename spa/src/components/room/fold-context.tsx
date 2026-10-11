@@ -120,7 +120,7 @@ export function useFoldMemory(): FoldStore {
 
 /**
  * For a transcript: the pane's fold memory when one is provided above it
- * (ExecutionView holds it, so switching room ⇄ chat — which remounts the
+ * (WorkerDeckPane holds it, so switching deck ⇄ chat — which remounts the
  * transcript — keeps what was expanded), else a memory of its own, so a
  * transcript mounted by itself still folds. Both hooks run on every render
  * (rules of hooks); the unused own store is a couple of empty containers.

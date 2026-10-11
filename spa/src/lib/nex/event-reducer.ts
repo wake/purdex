@@ -7,7 +7,6 @@
 import { parseAttachmentMeta, type AttachmentMeta } from './attachments'
 import { isResultError } from './cost-summary'
 import type { PurdexPeerMessage, StreamMessage } from './message-types'
-import { defaultPreludeState, type PreludeState } from './prelude'
 import { finalizeBlock, type PartialAssembly } from './partial'
 import { applyPermissionEvent, isPermissionEventKind, settlePendingPermissions, type PermissionTable } from './permissions'
 import type { NexSseFrame } from './sse-parser'
@@ -94,16 +93,8 @@ export interface ExecutionState {
   pendingLocal: {
     text: string
     delivery: 'delivered' | 'queued' | null
-    /**
-     * Thumbnails of the native images this send carries (phase E). The
-     * object URLs belong to the optimistic line — the execution store
-     * revokes them on the write that drops this array (revokeDroppedPreviews),
-     * never a pane — and never to the chips they were sent from.
-     */
-    attachments?: { previewUrl: string; media_type: string }[]
   } | null
-  /** `attachmentIndex`: the offending image on Nexen's per-image attachment errors (contract §1.9). */
-  sendError: { code: string; message: string; turnId?: string; attachmentIndex?: number } | null
+  sendError: { code: string; message: string; turnId?: string } | null
   lastTurn: { turnId: string; delivery: 'delivered' | 'queued' } | null
   /** In-flight assistant message from transient frames; only applyTransientFrame / D-rules write it. */
   partial: PartialAssembly | null
@@ -138,8 +129,6 @@ export interface ExecutionState {
    * (nexen v0.13) and by `applyTasksSnapshot`; always `{}` on an older daemon.
    */
   tasks: TaskTable
-  /** The transcript before turn 1 (worker prelude spec §5.2). Its own slice: never read by the rules above. */
-  prelude: PreludeState
   /**
    * The permission requests a `handoff_ask` worker raised, keyed by request_id
    * (permission channel plan Task 8). Written only by the durable
@@ -178,7 +167,6 @@ export function defaultExecutionState(): ExecutionState {
     turnEnds: [],
     tools: {},
     tasks: {},
-    prelude: defaultPreludeState(),
     permissions: {},
     expiredNotice: null,
   }

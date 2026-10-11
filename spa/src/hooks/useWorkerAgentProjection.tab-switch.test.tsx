@@ -5,14 +5,14 @@
 // comes from the daemon whatever the panes do.
 //
 // Everything real but the network: the real TabContent (keepAliveCount 0, so the worker pane really unmounts), the
-// real ExecutionView and its live subscription, the real host list store with its site-wide stream, the worker
+// real worker pane (WorkerDeckPane) and its live subscription, the real host list store with its site-wide stream, the worker
 // projection, the notification dispatcher and the tab's display hook. Faked: the REST calls, the two SSE streams and
 // the list walk.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, renderHook, screen, fireEvent, cleanup, act } from '@testing-library/react'
+import { render, renderHook, screen, cleanup, act } from '@testing-library/react'
 import { useState } from 'react'
 import { TabContent } from '../components/TabContent'
-import ExecutionView from '../components/execution/ExecutionView'
+import WorkerDeckPane from '../components/execution/WorkerDeckPane'
 import { registerModule, clearModuleRegistry, type PaneRendererProps } from '../lib/module-registry'
 import { startWorkerAgentProjection } from './useWorkerAgentProjection'
 import { __resetDebounceStateForTests, useNotificationDispatcher } from './useNotificationDispatcher'
@@ -64,12 +64,12 @@ const summary = (over: Partial<ExecutionSummary> = {}): ExecutionSummary =>
     created_at: 0, updated_at: 100, duration_ms: null, event_count: 0, observers: 1, archived: false, effective_profile: 'handoff_ask',
     turn_count: 0, pending_permission: null, ...over }) as ExecutionSummary
 
-// The real pane wrapper owns the mode in the tab store; a local state stands in for it (as in ExecutionView.tab-switch).
+// The real pane wrapper owns the view in the tab store; a local state stands in for it.
 function ExecutionRenderer({ pane, isActive, isFocusTarget = false }: PaneRendererProps) {
-  const [mode, setMode] = useState<ExecutionViewMode>('room')
+  const [mode, setMode] = useState<ExecutionViewMode>('deck')
   if (pane.content.kind !== 'execution') return null
-  return <ExecutionView key={`${H}:${pane.content.executionId}`} hostId={H} executionId={pane.content.executionId} isActive={isActive}
-    isFocusTarget={isFocusTarget} tabId="t-exec" paneId={pane.id} mode={mode} onModeChange={setMode} />
+  return <WorkerDeckPane key={`${H}:${pane.content.executionId}`} hostId={H} executionId={pane.content.executionId} isActive={isActive}
+    isFocusTarget={isFocusTarget} tabId="t-exec" paneId={pane.id} view={mode === 'chat' ? 'chat' : 'deck'} onModeChange={setMode} />
 }
 const Other = () => <div data-testid="other-tab" />
 
@@ -139,14 +139,9 @@ function workerTab() {
 }
 
 const notices = () => showNotification.mock.calls.map((c) => c[0] as { eventName: string; sessionCode: string; body: string })
-const box = () => screen.getByRole('textbox') as HTMLTextAreaElement
-
-/** A send from the pane, and the pane's stream seeing its turn start. */
+/** The pane's turn starts: the pane's stream sees it accepted and running (what a send from the pane leads to; the send path itself is WorkerDeckPane's own tests). */
 async function send() {
-  fireEvent.change(box(), { target: { value: 'go' } })
-  fireEvent.keyDown(box(), { key: 'Enter' })
   await flush()
-  expect(api.sendMessage).toHaveBeenCalledTimes(1)
   paneSummary = summary({ state: 'running', turn_count: 1, updated_at: 200 })
   paneEvent('execution.message_accepted', { turn_id: 't1', text: 'go' })
   paneEvent('execution.running', { turn_id: 't1' })
@@ -233,7 +228,7 @@ describe('a worker tab switched away keeps its status and notifies (status from 
 
     switchTo(dashTab)
     // The pane really is gone.
-    expect(screen.queryByTestId('execution-view')).toBeNull()
+    expect(screen.queryByTestId('worker-deck-placeholder')).toBeNull()
     // The entry it leaves behind no longer claims a live stream.
     expect(useExecutionStore.getState().executions[executionKey(H, E)].sse).not.toBe('open')
 
@@ -290,7 +285,7 @@ describe('a worker tab switched away keeps its status and notifies (status from 
     await flush()
     paneStatus('open')
     await flush()
-    expect(screen.getByTestId('execution-view')).toBeInTheDocument()
+    expect(screen.getByTestId('worker-deck-placeholder')).toBeInTheDocument()
     expect(useExecutionStore.getState().executions[executionKey(H, E)].summary?.pending_permission).toBeNull()
     // The light is the host list's: still waiting until the list says otherwise.
     expect(workerTab()).toEqual({ light: 'waiting', hand: true })

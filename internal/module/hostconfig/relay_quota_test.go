@@ -43,7 +43,7 @@ func TestRelayQuota_IsStrict(t *testing.T) {
 // A stored value that does not read is an error (the team module treats it as off), never "on".
 func TestRelayQuota_AStoredGarbageValueIsAnErrorNotOn(t *testing.T) {
 	m := newTestModule(t)
-	_, _, err := m.store.Put(KeyRelayQuota, 0, func() (json.RawMessage, error) { return json.RawMessage(`{"rule":"on"}`), nil })
+	_, _, err := m.store.Put(KeyRelayQuota, 0, func(Entry) (json.RawMessage, error) { return json.RawMessage(`{"rule":"on"}`), nil })
 	require.NoError(t, err)
 	on, err := m.RelayQuotaRule()
 	assert.Error(t, err)

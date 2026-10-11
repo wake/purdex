@@ -251,7 +251,7 @@ describe('PaneModeButtons — an execution target in the deck', () => {
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target', { mode: 'galaxy' as never }))} />)
     expect(pressed()).toEqual(['Deck'])
     cleanup()
-    render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target', { mode: 'room' }))} />)
+    render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, exec('exc_target', { mode: 'room' as never }))} />)
     expect(pressed()).toEqual(['Deck'])
   })
 

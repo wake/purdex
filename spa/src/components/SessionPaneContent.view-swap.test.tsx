@@ -1,7 +1,7 @@
 // U3-1a (plan D1/D2): the view of a session pane (terminal / deck / chat) is swapped without unmounting the terminal, and
 // it is device-local state outside the component, so it survives the tab itself unmounting. The second half mounts the
 // real TabContent (the alive pool keeps no tab by default: keepAliveCount 0, and a session pane is not in the light
-// whitelist, so switching away really unmounts it — the same shape as ExecutionView.tab-switch.test.tsx).
+// whitelist, so switching away really unmounts it — the same shape as WorkerDeckPane.tab-switch tests).
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, cleanup, act } from '@testing-library/react'
 import { useEffect } from 'react'

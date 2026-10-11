@@ -1,6 +1,6 @@
 // Regression: the workbook view's own state (紀錄 / 待辦, the scroll of each, the finished groups the reader opened) must survive
 // switching to another tab and back. The alive pool keeps no tab by default (keepAliveCount 0), so the view really unmounts: this
-// mounts the real TabContent, not the view alone (pattern: components/execution/ExecutionView.tab-switch.test.tsx).
+// mounts the real TabContent, not the view alone (pattern: components/execution/WorkerDeckPane.tab-switch tests).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { TabContent } from '../TabContent'

@@ -230,7 +230,7 @@ export function recordN2ToolUseIn(tools: Record<string, ToolActivity>, p: Record
   return putIn(tools, id, next)
 }
 
-/** N1 on an execution's own tools; the prelude overlay uses `recordN2ToolUseIn` directly. */
+/** N1 on an execution's own tools. */
 export function recordN2ToolUse(s: ExecutionState, p: Record<string, unknown>, at: number): ExecutionState {
   const tools = recordN2ToolUseIn(s.tools, p, at)
   return tools === s.tools ? s : { ...s, tools }

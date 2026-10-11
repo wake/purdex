@@ -89,7 +89,7 @@ export function useWorkerEnded({ hostId, executionId, summary, tabId, paneId }: 
     setError(null)
     try {
       const result = await exitWorker({ hostId, executionId })
-      // As ExecutionView.runExit: patch at once, the SSE confirms later; this pane turns into "exited".
+      // As useWorkerHandoff.runExit: patch at once, the SSE confirms later; this pane turns into "exited".
       useExecutionStore.getState().applySummaryPatch(hostId, executionId, { state: result.state, archived: result.archived })
     } catch (err) {
       setError({ message: exitErrorMessage(err, t), from: 'exit' })

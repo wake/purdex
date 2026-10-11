@@ -11,7 +11,7 @@
 // worker-draft-memory: a reload starts fresh.
 //
 // Keyed `${hostId}:${executionId}:${requestId}`, so another request — of this
-// worker or of another — never inherits it. ExecutionView prunes an
+// worker or of another — never inherits it. WorkerDeckPane prunes an
 // execution's entries, drafts and closed marks by one rule: once their request
 // no longer waits there (resolved, cancelled, expired) or the worker has
 // ended, so neither can grow without bound. Closing drops the draft at once.

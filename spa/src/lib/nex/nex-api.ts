@@ -25,8 +25,6 @@ import {
 } from './types'
 import { parseTask } from './tasks'
 import { sanitizeSummaryRollup } from './validate-executions'
-import type { WireImageAttachment } from './worker-upload'
-import { sanitizePreludePage, type PreludePage } from './prelude-wire'
 
 const PREFIX = '/api/nex'
 
@@ -165,7 +163,7 @@ export async function fetchExecutionTasks(
   return { items, cursor }
 }
 
-/** `signal` aborts the request (a stint's enrichment walk whose pane is gone). */
+/** `signal` aborts the request. */
 export function fetchExecutionEvents(
   hostId: string,
   executionId: string,
@@ -175,35 +173,6 @@ export function fetchExecutionEvents(
   if (opts.limit) q.set('limit', String(opts.limit))
   const init = opts.signal ? { signal: opts.signal } : undefined
   return nexFetch(hostId, `${execPath(executionId, '/events')}?${q.toString()}`, init).then((r) => okJson<EventsPage>(r))
-}
-
-/**
- * One page of the worker prelude (spec §4.2), newest page first: no
- * `before` = the page ending at the execution's turn-1 boundary. A body that
- * is not a page is an error (`malformed_response`), never "no prelude".
- */
-export function fetchExecutionPrelude(
-  hostId: string,
-  executionId: string,
-  opts: { before?: string; limit?: number } = {},
-): Promise<PreludePage> {
-  const q = new URLSearchParams()
-  if (opts.before) q.set('before', opts.before)
-  if (opts.limit) q.set('limit', String(opts.limit))
-  const qs = q.toString()
-  return nexFetch(hostId, `${execPath(executionId, '/prelude')}${qs ? `?${qs}` : ''}`)
-    .then((r) => okJson<unknown>(r))
-    .catch((e) => {
-      // If the response was ok but JSON parse failed, it's a malformed page.
-      // HTTP errors (non-2xx) are already NexApiError from okJson → nexErrorFromResponse.
-      if (e instanceof SyntaxError) throw new NexApiError(0, 'malformed_response', 'malformed prelude page')
-      throw e
-    })
-    .then((body) => {
-      const page = sanitizePreludePage(body)
-      if (!page) throw new NexApiError(0, 'malformed_response', 'malformed prelude page')
-      return page
-    })
 }
 
 export function attachObserve(hostId: string, executionId: string): Promise<AttachObserveResponse> {
@@ -245,16 +214,8 @@ export function pinnedLeaseRelease(hostId: string): ((executionId: string, lease
   }
 }
 
-/**
- * `attachments` (nexen contract §1.9) go on the wire only when non-empty, so a
- * text-only send is byte-identical to phase D. Key order is what
- * `requestBytes` measures. The caller has already feature-detected (§0).
- */
-export function sendMessage(
-  hostId: string, executionId: string, leaseId: string, text: string, attachments?: readonly WireImageAttachment[],
-): Promise<SendResponse> {
-  const body = attachments && attachments.length > 0 ? { lease_id: leaseId, text, attachments } : { lease_id: leaseId, text }
-  return postJson(hostId, execPath(executionId, '/messages'), body).then((r) => okJson<SendResponse>(r))
+export function sendMessage(hostId: string, executionId: string, leaseId: string, text: string): Promise<SendResponse> {
+  return postJson(hostId, execPath(executionId, '/messages'), { lease_id: leaseId, text }).then((r) => okJson<SendResponse>(r))
 }
 
 export function interruptExecution(hostId: string, executionId: string, leaseId: string): Promise<InterruptResponse> {
@@ -304,42 +265,6 @@ export async function uploadWorkerFile(hostId: string, executionId: string, file
   const body = await okJson<Partial<WorkerUploadResult>>(res)
   if (typeof body.path !== 'string' || body.path === '') throw new NexApiError(res.status, 'bad_response', 'upload response has no path')
   return { path: body.path, name: typeof body.name === 'string' ? body.name : file.name, size: typeof body.size === 'number' ? body.size : file.size }
-}
-
-/**
- * The bytes of one image attachment (nexen contract §1.9, consumer-guide
- * §9.5), from the capability's `send.attachments.image.fetch` route with
- * `{id}` and `{sha256}` substituted (URL-encoded). The route's path is
- * origin-relative and already carries the public prefix (`/api/nex/v1/…`
- * when embedded in pdx), so it goes straight to `pinnedHostFetch` against
- * the daemon origin — never through `nexFetch`, which would prefix it again.
- * Anything but a GET on an origin-relative path is refused unsent
- * (`attachment_route_invalid`), as is a host this device lacks
- * (`host_removed`). Other failures reject like `uploadWorkerFile`'s: the
- * daemon's code (`attachment_not_found`, …) or `network` (an aborted
- * `signal` lands here too, via `AbortError` — Review Focus A1: it lets the
- * caller's concurrency slot free up the moment the request stops mattering,
- * rather than only once the network eventually settles on its own).
- */
-export async function fetchAttachment(
-  hostId: string, executionId: string, sha256: string, route: { method: string; path: string }, signal?: AbortSignal,
-): Promise<Blob> {
-  if (!useHostStore.getState().hosts[hostId]) throw new NexApiError(0, 'host_removed', 'host removed')
-  if (route.method.toUpperCase() !== 'GET' || !route.path.startsWith('/') || route.path.startsWith('//')) {
-    throw new NexApiError(0, 'attachment_route_invalid', `attachment route not usable: ${route.method} ${route.path}`)
-  }
-  const path = route.path
-    .replaceAll('{id}', () => encodeURIComponent(executionId))
-    .replaceAll('{sha256}', () => encodeURIComponent(sha256))
-  let res: Response
-  try {
-    res = await pinnedHostFetch(hostId, path, { method: 'GET', headers: { 'X-Pdx-Client': getNexClientId() }, signal })
-  } catch (e) {
-    if (!useHostStore.getState().hosts[hostId]) throw new NexApiError(0, 'host_removed', 'host removed')
-    throw new NexApiError(0, 'network', e instanceof Error ? e.message : String(e))
-  }
-  if (!res.ok) throw await nexErrorFromResponse(res)
-  return res.blob()
 }
 
 export interface PermissionAnswer {

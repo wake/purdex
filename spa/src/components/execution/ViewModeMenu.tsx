@@ -1,12 +1,9 @@
 // spa/src/components/execution/ViewModeMenu.tsx — the worker pane's "view"
-// menu (R2 plan T1.2): 指揮室 / 聊天 as radios, then 終端機 ("Take to
-// terminal") as an action — it swaps the pane for a terminal instead of
-// choosing a view of this worker. Controlled like `CostPanel` /
-// `WorkerInfoPanel`: `ExecutionHeader` owns the open flag and the trigger's
-// ref, so its anchor-lost effect can close this panel too. `ViewModeItems` is
-// the bare list, reused by the header's overflow panel.
+// menu: 指揮台 / 聊天 as radios, then 終端機 ("Take to terminal") as an action
+// — it swaps the pane for a terminal instead of choosing a view of this
+// worker. Controlled: the caller owns the open flag and the trigger's ref.
 import type { RefObject } from 'react'
-import { ChatsCircle, ListBullets, SquaresFour, Terminal } from '@phosphor-icons/react'
+import { ChatsCircle, SquaresFour, Terminal } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { FloatingPanel } from '../FloatingPanel'
@@ -16,7 +13,6 @@ const MENU_ITEM = 'flex items-center gap-2 w-full px-2 py-1 rounded text-left ho
 
 /** The views in menu order, with their icon and label key. */
 const VIEW_MODES: ReadonlyArray<{ mode: ExecutionViewMode; icon: Icon; labelKey: string }> = [
-  { mode: 'room', icon: ListBullets, labelKey: 'room.view.room' },
   { mode: 'deck', icon: SquaresFour, labelKey: 'room.view.deck' },
   { mode: 'chat', icon: ChatsCircle, labelKey: 'room.view.chat' },
 ]
@@ -35,8 +31,6 @@ export interface ViewModeItemsProps {
   /** Present when the execution can be taken to a terminal; absent → no terminal item. */
   onTakeBack?: () => void
   takeBackBusy?: boolean
-  /** The views offered, in menu order; absent → all of them. The worker pane offers the deck and the chat only (U4-5a). */
-  views?: readonly ExecutionViewMode[]
   /** Called after any item acts, so the surrounding panel can close. */
   onDone: () => void
   /**
@@ -48,11 +42,11 @@ export interface ViewModeItemsProps {
   inMenu?: boolean
 }
 
-export function ViewModeItems({ mode, views, onModeChange, onTakeBack, takeBackBusy = false, onDone, inMenu = false }: ViewModeItemsProps) {
+export function ViewModeItems({ mode, onModeChange, onTakeBack, takeBackBusy = false, onDone, inMenu = false }: ViewModeItemsProps) {
   const t = useI18nStore((s) => s.t)
   return (
     <>
-      {VIEW_MODES.filter((v) => !views || views.includes(v.mode)).map(({ mode: m, icon: ModeIcon, labelKey }) => (
+      {VIEW_MODES.map(({ mode: m, icon: ModeIcon, labelKey }) => (
         <button key={m} type="button"
           {...(inMenu ? { role: 'menuitemradio', 'aria-checked': mode === m } : { 'aria-pressed': mode === m })}
           data-testid={`view-mode-${m}`} disabled={!onModeChange}

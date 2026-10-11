@@ -9,7 +9,7 @@ import { create } from 'zustand'
 import { createNexHostEffects, type NexHostEntries } from '../lib/nex/nex-host-effects'
 import { hostFingerprint } from '../lib/nex/nex-host-reducer'
 import { useHostStore } from './useHostStore'
-import type { ImageAttachmentCaps, TranscriptPreludeCapability, WorkerRollupCapability } from '../lib/nex/types'
+import type { WorkerRollupCapability } from '../lib/nex/types'
 
 export { NEX_HOST_TTL_MS, type NexHostEntry, type NexHostPhase } from '../lib/nex/nex-host-reducer'
 
@@ -70,14 +70,6 @@ export function selectAskChatV1(hostId: string): (s: Pick<NexHostState, 'byHost'
   return (s) => s.byHost[hostId]?.daemonCapabilities?.includes('team.ask_chat.v1') === true
 }
 
-/** Nexen v0.17: every prelude item carries an integer `offset`. */
-export function selectPreludeItemOffset(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
-  return (s) => {
-    const entry = s.byHost[hostId]
-    return entry?.phase === 'ready' && entry.capabilities?.transcript_prelude?.item_offset === true
-  }
-}
-
 export function selectHandoffReady(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
   return (s) => {
     const entry = s.byHost[hostId]
@@ -133,21 +125,6 @@ export function selectWorkerRollup(hostId: string): (s: Pick<NexHostState, 'byHo
 }
 
 /**
- * `capabilities.transcript_prelude` of a ready host, or null (not ready, an
- * unknown host, or a daemon older than Nexen v0.16.0). Presence is the only
- * feature detect (worker prelude spec §4.5). Returns the cached object
- * itself, so it is a stable selector result.
- */
-export function selectTranscriptPrelude(hostId: string): (s: Pick<NexHostState, 'byHost'>) => TranscriptPreludeCapability | null {
-  return (s) => {
-    const entry = s.byHost[hostId]
-    if (entry?.phase !== 'ready' || !entry.capabilities) return null
-    const cap = entry.capabilities.transcript_prelude
-    return typeof cap === 'object' && cap !== null ? cap : null
-  }
-}
-
-/**
  * Whether the lists may show the rollup `cost_usd` (R4 T4.1). Only
  * `worker_rollup.cost_basis === "result_evidence"` (nexen v0.13.2+, the same
  * continuation rule as the pane's `costSummary`) is trusted; v0.13.1's
@@ -160,114 +137,6 @@ export function selectRollupCostShown(hostId: string): (s: Pick<NexHostState, 'b
 }
 
 /** A number the wire may hand us that we can actually use as a byte cap: finite and > 0. */
-function isUsableCap(n: unknown): n is number {
-  return typeof n === 'number' && Number.isFinite(n) && n > 0
-}
-
-/**
- * Cache of `selectImageAttachments`'s combined result, keyed on the `send`
- * capabilities object identity. A ready host's `capabilities` object (and
- * therefore its `send` sub-object) is only ever replaced wholesale by a
- * fresh fetch (see `nex-host-effects`), never mutated in place, so keying
- * on it gives a result that is referentially stable for as long as the
- * underlying capabilities are — required so
- * `useNexHostStore(selectImageAttachments(h, p))` does not re-render forever
- * under Zustand 5 + React 19's `useSyncExternalStore` (a fresh object every
- * call fails the `Object.is` snapshot check and loops). Old entries are
- * reclaimed by the GC once their `send` object is no longer referenced
- * (WeakMap), so no explicit invalidation is needed on `clearHost`/refetch.
- */
-const imageAttachmentsCache = new WeakMap<object, ImageAttachmentCaps & { maxRequestBytes: number }>()
-
-/**
- * `capabilities.send.attachments.image` of a ready host, gated on `provider`
- * (nexen contract §0/§1.9, fail-closed per §1.9 rules 1–2): null unless the
- * capability object exists AND its `providers` includes `provider` AND its
- * three byte/count caps are all usable numbers AND the sibling
- * `send.max_request_bytes` (shared with delegate) is itself a usable number
- * — missing, non-finite or ≤ 0 fails closed the same as the other caps, so
- * callers never have to separately null-check `maxRequestBytes`; images
- * simply fall back to the non-attachment path when the daemon can't state
- * a request budget.
- *
- * The success-path object is cached (see `imageAttachmentsCache`) so equal
- * calls against the same underlying capabilities return the same reference.
- */
-export function selectImageAttachments(
-  hostId: string,
-  provider: string,
-): (s: Pick<NexHostState, 'byHost'>) => (ImageAttachmentCaps & { maxRequestBytes: number }) | null {
-  return (s) => {
-    const entry = s.byHost[hostId]
-    if (entry?.phase !== 'ready' || !entry.capabilities) return null
-    const send = entry.capabilities.send
-    const image = send?.attachments?.image
-    if (typeof image !== 'object' || image === null) return null
-    if (!Array.isArray(image.providers) || !image.providers.includes(provider)) return null
-    if (!Array.isArray(image.media_types)) return null
-    if (typeof image.fetch !== 'object' || image.fetch === null
-      || typeof image.fetch.method !== 'string' || typeof image.fetch.path !== 'string') return null
-    if (!isUsableCap(image.max_bytes) || !isUsableCap(image.max_count) || !isUsableCap(image.max_total_bytes)) return null
-    if (!isUsableCap(send.max_request_bytes)) return null
-
-    const cached = imageAttachmentsCache.get(send)
-    if (cached) return cached
-
-    const result = {
-      media_types: image.media_types,
-      max_bytes: image.max_bytes,
-      max_count: image.max_count,
-      max_total_bytes: image.max_total_bytes,
-      providers: image.providers,
-      fetch: image.fetch,
-      maxRequestBytes: send.max_request_bytes,
-    }
-    imageAttachmentsCache.set(send, result)
-    return result
-  }
-}
-
-/**
- * Interns `selectAttachmentFetch`'s result by `method + '\n' + path`. A ready
- * host's `capabilities` object is replaced wholesale on every refetch (the
- * same 60s TTL `ensure`/`invalidate` cycle documented on
- * `imageAttachmentsCache` above), so the raw `send.attachments.image.fetch`
- * object gets a fresh identity each time even when its content is unchanged.
- * `AttachmentThumbs` keys a fetch/revoke effect on this selector's result, so
- * without interning, every capability refresh revoked and refetched every
- * visible thumbnail. A plain `Map` (not `WeakMap`) is correct here: the key
- * is a string, not an object, and the keyspace is bounded — realistically one
- * route for the life of the app, a handful across daemon versions.
- */
-const attachmentFetchInterned = new Map<string, { method: string; path: string }>()
-
-/**
- * `capabilities.send.attachments.image.fetch` of a ready host — the route a
- * replayed image attachment is fetched back from (nexen contract §1.9) — or
- * null (not ready, unknown host, an older daemon, a malformed route). Not
- * gated on `providers`: that list says who may *send* images now, while a
- * stored attachment stays fetchable whatever the host's runners are today.
- * Returns an interned object (see `attachmentFetchInterned`), so the result
- * is stable both within one capabilities snapshot and across a content-equal
- * refetch.
- */
-export function selectAttachmentFetch(hostId: string): (s: Pick<NexHostState, 'byHost'>) => { method: string; path: string } | null {
-  return (s) => {
-    const entry = s.byHost[hostId]
-    if (entry?.phase !== 'ready' || !entry.capabilities) return null
-    const route = entry.capabilities.send?.attachments?.image?.fetch
-    if (typeof route !== 'object' || route === null) return null
-    if (typeof route.method !== 'string' || typeof route.path !== 'string') return null
-    const key = `${route.method}\n${route.path}`
-    let interned = attachmentFetchInterned.get(key)
-    if (!interned) {
-      interned = { method: route.method, path: route.path }
-      attachmentFetchInterned.set(key, interned)
-    }
-    return interned
-  }
-}
-
 /**
  * Whether the top-level `capabilities.session_title` object exists (nexen
  * contract §0/§1.10) — the only feature detect for the execution summary's

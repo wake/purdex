@@ -16,6 +16,11 @@ import { AgentBubble, UserBubble } from './ChatBubbles'
 import { ConversationHostContext } from './conversation-host'
 import { PeerLine } from './ChatPeerLine'
 import { ChatHeader } from './ChatHeader'
+import { FindBar } from './FindBar'
+import { focusSessionInput } from './focus-input'
+import { closeFind, findKey, useFindState } from '../../lib/conversations/find-memory'
+import { chatUnits } from '../../lib/conversations/find-units'
+import type { SearchUnit } from '../../lib/nex/transcript-search'
 import { ChatWorkRow, FileChip } from './ChatWorkRow'
 import { SessionPanelSplit } from './SessionPanelSplit'
 import { SystemRow } from './ThinkingSystem'
@@ -92,6 +97,8 @@ export function ChatView(props: ChatViewProps) {
   return <ChatViewBody key={binding} binding={binding} {...props} />
 }
 
+const NO_UNITS: SearchUnit[] = []
+
 function ChatViewBody({ binding, paneKey, hostId, sessionId, title, status, queued, background, turns, unreadable, onRetry, onSwitchToTerminal, input, active, hasMoreBefore, paging, onLoadOlder, generation }: ChatViewProps & { binding: string }) {
   const t = useI18nStore((s) => s.t)
   const fold = usePaneFoldStore(`${paneKey}\0${binding}`)
@@ -102,7 +109,9 @@ function ChatViewBody({ binding, paneKey, hostId, sessionId, title, status, queu
   const latest = progress?.kind === 'work' ? progress.run.latest : undefined
 
   // Placed from the pane's memory on the first run (a remount), then follows growth only for a reader at the bottom.
-  const scroll = useTranscriptScroll(undefined, false, { paneId: chatScrollKey(paneKey, binding), view: 'chat' })
+  const findMemory = findKey(paneKey, sessionId ?? '')
+  const find = useFindState(findMemory)
+  const scroll = useTranscriptScroll(undefined, find.open, { paneId: chatScrollKey(paneKey, binding), view: 'chat' })
   const { attach, onScroll: onBoxScroll, follow, shiftBy } = scroll
   const liveOn = liveLine(turns, status) !== null
   // What waits to be read ends the stream: it coming and going moves the end like the live line does, so a reader at the bottom follows it.
@@ -116,6 +125,12 @@ function ChatViewBody({ binding, paneKey, hostId, sessionId, title, status, queu
   const load = useCallback(() => onLoadOlder?.(), [onLoadOlder])
   const older = useOlderTurns({ box: boxEl, hasMore: !!hasMoreBefore && !!onLoadOlder, paging: !!paging, firstTurn: turns[0]?.index ?? null, generation: generation ?? 0, placed: scroll.placed, load, shiftBy })
   const onScroll = (e: UIEvent<HTMLDivElement>) => { onBoxScroll(e); older.onScroll() }
+  // The search index exists only while the bar is open (#2665).
+  const findUnits = useMemo<SearchUnit[]>(() => (find.open ? chatUnits(turns) : NO_UNITS), [find.open, turns])
+  const closeBar = useCallback(() => {
+    closeFind(findMemory)
+    focusSessionInput(boxEl?.closest<HTMLElement>('[data-testid="session-view-chat"]') ?? null, { request: true })
+  }, [findMemory, boxEl])
 
   return (
     <ConversationHostContext.Provider value={hostId}>
@@ -131,6 +146,7 @@ function ChatViewBody({ binding, paneKey, hostId, sessionId, title, status, queu
         ) : (
           <SessionPanelSplit paneKey={paneKey} binding={binding} turns={turns} active={active}>
             <ChatHeader title={title} status={status} latest={latest} />
+            {find.open && <FindBar memoryKey={findMemory} owner={paneKey} container={boxEl} units={findUnits} fold={fold} onClose={closeBar} onJump={scroll.release} />}
             <div ref={setBox} onScroll={onScroll} data-testid="chat-scroll" aria-label={t('chat.transcript')} style={{ overflowAnchor: 'none' }} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
               <StatusOverlay>
                 {paging && <div data-testid="chat-paging">{t('deck.paging')}</div>}

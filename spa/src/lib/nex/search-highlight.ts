@@ -96,7 +96,10 @@ function occurrences(el: Element, pattern: RegExp, count: number): Range[] {
   const nodes: Text[] = []
   const starts: number[] = []
   let text = ''
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+  // Text under `[data-search-skip]` is drawn but not indexed (a thumbnail's file name when the picture cannot be read).
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => (n.parentElement?.closest('[data-search-skip]') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
+  })
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
     const t = n as Text
     nodes.push(t)

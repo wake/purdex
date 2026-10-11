@@ -205,7 +205,7 @@ describe('usePermissionAnswer', () => {
     expect(isPermissionCardClosed(permissionCardKey(H, E, 'req_a'))).toBe(true)
   })
 
-  // The stream may outrun the HTTP reply: ExecutionView's prune has already run, nothing would drop a late mark.
+  // The stream may outrun the HTTP reply: WorkerDeckPane's prune has already run, nothing would drop a late mark.
   it.each([
     ['answered', () => vi.mocked(api.answerPermission).mockImplementationOnce(async () => {
       stream(H, E, 'permission.resolved', { request_id: 'req_a', turn_id: 't', outcome: 'allowed' })

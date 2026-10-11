@@ -141,16 +141,6 @@ export interface WorkerRollupCapability {
   subagent_cost: boolean
 }
 
-/** `capabilities.transcript_prelude` (worker prelude spec §4.5). Presence is the only feature detect. */
-export interface TranscriptPreludeCapability {
-  route: { method: string; path: string }
-  page_max_items: number
-  page_max_bytes: number
-  max_block_bytes: number
-  /** Nexen v0.17: prelude items carry an integer `offset`. Check by key presence. */
-  item_offset?: boolean
-}
-
 export interface NexEvent {
   seq: number
   execution_id: string
@@ -229,28 +219,6 @@ export interface PermissionResolvedPayload {
   timeout_s?: number
 }
 
-/**
- * `capabilities.send.attachments.image` (nexen contract §0/§1.9). The whole
- * object being absent = this daemon does not accept images; presence plus
- * `providers` including the execution's `provider` is the ONLY feature
- * detect (never a version compare). Numbers are the daemon's actual caps —
- * a client must never hard-code them.
- */
-export interface ImageAttachmentCaps {
-  /** Accepted `media_type`s; anything else → 400 `attachment_type_unsupported`. */
-  media_types: string[]
-  /** Per-image **decoded** byte cap (not the base64 length); over → 400 `attachment_too_large`. */
-  max_bytes: number
-  /** Max images in one message; over → 400 `too_many_attachments`. */
-  max_count: number
-  /** Sum of all images' **decoded** bytes in one message; over → 400 `attachments_too_large`. */
-  max_total_bytes: number
-  /** Providers this host currently has a runner for AND that support image input. */
-  providers: string[]
-  /** Route to fetch the original image back; `path` is origin-relative and already carries `PublicPrefix`. */
-  fetch: { method: string; path: string }
-}
-
 export interface NexCapabilities {
   phase: string
   host_id: string
@@ -278,8 +246,6 @@ export interface NexCapabilities {
      * Absent on a daemon older than 2026-09-28.
      */
     max_request_bytes?: number
-    /** Absent object, or `image` absent inside it, ⇒ this daemon does not accept images (fail-closed). */
-    attachments?: { image?: ImageAttachmentCaps }
   }
   brief?: { max_bytes: number }
   origin?: { max_bytes: number }
@@ -321,8 +287,6 @@ export interface NexCapabilities {
    * summaries (nexen v0.13, contract §0 `worker_rollup`).
    */
   worker_rollup?: WorkerRollupCapability
-  /** Presence = `GET /v1/executions/{id}/prelude` exists (worker prelude spec §4). */
-  transcript_prelude?: TranscriptPreludeCapability
   /** Presence = the permission channel exists in this build (nexen contract §1.14). */
   permissions?: PermissionsCapability
   /**
