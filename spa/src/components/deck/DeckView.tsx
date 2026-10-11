@@ -142,7 +142,7 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
 
   const items = useMemo(() => doc.turns.flatMap((turn) => turn.items), [doc.turns])
   // The search index exists only while the bar is open (#2665).
-  const findUnits = useMemo<SearchUnit[]>(() => (find.open ? deckUnits(doc.turns, EAGER_TURNS) : NO_UNITS), [find.open, doc.turns])
+  const findUnits = useMemo<SearchUnit[]>(() => (find.open ? deckUnits(doc.turns, EAGER_TURNS, entry.subagents) : NO_UNITS), [find.open, doc.turns, entry.subagents])
   const closeBar = useCallback(() => {
     closeFind(findMemory)
     focusSessionInput(boxEl?.closest<HTMLElement>('[data-testid="session-view-deck"]') ?? null, { request: true })

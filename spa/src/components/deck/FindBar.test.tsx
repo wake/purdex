@@ -132,6 +132,49 @@ describe.each([
   })
 })
 
+describe('the deck: what hides behind a fold', () => {
+  const output = { text: 'alpha\nneedle row\nomega', total_lines: 3, total_bytes: 1, truncated: false }
+  const run = { ...(exec('e0', 'ls') as object), output } as ConversationItem
+
+  it('a hit in a folded output opens the fold and marks the word in it', () => {
+    render(<DeckPane {...base} conversation={conv([turn(0, [run])])} />)
+    expect(screen.queryByTestId('output-body')).toBeNull()
+    fireEvent.keyDown(screen.getByTestId('session-view-deck'), findKeys())
+    type('needle')
+    expect(count()).toBe('1 / 1')
+    expect(screen.getByTestId('output-body')).toBeInTheDocument()
+    expect(marked('search-current')).toEqual(['needle'])
+  })
+
+  it('a hit in a loaded subagent\'s folded steps opens the task line, then the output', () => {
+    const task = { type: 'step', id: 'k1', at: 1, index: 1, kind: 'task', tool: 'Task', status: 'done', summary: 'dig', started_at: 1, input: null, subagent: { agent_id: 'ag', description: 'dig' } } as ConversationItem
+    const e = entry([turn(0, [task])])
+    e.subagents = { ag: { state: 'ready', answer: { items: [{ ...(run as object), id: 'c1' }] } } } as never
+    render(<DeckPane {...base} conversation={{ state: 'ready', hostId: 'h', sessionId: 's', entry: e }} />)
+    fireEvent.keyDown(screen.getByTestId('session-view-deck'), findKeys())
+    type('needle')
+    expect(count()).toBe('1 / 1')
+    expect(screen.getByTestId('subagent-steps')).toBeInTheDocument()
+    expect(screen.getByTestId('output-body')).toBeInTheDocument()
+    expect(marked('search-current')).toEqual(['needle'])
+  })
+
+  it('the marks come back by themselves when React replaces the text under them (a late redraw)', async () => {
+    render(<DeckPane {...base} conversation={conv(THREE)} />)
+    fireEvent.keyDown(screen.getByTestId('session-view-deck'), findKeys())
+    type('needle')
+    const before = highlights.get('search-current')!.ranges[0]
+    const unit = document.querySelector('[data-search-unit="u:u0"]') as HTMLElement
+    await act(async () => {
+      unit.textContent = 'the needle is here' // replaces the text node: the old Range collapses
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+    })
+    const after = highlights.get('search-current')!.ranges[0]
+    expect(after).not.toBe(before)
+    expect(after.toString()).toBe('needle')
+  })
+})
+
 describe('a ⌘F from the right panel is the panel\'s', () => {
   it('is not taken (the stream may be inert behind a modal panel)', () => {
     render(<DeckPane {...base} conversation={conv(THREE)} />)

@@ -110,6 +110,25 @@ export function FindBar({ memoryKey, owner, container, units, fold, onClose, onJ
 
   useLayoutEffect(() => () => clearSearchHighlights(owner), [owner])
 
+  // The DOM changes under the marks without any of the above changing: a far turn swaps to its real markdown as the reader nears it, a
+  // thumbnail settles, a streaming reply grows. React replaces the text nodes, the Ranges collapse — so mark again (without scrolling).
+  const latest = useRef({ query, matches, current, searching })
+  useLayoutEffect(() => { latest.current = { query, matches, current, searching } })
+  useEffect(() => {
+    if (!container || typeof MutationObserver === 'undefined') return
+    let frame = 0
+    const observer = new MutationObserver(() => {
+      if (frame) return
+      frame = requestAnimationFrame(() => {
+        frame = 0
+        const l = latest.current
+        if (l.searching && container.isConnected) highlightSearch(owner, container, l.query, l.matches, l.current, { scroll: false })
+      })
+    })
+    observer.observe(container, { childList: true, subtree: true, characterData: true })
+    return () => { observer.disconnect(); if (frame) cancelAnimationFrame(frame) }
+  }, [container, owner])
+
   // A query refining one that had a match stays on it (or the next one); a new search starts at the first match at or below the top of the
   // viewport, else wraps to the first, like a browser's find.
   const onChange = (value: string) => {

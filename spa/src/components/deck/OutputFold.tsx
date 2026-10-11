@@ -32,7 +32,7 @@ export function OutputFold({ foldKey, output, tone = 'normal', onShowAll }: Prop
       {open && (
         <div className="mt-1">
           {tail.cut && <div data-testid="output-cut" className="text-text-muted italic">{t('deck.output.cut')}</div>}
-          <pre data-testid="output-body" className={`max-h-72 overflow-auto whitespace-pre-wrap break-all ${tone === 'error' ? 'text-status-error' : 'text-text-secondary'}`}>{tail.text}</pre>
+          <pre data-testid="output-body" data-search-unit={foldKey} className={`max-h-72 overflow-auto whitespace-pre-wrap break-all ${tone === 'error' ? 'text-status-error' : 'text-text-secondary'}`}>{tail.text}</pre>
           {onShowAll && tail.cut && (
             <button type="button" data-testid="output-show-all" onClick={onShowAll} className="mt-1 cursor-pointer text-text-muted hover:text-text-primary">
               {t('deck.output.show_all')}
