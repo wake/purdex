@@ -373,14 +373,14 @@ func TestClaimFrameEnd_NewerRunTookTheFrameAfterTheSnapshot(t *testing.T) {
 		t.Fatalf("UpdateSessionIdentity: %v", err)
 	}
 	exit := exitForFrame(snapshot, exitTestInstance, ExitReasonSessionEnd, 1)
-	got, claimed, err := m.claimFrameEnd(snapshot, "S-old", exit)
+	got, claimed, err := m.claimFrameEnd(snapshot, "S-old", exit, nil)
 	if err != nil || claimed || got != nil {
 		t.Fatalf("claimFrameEnd = (%v, %v, %v), want no claim", got, claimed, err)
 	}
 	if frames, _ := m.frames.ListByPane("%5"); len(frames) != 1 {
 		t.Fatalf("the newer run's frame was deleted: %+v", frames)
 	}
-	if got, claimed, err := m.claimFrameEnd(snapshot, "S-new", exit); err != nil || !claimed || got != exit {
+	if got, claimed, err := m.claimFrameEnd(snapshot, "S-new", exit, nil); err != nil || !claimed || got != exit {
 		t.Fatalf("the current run's end = (%v, %v, %v), want claimed with the exit", got, claimed, err)
 	}
 }
@@ -505,7 +505,7 @@ func TestExit_LostClaim_LeavesProxyRefsUntouched(t *testing.T) {
 	parent := seedFrameWithSubagents(t, m, "%5", "cc", 100, "t100", 10, []agentpkg.SubagentRef{ref})
 	seedRootWithIdentity(t, m, "%5", "codex", 200, "t200", "S1") // the partial state: own frame + a ref on the parent
 	orig := claimDeleteFn
-	claimDeleteFn = func(*Module, string, string) (bool, error) { return false, nil } // someone else won
+	claimDeleteFn = func(*Module, string, string, *store.RunEnd) (bool, error) { return false, nil } // someone else won
 	t.Cleanup(func() { claimDeleteFn = orig })
 
 	req := EventRequest{

@@ -105,6 +105,12 @@ func migrateFramesDB(db *sql.DB) error {
 	if err := addFrameIdentityColumns(db); err != nil {
 		return err
 	}
+	if err := addFrameRootColumns(db); err != nil {
+		return err
+	}
+	if err := migrateLastRunTable(db); err != nil {
+		return err
+	}
 	return clearStaleSubagentsJSON(db)
 }
 
@@ -249,6 +255,9 @@ func (s *FramesStore) Upsert(frame Frame) (Frame, error) {
 	if err != nil {
 		return Frame{}, fmt.Errorf("marshal subagents: %w", err)
 	}
+	// is_root is the same: fixed by the INSERT (no parent at creation) and never in the DO UPDATE SET list —
+	// the parent link is nullable and ON DELETE SET NULL clears it when the parent ends first, so it cannot say
+	// later whether this frame was a child (NA-0a, no-agent launch panel spec §2.1).
 	// session_id / cwd are in the INSERT column list but deliberately NOT in
 	// the DO UPDATE SET list: an existing row keeps the identity it already
 	// learnt, and only UpdateSessionIdentity may change it afterwards. The
@@ -258,12 +267,13 @@ func (s *FramesStore) Upsert(frame Frame) (Frame, error) {
 		INSERT INTO agent_frames (
 			frame_id, pane_id, agent_type, pid, ppid, process_start_time,
 			parent_frame_id, subagents_json, status, started_at, last_seen_at, verified,
-			session_id, cwd
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			session_id, cwd, is_root
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(pane_id, pid, process_start_time) DO UPDATE SET
 			agent_type = excluded.agent_type,
 			ppid = excluded.ppid,
 			parent_frame_id = excluded.parent_frame_id,
+			is_root = CASE WHEN excluded.parent_frame_id IS NOT NULL AND excluded.parent_frame_id <> '' THEN 0 ELSE is_root END,
 			subagents_json = excluded.subagents_json,
 			status = excluded.status,
 			started_at = excluded.started_at,
@@ -271,7 +281,7 @@ func (s *FramesStore) Upsert(frame Frame) (Frame, error) {
 			verified = excluded.verified
 	`, frame.FrameID, frame.PaneID, frame.AgentType, frame.PID, frame.PPID, frame.ProcessStartTime,
 		nullString(frame.ParentFrameID), string(subagentsJSON), string(frame.Status), frame.StartedAt, frame.LastSeenAt, boolToInt(frame.Verified),
-		frame.SessionID, frame.Cwd)
+		frame.SessionID, frame.Cwd, boolToInt(frame.ParentFrameID == ""))
 	if err != nil {
 		return Frame{}, err
 	}
@@ -570,11 +580,12 @@ func (s *FramesStore) UpdateHookPath(frame Frame) error {
 			agent_type = ?,
 			ppid = ?,
 			parent_frame_id = ?,
+			is_root = CASE WHEN ? <> '' THEN 0 ELSE is_root END,
 			status = ?,
 			last_seen_at = ?,
 			verified = ?
 		WHERE frame_id = ?
-	`, frame.AgentType, frame.PPID, nullString(frame.ParentFrameID),
+	`, frame.AgentType, frame.PPID, nullString(frame.ParentFrameID), frame.ParentFrameID,
 		string(frame.Status), frame.LastSeenAt, boolToInt(frame.Verified), frame.FrameID)
 	if err != nil {
 		return err
@@ -602,12 +613,13 @@ func (s *FramesStore) UpdateHookPathAndResetSubagents(frame Frame) error {
 			agent_type = ?,
 			ppid = ?,
 			parent_frame_id = ?,
+			is_root = CASE WHEN ? <> '' THEN 0 ELSE is_root END,
 			subagents_json = '[]',
 			status = ?,
 			last_seen_at = ?,
 			verified = ?
 		WHERE frame_id = ?
-	`, frame.AgentType, frame.PPID, nullString(frame.ParentFrameID),
+	`, frame.AgentType, frame.PPID, nullString(frame.ParentFrameID), frame.ParentFrameID,
 		string(frame.Status), frame.LastSeenAt, boolToInt(frame.Verified), frame.FrameID)
 	if err != nil {
 		return err
@@ -647,13 +659,14 @@ func (s *FramesStore) UpsertIfUnchanged(frame Frame, expectedLastSeenAt int64) (
 			agent_type = ?,
 			ppid = ?,
 			parent_frame_id = ?,
+			is_root = CASE WHEN ? <> '' THEN 0 ELSE is_root END,
 			subagents_json = ?,
 			status = ?,
 			started_at = ?,
 			last_seen_at = ?,
 			verified = ?
 		WHERE frame_id = ? AND last_seen_at = ?
-	`, frame.AgentType, frame.PPID, nullString(frame.ParentFrameID),
+	`, frame.AgentType, frame.PPID, nullString(frame.ParentFrameID), frame.ParentFrameID,
 		string(subagentsJSON), string(frame.Status), frame.StartedAt, frame.LastSeenAt,
 		boolToInt(frame.Verified), frame.FrameID, expectedLastSeenAt)
 	if err != nil {

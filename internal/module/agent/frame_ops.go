@@ -271,7 +271,10 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 			if exit != nil {
 				exit.SessionID = payloadSID
 			}
-			exit, claimed, cerr := m.claimFrameEnd(*frame, payloadSID, exit)
+			// The session's last run (NA-0a) is recorded by the claim itself, from the frame's own facts; only the code
+			// is the hook's. An unresolved code records nothing.
+			code, _ := m.resolveSessionCodeFromHook(req)
+			exit, claimed, cerr := m.claimFrameEnd(*frame, payloadSID, exit, &store.RunEnd{Code: code, EndedAt: broadcastTs / int64(time.Millisecond)})
 			if cerr != nil {
 				return nil, FrameTraceMeta{}, cerr
 			}
@@ -1171,6 +1174,13 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		verdict == VerdictRoot && stored.ParentFrameID == "" {
 		p := buildProvenance(req, result, m.sessionTmuxInstance(), stored.FrameID)
 		prov = &p
+		// The frame keeps the generation it was created or taken over under: the SessionEnd that ends it writes THAT
+		// into the session's last run, whatever tmux's generation is when the SessionEnd arrives (NA-0a).
+		// A failed stamp is an error to the hook (it retries): swallowing it would let the frame's SessionEnd delete the
+		// only resumable record. A frame that vanished meanwhile (sweep / SessionEnd) has nothing to stamp.
+		if serr := stampTmuxInstanceFn(m, stored.FrameID, p.TmuxInstance); serr != nil && !errors.Is(serr, sql.ErrNoRows) {
+			return nil, FrameTraceMeta{}, fmt.Errorf("stamp tmux_instance on frame %s: %w", stored.FrameID, serr)
+		}
 	}
 	return projection, FrameTraceMeta{
 		FrameID:          stored.FrameID,
