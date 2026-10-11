@@ -209,7 +209,7 @@ func (m *Module) flushContextUsage() int {
 
 // startContextUsageFlush runs the flusher until Stop; a module without a store has nothing to write.
 func (m *Module) startContextUsageFlush() {
-	if m.usage == nil || m.usageCancel != nil {
+	if (m.usage == nil && m.snaps == nil) || m.usageCancel != nil {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -239,9 +239,11 @@ func (m *Module) runContextUsageFlush(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			m.flushContextUsage()
+			m.flushStatusSnapshots()
 			return
 		case <-t.C:
 			m.flushContextUsage()
+			m.flushStatusSnapshots()
 		}
 	}
 }

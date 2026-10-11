@@ -1100,9 +1100,7 @@ func (m *Module) handleStatuslineSetup(w http.ResponseWriter, r *http.Request) {
 			// possible approach); the empty session code is the existing
 			// codebase convention for cross-session events (see watcher.go
 			// sessions/tmux broadcasts).
-			m.snapshotMu.Lock()
-			m.statusSnapshots = make(map[string]statusSnapshot)
-			m.snapshotMu.Unlock()
+			m.clearStatusSnapshots()
 			// a removed statusline must not leave a stale CTX on the peer rows (codex R2, 2026-10-07), nor a persisted one for
 			// the next boot (#2406)
 			m.clearContextUsage()
@@ -1354,11 +1352,14 @@ func parseCodexTitleCapability(config string) titleCapability {
 }
 
 // statusSnapshot is the in-memory shape cached per sessionCode and broadcast over WS.
-// It is intentionally display-only and not persisted (high-frequency, agent-owned).
+// It is display-only; it is persisted coalesced (status_snapshot_persist.go), never per POST.
 // Lives as a Module field (m.statusSnapshots) guarded by m.snapshotMu.
 type statusSnapshot struct {
 	AgentType string          `json:"agent_type"`
 	Status    json.RawMessage `json:"status"`
+	// At is when the daemon received the payload (unix ms); the UI ages the snapshot by it, so one replayed after a
+	// restart is not shown as fresh. Absent on the self-test broadcast.
+	At int64 `json:"at,omitempty"`
 }
 
 // handleAgentStatus handles POST /api/agent/status.
@@ -1408,10 +1409,8 @@ func (m *Module) handleAgentStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snap := statusSnapshot{AgentType: payload.AgentType, Status: payload.RawStatus}
-	m.snapshotMu.Lock()
-	m.statusSnapshots[code] = snap
-	m.snapshotMu.Unlock()
+	snap := statusSnapshot{AgentType: payload.AgentType, Status: payload.RawStatus, At: usageNow()}
+	m.storeStatusSnapshot(code, snap)
 
 	if m.core != nil {
 		body, _ := json.Marshal(snap)
