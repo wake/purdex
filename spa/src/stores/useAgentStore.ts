@@ -231,7 +231,7 @@ interface AgentState {
   markRead: (hostId: string, sessionCode: string) => void
   removeHost: (hostId: string) => void
   setOscTitle: (hostId: string, sessionCode: string, title: string) => void
-  setCcStatus: (hostId: string, sessionCode: string, raw: Record<string, unknown>) => void
+  setCcStatus: (hostId: string, sessionCode: string, raw: Record<string, unknown>, receivedAt?: number) => void
   clearHostAgentStatus: (hostId: string) => void
 }
 
@@ -424,9 +424,11 @@ export const useAgentStore = create<AgentState>()(
       return { oscTitles: { ...s.oscTitles, [key]: cleaned } }
     }),
 
-    setCcStatus: (hostId, sessionCode, raw) => {
+    setCcStatus: (hostId, sessionCode, raw, receivedAt) => {
       const key = compositeKey(hostId, sessionCode)
-      const entry: CcStatusEntry = { receivedAt: Date.now(), raw }
+      // The daemon's own receive time when it sent one (a snapshot replayed after a restart is old), else now.
+      const at = typeof receivedAt === 'number' && Number.isFinite(receivedAt) && receivedAt > 0 ? receivedAt : Date.now()
+      const entry: CcStatusEntry = { receivedAt: at, raw }
       set((s) => ({ ccStatus: { ...s.ccStatus, [key]: entry } }))
     },
 
