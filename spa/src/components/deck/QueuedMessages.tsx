@@ -3,11 +3,26 @@
 // still holds it, 「傳送中」 once it is handed out, 「已送出」 once the daemon / worker took it (`keys` mode adds 「未經 mod 確認」). While Claude Code's own
 // queue line renders the same text, the entry is hidden (`matched`): the line stands for it. 「可能已送出」 when the answer was lost, the reason when it
 // was not sent. A message that MAY have run is only resent after an explicit confirmation (it can arrive twice), and as a new message.
-import { useState } from 'react'
+import { useState, type KeyboardEvent } from 'react'
+import { CircleNotch } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { outcomeMessage } from '../../lib/conversations/send'
 import type { QueueEntry } from '../../lib/conversations/send-queue'
 import { PENDING_USER_BOX, PENDING_USER_CAPTION } from './UserBlock'
+
+/** A whole block as a button (K-2b): role, focus, pointer, Enter / Space. */
+export function activateProps(onActivate: () => void, title: string) {
+  return {
+    role: 'button' as const, tabIndex: 0, title,
+    onClick: onActivate,
+    onKeyDown: (e: KeyboardEvent) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onActivate() } },
+  }
+}
+
+export const TAKE_BACK_BOX = 'cursor-pointer hover:bg-accent/20 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent'
+
+/** The spinner on a row whose take-back is on its way. */
+export const TakeBackSpinner = () => <CircleNotch data-testid="take-back-spinner" size={12} className="inline animate-spin text-accent" />
 
 interface Props {
   entries: readonly QueueEntry[]
@@ -19,9 +34,13 @@ interface Props {
   className?: string
   /** False: the back-end offers no recall, so no Undo is drawn (default true). */
   canUndo?: boolean
+  /** K-2b: Claude Code's queue can be taken back; an entry the daemon handed over (and no header row stands for) is clickable. Absent: not clickable. */
+  onTakeBack?: () => void
+  /** A take-back is on its way (the rows show a spinner). */
+  busy?: boolean
 }
 
-export function QueuedMessages({ entries, onUndo, onResend, onDismiss, className = 'flex flex-col gap-1 px-3 pb-1', canUndo = true }: Props) {
+export function QueuedMessages({ entries, onUndo, onResend, onDismiss, className = 'flex flex-col gap-1 px-3 pb-1', canUndo = true, onTakeBack, busy = false }: Props) {
   const t = useI18nStore((s) => s.t)
   const [confirming, setConfirming] = useState<string | null>(null)
   const shown = entries.filter((e) => e.state !== 'superseded' && !e.matched)
@@ -36,11 +55,15 @@ export function QueuedMessages({ entries, onUndo, onResend, onDismiss, className
         // buffer, with its Undo); a message already handed out says it is on its way, or sent.
         if (e.state === 'undo' || e.state === 'sending' || e.state === 'sent') {
           const label = e.state === 'undo' ? t('deck.user.queued') : e.state === 'sending' ? t('deck.send.sending') : e.mode === 'keys' ? t('deck.send.handed_keys') : t('deck.send.accepted')
+          // the whole block takes that entry back: the held one (no daemon call), or a handed one (Claude Code's queue)
+          const held = e.state === 'undo' && canUndo
+          const handed = e.state === 'sent' && e.mode !== undefined && !!onTakeBack
+          const act = held ? activateProps(() => onUndo(e.id), t('deck.recall.title')) : handed ? activateProps(onTakeBack!, t('deck.recall.title')) : {}
           return (
-            <div key={e.id} data-testid="queued-message" data-state={e.state} data-mode={e.mode} className={`${PENDING_USER_BOX} px-3 py-2`}>
-              <div className={`mb-1 deck-t-down font-medium ${PENDING_USER_CAPTION}`}>{label}</div>
+            <div key={e.id} data-testid="queued-message" data-state={e.state} data-mode={e.mode} aria-busy={handed && busy ? true : undefined} {...act} className={`${PENDING_USER_BOX} px-3 py-2 ${held || handed ? TAKE_BACK_BOX : ''}`}>
+              <div className={`mb-1 deck-t-down font-medium ${PENDING_USER_CAPTION}`}>{label}{handed && busy && <> <TakeBackSpinner /></>}</div>
               <div className="whitespace-pre-wrap break-words deck-t-up text-text-primary">{e.text}</div>
-              {e.state === 'undo' && canUndo && <button type="button" className="rounded px-0 deck-t-down text-accent underline-offset-2 hover:underline" onClick={() => onUndo(e.id)}>{t('deck.send.undo')}</button>}
+              {e.state === 'undo' && canUndo && <button type="button" className="rounded px-0 deck-t-down text-accent underline-offset-2 hover:underline" onClick={(ev) => { ev.stopPropagation(); onUndo(e.id) }}>{t('deck.send.undo')}</button>}
               {/* the transcript's row is what takes it away; one whose row never comes (or reads differently) must not leave it here for good */}
               {e.state === 'sent' && <button type="button" className={btn} onClick={() => onDismiss(e.id)}>{t('deck.send.dismiss')}</button>}
             </div>
