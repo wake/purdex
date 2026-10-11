@@ -2,9 +2,10 @@
 
 ## 1. User decision (2026-10-11, do not reopen)
 Both apps send a deck / chat message **by putting it into the Claude Code TUI and pressing Enter**, so Claude Code's own queue
-handles a busy session (the message is queued and read mid-turn, as when typing in the terminal). Reason given: with the mod route a
-message can be stuck in our pipeline when the daemon is interrupted; Claude Code's queue should own it, and mid-turn insertion comes
-with it. This **reverses U3 plan rev 4** (which removed the keystroke route because external checks + Enter cannot be atomic with
+handles a busy session (the message is queued and read mid-turn, as when typing in the terminal). Reasons given: (1) with the mod
+route a message can be stuck in our pipeline when the daemon is interrupted; Claude Code's queue should own it, and mid-turn
+insertion comes with it; (2) with the mod route the deck and the terminal do not show the same thing (a message held by the App or
+handed to the mod never appears in the terminal's queue) — typing makes the terminal show exactly what the deck sent. This **reverses U3 plan rev 4** (which removed the keystroke route because external checks + Enter cannot be atomic with
 Claude Code's state); the residual risks of §5 are accepted by the user.
 
 ## 2. Facts (measured 2026-10-11)

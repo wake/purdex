@@ -1,44 +1,64 @@
-# K-1 — daemon submit by typing (shared by Mac and iOS) — plan
+# K-1 — daemon submit by typing (shared by Mac and iOS) — plan (rev 2, after the spec+plan review)
 
-Spec: `docs/specs/2026-10-11-keystroke-submit-spec.md`. Two PRs: **K-1a** submit, **K-1b** recall. Daemon + mod (the mod change
-ships with the daemon: deploy runs `pdx setup`, which installs the plugin).
+Spec: `docs/specs/2026-10-11-keystroke-submit-spec.md`. PRs: **K-1a-1** (measurement + promptq kinds + mod), **K-1a-2** (route,
+lock, guards, keys fallback), **K-1b** (recall). The mod change ships with the daemon (deploy runs `pdx setup`).
 
-## K-1a submit
-1. **promptq job kind `fill`** (internal/promptq): `Job{ID, Kind:"fill", SessionID, Text}`; outcomes `accepted` (filled) or
-   `dropped` with reason `input_not_empty | dialog_open | no_composer | fill_mismatch | session_changed | refused`. Unlike
-   `submit`, a fill is allowed mid-turn (that is the point). Ledger / owner-stream rules as for submit (single owner stream,
-   at-most-once per client_msg_id, 10 s lease).
-2. **mod `pqRun` for `fill`** (cmd/pdx/plugin/purdex/hooks/events.js): session check as today; `$.prompt.read()` → non-empty text →
-   `input_not_empty`; `$.prompt.fill({text, mode:'replace'})` → `refusal:'dialog'` → `dialog_open`, `'no_composer'` → `no_composer`;
-   `!isFilled` or returned text ≠ ours → try `fill({text:'', mode:'replace'})` to clean up, then `fill_mismatch`; else `accepted`.
-   Tests in events.test.ts with a fake `$` (each branch).
-3. **Daemon route `POST /api/sessions/{code}/submit`** (internal/module/session, next to send-keys; device-allowed like send-keys —
-   add to cmd/pdx/device_scope.go): body `{text, client_msg_id, expected_tmux_instance}`.
-   Order: per-session-code mutex → ledger (seen id → recorded outcome) → sanitise (move the iOS rules into the daemon: tabs→4 spaces,
-   control chars except \n stripped, trim, ≤4000 bytes, leading `/` or `!` → `409 needs_terminal`, trailing `@token` padded) →
-   session exists, generation guard → agent is Claude Code and not `waiting` (agent status; `409 waiting`) → resolve the pane's
-   Claude Code session id (provenance / frame) and its mod owner (promptq Owners):
-   - **owner present (mode `fill`)**: enqueue `fill`, wait its outcome (≤ 8 s); `accepted` → send Enter with
-     `tmux.SendKeysIfInstance(code, instance, "Enter")` (same generation guard) → `{outcome:"handed", mode:"fill"}`; a dropped fill →
-     `409 {reason}`; a timeout → `{outcome:"unknown"}` (nothing typed by us after that point; never retried).
-   - **no owner (mode `keys`)**: today's iOS behaviour moved server-side: literal text (LF for newlines) then Enter, each under the
-     generation guard → `{outcome:"handed", mode:"keys"}`.
-   Ledger records the outcome per client_msg_id (bounded, e.g. 1000 entries / 10 min).
-4. **Tests**: sanitiser table (iOS cases); ledger replay; mutex serialises two submits; waiting → 409; generation mismatch → 409;
-   owner path with a fake promptq: accepted → Enter sent once, each dropped reason → 409 and no Enter, timeout → unknown and no
-   Enter; no-owner keys path (tmux test server `-L <label>`, `unset TMUX`; never a bare kill-server); device scope allows the route.
+## Step 0 — measure first (gates the plan)
+On a throwaway Claude Code session (Haiku, tmux, a throwaway mod loaded with `--plugin-dir` that calls the APIs from inside a
+running turn and logs the results to a file): (a) do `$.prompt.read()` / `$.prompt.fill({mode:'replace'})` return at once while a
+turn runs, or block until idle like `$.prompt.submit`? (b) the full set of `refusal` values (dialog, no_composer, others); (c) does
+`fill` keep newlines / trailing spaces as given, and what does `read` return right after; (d) Enter after a mid-turn fill queues
+the message (`queue-operation enqueue`) and it is read at the next tool boundary; (e) `#{alternate_on}` value of a Claude Code pane
+(fullscreen mode?); (f) Up on an empty input with a queue containing user + peer + task-notification items: which items pop
+(`popAllEditable`?), and the separator between popped items; (g) Up with an empty queue (history recall). Write the results into the
+spec §2 before any code. **If (a) blocks, stop and report — the fill route does not work.**
 
-## K-1b recall
-`POST /api/sessions/{code}/recall {expected_tmux_instance}` under the same mutex: requires `header.queued` (convfeed entry of the
-pane's sid) non-empty; mod job `read` must be empty; tmux `Up`; job `read` → text; it must equal the queued user texts joined the
-way Claude Code joins popped items (measure the separator first on a throwaway Haiku session) else `409 recall_mismatch` and the
-input is left as is; job `fill('')` clears it; returns `{text}`. A turn ending in between (queue already empty when read) →
-`409 already_sent`. Mod jobs `read` / `clear` added like `fill`. Tests as above.
+## Review decisions (rev 2)
+- C1 No stale Enter: the mod's fill result carries `filled_at`; the daemon presses Enter only if `now − filled_at ≤ 1.5 s` **and** the
+  agent light is not `waiting` (`LightStatus`) at that moment; otherwise it clears (see I2) and answers `unknown`/refused. A `fill`
+  result is posted once (no result retries for this kind — retries only widen the window).
+- I1 Enter / Up use a new `SendKeysIfInstanceAndMode` guard: generation **and** `#{pane_in_mode}==0` (copy-mode would eat Enter)
+  → `409 pane_busy`; `#{alternate_on}==0` only if step 0 (e) shows Claude Code runs on the main screen.
+- M7 Keys go to the **owner pane** (`-t <pane id>` of the mod's frame), never "the session's active pane"; a mismatch → `409
+  pane_mismatch`.
+- I2 Cleanup: whenever a fill was accepted but Enter is not sent (guard refused, stale, waiting, daemon timeout, late execution of a
+  timed-out fill), queue a best-effort `clear_if` job: the mod clears the input only if it still equals our text.
+- I3 One state machine per `client_msg_id`, in the existing promptq ledger (same key, so `Match` keeps pairing echoes):
+  `queued → filled → entering → entered | cleared | unknown`; the state is written as `entering` **before** Enter (the at-most-once
+  line); a replayed id returns the recorded state and never types.
+- I4 The route lives in the **conversation module** (it already has agent, promptq, convfeed, `sanitizePrompt`, `decodeBody`); URL
+  stays `/api/sessions/{code}/submit`; tmux comes in through an interface; export a `code → (sid, frame/pane)` resolver from where
+  `resolveSessionOwner` lives; "waiting" = `LightStatus(sid, frameID)`.
+- M1 One per-code lock shared with the old `/api/conversations/claude/{sid}/submit` route (still used until K-2/K-3 switch); bounded
+  wait 2 s → `429 busy` (Mac + phone at once must not hang 8 s).
+- M2/M3 Reuse the existing `sanitizePrompt` (one copy); `@token` padding only in keys mode; compare fill's returned text with the
+  same normalised string; leading `/` and `!` stay refused in both modes (Enter would still run them as a command / bash).
+- M4 Keys fallback only when no mod owner has been seen for ≥ 10 s and the light is `idle` or `running`; answer `mode:"keys"`; the
+  deck labels such sends 「未經 mod 確認」.
+- I5/I6 Recall: until step 0 (f) is known, a queue holding non-user items → `409 recall_unsupported`; the input must be empty
+  first; Up under the same guard and pane target; any mismatch / empty read → `fill('')` (the input was empty before) and
+  `409 recall_mismatch` / `already_sent` — never leave history text in the TUI input.
 
-## Out of scope
-SPA (K-2) and iOS (K-3) switching to the route; the iOS 3-second buffer question (user).
+## K-1a-1 — promptq kinds + mod
+promptq job kinds `fill {text}`, `clear_if {text}`, `read` (K-1b); outcomes with `filled_at`; ledger state machine (I3). mod
+`pqRun`: `fill` (session check; `read` non-empty → `input_not_empty`; `fill replace` → refusal → `dialog_open` / `no_composer` /
+other; returned text ≠ ours → clean up + `fill_mismatch`; else `accepted` + `filled_at`), `clear_if`, `read`. events.test.ts with a
+fake `$` for every branch; promptq tests for the state machine and the one-shot result.
+
+## K-1a-2 — route, lock, guards, keys fallback
+`POST /api/sessions/{code}/submit {text, client_msg_id, expected_tmux_instance}` in module/conversation, device-allowed
+(cmd/pdx/device_scope.go). Order: lock (2 s) → ledger → sanitise → session / generation / owner pane → not waiting →
+owner: fill → C1 checks → `entering` → Enter (I1/M7 guard) → `entered` / on refusal `clear_if` → answer
+`{outcome: handed|refused(reason)|unknown, mode: fill|keys}`; no owner ≥ 10 s: keys mode (M4). Tests: sanitiser reuse, ledger replay
+(each state), lock + 429, waiting, generation / pane_busy / pane_mismatch, stale fill (>1.5 s) → no Enter + clear_if, light turns
+waiting → no Enter, fill dropped reasons → 409 no Enter, timeout → unknown + clear_if, keys fallback gating; tmux test server with
+`-L <label>` and `unset TMUX` (never a bare kill-server).
+
+## K-1b — recall
+`POST /api/sessions/{code}/recall {expected_tmux_instance}` per I5/I6 and step 0 (f)/(g) results.
 
 ## Acceptance (real machine, before K-2 / K-3 merge)
-Busy session: a submit queues in Claude Code (header.queued shows it) and is read mid-turn; idle: runs at once; a terminal draft →
-`input_not_empty`, nothing changed; an open permission dialog → `dialog_open`, nothing typed; recall returns the queued text into the
-deck and empties the TUI input.
+Busy session: a submit queues (header.queued shows it, pending style) and is read mid-turn (`queued_command`, accepted style);
+idle: runs at once; a terminal draft → `input_not_empty`, unchanged; a permission dialog open → `dialog_open`, nothing typed;
+copy-mode → `pane_busy`; daemon restarted between fill and Enter → the input is cleaned; recall returns the queued text and leaves
+the TUI input empty; 10 s with neither queued nor transcript → 「可能已送出，請看紀錄」 (K-2).
