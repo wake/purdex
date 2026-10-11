@@ -2261,6 +2261,8 @@
   "peers.team.retry": "重試結束",
   "peers.team.row_gone": "這個 peer 已不在清單中：{{alias}}",
   "peers.team.leftover_gone": "{{alias}} 的同意已關閉，但找不到該主機，無法確認 member 是否已結束。",
+  "deck.peerFold.expand": "展開全文",
+  "deck.peerFold.collapse": "收合",
   "deck.user.you": "你 · {{time}}",
   "deck.user.queued": "你 · 排隊中",
   "deck.user.delivered": "你 · {{time}} · 回合中送達",
