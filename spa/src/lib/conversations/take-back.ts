@@ -1,41 +1,41 @@
 // spa/src/lib/conversations/take-back.ts — taking a sent message back (K-2b, plan D7): the App's held block (no daemon call), and what Claude Code
 // queued (POST /recall through the bound adapter). The state lives here, not in a component: a take-back answered while the tab is switched away
 // still lands in the draft memory, and the in-flight guard, the notice and the optimistic hide survive the pane's unmount.
+//
+// This module is the coordinator (#2682): the maps, the listeners, the hide timers, and every side effect — the adapter call, the draft write, the
+// send-queue dismissals. What to do is `take-back-machine.ts`'s question (generation of the take-back in flight, which header rows an answer stands
+// for, when the hide is over), asked of plain values and unit-tested as tables.
 import { useSyncExternalStore } from 'react'
 import { adapterOf } from './deck-adapter'
 import { prependToDraft, recallHeld } from './draft-recall'
-import { recallMessage, type OutcomeMessage } from './send'
+import { recallMessage } from './send'
 import type { HeaderRow, SendQueue } from './send-queue'
+import {
+  answerMatches, begin, dismissNotice, entriesToDismiss, expireHide, fail, headerCaughtUp, hideAfter, IDLE_CORE, isCurrent, isIdle, isRowHidden as hidden, land,
+  settle, snapshotOf, visibleRows, HIDE_MS, type TakeBackCore, type TakeBackState,
+} from './take-back-machine'
 
-/** Header rows the answer brought back stay hidden at most this long: `header.queued` takes about a second to empty after a recall. */
-export const HIDE_MS = 5000
+export { HIDE_MS }
+export type { TakeBackState }
 
-export interface TakeBackState {
-  /** A take-back is on its way: further Up / clicks are ignored and the rows show a spinner. */
-  busy: boolean
-  /** Why nothing came back (dismissable); drawn by the pending tail. */
-  notice: OutcomeMessage | null
-  /** The header rows (text, at) that came back: exactly those instances are hidden until the header stops listing them (or HIDE_MS pass). */
-  hide: { rows: readonly HeaderRow[]; at: number } | null
-}
-
-const EMPTY: TakeBackState = { busy: false, notice: null, hide: null }
-const states = new Map<string, TakeBackState>()
+const cores = new Map<string, TakeBackCore>()
 const rows = new Map<string, readonly HeaderRow[]>()
-/** Per key, only while a take-back is in flight: the pane releasing / retiring the key deletes it, so a late answer applies nothing. Idle keys hold no entry. */
-const inflight = new Map<string, object>()
+/** Only ever grows (not even a forgotten key starts over): a generation is never handed out twice, so a late answer cannot be taken for a newer take-back's. */
+let generation = 0
 /** Tests only: how many keys have a take-back in flight. */
-export const inflightTakeBackCount = (): number => inflight.size
+export const inflightTakeBackCount = (): number => [...cores.values()].filter((c) => c.op !== null).length
 const timers = new Map<string, ReturnType<typeof setTimeout>>()
 const listeners = new Map<string, Set<() => void>>()
 
-const get = (key: string): TakeBackState => states.get(key) ?? EMPTY
+const coreOf = (key: string): TakeBackCore => cores.get(key) ?? IDLE_CORE
+const get = (key: string): TakeBackState => coreOf(key).state
 
-function set(key: string, patch: Partial<TakeBackState>): void {
-  const next = { ...get(key), ...patch }
-  if (!next.busy && !next.notice && !next.hide) states.delete(key)
-  else states.set(key, next)
-  for (const l of [...(listeners.get(key) ?? [])]) l()
+/** Keeps `next` (an idle key holds nothing) and tells the key's listeners when what they draw changed. */
+function commit(key: string, next: TakeBackCore): void {
+  const changed = next.state !== get(key)
+  if (isIdle(next)) cores.delete(key)
+  else cores.set(key, next)
+  if (changed) for (const l of [...(listeners.get(key) ?? [])]) l()
 }
 
 function subscribe(key: string, cb: () => void): () => void {
@@ -50,20 +50,23 @@ export function useTakeBackState(key: string): TakeBackState {
   return useSyncExternalStore((cb) => subscribe(key, cb), () => get(key))
 }
 
-export const dismissTakeBackNotice = (key: string): void => { if (get(key).notice) set(key, { notice: null }) }
-
-const trimmed = (text: string): string => text.trimEnd()
+export const dismissTakeBackNotice = (key: string): void => { commit(key, dismissNotice(coreOf(key))) }
 
 /** Whether the header row `text` is hidden: it came back a moment ago and the header has not caught up. */
 export function isRowHidden(s: TakeBackState, row: HeaderRow, now: number = Date.now()): boolean {
-  return !!s.hide && now - s.hide.at < HIDE_MS && s.hide.rows.some((x) => x.at === row.at && x.text === trimmed(row.text))
+  return hidden(s, row, now)
 }
 
-function clearHide(key: string): void {
+function clearTimer(key: string): void {
   const t = timers.get(key)
   if (t) clearTimeout(t)
   timers.delete(key)
-  if (get(key).hide) set(key, { hide: null })
+}
+
+function clearHide(key: string): void {
+  clearTimer(key)
+  const c = coreOf(key)
+  if (c.state.hide) commit(key, { ...c, state: { ...c.state, hide: null } })
 }
 
 /**
@@ -72,14 +75,12 @@ function clearHide(key: string): void {
  */
 export function setHeaderUserRows(key: string, now: readonly HeaderRow[]): void {
   rows.set(key, now)
-  const h = get(key).hide
-  if (h && !now.some((r) => h.rows.some((x) => x.at === r.at && x.text === trimmed(r.text)))) clearHide(key)
+  if (headerCaughtUp(get(key), now)) clearHide(key)
 }
 
 /** How many `user` rows of the header are shown right now (not counting rows hidden after a take-back). */
 export function visibleHeaderUsers(key: string): number {
-  const s = get(key)
-  return (rows.get(key) ?? []).filter((x) => !isRowHidden(s, x)).length
+  return visibleRows(get(key), rows.get(key) ?? [], Date.now())
 }
 
 /** Whether this pane can ask the daemon to take Claude Code's queued messages back. */
@@ -92,35 +93,31 @@ export const canTakeBack = (key: string): boolean => !!adapterOf(key)?.takeBack
  */
 export async function takeBackQueued(key: string, queue: SendQueue): Promise<void> {
   const takeBack = adapterOf(key)?.takeBack
-  if (!takeBack || get(key).busy) return
-  const token = {}
-  inflight.set(key, token)
-  const mine = (): boolean => inflight.get(key) === token
-  const done = (): void => { if (mine()) inflight.delete(key) }
-  // What Claude Code's queue holds as this pane renders it, in reading order: the header rows (an entry that claimed one stands for it), then
-  // the handed entries no row stands for yet. The daemon joins its queue the same way (typed_recall.go joinQueued), so the answer can be matched.
-  const snapshot = (rows.get(key) ?? []).map((r) => ({ at: r.at, text: trimmed(r.text) }))
-  const loose = queue.entries().filter((e) => e.state === 'sent' && e.mode !== undefined && e.claimAt === undefined).map((e) => ({ id: e.id, text: trimmed(e.text) }))
-  const expected = [...snapshot.map((r) => r.text), ...loose.map((e) => e.text)].join('\n')
-  set(key, { busy: true, notice: null })
+  if (!takeBack) return
+  const gen = ++generation
+  const started = begin(coreOf(key), gen)
+  if (!started) return // one is on its way
+  // What Claude Code's queue holds as this pane renders it; the answer is matched against it.
+  const queued = snapshotOf(rows.get(key) ?? [], queue.entries())
+  commit(key, started)
   let outcome
   try { outcome = await takeBack() } catch { outcome = { kind: 'may_have_popped' as const, reason: 'network' } }
-  if (!mine()) return // the pane let this conversation go while the daemon answered: nothing of it applies any more
-  if (outcome.kind !== 'back') { done(); set(key, { busy: false, notice: recallMessage(outcome) }); return }
-  prependToDraft(key, outcome.text)
-  clearHide(key)
-  done()
-  if (expected === '' || outcome.text !== expected) { set(key, { busy: false }); return } // the queue changed meanwhile: which rows came back is unknown
-  // exactly the instances of the snapshot, one to one: an entry holding a claim on one of its rows, or one that stood alone
-  const free = [...snapshot]
-  for (const e of queue.entries()) {
-    if (e.state !== 'sent' || e.mode === undefined) continue
-    const k = e.claimAt === undefined ? -1 : free.findIndex((r) => r.at === e.claimAt && r.text === trimmed(e.text))
-    if (k >= 0) { free.splice(k, 1); queue.dismiss(e.id) } else if (loose.some((l) => l.id === e.id)) queue.dismiss(e.id)
+  if (outcome.kind !== 'back') {
+    const failed = fail(coreOf(key), gen, recallMessage(outcome))
+    if (failed) commit(key, failed) // else the pane let this conversation go while the daemon answered: nothing of it applies any more
+    return
   }
+  if (!isCurrent(coreOf(key), gen)) return // the same: stale
+  prependToDraft(key, outcome.text)
+  const landed = land(coreOf(key), gen) // (read again: the draft write woke listeners, which may have touched this key)
+  if (!landed) return
+  clearTimer(key)
+  commit(key, landed)
+  if (!answerMatches(queued, outcome.text)) { commit(key, settle(coreOf(key), null)); return } // the queue changed meanwhile: which rows came back is unknown
+  for (const id of entriesToDismiss(queued, queue.entries())) queue.dismiss(id)
   const at = Date.now()
-  timers.set(key, setTimeout(() => { timers.delete(key); if (get(key).hide?.at === at) set(key, { hide: null }) }, HIDE_MS))
-  set(key, { busy: false, hide: snapshot.length > 0 ? { rows: snapshot, at } : null })
+  timers.set(key, setTimeout(() => { timers.delete(key); commit(key, expireHide(coreOf(key), at)) }, HIDE_MS))
+  commit(key, settle(coreOf(key), hideAfter(queued, at)))
 }
 
 /** A held entry's block was clicked (or its Undo): that entry only, no daemon call. */
@@ -150,12 +147,11 @@ export async function takeBackAll(key: string, queue: SendQueue): Promise<void> 
 
 /** A pane that is gone for good, or a session it no longer shows. */
 export function forgetTakeBackWhere(match: (key: string) => boolean): void {
-  for (const key of [...new Set([...states.keys(), ...rows.keys(), ...timers.keys(), ...inflight.keys()])]) {
+  for (const key of [...new Set([...cores.keys(), ...rows.keys(), ...timers.keys()])]) {
     if (!match(key)) continue
-    const t = timers.get(key)
-    if (t) clearTimeout(t)
-    timers.delete(key); states.delete(key); rows.delete(key)
-    inflight.delete(key)
+    clearTimer(key)
+    cores.delete(key) // whatever was in flight is dropped: its answer finds no current generation and applies nothing
+    rows.delete(key)
   }
 }
 
