@@ -22,6 +22,7 @@ import './lib/browser-shortcuts'
 import { useNotificationDispatcher } from './hooks/useNotificationDispatcher'
 import { useWorkerAgentProjection } from './hooks/useWorkerAgentProjection'
 import { usePushPresence } from './hooks/usePushPresence'
+import { usePresenceHostsHandover } from './hooks/usePresenceHostsHandover'
 import { useElectronIpc } from './hooks/useElectronIpc'
 import { useDeeplinkResolver } from './hooks/useDeeplinkResolver'
 import { useNewTabBootstrap } from './hooks/useNewTabBootstrap'
@@ -74,6 +75,7 @@ export default function App() {
   // notifications ride the same pipeline as terminal agent tabs (spec §8.1).
   useWorkerAgentProjection()
   usePushPresence()
+  usePresenceHostsHandover()
   // Must precede useElectronIpc: the deeplink resolver has to subscribe before
   // `spa:ready` is sent, or a buffered cold-start deeplink flush is missed.
   useDeeplinkResolver()
