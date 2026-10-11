@@ -53,13 +53,28 @@ Claude Code's state); the residual risks of §5 are accepted by the user.
   `header.queued` (Claude Code queued it while busy). **Accepted** = the user item appears in the transcript (current user-block
   style, slightly dimmer). Idle sessions go straight to the transcript.
 - `unknown` / nothing seen 10 s after `handed` → 「可能已送出，請看紀錄」, no automatic retry.
-- The App-side "wait for idle" queue (#2617 ledger) is removed; messages go out immediately. The iOS 3-second undo buffer stays
-  (iOS only) unless decided otherwise.
-- **Recall (Up on an empty deck input) / undo of a pending message:** `POST /api/sessions/{code}/recall` under the same lock:
-  requires `$.prompt.read` empty and `header.queued` non-empty; sends Up; reads the input; it must equal the queued texts joined
-  as Claude Code joins them, else put nothing back and report `recall_mismatch`; clears the TUI input (`fill('')`); returns the text
-  to the deck input. Claude Code pops **all** queued items at once, so recall returns all of them (same as the terminal). A turn
-  ending between Up and read → `already_sent`.
+- The App-side "wait for idle" queue (#2617 ledger) is removed. **Send buffer (user 2026-10-11, Mac and iOS alike):** a sent
+  message is held 1.5 s in the App, drawn as pending (visible — iOS's old 3 s buffer was invisible); clicking it in that window
+  puts it back in the input and nothing is sent (only that message). After 1.5 s it goes to `/submit`. Idle session → it runs at
+  once and cannot be taken back; queued → Up on an empty input **or clicking the queued message** takes it back via `/recall`.
+- Taking back queued messages returns **all** of them (Claude Code pops all at once, as Up in the terminal does), one per line.
+  Clicking with a draft in the input puts the recalled text first, then a newline, then the draft (nothing is lost); Up acts only
+  on an empty input.
+- **Recall (Up on an empty deck input) / undo of a pending message:** `POST /api/sessions/{code}/recall` under the same lock.
+  Before Up: needs `$.prompt.read` empty and `header.queued` non-empty, all items user-sent (else `recall_unsupported`); the join of
+  the items (each trailing-whitespace trimmed, joined by one `\n`; Claude Code pops **all** items at once) must fit
+  `promptq.MaxTextBytes` and no item may sit at the feed's 2000-rune cap (it may have been cut), else `409 recall_too_long`
+  (nothing pressed). Up, then (on a deadline detached from the request) read every `recallSettle` until the input has text or the
+  1 s read budget has passed (the last read is at or after the budget).
+  - Read **equals** the join exactly (and not truncated) → `clear_if(that text)` → `200 {text}`. clear_if refused: read once
+    more; empty → `200 {text}`; still equal → `409 input_not_cleared` (no text); anything else / read error → `unknown` `clear_unknown`.
+  - Any other non-empty read (a draft typed meanwhile, history, a cut text) → `409 recall_mismatch`: no clear, no text; the
+    terminal is left as it is.
+  - Nothing read within the budget → `200 {outcome:unknown, reason:recall_empty}` (the turn may have taken the queue, or the TUI
+    may still draw it); read error after Up → `unknown` `read_failed` (the same 200 convention as `/submit`'s unknown).
+  - `client_msg_id` is required (empty or malformed → `400 bad_client_msg_id`, nothing read or pressed). Every answer after Up is
+    recorded under `session code + tmux instance + client_msg_id` and replayed before the owner is resolved: at most one Up per
+    id, a repeat gets the same answer even if the owner can no longer be resolved, another session reusing an id never sees it.
 - Interrupt: unchanged (mod `$.turn.abort` where present, else Esc).
 
 ## 5. Accepted residual risks (from U3 review rounds 1–4)
@@ -87,7 +102,9 @@ Claude Code's state); the residual risks of §5 are accepted by the user.
   write as a paste, the trailing Enter could become a newline: **verify on a real session (short and long text)** before K-2/K-3;
   if it fails, split into text then Enter (losing the all-or-nothing property) and document it.
 - A replayed `client_msg_id` is answered from the ledger before the session is checked; ids are client UUIDs, so another session
-  reusing one is not expected (not bound to the session code).
+  reusing one is not expected (not bound to the session code). (`/submit` only; the recall ledger is session-bound.)
+- Recall: a mismatch (a draft typed during the recall, or history recalled because the turn took the queue) leaves the text in
+  the TUI input; the deck tells the user to look at the terminal.
 
 ## 6. Phases
 - K-1 daemon: `/submit` with lock, ledger, sanitise, guards, mod fill path, keys fallback; `/recall`. Tests with a fake mod and a
