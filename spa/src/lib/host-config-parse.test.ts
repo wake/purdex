@@ -14,7 +14,8 @@ const P1 = { id: 'p1', name: 'Purdex', slug: 'purdex', path: '~/w/purdex' }
 const P2 = { id: 'p2', name: 'Ploom', slug: 'ploom', path: '/w/ploom' }
 const C1 = { id: 'c1', name: 'Claude', command: 'claude', icon: { kind: 'agent', value: 'cc-bot' } }
 const C2 = { id: 'c2', name: 'Logs', command: 'tail -f log', icon: { kind: 'phosphor', value: 'Rocket' } }
-const Q1 = { id: 'q1', text: 'go on' }
+const Q1 = { id: 'q1', title: 'Go', content: 'go on', text: 'go on' }
+const Q1V = { id: 'q1', title: 'Go', content: 'go on' }
 const CC = { exact: 'cld --resume {id}', fallback: 'cld -c' }
 
 let warn: MockInstance<typeof console.warn>
@@ -90,13 +91,24 @@ describe('parseCommands', () => {
 })
 
 describe('parseQuickReplies', () => {
-  it('a valid collection passes through unchanged', () => {
-    expect(parseQuickReplies({ items: [Q1], revision: 2 }, H)).toEqual({ items: [Q1], revision: 2, problem: null })
+  it('a v2 collection reads title and content (the echoed text is dropped)', () => {
+    expect(parseQuickReplies({ items: [Q1], revision: 2 }, H)).toEqual({ items: [Q1V], revision: 2, problem: null })
+  })
+
+  it('content absent (an old daemon): title = content = text', () => {
+    const p = parseQuickReplies({ items: [{ id: 'q1', text: 'go on' }], revision: 2 }, H)
+    expect(p).toEqual({ items: [{ id: 'q1', title: 'go on', content: 'go on' }], revision: 2, problem: null })
+  })
+
+  it('content present decides v2: a non-string content is skipped even when text is there', () => {
+    const p = parseQuickReplies({ items: [{ id: 'q1', title: 'T', content: 5, text: 'x' }, { id: 'q2', content: 'c', text: 'x' }], revision: 2 }, H)
+    expect(p.items).toEqual([])
+    expect(p.problem).toEqual({ kind: 'rows', count: 2 })
   })
 
   it('a reply whose text is not a string, or with no id, is skipped and counted', () => {
     const p = parseQuickReplies({ items: [{ id: 'n', text: 42 }, Q1, { text: 'x' }], revision: 2 }, H)
-    expect(p.items).toEqual([Q1])
+    expect(p.items).toEqual([Q1V])
     expect(p.problem).toEqual({ kind: 'rows', count: 2 })
   })
 
@@ -332,7 +344,7 @@ describe('parseHostConfig', () => {
     expect(p.commands).toEqual({ items: [], revision: 9, problem: { kind: 'shape' } })
     expect(p.projects).toEqual({ items: [P1], revision: 3, problem: null })
     expect(p.resumeTemplates.problem).toBeNull()
-    expect(p.quickReplies).toEqual({ items: [Q1], revision: 2, problem: null })
+    expect(p.quickReplies).toEqual({ items: [Q1V], revision: 2, problem: null })
     expect(p.relay?.problem).toBeNull()
   })
 

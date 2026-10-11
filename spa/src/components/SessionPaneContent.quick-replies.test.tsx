@@ -86,7 +86,7 @@ beforeEach(() => {
   useTabStore.setState({ tabs: { [sessionTab.id]: sessionTab }, tabOrder: [sessionTab.id], activeTabId: sessionTab.id, visitHistory: [] })
   useSessionViewStore.setState({ byPane: {} })
   useHostConfigStore.setState({
-    byHost: { [H]: { status: 'ready', quickRepliesSupported: true, quickReplies: [{ id: 'a', text: 'continue' }, { id: 'b', text: 'run the tests' }], revisions: { quickReplies: 1 }, problems: {} } },
+    byHost: { [H]: { status: 'ready', quickRepliesSupported: true, quickReplies: [{ id: 'a', title: 'continue', content: 'continue' }, { id: 'b', title: 'run the tests', content: 'run the tests' }], revisions: { quickReplies: 1 }, problems: {} } },
     ensureLoaded: async () => {},
   } as never)
   useWorkerSettingsStore.setState({ quickRepliesCollapsed: false })

@@ -42,24 +42,47 @@ beforeEach(() => {
 })
 
 describe('QuickReplySettings', () => {
+  it('has a title field and a content field; both are saved, each validated on its own', async () => {
+    seed(entry([{ id: 'a', title: 'Alpha', content: 'do alpha' }], 3))
+    render(<QuickReplySettings hostId={H} />)
+    fireEvent.click(screen.getByTestId('quick-reply-edit-a'))
+    expect(screen.getByTestId('quick-reply-title-input')).toHaveValue('Alpha')
+    expect(screen.getByTestId('quick-reply-input')).toHaveValue('do alpha')
+
+    fireEvent.change(screen.getByTestId('quick-reply-title-input'), { target: { value: '  ' } })
+    fireEvent.click(screen.getByTestId('quick-reply-save'))
+    expect(screen.getByTestId('quick-reply-error')).toHaveTextContent('Enter a title')
+    fireEvent.change(screen.getByTestId('quick-reply-title-input'), { target: { value: 'x'.repeat(101) } })
+    fireEvent.click(screen.getByTestId('quick-reply-save'))
+    expect(screen.getByTestId('quick-reply-error')).toHaveTextContent('100 bytes')
+    expect(saveQuickReplies).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByTestId('quick-reply-title-input'), { target: { value: 'Beta' } })
+    fireEvent.change(screen.getByTestId('quick-reply-input'), { target: { value: 'do beta' } })
+    fireEvent.click(screen.getByTestId('quick-reply-save'))
+    await waitFor(() => expect(stored()).toEqual([{ id: 'a', title: 'Beta', content: 'do beta' }]))
+  })
+
   it('lists the defaults when never written', () => {
     render(<QuickReplySettings hostId={H} />)
     expect(rowIds()).toEqual(['continue', 'run-tests', 'explain'])
+    expect(screen.getByTestId('quick-reply-row-run-tests')).toHaveTextContent('跑測試')
     expect(screen.getByTestId('quick-reply-row-run-tests')).toHaveTextContent('run the tests')
     expect(screen.getByTestId('quick-replies-defaults')).toBeInTheDocument()
     expect(saveQuickReplies).not.toHaveBeenCalled()
   })
 
   it('adds, edits, reorders and deletes', async () => {
-    seed(entry([{ id: 'a', text: 'alpha' }, { id: 'b', text: 'beta' }], 3))
+    seed(entry([{ id: 'a', title: 'alpha', content: 'alpha' }, { id: 'b', title: 'beta', content: 'beta' }], 3))
     render(<QuickReplySettings hostId={H} />)
     expect(screen.queryByTestId('quick-replies-defaults')).toBeNull()
 
     // add
     fireEvent.click(screen.getByTestId('quick-reply-add'))
+    fireEvent.change(screen.getByTestId('quick-reply-title-input'), { target: { value: ' Gamma ' } })
     fireEvent.change(screen.getByTestId('quick-reply-input'), { target: { value: '  gamma  ' } })
     fireEvent.click(screen.getByTestId('quick-reply-save'))
-    await waitFor(() => expect(stored().map((r) => r.text)).toEqual(['alpha', 'beta', 'gamma']))
+    await waitFor(() => expect(stored().map((r) => [r.title, r.content])).toEqual([['alpha', 'alpha'], ['beta', 'beta'], ['Gamma', 'gamma']]))
     await waitFor(() => expect(screen.queryByTestId('quick-reply-input')).toBeNull())
 
     // an empty text is refused without a save
@@ -72,7 +95,7 @@ describe('QuickReplySettings', () => {
     // edit
     fireEvent.change(screen.getByTestId('quick-reply-input'), { target: { value: 'ALPHA' } })
     fireEvent.click(screen.getByTestId('quick-reply-save'))
-    await waitFor(() => expect(stored()[0]).toEqual({ id: 'a', text: 'ALPHA' }))
+    await waitFor(() => expect(stored()[0]).toEqual({ id: 'a', title: 'alpha', content: 'ALPHA' }))
 
     // reorder
     fireEvent.click(screen.getByTestId('quick-reply-down-a'))
@@ -83,7 +106,7 @@ describe('QuickReplySettings', () => {
     fireEvent.click(screen.getByTestId('quick-reply-delete-b'))
     expect(saveQuickReplies).toHaveBeenCalledTimes(3)
     fireEvent.click(screen.getByTestId('quick-reply-delete-confirm-b'))
-    await waitFor(() => expect(stored().map((r) => r.text)).toEqual(['ALPHA', 'gamma']))
+    await waitFor(() => expect(stored().map((r) => r.content)).toEqual(['ALPHA', 'gamma']))
   })
 
   it('saves through the queue with the base revision', async () => {
@@ -116,7 +139,7 @@ describe('QuickReplySettings', () => {
 
   // F2: the editor trims like the daemon's strings.TrimSpace, NEL included.
   it('a NEL-only text is refused as empty; NEL around a text is trimmed away', async () => {
-    seed(entry([{ id: 'a', text: 'alpha' }], 1))
+    seed(entry([{ id: 'a', title: 'alpha', content: 'alpha' }], 1))
     render(<QuickReplySettings hostId={H} />)
     fireEvent.click(screen.getByTestId('quick-reply-edit-a'))
     fireEvent.change(screen.getByTestId('quick-reply-input'), { target: { value: '\u0085' } })
@@ -126,12 +149,12 @@ describe('QuickReplySettings', () => {
 
     fireEvent.change(screen.getByTestId('quick-reply-input'), { target: { value: '\u0085go on\u0085' } })
     fireEvent.click(screen.getByTestId('quick-reply-save'))
-    await waitFor(() => expect(stored()).toEqual([{ id: 'a', text: 'go on' }]))
+    await waitFor(() => expect(stored()).toEqual([{ id: 'a', title: 'alpha', content: 'go on' }]))
   })
 
   // R1-1 / F4: Enter must honour the same `busy` the save button does.
   it('Enter does not save while the host is offline', async () => {
-    seed(entry([{ id: 'a', text: 'alpha' }], 1))
+    seed(entry([{ id: 'a', title: 'alpha', content: 'alpha' }], 1))
     render(<QuickReplySettings hostId={H} />)
     fireEvent.click(screen.getByTestId('quick-reply-edit-a'))
     act(() => useHostStore.setState({ runtime: { [H]: { status: 'disconnected' } } }))
@@ -144,7 +167,7 @@ describe('QuickReplySettings', () => {
   })
 
   it('Enter twice in a row sends one save', async () => {
-    seed(entry([{ id: 'a', text: 'alpha' }], 1))
+    seed(entry([{ id: 'a', title: 'alpha', content: 'alpha' }], 1))
     let release!: () => void
     saveQuickReplies.mockImplementation(() => new Promise<void>((r) => { release = r }))
     render(<QuickReplySettings hostId={H} />)
@@ -159,7 +182,7 @@ describe('QuickReplySettings', () => {
   })
 
   it('a failed reload keeps listing the last known list, not the defaults', () => {
-    seed({ ...entry([{ id: 'a', text: 'alpha' }], 3), status: 'error', error: 'offline' })
+    seed({ ...entry([{ id: 'a', title: 'alpha', content: 'alpha' }], 3), status: 'error', error: 'offline' })
     render(<QuickReplySettings hostId={H} />)
     expect(rowIds()).toEqual(['a'])
     expect(screen.queryByTestId('quick-replies-defaults')).toBeNull()
@@ -206,13 +229,13 @@ describe('QuickReplySettings', () => {
     const input = () => screen.getByTestId('quick-reply-input') as HTMLInputElement
 
     it('keeps the typed text when the editor moves from its row to the new row', () => {
-      seed(entry([{ id: 'a', text: 'alpha' }, { id: 'b', text: 'beta' }], 3))
+      seed(entry([{ id: 'a', title: 'alpha', content: 'alpha' }, { id: 'b', title: 'beta', content: 'beta' }], 3))
       render(<QuickReplySettings hostId={H} />)
       fireEvent.click(screen.getByTestId('quick-reply-edit-a'))
       fireEvent.change(input(), { target: { value: 'my long draft' } })
       expect(screen.getByTestId('quick-reply-row-a')).toContainElement(input())
 
-      remoteList([{ id: 'b', text: 'beta' }], 4) // 'a' was deleted elsewhere
+      remoteList([{ id: 'b', title: 'beta', content: 'beta' }], 4) // 'a' was deleted elsewhere
 
       expect(screen.queryByTestId('quick-reply-row-a')).toBeNull()
       expect(screen.getByTestId('quick-reply-new')).toContainElement(input()) // it moved ...
@@ -220,18 +243,18 @@ describe('QuickReplySettings', () => {
     })
 
     it('saving after the move appends the item with the typed text (last writer wins, as before)', async () => {
-      seed(entry([{ id: 'a', text: 'alpha' }, { id: 'b', text: 'beta' }], 3))
+      seed(entry([{ id: 'a', title: 'alpha', content: 'alpha' }, { id: 'b', title: 'beta', content: 'beta' }], 3))
       render(<QuickReplySettings hostId={H} />)
       fireEvent.click(screen.getByTestId('quick-reply-edit-a'))
       fireEvent.change(input(), { target: { value: 'my long draft' } })
-      remoteList([{ id: 'b', text: 'beta' }], 4)
+      remoteList([{ id: 'b', title: 'beta', content: 'beta' }], 4)
       fireEvent.click(screen.getByTestId('quick-reply-save'))
       await waitFor(() => expect(saveQuickReplies).toHaveBeenCalled())
-      expect(saveQuickReplies.mock.calls[0][1]).toEqual([{ id: 'b', text: 'beta' }, { id: 'a', text: 'my long draft' }])
+      expect(saveQuickReplies.mock.calls[0][1]).toEqual([{ id: 'b', title: 'beta', content: 'beta' }, { id: 'a', title: 'alpha', content: 'my long draft' }])
     })
 
     it('the draft belongs to one edit: cancelling drops it, and editing the item again starts from its saved text', () => {
-      seed(entry([{ id: 'a', text: 'alpha' }], 3))
+      seed(entry([{ id: 'a', title: 'alpha', content: 'alpha' }], 3))
       render(<QuickReplySettings hostId={H} />)
       fireEvent.click(screen.getByTestId('quick-reply-edit-a'))
       fireEvent.change(input(), { target: { value: 'typed then abandoned' } })
@@ -241,7 +264,7 @@ describe('QuickReplySettings', () => {
     })
 
     it('opening another item\'s editor WITHOUT closing the first drops the first draft: editing it again starts from its saved text', () => {
-      seed(entry([{ id: 'a', text: 'alpha' }, { id: 'b', text: 'beta' }], 3))
+      seed(entry([{ id: 'a', title: 'alpha', content: 'alpha' }, { id: 'b', title: 'beta', content: 'beta' }], 3))
       render(<QuickReplySettings hostId={H} />)
       fireEvent.click(screen.getByTestId('quick-reply-edit-a'))
       fireEvent.change(input(), { target: { value: 'draft for a' } })
@@ -252,7 +275,7 @@ describe('QuickReplySettings', () => {
     })
 
     it('another item\'s edit does not inherit a previous item\'s draft', () => {
-      seed(entry([{ id: 'a', text: 'alpha' }, { id: 'b', text: 'beta' }], 3))
+      seed(entry([{ id: 'a', title: 'alpha', content: 'alpha' }, { id: 'b', title: 'beta', content: 'beta' }], 3))
       render(<QuickReplySettings hostId={H} />)
       fireEvent.click(screen.getByTestId('quick-reply-edit-a'))
       fireEvent.change(input(), { target: { value: 'draft for a' } })

@@ -12,7 +12,8 @@ export type CommandIcon =
 export interface HostProject { id: string; name: string; slug: string; path: string }
 export interface HostCommand { id: string; name: string; command: string; icon: CommandIcon }
 export type ResumeTemplateOverrides = Record<string, { exact: string; fallback: string }>
-export interface QuickReply { id: string; text: string }
+/** A quick reply: `title` is drawn on the button, `content` is what a tap sends (quick replies v2). */
+export interface QuickReply { id: string; title: string; content: string }
 /**
  * Host config `relay` (lead-team-relay spec §8.7 (a)): the two self-relay switches; a member has none (U13). The same
  * row holds the three relay prompt bodies (§8.8, P9a-1; absent = the built-in default) — carried along untouched, so
@@ -88,6 +89,12 @@ export async function fetchHostConfig(hostId: string, signal?: AbortSignal): Pro
   return await res.json()
 }
 
+/** A daemon from before v2 reads only `text` and drops the rest, so a quick reply also goes out as `text: content`. */
+function wireItems(collection: HostConfigCollection, items: unknown): unknown {
+  if (collection !== 'quick-replies') return items
+  return (items as QuickReply[]).map((r) => ({ id: r.id, title: r.title, content: r.content, text: r.content }))
+}
+
 /** Resolves to the stored copy, unchecked like `fetchHostConfig`'s (`parseHostConfigField` reads it). */
 export async function putHostConfig<C extends HostConfigCollection>(
   hostId: string,
@@ -99,7 +106,7 @@ export async function putHostConfig<C extends HostConfigCollection>(
   const res = await hostFetch(hostId, `/api/hostconfig/${collection}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ items, baseRevision }),
+    body: JSON.stringify({ items: wireItems(collection, items), baseRevision }),
   })
   if (res.status === 409) {
     throw new HostConfigConflictError((await res.json()) as Versioned<unknown>)
