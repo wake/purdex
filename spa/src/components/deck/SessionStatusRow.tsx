@@ -1,12 +1,13 @@
 // spa/src/components/deck/SessionStatusRow.tsx — the status row under a session view's input, wired to what the App already has:
 // the session's Claude Code statusLine snapshot (`useAgentStore.ccStatus`, the one the Mac status bar reads) for model, effort,
-// cost and (when it carries them) cwd / worktree / branch; the pane's rebuild record for the cwd otherwise. No new data path.
+// cost, the usage rings (context from this session, 5h / 7d the host's freshest: `usageFor`) and (when it carries them) cwd / worktree / branch; the pane's rebuild record for the cwd otherwise. No new data path.
 import { useAgentStore } from '../../stores/useAgentStore'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { compositeKey } from '../../lib/composite-key'
 import { useHostTint } from '../../lib/host-tint'
 import { parseCcExtras } from '../../lib/usage-display'
 import type { DeckFooterContext } from './footer-context'
+import { CcUsageSegments } from '../status/UsageSegments'
 import { StatusRow } from './StatusRow'
 import { readWhere } from './session-line'
 
@@ -36,6 +37,7 @@ export function SessionStatusRow({ sessionCode, cwd, ctx }: Props) {
       effort={extras.effort ?? ctx.usage?.effort ?? null}
       cost={extras.cost}
       tint={tint}
+      usage={<CcUsageSegments hostId={ctx.hostId} sessionCode={sessionCode} keep />}
     />
   )
 }

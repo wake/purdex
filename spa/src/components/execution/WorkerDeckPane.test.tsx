@@ -21,6 +21,7 @@ import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useWorkerSettingsStore } from '../../stores/useWorkerSettingsStore'
 import { useHostConfigStore } from '../../stores/useHostConfigStore'
 import * as api from '../../lib/nex/nex-api'
+import { clearNexQuotaShare } from '../../hooks/useNexHostQuota'
 import * as lease from '../../hooks/useExecutionLease'
 import { NexApiError } from '../../lib/nex/types'
 import { takeBack, takeToTerminal } from '../../lib/nex/handoff'
@@ -29,7 +30,7 @@ import { getTakeToTerminal } from '../../lib/nex/take-to-terminal-registry'
 import { getNexClientId } from '../../lib/nex/client-id'
 import { closeTab } from '../../lib/tab-lifecycle'
 
-vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn(), listExecutions: vi.fn(), answerPermission: vi.fn() }))
+vi.mock('../../lib/nex/nex-api', () => ({ sendMessage: vi.fn(), interruptExecution: vi.fn(), terminateExecution: vi.fn(), releaseLease: vi.fn(), uploadWorkerFile: vi.fn(), fetchExecutionPrelude: vi.fn(), listExecutions: vi.fn(), answerPermission: vi.fn(), fetchNexHost: vi.fn(() => new Promise(() => {})) }))
 vi.mock('../../hooks/useExecutionSubscription', () => ({ useExecutionSubscription: vi.fn(() => ({ problem: null, paused: false })) }))
 vi.mock('../../hooks/useExecutionLease', () => ({ useExecutionLease: vi.fn() }))
 
@@ -57,6 +58,7 @@ function seed(sum: Record<string, unknown>, loaded = true) {
 const realEnsure = useNexHostStore.getState().ensure
 
 beforeEach(() => {
+  clearNexQuotaShare()
   cleanup(); clearAllPanels(); clearAllSendQueues(); clearAllAdapters(); clearAllWorkerLeases(); clearAllUploads(); clearAllAttachments(); clearAllDrafts(); clearAllWorkerDrafts(); clearAllPermissionCards()
   useExecutionStore.setState({ executions: {} })
   useNexHostStore.setState({ ensure: async () => {}, byHost: { [H]: { phase: 'ready', capabilities: {} } } } as never)
@@ -127,6 +129,18 @@ describe('WorkerDeckPane', () => {
     const row = screen.getByTestId('status-row')
     expect(row).toHaveTextContent('claude-haiku-5-5')
     expect(screen.getByTestId('item-cost')).toHaveTextContent('$1.50')
+  })
+
+  it('the status row ends with the host\'s 5h / 7d rings (the worker status bar\'s own segments), kept on a narrow row', async () => {
+    vi.mocked(api.fetchNexHost).mockResolvedValueOnce({ active_account: 'a', quota: { five_hour_pct: 41, seven_day_pct: 72, resets_at: 0, source: 'x' } } as never)
+    seed(summary())
+    render(ui())
+    const five = await screen.findByTestId('status-seg-quota-five-hour')
+    expect(five).toHaveTextContent('59%')
+    expect(screen.getByTestId('status-seg-quota-seven-day')).toHaveTextContent('28%')
+    expect(screen.getByTestId('status-row')).toContainElement(five)
+    expect(screen.getByTestId('status-row').lastElementChild).toBe(five.parentElement)
+    expect(five.className).not.toMatch(/max-\[/)
   })
 
   it('the small view menu offers the deck and the chat (no room), and switches between them', () => {
