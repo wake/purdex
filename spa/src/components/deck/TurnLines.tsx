@@ -21,7 +21,7 @@ export function DoneTurnLine({ turn }: { turn: LineTurn }) {
   )
 }
 
-/** The live line: `✻ Running… · Bash · 2 subagents · 3m 03s`, or `✻ Waiting for you`. Draws nothing while the agent is idle. */
+/** The live line: `✻ Running · Bash · 2 subagents · 3m 03s`, `✻ Thinking… · 3m 03s` when no tool or subagent runs, or `✻ Waiting for you`. Draws nothing while the agent is idle. */
 export function LiveTurnLine({ turns, status }: { turns: readonly LineTurn[]; status: string | undefined }) {
   const t = useI18nStore((s) => s.t)
   const live = liveLine(turns, status)
@@ -35,7 +35,8 @@ export function LiveTurnLine({ turns, status }: { turns: readonly LineTurn[]; st
       </div>
     )
   }
-  const parts = [t('deck.live.running')]
+  // No tool and no subagent running: the model is thinking or writing (the conversation cannot tell which, as in the terminal).
+  const parts = [t(live.busy ? 'deck.live.running' : 'deck.live.thinking')]
   if (live.tool) parts.push(live.tool)
   if (live.subagents > 0) parts.push(t('deck.live.subagents', { n: live.subagents }))
   if (live.since !== null) parts.push(formatDuration(Math.max(0, now - live.since), t))

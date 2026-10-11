@@ -34,8 +34,8 @@ describe('liveLine', () => {
     const l = liveLine([running([step('a', { status: 'done', tool: 'Read' }), step('b', { tool: 'Bash' }), step('c', { kind: 'task', tool: 'Agent' }), step('d', { kind: 'task', tool: 'Agent' })])], 'running')
     expect(l).toMatchObject({ tool: 'Bash', subagents: 2 })
   })
-  it('a running turn with only subagents names the Agent tool; with nothing running names nothing', () => {
-    expect(liveLine([running([step('c', { kind: 'task', tool: 'Agent' })])], 'running')).toMatchObject({ tool: 'Agent', subagents: 1 })
+  it('a running turn with only subagents names no tool (they are counted); with nothing running names nothing', () => {
+    expect(liveLine([running([step('c', { kind: 'task', tool: 'Agent' })])], 'running')).toMatchObject({ tool: null, subagents: 1 })
     expect(liveLine([running([step('a', { status: 'done' })])], 'running')).toMatchObject({ tool: null, subagents: 0 })
   })
   it('a start time of 0 (a zero value) is no clock', () => {
@@ -95,9 +95,35 @@ describe('LiveTurnLine', () => {
   it('ticks the elapsed time every second, with the running tool and the subagent count', () => {
     vi.useFakeTimers({ now: T0 + 3_000 })
     render(<LiveTurnLine status="running" turns={[{ outcome: 'running', started_at: T0, items: [step('b'), step('c', { kind: 'task', tool: 'Agent' })] }]} />)
-    expect(screen.getByTestId('turn-live').textContent).toBe('✻Running… · Bash · 1 subagent(s) · 3s')
+    expect(screen.getByTestId('turn-live').textContent).toBe('✻Running · Bash · 1 subagent(s) · 3s')
     act(() => { vi.advanceTimersByTime(2_000) })
     expect(screen.getByTestId('turn-live').textContent).toContain('5s')
+  })
+  describe('the words follow what runs', () => {
+    const text = (items: unknown[]) => {
+      vi.useFakeTimers({ now: T0 + 183_000 })
+      render(<LiveTurnLine status="running" turns={[{ outcome: 'running', started_at: T0, items: items as LineTurn['items'] }]} />)
+      return screen.getByTestId('turn-live').textContent
+    }
+    it('a tool: Running · tool · time (no ellipsis)', () => { expect(text([step('b')])).toBe('✻Running · Bash · 3m 03s') })
+    it('only subagents: Running · n subagents · time, no tool name', () => {
+      expect(text([step('c', { kind: 'task', tool: 'Agent' }), step('d', { kind: 'task', tool: 'Agent' })])).toBe('✻Running · 2 subagent(s) · 3m 03s')
+    })
+    it('a tool and subagents', () => { expect(text([step('b'), step('c', { kind: 'task', tool: 'Agent' })])).toBe('✻Running · Bash · 1 subagent(s) · 3m 03s') })
+    it('nothing running (the model thinks or writes): Thinking… · time', () => { expect(text([step('a', { status: 'done' })])).toBe('✻Thinking… · 3m 03s') })
+    it('a running step without a tool name still counts as running, not thinking', () => { expect(text([step('b', { tool: '' })])).toBe('✻Running · 3m 03s') })
+    it('a turn with no steps yet thinks too, in Chinese as well', () => {
+      useI18nStore.getState().setLocale('zh-TW')
+      expect(text([])).toBe('✻思考中… · 3 分 03 秒')
+    })
+  })
+  it('a tool that ends puts the line back to thinking', () => {
+    vi.useFakeTimers({ now: T0 + 3_000 })
+    const turn = (status: string) => [{ outcome: 'running', started_at: T0, items: [step('b', { status })] }] as LineTurn[]
+    const { rerender } = render(<LiveTurnLine status="running" turns={turn('running')} />)
+    expect(screen.getByTestId('turn-live').textContent).toContain('Running · Bash')
+    rerender(<LiveTurnLine status="running" turns={turn('done')} />)
+    expect(screen.getByTestId('turn-live').textContent).toBe('✻Thinking… · 3s')
   })
   it('a line that comes on after a long idle counts from the present at once, not from when it mounted', () => {
     vi.useFakeTimers({ now: T0 })
