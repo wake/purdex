@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { DestructiveGuard, SUBMIT_TIMEOUT_MS, interruptSession, outcomeMessage, submitPrompt, mayHaveRun } from './send'
+import { DestructiveGuard, SUBMIT_TIMEOUT_MS, interruptSession, outcomeMessage, submitPrompt, submitTyped, typedSendPort, mayHaveRun } from './send'
 import { isDestructive, normalizePrompt, planSend } from './send-plan'
 
 const fetchMock = vi.hoisted(() => vi.fn())
@@ -159,5 +159,98 @@ describe('DestructiveGuard', () => {
     expect(g.check('rm -rf x')).toBe('confirm')
     t = 5500
     expect(g.check('rm -rf y')).toBe('confirm')
+  })
+})
+
+describe('submitTyped (POST /api/sessions/{code}/submit)', () => {
+  const T = { code: 'dev001', instance: '6901:1789205013' }
+  const run = () => submitTyped('h', T, 'hi', 'c1')
+
+  it('posts text, client_msg_id and expected_tmux_instance to the session code on the pinned host', async () => {
+    fetchMock.mockImplementation(() => json(200, { outcome: 'handed', mode: 'fill' }))
+    await run()
+    const [host, p, init] = fetchMock.mock.calls[0]
+    expect(host).toBe('h')
+    expect(p).toBe('/api/sessions/dev001/submit')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(init.body)).toEqual({ text: 'hi', client_msg_id: 'c1', expected_tmux_instance: '6901:1789205013' })
+  })
+
+  it.each([
+    [200, { outcome: 'handed', mode: 'fill' }, { kind: 'handed', mode: 'fill' }],
+    [200, { outcome: 'handed', mode: 'keys' }, { kind: 'handed', mode: 'keys' }],
+    [200, { outcome: 'unknown', mode: 'fill' }, { kind: 'unknown' }],
+    [200, { outcome: 'unknown', reason: 'recall_empty' }, { kind: 'unknown', reason: 'recall_empty' }],
+    [409, { outcome: 'refused', reason: 'input_not_empty', error: 'input_not_empty' }, { kind: 'refused', reason: 'input_not_empty', status: 409 }],
+    [409, { outcome: 'refused', reason: 'text_left_in_terminal', error: 'text_left_in_terminal' }, { kind: 'refused', reason: 'text_left_in_terminal', status: 409 }],
+    [429, { outcome: 'refused', reason: 'busy', error: 'busy' }, { kind: 'refused', reason: 'busy', status: 429 }],
+    [429, { reason: 'too_many_pending', error: 'too_many_pending' }, { kind: 'rejected', status: 429, code: 'too_many_pending' }],
+    [400, { reason: 'needs_terminal', error: 'needs_terminal' }, { kind: 'needs_terminal' }],
+    [400, { reason: 'empty_text', error: 'empty_text' }, { kind: 'invalid', code: 'empty_text' }],
+    [400, { reason: 'too_long', error: 'too_long' }, { kind: 'invalid', code: 'too_long' }],
+    [400, { reason: 'bad_text', error: 'bad_text' }, { kind: 'invalid', code: 'bad_text' }],
+    [400, { reason: 'bad_client_msg_id', error: 'bad_client_msg_id' }, { kind: 'rejected', status: 400, code: 'bad_client_msg_id' }],
+    [400, {}, { kind: 'rejected', status: 400, code: '' }],
+    [404, { reason: 'not_found', error: 'not_found' }, { kind: 'rejected', status: 404, code: 'not_found' }],
+    [500, { reason: 'internal', error: 'internal' }, { kind: 'rejected', status: 500, code: 'internal' }],
+    [503, { reason: 'unavailable', error: 'unavailable' }, { kind: 'rejected', status: 503, code: 'unavailable' }],
+  ])('%i %j -> %j', async (status, body, want) => {
+    fetchMock.mockImplementation(() => json(status, body))
+    await expect(run()).resolves.toEqual(want)
+  })
+
+  it('a 200 whose body cannot be read may have run: unknown', async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(new Response('not json', { status: 200 })))
+    await expect(run()).resolves.toEqual({ kind: 'unknown' })
+  })
+
+  it('a lost connection is `network`', async () => {
+    fetchMock.mockRejectedValueOnce(new TypeError('fetch failed'))
+    await expect(run()).resolves.toEqual({ kind: 'network' })
+  })
+
+  it('may have run: unknown, network and text_left_in_terminal; every other refusal did not', () => {
+    expect(mayHaveRun({ kind: 'unknown' })).toBe(true)
+    expect(mayHaveRun({ kind: 'network' })).toBe(true)
+    expect(mayHaveRun({ kind: 'refused', reason: 'text_left_in_terminal', status: 409 })).toBe(true)
+    expect(mayHaveRun({ kind: 'refused', reason: 'input_not_empty', status: 409 })).toBe(false)
+    expect(mayHaveRun({ kind: 'handed', mode: 'fill' })).toBe(false)
+    expect(mayHaveRun({ kind: 'needs_terminal' })).toBe(false)
+    expect(mayHaveRun({ kind: 'rejected', status: 503, code: 'x' })).toBe(false)
+  })
+})
+
+describe('typedSendPort', () => {
+  it('reads the target at each submit: a generation stamped later is the one sent', async () => {
+    fetchMock.mockImplementation(() => json(200, { outcome: 'handed', mode: 'fill' }))
+    let target: { code: string; instance: string } | null = { code: 'dev001', instance: '' }
+    const port = typedSendPort('h', SID, () => target)
+    await expect(port.submit('a', 'c1')).resolves.toEqual({ kind: 'no_instance' })
+    expect(fetchMock).not.toHaveBeenCalled()
+    target = { code: 'dev001', instance: 'g2' }
+    await expect(port.submit('a', 'c2')).resolves.toEqual({ kind: 'handed', mode: 'fill' })
+    expect(JSON.parse(fetchMock.mock.calls[0][2].body).expected_tmux_instance).toBe('g2')
+    target = null
+    await expect(port.submit('a', 'c3')).resolves.toEqual({ kind: 'no_instance' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('interrupt stays on the mod route', async () => {
+    fetchMock.mockImplementation(() => json(200, { status: 'accepted' }))
+    await typedSendPort('h', SID, () => null).interrupt()
+    expect(fetchMock.mock.calls[0][1]).toBe(`/api/conversations/claude/${SID}/interrupt`)
+  })
+})
+
+describe('outcomeMessage for the typed route', () => {
+  it('handed, keys caption, no_instance and every classified refusal have their own message; an unknown reason carries its code', () => {
+    const reasons = ['input_not_empty', 'dialog_open', 'pane_busy', 'waiting', 'generation', 'no_owner_yet', 'text_left_in_terminal', 'busy']
+    const keys = [
+      outcomeMessage({ kind: 'handed', mode: 'fill' }).key, outcomeMessage({ kind: 'handed', mode: 'keys' }).key, outcomeMessage({ kind: 'no_instance' }).key,
+      ...reasons.map((r) => outcomeMessage({ kind: 'refused', reason: r, status: 409 }).key),
+    ]
+    expect(new Set(keys).size).toBe(keys.length)
+    expect(outcomeMessage({ kind: 'refused', reason: 'pane_mismatch', status: 409 })).toMatchObject({ key: 'deck.send.refused_other', params: { code: 'pane_mismatch' } })
+    expect(outcomeMessage({ kind: 'refused', reason: 'text_left_in_terminal', status: 409 }).tone).toBe('warn')
   })
 })
