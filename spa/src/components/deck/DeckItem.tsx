@@ -1,5 +1,7 @@
 // spa/src/components/deck/DeckItem.tsx — one conversation item, drawn the deck's way (U3 spec §4). An item type this build
 // does not know draws nothing (the daemon may add kinds; older clients skip them, U1 §8.1).
+import { useContext } from 'react'
+import { SearchScopeContext } from './search-scope'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { isKnownItem, type ConversationItem } from '../../lib/conversations/types'
 import RoomProse, { RoomProseLight } from '../room/RoomProse'
@@ -12,6 +14,7 @@ import { agentUnitId } from '../../lib/conversations/find-units'
 /** `light`: the agent text is drawn as plain text (a turn far off screen, #2469); streaming text is always drawn in full. */
 export function DeckItem({ item, actions, light, agentModel, agentHeader, midTurn }: { item: ConversationItem; /** a user message that is not the first of its turn */ midTurn?: boolean; actions?: StepActions; light?: boolean; /** proto v2: the first agent text of a turn carries the head line */ agentModel?: string; agentHeader?: boolean }) {
   const t = useI18nStore((s) => s.t)
+  const scope = useContext(SearchScopeContext)
   if (!isKnownItem(item)) return null
   switch (item.type) {
     case 'user': return <UserBlock item={item} midTurn={midTurn} />
@@ -21,7 +24,7 @@ export function DeckItem({ item, actions, light, agentModel, agentHeader, midTur
           {agentHeader && <AgentHeader model={agentModel} at={item.at} />}
           {light && !item.streaming
             ? <RoomProseLight content={item.markdown} cjk />
-            : <RoomProse content={item.markdown} streaming={item.streaming} cacheKey={item.id} searchUnit={agentUnitId(item.id)} cjk />}
+            : <RoomProse content={item.markdown} streaming={item.streaming} cacheKey={item.id} searchUnit={agentUnitId(item.id, scope)} cjk />}
           {item.truncated && <div className="deck-t-down text-text-muted">{t('deck.output.cut')}</div>}
         </div>
       )

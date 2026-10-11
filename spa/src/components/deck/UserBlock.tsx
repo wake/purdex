@@ -1,5 +1,7 @@
 // spa/src/components/deck/UserBlock.tsx — the deck's one tinted block (U3 spec §4): a framed well with a caption by source
 // (你 · HH:mm / 你 · HH:mm · 回合中送達 / 來自 <name> / 背景任務回報 / 排程喚醒). A bash-mode input shows as `! command`.
+import { useContext } from 'react'
+import { SearchScopeContext } from './search-scope'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { textOutput, userCaption, userTone, type UserTone } from '../../lib/conversations/deck-format'
 import type { UserItem } from '../../lib/conversations/types'
@@ -28,6 +30,7 @@ export const PENDING_USER_CAPTION = 'text-accent'
 
 export function UserBlock({ item, midTurn }: { item: UserItem; /** Not the first user message of its turn (a `queued` one then says it arrived mid-turn). */ midTurn?: boolean }) {
   const t = useI18nStore((s) => s.t)
+  const scope = useContext(SearchScopeContext)
   const cap = userCaption(item, midTurn)
   const caption =
     cap.kind === 'you' ? t('deck.user.you', { time: cap.time })
@@ -50,7 +53,7 @@ export function UserBlock({ item, midTurn }: { item: UserItem; /** Not the first
     <div data-testid="deck-user" data-source={item.source} data-tone={tone} className={`${c.box} px-3 py-2`}>
       <div data-testid="deck-user-caption" className={`mb-1 deck-t-down font-medium ${c.caption}`}>{caption}</div>
       <div className={`whitespace-pre-wrap break-words deck-t-up ${c.body} ${bash ? 'font-mono' : ''}`}>
-        <span data-search-unit={userUnitId(item.id)}>{bash ? `! ${item.text}` : OWN_TEXT_SOURCES.has(item.source) ? <UserText text={item.text} /> : <CjkText text={item.text} />}</span>
+        <span data-search-unit={userUnitId(item.id, scope)}>{bash ? `! ${item.text}` : OWN_TEXT_SOURCES.has(item.source) ? <UserText text={item.text} /> : <CjkText text={item.text} />}</span>
         {item.truncated && <span className="text-text-muted">…</span>}
       </div>
       {item.images && item.images.length > 0 && (
