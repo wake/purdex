@@ -63,10 +63,57 @@ describe('stepHistory', () => {
     expect(stepHistory(K, 'up', r.draft, true)?.draft).toBe('plain')
     expect(readAttachments(K)).toHaveLength(0)
   })
-  it('keeps the position by index when a message arrives meanwhile', () => {
+  it('keeps the place by identity: older items prepended while one is shown, the next Up is its true older neighbour', () => {
+    const [a, b, c] = [user('one'), user('two'), user('three')]
+    setHistorySource(K, [a, b, c])
+    stepHistory(K, 'up', '', true)
+    stepHistory(K, 'up', 'three', true) // showing two
+    setHistorySource(K, [user('zero-a'), user('zero-b'), a, b, c])
+    expect(stepHistory(K, 'up', 'two', true)?.draft).toBe('one')
+    expect(stepHistory(K, 'up', 'one', true)?.draft).toBe('zero-b')
+  })
+  it('older items removed while one is shown: Up is null at the new oldest, Down still the true newer neighbour', () => {
+    const [a, b, c] = [user('one'), user('two'), user('three')]
+    setHistorySource(K, [a, b, c])
+    stepHistory(K, 'up', '', true)
+    stepHistory(K, 'up', 'three', true) // two
+    setHistorySource(K, [b, c])
+    expect(stepHistory(K, 'up', 'two', true)).toBeNull()
+    expect(stepHistory(K, 'down', 'two', true)?.draft).toBe('three')
+  })
+  it('a truncated flip of an older item does not shift the walk', () => {
+    const [a, b, c] = [user('one'), user('two'), user('three')]
+    setHistorySource(K, [a, b, c])
+    stepHistory(K, 'up', '', true)
+    stepHistory(K, 'up', 'three', true) // two
+    setHistorySource(K, [{ ...a, truncated: true }, b, c])
+    expect(stepHistory(K, 'up', 'two', true)).toBeNull() // the cut one left the history; two is now the oldest
+  })
+  it('a duplicate-collapse change does not shift the walk', () => {
+    const [a, b, c] = [user('one'), user('two'), user('three')]
+    setHistorySource(K, [a, b, c])
+    stepHistory(K, 'up', '', true)
+    stepHistory(K, 'up', 'three', true) // two
+    setHistorySource(K, [a, user('one'), b, c]) // a duplicate of one appears: collapses into a
+    expect(stepHistory(K, 'up', 'two', true)?.draft).toBe('one')
+    expect(stepHistory(K, 'up', 'one', true)).toBeNull()
+  })
+  it('the shown item vanished: the walk ends and the box is left alone', () => {
+    const [a, b, c] = [user('one'), user('two'), user('three')]
+    setHistorySource(K, [a, b, c])
+    stepHistory(K, 'up', '', true)
+    stepHistory(K, 'up', 'three', true) // two
+    setHistorySource(K, [a, c])
+    expect(stepHistory(K, 'up', 'two', true)).toBeNull()
+    expect(readDraft(K)).toBe('two')
+    expect(isWalking(K, 'two')).toBe(false)
+  })
+  it('keeps the position when a message arrives meanwhile', () => {
+    const [a, b, c] = [user('one'), user('two'), user('three')]
+    setHistorySource(K, [a, b, c])
     stepHistory(K, 'up', '', true)
     stepHistory(K, 'up', 'three', true)
-    setHistorySource(K, [user('one'), user('two'), user('three'), user('four')])
+    setHistorySource(K, [a, b, c, user('four')])
     expect(stepHistory(K, 'up', 'two', true)?.draft).toBe('one')
   })
 })

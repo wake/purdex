@@ -9,26 +9,32 @@ import { writeDraft } from './draft-memory'
 import { imagePlaceholder, splitImageRefs } from './image-placeholder'
 import type { ConversationItem, UserItem } from './types'
 
-/** The texts the person sent, oldest first: typed (`user`) or delivered from Claude Code's queue (`queued`); consecutive duplicates collapse. */
-export function sentTexts(items: readonly ConversationItem[]): string[] {
-  const out: string[] = []
+interface Sent { id: string; text: string }
+
+/** The messages the person sent, oldest first: typed (`user`) or delivered from Claude Code's queue (`queued`); consecutive duplicates collapse (the first one's identity stands). */
+function sentEntries(items: readonly ConversationItem[]): Sent[] {
+  const out: Sent[] = []
   for (const i of items) {
     if (i.type !== 'user') continue
     const u = i as UserItem
     if ((u.source !== 'user' && u.source !== 'queued') || u.truncated || u.text.trim() === '') continue
-    if (out[out.length - 1] !== u.text) out.push(u.text)
+    if (out[out.length - 1]?.text !== u.text) out.push({ id: u.id || `text:${u.text}`, text: u.text })
   }
   return out
 }
 
-interface Walk { pos: number; shown: string; chipIds: string[] }
+/** The texts the person sent, oldest first. */
+export const sentTexts = (items: readonly ConversationItem[]): string[] => sentEntries(items).map((e) => e.text)
 
-const sources = new Map<string, readonly string[]>()
+/** `id` is the item the box shows (its identity, not a position: the list changes under the walk). */
+interface Walk { id: string; shown: string; chipIds: string[] }
+
+const sources = new Map<string, readonly Sent[]>()
 const walks = new Map<string, Walk>()
 
 /** The conversation's items as the pane reads them now (called on every change). */
 export function setHistorySource(key: string, items: readonly ConversationItem[]): void {
-  sources.set(key, sentTexts(items))
+  sources.set(key, sentEntries(items))
 }
 
 /** Whether the box still shows exactly what the last step put there: an edit turns it into an ordinary draft. */
@@ -66,11 +72,13 @@ export function stepHistory(key: string, dir: 'up' | 'down', draft: string, canS
     walks.delete(key)
     if (dir === 'down' || !canStart || list.length === 0) return null
     pos = list.length - 1
-  } else if (dir === 'up') {
-    if (w.pos <= 0) return null
-    pos = Math.min(w.pos, list.length) - 1
   } else {
-    pos = w.pos + 1
+    const at = list.findIndex((e) => e.id === w.id) // relocate by identity: pages, removals and collapses shift positions
+    if (at < 0) { walks.delete(key); return null } // the item is gone: the walk ends, the box stays as it is
+    if (dir === 'up') {
+      if (at <= 0) return null
+      pos = at - 1
+    } else pos = at + 1
   }
   for (const id of w?.chipIds ?? []) removeAttachment(key, id)
   if (pos >= list.length) { // past the newest: the walk ends in an empty box
@@ -78,8 +86,8 @@ export function stepHistory(key: string, dir: 'up' | 'down', draft: string, canS
     writeDraft(key, '')
     return { draft: '' }
   }
-  const next = restore(key, list[pos])
-  walks.set(key, { pos, shown: next.draft, chipIds: next.chipIds })
+  const next = restore(key, list[pos].text)
+  walks.set(key, { id: list[pos].id, shown: next.draft, chipIds: next.chipIds })
   writeDraft(key, next.draft)
   reconcileAttachments(key, next.draft)
   discardCleared(key)
