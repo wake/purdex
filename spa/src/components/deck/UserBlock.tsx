@@ -22,6 +22,8 @@ const TONE: Record<UserTone, { box: string; caption: string; body: string }> = {
 
 /** A message the agent has not accepted yet (held by the App, or in Claude Code's queue): the first cut of the person's block — a dark well in a thin accent frame, the caption in accent. */
 export const PENDING_USER_BOX = 'rounded-md border border-accent bg-accent/12'
+/** Chat mode: the same not-accepted frame in the delivered bubble's shape (ChatBubbles' UserBubble). */
+export const PENDING_USER_BOX_CHAT = 'max-w-[80%] rounded-2xl rounded-br-sm border border-accent bg-accent/12'
 export const PENDING_USER_CAPTION = 'text-accent'
 
 export function UserBlock({ item, midTurn }: { item: UserItem; /** Not the first user message of its turn (a `queued` one then says it arrived mid-turn). */ midTurn?: boolean }) {

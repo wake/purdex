@@ -9,7 +9,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { outcomeMessage } from '../../lib/conversations/send'
 import type { QueueEntry } from '../../lib/conversations/send-queue'
 import { TAKE_BACK_BOX, activateProps } from './take-back-ui'
-import { PENDING_USER_BOX, PENDING_USER_CAPTION } from './UserBlock'
+import { PENDING_USER_BOX, PENDING_USER_BOX_CHAT, PENDING_USER_CAPTION } from './UserBlock'
 
 /** The spinner on a row whose take-back is on its way. */
 export const TakeBackSpinner = () => <CircleNotch data-testid="take-back-spinner" size={12} className="inline animate-spin text-accent" />
@@ -28,9 +28,12 @@ interface Props {
   onTakeBack?: () => void
   /** A take-back is on its way (the rows show a spinner). */
   busy?: boolean
+  /** 'chat': the rows sit on the right in the delivered bubble's shape (the caller's className must align them). Default 'deck': full-width blocks. */
+  layout?: 'deck' | 'chat'
 }
 
-export function QueuedMessages({ entries, onUndo, onResend, onDismiss, className = 'flex flex-col gap-1 px-3 pb-1', canUndo = true, onTakeBack, busy = false }: Props) {
+export function QueuedMessages({ entries, onUndo, onResend, onDismiss, className = 'flex flex-col gap-1 px-3 pb-1', canUndo = true, onTakeBack, busy = false, layout = 'deck' }: Props) {
+  const chat = layout === 'chat'
   const t = useI18nStore((s) => s.t)
   const [confirming, setConfirming] = useState<string | null>(null)
   const shown = entries.filter((e) => e.state !== 'superseded' && !e.matched)
@@ -50,7 +53,7 @@ export function QueuedMessages({ entries, onUndo, onResend, onDismiss, className
           const handed = e.state === 'sent' && e.mode !== undefined && !!onTakeBack
           const act = held ? activateProps(() => onUndo(e.id), t('deck.recall.title')) : handed ? activateProps(onTakeBack!, t('deck.recall.title')) : {}
           return (
-            <div key={e.id} data-testid="queued-message" data-state={e.state} data-mode={e.mode} aria-busy={handed && busy ? true : undefined} {...act} className={`${PENDING_USER_BOX} px-3 py-2 ${held || handed ? TAKE_BACK_BOX : ''}`}>
+            <div key={e.id} data-testid="queued-message" data-state={e.state} data-mode={e.mode} aria-busy={handed && busy ? true : undefined} {...act} className={`${chat ? PENDING_USER_BOX_CHAT : PENDING_USER_BOX} px-3 py-2 ${held || handed ? TAKE_BACK_BOX : ''}`}>
               <div className={`mb-1 deck-t-down font-medium ${PENDING_USER_CAPTION}`}>{label}{handed && busy && <> <TakeBackSpinner /></>}</div>
               <div className="whitespace-pre-wrap break-words deck-t-up text-text-primary">{e.text}</div>
               {e.state === 'undo' && canUndo && <button type="button" className="rounded px-0 deck-t-down text-accent underline-offset-2 hover:underline" onClick={(ev) => { ev.stopPropagation(); onUndo(e.id) }}>{t('deck.send.undo')}</button>}
@@ -61,7 +64,7 @@ export function QueuedMessages({ entries, onUndo, onResend, onDismiss, className
         }
         const caption = asking ? t('deck.send.resend_confirm') : m ? t(m.key, m.params) : t('deck.send.sending')
         return (
-          <div key={e.id} data-testid="queued-message" data-state={e.state} className="rounded-lg border border-border-subtle bg-surface-secondary px-3 py-1.5">
+          <div key={e.id} data-testid="queued-message" data-state={e.state} className={`${chat ? 'max-w-[80%] rounded-2xl rounded-br-sm' : 'rounded-lg'} border border-border-subtle bg-surface-secondary px-3 py-1.5`}>
             <div className={`deck-t-down ${m?.tone === 'error' ? 'text-status-error' : 'text-text-muted'}`}>{caption}</div>
             <div className="whitespace-pre-wrap break-words deck-t-up text-text-primary">{e.text}</div>
             <div className="flex gap-1">
