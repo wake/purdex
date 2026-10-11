@@ -23,6 +23,7 @@ import { workerInfoText } from '../../lib/nex/worker-info'
 import { DeckPane } from '../deck/DeckPane'
 import { ChatPane } from '../deck/ChatPane'
 import type { DeckFooterContext } from '../deck/footer-context'
+import { QuickReplies } from '../deck/QuickReplies'
 import { SessionInput } from '../deck/SessionInput'
 import { StatusRow } from '../deck/StatusRow'
 import ViewModeMenu, { ViewModeLabel } from './ViewModeMenu'
@@ -192,6 +193,7 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
       {st.leaseError?.code === 'lease_held' && (
         <div data-testid="lease-held" className="mx-2 mb-1 text-xs text-status-warning-text">{t('execution.lease_held', { principal: st.leaseError.heldBy ?? '' })}</div>
       )}
+      {!ended && <QuickReplies paneKey={ctx.paneKey} hostId={ctx.hostId} sessionId={ctx.sessionId} capabilities={ctx.capabilities} asking={ctx.asking || permissionShown} locked={streamDead} />}
       {!ended && <SessionInput {...ctx} asking={ctx.asking || permissionShown} pendingInStream lockedReason={streamDead ? t('execution.input.disconnected') : undefined} />}
       {/* the session status row (spec §3.5): the stream state, observers and lease holder at its right, small */}
       <FooterMark onChange={setFooterShown} />

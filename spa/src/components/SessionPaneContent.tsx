@@ -21,6 +21,7 @@ import { AskStrip } from './dock/AskStrip'
 import { QuestionDock } from './dock/QuestionDock'
 import { openAsks } from '../lib/conversations/asks'
 import { DeckPane } from './deck/DeckPane'
+import { QuickReplies } from './deck/QuickReplies'
 import { SessionInput } from './deck/SessionInput'
 import { SessionStatusRow } from './deck/SessionStatusRow'
 import type { DeckFooterContext } from './deck/footer-context'
@@ -116,10 +117,11 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   useSendQueueDriver(pane.id, hostId, readSession, readyItems, shownHeaderQueue(readyDoc?.header?.queued, readyDoc?.header?.status))
   const switchToTerminal = () => useSessionViewStore.getState().setView(tabId, pane.id, sessionBinding(hostId, sessionCode), 'terminal')
 
-  // The footer of the deck AND the chat, top to bottom: [dock cards (U3-4 stacks them here)] → input → status row.
+  // The footer of the deck AND the chat, top to bottom: [dock cards (U3-4 stacks them here)] → quick replies → input → status row.
   const footer = (ctx: DeckFooterContext) => (
     <div data-testid="session-footer">
       <QuestionDock ctx={ctx} />
+      <QuickReplies paneKey={ctx.paneKey} hostId={ctx.hostId} sessionId={ctx.sessionId} capabilities={ctx.capabilities} asking={ctx.asking} />
       <SessionInput {...ctx} onSwitchToTerminal={switchToTerminal} sessionCode={sessionCode} pendingInStream />
       <SessionStatusRow sessionCode={sessionCode} cwd={content.kind === 'tmux-session' ? content.rebuild?.cwd : undefined} ctx={ctx} />
     </div>
