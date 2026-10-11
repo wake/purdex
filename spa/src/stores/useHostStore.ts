@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { generateId } from '../lib/id'
+import { revPatch } from '../lib/presence/host-projection'
 import { isValidDaemonId } from '../lib/daemon-id'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import { syncIdOfSync, wireIdOfHost } from '../lib/profile/host-identity'
@@ -227,18 +228,6 @@ function createDefaultState() {
     devHostId: null as string | null,
     hostsRev: 0,
   }
-}
-
-/** The part of the host list the presence reporter in the main process uses (PA-2 D8). */
-function presenceProjection(hosts: Record<string, HostConfig>): string {
-  return JSON.stringify(Object.values(hosts).map((h) => [h.id, h.ip, h.port, h.token ?? null]).sort((a, b) => (a[0] as string).localeCompare(b[0] as string)))
-}
-
-/** `{ hostsRev }` for a patch that turns `before` into `after`; empty when the reporter's view did not change.
- *  max(prev + 1, now): a write time, so the highest rev is the latest write even across windows. */
-function revPatch(prevRev: number, before: Record<string, HostConfig>, after: Record<string, HostConfig>): { hostsRev?: number } {
-  if (presenceProjection(before) === presenceProjection(after)) return {}
-  return { hostsRev: Math.max((prevRev || 0) + 1, Date.now()) }
 }
 
 /** `ip:port` — the endpoint part of what `observeDaemonId` guards on. */
