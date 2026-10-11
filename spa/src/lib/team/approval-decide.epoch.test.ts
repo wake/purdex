@@ -131,7 +131,7 @@ describe('submitDecision when the host is forgotten while the decide is in fligh
     const old = approval()
     useApprovalStore.getState().applyOpened(H, old)
     mockedDecide.mockResolvedValueOnce(approval({ state: 'approved' }))
-    await expect(submitDecision(H, old, 'approve')).resolves.toBe('closed')
+    await expect(submitDecision(H, old, 'approve', undefined, { reveal: true })).resolves.toBe('closed')
     expect(useApprovalStore.getState().entries).toEqual({})
     expect(mockedGoto).toHaveBeenCalledTimes(1)
   })

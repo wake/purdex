@@ -10,8 +10,13 @@
 // then is queued in the store and sent when the reconnect snapshot re-adds the request (P3b). A send that fails on the
 // network while the host is still connected is not queued (nothing would resend it): it toasts and the buttons come back.
 //
-// Focus: the panel takes focus on open and Tab stays inside, as ConfirmDialog does, so a stray keystroke never
-// reaches the pane behind; focus that something behind takes anyway (a tab switch, a terminal's late focus) is pulled
+// 核准 only approves; 「核准並檢視」 (shown when the request names a tmux session to look at) approves and then goes to
+// the requester's tab (U22 (a)); 拒絕 and a decision queued while the daemon was down never switch.
+//
+// Focus: the dialog takes focus on open on 核准 (the panel itself when 核准 is disabled) and Tab stays inside, as
+// ConfirmDialog does, so a stray keystroke never reaches the pane behind. The Enter a person presses at the terminal
+// the moment the dialog appears would then approve: for 500 ms after the dialog shows, a click made with the keyboard
+// (`detail === 0`) is ignored; a mouse click never is; focus that something behind takes anyway (a tab switch, a terminal's late focus) is pulled
 // back; Escape is swallowed so a dialog beneath does not dismiss. The i18n strings are the spec's.
 //
 // 縮小 (U22 (b)): the dialog can be minimized to a corner pill (ApprovalPill). Minimized, it stays MOUNTED and hidden —
@@ -34,8 +39,9 @@ import { cellWidth } from '../lib/textwidth'
 import { adoptPayloadOf, adoptTargetLabel, clipForDisplay, leadPayloadOf, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
 import { approvalSessionLabel, formatCountdown, formatOriginAddress, memberRelayNames } from '../lib/team/approval-format'
 import { ApprovalApiError, setSelfRelayPause } from '../lib/team/approval-api'
-import { buttonBase, fieldClass, parseRoots, tabStops, teamNameOk } from './approval-dialog-helpers'
+import { buttonBase, fieldClass, keyboardGuard, parseRoots, tabStops, teamNameOk } from './approval-dialog-helpers'
 import { submitDecision } from '../lib/team/approval-decide'
+import { parseOriginTmux } from '../lib/team/approval-goto'
 
 
 export function ApprovalDialogHost() {
@@ -86,6 +92,9 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const inFlight = useRef(false)
   const overlayRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+  const approveRef = useRef<HTMLButtonElement>(null)
+  // True for `keyboardGuard.ms` after the dialog shows (or is restored): a keyboard-triggered click is ignored meanwhile.
+  const keyboardGuarded = useRef(false)
   // Where the keyboard was when the panel last took it; null while the panel has not taken it (mounted minimized).
   const focusBefore = useRef<{ el: Element | null } | null>(null)
 
@@ -104,8 +113,13 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
     if (!minimized) {
       const active = document.activeElement
       focusBefore.current = { el: inDialog(active) ? (focusBefore.current?.el ?? null) : active }
-      panelRef.current?.focus()
-      return
+      // The keyboard guard runs from here (also from a restore): see the header.
+      keyboardGuarded.current = keyboardGuard.ms > 0
+      const guardTimer = setTimeout(() => { keyboardGuarded.current = false }, keyboardGuard.ms)
+      // 核准 when it can be pressed, else the panel (a lead form that does not validate yet).
+      const approve = approveRef.current
+      ;(approve && !approve.disabled ? approve : panelRef.current)?.focus()
+      return () => clearTimeout(guardTimer)
     }
     const took = focusBefore.current
     focusBefore.current = null
@@ -197,9 +211,27 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   // A self relay and an adoption carry no grant (U13a: one click); only the lead kind validates its fields.
   const grantOk = isSelfRelay || isAdopt || isMemberRelay || (membersOk && rootsOk && nameOk && labelOk)
   const locked = busy || queued !== undefined
+
+  // A button the person just pressed turns disabled while the decision is in flight or queued, and a disabled element
+  // gives its focus up to the body — where the focus guard (it only reacts to a focus landing elsewhere) cannot see it
+  // and the keys would reach the pane behind. Take it back to the panel.
+  useEffect(() => {
+    if (minimized || !locked) return
+    const active = document.activeElement
+    const lost = active === null || active === document.body || (active instanceof HTMLButtonElement && active.disabled)
+    if (lost) panelRef.current?.focus()
+  }, [locked, minimized])
   const session = approvalSessionLabel(approval.origin)
 
-  const decide = async (decision: Decision) => {
+  // Only 核准並檢視 has somewhere to go: an origin outside tmux names no session to look at.
+  const canReveal = parseOriginTmux(approval.origin.tmux) !== null
+  // The click handler of all three buttons: the keyboard guard, then the decision.
+  const onButton = (e: React.MouseEvent, decision: Decision, reveal = false) => {
+    if (e.detail === 0 && keyboardGuarded.current) return
+    void decide(decision, reveal)
+  }
+
+  const decide = async (decision: Decision, reveal = false) => {
     if (inFlight.current || locked) return
     if (decision === 'approve' && !grantOk) return
     const grant: Grant | undefined = !isSelfRelay && !isAdopt && !isMemberRelay && decision === 'approve' ? { max_members: members, roots, ...(nameShown ? { team_name: trimmedName } : {}), ...(labelShown ? { team_label: trimmedLabel } : {}) } : undefined
@@ -227,7 +259,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
         useUndoToast.getState().show(t('approval.dialog.pause_failed', { code }))
       }
     }
-    const outcome = await submitDecision(hostId, approval, decision, grant, { epoch })
+    const outcome = await submitDecision(hostId, approval, decision, grant, { epoch, ...(reveal ? { reveal } : {}) })
     // 'closed' and 'decided_elsewhere' unmount this dialog through the store; the other two keep it.
     if (outcome === 'failed' || outcome === 'queued') {
       inFlight.current = false
@@ -465,17 +497,30 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
             data-testid="approval-deny"
             disabled={locked}
             aria-disabled={!connected || undefined}
-            onClick={() => void decide('deny')}
+            onClick={(e) => onButton(e, 'deny')}
             className={`${buttonBase} text-text-secondary hover:bg-surface-hover`}
           >
             {t('approval.dialog.deny')}
           </button>
+          {canReveal && (
+            <button
+              type="button"
+              data-testid="approval-approve-view"
+              disabled={locked || !grantOk}
+              aria-disabled={!connected || undefined}
+              onClick={(e) => onButton(e, 'approve', true)}
+              className={`${buttonBase} border border-border-default text-text-primary hover:bg-surface-hover`}
+            >
+              {t('approval.dialog.approve_and_view')}
+            </button>
+          )}
           <button
+            ref={approveRef}
             type="button"
             data-testid="approval-approve"
             disabled={locked || !grantOk}
             aria-disabled={!connected || undefined}
-            onClick={() => void decide('approve')}
+            onClick={(e) => onButton(e, 'approve')}
             className={`${buttonBase} bg-accent text-white`}
           >
             {busy && <ArrowsClockwise size={12} aria-hidden="true" className="animate-spin" />}

@@ -104,7 +104,7 @@ describe('ApprovalDialogHost — 縮小 (U22 b)', () => {
   it('minimized: Tab and Escape keydowns are not default-prevented, and focus returns to the element focused before the dialog', () => {
     renderWithTerminal()
     open('h1', request('lead', 'a', NOW, NOW + 500_000))
-    expect(document.activeElement).toBe(screen.getByTestId('approval-panel'))
+    expect(document.activeElement).toBe(screen.getByTestId('approval-approve'))
     // While open, both are taken (the baseline the minimized case is measured against).
     expect(fireEvent.keyDown(document.activeElement!, { key: 'Tab' })).toBe(false)
     expect(fireEvent.keyDown(document.activeElement!, { key: 'Escape' })).toBe(false)
@@ -117,15 +117,15 @@ describe('ApprovalDialogHost — 縮小 (U22 b)', () => {
     expect(document.activeElement).toBe(terminal())
   })
 
-  it('under StrictMode (the dev server the app loads) focus still returns to the terminal, not to the hidden panel', () => {
+  it('under StrictMode (the dev server the app loads) focus still returns to the terminal, not to the hidden dialog', () => {
     render(<StrictMode><textarea data-testid="terminal" /><ApprovalDialogHost /></StrictMode>)
     terminal().focus()
     open('h1', request('lead', 'a', NOW, NOW + 500_000))
-    expect(document.activeElement).toBe(screen.getByTestId('approval-panel'))
+    expect(document.activeElement).toBe(screen.getByTestId('approval-approve'))
     minimize()
     expect(document.activeElement).toBe(terminal())
     fireEvent.click(pill()!)
-    expect(document.activeElement).toBe(screen.getByTestId('approval-panel'))
+    expect(document.activeElement).toBe(screen.getByTestId('approval-approve'))
     minimize()
     expect(document.activeElement).toBe(terminal())
   })
@@ -184,7 +184,7 @@ describe('ApprovalDialogHost — 縮小 (U22 b)', () => {
   })
 
   for (const kind of KINDS) {
-    it(`clicking the pill restores the dialog and focuses its panel (a ${kind} request opened while minimized)`, () => {
+    it(`clicking the pill restores the dialog and focuses 核准 (a ${kind} request opened while minimized)`, () => {
       renderWithTerminal()
       const a = request('lead', 'a', NOW - 5_000, NOW + 500_000)
       open('h1', a)
@@ -197,10 +197,10 @@ describe('ApprovalDialogHost — 縮小 (U22 b)', () => {
       expect(pill()).toBeNull()
       expect(dialog()!.hidden).toBe(false)
       expect(dialog()!.dataset.kind).toBe(kind)
-      expect(document.activeElement).toBe(screen.getByTestId('approval-panel'))
+      expect(document.activeElement).toBe(screen.getByTestId('approval-approve'))
       // Modal again: the focus guard is back, Tab is trapped and Escape swallowed.
       terminal().focus()
-      expect(document.activeElement).toBe(screen.getByTestId('approval-panel'))
+      expect(document.activeElement).toBe(screen.getByTestId('approval-panel')) // the guard pulls back to the panel
       expect(fireEvent.keyDown(document.activeElement!, { key: 'Tab' })).toBe(false)
       expect(fireEvent.keyDown(document.activeElement!, { key: 'Escape' })).toBe(false)
       // 縮小 again hands the keyboard back to the terminal: the restore recorded it (the pill never took focus).
@@ -268,7 +268,7 @@ describe('ApprovalDialogHost — 縮小 (U22 b)', () => {
     open('h2', request('self_relay', 'b', NOW, NOW + 500_000))
     expect(dialog()!.hidden).toBe(false)
     expect(pill()).toBeNull()
-    expect(document.activeElement).toBe(screen.getByTestId('approval-panel'))
+    expect(document.activeElement).toBe(screen.getByTestId('approval-approve'))
   })
 
   it('a fresh store (reload) shows the dialog', () => {

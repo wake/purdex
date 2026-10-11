@@ -119,11 +119,15 @@ describe('ApprovalDialogHost — the adopt card', () => {
     expect(screen.getByTestId('approval-pill').textContent).toMatch(/^待核准 1/)
   })
 
-  it('a decision made here goes back to the lead’s tab (the requester)', async () => {
+  it('核准並檢視 goes back to the lead’s tab (the requester); 核准 does not', async () => {
     mockedDecide.mockResolvedValue({ ...adopt(), state: 'approved' })
     render(<ApprovalDialogHost />)
     open(adopt())
     await click('approval-approve')
+    expect(mockedGoto).not.toHaveBeenCalled()
+    act(() => { useApprovalStore.getState().reset() })
+    open(adopt())
+    await click('approval-approve-view')
     expect(mockedGoto).toHaveBeenCalledTimes(1)
     expect(mockedGoto.mock.calls[0][1].origin.session_id).toBe('S-LEAD')
   })

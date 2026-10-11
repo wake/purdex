@@ -197,10 +197,10 @@ describe('ApprovalDialogHost', () => {
     expect(mockedDecide).not.toHaveBeenCalled()
   })
 
-  it('takes focus onto the panel when it opens; Tab stays inside', () => {
+  it('takes focus onto 核准 when it opens; Tab stays inside', () => {
     render(<ApprovalDialogHost />)
     open(approval())
-    expect(document.activeElement).toBe(screen.getByTestId('approval-panel'))
+    expect(document.activeElement).toBe(screen.getByTestId('approval-approve'))
     // The header's 縮小 (U22 (b)) is the first stop, then the grant fields.
     fireEvent.keyDown(document, { key: 'Tab' })
     expect(document.activeElement).toBe(screen.getByTestId('approval-minimize'))

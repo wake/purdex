@@ -88,10 +88,10 @@ const settle = () => act(async () => { await new Promise<void>((r) => setTimeout
 const open = (...list: Approval[]) => act(() => { for (const a of list) useApprovalStore.getState().applyOpened(H, a) })
 const dialog = () => screen.queryByTestId('approval-dialog')
 
-/** Click 核准 on the current dialog; the daemon answers 200 with `a` approved. */
+/** Click 核准並檢視 (the one that switches to the requester) on the current dialog; the daemon answers 200 with `a` approved. */
 async function approve(a: Approval) {
   mockedDecide.mockResolvedValueOnce({ ...a, state: 'approved', decided_by: { kind: 'app', label: 'Purdex.app' }, decided_at: 5 })
-  fireEvent.click(screen.getByTestId('approval-approve'))
+  fireEvent.click(screen.getByTestId('approval-approve-view'))
   await settle()
 }
 
@@ -187,6 +187,8 @@ describe('ApprovalDialogHost keeps the keyboard while open (U22 switch, notifica
 
     await approve(A)
     expect(dialog()).toBeNull()
+    // While the decision was in flight the dialog took the focus back from the disabled button: that is before the close.
+    panelFocus.mockClear()
     runFrames()
 
     expect(terminalFocus).toEqual(['tA'])
