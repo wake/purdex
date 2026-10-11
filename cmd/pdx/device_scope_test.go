@@ -62,6 +62,7 @@ func TestDeviceAllowed_ExactSet(t *testing.T) {
 		"GET /api/info", "POST /api/ws-ticket", "GET /api/hostconfig",
 		"/ws/host-events", "/ws/terminal/{code}", "GET /ws/conversations/{provider}/{session_id}",
 		"POST /api/sessions", "POST /api/sessions/{code}/send-keys", "POST /api/sessions/{code}/submit", "POST /api/sessions/{code}/recall", "GET /api/sessions/{code}/provenance", "GET /api/sessions/{code}/transcript",
+		"GET /api/sessions/{code}/launch-plan", "POST /api/sessions/{code}/launch", // the no-agent launch panel
 		"GET /api/conversations/{provider}/{session_id}", "GET /api/conversations/{provider}/{session_id}/subagents/{agent_id}",
 		"GET /api/team/approvals/{id}", "GET /api/team/adoptions/{id}", "POST /api/team/approvals/{id}/decide", "GET /api/team/unattended", "PUT /api/team/unattended", "PUT /api/team/relay-quota", "PUT /api/team/max-members", "POST /api/relay/self",
 		"GET /api/nex/v1/executions", "/api/nex/",
@@ -119,7 +120,7 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 	}
 	// Reachable: the scope lets these through to their own handlers (whatever those answer, not device_forbidden).
 	for _, r := range []struct{ method, path string }{
-		{"GET", "/api/info"}, {"GET", "/api/hostconfig"}, {"PUT", "/api/team/relay-quota"}, {"PUT", "/api/team/max-members"}, {"GET", "/api/sessions/x/provenance"}, {"GET", "/api/team/unattended"},
+		{"GET", "/api/info"}, {"GET", "/api/hostconfig"}, {"GET", "/api/sessions/x/launch-plan"}, {"POST", "/api/sessions/x/launch"}, {"PUT", "/api/team/relay-quota"}, {"PUT", "/api/team/max-members"}, {"GET", "/api/sessions/x/provenance"}, {"GET", "/api/team/unattended"},
 		{"GET", "/api/push/devices"}, {"GET", "/api/profiles"}, {"GET", "/api/profiles/p_0123456789ab"}, {"PUT", "/api/devices/self"},
 		{"GET", "/api/conversations/claude/sid"}, {"POST", "/api/ws-ticket"},
 		{"POST", "/api/agent/upload"},
@@ -231,4 +232,28 @@ func TestDeviceScope_TicketToAllowedWebSocketAndRevokeSevers(t *testing.T) {
 	_, resp, err = dial("/ws/host-events")
 	require.Error(t, err)
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
+// The launch panel's two routes end to end with a device bearer: the scope lets them through to the session module's own
+// handlers (whose answers are the module's, never device_forbidden), and the plan route stays GET-only and the launch POST-only.
+func TestDeviceScope_LaunchPanelRoutesEndToEnd(t *testing.T) {
+	c, _ := realDaemonMux(t)
+	_, tok := mintAndUse(t, c, "00000000-0000-4000-8000-00000000000b", "p_0123456789ac")
+
+	// POST: validation comes first, so a body with no expectation is the handler's own 400 bad_request JSON.
+	rec := callWith(t, c, http.MethodPost, "/api/sessions/x/launch", tok, map[string]any{"kind": "fresh", "cd": false})
+	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	assert.JSONEq(t, `{"code":"bad_request"}`, rec.Body.String())
+
+	// GET: the handler answers (an unknown session, or no tmux on the machine running the test) — not the scope's 403.
+	rec = callWith(t, c, http.MethodGet, "/api/sessions/x/launch-plan?expected_tmux_instance=", tok, nil)
+	assert.NotEqual(t, http.StatusForbidden, rec.Code, rec.Body.String())
+	assert.NotContains(t, rec.Body.String(), "device_forbidden")
+
+	// The other verbs on the same paths are not on the allow-list.
+	for _, r := range []struct{ method, path string }{{"POST", "/api/sessions/x/launch-plan"}, {"GET", "/api/sessions/x/launch"}, {"DELETE", "/api/sessions/x/launch"}} {
+		rec = callWith(t, c, r.method, r.path, tok, nil)
+		assert.Equal(t, http.StatusForbidden, rec.Code, "%s %s", r.method, r.path)
+		assert.Contains(t, rec.Body.String(), "device_forbidden")
+	}
 }

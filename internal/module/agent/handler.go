@@ -759,6 +759,12 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		frameMeta.Provenance.SessionID != "" && frameMeta.IdentityRecorded {
 		m.sessionStarts.publish(sessionStartEventFrom(req, *frameMeta.Provenance))
 	}
+	// A root SessionStart is the launch panel's launch having worked: release the claim it was holding on this session.
+	if lifecycle == agentpkg.LifecycleSessionStart && frameMeta.Provenance != nil && req.TmuxSession != "" {
+		if releaser, ok := m.sessions.(session.LaunchClaimReleaser); ok {
+			releaser.ReleaseLaunchClaim(req.TmuxSession)
+		}
+	}
 	emitDecision, emitReason := m.emitHookSessionFrom(req, isProxySubagentStopReason(frameMeta.Reason), func(p *SessionProjection, readErr error) (agentpkg.NormalizedEvent, bool) {
 		if readErr != nil {
 			if frameMeta.Exit == nil {
