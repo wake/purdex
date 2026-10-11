@@ -57,8 +57,22 @@ export interface QueueEntry {
   mode?: 'fill' | 'keys'
   /** When the daemon handed it over. */
   handedAt?: number
-  /** Claude Code's own queue line (header.queued) renders this text right now: the entry is hidden, the line stands for it. */
+  /** Claude Code's own queue line (header.queued) renders the row this entry CLAIMED right now: the entry is hidden, the row stands for it. */
   matched?: boolean
+  /** The `at` of the header row this entry claimed, kept after the row is gone (the order Claude Code reads its queue in). Unset = never claimed. */
+  claimAt?: number
+}
+
+/** A row of Claude Code's own queue line, identified by (text, at). */
+export interface HeaderRow { text: string; at: number }
+
+/**
+ * Of the entries that fit a row stamped `at` (handed no later than 2 s after the stamp), the nearest: the latest one handed at or before the
+ * stamp (the usual case: the queue sees a message after it was handed out); failing that, the earliest one inside the 2 s of clock slack.
+ */
+function nearest<T extends { handedAt?: number }>(cands: readonly T[], at: number, ref: (e: T) => number): T | undefined {
+  const before = cands.filter((e) => ref(e) <= at).sort((a, b) => ref(b) - ref(a))
+  return before[0] ?? [...cands].sort((a, b) => ref(a) - ref(b))[0]
 }
 
 export class SendQueue {
@@ -179,22 +193,36 @@ export class SendQueue {
   }
 
   /**
-   * An observation of Claude Code's own queue line (header.queued, only the lines the deck actually renders: `shownHeaderQueue`, the `user`
-   * ones): a `handed` entry whose text (trailing whitespace trimmed) is on a rendered line is `matched` (hidden: the line stands for it), one
-   * to one in order; when the line stops being rendered without an echo it shows again, and past `HANDED_SEEN_MS` it is `maybe`. Idempotent:
-   * it emits only on a change (the caller reports on every header change and on every queue change).
+   * An observation of Claude Code's own queue line (header.queued, only the rows the deck actually renders: `shownHeaderQueue`, the `user`
+   * ones). A row is identified by (text, at). It is claimed by a `handed` entry with the same text (trailing whitespace trimmed) handed no
+   * later than 2 s after the row's stamp (an older row is someone else's), the nearest of those, one to one. A claim is sticky: the entry
+   * keeps its row while that row is rendered, and only unclaimed rows / entries are paired again. A claimed entry is hidden (the row stands
+   * for it) and never goes `maybe`; when its row stops being rendered without an echo it shows again, and past `HANDED_SEEN_MS` it is
+   * `maybe`. Idempotent: it emits only on a change (the caller reports on every header change and on every queue change).
    */
-  setHeaderQueue(userTexts: readonly string[]): void {
-    const rest = userTexts.map((x) => x.trimEnd())
+  setHeaderQueue(rows: readonly HeaderRow[]): void {
+    const rest = rows.map((r) => ({ text: r.text.trimEnd(), at: r.at, used: false }))
+    const handed = this.list.filter((e) => e.state === 'sent' && e.mode !== undefined)
     let changed = false
-    for (const e of this.list) {
-      if (e.state !== 'sent' || e.mode === undefined) { if (e.matched) { e.matched = false; changed = true } continue }
-      const i = rest.indexOf(e.text.trimEnd())
-      const hit = i >= 0
-      if (hit) rest.splice(i, 1)
-      if (hit !== (e.matched === true)) { e.matched = hit; changed = true }
-      if (!hit && this.staleHanded(e)) { this.markUnseen(e); changed = true }
+    for (const e of this.list) if (!handed.includes(e) && e.matched) { e.matched = false; changed = true }
+    // 1. a claim stands while its row is rendered
+    for (const e of handed) {
+      if (!e.matched) continue
+      const r = e.claimAt !== undefined ? rest.find((x) => !x.used && x.at === e.claimAt && x.text === e.text.trimEnd()) : undefined
+      if (r) r.used = true
+      else { e.matched = false; changed = true }
     }
+    // 2. unclaimed rows, oldest first, each take the nearest unclaimed entry
+    for (const r of rest.filter((x) => !x.used).sort((a, b) => a.at - b.at)) {
+      const cands = handed.filter((e) => !e.matched && e.text.trimEnd() === r.text && (e.handedAt ?? 0) <= r.at + ECHO_BEFORE_MS)
+      const best = nearest(cands, r.at, (e) => e.handedAt ?? 0)
+      if (!best) continue
+      r.used = true
+      best.matched = true
+      best.claimAt = r.at
+      changed = true
+    }
+    for (const e of handed) if (!e.matched && this.staleHanded(e)) { this.markUnseen(e); changed = true }
     if (changed) this.emit()
   }
 
@@ -219,21 +247,27 @@ export class SendQueue {
       const e = u.client_msg_id != null ? open.find((x) => x.ids.includes(u.client_msg_id!) && !done.has(x)) : undefined
       if (e) take(e, u)
     }
-    // 2. the rest by text, in the daemon's window (2 s before the request, 30 s after it was handed out), nearest first.
-    // A message still `sending` is never settled this way: only its own id or its transport outcome can.
-    const pairs: Array<{ e: QueueEntry; u: UserItem; d: number }> = []
-    for (const e of open) {
-      if (e.state === 'sending' || done.has(e)) continue
-      // a handed message's echo may come minutes later (Claude Code read it off its queue), even after the 10 s `maybe`
-      const to = e.state === 'sent' || (e.state === 'maybe' && e.handedAt !== undefined) ? (e.settledAt ?? e.startedAt) + (this.port.echo?.afterMs ?? ECHO_BEFORE_MS) : e.startedAt + HAND_TIMEOUT_MS + ECHO_AFTER_MS
-      for (const u of users) {
-        if (this.claimed.has(u.id) || u.client_msg_id != null) continue
-        if (u.at < e.startedAt - ECHO_BEFORE_MS || u.at > to || normalizePrompt(u.text) !== e.text) continue
-        pairs.push({ e, u, d: Math.abs(u.at - e.startedAt) })
+    // 2. the rest by text, in the daemon's window (2 s before the request, 30 s after it was handed out). A message still `sending` is never
+    // settled this way: only its own id or its transport outcome can. A row stamped more than 2 s before the entry was handed is someone
+    // else's: never a match. Rows go oldest first; each takes
+    //  - a `queued` row (Claude Code read its queue): first the entry that claimed a header row (FIFO by the claimed row's stamp: the queue
+    //    is read in order), else the nearest unclaimed one;
+    //  - a `user` row: only the nearest entry that never claimed a header row.
+    const refOf = (e: QueueEntry) => e.handedAt ?? e.startedAt
+    const rows = users.filter((u) => !this.claimed.has(u.id) && u.client_msg_id == null).sort((a, b) => a.at - b.at)
+    for (const u of rows) {
+      const fits = (e: QueueEntry): boolean => {
+        if (e.state === 'sending' || done.has(e) || normalizePrompt(u.text) !== e.text || u.at < refOf(e) - ECHO_BEFORE_MS) return false
+        // a handed message's echo may come minutes later (Claude Code read it off its queue), even after the 10 s `maybe`
+        const to = e.state === 'sent' || (e.state === 'maybe' && e.handedAt !== undefined) ? (e.settledAt ?? e.startedAt) + (this.port.echo?.afterMs ?? ECHO_BEFORE_MS) : e.startedAt + HAND_TIMEOUT_MS + ECHO_AFTER_MS
+        return u.at <= to
       }
+      const cands = open.filter(fits)
+      let pick: QueueEntry | undefined
+      if (u.source === 'queued') pick = cands.filter((e) => e.claimAt !== undefined).sort((a, b) => a.claimAt! - b.claimAt!)[0]
+      if (!pick) pick = nearest(cands.filter((e) => e.claimAt === undefined), u.at, refOf)
+      if (pick) take(pick, u)
     }
-    pairs.sort((a, b) => a.d - b.d)
-    for (const p of pairs) if (!done.has(p.e) && !this.claimed.has(p.u.id)) take(p.e, p.u)
     if (done.size === 0) return
     for (const x of done) this.release(x)
     this.list = this.list.filter((x) => !done.has(x))

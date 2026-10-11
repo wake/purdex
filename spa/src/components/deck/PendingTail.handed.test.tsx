@@ -27,7 +27,7 @@ const H = 'h', S = 'sess-2', P = 'p-handed'
 const KEY = draftKey(P, H, S)
 const turn: Turn = { id: 't0', index: 0, started_at: 1, outcome: 'running', items: [{ type: 'user', id: 'u0', at: 1, index: 0, text: 'go', source: 'user' }] }
 const header = (status: string, queued?: HeaderQueued[]): Header => ({ title: 't', status, backend: 'terminal', live: true, ...(queued ? { queued } : {}) })
-const line = (text: string): HeaderQueued => ({ text, at: 5, source: 'user' })
+const line = (text: string): HeaderQueued => ({ text, at: 4e12, source: 'user' })
 const entryOf = (h: Header): ConversationEntry => ({
   doc: { ...emptyDoc(), turns: [turn], header: h, capabilities: { send: 'keys' } }, status: 'live', reason: '', paging: false, subagents: {},
 })

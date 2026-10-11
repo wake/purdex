@@ -13,6 +13,8 @@ function fakePort() {
   }
   return { calls, port }
 }
+/** Rows of Claude Code's queue line, all stamped 1_002_000 (just after the first hand-out in these tests). */
+const H = (...texts: string[]) => texts.map((text) => ({ text, at: 1_002_000 }))
 const flush = () => vi.advanceTimersByTimeAsync(0)
 const user = (id: string, text: string, at: number, extra: Partial<UserItem> = {}): UserItem => ({ id, type: 'user', text, at, index: 0, source: 'user', ...extra })
 
@@ -255,7 +257,7 @@ describe('handed: seen on Claude Code\'s queue line, or echoed, or maybe after 1
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
     await sendHanded(q, calls)
-    q.setHeaderQueue(['hi  \n'])
+    q.setHeaderQueue(H('hi  \n'))
     expect(q.entries()[0].matched).toBe(true)
     await vi.advanceTimersByTimeAsync(60_000)
     expect(q.entries()[0]).toMatchObject({ state: 'sent', matched: true })
@@ -265,14 +267,14 @@ describe('handed: seen on Claude Code\'s queue line, or echoed, or maybe after 1
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
     await sendHanded(q, calls)
-    q.setHeaderQueue(['hi'])
+    q.setHeaderQueue(H('hi'))
     await vi.advanceTimersByTimeAsync(2000)
-    q.setHeaderQueue([]) // e.g. the conversation went idle: the header line is not rendered
+    q.setHeaderQueue(H()) // e.g. the conversation went idle: the header line is not rendered
     expect(q.entries()[0]).toMatchObject({ state: 'sent', matched: false })
-    q.setHeaderQueue(['hi'])
+    q.setHeaderQueue(H('hi'))
     await vi.advanceTimersByTimeAsync(20_000)
     expect(q.entries()[0].matched).toBe(true)
-    q.setHeaderQueue([])
+    q.setHeaderQueue(H())
     expect(q.entries()[0]).toMatchObject({ state: 'maybe', matched: false })
   })
 
@@ -283,10 +285,10 @@ describe('handed: seen on Claude Code\'s queue line, or echoed, or maybe after 1
       const { calls, port } = queuedPort()
       const q = new SendQueue(port)
       await sendHanded(q, calls)
-      q.setHeaderQueue(['hi'])
+      q.setHeaderQueue(H('hi'))
       await vi.advanceTimersByTimeAsync(60_000)
       expect(q.entries()[0]).toMatchObject({ state: 'sent', matched: true })
-      q.setHeaderQueue([]) // Claude Code took it off its queue line; the echo has not been written yet
+      q.setHeaderQueue(H()) // Claude Code took it off its queue line; the echo has not been written yet
       await vi.advanceTimersByTimeAsync(180_000)
       const item = user('u9', 'hi', Date.now(), { source: 'queued', client_msg_id: null })
       q.reconcile([item])
@@ -300,8 +302,8 @@ describe('handed: seen on Claude Code\'s queue line, or echoed, or maybe after 1
       const { calls, port } = queuedPort()
       const q = new SendQueue(port)
       await sendHanded(q, calls)
-      q.setHeaderQueue(['hi'])
-      q.setHeaderQueue([])
+      q.setHeaderQueue(H('hi'))
+      q.setHeaderQueue(H())
       await vi.advanceTimersByTimeAsync(180_000)
       q.reconcile([user('u9', 'other', Date.now(), { source: 'queued', client_msg_id: null })])
       expect(q.entries()).toHaveLength(1)
@@ -311,9 +313,92 @@ describe('handed: seen on Claude Code\'s queue line, or echoed, or maybe after 1
       const { calls, port } = queuedPort()
       const q = new SendQueue(port)
       await sendHanded(q, calls)
-      q.setHeaderQueue(['hi'])
+      q.setHeaderQueue(H('hi'))
       await vi.advanceTimersByTimeAsync(120_000)
       expect(q.entries()[0]).toMatchObject({ state: 'sent', matched: true })
+    })
+  })
+
+  describe('rows are claimed by (text, at), one to one, and claims stay put', () => {
+    const queuedPort = () => { const f = fakePort(); return { ...f, port: { ...f.port, echo: { sources: ['user', 'queued'], afterMs: 10 * 60_000 } } as SendPort } }
+    const rowsAt = (...rows: Array<[string, number]>) => rows.map(([text, at]) => ({ text, at }))
+
+    it('two same-text entries and only the second\'s row: the second is hidden and never maybe, the first goes maybe after 10 s', async () => {
+      const { calls, port } = fakePort()
+      const q = new SendQueue(port)
+      await sendHanded(q, calls, 'same') // handed at 1_001_500
+      await sendHanded(q, calls, 'same') // handed at 1_003_000
+      q.setHeaderQueue(rowsAt(['same', 1_003_100]))
+      expect(q.entries().map((e) => !!e.matched)).toEqual([false, true])
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(q.entries().map((e) => [e.state, !!e.matched])).toEqual([['maybe', false], ['sent', true]])
+    })
+
+    it('an old row with the same text (stamped more than 2 s before the hand-out) does not hide a new send', async () => {
+      const { calls, port } = fakePort()
+      const q = new SendQueue(port)
+      await sendHanded(q, calls) // handed at 1_001_500
+      q.setHeaderQueue(rowsAt(['hi', 999_000]))
+      expect(q.entries()[0].matched).toBeFalsy()
+      q.setHeaderQueue(rowsAt(['hi', 999_500])) // exactly 2 s before: still its own
+      expect(q.entries()[0].matched).toBe(true)
+    })
+
+    it('a claim stays on its row when rows are reordered or another row appears', async () => {
+      const { calls, port } = fakePort()
+      const q = new SendQueue(port)
+      await sendHanded(q, calls, 'same')
+      await sendHanded(q, calls, 'same')
+      q.setHeaderQueue(rowsAt(['same', 1_003_100]))
+      expect(q.entries().map((e) => e.claimAt)).toEqual([undefined, 1_003_100])
+      q.setHeaderQueue(rowsAt(['same', 1_003_100], ['same', 1_003_050])) // a new row that, paired afresh, would take the second entry
+      expect(q.entries().map((e) => e.claimAt)).toEqual([1_003_050, 1_003_100])
+      q.setHeaderQueue(rowsAt(['same', 1_003_050], ['same', 1_003_100]))
+      expect(q.entries().map((e) => e.claimAt)).toEqual([1_003_050, 1_003_100])
+    })
+
+    it('a null-id queued row settles the entry that claimed a row, not an older unclaimed one with the same text', async () => {
+      const { calls, port } = queuedPort()
+      const q = new SendQueue(port)
+      await sendHanded(q, calls, 'same')
+      await sendHanded(q, calls, 'same')
+      const [a] = q.entries()
+      q.setHeaderQueue(rowsAt(['same', 1_003_100]))
+      q.setHeaderQueue([])
+      q.reconcile([user('q1', 'same', 1_004_000, { source: 'queued', client_msg_id: null })])
+      expect(q.entries().map((e) => e.id)).toEqual([a.id])
+    })
+
+    it('a same-text null-id row stamped before the hand-out (another client\'s earlier message) settles nothing', async () => {
+      const { calls, port } = queuedPort()
+      const q = new SendQueue(port)
+      await sendHanded(q, calls) // handed at 1_001_500
+      q.reconcile([user('x1', 'hi', 999_000), user('x2', 'hi', 999_000, { source: 'queued', client_msg_id: null })])
+      expect(q.entries()).toHaveLength(1)
+      q.reconcile([user('x3', 'hi', 1_001_600)])
+      expect(q.entries()).toHaveLength(0)
+    })
+
+    it('a null-id user row never settles an entry that claimed a header row (its echo is a queued row)', async () => {
+      const { calls, port } = queuedPort()
+      const q = new SendQueue(port)
+      await sendHanded(q, calls)
+      q.setHeaderQueue(rowsAt(['hi', 1_002_000]))
+      q.reconcile([user('x1', 'hi', 1_002_500)])
+      expect(q.entries()).toHaveLength(1)
+    })
+
+    it('FIFO: two claimed same-text entries are settled by queued rows in the order of their claimed rows', async () => {
+      const { calls, port } = queuedPort()
+      const q = new SendQueue(port)
+      await sendHanded(q, calls, 'same')
+      await sendHanded(q, calls, 'same')
+      const [, b] = q.entries()
+      q.setHeaderQueue(rowsAt(['same', 1_003_100], ['same', 1_001_600]))
+      expect(q.entries().map((e) => e.claimAt)).toEqual([1_001_600, 1_003_100])
+      q.setHeaderQueue([])
+      q.reconcile([user('q1', 'same', 1_010_000, { source: 'queued', client_msg_id: null })])
+      expect(q.entries().map((e) => e.id)).toEqual([b.id])
     })
   })
 
@@ -322,9 +407,9 @@ describe('handed: seen on Claude Code\'s queue line, or echoed, or maybe after 1
     const q = new SendQueue(port)
     await sendHanded(q, calls, 'same')
     await sendHanded(q, calls, 'same')
-    q.setHeaderQueue(['same'])
+    q.setHeaderQueue(H('same'))
     expect(q.entries().map((e) => !!e.matched)).toEqual([true, false])
-    q.setHeaderQueue(['same', 'same'])
+    q.setHeaderQueue(H('same', 'same'))
     expect(q.entries().map((e) => e.matched)).toEqual([true, true])
   })
 
@@ -332,14 +417,14 @@ describe('handed: seen on Claude Code\'s queue line, or echoed, or maybe after 1
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
     q.enqueue('buffered')
-    q.setHeaderQueue(['buffered'])
+    q.setHeaderQueue(H('buffered'))
     expect(q.entries()[0].matched).toBeFalsy()
     await vi.advanceTimersByTimeAsync(UNDO_MS)
-    q.setHeaderQueue(['buffered'])
+    q.setHeaderQueue(H('buffered'))
     expect(q.entries()[0]).toMatchObject({ state: 'sending' })
     expect(q.entries()[0].matched).toBeFalsy()
     calls[0].resolve({ kind: 'accepted' }); await flush()
-    q.setHeaderQueue(['buffered'])
+    q.setHeaderQueue(H('buffered'))
     expect(q.entries()[0].matched).toBeFalsy()
     await vi.advanceTimersByTimeAsync(60_000)
     expect(q.entries()[0].state).toBe('sent') // a worker's accepted has no 10 s rule
@@ -349,11 +434,11 @@ describe('handed: seen on Claude Code\'s queue line, or echoed, or maybe after 1
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
     await sendHanded(q, calls)
-    q.setHeaderQueue(['hi'])
+    q.setHeaderQueue(H('hi'))
     const seen = vi.fn()
     q.subscribe(seen)
-    q.setHeaderQueue(['hi'])
-    q.setHeaderQueue(['hi'])
+    q.setHeaderQueue(H('hi'))
+    q.setHeaderQueue(H('hi'))
     expect(seen).not.toHaveBeenCalled()
   })
 

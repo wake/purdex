@@ -19,12 +19,12 @@ export function useSendQueueDriver(paneKey: string, hostId: string, sessionId: s
   const queue = key ? sendQueueFor(key, () => unboundSendPort(hostId, sessionId)) : null
   const users = useMemo(() => items.filter((i): i is UserItem => i.type === 'user'), [items])
   // the header is a new object on every frame: depend on what the lines say
-  const linesSig = JSON.stringify(headerQueued.filter((q) => q.source === 'user').map((q) => q.text))
+  const linesSig = JSON.stringify(headerQueued.filter((q) => q.source === 'user').map((q) => ({ text: q.text, at: q.at })))
 
   // Reported on mount and on change, and again whenever the queue itself changes (a message handed over may already be on the line).
   useEffect(() => {
     if (!queue) return
-    const lines = JSON.parse(linesSig) as string[]
+    const lines = JSON.parse(linesSig) as Array<{ text: string; at: number }>
     queue.setHeaderQueue(lines)
     return queue.subscribe(() => queue.setHeaderQueue(lines))
   }, [queue, linesSig])
