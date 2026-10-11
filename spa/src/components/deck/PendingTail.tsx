@@ -1,7 +1,7 @@
 // spa/src/components/deck/PendingTail.tsx — what is waiting to be read, drawn where the terminal draws it: at the end of the stream, inside the scroll
 // box, after the live line (c9d9c7-62). Two kinds, Claude Code's own queue first (it got in earlier), then what the App still holds:
-//  - header.queued: messages typed in the terminal (or sent by a peer) while a turn runs, in Claude Code's queue. Accent-framed like the person's first-cut block, no Undo (the App cannot
-//    reach them); a peer's keeps its teal, faded. Only while the conversation runs or waits for the person: an idle one has an empty queue.
+//  - header.queued: messages typed in the terminal (or sent by a peer) while a turn runs, in Claude Code's queue. Accent-framed like the person's first-cut block; a user row is clickable (K-2b: it takes Claude Code's
+//    queue back through the daemon's /recall, all of it at once); a peer's keeps its teal, faded, not clickable. Only while the conversation runs or waits for the person: an idle one has an empty queue.
 //  - the App's send queue (QueuedMessages): the same frame with Undo, Up in an empty box calls them back.
 import { useEffect } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -11,7 +11,8 @@ import { sendQueueFor, type QueueEntry } from '../../lib/conversations/send-queu
 import { canTakeBack, dismissTakeBackNotice, isRowHidden, setHeaderUserRows, takeBackHeld, takeBackQueued, useTakeBackState } from '../../lib/conversations/take-back'
 import type { HeaderQueued } from '../../lib/conversations/types'
 import { adapterOf } from '../../lib/conversations/deck-adapter'
-import { QueuedMessages, TAKE_BACK_BOX, TakeBackSpinner, activateProps } from './QueuedMessages'
+import { QueuedMessages, TakeBackSpinner } from './QueuedMessages'
+import { TAKE_BACK_BOX, activateProps } from './take-back-ui'
 import { PENDING_USER_BOX, PENDING_USER_CAPTION } from './UserBlock'
 
 function HeaderQueuedLine({ item, onTakeBack, busy }: { item: HeaderQueued; onTakeBack?: () => void; busy: boolean }) {

@@ -3,23 +3,13 @@
 // still holds it, 「傳送中」 once it is handed out, 「已送出」 once the daemon / worker took it (`keys` mode adds 「未經 mod 確認」). While Claude Code's own
 // queue line renders the same text, the entry is hidden (`matched`): the line stands for it. 「可能已送出」 when the answer was lost, the reason when it
 // was not sent. A message that MAY have run is only resent after an explicit confirmation (it can arrive twice), and as a new message.
-import { useState, type KeyboardEvent } from 'react'
+import { useState } from 'react'
 import { CircleNotch } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { outcomeMessage } from '../../lib/conversations/send'
 import type { QueueEntry } from '../../lib/conversations/send-queue'
+import { TAKE_BACK_BOX, activateProps } from './take-back-ui'
 import { PENDING_USER_BOX, PENDING_USER_CAPTION } from './UserBlock'
-
-/** A whole block as a button (K-2b): role, focus, pointer, Enter / Space. */
-export function activateProps(onActivate: () => void, title: string) {
-  return {
-    role: 'button' as const, tabIndex: 0, title,
-    onClick: onActivate,
-    onKeyDown: (e: KeyboardEvent) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onActivate() } },
-  }
-}
-
-export const TAKE_BACK_BOX = 'cursor-pointer hover:bg-accent/20 focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent'
 
 /** The spinner on a row whose take-back is on its way. */
 export const TakeBackSpinner = () => <CircleNotch data-testid="take-back-spinner" size={12} className="inline animate-spin text-accent" />
