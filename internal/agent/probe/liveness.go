@@ -1,8 +1,8 @@
 package probe
 
 import (
+	"context"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
@@ -264,16 +264,14 @@ func IsPidAlive(pid int) bool {
 	return err == nil || err == syscall.EPERM
 }
 
+// ProcessStartTime is the text `ps -p <pid> -o lstart=` prints: read from the kernel where that is the same text (no fork),
+// from ps otherwise (counted, agentpkg.RunPS).
 func ProcessStartTime(pid int) (string, error) {
-	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "lstart=").Output()
-	if err != nil {
-		return "", fmt.Errorf("read start time for pid %d: %w", pid, err)
-	}
-	return strings.TrimSpace(string(out)), nil
+	return agentpkg.ProcessStartText(pid)
 }
 
 func listProcessTree() (map[int][]int, error) {
-	out, err := exec.Command("ps", "-Ao", "pid=,ppid=").Output()
+	out, err := agentpkg.RunPS(context.Background(), "-Ao", "pid=,ppid=")
 	if err != nil {
 		return nil, fmt.Errorf("list process tree: %w", err)
 	}
@@ -300,20 +298,22 @@ func listProcessTree() (map[int][]int, error) {
 	return childrenByParent, nil
 }
 
+// PidAncestorIncludes walks pid's parent chain looking for ancestor. The walk needs only each pid's PPID, so it asks for
+// nothing else (ReadProcessInfo costs four ps forks per hop on darwin); a pid it cannot read ends the walk with false.
 func PidAncestorIncludes(pid int, ancestor int) bool {
 	current := pid
 	for current > 1 {
 		if current == ancestor {
 			return true
 		}
-		info, err := agentpkg.ReadProcessInfo(current)
+		ppid, err := agentpkg.ProcessPPID(current)
 		if err != nil {
 			return false
 		}
-		if info.PPID <= 0 || info.PPID == current {
+		if ppid <= 0 || ppid == current {
 			return false
 		}
-		current = info.PPID
+		current = ppid
 	}
 	return false
 }
