@@ -143,6 +143,20 @@ func (s *Store) OpenRelayOpBySession(sessionID string) (team.RelayOp, bool, erro
 	return op, true, nil
 }
 
+// OpenRelayOpByNewSession is the op that cleared INTO sessionID and is not over: the successor's seed turn is still
+// running. The op is keyed by the old session (OpenRelayOpBySession never finds it from the new one).
+func (s *Store) OpenRelayOpByNewSession(sessionID string) (team.RelayOp, bool, error) {
+	op, err := scanRelayOp(s.db.QueryRow(`SELECT `+relayCols+` FROM relay_ops
+		WHERE new_session_id = ? AND state NOT IN ('done', 'failed', 'cancelled') ORDER BY created_at, id LIMIT 1`, sessionID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return team.RelayOp{}, false, nil
+	}
+	if err != nil {
+		return team.RelayOp{}, false, fmt.Errorf("open relay op by new session %s: %w", sessionID, err)
+	}
+	return op, true, nil
+}
+
 // RelayOpByRequest returns the op opened for a self_relay approval row.
 func (s *Store) RelayOpByRequest(requestID string) (team.RelayOp, bool, error) {
 	op, err := scanRelayOp(s.db.QueryRow(`SELECT `+relayCols+` FROM relay_ops WHERE request_id = ? ORDER BY created_at, id LIMIT 1`, requestID))

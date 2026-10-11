@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -123,6 +124,48 @@ func TestRelayCreate_OpensARequestedOpBoundToTheMember(t *testing.T) {
 	// a second id while one is open: relay_open with the open op
 	if code, _, ae := f.createRelay(rid(31), "/tmp/10.sock", "_mem001"); code != 409 || ae.Error != team.ErrRelayOpen || ae.Op == nil || ae.Op.ID != rid(30) {
 		t.Fatalf("second op: %d %+v", code, ae)
+	}
+}
+
+// c933b0-129 ①: a relay that has cleared moved the member's row to the new session, whose seed turn is still running
+// (the op is not done). `pdx relay <old ref>` resolves to that new session, which has no op of its own: it must be refused
+// with the predecessor's op, not open a second relay of the same member mid-seed (Aigora, 2026-10-11 16:33).
+// Mutation: drop the predecessor check → the 409 case is red.
+func TestRelayCreate_AClearedPredecessorBlocksTheSuccessor(t *testing.T) {
+	f := newFixture(t)
+	f.memberTeam("2")
+	f.origins.cleared = map[string]int{"sid-new": 42}
+	if code, _, ae := f.createRelay(rid(70), "/tmp/10.sock", "_mem001"); code != 201 {
+		t.Fatalf("first op: %d %+v", code, ae)
+	}
+	if _, err := f.m.store.db.Exec(`UPDATE relay_ops SET state = 'written' WHERE id = ?`, rid(70)); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, ae := f.report(rid(70), team.RelayReportRequest{State: team.RelayCleared, NewSessionID: "sid-new"}); code != 200 {
+		t.Fatalf("cleared: %d %+v", code, ae)
+	}
+	f.liveMember("sid-new", ipeers.RefID("sid-new"), "new", "self/w-new", "tm-2")
+	if code, body := f.do(http.MethodPost, "/api/relay/hello", team.RelayHelloRequest{SessionID: "sid-new", ModVersion: "2", Agent: "cc"}); code != http.StatusOK {
+		t.Fatalf("hello: %d %s", code, body)
+	}
+
+	code, _, ae := f.createRelay(rid(71), "/tmp/10.sock", "_mem001") // the OLD ref: it reaches the successor through the lineage
+	if code != 409 || ae.Error != team.ErrRelayOpen || ae.Op == nil || ae.Op.ID != rid(70) || ae.Op.State != team.RelayCleared {
+		t.Fatalf("while the predecessor's op is cleared: %d %+v, want 409 relay_open with op %s", code, ae, rid(70))
+	}
+	if n := countRelayOps(t, f); n != 1 {
+		t.Fatalf("the refused create left %d ops, want 1", n)
+	}
+	// the same id again is not a replay of the refused one: it is refused the same way (nothing was opened under it)
+	if code, _, ae := f.createRelay(rid(71), "/tmp/10.sock", "_mem001"); code != 409 || ae.Error != team.ErrRelayOpen {
+		t.Fatalf("again: %d %+v", code, ae)
+	}
+
+	if _, err := f.m.store.db.Exec(`UPDATE relay_ops SET state = 'done' WHERE id = ?`, rid(70)); err != nil {
+		t.Fatal(err)
+	}
+	if code, op, ae := f.createRelay(rid(72), "/tmp/10.sock", "_mem001"); code != 201 || op.SessionID != "sid-new" {
+		t.Fatalf("once the predecessor is done: %d %+v %+v, want a new op on sid-new", code, op, ae)
 	}
 }
 
