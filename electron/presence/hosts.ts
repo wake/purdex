@@ -7,7 +7,8 @@
 //
 // Secrets: a host's token lives only in memory. It is used for the Authorization header and nowhere
 // else — never in a log line, an error message, or anything handed to a renderer. Log lines are fixed
-// templates plus the host id; caught errors are never interpolated.
+// templates plus an internal ordinal (`host#N`); renderer-supplied values (hostId, origin) and caught
+// errors are never interpolated.
 
 export interface HostEntry {
   hostId: string
@@ -85,6 +86,8 @@ export interface Hosts<S> {
   /** 'ignored' when the rev is older than the one held. */
   setHosts(payload: HostsPayload): 'applied' | 'ignored'
   list(): HostState<S>[]
+  /** Log-safe name of a held host: its ordinal in the list, never a renderer-supplied value. */
+  label(st: HostState<S>): string
   probe(st: HostState<S>): Promise<void>
   /** A send failed (the caller clears its own state and probes next). */
   markFailed(st: HostState<S>): void
@@ -154,6 +157,8 @@ export function createHosts<S>(deps: HostsDeps, hooks: HostsHooks<S>): Hosts<S> 
   let heldRev: number | null = null
   const log = createSafeLog(deps.logger)
 
+  const ordinalOf = (st: HostState<S>): number => [...hosts.values()].indexOf(st)
+
   const dispose = (st: HostState<S>) => {
     st.disposed = true
     if (st.probeTimer !== null) deps.clearTimeout(st.probeTimer)
@@ -203,7 +208,7 @@ export function createHosts<S>(deps: HostsDeps, hooks: HostsHooks<S>): Hosts<S> 
     if (!r.ok) {
       if (!st.probeFailLogged) {
         st.probeFailLogged = true
-        log(`presence: capability probe failed host=${st.hostId}`)
+        log(`presence: capability probe failed host#${ordinalOf(st)}`)
       }
       scheduleProbe(st, PROBE_RETRY_MS)
       return
@@ -287,6 +292,7 @@ export function createHosts<S>(deps: HostsDeps, hooks: HostsHooks<S>): Hosts<S> 
       return 'applied'
     },
     list: () => [...hosts.values()],
+    label: (st) => `host#${ordinalOf(st)}`,
     probe,
     markFailed(st) {
       if (!st.failed) st.recoverySent = false
