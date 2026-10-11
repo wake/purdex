@@ -54,7 +54,7 @@ describe('StatusBar peer segments', () => {
   })
 
   // The address segment (name only, no ref) duplicated the peer id segment, which already carries the name, the ref
-  // and the title. It is gone; the peer id segment is the one place the address is shown and copied from.
+  // (the title is in its tooltip). It is gone; the peer id segment is the one place the address is shown and copied from.
   it('has no separate address segment, and the peer id segment stays', () => {
     render(<StatusBar activeTab={sessionTab()} />)
     expect(screen.queryByTestId('status-seg-agent')).toBeNull()
@@ -72,12 +72,29 @@ describe('StatusBar peer segments', () => {
     expect(screen.getByTestId('status-seg-peer-id')).not.toBeDisabled()
   })
 
-  it('renders a set title beside the name rather than instead of it', () => {
+  // The segment is width-capped, so a title shown beside the name was almost always cut and the tooltip did not
+  // carry it. The segment shows `name [ref]` only; the full title lives in the tooltip.
+  it('keeps a set title out of the segment and puts it in the tooltip after the address and ref', async () => {
     seedPeers({}, { ...PEER_ROW, title: 'Purdex Tester 01', titleSource: 'user' })
     render(<StatusBar activeTab={sessionTab()} />)
     const seg = screen.getByTestId('status-seg-peer-id')
-    expect(seg.textContent).toContain('purdex-b0 [q34psn]')
-    expect(seg.textContent).toContain('Purdex Tester 01')
+    expect(seg.textContent).toBe('purdex-b0 [q34psn]')
+    expect(seg.getAttribute('title')).toBe('mlab/purdex-b0 [q34psn] · Purdex Tester 01')
+    fireEvent.click(seg)
+    await waitFor(() => expect(copyTextMock).toHaveBeenCalledWith('mlab/purdex-b0 [q34psn]'))
+  })
+
+  it('shows the address and ref alone in the tooltip when there is no title', () => {
+    render(<StatusBar activeTab={sessionTab()} />)
+    expect(screen.getByTestId('status-seg-peer-id').getAttribute('title')).toBe('mlab/purdex-b0 [q34psn]')
+  })
+
+  it('appends the reason after the title in the tooltip', () => {
+    seedPeers({}, { ...PEER_ROW, title: 'Purdex Tester 01', deliverable: false, reason: 'inbox_dead' })
+    render(<StatusBar activeTab={sessionTab()} />)
+    const seg = screen.getByTestId('status-seg-peer-id')
+    expect(seg.textContent).toBe('purdex-b0 [q34psn]')
+    expect(seg.getAttribute('title')).toMatch(/^mlab\/purdex-b0 \[q34psn\] · Purdex Tester 01 — .+/)
   })
 
   // A session whose registry name is not routable is addressed by its ref, so

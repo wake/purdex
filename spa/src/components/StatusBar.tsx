@@ -38,7 +38,11 @@ function peerIdTitle(peer: PeerInfo, t: T): string {
     // may simply not have been resolved inside the daemon's 2 s budget.
     return peer.envelope.partial ? t('peer.undetermined') : t('peer.none')
   }
-  const parts = [row.address]
+  // The title lives here, not in the segment: the segment is width-capped, so a title shown beside the name was
+  // almost always cut ("purde…") and this tooltip did not carry it, leaving no way to read it. The first part is
+  // what a click copies (address and ref) plus the title, which the clipboard does not carry.
+  const copyValue = peerIdText(row).value || row.address
+  const parts = [row.title ? `${copyValue} · ${row.title}` : copyValue]
   if (row.reason) parts.push(reasonText(row.reason, t))
   if (peer.envelope.titlesUnavailable) parts.push(t('peer.titles_unavailable_note'))
   if (peer.stale) parts.push(t('peer.stale', { seconds: Math.round((Date.now() - peer.fetchedAt) / 1000) }))
@@ -255,11 +259,10 @@ export function StatusBar({ activeTab, onNavigateToHost, onStartRename }: Props)
   // status segment already says so, and §6 keeps the last rows, dimmed.)
   const peerRow = peer.error ? null : peer.row
   const peerId = peerIdText(peerRow)
-  // The title sits beside the name, not in place of it: it is a human's note
-  // about the conversation, and losing the name would lose the thing that both
-  // identifies the row and matches what the clipboard carries.
-  const peerTitle = peerRow?.title ?? ''
-  const peerIdDisplay = peerId.display && peerTitle ? `${peerId.display} · ${peerTitle}` : peerId.display
+  // The title is not shown here: it is a human's free-text note, the segment is
+  // width-capped (`max-w-[24ch]`) so it was nearly always cut, and a cut title
+  // says nothing. It sits in the tooltip (`peerIdTitle`), where it reads in full.
+  const peerIdDisplay = peerId.display
   const peerUncertain = peerRow?.reason === 'inbox_dead' || peerRow?.reason === 'ambiguous'
   const peerDim = !peer.connected || peer.stale || peerUncertain
 
