@@ -101,10 +101,22 @@ describe('validateHostsPayload: rejected', () => {
     ['empty', ''],
     ['number', 5],
     ['129 chars', 'a'.repeat(129)],
+    ['newline', 'a\nb'],
+    ['carriage return', 'a\rb'],
+    ['NUL', 'a\u0000b'],
+    ['space', 'a b'],
+    ['unicode', 'h\u00e9'],
+    ['cjk', '\u4e3b\u6a5f'],
+    ['slash', 'a/b'],
   ])('hostId: %s', (_n, hostId) => {
     const p = good()
     ;(p.hosts[0] as { hostId: unknown }).hostId = hostId
     expect(validateHostsPayload(p).ok).toBe(false)
+  })
+  it.each(['abc123', 'local', 'h1', 'Host_1-b', 'a'.repeat(128)])('a generated or legacy host id is accepted: %s', (hostId) => {
+    const p = good()
+    p.hosts[0].hostId = hostId
+    expect(validateHostsPayload(p).ok).toBe(true)
   })
   it('duplicate hostId', () => {
     const e = { hostId: 'dup', baseUrl: 'http://h:1', token: null }
@@ -149,6 +161,13 @@ describe('validateHostsPayload: rejected', () => {
   it('a payload over the size cap', () => {
     const hosts = Array.from({ length: MAX_HOSTS }, (_, i) => ({ hostId: `h${i}`, baseUrl: 'http://h:1', token: 'x'.repeat(4096) }))
     expect(JSON.stringify({ rev: 1, hosts }).length).toBeGreaterThan(MAX_PAYLOAD_BYTES)
+    expect(validateHostsPayload({ rev: 1, hosts }).ok).toBe(false)
+  })
+  it('the cap counts UTF-8 bytes, not UTF-16 units', () => {
+    const hosts = Array.from({ length: MAX_HOSTS }, (_, i) => ({ hostId: `h${i}`, baseUrl: 'http://h:1', token: '\u20ac'.repeat(1400) }))
+    const text = JSON.stringify({ rev: 1, hosts })
+    expect(text.length).toBeLessThan(MAX_PAYLOAD_BYTES)
+    expect(Buffer.byteLength(text, 'utf8')).toBeGreaterThan(MAX_PAYLOAD_BYTES)
     expect(validateHostsPayload({ rev: 1, hosts }).ok).toBe(false)
   })
   it('a payload that cannot be serialised', () => {

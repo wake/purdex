@@ -9,6 +9,10 @@ import type { HostsPayload } from './hosts'
 export const MAX_HOSTS = 64
 export const MAX_PAYLOAD_BYTES = 256 * 1024
 const MAX_HOST_ID = 128
+// Host ids come from `generateId()` (spa/src/lib/id.ts:1, six chars of [0-9a-z]; used by useHostStore.ts:209, 377, 596)
+// or are an earlier one re-added (undo of a delete, `addHost({ id })`). The pattern is a superset that keeps
+// old or hand-made ids such as `local` valid while excluding whitespace, control characters and non-ASCII.
+const HOST_ID_PATTERN = /^[A-Za-z0-9_-]+$/
 const MAX_TOKEN = 4096
 const MAX_URL = 2048
 
@@ -51,7 +55,9 @@ export function validateHostsPayload(raw: unknown): Validation {
   for (const entry of hosts) {
     if (!isPlainObject(entry)) return fail('host: want an object')
     const { hostId, baseUrl, token } = entry
-    if (typeof hostId !== 'string' || hostId.length === 0 || hostId.length > MAX_HOST_ID) return fail('hostId: want 1-128 chars')
+    if (typeof hostId !== 'string' || hostId.length === 0 || hostId.length > MAX_HOST_ID || !HOST_ID_PATTERN.test(hostId)) {
+      return fail('hostId: want 1-128 chars of A-Z a-z 0-9 _ -')
+    }
     if (seen.has(hostId)) return fail('hostId: duplicate')
     seen.add(hostId)
     if (typeof baseUrl !== 'string') return fail('baseUrl: want a string')
@@ -62,7 +68,7 @@ export function validateHostsPayload(raw: unknown): Validation {
   }
   let size: number
   try {
-    size = JSON.stringify(raw).length
+    size = Buffer.byteLength(JSON.stringify(raw), 'utf8')
   } catch {
     return fail('payload: cannot be serialised')
   }
