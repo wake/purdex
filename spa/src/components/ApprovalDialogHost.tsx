@@ -360,6 +360,10 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
               </>
             ) : isSelfRelay ? (
               <>
+                {/* An idle-relay ask (spec §6): why it is asked now, above the usage. Only for a well-formed payload. */}
+                {relay.reason === 'idle' && relay.idle_minutes !== undefined && (
+                  <dd data-testid="approval-idle-note" className="col-span-2 text-text-primary">{t('approval.dialog.idle_note', { n: relay.idle_minutes })}</dd>
+                )}
                 <dt className="text-text-muted">{t('approval.dialog.usage')}</dt>
                 <dd data-testid="approval-usage" className="text-text-primary">{t('approval.dialog.usage_value', { pct: Math.round(relay.used_percentage) })}</dd>
               </>
