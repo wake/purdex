@@ -15,6 +15,7 @@
 import type { Icon } from '@phosphor-icons/react'
 import { ArrowLeft, ArrowRight, ChatCircle, SquaresFour, TerminalWindow } from '@phosphor-icons/react'
 import { useConversationViewGate } from '../../hooks/useConversationViewGate'
+import { useLaunchPanelGate } from '../../hooks/useLaunchPanelGate'
 import { useHandoffGate } from '../../hooks/useHandoffCandidate'
 import { useTakeToTerminal } from '../../lib/nex/take-to-terminal-registry'
 import { setExecutionPaneMode, viewModeOf } from '../../lib/nex/view-mode'
@@ -72,6 +73,8 @@ export function PaneModeButtons({ tabId, pane }: { tabId: string; pane: Pane }) 
   // non-session pane, and a tmux pane has no registered worker view.
   const handoff = useHandoffGate(content)
   const viewGate = useConversationViewGate(content)
+  // A live session with no Claude Code still reaches deck / chat when the launch panel applies there (same rule as the pane).
+  const launchPanel = useLaunchPanelGate(content, viewGate)
   const take = useTakeToTerminal(pane.id)
   const binding = content.kind === 'tmux-session' ? sessionBinding(content.hostId, content.sessionCode) : ''
   const view = useSessionViewStore(selectSessionView(tabId, pane.id, binding))
@@ -81,8 +84,8 @@ export function PaneModeButtons({ tabId, pane }: { tabId: string; pane: Pane }) 
   if (content.kind === 'tmux-session') {
     const toView = (v: SessionView): ButtonState => {
       if (v === view) return PRESSED
-      // The terminal is always reachable; the conversation views need the gate.
-      if (v !== 'terminal' && !viewGate.ok) return { kind: 'disabled', why: t(`status.mode.${viewGate.reason}`) }
+      // The terminal is always reachable; the conversation views need the gate or the launch panel.
+      if (v !== 'terminal' && !viewGate.ok && !launchPanel) return { kind: 'disabled', why: t(`status.mode.${viewGate.reason}`) }
       return { kind: 'action', run: () => useSessionViewStore.getState().setView(tabId, pane.id, binding, v) }
     }
     group = [

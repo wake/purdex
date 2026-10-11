@@ -48,13 +48,13 @@ function seedTab(primary: PaneContent, target: PaneContent): Pane {
 const contentOf = (paneId: string) => findPane(useTabStore.getState().tabs[TAB].layout, paneId)?.content
 
 /** The host's info: Nexen ready (or not) for the handoff, and the daemon serving (or not) the conversation API. */
-function seedHost({ nex = true, conversations = true }: { nex?: boolean; conversations?: boolean } = {}) {
+function seedHost({ nex = true, conversations = true, launch = false }: { nex?: boolean; conversations?: boolean; launch?: boolean } = {}) {
   useNexHostStore.setState({
     byHost: {
       [H]: {
         info: null,
         capabilities: { delegate: { resume_session_id: true }, sandbox_profiles: nex ? ['default', 'handoff'] : ['default'] } as never,
-        daemonCapabilities: conversations ? ['conversations.v1'] : [],
+        daemonCapabilities: [...(conversations ? ['conversations.v1'] : []), ...(launch ? ['session.launch.v1'] : [])],
         phase: 'ready', error: null, fetchedAt: 0, generation: 1, fingerprint: 'f',
       },
     },
@@ -220,6 +220,44 @@ describe('PaneModeButtons — a tmux-session target', () => {
     useSessionViewStore.getState().setView(TAB, TARGET, sessionBinding(H, 'old001'), 'chat')
     render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, tmux('targ01'))} />)
     expect(pressed()).toEqual(['Terminal'])
+  })
+})
+
+describe('PaneModeButtons — a live session with no Claude Code (the launch panel)', () => {
+  const primary = tmux('prim01')
+
+  it('on a host serving session.launch.v1 deck and chat are actions; deck switches the view', () => {
+    seedHost({ launch: true }); agents({ prim01: 'cc' })
+    render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, tmux('targ01'))} />)
+    expect(button('Deck')).toBeEnabled()
+    expect(button('Chat')).toBeEnabled()
+    fireEvent.click(button('Deck'))
+    expect(viewOfTarget('targ01')).toBe('deck')
+    fireEvent.click(button('Chat'))
+    expect(viewOfTarget('targ01')).toBe('chat')
+  })
+
+  it('also when the host does not serve conversations (no_conversations)', () => {
+    seedHost({ launch: true, conversations: false }); agents({ prim01: 'cc', targ01: 'cc' })
+    render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, tmux('targ01'))} />)
+    expect(button('Deck')).toBeEnabled()
+    expect(button('Chat')).toBeEnabled()
+  })
+
+  it('without the capability they stay disabled with the not_agent reason', () => {
+    seedHost({ launch: false }); agents({ prim01: 'cc' })
+    render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, tmux('targ01'))} />)
+    for (const name of ['Deck', 'Chat'] as const) {
+      expect(button(name)).toBeDisabled()
+      expect(button(name).getAttribute('title')).toBe('This terminal is not running Claude Code')
+    }
+  })
+
+  it('a terminated session stays disabled even on a launch-capable host', () => {
+    seedHost({ launch: true }); agents({ prim01: 'cc' })
+    render(<PaneModeButtons tabId={TAB} pane={seedTab(primary, tmux('targ01', { terminated: 'session-closed' }))} />)
+    expect(button('Deck')).toBeDisabled()
+    expect(button('Chat')).toBeDisabled()
   })
 })
 

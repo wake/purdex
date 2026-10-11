@@ -3,6 +3,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, act, fireEvent, waitFor } from '@testing-library/react'
 import { TabContent } from './TabContent'
+import { PaneModeButtons } from './status/PaneModeButtons'
 import { SessionPaneContent } from './SessionPaneContent'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
 import { useHostStore } from '../stores/useHostStore'
@@ -68,6 +69,32 @@ beforeEach(() => {
   useSessionViewStore.setState({ byPane: {} })
   useSessionStore.setState({ sessions: { [H]: [{ code: CODE, name: CODE, cwd: '/w/proj', mode: 'terminal', branch: 'main', tmux_instance: 'i' }] } })
   setCaps(['session.launch.v1'])
+})
+
+describe('the user path: status bar deck / chat button to the panel', () => {
+  // The real status bar buttons and the real pane, mounted together (the gate is mocked closed `not_agent`, as for a shell).
+  const content = (sessionTab.layout as { pane: { content: import('../types/tab').PaneContent } }).pane.content
+  const mountBoth = () => render(
+    <>
+      <PaneModeButtons tabId={sessionTab.id} pane={{ id: paneIdOf(sessionTab), content }} />
+      <TabContent activeTab={sessionTab} allTabs={[sessionTab]} />
+    </>,
+  )
+
+  it.each([['Deck'], ['Chat']])('starting in the terminal view, clicking %s renders the launch panel', async (name) => {
+    mountBoth()
+    expect(screen.queryByTestId('launch-panel')).toBeNull()
+    const btn = screen.getByRole('button', { name })
+    expect(btn).toBeEnabled()
+    fireEvent.click(btn)
+    expect(await screen.findByTestId('launch-panel')).toBeInTheDocument()
+  })
+
+  it('without session.launch.v1 the buttons stay disabled', () => {
+    setCaps([])
+    mountBoth()
+    expect(screen.getByRole('button', { name: 'Deck' })).toBeDisabled()
+  })
 })
 
 describe('when the panel shows', () => {

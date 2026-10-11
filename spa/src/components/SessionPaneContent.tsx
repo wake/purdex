@@ -16,6 +16,7 @@ import { bindAdapter } from '../lib/conversations/deck-adapter'
 import { draftKey } from '../lib/conversations/draft-memory'
 import { paneSendTarget, terminalAdapter } from '../lib/conversations/terminal-adapter'
 import { useConversationViewGate } from '../hooks/useConversationViewGate'
+import { useLaunchPanelGate } from '../hooks/useLaunchPanelGate'
 import { ChatPane } from './deck/ChatPane'
 import { AskStrip } from './dock/AskStrip'
 import { QuestionDock } from './dock/QuestionDock'
@@ -24,7 +25,6 @@ import { DeckPane } from './deck/DeckPane'
 import { LaunchPanel } from './LaunchPanel'
 import { useLaunchPlan } from '../hooks/useLaunchPlan'
 import { useSessionStore } from '../stores/useSessionStore'
-import { useNexHostStore, selectSessionLaunchV1 } from '../stores/useNexHostStore'
 import { QuickReplies } from './deck/QuickReplies'
 import { SessionInput } from './deck/SessionInput'
 import { SessionStatusRow } from './deck/SessionStatusRow'
@@ -35,7 +35,6 @@ import { probeSessionCwd } from '../lib/rebuild/cwd-probe'
 import { probeSessionProvenance } from '../lib/rebuild/provenance-probe'
 import type { PaneRendererProps } from '../lib/module-registry'
 
-const absent = () => false
 
 export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: PaneRendererProps) {
   const content = pane.content
@@ -108,7 +107,7 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   // The no-agent launch panel (spec 2026-10-12 §3). Decided HERE, once, for the deck and the chat alike: a live session
   // whose conversation would be `off` (no Claude Code to read, or a host that does not serve conversations), on a host that
   // serves `session.launch.v1`, where the daemon's plan says no agent is running. Other reasons keep today's views.
-  const launchServed = useNexHostStore(hostId ? selectSessionLaunchV1(hostId) : absent)
+  const launchRule = useLaunchPanelGate(pane.content, gate)
   const sessionKey = useSessionStore((s) => {
     const x = (Object.hasOwn(s.sessions, hostId) ? s.sessions[hostId] : undefined)?.find((c) => c.code === sessionCode)
     return x ? [x.tmux_instance, x.cwd, x.current_command, x.branch].join('\0') : ''
@@ -116,8 +115,7 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   const sessionBranch = useSessionStore((s) => (Object.hasOwn(s.sessions, hostId) ? s.sessions[hostId] : undefined)?.find((c) => c.code === sessionCode)?.branch)
   const panelCandidate = content.kind === 'tmux-session' && !terminated && hostKnown
     && (view === 'deck' || view === 'chat')
-    && conversation.state === 'off' && (gate.reason === 'not_agent' || gate.reason === 'no_conversations')
-    && launchServed
+    && conversation.state === 'off' && launchRule
   const launchPlan = useLaunchPlan(panelCandidate, hostId, sessionCode, sessionKey)
   const showLaunchPanel = panelCandidate && launchPlan.plan !== null && !launchPlan.plan.agentRunning
   // The pane now reads another conversation (/clear, relay, rebuild): what it kept for the old one will not be read again
