@@ -195,6 +195,12 @@ func (m *Module) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "unavailable")
 		return
 	}
+	release, ok := m.locks.acquire(r.Context(), sid, m.tuning().lockWait) // the lock the typed route holds too (M1)
+	if !ok {
+		writeError(w, http.StatusTooManyRequests, "busy")
+		return
+	}
+	defer release()
 	res, err := ps.Submit(r.Context(), sid, in.ClientMsgID, text)
 	m.writeSendAnswer(w, res, err, in.ClientMsgID)
 }

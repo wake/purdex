@@ -64,6 +64,12 @@ type Module struct {
 	maxBody  int              // tests lower it
 	subSem   chan struct{}
 
+	// typed submit (K-1a-2)
+	td       *typedDeps  // nil: the daemon's services; tests inject
+	tune     typedTuning // zero: the spec's timings
+	locks    sidLocks    // shared by both submit routes
+	keysSeen keysLedger  // ids typed blind (no mod)
+
 	mu      sync.Mutex
 	cur     *generation // the latest Start's (kept after Stop: its context is cancelled, so nothing is admitted)
 	running bool        // a Start whose sweeper has not returned yet
@@ -174,6 +180,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /ws/conversations/{provider}/{session_id}", m.handleWS)
 	mux.HandleFunc("POST /api/conversations/{provider}/{session_id}/submit", m.handleSubmit) // through the session's mod (U3-0b); not a device route
 	mux.HandleFunc("POST /api/conversations/{provider}/{session_id}/interrupt", m.handleInterrupt)
+	mux.HandleFunc("POST /api/sessions/{code}/submit", m.handleSessionSubmit) // typing into Claude Code (K-1a-2); a device route
 }
 
 // Start runs the cache sweeper in a new lifetime; a second Start while one runs does nothing.
