@@ -61,7 +61,7 @@ describe('where it is drawn', () => {
     expect(screen.getByTestId('session-input').contains(held)).toBe(false)
     const live = screen.getByTestId('turn-live')
     expect(live.compareDocumentPosition(held) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(held).toHaveClass('text-text-system')
+    expect(held).toHaveClass('border-accent', 'bg-accent/12') // not accepted yet: the first-cut block
   })
 
   it('the chat view draws it in its scroll box too', () => {
@@ -96,12 +96,12 @@ describe('Claude Code\'s own queue (header.queued)', () => {
   const user: HeaderQueued = { text: 'also check the logs', at: 5, source: 'user' }
   const peer: HeaderQueued = { text: 'ship it', at: 6, source: 'peer', from: 'mlab/purdex-1f-vq' }
 
-  it('a user message: grey, "You · queued", the text, a note that it waits in the terminal, no Undo', () => {
+  it('a user message: accent frame, "You · queued", the text, a note that it waits in the terminal, no Undo', () => {
     mountDeck(header('running', [user]))
     const el = screen.getByTestId('header-queued')
     expect(screen.getByTestId('deck-scroll').contains(el)).toBe(true)
     expect(el.dataset.source).toBe('user')
-    expect(el).toHaveClass('text-text-system')
+    expect(el).toHaveClass('border-accent', 'bg-accent/12')
     expect(el).toHaveTextContent('You · queued')
     expect(el).toHaveTextContent('also check the logs')
     expect(el).toHaveTextContent('Queued in the terminal')

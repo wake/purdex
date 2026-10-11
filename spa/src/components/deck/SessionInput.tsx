@@ -7,6 +7,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { useDeckTypeStore } from '../../stores/useDeckTypeStore'
 import { expandPlaceholders, removePlaceholderText } from '../../lib/conversations/image-placeholder'
 import { reconcileAttachments, readAttachments, removeAttachment, removeAttachmentText, takeAttachments, visibleAttachments, type Attachment } from '../../lib/conversations/attachment-memory'
+import { registerDropTarget } from '../../lib/conversations/pane-drop'
 import { startUploads, subscribeUploads, takeUnseenFailures, useUploads } from '../../lib/conversations/attachment-upload'
 import { draftKey, readDraft, writeDraft } from '../../lib/conversations/draft-memory'
 import { clearDraft, discardCleared, hasCleared, undoClear, useHasCleared } from '../../lib/conversations/draft-clear'
@@ -142,6 +143,12 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
   // Files come from a paste, a drop or the attach button. Each is saved by the daemon (no paste into the pane) and its path goes
   // into the draft when it lands (see attachment-upload); the box stays editable meanwhile.
   const attach = (files: readonly File[]) => { if (sessionCode) startUploads(dKey, hostId, sessionCode, files) }
+  // the pane takes a drop anywhere on it and hands the files to this input (usePaneFileDrop)
+  const dropEl = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!sessionCode || !dropEl.current) return
+    return registerDropTarget(dropEl.current, (files) => startUploads(dKey, hostId, sessionCode, files))
+  }, [dKey, hostId, sessionCode])
   const dropChip = (a: Attachment) => {
     removeAttachment(dKey, a.id)
     setChips(readAttachments(dKey))
@@ -202,6 +209,7 @@ function SessionInputBody({ paneKey, hostId, sessionId, sessionCode, capabilitie
             </div>
           )}
           <div
+            ref={dropEl}
             data-testid="session-input-drop"
             data-dragging={dragging}
             className={`flex items-end gap-2 border-t px-3 py-1.5 ${dragging ? 'border-dashed border-accent' : 'border-[#808080]'}`} /* proto v2: terminal-style input, a 1px #808080 rule above only (the session status row below is a block of its own) */

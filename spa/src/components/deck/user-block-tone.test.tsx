@@ -22,8 +22,11 @@ describe('the person\'s block', () => {
     const ring = /ring-1 ring-[a-z]+-\d+/.exec(active)![0]
     render(<UserBlock item={me} />)
     const box = screen.getByTestId('deck-user')
-    expect(box.className).toContain(tint)
-    expect(box.className).toContain(ring)
+    // Mac feedback 10-11: an accepted message is one small step dimmer than the sidebar's selected row (ring 400 → 500, tint 25% → 20%),
+    // same hue and frame; a retune of the sidebar's hue shows up here
+    const dimmer = (s: string) => s.replace(/ring-([a-z]+)-400/, 'ring-$1-500').replace(/(bg-\[#[0-9a-f]{6}\]\/)25/, '$120')
+    expect(box.className).toContain(dimmer(tint))
+    expect(box.className).toContain(dimmer(ring))
   })
 })
 

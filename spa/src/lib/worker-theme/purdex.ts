@@ -31,7 +31,8 @@ export const PURDEX_THEME: WorkerTheme = {
     'rail-color': 'color-mix(in srgb, var(--text-muted) 55%, transparent)',
     'footer-color': 'var(--text-muted)',
     'footer-error-color': 'var(--status-error)',
-    'table-border': 'var(--border-default)',
+    // one step firmer than the theme's border (Mac feedback 10-11: the grid was too dark to follow): mixed toward the text colour, so it lifts on dark and deepens on light
+    'table-border': 'color-mix(in srgb, var(--border-default) 65%, var(--text-primary))',
     'table-header-bg': 'color-mix(in srgb, var(--text-primary) 6%, transparent)',
     'code-font': 'Menlo, Monaco, monospace',
   },

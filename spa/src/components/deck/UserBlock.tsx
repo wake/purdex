@@ -13,10 +13,15 @@ import { CjkText } from './CjkText'
 const TONE: Record<UserTone, { box: string; caption: string; body: string }> = {
   // the same frame and tint as the sidebar's selected workspace row (WorkspaceRow isActive), so the person's words read as "selected"; the caption is primary text
   // because the accent on that tint falls under 4.5:1 in dark (3.2)
-  you: { box: 'rounded-md ring-1 ring-purple-400 bg-[#8b5cf6]/25', caption: 'text-text-primary', body: 'text-text-primary' },
+  // one small step dimmer than the first cut (ring purple-400 → 500, tint 25% → 20%): Mac feedback 10-11
+  you: { box: 'rounded-md ring-1 ring-purple-500 bg-[#8b5cf6]/20', caption: 'text-text-primary', body: 'text-text-primary' },
   peer: { box: 'rounded-md border border-peer/70 bg-peer/5', caption: 'text-peer', body: 'text-text-secondary' },
   notice: { box: 'rounded-md border border-dashed border-border-default', caption: 'text-text-system', body: 'text-text-system' },
 }
+
+/** A message the agent has not accepted yet (held by the App, or in Claude Code's queue): the first cut of the person's block — a dark well in a thin accent frame, the caption in accent. */
+export const PENDING_USER_BOX = 'rounded-md border border-accent bg-accent/12'
+export const PENDING_USER_CAPTION = 'text-accent'
 
 export function UserBlock({ item, midTurn }: { item: UserItem; /** Not the first user message of its turn (a `queued` one then says it arrived mid-turn). */ midTurn?: boolean }) {
   const t = useI18nStore((s) => s.t)

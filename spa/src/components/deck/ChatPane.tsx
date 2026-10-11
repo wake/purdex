@@ -13,6 +13,7 @@ import { ChatView } from './ChatView'
 import type { DeckViewProps } from './DeckView'
 import { footerContext } from './footer-context'
 import { UnreadableState, type UnreadableReason } from './UnreadableState'
+import { usePaneFileDrop } from '../../hooks/usePaneFileDrop'
 import { useDeckTypeStyle } from '../../lib/conversations/deck-type'
 
 interface Props {
@@ -34,6 +35,7 @@ export function ChatPane({ paneId, conversation, title, isActive, isFocusTarget,
   const t = useI18nStore((s) => s.t)
   const typeStyle = useDeckTypeStyle()
   const ref = useRef<HTMLDivElement>(null)
+  const drop = usePaneFileDrop(ref)
   // Switching to the chat focuses its input when it has one (plan D2), else the frame (loading, unreadable).
   // When the input is not there yet (the conversation is still resolving) the frame takes the focus and the input is taken when it shows up.
   const wantsInput = useRef(false)
@@ -85,8 +87,9 @@ export function ChatPane({ paneId, conversation, title, isActive, isFocusTarget,
     )
   }
   return (
-    <div ref={ref} tabIndex={-1} data-testid="session-view-chat" style={typeStyle} className="absolute inset-0 bg-surface-primary outline-none">
+    <div ref={ref} tabIndex={-1} data-testid="session-view-chat" style={typeStyle} className="absolute inset-0 bg-surface-primary outline-none" {...drop.handlers}>
       {body}
+      {drop.overlay}
     </div>
   )
 }

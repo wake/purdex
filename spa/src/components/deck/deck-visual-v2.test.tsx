@@ -46,10 +46,10 @@ describe('system rows', () => {
 })
 
 describe('deck user block', () => {
-  it('the person: the sidebar active-workspace frame and tint (purple ring, 25%), primary caption and text', () => {
+  it('the person: the sidebar active-workspace frame and tint one step dimmer (purple-500 ring, 20%), primary caption and text', () => {
     render(<UserBlock item={user()} />)
     const box = screen.getByTestId('deck-user')
-    expect(box).toHaveClass('ring-1', 'ring-purple-400', 'bg-[#8b5cf6]/25')
+    expect(box).toHaveClass('ring-1', 'ring-purple-500', 'bg-[#8b5cf6]/20')
     expect(screen.getByTestId('deck-user-caption')).toHaveClass('text-text-primary')
     expect(box.querySelector('.text-text-primary')).not.toBeNull()
   })
