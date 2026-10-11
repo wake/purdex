@@ -15,12 +15,15 @@ import { bindAdapter } from '../../lib/conversations/deck-adapter'
 import { draftKey } from '../../lib/conversations/draft-memory'
 import { retireStaleSessions } from '../../lib/conversations/pane-release'
 import { registerWorkerLease, workerAdapter } from '../../lib/conversations/worker-adapter'
+import { runningToolName, workerBackground } from '../../lib/nex/worker-live'
 import { DeckPane } from '../deck/DeckPane'
 import type { DeckFooterContext } from '../deck/footer-context'
 import { SessionInput } from '../deck/SessionInput'
 import { StatusRow } from '../deck/StatusRow'
 import ViewModeMenu, { ViewModeLabel } from './ViewModeMenu'
-import { WorkerEndedPane, workerEndedKind } from './WorkerEndedPane'
+import { WorkerEndedFooter } from './WorkerEndedFooter'
+import { WorkerLifecycleRow } from './WorkerLifecycleRow'
+import { workerEndedKind } from '../../lib/nex/worker-ended'
 import PermissionRequestCard, { PermissionExpiredNotice } from './PermissionRequestCard'
 import { permissionCardKey } from '../../lib/nex/permission-card-memory'
 import type { ExecutionViewMode } from '../../types/tab'
@@ -60,6 +63,15 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
   const readyItems = useMemo(() => (readyDoc ? readyDoc.turns.flatMap((turn) => turn.items) : []), [readyDoc])
   useSendQueueDriver(paneId, hostId, readSession, readyDoc?.header?.status === 'idle', readyItems)
 
+  // The live line speaks from the worker's own events: the tool that runs and the background work (U4-4a), fresher than the transcript's steps — once the
+  // event history is in (before that the tables are empty, which is not "nothing runs": the transcript speaks). A worker that ended runs nothing, and
+  // its task table may still hold a task whose end never came: no live line at all.
+  const endedNow = st.summary !== null && workerEndedKind(st.summary) !== null
+  const live = useMemo(() => {
+    if (endedNow) return { tool: null, background: undefined, hidden: true }
+    return st.historyLoaded ? { tool: runningToolName(st.tools), background: workerBackground(st.tasks) } : undefined
+  }, [endedNow, st.historyLoaded, st.tools, st.tasks])
+
   const [menuOpen, setMenuOpen] = useState(false)
   const menuAnchor = useRef<HTMLButtonElement>(null)
 
@@ -70,9 +82,17 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
       : t('execution.nex_unavailable', { error: st.sseError ?? '' })
     return <div data-testid="execution-problem" className="flex h-full items-center justify-center text-sm text-text-muted">{text}</div>
   }
-  // An exited / failed-to-start worker has its own screen, in every view (conversation entity spec §6, §7).
-  if (st.summary && workerEndedKind(st.summary)) {
-    return <WorkerEndedPane hostId={hostId} executionId={executionId} summary={st.summary} tabId={tabId} paneId={paneId} />
+  // A worker whose conversation is over (exited, or failed to start): its system row says so at the end of the stream, and the ended footer (the ended
+  // screen's rebuild / exit / close, `useWorkerEnded`) is where the input was. Without a session there is no stream to draw: the row and the footer alone.
+  const ended = st.summary && workerEndedKind(st.summary) ? st.summary : null
+  const endedFooter = ended ? <WorkerEndedFooter hostId={hostId} executionId={executionId} summary={ended} tabId={tabId} paneId={paneId} /> : null
+  if (ended && conversation.state === 'resolving') {
+    return (
+      <div data-testid="worker-deck-ended" className="flex h-full flex-col">
+        <div className="flex min-h-0 flex-1 items-center justify-center p-4"><WorkerLifecycleRow summary={ended} /></div>
+        {endedFooter}
+      </div>
+    )
   }
   // No session id yet: the lifecycle, in the words the executions list already uses.
   if (conversation.state === 'resolving') {
@@ -80,7 +100,7 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
     return <div data-testid="worker-deck-placeholder" className="flex h-full items-center justify-center text-sm text-text-muted">{text}</div>
   }
 
-  const permissionShown = st.historyLoaded && shownPermission !== undefined
+  const permissionShown = !ended && st.historyLoaded && shownPermission !== undefined
   const footer = (ctx: DeckFooterContext) => (
     <div data-testid="worker-deck-footer">
       {/* The request the worker waits on, in the dock's place (above the input, as a question's card is); one card at a time, the earliest first. An
@@ -99,7 +119,7 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
       {st.leaseError?.code === 'lease_held' && (
         <div data-testid="lease-held" className="mx-2 mb-1 text-xs text-status-warning-text">{t('execution.lease_held', { principal: st.leaseError.heldBy ?? '' })}</div>
       )}
-      <SessionInput {...ctx} asking={ctx.asking || permissionShown} pendingInStream />
+      {!ended && <SessionInput {...ctx} asking={ctx.asking || permissionShown} pendingInStream />}
       <div className="flex items-center">
         <div className="min-w-0 flex-1">
           <StatusRow cwd={st.summary?.cwd} model={ctx.usage?.model ?? null} effort={ctx.usage?.effort ?? null} cost={st.summary?.cost_usd ?? null} />
@@ -115,5 +135,17 @@ export default function WorkerDeckPane({ hostId, executionId, isActive, isFocusT
     </div>
   )
 
-  return <DeckPane paneId={paneId} conversation={conversation} isActive={isActive} isFocusTarget={isFocusTarget} footer={footer} />
+  const deck = (
+    <DeckPane paneId={paneId} conversation={conversation} isActive={isActive} isFocusTarget={isFocusTarget} footer={footer} live={live}
+      tail={st.summary ? <WorkerLifecycleRow summary={st.summary} /> : undefined} />
+  )
+  // The ended footer sits below the deck pane, not inside the deck's own footer slot: a conversation that cannot be read draws no footer, and the way to
+  // rebuild, exit or close must never be lost with it.
+  if (!endedFooter) return deck
+  return (
+    <div className="relative flex h-full flex-col">
+      <div className="relative min-h-0 flex-1">{deck}</div>
+      {endedFooter}
+    </div>
+  )
 }

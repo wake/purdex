@@ -21,9 +21,13 @@ interface Props {
   /** Absent for a worker (no terminal view): the deck then offers no way to switch to one. */
   onSwitchToTerminal?: () => void
   footer?: DeckViewProps['footer']
+  /** See `DeckViewProps.live`. */
+  live?: DeckViewProps['live']
+  /** See `DeckViewProps.tail`. */
+  tail?: DeckViewProps['tail']
 }
 
-export function DeckPane({ paneId, conversation, isActive, isFocusTarget, onSwitchToTerminal, footer }: Props) {
+export function DeckPane({ paneId, conversation, isActive, isFocusTarget, onSwitchToTerminal, footer, live, tail }: Props) {
   const t = useI18nStore((s) => s.t)
   const typeStyle = useDeckTypeStyle()
   const ref = useRef<HTMLDivElement>(null)
@@ -67,7 +71,7 @@ export function DeckPane({ paneId, conversation, isActive, isFocusTarget, onSwit
     body = (
       <SessionPanelSplit paneKey={paneId} binding={binding} turns={entry.doc.turns} active={isActive && isFocusTarget}>
         <DeckView key={sessionId} paneId={paneId} hostId={hostId} sessionId={sessionId} entry={entry}
-          onSwitchToTerminal={onSwitchToTerminal} footer={footer} onOpenPanel={onOpenPanel} />
+          onSwitchToTerminal={onSwitchToTerminal} footer={footer} onOpenPanel={onOpenPanel} live={live} tail={tail} />
       </SessionPanelSplit>
     )
   }

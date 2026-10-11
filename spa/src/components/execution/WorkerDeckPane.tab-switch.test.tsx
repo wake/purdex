@@ -67,6 +67,18 @@ beforeEach(() => {
 afterEach(() => { forgetWorkerDraft(`${H}:${E}`); vi.useRealTimers(); useNexHostStore.setState({ byHost: {}, ensure: realEnsure }) })
 
 describe('the worker deck across tab switches', () => {
+  it('an exited worker\'s deck (stream, system row, ended footer) is drawn again after a switch away and back', () => {
+    useExecutionStore.getState().setSummary(H, E, { ...summary, state: 'terminated', terminal_reason: 'idle timeout' } as never)
+    const { rerender } = render(<TabContent activeTab={execTab} allTabs={all} />)
+    expect(screen.getByTestId('worker-lifecycle')).toHaveTextContent('This worker has exited · Reason: idle timeout')
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    expect(screen.queryByTestId('worker-ended-footer')).toBeNull()
+    rerender(<TabContent activeTab={execTab} allTabs={all} />)
+    expect(screen.getByTestId('deck-scroll')).toBeInTheDocument()
+    expect(screen.getByTestId('worker-lifecycle')).toHaveTextContent('This worker has exited')
+    expect(screen.getByTestId('worker-ended-footer')).toBeInTheDocument()
+  })
+
   it('keeps the typed reply, and draws the deck again, when the reader switches to another tab and back', () => {
     const { rerender } = render(<TabContent activeTab={execTab} allTabs={all} />)
     expect(screen.getByTestId('deck-scroll')).toBeInTheDocument()
