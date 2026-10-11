@@ -66,8 +66,10 @@ export function LaunchPanel({ hostId, sessionCode, tmuxInstance, branch, plan, o
       await postLaunch(hostId, sessionCode, { kind, cd: withCd, expectedTmuxInstance: generation })
       latchSettled(key) // stays latched for the claim lifetime; the agent's hooks switch the view
     } catch (e) {
-      latchRelease(key)
-      // Not a coded answer (network, aborted, ...): the line may or may not have been typed — say so and read the plan again.
+      // A LaunchError is the daemon's own refusal: nothing was typed, so free the buttons at once. Anything else (network,
+      // aborted, ...) has an unknown outcome — the line may have been typed — so hold the latch for the claim lifetime.
+      if (e instanceof LaunchError) latchRelease(key)
+      else latchSettled(key)
       const code = e instanceof LaunchError ? e.code : 'unknown_outcome'
       setFailure({ code, status: e instanceof LaunchError ? String(e.status) : '' })
       if (code === 'busy' || code === 'agent_running' || code === 'unknown_outcome') onRefresh()

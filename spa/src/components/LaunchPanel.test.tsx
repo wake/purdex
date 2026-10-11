@@ -158,6 +158,25 @@ describe('launch latch', () => {
     await screen.findByTestId('launch-error')
     expect(btns().every((b) => !b.disabled)).toBe(true)
   })
+  it('an unknown outcome (fetch rejected) keeps the latch for 15 s from the error, then frees it', async () => {
+    vi.useFakeTimers()
+    try {
+      post.mockRejectedValue(new TypeError('Failed to fetch'))
+      mount(plan())
+      fireEvent.click(screen.getByTestId('launch-fresh'))
+      await flush()
+      expect(screen.getByTestId('launch-error').textContent).toContain('Not sure whether it was sent')
+      expect(onRefresh).toHaveBeenCalledTimes(1)
+      expect(btns().every((b) => b.disabled)).toBe(true)
+      fireEvent.click(screen.getByTestId('launch-fresh'))
+      fireEvent.click(screen.getByTestId('launch-resume'))
+      expect(post).toHaveBeenCalledTimes(1)
+      act(() => { vi.advanceTimersByTime(14_900) })
+      expect(btns().every((b) => b.disabled)).toBe(true)
+      act(() => { vi.advanceTimersByTime(200) })
+      expect(btns().every((b) => !b.disabled)).toBe(true)
+    } finally { vi.useRealTimers() }
+  })
   it('a panel mounted during an in-flight POST (tab switch) starts disabled, and follows its outcome', async () => {
     let done: () => void = () => {}
     post.mockReturnValue(new Promise<void>((r) => { done = r }))
