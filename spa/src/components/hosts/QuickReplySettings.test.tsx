@@ -5,6 +5,7 @@ import { CommandsSection } from './CommandsSection'
 import { useHostStore } from '../../stores/useHostStore'
 import { emptyHostConfigEntry, useHostConfigStore, type HostConfigEntry } from '../../stores/useHostConfigStore'
 import { putHostConfig, type QuickReply } from '../../lib/host-config-api'
+import { useQuickReplyPrefsStore } from '../../stores/useQuickReplyPrefsStore'
 
 vi.mock('../../lib/host-config-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../lib/host-config-api')>()),
@@ -290,5 +291,59 @@ describe('QuickReplySettings', () => {
     fireEvent.click(screen.getByTestId('commands-tab-quick'))
     expect(screen.getByTestId('quick-replies')).toBeInTheDocument()
     expect(screen.queryByTestId('command-add')).toBeNull()
+  })
+})
+
+// QR-2b: the editor's two switches write the Mac's prefs store, never the daemon
+describe('QuickReplySettings — the switches', () => {
+  const prefs = () => useQuickReplyPrefsStore.getState()
+  beforeEach(() => {
+    useQuickReplyPrefsStore.setState({ rowEnabled: true, disabled: {} })
+    vi.mocked(putHostConfig).mockClear()
+  })
+
+  it('a "show the quick-reply row" switch at the top (app-wide): on by default, flipping it writes rowEnabled and touches no daemon', () => {
+    seed(entry([{ id: 'a', title: 'Alpha', content: 'alpha' }], 3))
+    render(<QuickReplySettings hostId={H} />)
+    const sw = screen.getByTestId('quick-replies-row-switch')
+    expect(sw).toBeChecked()
+    fireEvent.click(sw)
+    expect(prefs().rowEnabled).toBe(false)
+    expect(sw).not.toBeChecked()
+    fireEvent.click(sw)
+    expect(prefs().rowEnabled).toBe(true)
+    expect(saveQuickReplies).not.toHaveBeenCalled()
+    expect(putHostConfig).not.toHaveBeenCalled()
+  })
+
+  it('an on/off switch per item: off-list semantics (on unless listed), written under the host\'s wire key, nothing sent to the daemon', () => {
+    seed(entry([{ id: 'a', title: 'Alpha', content: 'alpha' }, { id: 'b', title: 'Beta', content: 'beta' }], 3))
+    render(<QuickReplySettings hostId={H} />)
+    expect(screen.getByTestId('quick-reply-switch-a')).toBeChecked()
+    fireEvent.click(screen.getByTestId('quick-reply-switch-a'))
+    expect(prefs().disabled).toEqual({ [H]: ['a'] }) // H has no daemon id here: its wire id is its local id
+    expect(screen.getByTestId('quick-reply-switch-a')).not.toBeChecked()
+    expect(screen.getByTestId('quick-reply-switch-b')).toBeChecked()
+    fireEvent.click(screen.getByTestId('quick-reply-switch-a'))
+    expect(prefs().disabled).toEqual({})
+    expect(saveQuickReplies).not.toHaveBeenCalled()
+    expect(putHostConfig).not.toHaveBeenCalled()
+  })
+
+  it('a host with a daemon id writes under its d1_ key', () => {
+    useHostStore.setState({ hosts: { [H]: { id: H, name: 'mlab', ip: '1.2.3.4', port: 7860, order: 0, daemonId: 'abc123' } } })
+    seed(entry([{ id: 'a', title: 'Alpha', content: 'alpha' }], 3))
+    render(<QuickReplySettings hostId={H} />)
+    fireEvent.click(screen.getByTestId('quick-reply-switch-a'))
+    const key = Object.keys(prefs().disabled)[0]
+    expect(key).not.toBe(H)
+    expect(key.startsWith('d1_')).toBe(true)
+  })
+
+  it('an item that is switched off is shown off after a remount (the prefs store, not the component, holds it)', () => {
+    useQuickReplyPrefsStore.setState({ disabled: { [H]: ['a'] } })
+    seed(entry([{ id: 'a', title: 'Alpha', content: 'alpha' }], 3))
+    render(<QuickReplySettings hostId={H} />)
+    expect(screen.getByTestId('quick-reply-switch-a')).not.toBeChecked()
   })
 })

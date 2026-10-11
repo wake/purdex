@@ -13,9 +13,9 @@ import type { HeaderQueued } from '../../lib/conversations/types'
 import { adapterOf } from '../../lib/conversations/deck-adapter'
 import { QueuedMessages, TakeBackSpinner } from './QueuedMessages'
 import { TAKE_BACK_BOX, activateProps } from './take-back-ui'
-import { PENDING_USER_BOX, PENDING_USER_CAPTION } from './UserBlock'
+import { PENDING_USER_BOX, PENDING_USER_BOX_CHAT, PENDING_USER_CAPTION } from './UserBlock'
 
-function HeaderQueuedLine({ item, onTakeBack, busy }: { item: HeaderQueued; onTakeBack?: () => void; busy: boolean }) {
+function HeaderQueuedLine({ item, onTakeBack, busy, layout }: { item: HeaderQueued; onTakeBack?: () => void; busy: boolean; layout: 'deck' | 'chat' }) {
   const t = useI18nStore((s) => s.t)
   if (item.source === 'peer') {
     return (
@@ -26,13 +26,15 @@ function HeaderQueuedLine({ item, onTakeBack, busy }: { item: HeaderQueued; onTa
     )
   }
   const act = onTakeBack ? activateProps(onTakeBack, t('deck.recall.title')) : {}
-  return (
-    <div data-testid="header-queued" data-source="user" aria-busy={onTakeBack && busy ? true : undefined} {...act} className={`${PENDING_USER_BOX} px-3 py-2 ${onTakeBack ? TAKE_BACK_BOX : ''}`}>
+  const chat = layout === 'chat'
+  const block = (
+    <div data-testid="header-queued" data-source="user" aria-busy={onTakeBack && busy ? true : undefined} {...act} className={`${chat ? PENDING_USER_BOX_CHAT : PENDING_USER_BOX} px-3 py-2 ${onTakeBack ? TAKE_BACK_BOX : ''}`}>
       <div className={`mb-1 deck-t-down font-medium ${PENDING_USER_CAPTION}`}>{t('deck.user.queued')}{onTakeBack && busy && <> <TakeBackSpinner /></>}</div>
       <div className="whitespace-pre-wrap break-words deck-t-up text-text-primary">{item.text}</div>
       <div className="deck-t-down text-text-system">{t('deck.user.queued_terminal')}</div>
     </div>
   )
+  return chat ? <div className="flex flex-col items-end">{block}</div> : block
 }
 
 interface Props {
@@ -42,9 +44,11 @@ interface Props {
   entries: readonly QueueEntry[]
   /** header.queued, already filtered by the status (`shownHeaderQueue`). */
   queued: readonly HeaderQueued[]
+  /** 'chat': your own messages sit on the right in the delivered bubble's shape. Default 'deck': full-width blocks. */
+  layout?: 'deck' | 'chat'
 }
 
-export function PendingTail({ paneKey, hostId, sessionId, entries, queued }: Props) {
+export function PendingTail({ paneKey, hostId, sessionId, entries, queued, layout = 'deck' }: Props) {
   const t = useI18nStore((s) => s.t)
   const key = draftKey(paneKey, hostId, sessionId)
   const queue = sendQueueFor(key, () => unboundSendPort(hostId, sessionId))
@@ -58,10 +62,11 @@ export function PendingTail({ paneKey, hostId, sessionId, entries, queued }: Pro
   const takeBack = canTakeBack(key) ? () => { void takeBackQueued(key, queue) } : undefined
   return (
     <div data-testid="pending-tail" className="space-y-3">
-      {rows.map((q, i) => <HeaderQueuedLine key={`${q.at}:${i}`} item={q} onTakeBack={q.source === 'peer' ? undefined : takeBack} busy={tb.busy} />)}
+      {rows.map((q, i) => <HeaderQueuedLine key={`${q.at}:${i}`} item={q} onTakeBack={q.source === 'peer' ? undefined : takeBack} busy={tb.busy} layout={layout} />)}
       <QueuedMessages
         entries={entries}
-        className="flex flex-col gap-2"
+        layout={layout}
+        className={layout === 'chat' ? 'flex flex-col items-end gap-2' : 'flex flex-col gap-2'}
         canUndo={adapterOf(key)?.recall !== false}
         onUndo={(id) => { takeBackHeld(key, queue, id) }}
         onResend={(id) => { queue.resend(id) }}

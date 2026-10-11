@@ -6,6 +6,7 @@ import { UserBlock } from './UserBlock'
 import { UserBubble } from './ChatBubbles'
 import { DeckView } from './DeckView'
 import { ChatView } from './ChatView'
+import { FoldContext, useFoldMemory } from '../room/fold-context'
 import { ConversationHostContext } from './conversation-host'
 import { clearFsImages } from '../../lib/conversations/fs-image'
 import { emptyDoc } from '../../lib/conversations/model'
@@ -21,7 +22,8 @@ vi.mock('../../lib/fs-backend-daemon', () => ({ createDaemonBackendForHost: (h: 
 
 const user = (text: string, over: Partial<UserItem> = {}): UserItem => ({ type: 'user', id: 'u1', at: 1, index: 0, text, source: 'user', ...over })
 const flush = () => act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve() })
-const withHost = (ui: React.ReactElement, host: string | null = 'h') => <ConversationHostContext.Provider value={host}>{ui}</ConversationHostContext.Provider>
+function Folds({ children }: { children: React.ReactNode }) { return <FoldContext.Provider value={useFoldMemory()}>{children}</FoldContext.Provider> }
+const withHost = (ui: React.ReactElement, host: string | null = 'h') => <Folds><ConversationHostContext.Provider value={host}>{ui}</ConversationHostContext.Provider></Folds>
 const MSG = 'before [Image: source: /up/dev001/a.png] after'
 
 let made: string[] = []

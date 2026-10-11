@@ -8,6 +8,9 @@ import { CjkText } from '../../components/deck/CjkText'
 import { UserBlock } from '../../components/deck/UserBlock'
 import { UserBubble } from '../../components/deck/ChatBubbles'
 import type { UserItem } from './types'
+import { FoldContext, useFoldMemory } from '../../components/room/fold-context'
+
+function FoldCtx({ children }: { children: React.ReactNode }) { return <FoldContext.Provider value={useFoldMemory()}>{children}</FoldContext.Provider> }
 
 afterEach(cleanup)
 const user = (over: Partial<UserItem> = {}) => ({ type: 'user', id: 'u', at: 1, index: 0, text: 'hi', source: 'user', ...over }) as UserItem
@@ -89,7 +92,7 @@ describe('the person\'s and peers\' plain text', () => {
     render(<UserBlock item={user({ text: 'Please 修正 it' })} />)
     expect(cjkOf(screen.getByTestId('deck-user'))).toEqual(['修正'])
     cleanup()
-    render(<UserBlock item={user({ source: 'peer', from: { kind: 'peer', name: 'a/b' }, text: '收到 ok' })} />)
+    render(<FoldCtx><UserBlock item={user({ source: 'peer', from: { kind: 'peer', name: 'a/b' }, text: '收到 ok' })} /></FoldCtx>)
     expect(cjkOf(screen.getByTestId('deck-user'))).toContain('收到')
     cleanup()
     render(<UserBlock item={user({ source: 'bash', text: 'echo 中文' })} />)

@@ -4,7 +4,7 @@
 // later arrives here (added, its daemonId learned, an alias learned, a conflict cleared), every such reference must
 // point at the local host. This pass does that, over everything this device holds: the tab store on screen, every
 // parked world, `purdex-host-settings` keys and the New Tab host-bearing columns (presets and knownIds). It also
-// re-keys the stores keyed by WIRE id (H2c-2: `purdex-host-looks`; H2d-1: `purdex-shown-hosts`) the other way — local id → `d1_…` once a host's
+// re-keys the stores keyed by WIRE id (H2c-2: `purdex-host-looks`; H2d-1: `purdex-shown-hosts`; QR-2b: `purdex-quick-reply-prefs`) the other way — local id → `d1_…` once a host's
 // daemonId is known (spec §4.3) — the one step that changes a payload (`settings`, one push; plan §0.13).
 //
 // No push follows: for a `d1_…` reference the build maps the new local id back to the same `d1_…` (§3.3 no-push
@@ -41,6 +41,7 @@ import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { renameLayoutIds, useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
 import { useRebuildStore, type OperationLockGrant } from '../stores/useRebuildStore'
 import { useHostLookStore } from '../stores/useHostLookStore'
+import { useQuickReplyPrefsStore } from '../stores/useQuickReplyPrefsStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { readMasterWorld } from './profile/master-world'
@@ -174,7 +175,7 @@ interface Rereadable {
 }
 
 /** The stores the pass rewrites, and the workspace store the world's settledness is read with. */
-const REREAD: readonly Rereadable[] = [useTabStore, useWorkspaceStore, useLocalProfilesStore, useHostSettingsStore, useNewTabLayoutStore, useHostLookStore, useShownHostsStore] as unknown as Rereadable[]
+const REREAD: readonly Rereadable[] = [useTabStore, useWorkspaceStore, useLocalProfilesStore, useHostSettingsStore, useNewTabLayoutStore, useHostLookStore, useShownHostsStore, useQuickReplyPrefsStore] as unknown as Rereadable[]
 
 /**
  * Bring every store in `REREAD` up to what storage holds NOW. A store whose persisted record is exactly what its
@@ -256,8 +257,7 @@ function passBody(only: string | null, parent: OperationLockGrant | null): HostR
   // (spec §4.3, plan §0.12) — computed from the hosts alone, as its own step: never inside `planRewrite`, the
   // explicit-map rewrite a deletion (local → wire) reuses and that must move no look (decision 9). It changes the
   // `settings` payload: one push (plan §0.13).
-  const lookRekey = rekeyWireKeyedStores(hosts)
-  if (lookRekey !== null) writes.push({ key: 'host looks', ...lookRekey })
+  writes.push(...rekeyWireKeyedStores(hosts))
   // The shown-hosts ids are WIRE ids too (H2d-1): same direction, same rule, its own step — never in `planRewrite`.
   const shownRekey = rekeyShownHosts(hosts)
   if (shownRekey !== null) writes.push({ key: 'shown hosts', ...shownRekey })
@@ -333,7 +333,7 @@ export function scheduleHostReresolve(): void {
 }
 
 /** Every persisted store the pass reads or rewrites: it runs only once ALL of them hold their real state. */
-const STORES = [useHostStore, useTabStore, useNewTabLayoutStore, useLocalProfilesStore, useHostSettingsStore, useHostLookStore, useShownHostsStore] as const
+const STORES = [useHostStore, useTabStore, useNewTabLayoutStore, useLocalProfilesStore, useHostSettingsStore, useHostLookStore, useShownHostsStore, useQuickReplyPrefsStore] as const
 
 /**
  * The pass's triggers, for the app's lifetime (`main.tsx`): once every store it touches has hydrated; again whenever

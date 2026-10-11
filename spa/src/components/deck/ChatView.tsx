@@ -160,7 +160,7 @@ function ChatViewBody({ binding, paneKey, hostId, sessionId, title, status, queu
                 </div>
               ))}
               <LiveTurnLine turns={turns} status={status} background={background} />
-              <PendingTail paneKey={paneKey} hostId={hostId} sessionId={sessionId ?? ''} entries={pending} queued={headerQueued} />
+              <PendingTail layout="chat" paneKey={paneKey} hostId={hostId} sessionId={sessionId ?? ''} entries={pending} queued={headerQueued} />
             </div>
             {input}
           </SessionPanelSplit>

@@ -3,13 +3,14 @@
 import { useContext } from 'react'
 import { SearchScopeContext } from './search-scope'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { textOutput, userCaption, userTone, type UserTone } from '../../lib/conversations/deck-format'
+import { cleanCommandText, textOutput, userCaption, userTone, type UserTone } from '../../lib/conversations/deck-format'
 import type { UserItem } from '../../lib/conversations/types'
 import { userUnitId } from '../../lib/conversations/find-units'
 import { OutputFold } from './OutputFold'
 import { OWN_TEXT_SOURCES } from '../../lib/conversations/image-sniff'
 import { UserText } from './UserText'
 import { CjkText } from './CjkText'
+import { usePeerCollapse } from './usePeerCollapse'
 
 // Three tones (c9d9c7-52 pt 4/7): the person's words are the loudest — an accent frame on a firmer tint; a peer's message is a teal frame on a faint
 // tint with its body one step quieter; a system notice (task report, wake-up, a mod's notice) is the grey of the system rows, dashed and quieter still.
@@ -24,9 +25,24 @@ const TONE: Record<UserTone, { box: string; caption: string; body: string }> = {
 
 /** A message the agent has not accepted yet (held by the App, or in Claude Code's queue): the first cut of the person's block — a dark well in a thin accent frame, the caption in accent. */
 export const PENDING_USER_BOX = 'rounded-md border border-accent bg-accent/12'
+/** Chat mode: the same not-accepted frame in the delivered bubble's shape (ChatBubbles' UserBubble). */
+export const PENDING_USER_BOX_CHAT = 'max-w-[80%] rounded-2xl rounded-br-sm border border-accent bg-accent/12'
 export const PENDING_USER_CAPTION = 'text-accent'
 
-export function UserBlock({ item, midTurn }: { item: UserItem; /** Not the first user message of its turn (a `queued` one then says it arrived mid-turn). */ midTurn?: boolean }) {
+type Fold = ReturnType<typeof usePeerCollapse>
+interface BlockProps { item: UserItem; /** Not the first user message of its turn (a `queued` one then says it arrived mid-turn). */ midTurn?: boolean }
+
+/** A peer message folds to three lines (deck rules 2026-10-11); the fold memory is only asked for here, so the other tones need no provider. */
+function PeerBlock({ item, midTurn }: BlockProps) {
+  const fold = usePeerCollapse(`${item.id}:peerfold`, item.text)
+  return <UserBox item={item} midTurn={midTurn} fold={fold} />
+}
+
+export function UserBlock(props: BlockProps) {
+  return userTone(props.item) === 'peer' && props.item.source !== 'command_output' ? <PeerBlock {...props} /> : <UserBox {...props} />
+}
+
+function UserBox({ item, midTurn, fold }: BlockProps & { fold?: Fold }) {
   const t = useI18nStore((s) => s.t)
   const scope = useContext(SearchScopeContext)
   const cap = userCaption(item, midTurn)
@@ -48,10 +64,11 @@ export function UserBlock({ item, midTurn }: { item: UserItem; /** Not the first
   const tone = userTone(item)
   const c = TONE[tone]
   return (
-    <div data-testid="deck-user" data-source={item.source} data-tone={tone} className={`${c.box} px-3 py-2`}>
+    <div data-testid="deck-user" data-source={item.source} data-tone={tone} className={`${c.box} px-3 py-2 ${fold?.boxClass ?? ''}`} {...fold?.boxProps}>
+      {fold?.collapsible && <button type="button" {...fold.toggleProps} />}
       <div data-testid="deck-user-caption" className={`mb-1 deck-t-down font-medium ${c.caption}`}>{caption}</div>
-      <div className={`whitespace-pre-wrap break-words deck-t-up ${c.body} ${bash ? 'font-mono' : ''}`}>
-        <span data-search-unit={userUnitId(item.id, scope)}>{bash ? `! ${item.text}` : OWN_TEXT_SOURCES.has(item.source) ? <UserText text={item.text} /> : <CjkText text={item.text} />}</span>
+      <div ref={fold?.bodyRef} id={fold?.bodyId} className={`whitespace-pre-wrap break-words deck-t-up ${c.body} ${bash ? 'font-mono' : ''} ${fold?.bodyClass ?? ''}`}>
+        <span data-search-unit={userUnitId(item.id, scope)}>{bash ? `! ${cleanCommandText(item.text)}` : OWN_TEXT_SOURCES.has(item.source) ? <UserText text={item.text} /> : <CjkText text={item.text} />}</span>
         {item.truncated && <span className="text-text-muted">…</span>}
       </div>
       {item.images && item.images.length > 0 && (

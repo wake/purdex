@@ -423,8 +423,10 @@ function lookSeedOf(host: HostConfig): HostLookEntry {
  * moved that entry yet (lock busy, stores not hydrated). The local-id entry IS the look then: read there and write
  * there, and the pass later moves it to `d1_…` intact (codex critic review-mufd6v5g-2gh633). An existing `d1_…` entry
  * (e.g. synced from another device) always wins. Pure.
+ *
+ * Any wire-keyed record asks the same question (`looks` is only the first): the quick-reply prefs' `disabled` is read with it too.
  */
-export function lookKeyOf(host: HostConfig, looks: Record<string, HostLookEntry>): string {
+export function lookKeyOf(host: HostConfig, looks: Record<string, unknown>): string {
   const wire = wireIdOfHost(host)
   if (wire !== host.id && !Object.hasOwn(looks, wire) && Object.hasOwn(looks, host.id)) return host.id
   return wire

@@ -20,6 +20,7 @@
 import { useCallback } from 'react'
 import { lookKeyOf, useHostStore, type HostConfig } from '../stores/useHostStore'
 import { useHostLookStore, type HostLookEntry, type HostLookMove } from '../stores/useHostLookStore'
+import { useQuickReplyPrefsStore } from '../stores/useQuickReplyPrefsStore'
 import { wireIdOfHost } from './profile/host-identity'
 import type { IconWeight } from '../types/tab'
 
@@ -172,16 +173,23 @@ export function wireKeyMovesOf(hosts: Record<string, HostConfig>): HostLookMove[
 }
 
 /**
- * The pass's re-key step over every store keyed by wire id (H2c-2: the look store): the entry under a host's local
- * id moves to its `d1_…` key; an entry already there wins and the local-id one is dropped (`useHostLookStore.rekey`).
- * `null` when nothing would move; else the write and its way back, for the pass to commit under its lock.
+ * The pass's re-key step over every store keyed by wire id (H2c-2: the look store; QR-2b: the quick-reply prefs' `disabled`): the entry
+ * under a host's local id moves to its `d1_…` key; an entry already there wins and the local-id one is dropped (each store's `rekey`).
+ * One write per store that has something to move (none: an empty list), each with its way back — separate steps, so the pass commits and, if
+ * one fails, rolls them back one by one (an undo that throws on one store does not stop the other's).
  */
-export function rekeyWireKeyedStores(hosts: Record<string, HostConfig>): { commit: () => void; undo: () => void } | null {
+export function rekeyWireKeyedStores(hosts: Record<string, HostConfig>): Array<{ key: string; commit: () => void; undo: () => void }> {
   const looks = useHostLookStore.getState().looks
-  const moves = wireKeyMovesOf(hosts).filter(([from]) => Object.hasOwn(looks, from))
-  if (moves.length === 0) return null
-  return {
-    commit: () => useHostLookStore.getState().rekey(moves),
-    undo: () => useHostLookStore.setState({ looks }),
+  const disabled = useQuickReplyPrefsStore.getState().disabled
+  const all = wireKeyMovesOf(hosts)
+  const lookMoves = all.filter(([from]) => Object.hasOwn(looks, from))
+  const prefMoves = all.filter(([from]) => Object.hasOwn(disabled, from))
+  const writes: Array<{ key: string; commit: () => void; undo: () => void }> = []
+  if (lookMoves.length > 0) {
+    writes.push({ key: 'host looks', commit: () => useHostLookStore.getState().rekey(lookMoves), undo: () => useHostLookStore.setState({ looks }) })
   }
+  if (prefMoves.length > 0) {
+    writes.push({ key: 'quick-reply prefs', commit: () => useQuickReplyPrefsStore.getState().rekey(prefMoves), undo: () => useQuickReplyPrefsStore.setState({ disabled }) })
+  }
+  return writes
 }

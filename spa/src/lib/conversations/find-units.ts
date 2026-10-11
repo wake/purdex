@@ -8,6 +8,7 @@
 import { proseText } from '../nex/markdown-text'
 import type { SearchUnit } from '../nex/transcript-search'
 import { buildChat } from './chat-model'
+import { cleanCommandText } from './deck-format'
 import { splitImageRefs, imageMarker } from './image-placeholder'
 import { OWN_TEXT_SOURCES, isImagePath } from './image-sniff'
 import type { PanelTurn } from './panel-resolve'
@@ -39,7 +40,7 @@ export const peerKey = (id: string): string => `${id}:peerfold`
  * other stays as the marker it was. Only the person's own messages are drawn that way (UserBlock / UserBubble decide).
  */
 export function userText(item: UserItem): string {
-  if (item.source === 'bash') return `! ${item.text}`
+  if (item.source === 'bash') return `! ${cleanCommandText(item.text)}`
   if (!OWN_TEXT_SOURCES.has(item.source)) return item.text
   const parts = splitImageRefs(item.text)
   if (!parts.some((p) => p.kind === 'image')) return item.text
@@ -118,7 +119,9 @@ export function deckUnits(turns: readonly Turn[], eager: number, subagents?: Rec
 export function chatUnits(turns: readonly PanelTurn[]): SearchUnit[] {
   const out: SearchUnit[] = []
   for (const entry of buildChat(turns as PanelTurn[])) {
-    if (entry.kind === 'user') add(out, userUnitId(entry.item.id), userText(entry.item))
+    // a command output (either shape) is the same fold as the deck's: itemUnits builds its unit and reveal key
+    if (entry.kind === 'system' || (entry.kind === 'user' && entry.item.source === 'command_output')) itemUnits(out, entry.item, [], [], undefined)
+    else if (entry.kind === 'user') add(out, userUnitId(entry.item.id), userText(entry.item))
     else if (entry.kind === 'agent') add(out, agentUnitId(entry.item.id), proseText(entry.item.markdown))
   }
   return out

@@ -24,6 +24,7 @@ import {
 } from '../lib/host-config-parse'
 import { forgetRelayPromptDrafts } from '../lib/relay-prompt-draft-memory'
 import { useHostStore, type HostConfig } from './useHostStore'
+import { pruneQuickReplyPrefs } from '../lib/quick-reply-prefs'
 
 export type { HostConfigProblem } from '../lib/host-config-parse'
 
@@ -244,6 +245,9 @@ export const useHostConfigStore = create<HostConfigState>()((set, get) => {
       // whose copy the cache now holds.
       if (!stillCurrent(hostId, token)) return
       take(stored)
+      // A stored answer is the one moment an item is known gone: the Mac's switches for ids the host no longer lists go with them. A 409, a 400
+      // and a network failure (the catch) prune nothing — the switches survive a failed edit.
+      if (field === 'quickReplies') pruneQuickReplyPrefs(hostId, (get().byHost[hostId]?.quickReplies ?? []).map((r) => r.id))
     } catch (err) {
       if (err instanceof HostConfigConflictError && stillCurrent(hostId, token)) take(err.current)
       throw err

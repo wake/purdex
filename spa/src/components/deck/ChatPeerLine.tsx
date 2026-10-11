@@ -6,6 +6,7 @@
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { UserItem } from '../../lib/conversations/types'
 import { useFold } from '../room/fold-context'
+import { usePeerCollapse } from './usePeerCollapse'
 
 const PREVIEW_CHARS = 40
 
@@ -14,6 +15,17 @@ function peerPreview(text: string): { text: string; cut: boolean } {
   const lines = text.trim().split('\n')
   const chars = Array.from(lines[0].trim())
   return { text: chars.slice(0, PREVIEW_CHARS).join(''), cut: chars.length > PREVIEW_CHARS || lines.length > 1 }
+}
+
+/** One opened message: the same three-line fold as the deck's peer block (its own fold key, so opening the list does not open every message). */
+function PeerItemBody({ id, text }: { id: string; text: string }) {
+  const { bodyRef, bodyId, collapsible, toggleProps, boxClass, boxProps, bodyClass } = usePeerCollapse(`${id}:peerfold`, text)
+  return (
+    <div data-testid="chat-peer-item" className={`${boxClass} text-text-secondary`} {...boxProps}>
+      {collapsible && <button type="button" {...toggleProps} />}
+      <div ref={bodyRef} id={bodyId} className={`whitespace-pre-wrap break-words ${bodyClass}`}>{text}</div>
+    </div>
+  )
 }
 
 export function PeerLine({ items }: { items: UserItem[] }) {
@@ -34,9 +46,7 @@ export function PeerLine({ items }: { items: UserItem[] }) {
       {open && (
         <div className="mt-1 space-y-1 border-l border-border-subtle pl-3">
           {items.map((i) => (
-            <div key={i.id} data-testid="chat-peer-item" className="whitespace-pre-wrap break-words text-text-secondary">
-              {t('chat.peer.item', { sender: sender(i), flag: flag(i), text: i.text })}
-            </div>
+            <PeerItemBody key={i.id} id={i.id} text={t('chat.peer.item', { sender: sender(i), flag: flag(i), text: i.text })} />
           ))}
         </div>
       )}
