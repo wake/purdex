@@ -57,6 +57,9 @@ function finder(units: readonly SearchUnit[]) {
   }
 }
 
+/** How long the DOM must be quiet before the marks are laid again after it was redrawn under them. */
+const REMARK_MS = 120
+
 const BUTTON = 'p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-hover disabled:opacity-40 disabled:pointer-events-none'
 
 export function FindBar({ memoryKey, owner, container, units, fold, onClose, onJump }: FindBarProps) {
@@ -116,17 +119,18 @@ export function FindBar({ memoryKey, owner, container, units, fold, onClose, onJ
   useLayoutEffect(() => { latest.current = { query, matches, current, searching } })
   useEffect(() => {
     if (!container || typeof MutationObserver === 'undefined') return
-    let frame = 0
+    let timer: ReturnType<typeof setTimeout> | null = null
+    // Coalesced: a streaming reply changes the DOM every frame, and marking again scans every unit on screen. Quiet for REMARK_MS first.
     const observer = new MutationObserver(() => {
-      if (frame) return
-      frame = requestAnimationFrame(() => {
-        frame = 0
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
         const l = latest.current
         if (l.searching && container.isConnected) highlightSearch(owner, container, l.query, l.matches, l.current, { scroll: false })
-      })
+      }, REMARK_MS)
     })
     observer.observe(container, { childList: true, subtree: true, characterData: true })
-    return () => { observer.disconnect(); if (frame) cancelAnimationFrame(frame) }
+    return () => { observer.disconnect(); if (timer) clearTimeout(timer) }
   }, [container, owner])
 
   // A query refining one that had a match stays on it (or the next one); a new search starts at the first match at or below the top of the

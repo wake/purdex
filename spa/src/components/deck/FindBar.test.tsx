@@ -159,6 +159,28 @@ describe('the deck: what hides behind a fold', () => {
     expect(marked('search-current')).toEqual(['needle'])
   })
 
+  it('a subagent\'s step that shares its id with a main-turn step is found in its own place, not in the main one', () => {
+    const main = { ...(run as object), id: 'dup', output: { text: 'main row', total_lines: 1, total_bytes: 1, truncated: false } } as ConversationItem
+    const task = { type: 'step', id: 'k1', at: 1, index: 1, kind: 'task', tool: 'Task', status: 'done', summary: 'dig', started_at: 1, input: null, subagent: { agent_id: 'ag', description: 'dig' } } as ConversationItem
+    const e = entry([turn(0, [main, task])])
+    e.subagents = { ag: { state: 'ready', answer: { items: [{ ...(run as object), id: 'dup', output: { text: 'inner needle', total_lines: 1, total_bytes: 1, truncated: false } }] } } } as never
+    render(<DeckPane {...base} conversation={{ state: 'ready', hostId: 'h', sessionId: 's', entry: e }} />)
+    fireEvent.keyDown(screen.getByTestId('session-view-deck'), findKeys())
+    type('needle')
+    expect(count()).toBe('1 / 1')
+    const mark = highlights.get('search-current')!.ranges[0]
+    expect(mark.startContainer.parentElement?.closest('[data-testid="subagent-steps"]')).not.toBeNull()
+  })
+
+  it('a long system command output is a fold that is searched', () => {
+    const sys = { type: 'system', id: 'sy', at: 1, index: 0, kind: 'command_output', detail: 'first line\nthe needle line\nlast' } as ConversationItem
+    render(<DeckPane {...base} conversation={conv([turn(0, [sys])])} />)
+    fireEvent.keyDown(screen.getByTestId('session-view-deck'), findKeys())
+    type('needle')
+    expect(count()).toBe('1 / 1')
+    expect(screen.getByTestId('output-body')).toBeInTheDocument()
+  })
+
   it('the marks come back by themselves when React replaces the text under them (a late redraw)', async () => {
     render(<DeckPane {...base} conversation={conv(THREE)} />)
     fireEvent.keyDown(screen.getByTestId('session-view-deck'), findKeys())
@@ -167,7 +189,7 @@ describe('the deck: what hides behind a fold', () => {
     const unit = document.querySelector('[data-search-unit="u:u0"]') as HTMLElement
     await act(async () => {
       unit.textContent = 'the needle is here' // replaces the text node: the old Range collapses
-      await new Promise((r) => requestAnimationFrame(() => r(null)))
+      await new Promise((r) => setTimeout(r, 200))
     })
     const after = highlights.get('search-current')!.ranges[0]
     expect(after).not.toBe(before)

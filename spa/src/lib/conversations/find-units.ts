@@ -11,18 +11,21 @@ import { buildChat } from './chat-model'
 import { splitImageRefs, imageMarker } from './image-placeholder'
 import { OWN_TEXT_SOURCES, isImagePath } from './image-sniff'
 import type { PanelTurn } from './panel-resolve'
-import { outputTail, textOutput } from './deck-format'
+import { outputTail, systemView, textOutput } from './deck-format'
 import { isKnownItem, type AgentTextItem, type ConversationItem, type StepItem, type Turn, type UserItem } from './types'
+import { subagentScope } from '../../components/deck/search-scope'
 import type { SubagentState } from '../../stores/useConversationStore'
 
 /** The fold key that makes a far-off turn of the deck draw its agent text in full (the unit is the real markdown's text, not the plain source). */
 export const fullTurnKey = (turnId: string): string => `deck-full:${turnId}`
 
-export const userUnitId = (id: string): string => `u:${id}`
-export const agentUnitId = (id: string): string => `a:${id}`
-export const stepUnitId = (id: string): string => `s:${id}`
+export const userUnitId = (id: string, scope = ''): string => `${scope}u:${id}`
+export const agentUnitId = (id: string, scope = ''): string => `${scope}a:${id}`
+export const stepUnitId = (id: string, scope = ''): string => `${scope}s:${id}`
 /** A folded output's unit is its fold key (OutputFold draws `data-search-unit={foldKey}` on the body): opening the fold is its reveal. */
 export const outputKey = (id: string): string => `${id}:out`
+/** …and its unit id under a subagent scope. */
+export const outputUnitId = (id: string, scope = ''): string => `${scope}${id}:out`
 /** The key a task line's chevron toggles to show the agent's own steps. */
 export const subagentKey = (stepId: string): string => `${stepId}:sub`
 /** The key a collapsed peer message toggles (the Mac peer-message collapse and the chat's peer line use it): a hit in its cut lines opens it. */
@@ -65,25 +68,32 @@ function outputText(output: StepItem['output']): string | null {
 }
 
 /** One item's units (and, for a task line, its unfolded agent's), in the order the deck draws them. `outer`: folds that hide the item itself. */
-function itemUnits(out: SearchUnit[], item: ConversationItem, outer: string[], far: string[], subagents: Record<string, SubagentState> | undefined): void {
+function itemUnits(out: SearchUnit[], item: ConversationItem, outer: string[], far: string[], subagents: Record<string, SubagentState> | undefined, scope = ''): void {
   if (!isKnownItem(item)) return
   if (item.type === 'user') {
     if (item.source === 'command_output') {
       const text = outputText(textOutput(item.text, item.truncated))
-      if (text !== null) add(out, outputKey(item.id), text, [...outer, outputKey(item.id)])
-    } else add(out, userUnitId(item.id), userText(item), item.source === 'peer' ? [...outer, peerKey(item.id)] : outer)
+      if (text !== null) add(out, outputUnitId(item.id, scope), text, [...outer, outputKey(item.id)])
+    } else add(out, userUnitId(item.id, scope), userText(item), item.source === 'peer' ? [...outer, peerKey(item.id)] : outer)
   } else if (item.type === 'agent_text') {
-    add(out, agentUnitId(item.id), proseText((item as AgentTextItem).markdown), [...outer, ...far])
+    add(out, agentUnitId(item.id, scope), proseText((item as AgentTextItem).markdown), [...outer, ...far])
+  } else if (item.type === 'system') {
+    // a long command output is drawn as the same fold as a step's
+    const view = systemView(item)
+    if (view.kind === 'output') {
+      const text = outputText(textOutput(view.text))
+      if (text !== null) add(out, outputUnitId(item.id, scope), text, [...outer, outputKey(item.id)])
+    }
   } else if (item.type === 'step') {
     const subject = stepSubject(item)
-    if (subject !== null) add(out, stepUnitId(item.id), subject, outer)
+    if (subject !== null) add(out, stepUnitId(item.id, scope), subject, outer)
     const text = hasOutputFold(item) ? outputText(item.output) : null
-    if (text !== null) add(out, outputKey(item.id), text, [...outer, outputKey(item.id)])
+    if (text !== null) add(out, outputUnitId(item.id, scope), text, [...outer, outputKey(item.id)])
     // the agent's own steps, once they are loaded (the line's chevron loads them; an unloaded agent has nothing to search yet)
     const agentId = item.kind === 'task' ? item.subagent?.agent_id : undefined
     const st = agentId ? subagents?.[agentId] : undefined
     if (st?.state === 'ready' && st.answer?.items) {
-      for (const child of st.answer.items as ConversationItem[]) itemUnits(out, child, [...outer, subagentKey(item.id)], far, undefined)
+      for (const child of st.answer.items as ConversationItem[]) itemUnits(out, child, [...outer, subagentKey(item.id)], far, undefined, subagentScope(item.id))
     }
   }
 }

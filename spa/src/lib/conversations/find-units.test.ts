@@ -1,7 +1,7 @@
 // #2665: the units the ⌘F search looks through — what the deck and the chat draw as text, in the order they draw it, under the id of the element
 // that holds it (the DOM side is in components/deck/FindBar.test.tsx).
 import { describe, it, expect } from 'vitest'
-import { chatUnits, deckUnits, fullTurnKey, stepUnitId, userUnitId, agentUnitId, outputKey, subagentKey, peerKey } from './find-units'
+import { chatUnits, deckUnits, fullTurnKey, stepUnitId, userUnitId, agentUnitId, outputKey, outputUnitId, subagentKey, peerKey } from './find-units'
 import { proseText } from '../nex/markdown-text'
 import { imageMarker } from './image-placeholder'
 import type { ConversationItem, Turn } from './types'
@@ -98,9 +98,10 @@ describe('deckUnits: what hides behind a fold', () => {
     const units = deckUnits([turn(0, [task])], 20, sub)
     expect(units.map((u) => [u.id, u.reveal])).toEqual([
       [stepUnitId('k'), []],
-      [agentUnitId('c1'), [subagentKey('k')]],
-      [stepUnitId('c2'), [subagentKey('k')]],
-      [outputKey('c2'), [subagentKey('k'), outputKey('c2')]],
+      // under the task line's scope: the agent's ids may be a main-turn item's too
+      [agentUnitId('c1', 'k>'), [subagentKey('k')]],
+      [stepUnitId('c2', 'k>'), [subagentKey('k')]],
+      [outputUnitId('c2', 'k>'), [subagentKey('k'), outputKey('c2')]],
     ])
     expect(deckUnits([turn(0, [task])], 20, { ag: { state: 'loading' } } as never).map((u) => u.id)).toEqual([stepUnitId('k')])
   })
