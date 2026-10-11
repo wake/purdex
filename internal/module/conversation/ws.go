@@ -92,7 +92,7 @@ func capsKeyOf(c *convmodel.Capabilities) capsKey {
 // pushCaps queues a conversation.capabilities frame when the table changed since the snapshot or the last frame (a mod
 // that announced prompt.v1 came or went), so the App enables or disables its input at once instead of on the next fetch.
 func (c *wsConn) pushCaps() bool {
-	caps := c.m.capabilitiesFor(c.sid)
+	caps := c.m.capabilitiesFor(c.sid, c.entry.Header().Backend)
 	if k := capsKeyOf(caps); k != c.caps {
 		c.caps = k
 		return c.enqueue("conversation.capabilities", map[string]any{"capabilities": caps})
@@ -296,7 +296,7 @@ func (c *wsConn) sendFirst(hasAfter bool, afterEpoch string, afterRev uint64) bo
 
 // sendSnapshot queues a snapshot frame (with the connection's `turns`) and moves the follower's position to its cursor.
 func (c *wsConn) sendSnapshot() bool {
-	caps := c.m.capabilitiesFor(c.sid) // the table the snapshot says is also the baseline a later change is compared with
+	caps := c.m.capabilitiesFor(c.sid, c.entry.Header().Backend) // the table the snapshot says is also the baseline a later change is compared with
 	c.caps = capsKeyOf(caps)
 	body, cursor, _, code := c.m.snapshotBody(c.entry, c.sid, c.hostID, caps, c.turns, -1, "", false, false)
 	if code != "" {
@@ -342,9 +342,10 @@ func (c *wsConn) follow() {
 		// for the frame the last full lookup confirmed, and applied only to that same source.
 		lightAt := time.Now() // before the query: the Entry compares readings by this
 		light, lightOK, lightFrame := c.m.cheapLight(src, have, c.sid)
-		execLight, execOK := c.m.cheapExecLight(c.ctx, src, have, c.sid)
+		execLight, execAt, execState := c.m.cheapExecLight(c.ctx, src, have, c.sid)
 		err := c.entry.Exclusive(c.ctx, func() error {
-			if !have || time.Since(resolvedAt) >= c.m.reresolveEvery() {
+			// a worker that is gone ends the source at once: the full lookup says what runs the session now
+			if !have || execState == execLightGone || time.Since(resolvedAt) >= c.m.reresolveEvery() {
 				dropSrc()
 				s, err := c.m.resolver.Resolve(c.ctx, c.sid)
 				if err != nil {
@@ -353,8 +354,8 @@ func (c *wsConn) follow() {
 				src, have, resolvedAt = s, true, time.Now()
 			} else if lightOK && src.Live && src.FrameID == lightFrame {
 				src.Status, src.StatusAt = light, lightAt
-			} else if execOK && src.Live && src.Backend == "execution" {
-				src.Status, src.StatusAt = execLight, lightAt
+			} else if execState == execLightFound && src.Live && src.Backend == "execution" {
+				src.Status, src.StatusAt = execLight, execAt
 			}
 			if _, err := c.entry.Refresh(c.ctx, src); err != nil {
 				return err
