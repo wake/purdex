@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
+	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -61,7 +62,8 @@ func (m *Module) handleList(w http.ResponseWriter, r *http.Request) {
 // handleInflight is GET /api/team/inflight (spec §9.5): what a restart of
 // this daemon would interrupt, for the App's restart confirm. Open requests
 // survive a restart (boot lease grace), so the count informs, it does not
-// block. relays_active counts ops not in done/failed/cancelled (P5a). Hook
+// block. relays_active counts ops not in done/failed/cancelled (P5a), except an op that has cleared into a live
+// session (settling: only the seed turn's done or the reaper is left); it is listed, marked, not counted. Hook
 // rows (P8a) are not counted: their pollers ride out a restart.
 func (m *Module) handleInflight(w http.ResponseWriter, r *http.Request) {
 	open, err := m.store.ListOpenNonHook()
@@ -77,10 +79,15 @@ func (m *Module) handleInflight(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	relays := make([]team.InflightRelay, 0, len(active))
+	counted := 0
 	for _, op := range active {
-		relays = append(relays, team.InflightRelay{ID: op.ID, Kind: op.Kind, State: op.State, Ref: op.Ref})
+		settling := op.State == team.RelayCleared && m.newSessionPresence(op) == peersmod.PresenceLive
+		if !settling {
+			counted++
+		}
+		relays = append(relays, team.InflightRelay{ID: op.ID, Kind: op.Kind, State: op.State, Ref: op.Ref, Settling: settling})
 	}
-	m.writeJSON(w, http.StatusOK, team.InflightResponse{ApprovalsOpen: len(open), RelaysActive: len(active), Relays: relays})
+	m.writeJSON(w, http.StatusOK, team.InflightResponse{ApprovalsOpen: len(open), RelaysActive: counted, Relays: relays})
 }
 
 // pollWait parses GET's ?wait= (seconds): "" is 0, a negative or non-numeric

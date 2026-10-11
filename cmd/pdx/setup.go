@@ -177,6 +177,9 @@ func setupRelayGuard(client *http.Client, baseURL, token string, force bool, std
 	var b strings.Builder
 	fmt.Fprintf(&b, "setup: %d relay(s) under way would lose their mod:\n", inf.RelaysActive)
 	for _, r := range inf.Relays {
+		if r.Settling {
+			continue // cleared into a live session: not counted above, so not listed as stranded
+		}
 		fmt.Fprintf(&b, "  %s  %s %s  %s\n", r.ID, r.Kind, r.Ref, r.State)
 	}
 	b.WriteString("wait for them to finish, or run again with --force.\nrelay_active\n")

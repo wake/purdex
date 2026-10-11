@@ -89,3 +89,41 @@ func TestInflight_NamesTheActiveRelays(t *testing.T) {
 		t.Fatalf("inflight = %+v", inf)
 	}
 }
+
+// c933b0-129 ②: a relay that has cleared into a LIVE session is as good as done (only the seed turn's `done`, or the 15 minute
+// reaper, is left), so the deploy gate does not count it; it is still listed, marked settling. Every other state, and a cleared
+// op whose new session is not live or cannot be told, still counts.
+// Mutation: count every active op → the live case is red; drop the presence test → the gone / unknown cases are red.
+func TestInflight_AClearedRelayIntoALiveSessionIsSettlingNotActive(t *testing.T) {
+	f := newFixture(t)
+	mk := func(id, sid, newSid string, st team.RelayState) {
+		t.Helper()
+		if err := f.m.store.CreateRelayOp(team.RelayOp{ID: id, Kind: team.RelayKindMember, HostID: "h:1", SessionID: sid, NewSessionID: newSid, Ref: "_" + id,
+			State: st, HandoffPath: "/d/" + id + ".md", CreatedAt: 1, UpdatedAt: 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("op-live", "sid-a", "sid-a2", team.RelayCleared)
+	mk("op-gone", "sid-b", "sid-b2", team.RelayCleared)
+	mk("op-unknown", "sid-c", "sid-c2", team.RelayCleared)
+	mk("op-written", "sid-d", "", team.RelayWritten)
+	mk("op-claimed", "sid-e", "", team.RelayClaimed)
+	f.origins.mu.Lock()
+	f.origins.dead = map[string]bool{"sid-b2": true}
+	f.origins.unknown = map[string]bool{"sid-c2": true}
+	f.origins.mu.Unlock()
+	var inf team.InflightResponse
+	if code, body := f.do(http.MethodGet, "/api/team/inflight", nil); code != http.StatusOK || json.Unmarshal(body, &inf) != nil {
+		t.Fatalf("inflight: %d %s", code, body)
+	}
+	if inf.RelaysActive != 4 || len(inf.Relays) != 5 {
+		t.Fatalf("inflight = %+v, want 4 active of 5 listed", inf)
+	}
+	settling := map[string]bool{}
+	for _, r := range inf.Relays {
+		settling[r.ID] = r.Settling
+	}
+	if !settling["op-live"] || settling["op-gone"] || settling["op-unknown"] || settling["op-written"] || settling["op-claimed"] {
+		t.Fatalf("settling = %v, want only op-live", settling)
+	}
+}
