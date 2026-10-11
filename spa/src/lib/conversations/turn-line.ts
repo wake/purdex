@@ -9,6 +9,7 @@ export interface LineTurn {
   ended_at?: number
   outcome?: string
   duration_ms?: number
+  output_tokens?: number
   items: ConversationItem[]
 }
 
@@ -20,12 +21,24 @@ export interface LiveLine {
   tool: string | null
   /** How many Agent/Task steps are running now. */
   subagents: number
+  /** What the running turn's messages have written so far; null when the conversation does not say (or none yet). */
+  outputTokens: number | null
   /** Whether any step runs now (a tool without a name still counts): false means the model is thinking or writing. */
   busy: boolean
 }
 
 const isStep = (i: ConversationItem): i is StepItem => i.type === 'step'
 
+/** A token count that is a positive whole number, else null (nothing to show). */
+const tokensOf = (n: unknown): number | null => (typeof n === 'number' && Number.isFinite(n) && n > 0 ? Math.floor(n) : null)
+
+/** `842` below a thousand, then thousands with one decimal: `9.2k`, `12.4k`, `103.0k` (the terminal's `↓ 9.2k tokens`, without the word). */
+export function formatTokens(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return ''
+  if (n < 1000) return String(Math.floor(n))
+  const k = Math.round(n / 100) / 10
+  return k < 1000 ? `${k.toFixed(1)}k` : `${(Math.round(n / 100_000) / 10).toFixed(1)}M` // 999.96k is 1.0M, not 1000.0k
+}
 /**
  * The live line, or null when the agent is not working. `status` is the conversation header's (`running` | `waiting` | …): `running` and
  * `waiting` are the two that draw. The turn it counts from is the last one while it is still `running`.
@@ -42,6 +55,7 @@ export function liveLine(turns: readonly LineTurn[], status: string | undefined)
     since: typeof running?.started_at === 'number' && running.started_at > 0 ? running.started_at : null,
     tool: latest?.tool || null,
     subagents,
+    outputTokens: tokensOf(running?.output_tokens),
     busy: steps.length > 0,
   }
 }
@@ -49,13 +63,15 @@ export function liveLine(turns: readonly LineTurn[], status: string | undefined)
 export interface DoneLine {
   durationMs: number
   endedAt: number
+  /** The turn's output tokens, null when it has none to show. */
+  outputTokens: number | null
 }
 
 /** The closing line of a finished turn: only `done` (an interrupted or failed turn already says so), and only when both times are known. */
-export function doneLine(turn: Pick<LineTurn, 'outcome' | 'started_at' | 'ended_at' | 'duration_ms'>): DoneLine | null {
+export function doneLine(turn: Pick<LineTurn, 'outcome' | 'started_at' | 'ended_at' | 'duration_ms' | 'output_tokens'>): DoneLine | null {
   if (turn.outcome !== 'done' || typeof turn.ended_at !== 'number') return null
   const ms = typeof turn.duration_ms === 'number' ? turn.duration_ms : typeof turn.started_at === 'number' ? turn.ended_at - turn.started_at : null
-  return ms === null || ms < 0 ? null : { durationMs: ms, endedAt: turn.ended_at }
+  return ms === null || ms < 0 ? null : { durationMs: ms, endedAt: turn.ended_at, outputTokens: tokensOf(turn.output_tokens) }
 }
 
 /** `45` / `3m 03s` / `1h 02m` as parts for the locale's unit words (see `deck.dur.*`). */

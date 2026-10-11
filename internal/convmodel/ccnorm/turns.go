@@ -24,6 +24,7 @@ type turnRec struct {
 	prevModel   string               // the model before this turn, for model_changed
 	sawModel    bool                 // the turn's first model reply has been compared
 	pending     []string             // ids of steps that have had no result (pruned lazily)
+	msgTokens   map[string]int64     // message.id → its output_tokens (the rows of one message repeat the number), summed into t.OutputTokens
 }
 
 // openTurn starts a turn whose id is the opening row's uuid. It reports false

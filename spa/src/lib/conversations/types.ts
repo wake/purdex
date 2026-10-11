@@ -122,6 +122,8 @@ export interface TurnHeader {
   outcome: Outcome
   error?: { kind: string; message: string }
   duration_ms?: number
+  /** What the turn's assistant messages have written so far (main thread; c9d9c7-67). Absent while none has reported any, and from an older daemon. */
+  output_tokens?: number
   /** The turn was too long to send whole: its oldest N items are not in the document (v1 has no paging inside a turn). */
   omitted_items?: number
 }

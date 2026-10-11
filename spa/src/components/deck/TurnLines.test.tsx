@@ -49,8 +49,8 @@ describe('liveLine', () => {
 
 describe('doneLine', () => {
   it('only for a done turn with an end time; the duration is the daemon\'s, else the two times', () => {
-    expect(doneLine({ outcome: 'done', ended_at: T0 + 20_000, duration_ms: 20_000 })).toEqual({ durationMs: 20_000, endedAt: T0 + 20_000 })
-    expect(doneLine({ outcome: 'done', started_at: T0, ended_at: T0 + 7_000 })).toEqual({ durationMs: 7_000, endedAt: T0 + 7_000 })
+    expect(doneLine({ outcome: 'done', ended_at: T0 + 20_000, duration_ms: 20_000 })).toEqual({ durationMs: 20_000, endedAt: T0 + 20_000, outputTokens: null })
+    expect(doneLine({ outcome: 'done', started_at: T0, ended_at: T0 + 7_000 })).toEqual({ durationMs: 7_000, endedAt: T0 + 7_000, outputTokens: null })
     expect(doneLine({ outcome: 'interrupted', started_at: T0, ended_at: T0 + 7_000 })).toBeNull()
     expect(doneLine({ outcome: 'failed', ended_at: T0 })).toBeNull()
     expect(doneLine({ outcome: 'done', started_at: T0 })).toBeNull()

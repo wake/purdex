@@ -93,7 +93,11 @@ type Turn struct {
 	// DurationMS is the turn time Claude Code records in its turn_duration row
 	// (the last valid one when several); absent when no row has a non-negative number.
 	DurationMS *int64 `json:"duration_ms,omitempty"`
-	Items      []Item `json:"items"`
+	// OutputTokens is what the turn's assistant messages wrote (message.usage.output_tokens, one count per
+	// message.id: the rows of one message repeat the same number), main thread only. It grows as messages land;
+	// absent while no message has reported any.
+	OutputTokens int64  `json:"output_tokens,omitempty"`
+	Items        []Item `json:"items"`
 	// OmittedItems is how many of the turn's oldest items a size-capped window
 	// left out (U1-6, spec §8.2); 0 and absent for a whole turn.
 	OmittedItems int `json:"omitted_items,omitempty"`
