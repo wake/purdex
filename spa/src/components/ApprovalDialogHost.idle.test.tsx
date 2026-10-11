@@ -44,6 +44,7 @@ describe('idle relay line on the self-relay dialog', () => {
     render(<ApprovalDialogHost />)
     open(relay({ reason: 'idle', idle_minutes: 40 }))
     expect(note()?.textContent).toBe('閒置 40 分鐘，快取快過期；趁現在接力最省。')
+    expect(note()!.previousElementSibling?.tagName).toBe('DT') // a <dd> follows its own term (a11y), not the cwd's
     const usage = screen.getByTestId('approval-usage')
     expect(note()!.compareDocumentPosition(usage) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
