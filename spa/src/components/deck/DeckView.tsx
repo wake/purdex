@@ -3,7 +3,7 @@
 // tab switch (CLAUDE.md tab-hosted rule: `fold-memory` and the scroll memo are outside the component). The input and
 // whatever else lives under the stream is the caller's `footer`, drawn below the scrolling box.
 import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type UIEvent } from 'react'
-import { FoldContext } from '../room/fold-context'
+import { FoldContext, useFoldStore } from '../room/fold-context'
 import { ConversationHostContext } from './conversation-host'
 import { useTranscriptScroll } from '../../hooks/useTranscriptScroll'
 import { useOlderTurns } from '../../hooks/useOlderTurns'
@@ -16,6 +16,11 @@ import { useConversationStore, type ConversationEntry } from '../../stores/useCo
 import { useI18nStore } from '../../stores/useI18nStore'
 import { StatusOverlay } from './StatusOverlay'
 import { DeckItem } from './DeckItem'
+import { FindBar } from './FindBar'
+import { focusSessionInput } from './focus-input'
+import { closeFind, findKey, useFindState } from '../../lib/conversations/find-memory'
+import { deckUnits, fullTurnKey } from '../../lib/conversations/find-units'
+import type { SearchUnit } from '../../lib/nex/transcript-search'
 import { firstUserId } from '../../lib/conversations/deck-format'
 import { DoneTurnLine, LiveTurnLine } from './TurnLines'
 import { PendingTail } from './PendingTail'
@@ -55,7 +60,9 @@ const TurnView = memo(function TurnView({ turn, eager, onOpenPanel, agentModel, 
   const t = useI18nStore((s) => s.t)
   const reveal = useContext(DeckRevealContext)
   const [near, setNear] = useState(false)
-  const full = eager || near || !reveal || isRevealed(reveal.memKey, turn.id)
+  // a search that stands on this turn's prose asks for the real markdown (the unit is its text, not the plain source)
+  const found = useFoldStore().isExpanded(fullTurnKey(turn.id))
+  const full = eager || near || found || !reveal || isRevealed(reveal.memKey, turn.id)
   const ref = useRef<HTMLElement | null>(null)
   useEffect(() => {
     if (eager && reveal) markRevealed(reveal.memKey, turn.id)
@@ -89,6 +96,8 @@ const TurnView = memo(function TurnView({ turn, eager, onOpenPanel, agentModel, 
   )
 })
 
+const NO_UNITS: SearchUnit[] = []
+
 export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal, footer, onOpenPanel, live, tail }: DeckViewProps) {
   const background = live ? live.background : entry.doc.header?.background
   const t = useI18nStore((s) => s.t)
@@ -96,7 +105,9 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
   const foldStore = usePaneFoldStore(`${paneId}\0${sessionId}`)
   useEffect(() => noteDeckPane(paneId), [paneId])
   // The place is the pane's AND the session's: a pane that moves to another session (/clear, a relay) starts at the end.
-  const scroll = useTranscriptScroll(undefined, false, { paneId: `${paneId}\0${sessionId}`, view: 'deck', detached: doc.detached, totalTurns: doc.totalTurns })
+  const findMemory = findKey(paneId, sessionId)
+  const find = useFindState(findMemory)
+  const scroll = useTranscriptScroll(undefined, find.open, { paneId: `${paneId}\0${sessionId}`, view: 'deck', detached: doc.detached, totalTurns: doc.totalTurns })
   const { attach, onScroll: onBoxScroll, follow } = scroll
   const boxRef = useRef<HTMLDivElement | null>(null)
   // The box is also held in state: the older-turns hook reads it while rendering.
@@ -130,6 +141,12 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
   }
 
   const items = useMemo(() => doc.turns.flatMap((turn) => turn.items), [doc.turns])
+  // The search index exists only while the bar is open (#2665).
+  const findUnits = useMemo<SearchUnit[]>(() => (find.open ? deckUnits(doc.turns, EAGER_TURNS) : NO_UNITS), [find.open, doc.turns])
+  const closeBar = useCallback(() => {
+    closeFind(findMemory)
+    focusSessionInput(boxEl?.closest<HTMLElement>('[data-testid="session-view-deck"]') ?? null, { request: true })
+  }, [findMemory, boxEl])
   const loadSubagent = useCallback((agentId: string) => { void useConversationStore.getState().loadSubagent(hostId, sessionId, agentId) }, [hostId, sessionId])
 
   return (
@@ -141,6 +158,7 @@ export function DeckView({ paneId, hostId, sessionId, entry, onSwitchToTerminal,
           {t('deck.back_live')}
         </button>
       )}
+      {find.open && !empty && <FindBar memoryKey={findMemory} owner={paneId} container={boxEl} units={findUnits} fold={foldStore} onClose={closeBar} onJump={scroll.release} />}
       <div ref={setBox} onScroll={onScroll} data-testid="deck-scroll" style={{ overflowAnchor: 'none' }} className="flex-1 space-y-3 overflow-y-auto p-4">
         <ConversationHostContext.Provider value={hostId}>
         <FoldContext.Provider value={foldStore}>

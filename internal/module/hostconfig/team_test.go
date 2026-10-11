@@ -116,7 +116,7 @@ func TestTeamSettings_PutAndReader(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, rr.Code, body)
 	}
 	// A stored value that fails validation (written around the PUT) is an error.
-	_, stored, err := m.store.Put(KeyTeam, 1, func() (json.RawMessage, error) { return json.RawMessage(`{"member_command":"a\nb"}`), nil })
+	_, stored, err := m.store.Put(KeyTeam, 1, func(Entry) (json.RawMessage, error) { return json.RawMessage(`{"member_command":"a\nb"}`), nil })
 	require.True(t, stored, "the 400s stored nothing: the revision is still 1")
 	require.NoError(t, err)
 	_, err = m.TeamSettings()

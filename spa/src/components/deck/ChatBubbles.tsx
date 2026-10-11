@@ -6,6 +6,7 @@ import { formatClock } from '../../lib/conversations/deck-format'
 import type { AgentTextItem, UserItem } from '../../lib/conversations/types'
 import RoomProse from '../room/RoomProse'
 import { OWN_TEXT_SOURCES } from '../../lib/conversations/image-sniff'
+import { agentUnitId, userUnitId } from '../../lib/conversations/find-units'
 import { UserBlock } from './UserBlock'
 import { UserText } from './UserText'
 import { CjkText } from './CjkText'
@@ -20,7 +21,7 @@ export function UserBubble({ item, midTurn }: { item: UserItem; /** not the firs
   return (
     <div data-testid="chat-user" data-source={item.source} className="flex flex-col items-end">
       <div data-testid="chat-user-bubble" className="max-w-[80%] whitespace-pre-wrap break-words rounded-2xl rounded-br-sm bg-accent px-3 py-2 deck-t-up text-white">
-        {OWN_TEXT_SOURCES.has(item.source) ? <UserText text={item.text} /> : <CjkText text={item.text} />}{item.truncated && '…'}
+        <span data-search-unit={userUnitId(item.id)}>{OWN_TEXT_SOURCES.has(item.source) ? <UserText text={item.text} /> : <CjkText text={item.text} />}</span>{item.truncated && '…'}
       </div>
       <div data-testid="chat-user-time" className="mt-0.5 deck-t-down text-text-muted">
         {item.source === 'queued' && midTurn ? t('chat.user.delivered', { time: formatClock(item.at) }) : formatClock(item.at)}
@@ -37,7 +38,7 @@ export function AgentBubble({ item }: { item: AgentTextItem }) {
     <div data-testid="chat-agent" className="flex justify-start">
       <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-surface-secondary px-3 py-2 deck-t-up text-text-primary">
         <div data-testid="chat-agent-md" className="chat-md">
-          <RoomProse content={item.markdown} streaming={item.streaming} cjk />
+          <RoomProse content={item.markdown} streaming={item.streaming} searchUnit={agentUnitId(item.id)} cjk />
         </div>
         {item.truncated && <div className="deck-t-down text-text-muted">{t('deck.output.cut')}</div>}
       </div>

@@ -95,7 +95,7 @@ func (e *ValidationError) Error() string { return e.Err.Error() }
 func (e *ValidationError) Unwrap() error { return e.Err }
 
 // Put stores the value produced by build when baseRevision equals the stored
-// revision. On a mismatch it returns the current entry with ok=false and build
+// revision; build is handed the entry the revision check just matched. On a mismatch it returns the current entry with ok=false and build
 // is NOT called — a stale client always receives the server copy, whatever its
 // payload. A build error is returned as *ValidationError and nothing is written.
 //
@@ -105,7 +105,7 @@ func (e *ValidationError) Unwrap() error { return e.Err }
 // of a clean 409. IMMEDIATE takes the write lock first; the second writer waits
 // (busy_timeout) and then reads the committed revision. Same pattern as
 // internal/module/backup/store.go AppendSnapshot.
-func (s *Store) Put(key string, baseRevision int64, build func() (json.RawMessage, error)) (Entry, bool, error) {
+func (s *Store) Put(key string, baseRevision int64, build func(cur Entry) (json.RawMessage, error)) (Entry, bool, error) {
 	ctx := context.Background()
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
@@ -133,7 +133,7 @@ func (s *Store) Put(key string, baseRevision int64, build func() (json.RawMessag
 	if cur.Revision != baseRevision {
 		return cur, false, nil
 	}
-	value, err := build()
+	value, err := build(cur)
 	if err != nil {
 		return Entry{}, false, &ValidationError{Err: err}
 	}
