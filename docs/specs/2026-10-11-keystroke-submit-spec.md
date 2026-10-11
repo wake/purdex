@@ -53,8 +53,13 @@ Claude Code's state); the residual risks of §5 are accepted by the user.
   `header.queued` (Claude Code queued it while busy). **Accepted** = the user item appears in the transcript (current user-block
   style, slightly dimmer). Idle sessions go straight to the transcript.
 - `unknown` / nothing seen 10 s after `handed` → 「可能已送出，請看紀錄」, no automatic retry.
-- The App-side "wait for idle" queue (#2617 ledger) is removed; messages go out immediately. The iOS 3-second undo buffer stays
-  (iOS only) unless decided otherwise.
+- The App-side "wait for idle" queue (#2617 ledger) is removed. **Send buffer (user 2026-10-11, Mac and iOS alike):** a sent
+  message is held 1.5 s in the App, drawn as pending (visible — iOS's old 3 s buffer was invisible); clicking it in that window
+  puts it back in the input and nothing is sent (only that message). After 1.5 s it goes to `/submit`. Idle session → it runs at
+  once and cannot be taken back; queued → Up on an empty input **or clicking the queued message** takes it back via `/recall`.
+- Taking back queued messages returns **all** of them (Claude Code pops all at once, as Up in the terminal does), one per line.
+  Clicking with a draft in the input puts the recalled text first, then a newline, then the draft (nothing is lost); Up acts only
+  on an empty input.
 - **Recall (Up on an empty deck input) / undo of a pending message:** `POST /api/sessions/{code}/recall` under the same lock.
   Before Up: needs `$.prompt.read` empty and `header.queued` non-empty, all items user-sent (else `recall_unsupported`); the join of
   the items (each trailing-whitespace trimmed, joined by one `\n`; Claude Code pops **all** items at once) must fit
