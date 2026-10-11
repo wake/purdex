@@ -84,6 +84,19 @@ describe('outcomeMessage', () => {
   })
 })
 
+// U4-5a (coverage F): a worker's refusal codes are said in words, one per code, as the room said them (`execution.error.*`).
+describe('outcomeMessage — a worker\'s refusal codes', () => {
+  it.each(['invalid_text', 'execution_archived', 'execution_terminal', 'turn_failed_to_launch', 'turn_stalled', 'interrupt_unconfirmed'])(
+    '%s has its own readable message, not the bare code', (code) => {
+      const m = outcomeMessage({ kind: 'rejected', status: 409, code })
+      expect(m.key).toBe(`execution.error.${code}`)
+      expect(m.params).toBeUndefined()
+    })
+  it('a code it does not know still shows the code', () => {
+    expect(outcomeMessage({ kind: 'rejected', status: 500, code: 'weird' })).toMatchObject({ key: 'deck.send.rejected', params: { code: 'weird' } })
+  })
+})
+
 describe('planSend', () => {
   it('strips control characters but keeps newlines, expands tabs, trims', () => {
     expect(normalizePrompt('\n\n  a\u0007b\tc  \n\nline2   \n\n')).toBe('  ab    c\n\nline2')

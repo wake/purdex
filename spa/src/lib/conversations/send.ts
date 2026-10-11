@@ -93,9 +93,13 @@ export interface OutcomeMessage {
   tone: 'ok' | 'warn' | 'error'
 }
 
+/** The refusal codes a worker (Nexen) answers that have their own words (`execution.error.*`); any other code is shown as it is. */
+const WORKER_REFUSALS = new Set(['invalid_text', 'execution_archived', 'execution_terminal', 'turn_failed_to_launch', 'turn_stalled', 'interrupt_unconfirmed'])
+
 /** The message for an outcome (i18n keys; zh-TW and en in the locale files). */
 export function outcomeMessage(o: SendOutcome): OutcomeMessage {
   if (o.kind === 'rejected' && o.code === 'pane_closed') return { key: 'deck.send.pane_closed', tone: 'warn' }
+  if (o.kind === 'rejected' && WORKER_REFUSALS.has(o.code)) return { key: `execution.error.${o.code}`, tone: 'error' }
   switch (o.kind) {
     case 'accepted': return { key: 'deck.send.accepted', tone: 'ok' }
     case 'dropped': return { key: 'deck.send.dropped', params: { reason: o.reason || '-' }, tone: 'error' }
