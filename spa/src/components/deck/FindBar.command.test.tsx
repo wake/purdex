@@ -44,7 +44,8 @@ describe('bash command and its output (#2699)', () => {
   it('the deck draws the cleaned command, so a match after the stripped characters is marked right', () => {
     const bash = { type: 'user', id: 'b1', at: 1, index: 0, text: 'echo \u001b[31m‮hello world', source: 'bash' } as ConversationItem
     render(<DeckPane {...base} conversation={conv([turn(0, [bash])])} />)
-    expect(document.body.textContent).not.toMatch(/[\u001b‮]/)
+    expect(document.body.textContent).not.toContain('\u001b')
+    expect(document.body.textContent).not.toContain('‮')
     fireEvent.keyDown(screen.getByTestId('session-view-deck'), findKeys())
     type('world')
     expect(count()).toBe('1 / 1')
