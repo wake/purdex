@@ -1,6 +1,9 @@
 // internal/tmux/send_keys_shell.go — the launch panel's typing guard (no-agent launch panel spec §2.3): ONE if-shell that checks
 // the tmux generation AND that the pane's foreground command is a shell, so a launch line is typed only into a pane that is
-// at a prompt — nothing that starts between the plan and the send receives it, and no second tmux call decides the reason.
+// at a prompt. What it guarantees: whatever started between the plan and this call is seen by the check (nothing is typed into
+// it), and no second tmux call decides the reason. What it cannot: a program the shell starts in the microseconds between the
+// server's check and its send-keys (the pty's foreground state belongs to the OS, not to tmux's command queue) — that
+// window is the same one a person typing into the pane has.
 package tmux
 
 import (
@@ -83,11 +86,18 @@ func (r *RealExecutor) SendKeysIfInstanceAndShell(sessionID, expectedInstance st
 	if err != nil {
 		return fmt.Errorf("tmux if-shell send-keys: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
-	s := strings.TrimSpace(string(out))
-	if !strings.HasPrefix(s, shellRefusedSentinel) {
+	return parseShellRefusal(string(out))
+}
+
+// parseShellRefusal maps the one output of the invocation: nothing printed is a send; the sentinel's generation verdict comes
+// right after it, and the pane's command (which the pane's program controls, and may say anything) is the rest of the line and
+// is never read for a verdict.
+func parseShellRefusal(out string) error {
+	s := strings.TrimSpace(out)
+	if !strings.HasPrefix(s, shellRefusedSentinel+" ") {
 		return nil
 	}
-	if strings.Contains(s, " gen=0 ") {
+	if strings.HasPrefix(s, shellRefusedSentinel+" gen=0 ") {
 		return ErrGenerationMismatch
 	}
 	return ErrPaneBusy

@@ -28,5 +28,8 @@ func SetServerStateTimeout(t testing.TB, d time.Duration) {
 	t.Cleanup(func() { serverStateTimeout = prev })
 }
 
+// ParseShellRefusalForTest exposes the sentinel parser.
+func ParseShellRefusalForTest(out string) error { return parseShellRefusal(out) }
+
 // ShellConditionForTest exposes the server-side shell condition so a test can have a real tmux evaluate it.
 func ShellConditionForTest() string { return shellCondition() }

@@ -80,7 +80,7 @@ func TestShellCondition_ServerAgreesWithIsShellCommand(t *testing.T) {
 	run := ownTmux(t)
 	run("new-session", "-d", "-s", "c", "-c", os.TempDir(), "cat")
 	for _, name := range []string{"zsh", "ZSH", "Bash", "-zsh", "-BASH", "fish", "nu", "pwsh", "sh", "dash", "ksh", "tcsh",
-		"npm", "node", "claude", "zshrc", "--zsh", "sleep", "vim", "python3", "cat", ""} {
+		"npm", "node", "claude", "zshrc", "--zsh", "sleep", "vim", "python3", "cat", "", "z*", "?sh", "[z]sh", "zs h", "*"} {
 		cond := strings.ReplaceAll(tmux.ShellConditionForTest(), "#{pane_current_command}", name)
 		got := run("display-message", "-p", "-t", "=c:", cond) == "1"
 		if got != tmux.IsShellCommand(name) {
@@ -179,5 +179,22 @@ func TestFakeSendKeysIfInstanceAndShell(t *testing.T) {
 	}
 	if got := f.RawKeysSent(); len(got) != 1 || got[0].Target != "$0:" || strings.Join(got[0].Keys, "") != "line\r" {
 		t.Fatalf("recorded %+v", got)
+	}
+}
+
+// The pane's command is the pane's program's to name: it can say "gen=0" or carry glob characters. It is the pattern side of
+// the server's match that holds metacharacters, never the value, and the verdict is read from the fixed position only.
+func TestParseShellRefusal(t *testing.T) {
+	for out, want := range map[string]error{
+		"":                                       nil,
+		"pdx-launch-refused gen=0 cmd=zsh":       tmux.ErrGenerationMismatch,
+		"pdx-launch-refused gen=1 cmd=npm":       tmux.ErrPaneBusy,
+		"pdx-launch-refused gen=1 cmd=x gen=0 y": tmux.ErrPaneBusy,
+		"pdx-launch-refused gen=1 cmd=":          tmux.ErrPaneBusy,
+	} {
+		got := tmux.ParseShellRefusalForTest(out)
+		if !errors.Is(got, want) && !(want == nil && got == nil) {
+			t.Errorf("%q: got %v, want %v", out, got, want)
+		}
 	}
 }
