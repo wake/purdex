@@ -7,6 +7,7 @@ import { StepView, type StepActions } from './StepViews'
 import { SystemRow, ThinkingRow } from './ThinkingSystem'
 import { UserBlock } from './UserBlock'
 import { AgentHeader } from './AgentHeader'
+import { agentUnitId } from '../../lib/conversations/find-units'
 
 /** `light`: the agent text is drawn as plain text (a turn far off screen, #2469); streaming text is always drawn in full. */
 export function DeckItem({ item, actions, light, agentModel, agentHeader, midTurn }: { item: ConversationItem; /** a user message that is not the first of its turn */ midTurn?: boolean; actions?: StepActions; light?: boolean; /** proto v2: the first agent text of a turn carries the head line */ agentModel?: string; agentHeader?: boolean }) {
@@ -20,7 +21,7 @@ export function DeckItem({ item, actions, light, agentModel, agentHeader, midTur
           {agentHeader && <AgentHeader model={agentModel} at={item.at} />}
           {light && !item.streaming
             ? <RoomProseLight content={item.markdown} cjk />
-            : <RoomProse content={item.markdown} streaming={item.streaming} cacheKey={item.id} cjk />}
+            : <RoomProse content={item.markdown} streaming={item.streaming} cacheKey={item.id} searchUnit={agentUnitId(item.id)} cjk />}
           {item.truncated && <div className="deck-t-down text-text-muted">{t('deck.output.cut')}</div>}
         </div>
       )

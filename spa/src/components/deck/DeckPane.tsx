@@ -1,8 +1,10 @@
 // spa/src/components/deck/DeckPane.tsx — what a session pane shows in its deck view, given the conversation the pane holds
 // (`useConversationOfPane`, mounted by SessionPaneContent for every view): the unreadable state (D11), the loading
 // moment, or the deck. Takes focus when the pane switches to it, as the placeholder did.
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, type KeyboardEvent } from 'react'
 import { focusSessionInput } from './focus-input'
+import { isFindShortcut } from '../../lib/find-shortcut'
+import { findKey, requestFind } from '../../lib/conversations/find-memory'
 import { useActivationFocus } from '../../hooks/useActivationFocus'
 import type { PaneConversation } from '../../hooks/useConversationOfPane'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -52,6 +54,14 @@ export function DeckPane({ paneId, conversation, isActive, isFocusTarget, onSwit
   const binding = conversation.state === 'ready' ? conversationBinding(conversation.hostId, conversation.sessionId) : ''
   const onOpenPanel = useCallback((content: PanelContent) => openPanel(paneId, binding, content), [paneId, binding])
 
+  // ⌘F searches this conversation — only while the focus is in this pane (the terminal's and the editor's ⌘F are not ours).
+  const onFindKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (conversation.state !== 'ready' || !isFindShortcut(e.nativeEvent)) return
+    e.preventDefault()
+    e.stopPropagation()
+    requestFind(findKey(paneId, conversation.sessionId))
+  }
+
   let body
   if (conversation.state === 'off') {
     // The pane is not a Claude Code session (or its host does not serve conversations): nothing to read, and no auto-switch.
@@ -76,7 +86,7 @@ export function DeckPane({ paneId, conversation, isActive, isFocusTarget, onSwit
     )
   }
   return (
-    <div ref={ref} tabIndex={-1} data-testid="session-view-deck" style={typeStyle} className="absolute inset-0 bg-surface-primary outline-none" {...drop.handlers}>
+    <div ref={ref} tabIndex={-1} data-testid="session-view-deck" style={typeStyle} className="absolute inset-0 bg-surface-primary outline-none" onKeyDown={onFindKey} {...drop.handlers}>
       {body}
       {drop.overlay}
     </div>

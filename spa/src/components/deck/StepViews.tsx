@@ -12,6 +12,7 @@ import type { ConversationItem, StepItem } from '../../lib/conversations/types'
 import ToolDiffView from '../room/ToolDiffView'
 import { useFold } from '../room/fold-context'
 import { OutputFold } from './OutputFold'
+import { stepUnitId } from '../../lib/conversations/find-units'
 import { StatusSlot, StepDot } from './StatusSlot'
 
 export interface StepActions {
@@ -66,7 +67,7 @@ function Line({ step, icon, verb, subject, extra, children, testId = 'deck-step-
         <StepDot step={step} />
         {icon}
         <span className="shrink-0 font-mono deck-t-down font-medium text-text-secondary">{verb}</span>
-        <span className="min-w-0 flex-1 truncate font-mono deck-t-down text-text-secondary" title={subject}>{subject}</span>
+        <span data-search-unit={stepUnitId(step.id)} className="min-w-0 flex-1 truncate font-mono deck-t-down text-text-secondary" title={subject}>{subject}</span>
         {extra}
         <StatusSlot step={step} />
       </div>
@@ -120,7 +121,7 @@ function DiffCard({ step, diff, actions }: { step: StepItem; diff: NonNullable<S
           {open ? <CaretUp size={14} /> : <CaretDown size={14} />}
         </button>
       )}
-      title={<><span className="text-text-muted">{created ? t('deck.step.create') : t('deck.step.edit')}</span> <span className="font-mono deck-t-down" title={path}>{path}</span></>}
+      title={<><span className="text-text-muted">{created ? t('deck.step.create') : t('deck.step.edit')}</span> <span data-search-unit={stepUnitId(step.id)} className="font-mono deck-t-down" title={path}>{path}</span></>}
     >
       <div data-testid="diff-body" className="opacity-60 transition-opacity hover:opacity-100 focus-within:opacity-100">
         <ToolDiffView diff={toActivityDiff(capped.diff)} foldKey={step.id} unfolded />
@@ -139,7 +140,7 @@ function ExecuteCard({ step, actions }: { step: StepItem; actions: StepActions }
   const command = step.command?.text ?? step.summary
   return (
     <Card step={step} icon={<Terminal className={ICON} size={16} />} title={<span className="text-text-muted">{step.command?.description ?? t('deck.step.execute')}</span>}>
-      <pre data-testid="exec-command" className="line-clamp-6 overflow-hidden whitespace-pre-wrap break-all rounded bg-black/60 px-2 py-1 font-mono deck-t-down text-neutral-400 transition-colors hover:text-neutral-200">{`$ ${command}`}</pre>
+      <pre data-testid="exec-command" data-search-unit={stepUnitId(step.id)} className="line-clamp-6 overflow-hidden whitespace-pre-wrap break-all rounded bg-black/60 px-2 py-1 font-mono deck-t-down text-neutral-400 transition-colors hover:text-neutral-200">{`$ ${command}`}</pre>
       {step.output && (
         <OutputFold foldKey={`${step.id}:out`} output={step.output} tone={stepFailed(step) ? 'error' : 'normal'} onShowAll={showAll(step, actions)} />
       )}
@@ -239,7 +240,7 @@ function TaskStep({ step, actions }: { step: StepItem; actions: StepActions }) {
           <StepDot step={step} />
           <Robot className={ICON} size={16} />
           <span className="shrink-0 text-text-muted">{sub?.type ? t('deck.step.task_type', { type: sub.type }) : t('deck.step.task')}</span>
-          <span className="min-w-0 flex-1 truncate deck-t-down text-text-secondary">{sub?.description ?? step.summary}</span>
+          <span data-search-unit={stepUnitId(step.id)} className="min-w-0 flex-1 truncate deck-t-down text-text-secondary">{sub?.description ?? step.summary}</span>
           <SubagentTime step={step} />
           <StatusSlot step={step} />
         </button>
