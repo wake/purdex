@@ -55,7 +55,7 @@ export function QueuedMessages({ entries, onUndo, onResend, onDismiss, className
               <div className="whitespace-pre-wrap break-words deck-t-up text-text-primary">{e.text}</div>
               {e.state === 'undo' && canUndo && <button type="button" className="rounded px-0 deck-t-down text-accent underline-offset-2 hover:underline" onClick={(ev) => { ev.stopPropagation(); onUndo(e.id) }}>{t('deck.send.undo')}</button>}
               {/* the transcript's row is what takes it away; one whose row never comes (or reads differently) must not leave it here for good */}
-              {e.state === 'sent' && <button type="button" className={btn} onClick={() => onDismiss(e.id)}>{t('deck.send.dismiss')}</button>}
+              {e.state === 'sent' && <button type="button" className={btn} onClick={(ev) => { ev.stopPropagation(); onDismiss(e.id) }}>{t('deck.send.dismiss')}</button>}
             </div>
           )
         }
