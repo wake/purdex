@@ -67,6 +67,14 @@ describe('fetchPaused / postPauseRelease', () => {
     expect(send.mock.calls[0][1]).toBe('/api/team/paused/S%2F1/release')
     expect(JSON.parse(String(send.mock.calls[0][2].body))).toEqual({ client: { kind: 'app', label: 'Purdex.app' } })
   })
+  it.each([[{}], [null], ['<html>ok</html>'], [{ released: -1 }], [{ released: 1.5 }], [{ released: '2' }], [{ other: 1 }], [[]]])('a 2xx body %j is an error, not released', async (body) => {
+    send.mockResolvedValueOnce(body)
+    expect(await postPauseRelease('h', 'S')).toEqual({ kind: 'error', message: 'bad_response' })
+  })
+  it('released 0 is a valid answer', async () => {
+    send.mockResolvedValueOnce({ released: 0 })
+    expect(await postPauseRelease('h', 'S')).toEqual({ kind: 'released', n: 0 })
+  })
   it('404 not_paused -> not_paused', async () => {
     send.mockRejectedValueOnce(new ApprovalApiError(404, 'not_paused'))
     expect(await postPauseRelease('h', 'S')).toEqual({ kind: 'not_paused' })

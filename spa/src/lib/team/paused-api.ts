@@ -66,8 +66,10 @@ export async function postPauseRelease(hostId: string, sessionId: string): Promi
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ client }),
     })
-    const n = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>).released : undefined
-    return { kind: 'released', n: isNum(n) ? n : 0 }
+    const n = typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>).released : undefined
+    // A 2xx that is not `{released: <non-negative integer>}` is not an answer to trust: never read it as "released 0".
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 0) return { kind: 'error', message: 'bad_response' }
+    return { kind: 'released', n }
   } catch (e) {
     if (e instanceof ApprovalApiError) {
       if (e.status === 404 && e.code === 'not_paused') return { kind: 'not_paused' }
