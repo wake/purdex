@@ -177,7 +177,7 @@ stale by definition); flow notices from a persisted outbox, the only messages th
   head blocking the next; crash after send before delete ⇒ repeat, never lost; push reaches the push module (integration).
   Mutation: skip cascade ⇒ red; check quota outside the transaction ⇒ the PUT race test red.
 - **UP-2b member relay / forwarded + held-card sweep + CLI codes.** Tests: member gate ⇒ member row, lead's 409 with
-  title/ref, CLI exit 13 and no poll; forwarded path same; sweep: open held row ⇒ row + op cancelled + pause in one
+  title/ref, CLI exit 13 and no poll; remote (forwarded) member: no quota keeps the held card, no `session_pauses` / `pause_outbox` rows (notices are UP-3c); sweep: open held row ⇒ row + op cancelled + pause in one
   transaction; a concurrent decide (both orders) and an expired row ⇒ no pause; dual cause (member quota then lead
   pause, and the reverse).
 - **UP-3a switch off + reconcile + resume group.** Tests: resume group order (lead before members), only-last-cause
