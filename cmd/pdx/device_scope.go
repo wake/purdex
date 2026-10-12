@@ -41,6 +41,10 @@ var deviceAllowed = map[string]bool{
 	"PUT /api/team/relay-quota":            true, // the user's call (2026-10-09 20:2x): the phone may set the relay quota ...
 	"PUT /api/team/max-members":            true, // ... and the team size cap
 	"POST /api/relay/self":                 true,
+	// the unattended quota pause (UP-5b): the phone lists the paused sessions and releases one, as the Mac App does; it may
+	// already turn unattended off (which releases them all)
+	"GET /api/team/paused":                       true,
+	"POST /api/team/paused/{session_id}/release": true,
 	// nex: the executions list; the engine mount is narrowed by deviceNexAllowed
 	"GET /api/nex/v1/executions": true,
 	"/api/nex/":                  true,
