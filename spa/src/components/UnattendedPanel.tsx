@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { FloatingPanel } from './FloatingPanel'
 import { UnattendedQuotaSection, type QuotaHostData } from './UnattendedQuotaSection'
+import { UnattendedPausedSection } from './UnattendedPausedSection'
 import { UnattendedHeldSection, type HeldRow } from './UnattendedHeldSection'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useUnattendedStore } from '../stores/useUnattendedStore'
@@ -238,6 +239,7 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
     <FloatingPanel title={t('unattended.panel.title')} anchorRef={anchorRef} onClose={onClose} width={PANEL_WIDTH} placement="below" testId="unattended-panel">
       {/* Three blocks, a line between those that are there: 接力額度, 額度用完，等你核准, and the automatically approved list. */}
       <div aria-busy={busy} className="flex flex-col text-xs divide-y divide-border-subtle [&>*]:py-2 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">
+        <UnattendedPausedSection hostIds={hosts} />
         <UnattendedQuotaSection hosts={quotaHosts} headings={quotaHosts.length > 1} />
         <UnattendedHeldSection rows={held} />
         <section data-testid="unattended-approved-section" className="flex flex-col gap-2">
