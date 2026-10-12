@@ -268,8 +268,11 @@ export async function refreshHostRoots(leadId: string, afterWrite = false): Prom
   } catch {
     // an unreachable lead or a bad answer keeps what was shown; the next read tries again
   } finally {
-    if (reading.get(leadId) === identity) reading.delete(leadId)
-    if (again.delete(leadId)) void refreshHostRoots(leadId)
+    // only the read that is the lead host's current one owns the "read once more" mark (an older daemon's read must not eat it)
+    if (reading.get(leadId) === identity) {
+      reading.delete(leadId)
+      if (again.delete(leadId)) void refreshHostRoots(leadId)
+    }
   }
 }
 
