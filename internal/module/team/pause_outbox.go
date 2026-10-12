@@ -115,6 +115,7 @@ func (m *Module) drainPauseOutbox() {
 				// Dead-lettered: kept in the table and no longer tried, so one row that can never be sent does not hold every
 				// session's notices for ever; the rows behind it go on.
 				m.logf("[team] pause outbox %d (%s to %s): dead-lettered after %d attempts, kept in pause_outbox", r.Seq, r.Kind, r.SessionID, pauseOutboxMaxAttempts)
+				m.pauseRetryForget(r.Seq)
 				continue
 			}
 			m.pauseRetryLater(r.Seq)

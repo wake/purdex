@@ -292,6 +292,12 @@ func TestPauseOutbox_APoisonHeadIsDeadLetteredNotDropped(t *testing.T) {
 	if len(rows) != 1 || rows[0].Session != "sid-1" || rows[0].Attempts != pauseOutboxMaxAttempts {
 		t.Fatalf("outbox = %+v, want the dead row kept with its attempts", rows)
 	}
+	f.m.pauseRetryMu.Lock()
+	leaked := len(f.m.pauseRetryAt)
+	f.m.pauseRetryMu.Unlock()
+	if leaked != 0 {
+		t.Fatalf("%d retry-state entries are left for dead or sent rows (they would accumulate)", leaked)
+	}
 	f.m.drainPauseOutbox() // a dead row is not tried again
 	if flow.calls != pauseOutboxMaxAttempts+1 {
 		t.Fatalf("flow calls = %d, want %d (the dead row must not be retried)", flow.calls, pauseOutboxMaxAttempts+1)
