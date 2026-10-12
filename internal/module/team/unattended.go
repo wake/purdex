@@ -287,6 +287,9 @@ func (m *Module) autoApprove(a team.Approval) (approved, open bool) {
 			return true, false
 		}
 	}
+	if pauseEntryOn && errors.Is(err, ErrQuotaExhausted) && m.pauseHeldCard(a) {
+		return false, false // the card is cancelled with its op and its session is paused (spec §3.3)
+	}
 	if m.notAutoApproved[a.ID] != err.Error() {
 		m.rememberRefusal(a.ID, err.Error())
 		m.logf("[team] approval %s not auto-approved: %v", a.ID, err)

@@ -57,6 +57,9 @@ func (m *Module) createRemoteMemberRelay(w http.ResponseWriter, req team.RelayCr
 	case errors.Is(err, errLeadChanged):
 		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "the team's lead changed; retry", nil)
 		return
+	case errors.Is(err, errMemberPaused), errors.Is(err, errMemberPausedAlready):
+		m.writeMemberPaused(w, mr, errors.Is(err, errMemberPaused))
+		return
 	case errors.Is(err, ErrRelayOpOpen):
 		if !m.writeRelayOpen(w, mr.SessionID) {
 			m.logf("[team] remote member relay %s: %v", req.ID, err)

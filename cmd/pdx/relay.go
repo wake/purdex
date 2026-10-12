@@ -52,16 +52,18 @@ const (
 // §14): all exit 13. relay_open and bad_transition also print the op the
 // daemon sent, on stdout, so the mod can continue from it.
 var relayRefusalCodes = map[string]bool{
-	team.ErrMemberRelayIsLeads: true,
-	team.ErrSelfRelayOff:       true,
-	team.ErrSelfRelayPaused:    true,
-	team.ErrRelayOpen:          true,
-	team.ErrBadTransition:      true,
-	team.ErrNotLead:            true, // P6-5: the member relay's refusals
-	team.ErrNotYourMember:      true,
-	team.ErrRelayUnsupported:   true,
-	team.ErrNotYourOp:          true,
-	team.ErrNotMember:          true, // a member's ask from a session that is no member
+	team.ErrMemberRelayIsLeads:  true,
+	team.ErrSelfRelayOff:        true,
+	team.ErrSelfRelayPaused:     true,
+	team.ErrPausedNoQuota:       true, // the unattended quota pause (UP-2a self / idle begin, UP-2b member relay): no op was opened
+	team.ErrMemberPausedNoQuota: true,
+	team.ErrRelayOpen:           true,
+	team.ErrBadTransition:       true,
+	team.ErrNotLead:             true, // P6-5: the member relay's refusals
+	team.ErrNotYourMember:       true,
+	team.ErrRelayUnsupported:    true,
+	team.ErrNotYourOp:           true,
+	team.ErrNotMember:           true, // a member's ask from a session that is no member
 }
 
 // runRelay is the `pdx relay` switch target. SIGINT/SIGTERM cancel ctx;

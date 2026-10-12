@@ -160,6 +160,9 @@ func (m *Module) handleRelayCreate(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errLeadChanged):
 		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "the team's lead changed; retry", nil)
 		return
+	case errors.Is(err, errMemberPaused), errors.Is(err, errMemberPausedAlready):
+		m.writeMemberPaused(w, mr, errors.Is(err, errMemberPaused))
+		return
 	case errors.Is(err, ErrRelayOpOpen):
 		if !m.writeRelayOpen(w, mr.SessionID) {
 			fail(err)
@@ -221,6 +224,22 @@ func (m *Module) sendMemberControl(op team.RelayOp) {
 	}
 }
 
+// writeMemberPaused answers the lead's relay of a member the pool could not pay for while the host is unattended (spec §3.3): 409
+// member_paused_no_quota naming the member. fresh says the pause was written by this call: the roster changed and the member's
+// notice is waiting in the outbox; a repeat only repeats the answer.
+func (m *Module) writeMemberPaused(w http.ResponseWriter, mr memberRow, fresh bool) {
+	name := mr.Ref
+	if mr.Title != "" {
+		name = mr.Title + "（" + mr.Ref + "）"
+	}
+	if fresh {
+		m.logf("[team] relay of member %s (%s): no relay pool left while unattended: the member is paused", mr.Ref, mr.SessionID)
+		m.rosterChanged()
+		m.kickPauseOutbox()
+	}
+	m.writeErr(w, http.StatusConflict, team.ErrMemberPausedNoQuota, name+"接力額度用完，已暫停", nil)
+}
+
 // errLeadChanged: the team's lead moved between the create's read and its transaction; the caller retries.
 var errLeadChanged = errors.New("the team's lead changed during the request")
 
@@ -233,6 +252,13 @@ func (m *Module) memberRelayGate(lead team.Origin, mr memberRow, spent *bool, he
 	return func(tx *sql.Tx, op *team.RelayOp) (bool, error) {
 		if !m.unattendedOn() || !m.quotaRuleOn() {
 			return false, nil
+		}
+		if pauseEntryOn && !m.isRemoteRow(mr) { // a member that already holds its quota pause is answered by it, before any spend (spec §3.3 (1))
+			if paused, err := hasPauseCauseIn(tx, op.SessionID, team.PauseCauseQuota); err != nil {
+				return false, err
+			} else if paused {
+				return false, errMemberPausedAlready
+			}
 		}
 		err := spendPoolIn(tx, op.TeamID, op.CreatedAt)
 		if err == nil {
@@ -253,6 +279,14 @@ func (m *Module) memberRelayGate(lead team.Origin, mr memberRow, spent *bool, he
 		}
 		if cur != lead.SessionID {
 			return false, errLeadChanged
+		}
+		if pauseEntryOn && !m.isRemoteRow(mr) { // unattended + rule on (checked above) + no pool: the member is paused instead of getting a card (spec §3.3)
+			st, _ := m.unattended.Unattended()
+			if _, err := writeMemberPauseIn(tx, MemberPausePlan{SessionID: op.SessionID, Ref: mr.Ref, Title: mr.Title, TeamID: op.TeamID,
+				LeadSessionID: lead.SessionID, OnSince: st.Since, At: op.CreatedAt}); err != nil {
+				return false, err
+			}
+			return false, errMemberPaused
 		}
 		p := team.MemberRelayPayload{OpID: op.ID, TeamID: op.TeamID, LeadRef: lead.Ref, LeadTitle: lead.Title,
 			MemberSessionID: op.SessionID, MemberRef: mr.Ref, MemberTitle: mr.Title}

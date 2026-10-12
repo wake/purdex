@@ -210,7 +210,8 @@ func TestRelayCmd_BeginPrintsOpAndRequestOrRefuses(t *testing.T) {
 	for _, c := range []struct {
 		code   string
 		wantOp bool
-	}{{team.ErrSelfRelayOff, false}, {team.ErrSelfRelayPaused, false}, {team.ErrMemberRelayIsLeads, false}, {team.ErrRelayOpen, true}} {
+	}{{team.ErrSelfRelayOff, false}, {team.ErrSelfRelayPaused, false}, {team.ErrMemberRelayIsLeads, false}, {team.ErrRelayOpen, true},
+		{team.ErrPausedNoQuota, false}} { // UP-2a's 409: exit 13, no op on stdout, the code last
 		body := team.APIError{Error: c.code, Detail: "d"}
 		if c.wantOp {
 			body.Op = &team.RelayOp{ID: "op-open", State: team.RelayClaimed}
