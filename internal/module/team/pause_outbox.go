@@ -124,6 +124,13 @@ func (m *Module) sendPauseRow(r pauseOutboxRow) (done bool) {
 	case team.PauseOutboxPush:
 		svc, ok := m.core.Registry.Get(team.PauseNotifyKey)
 		if !ok {
+			// The push module publishes its notifier in Start, after this module's (it depends on this one): at a restart a
+			// module that is mounted and ready is only late, so the row stays. One that is absent or soft-failed never will.
+			if st, mounted := m.core.ModuleStatus("push"); mounted {
+				if ready, _ := st["ready"].(bool); ready {
+					return false
+				}
+			}
 			m.logf("[team] pause outbox %d: no push module, the phone push is dropped", r.Seq)
 			return true
 		}

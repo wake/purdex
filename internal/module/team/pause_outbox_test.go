@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/wake/purdex/internal/core"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
@@ -213,4 +214,42 @@ func TestPauseOutbox_ABeginThatPausesIsSentByTheRunningLoop(t *testing.T) {
 		t.Fatal(code)
 	}
 	waitFor(t, func() bool { return len(flow.sentTexts()) == 1 && len(push.got) == 1 && len(f.outbox()) == 0 })
+}
+
+// stubPush is a push module that is mounted (Init done, ready) but has not started, so it has not published its notifier yet.
+type stubPush struct{ ready bool }
+
+func (stubPush) Name() string                  { return "push" }
+func (stubPush) Dependencies() []string        { return nil }
+func (stubPush) Init(*core.Core) error         { return nil }
+func (stubPush) RegisterRoutes(*http.ServeMux) {}
+func (stubPush) Start(context.Context) error   { return nil }
+func (stubPush) Stop(context.Context) error    { return nil }
+func (s stubPush) Status() map[string]any      { return map[string]any{"ready": s.ready} }
+
+// Codex R1 (P2): at a restart the team module's outbox starts BEFORE the push module (push depends on team) and finds no notifier
+// yet; a push module that is mounted and ready is only late, so the row stays. One that soft-failed (not ready) never will publish:
+// its row is dropped. Mutation gate: drop whenever the notifier is missing → the persisted push is lost at every restart (red).
+func TestPauseOutbox_APushRowSurvivesTheStartupOrder(t *testing.T) {
+	f := newFixture(t)
+	f.core.AddModule(stubPush{ready: true})
+	f.queue("sid-1", team.PauseOutboxPush, "text", 500)
+	f.m.drainPauseOutbox()
+	if rows := f.outbox(); len(rows) != 1 {
+		t.Fatalf("outbox = %+v, want the push kept until the push module has started", rows)
+	}
+	push := &fakeNotifier{done: true}
+	f.core.Registry.Register(team.PauseNotifyKey, push) // the push module started
+	f.m.drainPauseOutbox()
+	if len(f.outbox()) != 0 || len(push.got) != 1 {
+		t.Fatalf("outbox %+v, pushes %q", f.outbox(), push.got)
+	}
+
+	g := newFixture(t)
+	g.core.AddModule(stubPush{ready: false}) // soft-failed: it will never publish
+	g.queue("sid-1", team.PauseOutboxPush, "text", 500)
+	g.m.drainPauseOutbox()
+	if len(g.outbox()) != 0 {
+		t.Fatalf("outbox = %+v, want the push dropped for a module that is not ready", g.outbox())
+	}
 }
