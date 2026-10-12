@@ -116,6 +116,7 @@ const fresh = () => ({
   writeDeferred: undefined, // a claimed request whose write prompt waits for the running turn to end
   pending: undefined, // { op, requestId, path, oldSession, oldRef, before, nonce, nonceState, who, wait, answer }
   lastAskPct: undefined,
+  latchEpoch: 0, // bumped by everything that clears the latch (a reask, a /clear, a session reset): a begin answers 'paused' only for the epoch it was sent in
   pausedLatch: false, // the daemon paused this session (409 paused_no_quota): no self ask until a reask control or the next session.start
   reaskSeen: [], // the ids of reask controls already taken, oldest first (MAX_REASKS_SEEN)
   reaskPending: '', // a reask that arrived while a turn ran or a relay was in progress: begun at the next turn end
@@ -155,7 +156,7 @@ function resetState() {
   disarmIdle()
   letGo()
   waitingRecovery = undefined // a recovery waiting for the old conversation to be free is that conversation's
-  Object.assign(s, fresh(), { gen: s.gen + 1, helloSeq: s.helloSeq, askEpoch: s.askEpoch + 1 })
+  Object.assign(s, fresh(), { gen: s.gen + 1, helloSeq: s.helloSeq, askEpoch: s.askEpoch + 1, latchEpoch: s.latchEpoch + 1 })
 }
 
 // letGo releases the prompts held on the request the mod is leaving, at
@@ -707,6 +708,7 @@ async function begin($, sid, gen, u, adopted, manual = false, idle = false, reas
   const argv = ['relay', 'begin', '--self', '--session', sid, '--used', String(u.percent), '--window', String(u.window)]
   if (manual) argv.push('--manual')
   if (reaskId) argv.push('--reask', reaskId) // the release token of a re-ask after a pause
+  const latchEpoch = s.latchEpoch // a reask that arrives while this begin is out clears the latch for good: this answer must not set it again
   const idleMinutes = s.idleMinutes // the numbers of this ask, whatever hello says meanwhile
   if (idle) argv.push('--reason', 'idle', '--idle-minutes', String(idleMinutes))
   const r = await pdx($, argv, CALL_TIMEOUT_MS)
@@ -723,7 +725,7 @@ async function begin($, sid, gen, u, adopted, manual = false, idle = false, reas
     const code = r.exitCode === 13 ? stderrCode(r) : ''
     if (code === 'member_relay_is_leads') s.role = 'member'
     toIdle($)
-    if (code === 'paused_no_quota') s.pausedLatch = true // set after toIdle: nothing resets it before the daemon's reask or a session.start
+    if (code === 'paused_no_quota' && s.latchEpoch === latchEpoch) s.pausedLatch = true // set after toIdle: nothing resets it before the daemon's reask or a session.start
     // 13 self_relay_off | self_relay_paused | relay_open, 20, 21, 1: the threshold caller does nothing
     // (§8.1, §8.7 (d)) and asks again at +10; `/relay now` says why.
     if (r.exitCode === 13) return { kind: 'refused', code }
@@ -777,12 +779,14 @@ async function reaskBegin($, id) {
   // A reask that cannot be begun yet (hello not answered, a relay or a turn in the way, no usage) is kept, not lost: it is tried again
   // when hello answers, a turn ends or the session returns to idle. Only a session reset or a /clear meanwhile drops it.
   const keep = () => { if (!s.reaskPending) s.reaskPending = id }
+  if (s.reaskSeen.includes(id)) return // the same token was begun already (a duplicate delivery, scheduled twice, or one that waited)
   if (!s.helloOK || s.role === 'member' || s.state !== 'idle' || s.turnRunning || !hasCSPRNG()) return keep()
   const gen = s.gen
   const u = (await $.session.usage().catch(() => undefined))?.context
   const sid = await $.session.id().catch(() => undefined)
   if (s.gen !== gen) return // the conversation this reask was for is gone
   if (!u || u.percent === undefined || !sid || s.state !== 'idle' || s.turnRunning) return keep()
+  if (s.reaskSeen.includes(id)) return // a twin of this call got here first while the engine was read
   s.reaskSeen = [...s.reaskSeen, id].slice(-MAX_REASKS_SEEN) // done only once it is really begun: a duplicate after this is dropped
   disarmIdle()
   s.state = 'beginning'
@@ -796,6 +800,7 @@ async function reaskBegin($, id) {
 // if the session is idle between turns, else at the end of the turn / relay that is running.
 function takeReask($, id) {
   s.pausedLatch = false
+  s.latchEpoch++
   if (s.reaskSeen.includes(id) || s.reaskPending === id) return
   if (!s.turnRunning && s.state === 'idle') later($, 0, () => reaskBegin($, id))
   else s.reaskPending = id
@@ -1550,6 +1555,7 @@ export function register(on) {
     if (was === 'awaiting') $.ui.status(undefined)
     s.floor = undefined
     s.lastAskPct = undefined
+    s.latchEpoch++
     s.pausedLatch = false // a /clear is a new session id, which the daemon never paused: the old conversation's latch and waiting reask are not its
     s.reaskPending = ''
     s.askBusy = undefined // an ask still out was the old conversation's: its answer is dropped (epoch), and it holds nothing here

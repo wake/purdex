@@ -618,6 +618,46 @@ test('a reask before hello answers is begun when hello answers, once', async ($,
   expect(begins(f).filter((c) => c.includes('--reask')).length).toBe(1)
 })
 
+// A begin that is out when the reask arrives answers "paused" later: that must not latch the session again (the reask cleared it).
+// Mutation gate: drop the epoch check → the older begin's answer re-sets the latch and the next turn never asks (red).
+test('a paused answer to a begin that was out before the reask does not re-set the latch', async ($, on) => {
+  let n = 0
+  let answerFirst!: (r: R) => void
+  const first = new Promise<R>((r) => { answerFirst = r })
+  const f = soloWorld(on, (argv) => (argv.includes('--reask') ? { exitCode: 20, stderr: 'daemon_unavailable' } : (n++ === 0 ? (first as any) : PAUSED)))
+  await start($, f)
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  await complete($, 't1') // begin goes out and is not answered yet
+  await f.clock.advance(100)
+  expect(begins(f).length).toBe(1)
+  await receive($, ENVELOPE(REASK)) // arrives while that begin is out
+  answerFirst(PAUSED) // the older begin now answers: paused
+  await f.clock.settle()
+  expect(begins(f).filter((c) => c.includes('--reask')).length).toBe(1) // the reask begin ran (and failed: daemon down)
+  f.usage = { tokens: 190000, window: 200000, percent: 95 }
+  await turn($, f, 't2')
+  expect(begins(f).length).toBe(3) // the latch is clear: t2 asks on its own
+})
+
+// The same reask delivered twice back to back: the twin finds the session busy with the first one's relay, is kept, and when that
+// relay ends it must NOT begin again — the token was spent.
+// Mutation gate: no seen re-check where the call starts and after its awaits → the twin begins a second time (red).
+test('two deliveries of one reask that arrive back to back begin once, even after the first relay ends', async ($, on) => {
+  let deny!: () => void
+  const f = soloWorld(on, (argv) => (argv.includes('--reask') ? { exitCode: 0, stdout: JSON.stringify({ op: { ...OP, kind: 'self', state: 'awaiting_approval' }, request_id: 'req-9' }) } : PAUSED))
+  const own = f.pdx
+  f.pdx = (argv) => (argv[0] === 'relay' && argv[1] === 'wait' ? new Promise<R>((resolve) => { deny = () => resolve({ exitCode: 10 }) }) : own(argv))
+  await start($, f)
+  await turn($, f, 't1')
+  await receive($, ENVELOPE(REASK))
+  await receive($, ENVELOPE(REASK)) // before any timer ran
+  await f.clock.advance(1000) // the first reask begins and its wait starts
+  expect(begins(f).filter((c) => c.includes('--reask')).length).toBe(1)
+  deny() // the card was denied: back to idle
+  await f.clock.advance(1000)
+  expect(begins(f).filter((c) => c.includes('--reask')).length).toBe(1)
+})
+
 // The two parsers do not mistake each other's message.
 test('the op control and the reask control are told apart', async () => {
   const peer = (text: string) => ({ origin: PEER, text })
