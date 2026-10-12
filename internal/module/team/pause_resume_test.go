@@ -325,6 +325,26 @@ func TestResume_AWaitingReaskKeepsItsTokenAndTheSendRestartsTheDay(t *testing.T)
 	}
 }
 
+// The token update and the row's delete are one transaction: when the token cannot be updated the sent reask stays in the outbox
+// (it will be sent again) and the token stays protected from pruning.
+// Mutation gate: delete the row even when the token update failed → the row is gone, the token unprotected (red).
+func TestResume_AReaskWhoseTokenCannotBeTouchedStaysInTheOutbox(t *testing.T) {
+	f := newFixture(t)
+	f.outboxWorld()
+	id := uuid.NewString()
+	if _, err := f.m.store.db.Exec(`INSERT INTO pause_outbox (session_id, kind, text, reask_id, created_at) VALUES ('sid-1', ?, ?, ?, 500)`,
+		team.PauseOutboxReask, team.PauseReaskControlPrefix+id, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.m.store.db.Exec(`DROP TABLE pause_release_tokens`); err != nil { // the update will fail
+		t.Fatal(err)
+	}
+	f.m.drainPauseOutbox()
+	if rows := f.outbox(); len(rows) != 1 {
+		t.Fatalf("outbox = %+v, want the reask kept for a repeat", rows)
+	}
+}
+
 // The switch off with no pause row at all writes nothing.
 func TestResume_NothingPausedNothingWritten(t *testing.T) {
 	f := leadWorld(t)

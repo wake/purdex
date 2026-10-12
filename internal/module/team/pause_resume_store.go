@@ -196,11 +196,24 @@ func bounceListIn(tx *sql.Tx, sid string) (string, error) {
 	return fmt.Sprintf(team.PauseBouncedFmt, n) + "\n" + strings.Join(lines, "\n"), nil
 }
 
-// TouchReleaseToken restarts a token's 24 h at `at`: the outbox calls it when the reask that carries the token has been sent, so the
-// token lives a day from its delivery, not from the transaction that wrote it.
-func (s *Store) TouchReleaseToken(token string, at int64) error {
-	if _, err := s.db.Exec(`UPDATE pause_release_tokens SET created_at = ? WHERE token = ?`, at, token); err != nil {
-		return fmt.Errorf("touch release token: %w", err)
+// FinishReaskOutbox is the outbox's delete of a reask row that has been sent: in ONE transaction the token's 24 h restart at `at`
+// (a token lives a day from its delivery, not from the transaction that wrote it) and the row goes. If the token cannot be
+// updated the row stays and is sent again (the mod drops a repeated id), so a delivered reask never has a token the next
+// reconciliation would prune.
+func (s *Store) FinishReaskOutbox(seq int64, token string, at int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("finish reask %d: %w", seq, err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE pause_release_tokens SET created_at = ? WHERE token = ?`, at, token); err != nil {
+		return fmt.Errorf("finish reask %d: touch token: %w", seq, err)
+	}
+	if _, err := tx.Exec(`DELETE FROM pause_outbox WHERE seq = ?`, seq); err != nil {
+		return fmt.Errorf("finish reask %d: %w", seq, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("finish reask %d: %w", seq, err)
 	}
 	return nil
 }
