@@ -639,6 +639,29 @@ test('a paused answer to a begin that was out before the reask does not re-set t
   expect(begins(f).length).toBe(3) // the latch is clear: t2 asks on its own
 })
 
+// A duplicate of a reask already taken is ignored whole: it must not move the latch epoch under an ordinary begin that is out.
+// Mutation gate: clear/advance before the duplicate check → that begin's paused answer is dropped and the session keeps asking (red).
+test('a duplicate reask does not disarm the latch of a begin that was sent after the first one', async ($, on) => {
+  let answerSecond!: (r: R) => void
+  const second = new Promise<R>((r) => { answerSecond = r })
+  let n = 0
+  const f = soloWorld(on, (argv) => (argv.includes('--reask') ? { exitCode: 20, stderr: 'daemon_unavailable' } : (n++ === 1 ? (second as any) : PAUSED)))
+  await start($, f)
+  await turn($, f, 't1') // paused: latched
+  await receive($, ENVELOPE(REASK))
+  await f.clock.advance(100) // the reask begin fails: idle, latch clear
+  f.usage = { tokens: 190000, window: 200000, percent: 95 }
+  await $.turn.start({ text: 'work', turnId: 't2' })
+  await complete($, 't2') // an ordinary begin goes out and waits
+  await f.clock.advance(100)
+  await receive($, ENVELOPE(REASK)) // the same reask again, while that begin is out
+  answerSecond(PAUSED)
+  await f.clock.settle()
+  f.usage = { tokens: 199000, window: 200000, percent: 99 }
+  await turn($, f, 't3')
+  expect(begins(f).filter((c) => !c.includes('--reask')).length).toBe(2) // t1 and t2 only: the latch from t2's answer stands
+})
+
 // The same reask delivered twice back to back: the twin finds the session busy with the first one's relay, is kept, and when that
 // relay ends it must NOT begin again — the token was spent.
 // Mutation gate: no seen re-check where the call starts and after its awaits → the twin begins a second time (red).

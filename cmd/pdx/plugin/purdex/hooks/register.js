@@ -799,9 +799,9 @@ async function reaskBegin($, id) {
 // takeReask is a reask control (consumed by the caller): the latch is cleared at once and, once per id, the re-ask is begun — now
 // if the session is idle between turns, else at the end of the turn / relay that is running.
 function takeReask($, id) {
+  if (s.reaskSeen.includes(id) || s.reaskPending === id) return // a duplicate of a token already taken: nothing more happens, the latch and its epoch included
   s.pausedLatch = false
   s.latchEpoch++
-  if (s.reaskSeen.includes(id) || s.reaskPending === id) return
   if (!s.turnRunning && s.state === 'idle') later($, 0, () => reaskBegin($, id))
   else s.reaskPending = id
 }
