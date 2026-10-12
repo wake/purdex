@@ -10,6 +10,7 @@ import { create } from 'zustand'
 import { ApprovalApiError, send } from './approval-api'
 import { descriptorFor } from './unattended-api'
 import { hostIdentityNow } from './quota-host'
+import { useHostStore } from '../../stores/useHostStore'
 
 export const HOST_ROOTS_PATH = '/api/team/host-roots'
 export const HOST_ROOTS_DISMISS_PATH = '/api/team/host-roots/dismiss'
@@ -146,7 +147,9 @@ export type HostRootsError =
   | { kind: 'not_a_root' }
   | { kind: 'failed'; code: string }
 
-export interface RowError { alias: string; path: string; error: HostRootsError }
+export interface RowError { hostKey: string; path: string; error: HostRootsError }
+/** The stable key of a paired host (its id; the alias only when the daemon sent none): an alias can be renamed between a write and the re-read. */
+export const hostKeyOf = (h: Pick<PairedHostRoots, 'hostId' | 'alias'>): string => (h.hostId !== '' ? h.hostId : h.alias)
 
 interface LeadView {
   /** `unknown`: not read yet. `unsupported`: the lead daemon has no routes (the feature is hidden). */
@@ -155,9 +158,11 @@ interface LeadView {
   rowError: RowError | null
   /** True while a write is out (the controls are disabled). */
   writing: boolean
+  /** A write finished and no read that began after it has landed yet: the view may predate it (keeps the poll running). */
+  dirty: boolean
 }
 
-const EMPTY: LeadView = { load: 'unknown', hosts: [], rowError: null, writing: false }
+const EMPTY: LeadView = { load: 'unknown', hosts: [], rowError: null, writing: false, dirty: false }
 
 interface HostRootsState {
   byLead: Record<string, LeadView>
@@ -170,15 +175,67 @@ export const useHostRootsStore = create<HostRootsState>()((set) => ({
   byLead: {},
   patch: (leadId, p) => set((s) => ({ byLead: { ...s.byLead, [leadId]: { ...(s.byLead[leadId] ?? EMPTY), ...p } } })),
   forget: (leadId) => set((s) => { const { [leadId]: _g, ...rest } = s.byLead; return { byLead: rest } }),
-  reset: () => { reading.clear(); again.clear(); writing.clear(); set({ byLead: {} }) },
+  reset: () => { reading.clear(); again.clear(); epochs.clear(); writing.clear(); set({ byLead: {} }) },
 }))
 
 export const viewOf = (s: Pick<HostRootsState, 'byLead'>, leadId: string): LeadView => s.byLead[leadId] ?? EMPTY
 
 export const hasPending = (hosts: readonly PairedHostRoots[]): boolean => hosts.some((h) => h.changes.some((c) => c.state === 'pending'))
 
+// ---- polling: one timer per lead host, however many editors are shown ----
+
+interface Poll { count: number; timer: ReturnType<typeof setInterval> | null; identity: string | null }
+const polls = new Map<string, Poll>()
+let unsubscribe: (() => void) | null = null
+let unsubscribeHosts: (() => void) | null = null
+
+/** A timer runs for a lead host exactly while an editor is shown (`count > 0`) and a change of it is pending. */
+function syncPolls(): void {
+  for (const [leadId, p] of polls) {
+    const now = deps.identity(leadId)
+    if (now !== p.identity) {
+      // the lead host was removed or re-pointed (same id, another endpoint or token): what was read belongs to another daemon
+      p.identity = now
+      useHostRootsStore.getState().forget(leadId)
+      void refreshHostRoots(leadId)
+    }
+    const view = viewOf(useHostRootsStore.getState(), leadId)
+    const want = p.count > 0 && (hasPending(view.hosts) || view.dirty)
+    if (want && p.timer === null) p.timer = setInterval(() => { void refreshHostRoots(leadId) }, HOST_ROOTS_POLL_MS)
+    else if (!want && p.timer !== null) { clearInterval(p.timer); p.timer = null }
+  }
+}
+
+/** An editor of the lead host is shown: the first one reads the view; the view is re-read every 10 s while a change is pending. Call the result when it is collapsed. */
+export function retainHostRootsPoll(leadId: string): () => void {
+  let p = polls.get(leadId)
+  if (p === undefined) { p = { count: 0, timer: null, identity: deps.identity(leadId) }; polls.set(leadId, p) }
+  p.count++
+  if (p.count === 1) void refreshHostRoots(leadId)
+  unsubscribe ??= useHostRootsStore.subscribe(syncPolls)
+  unsubscribeHosts ??= useHostStore.subscribe(syncPolls)
+  syncPolls()
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    p.count--
+    if (p.count === 0) {
+      if (p.timer !== null) clearInterval(p.timer)
+      polls.delete(leadId)
+      if (polls.size === 0) { unsubscribe?.(); unsubscribe = null; unsubscribeHosts?.(); unsubscribeHosts = null }
+    }
+  }
+}
+
 /** Test seam. */
 export function resetHostRoots(): void {
+  for (const p of polls.values()) if (p.timer !== null) clearInterval(p.timer)
+  polls.clear()
+  unsubscribe?.()
+  unsubscribe = null
+  unsubscribeHosts?.()
+  unsubscribeHosts = null
   deps = defaultDeps()
   useHostRootsStore.getState().reset()
 }
@@ -187,6 +244,7 @@ export function resetHostRoots(): void {
 
 const reading = new Map<string, string>() // lead host id → the identity the request in flight was sent to
 const again = new Set<string>() // a write finished while a read was out: that read may predate it, read once more
+const epochs = new Map<string, number>() // bumped when a write finishes: a read that began before it must not commit
 const writing = new Set<string>()
 
 /**
@@ -201,11 +259,12 @@ export async function refreshHostRoots(leadId: string, afterWrite = false): Prom
     return
   }
   reading.set(leadId, identity)
+  const epoch = epochs.get(leadId) ?? 0
   try {
     const answer = await deps.fetch(leadId)
-    if (deps.identity(leadId) !== identity) return
-    if (answer === 'unsupported') useHostRootsStore.getState().patch(leadId, { load: 'unsupported', hosts: [], rowError: null })
-    else useHostRootsStore.getState().patch(leadId, { load: 'ok', hosts: answer })
+    if (deps.identity(leadId) !== identity || (epochs.get(leadId) ?? 0) !== epoch) return
+    if (answer === 'unsupported') useHostRootsStore.getState().patch(leadId, { load: 'unsupported', hosts: [], rowError: null, dirty: false })
+    else useHostRootsStore.getState().patch(leadId, { load: 'ok', hosts: answer, dirty: false })
   } catch {
     // an unreachable lead or a bad answer keeps what was shown; the next read tries again
   } finally {
@@ -244,7 +303,7 @@ export async function changeHostRoot(leadId: string, host: PairedHostRoots, op: 
   } catch (e) {
     const error = errorOf(e, host.alias)
     if (deps.identity(leadId) === identity) {
-      if (op === 'remove') useHostRootsStore.getState().patch(leadId, { rowError: { alias: host.alias, path, error } })
+      if (op === 'remove') useHostRootsStore.getState().patch(leadId, { rowError: { hostKey: hostKeyOf(host), path, error } })
       await settle(leadId, identity)
     }
     return { ok: false, error }
@@ -268,11 +327,14 @@ export async function dismissHostRootChange(leadId: string, id: string): Promise
     writing.delete(leadId)
     if (deps.identity(leadId) === identity) {
       useHostRootsStore.getState().patch(leadId, { writing: false })
-      await refreshHostRoots(leadId, true)
+      await settle(leadId, identity)
     }
   }
 }
 
 async function settle(leadId: string, identity: string): Promise<void> {
-  if (deps.identity(leadId) === identity) await refreshHostRoots(leadId, true)
+  if (deps.identity(leadId) !== identity) return
+  epochs.set(leadId, (epochs.get(leadId) ?? 0) + 1) // a read already out predates this write: it will not commit
+  useHostRootsStore.getState().patch(leadId, { dirty: true })
+  await refreshHostRoots(leadId, true)
 }

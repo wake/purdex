@@ -1,8 +1,9 @@
 // spa/src/lib/team/host-roots.test.ts — XR-3: the wire parse, the input routing, and the per-lead-host read / write rules.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ApprovalApiError } from './approval-api'
+import { useHostStore } from '../../stores/useHostStore'
 import {
-  changeHostRoot, classifyRootInput, configureHostRoots, dismissHostRootChange, hasPending, inUseWho, parseHostRoots, refreshHostRoots,
+  changeHostRoot, classifyRootInput, retainHostRootsPoll, configureHostRoots, dismissHostRootChange, hasPending, inUseWho, parseHostRoots, refreshHostRoots,
   resetHostRoots, useHostRootsStore, viewOf, type PairedHostRoots,
 } from './host-roots'
 
@@ -142,7 +143,7 @@ describe('changeHostRoot', () => {
     })
     const r = await changeHostRoot(L, host({ roots: ['/x'] }), 'remove', '/x')
     expect(r).toEqual({ ok: false, error: { kind: 'in_use', who: ['T（_r）', 'abcdefgh'] } })
-    expect(viewOf(useHostRootsStore.getState(), L).rowError).toEqual({ alias: 'air26', path: '/x', error: { kind: 'in_use', who: ['T（_r）', 'abcdefgh'] } })
+    expect(viewOf(useHostRootsStore.getState(), L).rowError).toEqual({ hostKey: 'h-air', path: '/x', error: { kind: 'in_use', who: ['T（_r）', 'abcdefgh'] } })
     expect(fetch).toHaveBeenCalled()
   })
   it('the next action clears the row error', async () => {
@@ -163,6 +164,62 @@ describe('changeHostRoot', () => {
     expect(await changeHostRoot(L, host(), 'add', '/x')).toEqual({ ok: false, error: { kind: 'bad_root', detail: 'not_absolute' } })
     configureHostRoots({ post: async () => { throw new ApprovalApiError(400, 'not_a_root') } })
     expect(await changeHostRoot(L, host(), 'remove', '/x')).toEqual({ ok: false, error: { kind: 'not_a_root' } })
+  })
+})
+
+describe('a write and the reads around it', () => {
+  it('a read that began before the write finished does not commit; a failed follow-up leaves the view dirty (polling) until one lands', async () => {
+    const old = deferred<PairedHostRoots[]>()
+    const fetch = vi.fn().mockReturnValueOnce(old.promise).mockRejectedValueOnce(new Error('down')).mockResolvedValue([host({ roots: ['/new'] })])
+    configureHostRoots({ post: async () => {}, fetch })
+    const first = refreshHostRoots(L)
+    await changeHostRoot(L, host(), 'add', '/new')
+    old.resolve([host()]) // the pre-write answer: dropped, never shown
+    await first
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2)) // the follow-up (fails)
+    expect(viewOf(useHostRootsStore.getState(), L)).toMatchObject({ load: 'unknown', dirty: true })
+    await refreshHostRoots(L) // the next (poll) read lands
+    expect(viewOf(useHostRootsStore.getState(), L)).toMatchObject({ load: 'ok', dirty: false, hosts: [{ roots: ['/new'] }] })
+  })
+  it('a remove error stays on the row when the host is renamed meanwhile (keyed by host id)', async () => {
+    configureHostRoots({
+      fetch: async () => [host({ alias: 'renamed', roots: ['/x'] })],
+      post: async () => { throw new ApprovalApiError(409, 'roots_in_use', '', null, { uses: [{ ref: '_r' }] }) },
+    })
+    await changeHostRoot(L, host({ roots: ['/x'] }), 'remove', '/x')
+    expect(viewOf(useHostRootsStore.getState(), L).rowError).toMatchObject({ hostKey: 'h-air', path: '/x' })
+  })
+})
+
+describe('the poll of a shown editor', () => {
+  it('a lead host re-pointed to another daemon drops the old view and reads the new one, even with nothing pending', async () => {
+    let id = 'id-1'
+    const fetch = vi.fn(async () => (id === 'id-1' ? [host({ alias: 'old' })] : [host({ alias: 'new' })]))
+    configureHostRoots({ fetch, identity: () => id })
+    const release = retainHostRootsPoll(L)
+    await vi.waitFor(() => expect(viewOf(useHostRootsStore.getState(), L).hosts[0]?.alias).toBe('old'))
+    id = 'id-2'
+    useHostStore.setState({ hosts: { ...useHostStore.getState().hosts } }) // any host-store change makes the poll look
+    await vi.waitFor(() => expect(viewOf(useHostRootsStore.getState(), L).hosts[0]?.alias).toBe('new'))
+    release()
+  })
+  it('keeps polling while the view is dirty (a write finished, its re-read failed), then stops', async () => {
+    vi.useFakeTimers()
+    try {
+      const fetch = vi.fn().mockRejectedValueOnce(new Error('down')).mockResolvedValue([host()])
+      configureHostRoots({ post: async () => {}, fetch })
+      const release = retainHostRootsPoll(L) // first read: fails
+      await vi.advanceTimersByTimeAsync(0)
+      await changeHostRoot(L, host(), 'add', '/x') // post ok, the re-read is the 2nd fetch → lands, so force the dirty state
+      useHostRootsStore.getState().patch(L, { dirty: true })
+      const n = fetch.mock.calls.length
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(fetch.mock.calls.length).toBe(n + 1)
+      expect(viewOf(useHostRootsStore.getState(), L).dirty).toBe(false)
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(fetch.mock.calls.length).toBe(n + 1)
+      release()
+    } finally { vi.useRealTimers() }
   })
 })
 

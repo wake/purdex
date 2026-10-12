@@ -6,7 +6,7 @@ import { X } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { hostLabel, useHostLook } from '../../lib/host-look'
 import { midEllipsis } from '../../lib/team/roots'
-import { changeHostRoot, dismissHostRootChange, useHostRootsStore, viewOf, type HostRootChange, type HostStatus, type PairedHostRoots } from '../../lib/team/host-roots'
+import { changeHostRoot, dismissHostRootChange, hostKeyOf, useHostRootsStore, viewOf, type HostRootChange, type HostStatus, type PairedHostRoots } from '../../lib/team/host-roots'
 import { hostRootsErrorText } from '../../lib/team/host-roots-text'
 import { useHostRootsSync } from '../../hooks/useHostRootsSync'
 
@@ -48,15 +48,12 @@ export function HostRootsSection({ leadId }: { leadId: string }) {
     <div data-testid="host-roots" className="flex flex-col gap-1">
       <div className="text-text-muted">{t('unattended.hostroots.label')}</div>
       {view.hosts.map((h) => (
-        <section key={h.hostId || h.alias} data-testid="host-roots-host" data-alias={h.alias} className="flex flex-col gap-0.5">
-          <div className="flex flex-wrap items-baseline gap-x-2">
-            <span className="font-medium text-text-primary">{h.alias}</span>
-            <span className="text-text-muted">{t('unattended.hostroots.shared', { alias: h.alias, lead: leadName })}</span>
-          </div>
+        <section key={h.hostId || h.alias} data-testid="host-roots-host" data-alias={h.alias} className="mt-1 flex flex-col gap-0.5">
+          <div data-testid="host-roots-heading" className="font-medium text-text-secondary">{t('unattended.hostroots.shared', { alias: h.alias, lead: leadName })}</div>
           {h.status === 'consent_off' && <div data-testid="host-roots-consent-off" className="text-status-warning-text">{t('unattended.hostroots.consent_off', { alias: h.alias, lead: leadName })}</div>}
           <ul className="flex flex-col gap-0.5">
             {rowsOf(h).map((r) => {
-              const rowErr = view.rowError !== null && view.rowError.alias === h.alias && view.rowError.path === r.path ? view.rowError.error : null
+              const rowErr = view.rowError !== null && view.rowError.hostKey === hostKeyOf(h) && view.rowError.path === r.path ? view.rowError.error : null
               return (
                 <li key={r.key} data-testid="host-roots-row" data-kind={r.kind} className="flex flex-col">
                   <div className="flex items-center gap-1">

@@ -249,6 +249,31 @@ describe('polling', () => {
 })
 
 describe('two teams on one lead host', () => {
+  it('one poll timer for both editors, however they were mounted', async () => {
+    vi.useFakeTimers()
+    useTeamRosterStore.getState().apply(H, [team('t-L', 'L'), team('t-M', 'M')])
+    hosts = [host({ changes: [ch()] })]
+    show(['L', 'M'])
+    await flush()
+    expect(fetch).toHaveBeenCalledTimes(1)
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+    expect(fetch).toHaveBeenCalledTimes(2)
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+    expect(fetch).toHaveBeenCalledTimes(3)
+  })
+  it('collapsing one of two editors keeps the poll; collapsing both stops it', async () => {
+    vi.useFakeTimers()
+    useTeamRosterStore.getState().apply(H, [team('t-L', 'L'), team('t-M', 'M')])
+    hosts = [host({ changes: [ch()] })]
+    const { rerender, unmount } = show(['L', 'M'])
+    await flush()
+    rerender(<UnattendedQuotaSection hosts={[{ hostId: H, rows: [row('L')] }]} headings={false} />)
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
+    expect(fetch).toHaveBeenCalledTimes(2)
+    unmount()
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+    expect(fetch).toHaveBeenCalledTimes(2)
+  })
   it('both editors show the same grants from one read', async () => {
     useTeamRosterStore.getState().apply(H, [team('t-L', 'L'), team('t-M', 'M')])
     hosts = [host({ roots: ['/shared'] })]
