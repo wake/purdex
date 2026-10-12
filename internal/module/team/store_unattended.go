@@ -26,8 +26,23 @@ var ErrMemberRelayIsLeads = errors.New("the session is an active member of a liv
 // the begin's check); any other failure, or a close that is no approval,
 // writes nothing either. It returns the row and the op as committed.
 func (s *Store) CreateSelfRelayApproved(op team.RelayOp, a team.Approval, hash string, c Close) (team.Approval, team.RelayOp, error) {
-	fail := func(err error) (team.Approval, team.RelayOp, error) {
-		return team.Approval{}, team.RelayOp{}, fmt.Errorf("create approved self relay %s: %w", a.ID, err)
+	after, claimed, _, err := s.createSelfRelay(op, a, hash, c, nil)
+	return after, claimed, err
+}
+
+// CreateSelfRelayOrPause is SpendOrPause for a self / idle relay begin (unattended quota pause spec §3.3): CreateSelfRelayApproved
+// with one more outcome. In ONE write transaction that takes the writer lock first: (1) a session that already holds its
+// `quota` pause is answered PauseAlready, nothing written; (2) the op and its row are inserted and approved as before, spending
+// a unit; (3) when that finds the chain out of quota, the op and row are rolled back to a savepoint and the pause is written
+// in the same transaction (the session's `quota` row, a `lead` row for each live local member of a lead, the outbox rows) and the
+// answer is PausePaused, no op. A quota PUT cannot slip between the check and the pause: it waits for the lock.
+func (s *Store) CreateSelfRelayOrPause(op team.RelayOp, a team.Approval, hash string, c Close, plan PausePlan) (team.Approval, team.RelayOp, PauseOutcome, error) {
+	return s.createSelfRelay(op, a, hash, c, &plan)
+}
+
+func (s *Store) createSelfRelay(op team.RelayOp, a team.Approval, hash string, c Close, plan *PausePlan) (team.Approval, team.RelayOp, PauseOutcome, error) {
+	fail := func(err error) (team.Approval, team.RelayOp, PauseOutcome, error) {
+		return team.Approval{}, team.RelayOp{}, PauseNone, fmt.Errorf("create approved self relay %s: %w", a.ID, err)
 	}
 	if err := sameSelfRelay(op, a); err != nil {
 		return fail(err)
@@ -37,7 +52,24 @@ func (s *Store) CreateSelfRelayApproved(op team.RelayOp, a team.Approval, hash s
 		return fail(fmt.Errorf("begin: %w", err))
 	}
 	defer tx.Rollback()
-	// The first statement is a write, so SQLite takes the write lock at once.
+	if plan != nil {
+		// The writer lock first (a write statement that touches no row), so what is read next cannot change before it is written.
+		if _, err := tx.Exec(`DELETE FROM pause_bounces WHERE 0`); err != nil {
+			return fail(err)
+		}
+		if s.afterPauseLock != nil {
+			s.afterPauseLock()
+		}
+		if paused, err := hasPauseCauseIn(tx, plan.SessionID, team.PauseCauseQuota); err != nil {
+			return fail(err)
+		} else if paused {
+			return team.Approval{}, team.RelayOp{}, PauseAlready, nil
+		}
+		if _, err := tx.Exec(`SAVEPOINT open_relay`); err != nil {
+			return fail(err)
+		}
+	}
+	// The first statement of the plain begin is a write, so SQLite takes the write lock at once.
 	if err := insertRelayOpIn(tx, op); err != nil {
 		return fail(err)
 	}
@@ -48,6 +80,18 @@ func (s *Store) CreateSelfRelayApproved(op team.RelayOp, a team.Approval, hash s
 		return fail(err)
 	}
 	if _, member, err := s.closeSelfRelayApprovedIn(tx, a.ID, c, a.Origin.SessionID); err != nil {
+		if plan != nil && errors.Is(err, ErrQuotaExhausted) {
+			if _, err := tx.Exec(`ROLLBACK TO open_relay`); err != nil {
+				return fail(err)
+			}
+			if err := s.writePauseIn(tx, *plan); err != nil {
+				return fail(err)
+			}
+			if err := tx.Commit(); err != nil {
+				return fail(fmt.Errorf("commit: %w", err))
+			}
+			return team.Approval{}, team.RelayOp{}, PausePaused, nil
+		}
 		return fail(err)
 	} else if member {
 		return fail(ErrMemberRelayIsLeads)
@@ -67,7 +111,7 @@ func (s *Store) CreateSelfRelayApproved(op team.RelayOp, a team.Approval, hash s
 		return fail(fmt.Errorf("commit: %w", err))
 	}
 	s.notifyOp(claimed.ID)
-	return after, claimed, nil
+	return after, claimed, PauseNone, nil
 }
 
 // sameSelfRelay is nil when op and a are one self relay, as the click's

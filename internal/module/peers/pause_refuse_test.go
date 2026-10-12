@@ -264,3 +264,19 @@ func TestPause_AGateThatCannotAnswerHoldsTheMessage(t *testing.T) {
 		t.Fatalf("the gate error was not logged: %q", logged)
 	}
 }
+
+// The pause's flow notices go out from the paused session's own inbox (the daemon has no other): a self-addressed SendFlow is
+// delivered to that session, where an ordinary send to oneself is still refused (self_target). Mutation gate: no flow exception ->
+// the flow notice is refused (red); the exception for every send -> the ordinary one is delivered (red).
+func TestPause_ASessionIsToldByItsOwnInboxThroughSendFlowOnly(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	req := s.localSendReq()
+	req.To = localAlias + "/" + ipeers.RefID(targetSessionID)
+	req.Text = "[pdx team] 接力額度用完（無人值守），先暫停：手邊這一步收尾後不要開始新的工作，等使用者回來。"
+	assertRefused(t, s.send(adminCtx(), req), http.StatusBadRequest, ipeers.ErrSelfTarget)
+	resp, err := moduleSender{m: s.m}.SendFlow(context.Background(), req)
+	if err != nil || resp.Result != ipeers.ResultDelivered {
+		t.Fatalf("SendFlow to itself: %+v %v", resp, err)
+	}
+	s.recvLine()
+}

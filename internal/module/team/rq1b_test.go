@@ -87,27 +87,8 @@ func TestQuotaRule_OnSpendsOnTheAutomaticApprovalAtBegin(t *testing.T) {
 	}
 }
 
-// Exhausted at begin: the request opens for a person exactly as with unattended off — op awaiting approval, `opened`,
-// nothing spent, never approved. Mutation gate: approve anyway → red.
-func TestQuotaRule_ExhaustedAtBeginOpensForAPerson(t *testing.T) {
-	f := newFixture(t)
-	f.qrule.set(true, nil)
-	f.unatt.set(true)
-	f.events()
-	b := f.begin("sid-1") // no quota row: 0
-	if st := f.rowState(b.RequestID); st != team.StateOpen {
-		t.Fatalf("row %s, want open", st)
-	}
-	if op := f.op(b.Op.ID); op.State != team.RelayAwaitingApproval {
-		t.Fatalf("op %s, want awaiting_approval", op.State)
-	}
-	if ops := f.opsOf(); len(ops) != 1 || ops[0] != "opened" {
-		t.Fatalf("events = %v, want [opened]", ops)
-	}
-	if n := f.selfLeft("sid-1"); n != 0 {
-		t.Fatalf("self_left %d after a refusal, want 0", n)
-	}
-}
+// (An exhausted begin while unattended no longer opens a card: the session is paused instead — UP-2a, pause_enter_test.go. The held
+// card of a request that was OPEN when the switch went on is the sweep's, below.)
 
 // The sweeps hold an exhausted row quietly (one log line, listed in the unattended view) and approve it within one
 // tick of the user raising the quota. Mutation gate: log every tick → red; never release → red.
@@ -320,16 +301,17 @@ func BenchmarkQuotaRule_ApproveWithoutSpend(b *testing.B) {
 	}
 }
 
-// Exhausted at begin: the open request is listed as held at once, before any tick. Mutation gate: don't hold at
-// begin → red.
-func TestQuotaRule_ExhaustedAtBeginIsHeldImmediately(t *testing.T) {
+// A request that was open when the switch went on and finds no quota is listed as held once the sweep has seen it. Mutation gate:
+// don't hold in the sweep → red.
+func TestQuotaRule_AnOpenRequestIsHeldOnceTheSweepSeesIt(t *testing.T) {
 	f := newFixture(t)
 	f.qrule.set(true, nil)
+	b := f.begin("sid-1") // unattended off: opens for a person
 	f.unatt.set(true)
-	b := f.begin("sid-1") // no quota: opens for a person
+	f.m.tick()
 	_, v, raw := f.getUnattended("")
 	if len(v.Held) != 1 || v.Held[0].ID != b.RequestID {
-		t.Fatalf("held = %+v (%s), want the new request before any tick", v.Held, raw)
+		t.Fatalf("held = %+v (%s), want the open request after the sweep", v.Held, raw)
 	}
 	// with the switch off nothing is held for quota: every request waits for a person anyway
 	f.unatt.set(false)
@@ -441,8 +423,9 @@ func TestQuotaRule_ASpendEventFollowsAPutInTheSection(t *testing.T) {
 func TestQuotaRule_AClosedHeldRequestIsForgotten(t *testing.T) {
 	f := newFixture(t)
 	f.qrule.set(true, nil)
+	b := f.begin("sid-1") // unattended off: an open request
 	f.unatt.set(true)
-	b := f.begin("sid-1") // exhausted: held at once
+	f.m.tick() // the sweep holds it: no quota
 	f.m.heldMu.Lock()
 	held := len(f.m.heldQuota)
 	f.m.heldMu.Unlock()

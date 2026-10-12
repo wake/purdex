@@ -537,7 +537,7 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	// line earlier turns a not_deliverable refusal into a nil dereference.
 	// origin.Agent needs no such guard — findOrigin only ever returns a row
 	// whose Agent is non-nil and of type "cc" (send.go, findOrigin).
-	if isLocal &&
+	if isLocal && !isFlow(r.Context()) && // the pause's flow notices are sent from the session's own inbox: the daemon has no other
 		origin.Agent.SessionID == target.Agent.SessionID &&
 		origin.Agent.PID == target.Agent.PID &&
 		origin.Agent.ProcStart == target.Agent.ProcStart {
