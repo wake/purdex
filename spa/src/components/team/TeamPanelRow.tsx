@@ -5,9 +5,11 @@ import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
 import { ContextRing } from './ModelIcon'
 import { MODEL_LABEL } from './model-family'
 import { notInApp, transitionOf } from './seat-flags'
-import { ctxLeftText, ctxTip, useSeatReading } from './team-readings'
+import { ctxLeftText, ctxTip, useRosterSession, useSeatReading } from './team-readings'
 import { firstSentence, useSeatWorkbook } from './seat-workbook'
 import { useMemberDrag } from './useMemberDrag'
+import { PauseReleaseButton } from '../PauseReleaseButton'
+import { pausedLightText } from '../../lib/team/paused-text'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { keepFocus, useReturnFocus } from './panel-focus'
@@ -27,6 +29,7 @@ export function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert,
   const t = useI18nStore((s) => s.t)
   const r = useSeatReading(teamKey, seat.sessionId)
   const modelText = r.model ? MODEL_LABEL[r.model] : r.modelRaw ?? '—'
+  const paused = useRosterSession(teamKey, seat.sessionId)?.paused
   const wb = useSeatWorkbook(seat.hostId, seat.sessionId)
   const status = wb.conv?.status.trim() ?? ''
   const task = firstSentence(status)
@@ -98,6 +101,13 @@ export function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert,
           </button>
         )}
       </div>
+      {/* 被擋下 (UP-5b): the roster row says it is paused; the chip's 解除 goes to the host the seat lives on. */}
+      {paused && (
+        <div data-testid="team-panel-paused" className="pl-[26px] mt-1 flex items-center gap-2 text-[11px] leading-[16px] text-status-warning-text">
+          <span className="min-w-0 flex-1 truncate">{pausedLightText(t, paused.causes, 0)}</span>
+          {seat.hostId !== '' && <PauseReleaseButton hostId={seat.hostId} sessionId={seat.sessionId} />}
+        </div>
+      )}
       {/* Line 2: the task (only with a workbook that has a status); without one the row stays one line */}
       {task !== '' && (
         <div data-testid="team-panel-task" aria-label={t('team.panel.task', { task })} title={status} className="pl-[26px] mt-1 text-[11px] leading-[16px] text-text-secondary truncate">

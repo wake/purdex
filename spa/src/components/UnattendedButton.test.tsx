@@ -6,6 +6,7 @@ import { UnattendedButton } from './UnattendedButton'
 import { useHostStore, type HostRuntime } from '../stores/useHostStore'
 import { useShownHostsStore } from '../stores/useShownHostsStore'
 import { useUnattendedStore, type UnattendedHostEntry } from '../stores/useUnattendedStore'
+import { usePausedStore } from '../stores/usePausedStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { ApprovalApiError } from '../lib/team/approval-api'
@@ -307,5 +308,27 @@ describe('UnattendedButton', () => {
       list().dispatchEvent(ev)
       expect(ev.defaultPrevented).toBe(true)
     })
+  })
+})
+
+describe('UnattendedButton paused dot (UP-5b)', () => {
+  const paused = { session_id: 'S', ref: '_s', title: 't', role: 'solo' as const, causes: ['quota' as const], since: 1, lead_ref: '', bounced: 0 }
+  it('shows a warning dot with an accessible label only when a shown host has a paused session', () => {
+    setup([A, B], { [A]: up, [B]: up }, { [A]: yes(ON), [B]: yes(ON) })
+    usePausedStore.getState().reset()
+    const { unmount } = render(<UnattendedButton />)
+    expect(screen.queryByTestId('unattended-paused-dot')).toBeNull()
+    expect(toggle()).toHaveAccessibleName('無人值守模式：開')
+    unmount()
+    act(() => usePausedStore.getState().set(B, [paused], 1))
+    render(<UnattendedButton />)
+    expect(screen.getByTestId('unattended-paused-dot')).toBeInTheDocument()
+    expect(toggle().getAttribute('aria-label')).toContain('有 1 個 session 被擋下')
+  })
+  it('a paused session on a host that is not shown does not light it', () => {
+    setup([A], { [A]: up }, { [A]: yes(ON) })
+    usePausedStore.getState().set(B, [paused], 1)
+    render(<UnattendedButton />)
+    expect(screen.queryByTestId('unattended-paused-dot')).toBeNull()
   })
 })

@@ -14,6 +14,7 @@ import { CaretDown, MoonStars } from '@phosphor-icons/react'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useUndoToast } from '../stores/useUndoToast'
+import { usePausedStore } from '../stores/usePausedStore'
 import { useUnattendedStore } from '../stores/useUnattendedStore'
 import { useShownRefFilter } from '../lib/shown-hosts'
 import { hostLabel, hostLookOf, useHostLookResolver } from '../lib/host-look'
@@ -44,6 +45,7 @@ export function UnattendedButton() {
   const hostOrder = useHostStore((s) => s.hostOrder)
   const runtime = useHostStore((s) => s.runtime)
   const byHost = useUnattendedStore((s) => s.byHost)
+  const pausedByHost = usePausedStore((s) => s.byHost)
   const isShown = useShownRefFilter()
   const lookOf = useHostLookResolver()
   // A press in flight: a second click (a double-click) sends nothing more. Not state: nothing on screen depends on it.
@@ -56,6 +58,7 @@ export function UnattendedButton() {
   const agg = aggregateUnattended(hostOrder.filter(isShown), runtime, byHost)
   const label = (hostId: string) => hostLabel(hostId, lookOf(hostId))
   const { mode } = agg
+  const pausedN = hostOrder.filter(isShown).reduce((n, h) => n + (pausedByHost[h]?.sessions.length ?? 0), 0)
 
   const press = async () => {
     if (busy.current) return
@@ -87,16 +90,19 @@ export function UnattendedButton() {
         data-testid="unattended-toggle"
         data-state={mode}
         aria-pressed={mode === 'on'}
-        aria-label={t(name)}
+        aria-label={pausedN > 0 ? `${t(name)}, ${t('paused.dot', { n: pausedN })}` : t(name)}
         disabled={mode === 'none'}
         className={`${BUTTON} ${look}`}
-        title={tooltipOf(t, agg, label)}
+        title={pausedN > 0 ? `${tooltipOf(t, agg, label)}\n${t('paused.dot', { n: pausedN })}` : tooltipOf(t, agg, label)}
         // A mouse press leaves focus on the pane (shell polish spec §4).
         onMouseDown={keepFocus}
         onClick={() => { void press() }}
       >
         <MoonStars size={14} weight={mode === 'on' ? 'fill' : 'regular'} />
         {mode === 'on' && <span className="text-xs leading-none">{t('unattended.on_label')}</span>}
+        {pausedN > 0 && (
+          <span data-testid="unattended-paused-dot" aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-status-warning" />
+        )}
       </button>
       <button
         data-testid="unattended-list"

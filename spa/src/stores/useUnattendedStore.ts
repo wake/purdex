@@ -19,14 +19,16 @@ export interface UnattendedHostEntry {
   maxMembersSupport?: UnattendedSupport
   /** Whether the daemon lists `team.edit.v1` (name / label / colour edit): absent until the probe answered. */
   editSupport?: UnattendedSupport
+  /** Whether the daemon lists `team.pause.v1` (the 被擋下 light and release, UP-5b): absent until the probe answered. */
+  pauseSupport?: UnattendedSupport
   /** Absent until the daemon's snapshot arrived. */
   state?: UnattendedState
 }
 
 /** The host's capability flags: all of them follow one rule (unknown on disconnect / before a probe / after a failed probe). */
-const SUPPORT_FLAGS = ['support', 'quotaSupport', 'maxMembersSupport', 'editSupport'] as const
-/** Only the probe answers these three; `support` is also proven by a `team.unattended` frame (unattended-ws.ts). */
-export const PROBE_ONLY_FLAGS = ['quotaSupport', 'maxMembersSupport', 'editSupport'] as const
+const SUPPORT_FLAGS = ['support', 'quotaSupport', 'maxMembersSupport', 'editSupport', 'pauseSupport'] as const
+/** Only the probe answers these; `support` is also proven by a `team.unattended` frame (unattended-ws.ts). */
+export const PROBE_ONLY_FLAGS = ['quotaSupport', 'maxMembersSupport', 'editSupport', 'pauseSupport'] as const
 export type SupportFlag = (typeof SUPPORT_FLAGS)[number]
 
 interface UnattendedStoreState {
@@ -35,6 +37,7 @@ interface UnattendedStoreState {
   setQuotaSupport: (hostId: string, support: UnattendedSupport) => void
   setMaxMembersSupport: (hostId: string, support: UnattendedSupport) => void
   setEditSupport: (hostId: string, support: UnattendedSupport) => void
+  setPauseSupport: (hostId: string, support: UnattendedSupport) => void
   /** Every capability flag of the host (unattended, relay quota, max members, edit) is unknown again: the connection they were
    *  learned on is gone, and a daemon that came back may have lost one (#2309). A no-op for a flag never learned. */
   invalidateSupport: (hostId: string, flags?: readonly SupportFlag[]) => void
@@ -73,6 +76,11 @@ export const useUnattendedStore = create<UnattendedStoreState>()((set) => ({
     const cur = s.byHost[hostId]
     if (cur?.editSupport === editSupport) return s
     return { byHost: { ...s.byHost, [hostId]: { ...cur, support: cur?.support ?? 'unknown', editSupport } } }
+  }),
+  setPauseSupport: (hostId, pauseSupport) => set((s) => {
+    const cur = s.byHost[hostId]
+    if (cur?.pauseSupport === pauseSupport) return s
+    return { byHost: { ...s.byHost, [hostId]: { ...cur, support: cur?.support ?? 'unknown', pauseSupport } } }
   }),
   applyState: (hostId, state) => set((s) => {
     const cur = s.byHost[hostId]
