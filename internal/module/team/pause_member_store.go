@@ -79,10 +79,18 @@ func (s *Store) PauseHeldRow(id string, onSince, at int64) (team.Approval, Pause
 	if err != nil {
 		return fail(err)
 	}
+	// The card and its op are one request (codex attack): the op must exist, still await this card and be the card's own. Anything else
+	// is the boot's repair to make; nothing is closed, paused or queued here.
+	if !hasOp || op.State != team.RelayAwaitingApproval {
+		return row, PauseHeldLost, nil
+	}
+	if row.Kind == team.KindSelfRelay && sameSelfRelay(op, row) != nil {
+		return row, PauseHeldLost, nil
+	}
 	member := MemberPausePlan{OnSince: onSince, At: at}
 	subject := row.Origin.SessionID
 	if row.Kind == team.KindMemberRelay {
-		if !hasOp || (s.localHostID != "" && op.HostID != s.localHostID) {
+		if s.localHostID != "" && op.HostID != s.localHostID {
 			// A member that lives on another host cannot be paused from here (its notice and its message gate are that host's): its
 			// card stays a card for a person.
 			return row, PauseHeldLost, nil
@@ -105,13 +113,11 @@ func (s *Store) PauseHeldRow(id string, onSince, at int64) (team.Approval, Pause
 	if n != 1 {
 		return row, PauseHeldLost, nil
 	}
-	if hasOp && op.State == team.RelayAwaitingApproval {
-		if _, res, err := reportRelayIn(tx, op.ID, RelayReport{State: team.RelayCancelled, Reason: team.RelayReasonPausedNoQuota, At: at}); err != nil || res != ReportApplied {
-			if err == nil {
-				err = fmt.Errorf("op %s did not take cancelled (%v)", op.ID, res)
-			}
-			return fail(err)
+	if _, res, err := reportRelayIn(tx, op.ID, RelayReport{State: team.RelayCancelled, Reason: team.RelayReasonPausedNoQuota, At: at}); err != nil || res != ReportApplied {
+		if err == nil {
+			err = fmt.Errorf("op %s did not take cancelled (%v)", op.ID, res)
 		}
+		return fail(err)
 	}
 	if paused, err := hasPauseCauseIn(tx, subject, team.PauseCauseQuota); err != nil {
 		return fail(err)

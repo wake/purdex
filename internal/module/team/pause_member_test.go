@@ -271,6 +271,45 @@ func TestSweepPause_TheStoreCASRefusesAnOverdueRow(t *testing.T) {
 	}
 }
 
+// The card and its op are one request (codex attack): a card whose op is missing, no longer awaiting, or another session's is left
+// alone — nothing is closed, paused or queued.
+// Mutation gate: drop the op precondition → the card is cancelled and the session paused with a live op behind it (red).
+func TestSweepPause_ACardWhoseOpIsNotItsAwaitingOpIsLeftAlone(t *testing.T) {
+	for _, c := range []struct{ name, sql string }{
+		{"op missing", `DELETE FROM relay_ops WHERE id = ?`},
+		{"op already moved on", `UPDATE relay_ops SET state = 'claimed' WHERE id = ?`},
+		{"op of another session", `UPDATE relay_ops SET session_id = 'sid-other' WHERE id = ?`},
+	} {
+		for _, kind := range []string{"self", "member"} {
+			f := newFixture(t)
+			var rowID, opID string
+			if kind == "self" {
+				b := f.heldSelf()
+				rowID, opID = b.RequestID, b.Op.ID
+			} else {
+				op, row := f.awaitingMemberRelay(rid(430), rid(431))
+				f.setPool("sid-1", 0)
+				f.unatt.set(true)
+				f.qrule.set(true, nil)
+				rowID, opID = row.ID, op.ID
+			}
+			if kind == "member" && c.name == "op of another session" {
+				continue // a member card's op is found by the card's id, not by its session
+			}
+			if _, err := f.m.store.db.Exec(c.sql, opID); err != nil {
+				t.Fatal(err)
+			}
+			_, res, err := f.m.store.PauseHeldRow(rowID, 1, f.clock.Load())
+			if err != nil || res != PauseHeldLost {
+				t.Fatalf("%s/%s: PauseHeldRow = %v, %v", kind, c.name, res, err)
+			}
+			if len(f.pauses()) != 0 || len(f.outbox()) != 0 || f.rowState(rowID) != team.StateOpen {
+				t.Fatalf("%s/%s: pauses %d, outbox %d, row %s: want nothing written", kind, c.name, len(f.pauses()), len(f.outbox()), f.rowState(rowID))
+			}
+		}
+	}
+}
+
 // The gate closed: the sweep holds the card as it always did.
 func TestSweepPause_GateClosedHoldsTheCardAsToday(t *testing.T) {
 	if pauseEntryEnabled {
