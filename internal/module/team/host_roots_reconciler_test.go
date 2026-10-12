@@ -101,7 +101,10 @@ func TestRootsReconciler_RowsGoInOrderOneCallEach(t *testing.T) {
 	f.change("c2", "hostA", "remove", "/w/2")
 	f.change("c3", "hostA", "add", "/w/3")
 	fc.script = func(host string, body map[string]any) peersmod.CallResult {
-		return rootsOK(body, "unchanged", fmt.Sprint(body["path"]), nil, 1)
+		if body["op"] == "remove" {
+			return rootsOK(body, "unchanged", "", nil, 1)
+		}
+		return rootsOK(body, "unchanged", fmt.Sprint(body["path"]), []string{fmt.Sprint(body["path"])}, 1)
 	}
 	f.m.drainRootsHost("hostA")
 	var ids []any
@@ -317,13 +320,16 @@ func TestRootsReconciler_AnAnswerForAnotherRequestIsNotASettle(t *testing.T) {
 // Mutation gate: accept a body with only id and host_id → the row is done with an empty cache (red).
 func TestRootsReconciler_AnIncompleteSuccessBodyIsNotASettle(t *testing.T) {
 	for name, body := range map[string]string{
-		"only id and host": `{"id":"c1","host_id":"hostA"}`,
-		"no grant":         `{"id":"c1","host_id":"hostA","op":"add","result":"added","path":"/w"}`,
-		"null roots":       `{"id":"c1","host_id":"hostA","op":"add","result":"added","path":"/w","team_roots":null,"team_roots_rev":3}`,
-		"no rev":           `{"id":"c1","host_id":"hostA","op":"add","result":"added","path":"/w","team_roots":["/w"]}`,
-		"another op":       `{"id":"c1","host_id":"hostA","op":"remove","result":"removed","path":"/w","team_roots":[],"team_roots_rev":3}`,
-		"unknown result":   `{"id":"c1","host_id":"hostA","op":"add","result":"maybe","path":"/w","team_roots":["/w"],"team_roots_rev":3}`,
-		"another host":     `{"id":"c1","host_id":"hostB","op":"add","result":"added","path":"/w","team_roots":["/w"],"team_roots_rev":3}`,
+		"only id and host":  `{"id":"c1","host_id":"hostA"}`,
+		"no grant":          `{"id":"c1","host_id":"hostA","op":"add","result":"added","path":"/w"}`,
+		"null roots":        `{"id":"c1","host_id":"hostA","op":"add","result":"added","path":"/w","team_roots":null,"team_roots_rev":3}`,
+		"no rev":            `{"id":"c1","host_id":"hostA","op":"add","result":"added","path":"/w","team_roots":["/w"]}`,
+		"another op":        `{"id":"c1","host_id":"hostA","op":"remove","result":"removed","path":"/w","team_roots":[],"team_roots_rev":3}`,
+		"add said removed":  `{"id":"c1","host_id":"hostA","op":"add","result":"removed","path":"/w","team_roots":["/w"],"team_roots_rev":3}`,
+		"add, empty path":   `{"id":"c1","host_id":"hostA","op":"add","result":"added","path":"","team_roots":[],"team_roots_rev":3}`,
+		"add, not in roots": `{"id":"c1","host_id":"hostA","op":"add","result":"added","path":"/w","team_roots":["/other"],"team_roots_rev":3}`,
+		"unknown result":    `{"id":"c1","host_id":"hostA","op":"add","result":"maybe","path":"/w","team_roots":["/w"],"team_roots_rev":3}`,
+		"another host":      `{"id":"c1","host_id":"hostB","op":"add","result":"added","path":"/w","team_roots":["/w"],"team_roots_rev":3}`,
 	} {
 		f, fc := rootsFixture(t, "hostA")
 		f.change("c1", "hostA", "add", "/w")
@@ -541,5 +547,59 @@ func TestRootsReconciler_TheUnpairAlsoDropsTheHostsCommands(t *testing.T) {
 	f.m.drainRootsHost("hostA")
 	if f.changeRow("c1").State != RootChangeDropped || f.cmdState("cmd1").State != cmdDropped {
 		t.Fatalf("row %+v, command %+v", f.changeRow("c1"), f.cmdState("cmd1"))
+	}
+}
+
+// A remove that says removed must leave its matched root out of the roots it reports; one that is still there did not apply it.
+func TestRootsReconciler_ARemoveStillInTheReportedRootsIsNotASettle(t *testing.T) {
+	for name, body := range map[string]string{
+		"removed but still listed": `{"id":"c1","host_id":"hostA","op":"remove","result":"removed","path":"/w","team_roots":["/w"],"team_roots_rev":3}`,
+		"removed with no path":     `{"id":"c1","host_id":"hostA","op":"remove","result":"removed","path":"","team_roots":[],"team_roots_rev":3}`,
+		"remove said added":        `{"id":"c1","host_id":"hostA","op":"remove","result":"added","path":"/w","team_roots":["/w"],"team_roots_rev":3}`,
+	} {
+		f, fc := rootsFixture(t, "hostA")
+		f.change("c1", "hostA", "remove", "/w")
+		raw := body
+		fc.script = func(string, map[string]any) peersmod.CallResult {
+			return peersmod.CallResult{Class: peersmod.ClassDone, Status: 200, Body: json.RawMessage(raw)}
+		}
+		f.m.drainRootsHost("hostA")
+		if f.changeRow("c1").State != RootChangePending {
+			t.Fatalf("%s: row = %+v", name, f.changeRow("c1"))
+		}
+	}
+	f, fc := rootsFixture(t, "hostA")
+	f.change("c1", "hostA", "remove", "/w")
+	fc.script = func(string, map[string]any) peersmod.CallResult {
+		return peersmod.CallResult{Class: peersmod.ClassDone, Status: 200, Body: json.RawMessage(`{"id":"c1","host_id":"hostA","op":"remove","result":"removed","path":"/w","team_roots":["/x"],"team_roots_rev":4}`)}
+	}
+	f.m.drainRootsHost("hostA")
+	if f.changeRow("c1").State != RootChangeDone {
+		t.Fatalf("a real removal was refused: %+v", f.changeRow("c1"))
+	}
+}
+
+// The relation ends with the cache: a re-paired host whose grant starts again at rev 0 is not frozen out by what the earlier relation said.
+// Mutation gate: keep host_roots_seen when the host is unpaired → the rev-0 answer is ignored forever (red).
+func TestRootsReconciler_UnpairingForgetsTheCachedRoots(t *testing.T) {
+	f, fc := rootsFixture(t, "hostA")
+	if err := f.m.store.UpsertHostRootsSeen("hostA", []string{"/old"}, 9, 100); err != nil {
+		t.Fatal(err)
+	}
+	f.change("c1", "hostA", "add", "/w")
+	fc.paired = map[string]bool{"hostA": false}
+	f.m.drainRootsHost("hostA") // unpaired: the change is dropped, the cache forgotten
+	if _, ok, _ := f.m.store.HostRootsSeen("hostA"); ok {
+		t.Fatal("the cache of an unpaired host survived")
+	}
+	fc.paired = nil // paired again; its grant starts over at rev 0
+	f.change("c2", "hostA", "add", "/w")
+	fc.script = func(host string, body map[string]any) peersmod.CallResult {
+		return rootsOK(body, "added", "/w", []string{"/w"}, 0)
+	}
+	f.m.drainRootsHost("hostA")
+	seen, ok, _ := f.m.store.HostRootsSeen("hostA")
+	if !ok || seen.Rev != 0 || len(seen.Roots) != 1 || seen.Roots[0] != "/w" {
+		t.Fatalf("cache = %+v ok=%v, want the new relation's roots", seen, ok)
 	}
 }

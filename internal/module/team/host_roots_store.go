@@ -169,16 +169,21 @@ func (s *Store) RefuseRootChange(id, code, detail string, at int64) error {
 	return nil
 }
 
-// DropRootChangesOfHost drops the host's pending changes (it is no longer paired); the number dropped.
+// DropRootChangesOfHost drops the host's pending changes and forgets its cached roots (it is no longer paired); the number dropped.
 func (s *Store) DropRootChangesOfHost(hostID string, at int64) (int64, error) {
 	return dropRootChangesIn(s.db, hostID, at)
 }
 
-// dropRootChangesIn is DropRootChangesOfHost on a caller's transaction: unpairHost drops them with the rest of the relation.
+// dropRootChangesIn is DropRootChangesOfHost on a caller's transaction: unpairHost ends the host's root changes with the rest of the
+// relation — its pending changes are dropped and its cached roots forgotten. The cache is monotonic in rev, and a re-paired host's
+// grant may start again from rev 0: what an earlier relation said must not freeze the new one's cache (codex).
 func dropRootChangesIn(ex dbtx, hostID string, at int64) (int64, error) {
 	res, err := ex.Exec(`UPDATE host_root_changes SET state = 'dropped', first_401_at = 0, updated_at = ? WHERE host_id = ? AND state = 'pending'`, at, hostID)
 	if err != nil {
 		return 0, fmt.Errorf("drop root changes of %s: %w", hostID, err)
+	}
+	if _, err := ex.Exec(`DELETE FROM host_roots_seen WHERE host_id = ?`, hostID); err != nil {
+		return 0, fmt.Errorf("forget the roots of %s: %w", hostID, err)
 	}
 	return res.RowsAffected()
 }

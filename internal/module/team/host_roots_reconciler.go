@@ -6,6 +6,7 @@ package teammod
 
 import (
 	"encoding/json"
+	"slices"
 	"sync"
 	"time"
 
@@ -292,6 +293,25 @@ func completeRootsAnswer(body []byte, c HostRootChange) (rootsAnswer, string) {
 		return a, "unknown result"
 	case a.TeamRoots == nil || a.TeamRootsRev == nil:
 		return a, "no team_roots / team_roots_rev"
+	}
+	// the result must fit the op and the grant it reports: an add leaves its canonical path in the roots; a remove that removed
+	// leaves its matched root out of them (a body that says otherwise did not apply the change)
+	has := func(p string) bool { return p != "" && slices.Contains(*a.TeamRoots, p) }
+	switch c.Op {
+	case team.RootsOpAdd:
+		if a.Result == team.RootsResultRemoved {
+			return a, "an add answered removed"
+		}
+		if !has(a.Path) {
+			return a, "an add whose path is not in the roots it reports"
+		}
+	case team.RootsOpRemove:
+		if a.Result == team.RootsResultAdded {
+			return a, "a remove answered added"
+		}
+		if a.Result == team.RootsResultRemoved && (a.Path == "" || has(a.Path)) {
+			return a, "a remove that is still in the roots it reports"
+		}
 	}
 	return a, ""
 }
