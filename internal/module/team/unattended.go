@@ -335,6 +335,19 @@ func (m *Module) forgetClosedRefusals(open []team.Approval) {
 	}
 }
 
+// autoApprovableRow is whether the daemon may approve a for the person: its kind is AutoApprovable and it is not a re-ask card
+// (a self_relay row opened with a release token, payload reask — a person's alone, UP-3b).
+func autoApprovableRow(a team.Approval) bool {
+	if !team.AutoApprovable(a.Kind) {
+		return false
+	}
+	if a.Kind != team.KindSelfRelay {
+		return true
+	}
+	var p team.SelfRelayPayload
+	return json.Unmarshal(a.Payload, &p) != nil || !p.Reask
+}
+
 // sweepTick is sweepUnattended's why for the tick's reconciliation, whose
 // summary line is logged only when it approved something (a row a rule
 // refuses is retried every second).
@@ -352,7 +365,7 @@ func (m *Module) sweepUnattended(why string) (approved, pending int) {
 		return 0, 0
 	}
 	for _, a := range open {
-		if !team.AutoApprovable(a.Kind) {
+		if !autoApprovableRow(a) {
 			continue
 		}
 		if ok, still := m.autoApprove(a); ok {
@@ -380,7 +393,7 @@ func (m *Module) sweepUnattended(why string) (approved, pending int) {
 // since (review M2), against a list re-read under createMu; it takes
 // createMu for that only while some refusal is remembered.
 func (m *Module) reconcileUnattended(open []team.Approval) {
-	sweep := slices.ContainsFunc(open, func(a team.Approval) bool { return team.AutoApprovable(a.Kind) })
+	sweep := slices.ContainsFunc(open, autoApprovableRow)
 	if !sweep && m.notAutoApprovedN.Load() == 0 {
 		return
 	}

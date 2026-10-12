@@ -532,6 +532,7 @@ func (m *Module) Init(c *core.Core) error {
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+FactsRoute, m.handleTeamFact)                     // cross-host team facts (X3b-2); a host principal's, not the admin's
 	mux.HandleFunc("POST "+team.ProxyRoute, m.handleTeamProxy)               // a remote member's report / task calls, owner-scoped (X6)
+	mux.HandleFunc("POST "+team.PausedReleaseRoute, m.handlePausedRelease)   // a person releases one paused session (UP-3b)
 	mux.HandleFunc("GET "+team.PausedRoute, m.handlePausedGet)               // the sessions paused because an unattended session had no relay quota (UP-1a)
 	mux.HandleFunc("POST "+team.RootsChangeRoute, m.handleRootsChange)       // a lead host adds / removes / reads its roots (cross-host roots spec, XR-1); a host principal's
 	mux.HandleFunc("POST "+CommandsRoute, m.handleTeamCommand)               // cross-host team commands (X2b); a host principal's, not the admin's

@@ -223,31 +223,18 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "unknown reason", nil)
 		return
 	}
+	if req.ReaskID != "" {
+		if u, err := uuid.Parse(req.ReaskID); err != nil || u.String() != strings.ToLower(req.ReaskID) {
+			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "reask_id must be a UUID", nil)
+			return
+		}
+	}
 	if req.RequestID != "" {
 		if u, err := uuid.Parse(req.RequestID); err != nil || u.Version() != 4 || u.Variant() != uuid.RFC4122 {
 			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "request_id must be a UUID v4", nil)
 			return
 		}
-		// A replay (the CLI's retry after a lost response, PR #1726 A-1):
-		// the request already opened its op — answer with that op, in
-		// whatever state it is now, never a second one.
-		if op, ok, err := m.store.RelayOpByRequest(req.RequestID); err != nil {
-			m.logf("[team] relay begin %s: replay lookup %s: %v", req.SessionID, req.RequestID, err)
-			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
-			return
-		} else if ok {
-			// Same id ⇒ same request: the session AND the payload must match
-			// (Store.Create's idempotency rule, "same hash is a retry, a
-			// different hash is a conflicting reuse"); anything else is 409.
-			if op.SessionID != req.SessionID {
-				m.writeErr(w, http.StatusConflict, team.ErrBadRequest, "request_id belongs to another session's relay", nil)
-				return
-			}
-			if !sameBeginPayload(m, op, req) {
-				m.writeErr(w, http.StatusConflict, team.ErrBadRequest, "request_id reused with a different used_percentage, window, manual, reason or idle_minutes", nil)
-				return
-			}
-			m.writeJSON(w, http.StatusCreated, team.RelayBeginResponse{Op: op, RequestID: op.RequestID})
+		if m.replayOfBegin(w, req) {
 			return
 		}
 	}
@@ -315,6 +302,9 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "daemon is stopping", nil)
 		return
 	}
+	if m.replayOfBegin(w, req) { // the same request may have won the lock while this one waited
+		return
+	}
 	// At most one open self-relay per session (spec §8.7 (c)): the op is
 	// the authority; the approval row follows it. An op still in
 	// awaiting_approval whose row is no longer open (or never got written)
@@ -360,6 +350,21 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := m.now()
+	// A valid release token (spec §3.4, UP-3b) makes the begin a card for a person: this session's, unspent, under 24 h. Read under
+	// createMu, where the reconciliation's prune also runs; the card's transaction spends it.
+	reask := false
+	if req.ReaskID != "" {
+		var err error
+		if reask, err = m.store.ReleaseTokenValid(req.ReaskID, req.SessionID, now-team.PauseTokenTTLMs); err != nil {
+			m.logf("[team] relay begin %s: %v", req.SessionID, err)
+			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+			return
+		}
+	}
+	sp.Reask = reask
+	if reask {
+		sp.ReaskID = req.ReaskID
+	}
 	opID, reqID := m.newID(), req.RequestID
 	if reqID == "" {
 		reqID = m.newID()
@@ -377,6 +382,22 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: now, DeadlineAt: now + team.SelfRelayDeadlineS*1000, LeaseUntil: now + team.LeaseS*1000,
 	}
 	hash := requestHash(team.KindSelfRelay, origin.SessionID, team.SelfRelayDeadlineS, payload)
+	if reask {
+		// A re-ask after a pause: never paused, never approved for the person, whatever the switch and the quota say.
+		stored, err := m.store.CreateSelfRelayCard(op, row, hash, req.ReaskID, now-team.PauseTokenTTLMs)
+		if err != nil {
+			if errors.Is(err, ErrRelayOpOpen) && m.writeRelayOpen(w, req.SessionID) {
+				return
+			}
+			m.logf("[team] relay begin %s: reask card: %v", req.SessionID, err)
+			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+			return
+		}
+		m.logf("[team] relay op %s opened: self, origin=%s (%s) request=%s, a re-ask after a pause: a card for a person", opID, origin.Ref, origin.SessionID, reqID)
+		m.broadcast("opened", &stored)
+		m.writeJSON(w, http.StatusCreated, team.RelayBeginResponse{Op: op, RequestID: reqID})
+		return
+	}
 	exhausted := false // the chain has no quota left: the request opens for a person below and is listed as held at once
 	if m.unattendedOn() {
 		var done bool
@@ -411,6 +432,36 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 	m.logf("[team] relay op %s opened: self, origin=%s (%s) used=%.0f%% request=%s", opID, origin.Ref, origin.SessionID, req.UsedPercentage, reqID)
 	m.broadcast("opened", &stored)
 	m.writeJSON(w, http.StatusCreated, team.RelayBeginResponse{Op: op, RequestID: reqID})
+}
+
+// replayOfBegin answers a begin whose request_id already opened an op (the CLI's retry after a lost response, PR #1726 A-1) with that
+// op, in whatever state it is now, never a second one; true when it answered (a replay or an error). It runs before createMu and again
+// under it: two identical begins that arrive together must both get the op the first one opened (codex, UP-3b).
+func (m *Module) replayOfBegin(w http.ResponseWriter, req team.RelayBeginRequest) bool {
+	if req.RequestID == "" {
+		return false
+	}
+	op, ok, err := m.store.RelayOpByRequest(req.RequestID)
+	if err != nil {
+		m.logf("[team] relay begin %s: replay lookup %s: %v", req.SessionID, req.RequestID, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return true
+	}
+	if !ok {
+		return false
+	}
+	// Same id ⇒ same request: the session AND the payload must match (Store.Create's idempotency rule, "same hash is a retry, a
+	// different hash is a conflicting reuse"); anything else is 409.
+	if op.SessionID != req.SessionID {
+		m.writeErr(w, http.StatusConflict, team.ErrBadRequest, "request_id belongs to another session's relay", nil)
+		return true
+	}
+	if !sameBeginPayload(m, op, req) {
+		m.writeErr(w, http.StatusConflict, team.ErrBadRequest, "request_id reused with a different used_percentage, window, manual, reason or idle_minutes", nil)
+		return true
+	}
+	m.writeJSON(w, http.StatusCreated, team.RelayBeginResponse{Op: op, RequestID: op.RequestID})
+	return true
 }
 
 // writeRelayOpen answers 409 relay_open with the session's open op; false
@@ -592,6 +643,16 @@ func sameBeginPayload(m *Module, op team.RelayOp, req team.RelayBeginRequest) bo
 	var sp team.SelfRelayPayload
 	if err := json.Unmarshal(row.Payload, &sp); err != nil {
 		return false
+	}
+	if sp.Reask && req.ReaskID != sp.ReaskID {
+		return false // a re-ask replayed with another token, or none, is not the same request
+	}
+	if req.ReaskID != "" && !sp.Reask {
+		// An ordinary begin replayed with a release token that is valid now is another request, not a retry: answering it with the
+		// ordinary op would leave the token unspent and the person's card unopened (codex R1).
+		if valid, err := m.store.ReleaseTokenValid(req.ReaskID, op.SessionID, m.now()-team.PauseTokenTTLMs); err != nil || valid {
+			return false
+		}
 	}
 	return sp.Window == req.Window && sp.Manual == req.Manual && sp.Reason == req.Reason && sp.IdleMinutes == req.IdleMinutes
 }

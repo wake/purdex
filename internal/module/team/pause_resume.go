@@ -21,8 +21,7 @@ func (m *Module) resumePauses(why string, all bool) int {
 		return 0
 	}
 	scope := ResumeScope{All: all || !st.On, OnSinceNot: st.Since}
-	res, err := m.store.ResumePauses(scope, m.now(),
-		func(sid string) bool { return m.modProtocolAtLeast(sid, team.MinPauseReaskModVersion) }, uuid.NewString)
+	res, err := m.store.ResumePauses(scope, m.now(), m.speaksReask, uuid.NewString)
 	if err != nil {
 		m.logf("[team] resume pauses (%s): %v", why, err)
 		return 0
@@ -55,4 +54,23 @@ func (m *Module) reconcilePauses(force bool) {
 	} else if n > 0 {
 		m.logf("[team] pruned %d release token(s) older than 24 h", n)
 	}
+}
+
+// speaksReask: the session's mod (its persisted hello) speaks the reask protocol.
+func (m *Module) speaksReask(sid string) bool {
+	return m.modProtocolAtLeast(sid, team.MinPauseReaskModVersion)
+}
+
+// resumeOne is the release of one session (spec §3.4 "Release one"): the resume group for sid and the `lead`-cause members it paused
+// with it. It returns the number of sessions no longer paused. Caller holds createMu.
+func (m *Module) resumeOne(sid string) (int, error) {
+	res, err := m.store.ResumePauses(ResumeScope{Release: sid}, m.now(), m.speaksReask, uuid.NewString)
+	if err != nil {
+		return 0, err
+	}
+	if res.Rows > 0 {
+		m.rosterChanged()
+		m.kickPauseOutbox()
+	}
+	return res.Sessions, nil
 }

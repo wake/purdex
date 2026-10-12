@@ -25,7 +25,7 @@ import (
 // These are the mod's calls (lead-team-relay spec §8.3) plus `pdx relay <ref>`
 // (the lead's member relay, P6-5).
 const relayUsage = "usage: pdx relay hello --session <sid> [--version <v>] [--agent cc] [--config <path>]\n" +
-	"       pdx relay begin --self --session <sid> --used <pct> --window <n> [--manual] [--reason idle --idle-minutes <n>] [--config <path>]\n" +
+	"       pdx relay begin --self --session <sid> --used <pct> --window <n> [--manual] [--reason idle --idle-minutes <n>] [--reask <uuid>] [--config <path>]\n" +
 	"       pdx relay ask --session <sid> --used <pct> --window <n> [--request-id <uuid>] [--config <path>]\n" +
 	"       pdx relay wait <request_id> [--wait 9m] [--config <path>]\n" +
 	"       pdx relay self off|on|status --session <sid> [--config <path>]\n" +
@@ -258,11 +258,14 @@ func runRelayBegin(ctx context.Context, args []string, stdout, stderr io.Writer,
 	fs.IntVar(&req.Window, "window", -1, "")           // -1: not given (the grammar requires it)
 	fs.StringVar(&req.Reason, "reason", "", "")        // "" or idle (idle relay): why the mod asks
 	fs.IntVar(&req.IdleMinutes, "idle-minutes", 0, "") // 1–59 iff --reason idle
+	fs.StringVar(&req.ReaskID, "reask", "", "")        // the release token of a re-ask after a pause (UP-3b): a UUID
 	cfgPath, ok := relayFlags(fs, args, stderr)
 	if !ok {
 		return ExitUsage
 	}
 	switch {
+	case req.ReaskID != "" && uuid.Validate(req.ReaskID) != nil:
+		return relayUsageErr(stderr, "--reask 必須是 UUID")
 	case fs.NArg() != 0:
 		return relayUsageErr(stderr, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
 	case req.Reason != "" && req.Reason != team.RelayBeginReasonIdle:
