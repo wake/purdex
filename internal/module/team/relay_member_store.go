@@ -66,6 +66,12 @@ func (s *Store) createMemberRelayOp(op team.RelayOp, gate MemberRelayGate, enque
 	needs := false
 	if gate != nil {
 		if needs, err = gate(tx, &op); err != nil {
+			if errors.Is(err, errMemberPaused) { // the gate wrote the member's pause: that is committed, with no op
+				if cerr := tx.Commit(); cerr != nil {
+					return fail(fmt.Errorf("commit: %w", cerr))
+				}
+				return team.RelayOp{}, false, err
+			}
 			return fail(err)
 		}
 	}

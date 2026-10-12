@@ -287,6 +287,9 @@ func (m *Module) autoApprove(a team.Approval) (approved, open bool) {
 			return true, false
 		}
 	}
+	if pauseEntryOn && errors.Is(err, ErrQuotaExhausted) && m.pauseHeldCard(a) {
+		return false, false // the card is cancelled with its op and its session is paused (spec §3.3)
+	}
 	if m.notAutoApproved[a.ID] != err.Error() {
 		m.rememberRefusal(a.ID, err.Error())
 		m.logf("[team] approval %s not auto-approved: %v", a.ID, err)
@@ -297,6 +300,28 @@ func (m *Module) autoApprove(a team.Approval) (approved, open bool) {
 		m.unhold(a.ID)
 	}
 	return false, true
+}
+
+// pauseHeldCard is the sweep's pause of a held card whose auto-approve found no quota (spec §3.3, "switch on with open held cards"):
+// the row and its op are cancelled and the session paused in one transaction (Store.PauseHeldRow). It says whether it did. A row a
+// decide, a timeout or a gone member got to first is not paused and falls back to the held handling; a storage error is logged and
+// does the same, so the next tick tries again. Caller holds createMu, with the switch read on.
+func (m *Module) pauseHeldCard(a team.Approval) bool {
+	st, _ := m.unattended.Unattended()
+	after, res, err := m.store.PauseHeldRow(a.ID, st.Since, m.now())
+	if err != nil {
+		m.logf("[team] approval %s: pause at the sweep: %v", a.ID, err)
+		return false
+	}
+	if res != PauseHeldPaused {
+		return false
+	}
+	m.forgetRefusal(a.ID)
+	m.logf("[team] approval %s (%s, origin %s): no relay quota while unattended: cancelled, the session is paused", a.ID, a.Kind, a.Origin.Ref)
+	m.announceClosed(after, nil)
+	m.rosterChanged()
+	m.kickPauseOutbox()
+	return true
 }
 
 // rememberRefusal records reason as the one logged for open row id, and

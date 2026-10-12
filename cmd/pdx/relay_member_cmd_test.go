@@ -145,6 +145,24 @@ func TestRelayCmd_RefusalsExit13CodeLast(t *testing.T) {
 	}
 }
 
+// The lead's relay of a member the pool could not pay for while unattended (UP-2b): exit 13, the code is the last stderr token,
+// stdout has no op, and --wait does not poll. Mutation gate: leave member_paused_no_quota out of relayRefusalCodes → exit 1 (red).
+func TestRelayCmd_MemberPausedNoQuotaExit13NoOpNoPoll(t *testing.T) {
+	for _, args := range [][]string{{"_mem001"}, {"_mem001", "--wait", "1m"}} {
+		d := &fakeMemberRelayDaemon{create: func(int) (int, any) {
+			return 409, team.APIError{Error: team.ErrMemberPausedNoQuota, Detail: "worker（_mem001）接力額度用完，已暫停"}
+		}, polls: []team.RelayOp{{ID: "op-x", State: team.RelayRequested}}}
+		c, out, errs := driveMemberRelay(t, d, "/tmp/x.sock", args...)
+		toks := strings.Fields(errs)
+		if c != ExitRefused || len(toks) == 0 || toks[len(toks)-1] != team.ErrMemberPausedNoQuota {
+			t.Errorf("%v: exit %d err=%q", args, c, errs)
+		}
+		if out != "" || d.pollN != 0 {
+			t.Errorf("%v: stdout %q, %d polls, want none", args, out, d.pollN)
+		}
+	}
+}
+
 // A lost response: the client retries inside its grace and the SAME id goes out each time.
 func TestRelayCmd_ReplayAfterALostResponseIsTheSameOp(t *testing.T) {
 	calls := 0

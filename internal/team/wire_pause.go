@@ -61,6 +61,10 @@ type RosterPause struct {
 // instead of getting a card (spec §3.3). No op was opened. An already paused session gets the same answer.
 const ErrPausedNoQuota = "paused_no_quota"
 
+// ErrMemberPausedNoQuota is the 409 the lead's `pdx relay _<ref>` gets when the member's relay found no pool left while the host is
+// unattended: the member was paused instead of getting a card (spec §3.3, UP-2b). No op was opened. detail names the member.
+const ErrMemberPausedNoQuota = "member_paused_no_quota"
+
 // Kinds of a pause_outbox row (spec §3.1): a notice text to the session, a push request to the phones.
 const (
 	PauseOutboxNotice = "notice"
@@ -69,8 +73,9 @@ const (
 
 // The texts the daemon says on entering a pause (spec §3.3), word for word.
 const (
-	PauseNoticeSelf       = "[pdx team] 接力額度用完（無人值守），先暫停：手邊這一步收尾後不要開始新的工作，等使用者回來。"
-	PauseNoticeLeadPaused = "[pdx team] lead 已暫停（接力額度用完）：手邊這一步收尾後暫停，等 lead 指示。"
+	PauseNoticeSelf        = "[pdx team] 接力額度用完（無人值守），先暫停：手邊這一步收尾後不要開始新的工作，等使用者回來。"
+	PauseNoticeLeadPaused  = "[pdx team] lead 已暫停（接力額度用完）：手邊這一步收尾後暫停，等 lead 指示。"
+	PauseNoticeMemberQuota = "[pdx team] lead 安排：接力額度用完，先暫停，等 lead 指示。"
 )
 
 // PauseNotifyKey is the service-registry key under which the push module publishes its PauseNotifier.

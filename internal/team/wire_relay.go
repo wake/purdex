@@ -52,6 +52,7 @@ const (
 	RelayBeginReasonIdle         = "idle"                // begin's reason for an idle relay ask (the threshold ask has none)
 	RelayReasonResumed           = "resumed"             // cancelled: a prompt arrived while an idle ask was open (idle relay D6); only an idle op takes it
 	RelayReasonAbandoned         = "abandoned"           // cancelled
+	RelayReasonPausedNoQuota     = "paused_no_quota"     // cancelled: the held card's session was paused when the unattended switch went on (UP-2b)
 	RelayReasonModReloaded       = "mod_reloaded"        // failed: the mod reloaded (pdx setup) while the write was under way (#2441)
 )
 
