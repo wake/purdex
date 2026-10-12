@@ -18,9 +18,23 @@ import (
 
 // fakeUnattended is the host config's unattended switch in these tests.
 type fakeUnattended struct {
-	mu  sync.Mutex
-	on  bool
-	err error
+	mu    sync.Mutex
+	on    bool
+	err   error
+	since int64 // the Since the switch reports; 0 = 1
+}
+
+func (f *fakeUnattended) setSince(v int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.since = v
+}
+
+func (f *fakeUnattended) sinceLocked() int64 {
+	if f.since == 0 {
+		return 1
+	}
+	return f.since
 }
 
 func (f *fakeUnattended) Unattended() (team.UnattendedState, error) {
@@ -29,7 +43,7 @@ func (f *fakeUnattended) Unattended() (team.UnattendedState, error) {
 	if f.err != nil {
 		return team.UnattendedState{}, f.err
 	}
-	return team.UnattendedState{On: f.on, Since: 1}, nil
+	return team.UnattendedState{On: f.on, Since: f.sinceLocked()}, nil
 }
 
 func (f *fakeUnattended) SetUnattended(on bool, by team.Client, now int64) (team.UnattendedState, bool, error) {
@@ -37,7 +51,7 @@ func (f *fakeUnattended) SetUnattended(on bool, by team.Client, now int64) (team
 	defer f.mu.Unlock()
 	changed := f.on != on
 	f.on = on
-	return team.UnattendedState{On: on, Since: 1, ChangedAt: now, ChangedBy: &by}, changed, nil
+	return team.UnattendedState{On: on, Since: f.sinceLocked(), ChangedAt: now, ChangedBy: &by}, changed, nil
 }
 
 func (f *fakeUnattended) set(on bool) { _, _, _ = f.SetUnattended(on, appClient(), 1) }

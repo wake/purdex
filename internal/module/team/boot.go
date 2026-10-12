@@ -76,6 +76,10 @@ func (m *Module) bootSteps() []bootStep {
 			}
 			return nil
 		}},
+		{"pauses", false, func() error {
+			m.reconcilePauses(true) // a pause whose switch went off (or on again) while the daemon was down (UP-3a)
+			return nil
+		}},
 	}
 }
 

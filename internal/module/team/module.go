@@ -102,6 +102,8 @@ type Module struct {
 	// the tick reads without createMu (rememberRefusal / forgetRefusal).
 	notAutoApproved  map[string]string
 	notAutoApprovedN atomic.Int64
+	// pauseReconcileAt is when the pause reconciliation last ran (unix ms); the tick runs it again after 30 s (UP-3a).
+	pauseReconcileAt atomic.Int64
 	titles           TitleMover
 	// usage is the agent module's per-session statusline reading; begin
 	// copies model_id / effort from it into the self_relay payload (the mod

@@ -135,7 +135,7 @@ func (m *Module) drainPauseOutbox() {
 // sendPauseRow sends one row; done says it is finished (sent, or its target is gone) and may be deleted.
 func (m *Module) sendPauseRow(r pauseOutboxRow) (done bool) {
 	switch r.Kind {
-	case team.PauseOutboxNotice:
+	case team.PauseOutboxNotice, team.PauseOutboxReask: // a reask is a flow message too: its text is the control line
 		return m.sendPauseNotice(r)
 	case team.PauseOutboxPush:
 		svc, ok := m.core.Registry.Get(team.PauseNotifyKey)
