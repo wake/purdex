@@ -65,6 +65,7 @@ func TestDeviceAllowed_ExactSet(t *testing.T) {
 		"GET /api/sessions/{code}/launch-plan", "POST /api/sessions/{code}/launch", // the no-agent launch panel
 		"GET /api/conversations/{provider}/{session_id}", "GET /api/conversations/{provider}/{session_id}/subagents/{agent_id}",
 		"GET /api/team/approvals/{id}", "GET /api/team/adoptions/{id}", "POST /api/team/approvals/{id}/decide", "GET /api/team/unattended", "PUT /api/team/unattended", "PUT /api/team/relay-quota", "PUT /api/team/max-members", "POST /api/relay/self",
+		"GET /api/team/paused", "POST /api/team/paused/{session_id}/release", // the unattended quota pause: the 被擋下 list and 解除
 		"GET /api/nex/v1/executions", "/api/nex/",
 		"POST /api/push/devices", "GET /api/push/devices", "DELETE /api/push/devices/{device_id}",
 		"GET /api/profiles", "GET /api/profiles/{id}", "GET /api/profiles/{id}/sections/{section}", "PUT /api/profiles/{id}/sections/{section}",
@@ -113,6 +114,7 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 		{"GET", "/api/team/roster"}, {"PUT", "/api/team/appearance"}, // TR-1: the panel edit is the Mac App's (admin), not a phone's
 		{"POST", "/api/team/relay-quota"}, {"POST", "/api/team/max-members"}, {"GET", "/api/team/relay-quota"},
 		{"PUT", "/api/push/presence"},
+		{"GET", "/api/team/paused/x/release"}, {"DELETE", "/api/team/paused/x"}, {"POST", "/api/team/paused"},
 		{"POST", "/api/devices"}, {"GET", "/api/devices"}, {"DELETE", "/api/devices/d_aaaaaaaaaaaa"},
 		{"GET", "/api/fs/read"}, {"POST", "/api/host-transfer/redeem"}, {"GET", "/api/nothing-here"},
 	} {
@@ -124,6 +126,7 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 		{"GET", "/api/push/devices"}, {"GET", "/api/profiles"}, {"GET", "/api/profiles/p_0123456789ab"}, {"PUT", "/api/devices/self"},
 		{"GET", "/api/conversations/claude/sid"}, {"POST", "/api/ws-ticket"},
 		{"POST", "/api/agent/upload"},
+		{"GET", "/api/team/paused"}, {"POST", "/api/team/paused/x/release"},
 	} {
 		assert.False(t, forbidden(callWith(t, c, r.method, r.path, tok, nil)), "%s %s", r.method, r.path)
 	}
