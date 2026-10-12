@@ -126,6 +126,26 @@ describe('other hosts section', () => {
   })
 })
 
+describe('the input hint', () => {
+  it('with paired hosts read, the placeholder names the first alias', async () => {
+    hosts = [host(), host({ hostId: 'h-b', alias: 'mini' })]
+    show()
+    await flush()
+    expect(screen.getByTestId('roots-input')).toHaveAttribute('placeholder', '新增絕對路徑，或 air26:/路徑 授權其他主機')
+  })
+  it('a 404 lead, or no paired host, keeps the original hint', async () => {
+    hosts = 'unsupported'
+    show()
+    await flush()
+    expect(screen.getByTestId('roots-input')).toHaveAttribute('placeholder', '新增絕對路徑')
+    cleanup(); resetHostRoots(); configureHostRoots({ identity: () => 'id-1', fetch, post, dismiss })
+    hosts = []
+    show()
+    await flush()
+    expect(screen.getByTestId('roots-input')).toHaveAttribute('placeholder', '新增絕對路徑')
+  })
+})
+
 describe('routing the typed line', () => {
   it('air26:/x (and AIR26:/x) posts a grant, clears the box, and re-reads', async () => {
     show()

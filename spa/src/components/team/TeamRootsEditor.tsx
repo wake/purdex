@@ -26,6 +26,9 @@ export function TeamRootsEditor({ hostId, team }: { hostId: string; team: TeamRo
   const hostRoots = useHostRootsStore((s) => viewOf(s, hostId))
   const roots = team.roots ?? []
   const err = edit.error
+  // with paired hosts read, the box says it also takes `alias:/path` (a grant on another host)
+  const firstAlias = hostRoots.load === 'ok' ? hostRoots.hosts[0]?.alias : undefined
+  const placeholder = firstAlias !== undefined ? t('unattended.roots.placeholder_hosts', { alias: firstAlias }) : t('unattended.roots.placeholder')
 
   const add = async () => {
     setRemoteRefusal(null)
@@ -67,7 +70,7 @@ export function TeamRootsEditor({ hostId, team }: { hostId: string; team: TeamRo
       </ul>
       <div className="flex items-center gap-1">
         <input
-          type="text" data-testid="roots-input" value={edit.draft} disabled={busy} placeholder={t('unattended.roots.placeholder')} aria-label={t('unattended.roots.placeholder')}
+          type="text" data-testid="roots-input" value={edit.draft} disabled={busy} placeholder={placeholder} aria-label={placeholder}
           onChange={(e) => { useRootsStore.getState().setDraft(key, e.target.value); setLocalRefusal(null); setRemoteRefusal(null) }}
           onKeyDown={(e) => { if (e.key === 'Enter') void add() }}
           className="min-w-0 flex-1 rounded border border-border-subtle bg-surface-primary px-2 py-0.5 font-mono text-text-primary"

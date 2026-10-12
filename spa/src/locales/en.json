@@ -2253,6 +2253,7 @@
   "unattended.hostroots.err_failed": "The folders were not changed ({{code}})",
   "unattended.roots.label": "Directories members may start in",
   "unattended.roots.placeholder": "Add an absolute path",
+  "unattended.roots.placeholder_hosts": "Add an absolute path, or {{alias}}:/path to grant a folder on another host",
   "unattended.roots.add": "Add",
   "unattended.roots.remove": "Remove {{path}}",
   "unattended.roots.err_empty": "Type a path first",

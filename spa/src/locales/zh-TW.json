@@ -2253,6 +2253,7 @@
   "unattended.hostroots.err_failed": "資料夾沒有變更（{{code}}）",
   "unattended.roots.label": "成員可啟動的目錄",
   "unattended.roots.placeholder": "新增絕對路徑",
+  "unattended.roots.placeholder_hosts": "新增絕對路徑，或 {{alias}}:/路徑 授權其他主機",
   "unattended.roots.add": "新增",
   "unattended.roots.remove": "移除 {{path}}",
   "unattended.roots.err_empty": "請先輸入路徑",
