@@ -110,6 +110,8 @@ func (m *Module) handleUnattendedPut(w http.ResponseWriter, r *http.Request) {
 	if err == nil && changed {
 		if st.On {
 			swept, pending = m.sweepUnattended("switch on")
+		} else {
+			m.resumePauses("switch off", true) // every pause row ends with the switch that caused it (spec §3.4)
 		}
 		m.broadcastUnattended("changed", st)
 	}

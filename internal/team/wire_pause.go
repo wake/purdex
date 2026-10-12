@@ -78,6 +78,30 @@ const (
 	PauseNoticeMemberQuota = "[pdx team] lead 安排：接力額度用完，先暫停，等 lead 指示。"
 )
 
+// Leaving a pause (spec §3.4, UP-3a). A reask outbox row carries the control message and its token (reask_id).
+const (
+	PauseOutboxReask = "reask"
+	// PauseReaskControlPrefix is the control message that tells a mod to ask for the relay again: `[pdx-relay:control] reask id=<uuid>`.
+	PauseReaskControlPrefix = "[pdx-relay:control] reask id="
+	// MinPauseReaskModVersion is the mod protocol that understands the reask control and `pdx relay begin --reask` (UP-4 reports it in
+	// its hello). A mod that says less gets the fallback notice and no token.
+	MinPauseReaskModVersion = 5
+	// PauseTokenTTLMs: a release token older than this is deleted by the reconciliation (24 h).
+	PauseTokenTTLMs = 24 * 60 * 60 * 1000
+)
+
+// The texts the daemon says on leaving a pause (spec §3.4), word for word.
+const (
+	PauseResumedSolo        = "[pdx team] 管理者已回位。接力申請已重新送出，等使用者核准。"
+	PauseResumedSoloOldMod  = "[pdx team] 管理者已回位。請在這個 session 打 /relay 重新申請接力。"
+	PauseResumedMemberLead  = "[pdx team] lead 已恢復，等 lead 指示。"
+	PauseResumedMemberQuota = "[pdx team] 管理者已回位，等 lead 指示。"
+	// PauseMemberQuotaListFmt is the lead's one notice naming the members that were paused for their own quota; %s is the list.
+	PauseMemberQuotaListFmt = "[pdx team] 這些 member 之前因額度用完暫停：%s，要不要接力由你決定。"
+	// PauseBouncedFmt heads the list of the messages bounced during a pause; %d is how many.
+	PauseBouncedFmt = "[pdx team] 暫停期間有 %d 則訊息被退回："
+)
+
 // PauseNotifyKey is the service-registry key under which the push module publishes its PauseNotifier.
 const PauseNotifyKey = "push.pause-notifier"
 

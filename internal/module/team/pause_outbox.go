@@ -125,7 +125,13 @@ func (m *Module) drainPauseOutbox() {
 		if m.pauseOutboxCrash != nil && m.pauseOutboxCrash(r.Seq) {
 			return // test seam: the process died after the send, before the delete
 		}
-		if err := m.store.DeletePauseOutbox(r.Seq); err != nil {
+		var err error
+		if r.Kind == team.PauseOutboxReask && r.Reask != "" { // the token's day starts when its reask went out, with the delete
+			err = m.store.FinishReaskOutbox(r.Seq, r.Reask, m.now())
+		} else {
+			err = m.store.DeletePauseOutbox(r.Seq)
+		}
+		if err != nil {
 			m.logf("[team] %v", err)
 			return
 		}
@@ -135,7 +141,7 @@ func (m *Module) drainPauseOutbox() {
 // sendPauseRow sends one row; done says it is finished (sent, or its target is gone) and may be deleted.
 func (m *Module) sendPauseRow(r pauseOutboxRow) (done bool) {
 	switch r.Kind {
-	case team.PauseOutboxNotice:
+	case team.PauseOutboxNotice, team.PauseOutboxReask: // a reask is a flow message too: its text is the control line
 		return m.sendPauseNotice(r)
 	case team.PauseOutboxPush:
 		svc, ok := m.core.Registry.Get(team.PauseNotifyKey)

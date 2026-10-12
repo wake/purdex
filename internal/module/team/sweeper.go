@@ -49,6 +49,7 @@ func (m *Module) runSweeper() {
 // cancel and broadcasts once.
 func (m *Module) tick() {
 	m.tickN++
+	m.reconcilePauses(false) // pause rows the switch no longer covers, at most every 30 s (UP-3a)
 	checkLive := m.tickN%livenessEvery == 0
 	if checkLive {
 		// Flags outlive their request (spec §6.6): prune them on the same
