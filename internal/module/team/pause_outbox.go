@@ -21,7 +21,7 @@ import (
 // pauseOutboxPass bounds the rows one pass reads.
 const pauseOutboxPass = 100
 
-// pauseOutboxMaxAttempts is how many failed passes a row gets before it gives up (at pauseOutboxEvery each: about five minutes).
+// pauseOutboxMaxAttempts is how many failed attempts a row gets before it is dead-lettered (one per pauseOutboxEvery: about five minutes).
 const pauseOutboxMaxAttempts = 30
 
 // pauseOutboxEvery is how long the loop waits for a kick before it looks again (a failed head is retried at this pace).
@@ -34,9 +34,10 @@ type pauseOutboxRow struct {
 	Attempts                     int
 }
 
-// PauseOutboxHead lists the first limit rows by seq.
-func (s *Store) PauseOutboxHead(limit int) ([]pauseOutboxRow, error) {
-	rows, err := s.db.Query(`SELECT seq, session_id, kind, text, reask_id, created_at, attempts FROM pause_outbox ORDER BY seq LIMIT ?`, limit)
+// PauseOutboxHead lists the first limit rows by seq that are still being tried; a row that failed maxAttempts passes is
+// dead-lettered: it stays in the table (visible, recoverable) and is no longer listed here.
+func (s *Store) PauseOutboxHead(limit, maxAttempts int) ([]pauseOutboxRow, error) {
+	rows, err := s.db.Query(`SELECT seq, session_id, kind, text, reask_id, created_at, attempts FROM pause_outbox WHERE attempts < ? ORDER BY seq LIMIT ?`, maxAttempts, limit)
 	if err != nil {
 		return nil, fmt.Errorf("pause outbox: %w", err)
 	}
@@ -94,7 +95,7 @@ func (m *Module) runPauseOutbox() {
 
 // drainPauseOutbox is one pass: the rows in seq order until one cannot be sent now.
 func (m *Module) drainPauseOutbox() {
-	rows, err := m.store.PauseOutboxHead(pauseOutboxPass)
+	rows, err := m.store.PauseOutboxHead(pauseOutboxPass, pauseOutboxMaxAttempts)
 	if err != nil {
 		m.logf("[team] pause outbox: %v", err)
 		return
@@ -103,22 +104,23 @@ func (m *Module) drainPauseOutbox() {
 		if m.stopping() {
 			return
 		}
+		if m.pauseRetryWaiting(r.Seq) {
+			return // a failed row is retried at the timer's pace, not at the pace of kicks
+		}
 		if done := m.sendPauseRow(r); !done {
-			if r.Attempts+1 >= pauseOutboxMaxAttempts {
-				// A row that cannot be sent in this many passes (about five minutes) never will: the order is kept for everything
-				// that can be sent, so a poison row gives up instead of holding every session's notices for ever.
-				m.logf("[team] pause outbox %d (%s to %s): given up after %d attempts", r.Seq, r.Kind, r.SessionID, pauseOutboxMaxAttempts)
-				if err := m.store.DeletePauseOutbox(r.Seq); err != nil {
-					m.logf("[team] %v", err)
-					return
-				}
-				continue
-			}
 			if err := m.store.BumpPauseOutbox(r.Seq); err != nil {
 				m.logf("[team] %v", err)
 			}
+			if r.Attempts+1 >= pauseOutboxMaxAttempts {
+				// Dead-lettered: kept in the table and no longer tried, so one row that can never be sent does not hold every
+				// session's notices for ever; the rows behind it go on.
+				m.logf("[team] pause outbox %d (%s to %s): dead-lettered after %d attempts, kept in pause_outbox", r.Seq, r.Kind, r.SessionID, pauseOutboxMaxAttempts)
+				continue
+			}
+			m.pauseRetryLater(r.Seq)
 			return // head-of-line blocking
 		}
+		m.pauseRetryForget(r.Seq)
 		if m.pauseOutboxCrash != nil && m.pauseOutboxCrash(r.Seq) {
 			return // test seam: the process died after the send, before the delete
 		}
@@ -200,4 +202,27 @@ func (m *Module) sendPauseNotice(r pauseOutboxRow) bool {
 		m.logf("[team] pause outbox %d to %s: %v", r.Seq, to, err)
 		return false
 	}
+}
+
+// pauseRetryWaiting says a failed row's retry gap has not passed yet.
+func (m *Module) pauseRetryWaiting(seq int64) bool {
+	m.pauseRetryMu.Lock()
+	defer m.pauseRetryMu.Unlock()
+	at, ok := m.pauseRetryAt[seq]
+	return ok && time.Now().Before(at)
+}
+
+func (m *Module) pauseRetryLater(seq int64) {
+	m.pauseRetryMu.Lock()
+	defer m.pauseRetryMu.Unlock()
+	if m.pauseRetryAt == nil {
+		m.pauseRetryAt = map[int64]time.Time{}
+	}
+	m.pauseRetryAt[seq] = time.Now().Add(m.pauseRetryGap)
+}
+
+func (m *Module) pauseRetryForget(seq int64) {
+	m.pauseRetryMu.Lock()
+	delete(m.pauseRetryAt, seq)
+	m.pauseRetryMu.Unlock()
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/core"
 	peersmod "github.com/wake/purdex/internal/module/peers"
@@ -63,6 +64,7 @@ func (n *fakeNotifier) NotifyPause(p team.PausePush) bool {
 
 func (f *fixture) outboxWorld() (*fakeFlow, *fakeNotifier) {
 	f.t.Helper()
+	f.m.pauseRetryGap = 0 // passes in a test follow each other at once; the pacing has its own test
 	flow, push := &fakeFlow{}, &fakeNotifier{done: true}
 	f.core.Registry.Register(peersmod.FlowSenderKey, flow)
 	f.core.Registry.Register(team.PauseNotifyKey, push)
@@ -238,6 +240,7 @@ func (s stubPush) Status() map[string]any      { return map[string]any{"ready": 
 // its row is dropped. Mutation gate: drop whenever the notifier is missing → the persisted push is lost at every restart (red).
 func TestPauseOutbox_APushRowSurvivesTheStartupOrder(t *testing.T) {
 	f := newFixture(t)
+	f.m.pauseRetryGap = 0
 	f.core.AddModule(stubPush{ready: true})
 	f.queue("sid-1", team.PauseOutboxPush, "text", 500)
 	f.m.drainPauseOutbox()
@@ -260,11 +263,13 @@ func TestPauseOutbox_APushRowSurvivesTheStartupOrder(t *testing.T) {
 	}
 }
 
-// Codex attack (high): a head that can never be sent must not hold every other session's notices for ever. FIFO is kept, but a
-// row gives up after pauseOutboxMaxAttempts failed passes (logged), and the rows behind it go.
-// Mutation gate: no cap → the rows behind a poison head are never sent (red).
-func TestPauseOutbox_APoisonHeadGivesUpAfterBoundedAttempts(t *testing.T) {
+// Codex attack (high) and critic: a head that can never be sent must not hold every other session's notices for ever, and must not
+// be thrown away either (at least once). FIFO is kept, but a row that failed pauseOutboxMaxAttempts passes is dead-lettered: it
+// stays in the table (logged, recoverable), is not tried again, and the rows behind it go.
+// Mutation gates: no dead-letter → the rows behind a poison head are never sent (red); deleting the dead row → it is gone (red).
+func TestPauseOutbox_APoisonHeadIsDeadLetteredNotDropped(t *testing.T) {
 	f := newFixture(t)
+	f.m.pauseRetryGap = 0
 	flow, _ := f.outboxWorld()
 	flow.errAt = map[int]error{}
 	for i := 1; i <= pauseOutboxMaxAttempts; i++ {
@@ -278,10 +283,39 @@ func TestPauseOutbox_APoisonHeadGivesUpAfterBoundedAttempts(t *testing.T) {
 			t.Fatalf("pass %d: sent %q, outbox %+v, want the head retried and nothing behind it sent", i+1, flow.sentTexts(), f.outbox())
 		}
 	}
-	f.m.drainPauseOutbox() // the last attempt: the head gives up
-	f.m.drainPauseOutbox() // and the row behind it goes
+	f.m.drainPauseOutbox() // the last attempt: the head is dead-lettered and the row behind it goes in the same pass
 	got := flow.sentTexts()
-	if len(got) != 1 || got[0] != "h/_def456|/tmp/20.sock|behind" || len(f.outbox()) != 0 {
-		t.Fatalf("after the head gave up: sent %q, outbox %+v", got, f.outbox())
+	rows := f.outbox()
+	if len(got) != 1 || got[0] != "h/_def456|/tmp/20.sock|behind" {
+		t.Fatalf("after the head gave up: sent %q", got)
+	}
+	if len(rows) != 1 || rows[0].Session != "sid-1" || rows[0].Attempts != pauseOutboxMaxAttempts {
+		t.Fatalf("outbox = %+v, want the dead row kept with its attempts", rows)
+	}
+	f.m.drainPauseOutbox() // a dead row is not tried again
+	if flow.calls != pauseOutboxMaxAttempts+1 {
+		t.Fatalf("flow calls = %d, want %d (the dead row must not be retried)", flow.calls, pauseOutboxMaxAttempts+1)
+	}
+}
+
+// A failing head is retried at the pace of the timer, not at the pace of kicks: a flood of pauses cannot burn its attempts in a
+// second. Mutation gate: no pacing → the second pass retries at once (red).
+func TestPauseOutbox_AFailingHeadIsRetriedAtTheTimersPace(t *testing.T) {
+	f := newFixture(t)
+	flow, _ := f.outboxWorld()
+	f.m.pauseRetryGap = time.Hour
+	flow.errAt = map[int]error{1: errors.New("socket write failed")}
+	f.queue("sid-1", team.PauseOutboxNotice, "first", 500)
+	f.m.drainPauseOutbox() // fails
+	f.m.drainPauseOutbox() // a kick-driven pass inside the gap: the head waits
+	if rows := f.outbox(); len(rows) != 1 || rows[0].Attempts != 1 || flow.calls != 1 {
+		t.Fatalf("outbox %+v, flow calls %d, want one attempt so far", rows, flow.calls)
+	}
+	f.m.pauseRetryMu.Lock()
+	f.m.pauseRetryAt[1] = time.Now().Add(-time.Second) // the gap has passed
+	f.m.pauseRetryMu.Unlock()
+	f.m.drainPauseOutbox()
+	if len(f.outbox()) != 0 || len(flow.sentTexts()) != 1 {
+		t.Fatalf("outbox %+v, sent %q", f.outbox(), flow.sentTexts())
 	}
 }

@@ -145,6 +145,10 @@ type Module struct {
 	// pauseKick wakes the pause outbox loop (buffered 1); pauseOutboxCrash is a test seam: true aborts a pass after a row was sent and before it was deleted.
 	pauseKick        chan struct{}
 	pauseOutboxCrash func(seq int64) bool
+	// pauseRetryGap is how long a failed row waits before it is tried again; pauseRetryAt is when each failed row may next be tried (in memory: a restart tries at once).
+	pauseRetryGap time.Duration
+	pauseRetryMu  sync.Mutex
+	pauseRetryAt  map[int64]time.Time
 	// afterTargetResolved, when set, runs in the commands route between the target's resolution and the apply (test
 	// seam for a consent revoked meanwhile). nil in production.
 	afterTargetResolved func()
@@ -417,6 +421,7 @@ func (m *Module) Init(c *core.Core) error {
 	m.proxyLimit = newCommandLimiter()
 	m.rootsLimit = newCommandLimiter()
 	m.pauseKick = make(chan struct{}, 1)
+	m.pauseRetryGap = pauseOutboxEvery
 	c.Registry.Register(peersmod.PauseGateKey, pauseGate{m}) // peers asks it before a message reaches a session (UP-1b)
 	svc, ok := c.Registry.Get(peersmod.OriginResolverKey)
 	if !ok {
