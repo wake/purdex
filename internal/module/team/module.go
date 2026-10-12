@@ -147,9 +147,11 @@ type Module struct {
 	// pauseKick wakes the pause outbox loop (buffered 1); pauseOutboxCrash is a test seam: true aborts a pass after a row was sent and before it was deleted.
 	pauseKick chan struct{}
 	// roots is the reconciler of this lead host's root changes (XR-2a); rootsSig wakes its coordinator (buffered 1).
-	roots            rootsState
-	rootsSig         chan struct{}
-	pauseOutboxCrash func(seq int64) bool
+	roots    rootsState
+	rootsSig chan struct{}
+	// rootsAfterDrainEmpty, when set, runs in a host worker between its last empty look and giving the host back (test seam).
+	rootsAfterDrainEmpty func()
+	pauseOutboxCrash     func(seq int64) bool
 	// pauseRetryGap is how long a failed row waits before it is tried again; pauseRetryAt is when each failed row may next be tried (in memory: a restart tries at once).
 	pauseRetryGap time.Duration
 	pauseRetryMu  sync.Mutex

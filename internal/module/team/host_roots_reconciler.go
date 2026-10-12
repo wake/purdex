@@ -110,13 +110,27 @@ func (m *Module) rootsPass() {
 		m.sweepWG.Add(1) // the coordinator's own goroutine is counted: this Add cannot race Stop's Wait
 		go func(h string) {
 			defer m.sweepWG.Done()
-			defer func() {
-				m.roots.mu.Lock()
-				delete(m.roots.running, h)
-				m.roots.mu.Unlock()
-			}()
-			m.drainRootsHost(h)
+			m.rootsWorker(h)
 		}(h)
+	}
+}
+
+// rootsWorker is one host's worker: it drains the host, then gives the host back. A change inserted (and the coordinator woken)
+// after the drain's last look but before the host was given back found it "running" and was skipped: when the drain ended because
+// nothing was pending, look once more after giving the host back and wake the coordinator if something is (a host that stopped on a
+// failure is NOT woken again at once — it waits for the next period).
+func (m *Module) rootsWorker(h string) {
+	drained := m.drainRootsHost(h)
+	if m.rootsAfterDrainEmpty != nil {
+		m.rootsAfterDrainEmpty() // test seam: a change arrives in the gap
+	}
+	m.roots.mu.Lock()
+	delete(m.roots.running, h)
+	m.roots.mu.Unlock()
+	if drained && !m.stopping() {
+		if _, ok, _ := m.store.HeadRootChange(h); ok {
+			m.kickRoots()
+		}
 	}
 }
 
@@ -141,37 +155,39 @@ func (m *Module) rootsCapsOf(hostID string) (ipeers.TeamCaps, error) {
 	return caps, nil
 }
 
-// drainRootsHost delivers the host's pending changes in order until one has to wait.
-func (m *Module) drainRootsHost(hostID string) {
+// drainRootsHost delivers the host's pending changes in order until one has to wait. It reports whether it ended because the host
+// has nothing pending (true) rather than on a wait, a failure or the stop (false).
+func (m *Module) drainRootsHost(hostID string) (drained bool) {
 	for !m.stopping() {
 		head, ok, err := m.store.HeadRootChange(hostID)
 		if err != nil {
 			m.logf("[team] host roots %s: %v", hostID, err)
-			return
+			return false
 		}
 		if !ok {
-			return
+			return true
 		}
 		if !m.cmdCaller.Paired(hostID) {
 			// the relation is gone (spec §3.2): the host's pending changes end with it, in unpairHost's transaction
 			if err := m.unpairHost(hostID, "unpaired"); err != nil {
 				m.logf("[team] host roots %s: unpair: %v", hostID, err)
 			}
-			return
+			return false
 		}
 		caps, err := m.rootsCapsOf(hostID)
 		if err != nil {
 			m.setRootsStatus(hostID, RootsStatusOffline)
-			return
+			return false
 		}
 		if !caps.RootsChange {
 			m.setRootsStatus(hostID, RootsStatusUnsupported)
-			return
+			return false
 		}
 		if !m.attemptRootChange(head) {
-			return
+			return false
 		}
 	}
+	return false
 }
 
 // attemptRootChange makes the one call for the head change and acts on its class; true means the change was settled (done or
@@ -187,15 +203,15 @@ func (m *Module) attemptRootChange(c HostRootChange) bool {
 	}
 	switch res.Class {
 	case peersmod.ClassDone:
-		var ans team.RootsChangeResponse
-		if json.Unmarshal(res.Body, &ans) != nil || ans.ID != c.ID {
-			// not this request's answer (a broken or newer peer): nothing is settled, the request converges when it is sent again
+		ans, why := completeRootsAnswer(res.Body, c)
+		if why != "" {
+			// not a whole answer to this request (a broken or newer peer): nothing is settled and nothing cached; the request
+			// converges when it is sent again
 			m.setRootsStatus(c.HostID, RootsStatusOffline)
-			m.logf("[team] host roots %s: the answer to %s is not for it; kept pending", c.HostID, c.ID)
+			m.logf("[team] host roots %s: the answer to %s is not usable (%s); kept pending", c.HostID, c.ID, why)
 			return false
 		}
-		canonical := ans.Path
-		if err := m.store.SettleRootChangeDone(c.ID, canonical, ans.TeamRoots, ans.TeamRootsRev, now); err != nil {
+		if err := m.store.SettleRootChangeDone(c.ID, ans.Path, *ans.TeamRoots, *ans.TeamRootsRev, now); err != nil {
 			m.logf("[team] host roots %s: %v", c.HostID, err)
 			return false
 		}
@@ -245,4 +261,37 @@ func (m *Module) attemptRootChange(c HostRootChange) bool {
 		m.setRootsStatus(c.HostID, RootsStatusOffline)
 		return false
 	}
+}
+
+// rootsAnswer is the 200 body with the fields that must be there as pointers: a body that lacks them is not an answer.
+type rootsAnswer struct {
+	ID           string    `json:"id"`
+	HostID       string    `json:"host_id"`
+	Op           string    `json:"op"`
+	Result       string    `json:"result"`
+	Path         string    `json:"path"`
+	TeamRoots    *[]string `json:"team_roots"`
+	TeamRootsRev *int64    `json:"team_roots_rev"`
+}
+
+// completeRootsAnswer decodes the 200 body and checks it is the whole answer to c: its id, its host, its op, a known result and the
+// grant after the request (team_roots and team_roots_rev both present). why names what is wrong, "" when nothing is.
+func completeRootsAnswer(body []byte, c HostRootChange) (rootsAnswer, string) {
+	var a rootsAnswer
+	if err := json.Unmarshal(body, &a); err != nil {
+		return a, "unreadable"
+	}
+	switch {
+	case a.ID != c.ID:
+		return a, "another request's id"
+	case a.HostID != c.HostID:
+		return a, "another host's id"
+	case a.Op != c.Op:
+		return a, "another op"
+	case a.Result != team.RootsResultAdded && a.Result != team.RootsResultRemoved && a.Result != team.RootsResultUnchanged:
+		return a, "unknown result"
+	case a.TeamRoots == nil || a.TeamRootsRev == nil:
+		return a, "no team_roots / team_roots_rev"
+	}
+	return a, ""
 }

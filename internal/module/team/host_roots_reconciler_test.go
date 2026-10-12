@@ -43,6 +43,9 @@ func (f *fixture) changeRow(id string) HostRootChange {
 
 // rootsOK is the member host's 200 answer to the request in body.
 func rootsOK(body map[string]any, result, path string, roots []string, rev int64) peersmod.CallResult {
+	if roots == nil {
+		roots = []string{} // the member host always sends an array
+	}
 	b, _ := json.Marshal(team.RootsChangeResponse{ID: fmt.Sprint(body["id"]), HostID: fmt.Sprint(body["to_host_id"]), Op: fmt.Sprint(body["op"]),
 		Result: result, Path: path, TeamRoots: roots, TeamRootsRev: rev})
 	return peersmod.CallResult{Class: peersmod.ClassDone, Status: 200, Body: b}
@@ -306,6 +309,92 @@ func TestRootsReconciler_AnAnswerForAnotherRequestIsNotASettle(t *testing.T) {
 	f.m.drainRootsHost("hostA")
 	if f.changeRow("c1").State != RootChangePending {
 		t.Fatalf("row = %+v", f.changeRow("c1"))
+	}
+}
+
+// A 200 that is not the whole answer to the request settles nothing and caches nothing (codex): only an id and a host, no grant after
+// the request, another op, an unknown result.
+// Mutation gate: accept a body with only id and host_id → the row is done with an empty cache (red).
+func TestRootsReconciler_AnIncompleteSuccessBodyIsNotASettle(t *testing.T) {
+	for name, body := range map[string]string{
+		"only id and host": `{"id":"c1","host_id":"hostA"}`,
+		"no grant":         `{"id":"c1","host_id":"hostA","op":"add","result":"added","path":"/w"}`,
+		"null roots":       `{"id":"c1","host_id":"hostA","op":"add","result":"added","path":"/w","team_roots":null,"team_roots_rev":3}`,
+		"no rev":           `{"id":"c1","host_id":"hostA","op":"add","result":"added","path":"/w","team_roots":["/w"]}`,
+		"another op":       `{"id":"c1","host_id":"hostA","op":"remove","result":"removed","path":"/w","team_roots":[],"team_roots_rev":3}`,
+		"unknown result":   `{"id":"c1","host_id":"hostA","op":"add","result":"maybe","path":"/w","team_roots":["/w"],"team_roots_rev":3}`,
+		"another host":     `{"id":"c1","host_id":"hostB","op":"add","result":"added","path":"/w","team_roots":["/w"],"team_roots_rev":3}`,
+	} {
+		f, fc := rootsFixture(t, "hostA")
+		f.change("c1", "hostA", "add", "/w")
+		raw := body
+		fc.script = func(string, map[string]any) peersmod.CallResult {
+			return peersmod.CallResult{Class: peersmod.ClassDone, Status: 200, Body: json.RawMessage(raw)}
+		}
+		f.m.drainRootsHost("hostA")
+		if f.changeRow("c1").State != RootChangePending {
+			t.Fatalf("%s: row = %+v, want it pending", name, f.changeRow("c1"))
+		}
+		if _, ok, _ := f.m.store.HostRootsSeen("hostA"); ok {
+			t.Fatalf("%s: the cache took an unusable answer", name)
+		}
+	}
+	// an empty grant is a whole answer: "team_roots":[] with rev 0
+	f, fc := rootsFixture(t, "hostA")
+	f.change("c1", "hostA", "remove", "/w")
+	fc.script = func(string, map[string]any) peersmod.CallResult {
+		return peersmod.CallResult{Class: peersmod.ClassDone, Status: 200, Body: json.RawMessage(`{"id":"c1","host_id":"hostA","op":"remove","result":"unchanged","path":"","team_roots":[],"team_roots_rev":0}`)}
+	}
+	f.m.drainRootsHost("hostA")
+	if f.changeRow("c1").State != RootChangeDone {
+		t.Fatalf("row = %+v, an empty grant at rev 0 is a whole answer", f.changeRow("c1"))
+	}
+}
+
+// A change that arrives after a worker's last empty look but before it gave its host back must not wait for the next period: the worker
+// looks once more after giving the host back and wakes the coordinator.
+// Mutation gate: drop that second look → the signal is not raised (red).
+func TestRootsReconciler_AChangeArrivingAsAWorkerEndsWakesTheCoordinator(t *testing.T) {
+	f, fc := rootsFixture(t, "hostA")
+	f.change("c1", "hostA", "add", "/w/1")
+	fc.script = func(host string, body map[string]any) peersmod.CallResult {
+		return rootsOK(body, "added", fmt.Sprint(body["path"]), []string{fmt.Sprint(body["path"])}, 1)
+	}
+	f.m.roots.running = map[string]bool{"hostA": true}
+	f.m.rootsAfterDrainEmpty = func() {
+		f.change("c2", "hostA", "add", "/w/2") // arrives after the drain's last look
+		f.m.kickRoots()
+		f.m.rootsPass() // the coordinator consumes it, finds the host running and skips it
+		select {
+		case <-f.m.rootsSig:
+		default:
+		}
+	}
+	f.m.rootsWorker("hostA")
+	f.m.rootsAfterDrainEmpty = nil
+	select {
+	case <-f.m.rootsSig:
+	default:
+		t.Fatal("the worker went away without waking the coordinator for the change that arrived as it ended")
+	}
+	if f.changeRow("c2").State != RootChangePending {
+		t.Fatalf("c2 = %+v", f.changeRow("c2"))
+	}
+}
+
+// A host that stopped on a failure is NOT woken again at once (that would be a tight loop on an offline host).
+func TestRootsReconciler_AFailingHostIsNotRewokenByItsWorker(t *testing.T) {
+	f, fc := rootsFixture(t, "hostA")
+	f.change("c1", "hostA", "add", "/w/1")
+	fc.script = func(string, map[string]any) peersmod.CallResult {
+		return peersmod.CallResult{Class: peersmod.ClassTransient, Err: fmt.Errorf("down")}
+	}
+	f.m.roots.running = map[string]bool{"hostA": true}
+	f.m.rootsWorker("hostA")
+	select {
+	case <-f.m.rootsSig:
+		t.Fatal("a worker that stopped on a failure raised the signal")
+	default:
 	}
 }
 
