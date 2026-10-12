@@ -32,6 +32,13 @@ describe('useRelayBrief', () => {
     await act(async () => { first.resolve(page('STALE')); await Promise.resolve(); await Promise.resolve() })
     expect(result.current.entries).toEqual(['second'])
   })
+  it('a hanging half never hides the other', async () => {
+    conv.mockReturnValue(new Promise(() => {}))
+    todos.mockResolvedValue({ kind: 'ok', todos: [{ title: 'next' }] as never })
+    const { result } = renderHook(() => useRelayBrief('h', 'A'))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(result.current.todos).toEqual(['next'])
+  })
   it('does not show the old session\'s report while the new one loads', async () => {
     conv.mockResolvedValueOnce(page('first'))
     conv.mockReturnValueOnce(new Promise(() => {}))

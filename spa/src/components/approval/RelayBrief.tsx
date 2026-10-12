@@ -23,7 +23,7 @@ export function RelayBrief({ hostId, sessionId }: { hostId: string; sessionId: s
   const { entries, todos } = useRelayBrief(hostId, sessionId)
   if (entries.length === 0 && todos.length === 0) return null
   return (
-    <div data-testid="approval-brief" className="mt-3 space-y-2 text-xs">
+    <div data-testid="approval-brief" className="mt-3 max-h-40 space-y-2 overflow-y-auto text-xs">
       {entries.length > 0 && (
         <section data-testid="approval-brief-entries">
           <h3 className="text-text-muted">{t('approval.dialog.brief_done')}</h3>
