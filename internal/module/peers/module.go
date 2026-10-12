@@ -378,7 +378,7 @@ func (m *Module) Init(c *core.Core) error {
 	// The team module attributes approval requests through this view.
 	c.Registry.Register(OriginResolverKey, &OriginResolver{m: m})
 	// The team module's notice outbox (and later the handover notice) sends through this.
-	c.Registry.Register(SenderKey, moduleSender{m: m})
+	m.registerSenders(c.Registry)
 	// The team module's commands outbox pump (cross-host team spec X3a) calls paired hosts through this.
 	c.Registry.Register(HostCallerKey, m.HostCaller())
 	// The team module delivers a remote member's notices through this narrow seam (cross-host team spec §4.4, X3d).

@@ -148,6 +148,45 @@ func TestPauseVerdict_AgainstTheResumeInBothOrders(t *testing.T) {
 	}
 }
 
+// A flood of different texts cannot grow team.db without bound: a paused session keeps at most maxBounces rows, further new
+// ones are refused all the same (the verdict stays paused) but not listed; an existing one still refreshes. Mutation gate: no cap
+// → 300 rows (red); a capped insert answering "not paused" → the message would be delivered (red).
+func TestPauseVerdict_AFloodOfDifferentTextsIsBounded(t *testing.T) {
+	s := openTestStore(t)
+	if _, err := s.AddPause(pauseRow("sid-1", team.PauseCauseQuota, team.PauseRoleSolo, 10)); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 300; i++ {
+		paused, err := s.PauseVerdict("sid-1", "air/foo", fmt.Sprintf("flood %d", i), int64(i))
+		if err != nil || !paused {
+			t.Fatalf("message %d: paused=%v err=%v", i, paused, err)
+		}
+	}
+	rows := bounceRows(t, s, "sid-1")
+	if len(rows) != maxBounces {
+		t.Fatalf("bounce rows = %d, want the cap %d", len(rows), maxBounces)
+	}
+	// one that is already listed still refreshes at the cap
+	if paused, err := s.PauseVerdict("sid-1", "air/foo", "flood 0", 9999); err != nil || !paused {
+		t.Fatal(paused, err)
+	}
+	var at int64
+	if err := s.db.QueryRow(`SELECT at FROM pause_bounces WHERE session_id = 'sid-1' AND first_line = 'flood 0'`).Scan(&at); err != nil || at != 9999 {
+		t.Fatalf("at = %d err=%v", at, err)
+	}
+	// a long sender address is cut, not stored whole
+	long := strings.Repeat("x", 1000)
+	if _, err := s.AddPause(pauseRow("sid-2", team.PauseCauseQuota, team.PauseRoleSolo, 10)); err != nil {
+		t.Fatal(err)
+	}
+	if paused, err := s.PauseVerdict("sid-2", long, "hi", 1); err != nil || !paused {
+		t.Fatal(paused, err)
+	}
+	if rows := bounceRows(t, s, "sid-2"); len(rows) != 1 || len([]rune(rows[0].From)) != maxBounceFrom {
+		t.Fatalf("from = %d runes, want %d", len([]rune(rows[0].From)), maxBounceFrom)
+	}
+}
+
 // Verdicts and resumes racing: whatever the interleaving, no session ends with a bounce and no pause row.
 func TestPauseVerdict_NeverLeavesAnOrphanBounce(t *testing.T) {
 	s := openTestStore(t)

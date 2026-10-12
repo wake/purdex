@@ -81,7 +81,10 @@ func (m *Module) deliverToLocalTarget(ctx context.Context, snap deliverSnapshot,
 	if d.from.Address != "" {
 		from = d.senderAlias + "/" + d.from.Address
 	}
-	if m.paused(d.to.AgentSessionID, from, d.text) {
+	switch paused, perr := m.paused(d.to.AgentSessionID, from, d.text); {
+	case perr != nil:
+		return "", "", pauseHeldRefusal()
+	case paused:
 		return "", "", pausedRefusal()
 	}
 

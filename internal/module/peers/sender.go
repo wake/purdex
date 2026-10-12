@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/middleware"
 	ipeers "github.com/wake/purdex/internal/peers"
 )
@@ -20,9 +21,6 @@ const SenderKey = "peers.sender"
 // POST /api/peers/send) is a *SendError; anything else that goes wrong is a plain error.
 type Sender interface {
 	Send(ctx context.Context, req ipeers.SendRequest) (ipeers.SendResponse, error)
-	// SendFlow is Send for the pause's own flow messages (resume notices, bounce lists, reask controls): it alone skips the
-	// pause check. It is an in-process Go call that nothing over HTTP can reach, so no message text can claim the exemption.
-	SendFlow(ctx context.Context, req ipeers.SendRequest) (ipeers.SendResponse, error)
 }
 
 // SendError is a refused send: the HTTP status and the wire error handleSend answered.
@@ -38,7 +36,26 @@ func (e *SendError) Error() string {
 	return fmt.Sprintf("peers send refused (%d %s)", e.Status, e.API.Error)
 }
 
-var _ Sender = moduleSender{}
+var (
+	_ Sender     = moduleSender{}
+	_ Sender     = sendOnly{}
+	_ FlowSender = moduleSender{}
+)
+
+// registerSenders publishes the two in-process senders: the shared one (Send only, what every module holds) and the pause
+// outbox's flow sender (UP-2a), under separate keys.
+func (m *Module) registerSenders(reg *core.ServiceRegistry) {
+	reg.Register(SenderKey, sendOnly{moduleSender{m: m}})
+	reg.Register(FlowSenderKey, moduleSender{m: m})
+}
+
+// sendOnly is the Sender the shared registry hands out: moduleSender with only Send visible, so a module that type-asserts the
+// shared service to FlowSender gets nothing.
+type sendOnly struct{ s moduleSender }
+
+func (o sendOnly) Send(ctx context.Context, req ipeers.SendRequest) (ipeers.SendResponse, error) {
+	return o.s.Send(ctx, req)
+}
 
 // moduleSender runs handleSend in process under the admin principal.
 type moduleSender struct{ m *Module }
@@ -65,6 +82,9 @@ func (s moduleSender) Send(ctx context.Context, req ipeers.SendRequest) (ipeers.
 	return s.send(ctx, req)
 }
 
+// SendFlow is Send for the pause's own flow messages (resume notices, bounce lists, reask controls): it alone skips the pause
+// check. It is an in-process Go call that nothing over HTTP can reach, so no message text can claim the exemption; and it is
+// on FlowSender, registered under FlowSenderKey, not on the Sender the other modules share.
 func (s moduleSender) SendFlow(ctx context.Context, req ipeers.SendRequest) (ipeers.SendResponse, error) {
 	return s.send(context.WithValue(ctx, flowKey{}, true), req)
 }

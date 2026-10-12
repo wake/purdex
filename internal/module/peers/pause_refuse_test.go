@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/wake/purdex/internal/core"
 	ipeers "github.com/wake/purdex/internal/peers"
 )
 
@@ -160,6 +162,52 @@ func TestPause_NoTextExemptsAMessage(t *testing.T) {
 	}
 }
 
+// The same on the receiving arm, and a registered service that is not a gate counts as one that cannot answer.
+func TestPause_ADeliverThatCannotBeJudgedIsHeld(t *testing.T) {
+	e := newDeliverEnv(t, envOpts{})
+	g := &fakePauseGate{err: errors.New("team.db is down")}
+	e.m.core.Registry.Register(PauseGateKey, g)
+	if rr := e.post(e.hostCtx(), e.request()); rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("gate error: %d %s", rr.Code, rr.Body.String())
+	}
+	e.assertNoLine()
+
+	e2 := newDeliverEnv(t, envOpts{})
+	e2.m.core.Registry.Register(PauseGateKey, "not a gate")
+	if rr := e2.post(e2.hostCtx(), e2.request()); rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("wrong type: %d %s", rr.Code, rr.Body.String())
+	}
+	e2.assertNoLine()
+}
+
+// The shared registry's Sender cannot reach the exemption: SendFlow lives on its own interface, under its own key, which only
+// the pause outbox (UP-2a) takes. Mutation gate: SendFlow back on Sender → red.
+func TestPause_TheSharedSenderHasNoSendFlow(t *testing.T) {
+	if n := reflect.TypeOf((*Sender)(nil)).Elem().NumMethod(); n != 1 {
+		t.Fatalf("Sender has %d methods, want only Send", n)
+	}
+	s := newSendEnv(t, envOpts{})
+	reg := core.NewServiceRegistry()
+	s.m.registerSenders(reg)
+	shared, ok := reg.Get(SenderKey)
+	if !ok {
+		t.Fatal("no shared sender registered")
+	}
+	if _, bypass := shared.(FlowSender); bypass {
+		t.Fatalf("the shared Sender %T can be asserted to a FlowSender", shared)
+	}
+	if _, ok := shared.(Sender); !ok {
+		t.Fatalf("the shared service %T is not a Sender", shared)
+	}
+	svc, ok := reg.Get(FlowSenderKey)
+	if !ok {
+		t.Fatal("no flow sender registered")
+	}
+	if _, ok := svc.(FlowSender); !ok {
+		t.Fatalf("%T is not a FlowSender", svc)
+	}
+}
+
 // Nothing is paused (or no gate is registered at all): the delivery is what it was before.
 func TestPause_NotPausedChangesNothing(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
@@ -185,18 +233,27 @@ func TestPause_NotPausedChangesNothing(t *testing.T) {
 	e.recvLine()
 }
 
-// A gate that cannot answer (team.db trouble) does not stop the daemon's messages: the delivery goes through and the failure is logged.
-func TestPause_AGateErrorFailsOpen(t *testing.T) {
+// A gate that cannot answer (team.db busy, disk full) holds the message: nothing is delivered, the sender is told to retry
+// (503 not_ready), the failure is logged and the audit row says so. Mutation gate: let it through → delivered (red).
+func TestPause_AGateThatCannotAnswerHoldsTheMessage(t *testing.T) {
 	s := newSendEnv(t, envOpts{})
 	p := s.addLocalPeer(localPeerName, localPeerSessionID, localPeerPID)
 	var logged []string
 	s.m.logf = func(format string, a ...any) { logged = append(logged, format) }
 	g := gateFor(s, localPeerSessionID)
 	g.err = errors.New("team.db is down")
-	if resp := s.sendOK(s.localSendReq()); resp.Result != ipeers.ResultDelivered {
-		t.Fatalf("send: %+v", resp)
+	rr := s.send(adminCtx(), s.localSendReq())
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body=%s", rr.Code, rr.Body.String())
 	}
-	p.recvLine()
+	var ae ipeers.APIError
+	if err := json.Unmarshal(rr.Body.Bytes(), &ae); err != nil || ae.Error != ipeers.ErrNotReady {
+		t.Fatalf("body = %s", rr.Body.String())
+	}
+	p.assertNoLine()
+	if rows := s.rows(); len(rows) != 1 || rows[0].Result != ipeers.ErrNotReady {
+		t.Fatalf("audit rows = %+v", rows)
+	}
 	found := false
 	for _, l := range logged {
 		if strings.Contains(l, "pause gate") {
