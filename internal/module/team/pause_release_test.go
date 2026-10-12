@@ -282,6 +282,44 @@ func TestReask_AValidTokenIsACardWhateverTheSwitchSays(t *testing.T) {
 	}
 }
 
+// A request_id replayed with a valid token the first begin did not carry is a conflicting reuse (409), not a retry: the token stays
+// unspent. A real retry of a reask begin (same id, the token already spent) still gets its op.
+// Mutation gate: drop the check in sameBeginPayload → the replay answers 201 with the ordinary op (red).
+func TestReask_ATokenOnAReplayedRequestIDIsAConflictNotARetry(t *testing.T) {
+	f := newFixture(t)
+	f.origins.show(team.Origin{SessionID: "sid-1", Ref: "_abc123", Title: "boss", Address: "self/boss", PID: 10})
+	rid1 := uuid.NewString()
+	first := beginReq("sid-1")
+	first.RequestID = rid1
+	if code, raw := f.do(http.MethodPost, "/api/relay/begin", first); code != http.StatusCreated {
+		t.Fatalf("first: %d %s", code, raw)
+	}
+	tok := f.giveToken("sid-1", f.clock.Load())
+	again := first
+	again.ReaskID = tok
+	if code, raw := f.do(http.MethodPost, "/api/relay/begin", again); code != http.StatusConflict {
+		t.Fatalf("replay with a token: %d %s, want 409", code, raw)
+	}
+	if got := f.tokens(); len(got) != 1 {
+		t.Fatalf("tokens = %v, must be unspent", got)
+	}
+	// a lost-response retry of a reask begin: same id, token already spent
+	g := newFixture(t)
+	g.origins.show(team.Origin{SessionID: "sid-1", Ref: "_abc123", Title: "boss", Address: "self/boss", PID: 10})
+	tok2 := g.giveToken("sid-1", g.clock.Load())
+	r := beginReq("sid-1")
+	r.RequestID, r.ReaskID = uuid.NewString(), tok2
+	if code, raw := g.do(http.MethodPost, "/api/relay/begin", r); code != http.StatusCreated {
+		t.Fatalf("reask first: %d %s", code, raw)
+	}
+	if code, raw := g.do(http.MethodPost, "/api/relay/begin", r); code != http.StatusCreated {
+		t.Fatalf("reask retry: %d %s, want the same op", code, raw)
+	}
+	if g.opCount() != 1 {
+		t.Fatalf("ops = %d", g.opCount())
+	}
+}
+
 // reask_id must be a UUID.
 func TestReask_ABadTokenIsA400(t *testing.T) {
 	f := tokenWorld(t)

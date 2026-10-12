@@ -627,6 +627,13 @@ func sameBeginPayload(m *Module, op team.RelayOp, req team.RelayBeginRequest) bo
 	if err := json.Unmarshal(row.Payload, &sp); err != nil {
 		return false
 	}
+	if req.ReaskID != "" && !sp.Reask {
+		// An ordinary begin replayed with a release token that is valid now is another request, not a retry: answering it with the
+		// ordinary op would leave the token unspent and the person's card unopened (codex R1).
+		if valid, err := m.store.ReleaseTokenValid(req.ReaskID, op.SessionID, m.now()-team.PauseTokenTTLMs); err != nil || valid {
+			return false
+		}
+	}
 	return sp.Window == req.Window && sp.Manual == req.Manual && sp.Reason == req.Reason && sp.IdleMinutes == req.IdleMinutes
 }
 
