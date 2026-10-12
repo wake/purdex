@@ -77,9 +77,30 @@ func keptRootsIn(q dbtxq, hostID, without string) (kept []string, known bool, er
 	return kept, known, nil
 }
 
-// underRemoval says whether cwd runs under `path` and not under another root that stays.
+// pathWithinFold is pathWithin ignoring case, for the "is it under the path being removed" side of the check: a member host may be on a
+// case-insensitive file system (macOS) where /Users/x/Proj and /users/x/proj are one directory, and this host cannot tell. Doubt goes
+// to the refusal: a removal is refused on a spelling that differs only in case, a spawn / adopt likewise.
+func pathWithinFold(child, root string) bool {
+	if root == "" || child == "" {
+		return false
+	}
+	if strings.EqualFold(child, root) {
+		return true
+	}
+	if root == "/" {
+		return strings.HasPrefix(child, "/")
+	}
+	return len(child) > len(root) && child[len(root)] == '/' && strings.EqualFold(child[:len(root)], root)
+}
+
+// underRemoval says whether cwd runs under `path` (case-insensitively: doubt refuses) and not under another root that stays (exactly: a
+// root only counts as keeping the member when the spelling is the same). An unknown cwd (a member whose cwd was never recorded) is
+// under it: the location cannot be judged, so the removal waits until it is known.
 func underRemoval(cwd, path string, kept []string) bool {
-	return pathWithin(cwd, path) && !slices.ContainsFunc(kept, func(k string) bool { return pathWithin(cwd, k) })
+	if cwd == "" {
+		return true
+	}
+	return pathWithinFold(cwd, path) && !slices.ContainsFunc(kept, func(k string) bool { return pathWithin(cwd, k) })
 }
 
 // hostUsesIn are the members of this lead on the host, and the forwarded spawns still starting there, that run under `path` and
@@ -125,7 +146,7 @@ func hostUsesIn(q dbtxq, hostID, path string, kept []string) ([]team.HostRootUse
 // rootBeingRemovedIn says whether a pending remove of the host covers cwd (under the removed path, not under a root that stays). The
 // caller holds the writer lock (its own write transaction, after its own first write).
 func rootBeingRemovedIn(q dbtxq, hostID, cwd string) (bool, error) {
-	if hostID == "" || cwd == "" {
+	if hostID == "" {
 		return false, nil
 	}
 	rows, err := q.Query(`SELECT path FROM host_root_changes WHERE host_id = ? AND op = 'remove' AND state = 'pending' ORDER BY rowid`, hostID)

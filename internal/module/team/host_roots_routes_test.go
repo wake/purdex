@@ -3,6 +3,7 @@
 package teammod
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/wake/purdex/internal/config"
 	peersmod "github.com/wake/purdex/internal/module/peers"
+	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -195,6 +197,51 @@ func TestHostRootsPost_WhatDoesNotCount(t *testing.T) {
 		if code, raw := f.postHostRoots("air26", "remove", "/w/a"); code != http.StatusAccepted {
 			t.Errorf("%s: %d %s, want 202", name, code, raw)
 		}
+	}
+}
+
+// Doubt goes to the refusal: a member whose cwd was never recorded, or whose spelling differs only in case (a case-insensitive member host),
+// refuses a removal of a directory it may be under.
+// Mutation gate: an empty cwd counts as "not under" → the removal goes through (red).
+func TestHostRootsPost_AnUnknownOrCaseDifferentCwdRefusesTheRemoval(t *testing.T) {
+	for name, cwd := range map[string]string{"unknown cwd": "", "other case": "/W/A/proj"} {
+		f, _ := routesFixture(t)
+		f.cache("hostM", 1, "/w/a")
+		f.remoteMemberAt("m1", "hostM", rowActive, cwd)
+		if code, raw := f.postHostRoots("air26", "remove", "/w/a"); code != http.StatusConflict {
+			t.Errorf("%s: %d %s, want 409", name, code, raw)
+		}
+	}
+	// a case-different spelling of a root that STAYS does not keep the member (exact spelling only): still refused
+	f, _ := routesFixture(t)
+	f.cache("hostM", 1, "/w/a", "/W")
+	f.remoteMemberAt("m1", "hostM", rowActive, "/w/a/proj")
+	if code, raw := f.postHostRoots("air26", "remove", "/w/a"); code != http.StatusConflict {
+		t.Errorf("kept by another case: %d %s, want 409", code, raw)
+	}
+}
+
+// A remote adopt whose target has no recorded cwd cannot be judged against a pending removal: refused while one is pending, and allowed
+// again once it has settled. A spawn in another case is refused likewise.
+func TestHostRootsGuard_AnUnknownCwdAdoptIsRefusedWhileARemovalIsPending(t *testing.T) {
+	f, _ := adoptFixture(t)
+	f.m.peerRecords = func(_ context.Context, host string) ([]ipeers.PeerRecord, error) {
+		r := remoteSession(rtSession, "_rt1234")
+		r.Cwd = "" // the member host reported none
+		return []ipeers.PeerRecord{r}, nil
+	}
+	f.cache("hostM", 1, "/w")
+	f.change("rm1", "hostM", "remove", "/w")
+	f.adoptOK(uid(30), remoteTarget)
+	code, raw := f.decide(uid(30), "approve")
+	if code != http.StatusConflict || decodeErr(t, raw).Error != team.ErrRootBeingRemoved {
+		t.Fatalf("approve: %d %s", code, raw)
+	}
+	g, _ := routesFixture(t)
+	g.cache("hostM", 1, "/w")
+	g.change("rm1", "hostM", "remove", "/w")
+	if code, _, e := g.spawn(1, "/W/r", func(r *team.SpawnRequest) { r.Host = "air26" }); code != http.StatusConflict || e.Error != team.ErrRootBeingRemoved {
+		t.Fatalf("spawn in another case: %d %+v", code, e)
 	}
 }
 
@@ -564,6 +611,26 @@ func TestHostRootsRead_TheRebuildNeverUndoesANewerCache(t *testing.T) {
 	f.m.readHostRoots(t.Context(), "hostM")
 	if seen, _, _ := f.m.store.HostRootsSeen("hostM"); seen.Rev != 20 || seen.Roots[0] != "/w/newest" {
 		t.Fatalf("cache = %+v, want the newer settle kept", seen)
+	}
+}
+
+// The rebuild overwrites only the exact version it judged: an equal-rev update meanwhile (a refresh with other roots) is not taken back.
+// Mutation gate: compare the rev alone → the newer content is overwritten (red).
+func TestHostRootsRead_TheRebuildNeverUndoesAnEqualRevUpdate(t *testing.T) {
+	f, fc := routesFixture(t)
+	f.cache("hostM", 9, "/w/old")
+	n := 0
+	fc.script = func(host string, body map[string]any) peersmod.CallResult {
+		n++
+		if n == 2 {
+			f.clock.Add(1000)
+			_ = f.m.store.UpsertHostRootsSeen("hostM", []string{"/w/other"}, 9, f.clock.Load()) // same rev, newer content
+		}
+		return rootsReadAnswer(body, []string{"/w/low"}, 1)
+	}
+	f.m.readHostRoots(t.Context(), "hostM")
+	if seen, _, _ := f.m.store.HostRootsSeen("hostM"); seen.Rev != 9 || seen.Roots[0] != "/w/other" {
+		t.Fatalf("cache = %+v, want the equal-rev update kept", seen)
 	}
 }
 

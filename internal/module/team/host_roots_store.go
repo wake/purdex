@@ -288,10 +288,10 @@ func parseRoots(raw string) ([]string, error) {
 	return roots, nil
 }
 
-// OverwriteHostRootsSeenIf replaces the cache row whatever the new rev, but only while it is still the row the caller judged by (its rev is
-// expectRev): the read path's verdict that the member host's relation with this host was rebuilt (its rev started over). If the cache moved
+// OverwriteHostRootsSeenIf replaces the cache row whatever the new rev, but only while it is still the row the caller judged by (the
+// version in seen — rev, roots and seen_at): the read path's verdict that the member host's relation with this host was rebuilt (its rev started over). If the cache moved
 // meanwhile (a settle wrote a newer rev, an unpair deleted it) nothing is written. Only the read path calls it; a settle stays monotonic.
-func (s *Store) OverwriteHostRootsSeenIf(hostID string, expectRev int64, roots []string, rev, at int64) (bool, error) {
+func (s *Store) OverwriteHostRootsSeenIf(hostID string, seen HostRootsSeen, roots []string, rev, at int64) (bool, error) {
 	if roots == nil {
 		roots = []string{}
 	}
@@ -299,7 +299,17 @@ func (s *Store) OverwriteHostRootsSeenIf(hostID string, expectRev int64, roots [
 	if err != nil {
 		return false, err
 	}
-	res, err := s.db.Exec(`UPDATE host_roots_seen SET roots_json = ?, rev = ?, seen_at = ? WHERE host_id = ? AND rev = ?`, string(b), rev, at, hostID, expectRev)
+	was := seen.Roots
+	if was == nil {
+		was = []string{}
+	}
+	wasJSON, err := json.Marshal(was)
+	if err != nil {
+		return false, err
+	}
+	// the whole version the caller observed — rev, roots and seen_at: an equal-rev update (a refresh, other roots) is a newer cache too
+	res, err := s.db.Exec(`UPDATE host_roots_seen SET roots_json = ?, rev = ?, seen_at = ? WHERE host_id = ? AND rev = ? AND seen_at = ? AND roots_json = ?`,
+		string(b), rev, at, hostID, seen.Rev, seen.SeenAt, string(wasJSON))
 	if err != nil {
 		return false, fmt.Errorf("overwrite the roots of %s: %w", hostID, err)
 	}
