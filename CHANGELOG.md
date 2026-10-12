@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.725] - 2026-10-13
+
+> 只改了 daemon，mod 沒動。跨主機授權的 daemon 端到這版完成；App 的 team 面板（XR-3）接著由介面線做。
+
+### Added：lead 主機可以管理自己在別台主機的授權資料夾，對方離線也能先記下（跨主機授權 XR-2b，#2750）
+
+- `POST /api/team/host-roots` `{host, op: add|remove, path, client}`：新增或移除 lead 主機在另一台主機（alias 或 host id）的授權資料夾。
+  - 對方離線也不會失敗：變更先存在 lead 主機，對方一上線就照順序送過去，由對方檢查路徑。
+  - 要移除的資料夾裡如果還有這台 lead 的 member（或正在啟動的 member），會直接拒絕：409 `roots_in_use`，並列出是哪些 member。要先把那些 session 結束才能移除。
+  - 只能移除對方目前有的資料夾，或還在排隊的新增項目；其他路徑回 400 `not_a_root`。
+- 移除排隊期間，lead 不能在那個資料夾開新 member，也不能收編那裡的 session：409 `root_being_removed`。判斷和寫入在同一筆交易裡完成，兩件事不會同時成立。
+- `GET /api/team/host-roots`：每台配對主機回傳狀態（`ok`／`offline`／`consent_off`／`unsupported`／`unauthorized`）、目前的資料夾清單，以及排隊中、被拒、被丟棄的變更。回應前會並行問各台一次，最多等 2 秒；對方重建配對、版本號倒退時，會自動更新快取。
+- `POST /api/team/host-roots/dismiss` `{id}`：清除被拒或被丟棄的那一列。
+- 已知限制：lead 端判斷「是否還有 member 在用」只做字面比對，大小寫要一致，也看不出捷徑（symlink）。大小寫或寫法不同的情況，由對方主機用實際路徑再檢查一次，擋下後結果會顯示在那一列。
+
 ## [1.0.0-alpha.724] - 2026-10-13
 
 > 這版改了 daemon 與 SPA，mod 沒有改。Mac 按 dev update（或靠 dev server 的 HMR）就會生效；iOS 隨後出版。
