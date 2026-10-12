@@ -139,7 +139,12 @@ func (m *Module) sendPauseRow(r pauseOutboxRow) (done bool) {
 			m.logf("[team] pause outbox %d: %T is not a PauseNotifier, the phone push is dropped", r.Seq, svc)
 			return true
 		}
-		return n.NotifyPause(fmt.Sprintf("pause:%s:%d", r.SessionID, r.CreatedAt), r.Text)
+		tmux := ""
+		if o, live, err := m.origins.ResolveOriginBySession(r.SessionID); err == nil && live {
+			tmux = tmuxName(o.Tmux)
+		}
+		return n.NotifyPause(team.PausePush{CollapseID: fmt.Sprintf("pause:%s:%d", r.SessionID, r.CreatedAt), Text: r.Text,
+			SessionID: r.SessionID, TmuxSession: tmux, SinceMs: r.CreatedAt})
 	default:
 		m.logf("[team] pause outbox %d: unknown kind %q, dropped", r.Seq, r.Kind)
 		return true

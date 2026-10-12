@@ -47,14 +47,16 @@ func (g *fakeFlow) sentTexts() []string {
 type fakeNotifier struct {
 	mu   sync.Mutex
 	got  [][2]string
+	full []team.PausePush
 	done bool
 }
 
-func (n *fakeNotifier) NotifyPause(collapseID, text string) bool {
+func (n *fakeNotifier) NotifyPause(p team.PausePush) bool {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.done {
-		n.got = append(n.got, [2]string{collapseID, text})
+		n.got = append(n.got, [2]string{p.CollapseID, p.Text})
+		n.full = append(n.full, p)
 	}
 	return n.done
 }
@@ -64,7 +66,7 @@ func (f *fixture) outboxWorld() (*fakeFlow, *fakeNotifier) {
 	flow, push := &fakeFlow{}, &fakeNotifier{done: true}
 	f.core.Registry.Register(peersmod.FlowSenderKey, flow)
 	f.core.Registry.Register(team.PauseNotifyKey, push)
-	f.origins.show(team.Origin{SessionID: "sid-1", Ref: "_abc123", Address: "h/_abc123", PID: 10})
+	f.origins.show(team.Origin{SessionID: "sid-1", Ref: "_abc123", Address: "h/_abc123", PID: 10, Tmux: "mt0:@1.%1"})
 	f.origins.show(team.Origin{SessionID: "sid-2", Ref: "_def456", Address: "h/_def456", PID: 20})
 	return flow, push
 }
@@ -91,6 +93,10 @@ func TestPauseOutbox_SendsInOrderAndDeletes(t *testing.T) {
 	}
 	if len(push.got) != 1 || push.got[0] != [2]string{"pause:sid-1:500", "boss 已暫停：接力額度用完，等你接手"} {
 		t.Fatalf("push = %q", push.got)
+	}
+	// the push names the session and the tmux session it runs in (the phone jumps to it), and when the pause began
+	if p := push.full[0]; p.SessionID != "sid-1" || p.TmuxSession != "mt0" || p.SinceMs != 500 {
+		t.Fatalf("push request = %+v", p)
 	}
 	if rows := f.outbox(); len(rows) != 0 {
 		t.Fatalf("outbox after the pass = %+v, want empty", rows)

@@ -78,7 +78,18 @@ const PauseNotifyKey = "push.pause-notifier"
 
 // PauseNotifier is how the team module's pause outbox asks for a phone push, in process (spec §3.3). NotifyPause says done when
 // the request was queued or deliberately skipped (a person is at the computer, no device to tell) and not done when the push
-// side is not up yet, so the outbox row stays. collapseID is "pause:<session>:<since>": a repeat replaces the earlier push.
+// side is not up yet, so the outbox row stays. CollapseID is "pause:<session>:<since>": a repeat replaces the earlier push.
 type PauseNotifier interface {
-	NotifyPause(collapseID, text string) (done bool)
+	NotifyPause(p PausePush) (done bool)
+}
+
+// PausePush is one phone push of a pause. The payload carries the session (session_id; session_code when TmuxSession resolves to
+// one on this host, so a tap goes to it) and host_id; open_approvals / open_approval_keys come from the push module's own read at
+// send time or are left out, never written empty (the same sender an approval push uses).
+type PausePush struct {
+	CollapseID  string // pause:<session>:<since>
+	Text        string // the title
+	SessionID   string
+	TmuxSession string // the tmux session NAME the paused session runs in; "" when not in tmux
+	SinceMs     int64  // when the pause began (unix ms)
 }
