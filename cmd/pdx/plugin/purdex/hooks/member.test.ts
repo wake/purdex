@@ -650,7 +650,7 @@ test('a duplicate reask does not disarm the latch of a begin that was sent after
   await turn($, f, 't1') // paused: latched
   await receive($, ENVELOPE(REASK))
   await f.clock.advance(100) // the reask begin fails: idle, latch clear
-  f.usage = { tokens: 190000, window: 200000, percent: 95 }
+  f.usage = { tokens: 170000, window: 200000, percent: 85 }
   await $.turn.start({ text: 'work', turnId: 't2' })
   await complete($, 't2') // an ordinary begin goes out and waits
   await f.clock.advance(100)
