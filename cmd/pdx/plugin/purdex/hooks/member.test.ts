@@ -534,6 +534,24 @@ test('a reask during a turn is consumed at once and begins at that turn’s end'
   expect(begins(f).filter((c) => c.includes('--reask')).length).toBe(1)
 })
 
+// A reask that arrives while a relay of the mod's own is out waits for it, and is begun as the relay ends — not at some later turn.
+// Mutation gate: drain only at turn.complete (not at the return to idle) → no reask begin here (red).
+test('a reask that arrives while a relay is out is begun when that relay ends', async ($, on) => {
+  const f = memberWorld(on, 'none', (argv) => {
+    if (argv[0] === 'relay' && argv[1] === 'begin') return argv.includes('--reask') ? PAUSED : { exitCode: 0, stdout: JSON.stringify({ op: { ...OP, kind: 'self', state: 'awaiting_approval' }, request_id: 'req-1' }) }
+    if (argv[0] === 'relay' && argv[1] === 'wait') return new Promise<R>((resolve) => { (f as any).deny = () => resolve({ exitCode: 10 }) })
+    return undefined
+  })
+  await start($, f)
+  await turn($, f, 't1') // begins: awaiting the approval
+  expect(await receive($, ENVELOPE(REASK))).toEqual({ consumed: expect.any(String) })
+  await f.clock.advance(1000)
+  expect(begins(f).filter((c) => c.includes('--reask')).length).toBe(0) // a relay is out
+  ;(f as any).deny() // the person denied it: back to idle
+  await f.clock.advance(1000)
+  expect(begins(f).filter((c) => c.includes('--reask')).length).toBe(1)
+})
+
 // Only a peer's text counts, as for the member-relay control.
 test('the reask text from the user or any other origin is ordinary text', async ($, on) => {
   const f = soloWorld(on)

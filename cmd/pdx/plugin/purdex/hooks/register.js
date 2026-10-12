@@ -573,6 +573,11 @@ function toIdle($) {
   letGo()
   Object.assign(s, { gen: s.gen + 1, state: 'idle', pending: undefined, begun: undefined, fixRounds: 0, writeTurnId: undefined, seedTurnId: undefined, idleAsk: false, idleWithdraw: false })
   if (s.control.length > 0) claimLater($) // a control that came while a relay ran (claim checks the turn) is not left waiting for a later turn
+  if (s.reaskPending && !s.turnRunning) { // a reask that came while a relay ran: begun now, not at some later turn (a running turn drains it at its end)
+    const id = s.reaskPending
+    s.reaskPending = ''
+    later($, 0, () => reaskBegin($, id))
+  }
 }
 
 // recheckMember is U24 PL-1g: a cached `member` role is the daemon's answer of a moment ago, and a released
