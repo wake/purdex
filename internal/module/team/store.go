@@ -26,6 +26,10 @@ type Store struct {
 	// afterPauseLock, when set, runs in CreateSelfRelayOrPause right after the writer lock is taken (test seam: a quota PUT
 	// started there must wait for the begin). nil in production.
 	afterPauseLock func()
+	// leadNotice queues team.lead_paused / team.lead_resumed for a lead's remote members in the pause / resume transaction (set by the
+	// module at Init); nil in a bare store. afterLeadNotice, when set, fails right after (test seam: the one-transaction rule).
+	leadNotice      LeadNoticer
+	afterLeadNotice func() error
 	// newID and aliasFn let the store build the commands a transaction of its own enqueues (the lead moved, X3b-1b); set at Init.
 	newID func() string
 	// onCommands wakes the commands pump after a store transaction enqueued commands (set at Init).

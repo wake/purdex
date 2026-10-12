@@ -30,6 +30,10 @@ const (
 	// CmdAppearance is team.appearance (#2288): sent only to hosts that announce it, so a lead host's rename never waits
 	// for an older member host.
 	CmdAppearance = "team.appearance"
+	// CmdLeadPaused / CmdLeadResumed tell a member host that the lead of its remote members was paused / resumed (UP-3c): sent only to
+	// hosts that announce them, and DROPPED (not held) when the host does not, so an older member host never blocks its queue.
+	CmdLeadPaused  = team.CommandLeadPaused
+	CmdLeadResumed = team.CommandLeadResumed
 )
 
 // commandsPath is the one route every command goes to.

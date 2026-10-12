@@ -22,5 +22,6 @@ func (m *Module) pauseHeldCard(a team.Approval) bool {
 	m.announceClosed(after, nil)
 	m.rosterChanged()
 	m.kickPauseOutbox()
+	m.kickCommands() // a lead's remote members are told (UP-3c)
 	return true
 }

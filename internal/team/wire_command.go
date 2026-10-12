@@ -19,6 +19,10 @@ const (
 	CommandSpawn     = "spawn" // not applied by this version (X4a)
 	// CommandAppearance carries the team's current name, short label and colour to a member host (#2288).
 	CommandAppearance = "team.appearance"
+	// CommandLeadPaused / CommandLeadResumed tell the remote members of a team whose lead was paused for want of relay quota (or
+	// resumed): team-level, sent only to hosts that announce them (UP-3c). The member host owes each active remote member a notice.
+	CommandLeadPaused  = "team.lead_paused"
+	CommandLeadResumed = "team.lead_resumed"
 )
 
 // Command refusal codes (JSON 4xx bodies, {"error": code}).

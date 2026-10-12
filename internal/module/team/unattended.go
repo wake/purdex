@@ -217,6 +217,7 @@ func (m *Module) beginApproved(w http.ResponseWriter, op team.RelayOp, row team.
 			m.logf("[team] relay begin %s: no relay quota while unattended: the session is paused (ref %s)", op.SessionID, op.Ref)
 			m.rosterChanged() // the roster shows the pause
 			m.kickPauseOutbox()
+			m.kickCommands() // a lead's remote members are told (UP-3c)
 		}
 		m.writeErr(w, http.StatusConflict, team.ErrPausedNoQuota, "relay quota is used up; the session is paused until a person is back", nil)
 		return true, false

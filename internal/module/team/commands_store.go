@@ -58,7 +58,10 @@ const (
 	noticeHandover  = "handover"
 	noticeTeamEnded = "team_ended"
 	noticeLocalEnd  = "local_end" // the operator on this host ended the membership
-	noticeOwed      = "owed"
+	// the lead of this member was paused / resumed for want of relay quota (UP-3c); the member itself is not paused
+	noticeLeadPaused  = "lead_paused"
+	noticeLeadResumed = "lead_resumed"
+	noticeOwed        = "owed"
 )
 
 // ErrCommandIDConflict: the command id is stored for another content (spec §3.1 rule 3: 409 id_conflict).
@@ -223,6 +226,8 @@ func (s *Store) applyIn(tx *sql.Tx, p CommandPlan) (res CommandResult, err error
 		res, err = applyVoidIn(tx, p)
 	case team.CommandAppearance:
 		res, err = applyAppearanceIn(tx, p)
+	case team.CommandLeadPaused, team.CommandLeadResumed:
+		res, err = applyLeadNoticeIn(tx, p)
 	default:
 		return CommandResult{}, ErrCommandUnsupported
 	}

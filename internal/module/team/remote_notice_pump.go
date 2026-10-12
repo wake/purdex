@@ -36,7 +36,7 @@ const (
 // remoteNoticeState is the member state a notice of this kind is about.
 func remoteNoticeState(kind string) string {
 	switch kind {
-	case noticeAdopted, noticeHandover:
+	case noticeAdopted, noticeHandover, noticeLeadPaused, noticeLeadResumed:
 		return remoteActive
 	case noticeReleased:
 		return remoteReleased
@@ -74,6 +74,10 @@ func remoteNoticeText(n remoteNoticeRow, m remoteMemberRow) (string, bool) {
 		return fmt.Sprintf(team.RemoteTeamEndedNoticeFmt, lead, name), true
 	case noticeLocalEnd:
 		return fmt.Sprintf(team.RemoteLocalEndNoticeFmt, name, lead), true
+	case noticeLeadPaused:
+		return team.PauseNoticeLeadPaused, true
+	case noticeLeadResumed:
+		return team.PauseResumedMemberLead, true
 	}
 	return "", false
 }

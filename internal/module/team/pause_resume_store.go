@@ -147,6 +147,12 @@ func (s *Store) ResumePauses(scope ResumeScope, at int64, newMod func(sessionID 
 		if err := outbox(sid, team.PauseOutboxNotice, text, ""); err != nil {
 			return fail(err)
 		}
+		if first.Role == team.PauseRoleLead {
+			// the members on other hosts that heard of the pause hear of the resume (queued with the lead's own notice, UP-3c)
+			if err := s.noticeRemoteMembersIn(tx, first.TeamID, CmdLeadResumed, at); err != nil {
+				return fail(err)
+			}
+		}
 		list, err := bounceListIn(tx, sid)
 		if err != nil {
 			return fail(err)

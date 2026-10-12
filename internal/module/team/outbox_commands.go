@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 
 	peersmod "github.com/wake/purdex/internal/module/peers"
+	ipeers "github.com/wake/purdex/internal/peers"
 )
 
 // The commands table as the pump's outboxStore (cross-host team spec X3a-2). The table, enqueue, settle, void and unpair
@@ -52,7 +54,34 @@ func (o *commandOutbox) Head(hostID string) (outboxEntry, int64, bool, error) {
 	if expiring(c.Kind) && c.CreatedAt <= o.now()-commandExpiryMS {
 		return outboxEntry{}, 0, false, nil
 	}
-	return outboxEntry{ID: c.ID, HostID: c.HostID, Path: commandsPath, Body: c.Body, Attempts: c.Attempts, First401At: c.First401At}, c.NextAt, true, nil
+	e := outboxEntry{ID: c.ID, HostID: c.HostID, Path: commandsPath, Body: c.Body, Attempts: c.Attempts, First401At: c.First401At}
+	if leadNoticeKind(c.Kind) {
+		e.Kind = c.Kind // the pump reads the host's capabilities before it sends one of these (kindGate)
+	}
+	return e, c.NextAt, true, nil
+}
+
+// leadNoticeKind says whether a command kind is one of UP-3c's notices: the only commands sent through the kind gate.
+func leadNoticeKind(kind string) bool { return kind == CmdLeadPaused || kind == CmdLeadResumed }
+
+var (
+	_ kindGate    = (*commandOutbox)(nil)
+	_ kindDropper = (*commandOutbox)(nil)
+)
+
+// Announces is the pump's kind gate: a lead notice is sent only to a host that lists its kind.
+func (o *commandOutbox) Announces(caps ipeers.TeamCaps, kind string) bool {
+	return slices.Contains(caps.Kinds, kind)
+}
+
+// DropIfUnannounced: a lead notice for a host that does not announce it is dropped, not held. It is a courtesy; holding it would
+// block every command behind it for that host (an older member host never announces it).
+func (o *commandOutbox) DropIfUnannounced(kind string) bool { return leadNoticeKind(kind) }
+
+// Dropped ends the entry for good: one statement, a CAS on pending.
+func (o *commandOutbox) Dropped(e outboxEntry) error {
+	_, err := o.s.db.Exec(`UPDATE team_commands SET state = ?, updated_at = ? WHERE id = ? AND state = 'pending'`, cmdDropped, o.now(), e.ID)
+	return err
 }
 
 func (o *commandOutbox) Attempted(id string, nextAt, first401At int64) error {
