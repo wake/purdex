@@ -223,6 +223,12 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "unknown reason", nil)
 		return
 	}
+	if req.ReaskID != "" {
+		if u, err := uuid.Parse(req.ReaskID); err != nil || u.String() != strings.ToLower(req.ReaskID) {
+			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "reask_id must be a UUID", nil)
+			return
+		}
+	}
 	if req.RequestID != "" {
 		if u, err := uuid.Parse(req.RequestID); err != nil || u.Version() != 4 || u.Variant() != uuid.RFC4122 {
 			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "request_id must be a UUID v4", nil)
@@ -360,6 +366,18 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := m.now()
+	// A valid release token (spec §3.4, UP-3b) makes the begin a card for a person: this session's, unspent, under 24 h. Read under
+	// createMu, where the reconciliation's prune also runs; the card's transaction spends it.
+	reask := false
+	if req.ReaskID != "" {
+		var err error
+		if reask, err = m.store.ReleaseTokenValid(req.ReaskID, req.SessionID, now-team.PauseTokenTTLMs); err != nil {
+			m.logf("[team] relay begin %s: %v", req.SessionID, err)
+			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+			return
+		}
+	}
+	sp.Reask = reask
 	opID, reqID := m.newID(), req.RequestID
 	if reqID == "" {
 		reqID = m.newID()
@@ -377,6 +395,22 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: now, DeadlineAt: now + team.SelfRelayDeadlineS*1000, LeaseUntil: now + team.LeaseS*1000,
 	}
 	hash := requestHash(team.KindSelfRelay, origin.SessionID, team.SelfRelayDeadlineS, payload)
+	if reask {
+		// A re-ask after a pause: never paused, never approved for the person, whatever the switch and the quota say.
+		stored, err := m.store.CreateSelfRelayCard(op, row, hash, req.ReaskID, now-team.PauseTokenTTLMs)
+		if err != nil {
+			if errors.Is(err, ErrRelayOpOpen) && m.writeRelayOpen(w, req.SessionID) {
+				return
+			}
+			m.logf("[team] relay begin %s: reask card: %v", req.SessionID, err)
+			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+			return
+		}
+		m.logf("[team] relay op %s opened: self, origin=%s (%s) request=%s, a re-ask after a pause: a card for a person", opID, origin.Ref, origin.SessionID, reqID)
+		m.broadcast("opened", &stored)
+		m.writeJSON(w, http.StatusCreated, team.RelayBeginResponse{Op: op, RequestID: reqID})
+		return
+	}
 	exhausted := false // the chain has no quota left: the request opens for a person below and is listed as held at once
 	if m.unattendedOn() {
 		var done bool

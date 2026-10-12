@@ -36,6 +36,23 @@ type PausedSession struct {
 	Bounced   int      `json:"bounced"`
 }
 
+// PausedReleaseRoute is POST /api/team/paused/{session_id}/release: a person clears one session's pause (UP-3b).
+const PausedReleaseRoute = "/api/team/paused/{session_id}/release"
+
+// ErrNotPaused is the 404 of a release for a session that holds no pause row.
+const ErrNotPaused = "not_paused"
+
+// PauseReleaseRequest is the body of the release: an audit claim like PUT /api/team/roots, not a security boundary.
+type PauseReleaseRequest struct {
+	Client Client `json:"client"`
+}
+
+// PauseReleaseResponse is the 200 answer: how many sessions are no longer paused (the session, and the members of a lead that were
+// paused only because it was).
+type PauseReleaseResponse struct {
+	Released int `json:"released"`
+}
+
 // PausedView is the answer of GET /api/team/paused.
 type PausedView struct {
 	Sessions []PausedSession `json:"sessions"` // never null (MarshalJSON)
@@ -92,7 +109,9 @@ const (
 
 // The texts the daemon says on leaving a pause (spec §3.4), word for word.
 const (
-	PauseResumedSolo        = "[pdx team] 管理者已回位。接力申請已重新送出，等使用者核准。"
+	PauseResumedSolo = "[pdx team] 管理者已回位。接力申請已重新送出，等使用者核准。"
+	// PauseReleasedSolo is a release by a person (not the switch): the lead's or the solo session's resume notice.
+	PauseReleasedSolo       = "[pdx team] 已解除暫停。接力申請已重新送出，等使用者核准。"
 	PauseResumedSoloOldMod  = "[pdx team] 管理者已回位。請在這個 session 打 /relay 重新申請接力。"
 	PauseResumedMemberLead  = "[pdx team] lead 已恢復，等 lead 指示。"
 	PauseResumedMemberQuota = "[pdx team] 管理者已回位，等 lead 指示。"

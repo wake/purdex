@@ -552,6 +552,31 @@ func TestRelayCmd_HelloPrintsIdleNumbers(t *testing.T) {
 
 // IR-1a: `relay begin --reason idle --idle-minutes N` reaches the wire; a bad combination is a usage error (exit 2) before
 // any request. Mutation gate: drop the validation → the bad cases reach the daemon / exit 0 (red).
+// `--reask <uuid>` reaches the begin body as reask_id (UP-3b); a value that is not a UUID is a usage error that never reaches the daemon.
+// Mutation gate: do not copy the flag into the request → the daemon sees no reask_id (red).
+func TestRelayCmd_BeginReaskReachesTheWireAndMustBeAUUID(t *testing.T) {
+	pct := 55.0
+	base := []string{"begin", "--self", "--session", "sid-1", "--used", "55", "--window", "1000000"}
+	d := &fakeRelayDaemon{beginStatus: 201, beginBody: team.RelayBeginResponse{Op: team.RelayOp{ID: "op-1", State: team.RelayAwaitingApproval, UsedPercentage: &pct}, RequestID: "req-1"}}
+	id := uuid.NewString()
+	if code, _, stderr := driveRelay(t, context.Background(), d, append(append([]string{}, base...), "--reask", id)...); code != ExitOK {
+		t.Fatalf("reask begin: code=%d stderr=%q", code, stderr)
+	}
+	_, bodies := d.snapshot()
+	var sent team.RelayBeginRequest
+	_ = json.Unmarshal([]byte(bodies[len(bodies)-1]), &sent)
+	if sent.ReaskID != id {
+		t.Fatalf("sent = %+v, want reask_id %s", sent, id)
+	}
+	bad := &fakeRelayDaemon{}
+	if code, _, _ := driveRelay(t, context.Background(), bad, append(append([]string{}, base...), "--reask", "not-a-uuid")...); code != ExitUsage {
+		t.Fatalf("code = %d, want %d", code, ExitUsage)
+	}
+	if paths, _ := bad.snapshot(); len(paths) != 0 {
+		t.Fatalf("a bad --reask reached the daemon: %v", paths)
+	}
+}
+
 func TestRelayCmd_BeginIdleFlagsReachTheWireAndAreValidated(t *testing.T) {
 	pct := 55.0
 	base := []string{"begin", "--self", "--session", "sid-1", "--used", "55", "--window", "1000000"}

@@ -112,6 +112,9 @@ type SelfRelayPayload struct {
 	// Reason / IdleMinutes: the ask is an idle relay (idle relay spec §2). The row's, copied from begin.
 	Reason      string `json:"reason,omitempty"`
 	IdleMinutes int    `json:"idle_minutes,omitempty"`
+	// Reask: the request was made with a valid release token (UP-3b): a card for a person, never paused and never approved by the
+	// daemon, whatever the switch and the quota say. The row's, set by the daemon when it consumed the token; a caller cannot send it.
+	Reask bool `json:"reask,omitempty"`
 }
 
 // RelayHelloRequest is POST /api/relay/hello.
@@ -161,6 +164,10 @@ type RelayBeginRequest struct {
 	// Reason is "" (the threshold ask) or RelayBeginReasonIdle; IdleMinutes is 1–59 iff the reason is idle, else 0.
 	Reason      string `json:"reason,omitempty"`
 	IdleMinutes int    `json:"idle_minutes,omitempty"`
+	// ReaskID is the release token of a re-ask after a pause (`pdx relay begin --reask <uuid>`, UP-3b): a UUID the daemon wrote when it
+	// resumed the session. Valid (this session's, unused, under 24 h) it is consumed and the begin opens a card for a person; unknown,
+	// used or another session's it is ignored and the ordinary rules apply.
+	ReaskID string `json:"reask_id,omitempty"`
 }
 
 // RelayBeginResponse is begin's 201 body.

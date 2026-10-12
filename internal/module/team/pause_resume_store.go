@@ -15,10 +15,16 @@ import (
 type ResumeScope struct {
 	All        bool
 	OnSinceNot int64
+	// Release picks the rows a person releases (UP-3b): every row of Release, and the `lead`-cause rows of the members it paused with
+	// it. A member's own quota row stays. The solo / lead notice is the release text, not the switch's.
+	Release string
 }
 
 func (sc ResumeScope) where() (string, []any) {
-	if sc.All {
+	switch {
+	case sc.Release != "":
+		return "(session_id = ? OR (cause = 'lead' AND lead_session_id = ?))", []any{sc.Release, sc.Release}
+	case sc.All:
 		return "1", nil
 	}
 	return "on_since <> ?", []any{sc.OnSinceNot}
@@ -129,6 +135,9 @@ func (s *Store) ResumePauses(scope ResumeScope, at int64, newMod func(sessionID 
 			text = team.PauseResumedSoloOldMod
 			if reask {
 				text = team.PauseResumedSolo
+				if scope.Release != "" {
+					text = team.PauseReleasedSolo
+				}
 			}
 		}
 		if err := outbox(sid, team.PauseOutboxNotice, text, ""); err != nil {

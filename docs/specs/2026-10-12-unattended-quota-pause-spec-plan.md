@@ -77,9 +77,9 @@ stale by definition); flow notices from a persisted outbox, the only messages th
   and `teams.ended_at = 0` (the persisted predicate of `ActiveMembersOfLiveTeams`, `team_store_members.go:71`;
   `killing` / `releasing` / `gone` / remote excluded).
 - `GET /api/team/paused` → `{sessions: [{session_id, ref, title, role, causes, since, lead_ref, bounced}]}`; roster
-  rows gain `paused: {causes, since} | null`. Capability `team.pause.v1` is announced only by **UP-3b** (when entering,
-  refusing, leaving and release all exist). **Entering a pause is behind a compile-time switch** (`pauseEntryEnabled`,
-  false until UP-3b flips it together with the capability): while false, `SpendOrPause` never takes the pause branch and
+  rows gain `paused: {causes, since} | null`. Capability `team.pause.v1` is announced only by **UP-4**, the last phase (when
+  entering, refusing, leaving, release, remote notices and the mod all exist). **Entering a pause is behind a
+  compile-time switch** (`pauseEntryEnabled`, false until UP-4 flips it together with the capability): while false, `SpendOrPause` never takes the pause branch and
   begin behaves as today (held card). So main stays deployable after every phase (1f, UP-1a review #3, UP-2a review #4).
 
 ### 3.2 Refusing deliveries (UP-1b)
@@ -183,13 +183,14 @@ stale by definition); flow notices from a persisted outbox, the only messages th
 - **UP-3a switch off + reconcile + resume group.** Tests: resume group order (lead before members), only-last-cause
   resume notice, bounce lists sent and cleared, member-quota list to the lead; off CAS then crash then on ⇒ the old
   rows resumed by `on_since`; reconcile while on with current `on_since` ⇒ nothing; old-mod fallback notice.
-- **UP-3b release one + tokens + capability `team.pause.v1` + flip `pauseEntryEnabled`.** Tests: claim validation; solo / lead-with-members / member-quota release; the re-ask
+- **UP-3b release one + tokens.** Tests: claim validation; solo / lead-with-members / member-quota release; the re-ask
   with the token under unattended on + no quota ⇒ a person's held card (not a pause); token used once; duplicate
   `reask` delivery ⇒ one begin; token expiry.
 - **UP-3c remote member notices.** Tests: a lead pause with a remote member queues one `lead_paused` remote notice with
   the local text; the resume group queues `lead_resumed`; the member host renders both kinds; an old member host (kind
   unknown) drops it without breaking the pump.
-- **UP-4 mod.** Tests: 409 ⇒ latch, no ask on later turns; `reask` ⇒ consumed, dedup by id, one begin with `--reask`,
+- **UP-4 mod + flip `pauseEntryEnabled` + capability `team.pause.v1`** (mod protocol 5 = `team.MinPauseReaskModVersion`,
+  UP-3a). Tests: 409 ⇒ latch, no ask on later turns; `reask` ⇒ consumed, dedup by id, one begin with `--reask`,
   latch cleared; `session.start` clears the latch; hello protocol; old daemon unchanged. `go test ./cmd/pdx/...` (incl.
   plugin) + plugin vitest.
 - **UP-5a / UP-5b (88).**
