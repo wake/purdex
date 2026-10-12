@@ -23,6 +23,9 @@ type Store struct {
 	db *sql.DB
 	// localHostID is this daemon's host id (set at Init): the sweepers look at the rows that live on it.
 	localHostID string
+	// afterPauseLock, when set, runs in CreateSelfRelayOrPause right after the writer lock is taken (test seam: a quota PUT
+	// started there must wait for the begin). nil in production.
+	afterPauseLock func()
 	// newID and aliasFn let the store build the commands a transaction of its own enqueues (the lead moved, X3b-1b); set at Init.
 	newID func() string
 	// onCommands wakes the commands pump after a store transaction enqueued commands (set at Init).

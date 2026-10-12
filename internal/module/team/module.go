@@ -142,6 +142,13 @@ type Module struct {
 	rootsLimit *peersmod.HostLimiter
 	// rootsPrecheckHook, when set, runs at the start of a removal's in-use pre-check (test seam: proves it runs outside the config lock).
 	rootsPrecheckHook func()
+	// pauseKick wakes the pause outbox loop (buffered 1); pauseOutboxCrash is a test seam: true aborts a pass after a row was sent and before it was deleted.
+	pauseKick        chan struct{}
+	pauseOutboxCrash func(seq int64) bool
+	// pauseRetryGap is how long a failed row waits before it is tried again; pauseRetryAt is when each failed row may next be tried (in memory: a restart tries at once).
+	pauseRetryGap time.Duration
+	pauseRetryMu  sync.Mutex
+	pauseRetryAt  map[int64]time.Time
 	// afterTargetResolved, when set, runs in the commands route between the target's resolution and the apply (test
 	// seam for a consent revoked meanwhile). nil in production.
 	afterTargetResolved func()
@@ -413,6 +420,8 @@ func (m *Module) Init(c *core.Core) error {
 	m.factLimit = newCommandLimiter()
 	m.proxyLimit = newCommandLimiter()
 	m.rootsLimit = newCommandLimiter()
+	m.pauseKick = make(chan struct{}, 1)
+	m.pauseRetryGap = pauseOutboxEvery
 	c.Registry.Register(peersmod.PauseGateKey, pauseGate{m}) // peers asks it before a message reaches a session (UP-1b)
 	svc, ok := c.Registry.Get(peersmod.OriginResolverKey)
 	if !ok {
@@ -594,8 +603,9 @@ func (m *Module) Start(context.Context) error {
 	m.core.Events.OnSubscribe(m.sendSnapshot)
 	m.core.Events.OnSubscribe(m.sendUnattendedSnapshot)
 	m.core.Events.OnSubscribe(m.sendRosterSnapshot)
-	m.sweepWG.Add(4)
-	go m.runNotices() // first: a notice owed across the restart goes out before the sweeper's first tick
+	m.sweepWG.Add(5)
+	go m.runNotices()     // first: a notice owed across the restart goes out before the sweeper's first tick
+	go m.runPauseOutbox() // what a pause owes, written before a restart, is sent now
 	go m.runSweeper()
 	go m.runRetention()
 	go m.runRoster() // after the boot's own writes signalled: it publishes what they left

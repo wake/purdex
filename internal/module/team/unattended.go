@@ -197,8 +197,29 @@ func (m *Module) createApprovedLead(w http.ResponseWriter, row team.Approval, ha
 // for a person as with unattended mode off, and lists it as held for quota. Caller holds createMu.
 func (m *Module) beginApproved(w http.ResponseWriter, op team.RelayOp, row team.Approval, hash string) (done, exhausted bool) {
 	c := m.withQuotaRule(daemonClose(row.CreatedAt, nil), team.KindSelfRelay)
-	after, claimed, err := m.store.CreateSelfRelayApproved(op, row, hash, c)
+	st, _ := m.unattended.Unattended()
+	var after team.Approval
+	var claimed team.RelayOp
+	outcome := PauseNone
+	var err error
+	if pauseEntryOn {
+		after, claimed, outcome, err = m.store.CreateSelfRelayOrPause(op, row, hash, c,
+			PausePlan{SessionID: op.SessionID, Ref: op.Ref, Title: row.Origin.Title, OnSince: st.Since, At: row.CreatedAt})
+	} else {
+		// The pause is not released yet (pauseEntryEnabled): an exhausted quota is the held card it has always been.
+		after, claimed, err = m.store.CreateSelfRelayApproved(op, row, hash, c)
+	}
 	switch {
+	case err == nil && outcome != PauseNone:
+		// The chain has no quota left and the host is unattended: the session is paused instead of getting a card (spec §3.3),
+		// or it already was. No op exists; the mod is answered 409 and goes idle.
+		if outcome == PausePaused {
+			m.logf("[team] relay begin %s: no relay quota while unattended: the session is paused (ref %s)", op.SessionID, op.Ref)
+			m.rosterChanged() // the roster shows the pause
+			m.kickPauseOutbox()
+		}
+		m.writeErr(w, http.StatusConflict, team.ErrPausedNoQuota, "relay quota is used up; the session is paused until a person is back", nil)
+		return true, false
 	case errors.Is(err, ErrQuotaExhausted):
 		// The chain has no quota left (the rule is on): nothing was written; the caller opens the request for a person
 		// exactly as with unattended mode off. The sweeps hold it quietly and approve it once the quota is raised.

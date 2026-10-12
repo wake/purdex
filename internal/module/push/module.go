@@ -229,6 +229,7 @@ func (m *Module) Start(ctx context.Context) error {
 	snd.Start(ctx)
 	snd.openState = m.openState
 	m.sender.Store(snd)
+	m.core.Registry.Register(team.PauseNotifyKey, m.pauseNotifier()) // the team module's pause outbox asks for a phone push through it
 	m.holds.reset()
 	m.wbHolds.reset()
 	m.asks.Clear() // a restart starts with no asks: the feed's open snapshot proves nothing was pushed (spec §4.4), so it is not loaded
