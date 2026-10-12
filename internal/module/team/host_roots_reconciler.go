@@ -298,6 +298,10 @@ func completeRootsAnswer(body []byte, c HostRootChange) (rootsAnswer, string) {
 	// leaves its matched root out of them (a body that says otherwise did not apply the change)
 	has := func(p string) bool { return p != "" && slices.Contains(*a.TeamRoots, p) }
 	switch c.Op {
+	case team.RootsOpRead:
+		if a.Result != team.RootsResultUnchanged {
+			return a, "a read that changed something"
+		}
 	case team.RootsOpAdd:
 		if a.Result == team.RootsResultRemoved {
 			return a, "an add answered removed"

@@ -96,6 +96,12 @@ chain.
   created_at, updated_at`; index `(host_id, state)`.
 - **Cache** `host_roots_seen`: `host_id PK, roots_json, rev, seen_at`. Written only with `rev >= stored rev`
   (`INSERT … ON CONFLICT DO UPDATE … WHERE excluded.rev >= rev`), so a late, older answer never overwrites a newer one.
+  Two exceptions to the monotonic rule end its only failure mode, a member host whose rev **starts over** because its
+  relation with this host was rebuilt (user 2026-10-12 via the lead): (1) an unpair (`unpairHost`) deletes the host's cache
+  row in its transaction; (2) on the **read path only** (`GET /api/team/host-roots`): a `read` that answers a rev **below**
+  the cache's is read again at once; if the second answer is also below, the relation was rebuilt and the cache is replaced
+  by it; a second answer that is not below is applied the ordinary way (the first was a late answer), and a second read that
+  fails changes nothing. A settle (a change's 200) always stays monotonic.
 - **Reconciler** (a coordinator plus **one worker per host** with pending rows, at most one call in flight per host, so
   an offline host — `HostCaller.Call` can wait ~12 s — never delays another; started / stopped with the team module;
   woken on insert and every 60 s):
@@ -129,7 +135,10 @@ chain.
     "roots_in_use", uses: [{ref | op_id, title, cwd}]}`, no row is written. The App shows 「這個資料夾還有 member 在用：…。
     先結束它們才能移除。」. The lead cannot resolve the member host's symlinks, so a member whose recorded cwd uses another
     spelling of the same directory is not seen here; the member host's pre-check (§3.1) refuses that removal and the row
-    shows it.
+    shows it. Case-sensitive too (this host cannot know the member host's file-system rules), and a member with **no recorded
+    cwd** is not counted by this check (refusing every removal for it would make the grant unmanageable; the member host's
+    pre-check sees the real path); a remote **adopt** with no cwd is refused (`root_being_removed`) only while a removal of
+    that host is pending.
   - **Pending-remove guard** on both ways a member of this lead appears on that host, each inside its existing write
     transaction after the writer lock is held: remote spawn acceptance (`AcceptRemoteSpawn`) and remote adopt approval
     (`adoptApprovedIn`, before the `joining` row is inserted) refuse a cwd within a path that has a **pending remove** row

@@ -33,6 +33,10 @@ type Store struct {
 	// failBeforeRootsCache, when set, fails SettleRootChangeDone after its row update and before the cache write (test seam: the two
 	// are one transaction). nil in production.
 	failBeforeRootsCache func() error
+	// afterRootsLock, when set, runs in AddHostRootChange right after the writer lock is taken (test seam for the race tests).
+	afterRootsLock func()
+	// afterSpawnLock, when set, runs in AcceptRemoteSpawn right after the writer lock is taken (race tests).
+	afterSpawnLock func()
 	// newID and aliasFn let the store build the commands a transaction of its own enqueues (the lead moved, X3b-1b); set at Init.
 	newID func() string
 	// onCommands wakes the commands pump after a store transaction enqueued commands (set at Init).

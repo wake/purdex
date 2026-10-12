@@ -573,6 +573,9 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT "+team.RelayQuotaRoute, m.handleRelayQuotaPut)
 	mux.HandleFunc("PUT "+team.MaxMembersRoute, m.handleMaxMembersPut)
 	mux.HandleFunc("PUT "+team.RootsRoute, m.handleRootsPut)
+	mux.HandleFunc("POST "+team.HostRootsRoute, m.handleHostRootsPost)           // the App adds / removes a directory in a member host's grant (XR-2b)
+	mux.HandleFunc("GET "+team.HostRootsRoute, m.handleHostRootsGet)             // every paired host's roots, status and pending changes
+	mux.HandleFunc("POST "+team.HostRootsDismissRoute, m.handleHostRootsDismiss) // delete a refused / dropped change
 	mux.HandleFunc("PUT "+team.AppearanceRoute, m.handleAppearancePut)
 	mux.HandleFunc("POST /api/hooks/decide", m.handleHookDecide)
 	// P5a relay routes (spec §8.3, §8.7); all under TokenAuth like /api/team/*.

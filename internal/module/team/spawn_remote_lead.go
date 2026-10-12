@@ -122,6 +122,9 @@ func (m *Module) acceptRemoteSpawn(w http.ResponseWriter, r *http.Request, req t
 	case errors.Is(err, ErrSpawnTeamFull):
 		m.writeErr(w, http.StatusConflict, team.ErrTeamFull, fmt.Sprintf("team %s has its %d active or starting members", t.ID, t.Grant.MaxMembers), nil)
 		return remoteSpawnRow{}, false
+	case errors.Is(err, ErrRootBeingRemoved):
+		m.writeErr(w, http.StatusConflict, team.ErrRootBeingRemoved, "a removal of "+want.Cwd+" (or a directory above it) is pending on "+req.Host+"; try again when it has settled", nil)
+		return remoteSpawnRow{}, false
 	case err != nil:
 		m.failRemoteSpawn(w, req.ID, err)
 		return remoteSpawnRow{}, false

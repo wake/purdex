@@ -178,6 +178,17 @@ func adoptApprovedIn(tx *sql.Tx, id string, c Close, p team.AdoptPayload, chk ad
 	if refused, err = adoptRefusal(tx, id, rowHostID, p, chk); err != nil {
 		return 0, "", err
 	}
+	if refused == "" && remote {
+		// the writer lock is ours: a pending removal of the directory the target runs under refuses the adoption (XR-2b), as it
+		// refuses a spawn — either the removal is refused (a member exists) or this is (a removal is pending), never both
+		being, err := rootBeingRemovedIn(tx, p.TargetHostID, p.TargetCwd)
+		if err != nil {
+			return 0, "", err
+		}
+		if being {
+			refused = team.ErrRootBeingRemoved
+		}
+	}
 	if refused != "" {
 		n, err = closeRowIn(tx, id, Close{State: team.StateCancelled, DecidedAt: c.DecidedAt, UnexpiredAt: c.UnexpiredAt, Reason: refused}, "", 0)
 		if err != nil || n == 0 {
