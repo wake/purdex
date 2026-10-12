@@ -49,6 +49,13 @@ func (f *fixture) pauses() map[string]PauseRow {
 	return out
 }
 
+// enablePauseEntry opens the release gate (pauseEntryEnabled) for one test.
+func enablePauseEntry(t *testing.T) {
+	t.Helper()
+	pauseEntryOn = true
+	t.Cleanup(func() { pauseEntryOn = pauseEntryEnabled })
+}
+
 // quotaWorld: the host is unattended, the relay-quota rule is on.
 func (f *fixture) quotaWorld() {
 	f.t.Helper()
@@ -95,6 +102,7 @@ func TestPauseEnter_QuotaLeftOpensTodaysOp(t *testing.T) {
 // No quota, unattended on: 409 paused_no_quota, no op and no approval row, the session paused (ref / title recorded, the switch's
 // since), and the outbox holds the notice then the push.
 func TestPauseEnter_NoQuotaPausesTheSessionInsteadOfOpeningACard(t *testing.T) {
+	enablePauseEntry(t)
 	f := newFixture(t)
 	f.quotaWorld()
 	f.origins.show(team.Origin{SessionID: "sid-1", Ref: "_abc123", Title: "boss", Address: "self/boss", PID: 10})
@@ -120,6 +128,7 @@ func TestPauseEnter_NoQuotaPausesTheSessionInsteadOfOpeningACard(t *testing.T) {
 // A lead takes its live local members with it: each gets a `lead` row and the notice; the push counts them.
 // Mutation gate: skip the cascade → the members are not paused (red).
 func TestPauseEnter_ALeadPausesItsLiveLocalMembers(t *testing.T) {
+	enablePauseEntry(t)
 	f := newFixture(t)
 	f.quotaWorld()
 	f.origins.show(team.Origin{SessionID: "sid-1", Ref: "_abc123", Title: "boss", Address: "self/boss", PID: 10})
@@ -189,6 +198,7 @@ func TestPauseEnter_OnlyWithTheSwitchAndTheRuleOn(t *testing.T) {
 
 // Already paused: 409, no new rows, no second outbox batch.
 func TestPauseEnter_AnAlreadyPausedSessionGetsTheSameAnswerAndNoNewRows(t *testing.T) {
+	enablePauseEntry(t)
 	f := newFixture(t)
 	f.quotaWorld()
 	if code, _ := f.beginRaw("sid-1"); code != http.StatusConflict {
@@ -213,6 +223,7 @@ func TestPauseEnter_AnAlreadyPausedSessionGetsTheSameAnswerAndNoNewRows(t *testi
 // pause. The hook runs right after the lock is taken; a PUT started there stays blocked until the begin has committed.
 // Mutation gate: take the lock after the quota check (or not at all) → the PUT completes inside the hook (red).
 func TestPauseEnter_ABeginHoldsTheWriterLockWhileItChecksTheQuota(t *testing.T) {
+	enablePauseEntry(t)
 	f := newFixture(t)
 	f.quotaWorld()
 	putDone := make(chan struct{})
@@ -275,5 +286,30 @@ func TestPauseEnter_BeginAndQuotaPutRaceForTheLastUnit(t *testing.T) {
 		if approved == paused || (approved && code != http.StatusCreated) || (paused && code != http.StatusConflict) || g.selfLeft("sid-1") < 0 {
 			t.Fatalf("round %d: code %d, ops %d, pauses %v, self_left %d", round, code, g.opCount(), g.pauses(), g.selfLeft("sid-1"))
 		}
+	}
+}
+
+// While the gate is closed (pauseEntryEnabled is false) the release is not shipped: a begin that finds no quota while unattended
+// opens the held card it always did, and writes no pause row and no outbox row.
+// Mutation gate: take the gate out (pause whatever it says) → the begin is paused (red).
+func TestPauseEnter_GateClosedKeepsTodaysHeldCard(t *testing.T) {
+	if pauseEntryEnabled {
+		t.Skip("the gate is open in this build")
+	}
+	f := newFixture(t)
+	f.quotaWorld()
+	f.origins.show(team.Origin{SessionID: "sid-1", Ref: "_abc123", Title: "boss", Address: "self/boss", PID: 10})
+	code, body := f.beginRaw("sid-1")
+	if code == http.StatusConflict {
+		t.Fatalf("begin = %d %s, want the held card's answer, not a pause", code, body)
+	}
+	if n := len(f.pauses()); n != 0 {
+		t.Fatalf("%d pause rows written with the gate closed", n)
+	}
+	if n := len(f.outbox()); n != 0 {
+		t.Fatalf("%d outbox rows written with the gate closed", n)
+	}
+	if f.approvalRows() != 1 {
+		t.Fatalf("approval rows = %d, want the one held card", f.approvalRows())
 	}
 }

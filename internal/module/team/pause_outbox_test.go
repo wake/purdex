@@ -218,6 +218,7 @@ func TestPauseOutbox_NoFlowSenderKeepsTheRows(t *testing.T) {
 
 // End to end through the module: a begin that pauses wakes the loop, and the notice and the push go out.
 func TestPauseOutbox_ABeginThatPausesIsSentByTheRunningLoop(t *testing.T) {
+	enablePauseEntry(t)
 	f := newFixture(t)
 	flow, push := f.outboxWorld()
 	f.quotaWorld()

@@ -198,8 +198,17 @@ func (m *Module) createApprovedLead(w http.ResponseWriter, row team.Approval, ha
 func (m *Module) beginApproved(w http.ResponseWriter, op team.RelayOp, row team.Approval, hash string) (done, exhausted bool) {
 	c := m.withQuotaRule(daemonClose(row.CreatedAt, nil), team.KindSelfRelay)
 	st, _ := m.unattended.Unattended()
-	after, claimed, outcome, err := m.store.CreateSelfRelayOrPause(op, row, hash, c,
-		PausePlan{SessionID: op.SessionID, Ref: op.Ref, Title: row.Origin.Title, OnSince: st.Since, At: row.CreatedAt})
+	var after team.Approval
+	var claimed team.RelayOp
+	outcome := PauseNone
+	var err error
+	if pauseEntryOn {
+		after, claimed, outcome, err = m.store.CreateSelfRelayOrPause(op, row, hash, c,
+			PausePlan{SessionID: op.SessionID, Ref: op.Ref, Title: row.Origin.Title, OnSince: st.Since, At: row.CreatedAt})
+	} else {
+		// The pause is not released yet (pauseEntryEnabled): an exhausted quota is the held card it has always been.
+		after, claimed, err = m.store.CreateSelfRelayApproved(op, row, hash, c)
+	}
 	switch {
 	case err == nil && outcome != PauseNone:
 		// The chain has no quota left and the host is unattended: the session is paused instead of getting a card (spec §3.3),

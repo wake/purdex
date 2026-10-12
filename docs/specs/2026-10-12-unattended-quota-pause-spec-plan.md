@@ -78,7 +78,9 @@ stale by definition); flow notices from a persisted outbox, the only messages th
   `killing` / `releasing` / `gone` / remote excluded).
 - `GET /api/team/paused` → `{sessions: [{session_id, ref, title, role, causes, since, lead_ref, bounced}]}`; roster
   rows gain `paused: {causes, since} | null`. Capability `team.pause.v1` is announced only by **UP-3b** (when entering,
-  refusing, leaving and release all exist), so every earlier phase can be deployed on its own (1f, UP-1a review #3).
+  refusing, leaving and release all exist). **Entering a pause is behind a compile-time switch** (`pauseEntryEnabled`,
+  false until UP-3b flips it together with the capability): while false, `SpendOrPause` never takes the pause branch and
+  begin behaves as today (held card). So main stays deployable after every phase (1f, UP-1a review #3, UP-2a review #4).
 
 ### 3.2 Refusing deliveries (UP-1b)
 - Both delivery points (before `deliverLocal`; in `deliverToLocalTarget` after `findTarget`) call **one team-store
@@ -176,7 +178,7 @@ stale by definition); flow notices from a persisted outbox, the only messages th
 - **UP-3a switch off + reconcile + resume group.** Tests: resume group order (lead before members), only-last-cause
   resume notice, bounce lists sent and cleared, member-quota list to the lead; off CAS then crash then on ⇒ the old
   rows resumed by `on_since`; reconcile while on with current `on_since` ⇒ nothing; old-mod fallback notice.
-- **UP-3b release one + tokens + capability `team.pause.v1`.** Tests: claim validation; solo / lead-with-members / member-quota release; the re-ask
+- **UP-3b release one + tokens + capability `team.pause.v1` + flip `pauseEntryEnabled`.** Tests: claim validation; solo / lead-with-members / member-quota release; the re-ask
   with the token under unattended on + no quota ⇒ a person's held card (not a pause); token used once; duplicate
   `reask` delivery ⇒ one begin; token expiry.
 - **UP-4 mod.** Tests: 409 ⇒ latch, no ask on later turns; `reask` ⇒ consumed, dedup by id, one begin with `--reask`,
