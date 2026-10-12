@@ -24,7 +24,9 @@ var (
 // RootsInUseError is a removal refused because members of this lead run under the directory.
 type RootsInUseError struct{ Uses []team.HostRootUse }
 
-func (e *RootsInUseError) Error() string { return fmt.Sprintf("%d use(s) under the directory", len(e.Uses)) }
+func (e *RootsInUseError) Error() string {
+	return fmt.Sprintf("%d use(s) under the directory", len(e.Uses))
+}
 
 // pathWithin says whether child is root or lies under it, by path components (never by string prefix: /w/ab is not under /w/a).
 func pathWithin(child, root string) bool {
