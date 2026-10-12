@@ -74,6 +74,7 @@ func TestRelayCreate_DoesNotAcceptAnAskPastItsWindow(t *testing.T) {
 // Fault injection: the ask update fails → no op, no pool spend, the ask still open. Mutation gate: do the update
 // outside the op transaction (or after the commit) → the op survives or the ask is accepted without an op (red).
 func TestRelayCreate_AFailureAtTheAcceptRollsEverythingBack(t *testing.T) {
+	disablePauseEntry(t) // this tests the held card (the legacy path); the pause that replaces it with the gate open has its own tests
 	boom := errors.New("boom")
 	for _, pool := range []int{2, 0} {
 		f := gateFixture(t, true, true, pool)
@@ -109,6 +110,7 @@ func TestRelayCreate_AcceptIsInsideTheTransaction(t *testing.T) {
 
 // Pool 0 under unattended mode: the op is awaiting_approval with its own RQ2 row, and the ask is still accepted.
 func TestRelayCreate_AcceptsTheAskWhenTheOpAwaitsApproval(t *testing.T) {
+	disablePauseEntry(t) // this tests the held card (the legacy path); the pause that replaces it with the gate open has its own tests
 	f := gateFixture(t, true, true, 0)
 	f.openAsk(rid(550))
 	code, op, _ := f.createRelay(rid(551), "/tmp/10.sock", "_mem001")

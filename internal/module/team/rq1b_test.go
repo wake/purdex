@@ -93,6 +93,7 @@ func TestQuotaRule_OnSpendsOnTheAutomaticApprovalAtBegin(t *testing.T) {
 // The sweeps hold an exhausted row quietly (one log line, listed in the unattended view) and approve it within one
 // tick of the user raising the quota. Mutation gate: log every tick → red; never release → red.
 func TestQuotaRule_SweepHoldsQuietlyAndApprovesOnceTheQuotaIsRaised(t *testing.T) {
+	disablePauseEntry(t) // this tests the held card (the legacy path); the pause that replaces it with the gate open has its own tests
 	f := newFixture(t)
 	logs := f.logs()
 	b := f.begin("sid-1") // unattended off: an open request
@@ -304,6 +305,7 @@ func BenchmarkQuotaRule_ApproveWithoutSpend(b *testing.B) {
 // A request that was open when the switch went on and finds no quota is listed as held once the sweep has seen it. Mutation gate:
 // don't hold in the sweep → red.
 func TestQuotaRule_AnOpenRequestIsHeldOnceTheSweepSeesIt(t *testing.T) {
+	disablePauseEntry(t) // this tests the held card (the legacy path); the pause that replaces it with the gate open has its own tests
 	f := newFixture(t)
 	f.qrule.set(true, nil)
 	b := f.begin("sid-1") // unattended off: opens for a person
@@ -421,6 +423,7 @@ func TestQuotaRule_ASpendEventFollowsAPutInTheSection(t *testing.T) {
 // An exhausted request that is denied before any tick leaves no trace in the held set. Mutation gate: no unhold at the
 // winner point → red.
 func TestQuotaRule_AClosedHeldRequestIsForgotten(t *testing.T) {
+	disablePauseEntry(t) // this tests the held card (the legacy path); the pause that replaces it with the gate open has its own tests
 	f := newFixture(t)
 	f.qrule.set(true, nil)
 	b := f.begin("sid-1") // unattended off: an open request

@@ -96,9 +96,9 @@ func (m *Module) handlePausedGet(w http.ResponseWriter, r *http.Request) {
 
 // pauseEntryEnabled is the release gate of the unattended quota pause (spec §3.1, §5): while false, a begin that finds the
 // chain out of quota while unattended opens the held card as it always did, and nothing is written to session_pauses or
-// pause_outbox. UP-3b turns it on together with the way out of a pause and the team.pause.v1 capability. A compile-time
-// constant on purpose — not a setting.
-const pauseEntryEnabled = false
+// pause_outbox. UP-4 turned it on, with the mod that understands the 409 and the reask, and the team.pause.v1 capability: the whole
+// pause ships at once. A compile-time constant on purpose — not a setting; tests close it through pauseEntryOn.
+const pauseEntryEnabled = true
 
 // pauseEntryOn is the value the code reads; tests turn the gate on through it (enablePauseEntry).
 var pauseEntryOn = pauseEntryEnabled

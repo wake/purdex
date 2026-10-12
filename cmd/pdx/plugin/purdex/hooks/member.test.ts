@@ -2,6 +2,7 @@
 // A small engine fake beneath the mod (a copy of relay.test.ts's, kept apart so the two files stay independent):
 // a fake pdx behind $.process.run, $.session.*, $.fs.read, $.ui.*, and the bottom of every event a test raises.
 import { test, expect, mock } from 'claude-code/testing'
+import { controlOp, controlReask } from './member.js'
 
 const OPID = '3f2b8c1e-9a4d-4e6b-8c7a-1d2e3f4a5b6c'
 const CONTROL = '[pdx-relay:control] op=' + OPID
@@ -24,6 +25,7 @@ type World = {
   logs: string[]
   clock: any
   sessionId: string
+  usage: { tokens: number; window: number; percent: number }
   switchTo?: string
   failComplete?: boolean
   skipCompact?: boolean
@@ -32,7 +34,7 @@ type World = {
 
 function memberWorld(on: any, role: string, pdx?: (argv: string[]) => R | undefined): World {
   const f: World = {
-    argvs: [], order: [], submits: [], commands: [], files: {}, logs: [], sessionId: 'sid-old', clock: undefined as any,
+    argvs: [], order: [], submits: [], commands: [], files: {}, logs: [], sessionId: 'sid-old', clock: undefined as any, usage: { tokens: 144000, window: 200000, percent: 72 },
     pdx: (argv) => {
       const own = pdx?.(argv)
       if (own) return own
@@ -55,7 +57,7 @@ function memberWorld(on: any, role: string, pdx?: (argv: string[]) => R | undefi
     return { value: { exitCode: r.exitCode, stdout: r.stdout ?? '', stderr: r.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('session.id', async () => ({ value: f.sessionId }))
-  on('session.usage', async () => ({ value: { startedAt: 0, context: { tokens: 144000, window: 200000, percent: 72 }, rateLimits: [] } }))
+  on('session.usage', async () => ({ value: { startedAt: 0, context: f.usage, rateLimits: [] } }))
   on('fs.read', async (_$: any, e: any) => (e.path in f.files ? { value: f.files[e.path] } : { deny: 'ENOENT' }))
   on('ui.toast', async () => ({ value: undefined }))
   on('ui.status', async () => ({ value: undefined }))
@@ -403,4 +405,181 @@ test('a compaction skipped beneath the mod is not reported', async ($, on) => {
   await compactOf($, 'auto')
   await f.clock.advance(50)
   expect(calls(f, 'compacted')).toEqual([])
+})
+
+
+// ---------- unattended quota pause (UP-4): the paused latch and the reask control ----------
+// The daemon answers a begin with 409 paused_no_quota when the host is unattended and the relay quota is spent: the session is
+// paused, no op exists. The mod goes idle, holds nothing, and asks no more (a latch — the +10 % gate alone would ask again at the
+// next 10 points) until the daemon sends `reask` (the person came back / released it) or the session starts over.
+
+const REASK_ID = '7c1e2a4b-0d3f-4a58-9b6e-2f1d3c4b5a69'
+const REASK = '[pdx-relay:control] reask id=' + REASK_ID
+const PAUSED: R = { exitCode: 13, stderr: 'pdx relay: 接力額度用完，先暫停 paused_no_quota\n' }
+const begins = (f: World) => calls(f, 'begin')
+// A solo session whose begin is answered by `answer` (default: paused); every other call as memberWorld.
+const soloWorld = (on: any, answer: (argv: string[]) => R = () => PAUSED) =>
+  memberWorld(on, 'none', (argv) => (argv[0] === 'relay' && argv[1] === 'begin' ? answer(argv) : undefined))
+const turn = async ($: any, f: World, id: string) => {
+  await $.turn.start({ text: 'work', turnId: id })
+  await complete($, id)
+  await f.clock.settle()
+}
+
+// Mutation gate: the latch does not stop the ask → the second turn (90 %, 18 points over the last ask) begins again (red).
+test('a 409 paused_no_quota sets the latch: no self ask on the turns after it, however much the context grows', async ($, on) => {
+  const f = soloWorld(on)
+  await start($, f)
+  await turn($, f, 't1')
+  expect(begins(f).length).toBe(1)
+  f.usage = { tokens: 180000, window: 200000, percent: 90 }
+  await turn($, f, 't2')
+  f.usage = { tokens: 198000, window: 200000, percent: 99 }
+  await turn($, f, 't3')
+  expect(begins(f).length).toBe(1)
+  expect(calls(f, 'wait')).toEqual([]) // nothing waits for an approval
+})
+
+// Mutation gate: a refusal other than paused_no_quota sets the latch → the second ask (at +10) never happens (red).
+test('any other refusal does not latch: the mod asks again at +10, as before', async ($, on) => {
+  const f = soloWorld(on, () => ({ exitCode: 13, stderr: 'pdx relay: self_relay_paused' }))
+  await start($, f)
+  await turn($, f, 't1')
+  f.usage = { tokens: 180000, window: 200000, percent: 90 }
+  await turn($, f, 't2')
+  expect(begins(f).length).toBe(2)
+})
+
+// Mutation gate: the reask is handed on to the model (return next(e)) → red.
+test('the reask control is consumed — the model never sees it — and sends pdx relay begin --reask once, with the current usage', async ($, on) => {
+  const f = soloWorld(on)
+  await start($, f)
+  await turn($, f, 't1')
+  f.usage = { tokens: 180000, window: 200000, percent: 90 }
+  const out = await receive($, ENVELOPE(REASK))
+  expect(out).toEqual({ consumed: expect.any(String) })
+  await f.clock.advance(100)
+  expect(begins(f)).toEqual([
+    'relay begin --self --session sid-old --used 72 --window 200000',
+    'relay begin --self --session sid-old --used 90 --window 200000 --reask ' + REASK_ID,
+  ])
+  expect(calls(f, 'seen')).toEqual([]) // it is not a member-relay control
+  expect(calls(f, 'claim')).toEqual([])
+})
+
+// Mutation gate: no seen set → the same id begins twice (red).
+test('a reask delivered twice (same id) begins once', async ($, on) => {
+  const f = soloWorld(on)
+  await start($, f)
+  await turn($, f, 't1')
+  await receive($, ENVELOPE(REASK))
+  await f.clock.advance(100)
+  await receive($, ENVELOPE(REASK))
+  await f.clock.advance(100)
+  expect(begins(f).filter((c) => c.includes('--reask')).length).toBe(1)
+})
+
+test('the seen set is bounded: an old id is forgotten, the newest are not repeated', async ($, on) => {
+  const f = soloWorld(on)
+  await start($, f)
+  const ids = Array.from({ length: 40 }, (_, i) => '7c1e2a4b-0d3f-4a58-9b6e-' + String(i).padStart(12, '0'))
+  for (const id of ids) {
+    await receive($, ENVELOPE('[pdx-relay:control] reask id=' + id))
+    await f.clock.advance(100)
+  }
+  const reasks = () => begins(f).filter((c) => c.includes('--reask')).length
+  const n = reasks()
+  await receive($, ENVELOPE('[pdx-relay:control] reask id=' + ids[39])) // the newest: still remembered
+  await f.clock.advance(100)
+  expect(reasks()).toBe(n)
+})
+
+// Mutation gate: the reask does not clear the latch → the third turn never asks (red).
+test('a reask clears the latch: the mod may ask again at +10 afterwards', async ($, on) => {
+  let n = 0
+  const f = soloWorld(on, (argv) => (argv.includes('--reask') ? { exitCode: 20, stderr: 'daemon_unavailable' } : (n++, PAUSED)))
+  await start($, f)
+  await turn($, f, 't1') // paused: latched
+  await receive($, ENVELOPE(REASK))
+  await f.clock.advance(100) // the reask begin fails (daemon down): idle, latch cleared
+  f.usage = { tokens: 190000, window: 200000, percent: 95 }
+  await turn($, f, 't2')
+  expect(begins(f).length).toBe(3) // t1, the reask, and t2's own ask
+})
+
+// Mutation gate: session.start keeps the latch → red.
+test('session.start clears the latch', async ($, on) => {
+  const f = soloWorld(on)
+  await start($, f)
+  await turn($, f, 't1')
+  f.usage = { tokens: 180000, window: 200000, percent: 90 }
+  await turn($, f, 't2')
+  expect(begins(f).length).toBe(1) // latched
+  await start($, f) // a new session.start (a restart / resume)
+  await turn($, f, 't3')
+  expect(begins(f).length).toBe(2)
+})
+
+// A reask that arrives while a turn runs waits for that turn to end (as a member's claim does): the begin is a turn-boundary act.
+test('a reask during a turn is consumed at once and begins at that turn’s end', async ($, on) => {
+  const f = soloWorld(on)
+  await start($, f)
+  await turn($, f, 't1')
+  await $.turn.start({ text: 'work', turnId: 't2' })
+  expect(await receive($, ENVELOPE(REASK))).toEqual({ consumed: expect.any(String) })
+  await f.clock.advance(1000)
+  expect(begins(f).filter((c) => c.includes('--reask')).length).toBe(0)
+  await complete($, 't2')
+  await f.clock.settle()
+  expect(begins(f).filter((c) => c.includes('--reask')).length).toBe(1)
+})
+
+// Only a peer's text counts, as for the member-relay control.
+test('the reask text from the user or any other origin is ordinary text', async ($, on) => {
+  const f = soloWorld(on)
+  await start($, f)
+  const text = ENVELOPE(REASK)
+  for (const kind of ['bridge', 'unclassified', 'peer-send-message', 'task-notification']) expect(await receive($, text, { kind })).toEqual({ text })
+  for (const other of [ENVELOPE('[pdx-relay:control] reask id='), ENVELOPE('[pdx-relay:control] reask id=not-a-uuid'), ENVELOPE('pdx-relay:control reask id=' + REASK_ID)]) {
+    expect(await receive($, other)).toEqual({ text: other })
+  }
+  await f.clock.advance(1000)
+  expect(begins(f)).toEqual([])
+})
+
+// The two parsers do not mistake each other's message.
+test('the op control and the reask control are told apart', async () => {
+  const peer = (text: string) => ({ origin: PEER, text })
+  expect(controlOp(peer(ENVELOPE(CONTROL)))).toBe(OPID)
+  expect(controlReask(peer(ENVELOPE(CONTROL)))).toBe('')
+  expect(controlReask(peer(ENVELOPE(REASK)))).toBe(REASK_ID)
+  expect(controlOp(peer(ENVELOPE(REASK)))).toBe('')
+  expect(controlReask({ origin: { kind: 'bridge' }, text: ENVELOPE(REASK) })).toBe('')
+})
+
+test('an op control still reaches the member path; a reask is not claimed or seen', async ($, on) => {
+  const f = memberWorld(on, 'member', memberPdx())
+  await start($, f)
+  await receive($, ENVELOPE(CONTROL))
+  await f.clock.advance(10)
+  expect(calls(f, 'seen').length).toBe(1)
+  await receive($, ENVELOPE(REASK))
+  await f.clock.advance(10)
+  expect(calls(f, 'seen').length).toBe(1)
+})
+
+test('hello reports protocol 5, the one the daemon sends reask to', async ($, on) => {
+  const f = soloWorld(on)
+  await start($, f)
+  expect(calls(f, 'hello')[0]).toContain('--version 5')
+})
+
+// An old daemon (no paused_no_quota anywhere) is unchanged: a begin that opens a request waits for it as always.
+test('a daemon without the pause behaves as before: begin opens the request and the mod waits', async ($, on) => {
+  const f = soloWorld(on, () => ({ exitCode: 0, stdout: JSON.stringify({ op: { ...OP, kind: 'self', state: 'awaiting_approval' }, request_id: 'req-1' }) }))
+  await start($, f)
+  await turn($, f, 't1')
+  await f.clock.advance(100)
+  expect(begins(f).length).toBe(1)
+  expect(calls(f, 'wait').length).toBeGreaterThan(0)
 })

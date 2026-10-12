@@ -77,9 +77,7 @@ func TestMemberPause_AnAlreadyPausedMemberGetsTheSameAnswerAndNoNewRows(t *testi
 // The gate closed (pauseEntryEnabled is false): today's held card, no pause row, no outbox row.
 // Mutation gate: take the gate out of the member path → red.
 func TestMemberPause_GateClosedKeepsTodaysHeldCard(t *testing.T) {
-	if pauseEntryEnabled {
-		t.Skip("the gate is open in this build")
-	}
+	disablePauseEntry(t) // the release gate closed: today's held card
 	f := gateFixture(t, true, true, 0)
 	f.streamOf()
 	code, op, ae := f.createRelay(rid(403), "/tmp/10.sock", "_mem001")
@@ -137,9 +135,7 @@ func TestMemberPause_ARemoteMemberStaysAHeldCardEvenWithTheGateOpen(t *testing.T
 
 // The forwarded path with the gate closed is today's held card.
 func TestMemberPause_ForwardedGateClosedKeepsTodaysHeldCard(t *testing.T) {
-	if pauseEntryEnabled {
-		t.Skip("the gate is open in this build")
-	}
+	disablePauseEntry(t) // the release gate closed: today's held card
 	f, _ := fwdRelayFixture(t)
 	op := f.heldRemoteRelay(fwdOp)
 	if op.State != team.RelayAwaitingApproval || len(f.pauses()) != 0 || len(f.outbox()) != 0 {
@@ -312,9 +308,7 @@ func TestSweepPause_ACardWhoseOpIsNotItsAwaitingOpIsLeftAlone(t *testing.T) {
 
 // The gate closed: the sweep holds the card as it always did.
 func TestSweepPause_GateClosedHoldsTheCardAsToday(t *testing.T) {
-	if pauseEntryEnabled {
-		t.Skip("the gate is open in this build")
-	}
+	disablePauseEntry(t) // the release gate closed: today's held card
 	f := newFixture(t)
 	b := f.heldSelf()
 	f.m.tick()

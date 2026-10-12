@@ -19,6 +19,19 @@ const CONTROL_RE = new RegExp(CONTROL_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$
 
 export const CONSUMED = 'pdx relay control message' // the reason logged for a consumed delivery
 
+// The re-ask after a pause (the quota pause, UP-4): `[pdx-relay:control] reask id=<uuid>` (team.PauseReaskControlPrefix).
+// A different marker from the op control above, so neither parser can take the other's message.
+const REASK_PREFIX = '[pdx-relay:control] reask id='
+const REASK_RE = new RegExp(REASK_PREFIX.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(' + UUID + ')')
+export const CONSUMED_REASK = 'pdx relay reask control message'
+
+// controlReask is the release token of a reask control message, '' for any other delivery. Only a peer's text counts, as for controlOp.
+export function controlReask(e) {
+  if (!e || !e.origin || e.origin.kind !== 'peer' || typeof e.text !== 'string') return ''
+  const m = REASK_RE.exec(e.text)
+  return m ? m[1] : ''
+}
+
 // controlOp is the op id of a control message, '' for any other delivery. Only a peer's text counts
 // (M1): the same words typed by the user, or in a tool result, are ordinary text.
 export function controlOp(e) {
