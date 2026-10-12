@@ -88,7 +88,7 @@ func (m *Module) handleTeamCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch cmd.Kind {
-	case team.CommandAdopt, team.CommandRelease, team.CommandKill, team.CommandRelay, team.CommandSpawn, team.CommandEnd, team.CommandLeadMoved, team.CommandVoid, team.CommandAppearance:
+	case team.CommandAdopt, team.CommandRelease, team.CommandKill, team.CommandRelay, team.CommandSpawn, team.CommandEnd, team.CommandLeadMoved, team.CommandVoid, team.CommandAppearance, team.CommandLeadPaused, team.CommandLeadResumed:
 	default:
 		m.writeCommandErr(w, http.StatusBadRequest, team.ErrCommandUnsupportedKind, "this host does not apply "+boundText(cmd.Kind)+" commands")
 		return

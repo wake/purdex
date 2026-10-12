@@ -498,6 +498,7 @@ func (m *Module) Init(c *core.Core) error {
 	store.localHostID = c.Cfg.HostID
 	store.newID = func() string { return m.newID() }
 	store.onCommands = m.kickCommands
+	store.leadNotice = m.queueLeadNotice
 	store.onFacts = m.kickFacts
 	store.aliasFn = func() string { a, _ := m.selfHost(); return a }
 	store.onCommandSettled, store.onSettleAborted = m.afterRelayOpsEnded, m.dropRelayOpsEnded

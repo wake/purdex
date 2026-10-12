@@ -111,6 +111,10 @@ func (s *Store) writePauseIn(tx *sql.Tx, p PausePlan) error {
 			}
 		}
 	}
+	// the lead's members on other hosts are not paused: they are told, by the commands outbox, in this same transaction (UP-3c)
+	if err := s.noticeRemoteMembersIn(tx, teamID, CmdLeadPaused, p.At); err != nil {
+		return err
+	}
 	// the phone is told about a lead or a solo session, never about a member (spec §3.3)
 	name := p.Title
 	if name == "" {

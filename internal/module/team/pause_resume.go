@@ -30,6 +30,7 @@ func (m *Module) resumePauses(why string, all bool) int {
 		m.logf("[team] resume pauses (%s): %d row(s) deleted, %d session(s) resumed", why, res.Rows, res.Sessions)
 		m.rosterChanged()
 		m.kickPauseOutbox()
+		m.kickCommands() // a lead's remote members are told (UP-3c)
 	}
 	return res.Sessions
 }
@@ -71,6 +72,7 @@ func (m *Module) resumeOne(sid string) (int, error) {
 	if res.Rows > 0 {
 		m.rosterChanged()
 		m.kickPauseOutbox()
+		m.kickCommands()
 	}
 	return res.Sessions, nil
 }
