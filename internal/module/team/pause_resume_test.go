@@ -298,6 +298,33 @@ func TestResume_TheOutboxSendsTheReaskControlAsAFlowMessage(t *testing.T) {
 	}
 }
 
+// A token whose reask is still waiting in the outbox is not pruned however old it is (a daemon down for a day); once the reask is
+// sent the token's day starts from the send.
+// Mutation gates: prune without looking at the outbox → red; do not touch the token at the send → red.
+func TestResume_AWaitingReaskKeepsItsTokenAndTheSendRestartsTheDay(t *testing.T) {
+	f := newFixture(t)
+	flow, _ := f.outboxWorld()
+	_ = flow
+	id := uuid.NewString()
+	old := f.clock.Load() - 2*team.PauseTokenTTLMs
+	if _, err := f.m.store.db.Exec(`INSERT INTO pause_release_tokens (token, session_id, created_at) VALUES (?, 'sid-1', ?)`, id, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.m.store.db.Exec(`INSERT INTO pause_outbox (session_id, kind, text, reask_id, created_at) VALUES ('sid-1', ?, ?, ?, ?)`,
+		team.PauseOutboxReask, team.PauseReaskControlPrefix+id, id, old); err != nil {
+		t.Fatal(err)
+	}
+	f.reconcile()
+	if got := f.tokens(); len(got) != 1 {
+		t.Fatalf("tokens = %v: a token whose reask has not gone out was pruned", got)
+	}
+	f.m.drainPauseOutbox() // the reask goes out
+	f.reconcile()
+	if got := f.tokens(); len(got) != 1 {
+		t.Fatalf("tokens = %v: the day must start at the send", got)
+	}
+}
+
 // The switch off with no pause row at all writes nothing.
 func TestResume_NothingPausedNothingWritten(t *testing.T) {
 	f := leadWorld(t)

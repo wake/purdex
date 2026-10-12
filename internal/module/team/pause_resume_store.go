@@ -196,9 +196,20 @@ func bounceListIn(tx *sql.Tx, sid string) (string, error) {
 	return fmt.Sprintf(team.PauseBouncedFmt, n) + "\n" + strings.Join(lines, "\n"), nil
 }
 
-// PruneReleaseTokens deletes the release tokens written before `before` (unix ms).
+// TouchReleaseToken restarts a token's 24 h at `at`: the outbox calls it when the reask that carries the token has been sent, so the
+// token lives a day from its delivery, not from the transaction that wrote it.
+func (s *Store) TouchReleaseToken(token string, at int64) error {
+	if _, err := s.db.Exec(`UPDATE pause_release_tokens SET created_at = ? WHERE token = ?`, at, token); err != nil {
+		return fmt.Errorf("touch release token: %w", err)
+	}
+	return nil
+}
+
+// PruneReleaseTokens deletes the release tokens written before `before` (unix ms), except those a reask still waiting in the
+// outbox refers to: a daemon that was down (or an outbox blocked) for a day must not send a control whose token is gone.
 func (s *Store) PruneReleaseTokens(before int64) (int64, error) {
-	res, err := s.db.Exec(`DELETE FROM pause_release_tokens WHERE created_at < ?`, before)
+	res, err := s.db.Exec(`DELETE FROM pause_release_tokens WHERE created_at < ?
+		AND token NOT IN (SELECT reask_id FROM pause_outbox WHERE reask_id <> '')`, before)
 	if err != nil {
 		return 0, fmt.Errorf("prune release tokens: %w", err)
 	}

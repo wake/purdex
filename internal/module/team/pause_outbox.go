@@ -122,6 +122,11 @@ func (m *Module) drainPauseOutbox() {
 			return // head-of-line blocking
 		}
 		m.pauseRetryForget(r.Seq)
+		if r.Kind == team.PauseOutboxReask && r.Reask != "" { // the token's day starts when its reask went out
+			if err := m.store.TouchReleaseToken(r.Reask, m.now()); err != nil {
+				m.logf("[team] %v", err)
+			}
+		}
 		if m.pauseOutboxCrash != nil && m.pauseOutboxCrash(r.Seq) {
 			return // test seam: the process died after the send, before the delete
 		}
