@@ -4,7 +4,6 @@ package teammod
 
 import (
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/wake/purdex/internal/team"
@@ -117,22 +116,22 @@ func TestMemberPause_OnlyAnEmptyPoolWhileUnattendedPauses(t *testing.T) {
 	}
 }
 
-// The forwarded path (a member on another host) goes through the same gate: no op, no `relay` command, the pause row, the 409.
-func TestMemberPause_ForwardedRelayPausesTheRemoteMemberToo(t *testing.T) {
+// A member on another host cannot be paused from here (its notice and its message gate are that host's; codex R1 P1): even with the
+// gate open the lead's relay of it is today's held card, and the sweep leaves a held remote card for a person.
+// Mutation gate: let the remote member through the pause → red.
+func TestMemberPause_ARemoteMemberStaysAHeldCardEvenWithTheGateOpen(t *testing.T) {
 	enablePauseEntry(t)
 	f, _ := fwdRelayFixture(t)
-	f.unatt.set(true)
-	f.qrule.set(true, nil)
-	f.setPool("sid-1", 0)
-	code, _, ae := f.createRelay(fwdOp, "/tmp/10.sock", "air26/"+remoteRef)
-	if code != http.StatusConflict || ae.Error != team.ErrMemberPausedNoQuota || !strings.Contains(ae.Detail, remoteRef) {
-		t.Fatalf("relay: %d %+v", code, ae)
+	op := f.heldRemoteRelay(fwdOp)
+	if op.State != team.RelayAwaitingApproval || f.rowCount("member_relay") != 1 || len(f.relayCommands()) != 0 {
+		t.Fatalf("op %+v, cards %d, commands %d: want the held card", op, f.rowCount("member_relay"), len(f.relayCommands()))
 	}
-	if n := countRelayOps(t, f); n != 0 || len(f.relayCommands()) != 0 || f.rowCount("member_relay") != 0 {
-		t.Fatalf("ops %d, commands %d, cards %d: want none", n, len(f.relayCommands()), f.rowCount("member_relay"))
+	if len(f.pauses()) != 0 || len(f.outbox()) != 0 {
+		t.Fatalf("pauses %d, outbox %d, want none", len(f.pauses()), len(f.outbox()))
 	}
-	if p, ok := f.pauses()["sid-abc12/quota"]; !ok || p.Role != team.PauseRoleMember || p.Ref != remoteRef {
-		t.Fatalf("pauses = %+v", f.pauses())
+	f.m.tick() // the sweep sees the held card and finds no quota
+	if st := f.rowState(op.RequestID); st != team.StateOpen || f.op(op.ID).State != team.RelayAwaitingApproval || len(f.pauses()) != 0 || len(f.outbox()) != 0 {
+		t.Fatalf("after the sweep: row %s, op %s, pauses %d, outbox %d, want the card untouched", st, f.op(op.ID).State, len(f.pauses()), len(f.outbox()))
 	}
 }
 

@@ -253,7 +253,7 @@ func (m *Module) memberRelayGate(lead team.Origin, mr memberRow, spent *bool, he
 		if !m.unattendedOn() || !m.quotaRuleOn() {
 			return false, nil
 		}
-		if pauseEntryOn { // a member that already holds its quota pause is answered by it, before any spend (spec §3.3 (1))
+		if pauseEntryOn && !m.isRemoteRow(mr) { // a member that already holds its quota pause is answered by it, before any spend (spec §3.3 (1))
 			if paused, err := hasPauseCauseIn(tx, op.SessionID, team.PauseCauseQuota); err != nil {
 				return false, err
 			} else if paused {
@@ -280,7 +280,7 @@ func (m *Module) memberRelayGate(lead team.Origin, mr memberRow, spent *bool, he
 		if cur != lead.SessionID {
 			return false, errLeadChanged
 		}
-		if pauseEntryOn { // unattended + rule on (checked above) + no pool: the member is paused instead of getting a card (spec §3.3)
+		if pauseEntryOn && !m.isRemoteRow(mr) { // unattended + rule on (checked above) + no pool: the member is paused instead of getting a card (spec §3.3)
 			st, _ := m.unattended.Unattended()
 			if _, err := writeMemberPauseIn(tx, MemberPausePlan{SessionID: op.SessionID, Ref: mr.Ref, Title: mr.Title, TeamID: op.TeamID,
 				LeadSessionID: lead.SessionID, OnSince: st.Since, At: op.CreatedAt}); err != nil {

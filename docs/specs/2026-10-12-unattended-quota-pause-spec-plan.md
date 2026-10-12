@@ -114,6 +114,11 @@ stale by definition); flow notices from a persisted outbox, the only messages th
   expired row loses the CAS and nothing else happens.
 - **Push**: an outbox row of kind `push` (lead / solo only: 「<title> 已暫停：接力額度用完，等你接手」(+「，含 N 個 member」)),
   sent by the loop through an in-process push interface with collapse id `pause:<session>:<since>`; at least once.
+- **Remote members** (another host): a forwarded member relay with no quota keeps today's held card (a pause row on the
+  lead host could not stop a member whose deliveries are judged on its own host — UP-2b review). A paused lead's remote
+  members are not paused; they are **told** through the remote notice pump: new notice kinds `lead_paused` /
+  `lead_resumed` with the same texts as the local ones, written with the lead's pause / resume group, best effort
+  (UP-3c).
 - `adopt` and other approvals are unaffected.
 
 ### 3.4 Leaving (UP-3a switch off / reconcile, UP-3b release one)
@@ -181,6 +186,9 @@ stale by definition); flow notices from a persisted outbox, the only messages th
 - **UP-3b release one + tokens + capability `team.pause.v1` + flip `pauseEntryEnabled`.** Tests: claim validation; solo / lead-with-members / member-quota release; the re-ask
   with the token under unattended on + no quota ⇒ a person's held card (not a pause); token used once; duplicate
   `reask` delivery ⇒ one begin; token expiry.
+- **UP-3c remote member notices.** Tests: a lead pause with a remote member queues one `lead_paused` remote notice with
+  the local text; the resume group queues `lead_resumed`; the member host renders both kinds; an old member host (kind
+  unknown) drops it without breaking the pump.
 - **UP-4 mod.** Tests: 409 ⇒ latch, no ask on later turns; `reask` ⇒ consumed, dedup by id, one begin with `--reask`,
   latch cleared; `session.start` clears the latch; hello protocol; old daemon unchanged. `go test ./cmd/pdx/...` (incl.
   plugin) + plugin vitest.

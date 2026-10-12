@@ -82,7 +82,9 @@ func (s *Store) PauseHeldRow(id string, onSince, at int64) (team.Approval, Pause
 	member := MemberPausePlan{OnSince: onSince, At: at}
 	subject := row.Origin.SessionID
 	if row.Kind == team.KindMemberRelay {
-		if !hasOp {
+		if !hasOp || (s.localHostID != "" && op.HostID != s.localHostID) {
+			// A member that lives on another host cannot be paused from here (its notice and its message gate are that host's): its
+			// card stays a card for a person.
 			return row, PauseHeldLost, nil
 		}
 		if reason, err := recheckMemberRelayIn(tx, op); err != nil {
