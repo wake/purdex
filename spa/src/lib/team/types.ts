@@ -95,6 +95,8 @@ export interface SelfRelayPayload {
   reason?: string
   /** Minutes the session had been idle, 1–59; kept only as such an integer. */
   idle_minutes?: number
+  /** True when the person is back and the request is sent again after a pause (UP-5a); absent otherwise. */
+  reask?: boolean
 }
 
 /**
@@ -282,6 +284,7 @@ export function selfRelayPayloadOf(a: Approval): SelfRelayPayload {
     ...(typeof p.model_id === 'string' && p.model_id !== '' ? { model_id: p.model_id } : {}),
     ...(typeof p.effort === 'string' && p.effort !== '' ? { effort: p.effort } : {}),
     ...(typeof p.reason === 'string' && p.reason !== '' ? { reason: p.reason } : {}),
+    ...(p.reask === true ? { reask: true } : {}),
     ...(typeof p.idle_minutes === 'number' && Number.isInteger(p.idle_minutes) && p.idle_minutes >= 1 && p.idle_minutes <= 59 ? { idle_minutes: p.idle_minutes } : {}),
   }
 }

@@ -42,6 +42,7 @@ import { ApprovalApiError, setSelfRelayPause } from '../lib/team/approval-api'
 import { buttonBase, fieldClass, keyboardGuard, parseRoots, tabStops, teamNameOk } from './approval-dialog-helpers'
 import { submitDecision } from '../lib/team/approval-decide'
 import { parseOriginTmux } from '../lib/team/approval-goto'
+import { RelayBrief, RelayTitle } from './approval/RelayBrief'
 
 
 export function ApprovalDialogHost() {
@@ -318,7 +319,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
             {isSelfRelay && (
               <>
                 <dt className="text-text-muted">{t('approval.dialog.ref')}</dt>
-                <dd data-testid="approval-ref" className="font-mono text-text-primary">{approval.origin.ref}</dd>
+                <dd className="text-text-primary"><span data-testid="approval-ref" className="font-mono">{approval.origin.ref}</span><RelayTitle title={approval.origin.title ?? ''} reask={relay.reask} /></dd>
               </>
             )}
             <dt className="text-text-muted">{t('approval.dialog.cwd')}</dt>
@@ -354,7 +355,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
                 <dt className="text-text-muted">{t('approval.dialog.member')}</dt>
                 <dd data-testid="approval-member" dir="auto" className="break-all text-text-primary">{clipForDisplay(memberRelay.member, 80) || '—'}</dd>
                 <dt className="text-text-muted">{t('approval.dialog.member_ref')}</dt>
-                <dd data-testid="approval-member-ref" className="font-mono break-all text-text-primary">{memberRelay.payload.member_ref !== '' ? clipForDisplay(memberRelay.payload.member_ref, 40) : '—'}</dd>
+                <dd className="break-all text-text-primary"><span data-testid="approval-member-ref" className="font-mono">{memberRelay.payload.member_ref !== '' ? clipForDisplay(memberRelay.payload.member_ref, 40) : '—'}</span><RelayTitle title={memberRelay.payload.member_title} /></dd>
                 <dt className="text-text-muted">{t('approval.dialog.usage')}</dt>
                 <dd data-testid="approval-usage" className="text-text-primary">{t('approval.dialog.usage_value', { pct: memberRelay.pct })}</dd>
               </>
@@ -381,6 +382,8 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
             <dt className="text-text-muted">{t('approval.dialog.deadline')}</dt>
             <dd data-testid="approval-countdown" className="font-mono text-text-primary">{formatCountdown(approval.deadline_at - now)}</dd>
           </dl>
+          {isSelfRelay && <RelayBrief hostId={hostId} sessionId={approval.origin.session_id} />}
+          {isMemberRelay && <RelayBrief hostId={hostId} sessionId={memberRelay.payload.member_session_id} />}
           {isAdopt ? (
             <p data-testid="approval-adopt-note" className="mt-3 text-xs text-text-secondary">{adopt.target_host_id !== '' ? t('approval.dialog.adopt_note_remote', { alias: adoptionAlias(adopt) }) : t('approval.dialog.adopt_note')}</p>
           ) : isMemberRelay ? (
