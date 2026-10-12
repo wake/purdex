@@ -277,3 +277,48 @@ func (s *Store) HostRootsSeen(hostID string) (HostRootsSeen, bool, error) {
 	}
 	return h, true, nil
 }
+
+func isNoRows(err error) bool { return errors.Is(err, sql.ErrNoRows) }
+
+func parseRoots(raw string) ([]string, error) {
+	var roots []string
+	if err := json.Unmarshal([]byte(raw), &roots); err != nil {
+		return nil, fmt.Errorf("cached roots: %w", err)
+	}
+	return roots, nil
+}
+
+// OverwriteHostRootsSeen replaces the cache row whatever its rev: the read path's verdict that the member host's relation with this
+// host was rebuilt (its rev started over). Only the read path calls it; a settle stays monotonic.
+func (s *Store) OverwriteHostRootsSeen(hostID string, roots []string, rev, at int64) error {
+	if roots == nil {
+		roots = []string{}
+	}
+	b, err := json.Marshal(roots)
+	if err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`INSERT INTO host_roots_seen (host_id, roots_json, rev, seen_at) VALUES (?, ?, ?, ?)
+		ON CONFLICT (host_id) DO UPDATE SET roots_json = excluded.roots_json, rev = excluded.rev, seen_at = excluded.seen_at`, hostID, string(b), rev, at); err != nil {
+		return fmt.Errorf("overwrite the roots of %s: %w", hostID, err)
+	}
+	return nil
+}
+
+// RootChangesToShow are the host's pending, refused and dropped changes (done ones are reflected in the roots), oldest first.
+func (s *Store) RootChangesToShow(hostID string) ([]HostRootChange, error) {
+	rows, err := s.db.Query(`SELECT `+rootChangeCols+` FROM host_root_changes WHERE host_id = ? AND state IN ('pending', 'refused', 'dropped') ORDER BY rowid`, hostID)
+	if err != nil {
+		return nil, fmt.Errorf("root changes of %s: %w", hostID, err)
+	}
+	defer rows.Close()
+	out := []HostRootChange{}
+	for rows.Next() {
+		c, err := scanRootChange(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}

@@ -138,6 +138,15 @@ func (s *Store) AcceptRemoteSpawn(op remoteSpawnRow, cmd Command, now int64) (re
 	if err == nil && !lead {
 		err = ErrSpawnNotLead
 	}
+	if err == nil { // the writer lock is ours now: a removal of the directory this spawn would run under, pending, refuses it (XR-2b)
+		if s.afterSpawnLock != nil {
+			s.afterSpawnLock()
+		}
+		var being bool
+		if being, err = rootBeingRemovedIn(tx, op.HostID, op.Cwd); err == nil && being {
+			err = ErrRootBeingRemoved
+		}
+	}
 	var limit, used int
 	if err == nil {
 		err = tx.QueryRow(`SELECT json_extract(grant_json, '$.max_members') FROM teams WHERE id = ?`, op.TeamID).Scan(&limit)

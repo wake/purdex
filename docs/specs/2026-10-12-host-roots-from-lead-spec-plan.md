@@ -96,6 +96,12 @@ chain.
   created_at, updated_at`; index `(host_id, state)`.
 - **Cache** `host_roots_seen`: `host_id PK, roots_json, rev, seen_at`. Written only with `rev >= stored rev`
   (`INSERT … ON CONFLICT DO UPDATE … WHERE excluded.rev >= rev`), so a late, older answer never overwrites a newer one.
+  Two exceptions to the monotonic rule end its only failure mode, a member host whose rev **starts over** because its
+  relation with this host was rebuilt (user 2026-10-12 via the lead): (1) an unpair (`unpairHost`) deletes the host's cache
+  row in its transaction; (2) on the **read path only** (`GET /api/team/host-roots`): a `read` that answers a rev **below**
+  the cache's is read again at once; if the second answer is also below, the relation was rebuilt and the cache is replaced
+  by it; a second answer that is not below is applied the ordinary way (the first was a late answer), and a second read that
+  fails changes nothing. A settle (a change's 200) always stays monotonic.
 - **Reconciler** (a coordinator plus **one worker per host** with pending rows, at most one call in flight per host, so
   an offline host — `HostCaller.Call` can wait ~12 s — never delays another; started / stopped with the team module;
   woken on insert and every 60 s):
