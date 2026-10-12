@@ -10,7 +10,7 @@ import (
 
 // #1968: the boot's reconciliation is one phase whose order and failure policy are written in boot.go.
 
-var wantBootOrder = []string{"relay dir", "leases", "roster baseline", "relay", "kill recover", "spawn resume", "unattended"}
+var wantBootOrder = []string{"relay dir", "leases", "roster baseline", "relay", "kill recover", "spawn resume", "unattended", "pauses"}
 
 func (f *fixture) startTraced() (order []string, err error) {
 	f.m.bootTrace = func(step string) { order = append(order, step) }
