@@ -40,6 +40,30 @@ export interface RosterSession {
   /** Set by parsing (never on the wire) when a non-empty `host_id` was sent but failed validation: the member lives on
    *  SOME other host that cannot be named, so it is never attributed to the lead's host. Absent otherwise. */
   host_untrusted?: boolean
+  /** UP-5b: why the daemon holds this session back (its quota ran out, or its lead was paused), and since when. Absent = not paused
+   *  (the wire's null, a missing field and a malformed value all read the same). */
+  paused?: RosterPause
+}
+
+export type PauseCause = 'quota' | 'lead'
+export interface RosterPause { causes: PauseCause[]; since: number }
+
+export const PAUSE_CAUSES: readonly PauseCause[] = ['quota', 'lead']
+
+/** The known causes of a wire `causes` array (unknown strings dropped), or null when it is not an array / holds none we know. */
+export function parseCauses(v: unknown): PauseCause[] | null {
+  if (!Array.isArray(v)) return null
+  const known = [...new Set(v.filter((c): c is PauseCause => PAUSE_CAUSES.includes(c as PauseCause)))]
+  return known.length > 0 ? known : null
+}
+
+/** `{causes, since}` from the wire; anything malformed is null. */
+export function parsePausedField(v: unknown): RosterPause | null {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return null
+  const { causes, since } = v as Record<string, unknown>
+  const c = parseCauses(causes)
+  if (c === null || typeof since !== 'number' || !Number.isFinite(since)) return null
+  return { causes: c, since }
 }
 
 /** An active member: its session plus how it joined. `state` is `active`; a REMOTE member of a cross-host team can also be
@@ -122,12 +146,13 @@ const HOST_ID_MAX = 128
  *  and free of control / formatting characters (the alias also non-blank). Anything else is dropped (the field is absent),
  *  never a reason to drop the frame. */
 function cleanHost<T extends RosterSession>(s: T): T {
-  const { host_id, host_alias, host_untrusted: _wire, context_unavailable, ...rest } = s
+  const { host_id, host_alias, host_untrusted: _wire, context_unavailable, paused: wirePaused, ...rest } = s
   void _wire // computed here, never taken from the wire
   const idOk = isStr(host_id) && host_id.length <= HOST_ID_MAX && !UNPRINTABLE.test(host_id)
   // A host_id that was sent (not absent, not "") but failed the check says "another host, whom we cannot name": dropping it
   // would read as the lead's own host, so the seat is marked instead.
   const untrusted = host_id !== undefined && host_id !== '' && !idOk
+  const paused = parsePausedField(wirePaused as unknown)
   const aliasOk = isStr(host_alias) && host_alias.length <= HOST_ALIAS_MAX && !UNPRINTABLE.test(host_alias) && host_alias.trim() !== ''
   return {
     ...rest,
@@ -135,6 +160,7 @@ function cleanHost<T extends RosterSession>(s: T): T {
     ...(untrusted ? { host_untrusted: true } : {}),
     ...(aliasOk ? { host_alias } : {}),
     ...(context_unavailable === true ? { context_unavailable: true } : {}),
+    ...(paused !== null ? { paused } : {}),
   } as T
 }
 
