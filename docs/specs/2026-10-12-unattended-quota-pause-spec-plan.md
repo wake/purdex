@@ -149,7 +149,8 @@ stale by definition); flow notices from a persisted outbox, the only messages th
 
 ### 3.5 Mod (UP-4)
 - 409 `paused_no_quota` → idle, no hold, and a **paused latch** set: no self ask on later turns (the +10 % gate is not
-  enough) until a `reask` control or `session.start` clears it.
+  enough) until a `reask` control, `session.start`, or the user's own `/clear` (a new session id the daemon never paused;
+  UP-4 review) clears it.
 - `[pdx-relay:control] reask id=<uuid>` → consumed (never shown to the model); a bounded set of seen ids drops
   duplicates; `pdx relay begin --reask <uuid>` once; latch cleared.
 - Hello reports the new protocol so the daemon may send `reask`.
