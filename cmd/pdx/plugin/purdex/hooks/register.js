@@ -245,6 +245,7 @@ async function hello($, seq) {
     }
     if (s.idleWanted && s.state === 'idle') armIdle($) // the turn that ended before this answer (a new turn.start cleared the wish)
     if (h.active_relay && typeof h.active_relay === 'object') recoverLater($, h.active_relay, sid)
+    drainReask($) // a reask that came before hello answered
   } finally {
     if (seq === s.helloSeq) s.helloBusy = false
   }
@@ -573,11 +574,7 @@ function toIdle($) {
   letGo()
   Object.assign(s, { gen: s.gen + 1, state: 'idle', pending: undefined, begun: undefined, fixRounds: 0, writeTurnId: undefined, seedTurnId: undefined, idleAsk: false, idleWithdraw: false })
   if (s.control.length > 0) claimLater($) // a control that came while a relay ran (claim checks the turn) is not left waiting for a later turn
-  if (s.reaskPending && !s.turnRunning) { // a reask that came while a relay ran: begun now, not at some later turn (a running turn drains it at its end)
-    const id = s.reaskPending
-    s.reaskPending = ''
-    later($, 0, () => reaskBegin($, id))
-  }
+  drainReask($) // a reask that came while a relay ran: begun now, not at some later turn (a running turn drains it at its end)
 }
 
 // recheckMember is U24 PL-1g: a cached `member` role is the daemon's answer of a moment ago, and a released
@@ -777,11 +774,16 @@ async function begin($, sid, gen, u, adopted, manual = false, idle = false, reas
 // asked — the daemon opens a card for a person whatever the quota says. From a timer; state idle is taken before anything is
 // awaited. Nothing to begin (a relay already runs, no usage, a /clear meanwhile) only drops it: the latch is already clear.
 async function reaskBegin($, id) {
-  if (!s.helloOK || s.role === 'member' || s.state !== 'idle' || s.turnRunning || !hasCSPRNG()) return
+  // A reask that cannot be begun yet (hello not answered, a relay or a turn in the way, no usage) is kept, not lost: it is tried again
+  // when hello answers, a turn ends or the session returns to idle. Only a session reset or a /clear meanwhile drops it.
+  const keep = () => { if (!s.reaskPending) s.reaskPending = id }
+  if (!s.helloOK || s.role === 'member' || s.state !== 'idle' || s.turnRunning || !hasCSPRNG()) return keep()
   const gen = s.gen
   const u = (await $.session.usage().catch(() => undefined))?.context
   const sid = await $.session.id().catch(() => undefined)
-  if (!u || u.percent === undefined || !sid || s.gen !== gen || s.state !== 'idle' || s.turnRunning) return
+  if (s.gen !== gen) return // the conversation this reask was for is gone
+  if (!u || u.percent === undefined || !sid || s.state !== 'idle' || s.turnRunning) return keep()
+  s.reaskSeen = [...s.reaskSeen, id].slice(-MAX_REASKS_SEEN) // done only once it is really begun: a duplicate after this is dropped
   disarmIdle()
   s.state = 'beginning'
   s.lastAskPct = u.percent
@@ -794,10 +796,18 @@ async function reaskBegin($, id) {
 // if the session is idle between turns, else at the end of the turn / relay that is running.
 function takeReask($, id) {
   s.pausedLatch = false
-  if (s.reaskSeen.includes(id)) return
-  s.reaskSeen = [...s.reaskSeen, id].slice(-MAX_REASKS_SEEN)
+  if (s.reaskSeen.includes(id) || s.reaskPending === id) return
   if (!s.turnRunning && s.state === 'idle') later($, 0, () => reaskBegin($, id))
   else s.reaskPending = id
+}
+
+// drainReask begins the reask that waited, as soon as the session is idle between turns: from the return to idle, a turn's end and
+// hello's answer.
+function drainReask($) {
+  if (!s.reaskPending || s.turnRunning || s.state !== 'idle') return
+  const id = s.reaskPending
+  s.reaskPending = ''
+  later($, 0, () => reaskBegin($, id))
 }
 
 // relayNow is `/relay` (and `/relay now`): the self relay at once, whatever the context use, by the
@@ -1479,11 +1489,8 @@ export function register(on) {
       if (s.pending && s.writeTurnId !== undefined && e.turnId === s.writeTurnId) await onWriteTurnDone($)
       else if (s.pending && s.seedTurnId !== undefined && e.turnId === s.seedTurnId) await onSeedTurnDone($)
       else if (resumeRecovery($)) { /* the relay a reload left is finished first: no new ask this turn */ }
-      else if (s.state === 'idle' && s.reaskPending) {
-        const id = s.reaskPending // a reask that waited for this turn to end (UP-4)
-        s.reaskPending = ''
-        later($, 0, () => reaskBegin($, id))
-      } else if (s.state === 'idle') await maybeBegin($)
+      else if (s.state === 'idle' && s.reaskPending) drainReask($) // a reask that waited for this turn to end (UP-4)
+      else if (s.state === 'idle') await maybeBegin($)
       if (s.state === 'idle') { // idle relay: the stretch of idleness starts at the end of a main turn
         armIdle($)
         if (!s.helloOK) s.idleWanted = true // hello has not answered yet: its answer arms the timer
@@ -1543,6 +1550,8 @@ export function register(on) {
     if (was === 'awaiting') $.ui.status(undefined)
     s.floor = undefined
     s.lastAskPct = undefined
+    s.pausedLatch = false // a /clear is a new session id, which the daemon never paused: the old conversation's latch and waiting reask are not its
+    s.reaskPending = ''
     s.askBusy = undefined // an ask still out was the old conversation's: its answer is dropped (epoch), and it holds nothing here
     s.askEpoch++
     waitingRecovery = undefined // see resetState

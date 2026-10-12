@@ -565,6 +565,59 @@ test('the reask text from the user or any other origin is ordinary text', async 
   expect(begins(f)).toEqual([])
 })
 
+// The marker must stand alone on its own line of a short message: mentioning it is not sending it (codex).
+// Mutation gate: an unanchored match → the embedded cases are consumed (red).
+test('a reask marker inside a sentence, a quote or a very long message is ordinary text', async ($, on) => {
+  const f = soloWorld(on)
+  await start($, f)
+  for (const text of [
+    ENVELOPE('please note: ' + REASK + ' was sent'),
+    ENVELOPE('> ' + REASK),
+    ENVELOPE(REASK + ' and then some more words on the same line'),
+    ENVELOPE('x'.repeat(3000) + '\n' + REASK),
+  ]) expect(await receive($, text)).toEqual({ text })
+  await f.clock.advance(1000)
+  expect(begins(f)).toEqual([])
+  // alone on its line within a short message: the control
+  expect(await receive($, ENVELOPE('release\n' + REASK + '\n'))).toEqual({ consumed: expect.any(String) })
+})
+
+// A user's /clear is a new session id the daemon never paused: the old conversation's latch must not follow it.
+// Mutation gate: keep the latch across /clear → the new session never asks (red).
+test('a /clear clears the latch: the new session asks at the threshold', async ($, on) => {
+  const f = soloWorld(on)
+  await start($, f)
+  await turn($, f, 't1')
+  expect(begins(f).length).toBe(1)
+  f.switchTo = 'sid-new'
+  await $.classic.SessionStart({ source: 'clear' })
+  await f.clock.settle()
+  f.usage = { tokens: 150000, window: 200000, percent: 75 }
+  await turn($, f, 't2')
+  expect(begins(f).length).toBe(2)
+})
+
+// A reask that arrives before hello has answered is kept and begun when it does (not lost, not marked done).
+// Mutation gate: drop it when hello is not answered (return without keeping) → no reask begin (red).
+test('a reask before hello answers is begun when hello answers, once', async ($, on) => {
+  let release!: (r: R) => void
+  const gate = new Promise<R>((r) => { release = r })
+  const f = soloWorld(on)
+  const own = f.pdx
+  f.pdx = (argv) => (argv[0] === 'relay' && argv[1] === 'hello' ? gate : own(argv))
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await f.clock.advance(10)
+  expect(await receive($, ENVELOPE(REASK))).toEqual({ consumed: expect.any(String) })
+  await f.clock.advance(100)
+  expect(begins(f)).toEqual([]) // hello has not answered: nothing is begun yet
+  release({ exitCode: 0, stdout: HELLO('none') })
+  await f.clock.settle()
+  expect(begins(f).filter((c) => c.includes('--reask')).length).toBe(1)
+  await receive($, ENVELOPE(REASK)) // the same id again
+  await f.clock.settle()
+  expect(begins(f).filter((c) => c.includes('--reask')).length).toBe(1)
+})
+
 // The two parsers do not mistake each other's message.
 test('the op control and the reask control are told apart', async () => {
   const peer = (text: string) => ({ origin: PEER, text })
