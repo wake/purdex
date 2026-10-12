@@ -7,6 +7,9 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { checkRootInput, editOf, midEllipsis, saveRoots, useRootsStore, type InUseItem, type RootInputRefusal } from '../../lib/team/roots'
 import { teamKey } from '../../lib/team/max-members'
 import type { TeamRoster } from '../../lib/team/roster'
+import { changeHostRoot, classifyRootInput, viewOf, useHostRootsStore, type HostRootsError } from '../../lib/team/host-roots'
+import { hostRootsErrorText } from '../../lib/team/host-roots-text'
+import { HostRootsSection } from './HostRootsSection'
 
 const REFUSAL_KEY: Record<RootInputRefusal, string> = {
   empty: 'unattended.roots.err_empty', relative: 'unattended.roots.err_relative', duplicate: 'unattended.roots.err_duplicate', full: 'unattended.roots.err_full',
@@ -18,10 +21,24 @@ export function TeamRootsEditor({ hostId, team }: { hostId: string; team: TeamRo
   const busy = useRootsStore((s) => s.inflight[key] !== undefined)
   const edit = useRootsStore((s) => editOf(s, key))
   const [localRefusal, setLocalRefusal] = useState<RootInputRefusal | null>(null)
+  // `alias:/path` goes to the lead host's grants on another host (XR-3); what it was refused for shows beside the box
+  const [remoteRefusal, setRemoteRefusal] = useState<HostRootsError | null>(null)
+  const hostRoots = useHostRootsStore((s) => viewOf(s, hostId))
   const roots = team.roots ?? []
   const err = edit.error
 
   const add = async () => {
+    setRemoteRefusal(null)
+    const input = classifyRootInput(edit.draft, hostRoots.load === 'ok' ? hostRoots.hosts : null)
+    if (input.kind === 'unknown_host') { setLocalRefusal(null); setRemoteRefusal({ kind: 'unknown_host', name: input.name }); return }
+    if (input.kind === 'not_absolute') { setLocalRefusal('relative'); return }
+    if (input.kind === 'remote') {
+      setLocalRefusal(null)
+      const res = await changeHostRoot(hostId, input.host, 'add', input.path)
+      if (res.ok) useRootsStore.getState().setDraft(key, '')
+      else setRemoteRefusal(res.error)
+      return
+    }
     const r = checkRootInput(edit.draft, roots)
     if (!r.ok) { setLocalRefusal(r.reason); return }
     setLocalRefusal(null)
@@ -51,7 +68,7 @@ export function TeamRootsEditor({ hostId, team }: { hostId: string; team: TeamRo
       <div className="flex items-center gap-1">
         <input
           type="text" data-testid="roots-input" value={edit.draft} disabled={busy} placeholder={t('unattended.roots.placeholder')} aria-label={t('unattended.roots.placeholder')}
-          onChange={(e) => { useRootsStore.getState().setDraft(key, e.target.value); setLocalRefusal(null) }}
+          onChange={(e) => { useRootsStore.getState().setDraft(key, e.target.value); setLocalRefusal(null); setRemoteRefusal(null) }}
           onKeyDown={(e) => { if (e.key === 'Enter') void add() }}
           className="min-w-0 flex-1 rounded border border-border-subtle bg-surface-primary px-2 py-0.5 font-mono text-text-primary"
         />
@@ -60,6 +77,7 @@ export function TeamRootsEditor({ hostId, team }: { hostId: string; team: TeamRo
         </button>
       </div>
       {localRefusal && <div data-testid="roots-input-error" role="alert" className="text-status-error">{t(REFUSAL_KEY[localRefusal])}</div>}
+      {remoteRefusal && <div data-testid="roots-input-error" role="alert" className="text-status-error">{hostRootsErrorText(remoteRefusal, t)}</div>}
       {boxError && <div data-testid="roots-input-error" role="alert" className="text-status-error">{boxError}</div>}
       {err?.kind === 'rev_mismatch' && <div data-testid="roots-notice" role="status" className="text-status-warning-text">{t('unattended.roots.rev_mismatch')}</div>}
       {err?.kind === 'merged' && <div data-testid="roots-notice" role="status" className="text-text-muted">{t('unattended.roots.merged')}</div>}
@@ -71,6 +89,7 @@ export function TeamRootsEditor({ hostId, team }: { hostId: string; team: TeamRo
           <ul>{err.items.map((it, i) => <li key={i} data-testid="roots-in-use-item" className="font-mono">{inUseLine(it, team, t)}</li>)}</ul>
         </div>
       )}
+      <HostRootsSection leadId={hostId} />
     </div>
   )
 }
