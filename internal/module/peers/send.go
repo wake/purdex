@@ -601,6 +601,15 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	// object here on purpose — two concrete transports read more plainly than
 	// one interface with two implementations.
 	if isLocal {
+		// A paused session takes no message (unattended quota pause spec §3.2): the verdict is asked once, here, before the
+		// frame; the refusal is recorded on the audit row like any other. SendFlow alone skips it (the context key is
+		// unexported, an HTTP request cannot carry it).
+		if !isFlow(r.Context()) && m.paused(to.AgentSessionID, origin.Address, req.Text) {
+			m.setResult(id, "", ipeers.ErrSessionPaused, ipeers.SessionPausedDetail)
+			m.logf("peers: send %s to %q refused (%s)", msgID, targetAlias, ipeers.ErrSessionPaused)
+			writeWireError(w, http.StatusConflict, ipeers.APIError{Error: ipeers.ErrSessionPaused, Detail: ipeers.SessionPausedDetail})
+			return
+		}
 		m.deliverLocal(w, dreq, id, mode, req.OriginInbox, origin.Address, target.Agent.Inbox, targetHostID, targetAlias, toAddress)
 		return
 	}

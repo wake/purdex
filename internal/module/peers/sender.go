@@ -20,6 +20,9 @@ const SenderKey = "peers.sender"
 // POST /api/peers/send) is a *SendError; anything else that goes wrong is a plain error.
 type Sender interface {
 	Send(ctx context.Context, req ipeers.SendRequest) (ipeers.SendResponse, error)
+	// SendFlow is Send for the pause's own flow messages (resume notices, bounce lists, reask controls): it alone skips the
+	// pause check. It is an in-process Go call that nothing over HTTP can reach, so no message text can claim the exemption.
+	SendFlow(ctx context.Context, req ipeers.SendRequest) (ipeers.SendResponse, error)
 }
 
 // SendError is a refused send: the HTTP status and the wire error handleSend answered.
@@ -59,6 +62,14 @@ func (b *bufferedResponse) Write(p []byte) (int, error) {
 }
 
 func (s moduleSender) Send(ctx context.Context, req ipeers.SendRequest) (ipeers.SendResponse, error) {
+	return s.send(ctx, req)
+}
+
+func (s moduleSender) SendFlow(ctx context.Context, req ipeers.SendRequest) (ipeers.SendResponse, error) {
+	return s.send(context.WithValue(ctx, flowKey{}, true), req)
+}
+
+func (s moduleSender) send(ctx context.Context, req ipeers.SendRequest) (ipeers.SendResponse, error) {
 	raw, err := json.Marshal(req)
 	if err != nil {
 		return ipeers.SendResponse{}, fmt.Errorf("encode send request: %w", err)

@@ -26,6 +26,10 @@ type fakeSender struct {
 	in     chan struct{}
 }
 
+func (s *fakeSender) SendFlow(ctx context.Context, req ipeers.SendRequest) (ipeers.SendResponse, error) {
+	return s.Send(ctx, req)
+}
+
 func (s *fakeSender) Send(ctx context.Context, req ipeers.SendRequest) (ipeers.SendResponse, error) {
 	s.mu.Lock()
 	err, block, in, result := s.err, s.block, s.in, s.result

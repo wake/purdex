@@ -413,6 +413,7 @@ func (m *Module) Init(c *core.Core) error {
 	m.factLimit = newCommandLimiter()
 	m.proxyLimit = newCommandLimiter()
 	m.rootsLimit = newCommandLimiter()
+	c.Registry.Register(peersmod.PauseGateKey, pauseGate{m}) // peers asks it before a message reaches a session (UP-1b)
 	svc, ok := c.Registry.Get(peersmod.OriginResolverKey)
 	if !ok {
 		return fmt.Errorf("team: service %q not registered", peersmod.OriginResolverKey)
