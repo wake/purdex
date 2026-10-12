@@ -27,6 +27,9 @@ func (m *Module) unpairHost(hostID, reason string) error {
 		return err
 	}
 	dropped, _ := r.RowsAffected()
+	if _, err := dropRootChangesIn(tx, hostID, now); err != nil { // the root changes asked of this host end with the relation (XR-2a)
+		return err
+	}
 	r, err = tx.Exec(`UPDATE team_members SET state = 'gone', end_reason = ?, updated_at = ?, ended_at = CASE WHEN ended_at = 0 THEN ? ELSE ended_at END
 		WHERE host_id = ? AND host_id <> ? AND state IN `+liveRemoteStates+` AND `+liveTeamOfRow, reason, now, now, hostID, m.hostID())
 	if err != nil {
