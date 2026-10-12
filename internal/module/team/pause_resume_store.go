@@ -23,7 +23,11 @@ type ResumeScope struct {
 func (sc ResumeScope) where() (string, []any) {
 	switch {
 	case sc.Release != "":
-		return "(session_id = ? OR (cause = 'lead' AND lead_session_id = ?))", []any{sc.Release, sc.Release}
+		// The members a lead took with it are the `lead` rows of ITS team and of the same on-period: a session id can lead another
+		// team later, and a stale row of an earlier team or on-period is not this release's (codex, UP-3b).
+		return `(session_id = ? OR (cause = 'lead' AND lead_session_id = ? AND team_id <> ''
+			AND team_id IN (SELECT team_id FROM session_pauses WHERE session_id = ?)
+			AND on_since IN (SELECT on_since FROM session_pauses WHERE session_id = ?)))`, []any{sc.Release, sc.Release, sc.Release, sc.Release}
 	case sc.All:
 		return "1", nil
 	}

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -105,6 +106,36 @@ func TestRelease_ALeadReleasesItsMembersLeadCauseOnly(t *testing.T) {
 	}
 	if got := f.outboxOf("sid-m2"); len(got) != 0 {
 		t.Fatalf("sid-m2 still has a cause and was told %+v", got)
+	}
+}
+
+// The lead's members are those of ITS team and the same on-period: a `lead` row naming the same lead session but another team (the
+// session id led another team later) or another on-period is a stale row and stays.
+// Mutation gate: select by lead_session_id alone → the stale rows are released (red).
+func TestRelease_OnlyTheLeadsOwnTeamAndOnPeriodAreTakenAlong(t *testing.T) {
+	f := leadWorld(t)
+	f.seedPause("sid-1", team.PauseCauseQuota, team.PauseRoleLead, "_abc123", "boss", 1)
+	f.seedPause("sid-m1", team.PauseCauseLead, team.PauseRoleMember, "_mem001", "worker", 1)
+	for sid, p := range map[string]PauseRow{
+		"sid-old-team":   {SessionID: "sid-old-team", Cause: team.PauseCauseLead, Role: team.PauseRoleMember, TeamID: uid(2), LeadSessionID: "sid-1", OnSince: 1, Since: 5},
+		"sid-old-period": {SessionID: "sid-old-period", Cause: team.PauseCauseLead, Role: team.PauseRoleMember, TeamID: uid(1), LeadSessionID: "sid-1", OnSince: 0, Since: 5},
+	} {
+		if _, err := f.m.store.AddPause(p); err != nil {
+			t.Fatal(sid, err)
+		}
+	}
+	if code, raw := f.releasePaused("sid-1", appRelease()); code != http.StatusOK {
+		t.Fatalf("release: %d %s", code, raw)
+	}
+	ps := f.pauses()
+	if _, a := ps["sid-old-team/lead"]; !a {
+		t.Fatalf("pauses = %+v: another team's row was released", ps)
+	}
+	if _, a := ps["sid-old-period/lead"]; !a {
+		t.Fatalf("pauses = %+v: an earlier on-period's row was released", ps)
+	}
+	if _, a := ps["sid-m1/lead"]; a || len(ps) != 2 {
+		t.Fatalf("pauses = %+v, want sid-m1 released and the two stale rows left", ps)
 	}
 }
 
@@ -317,6 +348,38 @@ func TestReask_ATokenOnAReplayedRequestIDIsAConflictNotARetry(t *testing.T) {
 	}
 	if g.opCount() != 1 {
 		t.Fatalf("ops = %d", g.opCount())
+	}
+}
+
+// Two identical re-asks that arrive together (both miss the request_id lookup before the lock): the one that waited gets the op the
+// first opened (201), not relay_open 409; one op, one card, the token spent once.
+// Mutation gate: drop the lookup under the lock → the second answers 409 (red).
+func TestReask_TwoIdenticalBeginsInFlightGetTheSameOp(t *testing.T) {
+	f := tokenWorld(t)
+	tok := f.giveToken("sid-1", f.clock.Load())
+	req := beginReq("sid-1")
+	req.RequestID, req.ReaskID = uuid.NewString(), tok
+	f.m.createMu.Lock() // both begins pass their early checks and queue on the lock
+	type result struct {
+		code int
+		raw  []byte
+	}
+	out := make(chan result, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			code, raw := f.do(http.MethodPost, "/api/relay/begin", req)
+			out <- result{code, raw}
+		}()
+	}
+	time.Sleep(300 * time.Millisecond)
+	f.m.createMu.Unlock()
+	a, b := <-out, <-out
+	if a.code != http.StatusCreated || b.code != http.StatusCreated {
+		t.Fatalf("answers %d %s / %d %s, want two 201", a.code, a.raw, b.code, b.raw)
+	}
+	var ra, rb team.RelayBeginResponse
+	if json.Unmarshal(a.raw, &ra) != nil || json.Unmarshal(b.raw, &rb) != nil || ra.Op.ID != rb.Op.ID || f.opCount() != 1 || len(f.tokens()) != 0 {
+		t.Fatalf("ops %s / %s (%d in all), tokens %v", ra.Op.ID, rb.Op.ID, f.opCount(), f.tokens())
 	}
 }
 
