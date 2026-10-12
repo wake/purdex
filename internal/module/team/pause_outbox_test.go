@@ -62,6 +62,13 @@ func (n *fakeNotifier) NotifyPause(p team.PausePush) bool {
 	return n.done
 }
 
+// count is how many pushes were taken (safe while the running loop is sending).
+func (n *fakeNotifier) count() int {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return len(n.got)
+}
+
 func (f *fixture) outboxWorld() (*fakeFlow, *fakeNotifier) {
 	f.t.Helper()
 	f.m.pauseRetryGap = 0 // passes in a test follow each other at once; the pacing has its own test
@@ -221,7 +228,7 @@ func TestPauseOutbox_ABeginThatPausesIsSentByTheRunningLoop(t *testing.T) {
 	if code, _ := f.beginRaw("sid-1"); code != http.StatusConflict {
 		t.Fatal(code)
 	}
-	waitFor(t, func() bool { return len(flow.sentTexts()) == 1 && len(push.got) == 1 && len(f.outbox()) == 0 })
+	waitFor(t, func() bool { return len(flow.sentTexts()) == 1 && push.count() == 1 && len(f.outbox()) == 0 })
 }
 
 // stubPush is a push module that is mounted (Init done, ready) but has not started, so it has not published its notifier yet.
