@@ -204,6 +204,7 @@ const (
 	ErrTargetGone        = "target_gone"
 	ErrDuplicate         = "duplicate"
 	ErrRateLimited       = "rate_limited"
+	ErrSessionPaused     = "session_paused" // 409: the receiving session is paused (unattended, no relay quota); the message was bounced and is listed to it when it resumes
 	ErrAuditUnavailable  = "audit_unavailable"
 	ErrProxyLimit        = "proxy_limit"
 	ErrProxySpawnFailed  = "proxy_spawn_failed"
@@ -658,3 +659,6 @@ func (r DeliverRequest) Validate() error {
 
 	return nil
 }
+
+// SessionPausedDetail is the one detail a paused session's refusal carries (unattended quota pause spec §3.2).
+const SessionPausedDetail = "對方暫停中（接力額度用完，等使用者回來），訊息沒有送達"

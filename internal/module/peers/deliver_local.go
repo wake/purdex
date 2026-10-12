@@ -74,6 +74,20 @@ func (m *Module) deliverToLocalTarget(ctx context.Context, snap deliverSnapshot,
 		return "", "", refusalOf(http.StatusConflict, ipeers.ErrTargetGone, detail)
 	}
 
+	// 7b. A paused session takes no message (unattended quota pause spec §3.2): asked after the target is verified, so a
+	// message for a session that is not here bounces nothing. A remote host, a daemon team notice and an admin all pass
+	// here; nothing that reaches this function can skip the question (SendFlow is the local arm's, in handleSend).
+	from := d.senderAlias + "/" + d.from.SessionName
+	if d.from.Address != "" {
+		from = d.senderAlias + "/" + d.from.Address
+	}
+	switch paused, perr := m.paused(d.to.AgentSessionID, from, d.text); {
+	case perr != nil:
+		return "", "", pauseHeldRefusal()
+	case paused:
+		return "", "", pausedRefusal()
+	}
+
 	// 8. Per (sender, receiver) process pair rate limit.
 	if !m.pairs.Allow(pairKey{From: d.from.Key(), To: d.to.Key(snap.localHostID)}) {
 		return "", "", refusalOf(http.StatusTooManyRequests, ipeers.ErrRateLimited, "pair rate limit exceeded")

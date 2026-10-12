@@ -2,9 +2,14 @@
 package teammod
 
 import (
+	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -220,4 +225,85 @@ func (s *Store) LiveLocalMembersOfLead(leadSessionID string) ([]memberRow, error
 		FROM team_members m JOIN teams t ON t.id = m.team_id
 		WHERE t.lead_session_id = ? AND m.state = 'active' AND t.ended_at = 0 AND (? = '' OR m.host_id = ?) ORDER BY m.created_at, m.spawn_op`,
 		leadSessionID, s.localHostID, s.localHostID)
+}
+
+// What a bounce keeps is bounded, and so is how many a paused session holds: the sender's address and the first line are cut,
+// and past maxBounces rows a new (sender, text) is refused all the same but not listed — a flood of different texts cannot grow
+// team.db without bound while the session stays paused.
+const (
+	maxBounceFirstLine = 120
+	maxBounceFrom      = 120
+	maxBounces         = 100
+)
+
+// PauseVerdict is the one question both delivery points ask before a message reaches a session (unattended quota pause spec
+// §3.2): is the session paused? If it has any pause row, the message is bounced — a bounce row (session, from, text hash) is
+// upserted, so the same sender repeating the same text is one row with the latest time, and a session holds at most maxBounces
+// of them — and paused is true; else false and nothing is written.
+//
+// The common case (not paused) is one read. A paused session takes the write lock first (BEGIN IMMEDIATE) and looks again, so
+// the check and the bounce serialise with the resume, which deletes the pause rows and the bounces in one transaction: a
+// message is either bounced-and-listed or delivered, never bounced with no one left to list it. A store error is an error, not
+// "not paused": the caller holds the message.
+func (s *Store) PauseVerdict(sessionID, from, text string, at int64) (paused bool, err error) {
+	var one int
+	switch err := s.db.QueryRow(`SELECT 1 FROM session_pauses WHERE session_id = ? LIMIT 1`, sessionID).Scan(&one); {
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	case err != nil:
+		return false, fmt.Errorf("pause verdict %s: %w", sessionID, err)
+	}
+	sum := sha256.Sum256([]byte(text))
+	hash := hex.EncodeToString(sum[:])
+	from = cutRunes(from, maxBounceFrom)
+	err = s.immediateTx(func(ctx context.Context, conn *sql.Conn) error {
+		if err := conn.QueryRowContext(ctx, `SELECT 1 FROM session_pauses WHERE session_id = ? LIMIT 1`, sessionID).Scan(&one); errors.Is(err, sql.ErrNoRows) {
+			paused = false // resumed since the read above: the message is delivered
+			return nil
+		} else if err != nil {
+			return err
+		}
+		paused = true
+		var n int
+		var have int
+		if err := conn.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(from_addr = ? AND text_hash = ?), 0) FROM pause_bounces WHERE session_id = ?`, from, hash, sessionID).Scan(&n, &have); err != nil {
+			return err
+		}
+		if n >= maxBounces && have == 0 {
+			return nil // refused all the same, not listed
+		}
+		_, err := conn.ExecContext(ctx, `INSERT INTO pause_bounces (session_id, from_addr, text_hash, at, first_line) VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT (session_id, from_addr, text_hash) DO UPDATE SET at = excluded.at`,
+			sessionID, from, hash, at, firstLineOf(text, maxBounceFirstLine))
+		return err
+	})
+	if err != nil {
+		return false, fmt.Errorf("pause verdict %s: %w", sessionID, err)
+	}
+	return paused, nil
+}
+
+// cutRunes cuts s to max characters.
+func cutRunes(s string, max int) string {
+	if r := []rune(s); len(r) > max {
+		return string(r[:max])
+	}
+	return s
+}
+
+// firstLineOf is the first non-blank line of text, trimmed, cut to max characters.
+func firstLineOf(text string, max int) string {
+	for _, line := range strings.Split(text, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return cutRunes(line, max)
+		}
+	}
+	return ""
+}
+
+// pauseGate is the team module as peers' PauseGate (registered under peersmod.PauseGateKey in Init).
+type pauseGate struct{ m *Module }
+
+func (g pauseGate) PauseVerdict(sessionID, from, text string, at int64) (bool, error) {
+	return g.m.store.PauseVerdict(sessionID, from, text, at)
 }
