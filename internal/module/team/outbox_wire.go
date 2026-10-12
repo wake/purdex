@@ -67,6 +67,7 @@ func (m *Module) scanUnpaired() {
 	}
 	rows, err := m.store.db.Query(`SELECT host_id FROM team_members WHERE host_id <> ? AND state IN `+liveRemoteStates+`
 		UNION SELECT host_id FROM team_commands WHERE state = 'pending'
+		UNION SELECT host_id FROM host_root_changes WHERE state = 'pending'
 		UNION SELECT host_id FROM remote_spawns WHERE state = 'running'`, m.hostID())
 	if err != nil {
 		m.logf("[team] unpaired scan: %v", err)

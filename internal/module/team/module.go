@@ -145,8 +145,13 @@ type Module struct {
 	// rootsPrecheckHook, when set, runs at the start of a removal's in-use pre-check (test seam: proves it runs outside the config lock).
 	rootsPrecheckHook func()
 	// pauseKick wakes the pause outbox loop (buffered 1); pauseOutboxCrash is a test seam: true aborts a pass after a row was sent and before it was deleted.
-	pauseKick        chan struct{}
-	pauseOutboxCrash func(seq int64) bool
+	pauseKick chan struct{}
+	// roots is the reconciler of this lead host's root changes (XR-2a); rootsSig wakes its coordinator (buffered 1).
+	roots    rootsState
+	rootsSig chan struct{}
+	// rootsAfterDrainEmpty, when set, runs in a host worker between its last empty look and giving the host back (test seam).
+	rootsAfterDrainEmpty func()
+	pauseOutboxCrash     func(seq int64) bool
 	// pauseRetryGap is how long a failed row waits before it is tried again; pauseRetryAt is when each failed row may next be tried (in memory: a restart tries at once).
 	pauseRetryGap time.Duration
 	pauseRetryMu  sync.Mutex
@@ -423,6 +428,7 @@ func (m *Module) Init(c *core.Core) error {
 	m.proxyLimit = newCommandLimiter()
 	m.rootsLimit = newCommandLimiter()
 	m.pauseKick = make(chan struct{}, 1)
+	m.rootsSig = make(chan struct{}, 1)
 	m.pauseRetryGap = pauseOutboxEvery
 	c.Registry.Register(peersmod.PauseGateKey, pauseGate{m}) // peers asks it before a message reaches a session (UP-1b)
 	svc, ok := c.Registry.Get(peersmod.OriginResolverKey)
@@ -617,6 +623,7 @@ func (m *Module) Start(context.Context) error {
 	// command records on the premise that the lead host never resends one older than 10 minutes (#2265).
 	m.expireCommands()
 	m.startCommandPump()
+	m.startRootsReconciler() // the root changes this host asked member hosts for (XR-2a)
 	m.startFactPump()
 	m.startRemoteNoticePump()
 	m.logf("[team] endpoints enabled")

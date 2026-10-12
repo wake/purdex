@@ -30,6 +30,9 @@ type Store struct {
 	// module at Init); nil in a bare store. afterLeadNotice, when set, fails right after (test seam: the one-transaction rule).
 	leadNotice      LeadNoticer
 	afterLeadNotice func() error
+	// failBeforeRootsCache, when set, fails SettleRootChangeDone after its row update and before the cache write (test seam: the two
+	// are one transaction). nil in production.
+	failBeforeRootsCache func() error
 	// newID and aliasFn let the store build the commands a transaction of its own enqueues (the lead moved, X3b-1b); set at Init.
 	newID func() string
 	// onCommands wakes the commands pump after a store transaction enqueued commands (set at Init).
@@ -266,6 +269,10 @@ func OpenStore(path string) (*Store, error) {
 	if _, err := db.Exec(modHelloSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (mod hello): %w", err)
+	}
+	if _, err := db.Exec(hostRootsSchema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (host roots): %w", err)
 	}
 	if _, err := db.Exec(pauseSchema); err != nil {
 		db.Close()
