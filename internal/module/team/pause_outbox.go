@@ -21,6 +21,9 @@ import (
 // pauseOutboxPass bounds the rows one pass reads.
 const pauseOutboxPass = 100
 
+// pauseOutboxMaxAttempts is how many failed passes a row gets before it gives up (at pauseOutboxEvery each: about five minutes).
+const pauseOutboxMaxAttempts = 30
+
 // pauseOutboxEvery is how long the loop waits for a kick before it looks again (a failed head is retried at this pace).
 const pauseOutboxEvery = 10 * time.Second
 
@@ -101,6 +104,16 @@ func (m *Module) drainPauseOutbox() {
 			return
 		}
 		if done := m.sendPauseRow(r); !done {
+			if r.Attempts+1 >= pauseOutboxMaxAttempts {
+				// A row that cannot be sent in this many passes (about five minutes) never will: the order is kept for everything
+				// that can be sent, so a poison row gives up instead of holding every session's notices for ever.
+				m.logf("[team] pause outbox %d (%s to %s): given up after %d attempts", r.Seq, r.Kind, r.SessionID, pauseOutboxMaxAttempts)
+				if err := m.store.DeletePauseOutbox(r.Seq); err != nil {
+					m.logf("[team] %v", err)
+					return
+				}
+				continue
+			}
 			if err := m.store.BumpPauseOutbox(r.Seq); err != nil {
 				m.logf("[team] %v", err)
 			}

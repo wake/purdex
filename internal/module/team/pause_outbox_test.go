@@ -259,3 +259,29 @@ func TestPauseOutbox_APushRowSurvivesTheStartupOrder(t *testing.T) {
 		t.Fatalf("outbox = %+v, want the push dropped for a module that is not ready", g.outbox())
 	}
 }
+
+// Codex attack (high): a head that can never be sent must not hold every other session's notices for ever. FIFO is kept, but a
+// row gives up after pauseOutboxMaxAttempts failed passes (logged), and the rows behind it go.
+// Mutation gate: no cap → the rows behind a poison head are never sent (red).
+func TestPauseOutbox_APoisonHeadGivesUpAfterBoundedAttempts(t *testing.T) {
+	f := newFixture(t)
+	flow, _ := f.outboxWorld()
+	flow.errAt = map[int]error{}
+	for i := 1; i <= pauseOutboxMaxAttempts; i++ {
+		flow.errAt[i] = errors.New("socket write failed") // the head fails every time it is tried
+	}
+	f.queue("sid-1", team.PauseOutboxNotice, "poison", 500)
+	f.queue("sid-2", team.PauseOutboxNotice, "behind", 500)
+	for i := 0; i < pauseOutboxMaxAttempts-1; i++ {
+		f.m.drainPauseOutbox()
+		if len(flow.sentTexts()) != 0 || len(f.outbox()) != 2 {
+			t.Fatalf("pass %d: sent %q, outbox %+v, want the head retried and nothing behind it sent", i+1, flow.sentTexts(), f.outbox())
+		}
+	}
+	f.m.drainPauseOutbox() // the last attempt: the head gives up
+	f.m.drainPauseOutbox() // and the row behind it goes
+	got := flow.sentTexts()
+	if len(got) != 1 || got[0] != "h/_def456|/tmp/20.sock|behind" || len(f.outbox()) != 0 {
+		t.Fatalf("after the head gave up: sent %q, outbox %+v", got, f.outbox())
+	}
+}
