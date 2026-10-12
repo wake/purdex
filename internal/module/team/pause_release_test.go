@@ -139,6 +139,28 @@ func TestRelease_OnlyTheLeadsOwnTeamAndOnPeriodAreTakenAlong(t *testing.T) {
 	}
 }
 
+// The team and the on-period must belong to the SAME row of the released session: a member row that pairs team A with the period of
+// another row of the lead (a cross pairing) is not its.
+// Mutation gate: match team and on-period independently → the cross-paired row is released (red).
+func TestRelease_ATeamAndPeriodFromDifferentOwnerRowsDoNotMatch(t *testing.T) {
+	f := leadWorld(t)
+	for _, p := range []PauseRow{
+		{SessionID: "sid-1", Cause: team.PauseCauseQuota, Role: team.PauseRoleLead, TeamID: uid(1), LeadSessionID: "sid-1", OnSince: 1, Since: 1},
+		{SessionID: "sid-1", Cause: team.PauseCauseLead, Role: team.PauseRoleLead, TeamID: uid(2), LeadSessionID: "sid-1", OnSince: 2, Since: 1},
+		{SessionID: "sid-cross", Cause: team.PauseCauseLead, Role: team.PauseRoleMember, TeamID: uid(1), LeadSessionID: "sid-1", OnSince: 2, Since: 1}, // team of row 1, period of row 2
+	} {
+		if _, err := f.m.store.AddPause(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if code, raw := f.releasePaused("sid-1", appRelease()); code != http.StatusOK {
+		t.Fatalf("release: %d %s", code, raw)
+	}
+	if _, ok := f.pauses()["sid-cross/lead"]; !ok {
+		t.Fatalf("pauses = %+v: the cross-paired row was released", f.pauses())
+	}
+}
+
 // A member paused for its own quota: released alone; its lead gets the one list.
 func TestRelease_AMemberQuotaPauseIsReleasedAlone(t *testing.T) {
 	f := leadWorld(t)
@@ -348,6 +370,28 @@ func TestReask_ATokenOnAReplayedRequestIDIsAConflictNotARetry(t *testing.T) {
 	}
 	if g.opCount() != 1 {
 		t.Fatalf("ops = %d", g.opCount())
+	}
+}
+
+// A re-ask replayed with another token, or none, is not the same request (409); the same token is the retry.
+// Mutation gate: do not compare the stored token → the replay with token B answers 201 (red).
+func TestReask_AReplayMustCarryTheSameToken(t *testing.T) {
+	f := tokenWorld(t)
+	a, bt := f.giveToken("sid-1", f.clock.Load()), f.giveToken("sid-1", f.clock.Load())
+	req := beginReq("sid-1")
+	req.RequestID, req.ReaskID = uuid.NewString(), a
+	if code, raw := f.do(http.MethodPost, "/api/relay/begin", req); code != http.StatusCreated {
+		t.Fatalf("first: %d %s", code, raw)
+	}
+	for name, tok := range map[string]string{"another token": bt, "no token": ""} {
+		r := req
+		r.ReaskID = tok
+		if code, raw := f.do(http.MethodPost, "/api/relay/begin", r); code != http.StatusConflict {
+			t.Fatalf("%s: %d %s, want 409", name, code, raw)
+		}
+	}
+	if got := f.tokens(); len(got) != 1 || got[0] != bt {
+		t.Fatalf("tokens = %v, token B must stay unspent", got)
 	}
 }
 

@@ -115,6 +115,8 @@ type SelfRelayPayload struct {
 	// Reask: the request was made with a valid release token (UP-3b): a card for a person, never paused and never approved by the
 	// daemon, whatever the switch and the quota say. The row's, set by the daemon when it consumed the token; a caller cannot send it.
 	Reask bool `json:"reask,omitempty"`
+	// ReaskID is the (spent) release token the card was opened with: a replay of the begin must carry the same one.
+	ReaskID string `json:"reask_id,omitempty"`
 }
 
 // RelayHelloRequest is POST /api/relay/hello.

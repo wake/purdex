@@ -362,6 +362,9 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sp.Reask = reask
+	if reask {
+		sp.ReaskID = req.ReaskID
+	}
 	opID, reqID := m.newID(), req.RequestID
 	if reqID == "" {
 		reqID = m.newID()
@@ -640,6 +643,9 @@ func sameBeginPayload(m *Module, op team.RelayOp, req team.RelayBeginRequest) bo
 	var sp team.SelfRelayPayload
 	if err := json.Unmarshal(row.Payload, &sp); err != nil {
 		return false
+	}
+	if sp.Reask && req.ReaskID != sp.ReaskID {
+		return false // a re-ask replayed with another token, or none, is not the same request
 	}
 	if req.ReaskID != "" && !sp.Reask {
 		// An ordinary begin replayed with a release token that is valid now is another request, not a retry: answering it with the
