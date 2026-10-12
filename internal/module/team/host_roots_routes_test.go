@@ -200,29 +200,22 @@ func TestHostRootsPost_WhatDoesNotCount(t *testing.T) {
 	}
 }
 
-// Doubt goes to the refusal: a member whose cwd was never recorded, or whose spelling differs only in case (a case-insensitive member host),
-// refuses a removal of a directory it may be under.
-// Mutation gate: an empty cwd counts as "not under" → the removal goes through (red).
-func TestHostRootsPost_AnUnknownOrCaseDifferentCwdRefusesTheRemoval(t *testing.T) {
+// The in-use check is lexical and case-sensitive (spec §3.2): a member with no recorded cwd, or whose spelling differs only in case, is not
+// seen here — the member host's own pre-check (XR-1) is the backstop — and must not make every removal of its host impossible.
+// Mutation gate: count an unknown cwd as in use → the first case is refused (red).
+func TestHostRootsPost_AnUnknownOrCaseDifferentCwdIsNotCounted(t *testing.T) {
 	for name, cwd := range map[string]string{"unknown cwd": "", "other case": "/W/A/proj"} {
 		f, _ := routesFixture(t)
 		f.cache("hostM", 1, "/w/a")
 		f.remoteMemberAt("m1", "hostM", rowActive, cwd)
-		if code, raw := f.postHostRoots("air26", "remove", "/w/a"); code != http.StatusConflict {
-			t.Errorf("%s: %d %s, want 409", name, code, raw)
+		if code, raw := f.postHostRoots("air26", "remove", "/w/a"); code != http.StatusAccepted {
+			t.Errorf("%s: %d %s, want 202", name, code, raw)
 		}
-	}
-	// a case-different spelling of a root that STAYS does not keep the member (exact spelling only): still refused
-	f, _ := routesFixture(t)
-	f.cache("hostM", 1, "/w/a", "/W")
-	f.remoteMemberAt("m1", "hostM", rowActive, "/w/a/proj")
-	if code, raw := f.postHostRoots("air26", "remove", "/w/a"); code != http.StatusConflict {
-		t.Errorf("kept by another case: %d %s, want 409", code, raw)
 	}
 }
 
 // A remote adopt whose target has no recorded cwd cannot be judged against a pending removal: refused while one is pending, and allowed
-// again once it has settled. A spawn in another case is refused likewise.
+// again once it has settled (it is not refused when none is pending).
 func TestHostRootsGuard_AnUnknownCwdAdoptIsRefusedWhileARemovalIsPending(t *testing.T) {
 	f, _ := adoptFixture(t)
 	f.m.peerRecords = func(_ context.Context, host string) ([]ipeers.PeerRecord, error) {
@@ -237,11 +230,13 @@ func TestHostRootsGuard_AnUnknownCwdAdoptIsRefusedWhileARemovalIsPending(t *test
 	if code != http.StatusConflict || decodeErr(t, raw).Error != team.ErrRootBeingRemoved {
 		t.Fatalf("approve: %d %s", code, raw)
 	}
-	g, _ := routesFixture(t)
-	g.cache("hostM", 1, "/w")
-	g.change("rm1", "hostM", "remove", "/w")
-	if code, _, e := g.spawn(1, "/W/r", func(r *team.SpawnRequest) { r.Host = "air26" }); code != http.StatusConflict || e.Error != team.ErrRootBeingRemoved {
-		t.Fatalf("spawn in another case: %d %+v", code, e)
+	if err := f.m.store.SettleRootChangeDone("rm1", "/w", []string{}, 2, f.clock.Load()); err != nil {
+		t.Fatal(err)
+	}
+	f.adoptOK(uid(31), remoteTarget)
+	f.approveClick(uid(31))
+	if state, _ := f.memberRowState(uid(31)); state != team.AdoptionJoining {
+		t.Fatalf("after the removal settled: %s", state)
 	}
 }
 

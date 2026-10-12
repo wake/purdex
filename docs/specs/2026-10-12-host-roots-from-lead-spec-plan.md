@@ -135,7 +135,10 @@ chain.
     "roots_in_use", uses: [{ref | op_id, title, cwd}]}`, no row is written. The App shows 「這個資料夾還有 member 在用：…。
     先結束它們才能移除。」. The lead cannot resolve the member host's symlinks, so a member whose recorded cwd uses another
     spelling of the same directory is not seen here; the member host's pre-check (§3.1) refuses that removal and the row
-    shows it.
+    shows it. Case-sensitive too (this host cannot know the member host's file-system rules), and a member with **no recorded
+    cwd** is not counted by this check (refusing every removal for it would make the grant unmanageable; the member host's
+    pre-check sees the real path); a remote **adopt** with no cwd is refused (`root_being_removed`) only while a removal of
+    that host is pending.
   - **Pending-remove guard** on both ways a member of this lead appears on that host, each inside its existing write
     transaction after the writer lock is held: remote spawn acceptance (`AcceptRemoteSpawn`) and remote adopt approval
     (`adoptApprovedIn`, before the `joining` row is inserted) refuse a cwd within a path that has a **pending remove** row
