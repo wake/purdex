@@ -31,6 +31,7 @@ func (f *fixture) rowCount(kind string) int {
 // The §4.1 table. Mutation gates: spend when unattended is off → the first row red; spend with the rule off → the
 // second red; skip the spend → the third red; open the row with a pool left → the third red.
 func TestRelayCreate_GateTable(t *testing.T) {
+	disablePauseEntry(t) // this tests the held card (the legacy path); the pause that replaces it with the gate open has its own tests
 	for _, c := range []struct {
 		name            string
 		unatt, rule     bool
@@ -98,6 +99,7 @@ func TestRelayCreate_GateTable(t *testing.T) {
 // Fault injection after the op insert, after the row insert and after the spend: nothing persisted, the pool unchanged.
 // Mutation gate: spend outside the transaction → the pool drops (red).
 func TestRelayCreate_AFailureRollsBackOpRowAndSpend(t *testing.T) {
+	disablePauseEntry(t) // this tests the held card (the legacy path); the pause that replaces it with the gate open has its own tests
 	boom := errors.New("boom")
 	for name, inject := range map[string]func(f *fixture, pool int){
 		"after the spend":      func(f *fixture, pool int) { f.m.afterPoolSpend = func() error { return boom } },
@@ -120,6 +122,7 @@ func TestRelayCreate_AFailureRollsBackOpRowAndSpend(t *testing.T) {
 
 // Replay of the same id and member is 200 with the same op in each state; another member is id_conflict.
 func TestRelayCreate_ReplayInEveryState(t *testing.T) {
+	disablePauseEntry(t) // this tests the held card (the legacy path); the pause that replaces it with the gate open has its own tests
 	for _, pool := range []int{2, 0} {
 		f := gateFixture(t, true, true, pool)
 		_, op, _ := f.createRelay(rid(320), "/tmp/10.sock", "_mem001")
@@ -145,6 +148,7 @@ func btoi(b bool) int {
 
 // Two members race for the last unit: exactly one is spent and requested, the other waits on a row.
 func TestRelayCreate_TwoMembersOneLastUnit(t *testing.T) {
+	disablePauseEntry(t) // this tests the held card (the legacy path); the pause that replaces it with the gate open has its own tests
 	f := gateFixture(t, true, true, 1)
 	row2 := newMember("op-m2", uid(1), "sid-m2", "_mem002", f.clock.Load())
 	row2.ProcStart = memStart
@@ -162,6 +166,7 @@ func TestRelayCreate_TwoMembersOneLastUnit(t *testing.T) {
 
 // The held view lists a held member_relay row beside the self_relay ones. Mutation gate: filter to self_relay → red.
 func TestUnattendedView_HeldListsTheMemberRelayRow(t *testing.T) {
+	disablePauseEntry(t) // this tests the held card (the legacy path); the pause that replaces it with the gate open has its own tests
 	f := gateFixture(t, true, true, 0)
 	f.realUnattended()
 	f.switchTo(true)
@@ -174,6 +179,7 @@ func TestUnattendedView_HeldListsTheMemberRelayRow(t *testing.T) {
 
 // End to end: pool 0 → a person approves → the op is requested and the control goes out; the click spent nothing.
 func TestRelayCreate_HeldRowApprovedByAClickSendsTheControl(t *testing.T) {
+	disablePauseEntry(t) // this tests the held card (the legacy path); the pause that replaces it with the gate open has its own tests
 	f := gateFixture(t, true, true, 0)
 	_, op, _ := f.createRelay(rid(350), "/tmp/10.sock", "_mem001")
 	if code, body := f.decide(op.RequestID, "approve"); code != 200 {

@@ -53,10 +53,10 @@
 import { register as registerAsk } from './ask.js'
 import { backgroundBusy, registerEvents } from './events.js'
 import { registerLease } from './lease.js'
-import { CONSUMED, claimOp, controlOp, leadLine, rosterLines } from './member.js'
+import { CONSUMED, CONSUMED_REASK, claimOp, controlOp, controlReask, leadLine, rosterLines } from './member.js'
 import { DEFAULT_BODIES, FIXED } from './prompts.js'
 
-const VERSION = '4' // the mod ↔ daemon protocol version `pdx relay hello --version` reports
+const VERSION = '5' // the mod ↔ daemon protocol version `pdx relay hello --version` reports (5: the paused latch and the reask control)
 const DEFAULT_THRESHOLD = 70
 const DEFAULT_MIN_GROWTH = 20000
 const REASK_POINTS = 10
@@ -76,6 +76,7 @@ const BEGIN_HOLD_MS = 40_000 // … and for begin's answer at most 40 s: begin's
 const RELAY_MOD_RELOADED = 'mod_reloaded' // the failed reason of an op that was claimed / writing when the mod reloaded (#2441)
 const STEP_MS = 50 // the timer a step that starts a turn or a command waits for (F3)
 const MAX_RESENDS = 20 // a report that keeps failing with 20 / 21 is re-sent at most this often, then dropped
+const MAX_REASKS_SEEN = 32 // reask ids remembered to drop a duplicate delivery; the oldest are forgotten
 const MAX_CONTROLS = 8 // verified (seen) control ops kept at once; a forged marker is refused by `seen` and never kept
 const MAX_OUTBOX = 50 // reports queued at once; one more pushes out the oldest
 const REQUIRED = ['## 1.', '## 2.', '## 3.', '## 4.', '## 5.', '## 6.', '## 7.', '## 8.']
@@ -87,6 +88,7 @@ const RELAY_UNREACHABLE = 'Purdex daemon 連不上，無法變更自我接力'
 const RELAY_USAGE = '用法：/relay [now|off|on|status]（不帶參數＝now）'
 const RELAY_BUSY = '接力進行中'
 const RELAY_HOST_OFF = '主機的自我接力開關是關的，不接力'
+const RELAY_QUOTA_PAUSED = '接力額度用完，這個 session 已暫停，等使用者回來（或在 App 解除）後會自動重新申請'
 const RELAY_PAUSED = '這個 session 已用 /relay off 暫停自我接力；要立刻接力請先 /relay on 再 /relay'
 const RELAY_NO_USAGE = '目前讀不到 context 用量，稍後再試'
 const RELAY_NOT_STARTED = '接力沒有開始（這個 session 剛換過或被清除）'
@@ -114,6 +116,10 @@ const fresh = () => ({
   writeDeferred: undefined, // a claimed request whose write prompt waits for the running turn to end
   pending: undefined, // { op, requestId, path, oldSession, oldRef, before, nonce, nonceState, who, wait, answer }
   lastAskPct: undefined,
+  latchEpoch: 0, // bumped by everything that clears the latch (a reask, a /clear, a session reset): a begin answers 'paused' only for the epoch it was sent in
+  pausedLatch: false, // the daemon paused this session (409 paused_no_quota): no self ask until a reask control or the next session.start
+  reaskSeen: [], // the ids of reask controls already taken, oldest first (MAX_REASKS_SEEN)
+  reaskPending: '', // a reask that arrived while a turn ran or a relay was in progress: begun at the next turn end
   idleMinutes: 0, // idle relay (D9): hello's idle_minutes, or the env's; 0 = off (an older daemon, or no hello yet)
   idleThreshold: 0,
   envIdleMinutes: 0, // PDX_RELAY_IDLE_MINUTES, honoured only when hello advertised the feature
@@ -150,7 +156,7 @@ function resetState() {
   disarmIdle()
   letGo()
   waitingRecovery = undefined // a recovery waiting for the old conversation to be free is that conversation's
-  Object.assign(s, fresh(), { gen: s.gen + 1, helloSeq: s.helloSeq, askEpoch: s.askEpoch + 1 })
+  Object.assign(s, fresh(), { gen: s.gen + 1, helloSeq: s.helloSeq, askEpoch: s.askEpoch + 1, latchEpoch: s.latchEpoch + 1 })
 }
 
 // letGo releases the prompts held on the request the mod is leaving, at
@@ -240,6 +246,7 @@ async function hello($, seq) {
     }
     if (s.idleWanted && s.state === 'idle') armIdle($) // the turn that ended before this answer (a new turn.start cleared the wish)
     if (h.active_relay && typeof h.active_relay === 'object') recoverLater($, h.active_relay, sid)
+    drainReask($) // a reask that came before hello answered
   } finally {
     if (seq === s.helloSeq) s.helloBusy = false
   }
@@ -568,6 +575,7 @@ function toIdle($) {
   letGo()
   Object.assign(s, { gen: s.gen + 1, state: 'idle', pending: undefined, begun: undefined, fixRounds: 0, writeTurnId: undefined, seedTurnId: undefined, idleAsk: false, idleWithdraw: false })
   if (s.control.length > 0) claimLater($) // a control that came while a relay ran (claim checks the turn) is not left waiting for a later turn
+  drainReask($) // a reask that came while a relay ran: begun now, not at some later turn (a running turn drains it at its end)
 }
 
 // recheckMember is U24 PL-1g: a cached `member` role is the daemon's answer of a moment ago, and a released
@@ -658,6 +666,7 @@ async function maybeBegin($) {
     await maybeAsk($)
     return
   }
+  if (s.pausedLatch) return // the daemon paused this session: the +10 % gate alone would ask again, the latch does not
   if (!hasCSPRNG()) {
     if (!s.noCSPRNGLogged) {
       s.noCSPRNGLogged = true
@@ -695,9 +704,11 @@ async function maybeBegin($) {
 //
 // `manual` is a person's /relay (MR-1, U-M1): `--manual` lifts a member's refusals at the daemon, which still opens a
 // card a person must approve. The threshold path (maybeBegin) never passes it.
-async function begin($, sid, gen, u, adopted, manual = false, idle = false) {
+async function begin($, sid, gen, u, adopted, manual = false, idle = false, reaskId = '') {
   const argv = ['relay', 'begin', '--self', '--session', sid, '--used', String(u.percent), '--window', String(u.window)]
   if (manual) argv.push('--manual')
+  if (reaskId) argv.push('--reask', reaskId) // the release token of a re-ask after a pause
+  const latchEpoch = s.latchEpoch // a reask that arrives while this begin is out clears the latch for good: this answer must not set it again
   const idleMinutes = s.idleMinutes // the numbers of this ask, whatever hello says meanwhile
   if (idle) argv.push('--reason', 'idle', '--idle-minutes', String(idleMinutes))
   const r = await pdx($, argv, CALL_TIMEOUT_MS)
@@ -714,6 +725,7 @@ async function begin($, sid, gen, u, adopted, manual = false, idle = false) {
     const code = r.exitCode === 13 ? stderrCode(r) : ''
     if (code === 'member_relay_is_leads') s.role = 'member'
     toIdle($)
+    if (code === 'paused_no_quota' && s.latchEpoch === latchEpoch) s.pausedLatch = true // set after toIdle: nothing resets it before the daemon's reask or a session.start
     // 13 self_relay_off | self_relay_paused | relay_open, 20, 21, 1: the threshold caller does nothing
     // (§8.1, §8.7 (d)) and asks again at +10; `/relay now` says why.
     if (r.exitCode === 13) return { kind: 'refused', code }
@@ -757,6 +769,50 @@ async function begin($, sid, gen, u, adopted, manual = false, idle = false) {
     else p.answer.resolve('cancelled') // dropped before its loop started (the user's /clear, a compaction)
   })
   return { kind: 'opened' }
+}
+
+// reaskBegin is the re-ask the daemon invited with a reask control (the person is back, or released the session): the same
+// self-relay begin as the threshold's, with the current usage, the release token, and neither the threshold nor the +10 % gate
+// asked — the daemon opens a card for a person whatever the quota says. From a timer; state idle is taken before anything is
+// awaited. Nothing to begin (a relay already runs, no usage, a /clear meanwhile) only drops it: the latch is already clear.
+async function reaskBegin($, id) {
+  // A reask that cannot be begun yet (hello not answered, a relay or a turn in the way, no usage) is kept, not lost: it is tried again
+  // when hello answers, a turn ends or the session returns to idle. Only a session reset or a /clear meanwhile drops it.
+  const keep = () => { if (!s.reaskPending) s.reaskPending = id }
+  if (s.reaskSeen.includes(id)) return // the same token was begun already (a duplicate delivery, scheduled twice, or one that waited)
+  if (!s.helloOK || s.role === 'member' || s.state !== 'idle' || s.turnRunning || !hasCSPRNG()) return keep()
+  const gen = s.gen
+  const u = (await $.session.usage().catch(() => undefined))?.context
+  const sid = await $.session.id().catch(() => undefined)
+  if (s.gen !== gen) return // the conversation this reask was for is gone
+  if (!u || u.percent === undefined || !sid || s.state !== 'idle' || s.turnRunning) return keep()
+  if (s.reaskSeen.includes(id)) return // a twin of this call got here first while the engine was read
+  s.reaskSeen = [...s.reaskSeen, id].slice(-MAX_REASKS_SEEN) // done only once it is really begun: a duplicate after this is dropped
+  disarmIdle()
+  s.state = 'beginning'
+  s.lastAskPct = u.percent
+  const begun = deferred()
+  s.begun = begun
+  await begin($, sid, s.gen, u, begun.resolve, false, false, id).finally(() => begun.resolve(undefined))
+}
+
+// takeReask is a reask control (consumed by the caller): the latch is cleared at once and, once per id, the re-ask is begun — now
+// if the session is idle between turns, else at the end of the turn / relay that is running.
+function takeReask($, id) {
+  if (s.reaskSeen.includes(id) || s.reaskPending === id) return // a duplicate of a token already taken: nothing more happens, the latch and its epoch included
+  s.pausedLatch = false
+  s.latchEpoch++
+  if (!s.turnRunning && s.state === 'idle') later($, 0, () => reaskBegin($, id))
+  else s.reaskPending = id
+}
+
+// drainReask begins the reask that waited, as soon as the session is idle between turns: from the return to idle, a turn's end and
+// hello's answer.
+function drainReask($) {
+  if (!s.reaskPending || s.turnRunning || s.state !== 'idle') return
+  const id = s.reaskPending
+  s.reaskPending = ''
+  later($, 0, () => reaskBegin($, id))
 }
 
 // relayNow is `/relay` (and `/relay now`): the self relay at once, whatever the context use, by the
@@ -896,6 +952,7 @@ async function relayNow($) {
       if (out.code === 'member_relay_is_leads') return { text: RELAY_MEMBER }
       if (out.code === 'self_relay_off') return { text: RELAY_HOST_OFF }
       if (out.code === 'self_relay_paused') return { text: RELAY_PAUSED }
+      if (out.code === 'paused_no_quota') return { text: RELAY_QUOTA_PAUSED }
       if (out.code === 'relay_open') return { text: RELAY_BUSY }
       return { text: 'pdx relay begin 被拒：' + (out.code || '(無代碼)') }
   }
@@ -1121,7 +1178,7 @@ function armIdle($) {
 
 // idleLive: the cheap part of the gate, asked again after every await of the fire (as maybeBegin does).
 const idleLive = (t) => s.idleTimer === t && s.gen === t.gen && s.interactive && s.helloOK && s.role !== 'member' &&
-  s.idleMinutes > 0 && s.state === 'idle' && !s.turnRunning && s.control.length === 0
+  s.idleMinutes > 0 && s.state === 'idle' && !s.turnRunning && s.control.length === 0 && !s.pausedLatch
 
 // idleFire is the timer's handler (never inside a hook): the maybeBegin gate with the idle threshold, the shared +10 and
 // growth guards, and no running background task or session cron (D8). It opens the same self-relay request, with the
@@ -1349,6 +1406,11 @@ export function register(on) {
   // sees it. The daemon is told the mod has it now (Q2 branch A); the claim waits for the running turn.
   on('session.receive', async ($, e, next) => {
     if (!s.interactive) return next(e)
+    const reaskId = controlReask(e)
+    if (reaskId) {
+      takeReask($, reaskId)
+      return { consumed: CONSUMED_REASK }
+    }
     const opId = controlOp(e)
     if (!opId) return next(e)
     if (!(s.pending && s.pending.op.id === opId)) {
@@ -1432,6 +1494,7 @@ export function register(on) {
       if (s.pending && s.writeTurnId !== undefined && e.turnId === s.writeTurnId) await onWriteTurnDone($)
       else if (s.pending && s.seedTurnId !== undefined && e.turnId === s.seedTurnId) await onSeedTurnDone($)
       else if (resumeRecovery($)) { /* the relay a reload left is finished first: no new ask this turn */ }
+      else if (s.state === 'idle' && s.reaskPending) drainReask($) // a reask that waited for this turn to end (UP-4)
       else if (s.state === 'idle') await maybeBegin($)
       if (s.state === 'idle') { // idle relay: the stretch of idleness starts at the end of a main turn
         armIdle($)
@@ -1492,6 +1555,9 @@ export function register(on) {
     if (was === 'awaiting') $.ui.status(undefined)
     s.floor = undefined
     s.lastAskPct = undefined
+    s.latchEpoch++
+    s.pausedLatch = false // a /clear is a new session id, which the daemon never paused: the old conversation's latch and waiting reask are not its
+    s.reaskPending = ''
     s.askBusy = undefined // an ask still out was the old conversation's: its answer is dropped (epoch), and it holds nothing here
     s.askEpoch++
     waitingRecovery = undefined // see resetState

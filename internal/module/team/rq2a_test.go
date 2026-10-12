@@ -177,6 +177,7 @@ func (f *fixture) awaitingAgain(opID, rowID, prev string) (team.RelayOp, team.Ap
 
 // Pool 0: held; nothing is approved or spent. Rule off (unattended on): approved, nothing spent.
 func TestMemberRelay_PoolZeroIsHeldAndRuleOffSpendsNothing(t *testing.T) {
+	disablePauseEntry(t) // this tests the held card (the legacy path); the pause that replaces it with the gate open has its own tests
 	f := newFixture(t)
 	op, row := f.awaitingMemberRelay(rid(120), rid(121))
 	f.unatt.set(true)

@@ -41,6 +41,7 @@ func TestSweep_UnseenRequested60sFails(t *testing.T) {
 
 // An op created, then approved nine minutes later (RQ-2): it must not fail the moment it enters requested.
 func TestSweep_AnOpApprovedNineMinutesLateGetsItsOwnSixtySeconds(t *testing.T) {
+	disablePauseEntry(t) // this tests the held card (the legacy path); the pause that replaces it with the gate open has its own tests
 	f := newFixture(t)
 	f.memberTeam("2")
 	f.setPool("sid-1", 0)

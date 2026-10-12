@@ -116,9 +116,11 @@ stale by definition); flow notices from a persisted outbox, the only messages th
   sent by the loop through an in-process push interface with collapse id `pause:<session>:<since>`; at least once.
 - **Remote members** (another host): a forwarded member relay with no quota keeps today's held card (a pause row on the
   lead host could not stop a member whose deliveries are judged on its own host — UP-2b review). A paused lead's remote
-  members are not paused; they are **told** through the remote notice pump: new notice kinds `lead_paused` /
-  `lead_resumed` with the same texts as the local ones, written with the lead's pause / resume group, best effort
-  (UP-3c).
+  members are not paused; they are **told**: the lead host queues a team command `team.lead_paused` /
+  `team.lead_resumed` (one per member host, in the pause / resume transaction); the member host, applying it, owes
+  each active remote member of that lead a notice with the same text as the local one, rendered by its remote notice
+  pump. An old member host that does not announce the kinds gets the command dropped, not held (UP-3c, #2742 — the
+  `remote_notices` table lives on the member host, so the lead host cannot write it directly).
 - `adopt` and other approvals are unaffected.
 
 ### 3.4 Leaving (UP-3a switch off / reconcile, UP-3b release one)
@@ -147,7 +149,8 @@ stale by definition); flow notices from a persisted outbox, the only messages th
 
 ### 3.5 Mod (UP-4)
 - 409 `paused_no_quota` → idle, no hold, and a **paused latch** set: no self ask on later turns (the +10 % gate is not
-  enough) until a `reask` control or `session.start` clears it.
+  enough) until a `reask` control, `session.start`, or the user's own `/clear` (a new session id the daemon never paused;
+  UP-4 review) clears it.
 - `[pdx-relay:control] reask id=<uuid>` → consumed (never shown to the model); a bounded set of seen ids drops
   duplicates; `pdx relay begin --reask <uuid>` once; latch cleared.
 - Hello reports the new protocol so the daemon may send `reask`.

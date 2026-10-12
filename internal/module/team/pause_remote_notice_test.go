@@ -129,9 +129,7 @@ func TestLeadNotice_ASoloSessionQueuesNothing(t *testing.T) {
 
 // The release gate closed: no pause, so no command.
 func TestLeadNotice_GateClosedQueuesNothing(t *testing.T) {
-	if pauseEntryEnabled {
-		t.Skip("the gate is open in this build")
-	}
+	disablePauseEntry(t) // the release gate closed: today's held card
 	f, _ := remoteFixture(t)
 	f.remoteRow("abc12", "hostM", "mk1", rowActive)
 	f.quotaWorld()

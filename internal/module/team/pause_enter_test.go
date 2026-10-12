@@ -56,6 +56,13 @@ func enablePauseEntry(t *testing.T) {
 	t.Cleanup(func() { pauseEntryOn = pauseEntryEnabled })
 }
 
+// disablePauseEntry closes the release gate (pauseEntryEnabled) for one test: the behaviour before the pause was released.
+func disablePauseEntry(t *testing.T) {
+	t.Helper()
+	pauseEntryOn = false
+	t.Cleanup(func() { pauseEntryOn = pauseEntryEnabled })
+}
+
 // quotaWorld: the host is unattended, the relay-quota rule is on.
 func (f *fixture) quotaWorld() {
 	f.t.Helper()
@@ -84,6 +91,24 @@ func (f *fixture) approvalRows() int {
 		f.t.Fatal(err)
 	}
 	return n
+}
+
+// The pause is released (UP-4): with no seam touched, a begin that finds no quota while unattended is paused from begin to the
+// outbox — the end-to-end of what ships. Mutation gate: pauseEntryEnabled back to false → the begin is a held card (red).
+func TestPauseEnter_ShipsOpenWithNoSeam(t *testing.T) {
+	if !pauseEntryEnabled || !pauseEntryOn {
+		t.Fatalf("the release gate is closed in this build (enabled=%v on=%v)", pauseEntryEnabled, pauseEntryOn)
+	}
+	f := newFixture(t)
+	f.quotaWorld()
+	f.origins.show(team.Origin{SessionID: "sid-1", Ref: "_abc123", Title: "boss", Address: "self/boss", PID: 10})
+	code, body := f.beginRaw("sid-1")
+	if c, _ := wireErr(t, body); code != http.StatusConflict || c != team.ErrPausedNoQuota {
+		t.Fatalf("begin: %d %s", code, body)
+	}
+	if _, ok := f.pauses()["sid-1/quota"]; !ok || len(f.outbox()) != 2 || f.opCount() != 0 {
+		t.Fatalf("pauses %+v, outbox %d, ops %d", f.pauses(), len(f.outbox()), f.opCount())
+	}
 }
 
 // Quota left: today's begin — the op claimed, the unit spent, nothing paused.
@@ -289,13 +314,11 @@ func TestPauseEnter_BeginAndQuotaPutRaceForTheLastUnit(t *testing.T) {
 	}
 }
 
-// While the gate is closed (pauseEntryEnabled is false) the release is not shipped: a begin that finds no quota while unattended
+// While the gate is closed (a build with pauseEntryEnabled false, here disablePauseEntry) the pause is not released: a begin that finds no quota while unattended
 // opens the held card it always did, and writes no pause row and no outbox row.
 // Mutation gate: take the gate out (pause whatever it says) → the begin is paused (red).
 func TestPauseEnter_GateClosedKeepsTodaysHeldCard(t *testing.T) {
-	if pauseEntryEnabled {
-		t.Skip("the gate is open in this build")
-	}
+	disablePauseEntry(t) // the release gate closed: today's held card
 	f := newFixture(t)
 	f.quotaWorld()
 	f.origins.show(team.Origin{SessionID: "sid-1", Ref: "_abc123", Title: "boss", Address: "self/boss", PID: 10})
