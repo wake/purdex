@@ -128,6 +128,18 @@ func applyLeadNoticeIn(tx *sql.Tx, p CommandPlan) (CommandResult, error) {
 			if n, _ := res.RowsAffected(); n > 0 {
 				continue
 			}
+			// Only a member that was told of the pause (a lead_paused sent since its last resume) is told of the resume: one that
+			// joined in between never heard of the pause (codex R1).
+			var told int
+			err = tx.QueryRow(`SELECT 1 FROM remote_notices p WHERE p.mk = ? AND p.kind = ? AND p.state = ?
+				AND p.id > COALESCE((SELECT MAX(r.id) FROM remote_notices r WHERE r.mk = p.mk AND r.kind = ?), 0) LIMIT 1`,
+				t.mk, noticeLeadPaused, noticeSent, noticeLeadResumed).Scan(&told)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return CommandResult{}, err
+			}
 		}
 		lead := t.lead
 		if lead == "" {

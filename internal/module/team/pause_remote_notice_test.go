@@ -311,6 +311,45 @@ func TestLeadNoticeApply_AResumeSupersedesAnUnsentPause(t *testing.T) {
 	}
 }
 
+// A member that joined between the pause and the resume never heard of the pause, so it is not told of the resume; a second pause /
+// resume cycle tells the member again.
+// Mutation gate: owe the resume to everyone → the late joiner is told (red).
+func TestLeadNoticeApply_ALateJoinerIsNotToldOfAResumeItNeverHeardOfAPauseFor(t *testing.T) {
+	s := openTestStore(t)
+	seedRemote(t, s, "mk-1", "sid-1", 1000)
+	pp := plan(leadNoticeCmd("c1", team.CommandLeadPaused), true, nil)
+	pp.LeadHostID = "host-L"
+	mustApply(t, s, pp)
+	rows, _ := s.RemoteNotices("mk-1")
+	if ok, err := s.SettleRemoteNotice(rows[0].ID, noticeSent, 1000); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	seedRemote(t, s, "mk-9", "sid-9", 1000) // joins after the pause was applied
+	rp := plan(leadNoticeCmd("c2", team.CommandLeadResumed), true, nil)
+	rp.LeadHostID = "host-L"
+	mustApply(t, s, rp)
+	if n := noticesOf(t, s, "mk-9"); len(n) != 0 {
+		t.Fatalf("the late joiner was owed %+v", n)
+	}
+	if n := noticesOf(t, s, "mk-1"); len(n) != 2 || n[1].Kind != noticeLeadResumed {
+		t.Fatalf("mk-1 = %+v", n)
+	}
+	// a second cycle: paused again (sent), resumed again ⇒ a second resume is owed
+	pp2 := plan(leadNoticeCmd("c3", team.CommandLeadPaused), true, nil)
+	pp2.LeadHostID = "host-L"
+	mustApply(t, s, pp2)
+	all, _ := s.RemoteNotices("mk-1")
+	if ok, err := s.SettleRemoteNotice(all[2].ID, noticeSent, 1000); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	rp2 := plan(leadNoticeCmd("c4", team.CommandLeadResumed), true, nil)
+	rp2.LeadHostID = "host-L"
+	mustApply(t, s, rp2)
+	if n := noticesOf(t, s, "mk-1"); len(n) != 4 || n[3].Kind != noticeLeadResumed || n[3].State != noticeOwed {
+		t.Fatalf("mk-1 after the second cycle = %+v", n)
+	}
+}
+
 // The pump renders both kinds in the fixed texts, to the member's session as the remote lead.
 func TestLeadNoticePump_RendersBothKinds(t *testing.T) {
 	for kind, want := range map[string]string{noticeLeadPaused: team.PauseNoticeLeadPaused, noticeLeadResumed: team.PauseResumedMemberLead} {
