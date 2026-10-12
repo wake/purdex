@@ -243,12 +243,16 @@ func (m *Module) readHostRoots(ctx context.Context, hostID string) {
 	}
 	now := m.now()
 	if have && *a.TeamRootsRev < cached.Rev {
-		_, a2, ok2 := m.callRead(ctx, hostID)
+		st2, a2, ok2 := m.callRead(ctx, hostID)
+		if st2 != "" {
+			m.setRootsStatus(hostID, st2) // the confirming read is the latest word on the host
+		}
 		switch {
 		case !ok2:
 			return // could not confirm: keep the cache
 		case *a2.TeamRootsRev < cached.Rev:
-			if err := m.store.OverwriteHostRootsSeen(hostID, *a2.TeamRoots, *a2.TeamRootsRev, now); err != nil {
+			// only while the cache is still the one judged by: a settle or an unpair that moved it meanwhile is not undone
+			if _, err := m.store.OverwriteHostRootsSeenIf(hostID, cached.Rev, *a2.TeamRoots, *a2.TeamRootsRev, now); err != nil {
 				m.logf("[team] host roots: %v", err)
 			}
 			return

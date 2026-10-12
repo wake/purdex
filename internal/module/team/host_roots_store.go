@@ -288,21 +288,23 @@ func parseRoots(raw string) ([]string, error) {
 	return roots, nil
 }
 
-// OverwriteHostRootsSeen replaces the cache row whatever its rev: the read path's verdict that the member host's relation with this
-// host was rebuilt (its rev started over). Only the read path calls it; a settle stays monotonic.
-func (s *Store) OverwriteHostRootsSeen(hostID string, roots []string, rev, at int64) error {
+// OverwriteHostRootsSeenIf replaces the cache row whatever the new rev, but only while it is still the row the caller judged by (its rev is
+// expectRev): the read path's verdict that the member host's relation with this host was rebuilt (its rev started over). If the cache moved
+// meanwhile (a settle wrote a newer rev, an unpair deleted it) nothing is written. Only the read path calls it; a settle stays monotonic.
+func (s *Store) OverwriteHostRootsSeenIf(hostID string, expectRev int64, roots []string, rev, at int64) (bool, error) {
 	if roots == nil {
 		roots = []string{}
 	}
 	b, err := json.Marshal(roots)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if _, err := s.db.Exec(`INSERT INTO host_roots_seen (host_id, roots_json, rev, seen_at) VALUES (?, ?, ?, ?)
-		ON CONFLICT (host_id) DO UPDATE SET roots_json = excluded.roots_json, rev = excluded.rev, seen_at = excluded.seen_at`, hostID, string(b), rev, at); err != nil {
-		return fmt.Errorf("overwrite the roots of %s: %w", hostID, err)
+	res, err := s.db.Exec(`UPDATE host_roots_seen SET roots_json = ?, rev = ?, seen_at = ? WHERE host_id = ? AND rev = ?`, string(b), rev, at, hostID, expectRev)
+	if err != nil {
+		return false, fmt.Errorf("overwrite the roots of %s: %w", hostID, err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // RootChangesToShow are the host's pending, refused and dropped changes (done ones are reflected in the roots), oldest first.

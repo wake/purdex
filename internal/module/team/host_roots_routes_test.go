@@ -526,6 +526,47 @@ func TestHostRootsRead_OneLowerAnswerIsALateAnswerAndChangesNothing(t *testing.T
 	}
 }
 
+// The confirming read is the latest word on the host: a lower answer followed by a refusal reports the refusal, not the first read's ok.
+// Mutation gate: drop the second read's status → the host stays "ok" (red).
+func TestHostRootsRead_TheConfirmingReadsStatusStands(t *testing.T) {
+	f, fc := routesFixture(t)
+	f.cache("hostM", 9, "/w/old")
+	n := 0
+	fc.script = func(host string, body map[string]any) peersmod.CallResult {
+		n++
+		if n == 1 {
+			return rootsReadAnswer(body, []string{"/w/low"}, 3)
+		}
+		return peersmod.CallResult{Class: peersmod.ClassUnauthorized, Status: 401}
+	}
+	f.m.readHostRoots(t.Context(), "hostM")
+	if got := f.m.RootsHostStatus("hostM"); got != RootsStatusUnauthorized {
+		t.Fatalf("status = %q, want unauthorized", got)
+	}
+	if seen, _, _ := f.m.store.HostRootsSeen("hostM"); seen.Rev != 9 {
+		t.Fatalf("cache = %+v, an unconfirmed lower answer must not replace it", seen)
+	}
+}
+
+// The rebuild overwrites only the cache it judged by: a newer rev written meanwhile (a settle) is not taken back.
+// Mutation gate: overwrite unconditionally → the newer rev is lost (red).
+func TestHostRootsRead_TheRebuildNeverUndoesANewerCache(t *testing.T) {
+	f, fc := routesFixture(t)
+	f.cache("hostM", 9, "/w/old")
+	n := 0
+	fc.script = func(host string, body map[string]any) peersmod.CallResult {
+		n++
+		if n == 2 { // while the confirming read is out, a settle moves the cache on
+			_ = f.m.store.UpsertHostRootsSeen("hostM", []string{"/w/newest"}, 20, f.clock.Load())
+		}
+		return rootsReadAnswer(body, []string{"/w/low"}, 1)
+	}
+	f.m.readHostRoots(t.Context(), "hostM")
+	if seen, _, _ := f.m.store.HostRootsSeen("hostM"); seen.Rev != 20 || seen.Roots[0] != "/w/newest" {
+		t.Fatalf("cache = %+v, want the newer settle kept", seen)
+	}
+}
+
 func TestHostRootsRead_AnEqualOrHigherRevIsTheOrdinaryUpsertWithOneCall(t *testing.T) {
 	f, fc := routesFixture(t)
 	f.cache("hostM", 9, "/w/old")
