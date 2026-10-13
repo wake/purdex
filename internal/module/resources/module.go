@@ -65,10 +65,6 @@ type Module struct {
 	zoneLatch resources.ZoneLatch
 	lastZone  resources.Zone
 	zoneSince time.Time
-	// sampleFailing: the last tick failed. The published snapshot is kept for
-	// two failures (one flaky fork does not blank it), but admission must not
-	// decide on a reading that is no longer current: it reads zone unknown.
-	sampleFailing atomic.Bool
 	// minute is the host timeline's open minute (D-8.2).
 	minute minuteAgg
 	// mode is the setting's mode as of the last tick (the sampler goroutine's

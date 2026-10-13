@@ -77,7 +77,6 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 		m.logf("[resources] sampling recovered after %d failed tick(s)", m.fails)
 	}
 	m.fails, m.degraded = 0, false
-	m.sampleFailing.Store(false)
 	at := m.now()
 	host := resources.ComputeHost(raw)
 	host.Full = m.fullLatch.Update(host)
@@ -186,7 +185,6 @@ func (m *Module) noteRoots(problem string) {
 // flagged sample_failed.
 func (m *Module) failed(err error) {
 	m.fails++
-	m.sampleFailing.Store(true)
 	if !m.degraded {
 		m.degraded = true
 		m.logf("[resources] sampling failing: %v", err)

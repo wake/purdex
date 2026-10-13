@@ -291,25 +291,6 @@ func TestPassV2_AdviseStopsAtACutWaiter(t *testing.T) {
 	assert.Equal(t, "waiting", f.state("b"))
 }
 
-// After one failed sampler tick the snapshot is still published (two failures
-// are tolerated), but admission no longer decides on it: the zone reads unknown
-// and the head is granted (D-5), until a good tick brings a fresh reading
-// (codex R2). (M: drop the flag and the first grant is refused.)
-func TestPassV2_AFailedTickMakesTheZoneUnknownForAdmission(t *testing.T) {
-	f := newPassFix(t, resources.ModeLease)
-	f.setZone("danger", "rising")
-	f.m.sampleFailing.Store(true)
-	f.queue("a", 35, 5*time.Minute)
-	f.pass()
-	require.Equal(t, "held", f.state("a"))
-	assert.Equal(t, resources.PathUnknownZone, f.dec("a").path)
-
-	f.m.sampleFailing.Store(false)
-	f.queue("b", 35, 5*time.Minute)
-	f.pass()
-	assert.Equal(t, "waiting", f.state("b"), "a fresh danger reading holds again")
-}
-
 // A clock that stepped back keeps the gap running instead of shortening it:
 // the remaining gap is counted from the newest grant, so nothing is granted
 // until the clock has caught up and the gap has passed (codex R1).
