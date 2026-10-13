@@ -220,3 +220,42 @@ func TestRemoteAdopt_AlreadyMemberOnThatHost(t *testing.T) {
 	f.approveClick(uid(36))
 	f.wantAdoptRefusal(uid(37), remoteTarget, http.StatusConflict, team.ErrAdoptAlreadyMember)
 }
+
+// #2757: a remote member row of a team that has ended (the lead went away; D4 leaves the row `active`) holds no one. The
+// session can be adopted into the lead's next team; the stale row is retired at the approval, as a local one is, so the
+// membership can settle (team_members_one_member).
+func TestRemoteAdopt_MemberOfAnEndedTeamIsAdoptableAgain(t *testing.T) {
+	f, _ := adoptFixture(t)
+	f.adoptOK(uid(40), remoteTarget)
+	f.approveClick(uid(40))
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET state = 'active' WHERE spawn_op = ?`, uid(40)); err != nil {
+		t.Fatal(err)
+	}
+	// while the team lives, the guard holds (control)
+	f.wantAdoptRefusal(uid(41), remoteTarget, http.StatusConflict, team.ErrAdoptAlreadyMember)
+	if live, err := f.m.store.RemoteMemberLive("hostM", rtSession); err != nil || !live {
+		t.Fatalf("RemoteMemberLive of a live team = %v, %v", live, err)
+	}
+
+	if ended, err := f.m.store.EndTeam(uid(1), "sid-1", team.TeamEndLeadGone, f.clock.Load()); err != nil || !ended {
+		t.Fatalf("end team: %v %v", ended, err)
+	}
+	if state, _ := f.memberRowState(uid(40)); state != "active" {
+		t.Fatalf("ending the team touched the member row: %s (D4)", state)
+	}
+	if live, err := f.m.store.RemoteMemberLive("hostM", rtSession); err != nil || live {
+		t.Fatalf("RemoteMemberLive of an ended team = %v, %v", live, err)
+	}
+	f.approveLead(uid(2))
+	f.adoptOK(uid(42), remoteTarget)
+	f.approveClick(uid(42))
+	if state, _ := f.memberRowState(uid(40)); state != "released" {
+		t.Fatalf("the ended team's row = %s, want released at the new approval", state)
+	}
+	if state, _ := f.memberRowState(uid(42)); state != team.AdoptionJoining {
+		t.Fatalf("the new row = %s, want joining", state)
+	}
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET state = 'active' WHERE spawn_op = ?`, uid(42)); err != nil {
+		t.Fatalf("the new membership cannot settle: %v", err)
+	}
+}
