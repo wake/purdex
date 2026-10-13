@@ -55,6 +55,24 @@ describe('badgeReport — unread', () => {
     expect(r.sessions).toEqual(['h1:bbbbbb'])
   })
 
+  it('a pane whose session ended counts nothing: a restarted tmux server hands its code out again (#1840)', () => {
+    const dead = createTab({
+      kind: 'tmux-session', hostId: 'h1', sessionCode: 'aaaaaa', mode: 'terminal', cachedName: 'work', tmuxInstance: 'i1',
+      terminated: 'session-closed',
+    })
+    const r = report({ tabs: tabsOf(dead), unread: { 'h1:aaaaaa': true } })
+    expect(r.sessions).toEqual([])
+  })
+
+  it('an ended pane does not hide a live pane of the same key elsewhere', () => {
+    const dead = createTab({
+      kind: 'tmux-session', hostId: 'h1', sessionCode: 'aaaaaa', mode: 'terminal', cachedName: 'work', tmuxInstance: 'i1',
+      terminated: 'session-closed',
+    })
+    const r = report({ tabs: tabsOf(dead, tmuxTab('h1', 'aaaaaa')), unread: { 'h1:aaaaaa': true } })
+    expect(r.sessions).toEqual(['h1:aaaaaa'])
+  })
+
   it('tabs of every workspace count (the report scans the whole tab store, not the active tab)', () => {
     const r = report({
       tabs: tabsOf(tmuxTab('h1', 'aaaaaa'), tmuxTab('h1', 'bbbbbb')),
@@ -128,6 +146,26 @@ describe('badgeReport — resolution check against a recreated session (spec §4
     const r = report({ tabs, cards: [{ hostId: 'h1', approval: c }] })
     expect(r.cards).toEqual([{ id: 'h1\u0000c1', fallback: 'c:h1:NEW' }])
     expect(r.sessions).toEqual([])
+  })
+
+  it('an ended pane\'s recorded id is no evidence: ended OLD + live NEW, the card of OLD stays unresolved (#1840)', () => {
+    const dead = createTab({
+      kind: 'tmux-session', hostId: 'h1', sessionCode: 'aaaaaa', mode: 'terminal', cachedName: 'work', tmuxInstance: 'i1',
+      terminated: 'tmux-restarted',
+      rebuild: { agent: { type: 'cc', sessionId: 'OLD', updatedAt: 1 }, capturedAt: 1 },
+    })
+    const tabs = tabsOf(dead, tmuxTab('h1', 'aaaaaa', 'NEW'))
+    const r = report({ tabs, cards: [{ hostId: 'h1', approval: card('c1', { tmux: 'work:@1.%1', session_id: 'OLD' }) }] })
+    expect(r.cards).toEqual([{ id: 'h1\u0000c1', fallback: 'c:h1:OLD' }])
+    expect(r.sessions).toEqual([])
+  })
+
+  it('two live panes of one key with different agents: a card of either resolves', () => {
+    const tabs = tabsOf(tmuxTab('h1', 'aaaaaa', 'S1'), tmuxTab('h1', 'aaaaaa', 'S2'))
+    for (const sid of ['S1', 'S2']) {
+      const r = report({ tabs, cards: [{ hostId: 'h1', approval: card('c1', { tmux: 'work:@1.%1', session_id: sid }) }] })
+      expect(r.cards[0].session).toBe('h1:aaaaaa')
+    }
   })
 
   it('no known id → the name match stands', () => {

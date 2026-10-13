@@ -5,8 +5,8 @@
 // reports its resolved session keys and every open card by identity; main takes the union (electron/badge.ts).
 //
 // - `sessions`: every `hostId:code` with `unread[k] === true` that some live pane of ANY tab in this window shows
-//   (`tabAgentPanes` over all tabs: every workspace, every split pane, worker `exec-` panes too), plus the key each card
-//   resolved to. A card counts whether or not its session has a tab; an unread event only when it has one.
+//   (every workspace, every split pane, worker `exec-` panes too; a pane whose session ended is not live), plus the key
+//   each card resolved to. A card counts whether or not its session has a tab; an unread event only when it has one.
 // - `cards`: every open card, `id` = `hostId NUL approvalId` (the same in every window), `session` = the key this
 //   window resolved it to (absent when it could not), `fallback` = what main counts when no window resolved it.
 //
@@ -14,9 +14,8 @@
 // window knows a Claude Code session id for that key, it must equal `origin.session_id`: otherwise the tmux session was
 // recreated under the same name and the card belongs to another run, so it stays unresolved.
 import { approvalKey } from '../../stores/useApprovalStore'
-import { tabAgentPanes } from '../agent-lights/tab-aggregate'
 import { compositeKey } from '../composite-key'
-import { scanPaneTree } from '../pane-tree'
+import { paneAgentKey, scanPaneTree } from '../pane-tree'
 import type { Approval } from '../team/types'
 import type { Tab } from '../../types/tab'
 
@@ -53,7 +52,8 @@ export function knownSessionIdsOf(tabs: Record<string, Pick<Tab, 'layout'>>): (k
   for (const tab of Object.values(tabs)) {
     scanPaneTree(tab.layout, (pane) => {
       const c = pane.content
-      if (c.kind !== 'tmux-session') return
+      // An ended pane's record belongs to the run that ended; its code may now be a recreated session's (#1840).
+      if (c.kind !== 'tmux-session' || c.terminated) return
       const id = c.rebuild?.agent?.sessionId
       if (!id) return
       const key = compositeKey(c.hostId, c.sessionCode)
@@ -83,8 +83,16 @@ function resolveCard(hostId: string, a: Approval, input: BadgeReportInput): stri
 }
 
 export function badgeReport(input: BadgeReportInput): BadgeReport {
+  // Only LIVE panes: `paneAgentKey` gives nothing for a pane whose session ended, where `tabAgentPanes` keeps the
+  // primary pane's key for its light. A code is handed out again by a restarted tmux server (#1840), so an ended pane's
+  // leftover unread must not count toward whatever session now carries that code.
   const shown = new Set<string>()
-  for (const tab of Object.values(input.tabs)) for (const p of tabAgentPanes(tab.layout)) shown.add(p.key)
+  for (const tab of Object.values(input.tabs)) {
+    scanPaneTree(tab.layout, (pane) => {
+      const a = paneAgentKey(pane.content)
+      if (a) shown.add(compositeKey(a.hostId, a.sessionCode))
+    })
+  }
 
   const sessions = new Set<string>()
   for (const [key, unread] of Object.entries(input.unread)) if (unread === true && shown.has(key)) sessions.add(key)
