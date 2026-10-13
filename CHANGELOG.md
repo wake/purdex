@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.0.0-alpha.728] - 2026-10-13
+
+> daemon 和 mod 都有改（pdx-team skill 的文字變了），要跑 pdx setup。資源租約兩台仍是「只記錄」模式，新的准入規則還不會擋任何指令。
+
+### Changed：開 member 逾時的訊息分成兩種，並附上主機負載（#2761，PR #2765）
+
+- 啟動上限維持 20 秒（使用者決定）。
+- 主機上看得到 Purdex mod 在運作時，逾時訊息改成「主機忙：member 沒在 20 秒內完成啟動（load 1／5／15 分鐘、核心數；記憶體已用 %、壓力），名額已釋出，可以稍後重試」。只有這台主機從沒看過 Purdex hooks 時，才提示 `pdx setup --agent cc`。
+- 資源數值讀資源模組最新一次取樣，不另外 fork。跨主機 `spawn --host` 轉發的失敗暫時不帶數值。
+
+### Added：資源租約 v2 第一段：三區、用量方向、新准入規則（#2759，PR #2767／#2768／#2771／#2772）
+
+- 主機狀態分成一般／警戒／危險三區（記憶體 80％／90％、記憶體壓力、負載），加上最近 60 秒的用量方向（上升／持平／下降）。`GET /api/resources` 多了 `zone`、`trend`、`zone_since`；`?samples=1` 可以看最近 10 分鐘的取樣。
+- lease 模式的准入改成「三區 × 有沒有租約在跑 × 用量方向」，每次放行後隔 30 秒，拿掉「等滿就超量放行」。取樣器剛開始失敗的前兩次沿用上一次的數值，連續失敗才算未知。兩台目前仍是 advise（只記錄），所以實際上不影響任何指令。
+- 每筆申請記下在等什麼（間隔、危險區、警戒且持平、用量上升、排在後面…），並新增門檻、間隔、用量方向、告警等設定欄位，預設值見 spec。
+- spec 與 plan 進 repo：`docs/specs/2026-10-13-host-resource-lease-v2-spec.md`、`docs/plans/2026-10-13-host-resource-lease-v2-plan.md`。
+
+### Fixed：測試留下永不結束的 tmux server（#2760，PR #2776）
+
+- `internal/tmux` 的測試開私有 tmux server 時，會讀到使用者 `~/.tmux.conf` 裡的 `exit-empty off`，清理後 server 不會結束，也連不到。2026-10-13 當機時累積了 261 個（766 MiB）。現在測試不讀使用者設定，結束時用 label 關掉自己的 server。
+
 ## [1.0.0-alpha.727] - 2026-10-13
 
 > 只改了 daemon，mod 沒動。
