@@ -60,3 +60,15 @@ func TestRelayDeny_NoOpenAskIs409(t *testing.T) {
 		t.Fatalf("no ask: %d %+v", code, ae)
 	}
 }
+
+// S-8: a member of another host cannot be denied yet. Mutation gate: drop the remote check → the mirror is closed (red).
+func TestRelayDeny_ARemoteMemberIsRelayUnsupported(t *testing.T) {
+	f, _ := leadAskFixture(t)
+	f.postFact(leadPrincipal(), relayAskFact(factUUID1, "mk1", rid(620), 71, 300))
+	if code, ae := f.deny("/tmp/10.sock", "_rabc12"); code != http.StatusConflict || ae.Error != team.ErrRelayUnsupported {
+		t.Fatalf("remote deny: %d %+v", code, ae)
+	}
+	if a := f.ask(rid(620)); a.State != team.RelayAskOpen {
+		t.Fatalf("mirror = %+v, want open", a)
+	}
+}
