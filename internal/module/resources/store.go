@@ -374,41 +374,6 @@ func (s *leaseStore) SetShadow(id string, waitMS int64, open bool, waitReasons s
 	return nil
 }
 
-// Park parks a waiting row: it keeps its place, is never granted while parked,
-// and its lease runs to the end of the park. One compare-and-set on the state,
-// on not being parked yet and on the deadline the caller read (a row that was
-// re-attached in between has a new deadline and is left alone).
-func (s *leaseStore) Park(id string, deadlineAt, until int64) (bool, error) {
-	return s.changed(`
-		UPDATE resource_leases
-		SET parked_until = ?, lease_until = ?, parks = parks + 1
-		WHERE id = ? AND state = 'waiting' AND parked_until = 0 AND deadline_at = ?`, until, until, id, deadlineAt)
-}
-
-// ParkedFor lists the parked rows of a session with the same kind and weight,
-// oldest request first: what a new call of that session may take over.
-//
-// A park that has ended (parked_until <= now) keeps its place no more: the row is
-// the sweeper's to abandon, and a call that arrives in between makes a new one.
-func (s *leaseStore) ParkedFor(sessionID, kind string, weight int, now int64) ([]leaseRow, error) {
-	return s.many(`SELECT `+leaseCols+` FROM resource_leases
-		WHERE state = 'waiting' AND parked_until > ? AND session_id = ? AND kind = ? AND weight = ?
-		ORDER BY created_at, id`, now, sessionID, kind, weight)
-}
-
-// Adopt gives a parked row to a new call, by one compare-and-set on the old
-// client id and on the row still being parked: the new client id, holder, tool
-// use and scope replace the old ones, the park ends, and the deadline and the
-// lease start again. created_at stays, so the place in the queue does.
-func (s *leaseStore) Adopt(old leaseRow, n leaseRow, deadlineAt, leaseUntil, now int64) (bool, error) {
-	return s.changed(`
-		UPDATE resource_leases
-		SET client_id = ?, holder_pid = ?, holder_start = ?, tool_use_id = ?, scope = ?, parkable = ?,
-			parked_until = 0, deadline_at = ?, lease_until = ?
-		WHERE id = ? AND state = 'waiting' AND client_id = ? AND parked_until > ?`,
-		n.ClientID, n.HolderPID, n.HolderStart, n.ToolUseID, n.Scope, b2i(n.Parkable), deadlineAt, leaseUntil, old.ID, old.ClientID, now)
-}
-
 // MaxGrantedAt is the newest granted_at of any row, held or ended (0 when
 // nothing was ever granted): where the gap between two grants is counted from
 // after a restart. A grant on the offer path is left out: the offer started
