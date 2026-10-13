@@ -356,8 +356,15 @@ func (m *Module) endLease(w http.ResponseWriter, r *http.Request, find func() (l
 			reason = resources.EndCancelled
 		}
 		var won bool
-		if won, err = m.store.End(row.ID, reason, m.now().UnixMilli()); err == nil {
+		now := m.now()
+		if row.State == resources.StateWaiting {
+			won, err = m.store.EndWaiting(row.ID, reason, now.UnixMilli(), m.reasons.peek(row.ID, now))
+		} else {
+			won, err = m.store.End(row.ID, reason, now.UnixMilli())
+		}
+		if err == nil {
 			if won {
+				m.reasons.drop(row.ID)
 				m.logf("[resources] lease %s (%s) ended: %s", row.ID, row.Kind, reason)
 				m.wake()
 			}

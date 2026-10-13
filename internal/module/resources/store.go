@@ -242,20 +242,25 @@ func (s *leaseStore) Grant(id string, now int64, overrun, wouldWait bool) (bool,
 		WHERE id = ? AND state = 'waiting'`, now, b2i(overrun), b2i(wouldWait), now, id)
 }
 
-// GrantDecided is Grant with the D-8.1 snapshot of the decision and, for a
-// session-new lease, its baseline, written by the same single-row UPDATE: the
-// row is never held without them. baseline "" leaves the column as it is.
-func (s *leaseStore) GrantDecided(id string, now int64, wouldWait bool, g resources.Grant, baseline string) (bool, error) {
+// GrantDecided is Grant with the D-8.1 snapshot of the decision (the capacity
+// bookkeeping d and the v2 zone, trend, running and gap), the wait_reasons
+// totals and, for a session-new lease, its baseline, written by the same
+// single-row UPDATE: the row is never held without them. baseline "" leaves
+// the column as it is. overrun is never set: v2 has no overrun grant.
+func (s *leaseStore) GrantDecided(id string, now int64, wouldWait bool, d resources.Decision, v2 resources.V2Record, waitReasons, baseline string) (bool, error) {
 	return s.changed(`
 		UPDATE resource_leases
-		SET state = 'held', granted_at = ?, overrun = ?, would_wait = ?, waited_ms = ? - created_at,
+		SET state = 'held', granted_at = ?, overrun = 0, would_wait = ?, waited_ms = ? - created_at,
 			dec_recorded = 1, dec_load1 = ?, dec_ncpu = ?, dec_mem = ?, dec_measured = ?, dec_full = ?,
 			dec_sum_charge = ?, dec_unleased = ?, dec_weight = ?, dec_path = ?, would_wait_r2 = ?,
+			dec_zone = ?, dec_trend = ?, dec_running = ?, dec_gap_ms = ?,
+			wait_reasons = COALESCE(NULLIF(?, ''), wait_reasons),
 			baseline = COALESCE(?, baseline)
 		WHERE id = ? AND state = 'waiting'`,
-		now, b2i(g.Overrun), b2i(wouldWait), now,
-		g.Load1, g.NCPU, g.Mem, g.Measured, b2i(g.Full), g.SumCharge, g.Unleased, g.Weight, g.Path, b2i(g.WouldWaitR2),
-		nullable(baseline), id)
+		now, b2i(wouldWait), now,
+		d.Load1, d.NCPU, d.Mem, d.Measured, b2i(d.Full), d.SumCharge, d.Unleased, d.Weight, d.Path, b2i(d.WouldWaitR2),
+		v2.Zone, v2.Trend, b2i(v2.Running), v2.GapMS,
+		waitReasons, nullable(baseline), id)
 }
 
 // End moves a waiting or held row to ended with the reason (compare-and-set
@@ -266,6 +271,16 @@ func (s *leaseStore) End(id, reason string, now int64) (bool, error) {
 		UPDATE resource_leases
 		SET state = 'ended', ended_at = ?, end_reason = ?, waited_ms = COALESCE(waited_ms, ? - created_at)
 		WHERE id = ? AND state != 'ended'`, now, reason, now, id)
+}
+
+// EndWaiting is End for a row that is still waiting (compare-and-set on
+// state = 'waiting'), with the wait_reasons totals in the same UPDATE.
+func (s *leaseStore) EndWaiting(id, reason string, now int64, waitReasons string) (bool, error) {
+	return s.changed(`
+		UPDATE resource_leases
+		SET state = 'ended', ended_at = ?, end_reason = ?, waited_ms = COALESCE(waited_ms, ? - created_at),
+			wait_reasons = COALESCE(NULLIF(?, ''), wait_reasons)
+		WHERE id = ? AND state = 'waiting'`, now, reason, now, waitReasons, id)
 }
 
 // EndVanished ends a held session-new row as vanished only if its tracked tree
@@ -283,11 +298,23 @@ func (s *leaseStore) EndVanished(id string, minEmpty int, now int64) (bool, erro
 // more: End(abandoned) whose UPDATE also requires lease_until <= now, in the
 // same statement, so a poll that renewed the lease between the sweeper's read
 // and this close wins.
-func (s *leaseStore) CloseIfExpired(id string, now int64) (bool, error) {
+func (s *leaseStore) CloseIfExpired(id string, now int64, waitReasons string) (bool, error) {
 	return s.changed(`
 		UPDATE resource_leases
-		SET state = 'ended', ended_at = ?, end_reason = 'abandoned', waited_ms = COALESCE(waited_ms, ? - created_at)
-		WHERE id = ? AND state = 'waiting' AND lease_until <= ?`, now, now, id, now)
+		SET state = 'ended', ended_at = ?, end_reason = 'abandoned', waited_ms = COALESCE(waited_ms, ? - created_at),
+			wait_reasons = COALESCE(NULLIF(?, ''), wait_reasons)
+		WHERE id = ? AND state = 'waiting' AND lease_until <= ?`, now, now, waitReasons, id, now)
+}
+
+// MaxGrantedAt is the newest granted_at of any row, held or ended (0 when
+// nothing was ever granted): where the gap between two grants is counted from
+// after a restart.
+func (s *leaseStore) MaxGrantedAt() (int64, error) {
+	var n int64
+	if err := s.db.QueryRow(`SELECT COALESCE(MAX(granted_at), 0) FROM resource_leases`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("max granted_at: %w", err)
+	}
+	return n, nil
 }
 
 // ExtendWaiting is the boot grace: every waiting row's lease becomes
@@ -445,6 +472,15 @@ var decisionColumns = []struct{ name, def string }{
 	{"dec_weight", "INTEGER NOT NULL DEFAULT 0"},
 	{"dec_path", "TEXT NOT NULL DEFAULT ''"},
 	{"would_wait_r2", "INTEGER NOT NULL DEFAULT 0"},
+	// Lease v2 (spec D-7): the zone, the trend, whether a lease was running
+	// and the gap left at the decision; how often the row was parked (P2a);
+	// and the JSON of milliseconds waited by reason.
+	{"dec_zone", "TEXT NOT NULL DEFAULT ''"},
+	{"dec_trend", "TEXT NOT NULL DEFAULT ''"},
+	{"dec_running", "INTEGER NOT NULL DEFAULT 0"},
+	{"dec_gap_ms", "INTEGER NOT NULL DEFAULT 0"},
+	{"parks", "INTEGER NOT NULL DEFAULT 0"},
+	{"wait_reasons", "TEXT NOT NULL DEFAULT ''"},
 }
 
 // hostMinutesSchema is the D-8.2 timeline: one row per minute, written by the

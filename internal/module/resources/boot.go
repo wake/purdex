@@ -33,4 +33,9 @@ func (m *Module) boot() {
 	if _, err := m.store.PruneMinutes(now.Add(-retention).UnixMilli()); err != nil {
 		m.logf("[resources] boot prune minutes: %v", err)
 	}
+	if last, err := m.store.MaxGrantedAt(); err != nil {
+		m.logf("[resources] boot last grant: %v", err)
+	} else {
+		m.lastGrantMS = last
+	}
 }

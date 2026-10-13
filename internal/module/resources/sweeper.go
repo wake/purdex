@@ -112,7 +112,10 @@ func (m *Module) sweepLeases(now time.Time, set resources.Settings, view procVie
 		if m.sweepHook != nil {
 			m.sweepHook(r)
 		}
-		won, err := m.store.CloseIfExpired(r.ID, nowMS)
+		won, err := m.store.CloseIfExpired(r.ID, nowMS, m.reasons.peek(r.ID, now))
+		if won {
+			m.reasons.drop(r.ID)
+		}
 		m.ended(r, resources.EndAbandoned, won, err)
 	}
 
