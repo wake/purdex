@@ -290,6 +290,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (person aliases): %w", err)
 	}
+	if err := migratePauseRefTitle(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (pause ref / title): %w", err)
+	}
 	if err := migratePauseCauses(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (pause causes): %w", err)
@@ -297,10 +301,6 @@ func OpenStore(path string) (*Store, error) {
 	if err := ensureColumn(db, "approval_requests", "unanswered_at", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (unanswered_at): %w", err)
-	}
-	if err := migratePauseRefTitle(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("migrate team db (pause ref / title): %w", err)
 	}
 	return &Store{db: db}, nil
 }

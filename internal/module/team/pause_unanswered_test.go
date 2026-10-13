@@ -4,6 +4,7 @@ package teammod
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -398,5 +399,46 @@ func TestRelayHello_CarriesAnUnansweredCardOnly(t *testing.T) {
 	}
 	if _, h, _ := f.hello("sid-1"); h.Waiting != nil {
 		t.Fatalf("waiting = %+v after the card was answered, want none", h.Waiting)
+	}
+}
+
+// codex R1 P1: the earliest session_pauses (no ref, no title, the two-cause CHECK) opens: ref/title are added before the rebuild
+// copies them. Mutation gate: run the rebuild first → OpenStore fails on the missing columns (red).
+func TestOpenStore_TheEarliestPauseSchemaOpensAndKeepsItsRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "team.db")
+	s, err := OpenStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`DROP TABLE session_pauses`,
+		`CREATE TABLE session_pauses (
+			session_id      TEXT    NOT NULL,
+			cause           TEXT    NOT NULL CHECK (cause IN ('quota', 'lead')),
+			role            TEXT    NOT NULL CHECK (role IN ('solo', 'lead', 'member')),
+			team_id         TEXT    NOT NULL DEFAULT '',
+			lead_session_id TEXT    NOT NULL DEFAULT '',
+			on_since        INTEGER NOT NULL,
+			since           INTEGER NOT NULL,
+			PRIMARY KEY (session_id, cause)
+		)`,
+		`INSERT INTO session_pauses VALUES ('s-1', 'quota', 'solo', '', '', 5, 10)`,
+	} {
+		if _, err := s.db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+	s, err = OpenStore(path)
+	if err != nil {
+		t.Fatalf("open an old team.db: %v", err)
+	}
+	defer s.Close()
+	rows, err := s.Pauses()
+	if err != nil || len(rows) != 1 || rows[0].SessionID != "s-1" || rows[0].Cause != "quota" || rows[0].Since != 10 {
+		t.Fatalf("rows = %+v err=%v, want the old one kept", rows, err)
+	}
+	if created, err := s.AddPause(PauseRow{SessionID: "s-2", Cause: team.PauseCauseUnanswered, Role: team.PauseRoleSolo, Since: 11}); err != nil || !created {
+		t.Fatalf("relay_unanswered after the upgrade: created=%v err=%v", created, err)
 	}
 }
