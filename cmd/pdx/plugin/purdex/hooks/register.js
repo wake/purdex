@@ -56,10 +56,11 @@ import { registerLease } from './lease.js'
 import { CONSUMED, CONSUMED_REASK, claimOp, controlOp, controlReask, leadLine, parseTeamArgs, rosterLines } from './member.js'
 import { DEFAULT_BODIES, FIXED } from './prompts.js'
 
-const VERSION = '6' // the mod ↔ daemon protocol version `pdx relay hello --version` reports (5: the paused latch and the reask control; 6: person tokens, /team and the direct /relay)
+const VERSION = '7' // the mod ↔ daemon protocol version `pdx relay hello --version` reports (5: the paused latch and the reask control; 6: person tokens, /team and the direct /relay; 7: the ask ladder - lastAskPct only on an answer, no ask past 90 %, an unanswered final card)
 const DEFAULT_THRESHOLD = 70
 const DEFAULT_MIN_GROWTH = 20000
 const REASK_POINTS = 10
+const LAST_ASK_PCT = 90 // from here an ask is the last one (relay/team rules v2 §4.2): the daemon pauses the session when it goes unanswered, so nothing asks again past it
 const IDLE_MINUTES_MAX = 50 // env PDX_RELAY_IDLE_MINUTES 1–50 (idle relay D9); the daemon takes 1–59
 const ROLE_RECHECK_MS = 60_000 // a cached `member` role is re-read (hello) at the threshold at most this often (U24 PL-1g)
 const MAX_FIX_ROUNDS = 2
@@ -81,6 +82,7 @@ const MAX_CONTROLS = 8 // verified (seen) control ops kept at once; a forged mar
 const MAX_OUTBOX = 50 // reports queued at once; one more pushes out the oldest
 const REQUIRED = ['## 1.', '## 2.', '## 3.', '## 4.', '## 5.', '## 6.', '## 7.', '## 8.']
 const STATUS_WAITING = '接力等待核准中'
+const STATUS_UNANSWERED = '接力申請沒有回應，已暫停作業；在 App 核准後接力'
 const TOAST_WAITING = '接力等待核准：請在 Purdex App 按核准或拒絕'
 const NOTE = '接力已核准，這一輪只做簡短回應；如果這是一件新工作，不要開始做，把它寫進接力檔「下一步」的第一項，由接手後的新對話處理。'
 const SKIP_COMPACT = '接力已核准，略過壓縮，改為寫接力檔'
@@ -250,6 +252,7 @@ async function hello($, seq) {
     }
     if (s.idleWanted && s.state === 'idle') armIdle($) // the turn that ended before this answer (a new turn.start cleared the wish)
     if (h.active_relay && typeof h.active_relay === 'object') recoverLater($, h.active_relay, sid)
+    if (h.waiting && typeof h.waiting === 'object') adoptWaitingLater($, h.waiting, sid)
     drainReask($) // a reask that came before hello answered
   } finally {
     if (seq === s.helloSeq) s.helloBusy = false
@@ -634,7 +637,7 @@ async function maybeAsk($) {
   const u = (await $.session.usage()).context
   if (u.percent === undefined || u.percent < s.threshold) return
   if (s.floor !== undefined && (u.tokens ?? 0) < s.floor + s.minGrowth) return
-  if (s.lastAskPct !== undefined && u.percent < s.lastAskPct + REASK_POINTS) return
+  if (s.lastAskPct !== undefined && (s.lastAskPct >= LAST_ASK_PCT || u.percent < s.lastAskPct + REASK_POINTS)) return
   const sid = await $.session.id()
   // The engine was read twice: look again at everything the decision rests on.
   if (s.askEpoch !== epoch || !s.helloOK || s.role !== 'member') return
@@ -682,12 +685,12 @@ async function maybeBegin($) {
   const u = (await $.session.usage()).context
   if (u.percent === undefined || u.percent < s.threshold) return
   if (s.floor !== undefined && (u.tokens ?? 0) < s.floor + s.minGrowth) return
-  if (s.lastAskPct !== undefined && u.percent < s.lastAskPct + REASK_POINTS) return
+  if (s.lastAskPct !== undefined && (s.lastAskPct >= LAST_ASK_PCT || u.percent < s.lastAskPct + REASK_POINTS)) return
   const sid = await $.session.id()
   if (s.state !== 'idle') return // a /relay now took the state while the engine was read
   disarmIdle()
   s.state = 'beginning'
-  s.lastAskPct = u.percent
+  // s.lastAskPct is set by begin, when the daemon ANSWERED (a request opened, or a refusal): a daemon that is down costs nothing
   const gen = s.gen
   const begun = deferred() // a prompt that arrives while begin is out waits on it (P5b-3)
   s.begun = begun
@@ -727,9 +730,11 @@ async function begin($, sid, gen, u, adopted, manual = false, idle = false, reas
     if (mine) toIdle($) // same generation, another session id: nothing will ever answer for this begin
     return { kind: 'abandoned' }
   }
+  const threshold = !manual && !idle // the threshold's ask and a reask: the only ones the +10 and 90 % guards count
   if (!opened) {
     const code = r.exitCode === 13 ? stderrCode(r) : ''
     if (code === 'member_relay_is_leads') s.role = 'member'
+    if (threshold && r.exitCode === 13) s.lastAskPct = u.percent // the daemon refused it, whatever the code: that is an answer
     toIdle($)
     if (code === 'paused_no_quota' && s.latchEpoch === latchEpoch) s.pausedLatch = true // set after toIdle: nothing resets it before the daemon's reask or a session.start
     // 13 self_relay_off | self_relay_paused | relay_open, 20, 21, 1: the threshold caller does nothing
@@ -745,8 +750,9 @@ async function begin($, sid, gen, u, adopted, manual = false, idle = false, reas
     report($, body.op.id, 'cancelled', ['--error', 'resumed'])
     return { kind: 'abandoned' }
   }
+  if (threshold) s.lastAskPct = u.percent // the daemon opened the request: answered
   s.pending = {
-    idle, // an idle ask never holds a prompt (D6); a denial or timeout is remembered for the +10 rule at settle
+    idle, // an idle ask never holds a prompt (D6)
     idlePct: u.percent,
     idleMinutes: idle ? idleMinutes : undefined, // what the ask was opened with (s.idleMinutes is overwritten by a later hello)
     cause: idle ? 'idle' : manual ? 'manual' : 'threshold', // {{why}} (whyOf)
@@ -796,7 +802,6 @@ async function reaskBegin($, id) {
   s.reaskSeen = [...s.reaskSeen, id].slice(-MAX_REASKS_SEEN) // done only once it is really begun: a duplicate after this is dropped
   disarmIdle()
   s.state = 'beginning'
-  s.lastAskPct = u.percent
   const begun = deferred()
   s.begun = begun
   await begin($, sid, s.gen, u, begun.resolve, false, false, id).finally(() => begun.resolve(undefined))
@@ -1236,7 +1241,13 @@ function waitLoop($) {
   p.wait = (async () => {
     $.ui.toast(TOAST_WAITING) // once per request (one loop per request)
     for (;;) {
-      const outcome = waitAnswer(await pdx($, ['relay', 'wait', p.requestId], WAIT_TIMEOUT_MS))
+      // Until the daemon says the card went unanswered the call carries --return-unanswered, which makes the CLI come back at the
+      // mark; after it, the loop goes on as before until the card closes (an approval, a denial, a compaction).
+      const argv = ['relay', 'wait', p.requestId]
+      if (!p.unanswered) argv.push('--return-unanswered')
+      const r = await pdx($, argv, WAIT_TIMEOUT_MS)
+      const outcome = waitAnswer(r)
+      if (outcome === 'open' && !p.unanswered && unansweredRow(r)) markUnanswered($, p)
       if (outcome !== 'open') return outcome
     }
   })().catch(() => 'unavailable').then((outcome) => {
@@ -1247,6 +1258,23 @@ function waitLoop($) {
   return p.wait
 }
 
+// unansweredRow says whether a `pdx relay wait` answer is an open card that the daemon left unanswered (RT-2a1).
+function unansweredRow(r) {
+  if (r.exitCode !== 0) return false
+  const a = parseJSON(r.stdout)
+  return !!a && a.state === 'open' && typeof a.unanswered_at === 'number' && a.unanswered_at > 0
+}
+
+// markUnanswered is the mod's side of a final card nobody answered: the session is paused by the daemon, so the prompts held on
+// the card go on at once and unchanged (the hold's answer is 'unanswered', not 'approved'), later prompts are not held, and the
+// status line says what the person has to do. The card stays open; an approval later runs the ordinary settle.
+function markUnanswered($, p) {
+  p.unanswered = true
+  if (s.pending !== p || s.state !== 'awaiting') return
+  $.ui.status(STATUS_UNANSWERED)
+  p.answer.resolve('unanswered')
+}
+
 function settle($, p, outcome) {
   // A request the mod let go answers for nothing (its held prompts went on
   // at letGo, and whatever let it go cleared the status line or another
@@ -1254,12 +1282,7 @@ function settle($, p, outcome) {
   if (s.pending !== p) return
   $.ui.status(undefined)
   if (s.state !== 'awaiting') return
-  if (outcome !== 'approved') {
-    // an idle ask counts against the shared +10 guard only when the person answered it (denied / timed out); a
-    // withdrawal, a compaction or an unreachable daemon costs nothing (D7)
-    if (p.idle && (outcome === 'denied' || outcome === 'timeout')) s.lastAskPct = p.idlePct
-    return toIdle($)
-  }
+  if (outcome !== 'approved') return toIdle($) // an idle ask's answer no longer counts against the threshold's +10 guard (RT-2c T26)
   s.state = 'approved'
   startWrite($, p)
 }
@@ -1399,17 +1422,16 @@ function armIdle($) {
 const idleLive = (t) => s.idleTimer === t && s.gen === t.gen && s.interactive && s.helloOK && s.role !== 'member' &&
   s.idleMinutes > 0 && s.state === 'idle' && !s.turnRunning && s.control.length === 0 && !s.pausedLatch
 
-// idleFire is the timer's handler (never inside a hook): the maybeBegin gate with the idle threshold, the shared +10 and
-// growth guards, and no running background task or session cron (D8). It opens the same self-relay request, with the
-// reason, and takes `beginning` with nothing awaited between its last look and that move. s.lastAskPct is NOT set here:
-// only a denial or timeout of the request sets it (settle), so a withdrawal costs nothing.
+// idleFire is the timer's handler (never inside a hook): the maybeBegin gate with the idle threshold and the growth guard,
+// and no running background task or session cron (D8). It opens the same self-relay request, with the reason, and takes
+// `beginning` with nothing awaited between its last look and that move. The threshold's +10 guard does not apply to it
+// and its answer does not feed that guard (RT-2c T26): an idle ask is its own ladder.
 async function idleFire($, t) {
   if (!idleLive(t) || !hasCSPRNG()) return
   const u = (await $.session.usage()).context
   if (!idleLive(t)) return
   if (u.percent === undefined || u.percent < s.idleThreshold) return
   if (s.floor !== undefined && (u.tokens ?? 0) < s.floor + s.minGrowth) return
-  if (s.lastAskPct !== undefined && u.percent < s.lastAskPct + REASK_POINTS) return
   if (backgroundBusy()) return
   const sid = await $.session.id()
   if (!idleLive(t) || backgroundBusy()) return
@@ -1478,6 +1500,34 @@ function startClear($, p) {
     } catch (err) {
       giveUp($, p, 'clearing', 'cancelled', 'abandoned', '/clear: ' + String(err)) // written → cancelled
     }
+  })
+}
+
+// ---- a final card the daemon left unanswered, picked up again by a mod that reloaded (RT-2a1 T17, RT-2c T27) ----
+// hello's `waiting` names the session's open card whose deadline passed unanswered. A mod that holds no request has lost it with
+// its memory: it takes the card as its own again - awaiting, unanswered, the wait loop running - so an approval in the App still
+// starts the write, and a compaction still cancels it.
+function adoptWaitingLater($, w, sid) {
+  if (!w.request_id || !w.op || typeof w.op !== 'object' || typeof w.op.id !== 'string' || w.op.id === '') return
+  const gen = s.gen
+  later($, 0, async () => {
+    if (s.pending || s.state !== 'idle' || s.gen !== gen) return
+    const u = (await $.session.usage().catch(() => undefined))?.context
+    const now = await $.session.id().catch(() => undefined)
+    if (s.pending || s.state !== 'idle' || s.gen !== gen || now !== sid) return // the conversation moved on while the engine was read
+    const answer = deferred()
+    answer.resolve('unanswered')
+    const p = {
+      idle: false, idlePct: u?.percent, cause: 'threshold',
+      op: w.op, requestId: w.request_id, path: w.op.handoff_path, oldSession: sid, oldRef: w.op.ref, before: u ? usageLine(u) : '',
+      nonce: undefined, nonceState: undefined, who: '', answer, unanswered: true,
+    }
+    disarmIdle()
+    s.pending = p
+    s.state = 'awaiting'
+    s.fixRounds = 0
+    $.ui.status(STATUS_UNANSWERED)
+    await waitLoop($)
   })
 }
 
@@ -1835,6 +1885,7 @@ export function register(on) {
     const open = s.state === 'awaiting' ? s.pending : undefined
     const begun = s.state === 'beginning' ? s.begun : undefined
     if (!open && !begun) return next(e)
+    if (open && open.unanswered) return next(e) // the daemon paused the session over this card: nothing is held on it (RT-2c T27)
     let approved = false
     holding += 1
     try {
