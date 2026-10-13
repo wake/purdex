@@ -101,6 +101,58 @@ func TestCloseCoalescer_StopCancelsThePendingWindow(t *testing.T) {
 	}
 }
 
+// A timer callback that was already running when Stop cancelled its window (time.Timer.Stop is false then) must not flush the
+// window of the next run: each window has its own generation. R2 attack, high. Mutation gate: flush without the generation → red.
+func TestCloseCoalescer_AStaleCallbackCannotFlushALaterWindow(t *testing.T) {
+	var batches [][]string
+	var callbacks []func()
+	c := newCloseCoalescer(func(ids []string) { batches = append(batches, ids) })
+	c.schedule = func(d time.Duration, fn func()) func() {
+		callbacks = append(callbacks, fn)
+		return func() {} // Timer.Stop() == false: the callback is already on its way
+	}
+	c.add("old")
+	c.stop()
+	c.reset()
+	c.add("new")
+	if len(callbacks) != 2 {
+		t.Fatalf("schedules = %d", len(callbacks))
+	}
+	callbacks[0]() // the old window's callback arrives late
+	if len(batches) != 0 {
+		t.Fatalf("the stale callback flushed the new window early: %v", batches)
+	}
+	callbacks[1]()
+	if len(batches) != 1 || strings.Join(batches[0], ",") != "new" {
+		t.Fatalf("batches = %v, want only the new window's id", batches)
+	}
+}
+
+// stop does not return while a fire is under way, so after Stop (and the sender swap that follows) nothing of the old run can
+// still be enqueued. Mutation gate: fire outside the lock → red.
+func TestCloseCoalescer_StopWaitsForAFireInFlight(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var fn func()
+	c := newCloseCoalescer(func([]string) { close(entered); <-release })
+	c.schedule = func(d time.Duration, f func()) func() { fn = f; return func() {} }
+	c.add("ap1")
+	go fn()
+	<-entered
+	stopped := make(chan struct{})
+	go func() { c.stop(); close(stopped) }()
+	select {
+	case <-stopped:
+		t.Fatal("stop returned while a fire was in flight")
+	case <-time.After(60 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop never returned")
+	}
+}
+
 // bgEnv is a started module with a fast window and the given devices registered, device 0 asking for background badge pushes.
 func bgEnv(t *testing.T) *triggerEnv {
 	t.Helper()

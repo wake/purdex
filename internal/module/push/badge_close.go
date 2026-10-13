@@ -24,6 +24,7 @@ type closeCoalescer struct {
 	fire     func(ids []string)
 
 	mu      sync.Mutex
+	gen     uint64 // the window that is open; a timer callback may only end the window it was made for
 	pending bool
 	ids     []string
 	cancel  func()
@@ -47,7 +48,9 @@ func (c *closeCoalescer) add(id string) {
 	if !c.pending {
 		c.pending = true
 		c.ids = nil
-		c.cancel = c.schedule(c.window, c.flush)
+		c.gen++
+		gen := c.gen
+		c.cancel = c.schedule(c.window, func() { c.flush(gen) })
 	}
 	for _, have := range c.ids {
 		if have == id {
@@ -57,16 +60,18 @@ func (c *closeCoalescer) add(id string) {
 	c.ids = append(c.ids, id)
 }
 
-// flush ends the window: the batch goes to fire, outside the lock.
-func (c *closeCoalescer) flush() {
+// flush ends window gen: the batch goes to fire. A callback of any other window (one that was already running when stop
+// cancelled its timer, which Timer.Stop cannot recall) finds a different generation and does nothing. fire runs under the
+// lock on purpose: it only reads the device list and enqueues without waiting, and holding the lock makes stop wait for a
+// fire in flight, so once stop returns nothing of the old run can still be enqueued.
+func (c *closeCoalescer) flush(gen uint64) {
 	c.mu.Lock()
-	if c.stopped || !c.pending {
-		c.mu.Unlock()
+	defer c.mu.Unlock()
+	if c.stopped || !c.pending || gen != c.gen {
 		return
 	}
 	ids := c.ids
 	c.pending, c.ids, c.cancel = false, nil, nil
-	c.mu.Unlock()
 	c.fire(ids)
 }
 
@@ -75,6 +80,7 @@ func (c *closeCoalescer) stop() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.stopped = true
+	c.gen++ // whatever callback is still on its way is of an older window now
 	if c.cancel != nil {
 		c.cancel()
 	}
