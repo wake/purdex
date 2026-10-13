@@ -372,3 +372,18 @@ func TestLiveness_RunningEndsAfterItsCommand(t *testing.T) {
 	assert.Equal(t, resources.PosEnded, p.State)
 	assert.Equal(t, resources.EndAbandoned, p.EndReason)
 }
+
+// A position that left the offered state between two ticks is charged up to its
+// first start, not up to the last tick. (M: flush without the elapsed time.)
+func TestCost_TransitionBetweenTicksIsCounted(t *testing.T) {
+	f := newPosFix(t)
+	posA, _ := f.offeredWithAWaiter()
+	f.advance(10 * time.Second)
+	f.sweep() // tick: 10 s since the offer
+	f.advance(10 * time.Second)
+	run := decodeLease(t, f.postAs(newCID(), pidA, resources.CallQueue, "go build")) // starts 20 s after the offer
+	require.Equal(t, resources.StateHeld, run.State)
+	f.advance(5 * time.Second) // the next tick is 5 s after the start
+	f.sweep()
+	assert.Equal(t, int64(20_000), f.position(posA).OfferWaitMS, "up to the start, not the last tick (10 s) and not this tick (25 s)")
+}

@@ -161,6 +161,16 @@ func (m *Module) accrueWindowCost(p positionRow, nowMS int64) {
 	}
 	c := m.costs[p.ID]
 	if c != nil && c.state != p.State {
+		// The position left the state since the last tick: count up to the moment
+		// it did where that is known (the first start of an offered position), else
+		// up to this tick, so the time between the last tick and the change is not lost.
+		end := nowMS
+		if c.state == resources.PosOffered && p.FirstStartedAt >= c.lastTick && p.FirstStartedAt < nowMS {
+			end = p.FirstStartedAt
+		}
+		if waiting, err := m.someoneWaitingFor(p.ID, nowMS); err == nil && waiting {
+			c.ms += max(0, end-c.lastTick)
+		}
 		m.flushWindowCost(p.ID)
 		c = nil
 	}
