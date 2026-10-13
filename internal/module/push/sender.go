@@ -38,6 +38,8 @@ type Job struct {
 	DeviceIDs []string
 	Approval  *JobApproval // an approval's push: what the sender needs to resolve its session_code at send time
 	Make      func(push.Device) (push.Content, bool)
+	// SkipOpen: the job does not use the open set (a reads flush), so the sender does not read it.
+	SkipOpen bool
 	// RequireOpen: the job is only about the open set (a background badge push), so it is dropped when that cannot be read.
 	RequireOpen bool
 }
@@ -67,6 +69,7 @@ type sender struct {
 	topic  string
 
 	openState func(ctx context.Context, j Job) openSnap // read ONCE per Job, before its device loop; nil or !ok = unknown, left out
+	reads     readCarrier                               // the pending reads of the registrations that sync them; nil = none
 
 	queue   chan Job
 	dropped atomic.Int64
@@ -140,7 +143,7 @@ func (s *sender) Stop() {
 
 func (s *sender) process(ctx context.Context, j Job) {
 	var snap openSnap
-	if s.openState != nil {
+	if s.openState != nil && !j.SkipOpen {
 		snap = s.openState(ctx, j)
 	}
 	if j.RequireOpen && !snap.ok {
@@ -167,16 +170,29 @@ func (s *sender) process(ctx context.Context, j Job) {
 		if j.Approval != nil {
 			content.SessionCode = snap.code
 		}
-		payload, err := content.Payload(s.hostID)
+		// A phone that syncs reads gets the oldest pending ones on every push it is sent (they leave the list only once APNs
+		// took the push, by version: carrier.Sent). A flush with nothing pending has nothing to say.
+		syncs := s.reads != nil && d.Prefs.ReadSync
+		if syncs {
+			content.Reads = s.reads.Reserve(d.DeviceID)
+		}
+		if content.Kind == "reads" && len(content.Reads) == 0 {
+			continue
+		}
+		payload, carried, err := content.Build(s.hostID)
 		if err != nil {
 			s.book.MarkError(id, "payload")
-			continue
+			continue // a push that cannot be built carries, and acknowledges, nothing
 		}
 		h := apns.Headers{Topic: s.topic, CollapseID: content.CollapseID, Expiration: s.now().Add(expiresIn)}
 		if content.Background { // a silent badge update: its own push type and priority, and nothing to replace on the phone
 			h.PushType, h.Priority, h.CollapseID = "background", 5, ""
 		}
-		s.finish(ctx, d, s.sendWithRetry(ctx, d, h, payload))
+		res := s.sendWithRetry(ctx, d, h, payload)
+		s.finish(ctx, d, res)
+		if syncs && res.Class == apns.OK {
+			s.reads.Sent(d.DeviceID, carried)
+		}
 	}
 }
 

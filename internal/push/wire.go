@@ -43,6 +43,10 @@ type Prefs struct {
 	Muted []string `json:"muted,omitempty"`
 	// BadgePush: the phone wants background badge pushes (BG-1b). Stored from BG-1a on so the field is never lost.
 	BadgePush bool `json:"badge_push,omitempty"`
+	// ReadSync: the phone takes part in read sync (badge spec §7): the reads of other devices ride on the pushes it gets, and
+	// a flush push carries them when nothing else was pushed for a while. It sets this only on a host that lists
+	// session.read_sync.v1.
+	ReadSync bool `json:"read_sync,omitempty"`
 }
 
 // DeviceRequest is the body of POST /api/push/devices.

@@ -63,6 +63,7 @@ var capabilities = []string{
 	"session.launch.v1",       // GET /api/sessions/{code}/launch-plan, POST /api/sessions/{code}/launch: the no-agent launch panel (resume the last conversation / start a new one)
 	"team.ask_chat.v1",        // decide a hook_ask with decision deny + hook.message (the reply instead of answers); its wait is answered_remote with hook.message
 	"team.pause.v1",           // an unattended session with no relay quota left is paused, not held for a card: GET /api/team/paused, POST /api/team/paused/{session_id}/release, roster paused, 409 paused_no_quota / member_paused_no_quota, begin reask_id (UP-4)
+	"session.read_sync.v1",    // read sync (badge spec §7): POST /api/sessions/{code}/read, /ws/host-events?reads=v1 (session.reads / session.read), prefs.read_sync, purdex.reads / purdex.event_cursor on pushes, kind "reads" flush
 }
 
 // pushReady reports whether the push module is mounted AND has its key (its Status says ready). A mounted module whose
