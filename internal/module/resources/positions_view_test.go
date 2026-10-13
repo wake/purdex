@@ -69,6 +69,11 @@ func TestSnapshot_ListsPositionsWithTheirCommands(t *testing.T) {
 
 	raw := f.do(http.MethodGet, "/api/resources", nil).Body.String()
 	assert.NotContains(t, raw, `"env"`)
+
+	// Once it is asked (named in a notice), the ask row shows as asked.
+	f.name(ask.ID)
+	s = f.snapshot()
+	assert.Equal(t, "asked", s.Positions[0].Requests[1].State)
 }
 
 func refDigits(ref string) string {
