@@ -15,6 +15,7 @@ import { usePeerStore } from '../stores/usePeerStore'
 import { useSessionCwdStore } from '../stores/useSessionCwdStore'
 import { useTeamUiStore } from '../stores/useTeamUiStore'
 import { useApprovalStore } from '../stores/useApprovalStore'
+import { useHookCardStore } from '../stores/useHookCardStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { wireIdOfHost } from './profile/host-identity'
 import { reresolveRestoredHost, rewriteHostRefs, scheduleHostReresolve } from './host-reresolve'
@@ -427,5 +428,6 @@ function forgetApprovalsOnHostChange(next: Record<string, HostConfig>, prev: Rec
     const after = next[hostId]
     if (after && prev[hostId].ip === after.ip && prev[hostId].port === after.port) continue
     useApprovalStore.getState().forgetHost(hostId)
+    useHookCardStore.getState().forgetHost(hostId) // the Dock badge counts them too (app-badge spec §4.1)
   }
 }
