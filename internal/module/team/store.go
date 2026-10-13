@@ -162,6 +162,11 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (relay asks): %w", err)
 	}
+	// unanswered_at: a member's FINAL ask (used ≥ RelayLastAskPct) its lead let lapse (RT-2b T23)
+	if err := ensureColumn(db, "relay_asks", "unanswered_at", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (relay asks unanswered_at): %w", err)
+	}
 	if _, err := db.Exec(teamSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (teams): %w", err)

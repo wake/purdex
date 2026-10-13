@@ -151,7 +151,7 @@ func (s *Store) CreateRemoteRelayAsk(a RelayAsk, checkedLeadHost string) (stored
 		return fail(err)
 	}
 	a.TeamID, a.SpawnOp, a.State, a.Reason, a.OpID, a.NotifiedAt, a.ClosedAt = teamID, mk, team.RelayAskOpen, "", "", 0, 0
-	if _, err := tx.Exec(`INSERT INTO relay_asks (`+relayAskCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	if _, err := tx.Exec(`INSERT INTO relay_asks (`+relayAskCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`,
 		a.ID, a.TeamID, a.SpawnOp, a.SessionID, a.UsedPct, a.Window, a.State, a.Reason, a.OpID, a.NotifiedAt, a.CreatedAt, a.ExpiresAt, a.ClosedAt); err != nil {
 		return fail(err)
 	}

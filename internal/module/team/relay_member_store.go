@@ -94,9 +94,20 @@ func (s *Store) createMemberRelayOp(op team.RelayOp, gate MemberRelayGate, enque
 	}
 	// The lead's relay is the answer to an open ask (member relay ask §3.2): in this transaction, so a failure anywhere
 	// above or below leaves no op, no spent pool and the ask open. A window that has passed is no longer an ask (D9).
+	var unansweredAsk int64
+	switch err := tx.QueryRow(`SELECT unanswered_at FROM relay_asks WHERE session_id = ? AND state = 'open' AND expires_at > ?`, op.SessionID, op.CreatedAt).Scan(&unansweredAsk); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return fail(err)
+	}
 	if _, err := tx.Exec(`UPDATE relay_asks SET state = 'accepted', op_id = ?, closed_at = ? WHERE session_id = ? AND state = 'open' AND expires_at > ?`,
 		op.ID, op.CreatedAt, op.SessionID, op.CreatedAt); err != nil {
 		return fail(err)
+	}
+	if unansweredAsk > 0 { // the lead answered a final ask that had paused the member (RT-2b T23)
+		if err := leaveAskAcceptedIn(tx, op.SessionID, op.CreatedAt); err != nil {
+			return fail(err)
+		}
 	}
 	if s.afterAskAccept != nil {
 		if err := s.afterAskAccept(tx); err != nil {

@@ -183,6 +183,7 @@ func (m *Module) createMemberRelayFor(w http.ResponseWriter, req team.RelayCreat
 		return
 	}
 	m.logf("[team] relay op %s opened: member %s (%s) of team %s (%s)", op.ID, mr.Ref, mr.SessionID, t.ID, op.State)
+	m.askAnswered()
 	if spent {
 		m.announceSpend(t.LeadSessionID) // the lead's pool is spent: publish the chain's new numbers
 	}

@@ -58,5 +58,6 @@ func (m *Module) handleRelayDeny(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m.logf("[team] relay ask %s of member %s denied by its lead", ask.ID, mr.Ref)
+	m.askAnswered()
 	m.writeJSON(w, http.StatusOK, team.RelayDenyResponse{AskID: ask.ID})
 }

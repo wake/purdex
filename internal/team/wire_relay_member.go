@@ -101,12 +101,19 @@ const MinManualRelayModVersion = 4
 const RelayManualNoticeFmt = "[pdx team] member 由使用者手動接力：%s → %s"
 
 // RelayAskNoticeFmt takes the member's address, its bare 6-character ref, its title, the integer percentage, the minutes
-// left (rounded up) and the ref again.
-const RelayAskNoticeFmt = "[pdx team] member %s [%s]「%s」已用 %d%%，申請接力。\n%d 分鐘內同意請執行：pdx relay _%s（不同意不用回覆，過期即作罷）"
+// left (rounded up) and the ref twice (approve, deny).
+const RelayAskNoticeFmt = "[pdx team] member %s [%s]「%s」已用 %d%%，申請接力。\n%d 分鐘內請回覆：同意 pdx relay _%s；不同意 pdx relay _%s --deny"
 
-// RelayAskRemoteNoticeFmt is RelayAskNoticeFmt for a member on another host: the same words, the last argument is the whole
-// ref the lead types — <alias>/_<ref> — instead of the bare ref after an underscore.
+// RelayAskRemoteNoticeFmt is the notice of a member on another host: the same words as before RT-2b (a remote ask expires as it
+// always did and cannot be denied yet, S-8); the last argument is the whole ref the lead types — <alias>/_<ref>.
 const RelayAskRemoteNoticeFmt = "[pdx team] member %s [%s]「%s」已用 %d%%，申請接力。\n%d 分鐘內同意請執行：pdx relay %s（不同意不用回覆，過期即作罷）"
+
+// RelayAskFinalSuffix is appended to a notice of an ask at RelayLastAskPct or more: the member's last one (RT-2b T23).
+const RelayAskFinalSuffix = "\n這是最後一次申請；沒有回覆的話這個 member 會暫停作業。"
+
+// RelayAskUnansweredLeadFmt is the lead's notice that a member's final ask went unanswered and the member is paused: the member's
+// address, ref, title, and the bare ref twice.
+const RelayAskUnansweredLeadFmt = "[pdx team] member %s [%s]「%s」接力申請 5 分鐘沒有回應，已暫停作業。請執行 pdx relay _%s（接力）或 pdx relay _%s --deny（不接力，恢復作業）。"
 
 // UnattendedAskAcceptedFmt is the lead's notice that the daemon accepted a member's ask while the host is unattended (RT-2b T22,
 // S-4): the member's address, its title, the integer percentage and the member pool left.

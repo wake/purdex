@@ -129,7 +129,10 @@ func (m *Module) sendAskNotice(a RelayAsk) {
 	if ok {
 		address, title := m.memberNoticeName(mr)
 		ref := strings.TrimPrefix(mr.Ref, "_")
-		text = fmt.Sprintf(team.RelayAskNoticeFmt, address, ref, title, cur.UsedPct, minutes, ref)
+		text = fmt.Sprintf(team.RelayAskNoticeFmt, address, ref, title, cur.UsedPct, minutes, ref, ref)
+		if cur.UsedPct >= team.RelayLastAskPct {
+			text += team.RelayAskFinalSuffix
+		}
 	} else {
 		// a mirror of a remote member's ask (MR-4): the member is a row of another host, named as the lead can address it
 		var rok bool
@@ -164,6 +167,7 @@ func (m *Module) settleAsks() {
 	expired, errE := m.store.ExpireRelayAsks(now)
 	left, errW := m.store.WithdrawAsksOfInactiveMembers(now)
 	m.askMu.Unlock()
+	m.markFinalAsks()
 	for _, err := range []error{errE, errW} {
 		if err != nil {
 			m.logf("[team] sweep relay asks: %v", err)
@@ -173,6 +177,7 @@ func (m *Module) settleAsks() {
 		m.logf("[team] %d relay ask(s) expired", expired)
 	}
 	if left > 0 {
+		m.askAnswered()
 		m.logf("[team] %d relay ask(s) withdrawn: the member left", left)
 	}
 	m.acceptOpenAsksOnTick()

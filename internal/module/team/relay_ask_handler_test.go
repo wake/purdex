@@ -31,7 +31,7 @@ func (f *fixture) postAsk(reqID, sid string, pct int) (int, team.RelayAskRespons
 
 // wantAskNotice is the lead's text for the fixture member (address self/w-one, ref _mem001, title worker).
 func wantAskNotice(pct, minutes int) string {
-	return fmt.Sprintf(team.RelayAskNoticeFmt, "self/w-one", "mem001", "worker", pct, minutes, "mem001")
+	return fmt.Sprintf(team.RelayAskNoticeFmt, "self/w-one", "mem001", "worker", pct, minutes, "mem001", "mem001")
 }
 
 func (f *fixture) sendFails(err error) {
@@ -49,8 +49,8 @@ func (f *fixture) livenessTick() {
 }
 
 func TestRelayAskNotice_FormatIsPinned(t *testing.T) {
-	got := fmt.Sprintf(team.RelayAskNoticeFmt, "mlab/work-1", "abc123", "A 線", 71, 5, "abc123")
-	want := "[pdx team] member mlab/work-1 [abc123]「A 線」已用 71%，申請接力。\n5 分鐘內同意請執行：pdx relay _abc123（不同意不用回覆，過期即作罷）"
+	got := fmt.Sprintf(team.RelayAskNoticeFmt, "mlab/work-1", "abc123", "A 線", 71, 5, "abc123", "abc123")
+	want := "[pdx team] member mlab/work-1 [abc123]「A 線」已用 71%，申請接力。\n5 分鐘內請回覆：同意 pdx relay _abc123；不同意 pdx relay _abc123 --deny"
 	if got != want {
 		t.Fatalf("notice = %q, want %q", got, want)
 	}
