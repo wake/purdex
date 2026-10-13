@@ -87,3 +87,18 @@ func TestSessionOfProcess_ReturnsTheAgentPidAndStart(t *testing.T) {
 	assert.Zero(t, pid)
 	assert.Equal(t, "", start)
 }
+
+// A row that still carries parked_until (written by an older daemon between a
+// boot and the next one) is answered as waiting: "queued" now means a queue
+// position, which a wait-mode row never has.
+func TestResponse_ALegacyParkedRowIsStillJustWaiting(t *testing.T) {
+	f := newRouteFix(t, resources.ModeLease)
+	f.setZone("danger", "flat")
+	a := decodeLease(t, f.post(cidA, "test-full", 0))
+	require.Equal(t, resources.StateWaiting, a.State)
+	_, err := f.m.store.db.Exec(`UPDATE resource_leases SET parked_until = ? WHERE id = ?`, f.nowMS()+600_000, a.ID)
+	require.NoError(t, err)
+	got := decodeLease(t, f.do(http.MethodGet, "/api/resources/leases/"+a.ID+"?wait=0", nil))
+	assert.Equal(t, resources.StateWaiting, got.State)
+	assert.Zero(t, got.ParkedUntil)
+}
