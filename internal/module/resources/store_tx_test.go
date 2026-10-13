@@ -485,3 +485,332 @@ func TestPositions_APositionedHeldRowCannotEndWithoutItsPosition(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, res.Ended)
 }
+
+func TestPositions_EndOnlyFromTheNamedStates(t *testing.T) {
+	s := memStore(t)
+	runningFixture(t, s)
+	ok, err := s.EndPositionWithRows("pos_00000001", 3000, endPosition{Reason: resources.EndCancelledBySession, From: []string{resources.PosQueued, resources.PosOffered, resources.PosIdle}})
+	require.NoError(t, err)
+	assert.False(t, ok, "a running position is not ended by a cancel")
+	assert.Equal(t, resources.PosRunning, mustPos(t, s, "pos_00000001").State)
+}
+
+func TestPositions_WindowLapseLosesToAStart(t *testing.T) {
+	s := memStore(t)
+	runningFixture(t, s)
+	setState(t, s, "pos_00000001", "state = 'idle', window_until = 5000")
+	_, err := s.db.Exec(`UPDATE resource_leases SET state = 'ended', end_reason = 'released', ended_at = 4000 WHERE id = 'a'`)
+	require.NoError(t, err)
+	// The sweeper read window_until=5000; a command starts at once (clearing it).
+	require.NoError(t, createRow(s, txRow("b", "s1", "pos_00000001", resources.CallQueue, "x", "/w", 4500)))
+	ok, err := s.GrantInPosition("pos_00000001", resources.PosIdle, "b", 4600, false, resources.Decision{}, resources.V2Record{}, "", "")
+	require.NoError(t, err)
+	require.True(t, ok)
+	ok, err = s.EndPositionWithRows("pos_00000001", 5100, endPosition{Reason: resources.EndIdleTimeout, From: []string{resources.PosIdle}, WindowGuard: 5000})
+	require.NoError(t, err)
+	assert.False(t, ok, "the racing start wins")
+	assert.Equal(t, resources.PosRunning, mustPos(t, s, "pos_00000001").State)
+}
+
+// A new window (a command ran and ended again) is not the one the sweeper read.
+func TestPositions_WindowLapseLosesToANewWindow(t *testing.T) {
+	s := memStore(t)
+	runningFixture(t, s)
+	setState(t, s, "pos_00000001", "state = 'idle', window_until = 9000")
+	ok, err := s.EndPositionWithRows("pos_00000001", 5100, endPosition{Reason: resources.EndIdleTimeout, From: []string{resources.PosIdle}, WindowGuard: 5000})
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Equal(t, resources.PosIdle, mustPos(t, s, "pos_00000001").State)
+}
+
+func TestPositions_IdleTimeoutEndsAskedRowsAsNoAnswer(t *testing.T) {
+	s := memStore(t)
+	runningFixture(t, s)
+	setState(t, s, "pos_00000001", "state = 'idle', window_until = 5000")
+	_, err := s.db.Exec(`UPDATE resource_leases SET state = 'ended', end_reason = 'released', ended_at = 4000 WHERE id = 'a'`)
+	require.NoError(t, err)
+	require.NoError(t, createRow(s, txRow("asked", "s1", "pos_00000001", resources.CallAsk, "bg", "/w", 4100)))
+	require.NoError(t, createRow(s, txRow("plain", "s1", "pos_00000001", resources.CallQueue, "fg", "/w", 4200)))
+	_, err = s.db.Exec(`UPDATE resource_leases SET offered_at = 4300 WHERE id = 'asked'`)
+	require.NoError(t, err)
+	ok, err := s.EndPositionWithRows("pos_00000001", 5100, endPosition{Reason: resources.EndIdleTimeout, AskedReason: resources.EndNoAnswer,
+		From: []string{resources.PosIdle}, WindowGuard: 5000, Notice: "cancelled"})
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, resources.EndNoAnswer, mustRow(t, s, "asked").EndReason)
+	assert.Equal(t, resources.EndIdleTimeout, mustRow(t, s, "plain").EndReason)
+	p := mustPos(t, s, "pos_00000001")
+	assert.Equal(t, resources.EndIdleTimeout, p.EndReason)
+	assert.Equal(t, "cancelled", p.NoticeKind)
+}
+
+func TestPositions_EndRowMaybePositionEndsAnEmptyQueuedPosition(t *testing.T) {
+	s := memStore(t)
+	queuedFixture(t, s)
+	require.NoError(t, createRow(s, txRow("b", "s1", "pos_00000001", resources.CallQueue, "y", "/w", 11)))
+	ok, err := s.EndRowMaybePosition("a", resources.EndCancelledBySession, 100, "")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, resources.PosQueued, mustPos(t, s, "pos_00000001").State, "another waiting row keeps it")
+	ok, err = s.EndRowMaybePosition("b", resources.EndCancelledBySession, 200, "")
+	require.NoError(t, err)
+	require.True(t, ok)
+	p := mustPos(t, s, "pos_00000001")
+	assert.Equal(t, resources.PosEnded, p.State)
+	assert.Equal(t, resources.EndCancelledBySession, p.EndReason)
+	ok, err = s.EndRowMaybePosition("b", resources.EndCancelledBySession, 300, "")
+	require.NoError(t, err)
+	assert.False(t, ok, "an ended row cannot end again")
+}
+
+func TestPositions_PassOfferOnlyTheSameUndeliveredOffer(t *testing.T) {
+	s := memStore(t)
+	queuedFixture(t, s)
+	_, err := s.OfferPosition("pos_00000001", 1000, "", "", "")
+	require.NoError(t, err)
+	ok, err := s.PassOffer("pos_00000001", 999, 5000)
+	require.NoError(t, err)
+	assert.False(t, ok, "another offer")
+	ok, err = s.PassOffer("pos_00000001", 1000, 5000)
+	require.NoError(t, err)
+	require.True(t, ok)
+	p := mustPos(t, s, "pos_00000001")
+	assert.Equal(t, resources.PosQueued, p.State)
+	assert.Equal(t, int64(5000), p.PassedAt)
+	assert.Equal(t, 1, p.OfferPasses)
+	assert.Empty(t, p.NoticeKind)
+	assert.Zero(t, mustRow(t, s, "a").OfferedAt)
+	// A delivered offer is never passed.
+	_, err = s.OfferPosition("pos_00000001", 6000, "", "", "")
+	require.NoError(t, err)
+	ok, err = s.MarkDelivered("pos_00000001", 6000, 6100)
+	require.NoError(t, err)
+	require.True(t, ok)
+	ok, err = s.PassOffer("pos_00000001", 6000, 9000)
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestPositions_MarkDeliveredOnlyForTheSameOffer(t *testing.T) {
+	s := memStore(t)
+	queuedFixture(t, s)
+	_, err := s.OfferPosition("pos_00000001", 1000, "", "", "")
+	require.NoError(t, err)
+	ok, err := s.MarkDelivered("pos_00000001", 900, 1100)
+	require.NoError(t, err)
+	assert.False(t, ok, "a delivery for an older offer changes nothing")
+	assert.Zero(t, mustPos(t, s, "pos_00000001").DeliveredAt)
+	ok, err = s.MarkDelivered("pos_00000001", 1000, 1100)
+	require.NoError(t, err)
+	require.True(t, ok)
+	p := mustPos(t, s, "pos_00000001")
+	assert.Equal(t, int64(1100), p.DeliveredAt)
+	assert.Equal(t, int64(1100+180_000), p.WindowUntil)
+	ok, err = s.MarkDelivered("pos_00000001", 1000, 1200)
+	require.NoError(t, err)
+	assert.False(t, ok, "delivered once")
+}
+
+func TestPositions_NameRowsOnlyUnnamedRowsOfAnOfferedOrIdlePosition(t *testing.T) {
+	s := memStore(t)
+	runningFixture(t, s)
+	require.NoError(t, createRow(s, txRow("b", "s1", "pos_00000001", resources.CallQueue, "x", "/w", 1200)))
+	n, err := s.NameRows("pos_00000001", 1300, "offer")
+	require.NoError(t, err)
+	assert.Zero(t, n, "a running position names nothing")
+	setState(t, s, "pos_00000001", "state = 'idle', window_until = 9000")
+	n, err = s.NameRows("pos_00000001", 1400, "idle")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n)
+	assert.Equal(t, int64(1400), mustRow(t, s, "b").OfferedAt)
+	assert.Equal(t, "idle", mustPos(t, s, "pos_00000001").NoticeKind)
+	n, err = s.NameRows("pos_00000001", 1500, "idle")
+	require.NoError(t, err)
+	assert.Zero(t, n, "already named")
+}
+
+func TestPositions_MarkDoneOnlyWhileRunning(t *testing.T) {
+	s := memStore(t)
+	queuedFixture(t, s)
+	ok, err := s.MarkDone("pos_00000001")
+	require.NoError(t, err)
+	assert.False(t, ok)
+	setState(t, s, "pos_00000001", "state = 'running'")
+	ok, err = s.MarkDone("pos_00000001")
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.True(t, mustPos(t, s, "pos_00000001").DoneRequested)
+}
+
+func TestPositions_SmallWrites(t *testing.T) {
+	s := memStore(t)
+	queuedFixture(t, s)
+	require.NoError(t, s.SetNoticeResult("pos_00000001", "accepted", 500))
+	require.NoError(t, s.SetNoticeResult("pos_00000001", "unknown", 400))
+	require.NoError(t, s.AddWindowWait("pos_00000001", 10, 0))
+	require.NoError(t, s.AddWindowWait("pos_00000001", 0, 25))
+	p := mustPos(t, s, "pos_00000001")
+	assert.Equal(t, "unknown", p.NoticeResult)
+	assert.Equal(t, int64(500), p.NoticeSentAt, "sent_at only moves forward")
+	assert.Equal(t, int64(10), p.OfferWaitMS)
+	assert.Equal(t, int64(25), p.IdleWaitMS)
+}
+
+func TestStore_AdoptQueuedOnlySameCommandCwdAndWaiting(t *testing.T) {
+	s := memStore(t)
+	_, _, _, err := s.CreateAttached(txPos("pos_00000001", "s1", 10), txRow("a", "s1", "", resources.CallQueue, "go test", "/w", 10))
+	require.NoError(t, err)
+	old := mustRow(t, s, "a")
+	n := leaseRow{ClientID: "client-new", HolderPID: 8, HolderStart: "x", ToolUseID: "tu", Scope: resources.ScopeProcess}
+
+	for name, mut := range map[string]func(*leaseRow){
+		"another cwd":     func(r *leaseRow) { r.Cwd = "/other" },
+		"another command": func(r *leaseRow) { r.Command = "go build" },
+		"another client":  func(r *leaseRow) { r.ClientID = "client-zzz" },
+		"another place":   func(r *leaseRow) { r.PositionID = "pos_other" },
+	} {
+		probe := old
+		mut(&probe)
+		ok, err := s.AdoptQueued(probe, n, 9000)
+		require.NoError(t, err)
+		assert.False(t, ok, name)
+	}
+	// An ask row is never adopted, whatever the caller says.
+	require.NoError(t, createRow(s, txRow("k", "s1", "pos_00000001", resources.CallAsk, "go test", "/w", 12)))
+	ok, err := s.AdoptQueued(mustRow(t, s, "k"), n, 9000)
+	require.NoError(t, err)
+	assert.False(t, ok, "an ask row")
+
+	ok, err = s.AdoptQueued(old, n, 9000)
+	require.NoError(t, err)
+	require.True(t, ok)
+	got := mustRow(t, s, "a")
+	assert.Equal(t, "client-new", got.ClientID)
+	assert.Equal(t, 8, got.HolderPID)
+	assert.Equal(t, int64(10), got.CreatedAt, "the place stays")
+	assert.Equal(t, int64(9000), got.LeaseUntil)
+
+	// A held row is never adopted.
+	holdRow(t, s, "a")
+	held := mustRow(t, s, "a")
+	n.ClientID = "client-newer"
+	ok, err = s.AdoptQueued(held, n, 9000)
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+func TestStore_EndParkedAtBoot(t *testing.T) {
+	s := memStore(t)
+	for _, id := range []string{"parked", "plain"} {
+		require.NoError(t, createRow(s, txRow(id, "s", "", "", "x", "/w", 10)))
+	}
+	_, err := s.db.Exec(`UPDATE resource_leases SET parked_until = 99999 WHERE id = 'parked'`)
+	require.NoError(t, err)
+	n, err := s.EndParkedAtBoot(500)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), n)
+	assert.Equal(t, resources.EndAbandoned, mustRow(t, s, "parked").EndReason)
+	assert.Equal(t, "waiting", mustRow(t, s, "plain").State)
+}
+
+func TestPrune_EndedPositionsOlderThanRetention(t *testing.T) {
+	s := memStore(t)
+	const day = int64(24 * 3600 * 1000)
+	now := 100 * day
+	for id, endedAt := range map[string]int64{"pos_00000001": now - 15*day, "pos_00000002": now - 13*day} {
+		require.NoError(t, s.insertPosition(positionRow{ID: id, SessionID: "s-" + id, State: resources.PosQueued, CreatedAt: 1}))
+		setState(t, s, id, fmt.Sprintf("state = 'ended', ended_at = %d", endedAt))
+	}
+	require.NoError(t, s.insertPosition(positionRow{ID: "pos_00000003", SessionID: "s3", State: resources.PosQueued, CreatedAt: 1}))
+	_, err := s.Prune(now - 14*day)
+	require.NoError(t, err)
+	_, ok, _ := s.PositionByID("pos_00000001")
+	assert.False(t, ok, "15 days goes")
+	_, ok, _ = s.PositionByID("pos_00000002")
+	assert.True(t, ok, "13 days stays")
+	_, ok, _ = s.PositionByID("pos_00000003")
+	assert.True(t, ok, "a live one stays")
+}
+
+func TestReconcile_RepairsEachInconsistentPair(t *testing.T) {
+	t.Run("a: running with no held row becomes idle", func(t *testing.T) {
+		s, path := fileStore(t)
+		require.NoError(t, s.insertPosition(positionRow{ID: "pos_00000001", SessionID: "s1", State: resources.PosQueued, CreatedAt: 1}))
+		setState(t, s, "pos_00000001", "state = 'running', commands_started = 2, commands_ended = 1")
+		require.NoError(t, s.Close())
+		s, err := openLeaseStore(path)
+		require.NoError(t, err)
+		defer s.Close()
+		repairs, err := s.ReconcilePositions(10_000)
+		require.NoError(t, err)
+		assert.Len(t, repairs, 1)
+		p := mustPos(t, s, "pos_00000001")
+		assert.Equal(t, resources.PosIdle, p.State)
+		assert.Equal(t, int64(10_000+180_000), p.WindowUntil)
+		assert.Equal(t, 2, p.CommandsEnded)
+	})
+	t.Run("a: running with no held row and done requested ends done", func(t *testing.T) {
+		s := memStore(t)
+		require.NoError(t, s.insertPosition(positionRow{ID: "pos_00000001", SessionID: "s1", State: resources.PosQueued, CreatedAt: 1}))
+		setState(t, s, "pos_00000001", "state = 'running', done_requested = 1")
+		_, err := s.ReconcilePositions(10_000)
+		require.NoError(t, err)
+		p := mustPos(t, s, "pos_00000001")
+		assert.Equal(t, resources.PosEnded, p.State)
+		assert.Equal(t, resources.EndDone, p.EndReason)
+	})
+	t.Run("b: a held row makes its position running", func(t *testing.T) {
+		s := memStore(t)
+		require.NoError(t, s.insertPosition(positionRow{ID: "pos_00000001", SessionID: "s1", State: resources.PosQueued, CreatedAt: 1}))
+		setState(t, s, "pos_00000001", "state = 'idle', window_until = 5")
+		require.NoError(t, createRow(s, txRow("h", "s1", "pos_00000001", resources.CallQueue, "x", "/w", 2)))
+		holdRow(t, s, "h")
+		repairs, err := s.ReconcilePositions(10_000)
+		require.NoError(t, err)
+		assert.Len(t, repairs, 1)
+		p := mustPos(t, s, "pos_00000001")
+		assert.Equal(t, resources.PosRunning, p.State)
+		assert.Zero(t, p.WindowUntil)
+	})
+	t.Run("c: waiting rows of an ended position end with its reason", func(t *testing.T) {
+		s := memStore(t)
+		require.NoError(t, s.insertPosition(positionRow{ID: "pos_00000001", SessionID: "s1", State: resources.PosQueued, CreatedAt: 1}))
+		setState(t, s, "pos_00000001", "state = 'ended', end_reason = 'cancelled_by_session', ended_at = 5")
+		require.NoError(t, createRow(s, txRow("w", "s1", "pos_00000001", resources.CallQueue, "x", "/w", 2)))
+		_, err := s.ReconcilePositions(10_000)
+		require.NoError(t, err)
+		r := mustRow(t, s, "w")
+		assert.Equal(t, "ended", r.State)
+		assert.Equal(t, resources.EndCancelledBySession, r.EndReason)
+	})
+	t.Run("c: waiting rows of a missing position end abandoned; held rows are left", func(t *testing.T) {
+		s := memStore(t)
+		require.NoError(t, createRow(s, txRow("w", "s1", "pos_gone", resources.CallQueue, "x", "/w", 2)))
+		require.NoError(t, createRow(s, txRow("h", "s1", "pos_gone", resources.CallQueue, "x", "/w", 3)))
+		holdRow(t, s, "h")
+		_, err := s.ReconcilePositions(10_000)
+		require.NoError(t, err)
+		w := mustRow(t, s, "w")
+		assert.Equal(t, "ended", w.State)
+		assert.Equal(t, resources.EndAbandoned, w.EndReason)
+		assert.Equal(t, "held", mustRow(t, s, "h").State, "a held row of a missing position keeps running (R5)")
+	})
+	t.Run("d: queued with no waiting row ends abandoned", func(t *testing.T) {
+		s := memStore(t)
+		require.NoError(t, s.insertPosition(positionRow{ID: "pos_00000001", SessionID: "s1", State: resources.PosQueued, CreatedAt: 1}))
+		repairs, err := s.ReconcilePositions(10_000)
+		require.NoError(t, err)
+		assert.Len(t, repairs, 1)
+		p := mustPos(t, s, "pos_00000001")
+		assert.Equal(t, resources.PosEnded, p.State)
+		assert.Equal(t, resources.EndAbandoned, p.EndReason)
+	})
+	t.Run("a consistent database repairs nothing", func(t *testing.T) {
+		s := memStore(t)
+		queuedFixture(t, s)
+		repairs, err := s.ReconcilePositions(10_000)
+		require.NoError(t, err)
+		assert.Empty(t, repairs)
+		assert.Equal(t, resources.PosQueued, mustPos(t, s, "pos_00000001").State)
+	})
+}
