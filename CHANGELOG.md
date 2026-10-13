@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0-alpha.727] - 2026-10-13
+
+> 只改了 daemon，mod 沒動。
+
+### Fixed：team 因 lead 消失而結束後，它的遠端 member 收不回來（#2757，PR #2758）
+
+- 2026-10-13 主機當機重開後，三個 team 以「lead 不在了」結束。依設計，team 結束時不改 member 列，所以 member 列還是 active。結果同一台 lead 主機重建 team 後，要再收回另一台主機上的同一個 session 時，被當成「已經是 member」擋下（409 `adopt_already_member`）。
+- 判斷遠端 member 還在不在 team 時，現在會排除已結束的 team。新的收回核准時，會把那一列舊紀錄改成「已釋出」，新的 member 列才能生效。本機 member 原本就是這樣做。
+- 已結束 team 的「已收為 member」通知不再補送。
+- team 結束時仍然不改 member 列（設計 D4 不變）。
+
 ## [1.0.0-alpha.726] - 2026-10-13
 
 > daemon 只是搬了檔案；這版主要是 SPA。Mac 按 dev update（或靠 dev server 的 HMR）就生效，mod 沒有改。
