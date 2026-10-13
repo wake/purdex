@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-alpha.731] - 2026-10-13
+
+> 只改了 daemon，不用跑 pdx setup。兩台主機的資源租約已經從「排隊」模式切回「只記錄」模式（advise），因為排隊的等待方式要重新設計：新設計會讓 session 不必停下來等租約。這次切換只是設定改變，不在這個版本的程式碼裡。
+
+### Added：已讀同步的推播端（BG-4b，#2790，介面線）
+
+- daemon 現在宣告 capability `session.read_sync.v1`（固定宣告、沒有條件），所以部署後 App（Mac 的 BG-5、iOS 的 BG-3e）才會開始使用已讀同步。這補上了 730 的讀取端（BG-4a，PR #2785）。
+- 新增 `[push] read_flush_minutes` 設定（1–120 分鐘，預設 15；只在 daemon 啟動時讀取，沒設就是 15）。
+- 裝置可以開啟 `prefs.read_sync`。開啟的裝置會收到已讀資訊：每則推播最多帶 16 筆已讀紀錄（`purdex.reads`）；另外每隔設定的分鐘數送一則背景推播（kind `reads`，不會響也不會跳通知）把累積的已讀送出去；每則 agent 推播也會帶 `purdex.event_cursor`。
+- 新增 API：`POST /api/sessions/<code>/read`，session 存在回 204，不存在回 404 `{"error":"no_such_session"}`。
+- 已讀的位置與待送的已讀只存在記憶體，daemon 重啟就清空，這是設計如此。
+
 ## [1.0.0-alpha.730] - 2026-10-13
 
 > 只改了 daemon，不用跑 pdx setup。介面線的 Mac 和 iOS 部分之後才做。資源租約仍是「只記錄」模式（只記下每個指令會等多久，不會擋任何指令）；新准入規則的一天觀察期從這個版本開始。
