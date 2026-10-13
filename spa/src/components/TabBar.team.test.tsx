@@ -189,30 +189,76 @@ describe('TabBar — team group (TI-2)', () => {
     expect(h.onReorderTabs).not.toHaveBeenCalled()
   })
 
-  it('drag across the group boundary snaps back', () => {
+  it('a member never leaves the group nor takes the lead\'s place: those drops snap back', () => {
     const tabs = baseTabs()
     seed([roster()], tabs)
     const { h } = bar(tabs)
     drag('ma', 'plain') // out of the group
     drag('ma', 'p2')
-    drag('plain', 'ma') // a plain tab into it
-    drag('plain', 'lead')
-    drag('p2', 'mb')
+    drag('ma', 'lead') // in front of the lead
+    drag('mb', 'lead')
+    drag('ma', 'team-group:' + KEY)
     expect(useTeamUiStore.getState().memberOrder[KEY]).toBeUndefined()
     expect(h.onReorderTabs).not.toHaveBeenCalled()
-    drag('plain', 'p2') // plain tabs still reorder among themselves
-    expect(h.onReorderTabs).toHaveBeenCalledTimes(1)
   })
 
-  it('lead cannot be dragged behind a member', () => {
+  it('plain tabs still reorder among themselves', () => {
     const tabs = baseTabs()
     seed([roster()], tabs)
     const { h } = bar(tabs)
-    drag('lead', 'ma')
-    drag('lead', 'mb')
-    drag('ma', 'lead') // nor a member in front of the lead
-    drag('lead', 'p2') // the group as a whole is not draggable in v1
+    drag('plain', 'p2')
+    expect(h.onReorderTabs).toHaveBeenLastCalledWith(['lead', 'ma', 'mb', 'p2', 'plain'])
+  })
+
+  it('a plain tab dropped on the group lands before or after the whole group, never inside (TG-1)', () => {
+    const tabs = baseTabs()
+    seed([roster()], tabs)
+    const { h } = bar(tabs)
+    drag('plain', 'ma') // moving right: behind the group
+    expect(h.onReorderTabs).toHaveBeenLastCalledWith(['lead', 'ma', 'mb', 'plain', 'p2'])
+    drag('p2', 'lead') // moving left: in front of the group
+    expect(h.onReorderTabs).toHaveBeenLastCalledWith(['plain', 'p2', 'lead', 'ma', 'mb'])
+    drag('p2', 'mb')
+    expect(h.onReorderTabs).toHaveBeenLastCalledWith(['plain', 'p2', 'lead', 'ma', 'mb'])
     expect(useTeamUiStore.getState().memberOrder[KEY]).toBeUndefined()
+  })
+
+  it('dragging the lead moves the whole run; the group frame id counts as the lead (TG-1)', () => {
+    const tabs = baseTabs()
+    seed([roster()], tabs)
+    const { h } = bar(tabs)
+    drag('lead', 'p2')
+    expect(h.onReorderTabs).toHaveBeenLastCalledWith(['plain', 'p2', 'lead', 'ma', 'mb'])
+    drag('team-group:' + KEY, 'plain')
+    expect(h.onReorderTabs).toHaveBeenLastCalledWith(['lead', 'ma', 'mb', 'plain', 'p2'])
+    drag('lead', 'ma') // onto its own member: nothing
+    expect(h.onReorderTabs).toHaveBeenCalledTimes(2)
+  })
+
+  it('a collapsed group moves together with the members it hides (TG-1)', () => {
+    const tabs = baseTabs()
+    seed([roster()], tabs)
+    act(() => useTeamUiStore.getState().setCollapsed(KEY, true))
+    const { h } = bar(tabs)
+    drag('lead', 'p2')
+    expect(h.onReorderTabs).toHaveBeenLastCalledWith(['plain', 'p2', 'lead', 'ma', 'mb'])
+  })
+
+  it('a group dropped on another group lands beside it, never inside (TG-1)', () => {
+    const r2 = roster({ id: 't2', lead: sess('L2', 'lead2-tm') }, [mem('D', 1, 'd-tm')])
+    const tabs = [mk('lead', 'lead-tm'), mk('ma', 'a-tm'), mk('mb', 'b-tm'), mk('lead2', 'lead2-tm'), mk('md', 'd-tm')]
+    seed([roster(), r2], tabs)
+    const { h } = bar(tabs)
+    drag('lead', 'md')
+    expect(h.onReorderTabs).toHaveBeenLastCalledWith(['lead2', 'md', 'lead', 'ma', 'mb'])
+  })
+
+  it('pinned zone stays apart: a group and a pinned tab never trade places (TG-1)', () => {
+    const tabs = [mk('pin', 'p2', 'h1', true), ...baseTabs().slice(0, 4)]
+    seed([roster()], tabs)
+    const { h } = bar(tabs)
+    drag('lead', 'pin')
+    drag('pin', 'lead')
     expect(h.onReorderTabs).not.toHaveBeenCalled()
   })
 
