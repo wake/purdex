@@ -52,8 +52,9 @@ Review: codex (gpt-5.6-sol, low) on spec + plan, 10 findings (1 critical: one ca
   `self_relay`, `member_relay`, `adopt`, `hook_ask` (terminal-only included) or `hook_permission`. A new predicate
   `push.CountsForBadge(kind)` decides this; `ApprovalContent` keeps deciding only what gets a visible push.
 - **Keys**: `s:<session code>` when the origin's tmux session resolves (unchanged); else **`c:<origin session_id>`**
-  when the approval has an origin session id (new: several cards of one unresolved session count 1); else
-  `a:<approval id>`. Same cap (32) and sort.
+  when the approval has an origin session id of at most 64 bytes (new: several cards of one unresolved session count
+  1; a longer id falls back to `a:`, so one odd id can never push the payload past 4 KiB); else `a:<approval id>`.
+  Same cap (32) and sort.
 - **Membership** (who is a "team member"): `team.MembershipReader.Membership(sessionID) (member bool, err error)`, a
   registry interface the team module implements and the push module reads (like `OpenApprovalsReader`). True when the
   Claude Code session id is (a) a local member row (no `host_id`; never the lead) in state `active` of a team whose
@@ -67,7 +68,9 @@ Review: codex (gpt-5.6-sol, low) on spec + plan, 10 findings (1 critical: one ca
 - **Gate** (`gate.go` `DeviceWants`), after rules 5-6:
   - a member session pushes only when its code is in the device's `prefs.tabs` (whatever `notify_without_tab` says);
   - a session whose code is in the device's **`prefs.muted`** gets no agent push. Approval pushes ignore `muted`.
-  - `Membership` is read once per event (not per device), before the device loop.
+  - `Membership` is read once per event (not per device), before the device loop, single-flight with a 250 ms
+    budget: a read still running, or one past the budget, is "member, unknown" (as a read error), so a busy `team.db`
+    never stalls the agent hub's queue.
 - **Background badge push** (new, BG-1b):
   - Trigger: an approval whose kind `CountsForBadge` reaches `closed` (any close path: decide, timeout, lease expiry,
     answered locally, terminal override, dismissed — all go through the team module's `closed` broadcast). Opened
