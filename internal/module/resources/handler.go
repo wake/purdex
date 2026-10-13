@@ -1,11 +1,15 @@
 package resourcesmod
 
 import (
+	"cmp"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"time"
 
+	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/resources"
+	"github.com/wake/purdex/internal/team"
 )
 
 // handleGet serves the latest snapshot, optionally narrowed to one session.
@@ -79,9 +83,20 @@ func (m *Module) addLeases(snap *resources.Snapshot) {
 			SessionID: a.SessionID, AgeS: max(0, (nowMs-a.GrantedAt)/1000), Overrun: a.Overrun,
 		})
 	}
-	for i, w := range waiting {
+	positions, perr := m.store.LivePositions()
+	if perr != nil {
+		m.logf("[resources] list positions for /api/resources: %v", perr)
+		positions = nil
+	}
+	places := queuePlaces(positions, waiting)
+	// Waiters are the wait-mode requests (no position); a position's requests are
+	// listed under it.
+	for _, w := range waiting {
+		if w.PositionID != "" {
+			continue
+		}
 		view := resources.WaiterView{
-			ID: w.ID, Kind: w.Kind, Weight: w.Weight, SessionID: w.SessionID, Position: i + 1,
+			ID: w.ID, Kind: w.Kind, Weight: w.Weight, SessionID: w.SessionID, Position: places[w.ID],
 			WaitedS: max(0, (nowMs-w.CreatedAt)/1000), DeadlineInS: max(0, (w.DeadlineAt-nowMs)/1000),
 		}
 		view.ParkedUntil = w.ParkedUntil
@@ -90,6 +105,7 @@ func (m *Module) addLeases(snap *resources.Snapshot) {
 		}
 		snap.Waiters = append(snap.Waiters, view)
 	}
+	snap.Positions = m.positionViews(positions, active, waiting, places, reasons, nowMs)
 	for _, e := range ended {
 		snap.Recent = append(snap.Recent, resources.RecentView{
 			ID: e.ID, Kind: e.Kind, Weight: e.Weight, SessionID: e.SessionID, EndReason: e.EndReason,
@@ -140,4 +156,107 @@ func onlySession(s resources.Snapshot, sid string) resources.Snapshot {
 	}
 	s.Sessions = kept
 	return s
+}
+
+// queuePlaces numbers the queue the way the pass orders it: queued positions and
+// wait-mode requests together by created_at (a position first on the same
+// millisecond). The key is a wait-mode row's id or posKey(position id).
+func queuePlaces(positions []positionRow, waiting []leaseRow) map[string]int {
+	type entry struct {
+		key       string
+		createdAt int64
+		row       bool
+	}
+	var entries []entry
+	for _, p := range positions {
+		if p.State == resources.PosQueued {
+			entries = append(entries, entry{posKey(p.ID), p.CreatedAt, false})
+		}
+	}
+	for _, w := range waiting {
+		if w.PositionID == "" {
+			entries = append(entries, entry{w.ID, w.CreatedAt, true})
+		}
+	}
+	slices.SortStableFunc(entries, func(a, b entry) int {
+		if a.createdAt != b.createdAt {
+			return cmp.Compare(a.createdAt, b.createdAt)
+		}
+		if a.row != b.row {
+			return cmp.Compare(b2i(a.row), b2i(b.row))
+		}
+		return cmp.Compare(a.key, b.key)
+	})
+	out := make(map[string]int, len(entries))
+	for i, e := range entries {
+		out[e.key] = i + 1
+	}
+	return out
+}
+
+// originByRef is what the peers module's origin resolver offers besides the
+// roots: the session's address (its name on the bus). Asserted once per snapshot.
+type originBySession interface {
+	ResolveOriginBySession(sessionID string) (team.Origin, bool, error)
+}
+
+// positionViews describes the live positions with their requests (V14): who, which
+// command in which directory, the state and how long the window has left. The
+// command text is visible to every session of the host (same user's agents); env
+// is never stored, so it is never shown.
+func (m *Module) positionViews(positions []positionRow, held, waiting []leaseRow, places map[string]int,
+	reasons map[string]reasonView, nowMs int64) []resources.PositionView {
+	if len(positions) == 0 {
+		return nil
+	}
+	byPos := map[string][]leaseRow{}
+	for _, r := range held {
+		if r.PositionID != "" {
+			byPos[r.PositionID] = append(byPos[r.PositionID], r)
+		}
+	}
+	for _, r := range waiting {
+		if r.PositionID != "" {
+			byPos[r.PositionID] = append(byPos[r.PositionID], r)
+		}
+	}
+	resolver, _ := m.roots.(originBySession)
+	out := make([]resources.PositionView, 0, len(positions))
+	for _, p := range positions {
+		v := resources.PositionView{
+			ID: p.ID, SessionID: p.SessionID, Ref: ipeers.RefID(p.SessionID), State: p.State, Place: places[posKey(p.ID)],
+			CreatedAt: p.CreatedAt, WindowUntil: p.WindowUntil, FirstStartedAt: p.FirstStartedAt, Commands: p.CommandsStarted,
+			Warned: p.Warned, Delivered: p.DeliveredAt > 0, NoticeResult: p.NoticeResult,
+		}
+		if p.FirstStartedAt > 0 {
+			v.SpanS = max(0, (nowMs-p.FirstStartedAt)/1000)
+		}
+		if resolver != nil {
+			if o, ok, err := resolver.ResolveOriginBySession(p.SessionID); err == nil && ok {
+				v.Address = o.Address
+			}
+		}
+		if rv, ok := reasons[posKey(p.ID)]; ok {
+			v.Reason, v.ReasonSince = string(rv.Reason), rv.Since.UnixMilli()
+		}
+		rows := byPos[p.ID]
+		slices.SortStableFunc(rows, func(a, b leaseRow) int { return cmp.Compare(a.CreatedAt, b.CreatedAt) })
+		for _, r := range rows {
+			state := "queued"
+			switch {
+			case r.State == resources.StateHeld:
+				state = "held"
+			case r.Mode == resources.CallAsk && r.OfferedAt > 0:
+				state = "asked"
+			case r.Mode == resources.CallAsk:
+				state = "waiting"
+			}
+			v.Requests = append(v.Requests, resources.PositionRequestView{
+				ID: r.ID, Mode: r.Mode, Kind: r.Kind, Command: r.Command, Cwd: r.Cwd, State: state,
+				AgeS: max(0, (nowMs-r.CreatedAt)/1000),
+			})
+		}
+		out = append(out, v)
+	}
+	return out
 }

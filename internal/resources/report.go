@@ -85,6 +85,10 @@ func BuildReport(since, until int64, leases []ReportLease, minutes []ReportMinut
 				r.Paths.Waited++
 			case PathOverrun:
 				r.Paths.Overrun++
+			case PathOffer:
+				r.Paths.Offer++
+			case PathContinued:
+				r.Paths.Continued++
 			}
 			waits = append(waits, l.WaitedMS)
 			recordedLeases = append(recordedLeases, l)
@@ -257,4 +261,101 @@ func shadowOf(leases []ReportLease) ReportShadow {
 			Dominant: dominant(l.Reasons), Reasons: l.Reasons})
 	}
 	return sh
+}
+
+// ReportPosition is one position row as the report reads it.
+type ReportPosition struct {
+	EndReason       string
+	CommandsStarted int
+	RequeuedFrom    string
+	Extensions      int
+	CreatedAt       int64
+	OfferedAt       int64
+	DeliveredAt     int64
+	OfferPasses     int
+	OfferWaitMS     int64
+	IdleWaitMS      int64
+	NoticeResult    string
+}
+
+// BuildPositionReport works the position figures out of rows already read. Pure.
+func BuildPositionReport(rows []ReportPosition) ReportPositions {
+	out := ReportPositions{ByEndReason: []ReportReasonCount{}}
+	out.Offers.NoticeResults = []ReportReasonCount{}
+	ends, notices := map[string]int{}, map[string]int{}
+	var offerWait, idleWait, queuedWait, delay []int64
+	for _, p := range rows {
+		out.Total++
+		if p.EndReason != "" {
+			ends[p.EndReason]++
+		}
+		switch {
+		case p.CommandsStarted == 0:
+			out.Commands.None++
+		case p.CommandsStarted == 1:
+			out.Commands.One++
+		case p.CommandsStarted == 2:
+			out.Commands.Two++
+		case p.CommandsStarted == 3:
+			out.Commands.Three++
+		default:
+			out.Commands.FourPlus++
+		}
+		if p.RequeuedFrom != "" {
+			out.Requeued++
+		}
+		out.Extensions += p.Extensions
+		if p.OfferWaitMS > 0 {
+			offerWait = append(offerWait, p.OfferWaitMS)
+		}
+		if p.IdleWaitMS > 0 {
+			idleWait = append(idleWait, p.IdleWaitMS)
+		}
+		out.Offers.Passed += p.OfferPasses
+		if p.OfferedAt > 0 {
+			out.Offers.Offered++
+			queuedWait = append(queuedWait, max(0, p.OfferedAt-p.CreatedAt))
+			if p.DeliveredAt > 0 {
+				out.Offers.Delivered++
+				delay = append(delay, max(0, p.DeliveredAt-p.OfferedAt))
+			}
+		}
+		if p.EndReason == EndNoAnswer {
+			out.Offers.LapsedAfterDelivery++
+		}
+		if p.NoticeResult != "" {
+			notices[p.NoticeResult]++
+		}
+	}
+	out.ByEndReason = countsByName(ends)
+	out.Offers.NoticeResults = countsByName(notices)
+	out.OfferWaitMS, out.IdleWaitMS = distOf(offerWait), distOf(idleWait)
+	out.Offers.DeliveryDelayMS = distOf(delay)
+	sort.Slice(queuedWait, func(i, j int) bool { return queuedWait[i] < queuedWait[j] })
+	if n := len(queuedWait); n > 0 {
+		out.QueuedWaitMS = ReportWait{P50: nearestRank(queuedWait, 50), P90: nearestRank(queuedWait, 90), Max: queuedWait[n-1]}
+	}
+	return out
+}
+
+func countsByName(m map[string]int) []ReportReasonCount {
+	out := make([]ReportReasonCount, 0, len(m))
+	for k, n := range m {
+		out = append(out, ReportReasonCount{Reason: k, Count: n})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Reason < out[j].Reason })
+	return out
+}
+
+func distOf(values []int64) ReportDist {
+	if len(values) == 0 {
+		return ReportDist{}
+	}
+	sorted := append([]int64(nil), values...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	var total int64
+	for _, v := range sorted {
+		total += v
+	}
+	return ReportDist{N: len(sorted), Total: total, P50: nearestRank(sorted, 50), P90: nearestRank(sorted, 90), Max: sorted[len(sorted)-1]}
 }

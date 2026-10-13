@@ -102,6 +102,9 @@ func (m *Module) hasLeaseActivity(held []leaseRow) bool {
 	if len(held) > 0 {
 		return true
 	}
-	n, err := m.store.CountWaiting(context.Background())
-	return err == nil && n > 0
+	if n, err := m.store.CountWaiting(context.Background()); err == nil && n > 0 {
+		return true
+	}
+	// A position between two commands holds the host with nothing held or waiting.
+	return m.anyLivePosition()
 }

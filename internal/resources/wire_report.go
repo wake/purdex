@@ -48,6 +48,8 @@ type Report struct {
 	// Shadow is the advise counterfactual: how long v2 would have made the
 	// requests wait (the input of gate G2).
 	Shadow ReportShadow `json:"shadow"`
+	// Positions is amendment A: the queue unit, by session (A §5).
+	Positions ReportPositions `json:"positions"`
 }
 
 // ReportZones is the share of sampled time in each zone, from the minute rows
@@ -133,6 +135,10 @@ type ReportPaths struct {
 	Immediate int `json:"immediate"`
 	Waited    int `json:"waited"`
 	Overrun   int `json:"overrun"`
+	// Offer is the first command of an offered position, Continued a command
+	// granted inside a position's idle window (amendment A).
+	Offer     int `json:"offer"`
+	Continued int `json:"continued"`
 }
 
 // ReportWait is the wait percentiles in ms; all 0 with no recorded grant.
@@ -169,4 +175,62 @@ type ReportKind struct {
 	Weight  int     `json:"weight"`
 	PeakMax float64 `json:"peak_max"`
 	MeanAvg float64 `json:"mean_avg"`
+}
+
+// ReportPositions describes the positions created in the period (amendment A §5).
+type ReportPositions struct {
+	Total       int                 `json:"total"`
+	ByEndReason []ReportReasonCount `json:"by_end_reason"`
+	// Commands counts positions by how many commands they started.
+	Commands ReportCommandCounts `json:"commands"`
+	// Requeued are positions made by a limit for the ask rows of another.
+	Requeued int `json:"requeued"`
+	// Extensions is how many final notices were given.
+	Extensions int `json:"extensions"`
+	// OfferWaitMS and IdleWaitMS are the time the offered / idle windows held the
+	// host while someone waited, over the positions that have any (#10): the cost of V16 and V17.
+	OfferWaitMS ReportDist `json:"offer_wait_ms"`
+	IdleWaitMS  ReportDist `json:"idle_wait_ms"`
+	// QueuedWaitMS is offered_at - created_at over the offered positions.
+	QueuedWaitMS ReportWait   `json:"queued_wait_ms"`
+	Offers       ReportOffers `json:"offers"`
+}
+
+// ReportReasonCount is a count by end reason.
+type ReportReasonCount struct {
+	Reason string `json:"reason"`
+	Count  int    `json:"count"`
+}
+
+// ReportCommandCounts counts positions by commands started.
+type ReportCommandCounts struct {
+	None     int `json:"none"`
+	One      int `json:"one"`
+	Two      int `json:"two"`
+	Three    int `json:"three"`
+	FourPlus int `json:"four_plus"`
+}
+
+// ReportDist is a total with nearest-rank percentiles; all 0 with no value.
+type ReportDist struct {
+	N     int   `json:"n"`
+	Total int64 `json:"total"`
+	P50   int64 `json:"p50"`
+	P90   int64 `json:"p90"`
+	Max   int64 `json:"max"`
+}
+
+// ReportOffers is how the offers went.
+type ReportOffers struct {
+	Offered   int `json:"offered"`
+	Delivered int `json:"delivered"`
+	// Passed is the number of times an offer was not delivered in time and
+	// passed (the sum of offer_passes).
+	Passed int `json:"passed"`
+	// DeliveryDelayMS is delivered_at - offered_at over the delivered offers.
+	DeliveryDelayMS ReportDist `json:"delivery_delay_ms"`
+	// LapsedAfterDelivery are the positions that ended no_answer.
+	LapsedAfterDelivery int `json:"lapsed_after_delivery"`
+	// NoticeResults counts positions by the outcome of their last notice.
+	NoticeResults []ReportReasonCount `json:"notice_results"`
 }
