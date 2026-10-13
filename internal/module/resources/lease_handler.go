@@ -72,6 +72,9 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 	case req.Scope != "" && req.Scope != resources.ScopeProcess && req.Scope != resources.ScopeSessionNew:
 		writeErr(w, http.StatusBadRequest, resources.ErrBadRequest, "scope must be process or session-new")
 		return
+	case req.Mode != "" && req.Mode != resources.CallQueue && req.Mode != resources.CallAsk && req.Mode != resources.CallWait:
+		writeErr(w, http.StatusBadRequest, resources.ErrBadRequest, "mode must be queue, ask or wait")
+		return
 	case req.HolderPID <= 0:
 		writeErr(w, http.StatusBadRequest, resources.ErrBadRequest, "holder_pid is required")
 		return
@@ -127,6 +130,9 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 		SessionID: session, HolderPID: req.HolderPID, HolderStart: req.HolderStart, Scope: req.Scope,
 		ToolUseID: req.ToolUseID, Parkable: req.Parkable, CreatedAt: now.UnixMilli(), DeadlineAt: now.Add(wait).UnixMilli(),
 		LeaseUntil: now.Add(resources.LeaseS * time.Second).UnixMilli(),
+		Mode:       req.Mode,
+		Command:    resources.CutCommand(req.Command, resources.MaxCommandBytes),
+		Cwd:        resources.CutCommand(req.Cwd, resources.MaxCwdBytes),
 	}
 	if row.Scope == "" {
 		row.Scope = resources.ScopeProcess
@@ -208,7 +214,7 @@ func (m *Module) replay(w http.ResponseWriter, r *http.Request, req resources.Le
 	// is only what the client itself sent, so a replay is the same request whatever
 	// the lookup found this time or the time before.
 	sessionOK := row.SessionID == req.SessionID || (req.SessionID == "" && row.Scope == resources.ScopeProcess)
-	same := sessionOK && row.ToolUseID == req.ToolUseID
+	same := sessionOK && row.ToolUseID == req.ToolUseID && row.Mode == req.Mode
 	if req.Kind != "" {
 		same = same && row.Kind == req.Kind
 	} else {
