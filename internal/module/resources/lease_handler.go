@@ -143,6 +143,19 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A call of a session that has a parked request of the same kind and weight
+	// takes that request over instead of making a new one (spec D-4′).
+	if adopted, ok := m.reattach(row); ok {
+		if adopted.State == resources.StateWaiting {
+			m.admissionPass(r.Context(), adopted.ID)
+			if again, found, err := m.store.Get(adopted.ID); err == nil && found {
+				adopted = again
+			}
+		}
+		writeJSON(w, http.StatusOK, m.leaseResponse(adopted, set, fallback))
+		return
+	}
+
 	m.stateMu.Lock()
 	got, created, err := m.store.Create(row)
 	m.stateMu.Unlock()
@@ -448,4 +461,40 @@ func (m *Module) leaseResponse(row leaseRow, set resources.Settings, fallback bo
 		}
 	}
 	return resp
+}
+
+// reattach takes over the oldest parked row of the call's session with the same
+// kind and weight (never a waiting row that is not parked: two parallel calls
+// of a session are two requests). A lost compare-and-set tries the next one.
+// created_at is kept, so the row keeps its place. ok is false when there is
+// nothing to take over (or no session to match on).
+func (m *Module) reattach(n leaseRow) (leaseRow, bool) {
+	if n.SessionID == "" {
+		return leaseRow{}, false
+	}
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	cands, err := m.store.ParkedFor(n.SessionID, n.Kind, n.Weight)
+	if err != nil {
+		m.logf("[resources] re-attach: list parked leases: %v", err)
+		return leaseRow{}, false
+	}
+	for _, c := range cands {
+		won, err := m.store.Adopt(c, n, n.DeadlineAt, n.LeaseUntil)
+		if err != nil {
+			m.logf("[resources] re-attach: adopt %s: %v", c.ID, err)
+			return leaseRow{}, false
+		}
+		if !won {
+			continue
+		}
+		got, ok, err := m.store.Get(c.ID)
+		if err != nil || !ok {
+			return leaseRow{}, false
+		}
+		m.logf("[resources] lease %s (%s) re-attached by a new call of session %s", got.ID, got.Kind, got.SessionID)
+		m.wake() // the old client's poll answers "replaced"
+		return got, true
+	}
+	return leaseRow{}, false
 }

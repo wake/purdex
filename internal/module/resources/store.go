@@ -338,6 +338,27 @@ func (s *leaseStore) Park(id string, deadlineAt, until int64) (bool, error) {
 		WHERE id = ? AND state = 'waiting' AND parked_until = 0 AND deadline_at = ?`, until, until, id, deadlineAt)
 }
 
+// ParkedFor lists the parked rows of a session with the same kind and weight,
+// oldest request first: what a new call of that session may take over.
+func (s *leaseStore) ParkedFor(sessionID, kind string, weight int) ([]leaseRow, error) {
+	return s.many(`SELECT `+leaseCols+` FROM resource_leases
+		WHERE state = 'waiting' AND parked_until > 0 AND session_id = ? AND kind = ? AND weight = ?
+		ORDER BY created_at, id`, sessionID, kind, weight)
+}
+
+// Adopt gives a parked row to a new call, by one compare-and-set on the old
+// client id and on the row still being parked: the new client id, holder, tool
+// use and scope replace the old ones, the park ends, and the deadline and the
+// lease start again. created_at stays, so the place in the queue does.
+func (s *leaseStore) Adopt(old leaseRow, n leaseRow, deadlineAt, leaseUntil int64) (bool, error) {
+	return s.changed(`
+		UPDATE resource_leases
+		SET client_id = ?, holder_pid = ?, holder_start = ?, tool_use_id = ?, scope = ?,
+			parked_until = 0, deadline_at = ?, lease_until = ?
+		WHERE id = ? AND state = 'waiting' AND client_id = ? AND parked_until > 0`,
+		n.ClientID, n.HolderPID, n.HolderStart, n.ToolUseID, n.Scope, deadlineAt, leaseUntil, old.ID, old.ClientID)
+}
+
 // MaxGrantedAt is the newest granted_at of any row, held or ended (0 when
 // nothing was ever granted): where the gap between two grants is counted from
 // after a restart.
