@@ -76,7 +76,7 @@ func (m *Module) onRead(rd reads.Read) {
 // supersededLocked: a newer registration of the same paired phone, bundle and environment exists — the APNs token rotated,
 // and d is the dead one (APNs will say so on the next push; until then nothing should be kept for it). A registration of the
 // same phone in another environment is not a replacement. Newer is the later registration of this run, else the later
-// update, else the larger id. Under m.mu.
+// update; if even that is equal the order is unknown and nobody is superseded. Under m.mu.
 func (m *Module) supersededLocked(d push.Device) bool {
 	if d.OwnerDeviceID == "" {
 		return false
@@ -90,13 +90,11 @@ func (m *Module) supersededLocked(d push.Device) bool {
 			if m.regSeq[o.DeviceID] > m.regSeq[d.DeviceID] {
 				return true
 			}
-		case o.UpdatedAt != d.UpdatedAt:
-			if o.UpdatedAt > d.UpdatedAt {
-				return true
-			}
-		case o.DeviceID > d.DeviceID:
+		case o.UpdatedAt > d.UpdatedAt:
 			return true
 		}
+		// equal on both: the order is unknown (a restart and the same millisecond), and a device id, being a hash of the token,
+		// says nothing about it — neither supersedes the other.
 	}
 	return false
 }

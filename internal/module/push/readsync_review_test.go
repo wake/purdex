@@ -3,6 +3,7 @@ package push
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -121,5 +122,36 @@ func TestReadSyncPush_OnReadRecordsUnderTheModuleLock(t *testing.T) {
 	e.read("r1", 1)
 	if adds != 2 {
 		t.Fatalf("Add ran %d times, want once per syncing registration", adds)
+	}
+}
+
+// After a restart every registration has the same (zero) registration order, so "newer" rests on updated_at; when even that is
+// the same millisecond the order is unknown and NEITHER supersedes the other (the device id says nothing about which token is
+// newer). An over-delivery to a dead token is harmless; losing reads for the live one is not. Mutation gate: break the tie by
+// device id → red.
+func TestReadSyncPush_AnUnknownOrderSupersedesNobody(t *testing.T) {
+	e := newRSPushEnv(t)
+	mk := func(tok string, updated int64) push.Device {
+		d := device(tok, "en", "mlab")
+		d.OwnerDeviceID, d.UpdatedAt = "d_owner000001", updated
+		d.Prefs.ReadSync = true
+		return d
+	}
+	small, large := mk(strings.Repeat("00", 32), 1_000), mk(strings.Repeat("ff", 32), 1_000)
+	e.mod.mu.Lock()
+	e.mod.devices[small.DeviceID], e.mod.devices[large.DeviceID] = small, large
+	for _, d := range []push.Device{small, large} {
+		if e.mod.supersededLocked(d) {
+			e.mod.mu.Unlock()
+			t.Fatalf("%s superseded with an unknown registration order", d.DeviceID)
+		}
+	}
+	// a clearly later update wins, whatever the ids
+	later := mk(strings.Repeat("11", 32), 2_000)
+	e.mod.devices[later.DeviceID] = later
+	got := e.mod.supersededLocked(small) && e.mod.supersededLocked(large) && !e.mod.supersededLocked(later)
+	e.mod.mu.Unlock()
+	if !got {
+		t.Fatal("a later updated_at must supersede the earlier ones, and only them")
 	}
 }
