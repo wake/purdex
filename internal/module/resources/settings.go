@@ -47,3 +47,19 @@ func (m *Module) noteSettings(err error) {
 		m.logf("[resources] settings readable again")
 	}
 }
+
+// settingsRead is the setting as it was actually read: ok is false when there is
+// no reader or the read failed (settings then reads as measure, which is a safe
+// default for a request but not a fact: a drain must not act on it).
+func (m *Module) settingsRead() (resources.Settings, bool) {
+	if m.settingsSrc == nil || m.store == nil {
+		return resources.Settings{}, false
+	}
+	s, err := m.settingsSrc.ResourcesSettings()
+	if err != nil {
+		m.noteSettings(err)
+		return resources.Settings{}, false
+	}
+	m.noteSettings(nil)
+	return s.Effective(), true
+}
