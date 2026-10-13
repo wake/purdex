@@ -44,6 +44,19 @@ const (
 	// weight (test-full and build are 35; a single-package go test is 15).
 	DefaultHeavyMinWeight = 30
 
+	// v2 (lease-v2 spec "Settings").
+	DefaultMemWarnPct       = 80
+	DefaultMemDangerPct     = 90
+	DefaultGapS             = 30
+	DefaultTrendWindowS     = 60
+	DefaultTrendMemDPPM     = 10 // tenths of a point per minute: 1.0
+	DefaultTrendCPUDPPM     = 50 // 5.0
+	DefaultParkS            = 900
+	DefaultAlertDangerS     = 180
+	DefaultAlertStuckS      = 600
+	DefaultAlertLeaseMemPct = 20
+	DefaultAlertPush        = 0
+
 	minDeadlineS, maxDeadlineS         = 10, 590
 	minWarmupS, maxWarmupS             = 0, 300
 	minFloorPct, maxFloorPct           = 0, 100
@@ -52,6 +65,18 @@ const (
 	minKindWeight, maxKindWeight       = 1, 100
 	minHeavyWeight, maxHeavyWeight     = 1, 100
 	maxKinds                           = 32
+
+	minMemWarnPct, maxMemWarnPct             = 50, 95
+	minMemDangerPct, maxMemDangerPct         = minMemWarnPct + 1, 99
+	minGapS, maxGapS                         = 0, 300
+	minTrendWindowS, maxTrendWindowS         = 20, 300
+	minTrendMemDPPM, maxTrendMemDPPM         = 1, 100
+	minTrendCPUDPPM, maxTrendCPUDPPM         = 1, 500
+	minParkS, maxParkS                       = 60, 3600
+	minAlertDangerS, maxAlertDangerS         = 30, 3600
+	minAlertStuckS, maxAlertStuckS           = 60, 7200
+	minAlertLeaseMemPct, maxAlertLeaseMemPct = 5, 90
+	minAlertPush, maxAlertPush               = 0, 1
 )
 
 // DefaultKinds are the built-in kinds and their weights (spec D-7).
@@ -88,6 +113,28 @@ type Settings struct {
 	// HeavyMinWeight is the weight from which a held lease counts as heavy in
 	// the host timeline (spec D-8.2 heavy_held).
 	HeavyMinWeight *int `json:"heavy_min_weight,omitempty"`
+
+	// MemWarnPct and MemDangerPct are the memory shares that enter the
+	// warning and danger zones; danger must be above warn.
+	MemWarnPct   *int `json:"mem_warn_pct,omitempty"`
+	MemDangerPct *int `json:"mem_danger_pct,omitempty"`
+	// GapS is the pause after any grant before the next one is considered.
+	GapS *int `json:"gap_s,omitempty"`
+	// TrendWindowS is the window the usage trend is read over.
+	TrendWindowS *int `json:"trend_window_s,omitempty"`
+	// TrendMemDPPM and TrendCPUDPPM are the slope thresholds, in tenths of a
+	// point per minute.
+	TrendMemDPPM *int `json:"trend_mem_dppm,omitempty"`
+	TrendCPUDPPM *int `json:"trend_cpu_dppm,omitempty"`
+	// ParkS is how long a parked waiter keeps its place.
+	ParkS *int `json:"park_s,omitempty"`
+	// AlertDangerS, AlertStuckS and AlertLeaseMemPct are the anomaly rule
+	// thresholds (A1, A5, A3).
+	AlertDangerS     *int `json:"alert_danger_s,omitempty"`
+	AlertStuckS      *int `json:"alert_stuck_s,omitempty"`
+	AlertLeaseMemPct *int `json:"alert_lease_mem_pct,omitempty"`
+	// AlertPush (0 or 1) lets user alerts also go out as push.
+	AlertPush *int `json:"alert_push,omitempty"`
 }
 
 func intp(n int) *int { return &n }
@@ -134,10 +181,26 @@ func (s Settings) Validate() error {
 		{"max_hold_s", s.MaxHoldS, minMaxHoldS, maxMaxHoldS},
 		{"ewma_half_life_s", s.EWMAHalfLifeS, minEWMAHalfLifeS, maxEWMAHalfLifeS},
 		{"heavy_min_weight", s.HeavyMinWeight, minHeavyWeight, maxHeavyWeight},
+		{"mem_warn_pct", s.MemWarnPct, minMemWarnPct, maxMemWarnPct},
+		{"mem_danger_pct", s.MemDangerPct, minMemDangerPct, maxMemDangerPct},
+		{"gap_s", s.GapS, minGapS, maxGapS},
+		{"trend_window_s", s.TrendWindowS, minTrendWindowS, maxTrendWindowS},
+		{"trend_mem_dppm", s.TrendMemDPPM, minTrendMemDPPM, maxTrendMemDPPM},
+		{"trend_cpu_dppm", s.TrendCPUDPPM, minTrendCPUDPPM, maxTrendCPUDPPM},
+		{"park_s", s.ParkS, minParkS, maxParkS},
+		{"alert_danger_s", s.AlertDangerS, minAlertDangerS, maxAlertDangerS},
+		{"alert_stuck_s", s.AlertStuckS, minAlertStuckS, maxAlertStuckS},
+		{"alert_lease_mem_pct", s.AlertLeaseMemPct, minAlertLeaseMemPct, maxAlertLeaseMemPct},
+		{"alert_push", s.AlertPush, minAlertPush, maxAlertPush},
 	} {
 		if f.v != nil && (*f.v < f.lo || *f.v > f.hi) {
 			return fmt.Errorf("%w: %s must be between %d and %d", ErrSettings, f.name, f.lo, f.hi)
 		}
+	}
+	// The pair rule reads unset fields as their defaults, so a lone warn
+	// above the default danger is refused too.
+	if warn, danger := s.MemWarn(), s.rawMemDanger(); danger <= warn {
+		return fmt.Errorf("%w: mem_danger_pct (%d) must be above mem_warn_pct (%d)", ErrSettings, danger, warn)
 	}
 	return nil
 }
@@ -155,6 +218,18 @@ func (s Settings) Effective() Settings {
 		MaxHoldS:       intp(clampInt(s.MaxHoldS, DefaultMaxHoldS, minMaxHoldS, maxMaxHoldS)),
 		EWMAHalfLifeS:  intp(clampInt(s.EWMAHalfLifeS, DefaultEWMAHalfLifeS, minEWMAHalfLifeS, maxEWMAHalfLifeS)),
 		HeavyMinWeight: intp(clampInt(s.HeavyMinWeight, DefaultHeavyMinWeight, minHeavyWeight, maxHeavyWeight)),
+
+		MemWarnPct:       intp(s.MemWarn()),
+		MemDangerPct:     intp(s.MemDanger()),
+		GapS:             intp(clampInt(s.GapS, DefaultGapS, minGapS, maxGapS)),
+		TrendWindowS:     intp(clampInt(s.TrendWindowS, DefaultTrendWindowS, minTrendWindowS, maxTrendWindowS)),
+		TrendMemDPPM:     intp(clampInt(s.TrendMemDPPM, DefaultTrendMemDPPM, minTrendMemDPPM, maxTrendMemDPPM)),
+		TrendCPUDPPM:     intp(clampInt(s.TrendCPUDPPM, DefaultTrendCPUDPPM, minTrendCPUDPPM, maxTrendCPUDPPM)),
+		ParkS:            intp(clampInt(s.ParkS, DefaultParkS, minParkS, maxParkS)),
+		AlertDangerS:     intp(clampInt(s.AlertDangerS, DefaultAlertDangerS, minAlertDangerS, maxAlertDangerS)),
+		AlertStuckS:      intp(clampInt(s.AlertStuckS, DefaultAlertStuckS, minAlertStuckS, maxAlertStuckS)),
+		AlertLeaseMemPct: intp(clampInt(s.AlertLeaseMemPct, DefaultAlertLeaseMemPct, minAlertLeaseMemPct, maxAlertLeaseMemPct)),
+		AlertPush:        intp(clampInt(s.AlertPush, DefaultAlertPush, minAlertPush, maxAlertPush)),
 	}
 	for name, w := range s.Kinds {
 		out.Kinds[name] = min(max(w, minKindWeight), maxKindWeight)
@@ -215,4 +290,67 @@ func (s Settings) Weight(kind string) (weight int, ok bool) {
 	}
 	w, ok := DefaultKinds[kind]
 	return w, ok
+}
+
+// MemWarn is the memory share, in percent, that enters the warning zone.
+func (s Settings) MemWarn() int {
+	return clampInt(s.MemWarnPct, DefaultMemWarnPct, minMemWarnPct, maxMemWarnPct)
+}
+
+// rawMemDanger is the danger share before the pair rule lifts it above warn.
+func (s Settings) rawMemDanger() int {
+	return clampInt(s.MemDangerPct, DefaultMemDangerPct, minMemDangerPct, maxMemDangerPct)
+}
+
+// MemDanger is the memory share, in percent, that enters the danger zone; it
+// is always above MemWarn (lifted to warn+1 when the stored pair is not).
+func (s Settings) MemDanger() int {
+	return min(max(s.rawMemDanger(), s.MemWarn()+1), maxMemDangerPct)
+}
+
+// Gap is the pause after any grant before the next one is considered.
+func (s Settings) Gap() time.Duration {
+	return time.Duration(clampInt(s.GapS, DefaultGapS, minGapS, maxGapS)) * time.Second
+}
+
+// TrendWindow is the window the usage trend is read over.
+func (s Settings) TrendWindow() time.Duration {
+	return time.Duration(clampInt(s.TrendWindowS, DefaultTrendWindowS, minTrendWindowS, maxTrendWindowS)) * time.Second
+}
+
+// TrendMemPPM is the memory slope, in points per minute, past which the trend
+// is rising or falling.
+func (s Settings) TrendMemPPM() float64 {
+	return float64(clampInt(s.TrendMemDPPM, DefaultTrendMemDPPM, minTrendMemDPPM, maxTrendMemDPPM)) / 10
+}
+
+// TrendCPUPPM is the same for the cpu share.
+func (s Settings) TrendCPUPPM() float64 {
+	return float64(clampInt(s.TrendCPUDPPM, DefaultTrendCPUDPPM, minTrendCPUDPPM, maxTrendCPUDPPM)) / 10
+}
+
+// Park is how long a parked waiter keeps its place.
+func (s Settings) Park() time.Duration {
+	return time.Duration(clampInt(s.ParkS, DefaultParkS, minParkS, maxParkS)) * time.Second
+}
+
+// AlertDanger is how long the host may stay in danger before rule A1 fires.
+func (s Settings) AlertDanger() time.Duration {
+	return time.Duration(clampInt(s.AlertDangerS, DefaultAlertDangerS, minAlertDangerS, maxAlertDangerS)) * time.Second
+}
+
+// AlertStuck is how long the queue head may wait before rule A5 fires.
+func (s Settings) AlertStuck() time.Duration {
+	return time.Duration(clampInt(s.AlertStuckS, DefaultAlertStuckS, minAlertStuckS, maxAlertStuckS)) * time.Second
+}
+
+// AlertLeaseMem is the share of host memory one lease may measure before
+// rule A3 fires.
+func (s Settings) AlertLeaseMem() int {
+	return clampInt(s.AlertLeaseMemPct, DefaultAlertLeaseMemPct, minAlertLeaseMemPct, maxAlertLeaseMemPct)
+}
+
+// AlertPushOn reports whether user alerts also go out as push.
+func (s Settings) AlertPushOn() bool {
+	return clampInt(s.AlertPush, DefaultAlertPush, minAlertPush, maxAlertPush) == 1
 }
