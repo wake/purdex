@@ -11,6 +11,7 @@ import (
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/agent"
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/resources"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/team"
 )
@@ -111,8 +112,9 @@ func (m *Module) timeOutSpawn(op spawnRow) {
 
 // startTimeoutDetail is why a member did not register in time, for the failed op (#2761). The signal is the mod's own hello:
 // any session of this host whose mod said hello (it survives a restart, mod_hello) proves the hooks work here, so a member that
-// is late on such a host is a busy host; a host that never heard one is the one that needs `pdx setup`. Decided here, once, so
-// every CLI prints the same words.
+// is late on such a host is a busy host; a host that never heard one is the one that needs `pdx setup`. Both name the budget
+// and, when the resources module has a sample, the host's load under it. Computed when the op is read, so the words of one
+// failed op can change if a hello arrives later.
 func (m *Module) startTimeoutDetail() string {
 	secs := m.spawnBudget / 1000
 	m.mu.Lock()
@@ -124,10 +126,40 @@ func (m *Module) startTimeoutDetail() string {
 		}
 	}
 	m.mu.Unlock()
+	load := m.hostLoadNote()
 	if seen {
-		return fmt.Sprintf("主機忙，member 啟動太慢（%d 秒內沒完成註冊），名額已釋出，可以稍後重試", secs)
+		return fmt.Sprintf("主機忙：member 沒在 %d 秒內完成啟動%s，名額已釋出，可以稍後重試", secs, load)
 	}
-	return fmt.Sprintf("member 在 %d 秒內沒有註冊，這台主機從沒看過 Purdex hooks（pdx setup --agent cc）", secs)
+	return fmt.Sprintf("member 沒在 %d 秒內完成啟動%s，這台主機從沒看過 Purdex hooks（pdx setup --agent cc）", secs, load)
+}
+
+// hostLoadNote is "（load 1/5/15，N 核；記憶體已用 X%，壓力：…）" from the latest resources sample, or "" without one: the
+// sample is read, never taken here (no fork). The figures are the resources module's own (load average, memory in use, the
+// kernel's memory pressure level: 1 normal, 2 warning, 4 critical).
+func (m *Module) hostLoadNote() string {
+	hr := m.hostReader
+	if hr == nil && m.core != nil && m.core.Registry != nil { // looked up here: the resources module may Init after this one
+		if svc, ok := m.core.Registry.Get(resources.HostReaderKey); ok {
+			hr, _ = svc.(resources.HostReader)
+		}
+	}
+	if hr == nil {
+		return ""
+	}
+	h, ok := hr.LatestHost()
+	if !ok || h.NCPU <= 0 {
+		return ""
+	}
+	note := fmt.Sprintf("load %.1f／%.1f／%.1f，%d 核；記憶體已用 %.0f%%", h.Load1, h.Load5, h.Load15, h.NCPU, h.Mem)
+	switch h.Pressure {
+	case 1:
+		note += "，壓力：正常"
+	case 2:
+		note += "，壓力：警告"
+	case 4:
+		note += "，壓力：嚴重"
+	}
+	return "（" + note + "）"
 }
 
 func (m *Module) memberOnPane(pane string) (team.Origin, bool) {

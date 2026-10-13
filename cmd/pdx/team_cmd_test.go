@@ -330,8 +330,8 @@ func TestSpawnCmd_AnOpThatNeverSettlesEndsAtTheBound(t *testing.T) {
 // Spec §14: member_start_timeout exits 14, and the CLI prints what the daemon decided (the op's detail) — it does not guess
 // (#2761); any other failure reason exits 1. Neither sends the brief; the reason is the last stderr token.
 func TestSpawnCmd_StartTimeoutExits14(t *testing.T) {
-	busy := "主機忙，member 啟動太慢（60 秒內沒完成註冊），名額已釋出，可以稍後重試"
-	setup := "member 在 60 秒內沒有註冊，這台主機從沒看過 Purdex hooks（pdx setup --agent cc）"
+	busy := "主機忙：member 沒在 20 秒內完成啟動（load 18.1／16.4／16.3，10 核；記憶體已用 84%，壓力：警告），名額已釋出，可以稍後重試"
+	setup := "member 沒在 20 秒內完成啟動，這台主機從沒看過 Purdex hooks（pdx setup --agent cc）"
 	for _, c := range []struct {
 		name, reason, detail string
 		want                 int

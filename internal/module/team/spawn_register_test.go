@@ -3,11 +3,11 @@ package teammod
 import (
 	"context"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/resources"
 	"github.com/wake/purdex/internal/team"
 	"github.com/wake/purdex/internal/tmux"
 )
@@ -35,7 +35,7 @@ func TestSpawn_AMemberThatRegistersIsStoredAndTitled(t *testing.T) {
 	}
 }
 
-// Spec §7.2 step 5: no registration within 60 s of the launch → the session
+// Spec §7.2 step 5: no registration within 20 s of the launch → the session
 // is killed (recorded id, recorded generation) and the op fails
 // member_start_timeout, so it no longer counts against the limit. Mutation
 // gate: skip the kill → red.
@@ -52,14 +52,14 @@ func TestSpawn_StartTimeoutKillsAndFreesTheSlot(t *testing.T) {
 	}
 }
 
-// Spec §7.2 step 5 ("Wait up to 60 s … On timeout: kill"), review R1 as the
+// Spec §7.2 step 5 ("Wait up to 20 s … On timeout: kill"), review R1 as the
 // critic read it: every poll judges the deadline first, so a poll that wakes
-// past launched_at + 60 s times out even when the member has shown up by
+// past launched_at + 20 s times out even when the member has shown up by
 // then. Mutation gate: look at the member before the deadline → red.
 func TestSpawn_PastTheBudgetItTimesOutEvenWithAMemberThere(t *testing.T) {
 	f, root := newSpawnFixture(t, 1)
 	f.m.spawnSleep = func(context.Context, time.Duration) {
-		f.clock.Add(61_000)
+		f.clock.Add(21_000)
 		f.register("%0", "sid-m1")
 	}
 	if op := f.runOp(1, root, nil); op.State != team.SpawnFailed || op.Reason != team.SpawnReasonStartTimeout || len(f.tmux.KillIfInstanceCalls()) != 1 {
@@ -97,7 +97,7 @@ func TestSpawn_AtTheDeadlineOnlyOneRunnerActs(t *testing.T) {
 		if _, won := f.m.spawnRegister(op); !won {
 			t.Fatal("the registration did not win")
 		}
-		f.clock.Add(61_000)
+		f.clock.Add(21_000)
 		f.m.spawnRegister(op) // the second runner, with its read from before
 		now, _, _ := f.m.store.GetSpawnOp(op.ID)
 		if now.State != team.SpawnRunning || now.Step != team.StepRegistered || len(f.tmux.KillIfInstanceCalls()) != 0 {
@@ -107,7 +107,7 @@ func TestSpawn_AtTheDeadlineOnlyOneRunnerActs(t *testing.T) {
 	t.Run("timeout first", func(t *testing.T) {
 		f, op := launched(t)
 		f.frames.afterRead = func() {
-			f.clock.Add(61_000)
+			f.clock.Add(21_000)
 			f.m.spawnRegister(op) // the second runner times the op out
 		}
 		if _, won := f.m.spawnRegister(op); won {
@@ -164,49 +164,35 @@ func TestSpawn_StopLeavesTheOpRunning(t *testing.T) {
 	}
 }
 
-// #2761: a member that registers 25 s after the launch (a loaded host: 13–17 s was normal, 20 s often missed) is in time
-// under the 60 s budget; one that shows up past 60 s still times out. Mutation gate: SpawnRegisterS back to 20 → the first
-// case red.
-func TestSpawn_ASlowHostRegistersWithinTheBudget(t *testing.T) {
-	for _, c := range []struct {
-		name     string
-		after    int64
-		wantDone bool
-	}{{"25 s", 25_000, true}, {"past the budget", 61_000, false}} {
-		t.Run(c.name, func(t *testing.T) {
-			f, root := newSpawnFixture(t, 1)
-			start := f.clock.Load()
-			registered := false
-			f.m.spawnSleep = func(context.Context, time.Duration) {
-				f.clock.Add(1_000)
-				if !registered && f.clock.Load()-start >= c.after {
-					registered = true
-					f.register("%0", "sid-m1")
-				}
-			}
-			op := f.runOp(1, root, nil)
-			if c.wantDone && (op.State != team.SpawnRunning && op.State != team.SpawnDone || op.Reason == team.SpawnReasonStartTimeout) {
-				t.Fatalf("op = %+v, want a member registered in time", op)
-			}
-			if !c.wantDone && (op.State != team.SpawnFailed || op.Reason != team.SpawnReasonStartTimeout) {
-				t.Fatalf("op = %+v, want member_start_timeout", op)
-			}
-		})
-	}
+// #2761: the failed op says WHY in its detail, decided here and not guessed by the CLI. A host whose mods have said hello
+// (hooks work) is busy; a host that never heard one is the one that needs `pdx setup`. The seconds come from the budget in force
+// and the load from the resources sample, left out without one. Mutation gate: drop the hello condition (always the setup
+// hint, or never), or the load note → a case red.
+type fakeHostReader struct {
+	h  resources.HostUse
+	ok bool
 }
 
-// #2761: the failed op says WHY in its detail, decided here and not guessed by the CLI. A host whose mods have said hello
-// (hooks work) is busy; a host that never heard one is the one that needs `pdx setup`. The seconds are the budget in force.
-// Mutation gate: drop the hello condition (always the setup hint, or never) → one case red.
+func (r fakeHostReader) LatestHost() (resources.HostUse, bool) { return r.h, r.ok }
+
 func TestSpawnView_StartTimeoutDetailSaysBusyOrNoHooks(t *testing.T) {
+	load := "（load 18.1／16.4／16.3，10 核；記憶體已用 84%，壓力：警告）"
+	sample := fakeHostReader{h: resources.HostUse{Load1: 18.1, Load5: 16.4, Load15: 16.3, NCPU: 10, Mem: 84, Pressure: 2}, ok: true}
 	for _, c := range []struct {
-		name      string
-		hello     bool
-		wantBusy  bool
-		wantSetup bool
-	}{{"hooks seen", true, true, false}, {"hooks never seen", false, false, true}} {
+		name   string
+		hello  bool
+		reader resources.HostReader
+		want   string
+	}{
+		{"hooks seen, sample", true, sample, "主機忙：member 沒在 20 秒內完成啟動" + load + "，名額已釋出，可以稍後重試"},
+		{"hooks seen, no sample", true, nil, "主機忙：member 沒在 20 秒內完成啟動，名額已釋出，可以稍後重試"},
+		{"hooks seen, sample not usable yet", true, fakeHostReader{}, "主機忙：member 沒在 20 秒內完成啟動，名額已釋出，可以稍後重試"},
+		{"hooks never seen, sample", false, sample, "member 沒在 20 秒內完成啟動" + load + "，這台主機從沒看過 Purdex hooks（pdx setup --agent cc）"},
+		{"hooks never seen, no sample", false, nil, "member 沒在 20 秒內完成啟動，這台主機從沒看過 Purdex hooks（pdx setup --agent cc）"},
+	} {
 		t.Run(c.name, func(t *testing.T) {
 			f, root := newSpawnFixture(t, 1)
+			f.m.hostReader = c.reader
 			if c.hello {
 				f.m.mu.Lock()
 				f.m.modSeen["sid-old"] = helloInfo{ModVersion: "5", Agent: "cc", At: f.clock.Load() - 3_600_000}
@@ -220,16 +206,17 @@ func TestSpawnView_StartTimeoutDetailSaysBusyOrNoHooks(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(op.Detail, "60 秒") {
-				t.Errorf("detail %q does not carry the budget", op.Detail)
-			}
-			if got := strings.Contains(op.Detail, "主機忙"); got != c.wantBusy {
-				t.Errorf("busy hint = %v, want %v: %q", got, c.wantBusy, op.Detail)
-			}
-			if got := strings.Contains(op.Detail, "pdx setup --agent cc"); got != c.wantSetup {
-				t.Errorf("setup hint = %v, want %v: %q", got, c.wantSetup, op.Detail)
+			if op.Detail != c.want {
+				t.Errorf("detail\n got %q\nwant %q", op.Detail, c.want)
 			}
 		})
+	}
+	// the pressure levels (1 normal, 2 warning, 4 critical); an unknown one is left out
+	for lvl, want := range map[int]string{1: "，壓力：正常", 2: "，壓力：警告", 4: "，壓力：嚴重", 0: ""} {
+		m := &Module{hostReader: fakeHostReader{h: resources.HostUse{Load1: 1, NCPU: 2, Mem: 50, Pressure: lvl}, ok: true}}
+		if got, w := m.hostLoadNote(), "（load 1.0／0.0／0.0，2 核；記憶體已用 50%"+want+"）"; got != w {
+			t.Errorf("pressure %d: %q, want %q", lvl, got, w)
+		}
 	}
 	// any other reason carries no detail
 	f, root := newSpawnFixture(t, 1)

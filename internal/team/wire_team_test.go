@@ -49,8 +49,8 @@ func TestWireTeam_LiteralsArePinned(t *testing.T) {
 			t.Errorf("%s = %q, want %q", name, c.got, c.want)
 		}
 	}
-	if SpawnRegisterS != 60 || SpawnPollWaitS != 25 {
-		t.Errorf("limits = %d / %d, want 60 / 25", SpawnRegisterS, SpawnPollWaitS)
+	if SpawnRegisterS != 20 || SpawnPollWaitS != 25 {
+		t.Errorf("limits = %d / %d, want 20 / 25", SpawnRegisterS, SpawnPollWaitS)
 	}
 	// The brief prefix takes exactly the lead address, then the team id.
 	if got, want := fmt.Sprintf(MemberBriefPrefixFmt, "mlab/n10", "t-1"),

@@ -8,6 +8,8 @@ import (
 // HostRaw is what the sampler read from the host, before any arithmetic.
 type HostRaw struct {
 	Load1    float64
+	Load5    float64 // the same vm.loadavg read; shown in a failure's detail, not used in any figure
+	Load15   float64
 	NCPU     int
 	MemBytes uint64
 	// PageSize and the page counts come from vm_stat.
@@ -60,6 +62,8 @@ func clampFloat(x, lo, hi float64) float64 { return math.Min(math.Max(x, lo), hi
 func ComputeHost(r HostRaw) HostUse {
 	h := HostUse{
 		Load1:             r.Load1,
+		Load5:             r.Load5,
+		Load15:            r.Load15,
 		NCPU:              r.NCPU,
 		MemBytes:          r.MemBytes,
 		Pressure:          r.Pressure,

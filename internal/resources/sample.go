@@ -61,9 +61,11 @@ func (s *sysSampler) Sample(ctx context.Context) (HostRaw, []Proc, error) {
 	if err != nil {
 		return raw, nil, fmt.Errorf("sysctl vm.loadavg: %w", err)
 	}
-	if raw.Load1, err = parseLoadavg(buf); err != nil {
+	load, err := parseLoadavgAll(buf)
+	if err != nil {
 		return raw, nil, err
 	}
+	raw.Load1, raw.Load5, raw.Load15 = load[0], load[1], load[2]
 	ncpu, err := sysctlU32("hw.ncpu")
 	if err != nil {
 		return raw, nil, fmt.Errorf("sysctl hw.ncpu: %w", err)
@@ -124,14 +126,24 @@ const loadavgSize = 24
 
 // parseLoadavg returns load1 from a vm.loadavg buffer.
 func parseLoadavg(b []byte) (float64, error) {
+	l, err := parseLoadavgAll(b)
+	return l[0], err
+}
+
+// parseLoadavgAll returns the 1, 5 and 15 minute load averages of a vm.loadavg buffer (the same read, no more forks).
+func parseLoadavgAll(b []byte) ([3]float64, error) {
+	var l [3]float64
 	if len(b) != loadavgSize {
-		return 0, fmt.Errorf("vm.loadavg: %d bytes, want %d", len(b), loadavgSize)
+		return l, fmt.Errorf("vm.loadavg: %d bytes, want %d", len(b), loadavgSize)
 	}
 	fscale := binary.NativeEndian.Uint64(b[16:])
 	if fscale == 0 {
-		return 0, errors.New("vm.loadavg: fscale is 0")
+		return l, errors.New("vm.loadavg: fscale is 0")
 	}
-	return float64(binary.NativeEndian.Uint32(b[0:])) / float64(fscale), nil
+	for i := range l {
+		l[i] = float64(binary.NativeEndian.Uint32(b[4*i:])) / float64(fscale)
+	}
+	return l, nil
 }
 
 // vmStat is the part of vm_stat output D-1 uses.

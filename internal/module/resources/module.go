@@ -198,6 +198,7 @@ func (m *Module) Dependencies() []string { return []string{"peers", "hostconfig"
 // measuring only.
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
+	c.Registry.Register(resources.HostReaderKey, resources.HostReader(m))
 	if m.sampler == nil {
 		m.sampler = resources.NewSampler()
 		m.enableDiskGuard() // production wiring (a module with an injected sampler is a test's: its guard stays off)
@@ -222,6 +223,15 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	m.roots = src
 	return nil
+}
+
+// LatestHost is the host part of the last published snapshot (resources.HostReader); ok is false before a usable one.
+func (m *Module) LatestHost() (resources.HostUse, bool) {
+	snap := m.latest.Load()
+	if snap == nil || !snap.Available {
+		return resources.HostUse{}, false
+	}
+	return snap.Host, true
 }
 
 // openStore opens resources.db in the data dir. A failure is logged and

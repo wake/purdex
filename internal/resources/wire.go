@@ -70,6 +70,15 @@ func (s Snapshot) MarshalJSON() ([]byte, error) {
 	return json.Marshal(p)
 }
 
+// HostReaderKey is the registry key of the HostReader the resources module offers: the latest host sample, for a reader that must
+// not sample (or fork) itself, such as a failure's detail naming the load it happened under.
+const HostReaderKey = "resources.host-reader"
+
+// HostReader is the latest published host reading; ok is false until a tick has published a usable one.
+type HostReader interface {
+	LatestHost() (host HostUse, ok bool)
+}
+
 // HostUse is the host-wide part of a Snapshot.
 type HostUse struct {
 	// Measured is the D-1 figure, 0 to 100.
@@ -79,6 +88,8 @@ type HostUse struct {
 	// Mem is the vm_stat in-use share as a percentage.
 	Mem               float64 `json:"mem"`
 	Load1             float64 `json:"load1"`
+	Load5             float64 `json:"load5,omitempty"`
+	Load15            float64 `json:"load15,omitempty"`
 	NCPU              int     `json:"ncpu"`
 	MemBytes          uint64  `json:"mem_bytes"`
 	MemUsedBytes      uint64  `json:"mem_used_bytes"`
