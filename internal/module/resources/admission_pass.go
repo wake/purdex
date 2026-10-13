@@ -135,10 +135,32 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 			toGrant = append(toGrant, w)
 		}
 	} else {
+		// Parking happens here, before AdmitV2: a row past its deadline is parked
+		// first, so that this pass can never grant it (spec D-4′).
+		parked := 0
+		for i, w := range waiting {
+			if w.ParkedUntil != 0 || w.DeadlineAt > now.UnixMilli() {
+				continue
+			}
+			until := now.Add(set.Park()).UnixMilli()
+			won, err := m.store.Park(w.ID, w.DeadlineAt, until)
+			if err != nil {
+				m.logf("[resources] admission: park %s: %v", w.ID, err)
+				continue
+			}
+			if won {
+				waiting[i].ParkedUntil, waiting[i].LeaseUntil = until, until
+				parked++
+				m.logf("[resources] lease %s (%s) parked until %s", w.ID, w.Kind, time.UnixMilli(until).Format("15:04:05"))
+			}
+		}
+		if parked > 0 {
+			m.wake() // the polls of the parked rows answer "queued" now
+		}
 		vw := make([]resources.V2Waiter, len(waiting))
 		byID := make(map[string]leaseRow, len(waiting))
 		for i, w := range waiting {
-			vw[i] = resources.V2Waiter{ID: w.ID, CreatedAt: time.UnixMilli(w.CreatedAt), Cut: cut[w.ID]}
+			vw[i] = resources.V2Waiter{ID: w.ID, CreatedAt: time.UnixMilli(w.CreatedAt), Parked: w.ParkedUntil != 0, Cut: cut[w.ID]}
 			byID[w.ID] = w
 		}
 		var grantID string

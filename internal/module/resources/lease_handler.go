@@ -297,7 +297,9 @@ func (m *Module) handleLeaseGet(w http.ResponseWriter, r *http.Request) {
 		m.stateMu.Lock()
 		row, ok, err := m.store.Get(id)
 		gen := m.genChan()
-		if err == nil && ok && row.State == resources.StateWaiting {
+		// A parked row is not renewed: its lease runs to the end of the park, and
+		// a poll that kept it alive would never let it expire.
+		if err == nil && ok && row.State == resources.StateWaiting && row.ParkedUntil == 0 {
 			if rerr := m.store.RenewLease(id, m.now().Add(resources.LeaseS*time.Second).UnixMilli()); rerr != nil {
 				m.logf("[resources] renew lease %s: %v", id, rerr)
 			}
@@ -310,7 +312,7 @@ func (m *Module) handleLeaseGet(w http.ResponseWriter, r *http.Request) {
 		case !ok:
 			writeErr(w, http.StatusNotFound, resources.ErrNoLease, "no such lease")
 			return
-		case row.State != resources.StateWaiting || final:
+		case row.State != resources.StateWaiting || final || row.ParkedUntil != 0:
 			writeJSON(w, http.StatusOK, m.leaseResponse(row, m.settings(), false))
 			return
 		}
@@ -414,6 +416,9 @@ func (m *Module) leaseResponse(row leaseRow, set resources.Settings, fallback bo
 		ID: row.ID, State: row.State, Granted: row.GrantedAt != 0, Overrun: row.Overrun,
 		WaitedMS: row.WaitedMS, Host: m.leaseHost(), Mode: set.Mode, ScopeFallback: fallback, EndReason: row.EndReason,
 		Warning: m.warnFor(row),
+	}
+	if row.State == resources.StateWaiting && row.ParkedUntil != 0 {
+		resp.State, resp.ParkedUntil = resources.StateQueued, row.ParkedUntil
 	}
 	if set.Mode == resources.ModeAdvise {
 		ww := row.WouldWait

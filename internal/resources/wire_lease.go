@@ -7,6 +7,13 @@ const (
 	StateWaiting = "waiting"
 	StateHeld    = "held"
 	StateEnded   = "ended"
+	// StateQueued is what a poll or a POST answers for a waiting row that is
+	// parked: it keeps its place in the queue but this call stops waiting (the
+	// row's own state is still waiting).
+	StateQueued = "queued"
+	// StateReplaced is what a poll answers when a newer call took the row over
+	// (re-attach): this client must not run its command.
+	StateReplaced = "replaced"
 	// StateNone is what a route answers when there is no row to describe: a
 	// request granted in mode off or measure (nothing is recorded), or a
 	// release by a client id the daemon never saw.
@@ -89,10 +96,13 @@ type LeaseResponse struct {
 	// but in mode lease it would have waited.
 	WouldWait *bool `json:"would_wait,omitempty"`
 	// Position is the 1-based place in the queue of a waiting request.
-	Position int       `json:"position,omitempty"`
-	WaitedMS int64     `json:"waited_ms"`
-	Host     LeaseHost `json:"host"`
-	Mode     string    `json:"mode"`
+	Position int `json:"position,omitempty"`
+	// ParkedUntil is, for a queued answer, when the park ends (unix ms): the
+	// place is kept until then.
+	ParkedUntil int64     `json:"parked_until,omitempty"`
+	WaitedMS    int64     `json:"waited_ms"`
+	Host        LeaseHost `json:"host"`
+	Mode        string    `json:"mode"`
 	// ScopeFallback is true when scope session-new could not resolve the
 	// session's process and the lease measures the holder pid instead.
 	ScopeFallback bool `json:"scope_fallback,omitempty"`
@@ -129,6 +139,9 @@ type WaiterView struct {
 	// that reason began, unix ms; both empty before the first pass.
 	Reason      string `json:"reason,omitempty"`
 	ReasonSince int64  `json:"reason_since,omitempty"`
+	// ParkedUntil is when a parked request's place stops being kept (unix ms);
+	// 0 when it is not parked.
+	ParkedUntil int64 `json:"parked_until,omitempty"`
 }
 
 // RecentView is one ended lease in a Snapshot, for pdx lease ls.

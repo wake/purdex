@@ -63,6 +63,11 @@ type leaseRow struct {
 	// Baseline is a JSON array of {pid, start_unix_ms}: the processes a
 	// session-new lease does not own. NULL (empty) until P1-2b records it.
 	Baseline string
+	// Parks is how often the row was parked; ParkedUntil is when the current
+	// park ends (0: not parked). While parked the row keeps its place but is
+	// never granted (lease v2 spec D-4′).
+	Parks       int
+	ParkedUntil int64
 }
 
 // leaseStore is the SQLite persistence of resource_leases (resources.db).
@@ -150,7 +155,8 @@ func (s *leaseStore) Close() error { return s.db.Close() }
 const leaseCols = `id, client_id, state, kind, weight, session_id, holder_pid, holder_start, scope, tool_use_id,
 	created_at, deadline_at, lease_until, COALESCE(granted_at,0), COALESCE(ended_at,0),
 	overrun, would_wait, COALESCE(end_reason,''), COALESCE(waited_ms,0),
-	COALESCE(peak_use,0), COALESCE(mean_use,0), COALESCE(ewma,0), samples, empty_samples, COALESCE(baseline,'')`
+	COALESCE(peak_use,0), COALESCE(mean_use,0), COALESCE(ewma,0), samples, empty_samples, COALESCE(baseline,''),
+	parks, parked_until`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
@@ -160,7 +166,7 @@ func scanLease(sc rowScanner) (leaseRow, error) {
 	err := sc.Scan(&r.ID, &r.ClientID, &r.State, &r.Kind, &r.Weight, &r.SessionID, &r.HolderPID, &r.HolderStart,
 		&r.Scope, &r.ToolUseID, &r.CreatedAt, &r.DeadlineAt, &r.LeaseUntil, &r.GrantedAt, &r.EndedAt,
 		&overrun, &wouldWait, &r.EndReason, &r.WaitedMS,
-		&r.PeakUse, &r.MeanUse, &r.EWMA, &r.Samples, &r.EmptySamples, &r.Baseline)
+		&r.PeakUse, &r.MeanUse, &r.EWMA, &r.Samples, &r.EmptySamples, &r.Baseline, &r.Parks, &r.ParkedUntil)
 	r.Overrun, r.WouldWait = overrun != 0, wouldWait != 0
 	return r, err
 }
@@ -317,6 +323,17 @@ func (s *leaseStore) SetShadow(id string, waitMS int64, open bool, waitReasons s
 		return fmt.Errorf("record shadow wait %s: %w", id, err)
 	}
 	return nil
+}
+
+// Park parks a waiting row: it keeps its place, is never granted while parked,
+// and its lease runs to the end of the park. One compare-and-set on the state,
+// on not being parked yet and on the deadline the caller read (a row that was
+// re-attached in between has a new deadline and is left alone).
+func (s *leaseStore) Park(id string, deadlineAt, until int64) (bool, error) {
+	return s.changed(`
+		UPDATE resource_leases
+		SET parked_until = ?, lease_until = ?, parks = parks + 1
+		WHERE id = ? AND state = 'waiting' AND parked_until = 0 AND deadline_at = ?`, until, until, id, deadlineAt)
 }
 
 // MaxGrantedAt is the newest granted_at of any row, held or ended (0 when
@@ -493,6 +510,7 @@ var decisionColumns = []struct{ name, def string }{
 	{"dec_running", "INTEGER NOT NULL DEFAULT 0"},
 	{"dec_gap_ms", "INTEGER NOT NULL DEFAULT 0"},
 	{"parks", "INTEGER NOT NULL DEFAULT 0"},
+	{"parked_until", "INTEGER NOT NULL DEFAULT 0"},
 	{"wait_reasons", "TEXT NOT NULL DEFAULT ''"},
 	// The advise shadow queue (P1c): how long v2 would have made the request
 	// wait (-1: not recorded), and whether that is only a lower bound because
