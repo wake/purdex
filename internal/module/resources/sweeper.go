@@ -66,7 +66,7 @@ func (m *Module) sweepOnce(ctx context.Context) {
 	// sweepLeases judges only the rows granted strictly before it (a grant in the same millisecond cannot be ordered against the read).
 	var view procView
 	var viewAt time.Time
-	if leasing && m.latest.Load() != nil && m.anyHeld() {
+	if leasing && m.latest.Load() != nil && (m.anyHeld() || m.anyLivePosition()) {
 		viewAt = m.now()
 		view = m.holderView(ctx)
 	}
@@ -100,6 +100,9 @@ func (m *Module) anyHeld() bool {
 // table read at viewAt, or nil when there is none (unknown reads as alive).
 func (m *Module) sweepLeases(now time.Time, set resources.Settings, view procView, viewAt time.Time) {
 	nowMS := now.UnixMilli()
+	if set.Mode == resources.ModeLease {
+		m.sweepPositions(now, view, viewAt)
+	}
 	waiting, err := m.store.Waiting()
 	if err != nil {
 		m.logf("[resources] sweeper: list waiting leases: %v", err)

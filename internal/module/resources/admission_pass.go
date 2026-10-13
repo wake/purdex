@@ -284,8 +284,25 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 		}
 		// The queue: queued positions and wait-mode rows, strictly by created_at.
 		entries := make([]resources.V2Waiter, 0, len(waiting))
+		// A position whose offer passed (not delivered in time) waits for its
+		// session to be reachable, and for the next waiter to have had its turn.
+		decidedAt := max(m.lastGrantMS, m.lastOfferMS)
+		othersWaiting := false
+		for _, p := range positions {
+			if p.State == resources.PosQueued && p.PassedAt == 0 && len(rowsByPos[p.ID]) > 0 {
+				othersWaiting = true
+			}
+		}
+		for _, w := range waiting {
+			if w.PositionID == "" {
+				othersWaiting = true
+			}
+		}
 		for _, p := range positions {
 			if p.State != resources.PosQueued || len(rowsByPos[p.ID]) == 0 {
+				continue
+			}
+			if p.PassedAt > 0 && !(m.canDeliver(p.SessionID) && (decidedAt > p.PassedAt || !othersWaiting)) {
 				continue
 			}
 			c := false
@@ -562,4 +579,10 @@ func (m *Module) captureBaselines(ctx context.Context, rows []leaseRow) map[stri
 		out[r.ID] = string(b)
 	}
 	return out
+}
+
+// canDeliver says whether the session can take a notice now; the seam answers
+// true until P2d wires the agent module's answer.
+func (m *Module) canDeliver(sessionID string) bool {
+	return m.deliverable == nil || m.deliverable(sessionID)
 }

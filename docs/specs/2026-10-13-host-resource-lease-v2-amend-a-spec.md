@@ -78,7 +78,7 @@ Results: 1 over 30 min → 1 + extension (2). 1 + 2 over 30 min → 1 + 2 + exte
 
 ## 4. Telling the session
 
-- **Offer (「可以發起了」), B question, `no_answer` / `idle_timeout` cancel:** between the session's turns, through its mod — the way the relay seed reaches a conversation. To verify in the plan (measure, don't infer): the mod's prompt-submit path, and what happens when the session is mid-turn (it lands when the turn ends; the 3 min still count from the offer).
+- **Offer (「可以發起了」), B question, `no_answer` / `idle_timeout` cancel:** between the session's turns, through its mod — the way the relay seed reaches a conversation. To verify in the plan (measure, don't infer): the mod's prompt-submit path, and what happens when the session is mid-turn (it lands when the turn ends). The 3 min count from when the notice is **delivered**: if it cannot be delivered within 3 min of the offer, the offer passes to the next waiter and the session keeps the first place in line (user decision Q18, 2026-10-14). 從送達起算；輪到後 3 分鐘內送不到，就先讓下一位，自己保留在最前面。
 - **Final notice:** with the command's result (§3.3), so the session reads it before it decides the next step.
 - **Fallback** (no mod channel: not a Claude Code session, or an old mod): a member gets it from its lead's inbox (D-6 team path); anything else is a user alert naming the session.
 - Texts (Chinese, wording final in the plan):

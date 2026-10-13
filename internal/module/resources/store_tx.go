@@ -400,6 +400,8 @@ func (s *leaseStore) EndPositionWithRows(id string, now int64, o endPosition) (b
 			if err := armSlot(x, id, o.Notice, now); err != nil {
 				return err
 			}
+		} else if _, err := x.Exec(`UPDATE resource_positions SET notice_kind = '' WHERE id = ?`, id); err != nil {
+			return err // nothing to tell the session: a pending offer / idle notice is stale
 		}
 		if o.AskedReason != "" {
 			if _, err := endWaitingRowsOf(x, id, o.AskedReason, now, ` AND mode = 'ask' AND offered_at > 0`); err != nil {
