@@ -37,5 +37,6 @@ func (m *Module) boot() {
 		m.logf("[resources] boot last grant: %v", err)
 	} else {
 		m.lastGrantMS = last
+		m.lastGrantAtMS.Store(last)
 	}
 }

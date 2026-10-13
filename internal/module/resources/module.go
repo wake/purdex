@@ -93,13 +93,21 @@ type Module struct {
 	// the table at boot; guarded by stateMu. reasons is the account of why each
 	// waiting row is held back (reasons.go); its own lock nests inside stateMu.
 	lastGrantMS int64
-	reasons     waitReasons
+	// lastGrantAtMS and shadowLastAtMS mirror the real and the shadow's newest
+	// grant time for the snapshot, which is built without stateMu.
+	lastGrantAtMS, shadowLastAtMS atomic.Int64
+	reasons                       waitReasons
 	// shadow is the advise shadow queue (shadow.go): in memory, guarded by
 	// stateMu, with its own reasons account. shadowLen is its size, readable
 	// without the lock (the sweeper decides from it whether a pass is due).
 	shadow        shadowQueue
 	shadowReasons waitReasons
 	shadowLen     atomic.Int32
+	// shadowUnwritten counts verdicts worked out and not yet written; shadowSet
+	// replaces the write (a seam for tests).
+	shadowGen       uint64 // bumped by dropShadow; guarded by stateMu
+	shadowUnwritten atomic.Int32
+	shadowSet       func(id string, waitMS int64, open bool, reasons string) error
 	// gen is the generation channel: wake closes it and installs a fresh one on
 	// every state transition, so a poller that took genChan before it read the
 	// rows is woken by any change after that read. genMu guards the swap only.

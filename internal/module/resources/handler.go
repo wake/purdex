@@ -58,6 +58,19 @@ func (m *Module) addLeases(snap *resources.Snapshot) {
 		set = *s
 	}
 	use := m.leaseUseSnapshot()
+	last := m.lastGrantAtMS.Load()
+	if set.Mode == resources.ModeAdvise {
+		last = m.shadowLastAtMS.Load()
+	}
+	if last != 0 {
+		if until := last + set.Gap().Milliseconds(); until > nowMs {
+			snap.GapUntil = until
+		}
+	}
+	reasons := m.reasons.snapshot()
+	if set.Mode == resources.ModeAdvise {
+		reasons = m.shadowReasons.snapshot() // in advise a waiter is held only in the shadow
+	}
 	for _, a := range active {
 		charge := resources.Charge(resources.Lease{ID: a.ID, Weight: a.Weight, GrantedAt: time.UnixMilli(a.GrantedAt),
 			Measured: a.EWMA, Samples: a.Samples}, nowT, set)
@@ -67,10 +80,14 @@ func (m *Module) addLeases(snap *resources.Snapshot) {
 		})
 	}
 	for i, w := range waiting {
-		snap.Waiters = append(snap.Waiters, resources.WaiterView{
+		view := resources.WaiterView{
 			ID: w.ID, Kind: w.Kind, Weight: w.Weight, SessionID: w.SessionID, Position: i + 1,
 			WaitedS: max(0, (nowMs-w.CreatedAt)/1000), DeadlineInS: max(0, (w.DeadlineAt-nowMs)/1000),
-		})
+		}
+		if rv, ok := reasons[w.ID]; ok {
+			view.Reason, view.ReasonSince = string(rv.Reason), rv.Since.UnixMilli()
+		}
+		snap.Waiters = append(snap.Waiters, view)
 	}
 	for _, e := range ended {
 		snap.Recent = append(snap.Recent, resources.RecentView{

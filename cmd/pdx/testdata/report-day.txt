@@ -7,6 +7,11 @@ wait      p50 0.0s  p90 300.0s  max 300.0s
 old rule  would have held back 3 of 7 grants
 full      0.4% of the time, 2 runs, longest 300s
 2+ heavy  3 minutes, highest load1 11.20, highest memory 83.5%
+zones     no minute with zone seconds yet
+parks     0
+longest   #1 10-08 12:30  test-full  300.0s  no reasons recorded  (zone (none), trend (none) at the grant)
+longest   #2 10-08 12:20  test-full  12.0s  no reasons recorded  (zone (none), trend (none) at the grant)
+longest   #3 10-08 12:50  build  4.0s  no reasons recorded  (zone (none), trend (none) at the grant)
 
 KIND       N  WEIGHT  PEAK   MEAN
 build      2  35      28.0%  15.0%

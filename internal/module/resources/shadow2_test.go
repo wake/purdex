@@ -29,6 +29,45 @@ func TestShadow_RunningComesFromTheRealHeldRows(t *testing.T) {
 	assert.NotEqual(t, int64(-1), f.shadowOf("b").WaitMS)
 }
 
+// A request the real pass could not grant in its first round (a session-new
+// waiter whose baseline is not ready) was still granted by the shadow in that
+// pass: when the real grant comes in a later round, would_wait stays false
+// (codex R1). (M: judge by the later pass alone and it reads true.)
+func TestShadow_WouldWaitSurvivesACutRound(t *testing.T) {
+	f := newShadowFix(t)
+	r := baseRow("s", "c-s")
+	r.Scope, r.HolderPID = resources.ScopeSessionNew, 500
+	r.CreatedAt, r.DeadlineAt, r.LeaseUntil = f.nowMS()-1000, f.nowMS()+300000, f.nowMS()+30000
+	mustCreate(f.t, f.m.store, r)
+	f.m.passOnce(f.m.settings(), "s", map[string]string{}) // no baseline yet: cut in the real pass
+	f.m.flushShadow()
+	require.Equal(t, "waiting", f.state("s"))
+	require.Equal(t, int64(1000), f.shadowOf("s").WaitMS, "the shadow granted it in the request's own pass")
+	f.m.passOnce(f.m.settings(), "", map[string]string{"s": "[]"}) // the baseline arrives
+	f.m.flushShadow()
+	require.Equal(t, "held", f.state("s"))
+	assert.Equal(t, 0, f.shadowOf("s").WouldWait)
+	assert.Empty(t, f.m.shadow.atOnce, "the note is dropped with the grant")
+}
+
+// Switching away from advise clears the shadow's last grant too, even with its
+// queue empty, so a later advise does not start inside a stale gap (codex R1).
+func TestShadow_SwitchClearsTheGapEvenWhenEmpty(t *testing.T) {
+	f := newShadowFix(t)
+	f.queue("a", 35, 5*time.Minute)
+	f.m.admissionPass(context.Background(), "")
+	require.Zero(t, f.m.shadowLen.Load(), "the shadow granted its only request")
+	require.NotZero(t, f.m.shadowLastAtMS.Load())
+	f.set.set(resources.Settings{Mode: resources.ModeLease})
+	f.m.admissionPass(context.Background(), "")
+	assert.Zero(t, f.m.shadowLastAtMS.Load())
+	f.set.set(resources.Settings{Mode: resources.ModeAdvise})
+	f.queue("b", 35, 5*time.Minute)
+	f.m.admissionPass(context.Background(), "")
+	assert.Equal(t, int64(1000), f.shadowOf("b").WaitMS, "no stale gap: granted by the shadow at once")
+	assert.Equal(t, 0, f.shadowOf("b").WouldWait)
+}
+
 // A row's shadow verdict is written once.
 func TestShadow_RecordedOnce(t *testing.T) {
 	f := newShadowFix(t)

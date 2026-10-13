@@ -57,6 +57,9 @@ type Snapshot struct {
 	Leases  []LeaseView  `json:"leases,omitempty"`
 	Waiters []WaiterView `json:"waiters,omitempty"`
 	Recent  []RecentView `json:"recent,omitempty"`
+	// GapUntil is when the pause after the last grant ends, unix ms; absent
+	// when no gap is running (in advise it is the shadow's).
+	GapUntil int64 `json:"gap_until,omitempty"`
 	// Samples is the ring of the last 10 minutes, oldest first; only when
 	// asked for with ?samples=1.
 	Samples []TrendPoint `json:"samples,omitempty"`

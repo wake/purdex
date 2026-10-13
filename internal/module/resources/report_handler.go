@@ -1,6 +1,7 @@
 package resourcesmod
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,7 +17,8 @@ const defaultReportSince = 24 * time.Hour
 // rows in the same period, as the report reads them. Read only.
 func (s *leaseStore) ReportRows(since, until int64) ([]resources.ReportLease, []resources.ReportMinute, error) {
 	lrows, err := s.db.Query(`SELECT kind, weight, created_at, COALESCE(granted_at, 0), dec_recorded, dec_path,
-			COALESCE(waited_ms, 0), would_wait_r2, COALESCE(peak_use, 0), COALESCE(mean_use, 0), samples
+			COALESCE(waited_ms, 0), would_wait_r2, COALESCE(peak_use, 0), COALESCE(mean_use, 0), samples,
+			parks, dec_zone, dec_trend, wait_reasons, v2_wait_ms, v2_wait_open
 		FROM resource_leases WHERE created_at >= ? AND created_at < ? ORDER BY created_at, id`, since, until)
 	if err != nil {
 		return nil, nil, err
@@ -25,11 +27,16 @@ func (s *leaseStore) ReportRows(since, until int64) ([]resources.ReportLease, []
 	var leases []resources.ReportLease
 	for lrows.Next() {
 		var l resources.ReportLease
-		var recorded, r2 int
-		if err := lrows.Scan(&l.Kind, &l.Weight, &l.CreatedAt, &l.GrantedAt, &recorded, &l.Path, &l.WaitedMS, &r2, &l.PeakUse, &l.MeanUse, &l.Samples); err != nil {
+		var recorded, r2, open int
+		var reasons string
+		if err := lrows.Scan(&l.Kind, &l.Weight, &l.CreatedAt, &l.GrantedAt, &recorded, &l.Path, &l.WaitedMS, &r2, &l.PeakUse, &l.MeanUse, &l.Samples,
+			&l.Parks, &l.Zone, &l.Trend, &reasons, &l.V2WaitMS, &open); err != nil {
 			return nil, nil, err
 		}
-		l.Recorded, l.WouldWaitR2 = recorded != 0, r2 != 0
+		l.Recorded, l.WouldWaitR2, l.V2Open = recorded != 0, r2 != 0, open != 0
+		if reasons != "" {
+			_ = json.Unmarshal([]byte(reasons), &l.Reasons) // a malformed text reads as no reasons
+		}
 		leases = append(leases, l)
 	}
 	if err := lrows.Err(); err != nil {
@@ -40,7 +47,8 @@ func (s *leaseStore) ReportRows(since, until int64) ([]resources.ReportLease, []
 }
 
 func (s *leaseStore) reportMinutes(since, until int64) ([]resources.ReportMinute, error) {
-	mrows, err := s.db.Query(`SELECT at, load1, mem, full_ticks, full_starts, full_longest_s, heavy_held
+	mrows, err := s.db.Query(`SELECT at, load1, mem, full_ticks, full_starts, full_longest_s, heavy_held,
+			sampled_s, normal_s, warning_s, danger_s
 		FROM host_minutes WHERE at >= ? AND at < ? ORDER BY at`, since, until)
 	if err != nil {
 		return nil, err
@@ -49,7 +57,8 @@ func (s *leaseStore) reportMinutes(since, until int64) ([]resources.ReportMinute
 	var out []resources.ReportMinute
 	for mrows.Next() {
 		var m resources.ReportMinute
-		if err := mrows.Scan(&m.At, &m.Load1, &m.Mem, &m.FullTicks, &m.FullStarts, &m.FullLongestS, &m.HeavyHeld); err != nil {
+		if err := mrows.Scan(&m.At, &m.Load1, &m.Mem, &m.FullTicks, &m.FullStarts, &m.FullLongestS, &m.HeavyHeld,
+			&m.SampledS, &m.NormalS, &m.WarningS, &m.DangerS); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

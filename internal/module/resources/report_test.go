@@ -160,6 +160,15 @@ func TestReport_FixtureDayExactly(t *testing.T) {
 			{Kind: "test-full", N: 3, Weight: 35, PeakMax: 55, MeanAvg: 107.0 / 3.0}, // l01, l02, l03: l08 was granted before the record existed
 			{Kind: "test-pkg", N: 1, Weight: 15, PeakMax: 10, MeanAvg: 6},
 		},
+		// Lease v2 figures: the fixture has no zone seconds, reasons or shadow
+		// verdicts; the longest waits are the three recorded rows that waited.
+		WaitByReason: []resources.ReportReasonWait{},
+		Longest: []resources.ReportWaitRow{
+			{Kind: "test-full", CreatedAt: reportDay0.Add(30 * time.Minute).UnixMilli(), WaitedMS: 300000}, // l03
+			{Kind: "test-full", CreatedAt: reportDay0.Add(20 * time.Minute).UnixMilli(), WaitedMS: 12000},  // l02
+			{Kind: "build", CreatedAt: reportDay0.Add(50 * time.Minute).UnixMilli(), WaitedMS: 4000},       // l05
+		},
+		Shadow: resources.ReportShadow{Longest: []resources.ReportShadowRow{}},
 	}
 	wb, _ := json.MarshalIndent(want, "", "  ")
 	if !bytes.Equal(got, wb) {
