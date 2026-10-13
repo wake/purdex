@@ -78,8 +78,8 @@ func TestMinutes_FailedTickAddsNothing(t *testing.T) {
 func TestMinutes_MergeKeepsMaximaAndSums(t *testing.T) {
 	f := newMinuteFix(t)
 	at := int64(60000)
-	require.NoError(t, f.m.store.InsertMinute(minuteRow{At: at, NCPU: 1, SampledS: 20, NormalS: 15, WarningS: 5, PressureMax: 2, ZoneMax: 1}))
-	require.NoError(t, f.m.store.InsertMinute(minuteRow{At: at, NCPU: 1, SampledS: 30, NormalS: 10, DangerS: 20, PressureMax: 1, ZoneMax: 2}))
+	require.NoError(t, f.m.store.InsertMinute(minuteRow{At: at, NCPU: 1, SampledS: 20, NormalS: 15, WarningS: 5, PressureMax: 2, ZoneMax: 2}))
+	require.NoError(t, f.m.store.InsertMinute(minuteRow{At: at, NCPU: 1, SampledS: 30, NormalS: 10, DangerS: 20, PressureMax: 1, ZoneMax: 1}))
 	got := f.v2Minutes()
 	require.Len(t, got, 1)
 	assert.Equal(t, v2Minute{SampledS: 50, NormalS: 25, WarningS: 5, DangerS: 20, PressureMax: 2, ZoneMax: 2}, got[0])
