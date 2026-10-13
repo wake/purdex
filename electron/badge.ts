@@ -104,21 +104,38 @@ export interface BadgeSender {
   on(event: string, listener: (...args: any[]) => void): unknown // eslint-disable-line @typescript-eslint/no-explicit-any
 }
 
-const attached = new WeakSet<object>()
+/** What main knows of one window's documents: the id the last accepted report carried, and the ids that are over. */
+interface SenderState {
+  current?: string
+  /** Oldest first. A document that old has long been gone, so the list is bounded. */
+  stale: string[]
+}
+const MAX_STALE_DOCS = 8
+const senders = new WeakMap<object, SenderState>()
 
 /**
  * Drop `sender`'s report when its window closes (`destroyed`), its renderer goes away (`render-process-gone`) or its
- * main frame starts navigating — a reload; not a sub-frame, not the SPA's own same-document routing. Once per sender:
+ * main frame starts navigating — a reload; not a sub-frame, not the SPA's own same-document routing. The last two also
+ * mark the document that was reporting as over (`SenderState.stale`), see `submitBadgeReport`. Once per sender:
  * returns true the one time it attached, so a caller can hang its own per-sender listeners exactly once as well.
  */
 export function attachBadgeSender(center: BadgeCenter, sender: BadgeSender): boolean {
-  if (attached.has(sender)) return false
-  attached.add(sender)
+  if (senders.has(sender)) return false
+  const state: SenderState = { stale: [] }
+  senders.set(sender, state)
   const drop = () => center.drop(sender.id)
+  const documentOver = () => {
+    if (state.current !== undefined) {
+      state.stale.push(state.current)
+      if (state.stale.length > MAX_STALE_DOCS) state.stale.shift()
+      state.current = undefined
+    }
+    drop()
+  }
   sender.on('destroyed', drop)
-  sender.on('render-process-gone', drop)
+  sender.on('render-process-gone', documentOver)
   sender.on('did-start-navigation', (details: { isMainFrame?: boolean; isSameDocument?: boolean }) => {
-    if (details.isMainFrame === true && details.isSameDocument !== true) drop()
+    if (details.isMainFrame === true && details.isSameDocument !== true) documentOver()
   })
   return true
 }
@@ -127,11 +144,23 @@ export function attachBadgeSender(center: BadgeCenter, sender: BadgeSender): boo
  * One `badge:set` from `sender`: false (and nothing recorded) for a malformed report, which is ignored whole — the
  * window's earlier report stays, as it is still the last state it told us. `onFirst` runs once per sender, on its first
  * valid report; a window reports on every change, so per-report listeners would pile up until it closes.
+ *
+ * `doc` is the id the window's preload minted for the document that sent the report (one per document: the preload
+ * runs again on every navigation). A report already queued by a document that is going away can reach main after the
+ * navigation started and dropped its report; carrying an id main has marked over, it is refused instead of bringing the
+ * dropped report back. The next document has a new id, so its first report is taken whatever the order of events. No
+ * `doc` (an older preload) is never refused.
  */
-export function submitBadgeReport(center: BadgeCenter, sender: BadgeSender, raw: unknown, onFirst?: () => void): boolean {
+export function submitBadgeReport(center: BadgeCenter, sender: BadgeSender, raw: unknown, doc?: unknown, onFirst?: () => void): boolean {
   const report = parseBadgeReport(raw)
   if (!report) return false
   if (attachBadgeSender(center, sender)) onFirst?.()
+  const state = senders.get(sender)!
+  const id = isShortString(doc) ? doc : undefined
+  if (id !== undefined) {
+    if (state.stale.includes(id)) return false
+    state.current = id
+  }
   center.set(sender.id, report)
   return true
 }

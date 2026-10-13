@@ -156,25 +156,25 @@ describe('submitBadgeReport — one `badge:set`', () => {
 
   it('a malformed report is ignored whole: nothing recorded, nothing attached, an earlier report stays', () => {
     const { apply, center, sender, onAttach } = setup()
-    submitBadgeReport(center, sender, rep(['h:a']), onAttach)
+    submitBadgeReport(center, sender, rep(['h:a']), undefined, onAttach)
     apply.mockClear()
-    expect(submitBadgeReport(center, sender, { sessions: 'no' }, onAttach)).toBe(false)
+    expect(submitBadgeReport(center, sender, { sessions: 'no' }, undefined, onAttach)).toBe(false)
     expect(apply).not.toHaveBeenCalled()
     expect(onAttach).toHaveBeenCalledTimes(1)
   })
 
   it('the per-window hook runs once however many reports a window sends (no listener pile-up)', () => {
     const { center, sender, onAttach } = setup()
-    for (let i = 0; i < 25; i++) submitBadgeReport(center, sender, rep([`h:${i}`]), onAttach)
+    for (let i = 0; i < 25; i++) submitBadgeReport(center, sender, rep([`h:${i}`]), undefined, onAttach)
     expect(onAttach).toHaveBeenCalledTimes(1)
     expect(sender.listenerCount('destroyed')).toBe(1)
   })
 
   it('the first report of a malformed-then-valid window still attaches', () => {
     const { center, sender, onAttach } = setup()
-    submitBadgeReport(center, sender, null, onAttach)
+    submitBadgeReport(center, sender, null, undefined, onAttach)
     expect(onAttach).not.toHaveBeenCalled()
-    submitBadgeReport(center, sender, rep(['h:a']), onAttach)
+    submitBadgeReport(center, sender, rep(['h:a']), undefined, onAttach)
     expect(onAttach).toHaveBeenCalledTimes(1)
   })
 })
@@ -252,5 +252,97 @@ describe('attachBadgeSender — when a window\'s report is dropped', () => {
     sender.emit('did-start-navigation', nav())
     center.set(7, rep(['h:a', 'h:z']))
     expect(apply).toHaveBeenLastCalledWith(3)
+  })
+})
+
+// A late `badge:set` of the document that is going away (already queued when the navigation started) must not bring
+// the dropped report back. The preload mints one id per document and sends it with every report; main marks the
+// window's current id stale when its main frame starts navigating (or its renderer is gone), and refuses reports
+// carrying a stale id. The new document has a new id, so its first report is taken whatever the order of events.
+describe('submitBadgeReport — a late report of a document that is going away', () => {
+  const nav = (over: Record<string, unknown> = {}) => ({ isMainFrame: true, isSameDocument: false, ...over })
+  const setup = () => {
+    const apply = vi.fn()
+    const center = new BadgeCenter(apply)
+    return { apply, center, sender: fakeSender(5) }
+  }
+
+  it('after the main frame starts navigating, a report of the old document is refused; the new document\'s is taken', () => {
+    const { apply, center, sender } = setup()
+    expect(submitBadgeReport(center, sender, rep(['h:a']), 'doc-A')).toBe(true)
+    sender.emit('did-start-navigation', nav())
+    expect(apply).toHaveBeenLastCalledWith(0)
+    apply.mockClear()
+    expect(submitBadgeReport(center, sender, rep(['h:a']), 'doc-A')).toBe(false)
+    expect(apply).not.toHaveBeenCalled()
+    expect(submitBadgeReport(center, sender, rep(['h:b']), 'doc-B')).toBe(true)
+    expect(apply).toHaveBeenLastCalledWith(1)
+  })
+
+  it('the new document reporting before the old one\'s late report is not overwritten by it', () => {
+    const { apply, center, sender } = setup()
+    submitBadgeReport(center, sender, rep(['h:a']), 'doc-A')
+    sender.emit('did-start-navigation', nav())
+    submitBadgeReport(center, sender, rep(['h:b', 'h:c']), 'doc-B')
+    submitBadgeReport(center, sender, rep(['h:a']), 'doc-A')
+    expect(apply).toHaveBeenLastCalledWith(2)
+  })
+
+  it('a renderer that went away stales its document too', () => {
+    const { center, sender } = setup()
+    submitBadgeReport(center, sender, rep(['h:a']), 'doc-A')
+    sender.emit('render-process-gone', {}, { reason: 'crashed' })
+    expect(submitBadgeReport(center, sender, rep(['h:a']), 'doc-A')).toBe(false)
+  })
+
+  it('a same-document navigation (the SPA\'s routing) or a sub-frame navigation stales nothing', () => {
+    const { center, sender } = setup()
+    submitBadgeReport(center, sender, rep(['h:a']), 'doc-A')
+    sender.emit('did-start-navigation', nav({ isSameDocument: true }))
+    sender.emit('did-start-navigation', nav({ isMainFrame: false }))
+    expect(submitBadgeReport(center, sender, rep(['h:a', 'h:b']), 'doc-A')).toBe(true)
+  })
+
+  it('a report with no document id (an older preload) is taken as before, even beside stale ids', () => {
+    const { center, sender } = setup()
+    submitBadgeReport(center, sender, rep(['h:a']), 'doc-A')
+    sender.emit('did-start-navigation', nav()) // doc-A is stale now
+    expect(submitBadgeReport(center, sender, rep(['h:a']))).toBe(true)
+    expect(submitBadgeReport(center, sender, rep(['h:a']), undefined)).toBe(true)
+  })
+
+  it('navigating before any report stales nothing: the first document\'s first report is taken', () => {
+    const { center, sender } = setup()
+    expect(submitBadgeReport(center, sender, rep(['h:a']), 'doc-A')).toBe(true) // attaches the listeners
+    sender.emit('did-start-navigation', nav())
+    sender.emit('did-start-navigation', nav()) // a second start with no report in between: still only doc-A is stale
+    expect(submitBadgeReport(center, sender, rep(['h:b']), 'doc-B')).toBe(true)
+  })
+
+  it('stale ids are remembered per window and bounded', () => {
+    const { center, sender } = setup()
+    for (let i = 0; i < 40; i++) {
+      expect(submitBadgeReport(center, sender, rep(['h:a']), `doc-${i}`)).toBe(true)
+      sender.emit('did-start-navigation', nav())
+    }
+    // the latest ones are refused; the bound drops the oldest (a document that old has long been gone)
+    expect(submitBadgeReport(center, sender, rep(['h:a']), 'doc-39')).toBe(false)
+    expect(submitBadgeReport(center, sender, rep(['h:a']), 'doc-38')).toBe(false)
+    expect(submitBadgeReport(center, sender, rep(['h:a']), 'doc-0')).toBe(true)
+  })
+
+  it('another window\'s documents are unaffected', () => {
+    const { center, sender } = setup()
+    const other = fakeSender(6)
+    submitBadgeReport(center, sender, rep(['h:a']), 'doc-A')
+    submitBadgeReport(center, other, rep(['h:z']), 'doc-A') // same id in another window: its own document
+    sender.emit('did-start-navigation', nav())
+    expect(submitBadgeReport(center, other, rep(['h:z']), 'doc-A')).toBe(true)
+  })
+
+  it('an over-long or non-string document id counts as none', () => {
+    const { center, sender } = setup()
+    expect(submitBadgeReport(center, sender, rep(['h:a']), 'x'.repeat(MAX_STRING + 1))).toBe(true)
+    expect(submitBadgeReport(center, sender, rep(['h:a']), 42 as unknown as string)).toBe(true)
   })
 })
