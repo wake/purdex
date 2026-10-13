@@ -143,3 +143,28 @@ func TestLeaseCreate_ProcessScopeResolvesTheSession(t *testing.T) {
 	assert.Equal(t, http.StatusOK, again.Code, again.Body.String())
 	assert.Equal(t, a.ID, decodeLease(t, again).ID)
 }
+
+// The other direction: the first call's lookup found nothing (the row has no
+// session), the replay's finds one. Same client id, same holder: the same
+// request, not a 409 (lead's review of P2a).
+func TestLeaseCreate_ReplayWhenOnlyTheSecondLookupFindsASession(t *testing.T) {
+	f := newAttrFix(t)
+	roots := f.m.roots
+	f.m.roots = nil // nothing found the first time
+	req := resources.LeaseRequest{ClientID: cidA, Kind: "test-full", HolderPID: 1000, HolderStart: attrStartText}
+	first := f.do(http.MethodPost, "/api/resources/leases", req)
+	require.Equal(t, http.StatusCreated, first.Code, first.Body.String())
+	a := decodeLease(t, first)
+	assert.Equal(t, "", f.row(a.ID).SessionID)
+
+	f.m.roots = roots // the second time the agent is found
+	again := f.do(http.MethodPost, "/api/resources/leases", req)
+	assert.Equal(t, http.StatusOK, again.Code, again.Body.String())
+	assert.Equal(t, a.ID, decodeLease(t, again).ID)
+
+	// A client that does name a session is still held to it.
+	named := req
+	named.SessionID = "sid-other"
+	bad := f.do(http.MethodPost, "/api/resources/leases", named)
+	assert.Equal(t, http.StatusConflict, bad.Code, "a different session than the row has is a different request")
+}
