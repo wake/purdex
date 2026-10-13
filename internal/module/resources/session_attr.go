@@ -29,22 +29,23 @@ type ancestry interface {
 var _ ancestry = (*iagent.ProcessSnapshot)(nil)
 
 // sessionOfProcess is the session whose agent process is pid or one of its
-// ancestors within maxAncestryHops, or "" when there is none. An agent pid
+// ancestors within maxAncestryHops, with that agent's pid and start time (as
+// the registry recorded it); the session is "" when there is none. An agent pid
 // counts only when its start time is the one the registry recorded (at second
 // precision): a pid that was reused is another process.
-func (m *Module) sessionOfProcess(ctx context.Context, pid int) string {
+func (m *Module) sessionOfProcess(ctx context.Context, pid int) (session string, agentPID int, agentStart string) {
 	if m.roots == nil || pid <= 0 {
-		return ""
+		return "", 0, ""
 	}
 	ctx, cancel := context.WithTimeout(ctx, sampleBudget)
 	defer cancel()
 	snap, err := m.procSnapshot(ctx)
 	if err != nil {
-		return ""
+		return "", 0, ""
 	}
 	roots, err := m.roots.ProcessRoots(snap)
 	if err != nil {
-		return ""
+		return "", 0, ""
 	}
 	byPID := make(map[int]string, len(roots))
 	startOf := make(map[int]string, len(roots))
@@ -61,15 +62,15 @@ func (m *Module) sessionOfProcess(ctx context.Context, pid int) string {
 			want, err := ipeers.ParseProcStart(startOf[pid])
 			got, gerr := view.Start(pid)
 			if err != nil || gerr != nil || got.IsZero() || !got.Truncate(time.Second).Equal(want.Truncate(time.Second)) {
-				return ""
+				return "", 0, ""
 			}
-			return sid
+			return sid, pid, startOf[pid]
 		}
 		parent, err := view.PPID(pid)
 		if err != nil || parent <= 1 || parent == pid {
-			return ""
+			return "", 0, ""
 		}
 		pid = parent
 	}
-	return ""
+	return "", 0, ""
 }

@@ -59,19 +59,19 @@ func newAttrFix(t *testing.T) *attrFix {
 // The chain pdx -> zsh -> claude resolves to the agent's session.
 func TestSessionOfProcess_ChainReachesTheAgent(t *testing.T) {
 	f := newAttrFix(t)
-	assert.Equal(t, "sid-agent", f.m.sessionOfProcess(context.Background(), 1000))
-	assert.Equal(t, "sid-agent", f.m.sessionOfProcess(context.Background(), 800), "the agent itself")
+	assert.Equal(t, "sid-agent", sessionOnly(f.m, 1000))
+	assert.Equal(t, "sid-agent", sessionOnly(f.m, 800), "the agent itself")
 }
 
 // No agent within the hops, an unknown pid, or no registry: no session.
 func TestSessionOfProcess_NoAgentNoSession(t *testing.T) {
 	f := newAttrFix(t)
 	f.table.ppid[2000], f.table.start[2000] = 1, attrStart // a launchd child
-	assert.Equal(t, "", f.m.sessionOfProcess(context.Background(), 2000))
-	assert.Equal(t, "", f.m.sessionOfProcess(context.Background(), 3000), "not in the table")
-	assert.Equal(t, "", f.m.sessionOfProcess(context.Background(), 0))
+	assert.Equal(t, "", sessionOnly(f.m, 2000))
+	assert.Equal(t, "", sessionOnly(f.m, 3000), "not in the table")
+	assert.Equal(t, "", sessionOnly(f.m, 0))
 	f.m.roots = nil
-	assert.Equal(t, "", f.m.sessionOfProcess(context.Background(), 1000))
+	assert.Equal(t, "", sessionOnly(f.m, 1000))
 }
 
 // A pid whose start time differs from the registry's is another process that
@@ -79,11 +79,11 @@ func TestSessionOfProcess_NoAgentNoSession(t *testing.T) {
 func TestSessionOfProcess_ReusedPidIsNotTheAgent(t *testing.T) {
 	f := newAttrFix(t)
 	f.table.start[800] = attrStart.Add(time.Hour)
-	assert.Equal(t, "", f.m.sessionOfProcess(context.Background(), 1000))
+	assert.Equal(t, "", sessionOnly(f.m, 1000))
 	f.table.start[800] = attrStart.Add(400 * time.Millisecond) // the registry's text has second precision
-	assert.Equal(t, "sid-agent", f.m.sessionOfProcess(context.Background(), 1000))
+	assert.Equal(t, "sid-agent", sessionOnly(f.m, 1000))
 	delete(f.table.start, 800)
-	assert.Equal(t, "", f.m.sessionOfProcess(context.Background(), 1000), "a start time that cannot be read vouches for nothing")
+	assert.Equal(t, "", sessionOnly(f.m, 1000), "a start time that cannot be read vouches for nothing")
 }
 
 // The walk gives up after 16 hops, and a parent loop in a corrupt table ends it.
@@ -95,18 +95,18 @@ func TestSessionOfProcess_HopLimitAndLoops(t *testing.T) {
 		f.table.ppid[pid], f.table.start[pid] = prev, attrStart
 		prev = pid
 	}
-	assert.Equal(t, "", f.m.sessionOfProcess(context.Background(), 5017), "17 hops is out of reach")
-	assert.Equal(t, "sid-agent", f.m.sessionOfProcess(context.Background(), 5016), "16 hops is not")
+	assert.Equal(t, "", sessionOnly(f.m, 5017), "17 hops is out of reach")
+	assert.Equal(t, "sid-agent", sessionOnly(f.m, 5016), "16 hops is not")
 	f.table.ppid[6001], f.table.ppid[6002] = 6002, 6001
 	f.table.start[6001], f.table.start[6002] = attrStart, attrStart
-	assert.Equal(t, "", f.m.sessionOfProcess(context.Background(), 6001))
+	assert.Equal(t, "", sessionOnly(f.m, 6001))
 	// A pid that is its own parent ends the walk at once, not after the hops.
 	f.table.ppid[7001], f.table.start[7001] = 7001, attrStart
 	f.m.roots = &fakeRoots{roots: []resources.Root{{SessionID: "sid-agent", PID: 800, ProcStart: attrStartText}}}
-	assert.Equal(t, "", f.m.sessionOfProcess(context.Background(), 7001))
+	assert.Equal(t, "", sessionOnly(f.m, 7001))
 	calls := 0
 	f.m.ancestryOf = func(*iagent.ProcessSnapshot) ancestry { return &countingAncestry{f.table, &calls} }
-	f.m.sessionOfProcess(context.Background(), 7001)
+	sessionOnly(f.m, 7001)
 	assert.Equal(t, 1, calls, "one lookup of its parent, then done")
 }
 
@@ -167,4 +167,10 @@ func TestLeaseCreate_ReplayWhenOnlyTheSecondLookupFindsASession(t *testing.T) {
 	named.SessionID = "sid-other"
 	bad := f.do(http.MethodPost, "/api/resources/leases", named)
 	assert.Equal(t, http.StatusConflict, bad.Code, "a different session than the row has is a different request")
+}
+
+// sessionOnly is sessionOfProcess without the agent's identity.
+func sessionOnly(m *Module, pid int) string {
+	sid, _, _ := m.sessionOfProcess(context.Background(), pid)
+	return sid
 }

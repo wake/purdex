@@ -24,6 +24,13 @@ func (m *Module) boot() {
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
 	now := m.now()
+	// Parking is gone: a waiting row an older daemon left parked has nobody
+	// polling it.
+	if n, err := m.store.EndParkedAtBoot(now.UnixMilli()); err != nil {
+		m.logf("[resources] boot: end parked rows: %v", err)
+	} else if n > 0 {
+		m.logf("[resources] boot: %d parked rows ended as abandoned", n)
+	}
 	if _, err := m.store.ExtendWaiting(now.Add(bootGrace).UnixMilli()); err != nil {
 		m.logf("[resources] boot grace: %v", err)
 	}
