@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.0.0-alpha.729] - 2026-10-13
+
+> 只改了 daemon，不用跑 pdx setup。Mac 和 iOS 的部分之後才做（BG-2、BG-3）。
+
+### Added：App 角標第一段：daemon 端的計數規則（#2769，PR #2775，介面線）
+
+- 角標計數認得卡片的種類了：lead、自我接力、member 接力、收回、終端機問答、權限卡都算進待處理數。有些卡片（例如只在終端機裡的問答、收回、權限卡）算進數字，但不會因此發推播。
+- 屬於某個 session 的核准卡，數在那個 session 底下（`c:` key）；對不上 tmux session 時，改用它來源 session 的 id。
+- team member 只有在這台裝置開著它的分頁時才會推播，不受 `notify_without_tab` 影響。
+- 靜音的 session 不再收到 agent 推播（`prefs.muted`）；核准類推播不受靜音影響。
+- agent 推播帶一個 member 旗標（`purdex.member`）。新增 capability `push.badge.v2`，`/api/info` 會宣告。
+- 角標規格與計畫在 `docs/specs/2026-10-13-app-badge-spec-plan.md`（PR #2770）。
+
 ## [1.0.0-alpha.728] - 2026-10-13
 
 > daemon 和 mod 都有改（pdx-team skill 的文字變了），要跑 pdx setup。資源租約兩台仍是「只記錄」模式，新的准入規則還不會擋任何指令。
