@@ -8,6 +8,10 @@ import (
 	"github.com/wake/purdex/internal/team"
 )
 
+// ErrUnansweredMember: the card's session is a member of a team now, so its relay is the lead's and the card is not an ask that can
+// go unanswered (the approve path cancels such a card, U13): nothing was written and the sweeper times the card out as before.
+var ErrUnansweredMember = errors.New("the card's session is a member: it times out, it is not left unanswered")
+
 // MarkUnanswered is the store half of markUnanswered, in ONE write transaction: the CAS on (id, open, unanswered_at 0, the deadline the
 // caller saw) sets unanswered_at = now and the sentinel deadline; the session's relay_unanswered row (role lead when it leads a live
 // team, else solo; members are not touched) and, only when that row is new, its notice and the phone's push. false (nothing written)
@@ -19,6 +23,13 @@ func (s *Store) MarkUnanswered(a team.Approval, now int64) (bool, error) {
 		return fail(err)
 	}
 	defer tx.Rollback()
+	// The write lock first (the CAS below is a write; the read is of the same snapshot): a session that was taken in as a member since
+	// the card opened is not paused on its own account.
+	if role, err := memberRoleIn(tx, a.Origin.SessionID); err != nil {
+		return fail(err)
+	} else if role.isMember() {
+		return false, ErrUnansweredMember
+	}
 	res, err := tx.Exec(`UPDATE approval_requests SET unanswered_at = ?, deadline_at = ?
 		WHERE id = ? AND state = 'open' AND unanswered_at = 0 AND deadline_at = ?`, now, team.UnansweredDeadlineMs, a.ID, a.DeadlineAt)
 	if err != nil {

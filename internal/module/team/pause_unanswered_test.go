@@ -466,3 +466,18 @@ func TestUnanswered_NoResumeGroupTakesIt(t *testing.T) {
 		t.Fatalf("notices grew from %d to %d: a resume text was sent for a session that is still paused", before, got)
 	}
 }
+
+// codex critic: a session taken in as a member between the card and its deadline is not left unanswered: the card times out, no
+// pause. Mutation gate: drop the member re-check → an open card and a solo pause for a member (red).
+func TestFinalCard_ASessionThatBecameAMemberTimesOutInsteadOfPausing(t *testing.T) {
+	f := newFixture(t)
+	card := f.finalCard("sid-1", 95)
+	f.makeMember("sid-1")
+	f.pastDeadline()
+	if a := f.row(card.RequestID); a.State != team.StateTimeout || a.UnansweredAt != 0 {
+		t.Fatalf("card = %s unanswered_at=%d, want timeout", a.State, a.UnansweredAt)
+	}
+	if len(f.pauses()) != 0 {
+		t.Fatalf("pause rows %+v, want none for a member", f.pauses())
+	}
+}

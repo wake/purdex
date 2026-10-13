@@ -3,6 +3,7 @@ package teammod
 
 import (
 	"encoding/json"
+	"errors"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -31,6 +32,15 @@ func isFinalCard(a team.Approval) bool {
 // the pause and from the row.
 func (m *Module) markUnanswered(a team.Approval, now int64) {
 	marked, err := m.store.MarkUnanswered(a, now)
+	if errors.Is(err, ErrUnansweredMember) {
+		// became a member since: its relay is the lead's, the card ends as any other past its deadline
+		if after, won, cerr := m.closeExpired(a.ID, now, team.StateTimeout); cerr != nil {
+			m.logf("[team] sweep %s: %v", a.ID, cerr)
+		} else if won {
+			m.logf("[team] approval %s %s by the sweeper (origin %s is a member)", a.ID, after.State, a.Origin.Ref)
+		}
+		return
+	}
 	if err != nil {
 		m.logf("[team] sweep %s: mark unanswered: %v", a.ID, err)
 		return
