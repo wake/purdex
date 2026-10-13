@@ -189,14 +189,14 @@ func TestLeases_DeleteByClientID(t *testing.T) {
 	}
 }
 
-// Mode advise grants at once, whatever the zone, and carries the would_wait
-// field (false until the shadow queue of P1c answers it).
+// Mode advise grants at once, whatever the zone, and says whether v2 would have
+// made the request wait (the shadow holds both in the danger zone).
 func TestLeases_ModeAdviseGrantsAtOnce(t *testing.T) {
 	f := newRouteFix(t, resources.ModeAdvise)
 	f.setHost(resources.HostUse{Measured: 99, NCPU: 10, Zone: "danger", Trend: "rising"})
 	f.post(cidA, "", 70)
 	b := decodeLease(t, f.post(cidB, "", 60))
-	if b.State != resources.StateHeld || !b.Granted || b.WouldWait == nil || *b.WouldWait || b.Overrun {
+	if b.State != resources.StateHeld || !b.Granted || b.WouldWait == nil || !*b.WouldWait || b.Overrun {
 		t.Fatalf("resp %+v", b)
 	}
 	if d := f.dec(b.ID); d.recorded != 1 {

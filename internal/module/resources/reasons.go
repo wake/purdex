@@ -110,6 +110,13 @@ func (w *waitReasons) retain(live map[string]bool) {
 	}
 }
 
+// reset forgets everything.
+func (w *waitReasons) reset() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.m = nil
+}
+
 // snapshot is a copy of every row's current reason.
 func (w *waitReasons) snapshot() map[string]reasonView {
 	w.mu.Lock()

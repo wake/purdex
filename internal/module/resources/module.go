@@ -94,6 +94,12 @@ type Module struct {
 	// waiting row is held back (reasons.go); its own lock nests inside stateMu.
 	lastGrantMS int64
 	reasons     waitReasons
+	// shadow is the advise shadow queue (shadow.go): in memory, guarded by
+	// stateMu, with its own reasons account. shadowLen is its size, readable
+	// without the lock (the sweeper decides from it whether a pass is due).
+	shadow        shadowQueue
+	shadowReasons waitReasons
+	shadowLen     atomic.Int32
 	// gen is the generation channel: wake closes it and installs a fresh one on
 	// every state transition, so a poller that took genChan before it read the
 	// rows is woken by any change after that read. genMu guards the swap only.

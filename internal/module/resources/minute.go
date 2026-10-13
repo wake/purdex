@@ -93,6 +93,24 @@ func (m *Module) noteMinute(ctx context.Context, host resources.HostUse, now tim
 		r.FullLongestS = max(r.FullLongestS, int((max(0, now.Sub(a.runStart))+m.interval)/time.Second))
 	}
 	a.prevFull = host.Full
+	// Lease v2: the tick's seconds go to its zone; an unknown zone counts as
+	// sampled but belongs to none.
+	secs := int(m.interval / time.Second)
+	r.SampledS += secs
+	zoneRank := -1
+	switch resources.ParseZone(host.Zone) {
+	case resources.ZoneNormal:
+		r.NormalS += secs
+		zoneRank = 0
+	case resources.ZoneWarning:
+		r.WarningS += secs
+		zoneRank = 1
+	case resources.ZoneDanger:
+		r.DangerS += secs
+		zoneRank = 2
+	}
+	r.ZoneMax = max(r.ZoneMax, zoneRank)
+	r.PressureMax = max(r.PressureMax, host.Pressure)
 	r.Held = max(r.Held, len(held))
 	r.HeavyHeld = max(r.HeavyHeld, heavy)
 	r.SumCharge = max(r.SumCharge, sum)
