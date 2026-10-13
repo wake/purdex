@@ -57,6 +57,14 @@ type Module struct {
 	// fullLatch turns each reading into the published host.full with a
 	// hysteresis; a failed tick leaves it where it was.
 	fullLatch resources.FullLatch
+	// ringMu guards ring: the sampler goroutine adds to it, and a request
+	// (GET ?samples=1) reads a copy. zoneLatch, lastZone and zoneSince are the
+	// sampler goroutine's own.
+	ringMu    sync.Mutex
+	ring      resources.Ring
+	zoneLatch resources.ZoneLatch
+	lastZone  resources.Zone
+	zoneSince time.Time
 	// minute is the host timeline's open minute (D-8.2).
 	minute minuteAgg
 	// mode is the setting's mode as of the last tick (the sampler goroutine's

@@ -57,6 +57,9 @@ type Snapshot struct {
 	Leases  []LeaseView  `json:"leases,omitempty"`
 	Waiters []WaiterView `json:"waiters,omitempty"`
 	Recent  []RecentView `json:"recent,omitempty"`
+	// Samples is the ring of the last 10 minutes, oldest first; only when
+	// asked for with ?samples=1.
+	Samples []TrendPoint `json:"samples,omitempty"`
 	// SampleMS is how long the tick that produced this snapshot took, for
 	// seeing the cost of sampling; a debug field.
 	SampleMS int64 `json:"sample_ms,omitempty"`
@@ -101,6 +104,21 @@ type HostUse struct {
 	// Full is R5's "host full": load1 >= ncpu, or Mem >= MemFullPercent, or
 	// pressure >= 2.
 	Full bool `json:"full"`
+	// Zone is normal, warning, danger or unknown (lease v2 spec D-1′); Trend
+	// is rising, flat, falling or unknown (D-2′). ZoneSince is when the zone
+	// last changed, unix ms.
+	Zone      string `json:"zone"`
+	Trend     string `json:"trend"`
+	ZoneSince int64  `json:"zone_since"`
+}
+
+// TrendPoint is one sample of the sampler's ring, for GET
+// /api/resources?samples=1 (debugging and the G1 measurement).
+type TrendPoint struct {
+	At       int64   `json:"at"` // unix ms
+	Mem      float64 `json:"mem"`
+	CPU      float64 `json:"cpu"`
+	Pressure int     `json:"pressure"`
 }
 
 // SessionUse is what one agent session's process tree costs.

@@ -17,6 +17,12 @@ func (m *Module) handleGet(w http.ResponseWriter, r *http.Request) {
 	// shows from the next tick (at most one interval later).
 	snap := m.current()
 	m.addLeases(&snap)
+	if r.URL.Query().Get("samples") == "1" {
+		snap.Samples = []resources.TrendPoint{}
+		for _, s := range m.ringCopy() {
+			snap.Samples = append(snap.Samples, resources.TrendPoint{At: s.At.UnixMilli(), Mem: s.Mem, CPU: s.CPU, Pressure: s.Pressure})
+		}
+	}
 	if sid := r.URL.Query().Get("session"); sid != "" {
 		snap = onlySession(snap, sid)
 	}
