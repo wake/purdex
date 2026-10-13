@@ -371,3 +371,20 @@ func TestRelease_AnswerCarriesTheNotice(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, resources.FinalNotice(resources.NoticeOvertime), decodeLease(t, rec).Notice)
 }
+
+// A release whose answer was lost and is retried gets the notice again: the
+// session must not be released later without having read it.
+// (M: do not return the stored notice on a retry.)
+func TestRelease_RetryOfALostAnswerReturnsTheStoredNotice(t *testing.T) {
+	f := newPosFix(t)
+	c1 := f.run(pidA, "c1")
+	f.waiterB()
+	f.advance(31 * time.Minute)
+	first := f.release(c1, true)
+	require.Equal(t, resources.FinalNotice(resources.NoticeOvertime), first.Notice)
+	again := f.release(c1, true) // the first answer never arrived
+	assert.Equal(t, resources.StateEnded, again.State)
+	assert.Equal(t, first.Notice, again.Notice)
+	plain := f.release(c1, false)
+	assert.Empty(t, plain.Notice, "only a release that asks for the notice gets it")
+}

@@ -435,6 +435,10 @@ func (m *Module) endLease(w http.ResponseWriter, r *http.Request, find func() (l
 	m.admissionPass(r.Context(), "")
 	resp := m.leaseResponse(row, m.settings(), false)
 	resp.Notice = finalNotice
+	if resp.Notice == "" && row.State == resources.StateEnded && r.URL.Query().Get("notice") == "1" {
+		// A retry of a release whose answer was lost: the notice is on the row.
+		resp.Notice = row.Notice
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
