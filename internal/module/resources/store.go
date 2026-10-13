@@ -444,7 +444,12 @@ func (s *leaseStore) Recent(n int, since int64) ([]leaseRow, error) {
 // lists is in exactly one of them and none is lost or shown twice. Separate
 // queries would not give that (codex attack on P1-2a-2).
 func (s *leaseStore) Listing(n int, since int64) (active, waiting, recent []leaseRow, err error) {
-	rows, err := s.many(`SELECT `+leaseCols+` FROM resource_leases WHERE state IN ('held','waiting')
+	return listingOn(s.db, n, since)
+}
+
+// listingOn is Listing on a database or on a transaction.
+func listingOn(x dbx, n int, since int64) (active, waiting, recent []leaseRow, err error) {
+	rows, err := manyOn(x, `SELECT `+leaseCols+` FROM resource_leases WHERE state IN ('held','waiting')
 		UNION ALL
 		SELECT * FROM (SELECT `+leaseCols+` FROM resource_leases
 			WHERE state = 'ended' AND ended_at >= ? ORDER BY ended_at DESC, id LIMIT ?)`, since, n)
@@ -504,7 +509,12 @@ func (s *leaseStore) Prune(before int64) (int64, error) {
 }
 
 func (s *leaseStore) many(query string, args ...any) ([]leaseRow, error) {
-	rows, err := s.db.Query(query, args...)
+	return manyOn(s.db, query, args...)
+}
+
+// manyOn is many on a database or on a transaction.
+func manyOn(x dbx, query string, args ...any) ([]leaseRow, error) {
+	rows, err := x.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list leases: %w", err)
 	}

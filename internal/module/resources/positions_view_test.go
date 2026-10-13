@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wake/purdex/internal/resources"
+	"github.com/wake/purdex/internal/team"
 )
 
 func (f *posFix) snapshot() resources.Snapshot {
@@ -165,4 +168,81 @@ func TestReport_EndpointHasThePositions(t *testing.T) {
 	assert.Equal(t, 1, rep.Positions.Total)
 	assert.Equal(t, 1, rep.Positions.Commands.One)
 	assert.Equal(t, 1, rep.Paths.Immediate)
+}
+
+// countingRoots is the root source with the batch address lookup of the peers
+// module's resolver, counting the registry reads.
+type countingRoots struct {
+	*fakeRoots
+	reads atomic.Int64
+}
+
+func (c *countingRoots) ResolveOriginsBySession(ids []string) (map[string]team.Origin, error) {
+	c.reads.Add(1)
+	out := map[string]team.Origin{}
+	for _, id := range ids {
+		out[id] = team.Origin{SessionID: id, Address: "mlab/" + id}
+	}
+	return out, nil
+}
+
+// Twenty positions cost one registry read per snapshot at most, and none while the
+// addresses are fresh. (M: resolve each position on its own.)
+func TestSnapshot_AddressesAreResolvedOnceForManyPositions(t *testing.T) {
+	f := newPosFix(t)
+	cr := &countingRoots{fakeRoots: f.m.roots.(*fakeRoots)}
+	f.m.roots = cr
+	f.setZone("danger", "flat")
+	for i := 0; i < 20; i++ {
+		sid := "sid-" + string(rune('a'+i))
+		_, _, _, err := f.m.store.CreateAttached(positionRow{ID: newPositionID(), SessionID: sid, CreatedAt: f.nowMS() + int64(i)},
+			leaseRow{ID: "q" + sid, ClientID: "c" + sid, Weight: 35, SessionID: sid, HolderPID: 7, Scope: resources.ScopeProcess,
+				CreatedAt: f.nowMS() + int64(i), Mode: resources.CallQueue, Command: "go test", Cwd: "/w"})
+		require.NoError(t, err)
+	}
+	s := f.snapshot()
+	require.Len(t, s.Positions, 20)
+	assert.Equal(t, "mlab/sid-a", s.Positions[0].Address)
+	assert.Equal(t, int64(1), cr.reads.Load(), "one registry read for twenty positions")
+	f.snapshot()
+	assert.Equal(t, int64(1), cr.reads.Load(), "fresh addresses are not read again")
+	f.advance(addressTTL + time.Second)
+	f.snapshot()
+	assert.Equal(t, int64(2), cr.reads.Load(), "after the TTL, once more")
+}
+
+// The held rows, the queue and the positions of a snapshot are one view: a
+// transition that lands between the reads is in all of it or none. (M: read the
+// positions outside the transaction.)
+func TestSnapshot_LeasesAndPositionsAreOneView(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "resources.db")
+	s, err := openLeaseStore(path)
+	require.NoError(t, err)
+	defer s.Close()
+	other, err := openLeaseStore(path) // the writer, on its own connection
+	require.NoError(t, err)
+	defer other.Close()
+	_, _, _, err = s.CreateAttached(txPos("pos_00000001", "s1", 10), txRow("a", "s1", "", resources.CallQueue, "go build", "/w", 10))
+	require.NoError(t, err)
+	_, err = s.OfferPosition("pos_00000001", 20, "", "", "")
+	require.NoError(t, err)
+	ok, err := s.GrantInPosition("pos_00000001", resources.PosOffered, "a", 30, false, resources.Decision{}, resources.V2Record{}, "", "")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	s.afterFirstStmt = func() error { // between the two reads the command ends and the position goes idle
+		_, e := other.EndCommand("a", 40, commandEnd{Reason: resources.EndReleased, Outcome: outcomeIdle, PositionID: "pos_00000001", WindowUntil: 99_000})
+		return e
+	}
+	active, _, _, positions, err := s.ListingWithPositions(10, 0)
+	require.NoError(t, err)
+	require.Len(t, active, 1)
+	require.Len(t, positions, 1)
+	assert.Equal(t, resources.PosRunning, positions[0].State, "the position as it was when the held row was read")
+	// The next view sees the change, whole.
+	s.afterFirstStmt = nil
+	active, _, _, positions, err = s.ListingWithPositions(10, 0)
+	require.NoError(t, err)
+	assert.Empty(t, active)
+	assert.Equal(t, resources.PosIdle, positions[0].State)
 }

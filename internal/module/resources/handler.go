@@ -51,7 +51,7 @@ func (m *Module) addLeases(snap *resources.Snapshot) {
 		return
 	}
 	nowT := m.now()
-	active, waiting, ended, err := m.store.Listing(resources.RecentLimit, nowT.Add(-recentWindow).UnixMilli())
+	active, waiting, ended, positions, err := m.store.ListingWithPositions(resources.RecentLimit, nowT.Add(-recentWindow).UnixMilli())
 	m.noteList(err)
 	if err != nil {
 		return
@@ -82,11 +82,6 @@ func (m *Module) addLeases(snap *resources.Snapshot) {
 			ID: a.ID, Kind: a.Kind, Weight: a.Weight, Charge: charge, Use: use[a.ID].Use,
 			SessionID: a.SessionID, AgeS: max(0, (nowMs-a.GrantedAt)/1000), Overrun: a.Overrun,
 		})
-	}
-	positions, perr := m.store.LivePositions()
-	if perr != nil {
-		m.logf("[resources] list positions for /api/resources: %v", perr)
-		positions = nil
 	}
 	places := queuePlaces(positions, waiting)
 	// Waiters are the wait-mode requests (no position); a position's requests are
@@ -194,10 +189,65 @@ func queuePlaces(positions []positionRow, waiting []leaseRow) map[string]int {
 	return out
 }
 
-// originByRef is what the peers module's origin resolver offers besides the
-// roots: the session's address (its name on the bus). Asserted once per snapshot.
-type originBySession interface {
-	ResolveOriginBySession(sessionID string) (team.Origin, bool, error)
+// originsBySession is what the peers module's origin resolver offers besides the
+// roots: the addresses (names on the bus) of many sessions with one registry read.
+type originsBySession interface {
+	ResolveOriginsBySession(sessionIDs []string) (map[string]team.Origin, error)
+}
+
+// addressTTL is how long a session's address is kept: a registry read forks ps for
+// each entry, and an address changes rarely.
+const addressTTL = 30 * time.Second
+
+type cachedAddress struct {
+	address string
+	until   int64
+}
+
+// addressesOf gives the address of each position's session. The ones not known, or
+// older than addressTTL, are resolved together by one registry read; a snapshot is
+// built on every push, so the read is not repeated per position or per snapshot.
+func (m *Module) addressesOf(positions []positionRow, nowMs int64) map[string]string {
+	out := make(map[string]string, len(positions))
+	m.addrMu.Lock()
+	defer m.addrMu.Unlock()
+	var missing []string
+	for _, p := range positions {
+		if c, ok := m.addrCache[p.SessionID]; ok && c.until > nowMs {
+			out[p.SessionID] = c.address
+			continue
+		}
+		missing = append(missing, p.SessionID)
+	}
+	resolver, ok := m.roots.(originsBySession)
+	if len(missing) == 0 || !ok {
+		return out
+	}
+	found, err := resolver.ResolveOriginsBySession(missing)
+	if err != nil {
+		return out // the addresses are for display: try again at the next snapshot
+	}
+	if m.addrCache == nil {
+		m.addrCache = map[string]cachedAddress{}
+	}
+	for _, id := range missing {
+		addr := found[id].Address
+		m.addrCache[id] = cachedAddress{address: addr, until: nowMs + addressTTL.Milliseconds()}
+		out[id] = addr
+	}
+	// Forget the sessions that no position names any more.
+	if len(m.addrCache) > 4*len(positions)+16 {
+		keep := map[string]bool{}
+		for _, p := range positions {
+			keep[p.SessionID] = true
+		}
+		for id := range m.addrCache {
+			if !keep[id] {
+				delete(m.addrCache, id)
+			}
+		}
+	}
+	return out
 }
 
 // positionViews describes the live positions with their requests (V14): who, which
@@ -220,7 +270,7 @@ func (m *Module) positionViews(positions []positionRow, held, waiting []leaseRow
 			byPos[r.PositionID] = append(byPos[r.PositionID], r)
 		}
 	}
-	resolver, _ := m.roots.(originBySession)
+	addresses := m.addressesOf(positions, nowMs)
 	out := make([]resources.PositionView, 0, len(positions))
 	for _, p := range positions {
 		v := resources.PositionView{
@@ -231,11 +281,7 @@ func (m *Module) positionViews(positions []positionRow, held, waiting []leaseRow
 		if p.FirstStartedAt > 0 {
 			v.SpanS = max(0, (nowMs-p.FirstStartedAt)/1000)
 		}
-		if resolver != nil {
-			if o, ok, err := resolver.ResolveOriginBySession(p.SessionID); err == nil && ok {
-				v.Address = o.Address
-			}
-		}
+		v.Address = addresses[p.SessionID]
 		if rv, ok := reasons[posKey(p.ID)]; ok {
 			v.Reason, v.ReasonSince = string(rv.Reason), rv.Since.UnixMilli()
 		}
