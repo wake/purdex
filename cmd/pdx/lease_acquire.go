@@ -72,6 +72,10 @@ type acquireOutcome struct {
 	resp      resources.LeaseResponse
 	failOpen  string // non-empty: the caller runs anyway, and this is why
 	cancelled bool   // the caller was interrupted; the lease was cancelled
+	// queued: the daemon parked the request (resp.State queued) or a newer call
+	// took it over (replaced). The caller does not run its command, and nothing
+	// is sent to cancel: that would lose the place.
+	queued bool
 }
 
 // acquireLine is the one JSON line acquire prints.
@@ -84,6 +88,12 @@ type acquireLine struct {
 	FailOpen     string `json:"fail_open,omitempty"`
 	// Warning is the daemon's (#2470): the volume of the Go build cache is under its hard floor; the lease was granted anyway.
 	Warning string `json:"warning,omitempty"`
+	// State, Position and ParkedUntil say, for a call that was not granted and
+	// is not a failure, that it is queued (or replaced), its place, and when the
+	// place stops being kept (unix ms).
+	State       string `json:"state,omitempty"`
+	Position    int    `json:"position,omitempty"`
+	ParkedUntil int64  `json:"parked_until,omitempty"`
 }
 
 func (o acquireOutcome) line() acquireLine {
@@ -91,6 +101,9 @@ func (o acquireOutcome) line() acquireLine {
 		return acquireLine{Granted: true, FailOpen: o.failOpen}
 	}
 	r := o.resp
+	if o.queued {
+		return acquireLine{ID: r.ID, State: r.State, Position: r.Position, ParkedUntil: r.ParkedUntil, WaitedMS: r.WaitedMS}
+	}
 	return acquireLine{ID: r.ID, Granted: r.Granted, Overrun: r.Overrun, WaitedMS: r.WaitedMS, HostMeasured: r.Host.Measured, Warning: r.Warning}
 }
 
@@ -185,8 +198,11 @@ func runLeaseAcquire(ctx context.Context, args []string, stdout, stderr io.Write
 	}
 	out := leaseAcquire(ctx, client, o, stderr)
 	printAcquire(stdout, out)
-	if out.cancelled {
+	switch {
+	case out.cancelled:
 		return ExitCancelled
+	case out.queued:
+		return ExitQueued
 	}
 	return ExitOK
 }
@@ -218,7 +234,8 @@ func leaseAcquire(ctx context.Context, client *daemonclient.Client, o acquireOpt
 	}
 	o.holderStart = wireStart
 	req := resources.LeaseRequest{ClientID: o.clientID, Kind: o.kind, Weight: o.weight, WaitS: int(o.wait / time.Second),
-		SessionID: o.session, HolderPID: o.holderPID, HolderStart: o.holderStart, ToolUseID: o.toolUse}
+		SessionID: o.session, HolderPID: o.holderPID, HolderStart: o.holderStart, ToolUseID: o.toolUse,
+		Parkable: true}
 	if o.session != "" {
 		req.Scope = resources.ScopeSessionNew
 	} else {
@@ -244,13 +261,16 @@ func leaseAcquire(ctx context.Context, client *daemonclient.Client, o acquireOpt
 		if ctx.Err() != nil {
 			return leaseCancel(client, o.clientID, stderr)
 		}
+		if resp.State == resources.StateQueued || resp.State == resources.StateReplaced {
+			return acquireOutcome{resp: resp, queued: true}
+		}
 		if resp.State == resources.StateEnded {
 			// Ended without a grant (cancelled by someone, abandoned): nothing
 			// to wait for.
 			return acquireOutcome{failOpen: "ended_" + resp.EndReason}
 		}
 		var polled resources.LeaseResponse
-		_, err := client.Do(ctx, http.MethodGet, fmt.Sprintf("/api/resources/leases/%s?wait=%d", url.PathEscape(resp.ID), resources.MaxPollS), nil, &polled)
+		_, err := client.Do(ctx, http.MethodGet, fmt.Sprintf("/api/resources/leases/%s?wait=%d&client_id=%s", url.PathEscape(resp.ID), resources.MaxPollS, url.QueryEscape(o.clientID)), nil, &polled)
 		if err != nil {
 			if ctx.Err() != nil {
 				return leaseCancel(client, o.clientID, stderr)

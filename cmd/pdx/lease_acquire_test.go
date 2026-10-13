@@ -33,6 +33,8 @@ type fakeLeaseDaemon struct {
 	pollList []resources.LeaseResponse
 	hold     bool
 	delCode  int
+	// pollQueries is the raw query of each poll.
+	pollQueries []string
 }
 
 func (f *fakeLeaseDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +57,7 @@ func (f *fakeLeaseDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		write(w, answer{status: code, body: body})
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/resources/leases/"):
 		f.polls++
+		f.pollQueries = append(f.pollQueries, r.URL.RawQuery)
 		n := f.polls
 		hold := f.hold
 		var resp resources.LeaseResponse
