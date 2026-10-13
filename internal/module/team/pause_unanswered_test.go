@@ -442,3 +442,27 @@ func TestOpenStore_TheEarliestPauseSchemaOpensAndKeepsItsRows(t *testing.T) {
 		t.Fatalf("relay_unanswered after the upgrade: created=%v err=%v", created, err)
 	}
 }
+
+// codex attack (critical): relay_unanswered survives every resume group - the switch-off reconciliation, the boot pass and a
+// release-one - until its card is answered. Mutation gate: let the All / OnSinceNot / Release scopes take it → the row is gone and a
+// resume text is sent (red).
+func TestUnanswered_NoResumeGroupTakesIt(t *testing.T) {
+	f := newFixture(t)
+	f.unanswered("sid-1")
+	before := len(f.noticesOf("sid-1"))
+	f.reconcile()             // the periodic / boot pass with the switch off: scope All
+	f.m.reconcilePauses(true) // …and again
+	f.switchOff()             // a switch-off: scope All
+	f.unatt.set(true)         // on again (a new on-period) …
+	f.reconcile()             // … scope OnSinceNot
+	code, body := f.do(http.MethodPost, "/api/team/paused/sid-1/release", team.PauseReleaseRequest{Client: team.Client{Kind: "app", Label: "t"}})
+	if code != http.StatusOK {
+		t.Fatalf("release one: %d %s", code, body)
+	}
+	if _, ok := f.pauses()["sid-1/relay_unanswered"]; !ok {
+		t.Fatal("a resume group took the relay_unanswered row")
+	}
+	if got := len(f.noticesOf("sid-1")); got != before {
+		t.Fatalf("notices grew from %d to %d: a resume text was sent for a session that is still paused", before, got)
+	}
+}
