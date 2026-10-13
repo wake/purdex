@@ -161,6 +161,10 @@ const (
 	// A member whose final relay ask its lead did not answer (RT-2b T23).
 	PauseNoticeUnansweredMember = "[pdx team] 接力申請 lead 沒有回應，先暫停作業，等 lead 確認。"
 	PauseResumedMemberAccepted  = "[pdx team] lead 已安排接力，恢復作業。"
+	// A person released a member its lead had not answered (the App's 「解除」, #2816): the ask is denied by the person.
+	PauseResumedMemberDeniedByUser = "[pdx team] 使用者決定不接力，恢復作業。"
+	// RelayAskDeniedByUserLeadFmt is the lead's notice of it; %s is the member's address.
+	RelayAskDeniedByUserLeadFmt = "[pdx team] member %s 的接力申請已由使用者拒絕，恢復作業"
 	PauseResumedMemberDenied    = "[pdx team] lead 決定不接力，恢復作業。"
 	PauseBounceUnansweredMember = "我目前暫停作業，等待 lead 確認中"
 )

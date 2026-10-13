@@ -2,6 +2,7 @@
 package teammod
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -119,6 +120,38 @@ func TestRelease_ALostDenyIsAnOrdinaryRelease(t *testing.T) {
 	for _, n := range f.noticesOf("sid-1") {
 		if n == team.PauseResumedUnansweredDenied {
 			t.Fatal("a denial was told for a card that was approved")
+		}
+	}
+}
+
+// #2821: the card's deny and the release of the other causes are ONE transaction. A failure after the card closed rolls the card
+// back, so the retry still denies and asks nothing again. Mutation gate: release in a second transaction → the card stays denied
+// though the release failed (red).
+func TestRelease_UnansweredCardAndOtherCausesAreOneTransaction(t *testing.T) {
+	f := newFixture(t)
+	f.modHello("sid-1", "5")
+	card := f.unanswered("sid-1")
+	f.seedPause("sid-1", team.PauseCauseQuota, team.PauseRoleSolo, "_aaaaaa", "t", 1)
+	f.m.store.afterAskDeny = func() error { return fmt.Errorf("boom") }
+	if code, _ := f.releasePaused("sid-1", appRelease()); code != http.StatusInternalServerError {
+		t.Fatalf("release with a failing second half: %d, want 500", code)
+	}
+	if st := f.row(card.RequestID).State; st != team.StateOpen {
+		t.Fatalf("card = %s, want open (rolled back)", st)
+	}
+	if _, ok := f.pauses()["sid-1/relay_unanswered"]; !ok {
+		t.Fatalf("pauses = %+v, want relay_unanswered kept", f.pauses())
+	}
+	f.m.store.afterAskDeny = nil
+	if code, raw := f.releasePaused("sid-1", appRelease()); code != http.StatusOK {
+		t.Fatalf("retry: %d %s", code, raw)
+	}
+	if f.row(card.RequestID).State != team.StateDenied || len(f.pauses()) != 0 {
+		t.Fatalf("after the retry: card %s, pauses %+v", f.row(card.RequestID).State, f.pauses())
+	}
+	for _, o := range f.outbox() {
+		if o.Kind == team.PauseOutboxReask {
+			t.Fatalf("a reask control was written: %+v", o)
 		}
 	}
 }

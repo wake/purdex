@@ -141,6 +141,8 @@ func (m *Module) endCommand(row leaseRow, reason string, now time.Time, notice b
 			switch {
 			case otherHeld:
 				e.Outcome = outcomeCount // the last one to end decides (A §3.2)
+			case m.goneAgents[pos.ID]:
+				e.Outcome, e.PosReason = outcomeEnd, resources.EndAbandoned // the session is gone with its command
 			case pos.DoneRequested:
 				e.Outcome, e.PosReason = outcomeEnd, resources.EndDone
 			default:

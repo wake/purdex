@@ -2,8 +2,12 @@
 package teammod
 
 import (
+	"database/sql"
+	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -63,15 +67,67 @@ func (m *Module) releaseOne(sid string, client team.Client) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if id == "" {
-		return m.resumeOne(sid)
+	if id != "" {
+		return m.releaseCard(sid, id, client)
 	}
-	return m.releaseCard(sid, id, client)
+	if ask, ok, err := m.store.OpenAskOf(sid); err != nil {
+		return 0, err
+	} else if ok && ask.UnansweredAt > 0 {
+		return m.releaseAsk(sid)
+	}
+	return m.resumeOne(sid)
 }
 
-// releaseCard denies the card id of sid for the person and releases the rest; when the deny lost, it is an ordinary release.
+// releaseAsk is a person's release of a member its lead's silence paused (#2816): the final ask closes withdrawn / denied - the
+// person decided - and the pause row goes with it, and the other causes are released without a reask, all in ONE transaction (a
+// failure leaves the ask, the pauses and the outbox as they were, so a retry cannot turn the person's refusal into a reask); the lead
+// is told. A member that has left, or an ask another close took first, is an ordinary release. Caller holds createMu.
+func (m *Module) releaseAsk(sid string) (int, error) {
+	// what the lead's notice needs is read BEFORE the ask closes: a read that fails then fails the release with the ask still open
+	// (codex R1); whether the member is still active is decided again inside the transaction (codex attack)
+	mr, t, isMember, err := m.store.ActiveMemberInLiveTeam(sid)
+	if err != nil {
+		return 0, err
+	}
+	m.askMu.Lock() // behind an ask notice on the wire
+	ask, closed, res, err := m.store.ReleaseDeniedAsk(sid, m.now(), m.speaksReask, uuid.NewString)
+	m.askMu.Unlock()
+	if err != nil {
+		return 0, err
+	}
+	if !closed {
+		return m.resumeOne(sid)
+	}
+	m.logf("[team] relay ask %s of %s denied by a person's release", ask.ID, sid)
+	if isMember {
+		address, _ := m.memberNoticeName(mr)
+		text := fmt.Sprintf(team.RelayAskDeniedByUserLeadFmt, address)
+		m.goTracked(func() { m.noticeToLead(mr, t, text, "relay ask denied by a person") })
+	}
+	m.askAnswered()
+	m.kickCommands()
+	n := res.Sessions
+	if n == 0 { // the ask's close was the whole release
+		n = 1
+	}
+	return n, nil
+}
+
+// releaseCard denies the card id of sid for the person and releases the other causes in the SAME transaction (a failure rolls the
+// deny back, so a retry cannot turn the refusal into a reask, #2821); when the deny lost, it is an ordinary release.
 func (m *Module) releaseCard(sid, id string, client team.Client) (int, error) {
-	_, won, err := m.closeAs(id, Close{State: team.StateDenied, DecidedAt: m.now(), DecidedBy: &client})
+	var res ResumeResult
+	now := m.now()
+	_, won, err := m.closeAs(id, Close{State: team.StateDenied, DecidedAt: now, DecidedBy: &client, AfterWon: func(tx *sql.Tx) error {
+		if m.store.afterAskDeny != nil { // test seam: a failure between the deny and the release
+			if err := m.store.afterAskDeny(); err != nil {
+				return err
+			}
+		}
+		var err error
+		res, err = m.store.resumePausesIn(tx, ResumeScope{Release: sid, NoReask: true, NoReaskText: team.PauseResumedUnansweredDenied}, now, m.speaksReask, uuid.NewString)
+		return err
+	}})
 	if err != nil {
 		return 0, err
 	}
@@ -80,10 +136,12 @@ func (m *Module) releaseCard(sid, id string, client team.Client) (int, error) {
 		// not decide it, so the rest is an ordinary release (codex R1).
 		return m.resumeOne(sid)
 	}
-	n, err := m.resumeScope(ResumeScope{Release: sid, NoReask: true, NoReaskText: team.PauseResumedUnansweredDenied})
-	if err != nil {
-		return 0, err
+	if res.Rows > 0 {
+		m.rosterChanged()
+		m.kickPauseOutbox()
+		m.kickCommands()
 	}
+	n := res.Sessions
 	if n == 0 { // the card's close was the whole release
 		n = 1
 	}

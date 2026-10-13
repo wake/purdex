@@ -300,8 +300,8 @@ func (s *Store) PruneRelayAsks(before int64) (int64, error) {
 }
 
 // DenyRelayAsk closes the session's open ask as withdrawn / denied in ONE transaction and returns it; closed says one was open. A
-// member its unanswered ask had paused is resumed with the lead's "decided not to relay" text.
-func (s *Store) DenyRelayAsk(sessionID string, now int64) (RelayAsk, bool, error) {
+// member its unanswered ask had paused is resumed with text (the lead's, or the person's).
+func (s *Store) DenyRelayAsk(sessionID string, now int64, text string) (RelayAsk, bool, error) {
 	fail := func(err error) (RelayAsk, bool, error) {
 		return RelayAsk{}, false, fmt.Errorf("deny relay ask of %s: %w", sessionID, err)
 	}
@@ -317,11 +317,61 @@ func (s *Store) DenyRelayAsk(sessionID string, now int64) (RelayAsk, bool, error
 	if err != nil {
 		return fail(err)
 	}
-	if _, err := closeAsksIn(tx, `session_id = ?`, []any{sessionID}, team.RelayAskWithdrawDenied, now, team.PauseResumedMemberDenied); err != nil {
+	if _, err := closeAsksIn(tx, `session_id = ?`, []any{sessionID}, team.RelayAskWithdrawDenied, now, text); err != nil {
 		return fail(err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fail(err)
 	}
 	return a, true, nil
+}
+
+// ReleaseDeniedAsk is a person's release of a member its unanswered final ask paused, in ONE write transaction: the member must
+// still be an active member of a live team of this host (the write lock is taken first, so a release of the member cannot slip
+// between the check and the close), its open unanswered ask closes withdrawn / denied, its relay_unanswered pause goes with it, and
+// the other causes are released without a reask. closed false (nothing written) when the member has left or no unanswered ask is open.
+func (s *Store) ReleaseDeniedAsk(sessionID string, now int64, newMod func(string) bool, newToken func() string) (RelayAsk, bool, ResumeResult, error) {
+	fail := func(err error) (RelayAsk, bool, ResumeResult, error) {
+		return RelayAsk{}, false, ResumeResult{}, fmt.Errorf("release denied ask of %s: %w", sessionID, err)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fail(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE team_members SET state = state WHERE session_id = ?`, sessionID); err != nil {
+		return fail(err)
+	}
+	loc, locArgs := s.local("m.host_id")
+	var one int
+	switch err := tx.QueryRow(`SELECT 1 FROM team_members m JOIN teams t ON t.id = m.team_id
+		WHERE m.session_id = ? AND m.state = 'active' AND t.ended_at = 0 AND `+loc, append([]any{sessionID}, locArgs...)...).Scan(&one); {
+	case errors.Is(err, sql.ErrNoRows):
+		return RelayAsk{}, false, ResumeResult{}, nil
+	case err != nil:
+		return fail(err)
+	}
+	a, err := scanRelayAsk(tx.QueryRow(`SELECT `+relayAskCols+` FROM relay_asks WHERE session_id = ? AND state = 'open' AND unanswered_at > 0`, sessionID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return RelayAsk{}, false, ResumeResult{}, nil
+	}
+	if err != nil {
+		return fail(err)
+	}
+	if _, err := closeAsksIn(tx, `session_id = ?`, []any{sessionID}, team.RelayAskWithdrawDenied, now, team.PauseResumedMemberDeniedByUser); err != nil {
+		return fail(err)
+	}
+	if s.afterAskDeny != nil {
+		if err := s.afterAskDeny(); err != nil {
+			return fail(err)
+		}
+	}
+	res, err := s.resumePausesIn(tx, ResumeScope{Release: sessionID, NoReask: true}, now, newMod, newToken)
+	if err != nil {
+		return fail(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fail(err)
+	}
+	return a, true, res, nil
 }
