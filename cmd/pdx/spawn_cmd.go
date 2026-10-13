@@ -47,6 +47,7 @@ var briefTimeout = msgSendTimeout
 type spawnArgs struct {
 	cfgPath, cwd, title, model, effort string
 	host                               string // a paired member host's alias ("" = this host)
+	person                             string // the one-use token of a person's /team spawn (RT-1b)
 	brief                              string
 	hasBrief                           bool
 	taskSubject                        string   // T-2: "" = no task
@@ -62,6 +63,7 @@ func parseSpawnArgs(args []string, stderr io.Writer) (spawnArgs, bool) {
 	fs.StringVar(&a.cfgPath, "config", "", "")
 	fs.StringVar(&a.cwd, "cwd", "", "")
 	fs.StringVar(&a.host, "host", "", "")
+	fs.StringVar(&a.person, "person", "", "")
 	fs.StringVar(&a.title, "title", "", "")
 	fs.StringVar(&a.model, "model", "", "")
 	fs.StringVar(&a.effort, "effort", "", "")
@@ -187,7 +189,7 @@ func runSpawnCmd(ctx context.Context, args []string, getenv func(string) string,
 	if a.model == "" {
 		fmt.Fprintln(stderr, team.ReminderNoModel) // U20 (c): the spawn goes on
 	}
-	req := team.SpawnRequest{ID: spawnNewID(), OriginInbox: inbox, Cwd: cwd, Title: a.title, Model: a.model, Effort: a.effort, Host: a.host}
+	req := team.SpawnRequest{ID: spawnNewID(), OriginInbox: inbox, Cwd: cwd, Title: a.title, Model: a.model, Effort: a.effort, Host: a.host, PersonToken: a.person}
 	if a.taskSubject != "" {
 		req.Task = &team.SpawnTask{Subject: a.taskSubject, Description: a.brief, DoneWhen: a.doneWhen}
 	}

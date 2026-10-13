@@ -34,8 +34,19 @@ func UnattendedClient() Client {
 // lead and self_relay (U23) and adopt (U24 PL-1c). The hook kinds are never
 // approved by the daemon (U23 "不在範圍內").
 func AutoApprovable(k Kind) bool {
-	return k == KindLead || k == KindSelfRelay || k == KindAdopt || k == KindMemberRelay
+	return k == KindSelfRelay || k == KindMemberRelay
 }
+
+// Lead and adopt requests are no longer approved by the daemon (relay/team rules v2, RT-1b): an agent's own request is refused
+// while the switch is on, and one open when it goes on is closed cancelled with this reason. A person's typed command is not an
+// agent's request and is never refused (RT-1a person tokens).
+const (
+	ErrUnattendedRefused  = "unattended_refused" // 409 on create; close_reason of a swept row
+	UnattendedRefusedText = "無人值守模式不開放申請，請等待模式解除後，依情況重新申請"
+)
+
+// UnattendedRefusable reports whether an open request of kind k is refused (closed, not approved) when the switch is on.
+func UnattendedRefusable(k Kind) bool { return k == KindLead || k == KindAdopt }
 
 // UnattendedState is the switch as stored and as answered.
 type UnattendedState struct {
@@ -62,6 +73,7 @@ type UnattendedView struct {
 	NextBefore int64      `json:"next_before,omitempty"` // the next page's cursor: a decided_at
 	Swept      int        `json:"swept,omitempty"`       // PUT only: open requests the switch-on approved
 	Pending    int        `json:"pending,omitempty"`     // PUT only: auto-approvable requests still open after the sweep
+	Refused    int        `json:"refused,omitempty"`     // PUT only: open lead / adopt requests the switch-on refused (cancelled, unattended_refused)
 	// Quotas is every live session of the host with its relay chain's numbers (#2062), for the panel's steppers.
 	// null when the quotas could not be read (the page above stays valid); [] when they were read and the host has no
 	// live session; never absent. A client keeps what it had on null and replaces it on [].

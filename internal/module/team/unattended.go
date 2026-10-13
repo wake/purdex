@@ -164,16 +164,15 @@ func unattendedGrant(a team.Approval) (*team.Grant, error) {
 // committed state is approved, so no snapshot or poll sees it open), then
 // announced as closed only. A refusal of the approve's re-checks is the
 // create's own 409 with nothing written. Caller holds createMu.
-func (m *Module) createApprovedLead(w http.ResponseWriter, row team.Approval, hash string) {
-	g, err := unattendedGrant(row)
+func (m *Module) createApprovedLead(w http.ResponseWriter, row team.Approval, hash string, c Close, g *team.Grant, token string) {
+	var err error
 	var after team.Approval
-	if err == nil {
-		c, t := daemonClose(row.CreatedAt, g), leadTeamOf(row, *g, row.CreatedAt)
-		after, err = m.store.CreateApproved(row, hash, func(tx *sql.Tx) error {
-			_, err := closeLeadApprovedIn(tx, row.ID, c, t)
-			return err
-		})
-	}
+	c.Grant = g
+	t := leadTeamOf(row, *g, row.CreatedAt)
+	after, err = m.store.CreateApproved(row, hash, func(tx *sql.Tx) error {
+		_, err := closeLeadApprovedIn(tx, row.ID, c, t)
+		return err
+	})
 	switch {
 	case errors.Is(err, ErrLeadHasTeam):
 		m.writeErr(w, http.StatusConflict, team.ErrAlreadyLead, "this session already leads a live team", nil)
@@ -183,7 +182,8 @@ func (m *Module) createApprovedLead(w http.ResponseWriter, row team.Approval, ha
 		m.logf("[team] create %s: %v", row.ID, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 	default:
-		m.logf("[team] approval %s approved by unattended at create: kind=%s origin=%s (%s)%s", after.ID, after.Kind, after.Origin.Ref, after.Origin.SessionID, teamNote(after))
+		m.logf("[team] approval %s approved by %s at create: kind=%s origin=%s (%s)%s", after.ID, c.DecidedBy.Kind, after.Kind, after.Origin.Ref, after.Origin.SessionID, teamNote(after))
+		m.persons.spend(token)
 		m.announceClosed(after, nil)
 		m.writeJSON(w, http.StatusCreated, after)
 	}
@@ -359,13 +359,23 @@ const sweepTick = "tick"
 // while the switch is on (reconcileUnattended) and at boot. pending counts
 // the ones still open, which the next tick tries again (decision 5).
 // Caller holds createMu and has read the switch on.
-func (m *Module) sweepUnattended(why string) (approved, pending int) {
+func (m *Module) sweepUnattended(why string) (approved, pending, refused int) {
 	open, err := m.store.ListOpen()
 	if err != nil {
 		m.logf("[team] unattended sweep (%s): %v", why, err)
-		return 0, 0
+		return 0, 0, 0
 	}
 	for _, a := range open {
+		if team.UnattendedRefusable(a.Kind) {
+			// An agent's lead or adopt request is not approved while unattended (RT-1b): it is refused, with the reason the
+			// requester's CLI turns into the text. A person's typed command never reaches here: it is approved at its create.
+			if _, won, err := m.closeAs(a.ID, Close{State: team.StateCancelled, DecidedAt: m.now(), Reason: team.ErrUnattendedRefused}); err != nil {
+				m.logf("[team] unattended sweep (%s): refuse %s: %v", why, a.ID, err)
+			} else if won {
+				refused++
+			}
+			continue
+		}
 		if !autoApprovableRow(a) {
 			continue
 		}
@@ -376,10 +386,10 @@ func (m *Module) sweepUnattended(why string) (approved, pending int) {
 		}
 	}
 	m.forgetClosedRefusals(open)
-	if why != sweepTick || approved > 0 {
-		m.logf("[team] unattended sweep (%s): approved %d, still open %d", why, approved, pending)
+	if why != sweepTick || approved > 0 || refused > 0 {
+		m.logf("[team] unattended sweep (%s): approved %d, refused %d, still open %d", why, approved, refused, pending)
 	}
-	return approved, pending
+	return approved, pending, refused
 }
 
 // reconcileUnattended is the sweeper's half of decision 5 (rule 6): while
@@ -394,7 +404,7 @@ func (m *Module) sweepUnattended(why string) (approved, pending int) {
 // since (review M2), against a list re-read under createMu; it takes
 // createMu for that only while some refusal is remembered.
 func (m *Module) reconcileUnattended(open []team.Approval) {
-	sweep := slices.ContainsFunc(open, autoApprovableRow)
+	sweep := slices.ContainsFunc(open, func(a team.Approval) bool { return autoApprovableRow(a) || team.UnattendedRefusable(a.Kind) })
 	if !sweep && m.notAutoApprovedN.Load() == 0 {
 		return
 	}

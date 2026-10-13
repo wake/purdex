@@ -35,13 +35,13 @@ func TestBoot_TheStepsRunInTheStatedOrder(t *testing.T) {
 // sweep, so it is approved (PU-1b3). Mutation gate: run "unattended" before "leases" → the row stays open (red).
 func TestBoot_AnExpiredLeaseIsExtendedBeforeTheUnattendedSweepLooksAtIt(t *testing.T) {
 	f := newFixture(t)
-	f.create(uid(1)) // lease 1_030_000
+	relay := f.begin("sid-1") // lease 1_030_000
 	f.unatt.set(true)
 	f.clock.Add(35_000) // down for longer than the lease
 	if _, err := f.startTraced(); err != nil {
 		t.Fatal(err)
 	}
-	if a, _, _ := f.m.store.Get(uid(1)); a.State != team.StateApproved {
+	if a, _, _ := f.m.store.Get(relay.RequestID); a.State != team.StateApproved {
 		t.Fatalf("row = %s, want approved by the boot sweep after the lease grace", a.State)
 	}
 	_ = f.m.Stop(context.Background())

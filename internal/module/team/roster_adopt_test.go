@@ -1,7 +1,6 @@
 package teammod
 
 import (
-	"context"
 	"net/http"
 	"testing"
 
@@ -47,18 +46,12 @@ func TestRoster_ReleasedMemberIsOut(t *testing.T) {
 }
 
 // Every approve path of an adopt request announces the roster once, from the winner point
-// (afterApproved). Mutation gate: announce from handleCreateAdopt instead → the click, sweep, tick and boot paths red.
+// (afterApproved). Mutation gate: announce from handleCreateAdopt instead → the click and person-over-open paths red.
 func TestRoster_ChangedOnEveryAdoptApprovePath(t *testing.T) {
 	paths := map[string]func(f *fixture){
-		"click":  func(f *fixture) { f.adoptOK(uid(10), "_def456"); f.decide(uid(10), "approve") },
-		"create": func(f *fixture) { f.unatt.set(true); f.adoptOK(uid(10), "_def456") },
-		"sweep":  func(f *fixture) { f.adoptOK(uid(10), "_def456"); f.unatt.set(true); f.sweep() },
-		"tick":   func(f *fixture) { f.adoptOK(uid(10), "_def456"); f.unatt.set(true); f.m.tick() },
-		"boot": func(f *fixture) {
-			f.adoptOK(uid(10), "_def456")
-			f.unatt.set(true)
-			_ = f.m.Start(context.Background())
-		},
+		"click":            func(f *fixture) { f.adoptOK(uid(10), "_def456"); f.decide(uid(10), "approve") },
+		"person-create":    func(f *fixture) { f.personAdopt = true; f.adoptOK(uid(10), "_def456") },
+		"person-over-open": func(f *fixture) { f.adoptOK(uid(10), "_def456"); f.personAdopt = true; f.adoptOK(uid(11), "_def456") },
 	}
 	for name, run := range paths {
 		t.Run(name, func(t *testing.T) {

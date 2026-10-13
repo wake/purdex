@@ -131,10 +131,11 @@ func TestRemoteAdopt_NoRowWithoutItsCommand(t *testing.T) {
 	}
 }
 
-// Unattended mode: the create itself approves, in the same way.
-func TestRemoteAdopt_UnattendedWritesJoiningRowAndCommandAtCreate(t *testing.T) {
+// The person's /team adopt: the create itself approves, in the same way, whatever the switch.
+func TestRemoteAdopt_PersonAdoptWritesJoiningRowAndCommandAtCreate(t *testing.T) {
 	f, _ := adoptFixture(t)
 	f.unatt.set(true)
+	f.personAdopt = true
 	code, body := f.adopt(uid(32), remoteTarget)
 	if code != http.StatusCreated {
 		t.Fatalf("create = %d %s", code, body)

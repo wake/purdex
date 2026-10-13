@@ -181,7 +181,8 @@ func (m *Module) handleCreateAdopt(w http.ResponseWriter, req team.CreateApprova
 	// call, and only for a request not stored yet (a replay answers the stored row, whatever the host says now).
 	var remote *remoteAdoptTarget
 	if target.Remote {
-		if _, _, err := m.store.getRow(req.ID); errors.Is(err, ErrNoSuchApproval) {
+		aliased := m.personAliasAnswers(req.ID) // a person's retry is answered from its alias: the host is not asked again
+		if _, _, err := m.store.getRow(req.ID); errors.Is(err, ErrNoSuchApproval) && !aliased {
 			r, rerr := m.resolveRemoteAdopt(m.stopCtx, target)
 			if rerr != nil {
 				m.writeCapErr(w, rerr)
@@ -219,6 +220,14 @@ func (m *Module) handleCreateAdopt(w http.ResponseWriter, req team.CreateApprova
 		failStore(err)
 		return
 	}
+	if m.replayOfPersonAlias(w, req.ID, hash) {
+		return
+	}
+	person := req.PersonToken != ""
+	if person && !m.validPerson(origin.SessionID, team.PersonCmdAdopt, req.PersonToken) {
+		m.writeErr(w, http.StatusConflict, team.ErrPersonTokenInvalid, "the person token is unknown, spent, expired or not for this session's /team adopt", nil)
+		return
+	}
 	lead, found, err := m.store.LiveTeamByLead(origin.SessionID)
 	if err != nil {
 		failStore(err)
@@ -253,6 +262,11 @@ func (m *Module) handleCreateAdopt(w http.ResponseWriter, req team.CreateApprova
 		failStore(err)
 		return
 	} else if isOpen {
+		if person && open.Origin.SessionID == origin.SessionID {
+			// this lead asked already and the person has now said yes: their command approves that request (RT-1b)
+			m.personApprove(w, open, m.personClose(m.now()), req.PersonToken, req.ID, hash)
+			return
+		}
 		m.writeErr(w, http.StatusConflict, team.ErrRequestOpen, "an adopt request for this session is already open", &open)
 		return
 	}
@@ -275,8 +289,12 @@ func (m *Module) handleCreateAdopt(w http.ResponseWriter, req team.CreateApprova
 	now := m.now()
 	row := team.Approval{ID: req.ID, Kind: req.Kind, HostID: m.hostID(), Origin: origin, Payload: payload, State: team.StateOpen,
 		CreatedAt: now, DeadlineAt: now + int64(waitS)*1000, LeaseUntil: now + team.LeaseS*1000}
+	if person {
+		m.createApprovedAdopt(w, row, hash, p, tgt, m.personClose(row.CreatedAt), req.PersonToken)
+		return
+	}
 	if m.unattendedOn() { // under createMu: a switch-on's sweep is never behind this read
-		m.createApprovedAdopt(w, row, hash, p, tgt)
+		m.writeErr(w, http.StatusConflict, team.ErrUnattendedRefused, team.UnattendedRefusedText, nil)
 		return
 	}
 	stored, _, inserted, err := m.store.Create(row, hash)
@@ -343,8 +361,7 @@ func (m *Module) localAdoptTarget(w http.ResponseWriter, target adoptTarget, ori
 // createApprovedAdopt is handleCreateAdopt's write while the switch is on: the row, every re-check
 // and the member row in one transaction, so the row's first committed state is approved. A refusal
 // rolls all of it back and is the create's own 409 (no row). Caller holds createMu.
-func (m *Module) createApprovedAdopt(w http.ResponseWriter, row team.Approval, hash string, p team.AdoptPayload, tgt team.Origin) {
-	c := daemonClose(row.CreatedAt, nil)
+func (m *Module) createApprovedAdopt(w http.ResponseWriter, row team.Approval, hash string, p team.AdoptPayload, tgt team.Origin, c Close, token string) {
 	mem := m.adoptMemberRow(row.ID, p, &tgt, row.CreatedAt)
 	var cmd *Command
 	if p.TargetHostID != "" {
@@ -376,7 +393,8 @@ func (m *Module) createApprovedAdopt(w http.ResponseWriter, row team.Approval, h
 		m.logf("[team] create %s: %v", row.ID, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 	default:
-		m.logf("[team] approval %s approved by unattended at create: kind=adopt origin=%s (%s) target=%s", after.ID, after.Origin.Ref, after.Origin.SessionID, p.TargetRef)
+		m.logf("[team] approval %s approved by %s at create: kind=adopt origin=%s (%s) target=%s", after.ID, c.DecidedBy.Kind, after.Origin.Ref, after.Origin.SessionID, p.TargetRef)
+		m.persons.spend(token)
 		m.announceClosed(after, nil)
 		if cmd != nil {
 			m.kickCommands() // the joining row and its command are committed: send it now

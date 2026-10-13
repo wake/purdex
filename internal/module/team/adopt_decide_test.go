@@ -1,7 +1,6 @@
 package teammod
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"sync/atomic"
@@ -140,29 +139,22 @@ func TestAdoptDecide_RegistryErrorIs503AndTheRowStaysOpen(t *testing.T) {
 	}
 }
 
-// afterApproved is the one winner point: five approvals by five paths, one kick each; a refusal and a deny kick none.
-// Mutation gate: kick from handleCreateAdopt instead → the click, sweep, tick and boot rows red.
+// afterApproved is the one winner point: three approvals by three paths (a click, the person's create, the person approving the
+// agent's open request), one kick each; a refusal and a deny kick none. Mutation gate: kick from handleCreateAdopt instead → the
+// click and person-over-open rows red.
 func TestAfterApproved_RunsOnEveryApprovePath(t *testing.T) {
 	paths := map[string]func(f *fixture){
-		"click":  func(f *fixture) { f.adoptOK(uid(10), "_def456"); f.decide(uid(10), "approve") },
-		"create": func(f *fixture) { f.unatt.set(true); f.adoptOK(uid(10), "_def456") },
-		"sweep":  func(f *fixture) { f.adoptOK(uid(10), "_def456"); f.unatt.set(true); f.sweep() },
-		"tick":   func(f *fixture) { f.adoptOK(uid(10), "_def456"); f.unatt.set(true); f.m.tick() },
-		"boot": func(f *fixture) {
-			f.adoptOK(uid(10), "_def456")
-			f.unatt.set(true)
-			if err := f.m.Start(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-		},
-		"deny": func(f *fixture) { f.adoptOK(uid(10), "_def456"); f.decide(uid(10), "deny") },
+		"click":            func(f *fixture) { f.adoptOK(uid(10), "_def456"); f.decide(uid(10), "approve") },
+		"person-create":    func(f *fixture) { f.personAdopt = true; f.adoptOK(uid(10), "_def456") },
+		"person-over-open": func(f *fixture) { f.adoptOK(uid(10), "_def456"); f.personAdopt = true; f.adoptOK(uid(11), "_def456") },
+		"deny":             func(f *fixture) { f.adoptOK(uid(10), "_def456"); f.decide(uid(10), "deny") },
 		"refused": func(f *fixture) {
 			f.adoptOK(uid(10), "_def456")
 			f.origins.hide("sid-2")
 			f.decide(uid(10), "approve")
 		},
 	}
-	want := map[string]int32{"click": 1, "create": 1, "sweep": 1, "tick": 1, "boot": 1, "deny": 0, "refused": 0}
+	want := map[string]int32{"click": 1, "person-create": 1, "person-over-open": 1, "deny": 0, "refused": 0}
 	for name, run := range paths {
 		t.Run(name, func(t *testing.T) {
 			f := newFixture(t)

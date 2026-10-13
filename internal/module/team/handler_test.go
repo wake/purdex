@@ -387,6 +387,8 @@ type fixture struct {
 	sub      *core.EventSubscriber
 	// createReqEdit, when set, edits every createReq body.
 	createReqEdit func(*team.CreateApprovalRequest)
+	// personAdopt makes every adopt request adoptReq builds the person's own: it carries a freshly minted adopt token for sid-1.
+	personAdopt bool
 	spawnFakes
 }
 

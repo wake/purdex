@@ -1,7 +1,6 @@
 package teammod
 
 import (
-	"context"
 	"net/http"
 	"testing"
 
@@ -12,8 +11,8 @@ import (
 // it can take — a click, a create while the switch is on, the switch-on
 // sweep, the tick's reconciliation and boot — one changed each, from the
 // one place all of them end in (afterApproved). Mutation gate: broadcast
-// from the decide handler instead → the create-time, sweep, tick and boot
-// rows red.
+// from the decide handler instead → the person-create
+// and person-over-open rows red.
 func TestRoster_ChangedOnEveryLeadApprovePath(t *testing.T) {
 	paths := []struct {
 		name string
@@ -24,26 +23,16 @@ func TestRoster_ChangedOnEveryLeadApprovePath(t *testing.T) {
 			w.none("an open request")
 			f.approveClick(uid(1))
 		}},
-		{"create-time", func(f *fixture, w *rosterWatch) {
+		{"person-create", func(f *fixture, w *rosterWatch) {
 			f.unatt.set(true)
+			f.personLead()
 			f.create(uid(1))
 		}},
-		{"switch-on sweep", func(f *fixture, w *rosterWatch) {
+		{"person-over-open", func(f *fixture, w *rosterWatch) {
 			f.create(uid(1))
-			f.unatt.set(true)
-			f.sweep()
-		}},
-		{"tick", func(f *fixture, w *rosterWatch) {
-			f.create(uid(1))
-			f.unatt.set(true)
-			f.m.tick()
-		}},
-		{"boot", func(f *fixture, w *rosterWatch) {
-			f.create(uid(1))
-			f.unatt.set(true)
-			if err := f.m.Start(context.Background()); err != nil {
-				f.t.Fatal(err)
-			}
+			w.none("an open request")
+			f.personLead()
+			f.create(uid(2))
 		}},
 	}
 	for _, p := range paths {

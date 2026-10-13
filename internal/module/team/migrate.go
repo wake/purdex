@@ -117,6 +117,11 @@ func migrateSpawnRemote(db *sql.DB) error {
 	return nil
 }
 
+// migrateSpawnPerson gives spawn_ops the mark of a spawn the person typed (RT-1b): a row written before it reads 0.
+func migrateSpawnPerson(db *sql.DB) error {
+	return ensureColumn(db, "spawn_ops", "person", "INTEGER NOT NULL DEFAULT 0")
+}
+
 // migrateMemberLastTurn gives team_members the member's last turn (plan T-3a2): the
 // summary and its (at, seq) stamp, written when the member has no in_progress task. A row
 // written before it reads no turn. Never reset on a relay (resetMemberUsage leaves it).

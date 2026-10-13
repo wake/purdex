@@ -50,8 +50,10 @@ func TestPushTriggers_UnattendedAutoApprovalsPushNothing(t *testing.T) {
 	c := &collector{}
 	_, unsub := f.m.SubscribeApprovals(c.fn)
 	defer unsub()
-	f.createFrom(uid(1), "/tmp/10.sock") // createApprovedLead
-	f.begin("sid-2")                     // beginApproved
+	f.personLead()
+	f.createReqEdit = chain(f.createReqEdit, func(r *team.CreateApprovalRequest) { r.OriginInbox = "/tmp/10.sock" })
+	f.create(uid(1)) // createApprovedLead (the person's /team)
+	f.begin("sid-2") // beginApproved
 	settle()
 	if len(c.got()) == 0 {
 		t.Fatal("expected the closed ops of the auto-approved rows")

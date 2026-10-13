@@ -13,7 +13,11 @@ import (
 // Adopt over HTTP (adopt plan PL-1c). sid-1 (_abc123) leads; sid-2 (_def456) is the target.
 
 func (f *fixture) adoptReq(id, target string) team.CreateApprovalRequest {
-	return team.CreateApprovalRequest{ID: id, Kind: team.KindAdopt, OriginInbox: "/tmp/10.sock", Target: target}
+	r := team.CreateApprovalRequest{ID: id, Kind: team.KindAdopt, OriginInbox: "/tmp/10.sock", Target: target}
+	if f.personAdopt {
+		r.PersonToken = f.mintPerson("sid-1", team.PersonCmdAdopt).Token
+	}
+	return r
 }
 
 func (f *fixture) adopt(id, target string) (int, []byte) {
@@ -172,10 +176,11 @@ func TestAdoptCreate_RegistryErrorIs503NotNotFound(t *testing.T) {
 	}
 }
 
-func TestAdoptCreate_UnattendedIsApprovedNeverOpen(t *testing.T) {
+func TestAdoptCreate_PersonAdoptIsApprovedNeverOpen(t *testing.T) {
 	f := newFixture(t)
 	f.approveLead(uid(1))
 	f.unatt.set(true)
+	f.personAdopt = true
 	f.events()
 	seen := false
 	f.m.store.afterApprovedInsert = func(tx *sql.Tx) error {
@@ -187,7 +192,7 @@ func TestAdoptCreate_UnattendedIsApprovedNeverOpen(t *testing.T) {
 	if !seen {
 		t.Fatal("the create did not go through CreateApproved")
 	}
-	assertDecidedByUnattended(t, a, f.clock.Load())
+	assertDecidedByPerson(t, a, f.clock.Load())
 	if ops := f.opsOf(); !reflect.DeepEqual(ops, []string{"closed"}) {
 		t.Errorf("events = %v, want [closed]", ops)
 	}
@@ -197,10 +202,27 @@ func TestAdoptCreate_UnattendedIsApprovedNeverOpen(t *testing.T) {
 	}
 }
 
-func TestAdoptCreate_UnattendedRefusalInTheTransactionIs409(t *testing.T) {
+// RT-1b: an agent's own adopt request while the switch is on is refused, nothing written. Mutation gate: put the create-time
+// approve back for the agent → 201 (red).
+func TestAdoptCreate_UnattendedRefusesAnAgentsAdopt(t *testing.T) {
 	f := newFixture(t)
 	f.approveLead(uid(1))
 	f.unatt.set(true)
+	f.events()
+	code, body := f.adopt(uid(10), "_def456")
+	f.assertRefusedByUnattended(code, body)
+	if _, ok, _ := f.m.store.Get(uid(10)); ok {
+		t.Fatal("a row was written")
+	}
+	if ops := f.opsOf(); len(ops) != 0 {
+		t.Errorf("events = %v, want none", ops)
+	}
+}
+
+func TestAdoptCreate_PersonAdoptRefusalInTheTransactionIs409(t *testing.T) {
+	f := newFixture(t)
+	f.approveLead(uid(1))
+	f.personAdopt = true
 	f.events()
 	// the target becomes a member between the create's checks and its transaction
 	f.m.store.afterApprovedInsert = func(tx *sql.Tx) error {

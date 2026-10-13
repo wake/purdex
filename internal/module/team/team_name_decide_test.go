@@ -135,7 +135,7 @@ func TestLeadTeamOf_NilGrantNameIsUnnamed(t *testing.T) {
 
 // D-N4 / D-N11: unattended approval keeps the requested name, and the
 // decision log line names the team.
-func TestUnattended_KeepsTheRequestedNameAndLogsIt(t *testing.T) {
+func TestPersonLead_KeepsTheRequestedNameAndLogsIt(t *testing.T) {
 	f := newFixture(t)
 	var mu sync.Mutex
 	var lines []string
@@ -145,7 +145,8 @@ func TestUnattended_KeepsTheRequestedNameAndLogsIt(t *testing.T) {
 		lines = append(lines, fmt.Sprintf(format, args...))
 	}
 	f.unatt.set(true)
-	f.createReqEdit = func(r *team.CreateApprovalRequest) { r.TeamName = "夜班 team" }
+	f.personLead()
+	f.createReqEdit = chain(f.createReqEdit, func(r *team.CreateApprovalRequest) { r.TeamName = "夜班 team" })
 	code, body := f.do(http.MethodPost, "/api/team/approvals", f.createReq(uid(1)))
 	if code != http.StatusCreated {
 		t.Fatalf("create: %d %s", code, body)
@@ -155,7 +156,7 @@ func TestUnattended_KeepsTheRequestedNameAndLogsIt(t *testing.T) {
 	defer mu.Unlock()
 	var found bool
 	for _, l := range lines {
-		if strings.Contains(l, "approved by unattended") && strings.Contains(l, `"夜班 team"`) {
+		if strings.Contains(l, "approved by person") && strings.Contains(l, `"夜班 team"`) {
 			found = true
 		}
 	}

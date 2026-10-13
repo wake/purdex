@@ -180,8 +180,8 @@ func TestCreate_UnlabelledRetryMatchesAHashStoredBeforeLabels(t *testing.T) {
 	}
 }
 
-// D-L4: unattended approval uses the requested label, else the derived one.
-func TestUnattended_UsesTheRequestedOrTheDerivedLabel(t *testing.T) {
+// D-L4: a person-granted lead (RT-1b) uses the requested label, else the derived one.
+func TestPersonLead_UsesTheRequestedOrTheDerivedLabel(t *testing.T) {
 	for _, c := range []struct{ name, label, want, explicit string }{
 		{"A 線：資源租約", "資源線", "資源線", "資源線"},
 		{"A 線：資源租約", "", "A 線", ""},
@@ -189,7 +189,8 @@ func TestUnattended_UsesTheRequestedOrTheDerivedLabel(t *testing.T) {
 	} {
 		f := newFixture(t)
 		f.unatt.set(true)
-		f.createReqEdit = func(r *team.CreateApprovalRequest) { r.TeamName, r.TeamLabel = c.name, c.label }
+		f.personLead()
+		f.createReqEdit = chain(f.createReqEdit, func(r *team.CreateApprovalRequest) { r.TeamName, r.TeamLabel = c.name, c.label })
 		if code, body := f.do(http.MethodPost, "/api/team/approvals", f.createReq(uid(1))); code != http.StatusCreated {
 			t.Fatalf("create: %d %s", code, body)
 		}

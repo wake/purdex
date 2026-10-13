@@ -23,7 +23,7 @@ import (
 )
 
 // leadUsage is the grammar-rejection message for `pdx lead` (exit 2).
-const leadUsage = "usage: pdx lead request --reason <text> [--name <team name>] [--label <短名>] [--max-members N] [--root <dir>]... [--wait 9m] [--config <path>]\n" +
+const leadUsage = "usage: pdx lead request --reason <text> [--name <team name>] [--label <短名>] [--max-members N] [--root <dir>]... [--wait 9m] [--person <token>] [--config <path>]\n" +
 	"       (--max-members 1..8, default 3; --wait up to 10m, default 9m so the call fits one Bash timeout;\n" +
 	"        --label: the tab group's short name, about five Chinese characters / 10 columns, e.g. \"A 線\"; --name is the longer one for the team panel)"
 
@@ -57,9 +57,11 @@ func runLead(args []string) {
 // answer with (409): all of them are ExitRefused. Later rules this command
 // cannot receive are not listed; an unknown code stays ExitError.
 var leadRefusalCodes = map[string]bool{
-	team.ErrRequestOpen:      true,
-	team.ErrAlreadyLead:      true,
-	team.ErrMemberCannotLead: true,
+	team.ErrRequestOpen:        true,
+	team.ErrAlreadyLead:        true,
+	team.ErrMemberCannotLead:   true,
+	team.ErrUnattendedRefused:  true, // RT-1b: unattended mode takes no applications
+	team.ErrPersonTokenInvalid: true, // RT-1: the token of a person's /team is no good
 }
 
 // leadRequestArgs is the parsed, validated `pdx lead request` invocation.
@@ -71,6 +73,7 @@ type leadRequestArgs struct {
 	maxMembers int
 	roots      []string
 	wait       time.Duration
+	person     string // the one-use token of a person's /team (RT-1b); the application is then the person's own
 }
 
 // stringList is a repeatable string flag (--root a --root b).
@@ -93,6 +96,7 @@ func parseLeadRequestArgs(args []string, stderr io.Writer) (leadRequestArgs, boo
 	fs.StringVar(&label, "label", "", "")
 	fs.IntVar(&a.maxMembers, "max-members", 0, "")
 	fs.Var(&roots, "root", "")
+	fs.StringVar(&a.person, "person", "", "")
 	fs.DurationVar(&a.wait, "wait", time.Duration(team.DefaultWaitS)*time.Second, "")
 	reject := func(msg string) (leadRequestArgs, bool) {
 		fmt.Fprintf(stderr, "pdx lead: %s\n%s\n", msg, leadUsage)
@@ -187,6 +191,7 @@ func runLeadCmd(ctx context.Context, args []string, getenv func(string) string, 
 		MaxMembers:  a.maxMembers,
 		Roots:       a.roots,
 		WaitS:       int(a.wait / time.Second),
+		PersonToken: a.person,
 	}
 	var ap team.Approval
 	// The id is a client UUID and the daemon's create is idempotent on it,
@@ -282,6 +287,14 @@ func leadReportErr(err error, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "pdx lead: request_open — 已有一筆申請等待核准（%s）\n", openID)
 			return ExitRefused
 		}
+		if se.API.Error == team.ErrUnattendedRefused {
+			fmt.Fprintf(stderr, "pdx lead: %s %s\n", team.UnattendedRefusedText, se.API.Error)
+			return ExitRefused
+		}
+		if se.API.Error == team.ErrPersonTokenInvalid {
+			fmt.Fprintf(stderr, "pdx lead: 這張 person token 無效、已用過或已過期，請使用者再打一次 /team %s\n", se.API.Error)
+			return ExitRefused
+		}
 		fmt.Fprintf(stderr, "pdx lead: %s — team 規則拒絕這筆申請\n", se.API.Error)
 		return ExitRefused
 	default:
@@ -336,6 +349,10 @@ func leadFinish(ap team.Approval, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "pdx lead: 申請逾時，視同拒絕")
 		return ExitTimeout
 	case team.StateCancelled:
+		if ap.CloseReason == team.ErrUnattendedRefused { // the switch went on while it waited (RT-1b)
+			fmt.Fprintf(stderr, "pdx lead: %s %s\n", team.UnattendedRefusedText, team.ErrUnattendedRefused)
+			return ExitRefused
+		}
 		fmt.Fprintln(stderr, "pdx lead: 申請已取消")
 		return ExitCancelled
 	case team.StateAbandoned:

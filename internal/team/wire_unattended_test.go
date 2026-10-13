@@ -108,15 +108,18 @@ func TestWireUnattended_JSONShapes(t *testing.T) {
 	}
 }
 
-// Only the kinds the user put under the switch (U23, adopt U24 PL-1c); never the hook
-// kinds, which stay with the person (U23 "不在範圍內").
-func TestAutoApprovable_LeadSelfRelayAndAdoptOnly(t *testing.T) {
+// Only the relays are under the switch (RT-1b: lead and adopt are refused while it is on, no longer approved); never the hook
+// kinds, which stay with the person (U23 "不在範圍內"). Mutation gate: put KindLead back → red.
+func TestAutoApprovable_RelaysOnly_LeadAndAdoptAreRefused(t *testing.T) {
 	for k, want := range map[Kind]bool{
-		KindLead: true, KindSelfRelay: true, KindAdopt: true, KindMemberRelay: true,
+		KindLead: false, KindSelfRelay: true, KindAdopt: false, KindMemberRelay: true,
 		KindHookAsk: false, KindHookPermission: false, "adopt ": false, "": false, "LEAD": false,
 	} {
 		if got := AutoApprovable(k); got != want {
 			t.Errorf("AutoApprovable(%q) = %v, want %v", k, got, want)
+		}
+		if got, want := UnattendedRefusable(k), k == KindLead || k == KindAdopt; got != want {
+			t.Errorf("UnattendedRefusable(%q) = %v, want %v", k, got, want)
 		}
 	}
 }
