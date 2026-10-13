@@ -203,7 +203,9 @@ func (s *Store) resumePausesIn(tx *sql.Tx, scope ResumeScope, at int64, newMod f
 }
 
 // bounceListIn is the text that lists the messages bounced to sid while it was paused, oldest first: "" when there were none.
-func bounceListIn(tx *sql.Tx, sid string) (string, error) {
+func bounceListIn(tx interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}, sid string) (string, error) {
 	rows, err := tx.Query(`SELECT from_addr, at, first_line FROM pause_bounces WHERE session_id = ? ORDER BY at, from_addr, text_hash`, sid)
 	if err != nil {
 		return "", err

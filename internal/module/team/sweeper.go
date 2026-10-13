@@ -93,9 +93,14 @@ func (m *Module) tick() {
 		var won bool
 		var err error
 		switch {
+		case a.DeadlineAt <= now && isFinalCard(a):
+			// the last ask of the ladder is not timed out: the card stays open and the session stops (RT-2a1)
+			m.markUnanswered(a, now)
+			continue
 		case a.DeadlineAt <= now:
 			after, won, err = m.closeExpired(a.ID, now, team.StateTimeout)
-		case a.LeaseUntil <= now:
+		case a.LeaseUntil <= now && a.UnansweredAt == 0:
+			// an unanswered card is never abandoned for its lease (S-13): it ends by an answer, the session's end or a compaction
 			after, won, err = m.closeExpired(a.ID, now, team.StateAbandoned)
 		case a.Kind == team.KindMemberRelay:
 			// Liveness is the TEAM's (RQ-2 §4.2): the origin is the lead at create, which the lead's own relay ends while

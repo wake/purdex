@@ -1,0 +1,138 @@
+package teammod
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+
+	"github.com/wake/purdex/internal/team"
+)
+
+// MarkUnanswered is the store half of markUnanswered, in ONE write transaction: the CAS on (id, open, unanswered_at 0, the deadline the
+// caller saw) sets unanswered_at = now and the sentinel deadline; the session's relay_unanswered row (role lead when it leads a live
+// team, else solo; members are not touched) and, only when that row is new, its notice and the phone's push. false (nothing written)
+// when another close, mark or deadline change won.
+func (s *Store) MarkUnanswered(a team.Approval, now int64) (bool, error) {
+	fail := func(err error) (bool, error) { return false, fmt.Errorf("mark unanswered %s: %w", a.ID, err) }
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fail(err)
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE approval_requests SET unanswered_at = ?, deadline_at = ?
+		WHERE id = ? AND state = 'open' AND unanswered_at = 0 AND deadline_at = ?`, now, team.UnansweredDeadlineMs, a.ID, a.DeadlineAt)
+	if err != nil {
+		return fail(err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fail(err)
+	} else if n != 1 {
+		return false, nil
+	}
+	sid := a.Origin.SessionID
+	teamID, _, err := s.liveLocalMembersIn(tx, sid)
+	if err != nil {
+		return fail(err)
+	}
+	role, leadSession := team.PauseRoleSolo, ""
+	if teamID != "" {
+		role, leadSession = team.PauseRoleLead, sid
+	}
+	ins, err := tx.Exec(`INSERT INTO session_pauses (session_id, cause, role, team_id, lead_session_id, ref, title, on_since, since)
+		VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?) ON CONFLICT (session_id, cause) DO NOTHING`,
+		sid, team.PauseCauseUnanswered, role, teamID, leadSession, a.Origin.Ref, a.Origin.Title, now)
+	if err != nil {
+		return fail(err)
+	}
+	if n, err := ins.RowsAffected(); err != nil {
+		return fail(err)
+	} else if n == 1 {
+		name := a.Origin.Title
+		if name == "" {
+			name = a.Origin.Ref
+		}
+		for _, o := range []struct{ kind, text string }{
+			{team.PauseOutboxNotice, team.PauseNoticeUnanswered},
+			{team.PauseOutboxPush, fmt.Sprintf(team.PausePushUnansweredFmt, name)},
+		} {
+			if _, err := tx.Exec(`INSERT INTO pause_outbox (session_id, kind, text, created_at) VALUES (?, ?, ?, ?)`, sid, o.kind, o.text, now); err != nil {
+				return fail(err)
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fail(err)
+	}
+	return true, nil
+}
+
+// querier is what leaveUnansweredIn needs beyond dbtx: the reads of the bounce list.
+type querier interface {
+	dbtx
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+// leaveUnansweredIn runs inside closeRowIn when a close WON, on the closer's own transaction: a row that was unanswered takes the
+// session's relay_unanswered pause with it, the resume notice of how the card ended (approved / denied / anything else) and the
+// list of the messages bounced meanwhile. A session that still holds another cause stays paused and is told nothing yet. A row
+// that was never unanswered costs one read.
+func leaveUnansweredIn(ex dbtx, id string, c Close) error {
+	var unanswered int64
+	var sid string
+	switch err := ex.QueryRow(`SELECT unanswered_at, origin_session_id FROM approval_requests WHERE id = ?`, id).Scan(&unanswered, &sid); {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil
+	case err != nil:
+		return fmt.Errorf("read unanswered of %s: %w", id, err)
+	}
+	if unanswered == 0 {
+		return nil
+	}
+	q, ok := ex.(querier)
+	if !ok {
+		return fmt.Errorf("close of unanswered %s: not on a transaction", id)
+	}
+	res, err := ex.Exec(`DELETE FROM session_pauses WHERE session_id = ? AND cause = ?`, sid, team.PauseCauseUnanswered)
+	if err != nil {
+		return fmt.Errorf("leave unanswered %s: %w", id, err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return err // the pause was already gone (a release took it): nothing to tell
+	}
+	var left int
+	if err := ex.QueryRow(`SELECT COUNT(*) FROM session_pauses WHERE session_id = ?`, sid).Scan(&left); err != nil {
+		return fmt.Errorf("leave unanswered %s: %w", id, err)
+	}
+	if left > 0 {
+		return nil // another cause stands: not resumed, told nothing, its bounces kept
+	}
+	text := team.PauseResumedUnansweredEnded
+	switch c.State {
+	case team.StateApproved:
+		text = team.PauseResumedUnansweredApproved
+	case team.StateDenied:
+		text = team.PauseResumedUnansweredDenied
+	}
+	outbox := func(t string) error {
+		if _, err := ex.Exec(`INSERT INTO pause_outbox (session_id, kind, text, created_at) VALUES (?, ?, ?, ?)`, sid, team.PauseOutboxNotice, t, c.DecidedAt); err != nil {
+			return fmt.Errorf("leave unanswered %s: outbox: %w", id, err)
+		}
+		return nil
+	}
+	if err := outbox(text); err != nil {
+		return err
+	}
+	list, err := bounceListIn(q, sid)
+	if err != nil {
+		return fmt.Errorf("leave unanswered %s: %w", id, err)
+	}
+	if list != "" {
+		if err := outbox(list); err != nil {
+			return err
+		}
+		if _, err := ex.Exec(`DELETE FROM pause_bounces WHERE session_id = ?`, sid); err != nil {
+			return fmt.Errorf("leave unanswered %s: %w", id, err)
+		}
+	}
+	return nil
+}
