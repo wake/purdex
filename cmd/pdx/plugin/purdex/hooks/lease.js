@@ -431,12 +431,34 @@ function newClientId() {
   return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20)
 }
 
-// readAcquire is the one JSON line `pdx lease acquire` prints, or null for anything else (a non-zero exit,
-// junk). The answer is read even when the lease was fail-open: that says so itself.
+// EXIT_QUEUED is `pdx lease acquire`'s exit code for "queued": the request is parked (or was replaced by a
+// newer call) and its line says so. It is an answer, not a failure.
+const EXIT_QUEUED = 15
+
+// readAcquire is the one JSON line `pdx lease acquire` prints, or null for anything else (any other non-zero
+// exit, junk). The answer is read even when the lease was fail-open: that says so itself. Exit 15 counts only
+// with a line that says queued or replaced.
 function readAcquire(r) {
-  if (!r || r.exitCode !== 0) return null
+  if (!r || (r.exitCode !== 0 && r.exitCode !== EXIT_QUEUED)) return null
   const o = parse(String(r.stdout || '').trim())
-  return isObject(o) ? o : null
+  if (!isObject(o)) return null
+  if (r.exitCode === EXIT_QUEUED && !isQueued(o)) return null
+  return o
+}
+
+const isQueued = (a) => !!a && (a.state === 'queued' || a.state === 'replaced')
+
+// queuedDeny is what the model is told when the host is busy and its command was not run (lease v2 spec D-4′):
+// the place, how long it has waited, how long the place is kept, and to run the same command later, not to get
+// around the queue. `pdx lease run` says the same.
+function queuedDeny(a, nowMs) {
+  if (a.state === 'replaced') return '主機資源忙，這個指令沒有執行：這個呼叫已被同一個 session 較新的呼叫取代（它接手了排隊的位置），請等那一個的結果，不要重跑。'
+  const waitedMin = Math.floor((Number(a.waited_ms) || 0) / 60000)
+  const waited = waitedMin >= 1 ? '已等 ' + waitedMin + ' 分鐘' : '已等不到 1 分鐘'
+  const leftMs = Number(a.parked_until) - nowMs
+  const keep = Number(a.parked_until) > 0 && leftMs > 0 ? '位置會保留 ' + Math.ceil(leftMs / 60000) + ' 分鐘' : '位置會保留一段時間'
+  return '主機資源忙，這個指令還沒執行：排隊第 ' + (Number(a.position) || 0) + ' 位，' + waited + '。' + keep +
+    '；先做不需要這個指令的事，之後用同一個指令重跑就會接回原位。不要改成背景執行或加 & 繞過排隊。'
 }
 
 // leaseNotes is what the model is told, in Chinese, one line each and only what applies.
@@ -445,8 +467,7 @@ function leaseNotes(rewritten, command, answer) {
   if (rewritten) notes.push('Purdex mod 把 --maxWorkers=3 加進這個指令（主機資源規則 R7），實際執行的是：' + command)
   if (answer && !answer.fail_open) {
     const ms = Number(answer.waited_ms) || 0
-    if (answer.overrun) notes.push('等滿 ' + Math.round(ms / 60000) + ' 分鐘超量放行，已記錄')
-    else if (ms >= WAIT_NOTE_MS) {
+    if (ms >= WAIT_NOTE_MS) {
       const load = Number(answer.host_measured) > 0 ? '（負載 ' + answer.host_measured + '/100）' : ''
       notes.push('這個指令先等了 ' + Math.round(ms / 1000) + ' 秒主機資源' + load + '，不是卡住，不要重試')
     }
@@ -489,6 +510,7 @@ async function leaseCall($, e, next) {
   }
   const clientId = newClientId()
   let answer = null
+  let queued = false // a queued request is not released: a release by client id would cancel the parked row
   try {
     try {
       answer = readAcquire(await $.process.run([cfg.bin, 'lease', 'acquire', '--kind', c.kind, '--session', sid,
@@ -497,11 +519,17 @@ async function leaseCall($, e, next) {
     } catch (err) {
       log($, 'acquire failed, the command runs: ' + (err && err.message ? err.message : String(err)))
     }
+    if (isQueued(answer)) {
+      // The host is busy and this request's place is kept: the command is not run. The model is told in the
+      // tool's own result (a deny), and the next call of the same command takes the place back.
+      queued = true
+      return { deny: queuedDeny(answer, Date.now()) }
+    }
     const r = await next(rewritten ? { ...e, command } : e)
     const notes = leaseNotes(rewritten, command, answer)
     return notes.length ? { ...r, context: [...(r.context ?? []), ...notes] } : r
   } finally {
-    await releaseLease($, cfg, clientId, answer)
+    if (!queued) await releaseLease($, cfg, clientId, answer)
   }
 }
 

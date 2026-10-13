@@ -235,12 +235,12 @@ test('the context names the rewrite, with the command that really ran', async ($
   expect(out.context).toEqual(['Purdex mod 把 --maxWorkers=3 加進這個指令（主機資源規則 R7），實際執行的是：npx vitest run --maxWorkers=3'])
 })
 
-test('the context says plainly that the command waited, and overran', async ($, on) => {
+test('the context says plainly that the command waited (there is no overrun any more)', async ($, on) => {
   let answer = GRANT({ waited_ms: 37000, host_measured: 72 })
   rig(on, (a) => (sub(a) === 'acquire' ? ok(answer) : ok('{}')))
   expect((await bash($, 'pnpm run build')).context).toEqual(['這個指令先等了 37 秒主機資源（負載 72/100），不是卡住，不要重試'])
-  answer = GRANT({ waited_ms: 300000, overrun: true })
-  expect((await bash($, 'pnpm run build')).context).toEqual(['等滿 5 分鐘超量放行，已記錄'])
+  answer = GRANT({ waited_ms: 300000, overrun: true }) // an old daemon's field: no special note
+  expect((await bash($, 'pnpm run build')).context).toEqual(['這個指令先等了 300 秒主機資源，不是卡住，不要重試'])
 })
 
 test('a wait under a second is not announced; a fail-open answer says nothing', async ($, on) => {
@@ -334,3 +334,49 @@ for (const mode of ['throw', 'hang'] as const) {
     expect(out.context?.[0]).toContain('--maxWorkers=3')
   })
 }
+
+// ---- queued (lease v2 P2b) ----
+
+const QUEUED = (extra: object = {}) => JSON.stringify({ id: 'lease-1', granted: false, state: 'queued', position: 3, waited_ms: 125000, parked_until: Date.now() + 14 * 60000 + 20000, ...extra })
+
+test('queued: the command is not run, the model gets the text as a deny, and nothing is released', async ($, on) => {
+  const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(QUEUED(), 15) : ok('{}')))
+  const out = await bash($, 'cd spa && pnpm run build')
+  expect(r.ran).toEqual([]) // the tool never ran
+  expect(r.calls.map(sub)).toEqual(['acquire']) // no release: it would cancel the parked row
+  expect(out.deny).toContain('主機資源忙，這個指令還沒執行：排隊第 3 位，已等 2 分鐘。位置會保留 15 分鐘')
+  expect(out.deny).toContain('之後用同一個指令重跑就會接回原位')
+  expect(out.deny).toContain('不要改成背景執行或加 & 繞過排隊')
+})
+
+test('replaced: the same, with its own text', async ($, on) => {
+  const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(JSON.stringify({ id: 'lease-1', granted: false, state: 'replaced' }), 15) : ok('{}')))
+  const out = await bash($, 'pnpm run build')
+  expect(r.ran).toEqual([])
+  expect(r.calls.map(sub)).toEqual(['acquire'])
+  expect(out.deny).toContain('已被同一個 session 較新的呼叫取代')
+})
+
+test('exit 15 without a queued line is just a failed acquire: the command runs, the release goes', async ($, on) => {
+  const r = rig(on, (a) => (sub(a) === 'acquire' ? ok('not json', 15) : ok('{}')))
+  const out = await bash($, 'pnpm run build')
+  expect(out.result).toEqual(BASH_OK.result)
+  expect(r.ran).toEqual(['pnpm run build'])
+  expect(r.calls.map(sub)).toEqual(['acquire', 'release'])
+})
+
+test('a granted answer is as before, and a daemon that is down still runs the command', async ($, on) => {
+  let answer: any = ok(GRANT())
+  const r = rig(on, (a) => (sub(a) === 'acquire' ? answer : ok('{}')))
+  expect((await bash($, 'pnpm run build')).result).toEqual(BASH_OK.result)
+  answer = ok('', 20, 'pdx lease: daemon unreachable')
+  expect((await bash($, 'pnpm run build')).result).toEqual(BASH_OK.result)
+  expect(r.ran).toEqual(['pnpm run build', 'pnpm run build'])
+})
+
+test('a queued answer with the maxWorkers rewrite still runs nothing', async ($, on) => {
+  const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(QUEUED({ position: 1, waited_ms: 10000 }), 15) : ok('{}')))
+  const out = await bash($, 'npx vitest run')
+  expect(r.ran).toEqual([])
+  expect(out.deny).toContain('排隊第 1 位，已等不到 1 分鐘')
+})
