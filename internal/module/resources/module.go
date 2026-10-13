@@ -139,6 +139,9 @@ type Module struct {
 	// baselineFailing: the "no baseline" problem has been logged (the unlocked part
 	// of the pass runs on the sampler and the sweeper goroutine).
 	baselineFailing atomic.Bool
+	// addrMu guards addrCache: the addresses shown in the snapshot's positions.
+	addrMu    sync.Mutex
+	addrCache map[string]cachedAddress
 	// routeHook runs in the cancel and done routes after the caller and the target
 	// were read and before stateMu is taken, for tests to let a pass start the
 	// target in that window.

@@ -46,6 +46,27 @@ func (s *leaseStore) ReportRows(since, until int64) ([]resources.ReportLease, []
 	return leases, minutes, err
 }
 
+// ReportPositions reads the positions created in [since, until).
+func (s *leaseStore) ReportPositions(since, until int64) ([]resources.ReportPosition, error) {
+	rows, err := s.db.Query(`SELECT end_reason, commands_started, requeued_from, extensions, created_at, offered_at,
+			delivered_at, offer_passes, offer_wait_ms, idle_wait_ms, notice_result
+		FROM resource_positions WHERE created_at >= ? AND created_at < ? ORDER BY created_at, id`, since, until)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []resources.ReportPosition
+	for rows.Next() {
+		var p resources.ReportPosition
+		if err := rows.Scan(&p.EndReason, &p.CommandsStarted, &p.RequeuedFrom, &p.Extensions, &p.CreatedAt, &p.OfferedAt,
+			&p.DeliveredAt, &p.OfferPasses, &p.OfferWaitMS, &p.IdleWaitMS, &p.NoticeResult); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 func (s *leaseStore) reportMinutes(since, until int64) ([]resources.ReportMinute, error) {
 	mrows, err := s.db.Query(`SELECT at, load1, mem, full_ticks, full_starts, full_longest_s, heavy_held,
 			sampled_s, normal_s, warning_s, danger_s
@@ -113,5 +134,12 @@ func (m *Module) handleReport(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, resources.ErrNotReady, "read the report rows: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, resources.BuildReport(from, now.UnixMilli(), leases, minutes))
+	positions, err := m.store.ReportPositions(from, until)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, resources.ErrNotReady, "read the position rows: "+err.Error())
+		return
+	}
+	report := resources.BuildReport(from, now.UnixMilli(), leases, minutes)
+	report.Positions = resources.BuildPositionReport(positions)
+	writeJSON(w, http.StatusOK, report)
 }

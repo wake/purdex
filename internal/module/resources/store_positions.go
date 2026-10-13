@@ -1,6 +1,7 @@
 package resourcesmod
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -139,7 +140,12 @@ func (s *leaseStore) onePosition(query string, arg any) (positionRow, bool, erro
 
 // LivePositions are all positions that have not ended, oldest first.
 func (s *leaseStore) LivePositions() ([]positionRow, error) {
-	rows, err := s.db.Query(`SELECT ` + positionCols + ` FROM resource_positions WHERE state != 'ended' ORDER BY created_at, id`)
+	return livePositionsOn(s.db)
+}
+
+// livePositionsOn is LivePositions on a database or on a transaction.
+func livePositionsOn(x dbx) ([]positionRow, error) {
+	rows, err := x.Query(`SELECT ` + positionCols + ` FROM resource_positions WHERE state != 'ended' ORDER BY created_at, id`)
 	if err != nil {
 		return nil, fmt.Errorf("list positions: %w", err)
 	}
@@ -187,4 +193,25 @@ func (s *leaseStore) ConfirmRow(id, positionID string, now int64) (bool, error) 
 		WHERE id = ? AND state = 'waiting' AND mode = 'ask' AND position_id = ?
 		AND EXISTS (SELECT 1 FROM resource_positions WHERE id = ? AND state IN ('offered','idle'))`,
 		now, id, positionID, positionID)
+}
+
+// ListingWithPositions is Listing and the live positions in one read transaction:
+// the held rows, the queue and the positions are one view, so a transition cannot
+// show a position idle beside a request still held.
+func (s *leaseStore) ListingWithPositions(n int, since int64) (active, waiting, recent []leaseRow, positions []positionRow, err error) {
+	tx, err := s.db.BeginTx(context.Background(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("begin listing: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if active, waiting, recent, err = listingOn(tx, n, since); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	if err = s.mid(); err != nil { // test seam: a writer may move things here
+		return nil, nil, nil, nil, err
+	}
+	if positions, err = livePositionsOn(tx); err != nil {
+		return nil, nil, nil, nil, err
+	}
+	return active, waiting, recent, positions, nil
 }

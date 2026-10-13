@@ -100,11 +100,14 @@ func formatReport(w io.Writer, r resources.Report, loc *time.Location) {
 	fmt.Fprintf(w, "requests  %d%s\n", r.Requests.Total, by)
 	fmt.Fprintf(w, "let in    at once %d, after waiting %d, over the deadline %d; never granted %d\n",
 		r.Paths.Immediate, r.Paths.Waited, r.Paths.Overrun, r.Requests.NotGranted)
+	if r.Paths.Offer+r.Paths.Continued > 0 {
+		fmt.Fprintf(w, "          by a position: first command after an offer %d, continued in an idle window %d\n", r.Paths.Offer, r.Paths.Continued)
+	}
 	if r.NotRecorded > 0 {
 		fmt.Fprintf(w, "          %d granted before the decision record existed are in no figure below\n", r.NotRecorded)
 	}
 	fmt.Fprintf(w, "wait      p50 %s  p90 %s  max %s\n", seconds(r.WaitMS.P50), seconds(r.WaitMS.P90), seconds(r.WaitMS.Max))
-	fmt.Fprintf(w, "old rule  would have held back %d of %d grants\n", r.WouldWaitR2, r.Paths.Immediate+r.Paths.Waited+r.Paths.Overrun)
+	fmt.Fprintf(w, "old rule  would have held back %d of %d grants\n", r.WouldWaitR2, r.Paths.Immediate+r.Paths.Waited+r.Paths.Overrun+r.Paths.Offer+r.Paths.Continued)
 	fmt.Fprintf(w, "full      %.1f%% of the time, %d runs, longest %ds\n", r.Full.Share*100, r.Full.Runs, r.Full.LongestS)
 	fmt.Fprintf(w, "2+ heavy  %d minutes, highest load1 %.2f, highest memory %.1f%%\n", r.Heavy.Minutes, r.Heavy.MaxLoad1, r.Heavy.MaxMem)
 	formatReportV2(w, r, loc)

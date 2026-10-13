@@ -32,7 +32,9 @@
   "paths": {
     "immediate": 4,
     "waited": 2,
-    "overrun": 1
+    "overrun": 1,
+    "offer": 0,
+    "continued": 0
   },
   "wait_ms": {
     "p50": 0,
@@ -117,5 +119,51 @@
       "max": 0
     },
     "longest": []
+  },
+  "positions": {
+    "total": 0,
+    "by_end_reason": null,
+    "commands": {
+      "none": 0,
+      "one": 0,
+      "two": 0,
+      "three": 0,
+      "four_plus": 0
+    },
+    "requeued": 0,
+    "extensions": 0,
+    "offer_wait_ms": {
+      "n": 0,
+      "total": 0,
+      "p50": 0,
+      "p90": 0,
+      "max": 0
+    },
+    "idle_wait_ms": {
+      "n": 0,
+      "total": 0,
+      "p50": 0,
+      "p90": 0,
+      "max": 0
+    },
+    "queued_wait_ms": {
+      "p50": 0,
+      "p90": 0,
+      "max": 0
+    },
+    "offers": {
+      "offered": 0,
+      "delivered": 0,
+      "passed": 0,
+      "delivery_delay_ms": {
+        "n": 0,
+        "total": 0,
+        "p50": 0,
+        "p90": 0,
+        "max": 0
+      },
+      "lapsed_after_delivery": 0,
+      "notice_results": null
+    }
   }
 }

@@ -61,3 +61,19 @@ func TestReportText_V2EmptyAndQuoted(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(got, "longest   #"))
 	assert.Contains(t, got, "(zone (none), trend (none) at the grant)")
 }
+
+// A grant by a position is a grant: the old rule's denominator counts it and the
+// two paths are shown. (M: leave them out of the sum.)
+func TestFormatReport_PositionPathsCountAsGrants(t *testing.T) {
+	var buf bytes.Buffer
+	r := resources.Report{WouldWaitR2: 2}
+	r.Paths = resources.ReportPaths{Immediate: 1, Offer: 2, Continued: 1}
+	formatReport(&buf, r, time.UTC)
+	out := buf.String()
+	if !strings.Contains(out, "would have held back 2 of 4 grants") {
+		t.Errorf("the denominator misses the position paths:\n%s", out)
+	}
+	if !strings.Contains(out, "first command after an offer 2, continued in an idle window 1") {
+		t.Errorf("the position paths are not shown:\n%s", out)
+	}
+}
