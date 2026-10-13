@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -99,5 +100,27 @@ func TestRelayAsk_AttendedLeavesItToTheLead(t *testing.T) {
 	}
 	if askN, autoN := askNotices(f); askN != 1 || autoN != 0 {
 		t.Fatalf("notices = %+v", f.sender.calls())
+	}
+}
+
+// A remote member's mirror ask on the lead host is accepted by the next liveness tick while the switch is on (RT-2b T22).
+// Mutation gate: skip the tick's accept → the mirror stays open (red).
+func TestRelayAskFact_UnattendedAcceptsTheMirrorOnTheTick(t *testing.T) {
+	f, fc := leadAskFixture(t)
+	fc.caps["lead:1"] = ipeers.TeamCaps{Kinds: append(append([]string{}, allKinds...), CmdRelay), AllowTeam: true, FactKinds: []string{team.FactRelayAsk}}
+	f.setPool("sid-1", 2)
+	f.setQuota("sid-1", 5)
+	f.unatt.set(true)
+	f.qrule.set(true, nil)
+	if code, body := f.postFact(leadPrincipal(), relayAskFact(factUUID1, "mk1", rid(810), 71, 300)); code != http.StatusOK {
+		t.Fatalf("fact: %d %s", code, body)
+	}
+	f.livenessTick()
+	a := f.ask(rid(810))
+	if a.State != team.RelayAskAccepted || a.OpID == "" {
+		t.Fatalf("mirror = %+v, want accepted by the tick", a)
+	}
+	if got := f.poolLeft("sid-1"); got != 1 {
+		t.Fatalf("pool = %d, want 1", got)
 	}
 }
