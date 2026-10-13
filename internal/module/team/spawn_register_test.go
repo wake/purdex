@@ -34,7 +34,7 @@ func TestSpawn_AMemberThatRegistersIsStoredAndTitled(t *testing.T) {
 	}
 }
 
-// Spec §7.2 step 5: no registration within 20 s of the launch → the session
+// Spec §7.2 step 5: no registration within 60 s of the launch → the session
 // is killed (recorded id, recorded generation) and the op fails
 // member_start_timeout, so it no longer counts against the limit. Mutation
 // gate: skip the kill → red.
@@ -51,14 +51,14 @@ func TestSpawn_StartTimeoutKillsAndFreesTheSlot(t *testing.T) {
 	}
 }
 
-// Spec §7.2 step 5 ("Wait up to 20 s … On timeout: kill"), review R1 as the
+// Spec §7.2 step 5 ("Wait up to 60 s … On timeout: kill"), review R1 as the
 // critic read it: every poll judges the deadline first, so a poll that wakes
-// past launched_at + 20 s times out even when the member has shown up by
+// past launched_at + 60 s times out even when the member has shown up by
 // then. Mutation gate: look at the member before the deadline → red.
 func TestSpawn_PastTheBudgetItTimesOutEvenWithAMemberThere(t *testing.T) {
 	f, root := newSpawnFixture(t, 1)
 	f.m.spawnSleep = func(context.Context, time.Duration) {
-		f.clock.Add(21_000)
+		f.clock.Add(61_000)
 		f.register("%0", "sid-m1")
 	}
 	if op := f.runOp(1, root, nil); op.State != team.SpawnFailed || op.Reason != team.SpawnReasonStartTimeout || len(f.tmux.KillIfInstanceCalls()) != 1 {
@@ -96,7 +96,7 @@ func TestSpawn_AtTheDeadlineOnlyOneRunnerActs(t *testing.T) {
 		if _, won := f.m.spawnRegister(op); !won {
 			t.Fatal("the registration did not win")
 		}
-		f.clock.Add(21_000)
+		f.clock.Add(61_000)
 		f.m.spawnRegister(op) // the second runner, with its read from before
 		now, _, _ := f.m.store.GetSpawnOp(op.ID)
 		if now.State != team.SpawnRunning || now.Step != team.StepRegistered || len(f.tmux.KillIfInstanceCalls()) != 0 {
@@ -106,7 +106,7 @@ func TestSpawn_AtTheDeadlineOnlyOneRunnerActs(t *testing.T) {
 	t.Run("timeout first", func(t *testing.T) {
 		f, op := launched(t)
 		f.frames.afterRead = func() {
-			f.clock.Add(21_000)
+			f.clock.Add(61_000)
 			f.m.spawnRegister(op) // the second runner times the op out
 		}
 		if _, won := f.m.spawnRegister(op); won {
@@ -160,5 +160,36 @@ func TestSpawn_StopLeavesTheOpRunning(t *testing.T) {
 	}
 	if op, _, _ := f.m.store.GetSpawnOp(id); op.State != team.SpawnRunning || op.Step != team.StepLaunched || len(f.tmux.KillIfInstanceCalls()) != 0 {
 		t.Fatalf("after Stop: %s at %s, kills %+v", op.State, op.Step, f.tmux.KillIfInstanceCalls())
+	}
+}
+
+// #2761: a member that registers 25 s after the launch (a loaded host: 13–17 s was normal, 20 s often missed) is in time
+// under the 60 s budget; one that shows up past 60 s still times out. Mutation gate: SpawnRegisterS back to 20 → the first
+// case red.
+func TestSpawn_ASlowHostRegistersWithinTheBudget(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		after    int64
+		wantDone bool
+	}{{"25 s", 25_000, true}, {"past the budget", 61_000, false}} {
+		t.Run(c.name, func(t *testing.T) {
+			f, root := newSpawnFixture(t, 1)
+			start := f.clock.Load()
+			registered := false
+			f.m.spawnSleep = func(context.Context, time.Duration) {
+				f.clock.Add(1_000)
+				if !registered && f.clock.Load()-start >= c.after {
+					registered = true
+					f.register("%0", "sid-m1")
+				}
+			}
+			op := f.runOp(1, root, nil)
+			if c.wantDone && (op.State != team.SpawnRunning && op.State != team.SpawnDone || op.Reason == team.SpawnReasonStartTimeout) {
+				t.Fatalf("op = %+v, want a member registered in time", op)
+			}
+			if !c.wantDone && (op.State != team.SpawnFailed || op.Reason != team.SpawnReasonStartTimeout) {
+				t.Fatalf("op = %+v, want member_start_timeout", op)
+			}
+		})
 	}
 }

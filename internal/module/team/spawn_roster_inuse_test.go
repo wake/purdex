@@ -45,7 +45,7 @@ func TestSpawnRoster_AcceptAndFailAreAnnounced(t *testing.T) {
 // The start timeout ends the op failed through its own path (timeOutSpawn).
 func TestSpawnRoster_TimeoutIsAnnounced(t *testing.T) {
 	f, root := newSpawnFixture(t, 2)
-	f.m.spawnSleep = func(_ context.Context, _ time.Duration) { f.clock.Add(21_000) }
+	f.m.spawnSleep = func(_ context.Context, _ time.Duration) { f.clock.Add(61_000) }
 	id := f.acceptOp(1, root, nil)
 	w := f.watchRoster()
 	w.drain()
