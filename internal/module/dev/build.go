@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"sync"
 	"syscall"
@@ -110,10 +109,15 @@ func (m *DevModule) buildBinary(ctx context.Context, t buildTarget, hash, versio
 		defer sinkMu.Unlock()
 		sink(line)
 	}
-	cmd := exec.CommandContext(ctx, "go", "build", "-ldflags", ldflags, "-o", out, "./cmd/pdx")
+	goExe, err := m.tools.lookTool("go")
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, goExe, "build", "-ldflags", ldflags, "-o", out, "./cmd/pdx")
 	cmd.Dir = m.repoRoot
-	// Inherit env so GOCACHE / PATH / HOME work; do not scrub.
-	cmd.Env = os.Environ()
+	// Inherit env so GOCACHE / HOME work; PATH is the tool PATH so go finds
+	// the rest of the toolchain under a minimal launcher PATH.
+	cmd.Env = m.tools.childEnv()
 	// On ctx cancel, CommandContext's default Cancel kills only this "go"
 	// process; its compile/link children inherit the stdout/stderr pipes
 	// and, being separate processes, are not killed with it. If one of them

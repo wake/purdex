@@ -330,7 +330,7 @@ func runServe(args []string) *reexecPlan {
 			}
 			repoRoot = wd
 		}
-		c.AddModule(dev.New(repoRoot))
+		c.AddModule(dev.New(repoRoot).WithExtraPath(c.Cfg.Dev.ExtraPath))
 	}
 
 	// 6. Init all modules

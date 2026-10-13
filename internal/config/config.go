@@ -29,6 +29,9 @@ type FeaturesConfig struct {
 type DevConfig struct {
 	Update   bool   `toml:"update"    json:"update"`
 	RepoRoot string `toml:"repo_root" json:"repo_root"`
+	// ExtraPath lists directories searched first for pnpm / node / go by dev
+	// builds, for daemons started with a minimal PATH. Empty by default.
+	ExtraPath []string `toml:"extra_path" json:"extra_path"`
 }
 
 type TerminalConfig struct {

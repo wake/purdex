@@ -71,7 +71,7 @@ func TestBuildBinary_SinkIsSerialised(t *testing.T) {
 	}
 	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	m := &DevModule{repoRoot: dir}
+	m := &DevModule{repoRoot: dir, tools: toolEnv{extra: []string{fakeBin}}}
 	var lines []string // plain slice: safe only if sink is serialised
 	if err := m.buildBinary(context.Background(), buildTarget{}, "abc", "1.2.3", filepath.Join(dir, "out"), func(l string) { lines = append(lines, l) }); err != nil {
 		t.Fatalf("fake go: %v", err)
@@ -110,7 +110,7 @@ func TestBuildBinary_CancelDoesNotHangOnOrphanedChild(t *testing.T) {
 	}
 	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	m := &DevModule{repoRoot: dir}
+	m := &DevModule{repoRoot: dir, tools: toolEnv{extra: []string{fakeBin}}}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -180,7 +180,7 @@ func TestBuildBinary_CancelKillsOrphanedChild(t *testing.T) {
 	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("PDX_TEST_CHILD_PID_FILE", pidFile)
 
-	m := &DevModule{repoRoot: dir}
+	m := &DevModule{repoRoot: dir, tools: toolEnv{extra: []string{fakeBin}}}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
