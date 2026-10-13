@@ -53,13 +53,15 @@ type RelayAsk struct {
 	CreatedAt  int64
 	ExpiresAt  int64
 	ClosedAt   int64
+	// UnansweredAt (unix ms): the ask was final and its window passed with no answer; ExpiresAt is then the far sentinel (RT-2b T23).
+	UnansweredAt int64
 }
 
-const relayAskCols = `id, team_id, spawn_op, session_id, used_pct, window, state, reason, op_id, notified_at, created_at, expires_at, closed_at`
+const relayAskCols = `id, team_id, spawn_op, session_id, used_pct, window, state, reason, op_id, notified_at, created_at, expires_at, closed_at, unanswered_at`
 
 func scanRelayAsk(r rowScanner) (RelayAsk, error) {
 	var a RelayAsk
-	err := r.Scan(&a.ID, &a.TeamID, &a.SpawnOp, &a.SessionID, &a.UsedPct, &a.Window, &a.State, &a.Reason, &a.OpID, &a.NotifiedAt, &a.CreatedAt, &a.ExpiresAt, &a.ClosedAt)
+	err := r.Scan(&a.ID, &a.TeamID, &a.SpawnOp, &a.SessionID, &a.UsedPct, &a.Window, &a.State, &a.Reason, &a.OpID, &a.NotifiedAt, &a.CreatedAt, &a.ExpiresAt, &a.ClosedAt, &a.UnansweredAt)
 	return a, err
 }
 
@@ -124,9 +126,9 @@ func (s *Store) CreateRelayAsk(a RelayAsk) (stored RelayAsk, replay bool, err er
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return fail(err)
 	}
-	a.TeamID, a.SpawnOp, a.State, a.Reason, a.OpID, a.NotifiedAt, a.ClosedAt = teamID, spawnOp, team.RelayAskOpen, "", "", 0, 0
-	if _, err := tx.Exec(`INSERT INTO relay_asks (`+relayAskCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		a.ID, a.TeamID, a.SpawnOp, a.SessionID, a.UsedPct, a.Window, a.State, a.Reason, a.OpID, a.NotifiedAt, a.CreatedAt, a.ExpiresAt, a.ClosedAt); err != nil {
+	a.TeamID, a.SpawnOp, a.State, a.Reason, a.OpID, a.NotifiedAt, a.ClosedAt, a.UnansweredAt = teamID, spawnOp, team.RelayAskOpen, "", "", 0, 0, 0
+	if _, err := tx.Exec(`INSERT INTO relay_asks (`+relayAskCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		a.ID, a.TeamID, a.SpawnOp, a.SessionID, a.UsedPct, a.Window, a.State, a.Reason, a.OpID, a.NotifiedAt, a.CreatedAt, a.ExpiresAt, a.ClosedAt, 0); err != nil {
 		return fail(err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -135,9 +137,15 @@ func (s *Store) CreateRelayAsk(a RelayAsk) (stored RelayAsk, replay bool, err er
 	return a, false, nil
 }
 
-// ExpireRelayAsks closes every open ask whose window has passed at now; n says how many.
+// ExpireRelayAsks closes every open ask whose window has passed at now; n says how many. A FINAL ask (used ≥ RelayLastAskPct) of a
+// member of this host is not closed: it stays open for MarkFinalAsksUnanswered (RT-2b T23); a mirror of a remote member's ask expires
+// as it always did (S-8).
 func (s *Store) ExpireRelayAsks(now int64) (int64, error) {
-	res, err := s.db.Exec(`UPDATE relay_asks SET state = 'expired', closed_at = ? WHERE state = 'open' AND expires_at <= ?`, now, now)
+	loc, locArgs := s.local("m.host_id")
+	res, err := s.db.Exec(`UPDATE relay_asks SET state = 'expired', closed_at = ? WHERE state = 'open' AND expires_at <= ?
+		AND NOT (used_pct >= ? AND EXISTS (SELECT 1 FROM team_members m JOIN teams t ON t.id = m.team_id
+			WHERE m.spawn_op = relay_asks.spawn_op AND m.session_id = relay_asks.session_id AND m.state = 'active' AND t.ended_at = 0 AND `+loc+`))`,
+		append([]any{now, now, team.RelayLastAskPct}, locArgs...)...)
 	if err != nil {
 		return 0, fmt.Errorf("expire relay asks: %w", err)
 	}
@@ -145,28 +153,95 @@ func (s *Store) ExpireRelayAsks(now int64) (int64, error) {
 	return n, nil
 }
 
-// WithdrawAsksOfInactiveMembers closes as withdrawn / member_left every open ask whose member row is no longer an
-// active row of a live team (released, killing, killed, gone, or its team ended).
-func (s *Store) WithdrawAsksOfInactiveMembers(now int64) (int64, error) {
-	res, err := s.db.Exec(`UPDATE relay_asks SET state = 'withdrawn', reason = ?, closed_at = ?
-		WHERE state = 'open' AND NOT EXISTS (
+const inactiveMemberCond = `NOT EXISTS (
 			SELECT 1 FROM team_members m JOIN teams t ON t.id = m.team_id
 			WHERE m.spawn_op = relay_asks.spawn_op AND m.session_id = relay_asks.session_id AND m.state = 'active' AND t.ended_at = 0)
 		AND NOT EXISTS (
 			SELECT 1 FROM remote_members r
-			WHERE r.mk = relay_asks.spawn_op AND r.member_session_id = relay_asks.session_id AND r.team_id = relay_asks.team_id AND r.state = 'active')`,
-		team.RelayAskWithdrawMemberLeft, now)
+			WHERE r.mk = relay_asks.spawn_op AND r.member_session_id = relay_asks.session_id AND r.team_id = relay_asks.team_id AND r.state = 'active')`
+
+// closeAsksIn withdraws, in the caller's transaction, every open ask matching cond (with reason) and ends the relay_unanswered pause
+// of each one that was unanswered, telling its session text. n is how many asks closed.
+func closeAsksIn(tx dbtxq, cond string, args []any, reason string, now int64, text string) (int64, error) {
+	rows, err := tx.Query(`SELECT session_id FROM relay_asks WHERE state = 'open' AND unanswered_at > 0 AND (`+cond+`)`, args...)
 	if err != nil {
-		return 0, fmt.Errorf("withdraw relay asks of inactive members: %w", err)
+		return 0, err
+	}
+	var unanswered []string
+	for rows.Next() {
+		var sid string
+		if err := rows.Scan(&sid); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		unanswered = append(unanswered, sid)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+	res, err := tx.Exec(`UPDATE relay_asks SET state = 'withdrawn', reason = ?, closed_at = ? WHERE state = 'open' AND (`+cond+`)`,
+		append([]any{reason, now}, args...)...)
+	if err != nil {
+		return 0, err
 	}
 	n, _ := res.RowsAffected()
+	for _, sid := range unanswered {
+		if err := endUnansweredPauseIn(tx, sid, text, now); err != nil {
+			return 0, err
+		}
+	}
 	return n, nil
 }
 
-// WithdrawRelayAsk closes the session's open ask as withdrawn with reason; ok says one was open.
+// WithdrawAsksOfInactiveMembers closes as withdrawn / member_left every open ask whose member row is no longer an
+// active row of a live team (released, killing, killed, gone, or its team ended). A member left paused by its unanswered ask is
+// resumed with the "ended" text.
+func (s *Store) WithdrawAsksOfInactiveMembers(now int64) (int64, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("withdraw relay asks of inactive members: %w", err)
+	}
+	defer tx.Rollback()
+	n, err := closeAsksIn(tx, inactiveMemberCond, nil, team.RelayAskWithdrawMemberLeft, now, team.PauseResumedUnansweredEnded)
+	if err != nil {
+		return 0, fmt.Errorf("withdraw relay asks of inactive members: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("withdraw relay asks of inactive members: %w", err)
+	}
+	return n, nil
+}
+
+// WithdrawRelayAsk closes the session's open ask as withdrawn with reason; ok says one was open. A session its unanswered ask had
+// paused is resumed with the "ended" text.
 func (s *Store) WithdrawRelayAsk(sessionID, reason string, now int64) (bool, error) {
-	res, err := s.db.Exec(`UPDATE relay_asks SET state = 'withdrawn', reason = ?, closed_at = ? WHERE session_id = ? AND state = 'open'`, reason, now, sessionID)
-	return oneRow(res, err, "withdraw relay ask of "+sessionID)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("withdraw relay ask of %s: %w", sessionID, err)
+	}
+	defer tx.Rollback()
+	n, err := closeAsksIn(tx, `session_id = ?`, []any{sessionID}, reason, now, team.PauseResumedUnansweredEnded)
+	if err != nil {
+		return false, fmt.Errorf("withdraw relay ask of %s: %w", sessionID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("withdraw relay ask of %s: %w", sessionID, err)
+	}
+	return n == 1, nil
+}
+
+// OpenAskOf is the session's open ask, if it has one.
+func (s *Store) OpenAskOf(sessionID string) (RelayAsk, bool, error) {
+	a, err := scanRelayAsk(s.db.QueryRow(`SELECT `+relayAskCols+` FROM relay_asks WHERE session_id = ? AND state = 'open'`, sessionID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return RelayAsk{}, false, nil
+	}
+	if err != nil {
+		return RelayAsk{}, false, fmt.Errorf("open relay ask of %s: %w", sessionID, err)
+	}
+	return a, true, nil
 }
 
 // MarkAskNotified records that the lead's notice was delivered, once, while the ask is open.
@@ -197,7 +272,7 @@ func (s *Store) ListUnnotifiedAsks(now int64) ([]RelayAsk, error) {
 // OpenAskDeadlines maps the session of each of the team's members with an open, unexpired ask to when it runs out
 // (unix ms): what GET /api/team shows.
 func (s *Store) OpenAskDeadlines(teamID string, now int64) (map[string]int64, error) {
-	rows, err := s.db.Query(`SELECT session_id, expires_at FROM relay_asks WHERE team_id = ? AND state = 'open' AND expires_at > ?`, teamID, now)
+	rows, err := s.db.Query(`SELECT session_id, expires_at FROM relay_asks WHERE team_id = ? AND state = 'open' AND unanswered_at = 0 AND expires_at > ?`, teamID, now)
 	if err != nil {
 		return nil, fmt.Errorf("open relay asks of team %s: %w", teamID, err)
 	}
@@ -222,4 +297,31 @@ func (s *Store) PruneRelayAsks(before int64) (int64, error) {
 	}
 	n, _ := res.RowsAffected()
 	return n, nil
+}
+
+// DenyRelayAsk closes the session's open ask as withdrawn / denied in ONE transaction and returns it; closed says one was open. A
+// member its unanswered ask had paused is resumed with the lead's "decided not to relay" text.
+func (s *Store) DenyRelayAsk(sessionID string, now int64) (RelayAsk, bool, error) {
+	fail := func(err error) (RelayAsk, bool, error) {
+		return RelayAsk{}, false, fmt.Errorf("deny relay ask of %s: %w", sessionID, err)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fail(err)
+	}
+	defer tx.Rollback()
+	a, err := scanRelayAsk(tx.QueryRow(`SELECT `+relayAskCols+` FROM relay_asks WHERE session_id = ? AND state = 'open'`, sessionID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return RelayAsk{}, false, nil
+	}
+	if err != nil {
+		return fail(err)
+	}
+	if _, err := closeAsksIn(tx, `session_id = ?`, []any{sessionID}, team.RelayAskWithdrawDenied, now, team.PauseResumedMemberDenied); err != nil {
+		return fail(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fail(err)
+	}
+	return a, true, nil
 }

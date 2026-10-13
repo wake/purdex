@@ -47,6 +47,20 @@ func (m *Module) handleRelayAsk(w http.ResponseWriter, r *http.Request) {
 	now := m.now()
 	ask, replay, err := m.store.CreateRelayAsk(RelayAsk{ID: req.RequestID, SessionID: req.SessionID, UsedPct: req.UsedPct, Window: req.Window,
 		CreatedAt: now, ExpiresAt: now + team.RelayAskHoldS*1000})
+	// Unattended, the daemon answers a new ask itself (RT-2b T22), still under createMu so no `pdx relay` slips between.
+	if err == nil && !replay && m.unattendedOn() && m.acceptAskUnattended(ask) {
+		if cur, ok, gerr := m.store.GetRelayAsk(ask.ID); gerr == nil && ok {
+			ask = cur
+		}
+		m.createMu.Unlock()
+		m.writeJSON(w, http.StatusOK, team.RelayAskResponse{ID: ask.ID, State: ask.State, ExpiresAt: ask.ExpiresAt})
+		return
+	}
+	if err == nil && !replay { // an ask that was paused or withdrawn above is not the lead's to answer: re-read for the response and the notice
+		if cur, ok, gerr := m.store.GetRelayAsk(ask.ID); gerr == nil && ok {
+			ask = cur
+		}
+	}
 	m.createMu.Unlock()
 	switch {
 	case errors.Is(err, ErrAskNotMember):
@@ -69,7 +83,7 @@ func (m *Module) handleRelayAsk(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusConflict, team.ErrBadRequest, "request_id belongs to another session's ask", nil)
 		return
 	}
-	if !replay {
+	if !replay && ask.State == team.RelayAskOpen {
 		m.notifyAskAsync(ask)
 	}
 	m.writeJSON(w, http.StatusOK, team.RelayAskResponse{ID: ask.ID, State: ask.State, ExpiresAt: ask.ExpiresAt, Replay: replay})
@@ -115,7 +129,10 @@ func (m *Module) sendAskNotice(a RelayAsk) {
 	if ok {
 		address, title := m.memberNoticeName(mr)
 		ref := strings.TrimPrefix(mr.Ref, "_")
-		text = fmt.Sprintf(team.RelayAskNoticeFmt, address, ref, title, cur.UsedPct, minutes, ref)
+		text = fmt.Sprintf(team.RelayAskNoticeFmt, address, ref, title, cur.UsedPct, minutes, ref, ref)
+		if cur.UsedPct >= team.RelayLastAskPct {
+			text += team.RelayAskFinalSuffix
+		}
 	} else {
 		// a mirror of a remote member's ask (MR-4): the member is a row of another host, named as the lead can address it
 		var rok bool
@@ -150,6 +167,7 @@ func (m *Module) settleAsks() {
 	expired, errE := m.store.ExpireRelayAsks(now)
 	left, errW := m.store.WithdrawAsksOfInactiveMembers(now)
 	m.askMu.Unlock()
+	m.markFinalAsks()
 	for _, err := range []error{errE, errW} {
 		if err != nil {
 			m.logf("[team] sweep relay asks: %v", err)
@@ -159,9 +177,23 @@ func (m *Module) settleAsks() {
 		m.logf("[team] %d relay ask(s) expired", expired)
 	}
 	if left > 0 {
+		m.askAnswered()
 		m.logf("[team] %d relay ask(s) withdrawn: the member left", left)
 	}
+	m.acceptOpenAsksOnTick()
 	m.retryAskNotices()
+}
+
+// acceptOpenAsksOnTick is the liveness tick's accept of the asks still open while the switch is on. It takes createMu, so it only
+// reads the store first: a tick with no open ask costs one query.
+func (m *Module) acceptOpenAsksOnTick() {
+	asks, err := m.store.listOpenAsks(m.now())
+	if err != nil || len(asks) == 0 {
+		return
+	}
+	m.createMu.Lock()
+	defer m.createMu.Unlock()
+	m.acceptOpenAsksUnattended()
 }
 
 // retryAskNotices is the sweeper's step (liveness tick): every open ask whose notice has not been delivered is sent

@@ -100,6 +100,16 @@ func (m *Module) handleRelayCreate(w http.ResponseWriter, r *http.Request) {
 		m.writeJSON(w, http.StatusConflict, team.APIError{Error: team.ErrRelayOpen, Detail: "this member's previous relay (to this session) is still settling", Op: &prev})
 		return
 	}
+	m.createMemberRelayFor(w, req, t, mr)
+}
+
+// createMemberRelayFor is handleRelayCreate's write for a member that has been matched and checked: the lead's `pdx relay _ref`
+// and the daemon's own accept of an ask while the host is unattended (RT-2b T22) both end here. Caller holds createMu.
+func (m *Module) createMemberRelayFor(w http.ResponseWriter, req team.RelayCreateRequest, t team.Team, mr memberRow) {
+	fail := func(err error) {
+		m.logf("[team] member relay %s: %v", req.ID, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+	}
 	if m.isRemoteRow(mr) { // the member's host runs the relay; this host records it and sends the command (MR-3a)
 		m.createRemoteMemberRelay(w, req, t, mr)
 		return
@@ -173,6 +183,7 @@ func (m *Module) handleRelayCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m.logf("[team] relay op %s opened: member %s (%s) of team %s (%s)", op.ID, mr.Ref, mr.SessionID, t.ID, op.State)
+	m.askAnswered()
 	if spent {
 		m.announceSpend(t.LeadSessionID) // the lead's pool is spent: publish the chain's new numbers
 	}

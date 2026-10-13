@@ -45,6 +45,7 @@ func isMemberRelayTarget(s string) bool {
 func runRelayMember(ctx context.Context, target string, args []string, stdout, stderr io.Writer, clientOpts []daemonclient.Option) int {
 	fs := flag.NewFlagSet("pdx relay", flag.ContinueOnError)
 	wait := fs.Duration("wait", 0, "")
+	deny := fs.Bool("deny", false, "")
 	cfgPath, ok := relayFlags(fs, args, stderr)
 	if !ok {
 		return ExitUsage
@@ -55,10 +56,16 @@ func runRelayMember(ctx context.Context, target string, args []string, stdout, s
 	if *wait < 0 || *wait > relayMaxWait {
 		return relayUsageErr(stderr, "--wait 必須介於 0 與 9m 之間")
 	}
+	if *deny && *wait != 0 {
+		return relayUsageErr(stderr, "--deny 不能搭配 --wait")
+	}
 	inbox := relayGetenv("CLAUDE_CODE_MESSAGING_SOCKET")
 	if inbox == "" {
 		fmt.Fprintln(stderr, "pdx relay: CLAUDE_CODE_MESSAGING_SOCKET is unset — run inside a Claude Code session")
 		return ExitError
+	}
+	if *deny {
+		return runRelayDeny(ctx, target, inbox, cfgPath, stdout, stderr, clientOpts)
 	}
 	attempt := daemonclient.DefaultAttemptTimeout
 	if *wait > 0 {
@@ -80,6 +87,22 @@ func runRelayMember(ctx context.Context, target string, args []string, stdout, s
 		return relayPrintJSON(stdout, stderr, res.Op)
 	}
 	return followRelayOp(ctx, client, res.Op, *wait, stdout, stderr)
+}
+
+// runRelayDeny is `pdx relay <ref> --deny`: the lead declines the member's open ask (RT-2b T21). Exit 0 with the ask's id on stdout;
+// no open ask, not your member and the like are the refusals of every relay call, exit 13.
+func runRelayDeny(ctx context.Context, target, inbox, cfgPath string, stdout, stderr io.Writer, clientOpts []daemonclient.Option) int {
+	client, code := relayClient(cfgPath, stderr, daemonclient.DefaultAttemptTimeout, clientOpts)
+	if code != ExitOK {
+		return code
+	}
+	var res team.RelayDenyResponse
+	// not Idempotent(): a replay after a lost response would find no open ask and report a deny that did succeed as no_open_ask
+	if _, err := client.Do(ctx, http.MethodPost, "/api/team/relays/deny", team.RelayDenyRequest{OriginInbox: inbox, Target: target}, &res); err != nil {
+		return relayReportErr(err, stdout, stderr)
+	}
+	fmt.Fprintf(stderr, "已拒絕 %s 的接力申請\n", target)
+	return relayPrintJSON(stdout, stderr, res)
 }
 
 const awaitingApprovalLine = "等待核准：member 額度用完（無人值守）"

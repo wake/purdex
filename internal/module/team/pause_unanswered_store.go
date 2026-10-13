@@ -103,24 +103,6 @@ func leaveUnansweredIn(ex dbtx, id string, c Close) error {
 	if unanswered == 0 {
 		return nil
 	}
-	q, ok := ex.(querier)
-	if !ok {
-		return fmt.Errorf("close of unanswered %s: not on a transaction", id)
-	}
-	res, err := ex.Exec(`DELETE FROM session_pauses WHERE session_id = ? AND cause = ?`, sid, team.PauseCauseUnanswered)
-	if err != nil {
-		return fmt.Errorf("leave unanswered %s: %w", id, err)
-	}
-	if n, err := res.RowsAffected(); err != nil || n == 0 {
-		return err // the pause was already gone (a release took it): nothing to tell
-	}
-	var left int
-	if err := ex.QueryRow(`SELECT COUNT(*) FROM session_pauses WHERE session_id = ?`, sid).Scan(&left); err != nil {
-		return fmt.Errorf("leave unanswered %s: %w", id, err)
-	}
-	if left > 0 {
-		return nil // another cause stands: not resumed, told nothing, its bounces kept
-	}
 	text := team.PauseResumedUnansweredEnded
 	switch c.State {
 	case team.StateApproved:
@@ -128,9 +110,34 @@ func leaveUnansweredIn(ex dbtx, id string, c Close) error {
 	case team.StateDenied:
 		text = team.PauseResumedUnansweredDenied
 	}
+	return endUnansweredPauseIn(ex, sid, text, c.DecidedAt)
+}
+
+// endUnansweredPauseIn takes sid's relay_unanswered pause away on the closer's own transaction and, when no other cause stands,
+// tells the session text and lists the messages bounced meanwhile (and drops them). A card's close (leaveUnansweredIn) and a member
+// ask's closes (RT-2b T23) both end here. The pause already gone (a release took it) tells nothing.
+func endUnansweredPauseIn(ex dbtx, sid, text string, at int64) error {
+	q, ok := ex.(querier)
+	if !ok {
+		return fmt.Errorf("end unanswered pause of %s: not on a transaction", sid)
+	}
+	res, err := ex.Exec(`DELETE FROM session_pauses WHERE session_id = ? AND cause = ?`, sid, team.PauseCauseUnanswered)
+	if err != nil {
+		return fmt.Errorf("end unanswered pause of %s: %w", sid, err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return err
+	}
+	var left int
+	if err := ex.QueryRow(`SELECT COUNT(*) FROM session_pauses WHERE session_id = ?`, sid).Scan(&left); err != nil {
+		return fmt.Errorf("end unanswered pause of %s: %w", sid, err)
+	}
+	if left > 0 {
+		return nil // another cause stands: not resumed, told nothing, its bounces kept
+	}
 	outbox := func(t string) error {
-		if _, err := ex.Exec(`INSERT INTO pause_outbox (session_id, kind, text, created_at) VALUES (?, ?, ?, ?)`, sid, team.PauseOutboxNotice, t, c.DecidedAt); err != nil {
-			return fmt.Errorf("leave unanswered %s: outbox: %w", id, err)
+		if _, err := ex.Exec(`INSERT INTO pause_outbox (session_id, kind, text, created_at) VALUES (?, ?, ?, ?)`, sid, team.PauseOutboxNotice, t, at); err != nil {
+			return fmt.Errorf("end unanswered pause of %s: outbox: %w", sid, err)
 		}
 		return nil
 	}
@@ -139,14 +146,14 @@ func leaveUnansweredIn(ex dbtx, id string, c Close) error {
 	}
 	list, err := bounceListIn(q, sid)
 	if err != nil {
-		return fmt.Errorf("leave unanswered %s: %w", id, err)
+		return fmt.Errorf("end unanswered pause of %s: %w", sid, err)
 	}
 	if list != "" {
 		if err := outbox(list); err != nil {
 			return err
 		}
 		if _, err := ex.Exec(`DELETE FROM pause_bounces WHERE session_id = ?`, sid); err != nil {
-			return fmt.Errorf("leave unanswered %s: %w", id, err)
+			return fmt.Errorf("end unanswered pause of %s: %w", sid, err)
 		}
 	}
 	return nil

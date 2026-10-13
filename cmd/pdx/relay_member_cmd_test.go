@@ -20,6 +20,8 @@ type fakeMemberRelayDaemon struct {
 	create   func(n int) (int, any) // status and body of the nth create (default 201 requested)
 	polls    []team.RelayOp         // answers of GET /api/relay/ops/{id}, last repeated
 	pollN    int
+	denies   []team.RelayDenyRequest
+	deny     func() (int, any)
 	verbs    []string // "<verb> <body>"
 	verbResp func(verb string) (int, any)
 	onPoll   func() // called at each long-poll (tests cancel the caller there)
@@ -34,6 +36,16 @@ func (d *fakeMemberRelayDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	switch {
+	case r.Method == http.MethodPost && r.URL.Path == "/api/team/relays/deny":
+		var req team.RelayDenyRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		d.denies = append(d.denies, req)
+		status, body := http.StatusOK, any(team.RelayDenyResponse{AskID: "ask-1"})
+		if d.deny != nil {
+			status, body = d.deny()
+		}
+		w.WriteHeader(status)
+		json.NewEncoder(w).Encode(body)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/team/relays":
 		var req team.RelayCreateRequest
 		json.NewDecoder(r.Body).Decode(&req)
@@ -334,5 +346,28 @@ func TestRelayCmd_WaitExplainsWhyAMemberDidNotAnswer(t *testing.T) {
 	d := &fakeMemberRelayDaemon{polls: []team.RelayOp{opIn(team.RelayFailed, team.RelayReasonMemberGone)}}
 	if _, _, errs := driveMemberRelay(t, d, "/tmp/x.sock", "_mem001", "--wait", "5m"); strings.Contains(errs, "Mods:") {
 		t.Errorf("member_gone got the dialog hint: %q", errs)
+	}
+}
+
+// `pdx relay _ref --deny` (RT-2b T21). Mutation gates: send the relay create instead → no deny request (red); map no_open_ask to 1 → red.
+func TestRelayCmd_DenyDeclinesTheAsk(t *testing.T) {
+	d := &fakeMemberRelayDaemon{}
+	code, out, errs := driveMemberRelay(t, d, "/tmp/x.sock", "_mem001", "--deny")
+	if code != ExitOK || len(d.creates) != 0 || len(d.denies) != 1 || d.denies[0].Target != "_mem001" || d.denies[0].OriginInbox != "/tmp/x.sock" {
+		t.Fatalf("code=%d creates=%d denies=%+v", code, len(d.creates), d.denies)
+	}
+	if !strings.Contains(errs, "已拒絕 _mem001 的接力申請") || !strings.Contains(out, "ask-1") {
+		t.Fatalf("out=%q err=%q", out, errs)
+	}
+	d = &fakeMemberRelayDaemon{deny: func() (int, any) {
+		return 409, team.APIError{Error: team.ErrNoOpenAsk, Detail: "no ask"}
+	}}
+	c, _, errs := driveMemberRelay(t, d, "/tmp/x.sock", "_mem001", "--deny")
+	toks := strings.Fields(errs)
+	if c != ExitRefused || toks[len(toks)-1] != team.ErrNoOpenAsk {
+		t.Fatalf("no open ask: exit %d err=%q", c, errs)
+	}
+	if c, _, _ := driveMemberRelay(t, &fakeMemberRelayDaemon{}, "/tmp/x.sock", "_mem001", "--deny", "--wait", "1m"); c != ExitUsage {
+		t.Fatalf("--deny with --wait: exit %d, want usage", c)
 	}
 }

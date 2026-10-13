@@ -157,6 +157,10 @@ const (
 	// PausePushUnansweredFmt is the phone's title; %s is the session's title or ref.
 	PausePushUnansweredFmt = "%s 已暫停：接力申請沒有回應，等你核准"
 	// What a message to the paused session is bounced with (RT-2a2): to a solo session or a lead, and to a member.
-	PauseBounceUnanswered       = "我目前暫停作業，等待使用者確認中"
+	PauseBounceUnanswered = "我目前暫停作業，等待使用者確認中"
+	// A member whose final relay ask its lead did not answer (RT-2b T23).
+	PauseNoticeUnansweredMember = "[pdx team] 接力申請 lead 沒有回應，先暫停作業，等 lead 確認。"
+	PauseResumedMemberAccepted  = "[pdx team] lead 已安排接力，恢復作業。"
+	PauseResumedMemberDenied    = "[pdx team] lead 決定不接力，恢復作業。"
 	PauseBounceUnansweredMember = "我目前暫停作業，等待 lead 確認中"
 )
