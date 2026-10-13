@@ -205,6 +205,9 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
 	}
+	if m.replayOfPersonAlias(w, req.ID, hash) {
+		return
+	}
 	person := req.PersonToken != ""
 	if person && !m.validPerson(origin.SessionID, team.PersonCmdLead, req.PersonToken) {
 		m.writeErr(w, http.StatusConflict, team.ErrPersonTokenInvalid, "the person token is unknown, spent, expired or not for this session's /team", nil)
@@ -217,7 +220,7 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 	} else if found {
 		if person {
 			// the agent asked for this already and the person has now said yes: their command approves that request (RT-1b)
-			m.personApproveLead(w, open, personLeadGrant(open.Origin, teamName, teamLabel), req.PersonToken)
+			m.personApproveLead(w, open, personLeadGrant(open.Origin, teamName, teamLabel), req.PersonToken, req.ID, hash)
 			return
 		}
 		m.writeErr(w, http.StatusConflict, team.ErrRequestOpen, "this session already has an open lead request", &open)

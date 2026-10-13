@@ -50,6 +50,11 @@ func (m *Module) handleSpawn(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrOriginUnknown, "origin_inbox is not a live Claude Code session on this host", nil)
 		return
 	}
+	if req.Host != "" && req.PersonToken != "" {
+		// a spawn on another host is not the person's typed spawn (RT-1b, S-8): the token has no meaning there
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "person_token is for a spawn on this host", nil)
+		return
+	}
 	if req.Host != "" { // run by a paired member host (cross-host team spec §5.5)
 		m.handleRemoteSpawn(w, r, req, origin)
 		return

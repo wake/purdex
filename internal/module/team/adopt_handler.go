@@ -219,6 +219,9 @@ func (m *Module) handleCreateAdopt(w http.ResponseWriter, req team.CreateApprova
 		failStore(err)
 		return
 	}
+	if m.replayOfPersonAlias(w, req.ID, hash) {
+		return
+	}
 	person := req.PersonToken != ""
 	if person && !m.validPerson(origin.SessionID, team.PersonCmdAdopt, req.PersonToken) {
 		m.writeErr(w, http.StatusConflict, team.ErrPersonTokenInvalid, "the person token is unknown, spent, expired or not for this session's /team adopt", nil)
@@ -260,7 +263,7 @@ func (m *Module) handleCreateAdopt(w http.ResponseWriter, req team.CreateApprova
 	} else if isOpen {
 		if person && open.Origin.SessionID == origin.SessionID {
 			// this lead asked already and the person has now said yes: their command approves that request (RT-1b)
-			m.personApprove(w, open, m.personClose(m.now()), req.PersonToken)
+			m.personApprove(w, open, m.personClose(m.now()), req.PersonToken, req.ID, hash)
 			return
 		}
 		m.writeErr(w, http.StatusConflict, team.ErrRequestOpen, "an adopt request for this session is already open", &open)

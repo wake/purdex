@@ -236,3 +236,52 @@ func TestSpawnHash_IgnoresThePersonToken(t *testing.T) {
 		t.Fatal("the person token changed the spawn's hash")
 	}
 }
+
+// codex R1 P1: a person's request that approved the agent's open request has no row of its own; a retry of its id after a lost
+// response is the same request and gets that row, not person_token_invalid. Mutation gate: do not record the alias → the retry is
+// 409 (red); drop the hash check → a different request under the same id is answered (red).
+func TestPersonLead_ARetryOfARequestThatApprovedAnOpenOneGetsThatRow(t *testing.T) {
+	f := newFixture(t)
+	card := f.create(uid(1))
+	tok := f.mintPerson("sid-1", team.PersonCmdLead).Token
+	set := func(r *team.CreateApprovalRequest) { r.PersonToken = tok }
+	if code, body := f.createLeadWith(uid(2), set); code != http.StatusCreated {
+		t.Fatalf("first: %d %s", code, body)
+	}
+	code, body := f.createLeadWith(uid(2), set) // the response was lost: the same id, the spent token
+	if a := decodeApproval(t, body); code != http.StatusOK || a.ID != card.ID {
+		t.Fatalf("retry: %d %s, want 200 with the row %s", code, body, card.ID)
+	}
+	code, body = f.createLeadWith(uid(2), func(r *team.CreateApprovalRequest) { r.PersonToken = tok; r.Reason = "something else" })
+	if e := decodeErr(t, body); code != http.StatusConflict || e.Error != team.ErrIDConflict {
+		t.Fatalf("same id, another request: %d %s, want 409 %s", code, body, team.ErrIDConflict)
+	}
+}
+
+func TestPersonAdopt_ARetryOfARequestThatApprovedAnOpenOneGetsThatRow(t *testing.T) {
+	f := newFixture(t)
+	f.approveLead(uid(1))
+	opened := f.adoptOK(uid(10), "_def456")
+	tok := f.mintPerson("sid-1", team.PersonCmdAdopt).Token
+	post := func(target string) (int, []byte) {
+		r := f.adoptReq(uid(11), target)
+		r.PersonToken = tok
+		return f.do(http.MethodPost, "/api/team/approvals", r)
+	}
+	if code, body := post("_def456"); code != http.StatusCreated {
+		t.Fatalf("first: %d %s", code, body)
+	}
+	code, body := post("_def456")
+	if a := decodeApproval(t, body); code != http.StatusOK || a.ID != opened.ID {
+		t.Fatalf("retry: %d %s, want 200 with the row %s", code, body, opened.ID)
+	}
+}
+
+// codex R1 P2: a token on a remote spawn has no meaning there (S-8): refused, not silently ignored.
+func TestPersonSpawn_ARemoteSpawnWithATokenIs400(t *testing.T) {
+	f, root := newSpawnFixture(t, 2)
+	code, _, e := f.spawn(1, root, func(r *team.SpawnRequest) { r.Host, r.PersonToken = "air26", "tok" })
+	if code != http.StatusBadRequest || e.Error != team.ErrBadRequest {
+		t.Fatalf("remote spawn with a token: %d %+v, want 400 %s", code, e, team.ErrBadRequest)
+	}
+}
