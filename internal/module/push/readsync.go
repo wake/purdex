@@ -25,6 +25,7 @@ type readSync struct {
 	after      func(d time.Duration, fn func()) (cancel func()) // time.AfterFunc; a test seam
 	flushAfter time.Duration
 	fire       func(deviceID string) // asks the sender for a flush push; must not block
+	beforeAdd  func()                // a test seam: called at the start of Add, before the lock
 
 	mu      sync.Mutex
 	dev     map[string]*devReads
@@ -37,6 +38,7 @@ type devReads struct {
 	lastPush time.Time // the last push sent to the phone, of any kind; zero = not known
 	cancel   func()
 	armed    bool
+	gen      uint64 // the arm a timer callback belongs to; Sent, Forget and every new arm invalidate the older ones
 }
 
 func newReadSync(now func() time.Time, flushAfter time.Duration, fire func(deviceID string)) *readSync {
@@ -72,6 +74,9 @@ func (r *readSync) Stop() {
 // Add records a read for a registration. lastPush is when that phone was last pushed to, if the caller knows (a new entry
 // takes it); the flush timer is armed if it is not already.
 func (r *readSync) Add(deviceID string, rd reads.Read, lastPush time.Time) {
+	if r.beforeAdd != nil {
+		r.beforeAdd()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.stopped {
@@ -102,14 +107,17 @@ func (r *readSync) armLocked(deviceID string, d *devReads) {
 		}
 	}
 	d.armed = true
-	d.cancel = r.after(delay, func() { r.flush(deviceID, d) })
+	d.gen++
+	gen := d.gen
+	d.cancel = r.after(delay, func() { r.flush(deviceID, d, gen) })
 }
 
-// flush is the timer's callback for d; a callback of a registration that has since been forgotten (or replaced under the
-// same id) finds another entry and does nothing.
-func (r *readSync) flush(deviceID string, d *devReads) {
+// flush is the timer's callback for the arm gen of d. A callback of a registration that has since been forgotten (or replaced
+// under the same id), or of an arm that Sent or a newer arm has superseded (time.Timer.Stop cannot recall a callback that is
+// already running), finds another entry or generation and does nothing.
+func (r *readSync) flush(deviceID string, d *devReads, gen uint64) {
 	r.mu.Lock()
-	if r.stopped || r.dev[deviceID] != d {
+	if r.stopped || r.dev[deviceID] != d || d.gen != gen {
 		r.mu.Unlock()
 		return
 	}
@@ -184,6 +192,7 @@ func (r *readSync) Sent(deviceID string, sent []reads.Read) {
 		d.cancel()
 		d.cancel, d.armed = nil, false
 	}
+	d.gen++ // a callback of the arm just cancelled may still be on its way
 	r.armLocked(deviceID, d)
 }
 

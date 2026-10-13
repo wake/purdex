@@ -80,7 +80,9 @@ type Module struct {
 	memBudget   time.Duration                                                    // how long an event waits for the membership read; 0 = membershipBudget
 	memBusy     atomic.Bool                                                      // a membership read is still running: never more than one outstanding
 	rs          *readSync                                                        // read sync: the pending reads per registration and their flush timers (readsync.go)
-	readsFeed   reads.Feed                                                       // a test seam: the reads module's feed; nil = from the registry
+	regSeq      map[string]uint64                                                // the order registrations were made in (this run), to tell a rotated token from the one it replaced
+	regNext     uint64
+	readsFeed   reads.Feed // a test seam: the reads module's feed; nil = from the registry
 	unsubReads  func()
 	closes      *closeCoalescer // closed badge cards waiting for their 2 s window (badge_close.go); fires into the sender's queue
 	holds       holdSet
@@ -103,6 +105,7 @@ func New() *Module {
 	m := &Module{home: os.UserHomeDir, devices: map[string]push.Device{}, pres: NewPresence(time.Now),
 		gate: NewGate(time.Now), asks: newOpenAsks(time.Now), holdFor: waitingHold}
 	m.closes = newCloseCoalescer(m.fireBadge)
+	m.regSeq = map[string]uint64{}
 	m.rs = newReadSync(time.Now, time.Duration(config.DefaultReadFlushMinutes)*time.Minute, m.fireReadsFlush)
 	return m
 }
@@ -662,6 +665,8 @@ func (m *Module) handlePost(w http.ResponseWriter, r *http.Request) {
 	stored, err := m.store.Upsert(d)
 	if err == nil {
 		m.devices[stored.DeviceID] = stored
+		m.regNext++
+		m.regSeq[stored.DeviceID] = m.regNext
 		m.registered(stored)
 	}
 	m.mu.Unlock()

@@ -55,10 +55,14 @@ func (m *Module) stopReads() {
 	m.rs.Stop()
 }
 
-// onRead is one accepted read of the reads module: it becomes pending for every registration that syncs reads.
+// onRead is one accepted read of the reads module: it becomes pending for every registration that syncs reads and has not
+// been superseded. The choice and the recording happen under m.mu, the lock every removal path holds when it forgets a
+// registration, so a registration that is removed (or stops syncing) at that moment is never handed a pending list afterwards.
 func (m *Module) onRead(rd reads.Read) {
-	for _, d := range m.snapshot() {
-		if !d.Prefs.ReadSync {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, d := range m.devices {
+		if !d.Prefs.ReadSync || m.supersededLocked(d) {
 			continue
 		}
 		var last time.Time
@@ -67,6 +71,34 @@ func (m *Module) onRead(rd reads.Read) {
 		}
 		m.rs.Add(d.DeviceID, rd, last)
 	}
+}
+
+// supersededLocked: a newer registration of the same paired phone, bundle and environment exists — the APNs token rotated,
+// and d is the dead one (APNs will say so on the next push; until then nothing should be kept for it). A registration of the
+// same phone in another environment is not a replacement. Newer is the later registration of this run, else the later
+// update, else the larger id. Under m.mu.
+func (m *Module) supersededLocked(d push.Device) bool {
+	if d.OwnerDeviceID == "" {
+		return false
+	}
+	for _, o := range m.devices {
+		if o.DeviceID == d.DeviceID || o.OwnerDeviceID != d.OwnerDeviceID || o.Env != d.Env || o.BundleID != d.BundleID {
+			continue
+		}
+		switch {
+		case m.regSeq[o.DeviceID] != m.regSeq[d.DeviceID]:
+			if m.regSeq[o.DeviceID] > m.regSeq[d.DeviceID] {
+				return true
+			}
+		case o.UpdatedAt != d.UpdatedAt:
+			if o.UpdatedAt > d.UpdatedAt {
+				return true
+			}
+		case o.DeviceID > d.DeviceID:
+			return true
+		}
+	}
+	return false
 }
 
 // fireReadsFlush asks the sender for the push that carries one registration's pending reads alone (kind "reads", the
@@ -86,18 +118,16 @@ func (m *Module) fireReadsFlush(deviceID string) {
 	}
 }
 
-// registered is called, under m.mu, when a registration is stored: one that does not (or no longer) syncs reads keeps nothing pending, and
-// the phone's other registrations (an older APNs token of the same paired phone) are not in anyone's hands any more.
+// registered is called, under m.mu, when a registration is stored: one that does not (or no longer) syncs reads keeps nothing
+// pending, and the older registrations it supersedes (the same paired phone's earlier token for this bundle and environment)
+// give up theirs.
 func (m *Module) registered(d push.Device) {
 	if !d.Prefs.ReadSync {
 		m.rs.Forget(d.DeviceID)
 	}
-	if d.OwnerDeviceID == "" {
-		return
-	}
-	for _, other := range m.devices { // the caller holds m.mu
-		if other.OwnerDeviceID == d.OwnerDeviceID && other.DeviceID != d.DeviceID {
-			m.rs.Forget(other.DeviceID)
+	for _, o := range m.devices {
+		if o.DeviceID != d.DeviceID && m.supersededLocked(o) {
+			m.rs.Forget(o.DeviceID)
 		}
 	}
 }
