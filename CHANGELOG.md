@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.0.0-alpha.733] - 2026-10-14
+
+> daemon 與 mod 都有改：兩台都要重跑 `pdx setup`（mod 協定升到 6）。SPA 與 Electron 沒有改。兩台主機的資源租約仍是「只記錄」模式（advise）。
+
+### Added：session 裡的 /team 指令，以及不需核准的 /relay（RT-1c，PR #2798）
+
+- 新的 `/team` 指令：在 session 裡打 `/team` 會讓這個 session 成為 lead（不用再等核准卡）；已經是 lead 時，`/team` 會列出 team 和成員。lead 可以用 `/team spawn <任務>` 開 member，用 `/team adopt|release|kill <ref>` 收編、釋出或結束 member。
+- 這些指令都會帶一個只用一次的 person token（代表「是使用者本人打的」的一次性憑證），daemon 認得就直接生效。這也解除了 732 的已知限制：無人值守開著時，使用者打的指令不會再被拒絕。
+- 舊的 `/lead` 還能用，會被當成 `/team`，但會提示「/lead 將移除，請改用 /team」。
+- `/relay` 現在是使用者親手下的指令：直接接力，不需要核准、不扣接力額度。如果剛好有一張接力申請卡開著，打 `/relay` 就等於核准那張卡。
+- 接力進行中打的 `/team`（當 lead 或開 member）會排隊，接力結束後立刻執行；如果中間 /clear 換了對話，就不會帶到新對話去。
+- pdx-team skill 的說明文字也同步更新。
+
+### Changed：資源租約修正版 A 的資料表（#2759，PR #2802）
+
+- daemon 的 resources 資料庫多了一張「位置」表和幾個欄位（呼叫模式、指令內容、工作目錄等），是為了接下來「session 不必停下來等租約」的新排隊方式做準備。這一版只建表、不改變任何行為；兩台仍是「只記錄」模式。資料表是新增的，舊資料不受影響。
+
+### Fixed
+
+- SPA 的型別檢查（tsc -b）恢復通過：補上 BG-2 測試檔裡缺的欄位（PR #2804，只改測試檔）。
+
 ## [1.0.0-alpha.732] - 2026-10-14
 
 > daemon、SPA、Electron 都有改，mod 沒有改，不用跑 pdx setup。Mac 要按 dev update 才會拿到 Electron 的改動（Dock 圖示的數字）；SPA 的改動按 dev update 或靠 dev server 的 HMR 就會生效。兩台主機的資源租約仍是「只記錄」模式（advise）。
