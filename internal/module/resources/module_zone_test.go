@@ -181,6 +181,17 @@ func TestSampler_OneFailedTickKeepsTheZone(t *testing.T) {
 	s := r.m.latest.Load()
 	assert.True(t, s.Available)
 	assert.Equal(t, "warning", s.Host.Zone)
+	// The snapshot is kept, but admission reads unknown until a good tick.
+	zone, trend := r.m.admitZoneTrend()
+	assert.Equal(t, resources.ZoneUnknown, zone)
+	assert.Equal(t, resources.TrendUnknown, trend)
+	r.m.sampler = &fakeSampler{fn: func(context.Context, int) (resources.HostRaw, []resources.Proc, error) {
+		return zoneRaw(85, 1, 1), nil, nil
+	}}
+	r.cur = r.cur.Add(5 * time.Second)
+	r.m.tick(context.Background())
+	zone, _ = r.m.admitZoneTrend()
+	assert.Equal(t, resources.ZoneWarning, zone)
 }
 
 // GET /api/resources?samples=1 returns the ring, oldest first; without the

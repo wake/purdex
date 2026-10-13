@@ -185,9 +185,10 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 }
 
 // admitZoneTrend is the zone and trend of the latest sample; an unavailable or
-// missing sample reads as unknown, which admission fails open on (D-5).
+// missing sample, or one that the last (failed) tick left behind, reads as
+// unknown, which admission fails open on (D-5).
 func (m *Module) admitZoneTrend() (resources.Zone, resources.Trend) {
-	if s := m.latest.Load(); s != nil && s.Available {
+	if s := m.latest.Load(); s != nil && s.Available && !m.sampleFailing.Load() {
 		return resources.ParseZone(s.Host.Zone), resources.ParseTrend(s.Host.Trend)
 	}
 	return resources.ZoneUnknown, resources.TrendUnknown
