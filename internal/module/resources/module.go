@@ -160,6 +160,15 @@ type Module struct {
 	goCacheDir func() string
 	trimHook   func()
 	disk       diskGuard
+	// Amendment A, guarded by stateMu: the positions whose agent the sweeper
+	// found gone this tick, the snapshots in which an agent pid was listed under
+	// another session, and the window cost not yet written.
+	goneAgents map[string]bool
+	swaps      map[string]*sessionSwap
+	costs      map[string]*windowCost
+	// deliverable says whether the session can take a notice now (its main turn is
+	// not running); nil reads as true. P2d wires the real answer.
+	deliverable func(sessionID string) bool
 	// skipPass makes admissionPass a no-op (a test seam).
 	skipPass    bool
 	lastPrune   time.Time
