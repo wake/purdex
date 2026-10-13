@@ -112,16 +112,19 @@ Review: codex (gpt-5.6-sol, low) on spec + plan, 10 findings (1 critical: one ca
 ### 4.1 Mac
 
 A window's report (§3.2), built by a pure `badgeReport(...)`:
-- `sessions` ⊇ U: every `hostId:code` with `unread[k] === true` whose session is shown by a live pane of any tab in
-  that window's tab store (`tabAgentPanes` over all tabs, every workspace). Worker panes (`exec-<id>` keys) count the
-  same way.
+- `sessions` ⊇ U: every `hostId:code` with `unread[k] === true` whose session is shown by a **live** pane of any tab
+  in that window's tab store (`paneAgentKey` over every leaf of every tab, every workspace; a terminated pane does
+  not count — `tabAgentPanes` keeps a terminated primary pane's key for the lights, and a tmux restart reuses codes).
+  Worker panes (`exec-<id>` keys) count the same way.
 - `cards`: every open card, from `useApprovalStore` (all non-hook kinds) and a new hook-card slice fed by the same
   `approval.request` events `approval-ws.ts` now drops (`hook_ask`, `hook_permission`; snapshot replaces the host's
   set, opened adds, closed removes; the existing hook handling is untouched).
 - Resolving a card to `hostId:code`: the session whose `name` equals the session part of `origin.tmux` in that
-  host's session list, **and**, when the agent store knows a Claude Code session id for that `hostId:code`
-  (`agent.sessionId`), it must equal `origin.session_id` — otherwise (a recreated session with the same name) the card
-  stays unresolved and counts by its fallback. A resolved card's key is also added to `sessions`.
+  host's session list, **and**, when a live pane of that `hostId:code` records a Claude Code session id (the pane's
+  `rebuild.agent.sessionId`, written at SessionStart; any of several live panes matching is enough), it must equal
+  `origin.session_id` — otherwise (a recreated session with the same name) the card stays unresolved and counts by its
+  fallback. A session with no tab has no such record and resolves by name alone. A resolved card's key is also added to
+  `sessions`. (BG-2 review, 2026-10-13.)
 
 The renderer sends its report when it changes (debounced 300 ms, compared after sorting). No setting in v1.
 
@@ -199,6 +202,10 @@ withdrawing delivered notifications on the Mac.
 - When any device turns a session X from unread to read (a user action — on the Mac the tab that shows X becomes
   visible, or a notification click; on the iPhone X is opened), it tells X's host daemon "X read through T".
   A session that was already read, or one cleared by its own `running` status, sends nothing.
+- **Seen live counts as read** (88, 2026-10-13, from the BG-3e review): when an event that would set X's unread
+  arrives while X is on screen on a device (so that device never marks it unread), that device sends "X read through
+  the event's cursor" too (debounced 2 s per session) — otherwise the other devices keep an unread the user already
+  saw.
 - The daemon **remembers** the last read of each session in memory (forgotten on restart; never on disk).
 - It **forwards** the read at once over WS to every connected device that opted in (Mac windows, other Macs, an
   iPhone in the foreground).
@@ -275,12 +282,16 @@ withdrawing delivered notifications on the Mac.
     `notification-click.ts`) of a host session key whose unread was set returns that key's cursor and POSTs it
     (debounce 2 s per key, keeping the largest captured T — never a cursor read at fire time). No POST for `exec-*`
     worker keys, a key that was already read, a `running` / `clear` / host-prefix clear, or a received read.
+  - Seen live: an actionable event of a host session key that is not marked unread only because the agent is visible
+    in the active tab POSTs that event's cursor (same debounce).
   - Opt in with `reads=v1` and POST only to hosts declaring the capability; apply `session.reads` / `session.read` by
     the covering rule of §7.2.
 - **iPhone (BG-3e)**, all gated per host by `session.read_sync.v1` (POST, `reads=v1`, `prefs.read_sync`):
   - Unread entries keep their hook cursor (`purdex.event_cursor` from the NSE, the frame's cursor in the App); the
     App Group format gains it (an alpha reset is acceptable).
   - On opening a session (`markOpened`), POST the captured cursor.
+  - Seen live (follow-up BG-3f): an actionable event of the session whose conversation or deck is on screen POSTs
+    that event's cursor (debounced 2 s).
   - Apply reads from WS, from `purdex.reads` in the NSE, and from `kind: "reads"` / `kind: "badge"` in the background
     handler; remove the delivered notification `agent-<code>` (the agent push's collapse id) of each covered session.
   - An older host: everything stays local, no new request is sent.
