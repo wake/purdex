@@ -937,7 +937,7 @@ async function performTeam($, parsed, rawArgs, queued) {
       }
     }
     if (s.state === 'idle') return performTeam($, parsed, rawArgs, queued) // the relay ended while the role was read
-    s.teamQueued = { parsed, rawArgs }
+    s.teamQueued = { parsed, rawArgs, sid: await $.session.id().catch(() => undefined) } // the conversation it was typed in
     return TEAM_QUEUED
   }
   const sid = await $.session.id().catch(() => undefined)
@@ -991,7 +991,9 @@ async function becomeLeadOrShow($, parsed, rawArgs, sid, queued) {
     // one look, no await between it and the submit: still this ask, this conversation, no relay
     if (s.leadAsk !== ask || s.gen !== ask.gen || s.state !== 'idle' || now !== ask.sid) {
       drop()
-      log($, '/team prompt not submitted: the session moved on')
+      // the same conversation, only a relay in the way: the command is kept for that relay's return to idle; another conversation (a /clear) drops it
+      if (now === ask.sid) requeueTeam(parsed, rawArgs, ask.sid)
+      else log($, '/team prompt not submitted: the session moved on')
       return
     }
     try {
@@ -1014,8 +1016,8 @@ async function teamSpawn($, parsed, rawArgs, sid, queued) {
   later($, 0, async () => {
     const now = await $.session.id().catch(() => undefined)
     if (s.gen !== gen || s.state !== 'idle' || now !== sid) {
-      log($, '/team spawn prompt not submitted: the session moved on')
-      if (queued && s.gen === gen && !s.teamQueued) s.teamQueued = { parsed, rawArgs } // another relay is in the way: kept for its return to idle
+      if (now === sid) requeueTeam(parsed, rawArgs, sid) // a relay is in the way: kept for its return to idle
+      else log($, '/team spawn prompt not submitted: the session moved on')
       return
     }
     try {
@@ -1045,6 +1047,11 @@ async function teamAct($, parsed, sid) {
   return 'pdx ' + parsed.kind + ' ' + parsed.ref + ' 完成' + ((r.stdout || '').trim() ? '：' + (r.stdout || '').trim().slice(0, 300) : '')
 }
 
+// requeueTeam keeps a /team for the next return to idle of the conversation it was typed in (newest wins).
+function requeueTeam(parsed, rawArgs, sid) {
+  if (!s.teamQueued) s.teamQueued = { parsed, rawArgs, sid }
+}
+
 // runQueuedTeam runs the /team that waited for a relay, from a timer at the return to idle; its reply is a toast.
 function runQueuedTeam($) {
   const q = s.teamQueued
@@ -1053,6 +1060,12 @@ function runQueuedTeam($) {
   later($, 0, async () => {
     // another relay (a reask, a member control, a /relay) may have taken the idle state between the return and this timer: keep the
     // command for that relay's own return to idle, unless a newer one has been queued since
+    // a /clear (another conversation) between the typing and now drops it: it was the person's command for that conversation
+    const here = await $.session.id().catch(() => undefined)
+    if (!here || (q.sid && here !== q.sid)) {
+      log($, 'queued /team dropped: the session moved on')
+      return
+    }
     if (s.state !== 'idle') {
       if (!s.teamQueued) s.teamQueued = q
       return

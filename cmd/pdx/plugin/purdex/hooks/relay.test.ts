@@ -179,6 +179,7 @@ type Fake = {
   // /clear): a hook sees it only after its next(e), as in a session.
   switchTo?: string
   usageGate?: Promise<void> // session.usage waits on it (the race tests)
+  idGate?: Promise<void> // session.id waits on it (the race tests)
 }
 
 // The clock of `refuseNow`: the one way to make the prompt hold throw (its
@@ -251,7 +252,7 @@ function relayWorld(on: any, opts: Partial<Fake> = {}, env: Record<string, strin
     if ('deny' in r) return { deny: r.deny }
     return { value: { exitCode: r.exitCode, stdout: r.stdout ?? '', stderr: r.stderr ?? '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
-  on('session.id', async () => ({ value: f.sessionId }))
+  on('session.id', async () => { if (f.idGate) await f.idGate; return { value: f.sessionId } })
   on('session.usage', async () => { if (f.usageGate) await f.usageGate; return { value: { startedAt: 0, context: f.usage, rateLimits: [] } } })
   on('fs.read', async (_$: any, e: any) => {
     if (e.path.endsWith('/pdx.json')) return f.pdxJSON ? { value: f.pdxJSON } : { deny: 'ENOENT' }
@@ -3068,6 +3069,50 @@ test('a queued /team is kept when another relay takes the idle state while it re
   await f.clock.settle()
   expect(f.submits).toEqual([]) // not run into the second relay
   await f.clock.advance(50) // the second relay is denied: its return to idle runs the kept command
+  await f.clock.advance(50)
+  await f.clock.settle()
+  expect(f.submits.length).toBe(1)
+  expect(f.submits[0].text).toContain('pdx lead request --person ' + PERSON_TOKEN)
+})
+
+// codex attack: a /clear (another conversation) between the typing and the return to idle drops the queued command: it was the
+// person's command for the conversation that is gone. Mutation gate: no session check at the run → a lead prompt goes into the
+// new conversation (red).
+test('a queued /team does not cross a /clear: the new conversation gets no token and no prompt', async ($, on) => {
+  const base = pdxWith([])
+  const f = relayWorld(on, { usage: NOW_BELOW, pdx: (argv) => (argv[1] === 'begin' ? { exitCode: 0, stdout: BEGIN_OK } : argv[0] === 'team' ? NOT_LEAD : base(argv)) })
+  await start($, f)
+  await relayCmd($, 'now') // awaiting approval
+  expect((await teamCmd($, '')).text).toBe('接力進行中，完成後立刻執行')
+  f.switchTo = 'sid-new'
+  await $.classic.SessionStart({ source: 'clear' }) // the user's own /clear: the relay is gone, the session is another
+  await f.clock.advance(50)
+  await f.clock.advance(50)
+  await f.clock.settle()
+  expect(f.submits).toEqual([])
+  expect(f.persons.map((p) => p[5])).toEqual(['relay']) // no token for the queued command
+})
+
+// codex attack: the prompt's timer may find a relay in the way (it started after the token was minted); the command is kept for
+// that relay's return to idle, not lost behind a success message. Mutation gate: drop it at the timer → no prompt, ever (red).
+test('a /team whose prompt timer finds a relay in the way is kept for that relay’s return to idle', async ($, on) => {
+  let deny!: () => void
+  const denied = new Promise<{ exitCode: number }>((r) => { deny = () => r({ exitCode: 10 }) })
+  const base = pdxWith([denied as any])
+  const f = relayWorld(on, { usage: NOW_BELOW, pdx: (argv) => (argv[1] === 'begin' ? { exitCode: 0, stdout: BEGIN_OK } : argv[0] === 'team' ? NOT_LEAD : base(argv)) })
+  await start($, f)
+  expect((await teamCmd($, '')).text).toBe('已請這個 session 申請 lead，等待核准') // the prompt's timer is set
+  let open!: () => void
+  f.idGate = new Promise<void>((r) => { open = r }) // the timer's own session.id read parks here
+  const relay = relayCmd($, 'now') // a relay takes the state while the timer is parked
+  await f.clock.settle() // …the command reached the mod and holds the state (its own session.id read is parked too)
+  f.idGate = undefined
+  open()
+  await relay
+  await f.clock.advance(50) // the timer resumes, finds the relay: kept
+  await f.clock.advance(50)
+  expect(f.submits).toEqual([]) // not while the relay runs
+  deny() // the relay is denied: idle again, the kept command runs
   await f.clock.advance(50)
   await f.clock.settle()
   expect(f.submits.length).toBe(1)
