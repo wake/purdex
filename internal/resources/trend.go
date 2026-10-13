@@ -72,6 +72,16 @@ func (t Trend) String() string {
 	return "unknown"
 }
 
+// ParseTrend is the inverse of Trend.String; anything else is unknown.
+func ParseTrend(s string) Trend {
+	for _, t := range []Trend{TrendFalling, TrendFlat, TrendRising} {
+		if t.String() == s {
+			return t
+		}
+	}
+	return TrendUnknown
+}
+
 // TrendOf reads the direction of host usage from the samples within
 // trend_window_s of now (lease v2 spec D-2′).
 //

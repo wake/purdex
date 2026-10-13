@@ -8,9 +8,9 @@ import (
 	"github.com/wake/purdex/internal/resources"
 )
 
-// The admission pass (spec D-2/D-3, plan Task 1.5, P1-D1): it decides which
-// waiting requests are granted now and writes the grants. It has no HTTP in
-// it; the routes (D-2) and the loops call it.
+// The admission pass (lease v2 spec D-3′): it decides which waiting request is
+// granted now and writes the grant. It has no HTTP in it; the routes and the
+// loops call it.
 //
 // Who calls it: the sampler after every good tick; the sweeper after every
 // tick while a request waits (so a deadline is honoured within a second with
@@ -21,7 +21,7 @@ import (
 // transition lands between the rows a decision was made on and the writes
 // that follow. What it does under the lock is what the rule allows: two reads
 // that use the `state` index (held rows and waiting rows, a handful each), the
-// pure Admit, and one single-row UPDATE per grant. The process table is never
+// pure AdmitV2, and one single-row UPDATE per grant. The process table is never
 // read under it: a session-new lease's baseline is worked out before the lock
 // from the sampler's last process list and written by the grant's own UPDATE.
 
@@ -62,6 +62,11 @@ func (m *Module) admissionPass(ctx context.Context, fresh string) passResult {
 }
 
 // passOnce is the locked part of a pass; again asks for another round.
+//
+// Mode lease: AdmitV2 decides (lease v2 spec D-3′): strictly the head of the
+// queue, at most one grant, the gap after the last grant, the zone and trend
+// table. Every waiter's reason is recorded for wait_reasons. Mode advise grants
+// every waiter at once, as before; its counterfactual is the shadow queue (P1c).
 func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[string]string) (granted int, again bool) {
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
@@ -73,6 +78,12 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 		m.passHook()
 	}
 	now := m.now()
+	// A row that ended some way no path reported must not keep a reasons entry.
+	all := make(map[string]bool, len(waiting))
+	for _, w := range waiting {
+		all[w.ID] = true
+	}
+	m.reasons.retain(all)
 	// A waiter nobody polls any more (its lease ran out) is the sweeper's to
 	// end as abandoned; granting it would hold capacity for a client that left.
 	live := waiting[:0:0]
@@ -82,30 +93,75 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 		}
 	}
 	waiting = live
-	// A session-new waiter that arrived after the baselines were worked out has
-	// none yet. It is not granted without one, and nobody behind it is
-	// planned either (they would overtake it, which FIFO does not allow while
-	// it may fit): the queue is cut there and another round follows.
-	ready := waiting
-	for i, w := range waiting {
+
+	// Two holds on a waiter that are not about the host: a session-new waiter
+	// that arrived after the baselines were worked out has none yet (it is not
+	// granted without one, and another round follows), and while a trim runs the
+	// disk-guarded kinds wait for it (diskguard.go). The waiter is cut, which
+	// stops the walk when it is the head.
+	cut := make(map[string]bool)
+	for _, w := range waiting {
 		if w.Scope == resources.ScopeSessionNew && !m.baselineReady(w, baselines) {
-			ready, again = waiting[:i], true
-			break
+			cut[w.ID], again = true, true
+		}
+		if m.diskHolding() && diskGuardedKinds[w.Kind] {
+			cut[w.ID] = true
 		}
 	}
-	// A trim is running: the guarded leases wait for it (FIFO is kept: the queue is cut at the first one), and the walk ends
-	// with a pass that grants them with the disk judged after it (diskguard.go).
-	if m.diskHolding() {
-		for i, w := range ready {
-			if diskGuardedKinds[w.Kind] {
-				ready = ready[:i]
+
+	zone, trend := m.admitZoneTrend()
+	running := len(held) > 0
+	lastGrant := m.lastGrantTime(held)
+	var toGrant []leaseRow
+	var gapLeft time.Duration
+	if set.Mode == resources.ModeAdvise {
+		// Advise grants everything at once, up to a cut waiter (FIFO is kept).
+		for _, w := range waiting {
+			if cut[w.ID] {
 				break
 			}
+			toGrant = append(toGrant, w)
+		}
+	} else {
+		vw := make([]resources.V2Waiter, len(waiting))
+		byID := make(map[string]leaseRow, len(waiting))
+		for i, w := range waiting {
+			vw[i] = resources.V2Waiter{ID: w.ID, CreatedAt: time.UnixMilli(w.CreatedAt), Cut: cut[w.ID]}
+			byID[w.ID] = w
+		}
+		var grantID string
+		var reasons map[string]resources.V2Reason
+		grantID, gapLeft, reasons = resources.AdmitV2(zone, trend, running, lastGrant, vw, now, set)
+		for id, r := range reasons {
+			m.reasons.observe(id, r, now)
+		}
+		if grantID != "" {
+			toGrant = append(toGrant, byID[grantID])
 		}
 	}
-	for _, pg := range m.plan(set, held, ready, fresh, now) {
-		w := pg.row
-		won, err := m.store.GrantDecided(w.ID, now.UnixMilli(), pg.wouldWait, pg.grant, baselines[w.ID])
+
+	leases := make([]resources.Lease, len(held))
+	for i, r := range held {
+		leases[i] = resources.Lease{ID: r.ID, Weight: r.Weight, GrantedAt: time.UnixMilli(r.GrantedAt), Measured: r.EWMA, Samples: r.Samples}
+	}
+	host := m.admitHost()
+	use := m.leaseUseSnapshot()
+	for _, w := range toGrant {
+		rec := resources.RecordOf(host, leases, use, w.Weight, now, set)
+		path := resources.PathWaited
+		switch {
+		case zone == resources.ZoneUnknown:
+			path = resources.PathUnknownZone
+		case w.ID == fresh:
+			path = resources.PathImmediate
+		}
+		d := resources.Decision{
+			Path: path, WaitedMS: max(0, now.UnixMilli()-w.CreatedAt),
+			Load1: host.Load1, NCPU: host.NCPU, Mem: host.Mem, Measured: host.Measured, Full: host.Full,
+			Weight: w.Weight, SumCharge: rec.SumCharge, Unleased: rec.Unleased, WouldWaitR2: rec.WouldWaitR2,
+		}
+		v2 := resources.V2Decision(zone, trend, running, gapLeft)
+		won, err := m.store.GrantDecided(w.ID, now.UnixMilli(), false, d, v2, m.reasons.peek(w.ID, now), baselines[w.ID])
 		if err != nil {
 			m.logf("[resources] admission: grant %s: %v", w.ID, err)
 			return granted, false
@@ -114,15 +170,41 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 			// Someone else moved the row after the read: the plan is stale.
 			return granted, true
 		}
+		m.reasons.drop(w.ID)
+		m.lastGrantMS = max(m.lastGrantMS, now.UnixMilli()) // only forward (a grant needs now >= lastGrant + gap, so this is a guard)
+		leases = append(leases, resources.Lease{ID: w.ID, Weight: w.Weight, GrantedAt: now})
+		running = true
 		granted++
 		m.recordGrantWarning(w.ID, w.Kind)
-		m.logf("[resources] lease %s (%s, weight %d) granted: %s, waited %d ms", w.ID, w.Kind, w.Weight,
-			pg.grant.Path, pg.grant.WaitedMS)
+		m.logf("[resources] lease %s (%s, weight %d) granted: %s, waited %d ms", w.ID, w.Kind, w.Weight, d.Path, d.WaitedMS)
 	}
 	if granted > 0 {
 		m.wake()
 	}
 	return granted, again
+}
+
+// admitZoneTrend is the zone and trend of the latest sample; an unavailable or
+// missing sample reads as unknown, which admission fails open on (D-5).
+func (m *Module) admitZoneTrend() (resources.Zone, resources.Trend) {
+	if s := m.latest.Load(); s != nil && s.Available {
+		return resources.ParseZone(s.Host.Zone), resources.ParseTrend(s.Host.Trend)
+	}
+	return resources.ZoneUnknown, resources.TrendUnknown
+}
+
+// lastGrantTime is the newest granted_at of any row, held or ended: the larger
+// of the one kept in memory (set at every grant, read from the table at boot)
+// and the held rows' own. Zero when nothing was ever granted. stateMu is held.
+func (m *Module) lastGrantTime(held []leaseRow) time.Time {
+	last := m.lastGrantMS
+	for _, r := range held {
+		last = max(last, r.GrantedAt)
+	}
+	if last == 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(last)
 }
 
 // baselineReady says whether a session-new waiter can be granted: its
@@ -147,68 +229,6 @@ func (m *Module) readPassRows() (held, waiting []leaseRow, ok bool) {
 		return nil, nil, false
 	}
 	return held, waiting, true
-}
-
-// plannedGrant is one row the pass will grant.
-type plannedGrant struct {
-	row       leaseRow
-	grant     resources.Grant
-	wouldWait bool
-}
-
-// plan runs Admit on the rows. In mode lease its grants are the plan. In mode
-// advise every waiter is granted at once, and wouldWait says whether mode
-// lease would have kept it back (spec: advise computes and records, never
-// holds).
-func (m *Module) plan(set resources.Settings, held, waiting []leaseRow, fresh string, now time.Time) []plannedGrant {
-	host := m.admitHost()
-	leases := make([]resources.Lease, len(held))
-	for i, r := range held {
-		leases[i] = resources.Lease{ID: r.ID, Weight: r.Weight, GrantedAt: time.UnixMilli(r.GrantedAt), Measured: r.EWMA, Samples: r.Samples}
-	}
-	byID := make(map[string]leaseRow, len(waiting))
-	waiters := make([]resources.Waiter, len(waiting))
-	for i, w := range waiting {
-		byID[w.ID] = w
-		waiters[i] = resources.Waiter{ID: w.ID, Weight: w.Weight, EnqueuedAt: time.UnixMilli(w.CreatedAt),
-			Deadline: time.UnixMilli(w.DeadlineAt), Fresh: w.ID == fresh}
-	}
-	use := m.leaseUseSnapshot()
-	var out []plannedGrant
-	if set.Mode != resources.ModeAdvise {
-		for _, g := range resources.Admit(host, leases, use, waiters, now, set) {
-			out = append(out, plannedGrant{row: byID[g.ID], grant: g})
-		}
-		return out
-	}
-	// Advise: what lease mode would have done is worked out on its own, from
-	// the real deadlines, and says only whether each request would have been
-	// held back. Every request is then granted at once, and the decision
-	// recorded is the one the pass really makes: a second Admit in which every
-	// deadline has passed, so each grant counts in the sum of the next, as it
-	// does on the host. A request that lease mode would have queued therefore
-	// does not take capacity from the counterfactual of a later one.
-	lease := map[string]resources.Grant{}
-	for _, g := range resources.Admit(host, leases, use, waiters, now, set) {
-		lease[g.ID] = g
-	}
-	for i := range waiters {
-		waiters[i].Deadline = now
-	}
-	for _, g := range resources.Admit(host, leases, use, waiters, now, set) {
-		pg := plannedGrant{row: byID[g.ID], grant: g}
-		l, fits := lease[g.ID]
-		pg.wouldWait = !fits || l.Overrun
-		pg.grant.Overrun = false
-		if pg.grant.Path == resources.PathOverrun {
-			pg.grant.Path = resources.PathWaited
-			if g.ID == fresh {
-				pg.grant.Path = resources.PathImmediate
-			}
-		}
-		out = append(out, pg)
-	}
-	return out
 }
 
 // admitHost is the host figure the pass decides on: the latest sample, or an

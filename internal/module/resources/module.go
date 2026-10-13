@@ -88,6 +88,12 @@ type Module struct {
 	// under it are single statements, and a long poll never holds it while it
 	// waits.
 	stateMu sync.Mutex
+	// lastGrantMS is the newest granted_at of any row, held or ended (0: none),
+	// where the gap after a grant is counted from. Set by the pass and read from
+	// the table at boot; guarded by stateMu. reasons is the account of why each
+	// waiting row is held back (reasons.go); its own lock nests inside stateMu.
+	lastGrantMS int64
+	reasons     waitReasons
 	// gen is the generation channel: wake closes it and installs a fresh one on
 	// every state transition, so a poller that took genChan before it read the
 	// rows is woken by any change after that read. genMu guards the swap only.

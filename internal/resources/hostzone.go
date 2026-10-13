@@ -69,3 +69,13 @@ func (l *ZoneLatch) Update(h HostUse, available bool, s Settings) Zone {
 	l.z = next
 	return next
 }
+
+// ParseZone is the inverse of Zone.String; anything else is unknown.
+func ParseZone(s string) Zone {
+	for _, z := range []Zone{ZoneNormal, ZoneWarning, ZoneDanger} {
+		if z.String() == s {
+			return z
+		}
+	}
+	return ZoneUnknown
+}

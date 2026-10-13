@@ -225,14 +225,14 @@ func TestStore_CloseIfExpiredLosesToRenew(t *testing.T) {
 	if err := s.RenewLease("a", 70000); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := s.CloseIfExpired("a", 40000); err != nil || ok {
+	if ok, err := s.CloseIfExpired("a", 40000, ""); err != nil || ok {
 		t.Fatalf("a renewed row must not be closed: ok=%v err=%v", ok, err)
 	}
 	if a, _, _ := s.Get("a"); a.State != resources.StateWaiting {
 		t.Fatalf("row = %+v", a)
 	}
 
-	if ok, err := s.CloseIfExpired("a", 70000); err != nil || !ok {
+	if ok, err := s.CloseIfExpired("a", 70000, ""); err != nil || !ok {
 		t.Fatalf("an overdue row must close: ok=%v err=%v", ok, err)
 	}
 	a, _, _ := s.Get("a")
@@ -240,7 +240,7 @@ func TestStore_CloseIfExpiredLosesToRenew(t *testing.T) {
 		t.Fatalf("abandoned row = %+v", a)
 	}
 	// A held row has no lease to expire.
-	if ok, _ := s.CloseIfExpired("h", 1<<40); ok {
+	if ok, _ := s.CloseIfExpired("h", 1<<40, ""); ok {
 		t.Fatal("a held row must not be closed as abandoned")
 	}
 }

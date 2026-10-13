@@ -15,12 +15,19 @@ type passFix struct{ *useFix }
 
 func newPassFix(t *testing.T, mode string) *passFix {
 	f := &passFix{newUseFix(t)}
-	f.set.set(resources.Settings{Mode: mode})
+	// The gap is off for the fixture: most tests grant two requests in a row. The
+	// ones about the gap set it themselves.
+	f.set.set(resources.Settings{Mode: mode, GapS: intp(0)})
 	f.setHost(resources.HostUse{Measured: 10, NCPU: 10, Load1: 1})
 	return f
 }
 
+// setHost publishes h as the latest sample. A host without a zone is a calm
+// one (normal, flat); a test about the zone sets it.
 func (f *passFix) setHost(h resources.HostUse) {
+	if h.Zone == "" {
+		h.Zone, h.Trend = "normal", "flat"
+	}
 	f.m.publish(&resources.Snapshot{Available: true, Capacity: resources.Capacity, Host: h, Mode: resources.ModeLease})
 }
 
@@ -85,84 +92,119 @@ func TestPass_FreshRequestIsImmediate(t *testing.T) {
 	}
 }
 
-// Three requests of 35: two fit (the second sees the first's weight in the
-// sum, which its decision records), the third waits.
-func TestPass_SecondSeesTheFirstsWeight(t *testing.T) {
+// Strict FIFO, head only, one grant per pass: the first pass grants the oldest,
+// the next one the second (it sees the first running, and its decision records
+// the first's weight in the sum).
+func TestPass_OneGrantPerPassInQueueOrder(t *testing.T) {
 	f := newPassFix(t, resources.ModeLease)
 	f.queue("a", 35, 5*time.Minute)
 	f.queue("b", 35, 5*time.Minute)
 	f.queue("c", 35, 5*time.Minute)
 	f.m.admissionPass(context.Background(), "")
-	if f.state("a") != "held" || f.state("b") != "held" || f.state("c") != "waiting" {
+	if f.state("a") != "held" || f.state("b") != "waiting" || f.state("c") != "waiting" {
 		t.Fatalf("states %s %s %s", f.state("a"), f.state("b"), f.state("c"))
+	}
+	f.m.admissionPass(context.Background(), "")
+	if f.state("b") != "held" || f.state("c") != "waiting" {
+		t.Fatalf("states %s %s", f.state("b"), f.state("c"))
 	}
 	if d := f.dec("b"); d.sumCharge != 35 {
 		t.Errorf("b saw sum %v, want 35", d.sumCharge)
 	}
 }
 
-// A full host keeps a fitting request waiting; when it stops being full the
-// next pass grants it.
-func TestPass_FullHostWaitsThenGrants(t *testing.T) {
+// The danger zone keeps a request waiting, even with nothing running; once the
+// host is back to normal the next pass grants it. (M: let danger through and
+// the first assertion is red.)
+func TestPass_DangerWaitsThenGrants(t *testing.T) {
 	f := newPassFix(t, resources.ModeLease)
-	f.setHost(resources.HostUse{Measured: 95, Full: true, NCPU: 10})
+	f.setHost(resources.HostUse{Measured: 95, NCPU: 10, Zone: "danger", Trend: "flat"})
 	f.queue("a", 35, 5*time.Minute)
 	f.m.admissionPass(context.Background(), "")
 	if f.state("a") != "waiting" {
-		t.Fatal("granted on a full host")
+		t.Fatal("granted in the danger zone")
 	}
-	f.setHost(resources.HostUse{Measured: 60, NCPU: 10})
+	f.setHost(resources.HostUse{Measured: 60, NCPU: 10, Zone: "normal", Trend: "flat"})
 	f.m.admissionPass(context.Background(), "")
 	if f.state("a") != "held" {
-		t.Fatal("not granted once the host was not full")
+		t.Fatal("not granted once the host was normal")
 	}
 }
 
-// At its deadline a request is granted whatever the state, as an overrun.
-func TestPass_OverrunAtDeadline(t *testing.T) {
+// There is no overrun: a row past its deadline_at keeps waiting (the client
+// gives up at its own cap and the row is abandoned later, until P2a parks it).
+// (M: put the old branch back and the row is granted with overrun.)
+func TestPass_NoOverrunAtTheDeadline(t *testing.T) {
 	f := newPassFix(t, resources.ModeLease)
-	f.setHost(resources.HostUse{Measured: 99, Full: true, NCPU: 10})
+	f.setHost(resources.HostUse{Measured: 99, NCPU: 10, Zone: "danger", Trend: "flat"})
 	f.queue("a", 35, 3*time.Second)
-	f.m.admissionPass(context.Background(), "")
-	if f.state("a") != "waiting" {
-		t.Fatal("granted early")
-	}
-	f.advance(4 * time.Second)
-	f.m.admissionPass(context.Background(), "")
-	r := f.row("a")
-	if r.State != "held" || !r.Overrun || r.WaitedMS != 5000 {
+	f.advance(10 * time.Second)
+	f.m.passIfWaiting(context.Background())
+	if r := f.row("a"); r.State != "waiting" || r.Overrun {
 		t.Fatalf("row = %+v", r)
 	}
-	if d := f.dec("a"); d.path != resources.PathOverrun || d.full != 1 {
-		t.Errorf("decision = %+v", d)
+	var n int
+	f.m.store.db.QueryRow(`SELECT COUNT(*) FROM resource_leases WHERE overrun = 1 OR dec_path = 'overrun'`).Scan(&n)
+	if n != 0 {
+		t.Errorf("%d overrun rows", n)
 	}
 }
 
-// The sweeper's pass honours a deadline with no sample ever taken and no
-// change of any kind (plan review #3).
-func TestPass_OverrunWithNoSampleNoChange(t *testing.T) {
+// Without a sample the zone is unknown and admission fails open (D-5): the head
+// is granted, with the path unknown_zone.
+func TestPass_UnknownZoneFailsOpen(t *testing.T) {
 	f := newPassFix(t, resources.ModeLease)
 	f.m.latest.Store(nil) // no sample
 	f.queue("a", 35, 2*time.Second)
 	f.m.passIfWaiting(context.Background())
-	if f.state("a") != "held" { // no sample = nothing measured, not full: it fits at once
-		t.Fatal("not granted without a sample")
+	if r := f.row("a"); r.State != "held" || r.Overrun {
+		t.Fatalf("row = %+v", r)
 	}
-	// A pool already full of leases: the waiter fits nothing and waits for its deadline.
+	if d := f.dec("a"); d.path != resources.PathUnknownZone {
+		t.Errorf("path = %q", d.path)
+	}
+	// A sample that is unavailable reads the same.
 	f2 := newPassFix(t, resources.ModeLease)
-	f2.m.latest.Store(nil)
-	f2.held("h1", 1, "", f2.nowMS()-10000)
-	f2.held("h2", 2, "", f2.nowMS()-10000)
-	f2.held("h3", 3, "", f2.nowMS()-10000)
-	f2.queue("a", 35, 2*time.Second)
+	f2.m.publish(&resources.Snapshot{Available: false, Host: resources.HostUse{Zone: "danger", Trend: "rising"}, Mode: resources.ModeLease})
+	f2.queue("b", 35, 2*time.Second)
 	f2.m.passIfWaiting(context.Background())
-	if f2.state("a") != "waiting" {
-		t.Fatal("granted into a full pool")
+	if f2.state("b") != "held" {
+		t.Fatal("an unavailable sample must fail open, whatever zone it last carried")
 	}
-	f2.advance(3 * time.Second)
-	f2.m.passIfWaiting(context.Background())
-	if r := f2.row("a"); r.State != "held" || !r.Overrun {
-		t.Fatalf("not granted at its deadline: %+v", r)
+}
+
+// The gap is counted from the newest grant of any row, also one that has
+// already ended, and survives a restart (boot reads it from the table).
+func TestPass_GapFromTheLastGrantEvenEnded(t *testing.T) {
+	f := newPassFix(t, resources.ModeLease)
+	f.set.set(resources.Settings{Mode: resources.ModeLease}) // the default gap, 30 s
+	f.queue("a", 35, 5*time.Minute)
+	f.m.admissionPass(context.Background(), "")
+	if f.state("a") != "held" {
+		t.Fatal("a not granted")
+	}
+	f.m.store.End("a", resources.EndReleased, f.nowMS()) // ended at once: nothing is running
+	f.queue("b", 35, 5*time.Minute)
+	f.advance(29 * time.Second)
+	f.m.admissionPass(context.Background(), "")
+	if f.state("b") != "waiting" {
+		t.Fatal("granted inside the gap after an ended lease")
+	}
+	f.advance(2 * time.Second)
+	f.m.store.RenewLease("b", f.nowMS()+30000) // its client is still polling
+	f.m.admissionPass(context.Background(), "")
+	if f.state("b") != "held" {
+		t.Fatal("not granted after the gap")
+	}
+
+	// A restart: the in-memory time is gone, boot reads it from the table.
+	f.m.lastGrantMS = 0
+	f.m.store.End("b", resources.EndReleased, f.nowMS())
+	f.queue("c", 35, 5*time.Minute)
+	f.m.boot()
+	f.m.admissionPass(context.Background(), "")
+	if f.state("c") != "waiting" {
+		t.Fatal("the gap did not survive a restart")
 	}
 }
 
@@ -220,28 +262,23 @@ func TestPass_GrantWakes(t *testing.T) {
 	}
 }
 
-// Mode advise grants every waiter and records whether lease mode would have
-// held it: the one that does not fit is granted with would_wait, not overrun.
-func TestPass_AdviseGrantsAllAndRecordsWouldWait(t *testing.T) {
+// Mode advise grants every waiter at once, whatever the zone; would_wait stays
+// false until the shadow queue of P1c answers it.
+func TestPass_AdviseGrantsAll(t *testing.T) {
 	f := newPassFix(t, resources.ModeAdvise)
-	f.held("h", 99, "", f.nowMS()-60000)
-	f.m.store.db.Exec(`UPDATE resource_leases SET weight = 80, samples = 5, ewma = 80 WHERE id = 'h'`)
-	f.queue("fits", 10, 5*time.Minute)
-	f.queue("toomuch", 35, 5*time.Minute)
-	f.m.admissionPass(context.Background(), "toomuch")
-	for _, id := range []string{"fits", "toomuch"} {
+	f.setHost(resources.HostUse{Measured: 99, NCPU: 10, Zone: "danger", Trend: "rising"})
+	f.queue("a", 10, 5*time.Minute)
+	f.queue("b", 35, 5*time.Minute)
+	f.m.admissionPass(context.Background(), "b")
+	for _, id := range []string{"a", "b"} {
 		if f.state(id) != "held" {
 			t.Fatalf("%s not granted in advise", id)
 		}
 	}
-	if r := f.row("fits"); r.WouldWait || r.Overrun {
-		t.Errorf("fits: %+v", r)
+	if r := f.row("b"); r.WouldWait || r.Overrun {
+		t.Errorf("b: %+v", r)
 	}
-	r := f.row("toomuch")
-	if !r.WouldWait || r.Overrun {
-		t.Errorf("toomuch: %+v", r)
-	}
-	if d := f.dec("toomuch"); d.path != resources.PathImmediate || d.recorded != 1 {
+	if d := f.dec("b"); d.path != resources.PathImmediate || d.recorded != 1 || d.sumCharge != 10 {
 		t.Errorf("decision = %+v", d)
 	}
 }
@@ -399,28 +436,6 @@ func TestPass_SessionNewArrivingLateGetsItsBaselineFirst(t *testing.T) {
 	got := f.row("late")
 	if got.State != "held" || got.Baseline == "" || got.Baseline == "[]" {
 		t.Fatalf("row = %+v: granted without its baseline, or not at all", got)
-	}
-}
-
-// Advise: a request that lease mode would have queued does not take capacity
-// from the counterfactual of the next. Held 80; waiters 30 then 10: lease mode
-// keeps the 30 back and lets the 10 through.
-func TestPass_AdviseCounterfactualIgnoresWhatLeaseWouldHaveQueued(t *testing.T) {
-	f := newPassFix(t, resources.ModeAdvise)
-	f.held("h", 99, "", f.nowMS()-60000)
-	f.m.store.db.Exec(`UPDATE resource_leases SET weight = 80, samples = 5, ewma = 80 WHERE id = 'h'`)
-	f.queue("w1-thirty", 30, 5*time.Minute)
-	f.queue("w2-ten", 10, 5*time.Minute)
-	f.m.admissionPass(context.Background(), "")
-	if r := f.row("w1-thirty"); !r.WouldWait {
-		t.Errorf("thirty: %+v", r)
-	}
-	if r := f.row("w2-ten"); r.WouldWait {
-		t.Errorf("ten was marked would_wait because the thirty it was not behind in lease mode took capacity: %+v", r)
-	}
-	// What advise did on the host is still recorded: ten saw thirty's weight.
-	if d := f.dec("w2-ten"); d.sumCharge != 110 {
-		t.Errorf("ten's decision sum = %v, want 110 (80 + the 30 advise let in)", d.sumCharge)
 	}
 }
 

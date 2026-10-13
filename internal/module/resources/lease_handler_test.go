@@ -32,6 +32,12 @@ func newRouteFix(t *testing.T, mode string) *routeFix {
 	return f
 }
 
+// holdBack puts the host in the warning zone with a flat trend: a request behind
+// a running lease waits (spec D-3′ table), one with nothing running does not.
+func (f *routeFix) holdBack() {
+	f.setHost(resources.HostUse{Measured: 10, NCPU: 10, Load1: 1, Zone: "warning", Trend: "flat"})
+}
+
 func (f *routeFix) do(method, path string, body any) *httptest.ResponseRecorder {
 	f.t.Helper()
 	var rd *bytes.Reader
@@ -81,11 +87,13 @@ func TestLeases_GrantImmediatelyWhenFits(t *testing.T) {
 	}
 }
 
-// B does not fit behind A: it waits at position 1; A's release (DELETE) wakes
-// B's long poll, which answers granted well before its wait runs out.
+// B is held back behind A (warning zone, flat): it waits at position 1; A's
+// release (DELETE) wakes B's long poll, which answers granted well before its
+// wait runs out.
 func TestLeases_WaitThenGrantOnRelease(t *testing.T) {
 	f := newRouteFix(t, resources.ModeLease)
 	a := decodeLease(t, f.post(cidA, "", 60))
+	f.holdBack()
 	b := decodeLease(t, f.post(cidB, "", 60))
 	if a.State != resources.StateHeld || b.State != resources.StateWaiting || b.Position != 1 || b.Granted {
 		t.Fatalf("a=%+v b=%+v", a, b)
@@ -125,6 +133,7 @@ func TestLeases_IdempotentCreate(t *testing.T) {
 func TestLeases_PollRenews(t *testing.T) {
 	f := newRouteFix(t, resources.ModeLease)
 	f.post(cidA, "", 60)
+	f.holdBack()
 	b := decodeLease(t, f.post(cidB, "", 60))
 	before := f.row(b.ID).LeaseUntil
 	f.advance(20 * time.Second)
@@ -137,6 +146,7 @@ func TestLeases_PollRenews(t *testing.T) {
 func TestLeases_DeleteWaitingCancels(t *testing.T) {
 	f := newRouteFix(t, resources.ModeLease)
 	f.post(cidA, "", 60)
+	f.holdBack()
 	b := decodeLease(t, f.post(cidB, "", 60))
 	rec := f.do(http.MethodDelete, "/api/resources/leases/"+b.ID, nil)
 	got := decodeLease(t, rec)
@@ -155,6 +165,7 @@ func TestLeases_DeleteWaitingCancels(t *testing.T) {
 func TestLeases_DeleteHeldReleasesAndFreesTheNext(t *testing.T) {
 	f := newRouteFix(t, resources.ModeLease)
 	a := decodeLease(t, f.post(cidA, "", 60))
+	f.holdBack()
 	b := decodeLease(t, f.post(cidB, "", 60))
 	got := decodeLease(t, f.do(http.MethodDelete, "/api/resources/leases/"+a.ID, nil))
 	if got.EndReason != resources.EndReleased || f.state(b.ID) != "held" {
@@ -178,17 +189,18 @@ func TestLeases_DeleteByClientID(t *testing.T) {
 	}
 }
 
-// Mode advise grants at once and says whether lease mode would have waited.
-func TestLeases_ModeAdviseGrantsWithWouldWait(t *testing.T) {
+// Mode advise grants at once, whatever the zone, and carries the would_wait
+// field (false until the shadow queue of P1c answers it).
+func TestLeases_ModeAdviseGrantsAtOnce(t *testing.T) {
 	f := newRouteFix(t, resources.ModeAdvise)
+	f.setHost(resources.HostUse{Measured: 99, NCPU: 10, Zone: "danger", Trend: "rising"})
 	f.post(cidA, "", 70)
-	b := decodeLease(t, f.post(cidB, "", 60)) // 70 + 60 > 100: lease mode would have queued it
-	if b.State != resources.StateHeld || !b.Granted || b.WouldWait == nil || !*b.WouldWait || b.Overrun {
+	b := decodeLease(t, f.post(cidB, "", 60))
+	if b.State != resources.StateHeld || !b.Granted || b.WouldWait == nil || *b.WouldWait || b.Overrun {
 		t.Fatalf("resp %+v", b)
 	}
-	c := decodeLease(t, f.post(cidC, "", 10)) // would it have waited? 70 + 60 (advise let B in) + 10 > 100 in the host's real state
-	if c.State != resources.StateHeld || c.WouldWait == nil {
-		t.Fatalf("resp %+v", c)
+	if d := f.dec(b.ID); d.recorded != 1 {
+		t.Errorf("decision = %+v", d)
 	}
 }
 
@@ -309,6 +321,7 @@ func TestPoll_GrantBetweenReadAndWait(t *testing.T) {
 func TestPoll_DeleteWakes(t *testing.T) {
 	f := newRouteFix(t, resources.ModeLease)
 	f.post(cidA, "", 60)
+	f.holdBack()
 	b := decodeLease(t, f.post(cidB, "", 60))
 	done := make(chan resources.LeaseResponse, 1)
 	go func() { done <- decodeLease(t, f.do(http.MethodGet, "/api/resources/leases/"+b.ID+"?wait=20", nil)) }()
@@ -328,6 +341,7 @@ func TestPoll_DeleteWakes(t *testing.T) {
 func TestPoll_AbandonWakes(t *testing.T) {
 	f := newRouteFix(t, resources.ModeLease)
 	f.post(cidA, "", 60)
+	f.holdBack()
 	b := decodeLease(t, f.post(cidB, "", 60))
 	done := make(chan resources.LeaseResponse, 1)
 	go func() { done <- decodeLease(t, f.do(http.MethodGet, "/api/resources/leases/"+b.ID+"?wait=20", nil)) }()
@@ -463,7 +477,7 @@ func TestPoll_TimeoutReadsTheRowAgain(t *testing.T) {
 		// The room appears with no wake the poll could see: the row changes in
 		// the database only, then the timer fires.
 		f.m.store.End(a.ID, resources.EndReleased, f.nowMS())
-		f.m.store.GrantDecided(b.ID, f.nowMS(), false, resources.Grant{Decision: resources.Decision{Path: resources.PathWaited}}, "")
+		f.m.store.GrantDecided(b.ID, f.nowMS(), false, resources.Decision{Path: resources.PathWaited}, resources.V2Record{}, "", "")
 	}
 	got := decodeLease(t, f.do(http.MethodGet, "/api/resources/leases/"+b.ID+"?wait=1", nil))
 	if got.State != resources.StateHeld {
