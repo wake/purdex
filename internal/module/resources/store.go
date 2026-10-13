@@ -505,6 +505,20 @@ const hostMinutesSchema = `
 		unleased       REAL    NOT NULL
 	)`
 
+// minuteColumns are the lease v2 columns of host_minutes (spec D-7): the seconds
+// sampled in each zone (zone shares are x_s / sampled_s; a row from before has
+// sampled_s = 0 and is left out of them), and the minute's worst pressure and
+// zone (0 normal, 1 warning, 2 danger). The waiting peak is the existing
+// `waiting` column.
+var minuteColumns = []struct{ name, def string }{
+	{"sampled_s", "INTEGER NOT NULL DEFAULT 0"},
+	{"normal_s", "INTEGER NOT NULL DEFAULT 0"},
+	{"warning_s", "INTEGER NOT NULL DEFAULT 0"},
+	{"danger_s", "INTEGER NOT NULL DEFAULT 0"},
+	{"pressure_max", "INTEGER NOT NULL DEFAULT 0"},
+	{"zone_max", "INTEGER NOT NULL DEFAULT 0"},
+}
+
 // migrateDecisionColumns adds what the D-8 monitoring record needs, and is a
 // no-op on a database that has it.
 func migrateDecisionColumns(db *sql.DB) error {
@@ -522,6 +536,18 @@ func migrateDecisionColumns(db *sql.DB) error {
 	}
 	if _, err := db.Exec(hostMinutesSchema); err != nil {
 		return fmt.Errorf("migrate resources db: host_minutes: %w", err)
+	}
+	haveMin, err := columnSet(db, "host_minutes")
+	if err != nil {
+		return fmt.Errorf("migrate resources db: %w", err)
+	}
+	for _, c := range minuteColumns {
+		if haveMin[c.name] {
+			continue
+		}
+		if _, err := db.Exec("ALTER TABLE host_minutes ADD COLUMN " + c.name + " " + c.def); err != nil {
+			return fmt.Errorf("migrate resources db: add host_minutes.%s: %w", c.name, err)
+		}
 	}
 	return nil
 }
@@ -559,6 +585,10 @@ type minuteRow struct {
 	SumCharge       float64
 	Waiting         int
 	Unleased        float64
+	// Lease v2: seconds sampled (in all, and per zone), the minute's worst
+	// pressure level and zone.
+	SampledS, NormalS, WarningS, DangerS int
+	PressureMax, ZoneMax                 int
 }
 
 // InsertMinute stores one row. A minute that is already stored is merged, not
@@ -571,17 +601,21 @@ func (s *leaseStore) InsertMinute(r minuteRow) error {
 		full = 1
 	}
 	if _, err := s.db.Exec(`INSERT INTO host_minutes
-		(at, load1, ncpu, mem, measured, full, full_ticks, full_starts, full_longest_s, held, heavy_held, sum_charge, waiting, unleased)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		(at, load1, ncpu, mem, measured, full, full_ticks, full_starts, full_longest_s, held, heavy_held, sum_charge, waiting, unleased,
+			sampled_s, normal_s, warning_s, danger_s, pressure_max, zone_max)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(at) DO UPDATE SET
 			load1 = max(load1, excluded.load1), ncpu = excluded.ncpu, mem = max(mem, excluded.mem),
 			measured = max(measured, excluded.measured), full = max(full, excluded.full),
 			full_ticks = full_ticks + excluded.full_ticks, full_starts = full_starts + excluded.full_starts,
 			full_longest_s = max(full_longest_s, excluded.full_longest_s), held = max(held, excluded.held),
 			heavy_held = max(heavy_held, excluded.heavy_held), sum_charge = max(sum_charge, excluded.sum_charge),
-			waiting = max(waiting, excluded.waiting), unleased = max(unleased, excluded.unleased)`,
+			waiting = max(waiting, excluded.waiting), unleased = max(unleased, excluded.unleased),
+			sampled_s = sampled_s + excluded.sampled_s, normal_s = normal_s + excluded.normal_s,
+			warning_s = warning_s + excluded.warning_s, danger_s = danger_s + excluded.danger_s,
+			pressure_max = max(pressure_max, excluded.pressure_max), zone_max = max(zone_max, excluded.zone_max)`,
 		r.At, r.Load1, r.NCPU, r.Mem, r.Measured, full, r.FullTicks, r.FullStarts, r.FullLongestS, r.Held, r.HeavyHeld,
-		r.SumCharge, r.Waiting, r.Unleased); err != nil {
+		r.SumCharge, r.Waiting, r.Unleased, r.SampledS, r.NormalS, r.WarningS, r.DangerS, r.PressureMax, r.ZoneMax); err != nil {
 		return fmt.Errorf("insert host minute: %w", err)
 	}
 	return nil
