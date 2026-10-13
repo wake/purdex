@@ -279,3 +279,48 @@ func TestPass_ReservationGrantWakesAndNeedsNoSecondRound(t *testing.T) {
 		t.Fatal("the pollers were not woken by the grant")
 	}
 }
+
+// A pass starts the request between the moment the route looked at it and the
+// moment it holds the lock: the answer is the running 409, not an error and not a
+// silent 200. (M: decide on the row read before the lock.)
+func TestCancel_RequestStartedMeanwhileIs409(t *testing.T) {
+	f := newPosFix(t)
+	rowID, _ := f.askOffered()
+	f.m.routeHook = func() {
+		require.NoError(t, f.m.store.ConfirmRow(rowID, f.nowMS()))
+		f.m.admissionPass(context.Background(), rowID) // the confirmed command starts
+	}
+	rec := f.call("/api/resources/leases/"+rowID+"/cancel", pidA)
+	assert.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+	assert.Equal(t, resources.ErrRunning, apiCode(rec))
+	assert.Equal(t, resources.StateHeld, f.state(rowID))
+}
+
+// Same for a position: it started between the read and the lock, so cancel is the
+// running 409, and done leaves it to end with its command.
+func TestCancel_PositionStartedMeanwhile(t *testing.T) {
+	for _, route := range []string{"cancel", "done"} {
+		t.Run(route, func(t *testing.T) {
+			f := newPosFix(t)
+			rowID, posID := f.askOffered()
+			f.m.routeHook = func() {
+				f.m.routeHook = nil
+				require.NoError(t, f.m.store.ConfirmRow(rowID, f.nowMS()))
+				f.m.admissionPass(context.Background(), rowID)
+			}
+			path := "/api/resources/positions/" + posID + "/cancel"
+			if route == "done" {
+				path = "/api/resources/positions/done"
+			}
+			rec := f.call(path, pidA)
+			if route == "cancel" {
+				assert.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+			} else {
+				require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+				assert.True(t, decodePosition(t, rec).DonePending, "the running position ends with its command")
+				assert.True(t, f.position(posID).DoneRequested)
+			}
+			assert.Equal(t, resources.PosRunning, f.position(posID).State)
+		})
+	}
+}

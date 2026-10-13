@@ -139,6 +139,10 @@ type Module struct {
 	// baselineFailing: the "no baseline" problem has been logged (the unlocked part
 	// of the pass runs on the sampler and the sweeper goroutine).
 	baselineFailing atomic.Bool
+	// routeHook runs in the cancel and done routes after the caller and the target
+	// were read and before stateMu is taken, for tests to let a pass start the
+	// target in that window.
+	routeHook func()
 	// pollHook runs in a long poll after it read the row and released stateMu,
 	// before it waits: a seam for tests to land a transition in that window.
 	pollHook func()

@@ -112,33 +112,37 @@ func (m *Module) handleLeaseCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	set := m.settings()
-	switch row.State {
-	case resources.StateHeld:
-		writeErr(w, http.StatusConflict, resources.ErrRunning, "the command is running; it is released when it ends")
-		return
-	case resources.StateEnded:
-		writeJSON(w, http.StatusOK, m.leaseResponse(row, set, false))
-		return
-	}
 	now := m.now()
-	m.stateMu.Lock()
-	var err error
-	if row.PositionID != "" {
-		_, err = m.store.EndRowMaybePosition(row.ID, resources.EndCancelledBySession, now.UnixMilli(), m.reasons.peek(row.ID, now))
-	} else {
-		_, err = m.store.EndWaiting(row.ID, resources.EndCancelledBySession, now.UnixMilli(), m.reasons.peek(row.ID, now))
+	if m.routeHook != nil {
+		m.routeHook()
 	}
-	if err == nil {
-		m.reasons.drop(row.ID)
+	m.stateMu.Lock()
+	cur, found, err := m.store.Get(row.ID) // the row as it is under the lock: a pass may have started it
+	switch {
+	case err != nil || !found:
+	case cur.State == resources.StateWaiting:
+		if cur.PositionID != "" {
+			_, err = m.store.EndRowMaybePosition(cur.ID, resources.EndCancelledBySession, now.UnixMilli(), m.reasons.peek(cur.ID, now))
+		} else {
+			_, err = m.store.EndWaiting(cur.ID, resources.EndCancelledBySession, now.UnixMilli(), m.reasons.peek(cur.ID, now))
+		}
+		if err == nil {
+			m.reasons.drop(cur.ID)
+			cur, _, err = m.store.Get(cur.ID)
+		}
 	}
 	m.stateMu.Unlock()
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, resources.ErrNotReady, "cancel: "+err.Error())
+	switch {
+	case err != nil || !found:
+		writeErr(w, http.StatusInternalServerError, resources.ErrNotReady, "cancel failed")
+		return
+	case cur.State == resources.StateHeld:
+		writeErr(w, http.StatusConflict, resources.ErrRunning, "the command is running; it is released when it ends")
 		return
 	}
 	m.wake()
 	m.admissionPass(r.Context(), "") // a place may have opened
-	m.answerLease(w, r, row.ID, set)
+	writeJSON(w, http.StatusOK, m.leaseResponse(cur, set, false))
 }
 
 // answerLease writes the row as it is now.
@@ -164,10 +168,22 @@ func (m *Module) handlePositionCancel(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if m.routeHook != nil {
+		m.routeHook()
+	}
+	m.stateMu.Lock()
 	pos, found, err := m.store.PositionByID(r.PathValue("id"))
+	var ended bool
+	if err == nil && found && pos.SessionID == session && (pos.State == resources.PosQueued || pos.State == resources.PosOffered || pos.State == resources.PosIdle) {
+		ended, err = m.endPositionLocked(pos, resources.EndCancelledBySession)
+		if err == nil {
+			pos, _, err = m.store.PositionByID(pos.ID)
+		}
+	}
+	m.stateMu.Unlock()
 	switch {
 	case err != nil:
-		writeErr(w, http.StatusInternalServerError, resources.ErrNotReady, "read position: "+err.Error())
+		writeErr(w, http.StatusInternalServerError, resources.ErrNotReady, "cancel position: "+err.Error())
 		return
 	case !found:
 		writeErr(w, http.StatusNotFound, resources.ErrNoPosition, "no such position")
@@ -178,11 +194,12 @@ func (m *Module) handlePositionCancel(w http.ResponseWriter, r *http.Request) {
 	case pos.State == resources.PosRunning:
 		writeErr(w, http.StatusConflict, resources.ErrRunning, "a command is running; use done to release the position after it")
 		return
-	case pos.State == resources.PosEnded:
-		writeJSON(w, http.StatusOK, positionAnswer(pos))
-		return
 	}
-	m.endOwnPosition(w, r, pos, resources.EndCancelledBySession, []string{resources.PosQueued, resources.PosOffered, resources.PosIdle})
+	if ended {
+		m.wake()
+		m.admissionPass(r.Context(), "") // the next in line may be offered
+	}
+	writeJSON(w, http.StatusOK, positionAnswer(pos))
 }
 
 // handlePositionDone is POST /api/resources/positions/done: the session lets its
@@ -193,10 +210,18 @@ func (m *Module) handlePositionDone(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if m.routeHook != nil {
+		m.routeHook()
+	}
 	m.stateMu.Lock()
 	pos, found, err := m.store.LivePositionOf(session)
-	if err == nil && found && pos.State == resources.PosRunning {
-		_, err = m.store.MarkDone(pos.ID)
+	var ended bool
+	if err == nil && found {
+		if pos.State == resources.PosRunning {
+			_, err = m.store.MarkDone(pos.ID)
+		} else {
+			ended, err = m.endPositionLocked(pos, resources.EndDone)
+		}
 		if err == nil {
 			pos, _, err = m.store.PositionByID(pos.ID)
 		}
@@ -209,29 +234,23 @@ func (m *Module) handlePositionDone(w http.ResponseWriter, r *http.Request) {
 	case !found:
 		writeJSON(w, http.StatusOK, resources.PositionResponse{State: resources.StateNone})
 		return
-	case pos.State == resources.PosRunning:
-		writeJSON(w, http.StatusOK, positionAnswer(pos))
-		return
 	}
-	m.endOwnPosition(w, r, pos, resources.EndDone, []string{resources.PosQueued, resources.PosOffered, resources.PosIdle})
+	if ended {
+		m.wake()
+		m.admissionPass(r.Context(), "") // the next in line may be offered
+	}
+	writeJSON(w, http.StatusOK, positionAnswer(pos))
 }
 
-// endOwnPosition ends the position and its waiting rows, lets the queue move, and
-// answers with the position as it is.
-func (m *Module) endOwnPosition(w http.ResponseWriter, r *http.Request, pos positionRow, reason string, from []string) {
-	m.stateMu.Lock()
-	_, err := m.store.EndPositionWithRows(pos.ID, m.now().UnixMilli(), endPosition{Reason: reason, From: from})
-	if err == nil {
+// endPositionLocked ends a position that is queued, offered or idle together with
+// its waiting rows. stateMu is held; a position a pass started in the meantime is
+// not ended (the compare-and-set loses) and ended is false.
+func (m *Module) endPositionLocked(pos positionRow, reason string) (ended bool, err error) {
+	ended, err = m.store.EndPositionWithRows(pos.ID, m.now().UnixMilli(), endPosition{Reason: reason,
+		From: []string{resources.PosQueued, resources.PosOffered, resources.PosIdle}})
+	if err == nil && ended {
 		m.flushWindowCost(pos.ID)
 		m.writePendingCosts()
-		pos, _, err = m.store.PositionByID(pos.ID)
 	}
-	m.stateMu.Unlock()
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, resources.ErrNotReady, "end position: "+err.Error())
-		return
-	}
-	m.wake()
-	m.admissionPass(r.Context(), "") // the next in line may be offered
-	writeJSON(w, http.StatusOK, positionAnswer(pos))
+	return ended, err
 }
