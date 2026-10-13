@@ -116,6 +116,41 @@ describe('reading a card that ran out while open', () => {
     expect(fetchApproval).not.toHaveBeenCalled()
   })
 
+  // A flapping connection must not hand a card a fresh allowance: two reads per card in all, and every read renews its lease.
+  // Mutation gate: let the allowance go with the tracker → the reconnect case reads a third and fourth time → red.
+  it('the capability lost and regained: the card is still read at most twice in all', async () => {
+    supported()
+    open()
+    fetchApproval.mockResolvedValue(card())
+    await tick(12_000)
+    expect(fetchApproval).toHaveBeenCalledTimes(1)
+    supported('unknown') // disconnect, before the retry
+    await tick(60_000)
+    expect(fetchApproval).toHaveBeenCalledTimes(1)
+    supported() // reconnect: the one read left
+    await tick(60_000)
+    expect(fetchApproval).toHaveBeenCalledTimes(2)
+    for (let i = 0; i < 3; i++) {
+      supported('unknown')
+      await tick(1_000)
+      supported()
+      await tick(60_000)
+    }
+    expect(fetchApproval).toHaveBeenCalledTimes(2)
+  })
+
+  it('the allowance is per card and starts over for a card that closed and opened again', async () => {
+    supported()
+    open()
+    fetchApproval.mockResolvedValue(card())
+    await tick(12_000 + 15_000)
+    expect(fetchApproval).toHaveBeenCalledTimes(2)
+    useApprovalStore.getState().applySnapshot(H, []) // it closed, and the snapshot cleared the tombstone: the id may open again
+    open(card({ deadline_at: Date.now() + 10_000 }))
+    await tick(12_000)
+    expect(fetchApproval).toHaveBeenCalledTimes(3)
+  })
+
   it('a card closed before the read is not read', async () => {
     supported()
     open()

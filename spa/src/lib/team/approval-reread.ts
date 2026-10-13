@@ -28,11 +28,15 @@ const MAX_READS = 2
 
 interface Tracker {
   timer: ReturnType<typeof setTimeout> | null
-  reads: number
 }
 
 export function startUnansweredReread(): () => void {
   const trackers = new Map<string, Tracker>()
+  // Reads made per card. Kept apart from the tracker on purpose: a host that loses and regains the capability (a flapping
+  // connection) drops its trackers, but the card must not get a fresh allowance, since every read renews the row's lease. It goes
+  // when the card leaves the store or becomes unanswered.
+  const readsOf = new Map<string, number>()
+  const readsMade = (key: string): number => readsOf.get(key) ?? 0
 
   const supported = (hostId: string): boolean => useUnattendedStore.getState().byHost[hostId]?.unansweredSupport === 'yes'
   const cancel = (key: string) => {
@@ -49,7 +53,7 @@ export function startUnansweredReread(): () => void {
     // The pause data got there first (rule (b)): nothing left to ask.
     const src = { paused: usePausedStore.getState().byHost, roster: useTeamRosterStore.getState().byHost }
     if (isCardUnanswered(hostId, approval, Date.now(), src)) return
-    t.reads++
+    readsOf.set(key, readsMade(key) + 1)
     let again = true
     try {
       const fresh = await fetchApproval(hostId, approval.id)
@@ -64,7 +68,7 @@ export function startUnansweredReread(): () => void {
       if (e instanceof ApprovalApiError && e.status === 404) again = false
       // Any other failure is dropped quietly; it counts as a read and is retried like an open answer.
     }
-    if (again && t.reads < MAX_READS) t.timer = setTimeout(() => void read(key, t), REREAD_RETRY_MS)
+    if (again && readsMade(key) < MAX_READS) t.timer = setTimeout(() => void read(key, t), REREAD_RETRY_MS)
   }
 
   const reconcile = () => {
@@ -73,9 +77,13 @@ export function startUnansweredReread(): () => void {
       const e = entries[key]
       if (e === undefined || !supported(e.hostId) || isUnanswered(e.approval)) cancel(key)
     }
+    for (const key of [...readsOf.keys()]) {
+      const e = entries[key]
+      if (e === undefined || isUnanswered(e.approval)) readsOf.delete(key)
+    }
     for (const [key, e] of Object.entries(entries)) {
-      if (trackers.has(key) || !supported(e.hostId) || isUnanswered(e.approval)) continue
-      const t: Tracker = { timer: null, reads: 0 }
+      if (trackers.has(key) || !supported(e.hostId) || isUnanswered(e.approval) || readsMade(key) >= MAX_READS) continue
+      const t: Tracker = { timer: null }
       trackers.set(key, t)
       t.timer = setTimeout(() => void read(key, t), Math.max(0, e.approval.deadline_at + REREAD_AFTER_DEADLINE_MS - Date.now()))
     }
