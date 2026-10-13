@@ -35,7 +35,7 @@ const (
 // Default values and accepted ranges of the setting (plan Task 1.1).
 const (
 	DefaultMode          = ModeLease
-	DefaultDeadlineS     = 300
+	DefaultDeadlineS     = 540 // the hold: the longest one client call waits (lease v2 D-4′)
 	DefaultWarmupS       = 20
 	DefaultFloorPct      = 50
 	DefaultMaxHoldS      = 3600
