@@ -90,5 +90,6 @@ func TestStatus_AdviseShowsTheShadowGap(t *testing.T) {
 	f.set.set(resources.Settings{Mode: resources.ModeAdvise})
 	f.queue("a", 35, 5*time.Minute)
 	f.m.admissionPass(context.Background(), "")
+	f.m.lastGrantAtMS.Store(1) // the real mirror is somewhere else entirely
 	assert.Equal(t, f.nowMS()+30000, f.snapshot().GapUntil)
 }
