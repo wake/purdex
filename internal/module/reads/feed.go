@@ -1,9 +1,10 @@
 package reads
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"sync"
-	"time"
 
 	"github.com/wake/purdex/internal/reads"
 )
@@ -11,19 +12,14 @@ import (
 // readFeed delivers accepted reads to in-process subscribers (BG-4b's push side). Each subscriber has a worker goroutine and a
 // coalescing queue: a read for a code that is already pending replaces the pending cursor in place (the order is that in
 // which each code first became pending), so a subscriber that falls behind still ends with the latest cursor of every code
-// and a request never waits for it. Only more than maxPending distinct codes at once would lose the oldest pending one.
+// and a request never waits for it. Nothing pending is ever dropped: the codes it can hold are those the daemon accepted a
+// read for, i.e. sessions of a known list or sessions it has seen, so the queue is bounded by the sessions there are.
 type readFeed struct {
 	mu   sync.Mutex
 	subs map[int]*feedSub
 	next int
 	wg   sync.WaitGroup
 }
-
-// maxPending bounds one subscriber's queue: lastRead holds at most 4096 codes, so there is rarely more to wait for.
-const maxPending = reads.DefaultMax
-
-// stopWait is how long stop waits for the workers before it gives up and says so.
-const stopWait = 2 * time.Second
 
 type feedSub struct {
 	mu      sync.Mutex
@@ -50,11 +46,6 @@ func (s *feedSub) push(rd reads.Read) {
 	if _, ok := s.pending[rd.Code]; ok {
 		s.pending[rd.Code] = rd.Through
 	} else {
-		if len(s.order) >= maxPending {
-			log.Printf("[reads] a read subscriber has %d codes pending: dropping %s", maxPending, s.order[0])
-			delete(s.pending, s.order[0])
-			s.order = s.order[1:]
-		}
 		s.pending[rd.Code] = rd.Through
 		s.order = append(s.order, rd.Code)
 	}
@@ -131,9 +122,13 @@ func (f *readFeed) publish(rd reads.Read) {
 	}
 }
 
-// stop ends every subscription and waits (briefly) for the workers, so nothing is delivered after it returns. It can be
-// called again.
-func (f *readFeed) stop() {
+// stop ends every subscription and waits for the workers to return (or for ctx to end, which is the shutdown budget), so
+// nothing is delivered after it returns nil; when ctx ends first it says so. It can be called again. A nil ctx waits for
+// as long as it takes.
+func (f *readFeed) stop(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	f.mu.Lock()
 	subs := f.subs
 	f.subs = map[int]*feedSub{}
@@ -145,7 +140,9 @@ func (f *readFeed) stop() {
 	go func() { f.wg.Wait(); close(done) }()
 	select {
 	case <-done:
-	case <-time.After(stopWait):
-		log.Printf("[reads] a read subscriber did not return within %v of Stop", stopWait)
+		return nil
+	case <-ctx.Done():
+		log.Printf("[reads] a read subscriber had not returned when Stop's budget ended")
+		return fmt.Errorf("reads: a feed subscriber had not returned: %w", ctx.Err())
 	}
 }

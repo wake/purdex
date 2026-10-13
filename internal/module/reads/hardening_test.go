@@ -99,7 +99,7 @@ func TestRead_TrailingJSONIsRefused(t *testing.T) {
 // Mutation gate: drop when the queue is full → red.
 func TestFeed_ASlowSubscriberGetsTheLatestPerCodeAndLosesNone(t *testing.T) {
 	f := newReadFeed()
-	defer f.stop()
+	defer f.stop(nil)
 	release := make(chan struct{})
 	var mu sync.Mutex
 	got := map[string]reads.Cursor{}
@@ -151,7 +151,7 @@ func TestFeed_ASlowSubscriberGetsTheLatestPerCodeAndLosesNone(t *testing.T) {
 // Mutation gate: deliver the backlog after unsubscribe → red.
 func TestFeed_UnsubscribeDropsTheBacklog(t *testing.T) {
 	f := newReadFeed()
-	defer f.stop()
+	defer f.stop(nil)
 	release, entered := make(chan struct{}), make(chan struct{}, 1)
 	var calls atomic.Int32
 	unsub := f.subscribe(func(reads.Read) {
@@ -184,11 +184,11 @@ func TestFeed_StopWaitsForTheWorkersAndIsRepeatable(t *testing.T) {
 	})
 	f.publish(reads.Read{Code: "a", Through: reads.Cursor{Epoch: "e", Seq: 1}})
 	time.Sleep(10 * time.Millisecond)
-	f.stop()
+	f.stop(nil)
 	if running.Load() != 0 {
 		t.Fatal("stop returned while a delivery was still running")
 	}
-	f.stop()
+	f.stop(nil)
 	unsub()
 }
 

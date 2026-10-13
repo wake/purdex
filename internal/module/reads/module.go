@@ -11,6 +11,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -124,7 +125,7 @@ func (m *Module) Start(ctx context.Context) error {
 	return nil
 }
 
-func (m *Module) Stop(context.Context) error {
+func (m *Module) Stop(ctx context.Context) error {
 	m.life.Lock()
 	defer m.life.Unlock()
 	if m.unsub != nil {
@@ -136,8 +137,7 @@ func (m *Module) Stop(context.Context) error {
 		m.cancel = nil
 	}
 	m.wg.Wait()
-	m.feed.stop()
-	return nil
+	return m.feed.stop(ctx)
 }
 
 type readRequest struct {
@@ -202,6 +202,13 @@ func (m *Module) knownSession(code string) bool {
 	return ok
 }
 
+// ownEpoch: the epoch is one this daemon run stamps (core.BootID, or BootID-n after n rotations). The boot id is public
+// (/api/info), so a client can name the epoch before the module has seen a single frame.
+func (m *Module) ownEpoch(epoch string) bool {
+	boot := m.core.BootID
+	return boot != "" && (epoch == boot || strings.HasPrefix(epoch, boot+"-"))
+}
+
 // clamp keeps a cursor from reaching past what the daemon has emitted: a seq above the newest cursor of that session (or, for
 // a session with no event, above the epoch's high-water mark) would cover every later unread of it. A legitimate T is the
 // cursor of an event that already happened, so it is never changed. A cursor of another epoch than the current one can never
@@ -212,10 +219,13 @@ func (m *Module) clamp(code string, t reads.Cursor) reads.Cursor {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if t.Epoch != m.highEpoch {
-		return t
+	if t.Epoch != m.highEpoch && !m.ownEpoch(t.Epoch) {
+		return t // a previous run's cursor
 	}
-	hi := m.highSeq
+	var hi uint64 // an epoch of this run in which no frame has been seen yet has emitted nothing
+	if t.Epoch == m.highEpoch {
+		hi = m.highSeq
+	}
 	if newest, ok := m.newest[code]; ok && newest.Epoch == t.Epoch {
 		hi = newest.Seq
 	}
