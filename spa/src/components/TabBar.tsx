@@ -85,13 +85,25 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
 
   // Which droppables a drag may land on (TG-1). A group is one unit: the frame stands for it, so while it is dragged its
   // own tabs (which travel with it) are no targets, and a plain tab or a group never targets the inside of another group.
-  // A member drags among the tabs only (the frames are too big to be a sensible nearest).
+  // A member only ever targets the members of its own group (its inner SortableContext: any other id would stop the
+  // sortable transforms mid-drag); with the pointer outside the group's frame the target is itself, so it keeps following
+  // the pointer and snaps back on release.
   const collisionDetection: CollisionDetection = useCallback((args) => {
     const activeId = String(args.active.id)
-    const memberDrag = runOf.get(activeId)?.role === 'member'
+    const from = runOf.get(activeId)
+    if (from?.role === 'member') {
+      const frame = args.droppableRects.get(teamGroupDragId(from.teamKey))
+      const centre = args.collisionRect.left + args.collisionRect.width / 2
+      if (frame && (centre < frame.left || centre > frame.right)) return [{ id: args.active.id }]
+      const members = args.droppableContainers.filter((c) => {
+        const hit = runOf.get(String(c.id))
+        return hit?.teamKey === from.teamKey && hit.role === 'member'
+      })
+      return closestCenter({ ...args, droppableContainers: members })
+    }
     const droppableContainers = args.droppableContainers.filter((c) => {
       const id = String(c.id)
-      return memberDrag ? !leadOfFrame.has(id) : leadOfFrame.has(id) || !runOf.has(id)
+      return leadOfFrame.has(id) || !runOf.has(id)
     })
     return closestCenter({ ...args, droppableContainers })
   }, [leadOfFrame, runOf])

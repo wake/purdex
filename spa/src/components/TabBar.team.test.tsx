@@ -1,7 +1,7 @@
 // spa/src/components/TabBar.team.test.tsx — the team group on the top tab bar (plan TI-2, spec §4.2, §5).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
-import type { DragEndEvent } from '@dnd-kit/core'
+import type { CollisionDetection, DragEndEvent } from '@dnd-kit/core'
 import { TabBar } from './TabBar'
 import { TeamDisplayProvider } from './team/TeamDisplayProvider'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
@@ -19,13 +19,14 @@ import type { RosterMember, RosterSession, TeamRoster } from '../lib/team/roster
 import type { PaneLayout, Tab } from '../types/tab'
 
 // The DndContext's drag-end handler is what the bar's rules live in; capture it and call it with synthetic events.
-const dnd = vi.hoisted(() => ({ onDragEnd: null as ((e: DragEndEvent) => void) | null }))
+const dnd = vi.hoisted(() => ({ onDragEnd: null as ((e: DragEndEvent) => void) | null, collide: null as CollisionDetection | null }))
 vi.mock('@dnd-kit/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@dnd-kit/core')>()
   return {
     ...actual,
     DndContext: (props: React.ComponentProps<typeof actual.DndContext>) => {
       dnd.onDragEnd = props.onDragEnd as (e: DragEndEvent) => void
+      dnd.collide = props.collisionDetection ?? null
       return <actual.DndContext {...props} />
     },
   }
@@ -200,6 +201,48 @@ describe('TabBar — team group (TI-2)', () => {
     drag('ma', 'team-group:' + KEY)
     expect(useTeamUiStore.getState().memberOrder[KEY]).toBeUndefined()
     expect(h.onReorderTabs).not.toHaveBeenCalled()
+  })
+
+  describe('collision domain (TG-1)', () => {
+    const container = (id: string) => ({ id, data: { current: undefined }, node: { current: null }, rect: { current: null }, disabled: false })
+    const rectAt = (left: number, width = 100) => ({ left, right: left + width, top: 0, bottom: 26, width, height: 26 })
+    const collide = (active: string, left: number) => {
+      const ids = ['plain', 'lead', 'ma', 'mb', 'p2', 'team-group:' + KEY]
+      const rects = new Map(ids.map((id, i) => [id, rectAt(i * 100)]))
+      rects.set('team-group:' + KEY, rectAt(100, 300)) // the frame spans lead..mb
+      return dnd.collide!({
+        active: { id: active }, collisionRect: rectAt(left), droppableRects: rects, pointerCoordinates: null,
+        droppableContainers: ids.map(container),
+      } as never).map((c) => String(c.id))
+    }
+
+    it('a member only collides with the members of its own group', () => {
+      const tabs = baseTabs()
+      seed([roster()], tabs)
+      bar(tabs)
+      expect([...collide('ma', 100)].sort()).toEqual(['ma', 'mb'])
+      expect([...collide('ma', 300)].sort()).toEqual(['ma', 'mb'])
+    })
+
+    it('a member dragged outside the group frame targets itself, so it keeps following the pointer until it snaps back', () => {
+      const tabs = baseTabs()
+      seed([roster()], tabs)
+      bar(tabs)
+      expect(collide('ma', 450)).toEqual(['ma']) // over p2
+      expect(collide('ma', -200)).toEqual(['ma']) // before the plain tab
+    })
+
+    it('a lead/plain drag targets group frames and plain tabs, never the inside of a group', () => {
+      const tabs = baseTabs()
+      seed([roster()], tabs)
+      bar(tabs)
+      for (const active of ['team-group:' + KEY, 'plain']) {
+        const ids = collide(active, 0)
+        expect(ids).not.toContain('lead')
+        expect(ids).not.toContain('ma')
+        expect(ids).not.toContain('mb')
+      }
+    })
   })
 
   it('plain tabs still reorder among themselves', () => {
