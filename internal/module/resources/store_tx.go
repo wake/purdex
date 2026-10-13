@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/wake/purdex/internal/resources"
 )
@@ -348,4 +349,288 @@ func (s *leaseStore) EndCommand(rowID string, now int64, e commandEnd) (commandE
 		out.NewPositionID = ""
 	}
 	return out, nil
+}
+
+// endPosition describes the end of a whole position (P9 – P13, P16).
+type endPosition struct {
+	Reason string
+	// AskedReason, when set, is the end reason of the ask rows that were asked
+	// (named); the other rows end with Reason (P10).
+	AskedReason string
+	// From lists the states the position may be in.
+	From []string
+	// WindowGuard, when positive, requires window_until to still be this value:
+	// a command that started meanwhile has cleared it and wins (P9, P10).
+	WindowGuard int64
+	// Notice arms the notice slot with this kind ("cancelled", "drained"), or
+	// leaves it alone when empty.
+	Notice string
+}
+
+// EndPositionWithRows ends a position and its waiting rows in one transaction.
+func (s *leaseStore) EndPositionWithRows(id string, now int64, o endPosition) (bool, error) {
+	if len(o.From) == 0 {
+		return false, errors.New("end position: no source states")
+	}
+	marks := strings.TrimSuffix(strings.Repeat("?,", len(o.From)), ",")
+	args := []any{o.Reason, now, id}
+	for _, f := range o.From {
+		args = append(args, f)
+	}
+	where := ` AND state IN (` + marks + `)`
+	if o.WindowGuard > 0 {
+		where += ` AND window_until = ?`
+		args = append(args, o.WindowGuard)
+	}
+	return s.tx(func(x *sql.Tx) error {
+		if err := mustChange(x, `UPDATE resource_positions SET state = 'ended', end_reason = ?, ended_at = ?
+			WHERE id = ?`+where, args...); err != nil {
+			return err
+		}
+		if err := s.mid(); err != nil {
+			return err
+		}
+		if o.Notice != "" {
+			if err := armSlot(x, id, o.Notice, now); err != nil {
+				return err
+			}
+		}
+		if o.AskedReason != "" {
+			if _, err := endWaitingRowsOf(x, id, o.AskedReason, now, ` AND mode = 'ask' AND offered_at > 0`); err != nil {
+				return err
+			}
+		}
+		_, err := endWaitingRowsOf(x, id, o.Reason, now, "")
+		return err
+	})
+}
+
+// EndRowMaybePosition is P14: a waiting row ends (client cancel, abandoned ask
+// row), and a queued position left with no waiting row ends with the same
+// reason, in one transaction.
+func (s *leaseStore) EndRowMaybePosition(rowID, reason string, now int64, waitReasons string) (bool, error) {
+	return s.tx(func(x *sql.Tx) error {
+		var positionID string
+		if err := x.QueryRow(`SELECT position_id FROM resource_leases WHERE id = ? AND state = 'waiting'`, rowID).Scan(&positionID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return errLostCAS
+			}
+			return err
+		}
+		if err := mustChange(x, `UPDATE resource_leases
+			SET state = 'ended', ended_at = ?, end_reason = ?, waited_ms = COALESCE(waited_ms, ? - created_at),
+				wait_reasons = COALESCE(NULLIF(?, ''), wait_reasons)
+			WHERE id = ? AND state = 'waiting'`, now, reason, now, waitReasons, rowID); err != nil {
+			return err
+		}
+		if positionID == "" {
+			return nil
+		}
+		if err := s.mid(); err != nil {
+			return err
+		}
+		_, err := x.Exec(`UPDATE resource_positions SET state = 'ended', end_reason = ?, ended_at = ?
+			WHERE id = ? AND state = 'queued'
+			AND NOT EXISTS (SELECT 1 FROM resource_leases WHERE position_id = ? AND state = 'waiting')`,
+			reason, now, positionID, positionID)
+		return err
+	})
+}
+
+// PassOffer is P15: an offer nobody was told about for 3 minutes passes. The
+// position is queued again (it keeps its place), its rows are un-named, and the
+// notice slot is cleared. offeredAt is the offer being passed: a newer offer
+// is left alone.
+func (s *leaseStore) PassOffer(id string, offeredAt, now int64) (bool, error) {
+	return s.tx(func(x *sql.Tx) error {
+		if err := mustChange(x, `UPDATE resource_positions
+			SET state = 'queued', passed_at = ?, offer_passes = offer_passes + 1, window_until = 0,
+				notice_kind = '', notice_sent_at = 0, notice_due_at = 0, notice_tries = 0, notice_result = ''
+			WHERE id = ? AND state = 'offered' AND offered_at = ? AND delivered_at = 0`, now, id, offeredAt); err != nil {
+			return err
+		}
+		if err := s.mid(); err != nil {
+			return err
+		}
+		_, err := x.Exec(`UPDATE resource_leases SET offered_at = 0 WHERE position_id = ? AND state = 'waiting'`, id)
+		return err
+	})
+}
+
+// NameRows is R7: waiting rows of an offered or idle position that were never
+// named are named now, and the slot of the given kind is armed. It returns how
+// many rows it named.
+func (s *leaseStore) NameRows(positionID string, now int64, kind string) (int64, error) {
+	var named int64
+	_, err := s.tx(func(x *sql.Tx) error {
+		n, err := run(x, `UPDATE resource_leases SET offered_at = ?
+			WHERE position_id = ? AND state = 'waiting' AND offered_at = 0
+			AND EXISTS (SELECT 1 FROM resource_positions WHERE id = ? AND state IN ('offered','idle'))`,
+			now, positionID, positionID)
+		if err != nil {
+			return err
+		}
+		named = n
+		if n == 0 {
+			return nil
+		}
+		if err := s.mid(); err != nil {
+			return err
+		}
+		return armSlot(x, positionID, kind, now)
+	})
+	return named, err
+}
+
+// ReconcilePositions repairs the pairs of rows that disagree, in one
+// transaction (amendment A §2.4a, cases a–d; case e is the drain). With
+// transactions they cannot come from a crash; they come from an older daemon
+// after a rollback, or from a bug. It returns one line per repair.
+func (s *leaseStore) ReconcilePositions(now int64) ([]string, error) {
+	var repairs []string
+	_, err := s.tx(func(x *sql.Tx) error {
+		ids := func(query string, args ...any) ([]string, error) {
+			rows, err := x.Query(query, args...)
+			if err != nil {
+				return nil, err
+			}
+			defer rows.Close()
+			var out []string
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					return nil, err
+				}
+				out = append(out, id)
+			}
+			return out, rows.Err()
+		}
+		const heldOf = `EXISTS (SELECT 1 FROM resource_leases l WHERE l.position_id = resource_positions.id AND l.state = 'held')`
+		// (a) running with no held row: idle, or done when it was asked to be.
+		aIDs, err := ids(`SELECT id FROM resource_positions WHERE state = 'running' AND NOT ` + heldOf)
+		if err != nil {
+			return err
+		}
+		for _, id := range aIDs {
+			var done int
+			if err := x.QueryRow(`SELECT done_requested FROM resource_positions WHERE id = ?`, id).Scan(&done); err != nil {
+				return err
+			}
+			if done != 0 {
+				if _, err := x.Exec(`UPDATE resource_positions SET state = 'ended', end_reason = ?, ended_at = ? WHERE id = ?`,
+					resources.EndDone, now, id); err != nil {
+					return err
+				}
+			} else if _, err := x.Exec(`UPDATE resource_positions SET state = 'idle', window_until = ?, commands_ended = commands_started
+				WHERE id = ?`, now+int64(resources.PositionWindow.Milliseconds()), id); err != nil {
+				return err
+			}
+			repairs = append(repairs, "running position "+id+" had no held row")
+		}
+		if err := s.mid(); err != nil {
+			return err
+		}
+		// (b) queued / offered / idle with a held row: the held row is the truth.
+		bIDs, err := ids(`SELECT id FROM resource_positions WHERE state IN ('queued','offered','idle') AND ` + heldOf)
+		if err != nil {
+			return err
+		}
+		for _, id := range bIDs {
+			if _, err := x.Exec(`UPDATE resource_positions SET state = 'running', window_until = 0,
+				first_started_at = COALESCE(NULLIF(first_started_at, 0), ?) WHERE id = ?`, now, id); err != nil {
+				return err
+			}
+			repairs = append(repairs, "position "+id+" had a held row but was not running")
+		}
+		// (c) waiting rows whose position ended or is missing.
+		cIDs, err := ids(`SELECT l.id FROM resource_leases l WHERE l.state = 'waiting' AND l.position_id != ''
+			AND (NOT EXISTS (SELECT 1 FROM resource_positions p WHERE p.id = l.position_id)
+			  OR EXISTS (SELECT 1 FROM resource_positions p WHERE p.id = l.position_id AND p.state = 'ended'))`)
+		if err != nil {
+			return err
+		}
+		if len(cIDs) > 0 {
+			if _, err := x.Exec(`UPDATE resource_leases
+				SET state = 'ended', ended_at = ?, waited_ms = COALESCE(waited_ms, ? - created_at),
+					end_reason = COALESCE(NULLIF((SELECT p.end_reason FROM resource_positions p WHERE p.id = resource_leases.position_id), ''), ?)
+				WHERE state = 'waiting' AND position_id != ''
+				AND (NOT EXISTS (SELECT 1 FROM resource_positions p WHERE p.id = resource_leases.position_id)
+				  OR EXISTS (SELECT 1 FROM resource_positions p WHERE p.id = resource_leases.position_id AND p.state = 'ended'))`,
+				now, now, resources.EndAbandoned); err != nil {
+				return err
+			}
+			for _, id := range cIDs {
+				repairs = append(repairs, "waiting row "+id+" belonged to an ended or missing position")
+			}
+		}
+		// (d) queued with no waiting row.
+		dIDs, err := ids(`SELECT id FROM resource_positions WHERE state = 'queued'
+			AND NOT EXISTS (SELECT 1 FROM resource_leases l WHERE l.position_id = resource_positions.id AND l.state = 'waiting')`)
+		if err != nil {
+			return err
+		}
+		for _, id := range dIDs {
+			if _, err := x.Exec(`UPDATE resource_positions SET state = 'ended', end_reason = ?, ended_at = ? WHERE id = ?`,
+				resources.EndAbandoned, now, id); err != nil {
+				return err
+			}
+			repairs = append(repairs, "queued position "+id+" had no waiting row")
+		}
+		return nil
+	})
+	return repairs, err
+}
+
+// MarkDelivered is D1: the offer's notice reached the session. Only for the
+// same offer (offered_at); a delivery for an older offer changes nothing. The
+// 3-minute window starts at `at`.
+func (s *leaseStore) MarkDelivered(id string, offeredAt, at int64) (bool, error) {
+	return s.changed(`UPDATE resource_positions SET delivered_at = ?, window_until = ?
+		WHERE id = ? AND state = 'offered' AND offered_at = ? AND delivered_at = 0`,
+		at, at+resources.PositionWindow.Milliseconds(), id, offeredAt)
+}
+
+// MarkDone records `pdx lease done` on a running position: it ends when its
+// last command does.
+func (s *leaseStore) MarkDone(id string) (bool, error) {
+	return s.changed(`UPDATE resource_positions SET done_requested = 1 WHERE id = ? AND state = 'running'`, id)
+}
+
+// SetNoticeResult records the outcome of one delivery try of a notice slot.
+// The slot is named by what armed it (kind and due_at): a late answer for a
+// slot that has since been cleared, passed or armed again changes nothing. It
+// reports whether the answer was for the current slot.
+func (s *leaseStore) SetNoticeResult(id, kind string, dueAt int64, result string, sentAt int64) (bool, error) {
+	return s.changed(`UPDATE resource_positions SET notice_result = ?, notice_sent_at = MAX(notice_sent_at, ?)
+		WHERE id = ? AND notice_kind = ? AND notice_due_at = ?`, result, sentAt, id, kind, dueAt)
+}
+
+// AddWindowWait adds time the position held the host while someone waited
+// (the cost of V16 / V17).
+func (s *leaseStore) AddWindowWait(id string, offerMS, idleMS int64) error {
+	_, err := s.db.Exec(`UPDATE resource_positions SET offer_wait_ms = offer_wait_ms + ?, idle_wait_ms = idle_wait_ms + ? WHERE id = ?`,
+		offerMS, idleMS, id)
+	return err
+}
+
+// AdoptQueued gives a waiting queue row to a new call of the same session
+// that repeats its command and cwd (R2): the new client id, holder, tool use
+// and scope replace the old ones and the lease starts again. created_at stays,
+// so the place does. One compare-and-set on the old client id, the position,
+// the mode, the command and the cwd.
+func (s *leaseStore) AdoptQueued(old, n leaseRow, leaseUntil int64) (bool, error) {
+	return s.changed(`UPDATE resource_leases
+		SET client_id = ?, holder_pid = ?, holder_start = ?, tool_use_id = ?, scope = ?, lease_until = ?
+		WHERE id = ? AND state = 'waiting' AND client_id = ? AND position_id = ? AND mode = 'queue'
+		AND command = ? AND cwd = ?`,
+		n.ClientID, n.HolderPID, n.HolderStart, n.ToolUseID, n.Scope, leaseUntil,
+		old.ID, old.ClientID, old.PositionID, old.Command, old.Cwd)
+}
+
+// EndParkedAtBoot ends every waiting row that is still parked: the parking
+// code is gone and nobody polls such a row.
+func (s *leaseStore) EndParkedAtBoot(now int64) (int64, error) {
+	return run(s.db, `UPDATE resource_leases
+		SET state = 'ended', ended_at = ?, end_reason = ?, waited_ms = COALESCE(waited_ms, ? - created_at)
+		WHERE state = 'waiting' AND parked_until > 0`, now, resources.EndAbandoned, now)
 }

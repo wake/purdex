@@ -511,13 +511,24 @@ func (s *leaseStore) Listing(n int, since int64) (active, waiting, recent []leas
 	return active, waiting, recent, nil
 }
 
-// Prune deletes ended rows that ended before the cutoff and returns how many.
+// Prune deletes ended rows and ended positions that ended before the cutoff,
+// in one transaction, and returns how many rows it deleted.
 func (s *leaseStore) Prune(before int64) (int64, error) {
-	res, err := s.db.Exec(`DELETE FROM resource_leases WHERE state = 'ended' AND ended_at < ?`, before)
-	if err != nil {
-		return 0, fmt.Errorf("prune leases: %w", err)
-	}
-	return res.RowsAffected()
+	var n int64
+	_, err := s.tx(func(x *sql.Tx) error {
+		res, err := x.Exec(`DELETE FROM resource_leases WHERE state = 'ended' AND ended_at < ?`, before)
+		if err != nil {
+			return fmt.Errorf("prune leases: %w", err)
+		}
+		if n, err = res.RowsAffected(); err != nil {
+			return err
+		}
+		if _, err := x.Exec(`DELETE FROM resource_positions WHERE state = 'ended' AND ended_at < ?`, before); err != nil {
+			return fmt.Errorf("prune positions: %w", err)
+		}
+		return nil
+	})
+	return n, err
 }
 
 func (s *leaseStore) many(query string, args ...any) ([]leaseRow, error) {
