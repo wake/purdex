@@ -51,6 +51,11 @@ func TestLeaseCreate_BadModeIs400(t *testing.T) {
 	rec := f.do(http.MethodPost, "/api/resources/leases", req)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Equal(t, resources.ErrBadRequest, apiCode(rec))
+	for i, ok := range []string{resources.CallQueue, resources.CallAsk, resources.CallWait} {
+		good := amendReq("4444444" + string(rune('0'+i)) + "-4444-4444-8444-444444444444")
+		good.Mode = ok
+		assert.Less(t, f.do(http.MethodPost, "/api/resources/leases", good).Code, 300, ok)
+	}
 }
 
 // The mode is part of what a client id was made for.
