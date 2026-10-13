@@ -568,7 +568,7 @@ func TestPositions_PassOfferOnlyTheSameUndeliveredOffer(t *testing.T) {
 	queuedFixture(t, s)
 	_, err := s.OfferPosition("pos_00000001", 1000, "", "", "")
 	require.NoError(t, err)
-	require.NoError(t, s.SetNoticeResult("pos_00000001", "unknown", 1001))
+	setState(t, s, "pos_00000001", "notice_result = 'unknown'")
 	setState(t, s, "pos_00000001", "notice_tries = 2")
 	ok, err := s.PassOffer("pos_00000001", 999, 5000)
 	require.NoError(t, err)
@@ -649,8 +649,14 @@ func TestPositions_MarkDoneOnlyWhileRunning(t *testing.T) {
 func TestPositions_SmallWrites(t *testing.T) {
 	s := memStore(t)
 	queuedFixture(t, s)
-	require.NoError(t, s.SetNoticeResult("pos_00000001", "accepted", 500))
-	require.NoError(t, s.SetNoticeResult("pos_00000001", "unknown", 400))
+	_, err := s.OfferPosition("pos_00000001", 1000, "", "", "")
+	require.NoError(t, err)
+	ok, err := s.SetNoticeResult("pos_00000001", "offer", 1000, "accepted", 500)
+	require.NoError(t, err)
+	require.True(t, ok)
+	ok, err = s.SetNoticeResult("pos_00000001", "offer", 1000, "unknown", 400)
+	require.NoError(t, err)
+	require.True(t, ok)
 	require.NoError(t, s.AddWindowWait("pos_00000001", 10, 0))
 	require.NoError(t, s.AddWindowWait("pos_00000001", 0, 25))
 	p := mustPos(t, s, "pos_00000001")
@@ -658,6 +664,33 @@ func TestPositions_SmallWrites(t *testing.T) {
 	assert.Equal(t, int64(500), p.NoticeSentAt, "sent_at only moves forward")
 	assert.Equal(t, int64(10), p.OfferWaitMS)
 	assert.Equal(t, int64(25), p.IdleWaitMS)
+}
+
+// A late answer for an old slot changes nothing in the slot that replaced it.
+func TestPositions_LateNoticeResultForAnOldSlotChangesNothing(t *testing.T) {
+	s := memStore(t)
+	queuedFixture(t, s)
+	_, err := s.OfferPosition("pos_00000001", 1000, "", "", "")
+	require.NoError(t, err)
+	// The offer passes and a new offer arms a new slot.
+	ok, err := s.PassOffer("pos_00000001", 1000, 5000)
+	require.NoError(t, err)
+	require.True(t, ok)
+	_, err = s.OfferPosition("pos_00000001", 6000, "", "", "")
+	require.NoError(t, err)
+	before := dumpTables(t, s.db)
+	// The answer of the first offer's delivery arrives now.
+	ok, err = s.SetNoticeResult("pos_00000001", "offer", 1000, "accepted", 7000)
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Equal(t, before, dumpTables(t, s.db))
+	// A cleared slot (the position ended with another kind) is not written either.
+	ok, err = s.SetNoticeResult("pos_00000001", "idle", 6000, "accepted", 7000)
+	require.NoError(t, err)
+	assert.False(t, ok)
+	ok, err = s.SetNoticeResult("pos_00000001", "offer", 6000, "accepted", 7000)
+	require.NoError(t, err)
+	assert.True(t, ok)
 }
 
 func TestStore_AdoptQueuedOnlySameCommandCwdAndWaiting(t *testing.T) {

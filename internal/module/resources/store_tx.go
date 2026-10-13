@@ -596,11 +596,13 @@ func (s *leaseStore) MarkDone(id string) (bool, error) {
 	return s.changed(`UPDATE resource_positions SET done_requested = 1 WHERE id = ? AND state = 'running'`, id)
 }
 
-// SetNoticeResult records the last outcome of the position's notice slot.
-func (s *leaseStore) SetNoticeResult(id, result string, sentAt int64) error {
-	_, err := s.db.Exec(`UPDATE resource_positions SET notice_result = ?, notice_sent_at = MAX(notice_sent_at, ?) WHERE id = ?`,
-		result, sentAt, id)
-	return err
+// SetNoticeResult records the outcome of one delivery try of a notice slot.
+// The slot is named by what armed it (kind and due_at): a late answer for a
+// slot that has since been cleared, passed or armed again changes nothing. It
+// reports whether the answer was for the current slot.
+func (s *leaseStore) SetNoticeResult(id, kind string, dueAt int64, result string, sentAt int64) (bool, error) {
+	return s.changed(`UPDATE resource_positions SET notice_result = ?, notice_sent_at = MAX(notice_sent_at, ?)
+		WHERE id = ? AND notice_kind = ? AND notice_due_at = ?`, result, sentAt, id, kind, dueAt)
 }
 
 // AddWindowWait adds time the position held the host while someone waited
