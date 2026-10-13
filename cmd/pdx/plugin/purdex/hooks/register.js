@@ -868,6 +868,7 @@ const TEAM_UNREACHABLE = 'daemon 連不上，沒有執行'
 const TEAM_NO_TOKEN = '無法確認是使用者下的指令（daemon 沒有回應），沒有執行；請再打一次'
 const TEAM_MEMBER = '要先被釋出才能成為 lead'
 const TEAM_QUEUED = '接力進行中，完成後立刻執行'
+const TEAM_BUSY = Symbol('team-busy') // a queued /team found another relay in the way: it is kept for that relay's return to idle
 const LEAD_DEPRECATED = '（/lead 將移除，請改用 /team）'
 const TEAM_ONLY_LEAD = (what) => '只有 lead 可以 /team ' + what
 const SPAWN_NOTE_MAX_BYTES = 600
@@ -941,11 +942,11 @@ async function performTeam($, parsed, rawArgs, queued) {
   }
   const sid = await $.session.id().catch(() => undefined)
   if (!sid) return TEAM_UNREACHABLE
-  if (parsed.kind === 'show' || parsed.kind === 'lead') return becomeLeadOrShow($, parsed, sid, queued)
+  if (parsed.kind === 'show' || parsed.kind === 'lead') return becomeLeadOrShow($, parsed, rawArgs, sid, queued)
   const v = await teamRead($, sid)
   if (v.role === 'unreachable') return TEAM_UNREACHABLE
   if (v.role !== 'lead') return TEAM_ONLY_LEAD(parsed.kind)
-  if (parsed.kind === 'spawn') return teamSpawn($, parsed, sid)
+  if (parsed.kind === 'spawn') return teamSpawn($, parsed, rawArgs, sid, queued)
   return teamAct($, parsed, sid)
 }
 
@@ -958,7 +959,7 @@ async function teamShow($) {
 
 // becomeLeadOrShow: `/team` and `/team <note>`. A lead gets its roster, a member the reason it cannot lead, an ordinary session
 // becomes a lead: the agent is told, with the person's token, to run `pdx lead request --person` at once.
-async function becomeLeadOrShow($, parsed, sid, queued) {
+async function becomeLeadOrShow($, parsed, rawArgs, sid, queued) {
   const at = await $.clock.now().catch(() => Date.now()) // a refused engine clock falls back to the real one: the TTL always runs
   // An ask the turn events never ended (a prompt cancelled before its turn, a turn without text) lets go
   // after LEAD_ASK_TTL_MS, so a /team is never refused for good.
@@ -979,11 +980,11 @@ async function becomeLeadOrShow($, parsed, sid, queued) {
   if (v.role === 'unreadable') { drop(); return LEAD_UNREADABLE }
   if (v.role === 'lead') { drop(); return parsed.kind === 'show' ? teamShow($) : teamRoster(v) }
   if (v.role === 'member') { drop(); return TEAM_MEMBER }
-  if (!queued && (s.leadAsk !== ask || s.state !== 'idle' || s.gen !== ask.gen)) { drop(); return LEAD_RELAY_BUSY } // took over while the daemon was asked
+  if (s.leadAsk !== ask || s.state !== 'idle' || s.gen !== ask.gen) { drop(); return queued ? TEAM_BUSY : LEAD_RELAY_BUSY } // took over while the daemon was asked
   ask.sid = sid
   const token = await personToken($, sid, 'lead')
   if (!token) { drop(); return TEAM_NO_TOKEN }
-  if (s.leadAsk !== ask || s.gen !== ask.gen || s.state !== 'idle') { drop(); return LEAD_RELAY_BUSY }
+  if (s.leadAsk !== ask || s.gen !== ask.gen || s.state !== 'idle') { drop(); return queued ? TEAM_BUSY : LEAD_RELAY_BUSY }
   const { note, cut } = leadNote(parsed.kind === 'lead' ? parsed.note : '')
   later($, 0, async () => {
     const now = await $.session.id().catch(() => undefined)
@@ -1004,7 +1005,7 @@ async function becomeLeadOrShow($, parsed, sid, queued) {
 }
 
 // teamSpawn: `/team spawn <task> [--model m] [--effort e]` (a lead only): the agent writes the brief and runs `pdx spawn --person`.
-async function teamSpawn($, parsed, sid) {
+async function teamSpawn($, parsed, rawArgs, sid, queued) {
   const token = await personToken($, sid, 'spawn')
   if (!token) return TEAM_NO_TOKEN
   const { note: task } = leadNote(parsed.task, SPAWN_NOTE_MAX_BYTES)
@@ -1012,7 +1013,11 @@ async function teamSpawn($, parsed, sid) {
   const gen = s.gen
   later($, 0, async () => {
     const now = await $.session.id().catch(() => undefined)
-    if (s.gen !== gen || s.state !== 'idle' || now !== sid) { log($, '/team spawn prompt not submitted: the session moved on'); return }
+    if (s.gen !== gen || s.state !== 'idle' || now !== sid) {
+      log($, '/team spawn prompt not submitted: the session moved on')
+      if (queued && s.gen === gen && !s.teamQueued) s.teamQueued = { parsed, rawArgs } // another relay is in the way: kept for its return to idle
+      return
+    }
     try {
       await submit($, '使用者用 /team spawn 要求開一個 member：「' + task + '」。請依 pdx-team skill 立刻執行 pdx spawn --person ' + token + ' …，把上面的任務寫成 brief；' +
         'model／effort 用 ' + (given || '（沒指定就依任務自己選）') + '。')
@@ -1046,7 +1051,17 @@ function runQueuedTeam($) {
   if (!q) return
   s.teamQueued = undefined
   later($, 0, async () => {
+    // another relay (a reask, a member control, a /relay) may have taken the idle state between the return and this timer: keep the
+    // command for that relay's own return to idle, unless a newer one has been queued since
+    if (s.state !== 'idle') {
+      if (!s.teamQueued) s.teamQueued = q
+      return
+    }
     const text = await performTeam($, q.parsed, q.rawArgs, true)
+    if (text === TEAM_BUSY) {
+      if (!s.teamQueued) s.teamQueued = q
+      return
+    }
     try { $.ui.toast(text) } catch {}
   })
 }

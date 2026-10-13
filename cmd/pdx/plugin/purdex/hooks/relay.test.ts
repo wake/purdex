@@ -3049,6 +3049,31 @@ test('/team (become lead) during a relay is queued and runs when the relay retur
   expect(f.persons.map((p) => p[5])).toEqual(['relay', 'lead']) // minted then
 })
 
+// codex R1: another relay may take the idle state while the queued command is reading the role; the command is kept for that
+// relay's own return, not run into a busy state and lost. Mutation gate: run it anyway (no re-check after the role read) → a prompt
+// is submitted into the second relay (red); drop it silently → none ever (red).
+test('a queued /team is kept when another relay takes the idle state while it reads the role', async ($, on) => {
+  const base = pdxWith([{ exitCode: 10 }, { exitCode: 10 }])
+  let teamCalls = 0
+  let release!: () => void
+  const gate = new Promise<void>((r) => { release = r })
+  const f = relayWorld(on, { usage: NOW_BELOW, pdx: (argv) => (argv[1] === 'begin' ? { exitCode: 0, stdout: BEGIN_OK } : argv[0] === 'team' ? (++teamCalls <= 1 ? NOT_LEAD : gate.then(() => NOT_LEAD)) : base(argv)) })
+  await start($, f)
+  await relayCmd($, 'now')
+  await teamCmd($, '') // queued (its one role read is ungated)
+  await f.clock.advance(50) // the first relay is denied: idle, the queued command runs and parks on its role read (gated)
+  const second = await relayCmd($, 'now') // a second relay takes the state while it waits
+  expect(second.text).toContain('已送出接力申請')
+  release()
+  await f.clock.settle()
+  expect(f.submits).toEqual([]) // not run into the second relay
+  await f.clock.advance(50) // the second relay is denied: its return to idle runs the kept command
+  await f.clock.advance(50)
+  await f.clock.settle()
+  expect(f.submits.length).toBe(1)
+  expect(f.submits[0].text).toContain('pdx lead request --person ' + PERSON_TOKEN)
+})
+
 test('the newest queued /team wins', async ($, on) => {
   const base = pdxWith([{ exitCode: 10 }])
   const f = relayWorld(on, { usage: NOW_BELOW, pdx: (argv) => (argv[1] === 'begin' ? { exitCode: 0, stdout: BEGIN_OK } : argv[0] === 'team' ? NOT_LEAD : base(argv)) })
