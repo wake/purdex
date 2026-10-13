@@ -127,6 +127,11 @@ type Approval struct {
 	Hook       *HookDecision   `json:"hook,omitempty"`       // hook kinds: the answer (approved / denied = remote, answered_local / terminal_override = terminal)
 
 	CloseReason string `json:"close_reason,omitempty"` // cancelled by a re-check: the code (adopt: ErrAdopt*)
+
+	// UnansweredAt (unix ms) is when a FINAL self-relay card (used ≥ RelayLastAskPct) passed its deadline unanswered (RT-2a1): the card
+	// stays open with no deadline (DeadlineAt = UnansweredDeadlineMs) and the session is paused (cause relay_unanswered) until it is
+	// answered. 0 for every other row.
+	UnansweredAt int64 `json:"unanswered_at,omitempty"`
 }
 
 // CreateApprovalRequest is POST /api/team/approvals.

@@ -24,7 +24,7 @@ import (
 const pauseSchema = `
 	CREATE TABLE IF NOT EXISTS session_pauses (
 		session_id      TEXT    NOT NULL,
-		cause           TEXT    NOT NULL CHECK (cause IN ('quota', 'lead')),
+		cause           TEXT    NOT NULL CHECK (cause IN ('quota', 'lead', 'relay_unanswered')),
 		role            TEXT    NOT NULL CHECK (role IN ('solo', 'lead', 'member')),
 		team_id         TEXT    NOT NULL DEFAULT '',
 		lead_session_id TEXT    NOT NULL DEFAULT '',
@@ -66,6 +66,47 @@ func migratePauseRefTitle(db *sql.DB) error {
 		}
 	}
 	return nil
+}
+
+// migratePauseCauses lets a session_pauses written before RT-2a1 hold the cause relay_unanswered: SQLite cannot alter a CHECK, so
+// the table is rebuilt (create the new one, copy, drop, rename) in one transaction, only when the stored definition lacks the
+// cause. Idempotent, and rows are kept as they are.
+func migratePauseCauses(db *sql.DB) error {
+	var def string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'session_pauses'`).Scan(&def); err != nil {
+		return fmt.Errorf("read session_pauses definition: %w", err)
+	}
+	if strings.Contains(def, team.PauseCauseUnanswered) {
+		return nil
+	}
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`CREATE TABLE session_pauses_new (
+			session_id      TEXT    NOT NULL,
+			cause           TEXT    NOT NULL CHECK (cause IN ('quota', 'lead', 'relay_unanswered')),
+			role            TEXT    NOT NULL CHECK (role IN ('solo', 'lead', 'member')),
+			team_id         TEXT    NOT NULL DEFAULT '',
+			lead_session_id TEXT    NOT NULL DEFAULT '',
+			ref             TEXT    NOT NULL DEFAULT '',
+			title           TEXT    NOT NULL DEFAULT '',
+			on_since        INTEGER NOT NULL,
+			since           INTEGER NOT NULL,
+			PRIMARY KEY (session_id, cause)
+		)`,
+		`INSERT INTO session_pauses_new (session_id, cause, role, team_id, lead_session_id, ref, title, on_since, since)
+			SELECT session_id, cause, role, team_id, lead_session_id, ref, title, on_since, since FROM session_pauses`,
+		`DROP TABLE session_pauses`,
+		`ALTER TABLE session_pauses_new RENAME TO session_pauses`,
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			return fmt.Errorf("rebuild session_pauses: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // PauseRow is one row of session_pauses. OnSince is the unattended switch's Since at the time of the pause (the host-config
