@@ -327,19 +327,36 @@ func TestSpawnCmd_AnOpThatNeverSettlesEndsAtTheBound(t *testing.T) {
 	}
 }
 
-// Spec §14: member_start_timeout exits 14 with the hooks hint; any other
-// failure reason exits 1. Neither sends the brief; the reason is the last
-// stderr token.
+// Spec §14: member_start_timeout exits 14, and the CLI prints what the daemon decided (the op's detail) — it does not guess
+// (#2761); any other failure reason exits 1. Neither sends the brief; the reason is the last stderr token.
 func TestSpawnCmd_StartTimeoutExits14(t *testing.T) {
-	for reason, want := range map[string]int{team.SpawnReasonStartTimeout: ExitMemberFailed, team.SpawnReasonLaunchFailed: ExitError} {
-		d := &fakeTeamCmdDaemon{spawns: []func(team.SpawnRequest) answer{spawnFailed(reason)}}
+	busy := "主機忙：member 沒在 20 秒內完成啟動（load 18.1／16.4／16.3，10 核；記憶體已用 84%，壓力：警告），名額已釋出，可以稍後重試"
+	setup := "member 沒在 20 秒內完成啟動，這台主機從沒看過 Purdex hooks（pdx setup --agent cc）"
+	for _, c := range []struct {
+		name, reason, detail string
+		want                 int
+		wantInStderr         string
+		notInStderr          string
+	}{
+		{"busy host", team.SpawnReasonStartTimeout, busy, ExitMemberFailed, busy, "pdx setup"},
+		{"no hooks", team.SpawnReasonStartTimeout, setup, ExitMemberFailed, setup, "主機忙"},
+		{"no detail (older daemon, a forwarded op)", team.SpawnReasonStartTimeout, "", ExitMemberFailed, "member 沒有在時限內啟動", "pdx setup"},
+		{"other reason", team.SpawnReasonLaunchFailed, "", ExitError, "", "pdx setup"},
+	} {
+		d := &fakeTeamCmdDaemon{spawns: []func(team.SpawnRequest) answer{func(req team.SpawnRequest) answer {
+			a := spawnOp(req, team.SpawnFailed, c.reason)
+			if op, ok := a.body.(team.SpawnOp); ok {
+				op.Detail = c.detail
+				a.body = op
+			}
+			return a
+		}}}
 		code, stdout, stderr := driveTeamCmd(t, runSpawnCmd, d, "--model", "sonnet", "--brief", "hi")
-		if code != want || stdout != "" || lastToken(stderr) != reason || len(d.sendReq) != 0 {
-			t.Errorf("%s: code=%d stdout=%q stderr=%q sends=%d", reason, code, stdout, stderr, len(d.sendReq))
+		if code != c.want || stdout != "" || lastToken(stderr) != c.reason || len(d.sendReq) != 0 {
+			t.Errorf("%s: code=%d stdout=%q stderr=%q sends=%d", c.name, code, stdout, stderr, len(d.sendReq))
 		}
-		hint := "member 沒有在 20 秒內啟動（這台主機需要 Purdex hooks：pdx setup --agent cc）"
-		if strings.Contains(stderr, hint) != (reason == team.SpawnReasonStartTimeout) {
-			t.Errorf("%s: stderr = %q", reason, stderr)
+		if c.wantInStderr != "" && !strings.Contains(stderr, c.wantInStderr) || strings.Contains(stderr, c.notInStderr) {
+			t.Errorf("%s: stderr = %q", c.name, stderr)
 		}
 	}
 }

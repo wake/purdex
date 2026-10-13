@@ -425,3 +425,32 @@ func TestModule_InitFindsRootSource(t *testing.T) {
 		t.Fatalf("roots = %v, want the registered resolver", m2.roots)
 	}
 }
+
+// #2761: the module offers its latest sample to readers that must not sample (a failed spawn's detail): none before a usable
+// tick, the published host after, and it is registered under resources.HostReaderKey.
+func TestModule_LatestHostIsTheLastPublishedSample(t *testing.T) {
+	c := core.New(core.CoreDeps{Registry: core.NewServiceRegistry()})
+	m := New()
+	if err := m.Init(c); err != nil {
+		t.Fatal(err)
+	}
+	svc, ok := c.Registry.Get(resources.HostReaderKey)
+	if !ok {
+		t.Fatal("the host reader is not registered")
+	}
+	hr, ok := svc.(resources.HostReader)
+	if !ok {
+		t.Fatalf("registered %T is not a HostReader", svc)
+	}
+	if _, ok := hr.LatestHost(); ok {
+		t.Fatal("a host before any tick")
+	}
+	m.publish(&resources.Snapshot{Available: false})
+	if _, ok := hr.LatestHost(); ok {
+		t.Fatal("an unavailable snapshot gave a host")
+	}
+	m.publish(&resources.Snapshot{Available: true, Host: resources.HostUse{Load1: 18.1, Load5: 16.4, Load15: 16.3, NCPU: 10}})
+	if h, ok := hr.LatestHost(); !ok || h.Load5 != 16.4 || h.NCPU != 10 {
+		t.Fatalf("host = %+v ok=%v", h, ok)
+	}
+}

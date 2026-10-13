@@ -7,6 +7,7 @@ import (
 	"time"
 
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/resources"
 	"github.com/wake/purdex/internal/team"
 	"github.com/wake/purdex/internal/tmux"
 )
@@ -160,5 +161,68 @@ func TestSpawn_StopLeavesTheOpRunning(t *testing.T) {
 	}
 	if op, _, _ := f.m.store.GetSpawnOp(id); op.State != team.SpawnRunning || op.Step != team.StepLaunched || len(f.tmux.KillIfInstanceCalls()) != 0 {
 		t.Fatalf("after Stop: %s at %s, kills %+v", op.State, op.Step, f.tmux.KillIfInstanceCalls())
+	}
+}
+
+// #2761: the failed op says WHY in its detail, decided here and not guessed by the CLI. A host whose mods have said hello
+// (hooks work) is busy; a host that never heard one is the one that needs `pdx setup`. The seconds come from the budget in force
+// and the load from the resources sample, left out without one. Mutation gate: drop the hello condition (always the setup
+// hint, or never), or the load note → a case red.
+type fakeHostReader struct {
+	h  resources.HostUse
+	ok bool
+}
+
+func (r fakeHostReader) LatestHost() (resources.HostUse, bool) { return r.h, r.ok }
+
+func TestSpawnView_StartTimeoutDetailSaysBusyOrNoHooks(t *testing.T) {
+	load := "（load 18.1／16.4／16.3，10 核；記憶體已用 84%，壓力：警告）"
+	sample := fakeHostReader{h: resources.HostUse{Load1: 18.1, Load5: 16.4, Load15: 16.3, NCPU: 10, Mem: 84, Pressure: 2}, ok: true}
+	for _, c := range []struct {
+		name   string
+		hello  bool
+		reader resources.HostReader
+		want   string
+	}{
+		{"hooks seen, sample", true, sample, "主機忙：member 沒在 20 秒內完成啟動" + load + "，名額已釋出，可以稍後重試"},
+		{"hooks seen, no sample", true, nil, "主機忙：member 沒在 20 秒內完成啟動，名額已釋出，可以稍後重試"},
+		{"hooks seen, sample not usable yet", true, fakeHostReader{}, "主機忙：member 沒在 20 秒內完成啟動，名額已釋出，可以稍後重試"},
+		{"hooks never seen, sample", false, sample, "member 沒在 20 秒內完成啟動" + load + "，這台主機從沒看過 Purdex hooks（pdx setup --agent cc）"},
+		{"hooks never seen, no sample", false, nil, "member 沒在 20 秒內完成啟動，這台主機從沒看過 Purdex hooks（pdx setup --agent cc）"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f, root := newSpawnFixture(t, 1)
+			f.m.hostReader = c.reader
+			if c.hello {
+				f.m.mu.Lock()
+				f.m.modSeen["sid-old"] = helloInfo{ModVersion: "5", Agent: "cc", At: f.clock.Load() - 3_600_000}
+				f.m.mu.Unlock()
+			}
+			row := f.runOp(1, root, nil)
+			if row.State != team.SpawnFailed || row.Reason != team.SpawnReasonStartTimeout {
+				t.Fatalf("op = %+v", row)
+			}
+			op, err := f.m.spawnView(row, "mlab/lead")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if op.Detail != c.want {
+				t.Errorf("detail\n got %q\nwant %q", op.Detail, c.want)
+			}
+		})
+	}
+	// the pressure levels (1 normal, 2 warning, 4 critical); an unknown one is left out
+	for lvl, want := range map[int]string{1: "，壓力：正常", 2: "，壓力：警告", 4: "，壓力：嚴重", 0: ""} {
+		m := &Module{hostReader: fakeHostReader{h: resources.HostUse{Load1: 1, NCPU: 2, Mem: 50, Pressure: lvl}, ok: true}}
+		if got, w := m.hostLoadNote(), "（load 1.0／0.0／0.0，2 核；記憶體已用 50%"+want+"）"; got != w {
+			t.Errorf("pressure %d: %q, want %q", lvl, got, w)
+		}
+	}
+	// any other reason carries no detail
+	f, root := newSpawnFixture(t, 1)
+	row := f.runOp(1, root, nil)
+	row.Reason = team.SpawnReasonCreateFailed
+	if op, _ := f.m.spawnView(row, ""); op.Detail != "" {
+		t.Errorf("detail of another reason = %q", op.Detail)
 	}
 }

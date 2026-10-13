@@ -197,7 +197,11 @@ func runSpawnCmd(ctx context.Context, args []string, getenv func(string) string,
 	}
 	switch {
 	case op.State == team.SpawnFailed && op.Reason == team.SpawnReasonStartTimeout:
-		fmt.Fprintf(stderr, "pdx spawn: %s %s\n", spawnStartTimeoutHint, team.SpawnReasonStartTimeout)
+		detail := spawnStartTimeoutFallback
+		if op.Detail != "" {
+			detail = sanitizeCell(op.Detail)
+		}
+		fmt.Fprintf(stderr, "pdx spawn: %s %s\n", detail, team.SpawnReasonStartTimeout)
 		return ExitMemberFailed
 	case op.State == team.SpawnFailed && remoteSpawnReasonExit[op.Reason] != 0:
 		// what the member host (or the 10 minute void, or an unpairing) said, for a spawn --host

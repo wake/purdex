@@ -21,6 +21,7 @@ import (
 	"github.com/wake/purdex/internal/module/hostconfig"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/resources"
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -319,6 +320,8 @@ type Module struct {
 	spawnPoll   time.Duration
 	spawnSleep  func(ctx context.Context, d time.Duration)
 	spawnBudget int64
+	// hostReader is the resources module's latest sample (nil without that module): a failed spawn's detail names the load.
+	hostReader resources.HostReader
 	// spawnWait is how long POST /api/team/spawns waits for its op to leave
 	// running (team.SpawnPollWaitS).
 	spawnWait time.Duration

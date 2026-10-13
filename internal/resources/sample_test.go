@@ -144,7 +144,7 @@ func (f *fakeHost) install(t *testing.T) {
 		if err := fail(name); err != nil {
 			return nil, err
 		}
-		return loadavgBuf(20480, 0, 0, 2048), nil // load1 = 10
+		return loadavgBuf(20480, 10240, 6144, 2048), nil // load1 = 10, load5 = 5, load15 = 3
 	}
 	sysctlU32 = func(name string) (uint32, error) {
 		if err := fail(name); err != nil {
@@ -207,6 +207,9 @@ func TestSampler_Healthy(t *testing.T) {
 	}
 	if raw.PageSize != 16384 || raw.Free != 68039 || raw.Inactive != 318361 || raw.Speculative != 13661 {
 		t.Errorf("vm_stat figures = %+v", raw)
+	}
+	if raw.Load5 != 5 || raw.Load15 != 3 {
+		t.Errorf("load5/15 = %v / %v, want 5 / 3", raw.Load5, raw.Load15)
 	}
 	if raw.PcpuSum != 75.5 {
 		t.Errorf("PcpuSum = %v, want 75.5", raw.PcpuSum)
@@ -316,5 +319,25 @@ func TestParsePS_RSSOverflowIsMalformed(t *testing.T) {
 	}
 	if procs[0].RSSBytes != maxKiB*1024 {
 		t.Fatalf("limit line rss = %d", procs[0].RSSBytes)
+	}
+}
+
+// #2761: the same vm.loadavg read gives all three averages, each from its own slot; ComputeHost carries them (they feed no figure).
+func TestParseLoadavgAll_AndComputeHostCarryAllThree(t *testing.T) {
+	l, err := parseLoadavgAll(loadavgBuf(36024, 25088, 7168, 2048))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range [3]float64{17.59, 12.25, 3.5} {
+		if l[i] < want-0.01 || l[i] > want+0.01 {
+			t.Errorf("load[%d] = %v, want about %v", i, l[i], want)
+		}
+	}
+	if _, err := parseLoadavgAll(loadavgBuf(1, 1, 1, 0)); err == nil {
+		t.Error("fscale 0 must be an error")
+	}
+	h := ComputeHost(HostRaw{Load1: 3, Load5: 2, Load15: 1, NCPU: 4, MemBytes: 1 << 30, PageSize: 4096})
+	if h.Load1 != 3 || h.Load5 != 2 || h.Load15 != 1 {
+		t.Errorf("host = %+v", h)
 	}
 }

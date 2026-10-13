@@ -48,9 +48,9 @@ const (
 	// teamIDBytes: the team id is the approving request's id, which the
 	// daemon stores as a canonical UUID.
 	teamIDBytes = 36
-	// spawnStartTimeoutHint is the stderr hint of member_start_timeout: a
-	// member that never registers ran on a host without the Purdex hooks.
-	spawnStartTimeoutHint = "member 沒有在 20 秒內啟動（這台主機需要 Purdex hooks：pdx setup --agent cc）"
+	// spawnStartTimeoutFallback is the stderr line of member_start_timeout when the op carries no detail (an older daemon, or
+	// a forwarded op): the daemon decides why (busy host or missing hooks, #2761), so the CLI does not guess.
+	spawnStartTimeoutFallback = "member 沒有在時限內啟動"
 	// spawnWaitTimeout is the CLI's own code, not a daemon wire code (so it
 	// is not in internal/team): `pdx spawn` stopped waiting after
 	// spawnSettleBound while the op may still run, exit 1. Only the daemon's
