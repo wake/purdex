@@ -353,10 +353,10 @@ func (s *leaseStore) ParkedFor(sessionID, kind string, weight int) ([]leaseRow, 
 func (s *leaseStore) Adopt(old leaseRow, n leaseRow, deadlineAt, leaseUntil int64) (bool, error) {
 	return s.changed(`
 		UPDATE resource_leases
-		SET client_id = ?, holder_pid = ?, holder_start = ?, tool_use_id = ?, scope = ?,
+		SET client_id = ?, holder_pid = ?, holder_start = ?, tool_use_id = ?, scope = ?, parkable = ?,
 			parked_until = 0, deadline_at = ?, lease_until = ?
 		WHERE id = ? AND state = 'waiting' AND client_id = ? AND parked_until > 0`,
-		n.ClientID, n.HolderPID, n.HolderStart, n.ToolUseID, n.Scope, deadlineAt, leaseUntil, old.ID, old.ClientID)
+		n.ClientID, n.HolderPID, n.HolderStart, n.ToolUseID, n.Scope, b2i(n.Parkable), deadlineAt, leaseUntil, old.ID, old.ClientID)
 }
 
 // MaxGrantedAt is the newest granted_at of any row, held or ended (0 when

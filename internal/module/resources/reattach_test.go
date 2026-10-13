@@ -22,7 +22,7 @@ const (
 // postAs posts a process-scope request of a session (explicit session_id, so
 // the pid walk is not involved) with its own holder pid.
 func (f *routeFix) postAs(cid, session, kind string, weight, pid int) *httptest.ResponseRecorder {
-	req := resources.LeaseRequest{ClientID: cid, Kind: kind, Weight: weight, SessionID: session, HolderPID: pid, HolderStart: "Thu Oct  9 00:00:00 2026"}
+	req := resources.LeaseRequest{ClientID: cid, Kind: kind, Weight: weight, SessionID: session, HolderPID: pid, HolderStart: "Thu Oct  9 00:00:00 2026", Parkable: true}
 	return f.do(http.MethodPost, "/api/resources/leases", req)
 }
 
@@ -79,6 +79,19 @@ func TestReattach_AdoptsTheParkedRow(t *testing.T) {
 	assert.Equal(t, resources.StateReplaced, old.State)
 	now := decodeLease(t, f.do(http.MethodGet, "/api/resources/leases/"+first.ID+"?client_id="+cidD, nil))
 	assert.Equal(t, resources.StateWaiting, now.State)
+}
+
+// The adopting call's own capability replaces the row's: an older client that
+// takes a parked row over leaves it unparkable.
+func TestReattach_TheNewCallsParkableReplacesTheRows(t *testing.T) {
+	f := newRouteFix(t, resources.ModeLease)
+	f.setZone("danger", "flat")
+	p := f.parked(cidA, "sid-1", "test-full", 0)
+	require.True(t, f.row(p.ID).Parkable)
+	rec := f.do(http.MethodPost, "/api/resources/leases", resources.LeaseRequest{
+		ClientID: cidD, Kind: "test-full", SessionID: "sid-1", HolderPID: 1, HolderStart: "Thu Oct  9 00:00:00 2026"}) // no Parkable
+	assert.Equal(t, p.ID, decodeLease(t, rec).ID)
+	assert.False(t, f.row(p.ID).Parkable)
 }
 
 // A waiting row that is not parked is never adopted: two parallel calls of one
@@ -223,7 +236,7 @@ func TestReattach_SessionNewScope(t *testing.T) {
 	f.m.roots = &fakeRoots{roots: []resources.Root{{SessionID: "sid-1", PID: 500, ProcStart: attrStartText}}}
 	post := func(cid string) resources.LeaseResponse {
 		return decodeLease(t, f.do(http.MethodPost, "/api/resources/leases", resources.LeaseRequest{
-			ClientID: cid, Kind: "test-full", HolderPID: 4242, SessionID: "sid-1", Scope: resources.ScopeSessionNew}))
+			ClientID: cid, Kind: "test-full", HolderPID: 4242, SessionID: "sid-1", Scope: resources.ScopeSessionNew, Parkable: true}))
 	}
 	a := post(cidA)
 	require.Equal(t, resources.StateWaiting, a.State)
