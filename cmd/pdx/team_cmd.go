@@ -20,7 +20,7 @@ import (
 	"github.com/wake/purdex/internal/team"
 )
 
-const spawnUsage = "usage: pdx spawn [--host <alias> --cwd <dir on that host>] [--cwd <dir>] [--title <t>] [--model <m>] [--effort <e>] [--brief-file <f> | --brief <text>] [--task-subject <s> [--done-when <line>]…] [--config <path>]\n" +
+const spawnUsage = "usage: pdx spawn [--host <alias> --cwd <dir on that host>] [--cwd <dir>] [--title <t>] [--model <m>] [--effort <e>] [--brief-file <f> | --brief <text>] [--task-subject <s> [--done-when <line>]…] [--person <token>] [--config <path>]\n" +
 	"       (--cwd defaults to this directory; --host runs the member on a paired host, where --cwd is a required absolute path\n" +
 	"        under the roots that host granted; --effort is low, medium, high, xhigh or max;\n" +
 	"        without --model the member runs this host's default model, which is not fixed;\n" +
@@ -77,6 +77,9 @@ var teamRefusalCodes = map[string]bool{
 	team.ErrCwdOutsideGrant: true,
 	team.ErrNotYourMember:   true,
 	team.ErrRelayOpen:       true,
+	// RT-1: the unattended refusal and a person token that is no good.
+	team.ErrUnattendedRefused:  true,
+	team.ErrPersonTokenInvalid: true,
 	// Adopt (spec D-U24-2; the same codes close a request at the click as its close_reason).
 	team.ErrAdoptSelf:            true,
 	team.ErrAdoptTargetIsLead:    true,

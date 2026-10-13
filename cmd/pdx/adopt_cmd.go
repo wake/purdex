@@ -24,7 +24,7 @@ import (
 // `pdx adopt` and `pdx release` (adopt plan PL-1e, adopt spec D-U24-2 / D-U24-3): the lead takes a running session
 // of this host in as a member after a click in Purdex.app (or at once in 無人值守模式), and lets one go again.
 
-const adoptUsage = "usage: pdx adopt <ref|session-id|address> [--wait 9m] [--config <path>]\n" +
+const adoptUsage = "usage: pdx adopt <ref|session-id|address> [--wait 9m] [--person <token>] [--config <path>]\n" +
 	"       (<ref>: _xxxxxx or xxxxxx; address: <host>/_xxxxxx or \"<host>/<name> [xxxxxx]\"; --wait up to 10m, default 9m so the call fits one Bash timeout)"
 
 const releaseUsage = "usage: pdx release <ref> [--config <path>]"
@@ -46,6 +46,7 @@ type adoptArgs struct {
 	cfgPath string
 	target  string
 	wait    time.Duration
+	person  string // the one-use token of a person's /team adopt (RT-1b)
 }
 
 // validAdoptTarget is the grammar of a target, checked before anything is read or asked: a ref ("_xxxxxx" or
@@ -83,6 +84,7 @@ func parseAdoptArgs(args []string, stderr io.Writer) (adoptArgs, bool) {
 	var a adoptArgs
 	fs.StringVar(&a.cfgPath, "config", "", "")
 	fs.DurationVar(&a.wait, "wait", time.Duration(team.DefaultWaitS)*time.Second, "")
+	fs.StringVar(&a.person, "person", "", "")
 	reject := func(msg string) (adoptArgs, bool) {
 		fmt.Fprintf(stderr, "pdx adopt: %s\n%s\n", msg, adoptUsage)
 		return a, false
@@ -124,7 +126,7 @@ func runAdoptCmd(ctx context.Context, args []string, getenv func(string) string,
 	id := newID()
 	started := time.Now()
 	fmt.Fprintf(stderr, "申請納入 %s 中（%s），請在 Purdex 介面核准；這個呼叫必須在前景等待（Bash timeout 600000）\n", sanitizeCell(a.target), id)
-	create := team.CreateApprovalRequest{ID: id, Kind: team.KindAdopt, OriginInbox: inbox, Target: a.target, WaitS: int(a.wait / time.Second)}
+	create := team.CreateApprovalRequest{ID: id, Kind: team.KindAdopt, OriginInbox: inbox, Target: a.target, WaitS: int(a.wait / time.Second), PersonToken: a.person}
 	var ap team.Approval
 	// The id is a client UUID and the daemon's create is idempotent on it, so a dropped POST may be replayed.
 	if _, err := client.Do(ctx, http.MethodPost, "/api/team/approvals", create, &ap, daemonclient.Idempotent()); err != nil {
@@ -229,6 +231,10 @@ func adoptFinish(ap team.Approval, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "pdx adopt: 申請逾時，視同拒絕")
 		return ExitTimeout
 	case team.StateCancelled:
+		if ap.CloseReason == team.ErrUnattendedRefused { // the switch went on while it waited (RT-1b)
+			fmt.Fprintf(stderr, "pdx adopt: %s %s\n", team.UnattendedRefusedText, team.ErrUnattendedRefused)
+			return ExitRefused
+		}
 		if ap.CloseReason != "" { // cancelled by a re-check at the click: a team rule refused it
 			fmt.Fprintf(stderr, "pdx adopt: 核准時被規則取消 %s\n", sanitizeCell(ap.CloseReason))
 			return ExitRefused
