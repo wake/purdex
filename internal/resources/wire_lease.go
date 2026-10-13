@@ -124,6 +124,11 @@ type WaiterView struct {
 	Position    int    `json:"position"`
 	WaitedS     int64  `json:"waited_s"`
 	DeadlineInS int64  `json:"deadline_in_s"`
+	// Reason is why the last admission pass held the request back (gap,
+	// danger, warning_flat, rising, behind, cut, parked) and ReasonSince when
+	// that reason began, unix ms; both empty before the first pass.
+	Reason      string `json:"reason,omitempty"`
+	ReasonSince int64  `json:"reason_since,omitempty"`
 }
 
 // RecentView is one ended lease in a Snapshot, for pdx lease ls.

@@ -35,6 +35,7 @@ func (m *Module) dropShadow() {
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
 	m.shadow = shadowQueue{}
+	m.shadowLastAtMS.Store(0)
 	m.shadowReasons.reset()
 	m.shadowLen.Store(0)
 }
@@ -104,6 +105,7 @@ func (m *Module) shadowStep(set resources.Settings, held, waiting []leaseRow, zo
 			delete(sh.created, grantID)
 			m.shadowReasons.drop(grantID)
 			sh.last = now
+			m.shadowLastAtMS.Store(now.UnixMilli())
 			granted[grantID] = true
 		}
 	}
