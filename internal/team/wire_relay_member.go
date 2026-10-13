@@ -108,6 +108,10 @@ const RelayAskNoticeFmt = "[pdx team] member %s [%s]「%s」已用 %d%%，申請
 // ref the lead types — <alias>/_<ref> — instead of the bare ref after an underscore.
 const RelayAskRemoteNoticeFmt = "[pdx team] member %s [%s]「%s」已用 %d%%，申請接力。\n%d 分鐘內同意請執行：pdx relay %s（不同意不用回覆，過期即作罷）"
 
+// UnattendedAskAcceptedFmt is the lead's notice that the daemon accepted a member's ask while the host is unattended (RT-2b T22,
+// S-4): the member's address, its title, the integer percentage and the member pool left.
+const UnattendedAskAcceptedFmt = "[pdx team] 無人值守：member %s「%s」已用 %d%%，已自動接力（member 額度剩 %d）"
+
 // Relay ask states (relay_asks.state) and the reasons of a withdrawal.
 const (
 	RelayAskOpen      = "open"
@@ -116,6 +120,7 @@ const (
 	RelayAskWithdrawn = "withdrawn"
 
 	RelayAskWithdrawDenied     = "denied" // the lead declined it (pdx relay _ref --deny)
+	RelayAskWithdrawPaused     = "paused" // unattended accepted it and the lead's pool was empty: the member was paused instead
 	RelayAskWithdrawCompacted  = "compacted"
 	RelayAskWithdrawMemberLeft = "member_left"
 )

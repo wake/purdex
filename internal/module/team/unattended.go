@@ -386,6 +386,7 @@ func (m *Module) sweepUnattended(why string) (approved, pending, refused int) {
 		}
 	}
 	m.forgetClosedRefusals(open)
+	approved += m.acceptOpenAsksUnattended() // a member's ask is answered by the daemon too (RT-2b T22)
 	if why != sweepTick || approved > 0 || refused > 0 {
 		m.logf("[team] unattended sweep (%s): approved %d, refused %d, still open %d", why, approved, refused, pending)
 	}
