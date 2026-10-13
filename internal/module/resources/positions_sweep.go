@@ -98,9 +98,10 @@ func (m *Module) sweepPositions(now time.Time, view procView, viewAt time.Time) 
 	}
 	for id := range m.costs {
 		if !live[id] {
-			m.flushWindowCost(id) // a cost whose write failed when the position ended
+			m.flushWindowCost(id) // a position that ended some way the sweeper did not see
 		}
 	}
+	m.writePendingCosts()
 	for _, p := range positions {
 		m.accrueWindowCost(p, nowMS)
 		switch {
@@ -204,23 +205,41 @@ func (m *Module) accrueWindowCost(p positionRow, nowMS int64) {
 	c.lastTick = nowMS
 }
 
-// flushWindowCost writes the cost kept in memory for a position.
+// pendingCost is a window cost that is final but not yet written.
+type pendingCost struct {
+	id, state string
+	ms        int64
+}
+
+// flushWindowCost settles the cost kept in memory for a position: it is final,
+// and is written now or, if the write fails, on a later tick.
 func (m *Module) flushWindowCost(id string) {
 	c := m.costs[id]
 	if c == nil {
 		return
 	}
+	delete(m.costs, id)
 	if c.ms > 0 {
+		m.pendingCosts = append(m.pendingCosts, pendingCost{id: id, state: c.state, ms: c.ms})
+	}
+	m.writePendingCosts()
+}
+
+// writePendingCosts writes the settled costs; one whose write fails stays for the
+// next tick, one that was written is gone, so nothing is lost or written twice.
+func (m *Module) writePendingCosts() {
+	keep := m.pendingCosts[:0]
+	for _, pc := range m.pendingCosts {
 		var offer, idle int64
-		if c.state == resources.PosOffered {
-			offer = c.ms
+		if pc.state == resources.PosOffered {
+			offer = pc.ms
 		} else {
-			idle = c.ms
+			idle = pc.ms
 		}
-		if err := m.store.AddWindowWait(id, offer, idle); err != nil {
-			m.logf("[resources] sweeper: window cost of %s: %v (kept, tried again next tick)", id, err)
-			return // not deleted: a write that failed is not lost, and one that won is not written twice
+		if err := m.store.AddWindowWait(pc.id, offer, idle); err != nil {
+			m.logf("[resources] sweeper: window cost of %s: %v (kept, tried again next tick)", pc.id, err)
+			keep = append(keep, pc)
 		}
 	}
-	delete(m.costs, id)
+	m.pendingCosts = keep
 }

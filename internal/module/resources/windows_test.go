@@ -402,7 +402,8 @@ func TestCost_PassedOfferStopsChargingAtThePass(t *testing.T) {
 }
 
 // A cost whose write failed is kept and tried again; once written it is not
-// written twice.
+// written twice, also when the failure was at a state change between ticks and
+// the position went on into another charged state.
 func TestCost_FailedWriteIsKeptAndNotRepeated(t *testing.T) {
 	f := newPosFix(t)
 	posA, _ := f.offeredWithAWaiter()
@@ -410,17 +411,28 @@ func TestCost_FailedWriteIsKeptAndNotRepeated(t *testing.T) {
 	f.sweep()
 	f.advance(10 * time.Second)
 	f.sweep() // 20 s accrued in memory
-	require.Equal(t, int64(20_000), f.m.costs[posA].ms)
-	// The write fails (the table is read-only for a moment).
+	// The write fails at the state change (the position starts, then ends its command).
 	_, err := f.m.store.db.Exec(`CREATE TRIGGER fail_cost BEFORE UPDATE OF offer_wait_ms ON resource_positions BEGIN SELECT RAISE(ABORT, 'busy'); END`)
 	require.NoError(t, err)
-	f.m.flushWindowCost(posA)
-	require.NotNil(t, f.m.costs[posA], "kept after a failed write")
+	run := decodeLease(t, f.postAs(newCID(), pidA, resources.CallQueue, "go build"))
+	require.Equal(t, resources.StateHeld, run.State)
+	f.advance(time.Second)
+	f.sweep() // the change is noticed: the write fails, the cost is kept
+	require.Len(t, f.m.pendingCosts, 1)
+	f.advance(time.Second)
+	f.sweep() // still failing, and nothing is added a second time
+	require.Len(t, f.m.pendingCosts, 1)
+	assert.Equal(t, int64(20_000), f.m.pendingCosts[0].ms)
+	f.release(run.ID, true) // into the next charged state while the old write is still pending
+	f.advance(time.Second)
+	f.sweep()
+	require.NotNil(t, f.m.costs[posA], "the idle window is tracked on its own")
 	_, err = f.m.store.db.Exec(`DROP TRIGGER fail_cost`)
 	require.NoError(t, err)
-	f.m.flushWindowCost(posA)
-	assert.Nil(t, f.m.costs[posA])
-	assert.Equal(t, int64(20_000), f.position(posA).OfferWaitMS)
-	f.m.flushWindowCost(posA)
+	f.advance(time.Second)
+	f.sweep()
+	assert.Empty(t, f.m.pendingCosts)
+	assert.Equal(t, int64(20_000), f.position(posA).OfferWaitMS, "written once, exactly")
+	f.sweep()
 	assert.Equal(t, int64(20_000), f.position(posA).OfferWaitMS, "not written twice")
 }

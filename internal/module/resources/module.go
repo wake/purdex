@@ -166,6 +166,9 @@ type Module struct {
 	goneAgents map[string]bool
 	swaps      map[string]*sessionSwap
 	costs      map[string]*windowCost
+	// pendingCosts are window costs settled but not yet written (a write that
+	// failed is kept and tried again, never repeated once it won).
+	pendingCosts []pendingCost
 	// deliverable says whether the session can take a notice now (its main turn is
 	// not running); nil reads as true. P2d wires the real answer.
 	deliverable func(sessionID string) bool
