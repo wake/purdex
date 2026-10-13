@@ -227,11 +227,22 @@ withdrawing delivered notifications on the Mac.
   key, updated by every event that sets or re-sets the unread), captured **at the unread → read transition**, never
   re-read later. A reader with no cursor (an event from before this feature) omits T and the daemon uses the newest
   cursor it has emitted for that session.
-- `POST /api/sessions/{code}/read` `{"through": T?}` → 204. In the device scope allow-list (BG-4). The daemon keeps
+- `POST /api/sessions/{code}/read` `{"through": T?}` → 204, or **404 `{"error":"no_such_session"}`** for a code that is
+  not a session code or that the daemon's in-memory session list (the one `GET /api/sessions` serves, never a tmux read
+  of its own) does not have; with no usable list (never filled, invalidated by a create / rename / delete since, or older
+  than 2 minutes) nothing is evidence, and the read is accepted only for a session the daemon has seen (an event of it, or an
+  earlier read), so made-up codes cannot push real reads out of the bounded store. A client ignores the 404. A `through`
+  is clamped to what the daemon has emitted: a seq above the newest cursor of that session (above the epoch's
+  high-water mark for a session with no event) is lowered to it, so a wrong or hostile cursor cannot cover unreads that
+  do not exist yet; a trailing second JSON value in the body is a 400. A session created a moment ago
+  and not yet in the list may be refused: best effort. In the device scope allow-list (BG-4). The daemon keeps
   `lastRead[code]` = the larger T (a smaller or other-epoch T never replaces a current-epoch one), bounded to 4096
-  codes (least recently updated evicted), and deletes the code's entry when the session ends; all of it lives in memory.
-- **WS** `/ws/host-events?reads=v1` (opt-in): on connect a `session.reads` frame `{"reads":[{"code":…,"through":T}]}`,
-  and a `session.read` frame `{"code":…,"through":T}` per accepted read, to every opted-in connection including the
+  codes (least recently updated evicted), and **once a minute drops the codes the in-memory session list no longer has**
+  (it does nothing while the list is unusable); all of it lives in memory.
+- **WS** `/ws/host-events?reads=v1` (opt-in): on connect a `session.reads` frame `{"reads":[{"code":…,"through":T}]}`
+  (`[]` when there is none), and a `session.read` frame `{"code":…,"through":T}` per accepted read (one that moved
+  `lastRead` forward; a smaller or equal T is answered 204 and announced to no one). Both are the usual host-event
+  envelope `{"type":…,"session":…,"value":"<that JSON as a string>"}` (`session` is the code on `session.read`), to every opted-in connection including the
   sender's. These two frame types are **strict for opted-in connections only** (`BroadcastStrictTo` with a `reads`
   feature): a full buffer closes that connection, whose reconnect brings a fresh snapshot; `reads=v1` does not make
   any other frame strict, and connections without it never receive them. Applying a read is idempotent and
