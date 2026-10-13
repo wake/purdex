@@ -214,7 +214,7 @@ func (m *Module) replay(w http.ResponseWriter, r *http.Request, req resources.Le
 	// is only what the client itself sent, so a replay is the same request whatever
 	// the lookup found this time or the time before.
 	sessionOK := row.SessionID == req.SessionID || (req.SessionID == "" && row.Scope == resources.ScopeProcess)
-	same := sessionOK && row.ToolUseID == req.ToolUseID && row.Mode == req.Mode
+	same := sessionOK && row.ToolUseID == req.ToolUseID && callMode(row.Mode) == callMode(req.Mode)
 	if req.Kind != "" {
 		same = same && row.Kind == req.Kind
 	} else {
@@ -508,4 +508,13 @@ func (m *Module) reattach(n leaseRow) (leaseRow, bool) {
 		return got, true
 	}
 	return leaseRow{}, false
+}
+
+// callMode reads an empty mode as wait: rows from before amendment A and
+// clients that name no mode are the same kind of request as an explicit wait.
+func callMode(m string) string {
+	if m == "" {
+		return resources.CallWait
+	}
+	return m
 }

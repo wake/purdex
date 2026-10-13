@@ -81,3 +81,19 @@ func TestLeaseCreate_ParkableStillAccepted(t *testing.T) {
 	rec := f.do(http.MethodPost, "/api/resources/leases", req)
 	assert.Less(t, rec.Code, 300, rec.Body.String())
 }
+
+// An empty mode and an explicit wait are the same request: a retry that
+// spells the default out (or a row from before the column) is a replay.
+func TestLeaseCreate_EmptyModeAndWaitReplayEachOther(t *testing.T) {
+	f := newRouteFix(t, resources.ModeLease)
+	req := amendReq(cidA)
+	require.Less(t, f.do(http.MethodPost, "/api/resources/leases", req).Code, 300)
+	req.Mode = resources.CallWait
+	assert.Equal(t, http.StatusOK, f.do(http.MethodPost, "/api/resources/leases", req).Code)
+
+	req2 := amendReq(cidB)
+	req2.Mode = resources.CallWait
+	require.Less(t, f.do(http.MethodPost, "/api/resources/leases", req2).Code, 300)
+	req2.Mode = ""
+	assert.Equal(t, http.StatusOK, f.do(http.MethodPost, "/api/resources/leases", req2).Code)
+}
