@@ -13,10 +13,10 @@ import (
 const PauseGateKey = "peers.pause-gate"
 
 // PauseGate answers whether a session is paused. PauseVerdict, in one write transaction of its own, records the message as
-// bounced when the session has any pause row and says paused; otherwise it writes nothing. from is the sender's address as
+// bounced when the session has any pause row and says paused, with the detail to answer ("" = the fixed SessionPausedDetail); otherwise it writes nothing. from is the sender's address as
 // the receiver shows it, at the time of the attempt (unix ms).
 type PauseGate interface {
-	PauseVerdict(sessionID, from, text string, at int64) (paused bool, err error)
+	PauseVerdict(sessionID, from, text string, at int64) (paused bool, detail string, err error)
 }
 
 // flowKey marks a context as a pause-flow send. It is an unexported type, so nothing outside this package can build the
@@ -33,22 +33,25 @@ func isFlow(ctx context.Context) bool {
 // No gate registered is not paused (a daemon without the team module). A gate that cannot answer — team.db busy or full, or a
 // registered service that is not a gate — is an error: a paused session takes no message, so a message that cannot be judged
 // is held and the sender told to retry (503), never let through.
-func (m *Module) paused(sessionID, from, text string) (bool, error) {
+func (m *Module) paused(sessionID, from, text string) (bool, string, error) {
 	svc, ok := m.core.Registry.Get(PauseGateKey)
 	if !ok {
-		return false, nil
+		return false, "", nil
 	}
 	gate, ok := svc.(PauseGate)
 	if !ok {
 		m.logf("peers: pause gate: the registered service is %T, not a PauseGate", svc)
-		return false, errPauseUnavailable
+		return false, "", errPauseUnavailable
 	}
-	paused, err := gate.PauseVerdict(sessionID, from, text, time.Now().UnixMilli())
+	paused, detail, err := gate.PauseVerdict(sessionID, from, text, time.Now().UnixMilli())
 	if err != nil {
 		m.logf("peers: pause gate: %v", err)
-		return false, errPauseUnavailable
+		return false, "", errPauseUnavailable
 	}
-	return paused, nil
+	if detail == "" {
+		detail = peers.SessionPausedDetail
+	}
+	return paused, detail, nil
 }
 
 // errPauseUnavailable is why a message was held: the pause state could not be read.
@@ -67,9 +70,9 @@ type FlowSender interface {
 	SendFlow(ctx context.Context, req peers.SendRequest) (peers.SendResponse, error)
 }
 
-// pausedRefusal is what a paused session answers: 409 session_paused with the one fixed detail.
-func pausedRefusal() *deliveryRefusal {
-	return refusalOf(409, peers.ErrSessionPaused, peers.SessionPausedDetail)
+// pausedRefusal is what a paused session answers: 409 session_paused with the gate's detail.
+func pausedRefusal(detail string) *deliveryRefusal {
+	return refusalOf(409, peers.ErrSessionPaused, detail)
 }
 
 // pauseHeldRefusal is what a message the gate could not judge answers: 503 not_ready.

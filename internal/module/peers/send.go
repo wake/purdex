@@ -605,16 +605,16 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 		// frame; the refusal is recorded on the audit row like any other. SendFlow alone skips it (the context key is
 		// unexported, an HTTP request cannot carry it).
 		if !isFlow(r.Context()) {
-			paused, perr := m.paused(to.AgentSessionID, origin.Address, req.Text)
+			paused, detail, perr := m.paused(to.AgentSessionID, origin.Address, req.Text)
 			switch {
 			case perr != nil:
 				m.setResult(id, "", ipeers.ErrNotReady, pauseUnavailableDetail)
 				writeWireError(w, http.StatusServiceUnavailable, ipeers.APIError{Error: ipeers.ErrNotReady, Detail: pauseUnavailableDetail})
 				return
 			case paused:
-				m.setResult(id, "", ipeers.ErrSessionPaused, ipeers.SessionPausedDetail)
+				m.setResult(id, "", ipeers.ErrSessionPaused, detail)
 				m.logf("peers: send %s to %q refused (%s)", msgID, targetAlias, ipeers.ErrSessionPaused)
-				writeWireError(w, http.StatusConflict, ipeers.APIError{Error: ipeers.ErrSessionPaused, Detail: ipeers.SessionPausedDetail})
+				writeWireError(w, http.StatusConflict, ipeers.APIError{Error: ipeers.ErrSessionPaused, Detail: detail})
 				return
 			}
 		}

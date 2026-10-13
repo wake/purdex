@@ -286,17 +286,18 @@ const (
 // the check and the bounce serialise with the resume, which deletes the pause rows and the bounces in one transaction: a
 // message is either bounced-and-listed or delivered, never bounced with no one left to list it. A store error is an error, not
 // "not paused": the caller holds the message.
-func (s *Store) PauseVerdict(sessionID, from, text string, at int64) (paused bool, err error) {
+func (s *Store) PauseVerdict(sessionID, from, text string, at int64) (paused bool, detail string, err error) {
 	var one int
 	switch err := s.db.QueryRow(`SELECT 1 FROM session_pauses WHERE session_id = ? LIMIT 1`, sessionID).Scan(&one); {
 	case errors.Is(err, sql.ErrNoRows):
-		return false, nil
+		return false, "", nil
 	case err != nil:
-		return false, fmt.Errorf("pause verdict %s: %w", sessionID, err)
+		return false, "", fmt.Errorf("pause verdict %s: %w", sessionID, err)
 	}
 	sum := sha256.Sum256([]byte(text))
 	hash := hex.EncodeToString(sum[:])
 	from = cutRunes(from, maxBounceFrom)
+	var verdictDetail string
 	err = s.immediateTx(func(ctx context.Context, conn *sql.Conn) error {
 		if err := conn.QueryRowContext(ctx, `SELECT 1 FROM session_pauses WHERE session_id = ? LIMIT 1`, sessionID).Scan(&one); errors.Is(err, sql.ErrNoRows) {
 			paused = false // resumed since the read above: the message is delivered
@@ -305,6 +306,11 @@ func (s *Store) PauseVerdict(sessionID, from, text string, at int64) (paused boo
 			return err
 		}
 		paused = true
+		d, derr := pauseDetailIn(ctx, conn, sessionID)
+		if derr != nil {
+			return derr
+		}
+		verdictDetail = d
 		var n int
 		var have int
 		if err := conn.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(from_addr = ? AND text_hash = ?), 0) FROM pause_bounces WHERE session_id = ?`, from, hash, sessionID).Scan(&n, &have); err != nil {
@@ -319,9 +325,26 @@ func (s *Store) PauseVerdict(sessionID, from, text string, at int64) (paused boo
 		return err
 	})
 	if err != nil {
-		return false, fmt.Errorf("pause verdict %s: %w", sessionID, err)
+		return false, "", fmt.Errorf("pause verdict %s: %w", sessionID, err)
 	}
-	return paused, nil
+	return paused, verdictDetail, nil
+}
+
+// pauseDetailIn is what a bounce tells the sender: when the session holds relay_unanswered, that it waits for a person (a lead, for
+// a member); otherwise "" - the caller's own fixed text (RT-2a2, T19). relay_unanswered wins over the other causes: it is the one a
+// person can end by answering.
+func pauseDetailIn(ctx context.Context, conn *sql.Conn, sessionID string) (string, error) {
+	var role string
+	switch err := conn.QueryRowContext(ctx, `SELECT role FROM session_pauses WHERE session_id = ? AND cause = ?`, sessionID, team.PauseCauseUnanswered).Scan(&role); {
+	case errors.Is(err, sql.ErrNoRows):
+		return "", nil
+	case err != nil:
+		return "", err
+	}
+	if role == team.PauseRoleMember {
+		return team.PauseBounceUnansweredMember, nil
+	}
+	return team.PauseBounceUnanswered, nil
 }
 
 // cutRunes cuts s to max characters.
@@ -345,6 +368,6 @@ func firstLineOf(text string, max int) string {
 // pauseGate is the team module as peers' PauseGate (registered under peersmod.PauseGateKey in Init).
 type pauseGate struct{ m *Module }
 
-func (g pauseGate) PauseVerdict(sessionID, from, text string, at int64) (bool, error) {
+func (g pauseGate) PauseVerdict(sessionID, from, text string, at int64) (bool, string, error) {
 	return g.m.store.PauseVerdict(sessionID, from, text, at)
 }

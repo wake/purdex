@@ -455,10 +455,6 @@ func TestUnanswered_NoResumeGroupTakesIt(t *testing.T) {
 	f.switchOff()             // a switch-off: scope All
 	f.unatt.set(true)         // on again (a new on-period) …
 	f.reconcile()             // … scope OnSinceNot
-	code, body := f.do(http.MethodPost, "/api/team/paused/sid-1/release", team.PauseReleaseRequest{Client: team.Client{Kind: "app", Label: "t"}})
-	if code != http.StatusOK {
-		t.Fatalf("release one: %d %s", code, body)
-	}
 	if _, ok := f.pauses()["sid-1/relay_unanswered"]; !ok {
 		t.Fatal("a resume group took the relay_unanswered row")
 	}

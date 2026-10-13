@@ -81,11 +81,11 @@ func (m *Module) deliverToLocalTarget(ctx context.Context, snap deliverSnapshot,
 	if d.from.Address != "" {
 		from = d.senderAlias + "/" + d.from.Address
 	}
-	switch paused, perr := m.paused(d.to.AgentSessionID, from, d.text); {
+	switch paused, detail, perr := m.paused(d.to.AgentSessionID, from, d.text); {
 	case perr != nil:
 		return "", "", pauseHeldRefusal()
 	case paused:
-		return "", "", pausedRefusal()
+		return "", "", pausedRefusal(detail)
 	}
 
 	// 8. Per (sender, receiver) process pair rate limit.

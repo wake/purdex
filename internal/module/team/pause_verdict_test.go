@@ -61,7 +61,7 @@ func resume(t *testing.T, s *Store, sid string) {
 // that is not paused (red).
 func TestPauseVerdict_NotPausedIsOKAndWritesNothing(t *testing.T) {
 	s := openTestStore(t)
-	paused, err := s.PauseVerdict("sid-1", "air/foo", "hello", 100)
+	paused, _, err := s.PauseVerdict("sid-1", "air/foo", "hello", 100)
 	if err != nil || paused {
 		t.Fatalf("not paused: paused=%v err=%v", paused, err)
 	}
@@ -76,7 +76,7 @@ func TestPauseVerdict_PausedBouncesAndMergesTheSameSenderAndText(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i, at := range []int64{100, 200, 300} {
-		paused, err := s.PauseVerdict("sid-1", "air/foo", "hello\nsecond line", at)
+		paused, _, err := s.PauseVerdict("sid-1", "air/foo", "hello\nsecond line", at)
 		if err != nil || !paused {
 			t.Fatalf("call %d: paused=%v err=%v", i, paused, err)
 		}
@@ -87,7 +87,7 @@ func TestPauseVerdict_PausedBouncesAndMergesTheSameSenderAndText(t *testing.T) {
 	}
 	// another text, and another sender, are other rows
 	for _, c := range [][2]string{{"air/foo", "something else"}, {"air/bar", "hello\nsecond line"}} {
-		if paused, err := s.PauseVerdict("sid-1", c[0], c[1], 400); err != nil || !paused {
+		if paused, _, err := s.PauseVerdict("sid-1", c[0], c[1], 400); err != nil || !paused {
 			t.Fatal(paused, err)
 		}
 	}
@@ -102,7 +102,7 @@ func TestPauseVerdict_FirstLineIsAtMost120Characters(t *testing.T) {
 		t.Fatal(err)
 	}
 	long := strings.Repeat("字", 300)
-	if paused, err := s.PauseVerdict("sid-1", "a", long, 1); err != nil || !paused {
+	if paused, _, err := s.PauseVerdict("sid-1", "a", long, 1); err != nil || !paused {
 		t.Fatal(paused, err)
 	}
 	rows := bounceRows(t, s, "sid-1")
@@ -110,7 +110,7 @@ func TestPauseVerdict_FirstLineIsAtMost120Characters(t *testing.T) {
 		t.Fatalf("first line = %d runes, want 120", len([]rune(rows[0].FirstLine)))
 	}
 	// a text that starts with blank lines keeps the first non-blank line
-	if paused, err := s.PauseVerdict("sid-1", "b", "\n\n  real first\nmore", 2); err != nil || !paused {
+	if paused, _, err := s.PauseVerdict("sid-1", "b", "\n\n  real first\nmore", 2); err != nil || !paused {
 		t.Fatal(paused, err)
 	}
 	for _, r := range bounceRows(t, s, "sid-1") {
@@ -129,7 +129,7 @@ func TestPauseVerdict_AgainstTheResumeInBothOrders(t *testing.T) {
 	if _, err := s.AddPause(pauseRow("sid-1", team.PauseCauseQuota, team.PauseRoleSolo, 10)); err != nil {
 		t.Fatal(err)
 	}
-	if paused, err := s.PauseVerdict("sid-1", "a", "x", 1); err != nil || !paused {
+	if paused, _, err := s.PauseVerdict("sid-1", "a", "x", 1); err != nil || !paused {
 		t.Fatal(paused, err)
 	}
 	if n := len(bounceRows(t, s, "sid-1")); n != 1 {
@@ -140,7 +140,7 @@ func TestPauseVerdict_AgainstTheResumeInBothOrders(t *testing.T) {
 		t.Fatalf("bounces after the resume = %d", n)
 	}
 	// order 2: the resume first → the verdict finds no pause and delivers
-	if paused, err := s.PauseVerdict("sid-1", "a", "x", 2); err != nil || paused {
+	if paused, _, err := s.PauseVerdict("sid-1", "a", "x", 2); err != nil || paused {
 		t.Fatalf("after the resume: paused=%v err=%v", paused, err)
 	}
 	if n := len(bounceRows(t, s, "sid-1")); n != 0 {
@@ -157,7 +157,7 @@ func TestPauseVerdict_AFloodOfDifferentTextsIsBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 300; i++ {
-		paused, err := s.PauseVerdict("sid-1", "air/foo", fmt.Sprintf("flood %d", i), int64(i))
+		paused, _, err := s.PauseVerdict("sid-1", "air/foo", fmt.Sprintf("flood %d", i), int64(i))
 		if err != nil || !paused {
 			t.Fatalf("message %d: paused=%v err=%v", i, paused, err)
 		}
@@ -167,7 +167,7 @@ func TestPauseVerdict_AFloodOfDifferentTextsIsBounded(t *testing.T) {
 		t.Fatalf("bounce rows = %d, want the cap %d", len(rows), maxBounces)
 	}
 	// one that is already listed still refreshes at the cap
-	if paused, err := s.PauseVerdict("sid-1", "air/foo", "flood 0", 9999); err != nil || !paused {
+	if paused, _, err := s.PauseVerdict("sid-1", "air/foo", "flood 0", 9999); err != nil || !paused {
 		t.Fatal(paused, err)
 	}
 	var at int64
@@ -179,7 +179,7 @@ func TestPauseVerdict_AFloodOfDifferentTextsIsBounded(t *testing.T) {
 	if _, err := s.AddPause(pauseRow("sid-2", team.PauseCauseQuota, team.PauseRoleSolo, 10)); err != nil {
 		t.Fatal(err)
 	}
-	if paused, err := s.PauseVerdict("sid-2", long, "hi", 1); err != nil || !paused {
+	if paused, _, err := s.PauseVerdict("sid-2", long, "hi", 1); err != nil || !paused {
 		t.Fatal(paused, err)
 	}
 	if rows := bounceRows(t, s, "sid-2"); len(rows) != 1 || len([]rune(rows[0].From)) != maxBounceFrom {
@@ -202,7 +202,7 @@ func TestPauseVerdict_NeverLeavesAnOrphanBounce(t *testing.T) {
 			go func(i int) {
 				defer wg.Done()
 				for j := 0; j < 5; j++ {
-					if _, err := s.PauseVerdict(sid, fmt.Sprintf("from-%d", i), fmt.Sprintf("text-%d", j), int64(j)); err != nil {
+					if _, _, err := s.PauseVerdict(sid, fmt.Sprintf("from-%d", i), fmt.Sprintf("text-%d", j), int64(j)); err != nil {
 						t.Error(err)
 					}
 				}
@@ -232,16 +232,45 @@ func TestPauseGate_IsRegisteredForPeers(t *testing.T) {
 	if !ok {
 		t.Fatalf("the registered service is %T, not a PauseGate", svc)
 	}
-	if paused, err := gate.PauseVerdict("sid-1", "air/foo", "hi", 1); err != nil || paused {
+	if paused, _, err := gate.PauseVerdict("sid-1", "air/foo", "hi", 1); err != nil || paused {
 		t.Fatalf("not paused: %v %v", paused, err)
 	}
 	if _, err := f.m.store.AddPause(pauseRow("sid-1", team.PauseCauseQuota, team.PauseRoleSolo, 10)); err != nil {
 		t.Fatal(err)
 	}
-	if paused, err := gate.PauseVerdict("sid-1", "air/foo", "hi", 2); err != nil || !paused {
+	if paused, _, err := gate.PauseVerdict("sid-1", "air/foo", "hi", 2); err != nil || !paused {
 		t.Fatalf("paused: %v %v", paused, err)
 	}
 	if rows := bounceRows(t, f.m.store, "sid-1"); len(rows) != 1 {
 		t.Fatalf("bounce rows = %+v", rows)
+	}
+}
+
+// The bounce says what the session waits for (RT-2a2, T19). Mutation gates: always answer "" → the unanswered cases are red; let a
+// quota row beat relay_unanswered → the two-cause case is red; ignore the role → the member case is red.
+func TestPauseVerdict_DetailByCause(t *testing.T) {
+	s := openTestStore(t)
+	seed := func(sid, cause, role string) {
+		if _, err := s.db.Exec(`INSERT INTO session_pauses (session_id, cause, role, team_id, lead_session_id, ref, title, on_since, since) VALUES (?, ?, ?, '', '', '', '', 0, 1)`, sid, cause, role); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("quota", team.PauseCauseQuota, team.PauseRoleSolo)
+	seed("solo", team.PauseCauseUnanswered, team.PauseRoleSolo)
+	seed("lead", team.PauseCauseUnanswered, team.PauseRoleLead)
+	seed("member", team.PauseCauseUnanswered, team.PauseRoleMember)
+	seed("both", team.PauseCauseQuota, team.PauseRoleSolo)
+	seed("both", team.PauseCauseUnanswered, team.PauseRoleSolo)
+	for sid, want := range map[string]string{
+		"quota":  "",
+		"solo":   team.PauseBounceUnanswered,
+		"lead":   team.PauseBounceUnanswered,
+		"member": team.PauseBounceUnansweredMember,
+		"both":   team.PauseBounceUnanswered,
+	} {
+		paused, detail, err := s.PauseVerdict(sid, "a", "x", 1)
+		if err != nil || !paused || detail != want {
+			t.Fatalf("%s: paused=%v detail=%q err=%v, want paused with %q", sid, paused, detail, err, want)
+		}
 	}
 }
