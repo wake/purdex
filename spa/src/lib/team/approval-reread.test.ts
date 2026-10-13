@@ -107,6 +107,15 @@ describe('reading a card that ran out while open', () => {
     expect(held().unanswered_at).toBe(NOW + 10_500)
   })
 
+  it('the capability withdrawn before the read (the connection went away): not read', async () => {
+    supported()
+    open()
+    await tick(5_000)
+    supported('unknown')
+    await tick(60_000)
+    expect(fetchApproval).not.toHaveBeenCalled()
+  })
+
   it('a card closed before the read is not read', async () => {
     supported()
     open()
