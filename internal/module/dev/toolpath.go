@@ -139,7 +139,20 @@ func (e toolEnv) toolDirs() []string {
 	var out []string
 	seen := map[string]bool{}
 	add := func(d string) {
-		if d == "" || seen[d] {
+		if d == "" {
+			return
+		}
+		// The child runs with Dir=repoRoot, so a relative dir would be
+		// checked here against the daemon's cwd but resolved there against
+		// repoRoot: pin it to the daemon's cwd now.
+		if !filepath.IsAbs(d) {
+			abs, err := filepath.Abs(d)
+			if err != nil {
+				return
+			}
+			d = abs
+		}
+		if seen[d] {
 			return
 		}
 		seen[d] = true

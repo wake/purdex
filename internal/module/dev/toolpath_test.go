@@ -161,3 +161,23 @@ func TestBuildBinaryUsesToolPath(t *testing.T) {
 		t.Fatalf("go child PATH wrong: %v", lines)
 	}
 }
+
+// A relative extra_path is checked against the daemon's cwd, but the child
+// runs with Dir=repoRoot; the resolved executable must be absolute so the file
+// that was checked is the file that runs.
+func TestRelativeToolDirsBecomeAbsolute(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := testEnv(t.TempDir(), "rel/path")
+	e.extra = []string{"rel/extra"}
+	for _, d := range e.toolDirs() {
+		if !filepath.IsAbs(d) {
+			t.Fatalf("non-absolute dir %q", d)
+		}
+	}
+	if got := e.toolDirs()[0]; got != filepath.Join(cwd, "rel/extra") {
+		t.Fatalf("got %q", got)
+	}
+}
