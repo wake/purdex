@@ -306,6 +306,19 @@ func (s *leaseStore) CloseIfExpired(id string, now int64, waitReasons string) (b
 		WHERE id = ? AND state = 'waiting' AND lease_until <= ?`, now, now, waitReasons, id, now)
 }
 
+// SetShadow records the advise shadow's verdict on a row, once: the wait v2
+// would have imposed (open: a lower bound, the row ended first) and the
+// shadow's reasons. A row that already has one is left alone.
+func (s *leaseStore) SetShadow(id string, waitMS int64, open bool, waitReasons string) error {
+	if _, err := s.db.Exec(`
+		UPDATE resource_leases
+		SET v2_wait_ms = ?, v2_wait_open = ?, wait_reasons = COALESCE(NULLIF(?, ''), wait_reasons)
+		WHERE id = ? AND v2_wait_ms = -1`, waitMS, b2i(open), waitReasons, id); err != nil {
+		return fmt.Errorf("record shadow wait %s: %w", id, err)
+	}
+	return nil
+}
+
 // MaxGrantedAt is the newest granted_at of any row, held or ended (0 when
 // nothing was ever granted): where the gap between two grants is counted from
 // after a restart.
@@ -481,6 +494,11 @@ var decisionColumns = []struct{ name, def string }{
 	{"dec_gap_ms", "INTEGER NOT NULL DEFAULT 0"},
 	{"parks", "INTEGER NOT NULL DEFAULT 0"},
 	{"wait_reasons", "TEXT NOT NULL DEFAULT ''"},
+	// The advise shadow queue (P1c): how long v2 would have made the request
+	// wait (-1: not recorded), and whether that is only a lower bound because
+	// the row ended first.
+	{"v2_wait_ms", "INTEGER NOT NULL DEFAULT -1"},
+	{"v2_wait_open", "INTEGER NOT NULL DEFAULT 0"},
 }
 
 // hostMinutesSchema is the D-8.2 timeline: one row per minute, written by the

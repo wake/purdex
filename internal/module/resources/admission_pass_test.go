@@ -262,8 +262,9 @@ func TestPass_GrantWakes(t *testing.T) {
 	}
 }
 
-// Mode advise grants every waiter at once, whatever the zone; would_wait stays
-// false until the shadow queue of P1c answers it.
+// Mode advise grants every waiter at once, whatever the zone; would_wait says
+// whether the shadow queue (shadow.go) would have held the request: here the
+// danger zone holds both, so both would have waited.
 func TestPass_AdviseGrantsAll(t *testing.T) {
 	f := newPassFix(t, resources.ModeAdvise)
 	f.setHost(resources.HostUse{Measured: 99, NCPU: 10, Zone: "danger", Trend: "rising"})
@@ -275,7 +276,7 @@ func TestPass_AdviseGrantsAll(t *testing.T) {
 			t.Fatalf("%s not granted in advise", id)
 		}
 	}
-	if r := f.row("b"); r.WouldWait || r.Overrun {
+	if r := f.row("b"); !r.WouldWait || r.Overrun {
 		t.Errorf("b: %+v", r)
 	}
 	if d := f.dec("b"); d.path != resources.PathImmediate || d.recorded != 1 || d.sumCharge != 10 {
