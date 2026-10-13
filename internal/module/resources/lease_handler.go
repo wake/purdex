@@ -287,6 +287,14 @@ func (m *Module) handleLeaseGet(w http.ResponseWriter, r *http.Request) {
 		}
 		wait = min(n, resources.MaxPollS)
 	}
+	// The client that polls names itself. If the row has been taken over by a
+	// newer call (re-attach), the answer is "replaced" and nothing is renewed.
+	// An older client sends none and is treated as before.
+	cid := r.URL.Query().Get("client_id")
+	if cid != "" && !validClientID(cid) {
+		writeErr(w, http.StatusBadRequest, resources.ErrBadRequest, "client_id must be a lower-case UUID v4")
+		return
+	}
 	timer := time.NewTimer(time.Duration(wait) * time.Second)
 	defer timer.Stop()
 	final := false // the wait is over: answer with the row as it is now
@@ -299,7 +307,8 @@ func (m *Module) handleLeaseGet(w http.ResponseWriter, r *http.Request) {
 		gen := m.genChan()
 		// A parked row is not renewed: its lease runs to the end of the park, and
 		// a poll that kept it alive would never let it expire.
-		if err == nil && ok && row.State == resources.StateWaiting && row.ParkedUntil == 0 {
+		replaced := err == nil && ok && cid != "" && row.ClientID != cid
+		if err == nil && ok && !replaced && row.State == resources.StateWaiting && row.ParkedUntil == 0 {
 			if rerr := m.store.RenewLease(id, m.now().Add(resources.LeaseS*time.Second).UnixMilli()); rerr != nil {
 				m.logf("[resources] renew lease %s: %v", id, rerr)
 			}
@@ -311,6 +320,9 @@ func (m *Module) handleLeaseGet(w http.ResponseWriter, r *http.Request) {
 			return
 		case !ok:
 			writeErr(w, http.StatusNotFound, resources.ErrNoLease, "no such lease")
+			return
+		case replaced:
+			writeJSON(w, http.StatusOK, resources.LeaseResponse{ID: row.ID, State: resources.StateReplaced, Mode: m.settings().Mode, Host: m.leaseHost()})
 			return
 		case row.State != resources.StateWaiting || final || row.ParkedUntil != 0:
 			writeJSON(w, http.StatusOK, m.leaseResponse(row, m.settings(), false))
