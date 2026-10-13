@@ -196,6 +196,32 @@ describe('seen live — an actionable event of an agent that is on screen', () =
     expect(reportRead).toHaveBeenCalledExactlyOnceWith(H, 'aaaaaa', undefined)
   })
 
+  // "On screen" for a device elsewhere means a person could actually see it: a minimized or covered window keeps its
+  // active tab, so the tab store alone says nothing. Not marked unread here either way (unchanged); only the report
+  // that clears OTHER devices' unread needs a visible window.
+  it('a hidden window (minimized, covered, another Space) does not report: nobody saw the event', () => {
+    const vis = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    try {
+      showInActiveTab('aaaaaa')
+      news('aaaaaa', 'E1', 7)
+      expect(unread('aaaaaa')).toBe(false) // the existing local rule is untouched
+      expect(reportRead).not.toHaveBeenCalled()
+    } finally {
+      vis.mockRestore()
+    }
+  })
+
+  it('the same event reports once the window is visible', () => {
+    const vis = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    try {
+      showInActiveTab('aaaaaa')
+      news('aaaaaa', 'E1', 7)
+      expect(reportRead).toHaveBeenCalledExactlyOnceWith(H, 'aaaaaa', { epoch: 'E1', seq: 7 })
+    } finally {
+      vis.mockRestore()
+    }
+  })
+
   it('an agent that is not on screen is marked unread and nothing is reported', () => {
     showInActiveTab('bbbbbb')
     news('aaaaaa', 'E1', 7)

@@ -2,6 +2,7 @@
 // POST per session per 2 s window, carrying the largest cursor captured in it; only for a host session on a host that
 // declares `session.read_sync.v1`; best effort (a 404 or a network error is ignored).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 
 vi.mock('../host-api', () => ({ pinnedHostFetch: vi.fn() }))
@@ -11,7 +12,12 @@ import { READ_DEBOUNCE_MS, reportRead, stopReadSync } from './reporter'
 const post = vi.mocked(pinnedHostFetch)
 const CAP = 'session.read_sync.v1'
 
-function declare(hostId: string, caps: string[] = [CAP]) {
+/** The host exists on this device (at `ip`) and its daemon declares `caps`. */
+function declare(hostId: string, caps: string[] = [CAP], ip = '1.2.3.4') {
+  useHostStore.setState((s) => ({
+    hosts: { ...s.hosts, [hostId]: { id: hostId, name: hostId, ip, port: 7860, order: 0 } },
+    hostOrder: s.hostOrder.includes(hostId) ? s.hostOrder : [...s.hostOrder, hostId],
+  }))
   useNexHostStore.setState((s) => ({ byHost: { ...s.byHost, [hostId]: { daemonCapabilities: caps } as never } }))
 }
 const calls = () => post.mock.calls.map(([host, path, init]) => ({ host, path, init: init as RequestInit }))
@@ -21,6 +27,7 @@ beforeEach(() => {
   post.mockReset()
   post.mockResolvedValue(new Response(null, { status: 204 }))
   useNexHostStore.setState({ byHost: {} })
+  useHostStore.setState({ hosts: {}, hostOrder: [], runtime: {}, activeHostId: null })
   declare('h1')
 })
 afterEach(() => {
@@ -132,15 +139,74 @@ describe('reportRead — who may send', () => {
   })
 
   it('a host whose capabilities are not known yet (or that has no entry) gets nothing', () => {
+    declare('h4')
     useNexHostStore.setState({ byHost: { h4: {} as never } })
     reportRead('h4', 'aaaaaa', { epoch: 'E1', seq: 1 })
     reportRead('hX', 'aaaaaa', { epoch: 'E1', seq: 1 })
     none()
   })
 
+  it('a host this device does not have gets nothing, even if some capability list names it', () => {
+    useNexHostStore.setState({ byHost: { hGone: { daemonCapabilities: [CAP] } as never } })
+    reportRead('hGone', 'aaaaaa', { epoch: 'E1', seq: 1 })
+    none()
+  })
+
   it('a malformed code (empty) never sends', () => {
     reportRead('h1', '', { epoch: 'E1', seq: 1 })
     none()
+  })
+})
+
+// A pending read was captured from ONE daemon. If the host is removed or re-pointed (another ip, port or token)
+// inside the 2 s window, the same host id names another daemon by the time the timer fires, and a read of the old one
+// must not mark the same session code read on the new one.
+describe('reportRead — bound to the daemon it was captured from', () => {
+  const setHost = (hostId: string, patch: Record<string, unknown>) =>
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, [hostId]: { ...s.hosts[hostId], ...patch } } }))
+
+  it.each([['ip', { ip: '9.9.9.9' }], ['port', { port: 7861 }], ['token', { token: 'rotated' }]])(
+    'the host\'s %s changing inside the window drops the pending read', (_what, patch) => {
+      reportRead('h1', 'aaaaaa', { epoch: 'E1', seq: 1 })
+      vi.advanceTimersByTime(READ_DEBOUNCE_MS - 500)
+      setHost('h1', patch)
+      vi.advanceTimersByTime(500)
+      expect(post).not.toHaveBeenCalled()
+    },
+  )
+
+  it('removing the host inside the window drops it', () => {
+    reportRead('h1', 'aaaaaa', { epoch: 'E1', seq: 1 })
+    useHostStore.setState({ hosts: {}, hostOrder: [] })
+    vi.advanceTimersByTime(READ_DEBOUNCE_MS)
+    expect(post).not.toHaveBeenCalled()
+  })
+
+  it('the same host id re-created with the same endpoint and token is the same daemon: still sent', () => {
+    reportRead('h1', 'aaaaaa', { epoch: 'E1', seq: 1 })
+    useHostStore.setState({ hosts: {}, hostOrder: [] })
+    declare('h1')
+    vi.advanceTimersByTime(READ_DEBOUNCE_MS)
+    expect(calls()).toHaveLength(1)
+  })
+
+  it('a report made AFTER the host was re-pointed starts its own window for the new daemon (the old one is dropped, not merged)', () => {
+    reportRead('h1', 'aaaaaa', { epoch: 'E1', seq: 5 })
+    vi.advanceTimersByTime(1000)
+    setHost('h1', { ip: '9.9.9.9' })
+    reportRead('h1', 'aaaaaa', { epoch: 'E7', seq: 2 })
+    vi.advanceTimersByTime(READ_DEBOUNCE_MS)
+    expect(calls()).toHaveLength(1)
+    expect(JSON.parse(calls()[0].init.body as string)).toEqual({ through: { epoch: 'E7', seq: 2 } })
+  })
+
+  it('another host\'s pending read is untouched by this one being re-pointed', () => {
+    declare('h2')
+    reportRead('h1', 'aaaaaa', { epoch: 'E1', seq: 1 })
+    reportRead('h2', 'aaaaaa', { epoch: 'E1', seq: 1 })
+    setHost('h1', { ip: '9.9.9.9' })
+    vi.advanceTimersByTime(READ_DEBOUNCE_MS)
+    expect(calls().map((c) => c.host)).toEqual(['h2'])
   })
 })
 

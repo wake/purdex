@@ -7,6 +7,7 @@ import { useLocalProfilesStore } from '../stores/useLocalProfilesStore'
 import { useHostSettingsStore } from '../stores/useHostSettingsStore'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
 import { useAgentStore, type NormalizedEvent, type AgentStatus } from '../stores/useAgentStore'
+import type { ReadCursor } from './read-sync/cursor'
 import { useExecutionStore, splitExecutionKey } from '../stores/useExecutionStore'
 import { useNexHostStore } from '../stores/useNexHostStore'
 import { useExecutionListStore } from '../stores/useExecutionListStore'
@@ -85,6 +86,7 @@ export function deleteHostCascade(hostId: string, grant: OperationLockGrant | nu
     agentEvents: {},
     agentStatuses: {},
     agentUnread: {},
+    agentUnreadCursor: {},
     agentModels: {},
     teamUi: useTeamUiStore.getState().snapshotHostTeams(hostId),
   }
@@ -96,6 +98,10 @@ export function deleteHostCascade(hostId: string, grant: OperationLockGrant | nu
   }
   for (const [k, v] of Object.entries(agentStore.unread)) {
     if (k.startsWith(prefix)) snapshot.agentUnread[k] = v
+  }
+  // An unread and the cursor of the event that set it are one fact (read sync, app-badge spec §7.2): back together.
+  for (const [k, v] of Object.entries(agentStore.unreadCursor)) {
+    if (k.startsWith(prefix)) snapshot.agentUnreadCursor[k] = v
   }
   for (const [k, v] of Object.entries(agentStore.models)) {
     if (k.startsWith(prefix)) snapshot.agentModels[k] = v
@@ -224,6 +230,7 @@ interface UndoSnapshot {
   agentEvents: Record<string, NormalizedEvent>
   agentStatuses: Record<string, AgentStatus>
   agentUnread: Record<string, boolean>
+  agentUnreadCursor: Record<string, ReadCursor>
   agentModels: Record<string, string>
   /** The host's team arrangement (useTeamUiStore), put back by undo. */
   teamUi: ReturnType<ReturnType<typeof useTeamUiStore.getState>['snapshotHostTeams']>
@@ -256,6 +263,7 @@ function makeUndo(hostId: string, wireId: string, snapshot: UndoSnapshot, grant:
         lastEvents: { ...ag.lastEvents, ...snapshot.agentEvents },
         statuses: { ...ag.statuses, ...snapshot.agentStatuses },
         unread: { ...ag.unread, ...snapshot.agentUnread },
+        unreadCursor: { ...ag.unreadCursor, ...snapshot.agentUnreadCursor },
         models: { ...ag.models, ...snapshot.agentModels },
       })
     }

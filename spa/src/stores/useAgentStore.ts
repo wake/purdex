@@ -379,11 +379,18 @@ function eventPatch(
       else if (key in s.unreadCursor) patch.unreadCursor = dropKey(s.unreadCursor, key)
     } else {
       // On screen, so it never becomes unread here — but the person saw it: tell the daemon, or a device elsewhere
-      // keeps an unread of something already seen (spec §7.1). Reported after the state is written.
-      seen.push({ sessionCode, cursor: cursorOf(event) })
+      // keeps an unread of something already seen (spec §7.1). Reported after the state is written. Only while the
+      // window is actually visible: the active tab of a minimized or covered window is not a person looking, and the
+      // report clears OTHER devices' unread.
+      if (isWindowVisible()) seen.push({ sessionCode, cursor: cursorOf(event) })
     }
   }
   return patch
+}
+
+/** Is this window showing its page to a person (not minimized, not covered, not on another Space)? True where there is no document. */
+function isWindowVisible(): boolean {
+  return typeof document === 'undefined' || document.visibilityState !== 'hidden'
 }
 
 /** Report each seen-live event (after the state write: the reporter may read the store). */
