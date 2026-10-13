@@ -131,6 +131,13 @@ func (m *Module) handleRelayHello(w http.ResponseWriter, r *http.Request) {
 		if op.Kind == team.RelayKindMember {
 			resp.ActiveRelay.Lead = m.leadOf(op)
 		}
+	} else if ok && op.State == team.RelayAwaitingApproval {
+		// A final card nobody answered stays open for good (RT-2a1): a mod that reloaded holds no request for it and adopts it here.
+		if row, found, err := m.store.Get(op.RequestID); err != nil {
+			m.logf("[team] relay hello %s: card %s: %v", req.SessionID, op.RequestID, err)
+		} else if found && row.State == team.StateOpen && row.UnansweredAt > 0 {
+			resp.Waiting = &team.RelayWaiting{RequestID: row.ID, Op: op, UnansweredAt: row.UnansweredAt}
+		}
 	}
 	m.writeJSON(w, http.StatusOK, resp)
 }

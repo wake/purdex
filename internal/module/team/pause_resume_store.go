@@ -24,17 +24,21 @@ type ResumeScope struct {
 }
 
 func (sc ResumeScope) where() (string, []any) {
+	// relay_unanswered is never taken here: the session stops because a final card is unanswered and resumes only when that card is
+	// answered or ends - the close of the card removes it in its own transaction (RT-2a1, S-3). A person's release of such a session
+	// denies the card (RT-2a2).
+	const resumable = `cause IN ('quota', 'lead')`
 	switch {
 	case sc.Release != "":
 		// The members a lead took with it are the `lead` rows of ITS team and of the same on-period: a session id can lead another
 		// team later, and a stale row of an earlier team or on-period is not this release's (codex, UP-3b).
 		return `(session_id = ? OR (cause = 'lead' AND lead_session_id = ? AND team_id <> ''
-			AND EXISTS (SELECT 1 FROM session_pauses o WHERE o.session_id = ? AND o.team_id = session_pauses.team_id AND o.on_since = session_pauses.on_since)))`,
+			AND EXISTS (SELECT 1 FROM session_pauses o WHERE o.session_id = ? AND o.team_id = session_pauses.team_id AND o.on_since = session_pauses.on_since))) AND ` + resumable,
 			[]any{sc.Release, sc.Release, sc.Release}
 	case sc.All:
-		return "1", nil
+		return resumable, nil
 	}
-	return "on_since <> ?", []any{sc.OnSinceNot}
+	return "on_since <> ? AND " + resumable, []any{sc.OnSinceNot}
 }
 
 // ResumeResult says what a resume group did: the pause rows deleted and the sessions that are no longer paused at all.
@@ -203,7 +207,9 @@ func (s *Store) resumePausesIn(tx *sql.Tx, scope ResumeScope, at int64, newMod f
 }
 
 // bounceListIn is the text that lists the messages bounced to sid while it was paused, oldest first: "" when there were none.
-func bounceListIn(tx *sql.Tx, sid string) (string, error) {
+func bounceListIn(tx interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+}, sid string) (string, error) {
 	rows, err := tx.Query(`SELECT from_addr, at, first_line FROM pause_bounces WHERE session_id = ? ORDER BY at, from_addr, text_hash`, sid)
 	if err != nil {
 		return "", err

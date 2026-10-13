@@ -730,6 +730,10 @@ func (m *Module) closeWithOp(id string, cas func() (team.Approval, bool, error),
 // for an approval, afterApproved — on every path, so the side effects of
 // an approval live in one place.
 func (m *Module) announceClosed(after team.Approval, rep *RelayReport) {
+	if after.UnansweredAt > 0 {
+		// the close ended the session's relay_unanswered pause in its own transaction: the roster and the outbox follow
+		defer func() { m.rosterChanged(); m.kickPauseOutbox() }()
+	}
 	m.broadcast("closed", &after)
 	m.wake(after.ID)
 	m.unhold(after.ID) // closed, however: no longer waiting for quota

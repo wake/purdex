@@ -14,6 +14,9 @@ const PausedRoute = "/api/team/paused"
 const (
 	PauseCauseQuota = "quota" // the session's own relay found no quota
 	PauseCauseLead  = "lead"  // its lead was paused and the daemon paused its members with it
+	// PauseCauseUnanswered: the session's final relay ask (RelayLastAskPct) was not answered (RT-2a1): it stops working until a person
+	// answers, and members are not paused with it.
+	PauseCauseUnanswered = "relay_unanswered"
 )
 
 // Roles a paused session has: a lead of a live team, a live local member of one, or neither.
@@ -143,3 +146,17 @@ type PausePush struct {
 	TmuxSession string // the tmux session NAME the paused session runs in; "" when not in tmux
 	SinceMs     int64  // when the pause began (unix ms)
 }
+
+// The relay_unanswered pause (relay/team rules v2, RT-2a1): its texts, word for word.
+const (
+	PauseNoticeUnanswered = "[pdx team] 接力申請沒有回應，先暫停作業：手邊這一步收尾後不要開始新的工作，等使用者確認。"
+	// What the session is told when the pause ends, by how the card ended.
+	PauseResumedUnansweredApproved = "[pdx team] 接力已核准，恢復作業。"
+	PauseResumedUnansweredDenied   = "[pdx team] 使用者決定不接力，恢復作業；之後不會再申請。"
+	PauseResumedUnansweredEnded    = "[pdx team] 接力申請已結束，恢復作業。"
+	// PausePushUnansweredFmt is the phone's title; %s is the session's title or ref.
+	PausePushUnansweredFmt = "%s 已暫停：接力申請沒有回應，等你核准"
+	// What a message to the paused session is bounced with (RT-2a2): to a solo session or a lead, and to a member.
+	PauseBounceUnanswered       = "我目前暫停作業，等待使用者確認中"
+	PauseBounceUnansweredMember = "我目前暫停作業，等待 lead 確認中"
+)

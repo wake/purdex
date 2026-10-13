@@ -294,6 +294,14 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (pause ref / title): %w", err)
 	}
+	if err := migratePauseCauses(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (pause causes): %w", err)
+	}
+	if err := ensureColumn(db, "approval_requests", "unanswered_at", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (unanswered_at): %w", err)
+	}
 	return &Store{db: db}, nil
 }
 
@@ -301,7 +309,7 @@ func OpenStore(path string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 const selectCols = `id, kind, host_id, origin_json, payload_json, request_hash, state,
-	created_at, deadline_at, lease_until, decided_by_json, decided_at, grant_json, close_reason`
+	created_at, deadline_at, lease_until, decided_by_json, decided_at, grant_json, close_reason, unanswered_at`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
@@ -318,7 +326,7 @@ func scanRow(r rowScanner) (team.Approval, string, error) {
 	var hash, originJSON, payloadJSON string
 	var decidedBy, grant sql.NullString
 	if err := r.Scan(&a.ID, &a.Kind, &a.HostID, &originJSON, &payloadJSON, &hash, &a.State,
-		&a.CreatedAt, &a.DeadlineAt, &a.LeaseUntil, &decidedBy, &a.DecidedAt, &grant, &a.CloseReason); err != nil {
+		&a.CreatedAt, &a.DeadlineAt, &a.LeaseUntil, &decidedBy, &a.DecidedAt, &grant, &a.CloseReason, &a.UnansweredAt); err != nil {
 		return team.Approval{}, "", err
 	}
 	if err := json.Unmarshal([]byte(originJSON), &a.Origin); err != nil {
@@ -569,7 +577,15 @@ func (s *Store) closeWhere(id string, c Close, guard string, guardArg int64) (te
 	if found && kind == team.KindMemberRelay {
 		return s.closeMemberRelay(id, c, guard, guardArg) // the row and its op move in one transaction (RQ-2 §4.4)
 	}
-	n, err := closeRowIn(s.db, id, c, guard, guardArg)
+	tx, err := s.db.Begin() // a transaction: a close that ends an unanswered card's pause writes more than the row (RT-2a1)
+	if err != nil {
+		return team.Approval{}, false, fmt.Errorf("close approval %s: begin: %w", id, err)
+	}
+	defer tx.Rollback()
+	n, err := closeRowIn(tx, id, c, guard, guardArg)
+	if err == nil {
+		err = tx.Commit()
+	}
 	if err != nil {
 		return team.Approval{}, false, err
 	}
@@ -620,6 +636,13 @@ func closeRowIn(ex dbtx, id string, c Close, guard string, guardArg int64) (int6
 	n, err := res.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("close approval %s rows affected: %w", id, err)
+	}
+	if n == 1 {
+		// A final card the daemon left open because nobody answered (RT-2a1): its close ends the session's pause in the SAME
+		// transaction, whichever path closed it. Every caller that can close one holds a transaction.
+		if err := leaveUnansweredIn(ex, id, c); err != nil {
+			return 0, err
+		}
 	}
 	return n, nil
 }

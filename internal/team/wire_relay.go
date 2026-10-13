@@ -122,6 +122,21 @@ type SelfRelayPayload struct {
 	Person bool `json:"person,omitempty"`
 }
 
+// RelayLastAskPct is the context use at which a self-relay ask is the LAST one (relay/team rules v2, §4.2): from here an ask that
+// nobody answers pauses the session instead of timing out, whatever PDX_RELAY_THRESHOLD says.
+const RelayLastAskPct = 90
+
+// UnansweredDeadlineMs is the deadline_at of an unanswered final card: 9999-12-31, far enough to mean "none".
+const UnansweredDeadlineMs int64 = 253402300799000
+
+// RelayWaiting is the final card a reloaded mod must pick up again (RelayHelloResponse.Waiting): the session's open op
+// awaiting approval whose card is unanswered.
+type RelayWaiting struct {
+	RequestID    string  `json:"request_id"`
+	Op           RelayOp `json:"op"`
+	UnansweredAt int64   `json:"unanswered_at"`
+}
+
 // RelayHelloRequest is POST /api/relay/hello.
 type RelayHelloRequest struct {
 	SessionID  string `json:"session_id"`
@@ -145,6 +160,9 @@ type RelayHelloResponse struct {
 	// picks it up (written: /clear and seed; claimed / writing: failed, mod_reloaded). Absent for every other
 	// state, and from a daemon older than this field (the mod then behaves as before).
 	ActiveRelay *RelayClaimResponse `json:"active_relay,omitempty"`
+	// Waiting is this session's unanswered final card (RT-2a1): a mod that reloaded and holds no request adopts it again.
+	// Absent for an ordinary open card and from a daemon older than this field.
+	Waiting *RelayWaiting `json:"waiting,omitempty"`
 }
 
 // RelayBeginRequest is POST /api/relay/begin. It carries no model or
