@@ -133,6 +133,9 @@ func (m *Module) personClose(at int64) Close {
 // (no quota read or spent, the member check passes for a manual payload), announced closed only, then the session's pauses
 // end without a reask — the relay is the answer. Caller holds createMu.
 func (m *Module) beginPerson(w http.ResponseWriter, op team.RelayOp, row team.Approval, hash string) {
+	if !m.releasePausesForRelay(w, op.SessionID) {
+		return
+	}
 	after, claimed, err := m.store.CreateSelfRelayApproved(op, row, hash, m.personClose(row.CreatedAt))
 	switch {
 	case errors.Is(err, ErrMemberRelayIsLeads):
@@ -147,13 +150,15 @@ func (m *Module) beginPerson(w http.ResponseWriter, op team.RelayOp, row team.Ap
 	}
 	m.logf("[team] relay op %s claimed: self, origin=%s (%s), request %s approved by the person at begin", op.ID, op.Ref, op.SessionID, after.ID)
 	m.announceClosed(after, nil)
-	m.releasePausesForRelay(op.SessionID)
 	m.writeJSON(w, http.StatusCreated, team.RelayBeginResponse{Op: claimed, RequestID: after.ID})
 }
 
 // personApproveOpen approves the session's open self-relay card (awaiting approval) as the person: the card is answered by the
 // person's own /relay, not refused as "a relay is open". Caller holds createMu.
 func (m *Module) personApproveOpen(w http.ResponseWriter, sessionID string, op team.RelayOp) {
+	if !m.releasePausesForRelay(w, sessionID) {
+		return
+	}
 	row, ok, err := m.store.Get(op.RequestID)
 	if err != nil || !ok {
 		m.logf("[team] relay begin %s: card %s: ok=%v err=%v", sessionID, op.RequestID, ok, err)
@@ -170,7 +175,6 @@ func (m *Module) personApproveOpen(w http.ResponseWriter, sessionID string, op t
 		m.writeRelayOpen(w, sessionID) // the card closed another way first: a relay (or its end) is what the session has
 		return
 	}
-	m.releasePausesForRelay(sessionID)
 	cur, found, err := m.store.RelayOpByRequest(row.ID)
 	if err != nil || !found {
 		cur = op
@@ -178,9 +182,14 @@ func (m *Module) personApproveOpen(w http.ResponseWriter, sessionID string, op t
 	m.writeJSON(w, http.StatusCreated, team.RelayBeginResponse{Op: cur, RequestID: row.ID})
 }
 
-// releasePausesForRelay ends the pauses of a session its person relayed by hand, asking nothing again. Caller holds createMu.
-func (m *Module) releasePausesForRelay(sessionID string) {
+// releasePausesForRelay ends the pauses of a session its person is relaying by hand, asking nothing again; false (the answer
+// written) when it could not. It runs BEFORE the relay is written: a failure or a crash in between leaves a session that is
+// no longer paused and not yet relayed (the person types /relay again), never one relayed and paused for good. Caller holds createMu.
+func (m *Module) releasePausesForRelay(w http.ResponseWriter, sessionID string) bool {
 	if _, err := m.resumeScope(ResumeScope{Release: sessionID, NoReask: true}); err != nil {
-		m.logf("[team] release pauses of %s after its person's relay: %v", sessionID, err)
+		m.logf("[team] release pauses of %s before its person's relay: %v", sessionID, err)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return false
 	}
+	return true
 }

@@ -213,3 +213,36 @@ func TestPersonRelay_AReplayWithoutThePersonIsAConflict(t *testing.T) {
 		t.Fatalf("replay without the token: %d %s, want 409 %s", code, body, team.ErrBadRequest)
 	}
 }
+
+// The pauses end BEFORE the relay is written (codex R1): when they cannot, nothing is relayed, so no session is left relayed and
+// paused for good. Mutation gate: release after the relay → the op exists after the 500 (red).
+func TestPersonRelay_APauseThatCannotEndWritesNoRelay(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.m.store.db.Exec(`DROP TABLE pause_bounces`); err != nil { // ResumePauses' first statement now fails
+		t.Fatal(err)
+	}
+	tok := f.mintPerson("sid-1", team.PersonCmdRelay)
+	code, body := f.beginPerson("sid-1", tok.Token)
+	if code != http.StatusInternalServerError {
+		t.Fatalf("person begin with a pause that cannot end: %d %s, want 500", code, body)
+	}
+	if n := f.opCount(); n != 0 {
+		t.Fatalf("%d op(s) written, want none", n)
+	}
+	// the open-card path too
+	g := newFixture(t)
+	if code, body := g.beginRaw("sid-1"); code != http.StatusCreated {
+		t.Fatalf("card: %d %s", code, body)
+	}
+	if _, err := g.m.store.db.Exec(`DROP TABLE pause_bounces`); err != nil {
+		t.Fatal(err)
+	}
+	tok = g.mintPerson("sid-1", team.PersonCmdRelay)
+	if code, body := g.beginPerson("sid-1", tok.Token); code != http.StatusInternalServerError {
+		t.Fatalf("person begin over a card with a pause that cannot end: %d %s, want 500", code, body)
+	}
+	var open int
+	if err := g.m.store.db.QueryRow(`SELECT COUNT(*) FROM approval_requests WHERE state = 'open'`).Scan(&open); err != nil || open != 1 {
+		t.Fatalf("open rows = %d (%v), want the card still open", open, err)
+	}
+}
