@@ -37,8 +37,8 @@ func TestSettingsV2_Defaults(t *testing.T) {
 	assert.Equal(t, []int{80, 90, 30, 120, 20, 0, 900, 180, 600, 20, 0},
 		[]int{*e.MemWarnPct, *e.MemDangerPct, *e.GapS, *e.TrendWindowS, *e.TrendMemDPPM, *e.TrendCPUDPPM,
 			*e.ParkS, *e.AlertDangerS, *e.AlertStuckS, *e.AlertLeaseMemPct, *e.AlertPush})
-	// P1a changes no behaviour: the hold stays 300 until P2a.
-	assert.Equal(t, 300, *e.DeadlineS)
+	// P2a: deadline_s is the hold per call, 540 s (under the mod's 600 s cap).
+	assert.Equal(t, 540, *e.DeadlineS)
 }
 
 // v2Field is one new field with its range.

@@ -24,7 +24,7 @@ func TestHandlerGetEmpty(t *testing.T) {
 		"quickReplies":{"items":[],"revision":0},
 		"relay":{"items":{"self_solo":true,"self_lead":true},"revision":0},
 		"team":{"items":{"member_command":"claude --dangerously-skip-permissions"},"revision":0},
-		"resources":{"items":{"mode":"lease","kinds":{"build":35,"lint-full":10,"test-full":35,"test-pkg":15},"deadline_s":300,"warmup_s":20,"floor_pct":50,"max_hold_s":3600,"ewma_half_life_s":15,"heavy_min_weight":30,"mem_warn_pct":80,"mem_danger_pct":90,"gap_s":30,"trend_window_s":120,"trend_mem_dppm":20,"trend_cpu_dppm":0,"park_s":900,"alert_danger_s":180,"alert_stuck_s":600,"alert_lease_mem_pct":20,"alert_push":0},"revision":0},
+		"resources":{"items":{"mode":"lease","kinds":{"build":35,"lint-full":10,"test-full":35,"test-pkg":15},"deadline_s":540,"warmup_s":20,"floor_pct":50,"max_hold_s":3600,"ewma_half_life_s":15,"heavy_min_weight":30,"mem_warn_pct":80,"mem_danger_pct":90,"gap_s":30,"trend_window_s":120,"trend_mem_dppm":20,"trend_cpu_dppm":0,"park_s":900,"alert_danger_s":180,"alert_stuck_s":600,"alert_lease_mem_pct":20,"alert_push":0},"revision":0},
 		"relayQuota":{"items":{"rule":false},"revision":0},
 		"workbook":{"items":{"push_wait_s":8},"revision":0}
 	}`, rr.Body.String())

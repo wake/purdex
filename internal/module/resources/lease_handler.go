@@ -90,6 +90,13 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A process-scope request that names no session gets the one whose agent is
+	// among the holder's ancestors (`pdx lease run` sends none). Resolved before
+	// any lookup, so that a replay and a re-attach see the same session.
+	if req.Scope != resources.ScopeSessionNew && req.SessionID == "" {
+		req.SessionID = m.sessionOfProcess(r.Context(), req.HolderPID)
+	}
+
 	// A replay returns the row it made, whatever has become of it, but only to
 	// a request that is the one it was made for.
 	if row, ok, err := m.store.GetByClientID(req.ClientID); err != nil {
@@ -114,7 +121,7 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 	row := leaseRow{
 		ID: uuid.NewString(), ClientID: req.ClientID, State: resources.StateWaiting, Kind: req.Kind, Weight: weight,
 		SessionID: req.SessionID, HolderPID: req.HolderPID, HolderStart: req.HolderStart, Scope: req.Scope,
-		ToolUseID: req.ToolUseID, CreatedAt: now.UnixMilli(), DeadlineAt: now.Add(wait).UnixMilli(),
+		ToolUseID: req.ToolUseID, Parkable: req.Parkable, CreatedAt: now.UnixMilli(), DeadlineAt: now.Add(wait).UnixMilli(),
 		LeaseUntil: now.Add(resources.LeaseS * time.Second).UnixMilli(),
 	}
 	if row.Scope == "" {
@@ -134,6 +141,19 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+
+	// A call of a session that has a parked request of the same kind and weight
+	// takes that request over instead of making a new one (spec D-4′).
+	if adopted, ok := m.reattach(row); ok {
+		if adopted.State == resources.StateWaiting {
+			m.admissionPass(r.Context(), adopted.ID)
+			if again, found, err := m.store.Get(adopted.ID); err == nil && found {
+				adopted = again
+			}
+		}
+		writeJSON(w, http.StatusOK, m.leaseResponse(adopted, set, fallback))
+		return
 	}
 
 	m.stateMu.Lock()
@@ -180,7 +200,11 @@ func validHolderStart(s string) (code, detail string) {
 // request is the one it was made for (kind or weight, session, tool use, and
 // the holder unless the row is a session-new one), else 409 client_id_reused.
 func (m *Module) replay(w http.ResponseWriter, r *http.Request, req resources.LeaseRequest, row leaseRow, set resources.Settings) {
-	same := row.SessionID == req.SessionID && row.ToolUseID == req.ToolUseID
+	// A process row keeps the session found when it was made; a replay whose
+	// lookup finds none this time (the table changed, the registry is busy) is
+	// still the same request.
+	sessionOK := row.SessionID == req.SessionID || (req.SessionID == "" && row.Scope == resources.ScopeProcess)
+	same := sessionOK && row.ToolUseID == req.ToolUseID
 	if req.Kind != "" {
 		same = same && row.Kind == req.Kind
 	} else {
@@ -276,6 +300,14 @@ func (m *Module) handleLeaseGet(w http.ResponseWriter, r *http.Request) {
 		}
 		wait = min(n, resources.MaxPollS)
 	}
+	// The client that polls names itself. If the row has been taken over by a
+	// newer call (re-attach), the answer is "replaced" and nothing is renewed.
+	// An older client sends none and is treated as before.
+	cid := r.URL.Query().Get("client_id")
+	if cid != "" && !validClientID(cid) {
+		writeErr(w, http.StatusBadRequest, resources.ErrBadRequest, "client_id must be a lower-case UUID v4")
+		return
+	}
 	timer := time.NewTimer(time.Duration(wait) * time.Second)
 	defer timer.Stop()
 	final := false // the wait is over: answer with the row as it is now
@@ -286,7 +318,10 @@ func (m *Module) handleLeaseGet(w http.ResponseWriter, r *http.Request) {
 		m.stateMu.Lock()
 		row, ok, err := m.store.Get(id)
 		gen := m.genChan()
-		if err == nil && ok && row.State == resources.StateWaiting {
+		// A parked row is not renewed: its lease runs to the end of the park, and
+		// a poll that kept it alive would never let it expire.
+		replaced := err == nil && ok && cid != "" && row.ClientID != cid
+		if err == nil && ok && !replaced && row.State == resources.StateWaiting && row.ParkedUntil == 0 {
 			if rerr := m.store.RenewLease(id, m.now().Add(resources.LeaseS*time.Second).UnixMilli()); rerr != nil {
 				m.logf("[resources] renew lease %s: %v", id, rerr)
 			}
@@ -299,7 +334,10 @@ func (m *Module) handleLeaseGet(w http.ResponseWriter, r *http.Request) {
 		case !ok:
 			writeErr(w, http.StatusNotFound, resources.ErrNoLease, "no such lease")
 			return
-		case row.State != resources.StateWaiting || final:
+		case replaced:
+			writeJSON(w, http.StatusOK, resources.LeaseResponse{ID: row.ID, State: resources.StateReplaced, Mode: m.settings().Mode, Host: m.leaseHost()})
+			return
+		case row.State != resources.StateWaiting || final || row.ParkedUntil != 0:
 			writeJSON(w, http.StatusOK, m.leaseResponse(row, m.settings(), false))
 			return
 		}
@@ -404,6 +442,9 @@ func (m *Module) leaseResponse(row leaseRow, set resources.Settings, fallback bo
 		WaitedMS: row.WaitedMS, Host: m.leaseHost(), Mode: set.Mode, ScopeFallback: fallback, EndReason: row.EndReason,
 		Warning: m.warnFor(row),
 	}
+	if row.State == resources.StateWaiting && row.ParkedUntil != 0 {
+		resp.State, resp.ParkedUntil = resources.StateQueued, row.ParkedUntil
+	}
 	if set.Mode == resources.ModeAdvise {
 		ww := row.WouldWait
 		resp.WouldWait = &ww
@@ -420,4 +461,41 @@ func (m *Module) leaseResponse(row leaseRow, set resources.Settings, fallback bo
 		}
 	}
 	return resp
+}
+
+// reattach takes over the oldest parked row of the call's session with the same
+// kind and weight (never a waiting row that is not parked: two parallel calls
+// of a session are two requests). A lost compare-and-set tries the next one.
+// created_at is kept, so the row keeps its place. ok is false when there is
+// nothing to take over (or no session to match on).
+func (m *Module) reattach(n leaseRow) (leaseRow, bool) {
+	if n.SessionID == "" {
+		return leaseRow{}, false
+	}
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	now := m.now().UnixMilli()
+	cands, err := m.store.ParkedFor(n.SessionID, n.Kind, n.Weight, now)
+	if err != nil {
+		m.logf("[resources] re-attach: list parked leases: %v", err)
+		return leaseRow{}, false
+	}
+	for _, c := range cands {
+		won, err := m.store.Adopt(c, n, n.DeadlineAt, n.LeaseUntil, now)
+		if err != nil {
+			m.logf("[resources] re-attach: adopt %s: %v", c.ID, err)
+			return leaseRow{}, false
+		}
+		if !won {
+			continue
+		}
+		got, ok, err := m.store.Get(c.ID)
+		if err != nil || !ok {
+			return leaseRow{}, false
+		}
+		m.logf("[resources] lease %s (%s) re-attached by a new call of session %s", got.ID, got.Kind, got.SessionID)
+		m.wake() // the old client's poll answers "replaced"
+		return got, true
+	}
+	return leaseRow{}, false
 }

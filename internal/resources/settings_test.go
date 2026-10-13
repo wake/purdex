@@ -17,7 +17,7 @@ func TestSettings_EffectiveDefaults(t *testing.T) {
 	assert.Equal(t, "lease", d.Mode)
 	assert.Equal(t, map[string]int{"test-full": 35, "build": 35, "test-pkg": 15, "lint-full": 10}, d.Kinds)
 	require.NotNil(t, d.DeadlineS)
-	assert.Equal(t, 300, *d.DeadlineS)
+	assert.Equal(t, 540, *d.DeadlineS)
 	assert.Equal(t, 20, *d.WarmupS)
 	assert.Equal(t, 50, *d.FloorPct)
 	assert.Equal(t, 3600, *d.MaxHoldS)
@@ -26,7 +26,7 @@ func TestSettings_EffectiveDefaults(t *testing.T) {
 	assert.Equal(t, 30, Settings{}.HeavyMin())
 
 	var zero Settings
-	assert.Equal(t, 300*time.Second, zero.Deadline())
+	assert.Equal(t, 540*time.Second, zero.Deadline())
 	assert.Equal(t, 20*time.Second, zero.Warmup())
 	assert.Equal(t, 0.5, zero.Floor())
 	assert.Equal(t, time.Hour, zero.MaxHold())

@@ -359,6 +359,9 @@ func waitReasonText(q resources.WaiterView, now time.Time) string {
 	if !ok {
 		name = strconv.QuoteToASCII(q.Reason)
 	}
+	if q.Reason == "parked" && q.ParkedUntil > 0 {
+		return name + "，到 " + time.UnixMilli(q.ParkedUntil).In(now.Location()).Format("15:04")
+	}
 	if q.ReasonSince > 0 {
 		name += " " + shortSeconds((now.UnixMilli()-q.ReasonSince)/1000)
 	}

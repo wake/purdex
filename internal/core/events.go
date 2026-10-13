@@ -52,6 +52,15 @@ const FeatureNexV1 = "nex.v1"
 // keeps its per-session replay, and keeps its best effort.
 const FeatureAgentV2 = "agent.v2"
 
+// FeatureReadsV1 is the opt-in to the read-sync frames (badge spec §7.2, BG-4): one session.reads snapshot on connect and a
+// session.read frame per accepted read. A client asks for it with /ws/host-events?reads=v1, alone or with the others.
+//
+// Unlike FeatureNexV1 and FeatureAgentV2 it does NOT make the subscriber strict for every frame. Only the two read frames are
+// strict (BroadcastStrictTo / SendStrict: a full buffer closes the connection, whose reconnect brings a fresh snapshot, so a
+// read is never silently lost); every other frame keeps the best effort it had, and a connection that did not opt in is
+// never sent a read frame. It still gets the burst-sized buffer of any opt-in.
+const FeatureReadsV1 = "reads.v1"
+
 const (
 	// defaultSendBuffer is a subscriber's send buffer, in frames.
 	defaultSendBuffer = 64
@@ -538,7 +547,7 @@ func (eb *EventsBroadcaster) OnSubscribe(fn func(sub *EventSubscriber)) {
 // while ?nex=v2&nex=v1 would not; an ambiguous request gets the conservative
 // answer instead, since opting in changes what the connection is sent and
 // when it is closed. A bad value for one feature leaves the other alone.
-// The result is in a fixed order: nex first, agent second.
+// reads is read the same way (exactly "v1"). The result is in a fixed order: nex, agent, reads.
 func featuresOf(r *http.Request) []string {
 	q := r.URL.Query()
 	var features []string
@@ -547,6 +556,9 @@ func featuresOf(r *http.Request) []string {
 	}
 	if agent := q["agent"]; len(agent) == 1 && agent[0] == "v2" {
 		features = append(features, FeatureAgentV2)
+	}
+	if reads := q["reads"]; len(reads) == 1 && reads[0] == "v1" {
+		features = append(features, FeatureReadsV1)
 	}
 	return features
 }

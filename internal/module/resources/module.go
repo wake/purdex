@@ -44,6 +44,9 @@ type Module struct {
 	// procSnapshot reads the process table once per tick, for the roots'
 	// liveness; a seam so tests fork nothing.
 	procSnapshot func(ctx context.Context) (*iagent.ProcessSnapshot, error)
+	// ancestryOf turns the process snapshot into the parent/start lookup of
+	// session_attr.go; nil uses the snapshot itself (a seam for tests).
+	ancestryOf func(*iagent.ProcessSnapshot) ancestry
 
 	// latest is the last published snapshot; nil until the first tick ends.
 	// A published snapshot is never modified.

@@ -84,6 +84,7 @@ func (m *Module) addLeases(snap *resources.Snapshot) {
 			ID: w.ID, Kind: w.Kind, Weight: w.Weight, SessionID: w.SessionID, Position: i + 1,
 			WaitedS: max(0, (nowMs-w.CreatedAt)/1000), DeadlineInS: max(0, (w.DeadlineAt-nowMs)/1000),
 		}
+		view.ParkedUntil = w.ParkedUntil
 		if rv, ok := reasons[w.ID]; ok {
 			view.Reason, view.ReasonSince = string(rv.Reason), rv.Since.UnixMilli()
 		}

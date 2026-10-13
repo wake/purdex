@@ -37,6 +37,7 @@ import (
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	profilesmod "github.com/wake/purdex/internal/module/profiles"
 	pushmod "github.com/wake/purdex/internal/module/push"
+	readsmod "github.com/wake/purdex/internal/module/reads"
 	resourcesmod "github.com/wake/purdex/internal/module/resources"
 	"github.com/wake/purdex/internal/module/session"
 	teammod "github.com/wake/purdex/internal/module/team"
@@ -501,6 +502,10 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	// workbook (session summaries, spec 2026-10-09-session-workbook) is always mounted: one small file, and it soft-fails
 	// like devices. It reads the agent's turn ends, the team's seats, the conversation's turns and the host settings.
 	c.AddModule(workbookmod.New())
+
+	// reads (badge spec §7, read sync) is always mounted: it keeps only memory. It serves POST /api/sessions/{code}/read and the
+	// reads=v1 frames; the push module reads its feed.
+	c.AddModule(readsmod.New())
 
 	return nil
 }

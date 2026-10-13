@@ -63,6 +63,13 @@ type leaseRow struct {
 	// Baseline is a JSON array of {pid, start_unix_ms}: the processes a
 	// session-new lease does not own. NULL (empty) until P1-2b records it.
 	Baseline string
+	// Parks is how often the row was parked; ParkedUntil is when the current
+	// park ends (0: not parked). While parked the row keeps its place but is
+	// never granted (lease v2 spec D-4′).
+	Parks       int
+	ParkedUntil int64
+	// Parkable: the creating client reads "queued" and "replaced".
+	Parkable bool
 }
 
 // leaseStore is the SQLite persistence of resource_leases (resources.db).
@@ -150,18 +157,19 @@ func (s *leaseStore) Close() error { return s.db.Close() }
 const leaseCols = `id, client_id, state, kind, weight, session_id, holder_pid, holder_start, scope, tool_use_id,
 	created_at, deadline_at, lease_until, COALESCE(granted_at,0), COALESCE(ended_at,0),
 	overrun, would_wait, COALESCE(end_reason,''), COALESCE(waited_ms,0),
-	COALESCE(peak_use,0), COALESCE(mean_use,0), COALESCE(ewma,0), samples, empty_samples, COALESCE(baseline,'')`
+	COALESCE(peak_use,0), COALESCE(mean_use,0), COALESCE(ewma,0), samples, empty_samples, COALESCE(baseline,''),
+	parks, parked_until, parkable`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
 func scanLease(sc rowScanner) (leaseRow, error) {
 	var r leaseRow
-	var overrun, wouldWait int
+	var overrun, wouldWait, parkable int
 	err := sc.Scan(&r.ID, &r.ClientID, &r.State, &r.Kind, &r.Weight, &r.SessionID, &r.HolderPID, &r.HolderStart,
 		&r.Scope, &r.ToolUseID, &r.CreatedAt, &r.DeadlineAt, &r.LeaseUntil, &r.GrantedAt, &r.EndedAt,
 		&overrun, &wouldWait, &r.EndReason, &r.WaitedMS,
-		&r.PeakUse, &r.MeanUse, &r.EWMA, &r.Samples, &r.EmptySamples, &r.Baseline)
-	r.Overrun, r.WouldWait = overrun != 0, wouldWait != 0
+		&r.PeakUse, &r.MeanUse, &r.EWMA, &r.Samples, &r.EmptySamples, &r.Baseline, &r.Parks, &r.ParkedUntil, &parkable)
+	r.Overrun, r.WouldWait, r.Parkable = overrun != 0, wouldWait != 0, parkable != 0
 	return r, err
 }
 
@@ -178,11 +186,11 @@ func nullable(s string) any {
 func (s *leaseStore) Create(r leaseRow) (leaseRow, bool, error) {
 	res, err := s.db.Exec(`
 		INSERT INTO resource_leases (id, client_id, state, kind, weight, session_id, holder_pid, holder_start,
-			scope, tool_use_id, created_at, deadline_at, lease_until, baseline)
-		VALUES (?, ?, 'waiting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			scope, tool_use_id, created_at, deadline_at, lease_until, baseline, parkable)
+		VALUES (?, ?, 'waiting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (client_id) DO NOTHING`,
 		r.ID, r.ClientID, r.Kind, r.Weight, r.SessionID, r.HolderPID, r.HolderStart,
-		r.Scope, r.ToolUseID, r.CreatedAt, r.DeadlineAt, r.LeaseUntil, nullable(r.Baseline))
+		r.Scope, r.ToolUseID, r.CreatedAt, r.DeadlineAt, r.LeaseUntil, nullable(r.Baseline), b2i(r.Parkable))
 	if err != nil {
 		return leaseRow{}, false, fmt.Errorf("create lease: %w", err)
 	}
@@ -319,6 +327,41 @@ func (s *leaseStore) SetShadow(id string, waitMS int64, open bool, waitReasons s
 	return nil
 }
 
+// Park parks a waiting row: it keeps its place, is never granted while parked,
+// and its lease runs to the end of the park. One compare-and-set on the state,
+// on not being parked yet and on the deadline the caller read (a row that was
+// re-attached in between has a new deadline and is left alone).
+func (s *leaseStore) Park(id string, deadlineAt, until int64) (bool, error) {
+	return s.changed(`
+		UPDATE resource_leases
+		SET parked_until = ?, lease_until = ?, parks = parks + 1
+		WHERE id = ? AND state = 'waiting' AND parked_until = 0 AND deadline_at = ?`, until, until, id, deadlineAt)
+}
+
+// ParkedFor lists the parked rows of a session with the same kind and weight,
+// oldest request first: what a new call of that session may take over.
+//
+// A park that has ended (parked_until <= now) keeps its place no more: the row is
+// the sweeper's to abandon, and a call that arrives in between makes a new one.
+func (s *leaseStore) ParkedFor(sessionID, kind string, weight int, now int64) ([]leaseRow, error) {
+	return s.many(`SELECT `+leaseCols+` FROM resource_leases
+		WHERE state = 'waiting' AND parked_until > ? AND session_id = ? AND kind = ? AND weight = ?
+		ORDER BY created_at, id`, now, sessionID, kind, weight)
+}
+
+// Adopt gives a parked row to a new call, by one compare-and-set on the old
+// client id and on the row still being parked: the new client id, holder, tool
+// use and scope replace the old ones, the park ends, and the deadline and the
+// lease start again. created_at stays, so the place in the queue does.
+func (s *leaseStore) Adopt(old leaseRow, n leaseRow, deadlineAt, leaseUntil, now int64) (bool, error) {
+	return s.changed(`
+		UPDATE resource_leases
+		SET client_id = ?, holder_pid = ?, holder_start = ?, tool_use_id = ?, scope = ?, parkable = ?,
+			parked_until = 0, deadline_at = ?, lease_until = ?
+		WHERE id = ? AND state = 'waiting' AND client_id = ? AND parked_until > ?`,
+		n.ClientID, n.HolderPID, n.HolderStart, n.ToolUseID, n.Scope, b2i(n.Parkable), deadlineAt, leaseUntil, old.ID, old.ClientID, now)
+}
+
 // MaxGrantedAt is the newest granted_at of any row, held or ended (0 when
 // nothing was ever granted): where the gap between two grants is counted from
 // after a restart.
@@ -331,11 +374,13 @@ func (s *leaseStore) MaxGrantedAt() (int64, error) {
 }
 
 // ExtendWaiting is the boot grace: every waiting row's lease becomes
-// max(lease_until, until). It returns how many rows changed.
+// max(lease_until, until). A parked row is left alone: its lease is its park,
+// which ends when it ends whatever the daemon did meanwhile. It returns how many
+// rows changed.
 func (s *leaseStore) ExtendWaiting(until int64) (int64, error) {
 	res, err := s.db.Exec(`
 		UPDATE resource_leases SET lease_until = ?
-		WHERE state = 'waiting' AND lease_until < ?`, until, until)
+		WHERE state = 'waiting' AND parked_until = 0 AND lease_until < ?`, until, until)
 	if err != nil {
 		return 0, fmt.Errorf("extend waiting leases: %w", err)
 	}
@@ -493,6 +538,8 @@ var decisionColumns = []struct{ name, def string }{
 	{"dec_running", "INTEGER NOT NULL DEFAULT 0"},
 	{"dec_gap_ms", "INTEGER NOT NULL DEFAULT 0"},
 	{"parks", "INTEGER NOT NULL DEFAULT 0"},
+	{"parked_until", "INTEGER NOT NULL DEFAULT 0"},
+	{"parkable", "INTEGER NOT NULL DEFAULT 0"},
 	{"wait_reasons", "TEXT NOT NULL DEFAULT ''"},
 	// The advise shadow queue (P1c): how long v2 would have made the request
 	// wait (-1: not recorded), and whether that is only a lower bound because
