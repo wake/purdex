@@ -1,6 +1,7 @@
 // spa/src/lib/notification-click.ts — what a click on a desktop notification does, per action kind (open-session /
 // open-host / open-approval); moved from hooks/useNotificationDispatcher.ts (#1690).
 import { useAgentStore } from '../stores/useAgentStore'
+import { markReadByUser } from './read-sync/user-read'
 import { useNotificationSettingsStore } from '../stores/useNotificationSettingsStore'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
@@ -45,12 +46,12 @@ export function handleNotificationClick(action: NotificationAction): void {
       } else if (isNonTmuxAgentCode(sessionCode)) {
         // A session outside tmux has no tab and never gets one (its code is not a tmux code): the click only clears
         // the unread mark and brings the app to the front.
-        useAgentStore.getState().markRead(hostId, sessionCode)
+        markReadByUser(hostId, sessionCode)
         window.electronAPI?.focusMyWindow?.()
       } else if (isExecAgentCode(sessionCode)) {
         // A worker with no open tab: never reopen it as a tmux tab (an exec key is not a tmux code). Nothing to
         // focus, so only the unread mark is cleared (worker-pane theme spec §8.2).
-        useAgentStore.getState().markRead(hostId, sessionCode)
+        markReadByUser(hostId, sessionCode)
       } else if (agentSettings.reopenTabOnClick) {
         const session = useSessionStore.getState().sessions[hostId]?.find(s => s.code === sessionCode)
         const sessionName = session?.name ?? ''
@@ -67,7 +68,7 @@ export function handleNotificationClick(action: NotificationAction): void {
       }
 
       if (handled) {
-        useAgentStore.getState().markRead(hostId, sessionCode)
+        markReadByUser(hostId, sessionCode)
       }
       if (handled && window.electronAPI?.focusMyWindow) {
         window.electronAPI.focusMyWindow()
