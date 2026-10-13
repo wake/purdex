@@ -49,7 +49,7 @@ func TestSnapshot_JSONShape(t *testing.T) {
 	want := `{"sampled_at":"2026-10-09T03:04:05Z","available":true,"capacity":100,` +
 		`"host":{"measured":90,"cpu":17.5,"mem":76.25,"load1":1.75,"ncpu":10,` +
 		`"mem_bytes":17179869184,"mem_used_bytes":13100000000,"pressure":2,` +
-		`"memorystatus_level":48,"pcpu_total":312.5,"full":true},` +
+		`"memorystatus_level":48,"pcpu_total":312.5,"full":true,"zone":"","trend":"","zone_since":0},` +
 		`"sessions":[{"session_id":"s-1","pid":4242,"tmux":"work","cwd":"/tmp/x",` +
 		`"cpu":12.5,"mem":3.5,"use":13,"rss_bytes":600000000,"pcpu":125,"procs":6}],` +
 		`"mode":"measure"}`
