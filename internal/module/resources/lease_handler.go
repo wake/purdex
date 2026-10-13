@@ -90,6 +90,13 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A process-scope request that names no session gets the one whose agent is
+	// among the holder's ancestors (`pdx lease run` sends none). Resolved before
+	// any lookup, so that a replay and a re-attach see the same session.
+	if req.Scope != resources.ScopeSessionNew && req.SessionID == "" {
+		req.SessionID = m.sessionOfProcess(r.Context(), req.HolderPID)
+	}
+
 	// A replay returns the row it made, whatever has become of it, but only to
 	// a request that is the one it was made for.
 	if row, ok, err := m.store.GetByClientID(req.ClientID); err != nil {
@@ -180,7 +187,11 @@ func validHolderStart(s string) (code, detail string) {
 // request is the one it was made for (kind or weight, session, tool use, and
 // the holder unless the row is a session-new one), else 409 client_id_reused.
 func (m *Module) replay(w http.ResponseWriter, r *http.Request, req resources.LeaseRequest, row leaseRow, set resources.Settings) {
-	same := row.SessionID == req.SessionID && row.ToolUseID == req.ToolUseID
+	// A process row keeps the session found when it was made; a replay whose
+	// lookup finds none this time (the table changed, the registry is busy) is
+	// still the same request.
+	sessionOK := row.SessionID == req.SessionID || (req.SessionID == "" && row.Scope == resources.ScopeProcess)
+	same := sessionOK && row.ToolUseID == req.ToolUseID
 	if req.Kind != "" {
 		same = same && row.Kind == req.Kind
 	} else {
