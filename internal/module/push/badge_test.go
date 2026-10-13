@@ -51,7 +51,8 @@ func unpushed(id string) team.Approval {
 	return a
 }
 
-// The count is the reader's open set at send time: 3 open, one terminal_only ask and one unpushed kind do not count.
+// The count is the reader's open set at send time: all 3 open cards count (BG-1a: a terminal_only ask and a permission card
+// count too, though neither gets a visible push).
 func TestBadge_CountComesFromTheReaderAtSendTime(t *testing.T) {
 	te := newTriggerEnv(t, nil)
 	te.register(tokA, "en", "mlab")
@@ -60,8 +61,8 @@ func TestBadge_CountComesFromTheReaderAtSendTime(t *testing.T) {
 	}
 	te.events.emit("opened", leadApproval("ap1"))
 	p := te.waitSends(t, 1)[0].Payload
-	if n, ok := payloadOf(t, p); !ok || n != 1 {
-		t.Fatalf("open_approvals = %d (present %v), want 1: %s", n, ok, p)
+	if n, ok := payloadOf(t, p); !ok || n != 3 {
+		t.Fatalf("open_approvals = %d (present %v), want 3: %s", n, ok, p)
 	}
 	t.Logf("known: %s", p)
 }
@@ -158,21 +159,21 @@ func TestKeys_SameSessionDedupedAndNoTmuxUsesApprovalID(t *testing.T) {
 		return []team.Approval{
 			withTmux(leadApproval("ap1"), "dev:@1.%2"), withTmux(badgeAsk("a2", false), "dev:@1.%3"),
 			withTmux(leadApproval("ap3"), "ops:@1.%2"),
-			withTmux(leadApproval("ap4"), ""),           // no tmux -> a:ap4
-			withTmux(leadApproval("ap5"), "gone:@1.%2"), // session gone -> a:ap5
-			withTmux(badgeAsk("t1", true), "dev:@1.%9"), // terminal_only: excluded
-			withTmux(unpushed("p1"), "other:@1.%1"),     // unpushed kind: excluded
+			withTmux(anonLead("ap4"), ""),                   // no tmux -> a:ap4
+			withTmux(anonLead("ap5"), "gone:@1.%2"),         // session gone -> a:ap5
+			withTmux(badgeAsk("t1", true), "dev:@1.%9"),     // terminal_only: counts too (BG-1a), under dev's s: key
+			withTmux(anonOf(unpushed("p1")), "other:@1.%1"), // hook_permission: counts (BG-1a); unresolved, no session id -> a:p1
 		}, nil
 	}
 	te.events.emit("opened", leadApproval("ap1"))
 	p := te.waitSends(t, 1)[0].Payload
 	keys, ok := keysOf(t, p)
-	want := []string{"a:ap4", "a:ap5", "s:c0de01", "s:c0de02"}
+	want := []string{"a:ap4", "a:ap5", "a:p1", "s:c0de01", "s:c0de02"}
 	if !ok || strings.Join(keys, ",") != strings.Join(want, ",") {
 		t.Fatalf("keys = %v (present %v), want %v: %s", keys, ok, want, p)
 	}
-	if n, _ := payloadOf(t, p); n != 5 {
-		t.Fatalf("open_approvals = %d, want 5", n)
+	if n, _ := payloadOf(t, p); n != 7 {
+		t.Fatalf("open_approvals = %d, want 7", n)
 	}
 	t.Logf("sample: %s", p)
 }
@@ -193,7 +194,7 @@ func TestKeys_CapAt32KeepsFullCountAndPayloadFits(t *testing.T) {
 	te.register(tokA, "en", "mlab")
 	var open []team.Approval
 	for i := 0; i < 40; i++ {
-		open = append(open, withTmux(leadApproval(fmt.Sprintf("ap%02d", i)), ""))
+		open = append(open, withTmux(anonLead(fmt.Sprintf("ap%02d", i)), ""))
 	}
 	te.events.readOpen = func() ([]team.Approval, error) { return open, nil }
 	big := leadApproval("ap00")

@@ -3,11 +3,13 @@ package push
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/push"
+	"github.com/wake/purdex/internal/team"
 	"github.com/wake/purdex/internal/workbooklines"
 	"github.com/wake/purdex/internal/workbooksettings"
 )
@@ -37,6 +39,14 @@ func (m *Module) onNotify(ev agent.NotifyEvent) {
 		Silent: ev.Event.Detail["notification_silent"] == true, ErrorString: jsString(ev.Event.Detail["error"]),
 	}
 	content := push.AgentInput{SessionCode: ev.SessionCode, SessionID: ev.SessionID, SessionName: ev.SessionName, EventName: ev.Event.RawEventName, Detail: ev.Event.Detail}
+	// Team membership (badge spec §3.1) is read once for the event, before the device loop. A read error is "member,
+	// unknown": the gate applies the member rule (the quieter side) and the payload does not announce it.
+	member, err := m.memberOf(ev.SessionID, ev.Event.Status)
+	if err != nil {
+		log.Printf("[push] could not read the team membership of %s: %v (gated as a member, not announced)", ev.SessionCode, err)
+	}
+	in.Member = member || err != nil
+	content.Member = member && err == nil
 	// Rules 0-7 first, for every frame: freshness (rule 0) records a probe's or sweep's newer timestamp too, so an older
 	// frame that arrives late is not pushed behind it. Rule 9 (there is something to say) comes last, as in the spec.
 	// Rule 4′ (PA-1 §4.2): a person at the computer gets no phone push; else an older App's window that shows the session.
@@ -98,6 +108,30 @@ func (m *Module) onNotify(ev agent.NotifyEvent) {
 	}) {
 		send()
 	}
+}
+
+// memberOf is whether the Claude Code session is a team member (team.MembershipReader). No session id, or a frame the gate
+// drops by status anyway (rule 1: only waiting, idle and error can push), is not asked. No reader (no team module) means no
+// teams: not a member. The reader is looked up each time, so start order does not matter.
+func (m *Module) memberOf(sessionID, status string) (bool, error) {
+	if sessionID == "" || (status != "waiting" && status != "idle" && status != "error") {
+		return false, nil
+	}
+	if m.membership != nil {
+		return m.membership(sessionID)
+	}
+	if m.core == nil || m.core.Registry == nil {
+		return false, nil
+	}
+	svc, ok := m.core.Registry.Get(team.MembershipReaderKey)
+	if !ok {
+		return false, nil
+	}
+	r, ok := svc.(team.MembershipReader)
+	if !ok {
+		return false, nil
+	}
+	return r.Membership(sessionID)
 }
 
 // jsString mirrors the Mac's String(detail.error, defaulting to an empty text): "" for nothing, the text for a string,

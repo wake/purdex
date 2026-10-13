@@ -18,10 +18,10 @@ func TestSnapshot_AtMostOneOutstandingSessionRead(t *testing.T) {
 	te.mod.sessions = rc.read
 	te.mod.sessBudget = 30 * time.Millisecond
 	te.register(tokA, "en", "mlab")
-	te.events.readOpen = func() ([]team.Approval, error) { return []team.Approval{leadApproval("ap1")}, nil }
+	te.events.readOpen = func() ([]team.Approval, error) { return []team.Approval{anonLead("ap1")}, nil }
 	for i := 1; i <= 4; i++ {
 		start := time.Now()
-		te.events.emit("opened", leadApproval("ap1"))
+		te.events.emit("opened", anonLead("ap1"))
 		calls := te.waitSends(t, i)
 		if d := time.Since(start); d > time.Second {
 			t.Fatalf("job %d took %v", i, d)
@@ -44,7 +44,7 @@ func TestSnapshot_AtMostOneOutstandingSessionRead(t *testing.T) {
 			t.Fatalf("no new read after the stuck one returned (reads = %d)", rc.count())
 		}
 		sent++
-		te.events.emit("opened", leadApproval("ap1"))
+		te.events.emit("opened", anonLead("ap1"))
 		te.waitSends(t, sent)
 	}
 }

@@ -47,12 +47,14 @@ func TestHandleInfo_PushCapabilityFollowsReadiness(t *testing.T) {
 
 	ready := &pushStub{stubModule{name: "push"}, map[string]any{"ready": true, "init_error": ""}}
 	with := infoOf(t, pushCore("/keys", ready))["capabilities"].([]any)
-	assert.Equal(t, append(append([]any{}, static...), "push.v1", "push.presence.v2"), with, "appended after the static list, which is unchanged")
+	assert.Equal(t, append(append([]any{}, static...), "push.v1", "push.presence.v2", "push.badge.v2"), with, "appended after the static list, which is unchanged")
 
 	broken := &pushStub{stubModule{name: "push"}, map[string]any{"ready": false, "init_error": "push: apns key file cannot be read"}}
 	assert.NotContains(t, infoOf(t, pushCore("/keys", broken))["capabilities"], "push.v1", "mounted but not ready")
 	assert.NotContains(t, infoOf(t, pushCore("/keys", broken))["capabilities"], "push.presence.v2", "mounted but not ready")
 	assert.NotContains(t, static, "push.presence.v2", "no push module, no capability")
+	assert.NotContains(t, infoOf(t, pushCore("/keys", broken))["capabilities"], "push.badge.v2", "mounted but not ready")
+	assert.NotContains(t, with, "push.badge_bg.v1", "BG-1b's capability is not announced by BG-1a")
 }
 
 func TestHandleInfo_PushBlock(t *testing.T) {

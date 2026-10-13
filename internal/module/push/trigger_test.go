@@ -74,6 +74,20 @@ func leadApproval(id string) team.Approval {
 		Origin: team.Origin{SessionID: "sid-1", Ref: "_abc123", Name: "worker-1", Tmux: "dev:@1.%2"}}
 }
 
+// anonLead is a lead approval whose origin has no Claude Code session id: its badge key can only be s: or a:, never c:
+// (the tests of the a: fallback use it; leadApproval's sid-1 would make it c:sid-1).
+func anonLead(id string) team.Approval {
+	a := leadApproval(id)
+	a.Origin.SessionID = ""
+	return a
+}
+
+// anonOf clears the origin's session id of a.
+func anonOf(a team.Approval) team.Approval {
+	a.Origin.SessionID = ""
+	return a
+}
+
 // triggerEnv is a ready module with a fake APNs and a fake approval feed, started.
 type triggerEnv struct {
 	*env
