@@ -99,14 +99,13 @@ func TestNotice_AdoptFromTheLeadsInbox(t *testing.T) {
 	}
 }
 
-// Decision 2's paths plus the tick: each adopt approval kicks the drain (afterApproved) and is told exactly once.
+// Decision 2's paths (a click and the person's two): each adopt approval kicks the drain (afterApproved) and is told exactly once.
 // Mutation gate: skip kickNotices in afterApproved → the kick assertion is red on every path.
 func TestNotice_EveryApprovePathSends(t *testing.T) {
 	paths := map[string]func(f *fixture){
-		"click":  func(f *fixture) { f.adoptOK(uid(10), "_def456"); f.decide(uid(10), "approve") },
-		"create": func(f *fixture) { f.unatt.set(true); f.adoptOK(uid(10), "_def456") },
-		"sweep":  func(f *fixture) { f.adoptOK(uid(10), "_def456"); f.unatt.set(true); f.sweep() },
-		"tick":   func(f *fixture) { f.adoptOK(uid(10), "_def456"); f.unatt.set(true); f.m.tick() },
+		"click":            func(f *fixture) { f.adoptOK(uid(10), "_def456"); f.decide(uid(10), "approve") },
+		"person-create":    func(f *fixture) { f.personAdopt = true; f.adoptOK(uid(10), "_def456") },
+		"person-over-open": func(f *fixture) { f.adoptOK(uid(10), "_def456"); f.personAdopt = true; f.adoptOK(uid(11), "_def456") },
 	}
 	for name, run := range paths {
 		t.Run(name, func(t *testing.T) {
@@ -129,11 +128,12 @@ func TestNotice_EveryApprovePathSends(t *testing.T) {
 		})
 	}
 	t.Run("boot", func(t *testing.T) {
+		// a member already adopted and owed its notice when the daemon starts: the drain goroutine sends it
 		f := newFixture(t)
 		f.approveLead(uid(1))
 		f.adoptOK(uid(10), "_def456")
-		f.unatt.set(true)
-		if err := f.m.Start(context.Background()); err != nil { // the boot sweep approves; the drain goroutine sends
+		f.decide(uid(10), "approve")
+		if err := f.m.Start(context.Background()); err != nil {
 			t.Fatal(err)
 		}
 		waitFor(t, func() bool { return len(f.sender.calls()) == 1 })
