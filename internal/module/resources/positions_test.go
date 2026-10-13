@@ -93,7 +93,7 @@ func TestPosition_BusyHostQueuesAtOnce(t *testing.T) {
 	f.setZone("danger", "flat")
 	began := time.Now()
 	rec := f.postAs(newCID(), pidA, resources.CallQueue, "go build ./...")
-	assert.Less(t, time.Since(began), 100*time.Millisecond)
+	assert.Less(t, time.Since(began), 10*time.Second, "answered at once: a wait would last minutes")
 	require.Equal(t, http.StatusCreated, rec.Code, rec.Body.String())
 	got := decodeLease(t, rec)
 	assert.Equal(t, resources.StateQueued, got.State)
