@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -172,6 +173,9 @@ func printLeaseTable(stdout, stderr io.Writer, snap resources.Snapshot) int {
 		return ExitOK
 	}
 	h := snap.Host
+	if h.Zone != "" { // a daemon from before lease v2 has no zone
+		fmt.Fprintln(stdout, hostStatusLine(snap, leaseNow()))
+	}
 	line := fmt.Sprintf("host  %d/%d  load %.2f/%d  mem %.0f%%  pressure %s",
 		h.Measured, snap.Capacity, h.Load1, h.NCPU, h.Mem, pressureName(h.Pressure))
 	if h.Full {
@@ -249,10 +253,22 @@ func printLeaseSections(w io.Writer, snap resources.Snapshot) error {
 		}
 	}
 	if len(snap.Waiters) > 0 {
-		rows := [][]string{{"WAITERS", "SESSION", "KIND", "WEIGHT", "WAITED", "DEADLINE IN"}}
+		header := []string{"WAITERS", "SESSION", "KIND", "WEIGHT", "WAITED", "DEADLINE IN"}
+		withReason := false
 		for _, q := range snap.Waiters {
-			rows = append(rows, []string{fmt.Sprintf("#%d", q.Position), cell(shortSession(q.SessionID)), cell(q.Kind),
-				fmt.Sprint(q.Weight), shortSeconds(q.WaitedS), shortSeconds(q.DeadlineInS)})
+			withReason = withReason || q.Reason != ""
+		}
+		if withReason {
+			header = append(header, "REASON")
+		}
+		rows := [][]string{header}
+		for _, q := range snap.Waiters {
+			row := []string{fmt.Sprintf("#%d", q.Position), cell(shortSession(q.SessionID)), cell(q.Kind),
+				fmt.Sprint(q.Weight), shortSeconds(q.WaitedS), shortSeconds(q.DeadlineInS)}
+			if withReason {
+				row = append(row, waitReasonText(q, leaseNow()))
+			}
+			rows = append(rows, row)
 		}
 		fmt.Fprintln(w)
 		if err := alignRows(w, rows, 2); err != nil {
@@ -304,4 +320,47 @@ func humanBytes(b uint64) string {
 		return fmt.Sprintf("%.1fG", float64(b)/gib)
 	}
 	return fmt.Sprintf("%.0fM", float64(b)/mib)
+}
+
+// zoneText, trendText and the wait reasons in Chinese, as `pdx lease ls` shows them.
+var (
+	zoneText   = map[string]string{"normal": "一般", "warning": "警戒", "danger": "危險", "unknown": "未知"}
+	trendText  = map[string]string{"rising": "上升", "flat": "持平", "falling": "下降", "unknown": "未知"}
+	reasonText = map[string]string{
+		"gap": "間隔中", "danger": "危險區", "warning_flat": "警戒且持平",
+		"rising": "用量上升", "behind": "排在後面", "cut": "等待基準", "parked": "保留中",
+	}
+)
+
+// hostStatusLine is the first line of `pdx lease ls` under lease v2: the zone,
+// where the usage is heading and how much of the pause after the last grant is
+// left.
+func hostStatusLine(snap resources.Snapshot, now time.Time) string {
+	name := func(m map[string]string, k string) string {
+		if v, ok := m[k]; ok {
+			return v
+		}
+		return "未知"
+	}
+	gap := "無"
+	if left := (snap.GapUntil - now.UnixMilli() + 999) / 1000; snap.GapUntil > 0 && left > 0 {
+		gap = fmt.Sprintf("%ds", left)
+	}
+	return fmt.Sprintf("主機：%s · 用量%s · 間隔剩 %s", name(zoneText, snap.Host.Zone), name(trendText, snap.Host.Trend), gap)
+}
+
+// waitReasonText is a waiter's reason in Chinese with how long it has lasted;
+// an unknown name is shown quoted so it cannot pass for the table's structure.
+func waitReasonText(q resources.WaiterView, now time.Time) string {
+	if q.Reason == "" {
+		return "-"
+	}
+	name, ok := reasonText[q.Reason]
+	if !ok {
+		name = strconv.QuoteToASCII(q.Reason)
+	}
+	if q.ReasonSince > 0 {
+		name += " " + shortSeconds((now.UnixMilli()-q.ReasonSince)/1000)
+	}
+	return name
 }
