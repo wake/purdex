@@ -474,13 +474,14 @@ func (m *Module) reattach(n leaseRow) (leaseRow, bool) {
 	}
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
-	cands, err := m.store.ParkedFor(n.SessionID, n.Kind, n.Weight)
+	now := m.now().UnixMilli()
+	cands, err := m.store.ParkedFor(n.SessionID, n.Kind, n.Weight, now)
 	if err != nil {
 		m.logf("[resources] re-attach: list parked leases: %v", err)
 		return leaseRow{}, false
 	}
 	for _, c := range cands {
-		won, err := m.store.Adopt(c, n, n.DeadlineAt, n.LeaseUntil)
+		won, err := m.store.Adopt(c, n, n.DeadlineAt, n.LeaseUntil, now)
 		if err != nil {
 			m.logf("[resources] re-attach: adopt %s: %v", c.ID, err)
 			return leaseRow{}, false
