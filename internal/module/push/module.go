@@ -77,6 +77,7 @@ type Module struct {
 	membership  func(sessionID string) (bool, error)                             // a test seam: team.MembershipReader; nil = from the registry
 	memBudget   time.Duration                                                    // how long an event waits for the membership read; 0 = membershipBudget
 	memBusy     atomic.Bool                                                      // a membership read is still running: never more than one outstanding
+	closes      *closeCoalescer                                                  // closed badge cards waiting for their 2 s window (badge_close.go); fires into the sender's queue
 	holds       holdSet
 	wbHolds     wbHoldSet                  // Stop pushes held for the session workbook's line (agent_trigger.go)
 	wbWait      func() time.Duration       // a test seam: the push_wait_s setting; nil = from the registry
@@ -94,8 +95,10 @@ type presenceChecker interface {
 }
 
 func New() *Module {
-	return &Module{home: os.UserHomeDir, devices: map[string]push.Device{}, pres: NewPresence(time.Now),
+	m := &Module{home: os.UserHomeDir, devices: map[string]push.Device{}, pres: NewPresence(time.Now),
 		gate: NewGate(time.Now), asks: newOpenAsks(time.Now), holdFor: waitingHold}
+	m.closes = newCloseCoalescer(m.fireBadge)
+	return m
 }
 
 func (m *Module) Name() string           { return "push" }
@@ -235,6 +238,7 @@ func (m *Module) Start(ctx context.Context) error {
 	m.core.Registry.Register(team.PauseNotifyKey, m.pauseNotifier()) // the team module's pause outbox asks for a phone push through it
 	m.holds.reset()
 	m.wbHolds.reset()
+	m.closes.reset()
 	m.asks.Clear() // a restart starts with no asks: the feed's open snapshot proves nothing was pushed (spec §4.4), so it is not loaded
 	if m.events != nil {
 		_, m.unsub = m.events.SubscribeApprovals(m.onApproval)
@@ -335,6 +339,7 @@ func (m *Module) Stop(context.Context) error {
 	}
 	m.wbHolds.stop() // before the sender: a hold that is mid-send enqueues onto a live sender, then nothing more
 	m.holds.stopAll()
+	m.closes.stop() // a window that has not ended sends nothing
 	if snd := m.sender.Swap(nil); snd != nil {
 		snd.Stop() // a callback that already holds snd only enqueues onto a stopped sender: harmless
 	}
@@ -484,6 +489,9 @@ func (m *Module) openState(ctx context.Context, j Job) openSnap {
 func (m *Module) onApproval(op string, a team.Approval) {
 	if op == "closed" {
 		m.asks.Closed(a.ID) // an ask that was never recorded (not pushed) has nothing to close
+		if push.CountsForBadge(string(a.Kind)) {
+			m.closes.add(a.ID) // a card the badge counts went away: tell the phones that asked, after the 2 s window
+		}
 	}
 	snd := m.sender.Load() // one read: Stop may clear it at any moment
 	if op != "opened" || snd == nil {
