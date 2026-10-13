@@ -79,6 +79,12 @@ func (m *Module) releaseOne(sid string, client team.Client) (int, error) {
 // person decided, and the pause row goes with it in the same transaction - the other causes are released without a reask, and the
 // lead is told. Caller holds createMu.
 func (m *Module) releaseAsk(sid string) (int, error) {
+	// what the lead's notice needs is read BEFORE the ask closes: a read that fails then fails the release with the ask still open,
+	// instead of closing it and losing the notice for good (codex R1)
+	mr, t, isMember, err := m.store.ActiveMemberInLiveTeam(sid)
+	if err != nil {
+		return 0, err
+	}
 	m.askMu.Lock() // behind an ask notice on the wire
 	ask, closed, err := m.store.DenyRelayAsk(sid, m.now(), team.PauseResumedMemberDeniedByUser)
 	m.askMu.Unlock()
@@ -87,7 +93,7 @@ func (m *Module) releaseAsk(sid string) (int, error) {
 	}
 	if closed {
 		m.logf("[team] relay ask %s of %s denied by a person's release", ask.ID, sid)
-		if mr, t, ok, err := m.store.ActiveMemberInLiveTeam(sid); err == nil && ok {
+		if isMember {
 			address, _ := m.memberNoticeName(mr)
 			text := fmt.Sprintf(team.RelayAskDeniedByUserLeadFmt, address)
 			m.goTracked(func() { m.noticeToLead(mr, t, text, "relay ask denied by a person") })
