@@ -100,6 +100,24 @@ func TestSessionOfProcess_HopLimitAndLoops(t *testing.T) {
 	f.table.ppid[6001], f.table.ppid[6002] = 6002, 6001
 	f.table.start[6001], f.table.start[6002] = attrStart, attrStart
 	assert.Equal(t, "", f.m.sessionOfProcess(context.Background(), 6001))
+	// A pid that is its own parent ends the walk at once, not after the hops.
+	f.table.ppid[7001], f.table.start[7001] = 7001, attrStart
+	f.m.roots = &fakeRoots{roots: []resources.Root{{SessionID: "sid-agent", PID: 800, ProcStart: attrStartText}}}
+	assert.Equal(t, "", f.m.sessionOfProcess(context.Background(), 7001))
+	calls := 0
+	f.m.ancestryOf = func(*iagent.ProcessSnapshot) ancestry { return &countingAncestry{f.table, &calls} }
+	f.m.sessionOfProcess(context.Background(), 7001)
+	assert.Equal(t, 1, calls, "one lookup of its parent, then done")
+}
+
+type countingAncestry struct {
+	*fakeAncestry
+	n *int
+}
+
+func (c *countingAncestry) PPID(pid int) (int, error) {
+	*c.n++
+	return c.fakeAncestry.PPID(pid)
 }
 
 // A process-scope POST with no session_id gets the agent's session on its row;
