@@ -628,8 +628,14 @@ func TestSkill_SaysWhatSpec10Requires(t *testing.T) {
 		"Report with `pdx report <kind>`", "`pdx task mine` lists your tasks",
 		// /relay now (lead-command spec §2b): the user's early relay, never the agent's.
 		"`/relay` (or `/relay now`) is the user's way to relay early: **you never run it**",
-		// /lead (lead-command spec §3): requested at once, not judged.
-		"When the user runs `/lead` or plainly asks you to become a lead, request it at once",
+		// /team (relay/team rules v2, RT-1c; was /lead, lead-command spec §3): requested at once, not judged.
+		"When the user runs `/team` (or the older `/lead`) or plainly asks you to become a lead, request it at once",
+		// RT-1c: the person's own commands act at once, their token is exact and single-use, and the rules the daemon cannot yet enforce (#2774).
+		"are **the person's own commands** and they act at once", "A person's `/relay` in a member relays that member at once",
+		"put that exact token on the command it names", "**Never invent, guess, store or reuse a token**", "`person_token_invalid`",
+		"**Never type into your own terminal to run a slash command**", "never call Purdex.app's routes to approve something",
+		// RT-1b: unattended mode refuses an agent's own lead request and adopt.
+		"your own `pdx lead request` and `pdx adopt` are **refused**", "`unattended_refused`",
 		// P6-5: the lead decides when a member is relayed, with pdx relay <ref> in the foreground; approval is the user's.
 		"**you decide** whether and when to relay that member: `pdx relay <ref> --wait 9m`", "**in the foreground with Bash `timeout: 600000`**",
 		"`relay_unsupported`: that member has no Purdex mod", "you never approve it",
