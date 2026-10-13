@@ -16,9 +16,9 @@ func TestSettingsV2_Defaults(t *testing.T) {
 	assert.Equal(t, 80, z.MemWarn())
 	assert.Equal(t, 90, z.MemDanger())
 	assert.Equal(t, 30*time.Second, z.Gap())
-	assert.Equal(t, 60*time.Second, z.TrendWindow())
-	assert.Equal(t, 1.0, z.TrendMemPPM())
-	assert.Equal(t, 5.0, z.TrendCPUPPM())
+	assert.Equal(t, 120*time.Second, z.TrendWindow())
+	assert.Equal(t, 2.0, z.TrendMemPPM())
+	assert.Equal(t, 0.0, z.TrendCPUPPM())
 	assert.Equal(t, 900*time.Second, z.Park())
 	assert.Equal(t, 180*time.Second, z.AlertDanger())
 	assert.Equal(t, 600*time.Second, z.AlertStuck())
@@ -34,7 +34,7 @@ func TestSettingsV2_Defaults(t *testing.T) {
 	} {
 		require.NotNil(t, p, name)
 	}
-	assert.Equal(t, []int{80, 90, 30, 60, 10, 50, 900, 180, 600, 20, 0},
+	assert.Equal(t, []int{80, 90, 30, 120, 20, 0, 900, 180, 600, 20, 0},
 		[]int{*e.MemWarnPct, *e.MemDangerPct, *e.GapS, *e.TrendWindowS, *e.TrendMemDPPM, *e.TrendCPUDPPM,
 			*e.ParkS, *e.AlertDangerS, *e.AlertStuckS, *e.AlertLeaseMemPct, *e.AlertPush})
 	// P1a changes no behaviour: the hold stays 300 until P2a.
@@ -55,7 +55,7 @@ var v2Fields = []v2Field{
 	{"gap_s", func(s *Settings, v *int) { s.GapS = v }, func(s Settings) *int { return s.GapS }, 0, 300},
 	{"trend_window_s", func(s *Settings, v *int) { s.TrendWindowS = v }, func(s Settings) *int { return s.TrendWindowS }, 20, 300},
 	{"trend_mem_dppm", func(s *Settings, v *int) { s.TrendMemDPPM = v }, func(s Settings) *int { return s.TrendMemDPPM }, 1, 100},
-	{"trend_cpu_dppm", func(s *Settings, v *int) { s.TrendCPUDPPM = v }, func(s Settings) *int { return s.TrendCPUDPPM }, 1, 500},
+	{"trend_cpu_dppm", func(s *Settings, v *int) { s.TrendCPUDPPM = v }, func(s Settings) *int { return s.TrendCPUDPPM }, 0, 500},
 	{"park_s", func(s *Settings, v *int) { s.ParkS = v }, func(s Settings) *int { return s.ParkS }, 60, 3600},
 	{"alert_danger_s", func(s *Settings, v *int) { s.AlertDangerS = v }, func(s Settings) *int { return s.AlertDangerS }, 30, 3600},
 	{"alert_stuck_s", func(s *Settings, v *int) { s.AlertStuckS = v }, func(s Settings) *int { return s.AlertStuckS }, 60, 7200},

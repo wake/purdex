@@ -48,9 +48,9 @@ const (
 	DefaultMemWarnPct       = 80
 	DefaultMemDangerPct     = 90
 	DefaultGapS             = 30
-	DefaultTrendWindowS     = 60
-	DefaultTrendMemDPPM     = 10 // tenths of a point per minute: 1.0
-	DefaultTrendCPUDPPM     = 50 // 5.0
+	DefaultTrendWindowS     = 120
+	DefaultTrendMemDPPM     = 20 // tenths of a point per minute: 2.0
+	DefaultTrendCPUDPPM     = 0  // cpu takes no part in the direction (G1)
 	DefaultParkS            = 900
 	DefaultAlertDangerS     = 180
 	DefaultAlertStuckS      = 600
@@ -71,7 +71,7 @@ const (
 	minGapS, maxGapS                         = 0, 300
 	minTrendWindowS, maxTrendWindowS         = 20, 300
 	minTrendMemDPPM, maxTrendMemDPPM         = 1, 100
-	minTrendCPUDPPM, maxTrendCPUDPPM         = 1, 500
+	minTrendCPUDPPM, maxTrendCPUDPPM         = 0, 500
 	minParkS, maxParkS                       = 60, 3600
 	minAlertDangerS, maxAlertDangerS         = 30, 3600
 	minAlertStuckS, maxAlertStuckS           = 60, 7200
@@ -123,7 +123,8 @@ type Settings struct {
 	// TrendWindowS is the window the usage trend is read over.
 	TrendWindowS *int `json:"trend_window_s,omitempty"`
 	// TrendMemDPPM and TrendCPUDPPM are the slope thresholds, in tenths of a
-	// point per minute.
+	// point per minute; a TrendCPUDPPM of 0 keeps cpu out of the direction (the
+	// slope is still computed).
 	TrendMemDPPM *int `json:"trend_mem_dppm,omitempty"`
 	TrendCPUDPPM *int `json:"trend_cpu_dppm,omitempty"`
 	// ParkS is how long a parked waiter keeps its place.
@@ -324,7 +325,7 @@ func (s Settings) TrendMemPPM() float64 {
 	return float64(clampInt(s.TrendMemDPPM, DefaultTrendMemDPPM, minTrendMemDPPM, maxTrendMemDPPM)) / 10
 }
 
-// TrendCPUPPM is the same for the cpu share.
+// TrendCPUPPM is the same for the cpu share; 0 means cpu takes no part.
 func (s Settings) TrendCPUPPM() float64 {
 	return float64(clampInt(s.TrendCPUDPPM, DefaultTrendCPUDPPM, minTrendCPUDPPM, maxTrendCPUDPPM)) / 10
 }
