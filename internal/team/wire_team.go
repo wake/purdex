@@ -250,6 +250,7 @@ type SpawnOp struct {
 	State       SpawnState `json:"state"`
 	Step        string     `json:"step"`             // StepAccepted … StepRegistered
 	Reason      string     `json:"reason,omitempty"` // failed only: a SpawnReason*
+	Detail      string     `json:"detail,omitempty"` // failed member_start_timeout of THIS host only: why, for the CLI to print as it is
 	Cwd         string     `json:"cwd"`
 	Title       string     `json:"title"`
 	Model       string     `json:"model"`

@@ -109,6 +109,27 @@ func (m *Module) timeOutSpawn(op spawnRow) {
 	m.killSpawnSession(op.ID, op.TmuxID, op.TmuxInstance)
 }
 
+// startTimeoutDetail is why a member did not register in time, for the failed op (#2761). The signal is the mod's own hello:
+// any session of this host whose mod said hello (it survives a restart, mod_hello) proves the hooks work here, so a member that
+// is late on such a host is a busy host; a host that never heard one is the one that needs `pdx setup`. Decided here, once, so
+// every CLI prints the same words.
+func (m *Module) startTimeoutDetail() string {
+	secs := m.spawnBudget / 1000
+	m.mu.Lock()
+	seen := false
+	for _, h := range m.modSeen {
+		if h.Agent == "cc" {
+			seen = true
+			break
+		}
+	}
+	m.mu.Unlock()
+	if seen {
+		return fmt.Sprintf("主機忙，member 啟動太慢（%d 秒內沒完成註冊），名額已釋出，可以稍後重試", secs)
+	}
+	return fmt.Sprintf("member 在 %d 秒內沒有註冊，這台主機從沒看過 Purdex hooks（pdx setup --agent cc）", secs)
+}
+
 func (m *Module) memberOnPane(pane string) (team.Origin, bool) {
 	frames, err := m.frames.LiveSessions(m.stopCtx, "cc")
 	if pane == "" || err != nil {

@@ -3,6 +3,7 @@ package teammod
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -191,5 +192,50 @@ func TestSpawn_ASlowHostRegistersWithinTheBudget(t *testing.T) {
 				t.Fatalf("op = %+v, want member_start_timeout", op)
 			}
 		})
+	}
+}
+
+// #2761: the failed op says WHY in its detail, decided here and not guessed by the CLI. A host whose mods have said hello
+// (hooks work) is busy; a host that never heard one is the one that needs `pdx setup`. The seconds are the budget in force.
+// Mutation gate: drop the hello condition (always the setup hint, or never) → one case red.
+func TestSpawnView_StartTimeoutDetailSaysBusyOrNoHooks(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		hello     bool
+		wantBusy  bool
+		wantSetup bool
+	}{{"hooks seen", true, true, false}, {"hooks never seen", false, false, true}} {
+		t.Run(c.name, func(t *testing.T) {
+			f, root := newSpawnFixture(t, 1)
+			if c.hello {
+				f.m.mu.Lock()
+				f.m.modSeen["sid-old"] = helloInfo{ModVersion: "5", Agent: "cc", At: f.clock.Load() - 3_600_000}
+				f.m.mu.Unlock()
+			}
+			row := f.runOp(1, root, nil)
+			if row.State != team.SpawnFailed || row.Reason != team.SpawnReasonStartTimeout {
+				t.Fatalf("op = %+v", row)
+			}
+			op, err := f.m.spawnView(row, "mlab/lead")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(op.Detail, "60 秒") {
+				t.Errorf("detail %q does not carry the budget", op.Detail)
+			}
+			if got := strings.Contains(op.Detail, "主機忙"); got != c.wantBusy {
+				t.Errorf("busy hint = %v, want %v: %q", got, c.wantBusy, op.Detail)
+			}
+			if got := strings.Contains(op.Detail, "pdx setup --agent cc"); got != c.wantSetup {
+				t.Errorf("setup hint = %v, want %v: %q", got, c.wantSetup, op.Detail)
+			}
+		})
+	}
+	// any other reason carries no detail
+	f, root := newSpawnFixture(t, 1)
+	row := f.runOp(1, root, nil)
+	row.Reason = team.SpawnReasonCreateFailed
+	if op, _ := f.m.spawnView(row, ""); op.Detail != "" {
+		t.Errorf("detail of another reason = %q", op.Detail)
 	}
 }
