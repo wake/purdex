@@ -393,6 +393,7 @@ func (m *Module) handleLeaseDeleteByClient(w http.ResponseWriter, r *http.Reques
 // endLease ends the row find returns and answers with it. notFound404 says
 // whether a missing row is a 404 (by id) or the state none (by client id).
 func (m *Module) endLease(w http.ResponseWriter, r *http.Request, find func() (leaseRow, bool, error), notFound404 bool) {
+	finalNotice := ""
 	m.stateMu.Lock()
 	row, ok, err := find()
 	if err == nil && ok && row.State != resources.StateEnded {
@@ -407,7 +408,7 @@ func (m *Module) endLease(w http.ResponseWriter, r *http.Request, find func() (l
 		} else if row.State == resources.StateWaiting {
 			won, err = m.store.EndWaiting(row.ID, reason, now.UnixMilli(), m.reasons.peek(row.ID, now))
 		} else {
-			won, err = m.store.End(row.ID, reason, now.UnixMilli())
+			won, finalNotice, err = m.endCommand(row, reason, now, r.URL.Query().Get("notice") == "1", "")
 		}
 		if err == nil {
 			if won {
@@ -432,7 +433,13 @@ func (m *Module) endLease(w http.ResponseWriter, r *http.Request, find func() (l
 	}
 	// The capacity just freed may let the next request in.
 	m.admissionPass(r.Context(), "")
-	writeJSON(w, http.StatusOK, m.leaseResponse(row, m.settings(), false))
+	resp := m.leaseResponse(row, m.settings(), false)
+	resp.Notice = finalNotice
+	if resp.Notice == "" && row.State == resources.StateEnded && r.URL.Query().Get("notice") == "1" {
+		// A retry of a release whose answer was lost: the notice is on the row.
+		resp.Notice = row.Notice
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // leaseHost is the host figure a lease answer carries.

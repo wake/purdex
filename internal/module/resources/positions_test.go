@@ -31,6 +31,10 @@ func newPosFix(t *testing.T) *posFix {
 	}
 	f.set.set(resources.Settings{Mode: resources.ModeLease, GapS: intp(0)})
 	f.setZone("normal", "flat")
+	// The holders are alive for the sweeper.
+	for _, pid := range []int{1000, 1010, 2000} {
+		f.view.procs[pid] = attrStart
+	}
 	return f
 }
 

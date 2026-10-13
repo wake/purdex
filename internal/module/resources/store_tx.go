@@ -235,6 +235,11 @@ type commandEnd struct {
 	NewWarning  bool   // an extension was given: extensions += 1
 	Notice      string // the final notice text, stored on the row
 
+	// RowGuard is an extra condition on the row's end, with its arguments (the
+	// sweeper's vanished check: the tree must still be counted empty).
+	RowGuard     string
+	RowGuardArgs []any
+
 	// outcomeEnd
 	PosReason string
 	// outcomeRelease: the id of the position the ask rows move to (used only
@@ -263,6 +268,7 @@ func (s *leaseStore) EndCommand(rowID string, now int64, e commandEnd) (commandE
 		if e.PositionID != "" {
 			where, args = ` AND state = 'held' AND position_id = ?`, append(args, e.PositionID)
 		}
+		where, args = where+e.RowGuard, append(args, e.RowGuardArgs...)
 		if err := mustChange(x, `UPDATE resource_leases
 			SET state = 'ended', ended_at = ?, end_reason = ?, waited_ms = COALESCE(waited_ms, ? - created_at)
 			WHERE id = ?`+where, args...); err != nil {
