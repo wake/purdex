@@ -95,6 +95,7 @@ func (c *Core) capabilityList() []string {
 		out = append(out, "push.v1")          // POST/GET /api/push/devices, DELETE /api/push/devices/{device_id}, PUT /api/push/presence
 		out = append(out, "push.presence.v2") // …/presence accepts v:2 (the machine's idle / lock state); same condition as push.v1
 		out = append(out, "push.badge.v2")    // badge kinds (adopt, terminal-only asks, permission cards), c: keys, purdex.member, the member gate and prefs.muted; same condition as push.v1
+		out = append(out, "push.badge_bg.v1") // a card that closes sends the phones with prefs.badge_push a background badge push (apns-push-type background); same condition as push.v1
 	}
 	if c.moduleReady("devices") {
 		out = append(out, "devices.v1") // POST/GET/DELETE /api/devices, PUT /api/devices/self; device tokens (pdxd_) as bearers
