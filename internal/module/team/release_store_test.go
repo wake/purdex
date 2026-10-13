@@ -202,3 +202,28 @@ func TestKill_AReleasedMemberIsNotKilled(t *testing.T) {
 		t.Fatal("the row changed")
 	}
 }
+
+// #2757: the `adopted` notice of a row whose team ended is not owed (D4 keeps the row active; the team the notice names is
+// over). A live team's row keeps its notice. Mutation gate: drop the team condition → red.
+func TestDropStaleAdoptNotices_EndedTeamsRowOwesNothing(t *testing.T) {
+	s := openTestStore(t)
+	seedTeam(t, s, "team-1", "L1", 1000)
+	seedTeam(t, s, "team-2", "L2", 1000)
+	for _, c := range []struct{ op, team, sid string }{{"op-a", "team-1", "sid-a"}, {"op-b", "team-2", "sid-b"}} {
+		m := newMember(c.op, c.team, c.sid, "_"+c.op, 2000)
+		m.NoticePending, m.NoticeSince = team.NoticeAdopted, 2000
+		if err := s.InsertMember(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ended, err := s.EndTeam("team-1", "L1", team.TeamEndLeadGone, 3000); err != nil || !ended {
+		t.Fatal(ended, err)
+	}
+	if n, err := s.DropStaleAdoptNotices(); err != nil || n != 1 {
+		t.Fatalf("dropped %d, %v", n, err)
+	}
+	got, _ := s.PendingNotices()
+	if len(got) != 1 || got[0].SpawnOp != "op-b" {
+		t.Fatalf("pending = %+v", got)
+	}
+}
