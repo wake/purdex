@@ -26,7 +26,14 @@ var ErrMemberRelayIsLeads = errors.New("the session is an active member of a liv
 // the begin's check); any other failure, or a close that is no approval,
 // writes nothing either. It returns the row and the op as committed.
 func (s *Store) CreateSelfRelayApproved(op team.RelayOp, a team.Approval, hash string, c Close) (team.Approval, team.RelayOp, error) {
-	after, claimed, _, err := s.createSelfRelay(op, a, hash, c, nil)
+	after, claimed, _, err := s.createSelfRelay(op, a, hash, c, nil, nil)
+	return after, claimed, err
+}
+
+// CreateSelfRelayApprovedThen is CreateSelfRelayApproved with one more statement set run on the same transaction after the op is
+// claimed and before it commits (a person's own /relay ends the session's pauses there, RT-1a): if then fails nothing is written.
+func (s *Store) CreateSelfRelayApprovedThen(op team.RelayOp, a team.Approval, hash string, c Close, then func(tx *sql.Tx) error) (team.Approval, team.RelayOp, error) {
+	after, claimed, _, err := s.createSelfRelay(op, a, hash, c, nil, then)
 	return after, claimed, err
 }
 
@@ -37,10 +44,10 @@ func (s *Store) CreateSelfRelayApproved(op team.RelayOp, a team.Approval, hash s
 // in the same transaction (the session's `quota` row, a `lead` row for each live local member of a lead, the outbox rows) and the
 // answer is PausePaused, no op. A quota PUT cannot slip between the check and the pause: it waits for the lock.
 func (s *Store) CreateSelfRelayOrPause(op team.RelayOp, a team.Approval, hash string, c Close, plan PausePlan) (team.Approval, team.RelayOp, PauseOutcome, error) {
-	return s.createSelfRelay(op, a, hash, c, &plan)
+	return s.createSelfRelay(op, a, hash, c, &plan, nil)
 }
 
-func (s *Store) createSelfRelay(op team.RelayOp, a team.Approval, hash string, c Close, plan *PausePlan) (team.Approval, team.RelayOp, PauseOutcome, error) {
+func (s *Store) createSelfRelay(op team.RelayOp, a team.Approval, hash string, c Close, plan *PausePlan, then func(tx *sql.Tx) error) (team.Approval, team.RelayOp, PauseOutcome, error) {
 	fail := func(err error) (team.Approval, team.RelayOp, PauseOutcome, error) {
 		return team.Approval{}, team.RelayOp{}, PauseNone, fmt.Errorf("create approved self relay %s: %w", a.ID, err)
 	}
@@ -106,6 +113,11 @@ func (s *Store) createSelfRelay(op team.RelayOp, a team.Approval, hash string, c
 	}
 	if res != ReportApplied {
 		return fail(fmt.Errorf("op %s is %s; the approve could not claim it", op.ID, claimed.State))
+	}
+	if then != nil {
+		if err := then(tx); err != nil {
+			return fail(err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fail(fmt.Errorf("commit: %w", err))

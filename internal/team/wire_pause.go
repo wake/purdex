@@ -111,7 +111,9 @@ const (
 const (
 	PauseResumedSolo = "[pdx team] 管理者已回位。接力申請已重新送出，等使用者核准。"
 	// PauseReleasedSolo is a release by a person (not the switch): the lead's or the solo session's resume notice.
-	PauseReleasedSolo       = "[pdx team] 已解除暫停。接力申請已重新送出，等使用者核准。"
+	PauseReleasedSolo = "[pdx team] 已解除暫停。接力申請已重新送出，等使用者核准。"
+	// PauseResumedByRelay: the person relayed the session by hand (/relay): the pause ends and nothing is asked again (RT-1a).
+	PauseResumedByRelay     = "[pdx team] 使用者已直接接力，恢復作業。"
 	PauseResumedSoloOldMod  = "[pdx team] 管理者已回位。請在這個 session 打 /relay 重新申請接力。"
 	PauseResumedMemberLead  = "[pdx team] lead 已恢復，等 lead 指示。"
 	PauseResumedMemberQuota = "[pdx team] 管理者已回位，等 lead 指示。"

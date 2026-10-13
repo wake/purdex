@@ -251,12 +251,22 @@ func (s *Store) ActiveMemberInLiveTeam(sessionID string) (memberRow, team.Team, 
 // cancelled{member_relay_is_leads}, both or neither; memberCancelled says
 // that committed. The row and won are as CloseIfOpen's.
 func (s *Store) CloseSelfRelayApproved(id string, c Close, sessionID string) (a team.Approval, won, memberCancelled bool, err error) {
+	return s.closeSelfRelayApprovedThen(id, c, sessionID, nil)
+}
+
+// closeSelfRelayApprovedThen is CloseSelfRelayApproved with then run on the same transaction when this close won as an approval
+// (not when it lost, and not when the member rule cancelled it): a person's own /relay of an open card ends the session's pauses in
+// the same transaction (RT-1a). If then fails the close is rolled back too.
+func (s *Store) closeSelfRelayApprovedThen(id string, c Close, sessionID string, then func(tx *sql.Tx) error) (a team.Approval, won, memberCancelled bool, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return team.Approval{}, false, false, fmt.Errorf("approve self relay %s: begin: %w", id, err)
 	}
 	defer tx.Rollback()
 	n, memberCancelled, err := s.closeSelfRelayApprovedIn(tx, id, c, sessionID)
+	if err == nil && n == 1 && !memberCancelled && then != nil {
+		err = then(tx)
+	}
 	if err == nil {
 		a, _, err = getRowIn(tx, id)
 	}

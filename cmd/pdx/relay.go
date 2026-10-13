@@ -25,7 +25,8 @@ import (
 // These are the mod's calls (lead-team-relay spec §8.3) plus `pdx relay <ref>`
 // (the lead's member relay, P6-5).
 const relayUsage = "usage: pdx relay hello --session <sid> [--version <v>] [--agent cc] [--config <path>]\n" +
-	"       pdx relay begin --self --session <sid> --used <pct> --window <n> [--manual] [--reason idle --idle-minutes <n>] [--reask <uuid>] [--config <path>]\n" +
+	"       pdx relay begin --self --session <sid> --used <pct> --window <n> [--manual] [--reason idle --idle-minutes <n>] [--reask <uuid>] [--person <token>] [--config <path>]\n" +
+	"       pdx relay person --session <sid> --command relay|adopt|lead|spawn [--config <path>]\n" +
 	"       pdx relay ask --session <sid> --used <pct> --window <n> [--request-id <uuid>] [--config <path>]\n" +
 	"       pdx relay wait <request_id> [--wait 9m] [--config <path>]\n" +
 	"       pdx relay self off|on|status --session <sid> [--config <path>]\n" +
@@ -58,6 +59,7 @@ var relayRefusalCodes = map[string]bool{
 	team.ErrPausedNoQuota:       true, // the unattended quota pause (UP-2a self / idle begin, UP-2b member relay): no op was opened
 	team.ErrMemberPausedNoQuota: true,
 	team.ErrRelayOpen:           true,
+	team.ErrPersonTokenInvalid:  true, // RT-1a: the token of a person's own command is unknown, spent or expired
 	team.ErrBadTransition:       true,
 	team.ErrNotLead:             true, // P6-5: the member relay's refusals
 	team.ErrNotYourMember:       true,
@@ -111,6 +113,8 @@ func runRelayCmd(ctx context.Context, args []string, stdout, stderr io.Writer, c
 		return runRelayHello(ctx, args[1:], stdout, stderr, clientOpts)
 	case "begin":
 		return runRelayBegin(ctx, args[1:], stdout, stderr, clientOpts)
+	case "person":
+		return runRelayPerson(ctx, args[1:], stdout, stderr, clientOpts)
 	case "ask":
 		return runRelayAsk(ctx, args[1:], stdout, stderr, clientOpts)
 	case "wait":
@@ -259,6 +263,7 @@ func runRelayBegin(ctx context.Context, args []string, stdout, stderr io.Writer,
 	fs.StringVar(&req.Reason, "reason", "", "")        // "" or idle (idle relay): why the mod asks
 	fs.IntVar(&req.IdleMinutes, "idle-minutes", 0, "") // 1–59 iff --reason idle
 	fs.StringVar(&req.ReaskID, "reask", "", "")        // the release token of a re-ask after a pause (UP-3b): a UUID
+	fs.StringVar(&req.PersonToken, "person", "", "")   // the token of the person's own /relay (RT-1a), minted by `pdx relay person`
 	cfgPath, ok := relayFlags(fs, args, stderr)
 	if !ok {
 		return ExitUsage
@@ -274,6 +279,8 @@ func runRelayBegin(ctx context.Context, args []string, stdout, stderr io.Writer,
 		return relayUsageErr(stderr, "--idle-minutes 只能搭配 --reason idle")
 	case req.Reason == team.RelayBeginReasonIdle && (req.IdleMinutes < 1 || req.IdleMinutes > 59):
 		return relayUsageErr(stderr, "--reason idle 需要 --idle-minutes 1 到 59")
+	case req.PersonToken != "" && !req.Manual:
+		return relayUsageErr(stderr, "--person 只能搭配 --manual")
 	case req.Reason == team.RelayBeginReasonIdle && req.Manual:
 		return relayUsageErr(stderr, "--reason idle 不能搭配 --manual")
 	case !req.Self:
@@ -300,6 +307,36 @@ func runRelayBegin(ctx context.Context, args []string, stdout, stderr io.Writer,
 		return relayReportErr(err, stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "接力申請已送出（%s），等待核准；接著執行 pdx relay wait %s\n", res.Op.ID, res.RequestID)
+	return relayPrintJSON(stdout, stderr, res)
+}
+
+// runRelayPerson is `pdx relay person --session <sid> --command relay|adopt|lead|spawn` (RT-1a): the mod asks for the token of a
+// command the person just typed. stdout is {"token","expires_at"}. Not retried: a retry would mint a second token.
+func runRelayPerson(ctx context.Context, args []string, stdout, stderr io.Writer, clientOpts []daemonclient.Option) int {
+	fs := flag.NewFlagSet("pdx relay person", flag.ContinueOnError)
+	var req team.PersonRequest
+	fs.StringVar(&req.SessionID, "session", "", "")
+	fs.StringVar(&req.Command, "command", "", "")
+	cfgPath, ok := relayFlags(fs, args, stderr)
+	if !ok {
+		return ExitUsage
+	}
+	switch {
+	case fs.NArg() != 0:
+		return relayUsageErr(stderr, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
+	case strings.TrimSpace(req.SessionID) == "":
+		return relayUsageErr(stderr, "--session 不能為空")
+	case team.PersonTTLS(req.Command) == 0:
+		return relayUsageErr(stderr, "--command must be relay, adopt, lead or spawn")
+	}
+	client, code := relayClient(cfgPath, stderr, daemonclient.DefaultAttemptTimeout, clientOpts)
+	if code != ExitOK {
+		return code
+	}
+	var res team.PersonResponse
+	if _, err := client.Do(ctx, http.MethodPost, team.PersonRoute, req, &res); err != nil {
+		return relayReportErr(err, stdout, stderr)
+	}
 	return relayPrintJSON(stdout, stderr, res)
 }
 
