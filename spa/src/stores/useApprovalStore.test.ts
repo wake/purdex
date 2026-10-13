@@ -1,7 +1,7 @@
 // spa/src/stores/useApprovalStore.test.ts — the open approval requests this app shows (lead-team spec §6.3),
 // per host, oldest first, with the decisions clicked while a host was not connected (spec §9.4).
 import { beforeEach, describe, expect, it } from 'vitest'
-import { approvalKey, selectCurrent, selectNearestDeadline, selectOpenCount, selectOpenCountFor, useApprovalStore } from './useApprovalStore'
+import { approvalKey, selectCurrent, selectOpenCount, selectOpenCountFor, useApprovalStore } from './useApprovalStore'
 import type { Approval } from '../lib/team/types'
 
 const approval = (over: Partial<Approval> = {}): Approval => ({
@@ -209,18 +209,6 @@ describe('useApprovalStore', () => {
       minimize()
       expect(s().applyClosed('h1', approval({ id: 'zz', state: 'denied' }))).toBe('absent')
       expect(s().minimized).toBe(true)
-    })
-  })
-
-  describe('selectNearestDeadline', () => {
-    it('is the smallest deadline_at across hosts; null when empty', () => {
-      expect(selectNearestDeadline(s())).toBeNull()
-      s().applyOpened('h1', approval({ id: 'a', created_at: 1_000, deadline_at: 900_000 }))
-      s().applyOpened('h2', approval({ id: 'b', created_at: 2_000, deadline_at: 300_000 }))
-      s().applyOpened('h3', approval({ id: 'c', created_at: 3_000, deadline_at: 600_000 }))
-      expect(selectNearestDeadline(s())).toBe(300_000)
-      s().applyClosed('h2', approval({ id: 'b', state: 'approved' }))
-      expect(selectNearestDeadline(s())).toBe(600_000)
     })
   })
 

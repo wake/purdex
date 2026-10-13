@@ -8,6 +8,9 @@ import { useApprovalStore } from '../stores/useApprovalStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useUndoToast } from '../stores/useUndoToast'
+import { usePausedStore } from '../stores/usePausedStore'
+import { useTeamRosterStore } from '../stores/useTeamRosterStore'
+import type { PauseCause } from '../lib/team/roster'
 import { __resetClientDescriptorForTests } from '../lib/team/client-label'
 import type { Approval, ApprovalKind } from '../lib/team/types'
 
@@ -69,5 +72,61 @@ describe('the last relay card past its deadline', () => {
     open(relay({ unanswered_at: 541_500, deadline_at: SENTINEL }))
     expect(screen.getByTestId('approval-approve')).toBeTruthy()
     expect(screen.getByTestId('approval-deny')).toBeTruthy()
+  })
+})
+
+// 88's rule (b): the daemon sends no event op when the last card runs out, so a card an App holds from `opened` has no
+// `unanswered_at`. Past its deadline, the card's session holding `relay_unanswered` (paused list or roster, same host) is the signal.
+describe('a card held since opened, past its deadline', () => {
+  const pausedFor = (hostId: string, sessionId: string, causes: PauseCause[]) => act(() => {
+    usePausedStore.getState().set(hostId, [{ session_id: sessionId, ref: '_x', title: '', role: 'solo', causes, since: 1, lead_ref: '', bounced: 0 }], 1)
+  })
+  beforeEach(() => {
+    usePausedStore.getState().reset()
+    useTeamRosterStore.getState().reset()
+  })
+
+  // Mutation gate: drop rule (b) -> the card keeps counting down -> red.
+  it('shows no countdown once the pause data adds relay_unanswered', () => {
+    render(<ApprovalDialogHost />)
+    open(relay()) // deadline_at 541_000 is long past
+    expect(screen.getByTestId('approval-countdown')).toBeTruthy()
+    pausedFor(H, 'S1', ['relay_unanswered'])
+    expect(screen.queryByTestId('approval-countdown')).toBeNull()
+    expect(screen.getByTestId('approval-unanswered').textContent).toBe('已暫停作業，等你核准')
+  })
+
+  it('a roster row with the cause counts as well', () => {
+    render(<ApprovalDialogHost />)
+    open(relay())
+    act(() => {
+      useTeamRosterStore.getState().apply(H, [{
+        id: 't', host_id: 'd1', created_at: 1, team_name: '', team_label: '',
+        lead: { session_id: 'S1', ref: '_x', address: 'h/x', live: true, paused: { causes: ['relay_unanswered'], since: 1 } }, members: [],
+      }])
+    })
+    expect(screen.getByTestId('approval-unanswered')).toBeTruthy()
+  })
+
+  it('past the deadline but no relay_unanswered: the countdown stays', () => {
+    render(<ApprovalDialogHost />)
+    open(relay())
+    pausedFor(H, 'S1', ['quota'])
+    expect(screen.getByTestId('approval-countdown')).toBeTruthy()
+    expect(screen.queryByTestId('approval-unanswered')).toBeNull()
+  })
+
+  it('the same session id paused on another host does not count', () => {
+    render(<ApprovalDialogHost />)
+    open(relay())
+    pausedFor('h2', 'S1', ['relay_unanswered'])
+    expect(screen.getByTestId('approval-countdown')).toBeTruthy()
+  })
+
+  it('the cause on a card that is not yet past its deadline does not count', () => {
+    render(<ApprovalDialogHost />)
+    open(relay({ deadline_at: Date.now() + 3_600_000 }))
+    pausedFor(H, 'S1', ['relay_unanswered'])
+    expect(screen.getByTestId('approval-countdown')).toBeTruthy()
   })
 })

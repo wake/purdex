@@ -36,7 +36,8 @@ import { adoptionAlias } from '../lib/team/adoption-wait'
 import { hostLabel, useHostLook } from '../lib/host-look'
 import { deriveTeamLabel, goTrim, labelProblem, TEAM_LABEL_MAX_WIDTH } from '../lib/team/label'
 import { cellWidth } from '../lib/textwidth'
-import { adoptPayloadOf, adoptTargetLabel, clipForDisplay, isUnanswered, leadPayloadOf, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
+import { adoptPayloadOf, adoptTargetLabel, clipForDisplay, leadPayloadOf, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
+import { useCardUnanswered } from '../lib/team/approval-unanswered'
 import { approvalSessionLabel, formatCountdown, formatOriginAddress, memberRelayNames } from '../lib/team/approval-format'
 import { ApprovalApiError, setSelfRelayPause } from '../lib/team/approval-api'
 import { buttonBase, fieldClass, keyboardGuard, parseRoots, tabStops, teamNameOk } from './approval-dialog-helpers'
@@ -89,6 +90,9 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const [noMoreAsking, setNoMoreAsking] = useState(false)
   const [busy, setBusy] = useState(false)
   const [now, setNow] = useState(() => Date.now())
+  // Nobody answered this card: no countdown, the session is paused (relay v2 App contract 3). Also true for a card held since
+  // `opened` that ran out while open, once the pause data says so.
+  const unanswered = useCardUnanswered(hostId, approval, now)
   // Ref, not state: two clicks in one event burst both see `busy === false` before React commits the first setBusy.
   const inFlight = useRef(false)
   const overlayRef = useRef<HTMLDivElement>(null)
@@ -379,7 +383,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
                 <dd data-testid="approval-reason" className="whitespace-pre-wrap text-text-primary">{payload.reason}</dd>
               </>
             )}
-            {isUnanswered(approval) ? (
+            {unanswered ? (
               <>
                 <dt className="text-text-muted">{t('approval.dialog.unanswered_label')}</dt>
                 <dd data-testid="approval-unanswered" className="text-text-primary">{t('approval.dialog.unanswered')}</dd>

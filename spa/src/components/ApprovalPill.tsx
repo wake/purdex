@@ -10,7 +10,8 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Circle } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
-import { selectNearestDeadline, selectOpenCount, useApprovalStore, type ApprovalEntry } from '../stores/useApprovalStore'
+import { selectOpenCount, useApprovalStore, type ApprovalEntry } from '../stores/useApprovalStore'
+import { nearestDeadline, usePauseSources } from '../lib/team/approval-unanswered'
 import { formatCountdown } from '../lib/team/approval-format'
 
 const FLASH_MS = 600
@@ -65,7 +66,8 @@ function flash(el: HTMLElement): void {
 export function ApprovalPill() {
   const t = useI18nStore((s) => s.t)
   const count = useApprovalStore(selectOpenCount)
-  const nearest = useApprovalStore(selectNearestDeadline)
+  const entries = useApprovalStore((s) => s.entries)
+  const sources = usePauseSources()
   const [now, setNow] = useState(() => Date.now())
   const ref = useRef<HTMLButtonElement>(null)
   // What was open when the pill first rendered is not new.
@@ -82,7 +84,9 @@ export function ApprovalPill() {
   }, [flashes])
 
   if (count === 0) return null
-  // Only unanswered cards are open (`nearest` skips them): their deadline is a sentinel, so there is no countdown to show.
+  // Unanswered cards (a sentinel deadline, or past it with the session paused for relay_unanswered) are skipped: when only those
+  // are open there is no countdown to show.
+  const nearest = nearestDeadline(entries, now, sources)
   const label = nearest === null ? t('approval.pill.label_unanswered', { count }) : t('approval.pill.label', { count, countdown: formatCountdown(nearest - now) })
   return (
     <>

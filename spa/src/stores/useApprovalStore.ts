@@ -14,7 +14,7 @@
 // persisted, so a reload shows the dialog again. It is temporary: whatever leaves nothing open clears it, so the next
 // request opens the dialog; a new request (`applyOpened`) never does — only a click restores.
 import { create } from 'zustand'
-import { isUnanswered, type Approval, type Grant } from '../lib/team/types'
+import type { Approval, Grant } from '../lib/team/types'
 
 /** Tombstones kept per host; past this the oldest is dropped (a request id is a UUID, 256 is hours of closes). */
 export const TOMBSTONES_PER_HOST = 256
@@ -206,17 +206,6 @@ export const selectCurrent = (s: ApprovalStoreState): ApprovalEntry | null => {
 }
 
 export const selectOpenCount = (s: ApprovalStoreState): number => Object.keys(s.entries).length
-
-/** The deadline the pill counts down to (U22 (b)): the smallest `deadline_at` across hosts; null when nothing is open. A card that
- *  went unanswered has a sentinel deadline and is skipped, so null also means "only unanswered cards are open". */
-export const selectNearestDeadline = (s: ApprovalStoreState): number | null => {
-  let nearest: number | null = null
-  for (const e of Object.values(s.entries)) {
-    if (isUnanswered(e.approval)) continue
-    if (nearest === null || e.approval.deadline_at < nearest) nearest = e.approval.deadline_at
-  }
-  return nearest
-}
 
 export const selectOpenCountFor = (hostId: string) => (s: ApprovalStoreState): number => {
   let n = 0
