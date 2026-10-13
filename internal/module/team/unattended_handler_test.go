@@ -95,21 +95,22 @@ func (f *fixture) streamOf() (ops []string, states []team.UnattendedState) {
 	}
 }
 
-// D-U23-3 / rule 1: switching on approves the open lead and self_relay
-// requests by unattended (a closed event each), then broadcasts changed.
-// Mutation gate: drop the sweep → red.
+// D-U23-3 / rule 1 (RT-1b): switching on approves the open self_relay request by unattended and refuses the open lead request
+// (cancelled, unattended_refused; a closed event each), then broadcasts changed. Mutation gate: drop the sweep → red; approve the
+// lead request again → red.
 func TestUnattendedPut_OnSweepsOpenRequestsAndBroadcastsChanged(t *testing.T) {
 	f := newFixture(t)
 	f.realUnattended()
 	lead, relay := f.create(uid(1)), f.begin("sid-2")
 	f.streamOf()
 	v := f.switchTo(true)
-	if !v.On || v.Since != f.clock.Load() || v.Swept != 2 || v.Pending != 0 || len(v.Approved) != 2 {
-		t.Fatalf("view = %+v, want on since now, swept 2, pending 0, both listed", v)
+	if !v.On || v.Since != f.clock.Load() || v.Swept != 1 || v.Pending != 0 || v.Refused != 1 || len(v.Approved) != 1 {
+		t.Fatalf("view = %+v, want on since now, swept 1, refused 1, pending 0, the relay listed", v)
 	}
-	for _, id := range []string{lead.ID, relay.RequestID} {
-		a, _, _ := f.m.store.Get(id)
-		assertDecidedByUnattended(t, a, f.clock.Load())
+	a, _, _ := f.m.store.Get(relay.RequestID)
+	assertDecidedByUnattended(t, a, f.clock.Load())
+	if l, _, _ := f.m.store.Get(lead.ID); l.State != team.StateCancelled || l.CloseReason != team.ErrUnattendedRefused {
+		t.Fatalf("lead row = %s (%s), want cancelled / %s", l.State, l.CloseReason, team.ErrUnattendedRefused)
 	}
 	ops, states := f.streamOf()
 	if want := []string{"approval.request closed", "approval.request closed", "team.unattended changed"}; !reflect.DeepEqual(ops, want) {
@@ -126,7 +127,6 @@ func TestUnattendedPut_OnSweepsOpenRequestsAndBroadcastsChanged(t *testing.T) {
 func TestUnattendedPut_PendingIsReportedAndTheTickFinishesIt(t *testing.T) {
 	f := newFixture(t)
 	f.realUnattended()
-	f.create(uid(1))
 	relay := f.begin("sid-2")
 	failed := false
 	f.m.beforeAutoApprove = func(a team.Approval) error {
@@ -136,8 +136,8 @@ func TestUnattendedPut_PendingIsReportedAndTheTickFinishesIt(t *testing.T) {
 		}
 		return nil
 	}
-	if v := f.switchTo(true); v.Swept != 1 || v.Pending != 1 {
-		t.Fatalf("view = swept %d pending %d, want 1, 1", v.Swept, v.Pending)
+	if v := f.switchTo(true); v.Swept != 0 || v.Pending != 1 {
+		t.Fatalf("view = swept %d pending %d, want 0, 1", v.Swept, v.Pending)
 	}
 	f.m.tick()
 	a, _, _ := f.m.store.Get(relay.RequestID)
@@ -150,8 +150,8 @@ func TestUnattendedPut_PendingIsReportedAndTheTickFinishesIt(t *testing.T) {
 func TestUnattendedPut_OnTwiceKeepsSinceAndSweepsNothing(t *testing.T) {
 	f := newFixture(t)
 	f.realUnattended()
-	f.create(uid(1))
 	f.makeMember("sid-1")
+	f.manualOpened("sid-1") // a member's manual relay: a person's to approve, the daemon leaves it open
 	if v := f.switchTo(true); v.Pending != 1 {
 		t.Fatalf("first on: pending %d, want 1", v.Pending)
 	}
@@ -172,8 +172,8 @@ func TestUnattendedPut_OnTwiceKeepsSinceAndSweepsNothing(t *testing.T) {
 func TestUnattendedPut_OffKeepsTheListAndOpenRequests(t *testing.T) {
 	f := newFixture(t)
 	f.realUnattended()
-	f.create(uid(1))
-	f.makeMember("sid-1") // the lead row stays open: a rule refuses it
+	f.makeMember("sid-1")
+	card := f.manualOpened("sid-1") // the card stays open: a rule leaves it to a person
 	f.switchTo(true)
 	relay := f.begin("sid-2") // approved at begin
 	f.clock.Add(1_000)
@@ -181,12 +181,12 @@ func TestUnattendedPut_OffKeepsTheListAndOpenRequests(t *testing.T) {
 	if v.On || v.Since != f.clock.Load()-1_000 || len(v.Approved) != 1 || v.Approved[0].ID != relay.RequestID {
 		t.Fatalf("off view = %+v, want off, since kept, the self relay listed", v)
 	}
-	if a, _, _ := f.m.store.Get(uid(1)); a.State != team.StateOpen {
-		t.Fatalf("lead row %s, want still open", a.State)
+	if a, _, _ := f.m.store.Get(card.RequestID); a.State != team.StateOpen {
+		t.Fatalf("card %s, want still open", a.State)
 	}
 	f.m.tick()
-	if a, _, _ := f.m.store.Get(uid(1)); a.State != team.StateOpen {
-		t.Fatalf("lead row %s after a tick with the switch off, want open", a.State)
+	if a, _, _ := f.m.store.Get(card.RequestID); a.State != team.StateOpen {
+		t.Fatalf("card %s after a tick with the switch off, want open", a.State)
 	}
 }
 
@@ -199,10 +199,12 @@ func TestUnattendedGet_ListsAutoApprovalsSinceTheLastOn(t *testing.T) {
 		t.Fatalf("never on = %+v", v)
 	}
 	f.switchTo(true)
-	lead, relay := f.create(uid(1)), f.begin("sid-2")
+	f.personLead()
+	f.create(uid(1)) // a person's lead: approved by the person, so not in the daemon's list
+	relay := f.begin("sid-2")
 	f.switchTo(false)
 	code, v, raw := f.getUnattended("")
-	if code != http.StatusOK || v.On || !reflect.DeepEqual(ids(v.Approved), []string{lead.ID, relay.RequestID}) {
+	if code != http.StatusOK || v.On || !reflect.DeepEqual(ids(v.Approved), []string{relay.RequestID}) {
 		t.Fatalf("GET after off: %d %s", code, raw)
 	}
 	f.clock.Add(1_000)
@@ -326,7 +328,7 @@ func TestUnattendedPut_ListFailureAfterTheWriteIs200(t *testing.T) {
 	f := newFixture(t)
 	hc := f.realUnattended()
 	logs := f.logs()
-	f.create(uid(1))
+	f.begin("sid-2")
 	f.streamOf()
 	f.m.store.beforeListAutoApproved = func() error { return errors.New("disk I/O error") }
 	v := f.switchTo(true)
@@ -423,7 +425,7 @@ func TestUnattended_SurvivesARestart(t *testing.T) {
 	f := newFixture(t)
 	hc := f.realUnattended()
 	f.switchTo(true)
-	lead := f.create(uid(1))
+	relay := f.begin("sid-2")
 	_ = f.m.Stop(context.Background())
 	_ = f.m.Close()
 	_ = hc.Stop(context.Background())
@@ -440,7 +442,7 @@ func TestUnattended_SurvivesARestart(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, UnattendedRoute, nil))
 	var v team.UnattendedView
-	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil || rec.Code != http.StatusOK || !v.On || len(v.Approved) != 1 || v.Approved[0].ID != lead.ID {
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil || rec.Code != http.StatusOK || !v.On || len(v.Approved) != 1 || v.Approved[0].ID != relay.RequestID {
 		t.Fatalf("after restart: %d %s", rec.Code, rec.Body)
 	}
 }

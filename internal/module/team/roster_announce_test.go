@@ -79,8 +79,9 @@ func TestRosterChanged_NeverBlocks(t *testing.T) {
 	returnsPromptly(t, "rosterChanged again", f.m.rosterChanged)
 
 	f.unatt.set(true)
+	f.personLead()
 	var code int
-	returnsPromptly(t, "an unattended create (afterApproved under createMu)", func() {
+	returnsPromptly(t, "a person's create (afterApproved under createMu)", func() {
 		code, _ = f.do(http.MethodPost, "/api/team/approvals", f.createReq(uid(1)))
 	})
 	if code != http.StatusOK && code != http.StatusCreated {

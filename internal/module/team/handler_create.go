@@ -205,11 +205,21 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
 	}
+	person := req.PersonToken != ""
+	if person && !m.validPerson(origin.SessionID, team.PersonCmdLead, req.PersonToken) {
+		m.writeErr(w, http.StatusConflict, team.ErrPersonTokenInvalid, "the person token is unknown, spent, expired or not for this session's /team", nil)
+		return
+	}
 	if open, found, err := m.store.OpenByOrigin(origin.SessionID, req.Kind); err != nil {
 		m.logf("[team] create %s: %v", req.ID, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return
 	} else if found {
+		if person {
+			// the agent asked for this already and the person has now said yes: their command approves that request (RT-1b)
+			m.personApproveLead(w, open, personLeadGrant(open.Origin, teamName, teamLabel), req.PersonToken)
+			return
+		}
 		m.writeErr(w, http.StatusConflict, team.ErrRequestOpen, "this session already has an open lead request", &open)
 		return
 	}
@@ -248,8 +258,12 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		ID: req.ID, Kind: req.Kind, HostID: m.hostID(), Origin: origin, Payload: payload, State: team.StateOpen,
 		CreatedAt: now, DeadlineAt: now + int64(waitS)*1000, LeaseUntil: now + team.LeaseS*1000,
 	}
+	if person {
+		m.createApprovedLead(w, row, hash, m.personClose(now), personLeadGrant(origin, teamName, teamLabel), req.PersonToken)
+		return
+	}
 	if m.unattendedOn() { // under createMu: a switch-on's sweep is never behind this read
-		m.createApprovedLead(w, row, hash)
+		m.writeErr(w, http.StatusConflict, team.ErrUnattendedRefused, team.UnattendedRefusedText, nil)
 		return
 	}
 	stored, _, inserted, err := m.store.Create(row, hash)

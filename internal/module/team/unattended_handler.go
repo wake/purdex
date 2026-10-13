@@ -106,10 +106,10 @@ func (m *Module) handleUnattendedPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st, changed, err := m.unattended.SetUnattended(*req.On, client, m.now())
-	var swept, pending int
+	var swept, pending, refused int
 	if err == nil && changed {
 		if st.On {
-			swept, pending = m.sweepUnattended("switch on")
+			swept, pending, refused = m.sweepUnattended("switch on")
 		} else {
 			m.resumePauses("switch off", true) // every pause row ends with the switch that caused it (spec §3.4)
 		}
@@ -128,7 +128,7 @@ func (m *Module) handleUnattendedPut(w http.ResponseWriter, r *http.Request) {
 	// The write took effect: a list that cannot be read must not turn that
 	// into a 500 the App could not tell from a failed write. It answers
 	// 200 with approved [] and list_failed, and GETs the list.
-	v := team.UnattendedView{UnattendedState: st, Swept: swept, Pending: pending}
+	v := team.UnattendedView{UnattendedState: st, Swept: swept, Pending: pending, Refused: refused}
 	if m.fillUnattendedPage(&v, 0, team.UnattendedPageDefault) != nil {
 		v.ListFailed = true
 	}
