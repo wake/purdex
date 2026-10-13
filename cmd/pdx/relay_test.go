@@ -37,6 +37,7 @@ type fakeRelayDaemon struct {
 	polls        int
 	pollDelay    time.Duration // >0: every wait poll sleeps this long (or until the request is cancelled) before answering
 	onPoll       func(n int)   // runs on every wait poll (1-based) before any delay
+	unansweredAt int64         // >0: the open polls carry it (a final card that went unanswered, RT-2a1)
 }
 
 func (f *fakeRelayDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +88,7 @@ func (f *fakeRelayDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		id := strings.TrimPrefix(r.URL.Path, "/api/relay/wait/")
 		if n <= f.openUntil {
-			_ = json.NewEncoder(w).Encode(team.Approval{ID: id, Kind: team.KindSelfRelay, State: team.StateOpen})
+			_ = json.NewEncoder(w).Encode(team.Approval{ID: id, Kind: team.KindSelfRelay, State: team.StateOpen, UnansweredAt: f.unansweredAt})
 			return
 		}
 		ap := f.final
@@ -657,5 +658,21 @@ func TestRelayCmd_ResumedOnlyWithCancelled(t *testing.T) {
 		if paths, _ := d.snapshot(); len(paths) != 0 {
 			t.Fatalf("%s --error resumed reached the daemon: %v", st, paths)
 		}
+	}
+}
+
+// `pdx relay wait --return-unanswered` returns at once, exit 0, when a poll shows an open row that went unanswered (RT-2c T27);
+// without the flag the wait goes on. Mutation gates: ignore the flag → the first case waits for the final (red); return without
+// the flag → the second case returns early (red).
+func TestRelayCmd_WaitReturnUnanswered(t *testing.T) {
+	d := &fakeRelayDaemon{openUntil: 3, unansweredAt: 1234, final: team.Approval{Kind: team.KindSelfRelay, State: team.StateApproved}}
+	code, out, _ := driveRelay(t, context.Background(), d, "wait", "req-1", "--return-unanswered")
+	if code != ExitOK || !strings.Contains(out, `"unanswered_at":1234`) || !strings.Contains(out, `"state":"open"`) || d.polls != 1 {
+		t.Fatalf("with the flag: exit %d out=%q polls=%d, want one poll and the open row", code, out, d.polls)
+	}
+	d = &fakeRelayDaemon{openUntil: 3, unansweredAt: 1234, final: team.Approval{Kind: team.KindSelfRelay, State: team.StateApproved}}
+	code, out, _ = driveRelay(t, context.Background(), d, "wait", "req-1")
+	if code != ExitOK || !strings.Contains(out, `"state":"approved"`) || d.polls != 4 {
+		t.Fatalf("without the flag: exit %d out=%q polls=%d, want the approval after 4 polls", code, out, d.polls)
 	}
 }
