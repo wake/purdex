@@ -23,7 +23,10 @@ import (
 // estimate. The shadow is lost on restart: rows pending in it then record
 // nothing (v2_wait_ms stays -1).
 //
-// All of it runs under stateMu, on the pass.
+// The shadow never slows the real pass. Under stateMu it only works out
+// verdicts in memory; writing them to resources.db (and reading an ended row
+// back) happens after the lock is released, in flushShadow, and a write that
+// fails is retried at the next pass.
 
 type shadowQueue struct {
 	created map[string]time.Time // id -> created_at of the request
@@ -32,13 +35,35 @@ type shadowQueue struct {
 	// them: the real grant of such a request may come in a later round (it was
 	// cut for a baseline, say) and would_wait is still false.
 	atOnce map[string]bool
+	// pending are verdicts worked out and not yet written; gone are rows that
+	// left the real tables before the shadow granted them (ended) and still
+	// have to be settled.
+	pending []shadowVerdict
+	gone    []shadowGone
 }
+
+type shadowVerdict struct {
+	id       string
+	waitMS   int64
+	open     bool
+	reasons  string
+	attempts int
+}
+
+type shadowGone struct {
+	id       string
+	created  time.Time
+	attempts int
+}
+
+// shadowWriteAttempts is how often a verdict that cannot be written is tried.
+const shadowWriteAttempts = 5
 
 // shadowActive says whether the shadow holds anything, a queued request or the
 // time of its last grant (which would hold back the first request of a later
 // advise). Lock-free.
 func (m *Module) shadowActive() bool {
-	return m.shadowLen.Load() > 0 || m.shadowLastAtMS.Load() != 0
+	return m.shadowLen.Load() > 0 || m.shadowLastAtMS.Load() != 0 || m.shadowUnwritten.Load() > 0
 }
 
 // dropShadow forgets the whole shadow (a restart, or a switch away from advise).
@@ -49,12 +74,14 @@ func (m *Module) dropShadow() {
 	m.shadowLastAtMS.Store(0)
 	m.shadowReasons.reset()
 	m.shadowLen.Store(0)
+	m.shadowUnwritten.Store(0)
 }
 
 // shadowStep is the shadow's part of one advise pass: joins the new requests,
-// settles the rows that ended, and grants at most one. It returns the ids the
-// shadow granted in this pass. stateMu is held.
-func (m *Module) shadowStep(set resources.Settings, held, waiting []leaseRow, zone resources.Zone, trend resources.Trend, now time.Time) map[string]bool {
+// notes the rows that left before their shadow grant, and grants at most one.
+// It works in memory only. It returns the remaining gap the decision saw.
+// stateMu is held.
+func (m *Module) shadowStep(set resources.Settings, held, waiting []leaseRow, zone resources.Zone, trend resources.Trend, now time.Time) (gapLeft time.Duration) {
 	sh := &m.shadow
 	if sh.created == nil {
 		sh.created = map[string]time.Time{}
@@ -80,29 +107,15 @@ func (m *Module) shadowStep(set resources.Settings, held, waiting []leaseRow, zo
 		}
 	}
 	// A row in the shadow that is neither held nor waiting ended before the
-	// shadow granted it: its wait so far is a lower bound.
+	// shadow granted it: its wait so far is a lower bound. Its end time is
+	// read back outside the lock.
 	for id, created := range sh.created {
-		if present[id] {
-			continue
+		if !present[id] {
+			sh.gone = append(sh.gone, shadowGone{id: id, created: created})
+			delete(sh.created, id)
 		}
-		row, ok, err := m.store.Get(id)
-		if err != nil {
-			m.logf("[resources] shadow: read %s: %v", id, err)
-			continue
-		}
-		if ok && row.State != resources.StateEnded {
-			continue // moved between the reads; the next pass settles it
-		}
-		if ok {
-			if err := m.store.SetShadow(id, max(0, row.EndedAt-created.UnixMilli()), true, m.shadowReasons.peek(id, time.UnixMilli(row.EndedAt))); err != nil {
-				m.logf("[resources] shadow: record %s: %v", id, err)
-			}
-		}
-		delete(sh.created, id)
-		m.shadowReasons.drop(id)
 	}
 
-	granted := map[string]bool{}
 	if len(sh.created) > 0 {
 		ws := make([]resources.V2Waiter, 0, len(sh.created))
 		for id, created := range sh.created {
@@ -114,15 +127,15 @@ func (m *Module) shadowStep(set resources.Settings, held, waiting []leaseRow, zo
 			}
 			return strings.Compare(a.ID, b.ID)
 		})
-		grantID, _, reasons := resources.AdmitV2(zone, trend, len(held) > 0, sh.last, ws, now, set)
+		var grantID string
+		var reasons map[string]resources.V2Reason
+		grantID, gapLeft, reasons = resources.AdmitV2(zone, trend, len(held) > 0, sh.last, ws, now, set)
 		for id, r := range reasons {
 			m.shadowReasons.observe(id, r, now)
 		}
 		if grantID != "" {
-			wait := max(0, now.Sub(sh.created[grantID]).Milliseconds())
-			if err := m.store.SetShadow(grantID, wait, false, m.shadowReasons.peek(grantID, now)); err != nil {
-				m.logf("[resources] shadow: record %s: %v", grantID, err)
-			}
+			sh.pending = append(sh.pending, shadowVerdict{id: grantID, waitMS: max(0, now.Sub(sh.created[grantID]).Milliseconds()),
+				reasons: m.shadowReasons.peek(grantID, now)})
 			delete(sh.created, grantID)
 			m.shadowReasons.drop(grantID)
 			sh.last = now
@@ -130,9 +143,87 @@ func (m *Module) shadowStep(set resources.Settings, held, waiting []leaseRow, zo
 				sh.atOnce[grantID] = true
 			}
 			m.shadowLastAtMS.Store(now.UnixMilli())
-			granted[grantID] = true
 		}
 	}
 	m.shadowLen.Store(int32(len(sh.created)))
-	return granted
+	m.shadowUnwritten.Store(int32(len(sh.pending) + len(sh.gone)))
+	return gapLeft
+}
+
+// writeShadow persists one verdict (a seam for tests).
+func (m *Module) writeShadow(id string, waitMS int64, open bool, reasons string) error {
+	if m.shadowSet != nil {
+		return m.shadowSet(id, waitMS, open, reasons)
+	}
+	return m.store.SetShadow(id, waitMS, open, reasons)
+}
+
+// flushShadow writes what shadowStep worked out, with stateMu NOT held: the
+// pending verdicts, and the lower bounds of the rows that ended first (their
+// end time is read from the table). A write that fails goes back for the next
+// pass, up to shadowWriteAttempts times.
+func (m *Module) flushShadow() {
+	m.stateMu.Lock()
+	pend, gone := m.shadow.pending, m.shadow.gone
+	m.shadow.pending, m.shadow.gone = nil, nil
+	m.shadowUnwritten.Store(0)
+	m.stateMu.Unlock()
+	if len(pend) == 0 && len(gone) == 0 {
+		return
+	}
+
+	var retryV []shadowVerdict
+	var retryG []shadowGone
+	var rejoin []shadowGone
+	for _, v := range pend {
+		if err := m.writeShadow(v.id, v.waitMS, v.open, v.reasons); err != nil {
+			m.logf("[resources] shadow: record %s: %v", v.id, err)
+			if v.attempts++; v.attempts < shadowWriteAttempts {
+				retryV = append(retryV, v)
+			}
+		}
+	}
+	for _, g := range gone {
+		row, ok, err := m.store.Get(g.id)
+		switch {
+		case err != nil:
+			m.logf("[resources] shadow: read %s: %v", g.id, err)
+			if g.attempts++; g.attempts < shadowWriteAttempts {
+				retryG = append(retryG, g)
+			}
+			continue
+		case !ok:
+			m.shadowReasons.drop(g.id) // pruned: nothing to record
+			continue
+		case row.State != resources.StateEnded:
+			rejoin = append(rejoin, g) // it moved between the reads: still the shadow's
+			continue
+		}
+		endedAt := time.UnixMilli(row.EndedAt)
+		reasons := m.shadowReasons.peek(g.id, endedAt)
+		if err := m.writeShadow(g.id, max(0, row.EndedAt-g.created.UnixMilli()), true, reasons); err != nil {
+			m.logf("[resources] shadow: record %s: %v", g.id, err)
+			if g.attempts++; g.attempts < shadowWriteAttempts {
+				retryG = append(retryG, g)
+			}
+			continue
+		}
+		m.shadowReasons.drop(g.id)
+	}
+
+	if len(retryV)+len(retryG)+len(rejoin) == 0 {
+		return
+	}
+	m.stateMu.Lock()
+	defer m.stateMu.Unlock()
+	m.shadow.pending = append(m.shadow.pending, retryV...)
+	m.shadow.gone = append(m.shadow.gone, retryG...)
+	if m.shadow.created == nil {
+		m.shadow.created = map[string]time.Time{}
+	}
+	for _, g := range rejoin {
+		m.shadow.created[g.id] = g.created
+	}
+	m.shadowLen.Store(int32(len(m.shadow.created)))
+	m.shadowUnwritten.Store(int32(len(m.shadow.pending) + len(m.shadow.gone)))
 }

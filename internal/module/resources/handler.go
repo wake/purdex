@@ -68,6 +68,9 @@ func (m *Module) addLeases(snap *resources.Snapshot) {
 		}
 	}
 	reasons := m.reasons.snapshot()
+	if set.Mode == resources.ModeAdvise {
+		reasons = m.shadowReasons.snapshot() // in advise a waiter is held only in the shadow
+	}
 	for _, a := range active {
 		charge := resources.Charge(resources.Lease{ID: a.ID, Weight: a.Weight, GrantedAt: time.UnixMilli(a.GrantedAt),
 			Measured: a.EWMA, Samples: a.Samples}, nowT, set)

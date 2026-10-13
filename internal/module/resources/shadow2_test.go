@@ -40,9 +40,11 @@ func TestShadow_WouldWaitSurvivesACutRound(t *testing.T) {
 	r.CreatedAt, r.DeadlineAt, r.LeaseUntil = f.nowMS()-1000, f.nowMS()+300000, f.nowMS()+30000
 	mustCreate(f.t, f.m.store, r)
 	f.m.passOnce(f.m.settings(), "s", map[string]string{}) // no baseline yet: cut in the real pass
+	f.m.flushShadow()
 	require.Equal(t, "waiting", f.state("s"))
 	require.Equal(t, int64(1000), f.shadowOf("s").WaitMS, "the shadow granted it in the request's own pass")
 	f.m.passOnce(f.m.settings(), "", map[string]string{"s": "[]"}) // the baseline arrives
+	f.m.flushShadow()
 	require.Equal(t, "held", f.state("s"))
 	assert.Equal(t, 0, f.shadowOf("s").WouldWait)
 	assert.Empty(t, f.m.shadow.atOnce, "the note is dropped with the grant")

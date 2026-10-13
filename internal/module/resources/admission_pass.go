@@ -64,6 +64,10 @@ func (m *Module) admissionPass(ctx context.Context, fresh string) passResult {
 			break
 		}
 	}
+	// The advise shadow's verdicts are written here, with the lock released.
+	if m.shadowUnwritten.Load() > 0 {
+		m.flushShadow()
+	}
 	return res
 }
 
@@ -122,7 +126,7 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 	var toGrant []leaseRow
 	var gapLeft time.Duration
 	if set.Mode == resources.ModeAdvise {
-		m.shadowStep(set, held, waiting, zone, trend, now)
+		gapLeft = m.shadowStep(set, held, waiting, zone, trend, now)
 		// Advise grants everything at once, up to a cut waiter (FIFO is kept).
 		for _, w := range waiting {
 			if cut[w.ID] {

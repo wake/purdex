@@ -103,6 +103,10 @@ type Module struct {
 	shadow        shadowQueue
 	shadowReasons waitReasons
 	shadowLen     atomic.Int32
+	// shadowUnwritten counts verdicts worked out and not yet written; shadowSet
+	// replaces the write (a seam for tests).
+	shadowUnwritten atomic.Int32
+	shadowSet       func(id string, waitMS int64, open bool, reasons string) error
 	// gen is the generation channel: wake closes it and installs a fresh one on
 	// every state transition, so a poller that took genChan before it read the
 	// rows is woken by any change after that read. genMu guards the swap only.

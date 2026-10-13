@@ -233,7 +233,7 @@ func (m *Module) passIfWaiting(ctx context.Context) {
 	if m.store == nil {
 		return
 	}
-	if n, err := m.store.CountWaiting(ctx); err != nil || (n == 0 && m.shadowLen.Load() == 0) {
+	if n, err := m.store.CountWaiting(ctx); err != nil || (n == 0 && m.shadowLen.Load() == 0 && m.shadowUnwritten.Load() == 0) {
 		return
 	}
 	m.admissionPass(ctx, "")
