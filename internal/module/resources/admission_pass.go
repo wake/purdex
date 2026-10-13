@@ -3,6 +3,7 @@ package resourcesmod
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/wake/purdex/internal/resources"
@@ -80,7 +81,7 @@ func (m *Module) admissionPass(ctx context.Context, fresh string) passResult {
 func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[string]string) (granted int, again bool) {
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
-	held, waiting, ok := m.readPassRows()
+	held, waiting, positions, ok := m.readPassRows()
 	// In advise the shadow queue has work even when nothing waits for real.
 	if !ok || (len(waiting) == 0 && set.Mode != resources.ModeAdvise) {
 		return 0, false
@@ -89,17 +90,22 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 		m.passHook()
 	}
 	now := m.now()
+	nowMS := now.UnixMilli()
 	// A row that ended some way no path reported must not keep a reasons entry.
-	all := make(map[string]bool, len(waiting))
+	all := make(map[string]bool, len(waiting)+len(positions))
 	for _, w := range waiting {
 		all[w.ID] = true
+	}
+	for _, p := range positions {
+		all[posKey(p.ID)] = true
 	}
 	m.reasons.retain(all)
 	// A waiter nobody polls any more (its lease ran out) is the sweeper's to
 	// end as abandoned; granting it would hold capacity for a client that left.
+	// A queue-mode row of a position is nobody's to poll (R1): it is live.
 	live := waiting[:0:0]
 	for _, w := range waiting {
-		if w.LeaseUntil > now.UnixMilli() {
+		if w.LeaseUntil > nowMS || isQueueRow(w) {
 			live = append(live, w)
 		}
 	}
@@ -121,36 +127,30 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 	}
 
 	zone, trend := m.admitZoneTrend()
+	// Reserved counts as running (amendment A §2.5): a position that is offered,
+	// running or idle holds the host for its session even between two commands.
 	running := len(held) > 0
-	lastGrant := m.lastGrantTime(held)
-	var toGrant []leaseRow
-	var gapLeft time.Duration
-	if set.Mode == resources.ModeAdvise {
-		gapLeft = m.shadowStep(set, held, waiting, zone, trend, now)
-		// Advise grants everything at once, up to a cut waiter (FIFO is kept).
-		for _, w := range waiting {
-			if cut[w.ID] {
-				break
-			}
-			toGrant = append(toGrant, w)
-		}
-	} else {
-		vw := make([]resources.V2Waiter, len(waiting))
-		byID := make(map[string]leaseRow, len(waiting))
-		for i, w := range waiting {
-			vw[i] = resources.V2Waiter{ID: w.ID, CreatedAt: time.UnixMilli(w.CreatedAt), Cut: cut[w.ID]}
-			byID[w.ID] = w
-		}
-		var grantID string
-		var reasons map[string]resources.V2Reason
-		grantID, gapLeft, reasons = resources.AdmitV2(zone, trend, running, lastGrant, vw, now, set)
-		for id, r := range reasons {
-			m.reasons.observe(id, r, now)
-		}
-		if grantID != "" {
-			toGrant = append(toGrant, byID[grantID])
+	posByID := make(map[string]*positionRow, len(positions))
+	rowsByPos := map[string][]leaseRow{}
+	for i := range positions {
+		posByID[positions[i].ID] = &positions[i]
+		if positions[i].State != resources.PosQueued {
+			running = true
 		}
 	}
+	for _, w := range waiting {
+		if w.PositionID != "" {
+			rowsByPos[w.PositionID] = append(rowsByPos[w.PositionID], w)
+		}
+	}
+	lastGrant := m.lastGrantTime(held)
+	gapOf := func() time.Duration {
+		if lastGrant.IsZero() {
+			return 0
+		}
+		return max(lastGrant.Add(set.Gap()).Sub(now), 0)
+	}
+	gapLeft := gapOf()
 
 	leases := make([]resources.Lease, len(held))
 	for i, r := range held {
@@ -158,17 +158,19 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 	}
 	host := m.admitHost()
 	use := m.leaseUseSnapshot()
-	for _, w := range toGrant {
+
+	// grant writes one grant: a plain row (posID ""), or the start of a command
+	// of a position (posID, from: the state it was in).
+	type outcome int
+	const (
+		grantWon outcome = iota
+		grantLost
+		grantFailed
+	)
+	grant := func(w leaseRow, path, posID, from string) outcome {
 		rec := resources.RecordOf(host, leases, use, w.Weight, now, set)
-		path := resources.PathWaited
-		switch {
-		case zone == resources.ZoneUnknown:
-			path = resources.PathUnknownZone
-		case w.ID == fresh:
-			path = resources.PathImmediate
-		}
 		d := resources.Decision{
-			Path: path, WaitedMS: max(0, now.UnixMilli()-w.CreatedAt),
+			Path: path, WaitedMS: max(0, nowMS-w.CreatedAt),
 			Load1: host.Load1, NCPU: host.NCPU, Mem: host.Mem, Measured: host.Measured, Full: host.Full,
 			Weight: w.Weight, SumCharge: rec.SumCharge, Unleased: rec.Unleased, WouldWaitR2: rec.WouldWaitR2,
 		}
@@ -176,29 +178,246 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 		// Advise: would v2 have made this request wait? (not granted by the
 		// shadow in the pass of its own request)
 		wouldWait := set.Mode == resources.ModeAdvise && !m.shadow.atOnce[w.ID]
-		won, err := m.store.GrantDecided(w.ID, now.UnixMilli(), wouldWait, d, v2, m.reasons.peek(w.ID, now), baselines[w.ID])
+		var won bool
+		var err error
+		if posID == "" {
+			won, err = m.store.GrantDecided(w.ID, nowMS, wouldWait, d, v2, m.reasons.peek(w.ID, now), baselines[w.ID])
+		} else {
+			won, err = m.store.GrantInPosition(posID, from, w.ID, nowMS, wouldWait, d, v2, m.reasons.peek(w.ID, now), baselines[w.ID])
+		}
 		if err != nil {
 			m.logf("[resources] admission: grant %s: %v", w.ID, err)
-			return granted, false
+			return grantFailed
 		}
 		if !won {
-			// Someone else moved the row after the read: the plan is stale.
-			return granted, true
+			return grantLost // someone else moved the row after the read: the plan is stale
 		}
 		m.reasons.drop(w.ID)
 		delete(m.shadow.atOnce, w.ID)
-		m.lastGrantMS = max(m.lastGrantMS, now.UnixMilli()) // only forward (a grant needs now >= lastGrant + gap, so this is a guard)
-		m.lastGrantAtMS.Store(m.lastGrantMS)
+		if path != resources.PathOffer { // the offer already started the gap
+			m.lastGrantMS = max(m.lastGrantMS, nowMS) // only forward (a grant needs now >= lastGrant + gap, so this is a guard)
+			m.lastGrantAtMS.Store(m.lastGrantMS)
+			lastGrant = now
+		}
 		leases = append(leases, resources.Lease{ID: w.ID, Weight: w.Weight, GrantedAt: now})
 		running = true
 		granted++
 		m.recordGrantWarning(w.ID, w.Kind)
 		m.logf("[resources] lease %s (%s, weight %d) granted: %s, waited %d ms", w.ID, w.Kind, w.Weight, d.Path, d.WaitedMS)
+		return grantWon
+	}
+	// finish ends the pass the way the original did: a lost compare-and-set asks
+	// for another round, a failed write stops.
+	finish := func(o outcome) (int, bool, bool) {
+		switch o {
+		case grantLost:
+			return granted, true, true
+		case grantFailed:
+			return granted, false, true
+		}
+		return 0, false, false
+	}
+
+	if set.Mode == resources.ModeAdvise {
+		gapLeft = m.shadowStep(set, held, waiting, zone, trend, now)
+		// Advise grants everything at once, up to a cut waiter (FIFO is kept).
+		for _, w := range waiting {
+			if cut[w.ID] {
+				break
+			}
+			path := resources.PathWaited
+			switch {
+			case zone == resources.ZoneUnknown:
+				path = resources.PathUnknownZone
+			case w.ID == fresh:
+				path = resources.PathImmediate
+			}
+			if g, a, stop := finish(grant(w, path, "", "")); stop {
+				return g, a
+			}
+		}
+	} else {
+		// Reservation grants first: an offered or idle position starts its
+		// session's command at once, without a table or gap check. The offer was
+		// the decision (A §3.1).
+		for _, p := range positions {
+			if p.State != resources.PosOffered && p.State != resources.PosIdle {
+				continue
+			}
+			w, found := grantableAt(rowsByPos[p.ID], fresh, cut)
+			if !found {
+				continue
+			}
+			path := resources.PathOffer
+			if p.State == resources.PosIdle {
+				path = resources.PathContinued
+			}
+			if g, a, stop := finish(grant(w, path, p.ID, p.State)); stop {
+				return g, a
+			}
+			posByID[p.ID].State = resources.PosRunning
+		}
+		// A second command of a running position (coordinator Q6): the table
+		// decides, whether or not someone is queued; when someone waits, the
+		// position's own limit applies too.
+		for _, p := range positions {
+			if posByID[p.ID].State != resources.PosRunning {
+				continue
+			}
+			w, found := freshAt(rowsByPos[p.ID], fresh, cut)
+			if !found {
+				continue
+			}
+			if m.someoneWaitsBesides(positions, waiting, p.ID) && (p.Warned || p.CommandsStarted >= resources.PositionMaxCommands) {
+				continue
+			}
+			vw := []resources.V2Waiter{{ID: w.ID, CreatedAt: time.UnixMilli(w.CreatedAt)}}
+			if id, _, _ := resources.AdmitV2(zone, trend, true, lastGrant, vw, now, set); id == "" {
+				continue
+			}
+			if g, a, stop := finish(grant(w, resources.PathImmediate, p.ID, resources.PosRunning)); stop {
+				return g, a
+			}
+		}
+		// The queue: queued positions and wait-mode rows, strictly by created_at.
+		entries := make([]resources.V2Waiter, 0, len(waiting))
+		for _, p := range positions {
+			if p.State != resources.PosQueued || len(rowsByPos[p.ID]) == 0 {
+				continue
+			}
+			c := false
+			for _, w := range rowsByPos[p.ID] {
+				c = c || cut[w.ID]
+			}
+			entries = append(entries, resources.V2Waiter{ID: posKey(p.ID), CreatedAt: time.UnixMilli(p.CreatedAt), Cut: c})
+		}
+		byID := map[string]leaseRow{}
+		for _, w := range waiting {
+			if w.PositionID != "" {
+				continue
+			}
+			entries = append(entries, resources.V2Waiter{ID: w.ID, CreatedAt: time.UnixMilli(w.CreatedAt), Cut: cut[w.ID]})
+			byID[w.ID] = w
+		}
+		var grantID string
+		var reasons map[string]resources.V2Reason
+		grantID, gapLeft, reasons = resources.AdmitV2(zone, trend, running, lastGrant, entries, now, set)
+		for id, r := range reasons {
+			m.reasons.observe(id, r, now)
+		}
+		switch {
+		case grantID == "":
+		case isPosKey(grantID):
+			p := posByID[strings.TrimPrefix(grantID, "pos:")]
+			v2 := resources.V2Decision(zone, trend, running, gapLeft)
+			won, err := m.store.OfferPosition(p.ID, nowMS, v2.Zone, v2.Trend, m.reasons.peek(grantID, now))
+			if err != nil {
+				m.logf("[resources] admission: offer %s: %v", p.ID, err)
+				return granted, false
+			}
+			if !won {
+				return granted, true
+			}
+			m.reasons.drop(grantID)
+			m.lastOfferMS = max(m.lastOfferMS, nowMS)
+			lastGrant = now
+			p.State = resources.PosOffered
+			m.logf("[resources] position %s offered", p.ID)
+			m.wake()
+			// The free host: the offer is made in the pass of the request that
+			// asked, so it runs at once (V13).
+			if w, found := freshAt(rowsByPos[p.ID], fresh, cut); found {
+				path := resources.PathImmediate
+				if zone == resources.ZoneUnknown {
+					path = resources.PathUnknownZone
+				}
+				if g, a, stop := finish(grant(w, path, p.ID, resources.PosOffered)); stop {
+					return g, a
+				}
+				p.State = resources.PosRunning
+			}
+		default:
+			w := byID[grantID]
+			path := resources.PathWaited
+			switch {
+			case zone == resources.ZoneUnknown:
+				path = resources.PathUnknownZone
+			case w.ID == fresh:
+				path = resources.PathImmediate
+			}
+			if g, a, stop := finish(grant(w, path, "", "")); stop {
+				return g, a
+			}
+		}
+		// Naming (R7): no row waits at an offered or idle position unasked.
+		for _, p := range positions {
+			kind := ""
+			switch posByID[p.ID].State {
+			case resources.PosOffered:
+				kind = "offer"
+			case resources.PosIdle:
+				kind = "idle"
+			default:
+				continue
+			}
+			if _, err := m.store.NameRows(p.ID, nowMS, kind); err != nil {
+				m.logf("[resources] admission: name rows of %s: %v", p.ID, err)
+			}
+		}
 	}
 	if granted > 0 {
 		m.wake()
 	}
 	return granted, again
+}
+
+// posKey is the reasons / queue key of a position.
+func posKey(id string) string { return "pos:" + id }
+
+func isPosKey(k string) bool { return strings.HasPrefix(k, "pos:") }
+
+// isQueueRow says whether the row is a queue-mode request of a position.
+func isQueueRow(w leaseRow) bool { return w.Mode == resources.CallQueue && w.PositionID != "" }
+
+// grantableAt is the oldest waiting row of a position that the reservation may
+// start now: the pass's own request (of either mode), or an ask row that was
+// confirmed. A cut row is not started.
+func grantableAt(rows []leaseRow, fresh string, cut map[string]bool) (leaseRow, bool) {
+	for _, w := range rows {
+		if cut[w.ID] {
+			continue
+		}
+		if w.ID == fresh || (w.Mode == resources.CallAsk && w.ConfirmedAt > 0) {
+			return w, true
+		}
+	}
+	return leaseRow{}, false
+}
+
+// freshAt is the pass's own request, if it is a row of the position and not cut.
+func freshAt(rows []leaseRow, fresh string, cut map[string]bool) (leaseRow, bool) {
+	for _, w := range rows {
+		if w.ID == fresh && !cut[w.ID] {
+			return w, true
+		}
+	}
+	return leaseRow{}, false
+}
+
+// someoneWaitsBesides says whether anyone other than the position waits: another
+// queued position, or a wait-mode row (Q5).
+func (m *Module) someoneWaitsBesides(positions []positionRow, waiting []leaseRow, positionID string) bool {
+	for _, p := range positions {
+		if p.ID != positionID && p.State == resources.PosQueued {
+			return true
+		}
+	}
+	for _, w := range waiting {
+		if w.PositionID == "" {
+			return true
+		}
+	}
+	return false
 }
 
 // admitZoneTrend is the zone and trend of the latest sample; an unavailable or
@@ -214,8 +433,11 @@ func (m *Module) admitZoneTrend() (resources.Zone, resources.Trend) {
 // of the one kept in memory (set at every grant, read from the table at boot)
 // and the held rows' own. Zero when nothing was ever granted. stateMu is held.
 func (m *Module) lastGrantTime(held []leaseRow) time.Time {
-	last := m.lastGrantMS
+	last := max(m.lastGrantMS, m.lastOfferMS)
 	for _, r := range held {
+		if r.DecPath == resources.PathOffer {
+			continue
+		}
 		last = max(last, r.GrantedAt)
 	}
 	if last == 0 {
@@ -233,19 +455,23 @@ func (m *Module) baselineReady(w leaseRow, baselines map[string]string) bool {
 	return ok
 }
 
-// readPassRows reads the held and the waiting rows; ok is false when either
-// read failed (logged).
-func (m *Module) readPassRows() (held, waiting []leaseRow, ok bool) {
+// readPassRows reads the held rows, the waiting rows and the live positions;
+// ok is false when a read failed (logged).
+func (m *Module) readPassRows() (held, waiting []leaseRow, positions []positionRow, ok bool) {
 	var err error
 	if held, err = m.store.Active(); err != nil {
 		m.logf("[resources] admission: list held leases: %v", err)
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
 	if waiting, err = m.store.Waiting(); err != nil {
 		m.logf("[resources] admission: list waiting leases: %v", err)
-		return nil, nil, false
+		return nil, nil, nil, false
 	}
-	return held, waiting, true
+	if positions, err = m.store.LivePositions(); err != nil {
+		m.logf("[resources] admission: list positions: %v", err)
+		return nil, nil, nil, false
+	}
+	return held, waiting, positions, true
 }
 
 // admitHost is the host figure the pass decides on: the latest sample, or an

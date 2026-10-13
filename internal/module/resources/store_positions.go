@@ -171,3 +171,9 @@ func (s *leaseStore) MaxOfferedAt() (int64, error) {
 	}
 	return n, nil
 }
+
+// SetQueuedReason records why a queue-mode row did not run (queue, own_running).
+func (s *leaseStore) SetQueuedReason(id, reason string) error {
+	_, err := s.db.Exec(`UPDATE resource_leases SET queued_reason = ? WHERE id = ? AND state = 'waiting'`, reason, id)
+	return err
+}

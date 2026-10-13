@@ -85,6 +85,9 @@ type leaseRow struct {
 	OfferedAt    int64
 	ConfirmedAt  int64
 	Notice       string
+	// DecPath is how the grant was decided (immediate, waited, offer, ...);
+	// empty until granted.
+	DecPath string
 }
 
 // leaseStore is the SQLite persistence of resource_leases (resources.db).
@@ -179,7 +182,7 @@ const leaseCols = `id, client_id, state, kind, weight, session_id, holder_pid, h
 	overrun, would_wait, COALESCE(end_reason,''), COALESCE(waited_ms,0),
 	COALESCE(peak_use,0), COALESCE(mean_use,0), COALESCE(ewma,0), samples, empty_samples, COALESCE(baseline,''),
 	parks, parked_until, parkable,
-	position_id, mode, command, cwd, queued_reason, offered_at, confirmed_at, notice`
+	position_id, mode, command, cwd, queued_reason, offered_at, confirmed_at, notice, dec_path`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
@@ -190,7 +193,7 @@ func scanLease(sc rowScanner) (leaseRow, error) {
 		&r.Scope, &r.ToolUseID, &r.CreatedAt, &r.DeadlineAt, &r.LeaseUntil, &r.GrantedAt, &r.EndedAt,
 		&overrun, &wouldWait, &r.EndReason, &r.WaitedMS,
 		&r.PeakUse, &r.MeanUse, &r.EWMA, &r.Samples, &r.EmptySamples, &r.Baseline, &r.Parks, &r.ParkedUntil, &parkable,
-		&r.PositionID, &r.Mode, &r.Command, &r.Cwd, &r.QueuedReason, &r.OfferedAt, &r.ConfirmedAt, &r.Notice)
+		&r.PositionID, &r.Mode, &r.Command, &r.Cwd, &r.QueuedReason, &r.OfferedAt, &r.ConfirmedAt, &r.Notice, &r.DecPath)
 	r.Overrun, r.WouldWait, r.Parkable = overrun != 0, wouldWait != 0, parkable != 0
 	return r, err
 }
@@ -201,6 +204,10 @@ func nullable(s string) any {
 	}
 	return s
 }
+
+// queueRowSQL selects the rows of a queue-mode request that belong to a
+// position (R1): nobody polls them, so their lease_until never runs out.
+const queueRowSQL = `(mode = 'queue' AND position_id != '')`
 
 // Create inserts a waiting row, idempotent on ClientID: a second create with
 // the same client id inserts nothing and returns the existing row with
@@ -268,7 +275,7 @@ func (s *leaseStore) one(query string, arg any) (leaseRow, bool, error) {
 func (s *leaseStore) RenewLease(id string, until int64) error {
 	if _, err := s.db.Exec(`
 		UPDATE resource_leases SET lease_until = MAX(lease_until, ?)
-		WHERE id = ? AND state = 'waiting'`, until, id); err != nil {
+		WHERE id = ? AND state = 'waiting' AND NOT `+queueRowSQL, until, id); err != nil {
 		return fmt.Errorf("renew lease %s: %w", id, err)
 	}
 	return nil
@@ -358,7 +365,7 @@ func (s *leaseStore) CloseIfExpired(id string, now int64, waitReasons string) (b
 		UPDATE resource_leases
 		SET state = 'ended', ended_at = ?, end_reason = 'abandoned', waited_ms = COALESCE(waited_ms, ? - created_at),
 			wait_reasons = COALESCE(NULLIF(?, ''), wait_reasons)
-		WHERE id = ? AND state = 'waiting' AND lease_until <= ?`, now, now, waitReasons, id, now)
+		WHERE id = ? AND state = 'waiting' AND lease_until <= ? AND NOT `+queueRowSQL, now, now, waitReasons, id, now)
 }
 
 // SetShadow records the advise shadow's verdict on a row, once: the wait v2
@@ -393,7 +400,7 @@ func (s *leaseStore) MaxGrantedAt() (int64, error) {
 func (s *leaseStore) ExtendWaiting(until int64) (int64, error) {
 	res, err := s.db.Exec(`
 		UPDATE resource_leases SET lease_until = ?
-		WHERE state = 'waiting' AND parked_until = 0 AND lease_until < ?`, until, until)
+		WHERE state = 'waiting' AND parked_until = 0 AND lease_until < ? AND NOT `+queueRowSQL, until, until)
 	if err != nil {
 		return 0, fmt.Errorf("extend waiting leases: %w", err)
 	}
