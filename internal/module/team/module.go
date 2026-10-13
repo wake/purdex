@@ -209,6 +209,8 @@ type Module struct {
 	// request_open, insert) and Stop's cancel of stopCtx: a create either
 	// finishes before Stop, or takes the lock after it and sees stopping.
 	createMu sync.Mutex
+	// persons is the table of live person tokens (RT-1a).
+	persons personTokens
 
 	mu      sync.Mutex
 	waiters map[string][]chan struct{} // long-polls per approval id; closed when it closes
@@ -584,7 +586,8 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	// P5a relay routes (spec §8.3, §8.7); all under TokenAuth like /api/team/*.
 	mux.HandleFunc("POST /api/relay/hello", m.handleRelayHello)
 	mux.HandleFunc("POST /api/relay/begin", m.handleRelayBegin)
-	mux.HandleFunc("POST /api/relay/ask", m.handleRelayAsk) // a member's mod asks its lead to relay it (member relay ask §3.1)
+	mux.HandleFunc("POST "+team.PersonRoute, m.handlePerson) // a person-typed command: a one-use token (RT-1a)
+	mux.HandleFunc("POST /api/relay/ask", m.handleRelayAsk)  // a member's mod asks its lead to relay it (member relay ask §3.1)
 	mux.HandleFunc("GET /api/relay/wait/{id}", m.handleRelayWait)
 	mux.HandleFunc("POST /api/relay/self", m.handleRelaySelf)
 	mux.HandleFunc("POST /api/relay/ops/{id}/report", m.handleRelayReport)
