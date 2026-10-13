@@ -70,6 +70,21 @@ type leaseRow struct {
 	ParkedUntil int64
 	// Parkable: the creating client reads "queued" and "replaced".
 	Parkable bool
+
+	// Amendment A. PositionID is the position the row belongs to ("" for a
+	// wait-mode row). Mode is queue | ask | wait ("" reads as wait). Command
+	// and Cwd are what the queue shows (env is never stored). QueuedReason is
+	// queue | own_running. OfferedAt is when the row was named in a notice;
+	// ConfirmedAt when an ask row was confirmed; Notice is the final notice
+	// its release carried.
+	PositionID   string
+	Mode         string
+	Command      string
+	Cwd          string
+	QueuedReason string
+	OfferedAt    int64
+	ConfirmedAt  int64
+	Notice       string
 }
 
 // leaseStore is the SQLite persistence of resource_leases (resources.db).
@@ -158,7 +173,8 @@ const leaseCols = `id, client_id, state, kind, weight, session_id, holder_pid, h
 	created_at, deadline_at, lease_until, COALESCE(granted_at,0), COALESCE(ended_at,0),
 	overrun, would_wait, COALESCE(end_reason,''), COALESCE(waited_ms,0),
 	COALESCE(peak_use,0), COALESCE(mean_use,0), COALESCE(ewma,0), samples, empty_samples, COALESCE(baseline,''),
-	parks, parked_until, parkable`
+	parks, parked_until, parkable,
+	position_id, mode, command, cwd, queued_reason, offered_at, confirmed_at, notice`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
@@ -168,7 +184,8 @@ func scanLease(sc rowScanner) (leaseRow, error) {
 	err := sc.Scan(&r.ID, &r.ClientID, &r.State, &r.Kind, &r.Weight, &r.SessionID, &r.HolderPID, &r.HolderStart,
 		&r.Scope, &r.ToolUseID, &r.CreatedAt, &r.DeadlineAt, &r.LeaseUntil, &r.GrantedAt, &r.EndedAt,
 		&overrun, &wouldWait, &r.EndReason, &r.WaitedMS,
-		&r.PeakUse, &r.MeanUse, &r.EWMA, &r.Samples, &r.EmptySamples, &r.Baseline, &r.Parks, &r.ParkedUntil, &parkable)
+		&r.PeakUse, &r.MeanUse, &r.EWMA, &r.Samples, &r.EmptySamples, &r.Baseline, &r.Parks, &r.ParkedUntil, &parkable,
+		&r.PositionID, &r.Mode, &r.Command, &r.Cwd, &r.QueuedReason, &r.OfferedAt, &r.ConfirmedAt, &r.Notice)
 	r.Overrun, r.WouldWait, r.Parkable = overrun != 0, wouldWait != 0, parkable != 0
 	return r, err
 }
@@ -186,11 +203,13 @@ func nullable(s string) any {
 func (s *leaseStore) Create(r leaseRow) (leaseRow, bool, error) {
 	res, err := s.db.Exec(`
 		INSERT INTO resource_leases (id, client_id, state, kind, weight, session_id, holder_pid, holder_start,
-			scope, tool_use_id, created_at, deadline_at, lease_until, baseline, parkable)
-		VALUES (?, ?, 'waiting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			scope, tool_use_id, created_at, deadline_at, lease_until, baseline, parkable,
+			position_id, mode, command, cwd, queued_reason)
+		VALUES (?, ?, 'waiting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (client_id) DO NOTHING`,
 		r.ID, r.ClientID, r.Kind, r.Weight, r.SessionID, r.HolderPID, r.HolderStart,
-		r.Scope, r.ToolUseID, r.CreatedAt, r.DeadlineAt, r.LeaseUntil, nullable(r.Baseline), b2i(r.Parkable))
+		r.Scope, r.ToolUseID, r.CreatedAt, r.DeadlineAt, r.LeaseUntil, nullable(r.Baseline), b2i(r.Parkable),
+		r.PositionID, r.Mode, r.Command, r.Cwd, r.QueuedReason)
 	if err != nil {
 		return leaseRow{}, false, fmt.Errorf("create lease: %w", err)
 	}
@@ -364,10 +383,11 @@ func (s *leaseStore) Adopt(old leaseRow, n leaseRow, deadlineAt, leaseUntil, now
 
 // MaxGrantedAt is the newest granted_at of any row, held or ended (0 when
 // nothing was ever granted): where the gap between two grants is counted from
-// after a restart.
+// after a restart. A grant on the offer path is left out: the offer started
+// the gap (see MaxOfferedAt) and using the reservation does not start another.
 func (s *leaseStore) MaxGrantedAt() (int64, error) {
 	var n int64
-	if err := s.db.QueryRow(`SELECT COALESCE(MAX(granted_at), 0) FROM resource_leases`).Scan(&n); err != nil {
+	if err := s.db.QueryRow(`SELECT COALESCE(MAX(granted_at), 0) FROM resource_leases WHERE dec_path != 'offer'`).Scan(&n); err != nil {
 		return 0, fmt.Errorf("max granted_at: %w", err)
 	}
 	return n, nil
@@ -546,6 +566,17 @@ var decisionColumns = []struct{ name, def string }{
 	// the row ended first.
 	{"v2_wait_ms", "INTEGER NOT NULL DEFAULT -1"},
 	{"v2_wait_open", "INTEGER NOT NULL DEFAULT 0"},
+	// Amendment A: the position a row belongs to, how its caller wants a busy
+	// host answered, what the queue shows, and the offer / confirm / notice
+	// bookkeeping of the row.
+	{"position_id", "TEXT NOT NULL DEFAULT ''"},
+	{"mode", "TEXT NOT NULL DEFAULT ''"},
+	{"command", "TEXT NOT NULL DEFAULT ''"},
+	{"cwd", "TEXT NOT NULL DEFAULT ''"},
+	{"queued_reason", "TEXT NOT NULL DEFAULT ''"},
+	{"offered_at", "INTEGER NOT NULL DEFAULT 0"},
+	{"confirmed_at", "INTEGER NOT NULL DEFAULT 0"},
+	{"notice", "TEXT NOT NULL DEFAULT ''"},
 }
 
 // hostMinutesSchema is the D-8.2 timeline: one row per minute, written by the
@@ -598,6 +629,12 @@ func migrateDecisionColumns(db *sql.DB) error {
 		if _, err := db.Exec("ALTER TABLE resource_leases ADD COLUMN " + c.name + " " + c.def); err != nil {
 			return fmt.Errorf("migrate resources db: add %s: %w", c.name, err)
 		}
+	}
+	if _, err := db.Exec(positionsSchema); err != nil {
+		return fmt.Errorf("migrate resources db: positions: %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS resource_leases_position ON resource_leases (position_id) WHERE position_id != ''`); err != nil {
+		return fmt.Errorf("migrate resources db: position index: %w", err)
 	}
 	if _, err := db.Exec(hostMinutesSchema); err != nil {
 		return fmt.Errorf("migrate resources db: host_minutes: %w", err)

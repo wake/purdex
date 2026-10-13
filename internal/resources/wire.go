@@ -57,6 +57,9 @@ type Snapshot struct {
 	Leases  []LeaseView  `json:"leases,omitempty"`
 	Waiters []WaiterView `json:"waiters,omitempty"`
 	Recent  []RecentView `json:"recent,omitempty"`
+	// Positions are the live positions of mode lease, oldest first (amendment
+	// A); Waiters keeps only the wait-mode rows that have no position.
+	Positions []PositionView `json:"positions,omitempty"`
 	// GapUntil is when the pause after the last grant ends, unix ms; absent
 	// when no gap is running (in advise it is the shadow's).
 	GapUntil int64 `json:"gap_until,omitempty"`

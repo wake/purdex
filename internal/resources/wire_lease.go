@@ -37,6 +37,14 @@ const (
 	EndExpired    = "expired"
 	EndAbandoned  = "abandoned"
 	EndVanished   = "vanished"
+	// Amendment A: how a row or a position ends.
+	EndCancelledBySession = "cancelled_by_session"
+	EndNoAnswer           = "no_answer"
+	EndIdleTimeout        = "idle_timeout"
+	EndDone               = "done"
+	EndReleasedAfterLimit = "released_after_limit"
+	// EndDrained: the mode left lease and the queue was emptied.
+	EndDrained = "drained"
 )
 
 // EventType is the WS host event that carries the snapshot (without recent)
@@ -75,11 +83,16 @@ type LeaseRequest struct {
 	HolderStart string `json:"holder_start,omitempty"`
 	Scope       string `json:"scope,omitempty"`
 	ToolUseID   string `json:"tool_use_id,omitempty"`
-	// Parkable says the client understands "queued": when its hold runs out the
-	// row may be parked (it keeps its place and the call returns) instead of
-	// the call waiting on. A client that does not send it (older than lease v2
-	// P2b) is never parked, so it never meets an answer it cannot read.
+	// Parkable is accepted and ignored: parking is gone (amendment A), but a
+	// client that still sends it must not be refused (POST rejects unknown
+	// fields).
 	Parkable bool `json:"parkable,omitempty"`
+	// Mode is how the caller wants a busy host answered (CallQueue, CallAsk,
+	// CallWait; empty reads as wait). Command and Cwd are shown in the queue;
+	// both are cut by the daemon and env is never sent.
+	Mode    string `json:"mode,omitempty"`
+	Command string `json:"command,omitempty"`
+	Cwd     string `json:"cwd,omitempty"`
 }
 
 // LeaseHost is the part of the host reading a lease answer carries.
@@ -116,6 +129,14 @@ type LeaseResponse struct {
 	// Warning is set on a held build / test lease while the volume that holds the Go build cache is under its hard floor
 	// even after a trim: the lease was granted all the same (#2470).
 	Warning string `json:"warning,omitempty"`
+	// PositionID is the position the row belongs to (set on every answer about
+	// such a row, held answers included).
+	PositionID string `json:"position_id,omitempty"`
+	// QueuedReason says why a queue-mode request did not run (QueuedBehindQueue,
+	// QueuedOwnRunning).
+	QueuedReason string `json:"queued_reason,omitempty"`
+	// Notice is the final notice a release answer carries (amendment A §3.3).
+	Notice string `json:"notice,omitempty"`
 }
 
 // LeaseView is one held lease in a Snapshot.
@@ -171,7 +192,49 @@ const (
 	// ErrClientIDReused: the client id names a lease that was made for a
 	// different request. A replay must repeat the request it replays.
 	ErrClientIDReused = "client_id_reused"
+	// Amendment A: the routes that act on the caller's own session.
+	ErrNotYourSession = "not_your_session" // 403
+	ErrNoSession      = "no_session"       // 403: the caller is not under an agent
+	ErrNotYourTurn    = "not_your_turn"    // 409: confirm on a queued position
+	ErrRunning        = "running"          // 409: cancel of a running command
+	ErrNoPosition     = "no_position"      // 404
 )
+
+// PositionView is one position in a Snapshot (amendment A §5), with its
+// requests under it.
+type PositionView struct {
+	ID        string `json:"id"`
+	SessionID string `json:"session_id"`
+	Ref       string `json:"ref,omitempty"`
+	Address   string `json:"address,omitempty"`
+	State     string `json:"state"`
+	// Place is the 1-based queue place of a queued position.
+	Place          int    `json:"place,omitempty"`
+	CreatedAt      int64  `json:"created_at"`
+	WindowUntil    int64  `json:"window_until,omitempty"`
+	FirstStartedAt int64  `json:"first_started_at,omitempty"`
+	Commands       int    `json:"commands"`
+	SpanS          int64  `json:"span_s,omitempty"`
+	Warned         bool   `json:"warned,omitempty"`
+	Delivered      bool   `json:"delivered,omitempty"`
+	NoticeResult   string `json:"notice_result,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+	ReasonSince    int64  `json:"reason_since,omitempty"`
+	// Requests are the commands of the position.
+	Requests []PositionRequestView `json:"requests,omitempty"`
+}
+
+// PositionRequestView is one command of a position: state is held, queued,
+// waiting or asked.
+type PositionRequestView struct {
+	ID      string `json:"id"`
+	Mode    string `json:"mode,omitempty"`
+	Kind    string `json:"kind,omitempty"`
+	Command string `json:"command,omitempty"`
+	Cwd     string `json:"cwd,omitempty"`
+	State   string `json:"state"`
+	AgeS    int64  `json:"age_s"`
+}
 
 // APIError is the body of a refused lease request: {"error": code, "detail": text}.
 type APIError struct {

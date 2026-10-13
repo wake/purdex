@@ -72,6 +72,9 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 	case req.Scope != "" && req.Scope != resources.ScopeProcess && req.Scope != resources.ScopeSessionNew:
 		writeErr(w, http.StatusBadRequest, resources.ErrBadRequest, "scope must be process or session-new")
 		return
+	case req.Mode != "" && req.Mode != resources.CallQueue && req.Mode != resources.CallAsk && req.Mode != resources.CallWait:
+		writeErr(w, http.StatusBadRequest, resources.ErrBadRequest, "mode must be queue, ask or wait")
+		return
 	case req.HolderPID <= 0:
 		writeErr(w, http.StatusBadRequest, resources.ErrBadRequest, "holder_pid is required")
 		return
@@ -93,8 +96,12 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 	// A process-scope request that names no session gets the one whose agent is
 	// among the holder's ancestors (`pdx lease run` sends none). Resolved before
 	// any lookup, so that a replay and a re-attach see the same session.
-	if req.Scope != resources.ScopeSessionNew && req.SessionID == "" {
-		req.SessionID = m.sessionOfProcess(r.Context(), req.HolderPID)
+	// req keeps what the client sent: the replay check compares a session only if
+	// the client gave one, so a lookup that finds nothing one time and a session
+	// the next (or the other way round) is still the same request.
+	session := req.SessionID
+	if req.Scope != resources.ScopeSessionNew && session == "" {
+		session = m.sessionOfProcess(r.Context(), req.HolderPID)
 	}
 
 	// A replay returns the row it made, whatever has become of it, but only to
@@ -120,9 +127,12 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	row := leaseRow{
 		ID: uuid.NewString(), ClientID: req.ClientID, State: resources.StateWaiting, Kind: req.Kind, Weight: weight,
-		SessionID: req.SessionID, HolderPID: req.HolderPID, HolderStart: req.HolderStart, Scope: req.Scope,
+		SessionID: session, HolderPID: req.HolderPID, HolderStart: req.HolderStart, Scope: req.Scope,
 		ToolUseID: req.ToolUseID, Parkable: req.Parkable, CreatedAt: now.UnixMilli(), DeadlineAt: now.Add(wait).UnixMilli(),
 		LeaseUntil: now.Add(resources.LeaseS * time.Second).UnixMilli(),
+		Mode:       req.Mode,
+		Command:    resources.CutCommand(req.Command, resources.MaxCommandBytes),
+		Cwd:        resources.CutCommand(req.Cwd, resources.MaxCwdBytes),
 	}
 	if row.Scope == "" {
 		row.Scope = resources.ScopeProcess
@@ -200,11 +210,11 @@ func validHolderStart(s string) (code, detail string) {
 // request is the one it was made for (kind or weight, session, tool use, and
 // the holder unless the row is a session-new one), else 409 client_id_reused.
 func (m *Module) replay(w http.ResponseWriter, r *http.Request, req resources.LeaseRequest, row leaseRow, set resources.Settings) {
-	// A process row keeps the session found when it was made; a replay whose
-	// lookup finds none this time (the table changed, the registry is busy) is
-	// still the same request.
+	// A process row keeps the session found when it was made (or none); req.SessionID
+	// is only what the client itself sent, so a replay is the same request whatever
+	// the lookup found this time or the time before.
 	sessionOK := row.SessionID == req.SessionID || (req.SessionID == "" && row.Scope == resources.ScopeProcess)
-	same := sessionOK && row.ToolUseID == req.ToolUseID
+	same := sessionOK && row.ToolUseID == req.ToolUseID && callMode(row.Mode) == callMode(req.Mode)
 	if req.Kind != "" {
 		same = same && row.Kind == req.Kind
 	} else {
@@ -498,4 +508,13 @@ func (m *Module) reattach(n leaseRow) (leaseRow, bool) {
 		return got, true
 	}
 	return leaseRow{}, false
+}
+
+// callMode reads an empty mode as wait: rows from before amendment A and
+// clients that name no mode are the same kind of request as an explicit wait.
+func callMode(m string) string {
+	if m == "" {
+		return resources.CallWait
+	}
+	return m
 }
