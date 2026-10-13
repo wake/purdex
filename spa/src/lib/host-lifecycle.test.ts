@@ -21,6 +21,7 @@ import { useSessionCwdStore } from '../stores/useSessionCwdStore'
 import { useTeamUiStore } from '../stores/useTeamUiStore'
 import { teamKeyOf } from './team/team-views'
 import { approvalKey, useApprovalStore } from '../stores/useApprovalStore'
+import { useHookCardStore } from '../stores/useHookCardStore'
 import type { Approval } from './team/types'
 import { useLocalProfilesStore, type ParkedWorld } from '../stores/useLocalProfilesStore'
 import { STORAGE_KEYS } from './storage/keys'
@@ -1383,6 +1384,26 @@ describe('approval store invalidation (#1978)', () => {
       expect(held()).toEqual([`${HOST_B}:b1`])
       expect(useUndoToast.getState().toast).toBeNull()
     }
+  })
+
+  // The Dock badge counts hook cards (app-badge spec §4.1): they belong to the same daemon, so they go the same way.
+  it('hook cards go with the host: removed or re-pointed loses them, other hosts and a token change keep them', () => {
+    const hookCard = (id: string): Approval => ({ ...open(id), kind: 'hook_ask', payload: {} })
+    const seedHooks = () => {
+      useHookCardStore.getState().reset()
+      useHookCardStore.getState().applyOpened(HOST_A, hookCard('ha'))
+      useHookCardStore.getState().applyOpened(HOST_B, hookCard('hb'))
+    }
+    const heldHooks = () => Object.values(useHookCardStore.getState().entries).map((e) => `${e.hostId}:${e.approval.id}`).sort()
+    seedHooks()
+    useHostStore.getState().updateHost(HOST_A, { token: 'rotated' })
+    expect(heldHooks()).toEqual([`${HOST_A}:ha`, `${HOST_B}:hb`])
+    useHostStore.getState().updateHost(HOST_A, { ip: '9.9.9.9' })
+    expect(heldHooks()).toEqual([`${HOST_B}:hb`])
+    seedHooks()
+    useHostStore.setState((s) => ({ hosts: { [HOST_B]: s.hosts[HOST_B] }, hostOrder: [HOST_B] }))
+    expect(heldHooks()).toEqual([`${HOST_B}:hb`])
+    useHookCardStore.getState().reset()
   })
 
   // A token rotation is nearly always the same daemon: its snapshot corrects the entries and the queued decisions are

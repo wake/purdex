@@ -10,6 +10,7 @@
 // `toastClosed` and `submitDecision` live in approval-decide.ts (the 409 path words the toast the same way); that file
 // imports nothing from here, so there is no import cycle.
 import { useApprovalStore } from '../../stores/useApprovalStore'
+import { useHookCardStore } from '../../stores/useHookCardStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { hostLabel, hostLookOf } from '../host-look'
@@ -78,8 +79,21 @@ function withoutHookKinds(ev: ApprovalEventValue): ApprovalEventValue | null {
   return isHookKind(ev.approval.kind) ? null : ev
 }
 
+/**
+ * The Dock badge counts the cards this window does not draw (app-badge spec §4.1), so the hook kinds are kept in
+ * useHookCardStore: a snapshot replaces the host's whole set, opened adds, closed removes. Nothing else sees them.
+ */
+function feedHookCards(hostId: string, ev: ApprovalEventValue): void {
+  const store = useHookCardStore.getState()
+  if (ev.op === 'snapshot') store.applySnapshot(hostId, ev.approvals.filter((a) => isHookKind(a.kind)))
+  else if (!isHookKind(ev.approval.kind)) return
+  else if (ev.op === 'opened') store.applyOpened(hostId, ev.approval)
+  else store.applyClosed(hostId, ev.approval)
+}
+
 export function handleApprovalEvent(hostId: string, value: unknown): void {
   const parsed = parseApprovalEvent(value)
+  if (parsed) feedHookCards(hostId, parsed)
   const ev = parsed ? withoutHookKinds(parsed) : null
   if (!ev) return
   const store = useApprovalStore.getState()
