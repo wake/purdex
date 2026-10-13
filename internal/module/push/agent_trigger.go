@@ -2,6 +2,7 @@ package push
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -42,7 +43,7 @@ func (m *Module) onNotify(ev agent.NotifyEvent) {
 	// Team membership (badge spec §3.1) is read once for the event, before the device loop. A read error is "member,
 	// unknown": the gate applies the member rule (the quieter side) and the payload does not announce it.
 	member, err := m.memberOf(ev.SessionID, ev.Event.Status)
-	if err != nil {
+	if err != nil && !errors.Is(err, errMembershipBusy) { // a stall is logged once, by the read that started it
 		log.Printf("[push] could not read the team membership of %s: %v (gated as a member, not announced)", ev.SessionCode, err)
 	}
 	in.Member = member || err != nil
@@ -113,26 +114,62 @@ func (m *Module) onNotify(ev agent.NotifyEvent) {
 // memberOf is whether the Claude Code session is a team member (team.MembershipReader). No session id, or a frame the gate
 // drops by status anyway (rule 1: only waiting, idle and error can push), is not asked. No reader (no team module) means no
 // teams: not a member. The reader is looked up each time, so start order does not matter.
+//
+// The read is a SQLite query with no deadline of its own (up to busy_timeout per statement), and this runs on the notify
+// hub's subscriber goroutine, which has a 64-event queue and drops past it. So it is bounded like the tmux session read:
+// at most one outstanding, and an event waits at most membershipBudget; a read that is late, or still outstanding from an
+// earlier event, is an error ("member, unknown": gated as a member, not announced).
 func (m *Module) memberOf(sessionID, status string) (bool, error) {
 	if sessionID == "" || (status != "waiting" && status != "idle" && status != "error") {
 		return false, nil
 	}
-	if m.membership != nil {
-		return m.membership(sessionID)
+	read := m.membership
+	if read == nil {
+		if m.core == nil || m.core.Registry == nil {
+			return false, nil
+		}
+		svc, ok := m.core.Registry.Get(team.MembershipReaderKey)
+		if !ok {
+			return false, nil
+		}
+		r, ok := svc.(team.MembershipReader)
+		if !ok {
+			return false, nil
+		}
+		read = r.Membership
 	}
-	if m.core == nil || m.core.Registry == nil {
-		return false, nil
+	budget := m.memBudget
+	if budget <= 0 {
+		budget = membershipBudget
 	}
-	svc, ok := m.core.Registry.Get(team.MembershipReaderKey)
-	if !ok {
-		return false, nil
+	if !m.memBusy.CompareAndSwap(false, true) {
+		return false, errMembershipBusy
 	}
-	r, ok := svc.(team.MembershipReader)
-	if !ok {
-		return false, nil
+	type result struct {
+		member bool
+		err    error
 	}
-	return r.Membership(sessionID)
+	ch := make(chan result, 1)
+	go func() {
+		member, err := read(sessionID)
+		m.memBusy.Store(false)
+		ch <- result{member, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.member, r.err
+	case <-time.After(budget):
+		return false, errMembershipSlow
+	}
 }
+
+// membershipBudget is how long one agent event waits for the team store's membership answer.
+const membershipBudget = 250 * time.Millisecond
+
+var (
+	errMembershipBusy = errors.New("the previous membership read has not returned")
+	errMembershipSlow = errors.New("the membership read took too long")
+)
 
 // jsString mirrors the Mac's String(detail.error, defaulting to an empty text): "" for nothing, the text for a string,
 // a printed value otherwise.

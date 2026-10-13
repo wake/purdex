@@ -75,6 +75,8 @@ type Module struct {
 	sessBusy    atomic.Bool                                                      // a session read is still running: never more than one outstanding
 	sessStalled atomic.Bool                                                      // the "still busy" line was already logged for this stall
 	membership  func(sessionID string) (bool, error)                             // a test seam: team.MembershipReader; nil = from the registry
+	memBudget   time.Duration                                                    // how long an event waits for the membership read; 0 = membershipBudget
+	memBusy     atomic.Bool                                                      // a membership read is still running: never more than one outstanding
 	holds       holdSet
 	wbHolds     wbHoldSet                  // Stop pushes held for the session workbook's line (agent_trigger.go)
 	wbWait      func() time.Duration       // a test seam: the push_wait_s setting; nil = from the registry

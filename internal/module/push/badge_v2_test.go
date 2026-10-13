@@ -214,6 +214,45 @@ func TestMemberPush_NoSessionIDIsNotAMember(t *testing.T) {
 	e.waitSends(t, 1)
 }
 
+// A membership read that hangs (a contended team.db) must not hold the notify subscriber: the hub gives it a 64-event queue
+// and drops past it (R1 / critic F1). The read is bounded by a budget and single-flight; a read that is late or still
+// outstanding is "member, unknown" (gated as a member, not announced), and a later event reads again once it has returned.
+// Mutation gate: a synchronous read → the emit blocks past the budget → red.
+func TestMemberPush_AHungReadDoesNotHoldTheSubscriber(t *testing.T) {
+	e := newAgentEnv(t, time.Hour)
+	release := make(chan struct{})
+	var calls atomic.Int32
+	e.mod.membership = func(string) (bool, error) {
+		if calls.Add(1) == 1 {
+			<-release // the first read hangs
+		}
+		return false, nil
+	}
+	e.mod.memBudget = 30 * time.Millisecond
+	e.device(tokA, "en", "mlab", withoutTabNotify)
+	for i := 0; i < 5; i++ { // the first waits one budget; the next four find the read still outstanding and do not wait at all
+		start := time.Now()
+		e.feed.emit(nev("c1", "PdxStop", "idle", nil))
+		if d := time.Since(start); d > time.Second {
+			t.Fatalf("event %d held the subscriber for %v", i, d)
+		}
+	}
+	e.noSends(t) // unknown = gated as a member: no tab, no push
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("reads = %d while the first was outstanding, want 1", n)
+	}
+	close(release)
+	deadline := time.Now().Add(2 * time.Second)
+	for sent := 0; sent == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("no push after the read came back")
+		}
+		e.feed.emit(nev("c1", "PdxStop", "idle", nil))
+		time.Sleep(20 * time.Millisecond)
+		sent = e.apns.count()
+	}
+}
+
 // A muted session gets no agent push even in a tab; its approval push still goes.
 // Mutation gate: muted ignored → red.
 func TestMuted_NoAgentPushButTheApprovalStillPushes(t *testing.T) {
