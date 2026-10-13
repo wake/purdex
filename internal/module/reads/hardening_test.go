@@ -98,7 +98,7 @@ func TestRead_TrailingJSONIsRefused(t *testing.T) {
 // older one pending for the same code is replaced in place), in the order each code first became pending. R2 attack, high.
 // Mutation gate: drop when the queue is full → red.
 func TestFeed_ASlowSubscriberGetsTheLatestPerCodeAndLosesNone(t *testing.T) {
-	f := newReadFeed()
+	f := newReadFeed(nil)
 	defer f.stop(nil)
 	release := make(chan struct{})
 	var mu sync.Mutex
@@ -150,7 +150,7 @@ func TestFeed_ASlowSubscriberGetsTheLatestPerCodeAndLosesNone(t *testing.T) {
 // R1 P2: after unsubscribe no queued read is delivered (at most the one callback already running finishes).
 // Mutation gate: deliver the backlog after unsubscribe → red.
 func TestFeed_UnsubscribeDropsTheBacklog(t *testing.T) {
-	f := newReadFeed()
+	f := newReadFeed(nil)
 	defer f.stop(nil)
 	release, entered := make(chan struct{}), make(chan struct{}, 1)
 	var calls atomic.Int32
@@ -175,7 +175,7 @@ func TestFeed_UnsubscribeDropsTheBacklog(t *testing.T) {
 
 // stop returns once its workers have (they are waited for), and unsubscribing afterwards is harmless.
 func TestFeed_StopWaitsForTheWorkersAndIsRepeatable(t *testing.T) {
-	f := newReadFeed()
+	f := newReadFeed(nil)
 	var running atomic.Int32
 	unsub := f.subscribe(func(reads.Read) {
 		running.Add(1)

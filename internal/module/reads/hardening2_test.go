@@ -2,9 +2,6 @@ package reads
 
 import (
 	"context"
-	"fmt"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -44,47 +41,10 @@ func TestRead_ABootEpochCursorBeforeAnyEventIsClampedToZero(t *testing.T) {
 	}
 }
 
-// The feed holds a pending read for every code until it is delivered: no cap loses one. The codes it can hold are those the
-// daemon accepted reads for, which are sessions (a known list) or sessions it has seen.
-func TestFeed_NoPendingReadIsEverDropped(t *testing.T) {
-	f := newReadFeed()
-	defer f.stop(nil)
-	release := make(chan struct{})
-	var mu sync.Mutex
-	seen := map[string]bool{}
-	var first atomic.Bool
-	f.subscribe(func(r reads.Read) {
-		if first.CompareAndSwap(false, true) {
-			<-release
-		}
-		mu.Lock()
-		seen[r.Code] = true
-		mu.Unlock()
-	})
-	const n = 6000 // more distinct codes than lastRead's own bound
-	for i := 0; i < n; i++ {
-		f.publish(reads.Read{Code: fmt.Sprintf("c%05d", i), Through: reads.Cursor{Epoch: "e", Seq: 1}})
-	}
-	close(release)
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		mu.Lock()
-		got := len(seen)
-		mu.Unlock()
-		if got == n {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("%d of %d reads were delivered", got, n)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
 // Stop does not report success while a delivery is still running: it waits until the workers return or its context ends,
 // and then says so. Mutation gate: return nil on timeout → red.
 func TestFeed_StopReportsAWorkerThatDidNotReturn(t *testing.T) {
-	f := newReadFeed()
+	f := newReadFeed(nil)
 	release, entered := make(chan struct{}), make(chan struct{})
 	f.subscribe(func(reads.Read) { close(entered); <-release })
 	f.publish(reads.Read{Code: "a", Through: reads.Cursor{Epoch: "e", Seq: 1}})

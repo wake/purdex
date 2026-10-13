@@ -59,7 +59,9 @@ type Module struct {
 }
 
 func New() *Module {
-	return &Module{store: reads.NewStore(reads.DefaultMax), feed: newReadFeed(), newest: map[string]reads.Cursor{}}
+	m := &Module{store: reads.NewStore(reads.DefaultMax), newest: map[string]reads.Cursor{}}
+	m.feed = newReadFeed(m.store.Snapshot)
+	return m
 }
 
 func (m *Module) Name() string           { return "reads" }
