@@ -232,3 +232,19 @@ func TestRollback_TheP2aColumnListStillReads(t *testing.T) {
 }
 
 func logsHave(l *logSink, sub string) bool { return l.count(sub) > 0 }
+
+// The mode changes to advise and a pass runs before the sweeper's next tick: the
+// positions end drained first, and their rows are not granted as plain ones.
+// (M: leave the drain to the sweeper.)
+func TestDrain_APassBeforeTheSweeperDoesNotGrantPositionRows(t *testing.T) {
+	f := newPosFix(t)
+	f.setZone("danger", "flat")
+	q := decodeLease(t, f.postAs(newCID(), pidA, resources.CallQueue, "go build"))
+	require.Equal(t, resources.StateQueued, q.State)
+	f.set.set(resources.Settings{Mode: resources.ModeAdvise, GapS: intp(0)})
+	f.pass() // before any sweeper tick
+	r := f.row(q.ID)
+	assert.Equal(t, resources.StateEnded, r.State)
+	assert.Equal(t, resources.EndDrained, r.EndReason, "not granted")
+	assert.Equal(t, resources.EndDrained, f.position(q.PositionID).EndReason)
+}

@@ -82,6 +82,13 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
 	held, waiting, positions, ok := m.readPassRows()
+	// The mode just left lease and the sweeper has not drained yet: the positions
+	// end here, before this pass could grant their rows as plain ones.
+	if ok && set.Mode == resources.ModeAdvise && len(positions) > 0 {
+		if m.drainPositions(m.now()) > 0 {
+			held, waiting, positions, ok = m.readPassRows()
+		}
+	}
 	// In advise the shadow queue has work even when nothing waits for real.
 	if !ok || (len(waiting) == 0 && set.Mode != resources.ModeAdvise) {
 		return 0, false
