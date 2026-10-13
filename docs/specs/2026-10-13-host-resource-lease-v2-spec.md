@@ -54,12 +54,12 @@ A pure function of one reading, with hysteresis:
 ### D-2′ Trend
 
 - An in-memory ring of the last 10 min of good samples: `{at, mem, cpu = 100·Load1/NCPU, pressure}`. It is not persisted; it starts empty at boot.
-- Over the last `trend_window_s` (60 s), take the least-squares slope of `mem` and of `cpu`, in points per minute.
-- **rising** if the pressure level at the end is higher than at the window start, or the mem slope > `trend_mem_ppm`, or the cpu slope > `trend_cpu_ppm`.
-- Otherwise **falling** if the pressure level went down, or the mem slope < −`trend_mem_ppm`, or the cpu slope < −`trend_cpu_ppm`.
+- Over the last `trend_window_s` (**120 s**, changed at G1), take the least-squares slope of `mem` and of `cpu`, in points per minute. Both are always computed and recorded; `cpu` takes part in the direction only when `trend_cpu_dppm` > 0.
+- **rising** if the pressure level at the end is higher than at the window start, or the mem slope > `trend_mem_ppm`, or (when `trend_cpu_dppm` > 0) the cpu slope > `trend_cpu_ppm`.
+- Otherwise **falling** if the pressure level went down, or the mem slope < −`trend_mem_ppm`, or (when `trend_cpu_dppm` > 0) the cpu slope < −`trend_cpu_ppm`.
 - Otherwise **flat**.
 - Fewer than 6 samples, or a span shorter than half the window, gives **unknown**; admission treats unknown as rising.
-- Initial thresholds: `trend_mem_ppm` 1.0, `trend_cpu_ppm` 5.0. They are tuned at gate G1 (§6).
+- Thresholds: `trend_mem_ppm` **2.0**, and `trend_cpu_ppm` **off (0)**. The first defaults were 1.0 and 5.0 over a 60 s window; **G1 (2026-10-13, lead's decision)** changed them: on 45 minutes of real 5 s samples from a busy mlab (load1 16–36 on 10 cores, so cpu 155–428 %), the old defaults judged only 4 % of the samples flat, because load1 is itself a 1-minute average that drifts several points a minute under such a load, while memory (not cpu) is what takes the host down. With cpu out of the direction, a 120 s window and 2.0 points per minute, 81 % of the same samples are flat (table in the P1c-3 PR). A load at or above the core count is still the warning zone (D-1′): CPU saturation only slows commands down, so running one heavy command at a time is the intended behaviour there.
 
 ### D-3′ Admission (replaces v1 D-2, D-3, R5, R6, R9)
 
@@ -182,9 +182,9 @@ A daemon that is down or does not answer means the command runs. Zone unknown me
 | `mem_warn_pct` | 80 | 50..95 | |
 | `mem_danger_pct` | 90 | warn+1..99 | |
 | `gap_s` | 30 | 0..300 | |
-| `trend_window_s` | 60 | 20..300 | |
-| `trend_mem_dppm` | 10 | 1..100 | tenths of a point per minute (1.0) |
-| `trend_cpu_dppm` | 50 | 1..500 | (5.0) |
+| `trend_window_s` | **120** | 20..300 | was 60 before G1 |
+| `trend_mem_dppm` | **20** | 1..100 | tenths of a point per minute (2.0); was 10 before G1 |
+| `trend_cpu_dppm` | **0** | 0..500 | (0 = cpu takes no part in the direction; was 50 before G1) |
 | `deadline_s` | **540** (from P2a; 300 until then) | 10..590 | meaning changed: hold per call |
 | `park_s` | 900 | 60..3600 | |
 | `alert_danger_s` | 180 | 30..3600 | |

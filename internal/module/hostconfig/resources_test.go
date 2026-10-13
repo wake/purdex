@@ -17,7 +17,7 @@ import (
 
 const resourcesDefaultItems = `{"mode":"lease","kinds":{"build":35,"lint-full":10,"test-full":35,"test-pkg":15},` +
 	`"deadline_s":300,"warmup_s":20,"floor_pct":50,"max_hold_s":3600,"ewma_half_life_s":15,"heavy_min_weight":30,` +
-	`"mem_warn_pct":80,"mem_danger_pct":90,"gap_s":30,"trend_window_s":60,"trend_mem_dppm":10,"trend_cpu_dppm":50,` +
+	`"mem_warn_pct":80,"mem_danger_pct":90,"gap_s":30,"trend_window_s":120,"trend_mem_dppm":20,"trend_cpu_dppm":0,` +
 	`"park_s":900,"alert_danger_s":180,"alert_stuck_s":600,"alert_lease_mem_pct":20,"alert_push":0}`
 
 // A host that never wrote the key reads the defaults, on the GET and through
@@ -128,7 +128,7 @@ func TestResourcesSettings_PutGetRoundTrip(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 	const stored = `{"mode":"advise","kinds":{"build":20,"lint-full":10,"mine":5,"test-full":35,"test-pkg":15},` +
 		`"deadline_s":300,"warmup_s":0,"floor_pct":50,"max_hold_s":3600,"ewma_half_life_s":15,"heavy_min_weight":30,` +
-		`"mem_warn_pct":80,"mem_danger_pct":90,"gap_s":30,"trend_window_s":60,"trend_mem_dppm":10,"trend_cpu_dppm":50,` +
+		`"mem_warn_pct":80,"mem_danger_pct":90,"gap_s":30,"trend_window_s":120,"trend_mem_dppm":20,"trend_cpu_dppm":0,` +
 		`"park_s":900,"alert_danger_s":180,"alert_stuck_s":600,"alert_lease_mem_pct":20,"alert_push":0}`
 	assert.JSONEq(t, `{"items":`+stored+`,"revision":1}`, rr.Body.String())
 

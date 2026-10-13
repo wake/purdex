@@ -112,9 +112,9 @@ func TrendOf(samples []TrendSample, now time.Time, s Settings) Trend {
 	// counts only when both ends are known.
 	known := first > 0 && last > 0
 	switch {
-	case known && last > first || memSlope > memLimit || cpuSlope > cpuLimit:
+	case known && last > first || memSlope > memLimit || (cpuLimit > 0 && cpuSlope > cpuLimit):
 		return TrendRising
-	case known && last < first || memSlope < -memLimit || cpuSlope < -cpuLimit:
+	case known && last < first || memSlope < -memLimit || (cpuLimit > 0 && cpuSlope < -cpuLimit):
 		return TrendFalling
 	}
 	return TrendFlat

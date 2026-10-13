@@ -19,9 +19,9 @@ func TestTrendOf_UnknownPressureEndpointIsIgnored(t *testing.T) {
 	}
 	for _, c := range []struct{ from, to int }{{1, 0}, {0, 1}, {4, 0}, {0, 2}} {
 		d := step(c.from, c.to)
-		assert.Equal(t, TrendFlat, TrendOf(d, lastAt(d), DefaultSettings()), "%d to %d", c.from, c.to)
+		assert.Equal(t, TrendFlat, TrendOf(d, lastAt(d), v1Settings()), "%d to %d", c.from, c.to)
 	}
 	// Mem and cpu still decide when pressure is unknown.
 	d := series(windowN, lineF(50, 2), constF(30), pressureF(0))
-	assert.Equal(t, TrendRising, TrendOf(d, lastAt(d), DefaultSettings()))
+	assert.Equal(t, TrendRising, TrendOf(d, lastAt(d), v1Settings()))
 }

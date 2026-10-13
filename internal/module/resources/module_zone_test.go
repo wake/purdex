@@ -80,8 +80,8 @@ func TestSampler_PublishesZoneAndTrend(t *testing.T) {
 	assert.Equal(t, "warning", h.Zone)
 	assert.Equal(t, r.cur.UnixMilli(), h.ZoneSince)
 
-	// Flat for a full window: the trend settles; hysteresis keeps warning at 79.
-	for i := 0; i < 14; i++ {
+	// Flat for a full 120 s window: the trend settles; hysteresis keeps warning at 79.
+	for i := 0; i < 26; i++ {
 		h = r.tick(t, zoneRaw(79, 1, 1))
 	}
 	assert.Equal(t, "warning", h.Zone)

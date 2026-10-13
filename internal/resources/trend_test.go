@@ -7,6 +7,12 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// v1Settings are the first defaults (60 s window, mem 1.0, cpu 5.0 per minute), which the
+// series below were built for; the defaults after G1 have their own test.
+func v1Settings() Settings {
+	return Settings{TrendWindowS: intp(60), TrendMemDPPM: intp(10), TrendCPUDPPM: intp(50)}.Effective()
+}
+
 var trendT0 = time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
 
 // series builds n samples 5 s apart ending at trendT0 + (n-1)*5s. mem and cpu
@@ -41,7 +47,7 @@ func TestTrend_String(t *testing.T) {
 const windowN = 13
 
 func TestTrendOf_Directions(t *testing.T) {
-	s := DefaultSettings()
+	s := v1Settings()
 	// noisy builds a flat series with +-0.3 alternating noise.
 	noisy := func(base float64) func(float64) float64 {
 		i := 0
@@ -104,11 +110,11 @@ func TestTrendOf_PressureIsFirstVersusLast(t *testing.T) {
 		}
 		return 1
 	})
-	assert.Equal(t, TrendFlat, TrendOf(data, lastAt(data), DefaultSettings()))
+	assert.Equal(t, TrendFlat, TrendOf(data, lastAt(data), v1Settings()))
 }
 
 func TestTrendOf_Unknown(t *testing.T) {
-	s := DefaultSettings()
+	s := v1Settings()
 	// Five samples are too few, however clear the slope.
 	five := series(5, lineF(50, 30), constF(30), pressureF(1))
 	assert.Equal(t, TrendUnknown, TrendOf(five, lastAt(five), s))
@@ -137,7 +143,7 @@ func TestTrendOf_Unknown(t *testing.T) {
 // the window began does not make a flat window rising, and a quiet start does
 // not hide a climb at the end.
 func TestTrendOf_IgnoresSamplesOutsideTheWindow(t *testing.T) {
-	s := DefaultSettings()
+	s := v1Settings()
 	old := series(20, lineF(10, 20), constF(30), pressureF(1)) // 100 s of climbing
 	flat := make([]TrendSample, 0, 40)
 	flat = append(flat, old...)
@@ -181,7 +187,7 @@ func TestTrendOf_SlopeIsLeastSquares(t *testing.T) {
 	// fit through a flat series with one high end sample stays under 1.0.
 	data := series(windowN, constF(50), constF(30), pressureF(1))
 	data[len(data)-1].Mem = 52
-	assert.Equal(t, TrendFlat, TrendOf(data, lastAt(data), DefaultSettings()))
+	assert.Equal(t, TrendFlat, TrendOf(data, lastAt(data), v1Settings()))
 }
 
 func TestRing_AddSinceAllAndPrune(t *testing.T) {
