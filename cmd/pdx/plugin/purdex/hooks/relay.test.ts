@@ -4242,3 +4242,62 @@ test('RT-2c T27: a compaction after an unanswered card cancels it and resets the
   await turnAndSettle($, f, 't2')
   expect(count(f, 'begin')).toBe(2)
 })
+
+// codex attack: a begin refused member_relay_is_leads only says the role cache was stale; it must not spend the member's ask ladder.
+// Mutation gate: set lastAskPct on that code → the 91 % turn after never asks its lead (red).
+test('RT-2c: a begin refused member_relay_is_leads at ≥ 90 % still lets the member ask its lead', async ($, on) => {
+  const f = relayWorld(on, { usage: AT91 })
+  f.pdx = (argv) => argv[1] === 'hello' ? { exitCode: 0, stdout: HELLO('none') }
+    : argv[1] === 'begin' ? refused('member_relay_is_leads')
+    : argv[1] === 'ask' ? { exitCode: 0, stdout: ASK_OK }
+    : { exitCode: 0, stdout: '{}' }
+  await start($, f)
+  await turnAndSettle($, f, 't1') // begin, refused: now a member
+  expect(count(f, 'begin')).toBe(1)
+  await turnAndSettle($, f, 't2')
+  expect(count(f, 'ask')).toBe(1)
+})
+
+// codex attack: after the mark a failed poll must not end the card. Mutation gate: let 'unavailable' settle → idle, status cleared (red).
+test('RT-2c T27: a failed poll after the mark keeps the card; the daemon back, a later approval still writes', async ($, on) => {
+  const f = relayWorld(on, { usage: AT91 })
+  let down = false
+  const row = rowDaemon(f, {
+    wait: (argv) => {
+      if (argv.includes('--return-unanswered')) return { exitCode: 0, stdout: UNANSWERED_ROW }
+      if (down) return { exitCode: 20, stderr: 'daemon_unavailable' }
+      return undefined
+    },
+  })
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  await f.clock.advance(50) // marked
+  down = true
+  row.decide('open' as any)
+  await f.clock.advance(540_000) // the open poll's bound passes, the next one fails
+  down = true
+  await f.clock.advance(60_000)
+  expect(f.statuses.at(-1)).toBe(STATUS_UNANSWERED) // still waiting, not idle
+  down = false
+  row.decide('approved')
+  await f.clock.advance(60_000)
+  expect(f.submits.some((x: any) => String(x.text).startsWith('[pdx-relay op=op-1 n='))).toBe(true)
+})
+
+// codex R1 / attack: a reload forgot the ladder: a denied final card must not be asked again at 100 %.
+// Mutation gate: do not restore lastAskPct on adoption → a 100 % turn after the denial begins again (red).
+test('RT-2c T27: a re-adopted final card keeps the 90 % ladder: after its denial nothing asks again', async ($, on) => {
+  const f = relayWorld(on, { usage: AT100 })
+  const row = rowDaemon(f)
+  const base = f.pdx
+  f.pdx = (argv) => argv[1] === 'hello'
+    ? { exitCode: 0, stdout: HELLO('none', { waiting: { request_id: 'req-1', op: OP, unanswered_at: 5 } }) }
+    : base(argv)
+  await start($, f)
+  await f.clock.advance(50)
+  expect(f.statuses).toEqual([STATUS_UNANSWERED])
+  row.decide('denied')
+  await f.clock.advance(100)
+  await turnAndSettle($, f, 't1')
+  expect(count(f, 'begin')).toBe(0)
+})

@@ -60,6 +60,7 @@ const VERSION = '7' // the mod ↔ daemon protocol version `pdx relay hello --ve
 const DEFAULT_THRESHOLD = 70
 const DEFAULT_MIN_GROWTH = 20000
 const REASK_POINTS = 10
+const UNANSWERED_RETRY_MS = 30_000 // an unanswered card whose poll failed is polled again after this
 const LAST_ASK_PCT = 90 // from here an ask is the last one (relay/team rules v2 §4.2): the daemon pauses the session when it goes unanswered, so nothing asks again past it
 const IDLE_MINUTES_MAX = 50 // env PDX_RELAY_IDLE_MINUTES 1–50 (idle relay D9); the daemon takes 1–59
 const ROLE_RECHECK_MS = 60_000 // a cached `member` role is re-read (hello) at the threshold at most this often (U24 PL-1g)
@@ -734,7 +735,9 @@ async function begin($, sid, gen, u, adopted, manual = false, idle = false, reas
   if (!opened) {
     const code = r.exitCode === 13 ? stderrCode(r) : ''
     if (code === 'member_relay_is_leads') s.role = 'member'
-    if (threshold && r.exitCode === 13) s.lastAskPct = u.percent // the daemon refused it, whatever the code: that is an answer
+    // the daemon refused it, whatever the code: that is an answer - except member_relay_is_leads, which only says the role cache was stale
+    // (this session is a member and asks its lead): it must not use up the member's ask ladder (codex attack)
+    if (threshold && r.exitCode === 13 && code !== 'member_relay_is_leads') s.lastAskPct = u.percent
     toIdle($)
     if (code === 'paused_no_quota' && s.latchEpoch === latchEpoch) s.pausedLatch = true // set after toIdle: nothing resets it before the daemon's reask or a session.start
     // 13 self_relay_off | self_relay_paused | relay_open, 20, 21, 1: the threshold caller does nothing
@@ -1248,6 +1251,14 @@ function waitLoop($) {
       const r = await pdx($, argv, WAIT_TIMEOUT_MS)
       const outcome = waitAnswer(r)
       if (outcome === 'open' && !p.unanswered && unansweredRow(r)) markUnanswered($, p)
+      if (outcome === 'unavailable' && p.unanswered) {
+        // the card is still open at the daemon (a person can approve it any time): a failed poll is not its end. Keep it, try again later
+        // (codex attack); only an answer of the daemon's own leaves the card
+        if (s.pending !== p) return 'cancelled'
+        await new Promise((resolve) => $.clock.after(UNANSWERED_RETRY_MS, resolve))
+        if (s.pending !== p) return 'cancelled'
+        continue
+      }
       if (outcome !== 'open') return outcome
     }
   })().catch(() => 'unavailable').then((outcome) => {
@@ -1526,6 +1537,7 @@ function adoptWaitingLater($, w, sid) {
     s.pending = p
     s.state = 'awaiting'
     s.fixRounds = 0
+    s.lastAskPct = Math.max(s.lastAskPct ?? 0, LAST_ASK_PCT) // a final card is by definition the last ask: the reload must not forget it (codex)
     $.ui.status(STATUS_UNANSWERED)
     await waitLoop($)
   })
