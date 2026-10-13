@@ -65,6 +65,7 @@ var capabilities = []string{
 	"team.pause.v1",           // an unattended session with no relay quota left is paused, not held for a card: GET /api/team/paused, POST /api/team/paused/{session_id}/release, roster paused, 409 paused_no_quota / member_paused_no_quota, begin reask_id (UP-4)
 	"session.read_sync.v1",    // read sync (badge spec §7): POST /api/sessions/{code}/read, /ws/host-events?reads=v1 (session.reads / session.read), prefs.read_sync, purdex.reads / purdex.event_cursor on pushes, kind "reads" flush
 	"team.person.v1",          // person-typed commands: person tokens, direct /relay, decided_by.kind person, unattended_refused, PUT unattended refused (RT-1)
+	"relay.unanswered.v1",     // pause cause relay_unanswered, approval unanswered_at, a person's release = deny, the bounce text by cause (RT-2a)
 }
 
 // pushReady reports whether the push module is mounted AND has its key (its Status says ready). A mounted module whose

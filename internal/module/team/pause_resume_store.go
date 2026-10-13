@@ -21,6 +21,9 @@ type ResumeScope struct {
 	// NoReask: the person chose not to be asked again (their own /relay is the answer, RT-1a): no release token, no reask control,
 	// and the notice says so.
 	NoReask bool
+	// NoReaskText replaces the solo / lead notice of a NoReask resume (PauseResumedByRelay when empty): a person's release of a
+	// session whose final card they just denied says so (RT-2a2).
+	NoReaskText string
 }
 
 func (sc ResumeScope) where() (string, []any) {
@@ -160,6 +163,9 @@ func (s *Store) resumePausesIn(tx *sql.Tx, scope ResumeScope, at int64, newMod f
 			text = team.PauseResumedSoloOldMod
 			if scope.NoReask {
 				text = team.PauseResumedByRelay
+				if scope.NoReaskText != "" {
+					text = scope.NoReaskText
+				}
 			} else if reask {
 				text = team.PauseResumedSolo
 				if scope.Release != "" {

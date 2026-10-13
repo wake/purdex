@@ -151,3 +151,17 @@ func leaveUnansweredIn(ex dbtx, id string, c Close) error {
 	}
 	return nil
 }
+
+// OpenUnansweredCardOf is the id of sid's open card that stopped it (unanswered_at set), or "" when it has none.
+func (s *Store) OpenUnansweredCardOf(sid string) (string, error) {
+	var id string
+	err := s.db.QueryRow(`SELECT id FROM approval_requests WHERE origin_session_id = ? AND state = 'open' AND unanswered_at > 0
+		ORDER BY created_at DESC LIMIT 1`, sid).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("open unanswered card of %s: %w", sid, err)
+	}
+	return id, nil
+}

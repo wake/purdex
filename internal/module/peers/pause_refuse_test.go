@@ -20,17 +20,18 @@ import (
 type fakePauseGate struct {
 	mu     sync.Mutex
 	paused map[string]bool
+	detail map[string]string
 	err    error
 	calls  []pauseCall
 }
 
 type pauseCall struct{ session, from, text string }
 
-func (g *fakePauseGate) PauseVerdict(sessionID, from, text string, at int64) (bool, error) {
+func (g *fakePauseGate) PauseVerdict(sessionID, from, text string, at int64) (bool, string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.calls = append(g.calls, pauseCall{sessionID, from, text})
-	return g.paused[sessionID], g.err
+	return g.paused[sessionID], g.detail[sessionID], g.err
 }
 
 func (g *fakePauseGate) called() []pauseCall {
@@ -40,7 +41,7 @@ func (g *fakePauseGate) called() []pauseCall {
 }
 
 func gateFor(s *sendEnv, paused ...string) *fakePauseGate {
-	g := &fakePauseGate{paused: map[string]bool{}}
+	g := &fakePauseGate{paused: map[string]bool{}, detail: map[string]string{}}
 	for _, p := range paused {
 		g.paused[p] = true
 	}
@@ -279,4 +280,31 @@ func TestPause_ASessionIsToldByItsOwnInboxThroughSendFlowOnly(t *testing.T) {
 		t.Fatalf("SendFlow to itself: %+v %v", resp, err)
 	}
 	s.recvLine()
+}
+
+// The gate's detail rides in the 409 on both paths (RT-2a2, T19); an empty one falls back to the fixed text (the tests above).
+// Mutation gates: ignore the gate's detail on the local arm → the first body is the fixed text (red); on the remote arm → the
+// second (red).
+func TestPause_TheGatesDetailIsTheRefusals(t *testing.T) {
+	const custom = "我目前暫停作業，等待使用者確認中"
+	s := newSendEnv(t, envOpts{})
+	s.addLocalPeer(localPeerName, localPeerSessionID, localPeerPID)
+	g := gateFor(s, localPeerSessionID)
+	g.detail[localPeerSessionID] = custom
+	rr := s.send(adminCtx(), s.localSendReq())
+	var ae ipeers.APIError
+	if err := json.Unmarshal(rr.Body.Bytes(), &ae); rr.Code != http.StatusConflict || err != nil || ae.Error != "session_paused" || ae.Detail != custom {
+		t.Fatalf("local: %d %s (%v), want 409 session_paused with %q", rr.Code, rr.Body.String(), err, custom)
+	}
+	if rows := s.rows(); len(rows) != 1 || rows[0].Error != custom {
+		t.Fatalf("audit rows = %+v, want the custom detail", rows)
+	}
+
+	e := newDeliverEnv(t, envOpts{})
+	e.m.core.Registry.Register(PauseGateKey, &fakePauseGate{paused: map[string]bool{targetSessionID: true}, detail: map[string]string{targetSessionID: custom}})
+	rr = e.post(e.hostCtx(), e.request())
+	ae = ipeers.APIError{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &ae); rr.Code != http.StatusConflict || err != nil || ae.Detail != custom {
+		t.Fatalf("remote: %d %s (%v), want 409 with %q", rr.Code, rr.Body.String(), err, custom)
+	}
 }

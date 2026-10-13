@@ -133,7 +133,7 @@ func TestResume_TheBounceListIsSentAndCleared(t *testing.T) {
 	f := leadWorld(t)
 	f.seedPause("sid-1", team.PauseCauseQuota, team.PauseRoleLead, "_abc123", "boss", 1)
 	for _, from := range []string{"mlab/w-one", "mlab/w-two"} {
-		if paused, err := f.m.store.PauseVerdict("sid-1", from, "請看一下\n第二行", f.clock.Load()); err != nil || !paused {
+		if paused, _, err := f.m.store.PauseVerdict("sid-1", from, "請看一下\n第二行", f.clock.Load()); err != nil || !paused {
 			t.Fatalf("verdict: %v %v", paused, err)
 		}
 	}
