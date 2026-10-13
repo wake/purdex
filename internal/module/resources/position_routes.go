@@ -60,8 +60,10 @@ func (m *Module) ownLease(w http.ResponseWriter, r *http.Request, session string
 	return row, true
 }
 
-// handleLeaseConfirm is POST /api/resources/leases/{id}/confirm: the session says
-// yes to a background command whose turn came.
+// handleLeaseConfirm is POST /api/resources/leases/{id}/confirm: the session
+// says yes to a background command whose turn came. It is judged on the row and
+// its position as they are under the lock: a command that was asked is the one
+// confirmed, and one that was moved to a new place since has to be asked again.
 func (m *Module) handleLeaseConfirm(w http.ResponseWriter, r *http.Request) {
 	session, ok := m.callerSession(w, r)
 	if !ok {
@@ -72,32 +74,45 @@ func (m *Module) handleLeaseConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	set := m.settings()
-	if row.State != resources.StateWaiting {
-		writeJSON(w, http.StatusOK, m.leaseResponse(row, set, false)) // held or ended: nothing to confirm
-		return
-	}
-	if row.Mode != resources.CallAsk {
-		writeErr(w, http.StatusBadRequest, resources.ErrBadRequest, "only a background (ask) request is confirmed")
-		return
+	if m.routeHook != nil {
+		m.routeHook()
 	}
 	m.stateMu.Lock()
-	pos, found, err := m.store.PositionByID(row.PositionID)
-	if err == nil && found && pos.State == resources.PosQueued {
-		m.stateMu.Unlock()
-		writeErr(w, http.StatusConflict, resources.ErrNotYourTurn, "your turn has not come yet")
-		return
-	}
-	if err == nil {
-		err = m.store.ConfirmRow(row.ID, m.now().UnixMilli())
+	cur, found, err := m.store.Get(row.ID)
+	code, errCode, detail := 0, "", ""
+	confirmed := false
+	switch {
+	case err != nil || !found:
+	case cur.State != resources.StateWaiting:
+		// held or ended: nothing to confirm
+	case cur.Mode != resources.CallAsk:
+		code, errCode, detail = http.StatusBadRequest, resources.ErrBadRequest, "only a background (ask) request is confirmed"
+	default:
+		var pos positionRow
+		pos, found, err = m.store.PositionByID(cur.PositionID)
+		if err == nil && (!found || (pos.State != resources.PosOffered && pos.State != resources.PosIdle)) {
+			code, errCode, detail = http.StatusConflict, resources.ErrNotYourTurn, "your turn has not come yet"
+		} else if err == nil {
+			confirmed, err = m.store.ConfirmRow(cur.ID, pos.ID, m.now().UnixMilli())
+			if err == nil && !confirmed {
+				code, errCode, detail = http.StatusConflict, resources.ErrNotYourTurn, "your turn has not come yet"
+			}
+		}
 	}
 	m.stateMu.Unlock()
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, resources.ErrNotReady, "confirm: "+err.Error())
+	switch {
+	case err != nil || !found:
+		writeErr(w, http.StatusInternalServerError, resources.ErrNotReady, "confirm failed")
+		return
+	case code != 0:
+		writeErr(w, code, errCode, detail)
 		return
 	}
-	m.wake()
-	m.admissionPass(r.Context(), row.ID) // the confirmed command starts at once if it may
-	m.answerLease(w, r, row.ID, set)
+	if confirmed {
+		m.wake()
+		m.admissionPass(r.Context(), cur.ID) // the confirmed command starts at once if it may
+	}
+	m.answerLease(w, r, cur.ID, set)
 }
 
 // handleLeaseCancel is POST /api/resources/leases/{id}/cancel: the session

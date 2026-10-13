@@ -267,7 +267,7 @@ func TestPass_ReservationGrantWakesAndNeedsNoSecondRound(t *testing.T) {
 	passes := 0
 	f.m.passHook = func() { passes++ }
 	woken := f.m.genChan()
-	require.NoError(t, f.m.store.ConfirmRow(rowID, f.nowMS()))
+	f.confirmRow(rowID)
 	f.m.admissionPass(context.Background(), rowID)
 	assert.Equal(t, resources.StateHeld, f.state(rowID))
 	assert.Equal(t, resources.PosRunning, f.position(posID).State)
@@ -287,7 +287,7 @@ func TestCancel_RequestStartedMeanwhileIs409(t *testing.T) {
 	f := newPosFix(t)
 	rowID, _ := f.askOffered()
 	f.m.routeHook = func() {
-		require.NoError(t, f.m.store.ConfirmRow(rowID, f.nowMS()))
+		f.confirmRow(rowID)
 		f.m.admissionPass(context.Background(), rowID) // the confirmed command starts
 	}
 	rec := f.call("/api/resources/leases/"+rowID+"/cancel", pidA)
@@ -305,7 +305,7 @@ func TestCancel_PositionStartedMeanwhile(t *testing.T) {
 			rowID, posID := f.askOffered()
 			f.m.routeHook = func() {
 				f.m.routeHook = nil
-				require.NoError(t, f.m.store.ConfirmRow(rowID, f.nowMS()))
+				f.confirmRow(rowID)
 				f.m.admissionPass(context.Background(), rowID)
 			}
 			path := "/api/resources/positions/" + posID + "/cancel"
@@ -323,4 +323,41 @@ func TestCancel_PositionStartedMeanwhile(t *testing.T) {
 			assert.Equal(t, resources.PosRunning, f.position(posID).State)
 		})
 	}
+}
+
+// confirmRow records a confirm directly on the row's own position.
+func (f *posFix) confirmRow(rowID string) {
+	f.t.Helper()
+	ok, err := f.m.store.ConfirmRow(rowID, f.row(rowID).PositionID, f.nowMS())
+	require.NoError(f.t, err)
+	require.True(f.t, ok)
+}
+
+// The session confirms a command; before the lock is taken its position is released
+// by a limit and the command is moved to a new place: it has to be asked again, so
+// the confirm is refused and nothing is recorded.
+// (M: confirm on the row as read before the lock.)
+func TestConfirm_MovedToANewPlaceMeanwhileMustBeAskedAgain(t *testing.T) {
+	f := newPosFix(t)
+	run := decodeLease(t, f.postAs(newCID(), pidA, resources.CallQueue, "go build"))
+	posA := run.PositionID
+	f.setZone("danger", "flat")
+	decodeLease(t, f.postAs(newCID(), pidB, resources.CallQueue, "go test")) // a waiter
+	ask := decodeLease(t, f.postAs(newCID(), pidA, resources.CallAsk, "bg"))
+	require.Equal(t, resources.StateWaiting, ask.State)
+	f.m.routeHook = func() {
+		f.m.routeHook = nil
+		// The limit releases the position and the ask row moves to a new queued place.
+		res, err := f.m.store.EndCommand(run.ID, f.nowMS(), commandEnd{Reason: resources.EndReleased, Outcome: outcomeRelease,
+			PositionID: posA, NewPositionID: "pos_0000beef"})
+		require.NoError(t, err)
+		require.Equal(t, "pos_0000beef", res.NewPositionID)
+	}
+	rec := f.call("/api/resources/leases/"+ask.ID+"/confirm", pidA)
+	assert.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+	assert.Equal(t, resources.ErrNotYourTurn, apiCode(rec))
+	r := f.row(ask.ID)
+	assert.Zero(t, r.ConfirmedAt, "the new place has not asked yet")
+	assert.Equal(t, "pos_0000beef", r.PositionID, "it moved")
+	assert.Equal(t, resources.StateWaiting, r.State)
 }
