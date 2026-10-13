@@ -20,6 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/wake/purdex/cmd/pdx/daemonclient"
+	"github.com/wake/purdex/internal/resources"
 )
 
 // leaseSignals gives run the signals to pass on to the child, and a function
@@ -98,13 +99,16 @@ func runLeaseRun(ctx context.Context, args []string, stdout, stderr io.Writer, c
 	case out.cancelled:
 		fmt.Fprintln(stderr, "pdx lease: 等待中被中斷，指令沒有執行")
 		return ExitCancelled
+	case out.queued:
+		// Not an error and not run: the place is kept, the same command later takes it
+		// back. Nothing is released or cancelled.
+		fmt.Fprintf(stderr, "pdx lease: %s\n", queuedText(out.resp, leaseNow()))
+		return ExitQueued
 	case out.failOpen != "":
 		fmt.Fprintf(stderr, "pdx lease: daemon 連不上或無法使用（%s），直接執行\n", out.failOpen)
 	default:
 		r := out.resp
-		if r.Overrun {
-			fmt.Fprintf(stderr, "pdx lease: 等滿 %s，超量放行（已記錄）\n", waitedText(r.WaitedMS))
-		} else if time.Duration(r.WaitedMS)*time.Millisecond >= leaseWaitNotice {
+		if time.Duration(r.WaitedMS)*time.Millisecond >= leaseWaitNotice {
 			fmt.Fprintf(stderr, "pdx lease: 等了 %s主機資源（負載 %d/100）\n", waitedText(r.WaitedMS), r.Host.Measured)
 		}
 		if r.Warning != "" {
@@ -189,4 +193,23 @@ func runChild(command []string, sigs <-chan os.Signal, tty bool, stderr io.Write
 	}
 	fmt.Fprintf(stderr, "pdx lease: %v\n", err)
 	return 1
+}
+
+// queuedText is what a call that was queued (or replaced) tells whoever runs it
+// (lease v2 spec D-4′): that the command did not run, the place, how long it has
+// waited, how long the place is kept, and that the answer is to run the same
+// command again later, not to get around the queue. The mod says the same.
+func queuedText(r resources.LeaseResponse, now time.Time) string {
+	if r.State == resources.StateReplaced {
+		return "主機資源忙，這個指令沒有執行：這個呼叫已被同一個 session 較新的呼叫取代（它接手了排隊的位置），請等那一個的結果，不要重跑。"
+	}
+	waited := "已等不到 1 分鐘"
+	if m := r.WaitedMS / 60000; m >= 1 {
+		waited = fmt.Sprintf("已等 %d 分鐘", m)
+	}
+	keep := "位置會保留一段時間"
+	if left := time.UnixMilli(r.ParkedUntil).Sub(now); r.ParkedUntil > 0 && left > 0 {
+		keep = fmt.Sprintf("位置會保留 %d 分鐘", int((left+time.Minute-1)/time.Minute))
+	}
+	return fmt.Sprintf("主機資源忙，這個指令還沒執行：排隊第 %d 位，%s。%s；先做不需要這個指令的事，之後用同一個指令重跑就會接回原位。不要改成背景執行或加 & 繞過排隊。", r.Position, waited, keep)
 }

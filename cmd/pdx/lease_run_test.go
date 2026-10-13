@@ -207,7 +207,7 @@ func TestRun_WaitedLines(t *testing.T) {
 	}
 	d = waiting(resources.LeaseResponse{ID: leaseRow, State: resources.StateHeld, Granted: true, Overrun: true, WaitedMS: 300000, Host: resources.LeaseHost{Measured: 99}})
 	_, _, stderr = driveRunCmd(t, d, nil, []string{"--kind", "build"}, "true")
-	if stderr != "pdx lease: 等滿 5 分鐘，超量放行（已記錄）\n" {
+	if stderr != "pdx lease: 等了 5 分鐘主機資源（負載 99/100）\n" { // no overrun line any more: v2 has no overrun grant
 		t.Errorf("overrun: %q", stderr)
 	}
 	// A wait under a second is not worth a line.
