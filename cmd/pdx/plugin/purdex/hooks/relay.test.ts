@@ -3142,6 +3142,24 @@ test('a /clear while /team reads the role during a relay: nothing is queued, no 
   expect(f.persons.map((p) => p[5])).toEqual(['relay'])
 })
 
+// codex re-review P1: the same for the idle path - release and kill carry no token, so a /clear while the role is read must stop
+// them. Mutation gate: drop the re-check after the role read (and before the action) → pdx kill runs into the new conversation (red).
+test('a /clear while /team kill reads the role: nothing is killed', async ($, on) => {
+  const base = pdxWith([])
+  let release!: () => void
+  const gate = new Promise<void>((r) => { release = r })
+  let teamCalls = 0
+  const f = relayWorld(on, { pdx: (argv) => (argv[0] === 'team' ? (++teamCalls < 1 ? AS_LEAD(argv) : gate.then(() => AS_LEAD(argv))) : argv[0] === 'kill' ? { exitCode: 0, stdout: '' } : base(argv)) })
+  await start($, f)
+  const typed = teamCmd($, 'kill _abc123') // the role read parks on the gate
+  await f.clock.advance(1)
+  f.switchTo = 'sid-new'
+  await $.classic.SessionStart({ source: 'clear' })
+  release()
+  expect((await typed).text).toBe('這個 session 剛換過（/clear），沒有執行；請在新的對話再打一次')
+  expect(f.argvs.some((a) => a[1] === 'kill')).toBe(false)
+})
+
 // A session id that cannot be read fails closed: nothing is queued or asked.
 test('/team when the session id cannot be read says so and does nothing', async ($, on) => {
   const f = leadWorld(on, () => NOT_LEAD)

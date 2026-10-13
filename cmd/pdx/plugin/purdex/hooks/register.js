@@ -949,6 +949,7 @@ async function performTeam($, parsed, rawArgs, queued, typedSid) {
   if ((await $.session.id().catch(() => undefined)) !== sid) return TEAM_MOVED
   if (parsed.kind === 'show' || parsed.kind === 'lead') return becomeLeadOrShow($, parsed, rawArgs, sid, queued)
   const v = await teamRead($, sid)
+  if ((await $.session.id().catch(() => undefined)) !== sid) return TEAM_MOVED // a /clear while the role was read: the command was for the conversation that is gone
   if (v.role === 'unreachable') return TEAM_UNREACHABLE
   if (v.role !== 'lead') return TEAM_ONLY_LEAD(parsed.kind)
   if (parsed.kind === 'spawn') return teamSpawn($, parsed, rawArgs, sid, queued)
@@ -1047,6 +1048,7 @@ async function teamAct($, parsed, sid) {
   } else {
     argv = [parsed.kind, parsed.ref]
   }
+  if ((await $.session.id().catch(() => undefined)) !== sid) return TEAM_MOVED // release and kill carry no token of ours: the check is the only binding
   const r = await pdx($, argv, TEAM_CALL_TIMEOUT_MS)
   if (r.exitCode === 20 || r.exitCode === 21) return TEAM_UNREACHABLE
   const line = (r.stderr || '').trim().split('\n').filter(Boolean).pop() || ''
