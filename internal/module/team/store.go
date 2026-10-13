@@ -81,6 +81,8 @@ type Store struct {
 	afterRelayCommandEnqueue func() error
 	// afterAskAccept, when set, fails CreateMemberRelayOp right after the open ask was marked accepted, before the commit (tests).
 	afterAskAccept func(tx *sql.Tx) error
+	// afterAskDeny, when set, fails ReleaseDeniedAsk after the ask closed and before the other causes are released (tests).
+	afterAskDeny func() error
 	// beforeMemberOpMove, when set, runs in a member_relay row's transaction after the row's close and before its op's
 	// move; an error fails (and rolls back) the whole close (tests: fault injection). nil in production.
 	beforeMemberOpMove func() error
