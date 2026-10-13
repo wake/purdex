@@ -88,7 +88,7 @@ func adoptRefusal(tx *sql.Tx, id, rowHostID string, p team.AdoptPayload, chk ado
 	if remote {
 		// A session on another host: it cannot lead a team here, and it is a member only through a live row of THAT host
 		// (the member host decides the rest when it applies the command).
-		err = tx.QueryRow(`SELECT 1 FROM team_members WHERE host_id = ? AND session_id = ? AND state IN `+liveRemoteStates, p.TargetHostID, p.TargetSessionID).Scan(&one)
+		err = tx.QueryRow(`SELECT 1 FROM team_members WHERE host_id = ? AND session_id = ? AND state IN `+liveRemoteStates+` AND `+liveTeamOfRow, p.TargetHostID, p.TargetSessionID).Scan(&one)
 		switch {
 		case err == nil:
 			return team.ErrAdoptAlreadyMember, nil
@@ -204,6 +204,12 @@ func adoptApprovedIn(tx *sql.Tx, id string, c Close, p team.AdoptPayload, chk ad
 			WHERE session_id = ? AND state = 'active'`, string(team.MemberReleased), c.DecidedAt, c.DecidedAt, p.TargetSessionID); err != nil {
 			return 0, "", fmt.Errorf("retire the target's row of an ended team: %w", err)
 		}
+	} else if _, err = tx.Exec(`UPDATE team_members SET state = ?, ended_at = ?, updated_at = ?
+		WHERE host_id = ? AND session_id = ? AND state IN `+liveRemoteStates+` AND NOT `+liveTeamOfRow,
+		string(team.MemberReleased), c.DecidedAt, c.DecidedAt, p.TargetHostID, p.TargetSessionID); err != nil {
+		// the refusals above passed, so a live row of that host is of an ended team: its place is gone and it would hold the seat
+		// (team_members_one_member) the joining row settles into
+		return 0, "", fmt.Errorf("retire the remote target's row of an ended team: %w", err)
 	}
 	inserted, err := insertMemberRowIn(context.Background(), tx, m)
 	if err != nil {

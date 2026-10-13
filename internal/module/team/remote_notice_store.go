@@ -47,10 +47,10 @@ func (s *Store) RetryRemoteNotice(id int64, attempts int, nextAt, at int64) erro
 }
 
 // RemoteMemberLive says whether a session of another host is a member in play (joining / active / releasing / killing) of
-// a team led from this host.
+// a team led from this host. A team that ended holds no one (D4 leaves its rows as they were).
 func (s *Store) RemoteMemberLive(hostID, sessionID string) (bool, error) {
 	var one int
-	err := s.db.QueryRow(`SELECT 1 FROM team_members WHERE host_id = ? AND session_id = ? AND state IN `+liveRemoteStates, hostID, sessionID).Scan(&one)
+	err := s.db.QueryRow(`SELECT 1 FROM team_members WHERE host_id = ? AND session_id = ? AND state IN `+liveRemoteStates+` AND `+liveTeamOfRow, hostID, sessionID).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
