@@ -1,20 +1,12 @@
 // spa/src/components/team/TeamTabGroup.tsx — a lead/member group on the TabBar (team interface plan TI-2, spec §4.2, §5).
 // On every tab of the group a team-colour shadow plus a faint wash, drawn by a pointer-transparent overlay so the tab's own
 // background and active highlight stay. No label and no collapse control (round 2); no separators inside the group (TabBar).
-import { createContext, useContext, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { useThemeStore } from '../../stores/useThemeStore'
 import type { TeamTabMark } from './team-display'
 import { groupShadow, shadowBase } from './group-shadow'
-
-/** The sortable id of a group's frame: the unit that moves when its lead is dragged (TG-1). */
-export const teamGroupDragId = (teamKey: string) => `team-group:${teamKey}`
-
-/** What the lead tab needs to start a drag of the whole group: the frame's pointer listeners. */
-export type GroupDragHandle = ReturnType<typeof useSortable>['listeners']
-const GroupDragHandleContext = createContext<GroupDragHandle>(undefined)
-/** The group drag listeners for the lead tab; undefined for every other tab (a member drags itself). */
-export const useGroupDragHandle = () => useContext(GroupDragHandleContext)
+import { GroupDragHandleContext, teamGroupDragId } from './group-drag'
 
 /**
  * The group's frame is itself a sortable item (TG-1): dragging the lead tab, which wears the frame's listeners, moves the

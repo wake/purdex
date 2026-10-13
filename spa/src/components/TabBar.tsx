@@ -9,7 +9,8 @@ import { useI18nStore } from '../stores/useI18nStore'
 import { useTeamUiStore } from '../stores/useTeamUiStore'
 import { useTeamDisplay, type TeamTabMark } from './team/team-display'
 import { groupSegments } from './team/groupSegments'
-import { TeamTabGroupFrame, teamGroupDragId } from './team/TeamTabGroup'
+import { TeamTabGroupFrame } from './team/TeamTabGroup'
+import { teamGroupDragId } from './team/group-drag'
 import { dragReorder } from '../lib/team/team-group-drag'
 
 interface Props {

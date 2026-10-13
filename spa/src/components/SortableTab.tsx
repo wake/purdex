@@ -11,7 +11,8 @@ import { HostBadge } from './HostBadge'
 import { useTabHostBadge } from '../hooks/useTabHostBadge'
 import { hasHostBadge } from '../lib/host-color'
 import type { TeamTabMark } from './team/team-display'
-import { TeamTabShadow, useGroupDragHandle } from './team/TeamTabGroup'
+import { TeamTabShadow } from './team/TeamTabGroup'
+import { useGroupDragHandle } from './team/group-drag'
 
 interface Props {
   tab: Tab
