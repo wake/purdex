@@ -115,6 +115,12 @@ func TestTrendOf_Unknown(t *testing.T) {
 	// Six samples in a span shorter than half the window (6 x 5 s = 25 s < 30 s).
 	six := series(6, lineF(50, 30), constF(30), pressureF(1))
 	assert.Equal(t, TrendUnknown, TrendOf(six, lastAt(six), s))
+	// Five samples that span the whole window are still too few.
+	sparse := make([]TrendSample, 5)
+	for i := range sparse {
+		sparse[i] = TrendSample{At: trendT0.Add(time.Duration(i) * 15 * time.Second), Mem: 50 + float64(i)*5, Pressure: 1}
+	}
+	assert.Equal(t, TrendUnknown, TrendOf(sparse, lastAt(sparse), s))
 	// Seven samples span 30 s: exactly half the window is enough.
 	seven := series(7, lineF(50, 30), constF(30), pressureF(1))
 	assert.Equal(t, TrendRising, TrendOf(seven, lastAt(seven), s))
