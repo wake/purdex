@@ -39,12 +39,12 @@ func (m *Module) admissionPass(ctx context.Context, fresh string) passResult {
 	}
 	set := m.settings()
 	if set.Mode != resources.ModeLease && set.Mode != resources.ModeAdvise {
-		if m.shadowLen.Load() > 0 {
+		if m.shadowActive() {
 			m.dropShadow()
 		}
 		return res
 	}
-	if set.Mode != resources.ModeAdvise && m.shadowLen.Load() > 0 {
+	if set.Mode != resources.ModeAdvise && m.shadowActive() {
 		m.dropShadow() // switched away from advise: the counterfactual is over
 	}
 	// A heavy lease waits for the disk to be looked at (and the Go build cache trimmed when it runs low) before the locked
@@ -121,9 +121,8 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 	lastGrant := m.lastGrantTime(held)
 	var toGrant []leaseRow
 	var gapLeft time.Duration
-	var shadowGranted map[string]bool
 	if set.Mode == resources.ModeAdvise {
-		shadowGranted = m.shadowStep(set, held, waiting, zone, trend, now)
+		m.shadowStep(set, held, waiting, zone, trend, now)
 		// Advise grants everything at once, up to a cut waiter (FIFO is kept).
 		for _, w := range waiting {
 			if cut[w.ID] {
@@ -172,7 +171,7 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 		v2 := resources.V2Decision(zone, trend, running, gapLeft)
 		// Advise: would v2 have made this request wait? (not granted by the
 		// shadow in the pass of its own request)
-		wouldWait := set.Mode == resources.ModeAdvise && !shadowGranted[w.ID]
+		wouldWait := set.Mode == resources.ModeAdvise && !m.shadow.atOnce[w.ID]
 		won, err := m.store.GrantDecided(w.ID, now.UnixMilli(), wouldWait, d, v2, m.reasons.peek(w.ID, now), baselines[w.ID])
 		if err != nil {
 			m.logf("[resources] admission: grant %s: %v", w.ID, err)
@@ -183,6 +182,7 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 			return granted, true
 		}
 		m.reasons.drop(w.ID)
+		delete(m.shadow.atOnce, w.ID)
 		m.lastGrantMS = max(m.lastGrantMS, now.UnixMilli()) // only forward (a grant needs now >= lastGrant + gap, so this is a guard)
 		m.lastGrantAtMS.Store(m.lastGrantMS)
 		leases = append(leases, resources.Lease{ID: w.ID, Weight: w.Weight, GrantedAt: now})

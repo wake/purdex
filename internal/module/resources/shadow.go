@@ -28,6 +28,17 @@ import (
 type shadowQueue struct {
 	created map[string]time.Time // id -> created_at of the request
 	last    time.Time            // the shadow's own newest grant
+	// atOnce holds the ids the shadow granted in the very pass that first saw
+	// them: the real grant of such a request may come in a later round (it was
+	// cut for a baseline, say) and would_wait is still false.
+	atOnce map[string]bool
+}
+
+// shadowActive says whether the shadow holds anything, a queued request or the
+// time of its last grant (which would hold back the first request of a later
+// advise). Lock-free.
+func (m *Module) shadowActive() bool {
+	return m.shadowLen.Load() > 0 || m.shadowLastAtMS.Load() != 0
 }
 
 // dropShadow forgets the whole shadow (a restart, or a switch away from advise).
@@ -48,6 +59,10 @@ func (m *Module) shadowStep(set resources.Settings, held, waiting []leaseRow, zo
 	if sh.created == nil {
 		sh.created = map[string]time.Time{}
 	}
+	if sh.atOnce == nil {
+		sh.atOnce = map[string]bool{}
+	}
+	joined := map[string]bool{}
 	present := make(map[string]bool, len(held)+len(waiting))
 	for _, r := range held {
 		present[r.ID] = true
@@ -56,6 +71,12 @@ func (m *Module) shadowStep(set resources.Settings, held, waiting []leaseRow, zo
 		present[w.ID] = true
 		if _, ok := sh.created[w.ID]; !ok {
 			sh.created[w.ID] = time.UnixMilli(w.CreatedAt)
+			joined[w.ID] = true
+		}
+	}
+	for id := range sh.atOnce {
+		if !present[id] {
+			delete(sh.atOnce, id) // the request is gone without a real grant
 		}
 	}
 	// A row in the shadow that is neither held nor waiting ended before the
@@ -105,6 +126,9 @@ func (m *Module) shadowStep(set resources.Settings, held, waiting []leaseRow, zo
 			delete(sh.created, grantID)
 			m.shadowReasons.drop(grantID)
 			sh.last = now
+			if joined[grantID] {
+				sh.atOnce[grantID] = true
+			}
 			m.shadowLastAtMS.Store(now.UnixMilli())
 			granted[grantID] = true
 		}
