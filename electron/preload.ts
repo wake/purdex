@@ -111,6 +111,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   focusMyWindow: () => ipcRenderer.send('notification:focus-window'),
 
+  // Dock badge (app-badge spec §3.2): this window's resolved session keys and open cards; main takes the union.
+  badge: {
+    set: (report: { sessions: string[]; cards: { id: string; session?: string; fallback: string }[] }) =>
+      ipcRenderer.send('badge:set', report),
+  },
+
   // Deeplink (purdex://execution/<id>[?host=<hint>]) — main parses the OS
   // protocol URL and broadcasts here; the SPA resolver (P.12) navigates.
   onDeeplinkNavigate: (callback: (payload: { executionId: string; host?: string }) => void) => {
