@@ -3,7 +3,9 @@ package push
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -280,6 +282,8 @@ func TestBadgeBG_TwentyClosesSixteenIDsUnder4KiB(t *testing.T) {
 // A full queue drops the job and says so in the log; the window's batch is not retried.
 func TestBadgeBG_AFullQueueDropsTheJobWithALogLine(t *testing.T) {
 	te := bgEnv(t)
+	lb := &lockedBuf{} // the drop line is written by the window's timer goroutine: read it under a lock
+	log.SetOutput(lb)
 	te.registerBadge(tokA, true)
 	te.events.readOpen = func() ([]team.Approval, error) { return nil, nil }
 	snd := te.mod.sender.Load()
@@ -289,10 +293,22 @@ func TestBadgeBG_AFullQueueDropsTheJobWithALogLine(t *testing.T) {
 	}
 	te.events.emit("closed", closedCard("x", team.KindLead))
 	time.Sleep(200 * time.Millisecond)
-	if !strings.Contains(te.logs.String(), "badge") || !strings.Contains(te.logs.String(), "dropped") {
-		t.Fatalf("no drop line in the log: %s", te.logs.String())
+	if s := lb.String(); !strings.Contains(s, "badge job dropped") {
+		t.Fatalf("no drop line in the log: %s", s)
 	}
 }
+
+type lockedBuf struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuf) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+func (l *lockedBuf) String() string { l.mu.Lock(); defer l.mu.Unlock(); return l.b.String() }
 
 // Stop with a pending window sends nothing.
 func TestBadgeBG_StopCancelsAPendingWindow(t *testing.T) {
