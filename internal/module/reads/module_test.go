@@ -93,6 +93,7 @@ func newEnv(t *testing.T) *env {
 	m := New()
 	e := &env{m: m, core: c, notify: &fakeNotify{}, list: &codes{}}
 	m.notify, m.sessions = e.notify, e.list.get
+	e.list.put(codeA, codeB, codeC) // a usable list by default; the tests of an unusable one say so
 	if err := m.Init(c); err != nil {
 		t.Fatal(err)
 	}
@@ -283,9 +284,11 @@ func TestRead_UnknownSessionIs404OnlyWhenTheListIsKnown(t *testing.T) {
 	if rec := e.post(codeA, `{}`); rec.Code != http.StatusNoContent {
 		t.Fatalf("present in the list: %d", rec.Code)
 	}
-	e.list.set = nil // unknown
+	e.list.set = nil // unknown: only a session the daemon has seen is accepted (TestRead_UnknownListAcceptsOnlyCodesTheDaemonHasSeen)
+	e.notify.emit(codeB, "e1", 1)
+	time.Sleep(50 * time.Millisecond)
 	if rec := e.post(codeB, `{}`); rec.Code != http.StatusNoContent {
-		t.Fatalf("with an unknown list: %d", rec.Code)
+		t.Fatalf("with an unknown list, a session with an event: %d", rec.Code)
 	}
 	if _, ok := e.m.store.Get(codeB); !ok {
 		t.Fatal("the accepted read was not remembered")
@@ -340,7 +343,7 @@ func TestRead_AFullBufferClosesOnlyTheOptedInConnection(t *testing.T) {
 }
 
 // The feed (what BG-4b's push side subscribes to) gets the accepted reads in order and stops at unsubscribe.
-func TestFeed_AcceptedReadsInOrderUntilUnsubscribe(t *testing.T) {
+func TestFeed_AcceptedReadsReachTheSubscriberUntilUnsubscribe(t *testing.T) {
 	e := newEnv(t)
 	got := make(chan reads.Read, 8)
 	svc, ok := e.core.Registry.Get(reads.FeedKey)
@@ -352,14 +355,15 @@ func TestFeed_AcceptedReadsInOrderUntilUnsubscribe(t *testing.T) {
 	e.post(codeA, `{"through":{"epoch":"e1","seq":1}}`)
 	e.post(codeB, `{"through":{"epoch":"e1","seq":2}}`)
 	e.post(codeA, `{"through":{"epoch":"e1","seq":3}}`)
-	for i, want := range []string{codeA, codeB, codeA} {
+	// the feed coalesces per code (feed_test): whatever was delivered ends with the latest cursor of each code
+	latest := map[string]uint64{}
+	deadline := time.After(time.Second)
+	for latest[codeA] != 3 || latest[codeB] != 2 {
 		select {
 		case r := <-got:
-			if r.Code != want {
-				t.Fatalf("read %d = %s, want %s", i, r.Code, want)
-			}
-		case <-time.After(time.Second):
-			t.Fatalf("read %d never arrived", i)
+			latest[r.Code] = r.Through.Seq
+		case <-deadline:
+			t.Fatalf("the subscriber ended with %v, want A:3 B:2", latest)
 		}
 	}
 	unsub()

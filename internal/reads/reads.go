@@ -34,8 +34,11 @@ type Read struct {
 // FeedKey is the service-registry key under which the reads module publishes its Feed.
 const FeedKey = "reads.feed"
 
-// Feed is what the push module subscribes to: every read the daemon accepted (an advance of lastRead), from any device. fn
-// runs on a goroutine of its own and may block briefly; reads reach it in the order they were accepted.
+// Feed is what the push module subscribes to: the reads the daemon accepted (advances of lastRead), from any device. fn runs
+// on a goroutine of its own and may block briefly. Delivery is coalescing: a code that is still pending when a newer read of
+// it arrives is delivered once, with the newest cursor, in the order each code first became pending, so a slow subscriber
+// ends with the latest cursor of every code. After unsubscribe nothing queued is delivered (a callback already running
+// finishes).
 type Feed interface {
 	SubscribeReads(fn func(Read)) (unsubscribe func())
 }

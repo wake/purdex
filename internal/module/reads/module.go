@@ -47,9 +47,14 @@ type Module struct {
 	mu     sync.Mutex
 	newest map[string]reads.Cursor // the newest hook cursor emitted per session code
 
+	life   sync.Mutex // Start and Stop (Stop may be called twice, or from two goroutines)
 	unsub  func()
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	// highEpoch / highSeq: the largest seq seen in the newest epoch a hook frame carried; no event was emitted past it. Under mu.
+	highEpoch string
+	highSeq   uint64
 }
 
 func New() *Module {
@@ -99,6 +104,8 @@ func (m *Module) Start(ctx context.Context) error {
 	if every <= 0 {
 		every = pruneEvery
 	}
+	m.life.Lock()
+	defer m.life.Unlock()
 	ctx, m.cancel = context.WithCancel(ctx)
 	m.wg.Add(1)
 	go func() {
@@ -118,12 +125,15 @@ func (m *Module) Start(ctx context.Context) error {
 }
 
 func (m *Module) Stop(context.Context) error {
+	m.life.Lock()
+	defer m.life.Unlock()
 	if m.unsub != nil {
 		m.unsub()
 		m.unsub = nil
 	}
 	if m.cancel != nil {
 		m.cancel()
+		m.cancel = nil
 	}
 	m.wg.Wait()
 	m.feed.stop()
@@ -145,6 +155,10 @@ func (m *Module) handleRead(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"bad_request"}`, http.StatusBadRequest)
 		return
 	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) { // a second value after the body is an ambiguous request
+		http.Error(w, `{"error":"bad_request"}`, http.StatusBadRequest)
+		return
+	}
 	if req.Through != nil && len(req.Through.Epoch) > maxEpoch {
 		http.Error(w, `{"error":"bad_request"}`, http.StatusBadRequest)
 		return
@@ -161,6 +175,7 @@ func (m *Module) handleRead(w http.ResponseWriter, r *http.Request) {
 	} else if newest, ok := m.newestCursor(code); ok {
 		t = newest // the cursor of the newest event the daemon emitted for this session
 	}
+	t = m.clamp(code, t)
 	if m.store.Advance(code, t) {
 		m.announce(reads.Read{Code: code, Through: t})
 	}
@@ -172,15 +187,42 @@ func (m *Module) knownSession(code string) bool {
 	if _, err := session.DecodeSessionID(code); err != nil {
 		return false
 	}
-	if m.sessions == nil {
+	if m.sessions != nil {
+		if codes, ok := m.sessions(listMaxAge); ok {
+			_, present := codes[code]
+			return present
+		}
+	}
+	// No usable list: unknown is not absent, but a made-up code must not push real reads out of the bounded store, so only a
+	// session the daemon has seen (an event of it, or an earlier read) is accepted.
+	if _, ok := m.newestCursor(code); ok {
 		return true
 	}
-	codes, ok := m.sessions(listMaxAge)
-	if !ok {
-		return true // unknown is not absent
+	_, ok := m.store.Get(code)
+	return ok
+}
+
+// clamp keeps a cursor from reaching past what the daemon has emitted: a seq above the newest cursor of that session (or, for
+// a session with no event, above the epoch's high-water mark) would cover every later unread of it. A legitimate T is the
+// cursor of an event that already happened, so it is never changed. A cursor of another epoch than the current one can never
+// cover a current-epoch unread and is left alone.
+func (m *Module) clamp(code string, t reads.Cursor) reads.Cursor {
+	if t.Epoch == "" {
+		return t
 	}
-	_, present := codes[code]
-	return present
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if t.Epoch != m.highEpoch {
+		return t
+	}
+	hi := m.highSeq
+	if newest, ok := m.newest[code]; ok && newest.Epoch == t.Epoch {
+		hi = newest.Seq
+	}
+	if t.Seq > hi {
+		t.Seq = hi
+	}
+	return t
 }
 
 // announce tells every reads=v1 connection (strict: a full buffer closes it, its reconnect brings a fresh snapshot) and the
@@ -222,6 +264,12 @@ func (m *Module) onNotify(ev agent.NotifyEvent) {
 func (m *Module) noteEvent(code string, c reads.Cursor) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if c.Epoch != m.highEpoch {
+		m.highEpoch, m.highSeq = c.Epoch, 0
+	}
+	if c.Seq > m.highSeq {
+		m.highSeq = c.Seq
+	}
 	cur, ok := m.newest[code]
 	if ok && cur.Epoch == c.Epoch && c.Seq <= cur.Seq {
 		return
@@ -267,73 +315,4 @@ func (m *Module) pruneOnce() {
 		}
 	}
 	m.mu.Unlock()
-}
-
-// readFeed delivers accepted reads to in-process subscribers (the push module), each on a goroutine of its own behind a bounded
-// queue: a subscriber that falls behind loses reads (best effort, like everything about read sync) and never slows a request.
-type readFeed struct {
-	mu   sync.Mutex
-	subs map[int]*feedSub
-	next int
-}
-
-type feedSub struct {
-	ch   chan reads.Read
-	done chan struct{}
-	once sync.Once
-}
-
-func (s *feedSub) close() { s.once.Do(func() { close(s.done) }) }
-
-const feedQueue = 256
-
-func newReadFeed() *readFeed { return &readFeed{subs: map[int]*feedSub{}} }
-
-func (f *readFeed) SubscribeReads(fn func(reads.Read)) func() { return f.subscribe(fn) }
-
-func (f *readFeed) subscribe(fn func(reads.Read)) func() {
-	s := &feedSub{ch: make(chan reads.Read, feedQueue), done: make(chan struct{})}
-	f.mu.Lock()
-	id := f.next
-	f.next++
-	f.subs[id] = s
-	f.mu.Unlock()
-	go func() {
-		for {
-			select {
-			case rd := <-s.ch:
-				fn(rd)
-			case <-s.done:
-				return
-			}
-		}
-	}()
-	return func() {
-		f.mu.Lock()
-		delete(f.subs, id)
-		f.mu.Unlock()
-		s.close()
-	}
-}
-
-func (f *readFeed) publish(rd reads.Read) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, s := range f.subs {
-		select {
-		case s.ch <- rd:
-		default:
-			log.Printf("[reads] a read subscriber is %d reads behind: dropping %s", feedQueue, rd.Code)
-		}
-	}
-}
-
-func (f *readFeed) stop() {
-	f.mu.Lock()
-	subs := f.subs
-	f.subs = map[int]*feedSub{}
-	f.mu.Unlock()
-	for _, s := range subs {
-		s.close()
-	}
 }

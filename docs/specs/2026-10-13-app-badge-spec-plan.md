@@ -230,7 +230,11 @@ withdrawing delivered notifications on the Mac.
 - `POST /api/sessions/{code}/read` `{"through": T?}` → 204, or **404 `{"error":"no_such_session"}`** for a code that is
   not a session code or that the daemon's in-memory session list (the one `GET /api/sessions` serves, never a tmux read
   of its own) does not have; with no usable list (never filled, invalidated by a create / rename / delete since, or older
-  than 2 minutes) nothing is evidence and the read is accepted. A client ignores the 404. A session created a moment ago
+  than 2 minutes) nothing is evidence, and the read is accepted only for a session the daemon has seen (an event of it, or an
+  earlier read), so made-up codes cannot push real reads out of the bounded store. A client ignores the 404. A `through`
+  is clamped to what the daemon has emitted: a seq above the newest cursor of that session (above the epoch's
+  high-water mark for a session with no event) is lowered to it, so a wrong or hostile cursor cannot cover unreads that
+  do not exist yet; a trailing second JSON value in the body is a 400. A session created a moment ago
   and not yet in the list may be refused: best effort. In the device scope allow-list (BG-4). The daemon keeps
   `lastRead[code]` = the larger T (a smaller or other-epoch T never replaces a current-epoch one), bounded to 4096
   codes (least recently updated evicted), and **once a minute drops the codes the in-memory session list no longer has**
