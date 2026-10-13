@@ -36,7 +36,7 @@ const relayUsage = "usage: pdx relay hello --session <sid> [--version <v>] [--ag
 	"       pdx relay lock|unlock <op> --session <sid> [--config <path>]\n" +
 	"       pdx relay claim|seen <op> --session <sid> [--config <path>]\n" +
 	"       pdx relay compacted --session <sid> --trigger auto|manual|idle [--config <path>]\n" +
-	"       pdx relay <ref|address> [--wait <dur>] [--config <path>]"
+	"       pdx relay <ref|address> [--wait <dur> | --deny] [--config <path>]"
 
 const (
 	// relayAttemptTimeout bounds one long-poll (team.MaxPollWaitS plus room), as lead's does.
@@ -65,6 +65,7 @@ var relayRefusalCodes = map[string]bool{
 	team.ErrNotYourMember:       true,
 	team.ErrRelayUnsupported:    true,
 	team.ErrNotYourOp:           true,
+	team.ErrNoOpenAsk:           true, // RT-2b: --deny of a member that has no open ask
 	team.ErrNotMember:           true, // a member's ask from a session that is no member
 }
 

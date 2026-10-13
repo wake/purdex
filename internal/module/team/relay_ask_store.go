@@ -169,6 +169,18 @@ func (s *Store) WithdrawRelayAsk(sessionID, reason string, now int64) (bool, err
 	return oneRow(res, err, "withdraw relay ask of "+sessionID)
 }
 
+// OpenAskOf is the session's open ask, if it has one.
+func (s *Store) OpenAskOf(sessionID string) (RelayAsk, bool, error) {
+	a, err := scanRelayAsk(s.db.QueryRow(`SELECT `+relayAskCols+` FROM relay_asks WHERE session_id = ? AND state = 'open'`, sessionID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return RelayAsk{}, false, nil
+	}
+	if err != nil {
+		return RelayAsk{}, false, fmt.Errorf("open relay ask of %s: %w", sessionID, err)
+	}
+	return a, true, nil
+}
+
 // MarkAskNotified records that the lead's notice was delivered, once, while the ask is open.
 func (s *Store) MarkAskNotified(id string, at int64) (bool, error) {
 	res, err := s.db.Exec(`UPDATE relay_asks SET notified_at = ? WHERE id = ? AND state = 'open' AND notified_at = 0`, at, id)
@@ -222,4 +234,33 @@ func (s *Store) PruneRelayAsks(before int64) (int64, error) {
 	}
 	n, _ := res.RowsAffected()
 	return n, nil
+}
+
+// DenyRelayAsk closes the session's open ask as withdrawn / denied in ONE transaction and returns it; closed says one was open.
+func (s *Store) DenyRelayAsk(sessionID string, now int64) (RelayAsk, bool, error) {
+	fail := func(err error) (RelayAsk, bool, error) {
+		return RelayAsk{}, false, fmt.Errorf("deny relay ask of %s: %w", sessionID, err)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fail(err)
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE relay_asks SET state = 'withdrawn', reason = ?, closed_at = ? WHERE session_id = ? AND state = 'open'`,
+		team.RelayAskWithdrawDenied, now, sessionID)
+	if err != nil {
+		return fail(err)
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return RelayAsk{}, false, nil
+	}
+	a, err := scanRelayAsk(tx.QueryRow(`SELECT `+relayAskCols+` FROM relay_asks WHERE session_id = ? AND closed_at = ? AND reason = ? ORDER BY created_at DESC LIMIT 1`,
+		sessionID, now, team.RelayAskWithdrawDenied))
+	if err != nil {
+		return fail(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fail(err)
+	}
+	return a, true, nil
 }

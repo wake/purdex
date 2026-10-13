@@ -566,6 +566,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET "+RosterRoute, m.handleRosterGet)  // PL-1f′: every live team (D-U24-5)
 	mux.HandleFunc("POST /api/team/kill", m.handleKill)
 	mux.HandleFunc("POST /api/team/relays", m.handleRelayCreate)
+	mux.HandleFunc("POST /api/team/relays/deny", m.handleRelayDeny) // the lead declines a member's ask (RT-2b)
 	mux.HandleFunc("POST /api/team/release", m.handleRelease)
 	// T-1b1: tasks (plan "Routes"); a lead sees its team's, a member its own.
 	mux.HandleFunc("POST /api/team/tasks", m.handleTaskCreate)

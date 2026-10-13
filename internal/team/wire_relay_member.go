@@ -49,6 +49,7 @@ type RelayLead struct {
 const (
 	ErrRelayUnsupported = "relay_unsupported" // the member's mod is absent or older than MinMemberRelayModVersion
 	ErrNotYourOp        = "not_your_op"       // claim from a session other than the op's target
+	ErrNoOpenAsk        = "no_open_ask"       // --deny of a member that has no open ask (RT-2b)
 )
 
 // Member-relay constants.
@@ -114,6 +115,7 @@ const (
 	RelayAskExpired   = "expired"
 	RelayAskWithdrawn = "withdrawn"
 
+	RelayAskWithdrawDenied     = "denied" // the lead declined it (pdx relay _ref --deny)
 	RelayAskWithdrawCompacted  = "compacted"
 	RelayAskWithdrawMemberLeft = "member_left"
 )
@@ -133,4 +135,15 @@ type RelayAskResponse struct {
 	State     string `json:"state"`
 	ExpiresAt int64  `json:"expires_at"`
 	Replay    bool   `json:"replay,omitempty"`
+}
+
+// RelayDenyRequest is POST /api/team/relays/deny (RT-2b): the lead declines the open ask of one of its members.
+type RelayDenyRequest struct {
+	OriginInbox string `json:"origin_inbox"`
+	Target      string `json:"target"` // the member's ref or address
+}
+
+// RelayDenyResponse says which ask was closed.
+type RelayDenyResponse struct {
+	AskID string `json:"ask_id"`
 }
