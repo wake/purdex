@@ -512,3 +512,37 @@ func TestLeaseResponse_PlaceCountsPositionsAndRows(t *testing.T) {
 	a2 := decodeLease(t, f.postAs(newCID(), pidA, resources.CallQueue, "a2"))
 	assert.Equal(t, 2, a2.Position, "the second command shares the position's place")
 }
+
+// One pass has one table admission: a second command that took it leaves the
+// queue head for the next pass, even with no gap (v2: at most one grant per pass).
+// (M: ignore that the second command used the admission.)
+func TestPosition_SecondCommandAndTheQueueHeadAreNotBothAdmittedInOnePass(t *testing.T) {
+	f := newPosFix(t)
+	a1 := decodeLease(t, f.postAs(newCID(), pidA, resources.CallQueue, "go build"))
+	require.Equal(t, resources.StateHeld, a1.State)
+	f.setZone("danger", "flat")
+	b := decodeLease(t, f.postAs(newCID(), pidB, resources.CallQueue, "go test"))
+	f.setZone("normal", "flat")
+	a2 := decodeLease(t, f.postAs(newCID(), pidA, resources.CallQueue, "go vet"))
+	assert.Equal(t, resources.StateHeld, a2.State)
+	assert.Equal(t, resources.PosQueued, f.position(b.PositionID).State, "the head waits for the next pass")
+	f.pass()
+	assert.Equal(t, resources.PosOffered, f.position(b.PositionID).State)
+}
+
+// On the same millisecond a position comes before a wait-mode row, in the place
+// the answer reports and in the order the pass admits them.
+func TestPosition_SameMillisecondPositionsComeFirst(t *testing.T) {
+	f := newPosFix(t)
+	f.setZone("danger", "flat")
+	w := decodeLease(t, f.postAs(newCID(), 2000, resources.CallWait, "w")) // posted first, same millisecond
+	a := decodeLease(t, f.postAs(newCID(), pidA, resources.CallQueue, "a"))
+	assert.Equal(t, 1, a.Position)
+	assert.Equal(t, 2, f.queuePlaceOf(w.ID))
+	f.setZone("normal", "flat")
+	f.pass()
+	assert.Equal(t, resources.PosOffered, f.position(a.PositionID).State, "the pass admits the position first, as the place says")
+	assert.Equal(t, resources.StateWaiting, f.state(w.ID))
+}
+
+func (f *posFix) queuePlaceOf(id string) int { return f.m.queuePlace(f.row(id)) }

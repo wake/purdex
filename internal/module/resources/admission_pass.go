@@ -259,7 +259,9 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 		}
 		// A second command of a running position (coordinator Q6): the table
 		// decides, whether or not someone is queued; when someone waits, the
-		// position's own limit applies too.
+		// position's own limit applies too. It uses the pass's one table
+		// admission (at most one grant per pass).
+		tableUsed := false
 		for _, p := range positions {
 			if posByID[p.ID].State != resources.PosRunning {
 				continue
@@ -278,6 +280,7 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 			if g, a, stop := finish(grant(w, resources.PathImmediate, p.ID, resources.PosRunning)); stop {
 				return g, a
 			}
+			tableUsed = true
 		}
 		// The queue: queued positions and wait-mode rows, strictly by created_at.
 		entries := make([]resources.V2Waiter, 0, len(waiting))
@@ -304,6 +307,9 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 		grantID, gapLeft, reasons = resources.AdmitV2(zone, trend, running, lastGrant, entries, now, set)
 		for id, r := range reasons {
 			m.reasons.observe(id, r, now)
+		}
+		if tableUsed {
+			grantID = "" // a second command took this pass's admission; the head waits for the next
 		}
 		switch {
 		case grantID == "":

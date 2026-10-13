@@ -474,6 +474,7 @@ func (m *Module) queuePlace(row leaseRow) int {
 	type entry struct {
 		key       string
 		createdAt int64
+		row       bool // a wait-mode row; on the same millisecond a position goes first, as the pass orders them
 	}
 	var entries []entry
 	positions, err := m.store.LivePositions()
@@ -482,7 +483,7 @@ func (m *Module) queuePlace(row leaseRow) int {
 	}
 	for _, p := range positions {
 		if p.State == resources.PosQueued {
-			entries = append(entries, entry{posKey(p.ID), p.CreatedAt})
+			entries = append(entries, entry{posKey(p.ID), p.CreatedAt, false})
 		}
 	}
 	waiting, err := m.store.Waiting()
@@ -491,12 +492,15 @@ func (m *Module) queuePlace(row leaseRow) int {
 	}
 	for _, w := range waiting {
 		if w.PositionID == "" {
-			entries = append(entries, entry{w.ID, w.CreatedAt})
+			entries = append(entries, entry{w.ID, w.CreatedAt, true})
 		}
 	}
 	slices.SortStableFunc(entries, func(a, b entry) int {
 		if a.createdAt != b.createdAt {
 			return cmp.Compare(a.createdAt, b.createdAt)
+		}
+		if a.row != b.row {
+			return cmp.Compare(b2i(a.row), b2i(b.row))
 		}
 		return cmp.Compare(a.key, b.key)
 	})
