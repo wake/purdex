@@ -291,6 +291,32 @@ func TestPassV2_AdviseStopsAtACutWaiter(t *testing.T) {
 	assert.Equal(t, "waiting", f.state("b"))
 }
 
+// Sampling often fails when the host is at its worst (fork timeout, memory
+// exhausted), so for the first two failed ticks admission keeps the last good
+// zone and trend, as the snapshot does: danger still holds the queue. Only
+// after three failures in a row, when the snapshot is marked unavailable, is the
+// zone unknown and admission fails open (lead's decision on #2772).
+// (M: read unknown from the first failure and the first assertion is red.)
+func TestPassV2_DangerStillHoldsDuringTheFirstTwoFailedTicks(t *testing.T) {
+	f := newPassFix(t, resources.ModeLease)
+	f.setZone("danger", "flat")
+	f.m.sampler = &fakeSampler{fn: func(context.Context, int) (resources.HostRaw, []resources.Proc, error) {
+		return resources.HostRaw{}, nil, assert.AnError
+	}}
+	f.queue("a", 35, 5*time.Minute)
+	for i := 1; i <= 2; i++ {
+		f.m.tick(context.Background())
+		f.m.store.RenewLease("a", f.nowMS()+30000)
+		f.pass()
+		require.Equal(t, "waiting", f.state("a"), "failed tick %d", i)
+	}
+	f.m.tick(context.Background()) // the third in a row: the snapshot goes unavailable
+	f.m.store.RenewLease("a", f.nowMS()+30000)
+	f.pass()
+	require.Equal(t, "held", f.state("a"))
+	assert.Equal(t, resources.PathUnknownZone, f.dec("a").path)
+}
+
 // A clock that stepped back keeps the gap running instead of shortening it:
 // the remaining gap is counted from the newest grant, so nothing is granted
 // until the clock has caught up and the gap has passed (codex R1).
