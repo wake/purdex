@@ -515,6 +515,9 @@ type Close struct {
 	// is refused if it names that kind (RQ-0, #2062 plan review: a decide request posing as `unattended` must
 	// neither pass for the daemon in the audit nor, later, spend a quota).
 	Auto bool
+	// AfterWon, when set, runs in the close's own transaction after this close WON (the UPDATE changed the row) and before the commit;
+	// an error rolls the close back. A person's release of an unanswered card releases the session's other causes there (#2821).
+	AfterWon func(tx *sql.Tx) error
 	// SpendQuota asks an Auto close of a self_relay row to spend one of the chain's self_left in the same transaction
 	// (the relay-quota rule, #2062; set by the module only while the hostconfig switch relay_quota is on). Never honoured
 	// for a close that is not Auto: a person's click spends nothing.
@@ -590,6 +593,9 @@ func (s *Store) closeWhere(id string, c Close, guard string, guardArg int64) (te
 	}
 	defer tx.Rollback()
 	n, err := closeRowIn(tx, id, c, guard, guardArg)
+	if err == nil && n == 1 && c.AfterWon != nil {
+		err = c.AfterWon(tx)
+	}
 	if err == nil {
 		err = tx.Commit()
 	}
