@@ -65,7 +65,12 @@ func (m *Module) speaksReask(sid string) bool {
 // resumeOne is the release of one session (spec §3.4 "Release one"): the resume group for sid and the `lead`-cause members it paused
 // with it. It returns the number of sessions no longer paused. Caller holds createMu.
 func (m *Module) resumeOne(sid string) (int, error) {
-	res, err := m.store.ResumePauses(ResumeScope{Release: sid}, m.now(), m.speaksReask, uuid.NewString)
+	return m.resumeScope(ResumeScope{Release: sid})
+}
+
+// resumeScope runs the resume group of scope and wakes what follows it. Caller holds createMu.
+func (m *Module) resumeScope(scope ResumeScope) (int, error) {
+	res, err := m.store.ResumePauses(scope, m.now(), m.speaksReask, uuid.NewString)
 	if err != nil {
 		return 0, err
 	}

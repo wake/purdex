@@ -99,7 +99,10 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 			state = "off"
 		}
 	}
+	person := req.Manual && req.PersonToken != "" // a person's own /relay (RT-1a): the token is checked under createMu
 	switch {
+	case person:
+		// the switches, /relay off and the pause do not apply to what the person typed
 	case role == roleMember:
 		m.writeErr(w, http.StatusConflict, team.ErrMemberRelayIsLeads, "member 的接力由 lead 安排", nil)
 		return
@@ -113,7 +116,7 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 	// model_id / effort are the daemon's to fill (spec U18 (b), M21): the
 	// session's last statusline reading, kept by the agent module. The mod
 	// sends neither; a session without a reading shows neither.
-	sp := team.SelfRelayPayload{UsedPercentage: req.UsedPercentage, Window: req.Window, Manual: req.Manual, Reason: req.Reason, IdleMinutes: req.IdleMinutes}
+	sp := team.SelfRelayPayload{UsedPercentage: req.UsedPercentage, Window: req.Window, Manual: req.Manual, Reason: req.Reason, IdleMinutes: req.IdleMinutes, Person: person}
 	if m.usage != nil {
 		if u, ok := m.usage.ContextUsage(req.SessionID); ok {
 			sp.ModelID, sp.Effort = u.ModelID, u.Effort
@@ -134,6 +137,10 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 	if m.replayOfBegin(w, req) { // the same request may have won the lock while this one waited
 		return
 	}
+	if person && !m.consumePerson(req.SessionID, team.PersonCmdRelay, req.PersonToken) {
+		m.writeErr(w, http.StatusConflict, team.ErrPersonTokenInvalid, "the person token is unknown, spent, expired or not for this session's /relay", nil)
+		return
+	}
 	// At most one open self-relay per session (spec §8.7 (c)): the op is
 	// the authority; the approval row follows it. An op still in
 	// awaiting_approval whose row is no longer open (or never got written)
@@ -150,6 +157,10 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 			return
 		} else if still {
+			if person && cur.State == team.RelayAwaitingApproval {
+				m.personApproveOpen(w, req.SessionID, cur) // the card is the person's to approve, and they just did
+				return
+			}
 			m.writeJSON(w, http.StatusConflict, team.APIError{Error: team.ErrRelayOpen, Detail: "this session already has a relay in progress", Op: &cur})
 			return
 		}
@@ -190,6 +201,9 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if person {
+		reask = false // the person's relay is the answer; a release token is not spent on it
+	}
 	sp.Reask = reask
 	if reask {
 		sp.ReaskID = req.ReaskID
@@ -225,6 +239,10 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		m.logf("[team] relay op %s opened: self, origin=%s (%s) request=%s, a re-ask after a pause: a card for a person", opID, origin.Ref, origin.SessionID, reqID)
 		m.broadcast("opened", &stored)
 		m.writeJSON(w, http.StatusCreated, team.RelayBeginResponse{Op: op, RequestID: reqID})
+		return
+	}
+	if person {
+		m.beginPerson(w, op, row, hash)
 		return
 	}
 	exhausted := false // the chain has no quota left: the request opens for a person below and is listed as held at once
@@ -345,7 +363,8 @@ func sameBeginPayload(m *Module, op team.RelayOp, req team.RelayBeginRequest) bo
 			return false
 		}
 	}
-	return sp.Window == req.Window && sp.Manual == req.Manual && sp.Reason == req.Reason && sp.IdleMinutes == req.IdleMinutes
+	return sp.Window == req.Window && sp.Manual == req.Manual && sp.Reason == req.Reason && sp.IdleMinutes == req.IdleMinutes &&
+		sp.Person == (req.Manual && req.PersonToken != "")
 }
 
 // paneOf is the "%N" pane id at the end of an Origin.Tmux ("<session>:@<win>.%<pane>"), "" when there is none.

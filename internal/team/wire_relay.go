@@ -117,6 +117,9 @@ type SelfRelayPayload struct {
 	Reask bool `json:"reask,omitempty"`
 	// ReaskID is the (spent) release token the card was opened with: a replay of the begin must carry the same one.
 	ReaskID string `json:"reask_id,omitempty"`
+	// Person: the begin was a person's own /relay (RT-1a), approved at begin by the person. The row's, set by the daemon when it
+	// consumed the token; a caller cannot send it.
+	Person bool `json:"person,omitempty"`
 }
 
 // RelayHelloRequest is POST /api/relay/hello.
@@ -170,6 +173,10 @@ type RelayBeginRequest struct {
 	// resumed the session. Valid (this session's, unused, under 24 h) it is consumed and the begin opens a card for a person; unknown,
 	// used or another session's it is ignored and the ordinary rules apply.
 	ReaskID string `json:"reask_id,omitempty"`
+	// PersonToken (with Manual) says the begin is the person's own /relay: the one-use token the daemon minted for the mod
+	// (POST /api/relay/person). Valid, it makes the relay direct: no card, no quota, whatever the switches. Invalid → 409
+	// person_token_invalid and nothing is written. Without it a manual begin is a card, as before (an older mod).
+	PersonToken string `json:"person_token,omitempty"`
 }
 
 // RelayBeginResponse is begin's 201 body.
