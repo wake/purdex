@@ -2,6 +2,7 @@
 package teammod
 
 import (
+	"database/sql"
 	"fmt"
 	"net/http"
 	"strings"
@@ -112,9 +113,21 @@ func (m *Module) releaseAsk(sid string) (int, error) {
 	return n, nil
 }
 
-// releaseCard denies the card id of sid for the person and releases the rest; when the deny lost, it is an ordinary release.
+// releaseCard denies the card id of sid for the person and releases the other causes in the SAME transaction (a failure rolls the
+// deny back, so a retry cannot turn the refusal into a reask, #2821); when the deny lost, it is an ordinary release.
 func (m *Module) releaseCard(sid, id string, client team.Client) (int, error) {
-	_, won, err := m.closeAs(id, Close{State: team.StateDenied, DecidedAt: m.now(), DecidedBy: &client})
+	var res ResumeResult
+	now := m.now()
+	_, won, err := m.closeAs(id, Close{State: team.StateDenied, DecidedAt: now, DecidedBy: &client, AfterWon: func(tx *sql.Tx) error {
+		if m.store.afterAskDeny != nil { // test seam: a failure between the deny and the release
+			if err := m.store.afterAskDeny(); err != nil {
+				return err
+			}
+		}
+		var err error
+		res, err = m.store.resumePausesIn(tx, ResumeScope{Release: sid, NoReask: true, NoReaskText: team.PauseResumedUnansweredDenied}, now, m.speaksReask, uuid.NewString)
+		return err
+	}})
 	if err != nil {
 		return 0, err
 	}
@@ -123,10 +136,12 @@ func (m *Module) releaseCard(sid, id string, client team.Client) (int, error) {
 		// not decide it, so the rest is an ordinary release (codex R1).
 		return m.resumeOne(sid)
 	}
-	n, err := m.resumeScope(ResumeScope{Release: sid, NoReask: true, NoReaskText: team.PauseResumedUnansweredDenied})
-	if err != nil {
-		return 0, err
+	if res.Rows > 0 {
+		m.rosterChanged()
+		m.kickPauseOutbox()
+		m.kickCommands()
 	}
+	n := res.Sessions
 	if n == 0 { // the card's close was the whole release
 		n = 1
 	}
