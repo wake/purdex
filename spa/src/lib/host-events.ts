@@ -15,6 +15,8 @@ export interface HostEvent {
     | 'profile'
     | 'nex-worker-exited'
     | 'approval.request'
+    | 'session.reads'
+    | 'session.read'
     | 'team.unattended'
     | 'team.relay_quota'
     | 'team.roster'
