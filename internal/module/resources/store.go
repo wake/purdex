@@ -90,7 +90,12 @@ type leaseRow struct {
 // leaseStore is the SQLite persistence of resource_leases (resources.db).
 // Every state change is a compare-and-set on the row's state, so of any
 // number of concurrent writers exactly one wins.
-type leaseStore struct{ db *sql.DB }
+type leaseStore struct {
+	db *sql.DB
+	// afterFirstStmt is a test seam: a combined operation calls it between its
+	// statements, and an error from it aborts (and rolls back) the operation.
+	afterFirstStmt func() error
+}
 
 // openLeaseStore opens (or creates) resources.db at path. ":memory:" is for
 // tests.
@@ -201,7 +206,24 @@ func nullable(s string) any {
 // the same client id inserts nothing and returns the existing row with
 // created false, whatever state it has reached.
 func (s *leaseStore) Create(r leaseRow) (leaseRow, bool, error) {
-	res, err := s.db.Exec(`
+	created, err := insertLeaseRow(s.db, r)
+	if err != nil {
+		return leaseRow{}, false, err
+	}
+	row, ok, err := s.GetByClientID(r.ClientID)
+	if err != nil {
+		return leaseRow{}, false, err
+	}
+	if !ok {
+		return leaseRow{}, false, errors.New("create lease: row vanished after insert")
+	}
+	return row, created, nil
+}
+
+// insertLeaseRow inserts a waiting row, idempotent on the client id, on a
+// database or a transaction; it reports whether it inserted.
+func insertLeaseRow(x dbx, r leaseRow) (bool, error) {
+	res, err := x.Exec(`
 		INSERT INTO resource_leases (id, client_id, state, kind, weight, session_id, holder_pid, holder_start,
 			scope, tool_use_id, created_at, deadline_at, lease_until, baseline, parkable,
 			position_id, mode, command, cwd, queued_reason)
@@ -211,20 +233,13 @@ func (s *leaseStore) Create(r leaseRow) (leaseRow, bool, error) {
 		r.Scope, r.ToolUseID, r.CreatedAt, r.DeadlineAt, r.LeaseUntil, nullable(r.Baseline), b2i(r.Parkable),
 		r.PositionID, r.Mode, r.Command, r.Cwd, r.QueuedReason)
 	if err != nil {
-		return leaseRow{}, false, fmt.Errorf("create lease: %w", err)
+		return false, fmt.Errorf("create lease: %w", err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return leaseRow{}, false, fmt.Errorf("create lease rows affected: %w", err)
+		return false, fmt.Errorf("create lease rows affected: %w", err)
 	}
-	row, ok, err := s.GetByClientID(r.ClientID)
-	if err != nil {
-		return leaseRow{}, false, err
-	}
-	if !ok {
-		return leaseRow{}, false, errors.New("create lease: row vanished after insert")
-	}
-	return row, n == 1, nil
+	return n == 1, nil
 }
 
 // Get returns the row of id; ok is false for an unknown id.
@@ -275,7 +290,12 @@ func (s *leaseStore) Grant(id string, now int64, overrun, wouldWait bool) (bool,
 // single-row UPDATE: the row is never held without them. baseline "" leaves
 // the column as it is. overrun is never set: v2 has no overrun grant.
 func (s *leaseStore) GrantDecided(id string, now int64, wouldWait bool, d resources.Decision, v2 resources.V2Record, waitReasons, baseline string) (bool, error) {
-	return s.changed(`
+	return grantDecidedOn(s.db, id, now, wouldWait, d, v2, waitReasons, baseline)
+}
+
+// grantDecidedOn is GrantDecided on a database or a transaction.
+func grantDecidedOn(x dbx, id string, now int64, wouldWait bool, d resources.Decision, v2 resources.V2Record, waitReasons, baseline string) (bool, error) {
+	res, err := x.Exec(`
 		UPDATE resource_leases
 		SET state = 'held', granted_at = ?, overrun = 0, would_wait = ?, waited_ms = ? - created_at,
 			dec_recorded = 1, dec_load1 = ?, dec_ncpu = ?, dec_mem = ?, dec_measured = ?, dec_full = ?,
@@ -288,6 +308,14 @@ func (s *leaseStore) GrantDecided(id string, now int64, wouldWait bool, d resour
 		d.Load1, d.NCPU, d.Mem, d.Measured, b2i(d.Full), d.SumCharge, d.Unleased, d.Weight, d.Path, b2i(d.WouldWaitR2),
 		v2.Zone, v2.Trend, b2i(v2.Running), v2.GapMS,
 		waitReasons, nullable(baseline), id)
+	if err != nil {
+		return false, fmt.Errorf("update lease: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("update lease rows affected: %w", err)
+	}
+	return n == 1, nil
 }
 
 // End moves a waiting or held row to ended with the reason (compare-and-set
