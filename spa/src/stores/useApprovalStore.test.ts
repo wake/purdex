@@ -234,6 +234,25 @@ describe('useApprovalStore', () => {
     })
   })
 
+  describe('applyUnanswered', () => {
+    const SENTINEL = Date.UTC(9999, 11, 31)
+    it('takes unanswered_at and the sentinel deadline from a fresh open read, and nothing else', () => {
+      s().applyOpened('h1', approval({ id: 'a', lease_until: 31_000 }))
+      s().applyUnanswered('h1', approval({ id: 'a', unanswered_at: 600_000, deadline_at: SENTINEL, lease_until: 99_000 }))
+      const held = s().entries[approvalKey('h1', 'a')].approval
+      expect([held.unanswered_at, held.deadline_at, held.lease_until]).toEqual([600_000, SENTINEL, 31_000])
+    })
+    it('ignores a read that is closed, not unanswered, for another host, or for a request not held', () => {
+      s().applyOpened('h1', approval({ id: 'a' }))
+      const before = s().entries
+      s().applyUnanswered('h1', approval({ id: 'a', state: 'approved', unanswered_at: 600_000 }))
+      s().applyUnanswered('h1', approval({ id: 'a' }))
+      s().applyUnanswered('h2', approval({ id: 'a', unanswered_at: 600_000 }))
+      s().applyUnanswered('h1', approval({ id: 'zz', unanswered_at: 600_000 }))
+      expect(s().entries).toBe(before)
+    })
+  })
+
   describe('forgetHost', () => {
     it('removes that host\'s entries, queued decisions, decidedHere marks and tombstones; other hosts are untouched', () => {
       s().applyOpened('h1', approval({ id: 'a' }))

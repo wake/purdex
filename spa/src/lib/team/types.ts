@@ -276,6 +276,19 @@ export function isApproval(v: unknown): v is Approval {
     && optional(v.hook, isRecord)
 }
 
+/** `/api/info` capabilities entry of a daemon that leaves a final relay card open past its deadline (`unanswered_at`, pause cause `relay_unanswered`). */
+export const UNANSWERED_CAPABILITY = 'relay.unanswered.v1'
+
+/**
+ * What a card this app already holds takes from a later read of the same request (a reconnect snapshot, or the re-read at its
+ * deadline): when the fresh row ran out (`isUnanswered`) and the held one does not know yet, only `unanswered_at` and `deadline_at`
+ * (now the sentinel). Everything else stays, so the entry and the dialog keep their identity. Otherwise the held object itself.
+ */
+export function withUnanswered(held: Approval, fresh: Approval): Approval {
+  if (!isUnanswered(fresh) || isUnanswered(held)) return held
+  return { ...held, unanswered_at: fresh.unanswered_at, deadline_at: fresh.deadline_at }
+}
+
 /** A card the daemon left open past its deadline (`unanswered_at > 0`): its `deadline_at` is a sentinel, never to be counted down. */
 export function isUnanswered(a: Approval): boolean {
   return typeof a.unanswered_at === 'number' && a.unanswered_at > 0

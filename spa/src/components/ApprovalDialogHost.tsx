@@ -38,6 +38,7 @@ import { deriveTeamLabel, goTrim, labelProblem, TEAM_LABEL_MAX_WIDTH } from '../
 import { cellWidth } from '../lib/textwidth'
 import { adoptPayloadOf, adoptTargetLabel, clipForDisplay, leadPayloadOf, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
 import { useCardUnanswered } from '../lib/team/approval-unanswered'
+import { startUnansweredReread } from '../lib/team/approval-reread'
 import { approvalSessionLabel, formatCountdown, formatOriginAddress, memberRelayNames } from '../lib/team/approval-format'
 import { ApprovalApiError, setSelfRelayPause } from '../lib/team/approval-api'
 import { buttonBase, fieldClass, keyboardGuard, parseRoots, tabStops, teamNameOk } from './approval-dialog-helpers'
@@ -49,6 +50,8 @@ import { RelayBrief, RelayTitle } from './approval/RelayBrief'
 export function ApprovalDialogHost() {
   const current = useApprovalStore(selectCurrent)
   const minimized = useApprovalStore((s) => s.minimized)
+  // A card that ran out while open is read again by this host (its daemon sends no event for that); see approval-reread.ts.
+  useEffect(() => startUnansweredReread(), [])
   // The remote-adopt wait card outlives the (closed) approval, so it is mounted whether or not a request is open.
   if (!current) return <AdoptionWaitCard />
   // Keyed by the request: the next one is a fresh dialog (the payload's defaults, nothing in flight). Minimizing does

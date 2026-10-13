@@ -71,6 +71,15 @@ describe('startUnattendedSupport', () => {
     expect(useUnattendedStore.getState().byHost.h2?.editSupport).toBe('no')
   })
 
+  it('relay.unanswered.v1 in the capabilities → the App reads a card that ran out; without it, not', async () => {
+    useHostStore.setState({ runtime: { h1: { status: 'connected' }, h2: { status: 'connected' } } })
+    fetchHostInfo.mockImplementation(async (id) => info(id === 'h1' ? ['relay.unattended.v1', 'relay.unanswered.v1'] : ['relay.unattended.v1']))
+    stop = startUnattendedSupport()
+    await flush()
+    expect(useUnattendedStore.getState().byHost.h1?.unansweredSupport).toBe('yes')
+    expect(useUnattendedStore.getState().byHost.h2?.unansweredSupport).toBe('no')
+  })
+
   // #2309: every capability flag follows the connection by the one rule - unknown on a disconnect, unknown from the
   // reconnect until the probe answers, whatever the probe says once it does, and unknown after a failed probe.
   describe.each([
@@ -78,8 +87,9 @@ describe('startUnattendedSupport', () => {
     ['quotaSupport', 'team.relay_quota.v1'],
     ['maxMembersSupport', 'team.max_members.v1'],
     ['editSupport', 'team.edit.v1'],
+    ['unansweredSupport', 'relay.unanswered.v1'],
   ] as const)('the %s flag follows the connection', (flag, cap) => {
-    const ALL = ['relay.unattended.v1', 'team.relay_quota.v1', 'team.max_members.v1', 'team.edit.v1']
+    const ALL = ['relay.unattended.v1', 'team.relay_quota.v1', 'team.max_members.v1', 'team.edit.v1', 'relay.unanswered.v1']
     const FULL = info(ALL)
     const WITHOUT_IT = info(ALL.filter((c) => c !== cap))
     const read = () => useUnattendedStore.getState().byHost.h1?.[flag]

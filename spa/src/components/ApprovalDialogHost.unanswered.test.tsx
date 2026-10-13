@@ -1,7 +1,7 @@
 // spa/src/components/ApprovalDialogHost.unanswered.test.tsx — a final relay card past its deadline stays open with `unanswered_at`
 // and a sentinel `deadline_at` (relay v2 plan, App contract 3, `relay.unanswered.v1`): the dialog shows no countdown and says
 // 「已暫停作業，等你核准」. A card without `unanswered_at` (or with 0) keeps today's countdown.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, act } from '@testing-library/react'
 import { ApprovalDialogHost } from './ApprovalDialogHost'
 import { useApprovalStore } from '../stores/useApprovalStore'
@@ -12,7 +12,12 @@ import { usePausedStore } from '../stores/usePausedStore'
 import { useTeamRosterStore } from '../stores/useTeamRosterStore'
 import type { PauseCause } from '../lib/team/roster'
 import { __resetClientDescriptorForTests } from '../lib/team/client-label'
+import { useUnattendedStore } from '../stores/useUnattendedStore'
+import * as approvalApi from '../lib/team/approval-api'
 import type { Approval, ApprovalKind } from '../lib/team/types'
+
+vi.mock('../lib/team/approval-api', async (orig) => ({ ...(await orig<typeof import('../lib/team/approval-api')>()), fetchApproval: vi.fn() }))
+const fetchApproval = vi.mocked(approvalApi.fetchApproval)
 
 const H = 'h1'
 const SENTINEL = Date.UTC(9999, 11, 31)
@@ -138,5 +143,50 @@ describe('a card held since opened, past its deadline', () => {
     act(() => { useApprovalStore.getState().applySnapshot(H, [relay({ unanswered_at: 541_500, deadline_at: SENTINEL })]) })
     expect(screen.queryByTestId('approval-countdown')).toBeNull()
     expect(screen.getByTestId('approval-unanswered').textContent).toBe('已暫停作業，等你核准')
+  })
+})
+
+// A SOLO session's pause leaves the roster JSON unchanged and cards exist only with 無人值守 off (no 30 s paused poll), so nothing
+// tells the App its card ran out. The host reads the card itself ~2 s after its deadline (approval-reread.ts).
+describe('the dialog host reads a card that ran out while open', () => {
+  const NOW = 5_000_000
+  beforeEach(() => {
+    vi.useFakeTimers({ now: NOW })
+    fetchApproval.mockReset()
+    usePausedStore.getState().reset()
+    useTeamRosterStore.getState().reset()
+    useUnattendedStore.getState().reset()
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  // Mutation gate: take the reread out → the dialog stays on its countdown with no pause data at all → red.
+  it('a solo card, no pause data at all: after the deadline the read brings unanswered_at and the dialog says 已暫停作業', async () => {
+    useUnattendedStore.getState().setUnansweredSupport(H, 'yes')
+    render(<ApprovalDialogHost />)
+    open(relay({ created_at: NOW - 300_000, deadline_at: NOW + 10_000 }))
+    fetchApproval.mockResolvedValue(relay({ created_at: NOW - 300_000, unanswered_at: NOW + 10_500, deadline_at: SENTINEL }))
+    expect(screen.getByTestId('approval-countdown')).toBeTruthy()
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_000) })
+    expect(fetchApproval).toHaveBeenCalledWith(H, 'req-1')
+    expect(screen.queryByTestId('approval-countdown')).toBeNull()
+    expect(screen.getByTestId('approval-unanswered').textContent).toBe('已暫停作業，等你核准')
+  })
+
+  it('a host without the capability is not read: the dialog stays on its countdown', async () => {
+    render(<ApprovalDialogHost />)
+    open(relay({ created_at: NOW - 300_000, deadline_at: NOW + 10_000 }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000) })
+    expect(fetchApproval).not.toHaveBeenCalled()
+    expect(screen.getByTestId('approval-countdown')).toBeTruthy()
+  })
+
+  it('the read answers open without unanswered_at: the countdown stays', async () => {
+    useUnattendedStore.getState().setUnansweredSupport(H, 'yes')
+    render(<ApprovalDialogHost />)
+    open(relay({ created_at: NOW - 300_000, deadline_at: NOW + 10_000 }))
+    fetchApproval.mockResolvedValue(relay({ created_at: NOW - 300_000, deadline_at: NOW + 10_000 }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(40_000) })
+    expect(fetchApproval).toHaveBeenCalledTimes(2)
+    expect(screen.getByTestId('approval-countdown')).toBeTruthy()
   })
 })
