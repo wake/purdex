@@ -77,10 +77,12 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 		m.logf("[resources] sampling recovered after %d failed tick(s)", m.fails)
 	}
 	m.fails, m.degraded = 0, false
+	at := m.now()
 	host := resources.ComputeHost(raw)
 	host.Full = m.fullLatch.Update(host)
+	m.noteZone(&host, at, set)
 	m.publish(&resources.Snapshot{
-		SampledAt: m.now(),
+		SampledAt: at,
 		Available: true,
 		Capacity:  resources.Capacity,
 		Host:      host,
@@ -208,7 +210,36 @@ func (m *Module) unavailable(reason string) *resources.Snapshot {
 	s.Available = false
 	s.Reason = reason
 	s.Mode = m.mode
+	// A host that cannot be read has no zone; the latch starts again from
+	// normal when readings come back.
+	m.zoneLatch.Update(resources.HostUse{}, false, resources.Settings{})
+	if m.lastZone != resources.ZoneUnknown || m.zoneSince.IsZero() {
+		m.lastZone, m.zoneSince = resources.ZoneUnknown, m.now()
+	}
+	s.Host.Zone, s.Host.Trend, s.Host.ZoneSince = resources.ZoneUnknown.String(), resources.TrendUnknown.String(), m.zoneSince.UnixMilli()
 	return &s
+}
+
+// noteZone adds the reading to the ring and fills the host's zone, trend and
+// zone start. Sampler goroutine only.
+func (m *Module) noteZone(host *resources.HostUse, at time.Time, set resources.Settings) {
+	m.ringMu.Lock()
+	m.ring.Add(resources.TrendSample{At: at, Mem: host.Mem, CPU: host.CPU, Pressure: host.Pressure})
+	window := m.ring.Since(at.Add(-set.TrendWindow()))
+	m.ringMu.Unlock()
+	zone := m.zoneLatch.Update(*host, true, set)
+	if zone != m.lastZone || m.zoneSince.IsZero() {
+		m.lastZone, m.zoneSince = zone, at
+	}
+	host.Zone, host.Trend = zone.String(), resources.TrendOf(window, at, set).String()
+	host.ZoneSince = m.zoneSince.UnixMilli()
+}
+
+// ringCopy is the ring's samples, oldest first, as a copy.
+func (m *Module) ringCopy() []resources.TrendSample {
+	m.ringMu.Lock()
+	defer m.ringMu.Unlock()
+	return m.ring.All()
 }
 
 func (m *Module) publish(s *resources.Snapshot) { m.latest.Store(s) }
