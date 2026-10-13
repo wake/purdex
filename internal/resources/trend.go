@@ -98,10 +98,13 @@ func TrendOf(samples []TrendSample, now time.Time, s Settings) Trend {
 	cpuSlope := slope(in, func(x TrendSample) float64 { return x.CPU })
 	memLimit, cpuLimit := s.TrendMemPPM(), s.TrendCPUPPM()
 	first, last := in[0].Pressure, in[len(in)-1].Pressure
+	// Pressure 0 is a failed read, not a level below normal: the direction
+	// counts only when both ends are known.
+	known := first > 0 && last > 0
 	switch {
-	case last > first || memSlope > memLimit || cpuSlope > cpuLimit:
+	case known && last > first || memSlope > memLimit || cpuSlope > cpuLimit:
 		return TrendRising
-	case last < first || memSlope < -memLimit || cpuSlope < -cpuLimit:
+	case known && last < first || memSlope < -memLimit || cpuSlope < -cpuLimit:
 		return TrendFalling
 	}
 	return TrendFlat
