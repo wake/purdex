@@ -17,10 +17,14 @@ import (
 
 // posFix is the attribution fixture with a second agent: pdx 1000 / 900 / 800 is
 // session sid-agent (A), pdx 1010 / 910 / 810 is session sid-b (B). The gap is off.
-type posFix struct{ *attrFix }
+type posFix struct {
+	*attrFix
+	// guardRow and guardPos are the target of the own-session guard tests.
+	guardRow, guardPos string
+}
 
 func newPosFix(t *testing.T) *posFix {
-	f := &posFix{newAttrFix(t)}
+	f := &posFix{attrFix: newAttrFix(t)}
 	f.m.roots = &fakeRoots{roots: []resources.Root{
 		{SessionID: "sid-agent", PID: 800, ProcStart: attrStartText},
 		{SessionID: "sid-b", PID: 810, ProcStart: attrStartText},

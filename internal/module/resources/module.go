@@ -139,6 +139,10 @@ type Module struct {
 	// baselineFailing: the "no baseline" problem has been logged (the unlocked part
 	// of the pass runs on the sampler and the sweeper goroutine).
 	baselineFailing atomic.Bool
+	// routeHook runs in the cancel and done routes after the caller and the target
+	// were read and before stateMu is taken, for tests to let a pass start the
+	// target in that window.
+	routeHook func()
 	// pollHook runs in a long poll after it read the row and released stateMu,
 	// before it waits: a seam for tests to land a transition in that window.
 	pollHook func()
@@ -324,6 +328,10 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/resources/leases", m.handleLeaseDeleteByClient)
 	mux.HandleFunc("GET /api/resources/leases/{id}", m.handleLeaseGet)
 	mux.HandleFunc("DELETE /api/resources/leases/{id}", m.handleLeaseDelete)
+	mux.HandleFunc("POST /api/resources/leases/{id}/confirm", m.handleLeaseConfirm)
+	mux.HandleFunc("POST /api/resources/leases/{id}/cancel", m.handleLeaseCancel)
+	mux.HandleFunc("POST /api/resources/positions/{id}/cancel", m.handlePositionCancel)
+	mux.HandleFunc("POST /api/resources/positions/done", m.handlePositionDone)
 }
 
 // Start runs the boot reconcile, then launches the sampler goroutine (one

@@ -249,6 +249,9 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 			}
 		}
 	} else {
+		// startedNow are the positions whose command started in this pass: the row
+		// that started it is not a second command.
+		startedNow := map[string]bool{}
 		// Reservation grants first: an offered or idle position starts its
 		// session's command at once, without a table or gap check. The offer was
 		// the decision (A §3.1).
@@ -268,6 +271,7 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 				return g, a
 			}
 			posByID[p.ID].State = resources.PosRunning
+			startedNow[p.ID] = true
 		}
 		// A second command of a running position (coordinator Q6): the table
 		// decides, whether or not someone is queued; when someone waits, the
@@ -275,7 +279,7 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 		// admission (at most one grant per pass).
 		tableUsed := false
 		for _, p := range positions {
-			if posByID[p.ID].State != resources.PosRunning {
+			if posByID[p.ID].State != resources.PosRunning || startedNow[p.ID] {
 				continue
 			}
 			w, found := freshAt(rowsByPos[p.ID], fresh, cut)

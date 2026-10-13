@@ -851,3 +851,28 @@ func TestReconcile_RepairsEachInconsistentPair(t *testing.T) {
 		assert.Equal(t, resources.PosQueued, mustPos(t, s, "pos_00000001").State)
 	})
 }
+
+// ConfirmRow is a compare-and-set on the position the command was asked at.
+// (M: drop the position conditions.)
+func TestStore_ConfirmRowOnlyAtTheAskingPosition(t *testing.T) {
+	s := memStore(t)
+	_, _, _, err := s.CreateAttached(txPos("pos_00000001", "s1", 10), txRow("ask", "s1", "", resources.CallAsk, "bg", "/w", 10))
+	require.NoError(t, err)
+	ok, err := s.ConfirmRow("ask", "pos_00000001", 100)
+	require.NoError(t, err)
+	assert.False(t, ok, "the position is still queued: not asked yet")
+	_, err = s.OfferPosition("pos_00000001", 50, "", "", "")
+	require.NoError(t, err)
+	ok, err = s.ConfirmRow("ask", "pos_other", 100)
+	require.NoError(t, err)
+	assert.False(t, ok, "another position than the row's")
+	ok, err = s.ConfirmRow("ask", "pos_00000001", 100)
+	require.NoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, int64(100), mustRow(t, s, "ask").ConfirmedAt)
+	// A queue row is not confirmed.
+	require.NoError(t, createRow(s, txRow("q", "s1", "pos_00000001", resources.CallQueue, "x", "/w", 11)))
+	ok, err = s.ConfirmRow("q", "pos_00000001", 100)
+	require.NoError(t, err)
+	assert.False(t, ok)
+}

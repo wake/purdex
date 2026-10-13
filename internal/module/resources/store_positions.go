@@ -177,3 +177,14 @@ func (s *leaseStore) SetQueuedReason(id, reason string) error {
 	_, err := s.db.Exec(`UPDATE resource_leases SET queued_reason = ? WHERE id = ? AND state = 'waiting'`, reason, id)
 	return err
 }
+
+// ConfirmRow records that the session said yes to a background command whose turn
+// came: a compare-and-set on the row still waiting, still an ask row, still in that
+// position, and the position still offered or idle. A command that was moved to a
+// new place since it was asked is not confirmed. It reports whether it did.
+func (s *leaseStore) ConfirmRow(id, positionID string, now int64) (bool, error) {
+	return s.changed(`UPDATE resource_leases SET confirmed_at = ?
+		WHERE id = ? AND state = 'waiting' AND mode = 'ask' AND position_id = ?
+		AND EXISTS (SELECT 1 FROM resource_positions WHERE id = ? AND state IN ('offered','idle'))`,
+		now, id, positionID, positionID)
+}
