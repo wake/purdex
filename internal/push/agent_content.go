@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/wake/purdex/internal/reads"
 )
 
 // AgentInput is what the content of an agent push is built from: the session, the event (the frame's raw_event_name)
@@ -20,6 +22,8 @@ type AgentInput struct {
 	Workbook *WorkbookLine
 	// Member: the session is known to be a team member; the payload then says so (purdex.member).
 	Member bool
+	// EventCursor is the hook cursor of the event (agent.NotifyEvent.Event.Epoch / Seq); an empty epoch leaves it out.
+	EventCursor reads.Cursor
 }
 
 // WorkbookLine is the part of a workbook entry that a Stop push uses.
@@ -149,7 +153,7 @@ func AgentContent(in AgentInput, locale string) (Content, bool) {
 	c := Content{
 		Title: cutRunes(title, maxTitleRunes), Body: body, Kind: "agent",
 		SessionCode: in.SessionCode, SessionID: in.SessionID, SessionName: name, Event: ev,
-		CollapseID: "agent-" + in.SessionCode, Member: in.Member,
+		CollapseID: "agent-" + in.SessionCode, Member: in.Member, EventCursor: in.EventCursor,
 	}
 	if wb != nil {
 		c.Title = workbookTitle(title, wb.Thing)

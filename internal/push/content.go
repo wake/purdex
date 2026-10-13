@@ -9,6 +9,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/wake/purdex/internal/reads"
 )
 
 const (
@@ -64,7 +66,15 @@ type Content struct {
 	// one (at most 16 are sent); the phone clears their delivered notifications.
 	Background        bool
 	ClosedApprovalIDs []string
+	// Reads are the session reads of other devices this push carries to a read_sync phone (badge spec §7.2): the sender
+	// attaches up to maxReads pending ones, oldest first; Build says how many actually fitted. EventCursor is the hook
+	// cursor of the event an agent push is about (purdex.event_cursor); an empty epoch leaves it out.
+	Reads       []reads.Read
+	EventCursor reads.Cursor
 }
+
+// maxReads is how many reads one push carries.
+const maxReads = 16
 
 var (
 	reImage  = regexp.MustCompile(`!\[([^\]]*)\]\([^)]*\)`)
@@ -243,27 +253,49 @@ func ApprovalContent(a Approval, hostLabel, locale string) (Content, bool) {
 // Payload is the APNs JSON body (spec §6), under 4 KiB: the body is cut further if the whole is over. Empty fields of
 // the purdex block are left out.
 func (c Content) Payload(hostID string) ([]byte, error) {
+	raw, _, err := c.Build(hostID)
+	return raw, err
+}
+
+// Build is Payload that also says which of c.Reads the payload carries (at most maxReads, the oldest first). A visible push
+// fits its reads in the 4 KiB budget first and trims the body to make room; only when the fixed fields do not fit even with
+// an empty body are reads dropped, from the newest end, and a dropped read is not reported as carried (it stays pending).
+// A push that cannot be built carries, and reports, nothing.
+func (c Content) Build(hostID string) ([]byte, []reads.Read, error) {
 	if c.Background {
-		return c.backgroundPayload(hostID)
+		return c.backgroundBuild(hostID)
 	}
+	rs := firstReads(c.Reads)
 	body := c.Body
 	for {
-		raw, err := c.payload(hostID, body)
+		raw, err := c.payload(hostID, body, rs)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if len(raw) <= maxPayload {
-			return raw, nil
+			return raw, rs, nil
 		}
-		if body == "" { // only the fixed fields are left and they are still over: refuse here, not at APNs
-			return nil, errors.New("push payload exceeds 4096 bytes")
+		if body != "" {
+			r := []rune(body)
+			body = string(r[:len(r)*3/4])
+			continue
 		}
-		r := []rune(body)
-		body = string(r[:len(r)*3/4])
+		if len(rs) == 0 { // only the fixed fields are left and they are still over: refuse here, not at APNs
+			return nil, nil, errors.New("push payload exceeds 4096 bytes")
+		}
+		rs = rs[:len(rs)-1]
 	}
 }
 
-func (c Content) payload(hostID, body string) ([]byte, error) {
+// firstReads is the oldest maxReads of rs.
+func firstReads(rs []reads.Read) []reads.Read {
+	if len(rs) > maxReads {
+		return rs[:maxReads]
+	}
+	return rs
+}
+
+func (c Content) payload(hostID, body string, rs []reads.Read) ([]byte, error) {
 	purdex := map[string]any{"host_id": hostID, "kind": c.Kind}
 	for k, v := range map[string]string{"approval_id": c.ApprovalID, "session_code": c.SessionCode, "session_id": c.SessionID, "session_title": c.SessionName, "event": c.Event} {
 		if v != "" {
@@ -275,6 +307,12 @@ func (c Content) payload(hostID, body string) ([]byte, error) {
 	}
 	if c.Member {
 		purdex["member"] = true
+	}
+	if c.EventCursor.Epoch != "" {
+		purdex["event_cursor"] = c.EventCursor
+	}
+	if len(rs) > 0 {
+		purdex["reads"] = rs
 	}
 	if c.OpenApprovals != nil {
 		purdex["open_approvals"] = *c.OpenApprovals
