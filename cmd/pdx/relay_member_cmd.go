@@ -97,8 +97,8 @@ func runRelayDeny(ctx context.Context, target, inbox, cfgPath string, stdout, st
 		return code
 	}
 	var res team.RelayDenyResponse
-	// closing an ask twice is a refusal (no_open_ask), not a second effect: a replay after a lost response is safe to retry
-	if _, err := client.Do(ctx, http.MethodPost, "/api/team/relays/deny", team.RelayDenyRequest{OriginInbox: inbox, Target: target}, &res, daemonclient.Idempotent()); err != nil {
+	// not Idempotent(): a replay after a lost response would find no open ask and report a deny that did succeed as no_open_ask
+	if _, err := client.Do(ctx, http.MethodPost, "/api/team/relays/deny", team.RelayDenyRequest{OriginInbox: inbox, Target: target}, &res); err != nil {
 		return relayReportErr(err, stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "已拒絕 %s 的接力申請\n", target)

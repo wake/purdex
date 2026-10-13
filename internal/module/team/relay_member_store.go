@@ -94,14 +94,19 @@ func (s *Store) createMemberRelayOp(op team.RelayOp, gate MemberRelayGate, enque
 	}
 	// The lead's relay is the answer to an open ask (member relay ask §3.2): in this transaction, so a failure anywhere
 	// above or below leaves no op, no spent pool and the ask open. A window that has passed is no longer an ask (D9).
+	// A FINAL ask of a member of this host (RT-2b T23) is still the lead's to answer between its window passing and the sweeper's
+	// mark: otherwise the relay would open and the next tick would pause the member for an ask nobody answered (codex R1).
+	// A remote member's mirror is not final (S-8): it lapses with its window as it always did.
+	const askOpen = `session_id = ? AND state = 'open' AND (expires_at > ? OR (? AND used_pct >= ? AND unanswered_at = 0))`
+	finalOK := enqueue == nil
 	var unansweredAsk int64
-	switch err := tx.QueryRow(`SELECT unanswered_at FROM relay_asks WHERE session_id = ? AND state = 'open' AND expires_at > ?`, op.SessionID, op.CreatedAt).Scan(&unansweredAsk); {
+	switch err := tx.QueryRow(`SELECT unanswered_at FROM relay_asks WHERE `+askOpen, op.SessionID, op.CreatedAt, finalOK, team.RelayLastAskPct).Scan(&unansweredAsk); {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
 		return fail(err)
 	}
-	if _, err := tx.Exec(`UPDATE relay_asks SET state = 'accepted', op_id = ?, closed_at = ? WHERE session_id = ? AND state = 'open' AND expires_at > ?`,
-		op.ID, op.CreatedAt, op.SessionID, op.CreatedAt); err != nil {
+	if _, err := tx.Exec(`UPDATE relay_asks SET state = 'accepted', op_id = ?, closed_at = ? WHERE `+askOpen,
+		op.ID, op.CreatedAt, op.SessionID, op.CreatedAt, finalOK, team.RelayLastAskPct); err != nil {
 		return fail(err)
 	}
 	if unansweredAsk > 0 { // the lead answered a final ask that had paused the member (RT-2b T23)

@@ -128,7 +128,7 @@ func (m *Module) markFinalAsks() {
 		address, title := m.memberNoticeName(u.Member)
 		ref := strings.TrimPrefix(u.Member.Ref, "_")
 		text := fmt.Sprintf(team.RelayAskUnansweredLeadFmt, address, ref, title, ref, ref)
-		m.goTracked(func() { m.noticeToLead(u.Member, u.Team, text, "final relay ask unanswered") })
+		m.markFinalAsksNoticeFor(u, text)
 	}
 }
 
@@ -137,4 +137,17 @@ func (m *Module) markFinalAsks() {
 func (m *Module) askAnswered() {
 	m.rosterChanged()
 	m.kickPauseOutbox()
+}
+
+// markFinalAsksNoticeFor tells the lead that u's member is paused, off the sweeper's path: behind a close of the ask (askMu), and only
+// while the ask is still unanswered - a lead that accepted or denied between the mark and this send is not asked again (codex R1).
+func (m *Module) markFinalAsksNoticeFor(u unansweredAsk, text string) {
+	m.goTracked(func() {
+		m.askMu.Lock()
+		defer m.askMu.Unlock()
+		if cur, ok, err := m.store.GetRelayAsk(u.Ask.ID); err != nil || !ok || cur.State != team.RelayAskOpen || cur.UnansweredAt == 0 {
+			return
+		}
+		m.noticeToLead(u.Member, u.Team, text, "final relay ask unanswered")
+	})
 }

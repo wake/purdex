@@ -184,3 +184,35 @@ func TestRelayAsks_UnansweredAtColumnOnAnOldTable(t *testing.T) {
 		t.Fatalf("old row = %+v ok=%v err=%v", a, ok, err)
 	}
 }
+
+// codex R1: a lead that accepts a final ask after its window passed but before the sweeper's mark gets its relay, the ask is accepted
+// and nothing pauses the member afterwards. Mutation gate: require expires_at > now for a final ask too → the ask stays open and the next
+// tick pauses the member (red).
+func TestFinalAsk_AcceptedInTheGapBeforeTheMark(t *testing.T) {
+	f, a := finalAsked(t, 93)
+	f.clock.Store(a.CreatedAt + team.RelayAskHoldS*1000 + 1) // past the window, no tick yet
+	if code, _, ae := f.createRelay(rid(930), "/tmp/10.sock", "_mem001"); code != http.StatusCreated {
+		t.Fatalf("relay: %d %+v", code, ae)
+	}
+	if got := f.ask(a.ID); got.State != team.RelayAskAccepted {
+		t.Fatalf("ask = %+v, want accepted", got)
+	}
+	f.livenessTick()
+	if len(f.pauses()) != 0 {
+		t.Fatalf("pauses = %+v, want none", f.pauses())
+	}
+}
+
+// codex R1: the lead's "paused" notice is not sent for an ask that was answered after the mark. Mutation gate: send without the re-read →
+// the stale notice goes out (red).
+func TestFinalAsk_NoStaleNoticeAfterAnAnswer(t *testing.T) {
+	f, a := finalAsked(t, 93)
+	f.m.store.db.Exec(`UPDATE relay_asks SET state = 'withdrawn', reason = 'denied', closed_at = 1 WHERE id = ?`, a.ID)
+	f.m.markFinalAsksNoticeFor(unansweredAsk{Ask: RelayAsk{ID: a.ID}, Member: memberRow{Ref: "_mem001", SessionID: "sid-m1"}}, "x")
+	time.Sleep(100 * time.Millisecond)
+	for _, c := range f.sender.calls() {
+		if c.Text == "x" {
+			t.Fatalf("a notice went out for a closed ask: %+v", c)
+		}
+	}
+}
