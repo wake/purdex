@@ -73,6 +73,25 @@ describe('isCardUnanswered', () => {
   })
 })
 
+describe('isCardUnanswered: whose pause counts', () => {
+  const memberCard = (lead = 'L1', member = 'M1'): Approval => card({
+    kind: 'member_relay',
+    payload: { op_id: 'o', team_id: 't', lead_ref: '_lllll1', lead_title: 'lead', member_session_id: member, member_ref: '_mmmmm1', member_title: 'member', used_percentage: 80 },
+  }, lead)
+  // Mutation gate: judge a member_relay card by origin.session_id (the lead) → the member case goes red.
+  it('self_relay: the card\'s own session (origin.session_id)', () => {
+    expect(isCardUnanswered('h1', card({}, 'S1'), 10_001, withPaused('h1', 'S1', ['relay_unanswered']))).toBe(true)
+  })
+  it('member_relay: the MEMBER that was blocked (payload.member_session_id), not the lead that asks', () => {
+    expect(isCardUnanswered('h1', memberCard('L1', 'M1'), 10_001, withPaused('h1', 'M1', ['relay_unanswered']))).toBe(true)
+    expect(isCardUnanswered('h1', memberCard('L1', 'M1'), 10_001, withPaused('h1', 'L1', ['relay_unanswered']))).toBe(false)
+  })
+  it('member_relay with no readable member session id: never unanswered', () => {
+    const c = { ...memberCard(), payload: {} } as Approval
+    expect(isCardUnanswered('h1', c, 10_001, withPaused('h1', '', ['relay_unanswered']))).toBe(false)
+  })
+})
+
 describe('nearestDeadline', () => {
   const entry = (hostId: string, id: string, deadline_at: number, extra: Partial<Approval> = {}) => ({ hostId, approval: card({ id, deadline_at, ...extra }) })
   const entries = (...es: ReturnType<typeof entry>[]) => Object.fromEntries(es.map((e) => [`${e.hostId}/${e.approval.id}`, e]))

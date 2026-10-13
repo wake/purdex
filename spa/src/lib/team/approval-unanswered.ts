@@ -3,12 +3,13 @@
 // gets `unanswered_at`; the session's pause is the live signal. A card is unanswered when
 //   (a) the row carries `unanswered_at > 0`, or
 //   (b) it is past `deadline_at` AND this App's pause data — the paused list or a roster row, on the card's OWN host — shows the
-//       card's session (`origin.session_id`) holding `relay_unanswered`.
+//       card's session holding `relay_unanswered`: `origin.session_id`, or for a `member_relay` card the blocked member
+//       (`payload.member_session_id`).
 // Past the deadline with no pause data yet, the card is left as it was: nothing is guessed.
 import type { ApprovalEntry } from '../../stores/useApprovalStore'
 import { usePausedStore, type PausedHostEntry } from '../../stores/usePausedStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
-import { isUnanswered, type Approval } from './types'
+import { isUnanswered, memberRelayPayloadOf, type Approval } from './types'
 import type { TeamRoster } from './roster'
 
 /** The pause data of every host: `usePausedStore.byHost` and `useTeamRosterStore.byHost`. */
@@ -24,10 +25,17 @@ export function sessionHoldsUnanswered(hostId: string, sessionId: string, src: P
     [t.lead, ...t.members].some((m) => m.session_id === sessionId && m.paused?.causes.includes('relay_unanswered') === true))
 }
 
+/** The session whose pause tells that this card ran out: the card's own session, except a `member_relay` card, which a LEAD asks
+ *  about a member: the one that gets blocked is the member (`payload.member_session_id`). */
+function pausedSessionOf(a: Approval): string {
+  return a.kind === 'member_relay' ? memberRelayPayloadOf(a).member_session_id : a.origin.session_id
+}
+
 /** Rule (a) or (b) above; `now` is unix ms. */
 export function isCardUnanswered(hostId: string, a: Approval, now: number, src: PauseSources): boolean {
   if (isUnanswered(a)) return true
-  return now >= a.deadline_at && sessionHoldsUnanswered(hostId, a.origin.session_id, src)
+  const sessionId = pausedSessionOf(a)
+  return now >= a.deadline_at && sessionId !== '' && sessionHoldsUnanswered(hostId, sessionId, src)
 }
 
 /** The deadline the pill counts down to (U22 (b)): the smallest `deadline_at` across hosts, skipping unanswered cards (their
