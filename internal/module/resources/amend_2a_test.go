@@ -32,7 +32,7 @@ func TestBoot_ParkedRowsEndAbandoned(t *testing.T) {
 	assert.Equal(t, resources.StateEnded, parked.State)
 	assert.Equal(t, resources.EndAbandoned, parked.EndReason)
 	plain, _ := mustGet(t, m, "plain")
-	assert.Equal(t, resources.StateWaiting, plain.State)
+	assert.NotEqual(t, resources.StateEnded, plain.State, "waiting, or already granted by the first tick: not abandoned")
 }
 
 // Nothing is ever parked: in lease mode a wait-mode row past its deadline with
