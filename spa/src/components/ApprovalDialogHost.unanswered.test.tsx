@@ -129,4 +129,14 @@ describe('a card held since opened, past its deadline', () => {
     pausedFor(H, 'S1', ['relay_unanswered'])
     expect(screen.getByTestId('approval-countdown')).toBeTruthy()
   })
+
+  // The reconnect snapshot is where a card held since `opened` learns it ran out; the pause stores may still be empty then.
+  it('a reconnect snapshot with unanswered_at flips the open dialog at once, with no pause data', () => {
+    render(<ApprovalDialogHost />)
+    open(relay())
+    expect(screen.getByTestId('approval-countdown')).toBeTruthy()
+    act(() => { useApprovalStore.getState().applySnapshot(H, [relay({ unanswered_at: 541_500, deadline_at: SENTINEL })]) })
+    expect(screen.queryByTestId('approval-countdown')).toBeNull()
+    expect(screen.getByTestId('approval-unanswered').textContent).toBe('已暫停作業，等你核准')
+  })
 })

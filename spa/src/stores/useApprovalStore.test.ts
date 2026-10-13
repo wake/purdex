@@ -47,6 +47,28 @@ describe('useApprovalStore', () => {
       s().applySnapshot('h1', [approval({ id: 'a' }), approval({ id: 'z', state: 'denied' })])
       expect(ids()).toEqual(['h1:a'])
     })
+
+    // A card held since `opened` ran out while the socket was down: the daemon sends no event op for that, so the reconnect
+    // snapshot is the only place its `unanswered_at` (and the sentinel deadline) arrives (relay v2 App contract 3).
+    // Mutation gate: keep the held object as before → the held card still has the old deadline and no unanswered_at → red.
+    it('a request still open takes unanswered_at and the sentinel deadline from the snapshot, and keeps its key', () => {
+      const SENTINEL = Date.UTC(9999, 11, 31)
+      s().applyOpened('h1', approval({ id: 'a' }))
+      const before = s().entries[approvalKey('h1', 'a')]
+      s().applySnapshot('h1', [approval({ id: 'a', unanswered_at: 600_000, deadline_at: SENTINEL })])
+      const held = s().entries[approvalKey('h1', 'a')]
+      expect(held.approval.unanswered_at).toBe(600_000)
+      expect(held.approval.deadline_at).toBe(SENTINEL)
+      expect(held.approval.created_at).toBe(before.approval.created_at)
+      expect(ids()).toEqual(['h1:a'])
+    })
+
+    it('a snapshot without unanswered_at leaves the held request as it was', () => {
+      s().applyOpened('h1', approval({ id: 'a', deadline_at: 123_000 }))
+      const before = s().entries[approvalKey('h1', 'a')]
+      s().applySnapshot('h1', [approval({ id: 'a', deadline_at: 999_000 })])
+      expect(s().entries[approvalKey('h1', 'a')]).toBe(before)
+    })
   })
 
   describe('applyOpened', () => {

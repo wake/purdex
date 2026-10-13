@@ -14,7 +14,7 @@
 // persisted, so a reload shows the dialog again. It is temporary: whatever leaves nothing open clears it, so the next
 // request opens the dialog; a new request (`applyOpened`) never does — only a click restores.
 import { create } from 'zustand'
-import type { Approval, Grant } from '../lib/team/types'
+import { isUnanswered, type Approval, type Grant } from '../lib/team/types'
 
 /** Tombstones kept per host; past this the oldest is dropped (a request id is a UUID, 256 is hours of closes). */
 export const TOMBSTONES_PER_HOST = 256
@@ -119,8 +119,15 @@ export const useApprovalStore = create<ApprovalStoreState>()((set, get) => ({
     }
     for (const a of open) {
       const key = approvalKey(hostId, a.id)
-      // Keep the held object when the same request is still open: the dialog is keyed on it.
-      next[key] = get().entries[key] ?? { hostId, approval: a }
+      // Keep the held object when the same request is still open: the dialog is keyed on it. One exception: a card that ran out
+      // while this app held it (the daemon sends no event op for that, `relay.unanswered.v1`) arrives only here, with
+      // `unanswered_at` and the sentinel deadline; take those two fields, keep everything else.
+      const held = get().entries[key]
+      next[key] = held === undefined
+        ? { hostId, approval: a }
+        : isUnanswered(a) && !isUnanswered(held.approval)
+          ? { ...held, approval: { ...held.approval, unanswered_at: a.unanswered_at, deadline_at: a.deadline_at } }
+          : held
     }
     // The daemon's snapshot is authoritative: whatever it lists is open now, tombstones or not.
     set({ entries: next, closedIds: without(get().closedIds, hostId), ...endMinimizeIfEmpty(next) })
