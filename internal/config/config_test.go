@@ -286,3 +286,21 @@ allowed_repo_roots = ["/x"]
 		t.Errorf("port: want 7861, got %d", cfg.Port)
 	}
 }
+
+func TestLoadDevExtraPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[dev]\nupdate = true\nextra_path = [\"/a/bin\", \"/b/bin\"]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(cfg.Dev.ExtraPath, ","); got != "/a/bin,/b/bin" {
+		t.Errorf("extra_path: got %q", got)
+	}
+	empty, _ := config.Load(filepath.Join(t.TempDir(), "none.toml"))
+	if len(empty.Dev.ExtraPath) != 0 {
+		t.Errorf("extra_path must be empty by default, got %v", empty.Dev.ExtraPath)
+	}
+}
