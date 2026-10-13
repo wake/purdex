@@ -300,8 +300,8 @@ func (s *Store) PruneRelayAsks(before int64) (int64, error) {
 }
 
 // DenyRelayAsk closes the session's open ask as withdrawn / denied in ONE transaction and returns it; closed says one was open. A
-// member its unanswered ask had paused is resumed with the lead's "decided not to relay" text.
-func (s *Store) DenyRelayAsk(sessionID string, now int64) (RelayAsk, bool, error) {
+// member its unanswered ask had paused is resumed with text (the lead's, or the person's).
+func (s *Store) DenyRelayAsk(sessionID string, now int64, text string) (RelayAsk, bool, error) {
 	fail := func(err error) (RelayAsk, bool, error) {
 		return RelayAsk{}, false, fmt.Errorf("deny relay ask of %s: %w", sessionID, err)
 	}
@@ -317,7 +317,7 @@ func (s *Store) DenyRelayAsk(sessionID string, now int64) (RelayAsk, bool, error
 	if err != nil {
 		return fail(err)
 	}
-	if _, err := closeAsksIn(tx, `session_id = ?`, []any{sessionID}, team.RelayAskWithdrawDenied, now, team.PauseResumedMemberDenied); err != nil {
+	if _, err := closeAsksIn(tx, `session_id = ?`, []any{sessionID}, team.RelayAskWithdrawDenied, now, text); err != nil {
 		return fail(err)
 	}
 	if err := tx.Commit(); err != nil {

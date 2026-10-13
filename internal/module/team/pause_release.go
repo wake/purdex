@@ -2,6 +2,7 @@
 package teammod
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -63,10 +64,44 @@ func (m *Module) releaseOne(sid string, client team.Client) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if id == "" {
-		return m.resumeOne(sid)
+	if id != "" {
+		return m.releaseCard(sid, id, client)
 	}
-	return m.releaseCard(sid, id, client)
+	if ask, ok, err := m.store.OpenAskOf(sid); err != nil {
+		return 0, err
+	} else if ok && ask.UnansweredAt > 0 {
+		return m.releaseAsk(sid)
+	}
+	return m.resumeOne(sid)
+}
+
+// releaseAsk is a person's release of a member its lead's silence paused (#2816): the final ask closes withdrawn / denied - the
+// person decided, and the pause row goes with it in the same transaction - the other causes are released without a reask, and the
+// lead is told. Caller holds createMu.
+func (m *Module) releaseAsk(sid string) (int, error) {
+	m.askMu.Lock() // behind an ask notice on the wire
+	ask, closed, err := m.store.DenyRelayAsk(sid, m.now(), team.PauseResumedMemberDeniedByUser)
+	m.askMu.Unlock()
+	if err != nil {
+		return 0, err
+	}
+	if closed {
+		m.logf("[team] relay ask %s of %s denied by a person's release", ask.ID, sid)
+		if mr, t, ok, err := m.store.ActiveMemberInLiveTeam(sid); err == nil && ok {
+			address, _ := m.memberNoticeName(mr)
+			text := fmt.Sprintf(team.RelayAskDeniedByUserLeadFmt, address)
+			m.goTracked(func() { m.noticeToLead(mr, t, text, "relay ask denied by a person") })
+		}
+		m.askAnswered()
+	}
+	n, err := m.resumeScope(ResumeScope{Release: sid, NoReask: true})
+	if err != nil {
+		return 0, err
+	}
+	if n == 0 && closed { // the ask's close was the whole release
+		n = 1
+	}
+	return n, nil
 }
 
 // releaseCard denies the card id of sid for the person and releases the rest; when the deny lost, it is an ordinary release.
