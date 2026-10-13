@@ -4,6 +4,7 @@ package teammod
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/wake/purdex/internal/team"
@@ -283,5 +284,66 @@ func TestPersonSpawn_ARemoteSpawnWithATokenIs400(t *testing.T) {
 	code, _, e := f.spawn(1, root, func(r *team.SpawnRequest) { r.Host, r.PersonToken = "air26", "tok" })
 	if code != http.StatusBadRequest || e.Error != team.ErrBadRequest {
 		t.Fatalf("remote spawn with a token: %d %+v, want 400 %s", code, e, team.ErrBadRequest)
+	}
+}
+
+// codex attack (high): the alias is written BEFORE the approval. When it cannot be written nothing is approved and the token is
+// good; an alias left behind by a crash points at a still-open row and is no replay. Mutation gate: write the alias after the
+// approve and ignore its error → the failing case approves anyway (red).
+func TestPersonLead_AnAliasThatCannotBeWrittenApprovesNothing(t *testing.T) {
+	f := newFixture(t)
+	card := f.create(uid(1))
+	if _, err := f.m.store.db.Exec(`CREATE TRIGGER no_alias BEFORE INSERT ON person_aliases BEGIN SELECT RAISE(ABORT, 'disk full'); END`); err != nil {
+		t.Fatal(err)
+	}
+	tok := f.mintPerson("sid-1", team.PersonCmdLead).Token
+	code, body := f.createLeadWith(uid(2), func(r *team.CreateApprovalRequest) { r.PersonToken = tok })
+	if code != http.StatusInternalServerError {
+		t.Fatalf("alias write failed: %d %s, want 500", code, body)
+	}
+	if a, _, _ := f.m.store.Get(card.ID); a.State != team.StateOpen {
+		t.Fatalf("the agent's request is %s, want still open", a.State)
+	}
+	if !f.m.validPerson("sid-1", team.PersonCmdLead, tok) {
+		t.Fatal("the token was spent")
+	}
+}
+
+func TestPersonLead_AnAliasLeftByACrashIsNoReplay(t *testing.T) {
+	f := newFixture(t)
+	card := f.create(uid(1))
+	if err := f.m.store.RecordPersonAlias(uid(2), card.ID, "h", 1); err != nil {
+		t.Fatal(err)
+	}
+	// the crash happened before the approve: the alias points at a row that is still open, so a retry is a fresh request
+	rec := httptest.NewRecorder()
+	if f.m.replayOfPersonAlias(rec, uid(2), "h") {
+		t.Fatalf("an alias to an open row was answered as a replay: %d %s", rec.Code, rec.Body)
+	}
+	// once that row is closed the alias is the answer
+	if code, body := f.decide(card.ID, "deny"); code != http.StatusOK {
+		t.Fatalf("deny: %d %s", code, body)
+	}
+	rec = httptest.NewRecorder()
+	if !f.m.replayOfPersonAlias(rec, uid(2), "h") || rec.Code != http.StatusOK {
+		t.Fatalf("an alias to a closed row: answered=%v code=%d", rec.Code != 0, rec.Code)
+	}
+}
+
+// codex attack (medium): S-7 gives the person's lead the origin's cwd; a session with none cannot be a lead by this route even if
+// the request names an absolute root. Nothing is written and the token is good.
+func TestPersonLead_ASessionWithNoCwdIsRefusedBeforeAnythingIsWritten(t *testing.T) {
+	f := newFixture(t)
+	f.origins.show(team.Origin{SessionID: "sid-1", Ref: "_abc123", Name: "n10", PID: 10, ProcStart: "Sun Sep 13 15:22:36 2026", Cwd: ""})
+	tok := f.mintPerson("sid-1", team.PersonCmdLead).Token
+	code, body := f.createLeadWith(uid(1), func(r *team.CreateApprovalRequest) { r.PersonToken, r.Roots = tok, []string{"/elsewhere"} })
+	if e := decodeErr(t, body); code != http.StatusBadRequest || e.Error != team.ErrBadRequest {
+		t.Fatalf("no cwd: %d %s, want 400 %s", code, body, team.ErrBadRequest)
+	}
+	if _, ok, _ := f.m.store.LiveTeamByLead("sid-1"); ok {
+		t.Fatal("a team was created")
+	}
+	if !f.m.validPerson("sid-1", team.PersonCmdLead, tok) {
+		t.Fatal("the token was spent")
 	}
 }

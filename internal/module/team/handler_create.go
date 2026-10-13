@@ -213,6 +213,13 @@ func (m *Module) handleCreate(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusConflict, team.ErrPersonTokenInvalid, "the person token is unknown, spent, expired or not for this session's /team", nil)
 		return
 	}
+	if person {
+		// S-7: the person's lead gets the origin's cwd as its only folder; a session without one cannot, whatever roots the request named
+		if _, err := normaliseRoots(nil, origin.Cwd); err != nil {
+			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "/team needs this session's working directory: "+err.Error(), nil)
+			return
+		}
+	}
 	if open, found, err := m.store.OpenByOrigin(origin.SessionID, req.Kind); err != nil {
 		m.logf("[team] create %s: %v", req.ID, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)

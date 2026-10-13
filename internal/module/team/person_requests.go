@@ -28,7 +28,8 @@ func (m *Module) personApproveLead(w http.ResponseWriter, open team.Approval, g 
 }
 
 // replayOfPersonAlias answers a retry of a request id that a person's command answered by approving the agent's open request: the
-// same row, not a refusal for a token that is already spent. true when it answered. Caller holds createMu.
+// same row, not a refusal for a token that is already spent. true when it answered; an alias to a row that is still open is no
+// replay (see personApprove). Caller holds createMu.
 func (m *Module) replayOfPersonAlias(w http.ResponseWriter, reqID, hash string) bool {
 	approvalID, stored, ok, err := m.store.PersonAlias(reqID)
 	if err != nil {
@@ -49,6 +50,9 @@ func (m *Module) replayOfPersonAlias(w http.ResponseWriter, reqID, hash string) 
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return true
 	}
+	if row.State == team.StateOpen {
+		return false // the approval never happened (a crash after the alias): this is a fresh request, not a replay
+	}
 	m.writeJSON(w, http.StatusOK, row)
 	return true
 }
@@ -56,6 +60,14 @@ func (m *Module) replayOfPersonAlias(w http.ResponseWriter, reqID, hash string) 
 // personApprove runs the approve a click runs, for the person, and answers the closed row (201). Every refusal of the approve is
 // the create's own 409 and costs the token nothing. Caller holds createMu.
 func (m *Module) personApprove(w http.ResponseWriter, open team.Approval, c Close, token, reqID, hash string) {
+	// The person's request id has no row of its own: write the alias that maps it to the row it approves FIRST. A failure here
+	// aborts with nothing approved and the token good; a crash after it leaves an alias to a still-open row, which a retry treats
+	// as no alias (replayOfPersonAlias). Never the other order: an approval whose alias is lost cannot be retried safely.
+	if aerr := m.store.RecordPersonAlias(reqID, open.ID, hash, m.now()); aerr != nil {
+		m.logf("[team] person approve %s: %v", open.ID, aerr)
+		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+		return
+	}
 	after, won, _, err := m.approve(open, c)
 	var refused *adoptRefusedError
 	switch {
@@ -73,11 +85,6 @@ func (m *Module) personApprove(w http.ResponseWriter, open team.Approval, c Clos
 	case !won:
 		m.writeErr(w, http.StatusConflict, team.ErrAlreadyDecided, "this request was closed first by someone else", &after)
 	default:
-		// the person's request id has no row of its own: remember which row answered it, so a retry gets that row (before the token
-		// is spent: a failure here leaves the token good and the retry finds the request closed, never a spent token with no trace)
-		if aerr := m.store.RecordPersonAlias(reqID, after.ID, hash, m.now()); aerr != nil {
-			m.logf("[team] person approve %s: %v", open.ID, aerr)
-		}
 		m.persons.spend(token)
 		m.logf("[team] approval %s approved by the person's command: kind=%s origin=%s%s", after.ID, after.Kind, after.Origin.Ref, teamNote(after))
 		m.writeJSON(w, http.StatusCreated, after)
