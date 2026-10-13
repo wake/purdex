@@ -167,6 +167,16 @@ func (s *leaseStore) OfferPosition(id string, now int64, zone, trend, waitReason
 func (s *leaseStore) GrantInPosition(positionID, from, rowID string, now int64, wouldWait bool,
 	d resources.Decision, v2 resources.V2Record, waitReasons, baseline string) (bool, error) {
 	return s.tx(func(x *sql.Tx) error {
+		// The row must be a waiting row of this very position: a stale or
+		// mismatched pair must not start one position and grant another's row.
+		var attached int
+		if err := x.QueryRow(`SELECT COUNT(*) FROM resource_leases WHERE id = ? AND position_id = ? AND state = 'waiting'`,
+			rowID, positionID).Scan(&attached); err != nil {
+			return err
+		}
+		if attached == 0 {
+			return errLostCAS
+		}
 		switch from {
 		case resources.PosRunning:
 			if err := mustChange(x, `UPDATE resource_positions SET commands_started = commands_started + 1
@@ -242,9 +252,15 @@ type commandEndResult struct {
 func (s *leaseStore) EndCommand(rowID string, now int64, e commandEnd) (commandEndResult, error) {
 	var out commandEndResult
 	committed, err := s.tx(func(x *sql.Tx) error {
+		// With a position, the row must belong to it: a mismatched pair must not
+		// end one position's row and move another position.
+		guard, args := ``, []any{now, e.Reason, now, rowID}
+		if e.PositionID != "" {
+			guard, args = ` AND position_id = ?`, append(args, e.PositionID)
+		}
 		if err := mustChange(x, `UPDATE resource_leases
 			SET state = 'ended', ended_at = ?, end_reason = ?, waited_ms = COALESCE(waited_ms, ? - created_at)
-			WHERE id = ? AND state != 'ended'`, now, e.Reason, now, rowID); err != nil {
+			WHERE id = ? AND state != 'ended'`+guard, args...); err != nil {
 			return err
 		}
 		if e.PositionID == "" {
@@ -255,8 +271,7 @@ func (s *leaseStore) EndCommand(rowID string, now int64, e commandEnd) (commandE
 		}
 		switch e.Outcome {
 		case outcomeCount:
-			_, err := x.Exec(`UPDATE resource_positions SET commands_ended = commands_ended + 1 WHERE id = ? AND state = 'running'`, e.PositionID)
-			return err
+			return mustChange(x, `UPDATE resource_positions SET commands_ended = commands_ended + 1 WHERE id = ? AND state = 'running'`, e.PositionID)
 		case outcomeIdle:
 			if err := mustChange(x, `UPDATE resource_positions
 				SET state = 'idle', commands_ended = commands_ended + 1, window_until = ?, warned = ?, extensions = extensions + ?

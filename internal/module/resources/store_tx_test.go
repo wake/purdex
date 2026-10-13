@@ -419,3 +419,41 @@ func TestTx_TheOperationsDoChangeThingsWithoutTheFailure(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, before, dumpTables(t, s.db))
 }
+
+// A pair that does not belong together changes nothing.
+func TestPositions_MismatchedRowAndPositionChangeNothing(t *testing.T) {
+	s := memStore(t)
+	_, _, _, err := s.CreateAttached(txPos("pos_00000001", "s1", 10), txRow("a", "s1", "", resources.CallQueue, "x", "/w", 10))
+	require.NoError(t, err)
+	_, _, _, err = s.CreateAttached(txPos("pos_00000002", "s2", 11), txRow("b", "s2", "", resources.CallQueue, "y", "/w", 11))
+	require.NoError(t, err)
+	_, err = s.OfferPosition("pos_00000001", 1000, "", "", "")
+	require.NoError(t, err)
+	before := dumpTables(t, s.db)
+
+	// Start position 1 with the row of position 2.
+	ok, err := s.GrantInPosition("pos_00000001", resources.PosOffered, "b", 1100, false, resources.Decision{}, resources.V2Record{}, "", "")
+	require.NoError(t, err)
+	assert.False(t, ok)
+	assert.Equal(t, before, dumpTables(t, s.db))
+
+	// End the held row of position 2 as a command of position 1.
+	holdRow(t, s, "b")
+	setState(t, s, "pos_00000001", "state = 'running'")
+	before = dumpTables(t, s.db)
+	res, err := s.EndCommand("b", 2000, commandEnd{Reason: resources.EndReleased, Outcome: outcomeCount, PositionID: "pos_00000001"})
+	require.NoError(t, err)
+	assert.False(t, res.Ended)
+	assert.Equal(t, before, dumpTables(t, s.db))
+}
+
+// A count outcome on a position that is not running loses, and the row stays held.
+func TestPositions_CountOutcomeNeedsARunningPosition(t *testing.T) {
+	s := memStore(t)
+	runningFixture(t, s)
+	setState(t, s, "pos_00000001", "state = 'idle'")
+	res, err := s.EndCommand("a", 2000, commandEnd{Reason: resources.EndReleased, Outcome: outcomeCount, PositionID: "pos_00000001"})
+	require.NoError(t, err)
+	assert.False(t, res.Ended)
+	assert.Equal(t, "held", mustRow(t, s, "a").State)
+}
