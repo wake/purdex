@@ -261,3 +261,38 @@ func (m *Module) writePendingCosts() {
 	}
 	m.pendingCosts = keep
 }
+
+// drainPositions ends every live position as drained (P16, amendment A §2.9): the
+// mode left lease, so nobody will offer them. Their waiting queue and ask rows
+// end with them; held rows keep running (V8) and end as plain rows. The slot
+// `drained` is armed only when the session has something pending (Q7). stateMu is
+// held. It returns how many positions it ended.
+func (m *Module) drainPositions(now time.Time) int {
+	positions, err := m.store.LivePositions()
+	if err != nil {
+		m.logf("[resources] drain: list positions: %v", err)
+		return 0
+	}
+	n := 0
+	for _, p := range positions {
+		o := endPosition{Reason: resources.EndDrained,
+			From: []string{resources.PosQueued, resources.PosOffered, resources.PosRunning, resources.PosIdle}}
+		if m.cancelNotice(p) != "" {
+			o.Notice = "drained"
+		}
+		won, err := m.store.EndPositionWithRows(p.ID, now.UnixMilli(), o)
+		switch {
+		case err != nil:
+			m.logf("[resources] drain: end position %s: %v", p.ID, err)
+		case won:
+			m.flushWindowCost(p.ID)
+			n++
+		}
+	}
+	if n > 0 {
+		m.logf("[resources] drained %d positions: the mode is not lease", n)
+		m.writePendingCosts()
+		m.wake()
+	}
+	return n
+}

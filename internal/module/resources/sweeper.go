@@ -71,9 +71,14 @@ func (m *Module) sweepOnce(ctx context.Context) {
 		view = m.holderView(ctx)
 	}
 
+	read, readOK := m.settingsRead()
+
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
 	now := m.now()
+	if readOK && read.Mode != resources.ModeLease {
+		m.drainPositions(now) // every mode but lease; a setting that could not be read drains nothing
+	}
 	if leasing {
 		m.sweepLeases(now, set, view, viewAt)
 	}

@@ -1,6 +1,10 @@
 package resourcesmod
 
-import "time"
+import (
+	"time"
+
+	"github.com/wake/purdex/internal/resources"
+)
 
 const (
 	// bootGrace is how long a waiting row survives its poller being gone at
@@ -33,6 +37,18 @@ func (m *Module) boot() {
 	}
 	if _, err := m.store.ExtendWaiting(now.Add(bootGrace).UnixMilli()); err != nil {
 		m.logf("[resources] boot grace: %v", err)
+	}
+	// The pairs of rows that disagree (an older daemon after a rollback, or a bug)
+	// are repaired before the sampler's first tick sees them.
+	if repairs, err := m.store.ReconcilePositions(now.UnixMilli()); err != nil {
+		m.logf("[resources] boot reconcile: %v", err)
+	} else {
+		for _, line := range repairs {
+			m.logf("[resources] boot reconcile: %s", line)
+		}
+	}
+	if set, ok := m.settingsRead(); ok && set.Mode != resources.ModeLease {
+		m.drainPositions(now)
 	}
 	if _, err := m.store.Prune(now.Add(-retention).UnixMilli()); err != nil {
 		m.logf("[resources] boot prune: %v", err)
