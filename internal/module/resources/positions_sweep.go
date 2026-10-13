@@ -96,6 +96,11 @@ func (m *Module) sweepPositions(now time.Time, view procView, viewAt time.Time) 
 			delete(m.swaps, id)
 		}
 	}
+	for id := range m.costs {
+		if !live[id] {
+			m.flushWindowCost(id) // a cost whose write failed when the position ended
+		}
+	}
 	for _, p := range positions {
 		m.accrueWindowCost(p, nowMS)
 		switch {
@@ -113,6 +118,7 @@ func (m *Module) sweepPositions(now time.Time, view procView, viewAt time.Time) 
 			if err != nil {
 				m.logf("[resources] sweeper: pass offer %s: %v", p.ID, err)
 			} else if won {
+				m.flushWindowCost(p.ID) // charged up to this moment; the position no longer holds the host
 				m.logf("[resources] position %s: the offer was not delivered in time and passes", p.ID)
 				m.wake()
 			}
@@ -125,12 +131,12 @@ func (m *Module) sweepPositions(now time.Time, view procView, viewAt time.Time) 
 
 // endPosition ends a position through the store and logs a win.
 func (m *Module) endPosition(p positionRow, nowMS int64, o endPosition) {
-	m.flushWindowCost(p.ID)
 	won, err := m.store.EndPositionWithRows(p.ID, nowMS, o)
 	switch {
 	case err != nil:
 		m.logf("[resources] sweeper: end position %s (%s): %v", p.ID, o.Reason, err)
 	case won:
+		m.flushWindowCost(p.ID) // only a win settles the cost: a failed end is tried again
 		m.logf("[resources] position %s ended: %s", p.ID, o.Reason)
 		m.wake()
 	}
@@ -204,17 +210,17 @@ func (m *Module) flushWindowCost(id string) {
 	if c == nil {
 		return
 	}
+	if c.ms > 0 {
+		var offer, idle int64
+		if c.state == resources.PosOffered {
+			offer = c.ms
+		} else {
+			idle = c.ms
+		}
+		if err := m.store.AddWindowWait(id, offer, idle); err != nil {
+			m.logf("[resources] sweeper: window cost of %s: %v (kept, tried again next tick)", id, err)
+			return // not deleted: a write that failed is not lost, and one that won is not written twice
+		}
+	}
 	delete(m.costs, id)
-	if c.ms == 0 {
-		return
-	}
-	var offer, idle int64
-	if c.state == resources.PosOffered {
-		offer = c.ms
-	} else {
-		idle = c.ms
-	}
-	if err := m.store.AddWindowWait(id, offer, idle); err != nil {
-		m.logf("[resources] sweeper: window cost of %s: %v", id, err)
-	}
 }

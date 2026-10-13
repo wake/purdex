@@ -387,3 +387,40 @@ func TestCost_TransitionBetweenTicksIsCounted(t *testing.T) {
 	f.sweep()
 	assert.Equal(t, int64(20_000), f.position(posA).OfferWaitMS, "up to the start, not the last tick (10 s) and not this tick (25 s)")
 }
+
+// A passed offer stops charging at the pass: the next tick does not add the time
+// the position no longer held the host. (M: leave the cost open at the pass.)
+func TestCost_PassedOfferStopsChargingAtThePass(t *testing.T) {
+	f := newPosFix(t)
+	posA, _ := f.offeredWithAWaiter()
+	f.advance(window)
+	f.sweep() // the offer passes at 3:00
+	require.Equal(t, resources.PosQueued, f.position(posA).State)
+	f.advance(5 * time.Second)
+	f.sweep()
+	assert.Equal(t, window.Milliseconds(), f.position(posA).OfferWaitMS)
+}
+
+// A cost whose write failed is kept and tried again; once written it is not
+// written twice.
+func TestCost_FailedWriteIsKeptAndNotRepeated(t *testing.T) {
+	f := newPosFix(t)
+	posA, _ := f.offeredWithAWaiter()
+	f.advance(10 * time.Second)
+	f.sweep()
+	f.advance(10 * time.Second)
+	f.sweep() // 20 s accrued in memory
+	require.Equal(t, int64(20_000), f.m.costs[posA].ms)
+	// The write fails (the table is read-only for a moment).
+	_, err := f.m.store.db.Exec(`CREATE TRIGGER fail_cost BEFORE UPDATE OF offer_wait_ms ON resource_positions BEGIN SELECT RAISE(ABORT, 'busy'); END`)
+	require.NoError(t, err)
+	f.m.flushWindowCost(posA)
+	require.NotNil(t, f.m.costs[posA], "kept after a failed write")
+	_, err = f.m.store.db.Exec(`DROP TRIGGER fail_cost`)
+	require.NoError(t, err)
+	f.m.flushWindowCost(posA)
+	assert.Nil(t, f.m.costs[posA])
+	assert.Equal(t, int64(20_000), f.position(posA).OfferWaitMS)
+	f.m.flushWindowCost(posA)
+	assert.Equal(t, int64(20_000), f.position(posA).OfferWaitMS, "not written twice")
+}
