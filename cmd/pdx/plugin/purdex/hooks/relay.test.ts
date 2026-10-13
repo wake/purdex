@@ -3119,6 +3119,57 @@ test('a /team whose prompt timer finds a relay in the way is kept for that relay
   expect(f.submits[0].text).toContain('pdx lead request --person ' + PERSON_TOKEN)
 })
 
+// codex critic: the conversation is read before anything is awaited; a /clear while the role is being read must not carry the
+// command into the new one. Mutation gate: re-read the session id after the role read and use it → the command goes on (red).
+test('a /clear while /team reads the role during a relay: nothing is queued, no token, no prompt', async ($, on) => {
+  const base = pdxWith([])
+  let teamCalls = 0
+  let release!: () => void
+  const gate = new Promise<void>((r) => { release = r })
+  const f = relayWorld(on, { usage: NOW_BELOW, pdx: (argv) => (argv[1] === 'begin' ? { exitCode: 0, stdout: BEGIN_OK } : argv[0] === 'team' ? (++teamCalls < 1 ? NOT_LEAD : gate.then(() => NOT_LEAD)) : base(argv)) })
+  await start($, f)
+  await relayCmd($, 'now') // awaiting approval
+  const typed = teamCmd($, '') // the role read parks on the gate
+  await f.clock.advance(1) // (settle would wait for the parked call)
+  f.switchTo = 'sid-new'
+  await $.classic.SessionStart({ source: 'clear' }) // the user's own /clear meanwhile
+  release()
+  expect((await typed).text).toBe('這個 session 剛換過（/clear），沒有執行；請在新的對話再打一次')
+  await f.clock.advance(50)
+  await f.clock.advance(50)
+  await f.clock.settle()
+  expect(f.submits).toEqual([])
+  expect(f.persons.map((p) => p[5])).toEqual(['relay'])
+})
+
+// A session id that cannot be read fails closed: nothing is queued or asked.
+test('/team when the session id cannot be read says so and does nothing', async ($, on) => {
+  const f = leadWorld(on, () => NOT_LEAD)
+  await start($, f)
+  f.sessionId = ''
+  expect((await teamCmd($, '')).text).toBe('讀不到這個 session 的 id，沒有執行；請再打一次')
+  expect(f.persons).toEqual([])
+  expect(f.submits).toEqual([])
+})
+
+// The person was told "asked"; when the engine then refuses the prompt they are told so (a toast), for lead and for spawn.
+// Mutation gate: no toast on a refused submit → red.
+test('a /team prompt the engine refuses is told to the person with a toast, for lead and for spawn', async ($, on) => {
+  const f = leadWorld(on, AS_LEAD, 'none', { failSubmit: () => 'reject' })
+  await start($, f)
+  await teamCmd($, 'spawn 寫測試')
+  await f.clock.advance(50)
+  expect(f.toasts).toContain('/team 沒有送出（引擎拒絕了這個 prompt），請再打一次')
+})
+
+test('a /team (become lead) prompt the engine refuses is told to the person with a toast', async ($, on) => {
+  const f = leadWorld(on, () => NOT_LEAD, 'none', { failSubmit: () => 'reject' })
+  await start($, f)
+  await teamCmd($, '')
+  await f.clock.advance(50)
+  expect(f.toasts).toContain('/team 沒有送出（引擎拒絕了這個 prompt），請再打一次')
+})
+
 test('the newest queued /team wins', async ($, on) => {
   const base = pdxWith([{ exitCode: 10 }])
   const f = relayWorld(on, { usage: NOW_BELOW, pdx: (argv) => (argv[1] === 'begin' ? { exitCode: 0, stdout: BEGIN_OK } : argv[0] === 'team' ? NOT_LEAD : base(argv)) })

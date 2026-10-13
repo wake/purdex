@@ -865,6 +865,9 @@ function leadPrompt(note, nonce, token) {
 }
 
 const TEAM_UNREACHABLE = 'daemon 連不上，沒有執行'
+const TEAM_NO_SESSION = '讀不到這個 session 的 id，沒有執行；請再打一次'
+const TEAM_MOVED = '這個 session 剛換過（/clear），沒有執行；請在新的對話再打一次'
+const TEAM_NOT_SENT = '/team 沒有送出（引擎拒絕了這個 prompt），請再打一次'
 const TEAM_NO_TOKEN = '無法確認是使用者下的指令（daemon 沒有回應），沒有執行；請再打一次'
 const TEAM_MEMBER = '要先被釋出才能成為 lead'
 const TEAM_QUEUED = '接力進行中，完成後立刻執行'
@@ -918,30 +921,32 @@ async function teamCommand($, e, viaLead = false) {
   const parsed = parseTeamArgs(e.args)
   const out = (text) => ({ text: text + (viaLead ? '\n' + LEAD_DEPRECATED : '') })
   if (parsed.error) return out(parsed.error)
-  return out(await performTeam($, parsed, e.args, false))
+  // The conversation the person typed it in, read before anything else is awaited: every later step is for THIS conversation
+  // or it does nothing (a /clear while a daemon call is out must not carry the command into the new one).
+  const typedSid = await $.session.id().catch(() => undefined)
+  if (!typedSid) return out(TEAM_NO_SESSION)
+  return out(await performTeam($, parsed, e.args, false, typedSid))
 }
 
 // performTeam does one parsed /team and answers its reply text. queued: it is the run of a command that waited for a relay
 // (its reply goes to a toast, so it never queues again).
-async function performTeam($, parsed, rawArgs, queued) {
+async function performTeam($, parsed, rawArgs, queued, typedSid) {
   const needsIdle = parsed.kind === 'spawn' || parsed.kind === 'lead' || parsed.kind === 'show'
   if (needsIdle && !queued && s.state !== 'idle') {
     // a show/lead typed in a LEAD during a relay can still answer at once, but whether it is a lead is not yet known: ask first
     if (parsed.kind !== 'spawn') {
-      const sid0 = await $.session.id().catch(() => undefined)
-      if (sid0) {
-        const v = await teamRead($, sid0)
-        if (v.role === 'lead') return parsed.kind === 'show' ? await teamShow($) : teamRoster(v)
-        if (v.role === 'member') return TEAM_MEMBER
-        if (v.role === 'unreachable') return TEAM_UNREACHABLE
-      }
+      const v = await teamRead($, typedSid)
+      if ((await $.session.id().catch(() => undefined)) !== typedSid) return TEAM_MOVED // a /clear while the role was read
+      if (v.role === 'lead') return parsed.kind === 'show' ? await teamShow($) : teamRoster(v)
+      if (v.role === 'member') return TEAM_MEMBER
+      if (v.role === 'unreachable') return TEAM_UNREACHABLE
     }
-    if (s.state === 'idle') return performTeam($, parsed, rawArgs, queued) // the relay ended while the role was read
-    s.teamQueued = { parsed, rawArgs, sid: await $.session.id().catch(() => undefined) } // the conversation it was typed in
+    if (s.state === 'idle') return performTeam($, parsed, rawArgs, queued, typedSid) // the relay ended while the role was read
+    s.teamQueued = { parsed, rawArgs, sid: typedSid } // the conversation it was typed in
     return TEAM_QUEUED
   }
-  const sid = await $.session.id().catch(() => undefined)
-  if (!sid) return TEAM_UNREACHABLE
+  const sid = typedSid
+  if ((await $.session.id().catch(() => undefined)) !== sid) return TEAM_MOVED
   if (parsed.kind === 'show' || parsed.kind === 'lead') return becomeLeadOrShow($, parsed, rawArgs, sid, queued)
   const v = await teamRead($, sid)
   if (v.role === 'unreachable') return TEAM_UNREACHABLE
@@ -1001,6 +1006,7 @@ async function becomeLeadOrShow($, parsed, rawArgs, sid, queued) {
     } catch (err) {
       drop()
       log($, '/team prompt not submitted: ' + String(err))
+      try { $.ui.toast(TEAM_NOT_SENT) } catch {} // the person was told it was asked: now they are told it was not
     }
   })
   return '已請這個 session 申請 lead，等待核准' + (cut ? '（補充超過 ' + LEAD_NOTE_MAX_BYTES + ' bytes，已截斷）' : '')
@@ -1025,6 +1031,7 @@ async function teamSpawn($, parsed, rawArgs, sid, queued) {
         'model／effort 用 ' + (given || '（沒指定就依任務自己選）') + '。')
     } catch (err) {
       log($, '/team spawn prompt not submitted: ' + String(err))
+      try { $.ui.toast(TEAM_NOT_SENT) } catch {}
     }
   })
   return '已請這個 session 開一個 member'
@@ -1062,7 +1069,7 @@ function runQueuedTeam($) {
     // command for that relay's own return to idle, unless a newer one has been queued since
     // a /clear (another conversation) between the typing and now drops it: it was the person's command for that conversation
     const here = await $.session.id().catch(() => undefined)
-    if (!here || (q.sid && here !== q.sid)) {
+    if (!here || !q.sid || here !== q.sid) {
       log($, 'queued /team dropped: the session moved on')
       return
     }
@@ -1070,7 +1077,7 @@ function runQueuedTeam($) {
       if (!s.teamQueued) s.teamQueued = q
       return
     }
-    const text = await performTeam($, q.parsed, q.rawArgs, true)
+    const text = await performTeam($, q.parsed, q.rawArgs, true, q.sid)
     if (text === TEAM_BUSY) {
       if (!s.teamQueued) s.teamQueued = q
       return
