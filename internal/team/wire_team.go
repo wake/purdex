@@ -232,6 +232,9 @@ type SpawnRequest struct {
 	// Task, when set, is the member's first task (T-2): the daemon creates it
 	// in the transaction that inserts the member row. Its description is the brief.
 	Task *SpawnTask `json:"task,omitempty"`
+	// PersonToken: the one-use token of the person's /team spawn (RT-1b). Valid, the op is marked as the person's own (RT-5 lets
+	// it past the unattended refusal of a resource card); invalid → 409 person_token_invalid. Not part of the idempotency hash.
+	PersonToken string `json:"person_token,omitempty"`
 }
 
 // SpawnTask is the task a spawn creates for its member (T-2).

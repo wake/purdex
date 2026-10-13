@@ -151,6 +151,10 @@ func (m *Module) acceptSpawn(w http.ResponseWriter, req team.SpawnRequest, origi
 		}
 		return row, true
 	}
+	person := req.PersonToken != ""
+	if person && !m.validPerson(origin.SessionID, team.PersonCmdSpawn, req.PersonToken) {
+		return fail(http.StatusConflict, team.ErrPersonTokenInvalid, "the person token is unknown, spent, expired or not for this session's /team spawn")
+	}
 	t, found, err := m.store.LiveTeamByLead(origin.SessionID)
 	if err != nil {
 		return failStore(err)
@@ -180,7 +184,7 @@ func (m *Module) acceptSpawn(w http.ResponseWriter, req team.SpawnRequest, origi
 	row, _, inserted, err := m.store.AcceptSpawnOp(spawnRow{ID: req.ID, TeamID: t.ID, HostID: m.hostID(),
 		OriginSessionID: origin.SessionID, Cwd: cwd, Title: req.Title, Model: req.Model, Effort: req.Effort,
 		TmuxName: name, Step: team.StepAccepted, State: team.SpawnRunning, CreatedAt: now, UpdatedAt: now,
-		TaskSubject: taskSubjectOf(req.Task), TaskDescription: taskDescriptionOf(req.Task), TaskDoneJSON: taskDoneJSONOf(req.Task)}, hash)
+		TaskSubject: taskSubjectOf(req.Task), TaskDescription: taskDescriptionOf(req.Task), TaskDoneJSON: taskDoneJSONOf(req.Task), Person: person}, hash)
 	switch {
 	case errors.Is(err, ErrSpawnNotLead):
 		return fail(http.StatusConflict, team.ErrNotLead, "this session no longer leads team "+t.ID)
@@ -192,6 +196,9 @@ func (m *Module) acceptSpawn(w http.ResponseWriter, req team.SpawnRequest, origi
 		return failStore(err)
 	case !inserted: // unreachable under createMu after the read above
 		return fail(http.StatusConflict, team.ErrIDConflict, "id already used by a different spawn")
+	}
+	if person {
+		m.persons.spend(req.PersonToken) // the op is committed: the token is used (a re-post of this id joins it above, before this check)
 	}
 	m.logf("[team] spawn %s accepted: team %s, %s in %s", row.ID, t.ID, row.TmuxName, row.Cwd)
 	m.rosterChanged() // the accept is committed: a starting spawn takes a seat (in_use)

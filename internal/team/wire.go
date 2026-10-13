@@ -141,6 +141,10 @@ type CreateApprovalRequest struct {
 	TeamLabel   string   `json:"team_label,omitempty"` // lead only, optional (team-label D-L4)
 	WaitS       int      `json:"wait_s,omitempty"`     // 0→540, cap 600
 	Target      string   `json:"target,omitempty"`     // adopt only: the target as `pdx adopt` takes it (ref or address)
+	// PersonToken (lead and adopt): the one-use token of a command the person typed (RT-1). Valid, the request is the person's own:
+	// granted at once whatever the unattended switch, and it approves the same origin's open request of that kind. Invalid → 409
+	// person_token_invalid. Not part of the idempotency hash.
+	PersonToken string `json:"person_token,omitempty"`
 }
 
 // DecideRequest is POST /api/team/approvals/{id}/decide.

@@ -28,7 +28,7 @@ const spawnSchema = `
 
 const spawnCols = `id, team_id, host_id, origin_session_id, cwd, title, model, effort, tmux_name, tmux_id,
 	tmux_instance, pane_id, step, state, reason, session_id, launched_at, created_at, updated_at,
-	task_subject, task_description, task_done_json, lead_host_id, lead_json`
+	task_subject, task_description, task_done_json, lead_host_id, lead_json, person`
 
 // spawnRow is one spawn_ops row but its request hash.
 type spawnRow struct {
@@ -44,12 +44,14 @@ type spawnRow struct {
 	// and the team's name (remoteSpawnLead), what the remote member's row is written from. OriginSessionID is then the
 	// lead's session on the other host, TeamID the team of that host.
 	LeadHostID, LeadJSON string
+	// Person: the spawn was the person's own /team spawn (a valid person token, RT-1b); RT-5 reads it for the resource card.
+	Person bool
 }
 
 func (r *spawnRow) dest() []any {
 	return []any{&r.ID, &r.TeamID, &r.HostID, &r.OriginSessionID, &r.Cwd, &r.Title, &r.Model, &r.Effort,
 		&r.TmuxName, &r.TmuxID, &r.TmuxInstance, &r.PaneID, &r.Step, &r.State, &r.Reason, &r.SessionID,
-		&r.LaunchedAt, &r.CreatedAt, &r.UpdatedAt, &r.TaskSubject, &r.TaskDescription, &r.TaskDoneJSON, &r.LeadHostID, &r.LeadJSON}
+		&r.LaunchedAt, &r.CreatedAt, &r.UpdatedAt, &r.TaskSubject, &r.TaskDescription, &r.TaskDoneJSON, &r.LeadHostID, &r.LeadJSON, &r.Person}
 }
 
 // spawnStepRank orders the steps. A running row at rank n holds the
@@ -151,10 +153,10 @@ func insertSpawnOp(q dbtx, op spawnRow, hash string) (stored spawnRow, storedHas
 		return fail(err)
 	}
 	res, err := q.Exec(`INSERT INTO spawn_ops (request_hash, `+spawnCols+`)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (id) DO NOTHING`,
 		hash, op.ID, op.TeamID, op.HostID, op.OriginSessionID, op.Cwd, op.Title, op.Model, op.Effort, op.TmuxName,
 		op.TmuxID, op.TmuxInstance, op.PaneID, op.Step, string(op.State), op.Reason, op.SessionID,
-		op.LaunchedAt, op.CreatedAt, op.UpdatedAt, op.TaskSubject, op.TaskDescription, op.TaskDoneJSON, op.LeadHostID, op.LeadJSON)
+		op.LaunchedAt, op.CreatedAt, op.UpdatedAt, op.TaskSubject, op.TaskDescription, op.TaskDoneJSON, op.LeadHostID, op.LeadJSON, op.Person)
 	if inserted, err = oneRow(res, err, "insert"); err == nil {
 		err = q.QueryRow(`SELECT request_hash, `+spawnCols+` FROM spawn_ops WHERE id = ?`, op.ID).
 			Scan(append([]any{&storedHash}, stored.dest()...)...)
