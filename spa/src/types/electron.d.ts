@@ -137,6 +137,10 @@ interface Window {
     onNotificationClicked: (callback: (payload: { sessionCode: string; action?: { kind: string; hostId: string; sessionCode?: string; requestId?: string } }) => void) => () => void
     focusMyWindow: () => void
 
+    // Dock badge (app-badge spec §3.2): this window's resolved session keys and every open card; main takes the union
+    // over windows. Optional: an app build older than the SPA has no bridge, and the SPA then sends nothing.
+    badge?: { set: (report: { sessions: string[]; cards: { id: string; session?: string; fallback: string }[] }) => void }
+
     // Deeplink (purdex://execution/<id>[?host=<hint>]) — consumed by the P.12 resolver
     onDeeplinkNavigate: (callback: (payload: { executionId: string; host?: string }) => void) => () => void
 

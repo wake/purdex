@@ -22,6 +22,7 @@ import './lib/browser-shortcuts'
 import { useNotificationDispatcher } from './hooks/useNotificationDispatcher'
 import { useWorkerAgentProjection } from './hooks/useWorkerAgentProjection'
 import { usePushPresence } from './hooks/usePushPresence'
+import { useBadgeReporter } from './hooks/useBadgeReporter'
 import { usePresenceHostsHandover } from './hooks/usePresenceHostsHandover'
 import { useElectronIpc } from './hooks/useElectronIpc'
 import { useDeeplinkResolver } from './hooks/useDeeplinkResolver'
@@ -75,6 +76,8 @@ export default function App() {
   // notifications ride the same pipeline as terminal agent tabs (spec §8.1).
   useWorkerAgentProjection()
   usePushPresence()
+  // Tells Electron main what this window counts toward the Dock badge (app-badge spec §3.2); no-op outside Electron.
+  useBadgeReporter()
   usePresenceHostsHandover()
   // Must precede useElectronIpc: the deeplink resolver has to subscribe before
   // `spa:ready` is sent, or a buffered cold-start deeplink flush is missed.
