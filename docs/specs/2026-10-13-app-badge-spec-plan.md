@@ -11,7 +11,8 @@ Review: codex (gpt-5.6-sol, low) on spec + plan, 10 findings (1 critical: one ca
 
 - **One number per device**: the count of distinct sessions that have an unread event (under each platform's condition
   below) or an open card. A session with several unread events and several cards counts 1.
-- **Read state is not synced** across devices: reading a session on the Mac does not lower the iPhone badge.
+- ~~**Read state is not synced** across devices~~ — *superseded the same day (user, 2026-10-13, round 6): reads are
+  synced half-passively, best effort, §7.*
 - **Cards** are approvals the user must act on: `lead`, `self_relay`, `member_relay`, `adopt`, and Claude Code asking
   the user (`hook_ask`, including terminal-only ones the phone cannot answer, and `hook_permission`). A paused session
   (unattended quota pause) is not counted on its own: the card it waits on is.
@@ -187,5 +188,111 @@ renderer-reload drop).
 
 ## 6. Out of scope
 
-Syncing read state across devices; a Mac setting to turn the Dock badge off; counting Nexen workers on the phone;
+Guaranteed read-state consistency across devices (§7 is best effort); a Mac setting to turn the Dock badge off;
+counting Nexen workers on the phone;
 withdrawing delivered notifications on the Mac.
+
+## 7. Read sync, half-passive (user, 2026-10-13, round 6)
+
+### 7.1 Rules
+
+- When any device turns a session X from unread to read (a user action — on the Mac the tab that shows X becomes
+  visible, or a notification click; on the iPhone X is opened), it tells X's host daemon "X read through T".
+  A session that was already read, or one cleared by its own `running` status, sends nothing.
+- The daemon **remembers** the last read of each session in memory (forgotten on restart; never on disk).
+- It **forwards** the read at once over WS to every connected device that opted in (Mac windows, other Macs, an
+  iPhone in the foreground).
+- **Pushes carry it on the way**: per phone, the daemon keeps the reads since the last push it sent that phone; the
+  next push of any kind to that phone (agent, approval, background badge) carries them and clears the list.
+- **Flush after n minutes**: when that list is not empty and nothing has been pushed to that phone for **n = 15
+  minutes** (a setting), the daemon sends one background push carrying it.
+- **Reconcile on (re)connect**: a device connecting to the daemon receives every remembered read and clears what they
+  cover.
+- A receiving device clears X's unread **only if that unread came from an event at or before T** (a later event
+  stays unread); the iPhone also removes X's delivered agent notification. A received read is never forwarded again.
+- Best effort: a device that misses a read (offline, force-quit, a push iOS delayed or dropped) keeps its state; the
+  reconcile on its next connection is the only catch-up.
+
+
+### 7.2 Contract
+
+- **T is a hook cursor, not a time**: `{"epoch": E, "seq": N}`, the `(epoch, seq)` the daemon stamps on every `hook`
+  frame (`internal/module/agent/hookemitter.go:49-67`). It orders the events of one daemon process exactly — no clock,
+  no unit, no same-millisecond tie — and a new epoch (a daemon restart) makes older reads incomparable. **A read
+  covers an unread iff they share the epoch and the unread's seq ≤ T.seq**; a different epoch never clears anything.
+  Because seq only grows within an epoch, a session code reused by a later session cannot be cleared by an earlier
+  read. An unread with no cursor (set by a frame not from the emit slot — epoch `""`, seq 0 — or before this feature)
+  is covered by any read of its code.
+- **Which T a reader sends**: the cursor of the event that last set this unread (each platform keeps it per unread
+  key, updated by every event that sets or re-sets the unread), captured **at the unread → read transition**, never
+  re-read later. A reader with no cursor (an event from before this feature) omits T and the daemon uses the newest
+  cursor it has emitted for that session.
+- `POST /api/sessions/{code}/read` `{"through": T?}` → 204. In the device scope allow-list (BG-4). The daemon keeps
+  `lastRead[code]` = the larger T (a smaller or other-epoch T never replaces a current-epoch one), bounded to 4096
+  codes (least recently updated evicted), and deletes the code's entry when the session ends; all of it lives in memory.
+- **WS** `/ws/host-events?reads=v1` (opt-in): on connect a `session.reads` frame `{"reads":[{"code":…,"through":T}]}`,
+  and a `session.read` frame `{"code":…,"through":T}` per accepted read, to every opted-in connection including the
+  sender's. These two frame types are **strict for opted-in connections only** (`BroadcastStrictTo` with a `reads`
+  feature): a full buffer closes that connection, whose reconnect brings a fresh snapshot; `reads=v1` does not make
+  any other frame strict, and connections without it never receive them. Applying a read is idempotent and
+  monotonic, so the snapshot and the live frames need no relative order (an older snapshot after a newer delta
+  changes nothing).
+- **Pushes** (BG-4 extends the sender, since only it knows the device's current prefs and the APNs outcome):
+  - Pending reads are kept per push registration `DeviceID`, in the order each code first became pending (a newer T
+    for a pending code updates it in place). They are deleted with the registration on every removal path:
+    unregister, APNs "remove", owner revoke, re-registration under a new device id; `Stop` cancels every flush timer.
+  - Every push to a device with **`prefs.read_sync: true`** takes up to the 16 oldest pending entries as
+    `purdex.reads: [{"code":…,"through":T}]`. The visible-push builder fits them in the 4 KiB budget before trimming
+    the body; if the fixed fields still do not fit with the body empty it drops reads from the newest end until they
+    do, and those stay pending. A push that fails to build carries nothing.
+  - **Acknowledge by version**: after a successful send, each sent `(code, T)` is removed only if the pending entry
+    for that code still holds that T (compare-and-delete); a failed send (after the sender's one retry) removes
+    nothing. A read arriving while the push is in flight therefore survives.
+  - **Flush**: when a device has pending reads and nothing was sent to it for **15 minutes** (setting
+    `push.read_flush_minutes`, 1–120), one background push (the BG-1b headers) with
+    `{"aps":{"content-available":1},"purdex":{"kind":"reads","host_id":…,"reads":[…]}}`. The 15 minutes count from the
+    last push sent to that device, of any kind.
+  - Every agent push carries `purdex.event_cursor: {"epoch":…, "seq":…}` (the event's hook cursor,
+    `agent.NotifyEvent.Event.Epoch / Seq`); absent when the epoch is `""`.
+- Capability **`session.read_sync.v1`**; a client uses none of this against a host that does not declare it.
+
+### 7.3 Per platform
+
+- **Mac (BG-5)**:
+  - The agent store keeps, per unread key, the hook cursor of the event that last set it.
+  - `markRead` becomes source-aware: a **user read** (`active-tab-mark-read.ts`, the notification-click paths in
+    `notification-click.ts`) of a host session key whose unread was set returns that key's cursor and POSTs it
+    (debounce 2 s per key, keeping the largest captured T — never a cursor read at fire time). No POST for `exec-*`
+    worker keys, a key that was already read, a `running` / `clear` / host-prefix clear, or a received read.
+  - Opt in with `reads=v1` and POST only to hosts declaring the capability; apply `session.reads` / `session.read` by
+    the covering rule of §7.2.
+- **iPhone (BG-3e)**, all gated per host by `session.read_sync.v1` (POST, `reads=v1`, `prefs.read_sync`):
+  - Unread entries keep their hook cursor (`purdex.event_cursor` from the NSE, the frame's cursor in the App); the
+    App Group format gains it (an alpha reset is acceptable).
+  - On opening a session (`markOpened`), POST the captured cursor.
+  - Apply reads from WS, from `purdex.reads` in the NSE, and from `kind: "reads"` / `kind: "badge"` in the background
+    handler; remove the delivered notification `agent-<code>` (the agent push's collapse id) of each covered session.
+  - An older host: everything stays local, no new request is sent.
+
+### 7.4 Plan
+
+| Task | Where | What | Depends on |
+|---|---|---|---|
+| BG-4 | daemon | read route + device scope; `lastRead` (bounded, session end); `reads=v1` frames (feature-scoped strict); sender integration: per-device pending, reservation, version ack, removal paths, flush timer; `event_cursor`; `read_sync` pref; setting; capability; push spec | BG-1b merged |
+| BG-5 | SPA | per-key unread cursor; source-aware `markRead` and its callers; POST with debounce; `reads=v1` apply | BG-4 deployed |
+| BG-3e | purdex-ios | unread cursor; POST on open; apply reads (WS, NSE, background); remove delivered notifications; capability gate | BG-4 deployed, BG-3c |
+
+Tests:
+- BG-4:
+  - the cover rule: same epoch with seq ≤ T clears, a later seq or another epoch does not; `lastRead` only moves
+    forward; eviction at 4096; the entry goes with its session;
+  - a connect gets the snapshot; a read reaches every `reads=v1` connection and no other; a full buffer closes only
+    an opted-in connection, and other frames keep their treatment;
+  - reads ride the next push of each kind to `read_sync` devices only; 20 pending → the 16 oldest go, 4 stay; a
+    newer T arriving while the push is in flight survives its ack; a failed send keeps all; reads trimmed for size
+    stay pending; a build failure acks nothing;
+  - the flush fires 15 min after the last push and not while pushes keep going; the removal paths drop pending and
+    timers; `Stop` leaves no timer.
+- BG-5: the cursor captured at the transition (an event inside the debounce does not raise T); only user reads of
+  host sessions POST; a received read posts nothing; a covering / non-covering read; an older host gets no POST.
+- BG-3e: the same cover cases; NSE and background application; delivered notification removal; an older host.
