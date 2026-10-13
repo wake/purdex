@@ -41,6 +41,10 @@ type AgentEvent struct {
 	BroadcastTs int64
 	Silent      bool   // detail.notification_silent == true
 	ErrorString string // detail.error
+	// Member: the gate applies the member rule (the session pushes only to a device that has its tab). Set for a session
+	// that is a team member, and also when the membership read failed: the quieter side. Whether the payload says `member`
+	// is separate (push.AgentInput.Member), so an unknown is not announced as a member.
+	Member bool
 }
 
 // NormalizeEventName collapses the four user-facing notification events to their legacy form (one definition, shared
@@ -113,7 +117,9 @@ func (g *Gate) EventStage(ev AgentEvent, shows func(code string) bool) bool {
 	return true
 }
 
-// DeviceWants is rules 5-6, per device. ev.EventName must be normalised.
+// DeviceWants is rules 5-6 plus the badge spec's two (§3.1), per device. ev.EventName must be normalised. A member pushes
+// only to a device that has its tab, whatever notify_without_tab says; a session the device muted gets no agent push
+// (approval pushes do not come through here).
 func DeviceWants(d push.Device, ev AgentEvent) bool {
 	p := d.Prefs.Agents[ev.AgentType]    // an agent the phone never mentioned has the Mac's defaults: on, no events off, tabs only
 	if p.Enabled != nil && !*p.Enabled { // 5
@@ -122,7 +128,12 @@ func DeviceWants(d push.Device, ev AgentEvent) bool {
 	if on, set := p.Events[ev.EventName]; set && !on {
 		return false
 	}
-	if !p.NotifyWithoutTab { // 6
+	for _, code := range d.Prefs.Muted { // muted on this phone: no agent push, tab or not
+		if code == ev.SessionCode {
+			return false
+		}
+	}
+	if !p.NotifyWithoutTab || ev.Member { // 6, and the member rule
 		for _, code := range d.Prefs.Tabs {
 			if code == ev.SessionCode {
 				return true
