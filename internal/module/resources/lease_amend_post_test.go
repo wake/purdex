@@ -37,6 +37,11 @@ func TestLeaseCreate_StoresModeCommandCwd(t *testing.T) {
 	r2 := f.row(decodeLease(t, f.do(http.MethodPost, "/api/resources/leases", req2)).ID)
 	assert.Equal(t, "a b c", r2.Command)
 	assert.Equal(t, "", r2.Mode, "no mode reads as wait")
+
+	req3 := amendReq(cidC)
+	req3.Cwd = strings.Repeat("d", 1100)
+	r3 := f.row(decodeLease(t, f.do(http.MethodPost, "/api/resources/leases", req3)).ID)
+	assert.Len(t, r3.Cwd, resources.MaxCwdBytes)
 }
 
 func TestLeaseCreate_BadModeIs400(t *testing.T) {
