@@ -99,6 +99,30 @@ describe('host delete cascade — this device only (host ownership spec §3.4)',
     expect(JSON.stringify(useTabStore.getState().tabs)).not.toContain('host-removed')
   })
 
+  // Read sync (app-badge spec §7.2): an unread and the cursor of the event that set it are one fact. Undo brings the
+  // unread back, so it must bring the cursor back too — an unread restored without one is covered by ANY read and
+  // reports with no `through`, which can clear events the person never saw.
+  it('undo puts back each unread\'s cursor with the unread, and only for the deleted host', () => {
+    const ev = (status: string, epoch: string, seq: number): NormalizedEvent =>
+      ({ agent_type: 'cc', status, raw_event_name: 'PdxStop', broadcast_ts: 1, epoch, seq })
+    useAgentStore.getState().applyHookEvent(HOST_A, 'aaaaaa', ev('running', 'E1', 9))
+    useAgentStore.getState().applyHookEvent(HOST_A, 'aaaaaa', ev('idle', 'E1', 10))
+    useAgentStore.getState().applyHookEvent(HOST_B, 'bbbbbb', ev('running', 'E1', 11))
+    useAgentStore.getState().applyHookEvent(HOST_B, 'bbbbbb', ev('idle', 'E1', 12))
+    expect(useAgentStore.getState().unreadCursor).toEqual({ [`${HOST_A}:aaaaaa`]: { epoch: 'E1', seq: 10 }, [`${HOST_B}:bbbbbb`]: { epoch: 'E1', seq: 12 } })
+
+    const undo = deleteHostCascade(HOST_A)
+    expect(useAgentStore.getState().unreadCursor).toEqual({ [`${HOST_B}:bbbbbb`]: { epoch: 'E1', seq: 12 } })
+    expect(useAgentStore.getState().unread[`${HOST_A}:aaaaaa`]).toBeUndefined()
+
+    undo()
+    expect(useAgentStore.getState().unread[`${HOST_A}:aaaaaa`]).toBe(true)
+    expect(useAgentStore.getState().unreadCursor).toEqual({ [`${HOST_A}:aaaaaa`]: { epoch: 'E1', seq: 10 }, [`${HOST_B}:bbbbbb`]: { epoch: 'E1', seq: 12 } })
+    // the restored unread is covered by the cover rule again, not by any read
+    useAgentStore.getState().applyReads(HOST_A, [{ code: 'aaaaaa', through: { epoch: 'E2', seq: 99 } }])
+    expect(useAgentStore.getState().unread[`${HOST_A}:aaaaaa`]).toBe(true)
+  })
+
   it('another host\'s panes are untouched — the same objects', () => {
     const tabB = makeSessionTab(HOST_B, 'stg001')
     useTabStore.getState().addTab(tabB)

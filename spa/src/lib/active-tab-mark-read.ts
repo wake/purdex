@@ -1,7 +1,7 @@
 // spa/src/lib/active-tab-mark-read.ts — auto-markRead when an agent comes on screen in the active tab.
 // Lives outside active-session.ts to avoid a circular dependency between it and useAgentStore.
 import { useTabStore } from '../stores/useTabStore'
-import { useAgentStore } from '../stores/useAgentStore'
+import { markReadByUser } from './read-sync/user-read'
 import { getActiveTabAgents } from './active-session'
 import { compositeKey } from './composite-key'
 
@@ -21,6 +21,7 @@ export function startActiveTabMarkRead(): () => void {
     const keys = new Set(agents.map((a) => compositeKey(a.hostId, a.sessionCode)))
     const fresh = agents.filter((a) => !prevKeys.has(compositeKey(a.hostId, a.sessionCode)))
     prevKeys = keys
-    for (const a of fresh) useAgentStore.getState().markRead(a.hostId, a.sessionCode)
+    // A user read (read sync, app-badge spec §7.3): the person brought the session on screen.
+    for (const a of fresh) markReadByUser(a.hostId, a.sessionCode)
   })
 }

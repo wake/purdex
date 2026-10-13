@@ -5,6 +5,8 @@ import { compositeKey } from '../lib/composite-key'
 import { daemonNsToMsOrNull, parseExit, parseProvenance } from '../lib/rebuild/provenance'
 import { useTabStore } from './useTabStore'
 import { scanPaneTree } from '../lib/pane-tree'
+import { covers, cursorOf, type ReadCursor } from '../lib/read-sync/cursor'
+import { reportRead } from '../lib/read-sync/reporter'
 
 export type AgentStatus = 'running' | 'waiting' | 'idle' | 'error'
 
@@ -208,6 +210,12 @@ interface AgentState {
 
   // UI state
   unread: Record<string, boolean>
+  /**
+   * Per unread key, the hook cursor of the event that last set it (app-badge spec §7.2, §7.3). Absent: that event had
+   * none (an event from before the feature, or a frame not from the emit slot), so any read of the code covers it.
+   * Only keys in `unread` have one; every path that drops an unread drops its cursor with it.
+   */
+  unreadCursor: Record<string, ReadCursor>
 
   // Actions
   handleNormalizedEvent: (hostId: string, sessionCode: string, event: NormalizedEvent) => void
@@ -230,14 +238,44 @@ interface AgentState {
    */
   setSubagents: (hostId: string, sessionCode: string, subagents: SubagentRef[]) => void
   clearSession: (hostId: string, sessionCode: string) => void
-  markRead: (hostId: string, sessionCode: string) => void
+  /**
+   * Mark a key read. Returns what the unread -> read transition captured: whether it WAS unread and the cursor of the
+   * event that set it, taken now and never read later (read sync, spec §7.2). The caller decides whether this is a user
+   * read worth telling the daemon (`markReadByUser`); a read received from the daemon goes through `applyReads` instead.
+   */
+  markRead: (hostId: string, sessionCode: string) => ReadTransition
+  /**
+   * Reads received from the daemon (`session.reads` / `session.read`): clear each key's unread when the read covers it
+   * (spec §7.2: same epoch and the unread's seq <= T.seq; an unread with no cursor is covered by any read). Never
+   * reports anything: a received read is not forwarded again.
+   */
+  applyReads: (hostId: string, reads: { code: string; through: ReadCursor }[]) => void
   removeHost: (hostId: string) => void
   setOscTitle: (hostId: string, sessionCode: string, title: string) => void
   setCcStatus: (hostId: string, sessionCode: string, raw: Record<string, unknown>, receivedAt?: number) => void
   clearHostAgentStatus: (hostId: string) => void
 }
 
+/** What `markRead` captured at the unread -> read transition. */
+export interface ReadTransition {
+  wasUnread: boolean
+  cursor: ReadCursor | undefined
+}
+
 type UnreadPolicy = 'worker' | 'transition'
+
+/** An actionable event of an agent that is on screen: never marked unread, but seen (spec §7.1, "seen live"). */
+interface SeenLive {
+  sessionCode: string
+  cursor: ReadCursor | undefined
+}
+
+/** `rec` without `key` (the same object when it has none). */
+function dropKey<T>(rec: Record<string, T>, key: string): Record<string, T> {
+  if (!(key in rec)) return rec
+  const { [key]: _, ...rest } = rec
+  return rest
+}
 
 /** `s` without anything keyed `key` (what a `clear` event and clearSession do). */
 function withoutKey(s: AgentState, key: string): Partial<AgentState> {
@@ -255,6 +293,7 @@ function withoutKey(s: AgentState, key: string): Partial<AgentState> {
     oscTitles: drop(s.oscTitles),
     ccStatus: drop(s.ccStatus),
     unread: drop(s.unread),
+    unreadCursor: drop(s.unreadCursor),
   }
 }
 
@@ -280,7 +319,7 @@ function eventSideEffects(hostId: string, sessionCode: string, event: Normalized
  * - `transition`: only a status that changed from a KNOWN previous one (U1-3 ruling 1).
  */
 function eventPatch(
-  s: AgentState, hostId: string, sessionCode: string, event: NormalizedEvent, policy: UnreadPolicy,
+  s: AgentState, hostId: string, sessionCode: string, event: NormalizedEvent, policy: UnreadPolicy, seen: SeenLive[],
 ): Partial<AgentState> {
   const key = compositeKey(hostId, sessionCode)
   if (event.status === 'clear') return withoutKey(s, key)
@@ -311,6 +350,7 @@ function eventPatch(
       const { [key]: _, ...rest } = s.unread
       patch.unread = rest
     }
+    if (key in s.unreadCursor) patch.unreadCursor = dropKey(s.unreadCursor, key)
     return patch
   }
 
@@ -330,14 +370,36 @@ function eventPatch(
   const notificationSilent = event.detail?.notification_silent === true
   const isActionable = status === 'waiting' || status === 'error' ||
     (status === 'idle' && !isNotification && !notificationSilent)
-  if (isActionable && !isProxyStop(event) && !isAgentVisibleInActiveTab(hostId, sessionCode)) {
-    patch.unread = { ...s.unread, [key]: true }
+  if (isActionable && !isProxyStop(event)) {
+    if (!isAgentVisibleInActiveTab(hostId, sessionCode)) {
+      patch.unread = { ...s.unread, [key]: true }
+      // The cursor of the event that LAST set the unread: a later event replaces it, one with none leaves none.
+      const cursor = cursorOf(event)
+      if (cursor) patch.unreadCursor = { ...s.unreadCursor, [key]: cursor }
+      else if (key in s.unreadCursor) patch.unreadCursor = dropKey(s.unreadCursor, key)
+    } else {
+      // On screen, so it never becomes unread here — but the person saw it: tell the daemon, or a device elsewhere
+      // keeps an unread of something already seen (spec §7.1). Reported after the state is written. Only while the
+      // window is actually visible: the active tab of a minimized or covered window is not a person looking, and the
+      // report clears OTHER devices' unread.
+      if (isWindowVisible()) seen.push({ sessionCode, cursor: cursorOf(event) })
+    }
   }
   return patch
 }
 
+/** Is this window showing its page to a person (not minimized, not covered, not on another Space)? True where there is no document. */
+function isWindowVisible(): boolean {
+  return typeof document === 'undefined' || document.visibilityState !== 'hidden'
+}
+
+/** Report each seen-live event (after the state write: the reporter may read the store). */
+function reportSeen(hostId: string, seen: SeenLive[]): void {
+  for (const e of seen) reportRead(hostId, e.sessionCode, e.cursor)
+}
+
 export const useAgentStore = create<AgentState>()(
-  (set) => ({
+  (set, get) => ({
     statuses: {},
     agentTypes: {},
     models: {},
@@ -346,6 +408,7 @@ export const useAgentStore = create<AgentState>()(
     oscTitles: {},
     ccStatus: {},
     unread: {},
+    unreadCursor: {},
 
     clearSession: (hostId, sessionCode) => {
       const key = compositeKey(hostId, sessionCode)
@@ -354,22 +417,27 @@ export const useAgentStore = create<AgentState>()(
 
     handleNormalizedEvent: (hostId, sessionCode, event) => {
       eventSideEffects(hostId, sessionCode, event)
-      set((s) => eventPatch(s, hostId, sessionCode, event, 'worker'))
+      const seen: SeenLive[] = []
+      set((s) => eventPatch(s, hostId, sessionCode, event, 'worker', seen))
+      reportSeen(hostId, seen)
     },
 
     applyHookEvent: (hostId, sessionCode, event) => {
       eventSideEffects(hostId, sessionCode, event)
-      set((s) => eventPatch(s, hostId, sessionCode, event, 'transition'))
+      const seen: SeenLive[] = []
+      set((s) => eventPatch(s, hostId, sessionCode, event, 'transition', seen))
+      reportSeen(hostId, seen)
     },
 
     applyAgentSnapshot: (hostId, entries) => {
       for (const e of entries) eventSideEffects(hostId, e.session, e.event)
+      const seen: SeenLive[] = []
       set((s) => {
         let draft: AgentState = s
         const listed = new Set<string>()
         for (const e of entries) {
           listed.add(compositeKey(hostId, e.session))
-          draft = { ...draft, ...eventPatch(draft, hostId, e.session, e.event, 'transition') }
+          draft = { ...draft, ...eventPatch(draft, hostId, e.session, e.event, 'transition', seen) }
         }
         // A code of this host the snapshot does not list has no agent any more: clear it, but only a code that
         // holds agent state, and never an execution pane (owned by the worker projection, not daemon hook frames).
@@ -382,6 +450,7 @@ export const useAgentStore = create<AgentState>()(
         }
         return draft
       })
+      reportSeen(hostId, seen)
     },
 
     setSubagents: (hostId, sessionCode, subagents) => set((s) => {
@@ -392,11 +461,27 @@ export const useAgentStore = create<AgentState>()(
       return { subagents: rest }
     }),
 
-    markRead: (hostId, sessionCode) => set((s) => {
+    markRead: (hostId, sessionCode) => {
       const key = compositeKey(hostId, sessionCode)
-       
-      const { [key]: _, ...rest } = s.unread
-      return { unread: rest }
+      // Captured NOW, at the transition: a later event may set the unread again with a higher cursor, and that one
+      // was not read by this.
+      const { unread, unreadCursor } = get()
+      const wasUnread = unread[key] === true
+      const transition: ReadTransition = { wasUnread, cursor: wasUnread ? unreadCursor[key] : undefined }
+      set((s) => ({ unread: dropKey(s.unread, key), unreadCursor: dropKey(s.unreadCursor, key) }))
+      return transition
+    },
+
+    applyReads: (hostId, reads) => set((s) => {
+      let unread = s.unread
+      let unreadCursor = s.unreadCursor
+      for (const { code, through } of reads) {
+        const key = compositeKey(hostId, code)
+        if (unread[key] !== true || !covers(unreadCursor[key], through)) continue
+        unread = dropKey(unread, key)
+        unreadCursor = dropKey(unreadCursor, key)
+      }
+      return unread === s.unread ? s : { unread, unreadCursor }
     }),
 
     removeHost: (hostId) => set((s) => {
@@ -411,6 +496,7 @@ export const useAgentStore = create<AgentState>()(
         oscTitles: omitKeys(s.oscTitles, byPrefix),
         ccStatus: omitKeys(s.ccStatus, byPrefix),
         unread: omitKeys(s.unread, byPrefix),
+        unreadCursor: omitKeys(s.unreadCursor, byPrefix),
       }
     }),
 

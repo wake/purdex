@@ -22,6 +22,7 @@ import { handleWorkerExited } from '../lib/nex/worker-exited-event'
 import { dispatchNexHostEvent, NEX_OPT_IN } from '../lib/nex/nex-host-events'
 import { useExecutionListStore } from '../stores/useExecutionListStore'
 import { handleApprovalEvent } from '../lib/team/approval-ws'
+import { handleReadsEvent } from '../lib/read-sync/ws'
 import { handleUnattendedEvent } from '../lib/team/unattended-ws'
 import { handleRelayQuotaEvent } from '../lib/team/relay-quota-ws'
 import { RELAY_QUOTA_EVENT_TYPE, UNATTENDED_EVENT_TYPE } from '../lib/team/types'
@@ -127,6 +128,9 @@ export function useMultiHostEventWs() {
       wsUrlObj.searchParams.set(NEX_OPT_IN.key, NEX_OPT_IN.value)
       // `agent=v2` opts in to the complete `agent.snapshot` frame and the `(epoch, seq)` hook cursor (U1-3b, spec §7).
       wsUrlObj.searchParams.set('agent', 'v2')
+      // `reads=v1` opts in to `session.reads` (every remembered read, on connect) and `session.read` (one per accepted
+      // read) — read sync (app-badge spec §7.2). A daemon that does not know it ignores the parameter.
+      wsUrlObj.searchParams.set('reads', 'v1')
       const wsUrl = wsUrlObj.toString()
       const baseUrl = useHostStore.getState().getDaemonBase(hostId)
 
@@ -201,7 +205,7 @@ export function useMultiHostEventWs() {
             handleSessionsFrame(hostId, event)
             return
           }
-          if (event.type === 'agent.snapshot' || event.type === 'hook') {
+          if (event.type === 'agent.snapshot' || event.type === 'hook' || event.type === 'session.reads' || event.type === 'session.read') {
             // Bound to the host this connection was made for (as approval / team frames below): a removal or a
             // re-point reaches the host store before this effect closes the old socket, and a frame still queued on
             // it in between would bring the old daemon's lights back. After the close, host-events.ts's epoch drops
@@ -234,6 +238,7 @@ export function useMultiHostEventWs() {
               probeProvenanceOf(event.session)
             } catch { /* ignore */ }
           }
+          if (handleReadsEvent(hostId, event)) return
           if (event.type === 'tmux') {
             useHostStore.getState().setRuntime(hostId, {
               tmuxState: event.value === 'ok' ? 'ok' : 'unavailable',
