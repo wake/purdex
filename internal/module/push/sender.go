@@ -38,6 +38,8 @@ type Job struct {
 	DeviceIDs []string
 	Approval  *JobApproval // an approval's push: what the sender needs to resolve its session_code at send time
 	Make      func(push.Device) (push.Content, bool)
+	// RequireOpen: the job is only about the open set (a background badge push), so it is dropped when that cannot be read.
+	RequireOpen bool
 }
 
 // JobApproval is what an approval's Job carries to resolve its own tmux session, whether or not the approval is still open.
@@ -141,6 +143,10 @@ func (s *sender) process(ctx context.Context, j Job) {
 	if s.openState != nil {
 		snap = s.openState(ctx, j)
 	}
+	if j.RequireOpen && !snap.ok {
+		log.Printf("[push] badge job not sent: the open approvals could not be read")
+		return
+	}
 	for _, id := range j.DeviceIDs {
 		if ctx.Err() != nil {
 			return
@@ -167,6 +173,9 @@ func (s *sender) process(ctx context.Context, j Job) {
 			continue
 		}
 		h := apns.Headers{Topic: s.topic, CollapseID: content.CollapseID, Expiration: s.now().Add(expiresIn)}
+		if content.Background { // a silent badge update: its own push type and priority, and nothing to replace on the phone
+			h.PushType, h.Priority, h.CollapseID = "background", 5, ""
+		}
 		s.finish(ctx, d, s.sendWithRetry(ctx, d, h, payload))
 	}
 }

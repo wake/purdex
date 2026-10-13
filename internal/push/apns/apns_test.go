@@ -207,6 +207,34 @@ func TestSend_RequestShape(t *testing.T) {
 	}
 }
 
+// BG-1b: push type and priority are per notification. The zero Headers keep today's visible push (alert, 10) — locked here so
+// the background path can never change it; a background push is `background` / 5 and carries no collapse id.
+// Mutation gate: hard-code alert / 10 again → the background row is red; default to something else → the alert row is red.
+func TestSend_PushTypeAndPriorityArePerNotification(t *testing.T) {
+	f := newFake(t)
+	cl, c := newTestClient(t, f)
+	exp := c.now().Add(time.Hour)
+	for name, tc := range map[string]struct {
+		h              Headers
+		pushType, prio string
+		collapse       string
+	}{
+		"zero value is the visible push": {Headers{Topic: "t", CollapseID: "ap1", Expiration: exp}, "alert", "10", "ap1"},
+		"explicit alert":                 {Headers{Topic: "t", PushType: "alert", Priority: 10, Expiration: exp}, "alert", "10", ""},
+		"background":                     {Headers{Topic: "t", PushType: "background", Priority: 5, Expiration: exp}, "background", "5", ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if res := cl.Send(context.Background(), "sandbox", devToken, tc.h, []byte(`{"aps":{}}`)); res.Class != OK {
+				t.Fatalf("result = %+v", res)
+			}
+			h := f.last().Header
+			if h.Get("Apns-Push-Type") != tc.pushType || h.Get("Apns-Priority") != tc.prio || h.Get("Apns-Collapse-Id") != tc.collapse || h.Get("Apns-Expiration") != "1700003600" {
+				t.Fatalf("headers = %v", h)
+			}
+		})
+	}
+}
+
 func TestSend_EnvPicksTheHost(t *testing.T) {
 	sandbox, production := newFake(t), newFake(t)
 	cl, _ := newTestClient(t, sandbox)

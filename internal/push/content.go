@@ -59,6 +59,11 @@ type Content struct {
 	// Member marks an agent push of a team member (payload purdex.member = true), so a phone does not count its unread
 	// event. false = not a member, or unknown: the field is left out, never sent as false.
 	Member bool
+	// Background marks a silent badge update (badge spec §3.1, BG-1b): sent as apns-push-type `background`, priority 5, with no
+	// alert and no collapse id; its body is backgroundPayload. ClosedApprovalIDs are the approvals that closed since the last
+	// one (at most 16 are sent); the phone clears their delivered notifications.
+	Background        bool
+	ClosedApprovalIDs []string
 }
 
 var (
@@ -238,6 +243,9 @@ func ApprovalContent(a Approval, hostLabel, locale string) (Content, bool) {
 // Payload is the APNs JSON body (spec §6), under 4 KiB: the body is cut further if the whole is over. Empty fields of
 // the purdex block are left out.
 func (c Content) Payload(hostID string) ([]byte, error) {
+	if c.Background {
+		return c.backgroundPayload(hostID)
+	}
 	body := c.Body
 	for {
 		raw, err := c.payload(hostID, body)

@@ -95,6 +95,10 @@ type Headers struct {
 	Topic      string
 	CollapseID string
 	Expiration time.Time
+	// PushType is apns-push-type: "" is "alert", today's visible push. A silent badge update is "background" (BG-1b).
+	PushType string
+	// Priority is apns-priority: 0 is 10, today's visible push. A background push must be 5 (APNs refuses it at 10).
+	Priority int
 }
 
 // Result is one send's outcome. Reason is APNs's `reason`; Err describes a failure that never got an answer. Neither ever
@@ -145,8 +149,15 @@ func (c *Client) Send(ctx context.Context, env, token string, h Headers, payload
 	}
 	req.Header.Set("Authorization", "bearer "+jwt)
 	req.Header.Set("Apns-Topic", h.Topic)
-	req.Header.Set("Apns-Push-Type", "alert")
-	req.Header.Set("Apns-Priority", "10")
+	pushType, priority := h.PushType, h.Priority
+	if pushType == "" {
+		pushType = "alert"
+	}
+	if priority == 0 {
+		priority = 10
+	}
+	req.Header.Set("Apns-Push-Type", pushType)
+	req.Header.Set("Apns-Priority", strconv.Itoa(priority))
 	if !h.Expiration.IsZero() {
 		req.Header.Set("Apns-Expiration", strconv.FormatInt(h.Expiration.Unix(), 10))
 	}
