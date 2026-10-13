@@ -64,3 +64,46 @@ export function rosterLines(view, clean) {
   const one = (v) => clean(String(v ?? '')).replace(/\s+/g, ' ').trim()
   return '\n- 我管理的 members：' + members.map((m) => '\n  - ' + one(m.address) + '（ref ' + one(m.ref) + '，title ' + (one(m.title) || '無') + '，cwd ' + one(m.cwd) + '）').join('')
 }
+
+// ---- /team (relay/team rules v2, RT-1c) ----
+
+const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(\[1m\])?$/ // team.ValidModel
+const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] // team.ValidEffort
+const TEAM_USAGE = '用法：/team [名稱或說明] | spawn <任務> [--model m] [--effort e] | adopt <ref> | release <ref> | kill <ref>'
+export const SPAWN_USAGE = '用法：/team spawn <任務> [--model m] [--effort e]'
+
+// parseTeamArgs reads what follows `/team`: { kind: 'show' } (nothing), { kind: 'lead', note } (any other text),
+// { kind: 'spawn', task, model?, effort? }, { kind: 'adopt' | 'release' | 'kill', ref } or { error }. `--model` and
+// `--effort` belong to spawn only (their values are the CLI's own lists); a word of another kind is part of the note.
+export function parseTeamArgs(args) {
+  const text = String(args ?? '').trim()
+  if (text === '') return { kind: 'show' }
+  const words = text.split(/\s+/)
+  const head = words[0]
+  if (head === 'spawn') {
+    const out = { kind: 'spawn', task: '' }
+    const task = []
+    for (let i = 1; i < words.length; i++) {
+      const w = words[i]
+      const m = /^--(model|effort)(?:=(.*))?$/.exec(w)
+      if (!m) { task.push(w); continue }
+      const name = m[1]
+      let value = m[2]
+      if (value === undefined) value = words[++i]
+      if (value === undefined || value === '' || value.startsWith('--')) return { error: '--' + name + ' 需要一個值。' + SPAWN_USAGE }
+      if (name === 'model' && !MODEL_RE.test(value)) return { error: '--model 的值不合法：' + value.slice(0, 40) }
+      if (name === 'effort' && !EFFORTS.includes(value)) return { error: '--effort 只能是 ' + EFFORTS.join('、') + '：' + value.slice(0, 40) }
+      out[name] = value
+    }
+    out.task = task.join(' ')
+    if (out.task === '') return { error: SPAWN_USAGE }
+    return out
+  }
+  if (head === 'adopt' || head === 'release' || head === 'kill') {
+    if (words.length !== 2 || words[1].startsWith('-')) return { error: '用法：/team ' + head + ' <ref>' }
+    return { kind: head, ref: words[1] }
+  }
+  return { kind: 'lead', note: text }
+}
+
+export { TEAM_USAGE }

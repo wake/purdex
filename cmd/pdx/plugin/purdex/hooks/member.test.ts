@@ -2,7 +2,7 @@
 // A small engine fake beneath the mod (a copy of relay.test.ts's, kept apart so the two files stay independent):
 // a fake pdx behind $.process.run, $.session.*, $.fs.read, $.ui.*, and the bottom of every event a test raises.
 import { test, expect, mock } from 'claude-code/testing'
-import { controlOp, controlReask } from './member.js'
+import { controlOp, controlReask, parseTeamArgs } from './member.js'
 
 const OPID = '3f2b8c1e-9a4d-4e6b-8c7a-1d2e3f4a5b6c'
 const CONTROL = '[pdx-relay:control] op=' + OPID
@@ -702,10 +702,10 @@ test('an op control still reaches the member path; a reask is not claimed or see
   expect(calls(f, 'seen').length).toBe(1)
 })
 
-test('hello reports protocol 5, the one the daemon sends reask to', async ($, on) => {
+test('hello reports protocol 6 (5 was the one the daemon sends reask to)', async ($, on) => {
   const f = soloWorld(on)
   await start($, f)
-  expect(calls(f, 'hello')[0]).toContain('--version 5')
+  expect(calls(f, 'hello')[0]).toContain('--version 6')
 })
 
 // An old daemon (no paused_no_quota anywhere) is unchanged: a begin that opens a request waits for it as always.
@@ -716,4 +716,33 @@ test('a daemon without the pause behaves as before: begin opens the request and 
   await f.clock.advance(100)
   expect(begins(f).length).toBe(1)
   expect(calls(f, 'wait').length).toBeGreaterThan(0)
+})
+
+// ---- parseTeamArgs (RT-1c): what follows /team ----
+// Mutation gate: treat a note that starts with a keyword as a note / let --model through for a non-spawn → a row red.
+test('parseTeamArgs: nothing is show, other text is the note, spawn takes its flags, adopt/release/kill take one ref', () => {
+  expect(parseTeamArgs('')).toEqual({ kind: 'show' })
+  expect(parseTeamArgs('   ')).toEqual({ kind: 'show' })
+  expect(parseTeamArgs(undefined)).toEqual({ kind: 'show' })
+  expect(parseTeamArgs('B 線 上限 2')).toEqual({ kind: 'lead', note: 'B 線 上限 2' })
+  expect(parseTeamArgs('--model opus 做事')).toEqual({ kind: 'lead', note: '--model opus 做事' }) // the flags belong to spawn only
+  expect(parseTeamArgs('spawn 修登入 bug')).toEqual({ kind: 'spawn', task: '修登入 bug' })
+  expect(parseTeamArgs('spawn 修 bug --model opus[1m] --effort xhigh')).toEqual({ kind: 'spawn', task: '修 bug', model: 'opus[1m]', effort: 'xhigh' })
+  expect(parseTeamArgs('spawn --effort=low 寫測試 --model=sonnet')).toEqual({ kind: 'spawn', task: '寫測試', model: 'sonnet', effort: 'low' })
+  expect(parseTeamArgs('adopt _abc123')).toEqual({ kind: 'adopt', ref: '_abc123' })
+  expect(parseTeamArgs('release mlab/_abc123')).toEqual({ kind: 'release', ref: 'mlab/_abc123' })
+  expect(parseTeamArgs('kill _abc123')).toEqual({ kind: 'kill', ref: '_abc123' })
+})
+
+test('parseTeamArgs: bad spawn and ref commands are errors, never guessed', () => {
+  const err = (a: string) => (parseTeamArgs(a) as any).error as string
+  expect(err('spawn')).toBe('用法：/team spawn <任務> [--model m] [--effort e]')
+  expect(err('spawn --model opus')).toBe('用法：/team spawn <任務> [--model m] [--effort e]') // flags alone are no task
+  expect(err('spawn x --model')).toContain('--model 需要一個值')
+  expect(err('spawn x --model --effort high')).toContain('--model 需要一個值')
+  expect(err('spawn x --model "bad name"')).toContain('--model 的值不合法')
+  expect(err('spawn x --effort wild')).toContain('--effort 只能是')
+  expect(err('adopt')).toBe('用法：/team adopt <ref>')
+  expect(err('kill a b')).toBe('用法：/team kill <ref>')
+  expect(err('release --all')).toBe('用法：/team release <ref>')
 })
