@@ -152,6 +152,12 @@ func TestPark_PollAnswersQueuedWithoutRenewing(t *testing.T) {
 	assert.Equal(t, 1, got.Position)
 	assert.Equal(t, until, got.ParkedUntil)
 	assert.Equal(t, until, f.row(a.ID).LeaseUntil, "the poll renewed nothing")
+
+	// Ten seconds before the park ends a poll would push the lease past it if it
+	// renewed (the renewal is 30 s ahead): it must not.
+	f.clock.ms.Store(until - 10_000)
+	decodeLease(t, f.do(http.MethodGet, "/api/resources/leases/"+a.ID, nil))
+	assert.Equal(t, until, f.row(a.ID).LeaseUntil, "a late poll does not extend the park")
 }
 
 // A poll that is waiting when the row gets parked is woken by it.
