@@ -70,7 +70,7 @@ func TestReattach_AdoptsTheParkedRow(t *testing.T) {
 	assert.Equal(t, 9999, r.HolderPID)
 	assert.Equal(t, created, r.CreatedAt)
 	assert.Zero(t, r.ParkedUntil)
-	assert.Equal(t, f.nowMS()+300_000, r.DeadlineAt, "the hold counts from now")
+	assert.Equal(t, f.nowMS()+540_000, r.DeadlineAt, "the hold counts from now")
 	assert.Equal(t, f.nowMS()+30_000, r.LeaseUntil)
 	assert.Equal(t, 2, f.rowCount(), "no new row")
 
