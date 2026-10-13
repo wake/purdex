@@ -436,3 +436,20 @@ func TestCost_FailedWriteIsKeptAndNotRepeated(t *testing.T) {
 	f.sweep()
 	assert.Equal(t, int64(20_000), f.position(posA).OfferWaitMS, "not written twice")
 }
+
+// With the writes failing for good, the pending list is bounded by the positions
+// and each pending cost is tried once per sweep. (M: append instead of merging.)
+func TestCost_PendingListIsBoundedWhenWritesKeepFailing(t *testing.T) {
+	f := newPosFix(t)
+	posA, _ := f.offeredWithAWaiter()
+	_, err := f.m.store.db.Exec(`CREATE TRIGGER fail_cost BEFORE UPDATE OF offer_wait_ms, idle_wait_ms ON resource_positions BEGIN SELECT RAISE(ABORT, 'busy'); END`)
+	require.NoError(t, err)
+	for i := 0; i < 6; i++ { // a charged offered window, settled again and again
+		f.advance(10 * time.Second)
+		f.sweep()
+		f.m.costs[posA].state = resources.PosIdle // forces a change of state at the next tick
+		f.advance(time.Second)
+		f.sweep()
+	}
+	assert.LessOrEqual(t, len(f.m.pendingCosts), 2, "one entry per position and kind of cost")
+}

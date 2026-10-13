@@ -101,7 +101,6 @@ func (m *Module) sweepPositions(now time.Time, view procView, viewAt time.Time) 
 			m.flushWindowCost(id) // a position that ended some way the sweeper did not see
 		}
 	}
-	m.writePendingCosts()
 	for _, p := range positions {
 		m.accrueWindowCost(p, nowMS)
 		switch {
@@ -128,6 +127,7 @@ func (m *Module) sweepPositions(now time.Time, view procView, viewAt time.Time) 
 				From: []string{resources.PosIdle}, WindowGuard: p.WindowUntil, Notice: m.cancelNotice(p)})
 		}
 	}
+	m.writePendingCosts() // once per sweep, after every settlement of this tick
 }
 
 // endPosition ends a position through the store and logs a win.
@@ -212,21 +212,30 @@ type pendingCost struct {
 }
 
 // flushWindowCost settles the cost kept in memory for a position: it is final,
-// and is written now or, if the write fails, on a later tick.
+// and is written at the end of this sweep or, if the write fails, on a later one.
 func (m *Module) flushWindowCost(id string) {
 	c := m.costs[id]
 	if c == nil {
 		return
 	}
 	delete(m.costs, id)
-	if c.ms > 0 {
-		m.pendingCosts = append(m.pendingCosts, pendingCost{id: id, state: c.state, ms: c.ms})
+	if c.ms == 0 {
+		return
 	}
-	m.writePendingCosts()
+	// Merged by position and state: the list is bounded by the live positions
+	// even if the writes keep failing.
+	for i := range m.pendingCosts {
+		if m.pendingCosts[i].id == id && m.pendingCosts[i].state == c.state {
+			m.pendingCosts[i].ms += c.ms
+			return
+		}
+	}
+	m.pendingCosts = append(m.pendingCosts, pendingCost{id: id, state: c.state, ms: c.ms})
 }
 
-// writePendingCosts writes the settled costs; one whose write fails stays for the
-// next tick, one that was written is gone, so nothing is lost or written twice.
+// writePendingCosts writes the settled costs, once per sweep; one whose write
+// fails stays for the next tick, one that was written is gone, so nothing is
+// lost or written twice.
 func (m *Module) writePendingCosts() {
 	keep := m.pendingCosts[:0]
 	for _, pc := range m.pendingCosts {
