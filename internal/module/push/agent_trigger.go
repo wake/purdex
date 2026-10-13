@@ -10,6 +10,7 @@ import (
 
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/push"
+	"github.com/wake/purdex/internal/reads"
 	"github.com/wake/purdex/internal/team"
 	"github.com/wake/purdex/internal/workbooklines"
 	"github.com/wake/purdex/internal/workbooksettings"
@@ -39,7 +40,8 @@ func (m *Module) onNotify(ev agent.NotifyEvent) {
 		EventName: ev.Event.RawEventName, Status: ev.Event.Status, BroadcastTs: ev.Event.BroadcastTs,
 		Silent: ev.Event.Detail["notification_silent"] == true, ErrorString: jsString(ev.Event.Detail["error"]),
 	}
-	content := push.AgentInput{SessionCode: ev.SessionCode, SessionID: ev.SessionID, SessionName: ev.SessionName, EventName: ev.Event.RawEventName, Detail: ev.Event.Detail}
+	content := push.AgentInput{SessionCode: ev.SessionCode, SessionID: ev.SessionID, SessionName: ev.SessionName, EventName: ev.Event.RawEventName, Detail: ev.Event.Detail,
+		EventCursor: reads.Cursor{Epoch: ev.Event.Epoch, Seq: ev.Event.Seq}}
 	// Team membership (badge spec §3.1) is read once for the event, before the device loop. A read error is "member,
 	// unknown": the gate applies the member rule (the quieter side) and the payload does not announce it.
 	member, err := m.memberOf(ev.SessionID, ev.Event.Status)

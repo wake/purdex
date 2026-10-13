@@ -28,6 +28,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/devices"
 	"github.com/wake/purdex/internal/module/agent"
@@ -36,6 +37,7 @@ import (
 	"github.com/wake/purdex/internal/push"
 	"github.com/wake/purdex/internal/push/apns"
 	"github.com/wake/purdex/internal/push/apnskey"
+	"github.com/wake/purdex/internal/reads"
 	"github.com/wake/purdex/internal/team"
 	"github.com/wake/purdex/internal/workbooklines"
 )
@@ -77,7 +79,10 @@ type Module struct {
 	membership  func(sessionID string) (bool, error)                             // a test seam: team.MembershipReader; nil = from the registry
 	memBudget   time.Duration                                                    // how long an event waits for the membership read; 0 = membershipBudget
 	memBusy     atomic.Bool                                                      // a membership read is still running: never more than one outstanding
-	closes      *closeCoalescer                                                  // closed badge cards waiting for their 2 s window (badge_close.go); fires into the sender's queue
+	rs          *readSync                                                        // read sync: the pending reads per registration and their flush timers (readsync.go)
+	readsFeed   reads.Feed                                                       // a test seam: the reads module's feed; nil = from the registry
+	unsubReads  func()
+	closes      *closeCoalescer // closed badge cards waiting for their 2 s window (badge_close.go); fires into the sender's queue
 	holds       holdSet
 	wbHolds     wbHoldSet                  // Stop pushes held for the session workbook's line (agent_trigger.go)
 	wbWait      func() time.Duration       // a test seam: the push_wait_s setting; nil = from the registry
@@ -98,6 +103,7 @@ func New() *Module {
 	m := &Module{home: os.UserHomeDir, devices: map[string]push.Device{}, pres: NewPresence(time.Now),
 		gate: NewGate(time.Now), asks: newOpenAsks(time.Now), holdFor: waitingHold}
 	m.closes = newCloseCoalescer(m.fireBadge)
+	m.rs = newReadSync(time.Now, time.Duration(config.DefaultReadFlushMinutes)*time.Minute, m.fireReadsFlush)
 	return m
 }
 
@@ -108,6 +114,10 @@ func (m *Module) Dependencies() []string { return []string{"team", "agent"} }
 // material) and leaves the module off; Init itself returns nil so the daemon starts (push spec §3).
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
+	c.CfgMu.RLock()
+	cfg := *c.Cfg
+	c.CfgMu.RUnlock()
+	m.initReadSync(cfg)
 	if err := m.load(c); err != nil {
 		m.mu.Lock()
 		m.ready, m.initErr = false, err.Error()
@@ -239,6 +249,8 @@ func (m *Module) Start(ctx context.Context) error {
 	m.holds.reset()
 	m.wbHolds.reset()
 	m.closes.reset()
+	snd.reads = m.rs
+	m.followReads()
 	m.asks.Clear() // a restart starts with no asks: the feed's open snapshot proves nothing was pushed (spec §4.4), so it is not loaded
 	if m.events != nil {
 		_, m.unsub = m.events.SubscribeApprovals(m.onApproval)
@@ -307,6 +319,7 @@ func (m *Module) dropOwned(owners []string) {
 	gone, err := m.store.DeleteByOwners(owners)
 	for _, id := range gone {
 		delete(m.devices, id)
+		m.rs.Forget(id)
 	}
 	// Fail closed: whatever the database said, nothing owned by a revoked phone stays in the send cache (a failed delete is
 	// retried by the reconcile at the next Start).
@@ -317,6 +330,7 @@ func (m *Module) dropOwned(owners []string) {
 	for id, d := range m.devices {
 		if d.OwnerDeviceID != "" && revoked[d.OwnerDeviceID] {
 			delete(m.devices, id)
+			m.rs.Forget(id)
 		}
 	}
 	if err != nil {
@@ -340,6 +354,7 @@ func (m *Module) Stop(context.Context) error {
 	m.wbHolds.stop() // before the sender: a hold that is mid-send enqueues onto a live sender, then nothing more
 	m.holds.stopAll()
 	m.closes.stop() // a window that has not ended sends nothing
+	m.stopReads()   // the reads feed and every flush timer
 	if snd := m.sender.Swap(nil); snd != nil {
 		snd.Stop() // a callback that already holds snd only enqueues onto a stopped sender: harmless
 	}
@@ -558,6 +573,7 @@ func (m *Module) Remove(deviceID string) {
 		return
 	}
 	delete(m.devices, deviceID)
+	m.rs.Forget(deviceID)
 }
 
 func (m *Module) MarkSent(deviceID string, at int64) {
@@ -646,6 +662,7 @@ func (m *Module) handlePost(w http.ResponseWriter, r *http.Request) {
 	stored, err := m.store.Upsert(d)
 	if err == nil {
 		m.devices[stored.DeviceID] = stored
+		m.registered(stored)
 	}
 	m.mu.Unlock()
 	if err != nil {
@@ -692,6 +709,7 @@ func (m *Module) handleDelete(w http.ResponseWriter, r *http.Request) {
 	gone, err := m.store.DeleteByID(id)
 	if err == nil {
 		delete(m.devices, id)
+		m.rs.Forget(id)
 	}
 	m.mu.Unlock()
 	if err != nil {
