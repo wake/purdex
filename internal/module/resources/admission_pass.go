@@ -139,7 +139,7 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 		// first, so that this pass can never grant it (spec D-4′).
 		parked := 0
 		for i, w := range waiting {
-			if w.ParkedUntil != 0 || w.DeadlineAt > now.UnixMilli() {
+			if !w.Parkable || w.ParkedUntil != 0 || w.DeadlineAt > now.UnixMilli() {
 				continue
 			}
 			until := now.Add(set.Park()).UnixMilli()

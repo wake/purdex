@@ -75,6 +75,11 @@ type LeaseRequest struct {
 	HolderStart string `json:"holder_start,omitempty"`
 	Scope       string `json:"scope,omitempty"`
 	ToolUseID   string `json:"tool_use_id,omitempty"`
+	// Parkable says the client understands "queued": when its hold runs out the
+	// row may be parked (it keeps its place and the call returns) instead of
+	// the call waiting on. A client that does not send it (older than lease v2
+	// P2b) is never parked, so it never meets an answer it cannot read.
+	Parkable bool `json:"parkable,omitempty"`
 }
 
 // LeaseHost is the part of the host reading a lease answer carries.

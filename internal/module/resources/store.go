@@ -68,6 +68,8 @@ type leaseRow struct {
 	// never granted (lease v2 spec D-4′).
 	Parks       int
 	ParkedUntil int64
+	// Parkable: the creating client reads "queued" and "replaced".
+	Parkable bool
 }
 
 // leaseStore is the SQLite persistence of resource_leases (resources.db).
@@ -156,18 +158,18 @@ const leaseCols = `id, client_id, state, kind, weight, session_id, holder_pid, h
 	created_at, deadline_at, lease_until, COALESCE(granted_at,0), COALESCE(ended_at,0),
 	overrun, would_wait, COALESCE(end_reason,''), COALESCE(waited_ms,0),
 	COALESCE(peak_use,0), COALESCE(mean_use,0), COALESCE(ewma,0), samples, empty_samples, COALESCE(baseline,''),
-	parks, parked_until`
+	parks, parked_until, parkable`
 
 type rowScanner interface{ Scan(dest ...any) error }
 
 func scanLease(sc rowScanner) (leaseRow, error) {
 	var r leaseRow
-	var overrun, wouldWait int
+	var overrun, wouldWait, parkable int
 	err := sc.Scan(&r.ID, &r.ClientID, &r.State, &r.Kind, &r.Weight, &r.SessionID, &r.HolderPID, &r.HolderStart,
 		&r.Scope, &r.ToolUseID, &r.CreatedAt, &r.DeadlineAt, &r.LeaseUntil, &r.GrantedAt, &r.EndedAt,
 		&overrun, &wouldWait, &r.EndReason, &r.WaitedMS,
-		&r.PeakUse, &r.MeanUse, &r.EWMA, &r.Samples, &r.EmptySamples, &r.Baseline, &r.Parks, &r.ParkedUntil)
-	r.Overrun, r.WouldWait = overrun != 0, wouldWait != 0
+		&r.PeakUse, &r.MeanUse, &r.EWMA, &r.Samples, &r.EmptySamples, &r.Baseline, &r.Parks, &r.ParkedUntil, &parkable)
+	r.Overrun, r.WouldWait, r.Parkable = overrun != 0, wouldWait != 0, parkable != 0
 	return r, err
 }
 
@@ -184,11 +186,11 @@ func nullable(s string) any {
 func (s *leaseStore) Create(r leaseRow) (leaseRow, bool, error) {
 	res, err := s.db.Exec(`
 		INSERT INTO resource_leases (id, client_id, state, kind, weight, session_id, holder_pid, holder_start,
-			scope, tool_use_id, created_at, deadline_at, lease_until, baseline)
-		VALUES (?, ?, 'waiting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			scope, tool_use_id, created_at, deadline_at, lease_until, baseline, parkable)
+		VALUES (?, ?, 'waiting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (client_id) DO NOTHING`,
 		r.ID, r.ClientID, r.Kind, r.Weight, r.SessionID, r.HolderPID, r.HolderStart,
-		r.Scope, r.ToolUseID, r.CreatedAt, r.DeadlineAt, r.LeaseUntil, nullable(r.Baseline))
+		r.Scope, r.ToolUseID, r.CreatedAt, r.DeadlineAt, r.LeaseUntil, nullable(r.Baseline), b2i(r.Parkable))
 	if err != nil {
 		return leaseRow{}, false, fmt.Errorf("create lease: %w", err)
 	}
@@ -511,6 +513,7 @@ var decisionColumns = []struct{ name, def string }{
 	{"dec_gap_ms", "INTEGER NOT NULL DEFAULT 0"},
 	{"parks", "INTEGER NOT NULL DEFAULT 0"},
 	{"parked_until", "INTEGER NOT NULL DEFAULT 0"},
+	{"parkable", "INTEGER NOT NULL DEFAULT 0"},
 	{"wait_reasons", "TEXT NOT NULL DEFAULT ''"},
 	// The advise shadow queue (P1c): how long v2 would have made the request
 	// wait (-1: not recorded), and whether that is only a lower bound because

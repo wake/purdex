@@ -121,7 +121,7 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 	row := leaseRow{
 		ID: uuid.NewString(), ClientID: req.ClientID, State: resources.StateWaiting, Kind: req.Kind, Weight: weight,
 		SessionID: req.SessionID, HolderPID: req.HolderPID, HolderStart: req.HolderStart, Scope: req.Scope,
-		ToolUseID: req.ToolUseID, CreatedAt: now.UnixMilli(), DeadlineAt: now.Add(wait).UnixMilli(),
+		ToolUseID: req.ToolUseID, Parkable: req.Parkable, CreatedAt: now.UnixMilli(), DeadlineAt: now.Add(wait).UnixMilli(),
 		LeaseUntil: now.Add(resources.LeaseS * time.Second).UnixMilli(),
 	}
 	if row.Scope == "" {

@@ -70,7 +70,7 @@ func apiCode(rec *httptest.ResponseRecorder) string {
 
 func (f *routeFix) post(cid, kind string, weight int) *httptest.ResponseRecorder {
 	return f.do(http.MethodPost, "/api/resources/leases", resources.LeaseRequest{
-		ClientID: cid, Kind: kind, Weight: weight, HolderPID: 4242, HolderStart: "Thu Oct  9 00:00:00 2026"})
+		ClientID: cid, Kind: kind, Weight: weight, HolderPID: 4242, HolderStart: "Thu Oct  9 00:00:00 2026", Parkable: true})
 }
 
 // A request that fits is granted by the POST itself, with the decision on its
