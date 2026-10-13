@@ -88,9 +88,9 @@ func (m *Module) handleLeaseConfirm(w http.ResponseWriter, r *http.Request) {
 	case cur.Mode != resources.CallAsk:
 		code, errCode, detail = http.StatusBadRequest, resources.ErrBadRequest, "only a background (ask) request is confirmed"
 	default:
-		var pos positionRow
-		pos, found, err = m.store.PositionByID(cur.PositionID)
-		if err == nil && (!found || (pos.State != resources.PosOffered && pos.State != resources.PosIdle)) {
+		pos, posFound, perr := m.store.PositionByID(cur.PositionID)
+		err = perr
+		if err == nil && (!posFound || (pos.State != resources.PosOffered && pos.State != resources.PosIdle)) {
 			code, errCode, detail = http.StatusConflict, resources.ErrNotYourTurn, "your turn has not come yet"
 		} else if err == nil {
 			confirmed, err = m.store.ConfirmRow(cur.ID, pos.ID, m.now().UnixMilli())

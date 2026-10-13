@@ -361,3 +361,17 @@ func TestConfirm_MovedToANewPlaceMeanwhileMustBeAskedAgain(t *testing.T) {
 	assert.Equal(t, "pos_0000beef", r.PositionID, "it moved")
 	assert.Equal(t, resources.StateWaiting, r.State)
 }
+
+// An ask row whose position is gone is "not your turn", not a server error.
+// (M: let the position lookup overwrite the row's found.)
+func TestConfirm_RowOfAMissingPositionIs409(t *testing.T) {
+	f := newPosFix(t)
+	f.setZone("danger", "flat")
+	ask := decodeLease(t, f.postAs(newCID(), pidA, resources.CallAsk, "bg"))
+	_, err := f.m.store.db.Exec(`UPDATE resource_leases SET position_id = 'pos_gone' WHERE id = ?`, ask.ID)
+	require.NoError(t, err)
+	rec := f.call("/api/resources/leases/"+ask.ID+"/confirm", pidA)
+	assert.Equal(t, http.StatusConflict, rec.Code, rec.Body.String())
+	assert.Equal(t, resources.ErrNotYourTurn, apiCode(rec))
+	assert.Zero(t, f.row(ask.ID).ConfirmedAt)
+}
