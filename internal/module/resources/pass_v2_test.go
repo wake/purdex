@@ -261,6 +261,36 @@ func TestStore_MigratesAPreV2Database(t *testing.T) {
 	require.NoError(t, s2.Close())
 }
 
+// A held row counts for the gap even when nothing is in memory (the pass
+// started before boot read the table, or a row was written by another path).
+func TestPassV2_GapFromAHeldRowWithNothingInMemory(t *testing.T) {
+	f := newPassFix(t, resources.ModeLease)
+	f.set.set(resources.Settings{Mode: resources.ModeLease}) // gap 30 s
+	f.heldLease("h", resources.ScopeProcess, 100)
+	f.advance(10 * time.Second)
+	f.m.lastGrantMS = 0
+	f.queue("a", 35, 5*time.Minute)
+	f.setZone("normal", "flat")
+	f.pass()
+	assert.Equal(t, "waiting", f.state("a"))
+	r, _, _ := f.m.reasons.current("a")
+	assert.Equal(t, resources.ReasonGap, r)
+}
+
+// Mode advise keeps FIFO at a cut waiter too: nobody behind a session-new
+// waiter without a baseline is granted.
+func TestPassV2_AdviseStopsAtACutWaiter(t *testing.T) {
+	f := newPassFix(t, resources.ModeAdvise)
+	a := baseRow("s", "c-s")
+	a.Scope, a.HolderPID = resources.ScopeSessionNew, 500
+	a.CreatedAt, a.DeadlineAt, a.LeaseUntil = f.nowMS()-2000, f.nowMS()+300000, f.nowMS()+30000
+	mustCreate(f.t, f.m.store, a)
+	f.queue("b", 35, 5*time.Minute)
+	f.m.passOnce(f.m.settings(), "", map[string]string{})
+	assert.Equal(t, "waiting", f.state("s"))
+	assert.Equal(t, "waiting", f.state("b"))
+}
+
 // Boot reads the last grant from the table; an empty table says none.
 func TestBoot_ReadsTheLastGrant(t *testing.T) {
 	f := newPassFix(t, resources.ModeLease)
