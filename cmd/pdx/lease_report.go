@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -106,6 +107,7 @@ func formatReport(w io.Writer, r resources.Report, loc *time.Location) {
 	fmt.Fprintf(w, "old rule  would have held back %d of %d grants\n", r.WouldWaitR2, r.Paths.Immediate+r.Paths.Waited+r.Paths.Overrun)
 	fmt.Fprintf(w, "full      %.1f%% of the time, %d runs, longest %ds\n", r.Full.Share*100, r.Full.Runs, r.Full.LongestS)
 	fmt.Fprintf(w, "2+ heavy  %d minutes, highest load1 %.2f, highest memory %.1f%%\n", r.Heavy.Minutes, r.Heavy.MaxLoad1, r.Heavy.MaxMem)
+	formatReportV2(w, r, loc)
 	if len(r.Kinds) > 0 {
 		fmt.Fprintln(w)
 		rows := [][]string{{"KIND", "N", "WEIGHT", "PEAK", "MEAN"}}
@@ -114,5 +116,73 @@ func formatReport(w io.Writer, r resources.Report, loc *time.Location) {
 				fmt.Sprintf("%.1f%%", k.PeakMax), fmt.Sprintf("%.1f%%", k.MeanAvg)})
 		}
 		_ = alignRows(w, rows, 2)
+	}
+}
+
+// safeReason is what a wait reason looks like (the daemon's own names); anything
+// else is quoted, like a kind.
+var safeReason = regexp.MustCompile(`^[a-z][a-z_]{0,31}$`)
+
+func reportReasonName(r string) string {
+	switch {
+	case r == "":
+		return "(none)"
+	case safeReason.MatchString(r):
+		return r
+	}
+	return strconv.QuoteToASCII(r)
+}
+
+// reasonsText prints a wait_reasons map as "gap 30.0s, danger 12.0s", longest first.
+func reasonsText(m map[string]int64) string {
+	names := make([]string, 0, len(m))
+	for k := range m {
+		names = append(names, k)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if m[names[i]] != m[names[j]] {
+			return m[names[i]] > m[names[j]]
+		}
+		return names[i] < names[j]
+	})
+	parts := make([]string, 0, len(names))
+	for _, k := range names {
+		parts = append(parts, reportReasonName(k)+" "+seconds(m[k]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// formatReportV2 prints the lease v2 sections: zone shares, parks, waits by
+// reason, the longest waits and the advise shadow.
+func formatReportV2(w io.Writer, r resources.Report, loc *time.Location) {
+	if r.Zones.Minutes == 0 {
+		fmt.Fprintf(w, "zones     no minute with zone seconds yet\n")
+	} else {
+		fmt.Fprintf(w, "zones     normal %.1f%%  warning %.1f%%  danger %.1f%%  (%d of %d minutes counted)\n",
+			r.Zones.Normal*100, r.Zones.Warning*100, r.Zones.Danger*100, r.Zones.Minutes, r.Coverage.Minutes)
+	}
+	fmt.Fprintf(w, "parks     %d\n", r.Parks)
+	for _, g := range r.WaitByReason {
+		fmt.Fprintf(w, "wait by   %s  n %d  p50 %s  p90 %s  max %s\n", reportReasonName(g.Reason), g.N, seconds(g.P50), seconds(g.P90), seconds(g.Max))
+	}
+	for i, l := range r.Longest {
+		why := reasonsText(l.Reasons)
+		if why == "" {
+			why = "no reasons recorded"
+		}
+		fmt.Fprintf(w, "longest   #%d %s  %s  %s  %s  (zone %s, trend %s at the grant)\n", i+1, reportTime(l.CreatedAt, loc), reportKindName(l.Kind),
+			seconds(l.WaitedMS), why, reportReasonName(l.Zone), reportReasonName(l.Trend))
+	}
+	if r.Shadow.N == 0 {
+		return
+	}
+	fmt.Fprintf(w, "shadow    v2 would have made %d requests wait: p50 %s  p90 %s  max %s; %d are lower bounds (the request ended first)\n",
+		r.Shadow.N, seconds(r.Shadow.WaitMS.P50), seconds(r.Shadow.WaitMS.P90), seconds(r.Shadow.WaitMS.Max), r.Shadow.Open)
+	for i, l := range r.Shadow.Longest {
+		bound := ""
+		if l.Open {
+			bound = " (at least)"
+		}
+		fmt.Fprintf(w, "          #%d %s  %s  %s%s  %s\n", i+1, reportTime(l.CreatedAt, loc), reportKindName(l.Kind), seconds(l.WaitMS), bound, reasonsText(l.Reasons))
 	}
 }

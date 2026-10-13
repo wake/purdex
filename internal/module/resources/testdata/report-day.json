@@ -72,5 +72,50 @@
       "peak_max": 10,
       "mean_avg": 6
     }
-  ]
+  ],
+  "zones": {
+    "minutes": 0,
+    "sampled_s": 0,
+    "normal": 0,
+    "warning": 0,
+    "danger": 0
+  },
+  "wait_by_reason": [],
+  "parks": 0,
+  "longest": [
+    {
+      "kind": "test-full",
+      "created_at": 1791462600000,
+      "waited_ms": 300000,
+      "dominant": "",
+      "zone": "",
+      "trend": ""
+    },
+    {
+      "kind": "test-full",
+      "created_at": 1791462000000,
+      "waited_ms": 12000,
+      "dominant": "",
+      "zone": "",
+      "trend": ""
+    },
+    {
+      "kind": "build",
+      "created_at": 1791463800000,
+      "waited_ms": 4000,
+      "dominant": "",
+      "zone": "",
+      "trend": ""
+    }
+  ],
+  "shadow": {
+    "n": 0,
+    "open": 0,
+    "wait_ms": {
+      "p50": 0,
+      "p90": 0,
+      "max": 0
+    },
+    "longest": []
+  }
 }

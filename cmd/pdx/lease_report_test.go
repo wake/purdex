@@ -90,7 +90,7 @@ func TestReport_JSONAndSinceAreSent(t *testing.T) {
 	}
 	var raw map[string]json.RawMessage
 	_ = json.Unmarshal([]byte(stdout), &raw)
-	for _, k := range []string{"since", "until", "coverage", "not_recorded", "requests", "paths", "wait_ms", "would_wait_r2", "full", "heavy", "kinds"} {
+	for _, k := range []string{"since", "until", "coverage", "not_recorded", "requests", "paths", "wait_ms", "would_wait_r2", "full", "heavy", "kinds", "zones", "wait_by_reason", "parks", "longest", "shadow"} {
 		if _, ok := raw[k]; !ok {
 			t.Errorf("field %q missing from the JSON", k)
 		}

@@ -37,6 +37,70 @@ type Report struct {
 	Heavy       ReportHeavy `json:"heavy"`
 	// Kinds is the measured use of each kind against its weight.
 	Kinds []ReportKind `json:"kinds"`
+
+	// Lease v2 (spec D-7). Zones is the share of time per zone; WaitByReason
+	// groups the recorded waits by the reason that held the row longest; Parks
+	// is how often rows were parked; Longest the five longest waits.
+	Zones        ReportZones        `json:"zones"`
+	WaitByReason []ReportReasonWait `json:"wait_by_reason"`
+	Parks        int                `json:"parks"`
+	Longest      []ReportWaitRow    `json:"longest"`
+	// Shadow is the advise counterfactual: how long v2 would have made the
+	// requests wait (the input of gate G2).
+	Shadow ReportShadow `json:"shadow"`
+}
+
+// ReportZones is the share of sampled time in each zone, from the minute rows
+// that carry sampled_s. Minutes is how many rows counted: a row written before
+// the columns existed has no zone seconds and is left out. All zero with none.
+type ReportZones struct {
+	Minutes  int     `json:"minutes"`
+	SampledS int     `json:"sampled_s"`
+	Normal   float64 `json:"normal"`
+	Warning  float64 `json:"warning"`
+	Danger   float64 `json:"danger"`
+}
+
+// ReportReasonWait is the wait of the recorded grants whose dominant reason (the
+// largest entry of wait_reasons) is Reason, nearest-rank percentiles in ms.
+type ReportReasonWait struct {
+	Reason string `json:"reason"`
+	N      int    `json:"n"`
+	P50    int64  `json:"p50"`
+	P90    int64  `json:"p90"`
+	Max    int64  `json:"max"`
+}
+
+// ReportWaitRow is one of the longest waits, with why and the zone and trend at
+// the grant.
+type ReportWaitRow struct {
+	Kind      string           `json:"kind"`
+	CreatedAt int64            `json:"created_at"`
+	WaitedMS  int64            `json:"waited_ms"`
+	Dominant  string           `json:"dominant"`
+	Reasons   map[string]int64 `json:"reasons,omitempty"`
+	Zone      string           `json:"zone"`
+	Trend     string           `json:"trend"`
+}
+
+// ReportShadow is the advise shadow's verdicts. N counts the rows with one;
+// Open how many of them are lower bounds (the row ended before the shadow
+// would have granted it).
+type ReportShadow struct {
+	N       int               `json:"n"`
+	Open    int               `json:"open"`
+	WaitMS  ReportWait        `json:"wait_ms"`
+	Longest []ReportShadowRow `json:"longest"`
+}
+
+// ReportShadowRow is one of the longest shadow waits.
+type ReportShadowRow struct {
+	Kind      string           `json:"kind"`
+	CreatedAt int64            `json:"created_at"`
+	WaitMS    int64            `json:"wait_ms"`
+	Open      bool             `json:"open"`
+	Dominant  string           `json:"dominant"`
+	Reasons   map[string]int64 `json:"reasons,omitempty"`
 }
 
 // ReportCoverage is the host timeline's reach in the period.
