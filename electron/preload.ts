@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+const BADGE_DOC_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
+
 contextBridge.exposeInMainWorld('electronAPI', {
   // Window Management
   tearOffTab: (tabJson: string) => ipcRenderer.invoke('window:tear-off', tabJson),
@@ -110,6 +112,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('notification:clicked', handler)
   },
   focusMyWindow: () => ipcRenderer.send('notification:focus-window'),
+
+  // Dock badge (app-badge spec §3.2): this window's resolved session keys and open cards; main takes the union.
+  // `BADGE_DOC_ID` is minted once per document (this preload runs again on every navigation) so main can tell a late
+  // report of a document that is going away from the next document's.
+  badge: {
+    set: (report: { sessions: string[]; cards: { id: string; session?: string; fallback: string }[] }) =>
+      ipcRenderer.send('badge:set', report, BADGE_DOC_ID),
+  },
 
   // Deeplink (purdex://execution/<id>[?host=<hint>]) — main parses the OS
   // protocol URL and broadcasts here; the SPA resolver (P.12) navigates.
