@@ -457,3 +457,31 @@ func TestPositions_CountOutcomeNeedsARunningPosition(t *testing.T) {
 	assert.False(t, res.Ended)
 	assert.Equal(t, "held", mustRow(t, s, "a").State)
 }
+
+// Only a held row of the position ends a command of it.
+func TestPositions_AWaitingRowCannotEndACommand(t *testing.T) {
+	s := memStore(t)
+	runningFixture(t, s)
+	require.NoError(t, createRow(s, txRow("w", "s1", "pos_00000001", resources.CallQueue, "next", "/w", 1200)))
+	before := dumpTables(t, s.db)
+	res, err := s.EndCommand("w", 2000, commandEnd{Reason: resources.EndReleased, Outcome: outcomeIdle, PositionID: "pos_00000001", WindowUntil: 9000})
+	require.NoError(t, err)
+	assert.False(t, res.Ended)
+	assert.Equal(t, before, dumpTables(t, s.db), "the running position was not moved by a waiting row")
+}
+
+// A row with a live position is not ended alone (R5): the position must hear about it.
+func TestPositions_APositionedHeldRowCannotEndWithoutItsPosition(t *testing.T) {
+	s := memStore(t)
+	runningFixture(t, s)
+	before := dumpTables(t, s.db)
+	res, err := s.EndCommand("a", 2000, commandEnd{Reason: resources.EndReleased})
+	require.NoError(t, err)
+	assert.False(t, res.Ended)
+	assert.Equal(t, before, dumpTables(t, s.db))
+	// Once the position has ended (or is gone), the plain end is allowed.
+	setState(t, s, "pos_00000001", "state = 'ended', end_reason = 'done', ended_at = 5")
+	res, err = s.EndCommand("a", 2100, commandEnd{Reason: resources.EndReleased})
+	require.NoError(t, err)
+	assert.True(t, res.Ended)
+}

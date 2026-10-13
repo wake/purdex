@@ -252,15 +252,19 @@ type commandEndResult struct {
 func (s *leaseStore) EndCommand(rowID string, now int64, e commandEnd) (commandEndResult, error) {
 	var out commandEndResult
 	committed, err := s.tx(func(x *sql.Tx) error {
-		// With a position, the row must belong to it: a mismatched pair must not
-		// end one position's row and move another position.
-		guard, args := ``, []any{now, e.Reason, now, rowID}
+		// With a position, only a held row of that very position ends a
+		// command: a waiting row, or a row of another position, must not move
+		// this one. Without one, the row must have no live position (R5): a row
+		// whose position is live is ended through it.
+		where, args := ` AND state != 'ended' AND (position_id = '' OR NOT EXISTS (
+			SELECT 1 FROM resource_positions p WHERE p.id = resource_leases.position_id AND p.state != 'ended'))`,
+			[]any{now, e.Reason, now, rowID}
 		if e.PositionID != "" {
-			guard, args = ` AND position_id = ?`, append(args, e.PositionID)
+			where, args = ` AND state = 'held' AND position_id = ?`, append(args, e.PositionID)
 		}
 		if err := mustChange(x, `UPDATE resource_leases
 			SET state = 'ended', ended_at = ?, end_reason = ?, waited_ms = COALESCE(waited_ms, ? - created_at)
-			WHERE id = ? AND state != 'ended'`+guard, args...); err != nil {
+			WHERE id = ?`+where, args...); err != nil {
 			return err
 		}
 		if e.PositionID == "" {
