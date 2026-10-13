@@ -17,6 +17,11 @@ const capEpsilon = 1e-9
 const (
 	PathImmediate = "immediate" // granted by the pass started for its own request
 	PathWaited    = "waited"    // granted by a later pass
+	// PathOffer is the first command of an offered position, started in a
+	// later pass than the offer; PathContinued is a command granted inside a
+	// position's idle window (amendment A).
+	PathOffer     = "offer"
+	PathContinued = "continued"
 	// PathUnknownZone is a grant made because the zone was unknown (the sampler
 	// could not read the host): admission fails open.
 	PathUnknownZone = "unknown_zone"
