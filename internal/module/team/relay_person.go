@@ -3,6 +3,7 @@ package teammod
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -79,7 +80,23 @@ func (m *Module) personApproveOpen(w http.ResponseWriter, sessionID string, op t
 	var memberCancelled bool
 	at := m.now()
 	after, won, err := m.closeWith(row.ID, func() (team.Approval, bool, error) {
-		a, won, mc, err := m.store.closeSelfRelayApprovedThen(row.ID, m.personClose(at), row.Origin.SessionID, m.personResume(sessionID, at, &res))
+		resume := m.personResume(sessionID, at, &res)
+		// The approval, the op's claim and the end of the pauses are one transaction: the generic close claims the op after its own
+		// commit (afterClose), and a crash in between would leave the session resumed with its card approved and its op unclaimed.
+		then := func(tx *sql.Tx) error {
+			if err := resume(tx); err != nil {
+				return err
+			}
+			claimed, rr, err := reportRelayIn(tx, op.ID, opReportForClosedRow(team.Approval{State: team.StateApproved}, at))
+			if err != nil {
+				return err
+			}
+			if rr != ReportApplied {
+				return fmt.Errorf("op %s is %s; the approve could not claim it", op.ID, claimed.State)
+			}
+			return nil
+		}
+		a, won, mc, err := m.store.closeSelfRelayApprovedThen(row.ID, m.personClose(at), row.Origin.SessionID, then)
 		memberCancelled = mc
 		return a, won, err
 	})
@@ -103,6 +120,7 @@ func (m *Module) personApproveOpen(w http.ResponseWriter, sessionID string, op t
 		return
 	}
 	m.persons.spend(token)
+	m.store.notifyOp(op.ID)
 	m.afterPersonResume(res)
 	m.writeJSON(w, http.StatusCreated, team.RelayBeginResponse{Op: cur, RequestID: row.ID})
 }

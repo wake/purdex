@@ -362,3 +362,48 @@ func TestPerson_TheTableForgetsSpentAndExpiredTokens(t *testing.T) {
 		t.Fatalf("%d tokens after the last was spent, want 0", n)
 	}
 }
+
+// Over an open card the approval, the op's claim and the end of the pauses are ONE transaction (codex critic): an op that cannot be
+// claimed rolls the whole approve back. Mutation gate: claim the op after the commit (as the generic close does) → the card is
+// approved and the pause gone although the op was not claimed (red).
+func TestPersonRelay_OverACardTheOpClaimIsInTheSameTransaction(t *testing.T) {
+	f := newFixture(t)
+	f.seedPause("sid-1", team.PauseCauseQuota, team.PauseRoleSolo, "_aaaaaa", "t", 1)
+	card := f.manualOpened("sid-1")
+	f.m.afterPersonCardRead = func() { // the op ends some other way between the read and the approve
+		f.m.afterPersonCardRead = nil
+		if _, err := f.m.store.db.Exec(`UPDATE relay_ops SET state = 'cancelled' WHERE id = ?`, card.Op.ID); err != nil {
+			t.Error(err)
+		}
+	}
+	tok := f.mintPerson("sid-1", team.PersonCmdRelay)
+	if code, body := f.beginPerson("sid-1", tok.Token); code != http.StatusInternalServerError {
+		t.Fatalf("an op that cannot be claimed: %d %s, want 500", code, body)
+	}
+	if st := f.rowState(card.RequestID); st != team.StateOpen {
+		t.Fatalf("the card is %s, want open (rolled back)", st)
+	}
+	if _, ok := f.pauses()["sid-1/quota"]; !ok {
+		t.Fatal("the pause ended although the approve rolled back")
+	}
+	if !f.m.validPerson("sid-1", team.PersonCmdRelay, tok.Token) {
+		t.Fatal("the token was spent by a rolled-back approve")
+	}
+}
+
+func TestPersonRelay_OverACardThePausesEndAndNoReaskIsSent(t *testing.T) {
+	f := newFixture(t)
+	f.modHello("sid-1", "5")
+	f.seedPause("sid-1", team.PauseCauseQuota, team.PauseRoleSolo, "_aaaaaa", "t", 1)
+	f.manualOpened("sid-1")
+	out := f.personOpened("sid-1")
+	f.approvedByPerson(out)
+	if p := f.pauses(); len(p) != 0 {
+		t.Fatalf("pause rows %+v, want none", p)
+	}
+	for _, o := range f.outbox() {
+		if o.Kind == team.PauseOutboxReask {
+			t.Fatalf("a reask control was written: %+v", o)
+		}
+	}
+}
