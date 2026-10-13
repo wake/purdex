@@ -16,7 +16,9 @@ import (
 )
 
 const resourcesDefaultItems = `{"mode":"lease","kinds":{"build":35,"lint-full":10,"test-full":35,"test-pkg":15},` +
-	`"deadline_s":300,"warmup_s":20,"floor_pct":50,"max_hold_s":3600,"ewma_half_life_s":15,"heavy_min_weight":30}`
+	`"deadline_s":300,"warmup_s":20,"floor_pct":50,"max_hold_s":3600,"ewma_half_life_s":15,"heavy_min_weight":30,` +
+	`"mem_warn_pct":80,"mem_danger_pct":90,"gap_s":30,"trend_window_s":60,"trend_mem_dppm":10,"trend_cpu_dppm":50,` +
+	`"park_s":900,"alert_danger_s":180,"alert_stuck_s":600,"alert_lease_mem_pct":20,"alert_push":0}`
 
 // A host that never wrote the key reads the defaults, on the GET and through
 // the reader; a body that leaves everything out stores them filled in.
@@ -125,7 +127,9 @@ func TestResourcesSettings_PutGetRoundTrip(t *testing.T) {
 		`{"items":{"mode":"advise","warmup_s":0,"kinds":{"build":20,"mine":5}},"baseRevision":0}`)
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 	const stored = `{"mode":"advise","kinds":{"build":20,"lint-full":10,"mine":5,"test-full":35,"test-pkg":15},` +
-		`"deadline_s":300,"warmup_s":0,"floor_pct":50,"max_hold_s":3600,"ewma_half_life_s":15,"heavy_min_weight":30}`
+		`"deadline_s":300,"warmup_s":0,"floor_pct":50,"max_hold_s":3600,"ewma_half_life_s":15,"heavy_min_weight":30,` +
+		`"mem_warn_pct":80,"mem_danger_pct":90,"gap_s":30,"trend_window_s":60,"trend_mem_dppm":10,"trend_cpu_dppm":50,` +
+		`"park_s":900,"alert_danger_s":180,"alert_stuck_s":600,"alert_lease_mem_pct":20,"alert_push":0}`
 	assert.JSONEq(t, `{"items":`+stored+`,"revision":1}`, rr.Body.String())
 
 	rr = serve(m, http.MethodGet, "/api/hostconfig", "")
@@ -222,4 +226,38 @@ func TestInit_RegistersResourcesSettingsReader(t *testing.T) {
 	s, err := reader.ResourcesSettings()
 	require.NoError(t, err)
 	assert.Equal(t, resources.DefaultSettings(), s)
+}
+
+// The v2 keys are accepted, stored and read back; a stored v1 value without
+// them reads with the defaults; a pair with danger <= warn, a range miss and
+// a non-integer are refused.
+func TestResourcesSettings_V2Keys(t *testing.T) {
+	m := newTestModule(t)
+	body := `{"items":{"mem_warn_pct":70,"mem_danger_pct":85,"gap_s":0,"trend_window_s":120,` +
+		`"trend_mem_dppm":25,"trend_cpu_dppm":80,"park_s":60,"alert_danger_s":30,"alert_stuck_s":61,` +
+		`"alert_lease_mem_pct":33,"alert_push":1},"baseRevision":0}`
+	rr := serve(m, http.MethodPut, "/api/hostconfig/resources", body)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	s, err := m.ResourcesSettings()
+	require.NoError(t, err)
+	assert.Equal(t, 70, s.MemWarn())
+	assert.Equal(t, 85, s.MemDanger())
+	assert.Equal(t, 0, int(s.Gap().Seconds()))
+	assert.Equal(t, 2.5, s.TrendMemPPM())
+	assert.True(t, s.AlertPushOn())
+
+	// v1 stored JSON: none of the new keys.
+	v1, err := normalizeResources(json.RawMessage(`{"mode":"advise","deadline_s":120}`))
+	require.NoError(t, err)
+	assert.Equal(t, 80, *v1.MemWarnPct)
+	assert.Equal(t, 30, *v1.GapS)
+	assert.Equal(t, 0, *v1.AlertPush)
+
+	for _, items := range []string{
+		`{"mem_warn_pct":85,"mem_danger_pct":85}`, `{"mem_danger_pct":80}`, `{"mem_warn_pct":95}`,
+		`{"gap_s":301}`, `{"alert_push":2}`, `{"park_s":"900"}`, `{"trend_mem_dppm":null}`, `{"gap_s":1.5}`,
+	} {
+		_, err := normalizeResources(json.RawMessage(items))
+		assert.Error(t, err, items)
+	}
 }

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/wake/purdex/internal/resources"
 )
@@ -34,14 +36,20 @@ func resourcesFields(raw json.RawMessage) (map[string]json.RawMessage, error) {
 		return nil, errors.New("items must be a JSON object")
 	}
 	for k := range fields {
-		switch k {
-		case "mode", "kinds", "deadline_s", "warmup_s", "floor_pct", "max_hold_s", "ewma_half_life_s", "heavy_min_weight":
-		default:
-			return nil, errors.New("unknown resources field " + k +
-				"; only mode, kinds, deadline_s, warmup_s, floor_pct, max_hold_s, ewma_half_life_s and heavy_min_weight")
+		if k != "mode" && k != "kinds" && !slices.Contains(resourcesIntKeys, k) {
+			return nil, errors.New("unknown resources field " + k + "; only mode, kinds and " +
+				strings.Join(resourcesIntKeys, ", "))
 		}
 	}
 	return fields, nil
+}
+
+// resourcesIntKeys are the optional integer fields, in the order the error
+// message lists them.
+var resourcesIntKeys = []string{
+	"deadline_s", "warmup_s", "floor_pct", "max_hold_s", "ewma_half_life_s", "heavy_min_weight",
+	"mem_warn_pct", "mem_danger_pct", "gap_s", "trend_window_s", "trend_mem_dppm", "trend_cpu_dppm",
+	"park_s", "alert_danger_s", "alert_stuck_s", "alert_lease_mem_pct", "alert_push",
 }
 
 func isJSONNull(v json.RawMessage) bool { return bytes.Equal(bytes.TrimSpace(v), []byte("null")) }
@@ -98,6 +106,10 @@ func normalizeResources(raw json.RawMessage) (resources.Settings, error) {
 		{"deadline_s", &s.DeadlineS}, {"warmup_s", &s.WarmupS}, {"floor_pct", &s.FloorPct},
 		{"max_hold_s", &s.MaxHoldS}, {"ewma_half_life_s", &s.EWMAHalfLifeS},
 		{"heavy_min_weight", &s.HeavyMinWeight},
+		{"mem_warn_pct", &s.MemWarnPct}, {"mem_danger_pct", &s.MemDangerPct}, {"gap_s", &s.GapS},
+		{"trend_window_s", &s.TrendWindowS}, {"trend_mem_dppm", &s.TrendMemDPPM}, {"trend_cpu_dppm", &s.TrendCPUDPPM},
+		{"park_s", &s.ParkS}, {"alert_danger_s", &s.AlertDangerS}, {"alert_stuck_s", &s.AlertStuckS},
+		{"alert_lease_mem_pct", &s.AlertLeaseMemPct}, {"alert_push", &s.AlertPush},
 	} {
 		if *f.dst, err = resourcesInt(fields, f.key); err != nil {
 			return resources.Settings{}, err
