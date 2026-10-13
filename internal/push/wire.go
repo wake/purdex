@@ -39,6 +39,10 @@ type AgentPrefs struct {
 type Prefs struct {
 	Agents map[string]AgentPrefs `json:"agents,omitempty"`
 	Tabs   []string              `json:"tabs,omitempty"`
+	// Muted are the session codes this phone muted: no agent-event push for them (approval pushes still go).
+	Muted []string `json:"muted,omitempty"`
+	// BadgePush: the phone wants background badge pushes (BG-1b). Stored from BG-1a on so the field is never lost.
+	BadgePush bool `json:"badge_push,omitempty"`
 }
 
 // DeviceRequest is the body of POST /api/push/devices.
@@ -95,6 +99,14 @@ func (p *Prefs) validate() error {
 	for _, code := range p.Tabs {
 		if code == "" || len(code) > maxCodeLen || hasControl(code) {
 			return errors.New("prefs.tabs: every code must be 1-64 printable characters")
+		}
+	}
+	if len(p.Muted) > maxTabs {
+		return fmt.Errorf("prefs.muted: at most %d", maxTabs)
+	}
+	for _, code := range p.Muted {
+		if code == "" || len(code) > maxCodeLen || hasControl(code) {
+			return errors.New("prefs.muted: every code must be 1-64 printable characters")
 		}
 	}
 	if len(p.Agents) > maxAgentTypes {

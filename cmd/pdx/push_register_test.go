@@ -92,6 +92,7 @@ func TestRegisterServeModules_PushOn(t *testing.T) {
 	assert.EqualValues(t, 0, body.Push["presence_entries"])
 	assert.EqualValues(t, 0, body.Push["presence_active"])
 	assert.Contains(t, body.Capabilities, "push.presence.v2")
+	assert.Contains(t, body.Capabilities, "push.badge.v2")
 	assert.EqualValues(t, 0, body.Push["presence_v2_entries"])
 	assert.EqualValues(t, 0, body.Push["presence_at_computer"])
 	keys := make([]string, 0, len(body.Push))

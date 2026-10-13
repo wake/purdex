@@ -24,6 +24,9 @@ type Approval struct {
 	Kind    string
 	Payload json.RawMessage
 	Origin  ApprovalOrigin
+	// SessionID is the origin's Claude Code session id; it names the badge key ("c:<id>") of a card whose tmux session does
+	// not resolve, so several cards of one such session count once. "" = the approval has none.
+	SessionID string
 }
 
 // ApprovalOrigin names the requesting session; the title shows the first of Title, Name, Ref that is set (as the Mac's
@@ -53,6 +56,9 @@ type Content struct {
 	// (payload purdex.workbook = {conv_key, entry_id}); zero = none, the block is left out.
 	WorkbookConv  string
 	WorkbookEntry int64
+	// Member marks an agent push of a team member (payload purdex.member = true), so a phone does not count its unread
+	// event. false = not a member, or unknown: the field is left out, never sent as false.
+	Member bool
 }
 
 var (
@@ -141,6 +147,17 @@ func table(locale string) map[string]string {
 		return t
 	}
 	return texts["zh-TW"]
+}
+
+// CountsForBadge reports whether an open approval of this kind is a card the app-icon badge counts (badge spec §3.1): the
+// approvals a person must act on, whether or not they get a visible push (ApprovalContent decides that alone). A paused
+// session is not counted on its own: the card it waits on is.
+func CountsForBadge(kind string) bool {
+	switch kind {
+	case "lead", "self_relay", "member_relay", "adopt", "hook_ask", "hook_permission":
+		return true
+	}
+	return false
 }
 
 // ApprovalContent is the push for a newly opened approval, or false when this approval is not pushed: only lead,
@@ -247,6 +264,9 @@ func (c Content) payload(hostID, body string) ([]byte, error) {
 	}
 	if c.WorkbookEntry != 0 {
 		purdex["workbook"] = map[string]any{"conv_key": c.WorkbookConv, "entry_id": c.WorkbookEntry}
+	}
+	if c.Member {
+		purdex["member"] = true
 	}
 	if c.OpenApprovals != nil {
 		purdex["open_approvals"] = *c.OpenApprovals

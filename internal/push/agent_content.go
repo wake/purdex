@@ -18,6 +18,8 @@ type AgentInput struct {
 	// Workbook is the session workbook's line for the Stop this push is about (WB-3); nil = today's push. Only a Stop or a
 	// StopFailure uses it.
 	Workbook *WorkbookLine
+	// Member: the session is known to be a team member; the payload then says so (purdex.member).
+	Member bool
 }
 
 // WorkbookLine is the part of a workbook entry that a Stop push uses.
@@ -147,7 +149,7 @@ func AgentContent(in AgentInput, locale string) (Content, bool) {
 	c := Content{
 		Title: cutRunes(title, maxTitleRunes), Body: body, Kind: "agent",
 		SessionCode: in.SessionCode, SessionID: in.SessionID, SessionName: name, Event: ev,
-		CollapseID: "agent-" + in.SessionCode,
+		CollapseID: "agent-" + in.SessionCode, Member: in.Member,
 	}
 	if wb != nil {
 		c.Title = workbookTitle(title, wb.Thing)

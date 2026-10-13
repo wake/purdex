@@ -74,6 +74,9 @@ type Module struct {
 	sessBudget  time.Duration                                                    // how long a snapshot waits for that read; 0 = sessionBudget
 	sessBusy    atomic.Bool                                                      // a session read is still running: never more than one outstanding
 	sessStalled atomic.Bool                                                      // the "still busy" line was already logged for this stall
+	membership  func(sessionID string) (bool, error)                             // a test seam: team.MembershipReader; nil = from the registry
+	memBudget   time.Duration                                                    // how long an event waits for the membership read; 0 = membershipBudget
+	memBusy     atomic.Bool                                                      // a membership read is still running: never more than one outstanding
 	holds       holdSet
 	wbHolds     wbHoldSet                  // Stop pushes held for the session workbook's line (agent_trigger.go)
 	wbWait      func() time.Duration       // a test seam: the push_wait_s setting; nil = from the registry
@@ -341,6 +344,11 @@ func (m *Module) Stop(context.Context) error {
 // maxOpenKeys caps purdex.open_approval_keys (spec §6); open_approvals still reports the full count.
 const maxOpenKeys = 32
 
+// maxSessionIDKey bounds the session id a "c:" key may carry (a Claude Code session id is a 36-byte UUID). A longer one is
+// not a real id: it would make 32 keys overflow the 4 KiB payload of every push of the host while its card is open, so such
+// a card keys by its own approval id instead.
+const maxSessionIDKey = 64
+
 // sessionBudget bounds the one session read a snapshot makes; past it every approval falls back to its id.
 const sessionBudget = time.Second
 
@@ -404,10 +412,11 @@ func ownSession(refs map[string]session.SessionRef, name string, approvalAtMs in
 	return ref.Code
 }
 
-// openState reads the open approval set now: the count of the pushed kinds (lead, self_relay, member_relay, an
-// answerable hook_ask) for `purdex.open_approvals`, and the sorted, de-duplicated badge keys for
-// `purdex.open_approval_keys` ("s:<session_code>" when the approval's own tmux session resolves, else "a:<approval_id>",
-// at most maxOpenKeys). The Job's own approval is resolved from what the Job carries, independently of the open set (it may
+// openState reads the open approval set now: the count of the cards the badge counts (push.CountsForBadge: lead,
+// self_relay, member_relay, adopt, hook_ask, hook_permission — whether or not they got a visible push) for
+// `purdex.open_approvals`, and the sorted, de-duplicated badge keys for `purdex.open_approval_keys` ("s:<session_code>" when
+// the approval's own tmux session resolves, else "c:<origin session_id>" when it has one, else "a:<approval_id>", at most
+// maxOpenKeys). The Job's own approval is resolved from what the Job carries, independently of the open set (it may
 // have closed while the Job was queued, or the open-set read may have failed): its session_code is snap.code. The sender
 // asks once per Job and shares the answer across its devices; the tmux read is a single bounded call, made only if the Job's
 // approval or a pushed open approval has a tmux origin. Nothing is kept between sends, so there is nothing to drift.
@@ -422,7 +431,7 @@ func (m *Module) openState(ctx context.Context, j Job) openSnap {
 		} else {
 			openOK = true
 			for _, a := range open {
-				if _, ok := push.ApprovalContent(toPushApproval(a), "", "en"); ok {
+				if push.CountsForBadge(string(a.Kind)) { // the cards the badge counts, pushed or not (badge spec §3.1)
 					pushed = append(pushed, a)
 				}
 			}
@@ -448,9 +457,12 @@ func (m *Module) openState(ctx context.Context, j Job) openSnap {
 	snap.n = len(pushed)
 	set := map[string]struct{}{}
 	for _, a := range pushed {
-		if code := ownSession(refs, tmuxSessionOf(a.Origin.Tmux), a.CreatedAt); code != "" {
+		switch code := ownSession(refs, tmuxSessionOf(a.Origin.Tmux), a.CreatedAt); {
+		case code != "":
 			set["s:"+code] = struct{}{}
-		} else {
+		case a.Origin.SessionID != "" && len(a.Origin.SessionID) <= maxSessionIDKey: // several cards of one unresolved session count once
+			set["c:"+a.Origin.SessionID] = struct{}{}
+		default:
 			set["a:"+a.ID] = struct{}{}
 		}
 	}
@@ -511,7 +523,7 @@ func (m *Module) onApproval(op string, a team.Approval) {
 }
 
 func toPushApproval(a team.Approval) push.Approval {
-	return push.Approval{ID: a.ID, Kind: string(a.Kind), Payload: a.Payload,
+	return push.Approval{ID: a.ID, Kind: string(a.Kind), Payload: a.Payload, SessionID: a.Origin.SessionID,
 		Origin: push.ApprovalOrigin{Title: a.Origin.Title, Name: a.Origin.Name, Ref: a.Origin.Ref}}
 }
 

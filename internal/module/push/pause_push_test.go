@@ -74,7 +74,7 @@ func TestPausePush_NeverCarriesAnEmptyOpenSetItDidNotRead(t *testing.T) {
 
 	te2 := newTriggerEnv(t, nil)
 	te2.register(tokA, "zh-TW", "mlab")
-	te2.events.open = []team.Approval{leadApproval("ap1")}
+	te2.events.open = []team.Approval{anonLead("ap1")}
 	te2.mod.reader = te2.events
 	if !te2.mod.pauseNotifier().NotifyPause(team.PausePush{CollapseID: "pause:sid-1:2", Text: "t", SessionID: "sid-1"}) {
 		t.Fatal("not done")

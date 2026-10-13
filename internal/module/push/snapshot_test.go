@@ -65,10 +65,10 @@ func TestSnapshot_HungSessionReadStillSendsWithinBudgetAndFallsBack(t *testing.T
 	te.register(tokA, "en", "mlab")
 	te.register(tokB, "en", "mlab")
 	te.events.readOpen = func() ([]team.Approval, error) {
-		return []team.Approval{leadApproval("ap1"), leadApproval("ap2")}, nil
+		return []team.Approval{anonLead("ap1"), anonLead("ap2")}, nil
 	}
 	start := time.Now()
-	te.events.emit("opened", leadApproval("ap1"))
+	te.events.emit("opened", anonLead("ap1"))
 	calls := te.waitSends(t, 2)
 	if d := time.Since(start); d > time.Second {
 		t.Fatalf("took %v", d)
@@ -92,8 +92,8 @@ func TestSnapshot_FailingReadFallsBackToApprovalIDs(t *testing.T) {
 	rc := &readerCalls{err: errors.New("tmux gone")}
 	te.mod.sessions = rc.read
 	te.register(tokA, "en", "mlab")
-	te.events.readOpen = func() ([]team.Approval, error) { return []team.Approval{leadApproval("ap1")}, nil }
-	te.events.emit("opened", leadApproval("ap1"))
+	te.events.readOpen = func() ([]team.Approval, error) { return []team.Approval{anonLead("ap1")}, nil }
+	te.events.emit("opened", anonLead("ap1"))
 	p := te.waitSends(t, 1)[0].Payload
 	if keys, _ := keysOf(t, p); strings.Join(keys, ",") != "a:ap1" {
 		t.Fatalf("keys = %v", keys)
@@ -212,8 +212,8 @@ func TestIdentity_SessionRecreatedAfterTheApprovalIsNotItsSession(t *testing.T) 
 			rc := &readerCalls{refs: map[string]session.SessionRef{"dev": {Code: "c0de01", Created: c.created}}}
 			te.mod.sessions = rc.read
 			te.register(tokA, "en", "mlab")
-			te.events.readOpen = func() ([]team.Approval, error) { return []team.Approval{leadApproval("ap1")}, nil }
-			te.events.emit("opened", leadApproval("ap1"))
+			te.events.readOpen = func() ([]team.Approval, error) { return []team.Approval{anonLead("ap1")}, nil }
+			te.events.emit("opened", anonLead("ap1"))
 			p := te.waitSends(t, 1)[0].Payload
 			if keys, _ := keysOf(t, p); strings.Join(keys, ",") != c.want {
 				t.Fatalf("keys = %v, want %s", keys, c.want)
