@@ -311,12 +311,13 @@ describe('submitBadgeReport — a late report of a document that is going away',
     expect(submitBadgeReport(center, sender, rep(['h:a']), undefined)).toBe(true)
   })
 
-  it('navigating before any report stales nothing: the first document\'s first report is taken', () => {
+  it('a second navigation start with no report in between stales nothing more: only doc-A is over, doc-B is taken', () => {
     const { center, sender } = setup()
     expect(submitBadgeReport(center, sender, rep(['h:a']), 'doc-A')).toBe(true) // attaches the listeners
     sender.emit('did-start-navigation', nav())
-    sender.emit('did-start-navigation', nav()) // a second start with no report in between: still only doc-A is stale
+    sender.emit('did-start-navigation', nav())
     expect(submitBadgeReport(center, sender, rep(['h:b']), 'doc-B')).toBe(true)
+    expect(submitBadgeReport(center, sender, rep(['h:a']), 'doc-A')).toBe(false)
   })
 
   it('stale ids are remembered per window and bounded', () => {
