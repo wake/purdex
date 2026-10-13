@@ -445,7 +445,7 @@ func (s *leaseStore) PassOffer(id string, offeredAt, now int64) (bool, error) {
 	return s.tx(func(x *sql.Tx) error {
 		if err := mustChange(x, `UPDATE resource_positions
 			SET state = 'queued', passed_at = ?, offer_passes = offer_passes + 1, window_until = 0,
-				notice_kind = '', notice_sent_at = 0, notice_due_at = 0
+				notice_kind = '', notice_sent_at = 0, notice_due_at = 0, notice_tries = 0, notice_result = ''
 			WHERE id = ? AND state = 'offered' AND offered_at = ? AND delivered_at = 0`, now, id, offeredAt); err != nil {
 			return err
 		}

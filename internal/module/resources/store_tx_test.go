@@ -568,6 +568,8 @@ func TestPositions_PassOfferOnlyTheSameUndeliveredOffer(t *testing.T) {
 	queuedFixture(t, s)
 	_, err := s.OfferPosition("pos_00000001", 1000, "", "", "")
 	require.NoError(t, err)
+	require.NoError(t, s.SetNoticeResult("pos_00000001", "unknown", 1001))
+	setState(t, s, "pos_00000001", "notice_tries = 2")
 	ok, err := s.PassOffer("pos_00000001", 999, 5000)
 	require.NoError(t, err)
 	assert.False(t, ok, "another offer")
@@ -579,6 +581,8 @@ func TestPositions_PassOfferOnlyTheSameUndeliveredOffer(t *testing.T) {
 	assert.Equal(t, int64(5000), p.PassedAt)
 	assert.Equal(t, 1, p.OfferPasses)
 	assert.Empty(t, p.NoticeKind)
+	assert.Zero(t, p.NoticeTries, "the slot is cleared whole")
+	assert.Empty(t, p.NoticeResult)
 	assert.Zero(t, mustRow(t, s, "a").OfferedAt)
 	// A delivered offer is never passed.
 	_, err = s.OfferPosition("pos_00000001", 6000, "", "", "")
