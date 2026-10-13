@@ -58,6 +58,20 @@ func (s *Store) ResumePauses(scope ResumeScope, at int64, newMod func(sessionID 
 		return fail(err)
 	}
 	defer tx.Rollback()
+	res, err := s.resumePausesIn(tx, scope, at, newMod, newToken)
+	if err != nil {
+		return ResumeResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return fail(err)
+	}
+	return res, nil
+}
+
+// resumePausesIn is ResumePauses' statements on the caller's transaction, which commits (or not): a person's own relay
+// (RT-1a) ends the session's pauses in the same transaction that writes the relay, so neither happens without the other.
+func (s *Store) resumePausesIn(tx *sql.Tx, scope ResumeScope, at int64, newMod func(sessionID string) bool, newToken func() string) (ResumeResult, error) {
+	fail := func(err error) (ResumeResult, error) { return ResumeResult{}, fmt.Errorf("resume pauses: %w", err) }
 	// The writer lock first (a write that touches no row): the pause verdict takes it before it bounces, so a message is either
 	// bounced and listed here or delivered, never bounced with no one left to list it.
 	if _, err := tx.Exec(`DELETE FROM pause_bounces WHERE 0`); err != nil {
@@ -184,9 +198,6 @@ func (s *Store) ResumePauses(scope ResumeScope, at int64, newMod func(sessionID 
 		if err := outbox(lead, team.PauseOutboxNotice, fmt.Sprintf(team.PauseMemberQuotaListFmt, strings.Join(lists[lead], "、")), ""); err != nil {
 			return fail(err)
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fail(err)
 	}
 	return res, nil
 }

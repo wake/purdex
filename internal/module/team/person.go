@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
-	"errors"
 	"net/http"
 	"sort"
 	"sync"
@@ -38,13 +37,7 @@ func (p *personTokens) mint(session, command string, ttlS int, now int64) person
 	t := &personToken{token: hex.EncodeToString(raw[:]), session: session, command: command, expires: now + int64(ttlS)*1000, minted: now}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	kept := p.live[:0]
-	for _, o := range p.live {
-		if !o.consumed && o.expires > now {
-			kept = append(kept, o)
-		}
-	}
-	p.live = kept
+	p.prune(now)
 	var mine []*personToken
 	for _, o := range p.live {
 		if o.session == session {
@@ -57,7 +50,7 @@ func (p *personTokens) mint(session, command string, ttlS int, now int64) person
 		for _, o := range mine[:len(mine)-team.PersonMaxLive+1] {
 			drop[o] = true
 		}
-		kept = p.live[:0]
+		kept := p.live[:0]
 		for _, o := range p.live {
 			if !drop[o] {
 				kept = append(kept, o)
@@ -69,30 +62,81 @@ func (p *personTokens) mint(session, command string, ttlS int, now int64) person
 	return *t
 }
 
-// consume is true for exactly one caller holding a token minted for this session and command that has not expired: it marks
-// it spent. The comparison of the secret is constant-time.
-func (p *personTokens) consume(session, command, token string, now int64) bool {
-	if token == "" {
-		return false
+// prune drops the spent-and-expired tokens; caller holds p.mu.
+func (p *personTokens) prune(now int64) {
+	kept := p.live[:0]
+	for _, o := range p.live {
+		if !o.consumed && o.expires > now {
+			kept = append(kept, o)
+		}
 	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	for i := len(kept); i < len(p.live); i++ {
+		p.live[i] = nil // do not keep the dropped ones reachable through the backing array
+	}
+	p.live = kept
+}
+
+// find is the live token that is this exact secret for this session and command, nil when there is none. The comparison of the
+// secret is constant-time. Caller holds p.mu.
+func (p *personTokens) find(session, command, token string, now int64) *personToken {
+	if token == "" {
+		return nil
+	}
+	p.prune(now)
 	for _, o := range p.live {
 		if subtle.ConstantTimeCompare([]byte(o.token), []byte(token)) != 1 {
 			continue
 		}
-		if o.consumed || o.expires <= now || o.session != session || o.command != command {
-			return false
+		if o.session != session || o.command != command {
+			return nil
 		}
-		o.consumed = true
-		return true
+		return o
 	}
-	return false
+	return nil
+}
+
+// valid says whether token is a live token for this session and command, without spending it: a request that uses it spends it
+// only once its effect is committed (spend), so a refusal or a storage failure costs the person nothing. The callers that do
+// this hold createMu, which is what makes check-then-spend one step against another request with the same token.
+func (p *personTokens) valid(session, command, token string, now int64) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.find(session, command, token, now) != nil
+}
+
+// spend removes the token (it is used). Unknown tokens are ignored.
+func (p *personTokens) spend(token string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for i, o := range p.live {
+		if subtle.ConstantTimeCompare([]byte(o.token), []byte(token)) == 1 {
+			p.live = append(p.live[:i], p.live[i+1:]...)
+			return
+		}
+	}
+}
+
+// consume is true for exactly one caller holding a live token for this session and command: it spends it in the same step.
+func (p *personTokens) consume(session, command, token string, now int64) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	o := p.find(session, command, token, now)
+	if o == nil {
+		return false
+	}
+	o.consumed = true
+	p.prune(now)
+	return true
 }
 
 // consumePerson is the module's use of the table.
 func (m *Module) consumePerson(session, command, token string) bool {
 	return m.persons.consume(session, command, token, m.now())
+}
+
+// validPerson is valid() at the module's clock.
+func (m *Module) validPerson(session, command, token string) bool {
+	return m.persons.valid(session, command, token, m.now())
 }
 
 // handlePerson is POST /api/relay/person: mint a token for the mod of a live session of this host.
@@ -121,75 +165,4 @@ func (m *Module) handlePerson(w http.ResponseWriter, r *http.Request) {
 	}
 	t := m.persons.mint(req.SessionID, req.Command, ttl, m.now())
 	m.writeJSON(w, http.StatusOK, team.PersonResponse{Token: t.token, ExpiresAt: t.expires})
-}
-
-// personClose is the close of a request the person approved by a typed command: the person decides, the daemon spends nothing.
-func (m *Module) personClose(at int64) Close {
-	by := team.PersonClient()
-	return Close{State: team.StateApproved, DecidedAt: at, DecidedBy: &by}
-}
-
-// beginPerson is the person's /relay when the session has no open request: the op and its row are written approved at once
-// (no quota read or spent, the member check passes for a manual payload), announced closed only, then the session's pauses
-// end without a reask — the relay is the answer. Caller holds createMu.
-func (m *Module) beginPerson(w http.ResponseWriter, op team.RelayOp, row team.Approval, hash string) {
-	if !m.releasePausesForRelay(w, op.SessionID) {
-		return
-	}
-	after, claimed, err := m.store.CreateSelfRelayApproved(op, row, hash, m.personClose(row.CreatedAt))
-	switch {
-	case errors.Is(err, ErrMemberRelayIsLeads):
-		m.writeErr(w, http.StatusConflict, team.ErrMemberRelayIsLeads, "member 的接力由 lead 安排", nil)
-		return
-	case errors.Is(err, ErrRelayOpOpen) && m.writeRelayOpen(w, op.SessionID):
-		return
-	case err != nil:
-		m.logf("[team] relay begin %s: %v", op.SessionID, err)
-		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
-		return
-	}
-	m.logf("[team] relay op %s claimed: self, origin=%s (%s), request %s approved by the person at begin", op.ID, op.Ref, op.SessionID, after.ID)
-	m.announceClosed(after, nil)
-	m.writeJSON(w, http.StatusCreated, team.RelayBeginResponse{Op: claimed, RequestID: after.ID})
-}
-
-// personApproveOpen approves the session's open self-relay card (awaiting approval) as the person: the card is answered by the
-// person's own /relay, not refused as "a relay is open". Caller holds createMu.
-func (m *Module) personApproveOpen(w http.ResponseWriter, sessionID string, op team.RelayOp) {
-	if !m.releasePausesForRelay(w, sessionID) {
-		return
-	}
-	row, ok, err := m.store.Get(op.RequestID)
-	if err != nil || !ok {
-		m.logf("[team] relay begin %s: card %s: ok=%v err=%v", sessionID, op.RequestID, ok, err)
-		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
-		return
-	}
-	after, won, memberCancelled, err := m.approve(row, m.personClose(m.now()))
-	if err != nil {
-		m.logf("[team] relay begin %s: approve card %s: %v", sessionID, row.ID, err)
-		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
-		return
-	}
-	if memberCancelled || (!won && after.State != team.StateApproved) {
-		m.writeRelayOpen(w, sessionID) // the card closed another way first: a relay (or its end) is what the session has
-		return
-	}
-	cur, found, err := m.store.RelayOpByRequest(row.ID)
-	if err != nil || !found {
-		cur = op
-	}
-	m.writeJSON(w, http.StatusCreated, team.RelayBeginResponse{Op: cur, RequestID: row.ID})
-}
-
-// releasePausesForRelay ends the pauses of a session its person is relaying by hand, asking nothing again; false (the answer
-// written) when it could not. It runs BEFORE the relay is written: a failure or a crash in between leaves a session that is
-// no longer paused and not yet relayed (the person types /relay again), never one relayed and paused for good. Caller holds createMu.
-func (m *Module) releasePausesForRelay(w http.ResponseWriter, sessionID string) bool {
-	if _, err := m.resumeScope(ResumeScope{Release: sessionID, NoReask: true}); err != nil {
-		m.logf("[team] release pauses of %s before its person's relay: %v", sessionID, err)
-		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
-		return false
-	}
-	return true
 }

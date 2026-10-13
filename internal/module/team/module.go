@@ -271,6 +271,9 @@ type Module struct {
 	// for the same session in that window and prove the table's conflict
 	// (ErrRelayOpOpen) is answered as 409 relay_open too. nil in production.
 	afterOpenCheck func(sessionID string)
+	// afterPersonCardRead, when set, runs in personApproveOpen between its read of the open card and the CAS that approves it (tests: another
+	// request decides the card there).
+	afterPersonCardRead func()
 	// afterOpenByToolUse, when set, runs in handleAskBegin between its
 	// OpenByToolUse and its insert; tests start a second begin for the same
 	// tool use in that window and prove it waits for createMu. nil in

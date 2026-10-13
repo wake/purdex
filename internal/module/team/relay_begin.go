@@ -137,7 +137,7 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 	if m.replayOfBegin(w, req) { // the same request may have won the lock while this one waited
 		return
 	}
-	if person && !m.consumePerson(req.SessionID, team.PersonCmdRelay, req.PersonToken) {
+	if person && !m.validPerson(req.SessionID, team.PersonCmdRelay, req.PersonToken) { // spent only once its effect is committed
 		m.writeErr(w, http.StatusConflict, team.ErrPersonTokenInvalid, "the person token is unknown, spent, expired or not for this session's /relay", nil)
 		return
 	}
@@ -158,7 +158,7 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 			return
 		} else if still {
 			if person && cur.State == team.RelayAwaitingApproval {
-				m.personApproveOpen(w, req.SessionID, cur) // the card is the person's to approve, and they just did
+				m.personApproveOpen(w, req.SessionID, cur, req.PersonToken) // the card is the person's to approve, and they just did
 				return
 			}
 			m.writeJSON(w, http.StatusConflict, team.APIError{Error: team.ErrRelayOpen, Detail: "this session already has a relay in progress", Op: &cur})
@@ -242,7 +242,7 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if person {
-		m.beginPerson(w, op, row, hash)
+		m.beginPerson(w, op, row, hash, req.PersonToken)
 		return
 	}
 	exhausted := false // the chain has no quota left: the request opens for a person below and is listed as held at once

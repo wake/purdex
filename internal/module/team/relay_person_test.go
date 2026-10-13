@@ -48,8 +48,17 @@ func (f *fixture) approvedByPerson(out team.RelayBeginResponse) {
 // Mutation gate: route a person begin to the card path (ignore the token) → the row is open (red).
 func TestPersonRelay_BeginIsApprovedAtOnce(t *testing.T) {
 	f := newFixture(t)
-	out := f.personOpened("sid-1")
+	tok := f.mintPerson("sid-1", team.PersonCmdRelay)
+	code, body := f.beginPerson("sid-1", tok.Token)
+	if code != http.StatusCreated {
+		t.Fatalf("person begin: %d %s", code, body)
+	}
+	var out team.RelayBeginResponse
+	_ = json.Unmarshal(body, &out)
 	f.approvedByPerson(out)
+	if f.m.validPerson("sid-1", team.PersonCmdRelay, tok.Token) {
+		t.Fatal("the token is still good after the relay was written")
+	}
 	if got := f.countOps("opened"); got != 0 {
 		t.Fatalf("%d opened broadcast(s): a person's relay is announced closed only", got)
 	}
@@ -77,6 +86,9 @@ func TestPersonRelay_AnOpenCardIsApprovedByThePerson(t *testing.T) {
 	f.approvedByPerson(out)
 	if n := f.opCount(); n != 1 {
 		t.Fatalf("%d ops, want one", n)
+	}
+	if f.m.validPerson("sid-1", team.PersonCmdRelay, tok.Token) {
+		t.Fatal("the token is still good after it approved the card")
 	}
 }
 
@@ -244,5 +256,109 @@ func TestPersonRelay_APauseThatCannotEndWritesNoRelay(t *testing.T) {
 	var open int
 	if err := g.m.store.db.QueryRow(`SELECT COUNT(*) FROM approval_requests WHERE state = 'open'`).Scan(&open); err != nil || open != 1 {
 		t.Fatalf("open rows = %d (%v), want the card still open", open, err)
+	}
+}
+
+// The person's token is spent only when the relay is committed (codex attack): a refusal or a storage failure costs nothing.
+// Mutation gate: spend at the check (consume up front) → the token is dead after the failure (red).
+func TestPersonRelay_ATokenSurvivesARefusalAndAStorageFailure(t *testing.T) {
+	f := newFixture(t)
+	f.makeMember("sid-1")
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET state = 'killing' WHERE session_id = 'sid-1'`); err != nil {
+		t.Fatal(err)
+	}
+	tok := f.mintPerson("sid-1", team.PersonCmdRelay)
+	if code, _ := f.beginPerson("sid-1", tok.Token); code != http.StatusConflict {
+		t.Fatalf("a member being killed: %d, want 409", code)
+	}
+	if !f.m.validPerson("sid-1", team.PersonCmdRelay, tok.Token) {
+		t.Fatal("the token was spent by a refused request")
+	}
+
+	g := newFixture(t)
+	if _, err := g.m.store.db.Exec(`DROP TABLE pause_bounces`); err != nil {
+		t.Fatal(err)
+	}
+	tok = g.mintPerson("sid-1", team.PersonCmdRelay)
+	if code, _ := g.beginPerson("sid-1", tok.Token); code != http.StatusInternalServerError {
+		t.Fatalf("storage failure: %d, want 500", code)
+	}
+	if !g.m.validPerson("sid-1", team.PersonCmdRelay, tok.Token) {
+		t.Fatal("the token was spent by a failed request")
+	}
+}
+
+// The pauses end in the relay's transaction (codex R1 + attack): when the relay cannot be written the pauses stay, and when it
+// is written they are gone. Mutation gate: end them in a transaction of their own, first → the pause row is gone after the
+// refused begin (red).
+func TestPersonRelay_ThePausesAndTheRelayAreOneTransaction(t *testing.T) {
+	f := newFixture(t)
+	f.makeMember("sid-1")
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET state = 'killing' WHERE session_id = 'sid-1'`); err != nil {
+		t.Fatal(err)
+	}
+	f.seedPause("sid-1", team.PauseCauseQuota, team.PauseRoleSolo, "_aaaaaa", "t", 1)
+	tok := f.mintPerson("sid-1", team.PersonCmdRelay)
+	if code, _ := f.beginPerson("sid-1", tok.Token); code != http.StatusConflict {
+		t.Fatalf("a member being killed: %d, want 409", code)
+	}
+	if _, ok := f.pauses()["sid-1/quota"]; !ok {
+		t.Fatal("the pause ended although the relay was refused")
+	}
+	if n := f.opCount(); n != 0 {
+		t.Fatalf("%d op(s) after the refusal", n)
+	}
+}
+
+// A card another request decides between the read and the CAS is not the person's to approve (codex attack): the answer says what
+// it became (never an empty 200), the pauses stay and the token is unspent. Mutation gate: ignore the lost CAS and answer 201 /
+// resume anyway → red.
+func TestPersonRelay_ACardDeniedAtTheSameMomentIsNotApproved(t *testing.T) {
+	f := newFixture(t)
+	f.seedPause("sid-1", team.PauseCauseQuota, team.PauseRoleSolo, "_aaaaaa", "t", 1)
+	card := f.manualOpened("sid-1")
+	f.m.afterPersonCardRead = func() {
+		f.m.afterPersonCardRead = nil
+		if code, body := f.decide(card.RequestID, "deny"); code != http.StatusOK {
+			t.Errorf("deny: %d %s", code, body)
+		}
+	}
+	tok := f.mintPerson("sid-1", team.PersonCmdRelay)
+	code, body := f.beginPerson("sid-1", tok.Token)
+	if e := decodeErr(t, body); code != http.StatusConflict || e.Error != team.ErrRelayOpen || e.Op == nil || e.Op.State != team.RelayCancelled {
+		t.Fatalf("a card denied at the same moment: %d %s, want 409 relay_open with the cancelled op", code, body)
+	}
+	if _, ok := f.pauses()["sid-1/quota"]; !ok {
+		t.Fatal("the pause ended although the card was not approved")
+	}
+	if !f.m.validPerson("sid-1", team.PersonCmdRelay, tok.Token) {
+		t.Fatal("the token was spent although nothing was approved")
+	}
+}
+
+// The table does not keep dead tokens (codex attack): spent ones go at once, expired ones at the next touch. Mutation gate: keep
+// consumed tokens in the table → the length stays above 1 (red).
+func TestPerson_TheTableForgetsSpentAndExpiredTokens(t *testing.T) {
+	f := newFixture(t)
+	for i := 0; i < 50; i++ {
+		f.mintPerson("sid-1", team.PersonCmdRelay) // the cap keeps four, but the other sessions are many
+		f.m.persons.mint("churn-"+uid(i), team.PersonCmdRelay, 60, f.clock.Load())
+	}
+	f.clock.Add(61_000)
+	last := f.mintPerson("sid-1", team.PersonCmdRelay)
+	f.m.persons.mu.Lock()
+	n := len(f.m.persons.live)
+	f.m.persons.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("%d tokens live after everything else expired, want 1", n)
+	}
+	if !f.m.consumePerson("sid-1", team.PersonCmdRelay, last.Token) {
+		t.Fatal("the live token was lost")
+	}
+	f.m.persons.mu.Lock()
+	n = len(f.m.persons.live)
+	f.m.persons.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d tokens after the last was spent, want 0", n)
 	}
 }
