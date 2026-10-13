@@ -171,7 +171,7 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 			return granted, true
 		}
 		m.reasons.drop(w.ID)
-		m.lastGrantMS = now.UnixMilli()
+		m.lastGrantMS = max(m.lastGrantMS, now.UnixMilli()) // only forward (a grant needs now >= lastGrant + gap, so this is a guard)
 		leases = append(leases, resources.Lease{ID: w.ID, Weight: w.Weight, GrantedAt: now})
 		running = true
 		granted++

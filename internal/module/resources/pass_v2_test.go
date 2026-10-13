@@ -291,6 +291,18 @@ func TestPassV2_AdviseStopsAtACutWaiter(t *testing.T) {
 	assert.Equal(t, "waiting", f.state("b"))
 }
 
+// A clock that stepped back keeps the gap running instead of shortening it:
+// the remaining gap is counted from the newest grant, so nothing is granted
+// until the clock has caught up and the gap has passed (codex R1).
+func TestPassV2_ClockSteppedBackKeepsTheGap(t *testing.T) {
+	f := newPassFix(t, resources.ModeLease)
+	f.m.lastGrantMS = f.nowMS() + 60000 // the newest grant is a minute "in the future"
+	f.queue("a", 35, 5*time.Minute)
+	f.pass()
+	assert.Equal(t, "waiting", f.state("a"))
+	assert.Equal(t, f.nowMS()+60000, f.m.lastGrantMS, "a pass that grants nothing leaves it")
+}
+
 // Boot reads the last grant from the table; an empty table says none.
 func TestBoot_ReadsTheLastGrant(t *testing.T) {
 	f := newPassFix(t, resources.ModeLease)
