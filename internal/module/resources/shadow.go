@@ -71,6 +71,7 @@ func (m *Module) dropShadow() {
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
 	m.shadow = shadowQueue{}
+	m.shadowGen++ // a flush that is writing right now must not bring anything back
 	m.shadowLastAtMS.Store(0)
 	m.shadowReasons.reset()
 	m.shadowLen.Store(0)
@@ -165,6 +166,7 @@ func (m *Module) writeShadow(id string, waitMS int64, open bool, reasons string)
 func (m *Module) flushShadow() {
 	m.stateMu.Lock()
 	pend, gone := m.shadow.pending, m.shadow.gone
+	gen := m.shadowGen
 	m.shadow.pending, m.shadow.gone = nil, nil
 	m.shadowUnwritten.Store(0)
 	m.stateMu.Unlock()
@@ -216,6 +218,9 @@ func (m *Module) flushShadow() {
 	}
 	m.stateMu.Lock()
 	defer m.stateMu.Unlock()
+	if m.shadowGen != gen {
+		return // the shadow was dropped while this flush was writing: its leftovers are stale
+	}
 	m.shadow.pending = append(m.shadow.pending, retryV...)
 	m.shadow.gone = append(m.shadow.gone, retryG...)
 	if m.shadow.created == nil {

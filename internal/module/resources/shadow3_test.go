@@ -79,6 +79,22 @@ func TestShadow_FailedWriteIsRetried(t *testing.T) {
 	assert.Zero(t, g.m.shadowUnwritten.Load())
 }
 
+// A flush that fails while the shadow is dropped (a switch away from advise)
+// does not put the old state back (codex R1b). (M: drop the generation check
+// and the verdict comes back.)
+func TestShadow_DropDuringAFlushIsNotUndone(t *testing.T) {
+	f := newShadowFix(t)
+	f.m.shadowSet = func(string, int64, bool, string) error {
+		f.m.dropShadow() // another pass switched away from advise while this one writes
+		return errors.New("database is locked")
+	}
+	f.queue("a", 35, 5*time.Minute)
+	f.m.admissionPass(context.Background(), "")
+	assert.Zero(t, f.m.shadowUnwritten.Load(), "the failed verdict was not carried over the drop")
+	assert.Zero(t, f.m.shadowLastAtMS.Load())
+	assert.False(t, f.m.shadowActive())
+}
+
 // A request that arrives while the shadow is in its gap records the gap left in
 // dec_gap_ms (codex R2).
 func TestShadow_DecGapMSIsTheShadowsGapLeft(t *testing.T) {

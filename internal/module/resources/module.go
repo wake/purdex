@@ -105,6 +105,7 @@ type Module struct {
 	shadowLen     atomic.Int32
 	// shadowUnwritten counts verdicts worked out and not yet written; shadowSet
 	// replaces the write (a seam for tests).
+	shadowGen       uint64 // bumped by dropShadow; guarded by stateMu
 	shadowUnwritten atomic.Int32
 	shadowSet       func(id string, waitMS int64, open bool, reasons string) error
 	// gen is the generation channel: wake closes it and installs a fresh one on
