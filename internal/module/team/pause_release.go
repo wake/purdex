@@ -66,8 +66,19 @@ func (m *Module) releaseOne(sid string, client team.Client) (int, error) {
 	if id == "" {
 		return m.resumeOne(sid)
 	}
-	if _, _, err := m.closeAs(id, Close{State: team.StateDenied, DecidedAt: m.now(), DecidedBy: &client}); err != nil {
+	return m.releaseCard(sid, id, client)
+}
+
+// releaseCard denies the card id of sid for the person and releases the rest; when the deny lost, it is an ordinary release.
+func (m *Module) releaseCard(sid, id string, client team.Client) (int, error) {
+	_, won, err := m.closeAs(id, Close{State: team.StateDenied, DecidedAt: m.now(), DecidedBy: &client})
+	if err != nil {
 		return 0, err
+	}
+	if !won {
+		// Another close (an approve, the session's own cancel) took the card first and told the session how it ended: this click did
+		// not decide it, so the rest is an ordinary release (codex R1).
+		return m.resumeOne(sid)
 	}
 	n, err := m.resumeScope(ResumeScope{Release: sid, NoReask: true, NoReaskText: team.PauseResumedUnansweredDenied})
 	if err != nil {

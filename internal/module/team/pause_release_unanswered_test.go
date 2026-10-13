@@ -95,3 +95,30 @@ func TestRelease_QuotaOnlyStillReasks(t *testing.T) {
 		t.Fatal("a quota-only release lost its reask")
 	}
 }
+
+// The deny loses to another close (codex R1): the click did not decide the card, so the quota row is released as an ordinary release
+// (with the reask) and no denial is told. Mutation gate: ignore `won` → no reask and the denial text (red).
+func TestRelease_ALostDenyIsAnOrdinaryRelease(t *testing.T) {
+	f := newFixture(t)
+	f.modHello("sid-1", "5")
+	card := f.unanswered("sid-1")
+	f.seedPause("sid-1", team.PauseCauseQuota, team.PauseRoleSolo, "_aaaaaa", "t", 1)
+	if code, body := f.decide(card.RequestID, "approve"); code != http.StatusOK {
+		t.Fatalf("approve: %d %s", code, body)
+	}
+	if _, err := f.m.releaseCard("sid-1", card.RequestID, team.Client{Kind: "app", Label: "t"}); err != nil {
+		t.Fatal(err)
+	}
+	var reask bool
+	for _, o := range f.outbox() {
+		reask = reask || o.Kind == team.PauseOutboxReask
+	}
+	if !reask {
+		t.Fatal("a lost deny suppressed the reask")
+	}
+	for _, n := range f.noticesOf("sid-1") {
+		if n == team.PauseResumedUnansweredDenied {
+			t.Fatal("a denial was told for a card that was approved")
+		}
+	}
+}
