@@ -181,7 +181,7 @@ func (m *Module) handleCreateAdopt(w http.ResponseWriter, req team.CreateApprova
 	// call, and only for a request not stored yet (a replay answers the stored row, whatever the host says now).
 	var remote *remoteAdoptTarget
 	if target.Remote {
-		_, _, aliased, _ := m.store.PersonAlias(req.ID) // a person's retry is answered from its alias: the host is not asked again
+		aliased := m.personAliasAnswers(req.ID) // a person's retry is answered from its alias: the host is not asked again
 		if _, _, err := m.store.getRow(req.ID); errors.Is(err, ErrNoSuchApproval) && !aliased {
 			r, rerr := m.resolveRemoteAdopt(m.stopCtx, target)
 			if rerr != nil {

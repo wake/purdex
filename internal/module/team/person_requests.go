@@ -90,3 +90,14 @@ func (m *Module) personApprove(w http.ResponseWriter, open team.Approval, c Clos
 		m.writeJSON(w, http.StatusCreated, after)
 	}
 }
+
+// personAliasAnswers is whether request id is a retry that replayOfPersonAlias will answer from a CLOSED row (so nothing about it
+// needs resolving again); an alias left to a row that is still open is a fresh request.
+func (m *Module) personAliasAnswers(reqID string) bool {
+	approvalID, _, ok, err := m.store.PersonAlias(reqID)
+	if err != nil || !ok {
+		return false
+	}
+	row, found, err := m.store.Get(approvalID)
+	return err == nil && found && row.State != team.StateOpen
+}

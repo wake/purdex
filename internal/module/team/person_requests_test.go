@@ -372,3 +372,20 @@ func TestPersonAdopt_ARemoteRetryIsAnsweredFromTheAliasWithTheHostDown(t *testin
 		t.Fatalf("retry with the host down: %d %s, want 200 with the row %s", code, body, opened.ID)
 	}
 }
+
+// codex re-review: an alias a crash left on a still-open remote adopt row is a fresh request - the target IS resolved again (and with
+// the host up it is not a 503). Mutation gate: skip the resolve for any alias → 503 (red).
+func TestPersonAdopt_AnAliasToAnOpenRemoteRowStillResolvesTheTarget(t *testing.T) {
+	f, _ := adoptFixture(t)
+	opened := f.adoptOK(uid(50), remoteTarget)
+	if err := f.m.store.RecordPersonAlias(uid(51), opened.ID, "h", 1); err != nil {
+		t.Fatal(err)
+	}
+	tok := f.mintPerson("sid-1", team.PersonCmdAdopt).Token
+	r := f.adoptReq(uid(51), remoteTarget)
+	r.PersonToken = tok
+	code, body := f.do(http.MethodPost, "/api/team/approvals", r)
+	if code == http.StatusServiceUnavailable {
+		t.Fatalf("the open alias was taken for a replay and the target was not resolved: %d %s", code, body)
+	}
+}
