@@ -216,3 +216,97 @@ func TestFinalAsk_NoStaleNoticeAfterAnAnswer(t *testing.T) {
 		}
 	}
 }
+
+// #2816: a person's release of a member its lead's silence paused denies the ask (decided by the person), removes the pause row,
+// tells the member and the lead, and releases other causes without a reask. Mutation gates: skip the ask branch in releaseOne → the
+// row stays (red); release with the reask → a reask control (red); no lead notice → red.
+func TestFinalAsk_APersonsReleaseDeniesTheAsk(t *testing.T) {
+	for _, withQuota := range []bool{false, true} {
+		f, a := finalAsked(t, 94)
+		f.modHello("sid-m1", "5")
+		f.lapse(a)
+		if withQuota {
+			f.seedPause("sid-m1", team.PauseCauseQuota, team.PauseRoleMember, "_mem001", "worker", 1)
+		}
+		f.forgetSent()
+		code, raw := f.releasePaused("sid-m1", appRelease())
+		if code != http.StatusOK {
+			t.Fatalf("quota=%v release: %d %s", withQuota, code, raw)
+		}
+		time.Sleep(100 * time.Millisecond)
+		got := f.ask(a.ID)
+		if got.State != team.RelayAskWithdrawn || got.Reason != team.RelayAskWithdrawDenied {
+			t.Fatalf("quota=%v ask = %+v, want withdrawn / denied", withQuota, got)
+		}
+		if len(f.pauses()) != 0 {
+			t.Fatalf("quota=%v pauses = %+v, want none", withQuota, f.pauses())
+		}
+		n := f.noticesOf("sid-m1")
+		// with another cause the member is told by that cause's own resume text (a member's quota release), not twice
+		if len(n) == 0 || (!withQuota && n[len(n)-1] != team.PauseResumedMemberDeniedByUser) {
+			t.Fatalf("quota=%v member notices = %q, want the user's denial last", withQuota, n)
+		}
+		for _, o := range f.outbox() {
+			if o.Kind == team.PauseOutboxReask {
+				t.Fatalf("quota=%v: a reask control was written", withQuota)
+			}
+		}
+		want := fmt.Sprintf(team.RelayAskDeniedByUserLeadFmt, "self/w-one")
+		var told bool
+		for _, c := range f.sender.calls() {
+			told = told || c.Text == want
+		}
+		if !told {
+			t.Fatalf("quota=%v lead calls = %+v, want %q", withQuota, f.sender.calls(), want)
+		}
+	}
+}
+
+// codex attack: the person's release is ONE transaction. A failure after the ask closed rolls everything back, so the retry still
+// denies (no reask). Mutation gate: close the ask in its own transaction first → the ask is denied though the release failed (red).
+func TestFinalAsk_ReleaseIsAtomic(t *testing.T) {
+	f, a := finalAsked(t, 94)
+	f.modHello("sid-m1", "5")
+	f.lapse(a)
+	f.seedPause("sid-m1", team.PauseCauseQuota, team.PauseRoleMember, "_mem001", "worker", 1)
+	f.m.store.afterAskDeny = func() error { return fmt.Errorf("boom") }
+	if code, _ := f.releasePaused("sid-m1", appRelease()); code != http.StatusInternalServerError {
+		t.Fatalf("release with a failing second half: %d, want 500", code)
+	}
+	if got := f.ask(a.ID); got.State != team.RelayAskOpen {
+		t.Fatalf("ask = %+v, want still open (rolled back)", got)
+	}
+	if _, ok := f.pauses()["sid-m1/relay_unanswered"]; !ok {
+		t.Fatalf("pauses = %+v, want relay_unanswered kept", f.pauses())
+	}
+	f.m.store.afterAskDeny = nil
+	if code, raw := f.releasePaused("sid-m1", appRelease()); code != http.StatusOK {
+		t.Fatalf("retry: %d %s", code, raw)
+	}
+	if got := f.ask(a.ID); got.State != team.RelayAskWithdrawn || got.Reason != team.RelayAskWithdrawDenied {
+		t.Fatalf("after the retry ask = %+v, want denied", got)
+	}
+}
+
+// codex attack: a member that left is not "denied by the person": the ask is the member_left withdrawal's. Mutation gate: skip the
+// in-transaction membership check → the ask closes denied (red).
+func TestFinalAsk_ReleaseOfAMemberWhoLeftLeavesTheAskToTheWithdrawal(t *testing.T) {
+	f, a := finalAsked(t, 94)
+	f.lapse(a)
+	if ok, err := f.m.store.ReleaseMember("op-m1", "sid-m1", f.clock.Load()); err != nil || !ok {
+		t.Fatalf("release member: %v %v", ok, err)
+	}
+	if code, raw := f.releasePaused("sid-m1", appRelease()); code != http.StatusOK {
+		t.Fatalf("release: %d %s", code, raw)
+	}
+	if got := f.ask(a.ID); got.State != team.RelayAskOpen {
+		t.Fatalf("ask = %+v, want untouched by the person's release", got)
+	}
+	f.livenessTick()
+	if got := f.ask(a.ID); got.State != team.RelayAskWithdrawn || got.Reason != team.RelayAskWithdrawMemberLeft {
+		t.Fatalf("after the tick ask = %+v, want member_left", got)
+	}
+	if _, ok := f.pauses()["sid-m1/relay_unanswered"]; ok {
+		t.Fatal("the pause row is still there")
+	}
+}

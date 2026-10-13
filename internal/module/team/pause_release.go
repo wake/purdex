@@ -2,8 +2,11 @@
 package teammod
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -63,10 +66,50 @@ func (m *Module) releaseOne(sid string, client team.Client) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if id == "" {
+	if id != "" {
+		return m.releaseCard(sid, id, client)
+	}
+	if ask, ok, err := m.store.OpenAskOf(sid); err != nil {
+		return 0, err
+	} else if ok && ask.UnansweredAt > 0 {
+		return m.releaseAsk(sid)
+	}
+	return m.resumeOne(sid)
+}
+
+// releaseAsk is a person's release of a member its lead's silence paused (#2816): the final ask closes withdrawn / denied - the
+// person decided - and the pause row goes with it, and the other causes are released without a reask, all in ONE transaction (a
+// failure leaves the ask, the pauses and the outbox as they were, so a retry cannot turn the person's refusal into a reask); the lead
+// is told. A member that has left, or an ask another close took first, is an ordinary release. Caller holds createMu.
+func (m *Module) releaseAsk(sid string) (int, error) {
+	// what the lead's notice needs is read BEFORE the ask closes: a read that fails then fails the release with the ask still open
+	// (codex R1); whether the member is still active is decided again inside the transaction (codex attack)
+	mr, t, isMember, err := m.store.ActiveMemberInLiveTeam(sid)
+	if err != nil {
+		return 0, err
+	}
+	m.askMu.Lock() // behind an ask notice on the wire
+	ask, closed, res, err := m.store.ReleaseDeniedAsk(sid, m.now(), m.speaksReask, uuid.NewString)
+	m.askMu.Unlock()
+	if err != nil {
+		return 0, err
+	}
+	if !closed {
 		return m.resumeOne(sid)
 	}
-	return m.releaseCard(sid, id, client)
+	m.logf("[team] relay ask %s of %s denied by a person's release", ask.ID, sid)
+	if isMember {
+		address, _ := m.memberNoticeName(mr)
+		text := fmt.Sprintf(team.RelayAskDeniedByUserLeadFmt, address)
+		m.goTracked(func() { m.noticeToLead(mr, t, text, "relay ask denied by a person") })
+	}
+	m.askAnswered()
+	m.kickCommands()
+	n := res.Sessions
+	if n == 0 { // the ask's close was the whole release
+		n = 1
+	}
+	return n, nil
 }
 
 // releaseCard denies the card id of sid for the person and releases the rest; when the deny lost, it is an ordinary release.

@@ -47,7 +47,7 @@ func (m *Module) handleRelayDeny(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m.askMu.Lock() // behind an ask notice that is on the wire (see sendAskNotice)
-	ask, closed, err := m.store.DenyRelayAsk(mr.SessionID, m.now())
+	ask, closed, err := m.store.DenyRelayAsk(mr.SessionID, m.now(), team.PauseResumedMemberDenied)
 	m.askMu.Unlock()
 	if err != nil {
 		fail(err)
