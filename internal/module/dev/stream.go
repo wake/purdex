@@ -101,10 +101,27 @@ func (s *BuildSession) finish() {
 // done/error events — the caller decides those based on overall pipeline
 // outcome.
 func streamCmd(ctx context.Context, session *BuildSession, phase, dir, name string, args ...string) error {
+	return streamCmdEnv(ctx, session, phase, dir, nil, name, args...)
+}
+
+// streamTool is streamCmd for pnpm / node / go: name is resolved against the
+// tool PATH and the child runs with it (#2812).
+func (m *DevModule) streamTool(ctx context.Context, session *BuildSession, phase, dir, name string, args ...string) error {
+	exe, err := m.tools.lookTool(name)
+	if err != nil {
+		session.append(BuildEvent{Type: BuildEventPhase, Phase: phase})
+		return err
+	}
+	return streamCmdEnv(ctx, session, phase, dir, m.tools.childEnv(), exe, args...)
+}
+
+// streamCmdEnv is streamCmd with an explicit child environment (nil inherits).
+func streamCmdEnv(ctx context.Context, session *BuildSession, phase, dir string, env []string, name string, args ...string) error {
 	session.append(BuildEvent{Type: BuildEventPhase, Phase: phase})
 
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+	cmd.Env = env
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err

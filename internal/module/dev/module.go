@@ -20,15 +20,17 @@ import (
 type stepRunner func(ctx context.Context, session *BuildSession, phase, dir, name string, args ...string) error
 
 type DevModule struct {
-	core               *core.Core
-	repoRoot           string
-	versionFile        string
-	hashFn             func(paths ...string) string
-	mu                 sync.Mutex
-	building           bool
-	buildError         string
-	buildCmd           func(session *BuildSession) error
-	runStep            stepRunner
+	core        *core.Core
+	repoRoot    string
+	versionFile string
+	hashFn      func(paths ...string) string
+	mu          sync.Mutex
+	building    bool
+	buildError  string
+	buildCmd    func(session *BuildSession) error
+	runStep     stepRunner
+	// tools computes the PATH for pnpm / node / go subprocesses.
+	tools              toolEnv
 	buildSession       *BuildSession
 	lastFailedSPA      string
 	lastFailedElectron string
@@ -51,6 +53,13 @@ func New(repoRoot string) *DevModule {
 	}
 }
 
+// WithExtraPath sets the [dev] extra_path directories searched first for
+// pnpm / node / go.
+func (m *DevModule) WithExtraPath(dirs []string) *DevModule {
+	m.tools.extra = dirs
+	return m
+}
+
 func (m *DevModule) Name() string           { return "dev" }
 func (m *DevModule) Dependencies() []string { return nil }
 
@@ -64,7 +73,7 @@ func (m *DevModule) Init(c *core.Core) error {
 		m.gitHeadFn = m.gitHead
 	}
 	if m.runStep == nil {
-		m.runStep = streamCmd
+		m.runStep = m.streamTool
 	}
 	if m.buildCmd == nil {
 		m.buildCmd = m.defaultBuild
