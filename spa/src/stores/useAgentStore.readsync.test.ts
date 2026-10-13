@@ -50,8 +50,15 @@ describe('the cursor of the event that last set an unread', () => {
   })
 
   it('an event with no cursor (epoch "") sets the unread with no cursor recorded', () => {
-    news('aaaaaa', 'E1', 7)
-    news('aaaaaa', '', 0, 'waiting')
+    news('bbbbbb', '', 0)
+    expect(unread('bbbbbb')).toBe(true)
+    expect(cursorOfKey('bbbbbb')).toBeUndefined()
+  })
+
+  it('a later event with no cursor leaves NO cursor (the cursor of the event that LAST set the unread), not the old one', () => {
+    news('aaaaaa', 'E1', 7) // idle: unread with cursor E1:7
+    // straight to waiting (idle -> waiting is a transition; no `running` between, which would clear the unread itself)
+    useAgentStore.getState().applyHookEvent(H, 'aaaaaa', ev('waiting', { epoch: '', seq: 0 }))
     expect(unread('aaaaaa')).toBe(true)
     expect(cursorOfKey('aaaaaa')).toBeUndefined()
   })
