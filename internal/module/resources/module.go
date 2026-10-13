@@ -96,6 +96,10 @@ type Module struct {
 	// the table at boot; guarded by stateMu. reasons is the account of why each
 	// waiting row is held back (reasons.go); its own lock nests inside stateMu.
 	lastGrantMS int64
+	// lastOfferMS is the newest offer of a position (0: none): an offer is a
+	// grant decision and starts the gap, the first command that uses it does
+	// not start another (amendment A §2.5).
+	lastOfferMS int64
 	// lastGrantAtMS and shadowLastAtMS mirror the real and the shadow's newest
 	// grant time for the snapshot, which is built without stateMu.
 	lastGrantAtMS, shadowLastAtMS atomic.Int64

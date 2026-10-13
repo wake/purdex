@@ -2,10 +2,12 @@ package resourcesmod
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -100,8 +102,10 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 	// the client gave one, so a lookup that finds nothing one time and a session
 	// the next (or the other way round) is still the same request.
 	session := req.SessionID
+	var agentPID int
+	var agentStart string
 	if req.Scope != resources.ScopeSessionNew && session == "" {
-		session, _, _ = m.sessionOfProcess(r.Context(), req.HolderPID)
+		session, agentPID, agentStart = m.sessionOfProcess(r.Context(), req.HolderPID)
 	}
 
 	// A replay returns the row it made, whatever has become of it, but only to
@@ -144,6 +148,7 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 		// the holder pid itself (and says so).
 		if pid, start, ok := m.sessionRoot(r, req.SessionID); ok {
 			row.HolderPID, row.HolderStart = pid, start
+			agentPID, agentStart = pid, start
 		} else {
 			row.Scope, fallback = resources.ScopeProcess, true
 			if code, detail := validHolderStart(req.HolderStart); code != "" {
@@ -151,6 +156,13 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+
+	// Lease mode, a caller that asked for queue or ask, and a session: the
+	// request belongs to that session's position (amendment A §2.3).
+	if set.Mode == resources.ModeLease && session != "" && (req.Mode == resources.CallQueue || req.Mode == resources.CallAsk) {
+		m.createPositioned(w, r, req, row, agentPID, agentStart, set, fallback)
+		return
 	}
 
 	m.stateMu.Lock()
@@ -390,7 +402,9 @@ func (m *Module) endLease(w http.ResponseWriter, r *http.Request, find func() (l
 		}
 		var won bool
 		now := m.now()
-		if row.State == resources.StateWaiting {
+		if row.State == resources.StateWaiting && row.PositionID != "" {
+			won, err = m.store.EndRowMaybePosition(row.ID, reason, now.UnixMilli(), m.reasons.peek(row.ID, now))
+		} else if row.State == resources.StateWaiting {
 			won, err = m.store.EndWaiting(row.ID, reason, now.UnixMilli(), m.reasons.peek(row.ID, now))
 		} else {
 			won, err = m.store.End(row.ID, reason, now.UnixMilli())
@@ -441,18 +455,74 @@ func (m *Module) leaseResponse(row leaseRow, set resources.Settings, fallback bo
 		ww := row.WouldWait
 		resp.WouldWait = &ww
 	}
+	resp.PositionID = row.PositionID
 	if row.State == resources.StateWaiting {
 		resp.WaitedMS = max(0, m.now().UnixMilli()-row.CreatedAt)
-		if waiting, err := m.store.Waiting(); err == nil {
-			for i, wr := range waiting {
-				if wr.ID == row.ID {
-					resp.Position = i + 1
-					break
-				}
-			}
+		resp.Position = m.queuePlace(row)
+		if isQueueRow(row) {
+			// A queue-mode request that did not run is answered at once, never held.
+			resp.State, resp.QueuedReason = resources.StateQueued, m.queuedReasonOf(row)
 		}
 	}
 	return resp
+}
+
+// queuePlace is the 1-based place of a waiting row in the queue, counting queued
+// positions and wait-mode rows together by created_at; 0 for a row that is not in
+// the queue (it waits at its own position, which is not queued).
+func (m *Module) queuePlace(row leaseRow) int {
+	type entry struct {
+		key       string
+		createdAt int64
+		row       bool // a wait-mode row; on the same millisecond a position goes first, as the pass orders them
+	}
+	var entries []entry
+	positions, err := m.store.LivePositions()
+	if err != nil {
+		return 0
+	}
+	for _, p := range positions {
+		if p.State == resources.PosQueued {
+			entries = append(entries, entry{posKey(p.ID), p.CreatedAt, false})
+		}
+	}
+	waiting, err := m.store.Waiting()
+	if err != nil {
+		return 0
+	}
+	for _, w := range waiting {
+		if w.PositionID == "" {
+			entries = append(entries, entry{w.ID, w.CreatedAt, true})
+		}
+	}
+	slices.SortStableFunc(entries, func(a, b entry) int {
+		if a.createdAt != b.createdAt {
+			return cmp.Compare(a.createdAt, b.createdAt)
+		}
+		if a.row != b.row {
+			return cmp.Compare(b2i(a.row), b2i(b.row))
+		}
+		return cmp.Compare(a.key, b.key)
+	})
+	key := row.ID
+	if row.PositionID != "" {
+		key = posKey(row.PositionID)
+	}
+	for i, e := range entries {
+		if e.key == key {
+			return i + 1
+		}
+	}
+	return 0
+}
+
+// queuedReasonOf says why a waiting queue-mode row did not run: it waits behind
+// the queue, or behind its own session's running command.
+func (m *Module) queuedReasonOf(row leaseRow) string {
+	if pos, ok, err := m.store.PositionByID(row.PositionID); err == nil && ok && pos.State == resources.PosRunning {
+		return resources.QueuedOwnRunning
+	}
+	return resources.QueuedBehindQueue
 }
 
 // callMode reads an empty mode as wait: rows from before amendment A and

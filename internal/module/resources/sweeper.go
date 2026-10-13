@@ -106,11 +106,24 @@ func (m *Module) sweepLeases(now time.Time, set resources.Settings, view procVie
 		return
 	}
 	for _, r := range waiting {
-		if r.LeaseUntil > nowMS {
+		if r.LeaseUntil > nowMS || isQueueRow(r) {
 			continue
 		}
 		if m.sweepHook != nil {
 			m.sweepHook(r)
+		}
+		if r.PositionID != "" {
+			// An ask row nobody polls any more (P14): its queued position ends with it
+			// when it was the last. Under stateMu a poll cannot renew in between.
+			if cur, ok, err := m.store.Get(r.ID); err != nil || !ok || cur.State != resources.StateWaiting || cur.LeaseUntil > nowMS {
+				continue
+			}
+			won, err := m.store.EndRowMaybePosition(r.ID, resources.EndAbandoned, nowMS, m.reasons.peek(r.ID, now))
+			if won {
+				m.reasons.drop(r.ID)
+			}
+			m.ended(r, resources.EndAbandoned, won, err)
+			continue
 		}
 		won, err := m.store.CloseIfExpired(r.ID, nowMS, m.reasons.peek(r.ID, now))
 		if won {
