@@ -3,10 +3,13 @@
 package teammod
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
 )
 
@@ -345,5 +348,27 @@ func TestPersonLead_ASessionWithNoCwdIsRefusedBeforeAnythingIsWritten(t *testing
 	}
 	if !f.m.validPerson("sid-1", team.PersonCmdLead, tok) {
 		t.Fatal("the token was spent")
+	}
+}
+
+// codex critic: a retry answered from its alias must not need the member host (it may be down by then). Mutation gate: resolve
+// the remote target before looking at the alias → the retry fails with the host's error (red).
+func TestPersonAdopt_ARemoteRetryIsAnsweredFromTheAliasWithTheHostDown(t *testing.T) {
+	f, _ := adoptFixture(t)
+	opened := f.adoptOK(uid(40), remoteTarget)
+	f.personAdopt = false
+	tok := f.mintPerson("sid-1", team.PersonCmdAdopt).Token
+	post := func() (int, []byte) {
+		r := f.adoptReq(uid(41), remoteTarget)
+		r.PersonToken = tok
+		return f.do(http.MethodPost, "/api/team/approvals", r)
+	}
+	if code, body := post(); code != http.StatusCreated {
+		t.Fatalf("first: %d %s", code, body)
+	}
+	f.m.peerRecords = func(context.Context, string) ([]ipeers.PeerRecord, error) { return nil, errors.New("host down") }
+	code, body := post()
+	if a := decodeApproval(t, body); code != http.StatusOK || a.ID != opened.ID {
+		t.Fatalf("retry with the host down: %d %s, want 200 with the row %s", code, body, opened.ID)
 	}
 }
