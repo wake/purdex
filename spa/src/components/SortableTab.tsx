@@ -12,6 +12,7 @@ import { useTabHostBadge } from '../hooks/useTabHostBadge'
 import { hasHostBadge } from '../lib/host-color'
 import type { TeamTabMark } from './team/team-display'
 import { TeamTabShadow } from './team/TeamTabGroup'
+import { useGroupDragHandle } from './team/group-drag'
 
 interface Props {
   tab: Tab
@@ -35,7 +36,15 @@ const TAB_BG_ACTIVE = 'var(--surface-active)'
 export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddleClick, onContextMenu, onRename, onHover, group }: Props) {
   // `attributes` is deliberately not spread: sensors are pointer-only, so its aria-roledescription / aria-describedby
   // ("press space to pick up") would be false (#2531). Pinned is a native <button>; the unpinned div sets role=tab + tabIndex=0 itself.
-  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id })
+  // A group's lead drags the whole group (TG-1): its own draggable is off, the frame's listeners stand in, and the frame
+  // carries the transform. It stays a droppable, so a drop on it still resolves to the group.
+  const groupListeners = useGroupDragHandle()
+  const isLead = group?.role === 'lead' && groupListeners !== undefined
+  const sortable = useSortable({ id: tab.id, disabled: isLead ? { draggable: true } : undefined })
+  const { setNodeRef, isDragging } = sortable
+  const listeners = isLead ? groupListeners : sortable.listeners
+  const transform = isLead ? null : sortable.transform
+  const transition = isLead ? undefined : sortable.transition
 
   const style = {
     transform: transform ? `translate3d(${Math.round(transform.x)}px, 0, 0)` : undefined,

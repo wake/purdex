@@ -1,5 +1,5 @@
 import { Fragment, useRef, useState, useCallback, useMemo } from 'react'
-import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type DragEndEvent, type Modifier } from '@dnd-kit/core'
+import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type CollisionDetection, type DragEndEvent, type Modifier } from '@dnd-kit/core'
 import { SortableContext, horizontalListSortingStrategy } from '@dnd-kit/sortable'
 import { Plus, CaretLeft, CaretRight } from '@phosphor-icons/react'
 import { SortableTab } from './SortableTab'
@@ -10,6 +10,8 @@ import { useTeamUiStore } from '../stores/useTeamUiStore'
 import { useTeamDisplay, type TeamTabMark } from './team/team-display'
 import { groupSegments } from './team/groupSegments'
 import { TeamTabGroupFrame } from './team/TeamTabGroup'
+import { teamGroupDragId } from './team/group-drag'
+import { dragReorder } from '../lib/team/team-group-drag'
 
 interface Props {
   tabs: Tab[]
@@ -40,7 +42,6 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
   const team = useTeamDisplay()
   const collapsed = useTeamUiStore((s) => s.collapsed)
   const segments = useMemo(() => groupSegments(normalTabs, (id) => team?.tabMark(id) ?? null, collapsed), [normalTabs, team, collapsed])
-  const shownIds = useMemo(() => segments.flatMap((s) => (s.kind === 'tab' ? [s.tab.id] : s.tabs.map((t) => t.id))), [segments])
   /** Tab id → the run it is drawn in (grouped tabs only). */
   const runOf = useMemo(() => {
     const m = new Map<string, { teamKey: string; role: 'lead' | 'member'; leadTabId: string }>()
@@ -48,6 +49,14 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
       if (s.kind !== 'team') continue
       for (const tab of s.tabs) m.set(tab.id, { teamKey: s.mark.teamKey, role: tab === s.tabs[0] ? 'lead' : 'member', leadTabId: s.tabs[0].id })
     }
+    return m
+  }, [segments])
+  /** What the outer SortableContext sorts (TG-1): a plain tab, or a whole group by its frame; members sort inside the frame. */
+  const unitIds = useMemo(() => segments.map((s) => (s.kind === 'tab' ? s.tab.id : teamGroupDragId(s.mark.teamKey))), [segments])
+  /** Group frame id → its lead tab (a drag or drop on the frame stands for the lead). */
+  const leadOfFrame = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const s of segments) if (s.kind === 'team') m.set(teamGroupDragId(s.mark.teamKey), s.tabs[0].id)
     return m
   }, [segments])
   const [hoveredTabId, setHoveredTabId] = useState<string | null>(null)
@@ -74,12 +83,38 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
     return { ...transform, x: Math.min(Math.max(transform.x, minX), maxX), y: 0 }
   }, [pinnedIds, normalZoneRef])
 
+  // Which droppables a drag may land on (TG-1). A group is one unit: the frame stands for it, so while it is dragged its
+  // own tabs (which travel with it) are no targets, and a plain tab or a group never targets the inside of another group.
+  // A member only ever targets the members of its own group (its inner SortableContext: any other id would stop the
+  // sortable transforms mid-drag); with the pointer outside the group's frame the target is itself, so it keeps following
+  // the pointer and snaps back on release.
+  const collisionDetection: CollisionDetection = useCallback((args) => {
+    const activeId = String(args.active.id)
+    const from = runOf.get(activeId)
+    if (from?.role === 'member') {
+      const frame = args.droppableRects.get(teamGroupDragId(from.teamKey))
+      const centre = args.collisionRect.left + args.collisionRect.width / 2
+      if (frame && (centre < frame.left || centre > frame.right)) return [{ id: args.active.id }]
+      const members = args.droppableContainers.filter((c) => {
+        const hit = runOf.get(String(c.id))
+        return hit?.teamKey === from.teamKey && hit.role === 'member'
+      })
+      return closestCenter({ ...args, droppableContainers: members })
+    }
+    const droppableContainers = args.droppableContainers.filter((c) => {
+      const id = String(c.id)
+      return leadOfFrame.has(id) || !runOf.has(id)
+    })
+    return closestCenter({ ...args, droppableContainers })
+  }, [leadOfFrame, runOf])
+
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event
     if (!over || active.id === over.id) return
 
-    const activeId = String(active.id)
-    const overId = String(over.id)
+    // A group's frame stands for its lead tab.
+    const activeId = leadOfFrame.get(String(active.id)) ?? String(active.id)
+    const overId = leadOfFrame.get(String(over.id)) ?? String(over.id)
 
     const inPinned = pinnedIds.includes(activeId)
     const overInPinned = pinnedIds.includes(overId)
@@ -87,13 +122,12 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
     // Only allow same-zone reorder
     if (inPinned !== overInPinned) return
 
-    // A team run (spec §4.2): members swap places inside it (written to the shared member order; the tab list follows from
-    // the lifecycle subscriber). The lead stays first and the run is not draggable as a whole; a drop across its boundary,
-    // or a plain tab dropped into it, snaps back.
+    // A member (spec §4.2) swaps places inside its run only (written to the shared member order; the tab list follows from
+    // the lifecycle subscriber). The lead stays first; a drop on the lead or across the run's boundary snaps back.
     const from = runOf.get(activeId)
-    const to = runOf.get(overId)
-    if (from || to) {
-      if (!from || !to || from.teamKey !== to.teamKey || from.role !== 'member' || to.role !== 'member') return
+    if (from?.role === 'member') {
+      const to = runOf.get(overId)
+      if (!to || from.teamKey !== to.teamKey || to.role !== 'member') return
       const order = team?.panelTeam(from.leadTabId)?.members ?? []
       // The whole member order (unopened members included): the dragged seat takes the target's index, as dnd-kit's arrayMove.
       const ids = order.map((m) => m.sessionId)
@@ -106,15 +140,24 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
       return
     }
 
-    const zone = inPinned ? [...pinnedIds] : [...normalIds]
-    const oldIdx = zone.indexOf(activeId)
-    const newIdx = zone.indexOf(overId)
-    zone.splice(oldIdx, 1)
-    zone.splice(newIdx, 0, activeId)
+    if (inPinned) {
+      const zone = [...pinnedIds]
+      const oldIdx = zone.indexOf(activeId)
+      const newIdx = zone.indexOf(overId)
+      zone.splice(oldIdx, 1)
+      zone.splice(newIdx, 0, activeId)
+      onReorderTabs([...zone, ...normalIds])
+      return
+    }
 
-    const newOrder = inPinned ? [...zone, ...normalIds] : [...pinnedIds, ...zone]
-    onReorderTabs(newOrder)
-  }, [pinnedIds, normalIds, onReorderTabs, runOf, team])
+    // The lead (the whole run, hidden members included), or a plain tab: a unit moves to where the target unit is; a drop on
+    // any tab of a group lands before or after the whole group.
+    const next = dragReorder(normalIds, activeId, overId, (id) => {
+      const m = team?.tabMark(id)
+      return m ? { key: m.teamKey, role: m.role } : null
+    })
+    if (next) onReorderTabs([...pinnedIds, ...next])
+  }, [pinnedIds, normalIds, onReorderTabs, runOf, leadOfFrame, team])
 
   // Separator visibility: hide near active or hovered tab
   const shouldShowSeparator = (leftTab: Tab | undefined, rightTab: Tab | undefined) => {
@@ -141,7 +184,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
 
   return (
     <div className={`flex items-center px-1 ${embedded ? 'h-full flex-1 min-w-0' : 'flex-shrink-0 bg-surface-secondary border-b border-border-subtle'}`} style={embedded ? undefined : { height: 41 }}>
-      <DndContext sensors={sensors} collisionDetection={closestCenter} modifiers={[restrictToTabZone]} onDragEnd={handleDragEnd}>
+      <DndContext sensors={sensors} collisionDetection={collisionDetection} modifiers={[restrictToTabZone]} onDragEnd={handleDragEnd}>
         {/* Pinned zone */}
         {pinnedTabs.length > 0 && (
           <>
@@ -185,7 +228,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
           )}
           <div ref={normalZoneRef} className="flex items-center h-full overflow-x-auto scrollbar-hide">
             <div ref={normalTabsRef} className="flex items-center h-full flex-1 min-w-0" style={{ maxWidth: 'max-content' }}>
-              <SortableContext items={shownIds} strategy={horizontalListSortingStrategy}>
+              <SortableContext items={unitIds} strategy={horizontalListSortingStrategy}>
                 {segments.map((seg, si) => {
                   const prev = segments[si - 1]
                   // Separators before the group / after the group stay in the row but are never drawn next to a group.
@@ -197,7 +240,10 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                     <Fragment key={`g-${seg.mark.teamKey}`}>
                       {sep}
                       <TeamTabGroupFrame mark={seg.mark}>
-                        {seg.tabs.map((tab) => renderTab(tab, team?.tabMark(tab.id) ?? undefined))}
+                        {renderTab(seg.tabs[0], team?.tabMark(seg.tabs[0].id) ?? undefined)}
+                        <SortableContext items={seg.tabs.slice(1).map((t) => t.id)} strategy={horizontalListSortingStrategy}>
+                          {seg.tabs.slice(1).map((tab) => renderTab(tab, team?.tabMark(tab.id) ?? undefined))}
+                        </SortableContext>
                       </TeamTabGroupFrame>
                     </Fragment>
                   )

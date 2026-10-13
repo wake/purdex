@@ -1,7 +1,7 @@
 // spa/src/components/TabBar.team.test.tsx — the team group on the top tab bar (plan TI-2, spec §4.2, §5).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
-import type { DragEndEvent } from '@dnd-kit/core'
+import type { CollisionDetection, DragEndEvent } from '@dnd-kit/core'
 import { TabBar } from './TabBar'
 import { TeamDisplayProvider } from './team/TeamDisplayProvider'
 import { registerModule, clearModuleRegistry } from '../lib/module-registry'
@@ -19,13 +19,14 @@ import type { RosterMember, RosterSession, TeamRoster } from '../lib/team/roster
 import type { PaneLayout, Tab } from '../types/tab'
 
 // The DndContext's drag-end handler is what the bar's rules live in; capture it and call it with synthetic events.
-const dnd = vi.hoisted(() => ({ onDragEnd: null as ((e: DragEndEvent) => void) | null }))
+const dnd = vi.hoisted(() => ({ onDragEnd: null as ((e: DragEndEvent) => void) | null, collide: null as CollisionDetection | null }))
 vi.mock('@dnd-kit/core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@dnd-kit/core')>()
   return {
     ...actual,
     DndContext: (props: React.ComponentProps<typeof actual.DndContext>) => {
       dnd.onDragEnd = props.onDragEnd as (e: DragEndEvent) => void
+      dnd.collide = props.collisionDetection ?? null
       return <actual.DndContext {...props} />
     },
   }
@@ -189,30 +190,118 @@ describe('TabBar — team group (TI-2)', () => {
     expect(h.onReorderTabs).not.toHaveBeenCalled()
   })
 
-  it('drag across the group boundary snaps back', () => {
+  it('a member never leaves the group nor takes the lead\'s place: those drops snap back', () => {
     const tabs = baseTabs()
     seed([roster()], tabs)
     const { h } = bar(tabs)
     drag('ma', 'plain') // out of the group
     drag('ma', 'p2')
-    drag('plain', 'ma') // a plain tab into it
-    drag('plain', 'lead')
-    drag('p2', 'mb')
+    drag('ma', 'lead') // in front of the lead
+    drag('mb', 'lead')
+    drag('ma', 'team-group:' + KEY)
     expect(useTeamUiStore.getState().memberOrder[KEY]).toBeUndefined()
     expect(h.onReorderTabs).not.toHaveBeenCalled()
-    drag('plain', 'p2') // plain tabs still reorder among themselves
-    expect(h.onReorderTabs).toHaveBeenCalledTimes(1)
   })
 
-  it('lead cannot be dragged behind a member', () => {
+  describe('collision domain (TG-1)', () => {
+    const container = (id: string) => ({ id, data: { current: undefined }, node: { current: null }, rect: { current: null }, disabled: false })
+    const rectAt = (left: number, width = 100) => ({ left, right: left + width, top: 0, bottom: 26, width, height: 26 })
+    const collide = (active: string, left: number) => {
+      const ids = ['plain', 'lead', 'ma', 'mb', 'p2', 'team-group:' + KEY]
+      const rects = new Map(ids.map((id, i) => [id, rectAt(i * 100)]))
+      rects.set('team-group:' + KEY, rectAt(100, 300)) // the frame spans lead..mb
+      return dnd.collide!({
+        active: { id: active }, collisionRect: rectAt(left), droppableRects: rects, pointerCoordinates: null,
+        droppableContainers: ids.map(container),
+      } as never).map((c) => String(c.id))
+    }
+
+    it('a member only collides with the members of its own group', () => {
+      const tabs = baseTabs()
+      seed([roster()], tabs)
+      bar(tabs)
+      expect([...collide('ma', 100)].sort()).toEqual(['ma', 'mb'])
+      expect([...collide('ma', 300)].sort()).toEqual(['ma', 'mb'])
+    })
+
+    it('a member dragged outside the group frame targets itself, so it keeps following the pointer until it snaps back', () => {
+      const tabs = baseTabs()
+      seed([roster()], tabs)
+      bar(tabs)
+      expect(collide('ma', 450)).toEqual(['ma']) // over p2
+      expect(collide('ma', -200)).toEqual(['ma']) // before the plain tab
+    })
+
+    it('a lead/plain drag targets group frames and plain tabs, never the inside of a group', () => {
+      const tabs = baseTabs()
+      seed([roster()], tabs)
+      bar(tabs)
+      for (const active of ['team-group:' + KEY, 'plain']) {
+        const ids = collide(active, 0)
+        expect(ids).not.toContain('lead')
+        expect(ids).not.toContain('ma')
+        expect(ids).not.toContain('mb')
+      }
+    })
+  })
+
+  it('plain tabs still reorder among themselves', () => {
     const tabs = baseTabs()
     seed([roster()], tabs)
     const { h } = bar(tabs)
-    drag('lead', 'ma')
-    drag('lead', 'mb')
-    drag('ma', 'lead') // nor a member in front of the lead
-    drag('lead', 'p2') // the group as a whole is not draggable in v1
+    drag('plain', 'p2')
+    expect(h.onReorderTabs).toHaveBeenLastCalledWith(['lead', 'ma', 'mb', 'p2', 'plain'])
+  })
+
+  it('a plain tab dropped on the group lands before or after the whole group, never inside (TG-1)', () => {
+    const tabs = baseTabs()
+    seed([roster()], tabs)
+    const { h } = bar(tabs)
+    drag('plain', 'ma') // moving right: behind the group
+    expect(h.onReorderTabs).toHaveBeenLastCalledWith(['lead', 'ma', 'mb', 'plain', 'p2'])
+    drag('p2', 'lead') // moving left: in front of the group
+    expect(h.onReorderTabs).toHaveBeenLastCalledWith(['plain', 'p2', 'lead', 'ma', 'mb'])
+    drag('p2', 'mb')
+    expect(h.onReorderTabs).toHaveBeenLastCalledWith(['plain', 'p2', 'lead', 'ma', 'mb'])
     expect(useTeamUiStore.getState().memberOrder[KEY]).toBeUndefined()
+  })
+
+  it('dragging the lead moves the whole run; the group frame id counts as the lead (TG-1)', () => {
+    const tabs = baseTabs()
+    seed([roster()], tabs)
+    const { h } = bar(tabs)
+    drag('lead', 'p2')
+    expect(h.onReorderTabs).toHaveBeenLastCalledWith(['plain', 'p2', 'lead', 'ma', 'mb'])
+    drag('team-group:' + KEY, 'plain')
+    expect(h.onReorderTabs).toHaveBeenLastCalledWith(['lead', 'ma', 'mb', 'plain', 'p2'])
+    drag('lead', 'ma') // onto its own member: nothing
+    expect(h.onReorderTabs).toHaveBeenCalledTimes(2)
+  })
+
+  it('a collapsed group moves together with the members it hides (TG-1)', () => {
+    const tabs = baseTabs()
+    seed([roster()], tabs)
+    act(() => useTeamUiStore.getState().setCollapsed(KEY, true))
+    const { h } = bar(tabs)
+    drag('lead', 'p2')
+    expect(h.onReorderTabs).toHaveBeenLastCalledWith(['plain', 'p2', 'lead', 'ma', 'mb'])
+  })
+
+  it('a group dropped on another group lands beside it, never inside (TG-1)', () => {
+    const r2 = roster({ id: 't2', lead: sess('L2', 'lead2-tm') }, [mem('D', 1, 'd-tm')])
+    const tabs = [mk('lead', 'lead-tm'), mk('ma', 'a-tm'), mk('mb', 'b-tm'), mk('lead2', 'lead2-tm'), mk('md', 'd-tm')]
+    seed([roster(), r2], tabs)
+    const { h } = bar(tabs)
+    drag('lead', 'md')
+    expect(h.onReorderTabs).toHaveBeenLastCalledWith(['lead2', 'md', 'lead', 'ma', 'mb'])
+  })
+
+  it('pinned zone stays apart: a group and a pinned tab never trade places (TG-1)', () => {
+    const tabs = [mk('pin', 'p2', 'h1', true), ...baseTabs().slice(0, 4)]
+    seed([roster()], tabs)
+    const { h } = bar(tabs)
+    drag('lead', 'pin')
+    drag('pin', 'lead')
     expect(h.onReorderTabs).not.toHaveBeenCalled()
   })
 
