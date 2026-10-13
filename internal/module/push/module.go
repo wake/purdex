@@ -342,6 +342,11 @@ func (m *Module) Stop(context.Context) error {
 // maxOpenKeys caps purdex.open_approval_keys (spec §6); open_approvals still reports the full count.
 const maxOpenKeys = 32
 
+// maxSessionIDKey bounds the session id a "c:" key may carry (a Claude Code session id is a 36-byte UUID). A longer one is
+// not a real id: it would make 32 keys overflow the 4 KiB payload of every push of the host while its card is open, so such
+// a card keys by its own approval id instead.
+const maxSessionIDKey = 64
+
 // sessionBudget bounds the one session read a snapshot makes; past it every approval falls back to its id.
 const sessionBudget = time.Second
 
@@ -453,7 +458,7 @@ func (m *Module) openState(ctx context.Context, j Job) openSnap {
 		switch code := ownSession(refs, tmuxSessionOf(a.Origin.Tmux), a.CreatedAt); {
 		case code != "":
 			set["s:"+code] = struct{}{}
-		case a.Origin.SessionID != "": // several cards of one unresolved session count once
+		case a.Origin.SessionID != "" && len(a.Origin.SessionID) <= maxSessionIDKey: // several cards of one unresolved session count once
 			set["c:"+a.Origin.SessionID] = struct{}{}
 		default:
 			set["a:"+a.ID] = struct{}{}

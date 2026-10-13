@@ -254,6 +254,29 @@ func TestPrefs_MutedAndBadgePushRoundTripTheStore(t *testing.T) {
 	}
 }
 
+// A session id too long to be a real one (a damaged or hostile origin) never becomes a c: key: it would push every payload of
+// the host over 4 KiB while the card is open. The card falls back to its own a: key; 64 bytes (a UUID is 36) still keys.
+// Mutation gate: no length bound → red.
+func TestBadgeV2_OversizedSessionIDFallsBackToAnApprovalKey(t *testing.T) {
+	te := newTriggerEnv(t, nil)
+	te.register(tokA, "en", "mlab")
+	edge := strings.Repeat("y", 64)
+	open := []team.Approval{
+		sessionCard("big", team.KindHookPermission, strings.Repeat("x", 5000)),
+		sessionCard("edge", team.KindLead, edge),
+	}
+	te.events.readOpen = func() ([]team.Approval, error) { return open, nil }
+	te.events.emit("opened", leadApproval("ap1"))
+	p := te.waitSends(t, 1)[0].Payload
+	keys, _ := keysOf(t, p)
+	if want := "a:big,c:" + edge; strings.Join(keys, ",") != want {
+		t.Fatalf("keys = %.120v, want %s", keys, want)
+	}
+	if len(p) > 4096 {
+		t.Fatalf("payload %d bytes", len(p))
+	}
+}
+
 // Invalid muted is refused like invalid tabs.
 func TestPrefs_InvalidMutedIsRefused(t *testing.T) {
 	e := newEnv(t)
