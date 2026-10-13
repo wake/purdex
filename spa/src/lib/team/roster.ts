@@ -40,15 +40,16 @@ export interface RosterSession {
   /** Set by parsing (never on the wire) when a non-empty `host_id` was sent but failed validation: the member lives on
    *  SOME other host that cannot be named, so it is never attributed to the lead's host. Absent otherwise. */
   host_untrusted?: boolean
-  /** UP-5b: why the daemon holds this session back (its quota ran out, or its lead was paused), and since when. Absent = not paused
+  /** UP-5b: why the daemon holds this session back (its quota ran out, its lead was paused, or its final relay card went
+   *  unanswered: `relay_unanswered`, relay v2 RT-2a2), and since when. Absent = not paused
    *  (the wire's null, a missing field and a malformed value all read the same). */
   paused?: RosterPause
 }
 
-export type PauseCause = 'quota' | 'lead'
+export type PauseCause = 'quota' | 'lead' | 'relay_unanswered'
 export interface RosterPause { causes: PauseCause[]; since: number }
 
-export const PAUSE_CAUSES: readonly PauseCause[] = ['quota', 'lead']
+export const PAUSE_CAUSES: readonly PauseCause[] = ['quota', 'lead', 'relay_unanswered']
 
 /** The known causes of a wire `causes` array (unknown strings dropped), or null when it is not an array / holds none we know. */
 export function parseCauses(v: unknown): PauseCause[] | null {

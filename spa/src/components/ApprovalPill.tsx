@@ -81,8 +81,9 @@ export function ApprovalPill() {
     if (flashes > 0 && ref.current) flash(ref.current)
   }, [flashes])
 
-  if (nearest === null) return null
-  const label = t('approval.pill.label', { count, countdown: formatCountdown(nearest - now) })
+  if (count === 0) return null
+  // Only unanswered cards are open (`nearest` skips them): their deadline is a sentinel, so there is no countdown to show.
+  const label = nearest === null ? t('approval.pill.label_unanswered', { count }) : t('approval.pill.label', { count, countdown: formatCountdown(nearest - now) })
   return (
     <>
       <button

@@ -158,3 +158,27 @@ describe('ApprovalPill', () => {
     }
   })
 })
+
+describe('ApprovalPill: cards that went unanswered', () => {
+  const SENTINEL = Date.UTC(9999, 11, 31)
+  const unanswered = (id: string, created = 1_000): Approval => ({ ...relay(id, SENTINEL, created), unanswered_at: created + 500 })
+
+  // Mutation gate: let the sentinel deadline count as the nearest -> the countdown is ~2.9e11 s -> red.
+  it('the nearest deadline skips an unanswered card', () => {
+    useApprovalStore.getState().applyOpened('h1', unanswered('a'))
+    useApprovalStore.getState().applyOpened('h1', lead('b', 1_000 + 65_000, 2_000))
+    render(<ApprovalPill />)
+    expect(pill().textContent).toBe('待核准 2 · 1:05')
+  })
+
+  it('only unanswered cards open: the pill stays, with no countdown', () => {
+    useApprovalStore.getState().applyOpened('h1', unanswered('a'))
+    render(<ApprovalPill />)
+    expect(pill().textContent).toBe('待核准 1 · 已暫停作業')
+  })
+
+  it('nothing open: no pill', () => {
+    const { container } = render(<ApprovalPill />)
+    expect(container.querySelector('[data-testid="approval-pill"]')).toBeNull()
+  })
+})

@@ -36,7 +36,7 @@ import { adoptionAlias } from '../lib/team/adoption-wait'
 import { hostLabel, useHostLook } from '../lib/host-look'
 import { deriveTeamLabel, goTrim, labelProblem, TEAM_LABEL_MAX_WIDTH } from '../lib/team/label'
 import { cellWidth } from '../lib/textwidth'
-import { adoptPayloadOf, adoptTargetLabel, clipForDisplay, leadPayloadOf, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
+import { adoptPayloadOf, adoptTargetLabel, clipForDisplay, isUnanswered, leadPayloadOf, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
 import { approvalSessionLabel, formatCountdown, formatOriginAddress, memberRelayNames } from '../lib/team/approval-format'
 import { ApprovalApiError, setSelfRelayPause } from '../lib/team/approval-api'
 import { buttonBase, fieldClass, keyboardGuard, parseRoots, tabStops, teamNameOk } from './approval-dialog-helpers'
@@ -379,8 +379,17 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
                 <dd data-testid="approval-reason" className="whitespace-pre-wrap text-text-primary">{payload.reason}</dd>
               </>
             )}
-            <dt className="text-text-muted">{t('approval.dialog.deadline')}</dt>
-            <dd data-testid="approval-countdown" className="font-mono text-text-primary">{formatCountdown(approval.deadline_at - now)}</dd>
+            {isUnanswered(approval) ? (
+              <>
+                <dt className="text-text-muted">{t('approval.dialog.unanswered_label')}</dt>
+                <dd data-testid="approval-unanswered" className="text-text-primary">{t('approval.dialog.unanswered')}</dd>
+              </>
+            ) : (
+              <>
+                <dt className="text-text-muted">{t('approval.dialog.deadline')}</dt>
+                <dd data-testid="approval-countdown" className="font-mono text-text-primary">{formatCountdown(approval.deadline_at - now)}</dd>
+              </>
+            )}
           </dl>
           {isSelfRelay && <RelayBrief hostId={hostId} sessionId={approval.origin.session_id} />}
           {isMemberRelay && <RelayBrief hostId={hostId} sessionId={memberRelay.payload.member_session_id} />}

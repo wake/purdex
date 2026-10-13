@@ -28,6 +28,10 @@ describe('parsePausedView', () => {
     expect(out).toHaveLength(1)
     expect(out[0].causes).toEqual(['quota'])
   })
+  it('keeps relay_unanswered, alone and beside other causes', () => {
+    const out = parsePausedView({ sessions: [row({ session_id: 'A', causes: ['relay_unanswered'] }), row({ session_id: 'B', causes: ['quota', 'relay_unanswered', 'future'] })] })
+    expect(out.map((p) => [p.session_id, p.causes])).toEqual([['A', ['relay_unanswered']], ['B', ['quota', 'relay_unanswered']]])
+  })
   it('an envelope that is not {sessions: []} is bad_response', () => {
     expect(() => parsePausedView({})).toThrow(ApprovalApiError)
     expect(parsePausedView({ sessions: [] })).toEqual([])
@@ -47,6 +51,9 @@ describe('roster paused', () => {
   })
   it('an object is kept, unknown causes dropped', () => {
     expect(parse({ paused: { causes: ['quota', 'x'], since: 9 } }).paused).toEqual({ causes: ['quota'], since: 9 })
+  })
+  it('a roster pause with only relay_unanswered is kept', () => {
+    expect(parse({ paused: { causes: ['relay_unanswered'], since: 9 } }).paused).toEqual({ causes: ['relay_unanswered'], since: 9 })
   })
   it('a malformed value becomes absent and does not drop the frame', () => {
     expect(parse({ paused: { causes: [], since: 9 } }).paused).toBeUndefined()
@@ -93,11 +100,21 @@ describe('fetchPaused / postPauseRelease', () => {
 
 describe('pausedLightText', () => {
   const t = (k: string, p?: Record<string, string | number>) => (p ? `${k}:${JSON.stringify(p)}` : k)
-  it('quota', () => expect(pausedLightText(t, ['quota'], 0)).toBe('paused.light.quota'))
-  it('lead only', () => expect(pausedLightText(t, ['lead'], 0)).toBe('paused.light.lead'))
-  it('quota + lead reads as quota', () => expect(pausedLightText(t, ['lead', 'quota'], 0)).toBe('paused.light.quota'))
+  it('quota', () => expect(pausedLightText(t, ['quota'], 0, 'solo')).toBe('paused.light.quota'))
+  it('lead only', () => expect(pausedLightText(t, ['lead'], 0, 'member')).toBe('paused.light.lead'))
+  it('quota + lead reads as quota', () => expect(pausedLightText(t, ['lead', 'quota'], 0, 'member')).toBe('paused.light.quota'))
   it('bounced 0 adds nothing, N adds the suffix', () => {
-    expect(pausedLightText(t, ['quota'], 0)).not.toContain('bounced')
-    expect(pausedLightText(t, ['quota'], 3)).toBe('paused.light.quota' + 'paused.light.bounced:{"n":3}')
+    expect(pausedLightText(t, ['quota'], 0, 'solo')).not.toContain('bounced')
+    expect(pausedLightText(t, ['quota'], 3, 'solo')).toBe('paused.light.quota' + 'paused.light.bounced:{"n":3}')
+  })
+  it('relay_unanswered: solo and lead read the unanswered text, a member waits for its lead', () => {
+    expect(pausedLightText(t, ['relay_unanswered'], 0, 'solo')).toBe('paused.light.unanswered')
+    expect(pausedLightText(t, ['relay_unanswered'], 0, 'lead')).toBe('paused.light.unanswered')
+    expect(pausedLightText(t, ['relay_unanswered'], 0, 'member')).toBe('paused.light.unanswered_member')
+  })
+  it('relay_unanswered wins over quota and lead whatever the order', () => {
+    expect(pausedLightText(t, ['quota', 'relay_unanswered'], 0, 'solo')).toBe('paused.light.unanswered')
+    expect(pausedLightText(t, ['lead', 'quota', 'relay_unanswered'], 0, 'member')).toBe('paused.light.unanswered_member')
+    expect(pausedLightText(t, ['relay_unanswered', 'lead'], 2, 'lead')).toBe('paused.light.unanswered' + 'paused.light.bounced:{"n":2}')
   })
 })
