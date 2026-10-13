@@ -84,8 +84,10 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 	held, waiting, positions, ok := m.readPassRows()
 	// The mode just left lease and the sweeper has not drained yet: the positions
 	// end here, before this pass could grant their rows as plain ones.
+	// The mode was read before the lock; it is read again under it, so a switch back
+	// to lease in between does not get its queue drained by this pass.
 	if ok && set.Mode == resources.ModeAdvise && len(positions) > 0 {
-		if m.drainPositions(m.now()) > 0 {
+		if cur, read := m.settingsRead(); read && cur.Mode == resources.ModeAdvise && m.drainPositions(m.now()) > 0 {
 			held, waiting, positions, ok = m.readPassRows()
 		}
 	}
@@ -229,6 +231,9 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 		gapLeft = m.shadowStep(set, held, waiting, zone, trend, now)
 		// Advise grants everything at once, up to a cut waiter (FIFO is kept).
 		for _, w := range waiting {
+			if w.PositionID != "" {
+				continue // a position's row is never granted as a plain one (the drain ends it)
+			}
 			if cut[w.ID] {
 				break
 			}

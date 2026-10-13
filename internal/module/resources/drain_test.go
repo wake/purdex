@@ -248,3 +248,19 @@ func TestDrain_APassBeforeTheSweeperDoesNotGrantPositionRows(t *testing.T) {
 	assert.Equal(t, resources.EndDrained, r.EndReason, "not granted")
 	assert.Equal(t, resources.EndDrained, f.position(q.PositionID).EndReason)
 }
+
+// A pass that read advise, and found the setting back at lease by the time it holds
+// the lock, drains nothing. (M: act on the mode read before the lock.)
+func TestDrain_APassWithAStaleAdviseDrainsNothing(t *testing.T) {
+	f := newPosFix(t)
+	f.setZone("danger", "flat")
+	q := decodeLease(t, f.postAs(newCID(), pidA, resources.CallQueue, "go build"))
+	f.set.set(resources.Settings{Mode: resources.ModeAdvise, GapS: intp(0)})
+	f.m.beforeLockHook = func() { // the setting flips back after the pass read it
+		f.set.set(resources.Settings{Mode: resources.ModeLease, GapS: intp(0)})
+	}
+	f.pass()
+	f.m.beforeLockHook = nil
+	assert.Equal(t, resources.PosQueued, f.position(q.PositionID).State)
+	assert.Equal(t, resources.StateWaiting, f.state(q.ID))
+}
