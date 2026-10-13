@@ -2,12 +2,16 @@
 // it resolved (unread on a tab, plus cards it resolved) and every open card by identity.
 import { describe, expect, it } from 'vitest'
 import type { Approval } from '../team/types'
-import { createTab, type PaneLayout, type Tab } from '../../types/tab'
+import { createTab, type PaneLayout, type PaneRebuildRecord, type Tab } from '../../types/tab'
 import { badgeReport, knownSessionIdsOf, type BadgeReportInput } from './badge-report'
 
+/** A complete rebuild record (`sessionName` and `tmuxInstance` are required) whose agent has Claude Code session id `sessionId`. */
+const rebuildOf = (sessionName: string, sessionId: string): PaneRebuildRecord => ({
+  sessionName, tmuxInstance: 'i1', agent: { type: 'cc', sessionId, updatedAt: 1 }, capturedAt: 1,
+})
 const tmuxTab = (hostId: string, sessionCode: string, rebuildSessionId?: string): Tab => createTab({
   kind: 'tmux-session', hostId, sessionCode, mode: 'terminal', cachedName: sessionCode, tmuxInstance: 'i1',
-  ...(rebuildSessionId ? { rebuild: { agent: { type: 'cc', sessionId: rebuildSessionId, updatedAt: 1 }, capturedAt: 1 } } : {}),
+  ...(rebuildSessionId ? { rebuild: rebuildOf(sessionCode, rebuildSessionId) } : {}),
 })
 const tabsOf = (...tabs: Tab[]): Record<string, Tab> => Object.fromEntries(tabs.map((t) => [t.id, t]))
 
@@ -152,7 +156,7 @@ describe('badgeReport — resolution check against a recreated session (spec §4
     const dead = createTab({
       kind: 'tmux-session', hostId: 'h1', sessionCode: 'aaaaaa', mode: 'terminal', cachedName: 'work', tmuxInstance: 'i1',
       terminated: 'tmux-restarted',
-      rebuild: { agent: { type: 'cc', sessionId: 'OLD', updatedAt: 1 }, capturedAt: 1 },
+      rebuild: rebuildOf('work', 'OLD'),
     })
     const tabs = tabsOf(dead, tmuxTab('h1', 'aaaaaa', 'NEW'))
     const r = report({ tabs, cards: [{ hostId: 'h1', approval: card('c1', { tmux: 'work:@1.%1', session_id: 'OLD' }) }] })
