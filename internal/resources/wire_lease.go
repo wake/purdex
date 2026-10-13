@@ -241,3 +241,19 @@ type APIError struct {
 	Error  string `json:"error"`
 	Detail string `json:"detail,omitempty"`
 }
+
+// CallerRequest is the body of the routes a session uses on its own requests and
+// position (confirm, cancel, done): holder_pid names the caller, from which the
+// daemon finds the agent and so the session.
+type CallerRequest struct {
+	HolderPID int `json:"holder_pid"`
+}
+
+// PositionResponse answers cancel and done on a position.
+type PositionResponse struct {
+	ID        string `json:"id,omitempty"`
+	State     string `json:"state"`
+	EndReason string `json:"end_reason,omitempty"`
+	// DonePending: the position runs and ends with its last command.
+	DonePending bool `json:"done_pending,omitempty"`
+}

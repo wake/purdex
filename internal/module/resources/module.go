@@ -324,6 +324,10 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/resources/leases", m.handleLeaseDeleteByClient)
 	mux.HandleFunc("GET /api/resources/leases/{id}", m.handleLeaseGet)
 	mux.HandleFunc("DELETE /api/resources/leases/{id}", m.handleLeaseDelete)
+	mux.HandleFunc("POST /api/resources/leases/{id}/confirm", m.handleLeaseConfirm)
+	mux.HandleFunc("POST /api/resources/leases/{id}/cancel", m.handleLeaseCancel)
+	mux.HandleFunc("POST /api/resources/positions/{id}/cancel", m.handlePositionCancel)
+	mux.HandleFunc("POST /api/resources/positions/done", m.handlePositionDone)
 }
 
 // Start runs the boot reconcile, then launches the sampler goroutine (one

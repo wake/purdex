@@ -177,3 +177,10 @@ func (s *leaseStore) SetQueuedReason(id, reason string) error {
 	_, err := s.db.Exec(`UPDATE resource_leases SET queued_reason = ? WHERE id = ? AND state = 'waiting'`, reason, id)
 	return err
 }
+
+// ConfirmRow records that the session said yes to a background command whose turn
+// came.
+func (s *leaseStore) ConfirmRow(id string, now int64) error {
+	_, err := s.db.Exec(`UPDATE resource_leases SET confirmed_at = ? WHERE id = ? AND state = 'waiting' AND mode = 'ask'`, now, id)
+	return err
+}
