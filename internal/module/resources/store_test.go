@@ -95,7 +95,7 @@ func baseRow(id, client string) leaseRow {
 	return leaseRow{
 		ID: id, ClientID: client, Kind: "test-full", Weight: 35, SessionID: "sid-1",
 		HolderPID: 4242, HolderStart: "Thu Oct  9 00:00:00 2026", Scope: resources.ScopeProcess,
-		CreatedAt: 1000, DeadlineAt: 301000, LeaseUntil: 31000,
+		CreatedAt: 1000, DeadlineAt: 301000, LeaseUntil: 31000, Parkable: true,
 	}
 }
 

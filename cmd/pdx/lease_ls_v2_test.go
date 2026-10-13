@@ -60,6 +60,14 @@ func TestLeaseLs_V2ReasonNames(t *testing.T) {
 	assert.Equal(t, `"a\nb"`, waitReasonText(resources.WaiterView{Reason: "a\nb"}, now), "an unknown name cannot pass for structure")
 }
 
+// A parked request shows until when its place is kept.
+func TestLeaseLs_ParkedShowsUntil(t *testing.T) {
+	until := lsNow.Add(14*time.Minute + 30*time.Second).UnixMilli()
+	got := waitReasonText(resources.WaiterView{Reason: "parked", ReasonSince: lsNow.UnixMilli(), ParkedUntil: until}, lsNow)
+	assert.Equal(t, "保留中，到 12:14", got)
+	assert.Equal(t, "保留中 0s", waitReasonText(resources.WaiterView{Reason: "parked", ReasonSince: lsNow.UnixMilli()}, lsNow), "no end time known")
+}
+
 func TestLeaseLs_V2HeaderVariants(t *testing.T) {
 	snap := resources.Snapshot{Available: true, Host: resources.HostUse{Zone: "danger", Trend: "flat"}}
 	assert.Equal(t, "主機：危險 · 用量持平 · 間隔剩 無", hostStatusLine(snap, lsNow))
