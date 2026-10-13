@@ -453,3 +453,15 @@ func TestCost_PendingListIsBoundedWhenWritesKeepFailing(t *testing.T) {
 	}
 	assert.LessOrEqual(t, len(f.m.pendingCosts), 2, "one entry per position and kind of cost")
 }
+
+// The pending list has a hard cap, so a store that refuses writes for good cannot
+// grow it without bound across many positions. (M: no cap.)
+func TestCost_PendingListHasACap(t *testing.T) {
+	f := newPosFix(t)
+	for i := 0; i < maxPendingCosts+20; i++ {
+		id := "pos_" + string(rune('a'+i%26)) + string(rune('a'+i/26))
+		f.m.costs = map[string]*windowCost{id: {state: resources.PosOffered, ms: 1000}}
+		f.m.flushWindowCost(id)
+	}
+	assert.Len(t, f.m.pendingCosts, maxPendingCosts)
+}

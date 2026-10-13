@@ -222,8 +222,8 @@ func (m *Module) flushWindowCost(id string) {
 	if c.ms == 0 {
 		return
 	}
-	// Merged by position and state: the list is bounded by the live positions
-	// even if the writes keep failing.
+	// Merged by position and state, and capped (maxPendingCosts) if the writes keep
+	// failing.
 	for i := range m.pendingCosts {
 		if m.pendingCosts[i].id == id && m.pendingCosts[i].state == c.state {
 			m.pendingCosts[i].ms += c.ms
@@ -231,7 +231,16 @@ func (m *Module) flushWindowCost(id string) {
 		}
 	}
 	m.pendingCosts = append(m.pendingCosts, pendingCost{id: id, state: c.state, ms: c.ms})
+	if len(m.pendingCosts) > maxPendingCosts {
+		// The store has refused writes for a long time: the cost is only a report, so
+		// the oldest are given up rather than letting the list grow without bound.
+		m.logf("[resources] sweeper: dropping the window cost of %s: %d writes pending", m.pendingCosts[0].id, len(m.pendingCosts))
+		m.pendingCosts = m.pendingCosts[1:]
+	}
 }
+
+// maxPendingCosts bounds the window costs waiting for a write that keeps failing.
+const maxPendingCosts = 64
 
 // writePendingCosts writes the settled costs, once per sweep; one whose write
 // fails stays for the next tick, one that was written is gone, so nothing is
