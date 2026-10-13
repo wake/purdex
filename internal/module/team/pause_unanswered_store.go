@@ -23,8 +23,12 @@ func (s *Store) MarkUnanswered(a team.Approval, now int64) (bool, error) {
 		return fail(err)
 	}
 	defer tx.Rollback()
-	// The write lock first (the CAS below is a write; the read is of the same snapshot): a session that was taken in as a member since
-	// the card opened is not paused on its own account.
+	// The write lock first (a write that touches no row, as every transaction here that reads before it writes): the member read below
+	// is then of the state this transaction commits, not of a snapshot another connection can outdate.
+	if _, err := tx.Exec(`UPDATE approval_requests SET id = id WHERE id = ?`, a.ID); err != nil {
+		return fail(err)
+	}
+	// A session that was taken in as a member since the card opened is not paused on its own account.
 	if role, err := memberRoleIn(tx, a.Origin.SessionID); err != nil {
 		return fail(err)
 	} else if role.isMember() {
