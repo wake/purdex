@@ -2,7 +2,7 @@
 // window's report is dropped.
 import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
-import { attachBadgeSender, BadgeCenter, badgeCount, parseBadgeReport, type BadgeReport } from './badge'
+import { attachBadgeSender, BadgeCenter, badgeCount, MAX_STRING, parseBadgeReport, submitBadgeReport, type BadgeReport } from './badge'
 
 const card = (id: string, fallback: string, session?: string) => ({ id, fallback, ...(session ? { session } : {}) })
 const rep = (sessions: string[], cards: BadgeReport['cards'] = []): BadgeReport => ({ sessions, cards })
@@ -63,6 +63,16 @@ describe('parseBadgeReport — the IPC boundary', () => {
   it('rejects a report larger than any real window could send', () => {
     expect(parseBadgeReport({ sessions: Array.from({ length: 10_001 }, (_, i) => `h:${i}`), cards: [] })).toBeNull()
     expect(parseBadgeReport({ sessions: [], cards: Array.from({ length: 10_001 }, (_, i) => card(`c${i}`, `a:h:${i}`)) })).toBeNull()
+  })
+
+  it('rejects a string longer than any id or key could be (the entry cap alone does not bound the bytes)', () => {
+    const long = 'x'.repeat(MAX_STRING + 1)
+    expect(parseBadgeReport({ sessions: [long], cards: [] })).toBeNull()
+    expect(parseBadgeReport({ sessions: [], cards: [card(long, 'a:h:1')] })).toBeNull()
+    expect(parseBadgeReport({ sessions: [], cards: [card('c1', long)] })).toBeNull()
+    expect(parseBadgeReport({ sessions: [], cards: [card('c1', 'a:h:1', long)] })).toBeNull()
+    const edge = 'x'.repeat(MAX_STRING)
+    expect(parseBadgeReport({ sessions: [edge], cards: [card(edge, edge, edge)] })).not.toBeNull()
   })
 
   it('drops unknown extra fields', () => {
@@ -131,6 +141,44 @@ function fakeSender(id: number) {
   return Object.assign(new EventEmitter(), { id })
 }
 
+describe('submitBadgeReport — one `badge:set`', () => {
+  const setup = () => {
+    const apply = vi.fn()
+    const center = new BadgeCenter(apply)
+    return { apply, center, sender: fakeSender(5), onAttach: vi.fn() }
+  }
+
+  it('a valid report is recorded for the sender and counted', () => {
+    const { apply, center, sender } = setup()
+    expect(submitBadgeReport(center, sender, rep(['h:a']))).toBe(true)
+    expect(apply).toHaveBeenLastCalledWith(1)
+  })
+
+  it('a malformed report is ignored whole: nothing recorded, nothing attached, an earlier report stays', () => {
+    const { apply, center, sender, onAttach } = setup()
+    submitBadgeReport(center, sender, rep(['h:a']), onAttach)
+    apply.mockClear()
+    expect(submitBadgeReport(center, sender, { sessions: 'no' }, onAttach)).toBe(false)
+    expect(apply).not.toHaveBeenCalled()
+    expect(onAttach).toHaveBeenCalledTimes(1)
+  })
+
+  it('the per-window hook runs once however many reports a window sends (no listener pile-up)', () => {
+    const { center, sender, onAttach } = setup()
+    for (let i = 0; i < 25; i++) submitBadgeReport(center, sender, rep([`h:${i}`]), onAttach)
+    expect(onAttach).toHaveBeenCalledTimes(1)
+    expect(sender.listenerCount('destroyed')).toBe(1)
+  })
+
+  it('the first report of a malformed-then-valid window still attaches', () => {
+    const { center, sender, onAttach } = setup()
+    submitBadgeReport(center, sender, null, onAttach)
+    expect(onAttach).not.toHaveBeenCalled()
+    submitBadgeReport(center, sender, rep(['h:a']), onAttach)
+    expect(onAttach).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('attachBadgeSender — when a window\'s report is dropped', () => {
   const nav = (over: Record<string, unknown> = {}) => ({ isMainFrame: true, isSameDocument: false, url: 'app://./index.html', ...over })
   const armed = () => {
@@ -180,6 +228,14 @@ describe('attachBadgeSender — when a window\'s report is dropped', () => {
     center.set(8, rep(['h:b'])) // unchanged
     expect(apply).toHaveBeenCalledTimes(1)
     expect(apply).toHaveBeenLastCalledWith(1)
+  })
+
+  it('attaching again to the same sender is a no-op and says so, so the caller can hang its own listeners once', () => {
+    const { center } = armed()
+    const fresh = fakeSender(9)
+    expect(attachBadgeSender(center, fresh)).toBe(true)
+    expect(attachBadgeSender(center, fresh)).toBe(false)
+    expect(attachBadgeSender(center, fresh)).toBe(false)
   })
 
   it('attaching twice to one sender listens once (a window reports many times)', () => {

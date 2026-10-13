@@ -22,6 +22,10 @@ export interface BadgeReport {
 
 /** Far above what any window holds (a session is a tab or a card); a bigger report is not ours. */
 const MAX_ENTRIES = 10_000
+/** Far above any host id + session code / approval id / session id; the entry cap alone does not bound the bytes. */
+export const MAX_STRING = 512
+
+const isShortString = (v: unknown): v is string => typeof v === 'string' && v.length <= MAX_STRING
 
 /** The IPC boundary: a well-formed report, or null (the report is then ignored whole). Extra fields are dropped. */
 export function parseBadgeReport(raw: unknown): BadgeReport | null {
@@ -29,13 +33,13 @@ export function parseBadgeReport(raw: unknown): BadgeReport | null {
   const { sessions, cards } = raw as Record<string, unknown>
   if (!Array.isArray(sessions) || !Array.isArray(cards)) return null
   if (sessions.length > MAX_ENTRIES || cards.length > MAX_ENTRIES) return null
-  if (!sessions.every((s): s is string => typeof s === 'string')) return null
+  if (!sessions.every(isShortString)) return null
   const out: BadgeCard[] = []
   for (const c of cards) {
     if (typeof c !== 'object' || c === null) return null
     const { id, session, fallback } = c as Record<string, unknown>
-    if (typeof id !== 'string' || typeof fallback !== 'string') return null
-    if (session !== undefined && typeof session !== 'string') return null
+    if (!isShortString(id) || !isShortString(fallback)) return null
+    if (session !== undefined && !isShortString(session)) return null
     out.push({ id, fallback, ...(session !== undefined ? { session } : {}) })
   }
   return { sessions: [...sessions], cards: out }
@@ -104,10 +108,11 @@ const attached = new WeakSet<object>()
 
 /**
  * Drop `sender`'s report when its window closes (`destroyed`), its renderer goes away (`render-process-gone`) or its
- * main frame starts navigating — a reload; not a sub-frame, not the SPA's own same-document routing. Once per sender.
+ * main frame starts navigating — a reload; not a sub-frame, not the SPA's own same-document routing. Once per sender:
+ * returns true the one time it attached, so a caller can hang its own per-sender listeners exactly once as well.
  */
-export function attachBadgeSender(center: BadgeCenter, sender: BadgeSender): void {
-  if (attached.has(sender)) return
+export function attachBadgeSender(center: BadgeCenter, sender: BadgeSender): boolean {
+  if (attached.has(sender)) return false
   attached.add(sender)
   const drop = () => center.drop(sender.id)
   sender.on('destroyed', drop)
@@ -115,4 +120,18 @@ export function attachBadgeSender(center: BadgeCenter, sender: BadgeSender): voi
   sender.on('did-start-navigation', (details: { isMainFrame?: boolean; isSameDocument?: boolean }) => {
     if (details.isMainFrame === true && details.isSameDocument !== true) drop()
   })
+  return true
+}
+
+/**
+ * One `badge:set` from `sender`: false (and nothing recorded) for a malformed report, which is ignored whole — the
+ * window's earlier report stays, as it is still the last state it told us. `onFirst` runs once per sender, on its first
+ * valid report; a window reports on every change, so per-report listeners would pile up until it closes.
+ */
+export function submitBadgeReport(center: BadgeCenter, sender: BadgeSender, raw: unknown, onFirst?: () => void): boolean {
+  const report = parseBadgeReport(raw)
+  if (!report) return false
+  if (attachBadgeSender(center, sender)) onFirst?.()
+  center.set(sender.id, report)
+  return true
 }
