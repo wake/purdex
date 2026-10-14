@@ -46,6 +46,14 @@ func (s *leaseStore) ReportRows(since, until int64) ([]resources.ReportLease, []
 	return leases, minutes, err
 }
 
+// ReportNested sums the nested answers of the leases created in [since, until).
+func (s *leaseStore) ReportNested(since, until int64) (int, error) {
+	var n int
+	err := s.db.QueryRow(`SELECT COALESCE(SUM(nested_runs), 0) FROM resource_leases WHERE created_at >= ? AND created_at < ?`,
+		since, until).Scan(&n)
+	return n, err
+}
+
 // ReportPositions reads the positions created in [since, until).
 func (s *leaseStore) ReportPositions(since, until int64) ([]resources.ReportPosition, error) {
 	rows, err := s.db.Query(`SELECT end_reason, commands_started, requeued_from, extensions, created_at, offered_at,
@@ -141,5 +149,9 @@ func (m *Module) handleReport(w http.ResponseWriter, r *http.Request) {
 	}
 	report := resources.BuildReport(from, now.UnixMilli(), leases, minutes)
 	report.Positions = resources.BuildPositionReport(positions)
+	if report.Positions.Nested, err = m.store.ReportNested(from, until); err != nil {
+		writeErr(w, http.StatusInternalServerError, resources.ErrNotReady, "read the nested counts: "+err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, report)
 }
