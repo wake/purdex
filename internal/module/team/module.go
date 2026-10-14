@@ -249,6 +249,7 @@ type Module struct {
 	rosterSig     chan struct{}
 	rosterBarrier chan chan struct{}
 	fresh         freshStream // the relay.fresh stream (relay_fresh_events.go)
+	spawnSeen     sync.Map    // spawn op id -> what its registration poll last saw on the pane (spawn_register.go): the timeout detail's "last seen"
 	handoffKills  sync.Map    // op ids whose handoff kill is being finished (kill_handoff.go): a repeated report signals once
 	// afterRetentionFreshRead, when set, runs in sweepRetention between its two reads; tests delete a fresh row there. nil in production.
 	afterRetentionFreshRead func()

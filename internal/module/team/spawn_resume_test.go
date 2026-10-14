@@ -73,7 +73,7 @@ func TestSpawn_RestartPastBudgetKillsAndFails(t *testing.T) {
 			mustStep(t, f.m.store, id, team.StepAccepted, spawnUpdate{Step: team.StepSessionCreated,
 				TmuxID: "$7", TmuxInstance: "4242:1700000000", PaneID: "%7", At: 1}, true)
 			if c.step == team.StepLaunched {
-				mustStep(t, f.m.store, id, team.StepSessionCreated, spawnUpdate{Step: team.StepLaunched, LaunchedAt: f.clock.Load() - 21_000, At: 2}, true)
+				mustStep(t, f.m.store, id, team.StepSessionCreated, spawnUpdate{Step: team.StepLaunched, LaunchedAt: f.clock.Load() - 61_000, At: 2}, true)
 			}
 			if c.session {
 				f.tmux.AddSessionWithID("$7", "tm-0000000100", root)

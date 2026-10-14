@@ -67,7 +67,12 @@ func (m *Module) spawnRegister(op spawnRow) (*team.Origin, bool) {
 			m.timeOutSpawn(op)
 			return nil, false
 		}
-		if o, ok := m.memberOnPane(op.PaneID); ok {
+		o, ok := m.memberOnPane(op.PaneID)
+		if !ok {
+			_, seen := m.paneState(op.PaneID)
+			m.spawnSeen.Store(op.ID, seen) // what the timeout's detail will say was last seen
+		}
+		if ok {
 			id, err := m.paneIdentity(op.PaneID)
 			if err == nil && !ownsPane(op, id) {
 				m.abortSpawn(op.ID, op.TmuxID, op.TmuxInstance, fmt.Errorf("pane %s is no longer this op's: %+v", op.PaneID, id))
@@ -110,13 +115,58 @@ func (m *Module) timeOutSpawn(op spawnRow) {
 	m.killSpawnSession(op.ID, op.TmuxID, op.TmuxInstance)
 }
 
+// paneState says what the registration is waiting for on pane, in the words of the timeout's detail (#2853): no frame on the pane yet, a
+// frame not verified yet, a frame without a session id, or a session id the registry does not list (yet). The second value is empty when
+// the member is there.
+func (m *Module) paneState(pane string) (team.Origin, string) {
+	if pane == "" {
+		return team.Origin{}, "沒有 pane"
+	}
+	frames, err := m.frames.LiveSessions(m.stopCtx, "cc")
+	if err != nil {
+		return team.Origin{}, "讀不到 frame（" + err.Error() + "）"
+	}
+	state := "pane 上還沒有 frame"
+	for _, f := range frames {
+		if f.PaneID != pane {
+			continue
+		}
+		switch {
+		case !f.Verified:
+			state = "有 frame，尚未驗證"
+		case f.SessionID == "":
+			state = "有 frame，還沒有 session id"
+		default:
+			o, ok, err := m.origins.ResolveOriginBySession(f.SessionID)
+			if err == nil && ok {
+				return o, ""
+			}
+			state = "有 session id，registry 還沒有它"
+		}
+	}
+	return team.Origin{}, state
+}
+
 // startTimeoutDetail is why a member did not register in time, for the failed op (#2761). The signal is the mod's own hello:
 // any session of this host whose mod said hello (it survives a restart, mod_hello) proves the hooks work here, so a member that
 // is late on such a host is a busy host; a host that never heard one is the one that needs `pdx setup`. Both name the budget
 // and, when the resources module has a sample, the host's load under it. Computed when the op is read, so the words of one
 // failed op can change if a hello arrives later.
-func (m *Module) startTimeoutDetail() string {
+func (m *Module) startTimeoutDetail(op spawnRow) string {
 	secs := m.spawnBudget / 1000
+	waited := ""
+	if op.LaunchedAt > 0 && op.UpdatedAt >= op.LaunchedAt {
+		waited = fmt.Sprintf("已等 %d 秒", (op.UpdatedAt-op.LaunchedAt)/1000)
+	}
+	if v, ok := m.spawnSeen.Load(op.ID); ok { // lost with a restart: then only the seconds are said
+		if waited != "" {
+			waited += "；"
+		}
+		waited += "最後看到：" + v.(string)
+	}
+	if waited != "" {
+		waited = "（" + waited + "）"
+	}
 	m.mu.Lock()
 	seen := false
 	for _, h := range m.modSeen {
@@ -128,9 +178,9 @@ func (m *Module) startTimeoutDetail() string {
 	m.mu.Unlock()
 	load := m.hostLoadNote()
 	if seen {
-		return fmt.Sprintf("主機忙：member 沒在 %d 秒內完成啟動%s，名額已釋出，可以稍後重試", secs, load)
+		return fmt.Sprintf("主機忙：member 沒在 %d 秒內完成啟動%s%s，名額已釋出，可以稍後重試", secs, waited, load)
 	}
-	return fmt.Sprintf("member 沒在 %d 秒內完成啟動%s，這台主機從沒看過 Purdex hooks（pdx setup --agent cc）", secs, load)
+	return fmt.Sprintf("member 沒在 %d 秒內完成啟動%s%s，這台主機從沒看過 Purdex hooks（pdx setup --agent cc）", secs, waited, load)
 }
 
 // hostLoadNote is "（load 1/5/15，N 核；記憶體已用 X%，壓力：…）" from the latest resources sample, or "" without one: the

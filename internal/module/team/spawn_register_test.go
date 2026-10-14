@@ -2,6 +2,7 @@ package teammod
 
 import (
 	"context"
+	"github.com/wake/purdex/internal/module/agent"
 	"reflect"
 	"testing"
 	"time"
@@ -59,7 +60,7 @@ func TestSpawn_StartTimeoutKillsAndFreesTheSlot(t *testing.T) {
 func TestSpawn_PastTheBudgetItTimesOutEvenWithAMemberThere(t *testing.T) {
 	f, root := newSpawnFixture(t, 1)
 	f.m.spawnSleep = func(context.Context, time.Duration) {
-		f.clock.Add(21_000)
+		f.clock.Add(61_000)
 		f.register("%0", "sid-m1")
 	}
 	if op := f.runOp(1, root, nil); op.State != team.SpawnFailed || op.Reason != team.SpawnReasonStartTimeout || len(f.tmux.KillIfInstanceCalls()) != 1 {
@@ -97,7 +98,7 @@ func TestSpawn_AtTheDeadlineOnlyOneRunnerActs(t *testing.T) {
 		if _, won := f.m.spawnRegister(op); !won {
 			t.Fatal("the registration did not win")
 		}
-		f.clock.Add(21_000)
+		f.clock.Add(61_000)
 		f.m.spawnRegister(op) // the second runner, with its read from before
 		now, _, _ := f.m.store.GetSpawnOp(op.ID)
 		if now.State != team.SpawnRunning || now.Step != team.StepRegistered || len(f.tmux.KillIfInstanceCalls()) != 0 {
@@ -107,7 +108,7 @@ func TestSpawn_AtTheDeadlineOnlyOneRunnerActs(t *testing.T) {
 	t.Run("timeout first", func(t *testing.T) {
 		f, op := launched(t)
 		f.frames.afterRead = func() {
-			f.clock.Add(21_000)
+			f.clock.Add(61_000)
 			f.m.spawnRegister(op) // the second runner times the op out
 		}
 		if _, won := f.m.spawnRegister(op); won {
@@ -177,6 +178,7 @@ func (r fakeHostReader) LatestHost() (resources.HostUse, bool) { return r.h, r.o
 
 func TestSpawnView_StartTimeoutDetailSaysBusyOrNoHooks(t *testing.T) {
 	load := "（load 18.1／16.4／16.3，10 核；記憶體已用 84%，壓力：警告）"
+	waited := "（已等 60 秒；最後看到：pane 上還沒有 frame）" // the fixture's clock moves 250 ms a poll: the 60 s budget is spent to the poll
 	sample := fakeHostReader{h: resources.HostUse{Load1: 18.1, Load5: 16.4, Load15: 16.3, NCPU: 10, Mem: 84, Pressure: 2}, ok: true}
 	for _, c := range []struct {
 		name   string
@@ -184,11 +186,11 @@ func TestSpawnView_StartTimeoutDetailSaysBusyOrNoHooks(t *testing.T) {
 		reader resources.HostReader
 		want   string
 	}{
-		{"hooks seen, sample", true, sample, "主機忙：member 沒在 20 秒內完成啟動" + load + "，名額已釋出，可以稍後重試"},
-		{"hooks seen, no sample", true, nil, "主機忙：member 沒在 20 秒內完成啟動，名額已釋出，可以稍後重試"},
-		{"hooks seen, sample not usable yet", true, fakeHostReader{}, "主機忙：member 沒在 20 秒內完成啟動，名額已釋出，可以稍後重試"},
-		{"hooks never seen, sample", false, sample, "member 沒在 20 秒內完成啟動" + load + "，這台主機從沒看過 Purdex hooks（pdx setup --agent cc）"},
-		{"hooks never seen, no sample", false, nil, "member 沒在 20 秒內完成啟動，這台主機從沒看過 Purdex hooks（pdx setup --agent cc）"},
+		{"hooks seen, sample", true, sample, "主機忙：member 沒在 60 秒內完成啟動" + waited + load + "，名額已釋出，可以稍後重試"},
+		{"hooks seen, no sample", true, nil, "主機忙：member 沒在 60 秒內完成啟動" + waited + "，名額已釋出，可以稍後重試"},
+		{"hooks seen, sample not usable yet", true, fakeHostReader{}, "主機忙：member 沒在 60 秒內完成啟動" + waited + "，名額已釋出，可以稍後重試"},
+		{"hooks never seen, sample", false, sample, "member 沒在 60 秒內完成啟動" + waited + load + "，這台主機從沒看過 Purdex hooks（pdx setup --agent cc）"},
+		{"hooks never seen, no sample", false, nil, "member 沒在 60 秒內完成啟動" + waited + "，這台主機從沒看過 Purdex hooks（pdx setup --agent cc）"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f, root := newSpawnFixture(t, 1)
@@ -224,5 +226,58 @@ func TestSpawnView_StartTimeoutDetailSaysBusyOrNoHooks(t *testing.T) {
 	row.Reason = team.SpawnReasonCreateFailed
 	if op, _ := f.m.spawnView(row, ""); op.Detail != "" {
 		t.Errorf("detail of another reason = %q", op.Detail)
+	}
+}
+
+// #2853: a member that registers at the 30th second is a success (the budget is 60 s). Mutation gate: a 20 s budget → red.
+func TestSpawn_RegisteringAtThirtySecondsSucceeds(t *testing.T) {
+	f, root := newSpawnFixture(t, 1)
+	done := false
+	f.m.spawnSleep = func(context.Context, time.Duration) {
+		f.clock.Add(30_000)
+		if !done {
+			done = true
+			f.register("%0", "sid-m1")
+		}
+	}
+	if op := f.runOp(1, root, nil); op.State != team.SpawnDone || op.SessionID != "sid-m1" {
+		t.Fatalf("op = %+v, want done: a member that registers at 30 s is in time", op)
+	}
+}
+
+// The budget is 60 s on the wire, in the spec and in the module's own default.
+func TestSpawn_BudgetIsSixtySeconds(t *testing.T) {
+	if team.SpawnRegisterS != 60 {
+		t.Fatalf("SpawnRegisterS = %d", team.SpawnRegisterS)
+	}
+	f, _ := newSpawnFixture(t, 1)
+	if f.m.spawnBudget != 60_000 {
+		t.Fatalf("spawnBudget = %d", f.m.spawnBudget)
+	}
+}
+
+// What the poll last saw on the op's pane, for the timeout's detail: no frame, a frame not verified, a frame with no session id. (The
+// registry-missing case needs the origins fake: seen with the full timeout run above.) Mutation gate: collapse the states → red.
+type fakeFrames2 struct{ list []agent.TerminalSession }
+
+func (r fakeFrames2) LiveSessions(context.Context, string) ([]agent.TerminalSession, error) {
+	return r.list, nil
+}
+
+func TestSpawn_PaneStateSaysWhatIsMissing(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		list []agent.TerminalSession
+		want string
+	}{
+		{"no frame", nil, "pane 上還沒有 frame"},
+		{"another pane", []agent.TerminalSession{{PaneID: "%9", Verified: true, SessionID: "s"}}, "pane 上還沒有 frame"},
+		{"not verified", []agent.TerminalSession{{PaneID: "%0", Verified: false, SessionID: "s"}}, "有 frame，尚未驗證"},
+		{"no session id", []agent.TerminalSession{{PaneID: "%0", Verified: true}}, "有 frame，還沒有 session id"},
+	} {
+		m := &Module{frames: fakeFrames2{c.list}}
+		if _, got := m.paneState("%0"); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
 	}
 }

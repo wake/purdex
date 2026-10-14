@@ -75,7 +75,7 @@ const (
 const (
 	TeamEndLeadGone = "lead_gone" // Team.EndReason: the lead's conversation ended (§7.1)
 
-	SpawnRegisterS = 20 // §7.2 step 5: a launched member must register within this
+	SpawnRegisterS = 60 // §7.2 step 5: a launched member must register within this (20 until #2853: a cold Claude Code on a loaded host took longer)
 	SpawnPollWaitS = 25 // POST /api/team/spawns answers within this, running or not
 
 	// DefaultMemberCommand is host config team.member_command when unset
