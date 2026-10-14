@@ -149,6 +149,17 @@ func retentionVictims(ops []team.RelayOp, chainOf func(team.RelayOp) string, now
 // nothing outside <data_dir>/relay/ is touched); a row whose path is
 // anything else is marked pruned without a removal, and logged.
 func (m *Module) sweepRetention() {
+	// The fresh rows are read BEFORE the ops: a row deleted in between has already touched its op's updated_at (the same transaction), so
+	// the ops read below sees the new time; read the other way round, a sweep could hold an old updated_at and a fresh set without the
+	// op, and remove a file that has just entered its 3 days (codex attack).
+	halves, _, err := m.store.FreshHalves()
+	if err != nil {
+		m.logf("[team] retention: fresh halves: %v", err)
+		return // not knowing which halves are fresh is no licence to remove a file
+	}
+	if m.afterRetentionFreshRead != nil {
+		m.afterRetentionFreshRead() // test seam: a fresh row deleted between the two reads
+	}
 	ops, err := m.store.ListUnprunedRelayOps()
 	if err != nil {
 		m.logf("[team] retention: %v", err)
@@ -164,11 +175,6 @@ func (m *Module) sweepRetention() {
 			return root
 		}
 		return op.SessionID
-	}
-	halves, _, err := m.store.FreshHalves()
-	if err != nil {
-		m.logf("[team] retention: fresh halves: %v", err)
-		return // not knowing which halves are fresh is no licence to remove a file
 	}
 	fresh := map[string]bool{}
 	for _, h := range halves {

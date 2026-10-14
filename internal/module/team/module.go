@@ -249,6 +249,8 @@ type Module struct {
 	rosterSig     chan struct{}
 	rosterBarrier chan chan struct{}
 	fresh         freshStream // the relay.fresh stream (relay_fresh_events.go)
+	// afterRetentionFreshRead, when set, runs in sweepRetention between its two reads; tests delete a fresh row there. nil in production.
+	afterRetentionFreshRead func()
 
 	// afterRead, when set, runs in pollRow right after the row is read
 	// and before the wait. Tests use it to close the row in that window

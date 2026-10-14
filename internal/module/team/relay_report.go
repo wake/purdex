@@ -213,6 +213,9 @@ func (m *Module) afterReport(op team.RelayOp) {
 		// restart between the two. Unchanged is free (the hash gate).
 		m.rosterChanged()
 	}
+	if op.Mode == team.RelayModeHalf && op.Reason == team.RelayReasonHalf {
+		m.rosterChanged() // the written half became the session's fresh half: the relay.fresh list and the roster follow (RT-3a2)
+	}
 	if op.State.Terminal() && op.RequestID != "" {
 		m.closeRequestOfReportedOp(op)
 	}

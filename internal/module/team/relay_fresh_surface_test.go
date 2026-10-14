@@ -313,3 +313,51 @@ func TestFreshWire_NoSessionsIsAnEmptyListNotNull(t *testing.T) {
 		}
 	}
 }
+
+// The two transitions that only touch the fresh row inside a report - the half written, a relay claiming - signal the publisher on their
+// own: nothing else is pending when they happen (codex R1). Mutation gates: no signal after the half's written → red; none after the claim → red.
+func TestFreshSurface_WrittenAndClaimSignalOnTheirOwn(t *testing.T) {
+	f := newFixture(t)
+	w := f.watchFresh()
+	op := f.halfOp("sid-1")
+	w.drain() // the begin's and the writing's signals are spent
+	if err := os.MkdirAll(filepath.Dir(op.HandoffPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(op.HandoffPath, []byte("# HANDOFF\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c, _, ae := f.report(op.ID, team.RelayReportRequest{State: team.RelayWritten}); c != http.StatusOK {
+		t.Fatalf("written: %d %+v", c, ae)
+	}
+	evs := w.drain()
+	if len(evs) != 1 || evs[0].Op != "changed" || len(evs[0].Sessions) != 1 || evs[0].Sessions[0].OpID != op.ID {
+		t.Fatalf("after written: %+v, want one changed with the half", evs)
+	}
+	r := f.begin("sid-1")
+	w.drain()
+	if c, _ := f.decide(r.RequestID, "approve"); c != http.StatusOK {
+		t.Fatalf("approve: %d", c)
+	}
+	evs = w.drain()
+	if len(evs) != 1 || evs[0].Op != "changed" || len(evs[0].Sessions) != 0 {
+		t.Fatalf("after the claim: %+v, want one changed with no sessions", evs)
+	}
+}
+
+// A fresh row that goes between the sweep's two reads does not make the sweep remove the file at once: the row's deletion has touched the
+// op's updated_at, and the sweep reads the ops after the rows (codex attack). Mutation gate: read the ops first → the file is removed (red).
+func TestRetention_ARowDeletedMidSweepKeepsTheFile(t *testing.T) {
+	f := newFixture(t)
+	op := f.halfOnDisk("half-1", "sid-1", 1*day)
+	f.clock.Store(10 * day)
+	f.m.afterRetentionFreshRead = func() {
+		if err := f.m.store.DeleteFreshHalf("sid-1", "", f.m.now()); err != nil {
+			t.Error(err)
+		}
+	}
+	f.m.sweepRetention()
+	if _, err := os.Stat(op.HandoffPath); err != nil {
+		t.Fatalf("a row deleted mid-sweep cost the file its 3 days: %v", err)
+	}
+}
