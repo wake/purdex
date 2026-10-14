@@ -17,6 +17,8 @@ import { quotaHostIds, useRelayQuotaStore } from './relay-quota'
 import { useMaxMembersStore } from './max-members'
 import { useRootsStore } from './roots'
 import { useWorkbookStore } from '../../stores/useWorkbookStore'
+import { useJournalStore } from '../../stores/useJournalStore'
+import { JOURNAL_CAPABILITY } from '../journal/types'
 import { WORKBOOK_V1_CAPABILITY, WORKBOOK_V2_CAPABILITY } from '../workbook/types'
 import { PERSON_CAPABILITY, RELAY_QUOTA_CAPABILITY, TEAM_EDIT_CAPABILITY, TEAM_MAX_MEMBERS_CAPABILITY, TEAM_PAUSE_CAPABILITY, UNANSWERED_CAPABILITY, UNATTENDED_CAPABILITY } from './types'
 
@@ -32,6 +34,7 @@ export function startUnattendedSupport(): () => void {
     current.set(hostId, generation)
     useUnattendedStore.getState().invalidateSupport(hostId) // what the last connection said is not this one's answer (every flag: #2309)
     useWorkbookStore.getState().fence(hostId) // same for the workbook: a new connection generation, support unknown until this answer
+    useJournalStore.getState().fence(hostId) // and the journal: unknown until this answer, but its sticky last answer stays
     fetchHostInfo(hostId).then(
       (info) => {
         if (current.get(hostId) !== generation) return
@@ -47,6 +50,7 @@ export function startUnattendedSupport(): () => void {
         // The workbook flags share this guard; each answer is a new connection generation for the workbook store
         // (a seat is loaded once per generation, workbook-loader.ts).
         useWorkbookStore.getState().setSupport(hostId, { v1: listed.includes(WORKBOOK_V1_CAPABILITY), v2: listed.includes(WORKBOOK_V2_CAPABILITY) })
+        useJournalStore.getState().setSupport(hostId, listed.includes(JOURNAL_CAPABILITY))
       },
       () => { // not retried until the next trigger; the probe's flags stay unknown rather than keeping an old 'yes'
         // `support` was made unknown when this probe started; a `team.unattended` frame that proved it since is live
@@ -69,6 +73,9 @@ export function startUnattendedSupport(): () => void {
     for (const hostId of Object.keys(store.byHost)) {
       if (!next.hosts[hostId]) store.forgetHost(hostId)
     }
+    for (const hostId of Object.keys(useJournalStore.getState().sticky)) {
+      if (!next.hosts[hostId]) useJournalStore.getState().forgetHost(hostId) // a removed host's journal answer goes with it
+    }
     for (const hostId of quotaHostIds(useRelayQuotaStore.getState())) {
       if (!next.hosts[hostId]) useRelayQuotaStore.getState().forgetHost(hostId) // a removed host's numbers go with it
     }
@@ -84,6 +91,7 @@ export function startUnattendedSupport(): () => void {
         useRelayQuotaStore.getState().forgetHost(hostId) // and so are the quota numbers it confirmed
         useMaxMembersStore.getState().forgetHost(hostId) // and a cap request still out to it
         useRootsStore.getState().forgetHost(hostId)
+        useJournalStore.getState().forgetHost(hostId) // the old daemon's journal.v1 answer, sticky included, is not the new one's
       }
       if (next.runtime[hostId]?.status !== 'connected') {
         // The connection the capabilities were learned on is gone: they are unknown until the next probe answers, and an
@@ -92,6 +100,7 @@ export function startUnattendedSupport(): () => void {
           current.delete(hostId)
           store.invalidateSupport(hostId)
           useWorkbookStore.getState().fence(hostId) // the connection is gone: requests still out must not land
+          useJournalStore.getState().fence(hostId) // unknown now; the sticky answer stays so the journal UI does not flash back
         }
         continue
       }
