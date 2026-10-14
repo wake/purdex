@@ -193,16 +193,17 @@ const GRANT = (extra: object = {}) => JSON.stringify({ id: 'lease-1', granted: t
 const BASH_OK = { ref: 1, result: { stdout: 'ok', stderr: '', interrupted: false }, text: 'ok' }
 const UUID4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
-type Rig = { calls: string[][]; ran: string[]; sid: { v: string; mode: 'ok' | 'throw' | 'hang' }; checks: string[]; verdict: (command: string) => string }
+type Rig = { calls: string[][]; ran: string[]; sid: { v: string; mode: 'ok' | 'throw' | 'hang' }; checks: string[]; verdict: (command: string) => string; env: Record<string, string> }
 // rig stands the engine up: `answer` is what pdx says to each call (by subcommand), `bash` the tool beneath.
 function rig(on: any, answer: (argv: string[]) => any, bash: (e: any) => any = () => BASH_OK, pdxJSON?: string): Rig {
-  const r: Rig = { calls: [], ran: [], sid: { v: 'sess-1', mode: 'ok' }, checks: [], verdict: () => 'allow' }
+  const r: Rig = { calls: [], ran: [], sid: { v: 'sess-1', mode: 'ok' }, checks: [], verdict: () => 'allow', env: { SHELL: '/bin/zsh' } }
   on('session.id', () => {
     if (r.sid.mode === 'throw') throw new Error('the engine refused session.id')
     if (r.sid.mode === 'hang') return new Promise(() => {})
     return { value: r.sid.v }
   })
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  on('env.get', (_$: any, e: any) => ({ value: r.env[e.name] }))
   on('session.cwd', () => ({ value: '/work/purdex' }))
   on('tool.check', { tool: 'Bash' }, (_$: any, e: any) => { r.checks.push(e.input.command); return { decision: r.verdict(e.input.command) } })
   on('clock.sleep', async (_$: any, e: any) => { await new Promise((res) => setTimeout(res, e.ms)); return { value: undefined } })
@@ -406,7 +407,8 @@ test('a heavy background Bash is wrapped in pdx lease run --ask with its kind an
   const r = rig(on, () => ok(GRANT()))
   await startInteractive($)
   const out = await bash($, BG, { run_in_background: true })
-  expect(wrappedOf(r)).toBe(`'pdx' lease run --ask --kind build --command 'pnpm run build' -- "\${SHELL:-/bin/sh}" -c 'pnpm run build'`)
+  expect(wrappedOf(r)).toBe(`'pdx' lease run --ask --kind build --command 'pnpm run build' -- /bin/zsh -c 'pnpm run build'`)
+  expect(wrappedOf(r)).not.toContain('$') // a variable in the wrapped command makes the engine ask (M-P2 (c))
   expect(r.calls).toEqual([]) // the wrapped command asks for itself; the mod does not
   // the wrap is announced
   expect(out.context?.[0]).toContain('pdx lease run --ask')
@@ -421,6 +423,18 @@ test('the wrap quotes the command for the shell, and the worker cap goes inside 
   // every single quote inside a quoted word is closed, escaped and opened again
   expect(w).toContain(`--command 'pnpm run build -- --name="it'\\''s"; npx vitest run'`)
   expect(w).toContain(`-c 'pnpm run build -- --name="it'\\''s"; npx vitest run --maxWorkers=3'`)
+})
+
+test('the shell is a literal path: SHELL from the environment, else /bin/sh', async ($, on) => {
+  const r = rig(on, () => ok(GRANT()))
+  await startInteractive($)
+  r.env.SHELL = '/opt/homebrew/bin/fish'
+  await bash($, BG, { run_in_background: true })
+  r.env.SHELL = '$(evil) x'
+  await bash($, BG, { run_in_background: true })
+  delete r.env.SHELL
+  await bash($, BG, { run_in_background: true })
+  expect(r.ran.map((c) => c.split(' -- ')[1].split(' -c ')[0])).toEqual(['/opt/homebrew/bin/fish', '/bin/sh', '/bin/sh'])
 })
 
 test('a background pdx lease run is left as it is, not wrapped twice', async ($, on) => {

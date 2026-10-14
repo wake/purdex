@@ -572,6 +572,14 @@ async function leaseCall($, e, next) {
 // An interactive session is one a person is at: its mod can be told the daemon's notices. Set by session.start.
 let interactive = false
 
+// shellPath is the user's shell as a literal path (M-P2 (c): a `"${SHELL:-/bin/sh}"` or `"$SHELL"` in the wrapped
+// command makes the engine ask for permission, a literal path does not); /bin/sh when the environment has none or
+// something that is not a plain path.
+async function shellPath($) {
+  const sh = await bounded($, () => $.env.get('SHELL'))
+  return typeof sh === 'string' && /^\/[A-Za-z0-9_./+-]+$/.test(sh) ? sh : '/bin/sh'
+}
+
 // backgroundCall wraps a heavy background command in `pdx lease run --ask` (T25), in an interactive session
 // only (nothing can ask any other), and only when the wrap does not change the permission verdict: a prompt that
 // the original command would not have raised is the cost the mod must not add (Q1). A command already going
@@ -582,8 +590,9 @@ async function backgroundCall($, e, next) {
   if (!c) return next(e)
   const cfg = await leaseConfig($)
   const inner = c.needsMaxWorkers ? rewriteMaxWorkers(e.command).command : e.command
+  const shell = await shellPath($)
   const wrapped = [sq(cfg.bin), 'lease', 'run', '--ask', '--kind', c.kind, ...(cfg.config ? ['--config', sq(cfg.config)] : []),
-    '--command', sq(cutBytes(e.command, COMMAND_MAX)), '--', '"${SHELL:-/bin/sh}"', '-c', sq(inner)].join(' ')
+    '--command', sq(cutBytes(e.command, COMMAND_MAX)), '--', shell, '-c', sq(inner)].join(' ')
   const verdict = async (command) => {
     const v = await bounded($, () => $.tool.check({ tool: 'Bash', input: { command, run_in_background: true } }))
     return v && typeof v.decision === 'string' ? v.decision : null
