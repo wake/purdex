@@ -192,6 +192,11 @@ func TestJournalAPI_ASoloSessionReadsItsConversation(t *testing.T) {
 	if !slices.Equal(ids(p.Pinned), []string{"ask"}) {
 		t.Errorf("pinned = %v", ids(p.Pinned))
 	}
+	// the pinned band and the open questions cover the whole unit, not the page: a page of one entry still carries both
+	_, one, _ := j.page("/api/journal?session_id=s2&limit=1")
+	if !slices.Equal(ids(one.Entries), []string{"late"}) || !one.More || !slices.Equal(ids(one.Pinned), []string{"ask"}) || one.OpenConfirms != 2 {
+		t.Errorf("a page of one: entries %v more=%v pinned %v open_confirms=%d", ids(one.Entries), one.More, ids(one.Pinned), one.OpenConfirms)
+	}
 	var late jEntry
 	for _, e := range p.Entries {
 		if e.ID == "late" {
@@ -227,6 +232,21 @@ func TestJournalAPI_AnEntryWithoutActorOrTextStillHasBoth(t *testing.T) {
 	_, p, raw := j.page("/api/journal?session_id=s1")
 	if len(p.Entries) != 1 || !strings.Contains(raw, `"actor":""`) || !strings.Contains(raw, `"text":""`) {
 		t.Fatalf("entries %v\n%s", ids(p.Entries), raw)
+	}
+}
+
+// The person's name is the configured one, or the default when there is none: the App highlights it wherever it appears.
+// Mutation gate: a name written into the code (red); the default missing (red).
+func TestJournalAPI_PersonNameFollowsTheConfig(t *testing.T) {
+	j := newJournalAPI(t)
+	j.unit("solo:s1", "專案 A")
+	j.m.core.Cfg.Journal = &config.JournalConfig{PersonName: "Hana"}
+	if _, p, _ := j.page("/api/journal?session_id=s1"); p.PersonName != "Hana" {
+		t.Errorf("person_name = %q, want Hana", p.PersonName)
+	}
+	j.m.core.Cfg.Journal = nil
+	if _, p, _ := j.page("/api/journal?session_id=s1"); p.PersonName != "使用者" {
+		t.Errorf("person_name = %q, want the default", p.PersonName)
 	}
 }
 
