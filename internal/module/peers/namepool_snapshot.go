@@ -47,6 +47,10 @@ type remoteNameSnapshot struct {
 	mu    sync.Mutex
 	hosts map[string]*hostNames
 	seq   uint64 // last ticket handed out
+	// floor and keep are the last prune's: an answer to a request drawn before
+	// it is dropped unless its host was kept.
+	floor uint64
+	keep  map[string]bool
 }
 
 func newRemoteNameSnapshot() *remoteNameSnapshot {
@@ -85,6 +89,9 @@ func (s *remoteNameSnapshot) ticket() uint64 {
 func (s *remoteNameSnapshot) recordTicket(hostID string, rows []ipeers.PeerRecord, addressVersion int, ticket uint64, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if ticket < s.floor && !s.keep[hostID] {
+		return // sent before its host was pruned: it must not bring the host back
+	}
 	var prev map[string]remoteHolder
 	if h := s.hosts[hostID]; h != nil {
 		if ticket < h.ticket {
@@ -139,10 +146,19 @@ func (s *remoteNameSnapshot) held(now time.Time) map[string]time.Time {
 }
 
 // prune forgets every host whose id is not in keep (a host removed from the
-// config).
+// config), and remembers that nothing sent before now may bring one back: a
+// request already in flight when the host was removed would otherwise
+// reinstate its names when it finally answers (answers for the kept hosts are
+// not affected).
 func (s *remoteNameSnapshot) prune(keep map[string]bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.seq++ // above every ticket drawn so far, below every ticket drawn after
+	s.floor = s.seq
+	s.keep = make(map[string]bool, len(keep))
+	for id := range keep {
+		s.keep[id] = true
+	}
 	for id := range s.hosts {
 		if !keep[id] {
 			delete(s.hosts, id)

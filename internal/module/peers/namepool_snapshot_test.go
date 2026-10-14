@@ -199,6 +199,30 @@ func TestRemoteNameSnapshot_ADifferentHolderDoesNotInheritAFirstSighting(t *test
 	}
 }
 
+// A request already in flight when its host is removed from the config must not
+// bring the host's names back when it finally answers (codex incremental
+// review): the pruned host keeps the ticket high-water mark.
+func TestRemoteNameSnapshot_AnAnswerInFlightWhenAHostIsPrunedIsDropped(t *testing.T) {
+	t0 := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	for _, known := range []bool{true, false} { // the host had an earlier answer, or none yet
+		s := newRemoteNameSnapshot()
+		if known {
+			s.record("h1", []ipeers.PeerRecord{snapRow("a-emma", snapStartA)}, ipeers.AddressVersionV5, t0)
+		}
+		inFlight := s.ticket()
+		s.prune(map[string]bool{})
+		s.recordTicket("h1", []ipeers.PeerRecord{snapRow("a-adam", snapStartA)}, ipeers.AddressVersionV5, inFlight, t0.Add(time.Second))
+		if got := s.held(t0.Add(2 * time.Second)); len(got) != 0 {
+			t.Fatalf("known=%v: held = %v, want none after the host was pruned", known, got)
+		}
+		// A request sent after the prune (the host is configured again) counts.
+		s.recordTicket("h1", []ipeers.PeerRecord{snapRow("a-adam", snapStartA)}, ipeers.AddressVersionV5, s.ticket(), t0.Add(3*time.Second))
+		if _, held := s.held(t0.Add(4 * time.Second))["adam"]; !held {
+			t.Fatalf("known=%v: a request sent after the prune was dropped", known)
+		}
+	}
+}
+
 func TestRemoteNameSnapshot_PruneForgetsHostsThatAreNoLongerConfigured(t *testing.T) {
 	t0 := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 	s := newRemoteNameSnapshot()
