@@ -46,7 +46,21 @@ func (d *Drainer) writeTaskRow(it OutboxItem) error {
 			return err
 		}
 	}
-	return journal.WriteTasks(h.tasksFile, d.taskFileRows(p))
+	// A row holds the whole list as of its time, and a delayed row is retried after later ones were written: only a row newer
+	// than the last one shown may rewrite the file, or the retry would put an older list back.
+	d.mu.Lock()
+	newest := d.taskRow[it.UnitKey]
+	d.mu.Unlock()
+	if it.ID < newest {
+		return nil
+	}
+	if err := journal.WriteTasks(h.tasksFile, d.taskFileRows(p)); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	d.taskRow[it.UnitKey] = it.ID
+	d.mu.Unlock()
+	return nil
 }
 
 // taskFileRows is the mirror's task list as the tasks file shows it.

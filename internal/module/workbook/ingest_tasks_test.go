@@ -460,6 +460,40 @@ func TestTaskMirror_TheTasksFileShowsTheOwnerAndTheRefsOfEachTask(t *testing.T) 
 	}
 }
 
+// A task row carries the whole list as of its time. When an older row is delayed (its mark failed) and a newer one is
+// written first, the older row's retry must not put the older list back.
+// Mutation gate: write every row's list whatever came before -> the retry restores the old list (red).
+func TestTaskMirror_ARetriedOlderRowDoesNotRestoreAnOlderTaskList(t *testing.T) {
+	k := newMirrorKit(t)
+	k.finishBaseline()
+	k.feed.set(k.task(1, "寫文案", taskDoing, time.Second, time.Second))
+	k.now = k.now.Add(mirrorEvery)
+	k.tick() // row A: the list with task 1 doing
+	k.feed.set(k.task(1, "寫文案", taskCompleted, time.Second, 11*time.Second))
+	k.now = k.now.Add(mirrorEvery)
+	k.tick() // row B: the list with task 1 done
+	failed := false
+	k.d.markDone = func(id int64) error {
+		if !failed {
+			failed = true
+			return errors.New("crash before the mark") // row A is written, then delayed
+		}
+		return k.st.MarkOutboxDone(id)
+	}
+	k.drain()
+	k.now = k.now.Add(retryMax + time.Second)
+	if n := k.drain(); n != 1 {
+		t.Fatalf("the delayed row was handled %d times, want once", n)
+	}
+	states := map[string]journal.TaskState{}
+	for _, tk := range k.tasksFile() {
+		states[tk.Key] = tk.State
+	}
+	if states[mkTeam+"-1"] != journal.TaskDone {
+		t.Fatalf("tasks file = %v: the retried older row put its list back", states)
+	}
+}
+
 // A closing line whose task_done was edited away is logged and skipped: the row is done, not retried for ever, and it
 // does not block the rows behind it.
 // Mutation gate: treat a missing entry as a failure -> drain fails, the row stays undone (red).
