@@ -62,7 +62,7 @@ func runLeaseVerb(ctx context.Context, verb string, args []string, stdout, stder
 	defer cancel()
 	var raw json.RawMessage
 	if _, err := client.Do(rctx, http.MethodPost, path, resources.CallerRequest{HolderPID: os.Getpid()}, &raw); err != nil {
-		return reportVerbFailure(err, stderr)
+		return reportVerbFailure(err, strings.HasPrefix(path, "/api/resources/positions/"), stderr)
 	}
 	if verb == "confirm" {
 		return printConfirmed(raw, stdout, stderr)
@@ -107,7 +107,7 @@ func printConfirmed(raw json.RawMessage, stdout, stderr io.Writer) int {
 // reportVerbFailure prints why a verb was refused and picks the exit code: 13
 // for a refusal of the daemon (403, 409, and a request or position that is not
 // there), 20/21 when the daemon cannot be used, 1 otherwise.
-func reportVerbFailure(err error, stderr io.Writer) int {
+func reportVerbFailure(err error, onPosition bool, stderr io.Writer) int {
 	var se *daemonclient.StatusError
 	switch {
 	case errors.As(err, &se) && (se.Status == http.StatusForbidden):
@@ -117,7 +117,7 @@ func reportVerbFailure(err error, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "pdx lease: 找不到這個請求（可能已逾時或已取消）")
 		return ExitRefused
 	case errors.As(err, &se) && se.Status == http.StatusConflict:
-		fmt.Fprintf(stderr, "pdx lease: %s\n", verbConflictText(se.API.Error))
+		fmt.Fprintf(stderr, "pdx lease: %s\n", verbConflictText(se.API.Error, onPosition))
 		return ExitRefused
 	case errors.Is(err, daemonclient.ErrUnsupported):
 		fmt.Fprintln(stderr, "pdx lease: 這個 daemon 還沒有這個功能，請先更新 daemon")
@@ -135,11 +135,14 @@ func reportVerbFailure(err error, stderr io.Writer) int {
 
 // verbConflictText is what a 409 means to the caller. An unknown code is shown
 // quoted so it cannot pass for the line's own structure.
-func verbConflictText(code string) string {
+func verbConflictText(code string, onPosition bool) string {
 	switch code {
 	case resources.ErrNotYourTurn:
 		return "還沒輪到你，現在不能確認"
 	case resources.ErrRunning:
+		if onPosition {
+			return "這個位置有指令正在執行，不能撤銷；要在它跑完後放掉位置，請用 pdx lease done"
+		}
 		return "這個指令正在執行，不能撤銷"
 	}
 	return fmt.Sprintf("被拒絕（%q）", code)

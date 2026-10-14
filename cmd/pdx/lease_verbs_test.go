@@ -140,6 +140,20 @@ func TestConfirm_RefusedExits13(t *testing.T) {
 	}
 }
 
+// The 409 of a position names the next step (done); the one of a request does not.
+func TestCancel_RunningConflictTextFitsTheTarget(t *testing.T) {
+	d := &verbDaemon{status: http.StatusConflict, body: resources.APIError{Error: resources.ErrRunning}}
+	code, _, stderr := driveVerb(t, d, "cancel", "pos_ab12cd34")
+	assert.Equal(t, ExitRefused, code)
+	assert.Contains(t, stderr, "這個位置有指令正在執行，不能撤銷；要在它跑完後放掉位置，請用 pdx lease done")
+
+	d = &verbDaemon{status: http.StatusConflict, body: resources.APIError{Error: resources.ErrRunning}}
+	code, _, stderr = driveVerb(t, d, "cancel", "row-1")
+	assert.Equal(t, ExitRefused, code)
+	assert.Contains(t, stderr, "這個指令正在執行，不能撤銷")
+	assert.NotContains(t, stderr, "pdx lease done")
+}
+
 // A pos_ id is a position: cancel goes to the position route.
 func TestCancel_PositionIDGoesToThePositionRoute(t *testing.T) {
 	d := &verbDaemon{}
