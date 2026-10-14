@@ -158,6 +158,8 @@ type RelayReport struct {
 	// seen_at): the sweeper's timeouts decide from a snapshot, and progress that landed since must win. A mismatch
 	// answers ReportBadTransition with the op as it is, and writes nothing.
 	Expect *RelayExpect
+	// killClaimed, set by reportRelayIn on the report it was handed, says a handoff's `written` claimed the member for the kill.
+	killClaimed *bool
 }
 
 // RelayExpect is what a conditional report requires of the op's current row.
@@ -205,6 +207,8 @@ func (s *Store) ReportRelay(id string, r RelayReport) (team.RelayOp, ReportResul
 			}
 		}
 	}
+	var claimed bool
+	r.killClaimed = &claimed
 	op, res, err := reportRelayIn(tx, id, r)
 	if err != nil || res != ReportApplied {
 		return op, res, err
@@ -232,6 +236,9 @@ func (s *Store) ReportRelay(id string, r RelayReport) (team.RelayOp, ReportResul
 	}
 	if err := tx.Commit(); err != nil {
 		return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: commit: %w", id, err)
+	}
+	if claimed {
+		s.handoffClaims.Store(id, struct{}{}) // the commit that claimed the kill: the signal is this process's to send
 	}
 	s.notifyOp(id)
 	if len(led) > 0 && s.onCommands != nil {
@@ -330,9 +337,13 @@ func reportRelayIn(tx *sql.Tx, id string, r RelayReport) (team.RelayOp, ReportRe
 			// A claim that misses (a kill of the ordinary kind took the row first, the member left, the row is another host's) is not an
 			// error: the file IS written, and finishHandoffKill finds no claim of this op's and, for a member still active, says the
 			// member was not closed. host_id is bound to the op's own: the check made when the op was opened is made again here.
-			if _, err := tx.Exec(`UPDATE team_members SET state = 'killing', updated_at = ?
-				WHERE session_id = ? AND team_id = ? AND state = 'active' AND (host_id = ? OR host_id = '')`, r.At, cur.SessionID, cur.TeamID, cur.HostID); err != nil {
+			res, err := tx.Exec(`UPDATE team_members SET state = 'killing', updated_at = ?
+				WHERE session_id = ? AND team_id = ? AND state = 'active' AND (host_id = ? OR host_id = '')`, r.At, cur.SessionID, cur.TeamID, cur.HostID)
+			if err != nil {
 				return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: claim the kill: %w", id, err)
+			}
+			if n, _ := res.RowsAffected(); n == 1 && r.killClaimed != nil {
+				*r.killClaimed = true
 			}
 		}
 	}

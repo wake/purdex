@@ -368,3 +368,26 @@ func TestHandoffKill_AMissedClaimTellsTheLeadAndKillsNothing(t *testing.T) {
 		t.Fatalf("notice = %q, want the not-closed one", n)
 	}
 }
+
+// The ordinary kill's claim carries exactly the handoff op's millisecond: still not the handoff's (the claim is proved by the commit that
+// made it, not by a timestamp). Mutation gate: identify the claim by updated_at → a signal (red).
+func TestHandoffKill_AnOrdinaryClaimOfTheSameMillisecondIsNotTheHandoffs(t *testing.T) {
+	f := newFixture(t)
+	key := f.handoffMember("8")
+	kills := f.countKills()
+	_, op, _ := f.killHandoff("_def456")
+	f.walkHandoff(op)
+	f.writeHandoffFile(op)
+	at := f.m.now()
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET state = 'killing', updated_at = ? WHERE spawn_op = ?`, at, key); err != nil {
+		t.Fatal(err)
+	}
+	f.clock.Store(at) // the handoff's written lands in the same millisecond
+	if c, _, ae := f.report(op.ID, team.RelayReportRequest{State: team.RelayWritten}); c != http.StatusOK {
+		t.Fatalf("written: %d %+v", c, ae)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if kills.Load() != 0 {
+		t.Fatalf("signals = %d: the handoff finished a kill another path had claimed", kills.Load())
+	}
+}

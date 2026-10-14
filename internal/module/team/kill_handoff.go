@@ -51,41 +51,50 @@ func (m *Module) finishHandoffKill(op team.RelayOp) {
 		return
 	}
 	defer m.handoffKills.Delete(op.ID)
-	rows, err := m.store.LocalKillingMembers()
-	if err != nil {
-		m.logf("[team] handoff kill %s: %v", op.ID, err)
-		return
-	}
-	for _, mr := range rows {
-		if mr.SessionID != op.SessionID || mr.TeamID != op.TeamID || mr.UpdatedAt != op.UpdatedAt {
-			continue // not the claim this op's written made
-		}
-		t, ok, err := m.store.TeamByID(op.TeamID)
-		if err != nil || !ok {
-			return
-		}
-		address, title := m.memberNoticeName(mr)
-		m.rosterChanged() // the member shows as killing from the claim on
-		if why := m.signalClaimedMember(mr); why != "" {
-			m.logf("[team] handoff kill %s: member %s not closed: %s", op.ID, mr.Ref, why)
-			if ok, err := m.store.GiveBackMemberKilling(mr.SpawnOp, mr.SessionID, m.now()); err != nil || !ok {
-				m.logf("[team] handoff kill %s: could not give the claim back (%v, %v); the sweeper decides", op.ID, ok, err)
-			}
-			m.rosterChanged()
-			m.noticeToLead(mr, t, fmt.Sprintf(team.HandoffNotClosedFmt, address, title, op.HandoffPath), "handoff kill not closed")
-			return
-		}
-		m.noticeToLead(mr, t, fmt.Sprintf(team.HandoffClosedFmt, address, title, op.HandoffPath), "handoff kill")
-		return
-	}
-	// No claim of this op's: the file is written but nothing closes the member. A member another kill is closing (killing), that is
-	// closed, gone or released is that path's; one still ACTIVE is told to the lead, who asks again (RT-3c codex).
-	mr, t, ok, err := m.store.ActiveMemberInLiveTeam(op.SessionID)
+	t, ok, err := m.store.TeamByID(op.TeamID)
 	if err != nil || !ok {
 		return
 	}
-	address, title := m.memberNoticeName(mr)
-	m.noticeToLead(mr, t, fmt.Sprintf(team.HandoffNotClosedFmt, address, title, op.HandoffPath), "handoff kill not closed")
+	if _, mine := m.store.handoffClaims.LoadAndDelete(op.ID); mine {
+		rows, err := m.store.LocalKillingMembers()
+		if err != nil {
+			m.logf("[team] handoff kill %s: %v", op.ID, err)
+			return
+		}
+		for _, mr := range rows {
+			if mr.SessionID != op.SessionID || mr.TeamID != op.TeamID {
+				continue
+			}
+			address, title := m.memberNoticeName(mr)
+			m.rosterChanged() // the member shows as killing from the claim on
+			if why := m.signalClaimedMember(mr); why != "" {
+				m.logf("[team] handoff kill %s: member %s not closed: %s", op.ID, mr.Ref, why)
+				if ok, err := m.store.GiveBackMemberKilling(mr.SpawnOp, mr.SessionID, m.now()); err != nil || !ok {
+					m.logf("[team] handoff kill %s: could not give the claim back (%v, %v); the sweeper decides", op.ID, ok, err)
+				}
+				m.rosterChanged()
+				m.noticeToLead(mr, t, fmt.Sprintf(team.HandoffNotClosedFmt, address, title, op.HandoffPath), "handoff kill not closed")
+				return
+			}
+			m.noticeToLead(mr, t, fmt.Sprintf(team.HandoffClosedFmt, address, title, op.HandoffPath), "handoff kill")
+			return
+		}
+		return
+	}
+	// No claim of this op's (the kill claim missed, or this is a repeated report): the file is written but nothing closes the member. A
+	// member another kill is closing (killing), that is closed, gone or released is that path's; one still ACTIVE - of any host - is told
+	// to the lead, who asks again (RT-3c codex).
+	rows, err := m.store.MembersOf(op.TeamID)
+	if err != nil {
+		return
+	}
+	for _, mr := range rows {
+		if mr.SessionID == op.SessionID && mr.State == team.MemberActive {
+			address, title := m.memberNoticeName(mr)
+			m.noticeToLead(mr, t, fmt.Sprintf(team.HandoffNotClosedFmt, address, title, op.HandoffPath), "handoff kill not closed")
+			return
+		}
+	}
 }
 
 // signalClaimedMember ends a member that is already claimed killing and marks the row, as killAndMark does after its claim; it returns
