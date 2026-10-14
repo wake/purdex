@@ -46,13 +46,22 @@ func TestRewritePeerPrefixes(t *testing.T) {
 	}
 }
 
+// A name ending in an ASCII letter or digit is spaced from 「請求」; a CJK name stays tight.
+func TestEntryLabel_PersonNameSpacing(t *testing.T) {
+	for name, want := range map[string]string{"Wake": "Wake 請求", "wake2": "wake2 請求", "王小明": "王小明請求", "小W": "小W 請求", "W小": "W小請求"} {
+		if got := (Entry{Kind: KindRequest, By: ByUser, Person: name}).Label(); got != want {
+			t.Errorf("%q = %q, want %q", name, got, want)
+		}
+	}
+}
+
 // The label of a request the person makes carries their name; the other labels and an unnamed person are unchanged, and
 // the name survives a write and a parse.
 func TestEntryLabel_PersonName(t *testing.T) {
 	if got := (Entry{Kind: KindRequest, By: ByUser}).Label(); got != "使用者請求" {
 		t.Errorf("unnamed = %q", got)
 	}
-	if got := (Entry{Kind: KindRequest, By: ByUser, Person: "Wake"}).Label(); got != "Wake請求" {
+	if got := (Entry{Kind: KindRequest, By: ByUser, Person: "Wake"}).Label(); got != "Wake 請求" {
 		t.Errorf("named = %q", got)
 	}
 	if got := (Entry{Kind: KindRequest, By: ByLeader, Person: "Wake"}).Label(); got != "領導者請求" {

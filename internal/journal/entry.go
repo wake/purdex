@@ -63,7 +63,7 @@ type Entry struct {
 func (e Entry) Label() string {
 	if e.Kind == KindRequest {
 		if e.By == ByUser && e.Person != "" {
-			return e.Person + "請求"
+			return e.Person + requestGap(e.Person) + "請求"
 		}
 		if l, ok := byLabels[e.By]; ok {
 			return l + "請求"
@@ -71,6 +71,19 @@ func (e Entry) Label() string {
 		return "請求"
 	}
 	return kindLabels[e.Kind]
+}
+
+// requestGap is the space between a person's name and 「請求」: one when the name ends in an ASCII letter or digit
+// (「Wake 請求」), none after a CJK name (「王小明請求」).
+func requestGap(name string) string {
+	if name == "" {
+		return ""
+	}
+	c :=name[len(name)-1]
+	if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
+		return " "
+	}
+	return ""
 }
 
 // Validate reports why an entry cannot be written.
