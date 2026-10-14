@@ -100,7 +100,7 @@ func (f *fixture) mainState(t *testing.T) string {
 	return strings.Join([]string{
 		tgit(t, f.root, "rev-parse", "HEAD"), tgit(t, f.root, "branch", "--show-current"),
 		tgit(t, f.root, "status", "--porcelain=v1"), tgit(t, f.root, "ls-files", "-s"),
-		tgit(t, f.root, "for-each-ref", "refs/heads"),
+		tgit(t, f.root, "rev-parse", "main"),
 	}, "\n--\n")
 }
 
