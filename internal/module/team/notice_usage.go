@@ -144,13 +144,21 @@ func (m *Module) sendUsageNotice(mr memberRow, pct int) bool {
 	return m.noticeToLead(mr, t, fmt.Sprintf(UsageNoticeFmt, address, ref, title, pct, ref), "usage notice")
 }
 
-// memberNoticeName is how a notice to the lead names the member: its live address (else host/ref) and its title (else
+// memberNoticeName is how a notice to the lead names the member: its live address (else host/ref; a remote member on its own host's alias) and its title (else
 // its tmux session).
 func (m *Module) memberNoticeName(mr memberRow) (address, title string) {
 	alias, _ := m.selfHost()
+	if m.isRemoteRow(mr) { // a member of another host is not in this registry: it is named on ITS host (#2833)
+		alias = m.remoteAlias(mr.HostID)
+		if alias == "" { // no longer paired: the host id still names the host, the lead's own alias would lie
+			alias = mr.HostID
+		}
+	}
 	address = alias + "/" + mr.Ref
-	if o, live, err := m.origins.ResolveOriginBySession(mr.SessionID); err == nil && live && o.Address != "" {
-		address = o.Address
+	if !m.isRemoteRow(mr) {
+		if o, live, err := m.origins.ResolveOriginBySession(mr.SessionID); err == nil && live && o.Address != "" {
+			address = o.Address
+		}
 	}
 	title = mr.Title
 	if title == "" {

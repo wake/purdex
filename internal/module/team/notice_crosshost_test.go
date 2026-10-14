@@ -130,3 +130,34 @@ func TestRelayAskFact_UnattendedAcceptTellsTheLeadBySelfNotice(t *testing.T) {
 		t.Fatalf("self notices = %+v, want the unattended-accept notice", f.selfNotices())
 	}
 }
+
+// A notice that names a member names it on ITS host (#2833): a remote member is not in this registry, and its address used to come out as
+// the lead's own host alias. Mutation gate: the local alias back in memberNoticeName → red.
+func TestMemberNoticeName_RemoteMemberIsNamedOnItsOwnHost(t *testing.T) {
+	f := newFixture(t)
+	f.memberTeam("3")
+	fc := &fakeHostCaller{aliases: map[string]string{"air26": "host-elsewhere"}}
+	f.m.cmdCaller = fc
+	mr, _, ok, err := f.m.store.ActiveMemberInLiveTeam("sid-m1")
+	if err != nil || !ok {
+		t.Fatalf("member: %v %v", ok, err)
+	}
+	remote := mr
+	remote.SessionID, remote.Ref, remote.HostID = "sid-on-another-host", "_rem777", "host-elsewhere"
+	remote.Title = "E 線"
+	if addr, title := f.m.memberNoticeName(remote); addr != "air26/_rem777" || title != "E 線" {
+		t.Fatalf("remote: address %q title %q, want air26/_rem777", addr, title)
+	}
+	// a host that is no longer paired has no alias: its host id names it, never the lead's host
+	lost := remote
+	lost.HostID = "host-unpaired"
+	if addr, _ := f.m.memberNoticeName(lost); addr != "host-unpaired/_rem777" {
+		t.Fatalf("unpaired: address %q, want host-unpaired/_rem777", addr)
+	}
+	// a local member keeps its live address
+	local := mr
+	local.SessionID, local.Ref = "sid-2", "_def456"
+	if addr, _ := f.m.memberNoticeName(local); strings.HasPrefix(addr, "air26/") || strings.HasPrefix(addr, "host-") {
+		t.Fatalf("local: address %q named a remote host", addr)
+	}
+}
