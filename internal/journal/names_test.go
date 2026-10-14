@@ -1,6 +1,9 @@
 package journal
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestDisplayName(t *testing.T) {
 	for _, c := range []struct{ in, want string }{
@@ -35,5 +38,28 @@ func TestRewritePeerPrefixes(t *testing.T) {
 		if got := RewritePeerPrefixes(c.in); got != c.want {
 			t.Errorf("RewritePeerPrefixes(%q)\n got %q\nwant %q", c.in, got, c.want)
 		}
+	}
+}
+
+// The label of a request the person makes carries their name; the other labels and an unnamed person are unchanged, and
+// the name survives a write and a parse.
+func TestEntryLabel_PersonName(t *testing.T) {
+	if got := (Entry{Kind: KindRequest, By: ByUser}).Label(); got != "使用者請求" {
+		t.Errorf("unnamed = %q", got)
+	}
+	if got := (Entry{Kind: KindRequest, By: ByUser, Person: "Wake"}).Label(); got != "Wake請求" {
+		t.Errorf("named = %q", got)
+	}
+	if got := (Entry{Kind: KindRequest, By: ByLeader, Person: "Wake"}).Label(); got != "領導者請求" {
+		t.Errorf("leader = %q", got)
+	}
+	file := t.TempDir() + "/2026-10.md"
+	e := Entry{ID: "a", Kind: KindRequest, By: ByUser, Person: "Wake", At: time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC), Text: "要求。"}
+	if err := Upsert(file, e); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Parse(file)
+	if err != nil || len(got) != 1 || got[0].Person != "Wake" {
+		t.Fatalf("parse = %+v %v", got, err)
 	}
 }
