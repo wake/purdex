@@ -130,20 +130,19 @@ export function startJournalLoader(): () => void {
     const store = useJournalStore.getState()
     const u = selectUnit(store, t.hostId, t.sessionId)
     if (!u) return
-    if (origin && isStale(u, 'entries')) {
-      const r = await store.loadJournal(t.hostId, t.sessionId)
-      if (stopped) return
-      if (r.kind === 'remote') {
-        // The unit moved to another daemon since it was routed: take the new lead tuple and follow it (one hop, in ensure).
-        store.setRoute(origin.hostId, origin.sessionId, { kind: 'unreachable', leadHostId: r.leadHostId, leadSessionId: r.leadSessionId })
-        void ensure(origin)
-        return
-      }
-    }
-    const reads: Promise<unknown>[] = []
+    const reads: Promise<LoadResult>[] = []
+    if (isStale(u, 'entries')) reads.push(store.loadJournal(t.hostId, t.sessionId))
     if (u.tasks !== null && isStale(u, 'tasks')) reads.push(store.loadTasks(t.hostId, t.sessionId))
     if (u.roadmap !== null && isStale(u, 'roadmap')) reads.push(store.loadRoadmap(t.hostId, t.sessionId))
-    await Promise.all(reads)
+    const results = await Promise.all(reads)
+    if (stopped || !origin) return
+    // Any of the three can learn that the unit moved to another daemon since it was routed: take the new lead tuple and follow it
+    // (one hop, in ensure).
+    const moved = results.find((r): r is Extract<LoadResult, { kind: 'remote' }> => r.kind === 'remote')
+    if (moved) {
+      store.setRoute(origin.hostId, origin.sessionId, { kind: 'unreachable', leadHostId: moved.leadHostId, leadSessionId: moved.leadSessionId })
+      void ensure(origin)
+    }
   }
 
   const stops = [

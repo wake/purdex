@@ -204,6 +204,23 @@ describe('a remote member follows its lead', () => {
     expect(store().routes[`h1\u0000sA`]).toMatchObject({ kind: 'follow', hostId: 'h3' })
   })
 
+  it('a tasks-only re-read that answers 409 re-routes too', async () => {
+    withH3(true)
+    store().setSupport('h3', true)
+    getJournal.mockImplementation(async (h: string) => (h === 'h1' ? remote : okPage('team-1')))
+    getTasks.mockResolvedValue({ kind: 'ok', value: [] })
+    stop = startJournalLoader()
+    await flush()
+    await store().loadTasks('h2', 'lead-s')
+    getJournal.mockClear()
+    getTasks.mockResolvedValue({ kind: 'remote', leadHostId: 'dm-c', leadSessionId: 'new-s' })
+    getJournal.mockImplementation(async () => okPage('team-2'))
+    changed('h2', 'team-1', 'tasks')
+    await vi.advanceTimersByTimeAsync(STALE_DEBOUNCE_MS)
+    expect(getJournal.mock.calls.map((c) => [c[0], c[1]])).toEqual([['h3', 'new-s']])
+    expect(store().routes[`h1\u0000sA`]).toMatchObject({ kind: 'follow', hostId: 'h3', sessionId: 'new-s' })
+  })
+
   it('a re-read that answers 409 (the unit moved on) re-routes to the new lead', async () => {
     withH3(true)
     store().setSupport('h3', true)
