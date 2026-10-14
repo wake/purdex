@@ -193,15 +193,19 @@ const GRANT = (extra: object = {}) => JSON.stringify({ id: 'lease-1', granted: t
 const BASH_OK = { ref: 1, result: { stdout: 'ok', stderr: '', interrupted: false }, text: 'ok' }
 const UUID4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
-type Rig = { calls: string[][]; ran: string[]; sid: { v: string; mode: 'ok' | 'throw' | 'hang' } }
+type Rig = { calls: string[][]; ran: string[]; sid: { v: string; mode: 'ok' | 'throw' | 'hang' }; checks: string[]; verdict: (command: string) => string; env: Record<string, string> }
 // rig stands the engine up: `answer` is what pdx says to each call (by subcommand), `bash` the tool beneath.
 function rig(on: any, answer: (argv: string[]) => any, bash: (e: any) => any = () => BASH_OK, pdxJSON?: string): Rig {
-  const r: Rig = { calls: [], ran: [], sid: { v: 'sess-1', mode: 'ok' } }
+  const r: Rig = { calls: [], ran: [], sid: { v: 'sess-1', mode: 'ok' }, checks: [], verdict: () => 'allow', env: { SHELL: '/bin/zsh' } }
   on('session.id', () => {
     if (r.sid.mode === 'throw') throw new Error('the engine refused session.id')
     if (r.sid.mode === 'hang') return new Promise(() => {})
     return { value: r.sid.v }
   })
+  on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
+  on('env.get', (_$: any, e: any) => ({ value: r.env[e.name] }))
+  on('session.cwd', () => ({ value: '/work/purdex' }))
+  on('tool.check', { tool: 'Bash' }, (_$: any, e: any) => { r.checks.push(e.input.command); return { decision: r.verdict(e.input.command) } })
   on('clock.sleep', async (_$: any, e: any) => { await new Promise((res) => setTimeout(res, e.ms)); return { value: undefined } })
   on('fs.read', (_$: any, e: any) => (pdxJSON !== undefined && e.path.endsWith('/pdx.json') ? { value: pdxJSON } : { deny: 'ENOENT' }))
   on('ui.log', () => ({ value: undefined }))
@@ -226,7 +230,12 @@ test('a heavy foreground Bash acquires, runs the rewritten command once, release
   expect(arg(acq, '--tool-use')).toBe('toolu_1')
   expect(arg(acq, '--client-id')).toMatch(UUID4)
   expect(acq).not.toContain('--json') // acquire prints its one JSON line without it
-  expect(rel).toEqual(['pdx', 'lease', 'release', '--client-id', arg(acq, '--client-id')])
+  // The queue shows the command as the model gave it (not the capped one) and where it runs; no mode: the daemon decides.
+  expect(arg(acq, '--command')).toBe('cd spa && npx vitest run')
+  expect(arg(acq, '--cwd')).toBe('/work/purdex')
+  for (const flag of ['--queue', '--ask', '--wait']) expect(acq).not.toContain(flag)
+  // The release is the end of the command: it asks for the final notice.
+  expect(rel).toEqual(['pdx', 'lease', 'release', '--client-id', arg(acq, '--client-id'), '--notice', '--json'])
 })
 
 test('the context names the rewrite, with the command that really ran', async ($, on) => {
@@ -235,12 +244,10 @@ test('the context names the rewrite, with the command that really ran', async ($
   expect(out.context).toEqual(['Purdex mod 把 --maxWorkers=3 加進這個指令（主機資源規則 R7），實際執行的是：npx vitest run --maxWorkers=3'])
 })
 
-test('the context says plainly that the command waited, and overran', async ($, on) => {
-  let answer = GRANT({ waited_ms: 37000, host_measured: 72 })
+test('the context says plainly that the command waited', async ($, on) => {
+  const answer = GRANT({ waited_ms: 37000, host_measured: 72 })
   rig(on, (a) => (sub(a) === 'acquire' ? ok(answer) : ok('{}')))
   expect((await bash($, 'pnpm run build')).context).toEqual(['這個指令先等了 37 秒主機資源（負載 72/100），不是卡住，不要重試'])
-  answer = GRANT({ waited_ms: 300000, overrun: true })
-  expect((await bash($, 'pnpm run build')).context).toEqual(['等滿 5 分鐘超量放行，已記錄'])
 })
 
 test('a wait under a second is not announced; a fail-open answer says nothing', async ($, on) => {
@@ -251,7 +258,7 @@ test('a wait under a second is not announced; a fail-open answer says nothing', 
   expect((await bash($, 'pnpm run build')).context).toBeUndefined()
 })
 
-test('background Bash is not intercepted', async ($, on) => {
+test('background Bash is not intercepted when no interactive session.start was seen', async ($, on) => {
   const r = rig(on, () => ok(GRANT()))
   await bash($, 'npx vitest run', { run_in_background: true })
   expect(r.calls).toEqual([])
@@ -294,6 +301,17 @@ test('release runs even when the tool throws', async ($, on) => {
   expect(r.ran).toEqual(['pnpm run build']) // once: a throw after next never re-runs the tool
 })
 
+// The throw path does not ask for the final notice: the command did not end the way a notice assumes (#2).
+// (M: pass --notice in finally.)
+test('the throw path releases without --notice', async ($, on) => {
+  const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : ok('{}')), () => { throw new Error('the tool failed') })
+  await bash($, 'pnpm run build').catch(() => {})
+  const rel = r.calls.find((a) => sub(a) === 'release')!
+  expect(rel).not.toContain('--notice')
+  expect(rel).not.toContain('--json')
+  expect(r.calls.filter((a) => sub(a) === 'release').length).toBe(1)
+})
+
 test('a release that fails is swallowed', async ($, on) => {
   rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : { deny: 'release failed' }))
   expect((await bash($, 'pnpm run build')).result).toEqual(BASH_OK.result)
@@ -334,3 +352,176 @@ for (const mode of ['throw', 'hang'] as const) {
     expect(out.context?.[0]).toContain('--maxWorkers=3')
   })
 }
+
+// ---- queued, the final notice, the background wrap (lease v2 amendment A, T23, T25, T26) ----
+
+const QUEUED = (extra: object = {}) => JSON.stringify({ id: 'lease-1', state: 'queued', position: 2, ...extra })
+const startInteractive = ($: any) => $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+
+// A queued answer is not waited for: the command does not run, the model reads the text as the deny, and nothing
+// is released (a release by client id would cancel the queued row). (M: call next on queued.)
+test('queued: the command is not run, the model gets the queued text as a deny, and nothing is released', async ($, on) => {
+  const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(QUEUED(), 15) : ok('{}')))
+  const out = await bash($, 'pnpm run build')
+  expect(out.deny ?? out.error ?? JSON.stringify(out)).toContain('主機資源忙，這個指令還沒執行：排在第 2 位。輪到你時我會通知你，先做別的事；不要改成背景執行或加 & 繞過排隊。')
+  expect(r.ran).toEqual([])
+  expect(r.calls.map(sub)).toEqual(['acquire'])
+})
+
+test('own_running: the deny says to wait for its own previous command', async ($, on) => {
+  rig(on, (a) => (sub(a) === 'acquire' ? ok(QUEUED({ queued_reason: 'own_running' }), 15) : ok('{}')))
+  const text = JSON.stringify(await bash($, 'pnpm run build'))
+  expect(text).toContain('等你自己的上一個指令跑完')
+  expect(text).not.toContain('第 2 位')
+})
+
+test('exit 15 without a queued line runs the command and releases', async ($, on) => {
+  const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT(), 15) : ok('{}')))
+  await bash($, 'pnpm run build')
+  expect(r.ran).toEqual(['pnpm run build'])
+  expect(r.calls.map(sub)).toEqual(['acquire', 'release'])
+})
+
+test('the final notice from the release answer is added to the tool result', async ($, on) => {
+  const notice = '有其他 session 在排隊，下一個指令會是這次的最後一個；之後還要跑請重新排隊。'
+  const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : ok(JSON.stringify({ state: 'ended', notice }))))
+  const out = await bash($, 'pnpm run build')
+  expect(out.context).toEqual([notice])
+  // the release comes after the command ran (M: release back in finally only)
+  expect(r.ran).toEqual(['pnpm run build'])
+  expect(r.calls.map(sub)).toEqual(['acquire', 'release'])
+  expect(r.calls[1]).toContain('--notice')
+})
+
+test('a release answer without a notice adds nothing', async ($, on) => {
+  rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : ok(JSON.stringify({ state: 'ended' }))))
+  expect((await bash($, 'pnpm run build')).context).toBeUndefined()
+})
+
+// ---- the background wrap ----
+
+const BG = 'pnpm run build'
+const wrappedOf = (r: Rig) => r.ran[0]
+
+test('a heavy background Bash is wrapped in pdx lease run --ask with its kind and command', async ($, on) => {
+  const r = rig(on, () => ok(GRANT()))
+  await startInteractive($)
+  const out = await bash($, BG, { run_in_background: true })
+  expect(wrappedOf(r)).toBe(`'pdx' lease run --ask --kind build --command 'pnpm run build' -- /bin/zsh -c 'pnpm run build'`)
+  expect(wrappedOf(r)).not.toContain('$') // a variable in the wrapped command makes the engine ask (M-P2 (c))
+  expect(r.calls).toEqual([]) // the wrapped command asks for itself; the mod does not
+  // the wrap is announced
+  expect(out.context?.[0]).toContain('pdx lease run --ask')
+  expect(out.context?.[0]).toContain('pdx lease confirm')
+})
+
+test('the wrap quotes the command for the shell, and the worker cap goes inside it', async ($, on) => {
+  const r = rig(on, () => ok(GRANT()))
+  await startInteractive($)
+  await bash($, `pnpm run build -- --name="it's"; npx vitest run`, { run_in_background: true })
+  const w = wrappedOf(r)
+  // every single quote inside a quoted word is closed, escaped and opened again
+  expect(w).toContain(`--command 'pnpm run build -- --name="it'\\''s"; npx vitest run'`)
+  expect(w).toContain(`-c 'pnpm run build -- --name="it'\\''s"; npx vitest run --maxWorkers=3'`)
+})
+
+test('the shell is a literal path: SHELL from the environment, else /bin/sh', async ($, on) => {
+  const r = rig(on, () => ok(GRANT()))
+  await startInteractive($)
+  r.env.SHELL = '/opt/homebrew/bin/fish'
+  await bash($, BG, { run_in_background: true })
+  r.env.SHELL = '$(evil) x'
+  await bash($, BG, { run_in_background: true })
+  delete r.env.SHELL
+  await bash($, BG, { run_in_background: true })
+  expect(r.ran.map((c) => c.split(' -- ')[1].split(' -c ')[0])).toEqual(['/opt/homebrew/bin/fish', '/bin/sh', '/bin/sh'])
+})
+
+test('a background pdx lease run is left as it is, not wrapped twice', async ($, on) => {
+  const r = rig(on, () => ok(GRANT()))
+  await startInteractive($)
+  await bash($, 'pdx lease run --ask --kind build -- pnpm run build', { run_in_background: true })
+  expect(r.ran).toEqual(['pdx lease run --ask --kind build -- pnpm run build'])
+})
+
+test('a non-interactive heavy background Bash is not wrapped', async ($, on) => {
+  const r = rig(on, () => ok(GRANT()))
+  await $.session.start({ cwd: '/work', surface: null, isInteractive: false })
+  await bash($, BG, { run_in_background: true })
+  expect(r.ran).toEqual([BG])
+})
+
+// The wrap must not add a prompt (M-P2 (a)): it goes in only when the engine decides the same about the original
+// and the wrapped command. (M: skip the check.)
+test('a wrap that would change the permission verdict is not made, and the model is told', async ($, on) => {
+  const r = rig(on, () => ok(GRANT()))
+  r.verdict = (c) => (c === BG ? 'allow' : 'ask')
+  await startInteractive($)
+  const out = await bash($, BG, { run_in_background: true })
+  expect(r.ran).toEqual([BG])
+  expect(out.context).toEqual(['這個背景指令沒有納入資源排隊'])
+  expect(r.checks.length).toBe(2)
+})
+
+test('a verdict that cannot be read is not a reason to wrap', async ($, on) => {
+  const r = rig(on, () => ok(GRANT()))
+  r.verdict = () => { throw new Error('no verdict') }
+  await startInteractive($)
+  await bash($, BG, { run_in_background: true })
+  expect(r.ran).toEqual([BG])
+})
+
+test('a non-heavy background Bash only passes through', async ($, on) => {
+  const r = rig(on, () => ok(GRANT()))
+  await startInteractive($)
+  await bash($, 'sleep 30', { run_in_background: true })
+  expect(r.ran).toEqual(['sleep 30'])
+  expect(r.checks).toEqual([])
+})
+
+// ---- review: a release that did not answer, a mixed wrapped command ----
+
+// The release after the command may not answer (the 5 s ran out): it is tried once more with the notice, which the
+// daemon keeps on the row for a repeated release; and if that fails too the lease is still let go.
+// (M: mark the lease done before the release.)
+test('a release that does not answer is tried again and the notice is not lost', async ($, on) => {
+  const notice = '有其他 session 在排隊，下一個指令會是這次的最後一個；之後還要跑請重新排隊。'
+  let n = 0
+  const r = rig(on, (a) => {
+    if (sub(a) === 'acquire') return ok(GRANT())
+    return ++n === 1 ? ok('', 20, 'pdx lease: daemon unreachable') : ok(JSON.stringify({ state: 'ended', notice }))
+  })
+  const out = await bash($, 'pnpm run build')
+  expect(out.context).toEqual([notice])
+  const rels = r.calls.filter((a) => sub(a) === 'release')
+  expect(rels.length).toBe(2)
+  for (const rel of rels) expect(rel).toContain('--notice')
+})
+
+test('a release that throws twice still ends with a release without a notice', async ($, on) => {
+  const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : { deny: 'release failed' }))
+  const out = await bash($, 'pnpm run build')
+  expect(out.result).toEqual(BASH_OK.result)
+  const rels = r.calls.filter((a) => sub(a) === 'release')
+  expect(rels.length).toBe(3)
+  expect(rels.map((a) => a.includes('--notice'))).toEqual([true, true, false])
+  expect(r.ran).toEqual(['pnpm run build']) // the command ran once
+})
+
+test('a background command with a pdx lease segment anywhere is not wrapped', async ($, on) => {
+  const r = rig(on, () => ok(GRANT()))
+  await startInteractive($)
+  for (const c of ['pdx lease run --ask --kind build -- pnpm run build && pnpm run build', 'pnpm run build; pdx lease run --kind build -- ls', 'pdx lease ls\npnpm run build']) await bash($, c, { run_in_background: true })
+  expect(r.ran).toEqual(['pdx lease run --ask --kind build -- pnpm run build && pnpm run build', 'pnpm run build; pdx lease run --kind build -- ls', 'pdx lease ls\npnpm run build'])
+  expect(r.checks).toEqual([])
+})
+
+// Inside this lease the inner run would be queued behind its own session's running position and what follows it
+// skipped, so a foreground command with a pdx lease segment is left alone too. (M: drop the check.)
+test('a foreground command with a pdx lease segment is not leased by the mod', async ($, on) => {
+  const r = rig(on, () => ok(GRANT()))
+  const cmds = ['pdx lease run --kind build -- pnpm run build && npx vitest run', 'cd spa && pdx lease run --kind build -- ls; pnpm run build']
+  for (const c of cmds) await bash($, c)
+  expect(r.calls).toEqual([])
+  expect(r.ran).toEqual(cmds)
+})

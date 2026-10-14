@@ -395,6 +395,7 @@ func TestHooks_NoEventRegisteredTwiceWithoutMatcher(t *testing.T) {
 		{"hooks/register.js", "turn.complete", ""},
 		{"hooks/ask.js", "tool.call", "{ tool: 'AskUserQuestion' }"},
 		{"hooks/lease.js", "tool.call", "{ tool: 'Bash' }"},
+		{"hooks/lease.js", "session.start", "{ isInteractive: true }"},
 		{"hooks/events.js", "ui.render", "{ component: 'SessionMode' }"},
 	} {
 		found := false
@@ -548,21 +549,32 @@ func TestSkill_LeaseMentionsRun(t *testing.T) {
 		"pdx lease run --kind <kind> -- <指令…>", // the line an agent copies
 		"`test-full`", "`build`", "`test-pkg`", "`lint-full`", // D-7 kinds
 		"--maxWorkers=3", // R7
-		"等待就是主機忙，不是卡住",
-		"不要用 `run_in_background` 繞過排隊", // R8
+		"排隊就是主機忙，不是卡住",
+		"不要用 `&` 或 `run_in_background` 繞過排隊", // R8
 		"不要在子 shell 裡直接 acquire",
 		"agent 一律用 `pdx lease run`",
 		"pdx lease ls",
 		// Review of P1-3c: the contract an agent following the text literally needs.
-		"`--kind`、`--weight`、`--wait`、`--client-id`、`--config`）都要放在 `--` 之前", // flags before the separator
-		"pdx lease run --kind build -- pnpm run build --wait 2m",             // the wrong example is shown as wrong
-		"**12**", "**126**", "**127**", "以 `pdx lease:` 開頭的一行", // pdx's own exit codes
-		"Purdex mod 已經替你處理前景的重 Bash", "你不必自己包 `pdx lease run`", "`advise` 期間 mod 只記錄不擋", // Task 2.4: the mod covers foreground Bash
+		"`--kind`、`--weight`、`--queue`、`--ask`、`--wait`、`--client-id`、`--config`）都要放在 `--` 之前", // flags before the separator
+		"pdx lease run --kind build -- pnpm run build --ask",                                   // the wrong example is shown as wrong
+		"**12**", "**15**", "**126**", "**127**", "以 `pdx lease:` 開頭的一行", // pdx's own exit codes
+		"Purdex mod 已經替你處理前景與背景的重 Bash", "你不必自己包 `pdx lease run`", "`advise` 期間 mod 只記錄不擋", // Task 2.4: the mod covers foreground Bash
+		// Amendment A (T27): queued is answered at once, the notices and what to do with them, the background question.
+		"你的 session 永遠不會卡在等待上", "照原樣重跑同一個指令", "再保留 3 分鐘", "`pdx lease done`",
+		"有其他 session 在排隊，下一個指令會是這次的最後一個；之後還要跑請重新排隊。",
+		"因為執行時間過長，這次指令執行完畢後會釋出執行排序，請自行安排執行方式與內容。",
+		"`pdx lease confirm <id>`", "`pdx lease cancel <id>`", "pdx lease run --kind <kind> -- ./script.sh", "整支重跑",
 		"完整 vitest 的名額規定照舊",                               // the coordinator-slot rule stays until P2 (Task 2.4)
 		"sh -c 'cd spa && npx vitest run --maxWorkers=3'", // runs from the repo root
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("SKILL.md of pdx-lease lacks %q", want)
+		}
+	}
+	// What v2 retired must not be told any more.
+	for _, gone := range []string{"排太久會放行", "預設最多等 5 分鐘", "超量放行並記一筆"} {
+		if strings.Contains(s, gone) {
+			t.Errorf("SKILL.md of pdx-lease still says %q", gone)
 		}
 	}
 	// The weights in the table are the built-in ones of spec D-7.
