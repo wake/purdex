@@ -272,6 +272,11 @@ type Module struct {
 	// overrides the refresher's period in tests.
 	remoteNames     *remoteNameSnapshot
 	namePoolRefresh time.Duration
+	// namePicker is the name pool (namepool.go); nil means the pool is off.
+	// poolMu serialises picking and storing a pool name and settling two
+	// holders of one.
+	namePicker NamePicker
+	poolMu     sync.Mutex
 
 	// putHostAfterSnapshot is a test seam: called by handlePutHost right
 	// after its pre-lock snapshot, so a test can force a concurrent
@@ -830,6 +835,8 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	// hangs, or a pass whose budget is already spent, costs this pass its
 	// names (every row takes the ref form), never the GET or the send.
 	virtualNames := m.resolveNames(invCtx, append(entryNameCandidates(entries, proxyPIDs, previousRefs), execNameCandidates(execs, previousRefs)...))
+	// Two live holders of one pool name: the newcomer picks again (spec §5).
+	m.settlePoolCollisions(invCtx, entries, proxyPIDs, previousRefs, virtualNames)
 	peerRecords := ipeers.Build(ipeers.BuildInput{
 		HostID:       hostID,
 		Alias:        alias,
