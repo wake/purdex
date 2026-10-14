@@ -88,3 +88,8 @@ func (s *Store) RegisterUnit(u UnitRow) (UnitRow, error) {
 	}
 	return got, err
 }
+
+// ConvTodos is every todo of a conversation (open, done and dropped) by number.
+func (s *Store) ConvTodos(convKey string) ([]Todo, error) {
+	return queryTodos(s.db, `SELECT `+todoCols+` FROM wb_todos WHERE conv_key = ? ORDER BY seq, id`, convKey)
+}
