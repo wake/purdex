@@ -37,6 +37,7 @@ type JournalSource interface {
 // journalInput is the prompt JSON of a journal job (prompt document §2).
 type journalInput struct {
 	UnitRole     string        `json:"unit_role"`
+	PersonName   string        `json:"person_name"`
 	SelfName     string        `json:"self_name"`
 	Turn         turnPart      `json:"turn"`
 	OpenConfirms []openConfirm `json:"open_confirms"`
@@ -71,10 +72,11 @@ func unitRoleOf(seatRole string) (role string, ok bool) {
 
 // JournalSeed is everything BuildJournalInput needs besides the turn: read at hand-out from the unit's files.
 type JournalSeed struct {
-	UnitRole string
-	SelfName string
-	Open     []OpenItem   // every open item of the unit, oldest first (N set on the newest 30 only)
-	Rows     []RoadmapRow // at most 40, the features the unit touched first
+	UnitRole   string
+	PersonName string       // the person the journal is for (config [journal] person_name); empty: the default
+	SelfName   string       // the session as the journal writes it (journal.DisplayName), not its raw virtual name
+	Open       []OpenItem   // every open item of the unit, oldest first (N set on the newest 30 only)
+	Rows       []RoadmapRow // at most 40, the features the unit touched first
 }
 
 // BuildJournalInput builds the prompt of a journal job and the context its answer is checked against (the turn text
@@ -82,7 +84,14 @@ type JournalSeed struct {
 // string goes through redact.String; the output is byte-stable for the same seed.
 func BuildJournalInput(seed JournalSeed, turn convmodel.Turn) (prompt string, ctx JournalContext, err error) {
 	part, reply := buildTurnPart(turn)
-	in := journalInput{UnitRole: seed.UnitRole, SelfName: redact.String(seed.SelfName), Turn: part,
+	// The journal job reads peers by their display names; the turn job built its own copy of the text and keeps the
+	// addresses. The check context below carries the rewritten text, as sent.
+	part.UserPrompt = journal.RewritePeerPrefixes(part.UserPrompt)
+	person := strings.TrimSpace(seed.PersonName)
+	if person == "" {
+		person = journal.DefaultPersonName
+	}
+	in := journalInput{UnitRole: seed.UnitRole, PersonName: redact.String(person), SelfName: redact.String(seed.SelfName), Turn: part,
 		OpenConfirms: []openConfirm{}, RoadmapRows: []roadmapRow{}}
 	for _, o := range seed.Open {
 		if o.N > 0 {

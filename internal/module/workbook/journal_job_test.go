@@ -117,7 +117,7 @@ func TestJournalJob_WireIsATurnAndLeaseKeepsItsKind(t *testing.T) {
 	}
 	c := wire.Complete
 	if wire.Kind != "turn" || c.Model != "haiku" || c.Effort != "low" || c.MaxTokens != 4096 || c.TimeoutMS != 60_000 ||
-		len(c.System) != 1 || c.System[0].Text != JournalPrompt || !c.System[0].Cache || !strings.HasPrefix(c.Prompt, `{"unit_role":"leader","self_name":"name-s1"`) {
+		len(c.System) != 1 || c.System[0].Text != JournalPrompt || !c.System[0].Cache || !strings.HasPrefix(c.Prompt, `{"unit_role":"leader","person_name":"使用者","self_name":"name-s1"`) {
 		t.Fatalf("wire = %s", b)
 	}
 	if !strings.HasPrefix(JournalPrompt, "你是日誌記錄員") || strings.HasSuffix(JournalPrompt, "\n") || JournalPromptVersion != 1 {

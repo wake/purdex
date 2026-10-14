@@ -2,7 +2,20 @@ package workbook
 
 import (
 	_ "embed"
+	"strings"
+
+	"github.com/wake/purdex/internal/journal"
 )
+
+// personName is the person's name for a journal job: the configured one, or the default.
+func (e *Engine) personName() string {
+	if e.d.PersonName != nil {
+		if n := strings.TrimSpace(e.d.PersonName()); n != "" {
+			return n
+		}
+	}
+	return journal.DefaultPersonName
+}
 
 // JournalPromptVersion is the version of the journal job's prompt (journal_ver). It is stored with the job's outbox
 // row in J-1b2, not with the turn entry: the turn job and its prompt (PromptVersion 2) are untouched. A change to the
@@ -60,7 +73,7 @@ func (e *Engine) buildJournal(j *job, c Complete) (Complete, map[int]int64, erro
 		return Complete{}, nil, err
 	}
 	role, _ := unitRoleOf(ent.Role)
-	seed := JournalSeed{UnitRole: role, SelfName: e.d.Journal.SelfName(j.session)}
+	seed := JournalSeed{UnitRole: role, PersonName: e.personName(), SelfName: journal.DisplayName(e.d.Journal.SelfName(j.session))}
 	files, ok, err := e.d.Journal.UnitFiles(ent)
 	if err != nil {
 		e.d.Logf("[workbook] journal input: unit files: %v", err) // an unreadable unit: the job runs with empty lists
