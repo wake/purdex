@@ -598,6 +598,17 @@ func (s *leaseStore) MarkDelivered(id string, offeredAt, at int64) (bool, error)
 		at, at+resources.PositionWindow.Milliseconds(), id, offeredAt)
 }
 
+// MarkOfferAccepted is MarkDelivered and the slot's accepted result in one statement: the session took the offer's
+// notice, so the window starts at `at` and the `offer` slot armed at `offeredAt` is sent, together or not at all.
+// It reports whether the position was still that offer, undelivered.
+func (s *leaseStore) MarkOfferAccepted(id string, offeredAt, at int64, result string) (bool, error) {
+	return s.changed(`UPDATE resource_positions SET delivered_at = ?, window_until = ?,
+		notice_result = ?, notice_sent_at = MAX(notice_sent_at, ?)
+		WHERE id = ? AND state = 'offered' AND offered_at = ? AND delivered_at = 0
+		AND notice_kind = 'offer' AND notice_due_at = ?`,
+		at, at+resources.PositionWindow.Milliseconds(), result, at, id, offeredAt, offeredAt)
+}
+
 // MarkDone records `pdx lease done` on a running position: it ends when its
 // last command does.
 func (s *leaseStore) MarkDone(id string) (bool, error) {
