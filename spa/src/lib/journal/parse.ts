@@ -143,8 +143,15 @@ export function parseRoadmap(v: unknown): RoadmapFeature[] | null {
   return out
 }
 
-/** The `journal.changed` frame's value, or the reason it is not one. */
-export function parseChangedEvent(v: unknown): ChangedEvent | string {
+/** A host frame's `value` is a JSON string; anything else is taken as already parsed. */
+function parseJson(value: unknown): unknown {
+  if (typeof value !== 'string') return value
+  try { return JSON.parse(value) } catch { return undefined }
+}
+
+/** The `journal.changed` frame's value (a JSON string or an object), or the reason it is not one. */
+export function parseChangedEvent(value: unknown): ChangedEvent | string {
+  const v = parseJson(value)
   if (!isRec(v)) return 'journal.changed is not an object'
   const unit = isRec(v.unit) ? v.unit : null
   if (!unit || (unit.kind !== 'team' && unit.kind !== 'solo') || !isNonEmpty(unit.id)) return 'journal.changed.unit is not {kind, id}'

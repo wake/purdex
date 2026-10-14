@@ -29,6 +29,7 @@ import { RELAY_QUOTA_EVENT_TYPE, UNATTENDED_EVENT_TYPE } from '../lib/team/types
 import { handleRosterEvent } from '../lib/team/roster-ws'
 import { ROSTER_EVENT_TYPE } from '../lib/team/roster'
 import { handleWorkbookEvent, isWorkbookEvent } from '../lib/workbook/workbook-ws'
+import { handleJournalEvent, isJournalEvent } from '../lib/journal/journal-ws'
 import { connectionKey } from '../lib/host-connection-key'
 import { decideHookFrame, parseAgentSnapshot, type HookCursor } from '../lib/agent-lights/hook-cursor'
 
@@ -313,6 +314,14 @@ export function useMultiHostEventWs() {
             const now = useHostStore.getState().hosts[hostId]
             if (!now || connectionKey(now) !== configKey) return
             handleWorkbookEvent(hostId, event.type, event.value)
+            return
+          }
+          if (isJournalEvent(event.type)) {
+            // The workbook journal (J-2a): marks the named resource of a unit stale, never a reason to fetch. Bound to
+            // the connection exactly like the workbook frames above.
+            const now = useHostStore.getState().hosts[hostId]
+            if (!now || connectionKey(now) !== configKey) return
+            handleJournalEvent(hostId, event.type, event.value)
             return
           }
           // `handoff` / `relay` events: the daemon stopped emitting them in

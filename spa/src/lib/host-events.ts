@@ -24,6 +24,7 @@ export interface HostEvent {
     | 'workbook.status'
     | 'workbook.todos'
     | 'workbook.refresh_available'
+    | 'journal.changed'
     | 'nex.executions.hello'
     | 'nex.execution'
   session: string
