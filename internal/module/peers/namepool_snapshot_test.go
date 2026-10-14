@@ -127,6 +127,75 @@ func TestRemoteNameSnapshot_AnUnparsableProcStartCountsFromTheFirstSighting(t *t
 	}
 }
 
+// Fetches of one host run concurrently, so answers are applied in the order
+// their requests were sent: a slow answer to an older request must not hand a
+// name back that a newer answer showed held (codex R2).
+func TestRemoteNameSnapshot_AnAnswerToAnOlderRequestDoesNotOverwriteANewerOne(t *testing.T) {
+	t0 := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	s := newRemoteNameSnapshot()
+	s.recordSent("h1", []ipeers.PeerRecord{snapRow("a-adam", snapStartA)}, ipeers.AddressVersionV5, t0.Add(2*time.Second), t0.Add(3*time.Second))
+	// The older request's answer lands later and does not hold adam.
+	s.recordSent("h1", nil, ipeers.AddressVersionV5, t0.Add(time.Second), t0.Add(4*time.Second))
+	if _, held := s.held(t0.Add(5 * time.Second))["adam"]; !held {
+		t.Fatal("a stale answer handed adam back")
+	}
+	// An answer to a request sent after the stored one does replace it.
+	s.recordSent("h1", nil, ipeers.AddressVersionV5, t0.Add(6*time.Second), t0.Add(7*time.Second))
+	if len(s.held(t0.Add(8*time.Second))) != 0 {
+		t.Fatal("a newer answer did not replace the set")
+	}
+}
+
+func TestFetchHostResult_ASlowOlderAnswerDoesNotOverwriteANewerOne(t *testing.T) {
+	var tick atomic.Int64
+	now := func() time.Time {
+		return time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC).Add(time.Duration(tick.Add(1)) * time.Second)
+	}
+	var calls atomic.Int32
+	inFirst := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	m := poolFetchModule(func(context.Context, *http.Client, string, string) (ipeers.Envelope, error) {
+		if calls.Add(1) == 1 { // the older request: slow, and its answer holds nothing
+			close(inFirst)
+			<-releaseFirst
+			return okEnvelope(), nil
+		}
+		return okEnvelope(snapRow("purdex-adam", snapStartA)), nil
+	}, now)
+	done := make(chan struct{})
+	go func() { m.fetchHostResult(context.Background(), poolHost()); close(done) }()
+	<-inFirst
+	m.fetchHostResult(context.Background(), poolHost()) // newer request, answered first
+	close(releaseFirst)
+	<-done
+	if _, held := m.remoteNames.held(now())["adam"]; !held {
+		t.Fatal("the slow older answer overwrote the newer snapshot")
+	}
+}
+
+// A first sighting belongs to one holder: another conversation taking the name
+// with no usable proc_start starts its own (codex R2).
+func TestRemoteNameSnapshot_ADifferentHolderDoesNotInheritAFirstSighting(t *testing.T) {
+	t0 := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	a := snapRow("a-adam", "")
+	a.Ref = "_aaaaaa"
+	b := snapRow("b-adam", "")
+	b.Ref = "_bbbbbb"
+	s := newRemoteNameSnapshot()
+	s.record("h1", []ipeers.PeerRecord{a}, ipeers.AddressVersionV5, t0)
+	s.record("h1", []ipeers.PeerRecord{b}, ipeers.AddressVersionV5, t0.Add(time.Minute))
+	if got := s.held(t0.Add(time.Minute))["adam"]; !got.Equal(t0.Add(time.Minute)) {
+		t.Fatalf("start = %s, want the new holder's own first sighting %s", got, t0.Add(time.Minute))
+	}
+	// The same conversation in a new process (another pid) is a new holder too.
+	c := b
+	c.Agent = &ipeers.AgentInfo{Type: "cc", PID: 9999}
+	s.record("h1", []ipeers.PeerRecord{c}, ipeers.AddressVersionV5, t0.Add(2*time.Minute))
+	if got := s.held(t0.Add(2 * time.Minute))["adam"]; !got.Equal(t0.Add(2 * time.Minute)) {
+		t.Fatalf("start = %s, want a new sighting for a new pid", got)
+	}
+}
+
 func TestRemoteNameSnapshot_PruneForgetsHostsThatAreNoLongerConfigured(t *testing.T) {
 	t0 := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 	s := newRemoteNameSnapshot()

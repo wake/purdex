@@ -8,6 +8,7 @@ package peers
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -26,14 +27,18 @@ const (
 
 // remoteHolder is one pool name held on a host and when its conversation's
 // process started. fromRow says the start was the row's own proc_start; false
-// means this daemon first saw the holder at start.
+// means this daemon first saw the holder at start, and ident (the holder's ref
+// and pid) says whose first sighting that is: a different holder taking the
+// name starts a new one.
 type remoteHolder struct {
 	start   time.Time
 	fromRow bool
+	ident   string
 }
 
 type hostNames struct {
 	readAt time.Time
+	sentAt time.Time // when the request this set answers was sent
 	names  map[string]remoteHolder
 }
 
@@ -59,10 +64,22 @@ func newRemoteNameSnapshot() *remoteNameSnapshot {
 // unparsable, the time this daemon first saw the holder (kept while the name
 // stays in the answers). Two rows holding one name keep the earlier start.
 func (s *remoteNameSnapshot) record(hostID string, rows []ipeers.PeerRecord, addressVersion int, now time.Time) {
+	s.recordSent(hostID, rows, addressVersion, now, now)
+}
+
+// recordSent is record for an answer to a request sent at sentAt. Fetches of
+// one host run concurrently (the refresher and every scope=all), so an answer
+// is applied in the order its requests were sent, not the order they finished:
+// one to a request sent before the request the stored set answers is dropped,
+// or a slow old answer would hand a name back that a newer one showed held.
+func (s *remoteNameSnapshot) recordSent(hostID string, rows []ipeers.PeerRecord, addressVersion int, sentAt, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var prev map[string]remoteHolder
 	if h := s.hosts[hostID]; h != nil {
+		if sentAt.Before(h.sentAt) {
+			return
+		}
 		prev = h.names
 	}
 	names := map[string]remoteHolder{}
@@ -75,10 +92,11 @@ func (s *remoteNameSnapshot) record(hostID string, rows []ipeers.PeerRecord, add
 			if !ok || !ipeers.RoutableName(rec.Name) {
 				continue
 			}
-			h := remoteHolder{start: now}
+			ident := fmt.Sprintf("%s/%d", rec.Ref, rec.Agent.PID)
+			h := remoteHolder{start: now, ident: ident}
 			if t, err := ipeers.ParseProcStart(rec.Agent.ProcStart); err == nil {
-				h = remoteHolder{start: t, fromRow: true}
-			} else if p, seen := prev[name]; seen && !p.fromRow {
+				h = remoteHolder{start: t, fromRow: true, ident: ident}
+			} else if p, seen := prev[name]; seen && !p.fromRow && p.ident == ident {
 				h = p
 			}
 			if cur, dup := names[name]; dup && !h.start.Before(cur.start) {
@@ -87,7 +105,7 @@ func (s *remoteNameSnapshot) record(hostID string, rows []ipeers.PeerRecord, add
 			names[name] = h
 		}
 	}
-	s.hosts[hostID] = &hostNames{readAt: now, names: names}
+	s.hosts[hostID] = &hostNames{readAt: now, sentAt: sentAt, names: names}
 }
 
 // held is every pool name some other host holds, with the earliest process
@@ -123,11 +141,11 @@ func (s *remoteNameSnapshot) prune(keep map[string]bool) {
 }
 
 // noteRemoteNames files one OK answer's normalized rows. No-op without a pool.
-func (m *Module) noteRemoteNames(hostID string, rows []ipeers.PeerRecord, addressVersion int) {
+func (m *Module) noteRemoteNames(hostID string, rows []ipeers.PeerRecord, addressVersion int, sentAt time.Time) {
 	if m.remoteNames == nil {
 		return
 	}
-	m.remoteNames.record(hostID, rows, addressVersion, m.now())
+	m.remoteNames.recordSent(hostID, rows, addressVersion, sentAt, m.now())
 }
 
 // startNamePoolRefresher starts the background refresher: every

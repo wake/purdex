@@ -1171,6 +1171,7 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	fetchCtx, cancel := context.WithTimeout(ctx, remoteFetchTimeout)
 	defer cancel()
 
+	sentAt := m.now()
 	env, err := m.fetch(fetchCtx, m.client, h.URL, h.Token)
 	if err != nil {
 		return ipeers.HostResult{
@@ -1252,7 +1253,7 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	if env.OK && rowErr == "" {
 		// The name pool's snapshot of what this host holds, from the rows as
 		// normalizeRemoteRows settled them, never the raw envelope.
-		m.noteRemoteNames(resultHostID, peers, env.AddressVersion)
+		m.noteRemoteNames(resultHostID, peers, env.AddressVersion, sentAt)
 	}
 
 	// unknown is the remote's own reported list of alive-but-undecodable
