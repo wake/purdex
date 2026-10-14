@@ -98,7 +98,7 @@ func TestDrain_ActorsAreDisplayNamesAndThePersonIsNamed(t *testing.T) {
 	}
 	u, _ := k.byID("solo:c", "ev:"+itoa(id)+":0")
 	l, _ := k.byID("solo:c", "ev:"+itoa(id)+":1")
-	if u.Person != "Wake" || u.Label() != "Wake請求" || l.Person != "" || l.Label() != "領導者請求" {
+	if u.Person != "Wake" || u.Label() != "Wake 請求" || l.Person != "" || l.Label() != "領導者請求" {
 		t.Errorf("user request %+v (%s), leader request %+v (%s)", u, u.Label(), l, l.Label())
 	}
 
@@ -160,7 +160,7 @@ func TestDrain_PersonNameComesFromTheJobNotTheLiveConfig(t *testing.T) {
 	}
 	k.drain()
 	e, ok := k.byID("solo:c", "ev:"+itoa(id)+":0")
-	if !ok || e.Label() != "Old請求" {
+	if !ok || e.Label() != "Old 請求" {
 		t.Errorf("entry %+v ok=%v label %q", e, ok, e.Label())
 	}
 }

@@ -38,6 +38,7 @@ func TestRewritePeerPrefixes(t *testing.T) {
 		{"[report merged mlab/purdex-88-b8] x", "[report merged mlab/purdex-88-b8] x"}, // not a pool name: kept as written
 		{"[https://h/p → purdex-3f-adam] x", "[https://h/p → Adam] x"},
 		{"[unclosed mlab/purdex-3f-adam", "[unclosed mlab/purdex-3f-adam"},
+		{"[Mini.Lab_1/purdex-3f-adam → x] y", "[Adam → x] y"}, // a host alias may carry capitals, dots and underscores
 		{"", ""},
 	} {
 		if got := RewritePeerPrefixes(c.in); got != c.want {

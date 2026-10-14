@@ -73,6 +73,6 @@ func rewriteSide(s string) string {
 // addressPattern is a peer address as pdx writes it: one host alias, one slash, a virtual name or a ref. A branch name
 // with two parts (feature/login) still matches, which is why outside an arrow only pool names are rewritten; a URL or
 // a path with more slashes does not match.
-var addressPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*/([a-z0-9][a-z0-9-]{1,63}|_[0-9a-z]{6})$`)
+var addressPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}/([a-z0-9][a-z0-9-]{1,63}|_[0-9a-z]{6})$`)
 
 func isAddress(s string) bool { return addressPattern.MatchString(s) }
