@@ -21,7 +21,7 @@ The workbook view stacks 「目前狀況」, up to ~30 todos and several lists; 
 2026-10-14:
 
 6. An ask (tool permission, agent question) is a kind of unread whose light is yellow; a hidden tab knocking is its own unread (badge rule; unchanged here).
-7. **One report, written as now**: the journal is the workbook entry text, written by **the same per-turn Haiku call** (「出法維持現在，同一個事件中拋給 Haiku 去寫」). One call per turn writes all of that turn's journal lines (user: 「可以」).
+7. **One report, written as now**: the journal is the workbook entry text, written by Haiku at the turn's end (「出法維持現在，同一個事件中拋給 Haiku 去寫」). *Amended the same day (「Ok 乙」) after J-P measured the combined call at about twice the v2 call's time, which would cost leader / solo pushes their workbook line under load*: **two calls per leader / solo turn** — the v2 call unchanged (push timing unchanged), then a journal-only call; a member's turn keeps one call.
 8. **The journal is only a journal**: nothing about cards (approval, permission, ask cards), no handling or management from it.
 9. **Kinds**: 請求 (by 使用者 | leader | member); 任務建立 / 任務完成 (with the task number); 執行 / 執行完成; 溝通; **待確認** (special, item 10).
 10. **待確認**: when an agent needs the person's reply. One entry per message, **one checkbox per question** (「像現在你一個一個詢問我，就算是 6 項（同一筆內，6 個 checkbox）」); it opens to the left with the full detail, or the original question copied as is. Not only option-button prompts.
@@ -127,13 +127,14 @@ RA-2 已 merge：拿掉「不再詢問」、補上終端機指令核准的提示
 - Writes are durable: a job's journal output is queued in `workbook.db` in the same transaction as its result and written to the files after the entry is final, so a crash or a re-write loses nothing.
 - The daemon keeps no second copy of the entries: the App reads them through the daemon, which parses the files (cached by mtime).
 
-## 9. Summariser changes (workbook v2 §5, prompt v3)
+## 9. Summariser changes — a journal job after the turn job
 
-- **Who**: unchanged trigger and path (the session's mod, `$.model.complete`, Haiku, `effort: low`). The journal part of the job is asked **only for a leader's or a solo session's turn**; a member's job stays v2 (push, thing, status, todos — the push line still serves its notifications).
-- **Input adds** (journal jobs): `unit_role` (`leader` | `solo`); `open_confirms` (numbered items still open); `roadmap_rows` (the unit's features, stage + status); for a leader, the turn's `user_prompt` keeps the peer and report prefixes that tell who sent what (as today).
-- **Output adds**: `events: [{kind: request|comm|confirm, by?, from?, to?, text, items?, detail?}]`, `confirm_done: [n…]`, `roadmap: [{feature, stage, status}]`. `push`, `thing`, `entry`, `status`, `thing_done`, `todos` stay as v2: `entry` becomes one `exec` entry, or `exec_done` when `thing_done` (so v2's validation and background re-write of a long entry keep working); `skip: true` drops that entry only. Prompt: `docs/specs/2026-10-14-workbook-journal-prompt-v3.md`.
-- **Validation** (code): unknown kinds dropped; `request` / `comm` text ≤ 80 chars (cut at the last punctuation); `confirm` `items` ≤ 10 × ≤ 30, `detail` ≤ 4 000; unknown `confirm_done` numbers ignored; roadmap changes to unknown rows or with an unknown status ignored; entry as v2.
-- **Measured before it ships**: prompt rounds on ≥ 30 real leader and solo turns (the v2 method, 1f's `workbook-exp/` set plus the 10-13 A-line turns): kinds right, 待確認 caught and ticked right, no invented task numbers, entry length as v2. The prompt document is `docs/specs/2026-10-14-workbook-journal-prompt-v3.md`.
+- **Turn job unchanged** (workbook v2 §5: the session's mod, `$.model.complete`, Haiku, `effort: low`, prompt v2): push, thing, entry, status, thing_done, todos, exactly as today, for every seat.
+- **Journal job** (leader and solo turns only): queued in the conversation's queue right after the turn job's result is applied; same mod path and model; system prompt and input in `docs/specs/2026-10-14-workbook-journal-prompt-v3.md` (journal_ver 1): `unit_role`, `self_name`, the same turn text, `open_confirms`, `roadmap_rows` → `events` (request / comm / confirm with `detail_start`), `confirm_done`, `roadmap`.
+- **Entries**: the turn job's `entry` → one `exec` entry, or `exec_done` when `thing_done` (none when `skip`); the journal job's events → request / comm / confirm entries; the ticks and roadmap statuses applied; task kinds from the task source.
+- **Validation** (code): unknown kinds dropped; `request` / `comm` text ≤ 80 chars (cut at the last punctuation); `confirm` `items` ≤ 10 × ≤ 30; `detail` cut by the daemon at `detail_start`, ≤ 4 000; unknown `confirm_done` numbers ignored; roadmap changes to unknown rows or with an unknown status ignored. A journal job that fails or times out writes nothing more for that turn (the exec entry is already there); it is not retried beyond the v2 format retry.
+- **Cost**: one more Haiku call per leader / solo turn (≈ US$0.0007).
+- **Measured before it ships** (J-P): the pass bar in the prompt document §3.
 
 ## 10. Daemon
 
