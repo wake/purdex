@@ -160,6 +160,63 @@ describe('a remote member follows its lead', () => {
     await vi.advanceTimersByTimeAsync(STALE_DEBOUNCE_MS)
     expect(getJournal.mock.calls.map((c) => [c[0], c[1]])).toEqual([['h2', 'lead-s']])
   })
+
+  const withH3 = (verifiedH2: boolean) => useHostStore.setState({
+    hosts: { h1: host('h1', '10.0.0.1', 'dm-a'), h2: host('h2', '10.0.0.2', 'dm-b'), h3: host('h3', '10.0.0.3', verifiedH2 ? 'dm-c' : 'dm-b') }, hostOrder: ['h1', 'h2', 'h3'],
+    runtime: { h1: verified('10.0.0.1', 'dm-a'), ...(verifiedH2 ? { h2: verified('10.0.0.2', 'dm-b') } : {}), h3: verified('10.0.0.3', verifiedH2 ? 'dm-c' : 'dm-b') },
+  } as never)
+
+  it('a second 409 keeps its own target (one hop, no third request)', async () => {
+    getJournal.mockImplementation(async (h: string) => (h === 'h1' ? remote : { kind: 'remote', leadHostId: 'dm-c', leadSessionId: 'new-s' }))
+    stop = startJournalLoader()
+    await flush()
+    expect(getJournal).toHaveBeenCalledTimes(2)
+    expect(store().routes[`h1\u0000sA`]).toEqual({ kind: 'unreachable', leadHostId: 'dm-c', leadSessionId: 'new-s' })
+  })
+
+  it('a followed lead whose daemon is now verified on another host is asked there, not on the stored host', async () => {
+    getJournal.mockImplementation(async (h: string) => (h === 'h1' ? remote : okPage('team-1')))
+    stop = startJournalLoader()
+    await flush()
+    getJournal.mockClear()
+    withH3(false) // h2 lost its verification, h3 now verifies as dm-b
+    store().setSupport('h3', true)
+    await flush()
+    expect(getJournal.mock.calls.map((c) => [c[0], c[1]])).toEqual([['h3', 'lead-s']])
+    expect(store().routes[`h1\u0000sA`]).toMatchObject({ kind: 'follow', hostId: 'h3' })
+  })
+
+  it('a forgotten lead host does not strand the member: the origin is asked again once a host for the lead exists', async () => {
+    getJournal.mockImplementation(async (h: string) => (h === 'h1' ? remote : okPage('team-1')))
+    stop = startJournalLoader()
+    await flush()
+    useHostStore.setState({ hosts: { h1: host('h1', '10.0.0.1', 'dm-a') }, runtime: { h1: verified('10.0.0.1', 'dm-a') } } as never)
+    getJournal.mockClear()
+    store().forgetHost('h2')
+    await flush()
+    expect(getJournal.mock.calls.map((c) => [c[0], c[1]])).toEqual([['h1', 'sA']]) // the origin is asked again, not left blank
+    expect(store().routes[`h1\u0000sA`]).toEqual({ kind: 'unreachable', leadHostId: 'dm-b', leadSessionId: 'lead-s' })
+    getJournal.mockClear()
+    withH3(false)
+    store().setSupport('h3', true)
+    await flush()
+    expect(getJournal.mock.calls.map((c) => [c[0], c[1]])).toEqual([['h3', 'lead-s']])
+    expect(store().routes[`h1\u0000sA`]).toMatchObject({ kind: 'follow', hostId: 'h3' })
+  })
+
+  it('a re-read that answers 409 (the unit moved on) re-routes to the new lead', async () => {
+    withH3(true)
+    store().setSupport('h3', true)
+    getJournal.mockImplementation(async (h: string) => (h === 'h1' ? remote : okPage('team-1')))
+    stop = startJournalLoader()
+    await flush()
+    getJournal.mockClear()
+    getJournal.mockImplementation(async (h: string) => (h === 'h2' ? { kind: 'remote', leadHostId: 'dm-c', leadSessionId: 'new-s' } : okPage('team-2')))
+    changed('h2', 'team-1', 'entries')
+    await vi.advanceTimersByTimeAsync(STALE_DEBOUNCE_MS)
+    expect(getJournal.mock.calls.map((c) => [c[0], c[1]])).toEqual([['h2', 'lead-s'], ['h3', 'new-s']])
+    expect(store().routes[`h1\u0000sA`]).toMatchObject({ kind: 'follow', hostId: 'h3', sessionId: 'new-s' })
+  })
 })
 
 describe('journal.changed', () => {

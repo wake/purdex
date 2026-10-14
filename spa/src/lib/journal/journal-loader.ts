@@ -71,6 +71,10 @@ export function startJournalLoader(): () => void {
 
   async function ensure(origin: Target): Promise<void> {
     const store = useJournalStore.getState()
+    const originKey = keyOf(origin)
+    // An ok / none / remote answer always leaves a route; a loaded mark with no route and no pending retry means the route was
+    // dropped (its lead host was forgotten): ask the origin again so the lead can be found anew.
+    if (!store.routes[sessionKey(origin.hostId, origin.sessionId)] && loaded.has(originKey) && !retryOnSwitch.has(originKey)) loaded.delete(originKey)
     const res = await loadOnce(origin)
     if (stopped) return
     if (res?.kind === 'ok') store.setRoute(origin.hostId, origin.sessionId, { kind: 'direct' })
@@ -80,14 +84,20 @@ export function startJournalLoader(): () => void {
     // host has its own connection generation.
     const route = useJournalStore.getState().routes[sessionKey(origin.hostId, origin.sessionId)]
     if (route?.kind === 'direct' || route?.kind === 'none' || !route) return
-    const leadHostId = route.kind === 'follow' ? route.hostId : teamHostMap(useHostStore.getState())[route.leadHostId]
+    // The lead's SPA host is looked up again every time (`teamHostMap` holds only hosts whose daemon id is verified now), so a
+    // re-pointed or forgotten host is never trusted from the stored route.
+    const leadDaemon = route.leadHostId
     const leadSessionId = route.kind === 'follow' ? route.sessionId : route.leadSessionId
-    if (!leadHostId) return // still unreachable
+    const leadHostId = teamHostMap(useHostStore.getState())[leadDaemon]
+    if (!leadHostId) {
+      if (route.kind === 'follow') store.setRoute(origin.hostId, origin.sessionId, { kind: 'unreachable', leadHostId: leadDaemon, leadSessionId })
+      return // still unreachable
+    }
     const lead = { hostId: leadHostId, sessionId: leadSessionId }
-    if (route.kind === 'unreachable') store.setRoute(origin.hostId, origin.sessionId, { kind: 'follow', hostId: lead.hostId, sessionId: lead.sessionId, leadHostId: route.leadHostId })
+    if (route.kind === 'unreachable' || route.hostId !== leadHostId) store.setRoute(origin.hostId, origin.sessionId, { kind: 'follow', hostId: lead.hostId, sessionId: lead.sessionId, leadHostId: leadDaemon })
     const followed = await loadOnce(lead)
-    // A lead host that itself answers 409 would loop; one hop only.
-    if (!stopped && followed?.kind === 'remote') store.setRoute(origin.hostId, origin.sessionId, { kind: 'unreachable', leadHostId: route.leadHostId, leadSessionId })
+    // A lead host that itself answers 409 would loop; one hop only, but the new target is the one kept.
+    if (!stopped && followed?.kind === 'remote') store.setRoute(origin.hostId, origin.sessionId, { kind: 'unreachable', leadHostId: followed.leadHostId, leadSessionId: followed.leadSessionId })
   }
 
   /** A route that was learned in an older generation of the origin may have moved: it is re-asked with the origin (loadOnce). */
@@ -120,8 +130,17 @@ export function startJournalLoader(): () => void {
     const store = useJournalStore.getState()
     const u = selectUnit(store, t.hostId, t.sessionId)
     if (!u) return
+    if (origin && isStale(u, 'entries')) {
+      const r = await store.loadJournal(t.hostId, t.sessionId)
+      if (stopped) return
+      if (r.kind === 'remote') {
+        // The unit moved to another daemon since it was routed: take the new lead tuple and follow it (one hop, in ensure).
+        store.setRoute(origin.hostId, origin.sessionId, { kind: 'unreachable', leadHostId: r.leadHostId, leadSessionId: r.leadSessionId })
+        void ensure(origin)
+        return
+      }
+    }
     const reads: Promise<unknown>[] = []
-    if (isStale(u, 'entries')) reads.push(store.loadJournal(t.hostId, t.sessionId))
     if (u.tasks !== null && isStale(u, 'tasks')) reads.push(store.loadTasks(t.hostId, t.sessionId))
     if (u.roadmap !== null && isStale(u, 'roadmap')) reads.push(store.loadRoadmap(t.hostId, t.sessionId))
     await Promise.all(reads)
