@@ -4648,3 +4648,26 @@ test('RT-3b T36: a hello that answers after a main turn started restores no half
   expect(staleCalls(w.f)).toEqual([STALE])
   expect(idleBegins(w.f).at(-1)).toBe('relay begin --self --session sid-old --used 72 --window 200000')
 })
+
+// A member-relay control that waited for the half's write turn claims at the return to idle: the claim spends the half (the daemon deletes
+// its row there), so the status line stops promising a file. Mutation gate: no halfSpent at the claim → the status stays (red).
+test('RT-3b T36: a member relay claimed after the half spends it: the half status is cleared', async ($, on) => {
+  const MOP = '3f2b8c1e-9a4d-4e6b-8c7a-1d2e3f4a5b6c'
+  const w = halfWorld(on, { usage: AT55 })
+  const base = w.f.pdx
+  w.f.pdx = (argv) => (argv[1] === 'claim'
+    ? { exitCode: 0, stdout: JSON.stringify({ op: { ...OP, id: MOP, kind: 'member_relay', state: 'claimed', handoff_path: '/data/relay/' + MOP + '.md' }, lead: { address: 'mlab/lead-x', ref: '_h9movr', team_id: 'team-1' } }) }
+    : base(argv))
+  await start($, w.f)
+  await turnAndSettle($, w.f, 't1')
+  await w.f.clock.advance(40 * MIN)
+  w.row.decide('timeout')
+  await w.f.clock.advance(200)
+  await $.session.receive({ origin: { kind: 'peer' }, text: '<cross-session-message from="uds:/tmp/cc-socks/1.sock" from-name="mlab/lead-x">\n[pdx-relay:control] op=' + MOP + '\n</cross-session-message>' })
+  w.f.files[HALF_PATH] = GOOD_FILE
+  await $.turn.start({ text: w.f.submits[0].text, turnId: 'tw' })
+  await turnAndSettle($, w.f, 'tw')
+  await w.f.clock.advance(300)
+  expect(count(w.f, 'claim')).toBe(1)
+  expect(w.f.statuses.at(-1)).toBeUndefined()
+})

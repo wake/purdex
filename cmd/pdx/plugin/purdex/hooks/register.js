@@ -1423,6 +1423,7 @@ async function claim($, gen) {
   s.pending = p
   s.state = 'approved'
   s.fixRounds = 0
+  halfSpent($) // a member relay claimed: the daemon deleted the half's row
   // A turn the user started while the claim was out (id, the daemon, usage) is not interrupted: the write
   // waits for its turn.complete (P6-6 R1).
   if (s.turnRunning) s.writeDeferred = p
@@ -1539,12 +1540,19 @@ function reuseWritten($, p) {
       startWrite($, p) // the same path, written over
       return
     }
-    s.half = undefined // the claim spends it
+    halfSpent($) // the claim spends it
     report($, p.op.id, 'writing')
     report($, p.op.id, 'written')
     s.state = 'clearing'
     startClear($, p)
   })
+}
+
+// halfSpent: a relay claimed (the daemon deleted the half's row at the claim), so the mod forgets the half without telling anyone, and
+// the status line stops promising a file.
+function halfSpent($) {
+  s.half = undefined
+  if (s.halfStatus) { s.halfStatus = false; $.ui.status(undefined) }
 }
 
 // dropHalf forgets the fresh half: the conversation moved on, so its file no longer says where it is. `stale` also tells the daemon
@@ -1919,7 +1927,7 @@ export function register(on) {
     s.control = [] // a control message named the old session id: it is the old conversation's
     s.helloOK = false // nor does the old session's hello: the new one is sent below
     if (s.state === 'clearing' && p) {
-      s.half = undefined // the mod's own /clear: the relay spent the half (the daemon deleted its row at the claim)
+      halfSpent($) // the mod's own /clear: the relay spent the half (the daemon deleted its row at the claim)
       s.state = 'seeding'
       report($, p.op.id, 'cleared', ['--new-session', await $.session.id()])
       helloLater($)
