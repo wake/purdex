@@ -135,7 +135,7 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 		}
 	}
 
-	zone, trend := m.admitZoneTrend()
+	zone, trend, host := m.admitSample()
 	// Reserved counts as running (amendment A §2.5): a position that is offered,
 	// running or idle holds the host for its session even between two commands.
 	running := len(held) > 0
@@ -165,7 +165,6 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 	for i, r := range held {
 		leases[i] = resources.Lease{ID: r.ID, Weight: r.Weight, GrantedAt: time.UnixMilli(r.GrantedAt), Measured: r.EWMA, Samples: r.Samples}
 	}
-	host := m.admitHost()
 	load := resources.Load{Load1: host.Load1, NCPU: host.NCPU} // the sample the zone was judged on
 	use := m.leaseUseSnapshot()
 
@@ -460,13 +459,16 @@ func (m *Module) someoneWaitsBesides(positions []positionRow, waiting []leaseRow
 	return false
 }
 
-// admitZoneTrend is the zone and trend of the latest sample; an unavailable or
-// missing sample reads as unknown, which admission fails open on (D-5).
-func (m *Module) admitZoneTrend() (resources.Zone, resources.Trend) {
+// admitSample is what one pass decides on, all from the same sample (the sampler may publish another between two
+// reads, and a zone from the old sample with a load from the new one could slip past the load ceiling): the zone and
+// trend, which read as unknown for an unavailable or missing sample (admission fails open on that, D-5), and the host
+// figure, an all-zero reading then (not full, nothing measured: leases queue against each other and deadlines still
+// pass).
+func (m *Module) admitSample() (resources.Zone, resources.Trend, resources.HostUse) {
 	if s := m.latest.Load(); s != nil && s.Available {
-		return resources.ParseZone(s.Host.Zone), resources.ParseTrend(s.Host.Trend)
+		return resources.ParseZone(s.Host.Zone), resources.ParseTrend(s.Host.Trend), s.Host
 	}
-	return resources.ZoneUnknown, resources.TrendUnknown
+	return resources.ZoneUnknown, resources.TrendUnknown, resources.HostUse{}
 }
 
 // lastGrantTime is the newest granted_at of any row, held or ended: the larger
@@ -512,16 +514,6 @@ func (m *Module) readPassRows() (held, waiting []leaseRow, positions []positionR
 		return nil, nil, nil, false
 	}
 	return held, waiting, positions, true
-}
-
-// admitHost is the host figure the pass decides on: the latest sample, or an
-// all-zero reading when there is none or it is unavailable (not full, nothing
-// measured: leases then queue against each other and deadlines still pass).
-func (m *Module) admitHost() resources.HostUse {
-	if s := m.latest.Load(); s != nil && s.Available {
-		return s.Host
-	}
-	return resources.HostUse{}
 }
 
 // baselinesForWaiting works out, outside the lock, the baseline of every

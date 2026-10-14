@@ -48,6 +48,22 @@ func TestPassLoadCap_NothingRunningStillGrantsOne(t *testing.T) {
 	assert.Equal(t, "waiting", f.state("b"), "the second one is held by the ceiling")
 }
 
+// The zone, the trend and the load of a pass come from one sample: an unavailable one reads as unknown with an
+// all-zero host (fail open), an available one gives its own figures together.
+func TestAdmitSample_OneSampleForZoneTrendAndLoad(t *testing.T) {
+	f := newPassFix(t, resources.ModeLease)
+	f.setHost(resources.HostUse{Measured: 10, NCPU: 10, Load1: 12, Zone: "warning", Trend: "falling"})
+	zone, trend, host := f.m.admitSample()
+	assert.Equal(t, resources.ZoneWarning, zone)
+	assert.Equal(t, resources.TrendFalling, trend)
+	assert.Equal(t, 12.0, host.Load1)
+	f.m.publish(&resources.Snapshot{Available: false, Capacity: resources.Capacity, Host: resources.HostUse{NCPU: 10, Load1: 12, Zone: "danger"}, Mode: resources.ModeLease})
+	zone, trend, host = f.m.admitSample()
+	assert.Equal(t, resources.ZoneUnknown, zone)
+	assert.Equal(t, resources.TrendUnknown, trend)
+	assert.Equal(t, resources.HostUse{}, host)
+}
+
 // load_cap_pct 0 turns it off.
 func TestPassLoadCap_ZeroIsOff(t *testing.T) {
 	f := newPassFix(t, resources.ModeLease)
