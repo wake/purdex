@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -408,9 +411,10 @@ func TestHooks_NoEventRegisteredTwiceWithoutMatcher(t *testing.T) {
 	}
 }
 
-// The lease hook learns that a backgrounded command ended from the task list of classic.Stop, which events.js owns
-// (it may not be registered twice without a matcher): events.js must pass the list on (#2841).
-func TestHooks_EventsTellsTheLeaseHookAboutBackgroundTasks(t *testing.T) {
+// The lease hook learns that a backgrounded command ended from the task list of classic.Stop (#2841). It reads the list
+// in a classic.Stop hook of its own, not through events.js: `$` handed to a function imported from another file is a
+// mod tree Claude Code 2.1.296 refuses to load, and every session on it stays on the old mod (#2871).
+func TestHooks_LeaseWatchesBackgroundTasksWithItsOwnStopHook(t *testing.T) {
 	ev, err := fs.ReadFile(Files(), "hooks/events.js")
 	if err != nil {
 		t.Fatal(err)
@@ -419,11 +423,58 @@ func TestHooks_EventsTellsTheLeaseHookAboutBackgroundTasks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(ev), "leaseBackgroundChanged($, ev.background)") || !strings.Contains(string(ev), "import { leaseBackgroundChanged } from './lease.js'") {
-		t.Error("events.js does not call leaseBackgroundChanged with the background task list")
+	if strings.Contains(string(ev), "leaseBackgroundChanged") || strings.Contains(string(ev), "from './lease.js'") {
+		t.Error("events.js hands `$` to lease.js again (#2871)")
 	}
-	if !strings.Contains(string(ls), "export function leaseBackgroundChanged(") {
-		t.Error("lease.js does not export leaseBackgroundChanged")
+	if !strings.Contains(string(ls), "on('classic.Stop', { stop_hook_active: [false, true] }") {
+		t.Error("lease.js does not watch classic.Stop with a matcher of its own (events.js owns the unmatched one)")
+	}
+}
+
+// TestHooks_OldestInstalledClaudeCodeLoadsTheModTree (#2871): a mod tree an older Claude Code refuses to load keeps
+// every session on it on the previous mod ("reload failed, the previous version stays loaded"). The loader of 2.1.296
+// was stricter than the newer ones (`$` may go only into a function declared in the same file), so the tree is
+// validated by the oldest Claude Code installed here; without one the test is skipped.
+func TestHooks_OldestInstalledClaudeCodeLoadsTheModTree(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+	vers, _ := filepath.Glob(filepath.Join(home, ".local", "share", "claude", "versions", "*"))
+	var oldest string
+	var oldestKey [3]int
+	for _, v := range vers {
+		var key [3]int
+		if _, err := fmt.Sscanf(filepath.Base(v), "%d.%d.%d", &key[0], &key[1], &key[2]); err != nil {
+			continue
+		}
+		if oldest == "" || key[0] < oldestKey[0] || key[0] == oldestKey[0] && (key[1] < oldestKey[1] || key[1] == oldestKey[1] && key[2] < oldestKey[2]) {
+			oldest, oldestKey = v, key
+		}
+	}
+	if oldest == "" {
+		t.Skip("no installed Claude Code to validate with")
+	}
+	dir := t.TempDir()
+	if err := fs.WalkDir(Files(), ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		dst := filepath.Join(dir, p)
+		if d.IsDir() {
+			return os.MkdirAll(dst, 0o755)
+		}
+		b, err := fs.ReadFile(Files(), p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dst, b, 0o644)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(oldest, "plugin", "validate", dir).CombinedOutput()
+	if err != nil {
+		t.Errorf("%s plugin validate: %v\n%s", filepath.Base(oldest), err, out)
 	}
 }
 

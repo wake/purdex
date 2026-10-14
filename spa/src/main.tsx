@@ -13,6 +13,7 @@ import { startUnattendedSupport } from './lib/team/unattended-support'
 import { startPausedRefresh } from './lib/team/paused-refresh'
 import { startRosterForget } from './lib/team/roster-forget'
 import { startWorkbookLoader } from './lib/workbook/workbook-loader'
+import { startJournalLoader } from './lib/journal/journal-loader'
 import { startHostReresolve } from './lib/host-reresolve'
 import { startPeerCacheInvalidation } from './lib/host-lifecycle'
 import { startNexHostInvalidation } from './stores/useNexHostStore'
@@ -54,6 +55,8 @@ startPausedRefresh()
 startRosterForget()
 // Session workbook (plan WA-1.3): each team seat is loaded once per connection generation, on a workbook.v1 host.
 startWorkbookLoader()
+// Workbook journal (J-2a): the active tab's unit is loaded once per connection generation, on a journal.v1 host.
+startJournalLoader()
 // Host re-resolve (host ownership §3.3): a reference kept verbatim because this device lacked its host points at the
 // local host once that host is here — after hydration, on every host-identity change and every store rehydrate.
 startHostReresolve()

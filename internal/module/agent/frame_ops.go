@@ -1507,6 +1507,17 @@ func isSubagentStopFailure(lifecycle agentpkg.LifecycleEventKind, result agentpk
 	return id != ""
 }
 
+// isSubagentToolUse reports whether the event is a cc PostToolUse that names a
+// subagent (non-empty payload agent_id): that subagent's tool call, never a
+// status signal of the main conversation.
+func isSubagentToolUse(req EventRequest, result agentpkg.DeriveResult) bool {
+	if req.AgentType != "cc" || req.PurdexName != "PdxPostToolUse" {
+		return false
+	}
+	id, _ := result.Detail["agent_id"].(string)
+	return id != ""
+}
+
 func (m *Module) projectionForSession(sessionName string) (*SessionProjection, error) {
 	projections, snap, err := m.liveFrameProjectionsWithSnapshot()
 	if err != nil {

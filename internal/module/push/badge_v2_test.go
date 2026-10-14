@@ -303,12 +303,13 @@ func TestBadgeV2_OversizedSessionIDFallsBackToAnApprovalKey(t *testing.T) {
 	open := []team.Approval{
 		sessionCard("big", team.KindHookPermission, strings.Repeat("x", 5000)),
 		sessionCard("edge", team.KindLead, edge),
+		leadApproval("ap1"), // the pushed card itself is open, or the sender drops its push
 	}
 	te.events.readOpen = func() ([]team.Approval, error) { return open, nil }
 	te.events.emit("opened", leadApproval("ap1"))
 	p := te.waitSends(t, 1)[0].Payload
 	keys, _ := keysOf(t, p)
-	if want := "a:big,c:" + edge; strings.Join(keys, ",") != want {
+	if want := "a:big,c:sid-1,c:" + edge; strings.Join(keys, ",") != want {
 		t.Fatalf("keys = %.120v, want %s", keys, want)
 	}
 	if len(p) > 4096 {

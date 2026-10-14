@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -107,6 +108,11 @@ func (s *TraceStore) SaveChain(record TraceRecord) (err error) {
 		}
 	}()
 
+	// The chain's step count before this save (a save replaces a chain): the retention totals move by the difference.
+	oldSteps, existed, err := chainStepCount(tx, chain.ChainID)
+	if err != nil {
+		return err
+	}
 	if _, err = tx.Exec(`DELETE FROM agent_trace_steps WHERE chain_id = ?`, chain.ChainID); err != nil {
 		return err
 	}
@@ -163,13 +169,88 @@ func (s *TraceStore) SaveChain(record TraceRecord) (err error) {
 	}
 
 	maxChains, maxSteps := s.traceLimits()
-	if err = pruneTraceChains(tx, maxChains, maxSteps); err != nil {
+	dChains := 1
+	if existed {
+		dChains = 0
+	}
+	// The totals lock is held to the commit: the totals describe the committed table, so they move only with it.
+	t := s.totalsOf()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	chainsNow, stepsNow, err := t.after(tx, dChains, chain.StepCount-oldSteps)
+	if err != nil {
+		return err
+	}
+	chainsNow, stepsNow, err = pruneTraceChains(tx, maxChains, maxSteps, chainsNow, stepsNow, t)
+	if err != nil {
+		t.known = false
 		return err
 	}
 	if err = tx.Commit(); err != nil {
+		t.known = false
 		return err
 	}
+	t.chains, t.steps = chainsNow, stepsNow
 	return nil
+}
+
+// traceTotalsResyncEvery is how many saves the in-memory totals are trusted for before the table is counted again (a
+// row changed by anything but SaveChain, or a failed commit nobody noticed, cannot make them wrong for longer).
+const traceTotalsResyncEvery = 512
+
+// traceHysteresisFrom is the limit from which retention evicts down to 90% of it, not just to the limit: every save at a
+// full table would otherwise evict one chain and look again. Below it the limit is exact.
+const traceHysteresisFrom = 1000
+
+// traceTotals is how many chains and steps the table holds, kept in memory so that a save does not read the table
+// (#2887: every hook event read 10000 rows inside the write transaction). mu is held from the totals' use in a save to
+// its commit.
+type traceTotals struct {
+	mu        sync.Mutex
+	known     bool
+	chains    int
+	steps     int
+	sinceSync int
+	// observability for tests: rows retention read, and times the table was counted
+	scanned int
+	syncs   int
+}
+
+// after is the totals with the save's changes in them (already made in tx): the kept ones moved by the deltas, or, when
+// they are unknown or due, counted from the table.
+func (t *traceTotals) after(tx *sql.Tx, dChains, dSteps int) (int, int, error) {
+	t.sinceSync++
+	if t.known && t.sinceSync < traceTotalsResyncEvery {
+		return t.chains + dChains, t.steps + dSteps, nil
+	}
+	var chains, steps int
+	if err := tx.QueryRow(`SELECT COUNT(*), COALESCE(SUM(step_count), 0) FROM agent_trace_chains`).Scan(&chains, &steps); err != nil {
+		t.known = false
+		return 0, 0, err
+	}
+	t.known, t.sinceSync = true, 0
+	t.syncs++
+	return chains, steps, nil
+}
+
+// totalsOf is the retention totals of this handle's database. A handle made by hand (a test) gets its own, once.
+func (s *TraceStore) totalsOf() *traceTotals {
+	s.ownTotalsOnce.Do(func() {
+		if s.totals == nil {
+			s.totals = &traceTotals{}
+		}
+	})
+	return s.totals
+}
+
+// chainStepCount is the step_count a stored chain has, and whether it is stored.
+func chainStepCount(tx *sql.Tx, chainID string) (int, bool, error) {
+	var n int
+	err := tx.QueryRow(`SELECT step_count FROM agent_trace_chains WHERE chain_id = ?`, chainID).Scan(&n)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	return n, err == nil, err
 }
 
 func (s *TraceStore) traceLimits() (int, int) {
@@ -292,62 +373,91 @@ func normalizeTraceRecord(record TraceRecord) (TraceChain, []TraceStep, error) {
 	return chain, steps, nil
 }
 
-func pruneTraceChains(tx *sql.Tx, maxChains, maxSteps int) error {
+// The totals assume this process is the table's only writer (the daemon holds the one store); another writer is
+// corrected by the recount every traceTotalsResyncEvery saves and by the exhausted-pass check in pruneTraceChains.
+//
+// pruneTraceChains evicts the oldest chains while the table (chains and steps, as counted by the caller) is over a
+// limit, and returns the totals after. A table within its limits costs nothing; one over them is read from its oldest
+// end only as far as the eviction goes, down to 90% of the limits when they are large (traceHysteresisFrom).
+func pruneTraceChains(tx *sql.Tx, maxChains, maxSteps, chains, steps int, t *traceTotals) (int, int, error) {
 	if maxChains <= 0 || maxSteps <= 0 {
-		return nil
+		return chains, steps, nil
+	}
+	if chains <= maxChains && steps <= maxSteps {
+		return chains, steps, nil
+	}
+	keepChains, keepSteps := maxChains, maxSteps
+	if maxChains >= traceHysteresisFrom {
+		keepChains -= maxChains / 10
+	}
+	if maxSteps >= traceHysteresisFrom {
+		keepSteps -= maxSteps / 10
 	}
 
-	rows, err := tx.Query(`
+	// The totals are what this process saw; they are wrong when something else changed the table. A pass that runs out
+	// of rows while the totals still say "over" shows that: the table is counted again and the pass made anew, before
+	// anything is deleted (a wrong total must not evict the chain that was just saved).
+	var evict []string
+	for pass := 0; ; pass++ {
+		evict = evict[:0]
+		c, st := chains, steps
+		rows, err := tx.Query(`
 		SELECT chain_id, step_count
 		FROM agent_trace_chains
 		ORDER BY started_at ASC, chain_id ASC
 	`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	type chainStat struct {
-		chainID   string
-		stepCount int
-	}
-
-	stats := make([]chainStat, 0, 64)
-	totalSteps := 0
-	for rows.Next() {
-		var stat chainStat
-		if err := rows.Scan(&stat.chainID, &stat.stepCount); err != nil {
-			return err
+		if err != nil {
+			return 0, 0, err
 		}
-		stats = append(stats, stat)
-		totalSteps += stat.stepCount
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	totalChains := len(stats)
-	var evict []string
-	for _, stat := range stats {
-		if totalChains <= maxChains && totalSteps <= maxSteps {
-			break
+		for (c > keepChains || st > keepSteps) && rows.Next() {
+			var id string
+			var n int
+			if err := rows.Scan(&id, &n); err != nil {
+				rows.Close()
+				return 0, 0, err
+			}
+			t.scanned++
+			evict = append(evict, id)
+			c--
+			st -= n
 		}
-		evict = append(evict, stat.chainID)
-		totalChains--
-		totalSteps -= stat.stepCount
-	}
-	if len(evict) == 0 {
-		return nil
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return 0, 0, err
+		}
+		rows.Close()
+		if (c > keepChains || st > keepSteps) && pass == 0 {
+			if err := tx.QueryRow(`SELECT COUNT(*), COALESCE(SUM(step_count), 0) FROM agent_trace_chains`).Scan(&chains, &steps); err != nil {
+				return 0, 0, err
+			}
+			t.syncs++
+			if chains <= maxChains && steps <= maxSteps {
+				return chains, steps, nil
+			}
+			continue
+		}
+		chains, steps = c, st
+		break
 	}
 
-	placeholders := strings.Repeat("?,", len(evict))
-	placeholders = placeholders[:len(placeholders)-1]
-	args := make([]any, len(evict))
-	for i, chainID := range evict {
-		args[i] = chainID
+	const batch = 500
+	for len(evict) > 0 {
+		part := evict
+		if len(part) > batch {
+			part = evict[:batch]
+		}
+		evict = evict[len(part):]
+		placeholders := strings.Repeat("?,", len(part))
+		placeholders = placeholders[:len(placeholders)-1]
+		args := make([]any, len(part))
+		for i, chainID := range part {
+			args[i] = chainID
+		}
+		if _, err := tx.Exec(fmt.Sprintf(`DELETE FROM agent_trace_chains WHERE chain_id IN (%s)`, placeholders), args...); err != nil {
+			return 0, 0, err
+		}
 	}
-	_, err = tx.Exec(fmt.Sprintf(`DELETE FROM agent_trace_chains WHERE chain_id IN (%s)`, placeholders), args...)
-	return err
+	return chains, steps, nil
 }
 
 func rawJSONText(raw json.RawMessage) string {

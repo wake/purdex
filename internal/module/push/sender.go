@@ -42,6 +42,10 @@ type Job struct {
 	SkipOpen bool
 	// RequireOpen: the job is only about the open set (a background badge push), so it is dropped when that cannot be read.
 	RequireOpen bool
+	// DropIfClosed: an approval's push is dropped when its own card is not in the open set read right before sending (it
+	// closed while the job was queued). An open set that cannot be read does not drop it: a missed request is not recoverable,
+	// a stale notification is cleaned by the close badge push.
+	DropIfClosed bool
 }
 
 // JobApproval is what an approval's Job carries to resolve its own tmux session, whether or not the approval is still open.
@@ -58,6 +62,8 @@ type openSnap struct {
 	keys []string
 	code string // the Job's own approval's session code; "" = unresolved
 	ok   bool
+	// ownOpen: the Job's own approval is in the open set (any kind). Only meaningful when ok.
+	ownOpen bool
 }
 
 // sender is the push module's one sending goroutine (spec §7). Triggers call Enqueue and never wait; everything that can
@@ -148,6 +154,10 @@ func (s *sender) process(ctx context.Context, j Job) {
 	}
 	if j.RequireOpen && !snap.ok {
 		log.Printf("[push] badge job not sent: the open approvals could not be read")
+		return
+	}
+	if j.DropIfClosed && j.Approval != nil && snap.ok && !snap.ownOpen {
+		log.Printf("[push] approval %s not pushed: dropped_at_send (its card closed while the push was queued)", shortID(j.Approval.ID))
 		return
 	}
 	for _, id := range j.DeviceIDs {

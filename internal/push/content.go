@@ -41,6 +41,8 @@ type ApprovalOrigin struct {
 type Content struct {
 	Title, Body string
 	Kind        string // lead | self_relay | hook_ask | agent
+	// Category is the iOS notification category (aps.category): the actions the phone shows under the notification. "" = none.
+	Category    string
 	ApprovalID  string
 	SessionCode string
 	SessionID   string
@@ -177,12 +179,20 @@ func CountsForBadge(kind string) bool {
 	return false
 }
 
+// ApprovalCategory is the notification category of an approval push the person can answer with a yes or a no (the 同意 /
+// 拒絕 buttons): lead, self_relay and member_relay. A hook_ask needs answers or a message, so it has none (tap to open).
+const ApprovalCategory = "PDX_APPROVAL"
+
 // ApprovalContent is the push for a newly opened approval, or false when this approval is not pushed: only lead,
 // self_relay, member_relay and an answerable hook_ask (not terminal_only) are (spec §5.1).
 func ApprovalContent(a Approval, hostLabel, locale string) (Content, bool) {
 	t := table(locale)
 	who := originLabel(a.Origin)
 	c := Content{Kind: a.Kind, ApprovalID: a.ID, CollapseID: a.ID}
+	switch a.Kind {
+	case "lead", "self_relay", "member_relay":
+		c.Category = ApprovalCategory
+	}
 	switch a.Kind {
 	case "lead":
 		var p struct {
@@ -327,14 +337,15 @@ func (c Content) payload(hostID, body string, rs []reads.Read) ([]byte, error) {
 	if c.OpenApprovalKeys != nil {
 		purdex["open_approval_keys"] = c.OpenApprovalKeys
 	}
-	return json.Marshal(map[string]any{
-		"aps": map[string]any{
-			"alert":              map[string]string{"title": c.Title, "body": body},
-			"sound":              "default",
-			"thread-id":          hostID,
-			"interruption-level": "time-sensitive",
-			"mutable-content":    1,
-		},
-		"purdex": purdex,
-	})
+	aps := map[string]any{
+		"alert":              map[string]string{"title": c.Title, "body": body},
+		"sound":              "default",
+		"thread-id":          hostID,
+		"interruption-level": "time-sensitive",
+		"mutable-content":    1,
+	}
+	if c.Category != "" {
+		aps["category"] = c.Category
+	}
+	return json.Marshal(map[string]any{"aps": aps, "purdex": purdex})
 }

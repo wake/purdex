@@ -65,6 +65,8 @@ type Module struct {
 	// resolveSessionOwnerErr.
 	ownerResolver func(ctx context.Context, code string) (PaneOwner, bool, error)
 
+	subWaits subagentWaits // who caused each pane's waiting light (#2873)
+
 	mu             sync.Mutex
 	currentStatus  map[string]agentpkg.Status
 	subagents      map[string][]agentpkg.SubagentRef

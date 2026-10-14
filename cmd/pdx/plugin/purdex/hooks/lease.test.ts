@@ -531,7 +531,7 @@ test('a foreground command with a pdx lease segment is not leased by the mod', a
 
 const MOVED = { ref: 1, result: { stdout: '', stderr: '', interrupted: false, backgroundTaskId: 'bt1', timedOutAfterMs: 120000 }, text: 'moved to the background' }
 const movedAs = (id: string) => () => ({ ...MOVED, result: { ...MOVED.result, backgroundTaskId: id } })
-// Claude Code lists the background tasks at every Stop; events.js passes them on to the lease hook.
+// Claude Code lists the background tasks at every Stop; lease.js reads them in its own classic.Stop hook.
 const stop = ($: any, b: { tasks: any[] }) => $.classic.Stop({ stop_hook_active: false, background_tasks: b.tasks.map((t) => ({ description: 'x', ...t })), session_crons: [] } as any)
 const pause = (ms: number) => new Promise((res) => setTimeout(res, ms))
 // The task is listed running at one Stop and gone at the next: it ended.

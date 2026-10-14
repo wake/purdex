@@ -543,9 +543,9 @@ function backgroundTaskOf(r) {
   return typeof id === 'string' ? id : ''
 }
 
-// leaseBackgroundChanged is called with the background tasks each time Claude Code lists them (classic.Stop, through
-// events.js): a handed-over lease whose task is no longer listed as running is released, with the final notice, which
-// goes to the model in the next Bash result. `$` is used here at the top level only (M-U1-2).
+// leaseBackgroundChanged is called with the background tasks each time Claude Code lists them (this file's own
+// classic.Stop hook, in registerLease: `$` never goes through an import, #2871): a handed-over lease whose task is no
+// longer listed as running is released, with the final notice, which goes to the model in the next Bash result.
 export function leaseBackgroundChanged($, background) {
   if (bgLeases.size === 0) return
   const running = new Set(((background && background.tasks) || []).filter((t) => t.status === 'running').map((t) => t.id))
@@ -698,5 +698,13 @@ export function registerLease(on) {
     // session it is about (never into a deny, never into a subagent's, never into another session's).
     if (e.agentId || !r || typeof r !== 'object' || 'deny' in r) return r
     return withNotes(r, await takeNotices($))
+  }).catch(($, e, next) => next(e))
+  // A lease whose background command ended is let go (#2841). This file reads the list itself: events.js passing `$`
+  // here would be `$` crossing an import, which Claude Code 2.1.296 refuses to load (#2871).
+  on('classic.Stop', { stop_hook_active: [false, true] }, async ($, e, next) => {
+    const r = await next(e)
+    const listed = Array.isArray(e.background_tasks) ? e.background_tasks : []
+    try { leaseBackgroundChanged($, { tasks: listed.map((t) => ({ id: t.id, status: t.status })) }) } catch {}
+    return r
   }).catch(($, e, next) => next(e))
 }

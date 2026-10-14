@@ -93,7 +93,7 @@ func ownSession(refs map[string]session.SessionRef, name string, approvalAtMs in
 // ok=false (no reader, or the read failed) means the count and keys are unknown: the payload then leaves both fields out.
 func (m *Module) openState(ctx context.Context, j Job) openSnap {
 	var pushed []team.Approval
-	openOK := false
+	openOK, ownOpen := false, false
 	if r := m.reader; r != nil {
 		open, err := r.OpenApprovals()
 		if err != nil {
@@ -101,6 +101,9 @@ func (m *Module) openState(ctx context.Context, j Job) openSnap {
 		} else {
 			openOK = true
 			for _, a := range open {
+				if j.Approval != nil && a.ID == j.Approval.ID {
+					ownOpen = true
+				}
 				if push.CountsForBadge(string(a.Kind)) { // the cards the badge counts, pushed or not (badge spec §3.1)
 					pushed = append(pushed, a)
 				}
@@ -117,7 +120,7 @@ func (m *Module) openState(ctx context.Context, j Job) openSnap {
 	if needSessions {
 		refs = m.readSessions(ctx)
 	}
-	snap := openSnap{ok: openOK}
+	snap := openSnap{ok: openOK, ownOpen: ownOpen}
 	if j.Approval != nil {
 		snap.code = ownSession(refs, j.Approval.TmuxSession, j.Approval.CreatedAt)
 	}

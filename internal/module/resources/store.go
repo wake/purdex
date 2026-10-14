@@ -598,6 +598,8 @@ var decisionColumns = []struct{ name, def string }{
 	{"offered_at", "INTEGER NOT NULL DEFAULT 0"},
 	{"confirmed_at", "INTEGER NOT NULL DEFAULT 0"},
 	{"notice", "TEXT NOT NULL DEFAULT ''"},
+	// P2f: how many nested answers (a run below this row's holder) it covered.
+	{"nested_runs", "INTEGER NOT NULL DEFAULT 0"},
 }
 
 // hostMinutesSchema is the D-8.2 timeline: one row per minute, written by the

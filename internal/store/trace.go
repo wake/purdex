@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"sync"
 )
 
 const (
@@ -75,9 +76,11 @@ type TraceChainPage struct {
 
 // TraceStore persists trace chains and ordered steps.
 type TraceStore struct {
-	db        *sql.DB
-	maxChains int
-	maxSteps  int
+	db            *sql.DB
+	maxChains     int
+	maxSteps      int
+	ownTotalsOnce sync.Once
+	totals        *traceTotals // shared by the handles of one database; nil (a handle made by hand) is made on first use
 }
 
 // sqlQuerier is satisfied by both *sql.DB and *sql.Conn so migration helpers

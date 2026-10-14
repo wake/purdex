@@ -17,6 +17,7 @@ vi.mock('./lib/profile/start', () => ({ startProfileSync: vi.fn() }))
 vi.mock('./lib/pending-revocation-retry', () => ({ startPendingRevocationRetry: vi.fn() }))
 vi.mock('./features/workspace/lib/adopt-standalone', () => ({ startStandaloneAdoption: vi.fn() }))
 vi.mock('./lib/legacy-residue-cleanup', () => ({ scheduleLegacyResidueCleanup: vi.fn() }))
+vi.mock('./lib/journal/journal-loader', () => ({ startJournalLoader: vi.fn() }))
 vi.mock('./stores/useDeviceNameStore', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./stores/useDeviceNameStore')>()),
   ensureDefaultDeviceName: vi.fn(() => Promise.resolve()),
@@ -50,6 +51,13 @@ describe('boot', () => {
     const { startPendingRevocationRetry } = await import('./lib/pending-revocation-retry')
     await import('./main')
     expect(startPendingRevocationRetry).toHaveBeenCalledTimes(1)
+  })
+
+  // J-2a T-2a.6: the active tab's journal unit is kept loaded whether or not the card is open — app lifetime, once.
+  it('starts the journal loader once', async () => {
+    const { startJournalLoader } = await import('./lib/journal/journal-loader')
+    await import('./main')
+    expect(startJournalLoader).toHaveBeenCalledTimes(1)
   })
 
   // H2c-2 (plan §0.16): the host-look migration runs after BOTH the host store and the look store hydrated, and

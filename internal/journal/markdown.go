@@ -190,11 +190,16 @@ func readLines(file string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := strings.TrimSuffix(string(b), "\n")
+	return splitLines(string(b)), nil
+}
+
+// splitLines is the lines of a file's text, without its final newline.
+func splitLines(text string) []string {
+	s := strings.TrimSuffix(text, "\n")
 	if s == "" {
-		return nil, nil
+		return nil
 	}
-	return strings.Split(s, "\n"), nil
+	return strings.Split(s, "\n")
 }
 
 // atomicWrite writes data to path through a temp file in the same directory and a rename.
@@ -255,6 +260,11 @@ func Parse(file string) ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseLines(file, lines), nil
+}
+
+// parseLines reads the entries out of the lines of file's text (file only names it in the log).
+func parseLines(file string, lines []string) []Entry {
 	var out []Entry
 	for i, l := range lines {
 		if !strings.HasPrefix(l, metaPrefix) {
@@ -267,7 +277,7 @@ func Parse(file string) ([]Entry, error) {
 		}
 		out = append(out, e)
 	}
-	return out, nil
+	return out
 }
 
 // locate finds the block of id: [start, end] line indexes, end being the metadata line.
@@ -380,6 +390,18 @@ func SetPinned(file, id string, pinned bool) (bool, error) {
 			return false, nil
 		}
 		e.Pinned = pinned
+		return true, nil
+	})
+}
+
+// FillDetail sets the detail of an entry whose detail is empty (a task_done whose closing line arrived after the entry was
+// written). An entry that already has a detail is left alone.
+func FillDetail(file, id, detail string) (bool, error) {
+	return update(file, id, func(e *Entry) (bool, error) {
+		if e.Detail != "" || detail == "" {
+			return false, nil
+		}
+		e.Detail = detail
 		return true, nil
 	})
 }

@@ -137,6 +137,10 @@ type LeaseResponse struct {
 	QueuedReason string `json:"queued_reason,omitempty"`
 	// Notice is the final notice a release answer carries (amendment A §3.3).
 	Notice string `json:"notice,omitempty"`
+	// Nested is the id of the outer lease whose process tree the caller runs in
+	// (P2f): the answer is held with no row of its own (ID is empty), and the
+	// command runs under the outer lease's weight.
+	Nested string `json:"nested,omitempty"`
 }
 
 // LeaseView is one held lease in a Snapshot.

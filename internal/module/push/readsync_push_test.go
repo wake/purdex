@@ -253,6 +253,7 @@ func TestReadSyncPush_ReadsTrimmedForSizeStayPending(t *testing.T) {
 	for i := 0; i < 40; i++ { // 32 maximal keys of fixed fields
 		open = append(open, sessionCard(fmt.Sprintf("o%02d", i), team.KindLead, fmt.Sprintf("%s%02d", strings.Repeat("s", 62), i)))
 	}
+	open = append(open, big) // the pushed card itself is open, or the sender drops its push
 	e.events.readOpen = func() ([]team.Approval, error) { return open, nil }
 	e.events.emit("opened", big)
 	c := e.waitSends(t, 1)[0]
