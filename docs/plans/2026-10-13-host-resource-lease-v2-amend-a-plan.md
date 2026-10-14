@@ -657,12 +657,11 @@ Results go in the PR body and into Q1 and Q14. **If (a) shows any permission cha
 - (e) after the probe mod's folder was rewritten the engine reloaded it ("reloaded (2 hooks …)") and `session.start` fired again with `isInteractive:true` (the module's variables started over). The mod no longer depends on it for the foreground (the daemon decides); it sets its `interactive` flag from `session.start` for the background wrap only.
 - (f), (g) not measured: they served T24, which is dropped.
 
-**T23 Queue answers** (kept from `eec9a8cda`): exit 15 counts only with a queued line. `{deny}` uses T-queued / T-queued-own; `next(e)` is not called and no release is sent. The `replaced` branch is removed. In an **interactive** session acquire gets `--queue --command <e.command, first 200 bytes> --cwd <session cwd>` (Q14); in a non-interactive one `--wait` (today's behaviour, coordinator Q2).
+**T23 Queue answers** (kept from `eec9a8cda`): exit 15 counts only with a queued line. `{deny}` uses T-queued / T-queued-own; `next(e)` is not called and no release is sent. The `replaced` branch is removed. *(Amended, Q1: no mode flag at all.)* acquire gets `--command <e.command, first 200 bytes> --cwd <session cwd>` and **no** `--queue` / `--ask` / `--wait`: the daemon resolves `auto` (queue under an interactive session, wait otherwise, coordinator Q2).
 - Kept from eec9a8cda, text updated: `queued: the command is not run, the model gets the queued text as a deny, and nothing is released`.
 - `own_running: the deny says to wait for its own previous command`.
 - Kept: `exit 15 without a queued line runs the command and releases`.
-- `acquire passes --queue, the original command (first 200 bytes) and the cwd`.
-- `a non-interactive session acquires with --wait`. (M: pass `--queue` regardless.)
+- `acquire passes the original command (first 200 bytes) and the cwd, and no mode`. (M: pass `--queue` regardless.)
 
 **T24 ~~The caller export~~ — dropped (lead, Q1): the mod adds no prefix; `auto` (above) replaces it.** The original text follows for the record. (coordinator Q2) — lease.js registers `session.start` with the matcher `{ isInteractive: true }` (a matched registration; `embed_test.go`'s registration rows gain it) and keeps a module flag. In an interactive session, **every** Bash call, heavy or not, foreground or background, a subagent's included (its notices go to the main conversation, whose mod polls prompts), becomes `export PDX_LEASE_CALLER=<fg|bg> PDX_LEASE_SHELL=$$` + `\n` + the original. A non-interactive session (`claude -p`), or a load that has seen no `session.start` (T22 (e)), gets no export, so nested calls use wait mode. Not announced: it produces no output (M-R2's tampering signal was output that did not match).
 - `every foreground Bash of an interactive session runs with PDX_LEASE_CALLER=fg exported`. (M: drop the export for non-heavy commands.)
@@ -671,9 +670,9 @@ Results go in the PR body and into Q1 and Q14. **If (a) shows any permission cha
 - `a non-interactive session's Bash is not prefixed`. (M: drop the interactive check.)
 - The existing `non-heavy Bash passes through untouched (no process.run)` becomes `non-heavy Bash only gets the export (no process.run)`.
 
-**T25 Background heavy → ask** (*amended: the shell is a literal path, see T22 (c); the wrap is made only when `$.tool.check` gives the same verdict for the original and the wrapped command, Q1*) — interactive sessions only. `run_in_background:true` and `classify` heavy: the command becomes `pdx lease run --ask --kind <k> --command <original, 200 B> -- "${SHELL:-/bin/sh}" -c '<original, single-quote escaped>'`, after the export. A `context` note tells the model (Q15). A background command already wrapped in `pdx lease` is not wrapped again. A non-interactive session's background calls pass through as today (nothing can ask it).
+**T25 Background heavy → ask** (*amended: the shell is a literal path, see T22 (c); the wrap is made only when `$.tool.check` gives the same verdict for the original and the wrapped command, Q1*) — interactive sessions only. `run_in_background:true` and `classify` heavy: the command becomes `pdx lease run --ask --kind <k> --command <original, 200 B> -- <literal shell path> -c '<original, single-quote escaped>'` (no export, no variable: T22 (c)). A `context` note tells the model (Q15). A background command already wrapped in `pdx lease` is not wrapped again. A non-interactive session's background calls pass through as today (nothing can ask it).
 - `a heavy background Bash is wrapped in pdx lease run --ask with its kind and command`. (M: skip the wrap.)
-- `a background pdx lease run is only exported, not wrapped twice`.
+- `a background pdx lease run is left as it is, not wrapped twice`; a command with a `pdx lease` segment anywhere in it is not wrapped either (the inner run would find its own session's position running).
 - `the wrap is announced in the context`.
 - `a non-interactive heavy background Bash is not wrapped`.
 

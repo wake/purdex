@@ -478,3 +478,40 @@ test('a non-heavy background Bash only passes through', async ($, on) => {
   expect(r.ran).toEqual(['sleep 30'])
   expect(r.checks).toEqual([])
 })
+
+// ---- review: a release that did not answer, a mixed wrapped command ----
+
+// The release after the command may not answer (the 5 s ran out): it is tried once more with the notice, which the
+// daemon keeps on the row for a repeated release; and if that fails too the lease is still let go.
+// (M: mark the lease done before the release.)
+test('a release that does not answer is tried again and the notice is not lost', async ($, on) => {
+  const notice = '有其他 session 在排隊，下一個指令會是這次的最後一個；之後還要跑請重新排隊。'
+  let n = 0
+  const r = rig(on, (a) => {
+    if (sub(a) === 'acquire') return ok(GRANT())
+    return ++n === 1 ? ok('', 20, 'pdx lease: daemon unreachable') : ok(JSON.stringify({ state: 'ended', notice }))
+  })
+  const out = await bash($, 'pnpm run build')
+  expect(out.context).toEqual([notice])
+  const rels = r.calls.filter((a) => sub(a) === 'release')
+  expect(rels.length).toBe(2)
+  for (const rel of rels) expect(rel).toContain('--notice')
+})
+
+test('a release that throws twice still ends with a release without a notice', async ($, on) => {
+  const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : { deny: 'release failed' }))
+  const out = await bash($, 'pnpm run build')
+  expect(out.result).toEqual(BASH_OK.result)
+  const rels = r.calls.filter((a) => sub(a) === 'release')
+  expect(rels.length).toBe(3)
+  expect(rels.map((a) => a.includes('--notice'))).toEqual([true, true, false])
+  expect(r.ran).toEqual(['pnpm run build']) // the command ran once
+})
+
+test('a background command with a pdx lease segment anywhere is not wrapped', async ($, on) => {
+  const r = rig(on, () => ok(GRANT()))
+  await startInteractive($)
+  for (const c of ['pdx lease run --ask --kind build -- pnpm run build && pnpm run build', 'pnpm run build; pdx lease run --kind build -- ls', 'pdx lease ls\npnpm run build']) await bash($, c, { run_in_background: true })
+  expect(r.ran).toEqual(['pdx lease run --ask --kind build -- pnpm run build && pnpm run build', 'pnpm run build; pdx lease run --kind build -- ls', 'pdx lease ls\npnpm run build'])
+  expect(r.checks).toEqual([])
+})
