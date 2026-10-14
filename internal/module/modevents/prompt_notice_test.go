@@ -25,9 +25,9 @@ func TestNotice_ThroughTheSocketToTheCapableStream(t *testing.T) {
 	q := promptq.New(streamOwners{reg})
 	m := &Module{queue: q}
 	h := modevents.NewHandler(reg, modevents.WithPrompt(m.promptService))
-	announce(reg, "Aaaaaaaaaaaaaaaaaaaaaa", modevents.CapPromptV1) // the older announcer: prompts only
-	time.Sleep(5 * time.Millisecond)
 	announce(reg, "Cccccccccccccccccccccc", modevents.CapPromptV1, modevents.CapLeaseNoticeV1)
+	time.Sleep(5 * time.Millisecond)
+	announce(reg, "Aaaaaaaaaaaaaaaaaaaaaa", modevents.CapPromptV1) // the newer announcer owns the prompts, not the notices
 
 	got := make(chan promptq.Result, 1)
 	go func() { r, _ := q.SubmitNotice(context.Background(), sidP, "n-1", "輪到你了"); got <- r }()
