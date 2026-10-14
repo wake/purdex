@@ -2,8 +2,11 @@ package teammod
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"github.com/wake/purdex/internal/module/agent"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,7 +39,7 @@ func TestSpawn_AMemberThatRegistersIsStoredAndTitled(t *testing.T) {
 	}
 }
 
-// Spec §7.2 step 5: no registration within 20 s of the launch → the session
+// Spec §7.2 step 5: no registration within 60 s of the launch → the session
 // is killed (recorded id, recorded generation) and the op fails
 // member_start_timeout, so it no longer counts against the limit. Mutation
 // gate: skip the kill → red.
@@ -53,9 +56,9 @@ func TestSpawn_StartTimeoutKillsAndFreesTheSlot(t *testing.T) {
 	}
 }
 
-// Spec §7.2 step 5 ("Wait up to 20 s … On timeout: kill"), review R1 as the
+// Spec §7.2 step 5 ("Wait up to 60 s … On timeout: kill"), review R1 as the
 // critic read it: every poll judges the deadline first, so a poll that wakes
-// past launched_at + 20 s times out even when the member has shown up by
+// past launched_at + 60 s times out even when the member has shown up by
 // then. Mutation gate: look at the member before the deadline → red.
 func TestSpawn_PastTheBudgetItTimesOutEvenWithAMemberThere(t *testing.T) {
 	f, root := newSpawnFixture(t, 1)
@@ -279,5 +282,61 @@ func TestSpawn_PaneStateSaysWhatIsMissing(t *testing.T) {
 		if _, got := m.paneState("%0"); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+// The book of last-seen states is bounded, and a read error never reaches the detail (codex on #2853). Mutation gates: no cap → the
+// first id is still there (red); the error text in the state → red.
+func TestSpawnSeenBook_IsBounded(t *testing.T) {
+	var b spawnSeenBook
+	for i := 0; i < spawnSeenCap+10; i++ {
+		b.set(fmt.Sprintf("op-%d", i), "x")
+	}
+	if _, ok := b.get("op-0"); ok {
+		t.Fatal("the oldest entry survived the cap")
+	}
+	if _, ok := b.get(fmt.Sprintf("op-%d", spawnSeenCap+9)); !ok {
+		t.Fatal("the newest entry is gone")
+	}
+}
+
+type failingFrames struct{}
+
+func (failingFrames) LiveSessions(context.Context, string) ([]agent.TerminalSession, error) {
+	return nil, errors.New("sqlite: /Users/secret/path/frames.db is locked")
+}
+
+func TestSpawn_FrameReadErrorStaysOutOfTheDetail(t *testing.T) {
+	var logged []string
+	m := &Module{frames: failingFrames{}, logf: func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) }}
+	_, state := m.paneState("%0")
+	if state != "讀不到 frame" || strings.Contains(state, "secret") {
+		t.Fatalf("state = %q, want the fixed words", state)
+	}
+	if len(logged) != 1 || !strings.Contains(logged[0], "secret") {
+		t.Fatalf("log = %v, want the cause there", logged)
+	}
+}
+
+// One poll reads the frames once (codex on #2853: a second read for the diagnosis doubled the load of a busy host).
+type pollCountFrames struct{ n *int }
+
+func (c pollCountFrames) LiveSessions(context.Context, string) ([]agent.TerminalSession, error) {
+	*c.n++
+	return nil, nil
+}
+
+func TestSpawn_OnePollReadsTheFramesOnce(t *testing.T) {
+	f, root := newSpawnFixture(t, 1)
+	n := 0
+	f.m.frames = pollCountFrames{&n}
+	polls := 0
+	f.m.spawnSleep = func(context.Context, time.Duration) { polls++; f.clock.Add(250) }
+	f.runOp(1, root, nil)
+	if polls == 0 {
+		t.Fatal("no poll ran")
+	}
+	if n > polls {
+		t.Fatalf("%d frame reads for %d polls: more than one per poll", n, polls)
 	}
 }

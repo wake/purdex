@@ -52,7 +52,7 @@ func TestSpawn_RestartMidOpOpensNothingTwice(t *testing.T) {
 	}
 }
 
-// Spec §9.3: at boot a launched op past its 20 s budget is killed (the
+// Spec §9.3: at boot a launched op past its 60 s budget is killed (the
 // recorded id, under the recorded generation) and fails
 // member_start_timeout; one whose tmux session is gone is abandoned and
 // nothing is killed.
