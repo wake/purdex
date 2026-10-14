@@ -129,6 +129,9 @@ export const useJournalStore = create<JournalState>()((set, get) => {
     return { kind: 'ok' }
   }
 
+  /** Slot of a read: sessions that map to one unit share its slots (a known session is keyed by its unit, an unknown one by itself). */
+  const slotOf = (hostId: string, sessionId: string, what: string): string => `${get().byHost[hostId]?.unitOfSession[sessionId] ?? `session:${sessionId}`}\u0000${what}`
+
   const trim = (units: Record<string, UnitState>, unitOfSession: Record<string, string>): HostJournal => {
     const keys = Object.keys(units)
     if (keys.length <= MAX_UNITS) return { units, unitOfSession }
@@ -155,7 +158,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
         if (!u.more) return { kind: 'ok' }
         before = cursorOf(oldest)
       }
-      return read(hostId, `${sessionId}\u0000${older ? 'older' : 'newest'}`, () => getJournal(hostId, sessionId, before), (page, startedAt) => set((s) => {
+      return read(hostId, slotOf(hostId, sessionId, older ? 'older' : 'newest'), () => getJournal(hostId, sessionId, before), (page, startedAt) => set((s) => {
         const key = unitKeyOf(page.unit)
         const h = s.byHost[hostId] ?? { units: {}, unitOfSession: {} }
         const held = h.units[key]
@@ -180,7 +183,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
 
     loadTasks: async (hostId, sessionId) => {
       if (!unitOf(hostId, sessionId)) return { kind: 'no_unit' }
-      return read(hostId, `${sessionId}\u0000tasks`, () => getTasks(hostId, sessionId), (tasks, startedAt) => set((s) => {
+      return read(hostId, slotOf(hostId, sessionId, 'tasks'), () => getTasks(hostId, sessionId), (tasks, startedAt) => set((s) => {
         const h = s.byHost[hostId]
         const key = h?.unitOfSession[sessionId]
         const held = key === undefined ? undefined : h?.units[key]
@@ -191,7 +194,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
 
     loadRoadmap: async (hostId, sessionId) => {
       if (!unitOf(hostId, sessionId)) return { kind: 'no_unit' }
-      return read(hostId, `${sessionId}\u0000roadmap`, () => getRoadmap(hostId, sessionId), (roadmap, startedAt) => set((s) => {
+      return read(hostId, slotOf(hostId, sessionId, 'roadmap'), () => getRoadmap(hostId, sessionId), (roadmap, startedAt) => set((s) => {
         const h = s.byHost[hostId]
         const key = h?.unitOfSession[sessionId]
         const held = key === undefined ? undefined : h?.units[key]
