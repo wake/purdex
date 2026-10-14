@@ -155,8 +155,13 @@ func TestLate_ImmediateAndLateTogetherEnqueueOnce(t *testing.T) {
 	te.events.open = []team.Approval{a}
 	pa := toPushApproval(a)
 	reserved, release := make(chan struct{}), make(chan struct{})
-	var once sync.Once
-	te.mod.apAfterReserve = func(string) { once.Do(func() { close(reserved); <-release }) }
+	var first atomic.Bool
+	te.mod.apAfterReserve = func(string) {
+		if first.CompareAndSwap(false, true) { // only the first path parks; a second one that got past the reserve must not hang the test
+			close(reserved)
+			<-release
+		}
+	}
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() { defer wg.Done(); te.mod.pushApproval(a, pa, false, false) }()

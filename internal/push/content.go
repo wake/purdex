@@ -42,7 +42,7 @@ type Content struct {
 	Title, Body string
 	Kind        string // lead | self_relay | hook_ask | agent
 	// Category is the iOS notification category (aps.category): the actions the phone shows under the notification. "" = none.
-	Category string
+	Category    string
 	ApprovalID  string
 	SessionCode string
 	SessionID   string
