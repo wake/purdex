@@ -11,6 +11,9 @@ const (
 	noticeSessionChanged = "dropped:session_changed" // the session id changed (/clear): liveness ends the position
 	noticeUserAlert      = "user_alert"              // the fallback told the person instead (P2d-2): not a delivery
 	noticeMember         = "member"                  // the fallback delivered it to the member's lead channel (P2d-2)
+	// noticeMemberSending is NOT a settling result: the slot is claimed for one send to the member's lead, and stays pending
+	// (a failed record of that send is finished by the next try, never sent twice).
+	noticeMemberSending = "member_sending"
 )
 
 // PendingNoticePositions are the positions whose notice slot is armed and neither sent nor settled: the outbox's work.
