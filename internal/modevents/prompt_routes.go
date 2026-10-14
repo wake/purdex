@@ -60,7 +60,7 @@ func (h *handler) promptService() PromptService {
 }
 
 // promptNext serves POST /mod/v1/prompt/next {stream, session_id, wait_ms}: 200 {"job":…} or 204, 400, 503. Only the stream
-// that is the session's own, live and prompt-capable may poll, and one poll per stream runs at a time.
+// that is the session's own, live and prompt- or notice-capable may poll, and one poll per stream runs at a time.
 func (h *handler) promptNext(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Stream    string `json:"stream"`
@@ -80,7 +80,8 @@ func (h *handler) promptNext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	may := func() bool {
-		return h.reg != nil && h.reg.StreamCapable(in.Stream, in.SessionID, CapPromptV1, CapsFresh)
+		// a stream that can take notices polls too: the queue hands it only the jobs it owns
+		return h.reg != nil && (h.reg.StreamCapable(in.Stream, in.SessionID, CapPromptV1, CapsFresh) || h.reg.StreamCapable(in.Stream, in.SessionID, CapLeaseNoticeV1, CapsFresh))
 	}
 	if !may() {
 		w.WriteHeader(http.StatusNoContent)
