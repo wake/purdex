@@ -15,7 +15,7 @@ import (
 // shape and the next start retries from there. The transaction is BEGIN IMMEDIATE and the version is read again inside
 // it: a second opener (a daemon started twice, a rolling restart) waits for the first, then finds the step done and
 // skips it. Never edit a step that has shipped (the file exists on a host as soon as the module has run): add the next one.
-var migrations = []func(x stepExec) error{migrateV1, migrateV2, migrateV3}
+var migrations = []func(x stepExec) error{migrateV1, migrateV2, migrateV3, migrateV4}
 
 // stepExec is what a step runs its statements on: the open migration transaction.
 type stepExec interface {

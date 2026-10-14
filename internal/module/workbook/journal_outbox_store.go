@@ -15,7 +15,8 @@ type OutboxItem struct {
 	Payload     string
 }
 
-// ReadyOutbox lists the undone rows whose entry is not pending any more, oldest first. A `journal` row also waits for
+// ReadyOutbox lists the undone rows whose entry is not pending any more (a row of no entry, the team task mirror's, is
+// always ready), oldest first. A `journal` row also waits for
 // its turn's `turn` row to be done, so the order of one turn's writes is kept. skip are rows the caller will not try
 // now (waiting out a retry delay): they are left out in the query, so that a batch of failing rows cannot fill the
 // limit and starve the rows behind them.
@@ -28,8 +29,8 @@ func (s *Store) ReadyOutbox(limit int, skip []int64) ([]OutboxItem, error) {
 		return nil, fmt.Errorf("read journal outbox: %w", err)
 	}
 	rows, err := s.db.Query(`SELECT o.id, o.entry_id, o.unit_key, o.kind, o.payload
-		FROM wb_journal_outbox o JOIN wb_entries e ON e.id = o.entry_id
-		WHERE o.done_at = 0 AND e.state <> 'pending'
+		FROM wb_journal_outbox o LEFT JOIN wb_entries e ON e.id = o.entry_id
+		WHERE o.done_at = 0 AND (o.entry_id = 0 OR e.state <> 'pending')
 			AND (o.kind = 'turn' OR NOT EXISTS (SELECT 1 FROM wb_journal_outbox t WHERE t.entry_id = o.entry_id AND t.kind = 'turn' AND t.done_at = 0))
 			AND o.id NOT IN (SELECT value FROM json_each(?))
 		ORDER BY o.id LIMIT ?`, string(skipJSON), limit)
