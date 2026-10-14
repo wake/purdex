@@ -128,7 +128,7 @@ func (m *Module) openedApproval(a team.Approval, pa push.Approval) {
 		logApproval(a, "not pushed: at_computer")
 		return
 	}
-	if !m.holdApproval(a, pa, gen) {
+	if !m.holdApproval(a, pa, gen, false) {
 		logApproval(a, "hold set full: pushed at once")
 		m.pushApproval(a, pa, gen, false, true)
 		return
@@ -139,11 +139,13 @@ func (m *Module) openedApproval(a team.Approval, pa push.Approval) {
 // holdApproval puts a card that has not been pushed (unknown, or reserved by the caller's own push path) into held and
 // schedules its late check. False when the hold set cannot take it (full, or stopping): the card is forgotten and the caller
 // pushes at once. True also when there is nothing to hold (a repeated opened, closed already, an earlier run).
-func (m *Module) holdApproval(a team.Approval, pa push.Approval, gen uint64) bool {
+func (m *Module) holdApproval(a team.Approval, pa push.Approval, gen uint64, ownsReserve bool) bool {
 	p := &m.ap
 	p.mu.Lock()
 	e := p.states[a.ID]
-	if !p.running || p.gen != gen || (e != nil && e.state != apPushing) {
+	// ownsReserve: the caller is the push path that holds the card as pushing. Any other caller (an opened event) may only hold a
+	// card nobody knows: a repeated opened must never take the state of a push path or a late callback that is under way.
+	if !p.running || p.gen != gen || (ownsReserve && (e == nil || e.state != apPushing)) || (!ownsReserve && e != nil) {
 		p.mu.Unlock()
 		return true
 	}
@@ -310,7 +312,7 @@ func (m *Module) deferToLate(a team.Approval, pa push.Approval, gen uint64, prev
 		logApproval(a, "not pushed: "+why)
 		return
 	}
-	if m.holdApproval(a, pa, gen) {
+	if m.holdApproval(a, pa, gen, true) {
 		logApproval(a, "held 60s ("+why+")")
 		return
 	}

@@ -594,3 +594,18 @@ func TestLate_AHookAskAMacShowsIsNotHeld(t *testing.T) {
 		t.Fatalf("a hook_ask was held")
 	}
 }
+
+// A repeated opened that arrives while a push path (or the late callback) holds the card as pushing must not take the state:
+// it would turn it back into held with a new timer, and the card would be pushed twice.
+// Mutation gate: let an opened event hold a pushing card -> red.
+func TestLate_ARepeatedOpenedDoesNotTakeAPushingCard(t *testing.T) {
+	te, _ := lateEnv(t, true)
+	a := leadApproval("ap1")
+	te.mod.ap.mu.Lock()
+	te.mod.ap.states["ap1"] = &apEntry{state: apPushing, at: time.Now()}
+	te.mod.ap.mu.Unlock()
+	te.events.emit("opened", a)
+	if te.stateOf("ap1") != apPushing || te.timers.pending() != 0 {
+		t.Fatalf("state = %v, timers = %d", te.stateOf("ap1"), te.timers.pending())
+	}
+}
