@@ -7,9 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
-	"time"
 )
 
 // The read side of a unit's journal (plan J-1e): every month file of the unit's folder as one list, sorted, and the windows
@@ -22,7 +20,7 @@ const (
 	MaxPageLimit     = 200
 )
 
-// ErrBadCursor is returned for a page cursor that is not `<month>:<at>:<id>`.
+// ErrBadCursor is returned for a page cursor that is not `<month>:<id>` or names an entry that is not there.
 var ErrBadCursor = errors.New("journal: bad cursor")
 
 var (
@@ -77,12 +75,10 @@ func ReadUnit(dir string) ([]Entry, error) {
 	return all, nil
 }
 
-func millisToTime(ms int64) time.Time { return time.UnixMilli(ms) }
-
-// CursorOf is the cursor that pages to what comes before e: `<month>:<at in ms>:<id>`. The month is for the reader (the file
-// the entry is in); the page is cut by the time and the id alone.
+// CursorOf is the cursor that pages to what comes before e: `<month>:<id>` (the month of e's time, the id). The month is
+// for the reader and only has to be a month; the daemon finds the entry by its id.
 func CursorOf(e Entry) string {
-	return fmt.Sprintf("%s:%d:%s", e.At.Format("2006-01"), e.At.UnixMilli(), e.ID)
+	return e.At.Format("2006-01") + ":" + e.ID
 }
 
 // Page is a window of a unit's entries, oldest first.
@@ -91,9 +87,11 @@ type Page struct {
 	More    bool // there are older entries than the window
 }
 
-// PageBefore returns the newest `limit` entries of all (sorted oldest first, as ReadUnit returns them) that sort strictly
-// before the cursor; with no cursor, the newest `limit` of all. The cursor is a sort key, not a reference: the entry it was
-// made from need not be there. A limit below 1 is DefaultPageLimit, one above MaxPageLimit is MaxPageLimit.
+// PageBefore returns the newest `limit` entries of all (sorted oldest first and unique by id, as ReadUnit returns them) that
+// sort strictly before the cursor's entry; with no cursor, the newest `limit` of all. The cursor names its entry by id, and
+// the page is cut at that entry's place in the order: ids and times can run opposite ways (the drainer writes rows in
+// whatever order they become ready), so cutting by id alone would lose or repeat entries. A cursor whose entry is not there
+// is ErrBadCursor. A limit below 1 is DefaultPageLimit, one above MaxPageLimit is MaxPageLimit.
 func PageBefore(all []Entry, cursor string, limit int) (Page, error) {
 	if limit < 1 {
 		limit = DefaultPageLimit
@@ -101,27 +99,27 @@ func PageBefore(all []Entry, cursor string, limit int) (Page, error) {
 	limit = min(limit, MaxPageLimit)
 	end := len(all)
 	if cursor != "" {
-		key, err := parseCursor(cursor)
+		id, err := parseCursor(cursor)
 		if err != nil {
 			return Page{}, err
 		}
-		end, _ = slices.BinarySearchFunc(all, key, less) // the first entry that does not sort before the cursor
+		i := slices.IndexFunc(all, func(e Entry) bool { return e.ID == id })
+		if i < 0 {
+			return Page{}, ErrBadCursor
+		}
+		end = i
 	}
 	start := max(0, end-limit)
 	return Page{Entries: slices.Clone(all[start:end]), More: start > 0}, nil
 }
 
-// parseCursor reads `<month>:<at>:<id>` into the entry-shaped key it stands for; the id may itself contain colons.
-func parseCursor(c string) (Entry, error) {
-	parts := strings.SplitN(c, ":", 3)
-	if len(parts) != 3 || !monthRE.MatchString(parts[0]) || parts[2] == "" {
-		return Entry{}, ErrBadCursor
+// parseCursor reads `<month>:<id>` into the id; the id may itself contain colons.
+func parseCursor(c string) (string, error) {
+	month, id, ok := strings.Cut(c, ":")
+	if !ok || !monthRE.MatchString(month) || id == "" {
+		return "", ErrBadCursor
 	}
-	ms, err := strconv.ParseInt(parts[1], 10, 64)
-	if err != nil || ms < 0 {
-		return Entry{}, ErrBadCursor
-	}
-	return Entry{ID: parts[2], At: millisToTime(ms)}, nil
+	return id, nil
 }
 
 // Pinned is every pinned entry of all, newest first by (at, id).

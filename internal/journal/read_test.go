@@ -146,11 +146,11 @@ func TestPageBefore_WindowsAndMore(t *testing.T) {
 	}
 }
 
-// The cursor carries the whole sort key (at in milliseconds and id), and a page is what sorts strictly before it. The drainer
-// writes entries in whatever order their rows become ready, so ids and times can run opposite ways: cutting by id alone
-// would lose or repeat entries.
+// The cursor is `<month>:<id>`; the daemon looks the entry up and the page is what sorts strictly before its (at, id). The
+// drainer writes entries in whatever order their rows become ready, so ids and times can run opposite ways: cutting by id
+// alone would lose or repeat entries.
 // Mutation gate: cut by id only -> the page before `y` is the wrong set (red); cut by at only -> a tie group loses entries
-// (red); include the cursor's own key -> the entry repeats (red).
+// (red); include the cursor's own entry -> it repeats (red).
 func TestPageBefore_IDsRunAgainstTimes(t *testing.T) {
 	all := []Entry{ // sorted by (at, id): z, y, x, w - the ids descend while time ascends
 		{ID: "z", Kind: KindExec, At: at(time.November, 1, 9), Text: "t"},
@@ -168,13 +168,13 @@ func TestPageBefore_IDsRunAgainstTimes(t *testing.T) {
 	}
 }
 
-// The cursor names a sort key, not an entry that has to be there: one whose entry is gone still cuts the page.
+// A cursor whose entry is not in the unit cannot be placed: it is refused, not guessed.
+// Mutation gate: an unknown id pages from the end (red).
 func TestPageBefore_CursorOfAnEntryThatIsGone(t *testing.T) {
-	all := numbered(5) // ea … ee, one hour apart
+	all := numbered(5)
 	gone := Entry{ID: "gone", Kind: KindExec, At: all[2].At.Add(30 * time.Minute)}
-	p, err := PageBefore(all, CursorOf(gone), 10)
-	if err != nil || !slices.Equal(ids(p.Entries), []string{"ea", "eb", "ec"}) {
-		t.Fatalf("page before a vanished entry = %v, %v", ids(p.Entries), err)
+	if _, err := PageBefore(all, CursorOf(gone), 10); !errors.Is(err, ErrBadCursor) {
+		t.Fatalf("a cursor of a vanished entry: err = %v, want ErrBadCursor", err)
 	}
 }
 
@@ -200,15 +200,15 @@ func TestPageBefore_CursorInsideATieGroup(t *testing.T) {
 // A cursor that is not `<month>:<id>`, names a month that is not one, or an entry that is not there is refused.
 func TestPageBefore_BadCursors(t *testing.T) {
 	all := numbered(3)
-	for _, c := range []string{"nocolon", ":1:ea", "2026-11:", "2026-11:123", "2026-11:123:", "2026-11::ea", "2026-13:123:ea", "november:123:ea", "2026-11:abc:ea", "2026-11:-5:ea", "2026-11-01:123:ea", "2026-11:12.5:ea"} {
+	for _, c := range []string{"nocolon", ":ea", "2026-11:", "2026-13:ea", "2026-00:ea", "november:ea", "2026-11-01:ea", "2026-1:ea", "2026-11:nobody"} {
 		if _, err := PageBefore(all, c, 2); !errors.Is(err, ErrBadCursor) {
 			t.Errorf("cursor %q: err = %v, want ErrBadCursor", c, err)
 		}
 	}
-	if c := CursorOf(all[1]); !strings.HasPrefix(c, "2026-11:") || !strings.HasSuffix(c, ":eb") || strings.Count(c, ":") != 2 {
-		t.Errorf("CursorOf = %q", c)
+	if c := CursorOf(all[1]); c != "2026-11:eb" {
+		t.Errorf("CursorOf = %q, want 2026-11:eb", c)
 	}
-	// an id may contain colons (task:<team>:<seq>:new): the month and the time are what precede the first two
+	// an id may contain colons (task:<team>:<seq>:new): the month is what precedes the first one
 	e := Entry{ID: "task:7bcf08:3:done", Kind: KindTaskDone, At: at(time.November, 2, 2), Text: "#3 t"}
 	p, err := PageBefore(append(all, e), CursorOf(e), 5)
 	if err != nil || len(p.Entries) != 3 {
