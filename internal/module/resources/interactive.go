@@ -1,6 +1,10 @@
 package resourcesmod
 
 import (
+	"fmt"
+	"strings"
+	"time"
+
 	"github.com/wake/purdex/internal/modevents"
 )
 
@@ -25,4 +29,43 @@ func (m *Module) sessionInteractive(sid string) bool {
 	}
 	reg, ok := svc.(*modevents.Registry)
 	return ok && reg.SessionCapable(sid, modevents.CapPromptV1, modevents.CapsFresh)
+}
+
+// describeModStreams says, for the log, why a session was found to have no mod to take a notice: each stream whose current
+// session is sid with the age of its last batch and of its last capability announcement (the notice goes to a stream that
+// announced lease.notice.v1 within modevents.CapsFresh), or that no stream has the session. A 61 s user_alert on a session
+// with a live stream (10-15, pos_464e13dd) could not be explained afterwards without it.
+func (m *Module) describeModStreams(sid string) string {
+	var streams []modevents.StreamInfo
+	switch {
+	case m.modStreams != nil:
+		streams = m.modStreams(sid)
+	case m.core != nil && m.core.Registry != nil:
+		if svc, ok := m.core.Registry.Get("modevents"); ok {
+			if reg, ok := svc.(*modevents.Registry); ok {
+				streams = reg.Streams()
+			}
+		}
+	}
+	now := m.now()
+	var parts []string
+	other := 0
+	for _, s := range streams {
+		if s.SID != sid {
+			if !s.Ended {
+				other++
+			}
+			continue
+		}
+		caps := "caps never"
+		if !s.CapsAt.IsZero() {
+			caps = fmt.Sprintf("caps %s ago [%s]", now.Sub(s.CapsAt).Round(time.Second), strings.Join(s.Caps, ","))
+		}
+		parts = append(parts, fmt.Sprintf("stream %s mod %s ended=%v last batch %s ago, %s",
+			s.Stream, s.ModVersion, s.Ended, now.Sub(s.AppliedAt).Round(time.Second), caps))
+	}
+	if len(parts) == 0 {
+		return fmt.Sprintf("no stream has this session (%d other live streams)", other)
+	}
+	return strings.Join(parts, "; ")
 }

@@ -20,6 +20,7 @@ import (
 
 	iagent "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/modevents"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/resources"
 	"github.com/wake/purdex/internal/team"
@@ -38,6 +39,8 @@ type Module struct {
 	core *core.Core
 	// interactive answers sessionInteractive in a test; nil reads the mod event registry.
 	interactive func(sid string) bool
+	// modStreams lists the mod streams of a session for the log line of a notice that found no mod; nil reads the registry.
+	modStreams func(sid string) []modevents.StreamInfo
 
 	sampler  resources.Sampler
 	roots    resources.RootSource // nil: no sessions are attributed
