@@ -415,3 +415,20 @@ func TestReuse_UnattendedBeginCarriesTheFile(t *testing.T) {
 		t.Fatalf("unattended reuse: %d %s", code, body)
 	}
 }
+
+// Only the CURRENT fresh half can be reused: an older half op of the session, though cancelled / half with its file on disk, is not.
+// Mutation gate: drop the `h.OpID != opID` check → the older op's file is reused (red).
+func TestReuse_AnOlderHalfIsNotTheFreshOne(t *testing.T) {
+	f := newFixture(t)
+	older := f.freshHalfWithFile("sid-1")
+	newer := f.freshHalfWithFile("sid-1") // a second half replaces the fresh row
+	if id, _, ok := f.freshHalf("sid-1"); !ok || id != newer.ID {
+		t.Fatalf("setup: fresh row names %q, want the newer half %q", id, newer.ID)
+	}
+	if code, _, body := f.beginRaw2(reuseBeginReq("sid-1", older.ID)); code != http.StatusConflict || !strings.Contains(string(body), team.ErrReuseInvalid) {
+		t.Fatalf("an older half: %d %s, want 409 reuse_invalid", code, body)
+	}
+	if code, _, body := f.beginRaw2(reuseBeginReq("sid-1", newer.ID)); code != http.StatusCreated {
+		t.Fatalf("the current half: %d %s", code, body)
+	}
+}
