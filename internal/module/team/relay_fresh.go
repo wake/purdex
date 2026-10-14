@@ -2,6 +2,7 @@ package teammod
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -93,7 +94,17 @@ func (m *Module) handleRelayFresh(w http.ResponseWriter, r *http.Request) {
 	// and this report follows it - never between the validation and the insert (codex)
 	m.createMu.Lock()
 	err := m.store.DeleteFreshHalf(req.SessionID, req.OpID)
+	var waiting string // a card that waits to relay with this very file (codex critic)
+	if err == nil {
+		waiting, err = m.reuseCardWaiting(req.SessionID, req.OpID)
+	}
 	m.createMu.Unlock()
+	if err == nil && waiting != "" {
+		// the file went stale while its relay waited for an approval: the card is cancelled, so no approval can claim an op that carries it
+		if _, _, cerr := m.closeAs(waiting, Close{State: team.StateCancelled, DecidedAt: m.now()}); cerr != nil && !errors.Is(cerr, ErrNoSuchApproval) {
+			err = cerr
+		}
+	}
 	if err != nil {
 		m.logf("[team] relay fresh %s: %v", req.SessionID, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
@@ -116,4 +127,21 @@ func (m *Module) sweepFreshHalves() {
 			}
 		}
 	}
+}
+
+// reuseCardWaiting is the id of sid's open self-relay card whose op reuses the fresh half of opID ("" when there is none).
+func (m *Module) reuseCardWaiting(sid, opID string) (string, error) {
+	op, ok, err := m.store.OpenRelayOpBySession(sid)
+	if err != nil || !ok || op.State != team.RelayAwaitingApproval || op.RequestID == "" {
+		return "", err
+	}
+	row, ok, err := m.store.Get(op.RequestID)
+	if err != nil || !ok || row.State != team.StateOpen {
+		return "", err
+	}
+	var sp team.SelfRelayPayload
+	if json.Unmarshal(row.Payload, &sp) != nil || sp.ReuseOp != opID {
+		return "", nil
+	}
+	return row.ID, nil
 }

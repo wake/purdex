@@ -486,3 +486,34 @@ func TestHalfBegin_RefusesAReaskToken(t *testing.T) {
 		t.Fatalf("half + reask_id: %d %s, want 400", code, body)
 	}
 }
+
+// codex critic: a stale report while a reuse card waits cancels that card, so approving it cannot claim an op that carries the stale file.
+// Mutation gate: only delete the row → the card is still open and the approve claims the op (red).
+func TestFresh_AStaleReportCancelsTheWaitingReuseCard(t *testing.T) {
+	f := newFixture(t)
+	half := f.freshHalfWithFile("sid-1")
+	code, resp, body := f.beginRaw2(reuseBeginReq("sid-1", half.ID))
+	if code != http.StatusCreated {
+		t.Fatalf("reuse begin: %d %s", code, body)
+	}
+	if c, b := f.do(http.MethodPost, "/api/relay/fresh", team.RelayFreshRequest{SessionID: "sid-1", OpID: half.ID, Stale: true}); c != http.StatusOK {
+		t.Fatalf("fresh: %d %s", c, b)
+	}
+	if st := f.rowState(resp.RequestID); st != team.StateCancelled {
+		t.Fatalf("the reuse card is %s after the stale report, want cancelled", st)
+	}
+	if c, _ := f.decide(resp.RequestID, "approve"); c == http.StatusOK {
+		t.Fatal("a cancelled reuse card was approved")
+	}
+	if op, _, _ := f.m.store.GetRelayOp(resp.Op.ID); op.State == team.RelayClaimed {
+		t.Fatalf("the reuse op was claimed: %+v", op)
+	}
+	// a stale report naming another op leaves a reuse card alone
+	f2 := newFixture(t)
+	h2 := f2.freshHalfWithFile("sid-1")
+	_, r2, _ := f2.beginRaw2(reuseBeginReq("sid-1", h2.ID))
+	f2.do(http.MethodPost, "/api/relay/fresh", team.RelayFreshRequest{SessionID: "sid-1", OpID: "another", Stale: true})
+	if st := f2.rowState(r2.RequestID); st != team.StateOpen {
+		t.Fatalf("a stale report for another op closed the card: %s", st)
+	}
+}
