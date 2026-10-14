@@ -108,6 +108,9 @@ func NewEngine(d Deps) *Engine {
 	if d.Logf == nil {
 		d.Logf = log.Printf
 	}
+	if d.Journal != nil && d.Store != nil {
+		d.Store.EnableJournalOutbox() // a journal source is wired: result transactions also write their outbox rows
+	}
 	return &Engine{d: d, convs: map[string]*convQ{}, waiting: map[string]*waitState{}, leases: map[string]*lease{}, callCap: defaultCallCap}
 }
 

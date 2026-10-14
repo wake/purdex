@@ -31,6 +31,7 @@ const (
 // Todo is one row of the conversation's list. ClosedEntryID is 0 while it is open.
 type Todo struct {
 	ID            int64
+	Seq           int64 // the todo's number within its conversation (1, 2, ...); 0 only for a row written before seq existed
 	ConvKey       string
 	Title         string
 	Detail        string
@@ -87,11 +88,11 @@ func (s *Store) inTx(fn func(tx execer) error) error {
 	return tx.Commit()
 }
 
-const todoCols = `id, conv_key, title, detail, state, added_entry_id, COALESCE(closed_entry_id, 0), closed_by, created_at, closed_at, updated_at`
+const todoCols = `id, seq, conv_key, title, detail, state, added_entry_id, COALESCE(closed_entry_id, 0), closed_by, created_at, closed_at, updated_at`
 
 func scanTodo(r scanner) (Todo, error) {
 	var t Todo
-	err := r.Scan(&t.ID, &t.ConvKey, &t.Title, &t.Detail, &t.State, &t.AddedEntryID, &t.ClosedEntryID, &t.ClosedBy, &t.CreatedAt, &t.ClosedAt, &t.UpdatedAt)
+	err := r.Scan(&t.ID, &t.Seq, &t.ConvKey, &t.Title, &t.Detail, &t.State, &t.AddedEntryID, &t.ClosedEntryID, &t.ClosedBy, &t.CreatedAt, &t.ClosedAt, &t.UpdatedAt)
 	return t, err
 }
 
@@ -202,8 +203,9 @@ func applyTodoChanges(tx execer, convKey string, entryID int64, ch TodoChanges, 
 			continue
 		}
 		detail := cutAtSentenceEnd(strings.TrimSpace(redact.String(a.Detail)), maxTodoDetail)
-		r, err := tx.Exec(`INSERT INTO wb_todos (conv_key, title, detail, state, added_entry_id, created_at, updated_at) VALUES (?, ?, ?, 'open', ?, ?, ?)`,
-			convKey, title, detail, entryID, now, now)
+		r, err := tx.Exec(`INSERT INTO wb_todos (conv_key, seq, title, detail, state, added_entry_id, created_at, updated_at)
+			VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM wb_todos WHERE conv_key = ?), ?, ?, 'open', ?, ?, ?)`,
+			convKey, convKey, title, detail, entryID, now, now)
 		if err != nil {
 			return TodoResult{}, fmt.Errorf("add workbook todo: %w", err)
 		}
@@ -254,7 +256,10 @@ func (s *Store) SetPushLineV2(entryID int64, p PushLineV2) (res TodoResult, ok b
 			return fmt.Errorf("set workbook status: %w", err)
 		}
 		res, err = applyTodoChanges(tx, conv, entryID, p.Todos, p.By, now)
-		return err
+		if err != nil {
+			return err
+		}
+		return s.turnOutbox(tx, entryID, res, now)
 	})
 	if errors.Is(err, errNotPending) {
 		return TodoResult{}, false, nil
@@ -289,7 +294,10 @@ func (s *Store) FinishSkippedV2(entryID int64, reason string, u Usage, latencyMS
 			return fmt.Errorf("read workbook entry %d: %w", entryID, err)
 		}
 		res, err = applyTodoChanges(tx, conv, entryID, ch, by, now)
-		return err
+		if err != nil {
+			return err
+		}
+		return s.turnOutbox(tx, entryID, res, now)
 	})
 	if errors.Is(err, errNotPending) {
 		return TodoResult{}, false, nil
