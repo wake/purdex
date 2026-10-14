@@ -376,19 +376,27 @@ function rewriteAt(command, depth) {
   return { command: out, changed: true }
 }
 
-// ---- the hook (host-resource-lease plan Task 2.2) ----
+// ---- the hook (host-resource-lease plan Task 2.2; lease v2 amendment A, Tasks 23, 25, 26) ----
 //
-// registerLease puts a heavy foreground Bash call through the host's lease: it asks `pdx lease acquire`
-// (which waits up to the daemon's deadline), runs the command, and releases by client id when the call
-// ends, whatever happened. Everything fails open: a daemon that is down, an answer that is not JSON, a
-// throw before the command ran — the command runs, unchanged except for the worker cap.
+// registerLease puts a heavy Bash call through the host's lease: it asks `pdx lease acquire`, runs the
+// command, and releases by client id when the call ends, whatever happened. Everything fails open: a daemon
+// that is down, an answer that is not JSON, a throw before the command ran — the command runs, unchanged
+// except for the worker cap.
+//
+// Foreground: the request names the command and the session's directory and no mode, so the daemon decides
+// (mode auto: queue for a caller under an interactive session, wait for any other). A queue answer is not
+// waited for: the call is denied with where the command stands, and the session is told when its turn comes.
+// Background: in an interactive session a heavy command is wrapped in `pdx lease run --ask`, so it waits
+// inside its own background process and is asked at its turn; the mod adds nothing else to any command (any
+// prefix changes the permission prompts: lease v2 plan, Q1, M-P2 (a)).
 //
 // `$` is used only in the top-level functions below (M-U1-2); the handler hands it straight on.
 
-const ACQUIRE_TIMEOUT_MS = 600_000 // $.process.run's cap; the daemon's own deadline is at most 590 s
+const ACQUIRE_TIMEOUT_MS = 600_000 // $.process.run's cap
 const RELEASE_TIMEOUT_MS = 5_000
 const PRE_MS = 3_000 // pdx.json and the session id: a read that has not answered by then is a failed one
 const WAIT_NOTE_MS = 1_000 // a wait shorter than this is not worth telling the model about
+const COMMAND_MAX = 200 // bytes of the command the queue shows
 const HEX = '0123456789abcdef'
 
 const parse = (s) => { try { return JSON.parse(s) } catch { return null } }
@@ -431,12 +439,48 @@ function newClientId() {
   return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20)
 }
 
-// readAcquire is the one JSON line `pdx lease acquire` prints, or null for anything else (a non-zero exit,
-// junk). The answer is read even when the lease was fail-open: that says so itself.
+// cutBytes cuts a string to at most n UTF-8 bytes without splitting a character.
+function cutBytes(s, n) {
+  let bytes = 0
+  let out = ''
+  for (const ch of String(s)) {
+    const cp = ch.codePointAt(0)
+    const w = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4
+    if (bytes + w > n) break
+    bytes += w
+    out += ch
+  }
+  return out
+}
+
+// sq quotes a word for a POSIX shell.
+const sq = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'"
+
+// EXIT_QUEUED is `pdx lease acquire`'s exit code for "queued": the request waits at its place and its line
+// says so. It is an answer, not a failure.
+const EXIT_QUEUED = 15
+
+// readAcquire is the one JSON line `pdx lease acquire` prints, or null for anything else (any other non-zero
+// exit, junk). The answer is read even when the lease was fail-open: that says so itself. Exit 15 counts only
+// with a line that says queued: a command that exits 15 for itself is not this.
 function readAcquire(r) {
-  if (!r || r.exitCode !== 0) return null
+  if (!r || (r.exitCode !== 0 && r.exitCode !== EXIT_QUEUED)) return null
   const o = parse(String(r.stdout || '').trim())
-  return isObject(o) ? o : null
+  if (!isObject(o)) return null
+  if (r.exitCode === EXIT_QUEUED && o.state !== 'queued') return null
+  return o
+}
+
+const isQueued = (a) => !!a && a.state === 'queued'
+
+// queuedDeny is what the model is told when the host is busy and its command was not run (lease v2 amendment A,
+// T-queued and T-queued-own): the command did not run, where it stands, that it will be told, and not to get
+// around the queue. `pdx lease run` says the same.
+function queuedDeny(a) {
+  const head = a.queued_reason === 'own_running'
+    ? '主機資源忙，這個指令還沒執行：等你自己的上一個指令跑完。'
+    : '主機資源忙，這個指令還沒執行：排在第 ' + (Number(a.position) || 0) + ' 位。'
+  return head + '輪到你時我會通知你，先做別的事；不要改成背景執行或加 & 繞過排隊。'
 }
 
 // leaseNotes is what the model is told, in Chinese, one line each and only what applies.
@@ -445,8 +489,7 @@ function leaseNotes(rewritten, command, answer) {
   if (rewritten) notes.push('Purdex mod 把 --maxWorkers=3 加進這個指令（主機資源規則 R7），實際執行的是：' + command)
   if (answer && !answer.fail_open) {
     const ms = Number(answer.waited_ms) || 0
-    if (answer.overrun) notes.push('等滿 ' + Math.round(ms / 60000) + ' 分鐘超量放行，已記錄')
-    else if (ms >= WAIT_NOTE_MS) {
+    if (ms >= WAIT_NOTE_MS) {
       const load = Number(answer.host_measured) > 0 ? '（負載 ' + answer.host_measured + '/100）' : ''
       notes.push('這個指令先等了 ' + Math.round(ms / 1000) + ' 秒主機資源' + load + '，不是卡住，不要重試')
     }
@@ -454,22 +497,31 @@ function leaseNotes(rewritten, command, answer) {
   return notes
 }
 
-// release gives the lease back by client id (or by id when there was none), 5 s, errors swallowed: a
-// grant whose answer was lost is released too, and a client id the daemon never saw answers `none`.
-async function releaseLease($, cfg, clientId, answer) {
+// releaseLease gives the lease back by client id (or by id when there was none), 5 s, errors swallowed: a
+// grant whose answer was lost is released too, and a client id the daemon never saw answers `none`. With
+// withNotice the release is the end of the command and asks for the final notice (amendment A §3.3); the
+// notice, if the daemon gave one, is returned.
+async function releaseLease($, cfg, clientId, answer, withNotice) {
   const target = clientId ? ['--client-id', clientId] : answer && typeof answer.id === 'string' && answer.id ? [answer.id] : null
-  if (!target) return
+  if (!target) return ''
   try {
-    await $.process.run([cfg.bin, 'lease', 'release', ...target, ...(cfg.config ? ['--config', cfg.config] : [])], { timeoutMs: RELEASE_TIMEOUT_MS })
+    const r = await $.process.run([cfg.bin, 'lease', 'release', ...target, ...(withNotice ? ['--notice', '--json'] : []),
+      ...(cfg.config ? ['--config', cfg.config] : [])], { timeoutMs: RELEASE_TIMEOUT_MS })
+    if (!withNotice || !r || r.exitCode !== 0) return ''
+    const o = parse(String(r.stdout || '').trim())
+    return isObject(o) && typeof o.notice === 'string' ? o.notice : ''
   } catch (err) {
     log($, 'release failed: ' + (err && err.message ? err.message : String(err)))
+    return ''
   }
 }
 
-// leaseCall is one Bash call. A call that is not heavy, runs in the background (R8) or is already wrapped
-// in `pdx lease` goes straight on.
+// withNotes adds lines to a tool result's context.
+const withNotes = (r, notes) => (notes.length ? { ...r, context: [...(r.context ?? []), ...notes] } : r)
+
+// leaseCall is one foreground Bash call. A call that is not heavy or is already wrapped in `pdx lease` goes
+// straight on.
 async function leaseCall($, e, next) {
-  if (e.run_in_background === true) return next(e)
   const c = classify(e.command)
   if (!c) return next(e)
   let command = e.command
@@ -483,28 +535,73 @@ async function leaseCall($, e, next) {
   if (typeof sid !== 'string' || !sid) {
     // Without a session the lease cannot be asked for: the command runs, with the cap if it was given one.
     log($, 'no session id, the command runs without a lease')
-    const r = await next(rewritten ? { ...e, command } : e)
-    const notes = leaseNotes(rewritten, command, null)
-    return notes.length ? { ...r, context: [...(r.context ?? []), ...notes] } : r
+    return withNotes(await next(rewritten ? { ...e, command } : e), leaseNotes(rewritten, command, null))
   }
+  const cwd = await bounded($, () => $.session.cwd())
   const clientId = newClientId()
   let answer = null
+  let done = false // the lease is no longer ours to release: queued, or released after the command
   try {
     try {
       answer = readAcquire(await $.process.run([cfg.bin, 'lease', 'acquire', '--kind', c.kind, '--session', sid,
-        '--tool-use', String(e.tool_use_id || ''), ...(clientId ? ['--client-id', clientId] : []),
+        '--tool-use', String(e.tool_use_id || ''), '--command', cutBytes(e.command, COMMAND_MAX),
+        ...(typeof cwd === 'string' && cwd ? ['--cwd', cwd] : []),
+        ...(clientId ? ['--client-id', clientId] : []),
         ...(cfg.config ? ['--config', cfg.config] : [])], { timeoutMs: ACQUIRE_TIMEOUT_MS }))
     } catch (err) {
       log($, 'acquire failed, the command runs: ' + (err && err.message ? err.message : String(err)))
     }
+    if (isQueued(answer)) {
+      // The host is busy and this request waits at its place: the command is not run, nothing is released (a
+      // release by client id would cancel the queued row). The model reads where it stands as the tool's own
+      // result, and the same command again takes the place back.
+      done = true
+      return { deny: queuedDeny(answer) }
+    }
     const r = await next(rewritten ? { ...e, command } : e)
-    const notes = leaseNotes(rewritten, command, answer)
-    return notes.length ? { ...r, context: [...(r.context ?? []), ...notes] } : r
+    // The command has ended: this release is the end the daemon counts, and asks for the final notice.
+    done = true
+    const notice = await releaseLease($, cfg, clientId, answer, true)
+    return withNotes(r, [...leaseNotes(rewritten, command, answer), ...(notice ? [notice] : [])])
   } finally {
-    await releaseLease($, cfg, clientId, answer)
+    // Only the way out of a throw: without a notice (the command did not end the way a notice assumes).
+    if (!done) await releaseLease($, cfg, clientId, answer, false)
   }
 }
 
+// An interactive session is one a person is at: its mod can be told the daemon's notices. Set by session.start.
+let interactive = false
+
+// backgroundCall wraps a heavy background command in `pdx lease run --ask` (T25), in an interactive session
+// only (nothing can ask any other), and only when the wrap does not change the permission verdict: a prompt that
+// the original command would not have raised is the cost the mod must not add (Q1). A command already going
+// through `pdx lease` (classify says null) is left as it is.
+async function backgroundCall($, e, next) {
+  if (!interactive) return next(e)
+  const c = classify(e.command)
+  if (!c) return next(e)
+  const cfg = await leaseConfig($)
+  const inner = c.needsMaxWorkers ? rewriteMaxWorkers(e.command).command : e.command
+  const wrapped = [sq(cfg.bin), 'lease', 'run', '--ask', '--kind', c.kind, ...(cfg.config ? ['--config', sq(cfg.config)] : []),
+    '--command', sq(cutBytes(e.command, COMMAND_MAX)), '--', '"${SHELL:-/bin/sh}"', '-c', sq(inner)].join(' ')
+  const verdict = async (command) => {
+    const v = await bounded($, () => $.tool.check({ tool: 'Bash', input: { command, run_in_background: true } }))
+    return v && typeof v.decision === 'string' ? v.decision : null
+  }
+  const [before, after] = [await verdict(e.command), await verdict(wrapped)]
+  if (before === null || before !== after) {
+    log($, 'the wrap would change the permission verdict (' + before + ' → ' + after + '): the command runs as it is')
+    return withNotes(await next(e), ['這個背景指令沒有納入資源排隊'])
+  }
+  return withNotes(await next({ ...e, command: wrapped }), [
+    'Purdex mod 把這個背景指令包進 pdx lease run --ask（主機資源排隊）：主機忙時它在背景等，輪到時你會收到問題，用 pdx lease confirm <id> 或 pdx lease cancel <id> 回答；不要自己加 & 或重跑。'])
+}
+
 export function registerLease(on) {
-  on('tool.call', { tool: 'Bash' }, async ($, e, next) => leaseCall($, e, next)).catch(($, e, next) => next(e))
+  on('session.start', { isInteractive: true }, async ($, e, next) => {
+    interactive = true
+    return next(e)
+  })
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => (e.run_in_background === true ? backgroundCall($, e, next) : leaseCall($, e, next)))
+    .catch(($, e, next) => next(e))
 }
