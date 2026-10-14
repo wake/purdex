@@ -33,6 +33,12 @@ type fakeLeaseDaemon struct {
 	pollList []resources.LeaseResponse
 	hold     bool
 	delCode  int
+	// delResp, when set, is the body of a DELETE that succeeds.
+	delResp *resources.LeaseResponse
+	// onDelete runs when a DELETE arrives (it must not touch the fake's state).
+	onDelete func()
+	// pollQueries is the raw query of each poll.
+	pollQueries []string
 }
 
 func (f *fakeLeaseDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +61,7 @@ func (f *fakeLeaseDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		write(w, answer{status: code, body: body})
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/resources/leases/"):
 		f.polls++
+		f.pollQueries = append(f.pollQueries, r.URL.RawQuery)
 		n := f.polls
 		hold := f.hold
 		var resp resources.LeaseResponse
@@ -75,7 +82,14 @@ func (f *fakeLeaseDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			write(w, answer{status: code, body: resources.APIError{Error: resources.ErrNoLease}})
 			return
 		}
-		write(w, answer{body: resources.LeaseResponse{ID: leaseRow, State: resources.StateEnded, EndReason: resources.EndReleased}})
+		body := resources.LeaseResponse{ID: leaseRow, State: resources.StateEnded, EndReason: resources.EndReleased}
+		if f.onDelete != nil {
+			f.onDelete()
+		}
+		if f.delResp != nil {
+			body = *f.delResp
+		}
+		write(w, answer{body: body})
 	default:
 		f.mu.Unlock()
 		http.NotFound(w, r)
@@ -105,12 +119,17 @@ func driveLease(t *testing.T, ctx context.Context, d http.Handler, extra []daemo
 // test about attempt timeouts needs the real clock, not the fake one.
 func driveLeaseWith(t *testing.T, ctx context.Context, d http.Handler, extra []daemonclient.Option, args ...string) (int, string, string) {
 	t.Helper()
+	return driveLeaseEnv(t, ctx, d, nil, extra, args...)
+}
+
+func driveLeaseEnv(t *testing.T, ctx context.Context, d http.Handler, env map[string]string, extra []daemonclient.Option, args ...string) (int, string, string) {
+	t.Helper()
 	srv := httptest.NewServer(d)
 	defer srv.Close()
 	cfg := writeTestConfig(t, srv.URL, "admin-tok")
 	var stdout, stderr bytes.Buffer
 	opts := append([]daemonclient.Option{leadNoKeepAlive()}, extra...)
-	code := runLeaseCmd(ctx, append(append([]string{}, args...), "--config", cfg), fakeGetenv(nil), &stdout, &stderr, opts...)
+	code := runLeaseCmd(ctx, append(append([]string{}, args...), "--config", cfg), fakeGetenv(env), &stdout, &stderr, opts...)
 	return code, stdout.String(), stderr.String()
 }
 
@@ -139,7 +158,7 @@ func TestAcquire_GrantedImmediately(t *testing.T) {
 		t.Fatalf("posts %d polls %d", len(posts), polls)
 	}
 	p := posts[0]
-	if p.ClientID != leaseCID || p.Kind != "test-full" || p.WaitS != 120 || p.Scope != resources.ScopeProcess ||
+	if p.ClientID != leaseCID || p.Kind != "test-full" || p.WaitS != 0 || p.Scope != resources.ScopeProcess ||
 		p.HolderPID != 4242 || p.HolderStart != wantWire(t, leaseWhen) || p.ToolUseID != "tu1" || p.SessionID != "" {
 		t.Errorf("request = %+v", p)
 	}
@@ -351,11 +370,11 @@ func TestRelease_BestEffort(t *testing.T) {
 	}
 }
 
-// wait_s is whole seconds and 0 means the host's default: a shorter --wait is
-// rounded up, never turned into the default.
-func TestAcquire_WaitIsRoundedUpToWholeSeconds(t *testing.T) {
+// A --wait duration is accepted and ignored: wait_s stays 0 (the host's
+// setting decides), whatever the old script passed.
+func TestAcquire_WaitDurationIsIgnored(t *testing.T) {
 	fixedHolder(t)
-	for wait, want := range map[string]int{"1ms": 1, "500ms": 1, "999ms": 1, "1s": 1, "1500ms": 2, "2m": 120, "0s": 0} {
+	for wait, want := range map[string]int{"1ms": 0, "500ms": 0, "1s": 0, "1500ms": 0, "2m": 0, "0s": 0} {
 		d := &fakeLeaseDaemon{}
 		driveLease(t, context.Background(), d, nil, "acquire", "--kind", "build", "--wait", wait)
 		posts, _, _ := d.snapshot()

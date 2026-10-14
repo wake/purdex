@@ -111,6 +111,7 @@ func formatReport(w io.Writer, r resources.Report, loc *time.Location) {
 	fmt.Fprintf(w, "full      %.1f%% of the time, %d runs, longest %ds\n", r.Full.Share*100, r.Full.Runs, r.Full.LongestS)
 	fmt.Fprintf(w, "2+ heavy  %d minutes, highest load1 %.2f, highest memory %.1f%%\n", r.Heavy.Minutes, r.Heavy.MaxLoad1, r.Heavy.MaxMem)
 	formatReportV2(w, r, loc)
+	formatReportPositions(w, r.Positions)
 	if len(r.Kinds) > 0 {
 		fmt.Fprintln(w)
 		rows := [][]string{{"KIND", "N", "WEIGHT", "PEAK", "MEAN"}}
@@ -124,7 +125,7 @@ func formatReport(w io.Writer, r resources.Report, loc *time.Location) {
 
 // safeReason is what a wait reason looks like (the daemon's own names); anything
 // else is quoted, like a kind.
-var safeReason = regexp.MustCompile(`^[a-z][a-z_]{0,31}$`)
+var safeReason = regexp.MustCompile(`^[a-z][a-z_:]{0,47}$`)
 
 func reportReasonName(r string) string {
 	switch {

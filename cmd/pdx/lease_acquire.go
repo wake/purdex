@@ -65,6 +65,11 @@ type acquireOpts struct {
 	holderPID   int
 	holderStart string // "" for the CLI to look it up
 	clientID    string
+	// mode is how a busy host is answered: resources.CallQueue, CallAsk or
+	// CallWait. command and cwd are what the queue shows for the request.
+	mode    string
+	command string
+	cwd     string
 }
 
 // acquireOutcome is how an acquire ended.
@@ -72,6 +77,14 @@ type acquireOutcome struct {
 	resp      resources.LeaseResponse
 	failOpen  string // non-empty: the caller runs anyway, and this is why
 	cancelled bool   // the caller was interrupted; the lease was cancelled
+	// queued: the daemon queued the request (resp.State queued) or a newer call
+	// took it over (replaced). The caller does not run its command, and nothing
+	// is sent to cancel: that would lose the place.
+	queued bool
+	// askCancelled: an ask-mode request ended without running (the session
+	// cancelled it, nobody answered, the position was released or drained).
+	// The caller does not run its command; exit 15.
+	askCancelled bool
 }
 
 // acquireLine is the one JSON line acquire prints.
@@ -84,6 +97,14 @@ type acquireLine struct {
 	FailOpen     string `json:"fail_open,omitempty"`
 	// Warning is the daemon's (#2470): the volume of the Go build cache is under its hard floor; the lease was granted anyway.
 	Warning string `json:"warning,omitempty"`
+	// State, Position and QueuedReason say, for a call that was not granted and
+	// is not a failure, that it is queued (or replaced, or ended without a
+	// run), its place, and why it did not run.
+	State        string `json:"state,omitempty"`
+	Position     int    `json:"position,omitempty"`
+	QueuedReason string `json:"queued_reason,omitempty"`
+	EndReason    string `json:"end_reason,omitempty"`
+	PositionID   string `json:"position_id,omitempty"`
 }
 
 func (o acquireOutcome) line() acquireLine {
@@ -91,23 +112,29 @@ func (o acquireOutcome) line() acquireLine {
 		return acquireLine{Granted: true, FailOpen: o.failOpen}
 	}
 	r := o.resp
-	return acquireLine{ID: r.ID, Granted: r.Granted, Overrun: r.Overrun, WaitedMS: r.WaitedMS, HostMeasured: r.Host.Measured, Warning: r.Warning}
+	if o.queued || o.askCancelled {
+		return acquireLine{ID: r.ID, State: r.State, Position: r.Position, QueuedReason: r.QueuedReason, EndReason: r.EndReason, PositionID: r.PositionID, WaitedMS: r.WaitedMS}
+	}
+	return acquireLine{ID: r.ID, Granted: r.Granted, Overrun: r.Overrun, WaitedMS: r.WaitedMS, HostMeasured: r.Host.Measured, Warning: r.Warning, PositionID: r.PositionID}
 }
 
 // parseAcquireFlags reads and checks the flags of acquire; msg is a usage
 // error (exit 2, before any call).
-func parseAcquireFlags(args []string) (o acquireOpts, cfgPath string, msg string) {
+func parseAcquireFlags(args []string, getenv func(string) string) (o acquireOpts, cfgPath string, msg string) {
 	fs := flag.NewFlagSet("pdx lease acquire", flag.ContinueOnError)
 	cfg := fs.String("config", "", "")
 	kind := fs.String("kind", "", "")
 	weight := fs.Int("weight", 0, "")
-	wait := fs.Duration("wait", leaseDefaultWait, "")
+	var mf modeFlags
+	mf.register(fs)
+	command := fs.String("command", "", "")
+	cwd := fs.String("cwd", "", "")
 	session := fs.String("session", "", "")
 	toolUse := fs.String("tool-use", "", "")
 	holderPID := fs.Int("holder-pid", 0, "")
 	holderStart := fs.String("holder-start", "", "")
 	clientID := fs.String("client-id", "", "")
-	pos, err := parseTeamFlags(fs, args)
+	pos, err := parseTeamFlags(fs, normalizeWaitArgs(args))
 	switch {
 	case err != nil:
 		return o, "", err.Error()
@@ -118,11 +145,16 @@ func parseAcquireFlags(args []string) (o acquireOpts, cfgPath string, msg string
 	case *holderStart != "" && !validHolderStartText(*holderStart):
 		return o, "", "--holder-start must be a process start time as ps prints it"
 	}
-	o, msg = checkLeaseSize(*kind, *weight, *wait, *clientID)
+	mode, msg := mf.mode(getenv)
+	if msg != "" {
+		return o, "", msg
+	}
+	o, msg = checkLeaseSize(*kind, *weight, mf.wait.d, *clientID)
 	if msg != "" {
 		return o, "", msg
 	}
 	o.session, o.toolUse, o.holderPID, o.holderStart = *session, *toolUse, *holderPID, *holderStart
+	o.mode, o.command, o.cwd = mode, cutBytes(*command, leaseCommandMax), *cwd
 	return o, *cfg, ""
 }
 
@@ -139,12 +171,9 @@ func checkLeaseSize(kind string, weight int, wait time.Duration, clientID string
 	case clientID != "" && !validLeaseClientID(clientID):
 		return o, "--client-id must be a lower-case UUID v4"
 	}
-	if wait%time.Second != 0 {
-		// wait_s is whole seconds, and 0 means the host's default: a shorter
-		// wait is rounded up, never silently turned into the default.
-		wait = (wait/time.Second + 1) * time.Second
-	}
-	o = acquireOpts{kind: kind, weight: weight, wait: wait, clientID: clientID}
+	// The duration is checked and then dropped (Q11): the daemon would take
+	// wait_s as this request's deadline, over the host setting.
+	o = acquireOpts{kind: kind, weight: weight, clientID: clientID}
 	if o.clientID == "" {
 		o.clientID = uuid.NewString()
 	}
@@ -171,8 +200,8 @@ func validHolderStartText(s string) bool {
 }
 
 // runLeaseAcquire implements `pdx lease acquire`.
-func runLeaseAcquire(ctx context.Context, args []string, stdout, stderr io.Writer, clientOpts []daemonclient.Option) int {
-	o, cfgPath, msg := parseAcquireFlags(args)
+func runLeaseAcquire(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer, clientOpts []daemonclient.Option) int {
+	o, cfgPath, msg := parseAcquireFlags(args, getenv)
 	if msg != "" {
 		fmt.Fprintf(stderr, "pdx lease: %s\n%s\n", msg, leaseUsage)
 		return ExitUsage
@@ -185,8 +214,11 @@ func runLeaseAcquire(ctx context.Context, args []string, stdout, stderr io.Write
 	}
 	out := leaseAcquire(ctx, client, o, stderr)
 	printAcquire(stdout, out)
-	if out.cancelled {
+	switch {
+	case out.cancelled:
 		return ExitCancelled
+	case out.queued, out.askCancelled:
+		return ExitQueued
 	}
 	return ExitOK
 }
@@ -218,7 +250,8 @@ func leaseAcquire(ctx context.Context, client *daemonclient.Client, o acquireOpt
 	}
 	o.holderStart = wireStart
 	req := resources.LeaseRequest{ClientID: o.clientID, Kind: o.kind, Weight: o.weight, WaitS: int(o.wait / time.Second),
-		SessionID: o.session, HolderPID: o.holderPID, HolderStart: o.holderStart, ToolUseID: o.toolUse}
+		SessionID: o.session, HolderPID: o.holderPID, HolderStart: o.holderStart, ToolUseID: o.toolUse,
+		Mode: o.mode, Command: o.command, Cwd: o.cwd}
 	if o.session != "" {
 		req.Scope = resources.ScopeSessionNew
 	} else {
@@ -240,17 +273,29 @@ func leaseAcquire(ctx context.Context, client *daemonclient.Client, o acquireOpt
 		return acquireOutcome{failOpen: leaseFailReason(err)}
 	}
 	hung := 0
-	for !resp.Granted {
+	// R8: an ask request that waited at a position runs only on a held answer
+	// that still names the position.
+	askPos := false
+	for !askAnswered(o.mode, resp) {
 		if ctx.Err() != nil {
 			return leaseCancel(client, o.clientID, stderr)
 		}
+		// Queue mode never polls: the daemon answers queued at once, and the
+		// place is kept without this call. A replaced answer is defensive: a
+		// newer call took the row over, so this one must not run.
+		if resp.State == resources.StateQueued || resp.State == resources.StateReplaced {
+			return acquireOutcome{resp: resp, queued: true}
+		}
 		if resp.State == resources.StateEnded {
-			// Ended without a grant (cancelled by someone, abandoned): nothing
-			// to wait for.
+			if o.mode == resources.CallAsk && askNotRun(resp.EndReason) {
+				return acquireOutcome{resp: resp, askCancelled: true}
+			}
+			// Ended without a grant (abandoned, cancelled): nothing to wait for.
 			return acquireOutcome{failOpen: "ended_" + resp.EndReason}
 		}
+		askPos = askPos || (resp.State == resources.StateWaiting && resp.PositionID != "")
 		var polled resources.LeaseResponse
-		_, err := client.Do(ctx, http.MethodGet, fmt.Sprintf("/api/resources/leases/%s?wait=%d", url.PathEscape(resp.ID), resources.MaxPollS), nil, &polled)
+		_, err := client.Do(ctx, http.MethodGet, fmt.Sprintf("/api/resources/leases/%s?wait=%d&client_id=%s", url.PathEscape(resp.ID), resources.MaxPollS, url.QueryEscape(o.clientID)), nil, &polled)
 		if err != nil {
 			if ctx.Err() != nil {
 				return leaseCancel(client, o.clientID, stderr)
@@ -268,7 +313,32 @@ func leaseAcquire(ctx context.Context, client *daemonclient.Client, o acquireOpt
 		hung = 0
 		resp = polled
 	}
+	if o.mode == resources.CallAsk && askPos && resp.PositionID == "" {
+		// Without the position the room is given back and the caller does not
+		// run.
+		leaseReleaseByID(client, resp.ID, stderr)
+		return acquireOutcome{resp: resp, askCancelled: true}
+	}
 	return acquireOutcome{resp: resp}
+}
+
+// askAnswered says whether the loop stops: the answer is a grant, or (queue
+// mode, which never polls) the first answer is final.
+func askAnswered(mode string, r resources.LeaseResponse) bool {
+	if mode == resources.CallAsk {
+		return r.Granted && r.State == resources.StateHeld
+	}
+	return r.Granted
+}
+
+// askNotRun says whether an ended ask request ended without running.
+func askNotRun(reason string) bool {
+	switch reason {
+	case resources.EndCancelledBySession, resources.EndNoAnswer, resources.EndIdleTimeout, resources.EndDone,
+		resources.EndReleasedAfterLimit, resources.EndDrained:
+		return true
+	}
+	return false
 }
 
 // leaseFailReason is a short, stable name for why the daemon could not be used.
@@ -331,6 +401,7 @@ func runLeaseRelease(ctx context.Context, args []string, stdout, stderr io.Write
 	cfgPath := fs.String("config", "", "")
 	clientID := fs.String("client-id", "", "")
 	asJSON := fs.Bool("json", false, "")
+	notice := fs.Bool("notice", false, "")
 	pos, err := parseTeamFlags(fs, args)
 	switch {
 	case err != nil:
@@ -346,8 +417,14 @@ func runLeaseRelease(ctx context.Context, args []string, stdout, stderr io.Write
 	path := ""
 	if *clientID != "" {
 		path = "/api/resources/leases?client_id=" + url.QueryEscape(*clientID)
+		if *notice {
+			path += "&notice=1"
+		}
 	} else {
 		path = "/api/resources/leases/" + url.PathEscape(pos[0])
+		if *notice {
+			path += "?notice=1"
+		}
 	}
 	client, ok := leaseClientT("lease", *cfgPath, stderr, leaseReleaseTimeout, clientOpts)
 	if !ok {
@@ -383,4 +460,18 @@ func leaseReleaseByID(client *daemonclient.Client, id string, stderr io.Writer) 
 	if _, err := client.Once(rctx, http.MethodDelete, "/api/resources/leases/"+url.PathEscape(id), nil, nil); err != nil {
 		reportReleaseFailure(err, stderr)
 	}
+}
+
+// leaseReleaseWithNotice releases a lease after its command has exited and asks
+// for the final notice (amendment A §3.3): the text the session must read, ""
+// when there is none.
+func leaseReleaseWithNotice(client *daemonclient.Client, id string, stderr io.Writer) string {
+	rctx, cancel := context.WithTimeout(context.Background(), leaseReleaseTimeout)
+	defer cancel()
+	var resp resources.LeaseResponse
+	if _, err := client.Once(rctx, http.MethodDelete, "/api/resources/leases/"+url.PathEscape(id)+"?notice=1", nil, &resp); err != nil {
+		reportReleaseFailure(err, stderr)
+		return ""
+	}
+	return resp.Notice
 }
