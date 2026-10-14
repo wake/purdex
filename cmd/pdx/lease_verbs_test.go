@@ -73,6 +73,9 @@ func TestConfirmCancelDone_SendTheirPidAndPrint(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			d := &verbDaemon{}
+			if name == "confirm" {
+				d.body = resources.LeaseResponse{ID: "row-1", State: resources.StateHeld, Granted: true}
+			}
 			code, stdout, stderr := driveVerb(t, d, c.args...)
 			assert.Equal(t, ExitOK, code, stderr)
 			assert.Contains(t, stdout, c.line)
@@ -87,6 +90,27 @@ func TestConfirmCancelDone_SendTheirPidAndPrint(t *testing.T) {
 	code, stdout, _ := driveVerb(t, d, "done")
 	assert.Equal(t, ExitOK, code)
 	assert.Contains(t, stdout, "最後一個指令結束後放掉")
+}
+
+// A confirm says what became of the request, not just that the daemon answered:
+// an ended request (a repeat after the timeout) is not a command that started.
+func TestConfirm_ReportsWhatHappened(t *testing.T) {
+	ended := &verbDaemon{body: resources.LeaseResponse{ID: "row-1", State: resources.StateEnded, EndReason: resources.EndNoAnswer}}
+	code, stdout, stderr := driveVerb(t, ended, "confirm", "row-1")
+	assert.Equal(t, ExitRefused, code)
+	assert.NotContains(t, stdout, "開始執行")
+	assert.Contains(t, stderr, "已經結束（no_answer）")
+
+	waiting := &verbDaemon{body: resources.LeaseResponse{ID: "row-1", State: resources.StateWaiting}}
+	code, stdout, _ = driveVerb(t, waiting, "confirm", "row-1")
+	assert.Equal(t, ExitOK, code)
+	assert.Contains(t, stdout, "一有空")
+
+	odd := &verbDaemon{body: resources.LeaseResponse{ID: "row-1", State: "weird"}}
+	code, stdout, stderr = driveVerb(t, odd, "confirm", "row-1")
+	assert.Equal(t, ExitError, code)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, "不確定")
 }
 
 // A refusal of the daemon is exit 13 with a line; usage errors are 2.

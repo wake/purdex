@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -59,19 +60,46 @@ func runLeaseVerb(ctx context.Context, verb string, args []string, stdout, stder
 	}
 	rctx, cancel := context.WithTimeout(ctx, leaseReleaseTimeout)
 	defer cancel()
-	var resp resources.PositionResponse
-	if _, err := client.Do(rctx, http.MethodPost, path, resources.CallerRequest{HolderPID: os.Getpid()}, &resp); err != nil {
+	var raw json.RawMessage
+	if _, err := client.Do(rctx, http.MethodPost, path, resources.CallerRequest{HolderPID: os.Getpid()}, &raw); err != nil {
 		return reportVerbFailure(err, stderr)
 	}
+	if verb == "confirm" {
+		return printConfirmed(raw, stdout, stderr)
+	}
+	var resp resources.PositionResponse
+	_ = json.Unmarshal(raw, &resp)
 	switch {
-	case verb == "confirm":
-		fmt.Fprintln(stdout, "pdx lease: 已確認，背景指令開始執行")
 	case verb == "cancel":
 		fmt.Fprintln(stdout, "pdx lease: 已撤銷")
 	case resp.DonePending:
 		fmt.Fprintln(stdout, "pdx lease: 位置會在最後一個指令結束後放掉")
 	default:
 		fmt.Fprintln(stdout, "pdx lease: 位置已放掉")
+	}
+	return ExitOK
+}
+
+// printConfirmed says what a confirm did, from the request's state in the
+// answer: the daemon answers 200 also for a request that already ended (nothing
+// to confirm), and that must not read as a command that started.
+func printConfirmed(raw json.RawMessage, stdout, stderr io.Writer) int {
+	var resp resources.LeaseResponse
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		fmt.Fprintln(stderr, "pdx lease: daemon 的回應看不懂，不確定指令有沒有開始")
+		return ExitError
+	}
+	switch {
+	case resp.State == resources.StateHeld && resp.Granted:
+		fmt.Fprintln(stdout, "pdx lease: 已確認，背景指令開始執行")
+	case resp.State == resources.StateWaiting:
+		fmt.Fprintln(stdout, "pdx lease: 已確認，主機資源一有空，背景指令就會開始執行")
+	case resp.State == resources.StateEnded:
+		fmt.Fprintf(stderr, "pdx lease: 這個請求已經結束（%s），指令不會執行\n", reportReasonName(resp.EndReason))
+		return ExitRefused
+	default:
+		fmt.Fprintf(stderr, "pdx lease: 確認後的狀態不是預期的（%q），不確定指令有沒有開始\n", resp.State)
+		return ExitError
 	}
 	return ExitOK
 }
