@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 var noticeLoc = time.FixedZone("UTC+8", 8*3600)
@@ -51,5 +52,28 @@ func TestNoticeTexts_AreTheSpecsWords(t *testing.T) {
 	if CancelledNotice != "3 分鐘沒有動作，你在佇列裡的位置已經放掉；之後要跑請重新下指令。" ||
 		DrainedNotice != "主機資源改回不排隊模式，你在佇列裡的位置已經放掉；現在直接重下指令就會執行。" {
 		t.Fatal("the cancelled or drained text changed")
+	}
+}
+
+// The queue drops a notice over MaxNoticeText bytes, and the offer would then never reach the session: ten rows of the
+// longest command and directory still make a text that fits, with the rest counted.
+func TestOfferNotice_StaysUnderTheByteBudget(t *testing.T) {
+	var rows []NoticeRow
+	for i := 0; i < 10; i++ {
+		rows = append(rows, NoticeRow{ID: "row-long", Mode: CallAsk, Command: strings.Repeat("指", 300), Cwd: "/" + strings.Repeat("d", 1023), CreatedAt: time.Now()})
+	}
+	got := OfferNotice("pos_x", rows, noticeLoc)
+	if len(got) > MaxNoticeText {
+		t.Fatalf("%d bytes", len(got))
+	}
+	if !strings.Contains(got, "另有") || !strings.Contains(got, "`pdx lease confirm row-long`") {
+		t.Fatalf("the rest is not counted, or the first line was lost: %q", got[:200])
+	}
+	if !utf8.ValidString(got) {
+		t.Fatal("a command was cut inside a character")
+	}
+	one := OfferNotice("pos_x", rows[:1], noticeLoc)
+	if one == "" || len(one) > MaxNoticeText || strings.Contains(one, "另有") {
+		t.Fatalf("a lone longest row: %d bytes", len(one))
 	}
 }

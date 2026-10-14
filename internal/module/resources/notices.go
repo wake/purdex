@@ -183,6 +183,7 @@ func (m *Module) deliverNotice(ctx context.Context, p positionRow) time.Duration
 		// Not current any more: cleared, never sent (a stale offer would have the session re-run what was passed on).
 		if _, err := m.store.SetNoticeResult(p.ID, p.NoticeKind, p.NoticeDueAt, noticeStale, 0); err != nil {
 			m.logf("[resources] notices: clear %s: %v", p.ID, err)
+			return noticeRetryOther // a failing write is tried again on the timer, not in a tight loop
 		}
 		return 0
 	}
@@ -218,11 +219,11 @@ func (m *Module) noticeOutcome(p positionRow, res promptq.Result) time.Duration 
 	switch res.Status {
 	case promptq.Accepted:
 		if p.NoticeKind == "offer" {
-			// D1: the notice reached the session, the 3-minute window starts now (§2.8). The window is recorded before
-			// the slot is settled: if that write fails the slot stays pending and is tried again (the key is the same,
-			// so the queue does not send it twice), instead of leaving an offer the session got with no window.
+			// D1: the notice reached the session, the 3-minute window starts now (§2.8). The window and the slot's
+			// result are one write: if it fails the slot stays pending and is tried again (the key is the same, so
+			// the queue does not send it twice), never an offer the session got with no window recorded.
 			m.stateMu.Lock()
-			won, err := m.store.MarkDelivered(p.ID, p.OfferedAt, nowMS)
+			won, err := m.store.MarkOfferAccepted(p.ID, p.OfferedAt, nowMS, promptq.Accepted)
 			m.stateMu.Unlock()
 			if err != nil {
 				m.logf("[resources] notices: mark %s delivered: %v", p.ID, err)
@@ -230,7 +231,9 @@ func (m *Module) noticeOutcome(p positionRow, res promptq.Result) time.Duration 
 			}
 			if won {
 				m.wake()
+				return 0
 			}
+			// the position moved on while the notice was out: only the result is left to record
 		}
 		set(promptq.Accepted, nowMS)
 		return 0

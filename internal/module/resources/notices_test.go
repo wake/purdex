@@ -418,6 +418,30 @@ func TestNotices_AFailedReadIsNotStale(t *testing.T) {
 	assert.Equal(t, promptq.Accepted, f.position(posID).NoticeResult)
 }
 
+// The text limit of the notice builder is the queue's.
+func TestNotices_TextLimitIsTheQueues(t *testing.T) {
+	assert.Equal(t, promptq.MaxNoticeBytes, resources.MaxNoticeText)
+}
+
+// A slot that cannot be cleared (the write fails) is tried again on the timer, not in a tight loop.
+func TestNotices_AFailedClearBacksOff(t *testing.T) {
+	f := newPosFix(t)
+	n := f.outbox(status(promptq.Accepted))
+	posID, _ := f.queuedThenOffered(newCID(), pidA, "go build")
+	_, err := f.m.store.db.Exec(`UPDATE resource_positions SET state = 'running' WHERE id = ?`, posID) // the slot is stale
+	require.NoError(t, err)
+	_, err = f.m.store.db.Exec(`CREATE TRIGGER no_write BEFORE UPDATE OF notice_result ON resource_positions
+		BEGIN SELECT RAISE(ABORT, 'disk full'); END`)
+	require.NoError(t, err)
+	f.notices()
+	f.notices() // at once again: the retry time has not come
+	assert.Empty(t, n.tries())
+	f.m.notices.mu.Lock()
+	_, waiting := f.m.notices.retryAt[slotKey(f.position(posID))]
+	f.m.notices.mu.Unlock()
+	assert.True(t, waiting, "the slot waits for its next try")
+}
+
 // When the window cannot be recorded after an accepted offer, the slot stays pending: the next try (same key, so the
 // queue answers from its ledger) records it, instead of leaving an offer the session got with no window.
 func TestNotices_AcceptedOfferWithoutAWindowIsTriedAgain(t *testing.T) {
