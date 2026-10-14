@@ -136,3 +136,38 @@ func TestVerifyEvent_NonTmuxKeepsPidChecksSkipsPaneTree(t *testing.T) {
 		t.Fatalf("tmux path reason = %q, want tmux_unavailable", d.Reason)
 	}
 }
+
+// A non-tmux session has no pane, but a subagent's PostToolUse still must not
+// report the main session as running (#2873); the main session's own does.
+func TestHandleEvent_NonTmuxSubagentPostToolUse_DoesNotBroadcastRunning(t *testing.T) {
+	m := newTestModule(t)
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: tmux.NewFakeExecutor()}
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(_ string, raw json.RawMessage) agentpkg.DeriveResult {
+			var r map[string]any
+			_ = json.Unmarshal(raw, &r)
+			return agentpkg.DeriveResult{Valid: true, Status: agentpkg.StatusRunning, Detail: map[string]any{"agent_id": r["agent_id"]}}
+		},
+	})
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+	tail := `"sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"PdxPostToolUse","agent_type":"cc"`
+
+	postEvent(m, `{"tmux_session":"","tmux_pane_id":"",`+tail+`,"raw_event":{"session_id":"abc-123","agent_id":"agent-X"}}`)
+	select {
+	case msg := <-sub.SendCh():
+		t.Fatalf("subagent PostToolUse broadcast %s", msg)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	postEvent(m, `{"tmux_session":"","tmux_pane_id":"",`+tail+`,"raw_event":{"session_id":"abc-123"}}`)
+	select {
+	case msg := <-sub.SendCh():
+		if !strings.Contains(string(msg), `\"status\":\"running\"`) {
+			t.Fatalf("msg = %s, want running", msg)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("main PostToolUse not broadcast")
+	}
+}

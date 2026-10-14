@@ -50,6 +50,14 @@ func (m *Module) handleNonTmuxEvent(w http.ResponseWriter, req EventRequest, tra
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "reason": reason})
 		return
 	}
+	// A subagent's tool call carries the main session's id; it is not a status
+	// signal of the main conversation (#2873).
+	if isSubagentToolUse(req, result) {
+		trace.Verify(req, "skipped", "subagent_tool_use", nil)
+		trace.Finish("completed", "subagent_tool_use")
+		respond()
+		return
+	}
 	// The event is accepted and derived (nothing below can fail it): the turn end goes out here, before the
 	// emit, with no lock held. A rejected or invalid event returned above and publishes nothing (#2115).
 	m.publishTurnEnd(req, provider, m.classifyLifecycleForReq(req), FrameTraceMeta{}, stamp)
