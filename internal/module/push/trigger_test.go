@@ -46,9 +46,28 @@ func (f *fakeEvents) OpenApprovals() ([]team.Approval, error) {
 	return open, nil
 }
 
+// emit delivers an event and keeps the open list as the real team module would: an opened card is in it, a closed one is not.
 func (f *fakeEvents) emit(op string, a team.Approval) {
 	f.mu.Lock()
 	fn := f.fn
+	switch op {
+	case "opened":
+		have := false
+		for _, o := range f.open {
+			have = have || o.ID == a.ID
+		}
+		if !have {
+			f.open = append(append([]team.Approval(nil), f.open...), a)
+		}
+	case "closed":
+		var keep []team.Approval
+		for _, o := range f.open {
+			if o.ID != a.ID {
+				keep = append(keep, o)
+			}
+		}
+		f.open = keep
+	}
 	f.mu.Unlock()
 	if fn != nil {
 		fn(op, a)
@@ -328,7 +347,7 @@ func TestTrigger_EndToEndAgainstAFakeAPNs(t *testing.T) {
 	defer srv.Close()
 
 	e := newEnv(t)
-	e.mod.events = &fakeEvents{}
+	e.mod.events = &fakeEvents{open: []team.Approval{leadApproval("ap-e2e"), leadApproval("ap-gone")}}
 	e.mod.newAPNs = func() apnsClient {
 		return &apns.Client{HTTP: srv.Client(), Hosts: map[string]string{"sandbox": srv.URL}, Signer: apns.NewSigner(e.mod.key, nil)}
 	}

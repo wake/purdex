@@ -138,17 +138,14 @@ func TestCallback_NeverReadsSessions(t *testing.T) {
 	te.waitSends(t, 1)
 }
 
-// An approval that closed while its Job was queued is gone from the open set, yet its push still names its session.
-func TestSessionCode_ApprovalClosedBeforeSendStillResolves(t *testing.T) {
+// An approval that closed while its Job was queued is gone from the open set: since P-1 its push is not sent at all.
+func TestSessionCode_ApprovalClosedBeforeSendIsDropped(t *testing.T) {
 	te := newTriggerEnv(t, nil)
 	te.mod.sessions = fakeCodes(map[string]string{"dev": "c0de01"})
 	te.register(tokA, "en", "mlab")
 	te.events.readOpen = func() ([]team.Approval, error) { return nil, nil }
 	te.events.emit("opened", leadApproval("ap1"))
-	p := te.waitSends(t, 1)[0].Payload
-	if code, ok := sessionCodeOf(t, p); !ok || code != "c0de01" {
-		t.Fatalf("session_code = %q (present %v): %s", code, ok, p)
-	}
+	te.noSends(t)
 }
 
 // The open-set read failing, or no reader at all, costs the count and keys but not the push's own session_code.
