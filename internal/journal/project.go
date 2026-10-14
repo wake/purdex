@@ -50,6 +50,8 @@ func hashID(s string) string {
 
 // ProjectOf resolves cwd to its project. Not being in a repository is a normal answer (nil error, not cached); a git that
 // timed out or cannot run returns the cwd-keyed fallback together with the error and is not cached.
+// Known limitation: for a repository created with --separate-git-dir, Root is wrong (it is the parent of the git dir);
+// ID is right because it comes from the common dir.
 func ProjectOf(ctx context.Context, cwd string) (Project, error) {
 	if cwd == "" {
 		return Project{}, errors.New("journal: empty cwd")
