@@ -49,6 +49,8 @@ type teamMirror struct {
 	Label string              `json:"label,omitempty"`
 	Lead  string              `json:"lead,omitempty"`
 	Tasks map[int]*mirrorTask `json:"tasks"`
+
+	fresh bool // no state was stored when this tick loaded it: not saved
 }
 
 type mirrorTask struct {
@@ -310,9 +312,66 @@ func (tk *tick) load(teamID string) (*teamMirror, error) {
 		if err := json.Unmarshal([]byte(raw), tm); err != nil {
 			return nil, fmt.Errorf("task mirror state of team %s: %w", teamID, err)
 		}
+	} else {
+		tm.fresh = true
 	}
 	tk.teams[teamID] = tm
 	return tm, nil
+}
+
+// adopt catches up a team the mirror meets for the first time after the baseline. The cursors passed its tasks and
+// reports while its lead was elsewhere, and the rewinds cannot reach them any more, so they are read again from the
+// start. A task changed within the last hour is observed as new activity (it gets its entries, as the rewind would have
+// given them); an older one is only recorded, as in the baseline, so no history is written.
+func (tk *tick) adopt(ctx context.Context, teamID string, tm *teamMirror, d *mirrorDelta) error {
+	var after int64
+	since := tk.now.Add(-mirrorWindow).UnixMilli()
+	for ctx.Err() == nil { // the reports first: a closing line is known before the task that needs it
+		rows, err := tk.m.feed.ReportsAfter(after, since, mirrorPage)
+		if err != nil {
+			return err
+		}
+		for _, r := range rows {
+			after = r.RowID
+			if r.TeamID == teamID {
+				tm.observeReport(teamID, r, d)
+			}
+		}
+		if len(rows) < mirrorPage {
+			break
+		}
+	}
+	recent := tk.now.Add(-deepRewind).UnixMilli()
+	var read team.TaskCursor
+	for ctx.Err() == nil {
+		rows, err := tk.m.feed.TasksChangedAfter(read, mirrorPage)
+		if err != nil {
+			return err
+		}
+		for _, c := range rows {
+			if c.TeamID == teamID {
+				tm.observeTask(teamID, c, c.UpdatedAt < recent, d)
+			}
+		}
+		if len(rows) < mirrorPage {
+			break
+		}
+		l := rows[len(rows)-1]
+		read = team.TaskCursor{UpdatedAt: l.UpdatedAt, TeamID: l.TeamID, Seq: l.Seq}
+	}
+	return ctx.Err()
+}
+
+// catchUp runs adopt for a team met for the first time after the baseline (in the baseline itself the scan is the catch-up).
+func (tk *tick) catchUp(ctx context.Context, teamID string, tm *teamMirror, d *mirrorDelta) error {
+	if !tm.fresh {
+		return nil
+	}
+	tm.fresh = false
+	if tk.baseline {
+		return nil
+	}
+	return tk.adopt(ctx, teamID, tm, d)
 }
 
 // reports reads the new reports and records the closing lines.
@@ -349,6 +408,9 @@ func (tk *tick) reports(ctx context.Context) error {
 			if d == nil {
 				d = &mirrorDelta{}
 				deltas[r.TeamID] = d
+			}
+			if err := tk.catchUp(ctx, r.TeamID, tm, d); err != nil {
+				return err
 			}
 			tm.observeReport(r.TeamID, r, d)
 		}
@@ -402,6 +464,9 @@ func (tk *tick) tasks(ctx context.Context) error {
 			if d == nil {
 				d = &mirrorDelta{}
 				deltas[c.TeamID] = d
+			}
+			if err := tk.catchUp(ctx, c.TeamID, tm, d); err != nil {
+				return err
 			}
 			tm.observeTask(c.TeamID, c, tk.baseline, d)
 		}

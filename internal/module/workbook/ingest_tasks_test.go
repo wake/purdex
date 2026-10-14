@@ -169,6 +169,7 @@ func TestTaskMirror_TheFirstScanWritesNoHistoryButShowsTheCurrentTasks(t *testin
 	k.feed.set(k.task(1, "進行中的事", taskDoing, -60*day, -day))
 	k.feed.set(k.task(2, "上週做完", taskCompleted, -20*day, -10*day))
 	k.feed.set(k.task(3, "去年做完", taskCompleted, -90*day, -40*day))
+	k.feed.set(k.task(4, "剛才開始", taskDoing, -10*time.Minute, -10*time.Minute)) // within the hour: still no entry
 	k.tick()
 	k.drain()
 	if es := k.entries(); len(es) != 0 {
@@ -178,8 +179,8 @@ func TestTaskMirror_TheFirstScanWritesNoHistoryButShowsTheCurrentTasks(t *testin
 	for _, tk := range k.tasksFile() {
 		got[tk.Key] = tk.State
 	}
-	want := map[string]journal.TaskState{mkTeam + "-1": journal.TaskDoing, mkTeam + "-2": journal.TaskDone}
-	if len(got) != 2 || got[mkTeam+"-1"] != want[mkTeam+"-1"] || got[mkTeam+"-2"] != want[mkTeam+"-2"] {
+	want := map[string]journal.TaskState{mkTeam + "-1": journal.TaskDoing, mkTeam + "-2": journal.TaskDone, mkTeam + "-4": journal.TaskDoing}
+	if len(got) != 3 || got[mkTeam+"-1"] != want[mkTeam+"-1"] || got[mkTeam+"-2"] != want[mkTeam+"-2"] || got[mkTeam+"-4"] != want[mkTeam+"-4"] {
 		t.Fatalf("tasks file = %v, want %v", got, want)
 	}
 	// What was recorded is not written later either, and a closing line for a task that has no entry fills nothing.
@@ -457,6 +458,95 @@ func TestTaskMirror_TheTasksFileShowsTheOwnerAndTheRefsOfEachTask(t *testing.T) 
 	}
 	if got := strings.Join(ts[0].Refs, ","); got != "#2829,PR #2830" {
 		t.Errorf("refs = %q", got)
+	}
+}
+
+// While a team's lead is elsewhere the cursors pass its tasks and reports. When the lead comes to this host, the team's next
+// change reads what the cursors passed: the tasks file shows every open task and those finished lately; tasks changed within
+// the last hour are written as entries like any new activity, older ones only recorded (no history is written).
+// Mutation gate: no catch-up -> the tasks file shows only the new task (red); every task an entry -> the old ones get
+// entries (red); recent tasks recorded only -> the recent one has no entry (red); no reports read -> the finished task has
+// no closing line state (red).
+func TestTaskMirror_ATeamWhoseLeadComesLaterIsCaughtUpAtItsNextChange(t *testing.T) {
+	k := newMirrorKit(t)
+	k.local[mkLead] = false
+	k.finishBaseline()
+	k.feed.set(k.task(1, "舊的進行中", taskDoing, -3*time.Hour, -3*time.Hour))
+	k.feed.set(k.task(2, "舊的完成", taskCompleted, -3*time.Hour, -3*time.Hour))
+	k.feed.set(k.task(3, "最近的", taskCompleted, -20*time.Minute, -10*time.Minute))
+	k.feed.set(team.TaskChange{TeamID: "other", Seq: 9, Subject: "別組的", Status: taskDoing, OwnerSessionID: "x", CreatedAt: k.ms(-2 * time.Hour), UpdatedAt: k.ms(-2 * time.Hour)})
+	k.feed.reports = []team.ReportRow{
+		{RowID: 1, TeamID: mkTeam, ID: "r1", Kind: "merged", TaskSeq: 2, Summary: "舊的已合併", CreatedAt: k.ms(-3 * time.Hour)},
+		{RowID: 2, TeamID: mkTeam, ID: "r2", Kind: "merged", TaskSeq: 3, Summary: "最近的已合併", CreatedAt: k.ms(-10 * time.Minute)},
+	}
+	k.now = k.now.Add(mirrorEvery)
+	k.tick() // the lead is elsewhere: the cursors pass all of it
+	k.drain()
+	if len(k.entries()) != 0 || len(k.tasksFile()) != 0 {
+		t.Fatalf("a team led elsewhere was mirrored: %d entries, %d tasks", len(k.entries()), len(k.tasksFile()))
+	}
+	k.local[mkLead] = true
+	k.feed.set(k.task(4, "新任務", taskDoing, time.Second, time.Second))
+	k.now = k.now.Add(mirrorEvery)
+	k.tick()
+	k.drain()
+	states := map[string]journal.TaskState{}
+	for _, tk := range k.tasksFile() {
+		states[tk.Key] = tk.State
+	}
+	want := map[string]journal.TaskState{mkTeam + "-1": journal.TaskDoing, mkTeam + "-2": journal.TaskDone, mkTeam + "-3": journal.TaskDone, mkTeam + "-4": journal.TaskDoing}
+	if len(states) != len(want) {
+		t.Fatalf("tasks file = %v, want %v", states, want)
+	}
+	for key, st := range want {
+		if states[key] != st {
+			t.Errorf("tasks file = %v, want %v", states, want)
+			break
+		}
+	}
+	var ids []string
+	for _, e := range k.entries() {
+		ids = append(ids, e.ID)
+	}
+	sort.Strings(ids)
+	if got, wantIDs := strings.Join(ids, ","), strings.Join([]string{entryID(mkTeam, 3, "done"), entryID(mkTeam, 3, "new"), entryID(mkTeam, 4, "new")}, ","); got != wantIDs {
+		t.Fatalf("entries = %s, want %s", got, wantIDs)
+	}
+	if e, ok := k.entry(entryID(mkTeam, 3, "done")); !ok || e.Detail != "最近的已合併" {
+		t.Errorf("the recent task_done = %+v, %v: the report the cursor had passed was not read", e, ok)
+	}
+	k.feed.set(k.task(2, "舊的完成", taskCompleted, -3*time.Hour, -3*time.Hour)) // read again: nothing is queued
+	k.now = k.now.Add(mirrorEvery)
+	k.tick()
+	k.drain()
+	if len(k.entries()) != 3 {
+		t.Fatalf("a re-read of an old task wrote %d entries, want 3", len(k.entries()))
+	}
+}
+
+// The catch-up reads every page of the feed, not the first only.
+// Mutation gate: stop after the first page -> the tasks file lacks the rest (red).
+func TestTaskMirror_TheCatchUpReadsEveryPage(t *testing.T) {
+	k := newMirrorKit(t)
+	k.local[mkLead] = false
+	k.finishBaseline()
+	n := 2*mirrorPage + 50
+	for i := 1; i <= n; i++ { // a minute apart and all older than an hour: the rewinds cannot reach any of them
+		k.feed.set(k.task(i, "舊的", taskDoing, -20*time.Hour, -20*time.Hour+time.Duration(i)*time.Minute))
+	}
+	k.now = k.now.Add(mirrorEvery)
+	k.tick() // the lead is elsewhere: the cursors pass all of it
+	k.local[mkLead] = true
+	k.feed.set(k.task(n+1, "新任務", taskDoing, time.Second, time.Second))
+	k.now = k.now.Add(mirrorEvery)
+	k.tick()
+	for k.drain() > 0 {
+	}
+	if got := len(k.tasksFile()); got != n+1 {
+		t.Fatalf("the tasks file shows %d tasks, want %d", got, n+1)
+	}
+	if got := len(k.entries()); got != 1 {
+		t.Fatalf("%d entries, want only the new task's: the old tasks are recorded, not written", got)
 	}
 }
 
