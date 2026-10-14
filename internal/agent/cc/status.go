@@ -34,11 +34,16 @@ func deriveCCStatus(purdexName string, rawEvent json.RawMessage) agent.DeriveRes
 		// running unblocks the waiting → running transition that has no
 		// other hook between Notification(permission_prompt)/PermissionRequest
 		// and the eventual Stop.
+		//
+		// agent_id is passed through: a subagent's tool call arrives with the
+		// MAIN session's id and a non-empty agent_id, and the handler must not
+		// let it move the main conversation's light (#2873).
 		return agent.DeriveResult{
 			Valid:  true,
 			Status: agent.StatusRunning,
 			Detail: map[string]any{
 				"tool_name": raw["tool_name"],
+				"agent_id":  raw["agent_id"],
 			},
 		}
 

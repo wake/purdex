@@ -407,6 +407,33 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		result.Status = ""
 	}
 
+	// A PostToolUse that names a subagent (non-empty agent_id) is that
+	// subagent's tool call, which carries the main session's id: it must not
+	// move the main conversation's light or turn boundary (#2873). It goes
+	// through the status-less detail-only branch below.
+	subagentToolUse := isSubagentToolUse(req, result)
+	if subagentToolUse {
+		result.Status = ""
+		// The one exception: the agent that caused the pane's current waiting
+		// (its own permission prompt, now granted) clears it, back to the
+		// status the light had before. Any other subagent stays ignored.
+		if m.framePriorStatus(req) == agentpkg.StatusWaiting {
+			if prior, ok := m.takeSubagentWait(req, false); ok {
+				// Not consumed: the record must survive a failed or lost
+				// frame write so the hook's retry can still clear the light.
+				// The frame no longer being waiting is what stops a repeat.
+				result.Status = prior
+				subagentToolUse = false
+			}
+		}
+	} else if req.AgentType == "cc" && result.Valid && result.Status != "" {
+		if result.Status == agentpkg.StatusWaiting {
+			m.noteWaiting(req, m.framePriorStatus(req))
+		} else {
+			m.dropWait(req) // anything else the main light does ends a recorded wait
+		}
+	}
+
 	// Error guard: when the SENDER'S frame is in error, only whitelisted events
 	// can clear it. It reads the pane's own frame, not the session-level
 	// status, so another pane's error (or the mod's, which the session view
@@ -461,7 +488,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// detail-only Subagents membership update; here there is no Subagents
 	// mutation to perform).
 	if req.AgentType == "cc" &&
-		(req.PurdexName == "PdxPreToolUse" || req.PurdexName == "PdxPostToolUseFailure") {
+		(req.PurdexName == "PdxPreToolUse" || req.PurdexName == "PdxPostToolUseFailure" || subagentToolUse) {
 		if req.TmuxSession == "" {
 			trace.Finish("completed", "detail_only_no_session")
 			traceFinished = true
