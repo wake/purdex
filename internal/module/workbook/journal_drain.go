@@ -239,25 +239,19 @@ func (d *Drainer) writeRow(it OutboxItem) error {
 	case OutboxTurn:
 		var p turnPayload
 		if err := json.Unmarshal([]byte(it.Payload), &p); err != nil {
-			return d.badPayload(it, err)
+			return fmt.Errorf("decode outbox row %d: %w", it.ID, err) // stays undone: a binary that can decode it may come back
 		}
 		return d.writeTurn(h, ent, p)
 	case OutboxJournal:
 		var p journalPayload
 		if err := json.Unmarshal([]byte(it.Payload), &p); err != nil {
-			return d.badPayload(it, err)
+			return fmt.Errorf("decode outbox row %d: %w", it.ID, err) // stays undone: a binary that can decode it may come back
 		}
 		return d.writeJournal(h, ent, p)
 	}
 	// A kind this binary does not know (a newer daemon wrote it, then this one was rolled back) stays undone, retried
-	// and logged, so the upgraded binary can write it; only a payload that cannot be decoded is dropped.
+	// and logged, so the upgraded binary can write it.
 	return fmt.Errorf("unknown outbox kind %q", it.Kind)
-}
-
-// badPayload logs a row that can never be written and lets it count as done: retrying would only repeat the failure.
-func (d *Drainer) badPayload(it OutboxItem, err error) error {
-	d.logf("[workbook] journal outbox row %d is dropped: %v", it.ID, err)
-	return nil
 }
 
 // unit finds the unit's registration, making it (and asking the resolver for its project) on the first write.

@@ -346,7 +346,14 @@ func TestDrain_FailingRowsDoNotStarveOthersAndUnknownKindStays(t *testing.T) {
 	if _, err := k.st.db.Exec(`INSERT INTO wb_journal_outbox (entry_id, unit_key, kind, payload, created_at) VALUES (?, 'solo:good', 'future', '{}', 1)`, good); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := k.st.db.Exec(`INSERT INTO wb_journal_outbox (entry_id, unit_key, kind, payload, created_at) VALUES (?, 'solo:good', 'journal', 'not json', 1)`, good); err != nil {
+		t.Fatal(err)
+	}
 	k.drain()
+	var bad int
+	if err := k.st.db.QueryRow(`SELECT done_at FROM wb_journal_outbox WHERE payload = 'not json'`).Scan(&bad); err != nil || bad != 0 {
+		t.Fatalf("undecodable payload: done_at = %d err = %v, want undone", bad, err)
+	}
 	var done int
 	if err := k.st.db.QueryRow(`SELECT done_at FROM wb_journal_outbox WHERE kind = 'future'`).Scan(&done); err != nil || done != 0 {
 		t.Fatalf("unknown kind: done_at = %d err = %v, want undone", done, err)
