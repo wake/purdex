@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wake/purdex/internal/push"
 	"github.com/wake/purdex/internal/push/apns"
 	"github.com/wake/purdex/internal/team"
 )
@@ -369,6 +370,21 @@ func TestLate_NoDevicesIsLoggedAndNotRecorded(t *testing.T) {
 	te.mustLog(t, buf, "approval ap1 kind=lead not pushed: no_devices")
 	if te.stateOf("ap1") != apNone {
 		t.Fatalf("state = %v", te.stateOf("ap1"))
+	}
+}
+
+// The late push fails before it enqueues (no device): the spent timer must not leave the card held for ever, with no timer.
+// Mutation gate: put the card back to held after a late failure -> red.
+func TestLate_AFailedLatePushDoesNotLeaveTheCardHeld(t *testing.T) {
+	te, _ := lateEnv(t, true)
+	buf := captureLog(t)
+	te.mod.mu.Lock()
+	te.mod.devices = map[string]push.Device{} // the phone went away during the wait
+	te.mod.mu.Unlock()
+	te.events.emit("opened", leadApproval("ap1"))
+	te.mustLog(t, buf, "approval ap1 kind=lead not pushed: no_devices")
+	if st := te.stateOf("ap1"); st != apNone {
+		t.Fatalf("state = %v, want unknown (a held card with no timer is never pushed)", st)
 	}
 }
 

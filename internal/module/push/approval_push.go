@@ -248,6 +248,11 @@ func (m *Module) pushApproval(a team.Approval, pa push.Approval, gen uint64, lat
 			cur.state = to
 		}
 	}
+	// The late timer is spent once it fired: a card put back to held would have no timer and never be pushed (nor ever
+	// scheduled again, a repeated opened finds the state), so it goes back to unknown instead.
+	if late && prev == apHeld {
+		prev = apNone
+	}
 	snd := m.sender.Load()
 	if snd == nil {
 		settle(prev)
