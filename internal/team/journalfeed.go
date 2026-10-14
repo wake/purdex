@@ -50,7 +50,10 @@ type TeamInfo struct {
 // never an empty answer.
 type JournalFeed interface {
 	// TasksChangedAfter answers the tasks changed after c, ordered (updated_at, team_id, seq) ascending; at most limit
-	// (a limit below 1 answers none).
+	// (a limit below 1 answers none). It is NOT a gap-free tail: updated_at is taken by the caller before the team's write
+	// lock and ties on it are common, so a row can commit behind a cursor already returned (its (updated_at, team_id, seq)
+	// sorts before c). A reader rewinds c in time (the journal plan's §5.0: {UpdatedAt − 10 s, "", 0} each tick, − 1 h once
+	// an hour) and dedupes by its own ids. Reports have no such gap: ReportsAfter is exact.
 	TasksChangedAfter(c TaskCursor, limit int) ([]TaskChange, error)
 	// ReportsAfter answers the reports with rowid > afterRowID and created_at >= sinceMS, rowid ascending; at most limit
 	// (a limit below 1 answers none). The first-start backfill passes sinceMS = now − 30 days and pages by rowid;

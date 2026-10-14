@@ -99,6 +99,47 @@ func TestJournalFeed_AStatusChangeMovesTheTaskPastTheCursor(t *testing.T) {
 	}
 }
 
+// The tasks feed is not a gap-free tail (journal plan §5.0): a task that commits with an (updated_at, team_id, seq) behind
+// the cursor — a same-millisecond tie on a smaller key, or a time taken before the write lock — is not returned to the
+// cursor that already passed it, and is returned to a cursor rewound in time. The rewound read repeats the rows already
+// seen, unchanged, so a reader that dedupes by its own ids ingests the new task once.
+// Mutation: ignore the cursor (return every task) → the plain-cursor assertion goes red.
+func TestJournalFeed_ATaskCommittedBehindTheCursorIsFoundByARewoundCursor(t *testing.T) {
+	s := openTestStore(t)
+	ma := seedTaskTeam(t, s, tTeamA, "lead-a", "op-a", "sess-a")
+	mb := seedTaskTeam(t, s, tTeamB, "lead-b", "op-b", "sess-b")
+	mustCreateTask(t, s, newTask(tTeamA, ma, "a one", 100))
+	mustCreateTask(t, s, newTask(tTeamB, mb, "b one", 100))
+	first := allTaskChanges(t, s, 10)
+	last := first[len(first)-1] // (100, team B, 1)
+	passed := team.TaskCursor{UpdatedAt: last.UpdatedAt, TeamID: last.TeamID, Seq: last.Seq}
+
+	mustCreateTask(t, s, newTask(tTeamA, ma, "a two, committed late", 100)) // (100, team A, 2) sorts before the cursor
+	if page, err := s.TasksChangedAfter(passed, 10); err != nil || len(page) != 0 {
+		t.Fatalf("the plain cursor already passed (100, A, 2): %+v err=%v", page, err)
+	}
+
+	rewound := team.TaskCursor{UpdatedAt: passed.UpdatedAt - 10_000}
+	page, err := s.TasksChangedAfter(rewound, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := journalTaskIDs(page), []string{"3f2a9c01/1", "3f2a9c01/2", "3f2a9c02/1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("the rewound read = %v, want %v", got, want)
+	}
+	for i, old := range first { // the rows seen before come back unchanged: re-reading them is harmless
+		var again team.TaskChange
+		for _, p := range page {
+			if p.TeamID == old.TeamID && p.Seq == old.Seq {
+				again = p
+			}
+		}
+		if !reflect.DeepEqual(again, old) {
+			t.Errorf("row %d re-read as %+v, first read %+v", i, again, old)
+		}
+	}
+}
+
 // Every field of a task reaches the feed, including the PRs its reports recorded.
 func TestJournalFeed_ATaskCarriesItsFields(t *testing.T) {
 	s := openTestStore(t)
