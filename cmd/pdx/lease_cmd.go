@@ -33,6 +33,7 @@ const leaseUsage = "usage: pdx lease ls [--json] [--config <path>]\n" +
 	"       pdx lease run (--kind <k> | --weight <n>) [--queue | --ask | --wait [<dur>]] [--command <text>] [--client-id <uuid>] [--config <path>] -- <command…>\n" +
 	"       pdx lease report [--since 24h] [--json] [--config <path>]   (since: a duration such as 90m or 24h, or days as 7d; at most 14d)\n" +
 	"       pdx lease release (<id> | --client-id <uuid>) [--notice] [--json] [--config <path>]\n" +
+	"       pdx lease confirm <id> | cancel <id> | done   (your own background request, queued request or position; a pos_ id goes to the position)\n" +
 	"       (--queue: a busy host answers at once with your place (exit 15); --ask: for a background command, wait for the answer to the question; --wait: wait for room (a duration is accepted and ignored). With none of them PDX_LEASE_CALLER decides: fg queue, bg ask, else wait. acquire holds for --holder-pid, default the parent of pdx: a bare acquire in a subshell or $(…) names a process that exits at once. Give --holder-pid a long-lived pid, or use pdx lease run.)"
 
 // leaseAttemptTimeout bounds one request to the daemon; a snapshot is a read
@@ -78,6 +79,8 @@ func runLeaseCmd(ctx context.Context, args []string, getenv func(string) string,
 			return runLeaseRun(ctx, args[1:], getenv, stdout, stderr, clientOpts)
 		case "report":
 			return runLeaseReport(ctx, args[1:], stdout, stderr, clientOpts)
+		case "confirm", "cancel", "done":
+			return runLeaseVerb(ctx, args[0], args[1:], stdout, stderr, clientOpts)
 		}
 	}
 	msg := "需要一個子指令"
@@ -251,6 +254,9 @@ func printLeaseSections(w io.Writer, snap resources.Snapshot) error {
 		if err := alignRows(w, rows, 2); err != nil {
 			return err
 		}
+	}
+	if err := printPositions(w, snap, leaseNow()); err != nil {
+		return err
 	}
 	if len(snap.Waiters) > 0 {
 		header := []string{"WAITERS", "SESSION", "KIND", "WEIGHT", "WAITED", "DEADLINE IN"}
