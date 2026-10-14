@@ -361,3 +361,22 @@ func TestRetention_ARowDeletedMidSweepKeepsTheFile(t *testing.T) {
 		t.Fatalf("a row deleted mid-sweep cost the file its 3 days: %v", err)
 	}
 }
+
+// A member op claimed through the claim route also ends the member's fresh half, and tells the stream and the roster on its own (codex
+// critic). Mutation gate: no signal after the claim → red.
+func TestFreshSurface_MemberClaimSignals(t *testing.T) {
+	f := newFixture(t)
+	op := f.requestedOp() // member sid-m1's requested op
+	if _, err := f.m.store.db.Exec(`INSERT INTO relay_fresh_half (session_id, op_id, path, written_at) VALUES (?, ?, ?, ?)`, "sid-m1", "half-of-m1", "/tmp/h.md", 5); err != nil {
+		t.Fatal(err)
+	}
+	w := f.watchFresh()
+	w.drain() // announces the row; every earlier signal is spent
+	if code, _, ae := f.claim(op.ID, "sid-m1"); code != http.StatusOK {
+		t.Fatalf("claim: %d %+v", code, ae)
+	}
+	evs := w.drain()
+	if len(evs) != 1 || evs[0].Op != "changed" || len(evs[0].Sessions) != 0 {
+		t.Fatalf("after the member's claim: %+v, want one changed with no sessions", evs)
+	}
+}
