@@ -110,13 +110,19 @@ func (e *Engine) journalRetry(j *job) *job {
 	return &retry
 }
 
-// applyJournalResult is the seam J-1b2 fills in: today it logs the counts and hands the result to OnJournalResult (nil
-// in production). J-1b2 turns it into the transaction that records the outbox row.
+// applyJournalResult records a journal job's validated result as one outbox row (with the outbox off, nothing is
+// stored) and hands it to OnJournalResult (nil in production). A store error is logged: the turn entry is settled
+// already and is never touched, so the events of this turn are lost, not the entry.
 func (e *Engine) applyJournalResult(j *job, res JournalResult) {
 	e.d.Logf("[workbook] journal job of entry %d: %d events, %d ticks, %d roadmap changes, %d dropped",
 		j.entryID, len(res.Events), len(res.Ticks), len(res.Roadmap), res.Dropped)
+	out := JournalOutcome{EntryID: j.entryID, ConvKey: j.conv, PromptVer: JournalPromptVersion, Result: res, Usage: j.usage, LatencyMS: j.lat}
+	if e.d.Store != nil {
+		if err := e.d.Store.RecordJournalResult(out); err != nil {
+			e.d.Logf("[workbook] journal job of entry %d: store the result: %v", j.entryID, err)
+		}
+	}
 	if e.d.OnJournalResult != nil {
-		e.d.OnJournalResult(JournalOutcome{EntryID: j.entryID, ConvKey: j.conv, PromptVer: JournalPromptVersion, Result: res,
-			Usage: j.usage, LatencyMS: j.lat})
+		e.d.OnJournalResult(out)
 	}
 }

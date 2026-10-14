@@ -92,6 +92,7 @@ type Store struct {
 	failFinish  func() error // test seam: makes Finish fail; nil in production
 	failRepoint func() error // test seam: runs at the start of RepointSession and may fail it; nil in production
 	afterCommit func()       // test seam: between InsertPending's commit and its event; nil in production
+	journalOn   atomic.Bool  // the journal outbox is on (a journal source is wired)
 	wmu         sync.Mutex   // serialises the writes together with their events; an observer must not write to the store
 }
 
