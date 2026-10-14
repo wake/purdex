@@ -211,7 +211,7 @@ func (r *OriginResolver) originsOf(entries []ipeers.Entry) []team.Origin {
 		return nil
 	}
 	alias := r.m.configSnapshot().alias
-	ctx, cancel := context.WithTimeout(context.Background(), namerTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), namesBudget(len(entries)))
 	defer cancel()
 	names := r.m.virtualNamesOf(ctx, entries...)
 	titles := r.titles()
@@ -235,6 +235,20 @@ func (r *OriginResolver) originsOf(entries []ipeers.Entry) []team.Origin {
 		}
 	}
 	return out
+}
+
+// namesBudget is the time the names of n sessions may take together: namerTimeout, and a little more for each session
+// after the first (the store assigns them one by one), never more than three namerTimeouts. A store that does not answer
+// at all costs this once, not once per session.
+func namesBudget(n int) time.Duration {
+	d := namerTimeout
+	if n > 1 {
+		d += time.Duration(n-1) * 50 * time.Millisecond
+	}
+	if max := 3 * namerTimeout; d > max {
+		d = max
+	}
+	return d
 }
 
 // titles is every session's title from the title store, read once, or nil when there is no store or the read fails.

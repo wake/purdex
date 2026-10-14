@@ -72,3 +72,14 @@ func TestOriginResolver_ListLiveOrigins_OneNameResolutionAndOneTitleRead(t *test
 		}
 	}
 }
+
+func TestNamesBudget(t *testing.T) {
+	for _, c := range []struct {
+		n    int
+		want time.Duration
+	}{{1, namerTimeout}, {2, namerTimeout + 50*time.Millisecond}, {16, namerTimeout + 750*time.Millisecond}, {1000, 3 * namerTimeout}} {
+		if got := namesBudget(c.n); got != c.want {
+			t.Errorf("namesBudget(%d) = %v, want %v", c.n, got, c.want)
+		}
+	}
+}
