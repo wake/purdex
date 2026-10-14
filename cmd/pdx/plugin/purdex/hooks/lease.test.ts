@@ -561,6 +561,17 @@ test('a command moved to the background keeps its lease until the task ends', as
   expect(releasesOf(r).length).toBe(1)
 })
 
+// Past 20 handed-over leases the oldest is released at once instead of being forgotten. (M: just delete the handle.)
+test('the 21st handed-over lease releases the oldest instead of losing it', async ($, on) => {
+  let n = 0
+  const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : ok('{}')), () => ({ ...MOVED, result: { ...MOVED.result, backgroundTaskId: 'cap' + ++n } }))
+  for (let i = 0; i < 21; i++) await bash($, 'pnpm run build')
+  await settle($, r, 1)
+  const rels = releasesOf(r)
+  expect(rels.length).toBe(1)
+  expect(rels[0]).toEqual(['pdx', 'lease', 'release', '--client-id', arg(r.calls.find((a) => sub(a) === 'acquire')!, '--client-id')]) // the first one's, without a notice
+})
+
 test('a task that is gone from the list releases the lease too', async ($, on) => {
   const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : ok('{}')), movedAs('bt2'))
   await bash($, 'pnpm run build')

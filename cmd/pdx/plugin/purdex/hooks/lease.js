@@ -613,7 +613,13 @@ async function leaseCall($, e, next) {
     if (taskId) {
       done = true
       bgLeases.set(taskId, { cfg, clientId, answer })
-      while (bgLeases.size > BG_LEASES_MAX) bgLeases.delete(bgLeases.keys().next().value)
+      // Past the cap the oldest is let go now, not forgotten: a handle that is dropped can never be released.
+      while (bgLeases.size > BG_LEASES_MAX) {
+        const oldest = bgLeases.keys().next().value
+        const h = bgLeases.get(oldest)
+        bgLeases.delete(oldest)
+        releaseLease($, h.cfg, h.clientId, h.answer, false).catch(() => {})
+      }
       return withNotes(r, [...leaseNotes(rewritten, command, answer),
         '這個指令跑得比 Claude Code 的前景時限久，被移到背景；它還在跑，主機資源會留給它，等它結束才放掉。'])
     }
