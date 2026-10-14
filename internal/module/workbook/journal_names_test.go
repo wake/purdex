@@ -1,12 +1,14 @@
 package workbook
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/convmodel"
+	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/journal"
 	"github.com/wake/purdex/internal/team"
 )
@@ -111,5 +113,69 @@ func TestDrain_ActorsAreDisplayNamesAndThePersonIsNamed(t *testing.T) {
 	r, _ := k2.byID("solo:c", "ev:"+itoa(id2)+":0")
 	if x.Actor != "" || r.Label() != "使用者請求" {
 		t.Errorf("unwired: exec actor %q, label %q", x.Actor, r.Label())
+	}
+}
+
+// The engine of a running daemon reads the person's name from the live config: a configured name reaches the journal
+// job, and a reload applies without a restart.
+// Mutation gate: drop the Deps.PersonName wiring in startEngine -> red.
+func TestModule_EngineReadsPersonNameFromTheLiveConfig(t *testing.T) {
+	cfg := &config.Config{DataDir: t.TempDir(), Journal: &config.JournalConfig{PersonName: "Wake"}}
+	c := core.New(core.CoreDeps{Config: cfg})
+	m := New()
+	if err := m.Init(c); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Stop(context.Background()) })
+	m.mu.Lock()
+	eng := m.engine
+	m.mu.Unlock()
+	if eng == nil || eng.personName() != "Wake" {
+		t.Fatalf("engine = %v", eng)
+	}
+	c.CfgMu.Lock()
+	c.Cfg.Journal = &config.JournalConfig{PersonName: "Other"}
+	c.CfgMu.Unlock()
+	if got := eng.personName(); got != "Other" {
+		t.Errorf("after a reload: %q", got)
+	}
+}
+
+// A journal row keeps the person_name its job ran with: a config reload between the job and the drain does not change
+// the label of the events the job wrote about the old name.
+// Mutation gate: read d.person() at drain time instead of p.Person -> red.
+func TestDrain_PersonNameComesFromTheJobNotTheLiveConfig(t *testing.T) {
+	k := newDrainKit(t)
+	name := "New"
+	k.d.SetNames(nil, func() string { return name })
+	id := k.turn("c", "t1", team.SeatNone, TodoChanges{})
+	k.okEntry(id, "紀錄。", false)
+	out := JournalOutcome{EntryID: id, PromptVer: 1, Person: "Old", Result: JournalResult{Events: []JournalEvent{
+		{Kind: journal.KindRequest, By: journal.ByUser, Text: "Old 要求。"}}}}
+	if err := k.st.RecordJournalResult(out); err != nil {
+		t.Fatal(err)
+	}
+	k.drain()
+	e, ok := k.byID("solo:c", "ev:"+itoa(id)+":0")
+	if !ok || e.Label() != "Old請求" {
+		t.Errorf("entry %+v ok=%v label %q", e, ok, e.Label())
+	}
+}
+
+// The name a job ran with reaches the stored outcome.
+func TestJournalJob_OutcomeCarriesThePersonName(t *testing.T) {
+	k := journalKit(t, team.SeatLead, "a")
+	k.e.d.PersonName = func() string { return "Wake" }
+	var got JournalOutcome
+	k.e.d.OnJournalResult = func(o JournalOutcome) { got = o }
+	k.finish("m", mustNext(t, k, "m", "s1"), answerJSON("事", "推", "紀錄", "狀態", ""))
+	j := mustNext(t, k, "m", "s1")
+	k.e.d.PersonName = func() string { return "Changed" } // a reload while the job runs
+	k.finish("m", j, answer(journalAnswer))
+	if got.Person != "Wake" {
+		t.Errorf("outcome person = %q", got.Person)
 	}
 }

@@ -120,6 +120,9 @@ type job struct {
 	then *job
 	// jctx is what a journal job's answer is checked against, filled when its input is built at hand-out.
 	jctx JournalContext
+	// person is the person's name the journal job was built with; its events are stored with it, so a config reload between
+	// the job and the drain cannot make an event's text and its label name two people.
+	person string
 }
 
 type lease struct {

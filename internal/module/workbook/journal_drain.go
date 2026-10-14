@@ -392,7 +392,10 @@ func (d *Drainer) writeJournal(h home, ent Entry, p journalPayload) error {
 			e.Items = append(e.Items, journal.Item{Text: it})
 		}
 		if e.By == journal.ByUser {
-			e.Person = d.person()
+			e.Person = p.Person
+			if e.Person == "" { // a row written before the job's name was kept
+				e.Person = d.person()
+			}
 		}
 		e.Pinned = e.Kind == journal.KindConfirm
 		if err := h.putNew(e); err != nil {
