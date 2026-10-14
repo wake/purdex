@@ -282,6 +282,22 @@ func (h home) put(e journal.Entry) error {
 	return journal.Upsert(journal.MonthFile(h.journalDir, e.At), e)
 }
 
+// putNew writes an event that is not in its month file yet. A replay (a crash after the write, before the row was marked
+// done) must not overwrite what happened to the entry since: a confirm unpinned by hand, an item ticked.
+func (h home) putNew(e journal.Entry) error {
+	file := journal.MonthFile(h.journalDir, e.At)
+	have, err := journal.Parse(file)
+	if err != nil {
+		return err
+	}
+	for _, x := range have {
+		if x.ID == e.ID {
+			return nil
+		}
+	}
+	return journal.Upsert(file, e)
+}
+
 // writeTurn writes a turn row: the solo task entries and tasks file, then the exec entry (only for an ok entry).
 func (d *Drainer) writeTurn(h home, ent Entry, p turnPayload) error {
 	when := at(ent.TurnAt)
@@ -322,8 +338,12 @@ func (d *Drainer) writeTasks(h home) error {
 	if err != nil {
 		return err
 	}
-	if _, serr := os.Stat(h.tasksFile); len(todos) == 0 && serr != nil {
-		return nil
+	if len(todos) == 0 {
+		if _, serr := os.Stat(h.tasksFile); errors.Is(serr, os.ErrNotExist) {
+			return nil
+		} else if serr != nil {
+			return serr // not "there is no file": retry instead of leaving a stale one
+		}
 	}
 	tasks := make([]journal.Task, 0, len(todos))
 	for _, t := range todos {
@@ -348,7 +368,7 @@ func (d *Drainer) writeJournal(h home, ent Entry, p journalPayload) error {
 			e.Items = append(e.Items, journal.Item{Text: it})
 		}
 		e.Pinned = e.Kind == journal.KindConfirm
-		if err := h.put(e); err != nil {
+		if err := h.putNew(e); err != nil {
 			return err
 		}
 	}

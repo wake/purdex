@@ -537,3 +537,32 @@ func TestDrain_RefreshTodosAreMirrored(t *testing.T) {
 		t.Fatalf("tasks = %+v %v", tasks, err)
 	}
 }
+
+// A replayed journal row does not undo what was done to its entries since: a confirm unpinned by hand and an item
+// ticked stay so when the row is written again (it was not marked done).
+// Mutation gate: write events with Upsert instead of putNew -> the confirm is pinned again (red).
+func TestDrain_ReplayKeepsWhatHappenedToAnEvent(t *testing.T) {
+	k := newDrainKit(t)
+	a := k.turn("c", "t1", team.SeatNone, TodoChanges{})
+	k.okEntry(a, "。", false)
+	conf := JournalOutcome{EntryID: a, PromptVer: 1, Result: JournalResult{Events: []JournalEvent{{Kind: journal.KindConfirm, Text: "請確認", Items: []string{"甲?"}}}}}
+	if err := k.st.RecordJournalResult(conf); err != nil {
+		t.Fatal(err)
+	}
+	k.drain()
+	cid := "ev:" + itoa(a) + ":0"
+	file := journal.MonthFile(k.dir("solo:c"), at(1_700_000_000_000))
+	if _, err := journal.SetPinned(file, cid, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := journal.Tick(file, cid, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.st.db.Exec(`UPDATE wb_journal_outbox SET done_at = 0 WHERE kind = 'journal'`); err != nil { // the crash before MarkOutboxDone
+		t.Fatal(err)
+	}
+	k.drain()
+	if e, _ := k.byID("solo:c", cid); e.Pinned || !e.Items[0].Done {
+		t.Fatalf("after the replay: %+v", e)
+	}
+}
