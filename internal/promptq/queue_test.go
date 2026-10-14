@@ -11,8 +11,33 @@ import (
 // U3-0b: the prompt queue (plan D7, rev 5): one owner stream per session, at most once by client_msg_id.
 
 type owners struct {
-	mu sync.Mutex
-	m  map[string]string
+	mu   sync.Mutex
+	m    map[string]string
+	caps map[string]string // session -> the stream that announced CapLeaseNotice
+}
+
+// OwnerOfCap: the stream that announced the capability, per session; none until a test sets one.
+func (o *owners) OwnerOfCap(sid, capability string) (string, bool) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if capability != CapLeaseNotice {
+		return "", false
+	}
+	s, ok := o.caps[sid]
+	return s, ok
+}
+
+func (o *owners) setNotice(sid, stream string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.caps == nil {
+		o.caps = map[string]string{}
+	}
+	if stream == "" {
+		delete(o.caps, sid)
+		return
+	}
+	o.caps[sid] = stream
 }
 
 func (o *owners) OwnerOf(sid string) (string, bool) {

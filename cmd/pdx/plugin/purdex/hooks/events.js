@@ -483,6 +483,7 @@ async function pqRun($, job) {
     // A /clear or resume in progress (session.end seen, the switch not yet) still reports the old id: nothing runs then
     if (ev.switching || job.sessionId !== String(await $.session.id())) out = pqOut('dropped', 'session_changed')
     else if (job.kind === 'submit') out = await pqSubmit($, job)
+    else if (job.kind === 'notice') out = await pqNotice($, job)
     else if (job.kind === 'fill') out = await pqFill($, job)
     else if (job.kind === 'clear_if') out = await pqClearIf($, job)
     else if (job.kind === 'read') out = await pqRead($)
@@ -546,6 +547,17 @@ async function clearIfOurs($, own) {
 async function pqSubmit($, job) {
   if (ev.turnId) return pqOut('busy')
   const r = await $.prompt.submit({ text: job.text, asUser: true })
+  if (isObject(r) && typeof r.drop === 'string') return pqOut('dropped', r.drop || 'dropped')
+  return pqOut('accepted')
+}
+
+// A notice of the daemon (lease v2 amendment A §2.10): submitted as a plugin message, the way the relay seed goes in, NOT as
+// the person's words (no asUser), and only while no turn runs: $.prompt.submit blocks until the session is idle (M-D1, measured:
+// a turn in progress, or a permission dialog, holds it for as long as the turn lasts), so a turn in progress is `busy` at once
+// and the daemon sends the notice again. The daemon times it all (the window of an offer counts from delivery).
+async function pqNotice($, job) {
+  if (ev.turnId) return pqOut('busy')
+  const r = await $.prompt.submit({ text: job.text })
   if (isObject(r) && typeof r.drop === 'string') return pqOut('dropped', r.drop || 'dropped')
   return pqOut('accepted')
 }
