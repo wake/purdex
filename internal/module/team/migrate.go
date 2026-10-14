@@ -292,7 +292,11 @@ func migrateRelayOpBinding(db *sql.DB) error {
 		return err
 	}
 	// seen_at (P6-2b-2): when the member's mod first saw the control message; the unseen claim timer (P6-4b) reads it.
-	return ensureColumn(db, "relay_ops", "seen_at", "INTEGER NOT NULL DEFAULT 0")
+	if err := ensureColumn(db, "relay_ops", "seen_at", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	// mode (RT-3a1): '' a full relay, 'half' the handoff file only, 'handoff' the file then the member's kill.
+	return ensureColumn(db, "relay_ops", "mode", "TEXT NOT NULL DEFAULT ''")
 }
 
 // migrateNoticeArmed gives team_members the 70% idle notice's arm flag (plan v3 P7-1): 1 = the member may be reported to

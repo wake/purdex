@@ -49,6 +49,7 @@ const (
 	RelayReasonDenied            = "denied"              // cancelled
 	RelayReasonTimeout           = "timeout"             // cancelled
 	RelayReasonCompacted         = "compacted"           // cancelled
+	RelayReasonHalf              = "half"                // cancelled: a half (or handoff) op whose file was written - its end, not a failure (RT-3a1, S-9)
 	RelayBeginReasonIdle         = "idle"                // begin's reason for an idle relay ask (the threshold ask has none)
 	RelayReasonResumed           = "resumed"             // cancelled: a prompt arrived while an idle ask was open (idle relay D6); only an idle op takes it
 	RelayReasonAbandoned         = "abandoned"           // cancelled
@@ -68,36 +69,41 @@ const (
 
 // Relay limits (spec §8.1, §8.7).
 const (
-	RelayThresholdPct     = 70      // U1: used ≥ 70 % triggers the ask
-	RelayIdleMinutes      = 40      // idle relay D1: a session idle this long is told to / asks for a relay
-	RelayIdleThresholdPct = 40      // idle relay D1: … when its context use is at least this much
-	RelayMinGrowth        = 20000   // §8.1 loop guard: tokens a seeded conversation must grow before asking again
-	SelfRelayDeadlineS    = 600     // §8.7: 10 minutes, absolute
-	RelayDir              = "relay" // <data_dir>/relay/<op id>.md
+	RelayThresholdPct     = 70    // U1: used ≥ 70 % triggers the ask
+	RelayIdleMinutes      = 40    // idle relay D1: a session idle this long is told to / asks for a relay
+	RelayIdleThresholdPct = 40    // idle relay D1: … when its context use is at least this much
+	RelayMinGrowth        = 20000 // §8.1 loop guard: tokens a seeded conversation must grow before asking again
+	SelfRelayDeadlineS    = 600   // §8.7: 10 minutes, absolute
+	// SelfRelayIdleDeadlineS is an idle card's life while the host switch is off (RT-3a1 T29): five minutes, then it times out.
+	SelfRelayIdleDeadlineS = 300
+	RelayDir               = "relay" // <data_dir>/relay/<op id>.md
 )
 
 // RelayOp is one relay operation, self or member (spec §8.1).
 type RelayOp struct {
-	ID             string     `json:"id"`
-	Kind           RelayKind  `json:"kind"`
-	HostID         string     `json:"host_id"`
-	SessionID      string     `json:"session_id"`               // the session being relayed (old id)
-	NewSessionID   string     `json:"new_session_id,omitempty"` // after cleared
-	Ref            string     `json:"ref"`                      // old ref
-	NewRef         string     `json:"new_ref,omitempty"`
-	TeamID         string     `json:"team_id,omitempty"`    // member relays (P6)
-	RequestID      string     `json:"request_id,omitempty"` // the self_relay or member_relay approval row (a member op created requested has none)
-	State          RelayState `json:"state"`
-	Reason         string     `json:"reason,omitempty"`
-	HandoffPath    string     `json:"handoff_path"`         // <data_dir>/relay/<op id>.md
-	PID            int        `json:"pid,omitempty"`        // the process the op is bound to (P6-2a); 0 on an op from before it
-	PaneID         string     `json:"pane_id,omitempty"`    // the tmux pane "%N" it runs in, "" when none
-	SeenAt         int64      `json:"seen_at,omitempty"`    // when the member's mod first saw the control message (P6-2b-2); 0 = not yet
-	ProcStart      string     `json:"proc_start,omitempty"` // the process's start time as the registry shows it; pid + proc_start is the identity (a pid is reused)
-	Pruned         bool       `json:"pruned,omitempty"`
-	UsedPercentage *float64   `json:"used_percentage,omitempty"`
-	CreatedAt      int64      `json:"created_at"`
-	UpdatedAt      int64      `json:"updated_at"`
+	ID           string     `json:"id"`
+	Kind         RelayKind  `json:"kind"`
+	HostID       string     `json:"host_id"`
+	SessionID    string     `json:"session_id"`               // the session being relayed (old id)
+	NewSessionID string     `json:"new_session_id,omitempty"` // after cleared
+	Ref          string     `json:"ref"`                      // old ref
+	NewRef       string     `json:"new_ref,omitempty"`
+	TeamID       string     `json:"team_id,omitempty"`    // member relays (P6)
+	RequestID    string     `json:"request_id,omitempty"` // the self_relay or member_relay approval row (a member op created requested has none)
+	State        RelayState `json:"state"`
+	Reason       string     `json:"reason,omitempty"`
+	HandoffPath  string     `json:"handoff_path"`         // <data_dir>/relay/<op id>.md
+	PID          int        `json:"pid,omitempty"`        // the process the op is bound to (P6-2a); 0 on an op from before it
+	PaneID       string     `json:"pane_id,omitempty"`    // the tmux pane "%N" it runs in, "" when none
+	SeenAt       int64      `json:"seen_at,omitempty"`    // when the member's mod first saw the control message (P6-2b-2); 0 = not yet
+	ProcStart    string     `json:"proc_start,omitempty"` // the process's start time as the registry shows it; pid + proc_start is the identity (a pid is reused)
+	// Mode is how far the op goes (RT-3a1): "" a full relay, RelayModeHalf the handoff file only (an idle session's half, S-9), RelayModeHandoff
+	// the file and then the member's kill (RT-3c).
+	Mode           string   `json:"mode,omitempty"`
+	Pruned         bool     `json:"pruned,omitempty"`
+	UsedPercentage *float64 `json:"used_percentage,omitempty"`
+	CreatedAt      int64    `json:"created_at"`
+	UpdatedAt      int64    `json:"updated_at"`
 }
 
 // SelfRelayPayload is Approval.Payload for KindSelfRelay (dialog body, spec §8.7).
@@ -272,3 +278,11 @@ const LineageReaderKey = "team.lineage"
 type LineageReader interface {
 	PreviousRefs() (map[string][]string, error)
 }
+
+// Op modes (RelayOp.Mode) and the first mod protocol that speaks the half path (RT-3a1).
+const (
+	RelayModeHalf    = "half"
+	RelayModeHandoff = "handoff"
+	// MinHalfModVersion is the mod protocol that runs the idle half itself; an older mod keeps today's auto-approve, never a half.
+	MinHalfModVersion = 8
+)
