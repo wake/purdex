@@ -273,10 +273,15 @@ type Module struct {
 	remoteNames     *remoteNameSnapshot
 	namePoolRefresh time.Duration
 	// namePicker is the name pool (namepool.go); nil means the pool is off.
-	// poolMu serialises picking and storing a pool name and settling two
-	// holders of one.
+	// Picking and storing a pool name, and settling two holders of one, are
+	// serialised.
 	namePicker NamePicker
-	poolMu     sync.Mutex
+	// poolSem is the cancellable lock around picking and storing a pool name
+	// (lockPool); poolReady is closed once the refresher's first pass over
+	// the other hosts is done (awaitPoolReady), nil before Start.
+	poolSem   chan struct{}
+	poolOnce  sync.Once
+	poolReady chan struct{}
 
 	// putHostAfterSnapshot is a test seam: called by handlePutHost right
 	// after its pre-lock snapshot, so a test can force a concurrent
@@ -1171,7 +1176,10 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	fetchCtx, cancel := context.WithTimeout(ctx, remoteFetchTimeout)
 	defer cancel()
 
-	sentAt := m.now()
+	var ticket uint64 // orders this answer against concurrent fetches of the host
+	if m.remoteNames != nil {
+		ticket = m.remoteNames.ticket()
+	}
 	env, err := m.fetch(fetchCtx, m.client, h.URL, h.Token)
 	if err != nil {
 		return ipeers.HostResult{
@@ -1253,7 +1261,7 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	if env.OK && rowErr == "" {
 		// The name pool's snapshot of what this host holds, from the rows as
 		// normalizeRemoteRows settled them, never the raw envelope.
-		m.noteRemoteNames(resultHostID, peers, env.AddressVersion, sentAt)
+		m.noteRemoteNames(resultHostID, peers, env.AddressVersion, ticket)
 	}
 
 	// unknown is the remote's own reported list of alive-but-undecodable

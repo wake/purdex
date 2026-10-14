@@ -38,7 +38,7 @@ type remoteHolder struct {
 
 type hostNames struct {
 	readAt time.Time
-	sentAt time.Time // when the request this set answers was sent
+	ticket uint64 // the request this set answers (remoteNameSnapshot.ticket)
 	names  map[string]remoteHolder
 }
 
@@ -46,6 +46,7 @@ type hostNames struct {
 type remoteNameSnapshot struct {
 	mu    sync.Mutex
 	hosts map[string]*hostNames
+	seq   uint64 // last ticket handed out
 }
 
 func newRemoteNameSnapshot() *remoteNameSnapshot {
@@ -64,20 +65,29 @@ func newRemoteNameSnapshot() *remoteNameSnapshot {
 // unparsable, the time this daemon first saw the holder (kept while the name
 // stays in the answers). Two rows holding one name keep the earlier start.
 func (s *remoteNameSnapshot) record(hostID string, rows []ipeers.PeerRecord, addressVersion int, now time.Time) {
-	s.recordSent(hostID, rows, addressVersion, now, now)
+	s.recordTicket(hostID, rows, addressVersion, s.ticket(), now)
 }
 
-// recordSent is record for an answer to a request sent at sentAt. Fetches of
-// one host run concurrently (the refresher and every scope=all), so an answer
-// is applied in the order its requests were sent, not the order they finished:
-// one to a request sent before the request the stored set answers is dropped,
-// or a slow old answer would hand a name back that a newer one showed held.
-func (s *remoteNameSnapshot) recordSent(hostID string, rows []ipeers.PeerRecord, addressVersion int, sentAt, now time.Time) {
+// ticket numbers a request about to be sent: strictly increasing, so two
+// requests are never equal however coarse the clock.
+func (s *remoteNameSnapshot) ticket() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.seq++
+	return s.seq
+}
+
+// recordTicket is record for the answer to the request that drew ticket. Fetches
+// of one host run concurrently (the refresher and every scope=all), so answers
+// are applied in the order their requests were sent, not the order they
+// finished: one to an older request than the stored set answers is dropped, or
+// a slow old answer would hand a name back that a newer one showed held.
+func (s *remoteNameSnapshot) recordTicket(hostID string, rows []ipeers.PeerRecord, addressVersion int, ticket uint64, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var prev map[string]remoteHolder
 	if h := s.hosts[hostID]; h != nil {
-		if sentAt.Before(h.sentAt) {
+		if ticket < h.ticket {
 			return
 		}
 		prev = h.names
@@ -105,7 +115,7 @@ func (s *remoteNameSnapshot) recordSent(hostID string, rows []ipeers.PeerRecord,
 			names[name] = h
 		}
 	}
-	s.hosts[hostID] = &hostNames{readAt: now, sentAt: sentAt, names: names}
+	s.hosts[hostID] = &hostNames{readAt: now, ticket: ticket, names: names}
 }
 
 // held is every pool name some other host holds, with the earliest process
@@ -141,11 +151,11 @@ func (s *remoteNameSnapshot) prune(keep map[string]bool) {
 }
 
 // noteRemoteNames files one OK answer's normalized rows. No-op without a pool.
-func (m *Module) noteRemoteNames(hostID string, rows []ipeers.PeerRecord, addressVersion int, sentAt time.Time) {
+func (m *Module) noteRemoteNames(hostID string, rows []ipeers.PeerRecord, addressVersion int, ticket uint64) {
 	if m.remoteNames == nil {
 		return
 	}
-	m.remoteNames.recordSent(hostID, rows, addressVersion, sentAt, m.now())
+	m.remoteNames.recordTicket(hostID, rows, addressVersion, ticket, m.now())
 }
 
 // startNamePoolRefresher starts the background refresher: every
@@ -160,13 +170,17 @@ func (m *Module) startNamePoolRefresher() {
 	if every <= 0 {
 		every = remoteNamesRefresh
 	}
+	// Until the first pass over the other hosts is done, naming a conversation
+	// with a pool name waits for it (awaitPoolReady): a daemon that has just
+	// started must not pick blind to what the other hosts hold. The barrier is
+	// made here, before Start returns and the first request is served.
+	ready := make(chan struct{})
+	m.poolReady = ready
 	m.reapWG.Add(1)
 	go func() {
 		defer m.reapWG.Done()
-		// Fill the snapshot at once: a daemon that has just started would
-		// otherwise name its first conversations for up to a refresh period
-		// believing no other host holds a name.
 		m.refreshRemoteNames(m.stopCtx)
+		close(ready)
 		t := time.NewTicker(every)
 		defer t.Stop()
 		for {

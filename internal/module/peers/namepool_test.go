@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,9 +12,74 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wake/purdex/internal/config"
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/store"
 )
+
+// Naming waits for the refresher's first look at the other hosts: a pool name
+// picked before it would be picked blind (codex critic). A caller whose budget
+// ends first gets no name that pass and nothing is stored.
+func TestNamePool_NamingWaitsForTheFirstLookAtTheOtherHosts(t *testing.T) {
+	e := newPoolEnv(t)
+	e.m.core = newTestCoreWithHosts(t, "host-mlab", "mlab", []config.PeerHost{
+		{Alias: "air", HostID: "host-air", URL: "http://air.invalid", Token: "tok"}})
+	e.m.client = &http.Client{}
+	e.m.namePoolRefresh = time.Hour
+	in := make(chan struct{}, 4)
+	release := make(chan struct{})
+	e.m.fetch = func(context.Context, *http.Client, string, string) (ipeers.Envelope, error) {
+		in <- struct{}{}
+		<-release
+		return okEnvelope(snapRow("air-adam", snapStartA)), nil
+	}
+	e.start(poolSidA, tEarly)
+	e.m.startNamePoolRefresher()
+	t.Cleanup(func() { _ = e.m.Stop(context.Background()) })
+	var releaseOnce sync.Once
+	closeRelease := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(closeRelease) // runs before Stop, so a failed assertion cannot leave the fetch blocked
+	<-in                    // the first look is under way and has not answered
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if got := e.m.resolveNames(ctx, []nameCandidate{cand(poolSidA, "purdex-54")}); len(got) != 0 {
+		t.Fatalf("names = %v before the first look, want none", got)
+	}
+	if row := storedRow(t, e.meta, poolSidA); row != (store.PeerNameEntry{}) {
+		t.Fatalf("stored row = %+v, want none", row)
+	}
+
+	closeRelease()
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel2()
+	// After the look, the name air holds is not picked.
+	if got := e.m.resolveNames(ctx2, []nameCandidate{cand(poolSidA, "purdex-54")})[poolSidA]; got != "purdex-54-emma" {
+		t.Fatalf("name = %q after the first look, want purdex-54-emma (air holds adam)", got)
+	}
+}
+
+// The wait for the naming lock ends with the caller's budget: a slow holder of
+// the lock costs a waiter its name for this pass, not its time (codex critic).
+func TestNamePool_TheNamingLockWaitEndsWithTheCallersContext(t *testing.T) {
+	e := newPoolEnv(t)
+	e.start(poolSidA, tEarly)
+	unlock, err := e.m.lockPool(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	began := time.Now()
+	got := e.m.resolveNames(ctx, []nameCandidate{cand(poolSidA, "purdex-54")})
+	if len(got) != 0 || time.Since(began) > 5*time.Second {
+		t.Fatalf("names = %v after %s, want none and a prompt return", got, time.Since(began))
+	}
+	unlock()
+	if got := e.m.resolveNames(context.Background(), []nameCandidate{cand(poolSidA, "purdex-54")})[poolSidA]; got != "purdex-54-adam" {
+		t.Fatalf("name = %q once the lock is free, want purdex-54-adam", got)
+	}
+}
 
 // firstFree picks the first free name, so a test knows which name a pick gets.
 type firstFree struct{}

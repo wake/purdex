@@ -42,6 +42,40 @@ func (m *Module) WithNamePool(p NamePicker) *Module {
 	return m
 }
 
+// lockPool serialises picking and storing a pool name (and settling two
+// holders of one). The wait gives up when ctx does, so a slow holder of the lock
+// costs its waiters their name for this pass (the ref form, retried next pass),
+// never their budget.
+func (m *Module) lockPool(ctx context.Context) (unlock func(), err error) {
+	m.poolOnce.Do(func() { m.poolSem = make(chan struct{}, 1) })
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case m.poolSem <- struct{}{}:
+		return func() { <-m.poolSem }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// awaitPoolReady waits, within ctx, for the refresher's first pass over the
+// other hosts: a pool name picked before that would be picked blind to what
+// they hold (name pool spec §4: scan all addresses once). Before Start there is
+// no refresher and nothing to wait for. A caller whose ctx ends first gets no
+// name this pass.
+func (m *Module) awaitPoolReady(ctx context.Context) error {
+	if m.poolReady == nil {
+		return nil
+	}
+	select {
+	case <-m.poolReady:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 // heldPoolNames is every pool name a live conversation holds right now: the
 // stored pool names of the live local registry entries (read fresh, so a pick
 // another pass made a moment ago is seen), the names the other hosts hold, and
@@ -105,16 +139,28 @@ func (m *Module) pickFrom(free []string) string {
 
 // assignPooled stores the name of a conversation seen for the first time:
 // "<base>-<a free pool name>" with source pool, else (every pool name held)
-// refName with its own source. Picking and storing run under poolMu, so
-// concurrent passes never hand one name to two conversations; picked carries
+// refName with its own source. Picking and storing run under the pool lock, so
+// concurrent passes never hand one name to two conversations (the lock wait and
+// the wait for the first look at the other hosts both end with ctx); picked carries
 // the names this pass already took, for conversations (executions) no registry
 // entry shows. The stored row is returned: with Assign's first-writer-wins, a
 // concurrent pass that named the same conversation first wins.
 func (m *Module) assignPooled(ctx context.Context, sid, ref, base, refName, refSource string, nowMs int64, picked map[string]bool) (store.PeerNameEntry, error) {
-	m.poolMu.Lock()
-	defer m.poolMu.Unlock()
+	if err := m.awaitPoolReady(ctx); err != nil {
+		return store.PeerNameEntry{}, err
+	}
+	unlock, err := m.lockPool(ctx)
+	if err != nil {
+		return store.PeerNameEntry{}, err
+	}
+	defer unlock()
 	held, err := m.heldPoolNames(ctx, picked)
 	if err != nil {
+		return store.PeerNameEntry{}, err
+	}
+	// The registry read cannot be cancelled: a budget it ran past means no
+	// name this pass rather than a pick made after the caller gave up.
+	if err := ctx.Err(); err != nil {
 		return store.PeerNameEntry{}, err
 	}
 	name, source := refName, refSource
@@ -228,8 +274,12 @@ func (m *Module) settlePoolCollisions(ctx context.Context, entries []ipeers.Entr
 	}
 	sort.Slice(yielding, func(i, j int) bool { return yielding[i].key < yielding[j].key })
 
-	m.poolMu.Lock()
-	defer m.poolMu.Unlock()
+	unlock, err := m.lockPool(ctx)
+	if err != nil {
+		m.logf("peers: name pool: %d conversation(s) share a pool name but the naming lock was not free in time, settled next pass: %v", len(yielding), err)
+		return
+	}
+	defer unlock()
 	picked := map[string]bool{}
 	for _, l := range yielding {
 		held, err := m.heldPoolNames(ctx, picked)

@@ -133,24 +133,27 @@ func TestRemoteNameSnapshot_AnUnparsableProcStartCountsFromTheFirstSighting(t *t
 func TestRemoteNameSnapshot_AnAnswerToAnOlderRequestDoesNotOverwriteANewerOne(t *testing.T) {
 	t0 := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 	s := newRemoteNameSnapshot()
-	s.recordSent("h1", []ipeers.PeerRecord{snapRow("a-adam", snapStartA)}, ipeers.AddressVersionV5, t0.Add(2*time.Second), t0.Add(3*time.Second))
+	older, newer, newest := s.ticket(), s.ticket(), s.ticket()
+	if !(older < newer && newer < newest) {
+		t.Fatalf("tickets %d, %d, %d are not strictly increasing", older, newer, newest)
+	}
+	s.recordTicket("h1", []ipeers.PeerRecord{snapRow("a-adam", snapStartA)}, ipeers.AddressVersionV5, newer, t0.Add(3*time.Second))
 	// The older request's answer lands later and does not hold adam.
-	s.recordSent("h1", nil, ipeers.AddressVersionV5, t0.Add(time.Second), t0.Add(4*time.Second))
+	s.recordTicket("h1", nil, ipeers.AddressVersionV5, older, t0.Add(4*time.Second))
 	if _, held := s.held(t0.Add(5 * time.Second))["adam"]; !held {
 		t.Fatal("a stale answer handed adam back")
 	}
 	// An answer to a request sent after the stored one does replace it.
-	s.recordSent("h1", nil, ipeers.AddressVersionV5, t0.Add(6*time.Second), t0.Add(7*time.Second))
+	s.recordTicket("h1", nil, ipeers.AddressVersionV5, newest, t0.Add(7*time.Second))
 	if len(s.held(t0.Add(8*time.Second))) != 0 {
 		t.Fatal("a newer answer did not replace the set")
 	}
 }
 
 func TestFetchHostResult_ASlowOlderAnswerDoesNotOverwriteANewerOne(t *testing.T) {
-	var tick atomic.Int64
-	now := func() time.Time {
-		return time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC).Add(time.Duration(tick.Add(1)) * time.Second)
-	}
+	// A stopped clock: both requests carry the same timestamp, so only the
+	// order they were sent in can tell the answers apart.
+	now := func() time.Time { return time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC) }
 	var calls atomic.Int32
 	inFirst := make(chan struct{})
 	releaseFirst := make(chan struct{})
