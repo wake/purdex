@@ -26,6 +26,12 @@ var (
 
 // lockFile serialises read-modify-write of one file inside this process (the daemon is the only writer).
 func lockFile(path string) func() {
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		path = real
+	}
 	lockMu.Lock()
 	l, ok := locks[path]
 	if !ok {
@@ -41,7 +47,7 @@ func lockFile(path string) func() {
 func corruptFor(lines []string, id string) bool {
 	q, _ := json.Marshal(id)
 	for _, l := range lines {
-		if strings.HasPrefix(l, metaPrefix) && strings.Contains(l, `"id":`+string(q)) {
+		if strings.HasPrefix(l, metaPrefix) && strings.Contains(l, strings.ReplaceAll(`"id":`+string(q), "--", dashEsc+dashEsc)) {
 			if _, err := parseMeta(l); err != nil {
 				return true
 			}
