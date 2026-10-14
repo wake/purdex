@@ -112,25 +112,27 @@ func (d *Drainer) Run(ctx context.Context) {
 func (d *Drainer) Drain() (int, error) {
 	n := 0
 	for pass := 0; pass < maxPasses; pass++ { // a journal row becomes ready when its turn row is done: go on while a pass writes
-		wrote, err := d.pass()
+		wrote, tried, err := d.pass()
 		n += wrote
-		if err != nil || wrote == 0 {
+		if err != nil || tried == 0 { // a failed row enters its delay, so the next pass reaches rows further down
 			return n, err
 		}
 	}
 	return n, nil
 }
 
-func (d *Drainer) pass() (int, error) {
-	items, err := d.st.ReadyOutbox(drainBatch)
+// pass tries one batch: how many rows it wrote and how many it tried.
+func (d *Drainer) pass() (wrote, tried int, err error) {
+	items, err := d.st.ReadyOutbox(drainBatch, d.waiting())
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	n := 0
 	for _, it := range items {
 		if !d.due(it.ID) {
 			continue
 		}
+		tried++
 		if err := d.writeRow(it); err != nil {
 			d.failed(it, err)
 			continue
@@ -148,7 +150,21 @@ func (d *Drainer) pass() (int, error) {
 		d.mu.Unlock()
 		n++
 	}
-	return n, nil
+	return n, tried, nil
+}
+
+// waiting lists the rows that are in their retry delay.
+func (d *Drainer) waiting() []int64 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	now := d.now()
+	var ids []int64
+	for id, r := range d.retry {
+		if now.Before(r.next) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func (d *Drainer) due(id int64) bool {
@@ -233,7 +249,9 @@ func (d *Drainer) writeRow(it OutboxItem) error {
 		}
 		return d.writeJournal(h, ent, p)
 	}
-	return d.badPayload(it, fmt.Errorf("unknown kind %q", it.Kind))
+	// A kind this binary does not know (a newer daemon wrote it, then this one was rolled back) stays undone, retried
+	// and logged, so the upgraded binary can write it; only a payload that cannot be decoded is dropped.
+	return fmt.Errorf("unknown outbox kind %q", it.Kind)
 }
 
 // badPayload logs a row that can never be written and lets it count as done: retrying would only repeat the failure.

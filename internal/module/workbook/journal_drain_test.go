@@ -321,3 +321,34 @@ func TestDrain_RefreshRowWritesNoExecEntry(t *testing.T) {
 		t.Fatalf("entries = %+v", es)
 	}
 }
+
+// Rows that keep failing do not starve the rows behind them: with more failing rows than a batch, a healthy row after
+// them is still written; and a row of a kind this binary does not know stays undone.
+// Mutation gate: pass no skip list to ReadyOutbox -> the healthy row is never reached (red); mark an unknown kind done
+// -> the row is gone (red).
+func TestDrain_FailingRowsDoNotStarveOthersAndUnknownKindStays(t *testing.T) {
+	k := newDrainKit(t)
+	k.fp.err = errors.New("resolver down")
+	for i := 0; i < drainBatch+3; i++ {
+		id := k.turn("bad"+itoa(int64(i)), "t", team.SeatNone, TodoChanges{})
+		k.okEntry(id, "x。", false)
+	}
+	k.drain() // every row fails and enters its delay
+	k.fp.err = nil
+	good := k.turn("good", "t", team.SeatNone, TodoChanges{})
+	k.okEntry(good, "好。", false)
+	if n := k.drain(); n != 1 {
+		t.Fatalf("drained %d, want only the healthy row", n)
+	}
+	if _, ok := k.byID("solo:good", "turn:"+itoa(good)); !ok {
+		t.Fatal("the healthy row behind the failing batch was not written")
+	}
+	if _, err := k.st.db.Exec(`INSERT INTO wb_journal_outbox (entry_id, unit_key, kind, payload, created_at) VALUES (?, 'solo:good', 'future', '{}', 1)`, good); err != nil {
+		t.Fatal(err)
+	}
+	k.drain()
+	var done int
+	if err := k.st.db.QueryRow(`SELECT done_at FROM wb_journal_outbox WHERE kind = 'future'`).Scan(&done); err != nil || done != 0 {
+		t.Fatalf("unknown kind: done_at = %d err = %v, want undone", done, err)
+	}
+}
