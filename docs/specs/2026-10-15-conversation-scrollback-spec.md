@@ -32,7 +32,8 @@ A relay — and a plain `/clear` — is `/clear` in the same Claude Code process
 
 - **Record every `/clear`** (manual and relay alike) in the agent module, when a `SessionStart` with `source = clear` is accepted: the previous id is the frame's session id before it is overwritten, else `last_agent_run` of the same tmux code when it ended within the last 120 s; it must differ from the new id. Stored in a new table of the agent store, `session_predecessors(session_id TEXT PRIMARY KEY, predecessor_session_id TEXT NOT NULL, at INTEGER NOT NULL, tmux_code TEXT NOT NULL)` — created by a migration of that store (additive), never deleted (a row is ~150 bytes). `INSERT OR IGNORE`: the first record wins. `source = resume`, `startup` and `compact` are never predecessors.
 - **Read**: the conversation module answers `PredecessorOf(sid) → {session_id, kind, at} | none`. A relay's predecessor comes from `session_lineage` (kind `relay`) — read through a new team registry reader `PredecessorOf` (the existing `SELECT predecessor_session_id … WHERE session_id = ?`); otherwise from `session_predecessors` (kind `clear`). Both are local lookups by primary key. `session_lineage` is not changed (quota and workbook keep their meaning).
-- **API**: every snapshot response of `GET /api/conversations/claude/{sid}` — the first one and every `before=` page — carries `window.predecessor: {session_id, kind: "relay" | "clear", at}` when one is known, and omits it otherwise. Increments do not carry it. A previous session is read with the same endpoint and its own id; its file gone → the existing `not_found`.
+- **API**: every snapshot of a conversation — HTTP `GET /api/conversations/claude/{sid}` (the first one and every `before=` / `around=` page) and the WS snapshot, which share one body builder — carries `window.predecessor: {session_id, kind: "relay" | "clear", at}` when one is known, and omits it otherwise. Increments do not carry it. A previous session is read with the same endpoint and its own id; its file gone → the existing `not_found`.
+- **Kind is resolved at read time.** A relay's `/clear` is first recorded as a plain clear; `session_lineage` appears a moment later (the mod reports `cleared` after the `SessionStart`). A snapshot read inside that gap says `clear`; the next snapshot of the same session says `relay`. Only the divider's label depends on it.
 
 ### 4.2 Mac (SPA)
 
@@ -40,13 +41,14 @@ A relay — and a plain `/clear` — is `/clear` in the same Claude Code process
 - **Loading older**: `loadBefore` first pages the oldest loaded segment (`before=` within its own session); when that segment is exhausted and has a `predecessor`, it fetches the predecessor's newest page with `fetchConversationSnapshot` (HTTP only — no `acquire`, no WS, no live state, not seen by `retireStaleSessions`) and prepends it as a new segment. Lazy: one page per scroll-to-top, as today.
 - **Divider** between segments: 「── 接力 · 10/14 22:37 ──」 for `relay`, 「── /clear · 10/14 22:37 ──」 for `clear` (the newer segment's `at`, local time).
 - **Ends**: the oldest segment exhausted with no predecessor → 「history start」 as today; its predecessor answers `not_found` → 「更早的內容已不存在」 and stop. A session id seen twice in the chain → stop (defensive).
-- **Earlier segments are read-only**: no actions that belong to the live session (send, rewind, fork, approvals, queued input); search / jump stay within the live segment.
+- **Earlier segments are read-only**: no actions that belong to the live session (send, rewind, fork, approvals, queued input). Read-only views of a turn (show all output, open a subagent) stay and read **that segment's** session. Search and jump cover the live segment only.
+- **A replacing snapshot of the live session** — a WS reset, a reconnect, return-to-live, a jump (`around=`) — drops the earlier segments; scrolling to the top loads them again, one page at a time.
 - Both deck and chat; the pane-resolution, live WS and send paths are unchanged.
 
 ### 4.3 iOS
 
 - Same rule in `ConversationFeed.loadOlder()`: when the oldest segment is exhausted and `window.predecessor` is set, fetch the predecessor's newest page and prepend it as a segment; `ConversationState` keeps segment bases so indices stay unique and increasing; `ConvWindow.predecessor` decodes as optional (an older daemon → today's behaviour).
-- The same divider and end texts in deck and dialogue views; earlier segments read-only.
+- The same divider and end texts in deck and dialogue views; earlier segments read-only, with the same read-only views, search scope and replacing-snapshot rule as the Mac.
 
 ## 5. Out of scope
 
