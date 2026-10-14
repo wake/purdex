@@ -129,7 +129,8 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 	// session's last statusline reading, kept by the agent module. The mod
 	// sends neither; a session without a reading shows neither.
 	sp := team.SelfRelayPayload{UsedPercentage: req.UsedPercentage, Window: req.Window, Manual: req.Manual, Reason: req.Reason, IdleMinutes: req.IdleMinutes, Person: person,
-		Half: req.Half, ReuseOp: req.ReuseOp}
+		Half: req.Half, ReuseOp: req.ReuseOp,
+		HalfOnTimeout: req.Reason == team.RelayBeginReasonIdle && m.modProtocolAtLeast(req.SessionID, team.MinHalfModVersion)}
 	if m.usage != nil {
 		if u, ok := m.usage.ContextUsage(req.SessionID); ok {
 			sp.ModelID, sp.Effort = u.ModelID, u.Effort

@@ -248,6 +248,9 @@ type Module struct {
 	// production sends on it).
 	rosterSig     chan struct{}
 	rosterBarrier chan chan struct{}
+	fresh         freshStream // the relay.fresh stream (relay_fresh_events.go)
+	// afterRetentionFreshRead, when set, runs in sweepRetention between its two reads; tests delete a fresh row there. nil in production.
+	afterRetentionFreshRead func()
 
 	// afterRead, when set, runs in pollRow right after the row is read
 	// and before the wait. Tests use it to close the row in that window
@@ -604,6 +607,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/relay/wait/{id}", m.handleRelayWait)
 	mux.HandleFunc("POST /api/relay/self", m.handleRelaySelf)
 	mux.HandleFunc("POST /api/relay/fresh", m.handleRelayFresh) // the mod reports a fresh half stale (RT-3a1)
+	mux.HandleFunc("GET "+team.RelayFreshRoute, m.handleRelayFreshGet)
 	mux.HandleFunc("POST /api/relay/ops/{id}/report", m.handleRelayReport)
 	mux.HandleFunc("GET /api/relay/ops/{id}", m.handleRelayOp)
 	mux.HandleFunc("POST /api/relay/ops/{id}/claim", m.handleRelayClaim)
@@ -636,6 +640,7 @@ func (m *Module) Start(context.Context) error {
 	m.core.Events.OnSubscribe(m.sendSnapshot)
 	m.core.Events.OnSubscribe(m.sendUnattendedSnapshot)
 	m.core.Events.OnSubscribe(m.sendRosterSnapshot)
+	m.core.Events.OnSubscribe(m.sendFreshSnapshot)
 	m.sweepWG.Add(5)
 	go m.runNotices()     // first: a notice owed across the restart goes out before the sweeper's first tick
 	go m.runPauseOutbox() // what a pause owes, written before a restart, is sent now

@@ -66,6 +66,7 @@ var capabilities = []string{
 	"session.read_sync.v1",    // read sync (badge spec §7): POST /api/sessions/{code}/read, /ws/host-events?reads=v1 (session.reads / session.read), prefs.read_sync, purdex.reads / purdex.event_cursor on pushes, kind "reads" flush
 	"team.person.v1",          // person-typed commands: person tokens, direct /relay, decided_by.kind person, unattended_refused, PUT unattended refused (RT-1)
 	"relay.unanswered.v1",     // pause cause relay_unanswered, approval unanswered_at, a person's release = deny, the bounce text by cause (RT-2a)
+	"relay.half.v1",           // an idle card of 300 s whose timeout writes a half (relay_ops.mode, begin --half / --reuse, POST /api/relay/fresh), GET /api/relay/fresh, relay.fresh events, fresh_handoff on RosterSession, fresh_half on hello (RT-3a)
 }
 
 // pushReady reports whether the push module is mounted AND has its key (its Status says ready). A mounted module whose
