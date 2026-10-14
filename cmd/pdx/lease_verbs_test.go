@@ -211,7 +211,7 @@ func TestLs_OldDaemonStillPrints(t *testing.T) {
 func TestReport_PositionLines(t *testing.T) {
 	rep := v2Report()
 	rep.Positions = resources.ReportPositions{
-		Total: 5, ByEndReason: []resources.ReportReasonCount{{Reason: "idle_timeout", Count: 3}, {Reason: "done", Count: 2}},
+		Nested: 2, Total: 5, ByEndReason: []resources.ReportReasonCount{{Reason: "idle_timeout", Count: 3}, {Reason: "done", Count: 2}},
 		Commands: resources.ReportCommandCounts{None: 1, One: 2, Two: 1, Three: 1}, Requeued: 1, Extensions: 2,
 		OfferWaitMS:  resources.ReportDist{N: 2, Total: 30000, P50: 10000, P90: 20000, Max: 20000},
 		IdleWaitMS:   resources.ReportDist{N: 1, Total: 5000, P50: 5000, P90: 5000, Max: 5000},
@@ -230,6 +230,7 @@ func TestReport_PositionLines(t *testing.T) {
 		"offered window n 2 total 30.0s p50 10.0s p90 20.0s max 20.0s; idle window n 1 total 5.0s",
 		"offers  4, delivered 3, passed undelivered 1, lapsed after delivery 1; delivery delay p50 1.0s max 4.0s",
 		"notices  accepted 3, dropped:no_mod 1",
+		"nested  n 2",
 	} {
 		assert.Contains(t, got, want)
 	}

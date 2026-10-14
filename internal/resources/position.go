@@ -42,7 +42,11 @@ const (
 
 // Limits of a position (amendment A V16, V19, V20).
 const (
-	PositionWindow      = 3 * time.Minute
+	PositionWindow = 3 * time.Minute
+	// NoticeFallbackPass is how long an undelivered offer holds the host when its
+	// notice could only be told to the person (user_alert): the session cannot
+	// hear it, so the offer passes early (P2f-2).
+	NoticeFallbackPass  = 60 * time.Second
 	PositionMaxCommands = 3
 	PositionMaxSpan     = 30 * time.Minute
 )

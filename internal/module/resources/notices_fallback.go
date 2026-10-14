@@ -67,7 +67,7 @@ func (m *Module) noticeFallback(p positionRow, text string, nowMS int64, set fun
 	}
 	// Recorded first, and the event goes only with the write that holds: a failed write is tried again, and a slot that
 	// was cleared or replaced while the notice was out is not alerted about.
-	changed, err := m.store.SetNoticeResult(p.ID, p.NoticeKind, p.NoticeDueAt, noticeUserAlert, 0)
+	changed, err := m.store.SetNoticeResult(p.ID, p.NoticeKind, p.NoticeDueAt, noticeUserAlert, nowMS) // the time is the start of the offer's last minute (positions_sweep.go)
 	if err != nil {
 		m.logf("[resources] notices: record %s: %v", p.ID, err)
 		return noticeRetryOther

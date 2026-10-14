@@ -194,6 +194,9 @@ type ReportPositions struct {
 	// QueuedWaitMS is offered_at - created_at over the offered positions.
 	QueuedWaitMS ReportWait   `json:"queued_wait_ms"`
 	Offers       ReportOffers `json:"offers"`
+	// Nested counts the answers given to a run below a held run of the same
+	// session (P2f): held, no row of their own.
+	Nested int `json:"nested"`
 }
 
 // ReportReasonCount is a count by end reason.
