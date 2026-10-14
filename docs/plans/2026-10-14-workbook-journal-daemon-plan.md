@@ -3,7 +3,7 @@
 Spec: `docs/specs/2026-10-14-workbook-journal-spec.md` (v3). This plan covers the daemon half (spec §4–§5, §8); the Mac half (J-2a/J-2b) and iOS (J-3) get their own plan once the user has confirmed spec §3 and §9.
 **Written on the two §3 proposals.** Q1 changes only `internal/module/journal/text.go` (T-1a.3); Q2 changes nothing here.
 Facts below were read from origin/main on 2026-10-14 (paths relative to `internal/`).
-Revision 2 (2026-10-14): codex plan review `task-mv7o2g27-y35uad`, 14 findings, all taken — see §10.
+Revision 2 (2026-10-14): codex plan review `task-mv7o2g27-y35uad`, 14 findings, all taken — see §10. Revision 2.1: §5.0 cursor rewind (J-0a R1 P1, `review-mv7pbczt-8uth8c`).
 
 ## 0. Changes to the spec this plan makes (for the reviewer)
 
@@ -78,7 +78,9 @@ type ReportRow struct {
 type TeamInfo struct{ TeamID, Label, LeadSessionID string; EndedAt int64 }
 
 type JournalFeed interface {
-    // Tasks changed after c, ordered (updated_at, team_id, seq) ascending; at most limit.
+    // Tasks changed after c, ordered (updated_at, team_id, seq) ascending; at most limit. Not a gap-free tail: updated_at is
+    // taken before the write lock and ties are common, so a row can commit behind a cursor already returned. A reader rewinds
+    // (§5.0) and dedupes by its own ids.
     TasksChangedAfter(c TaskCursor, limit int) ([]TaskChange, error)
     // Reports with rowid > afterRowID and created_at >= sinceMS, rowid ascending; at most limit.
     // The first-start backfill passes sinceMS = now − 30 days and pages by rowid; afterwards sinceMS = 0.
@@ -113,8 +115,9 @@ type Feed interface {
     // Subscribe delivers every entry that becomes final (Finish), on its own goroutine, in commit order; a full queue
     // (256) drops and counts. unsubscribe is idempotent.
     Subscribe(fn func(Entry)) (unsubscribe func())
-    // FinalAfter: final entries with (updated_at, id) > c, ordered (updated_at, id) ascending, at most limit —
-    // finish order, so a cursor never passes an entry that finishes later.
+    // FinalAfter: final entries with (updated_at, id) > c, ordered (updated_at, id) ascending, at most limit — finish
+    // order (updated_at is taken under the writer lock), except that two finishes in the same ms can commit out of id
+    // order; a reader rewinds (§5.0) and dedupes by its own ids.
     FinalAfter(c Cursor, limit int) ([]Entry, error)
 }
 ```
@@ -123,6 +126,8 @@ type Feed interface {
 - Tests: `InsertPending` delivers nothing, `Finish(ok)` delivers once (M: deliver on insert); a slow subscriber does not block `Finish` (M: call inline → the writer test times out); `announce` still broadcasts `workbook.entry` (regression); `FinalAfter` skips a pending row, and an older id finishing after a newer one is returned after it (M: order by id → the late finisher falls behind the cursor); paging with equal `updated_at`; unsubscribe stops delivery; the migration on a v2 DB.
 
 ## 5. J-1a — module `journal`
+
+**§5.0 Cursor rule (both feeds; decided 2026-10-14 on J-0a's R1 P1).** A time-keyed cursor is not gap-free: the task `updated_at` is computed before the team write lock (a commit can land behind a returned cursor) and same-ms ties can commit out of key order (tasks and workbook alike). Every tick therefore reads from the stored cursor's time **minus 10 s** (`{UpdatedAt − 10 000, "", 0}` / `{UpdatedAt − 10 000, 0}`), and once an hour from **minus 1 h**; the stored cursor is the newest row seen. Everything the journal does with a row is idempotent by event id (`Add` no-op, `SetPending` / `FillBody` change-only, `NoteTeam` upsert), so a re-read row changes nothing. No schema change in the team or workbook DB beyond the two indexes. Reports keep the exact `rowid` cursor (insert-only, single writer).
 
 Package `internal/module/journal`. `Dependencies()`: `agent, team, conversation, workbook, peers`. It imports `module/agent` (for `TurnEndEvent`, as the workbook does) and `module/peers` (for `OriginResolverKey`, as the team module does), nothing else from `internal/module`.
 
@@ -177,9 +182,9 @@ CREATE TABLE journal_cursors (name TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 **T-1a.4 Workbook ingest** `ingest_workbook.go`:
 - Live: `workbookfeed.Feed.Subscribe`. A final entry with `state = ok`, `kind = turn` → `done` if `ThingDone` else `exec`; id `workbook:<id>`, `at = TurnAt`, `conv_key = ConvKey`, `team_id = TeamID`, actor `titleOf(SessionID, Ref)`, refs from the text; `noteTeamOf(TeamID)`.
-- Catch-up (subscribe first, then scan): `FinalAfter(cursor, 500)` until empty; the cursor `wb` (`{updated_at, id}`) is stored after each page — safe because the order is finish order. First start: `{now − 30 days, 0}`.
-- Every 60 s the same `FinalAfter` from the stored cursor (covers dropped deliveries; idempotent).
-- Tests: ok turn → exec; thing_done → done with 「完成：」; failed / skipped / refresh → nothing (M: accept every state); a delivery dropped (subscriber not called) is recovered by the 60 s scan (M: no scan → missing); a crash between two catch-up pages resumes without loss or repeat (M: store the max `TurnAt` instead → a late finisher is lost); first start backfills 30 days and not 31 (M: no bound).
+- Catch-up (subscribe first, then scan): `FinalAfter` from the stored cursor rewound per §5.0, paged by 500 until empty; the cursor `wb` (`{updated_at, id}`, the newest seen) is stored after each page. First start: `{now − 30 days, 0}`.
+- Every 60 s the same scan, rewound per §5.0 (covers dropped deliveries and same-ms ties; idempotent).
+- Tests: ok turn → exec; thing_done → done with 「完成：」; failed / skipped / refresh → nothing (M: accept every state); a delivery dropped (subscriber not called) is recovered by the 60 s scan (M: no scan → missing); a crash between two catch-up pages resumes without loss or repeat (M: store the max `TurnAt` instead → a late finisher is lost); a same-ms finish that commits behind the cursor is picked up by the rewind (M: no rewind → missing); first start backfills 30 days and not 31 (M: no bound).
 
 **T-1a.5 Approval ingest** `ingest_approvals.go`:
 - `SubscribeApprovals`: the returned open set (first start: only rows with `CreatedAt ≥ now − 30 days`; later starts: all) and each `opened` → `req` with `pending = 1`, id `approval:<id>`, `at = CreatedAt`, `conv_key = convOf(Origin.SessionID)`, `team_id = seatOf(Origin.SessionID).TeamID`, actor 「<titleOf(origin)> → 使用者」, text by kind (T-1a.3). `closed` → add if absent (with `pending = 0`), else `SetPending(false)`.
@@ -196,7 +201,7 @@ CREATE TABLE journal_cursors (name TEXT PRIMARY KEY, value TEXT NOT NULL);
 
 ## 6. J-1b — tasks and reports
 
-`ingest_team.go`, reading `team.JournalFeed` every 5 s, **reports before tasks** in each tick; cursors `report_rowid` and `task` (`TaskCursor` JSON), each stored after its page. First start: `ReportsAfter(0, now − 30 days, …)` paged to the end, and tasks from `{now − 30 days, "", 0}`.
+`ingest_team.go`, reading `team.JournalFeed` every 5 s, **reports before tasks** in each tick; cursors `report_rowid` (exact) and `task` (`TaskCursor` JSON, read rewound per §5.0), each stored after its page. First start: `ReportsAfter(0, now − 30 days, …)` paged to the end, and tasks from `{now − 30 days, "", 0}`.
 - Each `TaskChange`: `noteTeamOf(TeamID)`. First sight → `task` id `task:<team>:<seq>`, `at = CreatedAt`, `conv_key = convOf(OwnerSessionID)` (unowned → the team's lead conv), `team_id`, `seat_session_id` = the owner (or lead), title `Subject`, body `firstLines(Description, 2)`, actor `OwnerTitle` (else the lead's title), refs from `MetadataPRs` + text. Status `completed` → `taskdone` id `taskdone:<team>:<seq>` at `UpdatedAt`, same scope, body = the summary of the task's latest `merged` / `done` report seen so far. Leaving `pending`/`in_progress` also clears the task's pending report requests.
 - Each `ReportRow` (scope: `conv_key = convOf(MemberSessionID)` — the reporter; `other_conv_key` = the task owner's conv when it differs; `team_id`; `seat_session_id` = the reporter; `at = CreatedAt`):
   - `merged` → `taskdone` with the task's id (spec §8 gap 2), body `Summary`, refs `PR #N`; if the row exists already, `FillBody(Summary)` (whichever arrives first, the summary ends up in the body).
@@ -204,7 +209,7 @@ CREATE TABLE journal_cursors (name TEXT PRIMARY KEY, value TEXT NOT NULL);
   - `question` / `blocked` with `Needs = user` → `req` pending, id `report:<team>:<MemberKey>:<id>`, title `Summary`, body `firstLines(Body, 2)`, actor 「<MemberTitle> → 使用者」.
   - Any later report on the same `(team, task_seq)` clears earlier pending report requests of that task.
   - `ack`, `progress`, `ready`, and `needs = lead` → nothing.
-- Tests: created → task; completed → one taskdone; merged then completed, and completed then merged, each → one taskdone with the summary in its body (M: `Add` only → the second order loses the summary; M: distinct ids → two); a needs=user question → pending, the next report clears it (M: never clear), task completion clears it; needs=lead → nothing; the reporter and the owner differ → the event is in both members' pages and `seat=` of either; a lead relay keeps one `journal_teams` row; a report row identity does not change when the member relays (M: id from the session → a duplicate after the relay); restart resumes from the cursors without repeats.
+- Tests: created → task; completed → one taskdone; merged then completed, and completed then merged, each → one taskdone with the summary in its body (M: `Add` only → the second order loses the summary; M: distinct ids → two); a needs=user question → pending, the next report clears it (M: never clear), task completion clears it; needs=lead → nothing; the reporter and the owner differ → the event is in both members' pages and `seat=` of either; a lead relay keeps one `journal_teams` row; a report row identity does not change when the member relays (M: id from the session → a duplicate after the relay); restart resumes from the cursors without repeats; a task committed with an `updated_at` behind the cursor (lock wait, same-ms tie on a smaller `(team_id, seq)`) is picked up by the rewind and makes no duplicate (M: no rewind → missing; M: re-add on re-read → a second `journal.event`).
 
 ## 7. J-1c — conversation-derived `comm` (spec §4.4)
 
