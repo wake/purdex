@@ -290,7 +290,11 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 				continue
 			}
 			vw := []resources.V2Waiter{{ID: w.ID, CreatedAt: time.UnixMilli(w.CreatedAt)}}
-			if id, _, _ := resources.AdmitV2(zone, trend, true, load, lastGrant, vw, now, set); id == "" {
+			id, _, held := resources.AdmitV2(zone, trend, true, load, lastGrant, vw, now, set)
+			for rid, r := range held {
+				m.reasons.observe(rid, r, now) // the wait of this command is counted like any other (wait_reasons)
+			}
+			if id == "" {
 				continue
 			}
 			if g, a, stop := finish(grant(w, resources.PathImmediate, p.ID, resources.PosRunning)); stop {

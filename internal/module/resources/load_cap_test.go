@@ -48,6 +48,19 @@ func TestPassLoadCap_NothingRunningStillGrantsOne(t *testing.T) {
 	assert.Equal(t, "waiting", f.state("b"), "the second one is held by the ceiling")
 }
 
+// A second command of a running position that the ceiling holds has its wait counted under `load` (codex R2: the
+// verdict of that path was dropped, so wait_reasons and the report missed it). (M: drop the reasons again.)
+func TestPosition_SecondCommandHeldByTheCeilingCountsLoad(t *testing.T) {
+	f := newPosFix(t)
+	a1 := decodeLease(t, f.postAs(newCID(), pidA, resources.CallQueue, "go build"))
+	require.Equal(t, resources.StateHeld, a1.State)
+	f.setHost(resources.HostUse{Measured: 10, NCPU: 10, Load1: 12, Zone: "normal", Trend: "flat"})
+	a2 := decodeLease(t, f.postAs(newCID(), pidA, resources.CallQueue, "go vet"))
+	require.Equal(t, resources.StateQueued, a2.State, "held by the ceiling")
+	f.advance(7 * time.Second)
+	assert.JSONEq(t, `{"load":7000}`, f.m.reasons.peek(a2.ID, f.m.now()))
+}
+
 // The zone, the trend and the load of a pass come from one sample: an unavailable one reads as unknown with an
 // all-zero host (fail open), an available one gives its own figures together.
 func TestAdmitSample_OneSampleForZoneTrendAndLoad(t *testing.T) {
