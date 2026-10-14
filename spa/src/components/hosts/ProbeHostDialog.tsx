@@ -45,10 +45,12 @@ export function ProbeHostDialog({ hostId, draft }: { hostId: string; draft: Prob
     if (draft.ssh_alias === '') { setFieldError('alias'); return }
     setFieldError(null)
     setSaving(true)
+    const sid = draft.sid
     try {
       const res = await saveProbeHosts(hostId, upsertProbe(defOfDraft(draft)))
-      // The draft may be gone (the host was forgotten while the PUT was out): nothing to tell then.
-      if (!useProbeDraftStore.getState().byHost[hostId]) return
+      // The draft may be gone (cancelled, or the host was forgotten while the PUT was out) or be another opening of the
+      // dialog by now: the answer belongs to the one it was sent for.
+      if (useProbeDraftStore.getState().byHost[hostId]?.sid !== sid) return
       if (res.kind === 'ok') close(hostId)
       else if (res.kind === 'conflict') patch(hostId, (d) => ({ ...d, error: t('hosts.probe.conflict') }))
       else if (res.kind === 'invalid') patch(hostId, (d) => ({ ...d, error: res.text }))

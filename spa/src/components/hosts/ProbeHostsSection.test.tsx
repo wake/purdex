@@ -157,6 +157,23 @@ describe('add / edit / save', () => {
     await waitFor(() => expect(screen.getByTestId('probe-dialog-error').textContent).toBe('unknown_ssh_alias: nope'))
   })
 
+  it('a late answer for a cancelled dialog does not close or mark the next one', async () => {
+    setup({ items: [A] })
+    let answer!: (v: never) => void
+    vi.mocked(putProbeHosts).mockReturnValue(new Promise((r) => { answer = r as never }))
+    await openAdd()
+    await fill('first', 'air19')
+    fireEvent.click(screen.getByTestId('probe-save'))
+    await waitFor(() => expect(putProbeHosts).toHaveBeenCalled())
+    fireEvent.click(screen.getByTestId('probe-cancel'))
+    fireEvent.click(screen.getByTestId('probe-add'))
+    fireEvent.change(screen.getByTestId('probe-field-name'), { target: { value: 'second' } })
+    await act(async () => { answer({ kind: 'invalid', text: 'old failure' } as never) })
+    expect(screen.getByTestId('probe-dialog')).toBeInTheDocument()
+    expect(screen.queryByTestId('probe-dialog-error')).toBeNull()
+    expect((screen.getByTestId('probe-field-name') as HTMLInputElement).value).toBe('second')
+  })
+
   it('cancel closes the dialog without a request', async () => {
     setup()
     await openAdd()

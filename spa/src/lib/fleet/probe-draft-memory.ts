@@ -13,6 +13,8 @@ import type { IconWeight } from '../../types/tab'
 import type { ProbeHostDef } from './types'
 
 export interface ProbeDraft {
+  /** Which opening of the dialog this is (set by `open`): a late save answer only touches the draft it was sent for. */
+  sid: number
   /** The row being edited; '' = a new one (the daemon makes its id). */
   probeId: string
   name: string
@@ -26,10 +28,10 @@ export interface ProbeDraft {
   error: string | null
 }
 
-export const newProbeDraft = (): ProbeDraft => ({ probeId: '', name: '', ssh_alias: '', mode: 'console', error: null })
+export const newProbeDraft = (): ProbeDraft => ({ sid: 0, probeId: '', name: '', ssh_alias: '', mode: 'console', error: null })
 
 export function draftOf(def: ProbeHostDef): ProbeDraft {
-  const d: ProbeDraft = { probeId: def.id, name: def.name, ssh_alias: def.ssh_alias, mode: 'console', error: null }
+  const d: ProbeDraft = { sid: 0, probeId: def.id, name: def.name, ssh_alias: def.ssh_alias, mode: 'console', error: null }
   if (def.icon) d.icon = def.icon
   if (def.icon_weight) d.icon_weight = def.icon_weight
   if (def.colors) d.colors = def.colors
@@ -69,9 +71,11 @@ interface DraftState {
   reset: () => void
 }
 
+let sidCounter = 0
+
 export const useProbeDraftStore = create<DraftState>()((set) => ({
   byHost: {},
-  open: (hostId, draft) => set((s) => ({ byHost: { ...s.byHost, [hostId]: draft } })),
+  open: (hostId, draft) => set((s) => ({ byHost: { ...s.byHost, [hostId]: { ...draft, sid: ++sidCounter } } })),
   patch: (hostId, fn) => set((s) => {
     const cur = s.byHost[hostId]
     return cur ? { byHost: { ...s.byHost, [hostId]: fn(cur) } } : s

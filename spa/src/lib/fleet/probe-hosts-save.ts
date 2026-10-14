@@ -28,9 +28,12 @@ export function saveProbeHosts(
   hostId: string,
   mutate: (current: readonly ProbeHostDef[]) => readonly ProbeHostDef[] | null,
 ): Promise<ProbeSaveOutcome> {
+  // The generation is taken when the action is asked for, not when its turn comes: an action queued behind another one
+  // belongs to the connection it was asked on, and must not run against the daemon a re-point put there meanwhile.
+  const gen = useFleetStore.getState().genOf(hostId)
   const run = async (): Promise<ProbeSaveOutcome> => {
     const store = useFleetStore.getState()
-    const gen = store.genOf(hostId)
+    if (store.genOf(hostId) !== gen) return { kind: 'failed', reason: 'host changed' }
     const cur = store.defs[hostId]
     if (!cur) return { kind: 'failed', reason: 'probe host list not loaded' }
     let next: readonly ProbeHostDef[] | null
@@ -43,7 +46,11 @@ export function saveProbeHosts(
       const res = await putProbeHosts(hostId, next, cur.revision)
       if (res.kind === 'invalid') return res
       if (res.current) useFleetStore.getState().applyDefs(hostId, gen, res.current)
-      else await useFleetStore.getState().loadDefs(hostId)
+      else {
+        const reloaded = await useFleetStore.getState().loadDefs(hostId)
+        // A 409 whose copy could not be read and could not be fetched either: the list may still be stale.
+        if (!reloaded && res.kind === 'conflict') return { kind: 'failed', reason: 'reload failed' }
+      }
       return { kind: res.kind }
     } catch (e) {
       return { kind: 'failed', reason: e instanceof Error ? e.message : String(e) }

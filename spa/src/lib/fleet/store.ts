@@ -52,7 +52,8 @@ interface FleetState {
   /** A `fleet.changed` frame. Written only while this generation has `fleet.v1` confirmed. */
   applyEvent: (hostId: string, payload: FleetPayload) => void
   applyDefs: (hostId: string, gen: number, defs: VersionedProbeHosts | null) => void
-  loadDefs: (hostId: string) => Promise<void>
+  /** Resolves true when the list was read (and applied if the generation still held). */
+  loadDefs: (hostId: string) => Promise<boolean>
   setFocusProbe: (focus: FocusProbe | null) => void
   reset: () => void
 }
@@ -116,8 +117,9 @@ export const useFleetStore = create<FleetState>()((set, get) => ({
     const gen = get().genOf(hostId)
     try {
       get().applyDefs(hostId, gen, await fetchProbeHosts(hostId))
+      return true
     } catch {
-      /* the section shows what it has; a failed reload leaves the list as it was */
+      return false // the section shows what it has; a failed reload leaves the list as it was
     }
   },
 
