@@ -76,8 +76,8 @@ func (m *Module) handleRelayClaim(w http.ResponseWriter, r *http.Request) {
 	}
 	if res == ReportApplied {
 		m.logf("[team] relay op %s → claimed", id)
-		m.rosterChanged() // a claim ends the session's fresh half (RT-3a1): the relay.fresh list and the roster follow
 	}
+	m.rosterChanged() // a claim ends the session's fresh half (RT-3a1): the relay.fresh list and the roster follow; a retry (Noop) repeats it, free by the hash gate
 	m.writeJSON(w, http.StatusOK, team.RelayClaimResponse{Op: op, Lead: m.leadOf(op)})
 }
 
