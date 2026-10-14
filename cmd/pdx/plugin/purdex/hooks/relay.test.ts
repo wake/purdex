@@ -32,7 +32,7 @@ test('an interactive session.start says hello through the pdx and to the daemon 
   const argvs = world(on)
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
   await argvs.settle()
-  expect(argvs).toEqual([['/opt/pdx/bin/pdx', 'relay', 'hello', '--session', 'sid-1', '--version', '7', '--agent', 'cc', '--config', '/tmp/pdx b/config.toml']])
+  expect(argvs).toEqual([['/opt/pdx/bin/pdx', 'relay', 'hello', '--session', 'sid-1', '--version', '8', '--agent', 'cc', '--config', '/tmp/pdx b/config.toml']])
 })
 
 // Mutation gate: always append --config → this test fails.
@@ -40,7 +40,7 @@ test('a pdx.json without config adds no --config (pdx falls back to its default)
   const argvs = world(on, { sid: 'sid-1' }, '{"pdx":"/opt/pdx/bin/pdx","data_dir":"/tmp/pdx"}')
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
   await argvs.settle()
-  expect(argvs).toEqual([['/opt/pdx/bin/pdx', 'relay', 'hello', '--session', 'sid-1', '--version', '7', '--agent', 'cc']])
+  expect(argvs).toEqual([['/opt/pdx/bin/pdx', 'relay', 'hello', '--session', 'sid-1', '--version', '8', '--agent', 'cc']])
 })
 
 test('a headless session.start (claude -p) calls nothing', async ($, on) => {
@@ -60,7 +60,7 @@ test('after /clear the mod says hello again with the new session id', async ($, 
   ids.sid = 'sid-2'
   await $.classic.SessionStart({ source: 'clear' })
   await argvs.settle()
-  expect(argvs.map(sub)).toEqual(['relay hello --session sid-1 --version 7 --agent cc --config /tmp/pdx b/config.toml', 'relay hello --session sid-2 --version 7 --agent cc --config /tmp/pdx b/config.toml'])
+  expect(argvs.map(sub)).toEqual(['relay hello --session sid-1 --version 8 --agent cc --config /tmp/pdx b/config.toml', 'relay hello --session sid-2 --version 8 --agent cc --config /tmp/pdx b/config.toml'])
 })
 
 test('a SessionStart that is not a clear adds no hello (startup / resume are session.start’s)', async ($, on) => {
@@ -733,7 +733,7 @@ for (const reporter of REPORTER) {
     await clock.settle()
     const calls = f.argvs.map(sub)
     expect(calls).toContain('relay report op-1 cleared --new-session sid-new')
-    expect(calls.filter((c) => c.startsWith('relay hello')).at(-1)).toBe('relay hello --session sid-new --version 7 --agent cc')
+    expect(calls.filter((c) => c.startsWith('relay hello')).at(-1)).toBe('relay hello --session sid-new --version 8 --agent cc')
     await clock.advance(50)
     expect(f.submits.length).toBe(2)
     expect(f.submits[1].text.split('\n')[0]).toBe('↪ 接手自 _abc123')
@@ -1036,7 +1036,7 @@ for (const reporter of REPORTER) {
     await f.clock.settle()
     await turnAndSettle($, f, 't3')
     expect(count(f, 'begin')).toBe(2)
-    expect(f.argvs.map(sub).filter((c) => c.startsWith('relay hello'))).toEqual(['relay hello --session sid-old --version 7 --agent cc', 'relay hello --session sid-2 --version 7 --agent cc'])
+    expect(f.argvs.map(sub).filter((c) => c.startsWith('relay hello'))).toEqual(['relay hello --session sid-old --version 8 --agent cc', 'relay hello --session sid-2 --version 8 --agent cc'])
     if (!reporter) return expect(f.posts).toEqual([])
     expect(await switches(f)).toEqual([['sid-2', { prev_sid: 'sid-old', source: 'clear' }]])
   })
@@ -4300,4 +4300,374 @@ test('RT-2c T27: a re-adopted final card keeps the 90 % ladder: after its denial
   await f.clock.advance(100)
   await turnAndSettle($, f, 't1')
   expect(count(f, 'begin')).toBe(0)
+})
+
+// ---------- RT-3b: the first half in the mod (relay/team rules v2, T35, T36) ----------
+
+const HALF_PATH = '/data/relay/half-1.md'
+const HALF_OP = { ...OP, id: 'half-1', state: 'claimed', mode: 'half', handoff_path: HALF_PATH }
+const HALF_TOAST = '快取即將過期，已先寫好接力檔（' + HALF_PATH + '）。要接力請打 /relay；不需要就直接關掉這個 session，或照常繼續。'
+const FULL_OP = { ...OP, id: 'op-9', handoff_path: '/data/relay/op-9.md' }
+const staleCalls = (f: Fake) => f.argvs.map(sub).filter((c) => c.startsWith('relay fresh'))
+const STALE = 'relay fresh --session sid-old --op half-1 --stale'
+
+// The half world: the idle world, plus a daemon that answers `begin --half` (or any begin it decides is a half: `unattended`) with a claimed
+// half op whose wait answers approved at once. Any other begin opens the one card; `reuse` records the --reuse of each begin, `full` is the op a
+// reusing begin gets (the half's own file, or its own).
+function halfWorld(on: any, more: Partial<Fake> = {}, o: { unattended?: boolean; reuseAnswer?: () => PdxAnswer } = {}, hello = IDLE_HELLO()) {
+  const { f, row } = idleWorld(on, more, {}, hello)
+  const base = f.pdx
+  let halves = 0
+  f.pdx = (argv) => {
+    if (argv[1] === 'begin') {
+      const asked = argv.includes('--half')
+      if (asked || (o.unattended && argv.includes('--reason') && halves === 0)) {
+        halves++
+        return { exitCode: 0, stdout: JSON.stringify({ op: HALF_OP, request_id: 'req-h' }) }
+      }
+      if (argv.includes('--reuse') && o.reuseAnswer) return o.reuseAnswer()
+      return base(argv)
+    }
+    if (argv[1] === 'wait' && argv[2] === 'req-h') return { exitCode: 0, stdout: APPROVAL('approved') }
+    if (argv[1] === 'wait' && argv[2] === 'req-9') return { exitCode: 0, stdout: JSON.stringify({ id: 'req-9', kind: 'self_relay', state: 'approved' }) }
+    return base(argv)
+  }
+  return { f, row }
+}
+const FULL_BEGIN = (path: string) => ({ exitCode: 0, stdout: JSON.stringify({ op: { ...FULL_OP, handoff_path: path }, request_id: 'req-9' }) })
+
+// An idle session whose idle card timed out: the half's write prompt is out.
+async function halfWriting($: any, on: any, more: Partial<Fake> = {}, o: Parameters<typeof halfWorld>[2] = {}, hello = IDLE_HELLO()) {
+  const w = halfWorld(on, { usage: AT55, ...more }, o, hello)
+  await start($, w.f)
+  await turnAndSettle($, w.f, 't1')
+  await w.f.clock.advance(40 * MIN)
+  if (!o.unattended) {
+    w.row.decide('timeout')
+    await w.f.clock.advance(100)
+  }
+  await w.f.clock.advance(100) // the half begin, the wait loop, the write prompt
+  return w
+}
+// ... and the half written: the file is good, the write turn ends.
+async function halfWritten($: any, on: any, more: Partial<Fake> = {}, o: Parameters<typeof halfWorld>[2] = {}) {
+  const w = await halfWriting($, on, more, o)
+  w.f.files[HALF_PATH] = GOOD_FILE
+  await $.turn.start({ text: w.f.submits[0].text, turnId: 'tw' })
+  await turnAndSettle($, w.f, 'tw')
+  return w
+}
+
+// T35. An idle card that times out is followed by a half. Mutation gates: no half on a timeout → no second begin (red); the half begun for a
+// denied card (not a timeout) → red; --half left out → red.
+test('RT-3b T35: an idle card that settles timeout is followed by begin --half, from a timer', async ($, on) => {
+  const { f } = await halfWriting($, on)
+  expect(idleBegins(f)).toEqual([IDLE_BEGIN, IDLE_BEGIN + ' --half'])
+})
+
+test('RT-3b T35: a denied idle card gets no half', async ($, on) => {
+  const w = halfWorld(on, { usage: AT55 })
+  await start($, w.f)
+  await turnAndSettle($, w.f, 't1')
+  await w.f.clock.advance(40 * MIN)
+  w.row.decide('denied')
+  await w.f.clock.advance(300)
+  expect(idleBegins(w.f)).toEqual([IDLE_BEGIN])
+})
+
+test('RT-3b T35: a threshold card that timed out gets no half', async ($, on) => {
+  const t = halfWorld(on, { usage: AT72 })
+  await start($, t.f)
+  await turn($, 't1')
+  await t.f.clock.advance(50)
+  t.row.decide('timeout')
+  await t.f.clock.advance(300)
+  expect(idleBegins(t.f).filter((c) => c.includes('--half'))).toEqual([])
+})
+
+// The half is approved at begin (its wait answers at once), the write prompt goes out, writing is reported; no hold, no wait toast.
+// Mutation gate: the half's wait toast / status → red.
+test('RT-3b T35: the half goes through the ordinary write path: write prompt, writing; no waiting status, no wait toast', async ($, on) => {
+  const { f } = await halfWriting($, on)
+  expect(f.submits.length).toBe(1)
+  expect(f.submits[0].text).toContain(HALF_PATH)
+  expect(reports(f)).toEqual(['relay report half-1 writing'])
+  expect(f.statuses.filter((s) => s === '接力等待核准中').length).toBe(1) // the idle card's, not the half's
+  expect(f.toasts.filter((t) => t.includes('等待核准'))).toHaveLength(1)
+})
+
+// The write turn's end for a half: written, no /clear, idle, the status line and the one toast.
+// Mutation gates: clear after a half → a /clear command (red); no status/toast → red; report missing → red.
+test('RT-3b T35: the half’s write turn ends: written, no /clear, status and toast; the session is idle', async ($, on) => {
+  const { f } = await halfWritten($, on)
+  expect(reports(f)).toEqual(['relay report half-1 writing', 'relay report half-1 written'])
+  expect(f.commands).toEqual([])
+  expect(f.statuses.at(-1)).toBe('已寫好接力檔')
+  expect(f.toasts.filter((t) => t.includes('快取即將過期'))).toEqual([HALF_TOAST])
+})
+
+// An unattended idle begin that the daemon answers half runs the same way, with no --half asked.
+test('RT-3b T35: an idle begin the daemon answers half (unattended) is a half too', async ($, on) => {
+  const { f } = await halfWritten($, on, {}, { unattended: true })
+  expect(idleBegins(f)).toEqual([IDLE_BEGIN])
+  expect(reports(f)).toEqual(['relay report half-1 writing', 'relay report half-1 written'])
+  expect(f.commands).toEqual([])
+  expect(f.toasts.filter((t) => t.includes('快取即將過期'))).toEqual([HALF_TOAST])
+})
+
+// After a half the idle stretch does not start another: no second half or card until the conversation moves.
+// Mutation gate: drop the half from the idle gate → a second begin 40 minutes later (red).
+test('RT-3b T35: while the half is fresh the idle timer asks for nothing more', async ($, on) => {
+  const { f } = await halfWritten($, on)
+  const before = count(f, 'begin')
+  await f.clock.advance(120 * MIN)
+  expect(count(f, 'begin')).toBe(before)
+})
+
+// U-4.1: at the half's turn end at >= the threshold the ask follows at once, with --reuse.
+// Mutation gates: no maybeBegin after a half → no ask (red); --reuse left out → red.
+test('RT-3b T35: at 75 % when the half is written, the threshold ask follows at once and reuses the half', async ($, on) => {
+  const { f } = await halfWriting($, on)
+  f.files[HALF_PATH] = GOOD_FILE
+  f.usage = { tokens: 150000, window: 200000, percent: 75 }
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turnAndSettle($, f, 'tw')
+  expect(idleBegins(f).at(-1)).toBe('relay begin --self --session sid-old --used 75 --window 200000 --reuse half-1')
+})
+
+// T36. A begin that reuses: the answer carries the half's file, the write turn is skipped.
+// Mutation gates: write anyway → a second submit (red); skip writing/written → red; no /clear → red.
+test('RT-3b T36: the answer whose op carries the half’s file skips the write turn: writing, written, then /clear', async ($, on) => {
+  const { f } = await halfWriting($, on, {}, { reuseAnswer: () => FULL_BEGIN(HALF_PATH) })
+  f.files[HALF_PATH] = GOOD_FILE
+  f.usage = { tokens: 150000, window: 200000, percent: 75 }
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turnAndSettle($, f, 'tw')
+  await f.clock.advance(200)
+  expect(f.submits.length).toBe(1) // the half's own write prompt only
+  expect(reports(f)).toEqual(['relay report half-1 writing', 'relay report half-1 written', 'relay report op-9 writing', 'relay report op-9 written'])
+  expect(f.commands).toEqual(['clear'])
+})
+
+// A reuse answer whose file is not the half's (the daemon opened its own path) writes as always.
+test('RT-3b T36: an answer with another path is an ordinary relay: the write turn runs', async ($, on) => {
+  const { f } = await halfWriting($, on, {}, { reuseAnswer: () => FULL_BEGIN('/data/relay/op-9.md') })
+  f.files[HALF_PATH] = GOOD_FILE
+  f.usage = { tokens: 150000, window: 200000, percent: 75 }
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turnAndSettle($, f, 'tw')
+  await f.clock.advance(200)
+  expect(f.submits.length).toBe(2)
+  expect(f.commands).toEqual([])
+})
+
+// The first main-conversation turn.start that is not the mod's own drops the half and reports it stale, once.
+// Mutation gates: no drop → the next ask reuses a stale file (red); no stale report → red; reported twice → red.
+test('RT-3b T36: a typed prompt’s turn drops the half: one stale report, and the next begin has no --reuse', async ($, on) => {
+  const { f } = await halfWritten($, on)
+  await $.turn.start({ text: 'hello', turnId: 't2' })
+  await f.clock.settle()
+  expect(staleCalls(f)).toEqual([STALE])
+  await $.turn.start({ text: 'again', turnId: 't3' })
+  await f.clock.settle()
+  expect(staleCalls(f)).toEqual([STALE])
+  f.usage = { tokens: 150000, window: 200000, percent: 75 }
+  await turnAndSettle($, f, 't3')
+  expect(idleBegins(f).at(-1)).toBe('relay begin --self --session sid-old --used 75 --window 200000')
+})
+
+test('RT-3b T36: a subagent’s turn.start does not drop the half', async ($, on) => {
+  const { f } = await halfWritten($, on)
+  await $.turn.start({ text: 'x', turnId: 'a1', agentId: 'ag-1' })
+  await f.clock.settle()
+  expect(staleCalls(f)).toEqual([])
+})
+
+// /clear (the user's own) drops it and reports stale; a compaction drops it without a report (the daemon deletes the row at a compaction).
+test('RT-3b T36: the user’s /clear drops the half and reports it stale', async ($, on) => {
+  const { f } = await halfWritten($, on)
+  f.switchTo = 'sid-new'
+  await $.classic.SessionStart({ source: 'clear' })
+  await f.clock.settle()
+  expect(staleCalls(f)).toEqual([STALE.replace('sid-old', 'sid-old')])
+  f.usage = { tokens: 150000, window: 200000, percent: 75 }
+  await turnAndSettle($, f, 't9')
+  expect(idleBegins(f).at(-1)).not.toContain('--reuse')
+})
+
+test('RT-3b T36: a compaction drops the half locally, with no stale report', async ($, on) => {
+  const { f } = await halfWritten($, on)
+  await compact($, 'manual')
+  await f.clock.settle()
+  expect(staleCalls(f)).toEqual([])
+  f.usage = { tokens: 150000, window: 200000, percent: 75 }
+  await turnAndSettle($, f, 't9')
+  expect(idleBegins(f).at(-1)).not.toContain('--reuse')
+})
+
+// 409 reuse_invalid: the half is dropped and the begin sent again without it.
+// Mutation gates: no retry → no relay (red); the retry still carries --reuse → red.
+test('RT-3b T36: reuse_invalid drops the half and begins again without --reuse', async ($, on) => {
+  const w = await halfWriting($, on, {}, { reuseAnswer: () => ({ exitCode: 13, stderr: 'pdx relay: reuse_invalid' }) })
+  const f = w.f
+  f.files[HALF_PATH] = GOOD_FILE
+  f.usage = { tokens: 150000, window: 200000, percent: 75 }
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turnAndSettle($, f, 'tw')
+  await f.clock.advance(100)
+  const begins = idleBegins(f).filter((c) => c.includes('--used 75'))
+  expect(begins).toEqual(['relay begin --self --session sid-old --used 75 --window 200000 --reuse half-1', 'relay begin --self --session sid-old --used 75 --window 200000'])
+  // the half is gone from the mod: a later ask (the card denied, 90 % now) does not offer it again
+  w.row.decide('denied')
+  await f.clock.advance(100)
+  f.usage = { tokens: 180000, window: 200000, percent: 90 }
+  await turnAndSettle($, f, 't9')
+  expect(idleBegins(f).filter((c) => c.includes('--used 90'))).toEqual(['relay begin --self --session sid-old --used 90 --window 200000'])
+})
+
+// A half whose file no longer passes the check is not offered.
+test('RT-3b T36: a half whose file is broken is not reused: a fresh write', async ($, on) => {
+  const { f } = await halfWriting($, on)
+  f.files[HALF_PATH] = GOOD_FILE
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turnAndSettle($, f, 'tw')
+  f.files[HALF_PATH] = 'short'
+  f.usage = { tokens: 150000, window: 200000, percent: 75 }
+  await turnAndSettle($, f, 't2')
+  expect(idleBegins(f).at(-1)).toBe('relay begin --self --session sid-old --used 75 --window 200000')
+})
+
+// Hello's fresh_half restores the half in a mod that has none (a reload); /relay or the threshold then reuses it.
+// Mutation gate: ignore hello's fresh_half → no --reuse (red).
+test('RT-3b T36: hello’s fresh_half restores the half after a reload; the next ask reuses it', async ($, on) => {
+  const hello = HELLO('none', { idle_minutes: 40, idle_threshold: 40, fresh_half: { op_id: 'half-1', path: HALF_PATH, written_at: 5 } })
+  const w = halfWorld(on, { usage: AT72 }, {}, hello)
+  w.f.files[HALF_PATH] = GOOD_FILE
+  await start($, w.f)
+  await turnAndSettle($, w.f, 't1')
+  expect(idleBegins(w.f)[0]).toBe('relay begin --self --session sid-old --used 72 --window 200000 --reuse half-1')
+})
+
+// A half holds no prompt: one typed while the half begin is out, and one typed while the half's card is awaiting, go on at once and
+// unchanged (no NOTE: the half approves no one's work). Mutation gates: no halfBeginning guard → the first waits for begin (red); the
+// open.half guard removed → the second carries the NOTE (red).
+test('RT-3b T35: a prompt typed while the half begin is out, or the half is awaiting, is not held and carries no NOTE', async ($, on) => {
+  const g = gated()
+  const w = halfWorld(on, { usage: AT55 })
+  const base = w.f.pdx
+  const gw = gated()
+  w.f.pdx = (argv) => (argv[1] === 'begin' && argv.includes('--half') ? g.p.then(() => base(argv)) : argv[1] === 'wait' && argv[2] === 'req-h' ? gw.p.then(() => base(argv)) : base(argv))
+  await start($, w.f)
+  await turnAndSettle($, w.f, 't1')
+  await w.f.clock.advance(40 * MIN)
+  w.row.decide('timeout')
+  await w.f.clock.advance(60) // the idle card is gone; the half begin is out (gated)
+  const p = typed($, 'during begin')
+  await w.f.clock.advance(10)
+  expect(w.f.submits.map((x: any) => x.text)).toEqual(['during begin']) // not held
+  g.release()
+  await p
+  expect(w.f.submits[0].context).toBeUndefined()
+  await w.f.clock.advance(100) // the half is awaiting: its wait is gated
+  const aw = typed($, 'during await')
+  await w.f.clock.advance(10)
+  expect(w.f.submits.map((x: any) => x.text)).toEqual(['during begin', 'during await']) // not held while the half is awaiting
+  gw.release()
+  await aw
+  expect(w.f.submits[1].context).toBeUndefined() // and no NOTE
+  await w.f.clock.advance(400)
+  expect(w.f.submits.length).toBe(3) // the half's write prompt followed
+  const q = await typed($, 'during write')
+  expect(q).toBeDefined()
+  expect(w.f.submits.at(-1).context).toBeUndefined() // approved state: no NOTE either
+})
+
+// The answer carries the half's file, but it stopped checking out before the relay could use it: written again as an ordinary relay.
+// Mutation gate: skip the re-check → the broken file is cleared on (red).
+test('RT-3b T36: a reused file that no longer checks out is written again', async ($, on) => {
+  const { f } = await halfWriting($, on, {}, { reuseAnswer: () => { f2.files[HALF_PATH] = 'short'; return FULL_BEGIN(HALF_PATH) } })
+  const f2 = f
+  f.files[HALF_PATH] = GOOD_FILE
+  f.usage = { tokens: 150000, window: 200000, percent: 75 }
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turnAndSettle($, f, 'tw')
+  await f.clock.advance(300)
+  expect(f.submits.length).toBe(2) // a fresh write prompt
+  expect(f.commands).toEqual([])
+})
+
+// Both idle guards: a fresh half stops the timer from being armed AND a timer already armed from firing.
+test('RT-3b T35: a fire that finds a fresh half asks for nothing', async ($, on) => {
+  const { f } = await halfWritten($, on)
+  f.files[HALF_PATH] = GOOD_FILE
+  const before = count(f, 'begin')
+  await $.turn.start({ text: 'x', turnId: 'a1', agentId: 'ag-1' }) // a subagent turn.start keeps the half
+  await f.clock.advance(120 * MIN)
+  expect(count(f, 'begin')).toBe(before)
+})
+
+// A reask that arrived while the half was being written begins the moment the session returns to idle - with the half it just wrote.
+// Mutation gate: record the half after toIdle → the reask begins without --reuse (red).
+test('RT-3b T36: a reask that waited for the half’s write turn reuses that half', async ($, on) => {
+  const { f } = await halfWriting($, on)
+  const id = '7c1e2a4b-0d3f-4a58-9b6e-000000000001'
+  await $.session.receive({ origin: { kind: 'peer' }, text: '<cross-session-message from="uds:/tmp/cc-socks/1.sock" from-name="mlab/lead-x">\n[pdx-relay:control] reask id=' + id + '\n</cross-session-message>' })
+  await f.clock.advance(100)
+  f.files[HALF_PATH] = GOOD_FILE
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turnAndSettle($, f, 'tw')
+  await f.clock.advance(100)
+  expect(idleBegins(f).at(-1)).toBe('relay begin --self --session sid-old --used 55 --window 200000 --reask ' + id + ' --reuse half-1')
+})
+
+// The status line stops promising a file once the half is dropped.
+// Mutation gate: dropHalf leaves the status → red.
+test('RT-3b T36: dropping the half clears its status line', async ($, on) => {
+  const { f } = await halfWritten($, on)
+  expect(f.statuses.at(-1)).toBe('已寫好接力檔')
+  await $.turn.start({ text: 'hello', turnId: 't2' })
+  await f.clock.settle()
+  expect(f.statuses.at(-1)).toBeUndefined()
+})
+
+// A hello answered after a turn began restores no half (that turn made its file stale): the daemon is told it is stale instead.
+// Mutation gate: restore regardless of mainTurns → the next ask reuses it (red).
+test('RT-3b T36: a hello that answers after a main turn started restores no half and reports it stale', async ($, on) => {
+  const hello = HELLO('none', { idle_minutes: 40, idle_threshold: 40, fresh_half: { op_id: 'half-1', path: HALF_PATH, written_at: 5 } })
+  const w = halfWorld(on, { usage: AT72 }, {}, hello)
+  const g = gated()
+  const base = w.f.pdx
+  w.f.pdx = (argv) => (argv[1] === 'hello' ? g.p.then(() => base(argv)) : base(argv))
+  w.f.files[HALF_PATH] = GOOD_FILE
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await w.f.clock.advance(5) // hello is out
+  await $.turn.start({ text: 'x', turnId: 't0' })
+  g.release()
+  await w.f.clock.settle()
+  await turnAndSettle($, w.f, 't0')
+  expect(staleCalls(w.f)).toEqual([STALE])
+  expect(idleBegins(w.f).at(-1)).toBe('relay begin --self --session sid-old --used 72 --window 200000')
+})
+
+// A member-relay control that waited for the half's write turn claims at the return to idle: the claim spends the half (the daemon deletes
+// its row there), so the status line stops promising a file. Mutation gate: no halfSpent at the claim → the status stays (red).
+test('RT-3b T36: a member relay claimed after the half spends it: the half status is cleared', async ($, on) => {
+  const MOP = '3f2b8c1e-9a4d-4e6b-8c7a-1d2e3f4a5b6c'
+  const w = halfWorld(on, { usage: AT55 })
+  const base = w.f.pdx
+  w.f.pdx = (argv) => (argv[1] === 'claim'
+    ? { exitCode: 0, stdout: JSON.stringify({ op: { ...OP, id: MOP, kind: 'member_relay', state: 'claimed', handoff_path: '/data/relay/' + MOP + '.md' }, lead: { address: 'mlab/lead-x', ref: '_h9movr', team_id: 'team-1' } }) }
+    : base(argv))
+  await start($, w.f)
+  await turnAndSettle($, w.f, 't1')
+  await w.f.clock.advance(40 * MIN)
+  w.row.decide('timeout')
+  await w.f.clock.advance(200)
+  await $.session.receive({ origin: { kind: 'peer' }, text: '<cross-session-message from="uds:/tmp/cc-socks/1.sock" from-name="mlab/lead-x">\n[pdx-relay:control] op=' + MOP + '\n</cross-session-message>' })
+  w.f.files[HALF_PATH] = GOOD_FILE
+  await $.turn.start({ text: w.f.submits[0].text, turnId: 'tw' })
+  await turnAndSettle($, w.f, 'tw')
+  await w.f.clock.advance(300)
+  expect(count(w.f, 'claim')).toBe(1)
+  expect(w.f.statuses.at(-1)).toBeUndefined()
 })
