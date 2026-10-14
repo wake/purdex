@@ -302,6 +302,12 @@ func reportRelayIn(tx *sql.Tx, id string, r RelayReport) (team.RelayOp, ReportRe
 	if n, _ := res.RowsAffected(); n != 1 {
 		return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: state changed under the transaction", id)
 	}
+	if r.State == team.RelayClaimed {
+		// a relay that claims ends the fresh half's life, reused or not (RT-3a1 T31): the file is spent or beside the point
+		if _, err := tx.Exec(`DELETE FROM relay_fresh_half WHERE session_id = ?`, cur.SessionID); err != nil {
+			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: drop the fresh half: %w", id, err)
+		}
+	}
 	if r.State == team.RelayWritten && (cur.Mode == team.RelayModeHalf || cur.Mode == team.RelayModeHandoff) {
 		// A half (and a handoff, RT-3c) ends where its file is written: no /clear, no seed (RT-3a1 T30, C#15). The op closes cancelled /
 		// half in the same transaction; a half keeps its file for the next full relay to reuse. A handoff's kill is RT-3c's.

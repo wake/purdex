@@ -3,6 +3,8 @@ package teammod
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -261,5 +263,155 @@ func TestWritten_HalfAndHandoffSendNoCancelNotice(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if calls := f.sender.calls(); len(calls) != 0 {
 		t.Fatalf("a handoff's end told someone: %+v", calls)
+	}
+}
+
+// ---- T31: reuse and staleness ----
+
+// freshHalfWithFile makes sid's idle half, written, with its file on disk.
+func (f *fixture) freshHalfWithFile(sid string) team.RelayOp {
+	f.t.Helper()
+	op := f.halfOp(sid)
+	if err := os.MkdirAll(filepath.Dir(op.HandoffPath), 0o700); err != nil {
+		f.t.Fatal(err)
+	}
+	if err := os.WriteFile(op.HandoffPath, []byte("# HANDOFF\n"), 0o600); err != nil {
+		f.t.Fatal(err)
+	}
+	if c, got, _ := f.report(op.ID, team.RelayReportRequest{State: team.RelayWritten}); c != http.StatusOK || got.State != team.RelayCancelled {
+		f.t.Fatalf("written: %d %+v", c, got)
+	}
+	return op
+}
+
+func reuseBeginReq(sid, op string) team.RelayBeginRequest {
+	r := beginReq(sid)
+	r.ReuseOp = op
+	return r
+}
+
+// A valid reuse opens the card with the half's file and keeps the fresh row until that op claims. Mutation gates: ignore ReuseOp → the new
+// op has its own path (red); delete the row at begin → it is gone before the claim (red); never delete at claim → it stays (red).
+func TestReuse_ValidCarriesTheFileAndTheRowGoesAtTheClaim(t *testing.T) {
+	f := newFixture(t)
+	half := f.freshHalfWithFile("sid-1")
+	code, resp, body := f.beginRaw2(reuseBeginReq("sid-1", half.ID))
+	if code != http.StatusCreated || resp.Op.HandoffPath != half.HandoffPath || resp.Op.ID == half.ID {
+		t.Fatalf("reuse begin: %d %s, want a new op with path %s", code, body, half.HandoffPath)
+	}
+	if _, _, ok := f.freshHalf("sid-1"); !ok {
+		t.Fatal("the fresh row went at begin, before the op claimed")
+	}
+	if c, _ := f.decide(resp.RequestID, "approve"); c != http.StatusOK {
+		t.Fatalf("approve: %d", c)
+	}
+	if _, _, ok := f.freshHalf("sid-1"); ok {
+		t.Fatal("the fresh row is still there after the reusing op claimed")
+	}
+}
+
+// Everything else is 409 reuse_invalid, nothing written. Mutation gates: drop each check → its case begins (red).
+func TestReuse_InvalidIs409(t *testing.T) {
+	f := newFixture(t)
+	half := f.freshHalfWithFile("sid-1")
+	for name, op := range map[string]string{"an unknown op": "no-such-op", "an empty id that is named": "x"} {
+		if code, _, body := f.beginRaw2(reuseBeginReq("sid-1", op)); code != http.StatusConflict || !strings.Contains(string(body), team.ErrReuseInvalid) {
+			t.Fatalf("%s: %d %s, want 409 reuse_invalid", name, code, body)
+		}
+	}
+	// another session's half
+	f2 := newFixture(t)
+	other := f2.freshHalfWithFile("sid-1")
+	f2.liveMember("sid-2", "_two002", "two", "self/two", "tm-2")
+	if code, _, body := f2.beginRaw2(reuseBeginReq("sid-2", other.ID)); code != http.StatusConflict || !strings.Contains(string(body), team.ErrReuseInvalid) {
+		t.Fatalf("another session's op: %d %s", code, body)
+	}
+	// the file is gone / empty
+	if err := os.Truncate(half.HandoffPath, 0); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, body := f.beginRaw2(reuseBeginReq("sid-1", half.ID)); code != http.StatusConflict || !strings.Contains(string(body), team.ErrReuseInvalid) {
+		t.Fatalf("an empty file: %d %s", code, body)
+	}
+	if err := os.Remove(half.HandoffPath); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, body := f.beginRaw2(reuseBeginReq("sid-1", half.ID)); code != http.StatusConflict || !strings.Contains(string(body), team.ErrReuseInvalid) {
+		t.Fatalf("a missing file: %d %s", code, body)
+	}
+	if n := countRelayOps(t, f); n != 1 {
+		t.Fatalf("%d relay ops, want only the half: a refused reuse writes nothing", n)
+	}
+	// a non-half op and no fresh row
+	f3 := newFixture(t)
+	full := f3.begin("sid-1")
+	if code, _, body := f3.beginRaw2(reuseBeginReq("sid-1", full.Op.ID)); code != http.StatusConflict {
+		t.Fatalf("a full op (and a relay already open): %d %s", code, body)
+	}
+}
+
+// Each staleness path deletes the row. Mutation gates: drop each deletion → its case is red.
+func TestFresh_EveryStalenessPathDeletesTheRow(t *testing.T) {
+	post := func(f *fixture, sid, op string) {
+		if code, body := f.do(http.MethodPost, "/api/relay/fresh", team.RelayFreshRequest{SessionID: sid, OpID: op, Stale: true}); code != http.StatusOK {
+			t.Fatalf("fresh: %d %s", code, body)
+		}
+	}
+	cases := map[string]func(f *fixture, half team.RelayOp){
+		"the mod reports it stale": func(f *fixture, h team.RelayOp) { post(f, "sid-1", h.ID) },
+		"a compaction is reported": func(f *fixture, h team.RelayOp) { f.compacted("sid-1", "auto") },
+		"a manual compaction too":  func(f *fixture, h team.RelayOp) { f.compacted("sid-1", "manual") },
+		"the session is gone":      func(f *fixture, h team.RelayOp) { f.origins.markDead("sid-1"); f.livenessTick() },
+		"a relay claims without it": func(f *fixture, h team.RelayOp) {
+			r := f.begin("sid-1")
+			if c, _ := f.decide(r.RequestID, "approve"); c != http.StatusOK {
+				t.Fatalf("approve: %d", c)
+			}
+		},
+	}
+	for name, stale := range cases {
+		f := newFixture(t)
+		half := f.freshHalfWithFile("sid-1")
+		if _, _, ok := f.freshHalf("sid-1"); !ok {
+			t.Fatalf("%s: setup: no fresh row", name)
+		}
+		stale(f, half)
+		if _, _, ok := f.freshHalf("sid-1"); ok {
+			t.Errorf("%s: the fresh row is still there", name)
+		}
+	}
+	// a stale report for another op leaves it
+	f := newFixture(t)
+	f.freshHalfWithFile("sid-1")
+	post(f, "sid-1", "another-op")
+	if _, _, ok := f.freshHalf("sid-1"); !ok {
+		t.Fatal("a stale report naming another op deleted the row")
+	}
+}
+
+// Hello carries the fresh half. Mutation gate: drop it → red.
+func TestHello_CarriesTheFreshHalf(t *testing.T) {
+	f := newFixture(t)
+	half := f.freshHalfWithFile("sid-1")
+	code, body := f.do(http.MethodPost, "/api/relay/hello", team.RelayHelloRequest{SessionID: "sid-1", ModVersion: "8", Agent: "cc"})
+	var h team.RelayHelloResponse
+	if err := json.Unmarshal(body, &h); code != http.StatusOK || err != nil || h.FreshHalf == nil || h.FreshHalf.OpID != half.ID || h.FreshHalf.Path != half.HandoffPath || h.FreshHalf.WrittenAt == 0 {
+		t.Fatalf("hello: %d %s", code, body)
+	}
+	f2 := newFixture(t)
+	code, body = f2.do(http.MethodPost, "/api/relay/hello", team.RelayHelloRequest{SessionID: "sid-1", ModVersion: "8", Agent: "cc"})
+	if err := json.Unmarshal(body, &h); code != http.StatusOK || err != nil {
+		t.Fatalf("hello: %d %s", code, body)
+	}
+}
+
+// The unattended begin (approved at once) carries the reuse too. Mutation gate: build the unattended op without the path → red.
+func TestReuse_UnattendedBeginCarriesTheFile(t *testing.T) {
+	f := newFixture(t)
+	half := f.freshHalfWithFile("sid-1")
+	f.unatt.set(true)
+	code, resp, body := f.beginRaw2(reuseBeginReq("sid-1", half.ID))
+	if code != http.StatusCreated || resp.Op.State != team.RelayClaimed || resp.Op.HandoffPath != half.HandoffPath {
+		t.Fatalf("unattended reuse: %d %s", code, body)
 	}
 }

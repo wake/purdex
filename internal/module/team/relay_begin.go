@@ -52,6 +52,10 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "unknown reason", nil)
 		return
 	}
+	if req.Half && req.ReuseOp != "" {
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "a half writes its own file: it reuses nothing", nil)
+		return
+	}
 	if req.Half && req.Reason != team.RelayBeginReasonIdle {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "half is only for reason idle", nil)
 		return
@@ -216,10 +220,24 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 	if reqID == "" {
 		reqID = m.newID()
 	}
+	handoffPath := filepath.Join(m.relayDir, opID+".md")
+	if req.ReuseOp != "" { // the new op's file is the fresh half's (RT-3a1 T31); anything else is refused before a thing is written
+		path, ok, err := m.reusableHalf(req.SessionID, req.ReuseOp)
+		if err != nil {
+			m.logf("[team] relay begin %s: reuse %s: %v", req.SessionID, req.ReuseOp, err)
+			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+			return
+		}
+		if !ok {
+			m.writeErr(w, http.StatusConflict, team.ErrReuseInvalid, "reuse_op is not this session's fresh half, or its file is gone", nil)
+			return
+		}
+		handoffPath = path
+	}
 	pct := req.UsedPercentage
 	op := team.RelayOp{
 		ID: opID, Kind: team.RelayKindSelf, HostID: m.hostID(), SessionID: origin.SessionID, Ref: origin.Ref,
-		RequestID: reqID, State: team.RelayAwaitingApproval, HandoffPath: filepath.Join(m.relayDir, opID+".md"),
+		RequestID: reqID, State: team.RelayAwaitingApproval, HandoffPath: handoffPath,
 		UsedPercentage: &pct, CreatedAt: now, UpdatedAt: now, PID: origin.PID, PaneID: paneOf(origin.Tmux), ProcStart: origin.ProcStart,
 	}
 	sp.OpID = opID

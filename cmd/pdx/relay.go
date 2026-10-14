@@ -25,7 +25,7 @@ import (
 // These are the mod's calls (lead-team-relay spec §8.3) plus `pdx relay <ref>`
 // (the lead's member relay, P6-5).
 const relayUsage = "usage: pdx relay hello --session <sid> [--version <v>] [--agent cc] [--config <path>]\n" +
-	"       pdx relay begin --self --session <sid> --used <pct> --window <n> [--manual] [--reason idle --idle-minutes <n>] [--reask <uuid>] [--person <token>] [--config <path>]\n" +
+	"       pdx relay begin --self --session <sid> --used <pct> --window <n> [--manual] [--reason idle --idle-minutes <n>] [--reask <uuid>] [--person <token>] [--half | --reuse <op>] [--config <path>]\n" +
 	"       pdx relay person --session <sid> --command relay|adopt|lead|spawn [--config <path>]\n" +
 	"       pdx relay ask --session <sid> --used <pct> --window <n> [--request-id <uuid>] [--config <path>]\n" +
 	"       pdx relay wait <request_id> [--wait 9m] [--return-unanswered] [--config <path>]\n" +
@@ -36,6 +36,7 @@ const relayUsage = "usage: pdx relay hello --session <sid> [--version <v>] [--ag
 	"       pdx relay lock|unlock <op> --session <sid> [--config <path>]\n" +
 	"       pdx relay claim|seen <op> --session <sid> [--config <path>]\n" +
 	"       pdx relay compacted --session <sid> --trigger auto|manual|idle [--config <path>]\n" +
+	"       pdx relay fresh --session <sid> --op <id> --stale [--config <path>]\n" +
 	"       pdx relay <ref|address> [--wait <dur> | --deny] [--config <path>]"
 
 const (
@@ -64,6 +65,7 @@ var relayRefusalCodes = map[string]bool{
 	team.ErrNotLead:             true, // P6-5: the member relay's refusals
 	team.ErrNotYourMember:       true,
 	team.ErrRelayUnsupported:    true,
+	team.ErrReuseInvalid:        true, // RT-3a1: the begin's --reuse is not this session's fresh half; the mod then begins without it
 	team.ErrNotYourOp:           true,
 	team.ErrNoOpenAsk:           true, // RT-2b: --deny of a member that has no open ask
 	team.ErrNotMember:           true, // a member's ask from a session that is no member
@@ -134,6 +136,8 @@ func runRelayCmd(ctx context.Context, args []string, stdout, stderr io.Writer, c
 		return runRelaySeen(ctx, args[1:], stdout, stderr, clientOpts)
 	case "compacted":
 		return runRelayCompacted(ctx, args[1:], stdout, stderr, clientOpts)
+	case "fresh":
+		return runRelayFresh(ctx, args[1:], stdout, stderr, clientOpts)
 	case "lock":
 		return runRelayLock(args[1:], stdout, stderr, true)
 	case "unlock":
@@ -145,6 +149,39 @@ func runRelayCmd(ctx context.Context, args []string, stdout, stderr io.Writer, c
 		fmt.Fprintf(stderr, "pdx relay: unknown subcommand %q\n%s\n", args[0], relayUsage)
 		return ExitUsage
 	}
+}
+
+// runRelayFresh is `pdx relay fresh --session <sid> --op <id> --stale` (RT-3a1 S-10): the mod reports the idle half's file stale.
+func runRelayFresh(ctx context.Context, args []string, stdout, stderr io.Writer, clientOpts []daemonclient.Option) int {
+	fs := flag.NewFlagSet("pdx relay fresh", flag.ContinueOnError)
+	var req team.RelayFreshRequest
+	fs.StringVar(&req.SessionID, "session", "", "")
+	fs.StringVar(&req.OpID, "op", "", "")
+	fs.BoolVar(&req.Stale, "stale", false, "")
+	cfgPath, ok := relayFlags(fs, args, stderr)
+	if !ok {
+		return ExitUsage
+	}
+	switch {
+	case fs.NArg() != 0:
+		return relayUsageErr(stderr, fmt.Sprintf("unexpected argument %q", fs.Arg(0)))
+	case strings.TrimSpace(req.SessionID) == "":
+		return relayUsageErr(stderr, "--session 不能為空")
+	case strings.TrimSpace(req.OpID) == "":
+		return relayUsageErr(stderr, "--op 不能為空")
+	case !req.Stale:
+		return relayUsageErr(stderr, "--stale is required")
+	}
+	client, code := relayClient(cfgPath, stderr, daemonclient.DefaultAttemptTimeout, clientOpts)
+	if code != ExitOK {
+		return code
+	}
+	var res map[string]any
+	// deleting a row twice is the same as once: a replay after a lost response is safe
+	if _, err := client.Do(ctx, http.MethodPost, "/api/relay/fresh", req, &res, daemonclient.Idempotent()); err != nil {
+		return relayReportErr(err, stdout, stderr)
+	}
+	return relayPrintJSON(stdout, stderr, res)
 }
 
 // runRelayCompacted is `pdx relay compacted --session <sid> --trigger auto|manual|idle` (P7-2): the mod reports a compaction it
@@ -265,6 +302,8 @@ func runRelayBegin(ctx context.Context, args []string, stdout, stderr io.Writer,
 	fs.IntVar(&req.IdleMinutes, "idle-minutes", 0, "") // 1–59 iff --reason idle
 	fs.StringVar(&req.ReaskID, "reask", "", "")        // the release token of a re-ask after a pause (UP-3b): a UUID
 	fs.StringVar(&req.PersonToken, "person", "", "")   // the token of the person's own /relay (RT-1a), minted by `pdx relay person`
+	fs.BoolVar(&req.Half, "half", false, "")           // the idle half (RT-3a1): only with --reason idle
+	fs.StringVar(&req.ReuseOp, "reuse", "", "")        // a fresh half's op whose handoff file this begin reuses (RT-3a1)
 	cfgPath, ok := relayFlags(fs, args, stderr)
 	if !ok {
 		return ExitUsage
@@ -280,6 +319,10 @@ func runRelayBegin(ctx context.Context, args []string, stdout, stderr io.Writer,
 		return relayUsageErr(stderr, "--idle-minutes 只能搭配 --reason idle")
 	case req.Reason == team.RelayBeginReasonIdle && (req.IdleMinutes < 1 || req.IdleMinutes > 59):
 		return relayUsageErr(stderr, "--reason idle 需要 --idle-minutes 1 到 59")
+	case req.Half && req.Reason != team.RelayBeginReasonIdle:
+		return relayUsageErr(stderr, "--half 只能搭配 --reason idle")
+	case req.Half && req.ReuseOp != "":
+		return relayUsageErr(stderr, "--half 不能搭配 --reuse")
 	case req.PersonToken != "" && !req.Manual:
 		return relayUsageErr(stderr, "--person 只能搭配 --manual")
 	case req.Reason == team.RelayBeginReasonIdle && req.Manual:

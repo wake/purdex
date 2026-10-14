@@ -62,6 +62,7 @@ const (
 	ErrMemberRelayIsLeads = "member_relay_is_leads" // a member's relay is the lead's (U9)
 	ErrSelfRelayOff       = "self_relay_off"        // the host switch is off
 	ErrSelfRelayPaused    = "self_relay_paused"     // the session is paused
+	ErrReuseInvalid       = "reuse_invalid"         // begin's reuse_op is not this session's fresh half (RT-3a1)
 	ErrRelayOpen          = "relay_open"            // an op is already open for this session; carries Op
 	ErrUnknownSession     = "unknown_session"       // 404: session_id is not a live CC session on this host
 	ErrBadTransition      = "bad_transition"        // report: the op's state does not lead to this one; carries Op
@@ -143,6 +144,20 @@ type RelayWaiting struct {
 	UnansweredAt int64   `json:"unanswered_at"`
 }
 
+// RelayFreshHalf is a session's fresh half: the handoff file an idle half wrote, and when.
+type RelayFreshHalf struct {
+	OpID      string `json:"op_id"`
+	Path      string `json:"path"`
+	WrittenAt int64  `json:"written_at"`
+}
+
+// RelayFreshRequest is POST /api/relay/fresh: the mod reports the half's file stale (S-10). Only stale:true is defined.
+type RelayFreshRequest struct {
+	SessionID string `json:"session_id"`
+	OpID      string `json:"op_id"`
+	Stale     bool   `json:"stale"`
+}
+
 // RelayHelloRequest is POST /api/relay/hello.
 type RelayHelloRequest struct {
 	SessionID  string `json:"session_id"`
@@ -166,6 +181,8 @@ type RelayHelloResponse struct {
 	// picks it up (written: /clear and seed; claimed / writing: failed, mod_reloaded). Absent for every other
 	// state, and from a daemon older than this field (the mod then behaves as before).
 	ActiveRelay *RelayClaimResponse `json:"active_relay,omitempty"`
+	// FreshHalf is this session's fresh half (RT-3a1 C#18): an idle half whose handoff file is still current. A reloaded mod can reuse it.
+	FreshHalf *RelayFreshHalf `json:"fresh_half,omitempty"`
 	// Waiting is this session's unanswered final card (RT-2a1): a mod that reloaded and holds no request adopts it again.
 	// Absent for an ordinary open card and from a daemon older than this field.
 	Waiting *RelayWaiting `json:"waiting,omitempty"`
@@ -197,6 +214,9 @@ type RelayBeginRequest struct {
 	// resumed the session. Valid (this session's, unused, under 24 h) it is consumed and the begin opens a card for a person; unknown,
 	// used or another session's it is ignored and the ordinary rules apply.
 	ReaskID string `json:"reask_id,omitempty"`
+	// ReuseOp (RT-3a1 T31) names a fresh half's op whose handoff file this begin reuses instead of writing a new one. Valid: the session's own
+	// cancelled / half op, still the session's fresh half, its file there and not empty. Else 409 reuse_invalid and nothing is written.
+	ReuseOp string `json:"reuse_op,omitempty"`
 	// Half (with reason idle, RT-3a1) asks for the idle half: the daemon claims the op at once (mode half, approved by its own client, no
 	// quota, no card) and the mod writes the handoff file only - no /clear, no seed. Without reason idle it is 400.
 	Half bool `json:"half,omitempty"`
