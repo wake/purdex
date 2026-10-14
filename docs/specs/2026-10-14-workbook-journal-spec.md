@@ -77,7 +77,7 @@ The name pool (session names instead of the ref suffix, user 2026-10-14) is a se
 ### 5.2 待確認
 
 - Written when the turn's final reply asks the person to answer or decide something and the question is still open at the turn's end. A question answered inside the same turn (an option-button prompt the person already answered) is not one.
-- `items`: one per question, ≤ 30 chars each (≤ 10 items), in the order asked; `detail`: the reply's question part copied as is (scrubbed, ≤ 4 000 chars).
+- `items`: one per question, ≤ 30 chars each (≤ 10 items), in the order asked; `detail`: the reply's question part as written — the model names where it starts (`detail_start`) and the daemon cuts it from the reply (scrubbed, ≤ 4 000 chars).
 - Pinned when written. On every later turn of the unit, Haiku receives the open 待確認 items and returns the ones the person's message answered (`confirm_done`); the daemon ticks them. All ticked → unpinned (the entry stays in the stream).
 - The person can unpin by hand (App → daemon → file); the items stay as they are.
 
