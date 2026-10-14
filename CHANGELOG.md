@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.0-alpha.736] - 2026-10-15
+
+> daemon 與 mod 有改，SPA 只改版本號，Electron 沒有改。mod 協定仍是第 8 版，但 mod 檔案有改，兩台都要重跑 `pdx setup`。工作簿資料庫升到 schema 4：部署後如果要把 daemon 退回 735，必須連同部署前備份的 `workbook.db` 一起還原（735 會拒絕開比它新的 schema）。兩台主機的資源租約仍是「只記錄」模式（advise），這一版部署後在 mlab 暫時切到「租約」模式重跑驗收，結果由使用者決定是否正式切換。
+
+### Fixed
+
+- **舊版 Claude Code 載入不了新 mod（#2871，PR #2882）**：735 的 mod 在 Claude Code 2.1.296 上載入失敗，部署前就在跑的 session 因此一直停在 734 的 mod。原因是 `events.js` 把 `$` 傳給從 `lease.js` 匯入的函式，而 2.1.296 只允許把 `$` 傳給同一個檔案裡宣告的函式。現在改由 `lease.js` 自己監聽 Stop 事件來讀背景任務清單，2.1.294 到 2.1.300 都能載入。部署時跑 `pdx setup` 後，這些 session 不必重開就會換上新 mod。新增兩個守門測試：一個擋 `events.js` 再把 `$` 傳給 `lease.js`，一個用本機裝的最舊版 Claude Code 對整棵 mod 跑 `plugin validate`。
+- **資源租約：巢狀的 `pdx lease run` 不再被排隊（#2759 P2f，PR #2874）**：外層已經用 `pdx lease run` 拿到租約的指令，裡面再跑 `pdx lease run`（例如 Aigora 的 `pnpm check`）時，daemon 從程序的父鏈認出它是巢狀的，直接放行、不另外占一份租約，報表多一欄「nested」。另外，收不到 mod 通知、只能改發 App 告警的「輪到你了」，在告警送出 60 秒後就讓給下一位，不會一直卡到切回只記錄模式。這兩個問題都是 735 部署後第一輪 lease 驗收找到的；這一版仍是只記錄模式，行為不變。
+
+### Added
+
+- **daemon 加上 pprof（PR #2875）**：`/debug/pprof/` 掛在 7860 既有的認證後面，只接受 admin token、只開 GET，已配對的手機一律拒絕。用來找出 daemon 長期約 30% CPU 的熱點，部署後會抓一次 30 秒的 CPU profile。
+- **工作簿日誌：team 任務鏡像（J-1c，PR #2868，介面線）**：team 的任務新增與完成會寫成日誌條目，並為每個 team 產生一份 `tasks.md`。這一版仍沒有接線，日誌不會實際產生。工作簿資料庫升到 schema 4（outbox 的唯一索引改為只管屬於某筆紀錄的列）。
+
 ## [1.0.0-alpha.735] - 2026-10-15
 
 > daemon、mod、SPA 都有改，Electron 沒有改。mod 協定升到第 8 版，兩台都要重跑 `pdx setup`；姓名池要兩台一起部署才保證跨主機不撞名。工作簿資料庫升到 schema 3：部署後如果要把 daemon 退回 734，必須連同部署前備份的 `workbook.db` 一起還原（734 會拒絕開比它新的 schema）。兩台主機的資源租約仍是「只記錄」模式（advise），切到「租約」模式（lease）另外驗收後才做。
