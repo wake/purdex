@@ -130,19 +130,18 @@ export function startJournalLoader(): () => void {
     const store = useJournalStore.getState()
     const u = selectUnit(store, t.hostId, t.sessionId)
     if (!u) return
-    const reads: Promise<LoadResult>[] = []
-    if (isStale(u, 'entries')) reads.push(store.loadJournal(t.hostId, t.sessionId))
-    if (u.tasks !== null && isStale(u, 'tasks')) reads.push(store.loadTasks(t.hostId, t.sessionId))
-    if (u.roadmap !== null && isStale(u, 'roadmap')) reads.push(store.loadRoadmap(t.hostId, t.sessionId))
-    const results = await Promise.all(reads)
-    if (stopped || !origin) return
     // Any of the three can learn that the unit moved to another daemon since it was routed: take the new lead tuple and follow it
-    // (one hop, in ensure).
-    const moved = results.find((r): r is Extract<LoadResult, { kind: 'remote' }> => r.kind === 'remote')
-    if (moved) {
-      store.setRoute(origin.hostId, origin.sessionId, { kind: 'unreachable', leadHostId: moved.leadHostId, leadSessionId: moved.leadSessionId })
+    // (one hop, in ensure). Each read acts on its own answer, so a slow sibling never delays the re-route.
+    const reroute = (r: LoadResult) => {
+      if (stopped || !origin || r.kind !== 'remote') return
+      store.setRoute(origin.hostId, origin.sessionId, { kind: 'unreachable', leadHostId: r.leadHostId, leadSessionId: r.leadSessionId })
       void ensure(origin)
     }
+    const reads: Promise<void>[] = []
+    if (isStale(u, 'entries')) reads.push(store.loadJournal(t.hostId, t.sessionId).then(reroute))
+    if (u.tasks !== null && isStale(u, 'tasks')) reads.push(store.loadTasks(t.hostId, t.sessionId).then(reroute))
+    if (u.roadmap !== null && isStale(u, 'roadmap')) reads.push(store.loadRoadmap(t.hostId, t.sessionId).then(reroute))
+    await Promise.all(reads)
   }
 
   const stops = [
