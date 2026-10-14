@@ -267,6 +267,12 @@ type Module struct {
 	peerNames PeerNameStore
 	convNames ConversationNameReader
 
+	// remoteNames is the name pool's view of the other hosts (namepool_snapshot.go);
+	// nil (the default until WithNamePool) means no pool. namePoolRefresh
+	// overrides the refresher's period in tests.
+	remoteNames     *remoteNameSnapshot
+	namePoolRefresh time.Duration
+
 	// putHostAfterSnapshot is a test seam: called by handlePutHost right
 	// after its pre-lock snapshot, so a test can force a concurrent
 	// mutation into that window. No-op in production.
@@ -1235,6 +1241,11 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 		// the page render, and {ok:false, error:""} would be a red row
 		// with no reason. Same string verifyHost uses for the 502 case.
 		rowErr = "peer reported ok=false"
+	}
+	if env.OK && rowErr == "" {
+		// The name pool's snapshot of what this host holds, from the rows as
+		// normalizeRemoteRows settled them, never the raw envelope.
+		m.noteRemoteNames(resultHostID, peers, env.AddressVersion)
 	}
 
 	// unknown is the remote's own reported list of alive-but-undecodable
