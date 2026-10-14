@@ -3,6 +3,7 @@ package journal
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -46,14 +47,27 @@ var (
 	maxUnitBytes  int64 = 64 << 20 // a unit's month files together
 )
 
+// monthFile is what ReadUnit needs of an open month file; a variable's worth of seam so a test can put something that
+// misbehaves in its place.
+type monthFile interface {
+	io.Reader
+	io.Closer
+	Stat() (os.FileInfo, error)
+}
+
+// openMonth opens one month file (see openMonthFile); replaced in tests.
+var openMonth = openMonthFile
+
 // Skipped is a month file ReadUnit left out of the unit, and why.
 type Skipped struct{ Name, Reason string }
 
 // ReadUnit reads the month files (`YYYY-MM.md`) of dir and returns the entries oldest first by (at, id), and the month files
 // it left out. A folder that is not there is an empty unit; other files are left alone; an id that appears in more than one
-// file is one entry (the older file's). A month file that is not a regular file (a symlink could lead anywhere, even to a
-// device), is over maxMonthBytes, or cannot be read is skipped and reported, never a reason to hide the other months; when
-// the months together are over maxUnitBytes the oldest are left out. Only a folder that cannot be listed is an error.
+// file is one entry (the older file's). Each month file is opened once and checked on that descriptor (a regular file; a
+// symlink is not followed, a FIFO is not waited for), then read through a limit: at most maxMonthBytes for one file, and the
+// bytes actually read count toward maxUnitBytes for the unit, newest months first, so a file that grows or is swapped after
+// a check cannot take more than the limits. A month that is refused, over a limit or unreadable is skipped and reported,
+// never a reason to hide the other months. Only a folder that cannot be listed is an error.
 func ReadUnit(dir string) ([]Entry, []Skipped, error) {
 	names, err := os.ReadDir(dir)
 	if err != nil {
@@ -62,51 +76,33 @@ func ReadUnit(dir string) ([]Entry, []Skipped, error) {
 		}
 		return nil, nil, fmt.Errorf("journal: read %s: %w", dir, err)
 	}
-	type month struct {
-		name string
-		size int64
-	}
-	var files []month
-	var skipped []Skipped
+	var months []string
 	for _, n := range names {
-		if !monthFileRE.MatchString(n.Name()) {
-			continue
-		}
-		st, err := os.Lstat(filepath.Join(dir, n.Name()))
-		switch {
-		case err != nil:
-			skipped = append(skipped, Skipped{n.Name(), "unreadable: " + err.Error()})
-		case !st.Mode().IsRegular():
-			skipped = append(skipped, Skipped{n.Name(), "not a regular file"})
-		case st.Size() > maxMonthBytes:
-			skipped = append(skipped, Skipped{n.Name(), "too large"})
-		default:
-			files = append(files, month{n.Name(), st.Size()})
+		if monthFileRE.MatchString(n.Name()) {
+			months = append(months, n.Name())
 		}
 	}
-	slices.SortFunc(files, func(a, b month) int { return strings.Compare(a.name, b.name) }) // oldest month first
-	keep := make([]bool, len(files))
-	var total int64
-	for i := len(files) - 1; i >= 0; i-- { // the newest months first take the budget
-		if total+files[i].size > maxUnitBytes {
-			skipped = append(skipped, Skipped{files[i].name, "over the unit's size budget"})
+	slices.Sort(months)
+	type taken struct {
+		name string
+		text string
+	}
+	var skipped []Skipped
+	var kept []taken // newest first
+	remaining := maxUnitBytes
+	for i := len(months) - 1; i >= 0; i-- { // the newest months take the budget first
+		text, reason := readMonth(filepath.Join(dir, months[i]), min(maxMonthBytes, remaining), maxMonthBytes)
+		if reason != "" {
+			skipped = append(skipped, Skipped{months[i], reason})
 			continue
 		}
-		total += files[i].size
-		keep[i] = true
+		remaining -= int64(len(text))
+		kept = append(kept, taken{months[i], text})
 	}
 	var all []Entry
 	seen := map[string]bool{}
-	for i, f := range files { // oldest first, so a duplicate id keeps the older file's entry
-		if !keep[i] {
-			continue
-		}
-		es, err := Parse(filepath.Join(dir, f.name))
-		if err != nil {
-			skipped = append(skipped, Skipped{f.name, "unreadable: " + err.Error()})
-			continue
-		}
-		for _, e := range es {
+	for i := len(kept) - 1; i >= 0; i-- { // oldest first, so a duplicate id keeps the older file's entry
+		for _, e := range parseLines(kept[i].name, splitLines(kept[i].text)) {
 			if !seen[e.ID] {
 				seen[e.ID] = true
 				all = append(all, e)
@@ -115,6 +111,37 @@ func ReadUnit(dir string) ([]Entry, []Skipped, error) {
 	}
 	slices.SortStableFunc(all, less)
 	return all, skipped, nil
+}
+
+// readMonth reads one month file through one descriptor: at most limit bytes. A reason, instead of text, says why the file
+// was left out; fileCap is the per-file limit, which tells "too large" from "over the unit's size budget".
+func readMonth(path string, limit, fileCap int64) (text, reason string) {
+	f, err := openMonth(path)
+	if err != nil {
+		if st, serr := os.Lstat(path); serr == nil && !st.Mode().IsRegular() {
+			return "", "not a regular file" // a symlink (O_NOFOLLOW refused it) or another kind of file
+		}
+		return "", "unreadable: " + err.Error()
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return "", "unreadable: " + err.Error()
+	}
+	if !st.Mode().IsRegular() {
+		return "", "not a regular file"
+	}
+	b, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return "", "unreadable: " + err.Error()
+	}
+	if int64(len(b)) > limit {
+		if limit < fileCap {
+			return "", "over the unit's size budget"
+		}
+		return "", "too large"
+	}
+	return string(b), ""
 }
 
 // CursorOf is the cursor that pages to what comes before e: `<month>:<id>` (the month of e's time, the id). The month is

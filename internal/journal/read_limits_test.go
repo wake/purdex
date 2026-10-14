@@ -51,8 +51,8 @@ func TestReadUnit_SkipsWhatIsNotARegularFile(t *testing.T) {
 		t.Fatalf("skipped = %+v", skipped)
 	}
 	for _, s := range skipped {
-		if s.Reason == "" {
-			t.Errorf("skip of %s has no reason", s.Name)
+		if s.Reason != "not a regular file" {
+			t.Errorf("skip of %s: reason %q, want \"not a regular file\"", s.Name, s.Reason)
 		}
 	}
 }
@@ -69,7 +69,7 @@ func TestReadUnit_SkipsAnOversizedMonth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(ids(got), []string{"small"}) || !slices.Equal(skippedNames(skipped), []string{"2026-11.md"}) {
+	if !slices.Equal(ids(got), []string{"small"}) || !slices.Equal(skippedNames(skipped), []string{"2026-11.md"}) || skipped[0].Reason != "too large" {
 		t.Fatalf("entries = %v, skipped = %+v", ids(got), skipped)
 	}
 }
@@ -94,7 +94,7 @@ func TestReadUnit_UnitBudgetKeepsTheNewestMonths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(ids(got), []string{"oct", "nov"}) || !slices.Equal(skippedNames(skipped), []string{"2026-09.md"}) {
+	if !slices.Equal(ids(got), []string{"oct", "nov"}) || !slices.Equal(skippedNames(skipped), []string{"2026-09.md"}) || skipped[0].Reason != "over the unit's size budget" {
 		t.Fatalf("entries = %v, skipped = %+v", ids(got), skipped)
 	}
 }
@@ -118,7 +118,7 @@ func TestReadUnit_AnUnreadableMonthDoesNotHideTheOthers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("an unreadable month failed the unit: %v", err)
 	}
-	if !slices.Equal(ids(got), []string{"readable"}) || !slices.Equal(skippedNames(skipped), []string{"2026-10.md"}) {
+	if !slices.Equal(ids(got), []string{"readable"}) || !slices.Equal(skippedNames(skipped), []string{"2026-10.md"}) || !strings.HasPrefix(skipped[0].Reason, "unreadable: ") {
 		t.Fatalf("entries = %v, skipped = %+v", ids(got), skipped)
 	}
 }
