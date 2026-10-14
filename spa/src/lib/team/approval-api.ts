@@ -10,7 +10,7 @@
 // queues the decision on that code alone.
 import { pinnedHostFetch } from '../host-api'
 import { useHostStore } from '../../stores/useHostStore'
-import type { APIError, Approval, ApprovalErrorCode, DecideRequest, InflightResponse } from './types'
+import { isApproval, type APIError, type Approval, type ApprovalErrorCode, type DecideRequest, type InflightResponse } from './types'
 
 /** `fetchInflight`'s budget: the restart confirm's own (daemon-restart.ts `WORKER_COUNT_TIMEOUT_MS`). */
 export const INFLIGHT_TIMEOUT_MS = 3_000
@@ -98,6 +98,16 @@ export async function fetchAdoption(hostId: string, approvalId: string, waitS: n
   const wait = Math.max(0, Math.min(30, Math.trunc(waitS)))
   const r = await send<Partial<AdoptionAnswer>>(hostId, `/api/team/adoptions/${encodeURIComponent(approvalId)}?wait=${wait}`, { method: 'GET', ...(signal ? { signal } : {}) })
   return { approval_id: typeof r.approval_id === 'string' ? r.approval_id : approvalId, state: typeof r.state === 'string' ? r.state : '', ...(typeof r.code === 'string' && r.code !== '' ? { code: r.code } : {}) }
+}
+
+/**
+ * `GET /api/team/approvals/{id}` without `wait`: the row as it is now (the daemon also renews its lease). 404 `not_found` when the
+ * request is gone; a body that is not an Approval is `bad_response`.
+ */
+export async function fetchApproval(hostId: string, id: string): Promise<Approval> {
+  const r = await send<unknown>(hostId, `/api/team/approvals/${encodeURIComponent(id)}`, { method: 'GET' })
+  if (!isApproval(r)) throw new ApprovalApiError(200, 'bad_response', 'the approval is not the wire shape')
+  return r
 }
 
 /** `GET /api/team/approvals?state=open`. `approvals` is `[]` from the daemon, but null is tolerated. */

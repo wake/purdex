@@ -73,7 +73,57 @@ describe('PauseReleaseButton', () => {
   })
 })
 
+describe('PauseReleaseButton: relay_unanswered confirm', () => {
+  const click = () => { fireEvent.click(screen.getByTestId('pause-release')) }
+  it('asks first when the causes hold relay_unanswered; nothing is sent until confirmed', async () => {
+    post.mockResolvedValue({ kind: 'released', n: 1 })
+    render(<PauseReleaseButton hostId="a" sessionId="S" causes={['quota', 'relay_unanswered']} />)
+    click()
+    await flush()
+    expect(post).not.toHaveBeenCalled()
+    expect(screen.getByTestId('pause-release-confirm-panel').textContent).toContain('解除後不接力，這個 session 繼續作業，之後不再申請接力')
+    fireEvent.click(screen.getByTestId('pause-release-confirm-confirm'))
+    await flush()
+    expect(post).toHaveBeenCalledTimes(1)
+    expect(post).toHaveBeenCalledWith('a', 'S')
+    expect(screen.queryByTestId('pause-release-confirm-panel')).toBeNull()
+  })
+  it('cancel sends nothing and closes the dialog', async () => {
+    render(<PauseReleaseButton hostId="a" sessionId="S" causes={['relay_unanswered']} />)
+    click()
+    fireEvent.click(screen.getByTestId('pause-release-confirm-cancel'))
+    await flush()
+    expect(post).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('pause-release-confirm-panel')).toBeNull()
+  })
+  it.each([[['quota']], [['lead']], [['quota', 'lead']], [undefined]])('causes %j: no confirm, the POST goes out at once', async (causes) => {
+    post.mockResolvedValue({ kind: 'released', n: 1 })
+    render(<PauseReleaseButton hostId="a" sessionId="S" causes={causes as never} />)
+    click()
+    await flush()
+    expect(screen.queryByTestId('pause-release-confirm-panel')).toBeNull()
+    expect(post).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('UnattendedPausedSection', () => {
+  it('relay_unanswered rows: the light text by role, and 解除 asks before it sends', async () => {
+    usePausedStore.getState().set('a', [
+      sess('1', { role: 'solo', causes: ['relay_unanswered'] }),
+      sess('2', { role: 'member', causes: ['quota', 'relay_unanswered'], lead_ref: '_l' }),
+    ], 1)
+    render(<UnattendedPausedSection hostIds={['a']} />)
+    const lights = screen.getAllByTestId('paused-light')
+    expect(lights.map((l) => l.textContent).sort()).toEqual(expect.arrayContaining([
+      expect.stringContaining('被擋下：接力申請沒有回應'),
+      expect.stringContaining('被擋下：等待 lead 確認接力'),
+    ]))
+    fireEvent.click(screen.getAllByTestId('pause-release')[0])
+    await flush()
+    expect(post).not.toHaveBeenCalled()
+    expect(screen.getByTestId('pause-release-confirm-panel')).toBeTruthy()
+  })
+
   it('renders rows from two hosts, the light text, and a lead hint only for role=lead', () => {
     usePausedStore.getState().set('a', [sess('1', { title: 'one', bounced: 2 })], 1)
     usePausedStore.getState().set('b', [sess('2', { title: '', role: 'lead', causes: ['lead'] })], 1)

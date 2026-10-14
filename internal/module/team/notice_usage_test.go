@@ -18,6 +18,8 @@ func noticeFixture(t *testing.T) *fixture {
 	f := newFixture(t)
 	f.approveLead(uid(1))
 	seedMember(t, f.m.store, "op-a", uid(1), "sid-ma", f.clock.Load())
+	f.liveMember("sid-ma", "_memop-a", "worker", "h/_memop-a", "tm-op-a") // a live local session: the registry has an inbox to speak as
+	f.origins.setInbox("sid-ma", "/tmp/ma-notice.sock")
 	return f
 }
 
@@ -87,6 +89,8 @@ func TestNotice70_OnceThenRearmsAfterARelay(t *testing.T) {
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
+	f.liveMember("sid-mb", "_newmb", "worker", "h/_newmb", "tm-op-a")
+	f.origins.setInbox("sid-mb", "/tmp/mb-notice.sock")
 	f.usage.setPct("sid-mb", 72)
 	f.usageCheck()
 	if n := len(f.sender.calls()); n != 2 {

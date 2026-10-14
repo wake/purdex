@@ -104,8 +104,8 @@ export function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert,
       {/* 被擋下 (UP-5b): the roster row says it is paused; the chip's 解除 goes to the host the seat lives on. */}
       {paused && (
         <div data-testid="team-panel-paused" className="pl-[26px] mt-1 flex items-center gap-2 text-[11px] leading-[16px] text-status-warning-text">
-          <span className="min-w-0 flex-1 truncate">{pausedLightText(t, paused.causes, 0)}</span>
-          {seat.hostId !== '' && <PauseReleaseButton hostId={seat.hostId} sessionId={seat.sessionId} />}
+          <span className="min-w-0 flex-1 truncate">{pausedLightText(t, paused.causes, 0, seat.role)}</span>
+          {seat.hostId !== '' && <PauseReleaseButton hostId={seat.hostId} sessionId={seat.sessionId} causes={paused.causes} />}
         </div>
       )}
       {/* Line 2: the task (only with a workbook that has a status); without one the row stays one line */}
