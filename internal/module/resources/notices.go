@@ -241,6 +241,9 @@ func (m *Module) noticeOutcome(p positionRow, res promptq.Result, text string) t
 		set("dropped:"+res.Reason, 0)
 		return noticeRetryOther
 	case promptq.NoMod:
+		if p.NoticeResult != promptq.NoMod { // once per slot: the fallback may retry every few seconds
+			m.logf("[resources] notices: %s %s found no mod for session %s: %s", p.ID, p.NoticeKind, p.SessionID, m.describeModStreams(p.SessionID))
+		}
 		return m.noticeFallback(p, text, nowMS, set)
 	}
 	m.logf("[resources] notices: unexpected answer %q for %s", res.Status, p.ID)
