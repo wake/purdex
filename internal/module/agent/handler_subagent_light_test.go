@@ -105,6 +105,19 @@ func TestHandler_SubagentWaiting_ClearedOnlyByItsOwnAgent(t *testing.T) {
 	}
 }
 
+// The tmux path must not consume the record when it reads it: a failed frame
+// write has to leave it for the hook's retry (codex R3).
+func TestSubagentWait_TmuxReadKeepsRecordForRetry(t *testing.T) {
+	m := idleMainWithSubagent(t)
+	sendBody(t, m, permissionBy("agent-X"))
+	req := EventRequest{TmuxPaneID: "%5", RawEvent: json.RawMessage(`{"agent_id":"agent-X"}`)}
+	for i := 0; i < 2; i++ {
+		if _, ok := m.takeSubagentWait(req, false); !ok {
+			t.Fatalf("read %d: record gone", i)
+		}
+	}
+}
+
 // A waiting the main conversation caused (no agent_id) is not cleared by a
 // subagent's tool call.
 func TestHandler_MainWaiting_NotClearedBySubagent(t *testing.T) {

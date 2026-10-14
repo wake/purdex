@@ -56,7 +56,7 @@ func (m *Module) handleNonTmuxEvent(w http.ResponseWriter, req EventRequest, tra
 	// call (its permission prompt was granted); no frame exists to read, so the
 	// light goes back to running.
 	if isSubagentToolUse(req, result) {
-		if prior, ok := m.takeSubagentWait(req); ok {
+		if prior, ok := m.takeSubagentWait(req, true); ok {
 			result.Status = prior
 		} else {
 			trace.Verify(req, "skipped", "subagent_tool_use", nil)

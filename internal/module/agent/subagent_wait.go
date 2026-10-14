@@ -69,7 +69,9 @@ func (m *Module) dropWait(req EventRequest) {
 
 // takeSubagentWait reports the status a subagent's PostToolUse restores: only
 // the agent that caused the recorded waiting clears it, once.
-func (m *Module) takeSubagentWait(req EventRequest) (agentpkg.Status, bool) {
+// consume drops the record on a match; the tmux path keeps it (frame state
+// guards repeats), the non-tmux path has no frame and consumes.
+func (m *Module) takeSubagentWait(req EventRequest, consume bool) (agentpkg.Status, bool) {
 	id := rawAgentID(req)
 	key := waitKey(req)
 	m.subWaits.mu.Lock()
@@ -78,7 +80,9 @@ func (m *Module) takeSubagentWait(req EventRequest) (agentpkg.Status, bool) {
 	if !ok || id == "" || w.agentID != id {
 		return "", false
 	}
-	delete(m.subWaits.by, key)
+	if consume {
+		delete(m.subWaits.by, key)
+	}
 	return w.prior, true
 }
 

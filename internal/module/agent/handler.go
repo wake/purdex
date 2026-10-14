@@ -418,7 +418,10 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		// (its own permission prompt, now granted) clears it, back to the
 		// status the light had before. Any other subagent stays ignored.
 		if m.framePriorStatus(req) == agentpkg.StatusWaiting {
-			if prior, ok := m.takeSubagentWait(req); ok {
+			if prior, ok := m.takeSubagentWait(req, false); ok {
+				// Not consumed: the record must survive a failed or lost
+				// frame write so the hook's retry can still clear the light.
+				// The frame no longer being waiting is what stops a repeat.
 				result.Status = prior
 				subagentToolUse = false
 			}
