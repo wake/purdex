@@ -517,3 +517,31 @@ func TestFresh_AStaleReportCancelsTheWaitingReuseCard(t *testing.T) {
 		t.Fatalf("a stale report for another op closed the card: %s", st)
 	}
 }
+
+// codex critic: the stale report and an approval race (approve takes no createMu). With the fresh row already gone, the approve's own
+// transaction refuses: the op is never claimed with the stale file, whatever the order of the stale handler's card cancel.
+// Mutation gate: drop the in-transaction check → the approve claims the op (red).
+func TestReuseCard_ApproveRefusesWhenTheFreshHalfIsGone(t *testing.T) {
+	f := newFixture(t)
+	half := f.freshHalfWithFile("sid-1")
+	_, resp, _ := f.beginRaw2(reuseBeginReq("sid-1", half.ID))
+	if err := f.m.store.DeleteFreshHalf("sid-1", half.ID); err != nil { // the stale report's first half; its card cancel has not run yet
+		t.Fatal(err)
+	}
+	code, body := f.decide(resp.RequestID, "approve")
+	if code != http.StatusConflict || !strings.Contains(string(body), team.ErrReuseInvalid) {
+		t.Fatalf("approve: %d %s, want 409 reuse_invalid", code, body)
+	}
+	if st := f.rowState(resp.RequestID); st != team.StateOpen {
+		t.Fatalf("the refused approve left the card %s, want open (the stale handler cancels it)", st)
+	}
+	if op, _, _ := f.m.store.GetRelayOp(resp.Op.ID); op.State == team.RelayClaimed {
+		t.Fatalf("the op was claimed with a stale file: %+v", op)
+	}
+	// an ordinary card is unaffected
+	f2 := newFixture(t)
+	plain := f2.begin("sid-1")
+	if c, _ := f2.decide(plain.RequestID, "approve"); c != http.StatusOK {
+		t.Fatalf("an ordinary approve: %d", c)
+	}
+}
