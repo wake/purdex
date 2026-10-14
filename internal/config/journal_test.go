@@ -59,3 +59,28 @@ func TestJournal_ReadPushProjectsReReadsTheFile(t *testing.T) {
 		t.Fatalf("broken file: %v, %v, want an error and nothing", got, err)
 	}
 }
+
+// Mutation gate: default "" / ignore the configured value / skip the trim -> red.
+func TestJournalPersonName(t *testing.T) {
+	for _, c := range []struct{ name, toml, want string }{
+		{"absent section", "port = 9000\n", "使用者"},
+		{"empty section", "[journal]\n", "使用者"},
+		{"blank value", "[journal]\nperson_name = \"  \"\n", "使用者"},
+		{"configured", "[journal]\nperson_name = \"Wake\"\n", "Wake"},
+		{"trimmed", "[journal]\nperson_name = \" Wake \"\n", "Wake"},
+	} {
+		if got := loadToml(t, c.toml).JournalPersonName(); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// A copy of the config does not share the section with the original.
+func TestJournalConfig_CloneIsDeep(t *testing.T) {
+	cfg := loadToml(t, "[journal]\nperson_name = \"Wake\"\n")
+	cp := cfg.Clone()
+	cp.Journal.PersonName = "Other"
+	if cfg.JournalPersonName() != "Wake" {
+		t.Fatalf("original changed to %q", cfg.JournalPersonName())
+	}
+}

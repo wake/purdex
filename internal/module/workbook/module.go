@@ -166,6 +166,11 @@ func (m *Module) startEngine(st *Store) {
 		}
 	}
 	d.OnAvailability = m.announceAvailability
+	d.PersonName = func() string {
+		m.core.CfgMu.RLock()
+		defer m.core.CfgMu.RUnlock()
+		return m.core.Cfg.JournalPersonName()
+	}
 	eng := NewEngine(d)
 	eng.SetWaiter(m.lines)
 	ctx, cancel := context.WithCancel(context.Background())

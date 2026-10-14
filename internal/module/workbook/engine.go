@@ -54,6 +54,9 @@ type Deps struct {
 	// OnJournalResult receives a journal job's validated result. J-1b2 replaces it with the outbox insert; nil: the
 	// result is only logged.
 	OnJournalResult func(JournalOutcome)
+	// PersonName is the person's name in the journal (config [journal] person_name), read each time a journal job is
+	// built, so a config reload applies to the next job. Nil or empty: the default.
+	PersonName func() string
 
 	// RefreshSessions lists the sessions whose live stream announced workbook.refresh within 30 s, with when (nil: none).
 	RefreshSessions func() []CapSession

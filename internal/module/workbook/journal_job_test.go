@@ -117,7 +117,7 @@ func TestJournalJob_WireIsATurnAndLeaseKeepsItsKind(t *testing.T) {
 	}
 	c := wire.Complete
 	if wire.Kind != "turn" || c.Model != "haiku" || c.Effort != "low" || c.MaxTokens != 4096 || c.TimeoutMS != 60_000 ||
-		len(c.System) != 1 || c.System[0].Text != JournalPrompt || !c.System[0].Cache || !strings.HasPrefix(c.Prompt, `{"unit_role":"leader","self_name":"name-s1"`) {
+		len(c.System) != 1 || c.System[0].Text != JournalPrompt || !c.System[0].Cache || !strings.HasPrefix(c.Prompt, `{"unit_role":"leader","person_name":"使用者","self_name":"name-s1"`) {
 		t.Fatalf("wire = %s", b)
 	}
 	if !strings.HasPrefix(JournalPrompt, "你是日誌記錄員") || strings.HasSuffix(JournalPrompt, "\n") || JournalPromptVersion != 1 {
@@ -294,5 +294,24 @@ func TestJournalPrompt_EqualsTheDocumentBlock(t *testing.T) {
 	m := regexp.MustCompile("(?s)```text\n(.*?)\n```").FindSubmatch(doc)
 	if m == nil || string(m[1]) != JournalPrompt {
 		t.Error("JournalPrompt differs from the first text block of the prompt document")
+	}
+}
+
+// The document is on the spec branch, so the check above skips in most checkouts. This one always runs: the golden
+// file is a verbatim copy of the document's amended block (person_name, 這個人, Wake in the examples). When the
+// document changes, change both files in one commit.
+// Mutation gate: edit one word of prompts/journal-v1.txt (or of the golden) -> red.
+func TestJournalPrompt_EqualsTheGoldenCopy(t *testing.T) {
+	golden, err := os.ReadFile("testdata/journal-prompt-doc-block.golden.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(golden) != JournalPrompt {
+		t.Error("JournalPrompt differs from testdata/journal-prompt-doc-block.golden.txt")
+	}
+	for _, want := range []string{"person_name", "這個人", "Wake"} {
+		if !strings.Contains(JournalPrompt, want) {
+			t.Errorf("JournalPrompt does not mention %q", want)
+		}
 	}
 }

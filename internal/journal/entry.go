@@ -51,6 +51,7 @@ type Entry struct {
 	By     By        `json:"by,omitempty"` // request only
 	At     time.Time `json:"at"`
 	Actor  string    `json:"actor,omitempty"`
+	Person string    `json:"person,omitempty"` // the person's name, for the label of a request they make (By user); empty: 使用者
 	Text   string    `json:"text,omitempty"`
 	Refs   []string  `json:"refs,omitempty"`
 	Items  []Item    `json:"items,omitempty"`
@@ -61,12 +62,28 @@ type Entry struct {
 // Label is the Chinese label of the kind; a request is 「<by>請求」.
 func (e Entry) Label() string {
 	if e.Kind == KindRequest {
+		if e.By == ByUser && e.Person != "" {
+			return e.Person + requestGap(e.Person) + "請求"
+		}
 		if l, ok := byLabels[e.By]; ok {
 			return l + "請求"
 		}
 		return "請求"
 	}
 	return kindLabels[e.Kind]
+}
+
+// requestGap is the space between a person's name and 「請求」: one when the name ends in an ASCII letter or digit
+// (「Wake 請求」), none after a CJK name (「王小明請求」).
+func requestGap(name string) string {
+	if name == "" {
+		return ""
+	}
+	c := name[len(name)-1]
+	if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
+		return " "
+	}
+	return ""
 }
 
 // Validate reports why an entry cannot be written.

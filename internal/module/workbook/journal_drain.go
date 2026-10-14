@@ -65,6 +65,9 @@ type Drainer struct {
 	kick   chan struct{}
 
 	markDone func(id int64) error // test seam: nil = Store.MarkOutboxDone
+
+	selfName   func(sessionID string) string // the session's virtual name (SetNames); nil: entries carry no actor
+	personName func() string                 // the person's name (SetNames); nil: the default
 }
 
 type retryState struct {
@@ -80,6 +83,30 @@ func NewDrainer(st *Store, projects UnitProjects, logf func(string, ...any)) *Dr
 	}
 	return &Drainer{st: st, projects: projects, logf: logf, now: time.Now, projMu: map[string]*sync.Mutex{},
 		retry: map[int64]*retryState{}, kick: make(chan struct{}, 1)}
+}
+
+// SetNames tells the drainer how to name the session an entry belongs to (its virtual name; the drainer writes the display
+// name) and the person (config [journal] person_name, read at each write). Either may be nil. Call it before Run.
+func (d *Drainer) SetNames(selfName func(sessionID string) string, personName func() string) {
+	d.selfName, d.personName = selfName, personName
+}
+
+// actor is the display name of the session an entry belongs to, or "" when it cannot be named.
+func (d *Drainer) actor(sessionID string) string {
+	if d.selfName == nil {
+		return ""
+	}
+	return journal.DisplayName(d.selfName(sessionID))
+}
+
+// person is the person's name for a request they make.
+func (d *Drainer) person() string {
+	if d.personName != nil {
+		if n := strings.TrimSpace(d.personName()); n != "" {
+			return n
+		}
+	}
+	return journal.DefaultPersonName
 }
 
 // Kick asks for a pass soon (after a result was applied).
@@ -297,9 +324,10 @@ func (h home) putNew(e journal.Entry) error {
 // writeTurn writes a turn row: the solo task entries and tasks file, then the exec entry (only for an ok entry).
 func (d *Drainer) writeTurn(h home, ent Entry, p turnPayload) error {
 	when := at(ent.TurnAt)
+	actor := d.actor(ent.SessionID)
 	if h.solo {
 		for _, t := range p.Todos {
-			e := journal.Entry{ID: fmt.Sprintf("todo:%d:new", t.ID), Kind: journal.KindTaskNew, At: when, Text: fmt.Sprintf("#%d %s", t.Seq, t.Title)}
+			e := journal.Entry{ID: fmt.Sprintf("todo:%d:new", t.ID), Kind: journal.KindTaskNew, At: when, Actor: actor, Text: fmt.Sprintf("#%d %s", t.Seq, t.Title)}
 			switch t.State {
 			case TodoOpen:
 			case TodoDone:
@@ -320,7 +348,7 @@ func (d *Drainer) writeTurn(h home, ent Entry, p turnPayload) error {
 		if ent.ThingDone {
 			kind = journal.KindExecDone
 		}
-		if err := h.putNew(journal.Entry{ID: fmt.Sprintf("turn:%d", ent.ID), Kind: kind, At: when, Text: strings.TrimSpace(ent.Entry)}); err != nil {
+		if err := h.putNew(journal.Entry{ID: fmt.Sprintf("turn:%d", ent.ID), Kind: kind, At: when, Actor: actor, Text: strings.TrimSpace(ent.Entry)}); err != nil {
 			return err
 		}
 	}
@@ -362,6 +390,12 @@ func (d *Drainer) writeJournal(h home, ent Entry, p journalPayload) error {
 		e := journal.Entry{ID: fmt.Sprintf("ev:%d:%d", ent.ID, i), Kind: journal.Kind(ev.Kind), By: journal.By(ev.By), At: when, Actor: ev.Actor, Text: ev.Text, Detail: ev.Detail}
 		for _, it := range ev.Items {
 			e.Items = append(e.Items, journal.Item{Text: it})
+		}
+		if e.By == journal.ByUser {
+			e.Person = p.Person
+			if e.Person == "" { // a row written before the job's name was kept
+				e.Person = d.person()
+			}
 		}
 		e.Pinned = e.Kind == journal.KindConfirm
 		if err := h.putNew(e); err != nil {

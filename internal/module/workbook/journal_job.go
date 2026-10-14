@@ -2,7 +2,20 @@ package workbook
 
 import (
 	_ "embed"
+	"strings"
+
+	"github.com/wake/purdex/internal/journal"
 )
+
+// personName is the person's name for a journal job: the configured one, or the default.
+func (e *Engine) personName() string {
+	if e.d.PersonName != nil {
+		if n := strings.TrimSpace(e.d.PersonName()); n != "" {
+			return n
+		}
+	}
+	return journal.DefaultPersonName
+}
 
 // JournalPromptVersion is the version of the journal job's prompt (journal_ver). It is stored with the job's outbox
 // row in J-1b2, not with the turn entry: the turn job and its prompt (PromptVersion 2) are untouched. A change to the
@@ -20,6 +33,7 @@ type JournalOutcome struct {
 	EntryID   int64  // the turn entry the journal job followed
 	ConvKey   string // the conversation
 	PromptVer int    // JournalPromptVersion
+	Person    string // the person_name the job ran with
 	Result    JournalResult
 	Usage     Usage
 	LatencyMS int64
@@ -60,7 +74,7 @@ func (e *Engine) buildJournal(j *job, c Complete) (Complete, map[int]int64, erro
 		return Complete{}, nil, err
 	}
 	role, _ := unitRoleOf(ent.Role)
-	seed := JournalSeed{UnitRole: role, SelfName: e.d.Journal.SelfName(j.session)}
+	seed := JournalSeed{UnitRole: role, PersonName: e.personName(), SelfName: journal.DisplayName(e.d.Journal.SelfName(j.session))}
 	files, ok, err := e.d.Journal.UnitFiles(ent)
 	if err != nil {
 		e.d.Logf("[workbook] journal input: unit files: %v", err) // an unreadable unit: the job runs with empty lists
@@ -75,6 +89,7 @@ func (e *Engine) buildJournal(j *job, c Complete) (Complete, map[int]int64, erro
 		return Complete{}, nil, err
 	}
 	j.jctx = ctx
+	j.person = seed.PersonName
 	c.System = []SystemBlock{{Text: JournalPrompt, Cache: true}}
 	c.Prompt = prompt
 	c.TimeoutMS = journalTimeout
@@ -116,7 +131,7 @@ func (e *Engine) journalRetry(j *job) *job {
 func (e *Engine) applyJournalResult(j *job, res JournalResult) {
 	e.d.Logf("[workbook] journal job of entry %d: %d events, %d ticks, %d roadmap changes, %d dropped",
 		j.entryID, len(res.Events), len(res.Ticks), len(res.Roadmap), res.Dropped)
-	out := JournalOutcome{EntryID: j.entryID, ConvKey: j.conv, PromptVer: JournalPromptVersion, Result: res, Usage: j.usage, LatencyMS: j.lat}
+	out := JournalOutcome{EntryID: j.entryID, ConvKey: j.conv, PromptVer: JournalPromptVersion, Person: j.person, Result: res, Usage: j.usage, LatencyMS: j.lat}
 	if e.d.Store != nil {
 		if err := e.d.Store.RecordJournalResult(out); err != nil {
 			e.d.Logf("[workbook] journal job of entry %d: store the result: %v", j.entryID, err)

@@ -56,7 +56,8 @@ type payloadTodo struct {
 
 // journalPayload is a `journal` row: a validated journal result, ready to be written.
 type journalPayload struct {
-	Ver     int              `json:"ver"` // JournalPromptVersion
+	Ver     int              `json:"ver"`              // JournalPromptVersion
+	Person  string           `json:"person,omitempty"` // the person_name the job ran with
 	Events  []payloadEvent   `json:"events,omitempty"`
 	Ticks   []payloadTick    `json:"ticks,omitempty"`
 	Roadmap []payloadRoadmap `json:"roadmap,omitempty"`
@@ -135,7 +136,7 @@ func (s *Store) RecordJournalResult(out JournalOutcome) error {
 	if !s.journalOn.Load() {
 		return nil
 	}
-	p := journalPayload{Ver: out.PromptVer}
+	p := journalPayload{Ver: out.PromptVer, Person: out.Person}
 	for _, ev := range out.Result.Events {
 		p.Events = append(p.Events, payloadEvent{Kind: string(ev.Kind), By: string(ev.By), Actor: ev.Actor, Text: ev.Text, Items: ev.Items, Detail: ev.Detail})
 	}
