@@ -25,6 +25,12 @@ func runArgs(flags []string, cmd ...string) []string {
 // clock (the child is a real process) and the signal channel sigs (nil: none).
 func driveRunCmd(t *testing.T, d *fakeLeaseDaemon, sigs chan os.Signal, flags []string, cmd ...string) (int, string, string) {
 	t.Helper()
+	return driveRunEnv(t, d, sigs, nil, flags, cmd...)
+}
+
+// driveRunEnv is driveRunCmd with an environment, which runLeaseCmd's getenv reads.
+func driveRunEnv(t *testing.T, d *fakeLeaseDaemon, sigs chan os.Signal, env map[string]string, flags []string, cmd ...string) (int, string, string) {
+	t.Helper()
 	fixedHolder(t)
 	old := leaseSignals
 	leaseSignals = func() (<-chan os.Signal, func()) {
@@ -39,7 +45,7 @@ func driveRunCmd(t *testing.T, d *fakeLeaseDaemon, sigs chan os.Signal, flags []
 	cfg := writeTestConfig(t, srv.URL, "admin-tok")
 	var stdout, stderr bytes.Buffer
 	args := append([]string{"run", "--config", cfg}, runArgs(flags, cmd...)...)
-	code := runLeaseCmd(context.Background(), args, fakeGetenv(nil), &stdout, &stderr, leadNoKeepAlive())
+	code := runLeaseCmd(context.Background(), args, fakeGetenv(env), &stdout, &stderr, leadNoKeepAlive())
 	return code, stdout.String(), stderr.String()
 }
 
@@ -72,10 +78,10 @@ func TestRun_HoldsAsPdxAndReleasesAfterTheChild(t *testing.T) {
 		t.Fatalf("code=%d stderr=%q posts=%d", code, stderr, len(posts))
 	}
 	p := posts[0]
-	if p.HolderPID != os.Getpid() || p.Scope != resources.ScopeProcess || p.Weight != 30 || p.WaitS != 120 || p.SessionID != "" {
+	if p.HolderPID != os.Getpid() || p.Scope != resources.ScopeProcess || p.Weight != 30 || p.WaitS != 0 || p.SessionID != "" {
 		t.Errorf("request = %+v", p)
 	}
-	if len(deletes) != 1 || deletes[0] != "/api/resources/leases/"+leaseRow {
+	if len(deletes) != 1 || deletes[0] != "/api/resources/leases/"+leaseRow+"?notice=1" {
 		t.Errorf("deletes = %v", deletes)
 	}
 }
@@ -207,7 +213,7 @@ func TestRun_WaitedLines(t *testing.T) {
 	}
 	d = waiting(resources.LeaseResponse{ID: leaseRow, State: resources.StateHeld, Granted: true, Overrun: true, WaitedMS: 300000, Host: resources.LeaseHost{Measured: 99}})
 	_, _, stderr = driveRunCmd(t, d, nil, []string{"--kind", "build"}, "true")
-	if stderr != "pdx lease: 等滿 5 分鐘，超量放行（已記錄）\n" {
+	if stderr != "pdx lease: 等了 5 分鐘主機資源（負載 99/100）\n" { // no overrun line any more: v2 has no overrun grant
 		t.Errorf("overrun: %q", stderr)
 	}
 	// A wait under a second is not worth a line.
