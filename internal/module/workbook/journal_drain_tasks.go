@@ -5,10 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/wake/purdex/internal/journal"
 )
+
+// curTaskRow is the cursor name (+ unit key) of the newest task row whose list the unit's tasks file shows.
+const curTaskRow = "taskrow:"
 
 // writeTaskRow writes a `task` row of the team task mirror: the task entries, the closing lines that arrived after their
 // entry, and the unit's tasks file. A row belongs to no workbook entry, so it is ready at once; the entries are created
@@ -46,21 +50,22 @@ func (d *Drainer) writeTaskRow(it OutboxItem) error {
 			return err
 		}
 	}
-	// A row holds the whole list as of its time, and a delayed row is retried after later ones were written: only a row newer
-	// than the last one shown may rewrite the file, or the retry would put an older list back.
-	d.mu.Lock()
-	newest := d.taskRow[it.UnitKey]
-	d.mu.Unlock()
+	// A row holds the whole list as of its time, and a delayed row is retried after later ones were written (also after a
+	// restart): only a row newer than the last one shown may rewrite the file, or the retry would put an older list back.
+	// The newest row written is kept in the store, so the guard survives the process.
+	var newest int64
+	if raw, ok, err := d.st.JournalCursor(curTaskRow + it.UnitKey); err != nil {
+		return err
+	} else if ok {
+		newest, _ = strconv.ParseInt(raw, 10, 64)
+	}
 	if it.ID < newest {
 		return nil
 	}
 	if err := journal.WriteTasks(h.tasksFile, d.taskFileRows(p)); err != nil {
 		return err
 	}
-	d.mu.Lock()
-	d.taskRow[it.UnitKey] = it.ID
-	d.mu.Unlock()
-	return nil
+	return d.st.SetJournalCursor(curTaskRow+it.UnitKey, strconv.FormatInt(it.ID, 10))
 }
 
 // taskFileRows is the mirror's task list as the tasks file shows it.

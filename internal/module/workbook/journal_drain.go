@@ -60,11 +60,10 @@ type Drainer struct {
 	logf     func(string, ...any)
 	now      func() time.Time
 
-	mu      sync.Mutex // guards projMu, retry and taskRow
-	projMu  map[string]*sync.Mutex
-	retry   map[int64]*retryState
-	taskRow map[string]int64 // unit key -> the newest task row whose list its tasks file shows
-	kick    chan struct{}
+	mu     sync.Mutex // guards projMu and retry
+	projMu map[string]*sync.Mutex
+	retry  map[int64]*retryState
+	kick   chan struct{}
 
 	markDone func(id int64) error // test seam: nil = Store.MarkOutboxDone
 
@@ -84,7 +83,7 @@ func NewDrainer(st *Store, projects UnitProjects, logf func(string, ...any)) *Dr
 		logf = func(string, ...any) {}
 	}
 	return &Drainer{st: st, projects: projects, logf: logf, now: time.Now, projMu: map[string]*sync.Mutex{},
-		retry: map[int64]*retryState{}, taskRow: map[string]int64{}, kick: make(chan struct{}, 1)}
+		retry: map[int64]*retryState{}, kick: make(chan struct{}, 1)}
 }
 
 // SetNames tells the drainer how to name the session an entry belongs to (its virtual name; the drainer writes the display

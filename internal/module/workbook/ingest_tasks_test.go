@@ -584,6 +584,97 @@ func TestTaskMirror_ARetriedOlderRowDoesNotRestoreAnOlderTaskList(t *testing.T) 
 	}
 }
 
+// The guard survives a restart: the newest row written is kept in the store, not in the drainer.
+// Mutation gate: keep the newest row in memory only -> a restarted drainer retries the older row and puts its list back (red).
+func TestTaskMirror_TheOlderRowStaysSkippedAfterARestart(t *testing.T) {
+	k := newMirrorKit(t)
+	k.finishBaseline()
+	k.feed.set(k.task(1, "寫文案", taskDoing, time.Second, time.Second))
+	k.now = k.now.Add(mirrorEvery)
+	k.tick() // row A: task 1 doing
+	k.feed.set(k.task(1, "寫文案", taskCompleted, time.Second, 11*time.Second))
+	k.now = k.now.Add(mirrorEvery)
+	k.tick() // row B: task 1 done
+	failed := false
+	k.d.markDone = func(id int64) error {
+		if !failed {
+			failed = true
+			return errors.New("crash before the mark") // row A is written, but stays undone
+		}
+		return k.st.MarkOutboxDone(id)
+	}
+	k.drain()
+	k.d = NewDrainer(k.st, k.fp, func(f string, a ...any) { k.logs = append(k.logs, f) }) // the daemon restarts
+	k.d.now = func() time.Time { return k.now }
+	k.d.SetNames(func(sid string) string { return "mlab/purdex-3f-" + strings.TrimSuffix(sid, "-sess") }, nil)
+	if n := k.drain(); n != 1 {
+		t.Fatalf("the restarted drainer handled %d rows, want the one undone row", n)
+	}
+	states := map[string]journal.TaskState{}
+	for _, tk := range k.tasksFile() {
+		states[tk.Key] = tk.State
+	}
+	if states[mkTeam+"-1"] != journal.TaskDone {
+		t.Fatalf("tasks file = %v: the older row put its list back after a restart", states)
+	}
+}
+
+// A team the mirror saw while its lead was not on this host is looked at again every tick, so it is caught up the moment
+// its lead is here, with no new row of that team (a daemon that starts before its sessions are registered sees every lead as
+// elsewhere). A team still led elsewhere stays unmirrored.
+// Mutation gate: no marker for a skipped team -> never caught up (red); no re-check -> never caught up (red); a team led
+// elsewhere is mirrored (red); the marker never cleared -> still set after the catch-up (red).
+func TestTaskMirror_ATeamSkippedWhileItsLeadWasUnknownIsCaughtUpWithoutNewRows(t *testing.T) {
+	k := newMirrorKit(t)
+	k.local[mkLead] = false // a daemon that has not yet registered its sessions
+	k.feed.teams["far"] = team.TeamInfo{TeamID: "far", Label: "遠方", LeadSessionID: "far-lead"}
+	k.feed.set(k.task(1, "舊的進行中", taskDoing, -5*time.Hour, -5*time.Hour))
+	k.feed.set(k.task(2, "舊的完成", taskCompleted, -5*time.Hour, -4*time.Hour))
+	k.feed.set(team.TaskChange{TeamID: "far", Seq: 1, Subject: "別處的", Status: taskDoing, OwnerSessionID: "x", CreatedAt: k.ms(-5 * time.Hour), UpdatedAt: k.ms(-5 * time.Hour)})
+	k.tick() // the first scan: every lead looks elsewhere
+	k.drain()
+	if len(k.tasksFile()) != 0 {
+		t.Fatal("a team led elsewhere was mirrored")
+	}
+	k.local[mkLead] = true // the sessions are registered; no row of the team changes
+	k.now = k.now.Add(mirrorEvery)
+	k.tick()
+	k.drain()
+	if got := len(k.tasksFile()); got != 2 {
+		t.Fatalf("the tasks file shows %d tasks, want 2", got)
+	}
+	if es := k.entries(); len(es) != 0 {
+		t.Fatalf("the catch-up of old tasks wrote %d entries: %+v", len(es), es)
+	}
+	if files, _ := filepath.Glob(filepath.Join(k.fp.wt, ".purdex", "tasks", "*.md")); len(files) != 1 {
+		t.Fatalf("%d tasks files, want the one of the team led here", len(files))
+	}
+	if v, ok, _ := k.st.JournalCursor(curSkip + mkTeam); !ok || v != "" {
+		t.Fatalf("the marker of the caught-up team = %q (%v), want it cleared", v, ok)
+	}
+	if v, _, _ := k.st.JournalCursor(curSkip + "far"); v != "1" {
+		t.Fatalf("the marker of the team still led elsewhere = %q, want it kept", v)
+	}
+}
+
+// A team that was met with its lead elsewhere and is gone from the team module is forgotten, not looked at for ever.
+// Mutation gate: keep the marker of a gone team -> it stays set (red).
+func TestTaskMirror_ASkippedTeamThatIsGoneIsForgotten(t *testing.T) {
+	k := newMirrorKit(t)
+	k.feed.teams["gone"] = team.TeamInfo{TeamID: "gone", LeadSessionID: "far-lead"}
+	k.feed.set(team.TaskChange{TeamID: "gone", Seq: 1, Subject: "x", Status: taskDoing, OwnerSessionID: "x", CreatedAt: k.ms(-5 * time.Hour), UpdatedAt: k.ms(-5 * time.Hour)})
+	k.tick()
+	if v, _, _ := k.st.JournalCursor(curSkip + "gone"); v != "1" {
+		t.Fatalf("the marker of a team led elsewhere = %q, want it set", v)
+	}
+	delete(k.feed.teams, "gone")
+	k.now = k.now.Add(mirrorEvery)
+	k.tick()
+	if v, ok, _ := k.st.JournalCursor(curSkip + "gone"); !ok || v != "" {
+		t.Fatalf("the marker of a gone team = %q (%v), want it cleared", v, ok)
+	}
+}
+
 // A closing line whose task_done was edited away is logged and skipped: the row is done, not retried for ever, and it
 // does not block the rows behind it.
 // Mutation gate: treat a missing entry as a failure -> drain fails, the row stays undone (red).

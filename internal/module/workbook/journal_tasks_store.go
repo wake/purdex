@@ -37,6 +37,37 @@ func (s *Store) JournalCursor(name string) (string, bool, error) {
 	return v, true, nil
 }
 
+// SetJournalCursor writes one value of wb_journal_cursors on its own (the drainer keeps its per-unit marks here; the
+// mirror's values go through ApplyTaskPage, with the rows they belong to).
+func (s *Store) SetJournalCursor(name, value string) error {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+	_, err := s.db.Exec(`INSERT INTO wb_journal_cursors (name, value) VALUES (?, ?)
+		ON CONFLICT (name) DO UPDATE SET value = excluded.value`, name, value)
+	if err != nil {
+		return fmt.Errorf("write journal cursor %s: %w", name, err)
+	}
+	return nil
+}
+
+// JournalCursors reads every value of wb_journal_cursors whose name starts with prefix, keyed by the rest of the name.
+func (s *Store) JournalCursors(prefix string) (map[string]string, error) {
+	rows, err := s.db.Query(`SELECT name, value FROM wb_journal_cursors WHERE substr(name, 1, ?) = ?`, len(prefix), prefix)
+	if err != nil {
+		return nil, fmt.Errorf("list journal cursors %s: %w", prefix, err)
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var name, v string
+		if err := rows.Scan(&name, &v); err != nil {
+			return nil, fmt.Errorf("list journal cursors %s: %w", prefix, err)
+		}
+		out[name[len(prefix):]] = v
+	}
+	return out, rows.Err()
+}
+
 // ApplyTaskPage stores a page in ONE transaction: its outbox rows and its cursors. Either all of it is kept or none, so a
 // failure leaves the cursor where it was and the page is read again; a crash cannot move the cursor past rows that were
 // not stored.

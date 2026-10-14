@@ -34,6 +34,7 @@ const (
 	curReports = "reports"     // the last report rowid, decimal
 	curReady   = "tasks-ready" // set when the first scan (the baseline) is finished
 	curTeam    = "taskmirror:" // + team id: that team's mirror, JSON
+	curSkip    = "taskskip:"   // + team id: "1" while the team was met with its lead elsewhere, "" once it is caught up or gone
 )
 
 // Task statuses of the team module.
@@ -265,12 +266,14 @@ type tick struct {
 	baseline bool
 	teams    map[string]*teamMirror
 	infos    map[string]*mirrorTeam
+	skips    map[string]bool // teams met with their lead elsewhere, to be stored with the next page
 }
 
 // mirrorTeam is a team the tick looked up: ok when its lead is on this host (only those are mirrored).
 type mirrorTeam struct {
-	info team.TeamInfo
-	ok   bool // mirrored: its lead is on this host
+	info  team.TeamInfo
+	found bool // the team module knows the team
+	ok    bool // mirrored: its lead is on this host
 }
 
 // Tick runs one pass: the reports first (a closing line is known before the task that needs it), then the tasks from the
@@ -281,11 +284,14 @@ func (m *TaskMirror) Tick(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	tk := &tick{m: m, now: now, baseline: ready == "", teams: map[string]*teamMirror{}, infos: map[string]*mirrorTeam{}}
+	tk := &tick{m: m, now: now, baseline: ready == "", teams: map[string]*teamMirror{}, infos: map[string]*mirrorTeam{}, skips: map[string]bool{}}
 	if err := tk.reports(ctx); err != nil {
 		return err
 	}
-	return tk.tasks(ctx)
+	if err := tk.tasks(ctx); err != nil {
+		return err
+	}
+	return tk.recheck(ctx)
 }
 
 func (tk *tick) lead(teamID string) (*mirrorTeam, error) {
@@ -296,7 +302,7 @@ func (tk *tick) lead(teamID string) (*mirrorTeam, error) {
 	if err != nil {
 		return nil, err
 	}
-	x := &mirrorTeam{info: info, ok: found && info.LeadSessionID != "" && tk.m.local(info.LeadSessionID)}
+	x := &mirrorTeam{info: info, found: found, ok: found && info.LeadSessionID != "" && tk.m.local(info.LeadSessionID)}
 	tk.infos[teamID] = x
 	return x, nil
 }
@@ -362,6 +368,61 @@ func (tk *tick) adopt(ctx context.Context, teamID string, tm *teamMirror, d *mir
 	return ctx.Err()
 }
 
+// skip remembers a team met while its lead is elsewhere. The cursors pass its rows, and it may have no more rows for a
+// long time (a daemon that starts before its sessions are registered sees every lead as elsewhere), so recheck looks at it
+// again every tick instead of waiting for a row.
+func (tk *tick) skip(teamID string, x *mirrorTeam) {
+	if x.found {
+		tk.skips[teamID] = true
+	}
+}
+
+// recheck looks again at the teams met while their lead was elsewhere: one whose lead is on this host now is caught up (it
+// needs no new row of its own), one the team module does not know any more is forgotten.
+func (tk *tick) recheck(ctx context.Context) error {
+	if tk.baseline {
+		return nil // the first scan is itself the catch-up of every team that is here
+	}
+	marks, err := tk.m.st.JournalCursors(curSkip)
+	if err != nil {
+		return err
+	}
+	ids := make([]string, 0, len(marks))
+	for id, v := range marks {
+		if v == "1" {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	deltas := map[string]*mirrorDelta{}
+	cursors := map[string]string{}
+	for _, id := range ids {
+		x, err := tk.lead(id)
+		if err != nil {
+			return err
+		}
+		switch {
+		case !x.found:
+			cursors[curSkip+id] = ""
+		case x.ok:
+			tm, err := tk.load(id)
+			if err != nil {
+				return err
+			}
+			d := &mirrorDelta{}
+			if err := tk.catchUp(ctx, id, tm, d); err != nil {
+				return err
+			}
+			deltas[id] = d
+			cursors[curSkip+id] = ""
+		}
+	}
+	if len(cursors) == 0 {
+		return nil
+	}
+	return tk.commit(deltas, cursors)
+}
+
 // catchUp runs adopt for a team met for the first time after the baseline (in the baseline itself the scan is the catch-up).
 func (tk *tick) catchUp(ctx context.Context, teamID string, tm *teamMirror, d *mirrorDelta) error {
 	if !tm.fresh {
@@ -398,6 +459,7 @@ func (tk *tick) reports(ctx context.Context) error {
 				return err
 			}
 			if !x.ok {
+				tk.skip(r.TeamID, x)
 				continue
 			}
 			tm, err := tk.load(r.TeamID)
@@ -454,6 +516,7 @@ func (tk *tick) tasks(ctx context.Context) error {
 				return err
 			}
 			if !x.ok {
+				tk.skip(c.TeamID, x)
 				continue
 			}
 			tm, err := tk.load(c.TeamID)
@@ -512,6 +575,11 @@ func after(a, b team.TaskCursor) bool {
 // and the cursors, in one transaction; then asks the drainer for a pass.
 func (tk *tick) commit(deltas map[string]*mirrorDelta, cursors map[string]string) error {
 	page := TaskPage{Cursors: cursors}
+	for id := range tk.skips {
+		if _, ok := cursors[curSkip+id]; !ok {
+			cursors[curSkip+id] = "1"
+		}
+	}
 	ids := make([]string, 0, len(deltas))
 	for id := range deltas {
 		ids = append(ids, id)
@@ -537,6 +605,7 @@ func (tk *tick) commit(deltas map[string]*mirrorDelta, cursors map[string]string
 	if err := tk.m.st.ApplyTaskPage(page); err != nil {
 		return err
 	}
+	tk.skips = map[string]bool{}
 	if queued && tk.m.kick != nil {
 		tk.m.kick()
 	}
