@@ -15,6 +15,7 @@ import (
 
 	"github.com/wake/purdex/internal/core"
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/peers/ccuds"
 )
 
 // fakePauseGate is the team store's PauseVerdict as peers sees it (through the service registry, never by import).
@@ -326,8 +327,12 @@ func TestSelfNotice_DeliveredToTheSessionItself_PauseStillApplies(t *testing.T) 
 	}
 	// the frame offers no way to answer: its reply route is not the session's own socket (a reply would loop back unaudited)
 	line := fmt.Sprint(s.recvLine())
-	if strings.Contains(line, req.OriginInbox) || !strings.Contains(line, "uds:"+systemNoticeFrom) {
-		t.Fatalf("frame = %s, want the reply route %q and not the origin's socket %q", line, systemNoticeFrom, req.OriginInbox)
+	fr, perr := ccuds.ParseFrame([]byte(line))
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	if _, ok := ccuds.FromSocket(fr.From); ok || fr.From != "" || strings.Contains(line, "uds:") || strings.Contains(line, req.OriginInbox) || !strings.Contains(fr.Message.Content, `from=""`) || !strings.Contains(fr.Message.Content, `from-name="`+systemNoticeName+`"`) {
+		t.Fatalf("frame = %s, want no reply address anywhere (frame from, wrapper from) and the name %q", line, systemNoticeName)
 	}
 	// each privileged key shows only its own method: the registered services cannot be asserted to the other's interface
 	reg := core.NewServiceRegistry()

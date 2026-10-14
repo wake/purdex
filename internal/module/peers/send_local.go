@@ -104,7 +104,7 @@ func (m *Module) deliverLocal(
 	// unrecorded delivery.
 	effective := mode
 	line, err := ccuds.BuildFrame(msgID, originInbox, ccuds.Wrapper{
-		From:     "uds:" + originInbox,
+		From:     replyFrom(originInbox),
 		FromName: originAddress,
 		FromMode: effective,
 		HopChain: "",
@@ -150,4 +150,12 @@ func (m *Module) deliverLocal(
 		// address is a socket in this very filesystem.
 		OneWay: false,
 	})
+}
+
+// replyFrom is the wrapper's from attribute: the sender's socket, or "" for a notice with no reply address.
+func replyFrom(originInbox string) string {
+	if originInbox == "" {
+		return ""
+	}
+	return "uds:" + originInbox
 }

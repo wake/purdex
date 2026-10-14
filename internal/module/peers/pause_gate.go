@@ -79,12 +79,9 @@ type FlowSender interface {
 	SendFlow(ctx context.Context, req peers.SendRequest) (peers.SendResponse, error)
 }
 
-// systemNoticeFrom / systemNoticeName are the reply route and the name of a self-notice frame: no socket, so a reply goes nowhere, and a
-// name that says who spoke.
-const (
-	systemNoticeFrom = "pdx-daemon-notice"
-	systemNoticeName = "pdx daemon"
-)
+// systemNoticeName is the from-name of a self-notice frame, which carries NO reply address (the frame's from and the wrapper's from are
+// empty): it says who spoke and offers nothing to answer.
+const systemNoticeName = "pdx daemon"
 
 // SelfNoticeSenderKey is the registry key of the team module's notice sender: a notice to a team lead about a member the lead's host does not
 // run (a member on another host), which has no inbox here to speak from. The daemon has no identity of its own, so the notice is sent from
