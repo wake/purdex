@@ -371,3 +371,26 @@ func TestNotices_AnErrorRetries(t *testing.T) {
 	assert.Len(t, n.tries(), 2)
 	assert.Equal(t, promptq.Accepted, f.position(posID).NoticeResult)
 }
+
+// An offer slot is current only while its position is still offered, for the same offer, and not yet delivered: each
+// condition alone makes the text empty (a stale offer would have the session re-run what was passed on).
+func TestNotices_OfferTextNeedsACurrentOffer(t *testing.T) {
+	f := newPosFix(t)
+	f.outbox(nil)
+	posID, _ := f.queuedThenOffered(newCID(), pidA, "go build")
+	p := f.position(posID)
+	p.NoticeKind, p.NoticeDueAt = "offer", p.OfferedAt
+	require.NotEmpty(t, f.m.noticeText(p, f.nowMS()), "the current offer says something")
+
+	delivered := p
+	delivered.DeliveredAt = p.OfferedAt + 1
+	assert.Empty(t, f.m.noticeText(delivered, f.nowMS()), "already delivered")
+
+	newer := p
+	newer.NoticeDueAt = p.OfferedAt - 1
+	assert.Empty(t, f.m.noticeText(newer, f.nowMS()), "a slot of an older offer")
+
+	moved := p
+	moved.State = resources.PosRunning
+	assert.Empty(t, f.m.noticeText(moved, f.nowMS()), "no longer offered")
+}
