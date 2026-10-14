@@ -111,6 +111,9 @@ func migrateFramesDB(db *sql.DB) error {
 	if err := migrateLastRunTable(db); err != nil {
 		return err
 	}
+	if err := migrateSessionPredecessorsTable(db); err != nil {
+		return err
+	}
 	return clearStaleSubagentsJSON(db)
 }
 
