@@ -12,18 +12,18 @@ import (
 )
 
 // The shadow counts the real held rows as "running": in the warning zone with
-// the usage flat it holds the next request, and lets it in once the trend
+// the usage rising it holds the next request, and lets it in once the trend
 // falls. (M: running always false and b is granted at once.)
 func TestShadow_RunningComesFromTheRealHeldRows(t *testing.T) {
 	f := newShadowFix(t)
-	f.setZone("warning", "flat")
+	f.setZone("warning", "rising")
 	f.queue("a", 35, 5*time.Minute)
 	f.m.admissionPass(context.Background(), "")
 	assert.Equal(t, int64(1000), f.shadowOf("a").WaitMS, "nothing was running: granted")
 	f.advance(40 * time.Second)
 	f.queue("b", 35, 5*time.Minute)
 	f.m.admissionPass(context.Background(), "")
-	assert.Equal(t, int64(-1), f.shadowOf("b").WaitMS, "a is held: warning and flat observes")
+	assert.Equal(t, int64(-1), f.shadowOf("b").WaitMS, "a is held: warning and rising observes")
 	f.setZone("warning", "falling")
 	f.m.admissionPass(context.Background(), "")
 	assert.NotEqual(t, int64(-1), f.shadowOf("b").WaitMS)

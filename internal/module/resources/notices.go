@@ -205,11 +205,11 @@ func (m *Module) deliverNotice(ctx context.Context, p positionRow) time.Duration
 		m.logf("[resources] notices: send %s: %v", p.ID, err)
 		return noticeRetryOther
 	}
-	return m.noticeOutcome(p, res)
+	return m.noticeOutcome(p, res, text)
 }
 
 // noticeOutcome applies the queue's answer (plan §2.10 "Outcomes").
-func (m *Module) noticeOutcome(p positionRow, res promptq.Result) time.Duration {
+func (m *Module) noticeOutcome(p positionRow, res promptq.Result, text string) time.Duration {
 	nowMS := m.now().UnixMilli()
 	// set records a result; false when the write failed (the caller then waits for its next try, never a tight loop).
 	set := func(result string, sentAt int64) bool {
@@ -221,27 +221,7 @@ func (m *Module) noticeOutcome(p positionRow, res promptq.Result) time.Duration 
 	}
 	switch res.Status {
 	case promptq.Accepted:
-		if p.NoticeKind == "offer" {
-			// D1: the notice reached the session, the 3-minute window starts now (§2.8). The window and the slot's
-			// result are one write: if it fails the slot stays pending and is tried again (the key is the same, so
-			// the queue does not send it twice), never an offer the session got with no window recorded.
-			m.stateMu.Lock()
-			won, err := m.store.MarkOfferAccepted(p.ID, p.OfferedAt, nowMS, promptq.Accepted)
-			m.stateMu.Unlock()
-			if err != nil {
-				m.logf("[resources] notices: mark %s delivered: %v", p.ID, err)
-				return noticeRetryOther
-			}
-			if won {
-				m.wake()
-				return 0
-			}
-			// the position moved on while the notice was out: only the result is left to record
-		}
-		if !set(promptq.Accepted, nowMS) {
-			return noticeRetryOther
-		}
-		return 0
+		return m.noticeDelivered(p, nowMS, promptq.Accepted)
 	case promptq.Busy, promptq.Timeout:
 		return noticeRetryBusy // never sent: the same key may be sent again
 	case promptq.Unknown:
@@ -261,9 +241,34 @@ func (m *Module) noticeOutcome(p positionRow, res promptq.Result) time.Duration 
 		set("dropped:"+res.Reason, 0)
 		return noticeRetryOther
 	case promptq.NoMod:
-		set(promptq.NoMod, 0) // the fallback (P2d-2) is tried once per slot; the mod channel again every 5 s
-		return noticeRetryOther
+		return m.noticeFallback(p, text, nowMS, set)
 	}
 	m.logf("[resources] notices: unexpected answer %q for %s", res.Status, p.ID)
 	return noticeRetryOther
+}
+
+// noticeDelivered records that the session got the notice, with the result that says how.
+func (m *Module) noticeDelivered(p positionRow, nowMS int64, result string) time.Duration {
+	if p.NoticeKind == "offer" {
+		// D1: the notice reached the session, the 3-minute window starts now (§2.8). The window and the slot's
+		// result are one write: if it fails the slot stays pending and is tried again (the key is the same, so
+		// the queue does not send it twice), never an offer the session got with no window recorded.
+		m.stateMu.Lock()
+		won, err := m.store.MarkOfferAccepted(p.ID, p.OfferedAt, nowMS, result)
+		m.stateMu.Unlock()
+		if err != nil {
+			m.logf("[resources] notices: mark %s delivered: %v", p.ID, err)
+			return noticeRetryOther
+		}
+		if won {
+			m.wake()
+			return 0
+		}
+		// the position moved on while the notice was out: only the result is left to record
+	}
+	if _, err := m.store.SetNoticeResult(p.ID, p.NoticeKind, p.NoticeDueAt, result, nowMS); err != nil {
+		m.logf("[resources] notices: record %s: %v", p.ID, err)
+		return noticeRetryOther
+	}
+	return 0
 }

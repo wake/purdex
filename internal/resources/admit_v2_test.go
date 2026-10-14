@@ -35,7 +35,7 @@ func TestAdmitV2_Table(t *testing.T) {
 		{"normal, running, unknown trend counts as rising", ZoneNormal, TrendUnknown, true, false, ReasonRising},
 		{"warning, none running", ZoneWarning, TrendRising, false, true, ""},
 		{"warning, running, falling", ZoneWarning, TrendFalling, true, true, ""},
-		{"warning, running, flat", ZoneWarning, TrendFlat, true, false, ReasonWarningFlat},
+		{"warning, running, flat is let through (P2e)", ZoneWarning, TrendFlat, true, true, ""},
 		{"warning, running, rising", ZoneWarning, TrendRising, true, false, ReasonRising},
 		{"warning, running, unknown trend counts as rising", ZoneWarning, TrendUnknown, true, false, ReasonRising},
 		{"danger, none running", ZoneDanger, TrendFalling, false, false, ReasonDanger},
