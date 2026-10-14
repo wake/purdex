@@ -234,8 +234,9 @@ func TestPredecessor_NewSessionEventOvertookTheStart(t *testing.T) {
 	wantPred(t, m, "B", "A")
 }
 
-// Two clears whose identity writes both landed before either Start was applied: each Start finds what its own write
-// displaced; a displacement overwritten by a newer one is missing, never wrong.
+// Two clears whose identity writes both landed before either Start was applied (only reachable when the new sessions'
+// own events wrote the ids, i.e. a stalled daemon): the frame keeps one rolling displaced id, so the newer Start finds
+// its predecessor and the older one's link is missing — never wrong. Known limit, see the PR description.
 func TestPredecessor_ConsecutiveClearsNeverShareAPredecessor(t *testing.T) {
 	m, _ := predFixture(t)
 	postAs(t, m, "work", "PdxSessionStart", startRaw("A", "startup"))
