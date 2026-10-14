@@ -1,7 +1,9 @@
 package resourcesmod
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -9,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	iagent "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/modevents"
 	"github.com/wake/purdex/internal/resources"
@@ -95,6 +98,23 @@ func TestAuto_ReplayIsTheSameRequest(t *testing.T) {
 	again := f.postAs(cid, pidA, resources.CallAuto, "go build ./...")
 	assert.Equal(t, http.StatusOK, again.Code, again.Body.String())
 	assert.Equal(t, first.ID, decodeLease(t, again).ID)
+}
+
+// When the look at the process table fails, auto cannot tell an interactive
+// session from none: it answers not_ready (the CLI lets the command run) and
+// makes no row, instead of guessing wait. A plain wait request is unchanged.
+// (M: treat the failure as "no session".)
+func TestAuto_ProbeFailureMakesNoRowAndIsNotAWait(t *testing.T) {
+	f := newPosFix(t)
+	f.m.interactive = func(string) bool { return true }
+	f.m.procSnapshot = func(context.Context) (*iagent.ProcessSnapshot, error) { return nil, errors.New("ps timed out") }
+	rec := f.postAs(newCID(), pidA, resources.CallAuto, "go build ./...")
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code, rec.Body.String())
+	assert.Equal(t, resources.ErrNotReady, apiCode(rec))
+	assert.Empty(t, f.livePositions())
+
+	wait := f.postAs(newCID(), pidA, resources.CallWait, "go build ./...")
+	assert.Less(t, wait.Code, 300, "an explicit wait does not need the session")
 }
 
 // An ask row is not one auto could have made: the same client id with auto is a

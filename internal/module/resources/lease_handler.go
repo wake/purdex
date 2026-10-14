@@ -105,7 +105,15 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 	var agentPID int
 	var agentStart string
 	if req.Scope != resources.ScopeSessionNew && session == "" {
-		session, agentPID, agentStart = m.sessionOfProcess(r.Context(), req.HolderPID)
+		var failed bool
+		session, agentPID, agentStart, failed = m.sessionOfProcessChecked(r.Context(), req.HolderPID)
+		if failed && req.Mode == resources.CallAuto && set.Mode == resources.ModeLease {
+			// Auto cannot tell an interactive session from none when the look itself
+			// failed, and guessing wait would hold the session. The CLI gives up after
+			// its grace and lets the command run: the pool is advice.
+			writeErr(w, http.StatusServiceUnavailable, resources.ErrNotReady, "could not tell which session the caller is in")
+			return
+		}
 	}
 
 	// An auto request becomes queue for a caller under an interactive session
