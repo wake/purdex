@@ -322,7 +322,6 @@ func (c Config) Clone() Config {
 		p := *c.Push
 		out.Push = &p
 	}
-
 	if c.Journal != nil {
 		j := *c.Journal
 		j.PushProjects = slices.Clone(c.Journal.PushProjects)
