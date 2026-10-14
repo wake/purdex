@@ -32,6 +32,11 @@ func TestRewritePeerPrefixes(t *testing.T) {
 		{"intro [mlab/purdex-3f-adam → x] not a prefix", "intro [mlab/purdex-3f-adam → x] not a prefix"},
 		{"[a b → c] x", "[a b → c] x"},
 		{"[mlab/purdex-3f-adam → mlab/purdex-88-b8] one\n[mlab/purdex-88-b8 → mlab/purdex-3f-adam] two", "[Adam → purdex-88-b8] one\n[purdex-88-b8 → Adam] two"},
+		{"[report merged feature/login] 完成", "[report merged feature/login] 完成"},
+		{"[report https://host/path] x", "[report https://host/path] x"},
+		{"[report merged a/b/purdex-3f-adam] x", "[report merged a/b/purdex-3f-adam] x"},
+		{"[report merged mlab/purdex-88-b8] x", "[report merged mlab/purdex-88-b8] x"}, // not a pool name: kept as written
+		{"[https://h/p → purdex-3f-adam] x", "[https://h/p → Adam] x"},
 		{"[unclosed mlab/purdex-3f-adam", "[unclosed mlab/purdex-3f-adam"},
 		{"", ""},
 	} {

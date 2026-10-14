@@ -1,6 +1,7 @@
 package journal
 
 import (
+	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -46,8 +47,11 @@ func RewritePeerPrefixes(text string) string {
 		} else {
 			words := strings.Split(inner, " ")
 			for j, w := range words {
-				if strings.Contains(w, "/") {
-					words[j] = DisplayName(w)
+				// outside an arrow only an address whose name is a pool name is surely a session
+				if isAddress(w) {
+					if _, ok := ipeers.PoolNameOf(w[strings.IndexByte(w, '/')+1:]); ok {
+						words[j] = DisplayName(w)
+					}
 				}
 			}
 			inner = strings.Join(words, " ")
@@ -60,8 +64,15 @@ func RewritePeerPrefixes(text string) string {
 // rewriteSide renames one side of `A → B` when it is a single token (an address or a name); anything with a space is
 // not an address and stays.
 func rewriteSide(s string) string {
-	if s == "" || strings.ContainsAny(s, " \t") {
+	if s == "" || strings.ContainsAny(s, " \t") || (strings.Contains(s, "/") && !isAddress(s)) {
 		return s
 	}
 	return DisplayName(s)
 }
+
+// addressPattern is a peer address as pdx writes it: one host alias, one slash, a virtual name or a ref. A branch name
+// with two parts (feature/login) still matches, which is why outside an arrow only pool names are rewritten; a URL or
+// a path with more slashes does not match.
+var addressPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*/([a-z0-9][a-z0-9-]{1,63}|_[0-9a-z]{6})$`)
+
+func isAddress(s string) bool { return addressPattern.MatchString(s) }
