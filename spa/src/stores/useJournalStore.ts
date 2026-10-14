@@ -6,6 +6,7 @@
 // reconnects; a host that never answered has no sticky answer and uses the old UI. Only `forgetHost` (re-point / removal)
 // clears it: what the old daemon said is not the new one's.
 import { create } from 'zustand'
+import { forgetViewMemosOfHost } from '../lib/journal/view-memory'
 
 interface JournalState {
   /** Live support of the current connection; absent = unknown. */
@@ -29,7 +30,10 @@ export const useJournalStore = create<JournalState>()((set) => ({
   support: {}, sticky: {}, gens: {},
   fence: (hostId) => set((s) => ({ support: drop(s.support, hostId), gens: { ...s.gens, [hostId]: (s.gens[hostId] ?? 0) + 1 } })),
   setSupport: (hostId, yes) => set((s) => ({ support: { ...s.support, [hostId]: yes }, sticky: { ...s.sticky, [hostId]: yes } })),
-  forgetHost: (hostId) => set((s) => ({ support: drop(s.support, hostId), sticky: drop(s.sticky, hostId), gens: drop(s.gens, hostId) })),
+  forgetHost: (hostId) => {
+    forgetViewMemosOfHost(hostId)
+    set((s) => ({ support: drop(s.support, hostId), sticky: drop(s.sticky, hostId), gens: drop(s.gens, hostId) }))
+  },
   reset: () => set({ support: {}, sticky: {}, gens: {} }),
 }))
 
