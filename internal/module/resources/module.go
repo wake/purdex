@@ -22,6 +22,7 @@ import (
 	"github.com/wake/purdex/internal/core"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/resources"
+	"github.com/wake/purdex/internal/team"
 )
 
 // failuresBeforeUnavailable is how many ticks in a row must fail before the
@@ -208,6 +209,8 @@ type Module struct {
 
 	// The notice outbox (notices.go). noticeQ is a test seam: nil reads the prompt queue from the registry.
 	noticeQ    noticeSender
+	leadNotice team.LeadNoticer     // a test seam: nil reads the team module's from the registry (notices_fallback.go)
+	alertOut   func(core.HostEvent) // a test seam: nil broadcasts on core.Events
 	noticeWake chan struct{}
 	notices    noticeState
 }
