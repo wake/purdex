@@ -88,6 +88,7 @@ Every PR: TDD, one commit per task, `go test -race` only for the touched package
 
 ## 8. J-1e — API
 
+- **Order**: the drainer writes rows of different entries independently (J-1b2, PR #2856), so a file's block order can differ from turn order — every read **sorts entries by (`at`, `id`)** before paging and answering; the pinned band likewise (newest first by `at`).
 - `GET /api/journal?session_id=…&before=<month>:<id>&limit=50`: unit from the session — `lead` / `none` → its own unit; `member` → its team's unit (project from `wb_journal_units`, i.e. the lead's); `member_remote` → `409 {lead_host}` (the App asks the lead's host); an ended team → the unit stays readable; no unit yet → `404`.
 - `GET /api/journal/tasks?session_id=…`, `GET /api/journal/roadmap?session_id=…`, `PUT /api/journal/pin {session_id, entry_id, pinned}`.
 - `journal.changed {unit, project, what}` after every drained write; `journal.v1` when ready; device routes allowed.
