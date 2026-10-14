@@ -141,6 +141,7 @@ func TestFallback_SoloSessionIsAUserAlertNeverASelfSend(t *testing.T) {
 	p := f.position(posID)
 	assert.Equal(t, noticeUserAlert, p.NoticeResult)
 	assert.Zero(t, p.DeliveredAt, "a user alert is not a delivery")
+	assert.NotZero(t, p.NoticeSentAt, "the time the person was told: the 60 s of the offer count from it")
 }
 
 // The alert names the session and carries the text; the position is marked from its own column.

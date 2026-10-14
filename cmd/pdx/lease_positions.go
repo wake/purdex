@@ -123,6 +123,7 @@ func formatReportPositions(w io.Writer, p resources.ReportPositions) {
 	o := p.Offers
 	fmt.Fprintf(w, "          offers  %d, delivered %d, passed undelivered %d, lapsed after delivery %d; delivery delay p50 %s max %s\n",
 		o.Offered, o.Delivered, o.Passed, o.LapsedAfterDelivery, seconds(o.DeliveryDelayMS.P50), seconds(o.DeliveryDelayMS.Max))
+	fmt.Fprintf(w, "          nested  n %d\n", p.Nested)
 	if len(o.NoticeResults) > 0 {
 		parts := make([]string, 0, len(o.NoticeResults))
 		for _, r := range o.NoticeResults {

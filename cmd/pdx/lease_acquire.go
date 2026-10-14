@@ -106,6 +106,9 @@ type acquireLine struct {
 	QueuedReason string `json:"queued_reason,omitempty"`
 	EndReason    string `json:"end_reason,omitempty"`
 	PositionID   string `json:"position_id,omitempty"`
+	// Nested is the outer lease's id (P2f): held, with no row of its own to
+	// release (id is empty).
+	Nested string `json:"nested,omitempty"`
 }
 
 func (o acquireOutcome) line() acquireLine {
@@ -116,7 +119,7 @@ func (o acquireOutcome) line() acquireLine {
 	if o.queued || o.askCancelled {
 		return acquireLine{ID: r.ID, State: r.State, Position: r.Position, QueuedReason: r.QueuedReason, EndReason: r.EndReason, PositionID: r.PositionID, WaitedMS: r.WaitedMS}
 	}
-	return acquireLine{ID: r.ID, Granted: r.Granted, Overrun: r.Overrun, WaitedMS: r.WaitedMS, HostMeasured: r.Host.Measured, Warning: r.Warning, PositionID: r.PositionID}
+	return acquireLine{ID: r.ID, Granted: r.Granted, Overrun: r.Overrun, WaitedMS: r.WaitedMS, HostMeasured: r.Host.Measured, Warning: r.Warning, PositionID: r.PositionID, Nested: r.Nested}
 }
 
 // parseAcquireFlags reads and checks the flags of acquire; msg is a usage

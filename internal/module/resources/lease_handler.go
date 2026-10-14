@@ -145,6 +145,20 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, code, detail)
 			return
 		}
+		// A run below an outer run of the same session is the same job (P2f): held, no row. A replay above has
+		// already won, and the request is checked like any other first. A request that names its own session has
+		// no agent pid here and is never nested (the mod's foreground lease, plan N3).
+		outer, ok, failed := m.nestedUnder(r.Context(), req.HolderPID, agentPID, session)
+		if failed {
+			writeErr(w, http.StatusServiceUnavailable, resources.ErrNotReady, "could not tell whether the caller runs below a lease")
+			return
+		}
+		if ok {
+			m.store.countNested(outer.ID)
+			writeJSON(w, http.StatusOK, resources.LeaseResponse{State: resources.StateHeld, Granted: true,
+				Host: m.leaseHost(), Mode: set.Mode, Nested: outer.ID})
+			return
+		}
 	}
 
 	now := m.now()
