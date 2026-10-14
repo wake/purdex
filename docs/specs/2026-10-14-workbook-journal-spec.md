@@ -1,4 +1,4 @@
-# Workbook journal — spec (v3)
+# Workbook journal — spec (v3.1)
 
 Supersedes the **display** half of `docs/specs/2026-10-09-session-workbook-spec.md` (v1 + v2, §10) — see §9 for each clause it replaces. The summariser (§4–§8 of v2) stays as it is and feeds the journal.
 Prototype the user reviewed (2026-10-13): `docs/prototypes/workbook-journal/` (source, fixture of the A line's real events on 2026-10-13, five screenshots). Data inventory behind §4: lead notes `journal-sources-2026-10-14.md` (88).
@@ -30,7 +30,7 @@ The rest of this spec is written on the two proposals; changing either only touc
 
 - A journal belongs to **a conversation** (`conv_key`, the relay lineage root, as the workbook's §4.1): relays continue it, a manual `/clear` starts a new one.
 - **A lead's journal includes its team**: its own events, every event of a seat while it was in that team (`team_id` on the record), the team's tasks and reports, and the messages between the team's seats.
-- A member's journal: its own events, the tasks it owns or created, and its messages.
+- A member's journal: its own events, the tasks it owns (only a lead creates tasks), the reports it wrote, and the messages it received or sent (a sent one when its sender is resolved, §4.4).
 - A solo session: its own events.
 - The Mac journal card shows **the active tab's conversation** (§6.1); a team row's notebook button narrows it to one seat (§6.1).
 
@@ -47,18 +47,18 @@ The rest of this spec is written on the two proposals; changing either only touc
 
 - Workbook entries in `pending`, `failed` or `skipped` produce nothing; `refresh` entries produce nothing.
 - `ready`, `progress`, `ack` reports produce nothing (they are noise for a manager; the roster already shows the current task).
-- **actor**: `<seat title>` for a seat's own event; `A → B` for a message or request (`→ 使用者` for a request to the person). Seat titles come from the roster/naming store at the event's time, falling back to the ref.
+- **actor**: `<seat title>` for a seat's own event; `A → B` for a message or request (`→ 使用者` for a request to the person). Seat titles are the ones known when the event is recorded (live events: at the event; backfilled rows: the stored title, else the ref); no title history exists.
 - **refs**: PR numbers, issue numbers and task ids found in the record's fields (`metadata.prs`, report `pr`, `#NNNN` in the text) — each a link in the App.
 
 ### 4.3 Record
 
 ```json
-{"id":"…","conv_key":"…","team_id":"…","seat_session_id":"…","at":1760400000000,
+{"id":"…","conv_key":"…","other_conv_key":"","team_id":"…","seat_session_id":"…","at":1760400000000,
  "kind":"exec|done|task|taskdone|comm|req","actor":"…","title":"…","body":"…","refs":["PR #2765"],
  "pending":false,"source":{"type":"workbook|task|report|approval|peer|user","id":"…"}}
 ```
 
-`id` is stable per source record (`<source type>:<source id>`), so re-ingesting is idempotent. `pending` is §5.3.
+`id` is stable per source record (`<source type>:<source id>`), so re-ingesting is idempotent. `pending` is §5.3. `other_conv_key` is a second conversation that sees the event: the resolved sender of a `comm`, the task owner of a report event written by someone else.
 
 ### 4.4 The conversation-derived events (gaps 1 and 4)
 
@@ -76,15 +76,15 @@ The rest of this spec is written on the two proposals; changing either only touc
 - **Ingest** (all idempotent on `id`):
   - workbook: subscribe to the module's entry insert/state change (the `workbook.entry` event);
   - approvals: subscribe to `approval.request` opened / closed (in process);
-  - tasks and reports: tail by cursor — reports by `id`, tasks by `updated_at` — every 5 s and on `team.roster` changes, through a **read-only feed the team module exports** (`TaskFeed`, `ReportFeed`; the only team change, reviewed by 1f);
+  - tasks and reports: tail by cursor — reports by `rowid`, tasks by `(updated_at, team_id, seq)` — every 5 s, through a **read-only feed the team module exports** (`team.JournalFeed`; the only team change, reviewed by 1f);
   - conversations: §4.4.
 - **Backfill** at first start: workbook entries, tasks, reports and open approvals already stored (bounded to the last 30 days). Conversation-derived events start at deploy (no transcript backfill).
 - Retention: as the workbook — no automatic deletion (rows are short; measured size goes in the plan).
 
 ### 5.2 API and events (capability `journal.v1`)
 
-- `GET /api/journal/conversations/claude/{session_id}?before=<at>:<id>&limit=50[&seat=<session_id>]` → `{conv_key, team_id, events:[… oldest first], more: bool, pending: N}`. Without `before`: the newest page. `seat` narrows to one seat (§6.1).
-- Host event `journal.event` `{conv_key, team_ids:[…], op:"add"|"update", event}` — `update` when `pending` flips or a title is corrected. A client keeps the events of the journals it shows.
+- `GET /api/journal/conversations/claude/{session_id}?before=<at>:<id>&limit=50[&seat=<session_id>]` → `{conv_key, team_ids:[…], events:[… oldest first], more: bool, pending: N}` (`team_ids`: every team this conversation has led). Without `before`: the newest page. `seat` narrows to one seat (§6.1).
+- Host event `journal.event` `{conv_key, other_conv_key, team_ids:[…], op:"add"|"update", event}` — `update` when `pending` flips or an empty body is filled (a `taskdone`'s summary). A client keeps the events of the journals it shows.
 - Device tokens (iOS) may read both.
 - `404 not_found` for a session the daemon has never seen; an empty journal is `events: []`.
 
@@ -151,8 +151,11 @@ The summariser, the push, storage and the workbook API (v2 §4–§9) are unchan
 
 | phase | side | content |
 |---|---|---|
-| J-1a | daemon | module `journal`: store, ingest from workbook / approvals / tasks+reports (team `TaskFeed`/`ReportFeed`, 1f reviews), backfill, API, `journal.event`, `journal.v1` |
-| J-1b | daemon | conversation-derived `comm` (§4.4), scrub, turn-end trigger |
+| J-0a | daemon | team read feed `team.JournalFeed` (1f reviews) |
+| J-0b | daemon | workbook entry feed |
+| J-1a | daemon | module `journal`: store, ingest from workbook / approvals, backfill, API, `journal.event`, `journal.v1` |
+| J-1b | daemon | tasks / reports ingest |
+| J-1c | daemon | conversation-derived `comm` (§4.4), scrub, turn-end trigger |
 | J-2a | SPA | title-bar split (團隊 / 日誌), journal card shell and placement, store, API + events, tab-switch memory |
 | J-2b | SPA | rows, filters, paging, live pinning, pending count on the button, seat narrowing, removal of the workbook view on `journal.v1` hosts |
 | J-3 | purdex-ios | the 日誌 segment |
