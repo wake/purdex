@@ -38,17 +38,17 @@ func TestTraceStore_SavesAtAFullTableDoNotReadTheTable(t *testing.T) {
 	if c, _ := countTraceChains(t, s); c != 1000 {
 		t.Fatalf("a table at its limit holds %d chains, want 1000", c)
 	}
-	s.totals.mu.Lock()
-	scanned0, syncs0 := s.totals.scanned, s.totals.syncs
-	s.totals.mu.Unlock()
+	s.totalsOf().mu.Lock()
+	scanned0, syncs0 := s.totalsOf().scanned, s.totalsOf().syncs
+	s.totalsOf().mu.Unlock()
 
 	// 50 more saves: one pass over the oldest 101 (down to 900) and room left for the rest; never a read per save.
 	for i := 1000; i < 1050; i++ {
 		saveOneStepChain(t, s, i)
 	}
-	s.totals.mu.Lock()
-	scanned, syncs := s.totals.scanned-scanned0, s.totals.syncs-syncs0
-	s.totals.mu.Unlock()
+	s.totalsOf().mu.Lock()
+	scanned, syncs := s.totalsOf().scanned-scanned0, s.totalsOf().syncs-syncs0
+	s.totalsOf().mu.Unlock()
 	if scanned > 150 {
 		t.Errorf("50 saves at a full table read %d chains, want one eviction pass (about 100)", scanned)
 	}
@@ -94,10 +94,29 @@ func TestTraceStore_KeptTotalsMatchTheTable(t *testing.T) {
 		t.Fatal(err)
 	}
 	chains, steps := countTraceChains(t, s)
-	s.totals.mu.Lock()
-	kc, ks := s.totals.chains, s.totals.steps
-	s.totals.mu.Unlock()
+	s.totalsOf().mu.Lock()
+	kc, ks := s.totalsOf().chains, s.totalsOf().steps
+	s.totalsOf().mu.Unlock()
 	if kc != chains || ks != steps || chains != 5 || steps != 7 {
 		t.Errorf("kept %d/%d, table %d/%d, want 5/7", kc, ks, chains, steps)
+	}
+}
+
+// Two handles of one store share the totals: one that pruned must not leave the other counting a table that is gone.
+func TestTraceStore_HandlesOfOneStoreShareTheTotals(t *testing.T) {
+	st, err := OpenAgentEvent(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := st.Traces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := st.Traces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.totalsOf() != b.totalsOf() {
+		t.Fatal("two handles of one store keep separate totals")
 	}
 }

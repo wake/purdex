@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	_ "modernc.org/sqlite"
 )
@@ -19,7 +20,12 @@ type AgentEvent struct {
 }
 
 // AgentEventStore persists the latest agent hook event per tmux session.
-type AgentEventStore struct{ db *sql.DB }
+type AgentEventStore struct {
+	db *sql.DB
+	// the retention totals of the trace tables, shared by every TraceStore handle this store gives out (#2887)
+	traceTotalsOnce sync.Once
+	traceTotals     *traceTotals
+}
 
 // OpenAgentEvent opens (or creates) an AgentEventStore DB at path, runs
 // migration, and enables WAL mode. Use ":memory:" for tests.
@@ -192,8 +198,10 @@ func (s *AgentEventStore) Traces() (*TraceStore, error) {
 	if err := migrateTraceDB(s.db); err != nil {
 		return nil, err
 	}
+	s.traceTotalsOnce.Do(func() { s.traceTotals = &traceTotals{} })
 	return &TraceStore{
 		db:        s.db,
+		totals:    s.traceTotals,
 		maxChains: defaultTraceMaxChains,
 		maxSteps:  defaultTraceMaxSteps,
 	}, nil

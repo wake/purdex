@@ -174,22 +174,23 @@ func (s *TraceStore) SaveChain(record TraceRecord) (err error) {
 		dChains = 0
 	}
 	// The totals lock is held to the commit: the totals describe the committed table, so they move only with it.
-	s.totals.mu.Lock()
-	defer s.totals.mu.Unlock()
-	chainsNow, stepsNow, err := s.totals.after(tx, dChains, chain.StepCount-oldSteps)
+	t := s.totalsOf()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	chainsNow, stepsNow, err := t.after(tx, dChains, chain.StepCount-oldSteps)
 	if err != nil {
 		return err
 	}
-	chainsNow, stepsNow, err = pruneTraceChains(tx, maxChains, maxSteps, chainsNow, stepsNow, &s.totals)
+	chainsNow, stepsNow, err = pruneTraceChains(tx, maxChains, maxSteps, chainsNow, stepsNow, t)
 	if err != nil {
-		s.totals.known = false
+		t.known = false
 		return err
 	}
 	if err = tx.Commit(); err != nil {
-		s.totals.known = false
+		t.known = false
 		return err
 	}
-	s.totals.chains, s.totals.steps = chainsNow, stepsNow
+	t.chains, t.steps = chainsNow, stepsNow
 	return nil
 }
 
@@ -230,6 +231,16 @@ func (t *traceTotals) after(tx *sql.Tx, dChains, dSteps int) (int, int, error) {
 	t.known, t.sinceSync = true, 0
 	t.syncs++
 	return chains, steps, nil
+}
+
+// totalsOf is the retention totals of this handle's database. A handle made by hand (a test) gets its own, once.
+func (s *TraceStore) totalsOf() *traceTotals {
+	s.ownTotalsOnce.Do(func() {
+		if s.totals == nil {
+			s.totals = &traceTotals{}
+		}
+	})
+	return s.totals
 }
 
 // chainStepCount is the step_count a stored chain has, and whether it is stored.
