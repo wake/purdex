@@ -16,6 +16,7 @@ import { setHostShown, useIsRefShown } from '../../lib/shown-hosts'
 import { ToggleSwitch } from '../settings/ToggleSwitch'
 import { useDaemonRestartStore } from '../../stores/useDaemonRestartStore'
 import { RestartDaemonButton } from './RestartDaemonButton'
+import { ProbeHostsSection } from './ProbeHostsSection'
 
 interface Props {
   hostId: string
@@ -337,6 +338,9 @@ export function OverviewSection({ hostId }: Props) {
           </div>
         )}
       </Section>
+
+      {/* ─── Probe-only hosts (fleet.v1 daemons only) ─── */}
+      <ProbeHostsSection hostId={hostId} />
     </div>
   )
 }

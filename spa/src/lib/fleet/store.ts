@@ -8,6 +8,7 @@
 // no longer talks to can never put numbers on screen.
 import { create } from 'zustand'
 import { fetchProbeHosts } from './api'
+import { forgetProbeDraft } from './probe-draft-memory'
 import type { FleetProbe, FleetSelf, FleetPayload, VersionedProbeHosts } from './types'
 
 export type FleetSupport = 'unknown' | 'yes' | 'no'
@@ -82,12 +83,15 @@ export const useFleetStore = create<FleetState>()((set, get) => ({
     defs: withoutKey(s.defs, hostId),
   })),
 
-  forgetHost: (hostId) => set((s) => ({
-    gens: bump(s.gens, hostId),
-    byHost: withoutKey(s.byHost, hostId),
-    defs: withoutKey(s.defs, hostId),
-    focusProbe: s.focusProbe?.proberHostId === hostId ? null : s.focusProbe,
-  })),
+  forgetHost: (hostId) => {
+    forgetProbeDraft(hostId) // its SSH host was picked from the old daemon's list
+    set((s) => ({
+      gens: bump(s.gens, hostId),
+      byHost: withoutKey(s.byHost, hostId),
+      defs: withoutKey(s.defs, hostId),
+      focusProbe: s.focusProbe?.proberHostId === hostId ? null : s.focusProbe,
+    }))
+  },
 
   setSupport: (hostId, gen, support) => set((s) => {
     if ((s.gens[hostId] ?? 0) !== gen) return s
