@@ -352,4 +352,5 @@ func (c *Core) RegisterCoreRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/pair/verify", c.handlePairVerify)
 	mux.HandleFunc("POST /api/pair/setup", c.handlePairSetup)
 	mux.HandleFunc("POST /api/token/auth", c.handleTokenAuth)
+	registerPprof(mux)
 }

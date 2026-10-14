@@ -883,3 +883,36 @@ func TestOuterChain_PairingFlowWorksWithAnEmptyToken(t *testing.T) {
 		}
 	}
 }
+
+// The profiler (/debug/pprof/*) sits behind the daemon's own authentication on the real daemon routes: no token is 401, a peer host's token
+// is refused like a wrong one, and the admin token reaches it (cmdline answers, a named profile answers, the index lists them). Mutation
+// gates: not registered → 404 for the admin (red); registered on a path outside the general chain → the unauthenticated request gets in (red).
+func TestDaemonPprofRequiresHostToken(t *testing.T) {
+	c := newTestCore(&config.Config{Token: "host-token"})
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+	h := newOuterHandler(c, mux, mux, nil)
+
+	for _, path := range []string{"/debug/pprof/", "/debug/pprof/cmdline", "/debug/pprof/heap?debug=1", "/debug/pprof/goroutine?debug=1", "/debug/pprof/symbol", "/debug/pprof/profile?seconds=1", "/debug/pprof/trace?seconds=1"} {
+		if rec := doRequest(t, h, "GET", path, ""); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s without a token: got %d, want 401", path, rec.Code)
+		}
+		if rec := doRequest(t, h, "GET", path, "wrong-token"); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s with a wrong token: got %d, want 401", path, rec.Code)
+		}
+	}
+	rec := doRequest(t, h, "GET", "/debug/pprof/cmdline", "host-token")
+	if rec.Code != http.StatusOK || rec.Body.Len() == 0 {
+		t.Fatalf("cmdline with the host token: got %d, %d bytes, want 200 and the command line", rec.Code, rec.Body.Len())
+	}
+	if rec := doRequest(t, h, "GET", "/debug/pprof/heap?debug=1", "host-token"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "heap profile") {
+		t.Fatalf("heap with the host token: got %d %q", rec.Code, rec.Body.String())
+	}
+	if rec := doRequest(t, h, "GET", "/debug/pprof/", "host-token"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "goroutine") {
+		t.Fatalf("index with the host token: got %d", rec.Code)
+	}
+	// a write method is no profiler call
+	if rec := doRequest(t, h, "POST", "/debug/pprof/cmdline", "host-token"); rec.Code == http.StatusOK {
+		t.Fatalf("POST /debug/pprof/cmdline: got 200, want a refusal")
+	}
+}
