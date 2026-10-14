@@ -233,7 +233,7 @@ func TestRunMsgUsage_TeachesTheV4AddressForms(t *testing.T) {
 		`"<host>/<name> [<ref>]"`,
 		"<host>/_<ref>",
 		"<host>/tmux:<name>",
-		"mlab/purdex-b0-q3",
+		"mlab/purdex-b0-kenji",
 		"mlab/_q34psn",
 		"the name pdx gave the conversation",
 		"Claude Code's own session name is not an address",
