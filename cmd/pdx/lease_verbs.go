@@ -60,7 +60,7 @@ func runLeaseVerb(ctx context.Context, verb string, args []string, stdout, stder
 	rctx, cancel := context.WithTimeout(ctx, leaseReleaseTimeout)
 	defer cancel()
 	var resp resources.PositionResponse
-	if _, err := client.Once(rctx, http.MethodPost, path, resources.CallerRequest{HolderPID: os.Getpid()}, &resp); err != nil {
+	if _, err := client.Do(rctx, http.MethodPost, path, resources.CallerRequest{HolderPID: os.Getpid()}, &resp); err != nil {
 		return reportVerbFailure(err, stderr)
 	}
 	switch {
@@ -97,6 +97,9 @@ func reportVerbFailure(err error, stderr io.Writer) int {
 	case errors.Is(err, daemonclient.ErrUnavailable):
 		fmt.Fprintln(stderr, "pdx lease: daemon 連不上")
 		return ExitUnavailable
+	case errors.Is(err, daemonclient.ErrNoAnswer), errors.Is(err, daemonclient.ErrSentNoResponse), errors.Is(err, context.DeadlineExceeded):
+		fmt.Fprintln(stderr, "pdx lease: daemon 沒有回應，不確定有沒有送達；用 pdx lease ls 看現況")
+		return ExitError
 	}
 	fmt.Fprintf(stderr, "pdx lease: 失敗（%s）\n", leaseFailReason(err))
 	return ExitError

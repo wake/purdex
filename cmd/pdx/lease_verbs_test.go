@@ -199,3 +199,15 @@ func TestReport_PositionLines(t *testing.T) {
 	formatReport(&none, v2Report(), time.UTC)
 	assert.NotContains(t, none.String(), "positions ")
 }
+
+// A daemon that cannot be used is 20, not a generic 1.
+func TestVerb_DaemonNotReadyExits20(t *testing.T) {
+	d := &verbDaemon{status: http.StatusServiceUnavailable, body: resources.APIError{Error: resources.ErrNotReady}}
+	srv := httptest.NewServer(d)
+	defer srv.Close()
+	cfg := writeTestConfig(t, srv.URL, "admin-tok")
+	var stdout, stderr bytes.Buffer
+	code := runLeaseCmd(context.Background(), []string{"done", "--config", cfg}, fakeGetenv(nil), &stdout, &stderr, leadNoKeepAlive(), leadClockOpt())
+	assert.Equal(t, ExitUnavailable, code, stderr.String())
+	assert.Contains(t, stderr.String(), "daemon 連不上")
+}
