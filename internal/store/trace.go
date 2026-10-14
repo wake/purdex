@@ -78,6 +78,7 @@ type TraceStore struct {
 	db        *sql.DB
 	maxChains int
 	maxSteps  int
+	totals    traceTotals
 }
 
 // sqlQuerier is satisfied by both *sql.DB and *sql.Conn so migration helpers
