@@ -399,7 +399,9 @@ func (q *Queue) SubmitFill(ctx context.Context, sessionID, clientMsgID, text str
 // SubmitNotice sends the session a notice as a plugin message and waits for the mod's report: accepted, dropped,
 // busy (a turn was running: nothing was sent) or timeout (nothing was handed out in time) — busy and timeout may be
 // sent again under the same key, anything else is answered again from the ledger and never sent twice. no_mod when no
-// live stream of the session announced CapLeaseNotice.
+// live stream of the session announced CapLeaseNotice. The memory of a sent key is bounded like a typed row's (the ledger
+// for LedgerTTL, then a tombstone for TombstoneTTL, at most maxTombstones): the durable authority that never asks for the
+// same notice twice is the caller's own slot state (the outbox of P2d-1b keeps it in the position row).
 func (q *Queue) SubmitNotice(ctx context.Context, sessionID, key, text string) (Result, error) {
 	if strings.TrimSpace(text) == "" || len(text) > MaxNoticeBytes {
 		return Result{Status: Dropped, Reason: "bad_text"}, nil
