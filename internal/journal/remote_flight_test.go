@@ -37,9 +37,36 @@ func TestClassifyRemote(t *testing.T) {
 	if err := classifyRemote(expired, exit2); errors.Is(err, errNoRemote) || !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("a git killed by the timeout = %v, want the deadline", err)
 	}
+	killed := exec.Command("sh", "-c", "kill -9 $$").Run() // an ExitError whose code is -1: killed by a signal, not a finding
+	if err := classifyRemote(context.Background(), killed); errors.Is(err, errNoRemote) || err != killed {
+		t.Errorf("a git killed by a signal = %v, want the error itself", err)
+	}
 	missing := errors.New(`exec: "git": executable file not found in $PATH`)
 	if err := classifyRemote(context.Background(), missing); errors.Is(err, errNoRemote) || err != missing {
 		t.Errorf("git missing = %v, want the error itself", err)
+	}
+}
+
+// The daemon's own GIT_DIR / GIT_WORK_TREE must not send the question to another repository: the folder asked about answers.
+// Mutation gate: run git with the daemon's whole environment -> the other repository's origin comes back (red).
+func TestRemoteURL_IgnoresRepositoryRedirectingEnvironment(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	clearRemoteCache()
+	t.Cleanup(clearRemoteCache)
+	mine, other := t.TempDir(), t.TempDir()
+	for dir, origin := range map[string]string{mine: "git@github.com:wake/mine.git", other: "git@github.com:wake/other.git"} {
+		for _, args := range [][]string{{"init", "-q"}, {"remote", "add", "origin", origin}} {
+			if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+				t.Fatalf("git %v: %v %s", args, err, out)
+			}
+		}
+	}
+	t.Setenv("GIT_DIR", other+"/.git") // the daemon was started with it
+	t.Setenv("GIT_WORK_TREE", other)
+	if got := RemoteURL(context.Background(), mine); got != "https://github.com/wake/mine" {
+		t.Fatalf("RemoteURL = %q, want the asked folder's own origin", got)
 	}
 }
 
@@ -86,13 +113,20 @@ func TestRemoteURL_AWaiterHonoursItsOwnContext(t *testing.T) {
 		<-release
 		return "git@github.com:wake/purdex.git", nil
 	})
-	defer close(release)
-	go RemoteURL(context.Background(), "/slow") // the run everyone else waits for
+	leaderDone := make(chan struct{})
+	defer func() { // the run ends, and so does its goroutine, before the test's cleanup clears the shared cache
+		close(release)
+		<-leaderDone
+	}()
+	go func() { // the run everyone else waits for
+		defer close(leaderDone)
+		RemoteURL(context.Background(), "/waiter-slow")
+	}()
 	<-started
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	done := make(chan string, 1)
-	go func() { done <- RemoteURL(ctx, "/slow") }()
+	go func() { done <- RemoteURL(ctx, "/waiter-slow") }()
 	select {
 	case got := <-done:
 		if got != "" {
