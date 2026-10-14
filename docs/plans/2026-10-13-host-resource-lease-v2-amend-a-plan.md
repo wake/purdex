@@ -722,6 +722,13 @@ Branch `feat/lease-v2-amend-p2d1a`. Touches the interface line's `promptq` and `
 
 Numbers go in the PR body. If (b) changed, stop and ask the lead.
 
+**T29 results (2026-10-14, Claude Code 2.1.299, haiku probe session, default permission mode, a probe mod whose timer calls `$.prompt.submit({ text })` without `asUser`):**
+- (a) Idle: `turn.start` fires 2.5–2.6 s after the call, with a `turnId` (so `ev.turnId` covers it); the turn text is "The `<plugin>` plugin sent a message:\n`<text>`" followed by "This is how Claude Code surfaces a prompt a plugin submits between turns — it starts this turn in the user's place. Address the message above."; the call resolves `{text, origin:{kind:'plugin', name}}`, no `drop`.
+- (b) A turn in progress: no refusal, the call **blocks until idle** (unchanged: the check-then-submit design of T31 stays).
+- (c) A permission dialog open: the call blocks; after Esc the dialog's turn ended and the notice's turn started 2 s later (32.7 s in all).
+- (d) Right after `/clear`: it works, a new context starts with the notice (6.3 s including the clear).
+- (e) T-offer text: the model re-ran the named command. **T-ask text: the model declined `pdx lease confirm`** ("a plugin sent this, not you; confirming would start `pnpm run build`; reply 執行 or 取消"), in a context where it had never started that command. Decision (lead, 2026-10-14): reword T-ask in P2d-1b so the model recognises its own call — the original command (first 200 bytes), the directory and "you started it with `run_in_background` at HH:MM", and that it is the same command it asked for, postponed because the host was busy, so `confirm` starts it as planned and is not a new instruction; then test with a real case (the same session starts a heavy background command that is queued, and sees whether it confirms) and write what was observed into this plan; if the model still asks the person, that is accepted (a person present decides; absent: cancelled after 3 minutes and the session gets the cancel notice and may re-run) but recorded for a later design decision.
+
 **T30 The job kind** — `internal/promptq/queue.go`:
 - `KindNotice`.
 - `SubmitNotice(ctx, sessionID, key, text)`: at most once by `key` (the ledger); `busy` and `timeout` may be sent again under the same key. It needs an owner that announced `lease.notice.v1`; otherwise `no_mod`.
