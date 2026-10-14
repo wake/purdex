@@ -154,9 +154,10 @@ export interface Grant {
 export interface Client {
   /**
    * `terminal` on the closes the terminal made (answered_local, terminal_override); `unattended` on the approvals the
-   * daemon made itself while 無人值守模式 was on (U23, `team.UnattendedClient()`: no `addr`).
+   * daemon made itself while 無人值守模式 was on (U23, `team.UnattendedClient()`: no `addr`); `person` on the cards a
+   * person's own terminal command decided (`team.person.v1`, label 「使用者（終端機指令）」).
    */
-  kind: 'app' | 'terminal' | 'unattended'
+  kind: 'app' | 'terminal' | 'unattended' | 'person'
   label: string
   addr?: string
 }
@@ -279,6 +280,9 @@ export function isApproval(v: unknown): v is Approval {
 /** `/api/info` capabilities entry of a daemon that leaves a final relay card open past its deadline (`unanswered_at`, pause cause `relay_unanswered`). */
 export const UNANSWERED_CAPABILITY = 'relay.unanswered.v1'
 
+/** `/api/info` capabilities entry of a daemon that has the person decider and, under 無人值守模式, refuses lead / adopt cards itself (`decided_by.kind = "person"`, `unattended_refused`, PUT `refused`). */
+export const PERSON_CAPABILITY = 'team.person.v1'
+
 /**
  * What a card this app already holds takes from a later read of the same request (a reconnect snapshot, or the re-read at its
  * deadline): when the fresh row ran out (`isUnanswered`) and the held one does not know yet, only `unanswered_at` and `deadline_at`
@@ -390,6 +394,8 @@ export interface UnattendedView extends UnattendedState {
   next_before?: number
   /** PUT only: open requests the switch-on approved. */
   swept?: number
+  /** PUT only (`team.person.v1`): the lead / adopt cards the switch-on refused (they close `cancelled` / `unattended_refused`). */
+  refused?: number
   /** PUT only: auto-approvable requests still open after the sweep (the daemon's next tick approves them). */
   pending?: number
   /** PUT only: the write took effect but the list could not be read — `approved` is `[]` and says nothing. */

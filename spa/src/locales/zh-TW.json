@@ -2109,6 +2109,8 @@
   "approval.state.cancelled": "已取消",
   "approval.state.abandoned": "已放棄",
   "approval.toast.decided_elsewhere": "{{host}}：{{session}} 的 {{kind}} 已由 {{client}} {{decision}}",
+  "approval.toast.decided_by_person": "{{host}}：{{session}} 的 {{kind}} 已由終端機指令{{decision}}",
+  "approval.toast.unattended_refused": "{{host}}：{{session}} 的 {{kind}} 已由無人值守模式拒絕",
   "approval.toast.ended": "{{host}}：{{session}} 的 {{kind}}已結束（{{state}}）",
   "approval.toast.failed": "送出決定失敗（{{code}}）",
   "approval.dialog.title_lead": "{{host}}：{{session}} 申請成為 lead",

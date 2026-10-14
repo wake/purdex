@@ -122,6 +122,8 @@ describe('unattended-api', () => {
       ['next_before is 0 on a last page', view({ next_before: 0 })],
       ['swept is negative', view({ swept: -1 })],
       ['swept is a string', view({ swept: '2' })],
+      ['refused is negative', view({ refused: -1 })],
+      ['refused is a string', view({ refused: '2' })],
       ['pending is negative', view({ pending: -1 })],
       ['pending is null', view({ pending: null })],
       ['list_failed is a string', view({ list_failed: 'yes' })],
@@ -223,6 +225,14 @@ describe('unattended-api', () => {
       expect(v.on).toBe(true)
       expect(v.swept).toBe(2)
       expect(v.pending).toBe(0)
+    })
+
+    it('refused (relay v2): the lead / adopt cards unattended mode refused, read like swept', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json(view({ swept: 1, refused: 3 })))
+      const v = await putUnattended(hostId, true)
+      expect(v.refused).toBe(3)
+      testGlobal.fetch.mockResolvedValueOnce(json(view({ swept: 1 })))
+      expect((await putUnattended(hostId, true)).refused).toBeUndefined() // an older daemon sends none
     })
 
     it('sends on:false to turn it off', async () => {

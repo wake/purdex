@@ -31,7 +31,7 @@ function badResponse(what: string): never {
 
 /**
  * A 200's body as a view, checked whole (PU-2a review): the state, `approved` an array, `truncated` a boolean,
- * `next_before` a positive number (required when truncated), `swept` / `pending` non-negative numbers and
+ * `next_before` a positive number (required when truncated), `swept` / `refused` / `pending` non-negative numbers and
  * `list_failed` a boolean when present. Anything else is `bad_response` — a broken answer is never an empty page.
  * A row of a kind this build does not know is skipped; a malformed row of a known kind (or of no kind) is
  * `bad_response`, so no approval goes missing from the list silently.
@@ -43,6 +43,7 @@ function viewOf(raw: unknown): UnattendedView {
   if (typeof r.truncated !== 'boolean') badResponse('truncated is not a boolean')
   if (r.next_before !== undefined ? !isCursor(r.next_before) : r.truncated) badResponse('next_before')
   if (r.swept !== undefined && !isCount(r.swept)) badResponse('swept')
+  if (r.refused !== undefined && !isCount(r.refused)) badResponse('refused')
   if (r.pending !== undefined && !isCount(r.pending)) badResponse('pending')
   if (r.list_failed !== undefined && typeof r.list_failed !== 'boolean') badResponse('list_failed')
   const approved: Approval[] = []
@@ -79,6 +80,7 @@ function viewOf(raw: unknown): UnattendedView {
     truncated: r.truncated,
     ...(r.next_before !== undefined ? { next_before: r.next_before as number } : {}),
     ...(r.swept !== undefined ? { swept: r.swept as number } : {}),
+    ...(r.refused !== undefined ? { refused: r.refused as number } : {}),
     ...(r.pending !== undefined ? { pending: r.pending as number } : {}),
     ...(r.list_failed !== undefined ? { list_failed: r.list_failed as boolean } : {}),
     ...(quotas !== undefined ? { quotas } : {}),

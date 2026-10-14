@@ -2109,6 +2109,8 @@
   "approval.state.cancelled": "cancelled",
   "approval.state.abandoned": "abandoned",
   "approval.toast.decided_elsewhere": "{{host}}: {{client}} {{decision}} the {{kind}} from {{session}}",
+  "approval.toast.decided_by_person": "{{host}}: {{session}} {{kind}} was {{decision}} by a terminal command",
+  "approval.toast.unattended_refused": "{{host}}: {{session}} {{kind}} was refused by unattended mode",
   "approval.toast.ended": "{{host}}: the {{kind}} from {{session}} ended ({{state}})",
   "approval.toast.failed": "Could not send the decision ({{code}})",
   "approval.dialog.title_lead": "{{host}}: {{session}} requests to become lead",
