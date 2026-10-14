@@ -25,6 +25,9 @@ type RelaySeenRequest struct {
 type RelayCompactedRequest struct {
 	SessionID string `json:"session_id"`
 	Trigger   string `json:"trigger"`
+	// Intercepted: the member's mod answered {skip} to an idle compaction, so nothing was compacted (RT-4 T42). The daemon tells the lead
+	// to decide, once per idle period; none of a compaction's bookkeeping runs.
+	Intercepted bool `json:"intercepted,omitempty"`
 }
 
 // RelayCompactedResponse says whether the lead was told.

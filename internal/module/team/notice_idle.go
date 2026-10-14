@@ -68,6 +68,9 @@ func (m *Module) noticeIdle() {
 			continue
 		}
 		since := m.idleStart(mr.SessionID, now)
+		if m.modProtocolAtLeast(mr.SessionID, team.MinIdleInterceptModVersion) {
+			continue // its mod stops the idle compaction and the daemon tells the lead then (RT-4): the period is kept, nothing is said here
+		}
 		if now-since < after {
 			continue
 		}
@@ -194,4 +197,37 @@ func (m *Module) pruneIdle(live map[string]struct{}) {
 			delete(m.memberIdle, sid)
 		}
 	}
+}
+
+// interceptedIdle tells the lead that the member's mod stopped Claude Code's idle compaction (RT-4 T42): once per idle period, with the
+// three answers. The period is the one the liveness tick keeps (started here when the tick has not seen the member idle yet). It says
+// whether a notice went. Only an active local member of a live team is told about.
+func (m *Module) interceptedIdle(sessionID string) bool {
+	mr, t, ok, err := m.store.ActiveMemberInLiveTeam(sessionID)
+	if err != nil {
+		m.logf("[team] idle intercept %s: %v", sessionID, err)
+		return false
+	}
+	if !ok || m.sender == nil || m.stopping() {
+		return false
+	}
+	m.idleStart(sessionID, m.now()) // a period exists to be told once
+	gen, won := m.claimIdleTold(sessionID)
+	if !won {
+		return false
+	}
+	ctx := "未知"
+	if m.usage != nil {
+		if u, ok := m.usage.ContextUsage(sessionID); ok && u.UsedPercentage != nil {
+			ctx = fmt.Sprintf("%d%%", int(*u.UsedPercentage))
+		}
+	}
+	address, title := m.memberNoticeName(mr)
+	ref := strings.TrimPrefix(mr.Ref, "_")
+	text := fmt.Sprintf(team.IdleInterceptNoticeFmt, address, title, ctx, ref, ref, ref)
+	if !m.goTracked(func() { m.noticeToLead(mr, t, text, "idle intercept notice") }) {
+		m.releaseIdleTold(sessionID, gen)
+		return false
+	}
+	return true
 }
