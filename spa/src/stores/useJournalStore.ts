@@ -52,12 +52,13 @@ interface HostJournal {
   unitOfSession: Record<string, string>
 }
 
-/** Where a session's journal is read from. `follow`: a member whose lead lives on another daemon (409). */
+/** Where a session's journal is read from. `follow`: a member whose lead lives on another daemon (409): `leadHostId` is the
+ *  daemon's id, `hostId` the configured host it maps to. `unreachable`: no configured host has that daemon id (yet). */
 export type JournalRoute =
   | { kind: 'direct' }
   | { kind: 'none' }
-  | { kind: 'follow'; hostId: string; sessionId: string }
-  | { kind: 'unreachable'; leadHostId: string }
+  | { kind: 'follow'; hostId: string; sessionId: string; leadHostId: string }
+  | { kind: 'unreachable'; leadHostId: string; leadSessionId: string }
 
 export type LoadResult = { kind: 'ok' } | { kind: 'none' } | ({ kind: 'remote' } & RemoteLead) | { kind: 'failed' } | { kind: 'dropped' } | { kind: 'no_unit' }
 
