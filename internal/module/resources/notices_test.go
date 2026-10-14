@@ -380,17 +380,63 @@ func TestNotices_OfferTextNeedsACurrentOffer(t *testing.T) {
 	posID, _ := f.queuedThenOffered(newCID(), pidA, "go build")
 	p := f.position(posID)
 	p.NoticeKind, p.NoticeDueAt = "offer", p.OfferedAt
-	require.NotEmpty(t, f.m.noticeText(p, f.nowMS()), "the current offer says something")
+	text := func(p positionRow) string {
+		s, err := f.m.noticeText(p, f.nowMS())
+		require.NoError(t, err)
+		return s
+	}
+	require.NotEmpty(t, text(p), "the current offer says something")
 
 	delivered := p
 	delivered.DeliveredAt = p.OfferedAt + 1
-	assert.Empty(t, f.m.noticeText(delivered, f.nowMS()), "already delivered")
+	assert.Empty(t, text(delivered), "already delivered")
 
 	newer := p
 	newer.NoticeDueAt = p.OfferedAt - 1
-	assert.Empty(t, f.m.noticeText(newer, f.nowMS()), "a slot of an older offer")
+	assert.Empty(t, text(newer), "a slot of an older offer")
 
 	moved := p
 	moved.State = resources.PosRunning
-	assert.Empty(t, f.m.noticeText(moved, f.nowMS()), "no longer offered")
+	assert.Empty(t, text(moved), "no longer offered")
+}
+
+// A failed read of the named rows says nothing about the slot: it is tried again, not settled as stale.
+func TestNotices_AFailedReadIsNotStale(t *testing.T) {
+	f := newPosFix(t)
+	n := f.outbox(status(promptq.Accepted))
+	posID, _ := f.queuedThenOffered(newCID(), pidA, "go build")
+	_, err := f.m.store.db.Exec(`ALTER TABLE resource_leases RENAME TO resource_leases_away`)
+	require.NoError(t, err)
+	f.notices()
+	_, err = f.m.store.db.Exec(`ALTER TABLE resource_leases_away RENAME TO resource_leases`)
+	require.NoError(t, err)
+	assert.Empty(t, n.tries())
+	assert.NotEqual(t, noticeStale, f.position(posID).NoticeResult, "not settled by a failed read")
+	f.advance(noticeRetryOther)
+	f.notices()
+	assert.Len(t, n.tries(), 1, "sent once the read works")
+	assert.Equal(t, promptq.Accepted, f.position(posID).NoticeResult)
+}
+
+// When the window cannot be recorded after an accepted offer, the slot stays pending: the next try (same key, so the
+// queue answers from its ledger) records it, instead of leaving an offer the session got with no window.
+func TestNotices_AcceptedOfferWithoutAWindowIsTriedAgain(t *testing.T) {
+	f := newPosFix(t)
+	n := f.outbox(status(promptq.Accepted))
+	posID, _ := f.queuedThenOffered(newCID(), pidA, "go build")
+	_, err := f.m.store.db.Exec(`CREATE TRIGGER no_delivery BEFORE UPDATE OF delivered_at ON resource_positions
+		BEGIN SELECT RAISE(ABORT, 'disk full'); END`)
+	require.NoError(t, err)
+	f.notices()
+	p := f.position(posID)
+	assert.Zero(t, p.DeliveredAt)
+	assert.Zero(t, p.NoticeSentAt, "the slot is still pending")
+	_, err = f.m.store.db.Exec(`DROP TRIGGER no_delivery`)
+	require.NoError(t, err)
+	f.advance(noticeRetryOther)
+	f.notices()
+	p = f.position(posID)
+	assert.Equal(t, f.nowMS(), p.DeliveredAt)
+	assert.Equal(t, promptq.Accepted, p.NoticeResult)
+	assert.Len(t, n.tries(), 2)
 }

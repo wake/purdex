@@ -135,31 +135,31 @@ func (m *Module) noticePass(ctx context.Context) {
 }
 
 // noticeText is what the slot says now, from the requests that are still named and waiting; "" when there is nothing
-// true left to say (the slot is stale).
-func (m *Module) noticeText(p positionRow, nowMS int64) string {
+// true left to say (the slot is stale). An error is a failed read, which says nothing about the slot: it is tried again.
+func (m *Module) noticeText(p positionRow, nowMS int64) (string, error) {
 	switch p.NoticeKind {
 	case "offer":
 		if p.State != resources.PosOffered || p.OfferedAt != p.NoticeDueAt || p.DeliveredAt > 0 {
-			return ""
+			return "", nil
 		}
 	case "idle":
 		if p.State != resources.PosIdle || p.WindowUntil <= nowMS {
-			return ""
+			return "", nil
 		}
 	case "cancelled", "drained":
 		if p.State != resources.PosEnded || nowMS-p.EndedAt > noticeCancelAge.Milliseconds() {
-			return ""
+			return "", nil
 		}
 		if p.NoticeKind == "drained" {
-			return resources.DrainedNotice
+			return resources.DrainedNotice, nil
 		}
-		return resources.CancelledNotice
+		return resources.CancelledNotice, nil
 	default:
-		return ""
+		return "", nil
 	}
 	rows, err := m.store.RowsOf(p.ID)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	var named []resources.NoticeRow
 	for _, r := range rows {
@@ -167,14 +167,18 @@ func (m *Module) noticeText(p positionRow, nowMS int64) string {
 			named = append(named, resources.NoticeRow{ID: r.ID, Mode: callMode(r.Mode), Command: r.Command, Cwd: r.Cwd, CreatedAt: time.UnixMilli(r.CreatedAt)})
 		}
 	}
-	return resources.OfferNotice(p.ID, named, time.Local)
+	return resources.OfferNotice(p.ID, named, time.Local), nil
 }
 
 // deliverNotice is one try of one slot. It returns how long to wait before the next try of the same slot: 0 when the
 // slot is settled (sent, stale, or ended by a result), or when it was changed under the try.
 func (m *Module) deliverNotice(ctx context.Context, p positionRow) time.Duration {
 	nowMS := m.now().UnixMilli()
-	text := m.noticeText(p, nowMS)
+	text, err := m.noticeText(p, nowMS)
+	if err != nil {
+		m.logf("[resources] notices: read %s: %v", p.ID, err)
+		return noticeRetryOther
+	}
 	if text == "" {
 		// Not current any more: cleared, never sent (a stale offer would have the session re-run what was passed on).
 		if _, err := m.store.SetNoticeResult(p.ID, p.NoticeKind, p.NoticeDueAt, noticeStale, 0); err != nil {
@@ -213,18 +217,22 @@ func (m *Module) noticeOutcome(p positionRow, res promptq.Result) time.Duration 
 	}
 	switch res.Status {
 	case promptq.Accepted:
-		set(promptq.Accepted, nowMS)
 		if p.NoticeKind == "offer" {
-			// D1: the notice reached the session, the 3-minute window starts now (§2.8).
+			// D1: the notice reached the session, the 3-minute window starts now (§2.8). The window is recorded before
+			// the slot is settled: if that write fails the slot stays pending and is tried again (the key is the same,
+			// so the queue does not send it twice), instead of leaving an offer the session got with no window.
 			m.stateMu.Lock()
 			won, err := m.store.MarkDelivered(p.ID, p.OfferedAt, nowMS)
 			m.stateMu.Unlock()
 			if err != nil {
 				m.logf("[resources] notices: mark %s delivered: %v", p.ID, err)
-			} else if won {
+				return noticeRetryOther
+			}
+			if won {
 				m.wake()
 			}
 		}
+		set(promptq.Accepted, nowMS)
 		return 0
 	case promptq.Busy, promptq.Timeout:
 		return noticeRetryBusy // never sent: the same key may be sent again
