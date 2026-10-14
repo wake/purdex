@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -323,7 +324,24 @@ func TestSelfNotice_DeliveredToTheSessionItself_PauseStillApplies(t *testing.T) 
 	if err != nil || resp.Result != ipeers.ResultDelivered {
 		t.Fatalf("SendSelfNotice to itself: %+v %v", resp, err)
 	}
-	s.recvLine()
+	// the frame offers no way to answer: its reply route is not the session's own socket (a reply would loop back unaudited)
+	line := fmt.Sprint(s.recvLine())
+	if strings.Contains(line, req.OriginInbox) || !strings.Contains(line, "uds:"+systemNoticeFrom) {
+		t.Fatalf("frame = %s, want the reply route %q and not the origin's socket %q", line, systemNoticeFrom, req.OriginInbox)
+	}
+	// each privileged key shows only its own method: the registered services cannot be asserted to the other's interface
+	reg := core.NewServiceRegistry()
+	s.m.registerSenders(reg)
+	if svc, _ := reg.Get(SelfNoticeSenderKey); svc == nil {
+		t.Fatal("no self-notice sender registered")
+	} else if _, ok := svc.(FlowSender); ok {
+		t.Fatal("the self-notice service can be asserted to FlowSender")
+	}
+	if svc, _ := reg.Get(FlowSenderKey); svc == nil {
+		t.Fatal("no flow sender registered")
+	} else if _, ok := svc.(SelfNoticeSender); ok {
+		t.Fatal("the flow service can be asserted to SelfNoticeSender")
+	}
 	gateFor(s, targetSessionID) // the lead is paused: a notice bounces like any message
 	var se *SendError
 	if _, err := (moduleSender{m: s.m}).SendSelfNotice(context.Background(), req); !errors.As(err, &se) || se.Status != http.StatusConflict {

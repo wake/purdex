@@ -49,7 +49,7 @@ func TestNoticeToLead_RemoteMemberGoesFromTheLeadsInboxBySelfNotice_LocalFromThe
 	}
 	// remote member: its session has no inbox here
 	remote := mr
-	remote.SessionID, remote.Ref = "sid-on-another-host", "_rem777"
+	remote.SessionID, remote.Ref, remote.HostID = "sid-on-another-host", "_rem777", "host-elsewhere"
 	if !f.m.noticeToLead(remote, tm, "remote text", "test") {
 		t.Fatal("the remote notice did not go")
 	}
@@ -59,6 +59,13 @@ func TestNoticeToLead_RemoteMemberGoesFromTheLeadsInboxBySelfNotice_LocalFromThe
 	}
 	if n := len(f.sender.calls()); n != 2 { // sent records both kinds; the plain Send was refused for nobody
 		t.Fatalf("recorded sends = %d, want 2", n)
+	}
+	// a member of THIS host that the registry does not list right now is not a remote member: nothing is sent as if it were
+	gone := mr
+	gone.SessionID, gone.Ref = "sid-not-listed", "_gone99"
+	before := len(f.selfNotices())
+	if f.m.noticeToLead(gone, tm, "gone text", "test") || len(f.selfNotices()) != before {
+		t.Fatal("a local member missing from the registry was told as a remote one")
 	}
 	// no self-notice sender: not sent, not a panic
 	f.m.selfNotice = nil

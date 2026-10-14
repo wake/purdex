@@ -618,7 +618,13 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		m.deliverLocal(w, dreq, id, mode, req.OriginInbox, origin.Address, target.Agent.Inbox, targetHostID, targetAlias, toAddress)
+		replyInbox, fromName := req.OriginInbox, origin.Address
+		if isSelfNotice(r.Context()) {
+			// a notice the daemon speaks in the session's own voice must not offer a way to answer it: a native reply goes to the frame's
+			// `from` socket, which here would be the session's own - an unaudited, unlimited loop. The reply route points nowhere (codex)
+			replyInbox, fromName = systemNoticeFrom, systemNoticeName
+		}
+		m.deliverLocal(w, dreq, id, mode, replyInbox, fromName, target.Agent.Inbox, targetHostID, targetAlias, toAddress)
 		return
 	}
 

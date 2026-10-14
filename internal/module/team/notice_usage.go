@@ -183,6 +183,12 @@ func (m *Module) noticeToLead(mr memberRow, t team.Team, text, what string) bool
 		}
 		return true
 	}
+	if !m.isRemoteRow(mr) {
+		// a member of THIS host that the registry does not list right now (a gap, a restart, a stale row) is not a remote member: its
+		// notice is not sent as if it were, and the caller keeps it owed or retries (codex)
+		m.logf("[team] %s (member %s): its inbox is not in the registry; not sent", what, mr.Ref)
+		return false
+	}
 	leadInbox, ok, err := m.origins.InboxOf(t.LeadSessionID)
 	if err != nil || !ok || m.selfNotice == nil {
 		m.logf("[team] %s (member %s): no live inbox to send from (lead inbox %v, %v; self-notice sender %v)", what, mr.Ref, ok, err, m.selfNotice != nil)
