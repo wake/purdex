@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/module/hostconfig"
 	"github.com/wake/purdex/internal/team"
@@ -64,7 +65,6 @@ func (f *fixture) beginRaw2(r team.RelayBeginRequest) (int, team.RelayBeginRespo
 	}
 	return code, out, body
 }
-
 
 // A half begin is claimed at once, mode half, approved by the daemon's own client, and spends nothing - even with no quota left.
 // Mutation gates: spend on a half (Auto) → the quota drops / the begin is paused (red); leave the mode ” → red.
@@ -169,5 +169,97 @@ func TestIdleCard_SwitchOnSplitsOnTheModVersion(t *testing.T) {
 				t.Fatalf("close_reason = %q, want unattended", reason)
 			}
 		}
+	}
+}
+
+// ---- T30: `written` closes a half or a handoff ----
+
+// halfOp opens a half op (claimed, mode half) and walks it to writing.
+func (f *fixture) halfOp(sid string) team.RelayOp {
+	f.t.Helper()
+	code, resp, body := f.beginRaw2(halfBeginReq(sid, true))
+	if code != http.StatusCreated {
+		f.t.Fatalf("half begin: %d %s", code, body)
+	}
+	if c, _, ae := f.report(resp.Op.ID, team.RelayReportRequest{State: team.RelayWriting}); c != http.StatusOK {
+		f.t.Fatalf("writing: %d %+v", c, ae)
+	}
+	return resp.Op
+}
+
+func (f *fixture) freshHalf(sid string) (opID, path string, ok bool) {
+	f.t.Helper()
+	err := f.m.store.db.QueryRow(`SELECT op_id, path FROM relay_fresh_half WHERE session_id = ?`, sid).Scan(&opID, &path)
+	return opID, path, err == nil
+}
+
+// Mutation gates: leave the half `written` → red; skip the fresh upsert → red.
+func TestWritten_ClosesAHalfAndKeepsItsFile(t *testing.T) {
+	f := newFixture(t)
+	op := f.halfOp("sid-1")
+	code, got, ae := f.report(op.ID, team.RelayReportRequest{State: team.RelayWritten})
+	if code != http.StatusOK || got.State != team.RelayCancelled || got.Reason != team.RelayReasonHalf || got.Mode != team.RelayModeHalf {
+		t.Fatalf("written on a half: %d %+v %+v, want cancelled / half", code, got, ae)
+	}
+	if id, path, ok := f.freshHalf("sid-1"); !ok || id != op.ID || path != op.HandoffPath {
+		t.Fatalf("fresh row = %q %q %v, want the half's op and file", id, path, ok)
+	}
+	// a re-send is the same answer
+	if code, again, _ := f.report(op.ID, team.RelayReportRequest{State: team.RelayWritten}); code != http.StatusOK || again.State != team.RelayCancelled {
+		t.Fatalf("re-send: %d %+v", code, again)
+	}
+}
+
+// A handoff op (RT-3c) also ends cancelled / half, with no fresh row. Mutation gate: only half closes → the handoff stays written (red).
+func TestWritten_ClosesAHandoffToo(t *testing.T) {
+	f := newFixture(t)
+	f.memberTeam("2")
+	row := team.RelayOp{ID: "op-h", Kind: team.RelayKindMember, HostID: f.m.hostID(), SessionID: "sid-m1", Ref: "_mem001", TeamID: uid(1), State: team.RelayClaimed,
+		Mode: team.RelayModeHandoff, HandoffPath: "/p", CreatedAt: 1, UpdatedAt: 1}
+	if err := f.m.store.CreateRelayOp(row); err != nil {
+		t.Fatal(err)
+	}
+	code, got, ae := f.report("op-h", team.RelayReportRequest{State: team.RelayWritten})
+	if code != http.StatusOK || got.State != team.RelayCancelled || got.Reason != team.RelayReasonHalf {
+		t.Fatalf("written on a handoff: %d %+v %+v, want cancelled / half", code, got, ae)
+	}
+	if _, _, ok := f.freshHalf("sid-m1"); ok {
+		t.Fatal("a handoff left a fresh-half row")
+	}
+}
+
+// A full relay's `written` is as ever. Mutation gate: close every written → the full op is cancelled (red).
+func TestWritten_OnAFullOpStaysWritten(t *testing.T) {
+	f := newFixture(t)
+	resp := f.begin("sid-1")
+	if c, _ := f.decide(resp.RequestID, "approve"); c != http.StatusOK {
+		t.Fatalf("approve: %d", c)
+	}
+	if c, _, ae := f.report(resp.Op.ID, team.RelayReportRequest{State: team.RelayWriting}); c != http.StatusOK {
+		t.Fatalf("writing: %d %+v", c, ae)
+	}
+	code, got, _ := f.report(resp.Op.ID, team.RelayReportRequest{State: team.RelayWritten})
+	if code != http.StatusOK || got.State != team.RelayWritten {
+		t.Fatalf("written on a full op: %d %+v, want written", code, got)
+	}
+	if _, _, ok := f.freshHalf("sid-1"); ok {
+		t.Fatal("a full op left a fresh-half row")
+	}
+}
+
+// No "接力已取消" notice for either (C#20). Mutation gate: let the outcome notice run for cancelled / half → the lead is told (red).
+func TestWritten_HalfAndHandoffSendNoCancelNotice(t *testing.T) {
+	f := newFixture(t)
+	f.memberTeam("2")
+	row := team.RelayOp{ID: "op-h", Kind: team.RelayKindMember, HostID: f.m.hostID(), SessionID: "sid-m1", Ref: "_mem001", TeamID: uid(1), State: team.RelayClaimed,
+		Mode: team.RelayModeHandoff, HandoffPath: "/p", CreatedAt: 1, UpdatedAt: 1}
+	if err := f.m.store.CreateRelayOp(row); err != nil {
+		t.Fatal(err)
+	}
+	f.forgetSent()
+	f.report("op-h", team.RelayReportRequest{State: team.RelayWritten})
+	time.Sleep(100 * time.Millisecond)
+	if calls := f.sender.calls(); len(calls) != 0 {
+		t.Fatalf("a handoff's end told someone: %+v", calls)
 	}
 }

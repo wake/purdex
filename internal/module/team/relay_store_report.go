@@ -278,6 +278,9 @@ func reportRelayIn(tx *sql.Tx, id string, r RelayReport) (team.RelayOp, ReportRe
 	if cur.State == r.State {
 		return cur, ReportNoop, nil
 	}
+	if r.State == team.RelayWritten && cur.State == team.RelayCancelled && cur.Reason == team.RelayReasonHalf && cur.Mode != "" {
+		return cur, ReportNoop, nil // a half's `written` was applied: the mod's re-send gets the same answer
+	}
 	if !relayTransitionOK(cur.Kind, cur.State, r.State) {
 		return cur, ReportBadTransition, nil
 	}
@@ -298,6 +301,21 @@ func reportRelayIn(tx *sql.Tx, id string, r RelayReport) (team.RelayOp, ReportRe
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
 		return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: state changed under the transaction", id)
+	}
+	if r.State == team.RelayWritten && (cur.Mode == team.RelayModeHalf || cur.Mode == team.RelayModeHandoff) {
+		// A half (and a handoff, RT-3c) ends where its file is written: no /clear, no seed (RT-3a1 T30, C#15). The op closes cancelled /
+		// half in the same transaction; a half keeps its file for the next full relay to reuse. A handoff's kill is RT-3c's.
+		next.State, next.Reason = team.RelayCancelled, team.RelayReasonHalf
+		if _, err := tx.Exec(`UPDATE relay_ops SET state = ?, reason = ? WHERE id = ?`, string(next.State), next.Reason, id); err != nil {
+			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: close the half: %w", id, err)
+		}
+		if cur.Mode == team.RelayModeHalf {
+			if _, err := tx.Exec(`INSERT INTO relay_fresh_half (session_id, op_id, path, written_at) VALUES (?, ?, ?, ?)
+				ON CONFLICT (session_id) DO UPDATE SET op_id = excluded.op_id, path = excluded.path, written_at = excluded.written_at`,
+				cur.SessionID, id, cur.HandoffPath, r.At); err != nil {
+				return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: fresh half: %w", id, err)
+			}
+		}
 	}
 	if r.State == team.RelayCleared {
 		// A plain INSERT: checkLineage has already proven the key is free,
