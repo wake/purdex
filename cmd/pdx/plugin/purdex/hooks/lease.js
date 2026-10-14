@@ -532,6 +532,9 @@ const withNotes = (r, notes) => (notes.length ? { ...r, context: [...(r.context 
 async function leaseCall($, e, next) {
   const c = classify(e.command)
   if (!c) return next(e)
+  // A command with a `pdx lease` of its own anywhere in it is left to that one: inside this lease the inner run
+  // would find its own session's position running, be queued (exit 15), and what follows it would be skipped.
+  if (hasLeaseSegment(e.command)) return next(e)
   let command = e.command
   let rewritten = false
   if (c.needsMaxWorkers) {

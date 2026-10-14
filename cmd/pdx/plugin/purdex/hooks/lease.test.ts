@@ -515,3 +515,13 @@ test('a background command with a pdx lease segment anywhere is not wrapped', as
   expect(r.ran).toEqual(['pdx lease run --ask --kind build -- pnpm run build && pnpm run build', 'pnpm run build; pdx lease run --kind build -- ls', 'pdx lease ls\npnpm run build'])
   expect(r.checks).toEqual([])
 })
+
+// Inside this lease the inner run would be queued behind its own session's running position and what follows it
+// skipped, so a foreground command with a pdx lease segment is left alone too. (M: drop the check.)
+test('a foreground command with a pdx lease segment is not leased by the mod', async ($, on) => {
+  const r = rig(on, () => ok(GRANT()))
+  const cmds = ['pdx lease run --kind build -- pnpm run build && npx vitest run', 'cd spa && pdx lease run --kind build -- ls; pnpm run build']
+  for (const c of cmds) await bash($, c)
+  expect(r.calls).toEqual([])
+  expect(r.ran).toEqual(cmds)
+})
