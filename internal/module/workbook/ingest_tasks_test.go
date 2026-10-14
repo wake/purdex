@@ -435,3 +435,75 @@ func TestSummaryLine_OneTrimmedLineCutAtTheLimit(t *testing.T) {
 		t.Errorf("a blank summary = %q", got)
 	}
 }
+
+// The tasks file shows each task's owner by display name and its references: an issue number in the title and a PR from
+// the task's metadata.
+// Mutation gate: no owner in the tasks file -> red; no references in the tasks file -> red.
+func TestTaskMirror_TheTasksFileShowsTheOwnerAndTheRefsOfEachTask(t *testing.T) {
+	k := newMirrorKit(t)
+	k.finishBaseline()
+	c := k.task(4, "修 #2829", taskDoing, time.Second, time.Second)
+	c.MetadataPRs = []int{2830}
+	k.feed.set(c)
+	k.now = k.now.Add(mirrorEvery)
+	k.tick()
+	k.drain()
+	ts := k.tasksFile()
+	if len(ts) != 1 {
+		t.Fatalf("tasks file = %+v", ts)
+	}
+	if want := journal.DisplayName("mlab/purdex-3f-adam"); want == "" || ts[0].Owner != want {
+		t.Errorf("owner = %q, want %q", ts[0].Owner, want)
+	}
+	if got := strings.Join(ts[0].Refs, ","); got != "#2829,PR #2830" {
+		t.Errorf("refs = %q", got)
+	}
+}
+
+// A closing line whose task_done was edited away is logged and skipped: the row is done, not retried for ever, and it
+// does not block the rows behind it.
+// Mutation gate: treat a missing entry as a failure -> drain fails, the row stays undone (red).
+func TestTaskMirror_AClosingLineForAnEditedAwayEntryIsSkipped(t *testing.T) {
+	k := newMirrorKit(t)
+	k.finishBaseline()
+	k.feed.set(k.task(3, "寫文案", taskDoing, time.Second, time.Second))
+	k.now = k.now.Add(mirrorEvery)
+	k.tick()
+	k.feed.set(k.task(3, "寫文案", taskCompleted, time.Second, 11*time.Second))
+	k.now = k.now.Add(mirrorEvery)
+	k.tick()
+	k.drain()
+	doneID := entryID(mkTeam, 3, "done")
+	files, _ := filepath.Glob(filepath.Join(k.unitDir(), "*.md"))
+	for _, f := range files {
+		es, err := journal.Parse(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(f); err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range es {
+			if e.ID != doneID {
+				if err := journal.Upsert(f, e); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+	k.feed.reports = append(k.feed.reports, team.ReportRow{RowID: 1, TeamID: mkTeam, ID: "r1", Kind: "merged", TaskSeq: 3, Summary: "已合併", CreatedAt: k.ms(20 * time.Second)})
+	k.now = k.now.Add(mirrorEvery)
+	k.tick()
+	if n := k.drain(); n == 0 {
+		t.Fatal("the closing-line row was not drained")
+	}
+	if n := k.drain(); n != 0 {
+		t.Fatalf("a second drain handled %d rows: the row is retried", n)
+	}
+	if _, ok := k.entry(doneID); ok {
+		t.Error("the edited-away entry came back")
+	}
+	if !strings.Contains(strings.Join(k.logs, "\n"), "not there to receive") {
+		t.Errorf("no log line for the skipped closing line: %v", k.logs)
+	}
+}
