@@ -257,4 +257,16 @@ describe('forgetting and fencing', () => {
     expect(await first).toEqual({ kind: 'dropped' })
     expect(unit('h1', 's1').tasks).toEqual(parseTasks(wireTasks()))
   })
+  it('a tasks read whose session was remapped to another unit meanwhile does not land on the new unit', async () => {
+    getJournal.mockResolvedValueOnce(page())
+    await st().loadJournal('h1', 's1')
+    const d = deferred<unknown>()
+    getTasks.mockReturnValueOnce(d.promise)
+    const inflight = st().loadTasks('h1', 's1')
+    getJournal.mockResolvedValueOnce(page({ unit: { kind: 'team', id: 'tm2', label: 'Other' } }))
+    await st().loadJournal('h1', 's1')
+    d.resolve({ kind: 'ok', value: parseTasks(wireTasks()) })
+    await inflight
+    expect(unit('h1', 's1').tasks).toBeNull()
+  })
 })

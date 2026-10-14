@@ -183,22 +183,24 @@ export const useJournalStore = create<JournalState>()((set, get) => {
 
     loadTasks: async (hostId, sessionId) => {
       if (!unitOf(hostId, sessionId)) return { kind: 'no_unit' }
+      const startedKey = get().byHost[hostId]?.unitOfSession[sessionId] // the answer belongs to the unit asked for, even if the session is remapped meanwhile
       return read(hostId, slotOf(hostId, sessionId, 'tasks'), () => getTasks(hostId, sessionId), (tasks, startedAt) => set((s) => {
         const h = s.byHost[hostId]
         const key = h?.unitOfSession[sessionId]
         const held = key === undefined ? undefined : h?.units[key]
-        if (!h || key === undefined || !held) return {}
+        if (!h || key === undefined || key !== startedKey || !held) return {}
         return { byHost: { ...s.byHost, [hostId]: { ...h, units: { ...h.units, [key]: { ...held, tasks, readAt: { ...held.readAt, tasks: startedAt }, touched: nextStamp() } } } } }
       }))
     },
 
     loadRoadmap: async (hostId, sessionId) => {
       if (!unitOf(hostId, sessionId)) return { kind: 'no_unit' }
+      const startedKey = get().byHost[hostId]?.unitOfSession[sessionId] // the answer belongs to the unit asked for, even if the session is remapped meanwhile
       return read(hostId, slotOf(hostId, sessionId, 'roadmap'), () => getRoadmap(hostId, sessionId), (roadmap, startedAt) => set((s) => {
         const h = s.byHost[hostId]
         const key = h?.unitOfSession[sessionId]
         const held = key === undefined ? undefined : h?.units[key]
-        if (!h || key === undefined || !held) return {}
+        if (!h || key === undefined || key !== startedKey || !held) return {}
         return { byHost: { ...s.byHost, [hostId]: { ...h, units: { ...h.units, [key]: { ...held, roadmap, readAt: { ...held.readAt, roadmap: startedAt }, touched: nextStamp() } } } } }
       }))
     },
