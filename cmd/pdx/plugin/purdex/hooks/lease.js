@@ -527,6 +527,41 @@ async function releaseLease($, cfg, clientId, answer, withNotice) {
 // withNotes adds lines to a tool result's context.
 const withNotes = (r, notes) => (notes.length ? { ...r, context: [...(r.context ?? []), ...notes] } : r)
 
+// bgLeases are the leases of commands Claude Code moved to the background: background task id → what releases it.
+const bgLeases = new Map()
+const BG_LEASES_MAX = 20
+// A final notice that arrived with a release nobody could read it at (the task ended between turns) waits here and goes
+// into the next Bash result.
+const pendingNotices = []
+
+// backgroundTaskOf is the id of the background task a Bash result says its command became, or ''.
+function backgroundTaskOf(r) {
+  const id = r && r.result && r.result.backgroundTaskId
+  return typeof id === 'string' ? id : ''
+}
+
+// leaseBackgroundChanged is called with the background tasks each time Claude Code lists them (classic.Stop, through
+// events.js): a handed-over lease whose task is no longer listed as running is released, with the final notice, which
+// goes to the model in the next Bash result. `$` is used here at the top level only (M-U1-2).
+export function leaseBackgroundChanged($, background) {
+  if (bgLeases.size === 0) return
+  const running = new Set(((background && background.tasks) || []).filter((t) => t.status === 'running').map((t) => t.id))
+  for (const [id, h] of [...bgLeases]) {
+    if (running.has(id)) continue
+    bgLeases.delete(id)
+    endBackgroundLease($, h).catch(() => {})
+  }
+}
+
+// endBackgroundLease is the release at the end of a background command: the same two tries with the notice as the
+// foreground, then one without.
+async function endBackgroundLease($, h) {
+  let rel = await releaseLease($, h.cfg, h.clientId, h.answer, true)
+  if (!rel.ok) rel = await releaseLease($, h.cfg, h.clientId, h.answer, true)
+  if (!rel.ok) await releaseLease($, h.cfg, h.clientId, h.answer, false)
+  if (rel.notice) pendingNotices.push(rel.notice)
+}
+
 // leaseCall is one foreground Bash call. A call that is not heavy or is already wrapped in `pdx lease` goes
 // straight on.
 async function leaseCall($, e, next) {
@@ -570,6 +605,18 @@ async function leaseCall($, e, next) {
       return { deny: queuedDeny(answer) }
     }
     const r = await next(rewritten ? { ...e, command } : e)
+    // Claude Code moved the command to the background (it ran past its timeout, or the person pressed Ctrl+B) and
+    // `next` resolved at once while the process runs on: the lease is not released now. It is handed to the
+    // watcher, which releases it when the task ends (leaseBackgroundChanged). If that never happens (a reload of
+    // the mod loses the watcher) the daemon's sweeper ends it once nothing of the session runs any more (#2841).
+    const taskId = backgroundTaskOf(r)
+    if (taskId) {
+      done = true
+      bgLeases.set(taskId, { cfg, clientId, answer })
+      while (bgLeases.size > BG_LEASES_MAX) bgLeases.delete(bgLeases.keys().next().value)
+      return withNotes(r, [...leaseNotes(rewritten, command, answer),
+        '這個指令跑得比 Claude Code 的前景時限久，被移到背景；它還在跑，主機資源會留給它，等它結束才放掉。'])
+    }
     // The command has ended: this release is the end the daemon counts, and asks for the final notice. One that
     // did not go through (the 5 s ran out, the answer was lost) is tried once more with the notice: the daemon
     // keeps the notice on the row for a repeated release. Still no answer: finally lets go without one.
@@ -629,6 +676,9 @@ export function registerLease(on) {
     interactive = true
     return next(e)
   })
-  on('tool.call', { tool: 'Bash' }, async ($, e, next) => (e.run_in_background === true ? backgroundCall($, e, next) : leaseCall($, e, next)))
-    .catch(($, e, next) => next(e))
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    const r = await (e.run_in_background === true ? backgroundCall($, e, next) : leaseCall($, e, next))
+    // A notice a background release left behind goes in with the next Bash result (never into a deny).
+    return pendingNotices.length && r && typeof r === 'object' && !('deny' in r) ? withNotes(r, pendingNotices.splice(0)) : r
+  }).catch(($, e, next) => next(e))
 }
