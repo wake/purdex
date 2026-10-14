@@ -373,6 +373,9 @@ func normalizeTraceRecord(record TraceRecord) (TraceChain, []TraceStep, error) {
 	return chain, steps, nil
 }
 
+// The totals assume this process is the table's only writer (the daemon holds the one store); another writer is
+// corrected by the recount every traceTotalsResyncEvery saves and by the exhausted-pass check in pruneTraceChains.
+//
 // pruneTraceChains evicts the oldest chains while the table (chains and steps, as counted by the caller) is over a
 // limit, and returns the totals after. A table within its limits costs nothing; one over them is read from its oldest
 // end only as far as the eviction goes, down to 90% of the limits when they are large (traceHysteresisFrom).
@@ -391,32 +394,51 @@ func pruneTraceChains(tx *sql.Tx, maxChains, maxSteps, chains, steps int, t *tra
 		keepSteps -= maxSteps / 10
 	}
 
-	rows, err := tx.Query(`
+	// The totals are what this process saw; they are wrong when something else changed the table. A pass that runs out
+	// of rows while the totals still say "over" shows that: the table is counted again and the pass made anew, before
+	// anything is deleted (a wrong total must not evict the chain that was just saved).
+	var evict []string
+	for pass := 0; ; pass++ {
+		evict = evict[:0]
+		c, st := chains, steps
+		rows, err := tx.Query(`
 		SELECT chain_id, step_count
 		FROM agent_trace_chains
 		ORDER BY started_at ASC, chain_id ASC
 	`)
-	if err != nil {
-		return 0, 0, err
-	}
-	var evict []string
-	for (chains > keepChains || steps > keepSteps) && rows.Next() {
-		var id string
-		var n int
-		if err := rows.Scan(&id, &n); err != nil {
+		if err != nil {
+			return 0, 0, err
+		}
+		for (c > keepChains || st > keepSteps) && rows.Next() {
+			var id string
+			var n int
+			if err := rows.Scan(&id, &n); err != nil {
+				rows.Close()
+				return 0, 0, err
+			}
+			t.scanned++
+			evict = append(evict, id)
+			c--
+			st -= n
+		}
+		if err := rows.Err(); err != nil {
 			rows.Close()
 			return 0, 0, err
 		}
-		t.scanned++
-		evict = append(evict, id)
-		chains--
-		steps -= n
-	}
-	if err := rows.Err(); err != nil {
 		rows.Close()
-		return 0, 0, err
+		if (c > keepChains || st > keepSteps) && pass == 0 {
+			if err := tx.QueryRow(`SELECT COUNT(*), COALESCE(SUM(step_count), 0) FROM agent_trace_chains`).Scan(&chains, &steps); err != nil {
+				return 0, 0, err
+			}
+			t.syncs++
+			if chains <= maxChains && steps <= maxSteps {
+				return chains, steps, nil
+			}
+			continue
+		}
+		chains, steps = c, st
+		break
 	}
-	rows.Close()
 
 	const batch = 500
 	for len(evict) > 0 {

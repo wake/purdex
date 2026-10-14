@@ -120,3 +120,22 @@ func TestTraceStore_HandlesOfOneStoreShareTheTotals(t *testing.T) {
 		t.Fatal("two handles of one store keep separate totals")
 	}
 }
+
+// Totals that are too high (the table was emptied by something else) must not evict the chain just saved.
+func TestTraceStore_StaleHighTotalsDoNotEvictTheNewChain(t *testing.T) {
+	s := openTestTraceStore(t)
+	s.maxChains = 1000
+	s.maxSteps = 100000
+	for i := 0; i < 1000; i++ {
+		saveOneStepChain(t, s, i)
+	}
+	if _, err := s.db.Exec(`DELETE FROM agent_trace_chains`); err != nil {
+		t.Fatal(err)
+	}
+	for i := 2000; i < 2003; i++ {
+		saveOneStepChain(t, s, i)
+	}
+	if c, _ := countTraceChains(t, s); c != 3 {
+		t.Errorf("%d chains after three saves into an emptied table, want 3", c)
+	}
+}
