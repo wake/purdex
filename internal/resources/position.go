@@ -27,6 +27,11 @@ const (
 	// CallWait is the old path (no session, or a script nobody watches): the
 	// request waits until granted.
 	CallWait = "wait"
+	// CallAuto leaves the choice to the daemon: a caller under an interactive
+	// session (one whose mod can run a prompt job, so a notice can reach it) is
+	// queued, any other waits as before. It is resolved when the request is
+	// created; the row keeps queue or wait.
+	CallAuto = "auto"
 )
 
 // Why a queue-mode request did not run (the queued_reason column).

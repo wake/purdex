@@ -88,7 +88,7 @@ type LeaseRequest struct {
 	// fields).
 	Parkable bool `json:"parkable,omitempty"`
 	// Mode is how the caller wants a busy host answered (CallQueue, CallAsk,
-	// CallWait; empty reads as wait). Command and Cwd are shown in the queue;
+	// CallWait; empty reads as wait; CallAuto lets the daemon choose). Command and Cwd are shown in the queue;
 	// both are cut by the daemon and env is never sent.
 	Mode    string `json:"mode,omitempty"`
 	Command string `json:"command,omitempty"`

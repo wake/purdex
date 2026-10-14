@@ -174,8 +174,9 @@ func TestCaller_EnvPicksTheModeAndFlagsOverride(t *testing.T) {
 	}
 	assert.Equal(t, resources.CallQueue, modeOf(map[string]string{"PDX_LEASE_CALLER": "fg"}))
 	assert.Equal(t, resources.CallAsk, modeOf(map[string]string{"PDX_LEASE_CALLER": "bg"}))
-	assert.Equal(t, resources.CallWait, modeOf(nil))
-	assert.Equal(t, resources.CallWait, modeOf(map[string]string{"PDX_LEASE_CALLER": "other"}))
+	// Neither a flag nor the variable: the daemon decides (auto).
+	assert.Equal(t, resources.CallAuto, modeOf(nil))
+	assert.Equal(t, resources.CallAuto, modeOf(map[string]string{"PDX_LEASE_CALLER": "other"}))
 	assert.Equal(t, resources.CallWait, modeOf(map[string]string{"PDX_LEASE_CALLER": "fg"}, "--wait"))
 	assert.Equal(t, resources.CallAsk, modeOf(map[string]string{"PDX_LEASE_CALLER": "fg"}, "--ask"))
 	assert.Equal(t, resources.CallQueue, modeOf(map[string]string{"PDX_LEASE_CALLER": "bg"}, "--queue"))
@@ -315,23 +316,65 @@ func TestRun_SendsCommandAndCwd(t *testing.T) {
 	assert.Equal(t, "/x/y", posts[0].Cwd)
 }
 
-// Inside a script (the parent is not the shell the mod wrapped) a queued answer
-// adds the whole-script line. (M: invert the comparison.)
+// Inside a script a queued answer adds the whole-script line. A pdx typed as a
+// command has the agent as its parent or as its parent's parent; anything
+// deeper is a script step. (M: invert the comparison.)
 func TestRun_ScriptStepAddsTheWholeScriptLine(t *testing.T) {
-	d := queuedDaemon(2, 0)
-	// fixedHolder makes the parent 4242.
-	_, _, inScript := driveRunEnv(t, d, nil, map[string]string{"PDX_LEASE_SHELL": "9999"}, []string{"--kind", "build", "--queue"}, "true")
-	assert.Contains(t, inScript, "這支腳本做到一半被排隊，前面的步驟已經執行")
-	assert.Contains(t, inScript, "pdx lease run --kind build -- <整支腳本>")
+	const agent = 777
+	env := map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/cc-socks/777.sock"}
+	parents := map[int]int{4242: 5000} // fixedHolder makes pdx's parent 4242
+	old := leaseParentOf
+	leaseParentOf = func(_ context.Context, pid int) (int, error) { return parents[pid], nil }
+	t.Cleanup(func() { leaseParentOf = old })
+	run := func(env map[string]string, flags ...string) string {
+		_, _, stderr := driveRunEnv(t, queuedDaemon(2, 0), nil, env, append(flags, "--queue"), "true")
+		return stderr
+	}
 
-	_, _, direct := driveRunEnv(t, queuedDaemon(2, 0), nil, map[string]string{"PDX_LEASE_SHELL": "4242"}, []string{"--kind", "build", "--queue"}, "true")
-	assert.NotContains(t, direct, "這支腳本")
+	// pdx <- 4242 <- 5000 <- agent: 5000 is the shell the agent opened, 4242 a script.
+	parents[5000] = agent
+	script := run(env, "--kind", "build")
+	assert.Contains(t, script, "這支腳本做到一半被排隊，前面的步驟已經執行")
+	assert.Contains(t, script, "pdx lease run --kind build -- <整支腳本>")
+	assert.Contains(t, run(env, "--weight", "30"), "pdx lease run --weight 30 -- <整支腳本>")
 
-	_, _, unknown := driveRunEnv(t, queuedDaemon(2, 0), nil, nil, []string{"--kind", "build", "--queue"}, "true")
-	assert.NotContains(t, unknown, "這支腳本")
+	// pdx <- 4242 <- agent: typed as a command.
+	parents[4242] = agent
+	assert.NotContains(t, run(env, "--kind", "build"), "這支腳本")
+	// pdx <- agent: the shell was replaced by it.
+	env2 := map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/cc-socks/4242.sock"}
+	assert.NotContains(t, run(env2, "--kind", "build"), "這支腳本")
 
-	_, _, weight := driveRunEnv(t, queuedDaemon(2, 0), nil, map[string]string{"PDX_LEASE_SHELL": "9999"}, []string{"--weight", "30", "--queue"}, "true")
-	assert.Contains(t, weight, "pdx lease run --weight 30 -- <整支腳本>")
+	// No agent to find: no line.
+	assert.NotContains(t, run(nil, "--kind", "build"), "這支腳本")
+	assert.NotContains(t, run(map[string]string{"CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/x.sock"}, "--kind", "build"), "這支腳本")
+}
+
+// A daemon from before auto refuses the mode: the request is sent again as
+// wait, once, and the command is let through as before.
+func TestAcquire_AutoAgainstAnOldDaemonFallsBackToWait(t *testing.T) {
+	fixedHolder(t)
+	d := &fakeLeaseDaemon{post: func(req resources.LeaseRequest) (int, any) {
+		if req.Mode == resources.CallAuto {
+			return 400, resources.APIError{Error: resources.ErrBadRequest, Detail: "mode must be queue, ask or wait"}
+		}
+		return 201, resources.LeaseResponse{ID: leaseRow, State: resources.StateHeld, Granted: true}
+	}}
+	code, stdout, stderr := driveLease(t, context.Background(), d, nil, "acquire", "--kind", "build", "--client-id", leaseCID)
+	assert.Equal(t, ExitOK, code, stderr)
+	assert.True(t, parseAcquireLine(t, stdout).Granted)
+	posts, _, _ := d.snapshot()
+	require.Len(t, posts, 2)
+	assert.Equal(t, resources.CallAuto, posts[0].Mode)
+	assert.Equal(t, resources.CallWait, posts[1].Mode)
+
+	// Any other 400 is not retried.
+	d = &fakeLeaseDaemon{post: func(resources.LeaseRequest) (int, any) {
+		return 400, resources.APIError{Error: resources.ErrBadRequest, Detail: "wait_s must be between 0 and 600"}
+	}}
+	driveLease(t, context.Background(), d, nil, "acquire", "--kind", "build")
+	posts, _, _ = d.snapshot()
+	assert.Len(t, posts, 1)
 }
 
 // The final notice comes with the release after the child, and is printed

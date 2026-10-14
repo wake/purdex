@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -22,6 +23,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/wake/purdex/cmd/pdx/daemonclient"
+	iagent "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/resources"
 )
 
@@ -122,7 +124,7 @@ func runLeaseRun(ctx context.Context, args []string, getenv func(string) string,
 	case out.queued:
 		// Not an error and not run: the place is kept and the session is told
 		// when it is its turn. Nothing is released or cancelled.
-		fmt.Fprintf(stderr, "pdx lease: %s\n", queuedText(out.resp, scriptStepOf(o, getenv)))
+		fmt.Fprintf(stderr, "pdx lease: %s\n", queuedText(out.resp, scriptStepOf(ctx, o, getenv)))
 		return ExitQueued
 	case out.failOpen != "":
 		fmt.Fprintf(stderr, "pdx lease: daemon 連不上或無法使用（%s），直接執行\n", out.failOpen)
@@ -162,13 +164,42 @@ func runLeaseRun(ctx context.Context, args []string, getenv func(string) string,
 	return code
 }
 
+// leaseParentOf is the parent of a process (a seam for tests).
+var leaseParentOf = func(ctx context.Context, pid int) (int, error) {
+	snap, err := iagent.SnapshotProcesses(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return snap.PPID(pid)
+}
+
+// agentPIDOf is the pid of the agent that started this shell: Claude Code puts
+// its inbox socket, named after its pid, in CLAUDE_CODE_MESSAGING_SOCKET. 0 when
+// there is none.
+func agentPIDOf(getenv func(string) string) int {
+	name := strings.TrimSuffix(filepath.Base(getenv("CLAUDE_CODE_MESSAGING_SOCKET")), ".sock")
+	pid, err := strconv.Atoi(name)
+	if err != nil || pid <= 0 {
+		return 0
+	}
+	return pid
+}
+
 // scriptStepOf says what a queued answer must add when the command is a step
-// of a script (T-script): the mod exports PDX_LEASE_SHELL, the pid of the
-// shell it wrapped, and a pdx whose parent is another process is inside a
-// script that shell runs. Empty when the mod did not say.
-func scriptStepOf(o acquireOpts, getenv func(string) string) string {
-	shell, err := strconv.Atoi(getenv("PDX_LEASE_SHELL"))
-	if err != nil || shell <= 0 || leaseParentPID() == shell {
+// of a script (T-script). A pdx typed as a command has the agent as its parent
+// (the shell was replaced by it) or as its parent's parent (the shell the agent
+// opened for the command); anything deeper is a step of a script that shell
+// runs. Empty when it is not a script step or the agent cannot be found.
+func scriptStepOf(ctx context.Context, o acquireOpts, getenv func(string) string) string {
+	agent := agentPIDOf(getenv)
+	if agent == 0 {
+		return ""
+	}
+	parent := leaseParentPID()
+	if parent == agent {
+		return ""
+	}
+	if up, err := leaseParentOf(ctx, parent); err != nil || up == agent {
 		return ""
 	}
 	if o.kind != "" {

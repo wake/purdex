@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -261,7 +262,14 @@ func leaseAcquire(ctx context.Context, client *daemonclient.Client, o acquireOpt
 	var resp resources.LeaseResponse
 	// The client id makes the create idempotent: a POST whose connection
 	// dropped after it went out may be replayed.
-	if _, err := client.Do(ctx, http.MethodPost, "/api/resources/leases", req, &resp, daemonclient.Idempotent()); err != nil {
+	_, err = client.Do(ctx, http.MethodPost, "/api/resources/leases", req, &resp, daemonclient.Idempotent())
+	if err != nil && req.Mode == resources.CallAuto && refusedMode(err) {
+		// A daemon from before auto: it reads the request as wait (the same row
+		// is not made twice: the first POST made none).
+		req.Mode = resources.CallWait
+		_, err = client.Do(ctx, http.MethodPost, "/api/resources/leases", req, &resp, daemonclient.Idempotent())
+	}
+	if err != nil {
 		if ctx.Err() != nil {
 			return leaseCancel(client, o.clientID, stderr)
 		}
@@ -320,6 +328,13 @@ func leaseAcquire(ctx context.Context, client *daemonclient.Client, o acquireOpt
 		return acquireOutcome{resp: resp, askCancelled: true}
 	}
 	return acquireOutcome{resp: resp}
+}
+
+// refusedMode says whether a daemon refused the request for its mode: a daemon
+// from before the auto mode answers 400 "mode must be queue, ask or wait".
+func refusedMode(err error) bool {
+	var se *daemonclient.StatusError
+	return errors.As(err, &se) && se.Status == http.StatusBadRequest && strings.Contains(se.API.Detail, "mode must be")
 }
 
 // askAnswered says whether the loop stops: the answer is a grant, or (queue
