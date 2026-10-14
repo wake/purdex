@@ -548,6 +548,7 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(team.MembershipReaderKey, team.MembershipReader(store)) // the push module's badge rules (BG-1a)
 	c.Registry.Register(team.ApprovalFeedKey, team.ApprovalFeed(m))
 	c.Registry.Register(team.ApprovalEventsKey, team.ApprovalEvents(m))
+	c.Registry.Register(team.JournalFeedKey, team.JournalFeed(store)) // the workbook journal's tasks, reports and teams (J-0a)
 	return nil
 }
 
