@@ -43,13 +43,14 @@ const msgDefaultLogTail = 50
 // sets is a title, and a title routes nothing.
 //
 // Under Peer Address v5 (peer mailbox spec §3.3) <name> is the virtual name
-// pdx gave the conversation, "<base>-<ref[1:3]>"; the block says so, and
+// pdx gave the conversation, "<base>-<name>" (a name from the pool, or the
+// ref's first two characters once the pool is used up); the block says so, and
 // that Claude Code's own session name — the one its UI shows, which changes
 // on every start — is not an address either.
 const msgUsage = "usage: pdx msg send [--mode prompting|bypass] [--json] [--config <path>] [--] <address> <text>\n" +
 	"           (-- ends the options: use it before text that starts with -)\n" +
 	"           (<address> is one of:\n" +
-	"              <host>/<name>              the everyday form — mlab/purdex-b0-q3\n" +
+	"              <host>/<name>              the everyday form — mlab/purdex-b0-kenji\n" +
 	"              \"<host>/<name> [<ref>]\"     pasted whole; the name is checked against the ref\n" +
 	"              <host>/_<ref>              exact — mlab/_q34psn\n" +
 	"              <host>/tmux:<name>         the tmux session itself\n" +

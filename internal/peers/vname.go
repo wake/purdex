@@ -11,8 +11,11 @@ const vnameMaxLen = 64
 var vnameBasePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
 // VirtualName is a conversation's pdx-assigned name (Peer Address v5, spec
-// §3.1): "<base>-<ref[1:3]>", e.g. base "purdex-54" and ref "_k3m9qz" give
-// "purdex-54-k3".
+// §3.1) with the ref's first two characters as its suffix: "<base>-<ref[1:3]>",
+// e.g. base "purdex-54" and ref "_k3m9qz" give "purdex-54-k3". A conversation
+// named from the name pool ends in a pool name instead (VirtualNameWith); this
+// form remains for conversations named before the pool, and for the pool used
+// up.
 //
 // The order is the spec's and it matters: RoutableName caps the length, so it
 // cannot run on a raw base that is merely too long. The base's characters are

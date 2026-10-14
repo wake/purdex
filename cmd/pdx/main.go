@@ -442,6 +442,10 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 		// Each conversation's pdx-assigned virtual name (Peer Address v5),
 		// falling back on the recorded registry names for a base.
 		peersMod.WithPeerNames(meta.PeerNames(), meta.ConversationNames())
+		// A new conversation's name ends in a free name from the 30-name pool
+		// instead of two ref characters (name pool spec); deploy every host
+		// together, uniqueness across hosts holds only when all run it.
+		peersMod.WithNamePool(peersmod.RandomNamePicker())
 	}
 	c.AddModule(peersMod)
 	// resources samples the host on its own ticker; it reads the session
