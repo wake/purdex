@@ -296,3 +296,22 @@ func TestJournalPrompt_EqualsTheDocumentBlock(t *testing.T) {
 		t.Error("JournalPrompt differs from the first text block of the prompt document")
 	}
 }
+
+// The document is on the spec branch, so the check above skips in most checkouts. This one always runs: the golden
+// file is a verbatim copy of the document's amended block (person_name, 這個人, Wake in the examples). When the
+// document changes, change both files in one commit.
+// Mutation gate: edit one word of prompts/journal-v1.txt (or of the golden) -> red.
+func TestJournalPrompt_EqualsTheGoldenCopy(t *testing.T) {
+	golden, err := os.ReadFile("testdata/journal-prompt-doc-block.golden.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(golden) != JournalPrompt {
+		t.Error("JournalPrompt differs from testdata/journal-prompt-doc-block.golden.txt")
+	}
+	for _, want := range []string{"person_name", "這個人", "Wake"} {
+		if !strings.Contains(JournalPrompt, want) {
+			t.Errorf("JournalPrompt does not mention %q", want)
+		}
+	}
+}
