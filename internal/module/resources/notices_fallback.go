@@ -41,6 +41,22 @@ func (m *Module) noticeFallback(p positionRow, text string, nowMS int64, set fun
 		set(promptq.NoMod, 0)
 		return noticeRetryOther
 	}
+	if p.NoticeResult == noticeMemberSending {
+		// An earlier try sent it to the lead and could not record that (the write failed): it is not sent again.
+		return m.noticeDelivered(p, nowMS, noticeMember)
+	}
+	// The slot is claimed before the lead is asked, and only for the slot that is current: a slot cleared or replaced
+	// meanwhile claims nothing and sends nothing. A frame already on its way cannot be called back (the residual: the
+	// slot or the membership changing during that one send); a crash between the claim and the record leaves the claim,
+	// and the lead is then not sent a second copy.
+	claimed, err := m.store.SetNoticeResult(p.ID, p.NoticeKind, p.NoticeDueAt, noticeMemberSending, 0)
+	if err != nil {
+		m.logf("[resources] notices: claim %s: %v", p.ID, err)
+		return noticeRetryOther
+	}
+	if !claimed {
+		return 0 // the slot is not this one any more
+	}
 	member, delivered := ln.NoticeLeadOf(p.SessionID, resources.LeadNotice(p.SessionID, text))
 	switch {
 	case member && delivered:

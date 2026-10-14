@@ -90,6 +90,42 @@ func TestFallback_LeadLookupMissingIsRetried(t *testing.T) {
 	assert.Empty(t, *alerts)
 }
 
+// The lead was sent the notice and the delivery could not be recorded: the next try finishes the record and does not send a
+// second copy to the lead.
+func TestFallback_ASentLeadIsNotSentAgainWhenTheRecordFailed(t *testing.T) {
+	lead := &fakeLead{member: true}
+	f, _, _ := fallbackFix(t, lead)
+	posID, _ := f.queuedThenOffered(newCID(), pidA, "go build")
+	_, err := f.m.store.db.Exec(`CREATE TRIGGER no_delivery BEFORE UPDATE OF delivered_at ON resource_positions
+		BEGIN SELECT RAISE(ABORT, 'disk full'); END`)
+	require.NoError(t, err)
+	f.notices()
+	assert.Len(t, lead.sent(), 1)
+	assert.Zero(t, f.position(posID).DeliveredAt)
+	_, err = f.m.store.db.Exec(`DROP TRIGGER no_delivery`)
+	require.NoError(t, err)
+	f.advance(noticeRetryOther)
+	f.notices()
+	assert.Len(t, lead.sent(), 1, "not sent again")
+	p := f.position(posID)
+	assert.Equal(t, noticeMember, p.NoticeResult)
+	assert.Equal(t, f.nowMS(), p.DeliveredAt)
+}
+
+// A slot that was replaced before the claim sends nothing to the lead.
+func TestFallback_AReplacedSlotIsNotSentToTheLead(t *testing.T) {
+	lead := &fakeLead{member: true}
+	f, _, alerts := fallbackFix(t, lead)
+	posID, _ := f.queuedThenOffered(newCID(), pidA, "go build")
+	old := f.position(posID)
+	_, err := f.m.store.db.Exec(`UPDATE resource_positions SET notice_due_at = notice_due_at + 1 WHERE id = ?`, posID)
+	require.NoError(t, err)
+	d := f.m.noticeFallback(old, "text", f.nowMS(), func(string, int64) bool { return true })
+	assert.Zero(t, d)
+	assert.Empty(t, lead.sent())
+	assert.Empty(t, *alerts)
+}
+
 // A session that is no team member has no lead to tell: a user alert, once; never a send to itself.
 func TestFallback_SoloSessionIsAUserAlertNeverASelfSend(t *testing.T) {
 	lead := &fakeLead{member: false}
