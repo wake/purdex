@@ -407,6 +407,15 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		result.Status = ""
 	}
 
+	// A PostToolUse that names a subagent (non-empty agent_id) is that
+	// subagent's tool call, which carries the main session's id: it must not
+	// move the main conversation's light or turn boundary (#2873). It goes
+	// through the status-less detail-only branch below.
+	subagentToolUse := isSubagentToolUse(req, result)
+	if subagentToolUse {
+		result.Status = ""
+	}
+
 	// Error guard: when the SENDER'S frame is in error, only whitelisted events
 	// can clear it. It reads the pane's own frame, not the session-level
 	// status, so another pane's error (or the mod's, which the session view
@@ -461,7 +470,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// detail-only Subagents membership update; here there is no Subagents
 	// mutation to perform).
 	if req.AgentType == "cc" &&
-		(req.PurdexName == "PdxPreToolUse" || req.PurdexName == "PdxPostToolUseFailure") {
+		(req.PurdexName == "PdxPreToolUse" || req.PurdexName == "PdxPostToolUseFailure" || subagentToolUse) {
 		if req.TmuxSession == "" {
 			trace.Finish("completed", "detail_only_no_session")
 			traceFinished = true
