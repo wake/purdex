@@ -2179,8 +2179,6 @@
   "approval.dialog.adopt_wait.close": "關閉",
   "approval.dialog.adopt_wait.toast": "{{target}}：{{result}}",
   "approval.dialog.adopt_wait.more": "另有 {{count}} 筆納入等待中",
-  "approval.dialog.no_more_asking": "這個 session 不再詢問",
-  "approval.dialog.pause_failed": "無法暫停這個 session 的接力詢問（{{code}}），決定照常送出",
   "approval.notify.title_self_relay": "{{host}}：{{session}} 申請接力（已用 {{pct}}%）",
   "approval.notify.title_member_relay": "{{host}}：{{lead}} 要幫 member {{member}} 接力（context {{pct}}%）",
   "approval.notify.body_member_relay": "member 額度用完，要核准嗎？",

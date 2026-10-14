@@ -126,7 +126,8 @@ describe('locale completeness', () => {
       const zh = zhTW as Record<string, string>
       expect(zh['approval.dialog.usage_value']).toBe('已用 {{pct}}%')
       expect(zh['approval.dialog.self_relay_note']).toBe('核准後這個 session 會寫接力檔、清空並在原處接手（約 1 分鐘）')
-      expect(zh['approval.dialog.no_more_asking']).toBe('這個 session 不再詢問')
+      expect(Object.keys(zh)).not.toContain('approval.dialog.no_more_asking') // the box is gone (relay v2 App contract 1)
+      expect(Object.keys(zh)).not.toContain('approval.dialog.pause_failed')
       expect(zh['hosts.relay']).toBe('接力')
       expect(zh['hosts.relay.member_note']).toBe('member 的接力一律由 lead 安排')
     })

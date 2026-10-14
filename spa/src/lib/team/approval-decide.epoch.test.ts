@@ -16,7 +16,6 @@ import type { Approval } from './types'
 vi.mock('./approval-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./approval-api')>()),
   decideApproval: vi.fn(),
-  setSelfRelayPause: vi.fn(),
 }))
 vi.mock('./approval-goto', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./approval-goto')>()),

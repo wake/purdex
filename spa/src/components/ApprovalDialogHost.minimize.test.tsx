@@ -209,7 +209,7 @@ describe('ApprovalDialogHost — 縮小 (U22 b)', () => {
     })
   }
 
-  it('grant edits and the 不再詢問 tick survive minimize and restore', () => {
+  it('grant edits survive minimize and restore', () => {
     renderWithTerminal()
     const a = request('lead', 'a', NOW - 5_000, NOW + 500_000)
     open('h1', a)
@@ -221,12 +221,10 @@ describe('ApprovalDialogHost — 縮小 (U22 b)', () => {
     expect((screen.getByTestId('approval-max-members') as HTMLInputElement).value).toBe('5')
     expect((screen.getByTestId('approval-roots') as HTMLTextAreaElement).value).toBe('/w/purdex\n/w/nexen')
 
-    // The self_relay request (next after a): its tick survives too.
+    // The self_relay request (next after a) has nothing to edit: the 不再詢問 box is gone.
     closeElsewhere('h1', a)
-    fireEvent.click(screen.getByTestId('approval-no-more-asking'))
-    minimize()
-    fireEvent.click(pill()!)
-    expect((screen.getByTestId('approval-no-more-asking') as HTMLInputElement).checked).toBe(true)
+    expect(dialog()!.dataset.kind).toBe('self_relay')
+    expect(screen.queryByTestId('approval-no-more-asking')).toBeNull()
   })
 
   it('the edited team name survives minimize and restore (the dialog stays mounted)', () => {
