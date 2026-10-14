@@ -34,6 +34,8 @@ type RosterSession struct {
 	// Paused is the session's pause (unattended quota pause spec §3.1): its causes and since when; null when it is not paused.
 	// Always present, so a client tells "not paused" from a daemon that predates the field only by the capability.
 	Paused *RosterPause `json:"paused"`
+	// FreshHandoff is the handoff file an idle half wrote for the session and a full relay may reuse (RT-3a2 T32); absent when it has none.
+	FreshHandoff *RelayFreshHalf `json:"fresh_handoff,omitempty"`
 	// HostID and HostAlias name the host a remote member runs on (cross-host team spec §8); both absent for a session on
 	// the lead's own host. A remote member's Address is "<host_alias>/<ref>". ContextUnavailable: its host did not answer,
 	// so Model / Context are blank for that reason.

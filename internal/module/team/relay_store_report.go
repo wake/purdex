@@ -304,7 +304,7 @@ func reportRelayIn(tx *sql.Tx, id string, r RelayReport) (team.RelayOp, ReportRe
 	}
 	if r.State == team.RelayClaimed {
 		// a relay that claims ends the fresh half's life, reused or not (RT-3a1 T31): the file is spent or beside the point
-		if _, err := tx.Exec(`DELETE FROM relay_fresh_half WHERE session_id = ?`, cur.SessionID); err != nil {
+		if err := dropFreshHalfIn(tx, cur.SessionID, "", r.At); err != nil {
 			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: drop the fresh half: %w", id, err)
 		}
 	}

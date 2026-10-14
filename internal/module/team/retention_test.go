@@ -51,7 +51,7 @@ func TestRetentionVictims_Rules(t *testing.T) {
 		// already pruned: ignored even though old.
 		{ID: "gone", State: team.RelayDone, SessionID: "g1", CreatedAt: 1 * day, UpdatedAt: 1 * day, Pruned: true, HandoffPath: "x"},
 	}
-	got := retentionVictims(ops, chain, now)
+	got := retentionVictims(ops, chain, now, nil)
 	ids := map[string]bool{}
 	for _, op := range got {
 		ids[op.ID] = true

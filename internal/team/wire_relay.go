@@ -1,5 +1,7 @@
 package team
 
+import "encoding/json"
+
 // ---- P5a: relay ops, lineage, switches, pause (spec §8.1, §8.3, §8.4, §8.7) ----
 
 // RelayKind is who started a relay op (spec §8.1).
@@ -312,3 +314,49 @@ const (
 	// MinHalfModVersion is the mod protocol that runs the idle half itself; an older mod keeps today's auto-approve, never a half.
 	MinHalfModVersion = 8
 )
+
+// ---- The fresh handoffs of a host (RT-3a2 T32, S-21) ----
+
+// RelayFreshRoute is GET /api/relay/fresh: the sessions that hold a fresh half now.
+const RelayFreshRoute = "/api/relay/fresh"
+
+// RelayFreshEventType is the HostEvent.Type of the same list: {op:"snapshot"} to each new subscriber, {op:"changed"} after each change.
+const RelayFreshEventType = "relay.fresh"
+
+// RelayFreshSession is one session's fresh half: the handoff file an idle half wrote for it.
+type RelayFreshSession struct {
+	SessionID string `json:"session_id"`
+	Ref       string `json:"ref"`
+	OpID      string `json:"op_id"`
+	Path      string `json:"path"`
+	WrittenAt int64  `json:"written_at"`
+}
+
+// RelayFreshView is the answer of GET /api/relay/fresh, oldest first.
+type RelayFreshView struct {
+	Sessions []RelayFreshSession `json:"sessions"` // never null (MarshalJSON)
+}
+
+// MarshalJSON writes no sessions as sessions:[], not null.
+func (v RelayFreshView) MarshalJSON() ([]byte, error) {
+	type plain RelayFreshView
+	if v.Sessions == nil {
+		v.Sessions = []RelayFreshSession{}
+	}
+	return json.Marshal(plain(v))
+}
+
+// RelayFreshEventValue is HostEvent.Value (JSON string) for RelayFreshEventType.
+type RelayFreshEventValue struct {
+	Op       string              `json:"op"` // "snapshot" | "changed"
+	Sessions []RelayFreshSession `json:"sessions"`
+}
+
+// MarshalJSON writes no sessions as sessions:[], not null.
+func (v RelayFreshEventValue) MarshalJSON() ([]byte, error) {
+	type plain RelayFreshEventValue
+	if v.Sessions == nil {
+		v.Sessions = []RelayFreshSession{}
+	}
+	return json.Marshal(plain(v))
+}

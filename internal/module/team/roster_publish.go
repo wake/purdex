@@ -88,6 +88,7 @@ func (m *Module) rosterSync(send bool) {
 	if m.core == nil || m.core.Events == nil || m.store == nil {
 		return
 	}
+	m.freshSync(send) // the fresh halves ride the same publisher (relay_fresh_events.go)
 	m.rosterMu.Lock()
 	defer m.rosterMu.Unlock()
 	roster, err := m.buildRoster()

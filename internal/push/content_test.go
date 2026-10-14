@@ -74,11 +74,11 @@ func TestApprovalContent_ThreeKindsInBothLocales(t *testing.T) {
 
 	idle := approvalOpened("self_relay", map[string]any{"used_percentage": 55.4, "reason": "idle", "idle_minutes": 40}, "", "worker-7")
 	c, ok = ApprovalContent(idle, "mlab", "zh-TW")
-	if !ok || c.Title != "mlab：worker-7 閒置 40 分鐘，申請接力（已用 55%）" || !strings.Contains(c.Body, "趁快取還在時接力最省") || c.Kind != "self_relay" {
+	if !ok || c.Title != "mlab：worker-7 閒置 40 分鐘，申請接力（已用 55%）" || !strings.Contains(c.Body, "趁快取還在時接力最省；不核准的話，5 分鐘後會先寫好接力檔（不清空）") || c.Kind != "self_relay" {
 		t.Fatalf("idle self_relay zh-TW = %+v", c)
 	}
 	c, _ = ApprovalContent(idle, "mlab", "en")
-	if c.Title != "mlab: worker-7 has been idle 40 min and requests a relay (55% used)" || !strings.Contains(c.Body, "cache is warm") {
+	if c.Title != "mlab: worker-7 has been idle 40 min and requests a relay (55% used)" || !strings.Contains(c.Body, "cache is warm is cheapest; otherwise a handoff file is written in 5 minutes (nothing is cleared)") {
 		t.Fatalf("idle self_relay en = %+v", c)
 	}
 	// Any other reason keeps the ordinary text.

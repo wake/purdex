@@ -525,7 +525,7 @@ func TestReuseCard_ApproveRefusesWhenTheFreshHalfIsGone(t *testing.T) {
 	f := newFixture(t)
 	half := f.freshHalfWithFile("sid-1")
 	_, resp, _ := f.beginRaw2(reuseBeginReq("sid-1", half.ID))
-	if err := f.m.store.DeleteFreshHalf("sid-1", half.ID); err != nil { // the stale report's first half; its card cancel has not run yet
+	if err := f.m.store.DeleteFreshHalf("sid-1", half.ID, f.m.now()); err != nil { // the stale report's first half; its card cancel has not run yet
 		t.Fatal(err)
 	}
 	code, body := f.decide(resp.RequestID, "approve")

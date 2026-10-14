@@ -38,9 +38,10 @@ func (m *Module) handleRelayCompacted(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// whatever the trigger, the context the idle half summarised is gone: its file is stale (RT-3a1 T31)
-	if err := m.store.DeleteFreshHalf(req.SessionID, ""); err != nil {
+	if err := m.store.DeleteFreshHalf(req.SessionID, "", m.now()); err != nil {
 		m.logf("[team] compacted %s: drop the fresh half: %v", req.SessionID, err)
 	}
+	m.rosterChanged()
 	if req.Trigger == "manual" {
 		m.writeJSON(w, http.StatusOK, team.RelayCompactedResponse{})
 		return

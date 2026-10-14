@@ -98,7 +98,10 @@ func (m *Module) runRetention() {
 // reconciliation (reconcileFromFrames, P6-4a) ends an op stuck in claimed /
 // writing / written because its process died or cleared unseen (issue
 // #1735), and its file then follows its new state's rule.
-func retentionVictims(ops []team.RelayOp, chainOf func(team.RelayOp) string, now int64) []team.RelayOp {
+//
+// fresh is the ids of the ops a relay_fresh_half row still names (RT-3a2 T33): a half's file waits there for the next full relay to reuse
+// it, so it is no victim however old; when the row goes, the op's updated_at is touched and the 3 days run from then.
+func retentionVictims(ops []team.RelayOp, chainOf func(team.RelayOp) string, now int64, fresh map[string]bool) []team.RelayOp {
 	var out []team.RelayOp
 	seen := map[string]bool{}
 	take := func(op team.RelayOp) {
@@ -114,6 +117,9 @@ func retentionVictims(ops []team.RelayOp, chainOf func(team.RelayOp) string, now
 		}
 		switch op.State {
 		case team.RelayFailed, team.RelayCancelled:
+			if fresh[op.ID] {
+				continue
+			}
 			if now-op.UpdatedAt >= retentionFailedAge.Milliseconds() {
 				take(op)
 			}
@@ -159,7 +165,16 @@ func (m *Module) sweepRetention() {
 		}
 		return op.SessionID
 	}
-	for _, op := range retentionVictims(ops, chainOf, m.now()) {
+	halves, _, err := m.store.FreshHalves()
+	if err != nil {
+		m.logf("[team] retention: fresh halves: %v", err)
+		return // not knowing which halves are fresh is no licence to remove a file
+	}
+	fresh := map[string]bool{}
+	for _, h := range halves {
+		fresh[h.OpID] = true
+	}
+	for _, op := range retentionVictims(ops, chainOf, m.now(), fresh) {
 		if err := m.removeHandoff(op); err != nil {
 			m.logf("[team] retention: op %s: %v", op.ID, err)
 			continue
@@ -185,6 +200,9 @@ func (m *Module) removeHandoff(op team.RelayOp) error {
 	want := filepath.Join(relayDir, op.ID+".md")
 	if op.ID == "" || op.ID == "." || op.ID == ".." || strings.ContainsAny(op.ID, `/\`) ||
 		filepath.Dir(want) != relayDir || filepath.Clean(op.HandoffPath) != want {
+		if m.isReuseOf(op, relayDir) {
+			return nil // a reuse op points at its half's file: nothing of its own to remove, nothing odd to say
+		}
 		m.logf("[team] retention: op %s: handoff path %q is not <relay dir>/<op id>.md; marking pruned without removing anything", op.ID, op.HandoffPath)
 		return nil
 	}
@@ -214,4 +232,15 @@ func (m *Module) removeHandoff(op team.RelayOp) error {
 	}
 	m.logf("[team] retention: removed %s (op %s, %s)", want, op.ID, op.State)
 	return nil
+}
+
+// isReuseOf reports whether op carries another op's handoff file: its path is <relayDir>/<other id>.md for an op id other than its own
+// that is a half of the same session (RT-3a2 T33). That file belongs to the half and follows the half's own rule.
+func (m *Module) isReuseOf(op team.RelayOp, relayDir string) bool {
+	p := filepath.Clean(op.HandoffPath)
+	if filepath.Dir(p) != relayDir || !strings.HasSuffix(p, ".md") {
+		return false
+	}
+	other, ok, err := m.store.GetRelayOp(strings.TrimSuffix(filepath.Base(p), ".md"))
+	return err == nil && ok && other.ID != op.ID && other.SessionID == op.SessionID && other.Mode == team.RelayModeHalf
 }
