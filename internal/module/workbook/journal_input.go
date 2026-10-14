@@ -104,15 +104,23 @@ func BuildJournalInput(seed JournalSeed, turn convmodel.Turn) (prompt string, ct
 	for _, r := range in.RoadmapRows {
 		rows = append(rows, RoadmapRow{Feature: r.Feature, Stage: r.Stage, Desc: r.Desc, Status: r.Status})
 	}
+	// and the open items as sent (redacted text, the same map fields), so a re-asked question that was redacted in the
+	// prompt still matches what the model copies back
+	open := make([]OpenItem, len(seed.Open))
+	for i, o := range seed.Open {
+		o.Text = redact.String(o.Text)
+		open[i] = o
+	}
 	return strings.TrimSuffix(buf.String(), "\n"),
-		JournalContext{UserPrompt: part.UserPrompt, AssistantText: reply, Open: seed.Open, Rows: rows}, nil
+		JournalContext{UserPrompt: part.UserPrompt, AssistantText: reply, Open: open, Rows: rows}, nil
 }
 
 // ReadOpenItems lists the still-open items of a unit's confirm entries, oldest first, from the month files in dir. Each
 // confirm entry that still has an open item counts as one ask (Asked, from 1 = the oldest); Idx is the item's 1-based
 // place in its entry. Only the newest maxOpenConfirmsIn items get a number (N, from 1 in the same order); the older
-// ones are returned with N 0 so a re-asked question can still be recognised. A missing folder has none. Read errors
-// are logged by the caller's logf and give what was read so far.
+// ones are returned with N 0 so a re-asked question can still be recognised. A missing folder has none. A month file
+// that cannot be read is logged by the caller's logf and gives no list at all: the numbering of a partial list would
+// point a tick at the wrong question (plan T-1b1.2: unreadable file -> empty lists).
 func ReadOpenItems(dir string, logf func(string, ...any)) []OpenItem {
 	if dir == "" {
 		return nil
@@ -128,7 +136,7 @@ func ReadOpenItems(dir string, logf func(string, ...any)) []OpenItem {
 		entries, err := journal.Parse(f)
 		if err != nil {
 			logf("[workbook] journal input: read %s: %v", filepath.Base(f), err)
-			continue
+			return nil
 		}
 		for _, e := range entries {
 			if e.Kind != journal.KindConfirm {
@@ -200,25 +208,27 @@ func ReadRoadmapRows(file, hint string, logf func(string, ...any)) []RoadmapRow 
 	return rows
 }
 
-// recentEntryText is the text of the unit's newest journal entries, for the roadmap hint.
+// recentEntryText is the text of the unit's newest journal entries (at most 30, across month files, newest file
+// first), for the roadmap hint. A month file that cannot be read is skipped: the hint only orders rows.
 func recentEntryText(dir string) string {
 	if dir == "" {
 		return ""
 	}
 	files, _ := filepath.Glob(filepath.Join(dir, "*.md"))
 	sort.Strings(files)
-	if len(files) == 0 {
-		return ""
-	}
-	entries, err := journal.Parse(files[len(files)-1])
-	if err != nil {
-		return ""
-	}
-	if len(entries) > 30 {
-		entries = entries[len(entries)-30:]
+	var recent []journal.Entry
+	for i := len(files) - 1; i >= 0 && len(recent) < maxHintEntries; i-- {
+		entries, err := journal.Parse(files[i])
+		if err != nil {
+			continue
+		}
+		if need := maxHintEntries - len(recent); len(entries) > need {
+			entries = entries[len(entries)-need:]
+		}
+		recent = append(recent, entries...)
 	}
 	var b strings.Builder
-	for _, e := range entries {
+	for _, e := range recent {
 		b.WriteString(e.Text)
 		b.WriteByte(' ')
 		b.WriteString(strings.Join(e.Refs, " "))
@@ -226,3 +236,5 @@ func recentEntryText(dir string) string {
 	}
 	return b.String()
 }
+
+const maxHintEntries = 30

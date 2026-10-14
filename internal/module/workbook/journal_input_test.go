@@ -197,3 +197,53 @@ func TestUnitRoleOf(t *testing.T) {
 		}
 	}
 }
+
+// One month file that cannot be read gives no open list at all, never a renumbered partial one.
+// Mutation gate: skip the bad file and keep the rest -> red.
+func TestReadOpenItems_UnreadableMonthGivesNone(t *testing.T) {
+	dir := t.TempDir()
+	putConfirm(t, dir, "old", time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC), nil, "舊題")
+	if err := os.Mkdir(filepath.Join(dir, "2026-10.md"), 0o755); err != nil { // a directory where the newest month file belongs
+		t.Fatal(err)
+	}
+	var logged int
+	if got := ReadOpenItems(dir, func(string, ...any) { logged++ }); got != nil || logged != 1 {
+		t.Errorf("got %+v, logged %d", got, logged)
+	}
+}
+
+// The context keeps the open items as the prompt showed them (redacted), with their map fields.
+// Mutation gate: seed.Open copied as is -> red.
+func TestBuildJournalInput_ContextOpenIsRedacted(t *testing.T) {
+	secret := "sk-ant-api03-" + strings.Repeat("a1B2c3D4", 6)
+	seed := JournalSeed{UnitRole: "solo", Open: []OpenItem{{N: 1, Asked: 1, Idx: 2, EntryID: "c1", ItemIndex: 1, Text: "用 " + secret + " 好嗎"}}}
+	prompt, ctx, err := BuildJournalInput(seed, testTurn())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(prompt, secret) || len(ctx.Open) != 1 || strings.Contains(ctx.Open[0].Text, secret) ||
+		ctx.Open[0].EntryID != "c1" || ctx.Open[0].ItemIndex != 1 || ctx.Open[0].N != 1 {
+		t.Errorf("ctx.Open = %+v", ctx.Open)
+	}
+	if seed.Open[0].Text != "用 "+secret+" 好嗎" {
+		t.Error("the seed was changed")
+	}
+}
+
+// The newest 30 entries are collected across month files.
+// Mutation gate: read only the newest file -> red.
+func TestRecentEntryText_CrossesMonths(t *testing.T) {
+	dir := t.TempDir()
+	sep := time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC)
+	oct := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	for i, at := range []time.Time{sep, oct} {
+		e := journal.Entry{ID: fmt.Sprintf("e%d", i), Kind: journal.KindComm, At: at, Actor: "1f → 88", Text: fmt.Sprintf("事件%d", i)}
+		if err := journal.Upsert(journal.MonthFile(dir, at), e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := recentEntryText(dir)
+	if !strings.Contains(got, "事件0") || !strings.Contains(got, "事件1") {
+		t.Errorf("got %q", got)
+	}
+}
