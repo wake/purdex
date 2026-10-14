@@ -42,6 +42,9 @@ func (o *tOwners) OwnerOf(s string) (string, bool) {
 	return v, ok
 }
 
+// OwnerOfCap: these tests have no notice-capable streams.
+func (o *tOwners) OwnerOfCap(string, string) (string, bool) { return "", false }
+
 // tMod is the mod: it fetches jobs and answers them as scripted.
 type tMod struct {
 	q         *promptq.Queue

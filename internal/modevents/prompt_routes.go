@@ -15,6 +15,9 @@ const (
 	PromptResultPath = "/mod/v1/prompt/result"
 	maxPromptText    = 32 << 10    // bytes of a read text accepted (at least promptq.MaxTextBytes, which the mod cuts to)
 	CapPromptV1      = "prompt.v1" // announced by a mod that can run a prompt job
+	// CapLeaseNoticeV1 is announced by a mod that can take a notice job of the daemon (lease v2 amendment A §2.10):
+	// a plugin message submitted when no turn runs. promptq.CapLeaseNotice spells the same.
+	CapLeaseNoticeV1 = "lease.notice.v1"
 )
 
 // PromptResult is the body of POST /mod/v1/prompt/result.
