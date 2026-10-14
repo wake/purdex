@@ -32,7 +32,6 @@
 //   a matcher too (`component: 'ToolUse'`). A Go test over the embedded files keeps it so
 //   (cmd/pdx/plugin/embed_test.go).
 
-import { leaseBackgroundChanged } from './lease.js'
 import { CAPS, DEFAULT_TIMEOUT_MS, MAX_JOBS_PER_DRAIN, MODEL_SLACK_MS, NEXT_URL, PROMPT_BACKOFF_MS, PROMPT_IDLE_MS, PROMPT_NEXT_URL, PROMPT_RESULT_BUDGET_MS, PROMPT_RESULT_POST_MS, PROMPT_RESULT_RETRY_MS, PROMPT_RESULT_TRIES, PROMPT_RESULT_URL, PROMPT_WAIT_MS, parsePromptJob, promptNextBody, promptResultBody, fillRefusal, cutUtf8, MAX_TYPED_TEXT_BYTES, REFRESH_URL, RESULT_URL, REQUEST_DEADLINE_MS, WAIT_MS, completeRequest, forkRequest, moreOf, nextBody, parseNext, refreshBody, refreshNotice, refusedBody, resultBody, shouldAsk } from './workbook.js'
 
 const URL = 'http://pdx/mod/v1/events' // the host is not read; the socket is the address
@@ -928,7 +927,7 @@ export function backgroundBusy() {
 }
 
 function stopped($, e) {
-  // (the lease hook watches the same list: leaseBackgroundChanged, at the end)
+  // (the lease hook watches the same list in its own classic.Stop hook, lease.js)
   // a copy: the engine's objects are never touched. A task the Monitor tool started is named "monitor".
   const listed = Array.isArray(e.background_tasks) ? e.background_tasks : []
   const tasks = listed.map((t) => ({ id: t.id, type: ev.monitors.has(t.id) ? 'monitor' : t.type, status: t.status }))
@@ -940,7 +939,6 @@ function stopped($, e) {
   }
   ev.background = { tasks, crons: Array.isArray(e.session_crons) ? e.session_crons.length : 0 }
   if (ev.on) enqueue($, 'background', ev.background)
-  try { leaseBackgroundChanged($, ev.background) } catch {} // a lease whose background command ended is let go (#2841)
 }
 
 function compactStarted($, e) {
