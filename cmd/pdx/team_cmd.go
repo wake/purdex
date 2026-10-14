@@ -26,7 +26,8 @@ const spawnUsage = "usage: pdx spawn [--host <alias> --cwd <dir on that host>] [
 	"        without --model the member runs this host's default model, which is not fixed;\n" +
 	"        --task-subject makes the brief that member's first task, and --done-when needs it)"
 
-const killUsage = "usage: pdx kill <ref> [--config <path>]\n" +
+const killUsage = "usage: pdx kill <ref> [--handoff] [--config <path>]\n" +
+	"       (--handoff: the member writes its handoff first and is closed after it; exit 0 closed, 14 no answer, 13 refused)\n" +
 	"       (<ref> is _xxxxxx, or an address from pdx team; only a member of your own team)"
 
 const teamUsage = "usage: pdx team [--json] [--config <path>]"
@@ -72,11 +73,12 @@ var remoteSpawnReasonExit = map[string]int{
 // 13 (spec §14). relay_open is a kill of a member mid-relay (P4-6 review).
 // Any other API code is exit 1.
 var teamRefusalCodes = map[string]bool{
-	team.ErrNotLead:         true,
-	team.ErrTeamFull:        true,
-	team.ErrCwdOutsideGrant: true,
-	team.ErrNotYourMember:   true,
-	team.ErrRelayOpen:       true,
+	team.ErrNotLead:          true,
+	team.ErrTeamFull:         true,
+	team.ErrCwdOutsideGrant:  true,
+	team.ErrNotYourMember:    true,
+	team.ErrRelayOpen:        true,
+	team.ErrRelayUnsupported: true, // pdx kill --handoff: a remote member, or a mod older than protocol 8 (RT-3c)
 	// RT-1: the unattended refusal and a person token that is no good.
 	team.ErrUnattendedRefused:  true,
 	team.ErrPersonTokenInvalid: true,

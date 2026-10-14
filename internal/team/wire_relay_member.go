@@ -36,6 +36,9 @@ type RelayCompactedResponse struct {
 type RelayClaimResponse struct {
 	Op   RelayOp    `json:"op"`
 	Lead *RelayLead `json:"lead,omitempty"`
+	// Reuse: the op's file is the member's fresh handoff (a half or an earlier handoff nothing has made stale): the mod writes nothing, it
+	// reports writing and written (RT-3c, spec §4.3). Only a handoff op ever carries it.
+	Reuse bool `json:"reuse,omitempty"`
 }
 
 // RelayLead is how a member reaches its lead.

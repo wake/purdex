@@ -213,7 +213,10 @@ func (m *Module) afterReport(op team.RelayOp) {
 		// restart between the two. Unchanged is free (the hash gate).
 		m.rosterChanged()
 	}
-	if op.Mode == team.RelayModeHalf && op.Reason == team.RelayReasonHalf {
+	if op.Mode == team.RelayModeHandoff && op.Reason == team.RelayReasonHalf && op.Kind == team.RelayKindMember {
+		m.goTracked(func() { m.finishHandoffKill(op) }) // the signal after the commit that claimed the kill (RT-3c)
+	}
+	if op.Mode != "" && op.Reason == team.RelayReasonHalf {
 		m.rosterChanged() // the written half became the session's fresh half: the relay.fresh list and the roster follow (RT-3a2)
 	}
 	if op.State.Terminal() && op.RequestID != "" {

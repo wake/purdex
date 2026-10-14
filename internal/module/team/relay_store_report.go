@@ -302,7 +302,8 @@ func reportRelayIn(tx *sql.Tx, id string, r RelayReport) (team.RelayOp, ReportRe
 	if n, _ := res.RowsAffected(); n != 1 {
 		return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: state changed under the transaction", id)
 	}
-	if r.State == team.RelayClaimed {
+	if r.State == team.RelayClaimed && cur.Mode != team.RelayModeHandoff {
+		// (a handoff op keeps the row: its file is the half's, and its claim answer says so - RT-3c)
 		// a relay that claims ends the fresh half's life, reused or not (RT-3a1 T31): the file is spent or beside the point
 		if err := dropFreshHalfIn(tx, cur.SessionID, "", r.At); err != nil {
 			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: drop the fresh half: %w", id, err)
@@ -315,11 +316,20 @@ func reportRelayIn(tx *sql.Tx, id string, r RelayReport) (team.RelayOp, ReportRe
 		if _, err := tx.Exec(`UPDATE relay_ops SET state = ?, reason = ? WHERE id = ?`, string(next.State), next.Reason, id); err != nil {
 			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: close the half: %w", id, err)
 		}
-		if cur.Mode == team.RelayModeHalf {
-			if _, err := tx.Exec(`INSERT INTO relay_fresh_half (session_id, op_id, path, written_at) VALUES (?, ?, ?, ?)
-				ON CONFLICT (session_id) DO UPDATE SET op_id = excluded.op_id, path = excluded.path, written_at = excluded.written_at`,
-				cur.SessionID, id, cur.HandoffPath, r.At); err != nil {
-				return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: fresh half: %w", id, err)
+		// Both keep their file as the session's fresh half: a handoff's too, so a kill that did not complete can be asked again on the
+		// same file (RT-3c). The handoff op, whose file may BE the half's (a reuse), re-points the row at itself.
+		if _, err := tx.Exec(`INSERT INTO relay_fresh_half (session_id, op_id, path, written_at) VALUES (?, ?, ?, ?)
+			ON CONFLICT (session_id) DO UPDATE SET op_id = excluded.op_id, path = excluded.path, written_at = excluded.written_at`,
+			cur.SessionID, id, cur.HandoffPath, r.At); err != nil {
+			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: fresh half: %w", id, err)
+		}
+		if cur.Mode == team.RelayModeHandoff && cur.Kind == team.RelayKindMember {
+			// The kill is claimed in THIS transaction (RT-3c T38, C#16): the file is written and the member is claimed as `pdx kill` claims
+			// it, or neither is. The signal follows the commit (finishHandoffKill); a crash between them leaves a killing row the sweeper
+			// settles, never a half-closed handoff.
+			if _, err := tx.Exec(`UPDATE team_members SET state = 'killing', updated_at = ?
+				WHERE session_id = ? AND team_id = ? AND state = 'active'`, r.At, cur.SessionID, cur.TeamID); err != nil {
+				return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: claim the kill: %w", id, err)
 			}
 		}
 	}

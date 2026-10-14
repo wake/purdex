@@ -65,6 +65,8 @@ type fakeTeamCmdDaemon struct {
 	release    answer
 	queries    []string
 	view       answer
+	ops        []answer // GET /api/relay/ops/{id}: the answers in turn (the last repeats)
+	opsPolls   int
 }
 
 func (f *fakeTeamCmdDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -119,6 +121,10 @@ func (f *fakeTeamCmdDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		f.releaseReq = append(f.releaseReq, req)
 		write(w, f.release)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/relay/ops/") && len(f.ops) > 0:
+		n := min(f.opsPolls, len(f.ops)-1)
+		f.opsPolls++
+		write(w, f.ops[n])
 	case r.Method == http.MethodGet && r.URL.Path == "/api/team":
 		f.queries = append(f.queries, r.URL.RawQuery)
 		write(w, f.view)
@@ -728,5 +734,65 @@ func TestTeamCmd_TeamLineWithTheLabel(t *testing.T) {
 	var back team.TeamView
 	if code, stdout, _ := driveTeamCmd(t, runTeamCmd, d, "--json"); code != ExitOK || json.Unmarshal([]byte(stdout), &back) != nil || back.Team.TeamLabel != "資源線" || strings.Contains(stdout, "team: ") {
 		t.Errorf("--json: code=%d stdout=%q", code, stdout)
+	}
+}
+
+// ---- RT-3c: pdx kill <ref> --handoff ----
+
+func handoffOp(state team.RelayState, reason string) team.RelayOp {
+	return team.RelayOp{ID: "op-h1", Kind: team.RelayKindMember, Ref: "_m1m1m1", SessionID: "cc-sid-member-1", State: state, Reason: reason, Mode: team.RelayModeHandoff, HandoffPath: "/d/relay/op-h1.md"}
+}
+
+func memberView(state team.MemberState) answer {
+	m := fakeMember(team.SpawnRequest{ID: "op-1", Cwd: "/w"})
+	m.State = state
+	return answer{body: team.TeamView{Team: team.Team{ID: fakeTeamID}, Members: []team.Member{*m}}}
+}
+
+// The command posts handoff:true, follows the op, and exits 0 once the member is closed. Mutation gates: no handoff flag in the request →
+// red; an exit without looking at the member → red when the member stays active (next test).
+func TestKillCmd_HandoffPostsAndWaitsForTheClosedMember(t *testing.T) {
+	d := &fakeTeamCmdDaemon{
+		kill: answer{status: http.StatusCreated, body: team.RelayCreateResponse{Op: handoffOp(team.RelayRequested, "")}},
+		ops:  []answer{{body: handoffOp(team.RelayWriting, "")}, {body: handoffOp(team.RelayCancelled, team.RelayReasonHalf)}},
+		view: memberView(team.MemberKilled),
+	}
+	code, stdout, stderr := driveTeamCmd(t, runKillCmd, d, "--handoff", "_m1m1m1")
+	if code != ExitOK || !strings.Contains(stdout, `"id":"op-h1"`) {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	want := team.KillRequest{OriginInbox: "/tmp/cc-socks/1.sock", Target: "_m1m1m1", Handoff: true}
+	if len(d.killReq) != 1 || d.killReq[0] != want {
+		t.Errorf("kill requests = %+v, want %+v", d.killReq, want)
+	}
+}
+
+func TestKillCmd_HandoffExitsNonZeroWhenTheMemberIsNotClosed(t *testing.T) {
+	old := killHandoffCloseWait
+	killHandoffCloseWait = 50 * time.Millisecond
+	defer func() { killHandoffCloseWait = old }()
+	d := &fakeTeamCmdDaemon{
+		kill: answer{status: http.StatusCreated, body: team.RelayCreateResponse{Op: handoffOp(team.RelayRequested, "")}},
+		ops:  []answer{{body: handoffOp(team.RelayCancelled, team.RelayReasonHalf)}},
+		view: memberView(team.MemberActive),
+	}
+	code, _, stderr := driveTeamCmd(t, runKillCmd, d, "--handoff", "_m1m1m1")
+	if code != ExitError || !strings.Contains(stderr, "沒有關閉") {
+		t.Fatalf("code=%d stderr=%q, want 1 and a line saying the member was not closed", code, stderr)
+	}
+}
+
+// A member that does not respond is 14; a refusal is 13.
+func TestKillCmd_HandoffUnresponsiveIs14RefusedIs13(t *testing.T) {
+	d := &fakeTeamCmdDaemon{
+		kill: answer{status: http.StatusCreated, body: team.RelayCreateResponse{Op: handoffOp(team.RelayRequested, "")}},
+		ops:  []answer{{body: handoffOp(team.RelayFailed, team.RelayReasonMemberUnseen)}},
+	}
+	if code, _, stderr := driveTeamCmd(t, runKillCmd, d, "--handoff", "_m1m1m1"); code != ExitMemberFailed {
+		t.Fatalf("unresponsive: code=%d stderr=%q, want 14", code, stderr)
+	}
+	d2 := &fakeTeamCmdDaemon{kill: answer{status: http.StatusConflict, body: team.APIError{Error: team.ErrRelayUnsupported, Detail: "mod too old"}}}
+	if code, _, stderr := driveTeamCmd(t, runKillCmd, d2, "--handoff", "_m1m1m1"); code != ExitRefused || lastToken(stderr) != team.ErrRelayUnsupported {
+		t.Fatalf("refused: code=%d stderr=%q, want 13 relay_unsupported", code, stderr)
 	}
 }

@@ -1420,14 +1420,29 @@ async function claim($, gen) {
     op, requestId: undefined, path: op.handoff_path, oldSession: sid, oldRef: op.ref, before: usageLine(u),
     nonce: undefined, nonceState: undefined, who: '', lead: body.lead && typeof body.lead === 'object' ? body.lead : undefined, answer,
   }
+  if (op.mode === 'handoff') p.handoff = true // pdx kill --handoff (RT-3c): written, then the daemon closes the member - no /clear, no half
   s.pending = p
   s.state = 'approved'
   s.fixRounds = 0
   halfSpent($) // a member relay claimed: the daemon deleted the half's row
   // A turn the user started while the claim was out (id, the daemon, usage) is not interrupted: the write
   // waits for its turn.complete (P6-6 R1).
+  if (p.handoff && body.reuse === true) return handoffReused($, p)
   if (s.turnRunning) s.writeDeferred = p
   else startWrite($, p)
+}
+
+// handoffReused: the daemon says the handoff op's file is the member's fresh handoff. If it still checks out nothing is written: writing
+// and written are reported and the member goes idle until the daemon closes it; if not, it is written as any handoff.
+function handoffReused($, p) {
+  later($, STEP_MS, async () => {
+    if (s.pending !== p || s.state !== 'approved') return
+    if (!(await checkHandoff($, p)).ok) return s.turnRunning ? (s.writeDeferred = p) : startWrite($, p)
+    if (s.pending !== p || s.state !== 'approved') return
+    report($, p.op.id, 'writing')
+    report($, p.op.id, 'written')
+    toIdle($)
+  })
 }
 
 function claimLater($) {
@@ -1745,6 +1760,13 @@ async function onWriteTurnDone($) {
   s.writeTurnId = undefined // checked once
   const c = await checkHandoff($, p)
   if (s.pending !== p) return
+  if (c.ok && p.handoff) {
+    // A handoff ends where its file is written (RT-3c T39): the daemon closes the member. No /clear, no seed, no half, no status or
+    // toast, no threshold check.
+    report($, p.op.id, 'written')
+    toIdle($)
+    return
+  }
   if (c.ok && p.half) {
     // A half ends where its file is written: no /clear, no seed (RT-3b T35). The session is idle again and keeps the half for the next
     // relay; the threshold check runs once now, so at >= the threshold it asks at once and reuses it.
