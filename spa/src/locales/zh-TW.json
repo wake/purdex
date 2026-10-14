@@ -2214,7 +2214,7 @@
   "unattended.panel.host_failed": "{{host}}：無法讀取（{{code}}）",
   "unattended.panel.host_unreachable": "{{host}}：無法連線，可能仍在自動通過",
   "unattended.quota.title": "接力額度",
-  "unattended.quota.explain": "無人值守時，額度 ≥ 1 才會自動接力，每次扣 1；0 就等你核准。整條接力鏈共用。",
+  "unattended.quota.explain": "無人值守時，額度 ≥ 1 才會自動接力，每次扣 1；用到 0 時 session 會暫停作業，等你解除。整條接力鏈共用。",
   "unattended.quota.self": "自動接力",
   "unattended.quota.pool": "member",
   "unattended.quota.minus": "減少",
