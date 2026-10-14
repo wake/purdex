@@ -154,3 +154,39 @@ func TestSubmitNotice_BadText(t *testing.T) {
 		t.Errorf("a notice at the limit was refused: %+v", r)
 	}
 }
+
+// A settled notice that the ledger forgets (its time is up, or a flood of ids pushed it out) is still never sent
+// twice by its key; one that was only busy or timed out is free again. (M: no tombstone for a notice.)
+func TestSubmitNotice_ForgottenLedgerRowStillAnswersItsKey(t *testing.T) {
+	q, o := newQ(t)
+	o.setNotice("s1", "mod1")
+	now := time.Now()
+	q.Now = func() time.Time { return now }
+
+	ch := noticeAsync(q, "s1", "n-sent", "輪到你了")
+	j := next(t, q, "mod1", "s1")
+	q.Result("mod1", j.ID, Outcome{Status: Accepted})
+	take(t, ch)
+
+	now = now.Add(LedgerTTL + time.Minute) // the ledger forgets it
+	r, err := q.SubmitNotice(context.Background(), "s1", "n-sent", "輪到你了")
+	if err != nil || r.Status != Accepted {
+		t.Fatalf("the repeat after the ledger forgot it = %+v %v", r, err)
+	}
+	if _, ok := q.Next(context.Background(), "mod1", "s1", 100*time.Millisecond); ok {
+		t.Fatal("the key sent the notice a second time")
+	}
+
+	// busy: nothing was sent, so the key is free after the ledger forgets it too
+	ch = noticeAsync(q, "s1", "n-busy", "x")
+	j = next(t, q, "mod1", "s1")
+	q.Result("mod1", j.ID, Outcome{Status: Busy})
+	take(t, ch)
+	now = now.Add(LedgerTTL + time.Minute)
+	ch = noticeAsync(q, "s1", "n-busy", "x")
+	j = next(t, q, "mod1", "s1")
+	q.Result("mod1", j.ID, Outcome{Status: Accepted})
+	if r := take(t, ch); r.Status != Accepted {
+		t.Fatalf("busy then again = %+v", r)
+	}
+}

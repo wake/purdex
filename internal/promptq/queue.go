@@ -342,11 +342,14 @@ func (q *Queue) sweepLedger() {
 	}
 }
 
-// evict forgets a ledger row; EVERY typed row leaves a tombstone holding its recorded answer, so a replay of its id is
+// evict forgets a ledger row; EVERY typed row, and every notice that was sent, leaves a tombstone holding its recorded answer, so a replay of its id is
 // answered the same and never types again. q.mu held.
 func (q *Queue) evict(k string, e *entry) {
 	delete(q.ledger, k)
-	if e.job.Kind == KindFill && k != "" {
+	// A notice that was sent (or may have been) is remembered too: its key must never send it twice. busy and timeout
+	// were never sent, so their key is free again and leaves no tombstone.
+	noticeSent := e.job.Kind == KindNotice && e.res.Status != Busy && e.res.Status != Timeout
+	if (e.job.Kind == KindFill || noticeSent) && k != "" {
 		res := q.view(e)
 		res.Text = "" // the answer, not the user's text
 		if res.Phase == PhaseUnknown {
@@ -419,7 +422,7 @@ func (q *Queue) submitKeyed(ctx context.Context, kind, sessionID, clientMsgID, t
 			return q.await(ctx, e), nil // joins the first request's wait, or answers the settled ledger row
 		}
 	}
-	if t, dead := q.tombs[clientMsgID]; dead && clientMsgID != "" && kind == KindFill {
+	if t, dead := q.tombs[clientMsgID]; dead && clientMsgID != "" && (kind == KindFill || kind == KindNotice) {
 		q.mu.Unlock() // an evicted typed row: its recorded answer, never typed again
 		return t.res, nil
 	}
