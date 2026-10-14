@@ -45,6 +45,7 @@ type apEntry struct {
 type approvalPush struct {
 	mu       sync.Mutex
 	running  bool
+	gen      uint64         // bumped by every start: a callback of an earlier run must not push into this one
 	inflight sync.WaitGroup // push paths between "reserved" and "done"; Stop waits for them
 	states   map[string]*apEntry
 }
@@ -52,6 +53,7 @@ type approvalPush struct {
 func (p *approvalPush) start() {
 	p.mu.Lock()
 	p.running = true
+	p.gen++
 	p.states = map[string]*apEntry{}
 	p.mu.Unlock()
 }
@@ -121,9 +123,10 @@ func (m *Module) openedApproval(a team.Approval, pa push.Approval) {
 		return
 	}
 	p.prune(m.apNow())
+	gen := p.gen
 	p.mu.Unlock()
 	if !m.presence.AtComputer() {
-		m.pushApproval(a, pa, false, false)
+		m.pushApproval(a, pa, gen, false, false)
 		return
 	}
 	if a.Kind == team.KindHookAsk {
@@ -132,20 +135,20 @@ func (m *Module) openedApproval(a team.Approval, pa push.Approval) {
 	}
 	// Held: record it before the timer exists, so the callback always finds the state.
 	p.mu.Lock()
-	if e := p.states[a.ID]; e != nil || !p.running {
+	if e := p.states[a.ID]; e != nil || !p.running || p.gen != gen {
 		p.mu.Unlock() // already known (a repeated opened, or closed already): nothing to hold
 		return
 	}
 	p.states[a.ID] = &apEntry{state: apHeld, at: m.apNow()}
 	p.mu.Unlock()
-	if !m.holds.after(m.lateDelay(), func() { m.lateApproval(a, pa) }) {
+	if !m.holds.after(m.lateDelay(), func() { m.lateApproval(a, pa, gen) }) {
 		p.mu.Lock()
 		if e := p.states[a.ID]; e != nil && e.state == apHeld {
 			delete(p.states, a.ID)
 		}
 		p.mu.Unlock()
 		logApproval(a, "hold set full: pushed at once")
-		m.pushApproval(a, pa, false, true)
+		m.pushApproval(a, pa, gen, false, true)
 		return
 	}
 	logApproval(a, "held 60s (at_computer)")
@@ -153,12 +156,13 @@ func (m *Module) openedApproval(a team.Approval, pa push.Approval) {
 
 // lateApproval is the 60 s check: still running, still held, the card still open (read again) -> pushed, whatever the
 // presence says. A card that cannot be read is pushed anyway (fail open).
-func (m *Module) lateApproval(a team.Approval, pa push.Approval) {
+func (m *Module) lateApproval(a team.Approval, pa push.Approval, gen uint64) {
 	p := &m.ap
 	p.mu.Lock()
 	e := p.states[a.ID]
-	ok := p.running && e != nil && e.state == apHeld
-	closed := p.running && e != nil && e.state == apClosed
+	cur := p.running && p.gen == gen
+	ok := cur && e != nil && e.state == apHeld
+	closed := cur && e != nil && e.state == apClosed
 	p.mu.Unlock()
 	if !ok {
 		if closed {
@@ -179,7 +183,7 @@ func (m *Module) lateApproval(a team.Approval, pa push.Approval) {
 	default:
 		logApproval(a, "late push")
 	}
-	m.pushApproval(a, pa, true, true)
+	m.pushApproval(a, pa, gen, true, true)
 }
 
 // cardOpen reads the open set now; an error when there is no reader or the read fails.
@@ -203,7 +207,7 @@ func (m *Module) cardOpen(id string) (bool, error) {
 // pushApproval is the one push path (immediate or late). It reserves the card first (pushing), enqueues with the sender's
 // own last open check, and settles the state; Stop waits for it. skipPresence: the late path and a full hold set push
 // whatever the presence says.
-func (m *Module) pushApproval(a team.Approval, pa push.Approval, late, skipPresence bool) {
+func (m *Module) pushApproval(a team.Approval, pa push.Approval, gen uint64, late, skipPresence bool) {
 	p := &m.ap
 	p.mu.Lock()
 	e := p.states[a.ID]
@@ -211,11 +215,11 @@ func (m *Module) pushApproval(a team.Approval, pa push.Approval, late, skipPrese
 	if e != nil {
 		prev = e.state
 	}
-	if !p.running || prev == apPushing || prev == apPushed || prev == apClosed {
-		running := p.running
+	if !p.running || p.gen != gen || prev == apPushing || prev == apPushed || prev == apClosed {
+		current := p.running && p.gen == gen
 		p.mu.Unlock()
 		switch {
-		case !running:
+		case !current:
 		case prev == apClosed:
 			logApproval(a, "not pushed: closed")
 		default:

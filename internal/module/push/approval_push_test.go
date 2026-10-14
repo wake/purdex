@@ -164,9 +164,9 @@ func TestLate_ImmediateAndLateTogetherEnqueueOnce(t *testing.T) {
 	}
 	var wg sync.WaitGroup
 	wg.Add(1)
-	go func() { defer wg.Done(); te.mod.pushApproval(a, pa, false, false) }()
+	go func() { defer wg.Done(); te.mod.pushApproval(a, pa, te.mod.ap.gen, false, false) }()
 	<-reserved
-	te.mod.pushApproval(a, pa, true, true) // the late path arrives while the first is between reserve and enqueue
+	te.mod.pushApproval(a, pa, te.mod.ap.gen, true, true) // the late path arrives while the first is between reserve and enqueue
 	close(release)
 	wg.Wait()
 	te.waitSends(t, 1)
@@ -210,9 +210,10 @@ func TestLate_AReaderThatCannotAnswerPushesAnyway(t *testing.T) {
 	}
 }
 
-// Stop while the late callback is past its running check (parked after its read): Stop does not wait for a callback that has
-// reserved nothing, and the callback then finds the module stopped and sends nothing. A later Start begins empty.
-func TestLate_StopWhileTheCallbackIsPastTheRunningCheck(t *testing.T) {
+// Stop and a restart while the late callback is past its running check (parked after its read): the callback belongs to the
+// earlier run and sends nothing into the new one, and the new run begins empty.
+// Mutation gate: drop the generation check -> red.
+func TestLate_AStaleCallbackOfAnEarlierRunSendsNothing(t *testing.T) {
 	te, _ := lateEnv(t, true)
 	parked, release := make(chan struct{}), make(chan struct{})
 	te.mod.apAfterRead = func(string) { close(parked); <-release }
@@ -221,17 +222,17 @@ func TestLate_StopWhileTheCallbackIsPastTheRunningCheck(t *testing.T) {
 	if err := te.mod.Stop(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	close(release)
-	time.Sleep(3 * testLate)
-	if n := te.apns.count(); n != 0 {
-		t.Fatalf("sends after Stop = %d", n)
-	}
 	te.mod.apAfterRead = nil
 	if err := te.mod.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if te.stateOf("ap1") != apNone {
 		t.Fatalf("a restarted module kept state %v", te.stateOf("ap1"))
+	}
+	close(release)
+	te.noSends(t)
+	if te.stateOf("ap1") != apNone {
+		t.Fatalf("the stale callback left state %v in the new run", te.stateOf("ap1"))
 	}
 }
 
