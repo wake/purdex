@@ -8,11 +8,47 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
 // ErrNotFound is returned when an entry id is not in the file.
 var ErrNotFound = errors.New("journal: entry not found")
+
+// ErrCorrupt is returned when the file holds a metadata comment naming the entry that cannot be read; writing would
+// duplicate or hide it, so the file is left alone.
+var ErrCorrupt = errors.New("journal: unreadable metadata for entry")
+
+var (
+	lockMu sync.Mutex
+	locks  = map[string]*sync.Mutex{}
+)
+
+// lockFile serialises read-modify-write of one file inside this process (the daemon is the only writer).
+func lockFile(path string) func() {
+	lockMu.Lock()
+	l, ok := locks[path]
+	if !ok {
+		l = &sync.Mutex{}
+		locks[path] = l
+	}
+	lockMu.Unlock()
+	l.Lock()
+	return l.Unlock
+}
+
+// corruptFor reports a metadata line that does not parse but names id.
+func corruptFor(lines []string, id string) bool {
+	q, _ := json.Marshal(id)
+	for _, l := range lines {
+		if strings.HasPrefix(l, metaPrefix) && strings.Contains(l, `"id":`+string(q)) {
+			if _, err := parseMeta(l); err != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 const (
 	metaPrefix = "<!-- j "
@@ -143,6 +179,11 @@ func atomicWrite(path string, data []byte) error {
 		return err
 	}
 	name := tmp.Name()
+	mode := os.FileMode(0o644)
+	if st, serr := os.Stat(path); serr == nil {
+		mode = st.Mode().Perm()
+	}
+	_ = tmp.Chmod(mode)
 	if _, err = tmp.Write(data); err == nil {
 		err = tmp.Sync()
 	}
@@ -210,7 +251,9 @@ func locate(lines []string, id string) (start, end int, e Entry, ok bool) {
 		}
 		if got, err := parseMeta(l); err == nil && got.ID == id {
 			start = i
-			for j := boundary + 1; j < i; j++ {
+			// The nearest heading above the metadata is this entry's own; anything the user wrote between
+			// entries sits above it and stays.
+			for j := i - 1; j > boundary; j-- {
 				if strings.HasPrefix(lines[j], "### ") {
 					start = j
 					break
@@ -233,9 +276,13 @@ func Upsert(file string, e Entry) error {
 	if err != nil {
 		return err
 	}
+	defer lockFile(file)()
 	lines, err := readLines(file)
 	if err != nil {
 		return err
+	}
+	if corruptFor(lines, e.ID) {
+		return fmt.Errorf("%w: %s", ErrCorrupt, e.ID)
 	}
 	if start, end, _, ok := locate(lines, e.ID); ok {
 		out := append(append(append([]string{}, lines[:start]...), block...), lines[end+1:]...)
@@ -260,12 +307,16 @@ func Upsert(file string, e Entry) error {
 
 // update applies fn to the entry id and re-renders its block when fn reports a change.
 func update(file, id string, fn func(*Entry) (bool, error)) (bool, error) {
+	defer lockFile(file)()
 	lines, err := readLines(file)
 	if err != nil {
 		return false, err
 	}
 	start, end, e, ok := locate(lines, id)
 	if !ok {
+		if corruptFor(lines, id) {
+			return false, fmt.Errorf("%w: %s", ErrCorrupt, id)
+		}
 		return false, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
 	changed, err := fn(&e)

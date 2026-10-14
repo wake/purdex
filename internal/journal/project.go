@@ -48,7 +48,7 @@ func hashID(s string) string {
 	return hex.EncodeToString(sum[:])[:16]
 }
 
-// ProjectOf resolves cwd to its project. Not being in a repository is a normal answer (cached, nil error); a git that
+// ProjectOf resolves cwd to its project. Not being in a repository is a normal answer (nil error, not cached); a git that
 // timed out or cannot run returns the cwd-keyed fallback together with the error and is not cached.
 func ProjectOf(ctx context.Context, cwd string) (Project, error) {
 	if cwd == "" {
@@ -73,9 +73,15 @@ func ProjectOf(ctx context.Context, cwd string) (Project, error) {
 		if !errors.As(err, &ee) {
 			return fallback, err
 		}
+		// Not a repository: answered, but not cached, so a later git init is seen at once.
+		return fallback, nil
 	case out != "":
 		dir := filepath.Clean(out)
-		p = Project{ID: hashID(dir), CommonDir: dir, Root: filepath.Dir(dir)}
+		root := dir // a bare repository is its own root
+		if filepath.Base(dir) == ".git" {
+			root = filepath.Dir(dir)
+		}
+		p = Project{ID: hashID(dir), CommonDir: dir, Root: root}
 	}
 	cacheMu.Lock()
 	cache[cwd] = cached{p: p, at: now()}
