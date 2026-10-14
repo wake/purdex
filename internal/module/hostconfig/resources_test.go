@@ -18,7 +18,7 @@ import (
 const resourcesDefaultItems = `{"mode":"lease","kinds":{"build":35,"lint-full":10,"test-full":35,"test-pkg":15},` +
 	`"deadline_s":540,"warmup_s":20,"floor_pct":50,"max_hold_s":3600,"ewma_half_life_s":15,"heavy_min_weight":30,` +
 	`"mem_warn_pct":80,"mem_danger_pct":90,"gap_s":30,"trend_window_s":120,"trend_mem_dppm":20,"trend_cpu_dppm":0,` +
-	`"park_s":900,"alert_danger_s":180,"alert_stuck_s":600,"alert_lease_mem_pct":20,"alert_push":0}`
+	`"park_s":900,"alert_danger_s":180,"alert_stuck_s":600,"alert_lease_mem_pct":20,"alert_push":0,"load_cap_pct":100}`
 
 // A host that never wrote the key reads the defaults, on the GET and through
 // the reader; a body that leaves everything out stores them filled in.
@@ -129,7 +129,7 @@ func TestResourcesSettings_PutGetRoundTrip(t *testing.T) {
 	const stored = `{"mode":"advise","kinds":{"build":20,"lint-full":10,"mine":5,"test-full":35,"test-pkg":15},` +
 		`"deadline_s":540,"warmup_s":0,"floor_pct":50,"max_hold_s":3600,"ewma_half_life_s":15,"heavy_min_weight":30,` +
 		`"mem_warn_pct":80,"mem_danger_pct":90,"gap_s":30,"trend_window_s":120,"trend_mem_dppm":20,"trend_cpu_dppm":0,` +
-		`"park_s":900,"alert_danger_s":180,"alert_stuck_s":600,"alert_lease_mem_pct":20,"alert_push":0}`
+		`"park_s":900,"alert_danger_s":180,"alert_stuck_s":600,"alert_lease_mem_pct":20,"alert_push":0,"load_cap_pct":100}`
 	assert.JSONEq(t, `{"items":`+stored+`,"revision":1}`, rr.Body.String())
 
 	rr = serve(m, http.MethodGet, "/api/hostconfig", "")
@@ -235,7 +235,7 @@ func TestResourcesSettings_V2Keys(t *testing.T) {
 	m := newTestModule(t)
 	body := `{"items":{"mem_warn_pct":70,"mem_danger_pct":85,"gap_s":0,"trend_window_s":120,` +
 		`"trend_mem_dppm":25,"trend_cpu_dppm":80,"park_s":60,"alert_danger_s":30,"alert_stuck_s":61,` +
-		`"alert_lease_mem_pct":33,"alert_push":1},"baseRevision":0}`
+		`"alert_lease_mem_pct":33,"alert_push":1,"load_cap_pct":150},"baseRevision":0}`
 	rr := serve(m, http.MethodPut, "/api/hostconfig/resources", body)
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 	s, err := m.ResourcesSettings()
@@ -245,6 +245,7 @@ func TestResourcesSettings_V2Keys(t *testing.T) {
 	assert.Equal(t, 0, int(s.Gap().Seconds()))
 	assert.Equal(t, 2.5, s.TrendMemPPM())
 	assert.True(t, s.AlertPushOn())
+	assert.Equal(t, 15.0, s.LoadCap(10), "load_cap_pct 150 on 10 cores")
 
 	// v1 stored JSON: none of the new keys.
 	v1, err := normalizeResources(json.RawMessage(`{"mode":"advise","deadline_s":120}`))
@@ -252,10 +253,12 @@ func TestResourcesSettings_V2Keys(t *testing.T) {
 	assert.Equal(t, 80, *v1.MemWarnPct)
 	assert.Equal(t, 30, *v1.GapS)
 	assert.Equal(t, 0, *v1.AlertPush)
+	assert.Equal(t, 100, *v1.LoadCapPct)
 
 	for _, items := range []string{
 		`{"mem_warn_pct":85,"mem_danger_pct":85}`, `{"mem_danger_pct":80}`, `{"mem_warn_pct":95}`,
 		`{"gap_s":301}`, `{"alert_push":2}`, `{"park_s":"900"}`, `{"trend_mem_dppm":null}`, `{"gap_s":1.5}`,
+		`{"load_cap_pct":501}`, `{"load_cap_pct":-1}`, `{"load_cap_pct":"100"}`,
 	} {
 		_, err := normalizeResources(json.RawMessage(items))
 		assert.Error(t, err, items)

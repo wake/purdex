@@ -1,0 +1,60 @@
+package resourcesmod
+
+import (
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/wake/purdex/internal/resources"
+)
+
+// setLoad publishes a host sample with the given load1 on 10 cores (the zone is normal, the trend flat).
+func (f *passFix) setLoad(load1 float64) {
+	f.setHost(resources.HostUse{Measured: 10, NCPU: 10, Load1: load1, Zone: "normal", Trend: "flat"})
+}
+
+// The load ceiling end to end (user 2026-10-15): with a lease running, load1 at the ceiling holds the next request in
+// the normal zone with a flat trend, and the time is charged to the reason `load`; below it the request is granted.
+// (M: drop the ceiling and the first assertion is red; charge another reason and the last one is.)
+func TestPassLoadCap_HoldsTheNextRequestWhileALeaseRuns(t *testing.T) {
+	f := newPassFix(t, resources.ModeLease)
+	f.heldLease("h", resources.ScopeProcess, 100) // a lease is running
+	f.queue("a", 35, 5*time.Minute)
+	f.setLoad(10) // the default ceiling: 1.0 x 10 cores
+	f.pass()
+	assert.Equal(t, "waiting", f.state("a"), "load1 at the ceiling")
+	f.advance(10 * time.Second)
+	f.m.store.RenewLease("a", f.nowMS()+30000)
+	f.pass()
+	assert.Equal(t, "waiting", f.state("a"))
+	f.setLoad(9.5)
+	f.pass()
+	require.Equal(t, "held", f.state("a"), "below the ceiling")
+	assert.Equal(t, map[string]int64{"load": 10000}, f.waitReasons("a"))
+}
+
+// Nothing running: one is let in even when the base load is above the ceiling, or a host that always sits above it
+// would never run a heavy command. (M: apply the ceiling when nothing runs.)
+func TestPassLoadCap_NothingRunningStillGrantsOne(t *testing.T) {
+	f := newPassFix(t, resources.ModeLease)
+	f.queue("a", 35, 5*time.Minute)
+	f.setLoad(36)
+	f.pass()
+	assert.Equal(t, "held", f.state("a"))
+	f.queue("b", 35, 5*time.Minute)
+	f.pass()
+	assert.Equal(t, "waiting", f.state("b"), "the second one is held by the ceiling")
+}
+
+// load_cap_pct 0 turns it off.
+func TestPassLoadCap_ZeroIsOff(t *testing.T) {
+	f := newPassFix(t, resources.ModeLease)
+	f.set.set(resources.Settings{Mode: resources.ModeLease, GapS: intp(0), LoadCapPct: intp(0)})
+	f.heldLease("h", resources.ScopeProcess, 100)
+	f.queue("a", 35, 5*time.Minute)
+	f.setLoad(40)
+	f.pass()
+	assert.Equal(t, "held", f.state("a"))
+}

@@ -166,6 +166,7 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 		leases[i] = resources.Lease{ID: r.ID, Weight: r.Weight, GrantedAt: time.UnixMilli(r.GrantedAt), Measured: r.EWMA, Samples: r.Samples}
 	}
 	host := m.admitHost()
+	load := resources.Load{Load1: host.Load1, NCPU: host.NCPU} // the sample the zone was judged on
 	use := m.leaseUseSnapshot()
 
 	// grant writes one grant: a plain row (posID ""), or the start of a command
@@ -228,7 +229,7 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 	}
 
 	if set.Mode == resources.ModeAdvise {
-		gapLeft = m.shadowStep(set, held, waiting, zone, trend, now)
+		gapLeft = m.shadowStep(set, held, waiting, zone, trend, load, now)
 		// Advise grants everything at once, up to a cut waiter (FIFO is kept).
 		for _, w := range waiting {
 			if w.PositionID != "" {
@@ -290,7 +291,7 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 				continue
 			}
 			vw := []resources.V2Waiter{{ID: w.ID, CreatedAt: time.UnixMilli(w.CreatedAt)}}
-			if id, _, _ := resources.AdmitV2(zone, trend, true, lastGrant, vw, now, set); id == "" {
+			if id, _, _ := resources.AdmitV2(zone, trend, true, load, lastGrant, vw, now, set); id == "" {
 				continue
 			}
 			if g, a, stop := finish(grant(w, resources.PathImmediate, p.ID, resources.PosRunning)); stop {
@@ -337,7 +338,7 @@ func (m *Module) passOnce(set resources.Settings, fresh string, baselines map[st
 		}
 		var grantID string
 		var reasons map[string]resources.V2Reason
-		grantID, gapLeft, reasons = resources.AdmitV2(zone, trend, running, lastGrant, entries, now, set)
+		grantID, gapLeft, reasons = resources.AdmitV2(zone, trend, running, load, lastGrant, entries, now, set)
 		for id, r := range reasons {
 			m.reasons.observe(id, r, now)
 		}

@@ -82,7 +82,7 @@ func (m *Module) dropShadow() {
 // notes the rows that left before their shadow grant, and grants at most one.
 // It works in memory only. It returns the remaining gap the decision saw.
 // stateMu is held.
-func (m *Module) shadowStep(set resources.Settings, held, waiting []leaseRow, zone resources.Zone, trend resources.Trend, now time.Time) (gapLeft time.Duration) {
+func (m *Module) shadowStep(set resources.Settings, held, waiting []leaseRow, zone resources.Zone, trend resources.Trend, load resources.Load, now time.Time) (gapLeft time.Duration) {
 	sh := &m.shadow
 	if sh.created == nil {
 		sh.created = map[string]time.Time{}
@@ -130,7 +130,7 @@ func (m *Module) shadowStep(set resources.Settings, held, waiting []leaseRow, zo
 		})
 		var grantID string
 		var reasons map[string]resources.V2Reason
-		grantID, gapLeft, reasons = resources.AdmitV2(zone, trend, len(held) > 0, sh.last, ws, now, set)
+		grantID, gapLeft, reasons = resources.AdmitV2(zone, trend, len(held) > 0, load, sh.last, ws, now, set)
 		for id, r := range reasons {
 			m.shadowReasons.observe(id, r, now)
 		}
