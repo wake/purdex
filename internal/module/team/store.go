@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 
 	_ "modernc.org/sqlite"
 
@@ -21,6 +22,9 @@ var ErrNoSuchApproval = errors.New("no such approval")
 // Store is the SQLite persistence of approval requests.
 type Store struct {
 	db *sql.DB
+	// handoffClaims holds the ids of the handoff ops whose `written` committed WITH the member claimed for the kill (set after the
+	// commit that did it): finishHandoffKill signals only for an op in it. A timestamp is no proof of who claimed a row (RT-3c codex).
+	handoffClaims sync.Map
 	// localHostID is this daemon's host id (set at Init): the sweepers look at the rows that live on it.
 	localHostID string
 	// afterPauseLock, when set, runs in CreateSelfRelayOrPause right after the writer lock is taken (test seam: a quota PUT

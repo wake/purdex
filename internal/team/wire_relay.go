@@ -316,6 +316,16 @@ const (
 	RelayModeHandoff = "handoff"
 	// MinHalfModVersion is the mod protocol that runs the idle half itself; an older mod keeps today's auto-approve, never a half.
 	MinHalfModVersion = 8
+	// MinHandoffModVersion is the mod protocol that writes a handoff op's file and goes on (pdx kill --handoff, RT-3c).
+	MinHandoffModVersion = 8
+)
+
+// The lead's texts about a handoff kill (RT-3c T38), word for word.
+const (
+	// HandoffClosedFmt: %s the member's address, %s its title, %s the handoff file.
+	HandoffClosedFmt = "[pdx team] member %s「%s」已交接：%s，已關閉。內容請由你決定要不要寫進記憶與文件。"
+	// HandoffNotClosedFmt: the file is written but the member was not closed (the kill did not complete, or the daemon stopped between).
+	HandoffNotClosedFmt = "[pdx team] member %s「%s」的交接檔已寫好（%s），但關閉沒完成，請再下一次 pdx kill。"
 )
 
 // ---- The fresh handoffs of a host (RT-3a2 T32, S-21) ----

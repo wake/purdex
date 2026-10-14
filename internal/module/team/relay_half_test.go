@@ -212,7 +212,8 @@ func TestWritten_ClosesAHalfAndKeepsItsFile(t *testing.T) {
 	}
 }
 
-// A handoff op (RT-3c) also ends cancelled / half, with no fresh row. Mutation gate: only half closes → the handoff stays written (red).
+// A handoff op (RT-3c) also ends cancelled / half and keeps its file as the session's fresh half (a kill that does not complete is asked
+// again on the same file). Mutation gate: only half closes → the handoff stays written (red).
 func TestWritten_ClosesAHandoffToo(t *testing.T) {
 	f := newFixture(t)
 	f.memberTeam("2")
@@ -225,8 +226,8 @@ func TestWritten_ClosesAHandoffToo(t *testing.T) {
 	if code != http.StatusOK || got.State != team.RelayCancelled || got.Reason != team.RelayReasonHalf {
 		t.Fatalf("written on a handoff: %d %+v %+v, want cancelled / half", code, got, ae)
 	}
-	if _, _, ok := f.freshHalf("sid-m1"); ok {
-		t.Fatal("a handoff left a fresh-half row")
+	if id, path, ok := f.freshHalf("sid-m1"); !ok || id != "op-h" || path != "/p" {
+		t.Fatalf("fresh row = %q %q %v, want the handoff's op and file", id, path, ok)
 	}
 }
 
@@ -261,8 +262,11 @@ func TestWritten_HalfAndHandoffSendNoCancelNotice(t *testing.T) {
 	f.forgetSent()
 	f.report("op-h", team.RelayReportRequest{State: team.RelayWritten})
 	time.Sleep(100 * time.Millisecond)
-	if calls := f.sender.calls(); len(calls) != 0 {
-		t.Fatalf("a handoff's end told someone: %+v", calls)
+	// the only word to the lead is the handoff's own (the kill here cannot complete: no tmux for this member), never "接力已取消"
+	for _, c := range f.sender.calls() {
+		if strings.Contains(c.Text, "接力") && strings.Contains(c.Text, "取消") {
+			t.Fatalf("a handoff's end told the lead it was cancelled: %+v", c)
+		}
 	}
 }
 

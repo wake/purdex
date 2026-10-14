@@ -22,6 +22,8 @@ type World = {
   submits: any[]
   commands: string[]
   files: Record<string, string>
+  toasts: string[]
+  statuses: (string | undefined)[]
   logs: string[]
   clock: any
   sessionId: string
@@ -34,7 +36,7 @@ type World = {
 
 function memberWorld(on: any, role: string, pdx?: (argv: string[]) => R | undefined): World {
   const f: World = {
-    argvs: [], order: [], submits: [], commands: [], files: {}, logs: [], sessionId: 'sid-old', clock: undefined as any, usage: { tokens: 144000, window: 200000, percent: 72 },
+    argvs: [], order: [], submits: [], commands: [], files: {}, toasts: [], statuses: [], logs: [], sessionId: 'sid-old', clock: undefined as any, usage: { tokens: 144000, window: 200000, percent: 72 },
     pdx: (argv) => {
       const own = pdx?.(argv)
       if (own) return own
@@ -59,8 +61,8 @@ function memberWorld(on: any, role: string, pdx?: (argv: string[]) => R | undefi
   on('session.id', async () => ({ value: f.sessionId }))
   on('session.usage', async () => ({ value: { startedAt: 0, context: f.usage, rateLimits: [] } }))
   on('fs.read', async (_$: any, e: any) => (e.path in f.files ? { value: f.files[e.path] } : { deny: 'ENOENT' }))
-  on('ui.toast', async () => ({ value: undefined }))
-  on('ui.status', async () => ({ value: undefined }))
+  on('ui.toast', async (_$: any, e: any) => { f.toasts.push(e.text); return { value: undefined } })
+  on('ui.status', async (_$: any, e: any) => { f.statuses.push(e.text); return { value: undefined } })
   on('ui.log', async (_$: any, e: any) => { f.logs.push(e.text); return { value: undefined } })
   on('command.register', async (_$: any, e: any) => ({ value: { command: e.name } }))
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
@@ -745,4 +747,67 @@ test('parseTeamArgs: bad spawn and ref commands are errors, never guessed', () =
   expect(err('adopt')).toBe('用法：/team adopt <ref>')
   expect(err('kill a b')).toBe('用法：/team kill <ref>')
   expect(err('release --all')).toBe('用法：/team release <ref>')
+})
+
+// ---- RT-3c T39: a handoff op - the member writes its handoff and goes on, it is closed by the daemon ----
+
+const HANDOFF_OP = { ...OP, mode: 'handoff' }
+const handoffPdx = (reuse = false) => (argv: string[]): R | undefined => (argv[0] === 'relay' && argv[1] === 'claim' ? { exitCode: 0, stdout: JSON.stringify({ op: HANDOFF_OP, lead: LEAD, ...(reuse ? { reuse: true } : {}) }) } : undefined)
+
+// The claim writes the handoff and reports written; then the mod does none of the relay's follow-ups: no /clear, no seed, no half
+// (status, toast), no threshold check (a member asks its lead at the threshold: not now).
+// Mutation gates: clear after a handoff → a /clear command (red); the half's status / toast → red; the member's ask after the file → red.
+test('RT-3c T39: a handoff claim writes the file, reports written, and does not clear, half, or ask', async ($, on) => {
+  const f = memberWorld(on, 'member', handoffPdx())
+  await start($, f)
+  await receive($, ENVELOPE(CONTROL))
+  await f.clock.advance(200)
+  expect(f.submits.length).toBe(1)
+  f.files[OP.handoff_path] = GOOD_FILE
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await complete($, 'tw')
+  await f.clock.advance(300)
+  expect(reports(f)).toEqual(['relay report ' + OPID + ' writing', 'relay report ' + OPID + ' written'])
+  expect(f.commands).toEqual([])
+  expect(f.toasts).toEqual([])
+  expect(f.statuses.filter((s) => s !== undefined)).toEqual([])
+  expect(calls(f, 'ask')).toEqual([])
+  expect(f.submits.length).toBe(1)
+  // the lock the write took is lowered (the member lives on until the daemon closes it)
+  expect(f.argvs.map(sub).some((c) => c.startsWith('relay unlock ' + OPID))).toBe(true)
+})
+
+// The daemon says the file is the member's fresh handoff: nothing is written. Mutation gates: ignore reuse → a write prompt (red).
+test('RT-3c T39: a claim that says reuse (the file still checks out) writes nothing: writing, written', async ($, on) => {
+  const f = memberWorld(on, 'member', handoffPdx(true))
+  f.files[OP.handoff_path] = GOOD_FILE
+  await start($, f)
+  await receive($, ENVELOPE(CONTROL))
+  await f.clock.advance(300)
+  expect(f.submits).toEqual([])
+  expect(reports(f)).toEqual(['relay report ' + OPID + ' writing', 'relay report ' + OPID + ' written'])
+  expect(f.commands).toEqual([])
+})
+
+test('RT-3c T39: a reuse whose file no longer checks out is written as any handoff', async ($, on) => {
+  const f = memberWorld(on, 'member', handoffPdx(true))
+  f.files[OP.handoff_path] = 'short'
+  await start($, f)
+  await receive($, ENVELOPE(CONTROL))
+  await f.clock.advance(300)
+  expect(f.submits.length).toBe(1)
+  expect(reports(f)).toEqual(['relay report ' + OPID + ' writing'])
+})
+
+// An ordinary member relay is as ever (the same world, no mode): clears. Guards the handoff branch against catching every member op.
+test('RT-3c T39: a member op without the handoff mode still clears', async ($, on) => {
+  const f = memberWorld(on, 'member', memberPdx())
+  await start($, f)
+  await receive($, ENVELOPE(CONTROL))
+  await f.clock.advance(200)
+  f.files[OP.handoff_path] = GOOD_FILE
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await complete($, 'tw')
+  await f.clock.advance(100)
+  expect(f.commands).toEqual(['clear'])
 })

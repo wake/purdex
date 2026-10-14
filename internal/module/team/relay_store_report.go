@@ -158,6 +158,8 @@ type RelayReport struct {
 	// seen_at): the sweeper's timeouts decide from a snapshot, and progress that landed since must win. A mismatch
 	// answers ReportBadTransition with the op as it is, and writes nothing.
 	Expect *RelayExpect
+	// killClaimed, set by reportRelayIn on the report it was handed, says a handoff's `written` claimed the member for the kill.
+	killClaimed *bool
 }
 
 // RelayExpect is what a conditional report requires of the op's current row.
@@ -205,6 +207,8 @@ func (s *Store) ReportRelay(id string, r RelayReport) (team.RelayOp, ReportResul
 			}
 		}
 	}
+	var claimed bool
+	r.killClaimed = &claimed
 	op, res, err := reportRelayIn(tx, id, r)
 	if err != nil || res != ReportApplied {
 		return op, res, err
@@ -232,6 +236,9 @@ func (s *Store) ReportRelay(id string, r RelayReport) (team.RelayOp, ReportResul
 	}
 	if err := tx.Commit(); err != nil {
 		return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: commit: %w", id, err)
+	}
+	if claimed {
+		s.handoffClaims.Store(id, struct{}{}) // the commit that claimed the kill: the signal is this process's to send
 	}
 	s.notifyOp(id)
 	if len(led) > 0 && s.onCommands != nil {
@@ -302,7 +309,8 @@ func reportRelayIn(tx *sql.Tx, id string, r RelayReport) (team.RelayOp, ReportRe
 	if n, _ := res.RowsAffected(); n != 1 {
 		return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: state changed under the transaction", id)
 	}
-	if r.State == team.RelayClaimed {
+	if r.State == team.RelayClaimed && cur.Mode != team.RelayModeHandoff {
+		// (a handoff op keeps the row: its file is the half's, and its claim answer says so - RT-3c)
 		// a relay that claims ends the fresh half's life, reused or not (RT-3a1 T31): the file is spent or beside the point
 		if err := dropFreshHalfIn(tx, cur.SessionID, "", r.At); err != nil {
 			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: drop the fresh half: %w", id, err)
@@ -315,11 +323,27 @@ func reportRelayIn(tx *sql.Tx, id string, r RelayReport) (team.RelayOp, ReportRe
 		if _, err := tx.Exec(`UPDATE relay_ops SET state = ?, reason = ? WHERE id = ?`, string(next.State), next.Reason, id); err != nil {
 			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: close the half: %w", id, err)
 		}
-		if cur.Mode == team.RelayModeHalf {
-			if _, err := tx.Exec(`INSERT INTO relay_fresh_half (session_id, op_id, path, written_at) VALUES (?, ?, ?, ?)
-				ON CONFLICT (session_id) DO UPDATE SET op_id = excluded.op_id, path = excluded.path, written_at = excluded.written_at`,
-				cur.SessionID, id, cur.HandoffPath, r.At); err != nil {
-				return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: fresh half: %w", id, err)
+		// Both keep their file as the session's fresh half: a handoff's too, so a kill that did not complete can be asked again on the
+		// same file (RT-3c). The handoff op, whose file may BE the half's (a reuse), re-points the row at itself.
+		if _, err := tx.Exec(`INSERT INTO relay_fresh_half (session_id, op_id, path, written_at) VALUES (?, ?, ?, ?)
+			ON CONFLICT (session_id) DO UPDATE SET op_id = excluded.op_id, path = excluded.path, written_at = excluded.written_at`,
+			cur.SessionID, id, cur.HandoffPath, r.At); err != nil {
+			return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: fresh half: %w", id, err)
+		}
+		if cur.Mode == team.RelayModeHandoff && cur.Kind == team.RelayKindMember {
+			// The kill is claimed in THIS transaction (RT-3c T38, C#16): the file is written and the member is claimed as `pdx kill` claims
+			// it, or neither is. The signal follows the commit (finishHandoffKill); a crash between them leaves a killing row the sweeper
+			// settles, never a half-closed handoff.
+			// A claim that misses (a kill of the ordinary kind took the row first, the member left, the row is another host's) is not an
+			// error: the file IS written, and finishHandoffKill finds no claim of this op's and, for a member still active, says the
+			// member was not closed. host_id is bound to the op's own: the check made when the op was opened is made again here.
+			res, err := tx.Exec(`UPDATE team_members SET state = 'killing', updated_at = ?
+				WHERE session_id = ? AND team_id = ? AND state = 'active' AND (host_id = ? OR host_id = '')`, r.At, cur.SessionID, cur.TeamID, cur.HostID)
+			if err != nil {
+				return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: claim the kill: %w", id, err)
+			}
+			if n, _ := res.RowsAffected(); n == 1 && r.killClaimed != nil {
+				*r.killClaimed = true
 			}
 		}
 	}

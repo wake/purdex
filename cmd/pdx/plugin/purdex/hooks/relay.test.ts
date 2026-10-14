@@ -4306,7 +4306,7 @@ test('RT-2c T27: a re-adopted final card keeps the 90 % ladder: after its denial
 
 const HALF_PATH = '/data/relay/half-1.md'
 const HALF_OP = { ...OP, id: 'half-1', state: 'claimed', mode: 'half', handoff_path: HALF_PATH }
-const HALF_TOAST = '快取即將過期，已先寫好接力檔（' + HALF_PATH + '）。要接力請打 /relay；不需要就直接關掉這個 session，或照常繼續。'
+const HALF_TOAST = '快取即將過期，已先寫好接力檔（' + HALF_PATH + '）。要接力請打 /relay 或 /relay now，會直接接上後半：清空並由新對話接手，不用重寫接力檔；不需要就直接關掉這個 session，或照常繼續。'
 const FULL_OP = { ...OP, id: 'op-9', handoff_path: '/data/relay/op-9.md' }
 const staleCalls = (f: Fake) => f.argvs.map(sub).filter((c) => c.startsWith('relay fresh'))
 const STALE = 'relay fresh --session sid-old --op half-1 --stale'
@@ -4670,4 +4670,30 @@ test('RT-3b T36: a member relay claimed after the half spends it: the half statu
   await w.f.clock.advance(300)
   expect(count(w.f, 'claim')).toBe(1)
   expect(w.f.statuses.at(-1)).toBeUndefined()
+})
+
+// The person's /relay and /relay now do not make the half stale (a command is not a main-conversation turn) and go straight to its second
+// half: the begin offers the half, the answer carries its file, so there is no write turn - writing, written, /clear.
+// Mutation gates: a command that drops the half → no --reuse (red); a reuse that still writes → a second submit (red).
+async function relayNowReuses($: any, on: any, args: string) {
+  const { f } = await halfWriting($, on, {}, { reuseAnswer: () => FULL_BEGIN(HALF_PATH) })
+  f.files[HALF_PATH] = GOOD_FILE
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turnAndSettle($, f, 'tw')
+  expect(staleCalls(f)).toEqual([])
+  const r = await relayCmd($, args)
+  expect(r.text).toContain('已送出接力申請')
+  await f.clock.advance(400)
+  const begin = idleBegins(f).at(-1)!
+  expect(begin).toContain('--manual --person ' + PERSON_TOKEN + ' --reuse half-1')
+  expect(f.submits.length).toBe(1) // the half's own write prompt only
+  expect(reports(f)).toEqual(['relay report half-1 writing', 'relay report half-1 written', 'relay report op-9 writing', 'relay report op-9 written'])
+  expect(f.commands).toEqual(['clear'])
+  expect(staleCalls(f)).toEqual([])
+}
+test('RT-3c: bare /relay with a fresh half reuses it: no write turn, then /clear', async ($, on) => {
+  await relayNowReuses($, on, '')
+})
+test('RT-3c: /relay now with a fresh half reuses it: no write turn, then /clear', async ($, on) => {
+  await relayNowReuses($, on, 'now')
 })

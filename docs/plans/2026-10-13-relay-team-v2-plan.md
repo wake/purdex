@@ -290,7 +290,7 @@ Expected files: `hooks/register.js`, `hooks/relay.test.ts` (2).
 
 **T35 Running a half** — H.
 - An idle card that settles `timeout` (H:1038-1043) → from a timer, `begin --self --half --reason idle --idle-minutes N`. A begin answer whose op has `mode: half` (this call, or an unattended idle begin) is approved at begin, so it takes the existing `awaiting` → wait (answers at once) → `settle` → `startWrite` path; `s.pending.half = true` (from `body.op.mode`) is the new mark; an idle half never holds a prompt (D6).
-- The write turn's end (`onWriteTurnDone`, H:1357) for a half: a good file → report `written`, **no clear**, `toIdle`, `s.half = {op, path, at}`, status 「已寫好接力檔」, one toast 「快取即將過期，已先寫好接力檔（<path>）。要接力請打 /relay；不需要就直接關掉這個 session，或照常繼續。」 (S-14). Then, in the same turn.complete, the threshold check runs once (U-4.1: at ≥ 70 % it asks at once and reuses the half).
+- The write turn's end (`onWriteTurnDone`, H:1357) for a half: a good file → report `written`, **no clear**, `toIdle`, `s.half = {op, path, at}`, status 「已寫好接力檔」, one toast 「快取即將過期，已先寫好接力檔（<path>）。要接力請打 /relay 或 /relay now，會直接接上後半：清空並由新對話接手，不用重寫接力檔；不需要就直接關掉這個 session，或照常繼續。」 (S-14). Then, in the same turn.complete, the threshold check runs once (U-4.1: at ≥ 70 % it asks at once and reuses the half).
 - Tests: idle timeout → half begin → write prompt → written, no `/clear` (M); unattended idle answered half → the same; the texts; at 75 % the threshold ask follows the half with `--reuse`.
 
 **T36 Fresh and stale** — H.
@@ -308,11 +308,11 @@ Expected files: `W/wire_team.go`, `T/team_handler.go`, `T/member_relay_store.go`
 
 **T38 Daemon** — `W/wire_team.go` (`KillRequest.Handoff`), `T/team_handler.go` (`handleKill`, :189), `T/member_relay_store.go`, `T/kill_recover.go`.
 - `handoff: true` for a local active member whose mod protocol ≥ 8: a member op with mode `handoff` (`requested`) and the control message (`sendMemberControl`, `T/relay_member.go:196`).
-- On `written` (T30): in the **same transaction** as `written → cancelled/half`, the member row is claimed for the kill exactly as `pdx kill` claims it (state `killing`) (C#16); after the commit the kill runs as `pdx kill`'s does. A crash between the commit and the kill is finished by `settleStuckKillingMembers` (`T/kill_recover.go:53`), which already ends claimed kills. The lead hears once: 「[pdx team] member %s「%s」已交接：%s，已關閉。內容請由你決定要不要寫進記憶與文件。」 (and no outcome notice, T30).
+- On `written` (T30): in the **same transaction** as `written → cancelled/half`, the member row is claimed for the kill exactly as `pdx kill` claims it (state `killing`) (C#16); after the commit the kill runs as `pdx kill`'s does. A crash between the commit and the kill is settled by `settleStuckKillingMembers` (`T/kill_recover.go:53`) as for any stuck kill - it never signals on the lead's behalf: a process that is gone → `gone`, one still there → `active` again - and the lead is told 「member …的交接檔已寫好（<path>），但關閉沒完成，請再下一次 pdx kill」 (decided with the lead, 2026-10-14); a second `pdx kill --handoff` reuses the file (the handoff keeps `relay_fresh_half`, and the claim answer says `reuse`). The lead hears once: 「[pdx team] member %s「%s」已交接：%s，已關閉。內容請由你決定要不要寫進記憶與文件。」 (and no outcome notice, T30).
 - A member that does not claim or write (the timeouts of `T/relay_timeouts.go`) is **not** killed; the lead hears the failure as for a relay.
 - Remote member or mod < 8 → 409 `relay_unsupported`.
 - Answer: the op (201); the CLI waits for it like `pdx relay _<ref> --wait` (its loop reused) and exits 0 when the member is closed, 14 when it did not respond, 13 refused.
-- Tests: handoff → op, control, written → kill claimed in the same transaction, then killed, one notice (M); a crash after the commit (test seam) → the kill finished by `settleStuckKillingMembers` (M); unresponsive → not killed; remote → 409.
+- Tests: handoff → op, control, written → kill claimed in the same transaction, then killed, one notice (M); a crash after the commit (test seam) → the member active again, the lead told, the next `--handoff` on the same file (M); unresponsive → not killed; remote → 409.
 
 **T39 Mod** — H `claim` (H:1106): a claimed op with mode `handoff` writes the handoff and reports `written`, then goes idle: **no** `s.half`, no status or toast, no threshold check, no `/clear` (C#17). Tests: the claim writes and does not clear; none of the half's follow-ups run (M).
 

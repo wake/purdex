@@ -108,7 +108,8 @@ func (m *Module) reusableHalf(sid, opID string) (path string, ok bool, err error
 		return "", false, err
 	}
 	op, found, err := m.store.GetRelayOp(opID)
-	if err != nil || !found || op.SessionID != sid || op.State != team.RelayCancelled || op.Reason != team.RelayReasonHalf || op.Mode != team.RelayModeHalf {
+	if err != nil || !found || op.SessionID != sid || op.State != team.RelayCancelled || op.Reason != team.RelayReasonHalf ||
+		(op.Mode != team.RelayModeHalf && op.Mode != team.RelayModeHandoff) {
 		return "", false, err
 	}
 	st, serr := os.Stat(h.Path)
@@ -185,4 +186,18 @@ func (m *Module) reuseCardWaiting(sid, opID string) (string, error) {
 		return "", nil
 	}
 	return row.ID, nil
+}
+
+// freshFileOf is the file of sid's fresh half (an idle half's, or the handoff of a kill that did not complete) when it is still
+// there and not empty: what a `pdx kill --handoff` reuses instead of asking the member to write again (RT-3c, spec §4.3).
+func (m *Module) freshFileOf(sid string) (string, bool) {
+	h, found, err := m.store.FreshHalfOf(sid)
+	if err != nil || !found {
+		return "", false
+	}
+	path, ok, err := m.reusableHalf(sid, h.OpID)
+	if err != nil || !ok {
+		return "", false
+	}
+	return path, true
 }

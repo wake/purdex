@@ -208,6 +208,10 @@ func (m *Module) handleKill(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusConflict, team.ErrNotYourMember, fmt.Sprintf("%q is no member of team %s", req.Target, t.ID), nil)
 		return
 	}
+	if req.Handoff {
+		m.killWithHandoff(w, req, t, mr)
+		return
+	}
 	if m.isRemoteRow(mr) {
 		m.killRemote(w, t, mr)
 		return

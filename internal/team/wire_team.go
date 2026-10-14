@@ -270,6 +270,9 @@ type SpawnOp struct {
 type KillRequest struct {
 	OriginInbox string `json:"origin_inbox"` // CLAUDE_CODE_MESSAGING_SOCKET of the lead
 	Target      string `json:"target"`       // the member's ref or address, as `pdx kill <ref>` takes it
+	// Handoff: the member writes its handoff first and is killed once the file is written (RT-3c): `pdx kill <ref> --handoff`. The
+	// answer is then 201 and the op (RelayCreateResponse), not the member.
+	Handoff bool `json:"handoff,omitempty"`
 }
 
 // TeamView is GET /api/team: the caller's team and every member of it, in

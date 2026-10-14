@@ -248,5 +248,5 @@ func (m *Module) isReuseOf(op team.RelayOp, relayDir string) bool {
 		return false
 	}
 	other, ok, err := m.store.GetRelayOp(strings.TrimSuffix(filepath.Base(p), ".md"))
-	return err == nil && ok && other.ID != op.ID && other.SessionID == op.SessionID && other.Mode == team.RelayModeHalf
+	return err == nil && ok && other.ID != op.ID && other.SessionID == op.SessionID && (other.Mode == team.RelayModeHalf || other.Mode == team.RelayModeHandoff)
 }
