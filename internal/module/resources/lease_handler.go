@@ -110,7 +110,12 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 		if failed && req.Mode == resources.CallAuto && set.Mode == resources.ModeLease {
 			// Auto cannot tell an interactive session from none when the look itself
 			// failed, and guessing wait would hold the session. The CLI gives up after
-			// its grace and lets the command run: the pool is advice.
+			// its grace and lets the command run: the pool is advice. A retry of a
+			// request that already made its row is its replay, whatever the probe says.
+			if row, ok, err := m.store.GetByClientID(req.ClientID); err == nil && ok {
+				m.replay(w, r, req, row, set)
+				return
+			}
 			writeErr(w, http.StatusServiceUnavailable, resources.ErrNotReady, "could not tell which session the caller is in")
 			return
 		}

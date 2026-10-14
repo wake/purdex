@@ -117,6 +117,22 @@ func TestAuto_ProbeFailureMakesNoRowAndIsNotAWait(t *testing.T) {
 	assert.Less(t, wait.Code, 300, "an explicit wait does not need the session")
 }
 
+// A retry of a request that already made its row is that row's replay, even if
+// the probe fails the second time: answering not_ready would send the CLI to run
+// the command while the row still queues or holds. (M: probe before the lookup.)
+func TestAuto_ReplayDoesNotNeedTheProbe(t *testing.T) {
+	f := newPosFix(t)
+	f.m.interactive = func(string) bool { return true }
+	f.setZone("danger", "flat")
+	cid := newCID()
+	first := decodeLease(t, f.postAs(cid, pidA, resources.CallAuto, "go build ./..."))
+	require.NotEmpty(t, first.ID)
+	f.m.procSnapshot = func(context.Context) (*iagent.ProcessSnapshot, error) { return nil, errors.New("ps timed out") }
+	again := f.postAs(cid, pidA, resources.CallAuto, "go build ./...")
+	assert.Equal(t, http.StatusOK, again.Code, again.Body.String())
+	assert.Equal(t, first.ID, decodeLease(t, again).ID)
+}
+
 // An ask row is not one auto could have made: the same client id with auto is a
 // reused id, not the ask request. (M: let auto replay any row.)
 func TestAuto_DoesNotReplayAnAskRow(t *testing.T) {
