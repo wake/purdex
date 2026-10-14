@@ -44,6 +44,13 @@ describe('saveProbeHosts', () => {
     await expect(saveProbeHosts(H, upsertProbe({ id: 'b', name: 'B', ssh_alias: 'b' }))).resolves.toEqual({ kind: 'failed', reason: 'reload failed' })
   })
 
+  it('a 409 whose reload GET answers 200 without a readable collection is a failure too', async () => {
+    vi.mocked(putProbeHosts).mockResolvedValue({ kind: 'conflict', current: null })
+    vi.mocked(fetchProbeHosts).mockResolvedValue(null)
+    await expect(saveProbeHosts(H, upsertProbe({ id: 'b', name: 'B', ssh_alias: 'b' }))).resolves.toEqual({ kind: 'failed', reason: 'reload failed' })
+    expect(useFleetStore.getState().defs[H]?.revision).toBe(2)
+  })
+
   it('a 409 without a readable copy reloads by GET and reports the conflict', async () => {
     vi.mocked(putProbeHosts).mockResolvedValue({ kind: 'conflict', current: null })
     vi.mocked(fetchProbeHosts).mockResolvedValue({ items: [A], revision: 9 })

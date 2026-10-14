@@ -34,7 +34,6 @@ export function ProbeHostsSection({ hostId }: { hostId: string }) {
   const focusProbe = useFleetStore((s) => s.focusProbe)
   const [deleting, setDeleting] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const [highlight, setHighlight] = useState<string | null>(null)
   const rowRefs = useRef<Record<string, HTMLDivElement | null>>({})
 
   const supported = online && fleet.support === 'yes'
@@ -46,19 +45,17 @@ export function ProbeHostsSection({ hostId }: { hostId: string }) {
     if (supported) void useFleetStore.getState().loadDefs(hostId)
   }, [hostId, supported, probeIds])
 
-  // A bottom-block row click names a probe: scroll to it, highlight it once, clear the request.
-  useEffect(() => {
-    if (!focusProbe || focusProbe.proberHostId !== hostId || !defs) return
-    const row = defs.items.find((d) => d.id === focusProbe.probeId)
-    if (!row) return
-    rowRefs.current[row.id]?.scrollIntoView?.({ block: 'center' })
-    setHighlight(row.id)
-    useFleetStore.getState().setFocusProbe(null)
-  }, [focusProbe, defs, hostId])
-
+  // A bottom-block row click names a probe: the row is highlighted for a moment (derived from the request itself, so no
+  // state is set in an effect), scrolled to once, and the request is cleared when the highlight ends.
+  const highlight = focusProbe && focusProbe.proberHostId === hostId && defs?.items.some((d) => d.id === focusProbe.probeId)
+    ? focusProbe.probeId
+    : null
   useEffect(() => {
     if (highlight === null) return
-    const timer = setTimeout(() => setHighlight(null), HIGHLIGHT_MS)
+    rowRefs.current[highlight]?.scrollIntoView?.({ block: 'center' })
+    const timer = setTimeout(() => {
+      if (useFleetStore.getState().focusProbe?.probeId === highlight) useFleetStore.getState().setFocusProbe(null)
+    }, HIGHLIGHT_MS)
     return () => clearTimeout(timer)
   }, [highlight])
 

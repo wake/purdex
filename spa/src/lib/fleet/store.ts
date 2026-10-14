@@ -52,7 +52,7 @@ interface FleetState {
   /** A `fleet.changed` frame. Written only while this generation has `fleet.v1` confirmed. */
   applyEvent: (hostId: string, payload: FleetPayload) => void
   applyDefs: (hostId: string, gen: number, defs: VersionedProbeHosts | null) => void
-  /** Resolves true when the list was read (and applied if the generation still held). */
+  /** Resolves true only when a readable list was applied under the generation it began in. */
   loadDefs: (hostId: string) => Promise<boolean>
   setFocusProbe: (focus: FocusProbe | null) => void
   reset: () => void
@@ -116,7 +116,9 @@ export const useFleetStore = create<FleetState>()((set, get) => ({
   loadDefs: async (hostId) => {
     const gen = get().genOf(hostId)
     try {
-      get().applyDefs(hostId, gen, await fetchProbeHosts(hostId))
+      const defs = await fetchProbeHosts(hostId)
+      if (defs === null || get().genOf(hostId) !== gen) return false // missing or malformed collection, or a gone connection
+      get().applyDefs(hostId, gen, defs)
       return true
     } catch {
       return false // the section shows what it has; a failed reload leaves the list as it was

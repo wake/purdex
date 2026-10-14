@@ -223,8 +223,15 @@ describe('focusProbe', () => {
     await screen.findByTestId('probe-row-b2')
     act(() => useFleetStore.getState().setFocusProbe({ proberHostId: H, probeId: 'b2' }))
     await waitFor(() => expect(screen.getByTestId('probe-row-b2').getAttribute('data-highlight')).toBe('true'))
-    expect(scroll).toHaveBeenCalled()
-    expect(useFleetStore.getState().focusProbe).toBeNull()
+    expect(scroll).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('probe-row-a1').getAttribute('data-highlight')).toBe('false')
+  })
+  it('the request is cleared once the highlight ends', async () => {
+    setup({ items: [A] })
+    render(<ProbeHostsSection hostId={H} />)
+    await screen.findByTestId('probe-row-a1')
+    act(() => useFleetStore.getState().setFocusProbe({ proberHostId: H, probeId: 'a1' }))
+    await waitFor(() => expect(useFleetStore.getState().focusProbe).toBeNull(), { timeout: 5000 })
     expect(screen.getByTestId('probe-row-a1').getAttribute('data-highlight')).toBe('false')
   })
   it('a request for another prober is left alone', async () => {
