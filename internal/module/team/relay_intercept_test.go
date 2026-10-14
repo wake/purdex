@@ -20,7 +20,12 @@ func (f *fixture) setModVersion(sid, ver string) {
 
 func (f *fixture) intercepted(sid string) (int, team.RelayCompactedResponse) {
 	f.t.Helper()
-	code, raw := f.do(http.MethodPost, "/api/relay/compacted", team.RelayCompactedRequest{SessionID: sid, Trigger: "idle", Intercepted: true})
+	return f.interceptedSince(sid, 0)
+}
+
+func (f *fixture) interceptedSince(sid string, since int64) (int, team.RelayCompactedResponse) {
+	f.t.Helper()
+	code, raw := f.do(http.MethodPost, "/api/relay/compacted", team.RelayCompactedRequest{SessionID: sid, Trigger: "idle", Intercepted: true, IdleSince: since})
 	var res team.RelayCompactedResponse
 	if code == http.StatusOK {
 		if err := json.Unmarshal(raw, &res); err != nil {
@@ -160,5 +165,53 @@ func TestIntercept_NeedsNoEarlierTick(t *testing.T) {
 	}
 	if code, res := f.intercepted("sid-ma"); code != http.StatusOK || res.Noticed {
 		t.Fatalf("again = %d %+v, want not noticed", code, res)
+	}
+}
+
+// A short turn between two interceptions that no liveness tick saw still opens a new idle stretch: the mod names it by idle_since
+// (codex R1). Mutation gates: ignore idle_since (use the tick's period) → the second is silent (red); the same since told twice → red.
+func TestIntercept_AStretchIsNamedByWhenTheLastTurnEnded(t *testing.T) {
+	f := idleSetup(t)
+	f.setModVersion("sid-ma", "9")
+	f.forgetSent()
+	if _, res := f.interceptedSince("sid-ma", 1000); !res.Noticed {
+		t.Fatal("first interception not told")
+	}
+	if _, res := f.interceptedSince("sid-ma", 1000); res.Noticed {
+		t.Fatal("the same stretch was told twice")
+	}
+	if _, res := f.interceptedSince("sid-ma", 9000); !res.Noticed { // a turn ran in between; no tick saw it
+		t.Fatal("a later stretch (a turn ended after the first) was not told")
+	}
+	waitFor(t, func() bool { return len(f.sender.calls()) == 2 })
+}
+
+// A report that arrives when the member is running by now says nothing, and does not use up the stretch.
+// Mutation gate: no status check → a "閒置" notice to a busy member's lead (red).
+func TestIntercept_ARunningMemberIsNotTold(t *testing.T) {
+	f := idleSetup(t)
+	f.setModVersion("sid-ma", "9")
+	f.usage.setStatus("tm-op-a", "running")
+	f.forgetSent()
+	if _, res := f.interceptedSince("sid-ma", 1000); res.Noticed {
+		t.Fatal("a running member's lead was told it is idle")
+	}
+	f.usage.setStatus("tm-op-a", "idle")
+	if _, res := f.interceptedSince("sid-ma", 1000); !res.Noticed {
+		t.Fatal("the stretch was used up by the report that was not told")
+	}
+}
+
+// A session that is no active member (released; a stale role in its mod) is answered not_member, so the mod drops the role.
+// Mutation gate: member always true → the mod never learns (red).
+func TestIntercept_OfANonMemberSaysNotMember(t *testing.T) {
+	f := newFixture(t)
+	code, res := f.intercepted("sid-1")
+	if code != http.StatusOK || res.Noticed || !res.NotMember {
+		t.Fatalf("intercepted = %d %+v, want 200, not noticed, not_member", code, res)
+	}
+	g := idleSetup(t)
+	if _, res := g.intercepted("sid-ma"); res.NotMember {
+		t.Fatal("an active member was told it is no member")
 	}
 }

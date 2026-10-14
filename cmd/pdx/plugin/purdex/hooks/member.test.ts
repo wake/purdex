@@ -826,7 +826,7 @@ test('RT-4 T42: a member’s idle compaction is skipped and reported as intercep
   const r = await $.session.compact(compactEvent('auto'))
   expect(r).toEqual({ skip: expect.stringContaining('閒置') })
   await f.clock.advance(100)
-  expect(compactCalls(f)).toEqual(['relay compacted --session sid-old --trigger idle --intercepted'])
+  expect(compactCalls(f)).toEqual(['relay compacted --session sid-old --trigger idle --intercepted'])  // no turn ended yet: no stretch name
 })
 
 test('RT-4 T42: a context-full auto compaction (a turn is running) in a member runs and is reported as today', async ($, on) => {
@@ -867,4 +867,41 @@ test('RT-4 T42: a member whose relay is under way is not intercepted (the relay�
   expect(r).toEqual({ skip: expect.stringContaining('接力') })
   await f.clock.advance(100)
   expect(compactCalls(f)).toEqual([])
+})
+
+// The report names the idle stretch by when the last main turn ended; the guard needs hello answered; a daemon that says not_member makes
+// the mod drop its role and say hello again. Mutation gates: no --idle-since → red; no helloOK in the guard → red; the role kept → red.
+test('RT-4 T42: the interception names the idle stretch by the end of the last turn', async ($, on) => {
+  const f = memberWorld(on, 'member', memberPdx())
+  await start($, f)
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  await complete($, 't1')
+  await f.clock.advance(5000)
+  expect(await $.session.compact(compactEvent('auto'))).toEqual({ skip: expect.any(String) })
+  await f.clock.advance(100)
+  expect(compactCalls(f)).toEqual([expect.stringMatching(/^relay compacted --session sid-old --trigger idle --intercepted --idle-since [1-9][0-9]*$/)])
+})
+
+test('RT-4 T42: before hello has answered nothing is intercepted (the role is not the daemon’s yet)', async ($, on) => {
+  const f = memberWorld(on, 'member', (argv) => (argv[1] === 'hello' ? { exitCode: 20, stderr: 'unreachable' } : undefined))
+  await start($, f)
+  const r = await $.session.compact(compactEvent('auto'))
+  expect(r.skip).toBeUndefined()
+})
+
+test('RT-4 T42: a daemon that says not_member makes the mod drop the role: hello again, and the next idle compaction runs', async ($, on) => {
+  let role = 'member'
+  const f = memberWorld(on, 'member', (argv) => {
+    if (argv[1] === 'compacted') return { exitCode: 0, stdout: '{"noticed":false,"not_member":true}' }
+    if (argv[1] === 'hello') return { exitCode: 0, stdout: HELLO(role) }
+    return undefined
+  })
+  await start($, f)
+  expect(await $.session.compact(compactEvent('auto'))).toEqual({ skip: expect.any(String) })
+  const before = calls(f, 'hello').length
+  role = 'none' // the daemon's answer to the hello that follows
+  await f.clock.advance(300)
+  expect(calls(f, 'hello').length).toBe(before + 1)
+  const r2 = await $.session.compact(compactEvent('auto'))
+  expect(r2.skip).toBeUndefined()
 })

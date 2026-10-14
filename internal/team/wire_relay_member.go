@@ -28,11 +28,17 @@ type RelayCompactedRequest struct {
 	// Intercepted: the member's mod answered {skip} to an idle compaction, so nothing was compacted (RT-4 T42). The daemon tells the lead
 	// to decide, once per idle period; none of a compaction's bookkeeping runs.
 	Intercepted bool `json:"intercepted,omitempty"`
+	// IdleSince (with Intercepted): when the member's last main turn ended, unix ms by the mod's clock (0 = unknown). It names the idle
+	// stretch: one notice per value, so a short turn between two interceptions that the liveness tick never saw still opens a new one.
+	IdleSince int64 `json:"idle_since,omitempty"`
 }
 
 // RelayCompactedResponse says whether the lead was told.
 type RelayCompactedResponse struct {
 	Noticed bool `json:"noticed"`
+	// NotMember: an intercepted idle compaction of a session the daemon does not know as an active local member (it was released, or the
+	// mod's role is stale): the mod drops its role and says hello again, so the next idle compaction runs (RT-4).
+	NotMember bool `json:"not_member,omitempty"`
 }
 
 // RelayClaimResponse answers claim: the op and who leads the member's team.

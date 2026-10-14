@@ -138,6 +138,7 @@ const fresh = () => ({
   idleAsk: false, // an idle ask is out (beginning / awaiting): it holds no prompt, a prompt withdraws it (D6)
   idleWithdraw: false, // a prompt arrived while the idle begin was out: the op it opens is withdrawn at once
   askEpoch: 0, // bumped by everything that makes an ask in the air stale (a /clear, a session reset, a compaction); never reset, like gen
+  lastTurnDoneAt: 0, // when the last main turn ended (the engine's clock, ms): names an idle stretch for the daemon (RT-4)
   half: undefined, // { op, path, at, sid }: the fresh half this session wrote (idle half, RT-3b): the next relay may reuse its file until the conversation moves
   halfBeginning: false, // a half begin is out: it holds no prompt
   halfStatus: false, // the status line says 「已寫好接力檔」 and nothing else has replaced it
@@ -1587,9 +1588,20 @@ function dropHalf($, stale) {
 
 // interceptedLater tells the daemon, from a timer, that the member's idle compaction was stopped (RT-4 T42).
 function interceptedLater($) {
+  const since = s.lastTurnDoneAt
+  const gen = s.gen
   later($, 0, async () => {
     const sid = await $.session.id()
-    await pdx($, ['relay', 'compacted', '--session', sid, '--trigger', 'idle', '--intercepted'], CALL_TIMEOUT_MS)
+    const argv = ['relay', 'compacted', '--session', sid, '--trigger', 'idle', '--intercepted']
+    if (since > 0) argv.push('--idle-since', String(since)) // names this idle stretch for the daemon: one notice per stretch
+    const r = await pdx($, argv, CALL_TIMEOUT_MS)
+    // The daemon does not know this session as a member (released, or the role is stale): this idle compaction was stopped for nothing, so
+    // the role is dropped and hello says what it is now; the next one runs.
+    const body = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
+    if (body && body.not_member === true && s.gen === gen && s.role === 'member') {
+      s.role = 'none'
+      helloLater($)
+    }
   })
 }
 
@@ -1918,6 +1930,7 @@ export function register(on) {
       r = await next(e)
     } finally {
       if (s.interactive && !e.agentId) s.turnRunning = false // a hook beneath that throws must not leave the turn running for good
+      if (s.interactive && !e.agentId) { try { s.lastTurnDoneAt = await $.clock.now() } catch {} }
     }
     if (!s.interactive || e.agentId) return r
     if (s.leadAsk && s.leadAsk.turnId !== undefined && e.turnId === s.leadAsk.turnId) s.leadAsk = undefined // the /lead turn has ended: it may be asked again
@@ -2088,7 +2101,7 @@ export function register(on) {
     const trigger = e.trigger === 'auto' && !s.turnRunning && s.idleMinutes > 0 ? 'idle' : e.trigger
     // A member's idle compaction (RT-4 T42, Gate M-1): an auto compaction with no main turn running. It is stopped, and the daemon tells
     // the lead to decide (relay, hand over and close, close). A context-full compaction runs inside a turn; a relay under way keeps its rule below.
-    if (s.role === 'member' && e.trigger === 'auto' && !s.turnRunning && s.state === 'idle') {
+    if (s.helloOK && s.role === 'member' && e.trigger === 'auto' && !s.turnRunning && s.state === 'idle') {
       interceptedLater($)
       return { skip: SKIP_MEMBER_IDLE }
     }
