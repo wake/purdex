@@ -24,7 +24,10 @@ func TestNormalizeRemote_EveryFormOfOneRepositoryIsOneString(t *testing.T) {
 }
 
 func TestNormalizeRemote_NothingUsableIsEmptyAndNeverCarriesCredentials(t *testing.T) {
-	for _, in := range []string{"", "   ", "github.com", "https://", "git@github.com:", "../x", "file://otherhost/srv/git/repo.git", "/"} {
+	for _, in := range []string{"", "   ", "github.com", "https://", "git@github.com:", "../x", "file://otherhost/srv/git/repo.git", "/",
+		// A remote helper is a program git runs, not a host: whatever its path says, it is not the listed repository.
+		"ext::sh -c touch% /tmp/x", "ext://github.com/wake/purdex", "evil://github.com/wake/purdex", "fd::17/wake/purdex",
+		"git+ssh://git@github.com/wake/purdex", "ftp://github.com/wake/purdex", "github.com/wake/pur dex"} {
 		if got := NormalizeRemote(in); got != "" {
 			t.Errorf("NormalizeRemote(%q) = %q, want empty", in, got)
 		}

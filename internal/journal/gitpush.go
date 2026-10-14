@@ -40,8 +40,13 @@ func (g *Git) Run(ctx context.Context) {
 func (g *Git) adopt() {
 	entries, _ := os.ReadDir(g.Dir)
 	for _, e := range entries {
-		if _, err := os.Stat(filepath.Join(g.Dir, e.Name(), "wt", ".git")); err == nil {
+		wt := filepath.Join(g.Dir, e.Name(), "wt")
+		if _, err := os.Stat(filepath.Join(wt, ".git")); err == nil {
 			g.remember(e.Name())
+			// A worktree found on disk is trusted to be the repository it says it is, as of now; from here on it must stay so.
+			if out, err := g.git(context.Background(), wt, 10*time.Second, "rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil {
+				g.setIdentity(e.Name(), out)
+			}
 		}
 	}
 }
@@ -85,12 +90,13 @@ func (g *Git) pushProject(ctx context.Context, p Project, list []string) {
 	if _, err := os.Stat(filepath.Join(wt, ".git")); err != nil {
 		return
 	}
-	target, ok := g.pushTarget(ctx, p, wt, list)
+	plan, ok := g.pushTarget(ctx, p, wt, list)
 	if !ok {
 		return
 	}
-	if err := g.onBranch(ctx, wt); err != nil {
-		g.logOnce("branch/"+p.ID, "%v", err)
+	target := plan.push
+	if err := g.checkWT(ctx, wt); err != nil {
+		g.logOnce("worktree/"+p.ID, "%v", err)
 		return
 	}
 	head, err := g.git(ctx, wt, 10*time.Second, "rev-parse", "--verify", "HEAD")
@@ -102,7 +108,7 @@ func (g *Git) pushProject(ctx context.Context, p Project, list []string) {
 	}
 	out, err := g.git(ctx, wt, pushTimeout, "push", target, branchRefspec)
 	if err != nil && strings.Contains(out, "rejected") {
-		if !g.rebaseOntoRemote(ctx, p, wt) {
+		if !g.rebaseOntoRemote(ctx, p, wt, plan.fetch) {
 			return
 		}
 		out, err = g.git(ctx, wt, pushTimeout, "push", target, branchRefspec)
@@ -120,21 +126,26 @@ func (g *Git) pushProject(ctx context.Context, p Project, list []string) {
 // `origin` — with pushurl, url.<base>.insteadOf and pushInsteadOf applied (`git remote get-url`), not the configured text —
 // must be on the allow-list, and so must the fetch URL (the rebase takes the remote's commits from it). Exactly one push URL:
 // several would send the branch somewhere the check did not look. The push then goes to that URL, not to the name `origin`,
-// so a config change between the check and the push cannot redirect it.
-func (g *Git) pushTarget(ctx context.Context, p Project, wt string, list []string) (string, bool) {
+// so a config change between the check and the push cannot redirect it; the fetch of a rebase uses the checked fetch URL
+// the same way.
+func (g *Git) pushTarget(ctx context.Context, p Project, wt string, list []string) (pushPlan, bool) {
 	fetchURL, err := g.git(ctx, wt, 10*time.Second, "remote", "get-url", "origin")
 	if err != nil || !PushAllowed(fetchURL, list) {
-		return "", false
+		return pushPlan{}, false
 	}
 	out, err := g.git(ctx, wt, 10*time.Second, "remote", "get-url", "--push", "--all", "origin")
 	urls := strings.Fields(out)
 	if err != nil || len(urls) != 1 || !PushAllowed(urls[0], list) {
 		g.logOnce("target/"+p.ID, "journal: project %s is listed but its push destination is not (%d push URL(s), first %q); nothing is pushed",
 			p.ID, len(urls), NormalizeRemote(firstOr(urls, "")))
-		return "", false
+		return pushPlan{}, false
 	}
-	return urls[0], true
+	return pushPlan{fetch: fetchURL, push: urls[0]}, true
 }
+
+// pushPlan is the pair of URLs that passed the allow-list; everything that talks to the remote in one round uses them, never
+// the name `origin` again.
+type pushPlan struct{ fetch, push string }
 
 func firstOr(s []string, def string) string {
 	if len(s) > 0 {
@@ -146,8 +157,8 @@ func firstOr(s []string, def string) string {
 // rebaseOntoRemote fetches the remote journal branch (the network part, outside the lock) and rebases the local commits
 // onto it (under the lock, after committing what the writers left, so the tree is clean). It reports whether the branch
 // now sits on the remote's.
-func (g *Git) rebaseOntoRemote(ctx context.Context, p Project, wt string) bool {
-	if _, err := g.git(ctx, wt, pushTimeout, "fetch", "--no-tags", "origin", "+refs/heads/"+Branch+":refs/remotes/origin/"+Branch); err != nil {
+func (g *Git) rebaseOntoRemote(ctx context.Context, p Project, wt, fetchURL string) bool {
+	if _, err := g.git(ctx, wt, pushTimeout, "fetch", "--no-tags", fetchURL, "+refs/heads/"+Branch+":refs/remotes/origin/"+Branch); err != nil {
 		g.logOnce("push/"+p.ID, "journal: fetch for project %s failed, retried next round: %v", p.ID, err)
 		return false
 	}

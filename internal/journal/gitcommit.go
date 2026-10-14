@@ -25,7 +25,7 @@ func (g *Git) commit(ctx context.Context, wt string) error {
 	if _, err := os.Stat(filepath.Join(wt, ".git")); err != nil {
 		return nil
 	}
-	if err := g.onBranch(ctx, wt); err != nil {
+	if err := g.checkWT(ctx, wt); err != nil {
 		return err
 	}
 	if _, err := g.git(ctx, wt, 30*time.Second, "add", "-A", ".purdex"); err != nil {
@@ -48,8 +48,24 @@ func (g *Git) commit(ctx context.Context, wt string) error {
 	return err
 }
 
-// onBranch checks that the worktree still has the journal branch checked out: something that detached it or switched it
-// (the lead agent works in this folder) must not get journal commits, or have them counted as pushed.
+// checkWT checks that the folder is still the worktree this Git made or adopted — the same repository (common dir) —
+// and still has the journal branch checked out: something that detached or switched it (the lead agent works in this
+// folder), or replaced the folder with another clone, must not get journal commits, or have them counted as pushed.
+func (g *Git) checkWT(ctx context.Context, wt string) error {
+	if err := g.onBranch(ctx, wt); err != nil {
+		return err
+	}
+	want := g.identityOf(filepath.Base(filepath.Dir(wt)))
+	if want == "" {
+		return nil
+	}
+	out, err := g.git(ctx, wt, 10*time.Second, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil || canonicalDir(out) != want {
+		return fmt.Errorf("journal: %s belongs to repository %q, expected %q; nothing is committed or pushed from it", wt, out, want)
+	}
+	return nil
+}
+
 func (g *Git) onBranch(ctx context.Context, wt string) error {
 	ref, err := g.git(ctx, wt, 10*time.Second, "symbolic-ref", "-q", "HEAD")
 	if err != nil || ref != "refs/heads/"+Branch {

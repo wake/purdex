@@ -36,6 +36,7 @@ type Git struct {
 	known  map[string]bool        // project ids this Git has a worktree for
 	logged map[string]time.Time   // log-once-an-hour keys
 	pushed map[string]string      // project id -> the HEAD last pushed
+	ident  map[string]string      // project id -> the canonical common dir its worktree belongs to
 }
 
 const defaultInterval = 10 * time.Minute
@@ -67,6 +68,13 @@ func (g *Git) logOnce(key, format string, args ...any) {
 		return
 	}
 	g.logged[key] = time.Now()
+	if len(g.logged) > 128 { // forget the keys whose hour is over, so the map follows the live failures, not the history
+		for k, at := range g.logged {
+			if time.Since(at) >= time.Hour {
+				delete(g.logged, k)
+			}
+		}
+	}
 	g.mu.Unlock()
 	g.logf(format, args...)
 }
@@ -84,6 +92,33 @@ func (g *Git) lock(id string) func() {
 	g.mu.Unlock()
 	l.Lock()
 	return l.Unlock
+}
+
+// canonicalDir makes equivalent spellings of one directory equal.
+func canonicalDir(path string) string {
+	path = filepath.Clean(strings.TrimSpace(path))
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		return real
+	}
+	return path
+}
+
+func (g *Git) setIdentity(id, commonDir string) {
+	if commonDir == "" {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.ident == nil {
+		g.ident = map[string]string{}
+	}
+	g.ident[id] = canonicalDir(commonDir)
+}
+
+func (g *Git) identityOf(id string) string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.ident[id]
 }
 
 func (g *Git) remember(id string) {
@@ -117,6 +152,7 @@ func (g *Git) ensure(ctx context.Context, p Project) (_ string, err error) {
 		if err := g.finishPlain(wt); err != nil { // a migration that stopped half way is finished first
 			return "", err
 		}
+		g.setIdentity(p.ID, p.CommonDir)
 		g.remember(p.ID)
 		return wt, nil
 	}
@@ -172,6 +208,7 @@ func (g *Git) ensure(ctx context.Context, p Project) (_ string, err error) {
 	if err := g.finishPlain(wt); err != nil {
 		return "", err
 	}
+	g.setIdentity(p.ID, p.CommonDir)
 	g.remember(p.ID)
 	return wt, nil
 }

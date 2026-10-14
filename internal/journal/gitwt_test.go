@@ -398,3 +398,63 @@ func TestGit_RepositoryRedirectingEnvironmentFromTheDaemonIsIgnored(t *testing.T
 		t.Fatalf("the other repository got commits: %s", out)
 	}
 }
+
+func TestGitEnv_DropsWhatRedirectsGitAndLimitsTheTransports(t *testing.T) {
+	got := gitEnv([]string{"GIT_DIR=/x", "GIT_WORK_TREE=/x", "GIT_INDEX_FILE=/x", "GIT_EXEC_PATH=/x", "GIT_ALLOW_PROTOCOL=ext", "GIT_SSH_COMMAND=my-ssh", "GIT_CONFIG_GLOBAL=/g", "HOME=/h"})
+	has := map[string]string{}
+	for _, kv := range got {
+		k, v, _ := strings.Cut(kv, "=")
+		has[k] = v
+	}
+	for _, k := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_EXEC_PATH"} {
+		if _, ok := has[k]; ok {
+			t.Errorf("%s survived", k)
+		}
+	}
+	if has["GIT_ALLOW_PROTOCOL"] != "file:https:http:ssh:git" {
+		t.Errorf("GIT_ALLOW_PROTOCOL = %q: the daemon's own value must not widen it", has["GIT_ALLOW_PROTOCOL"])
+	}
+	if has["GIT_SSH_COMMAND"] != "my-ssh" || has["GIT_CONFIG_GLOBAL"] != "/g" || has["HOME"] != "/h" {
+		t.Errorf("the operator's own settings were lost: %v", has)
+	}
+}
+
+// Replacing the worktree's folder with another repository on a branch of the same name must not get journal commits.
+func TestGit_AWorktreeReplacedByAnotherRepositoryIsLeftAlone(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.writeJournal(t, "a.md", "one\n")
+	f.g.Round(ctx)
+	wt := WorktreeDir(f.g.Dir, f.p)
+	if err := os.RemoveAll(wt); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tgit(t, wt, "init", "-q", "-b", Branch)
+	f.write(t, filepath.Join(wt, ".purdex"), "a.md", "an impostor\n")
+	f.g.Round(ctx)
+	if out, _ := gitOut(wt, "rev-list", "--all", "--count"); out != "0" {
+		t.Fatalf("the other repository got %s commit(s)", out)
+	}
+	if countContaining(f.logs, "belongs to repository") == 0 {
+		t.Fatalf("nothing logged about the replaced worktree: %v", f.logs)
+	}
+}
+
+func TestGit_LogOnceForgetsKeysWhoseHourIsOver(t *testing.T) {
+	g := &Git{Logf: func(string, ...any) {}}
+	for i := 0; i < 500; i++ {
+		g.logOnce(fmt.Sprintf("old/%d", i), "x")
+	}
+	g.mu.Lock()
+	for k := range g.logged {
+		g.logged[k] = time.Now().Add(-2 * time.Hour)
+	}
+	g.mu.Unlock()
+	g.logOnce("fresh", "x")
+	if n := len(g.logged); n > 5 {
+		t.Fatalf("%d keys are kept after their hour was over", n)
+	}
+}

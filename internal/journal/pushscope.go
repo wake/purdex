@@ -21,7 +21,7 @@ func NormalizeRemote(raw string) string {
 	s := strings.TrimSpace(raw)
 	var host, path string
 	switch {
-	case s == "":
+	case s == "", strings.ContainsAny(s, " \t\r\n"), strings.Contains(s, "::"): // "::" is git's remote-helper syntax (ext::, fd::)
 		return ""
 	case strings.HasPrefix(s, "/"):
 		return localRemote(s)
@@ -30,13 +30,17 @@ func NormalizeRemote(raw string) string {
 		if err != nil {
 			return ""
 		}
-		if u.Scheme == "file" {
+		switch strings.ToLower(u.Scheme) {
+		case "ssh", "https", "http", "git":
+			host, path = u.Hostname(), u.Path
+		case "file":
 			if u.Host != "" && u.Host != "localhost" {
 				return ""
 			}
 			return localRemote(u.Path)
+		default: // a remote helper (ext://, evil://) is not a host, whatever its path says
+			return ""
 		}
-		host, path = u.Hostname(), u.Path
 	case scpLike.MatchString(s):
 		m := scpLike.FindStringSubmatch(s)
 		host, path = m[1], m[2]

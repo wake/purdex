@@ -17,8 +17,8 @@ import (
 // directories, GIT_NAMESPACE, GIT_CONFIG_PARAMETERS ...) could send a command to another repository than the one it is
 // run for, so it is dropped.
 var keptGitEnv = map[string]bool{
-	"GIT_SSH": true, "GIT_SSH_COMMAND": true, "GIT_SSH_VARIANT": true, "GIT_ASKPASS": true, "GIT_PROXY_COMMAND": true,
-	"GIT_CONFIG_GLOBAL": true, "GIT_CONFIG_SYSTEM": true, "GIT_CONFIG_NOSYSTEM": true, "GIT_EXEC_PATH": true,
+	"GIT_SSH": true, "GIT_SSH_COMMAND": true, "GIT_SSH_VARIANT": true, "GIT_ASKPASS": true,
+	"GIT_CONFIG_GLOBAL": true, "GIT_CONFIG_SYSTEM": true, "GIT_CONFIG_NOSYSTEM": true,
 }
 
 // gitEnv is the daemon's environment without the repository-redirecting GIT_* variables, plus the journal's settings: no
@@ -36,7 +36,7 @@ func gitEnv(environ []string) []string {
 		}
 		env = append(env, kv)
 	}
-	env = append(env, "LC_ALL=C", "GIT_TERMINAL_PROMPT=0", "GIT_EDITOR=true",
+	env = append(env, "LC_ALL=C", "GIT_TERMINAL_PROMPT=0", "GIT_EDITOR=true", "GIT_ALLOW_PROTOCOL=file:https:http:ssh:git",
 		"GIT_AUTHOR_NAME=Purdex journal", "GIT_AUTHOR_EMAIL=journal@purdex.local",
 		"GIT_COMMITTER_NAME=Purdex journal", "GIT_COMMITTER_EMAIL=journal@purdex.local")
 	if !sshSet {
