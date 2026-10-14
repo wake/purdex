@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -113,7 +114,7 @@ func (g *Git) With(ctx context.Context, p Project, fn func(purdexDir string) err
 }
 
 // ensure makes p's worktree exist and returns its path. Called with the project lock held.
-func (g *Git) ensure(ctx context.Context, p Project) (string, error) {
+func (g *Git) ensure(ctx context.Context, p Project) (_ string, err error) {
 	wt := WorktreeDir(g.Dir, p)
 	if _, err := os.Stat(filepath.Join(wt, ".git")); err == nil {
 		g.remember(p.ID)
@@ -122,8 +123,23 @@ func (g *Git) ensure(ctx context.Context, p Project) (string, error) {
 	if p.CommonDir == "" || !g.gitSupportsOrphan(ctx) {
 		return wt, os.MkdirAll(wt, 0o755)
 	}
-	if entries, err := os.ReadDir(wt); err == nil && len(entries) > 0 {
-		return "", fmt.Errorf("journal: %s exists and is not a worktree", wt)
+	// A folder left by the files-only mode (git was too old or unreadable then) is moved aside for the worktree to take its
+	// place, and its journal folder is moved in after; if the worktree cannot be made, the folder is put back.
+	plain := ""
+	if entries, rerr := os.ReadDir(wt); rerr == nil && len(entries) > 0 {
+		plain = wt + ".plain"
+		if _, serr := os.Stat(plain); serr == nil {
+			return "", fmt.Errorf("journal: %s exists and is not a worktree, and %s is in the way", wt, plain)
+		}
+		if err := os.Rename(wt, plain); err != nil {
+			return "", err
+		}
+		defer func() {
+			if err != nil {
+				_ = os.RemoveAll(wt)
+				_ = os.Rename(plain, wt)
+			}
+		}()
 	}
 	repo := []string{"--git-dir=" + p.CommonDir}
 	_, _ = g.git(ctx, "", 20*time.Second, append(repo, "worktree", "prune")...)
@@ -134,7 +150,6 @@ func (g *Git) ensure(ctx context.Context, p Project) (string, error) {
 		_, err := g.git(ctx, "", 30*time.Second, append(append(repo, "worktree", "add"), args...)...)
 		return err
 	}
-	var err error
 	switch {
 	case g.refExists(ctx, repo, "refs/heads/"+Branch):
 		err = add(wt, Branch) // the branch survives its worktree's folder
@@ -152,8 +167,34 @@ func (g *Git) ensure(ctx context.Context, p Project) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if plain != "" {
+		if err := adoptPlain(filepath.Join(plain, ".purdex"), filepath.Join(wt, ".purdex")); err != nil {
+			g.logf("journal: moving the files-only journal of project %s into its worktree failed, the files stay in %s: %v", p.ID, plain, err)
+		} else {
+			_ = os.RemoveAll(plain)
+		}
+	}
 	g.remember(p.ID)
 	return wt, nil
+}
+
+// adoptPlain moves the files of src into dst: a file dst does not have is moved; one it has (the remote branch's) wins,
+// and the local copy is kept beside it as `<name>.plain`. Nothing is overwritten or lost.
+func adoptPlain(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, path)
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		if _, err := os.Stat(target); err == nil {
+			target += ".plain"
+		}
+		return os.Rename(path, target)
+	})
 }
 
 // fetchBranch fetches origin's Branch into refs/remotes/origin/ and reports whether it exists. No origin is a

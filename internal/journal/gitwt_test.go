@@ -226,3 +226,72 @@ func TestGit_WithRunsOneProjectAtATime(t *testing.T) {
 		t.Fatal("two callbacks of one project ran at once")
 	}
 }
+
+// A folder the files-only mode wrote (git was too old or unreadable) becomes the worktree's journal once git works again,
+// instead of blocking the project for good (codex R1).
+func TestGit_AFilesOnlyFolderIsMovedIntoTheWorktreeWhenGitWorksAgain(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.g.version = func(context.Context) (int, int, error) { return 2, 41, nil }
+	f.writeJournal(t, "a.md", "written without git\n")
+	f.g.version = nil
+	var seen string
+	if err := f.g.With(ctx, f.p, func(d string) error {
+		b, err := os.ReadFile(filepath.Join(d, "a.md"))
+		seen = string(b)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wt := WorktreeDir(f.g.Dir, f.p)
+	if seen != "written without git\n" {
+		t.Fatalf("a.md = %q", seen)
+	}
+	if _, err := os.Stat(wt + ".plain"); err == nil {
+		t.Fatal("the moved-aside folder is still there")
+	}
+	if err := f.g.commitProject(ctx, f.p); err != nil {
+		t.Fatal(err)
+	}
+	if got := tgit(t, wt, "show", "--name-only", "--format=", "HEAD"); got != ".purdex/a.md" {
+		t.Fatalf("committed files = %q", got)
+	}
+}
+
+// Where the remote branch already has a file of that name, the remote's wins and the local copy is kept beside it.
+func TestGit_AMovedFilesOnlyFolderNeverOverwritesTheRemoteBranchsFiles(t *testing.T) {
+	f := newFixture(t)
+	f.otherHostCommit(t, "a.md", "remote\n")
+	f.g.version = func(context.Context) (int, int, error) { return 2, 41, nil }
+	f.writeJournal(t, "a.md", "local\n")
+	f.writeJournal(t, "b.md", "only local\n")
+	f.g.version = nil
+	if err := f.g.With(context.Background(), f.p, func(d string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(WorktreeDir(f.g.Dir, f.p), ".purdex")
+	for name, want := range map[string]string{"a.md": "remote\n", "a.md.plain": "local\n", "b.md": "only local\n"} {
+		if b, err := os.ReadFile(filepath.Join(dir, name)); err != nil || string(b) != want {
+			t.Errorf("%s = %q, %v; want %q", name, b, err, want)
+		}
+	}
+}
+
+// If the worktree cannot be made, the files-only folder is put back exactly as it was.
+func TestGit_AFailedMigrationPutsTheFilesOnlyFolderBack(t *testing.T) {
+	f := newFixture(t)
+	f.g.version = func(context.Context) (int, int, error) { return 2, 41, nil }
+	f.writeJournal(t, "a.md", "keep me\n")
+	f.g.version = nil
+	tgit(t, f.root, "remote", "set-url", "origin", filepath.Join(filepath.Dir(f.root), "nowhere.git"))
+	if err := f.g.With(context.Background(), f.p, func(string) error { return nil }); err == nil {
+		t.Fatal("With succeeded with an unreachable origin")
+	}
+	wt := WorktreeDir(f.g.Dir, f.p)
+	if b, err := os.ReadFile(filepath.Join(wt, ".purdex", "a.md")); err != nil || string(b) != "keep me\n" {
+		t.Fatalf("a.md = %q, %v", b, err)
+	}
+	if _, err := os.Stat(wt + ".plain"); err == nil {
+		t.Fatal("a moved-aside copy is left behind")
+	}
+}
