@@ -534,6 +534,11 @@ const movedAs = (id: string) => () => ({ ...MOVED, result: { ...MOVED.result, ba
 // Claude Code lists the background tasks at every Stop; events.js passes them on to the lease hook.
 const stop = ($: any, b: { tasks: any[] }) => $.classic.Stop({ stop_hook_active: false, background_tasks: b.tasks.map((t) => ({ description: 'x', ...t })), session_crons: [] } as any)
 const pause = (ms: number) => new Promise((res) => setTimeout(res, ms))
+// The task is listed running at one Stop and gone at the next: it ended.
+const taskEnds = async ($: any, id: string) => {
+  await stop($, { tasks: [{ id, type: 'shell', status: 'running' }] })
+  await stop($, { tasks: [] })
+}
 const releasesOf = (r: Rig) => r.calls.filter((a) => sub(a) === 'release')
 const settle = async ($: any, r: Rig, n: number) => {
   for (let i = 0; i < 40 && releasesOf(r).length < n; i++) await pause(50)
@@ -561,21 +566,25 @@ test('a command moved to the background keeps its lease until the task ends', as
   expect(releasesOf(r).length).toBe(1)
 })
 
-// Past 20 handed-over leases the oldest is released at once instead of being forgotten. (M: just delete the handle.)
-test('the 21st handed-over lease releases the oldest instead of losing it', async ($, on) => {
-  let n = 0
-  const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : ok('{}')), () => ({ ...MOVED, result: { ...MOVED.result, backgroundTaskId: 'cap' + ++n } }))
-  for (let i = 0; i < 21; i++) await bash($, 'pnpm run build')
+// A Stop whose list was taken before the task was registered must not release a lease whose process still runs: a
+// task is taken to have ended once it was seen running, or a few seconds after the hand-over. (M: release on absence.)
+test('a Stop that does not list the new task yet does not release; one that saw it running and then misses it does', async ($, on) => {
+  const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : ok('{}')), movedAs('bt5'))
+  await bash($, 'pnpm run build')
+  await stop($, { tasks: [] }) // taken too early
+  await pause(200)
+  expect(releasesOf(r)).toEqual([])
+  await stop($, { tasks: [{ id: 'bt5', type: 'shell', status: 'running' }] })
+  await stop($, { tasks: [] })
   await settle($, r, 1)
-  const rels = releasesOf(r)
-  expect(rels.length).toBe(1)
-  expect(rels[0]).toEqual(['pdx', 'lease', 'release', '--client-id', arg(r.calls.find((a) => sub(a) === 'acquire')!, '--client-id')]) // the first one's, without a notice
+  expect(releasesOf(r).length).toBe(1)
 })
 
 test('a task that is gone from the list releases the lease too', async ($, on) => {
   const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : ok('{}')), movedAs('bt2'))
   await bash($, 'pnpm run build')
-  await stop($, { tasks: [{ id: 'other', type: 'shell', status: 'running' }], crons: 0 })
+  await stop($, { tasks: [{ id: 'bt2', type: 'shell', status: 'running' }, { id: 'other', type: 'shell', status: 'running' }] })
+  await stop($, { tasks: [{ id: 'other', type: 'shell', status: 'running' }] })
   await settle($, r, 1)
   expect(releasesOf(r).length).toBe(1)
 })
@@ -585,7 +594,7 @@ test('the final notice of a background release goes into the next Bash result', 
   const notice = '有其他 session 在排隊，下一個指令會是這次的最後一個；之後還要跑請重新排隊。'
   const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : ok(JSON.stringify({ state: 'ended', notice }))), movedAs('bt3'))
   await bash($, 'pnpm run build')
-  await stop($, { tasks: [], crons: 0 })
+  await taskEnds($, 'bt3')
   await settle($, r, 1)
   await pause(100)
   const next = await bash($, 'ls')
@@ -593,10 +602,26 @@ test('the final notice of a background release goes into the next Bash result', 
   expect((await bash($, 'ls')).context).toBeUndefined() // once
 })
 
+// The notice is about one session's command: another session's Bash, a subagent's and a deny do not get it.
+// (M: hand it to whoever calls next.)
+test('a background notice goes only to the session it is about, and not to a subagent', async ($, on) => {
+  const notice = '有其他 session 在排隊，下一個指令會是這次的最後一個；之後還要跑請重新排隊。'
+  const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : ok(JSON.stringify({ state: 'ended', notice }))), movedAs('bt6'))
+  await bash($, 'pnpm run build') // session sess-1
+  await taskEnds($, 'bt6')
+  await settle($, r, 1)
+  await pause(100)
+  expect((await bash($, 'ls', { agentId: 'agent-7' })).context).toBeUndefined()
+  r.sid.v = 'sess-2'
+  expect((await bash($, 'ls')).context).toBeUndefined()
+  r.sid.v = 'sess-1'
+  expect((await bash($, 'ls')).context).toEqual([notice])
+})
+
 test('a background release that does not answer is tried again, then let go without a notice', async ($, on) => {
   const r = rig(on, (a) => (sub(a) === 'acquire' ? ok(GRANT()) : { deny: 'release failed' }), movedAs('bt4'))
   await bash($, 'pnpm run build')
-  await stop($, { tasks: [], crons: 0 })
+  await taskEnds($, 'bt4')
   await settle($, r, 3)
   expect(releasesOf(r).map((a) => a.includes('--notice'))).toEqual([true, true, false])
 })

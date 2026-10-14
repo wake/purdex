@@ -529,10 +529,13 @@ const withNotes = (r, notes) => (notes.length ? { ...r, context: [...(r.context 
 
 // bgLeases are the leases of commands Claude Code moved to the background: background task id → what releases it.
 const bgLeases = new Map()
-const BG_LEASES_MAX = 20
-// A final notice that arrived with a release nobody could read it at (the task ended between turns) waits here and goes
-// into the next Bash result.
+// A task that is not listed is taken to have ended only once it was seen running, or this long after the hand-over (a
+// Stop whose list was taken before the task was registered must not release a lease whose process is still running).
+const BG_UNSEEN_MS = 5_000
+// A final notice that arrived with a release nobody could read it at (the task ended between turns) waits here, with the
+// session whose command it is about, and goes into that session's next Bash result.
 const pendingNotices = []
+const PENDING_NOTICES_MAX = 20
 
 // backgroundTaskOf is the id of the background task a Bash result says its command became, or ''.
 function backgroundTaskOf(r) {
@@ -547,7 +550,8 @@ export function leaseBackgroundChanged($, background) {
   if (bgLeases.size === 0) return
   const running = new Set(((background && background.tasks) || []).filter((t) => t.status === 'running').map((t) => t.id))
   for (const [id, h] of [...bgLeases]) {
-    if (running.has(id)) continue
+    if (running.has(id)) { h.seen = true; continue }
+    if (!h.seen && Date.now() - h.at < BG_UNSEEN_MS) continue
     bgLeases.delete(id)
     endBackgroundLease($, h).catch(() => {})
   }
@@ -559,7 +563,20 @@ async function endBackgroundLease($, h) {
   let rel = await releaseLease($, h.cfg, h.clientId, h.answer, true)
   if (!rel.ok) rel = await releaseLease($, h.cfg, h.clientId, h.answer, true)
   if (!rel.ok) await releaseLease($, h.cfg, h.clientId, h.answer, false)
-  if (rel.notice) pendingNotices.push(rel.notice)
+  if (rel.notice) {
+    pendingNotices.push({ sid: h.sid, text: rel.notice })
+    while (pendingNotices.length > PENDING_NOTICES_MAX) pendingNotices.shift()
+  }
+}
+
+// takeNotices removes and returns the waiting notices of one session.
+async function takeNotices($) {
+  if (pendingNotices.length === 0) return []
+  const sid = await bounded($, () => $.session.id())
+  if (typeof sid !== 'string' || !sid) return []
+  const mine = pendingNotices.filter((n) => n.sid === sid).map((n) => n.text)
+  for (let i = pendingNotices.length - 1; i >= 0; i--) if (pendingNotices[i].sid === sid) pendingNotices.splice(i, 1)
+  return mine
 }
 
 // leaseCall is one foreground Bash call. A call that is not heavy or is already wrapped in `pdx lease` goes
@@ -612,14 +629,7 @@ async function leaseCall($, e, next) {
     const taskId = backgroundTaskOf(r)
     if (taskId) {
       done = true
-      bgLeases.set(taskId, { cfg, clientId, answer })
-      // Past the cap the oldest is let go now, not forgotten: a handle that is dropped can never be released.
-      while (bgLeases.size > BG_LEASES_MAX) {
-        const oldest = bgLeases.keys().next().value
-        const h = bgLeases.get(oldest)
-        bgLeases.delete(oldest)
-        releaseLease($, h.cfg, h.clientId, h.answer, false).catch(() => {})
-      }
+      bgLeases.set(taskId, { cfg, clientId, answer, sid, at: Date.now(), seen: false })
       return withNotes(r, [...leaseNotes(rewritten, command, answer),
         '這個指令跑得比 Claude Code 的前景時限久，被移到背景；它還在跑，主機資源會留給它，等它結束才放掉。'])
     }
@@ -684,7 +694,9 @@ export function registerLease(on) {
   })
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const r = await (e.run_in_background === true ? backgroundCall($, e, next) : leaseCall($, e, next))
-    // A notice a background release left behind goes in with the next Bash result (never into a deny).
-    return pendingNotices.length && r && typeof r === 'object' && !('deny' in r) ? withNotes(r, pendingNotices.splice(0)) : r
+    // A notice a background release left behind goes in with the next Bash result of the main conversation of the
+    // session it is about (never into a deny, never into a subagent's, never into another session's).
+    if (e.agentId || !r || typeof r !== 'object' || 'deny' in r) return r
+    return withNotes(r, await takeNotices($))
   }).catch(($, e, next) => next(e))
 }
