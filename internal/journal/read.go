@@ -39,30 +39,72 @@ func less(a, b Entry) int {
 	return strings.Compare(a.ID, b.ID)
 }
 
-// ReadUnit reads every month file (`YYYY-MM.md`) of dir and returns the entries oldest first by (at, id). A folder that is
-// not there is an empty unit; other files are left alone; an id that appears in more than one file is one entry (the
-// older file's). A file that cannot be read is an error, a comment that does not parse is skipped by Parse.
-func ReadUnit(dir string) ([]Entry, error) {
+// Limits on what ReadUnit takes in: the journal branch can come from a remote, so a month file is not trusted to be small or
+// to be a file at all. Variables so a test can lower them.
+var (
+	maxMonthBytes int64 = 16 << 20 // one month file
+	maxUnitBytes  int64 = 64 << 20 // a unit's month files together
+)
+
+// Skipped is a month file ReadUnit left out of the unit, and why.
+type Skipped struct{ Name, Reason string }
+
+// ReadUnit reads the month files (`YYYY-MM.md`) of dir and returns the entries oldest first by (at, id), and the month files
+// it left out. A folder that is not there is an empty unit; other files are left alone; an id that appears in more than one
+// file is one entry (the older file's). A month file that is not a regular file (a symlink could lead anywhere, even to a
+// device), is over maxMonthBytes, or cannot be read is skipped and reported, never a reason to hide the other months; when
+// the months together are over maxUnitBytes the oldest are left out. Only a folder that cannot be listed is an error.
+func ReadUnit(dir string) ([]Entry, []Skipped, error) {
 	names, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, fmt.Errorf("journal: read %s: %w", dir, err)
+		return nil, nil, fmt.Errorf("journal: read %s: %w", dir, err)
 	}
-	var files []string
+	type month struct {
+		name string
+		size int64
+	}
+	var files []month
+	var skipped []Skipped
 	for _, n := range names {
-		if !n.IsDir() && monthFileRE.MatchString(n.Name()) {
-			files = append(files, n.Name())
+		if !monthFileRE.MatchString(n.Name()) {
+			continue
+		}
+		st, err := os.Lstat(filepath.Join(dir, n.Name()))
+		switch {
+		case err != nil:
+			skipped = append(skipped, Skipped{n.Name(), "unreadable: " + err.Error()})
+		case !st.Mode().IsRegular():
+			skipped = append(skipped, Skipped{n.Name(), "not a regular file"})
+		case st.Size() > maxMonthBytes:
+			skipped = append(skipped, Skipped{n.Name(), "too large"})
+		default:
+			files = append(files, month{n.Name(), st.Size()})
 		}
 	}
-	slices.Sort(files) // oldest month first, so a duplicate id keeps the older file's entry
+	slices.SortFunc(files, func(a, b month) int { return strings.Compare(a.name, b.name) }) // oldest month first
+	keep := make([]bool, len(files))
+	var total int64
+	for i := len(files) - 1; i >= 0; i-- { // the newest months first take the budget
+		if total+files[i].size > maxUnitBytes {
+			skipped = append(skipped, Skipped{files[i].name, "over the unit's size budget"})
+			continue
+		}
+		total += files[i].size
+		keep[i] = true
+	}
 	var all []Entry
 	seen := map[string]bool{}
-	for _, f := range files {
-		es, err := Parse(filepath.Join(dir, f))
+	for i, f := range files { // oldest first, so a duplicate id keeps the older file's entry
+		if !keep[i] {
+			continue
+		}
+		es, err := Parse(filepath.Join(dir, f.name))
 		if err != nil {
-			return nil, err
+			skipped = append(skipped, Skipped{f.name, "unreadable: " + err.Error()})
+			continue
 		}
 		for _, e := range es {
 			if !seen[e.ID] {
@@ -72,7 +114,7 @@ func ReadUnit(dir string) ([]Entry, error) {
 		}
 	}
 	slices.SortStableFunc(all, less)
-	return all, nil
+	return all, skipped, nil
 }
 
 // CursorOf is the cursor that pages to what comes before e: `<month>:<id>` (the month of e's time, the id). The month is

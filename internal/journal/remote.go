@@ -3,6 +3,7 @@ package journal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -12,6 +13,9 @@ import (
 
 // errNoRemote is "this folder has no `origin`" (a repository without one, or no repository): an answer, not a failure.
 var errNoRemote = errors.New("journal: no origin")
+
+// maxRemoteCache bounds the answers kept, so a daemon that sees many folders over a long time does not keep them all.
+var maxRemoteCache = 256
 
 var (
 	remoteMu     sync.Mutex
@@ -35,7 +39,7 @@ type cachedRemote struct {
 	at  time.Time
 }
 
-// flight is one git run that callers for the same folder wait for.
+// flight is one git run that every caller for the same folder waits for.
 type flight struct {
 	done chan struct{}
 	url  string
@@ -67,41 +71,67 @@ func classifyRemote(ctx context.Context, err error) error {
 // RemoteURL is the https URL of the repository dir belongs to, from its `origin`, for linking `#123` refs
 // (`https://github.com/owner/repo`): without credentials, user, port or `.git`. "" when there is no origin, or the origin
 // is a local path, or git could not answer. The answer is kept for ten minutes per folder (a missing origin included; a
-// failure that is not "no origin" is not), and callers that come while a folder's git is running share that run, so a page
-// that loads many refs never forks git more than once for a folder.
+// failure that is not "no origin" is not; at most maxRemoteCache answers are kept). Callers that come while a folder's git
+// is running share that run, so a page that loads many refs never forks git more than once for a folder. The run belongs
+// to none of the callers: it ends by its own timeout, and a caller whose context ends stops waiting without affecting the
+// others.
 func RemoteURL(ctx context.Context, dir string) string {
 	remoteMu.Lock()
 	if c, ok := remoteCache[dir]; ok && now().Sub(c.at) < cacheTTL {
 		remoteMu.Unlock()
 		return c.url
 	}
-	if f, ok := remoteFlight[dir]; ok { // someone is asking git already: wait for that answer
+	f, running := remoteFlight[dir]
+	if !running {
+		f = &flight{done: make(chan struct{})}
+		remoteFlight[dir] = f
+		go f.run(context.Background(), dir)
+	}
+	remoteMu.Unlock()
+	select {
+	case <-f.done:
+		return f.url
+	case <-ctx.Done():
+		return ""
+	}
+}
+
+// run asks git for dir's origin, records the answer and wakes the waiters. A panic is a failure, not an answer, and the
+// folder is not left registered as running.
+func (f *flight) run(base context.Context, dir string) {
+	var raw string
+	var err error
+	defer func() {
+		if r := recover(); r != nil {
+			raw, err = "", fmt.Errorf("journal: remote url of %s: %v", dir, r)
+		}
+		url := ""
+		if n := NormalizeRemote(raw); err == nil && n != "" && !strings.HasPrefix(n, "file:") { // no origin: whatever came with it is not one
+			url = "https://" + n
+		}
+		remoteMu.Lock()
+		delete(remoteFlight, dir)
+		if err == nil || errors.Is(err, errNoRemote) {
+			pruneRemoteCacheLocked(now())
+			remoteCache[dir] = cachedRemote{url: url, at: now()}
+		}
 		remoteMu.Unlock()
-		select {
-		case <-f.done:
-			return f.url
-		case <-ctx.Done():
-			return ""
+		f.url = url
+		close(f.done)
+	}()
+	ctx, cancel := context.WithTimeout(base, gitTimeout) // base is no caller's context: the run ends by its own timeout
+	defer cancel()
+	raw, err = runRemote(ctx, dir)
+}
+
+// pruneRemoteCacheLocked drops the answers that have expired, and starts over when what is left is still at the cap.
+func pruneRemoteCacheLocked(at time.Time) {
+	for k, c := range remoteCache {
+		if at.Sub(c.at) >= cacheTTL {
+			delete(remoteCache, k)
 		}
 	}
-	f := &flight{done: make(chan struct{})}
-	remoteFlight[dir] = f
-	remoteMu.Unlock()
-
-	gctx, cancel := context.WithTimeout(ctx, gitTimeout)
-	raw, err := runRemote(gctx, dir)
-	cancel()
-	url := ""
-	if n := NormalizeRemote(raw); err == nil && n != "" && !strings.HasPrefix(n, "file:") { // no origin: whatever came with it is not one
-		url = "https://" + n
+	if len(remoteCache) >= maxRemoteCache {
+		clear(remoteCache)
 	}
-	remoteMu.Lock()
-	delete(remoteFlight, dir)
-	if err == nil || errors.Is(err, errNoRemote) {
-		remoteCache[dir] = cachedRemote{url: url, at: now()}
-	}
-	remoteMu.Unlock()
-	f.url = url
-	close(f.done)
-	return url
 }

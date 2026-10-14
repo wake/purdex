@@ -47,7 +47,7 @@ func TestReadUnit_SortedByAtThenIDAcrossMonths(t *testing.T) {
 		Entry{ID: "a", Kind: KindComm, At: at(time.November, 3, 11), Text: "tie, written second"},
 		Entry{ID: "oct", Kind: KindExec, At: at(time.October, 30, 8), Text: "the month before"},
 	)
-	got, err := ReadUnit(dir)
+	got, _, err := ReadUnit(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestReadUnit_SortKeyIsMilliseconds(t *testing.T) {
 		Entry{ID: "b", Kind: KindComm, At: base.Add(100 * time.Microsecond), Text: "earlier by nanoseconds, later by id"},
 		Entry{ID: "a", Kind: KindComm, At: base.Add(900 * time.Microsecond), Text: "later by nanoseconds, earlier by id"},
 	)
-	got, err := ReadUnit(dir)
+	got, _, err := ReadUnit(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestReadUnit_SortKeyIsMilliseconds(t *testing.T) {
 // A folder that is not there is an empty unit; files that are not month files are left alone; an id that sits in two month
 // files is one entry.
 func TestReadUnit_MissingFolderOtherFilesAndDuplicates(t *testing.T) {
-	if got, err := ReadUnit(filepath.Join(t.TempDir(), "nope")); err != nil || len(got) != 0 {
+	if got, skipped, err := ReadUnit(filepath.Join(t.TempDir(), "nope")); err != nil || len(got) != 0 || len(skipped) != 0 {
 		t.Fatalf("missing folder: %v, %v", got, err)
 	}
 	dir := unitDir(t,
@@ -95,7 +95,7 @@ func TestReadUnit_MissingFolderOtherFilesAndDuplicates(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "2026-13.md"), []byte("not a month either"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := ReadUnit(dir)
+	got, _, err := ReadUnit(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
