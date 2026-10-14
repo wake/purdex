@@ -87,7 +87,6 @@ type Module struct {
 	closes         *closeCoalescer // closed badge cards waiting for their 2 s window (badge_close.go); fires into the sender's queue
 	holds          holdSet
 	ap             approvalPush               // the state of each approval push (approval_push.go)
-	lateAfter      time.Duration              // how long a card waits at the computer before it is pushed; 0 = 60 s. A test seam
 	apClock        func() time.Time           // a test seam: nil = time.Now
 	apAfterRead    func(id string)            // a test seam: runs between the late check's read of the card and its push path
 	apAfterReserve func(id string)            // a test seam: runs after a push path reserved the card, before it enqueues

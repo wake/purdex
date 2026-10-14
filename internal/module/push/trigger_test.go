@@ -110,6 +110,7 @@ func anonOf(a team.Approval) team.Approval {
 // triggerEnv is a ready module with a fake APNs and a fake approval feed, started.
 type triggerEnv struct {
 	*env
+	timers *holdFakes // the late-push hold timers (approval_push_test.go); nil = the real ones
 	apns   *fakeAPNS
 	events *fakeEvents
 }

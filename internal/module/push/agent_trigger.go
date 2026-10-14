@@ -186,10 +186,14 @@ func jsString(v any) string {
 	}
 }
 
+// holdTimer is what a hold needs of a timer.
+type holdTimer interface{ Stop() bool }
+
 // holdSet is the timers of waiting events being held; stopAll cancels them at Stop.
 type holdSet struct {
 	mu      sync.Mutex
-	timers  map[*time.Timer]struct{}
+	timers  map[holdTimer]struct{}
+	timerFn func(d time.Duration, fn func()) holdTimer // a test seam: nil = a real time.AfterFunc
 	stopped bool
 }
 
@@ -201,10 +205,14 @@ func (h *holdSet) after(d time.Duration, fn func()) bool {
 		return false
 	}
 	if h.timers == nil {
-		h.timers = map[*time.Timer]struct{}{}
+		h.timers = map[holdTimer]struct{}{}
 	}
-	var t *time.Timer
-	t = time.AfterFunc(d, func() {
+	var t holdTimer
+	mk := h.timerFn
+	if mk == nil {
+		mk = func(d time.Duration, fn func()) holdTimer { return time.AfterFunc(d, fn) }
+	}
+	t = mk(d, func() {
 		h.mu.Lock()
 		delete(h.timers, t)
 		stopped := h.stopped

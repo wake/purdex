@@ -82,12 +82,7 @@ func shortID(id string) string {
 	return id
 }
 
-func (m *Module) lateDelay() time.Duration {
-	if m.lateAfter > 0 {
-		return m.lateAfter
-	}
-	return lateAfterDefault
-}
+func (m *Module) lateDelay() time.Duration { return lateAfterDefault }
 
 func (m *Module) apNow() time.Time {
 	if m.apClock != nil {
@@ -133,25 +128,36 @@ func (m *Module) openedApproval(a team.Approval, pa push.Approval) {
 		logApproval(a, "not pushed: at_computer")
 		return
 	}
-	// Held: record it before the timer exists, so the callback always finds the state.
-	p.mu.Lock()
-	if e := p.states[a.ID]; e != nil || !p.running || p.gen != gen {
-		p.mu.Unlock() // already known (a repeated opened, or closed already): nothing to hold
-		return
-	}
-	p.states[a.ID] = &apEntry{state: apHeld, at: m.apNow()}
-	p.mu.Unlock()
-	if !m.holds.after(m.lateDelay(), func() { m.lateApproval(a, pa, gen) }) {
-		p.mu.Lock()
-		if e := p.states[a.ID]; e != nil && e.state == apHeld {
-			delete(p.states, a.ID)
-		}
-		p.mu.Unlock()
+	if !m.holdApproval(a, pa, gen) {
 		logApproval(a, "hold set full: pushed at once")
 		m.pushApproval(a, pa, gen, false, true)
 		return
 	}
 	logApproval(a, "held 60s (at_computer)")
+}
+
+// holdApproval puts a card that has not been pushed (unknown, or reserved by the caller's own push path) into held and
+// schedules its late check. False when the hold set cannot take it (full, or stopping): the card is forgotten and the caller
+// pushes at once. True also when there is nothing to hold (a repeated opened, closed already, an earlier run).
+func (m *Module) holdApproval(a team.Approval, pa push.Approval, gen uint64) bool {
+	p := &m.ap
+	p.mu.Lock()
+	e := p.states[a.ID]
+	if !p.running || p.gen != gen || (e != nil && e.state != apPushing) {
+		p.mu.Unlock()
+		return true
+	}
+	p.states[a.ID] = &apEntry{state: apHeld, at: m.apNow()} // recorded before the timer exists, so the callback finds it
+	p.mu.Unlock()
+	if m.holds.after(m.lateDelay(), func() { m.lateApproval(a, pa, gen) }) {
+		return true
+	}
+	p.mu.Lock()
+	if e := p.states[a.ID]; e != nil && e.state == apHeld {
+		delete(p.states, a.ID)
+	}
+	p.mu.Unlock()
+	return false
 }
 
 // lateApproval is the 60 s check: still running, still held, the card still open (read again) -> pushed, whatever the
@@ -260,8 +266,7 @@ func (m *Module) pushApproval(a team.Approval, pa push.Approval, gen uint64, lat
 	}
 	if !skipPresence {
 		if name := tmuxSessionOf(a.Origin.Tmux); name != "" && m.presence.ShowsName(name) {
-			settle(prev)
-			logApproval(a, "not pushed: shows_name")
+			m.deferToLate(a, pa, gen, prev, settle, "shows_name")
 			return
 		}
 	}
@@ -278,8 +283,7 @@ func (m *Module) pushApproval(a team.Approval, pa push.Approval, gen uint64, lat
 	// Approval: the sender resolves session_code (#2235) from its one snapshot; nothing here may touch tmux.
 	ja := &JobApproval{ID: a.ID, TmuxSession: tmuxSessionOf(a.Origin.Tmux), CreatedAt: a.CreatedAt}
 	if !skipPresence && m.presence.AtComputer() { // the person came back since the check in openedApproval: nothing is told
-		settle(prev)
-		logApproval(a, "not pushed: at_computer")
+		m.deferToLate(a, pa, gen, prev, settle, "at_computer")
 		return
 	}
 	// Rule 8 (§4.4): the ask counts as pushed only when its push was actually queued for the devices.
@@ -295,4 +299,21 @@ func (m *Module) pushApproval(a team.Approval, pa push.Approval, gen uint64, lat
 	}
 	settle(prev)
 	logApproval(a, "not pushed: queue_full")
+}
+
+// deferToLate is the answer of the immediate path to "a person is at the computer now" / "a Mac shows this session": the
+// same as at the opening, wait for the late check and push then if the card is still open (a hook_ask keeps today's rule
+// and is not pushed). Called with the card reserved (pushing) by pushApproval; a full hold set pushes at once.
+func (m *Module) deferToLate(a team.Approval, pa push.Approval, gen uint64, prev apState, settle func(apState), why string) {
+	if a.Kind == team.KindHookAsk {
+		settle(prev)
+		logApproval(a, "not pushed: "+why)
+		return
+	}
+	if m.holdApproval(a, pa, gen) {
+		logApproval(a, "held 60s ("+why+")")
+		return
+	}
+	logApproval(a, "hold set full: pushed at once")
+	m.pushApproval(a, pa, gen, false, true)
 }
