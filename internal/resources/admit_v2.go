@@ -46,7 +46,7 @@ type V2Waiter struct {
 //
 //	zone     none running   falling   flat      rising or unknown trend
 //	normal   grant          grant     grant     observe (rising)
-//	warning  grant          grant     observe   observe (rising)
+//	warning  grant          grant     grant     observe (rising)   (flat is granted since P2e)
 //	danger   observe        observe   observe   observe
 //	unknown  grant          grant     grant     grant        (fail open)
 //

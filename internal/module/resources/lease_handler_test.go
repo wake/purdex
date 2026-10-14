@@ -32,7 +32,7 @@ func newRouteFix(t *testing.T, mode string) *routeFix {
 	return f
 }
 
-// holdBack puts the host in the warning zone with a flat trend: a request behind
+// holdBack puts the host in the warning zone with a rising trend: a request behind
 // a running lease waits (spec D-3′ table), one with nothing running does not.
 func (f *routeFix) holdBack() {
 	f.setHost(resources.HostUse{Measured: 10, NCPU: 10, Load1: 1, Zone: "warning", Trend: "rising"})
@@ -87,7 +87,7 @@ func TestLeases_GrantImmediatelyWhenFits(t *testing.T) {
 	}
 }
 
-// B is held back behind A (warning zone, flat): it waits at position 1; A's
+// B is held back behind A (warning zone, rising): it waits at position 1; A's
 // release (DELETE) wakes B's long poll, which answers granted well before its
 // wait runs out.
 func TestLeases_WaitThenGrantOnRelease(t *testing.T) {
