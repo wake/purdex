@@ -17,7 +17,15 @@ const (
 	ReasonBehind      V2Reason = "behind"       // not the head of the queue
 	ReasonCut         V2Reason = "cut"          // the head is held back by a baseline or disk guard
 	ReasonParked      V2Reason = "parked"       // parked: keeps its place, never granted
+	ReasonLoad        V2Reason = "load"         // a lease running and load1 at the load_cap_pct ceiling
 )
+
+// Load is the host's cpu load as AdmitV2 reads it: the same sample the zone was judged on. NCPU 0 is unknown, and
+// an unknown load never holds a waiter.
+type Load struct {
+	Load1 float64
+	NCPU  int
+}
 
 // V2Waiter is one waiting request as AdmitV2 sees it.
 type V2Waiter struct {
@@ -50,10 +58,14 @@ type V2Waiter struct {
 //	danger   observe        observe   observe   observe
 //	unknown  grant          grant     grant     grant        (fail open)
 //
+// In the normal and warning zones a lease running (running) and load1 at or above the load_cap_pct ceiling make
+// the head wait (ReasonLoad), whatever the trend; nothing running still grants one, so a host whose base load sits
+// above the ceiling is not closed for good.
+//
 // The returned reasons name every waiter that was not granted; the granted
 // one is absent. gapLeft is what remains of the gap at now, also when it did
 // not decide the pass.
-func AdmitV2(zone Zone, trend Trend, running bool, lastGrant time.Time, waiters []V2Waiter, now time.Time, s Settings) (grant string, gapLeft time.Duration, reasons map[string]V2Reason) {
+func AdmitV2(zone Zone, trend Trend, running bool, load Load, lastGrant time.Time, waiters []V2Waiter, now time.Time, s Settings) (grant string, gapLeft time.Duration, reasons map[string]V2Reason) {
 	if !lastGrant.IsZero() {
 		gapLeft = max(lastGrant.Add(s.Gap()).Sub(now), 0)
 	}
@@ -70,7 +82,7 @@ func AdmitV2(zone Zone, trend Trend, running bool, lastGrant time.Time, waiters 
 			reasons[w.ID] = ReasonBehind
 		default:
 			headSeen = true
-			if r, ok := headReason(w, zone, trend, running, gapLeft); ok {
+			if r, ok := headReason(w, zone, trend, running, load, gapLeft, s); ok {
 				reasons[w.ID] = r
 			} else {
 				grant = w.ID
@@ -81,12 +93,17 @@ func AdmitV2(zone Zone, trend Trend, running bool, lastGrant time.Time, waiters 
 }
 
 // headReason is why the head waits, or ok = false when it is granted.
-func headReason(w V2Waiter, zone Zone, trend Trend, running bool, gapLeft time.Duration) (V2Reason, bool) {
+func headReason(w V2Waiter, zone Zone, trend Trend, running bool, load Load, gapLeft time.Duration, s Settings) (V2Reason, bool) {
 	switch {
 	case w.Cut:
 		return ReasonCut, true
 	case gapLeft > 0:
 		return ReasonGap, true
+	}
+	if running && (zone == ZoneNormal || zone == ZoneWarning) {
+		if limit := s.LoadCap(load.NCPU); limit > 0 && load.Load1 >= limit {
+			return ReasonLoad, true
+		}
 	}
 	switch zone {
 	case ZoneNormal:

@@ -45,7 +45,7 @@ func TestAdmitV2_Table(t *testing.T) {
 		{"unknown zone fails open, none running", ZoneUnknown, TrendUnknown, false, true, ""},
 		{"unknown zone fails open, rising", ZoneUnknown, TrendRising, true, true, ""},
 	} {
-		grant, gapLeft, reasons := AdmitV2(c.zone, c.trend, c.running, longAgo, []V2Waiter{v2w("a", 5)}, v2Now, s)
+		grant, gapLeft, reasons := AdmitV2(c.zone, c.trend, c.running, Load{}, longAgo, []V2Waiter{v2w("a", 5)}, v2Now, s)
 		assert.Zero(t, gapLeft, c.name)
 		if c.grant {
 			assert.Equal(t, "a", grant, c.name)
@@ -62,24 +62,24 @@ func TestAdmitV2_GapBoundary(t *testing.T) {
 	s := DefaultSettings()
 	w := []V2Waiter{v2w("a", 5)}
 
-	grant, gapLeft, reasons := AdmitV2(ZoneNormal, TrendFlat, false, v2Now.Add(-29900*time.Millisecond), w, v2Now, s)
+	grant, gapLeft, reasons := AdmitV2(ZoneNormal, TrendFlat, false, Load{}, v2Now.Add(-29900*time.Millisecond), w, v2Now, s)
 	assert.Empty(t, grant)
 	assert.Equal(t, 100*time.Millisecond, gapLeft)
 	assert.Equal(t, map[string]V2Reason{"a": ReasonGap}, reasons)
 
-	grant, gapLeft, reasons = AdmitV2(ZoneNormal, TrendFlat, false, v2Now.Add(-30*time.Second), w, v2Now, s)
+	grant, gapLeft, reasons = AdmitV2(ZoneNormal, TrendFlat, false, Load{}, v2Now.Add(-30*time.Second), w, v2Now, s)
 	assert.Equal(t, "a", grant)
 	assert.Zero(t, gapLeft)
 	assert.Empty(t, reasons)
 
 	// A gap of 0 turns it off.
 	zero := Settings{GapS: intp(0)}.Effective()
-	grant, _, _ = AdmitV2(ZoneNormal, TrendFlat, false, v2Now, w, v2Now, zero)
+	grant, _, _ = AdmitV2(ZoneNormal, TrendFlat, false, Load{}, v2Now, w, v2Now, zero)
 	assert.Equal(t, "a", grant)
 
 	// The gap is a setting.
 	long := Settings{GapS: intp(120)}.Effective()
-	grant, gapLeft, _ = AdmitV2(ZoneNormal, TrendFlat, false, v2Now.Add(-100*time.Second), w, v2Now, long)
+	grant, gapLeft, _ = AdmitV2(ZoneNormal, TrendFlat, false, Load{}, v2Now.Add(-100*time.Second), w, v2Now, long)
 	assert.Empty(t, grant)
 	assert.Equal(t, 20*time.Second, gapLeft)
 }
@@ -88,7 +88,7 @@ func TestAdmitV2_GapBoundary(t *testing.T) {
 // the caller passes nothing running, only the old grant time.
 func TestAdmitV2_GapCountsFromAnEndedGrant(t *testing.T) {
 	s := DefaultSettings()
-	grant, gapLeft, reasons := AdmitV2(ZoneNormal, TrendFlat, false, v2Now.Add(-5*time.Second),
+	grant, gapLeft, reasons := AdmitV2(ZoneNormal, TrendFlat, false, Load{}, v2Now.Add(-5*time.Second),
 		[]V2Waiter{v2w("a", 20)}, v2Now, s)
 	assert.Empty(t, grant)
 	assert.Equal(t, 25*time.Second, gapLeft)
@@ -97,7 +97,7 @@ func TestAdmitV2_GapCountsFromAnEndedGrant(t *testing.T) {
 
 // No grant ever (zero time) is no gap.
 func TestAdmitV2_NoGrantEverMeansNoGap(t *testing.T) {
-	grant, gapLeft, _ := AdmitV2(ZoneNormal, TrendFlat, false, time.Time{}, []V2Waiter{v2w("a", 5)}, v2Now, DefaultSettings())
+	grant, gapLeft, _ := AdmitV2(ZoneNormal, TrendFlat, false, Load{}, time.Time{}, []V2Waiter{v2w("a", 5)}, v2Now, DefaultSettings())
 	assert.Equal(t, "a", grant)
 	assert.Zero(t, gapLeft)
 }
@@ -109,15 +109,15 @@ func TestAdmitV2_HeadOnlyAndAtMostOne(t *testing.T) {
 	// Passed out of order on purpose: the oldest created_at is the head.
 	ws := []V2Waiter{v2w("b", 20), v2w("a", 30), v2w("c", 10)}
 
-	grant, _, reasons := AdmitV2(ZoneNormal, TrendFlat, false, longAgo, ws, v2Now, s)
+	grant, _, reasons := AdmitV2(ZoneNormal, TrendFlat, false, Load{}, longAgo, ws, v2Now, s)
 	assert.Equal(t, "a", grant, "the oldest created_at goes first")
 	assert.Equal(t, map[string]V2Reason{"b": ReasonBehind, "c": ReasonBehind}, reasons)
 
-	grant, _, reasons = AdmitV2(ZoneDanger, TrendFlat, true, longAgo, ws, v2Now, s)
+	grant, _, reasons = AdmitV2(ZoneDanger, TrendFlat, true, Load{}, longAgo, ws, v2Now, s)
 	assert.Empty(t, grant)
 	assert.Equal(t, map[string]V2Reason{"a": ReasonDanger, "b": ReasonBehind, "c": ReasonBehind}, reasons)
 
-	grant, _, reasons = AdmitV2(ZoneNormal, TrendFlat, false, v2Now.Add(-time.Second), ws, v2Now, s)
+	grant, _, reasons = AdmitV2(ZoneNormal, TrendFlat, false, Load{}, v2Now.Add(-time.Second), ws, v2Now, s)
 	assert.Empty(t, grant)
 	assert.Equal(t, map[string]V2Reason{"a": ReasonGap, "b": ReasonBehind, "c": ReasonBehind}, reasons)
 }
@@ -126,7 +126,7 @@ func TestAdmitV2_HeadOnlyAndAtMostOne(t *testing.T) {
 // between two waiters of the same instant.
 func TestAdmitV2_TieKeepsCallerOrder(t *testing.T) {
 	ws := []V2Waiter{v2w("x", 10), v2w("y", 10)}
-	grant, _, _ := AdmitV2(ZoneNormal, TrendFlat, false, longAgo, ws, v2Now, DefaultSettings())
+	grant, _, _ := AdmitV2(ZoneNormal, TrendFlat, false, Load{}, longAgo, ws, v2Now, DefaultSettings())
 	assert.Equal(t, "x", grant)
 }
 
@@ -138,24 +138,24 @@ func TestAdmitV2_ParkedHeadIsSkipped(t *testing.T) {
 	p.Parked = true
 	ws := []V2Waiter{p, v2w("b", 20), v2w("c", 10)}
 
-	grant, _, reasons := AdmitV2(ZoneNormal, TrendFlat, false, longAgo, ws, v2Now, s)
+	grant, _, reasons := AdmitV2(ZoneNormal, TrendFlat, false, Load{}, longAgo, ws, v2Now, s)
 	assert.Equal(t, "b", grant)
 	assert.Equal(t, map[string]V2Reason{"a": ReasonParked, "c": ReasonBehind}, reasons)
 
 	// A parked waiter is never granted even when it is alone.
-	grant, _, reasons = AdmitV2(ZoneNormal, TrendFlat, false, longAgo, []V2Waiter{p}, v2Now, s)
+	grant, _, reasons = AdmitV2(ZoneNormal, TrendFlat, false, Load{}, longAgo, []V2Waiter{p}, v2Now, s)
 	assert.Empty(t, grant)
 	assert.Equal(t, map[string]V2Reason{"a": ReasonParked}, reasons)
 
 	// The next present head still waits for its own reason.
-	grant, _, reasons = AdmitV2(ZoneDanger, TrendFlat, true, longAgo, ws, v2Now, s)
+	grant, _, reasons = AdmitV2(ZoneDanger, TrendFlat, true, Load{}, longAgo, ws, v2Now, s)
 	assert.Empty(t, grant)
 	assert.Equal(t, map[string]V2Reason{"a": ReasonParked, "b": ReasonDanger, "c": ReasonBehind}, reasons)
 
 	// A parked one in the middle changes nothing for the others.
 	mid := v2w("m", 15)
 	mid.Parked = true
-	grant, _, reasons = AdmitV2(ZoneNormal, TrendFlat, false, longAgo, []V2Waiter{v2w("a", 30), mid, v2w("c", 10)}, v2Now, s)
+	grant, _, reasons = AdmitV2(ZoneNormal, TrendFlat, false, Load{}, longAgo, []V2Waiter{v2w("a", 30), mid, v2w("c", 10)}, v2Now, s)
 	assert.Equal(t, "a", grant)
 	assert.Equal(t, map[string]V2Reason{"m": ReasonParked, "c": ReasonBehind}, reasons)
 }
@@ -168,12 +168,12 @@ func TestAdmitV2_CutHeadStopsTheWalk(t *testing.T) {
 	cut.Cut = true
 	ws := []V2Waiter{cut, v2w("b", 20)}
 
-	grant, _, reasons := AdmitV2(ZoneNormal, TrendFlat, false, longAgo, ws, v2Now, s)
+	grant, _, reasons := AdmitV2(ZoneNormal, TrendFlat, false, Load{}, longAgo, ws, v2Now, s)
 	assert.Empty(t, grant)
 	assert.Equal(t, map[string]V2Reason{"a": ReasonCut, "b": ReasonBehind}, reasons)
 
 	// Cut wins over the gap and over a fail-open zone.
-	grant, _, reasons = AdmitV2(ZoneUnknown, TrendUnknown, false, v2Now.Add(-time.Second), ws, v2Now, s)
+	grant, _, reasons = AdmitV2(ZoneUnknown, TrendUnknown, false, Load{}, v2Now.Add(-time.Second), ws, v2Now, s)
 	assert.Empty(t, grant)
 	assert.Equal(t, ReasonCut, reasons["a"])
 
@@ -181,21 +181,21 @@ func TestAdmitV2_CutHeadStopsTheWalk(t *testing.T) {
 	// just behind.
 	later := v2w("c", 10)
 	later.Cut = true
-	grant, _, reasons = AdmitV2(ZoneNormal, TrendFlat, false, longAgo, []V2Waiter{v2w("a", 30), later}, v2Now, s)
+	grant, _, reasons = AdmitV2(ZoneNormal, TrendFlat, false, Load{}, longAgo, []V2Waiter{v2w("a", 30), later}, v2Now, s)
 	assert.Equal(t, "a", grant)
 	assert.Equal(t, map[string]V2Reason{"c": ReasonBehind}, reasons)
 
 	// A parked cut waiter is skipped like any parked one.
 	pc := v2w("p", 40)
 	pc.Cut, pc.Parked = true, true
-	grant, _, reasons = AdmitV2(ZoneNormal, TrendFlat, false, longAgo, []V2Waiter{pc, v2w("a", 30)}, v2Now, s)
+	grant, _, reasons = AdmitV2(ZoneNormal, TrendFlat, false, Load{}, longAgo, []V2Waiter{pc, v2w("a", 30)}, v2Now, s)
 	assert.Equal(t, "a", grant)
 	assert.Equal(t, map[string]V2Reason{"p": ReasonParked}, reasons)
 }
 
 // Nobody waiting is an empty answer, and the gap is still reported.
 func TestAdmitV2_NoWaiters(t *testing.T) {
-	grant, gapLeft, reasons := AdmitV2(ZoneNormal, TrendFlat, true, v2Now.Add(-10*time.Second), nil, v2Now, DefaultSettings())
+	grant, gapLeft, reasons := AdmitV2(ZoneNormal, TrendFlat, true, Load{}, v2Now.Add(-10*time.Second), nil, v2Now, DefaultSettings())
 	assert.Empty(t, grant)
 	assert.Equal(t, 20*time.Second, gapLeft)
 	assert.Empty(t, reasons)
@@ -204,7 +204,7 @@ func TestAdmitV2_NoWaiters(t *testing.T) {
 // The caller's slice is not reordered.
 func TestAdmitV2_DoesNotMutateTheInput(t *testing.T) {
 	ws := []V2Waiter{v2w("b", 10), v2w("a", 30)}
-	AdmitV2(ZoneNormal, TrendFlat, false, longAgo, ws, v2Now, DefaultSettings())
+	AdmitV2(ZoneNormal, TrendFlat, false, Load{}, longAgo, ws, v2Now, DefaultSettings())
 	assert.Equal(t, "b", ws[0].ID)
 }
 

@@ -334,7 +334,7 @@ var (
 	trendText  = map[string]string{"rising": "上升", "flat": "持平", "falling": "下降", "unknown": "未知"}
 	reasonText = map[string]string{
 		"gap": "間隔中", "danger": "危險區", "warning_flat": "警戒且持平",
-		"rising": "用量上升", "behind": "排在後面", "cut": "等待基準", "parked": "保留中",
+		"rising": "用量上升", "behind": "排在後面", "cut": "等待基準", "parked": "保留中", "load": "負載上限",
 	}
 )
 

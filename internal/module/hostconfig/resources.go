@@ -49,7 +49,7 @@ func resourcesFields(raw json.RawMessage) (map[string]json.RawMessage, error) {
 var resourcesIntKeys = []string{
 	"deadline_s", "warmup_s", "floor_pct", "max_hold_s", "ewma_half_life_s", "heavy_min_weight",
 	"mem_warn_pct", "mem_danger_pct", "gap_s", "trend_window_s", "trend_mem_dppm", "trend_cpu_dppm",
-	"park_s", "alert_danger_s", "alert_stuck_s", "alert_lease_mem_pct", "alert_push",
+	"park_s", "alert_danger_s", "alert_stuck_s", "alert_lease_mem_pct", "alert_push", "load_cap_pct",
 }
 
 func isJSONNull(v json.RawMessage) bool { return bytes.Equal(bytes.TrimSpace(v), []byte("null")) }
@@ -110,6 +110,7 @@ func normalizeResources(raw json.RawMessage) (resources.Settings, error) {
 		{"trend_window_s", &s.TrendWindowS}, {"trend_mem_dppm", &s.TrendMemDPPM}, {"trend_cpu_dppm", &s.TrendCPUDPPM},
 		{"park_s", &s.ParkS}, {"alert_danger_s", &s.AlertDangerS}, {"alert_stuck_s", &s.AlertStuckS},
 		{"alert_lease_mem_pct", &s.AlertLeaseMemPct}, {"alert_push", &s.AlertPush},
+		{"load_cap_pct", &s.LoadCapPct},
 	} {
 		if *f.dst, err = resourcesInt(fields, f.key); err != nil {
 			return resources.Settings{}, err
