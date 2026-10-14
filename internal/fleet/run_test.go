@@ -159,8 +159,28 @@ func TestRun_StderrOnlyInResultStderr(t *testing.T) {
 
 func TestRun_StderrCapped(t *testing.T) {
 	res := fakeRunner(t, fakeSpec{Exit: 255, Stderr: strings.Repeat("e", 10<<10)}).Run(context.Background(), "box")
-	if len(res.Stderr) != MaxStderr {
+	if len(res.Stderr) > MaxStderr+8 { // the kept head and tail plus the elision marker
 		t.Fatalf("stderr len %d", len(res.Stderr))
+	}
+}
+
+// ssh prints its decisive line last; noise before it must not hide it from the classifier.
+func TestRun_DecisiveStderrAfterLongNoise(t *testing.T) {
+	noise := strings.Repeat("debug1: some diagnostic line\n", 600) // well over MaxStderr
+	for name, c := range map[string]struct {
+		tail string
+		code Code
+	}{
+		"host key": {"Host key verification failed.\n", CodeHostKey},
+		"auth":     {"wake@host: Permission denied (publickey).\n", CodeAuth},
+	} {
+		res := fakeRunner(t, fakeSpec{Exit: 255, Stderr: noise + c.tail}).Run(context.Background(), "box")
+		if res.Status != StatusError || res.Code != c.code {
+			t.Errorf("%s: got %s/%s", name, res.Status, res.Code)
+		}
+		if len(res.Stderr) > MaxStderr+8 {
+			t.Errorf("%s: stderr len %d", name, len(res.Stderr))
+		}
 	}
 }
 

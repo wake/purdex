@@ -3,6 +3,7 @@
 package fleet
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +14,9 @@ import (
 
 // aliasRE is the shape of an SSH alias the fleet accepts (spec §5).
 var aliasRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+// errConfigTooBig is returned for a config file over maxConfigBytes: it is refused, never read as a prefix.
+var errConfigTooBig = errors.New("ssh config: file too large")
 
 // maxConfigBytes bounds what is read from one SSH config file.
 const maxConfigBytes = 1 << 20
@@ -39,7 +43,11 @@ func Aliases(home string) ([]string, error) {
 		}
 		return nil, err
 	}
-	for _, d := range parseConfig(main) {
+	mainDirs, err := parseConfig(main)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range mainDirs {
 		switch d.keyword {
 		case "host":
 			add(literalHosts(d.args))
@@ -47,9 +55,16 @@ func Aliases(home string) ([]string, error) {
 			for _, path := range expandIncludes(home, sshDir, d.args) {
 				text, err := readConfig(path)
 				if err != nil {
+					if errors.Is(err, errConfigTooBig) {
+						return nil, err // fail closed: ssh would read the whole file
+					}
 					continue // an include that cannot be read is skipped
 				}
-				for _, inner := range parseConfig(text) {
+				innerDirs, err := parseConfig(text)
+				if err != nil {
+					return nil, err
+				}
+				for _, inner := range innerDirs {
 					if inner.keyword == "host" { // an Include in an included file is ignored
 						add(literalHosts(inner.args))
 					}
@@ -75,8 +90,9 @@ type directive struct {
 }
 
 // parseConfig splits an SSH config into its directives. Comments (a line starting with `#`, or `#` after white space) and
-// blank lines are dropped; a keyword and its value may be separated by white space or `=`.
-func parseConfig(text string) []directive {
+// blank lines are dropped; a keyword and its value may be separated by white space or `=`. A line ssh would refuse (an
+// unterminated quote) is an error for the whole file: validation must not approve what ssh will not load.
+func parseConfig(text string) ([]directive, error) {
 	var out []directive
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
@@ -92,14 +108,18 @@ func parseConfig(text string) []directive {
 		if i := strings.IndexAny(line, " \t="); i >= 0 {
 			key, rest = line[:i], strings.TrimLeft(line[i:], " \t=")
 		}
-		out = append(out, directive{keyword: strings.ToLower(key), args: splitArgs(rest)})
+		args, ok := splitArgs(rest)
+		if !ok {
+			return nil, errors.New("ssh config: unterminated quote")
+		}
+		out = append(out, directive{keyword: strings.ToLower(key), args: args})
 	}
-	return out
+	return out, nil
 }
 
 // splitArgs splits the arguments of a directive the way ssh does: white space separates, double quotes group (and are
-// removed), and inside quotes a backslash escapes the next character. An unterminated quote runs to the end of the line.
-func splitArgs(s string) []string {
+// removed), and inside quotes a backslash escapes the next character. ok is false for an unterminated quote.
+func splitArgs(s string) (args []string, ok bool) {
 	var out []string
 	var cur strings.Builder
 	inTok, quoted := false, false
@@ -122,10 +142,13 @@ func splitArgs(s string) []string {
 			inTok = true
 		}
 	}
+	if quoted {
+		return nil, false
+	}
 	if inTok {
 		out = append(out, cur.String())
 	}
-	return out
+	return out, true
 }
 
 // literalHosts drops every pattern from the arguments of a `Host` line.
@@ -173,6 +196,9 @@ func readConfig(path string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
-	b, err := io.ReadAll(io.LimitReader(f, maxConfigBytes))
+	b, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
+	if err == nil && len(b) > maxConfigBytes {
+		return "", errConfigTooBig
+	}
 	return string(b), err
 }

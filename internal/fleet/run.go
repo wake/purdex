@@ -92,7 +92,7 @@ func (r Runner) Run(ctx context.Context, alias string) Result {
 	defer cancel()
 
 	stdout := &capped{max: MaxStdout, onFull: cancel}
-	stderr := &capped{max: MaxStderr}
+	stderr := &headTail{max: MaxStderr}
 	cmd := exec.CommandContext(cctx, ssh, Args(alias)...)
 	cmd.Stdin = nil // /dev/null
 	cmd.Stdout, cmd.Stderr = stdout, stderr
@@ -168,3 +168,38 @@ func (c *capped) Write(p []byte) (int, error) {
 }
 
 func (c *capped) String() string { return string(c.buf) }
+
+// headTail keeps the first max/2 and the last max/2 bytes of what is written. ssh prints its decisive message (host key,
+// permission denied) last, after any amount of earlier diagnostics, so the classifier must see the end as well as the start.
+// Writes never fail, for the same reason as capped.
+type headTail struct {
+	max       int
+	head      []byte
+	tail      []byte // the most recent max/2 bytes after the head is full
+	truncated bool
+}
+
+func (h *headTail) Write(p []byte) (int, error) {
+	n := len(p)
+	half := h.max / 2
+	if room := half - len(h.head); room > 0 {
+		take := min(room, len(p))
+		h.head = append(h.head, p[:take]...)
+		p = p[take:]
+	}
+	if len(p) > 0 {
+		h.tail = append(h.tail, p...)
+		if len(h.tail) > half {
+			h.truncated = true
+			h.tail = append(h.tail[:0], h.tail[len(h.tail)-half:]...)
+		}
+	}
+	return n, nil
+}
+
+func (h *headTail) String() string {
+	if h.truncated {
+		return string(h.head) + "\n...\n" + string(h.tail)
+	}
+	return string(h.head) + string(h.tail)
+}

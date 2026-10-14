@@ -124,6 +124,30 @@ func TestAliases_QuotedArguments(t *testing.T) {
 	}
 }
 
+// A config ssh would refuse to load is refused here too, so validation never approves what ssh will not run.
+func TestAliases_FailClosed(t *testing.T) {
+	cases := map[string]map[string]string{
+		"unterminated quote":      {"config": "Host \"prod\n"},
+		"unterminated in include": {"config": "Include inc\nHost ok\n", "inc": "Host \"bad\n"},
+		"main over 1 MiB":         {"config": "Host ok\n" + strings.Repeat("#", maxConfigBytes)},
+		"include over 1 MiB":      {"config": "Include inc\nHost ok\n", "inc": "Host big\n" + strings.Repeat("#", maxConfigBytes)},
+	}
+	for name, files := range cases {
+		home := sshHome(t, files)
+		if got, err := Aliases(home); err == nil {
+			t.Errorf("%s: want an error, got %q", name, got)
+		}
+		if ValidAlias(home, "ok") || ValidAlias(home, "prod") {
+			t.Errorf("%s: ValidAlias must be false", name)
+		}
+	}
+	// Exactly at the limit is still read.
+	home := sshHome(t, map[string]string{"config": "Host ok\n" + strings.Repeat("#", maxConfigBytes-8)})
+	if !ValidAlias(home, "ok") {
+		t.Error("a file of exactly maxConfigBytes must be read")
+	}
+}
+
 // There is no cache: a Host removed from an included file is gone at the next call, and one added is there.
 // Mutation gate: cache the first read -> the removed alias is still listed (red).
 func TestAliases_NoCache(t *testing.T) {
