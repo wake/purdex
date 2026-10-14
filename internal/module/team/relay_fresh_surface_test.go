@@ -380,3 +380,42 @@ func TestFreshSurface_MemberClaimSignals(t *testing.T) {
 		t.Fatalf("after the member's claim: %+v, want one changed with no sessions", evs)
 	}
 }
+
+// An idle card records whether its session's mod writes a half on the timeout, for the push wording: true from mod protocol 8, false for an
+// older mod and for a card that is not an idle one. Mutation gates: always true → the old-mod case is red; never → the v8 case is red.
+func TestIdleCard_RecordsHalfOnTimeoutFromTheModProtocol(t *testing.T) {
+	payloadOf := func(f *fixture, id string) team.SelfRelayPayload {
+		row, ok, err := f.m.store.Get(id)
+		if err != nil || !ok {
+			t.Fatalf("card %s: %v %v", id, ok, err)
+		}
+		var sp team.SelfRelayPayload
+		if err := json.Unmarshal(row.Payload, &sp); err != nil {
+			t.Fatal(err)
+		}
+		return sp
+	}
+	for _, c := range []struct {
+		mod  string
+		idle bool
+		want bool
+	}{{"8", true, true}, {"7", true, false}, {"", true, false}, {"8", false, false}} {
+		f := newFixture(t)
+		if c.mod != "" {
+			if code, body := f.do(http.MethodPost, "/api/relay/hello", team.RelayHelloRequest{SessionID: "sid-1", ModVersion: c.mod, Agent: "cc"}); code != http.StatusOK {
+				t.Fatalf("hello: %d %s", code, body)
+			}
+		}
+		req := beginReq("sid-1")
+		if c.idle {
+			req = halfBeginReq("sid-1", false)
+		}
+		code, resp, body := f.beginRaw2(req)
+		if code != http.StatusCreated {
+			t.Fatalf("mod %q idle %v: begin %d %s", c.mod, c.idle, code, body)
+		}
+		if got := payloadOf(f, resp.RequestID).HalfOnTimeout; got != c.want {
+			t.Errorf("mod %q idle %v: half_on_timeout = %v, want %v", c.mod, c.idle, got, c.want)
+		}
+	}
+}

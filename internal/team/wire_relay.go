@@ -132,6 +132,9 @@ type SelfRelayPayload struct {
 	// Half / ReuseOp: what the caller asked for (RT-3a1), kept so a replay of the begin can be told from another request.
 	Half    bool   `json:"half,omitempty"`
 	ReuseOp string `json:"reuse_op,omitempty"`
+	// HalfOnTimeout: an idle card whose session's mod (protocol >= MinHalfModVersion) writes a half when the card times out. The row's, set
+	// by the daemon at begin; the push says "a handoff file in 5 minutes" only for such a card (RT-3a2).
+	HalfOnTimeout bool `json:"half_on_timeout,omitempty"`
 }
 
 // RelayLastAskPct is the context use at which a self-relay ask is the LAST one (relay/team rules v2, §4.2): from here an ask that
