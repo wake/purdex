@@ -1,16 +1,12 @@
 package journal
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +29,7 @@ type Git struct {
 	Interval     time.Duration // commit and push period; 10 minutes when zero
 
 	version func(ctx context.Context) (major, minor int, err error) // replaced in tests
+	rename  func(oldpath, newpath string) error                     // os.Rename; replaced in tests
 
 	mu     sync.Mutex
 	locks  map[string]*sync.Mutex // per project id
@@ -117,6 +114,9 @@ func (g *Git) With(ctx context.Context, p Project, fn func(purdexDir string) err
 func (g *Git) ensure(ctx context.Context, p Project) (_ string, err error) {
 	wt := WorktreeDir(g.Dir, p)
 	if _, err := os.Stat(filepath.Join(wt, ".git")); err == nil {
+		if err := g.finishPlain(wt); err != nil { // a migration that stopped half way is finished first
+			return "", err
+		}
 		g.remember(p.ID)
 		return wt, nil
 	}
@@ -124,18 +124,19 @@ func (g *Git) ensure(ctx context.Context, p Project) (_ string, err error) {
 		return wt, os.MkdirAll(wt, 0o755)
 	}
 	// A folder left by the files-only mode (git was too old or unreadable then) is moved aside for the worktree to take its
-	// place, and its journal folder is moved in after; if the worktree cannot be made, the folder is put back.
-	plain := ""
+	// place (gitplain.go moves its journal folder in after); if the worktree cannot be made, the folder is put back.
+	putBack := false
 	if entries, rerr := os.ReadDir(wt); rerr == nil && len(entries) > 0 {
-		plain = wt + ".plain"
+		plain := plainDir(wt)
 		if _, serr := os.Stat(plain); serr == nil {
 			return "", fmt.Errorf("journal: %s exists and is not a worktree, and %s is in the way", wt, plain)
 		}
 		if err := os.Rename(wt, plain); err != nil {
 			return "", err
 		}
+		putBack = true
 		defer func() {
-			if err != nil {
+			if putBack && err != nil {
 				_ = os.RemoveAll(wt)
 				_ = os.Rename(plain, wt)
 			}
@@ -167,34 +168,12 @@ func (g *Git) ensure(ctx context.Context, p Project) (_ string, err error) {
 	if err != nil {
 		return "", err
 	}
-	if plain != "" {
-		if err := adoptPlain(filepath.Join(plain, ".purdex"), filepath.Join(wt, ".purdex")); err != nil {
-			g.logf("journal: moving the files-only journal of project %s into its worktree failed, the files stay in %s: %v", p.ID, plain, err)
-		} else {
-			_ = os.RemoveAll(plain)
-		}
+	putBack = false // the worktree stands; a move that fails now is finished by the next call
+	if err := g.finishPlain(wt); err != nil {
+		return "", err
 	}
 	g.remember(p.ID)
 	return wt, nil
-}
-
-// adoptPlain moves the files of src into dst: a file dst does not have is moved; one it has (the remote branch's) wins,
-// and the local copy is kept beside it as `<name>.plain`. Nothing is overwritten or lost.
-func adoptPlain(src, dst string) error {
-	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(src, path)
-		target := filepath.Join(dst, rel)
-		if d.IsDir() {
-			return os.MkdirAll(target, 0o755)
-		}
-		if _, err := os.Stat(target); err == nil {
-			target += ".plain"
-		}
-		return os.Rename(path, target)
-	})
 }
 
 // fetchBranch fetches origin's Branch into refs/remotes/origin/ and reports whether it exists. No origin is a
@@ -232,46 +211,4 @@ func (g *Git) gitSupportsOrphan(ctx context.Context) bool {
 		return false
 	}
 	return true
-}
-
-func gitVersion(ctx context.Context) (int, int, error) {
-	out, err := exec.CommandContext(ctx, "git", "--version").Output()
-	if err != nil {
-		return 0, 0, err
-	}
-	m := versionRe.FindStringSubmatch(string(out))
-	if m == nil {
-		return 0, 0, fmt.Errorf("unreadable git version %q", out)
-	}
-	major, _ := strconv.Atoi(m[1])
-	minor, _ := strconv.Atoi(m[2])
-	return major, minor, nil
-}
-
-// git runs `git args` (in dir when not empty) with a timeout and the journal's settings: no prompts, no hooks, no
-// signing, the journal's identity, English messages. The combined output comes back with the error.
-func (g *Git) git(ctx context.Context, dir string, timeout time.Duration, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	full := append([]string{"-c", "core.hooksPath=" + os.DevNull, "-c", "commit.gpgsign=false"}, args...)
-	cmd := exec.CommandContext(ctx, "git", full...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"LC_ALL=C", "GIT_TERMINAL_PROMPT=0", "GIT_EDITOR=true",
-		"GIT_AUTHOR_NAME=Purdex journal", "GIT_AUTHOR_EMAIL=journal@purdex.local",
-		"GIT_COMMITTER_NAME=Purdex journal", "GIT_COMMITTER_EMAIL=journal@purdex.local")
-	if os.Getenv("GIT_SSH_COMMAND") == "" {
-		cmd.Env = append(cmd.Env, "GIT_SSH_COMMAND=ssh -o BatchMode=yes -o ConnectTimeout=20")
-	}
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
-	err := cmd.Run()
-	text := strings.TrimSpace(out.String())
-	if err != nil {
-		if len(text) > 300 {
-			text = text[:300]
-		}
-		return text, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, text)
-	}
-	return text, nil
 }

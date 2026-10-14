@@ -3,6 +3,7 @@ package journal
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -79,7 +80,7 @@ func newFixture(t *testing.T) *fixture {
 	f.g = &Git{
 		Dir:          filepath.Join(base, "journal"),
 		PushProjects: func() ([]string, error) { return f.pushList, nil },
-		Logf:         func(format string, a ...any) { f.logs = append(f.logs, strings.TrimSpace(format)) },
+		Logf:         func(format string, a ...any) { f.logs = append(f.logs, fmt.Sprintf(format, a...)) },
 	}
 	return f
 }
@@ -293,5 +294,107 @@ func TestGit_AFailedMigrationPutsTheFilesOnlyFolderBack(t *testing.T) {
 	}
 	if _, err := os.Stat(wt + ".plain"); err == nil {
 		t.Fatal("a moved-aside copy is left behind")
+	}
+}
+
+// The local copy never takes the name of a file the worktree already has, however many such names there are.
+func TestGit_AMovedFilesOnlyFolderFindsANameThatIsFree(t *testing.T) {
+	f := newFixture(t)
+	other := filepath.Join(filepath.Dir(f.root), "clone")
+	tgit(t, filepath.Dir(f.root), "clone", "-q", f.bare, other)
+	tgit(t, other, "switch", "-q", "--orphan", Branch)
+	for _, n := range []string{"a.md", "a.md.plain", "a.md.plain.1"} {
+		f.write(t, filepath.Join(other, ".purdex"), n, "remote "+n+"\n")
+	}
+	tgit(t, other, "add", ".purdex")
+	tgit(t, other, "commit", "-q", "-m", "remote")
+	tgit(t, other, "push", "-q", "origin", Branch)
+	f.g.version = func(context.Context) (int, int, error) { return 2, 41, nil }
+	f.writeJournal(t, "a.md", "local\n")
+	f.g.version = nil
+	if err := f.g.With(context.Background(), f.p, func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(WorktreeDir(f.g.Dir, f.p), ".purdex")
+	for name, want := range map[string]string{"a.md": "remote a.md\n", "a.md.plain": "remote a.md.plain\n",
+		"a.md.plain.1": "remote a.md.plain.1\n", "a.md.plain.2": "local\n"} {
+		if b, err := os.ReadFile(filepath.Join(dir, name)); err != nil || string(b) != want {
+			t.Errorf("%s = %q, %v; want %q", name, b, err, want)
+		}
+	}
+}
+
+// A move that stops half way is finished by the next call, not abandoned beside the worktree.
+func TestGit_AMigrationThatStoppedHalfWayIsFinishedByTheNextCall(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.g.version = func(context.Context) (int, int, error) { return 2, 41, nil }
+	f.writeJournal(t, "a.md", "one\n")
+	f.writeJournal(t, "b.md", "two\n")
+	f.g.version = nil
+	calls := 0
+	f.g.rename = func(o, n string) error {
+		calls++
+		if calls == 2 { // the first file moves, the second does not
+			return os.ErrPermission
+		}
+		return os.Rename(o, n)
+	}
+	if err := f.g.With(ctx, f.p, func(string) error { return nil }); err == nil {
+		t.Fatal("With reported success although the move stopped")
+	}
+	f.g.rename = nil
+	if err := f.g.With(ctx, f.p, func(string) error { return nil }); err != nil {
+		t.Fatalf("the next call: %v", err)
+	}
+	wt := WorktreeDir(f.g.Dir, f.p)
+	for name, want := range map[string]string{"a.md": "one\n", "b.md": "two\n"} {
+		if b, err := os.ReadFile(filepath.Join(wt, ".purdex", name)); err != nil || string(b) != want {
+			t.Errorf("%s = %q, %v", name, b, err)
+		}
+	}
+	if _, err := os.Stat(wt + ".plain"); err == nil {
+		t.Fatal("the moved-aside folder is still there")
+	}
+}
+
+// GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE inherited from the daemon's launch would send every journal command to
+// another repository (codex R2).
+func TestGit_RepositoryRedirectingEnvironmentFromTheDaemonIsIgnored(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	other := filepath.Join(filepath.Dir(f.root), "elsewhere")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tgit(t, other, "init", "-q", "-b", "main")
+	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
+	t.Setenv("GIT_WORK_TREE", other)
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(other, ".git", "index-elsewhere"))
+	if err := f.g.With(ctx, f.p, func(d string) error { f.write(t, d, "a.md", "x\n"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.g.commitProject(ctx, f.p); err != nil {
+		t.Fatal(err)
+	}
+	wt := WorktreeDir(f.g.Dir, f.p)
+	clean := func(args ...string) string { // the test process itself carries the redirecting variables
+		cmd := exec.Command("git", args...)
+		for _, kv := range os.Environ() {
+			if !strings.HasPrefix(kv, "GIT_DIR=") && !strings.HasPrefix(kv, "GIT_WORK_TREE=") && !strings.HasPrefix(kv, "GIT_INDEX_FILE=") {
+				cmd.Env = append(cmd.Env, kv)
+			}
+		}
+		out, _ := cmd.Output()
+		return strings.TrimSpace(string(out))
+	}
+	if out := clean("-C", wt, "show", "--name-only", "--format=", "HEAD"); out != ".purdex/a.md" {
+		t.Fatalf("the journal commit: %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(other, ".git", "index-elsewhere")); err == nil {
+		t.Fatal("the other repository's index was used")
+	}
+	if out := clean("--git-dir="+filepath.Join(other, ".git"), "rev-list", "--all", "--count"); out != "0" {
+		t.Fatalf("the other repository got commits: %s", out)
 	}
 }

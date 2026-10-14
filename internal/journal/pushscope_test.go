@@ -24,13 +24,25 @@ func TestNormalizeRemote_EveryFormOfOneRepositoryIsOneString(t *testing.T) {
 }
 
 func TestNormalizeRemote_NothingUsableIsEmptyAndNeverCarriesCredentials(t *testing.T) {
-	for _, in := range []string{"", "   ", "github.com", "https://", "git@github.com:", "/srv/git/repo.git", "file:///srv/git/repo.git", "../x"} {
+	for _, in := range []string{"", "   ", "github.com", "https://", "git@github.com:", "../x", "file://otherhost/srv/git/repo.git", "/"} {
 		if got := NormalizeRemote(in); got != "" {
 			t.Errorf("NormalizeRemote(%q) = %q, want empty", in, got)
 		}
 	}
 	if got := NormalizeRemote("https://u:pw@gitlab.example.com:8443/group/sub/app.git"); got != "gitlab.example.com/group/sub/app" {
 		t.Errorf("subgroup url = %q", got)
+	}
+}
+
+func TestNormalizeRemote_ALocalRepositoryIsItsCleanedAbsolutePath(t *testing.T) {
+	for _, in := range []string{"/srv/git/repo.git", "/srv/git//repo.git/", "file:///srv/git/repo.git", "file://localhost/srv/git/repo.git"} {
+		const want = "file:/srv/git/repo.git"
+		if got := NormalizeRemote(in); got != want {
+			t.Errorf("NormalizeRemote(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if !PushAllowed("file:///srv/git/repo.git", []string{"/srv/git/repo.git"}) || PushAllowed("/srv/git/other.git", []string{"/srv/git/repo.git"}) {
+		t.Error("a local repository is matched by its path, exactly")
 	}
 }
 

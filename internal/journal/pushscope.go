@@ -2,6 +2,7 @@ package journal
 
 import (
 	"net/url"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -13,7 +14,8 @@ var (
 
 // NormalizeRemote reduces a remote URL, in any form git accepts for it (scp-like, ssh://, https://, git://, or already
 // `host/owner/repo`), to `host/owner/repo`: lowercase, without scheme, user and password, port, a trailing `/` or `.git`.
-// "" when it names no host and path (a local path, file://, nonsense). The result never carries credentials, so it is
+// A local remote (an absolute path or file://) becomes `file:<cleaned path>`, which only an entry spelling that path
+// matches. "" when it names no host and path (a relative path, nonsense). The result never carries credentials, so it is
 // safe to log.
 func NormalizeRemote(raw string) string {
 	s := strings.TrimSpace(raw)
@@ -21,10 +23,18 @@ func NormalizeRemote(raw string) string {
 	switch {
 	case s == "":
 		return ""
+	case strings.HasPrefix(s, "/"):
+		return localRemote(s)
 	case strings.Contains(s, "://"):
 		u, err := url.Parse(s)
 		if err != nil {
 			return ""
+		}
+		if u.Scheme == "file" {
+			if u.Host != "" && u.Host != "localhost" {
+				return ""
+			}
+			return localRemote(u.Path)
 		}
 		host, path = u.Hostname(), u.Path
 	case scpLike.MatchString(s):
@@ -43,6 +53,15 @@ func NormalizeRemote(raw string) string {
 		return ""
 	}
 	return host + "/" + path
+}
+
+// localRemote is the normal form of a local repository path.
+func localRemote(path string) string {
+	path = filepath.Clean(path)
+	if !filepath.IsAbs(path) || path == string(filepath.Separator) {
+		return ""
+	}
+	return "file:" + path
 }
 
 // PushAllowed reports whether a remote may be pushed: its normalised form equals a normalised entry of list. The match is

@@ -10,16 +10,6 @@ import (
 	"time"
 )
 
-const publicURL = "https://github.com/wake/purdex.git"
-
-// publicOrigin makes the origin look like github.com/wake/purdex to the allow-list while git still reaches the bare
-// repository (url.<base>.insteadOf).
-func (f *fixture) publicOrigin(t *testing.T) {
-	t.Helper()
-	tgit(t, f.root, "config", "url."+f.bare+".insteadOf", publicURL)
-	tgit(t, f.root, "remote", "set-url", "origin", publicURL)
-}
-
 // journalCommit writes a commit of its own on purdex/journal in a fresh clone and pushes it, as another host would.
 func (f *fixture) otherHostCommit(t *testing.T, file, text string) string {
 	t.Helper()
@@ -56,7 +46,6 @@ func (f *fixture) writeJournal(t *testing.T, name, text string) {
 
 func TestGit_NothingIsPushedUnlessTheProjectIsListed(t *testing.T) {
 	f := newFixture(t)
-	f.publicOrigin(t)
 	ctx := context.Background()
 	f.writeJournal(t, "a.md", "one\n")
 	f.g.Round(ctx) // the default: an empty list
@@ -66,12 +55,12 @@ func TestGit_NothingIsPushedUnlessTheProjectIsListed(t *testing.T) {
 	if got := tgit(t, WorktreeDir(f.g.Dir, f.p), "rev-list", "--count", Branch); got != "1" {
 		t.Fatalf("the commit is local anyway: %s commits", got)
 	}
-	f.pushList = []string{"github.com/wake/somewhere-else"}
+	f.pushList = []string{"github.com/wake/somewhere-else", "/nowhere/else.git"}
 	f.g.Round(ctx)
 	if f.remoteHead(t) != "" {
 		t.Fatal("pushed a project that is not listed")
 	}
-	f.pushList = []string{"github.com/wake/purdex"}
+	f.pushList = []string{f.bare}
 	f.g.Round(ctx)
 	if got := f.remoteHead(t); got == "" || got != f.localHead(t) {
 		t.Fatalf("remote %q, local %q after listing the project", got, f.localHead(t))
@@ -80,7 +69,6 @@ func TestGit_NothingIsPushedUnlessTheProjectIsListed(t *testing.T) {
 
 func TestGit_TheListIsReadAtEveryRoundAndAnErrorPushesNothing(t *testing.T) {
 	f := newFixture(t)
-	f.publicOrigin(t)
 	ctx := context.Background()
 	f.writeJournal(t, "a.md", "one\n")
 	calls := 0
@@ -89,7 +77,7 @@ func TestGit_TheListIsReadAtEveryRoundAndAnErrorPushesNothing(t *testing.T) {
 		if calls == 1 {
 			return nil, os.ErrPermission // an unreadable config
 		}
-		return []string{"github.com/wake/purdex"}, nil
+		return []string{f.bare}, nil
 	}
 	f.g.Round(ctx)
 	if f.remoteHead(t) != "" {
@@ -103,8 +91,7 @@ func TestGit_TheListIsReadAtEveryRoundAndAnErrorPushesNothing(t *testing.T) {
 
 func TestGit_ANewCommitIsPushedAfterAnEarlierPush(t *testing.T) {
 	f := newFixture(t)
-	f.publicOrigin(t)
-	f.pushList = []string{"github.com/wake/purdex"}
+	f.pushList = []string{f.bare}
 	ctx := context.Background()
 	f.writeJournal(t, "a.md", "one\n")
 	f.g.Round(ctx)
@@ -118,8 +105,7 @@ func TestGit_ANewCommitIsPushedAfterAnEarlierPush(t *testing.T) {
 
 func TestGit_ANonFastForwardIsRebasedAndPushed(t *testing.T) {
 	f := newFixture(t)
-	f.publicOrigin(t)
-	f.pushList = []string{"github.com/wake/purdex"}
+	f.pushList = []string{f.bare}
 	ctx := context.Background()
 	f.writeJournal(t, "mine.md", "mine\n")
 	f.g.Round(ctx)
@@ -143,8 +129,7 @@ func TestGit_ANonFastForwardIsRebasedAndPushed(t *testing.T) {
 // A conflict aborts the rebase, keeps the local commits, never forces, and says so once.
 func TestGit_ARebaseConflictAbortsKeepsLocalCommitsAndNeverForces(t *testing.T) {
 	f := newFixture(t)
-	f.publicOrigin(t)
-	f.pushList = []string{"github.com/wake/purdex"}
+	f.pushList = []string{f.bare}
 	ctx := context.Background()
 	f.writeJournal(t, "shared.md", "base\n")
 	f.g.Round(ctx)
@@ -184,22 +169,107 @@ func countContaining(lines []string, sub string) int {
 // A remote that cannot be reached costs a log line, never the commit and never the next round.
 func TestGit_AnUnreachableRemoteKeepsTheCommitAndIsRetried(t *testing.T) {
 	f := newFixture(t)
-	f.publicOrigin(t)
-	f.pushList = []string{"github.com/wake/purdex"}
+	nowhere := filepath.Join(filepath.Dir(f.root), "nowhere.git")
+	f.pushList = []string{f.bare, nowhere}
 	ctx := context.Background()
 	f.writeJournal(t, "a.md", "one\n") // the worktree is made while the remote still answers
-	nowhere := filepath.Join(filepath.Dir(f.root), "nowhere.git")
-	tgit(t, f.root, "config", "--unset-all", "url."+f.bare+".insteadOf")
-	tgit(t, f.root, "config", "url."+nowhere+".insteadOf", publicURL)
+	tgit(t, f.root, "remote", "set-url", "origin", nowhere)
 	f.g.Round(ctx)
 	if f.localHead(t) == "" || f.remoteHead(t) != "" {
 		t.Fatal("expected a local commit and no remote branch")
 	}
-	tgit(t, f.root, "config", "--unset-all", "url."+nowhere+".insteadOf")
-	tgit(t, f.root, "config", "url."+f.bare+".insteadOf", publicURL) // the remote is back
+	tgit(t, f.root, "remote", "set-url", "origin", f.bare) // the remote is back
 	f.g.Round(ctx)
 	if f.remoteHead(t) != f.localHead(t) {
 		t.Fatal("the pending commit was not pushed once the remote came back")
+	}
+}
+
+// The allow-list is checked against where git would really send the branch (codex R2, critical): a pushurl, a
+// url.<base>.insteadOf or a pushInsteadOf that leads somewhere else is not the listed project.
+func TestGit_ADestinationThatIsNotListedIsNeverPushedToWhateverOriginSays(t *testing.T) {
+	for name, setup := range map[string]func(t *testing.T, f *fixture, elsewhere string){
+		"pushurl": func(t *testing.T, f *fixture, elsewhere string) {
+			tgit(t, f.root, "config", "remote.origin.pushurl", elsewhere)
+		},
+		"pushInsteadOf": func(t *testing.T, f *fixture, elsewhere string) {
+			tgit(t, f.root, "config", "url."+elsewhere+".pushInsteadOf", f.bare)
+		},
+		"insteadOf": func(t *testing.T, f *fixture, elsewhere string) {
+			tgit(t, f.root, "config", "url."+elsewhere+".insteadOf", f.bare)
+		},
+		// The fetch side is checked too: a listed push URL does not make an unlisted origin listed.
+		"unlisted fetch url, listed pushurl": func(t *testing.T, f *fixture, elsewhere string) {
+			tgit(t, f.root, "remote", "set-url", "origin", elsewhere)
+			tgit(t, f.root, "config", "remote.origin.pushurl", f.bare)
+		},
+		"insteadOf for the fetch side only": func(t *testing.T, f *fixture, elsewhere string) {
+			tgit(t, f.root, "config", "url."+elsewhere+".insteadOf", f.bare) // origin's text still reads as the listed path
+			tgit(t, f.root, "config", "url."+f.bare+".pushInsteadOf", f.bare)
+		},
+		"two push urls": func(t *testing.T, f *fixture, elsewhere string) {
+			tgit(t, f.root, "config", "--add", "remote.origin.pushurl", f.bare)
+			tgit(t, f.root, "config", "--add", "remote.origin.pushurl", f.bare+"-copy")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			elsewhere := filepath.Join(filepath.Dir(f.root), "elsewhere.git")
+			tgit(t, filepath.Dir(f.root), "init", "-q", "--bare", elsewhere)
+			f.pushList = []string{f.bare} // the project is listed, the other places are not
+			f.writeJournal(t, "a.md", "one\n")
+			setup(t, f, elsewhere)
+			f.g.Round(context.Background())
+			if f.remoteHead(t) != "" {
+				t.Fatal("the listed repository received the branch although git would send it elsewhere")
+			}
+			if out, _ := gitOut(elsewhere, "rev-parse", "--verify", "--quiet", "refs/heads/"+Branch); out != "" {
+				t.Fatal("the branch was pushed to a destination that is not listed")
+			}
+			if f.localHead(t) == "" {
+				t.Fatal("the local commit is missing")
+			}
+		})
+	}
+}
+
+// A remote url with a password in it never reaches the log.
+func TestGit_ACredentialInARemoteUrlNeverReachesTheLog(t *testing.T) {
+	f := newFixture(t)
+	f.pushList = []string{"127.0.0.1/x"}
+	f.writeJournal(t, "a.md", "one\n")
+	tgit(t, f.root, "remote", "set-url", "origin", "http://user:hunter2secret@127.0.0.1:1/x.git")
+	f.g.Round(context.Background())
+	if len(f.logs) == 0 {
+		t.Fatal("expected the failed push to be logged")
+	}
+	for _, l := range f.logs {
+		if strings.Contains(l, "hunter2secret") {
+			t.Fatalf("a log line carries the password: %q", l)
+		}
+	}
+}
+
+// A worktree someone switched away from the journal branch gets no journal commit and its HEAD is never counted as pushed.
+func TestGit_AWorktreeNotOnTheJournalBranchIsNeitherCommittedNorPushed(t *testing.T) {
+	f := newFixture(t)
+	f.pushList = []string{f.bare}
+	ctx := context.Background()
+	f.writeJournal(t, "a.md", "one\n")
+	f.g.Round(ctx)
+	wt := WorktreeDir(f.g.Dir, f.p)
+	tgit(t, wt, "checkout", "-q", "--detach")
+	before := f.localHead(t)
+	f.writeJournal(t, "a.md", "two\n")
+	f.g.Round(ctx)
+	if f.localHead(t) != before {
+		t.Fatal("a commit was made on a detached HEAD")
+	}
+	if got := f.remoteHead(t); got == f.localHead(t) && got != before {
+		t.Fatal("a detached HEAD was pushed")
+	}
+	if countContaining(f.logs, "is not on") == 0 {
+		t.Fatalf("nothing logged about the detached HEAD: %v", f.logs)
 	}
 }
 

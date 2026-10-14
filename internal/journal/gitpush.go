@@ -85,8 +85,12 @@ func (g *Git) pushProject(ctx context.Context, p Project, list []string) {
 	if _, err := os.Stat(filepath.Join(wt, ".git")); err != nil {
 		return
 	}
-	remote, err := g.git(ctx, wt, 10*time.Second, "config", "--get", "remote.origin.url")
-	if err != nil || !PushAllowed(remote, list) {
+	target, ok := g.pushTarget(ctx, p, wt, list)
+	if !ok {
+		return
+	}
+	if err := g.onBranch(ctx, wt); err != nil {
+		g.logOnce("branch/"+p.ID, "%v", err)
 		return
 	}
 	head, err := g.git(ctx, wt, 10*time.Second, "rev-parse", "--verify", "HEAD")
@@ -96,12 +100,12 @@ func (g *Git) pushProject(ctx context.Context, p Project, list []string) {
 	if g.lastPushed(p.ID) == head {
 		return
 	}
-	out, err := g.git(ctx, wt, pushTimeout, "push", "origin", branchRefspec)
+	out, err := g.git(ctx, wt, pushTimeout, "push", target, branchRefspec)
 	if err != nil && strings.Contains(out, "rejected") {
 		if !g.rebaseOntoRemote(ctx, p, wt) {
 			return
 		}
-		out, err = g.git(ctx, wt, pushTimeout, "push", "origin", branchRefspec)
+		out, err = g.git(ctx, wt, pushTimeout, "push", target, branchRefspec)
 	}
 	if err != nil {
 		g.logOnce("push/"+p.ID, "journal: push of project %s failed, retried next round: %v", p.ID, err)
@@ -110,6 +114,33 @@ func (g *Git) pushProject(ctx context.Context, p Project, list []string) {
 	if head, err = g.git(ctx, wt, 10*time.Second, "rev-parse", "--verify", "HEAD"); err == nil {
 		g.setPushed(p.ID, head)
 	}
+}
+
+// pushTarget is the URL the journal branch is pushed to, when pushing it is allowed: the URL git itself would use for
+// `origin` — with pushurl, url.<base>.insteadOf and pushInsteadOf applied (`git remote get-url`), not the configured text —
+// must be on the allow-list, and so must the fetch URL (the rebase takes the remote's commits from it). Exactly one push URL:
+// several would send the branch somewhere the check did not look. The push then goes to that URL, not to the name `origin`,
+// so a config change between the check and the push cannot redirect it.
+func (g *Git) pushTarget(ctx context.Context, p Project, wt string, list []string) (string, bool) {
+	fetchURL, err := g.git(ctx, wt, 10*time.Second, "remote", "get-url", "origin")
+	if err != nil || !PushAllowed(fetchURL, list) {
+		return "", false
+	}
+	out, err := g.git(ctx, wt, 10*time.Second, "remote", "get-url", "--push", "--all", "origin")
+	urls := strings.Fields(out)
+	if err != nil || len(urls) != 1 || !PushAllowed(urls[0], list) {
+		g.logOnce("target/"+p.ID, "journal: project %s is listed but its push destination is not (%d push URL(s), first %q); nothing is pushed",
+			p.ID, len(urls), NormalizeRemote(firstOr(urls, "")))
+		return "", false
+	}
+	return urls[0], true
+}
+
+func firstOr(s []string, def string) string {
+	if len(s) > 0 {
+		return s[0]
+	}
+	return def
 }
 
 // rebaseOntoRemote fetches the remote journal branch (the network part, outside the lock) and rebases the local commits
