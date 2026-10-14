@@ -12,12 +12,18 @@ var (
 	validHost = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`)
 )
 
-// NormalizeRemote reduces a remote URL, in any form git accepts for it (scp-like, ssh://, https://, git://, or already
-// `host/owner/repo`), to `host/owner/repo`: lowercase, without scheme, user and password, port, a trailing `/` or `.git`.
+// NormalizeRemote reduces a remote URL, in a form git treats as a network address or a local repository (scp-like, ssh://,
+// https://, http://, git://, an absolute path, file://), to `host/owner/repo`: lowercase, without scheme, user and password, port, a trailing `/` or `.git`.
 // A local remote (an absolute path or file://) becomes `file:<cleaned path>`, which only an entry spelling that path
 // matches. "" when it names no host and path (a relative path, nonsense). The result never carries credentials, so it is
 // safe to log.
-func NormalizeRemote(raw string) string {
+func NormalizeRemote(raw string) string { return normalizeRemote(raw, false) }
+
+// normalizeEntry is NormalizeRemote for an allow-list entry, which may also be spelled `host/owner/repo` as it is
+// written in config.toml. A remote must not be: git reads such a string as a path relative to the working directory.
+func normalizeEntry(raw string) string { return normalizeRemote(raw, true) }
+
+func normalizeRemote(raw string, entry bool) string {
 	s := strings.TrimSpace(raw)
 	var host, path string
 	switch {
@@ -44,12 +50,14 @@ func NormalizeRemote(raw string) string {
 	case scpLike.MatchString(s):
 		m := scpLike.FindStringSubmatch(s)
 		host, path = m[1], m[2]
-	default:
+	case entry:
 		i := strings.IndexByte(s, '/')
 		if i <= 0 {
 			return ""
 		}
 		host, path = s[:i], s[i+1:]
+	default: // no scheme, not scp-like, not absolute: git takes it for a relative path
+		return ""
 	}
 	host = strings.ToLower(host)
 	path = strings.TrimSuffix(strings.Trim(strings.ToLower(path), "/"), ".git")
@@ -76,7 +84,7 @@ func PushAllowed(remoteURL string, list []string) bool {
 		return false
 	}
 	for _, e := range list {
-		if NormalizeRemote(e) == n {
+		if normalizeEntry(e) == n {
 			return true
 		}
 	}

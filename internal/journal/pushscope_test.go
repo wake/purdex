@@ -14,12 +14,28 @@ func TestNormalizeRemote_EveryFormOfOneRepositoryIsOneString(t *testing.T) {
 		"https://wake:ghp_secrettoken@github.com/wake/purdex.git",
 		"http://GitHub.com/Wake/Purdex",
 		"git://github.com/wake/purdex.git",
-		"github.com/wake/purdex",
-		"  github.com/wake/purdex.git  ",
+		"  git@github.com:wake/purdex.git  ",
 	} {
 		if got := NormalizeRemote(in); got != want {
 			t.Errorf("NormalizeRemote(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// `host/owner/repo` is how an entry is written in config.toml. As a remote it is a relative path to git (codex re-review).
+func TestNormalizeRemote_ABareHostOwnerRepoIsAnEntryFormNotARemote(t *testing.T) {
+	for _, in := range []string{"github.com/wake/purdex", "github.com/wake:purdex", "  github.com/wake/purdex.git  ", "./github.com/wake/purdex"} {
+		if got := NormalizeRemote(in); got != "" {
+			t.Errorf("NormalizeRemote(%q) = %q: git reads it as a local path", in, got)
+		}
+	}
+	for _, in := range []string{"github.com/wake/purdex", "  github.com/wake/purdex.git  ", "git@github.com:wake/purdex.git", "https://github.com/Wake/Purdex"} {
+		if got := normalizeEntry(in); got != "github.com/wake/purdex" {
+			t.Errorf("normalizeEntry(%q) = %q", in, got)
+		}
+	}
+	if PushAllowed("github.com/wake/purdex", []string{"github.com/wake/purdex"}) {
+		t.Error("a remote spelled like a relative path was allowed by an identical entry")
 	}
 }
 

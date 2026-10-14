@@ -42,11 +42,15 @@ func (g *Git) adopt() {
 	for _, e := range entries {
 		wt := filepath.Join(g.Dir, e.Name(), "wt")
 		if _, err := os.Stat(filepath.Join(wt, ".git")); err == nil {
-			g.remember(e.Name())
-			// A worktree found on disk is trusted to be the repository it says it is, as of now; from here on it must stay so.
-			if out, err := g.git(context.Background(), wt, 10*time.Second, "rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil {
-				g.setIdentity(e.Name(), out)
+			// The folder is named for the hash of its repository's common dir (Project.ID): a worktree found on disk is
+			// adopted only if it still belongs to that repository; from then on it must stay so (checkWT).
+			out, err := g.git(context.Background(), wt, 10*time.Second, "rev-parse", "--path-format=absolute", "--git-common-dir")
+			if err != nil || (hashID(out) != e.Name() && hashID(canonicalDir(out)) != e.Name()) {
+				g.logOnce("adopt/"+e.Name(), "journal: %s is not the worktree of project %s (it belongs to %q); it is left alone", wt, e.Name(), out)
+				continue
 			}
+			g.remember(e.Name())
+			g.setIdentity(e.Name(), out)
 		}
 	}
 }

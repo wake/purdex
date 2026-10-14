@@ -458,3 +458,36 @@ func TestGit_LogOnceForgetsKeysWhoseHourIsOver(t *testing.T) {
 		t.Fatalf("%d keys are kept after their hour was over", n)
 	}
 }
+
+// A worktree replaced before the daemon started is not adopted: the folder is named for the repository it must belong to.
+func TestGit_AWorktreeReplacedBeforeARestartIsNotAdopted(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.writeJournal(t, "a.md", "one\n")
+	wt := WorktreeDir(f.g.Dir, f.p)
+	if err := os.RemoveAll(wt); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(wt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tgit(t, wt, "init", "-q", "-b", Branch)
+	f.write(t, filepath.Join(wt, ".purdex"), "a.md", "an impostor\n")
+	g2 := &Git{Dir: f.g.Dir, Logf: func(format string, a ...any) { f.logs = append(f.logs, fmt.Sprintf(format, a...)) }}
+	g2.adopt()
+	g2.Round(ctx)
+	if out, _ := gitOut(wt, "rev-list", "--all", "--count"); out != "0" {
+		t.Fatalf("the impostor got %s commit(s)", out)
+	}
+	if countContaining(f.logs, "is not the worktree of project") == 0 {
+		t.Fatalf("the refusal was not logged: %v", f.logs)
+	}
+	// The real worktree of the same project is adopted.
+	f2 := newFixture(t)
+	f2.writeJournal(t, "a.md", "one\n")
+	g3 := &Git{Dir: f2.g.Dir, Logf: func(string, ...any) {}}
+	g3.adopt()
+	if !g3.known[f2.p.ID] {
+		t.Fatal("the genuine worktree was not adopted")
+	}
+}
