@@ -139,6 +139,8 @@ const fresh = () => ({
   askEpoch: 0, // bumped by everything that makes an ask in the air stale (a /clear, a session reset, a compaction); never reset, like gen
   half: undefined, // { op, path, at, sid }: the fresh half this session wrote (idle half, RT-3b): the next relay may reuse its file until the conversation moves
   halfBeginning: false, // a half begin is out: it holds no prompt
+  halfStatus: false, // the status line says 「已寫好接力檔」 and nothing else has replaced it
+  mainTurns: 0, // main-conversation turn.starts so far: a hello answer older than a turn restores no half
   askBusy: undefined, // a token while a member's `pdx relay ask` is out (member relay ask, D3: it changes no relay state)
   teamQueued: undefined, // { parsed, viaLead }: a /team (become lead) or /team spawn typed while a relay ran: run at the next return to idle (newest wins)
   leadAsk: undefined, // { gen, sid }: a /lead prompt is out until the agent's turn ends or the session moves on
@@ -230,6 +232,7 @@ function stderrCode(r) {
 async function hello($, seq) {
   try {
     const sid = await $.session.id()
+    const turns = s.mainTurns
     const r = await pdx($, ['relay', 'hello', '--session', sid, '--version', VERSION, '--agent', 'cc'], CALL_TIMEOUT_MS)
     if (seq !== s.helloSeq) return // a newer hello answers for the session now
     const h = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
@@ -258,7 +261,9 @@ async function hello($, seq) {
     if (s.idleWanted && s.state === 'idle') armIdle($) // the turn that ended before this answer (a new turn.start cleared the wish)
     const fh = h.fresh_half
     if (!s.half && fh && typeof fh === 'object' && typeof fh.op_id === 'string' && fh.op_id !== '' && typeof fh.path === 'string' && fh.path !== '') {
-      s.half = { op: fh.op_id, path: fh.path, at: Number(fh.written_at) || 0, sid } // a reloaded mod takes back the half the daemon still holds (RT-3b)
+      const back = { op: fh.op_id, path: fh.path, at: Number(fh.written_at) || 0, sid }
+      if (s.mainTurns === turns && !s.turnRunning) s.half = back // a reloaded mod takes back the half the daemon still holds (RT-3b)
+      else { s.half = back; dropHalf($, true) } // a turn began while hello was out: the half is already stale, and the daemon is told
     }
     if (h.active_relay && typeof h.active_relay === 'object') recoverLater($, h.active_relay, sid)
     if (h.waiting && typeof h.waiting === 'object') adoptWaitingLater($, h.waiting, sid)
@@ -801,7 +806,7 @@ async function begin($, sid, gen, u, adopted, manual = false, idle = false, reas
   }
   s.state = 'awaiting'
   s.fixRounds = 0
-  if (!s.pending.half) $.ui.status(STATUS_WAITING)
+  if (!s.pending.half) { $.ui.status(STATUS_WAITING); s.halfStatus = false }
   const p = s.pending
   adopted(p)
   later($, STEP_MS, async () => {
@@ -1548,6 +1553,7 @@ function dropHalf($, stale) {
   const h = s.half
   if (!h) return
   s.half = undefined
+  if (s.halfStatus) { s.halfStatus = false; $.ui.status(undefined) } // the status line no longer promises a file
   if (!stale) return
   later($, 0, async () => {
     const r = await pdx($, ['relay', 'fresh', '--session', h.sid, '--op', h.op, '--stale'], CALL_TIMEOUT_MS)
@@ -1735,11 +1741,15 @@ async function onWriteTurnDone($) {
     // A half ends where its file is written: no /clear, no seed (RT-3b T35). The session is idle again and keeps the half for the next
     // relay; the threshold check runs once now, so at >= the threshold it asks at once and reuses it.
     report($, p.op.id, 'written')
-    toIdle($)
     let at = 0
     try { at = await $.clock.now() } catch {}
+    if (s.pending !== p) return // the conversation moved on while the clock was read
+    // The half is recorded BEFORE the idle state is exposed: a reask, a control claim or a queued /team that toIdle starts at once
+    // must find it (and reuse it), not begin as if there were none (codex R1).
     s.half = { op: p.op.id, path: p.path, at, sid: p.oldSession }
+    toIdle($)
     $.ui.status(STATUS_HALF)
+    s.halfStatus = true
     $.ui.toast(toastHalf(p.path))
     await maybeBegin($)
     return
@@ -1850,7 +1860,7 @@ export function register(on) {
   on('turn.start', async ($, e, next) => {
     const p = s.pending
     let own = false // the mod's own write / seed turn
-    if (s.interactive && !e.agentId) { s.turnRunning = true; disarmIdle() }
+    if (s.interactive && !e.agentId) { s.turnRunning = true; s.mainTurns++; disarmIdle() }
     if (s.interactive && s.leadAsk && s.leadAsk.turnId === undefined && typeof e.text === 'string' && e.text.includes(s.leadAsk.nonce)) s.leadAsk.turnId = e.turnId
     if (s.interactive && p && p.nonce && s.state === p.nonceState && typeof e.text === 'string' && e.text.includes(p.nonce)) {
       const writing = s.state === 'approved'

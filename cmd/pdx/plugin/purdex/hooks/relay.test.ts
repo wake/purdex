@@ -4605,3 +4605,46 @@ test('RT-3b T35: a fire that finds a fresh half asks for nothing', async ($, on)
   await f.clock.advance(120 * MIN)
   expect(count(f, 'begin')).toBe(before)
 })
+
+// A reask that arrived while the half was being written begins the moment the session returns to idle - with the half it just wrote.
+// Mutation gate: record the half after toIdle → the reask begins without --reuse (red).
+test('RT-3b T36: a reask that waited for the half’s write turn reuses that half', async ($, on) => {
+  const { f } = await halfWriting($, on)
+  const id = '7c1e2a4b-0d3f-4a58-9b6e-000000000001'
+  await $.session.receive({ origin: { kind: 'peer' }, text: '<cross-session-message from="uds:/tmp/cc-socks/1.sock" from-name="mlab/lead-x">\n[pdx-relay:control] reask id=' + id + '\n</cross-session-message>' })
+  await f.clock.advance(100)
+  f.files[HALF_PATH] = GOOD_FILE
+  await $.turn.start({ text: f.submits[0].text, turnId: 'tw' })
+  await turnAndSettle($, f, 'tw')
+  await f.clock.advance(100)
+  expect(idleBegins(f).at(-1)).toBe('relay begin --self --session sid-old --used 55 --window 200000 --reask ' + id + ' --reuse half-1')
+})
+
+// The status line stops promising a file once the half is dropped.
+// Mutation gate: dropHalf leaves the status → red.
+test('RT-3b T36: dropping the half clears its status line', async ($, on) => {
+  const { f } = await halfWritten($, on)
+  expect(f.statuses.at(-1)).toBe('已寫好接力檔')
+  await $.turn.start({ text: 'hello', turnId: 't2' })
+  await f.clock.settle()
+  expect(f.statuses.at(-1)).toBeUndefined()
+})
+
+// A hello answered after a turn began restores no half (that turn made its file stale): the daemon is told it is stale instead.
+// Mutation gate: restore regardless of mainTurns → the next ask reuses it (red).
+test('RT-3b T36: a hello that answers after a main turn started restores no half and reports it stale', async ($, on) => {
+  const hello = HELLO('none', { idle_minutes: 40, idle_threshold: 40, fresh_half: { op_id: 'half-1', path: HALF_PATH, written_at: 5 } })
+  const w = halfWorld(on, { usage: AT72 }, {}, hello)
+  const g = gated()
+  const base = w.f.pdx
+  w.f.pdx = (argv) => (argv[1] === 'hello' ? g.p.then(() => base(argv)) : base(argv))
+  w.f.files[HALF_PATH] = GOOD_FILE
+  await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+  await w.f.clock.advance(5) // hello is out
+  await $.turn.start({ text: 'x', turnId: 't0' })
+  g.release()
+  await w.f.clock.settle()
+  await turnAndSettle($, w.f, 't0')
+  expect(staleCalls(w.f)).toEqual([STALE])
+  expect(idleBegins(w.f).at(-1)).toBe('relay begin --self --session sid-old --used 72 --window 200000')
+})
