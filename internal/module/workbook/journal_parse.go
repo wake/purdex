@@ -6,6 +6,10 @@ import (
 	"strings"
 )
 
+// MaxJournalEvents is the most events one journal job may leave (prompt document §1: 0 to 4 a turn); the rest is
+// dropped and counted, because the daemon cannot trust the prompt alone.
+const MaxJournalEvents = 4
+
 // ModelEvent is one item of a journal job's `events` as the model wrote it (prompt document §1). Nothing here is
 // trusted yet: ValidateJournal cuts, scrubs and filters it.
 type ModelEvent struct {
@@ -72,6 +76,16 @@ func objectItem(raw json.RawMessage, into any) error {
 	if json.Unmarshal(b, into) != nil {
 		return ErrFormat
 	}
+	// A null member decodes into a string or slice without an error, so it is refused here.
+	var members map[string]json.RawMessage
+	if json.Unmarshal(b, &members) != nil {
+		return ErrFormat
+	}
+	for _, v := range members {
+		if bytes.Equal(bytes.TrimSpace(v), []byte("null")) {
+			return ErrFormat
+		}
+	}
 	return nil
 }
 
@@ -114,7 +128,7 @@ func ParseJournalJSON(text string) (JournalOutput, error) {
 			}
 			ev.Items = append(ev.Items, s)
 		}
-		if !knownEvent(ev) {
+		if !knownEvent(ev) || len(out.Events) >= MaxJournalEvents {
 			out.Dropped++
 			continue
 		}

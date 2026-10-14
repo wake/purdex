@@ -2,6 +2,7 @@ package workbook
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -60,6 +61,11 @@ func TestParseJournalJSON_MalformedShapes(t *testing.T) {
 		"roadmap string item":   `{"events":[],"confirm_done":[],"roadmap":["x"]}`,
 		"roadmap dup key":       `{"events":[],"confirm_done":[],"roadmap":[{"feature":"a","feature":"b","stage":"s","status":"完成"}]}`,
 		"roadmap number field":  `{"events":[],"confirm_done":[],"roadmap":[{"feature":"a","stage":2,"status":"完成"}]}`,
+		"text null":             `{"events":[{"kind":"comm","text":null}],"confirm_done":[],"roadmap":[]}`,
+		"from null":             `{"events":[{"kind":"comm","from":null,"text":"x"}],"confirm_done":[],"roadmap":[]}`,
+		"items null":            `{"events":[{"kind":"confirm","text":"x","items":null}],"confirm_done":[],"roadmap":[]}`,
+		"detail_start null":     `{"events":[{"kind":"confirm","text":"x","items":["a"],"detail_start":null}],"confirm_done":[],"roadmap":[]}`,
+		"roadmap stage null":    `{"events":[],"confirm_done":[],"roadmap":[{"feature":"a","stage":null,"status":"完成"}]}`,
 		"trailing text":         okJournal + ` trailing`,
 	}
 	for name, text := range cases {
@@ -96,5 +102,20 @@ func TestParseJournalJSON_IsNotTheV2Parser(t *testing.T) {
 	v2 := `{"skip":false,"thing":"a","push":"b","entry":"c","status":"d","thing_done":false,"todos":{"done":[],"dropped":[],"add":[]}}`
 	if _, err := ParseJournalJSON(v2); !errors.Is(err, ErrFormat) {
 		t.Error("journal parser accepted a v2 answer")
+	}
+}
+
+// A turn leaves at most MaxJournalEvents events; the rest is dropped and counted (the prompt says 0 to 4).
+func TestParseJournalJSON_CapsEvents(t *testing.T) {
+	ev := `{"kind":"comm","text":"通知"}`
+	for _, c := range []struct{ n, kept, dropped int }{{4, 4, 0}, {5, 4, 1}, {500, 4, 496}} {
+		items := make([]string, c.n)
+		for i := range items {
+			items[i] = ev
+		}
+		out, err := ParseJournalJSON(`{"events":[` + strings.Join(items, ",") + `],"confirm_done":[],"roadmap":[]}`)
+		if err != nil || len(out.Events) != c.kept || out.Dropped != c.dropped {
+			t.Errorf("%d events: kept %d dropped %d err %v, want %d / %d", c.n, len(out.Events), out.Dropped, err, c.kept, c.dropped)
+		}
 	}
 }
