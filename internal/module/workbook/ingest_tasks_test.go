@@ -657,6 +657,97 @@ func TestTaskMirror_ATeamSkippedWhileItsLeadWasUnknownIsCaughtUpWithoutNewRows(t
 	}
 }
 
+// A merged report is a completion too (spec §6): a known, unfinished task gets its task_done with the closing line at once, and
+// the completion that follows writes nothing more. A merged report that comes in the same tick as the task, or before the task
+// is known, still ends in one task_done once the task is seen. A done-kind report only gives a closing line; a deleted task
+// never gets a task_done.
+// Mutation gate: no task_done from a merged report -> the first case has none (red); a done-kind report counts as merged ->
+// the done-kind case gets a task_done (red); a deleted task gets one -> red; no remembered merged report -> the same-tick
+// case has no task_done (red).
+func TestTaskMirror_AMergedReportWritesTheTaskDoneBeforeTheCompletion(t *testing.T) {
+	k := newMirrorKit(t)
+	k.finishBaseline()
+	k.feed.set(k.task(5, "已知的", taskDoing, time.Second, time.Second))
+	k.feed.set(k.task(6, "只收到 done 報告", taskDoing, time.Second, time.Second))
+	k.feed.set(k.task(7, "被刪除", taskDeleted, time.Second, 2*time.Second))
+	// a later row of another team: the cursor goes past these tasks, so the rewind does not read them again and only the
+	// reports can complete them
+	k.feed.set(team.TaskChange{TeamID: "other", Seq: 1, Subject: "別組", Status: taskDoing, OwnerSessionID: "x", CreatedAt: k.ms(15 * time.Second), UpdatedAt: k.ms(15 * time.Second)})
+	k.now = k.now.Add(mirrorEvery)
+	k.tick()
+	k.feed.reports = []team.ReportRow{
+		{RowID: 1, TeamID: mkTeam, ID: "r1", Kind: "merged", TaskSeq: 5, Summary: "已合併 #2900", CreatedAt: k.ms(20 * time.Second)},
+		{RowID: 2, TeamID: mkTeam, ID: "r2", Kind: "done", TaskSeq: 6, Summary: "只是 done", CreatedAt: k.ms(21 * time.Second)},
+		{RowID: 3, TeamID: mkTeam, ID: "r3", Kind: "merged", TaskSeq: 7, Summary: "刪掉的", CreatedAt: k.ms(22 * time.Second)},
+	}
+	// the same tick: a task that arrives together with its merged report
+	k.feed.set(k.task(8, "同一輪", taskDoing, 25*time.Second, 25*time.Second))
+	k.feed.reports = append(k.feed.reports, team.ReportRow{RowID: 4, TeamID: mkTeam, ID: "r4", Kind: "merged", TaskSeq: 8, Summary: "同輪已合併", CreatedAt: k.ms(26 * time.Second)})
+	// a task that arrives already deleted, with a merged report in the same tick
+	k.feed.set(k.task(9, "同輪就被刪除", taskDeleted, 25*time.Second, 25*time.Second))
+	k.feed.reports = append(k.feed.reports, team.ReportRow{RowID: 5, TeamID: mkTeam, ID: "r5", Kind: "merged", TaskSeq: 9, Summary: "刪掉的二", CreatedAt: k.ms(26 * time.Second)})
+	k.now = k.now.Add(mirrorEvery)
+	k.tick()
+	k.drain()
+	e, ok := k.entry(entryID(mkTeam, 5, "done"))
+	if !ok || e.Kind != journal.KindTaskDone || e.Text != "#5 已知的" || e.Detail != "已合併 #2900" {
+		t.Fatalf("task_done of the merged task = %+v, %v", e, ok)
+	}
+	if _, ok := k.entry(entryID(mkTeam, 6, "done")); ok {
+		t.Error("a done-kind report wrote a task_done")
+	}
+	if _, ok := k.entry(entryID(mkTeam, 7, "done")); ok {
+		t.Error("a deleted task got a task_done")
+	}
+	if _, ok := k.entry(entryID(mkTeam, 9, "done")); ok {
+		t.Error("a task deleted in the tick of its merged report got a task_done")
+	}
+	if e, ok := k.entry(entryID(mkTeam, 8, "done")); !ok || e.Text != "#8 同一輪" || e.Detail != "同輪已合併" {
+		t.Errorf("task_done of the task that came with its merged report = %+v, %v", e, ok)
+	}
+	// the completions that follow write nothing more
+	k.feed.set(k.task(5, "已知的", taskCompleted, time.Second, 40*time.Second))
+	k.feed.set(k.task(8, "同一輪", taskCompleted, 25*time.Second, 41*time.Second))
+	k.now = k.now.Add(mirrorEvery)
+	k.tick()
+	k.drain()
+	n := 0
+	for _, x := range k.entries() {
+		if x.Kind == journal.KindTaskDone {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("%d task_done entries, want 2 (tasks 5 and 8, once each)", n)
+	}
+}
+
+// A team mirrored here before whose lead goes elsewhere and comes back is caught up again: what changed while it was away is
+// read, though the team already has a stored state (the catch-up is not only for a team seen the first time).
+// Mutation gate: catch up only a team with no stored state -> the change made while it was away never shows (red).
+func TestTaskMirror_ATeamWhoseLeadLeavesAndComesBackIsCaughtUpAgain(t *testing.T) {
+	k := newMirrorKit(t)
+	k.feed.set(k.task(1, "第一件", taskDoing, -5*time.Hour, -5*time.Hour))
+	k.tick() // the first scan: the team is mirrored here
+	k.drain()
+	if len(k.tasksFile()) != 1 {
+		t.Fatalf("tasks file = %+v after the first scan", k.tasksFile())
+	}
+	k.local[mkLead] = false
+	k.feed.set(k.task(2, "離開時新增", taskDoing, -3*time.Hour, -2*time.Hour))
+	// a later row of another team: the cursor goes past task 2, and the rewind (10 s) cannot reach it any more
+	k.feed.set(team.TaskChange{TeamID: "other", Seq: 1, Subject: "別組", Status: taskDoing, OwnerSessionID: "x", CreatedAt: k.ms(-time.Hour), UpdatedAt: k.ms(-time.Hour)})
+	k.now = k.now.Add(mirrorEvery)
+	k.tick() // the cursor passes task 2 while the lead is elsewhere
+	k.local[mkLead] = true
+	k.now = k.now.Add(mirrorEvery)
+	k.tick() // no new row of the team
+	k.drain()
+	if got := len(k.tasksFile()); got != 2 {
+		t.Fatalf("the tasks file shows %d tasks, want 2: what changed while the lead was away was lost", got)
+	}
+}
+
 // A team that was met with its lead elsewhere and is gone from the team module is forgotten, not looked at for ever.
 // Mutation gate: keep the marker of a gone team -> it stays set (red).
 func TestTaskMirror_ASkippedTeamThatIsGoneIsForgotten(t *testing.T) {

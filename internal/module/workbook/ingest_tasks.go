@@ -65,6 +65,7 @@ type mirrorTask struct {
 	Done    bool   `json:"done,omitempty"` // its task_done is queued
 	DoneAt  int64  `json:"dat,omitempty"`
 	DoneSum bool   `json:"dsum,omitempty"` // the queued task_done has its closing line (or never will: a baseline task)
+	Merged  bool   `json:"mg,omitempty"`   // a merged report named it: its task_done does not wait for the completion
 }
 
 // taskPayload is a `task` outbox row.
@@ -159,7 +160,7 @@ func (tm *teamMirror) observeTask(teamID string, c team.TaskChange, baseline boo
 				Owner: c.OwnerSessionID, Text: taskText(c.Seq, c.Subject), Refs: refsOf(c.Subject, c.MetadataPRs)})
 		}
 	}
-	if c.Status == taskCompleted && !t.Done {
+	if (c.Status == taskCompleted || t.Merged) && c.Status != taskDeleted && !t.Done {
 		t.Done, t.DoneAt, d.changed = true, c.UpdatedAt, true
 		t.DoneSum = t.Sum != "" || baseline
 		if !baseline {
@@ -170,23 +171,29 @@ func (tm *teamMirror) observeTask(teamID string, c team.TaskChange, baseline boo
 }
 
 // observeReport records the closing line of a task a merged or done report names. The line goes into the task_done when it
-// is queued after this; when the task_done was queued without one, it is filled in (only while the entry has none).
+// is queued after this; when the task_done was queued without one, it is filled in (only while the entry has none). A
+// merged report is a completion too (spec §6): for a task already known and not finished it queues the task_done at once,
+// and the completion that follows finds it written. A merged report that comes before its task is known is remembered, and
+// observeTask queues the task_done when the task arrives.
 func (tm *teamMirror) observeReport(teamID string, r team.ReportRow, d *mirrorDelta) {
 	if r.TaskSeq <= 0 || (r.Kind != "merged" && r.Kind != "done") {
 		return
 	}
-	sum := summaryLine(r.Summary)
-	if sum == "" {
-		return
-	}
 	t := tm.task(r.TaskSeq)
-	if t.Sum != "" {
-		return
+	if r.Kind == "merged" && !t.Merged {
+		t.Merged, d.changed = true, true
 	}
-	t.Sum, d.changed = sum, true
-	if t.Done && !t.DoneSum {
-		t.DoneSum = true
-		d.fills = append(d.fills, taskFill{ID: entryID(teamID, r.TaskSeq, "done"), At: t.DoneAt, Detail: sum})
+	if sum := summaryLine(r.Summary); sum != "" && t.Sum == "" {
+		t.Sum, d.changed = sum, true
+		if t.Done && !t.DoneSum {
+			t.DoneSum = true
+			d.fills = append(d.fills, taskFill{ID: entryID(teamID, r.TaskSeq, "done"), At: t.DoneAt, Detail: sum})
+		}
+	}
+	if t.Merged && !t.Done && t.St != "" && t.St != taskDeleted {
+		t.Done, t.DoneAt, t.DoneSum, d.changed = true, r.CreatedAt, t.Sum != "", true
+		d.events = append(d.events, taskEvent{ID: entryID(teamID, r.TaskSeq, "done"), Kind: string(journal.KindTaskDone), At: r.CreatedAt,
+			Owner: t.Owner, Text: taskText(r.TaskSeq, t.Title), Detail: t.Sum, Refs: refsOf(t.Title, t.PRs)})
 	}
 }
 
@@ -409,6 +416,7 @@ func (tk *tick) recheck(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+			tm.fresh = true // also a team mirrored here before: what changed while its lead was away is read again
 			d := &mirrorDelta{}
 			if err := tk.catchUp(ctx, id, tm, d); err != nil {
 				return err
