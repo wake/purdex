@@ -161,6 +161,7 @@ func SetStatus(file, feature, stage, status string) (changed bool, err error) {
 	if !known {
 		return false, fmt.Errorf("%w: %q", ErrUnknownStatus, status)
 	}
+	defer lockFile(file)()
 	lines, err := readRoadmap(file)
 	if err != nil {
 		return false, err
@@ -169,29 +170,38 @@ func SetStatus(file, feature, stage, status string) (changed bool, err error) {
 	if err != nil {
 		return false, err
 	}
+	var hits []rowRef
 	for _, f := range fs {
 		if f.Name != feature {
 			continue
 		}
 		for _, r := range f.rows {
-			if r.stage.Name != stage {
-				continue
+			if r.stage.Name == stage {
+				hits = append(hits, r)
 			}
-			if r.stage.Status == status {
-				return false, nil
-			}
-			l := lines[r.line]
-			old := l[r.status.start:r.status.end]
-			trimmed := strings.TrimSpace(old)
-			lead, trail := " ", " "
-			if trimmed != "" {
-				lead = old[:strings.Index(old, trimmed)]
-				trail = old[strings.Index(old, trimmed)+len(trimmed):]
-			}
-			lines[r.line] = l[:r.status.start] + lead + status + trail + l[r.status.end:]
-			return true, atomicWrite(file, []byte(strings.Join(lines, "\n")))
 		}
+	}
+	switch {
+	case len(hits) == 0:
+		return false, nil
+	case len(hits) > 1:
+		return false, fmt.Errorf("%w: %d rows for %s / %s", ErrUnparsable, len(hits), feature, stage)
+	}
+	r := hits[0]
+	if r.stage.Status == status {
 		return false, nil
 	}
-	return false, nil
+	l := lines[r.line]
+	old := l[r.status.start:r.status.end]
+	trimmed := strings.TrimSpace(old)
+	lead, trail := " ", " "
+	if trimmed != "" {
+		lead = old[:strings.Index(old, trimmed)]
+		trail = old[strings.Index(old, trimmed)+len(trimmed):]
+	}
+	lines[r.line] = l[:r.status.start] + lead + status + trail + l[r.status.end:]
+	if err := atomicWrite(file, []byte(strings.Join(lines, "\n"))); err != nil {
+		return false, err
+	}
+	return true, nil
 }

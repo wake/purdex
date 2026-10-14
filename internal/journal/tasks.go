@@ -3,6 +3,7 @@ package journal
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -43,6 +44,16 @@ func cell(s string) string {
 // WriteTasks writes the whole tasks file: a table per non-empty state, in the order 進行中 / 未開始 / 完成 / 放棄,
 // each row carrying its task as JSON in a trailing comment (the visible cells are a rendering of it).
 func WriteTasks(file string, tasks []Task) error {
+	for _, t := range tasks {
+		known := false
+		for _, st := range taskStates {
+			known = known || st.State == t.State
+		}
+		if !known {
+			return fmt.Errorf("%w: task %q has state %q", ErrUnknownStatus, t.Key, t.State)
+		}
+	}
+	defer lockFile(file)()
 	var lines []string
 	for _, st := range taskStates {
 		var rows []string
