@@ -96,3 +96,15 @@ func TestAuto_ReplayIsTheSameRequest(t *testing.T) {
 	assert.Equal(t, http.StatusOK, again.Code, again.Body.String())
 	assert.Equal(t, first.ID, decodeLease(t, again).ID)
 }
+
+// An ask row is not one auto could have made: the same client id with auto is a
+// reused id, not the ask request. (M: let auto replay any row.)
+func TestAuto_DoesNotReplayAnAskRow(t *testing.T) {
+	f := newPosFix(t)
+	f.setZone("danger", "flat")
+	cid := newCID()
+	require.Less(t, f.postAs(cid, pidA, resources.CallAsk, "go build ./...").Code, 300)
+	again := f.postAs(cid, pidA, resources.CallAuto, "go build ./...")
+	assert.Equal(t, http.StatusConflict, again.Code, again.Body.String())
+	assert.Equal(t, resources.ErrClientIDReused, apiCode(again))
+}

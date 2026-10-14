@@ -223,7 +223,7 @@ func (m *Module) replay(w http.ResponseWriter, r *http.Request, req resources.Le
 	// is only what the client itself sent, so a replay is the same request whatever
 	// the lookup found this time or the time before.
 	sessionOK := row.SessionID == req.SessionID || (req.SessionID == "" && row.Scope == resources.ScopeProcess)
-	same := sessionOK && row.ToolUseID == req.ToolUseID && (req.Mode == resources.CallAuto || callMode(row.Mode) == callMode(req.Mode))
+	same := sessionOK && row.ToolUseID == req.ToolUseID && modeReplays(req.Mode, row.Mode)
 	if req.Kind != "" {
 		same = same && row.Kind == req.Kind
 	} else {
@@ -540,6 +540,17 @@ func (m *Module) queuedReasonOf(row leaseRow) string {
 		return resources.QueuedOwnRunning
 	}
 	return resources.QueuedBehindQueue
+}
+
+// modeReplays says whether a request of mode req may replay a row made with mode
+// row. An auto request replays the row it resolved to (queue or wait), never an
+// ask row: auto cannot make one.
+func modeReplays(req, row string) bool {
+	if req == resources.CallAuto {
+		c := callMode(row)
+		return c == resources.CallQueue || c == resources.CallWait
+	}
+	return callMode(row) == callMode(req)
 }
 
 // callMode reads an empty mode as wait: rows from before amendment A and
