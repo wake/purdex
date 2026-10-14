@@ -1,4 +1,4 @@
-# Name pool — spec (draft)
+# Name pool — spec
 
 > Draft 2026-10-14, 88 (interface line; 1f agreed it is B-line work and will review). User decision the same day (§2). Replaces the two-character ref suffix of a peer's virtual name with a short human name.
 
@@ -13,16 +13,18 @@ A virtual name today is `<base>-<ref[1:3]>` (`internal/peers/vname.go:30`): `pur
 3. **A relay keeps the name.** A name **frees when the session ends** and can be given again.
 4. **No duplicates across hosts.** Keep it very simple.
 
-88's defaults (stated to the user, not objected to): a rare collision (two hosts picking the same name at the same moment) is handled as today's `ambiguous`; when all 30 are taken the old two-character suffix is used; conversations that already have a name keep it.
+Confirmed by the user after the draft: the resume rule (§5, 「resume 撞名更換可以」). 88's defaults (stated to the user, not objected to): a rare collision (two hosts picking the same name at the same moment) is handled as today's `ambiguous`; when all 30 are taken the old two-character suffix is used; conversations that already have a name keep it.
 
 ## 3. The pool
 
 ```
-adam amy ben cleo dan eva finn gwen hugo iris ivy jack june kai leo
-lily max mia nina otto pia rex rosa sam tara tom uma vic wen zoe
+adam emma kenji yuki wei mei joon hana raj priya
+diego lucia louis chloe jonas anna marco elena omar layla
+erik freya ivan olga kofi amara tiago julia budi linh
 ```
 
-- Lowercase ASCII, 2–4 letters, no two alike in their first three letters' sound when read aloud in a list; none is 6 characters, so no name can be ref-shaped (`RoutableName`, `internal/peers/ref.go:146`).
+- **Common employee names from many countries** (user 2026-10-14: 「挑一下常見的公司的員工名稱，涵蓋各國」), two per region, one male and one female: US/UK, Japan, China/Taiwan, Korea, India, Spain/Latin America, France, Germany, Italy, the Arab world, the Nordics, Russia, West Africa, Brazil/Portugal, Indonesia/Vietnam.
+- Lowercase ASCII, 3–5 letters, no two sharing their first three letters. A virtual name always contains `-`, so it can never be ref-shaped (`RoutableName`, `internal/peers/ref.go:146`).
 - Compiled into the daemon (`internal/peers/namepool.go`); the order does not matter.
 
 ## 4. Picking

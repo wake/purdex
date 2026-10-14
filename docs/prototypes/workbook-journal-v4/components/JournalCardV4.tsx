@@ -89,7 +89,7 @@ export function JournalCardV4(p: Props) {
           {FILTERS.map((f) => {
             const on = filter === f.id
             return (
-              <button key={f.id} type="button" role="tab" aria-selected={on} onClick={() => setFilter(f.id)}
+              <button key={f.id} type="button" role="tab" aria-selected={on} onClick={() => setFilter(on && f.id !== 'all' ? 'all' : f.id)}
                 className={`px-2 py-0.5 rounded-full border text-[11px] ${on ? 'border-accent text-text-primary bg-accent-muted' : 'border-border-default text-text-secondary hover:text-text-primary hover:bg-surface-hover'}`}>
                 {f.label}
                 {f.id === 'confirm' && openCount > 0 && <span className="ml-1 px-1 rounded-full text-[10px] font-medium" style={{ background: KIND_COLOR.confirm, color: '#3a2f00' }}>{openCount}</span>}
@@ -151,7 +151,6 @@ function Row({ e, compact, hoverTask, onHoverTask, onTogglePin, selectedConfirm,
       onMouseEnter={() => e.taskId && onHoverTask(e.taskId)} onMouseLeave={() => e.taskId && onHoverTask(null)}
       onClick={isConfirm ? () => onOpenConfirm(e.id) : undefined}
       className={`group relative flex gap-2 py-1.5 px-1 -mx-1 rounded border-b border-border-subtle/50 last:border-b-0 ${isConfirm ? 'cursor-pointer hover:bg-surface-hover' : ''} ${linked ? 'bg-accent-muted ring-1 ring-accent' : ''} ${selected ? 'ring-1' : ''}`}
-      style={selected ? { boxShadow: `inset 3px 0 0 ${yellow}` } : isConfirm && !resolved ? { boxShadow: `inset 3px 0 0 ${yellow}99` } : undefined}
     >
       <span className="w-9 flex-shrink-0 tabular-nums text-[10.5px] text-text-muted pt-0.5">{e.time}</span>
       <div className="min-w-0 flex-1 pr-5">

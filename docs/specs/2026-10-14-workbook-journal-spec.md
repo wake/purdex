@@ -38,15 +38,13 @@ The workbook view stacks 「目前狀況」, up to ~30 todos and several lists; 
 
 The name pool (session names instead of the ref suffix, user 2026-10-14) is a separate spec (§13).
 
-## 3. Open — the user decides
+## 3. Decided after the prototype (2026-10-14)
 
-- **Q-A, how the files reach git** (item 14). Every turn changes the journal; main takes no direct pushes; worktrees fast-forward main often.
-  - 甲 (88's proposal): a dedicated branch `purdex/journal` in the project, written in its own worktree by the daemon, committed and pushed every ~10 minutes when something changed. Main is untouched.
-  - 乙: under main's `.purdex/`, written into the main checkout and carried into main by each release's bump PR.
-  - 丙: the daemon commits to main directly (needs the user's explicit authorisation).
-- **Q-B, the number on the 日誌 button**: proposal — the count of unresolved 待確認 items of the active tab's journal; nothing for ordinary entries.
-- **Q-C, filters**: proposal — 全部 / 執行 / 任務 / 請求與溝通 / 待確認.
-- **Q-D, §12 原文 → 新文** (confirmed with the prototype).
+- **Q-A, how the files reach git — 甲** (user: 「可以」): a dedicated branch `purdex/journal` in the project, written in its own worktree by the daemon, committed and pushed every ~10 minutes when something changed. Main is untouched (no direct push, no conflict with fast-forwards or PRs).
+- **Q-B, the number on the 日誌 button**: the count of unresolved 待確認 **items** of the active tab's journal; nothing for ordinary entries, nothing when 0.
+- **Q-C, filters**: 全部 / 執行 / 任務 / 請求與溝通 / 待確認 (a count of open items on 待確認). **Clicking the active filter again clears it** (back to 全部).
+- **Prototype** (`docs/prototypes/workbook-journal-v4/`): layout approved; **a 待確認 row has no coloured left edge** (the yellow is on its chip and checkboxes only).
+- **Q-D, §12 原文 → 新文**: still to confirm.
 
 ## 4. Journal units and scope
 
@@ -102,7 +100,7 @@ The name pool (session names instead of the ref suffix, user 2026-10-14) is a se
 
 ## 8. Files (item 20)
 
-- Under the project: `.purdex/journal/<unit>/<YYYY-MM>.md`, `.purdex/tasks/<unit>.md`, `.purdex/roadmap.md` (the folder's place in git: §3 Q-A). `<unit>` = the team's label slug + id suffix, or the solo session's name + ref.
+- On the branch `purdex/journal` (§3 Q-A), in the daemon's worktree of it: `.purdex/journal/<unit>/<YYYY-MM>.md`, `.purdex/tasks/<unit>.md`, `.purdex/roadmap.md`. The lead agent edits `roadmap.md` in that worktree; the daemon commits it with the rest. `<unit>` = the team's label slug + id suffix, or the solo session's name + ref.
 - **Markdown that reads as a document and parses back** — each entry a block:
 
 ```markdown
@@ -142,13 +140,13 @@ RA-2 已 merge：拿掉「不再詢問」、補上終端機指令核准的提示
   - `PUT /api/journal/pin` `{session_id, entry_id, pinned}`.
   - Host event `journal.changed` `{unit, project, what: entries|tasks|roadmap}` → the App re-reads what it shows.
   - Device tokens (iOS) may read and pin.
-- **Git**: per §3 Q-A.
+- **Git** (§3 Q-A): one worktree of `purdex/journal` per project under the daemon's data folder (created on first write from the remote branch, or as an orphan branch when none exists); a commit every ~10 minutes when files changed (author `Purdex journal`), then a push; a failed push is retried next round and never blocks writing; the branch is never merged into main.
 
 ## 11. Mac App
 
 - Title bar: 「團隊」 (team tabs) and 「日誌」 (any Claude Code tab whose host has `journal.v1`) buttons, as v3.
 - **Layout** (left → right): team card (team tabs) with the **roadmap tab** under it — or the roadmap tab alone without a team; the **journal card**; the **tasks tab**. Roadmap and tasks open and close from the journal card's header. Narrow windows drop, in order: the tasks tab, the roadmap, the team card; the journal stays.
-- **Journal card**: header (unit name, role line, live dot, close); the pinned band; filters (Q-C); the stream oldest at the top, newest at the bottom, a date divider per day; row = time, kind chip, actor, text, refs; a 待確認 row shows its checkboxes (read-only — Haiku ticks them) and opens its detail **to the left** over the roadmap side; a row's menu pins / unpins.
+- **Journal card**: header (unit name, role line, live dot, close); the pinned band; filters (Q-C; the active one clicked again clears it); the stream oldest at the top, newest at the bottom, a date divider per day; row = time, kind chip, actor, text, refs; a 待確認 row (no coloured left edge) shows its checkboxes (read-only — Haiku ticks them) and opens its detail **to the left** over the roadmap side; a row's menu pins / unpins.
 - Opens scrolled to the bottom; new entries append; pinned to the bottom while there, else 「↓ N 則新事件」; scrolling up loads older months.
 - **Tasks tab**: open tasks first, then done; hovering a `task_new` / `task_done` row highlights its task, and hovering a task highlights its rows.
 - **Roadmap tab**: the project's features, each a 階段 / 說明 / 狀態 table, live.
@@ -177,6 +175,6 @@ The summariser trigger, push, storage of `workbook.db` and secrets handling (v2 
 | phase | side | content |
 |---|---|---|
 | J-P | docs | prompt v3 rounds on real turns (§9), prompt document |
-| J-1 | daemon | project / unit resolution, file writer and parser, journal job output applied, task mirror (team feed, 1f), roadmap status, API, `journal.changed`, `journal.v1`, git per Q-A |
+| J-1 | daemon | project / unit resolution, file writer and parser, journal job output applied, task mirror (team feed, 1f), roadmap status, API, `journal.changed`, `journal.v1`, the `purdex/journal` branch worktree and its commit / push loop |
 | J-2 | SPA | buttons, journal card, pinned band, 待確認, filters, tasks tab, roadmap tab, layout, tab memory, workbook view removed on `journal.v1` hosts |
 | J-3 | purdex-ios | the 日誌 segment |
