@@ -492,6 +492,7 @@ func newFixture(t *testing.T) *fixture {
 	f.core.Registry.Register(hostconfig.RelayPromptsKey, f.switches)
 	f.core.Registry.Register(hostconfig.UnattendedKey, f.unatt)
 	f.core.Registry.Register(peersmod.SenderKey, f.sender)
+	f.core.Registry.Register(peersmod.SelfNoticeSenderKey, f.sender)
 	f.core.Registry.Register(hostconfig.RelayQuotaKey, f.qrule)
 	f.core.Registry.Register(agent.OwnerResolverKey, f.usage) // the team module asserts agent.ContextUsageReader on it
 	f.registerSpawnFakes()

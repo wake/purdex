@@ -23,6 +23,15 @@ type PauseGate interface {
 // key, and a context built from an HTTP request never carries it: only moduleSender.SendFlow, an in-process Go call, sets it.
 type flowKey struct{}
 
+// selfNoticeKey marks a context as a daemon notice spoken in the session's OWN voice (SendSelfNotice): the origin is the target's own inbox.
+// Like flowKey it is unexported, so only an in-process Go call can set it.
+type selfNoticeKey struct{}
+
+func isSelfNotice(ctx context.Context) bool {
+	v, _ := ctx.Value(selfNoticeKey{}).(bool)
+	return v
+}
+
 // isFlow reports whether ctx came from SendFlow.
 func isFlow(ctx context.Context) bool {
 	v, _ := ctx.Value(flowKey{}).(bool)
@@ -68,6 +77,17 @@ const FlowSenderKey = "peers.flow-sender"
 // FlowSender sends the pause's own flow messages (resume notices, bounce lists, reask controls) to a paused session.
 type FlowSender interface {
 	SendFlow(ctx context.Context, req peers.SendRequest) (peers.SendResponse, error)
+}
+
+// SelfNoticeSenderKey is the registry key of the team module's notice sender: a notice to a team lead about a member the lead's host does not
+// run (a member on another host), which has no inbox here to speak from. The daemon has no identity of its own, so the notice is sent from
+// the lead's own inbox to the lead - the one thing SendSelfNotice allows over Send is that self-addressed shape (self_target); the pause
+// check and everything else apply as to any message.
+const SelfNoticeSenderKey = "peers.self-notice-sender"
+
+// SelfNoticeSender sends a notice from a session's own inbox to that session.
+type SelfNoticeSender interface {
+	SendSelfNotice(ctx context.Context, req peers.SendRequest) (peers.SendResponse, error)
 }
 
 // pausedRefusal is what a paused session answers: 409 session_paused with the gate's detail.

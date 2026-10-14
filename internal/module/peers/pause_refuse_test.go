@@ -308,3 +308,25 @@ func TestPause_TheGatesDetailIsTheRefusals(t *testing.T) {
 		t.Fatalf("remote: %d %s (%v), want 409 with %q", rr.Code, rr.Body.String(), err, custom)
 	}
 }
+
+// A team lead is told about a member of another host from its own inbox (SendSelfNotice): delivered to it, where an ordinary send to
+// oneself is refused self_target - and the pause still applies to it. Mutation gates: no exception → the notice is refused (red); the
+// exception for every send → the ordinary one is delivered (red, TestPause_ASessionIsToldByItsOwnInboxThroughSendFlowOnly); the pause
+// skipped → the paused lead takes it (red).
+func TestSelfNotice_DeliveredToTheSessionItself_PauseStillApplies(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	req := s.localSendReq()
+	req.To = localAlias + "/" + ipeers.RefID(targetSessionID)
+	req.Text = "[pdx team] member air26/_abc123 已用 90%"
+	assertRefused(t, s.send(adminCtx(), req), http.StatusBadRequest, ipeers.ErrSelfTarget)
+	resp, err := moduleSender{m: s.m}.SendSelfNotice(context.Background(), req)
+	if err != nil || resp.Result != ipeers.ResultDelivered {
+		t.Fatalf("SendSelfNotice to itself: %+v %v", resp, err)
+	}
+	s.recvLine()
+	gateFor(s, targetSessionID) // the lead is paused: a notice bounces like any message
+	var se *SendError
+	if _, err := (moduleSender{m: s.m}).SendSelfNotice(context.Background(), req); !errors.As(err, &se) || se.Status != http.StatusConflict {
+		t.Fatalf("SendSelfNotice to a paused session: %v, want 409 session_paused", err)
+	}
+}

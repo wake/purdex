@@ -37,9 +37,10 @@ func (e *SendError) Error() string {
 }
 
 var (
-	_ Sender     = moduleSender{}
-	_ Sender     = sendOnly{}
-	_ FlowSender = moduleSender{}
+	_ Sender           = moduleSender{}
+	_ Sender           = sendOnly{}
+	_ FlowSender       = moduleSender{}
+	_ SelfNoticeSender = moduleSender{}
 )
 
 // registerSenders publishes the two in-process senders: the shared one (Send only, what every module holds) and the pause
@@ -47,6 +48,7 @@ var (
 func (m *Module) registerSenders(reg *core.ServiceRegistry) {
 	reg.Register(SenderKey, sendOnly{moduleSender{m: m}})
 	reg.Register(FlowSenderKey, moduleSender{m: m})
+	reg.Register(SelfNoticeSenderKey, moduleSender{m: m})
 }
 
 // sendOnly is the Sender the shared registry hands out: moduleSender with only Send visible, so a module that type-asserts the
@@ -87,6 +89,12 @@ func (s moduleSender) Send(ctx context.Context, req ipeers.SendRequest) (ipeers.
 // on FlowSender, registered under FlowSenderKey, not on the Sender the other modules share.
 func (s moduleSender) SendFlow(ctx context.Context, req ipeers.SendRequest) (ipeers.SendResponse, error) {
 	return s.send(context.WithValue(ctx, flowKey{}, true), req)
+}
+
+// SendSelfNotice is Send for a daemon notice to a team lead about a member of another host, sent from the lead's own inbox (see
+// SelfNoticeSenderKey): it alone skips the self_target refusal. The pause check still applies. An in-process Go call, on its own key.
+func (s moduleSender) SendSelfNotice(ctx context.Context, req ipeers.SendRequest) (ipeers.SendResponse, error) {
+	return s.send(context.WithValue(ctx, selfNoticeKey{}, true), req)
 }
 
 func (s moduleSender) send(ctx context.Context, req ipeers.SendRequest) (ipeers.SendResponse, error) {
