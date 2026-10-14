@@ -515,7 +515,7 @@ function currentLookOf(hosts: Record<string, HostConfig>, hostId: string): HostL
 }
 
 /** `setHostColorLayer`'s rules over a look (see the action's doc); `null` = no change. */
-function withColorLayer(look: HostLookEntry, mode: HostColorMode, layer: HostColorLayerName, value: HostColorLayer | null): HostLookEntry | null {
+export function withColorLayer(look: HostLookEntry, mode: HostColorMode, layer: HostColorLayerName, value: HostColorLayer | null): HostLookEntry | null {
   if (!isHostColorMode(mode) || !HOST_COLOR_LAYER_NAMES.includes(layer)) return null
   const colors = { ...look.colors }
   const existing = colors[mode]
@@ -557,7 +557,7 @@ function withColorLayer(look: HostLookEntry, mode: HostColorMode, layer: HostCol
 }
 
 /** `setHostIcon`'s rules over a look; `null` = no change. */
-function withIcon(look: HostLookEntry, icon: string | null, weight: IconWeight | undefined): HostLookEntry | null {
+export function withIcon(look: HostLookEntry, icon: string | null, weight: IconWeight | undefined): HostLookEntry | null {
   if (icon === null || (typeof icon === 'string' && icon.trim() === '')) {
     if (!('icon' in look) && !('iconWeight' in look)) return null
     const { icon: _i, iconWeight: _w, ...rest } = look
