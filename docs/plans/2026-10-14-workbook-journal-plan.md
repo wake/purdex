@@ -83,9 +83,9 @@ Every PR: TDD, one commit per task, `go test -race` only for the touched package
 - `journal.changed {unit, project, what}` after every drained write; `journal.v1` when ready; device routes allowed.
 - Tests: member with a different cwd than its lead reads the lead's project (M: member's cwd → wrong file); member_remote → 409 with the lead host; after a lead relay and after the team ended the unit still resolves; paging across months; pin round trip; 404; the frame per write; device token reaches the GETs and the PUT.
 
-## 9. Needs the user (before J-1d's push)
+## 9. Push scope — decided (user 2026-10-14, 「ok 可以」)
 
-`journal.push_projects` default empty means no project pushes until the user lists one; asked: start with `github.com/wake/purdex`?
+Commits always land locally; **only listed projects push**, starting with `github.com/wake/purdex`. The code default stays empty (T-1d.4); the deploy of J-1d adds `[journal] push_projects = ["github.com/wake/purdex"]` to the daemon config on mlab and air26 (1f, with the release).
 
 ## 10. Review log
 
