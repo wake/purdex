@@ -25,7 +25,7 @@ const ReasonStopped = "stopped"
 
 const (
 	dbFileMode    = 0o600
-	schemaVersion = 2
+	schemaVersion = 3
 )
 
 // Entry is one summarised turn (spec §6). Every time is unix milliseconds.
