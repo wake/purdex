@@ -888,7 +888,8 @@ func TestOuterChain_PairingFlowWorksWithAnEmptyToken(t *testing.T) {
 // is refused like a wrong one, and the admin token reaches it (cmdline answers, a named profile answers, the index lists them). Mutation
 // gates: not registered → 404 for the admin (red); registered on a path outside the general chain → the unauthenticated request gets in (red).
 func TestDaemonPprofRequiresHostToken(t *testing.T) {
-	c := newTestCore(&config.Config{Token: "host-token"})
+	c := newTestCore(&config.Config{Token: "host-token", DataDir: t.TempDir(), Peers: config.PeersConfig{
+		Hosts: []config.PeerHost{{Alias: "host-a", HostID: "hostid-a", InboundToken: "host-a-token"}}}})
 	mux := http.NewServeMux()
 	c.RegisterCoreRoutes(mux)
 	h := newOuterHandler(c, mux, mux, nil)
@@ -899,6 +900,22 @@ func TestDaemonPprofRequiresHostToken(t *testing.T) {
 		}
 		if rec := doRequest(t, h, "GET", path, "wrong-token"); rec.Code != http.StatusUnauthorized {
 			t.Fatalf("%s with a wrong token: got %d, want 401", path, rec.Code)
+		}
+		if rec := doRequest(t, h, "GET", path, "host-a-token"); rec.Code != http.StatusUnauthorized { // a paired peer host's inbound token
+			t.Fatalf("%s with a peer host's token: got %d, want 401", path, rec.Code)
+		}
+	}
+	// HEAD and a non-canonical path are no way in either
+	if rec := doRequest(t, h, "HEAD", "/debug/pprof/cmdline", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("HEAD without a token: got %d, want 401", rec.Code)
+	}
+	if rec := doRequest(t, h, "GET", "/debug/pprof/../pprof/cmdline", ""); rec.Code == http.StatusOK {
+		t.Fatalf("an unclean path without a token: got 200")
+	}
+	// a profile that asks for too long is refused before it starts (the admin's request, so past the chain)
+	for _, q := range []string{"profile?seconds=3600", "profile?seconds=-1", "profile?seconds=x", "trace?seconds=11"} {
+		if rec := doRequest(t, h, "GET", "/debug/pprof/"+q, "host-token"); rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: got %d, want 400", q, rec.Code)
 		}
 	}
 	rec := doRequest(t, h, "GET", "/debug/pprof/cmdline", "host-token")
