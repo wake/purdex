@@ -75,6 +75,7 @@ type kit struct {
 	clock   *fakeClock
 	turns   *fakeTurns
 	lineage fakeLineage
+	seats   fakeSeats
 	capable map[string]bool
 	refresh []CapSession // the sessions whose mod announced workbook.refresh
 	logs    *logSink
@@ -97,9 +98,10 @@ func (l *logSink) text() string { l.mu.Lock(); defer l.mu.Unlock(); return strin
 func newKit(t *testing.T) *kit {
 	t.Helper()
 	k := &kit{t: t, st: openTest(t), clock: &fakeClock{t: time.Unix(1_700_000_000, 0)}, lineage: fakeLineage{},
+		seats: fakeSeats{"s1": {TeamID: "team-9", Role: team.SeatMember}},
 		turns: &fakeTurns{turns: map[string][]convmodel.Turn{}, err: map[string]error{}}, capable: map[string]bool{}, logs: &logSink{}}
 	k.e = NewEngine(Deps{Store: k.st, Turns: k.turns, Lineage: k.lineage, HostID: "h1",
-		Seats:           fakeSeats{"s1": {TeamID: "team-9", Role: team.SeatMember}},
+		Seats:           k.seats,
 		Capable:         func(sid string) bool { return k.capable[sid] },
 		RefreshSessions: func() []CapSession { return k.refresh },
 		Now:             k.clock.Now,

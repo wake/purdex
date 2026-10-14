@@ -7,6 +7,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: superpowers:subagent-driven-development (recommended) or superpowers:executing-plans. Each PR is TDD, one task per commit.
 
+> **Note 2026-10-14:** the suffix is no longer always `ref[1:3]`. A conversation seen for the first time now takes a free name from a 30-name pool (`<base>-adam`), and `<base>-<ref[1:3]>` remains for conversations named before the pool and when the pool is used up. See `docs/specs/2026-10-14-name-pool-spec.md`. The rest of this document describes the original `ref[1:3]` rule.
+
 **Goal:** `pdx msg send` reaches any conversation by one stable pdx-assigned address (`<base>-<ref[1:3]>`), including a sleeping execution, which Nexen's peer mailbox wakes. The deck shows a peer turn as a peer message, not as the user's input.
 
 ---

@@ -179,7 +179,7 @@ type Module struct {
 	// failed is kept and tried again, never repeated once it won).
 	pendingCosts []pendingCost
 	// deliverable says whether the session can take a notice now (its main turn is
-	// not running); nil reads as true. P2d wires the real answer.
+	// not running); nil asks the agent module (canDeliver).
 	deliverable func(sessionID string) bool
 	// skipPass makes admissionPass a no-op (a test seam).
 	skipPass    bool
@@ -205,6 +205,11 @@ type Module struct {
 	started   bool
 	stopped   bool // Stop was called: the module cannot be started again
 	closeOnce sync.Once
+
+	// The notice outbox (notices.go). noticeQ is a test seam: nil reads the prompt queue from the registry.
+	noticeQ    noticeSender
+	noticeWake chan struct{}
+	notices    noticeState
 }
 
 // New returns the module with production defaults; Init installs the platform
@@ -220,6 +225,7 @@ func New() *Module {
 		stopRun:      stopRun,
 		gen:          make(chan struct{}),
 		evSig:        make(chan struct{}, 1),
+		noticeWake:   make(chan struct{}, 1),
 		sweepEvery:   sweepInterval,
 	}
 }
@@ -233,6 +239,7 @@ func (m *Module) wake() {
 	close(m.gen)
 	m.gen = make(chan struct{})
 	m.requestEvent() // a grant or an end is worth an event
+	m.kickNotices()  // and a transition may have armed a notice slot
 }
 
 // genChan is the channel the next wake closes. A poller takes it before it
@@ -360,6 +367,10 @@ func (m *Module) Start(context.Context) error {
 	}
 	m.wg.Add(1)
 	go m.runEvents(m.runCtx)
+	if m.store != nil {
+		m.wg.Add(1)
+		go m.runNotices(m.runCtx) // after the boot reconcile: the slots that were armed before a restart are sent again
+	}
 	return nil
 }
 

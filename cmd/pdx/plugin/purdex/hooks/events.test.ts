@@ -221,7 +221,7 @@ test('posts session.start then turn events in seq order to the socket from pdx.j
     dropped_total: 0,
     cwd: '/work',
     interactive: true,
-    caps: ['workbook.v2', 'workbook.refresh', 'prompt.v1'],
+    caps: ['workbook.v2', 'workbook.refresh', 'prompt.v1', 'lease.notice.v1'],
     events: [
       { seq: 1, at: expect.any(Number), sid: SID1, type: 'session.start', data: { cwd: '/work', surface: 'terminal' } },
       { seq: 2, at: expect.any(Number), sid: SID1, type: 'turn.start', data: { turn_id: 't1' } },
@@ -1199,14 +1199,14 @@ const nextReqs = (w: W) => w.wbReqs.filter((r) => r.url.endsWith('/next'))
 const resultReqs = (w: W) => w.wbReqs.filter((r) => r.url.endsWith('/result'))
 const USAGE = { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 50, cache_creation_input_tokens: 7 }
 
-test('every batch announces workbook.v2, workbook.refresh and prompt.v1 and nothing else', async ($, on) => {
+test('every batch announces workbook.v2, workbook.refresh, prompt.v1 and lease.notice.v1 and nothing else', async ($, on) => {
   const w = evWorld(on)
   await start($, w)
   await turnStart($, 't1')
   await w.clock.advance(150)
   await w.clock.advance(10_150) // a heartbeat batch
   expect(w.posts.length).toBeGreaterThanOrEqual(2)
-  for (const p of w.posts) expect(p.body.caps).toEqual(['workbook.v2', 'workbook.refresh', 'prompt.v1'])
+  for (const p of w.posts) expect(p.body.caps).toEqual(['workbook.v2', 'workbook.refresh', 'prompt.v1', 'lease.notice.v1'])
 })
 
 // Mutation gate: ask inside the hook, or for a subagent / interrupted turn → red.
@@ -1679,6 +1679,59 @@ test('a submit the engine refuses is reported dropped refused', async ($, on) =>
   await w.clock.settle()
   expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'refused' })
 })
+
+// ---- lease v2 amendment A §2.10: the notice job ----
+
+const NJOB = (extra: any = {}) => PJOB({ kind: 'notice', text: '輪到你了：`pnpm run build`（/work）。3 分鐘內照原樣重跑就會立刻執行。', ...extra })
+
+// A notice goes in as a plugin message, the way the relay seed does: NOT as the person's words (no asUser).
+// (M: send it with asUser.)
+test('notice job: idle → submitted as a plugin message (no asUser) and reported accepted', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(NJOB()) })
+  await start($, w)
+  await w.clock.settle()
+  expect(w.submitCalls).toHaveLength(1)
+  expect(w.submitCalls[0]).toMatchObject({ text: '輪到你了：`pnpm run build`（/work）。3 分鐘內照原樣重跑就會立刻執行。', origin: { kind: 'plugin' } })
+  expect(w.submitCalls[0].origin.asUser).toBeUndefined()
+  expect(pqResult(w)[0].body).toEqual({ stream: pqNext(w)[0].body.stream, job_id: 'pj-' + PJ, status: 'accepted' })
+})
+
+// $.prompt.submit blocks until the session is idle (M-D1): a turn in progress is busy at once, nothing is submitted.
+// (M: drop the ev.turnId check.)
+test('notice job mid-turn → busy, nothing submitted', async ($, on) => {
+  const g = gated(NJOB())
+  const w = evWorld(on, { promptNext: g.fn })
+  await start($, w)
+  await turnStart($, 't1')
+  g.open()
+  await w.clock.settle()
+  expect(w.submitCalls).toHaveLength(0)
+  expect(pqResult(w)[0].body).toMatchObject({ job_id: 'pj-' + PJ, status: 'busy' })
+})
+
+test('notice job for another session id (a /clear since) is dropped session_changed', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(NJOB({ session_id: SID2 })) })
+  await start($, w)
+  await w.clock.settle()
+  expect(w.submitCalls).toHaveLength(0)
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'session_changed' })
+})
+
+test('a notice Claude Code drops is reported dropped with its reason; one the engine refuses, refused', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(NJOB()), submit: () => ({ drop: 'blocked by a hook' }) })
+  await start($, w)
+  await w.clock.settle()
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'blocked by a hook' })
+})
+
+for (const [name, text] of [['over 4000 bytes', 'x'.repeat(4001)], ['over 4000 bytes in UTF-8', '字'.repeat(1334)], ['blank', '   ']] as const) {
+  test(`a notice ${name} is not a job: nothing runs`, async ($, on) => {
+    const w = evWorld(on, { promptNext: nextOnce(NJOB({ text })) })
+    await start($, w)
+    await w.clock.settle()
+    expect(w.submitCalls).toHaveLength(0)
+  })
+}
 
 test('an interrupt aborts the running main turn', async ($, on) => {
   const g = gated(PJOB({ kind: 'interrupt', text: undefined }))

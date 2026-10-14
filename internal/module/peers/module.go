@@ -267,6 +267,22 @@ type Module struct {
 	peerNames PeerNameStore
 	convNames ConversationNameReader
 
+	// remoteNames is the name pool's view of the other hosts (namepool_snapshot.go);
+	// nil (the default until WithNamePool) means no pool. namePoolRefresh
+	// overrides the refresher's period in tests.
+	remoteNames     *remoteNameSnapshot
+	namePoolRefresh time.Duration
+	// namePicker is the name pool (namepool.go); nil means the pool is off.
+	// Picking and storing a pool name, and settling two holders of one, are
+	// serialised.
+	namePicker NamePicker
+	// poolSem is the cancellable lock around picking and storing a pool name
+	// (lockPool); poolReady is closed once the refresher's first pass over
+	// the other hosts is done (awaitPoolReady), nil before Start.
+	poolSem   chan struct{}
+	poolOnce  sync.Once
+	poolReady chan struct{}
+
 	// putHostAfterSnapshot is a test seam: called by handlePutHost right
 	// after its pre-lock snapshot, so a test can force a concurrent
 	// mutation into that window. No-op in production.
@@ -824,6 +840,8 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	// hangs, or a pass whose budget is already spent, costs this pass its
 	// names (every row takes the ref form), never the GET or the send.
 	virtualNames := m.resolveNames(invCtx, append(entryNameCandidates(entries, proxyPIDs, previousRefs), execNameCandidates(execs, previousRefs)...))
+	// Two live holders of one pool name: the newcomer picks again (spec §5).
+	m.settlePoolCollisions(invCtx, entries, proxyPIDs, previousRefs, virtualNames)
 	peerRecords := ipeers.Build(ipeers.BuildInput{
 		HostID:       hostID,
 		Alias:        alias,
@@ -1158,6 +1176,10 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	fetchCtx, cancel := context.WithTimeout(ctx, remoteFetchTimeout)
 	defer cancel()
 
+	var ticket uint64 // orders this answer against concurrent fetches of the host
+	if m.remoteNames != nil {
+		ticket = m.remoteNames.ticket()
+	}
 	env, err := m.fetch(fetchCtx, m.client, h.URL, h.Token)
 	if err != nil {
 		return ipeers.HostResult{
@@ -1235,6 +1257,11 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 		// the page render, and {ok:false, error:""} would be a red row
 		// with no reason. Same string verifyHost uses for the 502 case.
 		rowErr = "peer reported ok=false"
+	}
+	if env.OK && rowErr == "" {
+		// The name pool's snapshot of what this host holds, from the rows as
+		// normalizeRemoteRows settled them, never the raw envelope.
+		m.noteRemoteNames(resultHostID, peers, env.AddressVersion, ticket)
 	}
 
 	// unknown is the remote's own reported list of alive-but-undecodable

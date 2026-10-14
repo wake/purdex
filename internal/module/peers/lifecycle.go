@@ -35,6 +35,7 @@ func (m *Module) Start(context.Context) error {
 	}
 	m.reapWG.Add(1)
 	go m.reapLoop()
+	m.startNamePoolRefresher()
 	return nil
 }
 

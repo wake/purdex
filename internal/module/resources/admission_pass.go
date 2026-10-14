@@ -597,8 +597,29 @@ func (m *Module) captureBaselines(ctx context.Context, rows []leaseRow) map[stri
 	return out
 }
 
-// canDeliver says whether the session can take a notice now; the seam answers
-// true until P2d wires the agent module's answer.
+// mainTurnReader is what the agent module answers about a session's main turn.
+type mainTurnReader interface {
+	MainTurnRunning(sessionID string) (running, ok bool)
+}
+
+// canDeliver says whether the session can take a notice now: its main turn is not running. The agent module is looked up
+// at use time, before stateMu is taken (the pass reads it first); a session it knows nothing about, or no agent module,
+// reads as deliverable, and the outbox then finds out by trying.
 func (m *Module) canDeliver(sessionID string) bool {
-	return m.deliverable == nil || m.deliverable(sessionID)
+	if m.deliverable != nil {
+		return m.deliverable(sessionID)
+	}
+	if m.core == nil || m.core.Registry == nil {
+		return true
+	}
+	svc, ok := m.core.Registry.Get("agent.module")
+	if !ok {
+		return true
+	}
+	r, ok := svc.(mainTurnReader)
+	if !ok {
+		return true
+	}
+	running, known := r.MainTurnRunning(sessionID)
+	return !known || !running
 }

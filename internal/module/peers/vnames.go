@@ -18,6 +18,7 @@ import (
 type PeerNameStore interface {
 	Assign(ctx context.Context, sessionID, ref, name, source string, nowMs int64) (store.PeerNameEntry, error)
 	AdoptLineage(ctx context.Context, sessionID, name string) (store.PeerNameEntry, error)
+	RenamePool(ctx context.Context, sessionID, oldName, newName string) (store.PeerNameEntry, bool, error)
 	Lookup(ctx context.Context, sessionIDs []string) (map[string]store.PeerNameEntry, error)
 	ByRefs(ctx context.Context, refs []string) (map[string]string, error)
 }
@@ -116,6 +117,7 @@ func (m *Module) resolveNames(ctx context.Context, cands []nameCandidate) map[st
 	var conv map[string]string
 	var convErr error
 	convRead := false
+	var picked map[string]bool // pool names this pass took (assignPooled)
 
 	now := time.Now
 	if m.now != nil { // a Module literal (tests) may leave the clock unset
@@ -138,6 +140,7 @@ func (m *Module) resolveNames(ctx context.Context, cands []nameCandidate) map[st
 		row, has := rows[k]
 		if !has {
 			name, source := ln, store.PeerNameSourceLineage
+			base := ""
 			if name == "" {
 				if !ipeers.RoutableName(c.registryName) && m.convNames != nil {
 					if !convRead {
@@ -149,12 +152,25 @@ func (m *Module) resolveNames(ctx context.Context, cands []nameCandidate) map[st
 						continue
 					}
 				}
-				name, source = baseName(c, conv[k])
+				base, source = baseOf(c, conv[k])
+				if base != "" {
+					name, _ = ipeers.VirtualName(base, c.ref)
+				}
 			}
 			if name == "" {
 				continue // nothing to name it after: the ref form
 			}
-			if row, err = m.peerNames.Assign(ctx, k, c.ref, name, source, nowMs); err != nil {
+			if ln == "" && m.namePicker != nil {
+				// A conversation with no predecessor name takes a free pool
+				// name (name pool spec §4); picking and storing are serialised.
+				if picked == nil {
+					picked = map[string]bool{}
+				}
+				row, err = m.assignPooled(ctx, k, c.ref, base, name, source, nowMs, picked)
+			} else {
+				row, err = m.peerNames.Assign(ctx, k, c.ref, name, source, nowMs)
+			}
+			if err != nil {
 				fail(err)
 				continue
 			}
@@ -224,19 +240,32 @@ func (m *Module) virtualNamesOf(ctx context.Context, entries ...ipeers.Entry) ma
 // lineage name: the live registry name, else the recorded conversation name
 // (conv), else the cwd basename. "" when no source makes a valid name.
 func baseName(c nameCandidate, conv string) (name, source string) {
+	base, source := baseOf(c, conv)
+	if base == "" {
+		return "", ""
+	}
+	name, _ = ipeers.VirtualName(base, c.ref)
+	return name, source
+}
+
+// baseOf is the base baseName builds a name on: the first source whose base
+// makes a valid virtual name. "" when none does.
+func baseOf(c nameCandidate, conv string) (base, source string) {
 	if ipeers.RoutableName(c.registryName) {
-		if n, ok := ipeers.VirtualName(c.registryName, c.ref); ok {
-			return n, store.PeerNameSourceRegistry
+		if _, ok := ipeers.VirtualName(c.registryName, c.ref); ok {
+			return c.registryName, store.PeerNameSourceRegistry
 		}
 	}
 	if ipeers.RoutableName(conv) {
-		if n, ok := ipeers.VirtualName(conv, c.ref); ok {
-			return n, store.PeerNameSourceConversationName
+		if _, ok := ipeers.VirtualName(conv, c.ref); ok {
+			return conv, store.PeerNameSourceConversationName
 		}
 	}
 	if c.dirBase != "" {
-		if n, ok := ipeers.VirtualName(ipeers.NormalizeBase(c.dirBase), c.ref); ok {
-			return n, store.PeerNameSourceDir
+		if b := ipeers.NormalizeBase(c.dirBase); b != "" {
+			if _, ok := ipeers.VirtualName(b, c.ref); ok {
+				return b, store.PeerNameSourceDir
+			}
 		}
 	}
 	return "", ""
