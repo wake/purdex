@@ -82,10 +82,10 @@ type payloadRoadmap struct {
 	Status  string `json:"status"`
 }
 
-// outboxEntry is what an outbox insert needs to know about a turn entry.
+// outboxEntry is what an outbox insert needs to know about a turn or refresh entry (a refresh changes todos too).
 func outboxEntry(tx execer, entryID int64) (conv, unitKey string, ok bool, err error) {
 	var role, teamID string
-	err = tx.QueryRow(`SELECT conv_key, COALESCE(role, ''), COALESCE(team_id, '') FROM wb_entries WHERE id = ? AND kind = 'turn'`, entryID).
+	err = tx.QueryRow(`SELECT conv_key, COALESCE(role, ''), COALESCE(team_id, '') FROM wb_entries WHERE id = ? AND kind IN ('turn', 'refresh')`, entryID).
 		Scan(&conv, &role, &teamID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", "", false, nil
@@ -110,7 +110,8 @@ func insertOutbox(tx execer, entryID int64, unitKey, kind string, payload any, n
 	return nil
 }
 
-// turnOutbox is called inside the transaction of SetPushLineV2 / FinishSkippedV2, after the todo changes: a lead's or
+// turnOutbox is called inside the transaction of SetPushLineV2 / FinishSkippedV2 / FinishRefresh (the last only when it
+// changed a todo), after the todo changes: a lead's or
 // a solo session's entry gets its `turn` row there, or the whole transaction fails and nothing of it is kept.
 func (s *Store) turnOutbox(tx execer, entryID int64, res TodoResult, now int64) error {
 	if !s.journalOn.Load() {

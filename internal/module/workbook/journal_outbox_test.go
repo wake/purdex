@@ -3,6 +3,7 @@ package workbook
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -284,5 +285,35 @@ func TestTodoSeq_PerConversationNeverReusedAndConcurrentSafe(t *testing.T) {
 		if !seen[q] {
 			t.Errorf("number %d missing from %v", q, seen)
 		}
+	}
+}
+
+// A refresh that changes a todo leaves a `turn` row in its own transaction (the spec mirrors solo tasks on every
+// change); a refresh that changes none leaves nothing; a refresh in a member seat none.
+// Mutation gate: drop the call in FinishRefresh -> no row (red); drop the Changed check -> the no-change refresh gets a
+// row (red); outboxEntry back to kind = 'turn' -> no row (red).
+func TestTurnOutbox_RefreshChangesGetARow(t *testing.T) {
+	s := openTest(t)
+	s.EnableJournalOutbox()
+	mk := func(conv, turn, role, teamID string) int64 {
+		e := pending(conv, conv+"-s", turn, 100)
+		e.Kind, e.Role, e.TeamID = KindRefresh, role, teamID
+		return mustInsert(t, s, e)
+	}
+	solo := mk("c1", "r:1", team.SeatNone, "")
+	none := mk("c2", "r:2", team.SeatNone, "")
+	mem := mk("c3", "r:3", team.SeatMember, "team-7")
+	if _, ok, err := s.FinishRefresh(solo, RefreshDone{Status: "s", Todos: adds("新")}); err != nil || !ok {
+		t.Fatal(err, ok)
+	}
+	if _, ok, err := s.FinishRefresh(none, RefreshDone{Status: "s"}); err != nil || !ok {
+		t.Fatal(err, ok)
+	}
+	if _, ok, err := s.FinishRefresh(mem, RefreshDone{Status: "s", Todos: adds("不該有")}); err != nil || !ok {
+		t.Fatal(err, ok)
+	}
+	rows := outboxRows(t, s)
+	if len(rows) != 1 || rows[0].EntryID != solo || rows[0].Kind != OutboxTurn || rows[0].Unit != "solo:c1" || !strings.Contains(rows[0].Payload, `"title":"新"`) {
+		t.Fatalf("rows = %+v", rows)
 	}
 }

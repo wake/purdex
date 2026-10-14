@@ -25,7 +25,7 @@ func migrateV3(tx stepExec) error {
 			created_at INTEGER NOT NULL);
 		CREATE TABLE wb_journal_cursors (name TEXT PRIMARY KEY, value TEXT NOT NULL);
 		ALTER TABLE wb_todos ADD COLUMN seq INTEGER NOT NULL DEFAULT 0;
-		UPDATE wb_todos SET seq = (SELECT COUNT(*) FROM wb_todos b WHERE b.conv_key = wb_todos.conv_key AND b.id <= wb_todos.id);
+		UPDATE wb_todos SET seq = r.rn FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY conv_key ORDER BY id) AS rn FROM wb_todos) AS r WHERE r.id = wb_todos.id;
 		CREATE UNIQUE INDEX wb_todos_conv_seq ON wb_todos (conv_key, seq) WHERE seq > 0;
 		UPDATE schema_version SET version = 3;`)
 	return err
