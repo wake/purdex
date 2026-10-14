@@ -28,7 +28,7 @@ const relayUsage = "usage: pdx relay hello --session <sid> [--version <v>] [--ag
 	"       pdx relay begin --self --session <sid> --used <pct> --window <n> [--manual] [--reason idle --idle-minutes <n>] [--reask <uuid>] [--person <token>] [--config <path>]\n" +
 	"       pdx relay person --session <sid> --command relay|adopt|lead|spawn [--config <path>]\n" +
 	"       pdx relay ask --session <sid> --used <pct> --window <n> [--request-id <uuid>] [--config <path>]\n" +
-	"       pdx relay wait <request_id> [--wait 9m] [--config <path>]\n" +
+	"       pdx relay wait <request_id> [--wait 9m] [--return-unanswered] [--config <path>]\n" +
 	"       pdx relay self off|on|status --session <sid> [--config <path>]\n" +
 	"       pdx relay report <op> <state> [--new-session <sid>] [--error <e>] [--config <path>]\n" +
 	"       pdx relay op <id> [--config <path>]\n" +
@@ -399,6 +399,9 @@ func runRelayWait(ctx context.Context, args []string, stdout, stderr io.Writer, 
 	id := args[0]
 	fs := flag.NewFlagSet("pdx relay wait", flag.ContinueOnError)
 	wait := fs.Duration("wait", time.Duration(team.DefaultWaitS)*time.Second, "")
+	// --return-unanswered: return at once (exit 0, the open row) when a poll shows the card went unanswered (RT-2c T27), so the mod
+	// can tell the person and let its held prompts go while the card stays open.
+	returnUnanswered := fs.Bool("return-unanswered", false, "")
 	cfgPath, ok := relayFlags(fs, args[1:], stderr)
 	if !ok {
 		return ExitUsage
@@ -471,6 +474,9 @@ func runRelayWait(ctx context.Context, args []string, stdout, stderr io.Writer, 
 		ap = polled
 		if ap.State != team.StateOpen {
 			return relayFinish(ap, stdout, stderr)
+		}
+		if *returnUnanswered && ap.UnansweredAt > 0 {
+			return relayPrintJSON(stdout, stderr, ap)
 		}
 	}
 }

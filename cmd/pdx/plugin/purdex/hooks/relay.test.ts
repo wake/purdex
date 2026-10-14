@@ -32,7 +32,7 @@ test('an interactive session.start says hello through the pdx and to the daemon 
   const argvs = world(on)
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
   await argvs.settle()
-  expect(argvs).toEqual([['/opt/pdx/bin/pdx', 'relay', 'hello', '--session', 'sid-1', '--version', '6', '--agent', 'cc', '--config', '/tmp/pdx b/config.toml']])
+  expect(argvs).toEqual([['/opt/pdx/bin/pdx', 'relay', 'hello', '--session', 'sid-1', '--version', '7', '--agent', 'cc', '--config', '/tmp/pdx b/config.toml']])
 })
 
 // Mutation gate: always append --config → this test fails.
@@ -40,7 +40,7 @@ test('a pdx.json without config adds no --config (pdx falls back to its default)
   const argvs = world(on, { sid: 'sid-1' }, '{"pdx":"/opt/pdx/bin/pdx","data_dir":"/tmp/pdx"}')
   await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
   await argvs.settle()
-  expect(argvs).toEqual([['/opt/pdx/bin/pdx', 'relay', 'hello', '--session', 'sid-1', '--version', '6', '--agent', 'cc']])
+  expect(argvs).toEqual([['/opt/pdx/bin/pdx', 'relay', 'hello', '--session', 'sid-1', '--version', '7', '--agent', 'cc']])
 })
 
 test('a headless session.start (claude -p) calls nothing', async ($, on) => {
@@ -60,7 +60,7 @@ test('after /clear the mod says hello again with the new session id', async ($, 
   ids.sid = 'sid-2'
   await $.classic.SessionStart({ source: 'clear' })
   await argvs.settle()
-  expect(argvs.map(sub)).toEqual(['relay hello --session sid-1 --version 6 --agent cc --config /tmp/pdx b/config.toml', 'relay hello --session sid-2 --version 6 --agent cc --config /tmp/pdx b/config.toml'])
+  expect(argvs.map(sub)).toEqual(['relay hello --session sid-1 --version 7 --agent cc --config /tmp/pdx b/config.toml', 'relay hello --session sid-2 --version 7 --agent cc --config /tmp/pdx b/config.toml'])
 })
 
 test('a SessionStart that is not a clear adds no hello (startup / resume are session.start’s)', async ($, on) => {
@@ -344,7 +344,7 @@ test('begin at used ≥ 70: pdx relay begin --self with usage and window; status
   expect(f.argvs.map(sub).slice(1)).toEqual(['relay begin --self --session sid-old --used 72 --window 200000'])
   expect(f.statuses).toEqual(['接力等待核准中'])
   await f.clock.advance(50)
-  expect(f.argvs.map(sub).at(-1)).toBe('relay wait req-1')
+  expect(f.argvs.map(sub).at(-1)).toBe('relay wait req-1 --return-unanswered')
   expect(f.toasts).toEqual(['接力等待核准：請在 Purdex App 按核准或拒絕'])
 })
 
@@ -733,7 +733,7 @@ for (const reporter of REPORTER) {
     await clock.settle()
     const calls = f.argvs.map(sub)
     expect(calls).toContain('relay report op-1 cleared --new-session sid-new')
-    expect(calls.filter((c) => c.startsWith('relay hello')).at(-1)).toBe('relay hello --session sid-new --version 6 --agent cc')
+    expect(calls.filter((c) => c.startsWith('relay hello')).at(-1)).toBe('relay hello --session sid-new --version 7 --agent cc')
     await clock.advance(50)
     expect(f.submits.length).toBe(2)
     expect(f.submits[1].text.split('\n')[0]).toBe('↪ 接手自 _abc123')
@@ -1036,7 +1036,7 @@ for (const reporter of REPORTER) {
     await f.clock.settle()
     await turnAndSettle($, f, 't3')
     expect(count(f, 'begin')).toBe(2)
-    expect(f.argvs.map(sub).filter((c) => c.startsWith('relay hello'))).toEqual(['relay hello --session sid-old --version 6 --agent cc', 'relay hello --session sid-2 --version 6 --agent cc'])
+    expect(f.argvs.map(sub).filter((c) => c.startsWith('relay hello'))).toEqual(['relay hello --session sid-old --version 7 --agent cc', 'relay hello --session sid-2 --version 7 --agent cc'])
     if (!reporter) return expect(f.posts).toEqual([])
     expect(await switches(f)).toEqual([['sid-2', { prev_sid: 'sid-old', source: 'clear' }]])
   })
@@ -1063,7 +1063,7 @@ test('after the user’s own /clear drops an open request, the next request wait
   await turn($, 't2')
   await f.clock.advance(50) // begin op-2, its wait (approved)
   await f.clock.advance(50) // the write prompt
-  expect(f.argvs.map(sub).filter((c) => c.startsWith('relay wait'))).toEqual(['relay wait req-1', 'relay wait req-2'])
+  expect(f.argvs.map(sub).filter((c) => c.startsWith('relay wait'))).toEqual(['relay wait req-1 --return-unanswered', 'relay wait req-2 --return-unanswered'])
   expect(f.submits.length).toBe(1)
   expect(f.submits[0].text.startsWith('[pdx-relay op=op-2 n=')).toBe(true)
 })
@@ -1134,7 +1134,7 @@ test('a begin that answers after the user’s /clear and a newer begin is cancel
   expect(waits(f)).toEqual([])
   newer.release()
   await f.clock.advance(50)
-  expect(waits(f)).toEqual(['relay wait req-2'])
+  expect(waits(f)).toEqual(['relay wait req-2 --return-unanswered'])
   expect(await writeAllowed($, '/data/relay/op-2.md')).toBe(true)
   expect(await writeAllowed($, '/data/relay/op-1.md')).toBe(false)
   expect(reports(f)).toEqual(['relay report op-1 cancelled --error abandoned'])
@@ -1400,7 +1400,7 @@ for (const reporter of REPORTER) {
     await start($, f)
     await turn($, 't1')
     await f.clock.advance(50) // begin, then the wait (never answers)
-    expect(waits(f)).toEqual(['relay wait req-1'])
+    expect(waits(f)).toEqual(['relay wait req-1 --return-unanswered'])
     f.switchTo = 'sid-2'
     await $.classic.SessionStart({ source: 'clear' })
     await f.clock.settle()
@@ -1619,7 +1619,7 @@ test('a prompt that arrives while a request is open waits; on approval it runs i
   await clock.advance(50)
   expect(f.submits.length).toBe(2)
   expect(f.submits[1].text.startsWith('[pdx-relay op=op-1 n=')).toBe(true)
-  expect(loopWaits(f)).toEqual(['relay wait req-1']) // one loop for the request
+  expect(loopWaits(f)).toEqual(['relay wait req-1 --return-unanswered']) // one loop for the request
   expect(holdWaits(f)).toEqual([]) // the held prompt asked the daemon nothing
   expect(f.sleeps).toEqual([SLEEP]) // it slept locally
 })
@@ -1739,7 +1739,7 @@ test('the hold sleeps locally (/bin/sleep 5, 10 s bound), again and again while 
   expect(f.submits.length).toBe(0)
   expect(f.sleeps.length).toBeGreaterThanOrEqual(26) // one every 5 s
   expect(f.sleeps.every((x) => JSON.stringify(x) === JSON.stringify(SLEEP))).toBe(true)
-  expect(waits(f)).toEqual(['relay wait req-1']) // the loop's one call is all the daemon was asked
+  expect(waits(f)).toEqual(['relay wait req-1 --return-unanswered']) // the loop's one call is all the daemon was asked
   row.decide('approved')
   await p
   expect(f.submits[0].context).toEqual([NOTE])
@@ -1953,7 +1953,7 @@ test('a prompt that arrives after begin answered but before the wait loop starte
   expect(done).toBe(false) // the daemon has approved, but no loop has asked it yet
   expect(f.statuses).toEqual(['接力等待核准中'])
   await f.clock.advance(50) // the loop: approved at once; the state moves, then the held prompt goes on
-  expect(loopWaits(f)).toEqual(['relay wait req-1'])
+  expect(loopWaits(f)).toEqual(['relay wait req-1 --return-unanswered'])
   await p
   expect(f.submits[0].context).toEqual(['c', NOTE])
   expect(f.statuses).toEqual(['接力等待核准中', undefined])
@@ -2107,7 +2107,7 @@ for (const how of ['manual /compact', 'auto-compact', 'the user’s /clear'] as 
     expect(f.submits.length).toBe(1)
     expect(f.submits[0].context).toEqual(['c']) // no NOTE
     expect(reports(f)).toEqual([how === 'the user’s /clear' ? 'relay report op-1 cancelled --error abandoned' : 'relay report op-1 cancelled --error compacted'])
-    expect(loopWaits(f)).toEqual(['relay wait req-1']) // still out: the row never closed
+    expect(loopWaits(f)).toEqual(['relay wait req-1 --return-unanswered']) // still out: the row never closed
   })
 }
 
@@ -3710,7 +3710,10 @@ test('IR-2: an env outside 1–50 minutes / 1–100 percent is ignored', async (
 })
 
 // Mutation gates: drop the `lastAskPct` guard → red; set lastAskPct at begin (not at denial) → the withdrawn one below is red.
-test('IR-2: a denied idle ask asks again only at +10 points', async ($, on) => {
+// RT-2c T26: an idle ask is its own ladder. Its denial no longer feeds the threshold's +10 guard, and the +10 guard no longer holds it
+// back. Mutation gates: set lastAskPct at an idle denial → the 80 % threshold ask below is red; keep the +10 gate in idleFire → the
+// second idle ask is red.
+test('IR-2 (RT-2c): a denied idle ask holds nothing back: the next idle period asks again, and the threshold ask is not moved', async ($, on) => {
   const { f, row } = await idleSession($, on)
   await f.clock.advance(40 * MIN)
   expect(count(f, 'begin')).toBe(1)
@@ -3720,11 +3723,12 @@ test('IR-2: a denied idle ask asks again only at +10 points', async ($, on) => {
   f.usage = { tokens: 120000, window: 200000, percent: 60 }
   await turnAndSettle($, f, 't2')
   await f.clock.advance(40 * MIN)
-  expect(count(f, 'begin')).toBe(1)
-  f.usage = { tokens: 130000, window: 200000, percent: 65 }
+  expect(count(f, 'begin')).toBe(2) // no +10 gate on an idle ask
+  row.decide('denied')
+  await f.clock.advance(100)
+  f.usage = { tokens: 150000, window: 200000, percent: 72 } // the threshold's own ask: its lastAskPct was never set by the denials
   await turnAndSettle($, f, 't3')
-  await f.clock.advance(40 * MIN)
-  expect(count(f, 'begin')).toBe(2)
+  expect(count(f, 'begin')).toBe(3)
 })
 
 test('IR-2: a withdrawn idle ask costs nothing: it asks again next idle period', async ($, on) => {
@@ -4050,4 +4054,250 @@ test('{{why}}: a body without it composes as before — the clause appears nowhe
   expect(write).toBe('[pdx-relay op=op-1 n=' + nonceOf(write) + '] 接力\n' + WRITE_TAIL())
   expect(seed).toBe('↪ 接手自 _abc123\n[pdx-relay seed op=op-1 n=' + nonceOf(seed) + '] 補')
   expect(write + seed).not.toContain('context 已達接力門檻')
+})
+
+// ---------- RT-2c: the ask ladder (T25, T26) and the unanswered final card (T27) ----------
+
+const STATUS_UNANSWERED = '接力申請沒有回應，已暫停作業；在 App 核准後接力'
+const AT90 = { tokens: 180000, window: 200000, percent: 90 }
+const AT91 = { tokens: 182000, window: 200000, percent: 91 }
+const AT100 = { tokens: 200000, window: 200000, percent: 100 }
+const AT73 = { tokens: 146000, window: 200000, percent: 73 }
+
+// A begin whose answer the test scripts: the nth call (1-based) answers answers[n-1], the last one repeats.
+function scriptedBegin(answers: PdxAnswer[]) {
+  let n = 0
+  return () => answers[Math.min(n++, answers.length - 1)]
+}
+
+// T25. The daemon was down: nothing answered, so nothing is remembered and the very next turn end asks again.
+// Mutation gate: set lastAskPct before the call (as before RT-2c) → the 73 % turn does not ask (red).
+test('RT-2c T25: a begin the daemon never answered (exit 20) does not move the +10 guard: the next turn asks again', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  rowDaemon(f, { begin: scriptedBegin([{ exitCode: 20, stderr: 'daemon_unavailable' }, { exitCode: 0, stdout: BEGIN_OK }]) })
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  expect(count(f, 'begin')).toBe(1)
+  f.usage = AT73
+  await turnAndSettle($, f, 't2')
+  expect(count(f, 'begin')).toBe(2)
+})
+
+// A refusal IS an answer (exit 13, any code): nothing is asked again until +10.
+test('RT-2c T25: a refused begin (exit 13) counts as an answer: nothing until +10 points', async ($, on) => {
+  const f = relayWorld(on, { usage: AT72 })
+  rowDaemon(f, { begin: () => ({ exitCode: 13, stderr: 'pdx relay: self_relay_off' }) })
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  f.usage = AT73
+  await turnAndSettle($, f, 't2')
+  expect(count(f, 'begin')).toBe(1)
+  f.usage = AT82
+  await turnAndSettle($, f, 't3')
+  expect(count(f, 'begin')).toBe(2)
+})
+
+// Past 90 % the ask is the last one: a denial there is final. Mutation gate: drop the LAST_ASK_PCT term → the 99 % turn asks (red).
+test('RT-2c T25: after an ask at ≥ 90 % nothing asks again, however much the context grows', async ($, on) => {
+  const f = relayWorld(on, { usage: AT90 })
+  const row = rowDaemon(f)
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  expect(count(f, 'begin')).toBe(1)
+  await f.clock.advance(50)
+  row.decide('denied')
+  await f.clock.advance(100)
+  f.usage = AT100 // 90 + 10: only the 90 % rule keeps the +10 guard from asking
+  await turnAndSettle($, f, 't2')
+  expect(count(f, 'begin')).toBe(1)
+})
+
+test('RT-2c T25: the member’s guard: an ask answered at ≥ 90 % is the last, even at 100 % (= 90 + 10)', async ($, on) => {
+  const f = memberWorld(on, () => ({ exitCode: 0, stdout: ASK_OK }), AT90)
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  expect(count(f, 'ask')).toBe(1)
+  f.usage = { tokens: 200000, window: 200000, percent: 100 }
+  await turnAndSettle($, f, 't2')
+  expect(count(f, 'ask')).toBe(1)
+})
+
+// T26. The threshold ask timed out at 70 %: the idle ask is not held back by it.
+// Mutation gate: keep the +10 gate in idleFire → no idle ask (red).
+test('RT-2c T26: a threshold ask that timed out at 72 % does not hold back an idle ask at 73 %', async ($, on) => {
+  const { f, row } = await idleSession($, on, { usage: AT72 })
+  await f.clock.advance(50)
+  expect(count(f, 'begin')).toBe(1) // the threshold ask
+  row.decide('timeout')
+  await f.clock.advance(100)
+  f.usage = AT73
+  await turnAndSettle($, f, 't2')
+  expect(count(f, 'begin')).toBe(1) // 73 < 72 + 10: the threshold does not ask
+  await f.clock.advance(40 * MIN)
+  expect(count(f, 'begin')).toBe(2) // but the idle ask does
+})
+
+// T27. The daemon says the final card went unanswered: the mod tells the person, lets the held prompt go on unchanged, holds no more
+// prompts, and the card stays open: an approval later still starts the write.
+const UNANSWERED_ROW = JSON.stringify({ id: 'req-1', kind: 'self_relay', state: 'open', unanswered_at: 5, deadline_at: 253402300799000 })
+function unansweredDaemon(f: Fake) {
+  const waitArgvs: string[][] = []
+  const row = rowDaemon(f, {
+    wait: (argv) => {
+      waitArgvs.push(argv)
+      return argv.includes('--return-unanswered') ? { exitCode: 0, stdout: UNANSWERED_ROW } : undefined
+    },
+  })
+  return { row, waitArgvs }
+}
+
+// Mutation gates: never mark → the held prompt stays held (red); resolve the hold 'approved' → it carries NOTE (red); keep the flag
+// after the mark → the second wait call carries it (red); hold prompts on an unanswered card → the later prompt sleeps (red).
+test('RT-2c T27: an unanswered card lets the held prompt go on unchanged, holds no later prompt, and an approval still writes', async ($, on) => {
+  const f = relayWorld(on, { usage: AT91 })
+  const { row, waitArgvs } = unansweredDaemon(f)
+  await start($, f)
+  await turn($, 't1')
+  const p = typed($, '請幫我看一下', { context: ['prior'] })
+  await f.clock.advance(50) // begin, then the loop's first wait: unanswered at once
+  await p
+  expect(f.submits.length).toBe(1)
+  expect(f.submits[0].text).toBe('請幫我看一下')
+  expect(f.submits[0].context).toEqual(['prior']) // unchanged: no NOTE
+  expect(f.statuses).toEqual(['接力等待核准中', STATUS_UNANSWERED])
+  expect(waitArgvs[0]).toEqual(['relay', 'wait', 'req-1', '--return-unanswered'])
+  expect(waitArgvs[1]).toEqual(['relay', 'wait', 'req-1']) // the loop goes on without the flag
+  const slept = f.sleeps.length
+  await typed($, '再一個')
+  expect(f.submits.length).toBe(2)
+  expect(f.sleeps.length).toBe(slept) // not held
+  row.decide('approved')
+  await f.clock.advance(50)
+  expect(f.submits.length).toBe(3)
+  expect(f.submits[2].text.startsWith('[pdx-relay op=op-1 n=')).toBe(true) // the write prompt
+})
+
+test('RT-2c T27: a denial of the unanswered card clears the status and ends the request; nothing asks again', async ($, on) => {
+  const f = relayWorld(on, { usage: AT91 })
+  const { row } = unansweredDaemon(f)
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  await f.clock.advance(50)
+  expect(f.statuses).toEqual(['接力等待核准中', STATUS_UNANSWERED])
+  row.decide('denied')
+  await f.clock.advance(100)
+  expect(f.statuses).toEqual(['接力等待核准中', STATUS_UNANSWERED, undefined])
+  f.usage = AT100
+  await turnAndSettle($, f, 't2')
+  expect(count(f, 'begin')).toBe(1)
+})
+
+// A reloaded mod holds no request: hello's `waiting` names the card, the mod adopts it again (awaiting, unanswered, the loop running).
+// Mutation gate: ignore `waiting` → no wait loop, no status (red).
+test('RT-2c T27: hello’s waiting re-adopts an unanswered card after a reload: status, the loop without the flag, an approval writes', async ($, on) => {
+  const f = relayWorld(on)
+  const row = rowDaemon(f)
+  const base = f.pdx
+  f.pdx = (argv) => argv[1] === 'hello'
+    ? { exitCode: 0, stdout: HELLO('none', { waiting: { request_id: 'req-1', op: OP, unanswered_at: 5 } }) }
+    : base(argv)
+  await start($, f)
+  await f.clock.advance(50)
+  expect(f.statuses).toEqual([STATUS_UNANSWERED])
+  expect(waits(f)).toEqual(['relay wait req-1']) // already unanswered: no flag
+  row.decide('approved')
+  await f.clock.advance(50)
+  expect(f.submits.length).toBe(1)
+  expect(f.submits[0].text.startsWith('[pdx-relay op=op-1 n=')).toBe(true)
+})
+
+test('RT-2c T27: a hello that carries waiting while the mod already holds that request adopts nothing twice', async ($, on) => {
+  const f = relayWorld(on, { usage: AT91 })
+  unansweredDaemon(f)
+  const base = f.pdx
+  f.pdx = (argv) => argv[1] === 'hello'
+    ? { exitCode: 0, stdout: HELLO('none', { waiting: { request_id: 'req-1', op: OP, unanswered_at: 5 } }) }
+    : base(argv)
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  await f.clock.advance(50)
+  expect(loopWaits(f).filter((c) => c.startsWith('relay wait req-1')).length).toBeLessThanOrEqual(2) // one loop
+  expect(count(f, 'begin')).toBeLessThanOrEqual(1)
+})
+
+// S-18: a compaction ends the unanswered card (the ordinary awaiting path) and restarts the ladder.
+// Mutation gate: skip the reset → lastAskPct stays 91 and nothing asks at 72 (red).
+test('RT-2c T27: a compaction after an unanswered card cancels it and resets the ladder: a 72 % turn asks again', async ($, on) => {
+  const f = relayWorld(on, { usage: AT91 })
+  unansweredDaemon(f)
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  await f.clock.advance(50)
+  expect(f.statuses.at(-1)).toBe(STATUS_UNANSWERED)
+  await compact($, 'auto')
+  await f.clock.advance(100)
+  expect(reports(f)).toEqual(['relay report op-1 cancelled --error compacted'])
+  expect(f.statuses.at(-1)).toBeUndefined()
+  f.usage = AT72
+  await turnAndSettle($, f, 't2')
+  expect(count(f, 'begin')).toBe(2)
+})
+
+// codex attack: a begin refused member_relay_is_leads only says the role cache was stale; it must not spend the member's ask ladder.
+// Mutation gate: set lastAskPct on that code → the 91 % turn after never asks its lead (red).
+test('RT-2c: a begin refused member_relay_is_leads at ≥ 90 % still lets the member ask its lead', async ($, on) => {
+  const f = relayWorld(on, { usage: AT91 })
+  f.pdx = (argv) => argv[1] === 'hello' ? { exitCode: 0, stdout: HELLO('none') }
+    : argv[1] === 'begin' ? refused('member_relay_is_leads')
+    : argv[1] === 'ask' ? { exitCode: 0, stdout: ASK_OK }
+    : { exitCode: 0, stdout: '{}' }
+  await start($, f)
+  await turnAndSettle($, f, 't1') // begin, refused: now a member
+  expect(count(f, 'begin')).toBe(1)
+  await turnAndSettle($, f, 't2')
+  expect(count(f, 'ask')).toBe(1)
+})
+
+// codex attack: after the mark a failed poll must not end the card. Mutation gate: let 'unavailable' settle → idle, status cleared (red).
+test('RT-2c T27: a failed poll after the mark keeps the card; the daemon back, a later approval still writes', async ($, on) => {
+  const f = relayWorld(on, { usage: AT91 })
+  let down = false
+  const row = rowDaemon(f, {
+    wait: (argv) => {
+      if (argv.includes('--return-unanswered')) return { exitCode: 0, stdout: UNANSWERED_ROW }
+      if (down) return { exitCode: 20, stderr: 'daemon_unavailable' }
+      return undefined
+    },
+  })
+  await start($, f)
+  await turnAndSettle($, f, 't1')
+  await f.clock.advance(50) // marked
+  down = true
+  row.decide('open' as any)
+  await f.clock.advance(540_000) // the open poll's bound passes, the next one fails
+  down = true
+  await f.clock.advance(60_000)
+  expect(f.statuses.at(-1)).toBe(STATUS_UNANSWERED) // still waiting, not idle
+  down = false
+  row.decide('approved')
+  await f.clock.advance(60_000)
+  expect(f.submits.some((x: any) => String(x.text).startsWith('[pdx-relay op=op-1 n='))).toBe(true)
+})
+
+// codex R1 / attack: a reload forgot the ladder: a denied final card must not be asked again at 100 %.
+// Mutation gate: do not restore lastAskPct on adoption → a 100 % turn after the denial begins again (red).
+test('RT-2c T27: a re-adopted final card keeps the 90 % ladder: after its denial nothing asks again', async ($, on) => {
+  const f = relayWorld(on, { usage: AT100 })
+  const row = rowDaemon(f)
+  const base = f.pdx
+  f.pdx = (argv) => argv[1] === 'hello'
+    ? { exitCode: 0, stdout: HELLO('none', { waiting: { request_id: 'req-1', op: OP, unanswered_at: 5 } }) }
+    : base(argv)
+  await start($, f)
+  await f.clock.advance(50)
+  expect(f.statuses).toEqual([STATUS_UNANSWERED])
+  row.decide('denied')
+  await f.clock.advance(100)
+  await turnAndSettle($, f, 't1')
+  expect(count(f, 'begin')).toBe(0)
 })

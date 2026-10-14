@@ -702,10 +702,10 @@ test('an op control still reaches the member path; a reask is not claimed or see
   expect(calls(f, 'seen').length).toBe(1)
 })
 
-test('hello reports protocol 6 (5 was the one the daemon sends reask to)', async ($, on) => {
+test('hello reports protocol 7 (5 was the one the daemon sends reask to, 6 the person tokens)', async ($, on) => {
   const f = soloWorld(on)
   await start($, f)
-  expect(calls(f, 'hello')[0]).toContain('--version 6')
+  expect(calls(f, 'hello')[0]).toContain('--version 7')
 })
 
 // An old daemon (no paused_no_quota anywhere) is unchanged: a begin that opens a request waits for it as always.
