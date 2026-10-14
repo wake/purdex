@@ -272,7 +272,7 @@ func (h home) put(e journal.Entry) error {
 // writeTurn writes a turn row: the exec entry (only for an ok entry).
 func (d *Drainer) writeTurn(h home, ent Entry, p turnPayload) error {
 	when := at(ent.TurnAt)
-	if ent.State == StateOK && strings.TrimSpace(ent.Entry) != "" {
+	if ent.Kind == KindTurn && ent.State == StateOK && strings.TrimSpace(ent.Entry) != "" { // a refresh's line is not a turn's account
 		kind := journal.KindExec
 		if ent.ThingDone {
 			kind = journal.KindExecDone

@@ -303,3 +303,21 @@ func TestDrain_RegistrationFixesTheProject(t *testing.T) {
 		t.Fatalf("entries = %+v", es)
 	}
 }
+
+// A refresh entry's `turn` row (its todo changes) is drained, but its 「重整：…」 line is not written as an exec entry.
+// Mutation gate: drop the Kind check in writeTurn -> a turn:<id> entry appears (red).
+func TestDrain_RefreshRowWritesNoExecEntry(t *testing.T) {
+	k := newDrainKit(t)
+	e := pending("c", "c-s", "r:1", 1_700_000_000_000)
+	e.Kind, e.Role, e.TeamID = KindRefresh, team.SeatNone, ""
+	id := mustInsert(t, k.st, e)
+	if _, ok, err := k.st.FinishRefresh(id, RefreshDone{Status: "s", Todos: adds("新")}); err != nil || !ok {
+		t.Fatal(err, ok)
+	}
+	if n := k.drain(); n != 1 {
+		t.Fatalf("drained %d", n)
+	}
+	if es := k.entries("solo:c"); len(es) != 0 {
+		t.Fatalf("entries = %+v", es)
+	}
+}
