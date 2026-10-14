@@ -52,7 +52,8 @@ const taskSchema = `
 		PRIMARY KEY (team_id, seq)
 	);
 	CREATE UNIQUE INDEX IF NOT EXISTS tasks_spawn_op ON tasks (spawn_op) WHERE spawn_op != '';
-	CREATE INDEX IF NOT EXISTS tasks_owner ON tasks (team_id, owner_key, status);`
+	CREATE INDEX IF NOT EXISTS tasks_owner ON tasks (team_id, owner_key, status);
+	CREATE INDEX IF NOT EXISTS tasks_updated ON tasks (updated_at, team_id, seq);`
 
 // TaskRow is one tasks row. The store never reads the clock: callers pass
 // CreatedAt / UpdatedAt (and the `at` of every change).
