@@ -391,3 +391,28 @@ func TestHandoffKill_AnOrdinaryClaimOfTheSameMillisecondIsNotTheHandoffs(t *test
 		t.Fatalf("signals = %d: the handoff finished a kill another path had claimed", kills.Load())
 	}
 }
+
+// A re-sent `written` (the mod's retry, a lost answer) repeats nothing: one signal, one notice - after a good kill, after a missed claim
+// and after a failed signal. Mutation gate: finish on a Noop too → the missed-claim notice repeats (red).
+func TestHandoffKill_AResentWrittenRepeatsNothing(t *testing.T) {
+	f := newFixture(t)
+	key := f.handoffMember("8")
+	kills := f.countKills()
+	_, op, _ := f.killHandoff("_def456")
+	f.walkHandoff(op)
+	f.writeHandoffFile(op)
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET host_id = 'host-elsewhere' WHERE spawn_op = ?`, key); err != nil { // the claim will miss
+		t.Fatal(err)
+	}
+	f.forgetSent()
+	for i := 0; i < 3; i++ {
+		if c, _, ae := f.report(op.ID, team.RelayReportRequest{State: team.RelayWritten}); c != http.StatusOK {
+			t.Fatalf("written #%d: %d %+v", i, c, ae)
+		}
+	}
+	waitFor(t, func() bool { return len(f.handoffNotices("[pdx team] member ")) >= 1 })
+	time.Sleep(300 * time.Millisecond)
+	if n := len(f.handoffNotices("[pdx team] member ")); n != 1 || kills.Load() != 0 {
+		t.Fatalf("notices = %d, signals = %d after three reports, want 1 and 0", n, kills.Load())
+	}
+}
