@@ -100,7 +100,7 @@ const RELAY_NO_USAGE = '目前讀不到 context 用量，稍後再試'
 const RELAY_NOT_STARTED = '接力沒有開始（這個 session 剛換過或被清除）'
 const RELAY_MEMBER = 'member 的接力由 lead 安排'
 const STATUS_HALF = '已寫好接力檔'
-const toastHalf = (path) => '快取即將過期，已先寫好接力檔（' + path + '）。要接力請打 /relay；不需要就直接關掉這個 session，或照常繼續。'
+const toastHalf = (path) => '快取即將過期，已先寫好接力檔（' + path + '）。要接力請打 /relay 或 /relay now，會直接接上後半：清空並由新對話接手，不用重寫接力檔；不需要就直接關掉這個 session，或照常繼續。'
 const TOAST_GAVE_UP = '接力檔不完整，已放棄接力；對話照常繼續'
 const toastSeedFailed = (path) => '接力未完成：接力檔在 ' + path + '，可手動貼給新 session'
 

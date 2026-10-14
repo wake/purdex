@@ -290,7 +290,7 @@ Expected files: `hooks/register.js`, `hooks/relay.test.ts` (2).
 
 **T35 Running a half** — H.
 - An idle card that settles `timeout` (H:1038-1043) → from a timer, `begin --self --half --reason idle --idle-minutes N`. A begin answer whose op has `mode: half` (this call, or an unattended idle begin) is approved at begin, so it takes the existing `awaiting` → wait (answers at once) → `settle` → `startWrite` path; `s.pending.half = true` (from `body.op.mode`) is the new mark; an idle half never holds a prompt (D6).
-- The write turn's end (`onWriteTurnDone`, H:1357) for a half: a good file → report `written`, **no clear**, `toIdle`, `s.half = {op, path, at}`, status 「已寫好接力檔」, one toast 「快取即將過期，已先寫好接力檔（<path>）。要接力請打 /relay；不需要就直接關掉這個 session，或照常繼續。」 (S-14). Then, in the same turn.complete, the threshold check runs once (U-4.1: at ≥ 70 % it asks at once and reuses the half).
+- The write turn's end (`onWriteTurnDone`, H:1357) for a half: a good file → report `written`, **no clear**, `toIdle`, `s.half = {op, path, at}`, status 「已寫好接力檔」, one toast 「快取即將過期，已先寫好接力檔（<path>）。要接力請打 /relay 或 /relay now，會直接接上後半：清空並由新對話接手，不用重寫接力檔；不需要就直接關掉這個 session，或照常繼續。」 (S-14). Then, in the same turn.complete, the threshold check runs once (U-4.1: at ≥ 70 % it asks at once and reuses the half).
 - Tests: idle timeout → half begin → write prompt → written, no `/clear` (M); unattended idle answered half → the same; the texts; at 75 % the threshold ask follows the half with `--reuse`.
 
 **T36 Fresh and stale** — H.

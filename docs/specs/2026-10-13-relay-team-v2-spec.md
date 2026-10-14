@@ -109,7 +109,7 @@ Lead-only CLI (agents):
   - It must start before Claude Code's idle compaction (~54 min): 40 + 5 leaves ~9 min, and the turn itself resets Claude Code's idle timer.
   - It spends **no quota**: nothing was cleared.
 - **What the person sees.**
-  - Terminal: a status line plus one message: 「快取即將過期，已先寫好接力檔（<path>）。要接力請打 /relay；不需要就直接關掉這個 session，或照常繼續。」
+  - Terminal: a status line plus one message: 「快取即將過期，已先寫好接力檔（<path>）。要接力請打 /relay 或 /relay now，會直接接上後半：清空並由新對話接手，不用重寫接力檔；不需要就直接關掉這個 session，或照常繼續。」
   - App: the session row shows 「已寫好接力檔」 (88), for solo sessions as well as team rows (§4.8).
 - **Fresh handoff.** A `half` handoff stays fresh while the session has had **no new turn** since it was written. Any later relay of that session, whatever the trigger, reuses it and goes straight to clear + take over:
   - `/relay`;
