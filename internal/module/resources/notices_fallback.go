@@ -49,10 +49,16 @@ func (m *Module) noticeFallback(p positionRow, text string, nowMS int64, set fun
 		set(promptq.NoMod, 0)
 		return noticeRetryOther
 	}
-	if !set(noticeUserAlert, 0) { // recorded first: a failed write is tried again and the event goes with the one that holds
+	// Recorded first, and the event goes only with the write that holds: a failed write is tried again, and a slot that
+	// was cleared or replaced while the notice was out is not alerted about.
+	changed, err := m.store.SetNoticeResult(p.ID, p.NoticeKind, p.NoticeDueAt, noticeUserAlert, 0)
+	if err != nil {
+		m.logf("[resources] notices: record %s: %v", p.ID, err)
 		return noticeRetryOther
 	}
-	m.sendAlert(p, text, nowMS)
+	if changed {
+		m.sendAlert(p, text, nowMS)
+	}
 	return 0
 }
 
@@ -62,7 +68,7 @@ func (m *Module) sendAlert(p positionRow, text string, nowMS int64) {
 	snap := m.current()
 	v, err := json.Marshal(resources.Alert{
 		ID: "lease_notice:" + p.ID + ":" + p.NoticeKind, Rule: resources.AlertRuleLeaseNotice, OpenedAt: nowMS,
-		Host:  &resources.AlertHost{Mem: snap.Host.Mem, Pressure: snap.Host.Pressure},
+		Host:  &resources.AlertHost{Zone: snap.Host.Zone, Mem: snap.Host.Mem, Pressure: snap.Host.Pressure},
 		Lease: &resources.AlertLease{ID: p.ID, SessionID: p.SessionID},
 		Text:  resources.LeaseNoticeAlertText(p.SessionID, text),
 	})

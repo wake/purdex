@@ -41,6 +41,7 @@ type Alert struct {
 
 // AlertHost is the host's state when the alert opened.
 type AlertHost struct {
+	Zone     string  `json:"zone"`
 	Mem      float64 `json:"mem"`
 	Pressure int     `json:"pressure"`
 }

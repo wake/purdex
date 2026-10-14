@@ -18,10 +18,14 @@ type fakeLead struct {
 	mu      sync.Mutex
 	member  bool
 	reached func(n int) bool // whether try n got to the lead
+	during  func()           // runs while the lead is being asked (the slot changes under the try)
 	calls   []string
 }
 
 func (f *fakeLead) NoticeLeadOf(sessionID, text string) (bool, bool) {
+	if f.during != nil {
+		f.during()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, sessionID+"|"+text)
@@ -119,6 +123,27 @@ func TestFallback_EventCarriesTheTextAndMarksThePosition(t *testing.T) {
 	assert.Contains(t, a.Text, "輪到你了：`go build`")
 	assert.Zero(t, a.ClosedAt)
 	assert.Equal(t, noticeUserAlert, f.position(posID).NoticeResult)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal([]byte(ev.Value), &raw))
+	host, _ := raw["host"].(map[string]any)
+	for _, k := range []string{"zone", "mem", "pressure"} {
+		assert.Contains(t, host, k, "the App contract's host fields")
+	}
+}
+
+// A slot that was cleared while the lead was being asked is not alerted about: the event goes with the write that holds.
+func TestFallback_ASlotClearedUnderTheTryIsNoAlert(t *testing.T) {
+	lead := &fakeLead{}
+	f, _, alerts := fallbackFix(t, lead)
+	posID, _ := f.queuedThenOffered(newCID(), pidA, "go build")
+	lead.during = func() {
+		// a newer slot replaced it: the same position, armed again
+		_, err := f.m.store.db.Exec(`UPDATE resource_positions SET notice_due_at = notice_due_at + 1 WHERE id = ?`, posID)
+		require.NoError(t, err)
+	}
+	f.notices()
+	assert.Empty(t, *alerts)
+	assert.NotEqual(t, noticeUserAlert, f.position(posID).NoticeResult, "the replacement is not marked by the old try")
 }
 
 // With no team module there is no fallback: the slot keeps trying the mod channel, as before P2d-2.
