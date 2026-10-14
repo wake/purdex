@@ -105,13 +105,18 @@ export const useJournalStore = create<JournalState>()((set, get) => {
     return key === undefined ? undefined : h?.units[key]
   }
 
-  /** Run one read; `apply` runs only when the host was neither forgotten nor reconnected meanwhile. */
-  async function read<T>(hostId: string, call: () => Promise<Outcome<T>>, apply: (value: T, startedAt: number) => void): Promise<LoadResult> {
+  /** Newest request token per (host, session, slot): a response that is no longer the newest of its slot is dropped. */
+  const latest = new Map<string, number>()
+
+  /** Run one read; `apply` runs only when the host was neither forgotten nor reconnected meanwhile and no newer read of the same slot started. */
+  async function read<T>(hostId: string, slot: string, call: () => Promise<Outcome<T>>, apply: (value: T, startedAt: number) => void): Promise<LoadResult> {
     const epoch = get().epoch[hostId] ?? 0
     const gen = get().gens[hostId] ?? 0
     const startedAt = nextStamp()
+    const slotKey = `${hostId}\u0000${slot}`
+    latest.set(slotKey, startedAt)
     let out: Outcome<T>
-    const current = (): boolean => (get().epoch[hostId] ?? 0) === epoch && (get().gens[hostId] ?? 0) === gen
+    const current = (): boolean => (get().epoch[hostId] ?? 0) === epoch && (get().gens[hostId] ?? 0) === gen && latest.get(slotKey) === startedAt
     try {
       out = await call()
     } catch {
@@ -150,7 +155,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
         if (!u.more) return { kind: 'ok' }
         before = cursorOf(oldest)
       }
-      return read(hostId, () => getJournal(hostId, sessionId, before), (page, startedAt) => set((s) => {
+      return read(hostId, `${sessionId}\u0000${older ? 'older' : 'newest'}`, () => getJournal(hostId, sessionId, before), (page, startedAt) => set((s) => {
         const key = unitKeyOf(page.unit)
         const h = s.byHost[hostId] ?? { units: {}, unitOfSession: {} }
         const held = h.units[key]
@@ -175,7 +180,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
 
     loadTasks: async (hostId, sessionId) => {
       if (!unitOf(hostId, sessionId)) return { kind: 'no_unit' }
-      return read(hostId, () => getTasks(hostId, sessionId), (tasks, startedAt) => set((s) => {
+      return read(hostId, `${sessionId}\u0000tasks`, () => getTasks(hostId, sessionId), (tasks, startedAt) => set((s) => {
         const h = s.byHost[hostId]
         const key = h?.unitOfSession[sessionId]
         const held = key === undefined ? undefined : h?.units[key]
@@ -186,7 +191,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
 
     loadRoadmap: async (hostId, sessionId) => {
       if (!unitOf(hostId, sessionId)) return { kind: 'no_unit' }
-      return read(hostId, () => getRoadmap(hostId, sessionId), (roadmap, startedAt) => set((s) => {
+      return read(hostId, `${sessionId}\u0000roadmap`, () => getRoadmap(hostId, sessionId), (roadmap, startedAt) => set((s) => {
         const h = s.byHost[hostId]
         const key = h?.unitOfSession[sessionId]
         const held = key === undefined ? undefined : h?.units[key]
@@ -225,7 +230,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
       }))
     },
 
-    reset: () => { clock = 0; set({ support: {}, sticky: {}, gens: {}, byHost: {}, routes: {}, epoch: {}, staleRev: 0 }) },
+    reset: () => { clock = 0; latest.clear(); set({ support: {}, sticky: {}, gens: {}, byHost: {}, routes: {}, epoch: {}, staleRev: 0 }) },
   }
 })
 
