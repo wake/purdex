@@ -78,7 +78,7 @@ func TestRun_HoldsAsPdxAndReleasesAfterTheChild(t *testing.T) {
 		t.Fatalf("code=%d stderr=%q posts=%d", code, stderr, len(posts))
 	}
 	p := posts[0]
-	if p.HolderPID != os.Getpid() || p.Scope != resources.ScopeProcess || p.Weight != 30 || p.WaitS != 120 || p.SessionID != "" {
+	if p.HolderPID != os.Getpid() || p.Scope != resources.ScopeProcess || p.Weight != 30 || p.WaitS != 0 || p.SessionID != "" {
 		t.Errorf("request = %+v", p)
 	}
 	if len(deletes) != 1 || deletes[0] != "/api/resources/leases/"+leaseRow+"?notice=1" {

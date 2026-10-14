@@ -171,12 +171,9 @@ func checkLeaseSize(kind string, weight int, wait time.Duration, clientID string
 	case clientID != "" && !validLeaseClientID(clientID):
 		return o, "--client-id must be a lower-case UUID v4"
 	}
-	if wait%time.Second != 0 {
-		// wait_s is whole seconds, and 0 means the host's default: a shorter
-		// wait is rounded up, never silently turned into the default.
-		wait = (wait/time.Second + 1) * time.Second
-	}
-	o = acquireOpts{kind: kind, weight: weight, wait: wait, clientID: clientID}
+	// The duration is checked and then dropped (Q11): the daemon would take
+	// wait_s as this request's deadline, over the host setting.
+	o = acquireOpts{kind: kind, weight: weight, clientID: clientID}
 	if o.clientID == "" {
 		o.clientID = uuid.NewString()
 	}

@@ -50,6 +50,25 @@ func TestAcquire_QueueModeNeverPolls(t *testing.T) {
 	assert.Equal(t, ExitQueued, code, stdout)
 }
 
+// A queue-mode request the daemon could not queue (no session to queue for: it
+// answers waiting, as it does for wait mode) waits like wait mode; telling the
+// caller "you are number N, you will be told" would be false, since no notice
+// can reach a caller without a session.
+func TestAcquire_QueueModeWithoutASessionWaitsLikeWaitMode(t *testing.T) {
+	fixedHolder(t)
+	d := &fakeLeaseDaemon{
+		post: func(resources.LeaseRequest) (int, any) {
+			return 201, resources.LeaseResponse{ID: leaseRow, State: resources.StateWaiting, Position: 1}
+		},
+		pollList: []resources.LeaseResponse{{ID: leaseRow, State: resources.StateHeld, Granted: true}},
+	}
+	code, stdout, _ := driveLease(t, context.Background(), d, nil, "acquire", "--kind", "build", "--queue", "--client-id", leaseCID)
+	assert.Equal(t, ExitOK, code)
+	assert.True(t, parseAcquireLine(t, stdout).Granted)
+	_, polls, _ := d.snapshot()
+	assert.Equal(t, 1, polls)
+}
+
 // A queued answer ends the call at once: the line says state, place and why,
 // nothing is sent to cancel (that would lose the place), and the exit code is 15.
 // (M: route it to fail-open and the command would run.)
@@ -182,9 +201,9 @@ func TestWaitFlag_BareAndDurationForms(t *testing.T) {
 		waitS int
 	}{
 		"bare":       {[]string{"--wait"}, 0},
-		"equals":     {[]string{"--wait=2m"}, 120},
-		"separate":   {[]string{"--wait", "2m"}, 120},
-		"single":     {[]string{"-wait", "90s"}, 90},
+		"equals":     {[]string{"--wait=2m"}, 0},
+		"separate":   {[]string{"--wait", "2m"}, 0},
+		"single":     {[]string{"-wait", "90s"}, 0},
 		"bare+after": {[]string{"--wait", "--kind", "build"}, 0},
 	} {
 		t.Run(name, func(t *testing.T) {

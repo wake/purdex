@@ -158,7 +158,7 @@ func TestAcquire_GrantedImmediately(t *testing.T) {
 		t.Fatalf("posts %d polls %d", len(posts), polls)
 	}
 	p := posts[0]
-	if p.ClientID != leaseCID || p.Kind != "test-full" || p.WaitS != 120 || p.Scope != resources.ScopeProcess ||
+	if p.ClientID != leaseCID || p.Kind != "test-full" || p.WaitS != 0 || p.Scope != resources.ScopeProcess ||
 		p.HolderPID != 4242 || p.HolderStart != wantWire(t, leaseWhen) || p.ToolUseID != "tu1" || p.SessionID != "" {
 		t.Errorf("request = %+v", p)
 	}
@@ -370,11 +370,11 @@ func TestRelease_BestEffort(t *testing.T) {
 	}
 }
 
-// wait_s is whole seconds and 0 means the host's default: a shorter --wait is
-// rounded up, never turned into the default.
-func TestAcquire_WaitIsRoundedUpToWholeSeconds(t *testing.T) {
+// A --wait duration is accepted and ignored: wait_s stays 0 (the host's
+// setting decides), whatever the old script passed.
+func TestAcquire_WaitDurationIsIgnored(t *testing.T) {
 	fixedHolder(t)
-	for wait, want := range map[string]int{"1ms": 1, "500ms": 1, "999ms": 1, "1s": 1, "1500ms": 2, "2m": 120, "0s": 0} {
+	for wait, want := range map[string]int{"1ms": 0, "500ms": 0, "1s": 0, "1500ms": 0, "2m": 0, "0s": 0} {
 		d := &fakeLeaseDaemon{}
 		driveLease(t, context.Background(), d, nil, "acquire", "--kind", "build", "--wait", wait)
 		posts, _, _ := d.snapshot()
