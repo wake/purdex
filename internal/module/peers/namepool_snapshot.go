@@ -145,6 +145,10 @@ func (m *Module) startNamePoolRefresher() {
 	m.reapWG.Add(1)
 	go func() {
 		defer m.reapWG.Done()
+		// Fill the snapshot at once: a daemon that has just started would
+		// otherwise name its first conversations for up to a refresh period
+		// believing no other host holds a name.
+		m.refreshRemoteNames(m.stopCtx)
 		t := time.NewTicker(every)
 		defer t.Stop()
 		for {

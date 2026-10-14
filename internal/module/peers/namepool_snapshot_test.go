@@ -285,3 +285,23 @@ func TestNamePoolRefresher_FetchesEveryConfiguredHostOnATickAndStopEndsIt(t *tes
 		t.Fatalf("the refresher kept fetching after Stop: %d -> %d", before, after)
 	}
 }
+
+// The first fetch happens when the refresher starts, not one period later: a
+// daemon that has just started must not name conversations blind to the other
+// hosts for 30 seconds (codex R1).
+func TestNamePoolRefresher_FetchesOnceImmediatelyAtStart(t *testing.T) {
+	got := make(chan struct{}, 4)
+	m := poolRefreshModule(t, []config.PeerHost{{Alias: "air", HostID: "host-air", URL: "http://air.invalid", Token: "tok"}},
+		func(context.Context, *http.Client, string, string) (ipeers.Envelope, error) {
+			got <- struct{}{}
+			return okEnvelope(snapRow("p-adam", snapStartA)), nil
+		})
+	m.namePoolRefresh = time.Hour // the ticker never fires in this test
+	m.startNamePoolRefresher()
+	select {
+	case <-got:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no fetch within 10s of starting a refresher with a one-hour period")
+	}
+	_ = m.Stop(context.Background())
+}
