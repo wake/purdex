@@ -676,3 +676,56 @@ func TestRelayCmd_WaitReturnUnanswered(t *testing.T) {
 		t.Fatalf("without the flag: exit %d out=%q polls=%d, want the approval after 4 polls", code, out, d.polls)
 	}
 }
+
+// RT-3a1: `begin --half` / `--reuse` reach the wire; --half needs --reason idle and refuses --reuse; `relay fresh` posts the stale report.
+// Mutation gates: drop a flag copy → the wire lacks it (red); drop a validation → the bad case reaches the daemon (red).
+func TestRelayCmd_BeginHalfAndReuseReachTheWire(t *testing.T) {
+	pct := 55.0
+	base := []string{"begin", "--self", "--session", "sid-1", "--used", "55", "--window", "1000000"}
+	d := &fakeRelayDaemon{beginStatus: 201, beginBody: team.RelayBeginResponse{Op: team.RelayOp{ID: "op-1", State: team.RelayClaimed, UsedPercentage: &pct}, RequestID: "req-1"}}
+	if code, _, stderr := driveRelay(t, context.Background(), d, append(append([]string{}, base...), "--reason", "idle", "--idle-minutes", "40", "--half")...); code != ExitOK {
+		t.Fatalf("half begin: code=%d stderr=%q", code, stderr)
+	}
+	if code, _, stderr := driveRelay(t, context.Background(), d, append(append([]string{}, base...), "--reuse", "op-9")...); code != ExitOK {
+		t.Fatalf("reuse begin: code=%d stderr=%q", code, stderr)
+	}
+	paths, all := d.snapshot()
+	var bodies []string
+	for i, p := range paths {
+		if strings.HasSuffix(p, "/api/relay/begin") {
+			bodies = append(bodies, all[i])
+		}
+	}
+	var half, reuse team.RelayBeginRequest
+	_ = json.Unmarshal([]byte(bodies[0]), &half)
+	_ = json.Unmarshal([]byte(bodies[1]), &reuse)
+	if !half.Half || reuse.ReuseOp != "op-9" {
+		t.Fatalf("half = %+v, reuse = %+v", half, reuse)
+	}
+	bad := &fakeRelayDaemon{}
+	for _, extra := range [][]string{{"--half"}, {"--reason", "idle", "--idle-minutes", "40", "--half", "--reuse", "op-9"}} {
+		if code, _, _ := driveRelay(t, context.Background(), bad, append(append([]string{}, base...), extra...)...); code != ExitUsage {
+			t.Fatalf("%v: code = %d, want usage", extra, code)
+		}
+	}
+	if paths, _ := bad.snapshot(); len(paths) != 0 {
+		t.Fatalf("a bad combination reached the daemon: %v", paths)
+	}
+}
+
+func TestRelayCmd_FreshPostsTheStaleReport(t *testing.T) {
+	d := &fakeRelayDaemon{}
+	code, _, stderr := driveRelay(t, context.Background(), d, "fresh", "--session", "sid-1", "--op", "op-9", "--stale")
+	if code == ExitUsage {
+		t.Fatalf("fresh: code=%d stderr=%q", code, stderr)
+	}
+	paths, bodies := d.snapshot()
+	if len(paths) == 0 || !strings.Contains(paths[len(paths)-1], "/api/relay/fresh") || !strings.Contains(bodies[len(bodies)-1], `"op_id":"op-9"`) || !strings.Contains(bodies[len(bodies)-1], `"stale":true`) {
+		t.Fatalf("paths %v bodies %v", paths, bodies)
+	}
+	for _, args := range [][]string{{"fresh", "--session", "sid-1", "--op", "op-9"}, {"fresh", "--op", "op-9", "--stale"}, {"fresh", "--session", "sid-1", "--stale"}} {
+		if code, _, _ := driveRelay(t, context.Background(), &fakeRelayDaemon{}, args...); code != ExitUsage {
+			t.Fatalf("%v: code = %d, want usage", args, code)
+		}
+	}
+}

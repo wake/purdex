@@ -296,6 +296,9 @@ func (s *Store) closeSelfRelayApprovedThen(id string, c Close, sessionID string,
 func (s *Store) closeSelfRelayApprovedIn(tx *sql.Tx, id string, c Close, sessionID string) (n int64, memberCancelled bool, err error) {
 	// A write first, so SQLite takes the write lock before the member read.
 	_, err = tx.Exec(`UPDATE approval_requests SET id = id WHERE id = ?`, id)
+	if err == nil {
+		err = reuseStillFreshIn(tx, id, sessionID) // a reuse card whose fresh half went stale is not approved (RT-3a1)
+	}
 	var member, cancel bool
 	if err == nil {
 		member, cancel, err = selfRelayMemberIn(tx, id, sessionID)
@@ -328,6 +331,36 @@ func (s *Store) closeSelfRelayApprovedIn(tx *sql.Tx, id string, c Close, session
 		return 0, false, err
 	}
 	return n, cancel && n == 1, nil
+}
+
+// ErrReuseStale: the card's op would reuse a fresh half's file that is no longer fresh (a stale report, a compaction, a claim); nothing
+// was written and the approve is refused.
+var ErrReuseStale = errors.New("the fresh half this relay would reuse is no longer fresh")
+
+// reuseStillFreshIn refuses (ErrReuseStale) an approve of a card that asked to reuse a fresh half when the session's fresh row no longer
+// names that op. It runs under the approve's write lock, so a stale report either committed before (refused here) or after (the card was
+// approved first: the claim stands, as the stale report then meets an op already claimed - the mod that reported it does not reuse).
+func reuseStillFreshIn(tx *sql.Tx, rowID, sessionID string) error {
+	var raw string
+	if err := tx.QueryRow(`SELECT payload_json FROM approval_requests WHERE id = ?`, rowID).Scan(&raw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	var sp team.SelfRelayPayload
+	if json.Unmarshal([]byte(raw), &sp) != nil || sp.ReuseOp == "" {
+		return nil
+	}
+	var one int
+	switch err := tx.QueryRow(`SELECT 1 FROM relay_fresh_half WHERE session_id = ? AND op_id = ?`, sessionID, sp.ReuseOp).Scan(&one); {
+	case err == nil:
+		return nil
+	case errors.Is(err, sql.ErrNoRows):
+		return ErrReuseStale
+	default:
+		return err
+	}
 }
 
 // ErrManualMemberNeedsPerson is returned when the daemon itself (unattended mode) would approve a member's manual

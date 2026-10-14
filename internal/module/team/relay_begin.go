@@ -52,6 +52,18 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "unknown reason", nil)
 		return
 	}
+	if req.Half && req.ReaskID != "" {
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "a half is never a card: it takes no reask_id", nil)
+		return
+	}
+	if req.Half && req.ReuseOp != "" {
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "a half writes its own file: it reuses nothing", nil)
+		return
+	}
+	if req.Half && req.Reason != team.RelayBeginReasonIdle {
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "half is only for reason idle", nil)
+		return
+	}
 	if req.ReaskID != "" {
 		if u, err := uuid.Parse(req.ReaskID); err != nil || u.String() != strings.ToLower(req.ReaskID) {
 			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "reask_id must be a UUID", nil)
@@ -116,7 +128,8 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 	// model_id / effort are the daemon's to fill (spec U18 (b), M21): the
 	// session's last statusline reading, kept by the agent module. The mod
 	// sends neither; a session without a reading shows neither.
-	sp := team.SelfRelayPayload{UsedPercentage: req.UsedPercentage, Window: req.Window, Manual: req.Manual, Reason: req.Reason, IdleMinutes: req.IdleMinutes, Person: person}
+	sp := team.SelfRelayPayload{UsedPercentage: req.UsedPercentage, Window: req.Window, Manual: req.Manual, Reason: req.Reason, IdleMinutes: req.IdleMinutes, Person: person,
+		Half: req.Half, ReuseOp: req.ReuseOp}
 	if m.usage != nil {
 		if u, ok := m.usage.ContextUsage(req.SessionID); ok {
 			sp.ModelID, sp.Effort = u.ModelID, u.Effort
@@ -212,19 +225,37 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 	if reqID == "" {
 		reqID = m.newID()
 	}
+	handoffPath := filepath.Join(m.relayDir, opID+".md")
+	if req.ReuseOp != "" { // the new op's file is the fresh half's (RT-3a1 T31); anything else is refused before a thing is written
+		path, ok, err := m.reusableHalf(req.SessionID, req.ReuseOp)
+		if err != nil {
+			m.logf("[team] relay begin %s: reuse %s: %v", req.SessionID, req.ReuseOp, err)
+			m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
+			return
+		}
+		if !ok {
+			m.writeErr(w, http.StatusConflict, team.ErrReuseInvalid, "reuse_op is not this session's fresh half, or its file is gone", nil)
+			return
+		}
+		handoffPath = path
+	}
 	pct := req.UsedPercentage
 	op := team.RelayOp{
 		ID: opID, Kind: team.RelayKindSelf, HostID: m.hostID(), SessionID: origin.SessionID, Ref: origin.Ref,
-		RequestID: reqID, State: team.RelayAwaitingApproval, HandoffPath: filepath.Join(m.relayDir, opID+".md"),
+		RequestID: reqID, State: team.RelayAwaitingApproval, HandoffPath: handoffPath,
 		UsedPercentage: &pct, CreatedAt: now, UpdatedAt: now, PID: origin.PID, PaneID: paneOf(origin.Tmux), ProcStart: origin.ProcStart,
 	}
 	sp.OpID = opID
 	payload, _ = json.Marshal(sp) // encoded above already; now with its op id
+	deadlineS := int64(team.SelfRelayDeadlineS)
+	if req.Reason == team.RelayBeginReasonIdle {
+		deadlineS = team.SelfRelayIdleDeadlineS // an idle card is five minutes, not ten (RT-3a1 T29)
+	}
 	row := team.Approval{
 		ID: reqID, Kind: team.KindSelfRelay, HostID: m.hostID(), Origin: origin, Payload: payload, State: team.StateOpen,
-		CreatedAt: now, DeadlineAt: now + team.SelfRelayDeadlineS*1000, LeaseUntil: now + team.LeaseS*1000,
+		CreatedAt: now, DeadlineAt: now + deadlineS*1000, LeaseUntil: now + team.LeaseS*1000,
 	}
-	hash := requestHash(team.KindSelfRelay, origin.SessionID, team.SelfRelayDeadlineS, payload)
+	hash := requestHash(team.KindSelfRelay, origin.SessionID, int(deadlineS), payload)
 	if reask {
 		// A re-ask after a pause: never paused, never approved for the person, whatever the switch and the quota say.
 		stored, err := m.store.CreateSelfRelayCard(op, row, hash, req.ReaskID, now-team.PauseTokenTTLMs)
@@ -243,6 +274,13 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 	}
 	if person {
 		m.beginPerson(w, op, row, hash, req.PersonToken)
+		return
+	}
+	// The idle half (RT-3a1 T29): asked for by the mod, or - the switch on and a mod that speaks it - decided here for an idle begin. An older
+	// mod keeps today's auto-approve below, never a half.
+	if req.Half || (req.Reason == team.RelayBeginReasonIdle && m.unattendedOn() && m.modProtocolAtLeast(req.SessionID, team.MinHalfModVersion)) {
+		op.Mode = team.RelayModeHalf
+		m.beginHalf(w, op, row, hash)
 		return
 	}
 	exhausted := false // the chain has no quota left: the request opens for a person below and is listed as held at once
@@ -364,7 +402,7 @@ func sameBeginPayload(m *Module, op team.RelayOp, req team.RelayBeginRequest) bo
 		}
 	}
 	return sp.Window == req.Window && sp.Manual == req.Manual && sp.Reason == req.Reason && sp.IdleMinutes == req.IdleMinutes &&
-		sp.Person == (req.Manual && req.PersonToken != "")
+		sp.Person == (req.Manual && req.PersonToken != "") && sp.Half == req.Half && sp.ReuseOp == req.ReuseOp
 }
 
 // paneOf is the "%N" pane id at the end of an Origin.Tmux ("<session>:@<win>.%<pane>"), "" when there is none.

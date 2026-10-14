@@ -138,8 +138,8 @@ const (
 // Callers pass an op they just applied (ReportApplied) — a re-send (Noop) never calls it, so there is one notice per
 // transition. Best effort: a failure is logged.
 func (m *Module) outcomeNoticeAsync(op team.RelayOp) {
-	if m.sender == nil || op.TeamID == "" {
-		return
+	if m.sender == nil || op.TeamID == "" || op.Reason == team.RelayReasonHalf {
+		return // a half (or a handoff) ending is no cancellation to report: a handoff's lead has its own notice (RT-3c)
 	}
 	switch {
 	case op.Kind == team.RelayKindMember:

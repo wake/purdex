@@ -603,6 +603,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/relay/ask", m.handleRelayAsk)  // a member's mod asks its lead to relay it (member relay ask §3.1)
 	mux.HandleFunc("GET /api/relay/wait/{id}", m.handleRelayWait)
 	mux.HandleFunc("POST /api/relay/self", m.handleRelaySelf)
+	mux.HandleFunc("POST /api/relay/fresh", m.handleRelayFresh) // the mod reports a fresh half stale (RT-3a1)
 	mux.HandleFunc("POST /api/relay/ops/{id}/report", m.handleRelayReport)
 	mux.HandleFunc("GET /api/relay/ops/{id}", m.handleRelayOp)
 	mux.HandleFunc("POST /api/relay/ops/{id}/claim", m.handleRelayClaim)

@@ -62,6 +62,7 @@ func (m *Module) tick() {
 		m.persistUsage()
 		m.endGoneTeams()
 		m.markGoneMembers()
+		m.sweepFreshHalves()          // a fresh half of a session that is gone (RT-3a1)
 		m.settleStuckKillingMembers() // a kill that claimed its member and never ended (#2152)
 		m.markGoneRemoteMembers()     // sessions here that a lead on another host adopted (X2c)
 		m.endUnpairedRemoteMembers()  // a lead host that is no longer paired (§3.2)

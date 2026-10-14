@@ -141,6 +141,10 @@ func (m *Module) handleDecide(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusServiceUnavailable, team.ErrNotReady, "registry unavailable; retry", nil)
 		return
 	}
+	if errors.Is(err, ErrReuseStale) {
+		m.writeErr(w, http.StatusConflict, team.ErrReuseInvalid, "the handoff file this relay would reuse is no longer fresh; the request is being cancelled", nil)
+		return
+	}
 	if err != nil {
 		m.logf("[team] decide %s: %v", id, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)

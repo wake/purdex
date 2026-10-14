@@ -122,6 +122,11 @@ func (m *Module) handleRelayHello(w http.ResponseWriter, r *http.Request) {
 		Threshold: team.RelayThresholdPct, MinGrowth: team.RelayMinGrowth,
 		IdleMinutes: team.RelayIdleMinutes, IdleThreshold: team.RelayIdleThresholdPct,
 	}
+	if h, ok, err := m.store.FreshHalfOf(req.SessionID); err != nil {
+		m.logf("[team] relay hello %s: fresh half: %v", req.SessionID, err)
+	} else if ok {
+		resp.FreshHalf = &h
+	}
 	// A mod that reloaded mid-relay (pdx setup, #2441) holds no state for its op: hand it the op it must pick up. A
 	// failed read only costs the recovery (the stall rule still fails the op), never the hello.
 	if op, ok, err := m.store.OpenRelayOpBySession(req.SessionID); err != nil {
