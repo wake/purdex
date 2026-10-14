@@ -414,6 +414,21 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	subagentToolUse := isSubagentToolUse(req, result)
 	if subagentToolUse {
 		result.Status = ""
+		// The one exception: the agent that caused the pane's current waiting
+		// (its own permission prompt, now granted) clears it, back to the
+		// status the light had before. Any other subagent stays ignored.
+		if m.framePriorStatus(req) == agentpkg.StatusWaiting {
+			if prior, ok := m.takeSubagentWait(req); ok {
+				result.Status = prior
+				subagentToolUse = false
+			}
+		}
+	} else if req.AgentType == "cc" && result.Valid && result.Status != "" {
+		if result.Status == agentpkg.StatusWaiting {
+			m.noteWaiting(req, m.framePriorStatus(req))
+		} else {
+			m.dropWait(req) // anything else the main light does ends a recorded wait
+		}
 	}
 
 	// Error guard: when the SENDER'S frame is in error, only whitelisted events

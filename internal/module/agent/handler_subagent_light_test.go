@@ -66,6 +66,59 @@ func TestHandler_MainPostToolUse_StillRunning(t *testing.T) {
 	}
 }
 
+func permissionBy(agentID string) string {
+	raw := map[string]any{"tool_name": "Write"}
+	if agentID != "" {
+		raw["agent_id"] = agentID
+	}
+	return ccBody("PdxPermissionRequest", raw)
+}
+
+func subagentTool(agentID string) string {
+	return ccBody("PdxPostToolUse", map[string]any{"tool_name": "Write", "agent_id": agentID})
+}
+
+// The subagent that raised the permission prompt clears the waiting it caused
+// with its next tool call, back to the light from before (idle here); another
+// subagent's tool call does not (#2873).
+func TestHandler_SubagentWaiting_ClearedOnlyByItsOwnAgent(t *testing.T) {
+	m := idleMainWithSubagent(t)
+	sendBody(t, m, permissionBy("agent-X"))
+	if got := findCCFrameRow(t, m).Status; got != agentpkg.StatusWaiting {
+		t.Fatalf("precondition: status = %q, want waiting", got)
+	}
+
+	sendBody(t, m, subagentTool("agent-Y"))
+	if got := findCCFrameRow(t, m).Status; got != agentpkg.StatusWaiting {
+		t.Fatalf("another subagent cleared the wait: status = %q", got)
+	}
+
+	sendBody(t, m, subagentTool("agent-X"))
+	if got := findCCFrameRow(t, m).Status; got != agentpkg.StatusIdle {
+		t.Fatalf("status = %q, want idle (the light before the wait)", got)
+	}
+
+	// Cleared once: a later tool call by it changes nothing.
+	sendBody(t, m, subagentTool("agent-X"))
+	if got := findCCFrameRow(t, m).Status; got != agentpkg.StatusIdle {
+		t.Fatalf("status = %q after a second call, want idle", got)
+	}
+}
+
+// A waiting the main conversation caused (no agent_id) is not cleared by a
+// subagent's tool call.
+func TestHandler_MainWaiting_NotClearedBySubagent(t *testing.T) {
+	m := idleMainWithSubagent(t)
+	sendBody(t, m, permissionBy("agent-X"))
+	sendBody(t, m, permissionBy(""))
+
+	sendBody(t, m, subagentTool("agent-X"))
+
+	if got := findCCFrameRow(t, m).Status; got != agentpkg.StatusWaiting {
+		t.Fatalf("status = %q, want the main waiting kept", got)
+	}
+}
+
 // SubagentStop after a subagent's tool use must not broadcast running for an
 // idle main conversation (the idle->running->idle flicker).
 func TestHandler_SubagentStopAfterToolUse_StaysIdle(t *testing.T) {

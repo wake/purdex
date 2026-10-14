@@ -137,6 +137,46 @@ func TestVerifyEvent_NonTmuxKeepsPidChecksSkipsPaneTree(t *testing.T) {
 	}
 }
 
+// Non-tmux: the subagent that raised the permission prompt clears its waiting
+// with its next tool call (back to running); another one does not.
+func TestHandleEvent_NonTmuxSubagentWaiting_ClearedOnlyByItsOwnAgent(t *testing.T) {
+	m := newTestModule(t)
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: tmux.NewFakeExecutor()}
+	m.registry.Register(&fakeAgentProvider{
+		typeName: "cc",
+		derive: func(event string, raw json.RawMessage) agentpkg.DeriveResult {
+			var r map[string]any
+			_ = json.Unmarshal(raw, &r)
+			st := agentpkg.StatusRunning
+			if event == "PdxPermissionRequest" {
+				st = agentpkg.StatusWaiting
+			}
+			return agentpkg.DeriveResult{Valid: true, Status: st, Detail: map[string]any{"agent_id": r["agent_id"]}}
+		},
+	})
+	sub := m.core.Events.AddTestSubscriber()
+	defer m.core.Events.RemoveTestSubscriber(sub)
+	send := func(event, agent string) string {
+		raw := `{"session_id":"abc-123","agent_id":"` + agent + `"}`
+		postEvent(m, `{"tmux_session":"","tmux_pane_id":"","sender_pid":200,"sender_start_time":"Sun Apr 20 01:30:00 2026","purdex_name":"`+event+`","agent_type":"cc","raw_event":`+raw+`}`)
+		select {
+		case msg := <-sub.SendCh():
+			return string(msg)
+		case <-time.After(150 * time.Millisecond):
+			return ""
+		}
+	}
+	if msg := send("PdxPermissionRequest", "agent-X"); !strings.Contains(msg, `\"status\":\"waiting\"`) {
+		t.Fatalf("waiting not broadcast: %s", msg)
+	}
+	if msg := send("PdxPostToolUse", "agent-Y"); msg != "" {
+		t.Fatalf("another subagent broadcast: %s", msg)
+	}
+	if msg := send("PdxPostToolUse", "agent-X"); !strings.Contains(msg, `\"status\":\"running\"`) {
+		t.Fatalf("own subagent did not clear the wait: %s", msg)
+	}
+}
+
 // A non-tmux session has no pane, but a subagent's PostToolUse still must not
 // report the main session as running (#2873); the main session's own does.
 func TestHandleEvent_NonTmuxSubagentPostToolUse_DoesNotBroadcastRunning(t *testing.T) {

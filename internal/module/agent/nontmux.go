@@ -52,11 +52,24 @@ func (m *Module) handleNonTmuxEvent(w http.ResponseWriter, req EventRequest, tra
 	}
 	// A subagent's tool call carries the main session's id; it is not a status
 	// signal of the main conversation (#2873).
+	// The agent that caused the session's waiting clears it with its next tool
+	// call (its permission prompt was granted); no frame exists to read, so the
+	// light goes back to running.
 	if isSubagentToolUse(req, result) {
-		trace.Verify(req, "skipped", "subagent_tool_use", nil)
-		trace.Finish("completed", "subagent_tool_use")
-		respond()
-		return
+		if prior, ok := m.takeSubagentWait(req); ok {
+			result.Status = prior
+		} else {
+			trace.Verify(req, "skipped", "subagent_tool_use", nil)
+			trace.Finish("completed", "subagent_tool_use")
+			respond()
+			return
+		}
+	} else if req.AgentType == "cc" && result.Status != "" {
+		if result.Status == agentpkg.StatusWaiting {
+			m.noteWaiting(req, "")
+		} else {
+			m.dropWait(req)
+		}
 	}
 	// The event is accepted and derived (nothing below can fail it): the turn end goes out here, before the
 	// emit, with no lock held. A rejected or invalid event returned above and publishes nothing (#2115).
