@@ -79,7 +79,7 @@ func requestGap(name string) string {
 	if name == "" {
 		return ""
 	}
-	c :=name[len(name)-1]
+	c := name[len(name)-1]
 	if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
 		return " "
 	}
