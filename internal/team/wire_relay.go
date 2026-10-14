@@ -197,6 +197,9 @@ type RelayBeginRequest struct {
 	// resumed the session. Valid (this session's, unused, under 24 h) it is consumed and the begin opens a card for a person; unknown,
 	// used or another session's it is ignored and the ordinary rules apply.
 	ReaskID string `json:"reask_id,omitempty"`
+	// Half (with reason idle, RT-3a1) asks for the idle half: the daemon claims the op at once (mode half, approved by its own client, no
+	// quota, no card) and the mod writes the handoff file only - no /clear, no seed. Without reason idle it is 400.
+	Half bool `json:"half,omitempty"`
 	// PersonToken (with Manual) says the begin is the person's own /relay: the one-use token the daemon minted for the mod
 	// (POST /api/relay/person). Valid, it makes the relay direct: no card, no quota, whatever the switches. Invalid → 409
 	// person_token_invalid and nothing is written. Without it a manual begin is a card, as before (an older mod).

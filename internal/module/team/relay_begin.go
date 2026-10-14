@@ -52,6 +52,10 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "unknown reason", nil)
 		return
 	}
+	if req.Half && req.Reason != team.RelayBeginReasonIdle {
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "half is only for reason idle", nil)
+		return
+	}
 	if req.ReaskID != "" {
 		if u, err := uuid.Parse(req.ReaskID); err != nil || u.String() != strings.ToLower(req.ReaskID) {
 			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "reask_id must be a UUID", nil)
@@ -220,11 +224,15 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 	}
 	sp.OpID = opID
 	payload, _ = json.Marshal(sp) // encoded above already; now with its op id
+	deadlineS := int64(team.SelfRelayDeadlineS)
+	if req.Reason == team.RelayBeginReasonIdle {
+		deadlineS = team.SelfRelayIdleDeadlineS // an idle card is five minutes, not ten (RT-3a1 T29)
+	}
 	row := team.Approval{
 		ID: reqID, Kind: team.KindSelfRelay, HostID: m.hostID(), Origin: origin, Payload: payload, State: team.StateOpen,
-		CreatedAt: now, DeadlineAt: now + team.SelfRelayDeadlineS*1000, LeaseUntil: now + team.LeaseS*1000,
+		CreatedAt: now, DeadlineAt: now + deadlineS*1000, LeaseUntil: now + team.LeaseS*1000,
 	}
-	hash := requestHash(team.KindSelfRelay, origin.SessionID, team.SelfRelayDeadlineS, payload)
+	hash := requestHash(team.KindSelfRelay, origin.SessionID, int(deadlineS), payload)
 	if reask {
 		// A re-ask after a pause: never paused, never approved for the person, whatever the switch and the quota say.
 		stored, err := m.store.CreateSelfRelayCard(op, row, hash, req.ReaskID, now-team.PauseTokenTTLMs)
@@ -243,6 +251,13 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 	}
 	if person {
 		m.beginPerson(w, op, row, hash, req.PersonToken)
+		return
+	}
+	// The idle half (RT-3a1 T29): asked for by the mod, or - the switch on and a mod that speaks it - decided here for an idle begin. An older
+	// mod keeps today's auto-approve below, never a half.
+	if req.Half || (req.Reason == team.RelayBeginReasonIdle && m.unattendedOn() && m.modProtocolAtLeast(req.SessionID, team.MinHalfModVersion)) {
+		op.Mode = team.RelayModeHalf
+		m.beginHalf(w, op, row, hash)
 		return
 	}
 	exhausted := false // the chain has no quota left: the request opens for a person below and is listed as held at once

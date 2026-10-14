@@ -376,6 +376,15 @@ func (m *Module) sweepUnattended(why string) (approved, pending, refused int) {
 			}
 			continue
 		}
+		if isIdleCard(a) && m.modProtocolAtLeast(a.Origin.SessionID, team.MinHalfModVersion) {
+			// An idle card of a mod that runs the half itself is not approved: it times out, and the mod writes the file (RT-3a1 T29)
+			if _, won, err := m.closeAs(a.ID, Close{State: team.StateTimeout, DecidedAt: m.now(), Reason: "unattended"}); err != nil {
+				m.logf("[team] unattended sweep (%s): idle card %s: %v", why, a.ID, err)
+			} else if won {
+				approved++ // counted with what the sweep settled
+			}
+			continue
+		}
 		if !autoApprovableRow(a) {
 			continue
 		}
