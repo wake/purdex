@@ -45,7 +45,7 @@ The name pool (session names instead of the ref suffix, user 2026-10-14) is a se
 ## 3. Decided after the prototype (2026-10-14)
 
 - **Q-A, how the files reach git — 甲** (user: 「可以」): a dedicated branch `purdex/journal` in the project, written in its own worktree by the daemon, committed and pushed every ~10 minutes when something changed. Main is untouched (no direct push, no conflict with fast-forwards or PRs).
-- **Push scope** (user: 「ok 可以」): commits always local; only projects listed in the daemon config push — `github.com/wake/purdex` to start. Every other project (company repositories included) keeps its journal branch local.
+- **Push scope**: commits always local; only projects listed in the daemon config `[journal] push_projects` push (code default: empty). *Revised 2026-10-14*: `wake/purdex` turned out to be a **public** repository, so pushing would publish the journal; the user chose **local only for now** (answered in 1f's session: 「先只存本機」) — neither host sets `push_projects`; pushing anywhere (e.g. a private repository) is a later decision.
 - **Q-B, the number on the 日誌 button**: the count of unresolved 待確認 **items** of the active tab's journal; nothing for ordinary entries, nothing when 0.
 - **Q-C, filters**: 全部 / 執行 / 任務 / 請求與溝通 / 待確認 (a count of open items on 待確認). **Clicking the active filter again clears it** (back to 全部).
 - **Prototype** (`docs/prototypes/workbook-journal-v4/`): layout approved; **a 待確認 row has no coloured left edge** (the yellow is on its chip and checkboxes only).
