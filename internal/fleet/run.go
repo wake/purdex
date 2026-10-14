@@ -63,6 +63,9 @@ func Args(alias string) []string {
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=5",
 		"-o", "StrictHostKeyChecking=yes",
+		// An alias with its own RemoteCommand would make ssh refuse a command line ("Cannot execute command-line and
+		// remote command"); none lets the probe script replace it.
+		"-o", "RemoteCommand=none",
 		"--", alias, Script,
 	}
 }

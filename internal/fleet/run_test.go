@@ -67,7 +67,7 @@ func TestRun_ArgvIsFixedAndAliasFollowsDashDash(t *testing.T) {
 	var got []string
 	b, _ := os.ReadFile(argv)
 	_ = json.Unmarshal(b, &got)
-	want := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=yes", "--", "web-1", Script}
+	want := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=yes", "-o", "RemoteCommand=none", "--", "web-1", Script}
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("argv\n got %q\nwant %q", got, want)
 	}

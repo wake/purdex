@@ -92,7 +92,38 @@ func parseConfig(text string) []directive {
 		if i := strings.IndexAny(line, " \t="); i >= 0 {
 			key, rest = line[:i], strings.TrimLeft(line[i:], " \t=")
 		}
-		out = append(out, directive{keyword: strings.ToLower(key), args: strings.Fields(rest)})
+		out = append(out, directive{keyword: strings.ToLower(key), args: splitArgs(rest)})
+	}
+	return out
+}
+
+// splitArgs splits the arguments of a directive the way ssh does: white space separates, double quotes group (and are
+// removed), and inside quotes a backslash escapes the next character. An unterminated quote runs to the end of the line.
+func splitArgs(s string) []string {
+	var out []string
+	var cur strings.Builder
+	inTok, quoted := false, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quoted && c == '\\' && i+1 < len(s):
+			i++
+			cur.WriteByte(s[i])
+		case c == '"':
+			quoted, inTok = !quoted, true
+		case !quoted && (c == ' ' || c == '\t'):
+			if inTok {
+				out = append(out, cur.String())
+				cur.Reset()
+				inTok = false
+			}
+		default:
+			cur.WriteByte(c)
+			inTok = true
+		}
+	}
+	if inTok {
+		out = append(out, cur.String())
 	}
 	return out
 }

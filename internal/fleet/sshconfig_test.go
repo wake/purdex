@@ -108,6 +108,22 @@ func TestAliases_IncludeOneLevel(t *testing.T) {
 	}
 }
 
+// Quoted arguments are read as ssh reads them: the quotes are not part of the name or of an include path.
+func TestAliases_QuotedArguments(t *testing.T) {
+	home := sshHome(t, map[string]string{
+		"config":         "Host \"build-box\" plain \"two words\" \"*\"\nInclude \"conf dir/hosts\"\n",
+		"conf dir/hosts": "Host \"inc-box\"\n",
+	})
+	got := aliasesOf(t, home)
+	want := []string{"build-box", "plain", "inc-box"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("aliases = %q, want %q", got, want)
+	}
+	if !ValidAlias(home, "build-box") {
+		t.Error("quoted alias should be valid")
+	}
+}
+
 // There is no cache: a Host removed from an included file is gone at the next call, and one added is there.
 // Mutation gate: cache the first read -> the removed alias is still listed (red).
 func TestAliases_NoCache(t *testing.T) {
