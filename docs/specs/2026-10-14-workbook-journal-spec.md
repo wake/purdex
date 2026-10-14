@@ -77,7 +77,7 @@ The name pool (session names instead of the ref suffix, user 2026-10-14) is a se
 ### 5.2 待確認
 
 - Written when the turn's final reply asks the person to answer or decide something and the question is still open at the turn's end. A question answered inside the same turn (an option-button prompt the person already answered) is not one.
-- `items`: one per question, ≤ 60 chars each, in the order asked; `detail`: the reply's question part copied as is (scrubbed, ≤ 4 000 chars).
+- `items`: one per question, ≤ 30 chars each (≤ 10 items), in the order asked; `detail`: the reply's question part copied as is (scrubbed, ≤ 4 000 chars).
 - Pinned when written. On every later turn of the unit, Haiku receives the open 待確認 items and returns the ones the person's message answered (`confirm_done`); the daemon ticks them. All ticked → unpinned (the entry stays in the stream).
 - The person can unpin by hand (App → daemon → file); the items stay as they are.
 
@@ -101,7 +101,7 @@ The name pool (session names instead of the ref suffix, user 2026-10-14) is a se
 
 ## 8. Files (item 20)
 
-- On the branch `purdex/journal` (§3 Q-A), in the daemon's worktree of it: `.purdex/journal/<unit>/<YYYY-MM>.md`, `.purdex/tasks/<unit>.md`, `.purdex/roadmap.md`. The lead agent edits `roadmap.md` in that worktree; the daemon commits it with the rest. `<unit>` = the team's label slug + id suffix, or the solo session's name + ref.
+- On the branch `purdex/journal` (§3 Q-A), in the daemon's registered worktree of it (`<data dir>/journal/<project id>/wt`; a second checkout of the branch elsewhere is refused): `.purdex/journal/<unit>/<YYYY-MM>.md`, `.purdex/tasks/<unit>.md`, `.purdex/roadmap.md`. The lead agent edits `roadmap.md` in that worktree; the daemon commits it with the rest. `<unit>` = the team's label slug + id suffix, or the solo session's name + ref.
 - **Markdown that reads as a document and parses back** — each entry a block:
 
 ```markdown
@@ -121,7 +121,9 @@ RA-2 已 merge：拿掉「不再詢問」、補上終端機指令核准的提示
 <!-- j id=wb:4813:1 kind=confirm pinned=1 -->
 ```
 
-- The daemon is the only writer of journal and tasks files (append, tick, pin); the roadmap file has two writers (the lead agent for stages, the daemon for 狀態) — the daemon rewrites only the 狀態 cell of a row it can match, and leaves a file it cannot parse untouched (one log line).
+- **The entry's data is a JSON object in its `<!-- j {…} -->` comment; the visible block is a rendering of it**, regenerated whenever the entry changes; hand edits of the visible text are not read back.
+- The daemon is the only writer of journal and tasks files (append, tick, pin, and filling a `task_done`'s empty closing line when the report arrives after the completion); the roadmap file has two writers (the lead agent for stages, the daemon for 狀態) — the daemon rewrites only the 狀態 cell of a row it can match, and leaves a file it cannot parse untouched (one log line).
+- Writes are durable: a job's journal output is queued in `workbook.db` in the same transaction as its result and written to the files after the entry is final, so a crash or a re-write loses nothing.
 - The daemon keeps no second copy of the entries: the App reads them through the daemon, which parses the files (cached by mtime).
 
 ## 9. Summariser changes (workbook v2 §5, prompt v3)
