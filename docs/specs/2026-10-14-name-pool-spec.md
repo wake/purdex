@@ -36,11 +36,15 @@ erik freya ivan olga kofi amara tiago julia budi linh
 - **Pick**: a uniformly random name from pool − in use. None left → today's `<base>-<ref[1:3]>`.
 - **Stored** as today (`peer_names`, `Assign`, first writer wins) with `source = 'pool'`; the virtual name is `<base>-<name>`, the base cut to `64 − 1 − len(name)` bytes as `VirtualName` does today.
 
-## 5. Relays, resumes and collisions
+## 5. Relays, resumes and collisions — the newcomer yields
 
-- **Relay**: unchanged path — the successor inherits the predecessor's stored name through the lineage (`resolveNames` lines 109–171, `AdoptLineage`); old refs keep routing (`address.go`, `PreviousRefs`). A pool name is inherited like any other.
-- **Resume** of a dead conversation (`claude --resume`, same session id) whose stored pool name is now held by another live conversation: it picks a new pool name (row updated, `source = 'pool'`), so a resumed session never shadows a live one. Its ref and old address forms keep working for its own history; the old name now belongs to the other session.
-- **Collision** (two hosts pick the same name within one snapshot window): today's `ambiguous` (`resolveTier`, `address.go:485`) with the candidates; the bracket form `<host>/<name> [<ref>]` and `<host>/_<ref>` still reach each one. No repair.
+- **Relay**: unchanged path — the successor inherits the predecessor's stored name through the lineage (`resolveNames`, `AdoptLineage`); old refs keep routing (`address.go`, `PreviousRefs`). A pool name is inherited like any other; a predecessor and its successor never count as two holders.
+- **Two live holders of one pool name** (outside one lineage), however it happened: **the one whose process started later picks a new pool name** (row updated by compare-and-set; a lineage row stays `lineage`, any other becomes `pool`).
+  - A **resume** of a dead conversation (`claude --resume`, same session id) is a new process, so it yields to the conversation that took the name meanwhile (user: 「resume 撞名更換可以」). Its ref and old forms keep working for its own history; the old name belongs to the other session.
+  - **Two hosts** picking the same name within one snapshot window settle the same way, each daemon renaming only its own conversation.
+  - Process start: the registry's `ProcStart` (local) or the row's `proc_start` (remote); unknown → the time the daemon first saw it live.
+- Until the newcomer's next naming pass, sends to the name answer today's `ambiguous` with the candidates; the bracket form and `<host>/_<ref>` reach each one.
+- **Picking is serialised** on each daemon (one lock around pick and store), so one host never hands one name to two conversations.
 - **Older daemons**: a host without the pool keeps naming `<base>-<xx>`; uniqueness across hosts holds only when both run it — deploy mlab and air26 together (1f bumps and deploys).
 
 ## 6. What changes, what does not
@@ -55,7 +59,7 @@ erik freya ivan olga kofi amara tiago julia budi linh
 - A dead conversation's name is free again (M: count stored rows → never freed).
 - All 30 held → `<base>-<xx>` (M: loop forever / empty suffix).
 - A relay successor inherits the pool name (regression).
-- A resume whose name is held elsewhere gets a new name; one whose name is free keeps it (M: always keep → two live holders).
+- Two live holders: the later process renames, the earlier keeps (M: always keep → two live holders; M: the earlier renames → the holder flips); a resume whose name is free keeps it; concurrent naming passes never give one name twice (M: no lock).
 - An unreachable host's snapshot expires after 5 minutes.
 - No pool name is ref-shaped; every name passes `RoutableName` with a 61-byte base.
 
