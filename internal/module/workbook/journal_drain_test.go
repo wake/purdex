@@ -566,3 +566,23 @@ func TestDrain_ReplayKeepsWhatHappenedToAnEvent(t *testing.T) {
 		t.Fatalf("after the replay: %+v", e)
 	}
 }
+
+// A replayed turn row keeps a pin the user set on its exec entry.
+// Mutation gate: write turn entries with Upsert instead of putNew -> the pin is cleared (red).
+func TestDrain_TurnReplayKeepsAPinOnItsExecEntry(t *testing.T) {
+	k := newDrainKit(t)
+	a := k.turn("c", "t1", team.SeatNone, TodoChanges{})
+	k.okEntry(a, "做完了。", false)
+	k.drain()
+	file := journal.MonthFile(k.dir("solo:c"), at(1_700_000_000_000))
+	if _, err := journal.SetPinned(file, "turn:"+itoa(a), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := k.st.db.Exec(`UPDATE wb_journal_outbox SET done_at = 0`); err != nil {
+		t.Fatal(err)
+	}
+	k.drain()
+	if e, _ := k.byID("solo:c", "turn:"+itoa(a)); !e.Pinned {
+		t.Fatalf("after the replay: %+v", e)
+	}
+}

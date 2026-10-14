@@ -278,12 +278,8 @@ func at(ms int64) time.Time {
 	return time.UnixMilli(ms)
 }
 
-func (h home) put(e journal.Entry) error {
-	return journal.Upsert(journal.MonthFile(h.journalDir, e.At), e)
-}
-
-// putNew writes an event that is not in its month file yet. A replay (a crash after the write, before the row was marked
-// done) must not overwrite what happened to the entry since: a confirm unpinned by hand, an item ticked.
+// putNew writes an entry that is not in its month file yet. A replay (a crash after the write, before the row was marked
+// done) must not overwrite what happened to the entry since: a pin set or cleared by hand, an item ticked.
 func (h home) putNew(e journal.Entry) error {
 	file := journal.MonthFile(h.journalDir, e.At)
 	have, err := journal.Parse(file)
@@ -311,7 +307,7 @@ func (d *Drainer) writeTurn(h home, ent Entry, p turnPayload) error {
 			default: // dropped: no entry, the task file shows it
 				continue
 			}
-			if err := h.put(e); err != nil {
+			if err := h.putNew(e); err != nil {
 				return err
 			}
 		}
@@ -324,7 +320,7 @@ func (d *Drainer) writeTurn(h home, ent Entry, p turnPayload) error {
 		if ent.ThingDone {
 			kind = journal.KindExecDone
 		}
-		if err := h.put(journal.Entry{ID: fmt.Sprintf("turn:%d", ent.ID), Kind: kind, At: when, Text: strings.TrimSpace(ent.Entry)}); err != nil {
+		if err := h.putNew(journal.Entry{ID: fmt.Sprintf("turn:%d", ent.ID), Kind: kind, At: when, Text: strings.TrimSpace(ent.Entry)}); err != nil {
 			return err
 		}
 	}
