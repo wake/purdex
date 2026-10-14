@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -271,6 +272,160 @@ func TestDrain_RepeatedFailureLogsOncePerHour(t *testing.T) {
 	}
 }
 
+// Solo todos become task entries (#seq title), done todos a task_done entry, a dropped one none; tasks.md is rewritten
+// from the conversation's todos. A team unit mirrors none of this.
+// Mutation gate: write task entries for a team unit -> red; write one for a dropped todo -> red; skip tasks.md -> red.
+func TestDrain_SoloTodosBecomeTaskEntriesAndTheTasksFile(t *testing.T) {
+	k := newDrainKit(t)
+	a := k.turn("c", "t1", team.SeatNone, adds("寫測試", "丟掉的"))
+	k.okEntry(a, "第一輪。", false)
+	todos, _ := k.st.OpenTodos("c", 10)
+	b := mustInsert(t, k.st, func() Entry {
+		e := pending("c", "c-s", "t2", 1_700_000_002_000)
+		e.Role, e.TeamID = team.SeatNone, ""
+		return e
+	}())
+	if _, ok, err := k.st.SetPushLineV2(b, PushLineV2{Thing: "x", Todos: TodoChanges{Done: []int64{todos[0].ID}, Dropped: []int64{todos[1].ID}, Adds: []TodoAdd{{Title: "改實作"}}}, By: ClosedByModel}); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	k.okEntry(b, "第二輪。", false)
+	lead := k.turn("l", "t1", team.SeatLead, adds("領導的任務"))
+	k.okEntry(lead, "領導。", false)
+	if n := k.drain(); n != 3 {
+		t.Fatalf("drained %d", n)
+	}
+	got := map[string]string{}
+	for _, e := range k.entries("solo:c") {
+		got[e.ID] = string(e.Kind) + "|" + e.Text
+	}
+	want := map[string]string{
+		"todo:" + itoa(todos[0].ID) + ":new":   "task_new|#1 寫測試",
+		"todo:" + itoa(todos[1].ID) + ":new":   "task_new|#2 丟掉的",
+		"todo:" + itoa(todos[1].ID+1) + ":new": "task_new|#3 改實作",
+		"todo:" + itoa(todos[0].ID) + ":done":  "task_done|#1 寫測試",
+		"turn:" + itoa(a):                      "exec|第一輪。",
+		"turn:" + itoa(b):                      "exec|第二輪。",
+	}
+	for id, w := range want {
+		if got[id] != w {
+			t.Errorf("entry %s = %q, want %q", id, got[id], w)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("entries = %v", got)
+	}
+	tasks, err := journal.ParseTasks(filepath.Join(k.fp.wt, ".purdex", "tasks", unitSlug("專案 A", "solo:c")+".md"))
+	if err != nil || len(tasks) != 3 || states(tasks) != "#1:done #2:dropped #3:todo" {
+		t.Fatalf("tasks = %+v %v", tasks, err)
+	}
+	for _, e := range k.entries("team:team-7") {
+		if e.Kind == journal.KindTaskNew {
+			t.Errorf("a team unit mirrored a lead todo: %+v", e)
+		}
+	}
+}
+
+// states lists a task list as "#n:state" in number order.
+func states(ts []journal.Task) string {
+	by := map[string]journal.TaskState{}
+	for _, t := range ts {
+		by[t.Key] = t.State
+	}
+	var out []string
+	for _, k := range []string{"#1", "#2", "#3"} {
+		out = append(out, k+":"+string(by[k]))
+	}
+	return strings.Join(out, " ")
+}
+
+// A confirm is written pinned; a journal result that ticks its items marks them, and the last tick unpins it. A tick
+// for an entry or item that is not there is skipped without blocking the row. Roadmap statuses are applied; a missing
+// roadmap file is not an error.
+// Mutation gate: pin never cleared -> red; unpin on the first tick -> red; fail on a missing entry -> the row stays
+// undone (red); fail on a missing roadmap file -> red.
+func TestDrain_ConfirmTicksAndRoadmap(t *testing.T) {
+	k := newDrainKit(t)
+	a := k.turn("c", "t1", team.SeatNone, TodoChanges{})
+	k.okEntry(a, "。", false)
+	conf := JournalOutcome{EntryID: a, PromptVer: 1, Result: JournalResult{Events: []JournalEvent{{Kind: journal.KindConfirm, Text: "請確認", Items: []string{"甲?", "乙?"}, Detail: "細節"}}}}
+	if err := k.st.RecordJournalResult(conf); err != nil {
+		t.Fatal(err)
+	}
+	k.drain()
+	cid := "ev:" + itoa(a) + ":0"
+	if e, ok := k.byID("solo:c", cid); !ok || !e.Pinned || len(e.Items) != 2 || e.Items[0].Done || e.Detail != "細節" {
+		t.Fatalf("confirm = %+v %v", e, ok)
+	}
+	b := mustInsert(t, k.st, func() Entry {
+		e := pending("c", "c-s", "t2", 1_700_000_002_000)
+		e.Role = team.SeatNone
+		e.TeamID = ""
+		return e
+	}())
+	if _, ok, err := k.st.FinishSkippedV2(b, ReasonModel, Usage{}, 0, TodoChanges{}, ClosedByModel); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	tick := func(entry string, idx int) JournalOutcome {
+		return JournalOutcome{EntryID: b, PromptVer: 1, Result: JournalResult{Ticks: []ConfirmTick{{EntryID: entry, ItemIndex: idx}, {EntryID: "ev:nope:0", ItemIndex: 0}, {EntryID: entry, ItemIndex: 9}},
+			Roadmap: []RoadmapChange{{Feature: "F", Stage: "S", Status: "完成"}}}}
+	}
+	if err := k.st.RecordJournalResult(tick(cid, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if n := k.drain(); n != 2 { // the skipped turn's turn row and its journal row
+		t.Fatalf("drained %d", n)
+	}
+	if e, _ := k.byID("solo:c", cid); !e.Items[0].Done || e.Items[1].Done || !e.Pinned {
+		t.Fatalf("after one tick: %+v", e)
+	}
+	// second tick on a third entry
+	c := mustInsert(t, k.st, func() Entry {
+		e := pending("c", "c-s", "t3", 1_700_000_003_000)
+		e.Role = team.SeatNone
+		e.TeamID = ""
+		return e
+	}())
+	if _, ok, err := k.st.FinishSkippedV2(c, ReasonModel, Usage{}, 0, TodoChanges{}, ClosedByModel); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	o := tick(cid, 1)
+	o.EntryID = c
+	if err := k.st.RecordJournalResult(o); err != nil {
+		t.Fatal(err)
+	}
+	k.drain()
+	if e, _ := k.byID("solo:c", cid); !e.Items[1].Done || e.Pinned {
+		t.Fatalf("after the last tick: %+v", e)
+	}
+	// a roadmap file that exists is changed in the one cell
+	road := filepath.Join(k.fp.wt, ".purdex", "roadmap.md")
+	if err := os.WriteFile(road, []byte("## F\n\n| 階段 | 說明 | 狀態 |\n|---|---|---|\n| S | x | 進行中 |\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d := mustInsert(t, k.st, func() Entry {
+		e := pending("c", "c-s", "t4", 1_700_000_004_000)
+		e.Role = team.SeatNone
+		e.TeamID = ""
+		return e
+	}())
+	if _, ok, err := k.st.FinishSkippedV2(d, ReasonModel, Usage{}, 0, TodoChanges{}, ClosedByModel); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	if err := k.st.RecordJournalResult(JournalOutcome{EntryID: d, PromptVer: 1, Result: JournalResult{Roadmap: []RoadmapChange{{Feature: "F", Stage: "S", Status: "完成"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	k.drain()
+	b2, _ := os.ReadFile(road)
+	if !strings.Contains(string(b2), "| S | x | 完成 |") {
+		t.Fatalf("roadmap = %q", b2)
+	}
+	for _, r := range outboxRows(t, k.st) {
+		if r.Done == 0 {
+			t.Errorf("row %+v left undone", r)
+		}
+	}
+}
+
 // The unit's project is asked once; the registration decides afterwards, even if the resolver would now answer
 // differently (a lead that moved, a relay).
 // Mutation gate: resolve on every row -> the second call lands in the other worktree (red).
@@ -317,8 +472,10 @@ func TestDrain_RefreshRowWritesNoExecEntry(t *testing.T) {
 	if n := k.drain(); n != 1 {
 		t.Fatalf("drained %d", n)
 	}
-	if es := k.entries("solo:c"); len(es) != 0 {
-		t.Fatalf("entries = %+v", es)
+	for _, x := range k.entries("solo:c") { // the todo it added is mirrored (see TestDrain_RefreshTodosAreMirrored), the line is not
+		if x.Kind == journal.KindExec || x.Kind == journal.KindExecDone {
+			t.Fatalf("an exec entry for a refresh: %+v", x)
+		}
 	}
 }
 
@@ -357,5 +514,26 @@ func TestDrain_FailingRowsDoNotStarveOthersAndUnknownKindStays(t *testing.T) {
 	var done int
 	if err := k.st.db.QueryRow(`SELECT done_at FROM wb_journal_outbox WHERE kind = 'future'`).Scan(&done); err != nil || done != 0 {
 		t.Fatalf("unknown kind: done_at = %d err = %v, want undone", done, err)
+	}
+}
+
+// A solo refresh that adds a todo mirrors it (task entry and tasks file) like a turn does, with no exec entry.
+// Mutation gate: skip the todos of a refresh row -> no task entry (red).
+func TestDrain_RefreshTodosAreMirrored(t *testing.T) {
+	k := newDrainKit(t)
+	e := pending("c", "c-s", "r:1", 1_700_000_000_000)
+	e.Kind, e.Role, e.TeamID = KindRefresh, team.SeatNone, ""
+	id := mustInsert(t, k.st, e)
+	if _, ok, err := k.st.FinishRefresh(id, RefreshDone{Status: "s", Todos: adds("重整新增")}); err != nil || !ok {
+		t.Fatal(err, ok)
+	}
+	k.drain()
+	es := k.entries("solo:c")
+	if len(es) != 1 || es[0].Kind != journal.KindTaskNew || es[0].Text != "#1 重整新增" {
+		t.Fatalf("entries = %+v", es)
+	}
+	tasks, err := journal.ParseTasks(filepath.Join(k.fp.wt, ".purdex", "tasks", unitSlug("專案 A", "solo:c")+".md"))
+	if err != nil || len(tasks) != 1 || tasks[0].Title != "重整新增" {
+		t.Fatalf("tasks = %+v %v", tasks, err)
 	}
 }

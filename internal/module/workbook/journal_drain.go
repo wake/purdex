@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -281,9 +282,27 @@ func (h home) put(e journal.Entry) error {
 	return journal.Upsert(journal.MonthFile(h.journalDir, e.At), e)
 }
 
-// writeTurn writes a turn row: the exec entry (only for an ok entry).
+// writeTurn writes a turn row: the solo task entries and tasks file, then the exec entry (only for an ok entry).
 func (d *Drainer) writeTurn(h home, ent Entry, p turnPayload) error {
 	when := at(ent.TurnAt)
+	if h.solo {
+		for _, t := range p.Todos {
+			e := journal.Entry{ID: fmt.Sprintf("todo:%d:new", t.ID), Kind: journal.KindTaskNew, At: when, Text: fmt.Sprintf("#%d %s", t.Seq, t.Title)}
+			switch t.State {
+			case TodoOpen:
+			case TodoDone:
+				e.ID, e.Kind = fmt.Sprintf("todo:%d:done", t.ID), journal.KindTaskDone
+			default: // dropped: no entry, the task file shows it
+				continue
+			}
+			if err := h.put(e); err != nil {
+				return err
+			}
+		}
+		if err := d.writeTasks(h); err != nil {
+			return err
+		}
+	}
 	if ent.Kind == KindTurn && ent.State == StateOK && strings.TrimSpace(ent.Entry) != "" { // a refresh's line is not a turn's account
 		kind := journal.KindExec
 		if ent.ThingDone {
@@ -296,7 +315,31 @@ func (d *Drainer) writeTurn(h home, ent Entry, p turnPayload) error {
 	return nil
 }
 
-// writeJournal writes a journal row: the events.
+// writeTasks rewrites the solo unit's tasks file from the conversation's todos (all of them, so a change by a refresh
+// shows too). A conversation with no todo and no file writes nothing.
+func (d *Drainer) writeTasks(h home) error {
+	todos, err := d.st.ConvTodos(h.convKey)
+	if err != nil {
+		return err
+	}
+	if _, serr := os.Stat(h.tasksFile); len(todos) == 0 && serr != nil {
+		return nil
+	}
+	tasks := make([]journal.Task, 0, len(todos))
+	for _, t := range todos {
+		st := journal.TaskTodo
+		switch t.State {
+		case TodoDone:
+			st = journal.TaskDone
+		case TodoDropped:
+			st = journal.TaskDropped
+		}
+		tasks = append(tasks, journal.Task{Key: fmt.Sprintf("#%d", t.Seq), Title: t.Title, State: st})
+	}
+	return journal.WriteTasks(h.tasksFile, tasks)
+}
+
+// writeJournal writes a journal row: the events, then the ticks, then the roadmap statuses.
 func (d *Drainer) writeJournal(h home, ent Entry, p journalPayload) error {
 	when := at(ent.TurnAt)
 	for i, ev := range p.Events {
@@ -309,6 +352,59 @@ func (d *Drainer) writeJournal(h home, ent Entry, p journalPayload) error {
 			return err
 		}
 	}
+	for _, t := range p.Ticks {
+		if err := d.tick(h, t); err != nil {
+			return err
+		}
+	}
+	for _, r := range p.Roadmap {
+		_, err := journal.SetStatus(h.roadmapFile, r.Feature, r.Stage, r.Status)
+		switch {
+		case err == nil:
+		case errors.Is(err, os.ErrNotExist), errors.Is(err, journal.ErrUnknownStatus):
+			d.logf("[workbook] journal roadmap: %s / %s not set: %v", r.Feature, r.Stage, err) // nothing to set, retrying cannot help
+		default:
+			return err
+		}
+	}
+	return nil
+}
+
+// tick marks one confirm item answered, in whichever month file holds the entry; a confirm whose items are all
+// answered is unpinned. An entry or item that is not there (edited away by hand) is skipped: retrying cannot make it.
+func (d *Drainer) tick(h home, t payloadTick) error {
+	files, err := filepath.Glob(filepath.Join(h.journalDir, "*.md"))
+	if err != nil {
+		return err
+	}
+	for i := len(files) - 1; i >= 0; i-- { // newest month first
+		list, err := journal.Parse(files[i])
+		if err != nil {
+			return err
+		}
+		for _, e := range list {
+			if e.ID != t.Entry {
+				continue
+			}
+			if t.Idx < 0 || t.Idx >= len(e.Items) {
+				d.logf("[workbook] journal tick: entry %s has no item %d", t.Entry, t.Idx)
+				return nil
+			}
+			if _, err := journal.Tick(files[i], t.Entry, t.Idx); err != nil {
+				return err
+			}
+			e.Items[t.Idx].Done = true
+			all := true
+			for _, it := range e.Items {
+				all = all && it.Done
+			}
+			if all {
+				_, err = journal.SetPinned(files[i], t.Entry, false)
+			}
+			return err
+		}
+	}
+	d.logf("[workbook] journal tick: entry %s not found", t.Entry)
 	return nil
 }
 
