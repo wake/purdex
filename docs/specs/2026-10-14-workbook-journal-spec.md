@@ -1,162 +1,182 @@
-# Workbook journal — spec (v3.1)
+# Workbook journal — spec (v4)
 
-Supersedes the **display** half of `docs/specs/2026-10-09-session-workbook-spec.md` (v1 + v2, §10) — see §9 for each clause it replaces. The summariser (§4–§8 of v2) stays as it is and feeds the journal.
-Prototype the user reviewed (2026-10-13): `docs/prototypes/workbook-journal/` (source, fixture of the A line's real events on 2026-10-13, five screenshots). Data inventory behind §4: lead notes `journal-sources-2026-10-14.md` (88).
-Owner: 88 (interface line). Daemon pieces that read the team module go past 1f (A line) for review.
+> v4 (2026-10-14) rewrites v3 after the user's redesign the same afternoon (§2, items 7–20). v3's daemon module that pulled events from the workbook, approvals, tasks, reports and transcripts is **dropped**: the journal is written by the workbook's own Haiku call. History: v3 / v3.1 and the daemon plan rev 2.1 are in the git history of this branch; J-0a (#2835) is paused.
+> Supersedes the **display** half of `docs/specs/2026-10-09-session-workbook-spec.md` (v2, §10) and extends its summariser (§5) — §12 lists each clause.
+> Owner: 88 (interface line). The summariser prompt, the workbook module and anything that reads the team module go past 1f (A line) for review.
 
 ## 1. Problem
 
-The workbook view stacks 「目前狀況」, up to ~30 todos and several lists; a manager cannot tell what happened (user, 2026-10-13). The user wants a **journal**: what happened, in order, written like a short report to a manager.
+The workbook view stacks 「目前狀況」, up to ~30 todos and several lists; a manager cannot tell what happened (user, 2026-10-13). The user wants **the workbook's content to be a journal report for a manager**: what happened, in order, one voice.
 
-## 2. User decisions (2026-10-13, do not reopen)
+## 2. User decisions (do not reopen)
 
-1. A **journal-style report plus an event stream** replaces the workbook view.
-2. Three event families: **執行** (an execution report, an execution finished), **任務** (created, completed), **溝通或請求** (to the user, between peers).
-3. Opening it **scrolls to the bottom** (newest last), and new events keep **loading in by themselves**.
-4. The journal and the team panel have **separate entries and separate panels that never overlap**. Both are **floating cards**; opening one pushes the other to the left; **the team card is on the left**.
+2026-10-13:
+
+1. A journal-style report plus an event stream replaces the workbook view.
+2. *(v4 refines into item 9)* Event families: execution, tasks, communication / requests.
+3. Opening it **scrolls to the bottom** (newest last), and new entries keep **loading in by themselves**.
+4. The journal and the team panel have **separate entries and separate panels that never overlap**; both are floating cards; **the team card is on the left**.
 5. The reader is **a manager**; the writing reads like **a brief report to a superior**.
-6. *(2026-10-14, badge)* an ask (a tool-permission prompt, an agent question) is a kind of unread whose light is yellow; a hidden tab knocking is its own unread. The journal's 「等我回覆」 follows the same notion (§5.3).
 
-## 3. Open — the user decides (88's proposals)
+2026-10-14:
 
-- **Q1 — who writes the 「報給主管」 lines.** Proposal: **by event type, no new model call** (§4.2): execution uses the workbook entry the summariser already writes in report tone (only turns that made progress); tasks use the `pdx task` subject and the `pdx report` summary as written; communication and requests use the first sentence of the original text. The alternative — the daemon batches events and has a model rewrite them — adds a call per batch, a delay, and a second voice for the same fact.
-- **Q2 — a number on the journal button.** Proposal: **only the count of 「等我回覆」** (§5.3), nothing for ordinary new events (the badge already counts unread).
+6. An ask (tool permission, agent question) is a kind of unread whose light is yellow; a hidden tab knocking is its own unread (badge rule; unchanged here).
+7. **One report, written as now**: the journal is the workbook entry text, written by **the same per-turn Haiku call** (「出法維持現在，同一個事件中拋給 Haiku 去寫」). One call per turn writes all of that turn's journal lines (user: 「可以」).
+8. **The journal is only a journal**: nothing about cards (approval, permission, ask cards), no handling or management from it.
+9. **Kinds**: 請求 (by 使用者 | leader | member); 任務建立 / 任務完成 (with the task number); 執行 / 執行完成; 溝通; **待確認** (special, item 10).
+10. **待確認**: when an agent needs the person's reply. One entry per message, **one checkbox per question** (「像現在你一個一個詢問我，就算是 6 項（同一筆內，6 個 checkbox）」); it opens to the left with the full detail, or the original question copied as is. Not only option-button prompts.
+11. **Pin**: any entry can be pinned; a 待確認 is pinned automatically and floats at the top; it unpins when every item is answered, or by hand. **The checkboxes are ticked by Haiku** (「基本上是 Haiku」).
+12. **Scope**: one journal per team, or per session when it is not in a team; **with a team, the whole team has one journal, recorded from the leader** — **only the leader's turns** (「乙，我只需要 leader 的日誌匯報」).
+13. **Storage by project directory**: files live **in the project folder**; all worktrees of a project are the same project.
+14. **In git**: the files are project-level assets and are committed (how: §3, open).
+15. **Tasks tab** on the journal's right, openable; hovering a task entry highlights its task.
+16. **Tasks** come from `pdx task` in a team; work tied to issues is dispatched with it too, so the tasks tab records both.
+17. **A session without a team**: its tasks are the summariser's todos (88's proposal, 「照你的先試試看」).
+18. **Roadmap tab** on the journal's left: project-level phases, three columns **階段 / 說明 / 狀態**, kept up to date; with a team it shows under the team card.
+19. **Roadmap ownership**: the stages and descriptions are written by the lead agent (「目前所有 roadmap 或 phases 拆分都是我和你討論完後由你做的，所以統一由你進行」); **the 狀態 column is updated by Haiku** from the journal.
+20. **Journal, tasks and roadmap are markdown files.**
 
-The rest of this spec is written on the two proposals; changing either only touches §4.2 and §6.2.
+The name pool (session names instead of the ref suffix, user 2026-10-14) is a separate spec (§13).
 
-## 4. Events
+## 3. Open — the user decides
 
-### 4.1 Scope — whose journal
+- **Q-A, how the files reach git** (item 14). Every turn changes the journal; main takes no direct pushes; worktrees fast-forward main often.
+  - 甲 (88's proposal): a dedicated branch `purdex/journal` in the project, written in its own worktree by the daemon, committed and pushed every ~10 minutes when something changed. Main is untouched.
+  - 乙: under main's `.purdex/`, written into the main checkout and carried into main by each release's bump PR.
+  - 丙: the daemon commits to main directly (needs the user's explicit authorisation).
+- **Q-B, the number on the 日誌 button**: proposal — the count of unresolved 待確認 items of the active tab's journal; nothing for ordinary entries.
+- **Q-C, filters**: proposal — 全部 / 執行 / 任務 / 請求與溝通 / 待確認.
+- **Q-D, §12 原文 → 新文** (confirmed with the prototype).
 
-- A journal belongs to **a conversation** (`conv_key`, the relay lineage root, as the workbook's §4.1): relays continue it, a manual `/clear` starts a new one.
-- **A lead's journal includes its team**: its own events, every event of a seat while it was in that team (`team_id` on the record), the team's tasks and reports, and the messages between the team's seats.
-- A member's journal: its own events, the tasks it owns (only a lead creates tasks), the reports it wrote, and the messages it received or sent (a sent one when its sender is resolved, §4.4).
-- A solo session: its own events.
-- The Mac journal card shows **the active tab's conversation** (§6.1); a team row's notebook button narrows it to one seat (§6.1).
+## 4. Journal units and scope
 
-### 4.2 Kinds, sources and text
+- **Project** = the repository the session's cwd belongs to, keyed by the main worktree's root (`git rev-parse --git-common-dir`, its parent). A cwd outside a git repository: the cwd itself.
+- **Unit** = a team (while it lives) or a conversation (`conv_key`, the relay lineage root) that is not in a team.
+- A **leader**'s turns write to its team's journal while it leads; a **solo** session's turns write to its own journal; a **member**'s turns write nothing to any journal (item 12) — the member's tab shows its team's journal.
+- A session that becomes a leader starts writing to the team journal from that turn; its solo journal keeps what came before. A team that ends closes its journal (the file stays).
+- A relay continues the unit (same lineage); a manual `/clear` starts a new solo unit.
 
-| kind | family | label | source (daemon) | title | body |
-|---|---|---|---|---|---|
-| `exec` | 執行 | 執行 | workbook entry, `state = ok`, `kind = turn`, `thing_done = false` | entry `push` | entry `entry` |
-| `done` | 執行 | 完成 | workbook entry, `state = ok`, `thing_done = true` | 「完成：」+ `thing` | entry `entry` |
-| `task` | 任務 | 任務 | team task created | task `subject` | task description, first 2 lines |
-| `taskdone` | 任務 | 完成任務 | task status → `completed`; **or a `merged` report** (§8 gap 2) | task `subject` | the report `summary` |
-| `comm` | 溝通 | 溝通 | a peer message (§4.4); **the user's own words** to a session (§4.4) | first sentence, ≤ 80 chars | the rest, ≤ 400 chars |
-| `req` | 請求 | 請求 | an approval opened for a seat in scope (all six kinds); a report with `needs = user` (`question`, `blocked`) | the card's question / command / relay line; the report `summary` | the card's detail; the report body, first 2 lines |
+## 5. Entries
 
-- Workbook entries in `pending`, `failed` or `skipped` produce nothing; `refresh` entries produce nothing.
-- `ready`, `progress`, `ack` reports produce nothing (they are noise for a manager; the roster already shows the current task).
-- **actor**: `<seat title>` for a seat's own event; `A → B` for a message or request (`→ 使用者` for a request to the person). Seat titles are the ones known when the event is recorded (live events: at the event; backfilled rows: the stored title, else the ref); no title history exists.
-- **refs**: PR numbers, issue numbers and task ids found in the record's fields (`metadata.prs`, report `pr`, `#NNNN` in the text) — each a link in the App.
+### 5.1 Kinds and who writes them
 
-### 4.3 Record
+| kind | label | written by | text |
+|---|---|---|---|
+| `request` | 請求 | Haiku | who asked whom for what — `by`: `user` / `leader` / `member` (e.g. the person asks the leader; a member asks the leader for a decision; the leader asks a member) |
+| `task_new` | 任務建立 | daemon, from the task source (§6) | 「#<n> <title>」 |
+| `task_done` | 任務完成 | daemon, from the task source | 「#<n> <title>」 + the closing line (the report summary, or Haiku's) |
+| `exec` | 執行 | Haiku | what this turn did, report tone (today's `entry`) |
+| `exec_done` | 執行完成 | Haiku | a thing finished (today's `thing_done`) |
+| `comm` | 溝通 | Haiku | an exchange between seats or with the person that is not a request |
+| `confirm` | 待確認 | Haiku | the questions the agent left for the person, one item each, plus the original text |
 
-```json
-{"id":"…","conv_key":"…","other_conv_key":"","team_id":"…","seat_session_id":"…","at":1760400000000,
- "kind":"exec|done|task|taskdone|comm|req","actor":"…","title":"…","body":"…","refs":["PR #2765"],
- "pending":false,"source":{"type":"workbook|task|report|approval|peer|user","id":"…"}}
+- Haiku never invents task numbers: task kinds come from the task source; Haiku only writes the closing line when it has one.
+- A turn yields 0–6 entries (a quiet turn: none). Entries of one turn share its time and keep the order Haiku gave.
+- **Actor**: the seat's name (its pdx name; the name pool's later) for `exec`, `exec_done`; `A → B` for `request`, `comm`, `confirm` (`→ 使用者` when it is the person).
+- **Refs**: `#NNNN` (issue / PR), `PR #NNNN`, task numbers — links in the App.
+
+### 5.2 待確認
+
+- Written when the turn's final reply asks the person to answer or decide something and the question is still open at the turn's end. A question answered inside the same turn (an option-button prompt the person already answered) is not one.
+- `items`: one per question, ≤ 60 chars each, in the order asked; `detail`: the reply's question part copied as is (scrubbed, ≤ 4 000 chars).
+- Pinned when written. On every later turn of the unit, Haiku receives the open 待確認 items and returns the ones the person's message answered (`confirm_done`); the daemon ticks them. All ticked → unpinned (the entry stays in the stream).
+- The person can unpin by hand (App → daemon → file); the items stay as they are.
+
+### 5.3 Pin
+
+- Any entry can be pinned or unpinned by the person from the App; 待確認 are pinned by the daemon.
+- Pinned entries show in a band at the top of the journal card (newest first), and in the stream at their place.
+
+## 6. Tasks
+
+- **Team**: the team's `pdx task` rows — number = the task's seq (shown with its id, e.g. `7bcf08-12`), title = subject, state, owner, issue / PR refs from the subject and metadata. A task created → `task_new`; completed (or a `merged` report) → `task_done`.
+- **Solo**: the summariser's todos (workbook v2 §5.5) are the session's tasks — number = the todo's stable number within the conversation, title, detail, open / done / dropped. An add → `task_new`; a done → `task_done`; dropped → no entry (shown struck through in the tasks tab).
+- Written to `tasks.md` of the unit on every change (§8).
+
+## 7. Roadmap
+
+- One `roadmap.md` per project: a section per feature (`## <feature>`), each a table **階段 | 說明 | 狀態**.
+- The lead agent writes and edits stages and descriptions (item 19) — in practice 88 for the interface line, 1f for the A line — as part of its spec / plan work.
+- **狀態** is one of 未開始 / 進行中 / 審查中 / 完成 / 暫停. On a leader's (or solo's) turn, Haiku receives the rows of the features this unit works on and returns status changes (`roadmap`: `[{feature, stage, status}]`) when the turn shows one (e.g. 「J-0a merged」 → 完成); the daemon applies them to the file. Haiku never adds or renames stages.
+- Shown in the roadmap tab; with a team, under the team card (item 18).
+
+## 8. Files (item 20)
+
+- Under the project: `.purdex/journal/<unit>/<YYYY-MM>.md`, `.purdex/tasks/<unit>.md`, `.purdex/roadmap.md` (the folder's place in git: §3 Q-A). `<unit>` = the team's label slug + id suffix, or the solo session's name + ref.
+- **Markdown that reads as a document and parses back** — each entry a block:
+
+```markdown
+## 2026-10-14
+
+### 14:32 · 執行完成 · purdex-88-b8
+RA-2 已 merge：拿掉「不再詢問」、補上終端機指令核准的提示，額度說明改成暫停的說法。
+<!-- j id=wb:4812:1 kind=exec_done refs=#2829 -->
+
+### 14:40 · 待確認 · purdex-88-b8 → 使用者 📌
+- [x] 日誌檔要不要進 git
+- [ ] 單一 session 的任務從哪來
+<details><summary>原始提問</summary>
+
+…the question part, as written…
+</details>
+<!-- j id=wb:4813:1 kind=confirm pinned=1 -->
 ```
 
-`id` is stable per source record (`<source type>:<source id>`), so re-ingesting is idempotent. `pending` is §5.3. `other_conv_key` is a second conversation that sees the event: the resolved sender of a `comm`, the task owner of a report event written by someone else.
+- The daemon is the only writer of journal and tasks files (append, tick, pin); the roadmap file has two writers (the lead agent for stages, the daemon for 狀態) — the daemon rewrites only the 狀態 cell of a row it can match, and leaves a file it cannot parse untouched (one log line).
+- The daemon keeps no second copy of the entries: the App reads them through the daemon, which parses the files (cached by mtime).
 
-### 4.4 The conversation-derived events (gaps 1 and 4)
+## 9. Summariser changes (workbook v2 §5, prompt v3)
 
-- `pdx msg` stores no text (`peer_messages` is metadata only), and the user's words are not stored either. Both are in the **recipient's transcript**: a user item with `source = peer` (and its `from`), or `source = user`.
-- On each **turn end** of a session in scope (the trigger the workbook already uses), the daemon reads that turn's user items through the conversation model and records one `comm` per item with `source` `peer` or `user`. Other sources (`queued`, `slash`, `bash`, `task`, `scheduled`) are skipped.
-- The text is scrubbed with the workbook's §8 rules before it is stored, then cut to the first sentence + 400 chars. Images and attachments are never stored.
-- A message is recorded once, from the recipient's side, so a lead→member message appears in the lead's journal through the member's transcript (the member is in scope).
-- Not covered: a message whose recipient never ends a turn (it shows when it does), and a remote seat on another host (its transcript lives there; §10).
+- **Who**: unchanged trigger and path (the session's mod, `$.model.complete`, Haiku, `effort: low`). The journal part of the job is asked **only for a leader's or a solo session's turn**; a member's job stays v2 (push, thing, status, todos — the push line still serves its notifications).
+- **Input adds** (journal jobs): `unit_role` (`leader` | `solo`); `open_confirms` (numbered items still open); `roadmap_rows` (the unit's features, stage + status); for a leader, the turn's `user_prompt` keeps the peer and report prefixes that tell who sent what (as today).
+- **Output adds**: `events: [{kind: request|exec|exec_done|comm|confirm, by?, from?, to?, text, items?, detail?}]`, `confirm_done: [n…]`, `roadmap: [{feature, stage, status}]`. `push`, `thing`, `status`, `todos` stay; `entry` becomes the `exec` event's text.
+- **Validation** (code): unknown kinds dropped; text length rules as v2's entry rule (≤ 3 sentences × ≤ 35 chars) for `exec` / `exec_done`, ≤ 80 for `request` / `comm`; `items` ≤ 10 × ≤ 60; unknown `confirm_done` numbers ignored; roadmap changes to unknown rows ignored.
+- **Measured before it ships**: prompt rounds on ≥ 30 real leader and solo turns (the v2 method, 1f's `workbook-exp/` set plus the 10-13 A-line turns): kinds right, 待確認 caught and ticked right, no invented task numbers, entry length as v2. The prompt document is `docs/specs/2026-10-14-workbook-journal-prompt-v3.md`.
 
-## 5. Daemon
+## 10. Daemon
 
-### 5.1 Module `journal` (`journal.db`, 0600)
+- **Module**: the workbook module grows the journal writer (no new module): applying a journal job's output writes the entries, ticks, pins, roadmap statuses and task mirror to the files; the team's task changes reach it through a read-only team feed (reviewed by 1f).
+- **API** (capability `journal.v1`):
+  - `GET /api/journal?session_id=<sid>&before=<cursor>&limit=50` → `{unit: {kind: team|solo, id, label}, project, entries: [… oldest first], pinned: [...], more, open_confirms: N}` — the unit is resolved from the session (a member → its team).
+  - `GET /api/journal/tasks?session_id=<sid>` → the unit's tasks; `GET /api/journal/roadmap?session_id=<sid>` → the project's roadmap.
+  - `PUT /api/journal/pin` `{session_id, entry_id, pinned}`.
+  - Host event `journal.changed` `{unit, project, what: entries|tasks|roadmap}` → the App re-reads what it shows.
+  - Device tokens (iOS) may read and pin.
+- **Git**: per §3 Q-A.
 
-- One table `journal_events` (§4.3 columns + `created_at`), indexed on `(conv_key, at, id)` and `(team_id, at, id)`; `pending` rows indexed on `(pending)`.
-- **Ingest** (all idempotent on `id`):
-  - workbook: subscribe to the module's entry insert/state change (the `workbook.entry` event);
-  - approvals: subscribe to `approval.request` opened / closed (in process);
-  - tasks and reports: tail by cursor — reports by `rowid`, tasks by `(updated_at, team_id, seq)` — every 5 s, through a **read-only feed the team module exports** (`team.JournalFeed`; the only team change, reviewed by 1f);
-  - conversations: §4.4.
-- **Backfill** at first start: workbook entries, tasks, reports and open approvals already stored (bounded to the last 30 days). Conversation-derived events start at deploy (no transcript backfill).
-- Retention: as the workbook — no automatic deletion (rows are short; measured size goes in the plan).
+## 11. Mac App
 
-### 5.2 API and events (capability `journal.v1`)
+- Title bar: 「團隊」 (team tabs) and 「日誌」 (any Claude Code tab whose host has `journal.v1`) buttons, as v3.
+- **Layout** (left → right): team card (team tabs) with the **roadmap tab** under it — or the roadmap tab alone without a team; the **journal card**; the **tasks tab**. Roadmap and tasks open and close from the journal card's header. Narrow windows drop, in order: the tasks tab, the roadmap, the team card; the journal stays.
+- **Journal card**: header (unit name, role line, live dot, close); the pinned band; filters (Q-C); the stream oldest at the top, newest at the bottom, a date divider per day; row = time, kind chip, actor, text, refs; a 待確認 row shows its checkboxes (read-only — Haiku ticks them) and opens its detail **to the left** over the roadmap side; a row's menu pins / unpins.
+- Opens scrolled to the bottom; new entries append; pinned to the bottom while there, else 「↓ N 則新事件」; scrolling up loads older months.
+- **Tasks tab**: open tasks first, then done; hovering a `task_new` / `task_done` row highlights its task, and hovering a task highlights its rows.
+- **Roadmap tab**: the project's features, each a 階段 / 說明 / 狀態 table, live.
+- Tab-hosted rule: open states, widths, filter and scroll position live outside the components, per unit; regression test with the real `TabContent`.
 
-- `GET /api/journal/conversations/claude/{session_id}?before=<at>:<id>&limit=50[&seat=<session_id>]` → `{conv_key, team_ids:[…], events:[… oldest first], more: bool, pending: N}` (`team_ids`: every team this conversation has led). Without `before`: the newest page. `seat` narrows to one seat (§6.1).
-- Host event `journal.event` `{conv_key, other_conv_key, team_ids:[…], op:"add"|"update", event}` — `update` when `pending` flips or an empty body is filled (a `taskdone`'s summary). A client keeps the events of the journals it shows.
-- Device tokens (iOS) may read both.
-- `404 not_found` for a session the daemon has never seen; an empty journal is `events: []`.
+## 12. What v4 replaces (原文 → 新文; Q-D)
 
-### 5.3 `pending` — 「等我回覆」
-
-- A `req` from an approval is pending while the approval is `open`; its close flips it (op `update`).
-- A `req` from a `needs = user` report is pending until the next report on that task, or the task leaves `in_progress` / `pending`.
-- The journal answer carries `pending` (the count in scope) — the button number of Q2.
-
-## 6. Mac App
-
-### 6.1 Entries and cards (decisions 3–4)
-
-- The title bar gets **two buttons**, 「團隊」 (Phosphor `UsersThree`) and 「日誌」 (`Notebook`), where today's single notebook button sits. 「團隊」 shows only on a team tab; 「日誌」 shows on any Claude Code tab whose host has `journal.v1`.
-- Each opens its own **floating card** under the title bar (today's `TeamPanelArea` layer, right-aligned). Both open: **team card on the left, journal card on its right**; opening one pushes the other left (animated). The team card keeps its modes and width (`useTeamUiStore`); the journal card has its own width (same bounds) and open state.
-- A window too narrow for both: the journal card stays, the team card hides until there is room (prototype rule: width < 2 × card + gaps).
-- A team row's notebook button opens the journal card **narrowed to that seat** (`seat=`), with a chip 「只看 <seat>」 that clears it.
-
-### 6.2 The journal card
-
-- Header: the conversation (title, role line 「lead · <team> · N 位 member」), live dot, close.
-- Filters: 全部 / 執行 / 任務 / 溝通與請求 / 等我回覆 (the prototype's), with counts on 等我回覆.
-- Body: events **oldest at the top, newest at the bottom**; a date divider per day; each row: time, kind chip (the prototype's six colours — distinct hue and lightness, readable in greyscale), actor, title; refs as links; body collapsed to two lines, a click expands.
-- Opening scrolls to the bottom. A new event appends; if the reader is at the bottom it stays pinned, else a 「↓ N 則新事件」 button appears.
-- Scrolling to the top loads the previous page (`before=`), keeping the reading position.
-- A pending `req` row has the yellow light and a 「去處理」 action that opens the card or the session where it is answered.
-- **Button number (Q2):** the 「日誌」 button shows the `pending` count of the active tab's journal; nothing when 0.
-- **Tab-hosted rule (CLAUDE.md):** open state, width, filter, seat narrowing and scroll position live outside the component (per conversation) and survive a tab switch; a regression test with the real `TabContent`.
-
-### 6.3 What leaves the Mac UI
-
-The workbook view (`OwnWorkbookPanel`, `TeamSeatWorkbookView`, `WorkbookStatus`, `WorkbookTodos`, `WorkbookToolbar`, the 紀錄｜待辦 switch, 重整) is removed on hosts with `journal.v1`; on older hosts it stays as it is. The team row line 「正在做的任務」 stays as it is.
-
-## 7. iOS
-
-Later phase (J-3), designed by 88: the session detail page's workbook segments become one 「日誌」 segment with the same events, filters and paging; the Tab-info content stays as it is. Until then iOS keeps v2's page.
-
-## 8. Data gaps (handoff 2026-10-13) and how each is handled
-
-1. **`pdx msg` text not stored** → read from the recipient's transcript at turn end (§4.4); no text is added to the peers store.
-2. **Tasks are not closed on merge** → the journal treats a `merged` report as `taskdone` (§4.2). Closing the task itself on merge stays an A-line question (issue for 1f, not needed by the journal).
-3. **Summaries leaking the summariser's thinking** → the code path does not send thinking and rejects non-JSON output (`input.go:82-92`, `validate.go:55`), so the leak is in the model's written `entry`. The plan collects the examples from `workbook.db` and fixes the prompt (v2 prompt doc) if they are real; the journal titles use `push` (short) to lessen it.
-4. **The user's words not stored** → user items with `source = user` (§4.4).
-
-## 9. What v3 replaces (原文 → 新文)
-
-| v2 clause | becomes |
+| workbook v2 clause | becomes |
 |---|---|
-| §10.1 "The workbook and the team panel share one panel area" with four states (title bar, line, full, max) behind one notebook button | two entries, two floating cards (§6.1); the team card keeps its modes |
-| §10.1 the workbook view: 目前狀況, 待辦, entries grouped by thing, 紀錄｜待辦 switch, 重整 | the journal card (§6.2); status, todos and refresh are not shown |
-| §10.1 a team row's workbook button drills into that seat's workbook | it opens the journal card narrowed to that seat (§6.1) |
-| §2 items 9, 11, 12 (todos readable mixed or alone; read-only; 重整 from the Mac view) | not shown on the Mac; the summariser still keeps them (data unchanged); `/workbook refresh` in the session stays |
-| §10.3 iOS segments 目前狀況 / 待辦 / 已完成 / 紀錄 | one 日誌 segment, later (§7) |
+| §10.1 one shared panel (title bar / line / full / max) behind one notebook button | two buttons, separate cards (§11) |
+| §10.1 the workbook view: 目前狀況, 待辦, entries grouped by thing, 紀錄｜待辦, 重整 | the journal card; 目前狀況 is not shown; 待辦 becomes the solo session's tasks tab; 重整 is not shown (`/workbook refresh` in the session stays) |
+| §10.1 a team row's workbook button opens that seat's workbook | removed: members have no journal; the team's journal is the leader's |
+| §2 items 9, 11 (todos mixed or alone, read-only) | todos are the solo tasks tab, read-only |
+| §10.3 iOS 目前狀況 / 待辦 / 已完成 / 紀錄 | one 日誌 segment later; until then iOS keeps v2 |
+| v3 (this file's previous version) — journal module, `等我回覆` from cards, member journals, transcript ingest | dropped (items 7, 8, 12) |
 
-The summariser, the push, storage and the workbook API (v2 §4–§9) are unchanged.
+The summariser trigger, push, storage of `workbook.db` and secrets handling (v2 §4, §7, §8) are unchanged.
 
-## 10. Out of scope
+## 13. Out of scope
 
-- Remote seats' conversation-derived events (another host's transcript); their tasks, reports and approvals on the lead's host are in.
-- Editing or deleting journal events; the employee workbook (v2 §11).
-- Rewriting events by a model (Q1's alternative), unless the user picks it.
+- **Name pool** — separate spec: a pre-built list of 30 short names (mixed), a session takes a random unused one at start (one scan of all hosts' addresses), the relay keeps it, it frees at the end; it replaces the ref suffix (`purdex-3f-adam`). Touches the peer address shared by all lines (agreed with 1f first).
+- Members' own journals; remote seats' turns (they are members); editing entries by hand (pin only); iOS (later, J-3).
 
-## 11. Phases (each ≤ 800 lines / 20 files)
+## 14. Phases (rough; the plan splits to ≤ 800 lines / 20 files)
 
 | phase | side | content |
 |---|---|---|
-| J-0a | daemon | team read feed `team.JournalFeed` (1f reviews) |
-| J-0b | daemon | workbook entry feed |
-| J-1a | daemon | module `journal`: store, ingest from workbook / approvals, backfill, API, `journal.event`, `journal.v1` |
-| J-1b | daemon | tasks / reports ingest |
-| J-1c | daemon | conversation-derived `comm` (§4.4), scrub, turn-end trigger |
-| J-2a | SPA | title-bar split (團隊 / 日誌), journal card shell and placement, store, API + events, tab-switch memory |
-| J-2b | SPA | rows, filters, paging, live pinning, pending count on the button, seat narrowing, removal of the workbook view on `journal.v1` hosts |
+| J-P | docs | prompt v3 rounds on real turns (§9), prompt document |
+| J-1 | daemon | project / unit resolution, file writer and parser, journal job output applied, task mirror (team feed, 1f), roadmap status, API, `journal.changed`, `journal.v1`, git per Q-A |
+| J-2 | SPA | buttons, journal card, pinned band, 待確認, filters, tasks tab, roadmap tab, layout, tab memory, workbook view removed on `journal.v1` hosts |
 | J-3 | purdex-ios | the 日誌 segment |
-| — | docs | gap 3 prompt check (with J-1a) |
