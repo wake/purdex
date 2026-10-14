@@ -175,3 +175,30 @@ func TestPredecessor_SecondRecordForSameSessionIgnored(t *testing.T) {
 	wantPred(t, m, "B", "A")
 	wantPred(t, m, "C", "B")
 }
+
+// A recent last run of another tmux generation (the code was reused after a tmux restart) is not this clear's predecessor.
+func TestPredecessor_LastRunOfAnotherTmuxGenerationIsSkipped(t *testing.T) {
+	m, _ := predFixture(t)
+	postAs(t, m, "work", "PdxSessionStart", startRaw("A", "startup"))
+	postAs(t, m, "work", "PdxSessionEnd", `{"session_id":"A"}`)
+	m.sessions = fakeProviderWithInstance("9999:1799999999") // tmux restarted since the run ended
+	postAs(t, m, "work", "PdxSessionStart", startRaw("B", "clear"))
+	wantPred(t, m, "B", "")
+}
+
+// A recent run of another agent type on the same tmux code (a codex that just ended) is not a Claude session's predecessor.
+func TestPredecessor_LastRunOfAnotherAgentTypeIsSkipped(t *testing.T) {
+	m, _ := predFixture(t)
+	f := seedRootWithIdentity(t, m, "%9", "codex", 300, "t300", "X")
+	if err := m.frames.SetTmuxInstance(f.FrameID, "inst-1"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := m.frames.ClaimEnd(f.FrameID, "X", &store.RunEnd{Code: "work-code", EndedAt: time.Now().UnixMilli()}); err != nil || !ok {
+		t.Fatalf("end: %v %v", ok, err)
+	}
+	if run, _ := m.frames.LastRun("work-code"); run == nil || run.AgentType != "codex" {
+		t.Fatalf("fixture: last run = %+v", run)
+	}
+	postAs(t, m, "work", "PdxSessionStart", startRaw("B", "clear"))
+	wantPred(t, m, "B", "")
+}

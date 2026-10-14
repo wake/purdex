@@ -63,6 +63,12 @@ func (m *Module) notePredecessor(req EventRequest, prov Provenance, prev string,
 			log.Printf("[agent] clear_predecessor_unknown: session=%s code=%s reason=no_fresh_last_run", prov.SessionID, c)
 			return ""
 		}
+		// The run must be this agent's own: the same agent type and the same tmux generation (a code reused after a
+		// tmux restart, or a codex that just ended on this code, is somebody else's session).
+		if run.AgentType != prov.AgentType || prov.TmuxInstance == "" || run.TmuxInstance != prov.TmuxInstance {
+			log.Printf("[agent] clear_predecessor_unknown: session=%s code=%s reason=last_run_not_ours", prov.SessionID, c)
+			return ""
+		}
 		prev, code = run.SessionID, c
 	}
 	if prev == "" || prev == prov.SessionID {
