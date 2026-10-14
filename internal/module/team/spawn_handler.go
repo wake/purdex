@@ -264,7 +264,7 @@ func (m *Module) spawnView(r spawnRow, leadAddress string) (team.SpawnOp, error)
 		Cwd: r.Cwd, Title: r.Title, Model: r.Model, Effort: r.Effort, TmuxSession: r.TmuxName,
 		LeadAddress: leadAddress, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}
 	if r.State == team.SpawnFailed && r.Reason == team.SpawnReasonStartTimeout {
-		op.Detail = m.startTimeoutDetail()
+		op.Detail = m.startTimeoutDetail(r)
 	}
 	if r.State != team.SpawnDone {
 		return op, nil
