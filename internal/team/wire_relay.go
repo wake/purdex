@@ -127,6 +127,9 @@ type SelfRelayPayload struct {
 	// Person: the begin was a person's own /relay (RT-1a), approved at begin by the person. The row's, set by the daemon when it
 	// consumed the token; a caller cannot send it.
 	Person bool `json:"person,omitempty"`
+	// Half / ReuseOp: what the caller asked for (RT-3a1), kept so a replay of the begin can be told from another request.
+	Half    bool   `json:"half,omitempty"`
+	ReuseOp string `json:"reuse_op,omitempty"`
 }
 
 // RelayLastAskPct is the context use at which a self-relay ask is the LAST one (relay/team rules v2, §4.2): from here an ask that

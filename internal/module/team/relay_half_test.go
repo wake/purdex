@@ -432,3 +432,57 @@ func TestReuse_AnOlderHalfIsNotTheFreshOne(t *testing.T) {
 		t.Fatalf("the current half: %d %s", code, body)
 	}
 }
+
+// ---- codex: replay identity, half + reask, fresh vs begin ----
+
+// The same request_id with another half / reuse_op is a conflicting reuse, not a replay. Mutation gates: drop the half comparison → the
+// first case replays (red); drop the reuse comparison → the second and third replay (red).
+func TestBeginReplay_HalfAndReuseAreTheRequestsIdentity(t *testing.T) {
+	f := newFixture(t)
+	rid1 := "11111111-1111-4111-8111-111111111111"
+	r := halfBeginReq("sid-1", true)
+	r.RequestID = rid1
+	if code, _, body := f.beginRaw2(r); code != http.StatusCreated {
+		t.Fatalf("half: %d %s", code, body)
+	}
+	if code, _, body := f.beginRaw2(r); code != http.StatusCreated { // the same request replays
+		t.Fatalf("replay of the half: %d %s", code, body)
+	}
+	same := halfBeginReq("sid-1", false) // same id, now an ordinary idle begin
+	same.RequestID = rid1
+	if code, _, body := f.beginRaw2(same); code != http.StatusConflict {
+		t.Fatalf("a half replayed as an ordinary begin: %d %s, want 409", code, body)
+	}
+	// reuse
+	f2 := newFixture(t)
+	half := f2.freshHalfWithFile("sid-1")
+	rid2 := "22222222-2222-4222-8222-222222222222"
+	a := reuseBeginReq("sid-1", half.ID)
+	a.RequestID = rid2
+	if code, _, body := f2.beginRaw2(a); code != http.StatusCreated {
+		t.Fatalf("reuse begin: %d %s", code, body)
+	}
+	if code, _, body := f2.beginRaw2(a); code != http.StatusCreated {
+		t.Fatalf("replay of the reuse begin: %d %s", code, body)
+	}
+	plain := beginReq("sid-1") // same id, no reuse
+	plain.RequestID = rid2
+	if code, _, body := f2.beginRaw2(plain); code != http.StatusConflict {
+		t.Fatalf("a reuse replayed without it: %d %s, want 409", code, body)
+	}
+	other := reuseBeginReq("sid-1", "another-op") // same id, another reuse_op
+	other.RequestID = rid2
+	if code, _, body := f2.beginRaw2(other); code != http.StatusConflict {
+		t.Fatalf("a reuse replayed with another op: %d %s, want 409", code, body)
+	}
+}
+
+// A half is never a card: with a reask token it is refused. Mutation gate: drop the check → the reask branch opens a card (red).
+func TestHalfBegin_RefusesAReaskToken(t *testing.T) {
+	f := newFixture(t)
+	r := halfBeginReq("sid-1", true)
+	r.ReaskID = "33333333-3333-4333-8333-333333333333"
+	if code, _, body := f.beginRaw2(r); code != http.StatusBadRequest {
+		t.Fatalf("half + reask_id: %d %s, want 400", code, body)
+	}
+}

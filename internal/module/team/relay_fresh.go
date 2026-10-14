@@ -89,7 +89,12 @@ func (m *Module) handleRelayFresh(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "session_id, op_id and stale:true are required", nil)
 		return
 	}
-	if err := m.store.DeleteFreshHalf(req.SessionID, req.OpID); err != nil {
+	// behind a begin that is validating a reuse (createMu): either the begin sees the row gone (409 reuse_invalid) or it has opened its op
+	// and this report follows it - never between the validation and the insert (codex)
+	m.createMu.Lock()
+	err := m.store.DeleteFreshHalf(req.SessionID, req.OpID)
+	m.createMu.Unlock()
+	if err != nil {
 		m.logf("[team] relay fresh %s: %v", req.SessionID, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
 		return

@@ -52,6 +52,10 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "unknown reason", nil)
 		return
 	}
+	if req.Half && req.ReaskID != "" {
+		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "a half is never a card: it takes no reask_id", nil)
+		return
+	}
 	if req.Half && req.ReuseOp != "" {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "a half writes its own file: it reuses nothing", nil)
 		return
@@ -124,7 +128,8 @@ func (m *Module) handleRelayBegin(w http.ResponseWriter, r *http.Request) {
 	// model_id / effort are the daemon's to fill (spec U18 (b), M21): the
 	// session's last statusline reading, kept by the agent module. The mod
 	// sends neither; a session without a reading shows neither.
-	sp := team.SelfRelayPayload{UsedPercentage: req.UsedPercentage, Window: req.Window, Manual: req.Manual, Reason: req.Reason, IdleMinutes: req.IdleMinutes, Person: person}
+	sp := team.SelfRelayPayload{UsedPercentage: req.UsedPercentage, Window: req.Window, Manual: req.Manual, Reason: req.Reason, IdleMinutes: req.IdleMinutes, Person: person,
+		Half: req.Half, ReuseOp: req.ReuseOp}
 	if m.usage != nil {
 		if u, ok := m.usage.ContextUsage(req.SessionID); ok {
 			sp.ModelID, sp.Effort = u.ModelID, u.Effort
@@ -397,7 +402,7 @@ func sameBeginPayload(m *Module, op team.RelayOp, req team.RelayBeginRequest) bo
 		}
 	}
 	return sp.Window == req.Window && sp.Manual == req.Manual && sp.Reason == req.Reason && sp.IdleMinutes == req.IdleMinutes &&
-		sp.Person == (req.Manual && req.PersonToken != "")
+		sp.Person == (req.Manual && req.PersonToken != "") && sp.Half == req.Half && sp.ReuseOp == req.ReuseOp
 }
 
 // paneOf is the "%N" pane id at the end of an Origin.Tmux ("<session>:@<win>.%<pane>"), "" when there is none.
