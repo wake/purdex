@@ -1,0 +1,167 @@
+package fleet
+
+import (
+	"context"
+	"errors"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+// Status is how a probe went (spec §5).
+type Status string
+
+const (
+	StatusOK      Status = "ok"
+	StatusOffline Status = "offline"
+	StatusError   Status = "error"
+)
+
+// Code is the reason behind a non-ok status. It is the only failure detail that leaves the daemon: SSH's stderr never does.
+type Code string
+
+const (
+	CodeNone        Code = ""
+	CodeTimeout     Code = "timeout"
+	CodeUnreachable Code = "unreachable"
+	CodeHostKey     Code = "host_key"
+	CodeAuth        Code = "auth"
+	CodeRemoteExit  Code = "remote_exit"
+	CodeParse       Code = "parse"
+	CodeAliasGone   Code = "alias_gone"
+)
+
+const (
+	// DefaultTimeout is how long one call may take before ssh is killed.
+	DefaultTimeout = 10 * time.Second
+	// MaxStdout is the most output read from a host; more is a `parse` error.
+	MaxStdout = 64 << 10
+	// MaxStderr is how much of ssh's stderr is kept, for the daemon log only.
+	MaxStderr = 4 << 10
+)
+
+// Result is one probe. Stderr is for the daemon's own log; it must never be put in an API payload or in Code.
+type Result struct {
+	Reading Reading
+	Status  Status
+	Code    Code
+	Stderr  string
+}
+
+// Runner runs the fixed probe over ssh.
+type Runner struct {
+	// LookPath finds the ssh binary; nil means exec.LookPath. Tests inject a fake.
+	LookPath func(file string) (string, error)
+	// Timeout bounds one call; zero means DefaultTimeout.
+	Timeout time.Duration
+}
+
+// Args is the whole argv after the program name: fixed options, the alias after `--` (so it can never be read as an option)
+// and the constant script. Nothing here goes through a local shell.
+func Args(alias string) []string {
+	return []string{
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=5",
+		"-o", "StrictHostKeyChecking=yes",
+		"--", alias, Script,
+	}
+}
+
+// Run probes alias. The alias is shape-checked again here; whether it is still in the SSH config is the caller's check
+// (ValidAlias), made right before the call. A cancelled ctx reads as `offline/unreachable`: nothing could be learned.
+func (r Runner) Run(ctx context.Context, alias string) Result {
+	if !aliasRE.MatchString(alias) {
+		return Result{Status: StatusError, Code: CodeAliasGone}
+	}
+	look := r.LookPath
+	if look == nil {
+		look = exec.LookPath
+	}
+	ssh, err := look("ssh")
+	if err != nil {
+		return Result{Status: StatusOffline, Code: CodeUnreachable}
+	}
+	timeout := r.Timeout
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	stdout := &capped{max: MaxStdout, onFull: cancel}
+	stderr := &capped{max: MaxStderr}
+	cmd := exec.CommandContext(cctx, ssh, Args(alias)...)
+	cmd.Stdin = nil // /dev/null
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	cmd.WaitDelay = time.Second
+	runErr := cmd.Run()
+	res := Result{Stderr: stderr.String()}
+
+	switch {
+	case errors.Is(cctx.Err(), context.DeadlineExceeded) && !stdout.full:
+		res.Status, res.Code = StatusOffline, CodeTimeout
+	case stdout.full:
+		res.Status, res.Code = StatusError, CodeParse
+	case ctx.Err() != nil:
+		res.Status, res.Code = StatusOffline, CodeUnreachable
+	case runErr == nil:
+		reading, perr := Parse(stdout.String())
+		if perr != nil {
+			res.Status, res.Code = StatusError, CodeParse
+			return res
+		}
+		res.Reading, res.Status = reading, StatusOK
+	default:
+		var ee *exec.ExitError
+		if !errors.As(runErr, &ee) {
+			res.Status, res.Code = StatusOffline, CodeUnreachable
+			return res
+		}
+		if ee.ExitCode() == 255 {
+			res.Status, res.Code = classify255(res.Stderr)
+		} else {
+			res.Status, res.Code = StatusError, CodeRemoteExit
+		}
+	}
+	return res
+}
+
+// classify255 tells apart the exit-255 cases by reading stderr; only the verdict leaves this function.
+func classify255(stderr string) (Status, Code) {
+	switch {
+	case strings.Contains(stderr, "Host key verification failed"),
+		strings.Contains(stderr, "REMOTE HOST IDENTIFICATION HAS CHANGED"):
+		return StatusError, CodeHostKey
+	case strings.Contains(stderr, "Permission denied"):
+		return StatusError, CodeAuth
+	}
+	return StatusOffline, CodeUnreachable
+}
+
+// capped keeps the first max bytes and drops the rest without ever failing a write (a failing write could leave the child
+// blocked on a full pipe). When the limit is passed, full is set and onFull is called.
+type capped struct {
+	max    int
+	buf    []byte
+	full   bool
+	onFull func()
+}
+
+func (c *capped) Write(p []byte) (int, error) {
+	if room := c.max - len(c.buf); len(p) <= room {
+		c.buf = append(c.buf, p...)
+	} else {
+		if room > 0 {
+			c.buf = append(c.buf, p[:room]...)
+		}
+		if !c.full {
+			c.full = true
+			if c.onFull != nil {
+				c.onFull()
+			}
+		}
+	}
+	return len(p), nil
+}
+
+func (c *capped) String() string { return string(c.buf) }
