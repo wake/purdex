@@ -71,7 +71,9 @@ func (m *modeFlags) register(fs *flag.FlagSet) {
 }
 
 // mode is the chosen mode: a flag wins over PDX_LEASE_CALLER (fg → queue,
-// bg → ask, anything else → wait). Two flags that disagree are a usage error.
+// bg → ask); with neither the daemon decides (auto: queue for a caller under an
+// interactive session, wait for any other). Two flags that disagree are a usage
+// error.
 func (m *modeFlags) mode(getenv func(string) string) (mode, msg string) {
 	n := 0
 	for _, b := range []bool{m.queue, m.ask, m.wait.set} {
@@ -95,7 +97,7 @@ func (m *modeFlags) mode(getenv func(string) string) (mode, msg string) {
 	case "bg":
 		return resources.CallAsk, ""
 	}
-	return resources.CallWait, ""
+	return resources.CallAuto, ""
 }
 
 // cutBytes cuts s to at most n bytes without splitting a character.

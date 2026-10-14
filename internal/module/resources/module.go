@@ -35,6 +35,8 @@ const sampleBudget = 3 * time.Second
 // Module owns the sampler loop and the latest Snapshot.
 type Module struct {
 	core *core.Core
+	// interactive answers sessionInteractive in a test; nil reads the mod event registry.
+	interactive func(sid string) bool
 
 	sampler  resources.Sampler
 	roots    resources.RootSource // nil: no sessions are attributed

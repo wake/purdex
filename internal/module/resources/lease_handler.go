@@ -74,8 +74,8 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 	case req.Scope != "" && req.Scope != resources.ScopeProcess && req.Scope != resources.ScopeSessionNew:
 		writeErr(w, http.StatusBadRequest, resources.ErrBadRequest, "scope must be process or session-new")
 		return
-	case req.Mode != "" && req.Mode != resources.CallQueue && req.Mode != resources.CallAsk && req.Mode != resources.CallWait:
-		writeErr(w, http.StatusBadRequest, resources.ErrBadRequest, "mode must be queue, ask or wait")
+	case req.Mode != "" && req.Mode != resources.CallQueue && req.Mode != resources.CallAsk && req.Mode != resources.CallWait && req.Mode != resources.CallAuto:
+		writeErr(w, http.StatusBadRequest, resources.ErrBadRequest, "mode must be queue, ask, wait or auto")
 		return
 	case req.HolderPID <= 0:
 		writeErr(w, http.StatusBadRequest, resources.ErrBadRequest, "holder_pid is required")
@@ -105,7 +105,30 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 	var agentPID int
 	var agentStart string
 	if req.Scope != resources.ScopeSessionNew && session == "" {
-		session, agentPID, agentStart = m.sessionOfProcess(r.Context(), req.HolderPID)
+		var failed bool
+		session, agentPID, agentStart, failed = m.sessionOfProcessChecked(r.Context(), req.HolderPID)
+		if failed && req.Mode == resources.CallAuto && set.Mode == resources.ModeLease {
+			// Auto cannot tell an interactive session from none when the look itself
+			// failed, and guessing wait would hold the session. The CLI gives up after
+			// its grace and lets the command run: the pool is advice. A retry of a
+			// request that already made its row is its replay, whatever the probe says.
+			if row, ok, err := m.store.GetByClientID(req.ClientID); err == nil && ok {
+				m.replay(w, r, req, row, set)
+				return
+			}
+			writeErr(w, http.StatusServiceUnavailable, resources.ErrNotReady, "could not tell which session the caller is in")
+			return
+		}
+	}
+
+	// An auto request becomes queue for a caller under an interactive session
+	// (a notice can reach it) and wait for any other; the row keeps the result.
+	mode := req.Mode
+	if mode == resources.CallAuto {
+		mode = resources.CallWait
+		if set.Mode == resources.ModeLease && session != "" && m.sessionInteractive(session) {
+			mode = resources.CallQueue
+		}
 	}
 
 	// A replay returns the row it made, whatever has become of it, but only to
@@ -134,7 +157,7 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 		SessionID: session, HolderPID: req.HolderPID, HolderStart: req.HolderStart, Scope: req.Scope,
 		ToolUseID: req.ToolUseID, Parkable: req.Parkable, CreatedAt: now.UnixMilli(), DeadlineAt: now.Add(wait).UnixMilli(),
 		LeaseUntil: now.Add(resources.LeaseS * time.Second).UnixMilli(),
-		Mode:       req.Mode,
+		Mode:       mode,
 		Command:    resources.CutCommand(req.Command, resources.MaxCommandBytes),
 		Cwd:        resources.CutCommand(req.Cwd, resources.MaxCwdBytes),
 	}
@@ -160,7 +183,7 @@ func (m *Module) handleLeaseCreate(w http.ResponseWriter, r *http.Request) {
 
 	// Lease mode, a caller that asked for queue or ask, and a session: the
 	// request belongs to that session's position (amendment A §2.3).
-	if set.Mode == resources.ModeLease && session != "" && (req.Mode == resources.CallQueue || req.Mode == resources.CallAsk) {
+	if set.Mode == resources.ModeLease && session != "" && (mode == resources.CallQueue || mode == resources.CallAsk) {
 		m.createPositioned(w, r, req, row, agentPID, agentStart, set, fallback)
 		return
 	}
@@ -213,7 +236,7 @@ func (m *Module) replay(w http.ResponseWriter, r *http.Request, req resources.Le
 	// is only what the client itself sent, so a replay is the same request whatever
 	// the lookup found this time or the time before.
 	sessionOK := row.SessionID == req.SessionID || (req.SessionID == "" && row.Scope == resources.ScopeProcess)
-	same := sessionOK && row.ToolUseID == req.ToolUseID && callMode(row.Mode) == callMode(req.Mode)
+	same := sessionOK && row.ToolUseID == req.ToolUseID && modeReplays(req.Mode, row.Mode)
 	if req.Kind != "" {
 		same = same && row.Kind == req.Kind
 	} else {
@@ -530,6 +553,17 @@ func (m *Module) queuedReasonOf(row leaseRow) string {
 		return resources.QueuedOwnRunning
 	}
 	return resources.QueuedBehindQueue
+}
+
+// modeReplays says whether a request of mode req may replay a row made with mode
+// row. An auto request replays the row it resolved to (queue or wait), never an
+// ask row: auto cannot make one.
+func modeReplays(req, row string) bool {
+	if req == resources.CallAuto {
+		c := callMode(row)
+		return c == resources.CallQueue || c == resources.CallWait
+	}
+	return callMode(row) == callMode(req)
 }
 
 // callMode reads an empty mode as wait: rows from before amendment A and
