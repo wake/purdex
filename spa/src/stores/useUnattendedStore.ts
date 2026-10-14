@@ -23,14 +23,16 @@ export interface UnattendedHostEntry {
   pauseSupport?: UnattendedSupport
   /** Whether the daemon lists `relay.unanswered.v1` (a final relay card left open past its deadline; the App reads it itself): absent until the probe answered. */
   unansweredSupport?: UnattendedSupport
+  /** Whether the daemon lists `team.person.v1` (under 無人值守模式 it refuses lead / adopt cards itself; an older one approves them): absent until the probe answered. */
+  personSupport?: UnattendedSupport
   /** Absent until the daemon's snapshot arrived. */
   state?: UnattendedState
 }
 
 /** The host's capability flags: all of them follow one rule (unknown on disconnect / before a probe / after a failed probe). */
-const SUPPORT_FLAGS = ['support', 'quotaSupport', 'maxMembersSupport', 'editSupport', 'pauseSupport', 'unansweredSupport'] as const
+const SUPPORT_FLAGS = ['support', 'quotaSupport', 'maxMembersSupport', 'editSupport', 'pauseSupport', 'unansweredSupport', 'personSupport'] as const
 /** Only the probe answers these; `support` is also proven by a `team.unattended` frame (unattended-ws.ts). */
-export const PROBE_ONLY_FLAGS = ['quotaSupport', 'maxMembersSupport', 'editSupport', 'pauseSupport', 'unansweredSupport'] as const
+export const PROBE_ONLY_FLAGS = ['quotaSupport', 'maxMembersSupport', 'editSupport', 'pauseSupport', 'unansweredSupport', 'personSupport'] as const
 export type SupportFlag = (typeof SUPPORT_FLAGS)[number]
 
 interface UnattendedStoreState {
@@ -41,6 +43,7 @@ interface UnattendedStoreState {
   setEditSupport: (hostId: string, support: UnattendedSupport) => void
   setPauseSupport: (hostId: string, support: UnattendedSupport) => void
   setUnansweredSupport: (hostId: string, support: UnattendedSupport) => void
+  setPersonSupport: (hostId: string, support: UnattendedSupport) => void
   /** Every capability flag of the host (unattended, relay quota, max members, edit) is unknown again: the connection they were
    *  learned on is gone, and a daemon that came back may have lost one (#2309). A no-op for a flag never learned. */
   invalidateSupport: (hostId: string, flags?: readonly SupportFlag[]) => void
@@ -89,6 +92,11 @@ export const useUnattendedStore = create<UnattendedStoreState>()((set) => ({
     const cur = s.byHost[hostId]
     if (cur?.unansweredSupport === unansweredSupport) return s
     return { byHost: { ...s.byHost, [hostId]: { ...cur, support: cur?.support ?? 'unknown', unansweredSupport } } }
+  }),
+  setPersonSupport: (hostId, personSupport) => set((s) => {
+    const cur = s.byHost[hostId]
+    if (cur?.personSupport === personSupport) return s
+    return { byHost: { ...s.byHost, [hostId]: { ...cur, support: cur?.support ?? 'unknown', personSupport } } }
   }),
   applyState: (hostId, state) => set((s) => {
     const cur = s.byHost[hostId]

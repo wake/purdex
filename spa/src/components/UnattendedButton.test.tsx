@@ -332,3 +332,60 @@ describe('UnattendedButton paused dot (UP-5b)', () => {
     expect(screen.queryByTestId('unattended-paused-dot')).toBeNull()
   })
 })
+
+// Relay v2 (App contract 2): the switch's tooltip tells the v2 rule; a shown host whose daemon lacks `team.person.v1` still auto-approves
+// "become lead" and adopt, so one more sentence says so - whenever any shown host cannot be shown to have it.
+describe('UnattendedButton tooltip: the v2 rule and the legacy-daemon sentence', () => {
+  const withPerson = (state: typeof ON, personSupport: UnattendedHostEntry['personSupport']): UnattendedHostEntry => ({ support: 'yes', state, personSupport })
+  const LEGACY = '（舊版 daemon 的主機仍會自動通過『成為 lead』與納入申請）'
+  beforeEach(() => { usePausedStore.getState().reset() }) // a leftover paused session would add the paused line to the tooltip
+
+  it('off, every shown host has team.person.v1: the v2 sentence, no legacy sentence', () => {
+    setup([A, B], { [A]: up, [B]: up }, { [A]: withPerson(OFF, 'yes'), [B]: withPerson(OFF, 'yes') })
+    render(<UnattendedButton />)
+    expect(toggle().title).toBe('無人值守模式已關閉。開啟後，所有顯示中主機的接力申請會自動核准（有設額度時照額度，額度用完的 session 會暫停）；『成為 lead』與納入申請一律拒絕，目前開著的也會被拒絕。工具權限與 agent 提問仍會等你')
+    expect(toggle().title).not.toContain(LEGACY)
+  })
+
+  it('on, every shown host has it: the v2 sentence, no legacy sentence', () => {
+    setup([A, B], { [A]: up, [B]: up }, { [A]: withPerson(ON, 'yes'), [B]: withPerson(ON, 'yes') })
+    render(<UnattendedButton />)
+    expect(toggle().title).toBe('無人值守中：接力申請自動核准（照額度），『成為 lead』與納入申請一律拒絕；工具權限與 agent 提問仍會等你。按下關閉')
+  })
+
+  it('off, one shown host lacks it: the v2 sentence plus the legacy one', () => {
+    setup([A, B], { [A]: up, [B]: up }, { [A]: withPerson(OFF, 'yes'), [B]: withPerson(OFF, 'no') })
+    render(<UnattendedButton />)
+    expect(toggle().title).toContain('接力申請會自動核准')
+    expect(toggle().title.endsWith(LEGACY)).toBe(true)
+  })
+
+  it('on, one shown host lacks it: the v2 sentence plus the legacy one', () => {
+    setup([A, B], { [A]: up, [B]: up }, { [A]: withPerson(ON, 'no'), [B]: withPerson(ON, 'yes') })
+    render(<UnattendedButton />)
+    expect(toggle().title).toContain('接力申請自動核准')
+    expect(toggle().title.endsWith(LEGACY)).toBe(true)
+  })
+
+  it('a flag not yet known counts as lacking (never claim a refusal a daemon may not make)', () => {
+    setup([A], { [A]: up }, { [A]: yes(OFF) })
+    render(<UnattendedButton />)
+    expect(toggle().title).toContain(LEGACY)
+  })
+
+  it('the host that lacks it is not a shown one: not counted', () => {
+    setup([A], { [A]: up, [D]: up }, { [A]: withPerson(OFF, 'yes'), [D]: withPerson(OFF, 'no') })
+    render(<UnattendedButton />)
+    expect(toggle().title).not.toContain(LEGACY)
+  })
+
+  it('English wording carries the same two sentences', () => {
+    useI18nStore.getState().setLocale('en')
+    setup([A, B], { [A]: up, [B]: up }, { [A]: withPerson(OFF, 'yes'), [B]: withPerson(OFF, 'no') })
+    render(<UnattendedButton />)
+    expect(toggle().title).toContain('"become lead"')
+    expect(toggle().title).toContain('always refused')
+    expect(toggle().title).toContain('adopt')
+    expect(toggle().title.split('\n').length).toBe(1)
+  })
+})
