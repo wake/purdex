@@ -21,6 +21,7 @@ import (
 // that is the lead's session (only a lead's turns write to a team journal).
 type UnitRef struct {
 	Key, Kind, TeamID, ConvKey, SessionID string
+	Label                                 string // a team's label (the task mirror knows it); "" for a solo unit
 }
 
 // UnitProject is where a unit's project keeps its journal: the root of the registered worktree (J-1d builds it) and
@@ -242,6 +243,9 @@ type home struct {
 }
 
 func (d *Drainer) writeRow(it OutboxItem) error {
+	if it.Kind == OutboxTask { // belongs to no workbook entry
+		return d.writeTaskRow(it)
+	}
 	ent, err := d.st.Entry(it.EntryID)
 	if err != nil {
 		return err
@@ -284,18 +288,24 @@ func (d *Drainer) writeRow(it OutboxItem) error {
 
 // unit finds the unit's registration, making it (and asking the resolver for its project) on the first write.
 func (d *Drainer) unit(it OutboxItem, ent Entry) (UnitRow, error) {
-	if u, ok, err := d.st.Unit(it.UnitKey); err != nil || ok {
+	_, kind, _ := UnitKeyOf(ent.Role, ent.TeamID, ent.ConvKey)
+	return d.unitFor(it.UnitKey, UnitRef{Key: it.UnitKey, Kind: kind, TeamID: ent.TeamID, ConvKey: ent.ConvKey, SessionID: ent.SessionID})
+}
+
+// unitFor is unit for a row that names its unit itself (the task mirror's rows have no entry to read it from).
+func (d *Drainer) unitFor(key string, ref UnitRef) (UnitRow, error) {
+	if u, ok, err := d.st.Unit(key); err != nil || ok {
 		return u, err
 	}
-	_, kind, _ := UnitKeyOf(ent.Role, ent.TeamID, ent.ConvKey)
-	p, err := d.projects.Project(UnitRef{Key: it.UnitKey, Kind: kind, TeamID: ent.TeamID, ConvKey: ent.ConvKey, SessionID: ent.SessionID})
+	kind := ref.Kind
+	p, err := d.projects.Project(ref)
 	if err != nil {
 		return UnitRow{}, fmt.Errorf("resolve the unit's project: %w", err)
 	}
 	if p.ProjectID == "" || p.WtPath == "" {
 		return UnitRow{}, errors.New("resolve the unit's project: empty project")
 	}
-	return d.st.RegisterUnit(UnitRow{Key: it.UnitKey, Kind: kind, ProjectID: p.ProjectID, WtPath: p.WtPath, Label: p.Label, LeadConv: p.LeadConv})
+	return d.st.RegisterUnit(UnitRow{Key: key, Kind: kind, ProjectID: p.ProjectID, WtPath: p.WtPath, Label: p.Label, LeadConv: p.LeadConv})
 }
 
 func at(ms int64) time.Time {

@@ -1,6 +1,7 @@
 package journal
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -144,6 +145,41 @@ func TestTickPinFillTouchOnlyTheirBlock(t *testing.T) {
 	b, _ := os.ReadFile(file)
 	if !strings.Contains(string(b), "📌") || !strings.Contains(string(b), "- [x] 要不要進 git") {
 		t.Errorf("rendering not refreshed:\n%s", b)
+	}
+}
+
+// FillDetail fills a detail that is empty and nothing else: an entry that already has a detail keeps it, an empty detail
+// is not written, and an unknown id is reported.
+// Mutation gate: overwrite an existing detail -> red; write an empty detail (and report a change) -> red.
+func TestFillDetailOnlyFillsAnEmptyDetail(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "j.md")
+	upsertAll(t, file, []Entry{
+		{ID: "d:1", Kind: KindTaskDone, At: t0, Text: "#1 a"},
+		{ID: "d:2", Kind: KindTaskDone, At: t0, Text: "#2 b", Detail: "first"},
+		{ID: "d:3", Kind: KindTaskDone, At: t0, Text: "#3 c"},
+	})
+	if ok, err := FillDetail(file, "d:1", "closing"); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if ok, err := FillDetail(file, "d:2", "other"); err != nil || ok {
+		t.Fatalf("FillDetail overwrote an existing detail: %v %v", ok, err)
+	}
+	if ok, err := FillDetail(file, "d:3", ""); err != nil || ok {
+		t.Fatalf("FillDetail reported a change for an empty detail: %v %v", ok, err)
+	}
+	if _, err := FillDetail(file, "nope", "x"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown id: %v", err)
+	}
+	got, err := Parse(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	details := map[string]string{}
+	for _, e := range got {
+		details[e.ID] = e.Detail
+	}
+	if details["d:1"] != "closing" || details["d:2"] != "first" || details["d:3"] != "" {
+		t.Fatalf("details = %v", details)
 	}
 }
 

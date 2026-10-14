@@ -28,7 +28,7 @@ func writeV2(t *testing.T, path string) {
 }
 
 // A v2 file keeps its todos, numbers them 1..n per conversation in id order, gets the journal tables and the unique
-// index, and is at version 3.
+// index, and is at the current version.
 // Mutation gate: backfill by a global counter (not per conversation) -> red; drop the unique index -> red.
 func TestMigrateV3_BackfillsSeqPerConversation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "workbook.db")
@@ -38,8 +38,8 @@ func TestMigrateV3_BackfillsSeqPerConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if v := version(t, s); v != 3 {
-		t.Fatalf("version = %d, want 3", v)
+	if v := version(t, s); v != schemaVersion {
+		t.Fatalf("version = %d, want %d", v, schemaVersion)
 	}
 	want := map[int]int{10: 1, 11: 1, 12: 2, 13: 3, 14: 2}
 	rows, err := s.db.Query(`SELECT id, seq FROM wb_todos`)

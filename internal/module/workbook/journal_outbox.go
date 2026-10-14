@@ -103,9 +103,10 @@ func insertOutbox(tx execer, entryID int64, unitKey, kind string, payload any, n
 	if err != nil {
 		return fmt.Errorf("journal outbox: %w", err)
 	}
-	// One row per (entry, kind): a repeat of the same result is not a second row.
+	// One row per (entry, kind): a repeat of the same result is not a second row. The rows that belong to no entry
+	// (entry_id 0, the team task mirror) are not covered by the index and never conflict.
 	if _, err := tx.Exec(`INSERT INTO wb_journal_outbox (entry_id, unit_key, kind, payload, created_at) VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT (entry_id, kind) DO NOTHING`, entryID, unitKey, kind, string(b), now); err != nil {
+		ON CONFLICT (entry_id, kind) WHERE entry_id > 0 DO NOTHING`, entryID, unitKey, kind, string(b), now); err != nil {
 		return fmt.Errorf("journal outbox: %w", err)
 	}
 	return nil

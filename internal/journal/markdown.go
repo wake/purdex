@@ -384,6 +384,18 @@ func SetPinned(file, id string, pinned bool) (bool, error) {
 	})
 }
 
+// FillDetail sets the detail of an entry whose detail is empty (a task_done whose closing line arrived after the entry was
+// written). An entry that already has a detail is left alone.
+func FillDetail(file, id, detail string) (bool, error) {
+	return update(file, id, func(e *Entry) (bool, error) {
+		if e.Detail != "" || detail == "" {
+			return false, nil
+		}
+		e.Detail = detail
+		return true, nil
+	})
+}
+
 // FillText sets the text of an entry whose text is empty (a task_done whose closing line arrived late). An entry that
 // already has text is left alone.
 func FillText(file, id, text string) (bool, error) {
