@@ -54,12 +54,12 @@ func TestPassV2_SecondWaitsForTheTrend(t *testing.T) {
 	assert.Equal(t, "held", f.state("b"), "flat in the normal zone is granted")
 
 	f.queue("c", 35, 5*time.Minute)
+	f.setZone("warning", "rising")
+	f.pass()
+	assert.Equal(t, "waiting", f.state("c"), "warning and rising observes")
 	f.setZone("warning", "flat")
 	f.pass()
-	assert.Equal(t, "waiting", f.state("c"), "warning and flat observes")
-	f.setZone("warning", "falling")
-	f.pass()
-	assert.Equal(t, "held", f.state("c"), "warning and falling is granted")
+	assert.Equal(t, "held", f.state("c"), "warning and flat is granted (P2e, G1 option c): the gap alone spaces it")
 }
 
 // The gap comes first, then the trend: inside the gap nothing is granted

@@ -71,10 +71,11 @@ A pure function of one reading, with hysteresis:
   | zone | no lease running | running, falling | running, flat | running, rising or unknown |
   |---|---|---|---|---|
   | normal | grant | grant | grant | observe |
-  | warning | grant | grant | observe | observe |
+  | warning | grant | grant | grant | observe |
   | danger | observe | observe | observe | observe |
   | unknown | grant (fail open, D-5) | grant | grant | grant |
 
+- **P2e (G1, user 2026-10-14, option c):** in the warning zone a flat trend with a lease running is **granted** (the table above shows it); only `rising` / unknown trend and the danger zone hold the head. Reason: on the night measure the host sat in warning 98.7% of the time, and blocking on flat made v2 "one heavy command at a time" (p50 26 s, p90 229 s); the gap and the queue stay. `warning_flat` is no longer produced; it stays in the vocabulary for rows written before.
 - At most one grant per pass (a grant starts a gap).
 - **Mode advise** still grants everything at once. The counterfactual runs as an in-memory **shadow queue**:
   - every request joins it at creation;

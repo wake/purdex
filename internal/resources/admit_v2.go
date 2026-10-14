@@ -12,7 +12,7 @@ type V2Reason string
 const (
 	ReasonGap         V2Reason = "gap"          // inside the pause after the last grant
 	ReasonDanger      V2Reason = "danger"       // host in the danger zone
-	ReasonWarningFlat V2Reason = "warning_flat" // warning zone, a lease running, usage flat
+	ReasonWarningFlat V2Reason = "warning_flat" // no longer produced (P2e: flat in warning is granted); kept for rows and reports written before
 	ReasonRising      V2Reason = "rising"       // a lease running and usage rising (or unknown)
 	ReasonBehind      V2Reason = "behind"       // not the head of the queue
 	ReasonCut         V2Reason = "cut"          // the head is held back by a baseline or disk guard
@@ -96,9 +96,7 @@ func headReason(w V2Waiter, zone Zone, trend Trend, running bool, gapLeft time.D
 	case ZoneWarning:
 		if running {
 			switch trend {
-			case TrendFalling:
-			case TrendFlat:
-				return ReasonWarningFlat, true
+			case TrendFalling, TrendFlat: // flat is let through since P2e (G1, user 2026-10-14: option c)
 			default:
 				return ReasonRising, true
 			}

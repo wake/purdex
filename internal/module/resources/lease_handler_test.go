@@ -35,7 +35,7 @@ func newRouteFix(t *testing.T, mode string) *routeFix {
 // holdBack puts the host in the warning zone with a flat trend: a request behind
 // a running lease waits (spec D-3′ table), one with nothing running does not.
 func (f *routeFix) holdBack() {
-	f.setHost(resources.HostUse{Measured: 10, NCPU: 10, Load1: 1, Zone: "warning", Trend: "flat"})
+	f.setHost(resources.HostUse{Measured: 10, NCPU: 10, Load1: 1, Zone: "warning", Trend: "rising"})
 }
 
 func (f *routeFix) do(method, path string, body any) *httptest.ResponseRecorder {
