@@ -327,8 +327,11 @@ func reportRelayIn(tx *sql.Tx, id string, r RelayReport) (team.RelayOp, ReportRe
 			// The kill is claimed in THIS transaction (RT-3c T38, C#16): the file is written and the member is claimed as `pdx kill` claims
 			// it, or neither is. The signal follows the commit (finishHandoffKill); a crash between them leaves a killing row the sweeper
 			// settles, never a half-closed handoff.
+			// A claim that misses (a kill of the ordinary kind took the row first, the member left, the row is another host's) is not an
+			// error: the file IS written, and finishHandoffKill finds no claim of this op's and, for a member still active, says the
+			// member was not closed. host_id is bound to the op's own: the check made when the op was opened is made again here.
 			if _, err := tx.Exec(`UPDATE team_members SET state = 'killing', updated_at = ?
-				WHERE session_id = ? AND team_id = ? AND state = 'active'`, r.At, cur.SessionID, cur.TeamID); err != nil {
+				WHERE session_id = ? AND team_id = ? AND state = 'active' AND (host_id = ? OR host_id = '')`, r.At, cur.SessionID, cur.TeamID, cur.HostID); err != nil {
 				return team.RelayOp{}, ReportBadTransition, fmt.Errorf("report relay %s: claim the kill: %w", id, err)
 			}
 		}

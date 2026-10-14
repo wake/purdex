@@ -78,6 +78,14 @@ func (m *Module) finishHandoffKill(op team.RelayOp) {
 		m.noticeToLead(mr, t, fmt.Sprintf(team.HandoffClosedFmt, address, title, op.HandoffPath), "handoff kill")
 		return
 	}
+	// No claim of this op's: the file is written but nothing closes the member. A member another kill is closing (killing), that is
+	// closed, gone or released is that path's; one still ACTIVE is told to the lead, who asks again (RT-3c codex).
+	mr, t, ok, err := m.store.ActiveMemberInLiveTeam(op.SessionID)
+	if err != nil || !ok {
+		return
+	}
+	address, title := m.memberNoticeName(mr)
+	m.noticeToLead(mr, t, fmt.Sprintf(team.HandoffNotClosedFmt, address, title, op.HandoffPath), "handoff kill not closed")
 }
 
 // signalClaimedMember ends a member that is already claimed killing and marks the row, as killAndMark does after its claim; it returns

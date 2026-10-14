@@ -342,3 +342,29 @@ func TestHandoffKill_TheBootGivesTheClaimBackAndTellsTheLead(t *testing.T) {
 		t.Fatalf("notice = %q", n)
 	}
 }
+
+// A claim that misses leaves an active member and the lead is told: the member is another host's row by the time `written` lands (the
+// check at the request is made again in the transaction), so nothing claims it and nothing signals. Mutation gates: the host condition
+// dropped → the kill happens (red); no notice for the active member → red.
+func TestHandoffKill_AMissedClaimTellsTheLeadAndKillsNothing(t *testing.T) {
+	f := newFixture(t)
+	key := f.handoffMember("8")
+	kills := f.countKills()
+	_, op, _ := f.killHandoff("_def456")
+	f.walkHandoff(op)
+	f.writeHandoffFile(op)
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET host_id = 'host-elsewhere' WHERE spawn_op = ?`, key); err != nil {
+		t.Fatal(err)
+	}
+	f.forgetSent()
+	if c, _, ae := f.report(op.ID, team.RelayReportRequest{State: team.RelayWritten}); c != http.StatusOK {
+		t.Fatalf("written: %d %+v", c, ae)
+	}
+	waitFor(t, func() bool { return len(f.handoffNotices("[pdx team] member ")) >= 1 })
+	if kills.Load() != 0 || f.killRowState(key) == team.MemberKilling {
+		t.Fatalf("signals = %d, member = %s: a row of another host was claimed", kills.Load(), f.killRowState(key))
+	}
+	if n := f.handoffNotices("[pdx team] member ")[0]; !strings.Contains(n, "關閉沒完成") {
+		t.Fatalf("notice = %q, want the not-closed one", n)
+	}
+}
