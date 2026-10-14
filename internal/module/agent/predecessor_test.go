@@ -189,7 +189,7 @@ func TestPredecessor_LastRunOfAnotherTmuxGenerationIsSkipped(t *testing.T) {
 // A recent run of another agent type on the same tmux code (a codex that just ended) is not a Claude session's predecessor.
 func TestPredecessor_LastRunOfAnotherAgentTypeIsSkipped(t *testing.T) {
 	m, _ := predFixture(t)
-	f := seedRootWithIdentity(t, m, "%9", "codex", 300, "t300", "X")
+	f := seedRootWithIdentity(t, m, "%5", "codex", 300, "t300", "X")
 	if err := m.frames.SetTmuxInstance(f.FrameID, "inst-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -200,5 +200,54 @@ func TestPredecessor_LastRunOfAnotherAgentTypeIsSkipped(t *testing.T) {
 		t.Fatalf("fixture: last run = %+v", run)
 	}
 	postAs(t, m, "work", "PdxSessionStart", startRaw("B", "clear"))
+	wantPred(t, m, "B", "")
+}
+
+// A run that ended in ANOTHER pane of the same tmux session (same code, generation and agent type) is not this pane's
+// predecessor.
+func TestPredecessor_LastRunOfAnotherPaneIsSkipped(t *testing.T) {
+	m, _ := predFixture(t)
+	f := seedRootWithIdentity(t, m, "%9", "cc", 301, "t301", "X")
+	if err := m.frames.SetTmuxInstance(f.FrameID, "inst-1"); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := m.frames.ClaimEnd(f.FrameID, "X", &store.RunEnd{Code: "work-code", EndedAt: time.Now().UnixMilli()}); err != nil || !ok {
+		t.Fatalf("end: %v %v", ok, err)
+	}
+	if run, _ := m.frames.LastRun("work-code"); run == nil || run.AgentType != "cc" || run.PaneID != "%9" {
+		t.Fatalf("fixture: last run = %+v", run)
+	}
+	postAs(t, m, "work", "PdxSessionStart", startRaw("B", "clear")) // pane %5, no frame of its own left
+	wantPred(t, m, "B", "")
+}
+
+// An ordinary event of the NEW session wrote its id into the frame before the clear's SessionStart was applied: the
+// SessionStart still finds what that write displaced.
+func TestPredecessor_NewSessionEventOvertookTheStart(t *testing.T) {
+	m, _ := predFixture(t)
+	postAs(t, m, "work", "PdxSessionStart", startRaw("A", "startup"))
+	f, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if err := m.frames.UpdateSessionIdentity(f.FrameID, "B", "", 1<<41); err != nil { // the overtaking event's write
+		t.Fatal(err)
+	}
+	postAs(t, m, "work", "PdxSessionStart", startRaw("B", "clear"))
+	wantPred(t, m, "B", "A")
+}
+
+// Two clears whose identity writes both landed before either Start was applied: each Start finds what its own write
+// displaced; a displacement overwritten by a newer one is missing, never wrong.
+func TestPredecessor_ConsecutiveClearsNeverShareAPredecessor(t *testing.T) {
+	m, _ := predFixture(t)
+	postAs(t, m, "work", "PdxSessionStart", startRaw("A", "startup"))
+	f, _ := m.frames.GetByIdentity("%5", 100, "t100")
+	if err := m.frames.UpdateSessionIdentity(f.FrameID, "B", "", 1<<41); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.frames.UpdateSessionIdentity(f.FrameID, "C", "", 1<<42); err != nil {
+		t.Fatal(err)
+	}
+	postAs(t, m, "work", "PdxSessionStart", startRaw("C", "clear"))
+	postAs(t, m, "work", "PdxSessionStart", startRaw("B", "clear"))
+	wantPred(t, m, "C", "B")
 	wantPred(t, m, "B", "")
 }

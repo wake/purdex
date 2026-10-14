@@ -93,9 +93,9 @@ type FrameTraceMeta struct {
 	// SessionStart to subscribers only when it is true.
 	IdentityRecorded bool
 
-	// PrevSessionID is the session id the sender's frame held BEFORE this SessionStart's recordSessionIdentity
-	// overwrote it ("" when the frame was new, or had not reported one). Set on the own-frame return of a
-	// SessionStart only; handleEvent turns it into a session_predecessors row when the start is a /clear.
+	// PrevSessionID is the session id the sender's frame held BEFORE the id this SessionStart carries replaced it
+	// ("" when the frame was new, or had not reported one). Set on the own-frame return of a SessionStart only;
+	// handleEvent turns it into a session_predecessors row when the start is a /clear.
 	PrevSessionID string
 }
 
@@ -1149,13 +1149,18 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 	// This is also the ordinary-event path, and therefore the one that
 	// matters most: a pre-deploy session's frame only ever sees ordinary
 	// events, and they take UpdateHookPath, never Upsert.
-	// The id the frame held until now: recordSessionIdentity is about to replace it, and a /clear's predecessor
-	// is exactly that id (the order where the SessionEnd already removed the frame falls back to last_agent_run).
-	prevSessionID := ""
-	if lifecycle == agentpkg.LifecycleSessionStart && frame != nil {
-		prevSessionID = frame.SessionID
-	}
 	identityRecorded := m.recordSessionIdentity(req, stored.FrameID)
+	// A /clear's predecessor is the id this frame's identity write displaced. It is captured in the write's own
+	// statement (prev_session_id), so it does not depend on which concurrent event of the new session won the race
+	// to write the new id; it counts only while the frame still holds the id this SessionStart carried.
+	prevSessionID := ""
+	if lifecycle == agentpkg.LifecycleSessionStart {
+		if cur, prev, found, terr := m.frames.SessionTransition(stored.FrameID); terr != nil {
+			log.Printf("[agent] session_transition_read_failed: frame=%s err=%v", stored.FrameID, terr)
+		} else if found && cur != "" && cur == m.payloadSessionID(req) && prev != cur {
+			prevSessionID = prev
+		}
+	}
 	projection, err := m.projectPane(req.TmuxPaneID)
 	// Phase 3 — three-state reason (plan §1.4):
 	//   parent_frame_found       → legacy lookup hit (line 220-228)

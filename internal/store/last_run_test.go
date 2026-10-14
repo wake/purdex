@@ -54,7 +54,7 @@ func TestClaimEnd_RootWritesTheLastRunWithTheFramesOwnGeneration(t *testing.T) {
 		t.Fatalf("claimed=%v err=%v", claimed, err)
 	}
 	got := mustLastRun(t, s, "abc123")
-	want := LastRun{Code: "abc123", TmuxInstance: "111:1700", AgentType: "cc", SessionID: "S1", Cwd: "/w/proj", EndedAt: 99}
+	want := LastRun{Code: "abc123", TmuxInstance: "111:1700", AgentType: "cc", SessionID: "S1", Cwd: "/w/proj", EndedAt: 99, PaneID: "%5"}
 	if got == nil || *got != want {
 		t.Fatalf("last run = %+v, want %+v", got, want)
 	}

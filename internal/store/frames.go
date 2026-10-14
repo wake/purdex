@@ -134,6 +134,8 @@ func addFrameIdentityColumns(db *sql.DB) error {
 		{"cwd", `TEXT NOT NULL DEFAULT ''`},
 		{"identity_seq", `INTEGER NOT NULL DEFAULT 0`},
 		{"transcript_path", `TEXT NOT NULL DEFAULT ''`},
+		// The session id this frame held before its current one (set in the same statement that replaces it).
+		{"prev_session_id", `TEXT NOT NULL DEFAULT ''`},
 	}
 	for _, column := range columns {
 		if existing[column.name] {
@@ -498,6 +500,10 @@ func (s *FramesStore) UpdateSessionIdentity(frameID, sessionID, cwd string, seq 
 	setClauses := make([]string, 0, 3)
 	args := make([]any, 0, 5)
 	if sessionID != "" {
+		// One statement, so the old id is captured atomically with its replacement (SQLite reads the pre-update row on
+		// the right-hand side): a /clear's predecessor is whatever this write displaced, whichever event wins the race.
+		setClauses = append(setClauses, "prev_session_id = CASE WHEN session_id != '' AND session_id != ? THEN session_id ELSE prev_session_id END")
+		args = append(args, sessionID)
 		setClauses = append(setClauses, "session_id = ?")
 		args = append(args, sessionID)
 	}
@@ -524,6 +530,19 @@ func (s *FramesStore) UpdateSessionIdentity(frameID, sessionID, cwd string, seq 
 		return s.classifyIdentityMiss(frameID)
 	}
 	return nil
+}
+
+// SessionTransition returns the session id the frame holds now and the one it held before that ("" when the id never
+// changed). found is false for a missing frame.
+func (s *FramesStore) SessionTransition(frameID string) (cur, prev string, found bool, err error) {
+	err = s.db.QueryRow(`SELECT session_id, prev_session_id FROM agent_frames WHERE frame_id = ?`, frameID).Scan(&cur, &prev)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	return cur, prev, true, nil
 }
 
 // SetTranscriptPath records the transcript path for a frame. It follows
