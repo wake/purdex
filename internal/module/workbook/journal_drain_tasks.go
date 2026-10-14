@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strconv"
 	"time"
 
@@ -29,11 +28,7 @@ func (d *Drainer) writeTaskRow(it OutboxItem) error {
 	lock := d.projectLock(reg.ProjectID)
 	lock.Lock()
 	defer lock.Unlock()
-	slug := unitSlug(reg.Label, reg.Key)
-	h := home{
-		journalDir: filepath.Join(reg.WtPath, ".purdex", "journal", slug),
-		tasksFile:  filepath.Join(reg.WtPath, ".purdex", "tasks", slug+".md"),
-	}
+	h := unitHome(reg)
 	for _, ev := range p.Events {
 		if err := h.putNew(journal.Entry{ID: ev.ID, Kind: journal.Kind(ev.Kind), At: time.UnixMilli(ev.At), Actor: d.actor(ev.Owner),
 			Text: ev.Text, Detail: ev.Detail, Refs: ev.Refs}); err != nil {

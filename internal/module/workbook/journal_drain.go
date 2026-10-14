@@ -242,6 +242,18 @@ type home struct {
 	convKey                            string
 }
 
+// unitHome is where a registered unit's files are: its month files and tasks file are named by its label and key, the
+// roadmap is the project's. The drainer writes them and the journal API reads them through this one function, so they
+// cannot disagree about where a unit lives.
+func unitHome(reg UnitRow) home {
+	slug := unitSlug(reg.Label, reg.Key)
+	return home{
+		journalDir:  filepath.Join(reg.WtPath, ".purdex", "journal", slug),
+		tasksFile:   filepath.Join(reg.WtPath, ".purdex", "tasks", slug+".md"),
+		roadmapFile: filepath.Join(reg.WtPath, ".purdex", "roadmap.md"),
+	}
+}
+
 func (d *Drainer) writeRow(it OutboxItem) error {
 	if it.Kind == OutboxTask { // belongs to no workbook entry
 		return d.writeTaskRow(it)
@@ -260,13 +272,8 @@ func (d *Drainer) writeRow(it OutboxItem) error {
 	lock := d.projectLock(reg.ProjectID)
 	lock.Lock()
 	defer lock.Unlock()
-	slug := unitSlug(reg.Label, reg.Key)
-	h := home{
-		journalDir:  filepath.Join(reg.WtPath, ".purdex", "journal", slug),
-		tasksFile:   filepath.Join(reg.WtPath, ".purdex", "tasks", slug+".md"),
-		roadmapFile: filepath.Join(reg.WtPath, ".purdex", "roadmap.md"),
-		solo:        reg.Kind == UnitSolo, convKey: ent.ConvKey,
-	}
+	h := unitHome(reg)
+	h.solo, h.convKey = reg.Kind == UnitSolo, ent.ConvKey
 	switch it.Kind {
 	case OutboxTurn:
 		var p turnPayload
