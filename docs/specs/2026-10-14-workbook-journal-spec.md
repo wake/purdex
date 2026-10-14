@@ -44,7 +44,8 @@ The name pool (session names instead of the ref suffix, user 2026-10-14) is a se
 - **Q-B, the number on the 日誌 button**: the count of unresolved 待確認 **items** of the active tab's journal; nothing for ordinary entries, nothing when 0.
 - **Q-C, filters**: 全部 / 執行 / 任務 / 請求與溝通 / 待確認 (a count of open items on 待確認). **Clicking the active filter again clears it** (back to 全部).
 - **Prototype** (`docs/prototypes/workbook-journal-v4/`): layout approved; **a 待確認 row has no coloured left edge** (the yellow is on its chip and checkboxes only).
-- **Q-D, §12 原文 → 新文**: still to confirm.
+- **Q-D, §12 原文 → 新文**: all six rows confirmed (user 2026-10-14, 「1–6 ok」).
+- **Go-ahead** for the journal and the name pool (user 2026-10-14, 「1, 2 可以」): prompt rounds → plan → codex → dispatch.
 
 ## 4. Journal units and scope
 
@@ -152,7 +153,7 @@ RA-2 已 merge：拿掉「不再詢問」、補上終端機指令核准的提示
 - **Roadmap tab**: the project's features, each a 階段 / 說明 / 狀態 table, live.
 - Tab-hosted rule: open states, widths, filter and scroll position live outside the components, per unit; regression test with the real `TabContent`.
 
-## 12. What v4 replaces (原文 → 新文; Q-D)
+## 12. What v4 replaces (原文 → 新文; Q-D, confirmed)
 
 | workbook v2 clause | becomes |
 |---|---|
