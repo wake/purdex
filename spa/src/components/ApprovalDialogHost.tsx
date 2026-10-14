@@ -37,6 +37,8 @@ import { hostLabel, useHostLook } from '../lib/host-look'
 import { deriveTeamLabel, goTrim, labelProblem, TEAM_LABEL_MAX_WIDTH } from '../lib/team/label'
 import { cellWidth } from '../lib/textwidth'
 import { adoptPayloadOf, adoptTargetLabel, clipForDisplay, leadPayloadOf, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
+import { useCardUnanswered } from '../lib/team/approval-unanswered'
+import { startUnansweredReread } from '../lib/team/approval-reread'
 import { approvalSessionLabel, formatCountdown, formatOriginAddress, memberRelayNames } from '../lib/team/approval-format'
 import { ApprovalApiError, setSelfRelayPause } from '../lib/team/approval-api'
 import { buttonBase, fieldClass, keyboardGuard, parseRoots, tabStops, teamNameOk } from './approval-dialog-helpers'
@@ -48,6 +50,8 @@ import { RelayBrief, RelayTitle } from './approval/RelayBrief'
 export function ApprovalDialogHost() {
   const current = useApprovalStore(selectCurrent)
   const minimized = useApprovalStore((s) => s.minimized)
+  // A card that ran out while open is read again by this host (its daemon sends no event for that); see approval-reread.ts.
+  useEffect(() => startUnansweredReread(), [])
   // The remote-adopt wait card outlives the (closed) approval, so it is mounted whether or not a request is open.
   if (!current) return <AdoptionWaitCard />
   // Keyed by the request: the next one is a fresh dialog (the payload's defaults, nothing in flight). Minimizing does
@@ -89,6 +93,9 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   const [noMoreAsking, setNoMoreAsking] = useState(false)
   const [busy, setBusy] = useState(false)
   const [now, setNow] = useState(() => Date.now())
+  // Nobody answered this card: no countdown, the session is paused (relay v2 App contract 3). Also true for a card held since
+  // `opened` that ran out while open, once the pause data says so.
+  const unanswered = useCardUnanswered(hostId, approval, now)
   // Ref, not state: two clicks in one event burst both see `busy === false` before React commits the first setBusy.
   const inFlight = useRef(false)
   const overlayRef = useRef<HTMLDivElement>(null)
@@ -379,8 +386,17 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
                 <dd data-testid="approval-reason" className="whitespace-pre-wrap text-text-primary">{payload.reason}</dd>
               </>
             )}
-            <dt className="text-text-muted">{t('approval.dialog.deadline')}</dt>
-            <dd data-testid="approval-countdown" className="font-mono text-text-primary">{formatCountdown(approval.deadline_at - now)}</dd>
+            {unanswered ? (
+              <>
+                <dt className="text-text-muted">{t('approval.dialog.unanswered_label')}</dt>
+                <dd data-testid="approval-unanswered" className="text-text-primary">{t('approval.dialog.unanswered')}</dd>
+              </>
+            ) : (
+              <>
+                <dt className="text-text-muted">{t('approval.dialog.deadline')}</dt>
+                <dd data-testid="approval-countdown" className="font-mono text-text-primary">{formatCountdown(approval.deadline_at - now)}</dd>
+              </>
+            )}
           </dl>
           {isSelfRelay && <RelayBrief hostId={hostId} sessionId={approval.origin.session_id} />}
           {isMemberRelay && <RelayBrief hostId={hostId} sessionId={memberRelay.payload.member_session_id} />}

@@ -24,9 +24,9 @@ export function UnattendedPausedSection({ hostIds }: { hostIds: readonly string[
               <span className="min-w-0 flex-1 truncate">
                 {t('unattended.paused.row', { host: hostLabel(hostId, hostLookOf(hostId)), session: clipForDisplay(p.title.trim() !== '' ? p.title : p.ref, 40) })}
               </span>
-              <PauseReleaseButton hostId={hostId} sessionId={p.session_id} />
+              <PauseReleaseButton hostId={hostId} sessionId={p.session_id} causes={p.causes} />
             </div>
-            <div data-testid="paused-light" className="text-text-muted">{pausedLightText(t, p.causes, p.bounced)} · {sinceText(p.since)}</div>
+            <div data-testid="paused-light" className="text-text-muted">{pausedLightText(t, p.causes, p.bounced, p.role)} · {sinceText(p.since)}</div>
             {p.role === 'lead' && <div data-testid="paused-lead-hint" className="text-text-muted">{t('paused.release.lead_hint')}</div>}
           </li>
         ))}
