@@ -22,18 +22,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Peer addresses（跨主機 agent 訊息）
 
 - **日常地址是 `<host>/<name>`**，`<name>` 是 pdx 替這個對話配的**虛擬名**（Peer Address v5）：
-  `<基底>-<ref 前兩碼>`，例如 ref `_q34psn`、基底 `purdex-b0` → `mlab/purdex-b0-q3`。
+  `<基底>-<名字>`，名字是 daemon 從 30 個短名字（adam、emma、kenji、yuki…，各國常見員工名）的池子裡，
+  挑一個「現在沒有活著的對話在用」的，例如 `mlab/purdex-b0-kenji`；30 個都被占住時退回舊式
+  `<基底>-<ref 前兩碼>`（例如 ref `_q34psn` → `mlab/purdex-b0-q3`）。**已經有名字的舊對話維持原名**。
   基底取這個對話**第一次**被 daemon 看到時的名字（當時的 CLI 名字；沒有就用記過的名字；
   執行體用工作目錄名），**配一次就終生不變**：`/rename`、Claude Code 每次啟動換名都不影響；
-  接力（relay）後的新 session 沿用前任的名字（後綴不重算）；手動 `/clear` 是新對話，重新配。
+  接力（relay）後的新 session 沿用前任的名字（含名字，後綴不重算）；手動 `/clear` 是新對話，重新配。
+  名字在對話結束後釋放；**兩個活著的對話撞到同一個名字時（例如 resume 一個舊對話，它的名字已被別的活著對話
+  占用；或兩台主機同時挑到同名），行程開始較晚的那個換一個新名字**，先占用的不變；換名前送到該名字會回
+  `ambiguous`，括號形式與 `<host>/_<ref>` 仍到得了各自的對話。**換名會讓一個活著的對話換地址，所以跨時間交接
+  （把地址記下來之後才用）一律用 `<host>/_<ref>`，不要記名字。**
   `pdx peers` 與 `pdx msg whoami` 會連同 ref 一起顯示成 `<host>/<name> [<ref>]`。
 - **Claude Code 自己的 session 名字（CLI 名字）不是地址，不路由**：拿它送會回 `peer_not_found`；
   它若剛好是某個活著的對話的 CLI 名字，detail 會附 `did you mean <host>/<虛擬名>?`。
   地址一律問 `pdx msg whoami`（自己的）／`pdx peers --all`（別人的），不要從 CLI 名字推。
   例外：對方主機的 daemon 還是舊版（列沒有虛擬名）時，對它照舊用 CLI 名字定址。
 - **`pdx msg send` 接受三種寫法**：
-  - `pdx msg send mlab/purdex-b0-q3 "..."` —— 日常型，不必引號。
-  - `pdx msg send "mlab/purdex-b0-q3 [q34psn]" "..."` —— 表格看到什麼就整串貼上。
+  - `pdx msg send mlab/purdex-b0-kenji "..."` —— 日常型，不必引號。
+  - `pdx msg send "mlab/purdex-b0-kenji [q34psn]" "..."` —— 表格看到什麼就整串貼上。
     **括號形式的 name 會拿去跟 ref 核對**，對不上就**拒送**（`name_mismatch`），
     不是「以 ref 為準」照送 —— 那個 name 是給人看的檢查碼。含空白，一定要引號。
   - `pdx msg send mlab/_q34psn "..."` —— 精確型；兩個對話剛好配到同一個虛擬名
