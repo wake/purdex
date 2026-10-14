@@ -18,7 +18,6 @@ import type { WorkbookEntry, WorkbookTodo } from '../lib/workbook/types'
 vi.mock('../lib/team/approval-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/team/approval-api')>()),
   decideApproval: vi.fn(),
-  setSelfRelayPause: vi.fn(),
 }))
 vi.mock('../lib/workbook/api', () => ({ fetchConversation: vi.fn(), fetchTodos: vi.fn() }))
 const mockedConv = vi.mocked(fetchConversation)

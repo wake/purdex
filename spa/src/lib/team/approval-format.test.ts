@@ -78,3 +78,43 @@ describe('member_relay', () => {
     expect(closedToastText(t, 'mlab', { ...base, payload: {}, state: 'timeout' })).toContain('approval.kind.member_relay')
   })
 })
+
+// Relay v2 App contract 2 (`team.person.v1`): a person's terminal command decides a card (`decided_by.kind = "person"`), and the
+// daemon cancels the lead / adopt cards 無人值守 refuses (`close_reason: "unattended_refused"`). Neither reads as a failure.
+describe('closedToastText: a person\'s command and the unattended refusal', () => {
+  const t = (k: string, vars?: Record<string, unknown>) => (vars ? `${k} ${JSON.stringify(vars)}` : k)
+  const base = { id: 'r', kind: 'lead', host_id: 'd', origin: origin(), payload: {}, created_at: 1, deadline_at: 2, lease_until: 3 } as const
+
+  it('a card a person approved from the terminal says so, in its own words (not through the app/terminal wording)', () => {
+    const text = closedToastText(t, 'mlab', { ...base, state: 'approved', decided_by: { kind: 'person', label: '使用者（終端機指令）' } })
+    expect(text).toContain('approval.toast.decided_by_person')
+    expect(text).toContain('"decision":"approval.decision.approved"')
+    expect(text).not.toContain('approval.toast.decided_elsewhere')
+  })
+
+  it('a denied card keeps the same wording with its own decision', () => {
+    const text = closedToastText(t, 'mlab', { ...base, state: 'denied', decided_by: { kind: 'person', label: '使用者（終端機指令）' } })
+    expect(text).toContain('approval.toast.decided_by_person')
+    expect(text).toContain('"decision":"approval.decision.denied"')
+  })
+
+  it('an app or terminal decider is worded as before', () => {
+    expect(closedToastText(t, 'mlab', { ...base, state: 'approved', decided_by: { kind: 'app', label: 'Purdex.app' } })).toContain('approval.toast.decided_elsewhere')
+    expect(closedToastText(t, 'mlab', { ...base, state: 'approved', decided_by: { kind: 'terminal', label: 'terminal' } })).toContain('approval.toast.decided_elsewhere')
+  })
+
+  it('a lead card cancelled with unattended_refused says unattended mode refused it', () => {
+    const text = closedToastText(t, 'mlab', { ...base, state: 'cancelled', close_reason: 'unattended_refused' })
+    expect(text).toContain('approval.toast.unattended_refused')
+    expect(text).not.toContain('approval.toast.ended')
+  })
+
+  it('an adopt card cancelled with unattended_refused too; any other close_reason keeps the plain ended wording', () => {
+    expect(closedToastText(t, 'mlab', { ...base, kind: 'adopt', state: 'cancelled', close_reason: 'unattended_refused' })).toContain('approval.toast.unattended_refused')
+    expect(closedToastText(t, 'mlab', { ...base, kind: 'adopt', state: 'cancelled', close_reason: 'adopt_target_is_lead' })).toContain('approval.toast.ended')
+  })
+
+  it('unattended_refused on a card that is not cancelled is not that wording (a stray field never rewrites a decision)', () => {
+    expect(closedToastText(t, 'mlab', { ...base, state: 'timeout', close_reason: 'unattended_refused' })).toContain('approval.toast.ended')
+  })
+})
