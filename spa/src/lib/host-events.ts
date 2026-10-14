@@ -20,6 +20,7 @@ export interface HostEvent {
     | 'team.unattended'
     | 'team.relay_quota'
     | 'team.roster'
+    | 'fleet.changed'
     | 'workbook.entry'
     | 'workbook.status'
     | 'workbook.todos'

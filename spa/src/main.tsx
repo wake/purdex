@@ -10,6 +10,7 @@ import { ensureDefaultDeviceName } from './stores/useDeviceNameStore'
 import { startHostConfigLoader } from './lib/host-config-loader'
 import { startHostDaemonIdVerification } from './lib/host-daemon-id'
 import { startUnattendedSupport } from './lib/team/unattended-support'
+import { startFleetSupport } from './lib/fleet/fleet-support'
 import { startPausedRefresh } from './lib/team/paused-refresh'
 import { startRosterForget } from './lib/team/roster-forget'
 import { startWorkbookLoader } from './lib/workbook/workbook-loader'
@@ -48,6 +49,8 @@ startHostConfigLoader()
 startHostDaemonIdVerification()
 // 無人值守模式 support (unattended spec D-U23-5): one /api/info per (re)connect / endpoint / token change → useUnattendedStore.
 startUnattendedSupport()
+// Fleet status (fleet spec §6): one /api/info per (re)connect / endpoint / token change; a fleet.v1 host gets one GET /api/fleet.
+startFleetSupport()
 // 被擋下 list (unattended quota pause, UP-5b): read on connect / roster event / poll while the switch is on.
 startPausedRefresh()
 // Team roster (plan PL-2b′): a removed or re-pointed host forgets the teams its old daemon reported.

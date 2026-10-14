@@ -28,6 +28,8 @@ import { handleRelayQuotaEvent } from '../lib/team/relay-quota-ws'
 import { RELAY_QUOTA_EVENT_TYPE, UNATTENDED_EVENT_TYPE } from '../lib/team/types'
 import { handleRosterEvent } from '../lib/team/roster-ws'
 import { ROSTER_EVENT_TYPE } from '../lib/team/roster'
+import { FLEET_EVENT_TYPE } from '../lib/fleet/types'
+import { handleFleetEvent } from '../lib/fleet/fleet-ws'
 import { handleWorkbookEvent, isWorkbookEvent } from '../lib/workbook/workbook-ws'
 import { connectionKey } from '../lib/host-connection-key'
 import { decideHookFrame, parseAgentSnapshot, type HookCursor } from '../lib/agent-lights/hook-cursor'
@@ -294,6 +296,15 @@ export function useMultiHostEventWs() {
             const now = useHostStore.getState().hosts[hostId]
             if (!now || connectionKey(now) !== configKey) return
             handleRelayQuotaEvent(hostId, event.value)
+            return
+          }
+          if (event.type === FLEET_EVENT_TYPE) {
+            // The fleet picture (fleet spec §6). Bound to the connection exactly like `team.relay_quota` above: a frame
+            // is dropped unless the host still exists under the endpoint and token this socket was opened with; the
+            // store also writes it only while this connection's `fleet.v1` answer confirmed the capability.
+            const now = useHostStore.getState().hosts[hostId]
+            if (!now || connectionKey(now) !== configKey) return
+            handleFleetEvent(hostId, event.value)
             return
           }
           if (event.type === ROSTER_EVENT_TYPE) {
