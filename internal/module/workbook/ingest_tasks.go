@@ -66,6 +66,7 @@ type mirrorTask struct {
 	DoneAt  int64  `json:"dat,omitempty"`
 	DoneSum bool   `json:"dsum,omitempty"` // the queued task_done has its closing line (or never will: a baseline task)
 	Merged  bool   `json:"mg,omitempty"`   // a merged report named it: its task_done does not wait for the completion
+	MergedA int64  `json:"mga,omitempty"`  // when that report was made
 }
 
 // taskPayload is a `task` outbox row.
@@ -172,16 +173,16 @@ func (tm *teamMirror) observeTask(teamID string, c team.TaskChange, baseline boo
 
 // observeReport records the closing line of a task a merged or done report names. The line goes into the task_done when it
 // is queued after this; when the task_done was queued without one, it is filled in (only while the entry has none). A
-// merged report is a completion too (spec §6): for a task already known and not finished it queues the task_done at once,
-// and the completion that follows finds it written. A merged report that comes before its task is known is remembered, and
-// observeTask queues the task_done when the task arrives.
+// merged report is a completion too (spec §6), but it only marks the task here: the reports of a tick are read before its
+// tasks, so completeMerged queues the task_done after the tasks of the tick are read (a task deleted in the same tick gets
+// none), and observeTask does it for a task seen after its report. The completion that follows finds it written.
 func (tm *teamMirror) observeReport(teamID string, r team.ReportRow, d *mirrorDelta) {
 	if r.TaskSeq <= 0 || (r.Kind != "merged" && r.Kind != "done") {
 		return
 	}
 	t := tm.task(r.TaskSeq)
 	if r.Kind == "merged" && !t.Merged {
-		t.Merged, d.changed = true, true
+		t.Merged, t.MergedA, d.changed = true, r.CreatedAt, true
 	}
 	if sum := summaryLine(r.Summary); sum != "" && t.Sum == "" {
 		t.Sum, d.changed = sum, true
@@ -190,11 +191,46 @@ func (tm *teamMirror) observeReport(teamID string, r team.ReportRow, d *mirrorDe
 			d.fills = append(d.fills, taskFill{ID: entryID(teamID, r.TaskSeq, "done"), At: t.DoneAt, Detail: sum})
 		}
 	}
-	if t.Merged && !t.Done && t.St != "" && t.St != taskDeleted {
-		t.Done, t.DoneAt, t.DoneSum, d.changed = true, r.CreatedAt, t.Sum != "", true
-		d.events = append(d.events, taskEvent{ID: entryID(teamID, r.TaskSeq, "done"), Kind: string(journal.KindTaskDone), At: r.CreatedAt,
-			Owner: t.Owner, Text: taskText(r.TaskSeq, t.Title), Detail: t.Sum, Refs: refsOf(t.Title, t.PRs)})
+}
+
+// completeMerged queues the task_done of every task of the teams loaded in this tick that a merged report named and that is
+// known, not finished and not deleted, from the state the tick ended with.
+func (tk *tick) completeMerged() error {
+	if tk.baseline {
+		return nil // the first scan records, it writes no history
 	}
+	ids := make([]string, 0, len(tk.teams))
+	for id := range tk.teams {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	deltas := map[string]*mirrorDelta{}
+	for _, id := range ids {
+		tm := tk.teams[id]
+		seqs := make([]int, 0, len(tm.Tasks))
+		for seq := range tm.Tasks {
+			seqs = append(seqs, seq)
+		}
+		sort.Ints(seqs)
+		for _, seq := range seqs {
+			t := tm.Tasks[seq]
+			if !t.Merged || t.Done || t.St == "" || t.St == taskDeleted {
+				continue
+			}
+			d := deltas[id]
+			if d == nil {
+				d = &mirrorDelta{}
+				deltas[id] = d
+			}
+			t.Done, t.DoneAt, t.DoneSum, d.changed = true, t.MergedA, t.Sum != "", true
+			d.events = append(d.events, taskEvent{ID: entryID(id, seq, "done"), Kind: string(journal.KindTaskDone), At: t.MergedA,
+				Owner: t.Owner, Text: taskText(seq, t.Title), Detail: t.Sum, Refs: refsOf(t.Title, t.PRs)})
+		}
+	}
+	if len(deltas) == 0 {
+		return nil
+	}
+	return tk.commit(deltas, map[string]string{})
 }
 
 // summaryLine is a report's summary as a closing line: one line, trimmed, cut to summaryRunes.
@@ -296,6 +332,9 @@ func (m *TaskMirror) Tick(ctx context.Context) error {
 		return err
 	}
 	if err := tk.tasks(ctx); err != nil {
+		return err
+	}
+	if err := tk.completeMerged(); err != nil {
 		return err
 	}
 	return tk.recheck(ctx)

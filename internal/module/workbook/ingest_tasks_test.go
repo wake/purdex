@@ -170,6 +170,8 @@ func TestTaskMirror_TheFirstScanWritesNoHistoryButShowsTheCurrentTasks(t *testin
 	k.feed.set(k.task(2, "上週做完", taskCompleted, -20*day, -10*day))
 	k.feed.set(k.task(3, "去年做完", taskCompleted, -90*day, -40*day))
 	k.feed.set(k.task(4, "剛才開始", taskDoing, -10*time.Minute, -10*time.Minute)) // within the hour: still no entry
+	k.feed.set(k.task(5, "合併了還沒標完成", taskDoing, -3*day, -2*day))
+	k.feed.reports = []team.ReportRow{{RowID: 1, TeamID: mkTeam, ID: "rb", Kind: "merged", TaskSeq: 5, Summary: "兩天前合併", CreatedAt: k.ms(-2 * day)}}
 	k.tick()
 	k.drain()
 	if es := k.entries(); len(es) != 0 {
@@ -179,12 +181,12 @@ func TestTaskMirror_TheFirstScanWritesNoHistoryButShowsTheCurrentTasks(t *testin
 	for _, tk := range k.tasksFile() {
 		got[tk.Key] = tk.State
 	}
-	want := map[string]journal.TaskState{mkTeam + "-1": journal.TaskDoing, mkTeam + "-2": journal.TaskDone, mkTeam + "-4": journal.TaskDoing}
-	if len(got) != 3 || got[mkTeam+"-1"] != want[mkTeam+"-1"] || got[mkTeam+"-2"] != want[mkTeam+"-2"] || got[mkTeam+"-4"] != want[mkTeam+"-4"] {
+	want := map[string]journal.TaskState{mkTeam + "-1": journal.TaskDoing, mkTeam + "-2": journal.TaskDone, mkTeam + "-4": journal.TaskDoing, mkTeam + "-5": journal.TaskDoing}
+	if len(got) != 4 || got[mkTeam+"-1"] != want[mkTeam+"-1"] || got[mkTeam+"-2"] != want[mkTeam+"-2"] || got[mkTeam+"-4"] != want[mkTeam+"-4"] || got[mkTeam+"-5"] != want[mkTeam+"-5"] {
 		t.Fatalf("tasks file = %v, want %v", got, want)
 	}
 	// What was recorded is not written later either, and a closing line for a task that has no entry fills nothing.
-	k.feed.reports = append(k.feed.reports, team.ReportRow{RowID: 1, TeamID: mkTeam, Kind: "merged", TaskSeq: 2, Summary: "晚到的摘要", CreatedAt: k.ms(time.Minute)})
+	k.feed.reports = append(k.feed.reports, team.ReportRow{RowID: 2, TeamID: mkTeam, Kind: "merged", TaskSeq: 2, Summary: "晚到的摘要", CreatedAt: k.ms(time.Minute)})
 	k.now = k.now.Add(mirrorEvery)
 	k.tick()
 	k.drain()
@@ -670,6 +672,7 @@ func TestTaskMirror_AMergedReportWritesTheTaskDoneBeforeTheCompletion(t *testing
 	k.feed.set(k.task(5, "已知的", taskDoing, time.Second, time.Second))
 	k.feed.set(k.task(6, "只收到 done 報告", taskDoing, time.Second, time.Second))
 	k.feed.set(k.task(7, "被刪除", taskDeleted, time.Second, 2*time.Second))
+	k.feed.set(k.task(12, "沒結語", taskDoing, time.Second, time.Second))
 	// a later row of another team: the cursor goes past these tasks, so the rewind does not read them again and only the
 	// reports can complete them
 	k.feed.set(team.TaskChange{TeamID: "other", Seq: 1, Subject: "別組", Status: taskDoing, OwnerSessionID: "x", CreatedAt: k.ms(15 * time.Second), UpdatedAt: k.ms(15 * time.Second)})
@@ -680,6 +683,9 @@ func TestTaskMirror_AMergedReportWritesTheTaskDoneBeforeTheCompletion(t *testing
 		{RowID: 2, TeamID: mkTeam, ID: "r2", Kind: "done", TaskSeq: 6, Summary: "只是 done", CreatedAt: k.ms(21 * time.Second)},
 		{RowID: 3, TeamID: mkTeam, ID: "r3", Kind: "merged", TaskSeq: 7, Summary: "刪掉的", CreatedAt: k.ms(22 * time.Second)},
 	}
+	k.feed.reports = append(k.feed.reports,
+		team.ReportRow{RowID: 6, TeamID: mkTeam, ID: "r6", Kind: "merged", TaskSeq: 12, Summary: "  ", CreatedAt: k.ms(23 * time.Second)}, // no summary
+		team.ReportRow{RowID: 7, TeamID: mkTeam, ID: "r7", Kind: "merged", TaskSeq: 11, Summary: "沒有這個任務", CreatedAt: k.ms(24 * time.Second)})
 	// the same tick: a task that arrives together with its merged report
 	k.feed.set(k.task(8, "同一輪", taskDoing, 25*time.Second, 25*time.Second))
 	k.feed.reports = append(k.feed.reports, team.ReportRow{RowID: 4, TeamID: mkTeam, ID: "r4", Kind: "merged", TaskSeq: 8, Summary: "同輪已合併", CreatedAt: k.ms(26 * time.Second)})
@@ -705,6 +711,22 @@ func TestTaskMirror_AMergedReportWritesTheTaskDoneBeforeTheCompletion(t *testing
 	if e, ok := k.entry(entryID(mkTeam, 8, "done")); !ok || e.Text != "#8 同一輪" || e.Detail != "同輪已合併" {
 		t.Errorf("task_done of the task that came with its merged report = %+v, %v", e, ok)
 	}
+	if e, _ := k.entry(entryID(mkTeam, 5, "done")); e.At.UnixMilli() != k.ms(20*time.Second) {
+		t.Errorf("the task_done is dated %d, want the report's time %d", e.At.UnixMilli(), k.ms(20*time.Second))
+	}
+	if _, ok := k.entry(entryID(mkTeam, 11, "done")); ok {
+		t.Error("a merged report for a task that was never seen wrote a task_done")
+	}
+	if e, ok := k.entry(entryID(mkTeam, 12, "done")); !ok || e.Detail != "" {
+		t.Errorf("task_done of a merged report without a summary = %+v, %v, want one with no closing line yet", e, ok)
+	}
+	k.feed.reports = append(k.feed.reports, team.ReportRow{RowID: 8, TeamID: mkTeam, ID: "r8", Kind: "done", TaskSeq: 12, Summary: "後來補上的結語", CreatedAt: k.ms(30 * time.Second)})
+	k.now = k.now.Add(mirrorEvery)
+	k.tick()
+	k.drain()
+	if e, ok := k.entry(entryID(mkTeam, 12, "done")); !ok || e.Detail != "後來補上的結語" {
+		t.Errorf("the closing line of a merged task that came later = %+v, %v", e, ok)
+	}
 	// the completions that follow write nothing more
 	k.feed.set(k.task(5, "已知的", taskCompleted, time.Second, 40*time.Second))
 	k.feed.set(k.task(8, "同一輪", taskCompleted, 25*time.Second, 41*time.Second))
@@ -717,8 +739,61 @@ func TestTaskMirror_AMergedReportWritesTheTaskDoneBeforeTheCompletion(t *testing
 			n++
 		}
 	}
-	if n != 2 {
-		t.Fatalf("%d task_done entries, want 2 (tasks 5 and 8, once each)", n)
+	if n != 3 {
+		t.Fatalf("%d task_done entries, want 3 (tasks 5, 8 and 12, once each)", n)
+	}
+}
+
+// The reports of a tick are read before its tasks, so whether a merged report completes its task is decided after the tasks
+// of the tick are read: a task deleted in the same tick as its merged report gets no task_done.
+// Mutation gate: decide when the report is read -> the stale in-progress state completes it (red).
+func TestTaskMirror_AMergedReportForATaskDeletedInTheSameTickWritesNoTaskDone(t *testing.T) {
+	k := newMirrorKit(t)
+	k.finishBaseline()
+	k.feed.set(k.task(10, "會被刪除", taskDoing, time.Second, time.Second))
+	k.feed.set(team.TaskChange{TeamID: "other", Seq: 1, Subject: "別組", Status: taskDoing, OwnerSessionID: "x", CreatedAt: k.ms(15 * time.Second), UpdatedAt: k.ms(15 * time.Second)})
+	k.now = k.now.Add(mirrorEvery)
+	k.tick() // task 10 is known and in progress
+	k.feed.set(k.task(10, "會被刪除", taskDeleted, time.Second, 40*time.Second))
+	k.feed.reports = []team.ReportRow{{RowID: 1, TeamID: mkTeam, ID: "r1", Kind: "merged", TaskSeq: 10, Summary: "同輪已合併", CreatedAt: k.ms(41 * time.Second)}}
+	k.now = k.now.Add(mirrorEvery)
+	k.tick() // the report is read first; the deletion in the same tick
+	k.drain()
+	if _, ok := k.entry(entryID(mkTeam, 10, "done")); ok {
+		t.Fatal("a task deleted in the tick of its merged report got a task_done")
+	}
+	states := map[string]journal.TaskState{}
+	for _, tk := range k.tasksFile() {
+		states[tk.Key] = tk.State
+	}
+	if states[mkTeam+"-10"] != journal.TaskDropped {
+		t.Fatalf("tasks file = %v, want task 10 dropped", states)
+	}
+}
+
+// The task_done a merged report wrote sits in the month file of the report's time, and its closing line, filled in later,
+// is looked up there: a report of another month than the task's last change must still find its entry.
+// Mutation gate: remember the task's time instead of the report's -> the fill looks in the wrong month file (red).
+func TestTaskMirror_TheClosingLineOfAMergedTaskFindsItsEntryInAnotherMonth(t *testing.T) {
+	k := newMirrorKit(t)
+	k.finishBaseline()
+	k.feed.set(k.task(13, "跨月", taskDoing, time.Second, time.Second))
+	k.feed.set(team.TaskChange{TeamID: "other", Seq: 1, Subject: "別組", Status: taskDoing, OwnerSessionID: "x", CreatedAt: k.ms(15 * time.Second), UpdatedAt: k.ms(15 * time.Second)})
+	k.now = k.now.Add(mirrorEvery)
+	k.tick() // task 13 is known
+	k.feed.reports = []team.ReportRow{{RowID: 1, TeamID: mkTeam, ID: "r1", Kind: "merged", TaskSeq: 13, Summary: " ", CreatedAt: k.ms(-40 * 24 * time.Hour)}}
+	k.now = k.now.Add(mirrorEvery)
+	k.tick()
+	k.drain()
+	if e, ok := k.entry(entryID(mkTeam, 13, "done")); !ok || e.Detail != "" {
+		t.Fatalf("task_done = %+v, %v, want one with no closing line yet", e, ok)
+	}
+	k.feed.reports = append(k.feed.reports, team.ReportRow{RowID: 2, TeamID: mkTeam, ID: "r2", Kind: "done", TaskSeq: 13, Summary: "跨月補上", CreatedAt: k.ms(30 * time.Second)})
+	k.now = k.now.Add(mirrorEvery)
+	k.tick()
+	k.drain()
+	if e, ok := k.entry(entryID(mkTeam, 13, "done")); !ok || e.Detail != "跨月補上" {
+		t.Fatalf("the closing line did not reach the entry of the other month: %+v, %v (logs %v)", e, ok, k.logs)
 	}
 }
 
