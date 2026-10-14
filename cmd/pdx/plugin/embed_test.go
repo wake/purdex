@@ -408,6 +408,25 @@ func TestHooks_NoEventRegisteredTwiceWithoutMatcher(t *testing.T) {
 	}
 }
 
+// The lease hook learns that a backgrounded command ended from the task list of classic.Stop, which events.js owns
+// (it may not be registered twice without a matcher): events.js must pass the list on (#2841).
+func TestHooks_EventsTellsTheLeaseHookAboutBackgroundTasks(t *testing.T) {
+	ev, err := fs.ReadFile(Files(), "hooks/events.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ls, err := fs.ReadFile(Files(), "hooks/lease.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(ev), "leaseBackgroundChanged($, ev.background)") || !strings.Contains(string(ev), "import { leaseBackgroundChanged } from './lease.js'") {
+		t.Error("events.js does not call leaseBackgroundChanged with the background task list")
+	}
+	if !strings.Contains(string(ls), "export function leaseBackgroundChanged(") {
+		t.Error("lease.js does not export leaseBackgroundChanged")
+	}
+}
+
 // TestHooks_UIRenderIsOnlyEverMatched (TI-5b, M-U1-3): `ui.render` is registered with a component matcher, and only for
 // the components this mod draws on — ToolUse (the reporter's tool row) and SessionMode (the lead's footer label); an
 // unmatched ui.render would be asked about every component the engine draws.
@@ -570,6 +589,10 @@ func TestSkill_LeaseMentionsRun(t *testing.T) {
 		if !strings.Contains(s, want) {
 			t.Errorf("SKILL.md of pdx-lease lacks %q", want)
 		}
+	}
+	// A command Claude Code moved to the background keeps its lease until it ends (#2841).
+	if want := "租約會留到它真的結束才放掉"; !strings.Contains(s, want) {
+		t.Errorf("SKILL.md of pdx-lease lacks %q", want)
 	}
 	// What v2 retired must not be told any more.
 	for _, gone := range []string{"排太久會放行", "預設最多等 5 分鐘", "超量放行並記一筆"} {

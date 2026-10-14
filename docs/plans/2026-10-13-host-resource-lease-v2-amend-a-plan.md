@@ -366,6 +366,7 @@ Estimates are diff lines (insertions + deletions) / files. Revision 2's fixes gr
 | P2c-1a | clients: modes, queue / ask, script step, final notice | ~600 / 7 |
 | P2c-1b | clients: new verbs, `ls`, report | ~450 / 6 |
 | P2c-2 | the mod, the skill, the probes | ~700 / 6 |
+| P2c-3 | a command Claude Code moved to the background keeps its lease until the task ends (#2841, M-P1) | ~250 / 4 |
 | P2d-1a | the notice job kind (promptq + mod) | ~450 / 8 |
 | P2d-1b | the notice outbox, delivery, `MainTurnRunning` | ~750 / 6 |
 | P2d-2 | fallback without a mod channel | ~450 / 8 |
@@ -696,6 +697,17 @@ Results go in the PR body and into Q1 and Q14. **If (a) shows any permission cha
 **T28 result (M-P1): `next(e)` DOES resolve early.** A foreground command that runs past Claude Code's default 120 s timeout is moved to the background and `next(e)` resolves at that moment (a `sleep 160` call: resolved after 122 s with `backgroundTaskId` and `timedOutAfterMs: 120000`; the command finished 38 s later). A command killed by an explicit short `timeout` resolves at the kill (6 s for `timeout: 5000`, exit 143). So for a heavy command longer than 2 minutes the release (and the §3.3 end with `--notice`) fires at 2:00 while the process still runs. No behaviour change here; follow-up issue #2841.
 
 **T28 M-P1 probe** (v2 §6, carried over): a heavy-classified foreground `sleep 150`-class command with a short Bash timeout. Does `next(e)` resolve when CC moves it to the background, and when does the release (now also the §3.3 end, with `--notice`) fire? Method and result go in the PR body. No behaviour change here; a follow-up issue if it does resolve early.
+
+### P2c-3 — a backgrounded foreground command keeps its lease (#2841) (~250 / 4)
+
+Branch `feat/lease-v2-amend-p2c3`. Added by the lead after the T28 result: a foreground command past Claude Code's 120 s timeout (or one the person sent to the background with Ctrl+B) is moved to the background and `next(e)` resolves while the process runs on, so P2c-2 released its lease at 2:00. Before the switch to mode lease this must not happen, or queueing means nothing for the longest commands.
+
+**T35 Hand-over and watch** — `lease.js`, one call in `events.js`:
+- `leaseCall` reads `r.result.backgroundTaskId`. When it is set the lease is **not** released: `{cfg, clientId, answer}` goes into `bgLeases` (task id → handle, at most 20), `finally` does nothing (`done`), and the result's context says the command was moved to the background and keeps the host until it ends.
+- `leaseBackgroundChanged($, background)` (exported; `events.js` `stopped()` calls it with the task list every `classic.Stop` has, the one place the mod sees them): a handed-over task that is not listed as `running` is released **with `--notice --json`** (two tries, then one without), once.
+- The final notice has no tool result to ride in, so it waits in `pendingNotices` and goes into the **next Bash result's context** (never into a deny).
+- **Backstop** (no code): if the watcher never fires (a reload of the mod empties `bgLeases`, the session ends), the daemon's sweeper ends the held row as `holder_gone` (the session's agent is gone) or `vanished` (a session-new lease with no process of the session under it for `emptySamplesToVanish` samples) or `expired` at `max_hold_s`. A sweeper end never carries a notice (V21 holds: an ordinary end).
+- Tests (`lease.test.ts`, through the real `classic.Stop`): `a command moved to the background keeps its lease until the task ends` (M: release when next resolves), `a task that is gone from the list releases the lease too`, `the final notice of a background release goes into the next Bash result` (M: drop the notice), `a background release that does not answer is tried again, then let go without a notice`. Mutations: release at `next`, a watcher that never releases, a running task released, a dropped notice, `events.js` not calling the hook: all red.
 
 ### P2d-1a — the notice job kind (~450 / 8)
 
