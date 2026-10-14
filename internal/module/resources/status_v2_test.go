@@ -51,10 +51,10 @@ func TestStatus_ReasonNames(t *testing.T) {
 	f.queue("a", 35, 5*time.Minute)
 	f.pass()
 	assert.Equal(t, "danger", f.snapshot().Waiters[0].Reason)
-	f.setZone("warning", "flat")
+	f.setZone("warning", "rising")
 	f.heldLease("h", resources.ScopeProcess, 100)
 	f.pass()
-	assert.Equal(t, "warning_flat", f.snapshot().Waiters[0].Reason)
+	assert.Equal(t, "rising", f.snapshot().Waiters[0].Reason)
 }
 
 // Without a pass a waiter has no reason yet, and the field is left out of the JSON.
