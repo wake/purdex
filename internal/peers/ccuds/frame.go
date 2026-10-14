@@ -39,7 +39,9 @@ func BuildFrame(msgID, fromSock string, w Wrapper) ([]byte, error) {
 	f.MsgID = msgID
 	f.Type = "user"
 	f.Priority = "next"
-	f.From = udsPrefix + fromSock
+	if fromSock != "" { // "" ⇒ no reply address at all (a daemon notice that must not be answered)
+		f.From = udsPrefix + fromSock
+	}
 	f.Message.Role = "user"
 	f.Message.Content = w.Format()
 

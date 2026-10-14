@@ -54,6 +54,8 @@ type fakeOrigins struct {
 	otherProc map[int]bool
 	procErr   error
 	verified  []int
+	// inboxes gives a session an inbox of its own (InboxOf), beside the static fixtureOrigins ones: a member the registry can speak as.
+	inboxes map[string]string
 	// ambiguousRef marks a ref two live sessions share (ResolveOriginByRef answers peersmod.ErrAmbiguousRef).
 	ambiguousRef map[string]bool
 	// batchHook, when set, runs first in every ResolveOriginsBySession (the
@@ -259,6 +261,12 @@ func (f *fakeOrigins) InboxOf(sid string) (string, bool, error) {
 		}
 	}
 	f.mu.Lock()
+	own, hasOwn := f.inboxes[sid]
+	f.mu.Unlock()
+	if hasOwn {
+		return own, true, nil
+	}
+	f.mu.Lock()
 	pid, cleared := f.cleared[sid] // a /clear keeps the process, and with it the inbox socket
 	f.mu.Unlock()
 	if cleared {
@@ -269,6 +277,16 @@ func (f *fakeOrigins) InboxOf(sid string) (string, bool, error) {
 		}
 	}
 	return "", false, nil
+}
+
+// setInbox gives sid an inbox of its own: a member this host's registry can speak as (its notices to the lead go from it).
+func (f *fakeOrigins) setInbox(sid, inbox string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.inboxes == nil {
+		f.inboxes = map[string]string{}
+	}
+	f.inboxes[sid] = inbox
 }
 
 func (f *fakeOrigins) lookup(sid string) (team.Origin, bool, error) {
@@ -492,6 +510,7 @@ func newFixture(t *testing.T) *fixture {
 	f.core.Registry.Register(hostconfig.RelayPromptsKey, f.switches)
 	f.core.Registry.Register(hostconfig.UnattendedKey, f.unatt)
 	f.core.Registry.Register(peersmod.SenderKey, f.sender)
+	f.core.Registry.Register(peersmod.SelfNoticeSenderKey, f.sender)
 	f.core.Registry.Register(hostconfig.RelayQuotaKey, f.qrule)
 	f.core.Registry.Register(agent.OwnerResolverKey, f.usage) // the team module asserts agent.ContextUsageReader on it
 	f.registerSpawnFakes()

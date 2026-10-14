@@ -537,7 +537,7 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 	// line earlier turns a not_deliverable refusal into a nil dereference.
 	// origin.Agent needs no such guard — findOrigin only ever returns a row
 	// whose Agent is non-nil and of type "cc" (send.go, findOrigin).
-	if isLocal && !isFlow(r.Context()) && // the pause's flow notices are sent from the session's own inbox: the daemon has no other
+	if isLocal && !isFlow(r.Context()) && !isSelfNotice(r.Context()) && // the pause's flow notices are sent from the session's own inbox: the daemon has no other
 		origin.Agent.SessionID == target.Agent.SessionID &&
 		origin.Agent.PID == target.Agent.PID &&
 		origin.Agent.ProcStart == target.Agent.ProcStart {
@@ -618,7 +618,13 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		m.deliverLocal(w, dreq, id, mode, req.OriginInbox, origin.Address, target.Agent.Inbox, targetHostID, targetAlias, toAddress)
+		replyInbox, fromName := req.OriginInbox, origin.Address
+		if isSelfNotice(r.Context()) {
+			// a notice the daemon speaks in the session's own voice must not offer a way to answer it: a native reply goes to the frame's
+			// `from` socket, which here would be the session's own - an unaudited, unlimited loop. The reply route points nowhere (codex)
+			replyInbox, fromName = "", systemNoticeName
+		}
+		m.deliverLocal(w, dreq, id, mode, replyInbox, fromName, target.Agent.Inbox, targetHostID, targetAlias, toAddress)
 		return
 	}
 

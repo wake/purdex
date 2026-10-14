@@ -159,25 +159,42 @@ func (m *Module) memberNoticeName(mr memberRow) (address, title string) {
 	return address, title
 }
 
-// noticeToLead sends text to the team's lead at its live address, from the member's inbox (else the lead's own); false
-// when it did not go.
+// noticeToLead sends text to the team's lead at its live address, from the member's inbox. A member this host has no inbox for (one of
+// another host: its session is not in this registry) cannot be spoken as; the notice then goes from the lead's OWN inbox through the
+// self-notice sender, the one send that may address its origin (the plain send refuses it as self_target, which silently dropped every
+// notice about a remote member until now). The lead sees the text, which names the member, from its own address. false when it did not go.
 func (m *Module) noticeToLead(mr memberRow, t team.Team, text, what string) bool {
 	alias, _ := m.selfHost()
-	inbox, ok, err := m.origins.InboxOf(mr.SessionID)
-	if err != nil || !ok {
-		inbox, ok, err = m.origins.InboxOf(t.LeadSessionID)
-	}
-	if err != nil || !ok {
-		m.logf("[team] %s (member %s): no live inbox to send from (%v)", what, mr.Ref, err)
-		return false
-	}
 	to := alias + "/" + ipeers.RefID(t.LeadSessionID)
 	if o, live, err := m.origins.ResolveOriginBySession(t.LeadSessionID); err == nil && live && o.Address != "" {
 		to = o.Address
 	}
 	ctx, cancel := context.WithTimeout(m.stopCtx, noticeSendTimeout)
 	defer cancel()
-	if _, err := m.sender.Send(ctx, ipeers.SendRequest{To: to, Text: text, OriginInbox: inbox}); err != nil {
+	inbox, ok, err := m.origins.InboxOf(mr.SessionID)
+	if err != nil {
+		m.logf("[team] %s (member %s): no live inbox to send from (%v)", what, mr.Ref, err)
+		return false
+	}
+	if ok {
+		if _, err := m.sender.Send(ctx, ipeers.SendRequest{To: to, Text: text, OriginInbox: inbox}); err != nil {
+			m.logf("[team] %s (member %s) to %s: %v", what, mr.Ref, to, err)
+			return false
+		}
+		return true
+	}
+	if !m.isRemoteRow(mr) {
+		// a member of THIS host that the registry does not list right now (a gap, a restart, a stale row) is not a remote member: its
+		// notice is not sent as if it were, and the caller keeps it owed or retries (codex)
+		m.logf("[team] %s (member %s): its inbox is not in the registry; not sent", what, mr.Ref)
+		return false
+	}
+	leadInbox, ok, err := m.origins.InboxOf(t.LeadSessionID)
+	if err != nil || !ok || m.selfNotice == nil {
+		m.logf("[team] %s (member %s): no live inbox to send from (lead inbox %v, %v; self-notice sender %v)", what, mr.Ref, ok, err, m.selfNotice != nil)
+		return false
+	}
+	if _, err := m.selfNotice.SendSelfNotice(ctx, ipeers.SendRequest{To: to, Text: text, OriginInbox: leadInbox}); err != nil {
 		m.logf("[team] %s (member %s) to %s: %v", what, mr.Ref, to, err)
 		return false
 	}

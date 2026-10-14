@@ -24,12 +24,33 @@ type fakeSender struct {
 	result string
 	block  chan struct{}
 	in     chan struct{}
+	// selfTarget, when set, makes Send refuse a request it reports true for, as the peers module refuses a send whose origin is its
+	// target (400 self_target); selfNotices are the SendSelfNotice requests, which are also in sent.
+	selfTarget  func(req ipeers.SendRequest) bool
+	selfNotices []ipeers.SendRequest
+}
+
+func (s *fakeSender) SendSelfNotice(ctx context.Context, req ipeers.SendRequest) (ipeers.SendResponse, error) {
+	resp, err := s.send(ctx, req, true)
+	if err == nil {
+		s.mu.Lock()
+		s.selfNotices = append(s.selfNotices, req)
+		s.mu.Unlock()
+	}
+	return resp, err
 }
 
 func (s *fakeSender) Send(ctx context.Context, req ipeers.SendRequest) (ipeers.SendResponse, error) {
+	return s.send(ctx, req, false)
+}
+
+func (s *fakeSender) send(_ context.Context, req ipeers.SendRequest, selfNotice bool) (ipeers.SendResponse, error) {
 	s.mu.Lock()
-	err, block, in, result := s.err, s.block, s.in, s.result
+	err, block, in, result, selfTarget := s.err, s.block, s.in, s.result, s.selfTarget
 	s.mu.Unlock()
+	if !selfNotice && selfTarget != nil && selfTarget(req) {
+		return ipeers.SendResponse{}, &peersmod.SendError{Status: 400, API: ipeers.APIError{Error: ipeers.ErrSelfTarget, Detail: "the address resolves to this session"}}
+	}
 	if result == "" {
 		result = ipeers.ResultDelivered
 	}

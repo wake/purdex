@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/wake/purdex/internal/core"
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/peers/ccuds"
 )
 
 // fakePauseGate is the team store's PauseVerdict as peers sees it (through the service registry, never by import).
@@ -306,5 +308,48 @@ func TestPause_TheGatesDetailIsTheRefusals(t *testing.T) {
 	ae = ipeers.APIError{}
 	if err := json.Unmarshal(rr.Body.Bytes(), &ae); rr.Code != http.StatusConflict || err != nil || ae.Detail != custom {
 		t.Fatalf("remote: %d %s (%v), want 409 with %q", rr.Code, rr.Body.String(), err, custom)
+	}
+}
+
+// A team lead is told about a member of another host from its own inbox (SendSelfNotice): delivered to it, where an ordinary send to
+// oneself is refused self_target - and the pause still applies to it. Mutation gates: no exception → the notice is refused (red); the
+// exception for every send → the ordinary one is delivered (red, TestPause_ASessionIsToldByItsOwnInboxThroughSendFlowOnly); the pause
+// skipped → the paused lead takes it (red).
+func TestSelfNotice_DeliveredToTheSessionItself_PauseStillApplies(t *testing.T) {
+	s := newSendEnv(t, envOpts{})
+	req := s.localSendReq()
+	req.To = localAlias + "/" + ipeers.RefID(targetSessionID)
+	req.Text = "[pdx team] member air26/_abc123 已用 90%"
+	assertRefused(t, s.send(adminCtx(), req), http.StatusBadRequest, ipeers.ErrSelfTarget)
+	resp, err := moduleSender{m: s.m}.SendSelfNotice(context.Background(), req)
+	if err != nil || resp.Result != ipeers.ResultDelivered {
+		t.Fatalf("SendSelfNotice to itself: %+v %v", resp, err)
+	}
+	// the frame offers no way to answer: its reply route is not the session's own socket (a reply would loop back unaudited)
+	line := fmt.Sprint(s.recvLine())
+	fr, perr := ccuds.ParseFrame([]byte(line))
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	if _, ok := ccuds.FromSocket(fr.From); ok || fr.From != "" || strings.Contains(line, "uds:") || strings.Contains(line, req.OriginInbox) || !strings.Contains(fr.Message.Content, `from=""`) || !strings.Contains(fr.Message.Content, `from-name="`+systemNoticeName+`"`) {
+		t.Fatalf("frame = %s, want no reply address anywhere (frame from, wrapper from) and the name %q", line, systemNoticeName)
+	}
+	// each privileged key shows only its own method: the registered services cannot be asserted to the other's interface
+	reg := core.NewServiceRegistry()
+	s.m.registerSenders(reg)
+	if svc, _ := reg.Get(SelfNoticeSenderKey); svc == nil {
+		t.Fatal("no self-notice sender registered")
+	} else if _, ok := svc.(FlowSender); ok {
+		t.Fatal("the self-notice service can be asserted to FlowSender")
+	}
+	if svc, _ := reg.Get(FlowSenderKey); svc == nil {
+		t.Fatal("no flow sender registered")
+	} else if _, ok := svc.(SelfNoticeSender); ok {
+		t.Fatal("the flow service can be asserted to SelfNoticeSender")
+	}
+	gateFor(s, targetSessionID) // the lead is paused: a notice bounces like any message
+	var se *SendError
+	if _, err := (moduleSender{m: s.m}).SendSelfNotice(context.Background(), req); !errors.As(err, &se) || se.Status != http.StatusConflict {
+		t.Fatalf("SendSelfNotice to a paused session: %v, want 409 session_paused", err)
 	}
 }

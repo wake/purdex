@@ -365,7 +365,10 @@ type Module struct {
 	killProcess func(pid int) error
 	// sender sends the notices (peers.SenderKey; nil → notices stay owed); noticeSig wakes the drain
 	// (kickNotices); noticeLogAt is the drain's own record of when a row's failure was last logged.
-	sender      peersmod.Sender
+	sender peersmod.Sender
+	// selfNotice sends a notice to the lead from the lead's OWN inbox, for a member this host has no inbox for (a member of another
+	// host; peers.SelfNoticeSenderKey; nil → such notices are not sent, logged).
+	selfNotice  peersmod.SelfNoticeSender
 	noticeSig   chan struct{}
 	noticeLogAt map[string]int64
 	// cmdCaller is the peers module's HostCaller (peers.HostCallerKey; nil → cross-host commands are unavailable) and cmdPump
@@ -451,6 +454,11 @@ func (m *Module) Init(c *core.Core) error {
 	if svc, ok := c.Registry.Get(peersmod.SenderKey); ok {
 		if snd, ok := svc.(peersmod.Sender); ok {
 			m.sender = snd
+		}
+	}
+	if svc, ok := c.Registry.Get(peersmod.SelfNoticeSenderKey); ok {
+		if snd, ok := svc.(peersmod.SelfNoticeSender); ok {
+			m.selfNotice = snd
 		}
 	}
 	sw, ok := c.Registry.Get(hostconfig.RelaySwitchesKey)
