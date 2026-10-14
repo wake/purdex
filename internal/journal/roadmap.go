@@ -1,6 +1,7 @@
 package journal
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -15,6 +16,8 @@ var (
 	ErrUnparsable = errors.New("journal: roadmap table not parsable")
 	// ErrUnknownStatus is returned for a status outside Statuses; the file is left untouched.
 	ErrUnknownStatus = errors.New("journal: unknown roadmap status")
+	// ErrConcurrentEdit is returned when roadmap.md kept changing under SetStatus for three attempts; nothing was written.
+	ErrConcurrentEdit = errors.New("journal: roadmap changed while being updated")
 )
 
 // Stage is one row of a feature's table.
@@ -153,6 +156,11 @@ func ParseRoadmap(file string) ([]Feature, error) {
 // SetStatus rewrites the 狀態 cell of one stage and nothing else (every other byte of the file stays). changed is
 // false, with a nil error, for an unknown feature or stage or a status that is already set; an unknown status is
 // ErrUnknownStatus and an unparsable table is ErrUnparsable, both leaving the file untouched.
+//
+// The lead agent edits roadmap.md directly, outside the in-process lock, so the new content is replaced only if the
+// file still holds the bytes it was computed from; otherwise it starts over, three attempts at most, then
+// ErrConcurrentEdit. Known limitation: a write landing between that last compare and the rename (microseconds) is
+// still lost; closing it needs a lock protocol the lead agent also follows, which plain file edits cannot offer.
 func SetStatus(file, feature, stage, status string) (changed bool, err error) {
 	known := false
 	for _, s := range Statuses {
@@ -162,13 +170,28 @@ func SetStatus(file, feature, stage, status string) (changed bool, err error) {
 		return false, fmt.Errorf("%w: %q", ErrUnknownStatus, status)
 	}
 	defer lockFile(file)()
-	lines, err := readRoadmap(file)
-	if err != nil {
-		return false, err
+	for attempt := 0; attempt < 3; attempt++ {
+		changed, retry, err := setStatusOnce(file, feature, stage, status)
+		if !retry {
+			return changed, err
+		}
 	}
+	return false, fmt.Errorf("%w: %s", ErrConcurrentEdit, file)
+}
+
+// beforeReplace is a test seam between computing the new content and the compare-and-replace.
+var beforeReplace func()
+
+// setStatusOnce makes one attempt; retry is true when the file changed between the read and the replace.
+func setStatusOnce(file, feature, stage, status string) (changed, retry bool, err error) {
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		return false, false, err
+	}
+	lines := strings.Split(string(raw), "\n")
 	fs, err := scanRoadmap(lines)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	var hits []rowRef
 	for _, f := range fs {
@@ -183,13 +206,13 @@ func SetStatus(file, feature, stage, status string) (changed bool, err error) {
 	}
 	switch {
 	case len(hits) == 0:
-		return false, nil
+		return false, false, nil
 	case len(hits) > 1:
-		return false, fmt.Errorf("%w: %d rows for %s / %s", ErrUnparsable, len(hits), feature, stage)
+		return false, false, fmt.Errorf("%w: %d rows for %s / %s", ErrUnparsable, len(hits), feature, stage)
 	}
 	r := hits[0]
 	if r.stage.Status == status {
-		return false, nil
+		return false, false, nil
 	}
 	l := lines[r.line]
 	old := l[r.status.start:r.status.end]
@@ -200,8 +223,16 @@ func SetStatus(file, feature, stage, status string) (changed bool, err error) {
 		trail = old[strings.Index(old, trimmed)+len(trimmed):]
 	}
 	lines[r.line] = l[:r.status.start] + lead + status + trail + l[r.status.end:]
-	if err := atomicWrite(file, []byte(strings.Join(lines, "\n"))); err != nil {
-		return false, err
+	if beforeReplace != nil {
+		beforeReplace()
 	}
-	return true, nil
+	if now, rerr := os.ReadFile(file); rerr != nil {
+		return false, false, rerr
+	} else if !bytes.Equal(now, raw) {
+		return false, true, nil
+	}
+	if err := atomicWrite(file, []byte(strings.Join(lines, "\n"))); err != nil {
+		return false, false, err
+	}
+	return true, false, nil
 }
