@@ -24,14 +24,27 @@ var (
 	locks  = map[string]*sync.Mutex{}
 )
 
-// lockFile serialises read-modify-write of one file inside this process (the daemon is the only writer).
-func lockFile(path string) func() {
+// canonicalPath makes equivalent spellings of one path equal: absolute, cleaned, and with symlinks resolved on the
+// nearest existing ancestor, so the answer is the same before and after the file or its directory is created.
+func canonicalPath(path string) string {
 	if abs, err := filepath.Abs(path); err == nil {
 		path = abs
 	}
-	if real, err := filepath.EvalSymlinks(path); err == nil {
-		path = real
+	rest := ""
+	for p := path; ; p = filepath.Dir(p) {
+		if real, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(real, rest)
+		}
+		if filepath.Dir(p) == p {
+			return path
+		}
+		rest = filepath.Join(filepath.Base(p), rest)
 	}
+}
+
+// lockFile serialises read-modify-write of one file inside this process (the daemon is the only writer).
+func lockFile(path string) func() {
+	path = canonicalPath(path)
 	lockMu.Lock()
 	l, ok := locks[path]
 	if !ok {
@@ -70,11 +83,20 @@ func MonthFile(dir string, at time.Time) string {
 // metaLine is the machine-readable comment of an entry. encoding/json already writes <, > and & as \u00XX, so the
 // only way a JSON string could end the comment is "--", whose two dashes are written as JSON escapes.
 func metaLine(e Entry) (string, error) {
-	b, err := json.Marshal(e)
+	s, err := commentJSON(e)
 	if err != nil {
 		return "", err
 	}
-	return metaPrefix + strings.ReplaceAll(string(b), "--", dashEsc+dashEsc) + " -->", nil
+	return metaPrefix + s + " -->", nil
+}
+
+// commentJSON is v as JSON that is safe inside an HTML comment.
+func commentJSON(v any) (string, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return "", err
+	}
+	return strings.ReplaceAll(string(b), "--", dashEsc+dashEsc), nil
 }
 
 func oneLine(s string) string {
