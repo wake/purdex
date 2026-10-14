@@ -393,6 +393,7 @@ func (m *Module) onApproval(op string, a team.Approval) {
 	}
 	pa := toPushApproval(a)
 	if _, pushed := push.ApprovalContent(pa, "", "en"); !pushed {
+		logApproval(a, "not pushed: kind")
 		return
 	}
 	m.openedApproval(a, pa)

@@ -388,6 +388,17 @@ func TestLate_AFailedLatePushDoesNotLeaveTheCardHeld(t *testing.T) {
 	}
 }
 
+// An approval of a kind that is never pushed (adopt, a terminal-only hook_ask) says so in the log.
+func TestLate_AKindThatIsNeverPushedIsLogged(t *testing.T) {
+	te, _ := lateEnv(t, false)
+	buf := captureLog(t)
+	adopt := leadApproval("ad1")
+	adopt.Kind = team.KindAdopt
+	te.events.emit("opened", adopt)
+	te.mustLog(t, buf, "approval ad1 kind=adopt not pushed: kind")
+	te.noSends(t)
+}
+
 // An id whose close event was dropped does not stay forever: states older than the TTL are pruned on each event.
 func TestLate_OldStatesArePruned(t *testing.T) {
 	te, _ := lateEnv(t, false)
