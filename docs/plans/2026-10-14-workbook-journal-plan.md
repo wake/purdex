@@ -30,6 +30,7 @@ Revision 2 (2026-10-14): codex plan review `task-mv7ugqpb-75vrid`, 16 findings, 
 | J-1a | `internal/journal`: project resolution, entry model, JSON-in-comment markdown writer / parser, tasks file, roadmap table | — | ~700 |
 | J-1b1 | workbook: the `journal` job kind, its input, its parser + validation | J-1a, J-P | ~600 |
 | J-1b2 | workbook: outbox (schema, insert in the result transactions, drainer), `wb_journal_units`, `wb_todos.seq`, solo task entries | J-1b1 | ~700 |
+| J-1n | display names (pool name), `person_name`, prompt file sync | J-1b2, NP-1 | ~250 |
 | J-1c | team task mirror through the outbox (`wb_journal_cursors`) | J-0a, J-1b2 | ~450 |
 | J-1d | git worktree, commit / push loop, `journal.push_projects`, `pdx journal path` | J-1a | ~550 |
 | J-1e | API, pin, `journal.changed`, `journal.v1`, device routes | J-1b2, J-1c | ~500 |
@@ -60,6 +61,13 @@ Every PR: TDD, one commit per task, `go test -race` only for the touched package
 - **T-1b2.2 Insert**: `SetPushLineV2` and `FinishSkippedV2`, for lead / solo entries, insert an outbox row `turn` (the `TodoResult` of this transaction) in their transaction; the journal job's result inserts an outbox row `journal` (events, ticks, roadmap) in the transaction that records it; new todos get `seq = MAX(seq)+1` for their conversation in the same transaction (the store's write transaction serialises openers).
 - **T-1b2.3 Drainer**: a goroutine (and a pass at start) takes undone rows whose entry is not `pending` (a `journal` row also waits for its turn's `turn` row to be done, so the order is kept); per row, under the unit's project mutex: resolve / register the unit (`wb_journal_units`; a team unit's project from the lead's cwd at first write), write in order — solo task entries (`task_new` 「#seq title」 for adds, `task_done` for dones; dropped → none; `tasks.md` rewritten from the conversation's todos), the exec / exec_done entry when the entry is `ok`, the events, the ticks (all ticked → unpinned), the roadmap statuses — then `done_at`. A file error leaves the row undone (retried with backoff, logged once per hour); the workbook entry is never affected.
 - Tests: a crash between finish and drain (row left undone) is written on the next pass, once (M: no outbox → lost); a re-write turn writes its events after the re-write finishes, with the final entry text (M: drain while pending → the pre-rewrite text); an orphan finish that later succeeds still drains; a `failed/store` entry drains its events without an exec entry; a skipped turn writes its events and ticks; concurrent todo inserts in one conversation get distinct `seq` (M: `MAX+1` outside the transaction → a unique violation); the migration backfills `seq` 1..n per conversation on a v2 DB.
+
+**J-1n — names** (after J-1b2 and the name pool NP-1; spec items 21–23)
+- `internal/journal`: `DisplayName(virtualName string) string` — the pool name capitalised when the virtual name ends in one (`ipeers.PoolNameOf`), else the virtual name without the host.
+- Daemon setting `[journal] person_name` (default `使用者`; mlab and air26 set `Wake` at the J-1e deploy).
+- Journal job input: `person_name`; `self_name` = `DisplayName`; peer prefixes in the turn text (`[mlab/purdex-3f-adam → …]`) rewritten to display names before the call; actors of `exec` / `exec_done` and task entries use display names.
+- `prompts/journal-v1.txt` updated to the prompt document's amended §1 (the file has never run in production: `Deps.Journal` is nil until J-1e), so no version bump.
+- Tests: `purdex-3f-adam` → `Adam`, an old name → itself without the host, the person's name in every place 使用者 was; the prefix rewrite; the prompt file equals the document's block (byte test).
 
 ## 6. J-1c — team task mirror
 

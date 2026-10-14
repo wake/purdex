@@ -139,6 +139,13 @@ export function KindChip({ e }: { e: Entry }) {
   )
 }
 
+// The person's name (spec v4 item 23) is highlighted wherever it appears.
+const PERSON = 'Wake'
+function PersonMark({ text }: { text: string }) {
+  const parts = text.split(PERSON)
+  return <>{parts.map((p, i) => (i === 0 ? p : [<span key={'p' + i} className="px-1 rounded font-semibold" style={{ background: 'rgba(255, 196, 0, 0.18)', color: '#ffd24d' }}>{PERSON}</span>, p]))}</>
+}
+
 function Row({ e, compact, hoverTask, onHoverTask, onTogglePin, selectedConfirm, onOpenConfirm }: Props & { e: Entry; compact?: boolean }) {
   const isConfirm = e.kind === 'confirm'
   const resolved = isResolved(e)
@@ -156,10 +163,10 @@ function Row({ e, compact, hoverTask, onHoverTask, onTogglePin, selectedConfirm,
       <div className="min-w-0 flex-1 pr-5">
         <div className="flex items-center gap-1.5 flex-wrap">
           <KindChip e={e} />
-          <span className="text-[10.5px] text-text-secondary break-words min-w-0">{e.actor}</span>
+          <span className="text-[10.5px] text-text-secondary break-words min-w-0"><PersonMark text={e.actor} /></span>
           {isConfirm && resolved && <span className="text-[10px] px-1 rounded bg-surface-hover text-text-muted">已答完</span>}
         </div>
-        <div className={`mt-0.5 leading-[17px] break-words ${compact ? 'line-clamp-2' : ''} ${resolved ? 'text-text-secondary' : 'text-text-primary'}`}>{e.text}</div>
+        <div className={`mt-0.5 leading-[17px] break-words ${compact ? 'line-clamp-2' : ''} ${resolved ? 'text-text-secondary' : 'text-text-primary'}`}><PersonMark text={e.text} /></div>
         {isConfirm && e.items && compact && (
           <div className="mt-0.5 text-[11px]" style={{ color: KIND_COLOR.confirm }}>已答 {e.items.filter((i) => i.done).length} / {e.items.length} 項</div>
         )}

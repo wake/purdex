@@ -36,6 +36,10 @@ The workbook view stacks 「目前狀況」, up to ~30 todos and several lists; 
 19. **Roadmap ownership**: the stages and descriptions are written by the lead agent (「目前所有 roadmap 或 phases 拆分都是我和你討論完後由你做的，所以統一由你進行」); **the 狀態 column is updated by Haiku** from the journal.
 20. **Journal, tasks and roadmap are markdown files.**
 
+21. *(2026-10-14, after the name pool)* **Seats appear by their pool name** in the journal — 「姓名池做好後，日誌中的 addr / peer id 就可以換成姓名例如 Adam」: a seat whose virtual name ends in a pool name shows as that name capitalised (`purdex-3f-adam` → **Adam**); a seat with an older name shows its virtual name without the host.
+22. **The person is named, not 「使用者」** — 「我是 Wake，別再用『使用者』」: the journal writes the person's name (**Wake**) wherever it would say 使用者 (actors, request `by`, texts). The name is one daemon setting (`[journal] person_name`, set to `Wake` on mlab and air26), never hard-coded.
+23. **The person's name is highlighted** in the journal so it is recognised at a glance (「可以把我的名字 highlight 以識別」).
+
 The name pool (session names instead of the ref suffix, user 2026-10-14) is a separate spec (§13).
 
 ## 3. Decided after the prototype (2026-10-14)
@@ -72,7 +76,7 @@ The name pool (session names instead of the ref suffix, user 2026-10-14) is a se
 
 - Haiku never invents task numbers: task kinds come from the task source; Haiku only writes the closing line when it has one.
 - A turn yields 0–6 entries (a quiet turn: none). Entries of one turn share its time and keep the order Haiku gave.
-- **Actor**: the seat's name (its pdx name; the name pool's later) for `exec`, `exec_done`; `A → B` for `request`, `comm`, `confirm` (`→ 使用者` when it is the person).
+- **Actor**: the seat's display name (item 21: `Adam`, or the virtual name without the host) for `exec`, `exec_done`; `A → B` for `request`, `comm`, `confirm`, with the person written as `person_name` (item 22: `Kenji → Wake`).
 - **Refs**: `#NNNN` (issue / PR), `PR #NNNN`, task numbers — links in the App.
 
 ### 5.2 待確認
@@ -108,11 +112,11 @@ The name pool (session names instead of the ref suffix, user 2026-10-14) is a se
 ```markdown
 ## 2026-10-14
 
-### 14:32 · 執行完成 · purdex-88-b8
+### 14:32 · 執行完成 · Kenji
 RA-2 已 merge：拿掉「不再詢問」、補上終端機指令核准的提示，額度說明改成暫停的說法。
 <!-- j id=wb:4812:1 kind=exec_done refs=#2829 -->
 
-### 14:40 · 待確認 · purdex-88-b8 → 使用者 📌
+### 14:40 · 待確認 · Kenji → Wake 📌
 - [x] 日誌檔要不要進 git
 - [ ] 單一 session 的任務從哪來
 <details><summary>原始提問</summary>
@@ -151,7 +155,7 @@ RA-2 已 merge：拿掉「不再詢問」、補上終端機指令核准的提示
 
 - Title bar: 「團隊」 (team tabs) and 「日誌」 (any Claude Code tab whose host has `journal.v1`) buttons, as v3.
 - **Layout** (left → right): team card (team tabs) with the **roadmap tab** under it — or the roadmap tab alone without a team; the **journal card**; the **tasks tab**. Roadmap and tasks open and close from the journal card's header. Narrow windows drop, in order: the tasks tab, the roadmap, the team card; the journal stays.
-- **Journal card**: header (unit name, role line, live dot, close); the pinned band; filters (Q-C; the active one clicked again clears it); the stream oldest at the top, newest at the bottom, a date divider per day; row = time, kind chip, actor, text, refs; a 待確認 row (no coloured left edge) shows its checkboxes (read-only — Haiku ticks them) and opens its detail **to the left** over the roadmap side; a row's menu pins / unpins.
+- **Journal card**: header (unit name, role line, live dot, close); the pinned band; filters (Q-C; the active one clicked again clears it); the stream oldest at the top, newest at the bottom, a date divider per day; row = time, kind chip, actor, text, refs; **the person's name is highlighted** wherever it appears in the actor or the text (item 23); a 待確認 row (no coloured left edge) shows its checkboxes (read-only — Haiku ticks them) and opens its detail **to the left** over the roadmap side; a row's menu pins / unpins.
 - Opens scrolled to the bottom; new entries append; pinned to the bottom while there, else 「↓ N 則新事件」; scrolling up loads older months.
 - **Tasks tab**: open tasks first, then done; hovering a `task_new` / `task_done` row highlights its task, and hovering a task highlights its rows.
 - **Roadmap tab**: the project's features, each a 階段 / 說明 / 狀態 table, live.
