@@ -33,6 +33,10 @@ type fakeLeaseDaemon struct {
 	pollList []resources.LeaseResponse
 	hold     bool
 	delCode  int
+	// delResp, when set, is the body of a DELETE that succeeds.
+	delResp *resources.LeaseResponse
+	// onDelete runs when a DELETE arrives (it must not touch the fake's state).
+	onDelete func()
 	// pollQueries is the raw query of each poll.
 	pollQueries []string
 }
@@ -78,7 +82,14 @@ func (f *fakeLeaseDaemon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			write(w, answer{status: code, body: resources.APIError{Error: resources.ErrNoLease}})
 			return
 		}
-		write(w, answer{body: resources.LeaseResponse{ID: leaseRow, State: resources.StateEnded, EndReason: resources.EndReleased}})
+		body := resources.LeaseResponse{ID: leaseRow, State: resources.StateEnded, EndReason: resources.EndReleased}
+		if f.onDelete != nil {
+			f.onDelete()
+		}
+		if f.delResp != nil {
+			body = *f.delResp
+		}
+		write(w, answer{body: body})
 	default:
 		f.mu.Unlock()
 		http.NotFound(w, r)
@@ -108,12 +119,17 @@ func driveLease(t *testing.T, ctx context.Context, d http.Handler, extra []daemo
 // test about attempt timeouts needs the real clock, not the fake one.
 func driveLeaseWith(t *testing.T, ctx context.Context, d http.Handler, extra []daemonclient.Option, args ...string) (int, string, string) {
 	t.Helper()
+	return driveLeaseEnv(t, ctx, d, nil, extra, args...)
+}
+
+func driveLeaseEnv(t *testing.T, ctx context.Context, d http.Handler, env map[string]string, extra []daemonclient.Option, args ...string) (int, string, string) {
+	t.Helper()
 	srv := httptest.NewServer(d)
 	defer srv.Close()
 	cfg := writeTestConfig(t, srv.URL, "admin-tok")
 	var stdout, stderr bytes.Buffer
 	opts := append([]daemonclient.Option{leadNoKeepAlive()}, extra...)
-	code := runLeaseCmd(ctx, append(append([]string{}, args...), "--config", cfg), fakeGetenv(nil), &stdout, &stderr, opts...)
+	code := runLeaseCmd(ctx, append(append([]string{}, args...), "--config", cfg), fakeGetenv(env), &stdout, &stderr, opts...)
 	return code, stdout.String(), stderr.String()
 }
 

@@ -29,11 +29,11 @@ import (
 )
 
 const leaseUsage = "usage: pdx lease ls [--json] [--config <path>]\n" +
-	"       pdx lease acquire (--kind <k> | --weight <n>) [--wait <dur>] [--session <sid>] [--tool-use <id>] [--holder-pid <pid>] [--holder-start <text>] [--client-id <uuid>] [--config <path>]\n" +
-	"       pdx lease run (--kind <k> | --weight <n>) [--wait <dur>] [--client-id <uuid>] [--config <path>] -- <command…>\n" +
+	"       pdx lease acquire (--kind <k> | --weight <n>) [--queue | --ask | --wait [<dur>]] [--command <text>] [--cwd <dir>] [--session <sid>] [--tool-use <id>] [--holder-pid <pid>] [--holder-start <text>] [--client-id <uuid>] [--config <path>]\n" +
+	"       pdx lease run (--kind <k> | --weight <n>) [--queue | --ask | --wait [<dur>]] [--command <text>] [--client-id <uuid>] [--config <path>] -- <command…>\n" +
 	"       pdx lease report [--since 24h] [--json] [--config <path>]   (since: a duration such as 90m or 24h, or days as 7d; at most 14d)\n" +
-	"       pdx lease release (<id> | --client-id <uuid>) [--json] [--config <path>]\n" +
-	"       (--wait: how long to queue before being let in anyway; default the host setting deadline_s, 5 minutes unless changed. acquire holds for --holder-pid, default the parent of pdx: a bare acquire in a subshell or $(…) names a process that exits at once. Give --holder-pid a long-lived pid, or use pdx lease run.)"
+	"       pdx lease release (<id> | --client-id <uuid>) [--notice] [--json] [--config <path>]\n" +
+	"       (--queue: a busy host answers at once with your place (exit 15); --ask: for a background command, wait for the answer to the question; --wait: wait for room (a duration is accepted and ignored). With none of them PDX_LEASE_CALLER decides: fg queue, bg ask, else wait. acquire holds for --holder-pid, default the parent of pdx: a bare acquire in a subshell or $(…) names a process that exits at once. Give --holder-pid a long-lived pid, or use pdx lease run.)"
 
 // leaseAttemptTimeout bounds one request to the daemon; a snapshot is a read
 // of memory, so a daemon slower than this is not answering.
@@ -71,11 +71,11 @@ func runLeaseCmd(ctx context.Context, args []string, getenv func(string) string,
 		case "ls":
 			return runLeaseLs(ctx, args[1:], stdout, stderr, clientOpts)
 		case "acquire":
-			return runLeaseAcquire(ctx, args[1:], stdout, stderr, clientOpts)
+			return runLeaseAcquire(ctx, args[1:], getenv, stdout, stderr, clientOpts)
 		case "release":
 			return runLeaseRelease(ctx, args[1:], stdout, stderr, clientOpts)
 		case "run":
-			return runLeaseRun(ctx, args[1:], stdout, stderr, clientOpts)
+			return runLeaseRun(ctx, args[1:], getenv, stdout, stderr, clientOpts)
 		case "report":
 			return runLeaseReport(ctx, args[1:], stdout, stderr, clientOpts)
 		}
