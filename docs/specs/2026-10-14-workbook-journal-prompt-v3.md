@@ -1,4 +1,4 @@
-# Workbook journal — journal prompt (journal_ver 1; round 3, being measured: J-P)
+# Workbook journal — journal prompt (journal_ver 1; round 4, being measured: J-P)
 
 > **Two calls per leader / solo turn** (user 2026-10-14, 「Ok 乙」): the workbook's turn job stays **v2 exactly** (`docs/specs/2026-10-10-session-workbook-prompt-v2.md`, push timing unchanged); right after its result is applied, a separate **journal job** runs with the system prompt below. A member's turn has no journal job. The re-write and refresh prompts are unchanged.
 > How the outputs become entries (daemon, spec v4 §5.1): the turn job's `entry` → one `exec` entry, or `exec_done` when `thing_done` (not both; none when `skip`); each journal job `events` item → one `request` / `comm` / `confirm` entry; `task_new` / `task_done` come from the task source, never from a model.
@@ -23,13 +23,13 @@ events 每一則是下面三種之一：
 - comm：通知、回報、知會，不是在要求什麼，也不需要對方回覆。
   例：1f 通知 734 已部署 → {"kind":"comm","from":"1f","to":"88","text":"1f 通知 alpha.734 已部署到兩台，可以請使用者真機驗。"}
 - confirm：這個 session 這一輪**最後的回覆**裡，留給使用者回答或決定、到這一輪結束都還沒得到回答的問題。一則訊息只寫一則 confirm。
-  - items：**回覆裡每一個要使用者回答或決定的問題都要有一個 item**——編號題、標了「最優先」的題、附「我的提議」要使用者同意的題、最後補問的小問題都算；每個 ≤ 30 字，照提問順序。**回覆結尾有「要你決定」「請你邊看邊決定」「還在等你」之類的清單時，即使前面是很長的進度報告，也一定要寫 confirm，清單裡每一條都是 item。寫完回頭數一次：item 數要和問題數一樣。**
-  - detail_start：照抄提問段落**開頭的 10～20 個字**，一字不差（系統會從這裡截到回覆結尾當作原文，所以不要改寫）。
+  - items：**只能來自這一輪 assistant_text 裡的問題，不要重抄 open_confirms 裡的舊題**；回覆只是複述還在等的事、沒有新的提問時，不要寫 confirm。**回覆裡每一個要使用者回答或決定的問題都要有一個 item**——編號題、標了「最優先」的題、附「我的提議」要使用者同意的題、最後補問的小問題都算；每個 ≤ 30 字，照提問順序。**回覆結尾有「要你決定」「請你邊看邊決定」「還在等你」之類的清單時，即使前面是很長的進度報告，也一定要寫 confirm，清單裡每一條都是 item。寫完回頭數一次：item 數要和問題數一樣。**
+  - detail_start：照抄提問段落**開頭的 10～20 個字**，一字不差，連 `**`、`#` 這類符號也照抄（系統會從這裡截到回覆結尾當作原文，所以不要改寫）。
   例：回覆最後是「要你決定：1. 日誌檔要不要進 git？2. 按鈕上要不要數字？另外，篩選要不要加一類？」→ {"kind":"confirm","from":"88","to":"使用者","text":"日誌規格還有三件事要使用者決定。","items":["日誌檔要不要進 git","按鈕上要不要數字","篩選要不要加一類"],"detail_start":"要你決定：1. 日誌檔要不要進 git"}
 
 寫 events 的規則：
 - 只寫這一輪發生的事，舊的不要重寫。每輪 0 到 4 則；沒有就給空陣列。
-- `[pdx team]` 開頭的系統通知不要寫成 events。
+- turn.user_prompt 開頭是 `[pdx team]` 時，events 一律是空陣列，不要改寫成 comm 或 request。
 - assistant_text 裡預告「接下來要做」的事，還沒發生，不要寫成 events。
 - **from、to 只能填人名或 session 名（例如 53-pe、1f、88）或「使用者」，不要填主機名（例如 mlab、air26）；寫到這個 session 自己一律用 self_name。**
 - text 一句話、≤ 60 字，主詞寫清楚（誰對誰、要什麼或說什麼）。繁體中文，PR 編號、版本、指令名保留原文。不用「你」「我」。
@@ -40,6 +40,7 @@ events 每一則是下面三種之一：
 confirm_done：逐筆看 open_confirms，**只勾這一則 turn.user_prompt 真的回答到的**，把 n 放進陣列。
 - 使用者常用編號回答（「1 可以、2 乙」）：編號指的是**最近一次提問（asked 最大的那組）裡的第幾題（idx）**，不是 n。
 - 給了答案、選了選項、說「可以」「ok」，或用自己的話決定、否決、改了做法，都算回答。**使用者反駁提議（「應該有辦法…才對」）、直接給新數值或新指示（「用 850+ 看看」），或「可以，」後面接著下一步要求，都表示對最近一次提問的那一題做了決定，要勾。**
+- **一句回答可以同時回答最近一次提問裡的好幾題**（例如一句「可以」回答「文字這樣寫可以嗎？分界點用 620px 可以嗎？」兩題），每一題都要勾。使用者說「沒有了」「看到了」「好了」「的確沒有了」，也算回答了上一則請他確認的那一題。
 - 更早的提問這一則沒提到，就不要勾；拿不準就不勾。
   例：open_confirms 有 {n:7, asked:3, idx:1, "日誌檔要不要進 git"}、{n:8, asked:3, idx:2, "按鈕上要不要數字"}、{n:2, asked:1, idx:1, "姓名池名單"}，使用者說「1 可以，2 先不要」→ confirm_done [7, 8]（n:2 是更早的提問，沒被提到）。
 
@@ -66,7 +67,8 @@ confirm 的欄位是 kind、from、to、text、items、detail_start；request �
 
 - Round 1 (2026-10-14, one call: v2 + journal block; 15 leader + 15 solo turns): classification 13/15 and 15/15; confirm items exact 4/6 (leader) and 7/7 (solo), detail verbatim 3/8 and 6/7; confirm_done wrong in both lanes (leader 15 ticked 5 items of older asks; solo missed answers given as 「可以」 and as a pushback); roadmap set 進行中 for work that was only a prototype; no invented task numbers; entry avg 96 / 95, push ≤ 40, no parse failure; latency p50 14.0 s / 11.6 s.
 - Round 2 (one call; item count check, `detail_start`, `asked` / `idx`, 「only this message」, stricter roadmap, `self_name`): classification 14/15 and 15/15; confirm items 7/8 and 7/7 (leader 13: a long report ending in a 5-item list gave no confirm); `detail_start` found verbatim 7/7 and 7/7; no false ticks; solo missed ticks on a pushback, on 「可以，＋next step」 and on a new value (3 turns); roadmap false changes 0; `to` written as the host name twice; latency p50 15.0 s / 11.2 s vs **v2 alone 7.1 s on the same host (load ≈ 21)** — the journal block doubled the call → the user chose two calls.
-- Round 3 = this text: a journal-only job (v2 untouched), the closing-list rule for confirms, the pushback / new-value / 「可以，」 tick rule, names only (no host names).
+- Round 3 (journal-only job; closing-list rule, pushback / new value / 「可以，」 ticks, names only): classification 13/15 and 15/15; confirm items 8/10 and 7/7 (leader 13 fixed: 5/5; leader 7 re-listed old items, leader 2 missed a closing 「我在等的事」 list); `detail_start` verbatim 8/9 and 7/7 (leader 13 dropped `**`); false ticks 0 / 0; missed ticks 1 (leader 10) and 2 (solo 7 「的確沒有了」, solo 8 one 「可以」 for two questions); leader 11 re-asked the same 4 questions (duplicate confirm) and paraphrased a `[pdx team]` notice as comm; no task kinds, no invented numbers, no host names; latency (load ≈ 22–26) journal p50 / p90 wall 21.0 / 39.9 s vs v2 18.9 / 21.2 s (leader; `open_confirms` grew past 40 with stale duplicates), solo 15.4 / 18.3 vs 19.2 / 28.5.
+- Round 4 = this text + daemon rules (plan T-1b1.3): items only from this turn's reply, no confirm for a restatement; `**` / `#` kept in `detail_start`; `[pdx team]` → no events; one answer can tick several items, 「沒有了」-style statements count. The daemon also drops a `[pdx team]` turn's events, skips confirm items whose normalised text is already open, and matches `detail_start` ignoring markdown emphasis.
 
 ## 3. Pass bar for J-P (per lane of 15 turns, judged by hand against the transcript)
 
@@ -75,6 +77,6 @@ confirm 的欄位是 kind、from、to、text、items、detail_start；request �
 - `confirm_done`: no false tick; at most 1 missed tick per lane.
 - No task number invented in any event; no task kind produced; no host name in `from` / `to`.
 - No parse failure.
-- Latency: the journal job alone p50 ≤ the v2 job's on the same host at the same time (it runs after the push, so it never delays one).
+- Latency: the journal job runs after the push, so it never delays one; it must finish within its timeout (60 s) at p90 on a loaded host.
 
 A miss → change the prompt, re-run the lane; the rounds go in the log above.
