@@ -16,6 +16,10 @@ const (
 	JobTurn    = "turn"
 	JobRewrite = "rewrite"
 	JobRefresh = "refresh"
+
+	// JobJournal is the journal job (spec §9): a second call after a leader's or solo session's turn job. It is a
+	// daemon-side kind only: on the wire it goes as "turn" (see Job.MarshalJSON), so every deployed mod runs it.
+	JobJournal = "journal"
 )
 
 // ErrNotLeased: the result's job is not leased to that stream (it ran out, was never handed out, was answered already,
@@ -44,7 +48,7 @@ type Fork struct {
 	TimeoutMS int    `json:"timeout_ms"`
 }
 
-// Job is what Next hands out: turn and re-write jobs carry a Complete, a refresh job carries a Fork instead.
+// Job is what Next hands out: turn, re-write and journal jobs carry a Complete, a refresh job carries a Fork instead.
 type Job struct {
 	ID       string
 	Kind     string
@@ -52,8 +56,13 @@ type Job struct {
 	Fork     *Fork
 }
 
-// MarshalJSON writes {id, kind, complete} or {id, kind, fork}: the wire kinds are exactly the spec's three.
+// MarshalJSON writes {id, kind, complete} or {id, kind, fork}: the wire kinds are exactly the spec's three. A journal job
+// is sent as a turn: the mod runs turn and re-write jobs through $.model.complete and refuses any other kind, and the
+// daemon (whose lease keeps the real kind) is the only one that tells them apart.
 func (j Job) MarshalJSON() ([]byte, error) {
+	if j.Kind == JobJournal {
+		j.Kind = JobTurn
+	}
 	if j.Kind == JobRefresh {
 		return json.Marshal(struct {
 			ID   string `json:"id"`
@@ -105,6 +114,12 @@ type job struct {
 	out   Output // thing / push / thing_done already written at the push line
 	usage Usage  // the tokens and time of every call of this entry so far
 	lat   int64
+
+	// then is the journal job that follows once this entry's turn work is done: carried by a re-write job, so the
+	// journal job runs after the re-write (journal_job.go).
+	then *job
+	// jctx is what a journal job's answer is checked against, filled when its input is built at hand-out.
+	jctx JournalContext
 }
 
 type lease struct {
@@ -190,6 +205,10 @@ func isFresh(j *job) bool { return j.kind == JobTurn && j.attempt == 1 }
 
 // finishUnrun ends the entry of a job that never ran (or whose result will never come) as skipped or failed.
 func (e *Engine) finishUnrun(j *job, state, reason string) {
+	if j.kind == JobJournal { // the entry is settled already: a journal job that never ran changes nothing
+		e.d.Logf("[workbook] a journal job did not run (%s)", reason)
+		return
+	}
 	if j.kind == JobRefresh && state == StateSkipped {
 		state = StateFailed // a refresh was asked for: it fails (stopped), it is not skipped
 	}
@@ -273,8 +292,11 @@ func (e *Engine) Next(ctx context.Context, stream, sessionID string, wait time.D
 				continue
 			}
 			timeout := completeTimeout
-			if j.kind == JobRefresh {
+			switch j.kind {
+			case JobRefresh:
 				timeout = refreshTimeout
+			case JobJournal:
+				timeout = journalTimeout
 			}
 			l = &lease{job: j, stream: stream, timeoutMS: timeout,
 				expires: e.d.Now().Add(time.Duration(timeout)*time.Millisecond + leaseSlack)}
@@ -290,7 +312,7 @@ func (e *Engine) Next(ctx context.Context, stream, sessionID string, wait time.D
 			out, fork, ids, err := e.buildCall(handed, conv)
 			if err != nil {
 				e.d.Logf("[workbook] build a job: %v", err)
-				e.release(l, nil)
+				e.release(l, followAfterLoss(handed))
 				e.finishUnrun(handed, StateFailed, ReasonAPI)
 				continue
 			}
@@ -360,6 +382,9 @@ func (e *Engine) buildCall(j *job, conv string) (Complete, *Fork, map[int]int64,
 // a job is handed out only after the one before it was finished.
 func (e *Engine) buildComplete(j *job, conv string) (Complete, map[int]int64, error) {
 	c := Complete{Model: "haiku", MaxTokens: 4096, Effort: "low", TimeoutMS: completeTimeout}
+	if j.kind == JobJournal {
+		return e.buildJournal(j, c)
+	}
 	if j.kind == JobRewrite {
 		c.System = []SystemBlock{{Text: RewritePrompt}}
 		c.Prompt = j.entry
@@ -444,7 +469,7 @@ func (e *Engine) reap() {
 	for _, l := range lost {
 		e.d.Logf("[workbook] a job ran out of its lease (kind %s)", l.job.kind)
 		e.finishUnrun(l.job, StateFailed, ReasonLost)
-		e.release(l, nil)
+		e.release(l, followAfterLoss(l.job))
 		e.inflight.Done()
 	}
 }
