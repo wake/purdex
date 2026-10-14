@@ -138,6 +138,18 @@ func TestNested_ReplayWins(t *testing.T) {
 	assert.Empty(t, again.Nested)
 }
 
+// A request that would be refused for its holder start is refused when it sits below an outer run too (codex R1:
+// the nested answer must not skip the check every other process-scope request gets).
+func TestNested_BadHolderStartIsStillRefused(t *testing.T) {
+	f := newNestedFix(t)
+	outer := decodeLease(t, f.postAs(newCID(), pidA, resources.CallQueue, "pnpm check --fast"))
+	require.Equal(t, resources.StateHeld, outer.State)
+	rec := f.do(http.MethodPost, "/api/resources/leases", resources.LeaseRequest{
+		ClientID: newCID(), Kind: "build", HolderPID: 1100, HolderStart: "", Mode: resources.CallQueue, Command: "x", Cwd: "/work"})
+	assert.Equal(t, http.StatusBadRequest, rec.Code, rec.Body.String())
+	assert.Zero(t, f.nestedRuns(outer.ID))
+}
+
 func TestNested_ProbeFailureIsNotReady(t *testing.T) {
 	f := newNestedFix(t)
 	outer := decodeLease(t, f.postAs(newCID(), pidA, resources.CallQueue, "pnpm check --fast"))
