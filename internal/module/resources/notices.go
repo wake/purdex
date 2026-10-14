@@ -211,10 +211,13 @@ func (m *Module) deliverNotice(ctx context.Context, p positionRow) time.Duration
 // noticeOutcome applies the queue's answer (plan §2.10 "Outcomes").
 func (m *Module) noticeOutcome(p positionRow, res promptq.Result) time.Duration {
 	nowMS := m.now().UnixMilli()
-	set := func(result string, sentAt int64) {
+	// set records a result; false when the write failed (the caller then waits for its next try, never a tight loop).
+	set := func(result string, sentAt int64) bool {
 		if _, err := m.store.SetNoticeResult(p.ID, p.NoticeKind, p.NoticeDueAt, result, sentAt); err != nil {
 			m.logf("[resources] notices: record %s: %v", p.ID, err)
+			return false
 		}
+		return true
 	}
 	switch res.Status {
 	case promptq.Accepted:
@@ -235,7 +238,9 @@ func (m *Module) noticeOutcome(p positionRow, res promptq.Result) time.Duration 
 			}
 			// the position moved on while the notice was out: only the result is left to record
 		}
-		set(promptq.Accepted, nowMS)
+		if !set(promptq.Accepted, nowMS) {
+			return noticeRetryOther
+		}
 		return 0
 	case promptq.Busy, promptq.Timeout:
 		return noticeRetryBusy // never sent: the same key may be sent again
@@ -248,7 +253,9 @@ func (m *Module) noticeOutcome(p positionRow, res promptq.Result) time.Duration 
 		return noticeRetryBusy
 	case promptq.Dropped:
 		if res.Reason == "session_changed" {
-			set(noticeSessionChanged, 0) // the /clear case: liveness ends the position
+			if !set(noticeSessionChanged, 0) { // the /clear case: liveness ends the position
+				return noticeRetryOther
+			}
 			return 0
 		}
 		set("dropped:"+res.Reason, 0)

@@ -442,6 +442,27 @@ func TestNotices_AFailedClearBacksOff(t *testing.T) {
 	assert.True(t, waiting, "the slot waits for its next try")
 }
 
+// An accepted non-offer notice whose result cannot be written waits for the timer too: the next pass at once does not
+// try again, and the one after the wait does.
+func TestNotices_AnAcceptedResultThatCannotBeWrittenBacksOff(t *testing.T) {
+	f := newPosFix(t)
+	n := f.outbox(status(promptq.Accepted))
+	posID, _ := f.queuedThenOffered(newCID(), pidA, "go build")
+	f.endWithSlot(posID, f.nowMS(), "cancelled")
+	_, err := f.m.store.db.Exec(`CREATE TRIGGER no_write BEFORE UPDATE OF notice_result ON resource_positions
+		BEGIN SELECT RAISE(ABORT, 'disk full'); END`)
+	require.NoError(t, err)
+	f.notices()
+	f.notices()
+	assert.Len(t, n.tries(), 1, "no second try before the wait")
+	_, err = f.m.store.db.Exec(`DROP TRIGGER no_write`)
+	require.NoError(t, err)
+	f.advance(noticeRetryOther)
+	f.notices()
+	assert.Len(t, n.tries(), 2)
+	assert.Equal(t, promptq.Accepted, f.position(posID).NoticeResult)
+}
+
 // When the window cannot be recorded after an accepted offer, the slot stays pending: the next try (same key, so the
 // queue answers from its ledger) records it, instead of leaving an offer the session got with no window.
 func TestNotices_AcceptedOfferWithoutAWindowIsTriedAgain(t *testing.T) {
