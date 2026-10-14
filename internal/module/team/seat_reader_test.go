@@ -124,3 +124,22 @@ func TestLastTurn_IgnoresAFailedTurnEnd(t *testing.T) {
 		t.Fatalf("a failed turn end was recorded: %q @%d", sum, at)
 	}
 }
+
+func TestPredecessorOf(t *testing.T) {
+	s := openTestStore(t)
+	var _ team.PredecessorReader = s
+	if _, _, ok, err := s.PredecessorOf("b"); err != nil || ok {
+		t.Fatalf("no lineage: ok=%v err=%v", ok, err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO session_lineage (session_id, predecessor_session_id, predecessor_ref, op_id, at) VALUES ('b', 'a', '_old000', 'op', 1234)`); err != nil {
+		t.Fatal(err)
+	}
+	prev, at, ok, err := s.PredecessorOf("b")
+	if err != nil || !ok || prev != "a" || at != 1234 {
+		t.Fatalf("got %q %d %v %v", prev, at, ok, err)
+	}
+	// only the new side is a key: the predecessor itself has none
+	if _, _, ok, _ := s.PredecessorOf("a"); ok {
+		t.Fatal("a predecessor is not its own successor")
+	}
+}

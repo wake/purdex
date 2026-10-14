@@ -62,7 +62,10 @@ type Module struct {
 	aborts   AbortSource      // nil: a mod interrupt is not seen in the model
 	bg       BackgroundSource // nil: the header carries no background work
 	maxBody  int              // tests lower it
-	subSem   chan struct{}
+	// optional: where a session's predecessor is read from (a relay's lineage, a recorded /clear); nil answers none
+	relayPred team.PredecessorReader
+	clearPred agent.PredecessorReader
+	subSem    chan struct{}
 
 	// typed submit (K-1a-2)
 	td         *typedDeps   // nil: the daemon's services; tests inject
@@ -171,6 +174,12 @@ func (m *Module) Init(c *core.Core) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return fmt.Errorf("conversation: home directory: %w", err)
+	}
+	if tsvc, ok := c.Registry.Get(team.PredecessorReaderKey); ok {
+		m.relayPred, _ = tsvc.(team.PredecessorReader)
+	}
+	if asvc, ok := c.Registry.Get(agent.PredecessorReaderKey); ok {
+		m.clearPred, _ = asvc.(agent.PredecessorReader)
 	}
 	m.cache = convfeed.NewCache(convfeed.CacheOptions{})
 	m.resolver = &convfeed.Resolver{Home: home, Owners: ownerAdapter{owners}, Index: m.index, ExecOwners: execAdapter{m}}
