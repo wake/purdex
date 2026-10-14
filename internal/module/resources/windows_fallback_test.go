@@ -35,6 +35,26 @@ func TestSweep_UserAlertOfferPassesAt60s(t *testing.T) {
 	assert.Equal(t, resources.PosOffered, f.position(posB).State)
 }
 
+// The 60 s count from the moment the fallback told the person, not from the offer: a fallback that happens 100 s
+// after the offer must not be passed on the next sweep, before the alert has had its minute (codex R2).
+// (M: count from offered_at.)
+func TestSweep_UserAlertMinuteCountsFromTheFallback(t *testing.T) {
+	f := newPosFix(t)
+	posA, _ := f.offeredWithAWaiter()
+	f.advance(100 * time.Second)
+	f.setNoticeResult(posA, noticeUserAlert)
+	_, err := f.m.store.db.Exec(`UPDATE resource_positions SET notice_sent_at = ? WHERE id = ?`, f.nowMS(), posA)
+	require.NoError(t, err)
+	f.sweep()
+	assert.Equal(t, resources.PosOffered, f.position(posA).State, "just alerted: holds")
+	f.advance(resources.NoticeFallbackPass - time.Millisecond)
+	f.sweep()
+	assert.Equal(t, resources.PosOffered, f.position(posA).State, "59.999 s after the alert")
+	f.advance(time.Millisecond)
+	f.sweep()
+	assert.Equal(t, resources.PosQueued, f.position(posA).State, "60 s after the alert")
+}
+
 // Any other result (or none) still waits the 3 minutes.
 func TestSweep_UndeliveredOfferStillWaits3Min(t *testing.T) {
 	f := newPosFix(t)

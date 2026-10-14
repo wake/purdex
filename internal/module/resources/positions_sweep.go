@@ -111,7 +111,7 @@ func (m *Module) sweepPositions(now time.Time, view procView, viewAt time.Time) 
 			// The window counts from delivery (Q18): a delivered offer nobody used lapses.
 			m.endPosition(p, nowMS, endPosition{Reason: resources.EndNoAnswer, From: []string{resources.PosOffered},
 				WindowGuard: p.WindowUntil, Notice: m.cancelNotice(p)})
-		case p.State == resources.PosOffered && p.DeliveredAt == 0 && nowMS >= p.OfferedAt+undeliveredLimit(p).Milliseconds():
+		case p.State == resources.PosOffered && p.DeliveredAt == 0 && nowMS >= undeliveredPassAt(p):
 			// Never delivered in 3 minutes (60 s when the notice could only be told
 			// to the person): the offer passes to the next waiter, the position
 			// keeps its place and is not ended (P15).
@@ -131,14 +131,17 @@ func (m *Module) sweepPositions(now time.Time, view procView, viewAt time.Time) 
 	m.writePendingCosts() // once per sweep, after every settlement of this tick
 }
 
-// undeliveredLimit is how long an offer that was never delivered holds the host:
-// the whole window, or NoticeFallbackPass when the fallback could only tell the
-// person (the session has no mod to hear the offer).
-func undeliveredLimit(p positionRow) time.Duration {
+// undeliveredPassAt is when an offer that was never delivered passes: the whole
+// window after the offer, or NoticeFallbackPass after the moment the fallback told
+// the person (the session has no mod to hear the offer). The minute counts from
+// that moment, not from the offer: a fallback made late must not pass the offer
+// before the alert has had its minute. A row written without the time (sent_at 0)
+// counts from the offer.
+func undeliveredPassAt(p positionRow) int64 {
 	if p.NoticeResult == noticeUserAlert {
-		return resources.NoticeFallbackPass
+		return max(p.OfferedAt, p.NoticeSentAt) + resources.NoticeFallbackPass.Milliseconds()
 	}
-	return resources.PositionWindow
+	return p.OfferedAt + resources.PositionWindow.Milliseconds()
 }
 
 // endPosition ends a position through the store and logs a win.
