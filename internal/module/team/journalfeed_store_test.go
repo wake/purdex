@@ -312,6 +312,43 @@ func TestJournalFeed_ReportFieldsAndMissingFields(t *testing.T) {
 	}
 }
 
+// A row whose JSON document is unreadable does not stop the feed: the cursor cannot pass a row that errors, so every later
+// row would wait behind it forever. The row is returned with that document read as empty, its other fields intact, and the
+// rows around it are unaffected. Mutation: return the decode error → the page is an error and the test goes red.
+func TestJournalFeed_AnUnreadableJSONColumnDoesNotStopTheFeed(t *testing.T) {
+	s, m := reportFixture(t)
+	mustCreateTask(t, s, newTask(tTeamA, m, "second", 11))
+	mustInsertReport(t, s, newReport(tTeamA, 1, m, team.ReportReady, 1, 20))    // PR 12
+	mustInsertReport(t, s, newReport(tTeamA, 1, m, team.ReportQuestion, 2, 21)) // needs lead
+	mustInsertReport(t, s, newReport(tTeamA, 1, m, team.ReportReady, 3, 22))
+	if _, err := s.db.Exec(`UPDATE tasks SET metadata_json = '{not json' WHERE seq = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE reports SET fields_json = 'not json' WHERE id = ?`, reportID(2)); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err := s.TasksChangedAfter(team.TaskCursor{}, 10)
+	if err != nil || len(tasks) != 2 {
+		t.Fatalf("tasks = %+v err=%v, want both rows", tasks, err)
+	}
+	if tasks[0].Seq != 2 || tasks[1].Seq != 1 { // seq 2 was last updated at 11, seq 1 at 22
+		t.Fatalf("task order = %d, %d", tasks[0].Seq, tasks[1].Seq)
+	}
+	if bad := tasks[1]; bad.Subject != "work" || bad.MetadataPRs != nil || bad.OwnerKey != m {
+		t.Errorf("the task with unreadable metadata = %+v, want its basic fields and no PRs", bad)
+	}
+	reports, err := s.ReportsAfter(0, 0, 10)
+	if err != nil || len(reports) != 3 {
+		t.Fatalf("reports = %+v err=%v, want all three", reports, err)
+	}
+	if reports[0].PR != 12 || reports[2].PR != 12 {
+		t.Errorf("the readable reports lost their PR: %+v %+v", reports[0], reports[2])
+	}
+	if bad := reports[1]; bad.ID != reportID(2) || bad.Kind != "question" || bad.Summary == "" || bad.Needs != "" || bad.PR != 0 {
+		t.Errorf("the report with unreadable fields = %+v, want its basic fields and zero needs/pr", bad)
+	}
+}
+
 // TeamInfo answers the label and the lead's CURRENT session: a lead that relayed shows the new one.
 // Mutation: read the lead from team_members / a cached value → the old session answers.
 func TestJournalFeed_TeamInfoFollowsALeadRelay(t *testing.T) {

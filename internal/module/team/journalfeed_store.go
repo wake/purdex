@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -43,7 +44,10 @@ func (s *Store) TasksChangedAfter(c team.TaskCursor, limit int) ([]team.TaskChan
 		}
 		var meta team.TaskMetadata
 		if err := json.Unmarshal([]byte(metaJSON), &meta); err != nil {
-			return nil, fmt.Errorf("journal feed: decode metadata_json of task %s/%d: %w", t.TeamID, t.Seq, err)
+			// An unreadable document must not stop the feed: the cursor cannot pass the row, so every later task would wait
+			// behind it. The PRs read as none; the rest of the row is intact.
+			log.Printf("[team] journal feed: metadata_json of task %s/%d is unreadable (%v); its PRs read as none", t.TeamID, t.Seq, err)
+			meta = team.TaskMetadata{}
 		}
 		t.MetadataPRs = meta.PRs
 		out = append(out, t)
@@ -81,7 +85,9 @@ func (s *Store) ReportsAfter(afterRowID, sinceMS int64, limit int) ([]team.Repor
 		}
 		var f reportFields
 		if err := json.Unmarshal([]byte(fieldsJSON), &f); err != nil {
-			return nil, fmt.Errorf("journal feed: decode fields_json of report %s: %w", r.ID, err)
+			// As for a task: needs and pr read as none, so one bad row does not hold back the reports behind it.
+			log.Printf("[team] journal feed: fields_json of report %s is unreadable (%v); its needs and pr read as none", r.ID, err)
+			f = reportFields{}
 		}
 		r.Needs, r.PR = f.Needs, f.PR
 		out = append(out, r)
