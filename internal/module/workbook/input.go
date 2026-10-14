@@ -74,23 +74,7 @@ func BuildTurnInput(src TurnSource) (prompt string, ids map[int]int64, err error
 	}
 	in.OpenTodos, ids = numberTodos(src.Open)
 
-	var users []string
-	for _, it := range src.Turn.Items {
-		switch {
-		case it.User != nil:
-			users = append(users, it.User.Text)
-		case it.AgentText != nil && strings.TrimSpace(it.AgentText.Markdown) != "":
-			in.Turn.AssistantText = it.AgentText.Markdown // the session's last words of the turn
-		case it.Step != nil && len(in.Turn.Tools) < maxTools:
-			tool := it.Step.Tool
-			if s := strings.TrimSpace(it.Step.Summary); s != "" {
-				tool += ": " + s
-			}
-			in.Turn.Tools = append(in.Turn.Tools, redact.String(tool))
-		}
-	}
-	in.Turn.UserPrompt = cutEllipsis(redact.String(strings.Join(users, "\n")), maxUserPrompt)
-	in.Turn.AssistantText = cutEllipsis(redact.String(in.Turn.AssistantText), maxAssistantText)
+	in.Turn, _ = buildTurnPart(src.Turn)
 
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -99,6 +83,33 @@ func BuildTurnInput(src TurnSource) (prompt string, ids map[int]int64, err error
 		return "", nil, fmt.Errorf("build workbook input: %w", err)
 	}
 	return strings.TrimSuffix(buf.String(), "\n"), ids, nil
+}
+
+// buildTurnPart is the turn text a job sends (shared by the turn job and the journal job: they see the same words).
+// fullReply is the session's last words of the turn, redacted and not cut: the journal job cuts a confirm's detail
+// from it.
+func buildTurnPart(t convmodel.Turn) (part turnPart, fullReply string) {
+	part.Tools = []string{}
+	var users []string
+	var reply string
+	for _, it := range t.Items {
+		switch {
+		case it.User != nil:
+			users = append(users, it.User.Text)
+		case it.AgentText != nil && strings.TrimSpace(it.AgentText.Markdown) != "":
+			reply = it.AgentText.Markdown // the session's last words of the turn
+		case it.Step != nil && len(part.Tools) < maxTools:
+			tool := it.Step.Tool
+			if s := strings.TrimSpace(it.Step.Summary); s != "" {
+				tool += ": " + s
+			}
+			part.Tools = append(part.Tools, redact.String(tool))
+		}
+	}
+	fullReply = redact.String(reply)
+	part.UserPrompt = cutEllipsis(redact.String(strings.Join(users, "\n")), maxUserPrompt)
+	part.AssistantText = cutEllipsis(fullReply, maxAssistantText)
+	return part, fullReply
 }
 
 // numberTodos numbers the first 30 open todos from 1 for one job and returns the job's n -> id map.
