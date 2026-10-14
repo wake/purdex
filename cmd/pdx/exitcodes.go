@@ -14,8 +14,9 @@ const (
 	ExitRefused      = 13 // refused by team rules: request_open, later already_lead …
 	ExitMemberFailed = 14 // the member did not start or did not respond (P4+)
 	// ExitQueued: `pdx lease acquire` / `run` did not get the lease and did not
-	// run the command: the request is queued (parked, its place kept) or was
-	// replaced by a newer call. Not a failure: run the same command again later.
+	// run the command: the request is queued (its place kept; the session is told when
+	// it is its turn), an ask request ended without running, or a newer call replaced
+	// it. Not a failure: wait for the notice.
 	ExitQueued      = 15
 	ExitUnavailable = 20 // the daemon stayed unreachable through the 30 s grace
 	ExitUnsupported = 21 // the daemon does not have this route (plain 404)
