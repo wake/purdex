@@ -14,9 +14,13 @@ type HostRaw struct {
 	MemBytes uint64
 	// PageSize and the page counts come from vm_stat.
 	PageSize, Free, Inactive, Speculative uint64
-	Pressure                              int // kern.memorystatus_vm_pressure_level; 0 unknown
-	MemorystatusLevel                     int // kern.memorystatus_level; -1 unknown
-	PcpuSum                               float64
+	// Pageouts and Swapouts are vm_stat's running counters (pages written out since boot); PageCounters says both lines were
+	// there. A reader takes a rate from the difference of two samples; they feed no figure of the host.
+	Pageouts, Swapouts uint64
+	PageCounters       bool
+	Pressure           int // kern.memorystatus_vm_pressure_level; 0 unknown
+	MemorystatusLevel  int // kern.memorystatus_level; -1 unknown
+	PcpuSum            float64
 }
 
 // Usable reports whether the reading has what D-1 divides by and whether its

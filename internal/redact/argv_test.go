@@ -1,6 +1,7 @@
-package gate
+package redact
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -48,7 +49,32 @@ func TestScrubArgv(t *testing.T) {
 		{"a secret flag at the end", []string{"x", "--token"}, []string{"x", "--token"}},
 	} {
 		in := append([]string(nil), c.in...)
-		assert.Equal(t, c.want, scrubArgv(c.in), c.name)
+		assert.Equal(t, c.want, ScrubArgv(c.in), c.name)
 		assert.Equal(t, in, c.in, c.name+": the input is not modified")
 	}
+}
+
+func TestArgv_ScrubsThenCuts(t *testing.T) {
+	long := strings.Repeat("a", 300)
+	got := Argv([]string{"tool", long, "--token", "abc"}, 200)
+	assert.Equal(t, []string{"tool", strings.Repeat("a", 200) + "…", "--token", "<redacted>"}, got)
+
+	// 15 words: the first 12, then one ellipsis
+	many := make([]string, 15)
+	for i := range many {
+		many[i] = "w"
+	}
+	got = Argv(many, 120)
+	assert.Len(t, got, 13)
+	assert.Equal(t, "…", got[12])
+
+	// the secret is scrubbed before the cut: it cannot survive in the first bytes of a long word
+	secretWord := "x=" + strings.Repeat("A1", 40) // a long mixed run: redacted whole, not cut to 20 bytes of it
+	got = Argv([]string{"run", secretWord}, 20)
+	assert.Equal(t, []string{"run", "x=[redacted]"}, got)
+
+	// no cut with max 0; the input is not modified
+	in := []string{"a", long}
+	assert.Equal(t, in, Argv(in, 0))
+	assert.Equal(t, long, in[1])
 }

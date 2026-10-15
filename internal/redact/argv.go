@@ -1,10 +1,8 @@
-package gate
+package redact
 
 import (
 	"regexp"
 	"strings"
-
-	"github.com/wake/purdex/internal/redact"
 )
 
 // The holder record is readable by every user of the host (0644) and `pdx gate status` prints it, so the command line it
@@ -17,9 +15,11 @@ import (
 //  2. Every word then goes through redact.String, the same scrubber the transcripts use: bearer tokens, `sk-…`, `ghp_…`,
 //     `xox…`, AWS key ids, Purdex tokens, and long mixed runs of letters and digits.
 //
-// The cut to 120 bytes comes after both, so a secret far into a long word does not survive in its first bytes.
+// The cut (Argv's max bytes per word) comes after both, so a secret far into a long word does not survive in its first bytes.
 
 const redacted = "<redacted>"
+
+const maxArgvWords = 12 // Argv keeps at most this many words, then a "…"
 
 // secretNames are the pieces of a flag or variable name that say its value is a secret.
 var secretNames = []string{"token", "secret", "password", "passwd", "passphrase", "apikey", "api-key", "api_key", "auth", "bearer",
@@ -51,8 +51,28 @@ func namesSecret(name string) bool {
 	return false
 }
 
-// scrubArgv returns the words with the secrets in them replaced; the input is not modified.
-func scrubArgv(argv []string) []string {
+// Argv is a command line as a record may keep it: the words with the secrets in them replaced (the shape of a command line
+// first, then each word through String), at most 12 words and at most max bytes of each (a cut word ends in "…"), the rest
+// of the words one "…". The scrub comes before the cut, so a secret far into a long word does not survive in its first bytes.
+// The input is not modified. The gate's holder records keep 120 bytes, the load watcher's event record 200.
+func Argv(argv []string, max int) []string {
+	scrubbed := ScrubArgv(argv)
+	out := make([]string, 0, len(scrubbed))
+	for i, a := range scrubbed {
+		if i >= maxArgvWords {
+			out = append(out, "…")
+			break
+		}
+		if max > 0 && len(a) > max {
+			a = a[:max] + "…"
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// ScrubArgv returns the words with the secrets in them replaced; the input is not modified.
+func ScrubArgv(argv []string) []string {
 	out := make([]string, 0, len(argv))
 	tool := ""
 	if len(argv) > 0 {
@@ -112,5 +132,5 @@ func scrubWord(a string) string {
 		return redacted
 	}
 	a = urlPassword.ReplaceAllString(a, "${1}"+redacted+"${2}")
-	return redact.String(a)
+	return String(a)
 }
