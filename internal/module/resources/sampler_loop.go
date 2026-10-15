@@ -56,6 +56,7 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 	// The roots are read before the sampler (whose ps fork is the process
 	// read) and again after it; see sessions.
 	before, beforeErr := m.readRoots(sctx)
+	sampledAt := m.now() // before the reads: the cache below never claims a reading is newer than it is
 	raw, procs, err := m.sampler.Sample(sctx)
 	if ctx.Err() != nil {
 		return true // stopping: whatever the sampler said, it is not a failure
@@ -81,6 +82,7 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 		return false
 	}
 	m.watchNote("sampling", "")
+	m.cachePressure(raw, sampledAt)
 
 	sessions, agreed := m.sessions(sctx, raw, procs, before, beforeErr)
 	if watchOn {
