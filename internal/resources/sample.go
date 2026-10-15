@@ -1,7 +1,6 @@
 package resources
 
 import (
-	"bufio"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -13,6 +12,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/wake/purdex/internal/hostmem"
 )
 
 // ErrUnsupported is what a sampler returns on a platform it cannot read. The
@@ -77,7 +78,7 @@ func (s *sysSampler) Sample(ctx context.Context) (HostRaw, []Proc, error) {
 
 	// Pressure and the kernel's free percentage are extras: when they are
 	// unreadable the sample still stands, with "unknown" in their place.
-	if v, err := sysctlU32("kern.memorystatus_vm_pressure_level"); err == nil {
+	if v, err := sysctlU32(hostmem.LevelSysctl); err == nil {
 		raw.Pressure = int(v)
 	}
 	raw.MemorystatusLevel = -1
@@ -156,62 +157,18 @@ type vmStat struct {
 	Counters           bool
 }
 
-// parseVMStat reads vm_stat output. It is a copy of the monitor module's
-// parseDarwinVMStat extended with the speculative count, and stricter: a
-// missing count is an error, because a zero would pass for a full host.
+// parseVMStat reads vm_stat output with the shared parser, and stricter than it: a missing count is an error, because a zero
+// would pass for a full host.
 func parseVMStat(raw string) (vmStat, error) {
-	var v vmStat
-	var sawFree, sawInactive, sawSpeculative, sawPageouts, sawSwapouts bool
-	scanner := bufio.NewScanner(strings.NewReader(raw))
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.Contains(line, "page size of") {
-			fields := strings.Fields(line)
-			for i, field := range fields {
-				if field == "of" && i+1 < len(fields) {
-					v.PageSize, _ = strconv.ParseUint(fields[i+1], 10, 64)
-				}
-			}
-			continue
-		}
-		value, ok := parseVMStatLine(line)
-		if !ok {
-			continue
-		}
-		switch {
-		case strings.HasPrefix(line, "Pages free:"):
-			v.Free, sawFree = value, true
-		case strings.HasPrefix(line, "Pages inactive:"):
-			v.Inactive, sawInactive = value, true
-		case strings.HasPrefix(line, "Pages speculative:"):
-			v.Speculative, sawSpeculative = value, true
-		case strings.HasPrefix(line, "Pageouts:"):
-			v.Pageouts, sawPageouts = value, true
-		case strings.HasPrefix(line, "Swapouts:"):
-			v.Swapouts, sawSwapouts = value, true
-		}
-	}
-	if err := scanner.Err(); err != nil {
+	v, err := hostmem.ParseVMStat([]byte(raw))
+	if err != nil {
 		return vmStat{}, err
 	}
-	if v.PageSize == 0 {
-		return vmStat{}, errors.New("vm_stat: missing page size")
+	if err := v.MemoryErr(); err != nil {
+		return vmStat{}, err
 	}
-	if !sawFree || !sawInactive || !sawSpeculative {
-		return vmStat{}, errors.New("vm_stat: missing free, inactive or speculative pages")
-	}
-	v.Counters = sawPageouts && sawSwapouts
-	return v, nil
-}
-
-func parseVMStatLine(line string) (uint64, bool) {
-	parts := strings.Split(line, ":")
-	if len(parts) != 2 {
-		return 0, false
-	}
-	raw := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(parts[1]), "."))
-	value, err := strconv.ParseUint(raw, 10, 64)
-	return value, err == nil
+	return vmStat{PageSize: v.PageSize, Free: v.Free, Inactive: v.Inactive, Speculative: v.Speculative,
+		Pageouts: v.Pageouts, Swapouts: v.Swapouts, Counters: v.HaveCounters}, nil
 }
 
 // parsePS reads `ps -axo pid=,ppid=,pcpu=,rss=,ucomm=` output (rss in KiB; ucomm is the

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/wake/purdex/internal/gate"
+	"github.com/wake/purdex/internal/hostmem"
 	"github.com/wake/purdex/internal/resources"
 )
 
@@ -261,8 +261,8 @@ func (m *Module) notePageRate(host *resources.HostUse, raw resources.HostRaw, at
 	if !raw.PageCounters {
 		return
 	}
-	cur := gate.PageSample{At: at, Total: raw.Pageouts + raw.Swapouts}
-	host.PageRate = gate.RateOver(m.pageRing, cur)
+	cur := hostmem.PageSample{At: at, Total: raw.Pageouts + raw.Swapouts}
+	host.PageRate = hostmem.RateOver(m.pageRing, cur)
 	keep := m.pageRing[:0]
 	for _, s := range m.pageRing {
 		if at.Sub(s.At) <= pageRingKeep && !s.At.After(at) {
