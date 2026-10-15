@@ -420,7 +420,9 @@ type AdmissionState struct {
 
 // admission reads the host without sampling it (the level from the kernel, the rate from the cache other gates keep; the free
 // space of the working directory and of $TMPDIR) and applies the rule that admits a command. A host that cannot be read is not
-// held: status shows what is known.
+// held: status shows what is known. The disk it looks at is the status process's own: the person's directory for `pdx gate
+// status`, the daemon's working directory and $TMPDIR when the daemon asks (the fleet's summary), which for the fleet is the
+// main disk, the one that matters; a command's own directory is only known to the command (its start checks that one).
 func (g *Gate) admission(cfg Config) AdmissionState {
 	if !cfg.Admission.Enabled {
 		return AdmissionState{}
