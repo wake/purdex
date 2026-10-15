@@ -91,3 +91,17 @@ func (s *Store) SeatOf(sessionID string) (team.Seat, error) {
 	}
 	return seat, nil
 }
+
+// PredecessorOf is the session a relay replaced with sid (one session_lineage row, read by its primary key).
+func (s *Store) PredecessorOf(sessionID string) (string, int64, bool, error) {
+	var prev string
+	var at int64
+	err := s.db.QueryRow(`SELECT predecessor_session_id, at FROM session_lineage WHERE session_id = ?`, sessionID).Scan(&prev, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", 0, false, nil
+	}
+	if err != nil {
+		return "", 0, false, fmt.Errorf("read predecessor %s: %w", sessionID, err)
+	}
+	return prev, at, true, nil
+}
