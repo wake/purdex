@@ -157,6 +157,13 @@ RA-2 已 merge：拿掉「不再詢問」、補上終端機指令核准的提示
 ## 11. Mac App
 
 - Title bar: 「團隊」 (team tabs) and 「日誌」 (any Claude Code tab whose host has `journal.v1`) buttons, as v3.
+- **Which host decides** (J-2b R2, 10-16): the journal UI or the workbook view follows the host the unit is **read
+  from** — the lead's host when the tab's session follows a remote lead — and that host's sticky `journal.v1`, not the
+  tab's own host. While the route is unresolved (the lead's host unreachable), the tab's own host decides and the card
+  shows the unreachable note; when the route resolves, the read host takes over. A host with `[journal] enabled =
+  false` therefore never gets a journal call, whichever tab points at it.
+- The view state of the unreachable placeholder (open, widths, filter, scroll) moves to the resolved unit the first
+  time the route resolves, so reconnecting keeps an open card open.
 - **Layout** (left → right): team card (team tabs) with the **roadmap tab** under it — or the roadmap tab alone without a team; the **journal card**; the **tasks tab**. Roadmap and tasks open and close from the journal card's header. Narrow windows drop, in order: the tasks tab, the roadmap, the team card; the journal stays.
 - **Journal card**: header (unit name, role line, live dot, close); the pinned band; filters (Q-C; the active one clicked again clears it); the stream oldest at the top, newest at the bottom, a date divider per day; row = time, kind chip, actor, text, refs; **the person's name is highlighted** wherever it appears in the actor or the text (item 23); a 待確認 row (no coloured left edge) shows its checkboxes (read-only — Haiku ticks them) and opens its detail **to the left** over the roadmap side; a row's menu pins / unpins.
 - Opens scrolled to the bottom; new entries append; pinned to the bottom while there, else 「↓ N 則新事件」; scrolling up loads older months.
