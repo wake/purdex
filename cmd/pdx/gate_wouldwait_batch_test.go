@@ -25,7 +25,7 @@ func wouldWaitBatchOf(t *testing.T, cfg string, argvs [][]string) []map[string]a
 // slot held (the commands of that class wait, the others do not).
 func TestGate_WouldWaitBatchAnswersAsOneByOne(t *testing.T) {
 	cfg, _ := gateEnv(t, "")
-	argvs := [][]string{{"go", "test", "./..."}, {"ls", "-la"}, {"./node_modules/.bin/tsc", "-b"}, {"pnpm", "run", "build"}, {"go", "vet", "./..."}}
+	argvs := [][]string{{"go", "test", "./..."}, {"ls", "-la"}, {"./node_modules/.bin/tsc", "-b"}, {"pnpm", "run", "build"}, {"git", "status"}}
 	same := func(label string) {
 		t.Helper()
 		got := wouldWaitBatchOf(t, cfg, argvs)
