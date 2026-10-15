@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -751,12 +752,20 @@ func TestRun_AWaitingCommandStaysInItsDirectoryWhenTheSettingMoves(t *testing.T)
 	dirA := g.Config().Dir
 	dirB := t.TempDir() + "/other"
 	work := t.TempDir()
+	var moved atomic.Bool
+	g.Load = func() Config {
+		c := g.Config()
+		if moved.Load() {
+			c.Dir = dirB
+		}
+		return c
+	}
 	occ := runAsync(g, t.Context(), Options{Argv: sh(holdScript(work, "0")), Class: ClassHeavy})
 	eventually(t, "the occupant", func() bool { return exists(work + "/started-0") })
 	waiter := runAsync(g, t.Context(), Options{Argv: sh("touch " + work + "/ran"), Class: ClassHeavy})
 	eventually(t, "the waiter's ticket", func() bool { return g.Status().WaitHeavy == 1 })
 
-	g.Load = func() Config { c := g.Config(); c.Dir = dirB; return c } // the setting moves
+	moved.Store(true) // the setting moves
 	never(t, "the waiter running before the slot is free", 200*time.Millisecond, func() bool { return exists(work + "/ran") })
 	require.NoError(t, os.WriteFile(work+"/go-0", nil, 0o644))
 	assert.Equal(t, 0, (<-waiter).code, "it took the freed slot of the directory it queued in")
@@ -838,7 +847,7 @@ func TestRun_ACommandIsNotRunWithoutItsHolderRecord(t *testing.T) {
 	r := runSync(t, g, Options{Argv: sh("touch " + dir + "/ran"), Class: ClassHeavy})
 	assert.Equal(t, ExitRefused, r.code)
 	assert.False(t, exists(dir+"/ran"))
-	assert.Contains(t, buf.String(), "holder record")
+	assert.Contains(t, buf.String(), "was not run")
 	assert.Empty(t, g.Status().Heavy)
 }
 

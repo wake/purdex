@@ -360,7 +360,10 @@ func (p *Pool) TryTake(t *Ticket) (slot *Slot, ahead int, err error) {
 	// The lock is ours now, so a record left by an earlier holder (kept because a child of it still held the lock) is stale:
 	// remove it before anything else, or a command still carrying the old token could pass the nesting check against our
 	// lock until SetHolder writes ours.
-	_ = os.Remove(p.recordPath(freeK[0]))
+	if err := os.Remove(p.recordPath(freeK[0])); err != nil && !errors.Is(err, os.ErrNotExist) {
+		closeAll(free[:1]) // the lock is let go again: a record that cannot be removed must not stay beside a lock we hand out
+		return nil, ahead, dirError(err)
+	}
 	return &Slot{Class: p.Class, K: freeK[0], f: free[0], rec: p.recordPath(freeK[0])}, ahead, nil
 }
 
