@@ -105,6 +105,13 @@ func writeThrough(path string, data []byte, defaultMode os.FileMode) error {
 	return os.Rename(tmp.Name(), target)
 }
 
+// isSymlink is whether path is itself a symbolic link (a dotfiles repo's): such a file is emptied, never deleted, so the link
+// and the file it points to stay where the user put them.
+func isSymlink(path string) bool {
+	fi, err := os.Lstat(path)
+	return err == nil && fi.Mode()&os.ModeSymlink != 0
+}
+
 // readIfExists is the file's content, or "" when there is no such file.
 func readIfExists(path string) (string, error) {
 	b, err := os.ReadFile(path)
@@ -161,7 +168,7 @@ func Uninstall(home string) error {
 	}
 	if cur != "" {
 		if next := Strip(cur); next != cur {
-			if strings.TrimSpace(next) == "" {
+			if strings.TrimSpace(next) == "" && !isSymlink(zshenv) {
 				if err := os.Remove(zshenv); err != nil && !os.IsNotExist(err) {
 					return fmt.Errorf(".zshenv: %w", err)
 				}

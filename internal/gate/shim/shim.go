@@ -35,8 +35,19 @@ for d in $PATH; do
   [ -n "$d" ] || continue
   dir=$(cd "$d" 2>/dev/null && pwd -P) || continue
   [ "$dir" = "$self" ] && continue
-  if [ -x "$dir/` + tool + `" ] && [ ! -d "$dir/` + tool + `" ]; then
-    exec "$dir/` + tool + `" "$@"
+  p="$dir/` + tool + `"
+  if [ -x "$p" ] && [ ! -d "$p" ]; then
+    # a symlink that leads back into this directory is the shim again, whatever its name or directory
+    n=0
+    while [ -L "$p" ] && [ "$n" -lt 40 ]; do
+      t=$(readlink "$p") || break
+      case $t in /*) p=$t ;; *) p=$(dirname "$p")/$t ;; esac
+      n=$((n + 1))
+    done
+    pd=$(cd "$(dirname "$p")" 2>/dev/null && pwd -P)
+    if [ "$pd" != "$self" ]; then
+      exec "$dir/` + tool + `" "$@"
+    fi
   fi
   IFS=:
 done

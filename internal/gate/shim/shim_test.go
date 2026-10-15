@@ -2,6 +2,7 @@ package shim
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -138,6 +139,30 @@ func TestStrip(t *testing.T) {
 	}
 }
 
+// A ~/.zshenv that is a symlink and held only our block is emptied, not deleted: the link and its target stay.
+func TestUninstall_ASymlinkedZshenvThatHeldOnlyTheBlockIsEmptiedNotRemoved(t *testing.T) {
+	home := t.TempDir()
+	real := filepath.Join(t.TempDir(), "zshenv")
+	if err := os.WriteFile(real, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, filepath.Join(home, ".zshenv")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Install(home, "/p/pdx"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Uninstall(home); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(filepath.Join(home, ".zshenv")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the link is gone: %v %v", fi, err)
+	}
+	if got := readFile(t, real); got != "" {
+		t.Fatalf("the target still holds: %q", got)
+	}
+}
+
 func TestUninstall_RemovesTheBlockTheShimsAndAnOwnFileButNotAForeignOne(t *testing.T) {
 	home := t.TempDir()
 	if err := Install(home, "/p/pdx"); err != nil {
@@ -250,7 +275,10 @@ func requireTool(t *testing.T, name string) string {
 
 func run(t *testing.T, env []string, name string, args ...string) (string, string, error) {
 	t.Helper()
-	cmd := exec.Command(name, args...)
+	// a shim that execs itself again forever must fail the test, not hang it
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = env
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -291,6 +319,19 @@ func TestScript_HandsOverToGateAndFallsBackToTheRealBinary(t *testing.T) {
 	out, _, err = run(t, env, sh, shimGo, "test", "-run", "X y")
 	if err != nil || strings.TrimSpace(out) != "real go test -run X y" {
 		t.Fatalf("fallback: %q %v", out, err)
+	}
+	// pdx removed and an alias of the shim earlier on PATH (a symlink in another directory): skipped, not run again
+	alias := filepath.Join(root, "alias")
+	if err := os.MkdirAll(alias, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(shimGo, filepath.Join(alias, "go")); err != nil {
+		t.Fatal(err)
+	}
+	aliasEnv := []string{"PATH=" + alias + ":" + DirIn(home) + ":" + realDir + ":/usr/bin:/bin", "HOME=" + home}
+	out, _, err = run(t, aliasEnv, sh, shimGo, "env")
+	if err != nil || strings.TrimSpace(out) != "real go env" {
+		t.Fatalf("alias fallback: %q %v", out, err)
 	}
 	// nothing else on PATH: a clear failure (127), not a loop
 	_, errOut, err := run(t, []string{"PATH=" + DirIn(home) + ":/usr/bin:/bin", "HOME=" + home}, sh, shimGo)
