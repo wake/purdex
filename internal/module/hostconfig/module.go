@@ -58,6 +58,8 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(ResumeTemplatesKey, m)
 	// ... and the fleet's probe hosts through this one (fleet plan F-1b1).
 	c.Registry.Register(ProbeHostsKey, m)
+	// ... and the fleet row through this one.
+	c.Registry.Register(FleetConfigKey, m)
 	return nil
 }
 
@@ -74,6 +76,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/hostconfig/workbook", m.putHandler(KeyWorkbook, func(raw []byte, _ Entry) (any, error) { return normalizeWorkbook(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/watch", m.putHandler(KeyWatch, func(raw []byte, _ Entry) (any, error) { return normalizeWatch(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/probe-hosts", m.putHandler(KeyProbeHosts, func(raw []byte, cur Entry) (any, error) { return normalizeProbeHosts(raw, cur) }))
+	mux.HandleFunc("PUT /api/hostconfig/fleet", m.putHandler(KeyFleet, func(raw []byte, _ Entry) (any, error) { return normalizeFleet(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/resources", m.putHandler(KeyResources, func(raw []byte, _ Entry) (any, error) { return normalizeResources(raw) }))
 	mux.HandleFunc("POST /api/hostconfig/check-path", m.handleCheckPath)
 }
