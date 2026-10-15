@@ -32,6 +32,9 @@ type LocalFast struct {
 	PageRate float64 // pageouts + swapouts per second over hostmem.RateWindow
 	Load1    float64
 	NCPU     int
+	// Missing names what this reading could not have ("cpu", "pageouts") and so is not to be believed; empty when it is whole.
+	// A figure that is missing is absent, not 0.
+	Missing []string
 }
 
 type LocalSlow struct {
