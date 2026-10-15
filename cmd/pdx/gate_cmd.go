@@ -67,7 +67,12 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 	real := fs.String("real", "", "binary to run in place of the first word")
 	tool := fs.String("tool", "", "the shim that called: find the real binary behind it")
 	cfgPath := fs.String("config", "", "config.toml (default ~/.config/pdx/config.toml)")
+	classSource := fs.String("class-source", "", "where --class came from, for the decision record (classifier or kind)")
 	if err := fs.Parse(flags); err != nil {
+		return 2
+	}
+	if *classSource != "" && *classSource != classByClassifier && *classSource != classByKind {
+		fmt.Fprintf(stderr, "pdx gate: --class-source must be classifier or kind, got %q\n", *classSource)
 		return 2
 	}
 	if *tool != "" {
@@ -123,7 +128,7 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 	g := gate.New(cfg)
 	g.Stderr = stderr
 	g.Load = gateReloader(*cfgPath, cfg)
-	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Real: realBin, Class: c, Foreground: *fg, Stdout: stdout, Stderr: stderr})
+	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Real: realBin, Class: c, ClassSource: *classSource, Foreground: *fg, Stdout: stdout, Stderr: stderr})
 	return code
 }
 

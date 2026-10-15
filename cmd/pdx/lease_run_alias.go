@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/wake/purdex/internal/gate"
 )
@@ -38,6 +39,29 @@ func leaseGateClass(kind string, weight int) gate.Class {
 		return gate.ClassLight
 	}
 	return gate.ClassHeavy
+}
+
+// Where the class of an aliased run came from, as the decision record says it.
+const (
+	classByClassifier = "classifier"
+	classByKind       = "kind"
+)
+
+// leaseRunClass is the pool for a wrapped command: what the gate's own classifier says when it knows the command (a vitest
+// run of named files is light, a full test run heavy, as for a command typed without the alias), and only when it does not
+// (a script of the project's, a command the gate never holds) what --kind or --weight map to. A kind of build stays the one
+// that is never held back, whatever the classifier thinks (user 10-15: packaging is not queued).
+func leaseRunClass(kind string, weight int, command []string, cfgPath string) (gate.Class, string) {
+	if kind == "build" {
+		return leaseGateClass(kind, weight), classByKind
+	}
+	cfg, _ := gate.Load(gateConfigPath(cfgPath))
+	if cfg.Enabled {
+		if c := cfg.Intercept.Classify(command, gate.EnvOf(os.Environ(), gateStdinIsTTY())); c.Valid() {
+			return c, classByClassifier
+		}
+	}
+	return leaseGateClass(kind, weight), classByKind
 }
 
 // gateRunMain is gateMain (a seam for tests).
@@ -75,13 +99,13 @@ func runLeaseRunAlias(args []string, getenv func(string) string, stdout, stderr 
 		fmt.Fprintf(stderr, "pdx lease: %s\n%s\n", msg, leaseUsage)
 		return ExitUsage
 	}
-	class := leaseGateClass(*kind, *weight)
+	class, source := leaseRunClass(*kind, *weight, command, *cfgPath)
 	if !class.Valid() {
 		fmt.Fprintf(stderr, "pdx lease run 已改為 pdx gate 的別名：--kind %s（打包）不經過閘門，直接執行；--ask／--queue／--wait 不再有作用\n", *kind)
 		return gateExecDirect("", command, stderr)
 	}
 	fmt.Fprintf(stderr, "pdx lease run 已改為 pdx gate 的別名（%s）：--ask／--queue／--wait 不再有作用；請改用 pdx gate --class %s -- …\n", class, class)
-	gateArgs := []string{"--class", string(class)}
+	gateArgs := []string{"--class", string(class), "--class-source", source}
 	if *cfgPath != "" {
 		gateArgs = append(gateArgs, "--config", *cfgPath)
 	}
