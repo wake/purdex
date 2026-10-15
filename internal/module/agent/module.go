@@ -32,6 +32,8 @@ import (
 
 // Module is the agent hook event module.
 type Module struct {
+	// lightGen is LightGeneration's counter (G3c)
+	lightGen  atomic.Uint64
 	core      *core.Core
 	events    *store.AgentEventStore
 	frames    *store.FramesStore

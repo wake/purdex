@@ -155,14 +155,18 @@ Design:
   level alone (and, if the level is unreadable too, fail-open with a stderr line).
 - **Parallelism for the child (D7: near full width, one at a time).**
   - `auto` (default): width = cores − `reserve_cores` (2 → 8 on mlab), lowered so that width × `mem_per_worker_mb`
-    fits the memory available at admission; computed per job from the live host.
+    fits the memory available at admission; computed per job from the live host. `mem_per_worker_mb` is per tool
+    (G0: go 150, vitest 700, others 400). vitest is further capped by `vitest_max_workers` (3): at 8 workers the full
+    suite was only 19 % faster, reached pressure level 2 and gained 101 timeout failures (§5.1); raise the cap only
+    with a clean measurement, after the suite's per-file cost changes.
   - Go: add `-p=<go_p>` to `GOFLAGS` when absent; leave `GOMAXPROCS` alone. vitest: add `--maxWorkers=<n>` when the
     command has no worker limit (replaces the mod's R7). pnpm: `--workspace-concurrency=<n>` for recursive runs.
   - The real load is slots × width; with one heavy slot near full width plus small light jobs, the host stays near its
     cores without the overlap that caused swapping.
 - **Priority for the child.** Default `nice` (10): the agents, the daemon and the person preempt it, and it still uses
-  the P cores when they are idle. `background` (`taskpolicy -b`: E cores only, I/O throttled; measured 45 % slower on
-  one package) stays an option for long, non-urgent work. `--fg` = no change (e.g. the release gate on an idle host).
+  the P cores when they are idle. `background` (`taskpolicy -b`: E cores only, I/O throttled; G0: 10–46 % slower on
+  every clean pair, §5.1) stays an option for long, non-urgent work, never a default. `--fg` = no change (e.g. the
+  release gate on an idle host).
 - **Process group.** When stdin is not a terminal (agents' Bash, scripts) the child starts in a new process group;
   SIGINT/SIGTERM/SIGHUP to the gate are forwarded to the group, and when the child exits the gate sends SIGTERM to
   whatever is left in the group, SIGKILL after 5 s. When stdin **is** a terminal the child stays in the foreground
@@ -176,8 +180,8 @@ Design:
   |---|---|---|
   | `intercept` | 1 | `tools` (go, pnpm, npx, vitest, tsc), `mod_rewrite` (true), extra `[[gate.intercept.rule]]` (match → class, before the built-ins) |
   | `slots` | 1 | `heavy` (1), `light` (3), `order` (fifo) |
-  | `admission` | 2 | `enabled`, `max_pressure_level` (1), `max_page_rate` (auto until G0 sets it), `disk_min_gb` (10), `on_unreadable` (level-only) |
-  | `parallelism` | 3 | `mode` (auto \| fixed \| off), `reserve_cores` (2), `mem_per_worker_mb` (400), `go_p` / `vitest_workers` / `pnpm_concurrency` (auto), per-class overrides |
+  | `admission` | 2 | `enabled`, `max_pressure_level` (1), `max_page_rate` (auto = 50 pages/s over 10 s, G0; the level is the primary signal), `disk_min_gb` (10), `on_unreadable` (level-only) |
+  | `parallelism` | 3 | `mode` (auto \| fixed \| off), `reserve_cores` (2), `mem_per_worker_mb` per tool (go 150, vitest 700, others 400), `go_p` / `vitest_workers` / `pnpm_concurrency` (auto), `vitest_max_workers` (3), per-class overrides |
   | `priority` | 4 | `mode` (nice \| background \| none), `nice` (10) |
   | `lifetime` | 5 | `hold` (tree), `alert_after_min` (60 — alert only, never kill) |
   | `reap` | 6 | `enabled`, `grace_s` (5) |
@@ -190,6 +194,26 @@ Design:
   reasons, the parameters applied and their source — default / config / profile / auto —, exit code, duration);
   `pdx gate status` shows each module's effective values and sources. Later, an optional tuner (daemon or script) may
   write the same config from the records; the gate itself never depends on it.
+
+### 5.1 G0 measurements (mlab, 2026-10-15)
+
+M4 10 cores / 16 GB. "nice" = `nice -n 10`, "bg" = `taskpolicy -b`. Page rate = pageouts + swapouts, peak over a 10 s
+window. Raw data: the lead's `reports/g0-8c/` (samples every 5 s, `/usr/bin/time -l`, vitest per-file JSON).
+
+| Command | Setting | Wall | Peak pressure | Min free | Peak page rate | Clean |
+|---|---|---|---|---|---|---|
+| `go test ./internal/store/` | plain / bg | 6.2 s / 9.0 s (+46 %) | 1 | 70 % | — | yes |
+| `go build ./...` | plain / bg | 6.8 s / 7.9 s (+15 %) | 1 | 69 % | — | yes |
+| `go test -p 3 ./internal/module/team/` | plain / bg | 333 s / 365 s (+10 %) | 1 | 68 % | 1.2 | yes |
+| `go test -count=1 ./...` | `-p 8` + nice | 382 s | 1 | 72 % | 0.2 | yes (rerun on a quiet host) |
+| `go test -count=1 ./...` | `-p 3` + bg | 448 s (+17 %) | 1 | 72 % | 2.0 | yes (rerun on a quiet host) |
+| `vitest run` (full) | 3 workers | 2426 s | 1 | 56 % | 17.1 | lightly disturbed |
+| `vitest run` (full) | 8 workers + nice | 1965 s (−19 %), 101 timeout failures | **2** | 39 % | 28.1 | lightly disturbed |
+
+Findings: `taskpolicy -b` is slower on every clean pair, so `nice` is the default (Q2). Go runs at full width without
+memory pressure. vitest does not scale with workers (≈ 85 % of its wall time is per-file fixed cost: environment,
+import, setup) and 8 workers reach pressure level 2, so its width is capped (§5 parallelism). No clean run exceeded
+28 pages/s; `max_page_rate` auto = 50 sits above all of them, with the pressure level as the primary signal (Q3).
 
 ## 6. Retiring the lease (D2)
 
@@ -282,8 +306,8 @@ then L1–L3. Other lines resume after G2 is deployed and its acceptance (§10) 
 ## 11. Open questions (for the plan)
 
 - Q1. (resolved 10-15) PATH precedence: `~/.zshenv` prepend reaches running sessions (see §4).
-- Q2. `taskpolicy -b` cost per class (I/O throttling): measure before choosing the default.
-- Q3. Pressure thresholds (`max_page_rate`): measure on mlab with a known workload.
+- Q2. (resolved, G0 10-15) `taskpolicy -b` is 10–46 % slower on every clean pair; default `nice` (§5.1).
+- Q3. (resolved, G0 10-15) `max_page_rate` auto = 50 pages/s; the pressure level is the primary signal (§5.1).
 - Q4. (resolved, codex review 10-15) The minimal mod rewrite for direct `node_modules/.bin/…` calls by agents is kept: shims alone cannot reach them (G1 "whoever starts it").
 
 Survey sources: Getty/loadguard, leahneukirchen/nq, Nukesor/pueue, discoteq/flock, fl4p/macos-oom-guard, GNU make
