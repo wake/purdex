@@ -67,9 +67,10 @@ func TestSeatOf(t *testing.T) {
 	seedMember(t, s, "op-1", "team-1", "local-m", 1000)
 	seedRemote(t, s, "mk-1", "remote-m", 1000)
 	for sid, want := range map[string]team.Seat{
-		"lead-1":   {TeamID: "team-1", Role: team.SeatLead},
-		"local-m":  {TeamID: "team-1", Role: team.SeatMember},
-		"remote-m": {TeamID: "team-L", Role: team.SeatMemberRemote}, // the team id on the lead's host
+		"lead-1":  {TeamID: "team-1", Role: team.SeatLead},
+		"local-m": {TeamID: "team-1", Role: team.SeatMember},
+		// the team id on the lead's host, and where that lead is: its host and its session there (the journal asks the lead's host)
+		"remote-m": {TeamID: "team-L", Role: team.SeatMemberRemote, LeadHostID: "host-L", LeadSessionID: "lead-sid"},
 		"nobody":   {Role: team.SeatNone},
 	} {
 		got, err := s.SeatOf(sid)
