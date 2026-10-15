@@ -30,6 +30,9 @@ func (d *Drainer) writeTaskRow(it OutboxItem) (rowResult, error) {
 	lock.Lock()
 	defer lock.Unlock()
 	h := unitHome(reg)
+	if err := h.verify(); err != nil {
+		return rowResult{}, err // the row stays undone, retried and logged
+	}
 	for _, ev := range p.Events {
 		if err := h.putNew(journal.Entry{ID: ev.ID, Kind: journal.Kind(ev.Kind), At: time.UnixMilli(ev.At), Actor: d.actor(ev.Owner),
 			Text: ev.Text, Detail: ev.Detail, Refs: ev.Refs}); err != nil {

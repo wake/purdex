@@ -185,6 +185,11 @@ func (m *Module) resolveJournal(w http.ResponseWriter, sessionID string) (journa
 		writeError(w, http.StatusNotFound, "no_journal")
 		return journalTarget{}, false
 	}
+	if err := unitHome(unit).verify(); err != nil { // a folder of the unit's home that is a symlink would send a read elsewhere
+		log.Printf("[workbook] journal: unit %s: %v", key, err)
+		writeError(w, http.StatusInternalServerError, "internal")
+		return journalTarget{}, false
+	}
 	kind, id, _ := strings.Cut(key, ":")
 	return journalTarget{unit: unit, kind: kind, id: id}, true
 }
@@ -357,39 +362,20 @@ func (m *Module) handleJournalPin(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	dir := unitHome(tgt.unit).journalDir
-	all, skipped, err := journal.ReadUnit(dir)
-	if err != nil {
-		log.Printf("[workbook] journal: read %s: %v", tgt.unit.Key, err)
-		writeError(w, http.StatusInternalServerError, "internal")
-		return
-	}
-	m.logSkipped(tgt.unit.Key, skipped)
-	var entry *journal.Entry
-	for i := range all {
-		if all[i].ID == body.EntryID {
-			entry = &all[i]
-			break
-		}
-	}
-	if entry == nil {
-		writeError(w, http.StatusNotFound, "not_found")
-		return
-	}
-	changed, err := journal.SetPinned(journal.MonthFile(dir, entry.At), entry.ID, *body.Pinned)
+	changed, err := journal.SetPinnedIn(unitHome(tgt.unit).journalDir, body.EntryID, *body.Pinned)
 	if errors.Is(err, journal.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "not_found")
 		return
 	}
 	if err != nil {
-		log.Printf("[workbook] journal: pin %s in %s: %v", entry.ID, tgt.unit.Key, err)
+		log.Printf("[workbook] journal: pin %s in %s: %v", body.EntryID, tgt.unit.Key, err)
 		writeError(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	if changed {
 		m.announceJournal(JournalChange{UnitKey: tgt.unit.Key, ProjectID: tgt.unit.ProjectID, What: "entries"})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"entry_id": entry.ID, "pinned": *body.Pinned})
+	writeJSON(w, http.StatusOK, map[string]any{"entry_id": body.EntryID, "pinned": *body.Pinned})
 }
 
 // announceJournal sends journal.changed for a write to a unit's files: the unit as {kind, id}, its project, and what changed.

@@ -241,6 +241,7 @@ func (d *Drainer) projectLock(id string) *sync.Mutex {
 
 // home is where one unit's files are.
 type home struct {
+	wt                                 string // the worktree the paths below are in
 	journalDir, tasksFile, roadmapFile string
 	solo                               bool
 	convKey                            string
@@ -252,6 +253,7 @@ type home struct {
 func unitHome(reg UnitRow) home {
 	slug := unitSlug(reg.Label, reg.Key)
 	return home{
+		wt:          reg.WtPath,
 		journalDir:  filepath.Join(reg.WtPath, ".purdex", "journal", slug),
 		tasksFile:   filepath.Join(reg.WtPath, ".purdex", "tasks", slug+".md"),
 		roadmapFile: filepath.Join(reg.WtPath, ".purdex", "roadmap.md"),
@@ -277,6 +279,9 @@ func (d *Drainer) writeRow(it OutboxItem) (rowResult, error) {
 	lock.Lock()
 	defer lock.Unlock()
 	h := unitHome(reg)
+	if err := h.verify(); err != nil {
+		return rowResult{}, err // the row stays undone, retried and logged
+	}
 	h.solo, h.convKey = reg.Kind == UnitSolo, ent.ConvKey
 	switch it.Kind {
 	case OutboxTurn:
