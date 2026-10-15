@@ -353,7 +353,7 @@ func (c *wsConn) follow() {
 		// took in nothing) and that had a full pass a moment ago has nothing to find: the poll is a stat and a comparison, not
 		// an entry lock and a store query (G3c). The full pass still runs at least every fullEvery, and always for a source the
 		// gate cannot judge.
-		if have && c.m.quiet(src, passAt, passSize, passGen) {
+		if have && time.Since(resolvedAt) < c.m.reresolveEvery() && c.m.quiet(src, passAt, passSize, passGen) {
 			continue
 		}
 		// what this pass will have seen: taken BEFORE it, so an event or a write that lands during the pass makes the next one

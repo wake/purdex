@@ -70,3 +70,25 @@ func TestWS_AQuietStreamStillSeesAGrownFileAndAMovedGeneration(t *testing.T) {
 		t.Fatalf("header status %q", got)
 	}
 }
+
+// The quiet gate does not hold the full lookup back past reresolveEvery: an owner that disappears (no event, no write) is seen
+// about one reresolve interval later, not one fullEvery later.
+func TestWS_AQuietStreamStillReresolvesWhenDue(t *testing.T) {
+	e, _, _ := quietEnv(t, time.Hour)
+	e.mod.tweak.reresolve = 150 * time.Millisecond
+	srv := e.server()
+	c := e.connect(srv, "")
+	c.expect("conversation.snapshot")
+	c.expect("approvals.snapshot")
+	time.Sleep(100 * time.Millisecond)
+	e.owners.mu.Lock()
+	e.owners.own = nil
+	e.owners.mu.Unlock()
+	_ = c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for { // the pane going away: capabilities, then a header or changes frame that says ended
+		f := c.read()
+		if f.Type == "conversation.header" || f.Type == "conversation.changes" {
+			return
+		}
+	}
+}
