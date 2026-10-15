@@ -24,6 +24,10 @@ func TestClassify_PHP(t *testing.T) {
 		{"composer -d /work/csp test", ClassHeavy},
 		{"composer --working-dir /work/csp test:integration", ClassHeavy},
 		{"composer --no-interaction test", ClassHeavy},
+		{"composer --file composer.json test", ClassHeavy},
+		{"composer -f composer.json test:integration", ClassHeavy},
+		{"composer --unknown-opt other/composer.json test", ClassHeavy},
+		{"composer -f composer.json install", ClassNone},
 		// ... narrowed by what is handed on to the script
 		{"composer test -- --filter FooTest", ClassLight},
 		{"composer test -- --filter=FooTest", ClassLight},

@@ -44,7 +44,7 @@ func leaseGateClass(kind string, weight int) gate.Class {
 var gateRunMain = gateMain
 
 // runLeaseRunAlias is `pdx lease run (--kind K | --weight N) [--ask|--queue|--wait D] -- <cmd…>` run by the gate.
-func runLeaseRunAlias(args []string, stdout, stderr io.Writer) int {
+func runLeaseRunAlias(args []string, getenv func(string) string, stdout, stderr io.Writer) int {
 	flagArgs, command, hasCmd := splitRunArgs(args)
 	fs := flag.NewFlagSet("pdx lease run", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -54,7 +54,7 @@ func runLeaseRunAlias(args []string, stdout, stderr io.Writer) int {
 	var mf modeFlags
 	mf.register(fs)
 	fs.String("command", "", "")
-	fs.String("client-id", "", "")
+	clientID := fs.String("client-id", "", "")
 	pos, err := parseTeamFlags(fs, normalizeWaitArgs(flagArgs))
 	msg := ""
 	switch {
@@ -64,6 +64,12 @@ func runLeaseRunAlias(args []string, stdout, stderr io.Writer) int {
 		msg = fmt.Sprintf("unexpected argument %q (the command goes after --)", pos[0])
 	case !hasCmd:
 		msg = "需要 -- 之後的指令"
+	default:
+		// the flags are still checked as `pdx lease run` checked them: exactly one of --kind and --weight, in range; a wait in
+		// range; at most one mode flag (a call that was a usage error does not start running a command)
+		if _, msg = mf.mode(getenv); msg == "" {
+			_, msg = checkLeaseSize(*kind, *weight, mf.wait.d, *clientID)
+		}
 	}
 	if msg != "" {
 		fmt.Fprintf(stderr, "pdx lease: %s\n%s\n", msg, leaseUsage)

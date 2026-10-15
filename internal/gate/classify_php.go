@@ -94,9 +94,12 @@ func classifyComposer(args []string, e Env) Class {
 	i := 0
 	for ; i < len(args); i++ { // composer's own options before the command
 		a := args[i]
-		if a == "-d" || a == "--working-dir" {
-			i++
+		if a == "-d" || a == "--working-dir" || a == "-f" || a == "--file" {
+			i++ // the option's value is the next word
 			continue
+		}
+		if strings.HasSuffix(a, ".json") && !strings.HasPrefix(a, "-") {
+			continue // a composer.json given to an option this table does not know: not the command (a test run must not slip past as "none")
 		}
 		if !strings.HasPrefix(a, "-") {
 			break
