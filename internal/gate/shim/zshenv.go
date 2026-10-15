@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 )
 
 const (
@@ -71,12 +72,33 @@ func WithBlock(s, shimDir string) string {
 	return s + Block(shimDir)
 }
 
+// resolveLink is where a write to path must land: path with every symbolic link in its last component followed, also one that
+// points at a file that is not there yet (a dotfiles repo not yet cloned; the write then creates the target and the link
+// stays). Relative targets are taken from the link's own directory. A chain longer than 40 links is an error.
+func resolveLink(path string) (string, error) {
+	for i := 0; i < 40; i++ {
+		fi, err := os.Lstat(path)
+		if err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			return path, nil
+		}
+		t, err := os.Readlink(path)
+		if err != nil {
+			return "", err
+		}
+		if !filepath.IsAbs(t) {
+			t = filepath.Join(filepath.Dir(path), t)
+		}
+		path = t
+	}
+	return "", fmt.Errorf("%s: too many levels of symbolic links", path)
+}
+
 // writeThrough replaces the file at path with data, in the file's own mode, through a rename in its directory. A symlink at
-// path (a dotfiles repo) is followed: the link stays a link and its target is replaced.
+// path (a dotfiles repo) is followed, a dangling one too: the link stays a link and its target is replaced or created.
 func writeThrough(path string, data []byte, defaultMode os.FileMode) error {
-	target := path
-	if r, err := filepath.EvalSymlinks(path); err == nil {
-		target = r
+	target, err := resolveLink(path)
+	if err != nil {
+		return err
 	}
 	mode := defaultMode
 	if fi, err := os.Stat(target); err == nil {
@@ -114,34 +136,119 @@ func isSymlink(path string) bool {
 
 // readIfExists is the file's content, or "" when there is no such file.
 func readIfExists(path string) (string, error) {
-	b, err := os.ReadFile(path)
+	target, err := resolveLink(path)
+	if err != nil {
+		return "", err
+	}
+	b, err := os.ReadFile(target)
 	if os.IsNotExist(err) {
 		return "", nil
 	}
 	return string(b), err
 }
 
+// ConflictError is Install's refusal: files in the shim directory that are not shims pdx wrote (a wrapper of the user's own,
+// a symlink), which Install does not overwrite. Nothing has been written when it is returned.
+type ConflictError struct{ Paths []string }
+
+func (e *ConflictError) Error() string {
+	return "not pdx shims, left alone (move them away to let the gate in): " + strings.Join(e.Paths, ", ")
+}
+
+// owned reports whether the regular file at p is a shim pdx wrote for tool.
+func owned(p, tool string) bool {
+	fi, err := os.Lstat(p)
+	if err != nil || !fi.Mode().IsRegular() {
+		return false
+	}
+	b, err := os.ReadFile(p)
+	return err == nil && bytes.Contains(b, []byte("(pdx gate shim for "+tool+")"))
+}
+
+// lock serializes Install and Uninstall of one home across processes (two `pdx setup` at once); the returned func releases it.
+func lock(home string) (func(), error) {
+	dir := filepath.Join(home, ".config", "pdx")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, ".gate-setup.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); f.Close() }, nil
+}
+
 // Install writes the shims (for pdxPath) into DirIn(home) and keeps one block in home/.zshenv. It is idempotent: a second run
-// changes no byte. Files it would not change are not rewritten.
+// changes no byte, and files it would not change are not rewritten. It takes a lock for the home; it looks at every target
+// before writing any (a file there that is not a pdx shim is a ConflictError and nothing is written); it stages all the shims
+// and only then puts them in place; and it writes the .zshenv block last, so the shims are in place before PATH leads to them.
 func Install(home, pdxPath string) error {
+	unlock, err := lock(home)
+	if err != nil {
+		return fmt.Errorf("lock: %w", err)
+	}
+	defer unlock()
 	dir := DirIn(home)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("shim dir: %w", err)
 	}
+	var conflicts []string
+	type staged struct{ tool, dst, tmp string }
+	var todo []staged
 	for _, tool := range Tools {
-		want := []byte(Script(tool, pdxPath))
 		p := filepath.Join(dir, tool)
+		if _, err := os.Lstat(p); err == nil && !owned(p, tool) {
+			conflicts = append(conflicts, p)
+			continue
+		}
+		want := []byte(Script(tool, pdxPath))
 		if have, err := os.ReadFile(p); err == nil && bytes.Equal(have, want) {
 			if fi, err := os.Stat(p); err == nil && fi.Mode().Perm() == 0o755 {
 				continue
 			}
 		}
-		if err := writeThrough(p, want, 0o755); err != nil {
-			return fmt.Errorf("shim %s: %w", tool, err)
+		todo = append(todo, staged{tool: tool, dst: p})
+	}
+	if len(conflicts) > 0 {
+		return &ConflictError{Paths: conflicts}
+	}
+	cleanup := func() {
+		for _, st := range todo {
+			if st.tmp != "" {
+				_ = os.Remove(st.tmp)
+			}
 		}
-		if err := os.Chmod(p, 0o755); err != nil {
-			return fmt.Errorf("shim %s: %w", tool, err)
+	}
+	for i := range todo {
+		tmp, err := os.CreateTemp(dir, "."+todo[i].tool+".pdx-*")
+		if err != nil {
+			cleanup()
+			return fmt.Errorf("shim %s: %w", todo[i].tool, err)
 		}
+		todo[i].tmp = tmp.Name()
+		_, werr := tmp.WriteString(Script(todo[i].tool, pdxPath))
+		cerr := tmp.Close()
+		if werr == nil {
+			werr = cerr
+		}
+		if werr == nil {
+			werr = os.Chmod(todo[i].tmp, 0o755)
+		}
+		if werr != nil {
+			cleanup()
+			return fmt.Errorf("shim %s: %w", todo[i].tool, werr)
+		}
+	}
+	for i := range todo {
+		if err := os.Rename(todo[i].tmp, todo[i].dst); err != nil {
+			cleanup()
+			return fmt.Errorf("shim %s: %w", todo[i].tool, err)
+		}
+		todo[i].tmp = ""
 	}
 	zshenv := filepath.Join(home, ".zshenv")
 	cur, err := readIfExists(zshenv)
@@ -159,8 +266,13 @@ func Install(home, pdxPath string) error {
 }
 
 // Uninstall removes the block from home/.zshenv exactly (the rest of the file is kept; a file left empty by it is removed only
-// if it was ours alone, i.e. it held nothing but the block) and the shims it wrote.
+// if it was a plain file that held nothing but the block, and emptied, never removed, if it is a symlink) and the shims it wrote.
 func Uninstall(home string) error {
+	unlock, err := lock(home)
+	if err != nil {
+		return fmt.Errorf("lock: %w", err)
+	}
+	defer unlock()
 	zshenv := filepath.Join(home, ".zshenv")
 	cur, err := readIfExists(zshenv)
 	if err != nil {
@@ -180,7 +292,7 @@ func Uninstall(home string) error {
 	dir := DirIn(home)
 	for _, tool := range Tools {
 		p := filepath.Join(dir, tool)
-		if b, err := os.ReadFile(p); err == nil && strings.Contains(string(b), "pdx gate shim for "+tool) {
+		if owned(p, tool) {
 			_ = os.Remove(p)
 		}
 	}

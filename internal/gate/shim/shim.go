@@ -28,7 +28,15 @@ if [ -x "$PDX_BIN" ]; then
   exec "$PDX_BIN" gate --auto --tool ` + tool + ` -- "$@"
 fi
 # pdx is gone: run the real ` + tool + `, the first one on PATH that is not in this directory
-self=$(cd "$(dirname "$0")" 2>/dev/null && pwd -P)
+# this script's own real place: it may have been started through a symlink (an alias in another directory)
+me=$0
+n=0
+while [ -L "$me" ] && [ "$n" -lt 40 ]; do
+  t=$(readlink "$me") || break
+  case $t in /*) me=$t ;; *) me=$(dirname "$me")/$t ;; esac
+  n=$((n + 1))
+done
+self=$(cd "$(dirname "$me")" 2>/dev/null && pwd -P)
 old_ifs=$IFS; IFS=:
 for d in $PATH; do
   IFS=$old_ifs
@@ -45,7 +53,7 @@ for d in $PATH; do
       n=$((n + 1))
     done
     pd=$(cd "$(dirname "$p")" 2>/dev/null && pwd -P)
-    if [ "$pd" != "$self" ]; then
+    if [ "$n" -lt 40 ] && [ "$pd" != "$self" ]; then
       exec "$dir/` + tool + `" "$@"
     fi
   fi

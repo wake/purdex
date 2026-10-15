@@ -380,3 +380,144 @@ func TestZshenvBlock_WithARealZsh(t *testing.T) {
 		t.Fatalf("after uninstall: %q", out)
 	}
 }
+
+// ---- review fixes ----
+
+// A wrapper of the user's own with a shim's name (or a symlink there) is not overwritten: Install says which and writes nothing.
+func TestInstall_RefusesAForeignFileOrSymlinkBeforeWritingAnything(t *testing.T) {
+	for _, kind := range []string{"file", "symlink"} {
+		home := t.TempDir()
+		dir := DirIn(home)
+		writeExe(t, filepath.Join(dir, "pnpm"), "#!/bin/sh\necho mine\n")
+		if kind == "symlink" {
+			mine := filepath.Join(t.TempDir(), "my-pnpm")
+			writeExe(t, mine, "#!/bin/sh\necho mine\n")
+			if err := os.Remove(filepath.Join(dir, "pnpm")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(mine, filepath.Join(dir, "pnpm")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		err := Install(home, "/p/pdx")
+		var ce *ConflictError
+		if !errors.As(err, &ce) || len(ce.Paths) != 1 || ce.Paths[0] != filepath.Join(dir, "pnpm") {
+			t.Fatalf("%s: err = %v", kind, err)
+		}
+		for _, tool := range Tools {
+			if tool == "pnpm" {
+				continue
+			}
+			if _, err := os.Stat(filepath.Join(dir, tool)); !os.IsNotExist(err) {
+				t.Fatalf("%s: shim %s written although another target conflicts", kind, tool)
+			}
+		}
+		if _, err := os.Stat(filepath.Join(home, ".zshenv")); !os.IsNotExist(err) {
+			t.Fatalf("%s: .zshenv written although a target conflicts", kind)
+		}
+		if b, err := os.ReadFile(filepath.Join(dir, "pnpm")); err != nil || !strings.Contains(string(b), "echo mine") {
+			t.Fatalf("%s: the user's file is gone: %q %v", kind, b, err)
+		}
+		// and Uninstall leaves it alone too
+		if err := Uninstall(home); err != nil {
+			t.Fatal(err)
+		}
+		if b, err := os.ReadFile(filepath.Join(dir, "pnpm")); err != nil || !strings.Contains(string(b), "echo mine") {
+			t.Fatalf("%s: uninstall removed the user's file: %q %v", kind, b, err)
+		}
+	}
+}
+
+// The shim started through a symlink in another directory (pdx gone) still finds the real tool and does not exec itself again.
+func TestScript_StartedThroughAnAliasWithoutPdxRunsTheRealTool(t *testing.T) {
+	sh := requireTool(t, "sh")
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	if err := Install(home, filepath.Join(root, "no-such-pdx")); err != nil {
+		t.Fatal(err)
+	}
+	realDir := filepath.Join(root, "real")
+	writeExe(t, filepath.Join(realDir, "go"), "#!/bin/sh\necho \"real go $*\"\n")
+	alias := filepath.Join(root, "alias")
+	if err := os.MkdirAll(alias, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(DirIn(home), "go"), filepath.Join(alias, "go")); err != nil {
+		t.Fatal(err)
+	}
+	// a second alias: with the script's place taken from the name it was started by, the two would start each other forever
+	alias2 := filepath.Join(root, "alias2")
+	if err := os.MkdirAll(alias2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(DirIn(home), "go"), filepath.Join(alias2, "go")); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"PATH=" + alias2 + ":" + alias + ":" + DirIn(home) + ":" + realDir + ":/usr/bin:/bin", "HOME=" + home}
+	out, _, err := run(t, env, sh, filepath.Join(alias, "go"), "version")
+	if err != nil || strings.TrimSpace(out) != "real go version" {
+		t.Fatalf("started through the alias: %q %v", out, err)
+	}
+}
+
+// A ~/.zshenv that is a dangling symlink (the dotfiles repo is not cloned yet) keeps being a link: its target is created.
+func TestInstall_ADanglingZshenvSymlinkKeepsTheLinkAndCreatesTheTarget(t *testing.T) {
+	for _, relative := range []bool{false, true} {
+		home := t.TempDir()
+		dot := filepath.Join(home, "dotfiles")
+		target := filepath.Join(dot, "zshenv")
+		link := target
+		if relative {
+			link = filepath.Join("dotfiles", "zshenv")
+		}
+		if err := os.Symlink(link, filepath.Join(home, ".zshenv")); err != nil {
+			t.Fatal(err)
+		}
+		if err := Install(home, "/p/pdx"); err != nil {
+			t.Fatalf("relative=%v: %v", relative, err)
+		}
+		if fi, err := os.Lstat(filepath.Join(home, ".zshenv")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("relative=%v: the link was replaced: %v %v", relative, fi, err)
+		}
+		if got := readFile(t, target); !strings.Contains(got, blockBegin) {
+			t.Fatalf("relative=%v: the target has no block: %q", relative, got)
+		}
+		if err := Uninstall(home); err != nil {
+			t.Fatal(err)
+		}
+		if fi, err := os.Lstat(filepath.Join(home, ".zshenv")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("relative=%v: uninstall removed the link: %v %v", relative, fi, err)
+		}
+	}
+}
+
+// Two `pdx setup` at once, with different pdx paths, end with shims that all name one of them, never a mixture.
+func TestInstall_ConcurrentSetupsLeaveOneConsistentSet(t *testing.T) {
+	for round := 0; round < 10; round++ {
+		home := t.TempDir()
+		done := make(chan error, 2)
+		for _, p := range []string{"/a/pdx", "/b/pdx"} {
+			go func(p string) { done <- Install(home, p) }(p)
+		}
+		for i := 0; i < 2; i++ {
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+		}
+		seen := map[string]bool{}
+		for _, tool := range Tools {
+			s := readFile(t, filepath.Join(DirIn(home), tool))
+			for _, p := range []string{"/a/pdx", "/b/pdx"} {
+				if strings.Contains(s, p) {
+					seen[p] = true
+				}
+			}
+		}
+		if len(seen) != 1 {
+			t.Fatalf("round %d: the shims name %v", round, seen)
+		}
+		if z := readFile(t, filepath.Join(home, ".zshenv")); strings.Count(z, blockBegin) != 1 {
+			t.Fatalf("round %d: .zshenv:\n%s", round, z)
+		}
+	}
+}
