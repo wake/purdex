@@ -78,6 +78,15 @@ func runHostReport(ctx context.Context, args []string, stdout, stderr io.Writer,
 		fmt.Fprintln(stderr, "pdx host: daemon 的回應不是 report invalid_response")
 		return ExitError
 	}
+	// A daemon from before L2c answers the lease's report; decoding it would read the missing fields as zeros.
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &fields)
+	for _, k := range []string{"heavy", "light", "gate"} {
+		if _, ok := fields[k]; !ok {
+			fmt.Fprintln(stderr, "pdx host: daemon 的報表是舊格式（缺 "+k+"），請先升級 daemon incompatible_daemon")
+			return ExitError
+		}
+	}
 	if *asJSON {
 		fmt.Fprintln(stdout, line.String())
 		return ExitOK
@@ -115,6 +124,9 @@ func formatReport(w io.Writer, r resources.Report, loc *time.Location) {
 	fmt.Fprintf(w, "full      %.1f%% of the time, %d runs, longest %ds\n", r.Full.Share*100, r.Full.Runs, r.Full.LongestS)
 	fmt.Fprintf(w, "heavy     %d minutes with a heavy command running (most at once %d), highest load1 %.2f, highest memory %.1f%%\n",
 		r.Heavy.Minutes, r.Heavy.MaxRunning, r.Heavy.MaxLoad1, r.Heavy.MaxMem)
+	if r.Heavy.LegacyMinutes > 0 {
+		fmt.Fprintf(w, "          %d earlier minutes had two or more heavy leases held (the retired lease's figure, not counted above)\n", r.Heavy.LegacyMinutes)
+	}
 	fmt.Fprintf(w, "light     at most %d at once\n", r.Light.MaxRunning)
 	fmt.Fprintf(w, "gate      %d minutes with a command waiting for a slot, longest queue %d\n", r.Gate.WaitingMinutes, r.Gate.MaxWaiting)
 	if r.Zones.Minutes == 0 {

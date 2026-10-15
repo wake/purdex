@@ -9,9 +9,9 @@ type ReportMinute struct {
 	FullTicks    int
 	FullStarts   int
 	FullLongestS int
-	// HeavyRunning and LightRunning are the minute's peaks of the gate's slot records (a row from before L2 has the lease's
-	// heavy_held in HeavyRunning); GateWaiting the peak of commands waiting at the gate.
-	HeavyRunning, LightRunning, GateWaiting int
+	// HeavyRunning and LightRunning are the minute's peaks of the gate's slot records, GateWaiting the peak of commands waiting at
+	// the gate. HeavyHeld is the retired lease's heavy_held (0 in a row written from L2 on).
+	HeavyRunning, LightRunning, GateWaiting, HeavyHeld int
 	// Seconds sampled, and in each zone (0 for a row from before).
 	SampledS, NormalS, WarningS, DangerS int
 }
@@ -41,6 +41,9 @@ func BuildReport(since, until int64, minutes []ReportMinute) Report {
 			r.Heavy.MaxRunning = max(r.Heavy.MaxRunning, m.HeavyRunning)
 			r.Heavy.MaxLoad1 = math.Max(r.Heavy.MaxLoad1, m.Load1)
 			r.Heavy.MaxMem = math.Max(r.Heavy.MaxMem, m.Mem)
+		}
+		if m.HeavyHeld >= 2 {
+			r.Heavy.LegacyMinutes++
 		}
 		r.Light.MaxRunning = max(r.Light.MaxRunning, m.LightRunning)
 		if m.GateWaiting >= 1 {

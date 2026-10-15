@@ -115,6 +115,18 @@ func TestReport_JSONAndSinceAreSent(t *testing.T) {
 	}
 }
 
+// A daemon from before L2c answers the lease's report: the CLI says so instead of printing its missing fields as zeros.
+func TestHostReport_RefusesAnOlderDaemonsAnswer(t *testing.T) {
+	old := map[string]any{"since": 1, "until": 2, "coverage": map[string]int{}, "full": map[string]int{}, "heavy": map[string]int{"minutes": 4},
+		"requests": map[string]int{"total": 9}, "zones": map[string]int{}}
+	for _, args := range [][]string{nil, {"--json"}} {
+		code, stdout, stderr := driveHostReport(t, &fakeReportAPI{body: old}, args...)
+		if code == ExitOK || stdout != "" || !strings.Contains(stderr, "incompatible_daemon") {
+			t.Errorf("%v: code=%d stdout=%q stderr=%q", args, code, stdout, stderr)
+		}
+	}
+}
+
 // `pdx lease report` points at the new verb and asks the daemon nothing.
 func TestLeaseReport_PointsAtHostReport(t *testing.T) {
 	var stdout, stderr bytes.Buffer

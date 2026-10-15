@@ -1,7 +1,8 @@
 period    10-08 12:00 → 10-09 12:00
 timeline  1430 minute rows, 10-08 12:00 → 10-09 11:59
 full      0.4% of the time, 2 runs, longest 300s
-heavy     5 minutes with a heavy command running (most at once 2), highest load1 20.00, highest memory 99.0%
+heavy     4 minutes with a heavy command running (most at once 2), highest load1 11.20, highest memory 83.5%
+          1 earlier minutes had two or more heavy leases held (the retired lease's figure, not counted above)
 light     at most 3 at once
 gate      2 minutes with a command waiting for a slot, longest queue 4
 zones     normal 50.0%  warning 41.7%  danger 8.3%  (3 of 1430 minutes counted)

@@ -23,9 +23,9 @@ var reportDay0 = time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 //
 //	full:  minutes 100-104 are full for 12 ticks each (one run of 5 minutes, 300 s, started at 100), minute 500 for 3 ticks (a run
 //	       of 15 s): Σ full_ticks = 63 -> 315 s of 1430 × 60 = 85800 s covered.
-//	heavy: minutes 200-202 have a heavy command running in the gate's columns (load1 9.5/11.2/10.0, mem 70/83.5/80; two at once in 201),
-//	       minute 203 one in the lease's column from before L2 (load1 20, mem 99), minute 204 one more (load1 4, mem 55):
-//	       5 minutes, most 2 (not in the last one).
+//	heavy: minutes 200-202 and 204 have a heavy command running in the gate's columns (load1 9.5/11.2/10.0/4, mem 70/83.5/80/55; two at
+//	       once in 201): 4 minutes, most 2 (not in the last one), highest load1 11.2, memory 83.5. Minute 203 has two heavy leases held
+//	       in the retired lease's column (load1 20, mem 99): a legacy minute, in no figure of the gate's.
 //	light: at most 3 (minute 300).
 //	gate:  minutes 400-401 have a command waiting (1, then 4): 2 minutes, longest queue 4.
 //	zones: minutes 600-602 carry zone seconds, 60 s each: normal 60+30+0, warning 0+30+45, danger 0+0+15 of 180 s
@@ -52,7 +52,7 @@ func fixtureMinutes() []minuteRow {
 		case i == 202:
 			r.HeavyRunning, r.Load1, r.Mem = 1, 10, 80
 		case i == 203:
-			r.HeavyHeld, r.Load1, r.Mem = 1, 20, 99
+			r.HeavyHeld, r.Load1, r.Mem = 2, 20, 99
 		case i == 204:
 			r.HeavyRunning, r.Load1, r.Mem = 1, 4, 55
 		case i == 300:
@@ -119,7 +119,7 @@ func TestReport_FixtureDayExactly(t *testing.T) {
 		Since: since, Until: until,
 		Coverage: resources.ReportCoverage{From: since, To: reportDay0.Add(1439 * time.Minute).UnixMilli(), Minutes: 1430},
 		Full:     resources.ReportFull{Share: 315.0 / 85800.0, Runs: 2, LongestS: 300},
-		Heavy:    resources.ReportHeavy{Minutes: 5, MaxRunning: 2, MaxLoad1: 20, MaxMem: 99},
+		Heavy:    resources.ReportHeavy{Minutes: 4, MaxRunning: 2, MaxLoad1: 11.2, MaxMem: 83.5, LegacyMinutes: 1},
 		Light:    resources.ReportLight{MaxRunning: 3},
 		Gate:     resources.ReportGate{WaitingMinutes: 2, MaxWaiting: 4},
 		Zones:    resources.ReportZones{Minutes: 3, SampledS: 180, Normal: 90.0 / 180, Warning: 75.0 / 180, Danger: 15.0 / 180},
@@ -187,7 +187,7 @@ func TestReport_Route(t *testing.T) {
 	}
 }
 
-// The gate's columns and the lease's column both make a heavy minute; the figures are the larger of the two.
+// The gate's columns and the retired lease's column are read apart: a row from before L2 is a legacy minute, never a heavy one.
 func TestReport_ReadsTheGatesColumns(t *testing.T) {
 	s := newTestStore(t)
 	at := reportDay0.UnixMilli()
@@ -203,7 +203,7 @@ func TestReport_ReadsTheGatesColumns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(minutes) != 2 || minutes[0].HeavyRunning != 2 || minutes[1].HeavyRunning != 1 || minutes[1].LightRunning != 3 || minutes[1].GateWaiting != 2 {
+	if len(minutes) != 2 || minutes[0].HeavyRunning != 0 || minutes[0].HeavyHeld != 2 || minutes[1].HeavyRunning != 1 || minutes[1].LightRunning != 3 || minutes[1].GateWaiting != 2 {
 		t.Fatalf("minutes = %+v", minutes)
 	}
 }

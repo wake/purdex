@@ -14,10 +14,10 @@ const defaultReportSince = 24 * time.Hour
 
 // ReportMinutes reads the minute rows in [since, until), as the report reads them. Read only.
 func (s *leaseStore) ReportMinutes(since, until int64) ([]resources.ReportMinute, error) {
-	// heavy_held is the lease's column (written 0 from L2 on, kept in the rows before); heavy_running is the gate's: a minute of
-	// either kind counts, so the figures do not lose the minutes recorded before L2.
-	mrows, err := s.db.Query(`SELECT at, load1, mem, full_ticks, full_starts, full_longest_s, max(heavy_held, heavy_running),
-			light_running, gate_waiting, sampled_s, normal_s, warning_s, danger_s
+	// heavy_held is the retired lease's column (written 0 from L2 on, kept in the rows before); it is read apart from the gate's
+	// heavy_running, whose figures it must not be mixed into.
+	mrows, err := s.db.Query(`SELECT at, load1, mem, full_ticks, full_starts, full_longest_s, heavy_running,
+			light_running, gate_waiting, heavy_held, sampled_s, normal_s, warning_s, danger_s
 		FROM host_minutes WHERE at >= ? AND at < ? ORDER BY at`, since, until)
 	if err != nil {
 		return nil, err
@@ -27,7 +27,7 @@ func (s *leaseStore) ReportMinutes(since, until int64) ([]resources.ReportMinute
 	for mrows.Next() {
 		var m resources.ReportMinute
 		if err := mrows.Scan(&m.At, &m.Load1, &m.Mem, &m.FullTicks, &m.FullStarts, &m.FullLongestS, &m.HeavyRunning,
-			&m.LightRunning, &m.GateWaiting, &m.SampledS, &m.NormalS, &m.WarningS, &m.DangerS); err != nil {
+			&m.LightRunning, &m.GateWaiting, &m.HeavyHeld, &m.SampledS, &m.NormalS, &m.WarningS, &m.DangerS); err != nil {
 			return nil, err
 		}
 		out = append(out, m)

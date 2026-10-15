@@ -12,10 +12,11 @@
     "longest_s": 300
   },
   "heavy": {
-    "minutes": 5,
+    "minutes": 4,
     "max_running": 2,
-    "max_load1": 20,
-    "max_mem": 99
+    "max_load1": 11.2,
+    "max_mem": 83.5,
+    "legacy_minutes": 1
   },
   "light": {
     "max_running": 3

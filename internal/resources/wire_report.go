@@ -61,12 +61,15 @@ type ReportFull struct {
 }
 
 // ReportHeavy is what the host did while the gate had a heavy command running. Minutes counts the minutes with at least one (the
-// gate lets one run); a minute recorded before L2 counts by its lease's heavy_held. MaxRunning is the largest number in a minute.
+// gate lets one run), MaxRunning is the largest number in a minute; both come from the gate's heavy_running alone. LegacyMinutes is
+// the retired lease's figure for the rows written before L2 (minutes with two or more heavy leases held): a different thing, kept
+// apart so that the two are never added up.
 type ReportHeavy struct {
-	Minutes    int     `json:"minutes"`
-	MaxRunning int     `json:"max_running"`
-	MaxLoad1   float64 `json:"max_load1"`
-	MaxMem     float64 `json:"max_mem"`
+	Minutes       int     `json:"minutes"`
+	MaxRunning    int     `json:"max_running"`
+	MaxLoad1      float64 `json:"max_load1"`
+	MaxMem        float64 `json:"max_mem"`
+	LegacyMinutes int     `json:"legacy_minutes"`
 }
 
 // ReportLight is the gate's light slots in use.
