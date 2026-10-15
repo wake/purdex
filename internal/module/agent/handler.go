@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/wake/purdex/internal/execstat"
 	"log"
 	"net/http"
 	"os"
@@ -220,6 +221,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"schema_invalid"}`, http.StatusBadRequest)
 		return
 	}
+	execstat.Event("hook." + m.hookEventLabel(req.AgentType, req.PurdexName)) // the denominator of the hook path's cost (probe dedupe plan)
 
 	// The identity version is allocated HERE — before verification, which is
 	// the first thing on this path that waits. Verification reads the sender's
@@ -1567,4 +1569,19 @@ func (m *Module) sessionNameOfPane(ctx context.Context, paneID string) string {
 		return ""
 	}
 	return p.SessionName
+}
+
+// hookEventLabel is the event's catalog name for the counters, or "unknown": the name came over the wire, and a registry
+// keyed by whatever a client sends would grow without bound.
+func (m *Module) hookEventLabel(agentType, purdexName string) string {
+	if m == nil || m.registry == nil {
+		return "unknown"
+	}
+	provider, _ := m.registry.Get(agentType)
+	if installer, ok := provider.(agentpkg.HookInstaller); ok {
+		if _, found := agentpkg.LookupByPurdexName(installer.Events(), purdexName); found {
+			return purdexName
+		}
+	}
+	return "unknown"
 }

@@ -121,6 +121,9 @@ func (c *Core) capabilityList() []string {
 			out = append(out, "journal.v1") // GET /api/journal, /api/journal/tasks, /api/journal/roadmap, PUT /api/journal/pin, journal.changed events; only while the journal runs ([journal] enabled, and wired)
 		}
 	}
+	if c.moduleReady("fleet") {
+		out = append(out, "fleet.v1") // GET /api/fleet, GET /api/fleet/ssh-aliases, the opt-in fleet.changed push (?fleet=v1)
+	}
 	return out
 }
 

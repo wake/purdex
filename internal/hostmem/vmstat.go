@@ -8,7 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os/exec"
+	"github.com/wake/purdex/internal/execstat"
 	"strconv"
 	"strings"
 )
@@ -95,5 +95,5 @@ func (v VMStat) CountersErr() error {
 
 // Run forks vm_stat and returns its output; ctx bounds it.
 func Run(ctx context.Context) ([]byte, error) {
-	return exec.CommandContext(ctx, "/usr/bin/vm_stat").Output()
+	return execstat.CommandContext(ctx, "hostmem.vm_stat", "/usr/bin/vm_stat").Output()
 }

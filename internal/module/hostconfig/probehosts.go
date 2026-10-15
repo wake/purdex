@@ -256,3 +256,13 @@ func (m *Module) ProbeHosts() ([]ProbeHost, int64, error) {
 }
 
 var _ ProbeHostsReader = (*Module)(nil)
+
+// ProbeHostsRevision is the stored row's revision alone: one store read, no alias check against the SSH config (ProbeHosts
+// re-reads ~/.ssh/config every time). The fleet module polls it and reads the rows only when it moves.
+func (m *Module) ProbeHostsRevision() (int64, error) {
+	e, err := m.store.Get(KeyProbeHosts)
+	if err != nil {
+		return 0, err
+	}
+	return e.Revision, nil
+}

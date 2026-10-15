@@ -933,3 +933,25 @@ func TestDaemonPprofRequiresHostToken(t *testing.T) {
 		t.Fatalf("POST /debug/pprof/cmdline: got 200, want a refusal")
 	}
 }
+
+// The fork counters (/api/debug/execstat) sit behind the same authentication as the profiler: no token, a wrong one and a paired
+// peer host's inbound token are all 401; the admin token gets the report. Mutation gate: registered outside the general chain → the
+// unauthenticated request gets in (red).
+func TestDaemonExecstatRequiresHostToken(t *testing.T) {
+	c := newTestCore(&config.Config{Token: "host-token", DataDir: t.TempDir(), Peers: config.PeersConfig{
+		Hosts: []config.PeerHost{{Alias: "host-a", HostID: "hostid-a", InboundToken: "host-a-token"}}}})
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+	h := newOuterHandler(c, mux, mux, nil)
+
+	const path = "/api/debug/execstat"
+	for name, token := range map[string]string{"no token": "", "a wrong token": "wrong-token", "a peer host's token": "host-a-token"} {
+		if rec := doRequest(t, h, "GET", path, token); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s: got %d, want 401", name, rec.Code)
+		}
+	}
+	rec := doRequest(t, h, "GET", path, "host-token")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"tags"`) {
+		t.Fatalf("admin token: got %d %q, want 200 with the report", rec.Code, rec.Body.String())
+	}
+}
