@@ -73,29 +73,35 @@ func (s *Slot) Label() string { return string(s.Class) + "-" + strconv.Itoa(s.K)
 // gone, whatever happens to the gate: a gate killed with SIGKILL does not free the slot under a tree that still runs.
 func (s *Slot) File() *os.File { return s.f }
 
-// Release gives the gate's own hold on the slot back: it closes its descriptor, and does not unlock. The command and its
-// descendants inherited the same open file description (fd 3), so the lock stays for as long as any of them is alive: a
-// child that escaped the gate's clean-up (it left the group and was orphaned between two looks at the process table) keeps
-// the slot, and a second gate cannot start a heavy command on top of it. When nothing else holds the lock the slot is free
-// at once and the record goes; when something does, the record stays, and `pdx gate status` shows the slot as held by a
-// tree whose gate is gone (the price: a command that daemonizes and keeps fd 3 open, such as a tmux server started by a
-// test, holds the slot until it ends).
-func (s *Slot) Release() {
+// Straggler is a process that still holds a slot's lock file open when the gate lets the slot go.
+type Straggler struct {
+	PID int
+	Cmd string
+}
+
+// Release gives the slot back: the record goes, then the lock is dropped with LOCK_UN and the descriptor closed. flock
+// belongs to the open file description, which the command and its descendants share (fd 3), so one unlock frees the
+// slot for everybody, even when a child escaped the clean-up and still holds fd 3 (a daemon such as a tmux server, which
+// would otherwise hold the slot for good). Before the unlock, find (when given) names the other processes that hold the
+// lock file; they are returned so the gate can say they were left running. A gate that is killed never gets here: the
+// lock then stays with the tree that is still alive.
+func (s *Slot) Release(find func(path string) []Straggler) []Straggler {
 	if s == nil || s.f == nil {
-		return
+		return nil
 	}
-	path := s.f.Name()
+	var left []Straggler
+	if find != nil {
+		for _, p := range find(s.f.Name()) {
+			if p.PID != os.Getpid() {
+				left = append(left, p)
+			}
+		}
+	}
+	_ = os.Remove(s.rec) // before the unlock: afterwards the record may be the next holder's
+	_ = syscall.Flock(int(s.f.Fd()), syscall.LOCK_UN)
 	_ = s.f.Close()
 	s.f = nil
-	probe, err := os.OpenFile(path, os.O_RDWR, 0)
-	if err != nil {
-		_ = os.Remove(s.rec)
-		return
-	}
-	defer probe.Close() // closing the probe drops the lock it takes
-	if st, _ := flockNB(probe); st == lockGot {
-		_ = os.Remove(s.rec) // nobody else holds it: the slot is free and has no holder
-	}
+	return left
 }
 
 // SetHolder writes the record of the command the slot is held for (atomically: a reader sees a whole record or none).

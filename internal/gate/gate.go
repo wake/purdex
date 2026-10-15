@@ -74,8 +74,10 @@ type Gate struct {
 	IsTTY    func() bool
 	DiskFree func(path string) (int64, error)
 	Facts    func() HostFacts
-	PID      func() int
-	Token    func() string
+	// Holders names the other processes that hold a slot's lock file when the slot is released.
+	Holders func(path string) []Straggler
+	PID     func() int
+	Token   func() string
 }
 
 // New is the gate of this host with the given config.
@@ -84,7 +86,7 @@ func New(cfg Config) *Gate {
 		st: &state{cfg: cfg}, Now: time.Now, Stderr: os.Stderr, TreeEvery: 500 * time.Millisecond,
 		Poll:    func() time.Duration { return time.Second + time.Duration(mrand.Int63n(int64(2*time.Second))) },
 		Session: os.Getenv("CLAUDE_SESSION_ID"),
-		Procs:   procTable, IsTTY: stdinIsTTY, DiskFree: freeBytes, Facts: ReadHostFacts, PID: os.Getpid, Token: newToken,
+		Procs:   procTable, IsTTY: stdinIsTTY, DiskFree: freeBytes, Facts: ReadHostFacts, PID: os.Getpid, Token: newToken, Holders: lsofHolders,
 	}
 	g.Pressure = NewHostReader(cfg.Dir)
 	g.Tools = hostTools()
@@ -261,7 +263,11 @@ func (g *Gate) Run(ctx context.Context, o Options) (int, error) {
 	if slot == nil { // the directory is denied (a sandbox): run without a slot
 		return g.start(ctx, cfg, o, argv, env, nil, sigs)
 	}
-	defer slot.Release()
+	defer func() {
+		if left := slot.Release(g.Holders); len(left) > 0 {
+			g.say("these processes escaped the clean-up and are still running: %s; the %s slot is released", describeStragglers(left), slot.Class)
+		}
+	}()
 	if class == ClassHeavy {
 		// the wait may have taken minutes or hours: the floor is checked again, with today's settings, before the command starts
 		if msg := g.diskRefusal(g.Config(), o.Dir); msg != "" {

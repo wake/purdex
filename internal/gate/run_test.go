@@ -545,7 +545,7 @@ func TestRun_AKilledGateKeepsItsSlotWhileItsTreeRuns(t *testing.T) {
 	eventually(t, "the slot to be free once the tree is gone", func() bool {
 		s, _, err := p.TryTake(tk)
 		if err == nil && s != nil {
-			s.Release()
+			s.Release(nil)
 			return true
 		}
 		return false
@@ -851,18 +851,18 @@ func TestRun_ACommandIsNotRunWithoutItsHolderRecord(t *testing.T) {
 	assert.Empty(t, g.Status().Heavy)
 }
 
-// A child that escaped the clean-up (orphaned at once, so no look at the process table saw it) still holds the lock it
-// inherited, so the slot stays taken and status says so; once it ends the slot is free. (M: unlock on release.)
-func TestRun_AnEscapedChildKeepsTheSlotUntilItEnds(t *testing.T) {
+// A child that escaped the clean-up (orphaned at once, so no look at the process table saw it) still holds fd 3, but the
+// slot is released when the command ends, and the gate says who was left running. (M: no unlock on release.)
+func TestRun_AnEscapedChildDoesNotKeepTheSlotAndIsNamed(t *testing.T) {
 	if _, err := exec.LookPath("perl"); err != nil {
 		t.Skip("perl is needed to call setsid")
 	}
-	g, _ := testGate(t)
+	if _, err := exec.LookPath("lsof"); err != nil {
+		t.Skip("lsof is needed to name the leftovers")
+	}
+	g, buf := testGate(t)
 	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1 })
 	g.TreeEvery = time.Hour // no look at the tree at all: the child is orphaned unseen
-	deadGate := exec.Command("true")
-	require.NoError(t, deadGate.Run())
-	g.PID = func() int { return deadGate.Process.Pid } // this test process stands in for a gate that has since exited
 	dir := t.TempDir()
 	script := `perl -e 'use POSIX; if (fork == 0) { POSIX::setsid(); open F, ">", $ARGV[0]; print F $$; close F; exec "sleep", "300" }' ` + dir + `/pid; exit 0`
 	r := runSync(t, g, Options{Argv: sh(script), Class: ClassHeavy})
@@ -870,19 +870,30 @@ func TestRun_AnEscapedChildKeepsTheSlotUntilItEnds(t *testing.T) {
 	pid := pidFrom(t, dir+"/pid")
 	defer func() { _ = syscall.Kill(pid, syscall.SIGKILL) }()
 
-	held := g.Status().Heavy
-	require.Len(t, held, 1, "the slot is still taken by the escaped child")
-	assert.True(t, held[0].Orphaned, "and status says its gate is gone while the tree lives")
+	assert.Empty(t, g.Status().Heavy, "the slot is free although the escaped child still holds fd 3")
 	pool := g.pool(g.Config(), ClassHeavy)
 	tk, err := pool.Enqueue()
 	require.NoError(t, err)
 	s, _, err := pool.TryTake(tk)
 	require.NoError(t, err)
-	assert.Nil(t, s, "a second gate cannot take it")
+	assert.NotNil(t, s, "a second gate can take it")
+	s.Release(nil)
 	tk.Drop()
+	assert.Contains(t, buf.String(), "escaped the clean-up and are still running: "+strconv.Itoa(pid))
+	assert.Contains(t, buf.String(), "slot is released")
+}
 
-	require.NoError(t, syscall.Kill(pid, syscall.SIGKILL))
-	eventually(t, "the slot to be free", func() bool { return len(g.Status().Heavy) == 0 })
+// Release names what else holds the lock file and does not name itself.
+func TestSlot_ReleaseReturnsTheOthersWhoHoldTheLock(t *testing.T) {
+	p := &Pool{Dir: t.TempDir(), Class: ClassHeavy, Size: 1, Now: time.Now}
+	tk, err := p.Enqueue()
+	require.NoError(t, err)
+	defer tk.Drop()
+	s, _, err := p.TryTake(tk)
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	left := s.Release(func(string) []Straggler { return []Straggler{{PID: os.Getpid()}, {PID: 4242, Cmd: "tmux"}} })
+	assert.Equal(t, []Straggler{{PID: 4242, Cmd: "tmux"}}, left)
 }
 
 // What a waiting command is told: who holds the slot (cut and scrubbed), where, for how long, how many are ahead, that the

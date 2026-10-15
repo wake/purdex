@@ -46,7 +46,7 @@ func TestPool_TakesUpToSizeThenWaits(t *testing.T) {
 	s, _, err := p.TryTake(tk)
 	require.NoError(t, err)
 	assert.Nil(t, s, "both slots are held")
-	slots[0].Release()
+	slots[0].Release(nil)
 	s, _, err = p.TryTake(tk)
 	require.NoError(t, err)
 	require.NotNil(t, s, "a released slot is free again")
@@ -66,7 +66,7 @@ func TestPool_TheOlderTicketGetsTheFreedSlot(t *testing.T) {
 
 	first := ticketAt(t, p, 1000)
 	second := ticketAt(t, p, 2000)
-	hs.Release()
+	hs.Release(nil)
 
 	s, ahead, err := p.TryTake(second)
 	require.NoError(t, err)
@@ -83,7 +83,7 @@ func TestPool_TheOlderTicketGetsTheFreedSlot(t *testing.T) {
 	s2, _, err := p.TryTake(second)
 	require.NoError(t, err)
 	assert.Nil(t, s2)
-	s.Release()
+	s.Release(nil)
 	s2, _, err = p.TryTake(second)
 	require.NoError(t, err)
 	assert.NotNil(t, s2)
@@ -155,7 +155,7 @@ func TestPool_HoldersAreTheLockedSlotsOnly(t *testing.T) {
 	assert.Equal(t, []string{"go", "test", "./..."}, held[0].Argv)
 	assert.Equal(t, ClassHeavy, held[0].Class)
 
-	s.Release()
+	s.Release(nil)
 	assert.Empty(t, p.Held())
 	_, err = os.Stat(p.recordPath(1))
 	assert.True(t, os.IsNotExist(err), "the record goes with the slot")
