@@ -208,6 +208,10 @@ func (p *Pool) liveBefore(t *Ticket) ([]string, error) {
 	}
 	var names []string
 	for _, e := range ents {
+		if strings.HasSuffix(e.Name(), ".new") {
+			p.reapStaging(e)
+			continue
+		}
 		if e.IsDir() || strings.Contains(e.Name(), ".") {
 			continue
 		}
@@ -236,6 +240,33 @@ func (p *Pool) liveBefore(t *Ticket) ([]string, error) {
 		live = append(live, n)
 	}
 	return live, nil
+}
+
+// stagingGrace and stagingMaxAge say when a half-made ticket (<name>.new, see Enqueue) is abandoned: its maker is gone and it
+// is at least stagingGrace old, or it is stagingMaxAge old whoever has its pid now (a healthy Enqueue takes microseconds).
+const (
+	stagingGrace  = 5 * time.Second
+	stagingMaxAge = 10 * time.Minute
+)
+
+// reapStaging removes a half-made ticket whose maker died between creating and renaming it. The scans skip these files on
+// purpose (a ticket being made must not be taken for a dead gate's), so nothing else would ever remove one.
+func (p *Pool) reapStaging(e os.DirEntry) {
+	info, err := e.Info()
+	if err != nil {
+		return
+	}
+	age := p.Now().Sub(info.ModTime())
+	parts := strings.Split(strings.TrimSuffix(e.Name(), ".new"), "-")
+	dead := false
+	if len(parts) == 3 {
+		if pid, err := strconv.Atoi(parts[1]); err == nil && pid > 0 && !pidAlive(pid) {
+			dead = true
+		}
+	}
+	if (dead && age >= stagingGrace) || age >= stagingMaxAge {
+		_ = os.Remove(filepath.Join(p.queueDir(), e.Name()))
+	}
 }
 
 // Waiting is the number of live tickets in the queue (all of them, for the status).

@@ -1,7 +1,9 @@
 package gate
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"syscall"
 	"testing"
@@ -331,4 +333,36 @@ func TestPool_AFailedEnqueueLeavesNoFile(t *testing.T) {
 	tk.Drop()
 	ents, _ := os.ReadDir(p.queueDir())
 	assert.Empty(t, ents)
+}
+
+// A gate that dies between creating and renaming its ticket leaves a .new file that the scans skip; it is removed once its
+// maker is gone (or it is very old). (M: skip the staging files for good.)
+func TestPool_AHalfMadeTicketOfADeadGateIsReaped(t *testing.T) {
+	p := testPool(t, ClassHeavy, 1)
+	require.NoError(t, os.MkdirAll(p.queueDir(), 0o755))
+	deadCmd := exec.Command("true")
+	require.NoError(t, deadCmd.Run())
+	deadPID := deadCmd.Process.Pid
+
+	mk := func(name string, age time.Duration) string {
+		path := filepath.Join(p.queueDir(), name)
+		require.NoError(t, os.WriteFile(path, nil, 0o644))
+		old := time.Now().Add(-age)
+		require.NoError(t, os.Chtimes(path, old, old))
+		return path
+	}
+	deadOld := mk(fmt.Sprintf("00000000000000000001-%d-000001.new", deadPID), time.Minute)
+	deadFresh := mk(fmt.Sprintf("00000000000000000002-%d-000001.new", deadPID), time.Second)
+	aliveFresh := mk(fmt.Sprintf("00000000000000000003-%d-000001.new", os.Getpid()), time.Minute)
+	aliveVeryOld := mk(fmt.Sprintf("00000000000000000004-%d-000001.new", os.Getpid()), time.Hour)
+	odd := mk("not-a-ticket.new", time.Minute)
+
+	_, err := p.liveBefore(&Ticket{Name: "99999999999999999999-1-000000"})
+	require.NoError(t, err)
+	exists := func(path string) bool { _, err := os.Stat(path); return err == nil }
+	assert.False(t, exists(deadOld), "its maker is gone and it is not new")
+	assert.True(t, exists(deadFresh), "a few seconds old: the maker may only just have died, or pid reuse; wait")
+	assert.True(t, exists(aliveFresh), "its maker is alive: it may be in Enqueue")
+	assert.False(t, exists(aliveVeryOld), "an hour old whoever has the pid")
+	assert.True(t, exists(odd), "a name that is not a ticket's is left alone")
 }
