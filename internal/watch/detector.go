@@ -70,6 +70,7 @@ type Detector struct {
 	trees map[treeKey]*treeState
 
 	orphanMiss map[string]int // consecutive passes a once-orphaned holder was not orphaned
+	started    bool
 
 	pressure, pages episode
 	havePages       bool
@@ -95,7 +96,12 @@ func (d *Detector) Pass(in Input) []Event {
 
 func (d *Detector) unmanagedTrees(in Input) []Event {
 	set := in.Set
-	if set.TS <= 0 || (set.XCores <= 0 && set.YMB <= 0) {
+	interval := in.Interval
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	// a window shorter than two ticks would be one sample standing for all of it: not a window that was observed
+	if set.TS < 2*interval || (set.XCores <= 0 && set.YMB <= 0) {
 		d.trees = map[treeKey]*treeState{}
 		return nil
 	}
@@ -178,11 +184,7 @@ func (d *Detector) unmanagedTrees(in Input) []Event {
 		}
 		st.window = set.TS
 		u := uses[root]
-		maxGap := in.Interval
-		if maxGap <= 0 {
-			maxGap = 5 * time.Second
-		}
-		maxGap = maxGap*5/2 + time.Second
+		maxGap := interval*5/2 + time.Second
 		if n := len(st.samples); n > 0 && in.Now.Sub(st.samples[n-1].at) > maxGap {
 			// a pass was missed (a failed sample): what was not observed is not part of a window, so it starts again
 			st.since, st.samples = in.Now, nil
@@ -218,7 +220,7 @@ func (d *Detector) overThreshold(st *treeState, now time.Time, set Settings) boo
 	var minRSS uint64
 	first := true
 	for i, s := range st.samples {
-		if s.at.After(start) { // inside the window
+		if !s.at.Before(start) { // inside the window, its left edge too
 			if first || s.rss < minRSS {
 				minRSS, first = s.rss, false
 			}
@@ -375,6 +377,16 @@ func (d *Detector) slotEvents(in Input) []Event {
 	}
 	// A holder that is not orphaned in one pass keeps its first-seen time for orphanGrace passes (the reading may flicker); one
 	// that is gone altogether, or that stays not orphaned, is forgotten, also one remembered from before a restart.
+	if !d.started {
+		// after a restart the memory may hold first-seen times this detector has no miss count for: a holder that is there and
+		// reads as not orphaned in the first pass gets the same grace as any other
+		d.started = true
+		for key := range present {
+			if !orphaned[key] {
+				d.orphanMiss[key] = 0
+			}
+		}
+	}
 	keep := map[string]bool{}
 	for key := range orphaned {
 		keep[key] = true

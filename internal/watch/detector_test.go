@@ -476,13 +476,14 @@ func TestE4_ASlotHeldLongerThanTheAlertTimeOnceAndAgainForANewHolder(t *testing.
 
 func TestE3E4_TheOrderIsE1ThenE2ThenE3ThenE4(t *testing.T) {
 	r := newRig(t)
-	r.set.OrphanAfter, r.set.PressureTS, r.set.TS = 5*time.Second, 5*time.Second, 5*time.Second
+	r.set.OrphanAfter, r.set.PressureTS, r.set.TS = 10*time.Second, 10*time.Second, 10*time.Second
 	r.procs = goTest(3, 100)
 	r.argv[100] = []string{"go", "test", "./..."}
 	r.raw.Pressure = 4
-	// held 60 min at the second pass (t0+5s): E4 is due then too
-	r.holders = []gate.Holder{holder(1, 500, t0.Add(5*time.Second-time.Hour), true)}
-	assert.Empty(t, r.pass(), "the first pass only starts the windows")
+	// held 60 min at the third pass (t0+10s): E4 is due then too
+	r.holders = []gate.Holder{holder(1, 500, t0.Add(10*time.Second-time.Hour), true)}
+	assert.Empty(t, r.pass(), "the first passes only start the windows")
+	assert.Empty(t, r.pass())
 	var kinds []Kind
 	for _, e := range r.pass() {
 		kinds = append(kinds, e.Kind)
@@ -609,6 +610,20 @@ func TestE3E4_HoldersOfTheSameSlotAndPidInTheSameSecondAreNotTheSame(t *testing.
 	assert.NotEqual(t, holderKey(a), holderKey(b))
 }
 
+// After a restart the first pass may read the holder as not orphaned: the remembered first-seen time gets the same grace.
+func TestE3_TheGraceAlsoCoversTheFirstPassAfterARestart(t *testing.T) {
+	r := newRig(t)
+	orphan := holder(1, 500, t0.Add(-time.Hour), true)
+	r.holders = []gate.Holder{orphan}
+	r.run(10 * time.Minute)
+	r.d = New(r.mem) // restart
+	r.holders = []gate.Holder{holder(1, 500, orphan.Started, false)}
+	r.pass() // the first pass reads it as alive
+	r.holders = []gate.Holder{orphan}
+	assert.Len(t, filterKind(r.run(6*time.Minute), KindSlotOrphaned), 1, "the first-seen time from before the restart is kept")
+	assert.Equal(t, 1, r.mem.Orphans())
+}
+
 // One reading of "not orphaned" does not throw away the time already counted; staying not orphaned does.
 func TestE3_AFlickerInTheOrphanReadingKeepsTheFirstSeenTime(t *testing.T) {
 	r := newRig(t)
@@ -637,4 +652,30 @@ func TestE1_WithoutAGateCheckNoProcessIsAGate(t *testing.T) {
 		n += len(d.Pass(Input{Now: t0.Add(time.Duration(i) * tick), Procs: procs, Set: DefaultSettings()}))
 	}
 	assert.Equal(t, 1, n)
+}
+
+// A window shorter than two ticks is one sample standing for all of it: E1 is off then, and a window's left edge counts.
+func TestE1_AWindowShorterThanTwoTicksIsNotMade(t *testing.T) {
+	r := newRig(t)
+	r.set.TS = 5 * time.Second // one tick
+	r.procs = goTest(3, 100)
+	assert.Empty(t, r.run(5*time.Minute))
+	r.set.TS = 10 * time.Second // two ticks: a window
+	assert.Len(t, r.run(30*time.Second), 1)
+}
+
+func TestE1_MemoryAtTheLeftEdgeOfTheWindowCounts(t *testing.T) {
+	r := newRig(t)
+	r.set.TS = 20 * time.Second
+	for i := 0; i < 10; i++ { // memory dips at the pass exactly TS before the fire
+		mb := uint64(2000)
+		if i == 0 {
+			mb = 900
+		}
+		r.procs = goTest(0.1, mb)
+		ev := r.pass()
+		if i == 4 { // t=20: the window [0, 20] has the dip at its left edge
+			assert.Empty(t, ev, "the sample at the left edge is in the window")
+		}
+	}
 }
