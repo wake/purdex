@@ -24,8 +24,9 @@ var goValueFlags = map[string]bool{
 	"-cpu": true, "-coverprofile": true, "-o": true, "-vet": true, "-covermode": true, "-coverpkg": true,
 	"-skip": true, "-fuzz": true, "-exec": true, "-ldflags": true, "-gcflags": true, "-mod": true, "-modfile": true,
 	"-overlay": true, "-pkgdir": true, "-blockprofile": true, "-cpuprofile": true, "-memprofile": true, "-trace": true,
-	"-outputdir": true, "-shuffle": true, "-fuzztime": true, "-test.run": true, "-asmflags": true, "-buildvcs": true,
-	"-C": true, "-trimpath": false,
+	"-outputdir": true, "-shuffle": true, "-fuzztime": true, "-test.run": true, "-asmflags": true,
+	"-C": true, "-list": true, "-vettool": true, "-toolexec": true, "-buildmode": true, "-compiler": true,
+	"-installsuffix": true,
 }
 
 // vitestValueFlags are the vitest flags whose value is the next word.
@@ -37,6 +38,13 @@ var vitestValueFlags = map[string]bool{
 	"--retry": true, "--bail": true, "--testTimeout": true, "--hookTimeout": true, "--exclude": true,
 	"--cache": true, "--poolOptions.threads.maxThreads": true, "--poolOptions.forks.maxForks": true,
 	"--poolOptions.threads.minThreads": true, "--poolOptions.forks.minForks": true, "--browser.name": true,
+}
+
+// runnerValueOpts are the options of a package runner (pnpm, yarn, npm) whose value is the next word: the word after
+// them is not the subcommand or the tool.
+var runnerValueOpts = map[string]bool{
+	"-C": true, "--dir": true, "--prefix": true, "--filter": true, "-F": true, "--workspace": true, "-w": true,
+	"--package": true, "-p": true, "--cwd": true,
 }
 
 // scripts a package runner is taken to run in full: a script by one of these names is a whole-project run.
@@ -107,9 +115,16 @@ func wide(pkgs []string) bool {
 }
 
 func classifyGo(args []string) Class {
-	// `go -C dir test …`: skip the directory flag to find the subcommand.
-	for len(args) >= 2 && args[0] == "-C" {
-		args = args[2:]
+	// `go -C dir test …` and `go -C=dir test …`: skip the directory flag to find the subcommand.
+	for len(args) >= 1 && (args[0] == "-C" || strings.HasPrefix(args[0], "-C=")) {
+		if args[0] == "-C" {
+			if len(args) < 2 {
+				return ClassNone
+			}
+			args = args[2:]
+		} else {
+			args = args[1:]
+		}
 	}
 	if len(args) == 0 {
 		return ClassNone
@@ -136,7 +151,7 @@ func classifyVitest(args []string) Class {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case a == "--version" || a == "-v" || a == "--help" || a == "-h" || a == "watch" || a == "dev":
+		case a == "--version" || a == "-v" || a == "--help" || a == "-h":
 			return ClassNone
 		case a == "run":
 			run = true
@@ -206,8 +221,7 @@ func classifyRunner(runner string, args []string) Class {
 		if !strings.HasPrefix(a, "-") {
 			break
 		}
-		switch a {
-		case "-C", "--dir", "--prefix", "--filter", "-F", "--workspace", "-w", "--package", "-p", "--cwd":
+		if runnerValueOpts[a] {
 			i++ // the option's value
 		}
 	}
@@ -215,6 +229,9 @@ func classifyRunner(runner string, args []string) Class {
 		return ClassNone
 	}
 	word, rest := args[i], args[i+1:]
+	if runner == "yarn" && word == "workspaces" && len(rest) > 0 && rest[0] == "foreach" {
+		return yarnForeach(rest[1:])
+	}
 	switch word {
 	case "install", "i", "add", "remove", "rm", "update", "up", "link", "unlink", "store", "config", "env", "dlx", "create",
 		"init", "outdated", "list", "ls", "why", "audit", "publish", "pack", "root", "bin", "cache", "version", "help":
@@ -242,6 +259,34 @@ func classifyRunner(runner string, args []string) Class {
 	}
 	if recursive {
 		return ClassHeavy
+	}
+	return ClassNone
+}
+
+// yarnForeach reads `yarn workspaces foreach <options> [run] <script|tool …>`: a run over the workspaces is heavy when
+// it runs a whole-project script, or when it is asked to go through all of them (-A / --all / -R / --recursive).
+func yarnForeach(args []string) Class {
+	all := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "-A" || a == "--all" || a == "-R" || a == "--recursive" || a == "-W" || a == "--worktree":
+			all = true
+		case a == "-p" || a == "--parallel" || a == "-i" || a == "--interlaced" || a == "-v" || a == "--verbose" || a == "-t" || a == "--topological" || a == "--topological-dev":
+		case a == "--include" || a == "--exclude" || a == "-j" || a == "--jobs" || a == "--since":
+			i++
+		case strings.HasPrefix(a, "-"):
+		case a == "run":
+			if i+1 < len(args) && (heavyScripts[args[i+1]] || all) {
+				return ClassHeavy
+			}
+			return ClassNone
+		default:
+			if heavyScripts[a] || all {
+				return ClassHeavy
+			}
+			return ClassNone
+		}
 	}
 	return ClassNone
 }
