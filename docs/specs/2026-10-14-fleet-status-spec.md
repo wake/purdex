@@ -72,21 +72,36 @@ that are probed but have no daemon, with name, icon and colour; Mac App first, i
 
 ## 4. Roles
 
-- **Setting** (each daemon's host config, `fleet` row): `order` (default `[air26, mlab]`, host aliases as the watcher's
-  `targets`), `peer_ssh_alias` (the SSH alias this daemon uses for the other daemon host), `enabled` (default true).
-  Daemons compare `order` in every heartbeat and log a warning when they differ (no other effect).
-- **State** (`~/.config/pdx/fleet/state.json`, atomic): this daemon's role (`primary | standby`), the highest **term** it has
-  seen, and when it last heard the primary.
-- **Heartbeat**: the standby calls the primary's `GET /api/peers/fleet/role` every 30 s (timeout 5 s). The answer carries the
-  role, the term, `order`, and the age of the primary's newest reading. Alive = answered **and** age ≤ 10 s.
+- **Setting** (each daemon's host config, `fleet` row): `order` (default `[air26, mlab]`), `peer_ssh_alias` (the SSH alias
+  this daemon uses for the other daemon host), `enabled` (default true). `order`: 1–4 entries, each of the peer alias
+  shape (`config.ValidateSelfAlias`'s rule), unique case-insensitively, one of them **this daemon's own alias**
+  (`Cfg.Peers.Alias`), the others resolvable to a peer host id (`HostCaller.HostIDOf`). An own alias that is empty or not
+  in `order` → the fleet is **off** on this daemon (role `off`, with the reason; it measures nothing and never becomes
+  primary). When the two daemons' `order` differ, each logs one warning per hour (no other effect).
+- **State** (`~/.config/pdx/fleet/state.json`, temp file + rename, no fsync): role (`primary | standby | off`), the highest
+  **term** seen, when the other was last heard. A torn or missing file = standby, term 0; a term lost to a power cut is
+  harmless (start adopts the other's). A failed write is logged and the role stays in memory.
+- **Peer calls** go through `HostCaller` (POST, the reply must carry the callee's `host_id`), both routes in
+  `peers.HostRoutePolicy` (POST, exact path):
+  - `POST /api/peers/fleet/role` body `{to_host_id, from_alias, role, term}` → `{host_id, alias, role, term, order,
+    newest_age_ms}` (`newest_age_ms` null when this daemon has no reading yet). The callee checks `to_host_id` is its own
+    and applies the caller's `role` / `term` like an announcement (below).
+  - `POST /api/peers/fleet/announce` body `{to_host_id, from_alias, term}` → `{host_id}`.
+- **Heartbeat**: **both** roles call the other's `role` every 30 s (timeout 5 s, or the peers inter-daemon timeout if longer).
+  For the standby, the primary is alive when it answers and `newest_age_ms ≤ 10 000`; `newest_age_ms` is the age of the
+  primary's newest reading of **any** host it measures (its own or one over SSH), so a primary whose own-host source is not
+  wired yet does not look dead; null is alive during the first 60 s after it became primary, dead after.
 - **Takeover**: the standby that finds the primary dead becomes primary with `term = highest seen + 1`, persists it, starts
-  measuring, and tells the other daemon (`POST /api/peers/fleet/announce`, best effort).
-- **Two primaries** (a partition, or a takeover from a primary that was slow, not gone): whenever a daemon learns of a
-  higher term (heartbeat answer, announcement, or the other's `role` call), it steps down to standby and stops measuring.
-  Equal terms: the one first in `order` stays.
-- **Start**: a daemon asks the other `GET /api/peers/fleet/role`. Other is primary → standby (adopt its term). Other
-  unreachable → primary with `term = persisted + 1`. Other answers standby or starting → the one first in `order` becomes
-  primary with `term = max + 1`, the other standby.
+  measuring, and announces (best effort; the next heartbeat repeats the information anyway).
+- **Two primaries** (a partition, a start with the other unreachable, or a takeover from a primary that was slow, not gone):
+  any daemon that learns of a higher term — a heartbeat answer, an announcement, or the role / term carried in the other's
+  heartbeat call — steps down to standby and stops measuring. **Equal terms, both primary**: the one later in `order` steps
+  down. Because both roles heartbeat, two primaries converge within one heartbeat of the two seeing each other again.
+- **Start**: a daemon calls the other's `role`. Other is primary → standby (adopt its term). Other unreachable → primary
+  with `term = persisted + 1`, and an announcement once the other answers. Other answers standby, off or starting → the one
+  first in `order` becomes primary with `term = max + 1`, the other standby.
+- **`enabled = false` or off**: answers `off`, measures nothing; a primary turned off stops at once (the standby takes over
+  at its next heartbeat, the `off` answer counting as dead).
 - **Standby work**: the heartbeat only. It answers the App's `GET /api/fleet` with its role and the primary's alias (§6).
 
 ## 5. Measuring (the primary)
@@ -94,28 +109,43 @@ that are probed but have no daemon, with name, icon and colour; Mac App first, i
 - **Its own host**: from the A line's local source (§7), every 1 s; the disk from the fleet module's own `statfs` of the
   §3 mount at the same tick.
 - **The other three hosts**: one SSH session each, started when the daemon becomes primary and stopped when it steps down:
-  `ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o RemoteCommand=none -o ServerAliveInterval=5
-  -o ServerAliveCountMax=2 -- <alias> <fixed loop script>`. The loop is a compile-time constant (no byte from the App or the
-  alias), prints one frame per second — the five items, between markers, ending `@@end` — and every fifth frame also the two
-  process lists and, on the other daemon host only, `pdx gate status --json` (looked up as `$HOME/.local/bin/pdx`, then
-  `$HOME/.config/pdx/bin/pdx`; absent → no queue, not an error).
+  `ssh -T -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -o RemoteCommand=none -o ControlMaster=no
+  -o ControlPath=none -o ServerAliveInterval=5 -o ServerAliveCountMax=2 -- <alias> <fixed loop script>`, in its own process
+  group (a stop signals the whole group, so a `ProxyJump` / `ProxyCommand` child does not hold the pipe). The loop is a
+  compile-time constant (no byte from the App or the alias), prints one frame per second — the five items, between markers,
+  ending `@@end` — and every fifth frame also the two process lists and, on the other daemon host only,
+  `pdx gate status --json` between its own markers (looked up as `$HOME/.local/bin/pdx`, then `$HOME/.config/pdx/bin/pdx`;
+  absent → no queue, not an error). The loop ends when a write fails (the session is gone) and takes its long-running
+  children with it (a `trap` on exit).
+  - Timestamps are the primary's receive time, not the remote clock. Each frame is capped at 64 KiB; a gate section that
+    does not parse (or is over its share) only blanks that host's queue; five fast frames in a row that do not parse →
+    `error: parse` and a restart (the count resets on a good frame). The reader hands frames on through a newest-wins slot,
+    never blocking the remote side; a frame older than 2 s when taken is dropped.
   - macOS: CPU from a streaming `iostat` (one long-running process, no fork per second), level from
     `sysctl kern.memorystatus_vm_pressure_level`, page counters from `vm_stat`, disk from `df -k` of the §3 mount, the lists
     from one `ps` every 5 s.
   - Linux: CPU from `/proc/stat` deltas, memory from `/proc/meminfo`, **level** from `/proc/pressure/memory` (`full avg10`
-    ≥ 10 % → 4, `some avg10` ≥ 10 % → 2, else 1 — first values, tuned on the live record), page rate from `pswpin + pswpout`
-    in `/proc/vmstat`, disk from `df -kP /`; read with shell built-ins where possible.
-  - The plan measures the loop's cost on each OS; target ≤ 15 ms CPU per second per host on the remote side.
+    ≥ 10 % → 4, `some avg10` ≥ 10 % → 2, else 1 — first values, tuned on the live record; no PSI → level unknown and the
+    zone uses the page rate only), page counters `pswpin + pswpout` from `/proc/vmstat`, disk from `df -kP /`; read with
+    shell built-ins where possible.
+  - **Page rate** for every host over the same window as the own host (`hostmem.RateWindow`), from the counters of the
+    frames in that window — never a one-frame delta, so the 50 pages/s threshold means the same on all four.
+  - The plan measures the loop's cost on each OS (target ≤ 15 ms CPU per second per host on the remote side) and reports
+    it; going over is the lead's call, never an automatic change of rate (§2.2).
 - **Status per host**: `ok`; `offline` (the session could not connect, or no frame for 5 s); `error` with rev 1's codes
-  (stderr read locally, never on the wire; the daemon log gets at most one line per host and code per hour). A dropped
-  session is restarted after 5 s, then with backoff to 60 s; a frame that does not parse is skipped and counted (5 in a row
-  → `error: parse`, session restarted).
+  (stderr read locally, never on the wire; the daemon log gets at most one line per host and code per hour). A host
+  without frames for 5 s shows `offline` while its session is kept; only after 30 s without frames is the session killed
+  and restarted (a host that is paging is not hammered with handshakes). A session that ends is restarted after 5 s, then
+  with backoff to 60 s, reset by a good frame; every wait is cut short by a stop.
 - **Composite load** (the ring), 0–100 = the largest of: CPU %; memory %; the level (1 → 30, 2 → 75, 4 → 100); page rate
   (pages/s, capped at 100); disk % only when ≥ 85. The **ring's colour is the zone** (§2.6), not the score: a host at CPU
   95 % with no memory pressure shows a long neutral ring ("busy, fine").
+- **Zone latch** (memory part, so the ring does not flicker): warning entered at level ≥ 2 or page rate ≥ 50, left after
+  10 s with level 1 and rate < 40; danger entered at level 4, left after 10 s below 4; one level at a time; plus rev 1's
+  disk latch; the worse of the two.
 - **Queue summary** (daemon hosts): from the gate status — heavy and light slots used / total, the waiters (place, command,
-  project, since), the longest wait, and **admission held** (the pressure level or page rate above the host's admission
-  settings, from the same readings and that host's effective `admission.*` settings).
+  project, since), the longest wait, and **admission held**: the gate status's `Admission` (the A line adds it), or, from a
+  gate without it, the level / page rate against that host's effective `admission.*` settings in `Status.Settings`.
 
 ## 6. API and push (capability `fleet.v1`)
 
@@ -123,14 +153,21 @@ that are probed but have no daemon, with name, icon and colour; Mac App first, i
   `{role: "primary", term, at, hosts: [Host]}`; `Host` = `{id, kind: daemon|probe, alias, name, icon, colors, icon_weight,
   os, status, error, last_ok_at, fast: {at, cpu, mem, level, page_rate, disk, disk_free_gb, load1, ncpu, zone, load},
   slow: {at, top_cpu: [Proc], top_mem: [Proc], queue?: Queue}}` (`load` = the composite score; `Proc` = `{pid, name, cpu,
-  rss_mb}`; `Queue` = the §5 summary). Daemon hosts take their name and look from the App's `HostConfig` (the App fills them
-  in); probe hosts carry theirs.
-- Host event **`fleet.changed`** from the primary, **once per second**: the `fast` part of every host; the `slow` part of a
-  host only in the push right after it changed (every 5 s); `status` / `error` changes in the next push. No throttle beyond
-  the 1 s rate; never sent by a standby.
+  rss_mb}`; `Queue` = the §5 summary). `id`: a daemon host's own daemon host id (the App maps it to its `HostConfig` through
+  `lib/host-daemon-id.ts` and takes the name and look from there); a probe host's config row id (it carries its own look).
+  An `off` daemon answers `{role: "off", reason}`.
+- Host event **`fleet.changed`** from the primary, **once per second**, opt-in: subscribers that ask `?fleet=v1` on
+  `/ws/host-events` (a `FeatureFleetV1` in `featuresOf`; older SPAs and iOS never get it); delivered best-effort,
+  newest-wins per subscriber (a slow subscriber loses old pushes, it is not disconnected). Payload `{term, primary,
+  hosts}`: the `fast` part of every host; the `slow` part of a host only in the push right after it changed (every 5 s);
+  `status` / `error` changes in the next push. Never sent by a standby.
 - The App connects to both daemons already. It reads `GET /api/fleet` from each, follows the one that says `primary`
-  (two primaries → the higher term), and listens to `fleet.changed` from that one only. No push for 10 s, or the primary
-  disconnects → the cells keep their last values and the row shows 「等待主方」 (tooltip) until a primary answers.
+  (two primaries → the higher term; equal → the earlier in `order`), and merges `fleet.changed` from that one only; a push
+  from another daemon carrying a higher term makes it re-read both and switch. No push for 10 s, or the primary
+  disconnects → the cells keep their last values, the row shows 「等待主方」 (tooltip), and the App re-reads both daemons'
+  `GET /api/fleet` every 5 s until a primary answers. An App that knows only the standby shows 「主方不在這台 App」.
+- `probeHosts` (with each row's `ssh_alias`) is readable with a device token like the rest of `GET /api/hostconfig`: alias
+  names are not secrets.
 - `GET /api/hostconfig` carries `probeHosts` (`{items, revision}`; rows `{id, name, ssh_alias, icon, colors, icon_weight}`)
   and the `fleet` row; `PUT /api/hostconfig/probe-hosts` and `PUT /api/hostconfig/fleet` as rev 1 (whole list, `baseRevision`,
   409 with the current copy, 400 with a plain-text reason; an alias not in the SSH config → `unknown_ssh_alias: <alias>`);
@@ -169,7 +206,12 @@ type LocalSource interface {
 
 The remote frames parse into the same two types, so the composite, the zone and the push treat all four hosts alike. Until
 the A line's implementation lands, the fleet module runs with a fake that reports nothing for its own host (the cell shows
-「沒有資料」).
+「沒有資料」). The resources module registers its implementation under `fleet.LocalSourceKey` in its `Init`; the fleet module
+depends on `peers`, `hostconfig` and `resources` (so it resolves the key after it is registered) and announces `fleet.v1`
+through `capabilityList()` with `moduleReady("fleet")`.
+
+The fleet module's role is read by the measuring side through `fleet.RoleView` (`State() RoleState`, `OnChange(func(RoleState))`;
+`RoleState{Role, Term, Primary, Self, Reason}`), defined with the §7 types so the two daemon PRs can be built in parallel.
 
 ## 8. Mac App
 
@@ -191,7 +233,10 @@ the A line's implementation lands, the fleet module runs with a fake that report
 - Tooltip: name, the zone word, the five values, the queue summary (daemon hosts), and 「等待主方」 when stale.
 - Click: opens the watcher area on that host's tab (watcher area spec).
 - **Narrow activity bar**: the four cells stacked vertically (box + ring only), same click and tooltip.
-- The watcher shield in the HomeRow uses the same badge style (≈ 11 px, 8 px figures) at its top-right corner.
+- The badge is one component (`CountBadge`, ≈ 11 px, 8 px figures, ring in the background colour); the watcher shield in
+  the HomeRow reuses it (watcher area spec, not this one).
+- **Click, until the watcher area lands**: a daemon host's cell opens that host on the Hosts page; a probe host's opens the
+  Hosts page's probe-host section with that row highlighted once.
 
 ### 8.2 The Hosts page
 
@@ -210,8 +255,12 @@ primary cannot reach.
 | phase | side | content |
 |---|---|---|
 | F-1a | daemon | merged (rev 1 leaf package) |
-| F-1b | daemon | the `fleet` and `probe_hosts` host config rows (normalisers, lenient read, GET fields, PUT routes); `state.json`; roles: heartbeat, takeover, terms, start, `GET /api/peers/fleet/role`, `POST /api/peers/fleet/announce` (route policy entries); `LocalSource` interface + fake |
-| F-1c | daemon | the loop script (Darwin / Linux) and the frame parser; one session per host with restart and backoff; composite load, zone (§2.6) and queue summary; `GET /api/fleet`, `fleet.changed` at 1 s, `GET /api/fleet/ssh-aliases`, `fleet.v1`, device routes |
-| A line | daemon | `LocalSource` implementation (probe-dedupe plan §F.1), after L2c |
-| F-2a | SPA | `useFleetStore` (primary choice by term, stale → 「等待主方」), `fleet.v1` probe, `fleet.changed` branch, the in-memory history buffer the watcher area reads; the Hosts page section writing both daemons (reworks open PRs #2879 / #2881; #2880, the editor extraction, stands) |
-| F-2b | SPA | the sidebar host cells, the narrow column, the shield badge style; i18n; tests |
+| F-0 | daemon | the §7 types, `Proc`, `LocalSourceKey`, `RoleView` / `RoleState`, `FakeLocal` (#2969) |
+| F-1b1 | daemon | the `fleet` and `probe_hosts` host config rows (normalisers, lenient read, GET fields, PUT routes, readers) |
+| F-1b2 | daemon | module skeleton and registration; `state.json`; the role engine (§4); the two peer routes and their policy entries |
+| F-1c1 | daemon | `internal/fleet` leaf: the loop scripts, the frame parser, composite load, zone latch, queue summary, captured fixtures |
+| F-1c2 | daemon | sessions, the aggregator, `GET /api/fleet`, `fleet.changed` (opt-in, 1 s), `GET /api/fleet/ssh-aliases`, `fleet.v1`, device routes; wiring to `RoleView` |
+| A line | daemon | `LocalSource` implementation (probe-dedupe plan §F.1), registered in resources' `Init` |
+| F-2a1 | SPA | types / parse, `useFleetStore` (primary choice, re-read on stale, 「等待主方」), the in-memory history, `fleet.v1` probe, the `fleet=v1` event opt-in and branch (reworks #2879) |
+| F-2a2 | SPA | the Hosts page probe-host section writing both daemons, the `fleet` row editor (reworks #2881; #2880, the editor extraction, stands) |
+| F-2b | SPA | `CountBadge`, the sidebar host cells, the narrow column, interim click targets; i18n; tests |
