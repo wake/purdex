@@ -304,7 +304,7 @@ func New(audit AuditStore, titles TitleStore) *Module {
 	stopCtx, stopCancel := context.WithCancel(context.Background())
 	m := &Module{
 		registryDir:          registryDir,
-		liveness:             ipeers.DefaultLiveness(),
+		liveness:             sharedProcessLiveness(ipeers.DefaultLiveness()),
 		snapshotProcs:        snapshotProcesses,
 		budget:               ipeers.InventoryBudget,
 		now:                  time.Now, // the one clock seam; every other clock reader below takes m.now
@@ -603,6 +603,15 @@ func (m *Module) ownerPass(src agent.ProcessSource) agent.OwnerPass {
 		return r.NewOwnerPass(src)
 	}
 	return &perSessionPass{r: m.owners}
+}
+
+// sharedProcessLiveness is base with its process reads (Info, StartTime) answered from the daemon's shared process table
+// (agentpkg.SharedProcessSnapshot, at most a TTL old) instead of a `ps` fork per registry entry per read: the registry is
+// read by /api/peers, the origin resolver, the team sweeper's lead presence and the name pool, several times a second
+// between them (G3a, host-load-control spec §7). The verdicts stay base's, as in inventoryLiveness, and a process the
+// table does not know (started since, or gone) is read by base exactly as before.
+func sharedProcessLiveness(base ipeers.Liveness) ipeers.Liveness {
+	return inventoryLiveness(base, agentpkg.SharedProcessView{})
 }
 
 // snapshotProcesses is the production snapshotProcs.
