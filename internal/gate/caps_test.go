@@ -30,6 +30,17 @@ func TestVitestArgs(t *testing.T) {
 		{"pnpm vitest run src/a.test.ts", "pnpm vitest run src/a.test.ts --maxWorkers=3", true},
 		{"vitest run -- --foo", "vitest run --maxWorkers=3 -- --foo", true},
 		{"vitest run --maxWorkers=2", "vitest run --maxWorkers=2", false},
+		{"npx --package vitest -- vitest run", "npx --package vitest -- vitest run --maxWorkers=3", true},
+		{"pnpm --maxWorkers=9 exec vitest run", "pnpm --maxWorkers=9 exec vitest run --maxWorkers=3", true}, // before the tool it is the runner's option, not vitest's limit
+		{"npx --package vitest -- vitest run -- --maxWorkers=20", "npx --package vitest -- vitest run --maxWorkers=3 -- --maxWorkers=20", true},
+		{"npx --package vitest -- vitest run --maxWorkers=2", "npx --package vitest -- vitest run --maxWorkers=2", false},
+		{"pnpm exec ./node_modules/.bin/vitest run", "pnpm exec ./node_modules/.bin/vitest run --maxWorkers=3", true},
+		{"npx --no-install ./node_modules/.bin/vitest run", "npx --no-install ./node_modules/.bin/vitest run --maxWorkers=3", true},
+		{"pnpm --prefix spa exec vitest run", "pnpm --prefix spa exec vitest run --maxWorkers=3", true},
+		{"pnpm -C spa exec vitest run --reporter=dot", "pnpm -C spa exec vitest run --reporter=dot --maxWorkers=3", true},
+		{"pnpm --filter spa exec vitest run", "pnpm --filter spa exec vitest run --maxWorkers=3", true},
+		{"pnpm --dir=spa exec vitest run", "pnpm --dir=spa exec vitest run --maxWorkers=3", true},
+		{"vitest run -- --maxWorkers=20", "vitest run --maxWorkers=3 -- --maxWorkers=20", true}, // after -- it is not vitest's limit
 		{"vitest run --max-workers 2", "vitest run --max-workers 2", false},
 		{"vitest run --poolOptions.threads.maxThreads=2", "vitest run --poolOptions.threads.maxThreads=2", false},
 		{"pnpm run test", "pnpm run test", false},       // a script: its own flags are not ours to add

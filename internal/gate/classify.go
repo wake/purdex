@@ -24,8 +24,9 @@ var goValueFlags = map[string]bool{
 	"-cpu": true, "-coverprofile": true, "-o": true, "-vet": true, "-covermode": true, "-coverpkg": true,
 	"-skip": true, "-fuzz": true, "-exec": true, "-ldflags": true, "-gcflags": true, "-mod": true, "-modfile": true,
 	"-overlay": true, "-pkgdir": true, "-blockprofile": true, "-cpuprofile": true, "-memprofile": true, "-trace": true,
-	"-outputdir": true, "-shuffle": true, "-fuzztime": true, "-test.run": true, "-asmflags": true, "-buildvcs": true,
-	"-C": true, "-trimpath": false,
+	"-outputdir": true, "-shuffle": true, "-fuzztime": true, "-test.run": true, "-asmflags": true,
+	"-C": true, "-list": true, "-vettool": true, "-toolexec": true, "-buildmode": true, "-compiler": true,
+	"-installsuffix": true,
 }
 
 // vitestValueFlags are the vitest flags whose value is the next word.
@@ -39,6 +40,13 @@ var vitestValueFlags = map[string]bool{
 	"--poolOptions.threads.minThreads": true, "--poolOptions.forks.minForks": true, "--browser.name": true,
 }
 
+// runnerValueOpts are the options of a package runner (pnpm, yarn, npm) whose value is the next word: the word after
+// them is not the subcommand or the tool.
+var runnerValueOpts = map[string]bool{
+	"-C": true, "--dir": true, "--prefix": true, "--filter": true, "-F": true, "--workspace": true, "-w": true,
+	"--package": true, "-p": true, "--cwd": true,
+}
+
 // scripts a package runner is taken to run in full: a script by one of these names is a whole-project run.
 var heavyScripts = map[string]bool{
 	"check": true, "test": true, "typecheck": true, "lint": true, "build": true, "electron:build": true,
@@ -47,7 +55,7 @@ var heavyScripts = map[string]bool{
 // Classify says how heavy a command is, from its argv (argv[0] may be a path). It is a pure function over the words
 // the shims hand over: go, pnpm/npx/yarn/npm, vitest, tsc and make. Anything else is none and passes through. A
 // command that cannot be read is none: the gate fails open on what it does not understand.
-func Classify(argv []string) Class {
+func Classify(argv []string, e Env) Class {
 	if len(argv) == 0 {
 		return ClassNone
 	}
@@ -56,11 +64,11 @@ func Classify(argv []string) Class {
 	case "go":
 		return classifyGo(args)
 	case "vitest":
-		return classifyVitest(args)
+		return classifyVitest(args, e)
 	case "tsc":
 		return classifyTsc(args)
 	case "pnpm", "pnpx", "npx", "yarn", "npm", "bunx", "bun":
-		return classifyRunner(filepath.Base(argv[0]), args)
+		return classifyRunner(filepath.Base(argv[0]), args, e)
 	case "make":
 		if len(args) == 1 && args[0] == "test" {
 			return ClassHeavy
@@ -107,9 +115,16 @@ func wide(pkgs []string) bool {
 }
 
 func classifyGo(args []string) Class {
-	// `go -C dir test …`: skip the directory flag to find the subcommand.
-	for len(args) >= 2 && args[0] == "-C" {
-		args = args[2:]
+	// `go -C dir test …` and `go -C=dir test …`: skip the directory flag to find the subcommand.
+	for len(args) >= 1 && (args[0] == "-C" || strings.HasPrefix(args[0], "-C=")) {
+		if args[0] == "-C" {
+			if len(args) < 2 {
+				return ClassNone
+			}
+			args = args[2:]
+		} else {
+			args = args[1:]
+		}
 	}
 	if len(args) == 0 {
 		return ClassNone
@@ -128,20 +143,25 @@ func classifyGo(args []string) Class {
 	return ClassNone // version, env, mod, list, fmt, run, tool, generate…
 }
 
-// vitestRun reads vitest's words: whether it is a run (or the default command), and whether a file or filter narrows
-// it. `vitest watch` and `--version` are not runs the gate holds a slot for.
-func classifyVitest(args []string) Class {
-	run := false
+// classifyVitest reads vitest's words. Vitest watches (and never ends) only when told to (`watch`, `dev`, `--watch`,
+// `-w`) or, with nothing said, for a person at a terminal outside CI; in an agent's shell, a script or CI it runs once. A
+// run that names files or a filter is light, the rest is heavy. `--version`, `--help`, `list` and `init` run nothing.
+func classifyVitest(args []string, e Env) Class {
+	sub := ""        // the first word that is a subcommand
+	explicit := 0    // +1 run once (--no-watch, --watch=false), -1 watch (--watch, -w); the last one wins
+	runFlag := false // --run / --run=true: vitest sets watch to false after everything else, whatever else was said
 	narrowed := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case a == "--version" || a == "-v" || a == "--help" || a == "-h" || a == "watch" || a == "dev":
+		case a == "--version" || a == "-v" || a == "--help" || a == "-h":
 			return ClassNone
-		case a == "run":
-			run = true
-		case a == "related":
-			run, narrowed = true, true // `vitest related <files>` runs once, on what those files touch
+		case a == "-w":
+			explicit = -1
+		case a == "--run" || a == "--run=true":
+			runFlag = true
+		case vitestBoolFlag(a) != 0:
+			explicit = vitestBoolFlag(a)
 		case a == "--changed" || a == "--related" || strings.HasPrefix(a, "--changed=") ||
 			a == "-t" || a == "--testNamePattern" || a == "--project" || a == "--shard":
 			narrowed = true
@@ -155,18 +175,60 @@ func classifyVitest(args []string) Class {
 			} else if vitestValueFlags[name] {
 				i++
 			}
+		case sub == "" && !narrowed && vitestSubcommands[a]:
+			sub = a
 		default:
 			narrowed = true // a path or a filter
 		}
 	}
-	if !run {
-		return ClassNone // watch mode or a bare `vitest`: long-lived, not held
+	switch sub {
+	case "list", "init", "bench":
+		return ClassNone
+	case "related":
+		narrowed = true // `vitest related <files>`: the tests those files touch
+	}
+	// --run wins over `watch`, `dev` and --watch (vitest sets watch to false when options.run is true, after the
+	// subcommand has set it), so it comes first; then a watch that was asked for; then what the place decides.
+	once := runFlag || explicit > 0
+	if sub == "run" {
+		once = explicit >= 0 // vitest's run action sets options.run = !options.watch: `run --watch` watches, and --run cannot undo it
+	}
+	if !once && (sub == "watch" || sub == "dev" || explicit < 0) {
+		return ClassNone
+	}
+	if !once && e.watchesByDefault() {
+		return ClassNone // a person at a terminal: the default is watch
 	}
 	if narrowed {
 		return ClassLight
 	}
 	return ClassHeavy
 }
+
+// vitestBoolFlag reads --watch with an optional =true / =false, and a bare --no-watch: +1 when the flag makes vitest run
+// once, -1 when it makes it watch, 0 when it is some other flag.
+func vitestBoolFlag(a string) int {
+	name, val, hasVal := strings.Cut(a, "=")
+	truth := !hasVal || val == "true"
+	falsy := hasVal && val == "false"
+	switch name {
+	case "--watch":
+		if truth {
+			return -1
+		}
+		if falsy {
+			return 1
+		}
+	case "--no-watch":
+		// cac does not split `--no-*` at an `=`: `--no-watch=false` is an unknown option that changes nothing
+		if !hasVal {
+			return 1
+		}
+	}
+	return 0
+}
+
+var vitestSubcommands = map[string]bool{"run": true, "watch": true, "dev": true, "related": true, "list": true, "init": true, "bench": true}
 
 func classifyTsc(args []string) Class {
 	build, project, files := false, false, false
@@ -193,7 +255,7 @@ func classifyTsc(args []string) Class {
 
 // classifyRunner reads `pnpm`, `npx`, `yarn`, `npm`: a script by a whole-project name is heavy, a recursive run is
 // heavy, and a tool run through them is classified as that tool.
-func classifyRunner(runner string, args []string) Class {
+func classifyRunner(runner string, args []string, e Env) Class {
 	recursive := false
 	i := 0
 	// options before the subcommand
@@ -206,8 +268,7 @@ func classifyRunner(runner string, args []string) Class {
 		if !strings.HasPrefix(a, "-") {
 			break
 		}
-		switch a {
-		case "-C", "--dir", "--prefix", "--filter", "-F", "--workspace", "-w", "--package", "-p", "--cwd":
+		if runnerValueOpts[a] {
 			i++ // the option's value
 		}
 	}
@@ -215,6 +276,9 @@ func classifyRunner(runner string, args []string) Class {
 		return ClassNone
 	}
 	word, rest := args[i], args[i+1:]
+	if runner == "yarn" && word == "workspaces" && len(rest) > 0 && rest[0] == "foreach" {
+		return yarnForeach(rest[1:])
+	}
 	switch word {
 	case "install", "i", "add", "remove", "rm", "update", "up", "link", "unlink", "store", "config", "env", "dlx", "create",
 		"init", "outdated", "list", "ls", "why", "audit", "publish", "pack", "root", "bin", "cache", "version", "help":
@@ -223,7 +287,7 @@ func classifyRunner(runner string, args []string) Class {
 		if len(rest) == 0 {
 			return ClassNone
 		}
-		return withRecursive(Classify(rest), recursive)
+		return withRecursive(Classify(rest, e), recursive)
 	case "run", "run-script":
 		if len(rest) == 0 {
 			return ClassNone
@@ -231,17 +295,45 @@ func classifyRunner(runner string, args []string) Class {
 		return scriptClass(rest[0], recursive)
 	}
 	if runner == "npx" || runner == "pnpx" || runner == "bunx" {
-		return withRecursive(Classify(args[i:]), recursive)
+		return withRecursive(Classify(args[i:], e), recursive)
 	}
 	if heavyScripts[word] {
 		return ClassHeavy
 	}
 	// `pnpm vitest …`, `pnpm tsc -b`: the word is a tool in node_modules/.bin
-	if c := Classify(args[i:]); c != ClassNone {
+	if c := Classify(args[i:], e); c != ClassNone {
 		return withRecursive(c, recursive)
 	}
 	if recursive {
 		return ClassHeavy
+	}
+	return ClassNone
+}
+
+// yarnForeach reads `yarn workspaces foreach <options> [run] <script|tool …>`: a run over the workspaces is heavy when
+// it runs a whole-project script, or when it is asked to go through all of them (-A / --all / -R / --recursive).
+func yarnForeach(args []string) Class {
+	all := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "-A" || a == "--all" || a == "-R" || a == "--recursive" || a == "-W" || a == "--worktree":
+			all = true
+		case a == "-p" || a == "--parallel" || a == "-i" || a == "--interlaced" || a == "-v" || a == "--verbose" || a == "-t" || a == "--topological" || a == "--topological-dev":
+		case a == "--include" || a == "--exclude" || a == "-j" || a == "--jobs" || a == "--since":
+			i++
+		case strings.HasPrefix(a, "-"):
+		case a == "run":
+			if i+1 < len(args) && (heavyScripts[args[i+1]] || all) {
+				return ClassHeavy
+			}
+			return ClassNone
+		default:
+			if heavyScripts[a] || all {
+				return ClassHeavy
+			}
+			return ClassNone
+		}
 	}
 	return ClassNone
 }

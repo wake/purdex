@@ -55,22 +55,23 @@ func hasGoP(flags string) bool {
 var vitestLimit = regexp.MustCompile(`^--(maxWorkers|max-workers|poolOptions\..*(maxThreads|maxForks))(=|$)`)
 
 // VitestArgs appends `--maxWorkers=<n>` to a vitest run (directly, or through npx / pnpm exec / pnpm vitest /
-// yarn) that carries no worker limit. It reports whether it changed anything. Arguments after `--` are the script's, so
-// the flag goes in front of them. A run that is not vitest is returned as it was.
+// yarn) that carries no worker limit. It reports whether it changed anything. Arguments after vitest's own `--` are the
+// tests' or the script's, so the flag goes in front of them. A run that is not vitest is returned as it was.
 func VitestArgs(argv []string, n int) ([]string, bool) {
-	if n <= 0 || !runsVitest(argv) {
+	start := vitestAt(argv)
+	if n <= 0 || start < 0 {
 		return argv, false
 	}
-	for _, a := range argv {
-		if vitestLimit.MatchString(a) {
-			return argv, false
+	at := len(argv)
+	for i := start + 1; i < len(argv); i++ {
+		if argv[i] == "--" {
+			at = i // what follows belongs to the script or the tests: not a limit of vitest's, and the flag goes before it
+			break
 		}
 	}
-	at := len(argv)
-	for i, a := range argv {
-		if a == "--" {
-			at = i
-			break
+	for _, a := range argv[start:at] {
+		if vitestLimit.MatchString(a) {
+			return argv, false
 		}
 	}
 	out := make([]string, 0, len(argv)+1)
@@ -80,32 +81,37 @@ func VitestArgs(argv []string, n int) ([]string, bool) {
 	return out, true
 }
 
-// runsVitest says the command is vitest itself: `vitest …`, or a runner naming vitest as the tool.
-func runsVitest(argv []string) bool {
+// vitestAt is the index of the word that is vitest in the command (`vitest …` itself, or the tool a runner names), or -1.
+// A runner's own `--` before the tool (`npx --package vitest -- vitest run`) is not vitest's.
+func vitestAt(argv []string) int {
 	if len(argv) == 0 {
-		return false
+		return -1
 	}
 	if filepath.Base(argv[0]) == "vitest" {
-		return true
+		return 0
 	}
 	switch filepath.Base(argv[0]) {
 	case "npx", "pnpx", "bunx", "pnpm", "yarn", "npm":
 	default:
-		return false
+		return -1
 	}
 	for i := 1; i < len(argv); i++ {
 		a := argv[i]
 		switch {
-		case a == "--":
-			return false
 		case a == "exec" || a == "x" || a == "dlx" || a == "run":
+			continue
+		case runnerValueOpts[a]:
+			i++ // `--prefix spa`: the value is not the tool
 			continue
 		case strings.HasPrefix(a, "-"):
 			continue
 		}
-		return a == "vitest"
+		if filepath.Base(a) == "vitest" {
+			return i
+		}
+		return -1
 	}
-	return false
+	return -1
 }
 
 // PnpmArgs adds `--workspace-concurrency=<n>` right after `pnpm` for a recursive run that gives none.
