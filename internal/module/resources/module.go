@@ -21,6 +21,7 @@ import (
 	iagent "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/gate"
+	"github.com/wake/purdex/internal/hostmem"
 	"github.com/wake/purdex/internal/modevents"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/resources"
@@ -77,10 +78,10 @@ type Module struct {
 	ringMu sync.Mutex
 	ring   resources.Ring
 	// zoneLatch is the daemon's zone: the memory pressure level and the page rate, the gate's own signal. pageRing holds the
-	// recent paging counters the rate is worked out from (gate.RateOver, the gate's arithmetic), and rateLimit the rate at
+	// recent paging counters the rate is worked out from (hostmem.RateOver, the gate's arithmetic), and rateLimit the rate at
 	// which the gate holds new work (its config, read every tick).
 	zoneLatch resources.PressureZoneLatch
-	pageRing  []gate.PageSample
+	pageRing  []hostmem.PageSample
 	rateLimit float64
 	haveRate  bool // the last reading carried the paging counters
 	lastZone  resources.Zone
