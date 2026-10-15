@@ -65,7 +65,12 @@ func Set(path, profile, key, value string) (SetResult, error) {
 	if _, err := toml.Decode(edited, &top); err != nil {
 		return res, fmt.Errorf("the file would not parse after the change (is %s set another way, e.g. a dotted key?): %w", key, err)
 	}
-	cfg := configFor(top, profile)
+	// The value is checked on its own: with another profile active, that profile's value would hide a bad one.
+	checkAs := profile
+	if profile == "" {
+		checkAs = "default"
+	}
+	cfg := configFor(top, checkAs)
 	if _, known := cfg.Values[key]; !known {
 		return res, fmt.Errorf("%q is not a setting the gate reads", key)
 	}
@@ -74,7 +79,11 @@ func Set(path, profile, key, value string) (SetResult, error) {
 			return res, fmt.Errorf("refused: %s", w)
 		}
 	}
-	res.New, res.NewSrc = cfg.Values[key], cfg.Sources[key]
+	active := configFor(top, "")
+	if profile != "" {
+		active = cfg
+	}
+	res.New, res.NewSrc = active.Values[key], active.Sources[key]
 	if err := writeAtomic(path, []byte(edited)); err != nil {
 		return res, err
 	}

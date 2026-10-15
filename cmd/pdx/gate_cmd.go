@@ -18,9 +18,14 @@ import (
 
 const gateUsage = `usage: pdx gate [--class heavy|light] [--auto] [--fg] [--real <binary>] [--config <path>] -- <command…>
        pdx gate status [--json] [--config <path>]
+       pdx gate set [--profile <name>] [--config <path>] <module>.<key>=<value>
+       pdx gate profile use <name> | list [--config <path>]
   --class  the pool to take a slot from (default heavy); --auto classifies the command by its words instead
   --fg     keep normal priority (no background QoS), for a release gate on an idle host
   --real   the binary to run in place of the command's first word (a shim passes the real one)
+  set      write one setting into [gate] of config.toml (or into [gate.profiles.<name>] with --profile); the gate reads it
+           again at the next command and at the next look of every waiting one. Values: 2, true, "text", auto
+  profile  use: make a profile the active one (its settings win over [gate]); list: the profiles the file defines
 `
 
 func runGate(args []string) {
@@ -29,8 +34,15 @@ func runGate(args []string) {
 
 // gateMain is runGate with its streams, for tests; it returns the exit code.
 func gateMain(args []string, stdout, stderr io.Writer) int {
-	if len(args) > 0 && args[0] == "status" {
-		return gateStatus(args[1:], stdout, stderr)
+	if len(args) > 0 {
+		switch args[0] {
+		case "status":
+			return gateStatus(args[1:], stdout, stderr)
+		case "set":
+			return gateSet(args[1:], stdout, stderr)
+		case "profile":
+			return gateProfile(args[1:], stdout, stderr)
+		}
 	}
 	flags, command, ok := splitRunArgs(args)
 	fs := flag.NewFlagSet("gate", flag.ContinueOnError)
@@ -125,6 +137,13 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 				gone = "  （gate 已不在，樹還活著）"
 			}
 			fmt.Fprintf(stdout, "  %s-%d  pid %d  %s  %s  %s%s\n", h.Class, h.Slot, h.PID, age, strings.Join(h.Argv, " "), h.Cwd, gone)
+			if len(h.Locked) > 0 {
+				parts := make([]string, len(h.Locked))
+				for i, p := range h.Locked {
+					parts[i] = fmt.Sprintf("%d %s", p.PID, p.Cmd)
+				}
+				fmt.Fprintf(stdout, "      拿著鎖的行程：%s\n", strings.Join(parts, "、"))
+			}
 		}
 	}
 	printPool("重", cfg.Slots.Heavy, st.Heavy, st.WaitHeavy)
@@ -132,5 +151,96 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 	for _, h := range st.Suspect {
 		fmt.Fprintf(stdout, "注意：%s-%d 的紀錄說 pid %d 還在，但鎖是空的（以鎖為準，視為空閒）\n", h.Class, h.Slot, h.PID)
 	}
+	fmt.Fprintf(stdout, "生效的設定（profile：%s；來源 default＝內建、config＝設定檔、profile＝profile、auto＝依主機現況）\n", st.Profile)
+	for _, e := range st.Settings {
+		fmt.Fprintf(stdout, "  %-34s %-24s %s\n", e.Key, e.Value, e.Source)
+	}
+	for _, w := range cfg.Warnings {
+		fmt.Fprintf(stdout, "設定警告：%s\n", w)
+	}
 	return 0
+}
+
+func gateSet(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("gate set", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	profile := fs.String("profile", "", "write into this profile")
+	cfgPath := fs.String("config", "", "config.toml")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	key, value, ok := strings.Cut(strings.Join(fs.Args(), " "), "=")
+	if !ok || fs.NArg() == 0 {
+		fmt.Fprint(stderr, "usage: pdx gate set [--profile <name>] <module>.<key>=<value>\n")
+		return 2
+	}
+	path := *cfgPath
+	if path == "" {
+		path = gate.DefaultConfigPath()
+	}
+	res, err := gate.Set(path, *profile, strings.TrimSpace(key), value)
+	if err != nil {
+		fmt.Fprintf(stderr, "pdx gate set: %v\n", err)
+		return 1
+	}
+	where := "[gate]"
+	if res.Profile != "" {
+		where = "profile " + res.Profile
+	}
+	fmt.Fprintf(stdout, "%s（%s）：%s → %s（%s）\n", res.Key, where, orDash(res.Old), res.New, res.NewSrc)
+	return 0
+}
+
+func gateProfile(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("gate profile", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	cfgPath := fs.String("config", "", "config.toml")
+	if len(args) == 0 {
+		fmt.Fprint(stderr, "usage: pdx gate profile use <name> | list\n")
+		return 2
+	}
+	sub := args[0]
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	path := *cfgPath
+	if path == "" {
+		path = gate.DefaultConfigPath()
+	}
+	switch {
+	case sub == "use" && fs.NArg() == 1:
+		known, err := gate.UseProfile(path, fs.Arg(0))
+		if err != nil {
+			fmt.Fprintf(stderr, "pdx gate profile: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "目前的 profile：%s\n", fs.Arg(0))
+		if !known {
+			fmt.Fprintf(stdout, "（設定檔裡還沒有 [gate.profiles.%s]，所以目前沒有任何設定被改變；用 pdx gate set --profile %s <module>.<key>=<value> 加入）\n", fs.Arg(0), fs.Arg(0))
+		}
+		return 0
+	case sub == "list" && fs.NArg() == 0:
+		cfg, err := gate.Load(path)
+		if err != nil {
+			fmt.Fprintf(stderr, "pdx gate profile: %v\n", err)
+			return 1
+		}
+		for _, name := range append([]string{"default"}, cfg.Profiles...) {
+			mark := " "
+			if name == cfg.Profile {
+				mark = "*"
+			}
+			fmt.Fprintf(stdout, "%s %s\n", mark, name)
+		}
+		return 0
+	}
+	fmt.Fprint(stderr, "usage: pdx gate profile use <name> | list\n")
+	return 2
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
 }
