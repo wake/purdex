@@ -385,7 +385,7 @@ daemon settings. Not Profile Sync: Profile Sync carries the App's own stores and
 |---|---|---|
 | `enabled` | true | detection (W1) |
 | thresholds (`x_cores`, `y_mb`, `t_s`, `pressure_t_s`, `page_rate`, `page_t_s`) | 1.5, 1024, 60, 120, 50, 60 | detection |
-| `targets` | `[a26, mlab]` (host aliases, in order: a26 normally, mlab only when a26 cannot be reached) | where events go and where a new watcher is started |
+| `targets` | `[air26, mlab]` (the peer host aliases `pdx peers` shows, in order: air26 normally, mlab only when air26 cannot be reached) | where events go and where a new watcher is started |
 | `mode` | `patrol` | `resident` (never rests) or `patrol` (rests when idle) |
 | `patrol_idle_min` | 120 | the rest countdown |
 | `auto_wake` | true | whether an event wakes or starts a watcher |
