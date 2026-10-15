@@ -3,7 +3,7 @@ import { startFleetSupport } from './fleet-support'
 import { handleFleetEvent } from './fleet-ws'
 import { useFleetStore } from './store'
 import { useHostStore } from '../../stores/useHostStore'
-import { fast, host, primaryAnswer, standbyAnswer } from './fixtures'
+import { fast, host, primaryAnswer, standbyAnswer, wireFast } from './__fixtures__/builders'
 import type { FleetAnswer } from './types'
 
 vi.mock('../host-api', async (orig) => ({ ...(await orig<typeof import('../host-api')>()), fetchHostInfo: vi.fn() }))
@@ -183,7 +183,7 @@ describe('waiting for a primary', () => {
 })
 
 describe('handleFleetEvent', () => {
-  const wire = (term: number, cpu: number) => JSON.stringify({ term, primary: 'air26', hosts: [{ id: 'd-a', fast: fast({ at: 2_000_000, cpu }) }] })
+  const wire = (term: number, cpu: number) => JSON.stringify({ term, primary: 'air26', hosts: [{ id: 'd-a', status: 'ok', error: null, last_ok_at: null, fast: wireFast(fast({ at: 2_000_000, cpu })) }] })
 
   beforeEach(async () => {
     vi.mocked(fetchHostInfo).mockResolvedValue(caps(['fleet.v1']))

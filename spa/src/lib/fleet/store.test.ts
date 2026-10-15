@@ -2,8 +2,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { fleetHostsView, useFleetStore } from './store'
 import { fleetHistory } from './history'
 import { useHostStore } from '../../stores/useHostStore'
-import { fast, host, primaryAnswer, standbyAnswer } from './fixtures'
+import { fast, host, primaryAnswer, standbyAnswer } from './__fixtures__/builders'
 import type { FleetPush } from './types'
+import { parseFleetAnswer, parseFleetPush } from './parse'
+import primaryJson from './__fixtures__/api-fleet-primary.json'
+import changedJson from './__fixtures__/fleet-changed.json'
 
 const A = 'cfg-a' // the App's HostConfig ids; the daemons' own host ids are 'd-a' / 'd-b'
 const B = 'cfg-b'
@@ -200,5 +203,20 @@ describe('history feed and hosts view', () => {
     answer(A, primaryAnswer(2, [host('p1', { kind: 'probe', name: 'mserv' }), host('d-b'), host('d-a'), host('zz-unknown')]))
     const view = fleetHostsView(st().snapshot, useHostStore.getState())
     expect(view.map((h) => [h.id, h.hostConfigId])).toEqual([['d-a', A], ['d-b', B], ['zz-unknown', undefined], ['p1', undefined]])
+  })
+})
+
+describe('the daemon samples through the store', () => {
+  it('the sample push merges into the sample answer: fast replaced, slow kept unless sent, null fast and status taken', () => {
+    useHostStore.setState({ hosts: { [A]: hostCfg(A, 'mlab:abc123') }, hostOrder: [A] } as never)
+    const a = parseFleetAnswer(primaryJson)!
+    answer(A, a as never)
+    expect(st().primaryHostId).toBe(A)
+    expect(st().applyPush(A, parseFleetPush(changedJson)!)).toBe('applied')
+    const h = st().snapshot!.hosts
+    expect(h['mlab:abc123'].fast?.cpu).toBe(14)
+    expect(h['mlab:abc123'].slow?.top_cpu).toHaveLength(1) // not in the push: kept
+    expect(h['air26:def456'].slow?.queue?.heavy_used).toBe(1) // sent: replaced
+    expect(h['cd34ef56']).toMatchObject({ status: 'offline', error: 'unreachable', fast: null })
   })
 })

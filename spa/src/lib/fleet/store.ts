@@ -155,7 +155,8 @@ export const useFleetStore = create<FleetState>((set, get) => {
         } else if (row.full) {
           cur = { ...row.full, fast: cur.fast, slow: cur.slow }
         }
-        const merged: FleetHost = { ...cur, fast: row.fast ?? cur.fast, slow: row.slow ?? cur.slow }
+        const merged: FleetHost = { ...cur, fast: row.fast === undefined ? cur.fast : row.fast, slow: row.slow ?? cur.slow }
+        if (row.last_ok_at !== undefined) merged.last_ok_at = row.last_ok_at
         if (row.status !== undefined) merged.status = row.status
         if (row.error !== undefined) merged.error = row.error
         hosts[row.id] = merged

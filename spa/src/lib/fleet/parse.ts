@@ -10,12 +10,19 @@ type Rec = Record<string, unknown>
 const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v)
 const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 const str = (v: unknown): v is string => typeof v === 'string'
+/** RFC3339 → ms since epoch; anything else is null. */
+const time = (v: unknown): number | null => {
+  if (!str(v) || !/^\d{4}-\d\d-\d\dT/.test(v)) return null
+  const t = Date.parse(v)
+  return Number.isFinite(t) ? t : null
+}
 const oneOf = <T extends string>(list: readonly T[], v: unknown): v is T => str(v) && (list as readonly string[]).includes(v)
 
 export function parseFast(v: unknown): FleetFast | null {
   if (!isRec(v)) return null
-  const { at, cpu, mem, level, page_rate, disk, zone, load } = v
-  if (!num(at) || !num(cpu) || !num(mem) || !num(level) || !num(page_rate) || !num(disk) || !num(load) || !oneOf(ZONES, zone)) return null
+  const { cpu, mem, level, page_rate, disk, zone, load } = v
+  const at = time(v.at)
+  if (at === null || !num(cpu) || !num(mem) || !num(level) || !num(page_rate) || !num(disk) || !num(load) || !oneOf(ZONES, zone)) return null
   const opt = (x: unknown): number => (num(x) ? x : 0)
   return { at, cpu, mem, level, page_rate, disk, disk_free_gb: opt(v.disk_free_gb), load1: opt(v.load1), ncpu: opt(v.ncpu), zone, load }
 }
@@ -29,26 +36,22 @@ function parseProcs(v: unknown): FleetProc[] {
   return out
 }
 
-function parseSlots(v: unknown): { used: number; total: number } | null {
-  return isRec(v) && num(v.used) && num(v.total) ? { used: v.used, total: v.total } : null
-}
-
 export function parseQueue(v: unknown): FleetQueue | undefined {
   if (!isRec(v)) return undefined
-  const heavy = parseSlots(v.heavy)
-  const light = parseSlots(v.light)
-  if (!heavy || !light || !Array.isArray(v.waiters)) return undefined
+  if (!num(v.heavy_used) || !num(v.heavy_total) || !num(v.light_used) || !num(v.light_total) || !Array.isArray(v.waiters)) return undefined
   const waiters: FleetWaiter[] = []
   for (const w of v.waiters) {
-    if (isRec(w) && num(w.place) && str(w.command) && str(w.project) && num(w.since)) waiters.push({ place: w.place, command: w.command, project: w.project, since: w.since })
+    const since = isRec(w) ? time(w.since) : null
+    if (isRec(w) && since !== null && num(w.place) && str(w.command) && str(w.project)) waiters.push({ class: str(w.class) ? w.class : '', place: w.place, command: w.command, project: w.project, since })
   }
-  return { heavy, light, waiters, longest_wait_ms: num(v.longest_wait_ms) ? v.longest_wait_ms : 0, admission_held: v.admission_held === true }
+  return { heavy_used: v.heavy_used, heavy_total: v.heavy_total, light_used: v.light_used, light_total: v.light_total, waiters, longest_wait_s: num(v.longest_wait_s) ? v.longest_wait_s : 0, admission_held: v.admission_held === true }
 }
 
 export function parseSlow(v: unknown): FleetSlow | null {
-  if (!isRec(v) || !num(v.at)) return null
+  const at = isRec(v) ? time(v.at) : null
+  if (!isRec(v) || at === null) return null
   const queue = parseQueue(v.queue)
-  return { at: v.at, top_cpu: parseProcs(v.top_cpu), top_mem: parseProcs(v.top_mem), ...(queue ? { queue } : {}) }
+  return { at, top_cpu: parseProcs(v.top_cpu), top_mem: parseProcs(v.top_mem), ...(queue ? { queue } : {}) }
 }
 
 const errorCode = (v: unknown): FleetErrorCode | null => (v === null || v === undefined || v === '' ? null : oneOf(ERROR_CODES, v) ? v : 'parse')
@@ -70,7 +73,7 @@ export function parseHost(v: unknown): FleetHost | null {
     ...(str(v.icon_weight) ? { icon_weight: v.icon_weight } : {}),
     os: str(v.os) ? v.os : '',
     status, error,
-    last_ok_at: num(v.last_ok_at) ? v.last_ok_at : null,
+    last_ok_at: time(v.last_ok_at),
     fast: parseFast(v.fast), slow: parseSlow(v.slow),
   }
 }
@@ -80,7 +83,7 @@ export function parseFleetAnswer(raw: unknown): FleetAnswer | null {
   if (raw.role === 'primary') {
     if (!num(raw.term) || !Array.isArray(raw.hosts)) return null
     const hosts = raw.hosts.map(parseHost).filter((h): h is FleetHost => h !== null)
-    return { role: 'primary', term: raw.term, at: num(raw.at) ? raw.at : 0, hosts }
+    return { role: 'primary', term: raw.term, at: time(raw.at) ?? 0, hosts }
   }
   if (raw.role === 'standby') return num(raw.term) && str(raw.primary) ? { role: 'standby', term: raw.term, primary: raw.primary } : null
   if (raw.role === 'off') return { role: 'off', reason: str(raw.reason) ? raw.reason : '' }
@@ -94,8 +97,9 @@ export function parseFleetPush(raw: unknown): FleetPush | null {
   for (const h of raw.hosts) {
     if (!isRec(h) || !str(h.id) || h.id === '') continue
     const row: FleetPushHost = { id: h.id }
-    const fast = parseFast(h.fast)
-    if (fast) row.fast = fast
+    if (h.fast === null) row.fast = null
+    else { const fast = parseFast(h.fast); if (fast) row.fast = fast }
+    if (h.last_ok_at !== undefined) row.last_ok_at = time(h.last_ok_at)
     const slow = parseSlow(h.slow)
     if (slow) row.slow = slow
     if (h.status !== undefined) { const st = statusOf(h.status, h.error); row.status = st.status; row.error = st.error }

@@ -22,7 +22,7 @@ export type FleetZone = (typeof ZONES)[number]
 
 /** `level`: memory pressure 1, 2 or 4; 0 = unknown (a Linux host without PSI). */
 export interface FleetFast {
-  at: number // ms since epoch, the primary's receive time
+  at: number // ms since epoch (RFC3339 on the wire), the primary's receive time
   cpu: number
   mem: number
   level: number
@@ -37,13 +37,15 @@ export interface FleetFast {
 
 export interface FleetProc { pid: number; name: string; cpu: number; rss_mb: number }
 
-/** ASSUMED keys: the spec lists the contents (§5) but not the names. */
-export interface FleetWaiter { place: number; command: string; project: string; since: number }
+/** Times are RFC3339 strings on the wire (UTC); parse.ts turns them into ms since epoch, which is all the App holds. */
+export interface FleetWaiter { class: string; place: number; command: string; project: string; since: number }
 export interface FleetQueue {
-  heavy: { used: number; total: number }
-  light: { used: number; total: number }
+  heavy_used: number
+  heavy_total: number
+  light_used: number
+  light_total: number
   waiters: FleetWaiter[]
-  longest_wait_ms: number
+  longest_wait_s: number
   admission_held: boolean
 }
 
@@ -65,20 +67,22 @@ export interface FleetHost {
   slow: FleetSlow | null
 }
 
-/** `GET /api/fleet`. */
+/** `GET /api/fleet` (samples: `__fixtures__/api-fleet-*.json`, copied from the daemon's testdata). */
 export type FleetAnswer =
   | { role: 'primary'; term: number; at: number; hosts: FleetHost[] }
   | { role: 'standby'; term: number; primary: string }
   | { role: 'off'; reason: string }
 
 /**
- * One host of a `fleet.changed` push: `fast` always, `slow` only right after it changed (every 5 s), `status` / `error`
- * when they changed. `full` is the whole row when the daemon sends one (a host the App has not seen).
+ * One host of a `fleet.changed` push: always `id`, `status`, `error`, `last_ok_at` and `fast` (null before the first reading);
+ * `slow` only right after it changed. `full` is the whole row when one carries a `kind` (the daemon's sample has none, so a
+ * host the App has not seen is a re-read).
  */
 export interface FleetPushHost {
   id: string
-  fast?: FleetFast
-  slow?: FleetSlow
+  fast?: FleetFast | null // null: no reading yet; absent: not in this push
+  slow?: FleetSlow // only when it changed
+  last_ok_at?: number | null
   status?: FleetHostStatus
   error?: FleetErrorCode | null
   full?: FleetHost

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { FleetHistory } from './history'
-import { fast } from './fixtures'
+import { fast } from './__fixtures__/builders'
 
 const S = 1000
 let h: FleetHistory
