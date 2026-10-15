@@ -73,16 +73,35 @@ func (s *Slot) Label() string { return string(s.Class) + "-" + strconv.Itoa(s.K)
 // gone, whatever happens to the gate: a gate killed with SIGKILL does not free the slot under a tree that still runs.
 func (s *Slot) File() *os.File { return s.f }
 
-// Release drops the slot: the record first, then the lock, for every process that inherited it too (the gate has
-// cleared the command's group by now; whatever escaped it does not keep the slot).
-func (s *Slot) Release() {
+// Straggler is a process that still holds a slot's lock file open when the gate lets the slot go.
+type Straggler struct {
+	PID int
+	Cmd string
+}
+
+// Release gives the slot back: the record goes, then the lock is dropped with LOCK_UN and the descriptor closed. flock
+// belongs to the open file description, which the command and its descendants share (fd 3), so one unlock frees the
+// slot for everybody, even when a child escaped the clean-up and still holds fd 3 (a daemon such as a tmux server, which
+// would otherwise hold the slot for good). Before the unlock, find (when given) names the other processes that hold the
+// lock file; they are returned so the gate can say they were left running. A gate that is killed never gets here: the
+// lock then stays with the tree that is still alive.
+func (s *Slot) Release(find func(path string) []Straggler) []Straggler {
 	if s == nil || s.f == nil {
-		return
+		return nil
 	}
-	_ = os.Remove(s.rec)
+	var left []Straggler
+	if find != nil {
+		for _, p := range find(s.f.Name()) {
+			if p.PID != os.Getpid() {
+				left = append(left, p)
+			}
+		}
+	}
+	_ = os.Remove(s.rec) // before the unlock: afterwards the record may be the next holder's
 	_ = syscall.Flock(int(s.f.Fd()), syscall.LOCK_UN)
 	_ = s.f.Close()
 	s.f = nil
+	return left
 }
 
 // SetHolder writes the record of the command the slot is held for (atomically: a reader sees a whole record or none).
@@ -344,6 +363,13 @@ func (p *Pool) TryTake(t *Ticket) (slot *Slot, ahead int, err error) {
 	}
 	// keep the lowest free slot; the other probes are given back
 	closeAll(free[1:])
+	// The lock is ours now, so a record left by an earlier holder (kept because a child of it still held the lock) is stale:
+	// remove it before anything else, or a command still carrying the old token could pass the nesting check against our
+	// lock until SetHolder writes ours.
+	if err := os.Remove(p.recordPath(freeK[0])); err != nil && !errors.Is(err, os.ErrNotExist) {
+		closeAll(free[:1]) // the lock is let go again: a record that cannot be removed must not stay beside a lock we hand out
+		return nil, ahead, dirError(err)
+	}
 	return &Slot{Class: p.Class, K: freeK[0], f: free[0], rec: p.recordPath(freeK[0])}, ahead, nil
 }
 

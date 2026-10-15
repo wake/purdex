@@ -46,7 +46,7 @@ func TestPool_TakesUpToSizeThenWaits(t *testing.T) {
 	s, _, err := p.TryTake(tk)
 	require.NoError(t, err)
 	assert.Nil(t, s, "both slots are held")
-	slots[0].Release()
+	slots[0].Release(nil)
 	s, _, err = p.TryTake(tk)
 	require.NoError(t, err)
 	require.NotNil(t, s, "a released slot is free again")
@@ -66,7 +66,7 @@ func TestPool_TheOlderTicketGetsTheFreedSlot(t *testing.T) {
 
 	first := ticketAt(t, p, 1000)
 	second := ticketAt(t, p, 2000)
-	hs.Release()
+	hs.Release(nil)
 
 	s, ahead, err := p.TryTake(second)
 	require.NoError(t, err)
@@ -83,7 +83,7 @@ func TestPool_TheOlderTicketGetsTheFreedSlot(t *testing.T) {
 	s2, _, err := p.TryTake(second)
 	require.NoError(t, err)
 	assert.Nil(t, s2)
-	s.Release()
+	s.Release(nil)
 	s2, _, err = p.TryTake(second)
 	require.NoError(t, err)
 	assert.NotNil(t, s2)
@@ -155,7 +155,7 @@ func TestPool_HoldersAreTheLockedSlotsOnly(t *testing.T) {
 	assert.Equal(t, []string{"go", "test", "./..."}, held[0].Argv)
 	assert.Equal(t, ClassHeavy, held[0].Class)
 
-	s.Release()
+	s.Release(nil)
 	assert.Empty(t, p.Held())
 	_, err = os.Stat(p.recordPath(1))
 	assert.True(t, os.IsNotExist(err), "the record goes with the slot")
@@ -365,4 +365,41 @@ func TestPool_AHalfMadeTicketOfADeadGateIsReaped(t *testing.T) {
 	assert.True(t, exists(aliveFresh), "its maker is alive: it may be in Enqueue")
 	assert.False(t, exists(aliveVeryOld), "an hour old whoever has the pid")
 	assert.True(t, exists(odd), "a name that is not a ticket's is left alone")
+}
+
+// A record kept for a child that still held the lock is stale once a new gate has the lock: the new gate removes it at
+// once, so a command that still carries the old token cannot pass the nesting check against the new lock before the new
+// record is written. (M: leave the old record until SetHolder.)
+func TestPool_TheOldRecordGoesWhenANewGateTakesTheSlot(t *testing.T) {
+	p := testPool(t, ClassHeavy, 1)
+	require.NoError(t, os.MkdirAll(p.Dir, 0o755))
+	old := Holder{Class: ClassHeavy, Slot: 1, PID: 4242, Token: "old-token", Argv: []string{"vitest"}}
+	require.NoError(t, os.WriteFile(p.recordPath(1), mustJSON(t, old), 0o644)) // the record Release kept
+
+	tk := ticketAt(t, p, 1)
+	s, _, err := p.TryTake(tk) // the earlier holder's last descriptor is gone: the lock is free
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	_, locked, ok := p.Record(1)
+	assert.False(t, ok, "the old record is gone before the new holder has written its own")
+	assert.False(t, locked && ok)
+	h, _, _ := p.Record(1)
+	assert.Empty(t, h.Token, "so the old token proves nothing")
+}
+
+// When the old record cannot be removed (a non-empty directory sits where it goes), no slot is handed out and the lock is let
+// go again: the old token must never be left beside a lock that is held. (M: ignore the failed removal.)
+func TestPool_ASlotIsNotHandedOutWhenTheOldRecordCannotBeRemoved(t *testing.T) {
+	p := testPool(t, ClassHeavy, 1)
+	require.NoError(t, os.MkdirAll(filepath.Join(p.recordPath(1), "x"), 0o755)) // heavy-1.json is a non-empty directory
+	tk := ticketAt(t, p, 1)
+	s, _, err := p.TryTake(tk)
+	assert.Nil(t, s)
+	assert.ErrorIs(t, err, ErrBroken)
+	// the lock is free again
+	f, oerr := os.OpenFile(p.slotPath(1), os.O_RDWR, 0)
+	require.NoError(t, oerr)
+	defer f.Close()
+	st, _ := flockNB(f)
+	assert.Equal(t, lockGot, st, "the slot lock was not left held")
 }
