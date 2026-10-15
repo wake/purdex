@@ -2,7 +2,7 @@
 // node_modules/.bin/{vitest,tsc} and vendor/bin/{phpunit,pest} get `pdx gate --auto --` in front, and a foreground call
 // the gate would make wait is run in the background with a note. Run by `claude plugin test cmd/pdx/plugin/purdex`.
 import { test, expect } from 'claude-code/testing'
-import { gatedCandidates, prefixGated } from './gate.js'
+import { askWouldWaitAll, gatedCandidates, prefixGated } from './gate.js'
 
 const P = "'pdx' gate --auto -- "
 
@@ -74,9 +74,9 @@ const FREE = JSON.stringify({ would_wait: false, class: 'heavy', ahead: 0 })
 const BUSY = JSON.stringify({ would_wait: true, reason: 'slots', class: 'heavy', ahead: 1, held_by: 'held 5m by "go test ./..." (purdex/spa)',
   note: 'waiting for a heavy slot — 1 ahead; held 5m by "go test ./..." (purdex/spa). This is a normal queue: it starts by itself when that ends; do not interrupt it or run the command another way.' })
 
-type Rig = { calls: string[][]; ran: { command: string; bg: unknown; agent?: unknown }[]; checks: { command: string; bg: unknown }[]; verdict: (command: string, bg: unknown) => string | null }
+type Rig = { oldPdx: boolean; batchAnswer?: (argv: string[]) => any; calls: string[][]; ran: { command: string; bg: unknown; agent?: unknown }[]; checks: { command: string; bg: unknown }[]; verdict: (command: string, bg: unknown) => string | null }
 function rig(on: any, answer: (argv: string[]) => any, bash: (e: any) => any = () => BASH_OK, pdxJSON?: string, hang?: string): Rig {
-  const r: Rig = { calls: [], ran: [], checks: [], verdict: () => 'allow' }
+  const r: Rig = { oldPdx: false, calls: [], ran: [], checks: [], verdict: () => 'allow' }
   const never = () => new Promise(() => {}) // a dependency that never answers
   on('session.id', () => ({ value: 'sess-1' }))
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
@@ -88,12 +88,31 @@ function rig(on: any, answer: (argv: string[]) => any, bash: (e: any) => any = (
   on('clock.sleep', async (_$: any, e: any) => { await new Promise((res) => setTimeout(res, e.ms)); return { value: undefined } })
   on('fs.read', (_$: any, e: any) => (hang === 'fs.read' ? never() : pdxJSON !== undefined && e.path.endsWith('/pdx.json') ? { value: pdxJSON } : { deny: 'ENOENT' }))
   on('ui.log', () => ({ value: undefined }))
-  on('process.run', (_$: any, e: any) => { r.calls.push([...e.argv]); return hang === 'process.run' ? never() : answer(e.argv) })
+  on('process.run', (_$: any, e: any) => {
+    r.calls.push([...e.argv])
+    if (hang === 'process.run') return never()
+    const bi = e.argv.indexOf('--auto-batch')
+    if (bi < 0) return answer(e.argv)
+    // pdx's own batch form: the answer of each command is what asking it alone gives; a pdx older than the mod does not know the flag
+    if (r.oldPdx) return ok('', 2)
+    if (r.batchAnswer) return r.batchAnswer(e.argv)
+    const rest = e.argv.slice(bi + 2).filter((x: string) => x !== '--json')
+    const outs = JSON.parse(e.argv[bi + 1]).map((a: string[]) => JSON.parse(answer([...e.argv.slice(0, 3), '--auto', '--json', ...rest, '--', ...a]).value.stdout))
+    return ok(JSON.stringify(outs))
+  })
   on('tool.call', { tool: 'Bash' }, (_$: any, e: any) => { r.ran.push({ command: e.command, bg: e.run_in_background, agent: e.agentId }); return bash(e) })
   return r
 }
 const bash = ($: any, command: string, extra: object = {}) => $.tool.call({ tool: 'Bash', command, tool_use_id: 'toolu_1', ...extra })
-const wouldWaits = (r: Rig) => r.calls.filter((a) => a[1] === 'gate' && a[2] === 'would-wait')
+const isAsk = (a: string[]) => a[1] === 'gate' && a[2] === 'would-wait'
+// the commands the hook asked about, each as the one-command call that would have asked it (a batch call stands for its commands)
+const wouldWaits = (r: Rig) => r.calls.filter(isAsk).flatMap((a) => {
+  const bi = a.indexOf('--auto-batch')
+  if (bi < 0) return [a]
+  const rest = a.slice(bi + 2).filter((x) => x !== '--json')
+  return JSON.parse(a[bi + 1]).map((c: string[]) => [...a.slice(0, 3), '--auto', '--json', ...rest, '--', ...c])
+})
+const askCalls = (r: Rig) => r.calls.filter(isAsk)
 
 test('a direct call of a tool binary runs behind pdx gate, with a note naming what ran', async ($, on) => {
   const r = rig(on, () => ok(FREE))
@@ -253,4 +272,62 @@ test('the fourth command of a call is asked about too: it is the one that waits'
   await bash($, 'go version; go env; go list ./...; go test ./...')
   expect(wouldWaits(r)).toHaveLength(4)
   expect(r.ran[0].bg).toBe(true)
+})
+
+// ---- one pdx process for all the commands of a call (G-D1c) ----
+
+test('a call with several commands is asked about in ONE pdx process, and the answers are the same as asking one by one', async ($, on) => {
+  const r = rig(on, (a) => ok(a.includes('pnpm') ? BUSY : FREE))
+  await bash($, 'go build ./... && pnpm run build && go vet ./...')
+  expect(askCalls(r)).toHaveLength(1)
+  expect(askCalls(r)[0].slice(0, 4)).toEqual(['pdx', 'gate', 'would-wait', '--auto-batch'])
+  expect(JSON.parse(askCalls(r)[0][4])).toEqual([['go', 'build', './...'], ['pnpm', 'run', 'build'], ['go', 'vet', './...']])
+  expect(r.ran[0].bg).toBe(true) // pnpm would wait: the middle one decides, as when asked alone
+  expect(wouldWaits(r)).toHaveLength(3)
+})
+
+test('one command is asked in the plain form, as before', async ($, on) => {
+  const r = rig(on, () => ok(FREE))
+  await bash($, 'go test ./...')
+  expect(askCalls(r)).toEqual([['pdx', 'gate', 'would-wait', '--auto', '--json', '--', 'go', 'test', './...']])
+})
+
+test('the batch carries the config of the daemon that installed the mod', async ($, on) => {
+  const r = rig(on, () => ok(FREE), () => BASH_OK, JSON.stringify({ pdx: '/opt/pdx/bin/pdx', config: '/home/me/.config/pdx2/config.toml' }))
+  await bash($, 'go build ./... && go vet ./...')
+  expect(askCalls(r)).toHaveLength(1)
+  expect(askCalls(r)[0][0]).toBe('/opt/pdx/bin/pdx')
+  expect(askCalls(r)[0].slice(-2)).toEqual(['--config', '/home/me/.config/pdx2/config.toml'])
+})
+
+test('a pdx that does not know the batch form is asked one by one: the same answers, at the old cost', async ($, on) => {
+  const r = rig(on, (a) => ok(a.includes('pnpm') ? BUSY : FREE))
+  r.oldPdx = true
+  await bash($, 'go build ./... && pnpm run build')
+  expect(askCalls(r)).toHaveLength(3) // the batch that failed, then each command
+  expect(r.ran[0].bg).toBe(true)
+})
+
+for (const bad of ['not json', '{"would_wait":true}', '[{"would_wait":true}]']) {
+  test(`an answer that cannot be read as a list of the right length is asked again one by one: ${bad}`, async ($, on) => {
+    const r = rig(on, (a) => ok(a.includes('pnpm') ? BUSY : FREE))
+    r.batchAnswer = () => ok(bad)
+    await bash($, 'go build ./... && pnpm run build')
+    expect(askCalls(r)).toHaveLength(3)
+    expect(r.ran[0].bg).toBe(true)
+  })
+}
+
+test('the list answer is checked entry by entry: an entry that is not an answer counts as no answer', async ($, on) => {
+  const r = rig(on, () => ok(BUSY))
+  r.batchAnswer = () => ok(JSON.stringify([{ would_wait: 'yes' }, null]))
+  await bash($, 'go build ./... && pnpm run build')
+  expect(askCalls(r)).toHaveLength(1)
+  expect(r.ran[0].bg).toBeUndefined() // neither entry says it would wait
+})
+
+test('askWouldWaitAll: nothing to ask is no process', async ($, on) => {
+  const r = rig(on, () => ok(BUSY))
+  expect(await askWouldWaitAll($, { bin: 'pdx', config: '' }, [])).toEqual([])
+  expect(r.calls).toEqual([])
 })

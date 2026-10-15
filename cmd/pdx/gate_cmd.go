@@ -25,6 +25,7 @@ const gateUsage = `usage: pdx gate [--class heavy|light] [--auto] [--tool <name>
        pdx gate status [--json [--holders]] [--config <path>]
        pdx gate would-wait [--class heavy|light] [--json] [--config <path>]
        pdx gate would-wait --auto [--json] [--config <path>] -- <command…>
+       pdx gate would-wait --auto-batch '<[["go","test"],["ls"]]>' [--json] [--config <path>]
        pdx gate set [--profile <name>] [--config <path>] <module>.<key>=<value>
        pdx gate profile use <name> | list [--config <path>]
   --class  the pool to take a slot from (default heavy); --auto classifies the command by its words instead
@@ -389,6 +390,39 @@ func orDash(s string) string {
 	return s
 }
 
+const wouldWaitUsage = "usage: pdx gate would-wait [--class heavy|light] [--json] [--config <path>]\n       pdx gate would-wait --auto [--json] [--config <path>] -- <command…>\n       pdx gate would-wait --auto-batch '<[[\"go\",\"test\"],[\"ls\"]]>' [--json] [--config <path>]\n"
+
+// wouldWaitBatch answers for several commands in one process: each is classified by its words as --auto does and gets the
+// answer a call of its own would get. The commands of one class are looked at once, so they cannot disagree with each other.
+// The JSON is an array in the order of the commands.
+func wouldWaitBatch(g *gate.Gate, cfg gate.Config, argvs [][]string, asJSON bool, stdout io.Writer) int {
+	env := gate.EnvOf(os.Environ(), false) // the same view of the environment as a shim's: no terminal, the caller's variables
+	byClass := map[gate.Class]gate.WouldWait{}
+	answers := make([]gate.WouldWait, 0, len(argvs))
+	for _, argv := range argvs {
+		cl := cfg.Intercept.Classify(argv, env)
+		w, ok := byClass[cl]
+		if !ok {
+			w = g.WouldWait(cl)
+			byClass[cl] = w
+		}
+		answers = append(answers, w)
+	}
+	if asJSON {
+		b, _ := json.Marshal(answers)
+		fmt.Fprintln(stdout, string(b))
+		return 0
+	}
+	for _, w := range answers {
+		if !w.Wait {
+			fmt.Fprintln(stdout, "no")
+			continue
+		}
+		fmt.Fprintf(stdout, "yes (%s): %s\n", w.Reason, w.Note)
+	}
+	return 0
+}
+
 // gateWouldWait answers whether a command of a class would wait now, without taking a slot. It exits 0 either way (the
 // answer is in the output); 2 is a usage error.
 func gateWouldWait(args []string, stdout, stderr io.Writer) int {
@@ -397,17 +431,36 @@ func gateWouldWait(args []string, stdout, stderr io.Writer) int {
 	flags, command, hasCmd := splitRunArgs(args)
 	class := fs.String("class", "heavy", "heavy or light")
 	auto := fs.Bool("auto", false, "classify the command after -- by its words")
+	batch := fs.String("auto-batch", "", "several commands at once: a JSON array of argv arrays, each classified by its words")
 	asJSON := fs.Bool("json", false, "print JSON")
 	cfgPath := fs.String("config", "", "config.toml")
 	if err := fs.Parse(flags); err != nil {
 		return 2
 	}
-	if fs.NArg() > 0 || (*class != "heavy" && *class != "light") || *auto != hasCmd {
-		fmt.Fprint(stderr, "usage: pdx gate would-wait [--class heavy|light] [--json] [--config <path>]\n       pdx gate would-wait --auto [--json] [--config <path>] -- <command…>\n")
+	batchGiven := false
+	fs.Visit(func(f *flag.Flag) { batchGiven = batchGiven || f.Name == "auto-batch" })
+	if fs.NArg() > 0 || (*class != "heavy" && *class != "light") || *auto != hasCmd || (batchGiven && (*auto || hasCmd)) {
+		fmt.Fprint(stderr, wouldWaitUsage)
 		return 2
+	}
+	var argvs [][]string
+	if batchGiven {
+		if err := json.Unmarshal([]byte(*batch), &argvs); err != nil || len(argvs) == 0 {
+			fmt.Fprint(stderr, wouldWaitUsage)
+			return 2
+		}
+		for _, a := range argvs {
+			if len(a) == 0 {
+				fmt.Fprint(stderr, wouldWaitUsage)
+				return 2
+			}
+		}
 	}
 	cfg := loadGateConfig(*cfgPath, stderr)
 	g := gate.New(cfg)
+	if batchGiven {
+		return wouldWaitBatch(g, cfg, argvs, *asJSON, stdout)
+	}
 	cl := gate.Class(*class)
 	if *auto {
 		// the same view of the environment as a shim's: no terminal, the caller's variables
