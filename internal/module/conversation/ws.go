@@ -19,6 +19,7 @@ import (
 // Defaults of the live stream (spec §8.2); the Module fields of the same names let tests shorten them.
 const (
 	defaultPollEvery      = 500 * time.Millisecond
+	defaultFullEvery      = 2 * time.Second // a stream whose file and light did not change gets a full pass at least this often
 	defaultReresolveEvery = 10 * time.Second
 	sendQueue             = 64
 	pingEvery             = 25 * time.Second
@@ -327,6 +328,10 @@ func (c *wsConn) follow() {
 		src        convfeed.Source
 		have       bool
 		resolvedAt time.Time
+		// what the last full pass saw, for the quiet-stream gate (quiet)
+		passAt   time.Time
+		passSize int64
+		passGen  uint64
 	)
 	dropSrc := func() {
 		if have {
@@ -344,6 +349,16 @@ func (c *wsConn) follow() {
 		if !c.pushCaps() {
 			return
 		}
+		// A stream whose transcript did not grow, whose light, abort and background list cannot have changed (the agent module
+		// took in nothing) and that had a full pass a moment ago has nothing to find: the poll is a stat and a comparison, not
+		// an entry lock and a store query (G3c). The full pass still runs at least every fullEvery, and always for a source the
+		// gate cannot judge.
+		if have && c.m.quiet(src, passAt, passSize, passGen) {
+			continue
+		}
+		// what this pass will have seen: taken BEFORE it, so an event or a write that lands during the pass makes the next one
+		// run (the gate compares against these)
+		preAt, preSize, preGen := time.Now(), c.m.fileSize(src), c.m.lightGeneration()
 		// The cheap light is read before the entry gate (a store query must not hold up other followers of the entry)
 		// for the frame the last full lookup confirmed, and applied only to that same source.
 		lightAt := time.Now() // before the query: the Entry compares readings by this
@@ -377,10 +392,41 @@ func (c *wsConn) follow() {
 			dropSrc() // a vanished or shrunk file: resolve again on the next tick
 			continue
 		}
+		passAt, passSize, passGen = preAt, preSize, preGen
 		if !c.push() {
 			return
 		}
 	}
+}
+
+// quiet reports whether a full pass can be skipped: the source is a plain transcript (not an execution's worker, whose light has
+// its own cheap path), a pass was made less than fullEvery ago, the file is the size that pass saw and the agent module's
+// generation is the one it saw. Anything the gate cannot read (a size error, no generation source) is not quiet.
+func (m *Module) quiet(src convfeed.Source, passAt time.Time, passSize int64, passGen uint64) bool {
+	gs, ok := m.light.(LightGenerationSource)
+	if !ok || passAt.IsZero() || src.Backend == "execution" || time.Since(passAt) >= m.fullEvery() {
+		return false
+	}
+	size, err := src.File.Size()
+	return err == nil && size == passSize && gs.LightGeneration() == passGen
+}
+
+// fileSize and lightGeneration are the two readings the gate compares; -1 and 0 where there is none.
+func (m *Module) fileSize(src convfeed.Source) int64 {
+	if src.File == nil {
+		return -1
+	}
+	if size, err := src.File.Size(); err == nil {
+		return size
+	}
+	return -1
+}
+
+func (m *Module) lightGeneration() uint64 {
+	if gs, ok := m.light.(LightGenerationSource); ok {
+		return gs.LightGeneration()
+	}
+	return 0
 }
 
 // push sends what the entry gained since the last frame. A slow reader gets fewer, larger frames: while the queue is
