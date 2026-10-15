@@ -92,8 +92,10 @@ Design:
 - **`pdx gate [--class heavy|light] [--fg] -- <cmd…>`** runs `<cmd>` under a slot (§5). `pdx gate --auto`
   classifies by argv (§3).
 - **Shims, not hooks.** Thin shell shims for `go`, `pnpm`, `npx` (and `vitest`/`tsc` for direct calls) in
-  `~/.config/pdx/shims/`, each: `exec pdx gate --auto --real <real binary> -- "$@"`; class `none` execs the real
-  binary at once (no extra process beyond one `pdx` exec). `pnpm` is classified by its subcommand/script name
+  `~/.config/pdx/shims/`, each: `exec pdx gate --auto --tool <name> -- "$@"`; class `none` execs the real
+  binary at once (no extra process beyond one `pdx` exec). **The real binary is resolved at every run, not at setup**
+  (so an `nvm` switch is followed): walk the current `PATH` skipping the shim dir, resolve symlinks, and refuse a
+  result whose real path lies in the shim dir (no recursion, whatever the alias). `pnpm` is classified by its subcommand/script name
   (`check`, `test`, `typecheck`, `lint`, `-r`/`--recursive` → heavy; `vitest <files>` → light; install/add/etc. → none);
   `npx`/`pnpm exec`/`pnpm vitest|tsc` by the tool and its arguments. The shims inject the parallelism caps (§5).
 - **PATH precedence** (measured: nvm's bin precedes `~/.local/bin`): the shim dir must come before nvm.
@@ -101,25 +103,39 @@ Design:
   `/bin/zsh -c 'source <snapshot>; …'`; the snapshot does not set `PATH`, and `zsh -c` reads `~/.zshenv`
   (a variable defined only there reaches a `zsh -c` started without it). So running sessions pick the shims up on
   their next command, no restart. The user's own terminals get the same shims (intended: every heavy command on
-  the host is gated). The block in `~/.zshenv` is delimited (`# >>> pdx gate >>>` … `# <<< pdx gate <<<`), idempotent,
-  and removed by `pdx setup --uninstall-gate`. Non-zsh callers (launchd, `bash -c` scripts) are covered only where
+  the host is gated). The block in `~/.zshenv` is delimited (`# >>> pdx gate >>>` … `# <<< pdx gate <<<`), idempotent
+  on disk **and at run time** (it prepends only when `:$PATH:` does not already contain the shim dir, so nested
+  `zsh -c` do not grow `PATH`), prints nothing, and is removed by `pdx setup --uninstall-gate` exactly (content before
+  and after the block kept; a duplicated or unclosed old block is repaired, not left half). Non-zsh callers (launchd, `bash -c` scripts) are covered only where
   they call `pdx gate`/`pdx lease run` themselves.
 - **Not covered by shims:** a direct `node_modules/.bin/vitest`, or a node program that starts vitest through its
   JS API. Aigora's `check.ts` already wraps each step in `pdx lease run` (becomes the gate alias, nested); for
   agents, the mod keeps a minimal rewrite that prefixes such commands with `pdx gate --auto --` (the only mod part
   that remains; no daemon call).
-- **Nesting:** the gate exports `PDX_GATE_HELD=<class>-<k>` to the child; a gate or shim that sees it passes
-  through (vitest workers, `tsc` inside `pnpm check`, `go test` inside a gated script). Children of a held job
-  count against its slot (jobserver rule).
+- **Nesting (verified, not trusted):** the gate exports `PDX_GATE_HELD=<class>-<k>:<token>` to the child, where
+  `<token>` is a random value also written in the holder record. An inner gate passes through only when all hold:
+  the token matches the record of that slot, that slot's flock is currently held (a non-blocking probe fails), and
+  the inner process is a descendant of the holder pid (ppid walk). A forged, stale or foreign value is ignored (the
+  inner gate takes a slot as usual). **No class escalation:** under a `light` holder, an inner `heavy` command takes
+  a heavy slot of its own; under a `heavy` holder, inner heavy and light pass through. Children of a held job count
+  against its slot (jobserver rule).
 - **Explicit use:** scripts may call `pdx gate -- <script>` to hold one slot for a whole sequence (release gate).
-- **Fail-open:** if the gate directory cannot be opened (codex read-only sandbox), run the command directly
-  and print one line to stderr. Codex prompts already forbid full suites.
+- **Fail-open, narrowly:** only when opening/creating the gate directory fails with `EPERM`, `EACCES` or `EROFS`
+  (codex read-only sandbox) does the gate run the command directly, with one stderr line. Any other error (the path
+  is a file, the disk is full, a lock cannot be taken for a reason other than contention) is **fail-closed**: the
+  command is refused with a message saying what to fix. Codex prompts already forbid full suites.
 
 ## 5. The gate (daemon-free)
 
 - **Slots.** `~/.config/pdx/gate/<class>-<k>.lock`, k = 1…N, taken with `flock(LOCK_EX|LOCK_NB)` from Go
-  (`syscall.Flock`; no external tool). The lock lives on an fd the gate holds until the child's process group is
-  gone; the kernel drops it if the gate dies (no expiry, no `max_hold`, no stale holder).
+  (`syscall.Flock`; no external tool). **The lock fd is passed to the child** (`ExtraFiles`, not close-on-exec), so
+  the whole process tree holds the same open file description: the slot is released only when the last process of
+  the tree closes it. A gate killed with SIGKILL therefore does not free the slot while its children still run (no
+  expiry, no `max_hold`, no double booking). A process that closes all its fds on purpose (a daemonizing helper)
+  escapes; `pdx gate status` shows such a slot as "free, holder record points to a live pid" for the person to see.
+- **Disk floor (heavy only).** Before taking a heavy slot the gate checks free space on the volume of the cwd and of
+  `$TMPDIR` (`statfs`) against `[gate] disk_min_gb` (default 10); below it the command is refused with the numbers.
+  This replaces the lease's disk preflight from G1 on (the daemon's disk alert stays).
 - **Fair order (nq-style).** A waiting gate first writes a ticket `queue/<class>/<unix-ns>-<pid>` and holds a
   flock on it (so a dead waiter's ticket is detectably stale). It may take a slot only when the number of live
   tickets older than its own is smaller than the number of free slots; otherwise it waits (poll with jitter,
@@ -130,9 +146,11 @@ Design:
   is the truth; a record without a held lock is stale and ignored.
 - **Admission by memory pressure.** Before taking a slot (and while waiting), require
   `kern.memorystatus_vm_pressure_level == 1` **and** pageouts+swapouts over the last 10 s below
-  `max_page_rate` (from `vm_stat`/`host_statistics64`, sampled by the gate itself; a cached sample younger
-  than 5 s in `~/.config/pdx/gate/pressure.json` may be reused by concurrent gates). Unreadable → admit
-  (fail-open), with a stderr line.
+  `max_page_rate` (from `host_statistics64`/`vm_stat`). Concurrent gates share one sampler: whoever holds
+  `pressure.lock` (flock, non-blocking) takes the sample and writes `pressure.json` atomically (temp file + rename);
+  the others read the last complete file if it is younger than 5 s. With no previous sample (no delta yet) only the
+  level is used. A read failure keeps the last good sample; only 3 consecutive failures make the gate admit on the
+  level alone (and, if the level is unreadable too, fail-open with a stderr line).
 - **Parallelism and QoS for the child.**
   - Go: add `-p=<go_p>` to `GOFLAGS` when absent (default 3); leave `GOMAXPROCS` alone.
   - vitest: the shim adds `--maxWorkers=<n>` (default 3) when the command has no worker limit (as the mod's R7 did).
@@ -142,11 +160,14 @@ Design:
     `taskpolicy -b` also throttles I/O, so I/O-bound steps (`go build`, `pnpm install`) may slow down a lot: the
     plan measures one go test package, vitest full and `go build ./...` with and without it, and the default per
     class follows the numbers. `--fg` opts out (the lead's release gate when the host is otherwise idle).
-- **Process group.** The child starts in a new process group. SIGINT/SIGTERM/SIGHUP to the gate are forwarded
-  to the group; when the child exits, the gate sends SIGTERM to whatever is left in the group, SIGKILL after
-  5 s, then releases the slot. Exit code = the child's.
+- **Process group.** When stdin is not a terminal (agents' Bash, scripts) the child starts in a new process group;
+  SIGINT/SIGTERM/SIGHUP to the gate are forwarded to the group, and when the child exits the gate sends SIGTERM to
+  whatever is left in the group, SIGKILL after 5 s. When stdin **is** a terminal the child stays in the foreground
+  group (a background group reading the terminal would get SIGTTIN; the current `pdx lease run` already does this,
+  `cmd/pdx/lease_run.go`): signals reach it from the terminal, and at exit the gate reaps its descendants by a ppid
+  walk instead of a group kill. Exit code = the child's (128+n on a signal).
 - **Config.** `[gate]` in `~/.config/pdx/config.toml` (read by the gate directly): `heavy_slots`,
-  `light_slots`, `go_p`, `vitest_workers`, `max_page_rate`, `enabled`. Defaults suit a 10-core host.
+  `light_slots`, `go_p`, `vitest_workers`, `max_page_rate`, `disk_min_gb`, `enabled`. Defaults suit a 10-core host.
 
 ## 6. Retiring the lease (D2)
 
@@ -163,8 +184,11 @@ Remove:
 - daemon plumbing that only served lease notices: `modevents.CapLeaseNoticeV1`, `promptq.KindNotice` /
   `CapLeaseNotice` and their hand-out branch, team `LeadNoticer` (if nothing else uses it — plan verifies).
 - settings: `kinds`, `deadline_s`, `warmup_s`, `floor_pct`, `max_hold_s`, `ewma_half_life_s`,
-  `heavy_min_weight`, `park_s`, `gap_s`, `load_cap_pct`, `alert_lease_mem_pct`, `mode`. Unknown keys in a
-  stored hostconfig are ignored on read and dropped on the next write.
+  `heavy_min_weight`, `park_s`, `gap_s`, `load_cap_pct`, `alert_lease_mem_pct`, `mode`. Today
+  `normalizeResources` is shared by PUT and by reading the stored document and rejects unknown keys
+  (`internal/module/hostconfig/resources.go`), so removing keys would make every stored document invalid. Split it:
+  **PUT stays strict** (unknown keys rejected); **reading a stored document is lenient** (retired keys ignored) and
+  the next write drops them. Tests: a stored document with every retired key reads fine and round-trips without them.
 - data: `resource_leases`, `resource_positions` — a store migration drops them (deployed schema: the step is
   additive-safe for a rollback to a binary that would recreate them empty).
 
@@ -174,8 +198,9 @@ Keep and rework:
 - zones: the memory input becomes the pressure level + page rate (same signal as the gate), CPU load stays
   informational;
 - alerts (`events.go`): danger and stuck rules on the new zone; `lease_notice` removed;
-- disk guard: checked by the gate before taking a heavy slot (refuse with a clear message when below the
-  floor) and by the daemon's sampler for the alert;
+- disk guard: in the gate from G1 (§5 disk floor); the daemon's sampler keeps the disk alert;
+- `pdx team show` host shares: `/api/resources` keeps `Snapshot.Sessions` (session attribution); a test fails if the
+  sessions disappear from the wire (today `cmd/pdx/team_cmd_resources_test.go`).
 - `host_minutes`: the lease columns are written as 0; new columns `heavy_running`, `light_running`,
   `gate_waiting` read from the slot records; `pdx lease report` → `pdx host report` (heavy minutes, waits,
   zone seconds) — the strategy report script reads it.
@@ -204,12 +229,12 @@ in the release gate (`test-at.sh`). `CLAUDE.md` 測試分層 gains one line. vit
 
 | Phase | Content | Depends |
 |---|---|---|
-| G1 | `pdx gate` core: slots, holder records, nesting env, process group reap, pressure admission, QoS, parallelism env, config, fail-open; unit tests (fake clock/pressure reader, real flock in temp dirs) | — |
+| G1 | `pdx gate` core: slots (lock fd inherited by the tree), fair tickets, holder records, verified nesting without class escalation, TTY-aware process group reap, pressure admission with a shared atomic sample, disk floor, QoS, parallelism env, config, narrow fail-open; unit tests (fake clock/pressure reader, real flock in temp dirs, real process trees) | — |
 | G2 | interception: go shim + classifier, Node hook, `pdx setup` installs both and writes the Claude Code `env`; `pdx lease run` → gate alias | G1, §4 final |
 | G3 | daemon steady cost: shared process snapshot, team sweeper cadence, WS change notification | — (parallel to G1/G2) |
-| L1 | retire the lease in the mod (lease.js, skill, CAPS, embed guards, protocol bump) | G2 deployed |
-| L2 | retire the lease in the daemon + CLI (routes, verbs, notices, promptq kind, settings, DB drop) | L1 |
-| L3 | rework kept parts: zone on pressure, host_minutes columns from slot records, disk guard in the gate, `pdx host report` | L2 |
+| L1 | retire the lease in the mod (lease.js except the minimal rewrite for direct `node_modules/.bin` calls, skill, CAPS, every embed guard that names the lease, protocol bump with its test updates) | G2 deployed |
+| L2 | rework the kept parts **before** anything is dropped: zone on pressure, `host_minutes` and the report read slot records instead of `resource_leases`/`resource_positions`, `pdx host report`, lenient hostconfig read | L1 |
+| L3 | retire the lease in the daemon + CLI (routes, verbs, notices, promptq kind, settings keys, DB drop) — only after L2 is deployed, so every binary in between still works | L2 deployed |
 | D | docs/scripts: CLAUDE.md, skill `pdx-gate`, lead scripts (`-count=1`, `pdx gate`), Aigora note | G2 |
 
 Rollout: G1+G2(+G3) deploy first with the lease switched to `advise` on both hosts (no double gating);
@@ -233,7 +258,7 @@ then L1–L3. Other lines resume after G2 is deployed and its acceptance (§10) 
 - Q1. (resolved 10-15) PATH precedence: `~/.zshenv` prepend reaches running sessions (see §4).
 - Q2. `taskpolicy -b` cost per class (I/O throttling): measure before choosing the default.
 - Q3. Pressure thresholds (`max_page_rate`): measure on mlab with a known workload.
-- Q4. The minimal mod rewrite (direct `node_modules/.bin/…` calls by agents): keep it in L1, or rely on shims only.
+- Q4. (resolved, codex review 10-15) The minimal mod rewrite for direct `node_modules/.bin/…` calls by agents is kept: shims alone cannot reach them (G1 "whoever starts it").
 
 Survey sources: Getty/loadguard, leahneukirchen/nq, Nukesor/pueue, discoteq/flock, fl4p/macos-oom-guard, GNU make
 job slots, vitest "improving performance", Turborepo `run`, pnpm recursive, Electron environment variables
