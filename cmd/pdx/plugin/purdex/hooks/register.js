@@ -52,7 +52,7 @@
 
 import { register as registerAsk } from './ask.js'
 import { backgroundBusy, registerEvents } from './events.js'
-import { registerLease } from './lease.js'
+import { registerGate } from './gate.js'
 import { CONSUMED, CONSUMED_REASK, claimOp, controlOp, controlReask, leadLine, parseTeamArgs, rosterLines } from './member.js'
 import { DEFAULT_BODIES, FIXED } from './prompts.js'
 
@@ -1825,7 +1825,7 @@ export function register(on) {
   // The event reporter (interface U1 spec §6.5): unmatched on events this module does not
   // hook, matched on the ones it does; registered first, so its hooks wrap the relay's.
   registerEvents(on)
-  registerLease(on)
+  registerGate(on) // tool.call{Bash} only: host load control for the calls the PATH shims cannot see
 
   // The member-relay control message (P6-6, M1): consumed whatever the state (codex finding 1), so the model never
   // sees it. The daemon is told the mod has it now (Q2 branch A); the claim waits for the running turn.

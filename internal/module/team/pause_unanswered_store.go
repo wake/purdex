@@ -34,6 +34,7 @@ func (s *Store) MarkUnanswered(a team.Approval, now int64) (bool, error) {
 	} else if role.isMember() {
 		return false, ErrUnansweredMember
 	}
+	approvalWrites.Add(1)
 	res, err := tx.Exec(`UPDATE approval_requests SET unanswered_at = ?, deadline_at = ?
 		WHERE id = ? AND state = 'open' AND unanswered_at = 0 AND deadline_at = ?`, now, team.UnansweredDeadlineMs, a.ID, a.DeadlineAt)
 	if err != nil {

@@ -20,10 +20,13 @@ import (
 
 	iagent "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/gate"
+	"github.com/wake/purdex/internal/hostmem"
 	"github.com/wake/purdex/internal/modevents"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/resources"
 	"github.com/wake/purdex/internal/team"
+	"github.com/wake/purdex/internal/watchsettings"
 )
 
 // failuresBeforeUnavailable is how many ticks in a row must fail before the
@@ -54,6 +57,9 @@ type Module struct {
 	// session_attr.go; nil uses the snapshot itself (a seam for tests).
 	ancestryOf func(*iagent.ProcessSnapshot) ancestry
 
+	// watch is the load watcher's state (watch.go).
+	watch watchState
+
 	// latest is the last published snapshot; nil until the first tick ends.
 	// A published snapshot is never modified.
 	latest atomic.Pointer[resources.Snapshot]
@@ -69,11 +75,21 @@ type Module struct {
 	// ringMu guards ring: the sampler goroutine adds to it, and a request
 	// (GET ?samples=1) reads a copy. zoneLatch, lastZone and zoneSince are the
 	// sampler goroutine's own.
-	ringMu    sync.Mutex
-	ring      resources.Ring
-	zoneLatch resources.ZoneLatch
+	ringMu sync.Mutex
+	ring   resources.Ring
+	// zoneLatch is the daemon's zone: the memory pressure level and the page rate, the gate's own signal. pageRing holds the
+	// recent paging counters the rate is worked out from (hostmem.RateOver, the gate's arithmetic), and rateLimit the rate at
+	// which the gate holds new work (its config, read every tick).
+	zoneLatch resources.PressureZoneLatch
+	pageRing  []hostmem.PageSample
+	rateLimit float64
+	haveRate  bool // the last reading carried the paging counters
 	lastZone  resources.Zone
 	zoneSince time.Time
+	// gateConfig reads the gate's config; gateCounts the slot records (see gate_input.go). nil: a module that is not wired to the
+	// host (Init wires both).
+	gateConfig func() gate.Config
+	gateCounts func() (heavy, light, waiting int, ok bool)
 	// minute is the host timeline's open minute (D-8.2).
 	minute minuteAgg
 	// mode is the setting's mode as of the last tick (the sampler goroutine's
@@ -233,6 +249,7 @@ func New() *Module {
 		evSig:        make(chan struct{}, 1),
 		noticeWake:   make(chan struct{}, 1),
 		sweepEvery:   sweepInterval,
+		watch:        watchState{env: defaultWatchEnv()},
 	}
 }
 
@@ -271,9 +288,13 @@ func (m *Module) Init(c *core.Core) error {
 	if m.sampler == nil {
 		m.sampler = resources.NewSampler()
 		m.enableDiskGuard() // production wiring (a module with an injected sampler is a test's: its guard stays off)
+		if m.gateConfig == nil {
+			m.gateConfig = hostGateConfig() // and so does the reading of the gate's config and slot records
+		}
 	}
 	m.openStore(c)
 	m.findSettings(c)
+	m.findWatchSettings(c)
 	if c.Events != nil {
 		c.Events.OnSubscribe(m.sendEventSnapshot)
 	}
@@ -430,4 +451,22 @@ func (m *Module) Close() error {
 		}
 	})
 	return nil
+}
+
+// findWatchSettings looks up the hostconfig module's watch setting reader; without one the watcher stays off.
+func (m *Module) findWatchSettings(c *core.Core) {
+	if m.watch.src != nil {
+		return
+	}
+	svc, ok := c.Registry.Get(watchsettings.Key)
+	if !ok {
+		m.logf("[watch] service %q not registered: the watcher stays off", watchsettings.Key)
+		return
+	}
+	rd, ok := svc.(watchsettings.Reader)
+	if !ok {
+		m.logf("[watch] service %q is %T, not a Reader: the watcher stays off", watchsettings.Key, svc)
+		return
+	}
+	m.watch.src = rd
 }

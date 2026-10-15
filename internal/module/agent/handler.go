@@ -168,6 +168,8 @@ func (m *Module) classifyLifecycleForReq(req EventRequest) agentpkg.LifecycleEve
 // read-only handlers (fs search, nex preflights, upload), which follow their
 // request, this is deliberate (#1293).
 func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
+	m.lightGen.Add(1)
+	defer m.lightGen.Add(1)
 	// The hook's arrival, on the mod clock: the time a turn edge it makes is
 	// ranked by (hookedge.go). Taken before anything that waits, so a mod
 	// event that lands while this hook is processed counts as newer.

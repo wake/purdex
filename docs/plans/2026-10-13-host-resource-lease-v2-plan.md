@@ -170,6 +170,9 @@ Done when: P1a merged, nothing calls the new code yet except tests, and the two 
 - Tests: fake snapshot → expected lines.
 
 **T10 G1 measurement** (spec §6)
+
+In plain words (user, 2026-10-15): the trend, flat or rising, looks at memory only; the cpu is watched by its own ceiling, `load_cap_pct` (default 100: load1 equal to the core count). With a lease running and load1 at or above it, the next request waits with the reason `load`; with nothing running, one is still let in.
+
 - After T5 is in a dev build on mlab, poll `GET /api/resources?samples=1` once a minute for ≥ 30 min of ordinary work, and recompute `TrendOf` for each sample time with the default thresholds (a small Go test helper or `go run` under `.scratch/`).
 - Report the direction shares, at rest and with leases. If flat < 60 % at rest, propose thresholds.
 - Numbers in the PR body. The lead decides any default change.

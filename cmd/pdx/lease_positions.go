@@ -102,33 +102,3 @@ func printPositions(w io.Writer, snap resources.Snapshot, now time.Time) error {
 	}
 	return nil
 }
-
-// formatReportPositions prints the amendment A lines of the report: what the
-// positions did in the period. Nothing when there were none.
-func formatReportPositions(w io.Writer, p resources.ReportPositions) {
-	if p.Total == 0 {
-		return
-	}
-	reasons := make([]string, 0, len(p.ByEndReason))
-	for _, r := range p.ByEndReason {
-		reasons = append(reasons, fmt.Sprintf("%s %d", reportReasonName(r.Reason), r.Count))
-	}
-	fmt.Fprintf(w, "positions %d  (%s)\n", p.Total, strings.Join(reasons, ", "))
-	fmt.Fprintf(w, "          commands per position: none %d, one %d, two %d, three %d, four or more %d; re-queued %d; extensions %d\n",
-		p.Commands.None, p.Commands.One, p.Commands.Two, p.Commands.Three, p.Commands.FourPlus, p.Requeued, p.Extensions)
-	fmt.Fprintf(w, "          queued wait  p50 %s  p90 %s  max %s\n", seconds(p.QueuedWaitMS.P50), seconds(p.QueuedWaitMS.P90), seconds(p.QueuedWaitMS.Max))
-	fmt.Fprintf(w, "          held for others  offered window n %d total %s p50 %s p90 %s max %s; idle window n %d total %s p50 %s p90 %s max %s\n",
-		p.OfferWaitMS.N, seconds(p.OfferWaitMS.Total), seconds(p.OfferWaitMS.P50), seconds(p.OfferWaitMS.P90), seconds(p.OfferWaitMS.Max),
-		p.IdleWaitMS.N, seconds(p.IdleWaitMS.Total), seconds(p.IdleWaitMS.P50), seconds(p.IdleWaitMS.P90), seconds(p.IdleWaitMS.Max))
-	o := p.Offers
-	fmt.Fprintf(w, "          offers  %d, delivered %d, passed undelivered %d, lapsed after delivery %d; delivery delay p50 %s max %s\n",
-		o.Offered, o.Delivered, o.Passed, o.LapsedAfterDelivery, seconds(o.DeliveryDelayMS.P50), seconds(o.DeliveryDelayMS.Max))
-	fmt.Fprintf(w, "          nested  n %d\n", p.Nested)
-	if len(o.NoticeResults) > 0 {
-		parts := make([]string, 0, len(o.NoticeResults))
-		for _, r := range o.NoticeResults {
-			parts = append(parts, fmt.Sprintf("%s %d", reportReasonName(r.Reason), r.Count))
-		}
-		fmt.Fprintf(w, "          notices  %s\n", strings.Join(parts, ", "))
-	}
-}

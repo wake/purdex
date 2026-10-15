@@ -37,6 +37,12 @@ func TestSettingsV2_Defaults(t *testing.T) {
 	assert.Equal(t, []int{80, 90, 30, 120, 20, 0, 900, 180, 600, 20, 0},
 		[]int{*e.MemWarnPct, *e.MemDangerPct, *e.GapS, *e.TrendWindowS, *e.TrendMemDPPM, *e.TrendCPUDPPM,
 			*e.ParkS, *e.AlertDangerS, *e.AlertStuckS, *e.AlertLeaseMemPct, *e.AlertPush})
+	require.NotNil(t, e.LoadCapPct)
+	assert.Equal(t, 100, *e.LoadCapPct, "1.0 x ncpu")
+	assert.Equal(t, 10.0, z.LoadCap(10))
+	assert.Equal(t, 0.0, z.LoadCap(0), "an unknown core count is no ceiling")
+	off := Settings{LoadCapPct: intp(0)}
+	assert.Equal(t, 0.0, off.LoadCap(10), "0 is off")
 	// P2a: deadline_s is the hold per call, 540 s (under the mod's 600 s cap).
 	assert.Equal(t, 540, *e.DeadlineS)
 }
@@ -61,6 +67,7 @@ var v2Fields = []v2Field{
 	{"alert_stuck_s", func(s *Settings, v *int) { s.AlertStuckS = v }, func(s Settings) *int { return s.AlertStuckS }, 60, 7200},
 	{"alert_lease_mem_pct", func(s *Settings, v *int) { s.AlertLeaseMemPct = v }, func(s Settings) *int { return s.AlertLeaseMemPct }, 5, 90},
 	{"alert_push", func(s *Settings, v *int) { s.AlertPush = v }, func(s Settings) *int { return s.AlertPush }, 0, 1},
+	{"load_cap_pct", func(s *Settings, v *int) { s.LoadCapPct = v }, func(s Settings) *int { return s.LoadCapPct }, 0, 500},
 }
 
 // Every range edge: the bounds validate, one outside is refused naming the

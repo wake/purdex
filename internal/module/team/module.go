@@ -196,6 +196,15 @@ type Module struct {
 	unsubTurnEnd func()
 	turnEndMu    sync.RWMutex // held (read) by a turn-end write in flight; Stop takes it once to wait for them
 	tickN        int          // sweeper ticks so far; only the sweeper goroutine (or a test) touches it
+	// the sweeper's last read of the open requests (openForTick): whether there is one, the store's write count and the time (ms)
+	// it was taken at, and when the next one of them falls due. Only the sweeper goroutine (or a test) touches them.
+	openRead           bool
+	openDV             int64 // the store's data_version at the last read, and whether it had one
+	openDVOk           bool
+	openAutoApprovable bool // the last read held a request the unattended sweep works on (approve or refuse)
+	openSettle         bool // the store's write count moved since the read before: read once more on the next tick
+	openGen            uint64
+	openAt, openNext   int64
 	// bootAt is when Start ran (unix ms): no team ends before bootAt +
 	// BootGraceS, the grace open requests get (spec §9.2). 0 for a module
 	// that never started (most tests): no grace.

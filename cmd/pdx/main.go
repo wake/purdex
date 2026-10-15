@@ -41,6 +41,7 @@ import (
 	resourcesmod "github.com/wake/purdex/internal/module/resources"
 	"github.com/wake/purdex/internal/module/session"
 	teammod "github.com/wake/purdex/internal/module/team"
+	watchmod "github.com/wake/purdex/internal/module/watch"
 	workbookmod "github.com/wake/purdex/internal/module/workbook"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
@@ -50,7 +51,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: pdx <command> [flags]\n")
-		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, hook, setup, token, peers, msg, lead, adopt, release, spawn, kill, team, task, report, lease, relay, ask, nex, path, journal, version\n")
+		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, hook, setup, token, peers, msg, lead, adopt, release, spawn, kill, team, task, report, lease, host, gate, watch, relay, ask, nex, path, journal, version\n")
 		os.Exit(1)
 	}
 
@@ -93,6 +94,12 @@ func main() {
 		runKill(os.Args[2:])
 	case "lease":
 		runLease(os.Args[2:])
+	case "host":
+		runHost(os.Args[2:])
+	case "gate":
+		runGate(os.Args[2:])
+	case "watch":
+		runWatch(os.Args[2:])
 	case "team":
 		runTeam(os.Args[2:])
 	case "task":
@@ -453,6 +460,7 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	// resources samples the host on its own ticker; it reads the session
 	// roots from the peers origin resolver, so it comes after peers.
 	c.AddModule(resourcesmod.New())
+	c.AddModule(watchmod.New())
 	c.AddModule(fsmod.New())
 	c.AddModule(logs.New())
 	// conversation serves GET /api/conversations/{provider}/{session_id}; its resolver consults the conversation
