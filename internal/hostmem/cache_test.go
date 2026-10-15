@@ -23,10 +23,11 @@ func TestCache_LoadOfABadFileIsNothing(t *testing.T) {
 	c := Cache{Dir: dir}
 	assert.Empty(t, c.Load().Samples, "missing")
 	for name, raw := range map[string]string{
-		"torn":    `{"samples":[{"at":17000000000`,
-		"garbage": "\x00\x01 not json",
-		"wrong":   `[1,2,3]`,
-		"empty":   ``,
+		"torn":       `{"samples":[{"at":17000000000`,
+		"garbage":    "\x00\x01 not json",
+		"wrong":      `[1,2,3]`,
+		"half typed": `{"samples":[{"at":5000,"level":1},{"at":6000,"level":"bad"}]}`,
+		"empty":      ``,
 	} {
 		require.NoError(t, os.WriteFile(c.Path(), []byte(raw), 0o644))
 		assert.Empty(t, c.Load().Samples, name)
