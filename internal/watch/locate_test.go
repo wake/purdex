@@ -15,6 +15,7 @@ import (
 
 // fakeHosts is a set of hosts that answer the locator's three questions.
 type fakeHosts struct {
+	fmu    sync.Mutex              // the locator asks the targets side by side
 	hold   map[string]HolderAnswer // by alias; a missing alias is unreachable
 	oldPer map[string]bool         // hosts that are an older daemon
 	asked  []string
@@ -25,6 +26,8 @@ type fakeHosts struct {
 }
 
 func (f *fakeHosts) Holder(_ context.Context, a string) (HolderAnswer, error) {
+	f.fmu.Lock()
+	defer f.fmu.Unlock()
 	f.asked = append(f.asked, a)
 	if f.oldPer[a] {
 		return HolderAnswer{}, ErrNoWatchSupport
@@ -37,6 +40,8 @@ func (f *fakeHosts) Holder(_ context.Context, a string) (HolderAnswer, error) {
 }
 
 func (f *fakeHosts) Wake(_ context.Context, a string) (HolderAnswer, error) {
+	f.fmu.Lock()
+	defer f.fmu.Unlock()
 	f.woken = append(f.woken, a)
 	if f.wakeFail[a] {
 		return HolderAnswer{}, ErrNoSession
@@ -48,6 +53,8 @@ func (f *fakeHosts) Wake(_ context.Context, a string) (HolderAnswer, error) {
 }
 
 func (f *fakeHosts) Start(_ context.Context, a string) (HolderAnswer, error) {
+	f.fmu.Lock()
+	defer f.fmu.Unlock()
 	f.start = append(f.start, a)
 	if f.startFail[a] {
 		return HolderAnswer{}, ErrNoSession
@@ -188,18 +195,20 @@ func TestLocate_TheCacheIsNotAskedAgainWhileDeliveriesSucceed(t *testing.T) {
 		"mlab":  hostAns("m:1", HolderNone, "", "air26", "mlab"),
 	}}
 	l, _ := newLoc(t, f)
+	var w Where
 	for i := 0; i < 5; i++ {
-		w, err := l.Current(context.Background(), targets, true)
+		var err error
+		w, err = l.Current(context.Background(), targets, true)
 		require.NoError(t, err)
 		require.Equal(t, "air26", w.Alias)
 	}
 	require.Len(t, f.asked, 2, "one search of two hosts, then the cache")
 
 	// a failed delivery: look again; the watcher has moved to mlab (no switching back is decided here, only what is awake)
-	l.Failed()
+	l.Failed(w)
 	f.hold["air26"] = hostAns("a:1", HolderNone, "", "air26", "mlab")
 	f.hold["mlab"] = hostAns("m:1", HolderAwake, "s-m", "air26", "mlab")
-	w, _ := l.Current(context.Background(), targets, true)
+	w, _ = l.Current(context.Background(), targets, true)
 	require.Equal(t, "mlab", w.Alias)
 	require.Len(t, f.asked, 4)
 }
@@ -210,8 +219,8 @@ func TestLocate_AFailedDeliveryKeepsTheLastWatcherForAWake(t *testing.T) {
 		"mlab":  hostAns("m:1", HolderNone, "", "air26", "mlab"),
 	}}
 	l, _ := newLoc(t, f)
-	_, _ = l.Current(context.Background(), targets, true)
-	l.Failed()
+	w0, _ := l.Current(context.Background(), targets, true)
+	l.Failed(w0)
 	cur, last := l.Remembered()
 	require.Nil(t, cur)
 	require.NotNil(t, last)
@@ -245,7 +254,6 @@ func TestLocate_MismatchedTargetsWarnOncePerChange(t *testing.T) {
 	}}
 	l, warns := newLoc(t, f)
 	for i := 0; i < 3; i++ {
-		l.Failed()
 		l.mem = remembered{}
 		_, _ = l.Current(context.Background(), targets, false)
 	}
@@ -325,4 +333,188 @@ func (l *lockedHosts) Wake(ctx context.Context, a string) (HolderAnswer, error) 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.fakeHosts.Wake(ctx, a)
+}
+
+// ---- the second round (codex attack) ----
+
+func TestLocate_ASlowTargetCostsOneBudgetNotMoreAndTheOthersAreStillUsed(t *testing.T) {
+	old := probeBudget
+	probeBudget = 60 * time.Millisecond
+	defer func() { probeBudget = old }()
+	f := &slowHosts{fakeHosts: fakeHosts{hold: map[string]HolderAnswer{
+		"air26": hostAns("a:1", HolderAwake, "s-a", "air26", "mlab"),
+		"mlab":  hostAns("m:1", HolderAwake, "s-m", "air26", "mlab"),
+	}}, slow: map[string]bool{"air26": true}}
+	l := NewLocator("", f, nil)
+	begin := time.Now()
+	w, err := l.Current(context.Background(), targets, true)
+	require.NoError(t, err)
+	require.Less(t, time.Since(begin), 2*time.Second)
+	require.Equal(t, "mlab", w.Alias, "air26 did not answer in its budget")
+}
+
+// slowHosts: a slow target does not answer before its context ends.
+type slowHosts struct {
+	fakeHosts
+	slow map[string]bool
+	mu   sync.Mutex
+}
+
+func (s *slowHosts) Holder(ctx context.Context, a string) (HolderAnswer, error) {
+	if s.slow[a] {
+		<-ctx.Done()
+		return HolderAnswer{}, ctx.Err()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.fakeHosts.Holder(ctx, a)
+}
+
+func TestLocate_AWaitingCallerGivesUpWhenItsContextEnds(t *testing.T) {
+	block := make(chan struct{})
+	f := &blockingHosts{fakeHosts: fakeHosts{hold: map[string]HolderAnswer{"air26": hostAns("a:1", HolderNone, "", "air26", "mlab")}}, block: block}
+	l := NewLocator("", f, nil)
+	done := make(chan struct{})
+	go func() { _, _ = l.Current(context.Background(), targets, true); close(done) }()
+	time.Sleep(30 * time.Millisecond) // the first caller is inside its search
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	begin := time.Now()
+	_, err := l.Current(ctx, targets, true)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(begin), time.Second)
+	close(block)
+	<-done
+}
+
+type blockingHosts struct {
+	fakeHosts
+	block chan struct{}
+}
+
+func (b *blockingHosts) Holder(ctx context.Context, a string) (HolderAnswer, error) {
+	<-b.block
+	return b.fakeHosts.Holder(ctx, a)
+}
+
+// A wake whose answer was lost may have worked: the host is asked again, and nothing is started elsewhere on a guess.
+func TestLocate_AWakeWithALostAnswerIsCheckedNotRepeatedNorReplaced(t *testing.T) {
+	f := &lostHosts{fakeHosts: fakeHosts{hold: map[string]HolderAnswer{
+		"air26": hostAns("a:1", HolderResting, "s-a", "air26", "mlab"),
+		"mlab":  hostAns("m:1", HolderNone, "", "air26", "mlab"),
+	}}, lose: map[string]bool{"air26": true}}
+	l := NewLocator("", f, nil)
+	l.mem.Last = &Where{Alias: "air26", SessionID: "s-a", State: HolderResting}
+	w, err := l.Current(context.Background(), targets, true)
+	require.NoError(t, err)
+	require.Equal(t, "air26", w.Alias, "the host came up although its answer was lost")
+	require.Equal(t, []string{"air26"}, f.woken, "woken once")
+	require.Empty(t, f.start)
+}
+
+func TestLocate_WhenTheOutcomeCannotBeFoundOutNothingIsStartedElsewhere(t *testing.T) {
+	f := &lostHosts{fakeHosts: fakeHosts{hold: map[string]HolderAnswer{
+		"air26": hostAns("a:1", HolderResting, "s-a", "air26", "mlab"),
+		"mlab":  hostAns("m:1", HolderNone, "", "air26", "mlab"),
+	}}, lose: map[string]bool{"air26": true}, gone: map[string]bool{"air26": true}}
+	l := NewLocator("", f, nil)
+	l.mem.Last = &Where{Alias: "air26", SessionID: "s-a", State: HolderResting}
+	_, err := l.Current(context.Background(), targets, true)
+	require.ErrorIs(t, err, ErrNoWatcher)
+	require.Empty(t, f.start, "air26 may be awake: no second watcher on mlab")
+	require.Equal(t, []string{"air26"}, f.woken, "and no second wake")
+}
+
+func TestLocate_AStartWithALostAnswerIsCheckedToo(t *testing.T) {
+	f := &lostHosts{fakeHosts: fakeHosts{hold: map[string]HolderAnswer{
+		"air26": hostAns("a:1", HolderNone, "", "air26", "mlab"),
+		"mlab":  hostAns("m:1", HolderNone, "", "air26", "mlab"),
+	}}, lose: map[string]bool{"air26": true}}
+	l := NewLocator("", f, nil)
+	w, err := l.Current(context.Background(), targets, true)
+	require.NoError(t, err)
+	require.Equal(t, "air26", w.Alias)
+	require.Equal(t, []string{"air26"}, f.start, "started once; mlab is not asked")
+}
+
+// lostHosts: wake and start work on the host but the answer does not come back (lose); gone: and the host cannot be asked again.
+type lostHosts struct {
+	fakeHosts
+	lose, gone map[string]bool
+	late       bool // set once an act was made: Holder then fails for the gone hosts
+}
+
+func (h *lostHosts) Holder(ctx context.Context, a string) (HolderAnswer, error) {
+	if h.late && h.gone[a] {
+		return HolderAnswer{}, errors.New("unreachable")
+	}
+	return h.fakeHosts.Holder(ctx, a)
+}
+func (h *lostHosts) Wake(ctx context.Context, a string) (HolderAnswer, error) {
+	res, err := h.fakeHosts.Wake(ctx, a)
+	h.late = true
+	if h.lose[a] {
+		return HolderAnswer{}, errors.New("timeout")
+	}
+	return res, err
+}
+func (h *lostHosts) Start(ctx context.Context, a string) (HolderAnswer, error) {
+	res, err := h.fakeHosts.Start(ctx, a)
+	h.late = true
+	if h.lose[a] {
+		return HolderAnswer{}, errors.New("timeout")
+	}
+	return res, err
+}
+
+// A late failure of an earlier delivery does not clear what a search found since.
+func TestLocate_FailedNamesTheWatcherItIsAbout(t *testing.T) {
+	f := &fakeHosts{hold: map[string]HolderAnswer{"air26": hostAns("a:1", HolderAwake, "s-new", "air26", "mlab")}}
+	l, _ := newLoc(t, f)
+	w, _ := l.Current(context.Background(), targets, true)
+	l.Failed(Where{Alias: "air26", HostID: "a:1", SessionID: "s-old"})
+	cur, _ := l.Remembered()
+	require.NotNil(t, cur, "a failure of an older watcher is not about this one")
+	l.Failed(w)
+	cur, _ = l.Remembered()
+	require.Nil(t, cur)
+}
+
+func TestLocate_ATamperedRememberedFileIsNotTrusted(t *testing.T) {
+	for name, content := range map[string]string{
+		"no session":     `{"current":{"alias":"air26","host_id":"a:1","state":"awake"}}`,
+		"no alias":       `{"last":{"host_id":"a:1","session_id":"s","state":"resting"}}`,
+		"a odd state":    `{"current":{"alias":"air26","host_id":"a:1","session_id":"s","state":"none"}}`,
+		"an unknown one": `{"current":{"alias":"air26","session_id":"s","state":"dozing"}}`,
+	} {
+		path := filepath.Join(t.TempDir(), "remembered.json")
+		require.NoError(t, writeFileForTest(path, content), name)
+		l := NewLocator(path, &fakeHosts{}, nil)
+		cur, last := l.Remembered()
+		require.Nil(t, cur, name)
+		require.Nil(t, last, name)
+		require.FileExists(t, path+".corrupt", name)
+	}
+	path := filepath.Join(t.TempDir(), "remembered.json")
+	require.NoError(t, writeFileForTest(path, `{"current":{"alias":"air26","host_id":"a:1","session_id":"s","state":"awake"}}`))
+	cur, _ := NewLocator(path, &fakeHosts{}, nil).Remembered()
+	require.NotNil(t, cur)
+}
+
+// A wake that was refused at step 2 is not asked again at step 3, and the watcher is started on the next target.
+func TestLocate_AHostThatRefusedTheWakeIsNotWokenAgainInTheStartStep(t *testing.T) {
+	f := &fakeHosts{
+		hold: map[string]HolderAnswer{
+			"air26": hostAns("a:1", HolderResting, "s-a", "air26", "mlab"),
+			"mlab":  hostAns("m:1", HolderNone, "", "air26", "mlab"),
+		},
+		wakeFail: map[string]bool{"air26": true},
+	}
+	l := NewLocator("", f, nil)
+	l.mem.Last = &Where{Alias: "air26", SessionID: "s-a", State: HolderResting}
+	w, err := l.Current(context.Background(), targets, true)
+	require.NoError(t, err)
+	require.Equal(t, []string{"air26"}, f.woken, "woken once, at step 2")
+	require.Equal(t, []string{"mlab"}, f.start)
+	require.Equal(t, "mlab", w.Alias)
 }

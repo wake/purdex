@@ -37,7 +37,7 @@ type asker struct{ m *Module }
 func (m *Module) isSelf(alias string) bool {
 	m.core.CfgMu.RLock()
 	defer m.core.CfgMu.RUnlock()
-	return m.core.Cfg.Peers.Alias != "" && strings.EqualFold(m.core.Cfg.Peers.Alias, alias)
+	return strings.EqualFold(m.core.Cfg.PeerAlias(), alias) // the alias this host goes by, also when none is set (the host id's name)
 }
 
 func answerOf(v HolderView) watch.HolderAnswer {

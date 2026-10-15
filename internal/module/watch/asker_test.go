@@ -155,3 +155,14 @@ func TestAsker_AnAliasIsFoundWithoutRegardToCase(t *testing.T) {
 	require.Equal(t, peerID, a.HostID)
 	require.Equal(t, []string{peerID + " " + pathHolder}, fc.calls)
 }
+
+// A host without a configured alias goes by the name of its host id; a target of that name is this host.
+func TestAsker_ThisHostWithoutAnAliasIsKnownByItsHostIDName(t *testing.T) {
+	r, fc := askerRig(t)
+	r.m.core.Cfg.Peers.Alias = ""
+	require.NoError(t, r.m.holder.Update(func(h *watch.Holder) { h.State, h.SessionID = watch.HolderAwake, "mine" }))
+	a, err := asker{r.m}.Holder(context.Background(), "mlab") // HostID is "mlab:aaaaaa"
+	require.NoError(t, err)
+	require.Equal(t, "mine", a.SessionID)
+	require.Empty(t, fc.calls)
+}

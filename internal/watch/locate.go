@@ -54,13 +54,27 @@ type remembered struct {
 	Last    *Where `json:"last,omitempty"`
 }
 
+// valid: every watcher in the file names a host, a session and a state a watcher can be in (a file that was edited by hand, or
+// is from another version, is not trusted).
+func (r remembered) valid() bool {
+	for _, w := range []*Where{r.Current, r.Last} {
+		if w == nil {
+			continue
+		}
+		if w.Alias == "" || w.SessionID == "" || (w.State != HolderAwake && w.State != HolderResting) {
+			return false
+		}
+	}
+	return true
+}
+
 // Locator knows where the watcher is (spec §12.3). It uses the remembered watcher until a delivery fails (Failed) or it is
 // gone, and only then looks again, in this order: (1) a watcher awake on a host in targets; (2) the last watcher's host is
 // reachable → wake that watcher; (3) the first reachable target starts a new one. Steps 2 and 3 only with auto_wake. The
 // remembered watcher is kept in a file, so a restart does not start a second search.
 type Locator struct {
 	mu       sync.Mutex
-	searchMu sync.Mutex // one search at a time: two callers that both missed the cache must not both start a watcher
+	search1  chan struct{} // one search at a time (capacity 1): two callers that both missed the cache must not both start a watcher
 	path     string
 	mem      remembered
 	ask      Asker
@@ -71,10 +85,10 @@ type Locator struct {
 
 // NewLocator reads the remembered watcher from path ("" keeps it in memory). A file that cannot be read is set aside.
 func NewLocator(path string, ask Asker, warnf func(string, ...any)) *Locator {
-	l := &Locator{path: path, ask: ask, now: time.Now, warnf: warnf, warnedOn: map[string]string{}}
+	l := &Locator{path: path, ask: ask, now: time.Now, warnf: warnf, warnedOn: map[string]string{}, search1: make(chan struct{}, 1)}
 	if path != "" {
 		if b, err := os.ReadFile(path); err == nil {
-			if json.Unmarshal(b, &l.mem) != nil {
+			if json.Unmarshal(b, &l.mem) != nil || !l.mem.valid() {
 				_ = os.Rename(path, path+".corrupt")
 				l.mem = remembered{}
 			}
@@ -98,55 +112,113 @@ func clone(w *Where) *Where {
 	return &c
 }
 
-// Failed says a delivery to the remembered watcher failed or it is gone: the next Current looks again. The watcher stays as
-// the last one, for a wake.
-func (l *Locator) Failed() {
+// Failed says a delivery to w failed or w is gone: the next Current looks again. Only when w is still the remembered watcher: a
+// late failure of an earlier delivery must not clear what a search found since. The watcher stays as the last one, for a wake.
+func (l *Locator) Failed(w Where) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.mem.Current == nil {
+	c := l.mem.Current
+	if c == nil || c.HostID != w.HostID || c.SessionID != w.SessionID {
 		return
 	}
 	l.mem.Current = nil
 	l.save()
 }
 
+// probeBudget is how long one target may take to answer the holder question; the targets are asked side by side, so a dead
+// host costs one budget, not one per target. A variable for the tests.
+var probeBudget = 5 * time.Second
+
 // Current is where events go: the remembered watcher while it is valid, else what the search finds. The cache is not asked
-// again while deliveries succeed. targets and autoWake are the settings of this pass.
+// again while deliveries succeed. targets and autoWake are the settings of this pass. One search runs at a time; a caller that
+// waits for it gives up when its ctx ends.
 func (l *Locator) Current(ctx context.Context, targets []string, autoWake bool) (Where, error) {
-	l.mu.Lock()
-	if c := l.mem.Current; c != nil {
-		w := *c
-		l.mu.Unlock()
+	if w, ok := l.cached(); ok {
 		return w, nil
 	}
-	l.mu.Unlock()
-	l.searchMu.Lock()
-	defer l.searchMu.Unlock()
-	l.mu.Lock()
-	if c := l.mem.Current; c != nil { // another caller's search found it while this one waited
-		w := *c
-		l.mu.Unlock()
+	select {
+	case l.search1 <- struct{}{}:
+	case <-ctx.Done():
+		return Where{}, ctx.Err()
+	}
+	defer func() { <-l.search1 }()
+	if w, ok := l.cached(); ok { // another caller's search found it while this one waited
 		return w, nil
 	}
-	l.mu.Unlock()
 	return l.search(ctx, targets, autoWake)
+}
+
+func (l *Locator) cached() (Where, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if c := l.mem.Current; c != nil {
+		return *c, true
+	}
+	return Where{}, false
+}
+
+type probeResult struct {
+	a   HolderAnswer
+	err error
+}
+
+// probeAll asks every target for its holder side by side, each within probeBudget.
+func (l *Locator) probeAll(ctx context.Context, targets []string) []probeResult {
+	out := make([]probeResult, len(targets))
+	var wg sync.WaitGroup
+	for i, alias := range targets {
+		wg.Add(1)
+		go func(i int, alias string) {
+			defer wg.Done()
+			cctx, cancel := context.WithTimeout(ctx, probeBudget)
+			defer cancel()
+			out[i].a, out[i].err = l.ask.Holder(cctx, alias)
+		}(i, alias)
+	}
+	wg.Wait()
+	return out
+}
+
+// try runs act (a wake or a start) on alias and returns the watcher awake there afterwards, if there is one. settled says the
+// outcome is known: an answer, or a refusal (ErrNoSession). Any other error leaves it unknown — the call may have worked and
+// the answer got lost — so the host is asked once more; if it cannot say either, the caller must not go on to start a watcher
+// elsewhere.
+func (l *Locator) try(ctx context.Context, alias string, act func(context.Context, string) (HolderAnswer, error)) (w *Where, settled bool) {
+	res, err := act(ctx, alias)
+	if err == nil {
+		if res.State == HolderAwake && res.SessionID != "" {
+			return &Where{Alias: alias, HostID: res.HostID, SessionID: res.SessionID, State: HolderAwake, At: l.now()}, true
+		}
+		return nil, true
+	}
+	if errors.Is(err, ErrNoSession) {
+		return nil, true
+	}
+	cctx, cancel := context.WithTimeout(ctx, probeBudget)
+	defer cancel()
+	a, qerr := l.ask.Holder(cctx, alias)
+	if qerr != nil {
+		return nil, false
+	}
+	if a.State == HolderAwake && a.SessionID != "" {
+		return &Where{Alias: alias, HostID: a.HostID, SessionID: a.SessionID, State: HolderAwake, At: l.now()}, true
+	}
+	return nil, true
 }
 
 func (l *Locator) search(ctx context.Context, targets []string, autoWake bool) (Where, error) {
 	reachable := map[string]HolderAnswer{} // the targets that answered the holder question
-	asked := map[string]bool{}
 	var awake *Where
 	// (1) the first watcher awake on a target
-	for _, alias := range targets {
-		a, err := l.ask.Holder(ctx, alias)
-		asked[alias] = true
-		if err != nil {
+	for i, p := range l.probeAll(ctx, targets) {
+		if p.err != nil {
 			continue // unreachable, or no watch support: not a candidate for anything
 		}
-		reachable[alias] = a
-		l.compareTargets(alias, targets, a)
-		if a.State == HolderAwake && a.SessionID != "" && awake == nil {
-			awake = &Where{Alias: alias, HostID: a.HostID, SessionID: a.SessionID, State: HolderAwake, At: l.now()}
+		alias := targets[i]
+		reachable[alias] = p.a
+		l.compareTargets(alias, targets, p.a)
+		if p.a.State == HolderAwake && p.a.SessionID != "" && awake == nil {
+			awake = &Where{Alias: alias, HostID: p.a.HostID, SessionID: p.a.SessionID, State: HolderAwake, At: l.now()}
 		}
 	}
 	if awake != nil {
@@ -157,38 +229,45 @@ func (l *Locator) search(ctx context.Context, targets []string, autoWake bool) (
 		return Where{}, ErrNoWatcher
 	}
 	// (2) the last watcher's host is reachable and holds it resting → wake it
+	woken := map[string]bool{} // hosts a wake was tried on: not woken again below
 	l.mu.Lock()
 	last := clone(l.mem.Last)
 	l.mu.Unlock()
 	if last != nil {
 		if a, ok := reachable[last.Alias]; ok && a.State == HolderResting && a.SessionID != "" {
-			if woke, err := l.ask.Wake(ctx, last.Alias); err == nil && woke.State == HolderAwake && woke.SessionID != "" {
-				w := Where{Alias: last.Alias, HostID: woke.HostID, SessionID: woke.SessionID, State: HolderAwake, At: l.now()}
-				l.remember(w)
-				return w, nil
+			woken[last.Alias] = true
+			w, settled := l.try(ctx, last.Alias, l.ask.Wake)
+			if w != nil {
+				l.remember(*w)
+				return *w, nil
+			}
+			if !settled {
+				return Where{}, ErrNoWatcher // it may be awake there: try again later rather than start a second one
 			}
 		}
 	}
-	// (3) the first reachable target starts a new one. A target that holds a resting watcher of its own is woken first by
-	// the same rule: it is the one a start there would have collided with.
+	// (3) the first reachable target starts a new one. A target that holds a resting watcher of its own is woken instead: it
+	// is the one a start there would have collided with.
 	for _, alias := range targets {
 		a, ok := reachable[alias]
 		if !ok {
 			continue
 		}
-		var res HolderAnswer
-		var err error
+		act := l.ask.Start
 		if a.State == HolderResting && a.SessionID != "" {
-			res, err = l.ask.Wake(ctx, alias)
-		} else {
-			res, err = l.ask.Start(ctx, alias)
+			if woken[alias] {
+				continue // already tried, and it did not come up
+			}
+			act = l.ask.Wake
 		}
-		if err != nil || res.State != HolderAwake || res.SessionID == "" {
-			continue // this one could not: the next target
+		w, settled := l.try(ctx, alias, act)
+		if w != nil {
+			l.remember(*w)
+			return *w, nil
 		}
-		w := Where{Alias: alias, HostID: res.HostID, SessionID: res.SessionID, State: HolderAwake, At: l.now()}
-		l.remember(w)
-		return w, nil
+		if !settled {
+			return Where{}, ErrNoWatcher
+		}
 	}
 	return Where{}, ErrNoWatcher
 }
