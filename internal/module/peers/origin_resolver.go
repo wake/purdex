@@ -152,6 +152,7 @@ func (r *OriginResolver) ResolveOriginsBySession(sessionIDs []string) (map[strin
 		return nil, fmt.Errorf("read registry: %w", err)
 	}
 	proxies := r.m.proxyPIDs()
+	var picked []ipeers.Entry
 	for _, e := range entries {
 		if _, ok := want[e.SessionID]; !ok || e.IsProxy || proxies[e.PID] {
 			continue
@@ -159,7 +160,11 @@ func (r *OriginResolver) ResolveOriginsBySession(sessionIDs []string) (map[strin
 		if _, done := out[e.SessionID]; done {
 			continue
 		}
-		out[e.SessionID] = r.originOf(e)
+		out[e.SessionID] = team.Origin{} // taken: a later entry of the same session is skipped
+		picked = append(picked, e)
+	}
+	for _, o := range r.originsOf(picked) {
+		out[o.SessionID] = o
 	}
 	return out, nil
 }
@@ -174,15 +179,15 @@ func (r *OriginResolver) ListLiveOrigins() ([]team.Origin, error) {
 	}
 	proxies := r.m.proxyPIDs()
 	seen := map[string]bool{}
-	out := make([]team.Origin, 0, len(entries))
+	picked := make([]ipeers.Entry, 0, len(entries))
 	for _, e := range entries {
 		if e.IsProxy || proxies[e.PID] || e.SessionID == "" || seen[e.SessionID] {
 			continue
 		}
 		seen[e.SessionID] = true
-		out = append(out, r.originOf(e))
+		picked = append(picked, e)
 	}
-	return out, nil
+	return r.originsOf(picked), nil
 }
 
 // originOf renders a registry entry as a team.Origin: ref, address (the
@@ -195,44 +200,74 @@ func (r *OriginResolver) ListLiveOrigins() ([]team.Origin, error) {
 // so the naming is bounded here by namerTimeout: a name store that does not
 // answer costs the origin its virtual name (the ref form), never the caller.
 func (r *OriginResolver) originOf(e ipeers.Entry) team.Origin {
-	ref := ipeers.RefID(e.SessionID)
-	alias := r.m.configSnapshot().alias
-	addr := alias + "/" + ref
-	ctx, cancel := context.WithTimeout(context.Background(), namerTimeout)
-	defer cancel()
-	if vn := r.m.virtualNamesOf(ctx, e)[e.SessionID]; ipeers.RoutableName(vn) {
-		addr = alias + "/" + vn
-	}
-	return team.Origin{
-		SessionID: e.SessionID,
-		Ref:       ref,
-		Name:      e.Name,
-		PID:       e.PID,
-		ProcStart: e.ProcStart,
-		Cwd:       e.Cwd,
-		Tmux:      e.Tmux,
-		Title:     r.titleOf(e.SessionID),
-		Address:   addr,
-	}
+	return r.originsOf([]ipeers.Entry{e})[0]
 }
 
-// titleOf is the session's title from the title store, or "" when there is
-// no store, the read fails, or the session has none. The dialog shows the
-// title or falls back to the name, so a missing title is never an error.
-func (r *OriginResolver) titleOf(sessionID string) string {
+// originsOf renders entries as origins, in order, with ONE name resolution and ONE read of the title store for all of
+// them: a list of N sessions used to wait namerTimeout N times when the name store did not answer, and read the whole
+// title table N times (#2892). The names are bounded together by one namerTimeout.
+func (r *OriginResolver) originsOf(entries []ipeers.Entry) []team.Origin {
+	if len(entries) == 0 {
+		return nil
+	}
+	alias := r.m.configSnapshot().alias
+	ctx, cancel := context.WithTimeout(context.Background(), namesBudget(len(entries)))
+	defer cancel()
+	names := r.m.virtualNamesOf(ctx, entries...)
+	titles := r.titles()
+	out := make([]team.Origin, len(entries))
+	for i, e := range entries {
+		ref := ipeers.RefID(e.SessionID)
+		addr := alias + "/" + ref
+		if vn := names[e.SessionID]; ipeers.RoutableName(vn) {
+			addr = alias + "/" + vn
+		}
+		out[i] = team.Origin{
+			SessionID: e.SessionID,
+			Ref:       ref,
+			Name:      e.Name,
+			PID:       e.PID,
+			ProcStart: e.ProcStart,
+			Cwd:       e.Cwd,
+			Tmux:      e.Tmux,
+			Title:     titles[e.SessionID],
+			Address:   addr,
+		}
+	}
+	return out
+}
+
+// namesBudget is the time the names of n sessions may take together: namerTimeout, and a little more for each session
+// after the first (the store assigns them one by one), never more than three namerTimeouts. A store that does not answer
+// at all costs this once, not once per session.
+func namesBudget(n int) time.Duration {
+	d := namerTimeout
+	if n > 1 {
+		d += time.Duration(n-1) * 50 * time.Millisecond
+	}
+	if max := 3 * namerTimeout; d > max {
+		d = max
+	}
+	return d
+}
+
+// titles is every session's title from the title store, read once, or nil when there is no store or the read fails.
+// The dialog shows the title or falls back to the name, so a missing title is never an error.
+func (r *OriginResolver) titles() map[string]string {
 	if r.m.titles == nil {
-		return ""
+		return nil
 	}
 	rows, err := r.m.titles.Snapshot()
 	if err != nil {
-		return ""
+		return nil
 	}
+	out := make(map[string]string, len(rows))
 	for _, row := range rows {
-		if row.SessionID == sessionID {
-			return row.Label
+		if _, dup := out[row.SessionID]; !dup { // the first row of a session, as the scan for one used to find
+			out[row.SessionID] = row.Label
 		}
 	}
-	return ""
+	return out
 }
 
 // Presence is what the registry and the process table say about a team's
