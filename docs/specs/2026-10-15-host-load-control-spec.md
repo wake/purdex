@@ -43,6 +43,8 @@ The lease (`pdx lease`, v1/v2/amend A, P2e/P2f, load cap) did not hold the host,
 | D11 | **Load watcher** (10-15): each daemon detects heavy commands outside the gate and high load on its own host, records them, and tells **one** watcher session for all hosts by peer message (§12). Each daemon has an ordered list of hosts that may hold the watcher; it remembers where the watcher is and looks again only when that fails (awake anywhere → the last one woken → a new one on the first reachable host); no switch back after a failover. Modes: resident, or patrol (the daemon counts the idle time and puts it to rest; it is resumed when needed); auto-wake on/off. The watcher's notes live in a dedicated branch, pulled at start and pushed after changes. Settings, including the start and wake prompts, are in each daemon's host config (not Profile Sync). Long-lived, low-usage background loops are not heavy commands and are not reported. |
 | D12 | When a heavy command would wait, the mod moves the agent's Bash call to the background with a note (L1), so a session does not sit in the foreground limit. Verified 10-15: a background task survives a relay and its completion notice reaches the new conversation. |
 | D13 | `pdx gate free <slot>`: lists the processes holding a slot and ends them after confirmation, only on a person's or the watcher's command; the gate itself never kills a running command (G2). |
+| D14 | **Settings live on each host's daemon** (10-15): the watcher's `watch` row and the thresholds in the daemon's host config; the gate's `[gate]` stays a file (the gate does not depend on the daemon, D3) but the App reads and writes it through a daemon API that edits it the way `pdx gate set` does; each host has its own resource-control switch (`gate.enabled`) the App can turn on and off. Not Profile Sync. Each host keeps its own copy. |
+| D15 | **Hosts** (10-15): the gate and the queue run on mlab and air26 only. air-2019 and mserv get **no daemon**; they are monitored only (no gate, no E1). All cross-host sampling is the fleet module's (primary a26, standby mlab, §12.8). |
 
 ## 2. Goals and non-goals
 
@@ -387,12 +389,12 @@ daemon settings. Not Profile Sync: Profile Sync carries the App's own stores and
 |---|---|---|
 | `enabled` | true | detection (W1) |
 | thresholds (`x_cores`, `y_mb`, `t_s`, `pressure_t_s`, `page_rate`, `page_t_s`) | 1.5, 1024, 60, 120, 50, 60 | detection |
-| `targets` | `[mlab, a26]` (host aliases, in order) | where events go and where a new watcher is started |
+| `targets` | `[air26, mlab]` (the peer host aliases `pdx peers` shows, in order: air26 normally, mlab only when air26 cannot be reached) | where events go and where a new watcher is started |
 | `mode` | `patrol` | `resident` (never rests) or `patrol` (rests when idle) |
 | `patrol_idle_min` | 120 | the rest countdown |
 | `auto_wake` | true | whether an event wakes or starts a watcher |
 | `model` | opus | a new watcher |
-| `workdir` | mlab: `~/Workspace/wake/purdex-watch` | the watcher's directory on this host (a checkout of the `watch-desk` branch) |
+| `workdir` | `~/Workspace/wake/mlab-purdex-watch` (both hosts) | the watcher's directory on this host: a checkout of the mlab repo used only for its `purdex-watch` branch |
 | `start_prompt` | built-in | the first prompt of a new watcher |
 | `wake_prompt` | built-in | the prompt that resumes a resting watcher |
 
@@ -421,9 +423,11 @@ daemon settings. Not Profile Sync: Profile Sync carries the App's own stores and
   `patrol_idle_min` sends "time to rest"; the watcher writes its notes, pushes them and answers; the daemon then ends
   the session (after 5 min without an answer, it ends it anyway) and keeps the session id for the next wake. In
   `resident` mode there is no countdown.
-- **Memory and documents in git.** The watcher works in `workdir`, a checkout of a dedicated `watch-desk` branch of
-  the purdex repo (never merged into main): it pulls the branch when it starts or wakes, and commits and pushes after
-  it changes its notes. A watcher started on another host after a failover pulls the same branch.
+- **Memory and documents in git.** The watcher works in `workdir`, a checkout of the `purdex-watch` branch of the mlab
+  repo (`ssh://git@lab.protype.tw:9079/wake/mlab.git`; branched from its main, never merged back; notes under
+  `watch/`): it pulls the branch when it starts or wakes, and commits and pushes after it changes its notes. A watcher
+  started on another host after a failover pulls the same branch. The lead makes the checkout once on each host (plan
+  W3 step 5); the daemon never clones.
 - A built-in brief and skill (`pdx-watch`): the above; what each event and label means; what the watcher may do (tell
   the person, message the session that started the command, propose an intercept rule that is applied only when the
   person agrees, run `pdx gate free` after confirming); what it must not do (end a process that holds no slot; change
@@ -439,8 +443,11 @@ is free. A slot whose gate is still alive is refused (interrupt that command ins
 
 ### 12.6 UI (W5, the App; B line)
 
-- Sidebar: at the right of the top row of the host list (the "Main Station" row), a watcher icon in three states:
-  none, active, unhandled events (with a count). It opens the watcher area.
+- The App's load-control UI as a whole (monitoring of the four hosts, the watcher, the queue state and the gate
+  settings of each host, D14) is specified by the B line with the user (10-15); the items below are the watcher's part.
+- Sidebar: at the right of the sidebar's top row (`HomeRow`, the row that shows the profile name, which the user calls
+  the "Main Station" row; not the host list), a watcher icon in three states: none, active, unhandled events (with a
+  count). It opens the watcher area.
 - The watcher area is a tab region of its own, apart from session tabs: a fixed tab for the watcher session of the
   host that holds it (awake or resting; opening it and asking wakes a resting watcher), the event log of all hosts
   (filter by host and kind, unhandled count), "start the watcher" when there is none, and the `watch` settings of each
@@ -457,3 +464,19 @@ is free. A slot whose gate is still alive is refused (interrupt that command ins
 
 W1–W4 start now (A-line member), W5 when the B line resumes; none depends on L1–L3. The watcher set goes live as a
 whole when W1–W4 are done (W5 can follow). The first stage (G1–G3) ships without waiting for it.
+
+### 12.8 Cross-host sampling: one fleet sampler (D15)
+
+- air-2019 and mserv are monitored only: no gate, no queue, no E1 (no process trees to attribute). The watcher gets E2
+  for them, and an `offline` state when they cannot be read (air-2019 sleeps often).
+- **One cross-host sampler, the fleet module** (user decision 10-15, through the B line; the fleet status spec
+  `docs/specs/2026-10-14-fleet-status-spec.md` is the source of truth, kept by the B line, which also builds it). In
+  short: a primary and a standby in the order `[a26, mlab]`; the primary reads every host each second (real CPU use
+  from CPU-time deltas, memory use, pressure level, page rate, disk) and every 5 s two lists (top 5 processes by CPU
+  and by memory from one `ps`; the gate queue of mlab and a26); fixed rates, never slowed on a busy host; the results
+  go to the App only (no database, no per-sample log; `host_minutes` unchanged). The watcher runs no SSH of its own:
+  E2 for air-2019 and mserv is judged by the fleet primary on the samples it holds in memory, added after the fleet
+  phases land (not part of W1–W4).
+- **What the A line owes it:** `pdx gate status --json` runs without the daemon (§5, D3) and stays cheap enough for
+  the primary to read it over SSH every 5 s (`pdx` start-up cost: #2925). Its fields are settled with the B line
+  together with the UI's other APIs.
