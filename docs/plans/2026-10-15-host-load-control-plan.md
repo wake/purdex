@@ -149,78 +149,135 @@ and record → W2 registration and delivery → W3 brief, skill and auto-start �
 resumes. The set goes live as a whole when W1–W4 are done and is tuned while it runs. W1–W5 do not depend on L1–L3;
 each phase one PR; the W plan (tasks per phase) is reviewed by codex with §12 before W1 starts.
 
-## W — load watcher (spec §12; A-line member; each phase one PR)
+## W — load watcher (spec §12; A-line member; one PR per row below, ≤ 800 lines / 20 files each)
 
-Cost rule for every W phase: no new fork per tick. The resources sampler already runs one `ps -axo pid,ppid,pcpu,rss`
-per 5 s tick (`internal/resources/sample.go`); W reuses that list. Command lines are read only for a tree that is over a
-threshold, through the shared process snapshot (`agent.SharedProcessSnapshot`, G3a). Pressure comes from the gate's
-reader (`gate.NewHostReader`, the same `pressure.json` sample the gates share). Lead captures a 30 s idle pprof before
-and after W1 (daemon target stays ≤ 10 % of one core).
+Revised 10-15 after the A-line member's code reading (13 points) and codex plan review `task-mv9jbifb-t4u53r`
+(22 findings; lead's `reports/codex-watch-plan-review.md`).
 
-### W1 — detection and record (daemon)
+**Cost rule (every W PR).** No fork is added to the daemon's steady state. The resources sampler already forks one
+`vm_stat` and one `ps` per 5 s tick (`internal/resources/sample.go`); W extends those two outputs instead of reading
+anything else. Command lines are read only for a tree already over a threshold (`agent.SharedProcessSnapshot` +
+`ReadFresh`, a handful of pids). The gate's `HostReader` is **not** used by the daemon (it forks its own `vm_stat` and
+can wait up to 4 s on `pressure.lock`). Proof per PR: an integration test with the `runCmd` fork counter
+(`sample.go`) over a table with many trees and no tree over threshold → exactly the sampler's two forks per tick and no
+argv read; and, lead-run before and after W1b, three 30 s idle pprof captures (host quiet, no session busy), CPU =
+mean of the three, target unchanged (daemon ≤ 10 % of one core).
 
-1. `internal/watch` (pure, table tests): `Detector.Pass(now, procs, managed, pressure, slots) []Event`.
-   - Trees: from the sampler's `[]Proc` (pid, ppid, pcpu, rss), rooted at the child of a shell (`zsh`, `bash`, `sh`
-     by comm) or at a session root (`resources.Root`); a tree containing a gate holder's gate pid or command pid
-     (slot records, `gate.Pool.Held`) is **managed** and skipped for E1.
-   - E1: per tree, a rolling window of `T` s; fires when mean cores ≥ `X` or RSS ≥ `Y` MB over the window. Signature =
-     tool basename + subcommand/script word, paths and flag values dropped; first sighting per signature per host →
-     `new: true`, later → counted in the record only.
-   - E2: pressure level ≥ 2 for `T2`, or page rate > `R` for `T3` (from `gate.HostReader`).
-   - E3/E4: from `gate.Pool.Held()`: `Orphaned` for ≥ 15 min (E3), held ≥ `lifetime.alert_after_min` (E4); once per
-     holder (pid + start), not per pass.
-   - Not events: trees under `X` and `Y` however long they live (D11).
-2. Record: `~/.config/pdx/watch/events-YYYYMMDD.jsonl`, appended with `O_APPEND`, one JSON line per event (kind,
-   host, at, signature, argv scrubbed by `internal/redact` then cut to 200 bytes, cwd, session id from
-   `resources.Attribute`'s roots, peak cores and MB, duration, `new`); files older than 30 days removed at the first
-   pass of a day.
-3. Settings `[watch]` in `~/.config/pdx/config.toml`, read at every pass like the gate's (no restart):
-   `x_cores` (1.5), `y_mb` (1024), `t_s` (60), `pressure_t_s` (120), `page_rate` (50), `page_t_s` (60) — first values,
-   tuned from W0 and the live record.
-4. Wire into `internal/module/resources/sampler_loop.go` after the sample (one call per tick; a detector error is
-   logged, never stops the sampler).
-5. `pdx watch log [--since D] [--kind K] [--json]`: reads the local record files directly (works with the daemon
-   down).
-Tests: synthetic proc tables (a tree over/under each threshold; managed vs unmanaged; a tree that crosses the window
-boundary; signature normalization incl. `composer test:integration`, `vendor/bin/phpunit --testsuite integration`,
-`pnpm exec vitest run`); record rotation with an injected clock; mutation on each threshold comparison.
+**Settings** (`watch` row in hostconfig, read at every pass; one value for all hosts: a change on any host is
+propagated to every paired host by the W2 channel, newest `updated_at` wins): `enabled` (true), `auto_start` (true),
+`model` (opus), `home` (host alias, mlab), thresholds `x_cores` (1.5), `y_mb` (1024), `t_s` (60), `pressure_t_s`
+(120), `page_rate` (50), `page_t_s` (60). The thresholds are first values; W0 and the live record tune them (spec
+§12.6). *(Profile Sync was the first idea; Profile Sync carries only the App's own stores and the daemon has no typed
+reader or "active profile" — see the lead's note to the user, 10-15.)*
 
-### W2 — registration and delivery
+### W1a — plumbing (no behaviour change)
 
-1. Daemon: `POST /api/watch/register {ref}`, `DELETE /api/watch/register`, `GET /api/watch` (current watcher,
-   registered at, by host); stored in a small table (deployed-schema rule: additive migration).
-2. Propagation: a registration is pushed to every paired host through the existing paired-host API (the same channel
-   the peer bridge uses); each host keeps the latest by registration time; the replaced watcher gets one message.
-3. Liveness: the registration ends when the registry no longer has the ref's session (relay lineage keeps it).
-4. Delivery: per host, events go to the watcher with the daemon's own peer send (the path `pdx msg` uses);
-   folding: one message per kind per host per 10 min, later ones counted into the next; E3 never folded; a send that
-   fails is retried on the next pass, kept in the record either way.
-5. CLI: `pdx watch register` (the calling session's ref), `pdx watch status`, `pdx watch unregister`,
-   `pdx watch log --host <alias>|--all` (through each host's `GET /api/watch/log`).
-Tests: register/replace/expire; fold timing with an injected clock; a send failure is retried; cross-host with two
-daemons in a test harness (as the peer bridge tests do).
+1. `ps` gets a fifth column `ucomm` in the same fork (`ps -axo pid=,ppid=,pcpu=,rss=,ucomm=`; `ucomm` may contain
+   spaces: the parser takes the rest of the line); `Proc` gains `Comm`; `parsePSFields` and its tests.
+2. `vm_stat` parsing keeps `Pageouts` and `Swapouts` in `HostRaw` (today they are dropped).
+3. `gate.ClassifyReason(argv, Env) (Class, Reason)`: `Reason` ∈ {`heavy`, `light`, `packaging`, `watch_mode`,
+   `known_passthrough`, `unknown`}; `Classify` keeps its signature and calls it. Table tests for every reason.
+4. The gate's argv scrubber (`internal/gate/scrub.go`) moves to `internal/redact` as `Argv(argv, max)` (gate keeps
+   120, watch uses 200); its tests move with it.
 
-### W3 — the watcher session and auto-start
+### W1b — detector and record
 
-1. `cmd/pdx/plugin/purdex/skills/pdx-watch/SKILL.md` and the built-in brief: the events, what the watcher may and must
-   not do (spec §12.3), how to read `pdx watch log` and `pdx gate status`, and to register itself first.
-2. Profile Sync keys `watch.auto_start` (true), `watch.model` (opus), `watch.home` (the host alias, default mlab);
-   read through the existing profile settings path.
-3. Auto-start: on E1/E2/E3 with no live watcher, the daemon of `watch.home` (an event elsewhere asks it through the
-   paired-host API) spawns a session with the brief and model (the spawn path `pdx spawn` uses, without a team), at
-   most one start per 30 min.
-Tests: no watcher + event → one spawn; a watcher present → none; two events within 30 min → one spawn; settings read
-from the profile.
+1. `internal/watch` (pure, injected clock): `Detector.Pass(now, procs, raw, slots, roots) []Event`, called on
+   **every** sampler tick (5 s; spec §12.1 updated to the tick).
+   - Tree root = the child of a shell (`Comm` ∈ zsh, bash, sh, fish) or of `tmux`/`launchd` when there is no shell;
+     session roots (`resources.Root`) are used only to attribute a tree to a session (ppid walk + the root's start
+     time against `SharedProcessSnapshot`, so a reused pid is not attributed), never as tree roots.
+   - Managed = the tree has a `pdx gate` ancestor (`Comm` pdx + argv check for the few candidates) **or** contains a
+     slot holder's gate pid or command pid (`gate.Pool.Held` for heavy and light, pools built from the live gate
+     config each pass). Managed trees are skipped for E1.
+   - E1 episode: a tree whose mean cores over the last `t_s` ≥ `x_cores` or RSS ≥ `y_mb` for `t_s` → one event when
+     it crosses, none while it stays over; re-armed when the tree ends or stays under for `t_s`. Label from
+     `ClassifyReason` on the root's argv: `gate_gap` (heavy/light outside the gate), `unknown`, `allowed` (packaging
+     or a known pass-through); all three are recorded and delivered with the label.
+   - Signature = tool basename + subcommand/script word (paths, values dropped). `new` = first sighting of the
+     signature on this host, from a persisted set (`~/.config/pdx/watch/state.json`: signatures with first/last
+     seen and count; orphan first-seen times; written atomically, read at start).
+   - E2: pressure level (`raw.Pressure`) ≥ 2 for `pressure_t_s`, or page rate (tick-to-tick delta of
+     pageouts+swapouts) > `page_rate` for `page_t_s`; episode semantics as E1.
+   - E3: a slot `Orphaned` for ≥ 15 min (first-seen time persisted), with the slot name and the holder pids from
+     `lsof` on the slot lock (run only for an orphaned slot, at most once per pass); E4: a slot held ≥
+     `lifetime.alert_after_min`; both once per holder (pid + start).
+   - Not events: trees under the thresholds however long they live (D11).
+2. Record: `~/.config/pdx/watch/events-YYYYMMDD.jsonl`, `O_APPEND`, one line per event: `id` (host + ulid), kind,
+   label, host, at, signature, argv (`redact.Argv`, 200), cwd, session, peak cores and MB, duration, `new`, slot and
+   holders for E3/E4, `handled` false. Files older than 30 days removed at the first pass of a day.
+3. Wiring: `sampler_loop.go` calls the detector after a successful sample, **independent of the resources lease
+   mode** (with mode `off` the tick still samples when `watch.enabled`); a failed sample skips the pass; a detector,
+   record or state I/O error is logged and never stops the sampler, the publish or the lease.
+4. `pdx watch log [--since D] [--kind K] [--json]` reads the local files directly (daemon down is fine).
+Tests: synthetic tables (over/under each threshold; managed by ancestor vs by holder; episode crossing, staying,
+re-arming; signature normalization incl. `composer test:integration`, `vendor/bin/phpunit --testsuite integration`,
+`pnpm exec vitest run`, `pnpm run electron:build` → `allowed`; session attribution with a reused pid); restart keeps
+`new` and orphan times; rotation with an injected clock; failure seams (state write, record write, lsof) leave the
+sampler's publish intact; the fork-counter test above; mutation on every threshold comparison.
+
+### W2a — registration (local and across hosts)
+
+1. Store: `watch_registration` table (additive migration): `ref`, `session_id`, `host_id`, `registered_at`,
+   `ended_at` (tombstone).
+2. Local API (management token): `POST /api/watch/register`, `DELETE /api/watch/register`, `GET /api/watch`.
+   CLI: `pdx watch register` (the calling session's `_ref`), `pdx watch status`, `pdx watch unregister`.
+3. Across hosts: `POST /api/peers/watch/registration` added to `peers.HostRoutePolicy`; sent with `HostCaller`
+   (`to_host_id`, outbox retry) to every paired host on register, replace, unregister and expiry; each host keeps the
+   newest by `registered_at`, tombstones included, so an unregister or an expiry converges everywhere. An older peer
+   that answers 404 is marked "no watch support" and skipped. The replaced watcher gets one message.
+4. Liveness: on each pass the home of the registration checks the registry; a gone session (no relay lineage) →
+   tombstone + propagation. A relay keeps it (lineage).
+5. Settings propagation: `POST /api/peers/watch/settings` the same way (newest `updated_at` wins).
+Tests: register/replace/unregister/expire converge on two daemons in the peer-bridge test harness; an old peer;
+outbox retry; relay keeps the registration.
+
+### W2b — delivery, backlog, handled
+
+1. Delivery: each host sends its events to the registered watcher with `peers.Sender` (the `/api/peers/send` path
+   `pdx msg` uses), `[負載守門] …` text with the event id. Folding per (host, kind) per 10 min, later events counted
+   into the next message; E3 never folded; a failed send is retried next pass from a persisted pending queue, without
+   counting twice.
+2. Backlog: on a new registration, each host sends one summary of its unhandled events since the last watcher's
+   last delivered id (counts by kind and label, the newest five, and `pdx watch log --all --unhandled`).
+3. Handled: `pdx watch ack <id>… | --all [--host]` marks events handled (a small ack log beside the records);
+   `GET /api/watch/unhandled` returns the count per host (for W5's badge).
+4. `GET /api/peers/watch/log` (policy entry) and `pdx watch log --host <alias> | --all`.
+Tests: folding isolation per host and kind; E3 not folded; retry without double counting; restart with a pending
+queue; backlog on register (and none twice); ack and the count.
+
+### W3a — standalone spawn primitive (daemon)
+
+`team` gains an internal "system spawn": the tmux start and registration of `runSpawn`/`spawn_tmux.go` without a
+team, a lead or an origin inbox; cwd = a configured directory (the purdex checkout on the home host); the brief is
+delivered as the first prompt. Not exposed on the network; callable from the watch module only. Tests: a system
+spawn starts a session that is not in any team, gets the brief, is listed in `pdx peers`; refused when a spawn of the
+same purpose is already starting.
+
+### W3b — the watcher session and auto-start
+
+1. `skills/pdx-watch/SKILL.md` and the built-in brief (spec §12.3): register first; read the backlog; what each
+   event and label means; what it may do and must not do; `pdx watch ack`.
+2. Auto-start on the home host: an E1/E2/E3 with no live registration → the home's daemon (an event on another host
+   asks it via `POST /api/peers/watch/start`) starts a system spawn with the brief and `watch.model`.
+   Single-flight on the home (one start in progress at a time, persisted cooldown 30 min, a start that does not
+   register within 3 min counts as failed and is retried after the cooldown). Inactive when `watch.auto_start` is
+   false.
+Tests: no watcher + event → one start; two daemons with simultaneous events → one start; a watcher present → none;
+start fails → retried after the cooldown; the session registers → no further start.
 
 ### W4 — `pdx gate free <class>-<k>`
 
-Lists the holders (`lsof` on the slot's lock: pid, command scrubbed, cwd, start, session), refuses a slot whose gate is
-alive unless `--force`, asks for `y` (or `--yes`), SIGTERM, 5 s, SIGKILL, then reports whether the slot is free.
-Tests: a held slot with a live gate is refused; an orphaned holder (a `sleep` keeping fd 3) is ended and the slot is
-free; `--yes` skips the question; the decision record gets one line.
+Lists the holders (`lsof` on the slot lock: pid, command via `redact.Argv`, cwd, start, session), refuses a slot
+whose gate is alive unless `--force`, asks for `y` (anything else aborts; `--yes` skips), SIGTERM, then SIGKILL only
+for those still alive after 5 s, then reports whether the slot is free (another holder left → "still held by …").
+Tests: live gate refused / `--force`; answer not `y`; SIGTERM enough → no SIGKILL; SIGKILL only after 5 s; still held
+by another holder; scrubbed output.
 
 ### W5 — UI (B line, when it resumes)
 
-Sidebar icon at the right of the host list's top row (none / active / unhandled count), the watcher area as its own
-tab region (watcher conversation, event log of all hosts with host/kind filters, "start the watcher"). Spec and plan
-by the B line from spec §12.5.
+Spec §12.5 with the W2b API (`GET /api/watch`, `/api/watch/unhandled`, `pdx watch log` data). The B line writes its
+own spec section and plan.
+
+Order: W1a → W1b → W2a → W2b → W3a → W3b → W4 (W4 only needs W1a's `redact.Argv` and may go earlier). The set goes
+live as a whole when W1b–W4 are merged and deployed; W5 follows.

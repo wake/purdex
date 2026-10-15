@@ -352,12 +352,16 @@ a host under pressure, and the states the gate cannot fix by itself (a slot held
 
 ### 12.1 Detection and record (W1, daemon)
 
-- The daemon's sampler gains a process pass every 10 s. A **tree** is a process and its descendants, rooted at the
-  child of a shell (an agent's Bash, a terminal, a script). A tree under a `pdx gate` process is managed.
+- The daemon's sampler gains a process pass on every sampler tick (5 s), from the `ps` and `vm_stat` it already
+  runs (no new fork). A **tree** is a process and its descendants, rooted at the child of a shell (an agent's Bash, a
+  terminal, a script). A tree under a `pdx gate` process, or holding a slot, is managed.
 - Events:
-  - **E1 `unmanaged_heavy`**: an unmanaged tree using ≥ X cores (average over T s) or ≥ Y MB for T s. Its command
-    signature (tool, subcommand, script name; paths and values dropped) seen for the first time is **new**; later
-    sightings are counted, not re-sent.
+  - **E1 `unmanaged_heavy`**: an unmanaged tree using ≥ X cores (average over T s) or ≥ Y MB for T s; one event per
+    episode (re-armed when the tree ends or stays under for T s). Labelled by the gate's classifier on the root's
+    command: `gate_gap` (a heavy or light command that ran outside the gate), `unknown` (a tool the gate does not
+    know), `allowed` (packaging or another pass-through by rule; recorded and delivered, never held, D9). Its command
+    signature (tool, subcommand, script name; paths and values dropped) seen for the first time is **new** (kept
+    across daemon restarts); later sightings are counted, not re-sent.
   - **E2 `pressure_high`**: pressure level ≥ 2 for ≥ T2, or page rate above R for ≥ T3.
   - **E3 `slot_orphaned`**: a slot held while its gate is gone, for ≥ 15 min (names the holders).
   - **E4 `slot_long`**: a slot held ≥ `lifetime.alert_after_min` (60).
