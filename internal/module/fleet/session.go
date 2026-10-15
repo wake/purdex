@@ -38,7 +38,7 @@ const (
 )
 
 // clock is the time the session lives by; tests drive it.
-type clock interface {
+type timeSource interface {
 	Now() time.Time
 	NewTimer(d time.Duration) timer
 }
@@ -74,7 +74,7 @@ type sessionCfg struct {
 	LookPath func(file string) (string, error) // finds ssh; nil = exec.LookPath
 	Home     string                            // for the ValidAlias check made before every start
 	Valid    func(home, alias string) bool     // nil = leaf.ValidAlias
-	Clock    clock                             // nil = the real one
+	Clock    timeSource                        // nil = the real one
 	Sink     sink
 	Logf     func(format string, args ...any) // the daemon log; nil = discard
 	Limit    *hourlyLimiter                   // shared by all sessions of a Measure; nil = a private one

@@ -59,7 +59,10 @@ func (m *Measure) push() {
 	for _, key := range m.order {
 		h := m.hosts[key]
 		status, code, lastOK := viewOK(h)
-		ph := PushHost{ID: m.idOf(h), Status: status, Error: code, LastOKAt: lastOK, Fast: h.fast}
+		ph := PushHost{ID: m.idOf(h), Status: status, LastOKAt: lastOK, Fast: h.fast}
+		if code != "" {
+			ph.Error = &code
+		}
 		if h.slow != nil && m.pushedSlow[key] != h.slowSeq {
 			ph.Slow = h.slow
 			m.pushedSlow[key] = h.slowSeq

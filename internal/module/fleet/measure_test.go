@@ -22,7 +22,7 @@ import (
 )
 
 // rig is a Measure on fakes: a hand-driven clock, a FakeLocal, a FakeRole, the real events broadcaster.
-type rig struct {
+type mrig struct {
 	t      *testing.T
 	m      *Measure
 	fc     *fakeClock
@@ -41,13 +41,13 @@ type rig struct {
 	sshDir                 string
 }
 
-func newRig(t *testing.T, script string) *rig {
+func newMRig(t *testing.T, script string) *mrig {
 	t.Helper()
-	r := &rig{t: t, fc: newFakeClock(), local: leaf.NewFakeLocal(), events: core.NewEventsBroadcaster()}
+	r := &mrig{t: t, fc: newFakeClock(), local: leaf.NewFakeLocal(), events: core.NewEventsBroadcaster()}
 	r.role = leaf.NewFakeRole(leaf.RoleState{Role: leaf.RolePrimary, Term: 3, Primary: "mlab", Self: "mlab"})
 	r.fleet = hostconfig.FleetConfig{Order: []string{"air26", "mlab"}, PeerSSHAlias: "a26", Enabled: true}
 	r.ssh, r.sshDir = fakeSSH(t, script)
-	r.m = New(Deps{
+	r.m = NewMeasure(Deps{
 		Home: t.TempDir(), Clock: r.fc, Local: r.local, Role: r.role, Events: r.events,
 		Probe: func() ([]hostconfig.ProbeHost, int64, error) {
 			r.probeReads.Add(1)
@@ -79,28 +79,28 @@ func newRig(t *testing.T, script string) *rig {
 	return r
 }
 
-func (r *rig) start() {
+func (r *mrig) start() {
 	r.t.Helper()
 	require.NoError(r.t, r.m.Start(r.t.Context()))
 	r.t.Cleanup(r.m.Stop)
 }
 
-func (r *rig) setProbes(rows ...hostconfig.ProbeHost) {
+func (r *mrig) setProbes(rows ...hostconfig.ProbeHost) {
 	r.mu.Lock()
 	r.probes = rows
 	r.mu.Unlock()
 	r.probeRv.Add(1)
 }
 
-func (r *rig) tick() { r.m.tick(r.t.Context()) }
+func (r *mrig) tick() { r.m.tick(r.t.Context()) }
 
-func (r *rig) setLocal(cpu float64, level int) {
+func (r *mrig) setLocal(cpu float64, level int) {
 	r.local.SetFast(leaf.LocalFast{At: r.fc.Now(), CPU: cpu, Mem: 50, Level: level, NCPU: 10, Load1: 2})
 }
 
-func (r *rig) hosts() []HostJSON { return r.m.Answer().Hosts }
+func (r *mrig) hosts() []HostJSON { return r.m.Answer().Hosts }
 
-func (r *rig) host(id string) *HostJSON {
+func (r *mrig) host(id string) *HostJSON {
 	for _, h := range r.hosts() {
 		if h.ID == id {
 			h := h
@@ -116,7 +116,7 @@ const oneFrame = `cat "$D/frames.txt"; exec sleep 600`
 // The own host is read from the LocalSource at each tick, with the disk of the fleet's mount; the zone and the composite load
 // are worked out from it.
 func TestOwnHostFromTheLocalSource(t *testing.T) {
-	r := newRig(t, silent)
+	r := newMRig(t, silent)
 	r.start()
 	r.tick()
 	h := r.host("mlab:abc123")
@@ -146,7 +146,7 @@ func TestOwnHostFromTheLocalSource(t *testing.T) {
 
 // The host list: this daemon, the other daemon host (id from the pairing), then the probe hosts, each with its own id.
 func TestHostListOrderAndIds(t *testing.T) {
-	r := newRig(t, silent)
+	r := newMRig(t, silent)
 	r.setProbes(hostconfig.ProbeHost{ID: "ab12cd34", Name: "air-2019", SSHAlias: "a19", Icon: "laptop", IconWeight: "bold",
 		Colors: json.RawMessage(`{"console":{"main":{"color":"#112233","alpha":100}}}`)})
 	r.start()
@@ -162,7 +162,7 @@ func TestHostListOrderAndIds(t *testing.T) {
 
 // A remote host's frames reach the row; the queue summary is made for daemon hosts only.
 func TestRemoteReadingReachesTheRow(t *testing.T) {
-	r := newRig(t, oneFrame)
+	r := newMRig(t, oneFrame)
 	r.start()
 	eventually(t, "reading", func() bool { h := r.host("air26:def456"); return h != nil && h.Status == "ok" && h.Fast != nil })
 	h := r.host("air26:def456")
@@ -174,7 +174,7 @@ func TestRemoteReadingReachesTheRow(t *testing.T) {
 
 // The config is re-read only when a revision moved, never per tick (the readers re-read ~/.ssh/config).
 func TestConfigIsReadOnlyWhenARevisionMoves(t *testing.T) {
-	r := newRig(t, silent)
+	r := newMRig(t, silent)
 	r.start()
 	p0, f0 := r.probeReads.Load(), r.fleetReads.Load()
 	for i := 0; i < 5; i++ {
@@ -192,7 +192,7 @@ func TestConfigIsReadOnlyWhenARevisionMoves(t *testing.T) {
 
 // New probe hosts start, removed ones stop, an alias change restarts, a change of look only does not.
 func TestProbeHostChangesStartStopRestart(t *testing.T) {
-	r := newRig(t, `echo $$ >> "$D/pids"; `+silent)
+	r := newMRig(t, `echo $$ >> "$D/pids"; `+silent)
 	r.fleet.PeerSSHAlias = "" // only the probe hosts have sessions
 	r.start()
 	assert.Equal(t, 0, startsOf(r.sshDir))
@@ -222,7 +222,7 @@ func TestProbeHostChangesStartStopRestart(t *testing.T) {
 // Once there has been a reading, the age is answered for good and keeps growing, however every source fails afterwards. A
 // primary that has read nothing yet answers "no reading".
 func TestNewestAgeNeverFallsBackToNull(t *testing.T) {
-	r := newRig(t, `echo "x: Connection refused" >&2; exit 255`)
+	r := newMRig(t, `echo "x: Connection refused" >&2; exit 255`)
 	r.start()
 	_, ok := r.m.NewestAge()
 	assert.False(t, ok, "nothing read yet")
@@ -248,7 +248,7 @@ func TestNewestAgeNeverFallsBackToNull(t *testing.T) {
 
 // A restart of the measuring (standby, then primary) starts again from no reading.
 func TestNewestAgeStartsOverAfterARestart(t *testing.T) {
-	r := newRig(t, silent)
+	r := newMRig(t, silent)
 	r.start()
 	r.setLocal(5, 1)
 	r.tick()
@@ -260,7 +260,7 @@ func TestNewestAgeStartsOverAfterARestart(t *testing.T) {
 	assert.False(t, ok)
 }
 
-func (r *rig) subscribe(features ...string) *core.EventSubscriber {
+func (r *mrig) subscribe(features ...string) *core.EventSubscriber {
 	sub := r.events.AddTestSubscriberWith(features...)
 	r.t.Cleanup(func() { r.events.RemoveTestSubscriber(sub) })
 	return sub
@@ -283,7 +283,7 @@ func pushOf(t *testing.T, sub *core.EventSubscriber) (PushPayload, bool) {
 // One push per tick to the opted-in subscribers: the term, the primary, the fast part of every host; the slow part only in
 // the push right after it changed.
 func TestPushPerTickSlowOnlyWhenChanged(t *testing.T) {
-	r := newRig(t, silent)
+	r := newMRig(t, silent)
 	r.fleet.PeerSSHAlias = ""
 	r.start()
 	sub := r.subscribe(core.FeatureFleetV1)
@@ -324,7 +324,7 @@ func TestPushPerTickSlowOnlyWhenChanged(t *testing.T) {
 
 // A standby or an off daemon pushes nothing and measures nothing; the measuring starts and stops with the role.
 func TestStandbyAndOffPushNothing(t *testing.T) {
-	r := newRig(t, silent)
+	r := newMRig(t, silent)
 	r.start()
 	sub := r.subscribe(core.FeatureFleetV1)
 	assert.Equal(t, 1, r.local.Starts())
@@ -348,7 +348,7 @@ echo $$ >> "$D/pids"
 trap 'sleep 0.5; exit 0' TERM
 sleep 600 &
 wait`
-	r := newRig(t, script)
+	r := newMRig(t, script)
 	r.start()
 	eventually(t, "first session", func() bool { return startsOf(r.sshDir) == 1 })
 	for i := 0; i < 3; i++ {
@@ -362,7 +362,7 @@ wait`
 
 // GET /api/fleet in its three shapes, and the alias list.
 func TestAPIShapes(t *testing.T) {
-	r := newRig(t, silent)
+	r := newMRig(t, silent)
 	r.fleet.PeerSSHAlias = ""
 	r.start()
 	mux := http.NewServeMux()

@@ -32,7 +32,7 @@ const (
 // Deps are the seams of a Measure; the module fills them from the registry, tests with fakes.
 type Deps struct {
 	Home  string
-	Clock clock // nil = the real one
+	Clock timeSource // nil = the real one
 	Local leaf.LocalSource
 	Role  leaf.RoleView
 	// Probe and Fleet read the host config rows. Both re-read ~/.ssh/config on every call, so they run only when the config's
@@ -95,9 +95,9 @@ type HostJSON struct {
 type PushHost struct {
 	ID       string     `json:"id"`
 	Status   string     `json:"status"`
-	Error    string     `json:"error,omitempty"`
-	LastOKAt *time.Time `json:"last_ok_at,omitempty"`
-	Fast     *FastView  `json:"fast,omitempty"`
+	Error    *string    `json:"error"`          // always present: null, or one of the codes
+	LastOKAt *time.Time `json:"last_ok_at"`     // always present: null before the first good reading
+	Fast     *FastView  `json:"fast"`           // always present: null before the first reading
 	Slow     *SlowView  `json:"slow,omitempty"` // only in the push right after it changed
 }
 
@@ -130,7 +130,7 @@ type hostRow struct {
 // session per other host, and pushes the fleet once a second.
 type Measure struct {
 	d     Deps
-	clock clock
+	clock timeSource
 	limit *hourlyLimiter
 
 	mu         sync.Mutex
@@ -159,7 +159,7 @@ type liveSession struct {
 	s     *session
 }
 
-func New(d Deps) *Measure {
+func NewMeasure(d Deps) *Measure {
 	m := &Measure{d: d, clock: d.Clock, limit: &hourlyLimiter{}}
 	if m.clock == nil {
 		m.clock = realClock{}
