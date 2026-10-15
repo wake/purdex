@@ -71,6 +71,19 @@ func TestMemLatchAFlickerResetsTheHold(t *testing.T) {
 	assert.Equal(t, resources.ZoneNormal, l.Update(at(20), 1, 0))
 }
 
+// A rate between the lines (40–50) neither enters nor allows leaving: it breaks the hold too.
+func TestMemLatchARateBetweenTheLinesResetsTheHold(t *testing.T) {
+	var l MemLatch
+	at := func(s int) time.Time { return t0.Add(time.Duration(s) * time.Second) }
+	l.Update(at(0), 2, 0)
+	l.Update(at(1), 1, 0)
+	l.Update(at(8), 1, 0)
+	assert.Equal(t, resources.ZoneWarning, l.Update(at(9), 1, 45))
+	assert.Equal(t, resources.ZoneWarning, l.Update(at(10), 1, 0))
+	assert.Equal(t, resources.ZoneWarning, l.Update(at(19), 1, 0), "9 s since the hold began again")
+	assert.Equal(t, resources.ZoneNormal, l.Update(at(20), 1, 0))
+}
+
 func TestMemLatchLevelTwoNeedsTheLevelToFallToOne(t *testing.T) {
 	var l MemLatch
 	l.Update(t0, 2, 0)
@@ -201,7 +214,7 @@ func TestQueueSummaryCapsWaitersAndCommand(t *testing.T) {
 	for i := 0; i < 30; i++ {
 		st.QueueHeavy = append(st.QueueHeavy, gate.Waiter{Place: i + 1, Since: t0.Add(-time.Duration(i) * time.Second), Argv: []string{string(make([]rune, 300))}})
 	}
-	st.QueueHeavy[0].Argv = []string{"é","xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
+	st.QueueHeavy[0].Argv = []string{"é", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
 	q := QueueSummary(st, LocalFast{}, t0)
 	assert.Len(t, q.Waiters, maxQueueShown)
 	assert.Equal(t, 29, q.LongestWaitS, "the longest wait counts the waiters that are not shown")

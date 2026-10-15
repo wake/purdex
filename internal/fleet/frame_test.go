@@ -154,15 +154,16 @@ func TestParseFastRefusesBadFrames(t *testing.T) {
 	_, err := ParseFast(good, t0, nil)
 	require.NoError(t, err)
 	for name, bad := range map[string]string{
-		"no @@end":        strings.TrimSuffix(good, "@@end\n"),
-		"bad ncpu":        strings.Replace(good, "@@ncpu\n4", "@@ncpu\nx", 1),
-		"zero ncpu":       strings.Replace(good, "@@ncpu\n4", "@@ncpu\n0", 1),
-		"bad load":        strings.Replace(good, "0.50", "nope", 1),
-		"bad cpu":         strings.Replace(good, "10 5 85", "10 5", 1),
-		"cpu id over 100": strings.Replace(good, "10 5 85", "10 5 150", 1),
-		"no meminfo":      strings.Replace(good, "MemAvailable: 250\n", "", 1),
-		"no disk":         strings.Replace(good, "40%", "??", 1),
-		"unknown os":      strings.Replace(good, "Linux", "Plan9", 1),
+		"no @@end":                      strings.TrimSuffix(good, "@@end\n"),
+		"no @@end, every section whole": strings.Replace(good, "@@end", "@@enx", 1),
+		"bad ncpu":                      strings.Replace(good, "@@ncpu\n4", "@@ncpu\nx", 1),
+		"zero ncpu":                     strings.Replace(good, "@@ncpu\n4", "@@ncpu\n0", 1),
+		"bad load":                      strings.Replace(good, "0.50", "nope", 1),
+		"bad cpu":                       strings.Replace(good, "10 5 85", "10 5", 1),
+		"cpu id over 100":               strings.Replace(good, "10 5 85", "10 5 150", 1),
+		"no meminfo":                    strings.Replace(good, "MemAvailable: 250\n", "", 1),
+		"no disk":                       strings.Replace(good, "40%", "??", 1),
+		"unknown os":                    strings.Replace(good, "Linux", "Plan9", 1),
 	} {
 		_, err := ParseFast(bad, t0, nil)
 		assert.Error(t, err, name)
