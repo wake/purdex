@@ -149,6 +149,9 @@ RA-2 已 merge：拿掉「不再詢問」、補上終端機指令核准的提示
   - `PUT /api/journal/pin` `{session_id, entry_id, pinned}`.
   - Host event `journal.changed` `{unit, project, what: entries|tasks|roadmap}` → the App re-reads what it shows.
   - Device tokens (iOS) may read and pin.
+  - `[journal] enabled = false` (lead's call 10-16, J-1e(c)): the four `/api/journal*` routes answer 503 `unavailable`
+    (as the workbook module does when it is off) and `journal.v1` is not announced, so the App keeps the workbook view and
+    never calls them; the drainer and the journal jobs stop, nothing is read from the files.
 - **Git** (§3 Q-A): one worktree of `purdex/journal` per project under the daemon's data folder (created on first write from the remote branch, or as an orphan branch when none exists); a commit every ~10 minutes when files changed (author `Purdex journal`), then a push; a failed push is retried next round and never blocks writing; the branch is never merged into main.
 
 ## 11. Mac App
