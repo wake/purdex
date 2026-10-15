@@ -7,6 +7,8 @@ import { TitleBar } from '../TitleBar'
 import { PanelAreas } from './CardStack'
 import { panelView } from '../team/panel-view'
 import { TeamDisplayProvider } from '../team/TeamDisplayProvider'
+import { useTeamDisplay } from '../team/team-display'
+import { TeamPanel } from '../team/TeamPanel'
 import type { TeamPanelTeam } from '../team/team-display'
 import { HOST, KEY, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
 import { seedWorkbook } from '../../lib/team/__tests__/workbook-fixture'
@@ -115,6 +117,32 @@ describe('the team panel', () => {
     setJournalHost(HOST, false)
     mount()
     expect(q('team-panel-ended')).toBeTruthy()
+  })
+})
+
+describe('the team card (card mode)', () => {
+  const Card = ({ card }: { card: boolean }) => {
+    const team = useTeamDisplay()?.panelTeam('lead')
+    return team ? <TeamPanel card={card} team={{ ...team, mode: 'full' }} activeTabId="lead" onSetMode={() => {}} onOpen={() => {}} onReorder={() => {}} /> : null
+  }
+  const mountCard = (card: boolean) => render(<TeamDisplayProvider><Card card={card} /></TeamDisplayProvider>)
+  const seedOld = () => {
+    setJournalHost(HOST, false) // the lead's host is an older one
+    useTeamUiStore.getState().setTeamDrill(KEY, DRILL)
+    useTeamUiStore.getState().recordEndedSeats(KEY, [{ hostId: HOST, sessionId: 'Z', title: 'gone Z', endedAt: 1 }])
+  }
+  it('never drills or offers a drill, even with a stored drill and a lead on an older host', () => {
+    seedOld()
+    mountCard(true)
+    expect(q('team-seat-workbook')).toBeNull()
+    expect(screen.getAllByTestId('team-panel-row').length).toBe(2)
+    expect(q('team-panel-workbook')).toBeNull()
+    expect(q('team-panel-ended')).toBeNull()
+  })
+  it('without card mode the same setup drills (the gate is the card flag)', () => {
+    seedOld()
+    mountCard(false)
+    expect(q('team-seat-workbook')).toBeTruthy()
   })
 })
 

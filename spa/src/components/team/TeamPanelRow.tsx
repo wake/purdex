@@ -16,6 +16,8 @@ import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { keepFocus, useReturnFocus } from './panel-focus'
 
 interface RowProps {
+  /** The journal stack's team card: never offers the workbook drill, whatever host the seat is on. */
+  noDrill?: boolean
   teamKey: string
   seat: TeamSeatView
   color: string
@@ -26,7 +28,7 @@ interface RowProps {
   dragging?: boolean
 }
 
-export function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert, dragging }: RowProps) {
+export function PanelRow({ noDrill, teamKey, seat, color, isActive, onOpen, drag, insert, dragging }: RowProps) {
   const t = useI18nStore((s) => s.t)
   const r = useSeatReading(teamKey, seat.sessionId)
   const modelText = r.model ? MODEL_LABEL[r.model] : r.modelRaw ?? '—'
@@ -34,7 +36,7 @@ export function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert,
   const wb0 = useSeatWorkbook(seat.hostId, seat.sessionId)
   // On a journal.v1 host the workbook view is off (J-2b): no drill button, no 目前狀況 line.
   const journalHost = useIsJournalHost(seat.hostId)
-  const wb = journalHost ? { ...wb0, has: false, conv: undefined } : wb0
+  const wb = journalHost || noDrill ? { ...wb0, has: false, conv: undefined } : wb0
   const status = wb.conv?.status.trim() ?? ''
   const task = firstSentence(status)
   const { remember, restore } = useReturnFocus()

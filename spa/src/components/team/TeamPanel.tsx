@@ -50,7 +50,7 @@ export function TeamPanel(props: Props) {
   // A drilled-in seat takes the place of the list (the drill is the store's, so it outlives this component).
   // On a journal.v1 host the workbook view is off (J-2b): a persisted drill is ignored here, not erased, so an older host still finds it.
   const journalHost = useIsJournalHost(hostId)
-  const drill = useTeamUiStore((s) => (journalHost ? undefined : s.teamDrill[team.teamKey]))
+  const drill = useTeamUiStore((s) => (journalHost || props.card ? undefined : s.teamDrill[team.teamKey]))
   const endedTitle = useTeamUiStore((s) => drill ? s.endedSeats[team.teamKey]?.find((e) => e.hostId === drill.hostId && e.sessionId === drill.sessionId)?.title : undefined)
   const drillTitle = drill
     ? [team.lead, ...team.members].find((m) => m.sessionId === drill.sessionId && m.hostId === drill.hostId)?.title ?? endedTitle ?? drill.sessionId
@@ -136,9 +136,10 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, card, hdr 
         )}
       </div>
       <div className="border-t border-border-subtle py-1.5 flex flex-col gap-1">
-        <PanelRow teamKey={teamKey} seat={lead} color={color} isActive={lead.tabId !== null && lead.tabId === activeTabId} onOpen={onOpen} />
+        <PanelRow noDrill={card} teamKey={teamKey} seat={lead} color={color} isActive={lead.tabId !== null && lead.tabId === activeTabId} onOpen={onOpen} />
         {members.map((m) => (
           <PanelRow
+            noDrill={card}
             key={m.sessionId}
             teamKey={teamKey}
             seat={m}
@@ -151,7 +152,7 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, card, hdr 
           />
         ))}
       </div>
-      <EndedGroup teamKey={teamKey} />
+      <EndedGroup teamKey={teamKey} noDrill={card} />
     </>
   )
 }
