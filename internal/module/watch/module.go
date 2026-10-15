@@ -24,6 +24,9 @@ import (
 // watcher it starts, wakes and rests through it.
 const HolderKey = "watch.holder"
 
+// LocatorKey is the key of the module's Locator: the delivery part (W2b) asks it where to send events.
+const LocatorKey = "watch.locator"
+
 // maxHolderBody bounds the request of the holder route (it carries only the address).
 const maxHolderBody = 4 << 10
 
@@ -36,6 +39,11 @@ type Module struct {
 	now    func() time.Time
 	// settings reads the watch setting (nil: the registry's reader is looked up at each use).
 	settings func() (watchsettings.Settings, error)
+	// caller reaches the other hosts (peers.HostCallerKey); nil: only this host can be asked.
+	caller hostCaller
+	// session starts and wakes the watcher on this host (W3); nil until then.
+	session SessionControl
+	loc     *watch.Locator
 }
 
 // New returns the module with production defaults.
@@ -65,6 +73,17 @@ func (m *Module) Init(c *core.Core) error {
 		m.holder = h
 	}
 	c.Registry.Register(HolderKey, m.holder)
+	if svc, ok := c.Registry.Get(peersmod.HostCallerKey); ok && m.caller == nil {
+		if hc, ok := svc.(hostCaller); ok {
+			m.caller = hc
+		}
+	}
+	remembered := ""
+	if c.Cfg != nil && c.Cfg.DataDir != "" {
+		remembered = filepath.Join(c.Cfg.DataDir, "watch", "remembered.json")
+	}
+	m.loc = watch.NewLocator(remembered, asker{m}, m.logf)
+	c.Registry.Register(LocatorKey, m.loc)
 	return nil
 }
 
@@ -75,6 +94,7 @@ func (m *Module) Stop(context.Context) error  { return nil }
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/peers/watch/holder", m.handlePeerHolder)
 	mux.HandleFunc("GET /api/watch/holder", m.handleLocalHolder)
+	mux.HandleFunc("GET /api/watch/status", m.handleStatus)
 }
 
 // HolderView is the answer about this host's holder: the wire form of both routes.
@@ -186,3 +206,27 @@ func (m *Module) handleLocalHolder(w http.ResponseWriter, _ *http.Request) {
 }
 
 var errNoSettings = errors.New("the watch setting reader is not available")
+
+// Status is this host's view of the watcher (GET /api/watch/status, `pdx watch status`).
+type Status struct {
+	Self HolderView `json:"self"`
+	// Current is the watcher events go to now; Last the last one there was (a forgotten Current leaves it for a wake).
+	Current  *watch.Where `json:"current,omitempty"`
+	Last     *watch.Where `json:"last,omitempty"`
+	Enabled  bool         `json:"enabled"`
+	AutoWake bool         `json:"auto_wake"`
+	Mode     string       `json:"mode"`
+	Targets  []string     `json:"targets"`
+}
+
+func (m *Module) handleStatus(w http.ResponseWriter, _ *http.Request) {
+	st := Status{Self: m.view()}
+	st.Current, st.Last = m.loc.Remembered()
+	if s, err := m.readSettings(); err == nil {
+		st.Enabled, st.AutoWake, st.Mode, st.Targets = s.Enabled, s.AutoWake, s.Mode, s.Targets
+	}
+	m.writeJSON(w, http.StatusOK, st)
+}
+
+// Locator is the module's locator (W2b delivers through it).
+func (m *Module) Locator() *watch.Locator { return m.loc }
