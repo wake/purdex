@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/wake/purdex/internal/fleet"
+	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/hostmem"
 	"github.com/wake/purdex/internal/resources"
 )
@@ -189,3 +190,41 @@ func TestLocalSource_IsRegisteredUnderTheFleetKey(t *testing.T) {
 	_, isSrc := svc.(fleet.LocalSource)
 	assert.True(t, isSrc)
 }
+
+// The fleet's gate summary carries the admission state, so the App's queue badge can turn red: at memory pressure level 2 the
+// summary says Held, with the reason; at level 1 it does not.
+func TestLocalSource_SlowGateCarriesAdmission(t *testing.T) {
+	s, _ := newTestLocal(t)
+	cfg := gate.Defaults()
+	cfg.Dir = t.TempDir()
+	cfg.Admission.Enabled, cfg.Admission.MaxPressureLevel = true, 1
+	cfg.Admission.DiskMinGB = 0
+	s.m.gateConfig = func() gate.Config { return cfg }
+	level := 2
+	s.m.newGate = func(c gate.Config) *gate.Gate {
+		g := gate.New(c)
+		g.Pressure = peekLevel{&level}
+		return g
+	}
+	procs := []resources.Proc{{PID: 1, Comm: "a"}}
+	s.m.lastProcs.Store(&procs)
+	at := time.Unix(7000, 0)
+	s.m.publish(&resources.Snapshot{SampledAt: at, Available: true})
+
+	sl, ok := s.Slow()
+	require.True(t, ok)
+	require.NotNil(t, sl.Gate)
+	assert.True(t, sl.Gate.Admission.Held, "pressure 2 holds")
+	assert.Equal(t, "pressure 2 > 1", sl.Gate.Admission.Reason)
+
+	level = 1
+	s.m.publish(&resources.Snapshot{SampledAt: at.Add(5 * time.Second), Available: true})
+	sl, _ = s.Slow()
+	require.NotNil(t, sl.Gate)
+	assert.False(t, sl.Gate.Admission.Held)
+}
+
+type peekLevel struct{ level *int }
+
+func (peekLevel) Read() (gate.Pressure, error)  { panic("the summary never samples") }
+func (p peekLevel) Peek() (gate.Pressure, bool) { return gate.Pressure{Level: *p.level}, true }

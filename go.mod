@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/creack/pty v1.1.24
+	github.com/ebitengine/purego v0.8.4
 	github.com/gorilla/websocket v1.5.3
 	github.com/mattn/go-shellwords v1.0.13
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
@@ -14,7 +15,6 @@ require (
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/ebitengine/purego v0.8.4 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

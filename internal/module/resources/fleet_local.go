@@ -158,7 +158,11 @@ func (m *Module) gateSummary() *gate.Status {
 	if _, err := os.Stat(cfg.Dir); err != nil {
 		return nil
 	}
-	st := gate.New(cfg).StatusWith(gate.HoldersOrphaned)
+	newGate := m.newGate
+	if newGate == nil {
+		newGate = gate.New
+	}
+	st := newGate(cfg).StatusWith(gate.HoldersOrphaned)
 	return &st
 }
 

@@ -216,6 +216,8 @@ type Module struct {
 	useAt       map[string]time.Time
 	measureNote string
 	lastProcs   atomic.Pointer[[]resources.Proc]
+	// newGate makes the gate the fleet summary reads (a test seam: nil is gate.New).
+	newGate func(gate.Config) *gate.Gate
 
 	// runCtx ends when Stop is called; it is made in New so that a Stop
 	// before Start still keeps a later Start from running.
