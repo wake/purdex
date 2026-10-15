@@ -85,7 +85,7 @@ func isExecCmd(e ast.Expr, names map[string]string) bool {
 		return false
 	}
 	id, ok := sel.X.(*ast.Ident)
-	return ok && names[id.Name] == "os/exec" && sel.Sel.Name == "Cmd"
+	return ok && id.Obj == nil && names[id.Name] == "os/exec" && sel.Sel.Name == "Cmd" // Obj == nil: the package, not a local of that name
 }
 
 // cliOnly are the files of the pdx binary that run only in the short-lived CLI process, never in the daemon: a counter in a
@@ -221,6 +221,7 @@ func TestTheGuardSeesEveryWayToFork(t *testing.T) {
 		`package p; import "os/exec"; type t struct{ cmd exec.Cmd }`:                                        true,  // a field
 		`package p; import "os/exec"; type A = exec.Cmd; var a A`:                                           true,  // an alias
 		`package p; import "os/exec"; var s []*exec.Cmd; var _ = s`:                                         false, // references
+		`package p; import "os/exec"; func f(exec struct{ Cmd int }) int { return exec.Cmd }`:               false, // a local named exec
 		`package p; import "os/exec"; func f(c *exec.Cmd) { c.Start() }`:                                    false, // a parameter is not a creation
 		`package p; import "os"; var _, _ = os.StartProcess("x", nil, nil)`:                                 true,
 		`package p; import "syscall"; var _, _ = syscall.ForkExec("x", nil, nil)`:                           true,
