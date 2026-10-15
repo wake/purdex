@@ -268,13 +268,21 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 // parseMixed parses fs over args wherever the flags stand: Go's flag package stops at the first word that is not a flag,
 // so `profile use night --config X` would otherwise be a usage error. It returns the words that are not flags, in order.
 func parseMixed(fs *flag.FlagSet, args []string) ([]string, error) {
+	// a `--` ends the flags for good: what follows it is words, whatever it looks like
+	var after []string
+	for i, a := range args {
+		if a == "--" {
+			args, after = args[:i], args[i+1:]
+			break
+		}
+	}
 	var words []string
 	for {
 		if err := fs.Parse(args); err != nil {
 			return nil, err
 		}
 		if fs.NArg() == 0 {
-			return words, nil
+			return append(words, after...), nil
 		}
 		words = append(words, fs.Arg(0))
 		args = fs.Args()[1:]
