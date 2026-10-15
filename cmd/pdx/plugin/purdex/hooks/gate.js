@@ -156,7 +156,7 @@ const base = (p) => p.slice(p.lastIndexOf('/') + 1)
 const PRE_MS = 3_000 // pdx.json, the permission check: a read that has not answered by then is a failed one
 const ASK_MS = 3_000 // `pdx gate would-wait` (about 70 ms): longer than this and the call is not held for it
 const PLAN_MS = 4_000 // all of the planning together: a hook that waits on a dead dependency must not hold every Bash call
-const MAX_ASKS = 3 // one call can hold several commands; the first that would wait decides, and no more than this are asked
+const MAX_ASKS = 6 // one call can hold several commands: all of them (distinct ones, at most this many) are asked at once, and the first that would wait decides
 
 const parse = (s) => { try { return JSON.parse(s) } catch { return null } }
 const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v)
@@ -245,11 +245,20 @@ export function prefixGated(command, prefix) {
   return { command: out, changed: true }
 }
 
-// gatedCandidates are the commands of a call that the gate may hold, in order, at most MAX_ASKS.
+// gatedCandidates are the distinct commands of a call that the gate may hold, in order, at most MAX_ASKS.
 export function gatedCandidates(command) {
   const cmds = readCommand(command)
   if (!cmds) return []
-  return cmds.filter((c) => TOOLS.has(base(c.first)) || GATED_BIN.test(c.first)).slice(0, MAX_ASKS).map((c) => c.argv)
+  const seen = new Set()
+  const out = []
+  for (const c of cmds) {
+    if (!TOOLS.has(base(c.first)) && !GATED_BIN.test(c.first)) continue
+    const key = JSON.stringify(c.argv)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(c.argv)
+  }
+  return out.slice(0, MAX_ASKS)
 }
 
 // askWouldWait is the gate's answer for one command: { would_wait, note, … }, or null (no answer is "no").
@@ -298,8 +307,9 @@ async function planGate($, e) {
   }
   let background = wasBackground
   if (!wasBackground) {
-    for (const argv of gatedCandidates(e.command)) {
-      const w = await askWouldWait($, cfg, argv)
+    const cands = gatedCandidates(e.command)
+    const answers = await Promise.all(cands.map((argv) => askWouldWait($, cfg, argv)))
+    for (const w of answers) {
       if (!w || w.would_wait !== true) continue
       // A call moved to the background must not raise a prompt the foreground call would not have.
       const [before, after] = await Promise.all([verdict($, e.command, false), verdict($, command, true)])

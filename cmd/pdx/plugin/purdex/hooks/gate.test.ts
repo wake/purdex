@@ -52,13 +52,15 @@ for (const cmd of UNCHANGED) {
   })
 }
 
-test('gatedCandidates: the commands of a call the gate may hold, at most three, none for the unreadable', () => {
+test('gatedCandidates: the commands of a call the gate may hold, distinct ones, at most six, none for the unreadable', () => {
   expect(gatedCandidates('go test ./... && pnpm run build')).toEqual([['go', 'test', './...'], ['pnpm', 'run', 'build']])
   expect(gatedCandidates('cd spa && FOO=1 timeout 30 npx vitest run > o.txt')).toEqual([['npx', 'vitest', 'run']])
   expect(gatedCandidates('./vendor/bin/pest --parallel')).toEqual([['./vendor/bin/pest', '--parallel']])
   expect(gatedCandidates('ls -la | grep go')).toEqual([])
   expect(gatedCandidates('go build ./... & go vet ./...')).toEqual([])
-  expect(gatedCandidates('go version; go vet; go build; go test')).toHaveLength(3)
+  expect(gatedCandidates('go version; go vet; go build; go test')).toHaveLength(4)
+  expect(gatedCandidates('go version; go version; go version; go test ./...')).toEqual([['go', 'version'], ['go', 'test', './...']])
+  expect(gatedCandidates('go a; go b; go c; go d; go e; go f; go g; go h')).toHaveLength(6)
 })
 
 // ---- the hook ----
@@ -281,3 +283,10 @@ for (const [name, hang] of [['fs.read', 'fs.read'], ['process.run', 'process.run
     expect(r.ran).toHaveLength(1)
   })
 }
+
+test('the fourth command of a call is asked about too: it is the one that waits', async ($, on) => {
+  const r = rig(on, (a) => ok(a.includes('test') ? BUSY : FREE))
+  await bash($, 'go version; go env; go list ./...; go test ./...')
+  expect(wouldWaits(r)).toHaveLength(4)
+  expect(r.ran[0].bg).toBe(true)
+})
