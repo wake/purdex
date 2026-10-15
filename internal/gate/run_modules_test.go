@@ -119,3 +119,42 @@ func TestRun_ASettingChangedInTheFileIsInForceForTheNextCommand(t *testing.T) {
 	run("b")
 	assert.Equal(t, 3, g.Config().Slots.Heavy, "the next command saw the new file")
 }
+
+// The classifier is given the place the command runs in: a bare vitest watches for a person at a terminal (not held)
+// and runs once for an agent (held). (M: do not pass the environment on.)
+func TestRun_TheClassifierSeesTheTerminalAndTheAgent(t *testing.T) {
+	g, _ := testGate(t)
+	g.IsTTY = func() bool { return true }
+	person := t.TempDir()
+	res := runAsync(g, t.Context(), Options{Argv: []string{"vitest", "-c", holdScript(person, "1")}, Real: "/bin/sh", Env: withoutMarks(cleanEnv())})
+	eventually(t, "start", func() bool { return exists(person + "/started-1") })
+	assert.Empty(t, g.Status().Heavy, "a person at a terminal: vitest watches, the gate does not hold it")
+	require.NoError(t, os.WriteFile(person+"/go-1", nil, 0o644))
+	assert.Equal(t, 0, (<-res).code)
+
+	agent := t.TempDir()
+	res = runAsync(g, t.Context(), Options{Argv: []string{"vitest", "-c", holdScript(agent, "1")}, Real: "/bin/sh", Env: append(withoutMarks(cleanEnv()), "CLAUDECODE=1")})
+	eventually(t, "start", func() bool { return exists(agent + "/started-1") })
+	assert.Len(t, g.Status().Heavy, 1, "an agent: vitest runs once, the gate holds it")
+	require.NoError(t, os.WriteFile(agent+"/go-1", nil, 0o644))
+	assert.Equal(t, 0, (<-res).code)
+}
+
+// withoutMarks takes the agent and CI marks out of an environment: the test itself may run under an agent or in CI.
+func withoutMarks(env []string) []string {
+	marks := map[string]bool{"CI": true}
+	for _, k := range agentVars {
+		marks[k] = true
+	}
+	for _, p := range ciProviders {
+		marks[p.Var] = true
+	}
+	var out []string
+	for _, kv := range env {
+		k, _, _ := strings.Cut(kv, "=")
+		if !marks[k] {
+			out = append(out, kv)
+		}
+	}
+	return out
+}

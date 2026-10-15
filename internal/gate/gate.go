@@ -225,7 +225,7 @@ func (g *Gate) Run(ctx context.Context, o Options) (int, error) {
 	}
 	class := o.Class
 	if class == "" {
-		class = cfg.Intercept.Classify(o.Argv)
+		class = cfg.Intercept.Classify(o.Argv, EnvOf(env, g.IsTTY != nil && g.IsTTY()))
 	}
 	sigs, stop := g.signals()
 	defer stop()
