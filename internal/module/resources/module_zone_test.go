@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 // a reading it sets before each one.
 type zoneRig struct {
 	m   *Module
+	mu  sync.Mutex // cur is read by a request goroutine in the race test
 	cur time.Time
 	raw resources.HostRaw
 	set *fakeSettings
@@ -31,7 +33,7 @@ func newZoneRig(t *testing.T) *zoneRig {
 		return r.raw, nil, nil
 	}}
 	r.m = newTestModule(s, nil)
-	r.m.now = func() time.Time { return r.cur }
+	r.m.now = func() time.Time { r.mu.Lock(); defer r.mu.Unlock(); return r.cur }
 	r.m.settingsSrc = r.set
 	r.raw = zoneRaw(40, 1, 1)
 	return r
@@ -46,10 +48,17 @@ func zoneRaw(memPct, load1 float64, pressure int) resources.HostRaw {
 	}
 }
 
+// step moves the clock 5 s.
+func (r *zoneRig) step() {
+	r.mu.Lock()
+	r.cur = r.cur.Add(5 * time.Second)
+	r.mu.Unlock()
+}
+
 // tick moves the clock 5 s, applies the reading and runs one sampler tick.
 func (r *zoneRig) tick(t *testing.T, raw resources.HostRaw) resources.HostUse {
 	t.Helper()
-	r.cur = r.cur.Add(5 * time.Second)
+	r.step()
 	r.raw = raw
 	require.False(t, r.m.tick(context.Background()))
 	return r.m.latest.Load().Host
@@ -88,7 +97,7 @@ func TestSampler_PublishesZoneAndTrend(t *testing.T) {
 	// Pressure warn: the zone changes and ZoneSince moves to that tick.
 	h = r.tick(t, zoneRaw(60, 1, 2))
 	assert.Equal(t, "warning", h.Zone)
-	assert.Equal(t, r.cur.UnixMilli(), h.ZoneSince)
+	assert.Equal(t, r.m.now().UnixMilli(), h.ZoneSince)
 
 	// Flat for a full 120 s window: the trend settles. The level back at 1 leaves warning.
 	for i := 0; i < 26; i++ {
@@ -201,7 +210,7 @@ func TestSampler_UnavailableIsUnknownAndAddsNoSamples(t *testing.T) {
 	}}
 	n := len(r.m.ringCopy())
 	for i := 0; i < 3; i++ {
-		r.cur = r.cur.Add(5 * time.Second)
+		r.step()
 		r.m.tick(context.Background())
 	}
 	s := r.m.latest.Load()
@@ -217,7 +226,7 @@ func TestSampler_UnavailableIsUnknownAndAddsNoSamples(t *testing.T) {
 		bad.NCPU = 0
 		return bad, nil, nil
 	}}
-	r.cur = r.cur.Add(5 * time.Second)
+	r.step()
 	r.m.tick(context.Background())
 	assert.Len(t, r.m.ringCopy(), n)
 }
@@ -230,7 +239,7 @@ func TestSampler_OneFailedTickKeepsTheZone(t *testing.T) {
 	r.m.sampler = &fakeSampler{fn: func(context.Context, int) (resources.HostRaw, []resources.Proc, error) {
 		return resources.HostRaw{}, nil, assert.AnError
 	}}
-	r.cur = r.cur.Add(5 * time.Second)
+	r.step()
 	r.m.tick(context.Background())
 	s := r.m.latest.Load()
 	assert.True(t, s.Available)
