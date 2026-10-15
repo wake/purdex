@@ -111,7 +111,7 @@ func (r *HostReader) Read() (Pressure, error) {
 		return Pressure{Level: level}, nil
 	}
 	cur := cachedSample{At: now.UnixMilli(), Level: level, Pageouts: po, Swapouts: so}
-	keep := r.cache().Append(now, cur)
+	keep, _ := r.cache().Append(now, cur)
 	return pressureOf(keep, cur), nil
 }
 

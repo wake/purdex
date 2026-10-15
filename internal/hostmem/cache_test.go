@@ -51,7 +51,8 @@ func TestCache_AppendKeepsTheRecentOnes(t *testing.T) {
 	assert.Equal(t, sampleAt(t0, 4, 1, 4), got[0])
 	// a reading from 40 s ago is older than KeepFor (30 s)
 	now := t0.Add(60 * time.Second)
-	out := c.Append(now, sampleAt(t0, 60, 2, 99))
+	out, written := c.Append(now, sampleAt(t0, 60, 2, 99))
+	assert.True(t, written)
 	require.Len(t, out, 1)
 	// a reading newer than the new one (the clock went back) is dropped
 	c.Append(t0.Add(50*time.Second), sampleAt(t0, 50, 1, 1))
@@ -134,4 +135,23 @@ func TestCache_RecordIntoAnUnwritableDirectory(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "file"), nil, 0o644))
 	c := Cache{Dir: filepath.Join(dir, "file", "sub")} // a path below a file
 	assert.False(t, c.Record(time.Now(), Sample{At: time.Now().UnixMilli(), Level: 1}))
+}
+
+// A write that fails is reported as not written, and leaves the cache as it was.
+func TestCache_RecordReportsAWriteThatFailed(t *testing.T) {
+	dir := t.TempDir()
+	c := Cache{Dir: dir}
+	t0 := time.Unix(10_000, 0)
+	require.True(t, c.Record(t0, sampleAt(t0, 0, 1, 1)))
+	require.NoError(t, os.Chmod(dir, 0o500)) // the lock file is there already; a temp file cannot be made
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	if f, err := os.CreateTemp(dir, "probe"); err == nil { // running as a user the mode does not bind
+		_ = f.Close()
+		t.Skip("the directory mode does not stop this user from writing")
+	}
+	t1 := t0.Add(5 * time.Second)
+	assert.False(t, c.Record(t1, sampleAt(t0, 5, 2, 9)), "the reading was not persisted")
+	got := c.Load().Samples
+	require.Len(t, got, 1)
+	assert.Equal(t, 1, got[0].Level, "the cache is as it was")
 }

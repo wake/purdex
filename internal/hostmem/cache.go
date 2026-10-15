@@ -81,10 +81,10 @@ func (c Cache) TryLock() (unlock func(), got bool) {
 	}
 }
 
-// Append adds cur to the cache, dropping the readings that are too old or newer than cur, and returns what the file now holds.
-// The caller holds the lock (TryLock). A file that cannot be written leaves the cache as it was: the readings are still
-// returned, for the caller's own use.
-func (c Cache) Append(now time.Time, cur Sample) []Sample {
+// Append adds cur to the cache, dropping the readings that are too old or newer than cur, and returns what the file now holds
+// and whether it was written. The caller holds the lock (TryLock). A file that cannot be written leaves the cache as it was:
+// the readings are still returned, for the caller's own use, and written is false.
+func (c Cache) Append(now time.Time, cur Sample) (readings []Sample, written bool) {
 	keep := []Sample{}
 	for _, s := range c.Load().Samples {
 		if now.Sub(time.UnixMilli(s.At)) <= KeepFor && s.At <= cur.At {
@@ -101,10 +101,12 @@ func (c Cache) Append(now time.Time, cur Sample) []Sample {
 			cerr := tf.Close()
 			if werr != nil || cerr != nil || os.Rename(tf.Name(), c.Path()) != nil {
 				_ = os.Remove(tf.Name())
+			} else {
+				written = true
 			}
 		}
 	}
-	return keep
+	return keep, written
 }
 
 // Record is what the daemon does with each reading it takes: it adds it to the cache when no one else is writing, and gives it
@@ -122,6 +124,6 @@ func (c Cache) Record(now time.Time, cur Sample) bool {
 	if have := c.Load().Samples; len(have) > 0 && have[len(have)-1].At >= cur.At {
 		return false // a reading as new is there already (a gate sampled meanwhile): the cache never goes back in time
 	}
-	c.Append(now, cur)
-	return true
+	_, written := c.Append(now, cur)
+	return written
 }
