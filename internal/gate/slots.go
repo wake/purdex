@@ -292,7 +292,12 @@ func (p *Pool) reapStaging(e os.DirEntry) {
 }
 
 // Waiting is the number of live tickets in the queue (all of them, for the status).
-func (p *Pool) Waiting() int {
+func (p *Pool) Waiting() int { return p.waiting(true) }
+
+// PeekWaiting counts the live tickets like Waiting and removes nothing (a dead ticket is just not counted).
+func (p *Pool) PeekWaiting() int { return p.waiting(false) }
+
+func (p *Pool) waiting(clean bool) int {
 	ents, err := os.ReadDir(p.queueDir())
 	if err != nil {
 		return 0
@@ -308,7 +313,9 @@ func (p *Pool) Waiting() int {
 			continue
 		}
 		if st, _ := flockNB(f); st == lockGot {
-			_ = os.Remove(path)
+			if clean {
+				_ = os.Remove(path)
+			}
 			_ = f.Close()
 			continue
 		}
