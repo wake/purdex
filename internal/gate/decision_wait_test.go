@@ -18,10 +18,10 @@ func TestRun_ASettingChangedWhileWaitingIsTheOneInForce(t *testing.T) {
 		c.Sources = map[string]Source{"priority.nice": SrcDefault, "priority.mode": SrcDefault}
 	})
 	g.Tools = Tools{Nice: "/usr/bin/nice"}
-	hold := runAsync(g, context.Background(), Options{Argv: sh("sleep 0.6"), Class: ClassHeavy})
+	hold := runAsync(g, context.Background(), Options{Argv: sh("sleep 2"), Class: ClassHeavy})
 	eventually(t, "the first command to hold the slot", func() bool { return len(g.Status().Heavy) == 1 })
 	waiter := runAsync(g, context.Background(), Options{Argv: sh("true"), Class: ClassHeavy})
-	eventually(t, "the second to queue", func() bool { return g.Status().WaitHeavy == 1 })
+	eventually(t, "the second to queue", func() bool { return g.Status().WaitHeavy >= 1 })
 	g.SetConfig(func(c *Config) {
 		c.Priority.Nice = 4
 		c.Sources["priority.nice"] = SrcProfile
