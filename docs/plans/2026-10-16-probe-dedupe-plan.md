@@ -1,8 +1,8 @@
 # Host and process probes: measure, then remove the duplicates — plan
 
 Date: 2026-10-16. Owner: A-line lead (purdex-1f). User decision 10-16: "the redundant cost should be consolidated and
-de-duplicated as far as possible"; the fleet reads the daemon's own samples for the hosts that run a daemon (mlab, air26),
-and probes only air-2019 and mserv over SSH.
+de-duplicated as far as possible"; the fleet primary reads its own host from its own daemon (no SSH, no fork) and probes the other three hosts over SSH;
+the App takes the fleet from the primary only (user, 10-16).
 
 Sources: two read-only audits of origin/main at 10-16 01:3x — `reports/probe-audit-daemon.md` (daemon process) and
 `reports/probe-audit-outside.md` (gate, mod, App, fleet plan, host). The lead spot-checked the two biggest claims
@@ -88,15 +88,21 @@ invalidates it.
    six forks.
 5. mod polling: `/mod/v1/team` every 15 s per session → carried on the existing events ack when it changes.
 
-## F — the fleet on daemon hosts (B line with the lease member)
+## F — the fleet primary does not probe itself (B line with the lease member)
+
+User decision (10-15, confirmed 10-16): primary / standby in the order `[air26, mlab]`; **the App takes all four hosts'
+data from the primary only**; the standby measures nothing, checks every 30 s that the primary is alive and takes over
+when it is not. The only duplicate the fleet adds is the primary measuring its own host, which its daemon already
+samples; that one goes. The primary's external view of the other daemon host (normally mlab) is wanted and stays.
 
 1. Daemon side (lease member, after G-D1): a 1 s light tick in the resources sampler that reads only fork-free sources
-   (sysctl, `host_statistics64` page counters, `host_processor_info` CPU ticks → real CPU %); the `ps` stays at 5 s; the
-   gate summary (held / waiting per class) comes from the watch pass's `HeldSlots` read. `/api/fleet` `self` carries them;
-   the fleet primary reads `/api/fleet` of mlab and air26 instead of probing them.
-2. Fleet side (B line): SSH only for air-2019 and mserv, over one long-lived connection per host (a remote loop or
-   ControlMaster), never a new handshake per second. The fleet spec is updated by the B line to say: daemon hosts are
-   never probed over SSH and never forked for the fleet.
+   (sysctl, `host_statistics64` page counters, `host_processor_info` CPU ticks → real CPU %), run only while this daemon
+   is the fleet primary; the `ps` stays at 5 s; the local gate summary comes from the watch pass's `HeldSlots` read. The
+   fleet module takes its own host's row from these, never from SSH or a fork.
+2. Fleet side (B line): SSH for the three other hosts (air-2019, mserv and the other daemon host), one long-lived
+   connection per host (a remote loop), five items each second, the process lists and — for the other daemon host —
+   `pdx gate status --json` every 5 s; never a new handshake per second. The App reads the fleet from the primary only
+   (push). The cost the user accepted: the primary's own host has no outside view until the standby takes over.
 
 ## App side (B line, low priority)
 
