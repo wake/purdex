@@ -182,6 +182,10 @@ A note 「沒有 daemon 的主機：由主方用 SSH 探查；沒有資源管制
 ## 8. What the A line is asked for
 
 All admin-token routes on each daemon host; the App calls each daemon host it is connected to. Times RFC 3339.
+The A line takes them after 743, in the order A1 → A3 → A2 (1f, 10-16). The writes (A2's `PUT`/`POST`, A3's skip,
+start and wake) are refused to device tokens (403) and are not opened to peers (`HostRoutePolicy`): only the Mac App,
+which holds each host's admin token as it does for the other host-config writes, changes a host's load policy. A2's
+writes use `pdx gate set`'s validation.
 
 - **A1 `GET /api/gate/decisions?class=heavy|light&since=<time>&limit=<n>`** → `{records: [...]}` newest first, from
   `decisions.jsonl` (+ `.1`), each a `Decision` as written today (`time`, `argv`, `cwd`, `session`, `class`, `outcome`,
@@ -206,7 +210,9 @@ All admin-token routes on each daemon host; the App calls each daemon host it is
   - `POST /api/watch/start` → starts a watcher by §12.3 (202 with the chosen host, or 409 with the cooldown end).
   - `POST /api/watch/wake` with `{prompt}` → resumes the resting watcher with `wake_prompt` followed by the prompt.
   - A `watch.changed` event on the daemon's event stream when an event is recorded, acked or skipped, and when the
-    holder's state changes.
+    holder's state changes (a plain `Broadcast`: the volume is small, no newest-wins).
+  - The A line's watcher identification (the fixed tmux session `pdx-watch`) comes as its spec §12.4／§12.6 and plan
+    W3 update after 743; A3 is aligned with it then.
 
 ## 9. Phasing (one phase = one PR, ≤ 800 lines or ≤ 20 files)
 
