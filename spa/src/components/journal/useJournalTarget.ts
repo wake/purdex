@@ -9,6 +9,7 @@ import type { TeamPanelTeam } from '../team/team-display'
 import { useTabStore } from '../../stores/useTabStore'
 import { selectUnit, sessionKey, useJournalStore, type UnitState } from '../../stores/useJournalStore'
 import { unitKeyOf } from '../../lib/journal/types'
+import { useIsJournalHost } from '../../lib/journal/use-journal-host'
 
 export interface JournalTarget {
   /** The host whose support decides the UI; '' = the tab has neither a cc session nor a team. */
@@ -29,8 +30,6 @@ export interface JournalTarget {
   memoKey: string | null
 }
 
-/** The host's sticky journal.v1 answer (the last yes / no, kept through a disconnect; absent = never answered = old UI). */
-export const useIsJournalHost = (hostId: string): boolean => useJournalStore((s) => hostId !== '' && s.sticky[hostId] === true)
 
 export function useJournalTarget(): JournalTarget {
   const team = useTitleBarTeam()

@@ -10,6 +10,7 @@ import { firstSentence, useSeatWorkbook } from './seat-workbook'
 import { useMemberDrag } from './useMemberDrag'
 import { PauseReleaseButton } from '../PauseReleaseButton'
 import { pausedLightText } from '../../lib/team/paused-text'
+import { useIsJournalHost } from '../../lib/journal/use-journal-host'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { keepFocus, useReturnFocus } from './panel-focus'
@@ -30,7 +31,10 @@ export function PanelRow({ teamKey, seat, color, isActive, onOpen, drag, insert,
   const r = useSeatReading(teamKey, seat.sessionId)
   const modelText = r.model ? MODEL_LABEL[r.model] : r.modelRaw ?? '—'
   const paused = useRosterSession(teamKey, seat.sessionId)?.paused
-  const wb = useSeatWorkbook(seat.hostId, seat.sessionId)
+  const wb0 = useSeatWorkbook(seat.hostId, seat.sessionId)
+  // On a journal.v1 host the workbook view is off (J-2b): no drill button, no 目前狀況 line.
+  const journalHost = useIsJournalHost(seat.hostId)
+  const wb = journalHost ? { ...wb0, has: false, conv: undefined } : wb0
   const status = wb.conv?.status.trim() ?? ''
   const task = firstSentence(status)
   const { remember, restore } = useReturnFocus()

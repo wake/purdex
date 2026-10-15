@@ -17,6 +17,7 @@ import { useHeaderGestures, type HeaderHandlers } from './useHeaderGestures'
 import { keepFocus } from './panel-focus'
 import { EndedGroup } from './TeamEndedGroup'
 import { PanelRow } from './TeamPanelRow'
+import { useIsJournalHost } from '../../lib/journal/use-journal-host'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamUiStore, type PanelMode } from '../../stores/useTeamUiStore'
 import { TeamSeatWorkbookView } from './TeamSeatWorkbookView'
@@ -47,7 +48,9 @@ export function TeamPanel(props: Props) {
   const canEdit = editable && roster !== undefined
   const { rootRef, hdr, editOpen, close, anchor } = useHeaderGestures({ teamKey: team.teamKey, mode: team.mode, onSetMode: props.onSetMode, canEdit })
   // A drilled-in seat takes the place of the list (the drill is the store's, so it outlives this component).
-  const drill = useTeamUiStore((s) => s.teamDrill[team.teamKey])
+  // On a journal.v1 host the workbook view is off (J-2b): a persisted drill is ignored here, not erased, so an older host still finds it.
+  const journalHost = useIsJournalHost(hostId)
+  const drill = useTeamUiStore((s) => (journalHost ? undefined : s.teamDrill[team.teamKey]))
   const endedTitle = useTeamUiStore((s) => drill ? s.endedSeats[team.teamKey]?.find((e) => e.hostId === drill.hostId && e.sessionId === drill.sessionId)?.title : undefined)
   const drillTitle = drill
     ? [team.lead, ...team.members].find((m) => m.sessionId === drill.sessionId && m.hostId === drill.hostId)?.title ?? endedTitle ?? drill.sessionId
