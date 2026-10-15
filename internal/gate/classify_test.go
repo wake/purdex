@@ -81,7 +81,13 @@ func TestClassify_Table(t *testing.T) {
 		// tsc
 		{"tsc -b", ClassHeavy},
 		{"tsc -b --force", ClassHeavy},
-		{"tsc -p spa/tsconfig.json --noEmit", ClassHeavy},
+		{"tsc -p spa/tsconfig.json --noEmit", ClassLight}, // one project, no references (#2985)
+		{"tsc --noEmit -p .", ClassLight},
+		{"tsc --project spa/tsconfig.json", ClassLight},
+		{"tsc --project=spa/tsconfig.json --noEmit", ClassLight},
+		{"tsc -b -p spa", ClassHeavy}, // -b wins: it builds the references
+		{"tsc --build --project spa", ClassHeavy},
+		{"tsc -p spa --version", ClassNone},
 		{"tsc --noEmit", ClassHeavy},
 		{"tsc src/a.ts", ClassLight},
 		{"tsc --version", ClassNone},

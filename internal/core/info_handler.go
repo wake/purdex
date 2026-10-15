@@ -108,6 +108,9 @@ func (c *Core) capabilityList() []string {
 		out = append(out, "workbook.v1") // GET /api/workbook/conversations/{provider}/{session_id}, GET /api/workbook/entries, workbook.entry / workbook.status events
 		out = append(out, "workbook.v2") // entries' kind / usage / todo_changes, the conversation's todos and refresh_available, GET …/todos, POST …/refresh, workbook.todos / workbook.refresh_available events
 	}
+	if c.moduleReady("fleet") {
+		out = append(out, "fleet.v1") // GET /api/fleet, GET /api/fleet/ssh-aliases, the opt-in fleet.changed push (?fleet=v1)
+	}
 	return out
 }
 

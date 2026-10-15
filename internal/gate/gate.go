@@ -407,6 +407,47 @@ type Status struct {
 	// Profile is the active profile; Settings is every setting in force, with where it came from.
 	Profile  string
 	Settings []Setting
+	// Admission says whether a heavy start would be held back by the host right now (memory pressure, page rate, disk), by the
+	// rule that decides it for a command.
+	Admission AdmissionState
+}
+
+// AdmissionState is whether the gate is holding new heavy work because of the host, and why.
+type AdmissionState struct {
+	Held   bool   `json:"held"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// admission reads the host without sampling it (the level from the kernel, the rate from the cache other gates keep; the free
+// space of the working directory and of $TMPDIR) and applies the rule that admits a command. A host that cannot be read is not
+// held: status shows what is known. The disk it looks at is the status process's own: the person's directory for `pdx gate
+// status`, the daemon's working directory and $TMPDIR when the daemon asks (the fleet's summary), which for the fleet is the
+// main disk, the one that matters; a command's own directory is only known to the command (its start checks that one).
+func (g *Gate) admission(cfg Config) AdmissionState {
+	if !cfg.Admission.Enabled {
+		return AdmissionState{}
+	}
+	if pk, ok := g.Pressure.(PressurePeeker); ok {
+		if p, have := pk.Peek(); have {
+			if held, why := cfg.Admission.Hold(p); held {
+				return AdmissionState{Held: true, Reason: why}
+			}
+		}
+	}
+	if g.DiskFree != nil {
+		cwd, _ := os.Getwd()
+		for _, path := range []string{cwd, os.TempDir()} {
+			if path == "" {
+				continue
+			}
+			if free, err := g.DiskFree(path); err == nil {
+				if short, why := cfg.Admission.DiskShort(free); short {
+					return AdmissionState{Held: true, Reason: why}
+				}
+			}
+		}
+	}
+	return AdmissionState{}
 }
 
 // HoldersMode says for which held slots Status asks who has the lock file open (an lsof, which looks at every process of
@@ -430,7 +471,7 @@ func (g *Gate) StatusWith(mode HoldersMode) Status {
 	g.fillLocked(h, heavy, l, light, mode)
 	return Status{
 		Heavy: heavy, Light: light, WaitHeavy: h.Waiting(), WaitLight: l.Waiting(), QueueHeavy: h.Waiters(), QueueLight: l.Waiters(),
-		Suspect: append(h.Suspect(), l.Suspect()...), Profile: cfg.Profile, Settings: cfg.Effective(),
+		Suspect: append(h.Suspect(), l.Suspect()...), Profile: cfg.Profile, Settings: cfg.Effective(), Admission: g.admission(cfg),
 	}
 }
 

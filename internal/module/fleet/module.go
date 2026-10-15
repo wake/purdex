@@ -38,13 +38,14 @@ type hostCaller interface {
 
 // Module is the fleet module.
 type Module struct {
-	core   *core.Core
-	engine *Engine
-	local  fleet.LocalSource
-	caller hostCaller
-	limit  *peersmod.HostLimiter
-	logf   func(format string, args ...any)
-	now    func() time.Time
+	core    *core.Core
+	engine  *Engine
+	measure *Measure // the measuring side (F-1c2): sessions, aggregator, GET /api/fleet, the push
+	local   fleet.LocalSource
+	caller  hostCaller
+	limit   *peersmod.HostLimiter
+	logf    func(format string, args ...any)
+	now     func() time.Time
 
 	// statePath overrides ~/.config/pdx/fleet/state.json (tests).
 	statePath string
@@ -93,6 +94,8 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	m.engine = NewEngine(peerOf{m}, m.settings, m.now, m.logf, path, m.hostID())
 	c.Registry.Register(RoleViewKey, fleet.RoleView(m.engine))
+	m.measure = m.newMeasure()
+	m.engine.SetNewestAge(m.measure.NewestAge)
 	return nil
 }
 
@@ -109,20 +112,26 @@ func (m *Module) Start(ctx context.Context) error {
 		defer m.wg.Done()
 		m.engine.Run(ctx)
 	}()
-	return nil
+	// OnChange does not replay the current state, so Start registers first and then reads it.
+	return m.measure.Start(ctx)
 }
 
 func (m *Module) Stop(context.Context) error {
+	// The engine goes first: its drain may still announce a primary, and the measure must be the last to hear it.
 	if m.cancel != nil {
 		m.cancel()
 	}
 	m.wg.Wait()
+	if m.measure != nil {
+		m.measure.Stop()
+	}
 	return nil
 }
 
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+pathRole, m.handleRole)
 	mux.HandleFunc("POST "+pathAnnounce, m.handleAnnounce)
+	m.measure.Routes(mux)
 }
 
 // ---- settings from hostconfig and the config ----
