@@ -31,6 +31,14 @@ const HeldEnv = "PDX_GATE_HELD"
 // broken (sysexits EX_TEMPFAIL).
 const ExitRefused = 75
 
+// ExitOrphaned is the exit code of a command that waited for a slot and whose caller went away meanwhile: nobody is left to
+// read its output, so it was not run (129, as for a hangup).
+const ExitOrphaned = 129
+
+// KeepOrphanEnv set to anything but "" and "0" lets a command that waits go on waiting when its caller is gone (a detached job
+// on purpose: `nohup pdx gate … &` that outlives the terminal).
+const KeepOrphanEnv = "PDX_GATE_KEEP_ORPHAN"
+
 // Options is one run.
 type Options struct {
 	Argv  []string // the command as the person typed it; argv[0] is its name
@@ -79,6 +87,8 @@ type Gate struct {
 	// Holders names the other processes that hold a slot's lock file when the slot is released.
 	Holders func(path string) []Straggler
 	PID     func() int
+	// Getppid is the parent of this process now (os.Getppid); a seam so a test can reparent it.
+	Getppid func() int
 	Token   func() string
 }
 
@@ -97,7 +107,7 @@ func New(cfg Config) *Gate {
 		st: &state{cfg: cfg}, Now: time.Now, Stderr: os.Stderr, TreeEvery: 500 * time.Millisecond,
 		Poll:    func() time.Duration { return time.Second + time.Duration(mrand.Int63n(int64(2*time.Second))) },
 		Session: sessionFromEnv(os.Getenv),
-		Procs:   procTable, IsTTY: stdinIsTTY, DiskFree: freeBytes, Facts: ReadHostFacts, PID: os.Getpid, Token: newToken, Holders: lsofHolders,
+		Procs:   procTable, IsTTY: stdinIsTTY, DiskFree: freeBytes, Facts: ReadHostFacts, PID: os.Getpid, Getppid: os.Getppid, Token: newToken, Holders: lsofHolders,
 	}
 	g.Pressure = NewHostReader(cfg.Dir)
 	g.Tools = hostTools()
