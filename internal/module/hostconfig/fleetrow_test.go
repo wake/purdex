@@ -115,3 +115,37 @@ func TestFleet_AStoredBadValueIsAnErrorAndInvalidInTheGet(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
 	assert.JSONEq(t, `{"items":{"order":["air26","mlab"],"peer_ssh_alias":"","enabled":true},"revision":1,"invalid":true}`, string(got["fleet"]))
 }
+
+// A stored peer alias that left the SSH config clears only that field; order and enabled stay, with one reason.
+func TestFleet_AStoredPeerAliasThatIsGoneClearsOnlyThatField(t *testing.T) {
+	withSSHAliases(t, "air-2026")
+	m := newTestModule(t)
+	code, body := putFleet(m, `{"order":["mlab","air26"],"peer_ssh_alias":"air-2026","enabled":false}`, "0")
+	require.Equal(t, http.StatusOK, code, body)
+
+	withSSHAliases(t) // the alias is gone
+	cfg, rev, err := m.FleetConfig()
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), rev)
+	assert.Equal(t, FleetConfig{Order: []string{"mlab", "air26"}, PeerSSHAlias: "", Enabled: false}, cfg)
+
+	rr := serve(m, http.MethodGet, "/api/hostconfig", ``)
+	raw := map[string]json.RawMessage{}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &raw))
+	var one struct {
+		Items   FleetConfig `json:"items"`
+		Invalid bool        `json:"invalid"`
+		Dropped *Dropped    `json:"dropped"`
+	}
+	require.NoError(t, json.Unmarshal(raw["fleet"], &one))
+	assert.False(t, one.Invalid)
+	assert.Equal(t, cfg, one.Items)
+	require.NotNil(t, one.Dropped)
+	assert.Equal(t, 1, one.Dropped.Count)
+	assert.Contains(t, one.Dropped.Reasons[0], "unknown_ssh_alias: air-2026")
+
+	// A PUT stays strict about the same alias.
+	code, body = putFleet(m, `{"order":["mlab"],"peer_ssh_alias":"air-2026"}`, "1")
+	assert.Equal(t, http.StatusBadRequest, code)
+	assert.Contains(t, body, "unknown_ssh_alias: air-2026")
+}

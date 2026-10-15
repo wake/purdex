@@ -47,11 +47,18 @@ var fleetDefaultJSON = func() string {
 // normalizeFleet validates a PUT body (and a stored value): an object of order (1 to 4 aliases of the peer alias shape,
 // unique case-insensitively), peer_ssh_alias (empty, or an alias of the SSH config) and enabled (default true); nothing else.
 func normalizeFleet(raw json.RawMessage) (FleetConfig, error) {
+	c, _, err := parseFleet(raw, false)
+	return c, err
+}
+
+// parseFleet is the one parser. lenient (the read side) turns a peer_ssh_alias that is gone from the SSH config into an empty
+// one with a reason, instead of refusing the row: a vanished alias must not send the order back to its default.
+func parseFleet(raw json.RawMessage, lenient bool) (cfg FleetConfig, reason string, err error) {
 	if err := rejectDuplicateKeys(raw); err != nil {
-		return FleetConfig{}, err
+		return FleetConfig{}, "", err
 	}
 	if firstByte(raw) != '{' {
-		return FleetConfig{}, errors.New("items must be a JSON object")
+		return FleetConfig{}, "", errors.New("items must be a JSON object")
 	}
 	var in struct {
 		Order        *[]string       `json:"order"`
@@ -59,22 +66,22 @@ func normalizeFleet(raw json.RawMessage) (FleetConfig, error) {
 		Enabled      json.RawMessage `json:"enabled"`
 	}
 	if err := strictDecode(raw, &in); err != nil {
-		return FleetConfig{}, fmt.Errorf("fleet: %v", err)
+		return FleetConfig{}, "", fmt.Errorf("fleet: %v", err)
 	}
 	if in.Order == nil {
-		return FleetConfig{}, errors.New("order is required")
+		return FleetConfig{}, "", errors.New("order is required")
 	}
 	if n := len(*in.Order); n < 1 || n > maxFleetOrder {
-		return FleetConfig{}, fmt.Errorf("order must list 1 to %d host aliases", maxFleetOrder)
+		return FleetConfig{}, "", fmt.Errorf("order must list 1 to %d host aliases", maxFleetOrder)
 	}
 	seen := map[string]bool{}
 	for _, a := range *in.Order {
 		if err := config.ValidateSelfAlias(a, nil); err != nil { // the shape rule a peer host's alias is held to
-			return FleetConfig{}, fmt.Errorf("order: %v", err)
+			return FleetConfig{}, "", fmt.Errorf("order: %v", err)
 		}
 		k := strings.ToLower(a)
 		if seen[k] {
-			return FleetConfig{}, fmt.Errorf("order: %q is listed twice", a)
+			return FleetConfig{}, "", fmt.Errorf("order: %q is listed twice", a)
 		}
 		seen[k] = true
 	}
@@ -82,10 +89,14 @@ func normalizeFleet(raw json.RawMessage) (FleetConfig, error) {
 	if in.PeerSSHAlias != nil {
 		var alias string
 		if err := json.Unmarshal(in.PeerSSHAlias, &alias); err != nil || string(in.PeerSSHAlias) == "null" {
-			return FleetConfig{}, errors.New("peer_ssh_alias must be a string")
+			return FleetConfig{}, "", errors.New("peer_ssh_alias must be a string")
 		}
 		if alias != "" && !sshAliasOK(alias) {
-			return FleetConfig{}, fmt.Errorf("unknown_ssh_alias: %s", alias)
+			if !lenient {
+				return FleetConfig{}, "", fmt.Errorf("unknown_ssh_alias: %s", alias)
+			}
+			reason = fmt.Sprintf("peer_ssh_alias cleared: unknown_ssh_alias: %s", alias)
+			alias = ""
 		}
 		out.PeerSSHAlias = alias
 	}
@@ -94,20 +105,24 @@ func normalizeFleet(raw json.RawMessage) (FleetConfig, error) {
 		case "true", "false":
 			out.Enabled = string(in.Enabled) == "true"
 		default:
-			return FleetConfig{}, errors.New("enabled must be true or false")
+			return FleetConfig{}, "", errors.New("enabled must be true or false")
 		}
 	}
-	return out, nil
+	return out, reason, nil
 }
 
 // readFleet is normalizeFleet's lenient twin (the GET's view): a value that does not read is invalid and answers the default
 // row (never what its owner did not write: FleetConfig refuses it).
 func readFleet(raw json.RawMessage) readout {
-	c, err := normalizeFleet(raw)
+	c, reason, err := parseFleet(raw, true)
 	if err != nil {
 		return readout{items: DefaultFleetConfig(), invalid: err}
 	}
-	return readout{items: c}
+	r := readout{items: c}
+	if reason != "" {
+		r.drop(reason)
+	}
+	return r
 }
 
 // FleetConfig reads the stored row and its revision; the default (revision 0) for a never-written key. A stored value that
@@ -120,6 +135,6 @@ func (m *Module) FleetConfig() (FleetConfig, int64, error) {
 	if e.Value == nil {
 		return DefaultFleetConfig(), e.Revision, nil
 	}
-	c, err := normalizeFleet(e.Value)
+	c, _, err := parseFleet(e.Value, true)
 	return c, e.Revision, err
 }
