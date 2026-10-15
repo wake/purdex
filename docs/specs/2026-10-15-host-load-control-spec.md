@@ -36,6 +36,8 @@ The lease (`pdx lease`, v1/v2/amend A, P2e/P2f, load cap) did not hold the host,
 | D4 | Fix the daemon's own steady cost (≈30 % of one core with the host idle, 10-15 08:50 profile). |
 | D5 | Until this is deployed, all other lines stay paused; only the members doing this work resume. |
 | D6 | Session count is not the problem; the spawned full-suite commands are (`feedback-load-root-is-test-commands`). |
+| D7 | **Finish each heavy command as fast as possible**: one full suite at a time, run near full width (parallelism ≈ cores − 2, bounded by free memory), lowered with `nice` rather than background QoS (`taskpolicy -b` measured 45 % slower on one package); then the next. Concurrency on a saturated CPU does not raise throughput, it slows every job and adds swapping. |
+| D8 | The seven items are **independent modules**, each with its own switch and parameters, tunable per situation and **at run time** (config re-read at every gate start and every waiting poll; `auto` values computed from the live host; profiles). |
 
 ## 2. Goals and non-goals
 
@@ -58,8 +60,8 @@ Non-goals
 
 | Class | Commands (examples) | Slots | Notes |
 |---|---|---|---|
-| heavy | `go test` with more than one package or `./...`, `go build ./...`, `go vet ./...`; `vitest run` with no file argument; `tsc -b` / `tsc -p` of a whole project; `pnpm check`, `pnpm -r test` | `heavy_slots` (default 2) | full suites |
-| light | `go test` of one package; `vitest run <files>` / `vitest related`; `go build ./cmd/x` | `light_slots` (default 4) | targeted runs must not wait behind a 20-minute suite |
+| heavy | `go test` with more than one package or `./...`, `go build ./...`, `go vet ./...`; `vitest run` with no file argument; `tsc -b` / `tsc -p` of a whole project; `pnpm check`, `pnpm -r test` | `slots.heavy` (default 1, D7) | full suites |
+| light | `go test` of one package; `vitest run <files>` / `vitest related`; `go build ./cmd/x` | `slots.light` (default 3) | targeted runs must not wait behind a full suite |
 | none | everything else (`go version`, `go env`, `node -e`, `vitest --version`) | — | passes through untouched |
 
 A light job that turns out to be broad (e.g. a pattern matching hundreds of files) is still light: the cap
@@ -134,7 +136,7 @@ Design:
   expiry, no `max_hold`, no double booking). A process that closes all its fds on purpose (a daemonizing helper)
   escapes; `pdx gate status` shows such a slot as "free, holder record points to a live pid" for the person to see.
 - **Disk floor (heavy only).** Before taking a heavy slot the gate checks free space on the volume of the cwd and of
-  `$TMPDIR` (`statfs`) against `[gate] disk_min_gb` (default 10); below it the command is refused with the numbers.
+  `$TMPDIR` (`statfs`) against `admission.disk_min_gb` (default 10); below it the command is refused with the numbers.
   This replaces the lease's disk preflight from G1 on (the daemon's disk alert stays).
 - **Fair order (nq-style).** A waiting gate first writes a ticket `queue/<class>/<unix-ns>-<pid>` and holds a
   flock on it (so a dead waiter's ticket is detectably stale). It may take a slot only when the number of live
@@ -151,23 +153,43 @@ Design:
   the others read the last complete file if it is younger than 5 s. With no previous sample (no delta yet) only the
   level is used. A read failure keeps the last good sample; only 3 consecutive failures make the gate admit on the
   level alone (and, if the level is unreadable too, fail-open with a stderr line).
-- **Parallelism and QoS for the child.**
-  - Go: add `-p=<go_p>` to `GOFLAGS` when absent (default 3); leave `GOMAXPROCS` alone.
-  - vitest: the shim adds `--maxWorkers=<n>` (default 3) when the command has no worker limit (as the mod's R7 did).
-  - pnpm: `--workspace-concurrency=<n>` (default 2) for recursive runs when absent.
-  - The real load is slots × per-command parallelism: the defaults (2 heavy × 3) target the 6 E cores.
-  - Run the child with background QoS (`taskpolicy -b`, inherited by children), so it is scheduled on E cores.
-    `taskpolicy -b` also throttles I/O, so I/O-bound steps (`go build`, `pnpm install`) may slow down a lot: the
-    plan measures one go test package, vitest full and `go build ./...` with and without it, and the default per
-    class follows the numbers. `--fg` opts out (the lead's release gate when the host is otherwise idle).
+- **Parallelism for the child (D7: near full width, one at a time).**
+  - `auto` (default): width = cores − `reserve_cores` (2 → 8 on mlab), lowered so that width × `mem_per_worker_mb`
+    fits the memory available at admission; computed per job from the live host.
+  - Go: add `-p=<go_p>` to `GOFLAGS` when absent; leave `GOMAXPROCS` alone. vitest: add `--maxWorkers=<n>` when the
+    command has no worker limit (replaces the mod's R7). pnpm: `--workspace-concurrency=<n>` for recursive runs.
+  - The real load is slots × width; with one heavy slot near full width plus small light jobs, the host stays near its
+    cores without the overlap that caused swapping.
+- **Priority for the child.** Default `nice` (10): the agents, the daemon and the person preempt it, and it still uses
+  the P cores when they are idle. `background` (`taskpolicy -b`: E cores only, I/O throttled; measured 45 % slower on
+  one package) stays an option for long, non-urgent work. `--fg` = no change (e.g. the release gate on an idle host).
 - **Process group.** When stdin is not a terminal (agents' Bash, scripts) the child starts in a new process group;
   SIGINT/SIGTERM/SIGHUP to the gate are forwarded to the group, and when the child exits the gate sends SIGTERM to
   whatever is left in the group, SIGKILL after 5 s. When stdin **is** a terminal the child stays in the foreground
   group (a background group reading the terminal would get SIGTTIN; the current `pdx lease run` already does this,
   `cmd/pdx/lease_run.go`): signals reach it from the terminal, and at exit the gate reaps its descendants by a ppid
   walk instead of a group kill. Exit code = the child's (128+n on a signal).
-- **Config.** `[gate]` in `~/.config/pdx/config.toml` (read by the gate directly): `heavy_slots`,
-  `light_slots`, `go_p`, `vitest_workers`, `max_page_rate`, `disk_min_gb`, `enabled`. Defaults suit a 10-core host.
+- **Modules and configuration (D8).** Each of the seven items is a module with its own switch and parameters, its own
+  file (`internal/gate/<module>.go`), Config type and table tests; `gate.Run` only composes them.
+
+  | Module | Item | Parameters (default) |
+  |---|---|---|
+  | `intercept` | 1 | `tools` (go, pnpm, npx, vitest, tsc), `mod_rewrite` (true), extra `[[gate.intercept.rule]]` (match → class, before the built-ins) |
+  | `slots` | 1 | `heavy` (1), `light` (3), `order` (fifo) |
+  | `admission` | 2 | `enabled`, `max_pressure_level` (1), `max_page_rate` (auto until G0 sets it), `disk_min_gb` (10), `on_unreadable` (level-only) |
+  | `parallelism` | 3 | `mode` (auto \| fixed \| off), `reserve_cores` (2), `mem_per_worker_mb` (400), `go_p` / `vitest_workers` / `pnpm_concurrency` (auto), per-class overrides |
+  | `priority` | 4 | `mode` (nice \| background \| none), `nice` (10) |
+  | `lifetime` | 5 | `hold` (tree), `alert_after_min` (60 — alert only, never kill) |
+  | `reap` | 6 | `enabled`, `grace_s` (5) |
+  | `cache` | 7 | `count1` (warn \| strip \| off) — `go test -count=1` outside the release profile |
+
+  **Run-time tuning:** the config (`[gate]` in `~/.config/pdx/config.toml`) is read at every gate start and by every
+  waiting gate on each poll, so a change applies to the next command without a restart. `pdx gate set <module>.<key>=<value>`
+  writes it atomically; `[gate.profiles.<name>]` overrides a set (`pdx gate profile use release|night|…`). `auto` values
+  are computed from the live host per job. Every job appends one decision record (JSON lines: class, slot, wait and its
+  reasons, the parameters applied and their source — default / config / profile / auto —, exit code, duration);
+  `pdx gate status` shows each module's effective values and sources. Later, an optional tuner (daemon or script) may
+  write the same config from the records; the gate itself never depends on it.
 
 ## 6. Retiring the lease (D2)
 
@@ -242,8 +264,12 @@ then L1–L3. Other lines resume after G2 is deployed and its acceptance (§10) 
 
 ## 10. Acceptance (after G2 deploy, on mlab)
 
-1. Three heavy jobs started together (two `go test ./...` in throwaway worktrees, one vitest full) → at most
-   `heavy_slots` run; the third waits and starts when one ends; `pdx gate status` shows holders and waiters.
+1. Three heavy jobs started together (two `go test ./...` in throwaway worktrees, one vitest full) → one runs at a
+   time near full width (`slots.heavy` = 1), in arrival order; a light job started meanwhile runs alongside;
+   `pdx gate status` shows holders, waiters and each module's effective values. Total wall time is recorded and
+   compared with the same three started together without the gate.
+1b. Run-time tuning: `pdx gate set slots.heavy=2` while one waits → the waiter starts on its next poll;
+   `pdx gate profile use release` changes the applied parameters of the next job (decision record shows the source).
 2. Nested: `pnpm check` in Aigora (or a test script calling `go test` twice) holds one slot; inner steps do not wait.
 3. A gated script started from a subagent and from a plain zsh (not through the mod) is gated the same way.
 4. Kill the gate of a running vitest full → no `node (vitest N)` left after 5 s; the slot is free.

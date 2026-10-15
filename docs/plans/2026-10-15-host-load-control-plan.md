@@ -10,17 +10,30 @@ changed, `make lint`; the lead runs full suites at release. Every PR: codex R1 +
 Serial, one command at a time, host idle (all other lines paused). For `go test ./internal/store/`,
 `go build ./...`, vitest full (`--maxWorkers=3`), `go test -p 3 ./internal/module/team/`: wall time and max RSS
 with and without `taskpolicy -b`; 5 s samples of load1, `kern.memorystatus_vm_pressure_level`,
-`kern.memorystatus_level`, pageouts/swapouts. Output: defaults for `max_page_rate` and per-class QoS (spec Q2, Q3).
+`kern.memorystatus_level`, pageouts/swapouts. Second batch (D7): `go test ./...` with `-p 8` + `nice 10` vs `-p 3` +
+`taskpolicy -b`; vitest full with `--maxWorkers=8` + `nice` vs `--maxWorkers=3`. Output: defaults for
+`max_page_rate`, `reserve_cores`, `mem_per_worker_mb` and the priority mode per class (spec Q2, Q3).
 
-## G1 — `pdx gate` core (one PR)
+## G1 — `pdx gate` core (two PRs: G1a execution core + module schema, G1b tuning surface)
 
-New package `internal/gate` (pure + OS seams) and `cmd/pdx/gate_cmd.go`.
+New package `internal/gate` (pure + OS seams) and `cmd/pdx/gate_cmd.go`. Modules per spec §5 "Modules and
+configuration" (D8): `intercept`, `slots`, `admission`, `parallelism`, `priority`, `lifetime`, `reap`, `cache` — one
+file, one Config type and one table test each; `gate.Run` composes them. Defaults per D7 (`slots.heavy` 1, `light` 3,
+`parallelism.mode` auto = cores − 2 bounded by memory, `priority.mode` nice 10).
+
+- **G1a**: items 1–9 below, the module schema, config re-read at every gate start and every waiting poll, `auto`
+  values computed per job, the source of each applied value kept in the holder record.
+- **G1b**: `pdx gate set <module>.<key>=<value>` (atomic write), `[gate.profiles.<name>]` + `pdx gate profile use`,
+  the decision log (JSON lines: class, slot, wait + reasons, parameters + sources, exit, duration), `pdx gate status`
+  showing every module's effective values and sources.
 
 1. `Classify(argv) Class` for `go`, `pnpm`, `npx`, `vitest`, `tsc` per spec §3 — table test (≥ 40 rows,
    incl. `go test ./pkg/` light, `go test ./...` heavy, `go version` none, `pnpm check` heavy, `pnpm install` none,
    `npx vitest run src/a.test.ts` light, `npx vitest run` heavy, `pnpm -r test` heavy).
 2. `Inject(argv, env, cfg)`: `GOFLAGS -p=<go_p>` when absent; vitest `--maxWorkers=<n>` when absent (same rules as
-   mod R7 `rewriteMaxWorkers`, which it replaces); pnpm `--workspace-concurrency=<n>` for recursive runs.
+   mod R7 `rewriteMaxWorkers`, which it replaces); pnpm `--workspace-concurrency=<n>` for recursive runs. `auto` width
+   = cores − `reserve_cores`, lowered to fit available memory ÷ `mem_per_worker_mb`; table tests with injected host
+   numbers.
 3. Slots: `Acquire(class)` over `~/.config/pdx/gate/<class>-<k>.lock` with `syscall.Flock`; the lock fd is passed
    to the child (`ExtraFiles`) so the tree holds it; tickets in `queue/<class>/` (unix-ns + pid, each flocked by its
    waiter); admit only when live older tickets < free slots.
@@ -33,12 +46,13 @@ New package `internal/gate` (pure + OS seams) and `cmd/pdx/gate_cmd.go`.
 6. Disk floor for heavy: `statfs` of cwd and `$TMPDIR` vs `disk_min_gb`; refuse with the numbers.
 7. Run: stdin not a TTY → new process group, forward SIGINT/SIGTERM/SIGHUP to the group, after exit SIGTERM the
    group then SIGKILL after 5 s; stdin a TTY → stay in the foreground group (as `cmd/pdx/lease_run.go:38-45,223-255`)
-   and reap descendants by a ppid walk. `taskpolicy -b` unless `--fg` or the G0 class default; exit with the child's
-   code (128+n on signal).
+   and reap descendants by a ppid walk. Priority per the `priority` module (`nice` 10 by default; `background` =
+   `taskpolicy -b`; `--fg` = none); exit with the child's code (128+n on signal).
 8. Holder record JSON beside the lock (argv scrubbed, token); `pdx gate status [--json]` reads locks + records +
    tickets (no daemon) and flags "lock free, recorded pid alive".
-9. `[gate]` config; `enabled = false` → pass-through; fail-open only on `EPERM`/`EACCES`/`EROFS` for the gate dir;
-   every other error fail-closed with a message.
+9. `[gate]` config with one section per module; `enabled = false` (global or per module) → that part passes through;
+   fail-open only on `EPERM`/`EACCES`/`EROFS` for the gate dir; every other error fail-closed with a message.
+10. `cache` module: `go test -count=1` outside the release profile → warn (default) / strip / off.
 
 Tests: real flock in temp dirs (two goroutines + two processes); fairness (an older ticket wins); dead waiter's
 ticket ignored; nested pass-through with a valid token; forged value, stale token, foreign (non-descendant) caller
