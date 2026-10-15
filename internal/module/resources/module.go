@@ -24,6 +24,7 @@ import (
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/resources"
 	"github.com/wake/purdex/internal/team"
+	"github.com/wake/purdex/internal/watchsettings"
 )
 
 // failuresBeforeUnavailable is how many ticks in a row must fail before the
@@ -53,6 +54,9 @@ type Module struct {
 	// ancestryOf turns the process snapshot into the parent/start lookup of
 	// session_attr.go; nil uses the snapshot itself (a seam for tests).
 	ancestryOf func(*iagent.ProcessSnapshot) ancestry
+
+	// watch is the load watcher's state (watch.go).
+	watch watchState
 
 	// latest is the last published snapshot; nil until the first tick ends.
 	// A published snapshot is never modified.
@@ -233,6 +237,7 @@ func New() *Module {
 		evSig:        make(chan struct{}, 1),
 		noticeWake:   make(chan struct{}, 1),
 		sweepEvery:   sweepInterval,
+		watch:        watchState{env: defaultWatchEnv()},
 	}
 }
 
@@ -274,6 +279,7 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	m.openStore(c)
 	m.findSettings(c)
+	m.findWatchSettings(c)
 	if c.Events != nil {
 		c.Events.OnSubscribe(m.sendEventSnapshot)
 	}
@@ -430,4 +436,22 @@ func (m *Module) Close() error {
 		}
 	})
 	return nil
+}
+
+// findWatchSettings looks up the hostconfig module's watch setting reader; without one the watcher stays off.
+func (m *Module) findWatchSettings(c *core.Core) {
+	if m.watch.src != nil {
+		return
+	}
+	svc, ok := c.Registry.Get(watchsettings.Key)
+	if !ok {
+		m.logf("[watch] service %q not registered: the watcher stays off", watchsettings.Key)
+		return
+	}
+	rd, ok := svc.(watchsettings.Reader)
+	if !ok {
+		m.logf("[watch] service %q is %T, not a Reader: the watcher stays off", watchsettings.Key, svc)
+		return
+	}
+	m.watch.src = rd
 }

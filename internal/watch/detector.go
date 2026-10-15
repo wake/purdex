@@ -74,6 +74,7 @@ type Detector struct {
 
 	pressure, pages episode
 	havePages       bool
+	lastPass        time.Time
 	lastPages       uint64
 	lastPagesAt     time.Time
 }
@@ -86,10 +87,26 @@ func New(mem Memory) *Detector {
 // Pass reads one tick and returns the events it makes, E1 first (by root pid), then E2, E3, E4. It is called on every sampler
 // tick that sampled; a tick that failed is not passed, and the windows simply see the gap.
 func (d *Detector) Pass(in Input) []Event {
+	d.breakE2AfterAGap(in)
 	events := d.unmanagedTrees(in)
 	events = append(events, d.pressureEvents(in)...)
 	events = append(events, d.slotEvents(in)...)
 	return events
+}
+
+// breakE2AfterAGap starts the pressure and page-rate episodes again when the passes before this one were too far back (more than
+// two and a half ticks: failed samples, or a watcher that was switched off): the time nobody looked is not time the host was
+// under pressure. (E1's windows keep their own gap rule.)
+func (d *Detector) breakE2AfterAGap(in Input) {
+	interval := in.Interval
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	if !d.lastPass.IsZero() && in.Now.Sub(d.lastPass) > interval*5/2 {
+		d.pressure, d.pages = episode{}, episode{}
+		d.havePages = false
+	}
+	d.lastPass = in.Now
 }
 
 // ---- E1 ----

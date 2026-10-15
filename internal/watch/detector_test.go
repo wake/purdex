@@ -674,3 +674,36 @@ func TestE1_MemoryAtTheLeftEdgeOfTheWindowCounts(t *testing.T) {
 		}
 	}
 }
+
+// Time nobody looked (failed samples, a watcher that was off) is not time the host was under pressure.
+func TestE2_AGapBetweenPassesStartsTheEpisodeAgain(t *testing.T) {
+	r := newRig(t)
+	r.raw = resources.HostRaw{Pressure: 2}
+	assert.Empty(t, r.run(100*time.Second), "100 s of 120: not yet")
+	r.now = r.now.Add(10 * time.Minute) // the watcher was off
+	assert.Empty(t, r.run(60*time.Second), "the gap does not count: 60 s since the restart")
+	assert.NotEmpty(t, r.run(90*time.Second), "and the episode completes 120 s after the restart")
+
+	r2 := newRig(t) // the control: without the gap the same 160 s fire
+	r2.raw = resources.HostRaw{Pressure: 2}
+	assert.NotEmpty(t, r2.run(160*time.Second))
+}
+
+func TestE2_AGapAlsoStartsThePageRateAgain(t *testing.T) {
+	r := newRig(t)
+	r.set.PageTS = 60 * time.Second
+	pages := uint64(0)
+	step := func(d time.Duration) []Event {
+		var all []Event
+		for end := r.now.Add(d); r.now.Before(end); {
+			pages += 1000 // 200/s at a 5 s tick, over the default 50
+			r.raw = resources.HostRaw{PageCounters: true, Pageouts: pages}
+			all = append(all, r.pass()...)
+		}
+		return all
+	}
+	assert.Empty(t, step(40*time.Second))
+	r.now = r.now.Add(10 * time.Minute)
+	assert.Empty(t, step(40*time.Second), "40 s since the restart, under the 60 s window")
+	assert.NotEmpty(t, step(60*time.Second))
+}

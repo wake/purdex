@@ -43,11 +43,11 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 	set := m.settings()
 	m.mode = set.Mode
 	m.lastSettings.Store(&set) // for GET /api/resources, which reads no settings itself
-	if m.mode == resources.ModeOff {
-		m.fails, m.degraded = 0, false
-		m.endMinute()
-		m.publish(m.unavailable(resources.ReasonOff))
-		return ctx.Err() != nil
+	// The load watcher is independent of the lease mode: with the mode off the tick still samples while the watch setting is on,
+	// and publishes "off" all the same (nothing else of the module's work runs).
+	wset, watchOn := m.watchSettings()
+	if m.mode == resources.ModeOff && !watchOn {
+		return m.goOff(ctx)
 	}
 	sctx, cancel := context.WithTimeout(ctx, sampleBudget)
 	defer cancel()
@@ -60,6 +60,10 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 		return true // stopping: whatever the sampler said, it is not a failure
 	}
 	if errors.Is(err, resources.ErrUnsupported) {
+		if m.mode == resources.ModeOff {
+			m.watchNote("sampling", "sampling is not supported on this platform") // the watcher cannot run; "off" stays what is published
+			return m.goOff(ctx)
+		}
 		m.publish(m.unavailable(resources.ReasonUnsupportedPlatform))
 		m.logf("[resources] sampling is not supported on this platform; /api/resources reports unavailable")
 		return true
@@ -68,11 +72,22 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 		err = errUnusableReading
 	}
 	if err != nil {
+		if m.mode == resources.ModeOff {
+			m.watchNote("sampling", err.Error()) // no lease or publish work to fail with the mode off; the pass is skipped
+			return m.goOff(ctx)
+		}
 		m.failed(err)
 		return false
 	}
+	m.watchNote("sampling", "")
 
-	sessions := m.sessions(sctx, raw, procs, before, beforeErr)
+	sessions, agreed := m.sessions(sctx, raw, procs, before, beforeErr)
+	if watchOn {
+		m.watchPass(ctx, raw, procs, agreed, wset)
+	}
+	if m.mode == resources.ModeOff {
+		return m.goOff(ctx)
+	}
 	if m.degraded {
 		m.logf("[resources] sampling recovered after %d failed tick(s)", m.fails)
 	}
@@ -100,6 +115,14 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 		m.requestEvent() // while something is held or waits, the state is worth a push per window
 	}
 	return false
+}
+
+// goOff is the tick of a module whose mode is off: no state of a run of failures, the open minute ended, "off" published.
+func (m *Module) goOff(ctx context.Context) (stop bool) {
+	m.fails, m.degraded = 0, false
+	m.endMinute()
+	m.publish(m.unavailable(resources.ReasonOff))
+	return ctx.Err() != nil
 }
 
 // readRoots takes one process snapshot (start times, no argv, no fork) and
@@ -130,21 +153,24 @@ func (m *Module) readRoots(ctx context.Context) ([]resources.Root, error) {
 //
 // Any trouble reading the roots leaves the list empty, never fails the tick:
 // the host figures stand on their own. A standing problem is logged once.
-func (m *Module) sessions(ctx context.Context, raw resources.HostRaw, procs []resources.Proc, before []resources.Root, beforeErr error) []resources.SessionUse {
+//
+// The second result is the roots both reads agree on (what the load watcher attributes its trees with); nil when there are none.
+func (m *Module) sessions(ctx context.Context, raw resources.HostRaw, procs []resources.Proc, before []resources.Root, beforeErr error) ([]resources.SessionUse, []resources.Root) {
 	if m.roots == nil {
-		return []resources.SessionUse{}
+		return []resources.SessionUse{}, nil
 	}
 	if beforeErr != nil {
 		m.noteRoots(beforeErr.Error())
-		return []resources.SessionUse{}
+		return []resources.SessionUse{}, nil
 	}
 	after, err := m.readRoots(ctx)
 	if err != nil {
 		m.noteRoots(err.Error())
-		return []resources.SessionUse{}
+		return []resources.SessionUse{}, nil
 	}
 	m.noteRoots("")
-	return resources.Attribute(procs, sameRoots(before, after), raw.NCPU, raw.MemBytes)
+	agreed := sameRoots(before, after)
+	return resources.Attribute(procs, agreed, raw.NCPU, raw.MemBytes), agreed
 }
 
 // sameRoots keeps the roots both lists agree on, in the order of after.
