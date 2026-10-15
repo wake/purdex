@@ -21,9 +21,9 @@ type Settings struct {
 	PageTSeconds     int     `json:"page_t_s"`
 }
 
-// Default is what a never-written setting answers. The watcher is off until a host turns it on.
+// Default is what a never-written setting answers: on (spec §12.2), with the first thresholds.
 func Default() Settings {
-	return Settings{Enabled: false, XCores: 1.5, YMB: 1024, TSeconds: 60, PressureLevel: 2, PressureTSeconds: 120, PageRate: 50, PageTSeconds: 60}
+	return Settings{Enabled: true, XCores: 1.5, YMB: 1024, TSeconds: 60, PressureLevel: 2, PressureTSeconds: 120, PageRate: 50, PageTSeconds: 60}
 }
 
 // Seconds is n seconds as a duration.

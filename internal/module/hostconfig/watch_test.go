@@ -16,12 +16,12 @@ var _ watchsettings.Reader = (*Module)(nil)
 
 const watchOK = `{"enabled":true,"x_cores":2,"y_mb":2048,"t_s":30,"pressure_level":3,"pressure_t_s":60,"page_rate":100,"page_t_s":45}`
 
-func TestWatch_DefaultsToOffAndRoundTrips(t *testing.T) {
+func TestWatch_DefaultsToOnAndRoundTrips(t *testing.T) {
 	m := newTestModule(t)
 	s, err := m.WatchSettings()
 	require.NoError(t, err)
 	assert.Equal(t, watchsettings.Default(), s)
-	assert.False(t, s.Enabled, "off until a host turns it on")
+	assert.True(t, s.Enabled, "on by default (spec §12.2)")
 
 	rr := serve(m, http.MethodPut, "/api/hostconfig/watch", `{"items":`+watchOK+`,"baseRevision":0}`)
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
@@ -69,5 +69,5 @@ func TestWatch_AStoredBadValueIsAnErrorAndInvalidInTheGet(t *testing.T) {
 	var got map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
 	assert.Contains(t, string(got["watch"]), `"invalid":true`)
-	assert.Contains(t, string(got["watch"]), `"enabled":false`)
+	assert.Contains(t, string(got["watch"]), `"enabled":true`)
 }

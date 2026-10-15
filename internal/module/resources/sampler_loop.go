@@ -60,6 +60,10 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 		return true // stopping: whatever the sampler said, it is not a failure
 	}
 	if errors.Is(err, resources.ErrUnsupported) {
+		if m.mode == resources.ModeOff {
+			m.watchNote("sampling", "sampling is not supported on this platform") // the watcher cannot run; "off" stays what is published
+			return m.goOff(ctx)
+		}
 		m.publish(m.unavailable(resources.ReasonUnsupportedPlatform))
 		m.logf("[resources] sampling is not supported on this platform; /api/resources reports unavailable")
 		return true

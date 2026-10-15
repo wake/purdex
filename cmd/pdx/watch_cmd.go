@@ -9,14 +9,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/watch"
 )
 
-const watchUsage = `usage: pdx watch log [--since <24h|7d|2026-10-14>] [--kind unmanaged_heavy|pressure_high|slot_orphaned|slot_long] [--json]
+const watchUsage = `usage: pdx watch log [--since <24h|7d|2026-10-14>] [--kind unmanaged_heavy|pressure_high|slot_orphaned|slot_long] [--json] [--config <path>]
 `
 
 func runWatch(args []string) {
@@ -34,7 +36,8 @@ func watchMain(args []string, stdout, stderr io.Writer) int {
 	since := fs.String("since", "", "only events from this long ago (24h, 7d) or this date (2026-10-14)")
 	kind := fs.String("kind", "", "only this kind of event")
 	asJSON := fs.Bool("json", false, "one JSON record per line")
-	dir := fs.String("dir", "", "the watcher's directory (default ~/.config/pdx/watch)")
+	dir := fs.String("dir", "", "the watcher's directory (default: <data_dir>/watch of the config)")
+	cfgPath := fs.String("config", "", "config.toml (default ~/.config/pdx/config.toml): its data_dir says where the daemon keeps the log")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -59,7 +62,7 @@ func watchMain(args []string, stdout, stderr io.Writer) int {
 	}
 	d := *dir
 	if d == "" {
-		d = watch.DefaultDir()
+		d = watchDirFor(*cfgPath)
 	}
 	recs, skipped, err := watch.ReadLogDiag(d, from, watch.Kind(*kind))
 	if err != nil {
@@ -82,6 +85,18 @@ func watchMain(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stdout, plainText(watchLine(r)))
 	}
 	return 0
+}
+
+// watchDirFor is where the daemon of that config keeps the watcher's files: <data_dir>/watch. A config that cannot be read
+// falls back to the default directory.
+func watchDirFor(cfgPath string) string {
+	if cfgPath == "" {
+		cfgPath = config.DefaultPath()
+	}
+	if cfg, err := config.Load(cfgPath); err == nil && cfg.DataDir != "" {
+		return filepath.Join(cfg.DataDir, "watch")
+	}
+	return watch.DefaultDir()
 }
 
 // parseSince reads "36h", "7d" (days of 24 hours) or a date "2026-10-14" (local midnight).

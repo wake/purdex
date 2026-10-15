@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -91,4 +92,16 @@ func TestWatchLogSaysWhenItSkippedLines(t *testing.T) {
 	var out, errb bytes.Buffer
 	require.Equal(t, 0, watchMain([]string{"log", "--dir", dir}, &out, &errb))
 	require.Contains(t, errb.String(), "略過 1 行")
+}
+
+// The daemon keeps the log in <data_dir>/watch of its config; the command finds it there without --dir.
+func TestWatchLogFollowsTheConfigsDataDir(t *testing.T) {
+	data := t.TempDir()
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(cfg, []byte("data_dir = "+strconv.Quote(data)+"\n"), 0o600))
+	_, err := watch.NewRecorder(filepath.Join(data, "watch"), "mlab").Record(watch.Event{Kind: watch.KindPressureHigh, At: time.Now(), Detail: "pressure level 2 for 2m0s"})
+	require.NoError(t, err)
+	var out, errb bytes.Buffer
+	require.Equal(t, 0, watchMain([]string{"log", "--config", cfg}, &out, &errb), errb.String())
+	require.Contains(t, out.String(), "pressure level 2")
 }

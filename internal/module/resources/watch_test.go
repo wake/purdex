@@ -26,20 +26,22 @@ func (f *fakeWatchSettings) WatchSettings() (watchsettings.Settings, error) { re
 // watchRig is a module whose tick runs the watcher, with a clock that moves by a tick per call of tick and every outside read
 // counted.
 type watchRig struct {
-	t         *testing.T
-	m         *Module
-	dir       string
-	set       *fakeWatchSettings
-	rset      *fakeSettings
-	procs     atomic.Pointer[[]resources.Proc]
-	now       time.Time
-	held      []gate.Holder
-	isGate    atomic.Int64
-	argv      atomic.Int64
-	cwd       atomic.Int64
-	lockPID   atomic.Int64
-	loadGate  atomic.Int64
-	sampleErr atomic.Bool
+	t           *testing.T
+	m           *Module
+	dir         string
+	set         *fakeWatchSettings
+	rset        *fakeSettings
+	procs       atomic.Pointer[[]resources.Proc]
+	now         time.Time
+	held        []gate.Holder
+	isGate      atomic.Int64
+	argv        atomic.Int64
+	cwd         atomic.Int64
+	lockPID     atomic.Int64
+	loadGate    atomic.Int64
+	gatePath    atomic.Value
+	sampleErr   atomic.Bool
+	unsupported atomic.Bool
 }
 
 const wtick = 20 * time.Second // not the detector's default of 5 s: a pass that ignored Input.Interval would see every gap as a break
@@ -50,6 +52,9 @@ func newWatchRig(t *testing.T, mode string) *watchRig {
 	r.set.s.Enabled = true
 	r.rset.set(resources.Settings{Mode: mode})
 	sampler := &fakeSampler{fn: func(context.Context, int) (resources.HostRaw, []resources.Proc, error) {
+		if r.unsupported.Load() {
+			return resources.HostRaw{}, nil, resources.ErrUnsupported
+		}
 		if r.sampleErr.Load() {
 			return resources.HostRaw{}, nil, os.ErrInvalid
 		}
@@ -64,7 +69,11 @@ func newWatchRig(t *testing.T, mode string) *watchRig {
 	m.now = func() time.Time { return r.now }
 	m.watch.src = r.set
 	m.watch.env = watchEnv{
-		loadGate: func() (gate.Config, error) { r.loadGate.Add(1); return gate.Defaults(), nil },
+		loadGate: func(path string) (gate.Config, error) {
+			r.loadGate.Add(1)
+			r.gatePath.Store(path)
+			return gate.Defaults(), nil
+		},
 		held:     func(gate.Config) ([]gate.Holder, []gate.Holder) { return r.held, nil },
 		lockPIDs: func(gate.Config, gate.Holder) []int { r.lockPID.Add(1); return []int{4242} },
 		isGate:   func(context.Context, int) bool { r.isGate.Add(1); return false },
@@ -293,5 +302,49 @@ func TestIsOwnGate_RefusesAProcessThatIsNotOne(t *testing.T) {
 	}
 	if isOwnGate(context.Background(), 0x7ffffff0) {
 		t.Fatal("a process that is not there was taken for a gate")
+	}
+}
+
+// With the mode off, a platform that cannot be sampled leaves "off" published and the loop alive (the setting is still read).
+func TestWatch_UnsupportedPlatformWithTheModeOffStaysOff(t *testing.T) {
+	r := newWatchRig(t, resources.ModeOff)
+	r.unsupported.Store(true)
+	if stop := r.m.tick(context.Background()); stop {
+		t.Fatal("the loop was stopped")
+	}
+	snap := r.m.latest.Load()
+	if snap == nil || snap.Reason != resources.ReasonOff {
+		t.Fatalf("snapshot = %+v, want reason off", snap)
+	}
+	// with the mode measure the old behaviour stands: unavailable, and the loop ends
+	r2 := newWatchRig(t, resources.ModeMeasure)
+	r2.unsupported.Store(true)
+	if stop := r2.m.tick(context.Background()); !stop {
+		t.Fatal("measure mode on an unsupported platform ends the loop")
+	}
+	if s := r2.m.latest.Load(); s == nil || s.Reason != resources.ReasonUnsupportedPlatform {
+		t.Fatalf("snapshot = %+v", s)
+	}
+}
+
+// The watcher reads the gate's config from the file the daemon was started with, not the default one.
+func TestWatch_TheGateConfigIsTheDaemonsOwnFile(t *testing.T) {
+	r := newWatchRig(t, resources.ModeMeasure)
+	r.m.core.Cfg.Path = "/custom/place/config.toml"
+	r.setProcs(heavyTree(0.1))
+	r.ticks(2)
+	if got, _ := r.gatePath.Load().(string); got != "/custom/place/config.toml" {
+		t.Fatalf("gate config path = %q", got)
+	}
+}
+
+// A never-written setting runs the watcher (on by default, spec §12.2).
+func TestWatch_NeverWrittenSettingMeansOn(t *testing.T) {
+	r := newWatchRig(t, resources.ModeMeasure)
+	r.m.watch.src = &fakeWatchSettings{s: watchsettings.Default()}
+	r.setProcs(heavyTree(3))
+	r.ticks(30)
+	if len(r.records()) != 1 {
+		t.Fatalf("records = %+v", r.records())
 	}
 }

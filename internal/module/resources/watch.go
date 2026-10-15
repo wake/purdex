@@ -26,7 +26,7 @@ import (
 
 // watchEnv are the reads the watcher makes outside the sampler's own, each a seam for tests.
 type watchEnv struct {
-	loadGate func() (gate.Config, error)
+	loadGate func(path string) (gate.Config, error) // path: the daemon's resolved config.toml ("" = the default)
 	held     func(cfg gate.Config) (heavy, light []gate.Holder)
 	lockPIDs func(cfg gate.Config, h gate.Holder) []int
 	// isGate says whether pid is a genuine `pdx gate` of this daemon's pdx; argv is a process's command line (nil: unknown).
@@ -37,7 +37,12 @@ type watchEnv struct {
 
 func defaultWatchEnv() watchEnv {
 	return watchEnv{
-		loadGate: func() (gate.Config, error) { return gate.Load(gate.DefaultConfigPath()) },
+		loadGate: func(path string) (gate.Config, error) {
+			if path == "" {
+				path = gate.DefaultConfigPath()
+			}
+			return gate.Load(path)
+		},
 		held:     gate.HeldSlots,
 		lockPIDs: gate.LockPIDs,
 		isGate:   isOwnGate,
@@ -176,7 +181,11 @@ func (m *Module) watchPass(ctx context.Context, raw resources.HostRaw, procs []r
 		return
 	}
 	env := m.watch.env
-	gcfg, gerr := env.loadGate() // gate.Load answers the defaults with its error
+	cfgPath := ""
+	if m.core != nil && m.core.Cfg != nil {
+		cfgPath = m.core.Cfg.Path // the file this daemon was started with: the gate and the daemon read the same config.toml
+	}
+	gcfg, gerr := env.loadGate(cfgPath) // gate.Load answers the defaults with its error
 	if gerr != nil {
 		m.watchNote("gate config", gerr.Error()+"; using the defaults")
 	} else {
