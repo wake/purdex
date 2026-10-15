@@ -5,6 +5,8 @@ import type { DndContext as RealDndContext, DragEndEvent, Modifier } from '@dnd-
 import { ActivityBarWide } from './ActivityBarWide'
 import { useLayoutStore, WORKER_LIST_DEFAULT } from '../../../stores/useLayoutStore'
 import type { Workspace } from '../../../types/tab'
+import { useFleetStore } from '../../../lib/fleet/store'
+import { fast, host, primaryAnswer } from '../../../lib/fleet/fixtures'
 
 // The real DndContext still renders (so useSortable / useDroppable stay wired); the wrapper only records the props the
 // bar hands it, so the tests can fire its drag-end handler and run its modifiers the way dnd-kit would.
@@ -461,6 +463,19 @@ describe('ActivityBarWide — bottom group', () => {
     expect(screen.getByRole('button', { name: 'New workspace' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Hosts' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument()
+  })
+
+  it('puts the fleet cells right under the BottomNav, whatever the BottomNav looks like', () => {
+    useFleetStore.getState().reset()
+    const gen = useFleetStore.getState().begin('h')
+    useFleetStore.getState().setSupport('h', gen, 'yes')
+    useFleetStore.getState().applyFetched('h', gen, primaryAnswer(1, [host('a', { name: 'a', fast: fast() }), host('b', { name: 'b' })]))
+    renderBar()
+    const nav = screen.getByTestId('bottom-nav')
+    expect(nav.nextElementSibling).toBe(screen.getByTestId('fleet-cells'))
+    fireEvent.click(screen.getByTestId('bottom-nav-compact-toggle'))
+    expect(screen.getByTestId('bottom-nav').nextElementSibling).toBe(screen.getByTestId('fleet-cells'))
+    useFleetStore.getState().reset()
   })
 
   it('the compact toggle flips bottomNavCompact and data-compact follows it', () => {

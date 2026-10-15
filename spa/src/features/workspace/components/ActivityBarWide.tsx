@@ -28,6 +28,7 @@ import { WorkerList } from '../../../components/executions/WorkerList'
 import { WorkspaceRow } from './WorkspaceRow'
 import { HomeRow } from './HomeRow'
 import { BottomNav } from './BottomNav'
+import { FleetCells } from '../../../components/fleet/FleetCells'
 import type { ActivityBarProps } from './activity-bar-props'
 import { computeDragEndAction, dispatchDragEndAction, type DragData } from '../lib/computeDragEndAction'
 import { useSpringLoad } from '../lib/useSpringLoad'
@@ -80,6 +81,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
     onReorderWorkspaces,
     onContextMenuWorkspace,
     onOpenHosts,
+    onOpenHost,
     onOpenSettings,
     tabsById = {},
     activeTabId = null,
@@ -386,6 +388,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
           onOpenSettings={onOpenSettings}
           onToggleCompact={toggleBottomNavCompact}
         />
+        <FleetCells variant="wide" onOpenHost={onOpenHost ?? (() => onOpenHosts())} onOpenHosts={onOpenHosts} />
       </div>
       <div data-testid="activity-bar-resize" className="hidden lg:flex">
         <RegionResize
