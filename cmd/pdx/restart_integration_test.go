@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/wake/purdex/internal/gate/gatetest"
 )
 
 // Isolation audit done: every path a module reaches is covered by isolatedEnv
@@ -30,7 +32,7 @@ func TestMain(m *testing.M) {
 		main()
 		return
 	}
-	os.Exit(m.Run())
+	gatetest.Main(m) // HOME and PDX_GATE_DIR in a temporary directory: no test reaches the real gate (#2932)
 }
 
 func freePort(t *testing.T) int {
