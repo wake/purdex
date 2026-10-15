@@ -143,7 +143,7 @@ func classifyVitest(args []string) Class {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
-		case a == "--version" || a == "-v" || a == "--help" || a == "-h" || a == "watch" || a == "dev":
+		case a == "--version" || a == "-v" || a == "--help" || a == "-h":
 			return ClassNone
 		case a == "run":
 			run = true
