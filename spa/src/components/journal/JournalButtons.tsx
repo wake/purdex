@@ -46,8 +46,8 @@ function TeamCardButton({ teamKey }: { teamKey: string }) {
 
 function JournalCardButton({ target }: { target: JournalTarget }) {
   const tr = useI18nStore((s) => s.t)
-  const host = target.read?.hostId ?? null
-  const memo = useViewMemo(host, target.unitKey)
+  const host = target.memoHost
+  const memo = useViewMemo(host, target.memoKey)
   const count = target.unit?.openConfirms ?? 0
   const open = memo.journalOpen
   const label = tr(open ? 'journal.journal.close' : 'journal.journal.open')
@@ -59,10 +59,10 @@ function JournalCardButton({ target }: { target: JournalTarget }) {
         aria-pressed={open}
         aria-label={count > 0 ? `${label} (${tr('journal.journal.pending', { count })})` : label}
         title={label}
-        disabled={target.unitKey === null}
+        disabled={target.memoKey === null}
         className={`${BUTTON} relative ${open ? PRESSED : IDLE}`}
         onMouseDown={keepFocus}
-        onClick={() => patchUnitMemo(host, target.unitKey, { journalOpen: !open })}
+        onClick={() => patchUnitMemo(host, target.memoKey, { journalOpen: !open })}
       >
         <Notebook size={14} weight={open ? 'fill' : 'regular'} />
         {count > 0 && (

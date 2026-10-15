@@ -34,6 +34,8 @@ interface Props {
   onSetMode: (mode: PanelMode) => void
   onOpen: (sessionId: string) => void
   onReorder: (sessionIds: string[]) => void
+  /** Drawn as the journal stack's team card (J-2b): open or closed and nothing else, so no title-bar / enlarge controls. */
+  card?: boolean
 }
 
 export function TeamPanel(props: Props) {
@@ -111,7 +113,7 @@ export function ExpandButton({ expanded, onToggle }: { expanded: boolean; onTogg
   )
 }
 
-function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, hdr }: Props & { hdr: HeaderHandlers }) {
+function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, card, hdr }: Props & { hdr: HeaderHandlers }) {
   const t = useI18nStore((s) => s.t)
   const expanded = team.mode === 'max'
   const { teamKey, color, lead, members } = team
@@ -123,10 +125,12 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, hdr }: Pro
       <div data-testid="team-panel-header" className={HEADER_CLASS} style={headerStyle} {...hdr}>
         <NameCapsule team={team} />
         <span data-testid="team-panel-count" className="text-text-muted whitespace-nowrap">· {t('team.panel.members', { count: members.length })}</span>
-        <span className="ml-auto flex items-center gap-0.5">
-          <ToTitleBarButton onClick={() => onSetMode('titlebar')} />
-          <ExpandButton expanded={expanded} onToggle={() => onSetMode(expanded ? 'full' : 'max')} />
-        </span>
+        {!card && (
+          <span className="ml-auto flex items-center gap-0.5">
+            <ToTitleBarButton onClick={() => onSetMode('titlebar')} />
+            <ExpandButton expanded={expanded} onToggle={() => onSetMode(expanded ? 'full' : 'max')} />
+          </span>
+        )}
       </div>
       <div className="border-t border-border-subtle py-1.5 flex flex-col gap-1">
         <PanelRow teamKey={teamKey} seat={lead} color={color} isActive={lead.tabId !== null && lead.tabId === activeTabId} onOpen={onOpen} />

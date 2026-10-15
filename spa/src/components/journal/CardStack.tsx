@@ -1,0 +1,139 @@
+// spa/src/components/journal/CardStack.tsx — the floating cards of a journal.v1 host (J-2b T-2b.2, spec §11), mounted by the
+// shell INSTEAD of TeamPanelArea for the active tab's host (App.tsx). Columns right-aligned under the title bar:
+//   [team card, the roadmap under it] [journal card] [tasks card]
+// Opening a card pushes the others left (the row is right-aligned; widths animate). What is open, the widths, the filter and the
+// scroll live OUTSIDE this component (lib/journal/view-memory.ts per unit, useJournalUiStore per team / last widths) — the stack
+// is a sibling of TabContent, so a tab switch does not unmount it, but a support toggle or a hide / show does (CLAUDE.md,
+// Tab-hosted checklist). The narrow-window drop is visibility only (card-layout.ts): nothing is written back.
+// The cards' bodies are J-2c (journal) and J-2d (tasks, roadmap); here they are frames with their header controls.
+import { useEffect, useState } from 'react'
+import { ListChecks, MapTrifold } from '@phosphor-icons/react'
+import { CardFrame } from './CardFrame'
+import { visibleCards, teamColumnWidth } from './card-layout'
+import { useJournalTarget } from './useJournalTarget'
+import { TeamPanel } from '../team/TeamPanel'
+import { TeamPanelArea } from '../team/TeamPanelArea'
+import { useTeamDisplay } from '../team/team-display'
+import { useTabStore } from '../../stores/useTabStore'
+import { useI18nStore } from '../../stores/useI18nStore'
+import { cardWidth, useJournalUiStore, type CardKey } from '../../stores/useJournalUiStore'
+import { keepFocus } from '../../lib/keep-focus'
+import { patchUnitMemo, useViewMemo } from '../../lib/journal/use-view-memo'
+import type { ViewMemo } from '../../lib/journal/view-memory'
+
+function useWindowWidth(): number {
+  const [w, setW] = useState(() => (typeof window === 'undefined' ? 1440 : window.innerWidth))
+  useEffect(() => {
+    const on = () => setW(window.innerWidth)
+    window.addEventListener('resize', on)
+    return () => window.removeEventListener('resize', on)
+  }, [])
+  return w
+}
+
+export function CardStack() {
+  const target = useJournalTarget()
+  if (!target.journalHost) return null
+  return <Stack target={target} />
+}
+
+/** What the shell mounts beside the tab content: the card stack on a journal.v1 host, else today's one panel area. */
+export function PanelAreas() {
+  const journalHost = useJournalTarget().journalHost
+  return journalHost ? <CardStack /> : <TeamPanelArea />
+}
+
+function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
+  const t = useI18nStore((s) => s.t)
+  const display = useTeamDisplay()
+  const activeTabId = useTabStore((s) => s.activeTabId)
+  const { team, memoHost, memoKey } = target
+  const memo = useViewMemo(memoHost, memoKey)
+  const teamKey = team?.teamKey ?? null
+  const teamOpen = useJournalUiStore((s) => teamKey !== null && s.teamOpen[teamKey] === true)
+  const last = useJournalUiStore((s) => s.lastWidths)
+  const windowWidth = useWindowWidth()
+
+  const widths = {
+    team: cardWidth('team', null, last),
+    roadmap: cardWidth('roadmap', memo.widths.roadmap, last),
+    journal: cardWidth('journal', memo.widths.journal, last),
+    tasks: cardWidth('tasks', memo.widths.tasks, last),
+  }
+  const shown = visibleCards({
+    open: { team: teamOpen, roadmap: memo.roadmapOpen, journal: memo.journalOpen, tasks: memo.tasksOpen },
+    widths,
+    available: windowWidth,
+  })
+
+  const patch = (p: Partial<ViewMemo>) => patchUnitMemo(memoHost, memoKey, p)
+  const commit = (card: Exclude<CardKey, 'team'>) => (w: number) => {
+    patch({ widths: { ...memo.widths, [card]: w } })
+    useJournalUiStore.getState().setLastWidth(card, w)
+  }
+  const teamColumn = shown.team || shown.roadmap
+  if (!teamColumn && !shown.journal && !shown.tasks) return null
+
+  return (
+    <div data-testid="journal-card-stack" className="absolute z-20 top-0 right-3 bottom-0 flex items-start justify-end gap-3 pointer-events-none">
+      {teamColumn && (
+        <div data-testid="journal-team-column" className="flex flex-col gap-3 items-end min-h-0 max-h-full" style={{ width: teamColumnWidth(shown, widths) }}>
+          {shown.team && team && display && (
+            <CardFrame testId="journal-team-card" width={widths.team} onCommitWidth={null}>
+              <TeamPanel
+                card
+                team={{ ...team, mode: 'full' }}
+                activeTabId={activeTabId}
+                onSetMode={() => {}}
+                onOpen={(sessionId) => display.onOpenSeat(team.teamKey, sessionId)}
+                onReorder={(ids) => display.onReorderMembers(team.teamKey, ids)}
+              />
+            </CardFrame>
+          )}
+          {shown.roadmap && (
+            <CardFrame testId="journal-roadmap-card" width={widths.roadmap} onCommitWidth={commit('roadmap')} title={t('journal.card.roadmap')} onClose={() => patch({ roadmapOpen: false })} />
+          )}
+        </div>
+      )}
+      {shown.journal && (
+        <CardFrame
+          testId="journal-card"
+          width={widths.journal}
+          onCommitWidth={commit('journal')}
+          title={target.unit?.unit.label ?? ''}
+          actions={
+            <>
+              <HeaderToggle testId="journal-toggle-roadmap" pressed={memo.roadmapOpen} label={t('journal.card.roadmap')} onClick={() => patch({ roadmapOpen: !memo.roadmapOpen })}><MapTrifold size={13} /></HeaderToggle>
+              <HeaderToggle testId="journal-toggle-tasks" pressed={memo.tasksOpen} label={t('journal.card.tasks')} onClick={() => patch({ tasksOpen: !memo.tasksOpen })}><ListChecks size={13} /></HeaderToggle>
+            </>
+          }
+          onClose={() => patch({ journalOpen: false })}
+        >
+          {target.unreachableHost !== null && !target.unit && (
+            <div data-testid="journal-unreachable" className="p-3 text-text-secondary">{t('journal.card.unreachable', { host: target.unreachableHost })}</div>
+          )}
+        </CardFrame>
+      )}
+      {shown.tasks && (
+        <CardFrame testId="journal-tasks-card" width={widths.tasks} onCommitWidth={commit('tasks')} title={t('journal.card.tasks')} onClose={() => patch({ tasksOpen: false })} />
+      )}
+    </div>
+  )
+}
+
+function HeaderToggle({ testId, pressed, label, onClick, children }: { testId: string; pressed: boolean; label: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      aria-pressed={pressed}
+      aria-label={label}
+      title={label}
+      className={`p-0.5 rounded cursor-pointer ${pressed ? 'text-accent-base bg-accent-base/10' : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'}`}
+      onMouseDown={keepFocus}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  )
+}

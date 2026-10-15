@@ -24,6 +24,9 @@ export interface JournalTarget {
   unitKey: string | null
   /** The lead lives on a daemon this App has no host for. */
   unreachableHost: string | null
+  /** Where this tab's view memo lives (host, key); null until a unit (or the unreachable stand-in) exists. */
+  memoHost: string | null
+  memoKey: string | null
 }
 
 /** The host's sticky journal.v1 answer (the last yes / no, kept through a disconnect; absent = never answered = old UI). */
@@ -38,9 +41,9 @@ export function useJournalTarget(): JournalTarget {
   const route = useJournalStore((s) => (origin ? s.routes[sessionKey(origin.hostId, origin.sessionId)] : undefined))
   const read = origin === null ? null : route?.kind === 'follow' ? { hostId: route.hostId, sessionId: route.sessionId } : route?.kind === 'unreachable' || route?.kind === 'none' ? null : origin
   const unit = useJournalStore((s) => (read ? selectUnit(s, read.hostId, read.sessionId) : undefined))
-  return {
-    hostId, journalHost, team, origin, read, unit,
-    unitKey: unit ? unitKeyOf(unit.unit) : null,
-    unreachableHost: route?.kind === 'unreachable' ? route.leadHostId : null,
-  }
+  const unitKey = unit ? unitKeyOf(unit.unit) : null
+  const unreachableHost = route?.kind === 'unreachable' ? route.leadHostId : null
+  // The view memo's key: the unit, or — where the lead's daemon is not connected — a stand-in so the card can still be opened to say so.
+  const memoKey = unitKey ?? (unreachableHost !== null ? `unreachable:${unreachableHost}` : null)
+  return { hostId, journalHost, team, origin, read, unit, unitKey, unreachableHost, memoHost: read?.hostId ?? origin?.hostId ?? null, memoKey }
 }
