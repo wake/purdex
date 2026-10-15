@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -308,7 +309,11 @@ func gateProfile(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "pdx gate profile: %v\n", err)
 			return 1
 		}
-		for _, name := range append([]string{"default"}, cfg.Profiles...) {
+		names := cfg.Profiles
+		if !slices.Contains(names, "default") {
+			names = append([]string{"default"}, names...)
+		}
+		for _, name := range names {
 			mark := " "
 			if name == cfg.Profile {
 				mark = "*"

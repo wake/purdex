@@ -274,12 +274,6 @@ func (g *Gate) run(ctx context.Context, o Options, d *Decision) (int, error) {
 		}
 	}
 
-	argv, note := cfg.Cache.Apply(o.Argv, cfg.foreground(o))
-	if note != "" {
-		g.say("%s", note)
-	}
-	limits := cfg.Parallelism.Resolve(class, g.Facts())
-	argv, env, added := Capped(argv, env, limits.GoP, limits.VitestWorkers, limits.PnpmWorkspace)
 	slot, code, done := g.wait(ctx, cfg, class, o, sigs, d)
 	if done {
 		if code == ExitRefused {
@@ -287,6 +281,17 @@ func (g *Gate) run(ctx context.Context, o Options, d *Decision) (int, error) {
 		}
 		return code, nil
 	}
+	// The wait may have been long and the settings may have changed meanwhile (pdx gate set, a new profile): the caps, the
+	// cache rule and the priority are those of the moment the command starts, and the record says the same.
+	pool := cfg.Dir
+	cfg = g.Config()
+	cfg.Dir = pool
+	argv, note := cfg.Cache.Apply(o.Argv, cfg.foreground(o))
+	if note != "" {
+		g.say("%s", note)
+	}
+	limits := cfg.Parallelism.Resolve(class, g.Facts())
+	argv, env, added := Capped(argv, env, limits.GoP, limits.VitestWorkers, limits.PnpmWorkspace)
 	if slot == nil { // the directory is denied (a sandbox): run without a slot
 		d.Outcome = "no-slot"
 		return g.start(ctx, cfg, o, argv, env, nil, sigs)
@@ -301,7 +306,7 @@ func (g *Gate) run(ctx context.Context, o Options, d *Decision) (int, error) {
 	}()
 	if class == ClassHeavy {
 		// the wait may have taken minutes or hours: the floor is checked again, with today's settings, before the command starts
-		if msg := g.diskRefusal(g.Config(), o.Dir); msg != "" {
+		if msg := g.diskRefusal(cfg, o.Dir); msg != "" {
 			g.say("%s", msg)
 			d.Outcome = "refused"
 			return ExitRefused, nil
@@ -321,7 +326,7 @@ func (g *Gate) run(ctx context.Context, o Options, d *Decision) (int, error) {
 		return ExitRefused, nil
 	}
 	env = withEnv(env, HeldEnv, slot.Label()+":"+token)
-	return g.start(ctx, g.Config(), o, argv, env, slot, sigs)
+	return g.start(ctx, cfg, o, argv, env, slot, sigs)
 }
 
 // diskRefusal is the message of a refusal when the disk of the command's directory or of $TMPDIR is below the floor
