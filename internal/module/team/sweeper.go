@@ -141,7 +141,12 @@ func (m *Module) tick() {
 func (m *Module) openForTick(checkLive bool) ([]team.Approval, bool) {
 	now := m.now()
 	gen := approvalWrites.Load()
-	if m.openRead && !checkLive && !m.openSettle && !m.unattendedRetry() && m.notAutoApprovedN.Load() == 0 && gen == m.openGen && now < m.openNext && now-m.openAt < sweepReadMax.Milliseconds() {
+	// SQLite's data_version, from a connection of ours, moves when another connection COMMITS: read before ListOpen, so a commit
+	// after it is seen by the next tick whatever the write's duration. Where there is none (a memory store) the write count
+	// stands in for it, with one more read after it moves (openSettle).
+	dv, dvOk := m.store.DataVersion()
+	same := gen == m.openGen && dvOk == m.openDVOk && dv == m.openDV
+	if m.openRead && !checkLive && !m.openSettle && !m.unattendedRetry() && m.notAutoApprovedN.Load() == 0 && same && now < m.openNext && now-m.openAt < sweepReadMax.Milliseconds() {
 		return nil, false
 	}
 	open, err := m.store.ListOpen()
@@ -150,10 +155,11 @@ func (m *Module) openForTick(checkLive bool) ([]team.Approval, bool) {
 		m.logf("[team] sweep: %v", err)
 		return nil, false
 	}
-	// A write counts before it commits, so a read made just after the count may have seen the state from before it: when the
-	// count moved, one more read follows on the next tick (openSettle), by which time the write has committed.
-	m.openSettle = gen != m.openGen
-	m.openRead, m.openGen, m.openAt = true, gen, now
+	// Without data_version, a write counts before it commits, so a read made just after the count may have seen the state from
+	// before it: when the count moved, one more read follows on the next tick (openSettle), by which time the write has
+	// usually committed (a transaction that outlasts a tick is found by the periodic read).
+	m.openSettle = !dvOk && gen != m.openGen
+	m.openRead, m.openGen, m.openAt, m.openDV, m.openDVOk = true, gen, now, dv, dvOk
 	m.openAutoApprovable = slices.ContainsFunc(open, func(a team.Approval) bool { return autoApprovableRow(a) || team.UnattendedRefusable(a.Kind) })
 	// the next moment a request falls due: only deadlines and leases still ahead count; one already past that stays open (a
 	// final card, an unanswered one) is looked at again by the periodic read, not on every tick

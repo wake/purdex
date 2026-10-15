@@ -4,6 +4,7 @@
 package teammod
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -27,6 +29,12 @@ var ErrNoSuchApproval = errors.New("no such approval")
 var approvalWrites atomic.Uint64
 
 type Store struct {
+	// the sweeper's own connection for PRAGMA data_version (see DataVersion); memory marks a store that has only one connection
+	// and so cannot spare it
+	memory    bool
+	dvMu      sync.Mutex
+	dvConn    *sql.Conn
+	dvDisable bool
 	// listOpenReads counts ListOpen calls: what the sweeper's cadence test looks at.
 	listOpenReads atomic.Int64
 	db            *sql.DB
@@ -130,6 +138,38 @@ type Store struct {
 	afterReportInsert func() error
 }
 
+// DataVersion is SQLite's data_version for team.db as seen from a connection of its own: it changes when ANOTHER connection
+// COMMITS a change to the file, so the sweeper learns of a write at its commit, not at the moment the write began (G3b). ok is
+// false where there is no such answer (a memory store has one connection and cannot spare it; or the pragma failed), and the
+// sweeper then relies on its write count. The connection is kept for the life of the store (closed by Close).
+func (s *Store) DataVersion() (int64, bool) {
+	if s == nil || s.memory {
+		return 0, false
+	}
+	s.dvMu.Lock()
+	defer s.dvMu.Unlock()
+	if s.dvDisable {
+		return 0, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if s.dvConn == nil {
+		c, err := s.db.Conn(ctx)
+		if err != nil {
+			return 0, false
+		}
+		s.dvConn = c
+	}
+	var v int64
+	if err := s.dvConn.QueryRowContext(ctx, `PRAGMA data_version`).Scan(&v); err != nil {
+		s.dvDisable = true
+		_ = s.dvConn.Close()
+		s.dvConn = nil
+		return 0, false
+	}
+	return v, true
+}
+
 // OpenStore opens (or creates) team.db at path. ":memory:" is for tests.
 func OpenStore(path string) (*Store, error) {
 	dsn := path
@@ -141,7 +181,8 @@ func OpenStore(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open team db: %w", err)
 	}
-	if path == ":memory:" {
+	memory := path == ":memory:"
+	if memory {
 		db.SetMaxOpenConns(1)
 	}
 	if _, err := db.Exec(`
@@ -321,11 +362,20 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (unanswered_at): %w", err)
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, memory: memory}, nil
 }
 
 // Close closes the database.
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	s.dvMu.Lock()
+	if s.dvConn != nil {
+		_ = s.dvConn.Close()
+		s.dvConn = nil
+	}
+	s.dvDisable = true
+	s.dvMu.Unlock()
+	return s.db.Close()
+}
 
 const selectCols = `id, kind, host_id, origin_json, payload_json, request_hash, state,
 	created_at, deadline_at, lease_until, decided_by_json, decided_at, grant_json, close_reason, unanswered_at`

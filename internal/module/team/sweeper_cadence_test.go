@@ -9,9 +9,7 @@ func TestTick_OpenRequestsAreNotReadEverySecond(t *testing.T) {
 	f.create(uid(1)) // lease now+30 s, deadline now+540 s
 	reads := func() int64 { return f.m.store.listOpenReads.Load() }
 
-	f.m.tick() // the create is a write the sweeper has not seen: one read ...
-	f.clock.Add(1000)
-	f.m.tick() // ... and one more, because the write counted before it committed (openSettle)
+	f.m.tick() // the create is a write the sweeper has not seen: one read
 	base := reads()
 	for i := 0; i < 4; i++ { // 4 s of ticks since that read, nothing written, nothing due
 		f.clock.Add(1000)
@@ -107,5 +105,41 @@ func TestTick_AWriteThatCommitsAfterTheReadIsFoundOnTheNextTick(t *testing.T) {
 	f.m.tick()
 	if f.m.store.listOpenReads.Load() == reads {
 		t.Fatal("the tick after a counted write did not read again")
+	}
+}
+
+// A write transaction that stays open across several ticks and commits later is found on the tick after its COMMIT (SQLite's
+// data_version moves then), however long it ran. The team.db of the fixture is a file, so data_version is available.
+func TestTick_ALongTransactionIsFoundAfterItsCommit(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	f.m.tick()
+	f.clock.Add(1000)
+	f.m.tick()
+	if _, ok := f.m.store.DataVersion(); !ok {
+		t.Skip("no data_version on this store")
+	}
+	tx, err := f.m.store.db.Begin() // a connection of the pool other than the sweeper's own
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE approval_requests SET state = 'abandoned', decided_at = ? WHERE id = ?`, f.clock.Load(), uid(1)); err != nil {
+		t.Fatal(err)
+	}
+	approvalWrites.Add(1) // the count moves at the write, before the commit
+	reads := f.m.store.listOpenReads.Load()
+	for i := 0; i < 3; i++ { // the transaction is open for three ticks
+		f.clock.Add(1000)
+		f.m.tick()
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	before := f.m.store.listOpenReads.Load()
+	f.clock.Add(1000)
+	f.m.tick()
+	if f.m.store.listOpenReads.Load() == before {
+		t.Fatalf("the tick after the commit did not read (reads during the open transaction: %d)", before-reads)
 	}
 }
