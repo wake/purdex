@@ -210,14 +210,25 @@ func TestHeartbeat_SilentPrimaryIsTakenOver(t *testing.T) {
 	require.Equal(t, int64(2), p.b.State().Term)
 }
 
-func TestHeartbeat_NullAgeAliveForSixtySecondsThenDead(t *testing.T) {
+func TestHeartbeat_NullAgeIsAliveNoMatterHowLong(t *testing.T) {
 	p := primaryWithStandby(t) // a has no newestAge: null
-	p.clk.Add(59 * time.Second)
+	p.clk.Add(10 * time.Minute)
 	p.b.Beat(ctx())
-	require.Equal(t, fleet.RoleStandby, p.b.State().Role, "within 60 s of the term")
-	p.clk.Add(2 * time.Second)
-	p.b.Beat(ctx())
-	require.Equal(t, fleet.RolePrimary, p.b.State().Role, "past 60 s with no reading: dead")
+	require.Equal(t, fleet.RoleStandby, p.b.State().Role, "nothing measurable: a takeover would not help")
+	require.Equal(t, fleet.RolePrimary, p.a.State().Role)
+}
+
+func TestHeartbeat_NoSourcesAnywhere_TenBeatsNeverFlip(t *testing.T) {
+	p := primaryWithStandby(t) // neither engine has a newestAge
+	term := p.a.State().Term
+	for i := 0; i < 10; i++ {
+		p.clk.Add(HeartbeatEvery * 3)
+		p.b.Beat(ctx())
+		p.a.Beat(ctx())
+		require.Equal(t, fleet.RolePrimary, p.a.State().Role, "beat %d", i)
+		require.Equal(t, fleet.RoleStandby, p.b.State().Role, "beat %d", i)
+	}
+	require.Equal(t, term, p.a.State().Term, "no term bump")
 }
 
 func TestHeartbeat_FreshRemoteReadingsKeepAPrimaryWithoutOwnSource(t *testing.T) {

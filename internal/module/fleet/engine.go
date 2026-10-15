@@ -15,8 +15,6 @@ const (
 	HeartbeatEvery = 30 * time.Second
 	// AliveAge: the primary is alive when its newest reading is at most this old.
 	AliveAge = 10 * time.Second
-	// NullGrace: a primary with no reading yet is alive for this long after its term began.
-	NullGrace = 60 * time.Second
 	// orderWarnEvery bounds the order-mismatch warning.
 	orderWarnEvery = time.Hour
 )
@@ -86,7 +84,6 @@ type Engine struct {
 	term        int64
 	primary     string
 	reason      string
-	termSeenAt  time.Time // when this daemon first learned of (or began) the current primary's term
 	lastHeard   time.Time
 	announce    bool // an announcement is owed to the peer
 	newestAge   func() (time.Duration, bool)
@@ -252,7 +249,6 @@ func (e *Engine) becomeOffLocked(reason string) {
 
 func (e *Engine) becomePrimaryLocked(term int64) {
 	e.role, e.term, e.reason, e.primary = fleet.RolePrimary, term, "", e.set.Self
-	e.termSeenAt = e.now()
 	e.persistLocked()
 	e.notifyLocked()
 }
@@ -275,7 +271,6 @@ func (e *Engine) becomeStandbyLocked(primary string, term int64) {
 func (e *Engine) adoptTermLocked(term int64) {
 	if term > e.term {
 		e.term = term
-		e.termSeenAt = e.now()
 		e.persistLocked()
 		e.notifyLocked()
 	}
@@ -295,12 +290,8 @@ func (e *Engine) observePrimaryLocked(from string, term int64) {
 		}
 	case fleet.RoleStandby:
 		if term >= e.term {
-			newTerm := term > e.term || e.primary != from
 			e.primary = from
 			e.lastHeard = e.now()
-			if newTerm {
-				e.termSeenAt = e.now()
-			}
 			e.adoptTermLocked(term)
 			e.persistLocked()
 			e.notifyLocked()
@@ -387,7 +378,6 @@ func (e *Engine) Startup(ctx context.Context) {
 	case ans.Role == fleet.RolePrimary:
 		e.lastHeard = e.now()
 		e.becomeStandbyLocked(ans.Alias, ans.Term)
-		e.termSeenAt = e.now()
 	default: // standby, off or starting: the first in order is primary
 		hi := maxInt64(e.term, ans.Term)
 		if e.laterInOrderLocked(e.set.peerAlias()) {
@@ -476,20 +466,16 @@ func (e *Engine) announceTo(ctx context.Context, term int64) error {
 	return e.peer.Announce(ctx, term)
 }
 
-// aliveLocked: the primary answered, says it is primary, and its newest reading is fresh (null: alive for NullGrace after its
-// term began, as this daemon first saw it).
+// aliveLocked: the primary answered, says it is primary, and its newest reading is not stale. A null age means it has nothing
+// measurable (no source wired, nothing to measure yet): a takeover would not help and would only make the two flip.
 func (e *Engine) aliveLocked(a RoleAnswer) bool {
 	if a.Role != fleet.RolePrimary {
 		return false
 	}
-	if a.NewestAgeMS != nil {
-		return time.Duration(*a.NewestAgeMS)*time.Millisecond <= AliveAge
+	if a.NewestAgeMS == nil {
+		return true
 	}
-	since := e.termSeenAt
-	if a.Term > e.term || e.primary != a.Alias {
-		since = e.now() // a term not seen before starts its grace now
-	}
-	return since.IsZero() || e.now().Sub(since) <= NullGrace
+	return time.Duration(*a.NewestAgeMS)*time.Millisecond <= AliveAge
 }
 
 func (e *Engine) takeoverLocked(a RoleAnswer, answered bool) {
