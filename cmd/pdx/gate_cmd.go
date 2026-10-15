@@ -64,8 +64,25 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 	cfg := loadGateConfig(*cfgPath, stderr)
 	g := gate.New(cfg)
 	g.Stderr = stderr
+	g.Load = gateReloader(*cfgPath, cfg)
 	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Real: *real, Class: c, Foreground: *fg, Stdout: stdout, Stderr: stderr})
 	return code
+}
+
+// gateReloader reads the config again each time the gate asks (a command starting, a waiting gate looking at the queue),
+// so a changed setting is in force for the next command; a file that cannot be read keeps the last good settings.
+func gateReloader(path string, last gate.Config) func() gate.Config {
+	if path == "" {
+		path = gate.DefaultConfigPath()
+	}
+	return func() gate.Config {
+		cfg, err := gate.Load(path)
+		if err != nil {
+			return last
+		}
+		last = cfg
+		return cfg
+	}
 }
 
 func loadGateConfig(path string, stderr io.Writer) gate.Config {
@@ -110,8 +127,8 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stdout, "  %s-%d  pid %d  %s  %s  %s%s\n", h.Class, h.Slot, h.PID, age, strings.Join(h.Argv, " "), h.Cwd, gone)
 		}
 	}
-	printPool("重", cfg.HeavySlots, st.Heavy, st.WaitHeavy)
-	printPool("輕", cfg.LightSlots, st.Light, st.WaitLight)
+	printPool("重", cfg.Slots.Heavy, st.Heavy, st.WaitHeavy)
+	printPool("輕", cfg.Slots.Light, st.Light, st.WaitLight)
 	for _, h := range st.Suspect {
 		fmt.Fprintf(stdout, "注意：%s-%d 的紀錄說 pid %d 還在，但鎖是空的（以鎖為準，視為空閒）\n", h.Class, h.Slot, h.PID)
 	}

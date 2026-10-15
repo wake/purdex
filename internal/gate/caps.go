@@ -7,9 +7,9 @@ import (
 	"strings"
 )
 
-// The parallelism a gated command is held to (spec §5). The real load is slots × per-command parallelism, so each
-// command gets a cap of its own when it did not give one; a limit the command (or its environment) already carries
-// is the person's and is left alone.
+// The parallelism a gated command is held to (spec §5, module 3). The real load is slots × per-command parallelism, so
+// each command gets a cap of its own when it did not give one; a limit the command (or its environment) already
+// carries is the person's and is left alone. The numbers come from ParallelismConfig.Resolve.
 
 // GoFlagsEnv returns env with `-p=<p>` added to GOFLAGS when GOFLAGS carries no -p. A -p on the command line wins
 // over GOFLAGS, so this never overrides a command that gave its own. GOMAXPROCS is left alone.
@@ -55,8 +55,8 @@ func hasGoP(flags string) bool {
 var vitestLimit = regexp.MustCompile(`^--(maxWorkers|max-workers|poolOptions\..*(maxThreads|maxForks))(=|$)`)
 
 // VitestArgs appends `--maxWorkers=<n>` to a vitest run (directly, or through npx / pnpm exec / pnpm vitest /
-// yarn) that carries no worker limit. It reports whether it changed anything. Arguments after `--` or `-args` are
-// the script's, so the flag goes in front of them. A run that is not vitest is returned as it was.
+// yarn) that carries no worker limit. It reports whether it changed anything. Arguments after `--` are the script's, so
+// the flag goes in front of them. A run that is not vitest is returned as it was.
 func VitestArgs(argv []string, n int) ([]string, bool) {
 	if n <= 0 || !runsVitest(argv) {
 		return argv, false
@@ -134,21 +134,22 @@ func PnpmArgs(argv []string, n int) ([]string, bool) {
 	return out, true
 }
 
-// Capped gives argv and env their caps for the class and says what it put in, for the one line the gate prints.
-func Capped(argv, env []string, c Config) (outArgv, outEnv []string, added []string) {
+// Capped gives argv and env their caps and says what it put in, for the one line the gate prints. A zero limit is no
+// cap (mode off).
+func Capped(argv, env []string, l Limits) (outArgv, outEnv []string, added []string) {
 	outArgv, outEnv = argv, env
-	if a, ok := VitestArgs(outArgv, c.VitestWorkers); ok {
+	if a, ok := VitestArgs(outArgv, l.VitestWorkers); ok {
 		outArgv = a
-		added = append(added, "--maxWorkers="+strconv.Itoa(c.VitestWorkers))
+		added = append(added, "--maxWorkers="+strconv.Itoa(l.VitestWorkers))
 	}
-	if a, ok := PnpmArgs(outArgv, c.PnpmConcurrency); ok {
+	if a, ok := PnpmArgs(outArgv, l.PnpmWorkspace); ok {
 		outArgv = a
-		added = append(added, "--workspace-concurrency="+strconv.Itoa(c.PnpmConcurrency))
+		added = append(added, "--workspace-concurrency="+strconv.Itoa(l.PnpmWorkspace))
 	}
-	if e := GoFlagsEnv(outEnv, c.GoP); !sameEnv(e, outEnv) {
+	if e := GoFlagsEnv(outEnv, l.GoP); !sameEnv(e, outEnv) {
 		outEnv = e // every gated command gets it: a script under the gate may run go anywhere
 		if len(argv) > 0 && filepath.Base(argv[0]) == "go" {
-			added = append(added, "GOFLAGS -p="+strconv.Itoa(c.GoP))
+			added = append(added, "GOFLAGS -p="+strconv.Itoa(l.GoP))
 		}
 	}
 	return outArgv, outEnv, added

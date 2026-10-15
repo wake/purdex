@@ -23,7 +23,7 @@ func gateEnv(t *testing.T, gateSection string) (cfgPath, dir string) {
 }
 
 func TestGate_RunsTheCommandAndReturnsItsExitCode(t *testing.T) {
-	cfg, dir := gateEnv(t, "disk_min_gb = 0\nheavy_background = false\n")
+	cfg, dir := gateEnv(t, "[admission]\ndisk_min_gb = 0\n[priority]\nmode = \"none\"\n")
 	var out, errb bytes.Buffer
 	code := gateMain([]string{"--config", cfg, "--", "sh", "-c", "touch " + dir + "/ran; exit 5"}, &out, &errb)
 	assert.Equal(t, 5, code)
@@ -32,7 +32,7 @@ func TestGate_RunsTheCommandAndReturnsItsExitCode(t *testing.T) {
 }
 
 func TestGate_AutoPassesWhatIsNotHeavy(t *testing.T) {
-	cfg, dir := gateEnv(t, "disk_min_gb = 0\n")
+	cfg, dir := gateEnv(t, "[admission]\ndisk_min_gb = 0\n")
 	var out, errb bytes.Buffer
 	code := gateMain([]string{"--config", cfg, "--auto", "--", "sh", "-c", "touch " + dir + "/ran"}, &out, &errb)
 	assert.Equal(t, 0, code)
@@ -43,7 +43,7 @@ func TestGate_AutoPassesWhatIsNotHeavy(t *testing.T) {
 }
 
 func TestGate_RealRunsInPlaceOfTheFirstWord(t *testing.T) {
-	cfg, _ := gateEnv(t, "disk_min_gb = 0\nheavy_background = false\n")
+	cfg, _ := gateEnv(t, "[admission]\ndisk_min_gb = 0\n[priority]\nmode = \"none\"\n")
 	var out, errb bytes.Buffer
 	code := gateMain([]string{"--config", cfg, "--real", "/bin/echo", "--", "not-a-binary", "from-real"}, &out, &errb)
 	assert.Equal(t, 0, code)
@@ -62,11 +62,11 @@ func TestGate_Usage(t *testing.T) {
 }
 
 func TestGate_StatusReadsTheDirectoryWithoutTheDaemon(t *testing.T) {
-	cfg, _ := gateEnv(t, "disk_min_gb = 0\n")
+	cfg, _ := gateEnv(t, "[admission]\ndisk_min_gb = 0\n")
 	var out, errb bytes.Buffer
 	assert.Equal(t, 0, gateMain([]string{"status", "--config", cfg}, &out, &errb))
-	assert.Contains(t, out.String(), "重 0/2 使用中，0 個在排隊")
-	assert.Contains(t, out.String(), "輕 0/4 使用中，0 個在排隊")
+	assert.Contains(t, out.String(), "重 0/1 使用中，0 個在排隊")
+	assert.Contains(t, out.String(), "輕 0/3 使用中，0 個在排隊")
 	out.Reset()
 	assert.Equal(t, 0, gateMain([]string{"status", "--json", "--config", cfg}, &out, &errb))
 	assert.True(t, strings.HasPrefix(strings.TrimSpace(out.String()), "{"))

@@ -49,12 +49,15 @@ func testGate(t *testing.T) (*Gate, *safeBuf) {
 	t.Helper()
 	cfg := Defaults()
 	cfg.Dir = t.TempDir()
-	cfg.HeavySlots, cfg.LightSlots = 2, 1
-	cfg.HeavyBackground, cfg.LightBackground = false, false
-	cfg.DiskMinGB = 0
+	cfg.Slots.Heavy, cfg.Slots.Light = 2, 1
+	cfg.Priority.Mode = "none"
+	cfg.Admission.DiskMinGB = 0
+	cfg.Parallelism = ParallelismConfig{Mode: "fixed", ByClass: map[Class]ParallelismOverride{}, GoP: Param{Auto: true}, VitestWorkers: Param{Auto: true}, PnpmWorkspace: Param{Auto: true}}
+	cfg.Cache.Count1 = "off"
 	g := New(cfg)
-	g.Taskpolicy = ""
+	g.Tools = Tools{}
 	g.Pressure = nil
+	g.Facts = func() HostFacts { return HostFacts{NCPU: 10, AvailMemMB: 8000} }
 	g.Poll = func() time.Duration { return 10 * time.Millisecond }
 	g.KillGrace = 300 * time.Millisecond
 	g.TreeEvery = 30 * time.Millisecond
@@ -203,7 +206,7 @@ func TestRun_AThirdHeavyCommandWaitsForASlot(t *testing.T) {
 // (M: let TryTake ignore the tickets before it.)
 func TestRun_WaitersStartInArrivalOrder(t *testing.T) {
 	g1, _ := testGate(t)
-	g1.Cfg.HeavySlots = 1
+	g1.SetConfig(func(c *Config) { c.Slots.Heavy = 1 })
 	g1.Poll = func() time.Duration { return 60 * time.Millisecond } // the older one looks rarely
 	g2 := *g1
 	g2.Poll = func() time.Duration { return time.Millisecond } // the younger looks all the time
@@ -248,14 +251,14 @@ func TestRun_TheLockIsInheritedAsFd3(t *testing.T) {
 func TestRun_OffAndNoneAreNotHeld(t *testing.T) {
 	g, _ := testGate(t)
 	dir := t.TempDir()
-	g.Cfg.Enabled = false
+	g.SetConfig(func(c *Config) { c.Enabled = false })
 	res := runAsync(g, context.Background(), Options{Argv: sh(holdScript(dir, "1")), Class: ClassHeavy})
 	eventually(t, "start", func() bool { return exists(dir + "/started-1") })
 	assert.Empty(t, g.Status().Heavy, "a gate that is off takes no slot")
 	require.NoError(t, os.WriteFile(dir+"/go-1", nil, 0o644))
 	assert.Equal(t, 0, (<-res).code)
 
-	g.Cfg.Enabled = true
+	g.SetConfig(func(c *Config) { c.Enabled = true })
 	res = runAsync(g, context.Background(), Options{Argv: sh(holdScript(dir, "2"))}) // class from the words: sh is none
 	eventually(t, "start", func() bool { return exists(dir + "/started-2") })
 	assert.Empty(t, g.Status().Heavy)
@@ -279,7 +282,7 @@ func startOuter(t *testing.T, g *Gate, class Class, pid int) *outer {
 	dir := t.TempDir()
 	done := runAsync(&og, context.Background(), Options{Argv: sh(holdScript(dir, "o")), Class: class})
 	eventually(t, "the outer command", func() bool { return exists(dir + "/started-o") })
-	pool := g.pool(class)
+	pool := g.pool(g.Config(), class)
 	h, locked, ok := pool.Record(1)
 	require.True(t, ok && locked)
 	return &outer{g: g, env: HeldEnv + "=" + string(class) + "-1:" + h.Token, dir: dir, done: done,
@@ -310,7 +313,7 @@ func (o *outer) inner(t *testing.T, class Class, innerPID int, procs Procs, env 
 
 func TestRun_AValidClaimPassesThroughWithoutASlot(t *testing.T) {
 	g, _ := testGate(t)
-	g.Cfg.HeavySlots = 1
+	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1 })
 	o := startOuter(t, g, ClassHeavy, 1001)
 	defer func() { o.release(); <-o.done }()
 	code, ran := o.inner(t, ClassHeavy, 2002, descendantProcs(2002, 1001), o.env)
@@ -327,7 +330,7 @@ func TestRun_AValidClaimPassesThroughWithoutASlot(t *testing.T) {
 // (M: pass through on the variable alone; M: do not compare the token; M: do not look at the ancestors.)
 func TestRun_AClaimThatIsNotTrueTakesNoOnePast(t *testing.T) {
 	g, _ := testGate(t)
-	g.Cfg.HeavySlots = 1
+	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1 })
 	o := startOuter(t, g, ClassHeavy, 1001)
 	defer func() { o.release(); <-o.done }()
 	ok := descendantProcs(2002, 1001)
@@ -352,7 +355,7 @@ func TestRun_AClaimThatIsNotTrueTakesNoOnePast(t *testing.T) {
 
 func TestRun_ALightSlotNeverCoversAHeavyCommand(t *testing.T) {
 	g, _ := testGate(t)
-	g.Cfg.HeavySlots = 1
+	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1 })
 	lightOuter := startOuter(t, g, ClassLight, 1001)
 	defer func() { lightOuter.release(); <-lightOuter.done }()
 	// another command holds the only heavy slot
@@ -384,7 +387,7 @@ func TestRun_ALightHolderLetsAHeavyCommandTakeItsOwnSlot(t *testing.T) {
 // A claim from a job that is over: the token is in no record, and the lock is free.
 func TestRun_AStaleClaimFromAFinishedJobIsNotAPass(t *testing.T) {
 	g, _ := testGate(t)
-	g.Cfg.HeavySlots = 1
+	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1 })
 	o := startOuter(t, g, ClassHeavy, 1001)
 	stale := o.env
 	o.release()
@@ -454,7 +457,7 @@ func TestRun_ASignalGoesToTheWholeGroup(t *testing.T) {
 
 func TestRun_ASignalWhileWaitingEndsTheWaitWithoutRunning(t *testing.T) {
 	g, _ := testGate(t)
-	g.Cfg.HeavySlots = 1
+	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1 })
 	sigs := make(chan os.Signal, 1)
 	dir := t.TempDir()
 	occ := runAsync(g, context.Background(), Options{Argv: sh(holdScript(dir, "0")), Class: ClassHeavy})
@@ -503,9 +506,9 @@ func TestHelperGate(t *testing.T) {
 		t.Skip("helper for TestRun_AKilledGateKeepsItsSlotWhileItsTreeRuns")
 	}
 	cfg := Defaults()
-	cfg.Dir, cfg.HeavySlots, cfg.HeavyBackground, cfg.DiskMinGB = dir+"/gate", 1, false, 0
+	cfg.Dir, cfg.Slots.Heavy, cfg.Priority.Mode, cfg.Admission.DiskMinGB = dir+"/gate", 1, "none", 0
 	g := New(cfg)
-	g.Pressure, g.Taskpolicy, g.IsTTY = nil, "", func() bool { return false }
+	g.Pressure, g.Tools, g.IsTTY = nil, Tools{}, func() bool { return false }
 	code, _ := g.Run(context.Background(), Options{Argv: sh("sleep 300 & echo $! > " + dir + "/pid; touch " + dir + "/started; wait"), Class: ClassHeavy, Env: cleanEnv()})
 	os.Exit(code)
 }
@@ -618,7 +621,7 @@ func TestRun_PressureLastGoodIsKeptThroughTwoFailures(t *testing.T) {
 
 func TestRun_TheDiskFloorRefusesAHeavyCommand(t *testing.T) {
 	g, buf := testGate(t)
-	g.Cfg.DiskMinGB = 3
+	g.SetConfig(func(c *Config) { c.Admission.DiskMinGB = 3 })
 	g.DiskFree = func(path string) (int64, error) { return 1 << 30, nil }
 	dir := t.TempDir()
 	r := runSync(t, g, Options{Argv: sh("touch " + dir + "/ran"), Class: ClassHeavy})
@@ -632,7 +635,7 @@ func TestRun_TheDiskFloorRefusesAHeavyCommand(t *testing.T) {
 	g.DiskFree = func(path string) (int64, error) { return 0, errors.New("statfs failed") }
 	r = runSync(t, g, Options{Argv: sh("true"), Class: ClassHeavy})
 	assert.Equal(t, 0, r.code, "an unreadable disk is not a reason to refuse")
-	g.Cfg.DiskMinGB = 0
+	g.SetConfig(func(c *Config) { c.Admission.DiskMinGB = 0 })
 	g.DiskFree = func(path string) (int64, error) { return 0, nil }
 	r = runSync(t, g, Options{Argv: sh("true"), Class: ClassHeavy})
 	assert.Equal(t, 0, r.code, "0 turns the check off")
@@ -640,7 +643,7 @@ func TestRun_TheDiskFloorRefusesAHeavyCommand(t *testing.T) {
 
 func TestRun_TheDiskIsLookedAtInTheCommandsDirectoryAndTmp(t *testing.T) {
 	g, _ := testGate(t)
-	g.Cfg.DiskMinGB = 3
+	g.SetConfig(func(c *Config) { c.Admission.DiskMinGB = 3 })
 	var seen []string
 	g.DiskFree = func(path string) (int64, error) { seen = append(seen, path); return 100 << 30, nil }
 	wd := t.TempDir()
@@ -653,7 +656,7 @@ func TestRun_ABrokenDirectoryFailsClosed(t *testing.T) {
 	g, buf := testGate(t)
 	file := filepath.Join(t.TempDir(), "afile")
 	require.NoError(t, os.WriteFile(file, nil, 0o644))
-	g.Cfg.Dir = filepath.Join(file, "gate")
+	g.SetConfig(func(c *Config) { c.Dir = filepath.Join(file, "gate") })
 	dir := t.TempDir()
 	r := runSync(t, g, Options{Argv: sh("touch " + dir + "/ran"), Class: ClassHeavy})
 	assert.Equal(t, ExitRefused, r.code)
@@ -671,7 +674,7 @@ func TestRun_ADeniedDirectoryFailsOpen(t *testing.T) {
 	parent := t.TempDir()
 	require.NoError(t, os.Chmod(parent, 0o555))
 	defer os.Chmod(parent, 0o755)
-	g.Cfg.Dir = filepath.Join(parent, "gate")
+	g.SetConfig(func(c *Config) { c.Dir = filepath.Join(parent, "gate") })
 	dir := t.TempDir()
 	r := runSync(t, g, Options{Argv: sh("touch " + dir + "/ran"), Class: ClassHeavy})
 	assert.Equal(t, 0, r.code)
@@ -690,27 +693,27 @@ func TestDirError_OnlyTheSandboxErrorsFailOpen(t *testing.T) {
 	}
 }
 
-func TestRun_BackgroundQoSWrapsTheCommandUnlessForeground(t *testing.T) {
+func TestRun_PriorityWrapsTheCommandUnlessForeground(t *testing.T) {
 	g, _ := testGate(t)
 	dir := t.TempDir()
-	wrapper := filepath.Join(dir, "taskpolicy")
-	require.NoError(t, os.WriteFile(wrapper, []byte("#!/bin/sh\necho \"$1\" >> "+dir+"/calls\nshift\nexec \"$@\"\n"), 0o755))
-	g.Taskpolicy = wrapper
-	g.Cfg.HeavyBackground = true
+	wrapper := filepath.Join(dir, "wrap")
+	require.NoError(t, os.WriteFile(wrapper, []byte("#!/bin/sh\necho \"$1 $2\" >> "+dir+"/calls\nshift\nif [ \"$1\" = 10 ]; then shift; fi\nexec \"$@\"\n"), 0o755))
+	g.Tools = Tools{Nice: wrapper}
+	g.SetConfig(func(c *Config) { c.Priority.Mode = "nice"; c.Priority.Nice = 10 })
 	r := runSync(t, g, Options{Argv: sh("echo ran"), Class: ClassHeavy})
 	assert.Equal(t, "ran\n", r.out)
 	b, _ := os.ReadFile(dir + "/calls")
-	assert.Equal(t, "-b\n", string(b), "taskpolicy -b stands in front of the command")
+	assert.Equal(t, "-n 10\n", string(b), "nice -n 10 stands in front of the command")
 
 	r = runSync(t, g, Options{Argv: sh("echo ran"), Class: ClassHeavy, Foreground: true})
 	assert.Equal(t, "ran\n", r.out)
 	b, _ = os.ReadFile(dir + "/calls")
-	assert.Equal(t, "-b\n", string(b), "--fg leaves it out")
+	assert.Equal(t, "-n 10\n", string(b), "--fg leaves it out")
 
-	g.Cfg.LightBackground = false
-	runSync(t, g, Options{Argv: sh("true"), Class: ClassLight})
+	g.SetConfig(func(c *Config) { c.Priority.Mode = "none" })
+	runSync(t, g, Options{Argv: sh("true"), Class: ClassHeavy})
 	b, _ = os.ReadFile(dir + "/calls")
-	assert.Equal(t, "-b\n", string(b), "a class that is not set to background is not wrapped")
+	assert.Equal(t, "-n 10\n", string(b), "mode none is not wrapped")
 }
 
 func TestTruncateArgv_ScrubsSecrets(t *testing.T) {
@@ -727,9 +730,9 @@ func TestTruncateArgv_ScrubsSecrets(t *testing.T) {
 
 func TestStatus_ASuspectRecordHasAFreeLockAndALivePid(t *testing.T) {
 	g, _ := testGate(t)
-	require.NoError(t, os.MkdirAll(g.Cfg.Dir, 0o755))
+	require.NoError(t, os.MkdirAll(g.Config().Dir, 0o755))
 	h := Holder{Class: ClassHeavy, Slot: 1, PID: os.Getpid(), Token: "t"}
-	require.NoError(t, os.WriteFile(filepath.Join(g.Cfg.Dir, "heavy-1.json"), mustJSON(t, h), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(g.Config().Dir, "heavy-1.json"), mustJSON(t, h), 0o644))
 	st := g.Status()
 	assert.Empty(t, st.Heavy, "a free lock is a free slot")
 	require.Len(t, st.Suspect, 1)

@@ -31,12 +31,6 @@ type PressureReader interface {
 	Read() (Pressure, error)
 }
 
-// Admit says whether new work may start under p. Unknown levels above 1 hold; an unreadable state is the caller's
-// to admit (fail open).
-func (c Config) Admit(p Pressure) bool {
-	return p.Level <= 1 && p.PageRate < c.MaxPageRate
-}
-
 // sampleReuse is how long a sample in the cache file is reused by other gates; rateWindow how far back the rate looks.
 const (
 	sampleReuse = 5 * time.Second

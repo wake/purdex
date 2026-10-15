@@ -18,16 +18,6 @@ func mustJSON(t *testing.T, v any) []byte {
 	return b
 }
 
-// (M: admit at level 2.)
-func TestAdmit_LevelAndRate(t *testing.T) {
-	cfg := Defaults() // max_page_rate 100
-	assert.True(t, cfg.Admit(Pressure{Level: 1, PageRate: 0}))
-	assert.True(t, cfg.Admit(Pressure{Level: 1, PageRate: 99.9}))
-	assert.False(t, cfg.Admit(Pressure{Level: 1, PageRate: 100}), "at the rate")
-	assert.False(t, cfg.Admit(Pressure{Level: 2}), "warn level")
-	assert.False(t, cfg.Admit(Pressure{Level: 4}), "critical level")
-}
-
 const vmStatSample = `Mach Virtual Memory Statistics: (page size of 16384 bytes)
 Pages free:                                     5545.
 Pageins:                                    301199558.

@@ -61,18 +61,18 @@ func TestPnpmArgs(t *testing.T) {
 }
 
 func TestCapped_NamesWhatItAdded(t *testing.T) {
-	cfg := Defaults()
-	argv, env, added := Capped(words("go test ./..."), []string{"A=1"}, cfg)
+	lim := Limits{GoP: 3, VitestWorkers: 3, PnpmWorkspace: 2}
+	argv, env, added := Capped(words("go test ./..."), []string{"A=1"}, lim)
 	assert.Equal(t, words("go test ./..."), argv)
 	assert.Equal(t, []string{"A=1", "GOFLAGS=-p=3"}, env)
 	assert.Equal(t, []string{"GOFLAGS -p=3"}, added)
 
-	argv, env, added = Capped(words("npx vitest run"), []string{"GOFLAGS=-p=1"}, cfg)
+	argv, env, added = Capped(words("npx vitest run"), []string{"GOFLAGS=-p=1"}, lim)
 	assert.Equal(t, words("npx vitest run --maxWorkers=3"), argv)
 	assert.Equal(t, []string{"GOFLAGS=-p=1"}, env)
 	assert.Equal(t, []string{"--maxWorkers=3"}, added)
 
-	_, env, added = Capped(words("pnpm check"), nil, cfg)
+	_, env, added = Capped(words("pnpm check"), nil, lim)
 	assert.Equal(t, []string{"GOFLAGS=-p=3"}, env, "a script that runs go gets the cap in its environment")
 	assert.Empty(t, added, "but the line names only what the command line got")
 }
