@@ -92,8 +92,13 @@ func ParseTasks(file string) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ParseTasksText(file, string(b)), nil
+}
+
+// ParseTasksText is ParseTasks for text that was read already (name only labels it in the log).
+func ParseTasksText(name, text string) []Task {
 	var out []Task
-	for i, l := range strings.Split(string(b), "\n") {
+	for i, l := range strings.Split(text, "\n") {
 		l = strings.TrimSuffix(l, "\r")
 		if !strings.HasPrefix(l, "|") {
 			continue
@@ -105,10 +110,10 @@ func ParseTasks(file string) ([]Task, error) {
 		var t Task
 		body := strings.TrimSuffix(l[at+len(taskMarker):], " -->")
 		if !strings.HasSuffix(l, " -->") || json.Unmarshal([]byte(body), &t) != nil || t.Key == "" {
-			log.Printf("journal: %s:%d: skipping unreadable task row", file, i+1)
+			log.Printf("journal: %s:%d: skipping unreadable task row", name, i+1)
 			continue
 		}
 		out = append(out, t)
 	}
-	return out, nil
+	return out
 }
