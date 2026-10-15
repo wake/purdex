@@ -357,6 +357,10 @@ func (p *Pool) TryTake(t *Ticket) (slot *Slot, ahead int, err error) {
 	}
 	// keep the lowest free slot; the other probes are given back
 	closeAll(free[1:])
+	// The lock is ours now, so a record left by an earlier holder (kept because a child of it still held the lock) is stale:
+	// remove it before anything else, or a command still carrying the old token could pass the nesting check against our
+	// lock until SetHolder writes ours.
+	_ = os.Remove(p.recordPath(freeK[0]))
 	return &Slot{Class: p.Class, K: freeK[0], f: free[0], rec: p.recordPath(freeK[0])}, ahead, nil
 }
 

@@ -39,6 +39,7 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 	fails := 0
 	warned := false
 	lastPlace := time.Time{}
+	waitStart := time.Time{} // set at the first look that did not get a slot
 	for {
 		cfg = g.refresh()
 		cfg.Dir = dir
@@ -72,17 +73,24 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 			}
 			if slot != nil {
 				ticket.Drop()
+				if !waitStart.IsZero() {
+					g.say("%s", grantedLine(class, g.Now().Sub(waitStart)))
+				}
 				return slot, 0, false
 			}
 			ahead = a
 		}
 		now := g.Now()
+		if waitStart.IsZero() {
+			waitStart = now
+		}
 		if lastPlace.IsZero() || now.Sub(lastPlace) >= time.Minute {
 			lastPlace = now
 			if ok {
-				g.say("waiting for a %s slot (%d ahead)", class, ahead)
+				holders := g.pool(cfg, class).Held()
+				g.say("%s", waitingLine(class, ahead+len(holders), holders, now)) // everything in front of it: the running and the queued
 			} else {
-				g.say("waiting: the host is under memory pressure")
+				g.say("%s", pressureLine(lastPressure(good), cfg.Admission, good != nil))
 			}
 		}
 		select {
@@ -93,6 +101,14 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		case <-time.After(g.Poll()):
 		}
 	}
+}
+
+// lastPressure is the last good reading, or the zero Pressure when there has not been one.
+func lastPressure(p *Pressure) Pressure {
+	if p == nil {
+		return Pressure{}
+	}
+	return *p
 }
 
 func signalNumber(s os.Signal) int {

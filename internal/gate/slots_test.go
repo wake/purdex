@@ -366,3 +366,23 @@ func TestPool_AHalfMadeTicketOfADeadGateIsReaped(t *testing.T) {
 	assert.False(t, exists(aliveVeryOld), "an hour old whoever has the pid")
 	assert.True(t, exists(odd), "a name that is not a ticket's is left alone")
 }
+
+// A record kept for a child that still held the lock is stale once a new gate has the lock: the new gate removes it at
+// once, so a command that still carries the old token cannot pass the nesting check against the new lock before the new
+// record is written. (M: leave the old record until SetHolder.)
+func TestPool_TheOldRecordGoesWhenANewGateTakesTheSlot(t *testing.T) {
+	p := testPool(t, ClassHeavy, 1)
+	require.NoError(t, os.MkdirAll(p.Dir, 0o755))
+	old := Holder{Class: ClassHeavy, Slot: 1, PID: 4242, Token: "old-token", Argv: []string{"vitest"}}
+	require.NoError(t, os.WriteFile(p.recordPath(1), mustJSON(t, old), 0o644)) // the record Release kept
+
+	tk := ticketAt(t, p, 1)
+	s, _, err := p.TryTake(tk) // the earlier holder's last descriptor is gone: the lock is free
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	_, locked, ok := p.Record(1)
+	assert.False(t, ok, "the old record is gone before the new holder has written its own")
+	assert.False(t, locked && ok)
+	h, _, _ := p.Record(1)
+	assert.Empty(t, h.Token, "so the old token proves nothing")
+}

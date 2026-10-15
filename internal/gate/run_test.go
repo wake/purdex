@@ -874,3 +874,61 @@ func TestRun_AnEscapedChildKeepsTheSlotUntilItEnds(t *testing.T) {
 	require.NoError(t, syscall.Kill(pid, syscall.SIGKILL))
 	eventually(t, "the slot to be free", func() bool { return len(g.Status().Heavy) == 0 })
 }
+
+// What a waiting command is told: who holds the slot (cut and scrubbed), where, for how long, how many are ahead, that the
+// wait is normal; and a line when its turn comes.
+func TestRun_AWaitingCommandIsToldWhoHoldsTheSlotAndThatItIsNormal(t *testing.T) {
+	g, buf := testGate(t)
+	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1 })
+	work := t.TempDir()
+	// the holder's command line carries a secret that must not reach the message
+	holdBin := work + "/holder"
+	require.NoError(t, os.WriteFile(holdBin, []byte("#!/bin/sh\n"+holdScript(work, "0")+"\n"), 0o755))
+	occ := runAsync(g, t.Context(), Options{Argv: []string{"deploy", "--token", "s3cr3t-value"}, Real: holdBin, Class: ClassHeavy, Dir: work})
+	eventually(t, "the occupant", func() bool { return exists(work + "/started-0") })
+	waiter := runAsync(g, t.Context(), Options{Argv: sh("true"), Class: ClassHeavy})
+	eventually(t, "the waiting line", func() bool { return strings.Contains(buf.String(), "waiting for a heavy slot") })
+	line := buf.String()
+	assert.Contains(t, line, "1 ahead")
+	assert.Contains(t, line, "held ")
+	assert.Contains(t, line, "by \"deploy --token <redacted>\"")
+	assert.NotContains(t, line, "s3cr3t-value", "a secret in the holder's command line does not reach the message")
+	assert.Contains(t, line, projectOf(work), "where it runs")
+	assert.Contains(t, line, "This is a normal queue")
+	assert.Contains(t, line, "do not interrupt it")
+
+	require.NoError(t, os.WriteFile(work+"/go-0", nil, 0o644))
+	assert.Equal(t, 0, (<-waiter).code)
+	<-occ
+	assert.Contains(t, buf.String(), "got a heavy slot after ")
+}
+
+func TestWaitMessages_Formatting(t *testing.T) {
+	assert.Equal(t, "45s", fmtDur(45*time.Second))
+	assert.Equal(t, "12m", fmtDur(12*time.Minute+20*time.Second))
+	assert.Equal(t, "1h05m", fmtDur(65*time.Minute))
+	assert.Equal(t, "purdex/spa", projectOf("/Users/wake/Workspace/wake/purdex/spa"))
+	assert.Equal(t, "work", projectOf("/work"))
+	now := time.Unix(10000, 0)
+	h := Holder{Argv: []string{"pnpm", "exec", "vitest", "run"}, Cwd: "/w/purdex/spa", Started: now.Add(-12 * time.Minute)}
+	assert.Equal(t,
+		"waiting for a heavy slot — 1 ahead; held 12m by \"pnpm exec vitest run\" (purdex/spa). This is a normal queue: it starts by itself when that ends; do not interrupt it or run the command another way.",
+		waitingLine(ClassHeavy, 1, []Holder{h}, now))
+	older := Holder{Argv: []string{"go", "test"}, Cwd: "/w/x", Started: now.Add(-30 * time.Minute)}
+	assert.Contains(t, waitingLine(ClassHeavy, 2, []Holder{h, older}, now), "held 30m by \"go test\"", "the oldest is named")
+	assert.Contains(t, waitingLine(ClassHeavy, 2, []Holder{h, older}, now), "(+1 more)")
+	assert.Contains(t, waitingLine(ClassLight, 0, nil, now), "no slot is held right now")
+	orphan := h
+	orphan.Orphaned = true
+	assert.Contains(t, waitingLine(ClassHeavy, 1, []Holder{orphan}, now), "its gate is gone")
+	assert.Contains(t, waitingLine(ClassHeavy, 1, []Holder{{}}, now), "; another command.")
+
+	a := Defaults().Admission
+	pl := pressureLine(Pressure{Level: 2, PageRate: 340.4}, a, true)
+	assert.Contains(t, pl, "level 2")
+	assert.Contains(t, pl, "340 pages/s")
+	assert.Contains(t, pl, "level 1 or below and under 50 pages/s")
+	assert.Contains(t, pl, "normal wait")
+	assert.Contains(t, pressureLine(Pressure{}, a, false), "could not be read yet")
+	assert.Equal(t, "got a heavy slot after 14m", grantedLine(ClassHeavy, 14*time.Minute+5*time.Second))
+}
