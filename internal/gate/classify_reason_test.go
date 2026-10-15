@@ -63,6 +63,9 @@ func TestClassifyReason_Table(t *testing.T) {
 		{"vite", Env{}, ClassNone, ReasonWatchMode},
 		{"vite dev", Env{}, ClassNone, ReasonWatchMode},
 		{"electron-vite dev", Env{}, ClassNone, ReasonWatchMode},
+		{"vite preview", Env{}, ClassNone, ReasonWatchMode}, // a server that stays up
+		{"vite serve --port 3000", Env{}, ClassNone, ReasonWatchMode},
+		{"electron-vite preview", Env{}, ClassNone, ReasonWatchMode},
 		// known tools, commands that cost little
 		{"go version", Env{}, ClassNone, ReasonKnownPassthrough},
 		{"go env GOPATH", Env{}, ClassNone, ReasonKnownPassthrough},
@@ -85,7 +88,6 @@ func TestClassifyReason_Table(t *testing.T) {
 		{"vitest --version", Env{}, ClassNone, ReasonKnownPassthrough},
 		{"vitest list", Env{}, ClassNone, ReasonKnownPassthrough},
 		{"vite --version", Env{}, ClassNone, ReasonKnownPassthrough},
-		{"vite preview", Env{}, ClassNone, ReasonKnownPassthrough},
 		{"make clean", Env{}, ClassNone, ReasonKnownPassthrough},
 		{"make help", Env{}, ClassNone, ReasonKnownPassthrough},
 		{"composer validate", Env{}, ClassNone, ReasonKnownPassthrough},
@@ -108,6 +110,8 @@ func TestClassifyReason_Table(t *testing.T) {
 		{"yarn workspaces foreach run my-script", Env{}, ClassNone, ReasonUnknown},
 		{"composer run my-script", Env{}, ClassNone, ReasonUnknown},
 		{"composer exec php-cs-fixer", Env{}, ClassNone, ReasonUnknown},
+		{"vite optimize", Env{}, ClassNone, ReasonUnknown},
+		{"electron-vite something-new", Env{}, ClassNone, ReasonUnknown},
 		{"make", Env{}, ClassNone, ReasonUnknown},
 		{"make lint", Env{}, ClassNone, ReasonUnknown},
 		{"make integration", Env{}, ClassNone, ReasonUnknown},

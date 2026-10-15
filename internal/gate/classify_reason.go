@@ -42,10 +42,10 @@ func noneReason(argv []string, e Env) Reason {
 		switch {
 		case i >= 0 && args[i] == "build":
 			return ReasonPackaging
-		case i < 0 || args[i] == "dev" || args[i] == "serve":
-			return ReasonWatchMode // the dev server runs until it is stopped
+		case i < 0 || args[i] == "dev" || args[i] == "serve" || args[i] == "preview":
+			return ReasonWatchMode // a server that runs until it is stopped (a bare `vite` is the dev server)
 		}
-		return ReasonKnownPassthrough
+		return ReasonUnknown // `vite optimize` and whatever comes next: not a word the table knows
 	case "electron-builder":
 		return ReasonPackaging
 	}
