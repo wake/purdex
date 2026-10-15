@@ -55,6 +55,9 @@ type Holder struct {
 	// Orphaned (set when read, never stored): the slot is locked but the gate that took it is gone; the lock lives on
 	// in the command tree that inherited it.
 	Orphaned bool `json:"orphaned,omitempty"`
+	// Locked (set by Status, never stored): the processes that have the slot's lock file open right now, so a slot whose
+	// gate is gone shows which processes to end.
+	Locked []Straggler `json:"locked,omitempty"`
 }
 
 // Slot is a slot held by this process.

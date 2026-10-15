@@ -94,12 +94,13 @@ func (s *sysSampler) Sample(ctx context.Context) (HostRaw, []Proc, error) {
 		return raw, nil, err
 	}
 	raw.PageSize, raw.Free, raw.Inactive, raw.Speculative = vm.PageSize, vm.Free, vm.Inactive, vm.Speculative
+	raw.Pageouts, raw.Swapouts, raw.PageCounters = vm.Pageouts, vm.Swapouts, vm.Counters
 	if _, ok := raw.availableBytes(); !ok {
 		return raw, nil, fmt.Errorf("vm_stat: page counts overflow (%d + %d + %d pages of %d bytes)", vm.Free, vm.Inactive, vm.Speculative, vm.PageSize)
 	}
 
 	// LC_ALL=C keeps the decimal point a point in pcpu.
-	psOut, err := s.fork(ctx, []string{"LC_ALL=C"}, "ps", "-axo", "pid=,ppid=,pcpu=,rss=")
+	psOut, err := s.fork(ctx, []string{"LC_ALL=C"}, "ps", "-axo", "pid=,ppid=,pcpu=,rss=,ucomm=")
 	if err != nil {
 		return raw, nil, fmt.Errorf("ps: %w", err)
 	}
@@ -149,6 +150,10 @@ func parseLoadavgAll(b []byte) ([3]float64, error) {
 // vmStat is the part of vm_stat output D-1 uses.
 type vmStat struct {
 	PageSize, Free, Inactive, Speculative uint64
+	// Pageouts and Swapouts are vm_stat's running counters of pages written out; both is whether the two lines were there (a
+	// missing line is not a failed sample: the rate is only unknown).
+	Pageouts, Swapouts uint64
+	Counters           bool
 }
 
 // parseVMStat reads vm_stat output. It is a copy of the monitor module's
@@ -156,7 +161,7 @@ type vmStat struct {
 // missing count is an error, because a zero would pass for a full host.
 func parseVMStat(raw string) (vmStat, error) {
 	var v vmStat
-	var sawFree, sawInactive, sawSpeculative bool
+	var sawFree, sawInactive, sawSpeculative, sawPageouts, sawSwapouts bool
 	scanner := bufio.NewScanner(strings.NewReader(raw))
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -180,6 +185,10 @@ func parseVMStat(raw string) (vmStat, error) {
 			v.Inactive, sawInactive = value, true
 		case strings.HasPrefix(line, "Pages speculative:"):
 			v.Speculative, sawSpeculative = value, true
+		case strings.HasPrefix(line, "Pageouts:"):
+			v.Pageouts, sawPageouts = value, true
+		case strings.HasPrefix(line, "Swapouts:"):
+			v.Swapouts, sawSwapouts = value, true
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -191,6 +200,7 @@ func parseVMStat(raw string) (vmStat, error) {
 	if !sawFree || !sawInactive || !sawSpeculative {
 		return vmStat{}, errors.New("vm_stat: missing free, inactive or speculative pages")
 	}
+	v.Counters = sawPageouts && sawSwapouts
 	return v, nil
 }
 
@@ -204,16 +214,18 @@ func parseVMStatLine(line string) (uint64, bool) {
 	return value, err == nil
 }
 
-// parsePS reads `ps -axo pid=,ppid=,pcpu=,rss=` output (rss in KiB). A
-// malformed line is skipped and counted; output with no valid line at all is
-// an error.
+// parsePS reads `ps -axo pid=,ppid=,pcpu=,rss=,ucomm=` output (rss in KiB; ucomm is the
+// command's name, which may hold spaces, so it is the rest of the line). A line without
+// the ucomm column is still a process, with an empty Comm. A malformed line is skipped
+// and counted; output with no valid line at all is an error.
 func parsePS(out string) (procs []Proc, skipped int, err error) {
 	for _, line := range strings.Split(out, "\n") {
-		fields := strings.Fields(line)
+		fields, comm := splitPSLine(line)
 		if len(fields) == 0 {
 			continue
 		}
 		p, ok := parsePSFields(fields)
+		p.Comm = comm
 		if !ok {
 			skipped++
 			continue
@@ -224,6 +236,24 @@ func parsePS(out string) (procs []Proc, skipped int, err error) {
 		return nil, skipped, fmt.Errorf("ps: no valid process lines (%d skipped)", skipped)
 	}
 	return procs, skipped, nil
+}
+
+// splitPSLine is the four numeric columns of a ps line and the rest of it, trimmed, as the command's name. A line with fewer
+// than four words comes back whole (parsePSFields then refuses it).
+func splitPSLine(line string) (fields []string, comm string) {
+	rest := strings.TrimSpace(line)
+	if rest == "" {
+		return nil, ""
+	}
+	for len(fields) < 4 {
+		i := strings.IndexAny(rest, " \t")
+		if i < 0 {
+			return append(fields, rest), ""
+		}
+		fields = append(fields, rest[:i])
+		rest = strings.TrimLeft(rest[i:], " \t")
+	}
+	return fields, strings.TrimSpace(rest)
 }
 
 func parsePSFields(f []string) (Proc, bool) {

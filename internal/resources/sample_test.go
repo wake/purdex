@@ -53,6 +53,8 @@ Pages wired down:                             137688.
 Pages purgeable:                                4350.
 "Translation faults":                    61269535748.
 Pages copy-on-write:                     14260042953.
+Pageouts:                                      123456.
+Swapouts:                                       78901.
 `
 
 func TestParseVMStat_Speculative(t *testing.T) {
@@ -60,7 +62,7 @@ func TestParseVMStat_Speculative(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := vmStat{PageSize: 16384, Free: 68039, Inactive: 318361, Speculative: 13661}
+	want := vmStat{PageSize: 16384, Free: 68039, Inactive: 318361, Speculative: 13661, Pageouts: 123456, Swapouts: 78901, Counters: true}
 	if got != want {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
@@ -194,7 +196,7 @@ func (f *fakeHost) install(t *testing.T) {
 }
 
 func TestSampler_Healthy(t *testing.T) {
-	f := &fakeHost{psOut: "  100     1  50.0  1000\n  101   100  25.5  2000\n  oops\n"}
+	f := &fakeHost{psOut: "  100     1  50.0  1000 launchd\n  101   100  25.5  2000 Google Chrome H\n  oops\n"}
 	f.install(t)
 	s := &sysSampler{}
 	raw, procs, err := s.Sample(context.Background())
@@ -217,6 +219,9 @@ func TestSampler_Healthy(t *testing.T) {
 	if len(procs) != 2 || procs[1].RSSBytes != 2000*1024 {
 		t.Errorf("procs = %+v", procs)
 	}
+	if procs[0].Comm != "launchd" || procs[1].Comm != "Google Chrome H" {
+		t.Errorf("comms = %q, %q; want the rest of the line, spaces kept", procs[0].Comm, procs[1].Comm)
+	}
 	if got := s.PSLinesSkipped(); got != 1 {
 		t.Errorf("PSLinesSkipped = %d, want 1", got)
 	}
@@ -236,7 +241,7 @@ func TestSampler_Healthy(t *testing.T) {
 	if ps == nil || !slices.Contains(ps.env, "LC_ALL=C") {
 		t.Errorf("ps must run with LC_ALL=C, env = %v", ps)
 	}
-	if !slices.Equal(ps.args, []string{"-axo", "pid=,ppid=,pcpu=,rss="}) {
+	if !slices.Equal(ps.args, []string{"-axo", "pid=,ppid=,pcpu=,rss=,ucomm="}) {
 		t.Errorf("ps args = %v", ps.args)
 	}
 }
@@ -339,5 +344,57 @@ func TestParseLoadavgAll_AndComputeHostCarryAllThree(t *testing.T) {
 	h := ComputeHost(HostRaw{Load1: 3, Load5: 2, Load15: 1, NCPU: 4, MemBytes: 1 << 30, PageSize: 4096})
 	if h.Load1 != 3 || h.Load5 != 2 || h.Load15 != 1 {
 		t.Errorf("host = %+v", h)
+	}
+}
+
+// The fifth column is the command's name, the rest of the line (it may hold spaces); a line without it is still a process.
+func TestParsePS_CommIsTheRestOfTheLine(t *testing.T) {
+	out := "  1     0  0.0  4000 launchd\n" +
+		"  2     1  1.5  8000 Google Chrome H\n" +
+		"  3     1  2.5  9000\tzsh\n" +
+		"  4     1  0.0  1000   padded name  \n" +
+		"  5     1  0.0  1000\n" + // the old four-column form
+		"  6     1  0.0\n" + // too short
+		"  x     1  0.0  1000 bad\n" // not a pid
+	procs, skipped, err := parsePS(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skipped != 2 {
+		t.Fatalf("skipped = %d, want the two malformed lines", skipped)
+	}
+	want := []Proc{
+		{PID: 1, PPID: 0, Pcpu: 0, RSSBytes: 4000 * 1024, Comm: "launchd"},
+		{PID: 2, PPID: 1, Pcpu: 1.5, RSSBytes: 8000 * 1024, Comm: "Google Chrome H"},
+		{PID: 3, PPID: 1, Pcpu: 2.5, RSSBytes: 9000 * 1024, Comm: "zsh"},
+		{PID: 4, PPID: 1, Pcpu: 0, RSSBytes: 1000 * 1024, Comm: "padded name"},
+		{PID: 5, PPID: 1, Pcpu: 0, RSSBytes: 1000 * 1024, Comm: ""},
+	}
+	if !slices.Equal(procs, want) {
+		t.Fatalf("procs = %+v\nwant    %+v", procs, want)
+	}
+}
+
+// Pageouts and Swapouts are kept in the reading; a vm_stat without them is a sample with unknown counters, not a failed one.
+func TestSampler_KeepsThePageCounters(t *testing.T) {
+	f := &fakeHost{}
+	f.install(t)
+	raw, _, err := (&sysSampler{}).Sample(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !raw.PageCounters || raw.Pageouts != 123456 || raw.Swapouts != 78901 {
+		t.Errorf("counters = %v %d %d", raw.PageCounters, raw.Pageouts, raw.Swapouts)
+	}
+
+	without := strings.NewReplacer("Pageouts:", "Pagedouts:").Replace(vmStatSample)
+	f2 := &fakeHost{vmOut: without}
+	f2.install(t)
+	raw, _, err = (&sysSampler{}).Sample(context.Background())
+	if err != nil {
+		t.Fatalf("a vm_stat without Pageouts failed the sample: %v", err)
+	}
+	if raw.PageCounters || raw.Free != 68039 {
+		t.Errorf("counters = %v, free = %d; want unknown counters and the memory figures intact", raw.PageCounters, raw.Free)
 	}
 }
