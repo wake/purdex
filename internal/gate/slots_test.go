@@ -386,3 +386,20 @@ func TestPool_TheOldRecordGoesWhenANewGateTakesTheSlot(t *testing.T) {
 	h, _, _ := p.Record(1)
 	assert.Empty(t, h.Token, "so the old token proves nothing")
 }
+
+// When the old record cannot be removed (a non-empty directory sits where it goes), no slot is handed out and the lock is let
+// go again: the old token must never be left beside a lock that is held. (M: ignore the failed removal.)
+func TestPool_ASlotIsNotHandedOutWhenTheOldRecordCannotBeRemoved(t *testing.T) {
+	p := testPool(t, ClassHeavy, 1)
+	require.NoError(t, os.MkdirAll(filepath.Join(p.recordPath(1), "x"), 0o755)) // heavy-1.json is a non-empty directory
+	tk := ticketAt(t, p, 1)
+	s, _, err := p.TryTake(tk)
+	assert.Nil(t, s)
+	assert.ErrorIs(t, err, ErrBroken)
+	// the lock is free again
+	f, oerr := os.OpenFile(p.slotPath(1), os.O_RDWR, 0)
+	require.NoError(t, oerr)
+	defer f.Close()
+	st, _ := flockNB(f)
+	assert.Equal(t, lockGot, st, "the slot lock was not left held")
+}
