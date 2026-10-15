@@ -59,6 +59,16 @@ type windowJSON struct {
 	LastIndex     int  `json:"last_index"`
 	TotalTurns    int  `json:"total_turns"`
 	HasMoreBefore bool `json:"has_more_before"`
+	// Predecessor is the session this one replaced (a relay or a /clear), so a client can scroll on into its transcript.
+	// Present in every snapshot (first page, before=, around=, the WebSocket's), never in increments; absent when none is known.
+	Predecessor *predecessorJSON `json:"predecessor,omitempty"`
+}
+
+// predecessorJSON: kind is "relay" (a session_lineage row) or "clear" (a recorded /clear); at is unix ms.
+type predecessorJSON struct {
+	SessionID string `json:"session_id"`
+	Kind      string `json:"kind"`
+	At        int64  `json:"at"`
 }
 
 type snapshotJSON struct {
@@ -227,6 +237,7 @@ func (m *Module) snapshotBody(entry *convfeed.Entry, sid, hostID string, caps *c
 	if echo == nil {
 		echo = map[string]string{}
 	}
+	pred := m.predecessorOf(sid) // read once and part of the envelope, so the 4 MiB trim leaves room for it
 	build := func(h convfeed.Header, cursor string, turnList []convmodel.Turn, win convfeed.WindowResult, reset bool) snapshotJSON {
 		var cu *convmodel.Usage
 		if h.Usage != nil {
@@ -239,7 +250,7 @@ func (m *Module) snapshotBody(entry *convfeed.Entry, sid, hostID string, caps *c
 				Provider: "claude", Backend: h.Backend, Title: h.Title, Status: h.Status, Capabilities: caps, Usage: cu, Turns: apiTurns(turnList, echo),
 			},
 			Header: headerOf(h),
-			Window: windowJSON{FirstIndex: win.FirstIndex, LastIndex: win.LastIndex, TotalTurns: win.TotalTurns, HasMoreBefore: win.HasMoreBefore},
+			Window: windowJSON{FirstIndex: win.FirstIndex, LastIndex: win.LastIndex, TotalTurns: win.TotalTurns, HasMoreBefore: win.HasMoreBefore, Predecessor: pred},
 			Cursor: cursor,
 		}
 	}
