@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.0.0-alpha.740] - 2026-10-16
+
+> mod 與 daemon（`pdx` CLI）有改，SPA、Electron 沒有改，資料庫 schema 沒有變。兩台都要重跑 `pdx setup` 才會換上新的 mod（mod ↔ daemon 協定仍是 8）；退回 739 不需要還原資料庫，但要再跑一次 `pdx setup` 換回舊 mod。
+
+### Added：主機負載控制 L1a（mod 端的閘門，spec docs/specs/2026-10-15-host-load-control-spec.md §6、D12）
+
+- **agent 直接呼叫的工具也經過閘門（PR #2929）**：mod 新增 `hooks/gate.js`。agent 的 Bash 直接呼叫 `node_modules/.bin/vitest`、`node_modules/.bin/tsc`、`vendor/bin/phpunit`、`vendor/bin/pest`（含 `./` 開頭）時，自動在前面加上 `pdx gate --auto --`，shim 管不到的這些呼叫也會排隊。權限判定會因此改變的呼叫不改寫。
+- **會排隊的前景呼叫自動轉到背景（D12）**：前景的 Bash 呼叫若 `pdx gate would-wait --auto` 回答「會等」，mod 把整段呼叫改成 `run_in_background` 並附一段說明，session 不會卡在前景的時間上限裡等名額（10-15 實測：背景任務跨接力仍會收到完成通知）。全程 fail open，規劃總期限 4 秒。順序固定為閘門先、舊租約後。
+- **`pdx gate would-wait`（PR #2923）**：不啟動任何行程、不拿名額，只回答「這一類（或用 `--auto` 依指令文字判斷的這個指令）現在會不會排隊」與原因；不需要 daemon，`--json` 給程式讀。
+
+### Added：負載守門員的核心（還沒接進 daemon，spec §12）
+
+- **偵測核心（W1b-1，PR #2922）**：`internal/watch` 的偵測器，判斷 E1（閘門外的重指令樹）、E2（記憶體壓力或換頁率持續過高）、E3（gate 已不在、名額仍被佔住 15 分鐘以上）、E4（名額佔用超過上限），每個事件一次、持續超標不重響。這一版只有程式庫，daemon 還沒呼叫它。
+- **事件紀錄與狀態（W1b-2，PR #2939）**：事件寫進每天一個 JSON lines 檔（保留 30 天，指令列先遮蔽敏感值），偵測器的跨重啟記憶存成原子寫入的 `state.json`；`pdx watch log [--since 24h|7d|日期] [--kind …] [--json]` 讀紀錄（daemon 接線前沒有任何紀錄）。
+
+### Changed
+
+- **`pdx gate status --json` 變輕（#2933，PR #2938）**：機器讀的 JSON 預設只對「gate 已不在」的名額查是誰拿著鎖（每查一次要掃全機行程，約 0.3 秒 CPU），每次從約 0.4 秒降到 0.06 秒 CPU；要完整資料加 `--holders`。人看的 `pdx gate status` 照舊全查。
+
+### Fixed（測試）
+
+- **測試不再碰真實的 gate 目錄（#2932，PR #2935）**：`cmd/pdx`、`internal/gate`、`internal/gate/shim` 的測試一律把 HOME 與 `PDX_GATE_DIR` 指到暫時目錄，並各有一個守門測試。起因是一個舊測試漏下的行程拿著 mlab 真實的重指令名額 3.5 小時。
+- **佔名額的測試不再靠牆鐘（#2936，PR #2937）**：改成等檔案才放行，主機忙的時候不會因為佔位的 `sleep` 先結束而誤判。
+
 ## [1.0.0-alpha.739] - 2026-10-15
 
 > 緊急修正（738 的重指令閘門大部分沒攔到）。只改 `pdx setup` 寫進 `~/.zshenv` 的區塊，daemon、SPA、mod、Electron 行為都沒有改，資料庫 schema 沒有變。兩台都要重跑 `pdx setup`，舊區塊會被換成新的；退回 738 不需要還原資料庫。
