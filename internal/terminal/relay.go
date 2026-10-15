@@ -104,7 +104,7 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 		log.Printf("pty start: %v", err)
 		return
 	}
-	execstat.Observe("terminal.relay", 0)
+	c.NoteStarted()
 	if r.OnStart != nil {
 		r.OnStart()
 	}

@@ -193,10 +193,18 @@ func (c *Cmd) Start() error {
 		c.observe(t0)
 		return err
 	}
-	statsOf(c.tag).count()
-	c.started = t0
+	c.noteStarted(t0)
 	return nil
 }
+
+func (c *Cmd) noteStarted(t0 time.Time) {
+	statsOf(c.tag).count()
+	c.started = t0
+}
+
+// NoteStarted is for a caller that starts the embedded Cmd itself (a pty library does): call it once the start succeeded, so the
+// fork is counted and Wait adds its time.
+func (c *Cmd) NoteStarted() { c.noteStarted(time.Now()) }
 
 // Wait implements (*exec.Cmd).Wait.
 func (c *Cmd) Wait() error {

@@ -139,3 +139,22 @@ func TestTagsAreSortedAndDurationsAdd(t *testing.T) {
 		t.Fatalf("%+v", tags[1])
 	}
 }
+
+// A caller that starts the embedded Cmd itself (the pty library) still gets the fork counted and its wall time added at Wait.
+func TestNoteStartedCountsAndWaitAddsTheTime(t *testing.T) {
+	ResetTags()
+	c := Command("t.pty", "sleep", "0.15")
+	if err := c.Cmd.Start(); err != nil {
+		t.Skip("no sleep")
+	}
+	c.NoteStarted()
+	if got := find(t, "t.pty"); got.Total != 1 {
+		t.Fatalf("%+v", got)
+	}
+	if err := c.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	if got := find(t, "t.pty"); got.Total != 1 || got.TotalMS < 100 {
+		t.Fatalf("the time of the wait is added: %+v", got)
+	}
+}
