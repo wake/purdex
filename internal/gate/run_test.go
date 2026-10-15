@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -544,7 +545,7 @@ func TestRun_AKilledGateKeepsItsSlotWhileItsTreeRuns(t *testing.T) {
 	eventually(t, "the slot to be free once the tree is gone", func() bool {
 		s, _, err := p.TryTake(tk)
 		if err == nil && s != nil {
-			s.Release()
+			s.Release(nil)
 			return true
 		}
 		return false
@@ -648,7 +649,8 @@ func TestRun_TheDiskIsLookedAtInTheCommandsDirectoryAndTmp(t *testing.T) {
 	g.DiskFree = func(path string) (int64, error) { seen = append(seen, path); return 100 << 30, nil }
 	wd := t.TempDir()
 	runSync(t, g, Options{Argv: sh("true"), Class: ClassHeavy, Dir: wd})
-	assert.Equal(t, []string{wd, os.TempDir()}, seen)
+	// before the queue and again once the slot is taken: the command's directory and $TMPDIR each time
+	assert.Equal(t, []string{wd, os.TempDir(), wd, os.TempDir()}, seen)
 }
 
 // A file where the directory should be is a damaged install: the command is not run.
@@ -716,16 +718,19 @@ func TestRun_PriorityWrapsTheCommandUnlessForeground(t *testing.T) {
 	assert.Equal(t, "-n 10\n", string(b), "mode none is not wrapped")
 }
 
-func TestTruncateArgv_ScrubsSecrets(t *testing.T) {
+func TestTruncateArgv_ScrubsSecretsAndCutsTheRest(t *testing.T) {
 	got := truncateArgv([]string{"curl", "-H", "Authorization: Bearer abc", "https://x/?token=1", strings.Repeat("a", 300)})
 	assert.Equal(t, "<redacted>", got[2])
-	assert.Equal(t, "<redacted>", got[3])
+	assert.Equal(t, "https://x/?token=<redacted>", got[3])
 	assert.Len(t, got[4], 120+len("…"))
 	long := make([]string, 20)
 	for i := range long {
 		long[i] = "w"
 	}
 	assert.Len(t, truncateArgv(long), 13, "12 words and a mark")
+	// the cut comes after the scrub: a secret far into a long word does not survive in its first 120 bytes
+	got = truncateArgv([]string{"run", "--token=" + strings.Repeat("s", 400)})
+	assert.Equal(t, "--token=<redacted>", got[1])
 }
 
 func TestStatus_ASuspectRecordHasAFreeLockAndALivePid(t *testing.T) {
@@ -737,4 +742,214 @@ func TestStatus_ASuspectRecordHasAFreeLockAndALivePid(t *testing.T) {
 	assert.Empty(t, st.Heavy, "a free lock is a free slot")
 	require.Len(t, st.Suspect, 1)
 	assert.Empty(t, st.Suspect[0].Token)
+}
+
+// A setting that changes gate.dir while a command waits is for the next command: the ticket lives in one directory, and the
+// waiter keeps looking at that one. (M: re-read the directory with the rest of the settings.)
+func TestRun_AWaitingCommandStaysInItsDirectoryWhenTheSettingMoves(t *testing.T) {
+	g, _ := testGate(t)
+	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1 })
+	dirA := g.Config().Dir
+	dirB := t.TempDir() + "/other"
+	work := t.TempDir()
+	var moved atomic.Bool
+	g.Load = func() Config {
+		c := g.Config()
+		if moved.Load() {
+			c.Dir = dirB
+		}
+		return c
+	}
+	occ := runAsync(g, t.Context(), Options{Argv: sh(holdScript(work, "0")), Class: ClassHeavy})
+	eventually(t, "the occupant", func() bool { return exists(work + "/started-0") })
+	waiter := runAsync(g, t.Context(), Options{Argv: sh("touch " + work + "/ran"), Class: ClassHeavy})
+	eventually(t, "the waiter's ticket", func() bool { return g.Status().WaitHeavy == 1 })
+
+	moved.Store(true) // the setting moves
+	never(t, "the waiter running before the slot is free", 200*time.Millisecond, func() bool { return exists(work + "/ran") })
+	require.NoError(t, os.WriteFile(work+"/go-0", nil, 0o644))
+	assert.Equal(t, 0, (<-waiter).code, "it took the freed slot of the directory it queued in")
+	assert.True(t, exists(work+"/ran"))
+	<-occ
+	_, err := os.Stat(dirB)
+	assert.True(t, os.IsNotExist(err), "and never touched the new directory")
+	_ = dirA
+}
+
+// The disk floor is looked at again once the slot is taken: a wait of hours can end with the disk full. (M: check the disk
+// before the queue only.)
+func TestRun_TheDiskIsLookedAtAgainAfterTheWait(t *testing.T) {
+	g, buf := testGate(t)
+	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1; c.Admission.DiskMinGB = 3 })
+	free := int64(100 << 30)
+	var mu sync.Mutex
+	g.DiskFree = func(string) (int64, error) { mu.Lock(); defer mu.Unlock(); return free, nil }
+	work := t.TempDir()
+	occ := runAsync(g, t.Context(), Options{Argv: sh(holdScript(work, "0")), Class: ClassHeavy})
+	eventually(t, "the occupant", func() bool { return exists(work + "/started-0") })
+	waiter := runAsync(g, t.Context(), Options{Argv: sh("touch " + work + "/ran"), Class: ClassHeavy})
+	eventually(t, "the waiter's ticket", func() bool { return g.Status().WaitHeavy == 1 })
+
+	mu.Lock()
+	free = 1 << 30 // the disk filled up while it waited
+	mu.Unlock()
+	require.NoError(t, os.WriteFile(work+"/go-0", nil, 0o644))
+	r := <-waiter
+	assert.Equal(t, ExitRefused, r.code)
+	assert.False(t, exists(work+"/ran"))
+	assert.Contains(t, buf.String(), "disk_min_gb")
+	<-occ
+	assert.Empty(t, g.Status().Heavy, "and the slot it had taken is free again")
+}
+
+// A child that leaves the process group with setsid is still a child of the command while the command runs; the tree
+// remembers it and the clean-up ends it before the slot is given back. (M: clear the group only.) What this cannot catch: a
+// child that is forked, leaves the group and is orphaned within one TreeEvery of the last look (the parent exits at once).
+func TestRun_AChildThatLeftTheGroupIsEndedToo(t *testing.T) {
+	if _, err := exec.LookPath("perl"); err != nil {
+		t.Skip("perl is needed to call setsid")
+	}
+	g, _ := testGate(t)
+	dir := t.TempDir()
+	script := `perl -e 'use POSIX; if (fork == 0) { POSIX::setsid(); open F, ">", $ARGV[0]; print F $$; close F; exec "sleep", "300" } select(undef, undef, undef, 0.5)' ` + dir + `/pid; exit 0`
+	r := runSync(t, g, Options{Argv: sh(script), Class: ClassHeavy})
+	assert.Equal(t, 0, r.code)
+	pid := pidFrom(t, dir+"/pid")
+	assert.True(t, gone(pid), "the child that left the group is gone when the run returns")
+}
+
+// A cancelled run ends in bounded time even if the command ignores SIGTERM: SIGTERM, the grace, SIGKILL. (M: signal once.)
+func TestRun_ACancelledRunEndsEvenIfTheCommandIgnoresSigterm(t *testing.T) {
+	g, _ := testGate(t)
+	g.KillGrace = 200 * time.Millisecond
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	res := runAsync(g, ctx, Options{Argv: sh("trap '' TERM; touch " + dir + "/started; while :; do sleep 0.05; done"), Class: ClassHeavy})
+	eventually(t, "start", func() bool { return exists(dir + "/started") })
+	cancel()
+	select {
+	case r := <-res:
+		assert.Equal(t, 128+int(syscall.SIGKILL), r.code)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the run did not end after the cancel")
+	}
+	assert.Empty(t, g.Status().Heavy, "and its slot is free")
+}
+
+// The holder record is part of the nesting protocol: when it cannot be written the command is not run.
+// (M: log the failure and run on.)
+func TestRun_ACommandIsNotRunWithoutItsHolderRecord(t *testing.T) {
+	g, buf := testGate(t)
+	dir := t.TempDir()
+	cfgDir := g.Config().Dir
+	require.NoError(t, os.MkdirAll(filepath.Join(cfgDir, "heavy-1.json"), 0o755))               // a directory where the record goes: the rename fails
+	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "heavy-1.json", "keep"), nil, 0o644)) // and not an empty one, which Remove would take away
+	r := runSync(t, g, Options{Argv: sh("touch " + dir + "/ran"), Class: ClassHeavy})
+	assert.Equal(t, ExitRefused, r.code)
+	assert.False(t, exists(dir+"/ran"))
+	assert.Contains(t, buf.String(), "was not run")
+	assert.Empty(t, g.Status().Heavy)
+}
+
+// A child that escaped the clean-up (orphaned at once, so no look at the process table saw it) still holds fd 3, but the
+// slot is released when the command ends, and the gate says who was left running. (M: no unlock on release.)
+func TestRun_AnEscapedChildDoesNotKeepTheSlotAndIsNamed(t *testing.T) {
+	if _, err := exec.LookPath("perl"); err != nil {
+		t.Skip("perl is needed to call setsid")
+	}
+	if _, err := exec.LookPath("lsof"); err != nil {
+		t.Skip("lsof is needed to name the leftovers")
+	}
+	g, buf := testGate(t)
+	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1 })
+	g.TreeEvery = time.Hour // no look at the tree at all: the child is orphaned unseen
+	dir := t.TempDir()
+	script := `perl -e 'use POSIX; if (fork == 0) { POSIX::setsid(); open F, ">", $ARGV[0]; print F $$; close F; exec "sleep", "300" }' ` + dir + `/pid; exit 0`
+	r := runSync(t, g, Options{Argv: sh(script), Class: ClassHeavy})
+	assert.Equal(t, 0, r.code)
+	pid := pidFrom(t, dir+"/pid")
+	defer func() { _ = syscall.Kill(pid, syscall.SIGKILL) }()
+
+	assert.Empty(t, g.Status().Heavy, "the slot is free although the escaped child still holds fd 3")
+	pool := g.pool(g.Config(), ClassHeavy)
+	tk, err := pool.Enqueue()
+	require.NoError(t, err)
+	s, _, err := pool.TryTake(tk)
+	require.NoError(t, err)
+	assert.NotNil(t, s, "a second gate can take it")
+	s.Release(nil)
+	tk.Drop()
+	assert.Contains(t, buf.String(), "escaped the clean-up and are still running: "+strconv.Itoa(pid))
+	assert.Contains(t, buf.String(), "slot is released")
+}
+
+// Release names what else holds the lock file and does not name itself.
+func TestSlot_ReleaseReturnsTheOthersWhoHoldTheLock(t *testing.T) {
+	p := &Pool{Dir: t.TempDir(), Class: ClassHeavy, Size: 1, Now: time.Now}
+	tk, err := p.Enqueue()
+	require.NoError(t, err)
+	defer tk.Drop()
+	s, _, err := p.TryTake(tk)
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	left := s.Release(func(string) []Straggler { return []Straggler{{PID: os.Getpid()}, {PID: 4242, Cmd: "tmux"}} })
+	assert.Equal(t, []Straggler{{PID: 4242, Cmd: "tmux"}}, left)
+}
+
+// What a waiting command is told: who holds the slot (cut and scrubbed), where, for how long, how many are ahead, that the
+// wait is normal; and a line when its turn comes.
+func TestRun_AWaitingCommandIsToldWhoHoldsTheSlotAndThatItIsNormal(t *testing.T) {
+	g, buf := testGate(t)
+	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1 })
+	work := t.TempDir()
+	// the holder's command line carries a secret that must not reach the message
+	holdBin := work + "/holder"
+	require.NoError(t, os.WriteFile(holdBin, []byte("#!/bin/sh\n"+holdScript(work, "0")+"\n"), 0o755))
+	occ := runAsync(g, t.Context(), Options{Argv: []string{"deploy", "--token", "s3cr3t-value"}, Real: holdBin, Class: ClassHeavy, Dir: work})
+	eventually(t, "the occupant", func() bool { return exists(work + "/started-0") })
+	waiter := runAsync(g, t.Context(), Options{Argv: sh("true"), Class: ClassHeavy})
+	eventually(t, "the waiting line", func() bool { return strings.Contains(buf.String(), "waiting for a heavy slot") })
+	line := buf.String()
+	assert.Contains(t, line, "1 ahead")
+	assert.Contains(t, line, "held ")
+	assert.Contains(t, line, "by \"deploy --token <redacted>\"")
+	assert.NotContains(t, line, "s3cr3t-value", "a secret in the holder's command line does not reach the message")
+	assert.Contains(t, line, projectOf(work), "where it runs")
+	assert.Contains(t, line, "This is a normal queue")
+	assert.Contains(t, line, "do not interrupt it")
+
+	require.NoError(t, os.WriteFile(work+"/go-0", nil, 0o644))
+	assert.Equal(t, 0, (<-waiter).code)
+	<-occ
+	assert.Contains(t, buf.String(), "got a heavy slot after ")
+}
+
+func TestWaitMessages_Formatting(t *testing.T) {
+	assert.Equal(t, "45s", fmtDur(45*time.Second))
+	assert.Equal(t, "12m", fmtDur(12*time.Minute+20*time.Second))
+	assert.Equal(t, "1h05m", fmtDur(65*time.Minute))
+	assert.Equal(t, "purdex/spa", projectOf("/Users/wake/Workspace/wake/purdex/spa"))
+	assert.Equal(t, "work", projectOf("/work"))
+	now := time.Unix(10000, 0)
+	h := Holder{Argv: []string{"pnpm", "exec", "vitest", "run"}, Cwd: "/w/purdex/spa", Started: now.Add(-12 * time.Minute)}
+	assert.Equal(t,
+		"waiting for a heavy slot — 1 ahead; held 12m by \"pnpm exec vitest run\" (purdex/spa). This is a normal queue: it starts by itself when that ends; do not interrupt it or run the command another way.",
+		waitingLine(ClassHeavy, 1, []Holder{h}, now))
+	older := Holder{Argv: []string{"go", "test"}, Cwd: "/w/x", Started: now.Add(-30 * time.Minute)}
+	assert.Contains(t, waitingLine(ClassHeavy, 2, []Holder{h, older}, now), "held 30m by \"go test\"", "the oldest is named")
+	assert.Contains(t, waitingLine(ClassHeavy, 2, []Holder{h, older}, now), "(+1 more)")
+	assert.Contains(t, waitingLine(ClassLight, 0, nil, now), "no slot is held right now")
+	orphan := h
+	orphan.Orphaned = true
+	assert.Contains(t, waitingLine(ClassHeavy, 1, []Holder{orphan}, now), "its gate is gone")
+	assert.Contains(t, waitingLine(ClassHeavy, 1, []Holder{{}}, now), "; another command.")
+
+	a := Defaults().Admission
+	pl := pressureLine(Pressure{Level: 2, PageRate: 340.4}, a, true)
+	assert.Contains(t, pl, "level 2")
+	assert.Contains(t, pl, "340 pages/s")
+	assert.Contains(t, pl, "level 1 or below and under 50 pages/s")
+	assert.Contains(t, pl, "normal wait")
+	assert.Contains(t, pressureLine(Pressure{}, a, false), "could not be read yet")
+	assert.Equal(t, "got a heavy slot after 14m", grantedLine(ClassHeavy, 14*time.Minute+5*time.Second))
 }

@@ -158,3 +158,30 @@ func withoutMarks(env []string) []string {
 	}
 	return out
 }
+
+// The release profile is --fg for the priority and cache modules: nothing in front of the command, -count=1 left alone.
+// (M: look at --fg only.)
+func TestRun_TheReleaseProfileIsForeground(t *testing.T) {
+	g, buf := testGate(t)
+	dir := t.TempDir()
+	wrapper := dir + "/nice"
+	require.NoError(t, os.WriteFile(wrapper, []byte("#!/bin/sh\necho wrapped >> "+dir+"/calls\nshift 2\nexec \"$@\"\n"), 0o755))
+	script := dir + "/echoargs"
+	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\necho \"$@\"\n"), 0o755))
+	g.Tools = Tools{Nice: wrapper}
+	g.SetConfig(func(c *Config) { c.Priority.Mode = "nice"; c.Priority.Nice = 10; c.Cache.Count1 = "strip" })
+	argv := []string{"go", "test", "-count=1", "./a", "./b"}
+
+	r := runSync(t, g, Options{Argv: argv, Class: ClassHeavy, Real: script})
+	assert.Equal(t, "test ./a ./b\n", r.out, "a normal run: -count=1 taken out")
+	b, _ := os.ReadFile(dir + "/calls")
+	assert.Equal(t, "wrapped\n", string(b), "and niced")
+
+	g.SetConfig(func(c *Config) { c.Profile = "release" })
+	buf.b.Reset()
+	r = runSync(t, g, Options{Argv: argv, Class: ClassHeavy, Real: script})
+	assert.Equal(t, "test -count=1 ./a ./b\n", r.out, "the release profile keeps -count=1")
+	b, _ = os.ReadFile(dir + "/calls")
+	assert.Equal(t, "wrapped\n", string(b), "and is not niced again")
+	assert.NotContains(t, buf.String(), "taken out")
+}

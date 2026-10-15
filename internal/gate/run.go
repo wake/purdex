@@ -28,6 +28,8 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		g.say("%v: the command was not run (fix %s)", err, cfg.Dir)
 		return nil, ExitRefused, true
 	}
+	// The ticket lives in one directory; a setting that changes gate.dir while this command waits is for the next command.
+	dir := cfg.Dir
 	ticket, err := g.pool(cfg, class).Enqueue()
 	if err != nil {
 		return broken(err)
@@ -37,8 +39,10 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 	fails := 0
 	warned := false
 	lastPlace := time.Time{}
+	waitStart := time.Time{} // set at the first look that did not get a slot
 	for {
 		cfg = g.refresh()
+		cfg.Dir = dir
 		ok := true
 		if g.Pressure != nil && cfg.Admission.Enabled {
 			p, err := g.Pressure.Read()
@@ -69,17 +73,24 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 			}
 			if slot != nil {
 				ticket.Drop()
+				if !waitStart.IsZero() {
+					g.say("%s", grantedLine(class, g.Now().Sub(waitStart)))
+				}
 				return slot, 0, false
 			}
 			ahead = a
 		}
 		now := g.Now()
+		if waitStart.IsZero() {
+			waitStart = now
+		}
 		if lastPlace.IsZero() || now.Sub(lastPlace) >= time.Minute {
 			lastPlace = now
 			if ok {
-				g.say("waiting for a %s slot (%d ahead)", class, ahead)
+				holders := g.pool(cfg, class).Held()
+				g.say("%s", waitingLine(class, ahead+len(holders), holders, now)) // everything in front of it: the running and the queued
 			} else {
-				g.say("waiting: the host is under memory pressure")
+				g.say("%s", pressureLine(lastPressure(good), cfg.Admission, good != nil))
 			}
 		}
 		select {
@@ -90,6 +101,14 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		case <-time.After(g.Poll()):
 		}
 	}
+}
+
+// lastPressure is the last good reading, or the zero Pressure when there has not been one.
+func lastPressure(p *Pressure) Pressure {
+	if p == nil {
+		return Pressure{}
+	}
+	return *p
 }
 
 func signalNumber(s os.Signal) int {
@@ -116,7 +135,7 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 	}
 	args := append([]string{real}, argv[1:]...)
 	if slot != nil {
-		args = cfg.Priority.Wrap(args, g.Tools, o.Foreground)
+		args = cfg.Priority.Wrap(args, g.Tools, cfg.foreground(o))
 	}
 	cmd := &exec.Cmd{Path: args[0], Args: args, Env: env, Dir: o.Dir, Stdin: stdinOr(o.Stdin), Stdout: outOr(o.Stdout, os.Stdout), Stderr: outOr(o.Stderr, os.Stderr)}
 	// Output that is not a file goes through a pipe the command's leftovers keep open; Wait must not wait for them
@@ -143,10 +162,16 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 			g.say("holder record: %v", err)
 		}
 	}
+	// The command's tree is followed by parentage as well as (off a terminal) by its process group: a child that left the
+	// group with setsid is still a child of the command while the command runs, and is remembered for the clean-up.
+	// What cannot be caught: a child that is forked, leaves the group and is orphaned within one TreeEvery of the last look.
 	var followed *tree
 	var tick <-chan time.Time
-	if tty {
+	if slot != nil {
 		followed = newTree(pid, g.Procs)
+		if !followed.known() {
+			g.say("the process table could not be read: what %s leaves running at the end will not be cleared", argv[0])
+		}
 		t := time.NewTicker(g.TreeEvery)
 		defer t.Stop()
 		tick = t.C
@@ -161,6 +186,11 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 	if grouped {
 		target = -pid
 	}
+	grace := cfg.Reap.Grace
+	if g.KillGrace > 0 {
+		grace = g.KillGrace
+	}
+	var killAt <-chan time.Time // set when the context is cancelled: SIGTERM now, SIGKILL when the grace is over
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	for {
@@ -180,22 +210,22 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 			g.say("%s has held its %s slot for %s (it is not stopped; see `pdx gate status`)", argv[0], slot.Class, cfg.Lifetime.AlertAfter)
 		case err := <-done:
 			code := exitCode(err, cmd)
-			if reap := cfg.Reap; reap.Enabled {
-				grace := reap.Grace
-				if g.KillGrace > 0 {
-					grace = g.KillGrace
-				}
-				switch {
-				case grouped:
+			if cfg.Reap.Enabled {
+				if grouped {
 					g.reap(pid, grace)
-				case followed != nil:
-					followed.reap(grace)
+				}
+				if followed != nil {
+					followed.reap(grace) // what left the group, or all of it at a terminal
 				}
 			}
 			return code, nil
 		case <-ctx.Done():
-			ctx = context.Background() // once: pass the cancel on as SIGTERM, then keep waiting for the command
-			_ = syscall.Kill(target, syscall.SIGTERM)
+			ctx = context.Background()                // once
+			_ = syscall.Kill(target, syscall.SIGTERM) // the cancel is passed on as SIGTERM…
+			killAt = time.After(grace)                // …and a command that ignores it does not keep the run (and its slot) for ever
+		case <-killAt:
+			killAt = nil
+			_ = syscall.Kill(target, syscall.SIGKILL)
 		}
 	}
 }

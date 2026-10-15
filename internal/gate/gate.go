@@ -74,17 +74,19 @@ type Gate struct {
 	IsTTY    func() bool
 	DiskFree func(path string) (int64, error)
 	Facts    func() HostFacts
-	PID      func() int
-	Token    func() string
+	// Holders names the other processes that hold a slot's lock file when the slot is released.
+	Holders func(path string) []Straggler
+	PID     func() int
+	Token   func() string
 }
 
 // New is the gate of this host with the given config.
 func New(cfg Config) *Gate {
 	g := &Gate{
-		st: &state{cfg: cfg}, Now: time.Now, Stderr: os.Stderr, TreeEvery: time.Second,
+		st: &state{cfg: cfg}, Now: time.Now, Stderr: os.Stderr, TreeEvery: 500 * time.Millisecond,
 		Poll:    func() time.Duration { return time.Second + time.Duration(mrand.Int63n(int64(2*time.Second))) },
 		Session: os.Getenv("CLAUDE_SESSION_ID"),
-		Procs:   procTable, IsTTY: stdinIsTTY, DiskFree: freeBytes, Facts: ReadHostFacts, PID: os.Getpid, Token: newToken,
+		Procs:   procTable, IsTTY: stdinIsTTY, DiskFree: freeBytes, Facts: ReadHostFacts, PID: os.Getpid, Token: newToken, Holders: lsofHolders,
 	}
 	g.Pressure = NewHostReader(cfg.Dir)
 	g.Tools = hostTools()
@@ -208,6 +210,13 @@ func (g *Gate) nested(cfg Config, env []string, want Class) bool {
 	return false
 }
 
+// releaseProfile is the profile of a release run: the command runs as it was typed, at normal priority, with go's test
+// cache switched off if it says so (spec §5, cache module).
+const releaseProfile = "release"
+
+// foreground says the command is exempt from the priority and cache modules: --fg, or the release profile.
+func (c Config) foreground(o Options) bool { return o.Foreground || c.Profile == releaseProfile }
+
 // Run takes a slot for the command, runs it, and gives the slot back when its process tree is gone. It returns the
 // command's exit code (128+n for a signal, ExitRefused for a command that was not run). An error is only for a command
 // that could not be started.
@@ -241,7 +250,7 @@ func (g *Gate) Run(ctx context.Context, o Options) (int, error) {
 		}
 	}
 
-	argv, note := cfg.Cache.Apply(o.Argv, o.Foreground)
+	argv, note := cfg.Cache.Apply(o.Argv, cfg.foreground(o))
 	if note != "" {
 		g.say("%s", note)
 	}
@@ -254,13 +263,27 @@ func (g *Gate) Run(ctx context.Context, o Options) (int, error) {
 	if slot == nil { // the directory is denied (a sandbox): run without a slot
 		return g.start(ctx, cfg, o, argv, env, nil, sigs)
 	}
-	defer slot.Release()
+	defer func() {
+		if left := slot.Release(g.Holders); len(left) > 0 {
+			g.say("these processes escaped the clean-up and are still running: %s; the %s slot is released", describeStragglers(left), slot.Class)
+		}
+	}()
+	if class == ClassHeavy {
+		// the wait may have taken minutes or hours: the floor is checked again, with today's settings, before the command starts
+		if msg := g.diskRefusal(g.Config(), o.Dir); msg != "" {
+			g.say("%s", msg)
+			return ExitRefused, nil
+		}
+	}
 	if len(added) > 0 {
 		g.say("%s", "limits added: "+strings.Join(added, ", "))
 	}
 	token := g.Token()
 	if err := slot.SetHolder(g.holder(o, token)); err != nil {
-		g.say("holder record: %v", err)
+		// the record is part of the nesting protocol: a command started without it could never prove its claim, and a
+		// heavy command below it would wait for the very slot its parent holds
+		g.say("holder record: %v: the command was not run", err)
+		return ExitRefused, nil
 	}
 	env = withEnv(env, HeldEnv, slot.Label()+":"+token)
 	return g.start(ctx, g.Config(), o, argv, env, slot, sigs)
@@ -309,14 +332,12 @@ func (g *Gate) holder(o Options, token string) Holder {
 
 // truncateArgv keeps the record short: at most 12 words of 120 bytes. Words that look like a secret are not kept.
 func truncateArgv(argv []string) []string {
-	out := make([]string, 0, len(argv))
-	for i, a := range argv {
+	scrubbed := scrubArgv(argv) // before the cut: a secret in a long word must not survive in its first 120 bytes
+	out := make([]string, 0, len(scrubbed))
+	for i, a := range scrubbed {
 		if i >= 12 {
 			out = append(out, "…")
 			break
-		}
-		if looksSecret(a) {
-			a = "<redacted>"
 		}
 		if len(a) > 120 {
 			a = a[:120] + "…"
@@ -324,16 +345,6 @@ func truncateArgv(argv []string) []string {
 		out = append(out, a)
 	}
 	return out
-}
-
-func looksSecret(a string) bool {
-	l := strings.ToLower(a)
-	for _, k := range []string{"token=", "secret=", "password=", "passwd=", "apikey=", "api_key=", "authorization:", "bearer "} {
-		if strings.Contains(l, k) {
-			return true
-		}
-	}
-	return false
 }
 
 // Status is what `pdx gate status` shows: the holders of both pools, the number of waiters, and the records whose
