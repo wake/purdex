@@ -27,6 +27,7 @@ import (
 	conversationmod "github.com/wake/purdex/internal/module/conversation"
 	"github.com/wake/purdex/internal/module/dev"
 	devicesmod "github.com/wake/purdex/internal/module/devices"
+	fleetmod "github.com/wake/purdex/internal/module/fleet"
 	fsmod "github.com/wake/purdex/internal/module/fs"
 	hostconfigmod "github.com/wake/purdex/internal/module/hostconfig"
 	hosttransfermod "github.com/wake/purdex/internal/module/hosttransfer"
@@ -461,6 +462,7 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	// roots from the peers origin resolver, so it comes after peers.
 	c.AddModule(resourcesmod.New())
 	c.AddModule(watchmod.New())
+	c.AddModule(fleetmod.New()) // the fleet status: primary / standby roles (F-1b2)
 	c.AddModule(fsmod.New())
 	c.AddModule(logs.New())
 	// conversation serves GET /api/conversations/{provider}/{session_id}; its resolver consults the conversation

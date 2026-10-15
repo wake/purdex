@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/wake/purdex/internal/execstat"
 	"log"
 	"net/http"
 	"os"
@@ -657,6 +658,7 @@ func (m *Module) snapshotWithin(ctx context.Context) (agentpkg.ProcessView, erro
 // request, so the local row's titles and the host/host_id embedded in its
 // own Peers records are always built from the same values.
 func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers.Envelope {
+	execstat.Event("peers-envelope") // one local inventory = about 20 forks today (probe dedupe plan D3)
 	// ONE budget for the whole local inventory (#1293 §3.2): both tmux-
 	// instance probes, the session list, the process snapshot and every owner
 	// lookup run under invCtx, so a hung tmux costs the budget once, not once
