@@ -66,7 +66,18 @@ func TestHomeVerify_RefusesASymlinkedFolderOnTheWay(t *testing.T) {
 	}
 }
 
-// A target that is not under the worktree (an empty WtPath, a slug that climbs out) is refused, not walked.
+// A unit whose worktree path is empty or relative would have its home resolved against the daemon's working directory; both
+// are refused, through unitHome as the API and the drainer use it.
+// Mutation gate: drop the IsAbs check → the empty and the relative case pass (red).
+func TestHomeVerify_RefusesAnEmptyOrRelativeWorktree(t *testing.T) {
+	for _, wt := range []string{"", "relative/wt", "."} {
+		if err := unitHome(UnitRow{Key: "team:t1", Label: "日誌", WtPath: wt}).verify(); !errors.Is(err, errUnsafeHome) {
+			t.Errorf("WtPath %q: %v", wt, err)
+		}
+	}
+}
+
+// A target that is not under the worktree (a slug that climbs out) is refused, not walked.
 // Mutation gate: accept a path outside the root → that case passes (red).
 func TestHomeVerify_RefusesAPathOutsideTheWorktree(t *testing.T) {
 	wt := t.TempDir()

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -83,6 +84,37 @@ func TestSetPinnedIn_SkipsAFileTheReaderRefuses(t *testing.T) {
 	}
 	if !pinnedIn(t, real, "x") {
 		t.Fatal("the real file was not pinned")
+	}
+}
+
+// When the unit's byte budget leaves the older month out, the entry ReadUnit shows is the newer file's copy, and that is the
+// one pinned; the older file, which the reader skipped, is not touched even though it holds the id.
+// Mutation gate: read each file on its own limit, without the unit's budget → the skipped older copy is pinned (red).
+func TestSetPinnedIn_FollowsTheUnitBudgetOfTheReader(t *testing.T) {
+	dir := t.TempDir()
+	older, newer := filepath.Join(dir, "2026-08.md"), filepath.Join(dir, "2026-09.md")
+	for _, f := range []string{older, newer} {
+		if err := Upsert(f, Entry{ID: "dup", Kind: KindComm, At: t0, Text: "x"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, err := os.Stat(newer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withReadLimits(t, 1<<20, st.Size()) // room for the newer month only
+	if _, skipped, _ := ReadUnit(dir); !slices.Equal(skippedNames(skipped), []string{"2026-08.md"}) {
+		t.Fatalf("the setup must leave the older month out, skipped = %v", skipped)
+	}
+	before, _ := os.ReadFile(older)
+	if changed, err := SetPinnedIn(dir, "dup", true); err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	if !pinnedIn(t, newer, "dup") {
+		t.Fatal("the copy the reader shows was not pinned")
+	}
+	if after, _ := os.ReadFile(older); string(after) != string(before) {
+		t.Fatal("a month the reader left out was written")
 	}
 }
 

@@ -33,6 +33,9 @@ func (h home) verify() error {
 
 // checkChain looks at every directory from root (not itself) down to target, target's last component only when leaf.
 func checkChain(root, target string, leaf bool) error {
+	if !filepath.IsAbs(root) { // "" or a relative path would be resolved against the daemon's working directory
+		return fmt.Errorf("%w: the worktree %q is not an absolute path", errUnsafeHome, root)
+	}
 	rel, err := filepath.Rel(root, target)
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("%w: %s is not under %s", errUnsafeHome, target, root)
