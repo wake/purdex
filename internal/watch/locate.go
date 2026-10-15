@@ -52,7 +52,19 @@ var ErrNoWatcher = errors.New("no watcher is awake")
 type remembered struct {
 	Current *Where `json:"current,omitempty"`
 	Last    *Where `json:"last,omitempty"`
+	// Uncertain is a host a wake or start was sent to whose outcome could not be found out (the call and the question after it
+	// both got no answer): it may be running a watcher. Until it answers (or uncertainTTL passes) nothing is started elsewhere.
+	Uncertain *Uncertain `json:"uncertain,omitempty"`
 }
+
+// Uncertain: see remembered.Uncertain.
+type Uncertain struct {
+	Alias string    `json:"alias"`
+	At    time.Time `json:"at"`
+}
+
+// uncertainTTL is how long an uncertain host blocks a start elsewhere; a variable for the tests.
+var uncertainTTL = 30 * time.Minute
 
 // valid: every watcher in the file names a host, a session and a state a watcher can be in (a file that was edited by hand, or
 // is from another version, is not trusted).
@@ -65,7 +77,7 @@ func (r remembered) valid() bool {
 			return false
 		}
 	}
-	return true
+	return r.Uncertain == nil || r.Uncertain.Alias != ""
 }
 
 // Locator knows where the watcher is (spec §12.3). It uses the remembered watcher until a delivery fails (Failed) or it is
@@ -228,6 +240,9 @@ func (l *Locator) search(ctx context.Context, targets []string, autoWake bool) (
 	if !autoWake {
 		return Where{}, ErrNoWatcher
 	}
+	if l.blockedByUncertain(reachable) {
+		return Where{}, ErrNoWatcher // a host that may hold a watcher has not answered yet: do not start another
+	}
 	// (2) the last watcher's host is reachable and holds it resting → wake it
 	woken := map[string]bool{} // hosts a wake was tried on: not woken again below
 	l.mu.Lock()
@@ -242,6 +257,7 @@ func (l *Locator) search(ctx context.Context, targets []string, autoWake bool) (
 				return *w, nil
 			}
 			if !settled {
+				l.setUncertain(last.Alias)
 				return Where{}, ErrNoWatcher // it may be awake there: try again later rather than start a second one
 			}
 		}
@@ -266,16 +282,42 @@ func (l *Locator) search(ctx context.Context, targets []string, autoWake bool) (
 			return *w, nil
 		}
 		if !settled {
+			l.setUncertain(alias)
 			return Where{}, ErrNoWatcher
 		}
 	}
 	return Where{}, ErrNoWatcher
 }
 
+// blockedByUncertain says whether an earlier wake or start left a host whose outcome is still unknown. The host answering the
+// holder question settles it (a watcher awake there was found above; otherwise the normal steps go on); so does uncertainTTL.
+func (l *Locator) blockedByUncertain(reachable map[string]HolderAnswer) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	u := l.mem.Uncertain
+	if u == nil {
+		return false
+	}
+	if _, answered := reachable[u.Alias]; answered || l.now().Sub(u.At) > uncertainTTL {
+		l.mem.Uncertain = nil
+		l.save()
+		return false
+	}
+	return true
+}
+
+func (l *Locator) setUncertain(alias string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.mem.Uncertain = &Uncertain{Alias: alias, At: l.now()}
+	l.save()
+}
+
 func (l *Locator) remember(w Where) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.mem.Current, l.mem.Last = &w, &w
+	l.mem.Uncertain = nil // a watcher is accounted for
 	l.save()
 }
 

@@ -518,3 +518,66 @@ func TestLocate_AHostThatRefusedTheWakeIsNotWokenAgainInTheStartStep(t *testing.
 	require.Equal(t, []string{"mlab"}, f.start)
 	require.Equal(t, "mlab", w.Alias)
 }
+
+// An outcome that could not be found out blocks a start elsewhere across searches (a partition outlasts one Current), until the
+// host answers or the time passes.
+func TestLocate_AnUncertainHostBlocksAStartElsewhereUntilItAnswersOrTheTimePasses(t *testing.T) {
+	mk := func() (*lostHosts, *Locator) {
+		f := &lostHosts{fakeHosts: fakeHosts{hold: map[string]HolderAnswer{
+			"air26": hostAns("a:1", HolderNone, "", "air26", "mlab"),
+			"mlab":  hostAns("m:1", HolderNone, "", "air26", "mlab"),
+		}}, lose: map[string]bool{"air26": true}, gone: map[string]bool{"air26": true}}
+		return f, NewLocator(filepath.Join(t.TempDir(), "remembered.json"), f, nil)
+	}
+	ctx := context.Background()
+
+	f, l := mk()
+	_, err := l.Current(ctx, targets, true) // air26: Start lost its answer and the question after it got none
+	require.ErrorIs(t, err, ErrNoWatcher)
+	require.Equal(t, []string{"air26"}, f.start)
+	// the next searches: air26 still does not answer → mlab is not started on a guess
+	for i := 0; i < 3; i++ {
+		_, err = l.Current(ctx, targets, true)
+		require.ErrorIs(t, err, ErrNoWatcher)
+	}
+	require.Equal(t, []string{"air26"}, f.start, "no start on mlab while air26 is unaccounted for")
+
+	// the block is kept across a restart
+	l2 := NewLocator(l.path, f, nil)
+	_, err = l2.Current(ctx, targets, true)
+	require.ErrorIs(t, err, ErrNoWatcher)
+	require.Equal(t, []string{"air26"}, f.start)
+
+	// air26 comes back and holds the watcher the start made: it is found, the block is gone
+	f.late, f.gone["air26"] = false, false
+	f.hold["air26"] = hostAns("a:1", HolderAwake, "new-on-air26", "air26", "mlab")
+	w, err := l.Current(ctx, targets, true)
+	require.NoError(t, err)
+	require.Equal(t, "air26", w.Alias)
+	_, _ = l.Remembered()
+	require.Nil(t, l.mem.Uncertain)
+
+	// air26 never comes back: after the time the block ends and mlab starts one
+	f, l = mk()
+	_, _ = l.Current(ctx, targets, true)
+	now := time.Now()
+	l.now = func() time.Time { return now.Add(uncertainTTL + time.Minute) }
+	w, err = l.Current(ctx, targets, true)
+	require.NoError(t, err)
+	require.Equal(t, "mlab", w.Alias)
+	require.Equal(t, []string{"air26", "mlab"}, f.start)
+}
+
+func TestLocate_AnUncertainHostThatAnswersNoneEndsTheBlockAndTheNormalStepsGoOn(t *testing.T) {
+	f := &lostHosts{fakeHosts: fakeHosts{hold: map[string]HolderAnswer{
+		"air26": hostAns("a:1", HolderNone, "", "air26", "mlab"),
+		"mlab":  hostAns("m:1", HolderNone, "", "air26", "mlab"),
+	}}, lose: map[string]bool{"air26": true}, gone: map[string]bool{"air26": true}}
+	l := NewLocator("", f, nil)
+	_, _ = l.Current(context.Background(), targets, true)
+	f.late, f.gone["air26"] = false, false // reachable again, and it holds none: the start never happened
+	f.lose["air26"] = false
+	w, err := l.Current(context.Background(), targets, true)
+	require.NoError(t, err)
+	require.Equal(t, "air26", w.Alias, "started on the first target again, now with an answer")
+}
