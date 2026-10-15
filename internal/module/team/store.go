@@ -22,12 +22,12 @@ import (
 // ErrNoSuchApproval is returned by the per-id methods for an unknown id.
 var ErrNoSuchApproval = errors.New("no such approval")
 
-// Store is the SQLite persistence of approval requests.
 // approvalWrites counts the writes to approval_requests this process makes (insert, close, lease, unanswered), so the sweeper
 // can read the open requests when something may have changed and not every second (G3b). It is a hint: a write that does not
 // count (a plain touch of the row for a lock) costs the sweeper at most sweepReadMax of lateness.
 var approvalWrites atomic.Uint64
 
+// Store is the SQLite persistence of approval requests.
 type Store struct {
 	// the sweeper's own connection for PRAGMA data_version (see DataVersion); memory marks a store that has only one connection
 	// and so cannot spare it
