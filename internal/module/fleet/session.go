@@ -1,11 +1,11 @@
-// Package fleet is the daemon module that measures the fleet (spec rev 2 §5–§7,
+// The fleetmod package, measuring side: the daemon module that measures the fleet (spec rev 2 §5–§7,
 // docs/specs/2026-10-14-fleet-status-spec.md on branch docs/workbook-journal-spec): one long-lived SSH session per remote
 // host, the aggregator that holds the newest reading of every host, GET /api/fleet and the 1 s fleet.changed push.
 //
 // This file is the session: one `ssh -T … -- <alias> <loop>` per host, in its own process group, its stdout cut into frames
 // and handed on through a newest-wins slot. Nothing it reads is written to a database or to the log; only the verdict (a
 // status and a code) leaves it, stderr goes to the daemon log at most once an hour per host and code.
-package fleet
+package fleetmod
 
 import (
 	"context"

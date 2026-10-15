@@ -1,4 +1,4 @@
-package fleet
+package fleetmod
 
 import (
 	"errors"
