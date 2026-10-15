@@ -1,0 +1,512 @@
+package watch
+
+import (
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/wake/purdex/internal/gate"
+	"github.com/wake/purdex/internal/resources"
+)
+
+var t0 = time.Date(2026, 10, 16, 3, 0, 0, 0, time.UTC)
+
+const tick = 5 * time.Second
+
+// rig is a detector with a clock that moves by a tick per pass.
+type rig struct {
+	t   *testing.T
+	d   *Detector
+	mem *MemoryStore
+	now time.Time
+	set Settings
+	// what every pass reads, set by the test
+	procs   []resources.Proc
+	raw     resources.HostRaw
+	holders []gate.Holder
+	roots   []resources.Root
+	argv    map[int][]string
+	cwd     map[int]string
+	lockPID []int
+	locks   int
+}
+
+func newRig(t *testing.T) *rig {
+	mem := NewMemoryStore()
+	return &rig{t: t, d: New(mem), mem: mem, now: t0, set: DefaultSettings(), argv: map[int][]string{}, cwd: map[int]string{}}
+}
+
+// pass runs one pass at the current time and moves the clock on by a tick.
+func (r *rig) pass() []Event {
+	in := Input{Now: r.now, Procs: r.procs, Raw: r.raw, Holders: r.holders, Roots: r.roots, Set: r.set,
+		Argv: func(pid int) []string { return r.argv[pid] },
+		Cwd:  func(pid int) string { return r.cwd[pid] },
+		LockPIDs: func(gate.Holder) []int {
+			r.locks++
+			return r.lockPID
+		},
+	}
+	ev := r.d.Pass(in)
+	r.now = r.now.Add(tick)
+	return ev
+}
+
+// run passes for a duration and returns every event, with the time offset of each pass that made one.
+func (r *rig) run(d time.Duration) []Event {
+	var all []Event
+	for end := r.now.Add(d); r.now.Before(end); {
+		all = append(all, r.pass()...)
+	}
+	return all
+}
+
+func p(pid, ppid int, comm string, pcpu float64, rssMB uint64) resources.Proc {
+	return resources.Proc{PID: pid, PPID: ppid, Comm: comm, Pcpu: pcpu, RSSBytes: rssMB * mib}
+}
+
+// a shell (pid 10) with a `go test` below it that uses cores×100 percent and rssMB.
+func goTest(cores float64, rssMB uint64) []resources.Proc {
+	return []resources.Proc{
+		p(1, 0, "launchd", 0, 10),
+		p(10, 1, "zsh", 0, 5),
+		p(100, 10, "go", cores*100/2, rssMB/2),
+		p(101, 100, "compile", cores*100/2, rssMB/2),
+	}
+}
+
+// ---- E1: the thresholds ----
+
+func TestE1_NothingUnderTheThresholds(t *testing.T) {
+	r := newRig(t)
+	r.procs = goTest(1.4, 1000) // 1.4 cores (< 1.5), 1000 MB (< 1024)
+	assert.Empty(t, r.run(10*time.Minute), "a tree under both thresholds is not an event however long it lives (D11)")
+}
+
+func TestE1_CoresAtTheThresholdFireAfterTheWindow(t *testing.T) {
+	r := newRig(t)
+	r.procs = goTest(1.5, 100) // exactly x_cores: the comparison is >=
+	r.argv[100] = []string{"go", "test", "./..."}
+	var at []time.Duration
+	for i := 0; i < 20; i++ {
+		if ev := r.pass(); len(ev) > 0 {
+			at = append(at, r.now.Add(-tick).Sub(t0))
+			assert.Equal(t, KindUnmanagedHeavy, ev[0].Kind)
+		}
+	}
+	assert.Equal(t, []time.Duration{60 * time.Second}, at, "one event, when the 60 s window has been seen and not before")
+}
+
+func TestE1_MemoryAtTheThresholdFiresWhenItHeldThroughoutTheWindow(t *testing.T) {
+	r := newRig(t)
+	r.procs = goTest(0.1, 1024) // exactly y_mb
+	r.argv[100] = []string{"go", "test", "./..."}
+	ev := r.run(2 * time.Minute)
+	require.Len(t, ev, 1)
+	assert.Equal(t, uint64(1024), ev[0].PeakMB)
+
+	r2 := newRig(t) // a dip below y_mb inside the window: no event while the dip is in it
+	for i := 0; i < 20; i++ {
+		mb := uint64(2000)
+		if i == 8 {
+			mb = 900
+		}
+		r2.procs = goTest(0.1, mb)
+		assert.Empty(t, r2.pass(), "pass %d", i)
+	}
+	r2.procs = goTest(0.1, 2000)
+	assert.Len(t, r2.run(10*time.Second), 1, "once the dip has left the window it has been over throughout")
+}
+
+func TestE1_MeanCoresNotAPeak(t *testing.T) {
+	r := newRig(t)
+	// 3 cores for 20 s, then 0.1: the mean over the window stays under 1.5 once the burst has been diluted
+	for i := 0; i < 12*3; i++ {
+		c := 0.1
+		if i%12 < 4 {
+			c = 3 // 20 s in every minute: mean 0.1*40/60+3*20/60 = 1.07
+		}
+		r.procs = goTest(c, 100)
+		assert.Empty(t, r.pass(), "pass %d", i)
+	}
+}
+
+// ---- E1: episodes ----
+
+func TestE1_OneEventWhileOverThenRearmedAfterAWindowUnder(t *testing.T) {
+	r := newRig(t)
+	r.argv[100] = []string{"go", "test", "./..."}
+	r.procs = goTest(3, 100)
+	require.Len(t, r.run(3*time.Minute), 1, "it stays over for minutes: one event")
+
+	// under the threshold for a full window: re-armed, then over again: a second event
+	r.procs = goTest(0.1, 100)
+	assert.Empty(t, r.run(75*time.Second))
+	r.procs = goTest(3, 100)
+	assert.Len(t, r.run(90*time.Second), 1, "a new episode")
+}
+
+func TestE1_ADipShorterThanAWindowIsTheSameEpisode(t *testing.T) {
+	r := newRig(t)
+	r.argv[100] = []string{"go", "test", "./..."}
+	r.procs = goTest(3, 100)
+	require.Len(t, r.run(90*time.Second), 1)
+	r.procs = goTest(0.1, 100)
+	r.run(10 * time.Second)
+	r.procs = goTest(3, 100)
+	assert.Empty(t, r.run(3*time.Minute), "it did not stay under for t_s: no second event")
+}
+
+func TestE1_ATreeThatEndsStartsOverWhenItComesBack(t *testing.T) {
+	r := newRig(t)
+	r.argv[100] = []string{"go", "test", "./..."}
+	r.procs = goTest(3, 100)
+	require.Len(t, r.run(90*time.Second), 1)
+	r.procs = []resources.Proc{p(1, 0, "launchd", 0, 10), p(10, 1, "zsh", 0, 5)} // the command ended
+	assert.Empty(t, r.run(10*time.Second))
+	r.procs = goTest(3, 100)
+	assert.Empty(t, r.run(50*time.Second), "a new tree needs its own window")
+	assert.Len(t, r.run(20*time.Second), 1)
+}
+
+// ---- E1: managed ----
+
+func TestE1_ATreeUnderAGateIsManaged(t *testing.T) {
+	r := newRig(t)
+	r.procs = []resources.Proc{
+		p(1, 0, "launchd", 0, 10), p(10, 1, "zsh", 0, 5),
+		p(100, 10, "pdx", 1, 50), // pdx gate
+		p(101, 100, "go", 200, 500),
+		p(102, 101, "compile", 200, 500),
+	}
+	r.argv[100] = []string{"pdx", "gate", "--class", "heavy", "--", "go", "test", "./..."}
+	assert.Empty(t, r.run(5*time.Minute))
+
+	// a `pdx` that is not a gate is just a command
+	r2 := newRig(t)
+	r2.procs = r.procs
+	r2.argv[100] = []string{"pdx", "msg", "send"}
+	assert.Len(t, r2.run(2*time.Minute), 1)
+	// an argv nobody can read: not known to be a gate
+	r3 := newRig(t)
+	r3.procs = r.procs
+	assert.Len(t, r3.run(2*time.Minute), 1)
+}
+
+func TestE1_AGateFurtherUpIsAnAncestor(t *testing.T) {
+	r := newRig(t)
+	r.procs = []resources.Proc{
+		p(1, 0, "launchd", 0, 10), p(10, 1, "zsh", 0, 5),
+		p(100, 10, "pdx", 1, 50),
+		p(101, 100, "zsh", 0, 5), // the command's own shell: its children are roots, below the gate
+		p(102, 101, "go", 300, 500),
+	}
+	r.argv[100] = []string{"pdx", "gate", "--", "sh", "-c", "go test"}
+	assert.Empty(t, r.run(5*time.Minute), "the gate is an ancestor of the tree's root")
+}
+
+func TestE1_ATreeThatHoldsASlotIsManagedEvenWithoutAGateAncestor(t *testing.T) {
+	r := newRig(t)
+	r.procs = goTest(3, 100) // the gate died and its command lives on (its pid is the holder's PGID)
+	r.holders = []gate.Holder{{Class: gate.ClassHeavy, Slot: 1, PID: 9999, PGID: 101, Started: t0}}
+	assert.Empty(t, r.run(5*time.Minute))
+	r.holders = []gate.Holder{{Class: gate.ClassHeavy, Slot: 1, PID: 100, PGID: 9998, Started: t0}} // the gate's own pid in the tree
+	r2 := newRig(t)
+	r2.procs, r2.holders = r.procs, r.holders
+	assert.Empty(t, r2.run(5*time.Minute))
+	r3 := newRig(t) // a holder whose pids are in no tree
+	r3.procs = r.procs
+	r3.holders = []gate.Holder{{Class: gate.ClassHeavy, Slot: 1, PID: 7777, PGID: 7778, Started: t0}}
+	assert.Len(t, r3.run(2*time.Minute), 1)
+}
+
+// ---- E1: trees, sessions, labels ----
+
+func TestE1_TreesAreTheChildrenOfShellsAndAreNotCountedTwice(t *testing.T) {
+	r := newRig(t)
+	// A session: a terminal's zsh runs claude (a root), whose Bash tool shell runs `go test` (another root) and an idle MCP
+	// server. The go tree is its own; claude's tree holds the rest.
+	r.procs = []resources.Proc{
+		p(1, 0, "launchd", 0, 10),
+		p(10, 1, "zsh", 0, 5),
+		p(50, 10, "claude", 20, 400),
+		p(51, 50, "node", 5, 100), // an MCP server
+		p(52, 50, "zsh", 0, 5),    // the tool's shell
+		p(53, 52, "go", 150, 300), // root: the child of a shell
+		p(54, 53, "compile", 150, 300),
+	}
+	r.argv[53] = []string{"go", "test", "./..."}
+	r.roots = []resources.Root{{SessionID: "s1", PID: 50, Cwd: "/work/purdex"}}
+	ev := r.run(2 * time.Minute)
+	require.Len(t, ev, 1, "only the go tree is over; the session's own tree (0.25 cores) is not")
+	assert.Equal(t, "go test", ev[0].Signature)
+	assert.Equal(t, "s1", ev[0].Session)
+	assert.Equal(t, "/work/purdex", ev[0].Cwd, "no cwd lookup answers: the session's")
+	assert.InDelta(t, 3.0, ev[0].PeakCores, 0.001)
+	assert.Equal(t, []string{"go", "test", "./..."}, ev[0].Argv)
+
+	r.cwd[53] = "/work/purdex/subdir"
+	r.procs[5].Pcpu = 0
+	r.procs[6].Pcpu = 0
+	r.run(80 * time.Second) // under for a window: re-armed
+	r.procs[5].Pcpu, r.procs[6].Pcpu = 150, 150
+	ev = r.run(2 * time.Minute)
+	require.Len(t, ev, 1)
+	assert.Equal(t, "/work/purdex/subdir", ev[0].Cwd, "the lookup's answer comes first")
+}
+
+func TestE1_NoShellNoRootExceptLaunchdAndTmux(t *testing.T) {
+	r := newRig(t)
+	// a process whose parent is neither a shell nor launchd/tmux belongs to no tree: nothing to report
+	r.procs = []resources.Proc{p(1, 0, "launchd", 0, 10), p(20, 1, "daemon-x", 1, 10), p(21, 20, "worker", 400, 4000)}
+	// 20 is a child of launchd: a root; 21 is in its tree
+	r.argv[20] = []string{"daemon-x"}
+	assert.Len(t, r.run(2*time.Minute), 1)
+	r2 := newRig(t)
+	r2.procs = []resources.Proc{p(30, 29, "orphan", 400, 4000)} // its parent is not in the table
+	assert.Empty(t, r2.run(2*time.Minute))
+	r3 := newRig(t)
+	r3.procs = []resources.Proc{p(1, 0, "launchd", 0, 1), p(5, 1, "tmux", 0, 5), p(6, 5, "zsh", 0, 5), p(7, 6, "vitest", 300, 800)}
+	r3.argv[7] = []string{"vitest", "run"}
+	assert.Len(t, r3.run(2*time.Minute), 1, "a window's shell is a child of tmux, and its command a child of that shell")
+}
+
+func TestE1_ALoopInTheTableEndsTheWalk(t *testing.T) {
+	r := newRig(t)
+	r.procs = []resources.Proc{p(2, 3, "a", 500, 10), p(3, 2, "b", 500, 10), p(4, 4, "self", 500, 10)}
+	assert.NotPanics(t, func() { r.run(2 * time.Minute) })
+}
+
+func TestE1_LabelsSayWhyTheGateDidNotTakeIt(t *testing.T) {
+	for _, c := range []struct {
+		argv  []string
+		label Label
+	}{
+		{[]string{"go", "test", "./..."}, LabelGateGap},
+		{[]string{"vendor/bin/phpunit", "--testsuite", "integration"}, LabelGateGap},
+		{[]string{"composer", "test:integration"}, LabelGateGap},
+		{[]string{"pnpm", "run", "electron:build"}, LabelAllowed},
+		{[]string{"go", "build", "-o", "bin/pdx", "./cmd/pdx"}, LabelAllowed},
+		{[]string{"vite", "build"}, LabelAllowed},
+		{[]string{"pnpm", "install"}, LabelAllowed},
+		{[]string{"rsync", "-a", "a", "b"}, LabelUnknown},
+		{[]string{"pnpm", "my-script"}, LabelUnknown},
+		{nil, LabelUnknown},
+	} {
+		r := newRig(t)
+		r.procs = goTest(3, 100)
+		r.argv[100] = c.argv
+		ev := r.run(2 * time.Minute)
+		require.Len(t, ev, 1, "%v", c.argv)
+		assert.Equal(t, c.label, ev[0].Label, "%v", c.argv)
+	}
+}
+
+func TestE1_NewIsTheSignaturesFirstSightingOnTheHost(t *testing.T) {
+	r := newRig(t)
+	r.argv[100] = []string{"composer", "test:integration"}
+	r.procs = goTest(3, 100)
+	ev := r.run(90 * time.Second)
+	require.Len(t, ev, 1)
+	assert.True(t, ev[0].New)
+	assert.Equal(t, "composer test:integration", ev[0].Signature)
+
+	r.procs = goTest(0.1, 100)
+	r.run(80 * time.Second)
+	r.argv[100] = []string{"composer", "test:integration", "--no-ansi"} // other arguments, the same signature
+	r.procs = goTest(3, 100)
+	ev = r.run(90 * time.Second)
+	require.Len(t, ev, 1)
+	assert.False(t, ev[0].New)
+	assert.Equal(t, 2, r.mem.Count("composer test:integration"), "later sightings are counted")
+}
+
+// ---- E2 ----
+
+func TestE2_PressureForALongEnoughWhile(t *testing.T) {
+	r := newRig(t)
+	r.raw = resources.HostRaw{Pressure: 2} // exactly the level: >=
+	var at []time.Duration
+	for i := 0; i < 40; i++ {
+		if ev := r.pass(); len(ev) > 0 {
+			at = append(at, r.now.Add(-tick).Sub(t0))
+			assert.Equal(t, KindPressureHigh, ev[0].Kind)
+			assert.Equal(t, 2, ev[0].Pressure)
+			assert.Contains(t, ev[0].Detail, "pressure level 2")
+		}
+	}
+	assert.Equal(t, []time.Duration{120 * time.Second}, at)
+
+	r2 := newRig(t) // one pass of level 1 inside the window starts it over
+	for i := 0; i < 40; i++ {
+		r2.raw.Pressure = 2
+		if i == 15 {
+			r2.raw.Pressure = 1
+		}
+		if ev := r2.pass(); len(ev) > 0 {
+			assert.Greater(t, i, 15+23, "the window restarted at the dip")
+		}
+	}
+	r3 := newRig(t)
+	r3.raw = resources.HostRaw{Pressure: 1}
+	assert.Empty(t, r3.run(10*time.Minute))
+}
+
+func TestE2_PageRateAboveTheRateForAWhile(t *testing.T) {
+	counters := func(r *rig, perSecond uint64) {
+		r.raw.PageCounters = true
+		r.raw.Pageouts += perSecond * uint64(tick/time.Second)
+	}
+	r := newRig(t)
+	var events []Event
+	for i := 0; i < 30; i++ {
+		counters(r, 51) // above 50/s
+		events = append(events, r.pass()...)
+	}
+	require.Len(t, events, 1)
+	assert.InDelta(t, 51, events[0].PageRate, 0.001)
+	assert.Contains(t, events[0].Detail, "page rate 51/s")
+
+	r2 := newRig(t) // exactly the rate does not fire: >
+	for i := 0; i < 40; i++ {
+		counters(r2, 50)
+		assert.Empty(t, r2.pass())
+	}
+	r3 := newRig(t) // a counter that goes back is a new baseline, not a huge rate and not a negative one
+	r3.raw.PageCounters = true
+	r3.raw.Pageouts = 1_000_000
+	r3.pass()
+	r3.raw.Pageouts = 10
+	for i := 0; i < 40; i++ {
+		r3.raw.Pageouts += 10
+		assert.Empty(t, r3.pass())
+	}
+	r4 := newRig(t) // no counters: no page-rate events however the pressure is
+	r4.raw.Pageouts = 1 << 40
+	assert.Empty(t, r4.run(10*time.Minute))
+}
+
+// ---- E3, E4 ----
+
+func holder(slot, pid int, started time.Time, orphaned bool) gate.Holder {
+	return gate.Holder{Class: gate.ClassHeavy, Slot: slot, PID: pid, PGID: pid + 1, Argv: []string{"go", "test"}, Cwd: "/w",
+		Started: started, Session: "s1", Orphaned: orphaned}
+}
+
+func TestE3_AnOrphanedSlotAfterFifteenMinutes(t *testing.T) {
+	r := newRig(t)
+	r.lockPID = []int{4242, 4243}
+	r.holders = []gate.Holder{holder(1, 500, t0.Add(-time.Hour), true)}
+	var at []time.Duration
+	var ev Event
+	for i := 0; i < 250; i++ {
+		if got := r.pass(); len(got) > 0 {
+			for _, e := range got {
+				if e.Kind == KindSlotOrphaned {
+					at = append(at, r.now.Add(-tick).Sub(t0))
+					ev = e
+				}
+			}
+		}
+	}
+	assert.Equal(t, []time.Duration{15 * time.Minute}, at, "once, 15 min after it was first seen orphaned (not after it was taken)")
+	assert.Equal(t, "heavy-1", ev.Slot)
+	assert.Equal(t, 500, ev.HolderPID)
+	assert.Equal(t, []int{4242, 4243}, ev.LockPIDs)
+	assert.Equal(t, 1, r.locks, "one lsof, for the one orphaned slot")
+}
+
+func TestE3_TheFirstSeenTimeSurvivesARestartAndAHolderThatIsNotOrphanedAnymoreIsForgotten(t *testing.T) {
+	r := newRig(t)
+	r.holders = []gate.Holder{holder(1, 500, t0.Add(-time.Hour), true)}
+	r.run(10 * time.Minute)
+	r.d = New(r.mem) // the daemon restarts; the memory is the state file
+	assert.Empty(t, filterKind(r.run(4*time.Minute), KindSlotOrphaned), "not yet: 10 + 4 min since it was first seen")
+	assert.Len(t, filterKind(r.run(2*time.Minute), KindSlotOrphaned), 1, "15 min from the first sighting, counted across the restart")
+
+	r.holders = nil // the slot is free
+	r.pass()
+	assert.Zero(t, r.mem.Orphans(), "the orphan is forgotten when its holder is gone")
+	// and one remembered from before a restart that is not there any more
+	r.mem.OrphanSince("heavy-9:1:1", r.now)
+	r.d = New(r.mem)
+	r.pass()
+	assert.Zero(t, r.mem.Orphans())
+}
+
+func TestE3_LsofRunsAtMostOncePerPass(t *testing.T) {
+	r := newRig(t)
+	r.lockPID = []int{1}
+	r.holders = []gate.Holder{holder(1, 500, t0, true), holder(2, 600, t0, true)}
+	got := filterKind(r.run(16*time.Minute), KindSlotOrphaned)
+	require.Len(t, got, 2)
+	assert.Equal(t, 1, r.locks)
+	assert.Equal(t, []int{1}, got[0].LockPIDs)
+	assert.Empty(t, got[1].LockPIDs, "the second one in the same pass has none: the lookup is once per pass")
+}
+
+func TestE4_ASlotHeldLongerThanTheAlertTimeOnceAndAgainForANewHolder(t *testing.T) {
+	r := newRig(t)
+	r.holders = []gate.Holder{holder(1, 500, t0, false)}
+	var at []time.Duration
+	for i := 0; i < 800; i++ {
+		for _, e := range r.pass() {
+			if e.Kind == KindSlotLong {
+				at = append(at, r.now.Add(-tick).Sub(t0))
+			}
+		}
+	}
+	assert.Equal(t, []time.Duration{60 * time.Minute}, at, "exactly alert_after_min, once")
+
+	r.holders = nil
+	r.pass()
+	r.holders = []gate.Holder{holder(1, 501, r.now, false)} // another holder of the same slot
+	assert.Len(t, filterKind(r.run(61*time.Minute), KindSlotLong), 1)
+
+	r2 := newRig(t)
+	r2.set.SlotLongAfter = 0 // never
+	r2.holders = []gate.Holder{holder(1, 500, t0.Add(-100*time.Hour), false)}
+	assert.Empty(t, r2.run(10*time.Minute))
+}
+
+func TestE3E4_TheOrderIsE1ThenE2ThenE3ThenE4(t *testing.T) {
+	r := newRig(t)
+	r.set.OrphanAfter, r.set.PressureTS, r.set.TS = 5*time.Second, 5*time.Second, 5*time.Second
+	r.procs = goTest(3, 100)
+	r.argv[100] = []string{"go", "test", "./..."}
+	r.raw.Pressure = 4
+	// held 60 min at the second pass (t0+5s): E4 is due then too
+	r.holders = []gate.Holder{holder(1, 500, t0.Add(5*time.Second-time.Hour), true)}
+	assert.Empty(t, r.pass(), "the first pass only starts the windows")
+	var kinds []Kind
+	for _, e := range r.pass() {
+		kinds = append(kinds, e.Kind)
+	}
+	assert.Equal(t, []Kind{KindUnmanagedHeavy, KindPressureHigh, KindSlotOrphaned, KindSlotLong}, kinds)
+}
+
+func filterKind(ev []Event, k Kind) []Event {
+	var out []Event
+	for _, e := range ev {
+		if e.Kind == k {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// ---- settings that switch parts off ----
+
+func TestSettingsThatSwitchPartsOff(t *testing.T) {
+	r := newRig(t)
+	r.set.TS = 0
+	r.procs = goTest(5, 5000)
+	assert.Empty(t, r.run(5*time.Minute), "no window: no E1")
+	r2 := newRig(t)
+	r2.set.XCores = 0 // cores off, memory still on
+	r2.procs = goTest(5, 100)
+	assert.Empty(t, r2.run(5*time.Minute))
+	r2.procs = goTest(0.1, 2000)
+	assert.Len(t, r2.run(5*time.Minute), 1)
+}
