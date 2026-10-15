@@ -117,3 +117,5 @@ func TestStateStoreFlushKeepsDirtyWhenTheDirectorySyncFails(t *testing.T) {
 	_, err := os.Stat(p)
 	require.NoError(t, err)
 }
+
+func writeFileForTest(path, content string) error { return os.WriteFile(path, []byte(content), 0o600) }
