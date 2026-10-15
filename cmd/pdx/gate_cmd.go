@@ -22,7 +22,7 @@ import (
 )
 
 const gateUsage = `usage: pdx gate [--class heavy|light] [--auto] [--tool <name>] [--fg] [--real <binary>] [--config <path>] -- <command…>
-       pdx gate status [--json] [--config <path>]
+       pdx gate status [--json [--holders]] [--config <path>]
        pdx gate would-wait [--class heavy|light] [--json] [--config <path>]
        pdx gate would-wait --auto [--json] [--config <path>] -- <command…>
        pdx gate set [--profile <name>] [--config <path>] <module>.<key>=<value>
@@ -202,13 +202,20 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("gate status", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	asJSON := fs.Bool("json", false, "print JSON")
+	holders := fs.Bool("holders", false, "with --json: also look up the processes that hold each lock (slow: an lsof over the whole host)")
 	cfgPath := fs.String("config", "", "config.toml")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	cfg := loadGateConfig(*cfgPath, stderr)
 	g := gate.New(cfg)
-	st := g.Status()
+	// the JSON is read by machines, often (the fleet view polls it): the lock holders cost an lsof over the whole host each,
+	// so it carries them only for a slot whose gate is gone, unless asked
+	mode := gate.HoldersAll
+	if *asJSON && !*holders {
+		mode = gate.HoldersOrphaned
+	}
+	st := g.StatusWith(mode)
 	if *asJSON {
 		b, _ := json.MarshalIndent(st, "", "  ")
 		fmt.Fprintln(stdout, string(b))
