@@ -1,7 +1,6 @@
 package fleetmod
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -409,4 +408,18 @@ func TestAPIShapes(t *testing.T) {
 	assert.Equal(t, map[string]any{"aliases": []any{"mserv", "a19"}}, get("/api/fleet/ssh-aliases"))
 }
 
-var _ = context.Background
+// After Stop a primary that arrives late (the engine's drain) starts nothing: no session, no ssh left behind.
+func TestNoSessionStartsAfterStop(t *testing.T) {
+	r := newMRig(t, silent)
+	r.role.Set(leaf.RoleState{Role: leaf.RoleStandby, Term: 3, Primary: "air26", Self: "mlab"})
+	r.start()
+	r.m.Stop()
+	r.role.Set(leaf.RoleState{Role: leaf.RolePrimary, Term: 4, Primary: "mlab", Self: "mlab"})
+	r.m.onRole(r.role.State())
+	time.Sleep(200 * time.Millisecond)
+	assert.Equal(t, 0, startsOf(r.sshDir), "no ssh started after Stop")
+	r.m.life.Lock()
+	active := r.m.active
+	r.m.life.Unlock()
+	assert.False(t, active)
+}

@@ -2,7 +2,6 @@ package fleetmod
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -215,5 +214,3 @@ func sessionFor(t *testing.T, path string, fc *fakeClock, sk sink, logf func(str
 		TermGrace: 300 * time.Millisecond,
 	}
 }
-
-var _ = fmt.Sprint

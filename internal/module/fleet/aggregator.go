@@ -140,11 +140,12 @@ type Measure struct {
 	haveNewest bool
 	pushedSlow map[string]uint64
 
-	life   sync.Mutex // activate / deactivate
-	active bool
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	base   context.Context
+	life    sync.Mutex // activate / deactivate
+	active  bool
+	stopped bool // Stop was called: nothing is activated any more
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+	base    context.Context
 
 	// touched only by the goroutine that runs reconcile (activate, then the tick loop)
 	sessions   map[string]*liveSession
@@ -185,6 +186,7 @@ func (m *Measure) resetLocked() {
 func (m *Measure) Start(ctx context.Context) error {
 	m.life.Lock()
 	m.base = ctx
+	m.stopped = false
 	m.life.Unlock()
 	if m.d.Role == nil {
 		return nil
@@ -198,12 +200,16 @@ func (m *Measure) Start(ctx context.Context) error {
 func (m *Measure) Stop() {
 	m.life.Lock()
 	defer m.life.Unlock()
+	m.stopped = true
 	m.deactivateLocked()
 }
 
 func (m *Measure) onRole(st leaf.RoleState) {
 	m.life.Lock()
 	defer m.life.Unlock()
+	if m.stopped {
+		return
+	}
 	switch {
 	case st.Role == leaf.RolePrimary && !m.active:
 		m.activateLocked()
@@ -213,6 +219,9 @@ func (m *Measure) onRole(st leaf.RoleState) {
 }
 
 func (m *Measure) activateLocked() {
+	if m.stopped {
+		return
+	}
 	base := m.base
 	if base == nil {
 		base = context.Background()
