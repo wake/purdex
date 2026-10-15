@@ -3,9 +3,14 @@ package gate
 import "time"
 
 // WouldWait answers, for a hook that decides whether to move an agent's Bash call to the background: if a command of this
-// class asked for a slot now, would it wait, and for what? It is cheap on purpose (a hook asks it for every heavy call):
-// it reads the slot records and the queue directory, the memory-pressure level (one sysctl) and the rate from the samples
-// other gates already cached. It starts no process, asks no daemon, and takes nothing.
+// class asked for a slot now, would it wait, and for what? It is cheap on purpose (a hook asks it for every heavy call): it
+// reads the slot records and the queue directory, the memory-pressure level (one sysctl) and the rate from the samples
+// other gates already cached. It starts no process, asks no daemon, and takes no slot.
+//
+// It is a hint, not a promise: it reads the slots, the queue and the pressure one after the other, so a gate that takes or
+// releases a slot at that moment can make it wrong in either direction. The gate decides when the command really runs; a
+// wrong answer costs a call that stays in the foreground (and is queued there) or one that goes to the background and
+// starts at once. The probes try a lock without waiting and drop it at once, as `pdx gate status` does.
 
 // WouldWait is the answer.
 type WouldWait struct {
@@ -25,9 +30,14 @@ type PressurePeeker interface {
 	Peek() (Pressure, bool)
 }
 
-// Peek is the pressure from what is at hand: the level from the kernel now, the rate from the cached samples when the
-// newest is not older than staleLimit (otherwise the rate is taken as 0). It never runs vm_stat and never writes.
+// Peek is the pressure from what is at hand. A cache that Read would reuse (younger than sampleReuse) gives exactly
+// what Read gives. Otherwise: the level from the kernel now, and the rate from the cached samples when the newest is not
+// older than staleLimit (without one the rate is unknown and counts as 0: the answer is then only a hint, and the gate
+// itself still decides when the command runs). It never runs vm_stat and never writes.
 func (r *HostReader) Peek() (Pressure, bool) {
+	if p, ok := r.fresh(); ok {
+		return p, true
+	}
 	level, lerr := r.Level()
 	f := r.load()
 	n := len(f.Samples)

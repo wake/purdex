@@ -111,8 +111,8 @@ func TestHostReader_PeekNeverSamplesAndNeverWrites(t *testing.T) {
 	assert.Equal(t, Pressure{Level: 2}, p)
 
 	samples := sampleFile{Samples: []cachedSample{
-		{At: now.Add(-8 * time.Second).UnixMilli(), Level: 1, Pageouts: 100},
-		{At: now.Add(-2 * time.Second).UnixMilli(), Level: 1, Pageouts: 700},
+		{At: now.Add(-18 * time.Second).UnixMilli(), Level: 1, Pageouts: 100},
+		{At: now.Add(-12 * time.Second).UnixMilli(), Level: 1, Pageouts: 700},
 	}}
 	b, _ := json.Marshal(samples)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "pressure.json"), b, 0o644))
