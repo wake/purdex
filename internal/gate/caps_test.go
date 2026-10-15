@@ -31,6 +31,7 @@ func TestVitestArgs(t *testing.T) {
 		{"vitest run -- --foo", "vitest run --maxWorkers=3 -- --foo", true},
 		{"vitest run --maxWorkers=2", "vitest run --maxWorkers=2", false},
 		{"npx --package vitest -- vitest run", "npx --package vitest -- vitest run --maxWorkers=3", true},
+		{"pnpm --maxWorkers=9 exec vitest run", "pnpm --maxWorkers=9 exec vitest run --maxWorkers=3", true}, // before the tool it is the runner's option, not vitest's limit
 		{"npx --package vitest -- vitest run -- --maxWorkers=20", "npx --package vitest -- vitest run --maxWorkers=3 -- --maxWorkers=20", true},
 		{"npx --package vitest -- vitest run --maxWorkers=2", "npx --package vitest -- vitest run --maxWorkers=2", false},
 		{"pnpm exec ./node_modules/.bin/vitest run", "pnpm exec ./node_modules/.bin/vitest run --maxWorkers=3", true},

@@ -98,7 +98,7 @@ func vitestAt(argv []string) int {
 	for i := 1; i < len(argv); i++ {
 		a := argv[i]
 		switch {
-		case a == "--" || a == "exec" || a == "x" || a == "dlx" || a == "run":
+		case a == "exec" || a == "x" || a == "dlx" || a == "run":
 			continue
 		case runnerValueOpts[a]:
 			i++ // `--prefix spa`: the value is not the tool
