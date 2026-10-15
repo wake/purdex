@@ -13,11 +13,11 @@ import (
 // --queue, --wait) and the client id and command text mean nothing to a local file lock and are read and ignored. The
 // daemon-side lease and runLeaseRun go away with L2; until then nothing calls runLeaseRun.
 
-// leaseKindClass is the pool each built-in kind takes a slot from; a kind it does not know (a custom one) is heavy, the
-// side that waits rather than the side that runs unqueued.
+// leaseKindClass is the pool each built-in kind takes a slot from, or none (the command runs at once, with no slot); a kind it
+// does not know (a custom one) is heavy, the side that waits rather than the side that runs unqueued.
 var leaseKindClass = map[string]gate.Class{
 	"test-full": gate.ClassHeavy,
-	"build":     gate.ClassHeavy,
+	"build":     gate.ClassNone, // packaging (the deploy script builds the Purdex App this way) is never held back (user 10-15)
 	"test-pkg":  gate.ClassLight,
 	"lint-full": gate.ClassLight,
 }
@@ -76,6 +76,10 @@ func runLeaseRunAlias(args []string, getenv func(string) string, stdout, stderr 
 		return ExitUsage
 	}
 	class := leaseGateClass(*kind, *weight)
+	if !class.Valid() {
+		fmt.Fprintf(stderr, "pdx lease run 已改為 pdx gate 的別名：--kind %s（打包）不經過閘門，直接執行；--ask／--queue／--wait 不再有作用\n", *kind)
+		return gateExecDirect("", command, stderr)
+	}
 	fmt.Fprintf(stderr, "pdx lease run 已改為 pdx gate 的別名（%s）：--ask／--queue／--wait 不再有作用；請改用 pdx gate --class %s -- …\n", class, class)
 	gateArgs := []string{"--class", string(class)}
 	if *cfgPath != "" {

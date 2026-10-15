@@ -22,7 +22,10 @@ func aliasCapture(t *testing.T, code int) *[][]string {
 		calls = append(calls, append([]string(nil), args...))
 		return code
 	}
-	t.Cleanup(func() { gateRunMain = old })
+	// nothing in these tests may replace the test process with a real command
+	oldExec := gateExec
+	gateExec = func(string, []string, []string) error { return nil }
+	t.Cleanup(func() { gateRunMain, gateExec = old, oldExec })
 	return &calls
 }
 
@@ -33,7 +36,7 @@ func TestLeaseGateClass(t *testing.T) {
 		want   gate.Class
 	}{
 		{"test-full", 0, gate.ClassHeavy},
-		{"build", 0, gate.ClassHeavy},
+		{"build", 0, gate.ClassNone}, // packaging runs at once
 		{"test-pkg", 0, gate.ClassLight},
 		{"lint-full", 0, gate.ClassLight},
 		{"my-custom-kind", 0, gate.ClassHeavy}, // unknown: the side that waits
@@ -67,8 +70,8 @@ func TestLeaseRunAlias_RunsThroughTheGate(t *testing.T) {
 func TestLeaseRunAlias_KeepsTheConfigPathAndMapsHeavy(t *testing.T) {
 	calls := aliasCapture(t, 0)
 	var out, errb bytes.Buffer
-	assert.Equal(t, 0, runLeaseRunAlias([]string{"--config", "/c.toml", "--kind", "build", "--wait", "5m", "--", "pnpm", "build"}, func(string) string { return "" }, &out, &errb))
-	assert.Equal(t, [][]string{{"--class", "heavy", "--config", "/c.toml", "--", "pnpm", "build"}}, *calls)
+	assert.Equal(t, 0, runLeaseRunAlias([]string{"--config", "/c.toml", "--kind", "test-full", "--wait", "5m", "--", "pnpm", "test"}, func(string) string { return "" }, &out, &errb))
+	assert.Equal(t, [][]string{{"--class", "heavy", "--config", "/c.toml", "--", "pnpm", "test"}}, *calls)
 }
 
 func TestLeaseRunAlias_UsageErrorsNeverReachTheGate(t *testing.T) {
@@ -91,4 +94,32 @@ func TestLeaseRunAlias_UsageErrorsNeverReachTheGate(t *testing.T) {
 		assert.Contains(t, errb.String(), "pdx lease:")
 	}
 	assert.Empty(t, *calls)
+}
+
+// `--kind build` is packaging (the deploy script builds the Purdex App with it): it runs at once, taking no slot, with the
+// deprecation line and the command's own exit code.
+func TestLeaseRunAlias_BuildRunsAtOnceWithoutASlot(t *testing.T) {
+	calls := aliasCapture(t, 99)
+	var execd struct {
+		path string
+		argv []string
+	}
+	old := gateExec
+	gateExec = func(path string, argv []string, _ []string) error {
+		execd.path, execd.argv = path, argv
+		return nil
+	}
+	t.Cleanup(func() { gateExec = old })
+	var out, errb bytes.Buffer
+	code := runLeaseRunAlias([]string{"--kind", "build", "--queue", "--", "sh", "-c", "exit 3"}, func(string) string { return "" }, &out, &errb)
+	assert.Equal(t, 0, code, "gateExec returned (a seam): nothing failed to start")
+	assert.Empty(t, *calls, "no slot: the gate is not asked")
+	assert.Equal(t, []string{"sh", "-c", "exit 3"}, execd.argv)
+	assert.True(t, strings.HasSuffix(execd.path, "/sh"), execd.path)
+	assert.Equal(t, 1, strings.Count(errb.String(), "別名"), "one deprecation line: %q", errb.String())
+	assert.Contains(t, errb.String(), "不經過閘門")
+	// a kind that is not packaging still goes through the gate
+	*calls = nil
+	runLeaseRunAlias([]string{"--kind", "test-full", "--", "go", "test", "./..."}, func(string) string { return "" }, &out, &errb)
+	assert.Len(t, *calls, 1)
 }
