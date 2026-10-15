@@ -147,8 +147,9 @@ func classifyGo(args []string) Class {
 // `-w`) or, with nothing said, for a person at a terminal outside CI; in an agent's shell, a script or CI it runs once. A
 // run that names files or a filter is light, the rest is heavy. `--version`, `--help`, `list` and `init` run nothing.
 func classifyVitest(args []string, e Env) Class {
-	sub := ""     // the first word that is a subcommand
-	explicit := 0 // +1 run once (--run, --no-watch, --watch=false), -1 watch (--watch, -w); the last one wins
+	sub := ""        // the first word that is a subcommand
+	explicit := 0    // +1 run once (--no-watch, --watch=false), -1 watch (--watch, -w); the last one wins
+	runFlag := false // --run / --run=true: vitest sets watch to false after everything else, whatever else was said
 	narrowed := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -157,6 +158,8 @@ func classifyVitest(args []string, e Env) Class {
 			return ClassNone
 		case a == "-w":
 			explicit = -1
+		case a == "--run" || a == "--run=true":
+			runFlag = true
 		case vitestBoolFlag(a) != 0:
 			explicit = vitestBoolFlag(a)
 		case a == "--changed" || a == "--related" || strings.HasPrefix(a, "--changed=") ||
@@ -179,15 +182,17 @@ func classifyVitest(args []string, e Env) Class {
 		}
 	}
 	switch sub {
-	case "watch", "dev", "list", "init", "bench":
+	case "list", "init", "bench":
 		return ClassNone
 	case "related":
 		narrowed = true // `vitest related <files>`: the tests those files touch
 	}
-	if explicit < 0 {
+	// --run wins over `watch`, `dev` and --watch (vitest sets watch to false when options.run is true, after the
+	// subcommand has set it), so it comes first; then a watch that was asked for; then what the place decides.
+	once := runFlag || sub == "run" || explicit > 0
+	if !once && (sub == "watch" || sub == "dev" || explicit < 0) {
 		return ClassNone
 	}
-	once := sub == "run" || explicit > 0
 	if !once && e.watchesByDefault() {
 		return ClassNone // a person at a terminal: the default is watch
 	}
@@ -197,17 +202,13 @@ func classifyVitest(args []string, e Env) Class {
 	return ClassHeavy
 }
 
-// vitestBoolFlag reads --run and --watch with an optional =true / =false, and a bare --no-watch: +1 when the flag makes
-// vitest run once, -1 when it makes it watch, 0 when it is some other flag (or `--run=false`, which says nothing).
+// vitestBoolFlag reads --watch with an optional =true / =false, and a bare --no-watch: +1 when the flag makes vitest run
+// once, -1 when it makes it watch, 0 when it is some other flag.
 func vitestBoolFlag(a string) int {
 	name, val, hasVal := strings.Cut(a, "=")
 	truth := !hasVal || val == "true"
 	falsy := hasVal && val == "false"
 	switch name {
-	case "--run":
-		if truth {
-			return 1
-		}
 	case "--watch":
 		if truth {
 			return -1
