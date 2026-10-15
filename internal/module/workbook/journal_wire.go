@@ -97,15 +97,14 @@ func (l *liveSessions) has(sessionID string) bool {
 	defer l.mu.Unlock()
 	if l.set == nil || l.now().Sub(l.at) >= liveTTL {
 		origins, err := lister.ListLiveOrigins()
+		l.set = make(map[string]bool, len(origins)) // a failed read is an empty list for one TTL: the questions of this tick are not
+		l.at = l.now()                              // each a new read of a registry that just failed (the mirror asks again next tick)
 		if err != nil {
-			l.set = nil
 			return false
 		}
-		l.set = make(map[string]bool, len(origins))
 		for _, o := range origins {
 			l.set[o.SessionID] = true
 		}
-		l.at = l.now()
 	}
 	return l.set[sessionID]
 }

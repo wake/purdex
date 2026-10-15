@@ -622,13 +622,21 @@ func TestLiveSessions_OneRegistryReadServesManyQuestions(t *testing.T) {
 	if !ls.has("c") || src.reads() != 2 {
 		t.Errorf("after the TTL: has(c) false or %d reads, want true and 2", src.reads())
 	}
-	// an unreadable registry answers "not live here" and is read again by the next question
+	// an unreadable registry answers "not live here" - for every question of the tick, from one failed read, not one per team
 	src.err = errors.New("registry unreadable")
 	now = now.Add(liveTTL)
-	if ls.has("a") {
-		t.Error("an unreadable registry answered live")
+	before := src.reads()
+	for i := 0; i < 50; i++ {
+		if ls.has("a") {
+			t.Fatal("an unreadable registry answered live")
+		}
 	}
+	if n := src.reads() - before; n != 1 {
+		t.Fatalf("%d registry reads while it kept failing, want 1 for the whole tick", n)
+	}
+	// and it is read again after the TTL
 	src.err = nil
+	now = now.Add(liveTTL)
 	if !ls.has("a") {
 		t.Error("the registry was not read again after the error")
 	}
