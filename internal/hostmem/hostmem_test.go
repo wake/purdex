@@ -48,6 +48,8 @@ func TestParseVMStat_MissingLines(t *testing.T) {
 		v, err := ParseVMStat([]byte(c.raw))
 		require.NoError(t, err, name)
 		assert.Equal(t, c.memoryOK, v.MemoryErr() == nil, name+": memory")
+		assert.Equal(t, c.memoryOK, v.HaveMemory, name+": HaveMemory")
+		assert.Equal(t, c.ctrsOK, v.HaveCounters, name+": HaveCounters")
 		assert.Equal(t, c.ctrsOK, v.CountersErr() == nil, name+": counters")
 	}
 }
