@@ -101,6 +101,11 @@ func Load(path string) (Config, error) {
 		}
 		return Defaults(), fmt.Errorf("gate config %s: %w", path, err)
 	}
-	g, _ := top["gate"].(map[string]any)
+	g, isTable := top["gate"].(map[string]any)
+	if v, present := top["gate"]; present && !isTable {
+		cfg := Defaults()
+		cfg.Warnings = append(cfg.Warnings, fmt.Sprintf("gate: want a [gate] table, got %v (defaults kept)", v))
+		return cfg, nil
+	}
 	return FromTable(g), nil
 }

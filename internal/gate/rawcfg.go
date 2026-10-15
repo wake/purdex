@@ -37,9 +37,13 @@ func newRaw(m map[string]any) raw {
 	return raw{m: m, st: &rawState{src: map[string]Source{}}}
 }
 
-// sub is the nested table `name`; a missing or non-table value is an empty table.
+// sub is the nested table `name`; a missing value is an empty table, and one of the wrong kind is an empty table with a
+// warning (the module keeps its defaults).
 func (r raw) sub(name string) raw {
-	child, _ := r.m[name].(map[string]any)
+	child, isTable := r.m[name].(map[string]any)
+	if v, present := r.m[name]; present && !isTable {
+		r.warn(name, "want a table, got %v", v) // [[gate.slots]], slots = 3 …; the one list of tables, intercept's rule, is read by its module without sub
+	}
 	if child == nil {
 		child = map[string]any{}
 	}
@@ -85,15 +89,15 @@ func (r raw) Int(key string, def, lo, hi int) int {
 	return n
 }
 
-func (r raw) Float(key string, def, lo float64) float64 {
+func (r raw) Float(key string, def, lo, hi float64) float64 {
 	r.set(key, SrcDefault)
 	v, ok := r.m[key]
 	if !ok {
 		return def
 	}
 	f, ok := asFloat(v)
-	if !ok || f < lo {
-		r.warn(key, "want a number of at least %v, got %v", lo, v)
+	if !ok || !finite(f) || f < lo || f > hi {
+		r.warn(key, "want a number from %v to %v, got %v", lo, hi, v)
 		return def
 	}
 	r.set(key, SrcConfig)
@@ -194,7 +198,7 @@ func (r raw) IntOrAuto(key string, def Param, lo, hi int) Param {
 }
 
 // FloatOrAuto reads a number of at least lo, or the string "auto".
-func (r raw) FloatOrAuto(key string, def float64, defAuto bool, lo float64) (f float64, auto bool) {
+func (r raw) FloatOrAuto(key string, def float64, defAuto bool, lo, hi float64) (f float64, auto bool) {
 	r.set(key, SrcDefault)
 	v, ok := r.m[key]
 	if !ok {
@@ -205,8 +209,8 @@ func (r raw) FloatOrAuto(key string, def float64, defAuto bool, lo float64) (f f
 		return def, true
 	}
 	n, ok := asFloat(v)
-	if !ok || n < lo {
-		r.warn(key, `want "auto" or a number of at least %v, got %v`, lo, v)
+	if !ok || !finite(n) || n < lo || n > hi {
+		r.warn(key, `want "auto" or a number from %v to %v, got %v`, lo, hi, v)
 		return def, defAuto
 	}
 	r.set(key, SrcConfig)
@@ -226,6 +230,9 @@ func asInt(v any) (int, bool) {
 	}
 	return 0, false
 }
+
+// finite says the number is neither NaN nor an infinity (TOML can spell both: a NaN would pass every `< lo` test).
+func finite(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
 
 func asFloat(v any) (float64, bool) {
 	switch n := v.(type) {

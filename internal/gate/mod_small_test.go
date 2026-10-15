@@ -49,6 +49,13 @@ func TestCache_Apply(t *testing.T) {
 	assert.Equal(t, in, out, "--fg (the release gate) is never touched")
 	assert.Empty(t, note)
 
+	out, note = strip.Apply(words("go test ./pkg -args -count=1"), false)
+	assert.Equal(t, words("go test ./pkg -args -count=1"), out, "after -args it is the test binary's own flag")
+	assert.Empty(t, note)
+	out, note = strip.Apply(words("go test -count=1 ./pkg -args -count=1"), false)
+	assert.Equal(t, words("go test ./pkg -args -count=1"), out, "only go test's own -count=1 is taken out")
+	assert.NotEmpty(t, note)
+
 	for _, other := range []string{"go test -count=2 ./...", "go test ./...", "go build ./...", "npx vitest run", "go vet ./..."} {
 		out, note = strip.Apply(words(other), false)
 		assert.Equal(t, words(other), out, other)
