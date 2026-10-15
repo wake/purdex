@@ -9,7 +9,7 @@
 export const NEXT_URL = 'http://pdx/mod/v1/workbook/next'
 export const RESULT_URL = 'http://pdx/mod/v1/workbook/result'
 export const REFRESH_URL = 'http://pdx/mod/v1/workbook/refresh'
-export const CAPS = ['workbook.v2', 'workbook.refresh', 'prompt.v1', 'lease.notice.v1'] // announced on every events batch: turn / re-write jobs, the refresh fork, the Apps' send / interrupt, and the daemon's lease notices
+export const CAPS = ['workbook.v2', 'workbook.refresh', 'prompt.v1'] // announced on every events batch: turn / re-write jobs, the refresh fork, and the Apps' send / interrupt
 export const WAIT_MS = 15_000 // the long poll after a main turn ends
 export const REQUEST_DEADLINE_MS = 5000 // slack over the wait for a request to be answered ($.http.fetch has no timeout)
 export const REASONS = new Set(['api-error', 'empty-reply', 'aborted', 'nothing-to-fork'])
@@ -155,8 +155,6 @@ export function promptNextBody(stream, sessionId, waitMs) {
   return JSON.stringify({ stream, session_id: sessionId, wait_ms: waitMs })
 }
 
-export const MAX_NOTICE_BYTES = 4000 // promptq.MaxNoticeBytes: the daemon refuses a longer notice, the mod does not run one
-
 // parsePromptJob reads the answer of `prompt/next`: the job, or null (204, an error, anything that is not a well-formed
 // job). Fail closed: a job outside the bounds is not run.
 export function parsePromptJob(res) {
@@ -173,10 +171,6 @@ export function parsePromptJob(res) {
     return { id: j.id, kind: j.kind, sessionId: j.session_id, text: j.text }
   }
   if (j.kind === 'read') return { id: j.id, kind: 'read', sessionId: j.session_id, text: '' }
-  // a notice of the daemon (lease v2 amendment A §2.10): at most MAX_NOTICE_BYTES of UTF-8 (promptq.MaxNoticeBytes)
-  if (j.kind === 'notice' && typeof j.text === 'string' && j.text.trim() !== '' && cutUtf8(j.text, MAX_NOTICE_BYTES).length === j.text.length) {
-    return { id: j.id, kind: 'notice', sessionId: j.session_id, text: j.text }
-  }
   return null
 }
 

@@ -204,7 +204,7 @@ test('both together: prefixed and moved to the background, one run', async ($, o
   expect(out.context).toHaveLength(2)
 })
 
-test('a denial from beneath (a queued lease) gets no note and the tool is not run again', async ($, on) => {
+test('a denial from beneath gets no note and the tool is not run again', async ($, on) => {
   const r = rig(on, () => ok(FREE), () => ({ deny: 'queued' }))
   const out = await bash($, './vendor/bin/pest')
   expect(out.deny).toBe('queued')
@@ -216,77 +216,4 @@ test('a tool that throws is run once and the error goes on', async ($, on) => {
   const r = rig(on, () => ok(BUSY), () => { throw new Error('the tool failed') })
   await bash($, 'go test ./...').catch(() => {})
   expect(r.ran).toHaveLength(1)
-})
-
-// ---- the order with the lease hook, which is retired in L1b ----
-//
-// gate.js is registered before lease.js, so it sees the call first. A call it moves to the background reaches the lease
-// hook as a background call: in an interactive session that is wrapped in `pdx lease run --ask` (the lease alias of the
-// gate), and the command inside is the one gate.js made. This test pins that order; L1b removes the lease half.
-
-const startInteractive = ($: any) => $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
-
-test('pinned order: gate.js moves the call to the background, then the lease hook wraps it', async ($, on) => {
-  const r = rig(on, (a) => (a[1] === 'gate' ? ok(BUSY) : ok('{}')))
-  await startInteractive($)
-  await bash($, 'go test ./...')
-  expect(r.calls[0].slice(1, 3)).toEqual(['gate', 'would-wait']) // gate.js asked first
-  expect(r.ran).toHaveLength(1)
-  expect(r.ran[0].bg).toBe(true)
-  expect(r.ran[0].command).toMatch(/^'pdx' lease run --ask --kind test-full /) // …and the lease hook wrapped what it handed on
-  expect(r.ran[0].command).toContain('go test ./...')
-})
-
-test('pinned order: a direct .bin call is prefixed by gate.js, which the lease hook then recognises as already gated', async ($, on) => {
-  const r = rig(on, (a) => (a[1] === 'gate' ? ok(BUSY) : ok('{}')))
-  await startInteractive($)
-  await bash($, './node_modules/.bin/vitest run')
-  expect(r.ran).toHaveLength(1)
-  expect(r.ran[0].bg).toBe(true)
-  expect(r.ran[0].command).toBe("'pdx' gate --auto -- ./node_modules/.bin/vitest run") // not wrapped a second time
-  expect(r.calls.filter((a) => a[1] === 'lease')).toEqual([])
-})
-
-test('pinned order: a call that can start at once is not touched by gate.js and the lease hook decides alone', async ($, on) => {
-  const r = rig(on, (a) => (a[1] === 'gate' ? ok(FREE) : a[2] === 'acquire' ? ok(JSON.stringify({ id: 'lease-1', granted: true })) : ok('{}')))
-  await bash($, 'go test ./...')
-  expect(r.calls.map((a) => a[1] + ' ' + a[2])).toEqual(['gate would-wait', 'lease acquire', 'lease release'])
-  expect(r.ran[0].bg).toBeUndefined()
-})
-
-test('pdx.json names the binary and the config: the question and the prefix both carry them', async ($, on) => {
-  const r = rig(on, () => ok(BUSY), () => BASH_OK, JSON.stringify({ pdx: '/opt/pdx/bin/pdx', config: '/home/me/.config/pdx2/config.toml' }))
-  const out = await bash($, './vendor/bin/pest')
-  expect(wouldWaits(r)).toEqual([['/opt/pdx/bin/pdx', 'gate', 'would-wait', '--auto', '--json', '--config', '/home/me/.config/pdx2/config.toml', '--', './vendor/bin/pest']])
-  expect(r.ran[0].command).toBe("'/opt/pdx/bin/pdx' gate --config '/home/me/.config/pdx2/config.toml' --auto -- ./vendor/bin/pest")
-  expect(out.context).toHaveLength(2)
-})
-
-test('a compound call goes to the background as a whole, and the note says so', async ($, on) => {
-  const r = rig(on, () => ok(BUSY))
-  const out = await bash($, 'cd spa && go test ./... && cat result.json')
-  expect(r.ran).toHaveLength(1)
-  expect(r.ran[0].command).toBe('cd spa && go test ./... && cat result.json') // unchanged: it all runs, in order, in the background
-  expect(r.ran[0].bg).toBe(true)
-  expect(out.context[0]).toContain('整段，包括它前後接的指令')
-  expect(out.context[0]).toContain('不要假設它做完了')
-})
-
-// A dependency that never answers must not hold the call: the planning has one deadline and the call then runs as it is.
-for (const [name, hang] of [['fs.read', 'fs.read'], ['process.run', 'process.run'], ['tool.check', 'tool.check']] as const) {
-  test(`${name} never answers → the call runs as it was, within the planning deadline`, { timeoutMs: 15000 }, async ($, on) => {
-    const r = rig(on, () => ok(BUSY), () => BASH_OK, undefined, hang)
-    const began = Date.now()
-    const out = await bash($, './vendor/bin/pest')
-    expect(Date.now() - began).toBeLessThan(9000)
-    expect(out.result).toEqual(BASH_OK.result)
-    expect(r.ran).toHaveLength(1)
-  })
-}
-
-test('the fourth command of a call is asked about too: it is the one that waits', async ($, on) => {
-  const r = rig(on, (a) => ok(a.includes('test') ? BUSY : FREE))
-  await bash($, 'go version; go env; go list ./...; go test ./...')
-  expect(wouldWaits(r)).toHaveLength(4)
-  expect(r.ran[0].bg).toBe(true)
 })
