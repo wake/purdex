@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.0-alpha.739] - 2026-10-15
+
+> 緊急修正（738 的重指令閘門大部分沒攔到）。只改 `pdx setup` 寫進 `~/.zshenv` 的區塊，daemon、SPA、mod、Electron 行為都沒有改，資料庫 schema 沒有變。兩台都要重跑 `pdx setup`，舊區塊會被換成新的；退回 738 不需要還原資料庫。
+
+### Fixed
+
+- **閘門的 shim 一定排在 PATH 最前面（#2930，PR #2931）**：738 的區塊只在 PATH 裡「沒有」shim 目錄時才把它加到前面。登入 shell 讀完 `.zprofile`、`.zshrc` 之後，homebrew、nvm 又排到 shim 前面，所以部署後才開的終端機、tmux 與 Claude Code session，shim 雖然在 PATH 裡，`go`、`pnpm`、`npx` 卻都直接執行、沒經過閘門。現在區塊不管 shim 目錄原本在哪都把它移到最前面（不會讓 PATH 變長）；互動 shell 另外在每次出現提示字元前再移一次，蓋過 `.zshrc` 與之後的 `nvm use`。已知限制：舊版 Claude Code 的 shell 快照最後會整個重設 PATH，用那種快照的 session 要重開（或另行處理快照）才會經過閘門；`zsh -ic '<指令>'` 這種不出提示字元的互動呼叫，`pnpm`／`npx` 仍可能是 nvm 的。
+
 ## [1.0.0-alpha.738] - 2026-10-15
 
 > daemon 與 SPA 有改，mod 與 Electron 沒有改。這一版新增重指令閘門 `pdx gate`，兩台都要重跑 `pdx setup` 才會裝上 shim（`~/.config/pdx/shims/`）與 `~/.zshenv` 區塊；裝上之後，所有 zsh（含正在跑的 session 的下一個指令）呼叫 `go`、`pnpm`、`npx`、`vitest`、`tsc`、`composer` 都會先經過閘門。資料庫 schema 沒有變，退回 737 不需要還原資料庫；要撤掉閘門可跑 `pdx setup --uninstall-gate`（只移除那個區塊與 shim）。舊的資源租約維持「只記錄」模式（advise），在之後的 L1–L3 才拆掉。
