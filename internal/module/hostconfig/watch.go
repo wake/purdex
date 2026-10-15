@@ -10,6 +10,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/watchsettings"
 )
 
@@ -147,7 +148,6 @@ func (m *Module) WatchSettings() (watchsettings.Settings, error) {
 }
 
 var (
-	watchAliasRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
 	watchModelRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,63}$`)
 )
 
@@ -166,7 +166,7 @@ func validateWatchDelivery(s watchsettings.Settings) error {
 	}
 	seen := map[string]bool{}
 	for _, a := range s.Targets {
-		if !watchAliasRe.MatchString(a) {
+		if config.ValidateAlias(a, "") != nil { // the rule a peer host's alias is held to
 			return fmt.Errorf("targets: %q is not a host alias", a)
 		}
 		k := strings.ToLower(a)

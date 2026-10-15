@@ -121,3 +121,15 @@ func TestWatch_TheDeliveryFieldsAreValidated(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), e.Revision, "nothing stored")
 }
+
+// targets are held to the rule a paired host's alias is held to, whatever its length there allows.
+func TestWatch_TargetsFollowTheConfigsAliasRule(t *testing.T) {
+	m := newTestModule(t)
+	long := strings.Repeat("a", 64) // config's aliasPattern allows 64
+	rr := serve(m, http.MethodPut, "/api/hostconfig/watch", `{"items":`+strings.TrimSuffix(watchOK, "}")+`,"targets":["`+long+`"]},"baseRevision":0}`)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	rr = serve(m, http.MethodPut, "/api/hostconfig/watch", `{"items":`+strings.TrimSuffix(watchOK, "}")+`,"targets":["`+long+`a"]},"baseRevision":1}`)
+	assert.Equal(t, http.StatusBadRequest, rr.Code, "65 is too long")
+	rr = serve(m, http.MethodPut, "/api/hostconfig/watch", `{"items":`+strings.TrimSuffix(watchOK, "}")+`,"targets":[".."]},"baseRevision":1}`)
+	assert.Equal(t, http.StatusBadRequest, rr.Code, "a reserved alias")
+}
