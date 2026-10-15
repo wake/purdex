@@ -229,6 +229,22 @@ func TestLoad_ARangeAndNonTablesAreListed(t *testing.T) {
 	assert.Contains(t, cfg.Warnings[0]+cfg.Warnings[1], "slots")
 }
 
+// intercept's rule must be a list of tables; a scalar or a single table is refused with a warning, not dropped.
+func TestLoad_ARuleThatIsNotAListOfTablesIsListed(t *testing.T) {
+	t.Setenv("PDX_GATE_DIR", "")
+	for _, body := range []string{
+		"[gate.intercept]\nrule = \"bad\"\n",
+		"[gate.intercept.rule]\nmatch = \"go test\"\nclass = \"heavy\"\n",
+		"[gate.intercept]\nrule = 3\n",
+	} {
+		cfg, err := Load(writeConfig(t, body))
+		require.NoError(t, err, body)
+		assert.Empty(t, cfg.Intercept.Rules, body)
+		require.Len(t, cfg.Warnings, 1, body)
+		assert.Contains(t, cfg.Warnings[0], "rule")
+	}
+}
+
 func TestLoad_ABrokenFileGivesTheDefaultsAndTheError(t *testing.T) {
 	t.Setenv("PDX_GATE_DIR", "")
 	cfg, err := Load(writeConfig(t, "[gate\nslots = "))
