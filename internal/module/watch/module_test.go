@@ -61,7 +61,7 @@ func TestHolderRoute_AnswersNoneThenAwakeThenResting(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &v))
 	require.Equal(t, ourID, v.HostID, "HostCaller checks the answer names the host it asked")
 	require.Equal(t, "none", v.State)
-	require.Equal(t, []string{"mlab", "a26"}, v.Targets)
+	require.Equal(t, []string{"air26", "mlab"}, v.Targets)
 
 	at := time.Date(2026, 10, 16, 3, 0, 0, 0, time.UTC)
 	require.NoError(t, r.m.holder.Update(func(h *watch.Holder) { h.State, h.SessionID, h.Since, h.LastTurn = watch.HolderAwake, "sess-9", at, at }))
