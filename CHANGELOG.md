@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.0.0-alpha.741] - 2026-10-16
+
+> mod 與 daemon 有改，SPA、Electron 沒有改。兩台都要重跑 `pdx setup` 才會換上新的 mod（mod ↔ daemon 協定仍是 8）。hostconfig 多了 `watch` 一列（缺少時用預設值），資料庫 schema 沒有變；退回 740 不需要還原資料庫，但要再跑一次 `pdx setup` 換回舊 mod。daemon 開始在資料目錄的 `watch/` 底下寫守門員的事件紀錄與 `state.json`。
+
+### Removed：mod 端的資源租約（L1b，PR #2947）
+
+- mod 不再有租約 hook：刪掉 `hooks/lease.js` 與 `pdx-lease` skill，不再宣告 `lease.notice.v1`，也不再接收 daemon 的租約通知。重指令一律由閘門處理（L1a 的 `gate.js` 與 shim），新增 `pdx-gate` skill 說明排隊、結束碼與 `pdx lease run` 別名的語意。
+- mod 收到不認得的 job（例如退役的租約通知，或之後新增的種類）會回報 dropped／`unsupported_kind`，不再默默吞掉，daemon 的佇列不會因此卡到交付逾時。
+- daemon 端的租約（`pdx lease` 其餘指令、資料表、設定）還在，下一階段 L2 才拆。
+
+### Added：負載守門員（spec §12，還不會通知任何 session）
+
+- **偵測接進 daemon（W1b-3，PR #2940）**：daemon 每次主機取樣（5 秒）順便判斷 E1 閘門外的重指令樹、E2 記憶體壓力或換頁率持續過高、E3 gate 已不在但名額仍被佔住、E4 名額佔用過久，事件寫進資料目錄 `watch/` 的每日紀錄（保留 30 天）。不依賴租約模式；取樣失敗的那一拍跳過，寫檔錯誤只記 log。查持鎖行程（lsof）只在 E3 成立時做一次。`pdx watch log` 讀這些紀錄。
+- **守門員設定（W2a-1，PR #2943）**：hostconfig 的 `watch` 列除了偵測門檻，還有 `targets`（預設 `[air26, mlab]`）、`mode`（`patrol`／`resident`）、`patrol_idle_min`（120）、`auto_wake`、`model`（opus）、`workdir`（`~/Workspace/wake/mlab-purdex-watch`）、`start_prompt`、`wake_prompt`，寫入時逐欄驗證；`pdx watch config [get [key] | set key=value…]` 讀寫。
+- **守門員在哪（W2a-2，PR #2948）**：daemon 記住目前守門員所在的主機與 session（`holder.json`），其他主機的 daemon 可用 `POST /api/peers/watch/holder` 詢問（只開放這個路徑，有每台主機的頻率上限）。找人、叫醒、送達在之後的 W2b／W3。
+
+### Changed
+
+- **`pdx gate status` 列出排隊者（#2941，PR #2944）**：文字版多一段 `排隊 #n  pid  等多久  指令  cwd`；`--json` 新增 `QueueHeavy`／`QueueLight`（先到的在前，每筆 class、place、pid、since、argv、cwd、session）。`pdx gate set`／`profile` 的旗標放在名稱前後都可以。`release` 是內建 profile（等同 `--fg`、保留 `-count=1`），`pdx gate profile list` 會列出它；要加別的設定用 `pdx gate set --profile release …`。
+
+### Fixed
+
+- **閘門記錄的 session 一直是空的（#2945，PR #2946）**：閘門讀的是 `CLAUDE_SESSION_ID`，Claude Code 實際提供的是 `CLAUDE_CODE_SESSION_ID`；現在先讀後者、再退回前者。佔名額、排隊與決策紀錄都會帶上所屬 session。
+
 ## [1.0.0-alpha.740] - 2026-10-16
 
 > mod 與 daemon（`pdx` CLI）有改，SPA、Electron 沒有改，資料庫 schema 沒有變。兩台都要重跑 `pdx setup` 才會換上新的 mod（mod ↔ daemon 協定仍是 8）；退回 739 不需要還原資料庫，但要再跑一次 `pdx setup` 換回舊 mod。
