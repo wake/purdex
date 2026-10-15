@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -406,6 +407,21 @@ func TestAPIShapes(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(r.m.d.Home, ".ssh"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(r.m.d.Home, ".ssh", "config"), []byte("Host mserv a19\n  HostName x\nHost *\n  User y\n"), 0o600))
 	assert.Equal(t, map[string]any{"aliases": []any{"mserv", "a19"}}, get("/api/fleet/ssh-aliases"))
+}
+
+// The own host reports its os the way a remote does ("Darwin" / "Linux"), from runtime.GOOS.
+func TestOwnHostFillsOS(t *testing.T) {
+	for goos, want := range map[string]string{"darwin": "Darwin", "linux": "Linux", "windows": ""} {
+		localGOOS = goos
+		r := newMRig(t, silent)
+		r.start()
+		r.setLocal(10, 1)
+		r.tick()
+		h := r.host("mlab:abc123")
+		require.NotNil(t, h)
+		assert.Equal(t, want, h.OS, goos)
+	}
+	localGOOS = runtime.GOOS
 }
 
 // After Stop a primary that arrives late (the engine's drain) starts nothing: no session, no ssh left behind.

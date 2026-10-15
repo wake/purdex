@@ -3,6 +3,7 @@ package fleetmod
 import (
 	"context"
 	"encoding/json"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -469,6 +470,20 @@ func orEmpty(p []leaf.Proc) []leaf.Proc {
 	return p
 }
 
+// localGOOS is runtime.GOOS; tests pin it.
+var localGOOS = runtime.GOOS
+
+// localOS is the own os in the words a remote frame uses (leaf.ParseFast): "Darwin" or "Linux", "" for anything else.
+func localOS() string {
+	switch localGOOS {
+	case "darwin":
+		return "Darwin"
+	case "linux":
+		return "Linux"
+	}
+	return ""
+}
+
 // readLocalLocked takes the newest reading of the own host from the LocalSource. now is the receive time.
 func (m *Measure) readLocal(now time.Time) {
 	m.mu.Lock()
@@ -479,6 +494,7 @@ func (m *Measure) readLocal(now time.Time) {
 	}
 	if f, ok := m.d.Local.Fast(); ok && f.At.After(h.ownAt) {
 		h.ownAt, h.ownSeen = f.At, now
+		h.os = localOS()
 		pct, free, dok := m.disk()
 		lf := leaf.Fast{LocalFast: f, DiskPct: pct, DiskFreeGB: free, RateKnown: true, LevelKnown: f.Level > 0}
 		m.applyFastLocked(h, lf, now)

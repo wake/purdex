@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -46,6 +47,8 @@ func inject(t *testing.T, r *mrig, key string, f leaf.Fast, s *leaf.Slow) {
 }
 
 func goldenRig(t *testing.T) *mrig {
+	localGOOS = "darwin" // the golden files are the same on every machine
+	t.Cleanup(func() { localGOOS = runtime.GOOS })
 	r := newMRig(t, silent)
 	r.setProbes(
 		hostconfig.ProbeHost{ID: "ab12cd34", Name: "air-2019", SSHAlias: "a19", Icon: "Laptop", IconWeight: "fill",
