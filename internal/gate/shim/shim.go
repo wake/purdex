@@ -65,6 +65,12 @@ exit 127
 `
 }
 
+// shUnquoteInner is the inverse of shQuoteInner.
+func shUnquoteInner(s string) string {
+	r := strings.NewReplacer(`\\`, `\`, `\"`, `"`, `\$`, "$", "\\`", "`")
+	return r.Replace(s)
+}
+
 // shQuoteInner makes s safe inside a double-quoted sh word (the ${VAR:-…} default).
 func shQuoteInner(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "$", `\$`, "`", "\\`")

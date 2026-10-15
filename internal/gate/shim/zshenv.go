@@ -155,14 +155,46 @@ func (e *ConflictError) Error() string {
 	return "not pdx shims, left alone (move them away to let the gate in): " + strings.Join(e.Paths, ", ")
 }
 
-// owned reports whether the regular file at p is a shim pdx wrote for tool.
+// generations are the generators of every form of shim pdx has ever written, newest first. A file is a pdx shim only if it is
+// byte for byte what one of them writes; when Script changes, the old form is kept here (so an upgrade still recognizes it).
+var generations = []func(tool, pdxPath string) string{Script}
+
+// pdxPathOf is the pdx path written into a shim (the default of its PDX_BIN line), or "" when there is no such line.
+func pdxPathOf(content string) string {
+	const head = `PDX_BIN="${PDX_BIN:-`
+	i := strings.Index(content, head)
+	if i < 0 {
+		return ""
+	}
+	rest := content[i+len(head):]
+	j := strings.Index(rest, "}\"\n")
+	if j < 0 {
+		return ""
+	}
+	return shUnquoteInner(rest[:j])
+}
+
+// owned reports whether the regular file at p is a shim pdx wrote for tool: its content is exactly what a generator writes for
+// the pdx path it names. A file that merely carries a shim's comment, or a shim someone edited, is not.
 func owned(p, tool string) bool {
 	fi, err := os.Lstat(p)
 	if err != nil || !fi.Mode().IsRegular() {
 		return false
 	}
 	b, err := os.ReadFile(p)
-	return err == nil && bytes.Contains(b, []byte("(pdx gate shim for "+tool+")"))
+	if err != nil {
+		return false
+	}
+	pdx := pdxPathOf(string(b))
+	if pdx == "" {
+		return false
+	}
+	for _, gen := range generations {
+		if gen(tool, pdx) == string(b) {
+			return true
+		}
+	}
+	return false
 }
 
 // lock serializes Install and Uninstall of one home across processes (two `pdx setup` at once); the returned func releases it.

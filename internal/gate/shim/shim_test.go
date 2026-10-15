@@ -521,3 +521,45 @@ func TestInstall_ConcurrentSetupsLeaveOneConsistentSet(t *testing.T) {
 		}
 	}
 }
+
+// Ownership is "byte for byte what pdx writes": a file that only carries a shim's comment, or a shim someone edited, is the
+// user's. A pdx path with every character the quoting handles is still recognized on the next run.
+func TestOwnership_IsExactNotAMarker(t *testing.T) {
+	home := t.TempDir()
+	weird := "/p a/\"q\"/$x/`y`/\\z/pdx"
+	if err := Install(home, weird); err != nil {
+		t.Fatal(err)
+	}
+	if err := Install(home, weird); err != nil { // recognized as its own, not a conflict
+		t.Fatalf("second install: %v", err)
+	}
+	p := filepath.Join(DirIn(home), "go")
+	if !owned(p, "go") {
+		t.Fatal("a shim pdx wrote for a path with quotes and dollars is not recognized")
+	}
+	if got := pdxPathOf(readFile(t, p)); got != weird {
+		t.Fatalf("pdxPathOf = %q", got)
+	}
+	// a user's file with the marker comment in it
+	forged := "#!/bin/sh\n# (pdx gate shim for go) -- my own wrapper, keep\nexec /usr/local/go/bin/go \"$@\"\n"
+	if err := os.WriteFile(p, []byte(forged), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var ce *ConflictError
+	if err := Install(home, weird); !errors.As(err, &ce) {
+		t.Fatalf("a forged marker was taken for a shim: %v", err)
+	}
+	if err := Uninstall(home); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, p); got != forged {
+		t.Fatalf("uninstall touched the user's file: %q", got)
+	}
+	// a pdx shim somebody edited
+	if err := os.WriteFile(p, []byte(Script("go", weird)+"echo edited\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Install(home, weird); !errors.As(err, &ce) {
+		t.Fatalf("an edited shim was overwritten: %v", err)
+	}
+}
