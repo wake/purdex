@@ -27,6 +27,7 @@ const (
 	pathRole     = "/api/peers/fleet/role"
 	pathAnnounce = "/api/peers/fleet/announce"
 	maxBody      = 4 << 10
+	maxTerm      = 1 << 40
 )
 
 // hostCaller is *peersmod.HostCaller as the module uses it (a test seam).
@@ -182,7 +183,7 @@ func (p peerOf) Role(ctx context.Context, req RoleRequest) (RoleAnswer, error) {
 	if err != nil {
 		return RoleAnswer{}, err
 	}
-	res := p.m.caller.Call(ctx, id, pathRole, map[string]any{"to_host_id": id, "from_alias": req.FromAlias, "role": req.Role, "term": req.Term})
+	res := p.m.caller.Call(ctx, id, pathRole, map[string]any{"to_host_id": id, "from_alias": req.FromAlias, "role": req.Role, "term": req.Term, "order": req.Order})
 	if res.Class != peersmod.ClassDone {
 		return RoleAnswer{}, callErr(res)
 	}
@@ -213,6 +214,8 @@ type roleBody struct {
 	FromAlias string `json:"from_alias"`
 	Role      string `json:"role"`
 	Term      int64  `json:"term"`
+	// Order is the caller's fleet order (role only).
+	Order []string `json:"order"`
 }
 
 func (m *Module) writeJSON(w http.ResponseWriter, status int, v any) {
@@ -229,9 +232,9 @@ func (m *Module) writeErr(w http.ResponseWriter, status int, code, detail string
 
 // admit does the team routes' preamble: the binding of the host principal, the rate limit and body cap, the decode, then
 // to_host_id. It reports whether the request may go on.
-func (m *Module) admit(w http.ResponseWriter, r *http.Request, what string, v any, toHost func() string) bool {
+func (m *Module) admit(w http.ResponseWriter, r *http.Request, what string, v any, toHost, fromAlias func() string) bool {
 	var entryHost string
-	_, _, berr := peersmod.BindHostPrincipal(r, what, func(alias string) (cfgPeer, bool) {
+	pr, _, berr := peersmod.BindHostPrincipal(r, what, func(alias string) (cfgPeer, bool) {
 		e, ok := m.peerEntry(alias)
 		entryHost = e.HostID
 		return e, ok
@@ -257,12 +260,17 @@ func (m *Module) admit(w http.ResponseWriter, r *http.Request, what string, v an
 		m.writeErr(w, http.StatusConflict, "wrong_host", "this request is addressed to another host")
 		return false
 	}
+	// from_alias is the authenticated host's own, and one of the fleet's (a third paired host cannot steer the roles)
+	if !strings.EqualFold(fromAlias(), pr.Alias) || !m.engine.InOrder(fromAlias()) {
+		m.writeErr(w, http.StatusForbidden, ipeers.ErrForbidden, "from_alias is not the calling host's fleet alias")
+		return false
+	}
 	return true
 }
 
 func (m *Module) handleRole(w http.ResponseWriter, r *http.Request) {
 	var b roleBody
-	if !m.admit(w, r, "fleet role", &b, func() string { return b.ToHostID }) {
+	if !m.admit(w, r, "fleet role", &b, func() string { return b.ToHostID }, func() string { return b.FromAlias }) {
 		return
 	}
 	switch b.Role {
@@ -271,19 +279,19 @@ func (m *Module) handleRole(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, ipeers.ErrBadRequest, "unknown role")
 		return
 	}
-	if strings.TrimSpace(b.FromAlias) == "" || b.Term < 0 {
+	if strings.TrimSpace(b.FromAlias) == "" || b.Term < 0 || b.Term > maxTerm {
 		m.writeErr(w, http.StatusBadRequest, ipeers.ErrBadRequest, "from_alias and term are required")
 		return
 	}
-	m.writeJSON(w, http.StatusOK, m.engine.HandleRole(RoleRequest{FromAlias: b.FromAlias, Role: b.Role, Term: b.Term}))
+	m.writeJSON(w, http.StatusOK, m.engine.HandleRole(RoleRequest{FromAlias: b.FromAlias, Role: b.Role, Term: b.Term, Order: b.Order}))
 }
 
 func (m *Module) handleAnnounce(w http.ResponseWriter, r *http.Request) {
 	var b roleBody
-	if !m.admit(w, r, "fleet announce", &b, func() string { return b.ToHostID }) {
+	if !m.admit(w, r, "fleet announce", &b, func() string { return b.ToHostID }, func() string { return b.FromAlias }) {
 		return
 	}
-	if strings.TrimSpace(b.FromAlias) == "" || b.Term < 0 {
+	if strings.TrimSpace(b.FromAlias) == "" || b.Term < 0 || b.Term > maxTerm {
 		m.writeErr(w, http.StatusBadRequest, ipeers.ErrBadRequest, "from_alias and term are required")
 		return
 	}

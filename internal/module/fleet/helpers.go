@@ -50,3 +50,11 @@ func (e *Engine) settingsSnapshot() Settings {
 	defer e.mu.Unlock()
 	return e.set
 }
+
+// InOrder says whether alias is in the fleet order (settings refreshed by revision first).
+func (e *Engine) InOrder(alias string) bool {
+	e.refresh()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return indexOf(e.set.Order, alias) >= 0
+}

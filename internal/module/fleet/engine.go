@@ -46,6 +46,7 @@ type RoleRequest struct {
 	FromAlias string
 	Role      string // primary | standby | off | starting
 	Term      int64
+	Order     []string // the caller's fleet order
 }
 
 // RoleAnswer is the callee's reply (spec §4).
@@ -88,6 +89,9 @@ type Engine struct {
 	announce    bool // an announcement is owed to the peer
 	newestAge   func() (time.Duration, bool)
 	lastOrderWn time.Time
+	readErr     string        // the last settings read error that was logged
+	backoff     time.Duration // the settings re-read delay after errors
+	retryAt     time.Time
 	started     bool
 
 	// notification: states queue up under nmu and one goroutine delivers them, outside every lock.
@@ -114,7 +118,7 @@ func NewEngine(peer Peer, src SettingsSource, now func() time.Time, logf func(st
 	return e
 }
 
-// SetNewestAge supplies the age of the newest reading of any host (the aggregator, F-1c2); nil answers null.
+// SetNewestAge supplies (f must not call any method of the engine: it runs under its lock) the age of the newest reading of any host (the aggregator, F-1c2); nil answers null.
 func (e *Engine) SetNewestAge(f func() (time.Duration, bool)) {
 	e.mu.Lock()
 	e.newestAge = f
@@ -133,7 +137,7 @@ func (e *Engine) stateLocked() fleet.RoleState {
 	return fleet.RoleState{Role: e.role, Term: e.term, Primary: e.primary, Self: e.set.Self, Reason: e.reason}
 }
 
-// OnChange registers f. It is called after every change of the state, in order, one call at a time, from one goroutine and
+// OnChange registers f. It does not replay the current state: register first, then read State(). It is called after every change of the state, in order, one call at a time, from one goroutine and
 // never under the engine's lock: f may call State or anything that changes the state.
 func (e *Engine) OnChange(f func(fleet.RoleState)) {
 	e.nmu.Lock()
@@ -187,9 +191,15 @@ func (e *Engine) persistLocked() {
 
 // ---- settings ----
 
-// refresh reads the settings when their revision moved (or never read). It reports whether the engine is usable; a read error
-// keeps the previous settings.
+// refresh reads the settings when their revision moved (or never read); a read error keeps the previous settings. The same
+// error is logged once until it changes or a read succeeds, and the retry backs off from 2 s to 60 s.
 func (e *Engine) refresh() {
+	e.mu.Lock()
+	if !e.retryAt.IsZero() && e.now().Before(e.retryAt) {
+		e.mu.Unlock()
+		return
+	}
+	e.mu.Unlock()
 	rev, err := e.settings.Rev()
 	e.mu.Lock()
 	have, cur := e.haveSet, e.setRev
@@ -198,13 +208,23 @@ func (e *Engine) refresh() {
 		return
 	}
 	s, err := e.settings.Read()
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	if err != nil {
-		e.logf("[fleet] fleet config not read: %v", err)
+		if msg := err.Error(); msg != e.readErr {
+			e.readErr = msg
+			e.logf("[fleet] fleet config not read: %v", err)
+		}
+		if e.backoff < 2*time.Second {
+			e.backoff = 2 * time.Second
+		} else if e.backoff *= 2; e.backoff > time.Minute {
+			e.backoff = time.Minute
+		}
+		e.retryAt = e.now().Add(e.backoff)
 		return
 	}
-	e.mu.Lock()
+	e.readErr, e.backoff, e.retryAt = "", 0, time.Time{}
 	e.set, e.setRev, e.haveSet = s, rev, true
-	e.mu.Unlock()
 }
 
 // offReason is why the fleet is off here ("" = on).
@@ -276,16 +296,23 @@ func (e *Engine) adoptTermLocked(term int64) {
 	}
 }
 
-// laterInOrderLocked: is this daemon behind other in the order?
-func (e *Engine) laterInOrderLocked(other string) bool {
-	return indexOf(e.set.Order, e.set.Self) > indexOf(e.set.Order, other)
+// staysOnTieLocked decides two primaries of equal term: true when this daemon stays. When both daemons' orders are the same
+// (an empty theirOrder counts as the same) the one first in the order stays; when they differ, or other is not in the order,
+// the smaller alias (case-insensitive) stays, which both sides compute alike.
+func (e *Engine) staysOnTieLocked(other string, theirOrder []string) bool {
+	self := e.set.Self
+	if (len(theirOrder) == 0 || equalFold(theirOrder, e.set.Order)) && indexOf(e.set.Order, other) >= 0 && indexOf(e.set.Order, self) >= 0 {
+		return indexOf(e.set.Order, self) < indexOf(e.set.Order, other)
+	}
+	return strings.ToLower(self) < strings.ToLower(other)
 }
 
 // observePrimaryLocked applies what a primary named from says (a heartbeat answer, a heartbeat call or an announcement).
-func (e *Engine) observePrimaryLocked(from string, term int64) {
+// theirOrder nil (an announcement carries none) leaves an equal-term tie to the next heartbeat.
+func (e *Engine) observePrimaryLocked(from string, term int64, theirOrder []string) {
 	switch e.role {
 	case fleet.RolePrimary:
-		if term > e.term || (term == e.term && e.laterInOrderLocked(from)) {
+		if term > e.term || (term == e.term && theirOrder != nil && !e.staysOnTieLocked(from, theirOrder)) {
 			e.becomeStandbyLocked(from, term)
 		}
 	case fleet.RoleStandby:
@@ -310,7 +337,7 @@ func (e *Engine) HandleRole(req RoleRequest) RoleAnswer {
 	if e.role != fleet.RoleOff {
 		switch req.Role {
 		case fleet.RolePrimary:
-			e.observePrimaryLocked(req.FromAlias, req.Term)
+			e.observePrimaryLocked(req.FromAlias, req.Term, req.Order)
 		default:
 			// a non-primary caller only teaches the term
 			if req.Term > e.term && e.role == fleet.RoleStandby {
@@ -329,7 +356,7 @@ func (e *Engine) HandleAnnounce(from string, term int64) {
 	if e.role == fleet.RoleOff {
 		return
 	}
-	e.observePrimaryLocked(from, term)
+	e.observePrimaryLocked(from, term, nil)
 }
 
 func (e *Engine) answerLocked() RoleAnswer {
@@ -364,11 +391,14 @@ func (e *Engine) Startup(ctx context.Context) {
 		e.mu.Unlock()
 		return
 	}
-	self, term := e.set.Self, e.term
+	self, term, order := e.set.Self, e.term, append([]string{}, e.set.Order...)
 	e.mu.Unlock()
 
-	ans, err := e.callPeer(ctx, RoleRequest{FromAlias: self, Role: roleStarting, Term: term})
+	ans, err := e.callPeer(ctx, RoleRequest{FromAlias: self, Role: roleStarting, Term: term, Order: order})
 
+	if ctx.Err() != nil { // stopped: that is not the other being dead
+		return
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	switch {
@@ -380,7 +410,7 @@ func (e *Engine) Startup(ctx context.Context) {
 		e.becomeStandbyLocked(ans.Alias, ans.Term)
 	default: // standby, off or starting: the first in order is primary
 		hi := maxInt64(e.term, ans.Term)
-		if e.laterInOrderLocked(e.set.peerAlias()) {
+		if !e.staysOnTieLocked(e.set.peerAlias(), ans.Order) {
 			e.becomeStandbyLocked("", hi)
 		} else {
 			e.becomePrimaryLocked(hi + 1)
@@ -418,9 +448,12 @@ func (e *Engine) Beat(ctx context.Context) {
 	}
 
 	e.mu.Lock()
-	req := RoleRequest{FromAlias: e.set.Self, Role: e.role, Term: e.term}
+	req := RoleRequest{FromAlias: e.set.Self, Role: e.role, Term: e.term, Order: append([]string{}, e.set.Order...)}
 	e.mu.Unlock()
 	ans, err := e.callPeer(ctx, req)
+	if ctx.Err() != nil { // stopped mid-call: no takeover, nothing written
+		return
+	}
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -437,7 +470,7 @@ func (e *Engine) Beat(ctx context.Context) {
 		}
 		e.lastHeard = e.now()
 		if ans.Role == fleet.RolePrimary {
-			e.observePrimaryLocked(ans.Alias, ans.Term)
+			e.observePrimaryLocked(ans.Alias, ans.Term, ans.Order)
 		} else if ans.Term > e.term {
 			e.adoptTermLocked(ans.Term)
 		}
@@ -452,11 +485,11 @@ func (e *Engine) Beat(ctx context.Context) {
 		}
 	case fleet.RoleStandby:
 		if err != nil || !e.aliveLocked(ans) {
-			e.takeoverLocked(ans, err == nil)
+			e.takeoverLocked(ctx, ans, err == nil)
 			return
 		}
 		e.lastHeard = e.now()
-		e.observePrimaryLocked(ans.Alias, ans.Term)
+		e.observePrimaryLocked(ans.Alias, ans.Term, ans.Order)
 	}
 }
 
@@ -478,7 +511,7 @@ func (e *Engine) aliveLocked(a RoleAnswer) bool {
 	return time.Duration(*a.NewestAgeMS)*time.Millisecond <= AliveAge
 }
 
-func (e *Engine) takeoverLocked(a RoleAnswer, answered bool) {
+func (e *Engine) takeoverLocked(ctx context.Context, a RoleAnswer, answered bool) {
 	hi := e.term
 	if answered && a.Term > hi {
 		hi = a.Term
@@ -487,7 +520,7 @@ func (e *Engine) takeoverLocked(a RoleAnswer, answered bool) {
 	term := e.term
 	// announce best effort, with the lock released (the caller's deferred Unlock still pairs with the Lock below)
 	e.mu.Unlock()
-	aerr := e.announceTo(context.Background(), term)
+	aerr := e.announceTo(ctx, term)
 	e.mu.Lock()
 	if aerr != nil && e.role == fleet.RolePrimary && e.term == term {
 		e.announce = true // owed: the next heartbeat that gets an answer repeats it

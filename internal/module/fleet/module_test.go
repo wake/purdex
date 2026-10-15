@@ -143,7 +143,7 @@ func TestRoutes_Refusals(t *testing.T) {
 	require.Equal(t, http.StatusForbidden, r.post(pathRole, nil, `{}`).Code, "no principal")
 	body := func(extra string) string { return `{"to_host_id":"` + ourID + `",` + extra + `}` }
 	require.Equal(t, http.StatusBadRequest, r.post(pathRole, hostP, body(`"from_alias":"mlab","role":"king","term":1`)).Code)
-	require.Equal(t, http.StatusBadRequest, r.post(pathRole, hostP, body(`"from_alias":"","role":"standby","term":1`)).Code)
+	require.Equal(t, http.StatusForbidden, r.post(pathRole, hostP, body(`"from_alias":"","role":"standby","term":1`)).Code, "an empty alias is not the caller's")
 	require.Equal(t, http.StatusBadRequest, r.post(pathRole, hostP, `not json`).Code)
 	require.Equal(t, http.StatusBadRequest, r.post(pathAnnounce, hostP, body(`"from_alias":"mlab","term":-1`)).Code)
 }
