@@ -55,6 +55,8 @@ func fixtureMinutes() []minuteRow {
 			r.HeavyHeld, r.Load1, r.Mem = 2, 20, 99
 		case i == 204:
 			r.HeavyRunning, r.Load1, r.Mem = 1, 4, 55
+		case i == 205:
+			r.HeavyHeld = 1 // one lease alone was never "two or more"
 		case i == 300:
 			r.LightRunning = 3
 		case i == 301:
