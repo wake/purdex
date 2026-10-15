@@ -84,17 +84,14 @@ func TestStateStoreCorruptFileIsSetAside(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestStateStorePrunesOldSignatures(t *testing.T) {
+// "new" means the first sighting on this host, however long ago (spec §12): a signature is never forgotten.
+func TestStateStoreNeverForgetsASignature(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "state.json")
 	s, _ := OpenState(p)
 	s.Sighting("old", st0)
-	s.Sighting("fresh", st0.Add(100*24*time.Hour))
 	require.NoError(t, s.Flush())
 	r, _ := OpenState(p)
-	r.now = func() time.Time { return st0.Add(101 * 24 * time.Hour) }
-	r.prune()
-	require.NotContains(t, r.Signatures(), "old")
-	require.Contains(t, r.Signatures(), "fresh")
+	require.False(t, r.Sighting("old", st0.Add(400*24*time.Hour)))
 }
 
 func TestStateStoreAtomicNoTempLeft(t *testing.T) {

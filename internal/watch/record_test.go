@@ -106,3 +106,20 @@ func TestReadLogSkipsBadLinesAndMissingDir(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, recs, 1, "a torn last line from a crash does not hide the rest")
 }
+
+func TestReadLogReportsWhatItCannotRead(t *testing.T) {
+	dir := t.TempDir()
+	// a record longer than the scanner's limit: an error, not a silently shorter log
+	long := `{"id":"x","kind":"pressure_high","at":"2026-10-15T12:00:00Z","detail":"` + strings.Repeat("a", 2<<20) + `"}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "events-20261015.jsonl"), []byte(long), 0o600))
+	_, err := ReadLog(dir, time.Time{}, "")
+	require.Error(t, err)
+	// a directory that is there but cannot be read
+	if os.Getuid() != 0 {
+		d2 := filepath.Join(t.TempDir(), "w")
+		require.NoError(t, os.Mkdir(d2, 0o000))
+		defer os.Chmod(d2, 0o700)
+		_, err = ReadLog(d2, time.Time{}, "")
+		require.Error(t, err)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -96,18 +97,23 @@ func (r *Recorder) Record(ev Event) (string, error) {
 // clean removes the log files whose day is more than 30 days before today.
 func (r *Recorder) clean() {
 	cut := r.now().UTC().AddDate(0, 0, -logKeepDays).Format(logDayFormat)
-	for _, name := range logFiles(r.dir) {
+	names, _ := logFiles(r.dir) // best effort: a directory that cannot be read is found by the append that follows
+	for _, name := range names {
 		if day := strings.TrimSuffix(strings.TrimPrefix(name, logPrefix), logSuffix); day < cut {
 			_ = os.Remove(filepath.Join(r.dir, name))
 		}
 	}
 }
 
-// logFiles are the event log file names in dir, oldest first.
-func logFiles(dir string) []string {
+// logFiles are the event log file names in dir, oldest first. A directory that is not there is no files; one that cannot be read
+// is an error.
+func logFiles(dir string) ([]string, error) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
-		return nil
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
 	}
 	var out []string
 	for _, e := range ents {
@@ -117,7 +123,7 @@ func logFiles(dir string) []string {
 		}
 	}
 	sort.Strings(out)
-	return out
+	return out, nil
 }
 
 // ReadLog reads the records in dir, oldest first, from since on (zero: all) and of kind (empty: all). A line that is not a record
@@ -125,7 +131,11 @@ func logFiles(dir string) []string {
 func ReadLog(dir string, since time.Time, kind Kind) ([]Record, error) {
 	var out []Record
 	sinceDay := since.UTC().Format(logDayFormat)
-	for _, name := range logFiles(dir) {
+	names, err := logFiles(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range names {
 		if !since.IsZero() && strings.TrimSuffix(strings.TrimPrefix(name, logPrefix), logSuffix) < sinceDay {
 			continue
 		}
@@ -145,7 +155,11 @@ func ReadLog(dir string, since time.Time, kind Kind) ([]Record, error) {
 			}
 			out = append(out, rec)
 		}
+		serr := sc.Err()
 		f.Close()
+		if serr != nil {
+			return out, fmt.Errorf("%s: %w", name, serr)
+		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
 	return out, nil

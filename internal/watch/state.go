@@ -10,9 +10,6 @@ import (
 	"time"
 )
 
-// signatureTTL is how long a command signature that was not seen again is remembered; after that its next sighting is "new" again.
-const signatureTTL = 90 * 24 * time.Hour
-
 // SignatureInfo is what state.json keeps of one command signature.
 type SignatureInfo struct {
 	First time.Time `json:"first"`
@@ -73,21 +70,7 @@ func OpenState(path string) (*StateStore, error) {
 		s.file.Reported = map[string]time.Time{}
 	}
 	s.file.Version = 1
-	s.prune()
 	return s, err
-}
-
-// prune forgets signatures not seen for signatureTTL.
-func (s *StateStore) prune() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	cut := s.now().Add(-signatureTTL)
-	for k, v := range s.file.Signatures {
-		if v.Last.Before(cut) {
-			delete(s.file.Signatures, k)
-			s.dirty = true
-		}
-	}
 }
 
 // Signatures is a copy of the signatures seen (the log and tests).
