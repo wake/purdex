@@ -386,8 +386,9 @@ a host under pressure, and the states the gate cannot fix by itself (a slot held
   `pdx gate free` after confirming); what it must not do (end a process that holds no slot; change thresholds by
   itself).
 - **Auto-start** (`watch.auto_start`, synced by Profile Sync): on E1, E2 or E3 with no watcher registered, the daemon
-  spawns one on the host named by `watch.home` (default mlab), with the brief. It is on by default but inactive
-  until the person confirms W0's thresholds.
+  spawns one on the host named by `watch.home` (default mlab), with the brief. It is on by default and live from the
+  first deploy (10-15: "go live and sample while it runs"); thresholds start from W0's first data and are tuned on
+  the running system (§12.6).
 - **Model** `watch.model` (Profile Sync), default Opus: an idle watcher spends nothing.
 
 ### 12.4 `pdx gate free <class>-<k>` (W4)
@@ -409,6 +410,8 @@ is free. A slot whose gate is still alive is refused (interrupt that command ins
 - E1: a 48 h process sampler (lead script, every 10 s, processes ≥ 0.25 core or ≥ 300 MB with their ancestry;
   started 10-15 19:3x, ends by itself) replayed against candidate sets, e.g. 1.5 cores or 1 GB for 60 s, and 2 cores
   or 2 GB for 120 s.
-- Output: events per day and what each set catches; the person picks; the values become the `watch.*` defaults.
+- Output: events per day and what each set catches; the values become the `watch.*` defaults and keep being tuned
+  from the live record (thresholds are settings, read at every pass).
 
-W1–W5 start after the first stage's acceptance and do not depend on L1–L3.
+W1–W4 start now (A-line member), W5 when the B line resumes; none depends on L1–L3. The watcher set goes live as a
+whole when W1–W4 are done (W5 can follow). The first stage (G1–G3) ships without waiting for it.

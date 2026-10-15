@@ -144,6 +144,7 @@ message other leads).
 
 G0 → G1 → G2 → release (G1, G2, G3a, G3b, G3c — G3b/G3c finished early and ride the first release) → acceptance → other lines resume → L1 → L2 (deploy) → L3. Each L phase is deployed before the next starts.
 
-Load watcher (spec §12): W0 (threshold evaluation, lead, now) → after acceptance, W1 detection and record → W2
-registration and delivery → W3 brief, skill and auto-start → W4 `pdx gate free` → W5 UI (B line). W1–W5 do not depend
-on L1–L3; each phase one PR.
+Load watcher (spec §12): W0 (threshold evaluation, lead, now) and, in parallel from now (A-line member), W1 detection
+and record → W2 registration and delivery → W3 brief, skill and auto-start → W4 `pdx gate free`; W5 UI when the B line
+resumes. The set goes live as a whole when W1–W4 are done and is tuned while it runs. W1–W5 do not depend on L1–L3;
+each phase one PR; the W plan (tasks per phase) is reviewed by codex with §12 before W1 starts.
