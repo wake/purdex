@@ -91,6 +91,10 @@ func TestClassify_PHP(t *testing.T) {
 		{"vendor/bin/pest --pr 45", ClassHeavy},
 		{"vendor/bin/pest --pull-request 45", ClassHeavy},
 		{"vendor/bin/phpunit --columns 120", ClassHeavy},
+		{`vendor/bin/pest --mutate --ignore App\Http\Requests`, ClassHeavy},
+		{`vendor/bin/pest --mutate --class App\Models\User`, ClassHeavy},
+		{"vendor/bin/pest --mutate --class App/Models/User", ClassHeavy},
+		{"vendor/bin/pest --mutate --id abc/def --exactly x/y", ClassHeavy},
 		// an option this table does not know, followed by a word that is no path: the run is as wide as it was
 		{"vendor/bin/phpunit --some-new-option value", ClassHeavy},
 		{"vendor/bin/phpunit --some-new-option value tests/Unit/FooTest.php", ClassLight},

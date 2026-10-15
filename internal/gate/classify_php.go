@@ -21,6 +21,8 @@ var phpunitValueFlags = map[string]bool{
 	"--exclude-filter": true, "--exclude-testsuite": true, "--test-directory": true, "--requires-php-extension": true,
 	"--issue": true, "--pr": true, "--pull-request": true, "--extension": true, "--coverage-filter": true, "--columns": true,
 	"--coverage-text-file": true,
+	// pest mutation testing (`--mutate`): classes and paths whose values contain slashes
+	"--class": true, "--ignore": true, "--id": true, "--exactly": true,
 }
 
 // phpunitNoRun are the options that print something and run no test.
