@@ -1,0 +1,122 @@
+# Host load control — plan
+
+Spec: `docs/specs/2026-10-15-host-load-control-spec.md` (user decisions D1–D6 final).
+Coordinator: purdex-1f. Members: lease member `_51epu8` (G0, G1, G2, L1–L3), A-line member `_bgz9kz` (G3).
+Test tiers (CLAUDE.md 測試分層) apply to every task: affected packages only, `-race` only where concurrency
+changed, `make lint`; the lead runs full suites at release. Every PR: codex R1 + R2 (attack → critic).
+
+## G0 — measurements (no code)
+
+Serial, one command at a time, host idle (all other lines paused). For `go test ./internal/store/`,
+`go build ./...`, vitest full (`--maxWorkers=3`), `go test -p 3 ./internal/module/team/`: wall time and max RSS
+with and without `taskpolicy -b`; 5 s samples of load1, `kern.memorystatus_vm_pressure_level`,
+`kern.memorystatus_level`, pageouts/swapouts. Output: defaults for `max_page_rate` and per-class QoS (spec Q2, Q3).
+
+## G1 — `pdx gate` core (one PR)
+
+New package `internal/gate` (pure + OS seams) and `cmd/pdx/gate_cmd.go`.
+
+1. `Classify(argv) Class` for `go`, `pnpm`, `npx`, `vitest`, `tsc` per spec §3 — table test (≥ 40 rows,
+   incl. `go test ./pkg/` light, `go test ./...` heavy, `go version` none, `pnpm check` heavy, `pnpm install` none,
+   `npx vitest run src/a.test.ts` light, `npx vitest run` heavy, `pnpm -r test` heavy).
+2. `Inject(argv, env, cfg)`: `GOFLAGS -p=<go_p>` when absent; vitest `--maxWorkers=<n>` when absent (same rules as
+   mod R7 `rewriteMaxWorkers`, which it replaces); pnpm `--workspace-concurrency=<n>` for recursive runs.
+3. Slots: `Acquire(class)` over `~/.config/pdx/gate/<class>-<k>.lock` with `syscall.Flock`; the lock fd is passed
+   to the child (`ExtraFiles`) so the tree holds it; tickets in `queue/<class>/` (unix-ns + pid, each flocked by its
+   waiter); admit only when live older tickets < free slots.
+4. Nesting: `PDX_GATE_HELD=<class>-<k>:<token>`; pass through only when the token matches the slot's record, the
+   slot's lock is held (non-blocking probe), and the caller descends from the holder pid (ppid walk); a light
+   holder never covers an inner heavy command.
+5. Pressure: `PressureReader` (level + pageout/swapout delta over 10 s); one sampler at a time via `pressure.lock`,
+   `pressure.json` written temp+rename, readers accept ≤ 5 s old; no delta yet → level only; keep last-good, 3
+   consecutive failures → level only → unreadable level → fail-open with a stderr line.
+6. Disk floor for heavy: `statfs` of cwd and `$TMPDIR` vs `disk_min_gb`; refuse with the numbers.
+7. Run: stdin not a TTY → new process group, forward SIGINT/SIGTERM/SIGHUP to the group, after exit SIGTERM the
+   group then SIGKILL after 5 s; stdin a TTY → stay in the foreground group (as `cmd/pdx/lease_run.go:38-45,223-255`)
+   and reap descendants by a ppid walk. `taskpolicy -b` unless `--fg` or the G0 class default; exit with the child's
+   code (128+n on signal).
+8. Holder record JSON beside the lock (argv scrubbed, token); `pdx gate status [--json]` reads locks + records +
+   tickets (no daemon) and flags "lock free, recorded pid alive".
+9. `[gate]` config; `enabled = false` → pass-through; fail-open only on `EPERM`/`EACCES`/`EROFS` for the gate dir;
+   every other error fail-closed with a message.
+
+Tests: real flock in temp dirs (two goroutines + two processes); fairness (an older ticket wins); dead waiter's
+ticket ignored; nested pass-through with a valid token; forged value, stale token, foreign (non-descendant) caller
+and light→heavy all take their own slot; group reap with a `sleep` tree (no survivor); SIGKILL of the gate keeps the
+slot taken until the tree ends; TTY path does not setpgid (pty test or seam); signal forwarding; pressure 2 holds /
+1 admits; concurrent samplers produce one complete `pressure.json`; fail-open only for the three errnos, fail-closed
+for a file in place of the dir; disk floor refuses. Mutations listed in the brief must go red.
+
+## G2 — interception (one PR)
+
+1. Shims (`internal/gate/shim`): generated POSIX sh scripts `go`, `pnpm`, `npx`, `vitest`, `tsc` in
+   `~/.config/pdx/shims/`, each `exec "$PDX_BIN" gate --auto --tool <name> -- "$@"`. The gate resolves the real binary
+   **at every run** from the current `PATH` minus the shim dir, follows symlinks, and refuses a target inside the shim
+   dir (no recursion; an `nvm use` is followed).
+2. `pdx setup` writes the shims and the delimited `~/.zshenv` block, which prepends only when `:$PATH:` lacks the
+   shim dir and prints nothing; `pdx setup --uninstall-gate` removes exactly the block (content before/after kept;
+   duplicated or unclosed old blocks repaired). air26 the same.
+3. `pdx lease run …` becomes a deprecated alias: maps `--kind test-full|build` → heavy, `test-pkg|lint-full` → light,
+   ignores `--ask/--queue/--wait`, runs through the gate, prints one deprecation line.
+4. Fast path: class `none` execs the real binary without loading config (hot path for `go env`, `pnpm install`).
+5. Tests: setup idempotence on a temp `HOME`; resolution never points into the shim dir (also through a symlink
+   alias), follows a changed `PATH` (two fake node dirs); a fresh `zsh -c 'command -v go'` resolves to the shim and
+   a nested `zsh -c` does not grow `PATH` (skipped without zsh); uninstall keeps surrounding `~/.zshenv` content and
+   repairs a duplicated block; the `.zshenv` block prints nothing; alias mapping table; `none` latency (< 20 ms for
+   `go version` through the shim on mlab, measured once, not a unit test).
+
+Deploy G1+G2 (+G3a if ready) as one release; then acceptance (spec §10). Other lines resume after it passes.
+
+## G3 — daemon steady cost (three PRs, A-line member)
+
+- G3a shared process snapshot: one snapshot per ≥ 2 s for the whole daemon, read by **every** reader:
+  `agent.ReadProcessInfo`, the peers registry (`internal/peers/registry.go:84-101,153-176`), the resources sampler's
+  two `procSnapshot` calls per tick (`internal/module/resources/sampler_loop.go:55-58,105-147`), `ProcessRoots`, team
+  liveness. Tests: resources + peers + team inside one TTL window take one snapshot (counting seam); PID reuse told
+  apart by start time; argv/exe/proxy classification unchanged (mutations for each).
+- G3b team sweeper: dirty flag on writes, `ListOpen` at most every 5 s otherwise; liveness on the snapshot.
+- G3c conversation WS: wake on feed change, 2 s fallback poll.
+Before/after: 30 s pprof with the host idle (lead captures; target ≤ 10 % of one core).
+
+## L1 — retire the lease in the mod (one PR, after G2 is deployed)
+
+Delete `hooks/lease.js` except the minimal rewrite for direct `node_modules/.bin/{vitest,tsc}` calls by agents (kept,
+spec Q4; it moves to a small `hooks/gate.js` that only prefixes `pdx gate --auto --`, no daemon call), `registerLease`
+(register.js), `skills/pdx-lease/`, `lease.notice.v1` from `CAPS` (workbook.js), lease notice submission in events.js.
+Every embed guard that names the lease changes with it (`cmd/pdx/plugin/embed_test.go:19-37` file list and
+registration inventory, `:72-82` hand-off regex and scanner grammar, `:393-430` classic.Stop ownership and the
+background-task test, `:587-605` `registerLease` scan, `:608-665` the two skill contracts); the scanner is narrowed to
+the new `registerGate` hand-off. Protocol: bump `VERSION` (coordinate with RT-4 #2870 — whichever merges second takes
+the next number) and update the exact assertions (`relay.test.ts:35-63`, `member.test.ts:707-710`); check the daemon's
+numeric feature gates (`internal/team/wire_relay.go:317-320`) still enable half/handoff for the new number, and test a
+mixed pair (old mod + new daemon, new mod + old daemon). Add `skills/pdx-gate/SKILL.md` (what is gated, how to read
+`pdx gate status`, never bypass with `&`, `pdx gate -- <script>` for sequences).
+
+## L2 — rework the kept parts first (one PR; deployable while the lease tables still exist)
+
+Zone memory input = the gate's pressure reader (shared code); `noteMinute` stops reading `resource_leases`
+(`internal/module/resources/minute.go:41-62`): lease columns written 0, new `heavy_running`, `light_running`,
+`gate_waiting` from slot records; the report handler stops reading `resource_leases`/`resource_positions`
+(`report_handler.go:16-22,49-61,126-153`) and `pdx host report` replaces `pdx lease report` (the old verb prints a
+pointer); hostconfig: split strict PUT from lenient stored-read in `internal/module/hostconfig/resources.go:30-44,71-75,125-148`
+(update `resources_test.go:42-56`, add a stored-document-with-every-retired-key test and default GET fixtures);
+`/api/resources` keeps `Snapshot.Sessions` — `cmd/pdx/team_cmd_resources_test.go` gains mutations (sessions removed
+from the wire, attribution removed → red). The strategy report script reads the new columns.
+
+## L3 — retire the lease in the daemon and CLI (one or two PRs; after L2 is deployed; deletions may exceed 800 lines with a file list)
+
+Remove the files and routes in spec §6 "Remove"; `pdx lease` verbs except the `run` alias; `promptq.KindNotice`,
+`CapLeaseNotice`, `modevents.CapLeaseNoticeV1` and their branches; team `LeadNoticer` if no other caller (verify
+with grep in the PR; `PauseNotifyKey` stays — push uses it for pauses). Settings: drop the lease fields (the lenient
+read from L2 keeps old documents valid). Store: migration step drops `resource_leases` and `resource_positions`
+(nothing reads them since L2).
+
+## D — docs and scripts (lead)
+
+CLAUDE.md (測試分層: `pdx gate`, `-count=1` only at release), lead scripts (`pdx lease run` → `pdx gate`,
+drop `-count=1` outside `test-at.sh`), memories, CHANGELOG. Aigora: their lead is told by the user (do not
+message other leads).
+
+## Order
+
+G0 → G1 → G2 → release (G1, G2, G3a) → acceptance → other lines resume → L1 → L2 (deploy) → L3 (G3b/G3c as they finish). Each L phase is deployed before the next starts.
