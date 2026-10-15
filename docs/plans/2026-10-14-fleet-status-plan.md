@@ -1,73 +1,143 @@
-# Fleet status and probe-only hosts — plan (F-1a … F-2b)
+# Fleet status — plan (rev 3: F-0 … F-2b)
 
-Spec: `docs/specs/2026-10-14-fleet-status-spec.md`. Facts in the spec §3 (origin/main, 2026-10-14).
+Spec: `docs/specs/2026-10-14-fleet-status-spec.md` **rev 2** (2026-10-16). Facts: spec §3 (origin/main alpha.742).
 
-Rev 2 (2026-10-14) after codex plan review `task-mv892st5-hebs81` (18 findings, all taken; the spec moved with it: 30 s cadence, disk latch, error codes, own disk reading, hostconfig contract). The daemon side is now three PRs.
+Rev 3 (2026-10-16) rewrites rev 2 for spec rev 2: a primary and a standby, 1 s frames over one long-lived SSH session per
+host, the App reading the primary only, the sidebar host cells. Rev 2's details that still hold are kept (the
+`probe_hosts` collection contract, alias validation, the error classification, the App's generations, the lifted editors).
+**Flow: the quick one** (the user wants the hosts on screen within hours, 10-16): this plan gets one focused subagent
+review; each PR a subagent full review; no codex round. The daemon PRs still go past 1f (hostconfig, `cmd/pdx/main.go`,
+device scope). The gate's heavy slots are 2 on mlab since 04:4x; run one test command at a time per PR anyway.
 
 ## 1. Design choices (for the reviewer)
 
-- **A new daemon module `fleet`** (`internal/module/fleet`) over a leaf package `internal/fleet` (no module imports; hostconfig may import it). Not a growth of `resources`: `resources` is the A line's lease sampler and must not gain SSH.
-- **Reads, no new A-line interfaces.** The daemon's own sample through the existing `resources.HostReaderKey` (`internal/resources/wire.go:82`, `LatestHost() (HostUse, bool)`); the memory thresholds and trend slope through the existing `resources.SettingsKey` (`SettingsReader.ResourcesSettings()`, registered by hostconfig). Both read on every use, tolerated when missing (self → `unknown`, probes → resources defaults via `Settings{}.Effective()`).
-- **Disk is the fleet module's own `statfs`**, not the monitor's: the monitor has no background sampler (its disk is read only inside the full `GET /api/monitor/snapshot`, which also walks sessions and the process table) and it reads `/` where the probe script reads `/System/Volumes/Data` on Darwin. One function `fleet.DiskMount(goos)` picks the mount for both sides, so every host is judged on the same mount. No monitor change.
-- **Two loops in the module.** A self loop every 5 s: reads `LatestHost()` + the local disk, updates the self row, and reads the `probe_hosts` revision — when it moved, reconciles the prober goroutines (start new ids, stop removed ids, restart changed ones). hostconfig has no change notification and does not gain one; the 5 s revision read is one SQLite `Get`. Per probe host a goroutine every 30 s ± 3 s.
-- **SSH is `exec.CommandContext("ssh", …)` with a fixed argv** — `-o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=yes -- <alias> <script>`; the script is a compile-time constant. The alias is checked against the freshly read SSH config on save and before every call (regex + presence); no shell on the local side; stdin `/dev/null`.
-- **stderr never leaves the daemon.** The API carries a code (spec §5); stderr is read locally only to tell `host_key` / `auth` apart, then logged (first 200 bytes, ≤ 1 line per host and code per hour).
-- **Probe-host definitions live in the prober's hostconfig** (collection `probe_hosts`), under the existing collection contract (`{items, baseRevision}`, 409 with the current copy, plain-text 400 from a `ValidationError`). The App never stores a probe host locally.
-- **Push, not poll**: `fleet.changed` carries the whole payload, sent on a visible change (spec §6) with a leading send and one trailing send per 5 s window.
+- **Module `fleet`** (`internal/module/fleet`) over the leaf package `internal/fleet` (F-1a). `resources` gains no SSH.
+- **The own host comes from the A line's `fleet.LocalSource`** (spec §7), resolved in `Init` from the registry key
+  `fleet.LocalSourceKey` (`"fleet.local-source"`, defined with the types in F-0); missing → an empty `FakeLocal` (the cell
+  shows 「沒有資料」). The module calls `Start()` when it becomes primary and `Stop()` when it steps down.
+- **Roles live in the module**, the network through the peer path (`HostCaller` / `peers.HostRoutePolicy`), like the
+  watcher's `/api/peers/watch/*`. A role engine with an injected clock and caller decides; it never blocks the push.
+- **One SSH session per remote host** (`exec.CommandContext("ssh", argv…)`, fixed argv, the loop script a compile-time
+  constant, stdin `/dev/null`); frames read line by line from stdout with a size cap; stderr read locally only.
+- **One snapshot, one push**: an aggregator holds the newest fast and slow reading per host; a 1 s ticker builds the push
+  (fast of all hosts; slow of the hosts whose slow part changed since the last push).
+- **Nothing persisted but the role state** (`~/.config/pdx/fleet/state.json`); no sample reaches SQLite or the log.
 
 ## 2. Phases
 
-| PR | content | reviewer extra | est. lines |
+| PR | content | depends on | est. lines |
 |---|---|---|---|
-| F-1a | `internal/fleet` leaf: SSH config reader, script + parser, runner + classification, disk latch + zone combine + probe trend, `DiskMount` / local disk | — | ~700 |
-| F-1b | hostconfig `probe_hosts` collection; `fleet` module (self loop, prober reconcile, table); registration | 1f (hostconfig, `cmd/pdx/main.go`) | ~650 |
-| F-1c | `GET /api/fleet`, `fleet.changed`, `GET /api/fleet/ssh-aliases`, `fleet.v1`, device route | 1f (device scope) | ~400 |
-| F-2a | SPA data: `useFleetStore`, `fleet.v1` probe, initial GET, event branch; lifted icon / colour editors; Hosts page section + dialog | — | ~750 |
-| F-2b | SPA bottom block: expanded rows, collapsed strip, narrow light, row click, i18n | — | ~550 |
+| F-0 | `internal/fleet/local.go`: the §7 types, `Proc`, `LocalSourceKey`; `FakeLocal` | — | ~120 (in review) |
+| F-1b | hostconfig rows `probe_hosts` + `fleet`; module skeleton; `state.json`; role engine; peer routes | F-0 | ~750 |
+| F-1c | loop scripts + frame parser; session manager; composite / zone / queue; aggregator; `GET /api/fleet`, `fleet.changed`, `GET /api/fleet/ssh-aliases`, `fleet.v1`, device routes | F-0 (F-1b for the wiring task only) | ~800 |
+| A line | `LocalSource` in the resources sampler (probe-dedupe plan §F.1), registered under `LocalSourceKey` | F-0 | (A line) |
+| F-2a | SPA data: types / parse, `useFleetStore` (primary by term, stale), the in-memory history, `fleet.v1`, the event branch; Hosts page section writing both daemons (reworks #2879 / #2881; #2880 stands) | F-1c's payload (fixtures until merged) | ~750 |
+| F-2b | SPA sidebar host cells, the narrow column | F-2a | ~450 |
 
-F-1a → F-1b → F-1c in order (each builds on the last); F-2a needs F-1c merged (it reads the live payload shape); F-2b needs F-2a.
+F-1b, F-1c, F-2a start in parallel. F-1c's last task wires the role callbacks after F-1b merges. F-2b starts on F-2a's
+store with fixtures.
 
-Every PR: TDD, one commit per task, mutation table; daemon: `go test -race` on the touched packages + `gofmt -l` / `go vet`, never the full `go test ./...`; SPA: affected vitest while developing, full vitest (`--maxWorkers=3`) + `tsc -b --force` + lint before merge on a fresh origin/main. codex R1 → attacker → critic.
+Every PR: TDD, one commit per task, a mutation table in the PR body (each named mutation made, the test seen red,
+reverted). Daemon: `go test` of the touched packages, `-race` on the module package (it has goroutines), `gofmt -l`,
+`go vet` of those packages; never `go test ./...`. SPA: `vitest related --run` on the changed files, `tsc -b --force`,
+`eslint` on the changed files; never the full vitest or the full lint (CLAUDE.md test tiers).
 
-## 3. F-1a — the leaf package `internal/fleet`
+## 3. F-1b — config, module, roles
 
-- **T-1a.1 SSH config reader** `sshconfig.go`: `Aliases(home string) ([]string, error)` reads `<home>/.ssh/config` — `Host` lines' literal names (skip any pattern with `*`, `?` or `!`), `Include` followed one level (paths relative to `~/.ssh`, globs expanded, an included `Include` ignored), comments and `Match` blocks ignored (a `Match` block's `Host`-less body never yields an alias). **No cache**: called on every save and before every call. `ValidAlias(home, a)` = regex `^[A-Za-z0-9._-]{1,64}$` and present.
-- **T-1a.2 Script and parser** `script.go`, `parse.go`: the constant script prints marker sections (`@@uname`, `@@ncpu`, `@@mem`, `@@load`, `@@disk`) and ends with `@@end`; Darwin `vm_stat` → in-use % exactly as `internal/resources` computes it for mlab (reuse its function if exported, else port it with a test on the same fixture); Linux `MemTotal − MemAvailable`; `df` used % of `DiskMount`'s mount. `Parse(out) (Reading, error)`; no `@@end` → `parse` error.
-- **T-1a.3 Runner and classification** `run.go`: `Run(ctx, alias) Result{Reading, Status, Code, Stderr}` — argv as §1, 10 s context, stdout capped at 64 KiB (over the cap → `parse`), stderr capped at 4 KiB. Classification (spec §5): deadline → `offline/timeout`; exit 255 with `Host key verification failed` / `REMOTE HOST IDENTIFICATION HAS CHANGED` → `error/host_key`; exit 255 with `Permission denied` → `error/auth`; other exit 255 → `offline/unreachable`; other non-zero → `error/remote_exit`; exit 0 and `Parse` fails → `error/parse`. The `ssh` path comes from an injectable `lookPath` for the test's fake.
-- **T-1a.4 Zone and trend** `zone.go`: `DiskLatch` (warning at 85, left under 83; danger at 95, left under 93; one level at a time; unknown resets); `Combine(res, disk Zone) Zone` (spec §5: the worse of warning / danger; else unknown if either unknown; else normal); `ProbeZone` feeds a `resources.ZoneLatch` `{Mem, Load1, NCPU, Pressure: 0}` with the current settings; `ProbeTrend(ring, now, settings)` = `resources.TrendOf` with `TrendWindowS` forced to 300 (memory / cpu slopes from the settings).
-- **T-1a.5 Local disk** `disk.go`: `DiskMount(goos)` and `LocalDisk() (usedPct float64, ok bool)` via `unix.Statfs` on that mount (fallback `/` on Darwin when the data volume is missing).
-- Tests: alias reader (wildcards / negation skipped, `Include` one level incl. a glob, nested `Include` ignored, `Match` ignored, missing file → empty, a `Host` removed from an included file disappears on the next call; M: accept `*`, M: cache the first read); the argv is exactly the fixed one with the alias after `--` and no shell (M: build a shell string — the test with alias `a;rm` must fail); a fake `ssh` (test binary on an injected path) answering the Darwin / Linux fixtures, each classification row incl. a sensitive stderr fixture (user, hostname, path) that must not appear in `Result.Code` or anywhere but `Stderr`, missing `@@end`, 64 KiB overflow; disk latch enter / stay / leave sequences 84 → 85 → 84 → 83 → 82 and 94 → 95 → 93 → 92 (M: no hysteresis), `Combine` table incl. unknown + warning; probe trend rising / falling / flat on 30 s spaced samples and unknown on 60 s spaced ones (M: window not forced).
+- **T-1b.1 `probe_hosts` collection** — rev 2's T-1b.1 unchanged (normaliser, ≤ 16 rows, ids, the `colors` shape of
+  `spa/src/lib/host-color.ts`, `fleet.ValidAlias` → `unknown_ssh_alias: <alias>`, lenient reader dropping rows that no
+  longer validate, `putHandler`, GET field `probeHosts`, reader key).
+- **T-1b.2 `fleet` row**: `{order: [alias…], peer_ssh_alias: string, enabled: bool}`; `order` 1–4 unique aliases matching
+  `^[a-z0-9][a-z0-9-]{0,31}$` (default `["air26","mlab"]`); `peer_ssh_alias` empty or `fleet.ValidAlias`; `enabled`
+  default true. `PUT /api/hostconfig/fleet` (single row, `baseRevision`, 409, 400 text), lenient read, GET field `fleet`.
+- **T-1b.3 Module skeleton**: `Name "fleet"`, `Dependencies() = ["hostconfig"]`; `Init` resolves the hostconfig readers and
+  `LocalSourceKey` (missing → `FakeLocal`, logged once); `Start` / `Stop` (cancel, wait, no goroutine left);
+  `registerServeModules` in `cmd/pdx/main.go`.
+- **T-1b.4 State**: `state.json` `{role, term, last_heard_ms}` written atomically (temp + rename) on every change; read in
+  `Start`; a torn or missing file = `{standby, 0}`.
+- **T-1b.5 Role engine** (`internal/module/fleet/role.go`, pure over an injected clock and a `Peer` interface
+  `Role(ctx) (RoleAnswer, error)` / `Announce(ctx, term)`): spec §4 — start sequence (other primary → standby and adopt its
+  term; unreachable → primary, `term+1`; other standby / starting → first in `order` primary with `max+1`), heartbeat every
+  30 s with a 5 s timeout, alive = answered and `newest_age_ms ≤ 10000`, takeover with `term = highest+1` + announce, step
+  down on a higher term from any source, equal terms → first in `order` stays, `enabled=false` → standby forever and
+  answers `standby`. Outputs: `OnPrimary()` / `OnStandby()` callbacks (called once per change) and `State()`.
+- **T-1b.6 Peer routes**: `GET /api/peers/fleet/role` → `{role, term, order, newest_age_ms, alias}`;
+  `POST /api/peers/fleet/announce {term, alias}` → applies "higher term wins"; both in `peers.HostRoutePolicy`; the `Peer`
+  implementation over `HostCaller` (`to_host_id` resolved from the alias in `order` through the peers inventory).
+- Tests: normalisers (each field, unknown key, bounds; M: accept unknown keys); 409 / 400 text; lenient read drops a row
+  with a gone alias; registration (M: drop the AddModule line). Role engine table with a fake clock and fake peer — start:
+  each of the three branches; heartbeat: alive / not answering / answering with age 11 s → takeover with `term+1` and one
+  announce (M: alive ignores the age); a higher term in a heartbeat answer or an announce → step down, `OnStandby` once
+  (M: keep primary); equal terms → order decides; a recovered old primary that sees a primary → standby (no switch back;
+  M: switch back by order); `enabled=false`; restart reads `state.json` (torn file → standby 0). Routes: shape, policy
+  entries (M: route missing from the policy → peer call refused).
 
-## 4. F-1b — config collection and the module
+## 4. F-1c — measuring and the API
 
-- **T-1b.1 hostconfig collection `probe_hosts`** (hostconfig files): `KeyProbeHosts`; `normalizeProbeHosts(raw, cur)` — `[{id, name, ssh_alias, icon, colors, icon_weight}]`, ≤ 16 rows; `id` kept when it matches a current row, server-generated 8 hex when empty; `name` 1–40 chars; `icon` a Phosphor name or empty; `icon_weight` the App's weights; `colors` exactly the App's `HostConfig.colors` shape (`spa/src/lib/host-color.ts:185-202`): an object keyed by mode (`console` | `terminal` | `execution`, each optional), each a `HostColorSet` `{main: {color: "#rrggbb", alpha: 0–100 int}, middle?: {color?, alpha}, light?: {color?, alpha}}` — unknown modes / layers / keys rejected (F-2a sends this shape; corrected 10-15 from "per-mode `#rrggbb` strings"); unknown keys rejected; `ssh_alias` through `fleet.ValidAlias` (failure → `ValidationError` reading `unknown_ssh_alias: <alias>`); returned as `ValidationError` so `putHandler` answers 400 plain text. Wiring: `PUT /api/hostconfig/probe-hosts` via `putHandler`; `readers[KeyProbeHosts]` (lenient: a stored row that no longer validates — alias gone included — is dropped with a reason, like the other collections); `emptyFor` → `[]` (the default); the GET field `probeHosts`; a reader `ProbeHostsKey` → `ProbeHosts() (rows, revision int64, err)` registered in `Init`.
-- **T-1b.2 Module skeleton** `internal/module/fleet`: `Name "fleet"`, `Dependencies() = ["hostconfig", "resources"]`; `Init` resolves the registry keys (missing → tolerated, logged once); `Start` launches the self loop; `Stop` cancels everything and waits; registered in `registerServeModules` (`cmd/pdx/main.go`) after both dependencies.
-- **T-1b.3 Self loop** (5 s): `LatestHost()` + `LocalDisk()` → the self row (cpu, mem, load1, ncpu from the sample; zone = `Combine(sample zone, disk latch)`; trend = the sample's); a missing / not-ok reader → resources part unknown.
-- **T-1b.4 Prober reconcile**: on each self tick, read `ProbeHosts()`; when the revision moved, diff by `id` — start new, stop removed (its row dropped from the table), restart a row whose `ssh_alias` changed; a look-only change (name / icon / colours) updates the table without a restart. Each goroutine: 30 s ± 3 s, `ValidAlias` before every call (`error/alias_gone` without calling), `Run`, then zone / trend / status into the table; `last_ok_at` kept across offline; stderr logged per spec §5.
-- Tests: normaliser (each field, unknown key, 17 rows, id kept / generated, unknown alias → 400 text; M: accept unknown keys); GET carries `probeHosts`; a stored row with a gone alias is dropped on read; PUT stale → 409 with the current copy; device token PUT → 403 (existing scope rule, asserted); registration: the module is added and `Dependencies()` names both (M: drop the AddModule line — a registration test fails); self loop with a fake reader and fake disk (warning from disk alone; reader missing → unknown + disk known); reconcile — add one, remove one, alias change restarts only that one, look change restarts none (M: restart all on any change); `Stop` leaves no goroutine (race test).
+- **T-1c.1 Loop scripts** (`internal/fleet/loop.go`, constants): Darwin and Linux per spec §5; each second one fast frame
+  `@@f <unix_ms>` … `@@end`; every fifth second also `@@s` with `@@top_cpu`, `@@top_mem` (one `ps`), and `@@gate`
+  (`pdx gate status --json` from `$HOME/.local/bin/pdx` then `$HOME/.config/pdx/bin/pdx`; absent → `@@gate none`). Darwin
+  CPU from one long-running `iostat -n0 -w1` merged into the frames; Linux CPU from `/proc/stat` deltas with shell
+  built-ins. **Capture real output** once from mlab, air26 and mserv (and air-2019 when awake) into
+  `internal/fleet/testdata/` (scrub user names and hostnames) before writing the parser; measure the loop's remote CPU
+  over 60 s on each (spec target ≤ 15 ms / s) and put the numbers in the PR body.
+- **T-1c.2 Frame parser** (`internal/fleet/frame.go`): `ParseFast` → `LocalFast` (+ disk %, free GB), `ParseSlow` →
+  `LocalSlow` (gate JSON into `gate.Status`, `none` → nil); Linux PSI → level (spec §5 values); page rate from the counter
+  delta of two frames (first frame → rate unknown); a frame over 64 KiB or without `@@end` → error.
+- **T-1c.3 Session manager** (`internal/module/fleet/session.go`): one goroutine per remote host while primary: start the
+  ssh (`fleet.Args` + `ServerAliveInterval=5`, `ServerAliveCountMax=2`), read frames, publish to the aggregator; no frame
+  for 5 s → `offline/timeout`; exit classified as F-1a's `classify255`; restart after 5 s, backoff doubling to 60 s, reset
+  on a good frame; 5 unparsable frames in a row → `error/parse` + restart; `ValidAlias` before each start (`alias_gone`);
+  stderr to the log per spec (≤ 1 line per host and code per hour). `Stop` kills every ssh and waits.
+- **T-1c.4 Composite, zone, queue** (`internal/fleet/load.go`): `Composite(fast, disk)` (spec §5 formula); `Zone` = the
+  §2.6 rule with `DiskLatch` (replace F-1a's `ZoneLatch`-based probe zone; F-1a's trend is no longer used); `QueueSummary
+  (gate.Status, fast, settings)` incl. `admission_held` (`Status.Admission` when present, else level / page rate against
+  the host's effective `admission.*` from `Status.Settings`).
+- **T-1c.5 Aggregator and push** (`internal/module/fleet/fleet.go`): rows for own host (LocalSource + `LocalDisk` at each
+  1 s tick), the other daemon host (`peer_ssh_alias`), and the probe hosts (config rows; reconciled on the hostconfig
+  revision as rev 2's T-1b.4); a 1 s ticker sends `fleet.changed` (spec §6: all fast parts; slow parts that changed;
+  status changes); nothing while standby.
+- **T-1c.6 API**: `GET /api/fleet` (standby / primary shapes, spec §6), `GET /api/fleet/ssh-aliases`, `fleet.v1` in the
+  capabilities when the module is ready, device scope: `GET /api/fleet` + the event allowed, the alias list admin-only.
+- **T-1c.7 Wiring** (after F-1b merges): `OnPrimary` → `LocalSource.Start()` + sessions + ticker; `OnStandby` → stop all
+  three; `newest_age_ms` for the role route = age of the own host's newest fast reading.
+- Tests: parser on the captured fixtures (Darwin, Linux; PSI levels; gate JSON present / `none`; torn frame; 64 KiB; M:
+  accept a frame without `@@end`); page rate from two frames (M: rate from one frame); composite table incl. disk 84 vs 86
+  and CPU 95 with level 1 → neutral zone (M: colour by score); session manager with a fake ssh binary on an injected path
+  (frames then silence → offline after 5 s; exit 255 + auth stderr → `error/auth` with no stderr on the wire; restart
+  backoff 5 → 10 → 20 s, reset after a good frame; `Stop` leaves no process and no goroutine, `-race`); push: one per tick,
+  slow parts only when changed (M: send every slow part each tick), nothing while standby (M: push as standby); API shapes;
+  device token: GET 200, alias list 403.
 
-## 5. F-1c — API and events
+## 5. F-2a — SPA data and the Hosts page
 
-- **T-1c.1 `GET /api/fleet`** (spec §6 shape): `self` from the self row; `probes` from the table in config order, look fields from the config rows.
-- **T-1c.2 `fleet.changed`**: after each self tick and each probe result, compute the visible key per host — `{zone, status, trend, code, round(cpu), round(mem), round(disk)}` (`math.Round` to whole percent) plus the host set; changed → `send()`. Throttle with an injected clock: the first change in a quiet 5 s is sent at once; changes inside the window arm one trailing timer at `last + 5 s`, which sends the **newest** payload at fire time; `Stop` cancels the timer and nothing sends after it.
-- **T-1c.3 `GET /api/fleet/ssh-aliases`** → `{aliases: [...]}` from `fleet.Aliases` (fresh read).
-- **T-1c.4 Capability and scope**: `fleet.v1` in `core/info_handler.go` when the module is ready; `cmd/pdx/device_scope.go`: `GET /api/fleet` allowed; the alias list stays admin-only (PUT already is).
-- Tests: the GET shape with and without the resources reader; the event on a zone change, not on an unchanged sample, not on a sub-percent change (M: send every tick); throttle — three changes within 5 s → two sends, the second carrying the third change's payload (M: trailing send carries the first), no send after `Stop`; device token: GET 200, alias list 403 (M: allow-list the alias list).
+- **T-2a.1 Types and parse** `lib/fleet/{types,parse,api}.ts` for spec §6 (standby / primary answers, `Host`, `fast`, `slow`,
+  `Queue`, codes as a union).
+- **T-2a.2 Store** `useFleetStore`: per daemon host `{role, term, generation}`; the primary = the host answering `primary`
+  with the highest term; `hosts` = the primary's snapshot; `fleet.changed` merged only from the current primary and only
+  under the generation it was requested in (rev 2's generation rule); no push for 10 s or the primary disconnects →
+  `waitingPrimary` with the last values kept; on a role change re-read `GET /api/fleet` from both.
+- **T-2a.3 History** `lib/fleet/history.ts` (memory only, never persisted): per host and item, 1 s points for the last 10 min
+  and 10 s buckets `{avg, max}` for 24 h; `series(hostId, item, range)` for the watcher area (5 min / 1 h / 6 h / 24 h).
+- **T-2a.4 Capability and events**: `fleet.v1` probe beside the others (`lib/team/unattended-support.ts`), invalidated on
+  disconnect, forgotten on re-point / removal; the `fleet.changed` branch in `useMultiHostEventWs`.
+- **T-2a.5 Hosts page**: rev 2's T-2a.4 dialog and section, changed per spec §8.2 — the section once (on the Hosts page's
+  overview of any `fleet.v1` host, listing the shared rows), the dialog asking the SSH alias **per daemon** (each from that
+  daemon's alias list), save = PUT to both with each one's revision; a 409 from either reloads both. The `fleet` row
+  (order, alias for the other daemon host) on each daemon host's overview.
+- Tests: parse; primary choice (two primaries → higher term; M: first answer wins); stale → `waitingPrimary` and values kept
+  (M: clear values); a push from the standby ignored (M: merge any host's push); generation rule (late GET after
+  disconnect does not write); history buckets avg / max and range slicing, memory only (M: write to localStorage); dialog
+  writes both daemons with their own alias and revision, 409 from one reloads both.
 
-## 6. F-2a — SPA data and the Hosts page
+## 6. F-2b — the sidebar host cells
 
-- **T-2a.1 Types and API**: `FLEET_CAPABILITY`; `lib/fleet/{types,parse,api}.ts` — strict parse of the spec §6 payload (codes as a union; unknown code → `parse`), `fetchFleet`, `fetchSshAliases`, `putProbeHosts({items, baseRevision})` returning `ok | conflict(current) | invalid(text)`.
-- **T-2a.2 Store and generations**: `useFleetStore` per daemon host `{self, probes, updatedAt, offlineSince}`; the capability probe beside the others (`lib/team/unattended-support.ts`), invalidated on disconnect, forgotten on re-point / removal. A **fleet generation** per host, bumped on disconnect, re-point and removal: the initial `GET /api/fleet` starts when the capability is confirmed for the current connection (also when the capability answer arrives after the connection is up), and its reply — and any `fleet.changed` — is written only under the generation it started in. A host the App cannot reach → offline with the time it went away; its last numbers are not shown as live. `focusProbe: {proberHostId, probeId} | null` (not persisted) for T-2b's row click.
-- **T-2a.3 Lifted editors**: `HostIconPicker({icon, weight, onChange, mode?})` and `HostColorPicker({colors, onChange, mode, onModeChange})` take the editing bodies of `HostIconField` / `HostColorField` as controlled components; the two fields become wrappers binding them to `useHostLook(hostId)` and the store writers. No behaviour change for daemon hosts.
-- **T-2a.4 Hosts page section and dialog**: under a `fleet.v1` host (the host's overview sub-page), 「只探查的主機」 with rows (badge, name, SSH host, status), 「新增」, edit, remove (asks once); the dialog holds a draft `{name, ssh_alias, icon, icon_weight, colors}` (SSH host picker from `fetchSshAliases`, the two pickers); save PUTs the whole list with the collection's revision; 409 → reload the list and say it changed elsewhere; 400 → the text in the dialog. When `focusProbe` names a row here, scroll to it, highlight it once, clear `focusProbe`.
-- Tests: parse each status and code; event updates without a fetch; offline on disconnect (M: keep the last numbers as live); late initial GET after disconnect / re-point / removal does not write (M: drop the generation check); capability answer after connect still starts the GET; the two existing field test files pass unchanged and the pickers work on a draft; dialog validation, the PUT body with `baseRevision`, 409 reload, 400 text; remove asks once; `focusProbe` scrolls and clears.
-
-## 7. F-2b — the bottom block
-
-- `components/fleet/FleetRows.tsx` (expanded) above the labelled buttons in `BottomNav`'s wide-rows look; `FleetStrip.tsx` replaces the icon buttons in the wide one-row look (the toggle stays); `FleetLight.tsx` above the buttons in the narrow look (worst zone, tooltip list).
-- Each host's look: daemon hosts via `useHostLook`; probe-only hosts from their definition (`resolveHostColors(look, mode)` → `HostBadge`).
-- Zone colours from the theme (`status-success` / `status-warning` / `status-error` / text-muted for offline and unknown); trend arrows; 「離線（n 分鐘前）」; an `error` row shows a short reason per code.
-- Most loaded = worst zone, then the highest of CPU / memory / disk.
-- Row click: a daemon host → the existing `open-host` path (`openSingletonTab({kind: 'hosts'})` + `setActiveHost(hostId)`); a probe-only host → the same with its prober's id, plus `focusProbe` (T-2a.2).
-- i18n under `fleet.*` (zh-TW / en), completeness test.
-- Tests: expanded rows per host kind; collapsed strip hides the four buttons and expands on click (M: buttons still rendered); the most-loaded label and nothing when all normal; narrow light colour = worst; offline and error rendering; a daemon row click opens that host; a probe row click opens the prober and sets `focusProbe` (M: open the probe id as a host).
+- `components/fleet/HostCell.tsx` per spec §8.1 (box, queue badge, composite ring), `FleetCells.tsx` (one row under the
+  BottomNav in the wide bar, a column in the narrow bar), tooltip (name, zone word, five values, queue summary,
+  「等待主方」).
+- **Click, interim**: until the watcher area lands, a daemon host's cell opens that host on the Hosts page; a probe host's
+  opens the Hosts page's probe-host section with that row highlighted once. The watcher area spec replaces this.
+- i18n `fleet.*` (zh-TW / en) and the completeness test.
+- Tests: the box colours and the white icon; offline hatch + dashed ring; ring length = composite, colour = zone (M: colour
+  by score); badge only on daemon hosts with waiters, its three colours (M: badge at 0 waiters); one row at the default
+  sidebar width (four cells fit 240 px); the narrow column; click targets; 「等待主方」 tooltip.
