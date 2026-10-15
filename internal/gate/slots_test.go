@@ -215,3 +215,37 @@ func TestSlot_Label(t *testing.T) {
 }
 
 var _ = syscall.LOCK_EX
+
+// Only EWOULDBLOCK means a lock is held; a lock that cannot be probed is broken, not busy, or a command would wait forever
+// on a slot nobody holds. (M: read every flock error as held.)
+func TestFlockNB_HeldIsNotBroken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "l")
+	a, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	require.NoError(t, err)
+	b, err := os.OpenFile(path, os.O_RDWR, 0)
+	require.NoError(t, err)
+	st, err := flockNB(a)
+	assert.Equal(t, lockGot, st)
+	assert.NoError(t, err)
+	st, err = flockNB(b)
+	assert.Equal(t, lockHeld, st, "another descriptor holds it")
+	assert.NoError(t, err)
+	require.NoError(t, a.Close())
+	st, _ = flockNB(b)
+	assert.Equal(t, lockGot, st, "released when the holder closes")
+	require.NoError(t, b.Close())
+	st, err = flockNB(b)
+	assert.Equal(t, lockBroken, st, "a closed descriptor cannot be locked: broken, not busy")
+	assert.Error(t, err)
+}
+
+func TestPool_ABrokenSlotLockIsBrokenNotBusy(t *testing.T) {
+	p := testPool(t, ClassHeavy, 1)
+	tk := ticketAt(t, p, 1)
+	old := lockProbe
+	lockProbe = func(*os.File) (lockState, error) { return lockBroken, syscall.ENOLCK }
+	defer func() { lockProbe = old }()
+	s, _, err := p.TryTake(tk)
+	assert.Nil(t, s)
+	assert.ErrorIs(t, err, ErrBroken, "the caller fails closed instead of queueing for ever")
+}

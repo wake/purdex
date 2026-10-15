@@ -12,10 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 // PressureReader reads the host's pressure; a seam so tests inject a level and a rate.
@@ -85,9 +82,14 @@ func (r *HostReader) lockSampler() (unlock func(), got bool) {
 	if err != nil {
 		return func() {}, true // no lock to be had (a directory the gate cannot write): sample alone
 	}
-	if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+	st, _ := flockNB(f)
+	switch st {
+	case lockHeld:
 		_ = f.Close()
 		return func() {}, false
+	case lockBroken:
+		_ = f.Close()
+		return func() {}, true // the lock cannot be had at all: sample alone
 	}
 	return func() { _ = f.Close() }, true
 }
@@ -177,7 +179,7 @@ func pressureOf(samples []cachedSample, cur cachedSample) Pressure {
 }
 
 func sysctlLevel() (int, error) {
-	v, err := unix.SysctlUint32("kern.memorystatus_vm_pressure_level")
+	v, err := sysctlUint32("kern.memorystatus_vm_pressure_level")
 	return int(v), err
 }
 
