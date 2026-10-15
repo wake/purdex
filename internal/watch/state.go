@@ -24,6 +24,9 @@ type stateFile struct {
 	Reported   map[string]time.Time     `json:"reported"` // kind + " " + holder key → when it was marked
 }
 
+// There is one writer: the daemon's watcher (a restart re-execs the same process, so two never overlap). A second process that
+// flushed from an older snapshot would overwrite the first's changes; the CLI reads the event log only and never opens the state.
+//
 // StateStore is the persistent Memory (~/.config/pdx/watch/state.json): the signatures seen, when each orphaned slot was first
 // seen orphaned, and the E3/E4 events already made. Changes stay in memory and go to the file at Flush (the caller flushes once
 // per pass); the write is atomic (a temp file renamed over the old one), so a crash leaves the old or the new file whole.
@@ -174,6 +177,9 @@ func (s *StateStore) Flush() error {
 		return err
 	}
 	_, werr := tmp.Write(b)
+	if werr == nil {
+		werr = tmp.Sync() // the content is on disk before the name points at it
+	}
 	cerr := tmp.Close()
 	if werr == nil {
 		werr = cerr
@@ -187,6 +193,10 @@ func (s *StateStore) Flush() error {
 	if werr != nil {
 		_ = os.Remove(tmp.Name())
 		return werr
+	}
+	if d, err := os.Open(filepath.Dir(s.path)); err == nil { // the rename itself survives a power cut; best effort
+		_ = d.Sync()
+		d.Close()
 	}
 	s.dirty = false
 	return nil

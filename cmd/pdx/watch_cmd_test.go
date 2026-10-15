@@ -60,3 +60,21 @@ func TestWatchLogBadArgs(t *testing.T) {
 	require.Equal(t, 0, watchMain([]string{"log", "--dir", dir}, &out, &errb), "an empty log is not an error")
 	require.Contains(t, out.String(), "沒有")
 }
+
+func TestWatchLogRefusesExtraArgumentsAndNeutralisesControlCharacters(t *testing.T) {
+	dir := t.TempDir()
+	var out, errb bytes.Buffer
+	require.Equal(t, 2, watchMain([]string{"log", "--dir", dir, "typo", "--since", "1d"}, &out, &errb))
+	require.Contains(t, errb.String(), "typo")
+
+	r := watch.NewRecorder(dir, "mlab")
+	_, err := r.Record(watch.Event{Kind: watch.KindUnmanagedHeavy, At: time.Now(), Label: watch.LabelUnknown, Signature: "x", Cwd: "/w\n99-99 fake line\x1b[2J"})
+	require.NoError(t, err)
+	out.Reset()
+	require.Equal(t, 0, watchMain([]string{"log", "--dir", dir}, &out, &errb))
+	require.Equal(t, 1, strings.Count(strings.TrimSpace(out.String()), "\n")+1, out.String())
+	require.NotContains(t, out.String(), "\x1b")
+	out.Reset()
+	require.Equal(t, 0, watchMain([]string{"log", "--dir", dir, "--json"}, &out, &errb))
+	require.Contains(t, out.String(), `\n99-99 fake line`, "JSON keeps the value, escaped")
+}

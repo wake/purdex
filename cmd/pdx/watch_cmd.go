@@ -38,6 +38,10 @@ func watchMain(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
+	if fs.NArg() > 0 { // flag stops at the first positional word: what follows would be ignored silently
+		fmt.Fprintf(stderr, "多餘的參數 %q\n%s", fs.Args(), watchUsage)
+		return 2
+	}
 	var from time.Time
 	if *since != "" {
 		t, err := parseSince(*since, time.Now())
@@ -72,7 +76,7 @@ func watchMain(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, string(b))
 			continue
 		}
-		fmt.Fprintln(stdout, watchLine(r))
+		fmt.Fprintln(stdout, plainText(watchLine(r)))
 	}
 	return 0
 }
@@ -115,4 +119,15 @@ func watchLine(r watch.Record) string {
 		}
 	}
 	return b.String()
+}
+
+// plainText replaces the control characters of s (a cwd or a command word can carry a newline or an escape sequence) so a
+// line of the text view stays one line and cannot drive the terminal.
+func plainText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
+			return '?'
+		}
+		return r
+	}, s)
 }
