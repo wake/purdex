@@ -18,7 +18,7 @@ import (
 
 func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
 	f := Files()
-	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "hooks/events.js", "hooks/lease.js", "hooks/member.js", "hooks/prompts.js", "hooks/workbook.js", "skills/pdx-team/SKILL.md", "skills/pdx-lease/SKILL.md"} {
+	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "hooks/events.js", "hooks/gate.js", "hooks/lease.js", "hooks/member.js", "hooks/prompts.js", "hooks/workbook.js", "skills/pdx-team/SKILL.md", "skills/pdx-lease/SKILL.md"} {
 		if _, err := fs.Stat(f, rel); err != nil {
 			t.Errorf("%s: %v", rel, err)
 		}
@@ -31,7 +31,7 @@ func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []struct{ name, file string }{{"registerAsk", "ask.js"}, {"registerEvents", "events.js"}, {"registerLease", "lease.js"}} {
+	for _, c := range []struct{ name, file string }{{"registerAsk", "ask.js"}, {"registerEvents", "events.js"}, {"registerGate", "gate.js"}, {"registerLease", "lease.js"}} {
 		if !importsAndCalls(string(reg), c.name, c.file) {
 			t.Errorf("register.js does not import and register ./%s", c.file)
 		}
@@ -75,10 +75,10 @@ type registration struct {
 // one it reads — on('<event>', …) or on?.('<event>', …) with a quoted literal as the whole
 // first argument, its arguments on any line — or one that cannot register anything: a
 // function's parameter, a property key, the two calls that hand `on` to the other files
-// (registerAsk(on), registerEvents(on), registerLease(on), whose files are scanned too). Anything else (an
+// (registerAsk(on), registerEvents(on), registerGate(on), registerLease(on), whose files are scanned too). Anything else (an
 // alias, `on` passed elsewhere, a variable or template event name) is an error.
 var (
-	handsOnTo   = regexp.MustCompile(`(?:^|[^\w$.])(?:registerAsk|registerEvents|registerLease)\s*\(\s*$`)
+	handsOnTo   = regexp.MustCompile(`(?:^|[^\w$.])(?:registerAsk|registerEvents|registerGate|registerLease)\s*\(\s*$`)
 	onParameter = regexp.MustCompile(`(?:^|[^\w$.])function\s*\*?\s*[\w$]*\s*\(\s*$`)
 )
 
@@ -120,11 +120,11 @@ func scanRegistrations(file, src string) (regs []registration, problems []string
 				regs = append(regs, r)
 			}
 		case next < len(code) && code[next] == ')' && (handsOnTo.MatchString(code[:at]) || onParameter.MatchString(code[:at])):
-			// registerAsk(on) / registerEvents(on) / registerLease(on), or function register(on)
+			// registerAsk(on) / registerEvents(on) / registerGate(on) / registerLease(on), or function register(on)
 		case next < len(code) && code[next] == ':' && prev >= 0 && (code[prev] == '{' || code[prev] == ','):
 			// a property key: { on: … }
 		default:
-			problems = append(problems, where(at)+": `on` is used other than in on('<event>', …), registerAsk(on), registerEvents(on) or registerLease(on) (an alias, an argument, a parameter of an arrow, …): the guard cannot follow it, so call on('<event>', …) directly")
+			problems = append(problems, where(at)+": `on` is used other than in on('<event>', …), registerAsk(on), registerEvents(on), registerGate(on) or registerLease(on) (an alias, an argument, a parameter of an arrow, …): the guard cannot follow it, so call on('<event>', …) directly")
 		}
 	}
 	return regs, problems
@@ -397,6 +397,7 @@ func TestHooks_NoEventRegisteredTwiceWithoutMatcher(t *testing.T) {
 		{"hooks/events.js", "turn.complete", "{ turnId: /^/ }"},
 		{"hooks/register.js", "turn.complete", ""},
 		{"hooks/ask.js", "tool.call", "{ tool: 'AskUserQuestion' }"},
+		{"hooks/gate.js", "tool.call", "{ tool: 'Bash' }"},
 		{"hooks/lease.js", "tool.call", "{ tool: 'Bash' }"},
 		{"hooks/lease.js", "session.start", "{ isInteractive: true }"},
 		{"hooks/events.js", "ui.render", "{ component: 'SessionMode' }"},
@@ -586,10 +587,35 @@ func TestScanRegistrations_FailsClosed(t *testing.T) {
 	}
 	// What the mod itself does with `on` passes: registerAsk(on), registerEvents(on), a
 	// function's parameter, a property key, a property access.
-	ok := "export function register(on) {\n  registerAsk(on)\n  registerEvents( on )\n  registerLease(on)\n  on('tool.call', { tool: 'Bash' }, h)\n}\nconst label = { on: 'x', off: 'y' }[k]\n$.ui.on('x', h)\nconst json = once + on_ + $on\n"
+	ok := "export function register(on) {\n  registerAsk(on)\n  registerEvents( on )\n  registerGate(on)\n  registerLease(on)\n  on('tool.call', { tool: 'Bash' }, h)\n}\nconst label = { on: 'x', off: 'y' }[k]\n$.ui.on('x', h)\nconst json = once + on_ + $on\n"
 	regs, problems := scanRegistrations("a.js", ok)
 	if len(problems) > 0 || len(regs) != 1 || regs[0] != (registration{"a.js", "tool.call", "{ tool: 'Bash' }"}) {
 		t.Errorf("scan = %+v, problems %q; want the one registration and no problem", regs, problems)
+	}
+}
+
+// registerGate(on) is allowed like the others, and a typo of it still fails closed.
+func TestScanRegistrations_AllowsRegisterGate(t *testing.T) {
+	regs, problems := scanRegistrations("a.js", "export function register(on) {\n  registerGate(on)\n}\n")
+	if len(problems) > 0 || len(regs) != 0 {
+		t.Errorf("scan = %+v, problems %q; want nothing registered and no problem", regs, problems)
+	}
+	_, problems = scanRegistrations("a.js", "export function register(on) {\n  registerGat(on)\n}\n")
+	if len(problems) == 0 || !strings.Contains(strings.Join(problems, "\n"), "used other than") {
+		t.Errorf("a registerGat(on) typo must fail closed, problems = %q", problems)
+	}
+}
+
+// registerGate runs before registerLease: the mod's hooks wrap in the order they are registered, and the gate hook has to
+// see a call first so that the lease hook sees it as the background call the gate made of it (pinned in gate.test.ts).
+func TestHooks_GateIsRegisteredBeforeTheLease(t *testing.T) {
+	reg, err := fs.ReadFile(Files(), "hooks/register.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, l := strings.Index(string(reg), "registerGate(on)"), strings.Index(string(reg), "registerLease(on)")
+	if g < 0 || l < 0 || g > l {
+		t.Errorf("register.js: registerGate(on) at %d, registerLease(on) at %d; the gate must come first", g, l)
 	}
 }
 
