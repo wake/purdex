@@ -444,8 +444,6 @@ func (s *session) readFrames(r io.Reader, sl *slot, failed chan<- struct{}) {
 func killGroup(pid int, done <-chan struct{}, grace time.Duration, closeRead func()) {
 	// Always signal the group, even when stdout is closed already: a grandchild may hold only stderr. ESRCH (nobody left) is
 	// harmless.
-	// Always signal the group, even when stdout is closed already: a grandchild may hold only stderr. ESRCH (nobody left) is
-	// harmless.
 	_ = syscall.Kill(-pid, syscall.SIGTERM)
 	select {
 	case <-done:

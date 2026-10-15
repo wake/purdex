@@ -142,6 +142,52 @@ wait`)
 	eventually(t, "ssh gone", func() bool { return !alive(sshPid) })
 }
 
+// lateClock is a fakeClock whose reading right after lateNext() is the true time and every reading after it is `by` later:
+// a frame stamped on arrival and taken `by` after, i.e. a stale one.
+type lateClock struct {
+	*fakeClock
+	mu      sync.Mutex
+	pending bool
+	skew    time.Duration
+	by      time.Duration
+}
+
+func (c *lateClock) lateNext() { c.mu.Lock(); c.pending = true; c.mu.Unlock() }
+
+func (c *lateClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pending {
+		c.pending, c.skew = false, c.by
+		return c.fakeClock.Now()
+	}
+	return c.fakeClock.Now().Add(c.skew)
+}
+
+// A frame dropped as stale proves nothing: it does not move the silence clock, so the host still reads offline 5 s after
+// the last good frame.
+func TestStaleFrameDoesNotResetTheSilenceClock(t *testing.T) {
+	path, dir := fakeSSH(t, `cat "$D/frames.txt"
+while [ ! -f "$D/go" ]; do sleep 0.05; done
+cat "$D/frame1.txt"; exec sleep 600`)
+	fc, sk := newFakeClock(), &recSink{}
+	lc := &lateClock{fakeClock: fc, by: 3 * time.Second} // the default MaxAge is 2 s
+	cfg := sessionFor(t, path, fc, sk, nil)
+	cfg.Clock = lc
+	s := startSession(t.Context(), cfg, "mserv")
+	defer stopWithin(t, s)
+
+	eventually(t, "first reading", func() bool { return sk.readingCount() == 1 })
+	fc.Advance(4 * time.Second) // 1 s before the offline mark
+	lc.lateNext()               // the next reading of the clock is the reader stamping the second frame
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go"), nil, 0o644))
+	time.Sleep(300 * time.Millisecond) // the second frame arrived and was dropped
+	assert.Equal(t, 1, sk.readingCount(), "a stale frame reached the sink")
+
+	fc.Advance(time.Second) // 5 s since the last good frame
+	eventually(t, "offline", func() bool { return sk.last() == "offline/timeout" })
+}
+
 // Five unparsable frames in a row restart the session; a good frame in between resets the count.
 func TestFiveBadFramesRestartAndAGoodOneResets(t *testing.T) {
 	t.Run("five in a row", func(t *testing.T) {

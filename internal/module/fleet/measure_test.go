@@ -441,6 +441,70 @@ func TestNoSessionStartsAfterStop(t *testing.T) {
 	assert.False(t, active)
 }
 
+// feed gives a host row one reading of the memory level and returns the zone it shows. A level 4 latches danger, which a
+// level 1 only leaves after 10 s: right after a reset the latch is gone, so level 1 reads normal at once.
+func (r *mrig) feed(key string, level int) string {
+	r.t.Helper()
+	r.m.mu.Lock()
+	defer r.m.mu.Unlock()
+	h := r.m.hosts[key]
+	require.NotNil(r.t, h)
+	r.m.applyFastLocked(h, leaf.Fast{LocalFast: leaf.LocalFast{At: r.fc.Now(), Level: level, NCPU: 4}}, r.fc.Now())
+	return h.fast.Zone
+}
+
+// A host row survives its session being restarted (an alias change): the new session starts from an unknown zone, not from
+// the latch the old one left.
+func TestZoneResetsWhenASessionIsRestarted(t *testing.T) {
+	r := newMRig(t, silent)
+	r.fleet.PeerSSHAlias = ""
+	r.setProbes(hostconfig.ProbeHost{ID: "ab12cd34", Name: "x", SSHAlias: "a19"})
+	r.start()
+	eventually(t, "started", func() bool { return startsOf(r.sshDir) == 1 })
+	require.Equal(t, "danger", r.feed("probe:ab12cd34", 4))
+
+	r.setProbes(hostconfig.ProbeHost{ID: "ab12cd34", Name: "x", SSHAlias: "a19b"})
+	r.tick()
+	eventually(t, "restarted", func() bool { return startsOf(r.sshDir) == 2 })
+	assert.Equal(t, "normal", r.feed("probe:ab12cd34", 1), "the old latch survived the restart")
+}
+
+// A remote host that goes offline or fails shows an unknown zone, and starts again from normal when it comes back.
+func TestZoneResetsWhenARemoteHostIsNotOK(t *testing.T) {
+	r := newMRig(t, silent)
+	r.fleet.PeerSSHAlias = ""
+	r.setProbes(hostconfig.ProbeHost{ID: "ab12cd34", Name: "x", SSHAlias: "a19"})
+	r.start()
+	require.Equal(t, "danger", r.feed("probe:ab12cd34", 4))
+
+	r.m.mu.Lock()
+	h := r.m.hosts["probe:ab12cd34"]
+	r.m.mu.Unlock()
+	(&rowSink{m: r.m, h: h}).State(leaf.StatusOffline, leaf.CodeTimeout, r.fc.Now())
+	assert.Equal(t, "unknown", r.host("ab12cd34").Fast.Zone, "an offline host keeps no zone")
+	assert.Equal(t, "normal", r.feed("probe:ab12cd34", 1), "the old latch survived going offline")
+}
+
+// The own host with no new reading for a while reads offline with an unknown zone, and starts again from normal.
+func TestZoneResetsWhenTheOwnHostGoesStale(t *testing.T) {
+	r := newMRig(t, silent)
+	r.fleet.PeerSSHAlias = ""
+	r.start()
+	r.setLocal(10, 4)
+	r.tick()
+	require.Equal(t, "danger", r.host("mlab:abc123").Fast.Zone)
+
+	r.fc.Advance(ownStaleAfter + time.Second)
+	r.tick()
+	h := r.host("mlab:abc123")
+	require.Equal(t, "offline", h.Status)
+	assert.Equal(t, "unknown", h.Fast.Zone)
+
+	r.setLocal(10, 1)
+	r.tick()
+	assert.Equal(t, "normal", r.host("mlab:abc123").Fast.Zone, "the old latch survived going stale")
+}
+
 // Removing several hosts at once stops their sessions side by side: a tick is held for one TermGrace, not one per host.
 func TestReconcileStopsRemovedHostsInParallel(t *testing.T) {
 	// TERM is ignored (and inherited by sleep), so each session only ends when killGroup sends KILL after the grace.
