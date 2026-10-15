@@ -84,3 +84,35 @@ func TestJournalConfig_CloneIsDeep(t *testing.T) {
 		t.Fatalf("original changed to %q", cfg.JournalPersonName())
 	}
 }
+
+// The journal is on unless config.toml says `enabled = false`: a missing section, a missing key and an empty section all
+// mean on. Mutation gate: default off / ignore the value -> red.
+func TestJournalEnabled(t *testing.T) {
+	for _, c := range []struct {
+		name, toml string
+		want       bool
+	}{
+		{"absent section", "port = 9000\n", true},
+		{"empty section", "[journal]\n", true},
+		{"other key only", "[journal]\nperson_name = \"Wake\"\n", true},
+		{"explicitly on", "[journal]\nenabled = true\n", true},
+		{"explicitly off", "[journal]\nenabled = false\n", false},
+	} {
+		if got := loadToml(t, c.toml).JournalEnabled(); got != c.want {
+			t.Errorf("%s: JournalEnabled() = %v, want %v", c.name, got, c.want)
+		}
+	}
+	var zero config.Config
+	if !zero.JournalEnabled() {
+		t.Error("a zero Config must have the journal on")
+	}
+}
+
+func TestJournalEnabled_CloneIsDeep(t *testing.T) {
+	cfg := loadToml(t, "[journal]\nenabled = false\n")
+	cp := cfg.Clone()
+	*cp.Journal.Enabled = true
+	if cfg.JournalEnabled() {
+		t.Fatal("Clone shares the enabled flag")
+	}
+}
