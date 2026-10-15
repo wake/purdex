@@ -6,21 +6,27 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/wake/purdex/internal/gate"
+	"github.com/wake/purdex/internal/gate/shim"
 )
 
-const gateUsage = `usage: pdx gate [--class heavy|light] [--auto] [--fg] [--real <binary>] [--config <path>] -- <command…>
+const gateUsage = `usage: pdx gate [--class heavy|light] [--auto] [--tool <name>] [--fg] [--real <binary>] [--config <path>] -- <command…>
        pdx gate status [--json] [--config <path>]
   --class  the pool to take a slot from (default heavy); --auto classifies the command by its words instead
   --fg     keep normal priority (no background QoS), for a release gate on an idle host
   --real   the binary to run in place of the command's first word (a shim passes the real one)
+  --tool   a shim's call: the command is <name> followed by the words after --; the real binary is looked up on PATH
+           without the shim directory, at this run; a command that is not heavy or light is run at once, unqueued
 `
 
 func runGate(args []string) {
@@ -33,17 +39,25 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 		return gateStatus(args[1:], stdout, stderr)
 	}
 	flags, command, ok := splitRunArgs(args)
+	hasSep := ok || sepIn(args)
 	fs := flag.NewFlagSet("gate", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	class := fs.String("class", "", "heavy or light")
 	auto := fs.Bool("auto", false, "classify the command by its words")
 	fg := fs.Bool("fg", false, "no background QoS")
 	real := fs.String("real", "", "binary to run in place of the first word")
+	tool := fs.String("tool", "", "the shim that called: find the real binary behind it")
 	cfgPath := fs.String("config", "", "config.toml (default ~/.config/pdx/config.toml)")
 	if err := fs.Parse(flags); err != nil {
 		return 2
 	}
-	if !ok || fs.NArg() > 0 {
+	if *tool != "" {
+		// a shim passes what the person typed after --, which is nothing for a bare `go`
+		if !hasSep || fs.NArg() > 0 || strings.ContainsAny(*tool, "/ ") {
+			fmt.Fprint(stderr, gateUsage)
+			return 2
+		}
+	} else if !ok || fs.NArg() > 0 {
 		fmt.Fprint(stderr, gateUsage)
 		return 2
 	}
@@ -61,12 +75,81 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "pdx gate: --class must be heavy or light, got %q\n", *class)
 		return 2
 	}
+	realBin := *real
+	if *tool != "" {
+		command = append([]string{*tool}, command...)
+		home, err := os.UserHomeDir()
+		if err != nil {
+			fmt.Fprintf(stderr, "pdx gate: %v\n", err)
+			return 127
+		}
+		// looked up at every run from this run's PATH, so an `nvm use` is followed
+		realBin, err = shim.Resolve(*tool, os.Getenv("PATH"), shim.DirIn(home))
+		if err != nil {
+			fmt.Fprintf(stderr, "pdx gate: %v\n", err)
+			return 127
+		}
+	}
+	// The hot path of a shim (go env, pnpm install, …): a command the gate does not take in is run at once, by exec, before any
+	// gate state is made. Only the settings file is read (the intercept rules of it still apply), nothing else of the gate.
+	if *tool != "" && *class == "" {
+		cfg, _ := gate.Load(gateConfigPath(*cfgPath))
+		cls := cfg.Intercept.Classify(command, gate.EnvOf(os.Environ(), gateStdinIsTTY()))
+		if !cfg.Enabled || !cls.Valid() {
+			return gateExecDirect(realBin, command, stderr)
+		}
+		c = cls
+	}
 	cfg := loadGateConfig(*cfgPath, stderr)
 	g := gate.New(cfg)
 	g.Stderr = stderr
 	g.Load = gateReloader(*cfgPath, cfg)
-	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Real: *real, Class: c, Foreground: *fg, Stdout: stdout, Stderr: stderr})
+	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Real: realBin, Class: c, Foreground: *fg, Stdout: stdout, Stderr: stderr})
 	return code
+}
+
+// gateStdinIsTTY says whether stdin is a terminal (a seam for tests): vitest without a subcommand runs once, or watches, by it.
+var gateStdinIsTTY = func() bool { return leaseStdinIsTTY() }
+
+// gateExec replaces this process with the command (a seam for tests).
+var gateExec = syscall.Exec
+
+// gateExecDirect runs argv by exec, as the shell would have run it without the gate: argv[0] is the name as typed, the binary
+// is realBin (looked up on PATH when empty). It returns only when the command could not be started.
+func gateExecDirect(realBin string, argv []string, stderr io.Writer) int {
+	if realBin == "" {
+		p, err := exec.LookPath(argv[0])
+		if err != nil {
+			fmt.Fprintf(stderr, "pdx gate: %v\n", err)
+			return 127
+		}
+		realBin = p
+	}
+	if err := gateExec(realBin, argv, os.Environ()); err != nil {
+		fmt.Fprintf(stderr, "pdx gate: %s: %v\n", realBin, err)
+		if errors.Is(err, os.ErrNotExist) {
+			return 127
+		}
+		return 126
+	}
+	return 0
+}
+
+func gateConfigPath(path string) string {
+	if path == "" {
+		return gate.DefaultConfigPath()
+	}
+	return path
+}
+
+// sepIn reports whether args holds the "--" that ends the flags, with or without anything after it.
+func sepIn(args []string) bool {
+	for _, a := range args {
+		if a == "--" {
+			return true
+		}
+	}
+	return false
 }
 
 // gateReloader reads the config again each time the gate asks (a command starting, a waiting gate looking at the queue),

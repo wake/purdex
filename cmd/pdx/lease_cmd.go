@@ -65,6 +65,12 @@ func runLease(args []string) {
 	os.Exit(runLeaseCmd(ctx, args, os.Getenv, os.Stdout, os.Stderr))
 }
 
+// leaseRun is what `pdx lease run` does: the gate alias. A var so the tests of the old, daemon-lease implementation (runLeaseRun,
+// which L2 removes together with them) can point it back at that.
+var leaseRun = func(_ context.Context, args []string, _ func(string) string, stdout, stderr io.Writer, _ []daemonclient.Option) int {
+	return runLeaseRunAlias(args, stdout, stderr)
+}
+
 // runLeaseCmd dispatches `pdx lease <verb>`.
 func runLeaseCmd(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer, clientOpts ...daemonclient.Option) int {
 	if len(args) > 0 {
@@ -76,7 +82,7 @@ func runLeaseCmd(ctx context.Context, args []string, getenv func(string) string,
 		case "release":
 			return runLeaseRelease(ctx, args[1:], stdout, stderr, clientOpts)
 		case "run":
-			return runLeaseRun(ctx, args[1:], getenv, stdout, stderr, clientOpts)
+			return leaseRun(ctx, args[1:], getenv, stdout, stderr, clientOpts)
 		case "report":
 			return runLeaseReport(ctx, args[1:], stdout, stderr, clientOpts)
 		case "confirm", "cancel", "done":

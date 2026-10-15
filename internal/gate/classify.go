@@ -53,7 +53,7 @@ var heavyScripts = map[string]bool{
 }
 
 // Classify says how heavy a command is, from its argv (argv[0] may be a path). It is a pure function over the words
-// the shims hand over: go, pnpm/npx/yarn/npm, vitest, tsc and make. Anything else is none and passes through. A
+// the shims hand over: go, pnpm/npx/yarn/npm, vitest, tsc, make, composer and the PHP test runners phpunit and pest. Anything else is none and passes through. A
 // command that cannot be read is none: the gate fails open on what it does not understand.
 func Classify(argv []string, e Env) Class {
 	if len(argv) == 0 {
@@ -73,6 +73,10 @@ func Classify(argv []string, e Env) Class {
 		if len(args) == 1 && args[0] == "test" {
 			return ClassHeavy
 		}
+	case "composer":
+		return classifyComposer(args, e)
+	case "phpunit", "pest":
+		return classifyPhpunit(args)
 	}
 	return ClassNone
 }

@@ -569,3 +569,54 @@ func TestOwnership_IsExactNotAMarker(t *testing.T) {
 		t.Fatalf("an edited shim was overwritten: %v", err)
 	}
 }
+
+// Herd keeps composer in "~/Library/Application Support/Herd/bin": a directory with a space in its name must resolve, and the
+// shim's own fallback must find the tool there too (word splitting on spaces would lose it).
+func TestSpacesInPaths(t *testing.T) {
+	sh := requireTool(t, "sh")
+	root := t.TempDir()
+	home := filepath.Join(root, "my home") // spaces in the shim directory's path as well
+	if err := Install(home, filepath.Join(root, "no such pdx")); err != nil {
+		t.Fatal(err)
+	}
+	herd := filepath.Join(root, "Library", "Application Support", "Herd", "bin")
+	writeExe(t, filepath.Join(herd, "composer"), "#!/bin/sh\necho \"herd composer $*\"\n")
+
+	pathEnv := DirIn(home) + ":" + herd + ":/usr/bin:/bin"
+	got, err := Resolve("composer", pathEnv, DirIn(home))
+	if err != nil || got != filepath.Join(herd, "composer") {
+		t.Fatalf("Resolve: %q %v", got, err)
+	}
+	// the shim without pdx runs it, with the arguments as they came
+	out, _, err := run(t, []string{"PATH=" + pathEnv, "HOME=" + home}, sh, filepath.Join(DirIn(home), "composer"), "test", "--", "--filter", "Foo Bar")
+	if err != nil || strings.TrimSpace(out) != "herd composer test -- --filter Foo Bar" {
+		t.Fatalf("shim fallback: %q %v", out, err)
+	}
+	// and with a pdx whose path has a space in it too
+	fakePdx := filepath.Join(root, "pdx dir", "pdx")
+	writeExe(t, fakePdx, "#!/bin/sh\necho \"pdx $*\"\n")
+	if err := Install(home, fakePdx); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err = run(t, []string{"PATH=" + pathEnv, "HOME=" + home}, sh, filepath.Join(DirIn(home), "composer"), "install")
+	if err != nil || strings.TrimSpace(out) != "pdx gate --auto --tool composer -- install" {
+		t.Fatalf("with pdx: %q %v", out, err)
+	}
+}
+
+func TestToolsHaveComposerAndNotThePHPRunners(t *testing.T) {
+	have := map[string]bool{}
+	for _, tool := range Tools {
+		have[tool] = true
+	}
+	for _, want := range []string{"go", "pnpm", "npx", "vitest", "tsc", "composer"} {
+		if !have[want] {
+			t.Errorf("no shim for %s", want)
+		}
+	}
+	for _, not := range []string{"phpunit", "pest"} {
+		if have[not] {
+			t.Errorf("%s lives in vendor/bin, not on PATH: no shim", not)
+		}
+	}
+}
