@@ -20,10 +20,14 @@ func noneReason(argv []string, e Env) Reason {
 	case "tsc", "phpunit", "pest":
 		return ReasonKnownPassthrough // --version, --help, --init, --list-tests…: nothing is run
 	case "make":
-		if i := firstWord(args); i >= 0 && args[i] == "build" {
+		// a target is the project's own: only the ones every Makefile means the same by are known to cost little
+		switch i := firstWord(args); {
+		case i >= 0 && args[i] == "build":
 			return ReasonPackaging
+		case i >= 0 && makeCheapTargets[args[i]]:
+			return ReasonKnownPassthrough
 		}
-		return ReasonKnownPassthrough
+		return ReasonUnknown // `make` alone, `make lint`, `make integration`…
 	case "composer":
 		return composerNoneReason(args, e)
 	case "pnpm", "pnpx", "npx", "yarn", "npm", "bunx", "bun":
@@ -113,7 +117,26 @@ func composerNoneReason(args []string, e Env) Reason {
 		}
 		return noneReason(append([]string{rest[j]}, tail...), e)
 	}
-	return ReasonKnownPassthrough // install, update, require, dump-autoload, validate, show, …
+	// composer runs a script of the project's by its bare name (`composer deploy`): only composer's own commands are known
+	if composerBuiltins[word] {
+		return ReasonKnownPassthrough // install, update, require, dump-autoload, validate, show, …
+	}
+	return ReasonUnknown
+}
+
+// makeCheapTargets are the make targets that do next to nothing in any project.
+var makeCheapTargets = map[string]bool{"clean": true, "help": true, "version": true, "fmt": true, "format": true}
+
+// composerBuiltins are composer's own commands that cost little (the ones that run a test script or a script by name are
+// classified before this: test*, run, run-script, exec).
+var composerBuiltins = map[string]bool{
+	"about": true, "archive": true, "audit": true, "browse": true, "home": true, "bump": true, "check-platform-reqs": true,
+	"clear-cache": true, "clearcache": true, "cc": true, "completion": true, "config": true, "create-project": true,
+	"depends": true, "why": true, "diagnose": true, "dump-autoload": true, "dumpautoload": true, "fund": true,
+	"global": true, "help": true, "init": true, "install": true, "i": true, "licenses": true, "list": true,
+	"outdated": true, "prohibits": true, "why-not": true, "reinstall": true, "remove": true, "rm": true, "uninstall": true,
+	"require": true, "r": true, "search": true, "self-update": true, "selfupdate": true, "show": true, "info": true,
+	"status": true, "suggests": true, "update": true, "u": true, "upgrade": true, "validate": true,
 }
 
 // runnerNoneReason follows classifyRunner for a none: a packaging script, a package-manager command, or the tool or script it

@@ -87,6 +87,10 @@ func TestClassifyReason_Table(t *testing.T) {
 		{"vite --version", Env{}, ClassNone, ReasonKnownPassthrough},
 		{"vite preview", Env{}, ClassNone, ReasonKnownPassthrough},
 		{"make clean", Env{}, ClassNone, ReasonKnownPassthrough},
+		{"make help", Env{}, ClassNone, ReasonKnownPassthrough},
+		{"composer validate", Env{}, ClassNone, ReasonKnownPassthrough},
+		{"composer show", Env{}, ClassNone, ReasonKnownPassthrough},
+		{"composer require vendor/pkg", Env{}, ClassNone, ReasonKnownPassthrough},
 		{"pnpm exec", Env{}, ClassNone, ReasonKnownPassthrough},
 		// unknown: not in the table, or a script / program the table cannot judge, or a line it cannot read
 		{"rsync -a src dst", Env{}, ClassNone, ReasonUnknown},
@@ -104,6 +108,11 @@ func TestClassifyReason_Table(t *testing.T) {
 		{"yarn workspaces foreach run my-script", Env{}, ClassNone, ReasonUnknown},
 		{"composer run my-script", Env{}, ClassNone, ReasonUnknown},
 		{"composer exec php-cs-fixer", Env{}, ClassNone, ReasonUnknown},
+		{"make", Env{}, ClassNone, ReasonUnknown},
+		{"make lint", Env{}, ClassNone, ReasonUnknown},
+		{"make integration", Env{}, ClassNone, ReasonUnknown},
+		{"composer deploy", Env{}, ClassNone, ReasonUnknown}, // a script of the project's, called by its bare name
+		{"composer analyse", Env{}, ClassNone, ReasonUnknown},
 		{"", Env{}, ClassNone, ReasonUnknown},
 	} {
 		class, reason := ClassifyReason(words(c.cmd), c.env)
