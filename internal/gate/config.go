@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/BurntSushi/toml"
 )
@@ -38,6 +39,10 @@ type Config struct {
 	// "slots.heavy", "admission.max_page_rate" and so on. Warnings are the lines about values that were refused.
 	Sources  map[string]Source
 	Warnings []string
+	// Values is the effective value of every key as text ("auto" for a number left to the gate); Profiles names the
+	// profiles the file defines.
+	Values   map[string]string
+	Profiles []string
 }
 
 // DefaultDir is ~/.config/pdx/gate (PDX_GATE_DIR overrides it: tests and a host that keeps its state elsewhere).
@@ -63,6 +68,13 @@ func DefaultConfigPath() string {
 
 // FromTable builds the config from the decoded `[gate]` table (nil is "nothing set": the defaults).
 func FromTable(gate map[string]any) Config {
+	// The active profile's table is laid over the settings before they are read; its keys are told apart afterwards.
+	profile := newRaw(gate).Name("profile", "default")
+	profKeys := map[string]bool{}
+	profiles, _ := gate["profiles"].(map[string]any)
+	if pt, ok := profiles[profile].(map[string]any); ok {
+		gate = overlay(gate, pt, "", profKeys)
+	}
 	r := newRaw(gate)
 	c := Config{
 		Enabled:     r.Bool("enabled", true),
@@ -80,8 +92,60 @@ func FromTable(gate map[string]any) Config {
 	if d, _ := gate["dir"].(string); d != "" && os.Getenv("PDX_GATE_DIR") == "" {
 		c.Dir = d
 	}
-	c.Sources, c.Warnings = r.st.src, r.st.warn
+	if v, present := gate["profiles"]; present && profiles == nil {
+		r.warn("profiles", "want a table of profiles, got %v", v)
+	}
+	for k := range profKeys {
+		if r.st.src[k] == SrcConfig {
+			r.st.src[k] = SrcProfile
+		}
+	}
+	for name := range profiles {
+		c.Profiles = append(c.Profiles, name)
+	}
+	sort.Strings(c.Profiles)
+	c.Sources, c.Warnings, c.Values = r.st.src, r.st.warn, r.st.val
 	return c
+}
+
+// overlay is base with the keys of over laid on it (tables merge, anything else is replaced); keys collects the dotted
+// path of every key that came from over. A profile cannot change which profile is active, nor the directory.
+func overlay(base, over map[string]any, prefix string, keys map[string]bool) map[string]any {
+	out := make(map[string]any, len(base)+len(over))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range over {
+		if prefix == "" && (k == "profile" || k == "profiles" || k == "dir") {
+			continue
+		}
+		ov, isTable := v.(map[string]any)
+		bv, baseIsTable := out[k].(map[string]any)
+		if isTable && (baseIsTable || out[k] == nil) {
+			out[k] = overlay(bv, ov, prefix+k+".", keys)
+			continue
+		}
+		out[k] = v
+		keys[prefix+k] = true
+	}
+	return out
+}
+
+// Setting is one effective value with where it came from.
+type Setting struct {
+	Key    string `json:"key"`
+	Value  string `json:"value"`
+	Source Source `json:"source"`
+}
+
+// Effective lists every setting that was read, sorted by key.
+func (c Config) Effective() []Setting {
+	out := make([]Setting, 0, len(c.Values))
+	for k, v := range c.Values {
+		out = append(out, Setting{Key: k, Value: v, Source: c.Sources[k]})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out
 }
 
 // Defaults is the config with nothing set.
