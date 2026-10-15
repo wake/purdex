@@ -404,7 +404,7 @@ func (c *wsConn) follow() {
 // generation is the one it saw. Anything the gate cannot read (a size error, no generation source) is not quiet.
 func (m *Module) quiet(src convfeed.Source, passAt time.Time, passSize int64, passGen uint64) bool {
 	gs, ok := m.light.(LightGenerationSource)
-	if !ok || passAt.IsZero() || src.Backend == "execution" || time.Since(passAt) >= m.fullEvery() {
+	if !ok || src.File == nil || passAt.IsZero() || src.Backend == "execution" || time.Since(passAt) >= m.fullEvery() {
 		return false
 	}
 	size, err := src.File.Size()
