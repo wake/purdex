@@ -105,6 +105,7 @@ func (m *Module) handleGet(w http.ResponseWriter, _ *http.Request) {
 		"relayQuota":      KeyRelayQuota,
 		"workbook":        KeyWorkbook,
 		"watch":           KeyWatch,
+		"probeHosts":      KeyProbeHosts,
 	} {
 		e, err := m.store.Get(key)
 		if err != nil {

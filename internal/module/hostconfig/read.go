@@ -108,4 +108,5 @@ var readers = map[string]func(json.RawMessage) readout{
 	KeyRelayQuota:      readRelayQuota,
 	KeyWorkbook:        readWorkbook,
 	KeyWatch:           readWatch,
+	KeyProbeHosts:      readProbeHosts,
 }
