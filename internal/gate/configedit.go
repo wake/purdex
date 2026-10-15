@@ -186,15 +186,17 @@ func editTOML(text, header, leaf, lit string) string {
 			if in {
 				break
 			}
-			name := strings.TrimSpace(strings.TrimSuffix(strings.SplitN(t, "#", 2)[0], " "))
-			if name == "["+header+"]" {
+			if tableName(t) == header {
 				in, headerAt = true, i
 			}
 			continue
 		}
 		if in && keyLine.MatchString(l) {
-			lines[i] = leaf + " = " + lit
-			return strings.Join(lines, "\n") + "\n"
+			end := valueEnd(lines, i)
+			out := append([]string{}, lines[:i]...)
+			out = append(out, leaf+" = "+lit)
+			out = append(out, lines[end+1:]...)
+			return strings.Join(out, "\n") + "\n"
 		}
 	}
 	if headerAt >= 0 {
@@ -208,6 +210,83 @@ func editTOML(text, header, leaf, lit string) string {
 		out += "\n\n"
 	}
 	return out + "[" + header + "]\n" + leaf + " = " + lit + "\n"
+}
+
+// tableName is the dotted name of a `[a.b]` header line, whatever the spaces and quotes around its parts (`[ a . "b" ]`);
+// "" when the line is not a plain table header (an array of tables, `[[a]]`, is not one).
+func tableName(line string) string {
+	t := strings.TrimSpace(line)
+	if strings.HasPrefix(t, "[[") || !strings.HasPrefix(t, "[") {
+		return ""
+	}
+	var name strings.Builder
+	quote := byte(0)
+	for i := 1; i < len(t); i++ {
+		c := t[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			} else {
+				name.WriteByte(c)
+			}
+		case c == '"' || c == '\'':
+			quote = c
+		case c == ']':
+			return name.String()
+		case c == ' ' || c == '\t':
+		default:
+			name.WriteByte(c)
+		}
+	}
+	return ""
+}
+
+// valueEnd is the index of the last line of the value that starts on line i: the same line, unless it opens an array or
+// a multi-line string that goes on.
+func valueEnd(lines []string, i int) int {
+	_, v, _ := strings.Cut(lines[i], "=")
+	v = strings.TrimSpace(v)
+	for _, q := range []string{`"""`, `'''`} {
+		if strings.HasPrefix(v, q) && strings.Count(v, q) < 2 {
+			for j := i + 1; j < len(lines); j++ {
+				if strings.Contains(lines[j], q) {
+					return j
+				}
+			}
+			return len(lines) - 1
+		}
+	}
+	depth, quote := 0, byte(0)
+	for j := i; j < len(lines); j++ {
+		src := lines[j]
+		if j == i {
+			src = v
+		}
+		for k := 0; k < len(src); k++ {
+			c := src[k]
+			switch {
+			case quote != 0:
+				if c == '\\' && quote == '"' {
+					k++
+				} else if c == quote {
+					quote = 0
+				}
+			case c == '"' || c == '\'':
+				quote = c
+			case c == '#':
+				k = len(src)
+			case c == '[':
+				depth++
+			case c == ']':
+				depth--
+			}
+		}
+		if depth <= 0 {
+			return j
+		}
+	}
+	return len(lines) - 1
 }
 
 func writeAtomic(path string, data []byte) error {

@@ -404,8 +404,10 @@ type Status struct {
 func (g *Gate) Status() Status {
 	cfg := g.Config()
 	h, l := g.pool(cfg, ClassHeavy), g.pool(cfg, ClassLight)
+	heavy, light := h.Held(), l.Held()
+	g.fillLocked(h, heavy, l, light)
 	return Status{
-		Heavy: g.withLocked(h, h.Held()), Light: g.withLocked(l, l.Held()), WaitHeavy: h.Waiting(), WaitLight: l.Waiting(),
+		Heavy: heavy, Light: light, WaitHeavy: h.Waiting(), WaitLight: l.Waiting(),
 		Suspect: append(h.Suspect(), l.Suspect()...), Profile: cfg.Profile, Settings: cfg.Effective(),
 	}
 }
@@ -413,19 +415,36 @@ func (g *Gate) Status() Status {
 // statusLookupBudget is how long `pdx gate status` spends in total on asking who holds the locks.
 var statusLookupBudget = 3 * time.Second
 
-// withLocked adds, to each held slot, the processes that have its lock file open.
-func (g *Gate) withLocked(p *Pool, held []Holder) []Holder {
+// fillLocked adds, to each held slot of both pools, the processes that have its lock file open. The lookups run side
+// by side and share one budget: whatever has not answered when it is spent is shown without its holders, so a slow lsof
+// cannot hold `pdx gate status` for longer than that.
+func (g *Gate) fillLocked(hp *Pool, heavy []Holder, lp *Pool, light []Holder) {
 	if g.Holders == nil {
-		return held
+		return
 	}
-	deadline := g.Now().Add(statusLookupBudget)
-	for i := range held {
-		if g.Now().After(deadline) {
-			break // a slow lsof must not hold status for minutes: the rest are shown without their lock holders
+	type answer struct {
+		h *Holder
+		s []Straggler
+	}
+	find := g.Holders
+	n := len(heavy) + len(light)
+	ch := make(chan answer, n) // buffered: a late answer is dropped without anyone waiting for it
+	ask := func(p *Pool, held []Holder) {
+		for i := range held {
+			go func(h *Holder) { ch <- answer{h, find(p.slotPath(h.Slot))} }(&held[i])
 		}
-		held[i].Locked = g.Holders(p.slotPath(held[i].Slot))
 	}
-	return held
+	ask(hp, heavy)
+	ask(lp, light)
+	timeout := time.After(statusLookupBudget)
+	for ; n > 0; n-- {
+		select {
+		case a := <-ch:
+			a.h.Locked = a.s
+		case <-timeout:
+			return
+		}
+	}
 }
 
 // DirOf is the directory the gate keeps its state in.

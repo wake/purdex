@@ -28,24 +28,20 @@ func TestSet_ASymlinkedConfigIsWrittenThrough(t *testing.T) {
 	assert.Contains(t, read(t, real), "heavy = 2")
 }
 
-// Notations the line editor does not follow are refused with the file untouched, never half-written.
-func TestSet_ANotationItCannotEditIsRefusedAndTheFileIsKept(t *testing.T) {
-	for name, text := range map[string]string{
-		"spaced header":   "[ gate.slots ]\nheavy = 1\n",
-		"quoted header":   "[\"gate\".\"slots\"]\nheavy = 1\n",
-		"multiline array": "[gate.intercept]\ntools = [\n  \"go\",\n  \"pnpm\",\n]\n",
+// Valid notations the line editor has to follow: spaced and quoted headers, multi-line arrays and strings, CRLF.
+func TestSet_FollowsSpacedQuotedHeadersAndMultilineValues(t *testing.T) {
+	for name, c := range map[string]struct{ text, key, val, want string }{
+		"spaced header":   {"[ gate . slots ]\nheavy = 1\n", "slots.heavy", "2", "[ gate . slots ]\nheavy = 2\n"},
+		"quoted header":   {"[\"gate\".\"slots\"]\nheavy = 1\nlight = 3\n", "slots.heavy", "2", "[\"gate\".\"slots\"]\nheavy = 2\nlight = 3\n"},
+		"multiline array": {"[gate.intercept]\ntools = [\n  \"go\", # keep?\n  \"pnpm\",\n]\nmod_rewrite = true\n", "intercept.tools", `["go"]`, "[gate.intercept]\ntools = [\"go\"]\nmod_rewrite = true\n"},
+		"array in value":  {"[gate.intercept]\ntools = [\"a]\", \"b\"]\nmod_rewrite = true\n", "intercept.tools", `["go"]`, "[gate.intercept]\ntools = [\"go\"]\nmod_rewrite = true\n"},
+		"after other":     {"[gate]\nenabled = true\n[[other]]\nx = 1\n[gate.slots]\nheavy = 1\n", "slots.heavy", "2", "[gate]\nenabled = true\n[[other]]\nx = 1\n[gate.slots]\nheavy = 2\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			p := cfgFile(t, text)
-			key := "slots.heavy"
-			if name == "multiline array" {
-				key = "intercept.tools"
-			}
-			_, err := Set(p, "", key, `"go"`)
-			if err == nil {
-				return // edited correctly is fine too
-			}
-			assert.Equal(t, text, read(t, p))
+			p := cfgFile(t, c.text)
+			_, err := Set(p, "", c.key, c.val)
+			require.NoError(t, err)
+			assert.Equal(t, c.want, read(t, p))
 		})
 	}
 }
@@ -90,25 +86,32 @@ func TestDecisions_ConcurrentWritersKeepWholeLines(t *testing.T) {
 	assert.Equal(t, 24, lines)
 }
 
-// status spends a bounded time on the lock-holder lookups.
+// status spends a bounded time on the lock-holder lookups, both pools together, whatever one lookup takes.
 func TestStatus_TheLockLookupsHaveOneBudget(t *testing.T) {
 	g, _ := testGate(t)
-	g.SetConfig(func(c *Config) { c.Slots.Heavy = 3 })
+	g.SetConfig(func(c *Config) { c.Slots.Heavy, c.Slots.Light = 2, 2 })
 	old := statusLookupBudget
 	statusLookupBudget = 150 * time.Millisecond
 	defer func() { statusLookupBudget = old }()
-	var calls atomic.Int32
-	g.Holders = func(string) []Straggler { calls.Add(1); time.Sleep(120 * time.Millisecond); return nil }
-	var holds []<-chan runResult
-	for i := 0; i < 3; i++ {
-		holds = append(holds, runAsync(g, context.Background(), Options{Argv: sh("sleep 1.5"), Class: ClassHeavy}))
+	var slow atomic.Bool
+	g.Holders = func(string) []Straggler {
+		if slow.Load() {
+			time.Sleep(3 * time.Second)
+			return []Straggler{{PID: 1}}
+		}
+		return nil
 	}
-	eventually(t, "three held slots", func() bool { return len(g.Status().Heavy) == 3 })
-	calls.Store(0)
+	var holds []<-chan runResult
+	for _, c := range []Class{ClassHeavy, ClassHeavy, ClassLight, ClassLight} {
+		holds = append(holds, runAsync(g, context.Background(), Options{Argv: sh("sleep 2"), Class: c}))
+	}
+	eventually(t, "four held slots", func() bool { return len(g.Status().Heavy) == 2 && len(g.Status().Light) == 2 })
+	slow.Store(true)
 	begin := time.Now()
-	g.Status()
-	assert.Less(t, time.Since(begin), 600*time.Millisecond)
-	assert.LessOrEqual(t, calls.Load(), int32(2), "the third lookup is skipped once the budget is spent")
+	st := g.Status()
+	assert.Less(t, time.Since(begin), time.Second)
+	assert.Empty(t, st.Heavy[0].Locked, "an answer that came too late is not shown")
+	slow.Store(false)
 	for _, h := range holds {
 		<-h
 	}
