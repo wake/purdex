@@ -30,6 +30,8 @@ func TestVitestArgs(t *testing.T) {
 		{"pnpm vitest run src/a.test.ts", "pnpm vitest run src/a.test.ts --maxWorkers=3", true},
 		{"vitest run -- --foo", "vitest run --maxWorkers=3 -- --foo", true},
 		{"vitest run --maxWorkers=2", "vitest run --maxWorkers=2", false},
+		{"pnpm exec ./node_modules/.bin/vitest run", "pnpm exec ./node_modules/.bin/vitest run --maxWorkers=3", true},
+		{"npx --no-install ./node_modules/.bin/vitest run", "npx --no-install ./node_modules/.bin/vitest run --maxWorkers=3", true},
 		{"pnpm --prefix spa exec vitest run", "pnpm --prefix spa exec vitest run --maxWorkers=3", true},
 		{"pnpm -C spa exec vitest run --reporter=dot", "pnpm -C spa exec vitest run --reporter=dot --maxWorkers=3", true},
 		{"pnpm --filter spa exec vitest run", "pnpm --filter spa exec vitest run --maxWorkers=3", true},

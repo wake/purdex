@@ -106,7 +106,7 @@ func runsVitest(argv []string) bool {
 		case strings.HasPrefix(a, "-"):
 			continue
 		}
-		return a == "vitest"
+		return filepath.Base(a) == "vitest"
 	}
 	return false
 }
