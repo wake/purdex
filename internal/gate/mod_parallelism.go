@@ -2,8 +2,6 @@ package gate
 
 import (
 	"runtime"
-
-	"golang.org/x/sys/unix"
 )
 
 // HostFacts is what "auto" is worked out from.
@@ -15,8 +13,8 @@ type HostFacts struct {
 // ReadHostFacts reads this host: the cores, and the memory still available (hw.memsize × kern.memorystatus_level %).
 func ReadHostFacts() HostFacts {
 	f := HostFacts{NCPU: runtime.NumCPU()}
-	if total, err := unix.SysctlUint64("hw.memsize"); err == nil {
-		if level, err := unix.SysctlUint32("kern.memorystatus_level"); err == nil {
+	if total, err := sysctlUint64("hw.memsize"); err == nil {
+		if level, err := sysctlUint32("kern.memorystatus_level"); err == nil {
 			f.AvailMemMB = availMemMB(total, level)
 		}
 	}
@@ -59,6 +57,12 @@ type ParallelismOverride struct {
 const (
 	fixedGoP, fixedVitest, fixedPnpm = 3, 3, 2 // what "auto" means in mode fixed
 )
+
+// pnpmAutoMax is the most that "auto" gives pnpm's --workspace-concurrency. pnpm runs several packages at once and each
+// package's script has workers of its own (a vitest run alone is up to 3), so the product is what loads the host: four
+// packages at a time was chosen as plenty for the workspaces here, not measured (G0 did not run pnpm -r); the memory
+// division by mem_per_worker_mb still applies below it.
+const pnpmAutoMax = 4
 
 func parseParallelism(r raw) ParallelismConfig {
 	c := ParallelismConfig{
@@ -146,6 +150,6 @@ func (c ParallelismConfig) Resolve(class Class, f HostFacts) Limits {
 	}
 	l.GoP = pick("go_p", c.GoP, o.GoP, fixedGoP, c.GoMemPerWorkerMB, 0)
 	l.VitestWorkers = pick("vitest_workers", c.VitestWorkers, o.VitestWorkers, fixedVitest, c.VitestMemPerWorkerMB, c.VitestMaxWorkers)
-	l.PnpmWorkspace = pick("pnpm_concurrency", c.PnpmWorkspace, o.PnpmWorkspace, fixedPnpm, c.MemPerWorkerMB, 4)
+	l.PnpmWorkspace = pick("pnpm_concurrency", c.PnpmWorkspace, o.PnpmWorkspace, fixedPnpm, c.MemPerWorkerMB, pnpmAutoMax)
 	return l
 }
