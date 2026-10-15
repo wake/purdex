@@ -27,16 +27,19 @@ var resourcesDefaultJSON = func() string {
 	return string(b)
 }()
 
-// resourcesFields splits a resources object into its raw fields. Anything
-// but an object of the known keys is an error: a misspelt field must not
-// save as "left out = default".
-func resourcesFields(raw json.RawMessage) (map[string]json.RawMessage, error) {
+// resourcesFields splits a resources object into its raw fields. A write
+// (strict) refuses anything but an object of the known keys: a misspelt field
+// must not save as "left out = default". A read of the stored document is
+// lenient: a key this binary does not know is ignored, so the retirement of a
+// setting (the lease's, L3) never makes every stored document invalid; the next
+// write stores the document without it.
+func resourcesFields(raw json.RawMessage, strict bool) (map[string]json.RawMessage, error) {
 	var fields map[string]json.RawMessage
 	if firstByte(raw) != '{' || json.Unmarshal(raw, &fields) != nil {
 		return nil, errors.New("items must be a JSON object")
 	}
 	for k := range fields {
-		if k != "mode" && k != "kinds" && !slices.Contains(resourcesIntKeys, k) {
+		if strict && k != "mode" && k != "kinds" && !slices.Contains(resourcesIntKeys, k) {
 			return nil, errors.New("unknown resources field " + k + "; only mode, kinds and " +
 				strings.Join(resourcesIntKeys, ", "))
 		}
@@ -68,11 +71,21 @@ func resourcesInt(fields map[string]json.RawMessage, key string) (*int, error) {
 	return &n, nil
 }
 
-// normalizeResources validates a PUT body (and a stored value): a JSON object
-// of the known fields, each optional, then returns the settings with every
-// default filled in, so that a stored row says everything it means.
+// normalizeResources validates a PUT body: a JSON object of the known fields,
+// each optional, then returns the settings with every default filled in, so
+// that a stored row says everything it means. Unknown keys are refused.
 func normalizeResources(raw json.RawMessage) (resources.Settings, error) {
-	fields, err := resourcesFields(raw)
+	return parseResources(raw, true)
+}
+
+// normalizeStoredResources reads a stored value: the same, but a key this binary
+// does not know is ignored (see resourcesFields).
+func normalizeStoredResources(raw json.RawMessage) (resources.Settings, error) {
+	return parseResources(raw, false)
+}
+
+func parseResources(raw json.RawMessage, strict bool) (resources.Settings, error) {
+	fields, err := resourcesFields(raw, strict)
 	if err != nil {
 		return resources.Settings{}, err
 	}
@@ -122,12 +135,12 @@ func normalizeResources(raw json.RawMessage) (resources.Settings, error) {
 	return s.Effective(), nil
 }
 
-// readResources is normalizeResources' lenient twin (the GET's view). The row
-// is one setting, so a value that does not validate is invalid and answers
-// {} — never the defaults, which its owner did not write (ResourcesSettings
-// refuses it too).
+// readResources is the GET's view of the stored row. The row is one setting, so
+// a value that does not validate is invalid and answers {} — never the
+// defaults, which its owner did not write (ResourcesSettings refuses it too). A
+// key this binary does not know is ignored, not a reason to refuse the row.
 func readResources(raw json.RawMessage) readout {
-	s, err := normalizeResources(raw)
+	s, err := normalizeStoredResources(raw)
 	if err != nil {
 		return readout{items: struct{}{}, invalid: err}
 	}
@@ -145,5 +158,5 @@ func (m *Module) ResourcesSettings() (resources.Settings, error) {
 	if e.Value == nil {
 		return resources.DefaultSettings(), nil
 	}
-	return normalizeResources(e.Value)
+	return normalizeStoredResources(e.Value)
 }
