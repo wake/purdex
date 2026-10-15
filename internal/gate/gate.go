@@ -388,12 +388,25 @@ type Status struct {
 	Settings []Setting
 }
 
-// Status reads the slot records straight from the directory (the daemon is not needed).
-func (g *Gate) Status() Status {
+// HoldersMode says for which held slots Status asks who has the lock file open (an lsof, which looks at every process of
+// the host: about 0.3 s of CPU each time, #2933).
+type HoldersMode int
+
+const (
+	HoldersAll      HoldersMode = iota // every held slot
+	HoldersOrphaned                    // only the slots whose gate is gone (the only ones whose holders are not already known: the gate's own pid)
+)
+
+// Status reads the slot records straight from the directory (the daemon is not needed), with the lock holders of every held
+// slot.
+func (g *Gate) Status() Status { return g.StatusWith(HoldersAll) }
+
+// StatusWith is Status with a choice of which held slots get their lock holders looked up.
+func (g *Gate) StatusWith(mode HoldersMode) Status {
 	cfg := g.Config()
 	h, l := g.pool(cfg, ClassHeavy), g.pool(cfg, ClassLight)
 	heavy, light := h.Held(), l.Held()
-	g.fillLocked(h, heavy, l, light)
+	g.fillLocked(h, heavy, l, light, mode)
 	return Status{
 		Heavy: heavy, Light: light, WaitHeavy: h.Waiting(), WaitLight: l.Waiting(),
 		Suspect: append(h.Suspect(), l.Suspect()...), Profile: cfg.Profile, Settings: cfg.Effective(),
@@ -406,7 +419,7 @@ var statusLookupBudget = 3 * time.Second
 // fillLocked adds, to each held slot of both pools, the processes that have its lock file open. The lookups run side
 // by side and share one budget: whatever has not answered when it is spent is shown without its holders, so a slow lsof
 // cannot hold `pdx gate status` for longer than that.
-func (g *Gate) fillLocked(hp *Pool, heavy []Holder, lp *Pool, light []Holder) {
+func (g *Gate) fillLocked(hp *Pool, heavy []Holder, lp *Pool, light []Holder, mode HoldersMode) {
 	if g.Holders == nil {
 		return
 	}
@@ -415,11 +428,23 @@ func (g *Gate) fillLocked(hp *Pool, heavy []Holder, lp *Pool, light []Holder) {
 		s []Straggler
 	}
 	find := g.Holders
-	n := len(heavy) + len(light)
+	n := 0
+	for _, held := range [][]Holder{heavy, light} {
+		for _, h := range held {
+			if mode == HoldersAll || h.Orphaned {
+				n++
+			}
+		}
+	}
+	if n == 0 {
+		return
+	}
 	ch := make(chan answer, n) // buffered: a late answer is dropped without anyone waiting for it
 	ask := func(p *Pool, held []Holder) {
 		for i := range held {
-			go func(h *Holder) { ch <- answer{h, find(p.slotPath(h.Slot))} }(&held[i])
+			if mode == HoldersAll || held[i].Orphaned {
+				go func(h *Holder) { ch <- answer{h, find(p.slotPath(h.Slot))} }(&held[i])
+			}
 		}
 	}
 	ask(hp, heavy)

@@ -70,6 +70,9 @@ func TestGate_StatusReadsTheDirectoryWithoutTheDaemon(t *testing.T) {
 	out.Reset()
 	assert.Equal(t, 0, gateMain([]string{"status", "--json", "--config", cfg}, &out, &errb))
 	assert.True(t, strings.HasPrefix(strings.TrimSpace(out.String()), "{"))
+	out.Reset()
+	assert.Equal(t, 0, gateMain([]string{"status", "--json", "--holders", "--config", cfg}, &out, &errb), "--holders is accepted with --json")
+	assert.Equal(t, 0, gateMain([]string{"status", "--holders", "--config", cfg}, &out, &errb), "and harmless without it")
 }
 
 func TestGate_ABrokenConfigIsReportedAndTheDefaultsRun(t *testing.T) {
