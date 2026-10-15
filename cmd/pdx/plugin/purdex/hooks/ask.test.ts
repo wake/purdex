@@ -178,7 +178,8 @@ test('interleaving: answered_remote arrives after the terminal already answered 
       const a = e.argv
       if (sub(a) === 'begin') return ok('{"id":"r5"}')
       // answered_remote only once the native promise has resolved — never before.
-      if (sub(a) === 'wait') return nativeDone.then(() => ok('{"state":"answered_remote","hook":{"answers":{"紅還是藍？":"藍"}}}'))
+      // (a macrotask later: how many promise hops separate the two resolutions depends on how many tool.call hooks the mod has, and this test is about the order, not the hops)
+      if (sub(a) === 'wait') return nativeDone.then(() => new Promise((r) => setTimeout(r, 5))).then(() => ok('{"state":"answered_remote","hook":{"answers":{"紅還是藍？":"藍"}}}'))
       if (sub(a) === 'report') { resolve([...a]); return ok('{}') }
       return ok('')
     })

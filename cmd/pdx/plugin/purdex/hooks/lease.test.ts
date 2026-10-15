@@ -210,7 +210,13 @@ function rig(on: any, answer: (argv: string[]) => any, bash: (e: any) => any = (
   on('clock.sleep', async (_$: any, e: any) => { await new Promise((res) => setTimeout(res, e.ms)); return { value: undefined } })
   on('fs.read', (_$: any, e: any) => (pdxJSON !== undefined && e.path.endsWith('/pdx.json') ? { value: pdxJSON } : { deny: 'ENOENT' }))
   on('ui.log', () => ({ value: undefined }))
-  on('process.run', (_$: any, e: any) => { r.calls.push([...e.argv]); return answer(e.argv) })
+  // gate.js (registered before the lease hook) asks `pdx gate would-wait`; these tests are about the lease, so that question is
+  // answered "no" and not counted (gate.test.ts covers it, and the order of the two hooks).
+  on('process.run', (_$: any, e: any) => {
+    if (e.argv[1] === 'gate') return { value: { exitCode: 0, stdout: '{"would_wait":false}', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    r.calls.push([...e.argv])
+    return answer(e.argv)
+  })
   on('tool.call', { tool: 'Bash' }, (_$: any, e: any) => { r.ran.push(e.command); return bash(e) })
   return r
 }
