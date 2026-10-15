@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -20,7 +21,11 @@ const sharedFailBackoff = 500 * time.Millisecond
 // process themselves, as they did before the table was shared).
 const sharedViewWait = 2 * time.Second
 
+// errSharedReadSlow is what a caller gets, at once, while a table read that a waiter has already given up on is still running.
+var errSharedReadSlow = errors.New("the shared process table read is taking too long")
+
 type sharedRead struct {
+	slow bool // a waiter gave up on this read: later callers do not wait for it, they fail at once
 	done chan struct{}
 	snap *ProcessSnapshot
 	err  error
@@ -44,7 +49,7 @@ var (
 // SharedProcessSnapshot is a process table read no older than SharedSnapshotTTL, shared by every caller in the daemon: the
 // first caller after the TTL starts the read (on a goroutine of its own, outside the lock: darwin's sysctl cannot be
 // cancelled), the others wait for that one read and each can give up on its own ctx; they do not start reads of their own.
-// A failed read is answered to everyone for sharedFailBackoff, then tried again. Like any snapshot it knows nothing of a
+// A read a waiter has given up on is marked slow: until it returns, callers fail at once (errSharedReadSlow) instead of each waiting out their own ctx. A failed read is answered to everyone for sharedFailBackoff, then tried again. Like any snapshot it knows nothing of a
 // process that started after it was read, and ErrNotInSnapshot says so; the caller reads that PID itself.
 func SharedProcessSnapshot(ctx context.Context) (*ProcessSnapshot, error) {
 	shared.mu.Lock()
@@ -60,6 +65,10 @@ func SharedProcessSnapshot(ctx context.Context) (*ProcessSnapshot, error) {
 		return nil, err
 	}
 	r := shared.inflight
+	if r != nil && r.slow {
+		shared.mu.Unlock()
+		return nil, errSharedReadSlow
+	}
 	if r == nil {
 		r = &sharedRead{done: make(chan struct{})}
 		shared.inflight = r
@@ -82,6 +91,9 @@ func SharedProcessSnapshot(ctx context.Context) (*ProcessSnapshot, error) {
 	case <-r.done:
 		return r.snap, r.err
 	case <-ctx.Done():
+		shared.mu.Lock()
+		r.slow = true
+		shared.mu.Unlock()
 		return nil, ctx.Err()
 	}
 }

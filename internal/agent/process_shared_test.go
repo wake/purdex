@@ -52,6 +52,21 @@ func TestSharedProcessSnapshot_OneReadPerTTL(t *testing.T) {
 	}
 }
 
+// releaseAndDrain lets a blocked read return and waits until its goroutine is done with the shared state, so a test's seams are
+// not restored under it.
+func releaseAndDrain(release chan struct{}) {
+	close(release)
+	for i := 0; i < 500; i++ {
+		shared.mu.Lock()
+		idle := shared.inflight == nil
+		shared.mu.Unlock()
+		if idle {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func resetShared() {
 	shared.mu.Lock()
 	shared.snap, shared.inflight, shared.failErr = nil, nil, nil
@@ -91,18 +106,41 @@ func TestSharedProcessSnapshot_ABlockedReadBlocksNoLockAndIsNotStartedTwice(t *t
 		<-release
 		return &ProcessSnapshot{procs: map[int]*snapshotEntry{}}, nil
 	}
-	t.Cleanup(func() { close(release) })
-	for i := 0; i < 3; i++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-		start := time.Now()
-		_, err := SharedProcessSnapshot(ctx)
-		cancel()
-		if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > time.Second {
-			t.Fatalf("waiter %d: err=%v after %v, want its own deadline", i, err, time.Since(start))
+	t.Cleanup(func() { releaseAndDrain(release) })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	_, err := SharedProcessSnapshot(ctx)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("the first waiter: %v, want its own deadline", err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := SharedProcessSnapshot(context.Background()); !errors.Is(err, errSharedReadSlow) {
+			t.Fatalf("later caller %d: %v, want errSharedReadSlow", i, err)
 		}
 	}
 	if n := started.Load(); n != 1 {
 		t.Fatalf("%d reads started while one was in flight, want 1", n)
+	}
+}
+
+// Once a waiter has given up on a read that does not return, the callers after it do not wait at all (a registry pass asks
+// once per entry: N entries must not cost N waits).
+func TestSharedProcessSnapshot_AfterOneWaiterGivesUpTheOthersFailAtOnce(t *testing.T) {
+	_, _, _ = withSharedSeams(t)
+	release := make(chan struct{})
+	sharedSnapshot = func(context.Context) (*ProcessSnapshot, error) { <-release; return &ProcessSnapshot{}, nil }
+	t.Cleanup(func() { releaseAndDrain(release) })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	_, _ = SharedProcessSnapshot(ctx)
+	cancel()
+	start := time.Now()
+	for i := 0; i < 50; i++ {
+		if _, err := SharedProcessSnapshot(context.Background()); !errors.Is(err, errSharedReadSlow) {
+			t.Fatalf("call %d: %v, want errSharedReadSlow", i, err)
+		}
+	}
+	if time.Since(start) > time.Second {
+		t.Fatalf("50 calls took %v, want no waiting", time.Since(start))
 	}
 }
 
