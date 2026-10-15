@@ -56,6 +56,31 @@ var heavyScripts = map[string]bool{
 // (user 10-15), whichever way they are asked for (also `pnpm -r build`). They are none, not heavy, and not light either.
 var packagingScripts = map[string]bool{"build": true, "electron:build": true}
 
+// Reason is why a command got its class (ClassifyReason): the two pools, and for a command the gate lets through the kind of
+// letting. The load watcher reads it to tell a command that should have been gated from one that is allowed.
+type Reason string
+
+const (
+	ReasonHeavy            Reason = "heavy"             // a whole run: takes a heavy slot
+	ReasonLight            Reason = "light"             // a narrowed run: takes a light slot
+	ReasonPackaging        Reason = "packaging"         // a build that writes its output: never held back (user 10-15)
+	ReasonWatchMode        Reason = "watch_mode"        // a tool that watches and never ends (vitest watch, a dev server)
+	ReasonKnownPassthrough Reason = "known_passthrough" // a known tool, a command that costs little (go version, pnpm install, composer install…)
+	ReasonUnknown          Reason = "unknown"           // a tool or script the table does not know, or a command line it cannot read
+)
+
+// ClassifyReason is Classify with the reason for the class. The class is exactly Classify's.
+func ClassifyReason(argv []string, e Env) (Class, Reason) {
+	switch c := Classify(argv, e); c {
+	case ClassHeavy:
+		return c, ReasonHeavy
+	case ClassLight:
+		return c, ReasonLight
+	default:
+		return c, noneReason(argv, e)
+	}
+}
+
 // Classify says how heavy a command is, from its argv (argv[0] may be a path). It is a pure function over the words
 // the shims hand over: go, pnpm/npx/yarn/npm, vitest, tsc, make, composer and the PHP test runners phpunit and pest. Anything else is none and passes through. A
 // command that cannot be read is none: the gate fails open on what it does not understand.
@@ -189,6 +214,13 @@ func classifyGo(args []string) Class {
 // `-w`) or, with nothing said, for a person at a terminal outside CI; in an agent's shell, a script or CI it runs once. A
 // run that names files or a filter is light, the rest is heavy. `--version`, `--help`, `list` and `init` run nothing.
 func classifyVitest(args []string, e Env) Class {
+	c, _ := vitestVerdict(args, e)
+	return c
+}
+
+// vitestVerdict is classifyVitest with the reason of a none: watch_mode when vitest would watch (never ends), known_passthrough
+// for the words that run no test.
+func vitestVerdict(args []string, e Env) (Class, Reason) {
 	sub := ""        // the first word that is a subcommand
 	explicit := 0    // +1 run once (--no-watch, --watch=false), -1 watch (--watch, -w); the last one wins
 	runFlag := false // --run / --run=true: vitest sets watch to false after everything else, whatever else was said
@@ -197,7 +229,7 @@ func classifyVitest(args []string, e Env) Class {
 		a := args[i]
 		switch {
 		case a == "--version" || a == "-v" || a == "--help" || a == "-h":
-			return ClassNone
+			return ClassNone, ReasonKnownPassthrough
 		case a == "-w":
 			explicit = -1
 		case a == "--run" || a == "--run=true":
@@ -225,7 +257,7 @@ func classifyVitest(args []string, e Env) Class {
 	}
 	switch sub {
 	case "list", "init", "bench":
-		return ClassNone
+		return ClassNone, ReasonKnownPassthrough
 	case "related":
 		narrowed = true // `vitest related <files>`: the tests those files touch
 	}
@@ -236,15 +268,15 @@ func classifyVitest(args []string, e Env) Class {
 		once = explicit >= 0 // vitest's run action sets options.run = !options.watch: `run --watch` watches, and --run cannot undo it
 	}
 	if !once && (sub == "watch" || sub == "dev" || explicit < 0) {
-		return ClassNone
+		return ClassNone, ReasonWatchMode
 	}
 	if !once && e.watchesByDefault() {
-		return ClassNone // a person at a terminal: the default is watch
+		return ClassNone, ReasonWatchMode // a person at a terminal: the default is watch
 	}
 	if narrowed {
-		return ClassLight
+		return ClassLight, ReasonLight
 	}
-	return ClassHeavy
+	return ClassHeavy, ReasonHeavy
 }
 
 // vitestBoolFlag reads --watch with an optional =true / =false, and a bare --no-watch: +1 when the flag makes vitest run

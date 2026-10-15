@@ -17,6 +17,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/wake/purdex/internal/redact"
 )
 
 // HeldEnv names the slot a command runs under: <class>-<k>:<token>, e.g. heavy-1:9f3c…. A gate that finds it passes
@@ -330,22 +332,8 @@ func (g *Gate) holder(o Options, token string) Holder {
 	return Holder{PID: g.PID(), Argv: truncateArgv(o.Argv), Cwd: cwd, Started: g.Now(), Session: g.Session, Token: token}
 }
 
-// truncateArgv keeps the record short: at most 12 words of 120 bytes. Words that look like a secret are not kept.
-func truncateArgv(argv []string) []string {
-	scrubbed := scrubArgv(argv) // before the cut: a secret in a long word must not survive in its first 120 bytes
-	out := make([]string, 0, len(scrubbed))
-	for i, a := range scrubbed {
-		if i >= 12 {
-			out = append(out, "…")
-			break
-		}
-		if len(a) > 120 {
-			a = a[:120] + "…"
-		}
-		out = append(out, a)
-	}
-	return out
-}
+// truncateArgv keeps the record short: at most 12 words of 120 bytes, the secrets in them replaced before the cut (redact.Argv).
+func truncateArgv(argv []string) []string { return redact.Argv(argv, 120) }
 
 // Status is what `pdx gate status` shows: the holders of both pools, the number of waiters, and the records whose
 // gate is alive while their lock is free (something that should not happen: the lock is the truth, so it is flagged).
