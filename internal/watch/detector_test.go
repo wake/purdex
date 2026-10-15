@@ -572,34 +572,29 @@ func TestE1_AGapBreaksTheWindow(t *testing.T) {
 	assert.Len(t, r.run(15*time.Second), 1, "a window of load seen without a gap fires")
 }
 
-// Passes that come at uneven times weigh each sample by the time it stands for.
-func TestE1_TheMeanIsWeightedByTime(t *testing.T) {
-	r := newRig(t)
-	r.set.TS = 20 * time.Second
-	r.argv[100] = []string{"go", "test", "./..."}
-	// 1.0 core for 18 s, then 6 cores for 2 s: the time-weighted mean is 1.5 (1.0*0.9 + 6.0*0.1 = 1.5), the plain mean of the
-	// two samples that stand for them would be 3.5; with Interval 10 s the gap rule allows 26 s between passes
-	at := func(sec int, cores float64) []Event {
-		r.now = t0.Add(time.Duration(sec) * time.Second)
-		r.procs = goTest(cores, 100)
-		in := Input{Now: r.now, Procs: r.procs, Set: r.set, Interval: 10 * time.Second, Argv: func(int) []string { return r.argv[100] }}
-		return r.d.Pass(in)
+// Passes at uneven times: the mean is over time, and a stretch counts for the lower of its two ends.
+func TestE1_TheMeanIsOverTimeAndAStretchCountsForTheLowerEnd(t *testing.T) {
+	run := func(samples [][2]float64) []Event {
+		r := newRig(t)
+		r.set.TS = 20 * time.Second
+		r.set.XCores = 1.5
+		var last []Event
+		for _, sm := range samples {
+			last = r.d.Pass(Input{Now: t0.Add(time.Duration(sm[0]) * time.Second), Procs: goTest(sm[1], 100), Set: r.set, Interval: 10 * time.Second,
+				Argv: func(int) []string { return []string{"go", "test", "./..."} }})
+		}
+		return last
 	}
-	assert.Empty(t, at(0, 1.0))
-	assert.Empty(t, at(18, 1.0))
-	ev := at(20, 6.0)
-	require.Len(t, ev, 1, "weighted mean 1.5 over [0,20] is at the threshold")
-	assert.InDelta(t, 6.0, ev[0].PeakCores, 0.001)
-
-	r2 := newRig(t)
-	r2.set.TS = 20 * time.Second
-	at2 := func(sec int, cores float64) []Event {
-		r2.procs = goTest(cores, 100)
-		return r2.d.Pass(Input{Now: t0.Add(time.Duration(sec) * time.Second), Procs: r2.procs, Set: r2.set, Interval: 10 * time.Second})
-	}
-	at2(0, 1.0)
-	at2(18, 1.0)
-	assert.Empty(t, at2(20, 5.0), "1.0*0.9 + 5.0*0.1 = 1.4: under the threshold although the plain mean of 1.0, 1.0, 5.0 would be 2.3")
+	// 2 cores for 18 s then nothing at 20 s: time-weighted 1.8 (the plain mean of the three samples, 1.33, would not fire)
+	assert.Len(t, run([][2]float64{{0, 2}, {18, 2}, {20, 0}}), 1)
+	// 1 core for 18 s then 5 at 20 s: 1.0 over time (the plain mean, 2.33, would fire)
+	assert.Empty(t, run([][2]float64{{0, 1}, {18, 1}, {20, 5}}))
+	// load seen only at the end: 18 s of nothing, then 3 cores at 18 s and 20 s: 2 s of load, not a window of it
+	assert.Empty(t, run([][2]float64{{0, 0.1}, {18, 3}, {20, 3}}))
+	// and the mirror: load at the start, gone by the end
+	assert.Empty(t, run([][2]float64{{0, 3}, {2, 3}, {20, 0.1}}))
+	// steady load fires however the passes are spaced
+	assert.Len(t, run([][2]float64{{0, 3}, {7, 3}, {15, 3}, {20, 3}}), 1)
 }
 
 // ---- holders, signatures: identity and secrets ----

@@ -209,8 +209,10 @@ func (d *Detector) unmanagedTrees(in Input) []Event {
 	return events
 }
 
-// overThreshold: the whole window has been seen without a gap, and its mean cores (each sample weighted by the time it stands
-// for) are at or above x_cores or its resident memory was at or above y_mb throughout.
+// overThreshold: the whole window has been seen without a gap, and its mean cores are at or above x_cores or its resident
+// memory was at or above y_mb throughout. The mean is over time: each stretch between two samples counts for the lower of the
+// two, so load that was seen at only one end of a stretch (a burst between two passes, a sample that jumped) is not taken for
+// load that lasted the whole stretch, in either direction.
 func (d *Detector) overThreshold(st *treeState, now time.Time, set Settings) bool {
 	if now.Sub(st.since) < set.TS || len(st.samples) == 0 {
 		return false
@@ -232,8 +234,8 @@ func (d *Detector) overThreshold(st *treeState, now time.Time, set Settings) boo
 		if from.Before(start) {
 			from = start
 		}
-		if dt := s.at.Sub(from).Seconds(); dt > 0 { // a sample stands for the time since the one before it
-			weighted += s.cores * dt
+		if dt := s.at.Sub(from).Seconds(); dt > 0 {
+			weighted += min(st.samples[i-1].cores, s.cores) * dt
 			total += dt
 		}
 	}
