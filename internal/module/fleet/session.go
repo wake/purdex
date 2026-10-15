@@ -444,11 +444,21 @@ func (s *session) readFrames(r io.Reader, sl *slot, failed chan<- struct{}) {
 func killGroup(pid int, done <-chan struct{}, grace time.Duration, closeRead func()) {
 	// Always signal the group, even when stdout is closed already: a grandchild may hold only stderr. ESRCH (nobody left) is
 	// harmless.
+	// A pid reuse by another group within the grace is practically impossible (the leader is not reaped before cleanup ends).
 	_ = syscall.Kill(-pid, syscall.SIGTERM)
-	select {
-	case <-done:
+	// The stdout reader finishing says nothing about the group (a holder of stderr only, ignoring TERM): wait out the grace
+	// for the group to vanish, then probe it and send KILL if anything is left.
+	deadline := time.Now().Add(grace)
+	for time.Now().Before(deadline) && syscall.Kill(-pid, 0) == nil {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if syscall.Kill(-pid, 0) != nil { // ESRCH: nobody left
+		select {
+		case <-done:
+		case <-time.After(grace):
+			closeRead()
+		}
 		return
-	case <-time.After(grace):
 	}
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
 	select {
