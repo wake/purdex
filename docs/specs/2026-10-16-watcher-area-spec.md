@@ -39,6 +39,18 @@
 The fleet cells (F-2b) switch their click target from the interim one (the Hosts page) to the area's tab of that host.
 Hover tooltips stay as F-2b built them.
 
+### 2.3 The queued symbol on the agent icon (user, 10-16 07:5x)
+
+- The agent icon's top-left symbol (`BackgroundSymbol`, one at a time: workflow > monitor > schedule) gains a fourth
+  kind, **queued** (Phosphor `Hourglass`), **ranked first**: while any command of the session — its subagents' included,
+  since a subagent's command carries the main session's id — waits in a host's gate, the hourglass replaces the other
+  symbol; when the command starts, it goes and the other symbol comes back.
+- One symbol for heavy and light; **the same colour as the other symbols** (`currentColor`), never a warning tint.
+- Tooltip: 「排隊中：第 {place} 位・已等 {m} 分鐘・{command}（重指令｜輕指令）」; with more than one waiting command,
+  the one that has waited longest, then 「・另有 n 個」.
+- Source: the fleet frames' `slow.queue.waiters[].session` (W5b), matched to the session; 5 s late at most. No fleet
+  (off, or no primary) → no hourglass (accepted). Drawn only where the other symbols are (not when the lights are off).
+
 ## 3. The area
 
 - A reserved workspace (id `watch`) in the workspace store, built with the normal workspace and tab machinery (the
@@ -192,7 +204,8 @@ writes use `pdx gate set`'s validation.
   `slot`, `wait_s`, `wait_reasons`, `applied`, `exit`, `duration_s`) **plus** the start time if `time` is the end, and
   the four rusage fields of the command tree: `cpu_s` (user + system; the UI shows `cpu_s / duration_s` as 平均核心數),
   `max_rss_mb` (largest single process, 記憶體峰值), `major_faults` (pages read back from swap, 換頁拖累), `disk_read_mb`
-  and `disk_write_mb` (磁碟讀寫). Absent fields = an older record (UI shows 「—」).
+  and `disk_write_mb` (磁碟讀寫). Absent fields = an older record (UI shows 「—」). Records written before 743 carry
+  `session: null` (#2959 deploys with 743): the session column shows 「—」 for them.
 - **A2 gate config**: `GET /api/gate/config` → `{enabled, profile, profiles: [names], settings: [{key, value, source}]}`
   (the same list `pdx gate status` prints, sources `default|config|profile|auto`); `PUT /api/gate/config` with
   `{key, value}` (one value, written the way `pdx gate set` writes it; 400 with the reason for an unknown key or a bad
@@ -220,6 +233,7 @@ writes use `pdx gate set`'s validation.
 |---|---|---|
 | W5a | The area (reserved workspace, the three pane kinds, tab order sync, host tabs following the fleet), the shield (states from `watch/status` only, no count yet), host cells' click target, the host tab's header and 狀態 without the queue (gauges, charts, processes) | F-2a1, F-2b |
 | W5b | Queue 當下: `queue.holders` / `waiters[].session` / `admission_reason` in `internal/fleet` + golden JSON + SPA wire; the lanes and the table | W5a, #2971 |
+| W5b2 | The queued symbol on the agent icon (§2.3) | W5b's wire (can go before W5b's UI) |
 | W5c | 設定: the 守門員 section (existing API), probe-host settings (F-2a2's editor), then the gate sections once A2 lands | W5a; A2 |
 | W5d | Queue 歷史 | W5a; A1 |
 | W5e | The 守門員 tab and the 事件 tab, the shield's count, `watch.changed` | W5a; A3 |
