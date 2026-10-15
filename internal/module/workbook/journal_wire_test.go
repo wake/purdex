@@ -55,7 +55,10 @@ type wireKit struct {
 }
 
 // newWire makes a module through Init, with the journal switch as given (nil = the config says nothing), and starts it.
-func newWire(t *testing.T, enabled *bool) *wireKit {
+func newWire(t *testing.T, enabled *bool) *wireKit { return newWireFeed(t, enabled, nil, false) }
+
+// newWireFeed is newWire with the team feed the module is given (nil: a plain fake) and, with start false, not started.
+func newWireFeed(t *testing.T, enabled *bool, feed team.JournalFeed, noStart bool) *wireKit {
 	t.Helper()
 	cfg := &config.Config{DataDir: t.TempDir(), HostID: "h1:abc"}
 	if enabled != nil {
@@ -63,17 +66,22 @@ func newWire(t *testing.T, enabled *bool) *wireKit {
 	}
 	c := core.New(core.CoreDeps{Config: cfg})
 	k := &wireKit{c: c, origins: &fakeOrigins{}, feed: &fakeFeed{teams: map[string]team.TeamInfo{}}}
+	if feed == nil {
+		feed = k.feed
+	}
 	c.Registry.Register(peersmod.OriginResolverKey, k.origins)
-	c.Registry.Register(team.JournalFeedKey, team.JournalFeed(k.feed))
+	c.Registry.Register(team.JournalFeedKey, feed)
 	m := New()
 	if err := m.Init(c); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { m.Stop(context.Background()); m.Close() })
-	if err := m.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
 	k.m = m
+	if !noStart {
+		if err := m.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return k
 }
 
@@ -223,32 +231,127 @@ func TestWire_OffMakesEveryJournalRouteUnavailable(t *testing.T) {
 	}
 }
 
-// Stop ends the loops and returns only when they have ended: the store is released after it.
-// Mutation gate: do not wait (or do not cancel) in journalRun.stop -> red.
-func TestWire_StopEndsTheLoops(t *testing.T) {
-	k := newWire(t, nil)
+// blockingFeed holds the task mirror inside its first read until release is closed, so a test can tell whether Stop waits
+// for a loop that is in the middle of its work.
+type blockingFeed struct {
+	*fakeFeed
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingFeed) ReportsAfter(after, since int64, limit int) ([]team.ReportRow, error) {
+	b.once.Do(func() {
+		close(b.entered)
+		<-b.release
+	})
+	return b.fakeFeed.ReportsAfter(after, since, limit)
+}
+
+// Stop ends the loops and returns only when they have ended: the store is released after it. The mirror is held inside a
+// read of the feed (which ignores the context), so Stop must be seen to wait for it.
+// Mutation gate: do not wait, or do not cancel, in journalRun.stop; do not call it from Module.Stop; never start the
+// task mirror -> red.
+func TestWire_StopWaitsForTheLoopsToEnd(t *testing.T) {
+	bf := &blockingFeed{fakeFeed: &fakeFeed{teams: map[string]team.TeamInfo{}}, entered: make(chan struct{}), release: make(chan struct{})}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(bf.release) }) }
+	defer release()
+	k := newWireFeed(t, nil, bf, false)
 	k.m.mu.Lock()
 	run := k.m.journalRun
 	k.m.mu.Unlock()
+	select {
+	case <-bf.entered:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the task mirror never started")
+	}
 	done := make(chan struct{})
 	go func() { k.m.Stop(context.Background()); close(done) }()
 	select {
 	case <-done:
+		t.Fatal("Stop returned while the task mirror was still inside its work")
+	case <-time.After(300 * time.Millisecond):
+	}
+	release()
+	select {
+	case <-done:
 	case <-time.After(10 * time.Second):
-		t.Fatal("Stop did not return")
+		t.Fatal("Stop did not return after the loops were released")
 	}
 	if run.runCtx.Err() == nil {
 		t.Fatal("Stop left the loops' context running")
 	}
-	waited := make(chan struct{})
-	go func() { run.wg.Wait(); close(waited) }()
-	select {
-	case <-waited:
-	case <-time.After(time.Second):
-		t.Fatal("a loop is still running after Stop returned")
-	}
 	if k.journalStatus() {
 		t.Error("Status()[journal] still true after Stop")
+	}
+}
+
+// What prepareJournal hands the engine and the loops, looked at without starting anything.
+func TestWire_PrepareConnectsTheParts(t *testing.T) {
+	k := newWireFeed(t, nil, nil, true)
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(cfgPath, []byte("[journal]\nperson_name = \"Wake\"\npush_projects = [\"github.com/wake/purdex\"]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	k.c.CfgMu.Lock()
+	k.c.CfgPath = cfgPath
+	k.c.Cfg.Journal = &config.JournalConfig{PersonName: "Wake"}
+	k.c.CfgMu.Unlock()
+	k.origins.set(team.Origin{SessionID: "s1", Address: "mlab/purdex-3f-adam"})
+
+	var d Deps
+	run := k.m.prepareJournal(k.m.live(), &d)
+	if run == nil {
+		t.Fatal("prepareJournal returned no run")
+	}
+	defer run.stop()
+	if d.Journal == nil || d.OnJournalResult == nil {
+		t.Fatalf("deps = %+v: the engine gets no source or no result hook", d)
+	}
+	// a result of a journal job asks the drainer for a pass
+	d.OnJournalResult(JournalOutcome{})
+	if len(run.drainer.kick) != 1 {
+		t.Error("a journal result did not kick the drainer")
+	}
+	// the drainer names sessions and the person
+	if got := run.drainer.actor("s1"); got != "Adam" {
+		t.Errorf("actor(s1) = %q, want Adam", got)
+	}
+	if got := run.drainer.person(); got != "Wake" {
+		t.Errorf("person() = %q, want Wake", got)
+	}
+	// the mirror mirrors the teams whose lead is a live session here, and asks the drainer for a pass
+	if run.mirror.local("s1") != true || run.mirror.local("gone") != false {
+		t.Error("the task mirror's notion of local is not 'the lead's session is live here'")
+	}
+	if run.mirror.kick == nil {
+		t.Error("the task mirror cannot kick the drainer")
+	}
+	// the git loop keeps its worktrees under the data dir and reads push_projects from the file as it is now
+	if want := filepath.Join(k.dataDir(), "journal"); run.git.Dir != want {
+		t.Errorf("git dir = %q, want %q", run.git.Dir, want)
+	}
+	if got, err := run.git.PushProjects(); err != nil || len(got) != 1 || got[0] != "github.com/wake/purdex" {
+		t.Errorf("push_projects = %v, %v", got, err)
+	}
+	if err := os.WriteFile(cfgPath, []byte("[journal]\npush_projects = []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := run.git.PushProjects(); len(got) != 0 {
+		t.Errorf("push_projects after the edit = %v, want none", got)
+	}
+}
+
+// A worktree path that is not absolute is refused: the unit would be registered with a place the guards reject.
+func TestJournalProjects_ARelativeJournalFolderIsRefused(t *testing.T) {
+	k := newProjectKit(t)
+	cwd, _ := filepath.EvalSymlinks(t.TempDir())
+	k.origins.set(team.Origin{SessionID: "s1", Cwd: cwd})
+	k.projects.git.Dir = "relative-journal-dir"
+	t.Chdir(t.TempDir())
+	if p, err := k.projects.Project(UnitRef{Key: "solo:c1", Kind: UnitSolo, SessionID: "s1"}); err == nil {
+		t.Fatalf("project %+v, want an error", p)
 	}
 }
 
@@ -456,11 +559,19 @@ func TestJournalProjects_ASessionThatCannotBeFoundIsAnErrorNotAGuess(t *testing.
 }
 
 // The whole path in one: a finished turn of a live solo session ends up as an exec entry in the project's journal worktree
-// under the Git folder, and the App is told. The drainer, the unit's project and the notification are the production ones.
-// Mutation gate: do not start the drainer (journalRun.start) -> red; do not hand it SetNotify -> red.
+// under the Git folder, the App is told, and the git loop commits it on purdex/journal (the main checkout is untouched). The
+// drainer, the unit's project, the notification and the git loop are the production ones.
+// Mutation gate: do not start the drainer or the git loop (journalRun.start) -> red; do not hand the drainer SetNotify -> red.
 func TestWire_AFinishedTurnIsWrittenToTheProjectsJournalAndAnnounced(t *testing.T) {
-	k := newWire(t, nil)
-	cwd, _ := filepath.EvalSymlinks(t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	cwd := gitRepo(t)
+	k := newWireFeed(t, nil, nil, true)
+	k.m.gitInterval = 100 * time.Millisecond
+	if err := k.m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	k.origins.set(team.Origin{SessionID: "c1-s", Cwd: cwd, Address: "mlab/purdex-3f-adam"})
 	var mu sync.Mutex
 	var sent []string
@@ -517,5 +628,27 @@ func TestWire_AFinishedTurnIsWrittenToTheProjectsJournalAndAnnounced(t *testing.
 	}
 	if got := changed(); !strings.Contains(got, `"what":"entries"`) || !strings.Contains(got, `"id":"c1"`) {
 		t.Errorf("journal.changed = %q, want one for the entries of solo c1", got)
+	}
+	// the git loop commits the journal folder on its branch
+	var wts []string
+	for time.Now().Before(deadline) {
+		wts, _ = filepath.Glob(filepath.Join(k.dataDir(), "journal", "*", "wt"))
+		if len(wts) == 1 {
+			out, err := exec.Command("git", "-C", wts[0], "log", "--format=%s", journal.Branch).Output()
+			if err == nil && strings.Contains(string(out), "journal: ") {
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if len(wts) != 1 {
+		t.Fatalf("journal worktrees = %v, want one", wts)
+	}
+	out, err := exec.Command("git", "-C", wts[0], "log", "--format=%s", journal.Branch).Output()
+	if err != nil || !strings.Contains(string(out), "journal: ") {
+		t.Errorf("the journal branch has no journal commit: %q, %v", out, err)
+	}
+	if st, _ := exec.Command("git", "-C", cwd, "status", "--porcelain").Output(); len(strings.TrimSpace(string(st))) != 0 {
+		t.Errorf("the main checkout changed: %s", st)
 	}
 }

@@ -179,6 +179,7 @@ func (m *Module) prepareJournal(st *Store, d *Deps) *journalRun {
 		Dir:          filepath.Join(dataDir, "journal"),
 		PushProjects: func() ([]string, error) { return config.ReadJournalPushProjects(m.core.CfgPath) },
 		Logf:         log.Printf,
+		Interval:     m.gitInterval,
 	}
 	projects := &journalProjects{ctx: ctx, git: g, origins: origins, feed: feed, convOf: func(sid string) string {
 		if conv, err := m.convKeyOf(sid); err == nil {

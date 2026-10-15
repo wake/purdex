@@ -12,6 +12,7 @@ import (
 	"log"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/wake/purdex/internal/convturns"
 	"github.com/wake/purdex/internal/core"
@@ -35,6 +36,8 @@ type Module struct {
 
 	journalRun *journalRun // the drainer, task mirror and git loop; nil while the journal is off or not wired (guarded by mu)
 	journalOff bool        // [journal] enabled = false: the journal API answers 503 (guarded by mu)
+
+	gitInterval time.Duration // test seam: the git loop's commit period (zero: its default, ten minutes)
 
 	engine       *Engine // the subscriber and the job queue; nil until Start
 	unsubTurnEnd func()
