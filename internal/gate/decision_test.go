@@ -31,7 +31,7 @@ func TestRun_EveryCommandLeavesADecisionRecord(t *testing.T) {
 	g.SetConfig(func(c *Config) {
 		c.Priority.Mode = "nice"
 		c.Priority.Nice = 7
-		c.Sources = map[string]Source{"priority.nice": SrcProfile, "priority.mode": SrcConfig, "slots.heavy": SrcDefault}
+		c.Sources = map[string]Source{"priority.nice": SrcProfile, "priority.mode": SrcConfig, "slots.heavy": SrcConfig}
 	})
 	r := runSync(t, g, Options{Argv: sh("exit 3"), Class: ClassHeavy})
 	assert.Equal(t, 3, r.code)
@@ -47,7 +47,7 @@ func TestRun_EveryCommandLeavesADecisionRecord(t *testing.T) {
 	assert.NotNil(t, recs[0]["duration_s"])
 	applied := recs[0]["applied"].(map[string]any)
 	assert.Equal(t, map[string]any{"value": "7", "source": "profile"}, applied["priority.nice"])
-	assert.Equal(t, map[string]any{"value": "2", "source": "default"}, applied["slots.heavy"])
+	assert.Equal(t, map[string]any{"value": "2", "source": "config"}, applied["slots.heavy"])
 	assert.Equal(t, "off", recs[1]["outcome"])
 }
 

@@ -148,7 +148,7 @@ func TestConfig_EffectiveListsEveryValueWithItsSource(t *testing.T) {
 	assert.Equal(t, Setting{Key: "slots.light", Value: "3", Source: SrcDefault}, got["slots.light"])
 	assert.Equal(t, "auto", got["parallelism.go_p"].Value)
 	assert.Equal(t, "nice", got["priority.mode"].Value)
-	assert.Equal(t, "go,pnpm,npx,vitest,tsc", got["intercept.tools"].Value)
+	assert.Equal(t, strings.Join(defaultTools, ","), got["intercept.tools"].Value)
 	assert.Equal(t, "10", got["admission.disk_min_gb"].Value)
 	assert.Equal(t, "auto", got["admission.max_page_rate"].Value)
 }
