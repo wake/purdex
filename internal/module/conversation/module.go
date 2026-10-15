@@ -31,6 +31,13 @@ type LightSource interface {
 	LightStatus(sessionID, frameID string) (status string, ok bool)
 }
 
+// LightGenerationSource is the optional half of LightSource that makes a quiet stream cheap: a counter that moves whenever the
+// agent module took in something that can change a conversation's light, abort or background list (G3c). A source without
+// it is polled in full on every tick, as before.
+type LightGenerationSource interface {
+	LightGeneration() uint64
+}
+
 // AbortSource tells when the Purdex mod last interrupted the session's main turn (`$.turn.abort` writes no interruption
 // marker into the transcript, so the model cannot know). Optional: without it such a turn stays running until the next one.
 type AbortSource interface {
@@ -93,6 +100,7 @@ type generation struct {
 // wsTuning lets tests shorten the live stream's timings and queue; zero values are the spec's.
 type wsTuning struct {
 	poll, reresolve time.Duration
+	full            time.Duration // the longest a stream goes without a full pass (the quiet-stream gate, G3c)
 	queue           int
 }
 
@@ -101,6 +109,13 @@ func (m *Module) pollEvery() time.Duration {
 		return m.tweak.poll
 	}
 	return defaultPollEvery
+}
+
+func (m *Module) fullEvery() time.Duration {
+	if m.tweak.full > 0 {
+		return m.tweak.full
+	}
+	return defaultFullEvery
 }
 
 func (m *Module) reresolveEvery() time.Duration {
