@@ -30,10 +30,10 @@ type fakeOrigins struct {
 func (f *fakeOrigins) ResolveOriginBySession(sid string) (team.Origin, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.err != nil {
-		return team.Origin{}, false, f.err
-	}
 	o, ok := f.live[sid]
+	if f.err != nil {
+		return o, ok, f.err // a caller must not trust the origin that comes with an error
+	}
 	return o, ok, nil
 }
 
@@ -86,6 +86,13 @@ func newWireFeed(t *testing.T, enabled *bool, feed team.JournalFeed, noStart boo
 }
 
 func boolp(b bool) *bool { return &b }
+
+// The peers module's resolver is what the wiring talks to: if it loses either method the journal would silently not wire (or
+// read the registry once per team), so the build says so.
+var (
+	_ originSource = (*peersmod.OriginResolver)(nil)
+	_ liveLister   = (*peersmod.OriginResolver)(nil)
+)
 
 func (k *wireKit) journalStatus() bool {
 	v, _ := k.m.Status()["journal"].(bool)
@@ -549,12 +556,95 @@ func TestJournalProjects_ASessionThatCannotBeFoundIsAnErrorNotAGuess(t *testing.
 			t.Errorf("%s: project %+v, want an error", name, p)
 		}
 	}
+	k.origins.set(team.Origin{SessionID: "s1", Cwd: t.TempDir()}) // listed, but the read that found it failed
 	k.origins.err = errors.New("registry unreadable")
 	if _, err := k.projects.Project(UnitRef{Key: "solo:c1", Kind: UnitSolo, SessionID: "s1"}); err == nil {
 		t.Error("an unreadable registry gave a project")
 	}
 	if entries, _ := os.ReadDir(k.dir); len(entries) != 0 {
 		t.Errorf("a worktree was made for a session that could not be found: %v", entries)
+	}
+}
+
+// listingOrigins is a fakeOrigins that can also list its live sessions, counting how often it is read.
+type listingOrigins struct {
+	*fakeOrigins
+	mu    sync.Mutex
+	lists int
+}
+
+func (l *listingOrigins) ListLiveOrigins() ([]team.Origin, error) {
+	l.mu.Lock()
+	l.lists++
+	l.mu.Unlock()
+	l.fakeOrigins.mu.Lock()
+	defer l.fakeOrigins.mu.Unlock()
+	if l.fakeOrigins.err != nil {
+		return nil, l.fakeOrigins.err
+	}
+	var out []team.Origin
+	for _, o := range l.fakeOrigins.live {
+		out = append(out, o)
+	}
+	return out, nil
+}
+
+func (l *listingOrigins) reads() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.lists
+}
+
+// The task mirror asks about the lead of every team on every tick; the registry is read once per liveTTL for all of them, not
+// once per question, and a session that appears (or goes) is seen after the TTL.
+// Mutation gate: no cache (read at every question) -> red; never refresh -> red; a read error answered true -> red.
+func TestLiveSessions_OneRegistryReadServesManyQuestions(t *testing.T) {
+	src := &listingOrigins{fakeOrigins: &fakeOrigins{}}
+	src.set(team.Origin{SessionID: "a"})
+	src.set(team.Origin{SessionID: "b"})
+	now := time.Unix(1_700_000_000, 0)
+	ls := newLiveSessions(src)
+	ls.now = func() time.Time { return now }
+
+	for i := 0; i < 50; i++ {
+		if !ls.has("a") || !ls.has("b") || ls.has("gone") {
+			t.Fatal("a live session was not found, or a session that is not live was")
+		}
+	}
+	if n := src.reads(); n != 1 {
+		t.Fatalf("%d registry reads for 150 questions, want 1", n)
+	}
+	src.set(team.Origin{SessionID: "c"})
+	if ls.has("c") {
+		t.Error("a session that appeared was seen before the TTL ended")
+	}
+	now = now.Add(liveTTL)
+	if !ls.has("c") || src.reads() != 2 {
+		t.Errorf("after the TTL: has(c) false or %d reads, want true and 2", src.reads())
+	}
+	// an unreadable registry answers "not live here" and is read again by the next question
+	src.err = errors.New("registry unreadable")
+	now = now.Add(liveTTL)
+	if ls.has("a") {
+		t.Error("an unreadable registry answered live")
+	}
+	src.err = nil
+	if !ls.has("a") {
+		t.Error("the registry was not read again after the error")
+	}
+}
+
+// A source that cannot list is asked one session at a time (the same answers, no cache).
+func TestLiveSessions_ASourceWithoutAListIsAskedPerSession(t *testing.T) {
+	src := &fakeOrigins{}
+	src.set(team.Origin{SessionID: "a"})
+	ls := newLiveSessions(src)
+	if !ls.has("a") || ls.has("gone") {
+		t.Fatal("per-session lookup gave the wrong answer")
+	}
+	src.err = errors.New("registry unreadable")
+	if ls.has("a") {
+		t.Error("an unreadable registry answered live")
 	}
 }
 

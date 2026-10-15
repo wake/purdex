@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/journal"
@@ -61,6 +62,52 @@ func addressOf(o originSource, sessionID string) string {
 		return ""
 	}
 	return origin.Address
+}
+
+// liveLister is the origin resolver's one-read list of every live session of this host.
+type liveLister interface {
+	ListLiveOrigins() ([]team.Origin, error)
+}
+
+// liveSessions answers "is this session live on this host" for the task mirror. The mirror asks about the lead of every team
+// it meets, and re-asks about the teams it skipped at every tick (every 5 s, for as long as the daemon runs), and each
+// registry read checks every entry's process: one read per liveTTL, shared by all the questions, keeps that cost from
+// growing with the number of teams. A source that cannot list is asked one session at a time.
+type liveSessions struct {
+	src originSource
+	now func() time.Time
+
+	mu  sync.Mutex
+	at  time.Time
+	set map[string]bool
+}
+
+const liveTTL = 3 * time.Second
+
+func newLiveSessions(src originSource) *liveSessions { return &liveSessions{src: src, now: time.Now} }
+
+// has is false for a session the registry does not list and when the registry cannot be read (the mirror asks again).
+func (l *liveSessions) has(sessionID string) bool {
+	lister, ok := l.src.(liveLister)
+	if !ok {
+		_, found, err := l.src.ResolveOriginBySession(sessionID)
+		return err == nil && found
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.set == nil || l.now().Sub(l.at) >= liveTTL {
+		origins, err := lister.ListLiveOrigins()
+		if err != nil {
+			l.set = nil
+			return false
+		}
+		l.set = make(map[string]bool, len(origins))
+		for _, o := range origins {
+			l.set[o.SessionID] = true
+		}
+		l.at = l.now()
+	}
+	return l.set[sessionID]
 }
 
 // journalProjects implements UnitProjects: the unit's project is the one the lead's (or the solo session's) cwd is in, and
@@ -192,11 +239,7 @@ func (m *Module) prepareJournal(st *Store, d *Deps) *journalRun {
 	dr.SetNotify(m.announceJournal)
 	run := &journalRun{cancel: cancel, runCtx: ctx, drainer: dr, git: g}
 	if feed != nil {
-		local := func(leadSessionID string) bool {
-			_, ok, err := origins.ResolveOriginBySession(leadSessionID)
-			return err == nil && ok
-		}
-		run.mirror = NewTaskMirror(st, feed, local, dr.Kick, log.Printf)
+		run.mirror = NewTaskMirror(st, feed, newLiveSessions(origins).has, dr.Kick, log.Printf)
 	} else {
 		log.Printf("[workbook] journal: no team feed: the team tasks are not mirrored")
 	}
