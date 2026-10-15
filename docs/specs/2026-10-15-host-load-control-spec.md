@@ -40,7 +40,7 @@ The lease (`pdx lease`, v1/v2/amend A, P2e/P2f, load cap) did not hold the host,
 | D8 | The seven items are **independent modules**, each with its own switch and parameters, tunable per situation and **at run time** (config re-read at every gate start and every waiting poll; `auto` values computed from the live host; profiles). |
 | D9 | **Packaging is never held back** (10-15): commands that build an artifact (the Purdex App build and the like, seconds to under a minute) pass through the gate; a whole-module compile check (`go build ./...`) stays heavy. |
 | D10 | The release tier does **not** accept Go's test cache: the release gate keeps `-count=1` (10-15). |
-| D11 | **Load watcher** (10-15): the daemon detects heavy commands outside the gate and high load, records them, and tells one registered watcher session by peer message (§12). One watcher for all hosts; a new registration replaces the old; with no watcher the events are only recorded, and a watcher reads them when it registers. Auto-start is a setting synced by Profile Sync; the watcher's model is selectable (Opus by default). Long-lived, low-usage background loops are not heavy commands and are not reported. |
+| D11 | **Load watcher** (10-15): each daemon detects heavy commands outside the gate and high load on its own host, records them, and tells **one** watcher session for all hosts by peer message (§12). Each daemon has an ordered list of hosts that may hold the watcher; it remembers where the watcher is and looks again only when that fails (awake anywhere → the last one woken → a new one on the first reachable host); no switch back after a failover. Modes: resident, or patrol (the daemon counts the idle time and puts it to rest; it is resumed when needed); auto-wake on/off. The watcher's notes live in a dedicated branch, pulled at start and pushed after changes. Settings, including the start and wake prompts, are in each daemon's host config (not Profile Sync). Long-lived, low-usage background loops are not heavy commands and are not reported. |
 | D12 | When a heavy command would wait, the mod moves the agent's Bash call to the background with a note (L1), so a session does not sit in the foreground limit. Verified 10-15: a background task survives a relay and its completion notice reaches the new conversation. |
 | D13 | `pdx gate free <slot>`: lists the processes holding a slot and ends them after confirmation, only on a person's or the watcher's command; the gate itself never kills a running command (G2). |
 
@@ -352,12 +352,16 @@ a host under pressure, and the states the gate cannot fix by itself (a slot held
 
 ### 12.1 Detection and record (W1, daemon)
 
-- The daemon's sampler gains a process pass every 10 s. A **tree** is a process and its descendants, rooted at the
-  child of a shell (an agent's Bash, a terminal, a script). A tree under a `pdx gate` process is managed.
+- The daemon's sampler gains a process pass on every sampler tick (5 s), from the `ps` and `vm_stat` it already
+  runs (no new fork). A **tree** is a process and its descendants, rooted at the child of a shell (an agent's Bash, a
+  terminal, a script). A tree under a `pdx gate` process, or holding a slot, is managed.
 - Events:
-  - **E1 `unmanaged_heavy`**: an unmanaged tree using ≥ X cores (average over T s) or ≥ Y MB for T s. Its command
-    signature (tool, subcommand, script name; paths and values dropped) seen for the first time is **new**; later
-    sightings are counted, not re-sent.
+  - **E1 `unmanaged_heavy`**: an unmanaged tree using ≥ X cores (average over T s) or ≥ Y MB for T s; one event per
+    episode (re-armed when the tree ends or stays under for T s). Labelled by the gate's classifier on the root's
+    command: `gate_gap` (a heavy or light command that ran outside the gate), `unknown` (a tool the gate does not
+    know), `allowed` (packaging or another pass-through by rule; recorded and delivered, never held, D9). Its command
+    signature (tool, subcommand, script name; paths and values dropped) seen for the first time is **new** (kept
+    across daemon restarts); later sightings are counted, not re-sent.
   - **E2 `pressure_high`**: pressure level ≥ 2 for ≥ T2, or page rate above R for ≥ T3.
   - **E3 `slot_orphaned`**: a slot held while its gate is gone, for ≥ 15 min (names the holders).
   - **E4 `slot_long`**: a slot held ≥ `lifetime.alert_after_min` (60).
@@ -368,43 +372,77 @@ a host under pressure, and the states the gate cannot fix by itself (a slot held
 - Record: append-only JSON lines under `~/.config/pdx/watch/` (rotated, 30 days): kind, host, time, command (scrubbed
   by `internal/redact`), cwd, the Claude session found in the ancestry, peak cores and memory, duration, `new`.
 
-### 12.2 Registration and delivery (W2)
+### 12.2 Settings (each host's daemon config)
 
-- `pdx watch register` from the watcher session records its `_ref` (stable across renames and relays) and is
-  propagated to every paired host: **one watcher for all hosts**; a later registration replaces the earlier one
-  everywhere, and the replaced session is told. `pdx watch status`, `pdx watch unregister`. The registration ends
-  when the session ends (registry liveness); a relay keeps it (lineage).
-- Delivery: each host's daemon sends its events to the watcher by `pdx msg` (peer path), at most one message per
-  event kind per host per 10 min (later ones are folded into a count). E3 is never folded.
-- **No watcher: record only.** `pdx watch log [--since] [--host]` reads the records of every host; a new watcher reads
-  them first.
+The watcher's settings are a `watch` row in each daemon's host config (the store of the daemon-side settings such as
+the team settings), read at every pass; the App's settings page edits them through the daemon API, like the other
+daemon settings. Not Profile Sync: Profile Sync carries the App's own stores and the daemon cannot read them
+(user decision 10-15). Each host keeps its own copy; a cross-host sync may come later.
 
-### 12.3 The watcher session (W3)
+| Key | Default | Used by |
+|---|---|---|
+| `enabled` | true | detection (W1) |
+| thresholds (`x_cores`, `y_mb`, `t_s`, `pressure_t_s`, `page_rate`, `page_t_s`) | 1.5, 1024, 60, 120, 50, 60 | detection |
+| `targets` | `[mlab, a26]` (host aliases, in order) | where events go and where a new watcher is started |
+| `mode` | `patrol` | `resident` (never rests) or `patrol` (rests when idle) |
+| `patrol_idle_min` | 120 | the rest countdown |
+| `auto_wake` | true | whether an event wakes or starts a watcher |
+| `model` | opus | a new watcher |
+| `workdir` | mlab: `~/Workspace/wake/purdex-watch` | the watcher's directory on this host (a checkout of the `watch-desk` branch) |
+| `start_prompt` | built-in | the first prompt of a new watcher |
+| `wake_prompt` | built-in | the prompt that resumes a resting watcher |
 
-- A built-in brief and skill (`pdx-watch`): what each event means; what the watcher may do (tell the person, message
-  the session that started the command, propose an intercept rule that is applied only when the person agrees, run
-  `pdx gate free` after confirming); what it must not do (end a process that holds no slot; change thresholds by
-  itself).
-- **Auto-start** (`watch.auto_start`, synced by Profile Sync): on E1, E2 or E3 with no watcher registered, the daemon
-  spawns one on the host named by `watch.home` (default mlab), with the brief. It is on by default and live from the
-  first deploy (10-15: "go live and sample while it runs"); thresholds start from W0's first data and are tuned on
-  the running system (§12.6).
-- **Model** `watch.model` (Profile Sync), default Opus: an idle watcher spends nothing.
+### 12.3 Where the watcher is, and delivery (W2)
 
-### 12.4 `pdx gate free <class>-<k>` (W4)
+- **One watcher for all hosts.** Each daemon remembers where the current watcher is (host and session) and sends its
+  events there with the peer path (`pdx msg`'s). It looks again only when a delivery fails or the remembered watcher
+  is gone, in this order: (1) a watcher awake on any host in `targets` → use it; (2) the last watcher's host is
+  reachable → ask it to wake that watcher (same session, resumed); (3) start a new one on the first reachable host in
+  `targets`. Steps 2 and 3 run only when `auto_wake` is on; with it off, events are recorded and delivered only to a
+  watcher that is awake.
+- **One at a time.** Only the host that will hold the watcher starts or wakes it, one start in progress at a time;
+  before starting a new one it tells the other hosts, and when two hosts announce at once, the smaller host id wins.
+  Daemons compare their `targets` and warn when they differ.
+- **No switch back.** After a failover the watcher stays where it is; the order in `targets` matters only when a new
+  one has to be started.
+- Delivery: at most one message per event kind per host per 10 min (later ones are folded into a count); E3 is never
+  folded. A woken or new watcher first gets a summary of the unhandled events since the last delivery.
+- `pdx watch log [--since] [--host|--all]` reads the records; `pdx watch ack` marks events handled (the UI's count).
+
+### 12.4 The watcher session (W3)
+
+- **Started and managed by the daemon of the host that holds it**: a session outside any team, in `workdir`, with
+  `model` and `start_prompt`; woken with `wake_prompt` by resuming the same session.
+- **Rest (patrol mode).** The daemon counts the idle time (no event delivered, no turn of the watcher) and at
+  `patrol_idle_min` sends "time to rest"; the watcher writes its notes, pushes them and answers; the daemon then ends
+  the session (after 5 min without an answer, it ends it anyway) and keeps the session id for the next wake. In
+  `resident` mode there is no countdown.
+- **Memory and documents in git.** The watcher works in `workdir`, a checkout of a dedicated `watch-desk` branch of
+  the purdex repo (never merged into main): it pulls the branch when it starts or wakes, and commits and pushes after
+  it changes its notes. A watcher started on another host after a failover pulls the same branch.
+- A built-in brief and skill (`pdx-watch`): the above; what each event and label means; what the watcher may do (tell
+  the person, message the session that started the command, propose an intercept rule that is applied only when the
+  person agrees, run `pdx gate free` after confirming); what it must not do (end a process that holds no slot; change
+  thresholds by itself).
+- Live from the first deploy (10-15: "go live and sample while it runs"); thresholds start from W0's first data and
+  are tuned on the running system (§12.7).
+
+### 12.5 `pdx gate free <class>-<k>` (W4)
 
 Lists the processes holding the slot's lock (pid, command, cwd, start, session), asks for confirmation (`--yes` for a
 watcher that already has the person's agreement), sends SIGTERM, then SIGKILL after 5 s, and reports whether the slot
 is free. A slot whose gate is still alive is refused (interrupt that command instead) unless `--force`.
 
-### 12.5 UI (W5, the App; B line)
+### 12.6 UI (W5, the App; B line)
 
 - Sidebar: at the right of the top row of the host list (the "Main Station" row), a watcher icon in three states:
   none, active, unhandled events (with a count). It opens the watcher area.
-- The watcher area is a tab region of its own, apart from session tabs: the watcher's conversation when one is
-  registered, the event log of all hosts (filter by host and kind), and "start the watcher" when there is none.
+- The watcher area is a tab region of its own, apart from session tabs: a fixed tab for the watcher session of the
+  host that holds it (awake or resting; opening it and asking wakes a resting watcher), the event log of all hosts
+  (filter by host and kind, unhandled count), "start the watcher" when there is none, and the `watch` settings of each
+  host (§12.2, including the two prompts).
 
-### 12.6 W0: threshold evaluation (now)
+### 12.7 W0: threshold evaluation (now)
 
 - E2: replay `host_minutes` (load1 and memory per minute since 10-09) against candidate thresholds.
 - E1: a 48 h process sampler (lead script, every 10 s, processes ≥ 0.25 core or ≥ 300 MB with their ancestry;
