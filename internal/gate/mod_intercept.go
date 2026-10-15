@@ -55,7 +55,7 @@ func stringOf(v any) string { s, _ := v.(string); return s }
 
 // Classify is the class of a command under this module: a rule that matches decides; else a tool that is not listed is
 // none; else the built-in table (Classify).
-func (c InterceptConfig) Classify(argv []string) Class {
+func (c InterceptConfig) Classify(argv []string, e Env) Class {
 	if len(argv) == 0 {
 		return ClassNone
 	}
@@ -68,7 +68,7 @@ func (c InterceptConfig) Classify(argv []string) Class {
 	name := filepath.Base(argv[0])
 	for _, t := range c.Tools {
 		if t == name {
-			return Classify(argv)
+			return Classify(argv, e)
 		}
 	}
 	return ClassNone
