@@ -19,7 +19,7 @@ const pressureFailures = 3
 // wait queues for a slot and returns it. done is true when the run ends here (an interrupt while waiting, or a broken
 // gate directory, with the exit code); a nil slot with done false means the directory is denied (a sandbox) and the
 // command runs without a slot. The settings are read again at every look, so a waiting command sees a change.
-func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sigs <-chan os.Signal) (*Slot, int, bool) {
+func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sigs <-chan os.Signal, d *Decision) (*Slot, int, bool) {
 	broken := func(err error) (*Slot, int, bool) {
 		if errors.Is(err, ErrUnavailable) {
 			g.say("%v; running without a slot", err)
@@ -74,6 +74,7 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 			if slot != nil {
 				ticket.Drop()
 				if !waitStart.IsZero() {
+					d.WaitS = g.Now().Sub(waitStart).Seconds()
 					g.say("%s", grantedLine(class, g.Now().Sub(waitStart)))
 				}
 				return slot, 0, false
@@ -81,6 +82,14 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 			ahead = a
 		}
 		now := g.Now()
+		switch {
+		case ok:
+			d.why("queue")
+		case good == nil:
+			d.why("pressure-unreadable")
+		default:
+			d.why("memory-pressure")
+		}
 		if waitStart.IsZero() {
 			waitStart = now
 		}

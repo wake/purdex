@@ -226,6 +226,20 @@ func (g *Gate) Run(ctx context.Context, o Options) (int, error) {
 	if len(o.Argv) == 0 {
 		return 2, errors.New("no command")
 	}
+	started := g.Now()
+	d := &Decision{Time: started, Argv: truncateArgv(o.Argv), Outcome: "interrupted"}
+	code, err := g.run(ctx, o, d)
+	d.Exit, d.Duration = code, g.Now().Sub(started).Seconds()
+	if d.Outcome != "not-gated" { // the commands the gate does not hold are many and cheap: they leave no line and touch no file
+		g.record(d.dir, d)
+	}
+	return code, err
+}
+
+func (g *Gate) run(ctx context.Context, o Options, d *Decision) (int, error) {
+	if len(o.Argv) == 0 {
+		return 2, errors.New("no command")
+	}
 	cfg := g.refresh()
 	for _, w := range cfg.Warnings {
 		g.say("config: %s", w)
@@ -238,45 +252,71 @@ func (g *Gate) Run(ctx context.Context, o Options) (int, error) {
 	if class == "" {
 		class = cfg.Intercept.Classify(o.Argv, EnvOf(env, g.IsTTY != nil && g.IsTTY()))
 	}
+	d.Class, d.Profile, d.dir = class, cfg.Profile, cfg.Dir
 	sigs, stop := g.signals()
 	defer stop()
 
 	// Nothing to hold: the gate is off, the command is not heavy, or it runs below a slot that really is held.
 	if !cfg.Enabled || !class.Valid() || g.nested(cfg, env, class) {
+		switch {
+		case !cfg.Enabled:
+			d.Outcome = "off"
+		case !class.Valid():
+			d.Outcome = "not-gated"
+		default:
+			d.Outcome = "nested"
+		}
 		return g.start(ctx, cfg, o, o.Argv, env, nil, sigs)
 	}
 	if class == ClassHeavy {
 		if msg := g.diskRefusal(cfg, o.Dir); msg != "" {
 			g.say("%s", msg)
+			d.Outcome = "refused"
 			return ExitRefused, nil
 		}
 	}
 
+	slot, code, done := g.wait(ctx, cfg, class, o, sigs, d)
+	if done {
+		if code == ExitRefused {
+			d.Outcome = "refused"
+		}
+		return code, nil
+	}
+	// The wait may have been long and the settings may have changed meanwhile (pdx gate set, a new profile): the caps, the
+	// cache rule and the priority are those of the moment the command starts, and the record says the same.
+	pool := cfg.Dir
+	cfg = g.Config()
+	cfg.Dir = pool
+	d.Profile = cfg.Profile
 	argv, note := cfg.Cache.Apply(o.Argv, cfg.foreground(o))
 	if note != "" {
 		g.say("%s", note)
 	}
 	limits := cfg.Parallelism.Resolve(class, g.Facts())
 	argv, env, added := Capped(argv, env, limits.GoP, limits.VitestWorkers, limits.PnpmWorkspace)
-	slot, code, done := g.wait(ctx, cfg, class, o, sigs)
-	if done {
-		return code, nil
-	}
 	if slot == nil { // the directory is denied (a sandbox): run without a slot
+		d.Outcome = "no-slot"
 		return g.start(ctx, cfg, o, argv, env, nil, sigs)
 	}
 	defer func() {
 		if left := slot.Release(g.Holders); len(left) > 0 {
 			g.say("these processes escaped the clean-up and are still running: %s; the %s slot is released", describeStragglers(left), slot.Class)
+			for _, p := range left {
+				d.Left = append(d.Left, strconv.Itoa(p.PID)+" "+p.Cmd)
+			}
 		}
 	}()
 	if class == ClassHeavy {
 		// the wait may have taken minutes or hours: the floor is checked again, with today's settings, before the command starts
-		if msg := g.diskRefusal(g.Config(), o.Dir); msg != "" {
+		if msg := g.diskRefusal(cfg, o.Dir); msg != "" {
 			g.say("%s", msg)
+			d.Outcome = "refused"
 			return ExitRefused, nil
 		}
 	}
+	d.Outcome, d.Slot, d.Added = "slot", slot.Label(), added
+	d.appliedSettings(cfg, class, cfg.foreground(o), limits)
 	if len(added) > 0 {
 		g.say("%s", "limits added: "+strings.Join(added, ", "))
 	}
@@ -285,10 +325,11 @@ func (g *Gate) Run(ctx context.Context, o Options) (int, error) {
 		// the record is part of the nesting protocol: a command started without it could never prove its claim, and a
 		// heavy command below it would wait for the very slot its parent holds
 		g.say("holder record: %v: the command was not run", err)
+		d.Outcome = "refused"
 		return ExitRefused, nil
 	}
 	env = withEnv(env, HeldEnv, slot.Label()+":"+token)
-	return g.start(ctx, g.Config(), o, argv, env, slot, sigs)
+	return g.start(ctx, cfg, o, argv, env, slot, sigs)
 }
 
 // diskRefusal is the message of a refusal when the disk of the command's directory or of $TMPDIR is below the floor
@@ -342,13 +383,56 @@ type Status struct {
 	WaitHeavy    int
 	WaitLight    int
 	Suspect      []Holder
+	// Profile is the active profile; Settings is every setting in force, with where it came from.
+	Profile  string
+	Settings []Setting
 }
 
 // Status reads the slot records straight from the directory (the daemon is not needed).
 func (g *Gate) Status() Status {
 	cfg := g.Config()
 	h, l := g.pool(cfg, ClassHeavy), g.pool(cfg, ClassLight)
-	return Status{Heavy: h.Held(), Light: l.Held(), WaitHeavy: h.Waiting(), WaitLight: l.Waiting(), Suspect: append(h.Suspect(), l.Suspect()...)}
+	heavy, light := h.Held(), l.Held()
+	g.fillLocked(h, heavy, l, light)
+	return Status{
+		Heavy: heavy, Light: light, WaitHeavy: h.Waiting(), WaitLight: l.Waiting(),
+		Suspect: append(h.Suspect(), l.Suspect()...), Profile: cfg.Profile, Settings: cfg.Effective(),
+	}
+}
+
+// statusLookupBudget is how long `pdx gate status` spends in total on asking who holds the locks.
+var statusLookupBudget = 3 * time.Second
+
+// fillLocked adds, to each held slot of both pools, the processes that have its lock file open. The lookups run side
+// by side and share one budget: whatever has not answered when it is spent is shown without its holders, so a slow lsof
+// cannot hold `pdx gate status` for longer than that.
+func (g *Gate) fillLocked(hp *Pool, heavy []Holder, lp *Pool, light []Holder) {
+	if g.Holders == nil {
+		return
+	}
+	type answer struct {
+		h *Holder
+		s []Straggler
+	}
+	find := g.Holders
+	n := len(heavy) + len(light)
+	ch := make(chan answer, n) // buffered: a late answer is dropped without anyone waiting for it
+	ask := func(p *Pool, held []Holder) {
+		for i := range held {
+			go func(h *Holder) { ch <- answer{h, find(p.slotPath(h.Slot))} }(&held[i])
+		}
+	}
+	ask(hp, heavy)
+	ask(lp, light)
+	timeout := time.After(statusLookupBudget)
+	for ; n > 0; n-- {
+		select {
+		case a := <-ch:
+			a.h.Locked = a.s
+		case <-timeout:
+			return
+		}
+	}
 }
 
 // DirOf is the directory the gate keeps its state in.
