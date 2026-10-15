@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"github.com/wake/purdex/internal/execstat"
 	"log"
 	"net/http"
 	"sync"
@@ -582,6 +583,9 @@ func (eb *EventsBroadcaster) HandleHostEvents(w http.ResponseWriter, r *http.Req
 	})
 
 	sub := eb.Add(conn, features...)
+	execstat.Event("host-events-subscribe")
+	execstat.AdjustGauge("host-events-subscribers", 1)
+	defer func() { execstat.AdjustGauge("host-events-subscribers", -1) }()
 	defer eb.Remove(sub)
 
 	// Call all registered OnSubscribe callbacks.

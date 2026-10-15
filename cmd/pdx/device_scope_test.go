@@ -118,7 +118,7 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 		{"GET", "/api/team/paused/x/release"}, {"DELETE", "/api/team/paused/x"}, {"POST", "/api/team/paused"},
 		{"POST", "/api/devices"}, {"GET", "/api/devices"}, {"DELETE", "/api/devices/d_aaaaaaaaaaaa"},
 		{"GET", "/api/fs/read"}, {"POST", "/api/host-transfer/redeem"}, {"GET", "/api/nothing-here"},
-		{"GET", "/debug/pprof/"}, {"GET", "/debug/pprof/cmdline"}, {"GET", "/debug/pprof/heap"}, {"GET", "/debug/pprof/profile"}, // the profiler is the admin's alone
+		{"GET", "/debug/pprof/"}, {"GET", "/debug/pprof/cmdline"}, {"GET", "/debug/pprof/heap"}, {"GET", "/debug/pprof/profile"}, {"GET", "/api/debug/execstat"}, // the profiler and the fork counters are the admin's alone
 		{"POST", "/api/journal"}, {"GET", "/api/journal/pin"}, {"DELETE", "/api/journal/pin"}, {"GET", "/api/journal/other"}, // only the four journal routes
 	} {
 		assert.True(t, forbidden(callWith(t, c, r.method, r.path, tok, nil)), "%s %s", r.method, r.path)
