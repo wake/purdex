@@ -189,7 +189,10 @@ func classifyVitest(args []string, e Env) Class {
 	}
 	// --run wins over `watch`, `dev` and --watch (vitest sets watch to false when options.run is true, after the
 	// subcommand has set it), so it comes first; then a watch that was asked for; then what the place decides.
-	once := runFlag || sub == "run" || explicit > 0
+	once := runFlag || explicit > 0
+	if sub == "run" {
+		once = explicit >= 0 // vitest's run action sets options.run = !options.watch: `run --watch` watches, and --run cannot undo it
+	}
 	if !once && (sub == "watch" || sub == "dev" || explicit < 0) {
 		return ClassNone
 	}
