@@ -648,7 +648,8 @@ func TestRun_TheDiskIsLookedAtInTheCommandsDirectoryAndTmp(t *testing.T) {
 	g.DiskFree = func(path string) (int64, error) { seen = append(seen, path); return 100 << 30, nil }
 	wd := t.TempDir()
 	runSync(t, g, Options{Argv: sh("true"), Class: ClassHeavy, Dir: wd})
-	assert.Equal(t, []string{wd, os.TempDir()}, seen)
+	// before the queue and again once the slot is taken: the command's directory and $TMPDIR each time
+	assert.Equal(t, []string{wd, os.TempDir(), wd, os.TempDir()}, seen)
 }
 
 // A file where the directory should be is a damaged install: the command is not run.
