@@ -65,7 +65,7 @@ const (
 	ReasonLight            Reason = "light"             // a narrowed run: takes a light slot
 	ReasonPackaging        Reason = "packaging"         // a build that writes its output: never held back (user 10-15)
 	ReasonWatchMode        Reason = "watch_mode"        // a tool that watches and never ends (vitest watch, a dev server)
-	ReasonKnownPassthrough Reason = "known_passthrough" // a known tool, a command that costs little (go version, pnpm install, composer install…)
+	ReasonKnownPassthrough Reason = "known_passthrough" // a known tool's command the gate lets through without judging its cost (go version, pnpm install, composer install…); a label only
 	ReasonUnknown          Reason = "unknown"           // a tool or script the table does not know, or a command line it cannot read
 )
 
