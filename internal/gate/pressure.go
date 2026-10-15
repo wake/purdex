@@ -2,11 +2,8 @@ package gate
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/wake/purdex/internal/hostmem"
@@ -43,26 +40,15 @@ func NewHostReader(dir string) *HostReader {
 	return &HostReader{Dir: dir, Now: time.Now, Level: sysctlLevel, Pages: vmStatCounters, Wait: 4 * time.Second}
 }
 
-type cachedSample struct {
-	At       int64  `json:"at"` // unix ms
-	Level    int    `json:"level"`
-	Pageouts uint64 `json:"pageouts"`
-	Swapouts uint64 `json:"swapouts"`
-}
+// The cache file and its writer's protocol live in hostmem, shared with the daemon, which writes the same file.
+type (
+	cachedSample = hostmem.Sample
+	sampleFile   = hostmem.File
+)
 
-type sampleFile struct {
-	Samples []cachedSample `json:"samples"`
-}
+func (r *HostReader) cache() hostmem.Cache { return hostmem.Cache{Dir: r.Dir} }
 
-func (r *HostReader) path() string { return filepath.Join(r.Dir, "pressure.json") }
-
-func (r *HostReader) load() sampleFile {
-	var f sampleFile
-	if b, err := os.ReadFile(r.path()); err == nil {
-		_ = json.Unmarshal(b, &f)
-	}
-	return f
-}
+func (r *HostReader) load() sampleFile { return r.cache().Load() }
 
 // fresh is the pressure of the cached samples when the newest is younger than sampleReuse.
 func (r *HostReader) fresh() (Pressure, bool) {
@@ -78,23 +64,8 @@ func (r *HostReader) fresh() (Pressure, bool) {
 	return Pressure{}, false
 }
 
-// lockSampler takes the one-sampler lock without waiting; got is false when another gate is sampling.
-func (r *HostReader) lockSampler() (unlock func(), got bool) {
-	f, err := os.OpenFile(filepath.Join(r.Dir, "pressure.lock"), os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return func() {}, true // no lock to be had (a directory the gate cannot write): sample alone
-	}
-	st, _ := flockNB(f)
-	switch st {
-	case lockHeld:
-		_ = f.Close()
-		return func() {}, false
-	case lockBroken:
-		_ = f.Close()
-		return func() {}, true // the lock cannot be had at all: sample alone
-	}
-	return func() { _ = f.Close() }, true
-}
+// lockSampler takes the one-sampler lock without waiting; got is false when another gate (or the daemon) is sampling.
+func (r *HostReader) lockSampler() (unlock func(), got bool) { return r.cache().TryLock() }
 
 // Read gives the level and the rate. One gate at a time reads the host and writes the cache; the others wait a moment
 // for its sample and read the host themselves only if none comes. A cache that is missing, torn or unwritable is
@@ -129,7 +100,6 @@ func (r *HostReader) Read() (Pressure, error) {
 		return p, nil // another gate sampled while this one took the lock
 	}
 	now := r.Now()
-	f := r.load()
 	level, err := r.Level()
 	if err != nil {
 		return Pressure{}, fmt.Errorf("pressure level: %w", err)
@@ -141,25 +111,7 @@ func (r *HostReader) Read() (Pressure, error) {
 		return Pressure{Level: level}, nil
 	}
 	cur := cachedSample{At: now.UnixMilli(), Level: level, Pageouts: po, Swapouts: so}
-	keep := f.Samples[:0:0]
-	for _, s := range f.Samples {
-		if now.Sub(time.UnixMilli(s.At)) <= 3*rateWindow && s.At <= cur.At {
-			keep = append(keep, s)
-		}
-	}
-	keep = append(keep, cur)
-	if len(keep) > 16 {
-		keep = keep[len(keep)-16:]
-	}
-	if b, err := json.Marshal(sampleFile{Samples: keep}); err == nil {
-		if tf, err := os.CreateTemp(r.Dir, "pressure.json.*"); err == nil {
-			_, werr := tf.Write(b)
-			cerr := tf.Close()
-			if werr != nil || cerr != nil || os.Rename(tf.Name(), r.path()) != nil {
-				_ = os.Remove(tf.Name())
-			}
-		}
-	}
+	keep := r.cache().Append(now, cur)
 	return pressureOf(keep, cur), nil
 }
 
