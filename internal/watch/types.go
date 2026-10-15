@@ -106,6 +106,12 @@ type Memory interface {
 	Sighting(sig string, at time.Time) (first bool)
 	// OrphanSince is when the holder was first seen orphaned: the time of the first call for a key, then the same time.
 	OrphanSince(key string, now time.Time) time.Time
+	// Reported says whether an E3 or E4 event was already made for a holder (its key), also before a restart: E3 is never folded,
+	// so a restart must not send it again. MarkReported records it.
+	Reported(kind Kind, key string) bool
+	MarkReported(kind Kind, key string)
+	// KeepReported forgets the reported marks of holders that are no longer there (every key but these).
+	KeepReported(keys map[string]bool)
 	// KeepOrphans forgets every orphan key but these: the holders that are orphaned now. A holder that is no longer orphaned,
 	// or no longer there, drops out, also one remembered from before a restart.
 	KeepOrphans(keys map[string]bool)

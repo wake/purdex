@@ -510,3 +510,43 @@ func TestSettingsThatSwitchPartsOff(t *testing.T) {
 	r2.procs = goTest(0.1, 2000)
 	assert.Len(t, r2.run(5*time.Minute), 1)
 }
+
+// ---- restarts and settings changes ----
+
+// E3 is never folded: a daemon that restarts must not send it again, nor E4, for a holder that was already reported.
+func TestE3E4_AReportedHolderIsNotReportedAgainAfterARestart(t *testing.T) {
+	r := newRig(t)
+	r.holders = []gate.Holder{holder(1, 500, t0.Add(-2*time.Hour), true)}
+	r.run(20 * time.Minute)
+	require.Equal(t, 2, r.mem.ReportedCount(), "E3 and E4 were reported")
+	r.d = New(r.mem) // the daemon restarts; the memory is the state file
+	assert.Empty(t, r.run(10*time.Minute), "the holder is still there and still past due: nothing to say again")
+	// a different holder of the same slot is a new one
+	r.holders = []gate.Holder{holder(1, 501, r.now, true)}
+	assert.Empty(t, r.run(10*time.Minute), "its orphan time starts now")
+	assert.Len(t, filterKind(r.run(10*time.Minute), KindSlotOrphaned), 1)
+	// and when the holder goes the marks go
+	r.holders = nil
+	r.pass()
+	assert.Zero(t, r.mem.ReportedCount())
+}
+
+// The settings are read at every pass: a window made longer must be collected anew, not trusted on the old one's samples.
+func TestE1_ALongerWindowIsCollectedAnew(t *testing.T) {
+	r := newRig(t)
+	r.set.TS = 30 * time.Second
+	r.argv[100] = []string{"go", "test", "./..."}
+	r.procs = goTest(0.1, 100)
+	assert.Empty(t, r.run(70*time.Second))
+	r.set.TS = 60 * time.Second
+	r.procs = goTest(3, 100)
+	assert.Empty(t, r.run(55*time.Second), "15 s of load is not a 60 s window, whatever the tree's age")
+	assert.Len(t, r.run(15*time.Second), 1, "a whole new window of it is")
+
+	// a window made shorter just applies
+	r2 := newRig(t)
+	r2.procs = goTest(3, 100)
+	r2.run(20 * time.Second)
+	r2.set.TS = 30 * time.Second
+	assert.Len(t, r2.run(15*time.Second), 1)
+}

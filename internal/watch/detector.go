@@ -55,6 +55,7 @@ type sample struct {
 }
 
 type treeState struct {
+	window  time.Duration // the t_s these samples were collected for
 	since   time.Time
 	samples []sample // those of the last TS
 	ep      episode
@@ -69,13 +70,11 @@ type Detector struct {
 	havePages       bool
 	lastPages       uint64
 	lastPagesAt     time.Time
-
-	orphanFired, longFired map[string]bool
 }
 
 // New is a detector over a Memory.
 func New(mem Memory) *Detector {
-	return &Detector{mem: mem, trees: map[treeKey]*treeState{}, orphanFired: map[string]bool{}, longFired: map[string]bool{}}
+	return &Detector{mem: mem, trees: map[treeKey]*treeState{}}
 }
 
 // Pass reads one tick and returns the events it makes, E1 first (by root pid), then E2, E3, E4. It is called on every sampler
@@ -165,9 +164,15 @@ func (d *Detector) unmanagedTrees(in Input) []Event {
 		seen[key] = true
 		st := d.trees[key]
 		if st == nil {
-			st = &treeState{since: in.Now}
+			st = &treeState{since: in.Now, window: set.TS}
 			d.trees[key] = st
 		}
+		if set.TS > st.window {
+			// the window was lengthened (settings are read at every pass): what was kept covers the old one only, so the
+			// longer window is collected anew
+			st.window, st.since, st.samples = set.TS, in.Now, nil
+		}
+		st.window = set.TS
 		u := uses[root]
 		st.samples = append(st.samples, sample{in.Now, u.cores, u.rss})
 		cut := 0
@@ -317,8 +322,8 @@ func (d *Detector) slotEvents(in Input) []Event {
 		if h.Orphaned {
 			orphaned[key] = true
 			since := d.mem.OrphanSince(key, in.Now)
-			if set.OrphanAfter > 0 && in.Now.Sub(since) >= set.OrphanAfter && !d.orphanFired[key] {
-				d.orphanFired[key] = true
+			if set.OrphanAfter > 0 && in.Now.Sub(since) >= set.OrphanAfter && !d.mem.Reported(KindSlotOrphaned, key) {
+				d.mem.MarkReported(KindSlotOrphaned, key)
 				ev := base
 				ev.Kind = KindSlotOrphaned
 				ev.Duration = in.Now.Sub(since)
@@ -329,24 +334,15 @@ func (d *Detector) slotEvents(in Input) []Event {
 				events = append(events, ev)
 			}
 		}
-		if set.SlotLongAfter > 0 && in.Now.Sub(h.Started) >= set.SlotLongAfter && !d.longFired[key] {
-			d.longFired[key] = true
+		if set.SlotLongAfter > 0 && in.Now.Sub(h.Started) >= set.SlotLongAfter && !d.mem.Reported(KindSlotLong, key) {
+			d.mem.MarkReported(KindSlotLong, key)
 			ev := base
 			ev.Kind = KindSlotLong
 			events = append(events, ev)
 		}
 	}
 	d.mem.KeepOrphans(orphaned) // a holder no longer orphaned, or gone, is forgotten (also one from before a restart)
-	for key := range d.longFired {
-		if !present[key] {
-			delete(d.longFired, key)
-		}
-	}
-	for key := range d.orphanFired {
-		if !present[key] {
-			delete(d.orphanFired, key)
-		}
-	}
+	d.mem.KeepReported(present) // a holder that is gone is forgotten, so a new one of the same slot is reported
 	// E3 before E4, each in key order
 	sort.SliceStable(events, func(i, j int) bool { return events[i].Kind == KindSlotOrphaned && events[j].Kind == KindSlotLong })
 	return events
