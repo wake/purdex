@@ -147,14 +147,20 @@ func TestWatchDaemonBase(t *testing.T) {
 	}
 }
 
-// A daemon bound to every interface is reached on the loopback (the command used the bind as it stood: 0.0.0.0 is no address).
-func TestWatchConfig_ReachesAWildcardBoundDaemon(t *testing.T) {
+// The command finds the daemon through watchDaemonBase from the bind of the config it was given (connecting to 0.0.0.0 happens
+// to work on some systems, so the wiring is checked by what the seam is asked, not by a connection).
+func TestWatchConfig_FindsTheDaemonFromTheConfigsBind(t *testing.T) {
 	srv := httptest.NewServer(newFakeHostconfig())
 	defer srv.Close()
 	u, _ := url.Parse(srv.URL)
 	p := filepath.Join(t.TempDir(), "config.toml")
 	require.NoError(t, os.WriteFile(p, []byte(fmt.Sprintf("bind = \"0.0.0.0\"\nport = %s\ntoken = \"tok\"\ndata_dir = %q\n", u.Port(), t.TempDir())), 0o600))
+	old := watchBase
+	defer func() { watchBase = old }()
+	var asked string
+	watchBase = func(cfg config.Config) string { asked = cfg.Bind; return srv.URL }
 	var out, errb bytes.Buffer
 	require.Equal(t, 0, watchMain([]string{"config", "--config", p}, &out, &errb), errb.String())
+	require.Equal(t, "0.0.0.0", asked)
 	require.Contains(t, out.String(), "enabled = true")
 }

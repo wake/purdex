@@ -35,7 +35,7 @@ func watchConfig(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "pdx watch config: %v\n", err)
 		return 1
 	}
-	base := watchDaemonBase(cfg)
+	base := watchBase(cfg)
 	items, rev, code := fetchWatchItems(base, cfg.Token, stderr)
 	if code != 0 {
 		return code
@@ -189,6 +189,9 @@ func parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
 		args = fs.Args()[1:]
 	}
 }
+
+// watchBase is how the command finds the daemon (a seam: a test points it at its fake).
+var watchBase = watchDaemonBase
 
 // watchDaemonBase is the URL of this host's daemon: a wildcard bind is reached on the loopback, an IPv6 address is bracketed.
 func watchDaemonBase(cfg config.Config) string {
