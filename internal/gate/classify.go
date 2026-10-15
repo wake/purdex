@@ -49,11 +49,15 @@ var runnerValueOpts = map[string]bool{
 
 // scripts a package runner is taken to run in full: a script by one of these names is a whole-project run.
 var heavyScripts = map[string]bool{
-	"check": true, "test": true, "typecheck": true, "lint": true, "build": true, "electron:build": true,
+	"check": true, "test": true, "typecheck": true, "lint": true,
 }
 
+// packagingScripts are scripts that package or build an output: they run for seconds to a minute and are never held back
+// (user 10-15), whichever way they are asked for (also `pnpm -r build`). They are none, not heavy, and not light either.
+var packagingScripts = map[string]bool{"build": true, "electron:build": true}
+
 // Classify says how heavy a command is, from its argv (argv[0] may be a path). It is a pure function over the words
-// the shims hand over: go, pnpm/npx/yarn/npm, vitest, tsc and make. Anything else is none and passes through. A
+// the shims hand over: go, pnpm/npx/yarn/npm, vitest, tsc, make, composer and the PHP test runners phpunit and pest. Anything else is none and passes through. A
 // command that cannot be read is none: the gate fails open on what it does not understand.
 func Classify(argv []string, e Env) Class {
 	if len(argv) == 0 {
@@ -73,6 +77,10 @@ func Classify(argv []string, e Env) Class {
 		if len(args) == 1 && args[0] == "test" {
 			return ClassHeavy
 		}
+	case "composer":
+		return classifyComposer(args, e)
+	case "phpunit", "pest":
+		return classifyPhpunit(args)
 	}
 	return ClassNone
 }
@@ -100,6 +108,33 @@ func goPackages(args []string) (pkgs []string, compileOnly bool) {
 		pkgs = append(pkgs, a)
 	}
 	return pkgs, compileOnly
+}
+
+// goOutputFlag says whether the go flags name an output file or directory (-o x, -o=x): the command packages.
+func goOutputFlag(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "-args" || a == "--args" {
+			break
+		}
+		if !strings.HasPrefix(a, "-") {
+			continue
+		}
+		name := "-" + strings.TrimLeft(a, "-")
+		if eq := strings.IndexByte(name, '='); eq >= 0 {
+			name = name[:eq]
+		} else if goValueFlags[name] {
+			if name == "-o" {
+				return true
+			}
+			i++
+			continue
+		}
+		if name == "-o" {
+			return true
+		}
+	}
+	return false
 }
 
 func wide(pkgs []string) bool {
@@ -132,7 +167,14 @@ func classifyGo(args []string) Class {
 	sub, rest := args[0], args[1:]
 	pkgs, _ := goPackages(rest)
 	switch sub {
-	case "test", "vet", "build":
+	case "build":
+		// Packaging is never held back: a build that writes its output (-o) and a build of one target are none. Only a build
+		// of several packages or of the whole module (./...), the compile check that writes nothing, takes a slot.
+		if goOutputFlag(rest) || (len(pkgs) <= 1 && !wide(pkgs)) {
+			return ClassNone
+		}
+		return ClassHeavy
+	case "test", "vet":
 		if wide(pkgs) {
 			return ClassHeavy
 		}
@@ -297,6 +339,9 @@ func classifyRunner(runner string, args []string, e Env) Class {
 	if runner == "npx" || runner == "pnpx" || runner == "bunx" {
 		return withRecursive(Classify(args[i:], e), recursive)
 	}
+	if packagingScripts[word] {
+		return ClassNone
+	}
 	if heavyScripts[word] {
 		return ClassHeavy
 	}
@@ -324,12 +369,12 @@ func yarnForeach(args []string) Class {
 			i++
 		case strings.HasPrefix(a, "-"):
 		case a == "run":
-			if i+1 < len(args) && (heavyScripts[args[i+1]] || all) {
+			if i+1 < len(args) && !packagingScripts[args[i+1]] && (heavyScripts[args[i+1]] || all) {
 				return ClassHeavy
 			}
 			return ClassNone
 		default:
-			if heavyScripts[a] || all {
+			if !packagingScripts[a] && (heavyScripts[a] || all) {
 				return ClassHeavy
 			}
 			return ClassNone
@@ -339,6 +384,9 @@ func yarnForeach(args []string) Class {
 }
 
 func scriptClass(name string, recursive bool) Class {
+	if packagingScripts[name] {
+		return ClassNone
+	}
 	if heavyScripts[name] || recursive {
 		return ClassHeavy
 	}

@@ -20,7 +20,7 @@ type Rule struct {
 	Class Class
 }
 
-var defaultTools = []string{"go", "pnpm", "npx", "vitest", "tsc"}
+var defaultTools = []string{"go", "pnpm", "npx", "vitest", "tsc", "composer", "phpunit", "pest"}
 
 func parseIntercept(r raw) InterceptConfig {
 	c := InterceptConfig{
