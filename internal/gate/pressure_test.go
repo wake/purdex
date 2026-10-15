@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -118,4 +120,66 @@ func TestHostReader_ACacheItCannotWriteStillReads(t *testing.T) {
 	assert.Equal(t, 2, p.Level)
 	_, err = os.Stat("/proc/does")
 	assert.Error(t, err)
+}
+
+// Without the sampler lock nothing is sampled and nothing is written: a reader that cannot get it waits for the sampler,
+// then gives the last cached reading, or an error. (M: sample anyway after the wait.)
+func TestHostReader_WithoutTheSamplerLockItDoesNotSample(t *testing.T) {
+	dir := t.TempDir()
+	f := &fakeHost{now: time.Unix(1000, 0), level: 1, po: 10, so: 10}
+	r := f.reader(dir)
+	r.Wait = 120 * time.Millisecond
+	_, err := r.Read() // one cached sample
+	require.NoError(t, err)
+	require.Equal(t, 1, f.reads)
+
+	lock, err := os.OpenFile(filepath.Join(dir, "pressure.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	require.NoError(t, err)
+	defer lock.Close()
+	st, _ := flockNB(lock)
+	require.Equal(t, lockGot, st) // another gate is sampling
+
+	f.now = f.now.Add(30 * time.Second) // the cache is stale now
+	f.level = 4
+	before := f.reads
+	p, err := r.Read()
+	require.NoError(t, err)
+	assert.Equal(t, 1, p.Level, "the last cached reading, not a sample of its own")
+	assert.Equal(t, before, f.reads, "the host was not read")
+
+	empty := t.TempDir()
+	lock2, _ := os.OpenFile(filepath.Join(empty, "pressure.lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	defer lock2.Close()
+	_, _ = flockNB(lock2)
+	r2 := f.reader(empty)
+	r2.Wait = 60 * time.Millisecond
+	_, err = r2.Read()
+	assert.Error(t, err, "no cache and no sampler result: unreadable, which the caller counts")
+}
+
+// Many readers at once (one process, one directory) leave one whole pressure.json and no stray temp files.
+// (M: a fixed temp file name.)
+func TestHostReader_ManyReadersLeaveOneWholeCache(t *testing.T) {
+	dir := t.TempDir()
+	var wg sync.WaitGroup
+	for i := 0; i < 12; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			f := &fakeHost{now: time.Unix(int64(1000+i*7), 0), level: 1, po: uint64(100 * i), so: uint64(i)}
+			r := f.reader(dir)
+			r.Wait = 2 * time.Second
+			_, _ = r.Read()
+		}(i)
+	}
+	wg.Wait()
+	b, err := os.ReadFile(filepath.Join(dir, "pressure.json"))
+	require.NoError(t, err)
+	var sf sampleFile
+	require.NoError(t, json.Unmarshal(b, &sf), "the cache parses: it was replaced whole")
+	assert.NotEmpty(t, sf.Samples)
+	ents, _ := os.ReadDir(dir)
+	for _, e := range ents {
+		assert.NotContains(t, e.Name(), "pressure.json.", "no temp file is left: "+e.Name())
+	}
 }

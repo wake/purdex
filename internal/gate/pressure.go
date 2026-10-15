@@ -34,11 +34,14 @@ type HostReader struct {
 	Now   func() time.Time
 	Level func() (int, error)
 	Pages func() (pageouts, swapouts uint64, err error)
+	// Wait is how long a reader that did not get the sampler lock waits for the sampler's result (more than the 3 s a
+	// vm_stat may take); a seam for tests.
+	Wait time.Duration
 }
 
 // NewHostReader is the reader of this host.
 func NewHostReader(dir string) *HostReader {
-	return &HostReader{Dir: dir, Now: time.Now, Level: sysctlLevel, Pages: vmStatCounters}
+	return &HostReader{Dir: dir, Now: time.Now, Level: sysctlLevel, Pages: vmStatCounters, Wait: 4 * time.Second}
 }
 
 type cachedSample struct {
@@ -105,13 +108,21 @@ func (r *HostReader) Read() (Pressure, error) {
 	unlock, got := r.lockSampler()
 	defer unlock()
 	if !got {
-		for i := 0; i < 6; i++ {
+		// Another gate is sampling. Take nothing and write nothing without the lock: wait for its sample, and if it does
+		// not come, give the last cached reading (older than the reuse time, but a reading) or an error.
+		deadline := time.Now().Add(r.Wait)
+		for time.Now().Before(deadline) {
 			time.Sleep(50 * time.Millisecond)
 			if p, ok := r.fresh(); ok {
 				return p, nil
 			}
 		}
-	} else if p, ok := r.fresh(); ok {
+		if f := r.load(); len(f.Samples) > 0 {
+			return pressureOf(f.Samples, f.Samples[len(f.Samples)-1]), nil
+		}
+		return Pressure{}, errors.New("another gate has been sampling the memory pressure for too long")
+	}
+	if p, ok := r.fresh(); ok {
 		return p, nil // another gate sampled while this one took the lock
 	}
 	now := r.Now()
@@ -138,10 +149,11 @@ func (r *HostReader) Read() (Pressure, error) {
 		keep = keep[len(keep)-16:]
 	}
 	if b, err := json.Marshal(sampleFile{Samples: keep}); err == nil {
-		tmp := r.path() + "." + strconv.Itoa(os.Getpid())
-		if os.WriteFile(tmp, b, 0o644) == nil {
-			if os.Rename(tmp, r.path()) != nil {
-				_ = os.Remove(tmp)
+		if tf, err := os.CreateTemp(r.Dir, "pressure.json.*"); err == nil {
+			_, werr := tf.Write(b)
+			cerr := tf.Close()
+			if werr != nil || cerr != nil || os.Rename(tf.Name(), r.path()) != nil {
+				_ = os.Remove(tf.Name())
 			}
 		}
 	}

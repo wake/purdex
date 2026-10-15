@@ -56,19 +56,31 @@ func descendants(tab map[int]procInfo, root int) map[int]int64 {
 // is adopted by init and no longer found by walking down from the command, so the tree is walked while it runs and
 // what was seen is remembered, with its start time.
 type tree struct {
-	root  int
-	procs Procs
-	seen  map[int]int64
+	root      int
+	rootStart int64 // when the root started, to tell it from a process that got its pid later
+	procs     Procs
+	seen      map[int]int64
+	kill      func(pid int, sig syscall.Signal) error // a seam for tests
 }
 
 func newTree(root int, procs Procs) *tree {
-	return &tree{root: root, procs: procs, seen: map[int]int64{}}
+	t := &tree{root: root, procs: procs, seen: map[int]int64{}, kill: func(pid int, sig syscall.Signal) error { return syscall.Kill(pid, sig) }}
+	if tab, err := procs(); err == nil {
+		if p, ok := tab[root]; ok {
+			t.rootStart = p.Start
+		}
+	}
+	return t
 }
 
-// scan adds what is below the root now.
+// scan adds what is below the root now. It looks only while the root is still the process it was: once the command is
+// gone, a process that got its pid would bring its own children into the tree.
 func (t *tree) scan() {
 	tab, err := t.procs()
 	if err != nil {
+		return
+	}
+	if r, ok := tab[t.root]; !ok || r.Start != t.rootStart {
 		return
 	}
 	for pid, start := range descendants(tab, t.root) {
@@ -91,6 +103,18 @@ func (t *tree) alive() []int {
 	return out
 }
 
+// signal sends sig to the remembered process, after looking again that the pid is still that process. A pid can still be
+// reused between that look and the signal: a platform limit (pidfd_send_signal would close it on Linux), narrow enough here.
+func (t *tree) signal(pid int, sig syscall.Signal) {
+	tab, err := t.procs()
+	if err != nil {
+		return
+	}
+	if p, ok := tab[pid]; ok && p.Start == t.seen[pid] {
+		_ = t.kill(pid, sig)
+	}
+}
+
 // reap ends what is left: SIGTERM, grace, SIGKILL.
 func (t *tree) reap(grace time.Duration) {
 	t.scan() // what the command started since the last look
@@ -99,7 +123,7 @@ func (t *tree) reap(grace time.Duration) {
 		return
 	}
 	for _, pid := range left {
-		_ = syscall.Kill(pid, syscall.SIGTERM)
+		t.signal(pid, syscall.SIGTERM)
 	}
 	deadline := time.Now().Add(grace)
 	for time.Now().Before(deadline) {
@@ -109,6 +133,6 @@ func (t *tree) reap(grace time.Duration) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	for _, pid := range t.alive() {
-		_ = syscall.Kill(pid, syscall.SIGKILL)
+		t.signal(pid, syscall.SIGKILL)
 	}
 }

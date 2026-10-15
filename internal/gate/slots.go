@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -123,6 +124,9 @@ func (p *Pool) recordPath(k int) string {
 }
 func (p *Pool) queueDir() string { return filepath.Join(p.Dir, "queue", string(p.Class)) }
 
+// ticketSeq numbers the tickets this process makes.
+var ticketSeq atomic.Uint64
+
 // Ticket is a place in the queue.
 type Ticket struct {
 	Name string
@@ -145,15 +149,27 @@ func (p *Pool) Enqueue() (*Ticket, error) {
 	if err := os.MkdirAll(p.queueDir(), 0o755); err != nil {
 		return nil, dirError(err)
 	}
-	name := fmt.Sprintf("%020d-%d", p.Now().UnixNano(), os.Getpid())
-	path := filepath.Join(p.queueDir(), name)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	// <time>-<pid>-<n>: n is this process's own counter, so two tickets made in one nanosecond by one process differ, and the
+	// file is created with O_EXCL so a name that is taken is never opened (and never removed) by the second maker.
+	var (
+		name, path string
+		f          *os.File
+		err        error
+	)
+	for try := 0; try < 8; try++ {
+		name = fmt.Sprintf("%020d-%d-%06d", p.Now().UnixNano(), os.Getpid(), ticketSeq.Add(1))
+		path = filepath.Join(p.queueDir(), name)
+		f, err = os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644)
+		if !errors.Is(err, os.ErrExist) {
+			break
+		}
+	}
 	if err != nil {
 		return nil, dirError(err)
 	}
 	if st, err := flockNB(f); st != lockGot {
 		_ = f.Close()
-		_ = os.Remove(path)
+		_ = os.Remove(path) // ours: it was created here, exclusively
 		if err == nil {
 			err = errors.New("the new ticket is locked by somebody else")
 		}
