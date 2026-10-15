@@ -199,6 +199,29 @@ func TestLoad_NaNAndInfinityAreRefused(t *testing.T) {
 	assert.Len(t, cfg.Warnings, 1)
 }
 
+// A value too large for the setting is refused (an absurd disk floor), as is [gate] or a module that is not a table.
+func TestLoad_ARangeAndNonTablesAreListed(t *testing.T) {
+	t.Setenv("PDX_GATE_DIR", "")
+	cfg, err := Load(writeConfig(t, "[gate.admission]\ndisk_min_gb = 1e300\nmax_page_rate = 1e300\n"))
+	require.NoError(t, err)
+	assert.Equal(t, Defaults().Admission, cfg.Admission)
+	assert.Len(t, cfg.Warnings, 2)
+
+	for _, body := range []string{"gate = false\n", "gate = \"off\"\n", "gate = 3\n"} {
+		cfg, err = Load(writeConfig(t, body))
+		require.NoError(t, err, body)
+		assert.Equal(t, Defaults().Slots, cfg.Slots, body)
+		require.Len(t, cfg.Warnings, 1, body)
+		assert.Contains(t, cfg.Warnings[0], "gate")
+	}
+	cfg, err = Load(writeConfig(t, "[gate]\nslots = \"bad\"\nreap = [1, 2]\n[gate.priority]\nmode = \"none\"\n"))
+	require.NoError(t, err)
+	assert.Equal(t, Defaults().Slots, cfg.Slots, "a module that is not a table keeps its defaults")
+	assert.Equal(t, "none", cfg.Priority.Mode, "and the others are read")
+	assert.Len(t, cfg.Warnings, 2)
+	assert.Contains(t, cfg.Warnings[0]+cfg.Warnings[1], "slots")
+}
+
 func TestLoad_ABrokenFileGivesTheDefaultsAndTheError(t *testing.T) {
 	t.Setenv("PDX_GATE_DIR", "")
 	cfg, err := Load(writeConfig(t, "[gate\nslots = "))

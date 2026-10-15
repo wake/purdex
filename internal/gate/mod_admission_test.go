@@ -37,4 +37,9 @@ func TestAdmission_DiskFloor(t *testing.T) {
 	assert.Contains(t, msg, "disk_min_gb")
 	a.DiskMinGB = 0
 	assert.Empty(t, a.DiskRefusal("/x", 0), "0 turns it off")
+	// an absurd floor must refuse, not wrap into a negative number and let everything through
+	// (M: convert the floor to int64 before comparing.)
+	a.DiskMinGB = 1e300
+	assert.NotEmpty(t, a.DiskRefusal("/x", 0))
+	assert.NotEmpty(t, a.DiskRefusal("/x", 1<<62))
 }

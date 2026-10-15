@@ -16,11 +16,20 @@ type HostFacts struct {
 func ReadHostFacts() HostFacts {
 	f := HostFacts{NCPU: runtime.NumCPU()}
 	if total, err := unix.SysctlUint64("hw.memsize"); err == nil {
-		if level, err := unix.SysctlUint32("kern.memorystatus_level"); err == nil && level > 0 && level <= 100 {
-			f.AvailMemMB = int(total >> 20 * uint64(level) / 100)
+		if level, err := unix.SysctlUint32("kern.memorystatus_level"); err == nil {
+			f.AvailMemMB = availMemMB(total, level)
 		}
 	}
 	return f
+}
+
+// availMemMB is the memory still available, in MB: the machine's bytes times the kernel's available percentage. 0 for a
+// percentage that is not 1 to 100 (unknown). The shift is done first: Go's * / >> share one precedence, left to right.
+func availMemMB(totalBytes uint64, levelPct uint32) int {
+	if levelPct == 0 || levelPct > 100 {
+		return 0
+	}
+	return int((totalBytes >> 20) * uint64(levelPct) / 100)
 }
 
 // Module 3, parallelism: how many cores one command may use. The result is capped by the memory its workers are

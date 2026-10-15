@@ -37,9 +37,16 @@ func newRaw(m map[string]any) raw {
 	return raw{m: m, st: &rawState{src: map[string]Source{}}}
 }
 
-// sub is the nested table `name`; a missing or non-table value is an empty table.
+// sub is the nested table `name`; a missing value is an empty table, and one of the wrong kind is an empty table with a
+// warning (the module keeps its defaults).
 func (r raw) sub(name string) raw {
-	child, _ := r.m[name].(map[string]any)
+	child, isTable := r.m[name].(map[string]any)
+	if v, present := r.m[name]; present && !isTable {
+		// a list of tables ([[gate.intercept.rule]]) is read by the module that owns it, so only non-lists are refused here
+		if _, isList := v.([]map[string]any); !isList {
+			r.warn(name, "want a table, got %v", v)
+		}
+	}
 	if child == nil {
 		child = map[string]any{}
 	}
@@ -85,15 +92,15 @@ func (r raw) Int(key string, def, lo, hi int) int {
 	return n
 }
 
-func (r raw) Float(key string, def, lo float64) float64 {
+func (r raw) Float(key string, def, lo, hi float64) float64 {
 	r.set(key, SrcDefault)
 	v, ok := r.m[key]
 	if !ok {
 		return def
 	}
 	f, ok := asFloat(v)
-	if !ok || !finite(f) || f < lo {
-		r.warn(key, "want a number of at least %v, got %v", lo, v)
+	if !ok || !finite(f) || f < lo || f > hi {
+		r.warn(key, "want a number from %v to %v, got %v", lo, hi, v)
 		return def
 	}
 	r.set(key, SrcConfig)
@@ -194,7 +201,7 @@ func (r raw) IntOrAuto(key string, def Param, lo, hi int) Param {
 }
 
 // FloatOrAuto reads a number of at least lo, or the string "auto".
-func (r raw) FloatOrAuto(key string, def float64, defAuto bool, lo float64) (f float64, auto bool) {
+func (r raw) FloatOrAuto(key string, def float64, defAuto bool, lo, hi float64) (f float64, auto bool) {
 	r.set(key, SrcDefault)
 	v, ok := r.m[key]
 	if !ok {
@@ -205,8 +212,8 @@ func (r raw) FloatOrAuto(key string, def float64, defAuto bool, lo float64) (f f
 		return def, true
 	}
 	n, ok := asFloat(v)
-	if !ok || !finite(n) || n < lo {
-		r.warn(key, `want "auto" or a number of at least %v, got %v`, lo, v)
+	if !ok || !finite(n) || n < lo || n > hi {
+		r.warn(key, `want "auto" or a number from %v to %v, got %v`, lo, hi, v)
 		return def, defAuto
 	}
 	r.set(key, SrcConfig)
