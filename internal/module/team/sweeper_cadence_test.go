@@ -51,3 +51,22 @@ func TestTick_AFallingDueRequestIsReadWhenDue(t *testing.T) {
 		t.Fatal("the tick at which the lease runs out did not read the open requests")
 	}
 }
+
+// A request the unattended switch may approve is not skipped: its retry after a transient failure stays one tick away.
+func TestTick_AnAutoApprovableRequestKeepsTheEveryTickRead(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1))
+	f.m.tick()
+	f.m.openAutoApprovable = true // as the read sets it for a list that holds a request the switch may approve
+	f.unatt.mu.Lock()
+	f.unatt.on = true
+	f.unatt.mu.Unlock()
+	base := f.m.store.listOpenReads.Load()
+	for i := 0; i < 3; i++ {
+		f.clock.Add(1000)
+		f.m.tick()
+	}
+	if got := f.m.store.listOpenReads.Load() - base; got != 3 {
+		t.Fatalf("3 ticks with a retryable request read %d times, want 3", got)
+	}
+}
