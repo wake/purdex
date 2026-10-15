@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -28,13 +30,17 @@ func TestGate_WouldWaitAutoClassifiesTheCommand(t *testing.T) {
 	assert.Equal(t, false, wouldWaitAuto(t, cfg, "go", "test", "./...")["would_wait"])
 
 	// a held heavy slot: only the commands of that class would wait
+	gofile := filepath.Join(t.TempDir(), "go")
+	release := func() { _ = os.WriteFile(gofile, nil, 0o644) }
+	defer release()
 	hold := make(chan int, 1)
 	var hout, herr bytes.Buffer
 	go func() {
-		hold <- gateMain([]string{"--config", cfg, "--class", "heavy", "--fg", "--", "sh", "-c", "sleep 1.5"}, &hout, &herr)
+		hold <- gateMain([]string{"--config", cfg, "--class", "heavy", "--fg", "--", "sh", "-c", "while [ ! -e " + gofile + " ]; do sleep 0.02; done"}, &hout, &herr)
 	}()
 	eventuallyOutput(t, func() bool { return wouldWaitAuto(t, cfg, "go", "test", "./...")["would_wait"] == true })
 	assert.Equal(t, false, wouldWaitAuto(t, cfg, "ls")["would_wait"], "a command the gate does not hold never waits")
+	release()
 	assert.Equal(t, 0, <-hold)
 }
 
