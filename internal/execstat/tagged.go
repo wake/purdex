@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os/exec"
 	"sort"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -275,18 +276,52 @@ func (c *Cmd) Run() error {
 	return c.Wait()
 }
 
-// capped keeps the first limit bytes written to it (the stdlib keeps a head and a tail for ExitError.Stderr; the head is enough
-// for a message) and always reports the whole write as taken, so the child is never blocked by it.
-type capped struct {
-	buf   bytes.Buffer
-	limit int
+// headTail keeps the first and the last limit bytes written to it, with a marker for what was dropped between them, as the
+// standard library does for ExitError.Stderr (the last lines of a long stderr are usually the reason). It always reports the
+// whole write as taken, so the child is never blocked by it.
+type headTail struct {
+	limit   int
+	head    []byte
+	tail    []byte // a ring of the last limit bytes once it is full
+	tailPos int
+	skipped int64
 }
 
-func (w *capped) Write(p []byte) (int, error) {
-	if room := w.limit - w.buf.Len(); room > 0 {
-		w.buf.Write(p[:min(room, len(p))])
+func (w *headTail) Write(p []byte) (int, error) {
+	n := len(p)
+	if room := w.limit - len(w.head); room > 0 {
+		k := min(room, len(p))
+		w.head = append(w.head, p[:k]...)
+		p = p[k:]
 	}
-	return len(p), nil
+	if len(p) == 0 {
+		return n, nil
+	}
+	if len(p) >= w.limit { // the write alone fills the tail
+		w.skipped += int64(len(w.tail) + len(p) - w.limit)
+		w.tail = append(w.tail[:0], p[len(p)-w.limit:]...)
+		w.tailPos = 0
+		return n, nil
+	}
+	for _, c := range p {
+		if len(w.tail) < w.limit {
+			w.tail = append(w.tail, c)
+			continue
+		}
+		w.tail[w.tailPos] = c
+		w.tailPos = (w.tailPos + 1) % w.limit
+		w.skipped++
+	}
+	return n, nil
+}
+
+func (w *headTail) Bytes() []byte {
+	out := append([]byte(nil), w.head...)
+	if w.skipped > 0 {
+		out = append(out, "\n... omitting "+strconv.FormatInt(w.skipped, 10)+" bytes ...\n"...)
+	}
+	out = append(out, w.tail[w.tailPos:]...)
+	return append(out, w.tail[:w.tailPos]...)
 }
 
 // Output implements (*exec.Cmd).Output over Start and Wait: Stdout is collected, and when Stderr is not set its head goes
@@ -297,14 +332,14 @@ func (c *Cmd) Output() ([]byte, error) {
 	}
 	var stdout bytes.Buffer
 	c.Stdout = &stdout
-	var stderr *capped
+	var stderr *headTail
 	if c.Stderr == nil {
-		stderr = &capped{limit: 32 << 10}
+		stderr = &headTail{limit: 32 << 10}
 		c.Stderr = stderr
 	}
 	err := c.Run()
 	if ee, ok := err.(*exec.ExitError); ok && stderr != nil {
-		ee.Stderr = stderr.buf.Bytes()
+		ee.Stderr = stderr.Bytes()
 	}
 	return stdout.Bytes(), err
 }

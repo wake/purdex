@@ -290,3 +290,19 @@ func TestOutputKeepsTheStdlibSemantics(t *testing.T) {
 		t.Fatalf("a refused Output starts nothing: %+v", got)
 	}
 }
+
+// A failing child with far more stderr than the cap: the ExitError carries the same head, marker and tail as the standard
+// library's, so the reason at the end of a long message survives (differential against exec.Cmd.Output).
+func TestOutputLongStderrMatchesTheStdlib(t *testing.T) {
+	script := "i=0; while [ $i -lt 3000 ]; do echo line-$i-xxxxxxxxxxxxxxxxxxxxxxxx >&2; i=$((i+1)); done; echo THE-REASON >&2; exit 2"
+	_, want := exec.Command("sh", "-c", script).Output()
+	_, got := Command("t.long-stderr", "sh", "-c", script).Output()
+	we, ok1 := want.(*exec.ExitError)
+	ge, ok2 := got.(*exec.ExitError)
+	if !ok1 || !ok2 {
+		t.Fatalf("want ExitErrors, got %v / %v", want, got)
+	}
+	if len(we.Stderr) < 64<<10 || !bytes.HasSuffix(ge.Stderr, []byte("THE-REASON\n")) || !bytes.Equal(ge.Stderr, we.Stderr) {
+		t.Fatalf("stderr differs from the standard library's: %d bytes vs %d, tail %q", len(ge.Stderr), len(we.Stderr), ge.Stderr[max(0, len(ge.Stderr)-30):])
+	}
+}
