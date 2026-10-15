@@ -123,6 +123,25 @@ wait`)
 	eventually(t, "ssh gone", func() bool { return !alive(sshPid) })
 }
 
+// A grandchild holding only stderr (stdout is already closed) must still be killed with the group.
+func TestStopKillsAGrandchildHoldingOnlyStderr(t *testing.T) {
+	path, dir := fakeSSH(t, `sleep 600 >/dev/null &
+echo $! > "$D/gc"
+cat "$D/frames.txt"
+exec 1>&-
+wait`)
+	fc, sk := newFakeClock(), &recSink{}
+	s := startSession(t.Context(), sessionFor(t, path, fc, sk, nil), "mserv")
+	eventually(t, "reading", func() bool { return sk.readingCount() == 1 })
+	gc, sshPid := pidOf(t, dir, "gc"), pidOf(t, dir, "pid")
+	time.Sleep(100 * time.Millisecond) // stdout is closed: the reader is done
+	require.True(t, alive(gc))
+
+	stopWithin(t, s)
+	eventually(t, "grandchild gone", func() bool { return !alive(gc) })
+	eventually(t, "ssh gone", func() bool { return !alive(sshPid) })
+}
+
 // Five unparsable frames in a row restart the session; a good frame in between resets the count.
 func TestFiveBadFramesRestartAndAGoodOneResets(t *testing.T) {
 	t.Run("five in a row", func(t *testing.T) {

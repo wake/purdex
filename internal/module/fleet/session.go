@@ -442,11 +442,10 @@ func (s *session) readFrames(r io.Reader, sl *slot, failed chan<- struct{}) {
 // grace and force it with closeRead. Signalling the group (not only ssh) is what frees the pipe when a ProxyCommand child
 // holds it.
 func killGroup(pid int, done <-chan struct{}, grace time.Duration, closeRead func()) {
-	select {
-	case <-done:
-		return // every holder of the pipe is gone already
-	default:
-	}
+	// Always signal the group, even when stdout is closed already: a grandchild may hold only stderr. ESRCH (nobody left) is
+	// harmless.
+	// Always signal the group, even when stdout is closed already: a grandchild may hold only stderr. ESRCH (nobody left) is
+	// harmless.
 	_ = syscall.Kill(-pid, syscall.SIGTERM)
 	select {
 	case <-done:
