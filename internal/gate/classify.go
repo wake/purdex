@@ -197,8 +197,8 @@ func classifyVitest(args []string, e Env) Class {
 	return ClassHeavy
 }
 
-// vitestBoolFlag reads --run, --watch and --no-watch with an optional =true / =false: +1 when the flag makes vitest run once, -1
-// when it makes it watch, 0 when it is some other flag (or `--run=false`, which says nothing).
+// vitestBoolFlag reads --run and --watch with an optional =true / =false, and a bare --no-watch: +1 when the flag makes
+// vitest run once, -1 when it makes it watch, 0 when it is some other flag (or `--run=false`, which says nothing).
 func vitestBoolFlag(a string) int {
 	name, val, hasVal := strings.Cut(a, "=")
 	truth := !hasVal || val == "true"
@@ -216,11 +216,9 @@ func vitestBoolFlag(a string) int {
 			return 1
 		}
 	case "--no-watch":
-		if truth {
+		// cac does not split `--no-*` at an `=`: `--no-watch=false` is an unknown option that changes nothing
+		if !hasVal {
 			return 1
-		}
-		if falsy {
-			return -1
 		}
 	}
 	return 0
