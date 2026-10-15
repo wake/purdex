@@ -123,6 +123,11 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 	} {
 		assert.True(t, forbidden(callWith(t, c, r.method, r.path, tok, nil)), "%s %s", r.method, r.path)
 	}
+	// The fleet's peer calls are the paired daemons' (host tokens), never a phone's: refused before the handler, whichever way.
+	for _, p := range []string{"/api/peers/fleet/role", "/api/peers/fleet/announce"} {
+		rec := callWith(t, c, "POST", p, tok, map[string]any{"to_host_id": "x", "from_alias": "air26", "role": "primary", "term": 99})
+		assert.Contains(t, []int{http.StatusUnauthorized, http.StatusForbidden}, rec.Code, "POST %s: %s", p, rec.Body.String())
+	}
 	// Reachable: the scope lets these through to their own handlers (whatever those answer, not device_forbidden).
 	for _, r := range []struct{ method, path string }{
 		{"GET", "/api/info"}, {"GET", "/api/hostconfig"}, {"GET", "/api/sessions/x/launch-plan"}, {"POST", "/api/sessions/x/launch"}, {"POST", "/api/sessions/x/read"}, {"PUT", "/api/team/relay-quota"}, {"PUT", "/api/team/max-members"}, {"GET", "/api/sessions/x/provenance"}, {"GET", "/api/team/unattended"},
