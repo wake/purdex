@@ -12,6 +12,9 @@ import (
 
 const mib = 1 << 20
 
+// orphanGrace is how many passes in a row a holder may read as not orphaned before its first-seen time is forgotten.
+const orphanGrace = 3
+
 // episode is the "one event when it crosses, none while it stays over" rule: fireAfter is how long the condition must hold
 // (continuously) before the event, rearmAfter how long it must stay false before it can fire again.
 type episode struct {
@@ -56,8 +59,8 @@ type sample struct {
 
 type treeState struct {
 	window  time.Duration // the t_s these samples were collected for
-	since   time.Time
-	samples []sample // those of the last TS
+	since   time.Time     // where the unbroken run of samples starts
+	samples []sample      // those of the last TS, and the one before them (the left edge's value)
 	ep      episode
 }
 
@@ -65,6 +68,8 @@ type treeState struct {
 type Detector struct {
 	mem   Memory
 	trees map[treeKey]*treeState
+
+	orphanMiss map[string]int // consecutive passes a once-orphaned holder was not orphaned
 
 	pressure, pages episode
 	havePages       bool
@@ -74,7 +79,7 @@ type Detector struct {
 
 // New is a detector over a Memory.
 func New(mem Memory) *Detector {
-	return &Detector{mem: mem, trees: map[treeKey]*treeState{}}
+	return &Detector{mem: mem, trees: map[treeKey]*treeState{}, orphanMiss: map[string]int{}}
 }
 
 // Pass reads one tick and returns the events it makes, E1 first (by root pid), then E2, E3, E4. It is called on every sampler
@@ -125,14 +130,13 @@ func (d *Detector) unmanagedTrees(in Input) []Event {
 	}
 	gateProc := map[int]bool{} // pid → is a `pdx gate`, asked once per pass
 	isGate := func(p resources.Proc) bool {
-		if p.Comm != "pdx" || in.Argv == nil {
+		if p.Comm != "pdx" || in.IsGate == nil { // the name is only the cheap filter: the caller says who really is a gate
 			return false
 		}
 		if v, ok := gateProc[p.PID]; ok {
 			return v
 		}
-		argv := in.Argv(p.PID)
-		v := len(argv) >= 2 && argv[1] == "gate"
+		v := in.IsGate(p.PID)
 		gateProc[p.PID] = v
 		return v
 	}
@@ -174,9 +178,19 @@ func (d *Detector) unmanagedTrees(in Input) []Event {
 		}
 		st.window = set.TS
 		u := uses[root]
+		maxGap := in.Interval
+		if maxGap <= 0 {
+			maxGap = 5 * time.Second
+		}
+		maxGap = maxGap*5/2 + time.Second
+		if n := len(st.samples); n > 0 && in.Now.Sub(st.samples[n-1].at) > maxGap {
+			// a pass was missed (a failed sample): what was not observed is not part of a window, so it starts again
+			st.since, st.samples = in.Now, nil
+		}
 		st.samples = append(st.samples, sample{in.Now, u.cores, u.rss})
+		// keep the samples inside the window and the one just before it
 		cut := 0
-		for cut < len(st.samples) && !st.samples[cut].at.After(in.Now.Add(-set.TS)) {
+		for cut+1 < len(st.samples) && !st.samples[cut+1].at.After(in.Now.Add(-set.TS)) {
 			cut++
 		}
 		st.samples = st.samples[cut:]
@@ -193,21 +207,38 @@ func (d *Detector) unmanagedTrees(in Input) []Event {
 	return events
 }
 
-// overThreshold: the whole window has been seen, and its mean cores are at or above x_cores or its resident memory was at
-// or above y_mb throughout.
+// overThreshold: the whole window has been seen without a gap, and its mean cores (each sample weighted by the time it stands
+// for) are at or above x_cores or its resident memory was at or above y_mb throughout.
 func (d *Detector) overThreshold(st *treeState, now time.Time, set Settings) bool {
 	if now.Sub(st.since) < set.TS || len(st.samples) == 0 {
 		return false
 	}
-	var sum float64
-	minRSS := st.samples[0].rss
-	for _, s := range st.samples {
-		sum += s.cores
-		if s.rss < minRSS {
-			minRSS = s.rss
+	start := now.Add(-set.TS)
+	var weighted, total float64
+	var minRSS uint64
+	first := true
+	for i, s := range st.samples {
+		if s.at.After(start) { // inside the window
+			if first || s.rss < minRSS {
+				minRSS, first = s.rss, false
+			}
+		}
+		if i == 0 {
+			continue
+		}
+		from := st.samples[i-1].at
+		if from.Before(start) {
+			from = start
+		}
+		if dt := s.at.Sub(from).Seconds(); dt > 0 { // a sample stands for the time since the one before it
+			weighted += s.cores * dt
+			total += dt
 		}
 	}
-	mean := sum / float64(len(st.samples))
+	if total == 0 || first {
+		return false
+	}
+	mean := weighted / total
 	return (set.XCores > 0 && mean >= set.XCores) || (set.YMB > 0 && minRSS >= uint64(set.YMB)*mib)
 }
 
@@ -301,8 +332,9 @@ func (d *Detector) pressureEvents(in Input) []Event {
 
 // ---- E3, E4 ----
 
+// holderKey names one holder of a slot for its lifetime: class-slot, the gate's pid and when it took the slot, to the nanosecond.
 func holderKey(h gate.Holder) string {
-	return fmt.Sprintf("%s-%d:%d:%d", h.Class, h.Slot, h.PID, h.Started.Unix())
+	return fmt.Sprintf("%s-%d:%d:%d", h.Class, h.Slot, h.PID, h.Started.UnixNano())
 }
 
 func (d *Detector) slotEvents(in Input) []Event {
@@ -341,7 +373,25 @@ func (d *Detector) slotEvents(in Input) []Event {
 			events = append(events, ev)
 		}
 	}
-	d.mem.KeepOrphans(orphaned) // a holder no longer orphaned, or gone, is forgotten (also one from before a restart)
+	// A holder that is not orphaned in one pass keeps its first-seen time for orphanGrace passes (the reading may flicker); one
+	// that is gone altogether, or that stays not orphaned, is forgotten, also one remembered from before a restart.
+	keep := map[string]bool{}
+	for key := range orphaned {
+		keep[key] = true
+		d.orphanMiss[key] = 0
+	}
+	for key, miss := range d.orphanMiss {
+		if orphaned[key] {
+			continue
+		}
+		if !present[key] || miss+1 > orphanGrace {
+			delete(d.orphanMiss, key)
+			continue
+		}
+		d.orphanMiss[key] = miss + 1
+		keep[key] = true
+	}
+	d.mem.KeepOrphans(keep)
 	d.mem.KeepReported(present) // a holder that is gone is forgotten, so a new one of the same slot is reported
 	// E3 before E4, each in key order
 	sort.SliceStable(events, func(i, j int) bool { return events[i].Kind == KindSlotOrphaned && events[j].Kind == KindSlotLong })

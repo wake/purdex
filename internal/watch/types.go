@@ -65,8 +65,15 @@ type Input struct {
 	// Roots are the sessions' root processes, already checked against a reused pid by the caller; the detector only uses them
 	// to say which session a tree belongs to.
 	Roots []resources.Root
-	// Argv is the command line of a process, for the few the detector asks about (a `pdx` that may be a gate, the root of a
-	// tree that crossed a threshold); nil, or a nil answer, is "unknown".
+	// Interval is the sampler's tick (how often Pass is called); 0 is 5 s. A gap between two passes of more than two and a half
+	// ticks (a sample that failed) breaks the continuity of an E1 window, which then starts again.
+	Interval time.Duration
+	// IsGate says whether a process is a genuine `pdx gate`: the caller checks its executable (the daemon's own pdx) and its
+	// argv, not a name a process can give itself. Asked only for processes whose command name is pdx. nil: none is a gate
+	// (the slot holders still make their trees managed).
+	IsGate func(pid int) bool
+	// Argv is the command line of the root of a tree that crossed a threshold, asked once when its event is made; nil, or a nil
+	// answer, is "unknown".
 	Argv func(pid int) []string
 	// Cwd is the working directory of a process, asked once for the root of a tree at the moment its event is made (one lookup
 	// per episode, never per tick); nil, or "", falls back to the session's cwd.

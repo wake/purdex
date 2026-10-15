@@ -34,6 +34,14 @@ func TestSignature(t *testing.T) {
 		{[]string{"sleep", "30"}, "sleep"},
 		{[]string{"rsync", "-a", "src/", "dst/"}, "rsync"},
 		{[]string{"tool", "", "--", "x"}, "tool"},
+		// secrets and oddities never become part of a signature
+		{[]string{"deploy", "sk-ant-api03-AbCdEf1234567890"}, "deploy"},
+		{[]string{"tool", "ghp_AbCdEf1234567890xyz"}, "tool"},
+		{[]string{"tool", "aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3aB3"}, "tool"},
+		{[]string{"tool", "line\nbreak", "ok"}, "tool ok"},
+		{[]string{"tool", "has\x00nul", "ok"}, "tool ok"},
+		{[]string{"tool", string(make([]byte, 0)) + "this-is-a-very-long-word-that-is-more-than-forty-bytes-long", "ok"}, "tool ok"},
+		{[]string{"sk-ant-api03-AbCdEf1234567890"}, ""},
 		{nil, ""},
 		{[]string{""}, ""},
 	} {

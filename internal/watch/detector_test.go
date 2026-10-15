@@ -28,6 +28,7 @@ type rig struct {
 	holders []gate.Holder
 	roots   []resources.Root
 	argv    map[int][]string
+	gates   map[int]bool // the pids the caller verified as a genuine pdx gate
 	cwd     map[int]string
 	lockPID []int
 	locks   int
@@ -35,14 +36,15 @@ type rig struct {
 
 func newRig(t *testing.T) *rig {
 	mem := NewMemoryStore()
-	return &rig{t: t, d: New(mem), mem: mem, now: t0, set: DefaultSettings(), argv: map[int][]string{}, cwd: map[int]string{}}
+	return &rig{t: t, d: New(mem), mem: mem, now: t0, set: DefaultSettings(), argv: map[int][]string{}, gates: map[int]bool{}, cwd: map[int]string{}}
 }
 
 // pass runs one pass at the current time and moves the clock on by a tick.
 func (r *rig) pass() []Event {
 	in := Input{Now: r.now, Procs: r.procs, Raw: r.raw, Holders: r.holders, Roots: r.roots, Set: r.set,
-		Argv: func(pid int) []string { return r.argv[pid] },
-		Cwd:  func(pid int) string { return r.cwd[pid] },
+		Argv:   func(pid int) []string { return r.argv[pid] },
+		IsGate: func(pid int) bool { return r.gates[pid] },
+		Cwd:    func(pid int) string { return r.cwd[pid] },
 		LockPIDs: func(gate.Holder) []int {
 			r.locks++
 			return r.lockPID
@@ -180,17 +182,19 @@ func TestE1_ATreeUnderAGateIsManaged(t *testing.T) {
 		p(101, 100, "go", 200, 500),
 		p(102, 101, "compile", 200, 500),
 	}
-	r.argv[100] = []string{"pdx", "gate", "--class", "heavy", "--", "go", "test", "./..."}
+	r.gates[100] = true
 	assert.Empty(t, r.run(5*time.Minute))
 
-	// a `pdx` that is not a gate is just a command
+	// a process that is called pdx and has `gate` for its argument is not a gate unless the caller verified it (its executable):
+	// the name is a filter, not an identity
 	r2 := newRig(t)
 	r2.procs = r.procs
-	r2.argv[100] = []string{"pdx", "msg", "send"}
-	assert.Len(t, r2.run(2*time.Minute), 1)
-	// an argv nobody can read: not known to be a gate
+	r2.argv[100] = []string{"pdx", "gate", "--", "go", "test"}
+	assert.Len(t, r2.run(2*time.Minute), 1, "a forged gate does not hide a tree")
+	// a process that is not called pdx is never asked about
 	r3 := newRig(t)
-	r3.procs = r.procs
+	r3.procs = []resources.Proc{p(1, 0, "launchd", 0, 10), p(10, 1, "zsh", 0, 5), p(100, 10, "node", 1, 50), p(101, 100, "go", 400, 500)}
+	r3.gates[100] = true
 	assert.Len(t, r3.run(2*time.Minute), 1)
 }
 
@@ -202,7 +206,7 @@ func TestE1_AGateFurtherUpIsAnAncestor(t *testing.T) {
 		p(101, 100, "zsh", 0, 5), // the command's own shell: its children are roots, below the gate
 		p(102, 101, "go", 300, 500),
 	}
-	r.argv[100] = []string{"pdx", "gate", "--", "sh", "-c", "go test"}
+	r.gates[100] = true
 	assert.Empty(t, r.run(5*time.Minute), "the gate is an ancestor of the tree's root")
 }
 
@@ -549,4 +553,88 @@ func TestE1_ALongerWindowIsCollectedAnew(t *testing.T) {
 	r2.run(20 * time.Second)
 	r2.set.TS = 30 * time.Second
 	assert.Len(t, r2.run(15*time.Second), 1)
+}
+
+// ---- the window is what was observed ----
+
+// A pass that did not happen (a failed sample) breaks the window: the time nobody saw is not 60 seconds of load.
+func TestE1_AGapBreaksTheWindow(t *testing.T) {
+	r := newRig(t)
+	r.argv[100] = []string{"go", "test", "./..."}
+	r.procs = goTest(0.1, 100)
+	r.pass() // t0: one quiet sample, then the sampler fails for 55 s
+	r.now = r.now.Add(55 * time.Second)
+	r.procs = goTest(3, 100)
+	assert.Empty(t, r.pass(), "t=55")
+	assert.Empty(t, r.pass(), "t=60: only the last 5 s have been seen, not a window of it")
+	assert.Empty(t, r.run(45*time.Second))
+	assert.Len(t, r.run(15*time.Second), 1, "a window of load seen without a gap fires")
+}
+
+// Passes that come at uneven times weigh each sample by the time it stands for.
+func TestE1_TheMeanIsWeightedByTime(t *testing.T) {
+	r := newRig(t)
+	r.set.TS = 20 * time.Second
+	r.argv[100] = []string{"go", "test", "./..."}
+	// 1.0 core for 18 s, then 6 cores for 2 s: the time-weighted mean is 1.5 (1.0*0.9 + 6.0*0.1 = 1.5), the plain mean of the
+	// two samples that stand for them would be 3.5; with Interval 10 s the gap rule allows 26 s between passes
+	at := func(sec int, cores float64) []Event {
+		r.now = t0.Add(time.Duration(sec) * time.Second)
+		r.procs = goTest(cores, 100)
+		in := Input{Now: r.now, Procs: r.procs, Set: r.set, Interval: 10 * time.Second, Argv: func(int) []string { return r.argv[100] }}
+		return r.d.Pass(in)
+	}
+	assert.Empty(t, at(0, 1.0))
+	assert.Empty(t, at(18, 1.0))
+	ev := at(20, 6.0)
+	require.Len(t, ev, 1, "weighted mean 1.5 over [0,20] is at the threshold")
+	assert.InDelta(t, 6.0, ev[0].PeakCores, 0.001)
+
+	r2 := newRig(t)
+	r2.set.TS = 20 * time.Second
+	at2 := func(sec int, cores float64) []Event {
+		r2.procs = goTest(cores, 100)
+		return r2.d.Pass(Input{Now: t0.Add(time.Duration(sec) * time.Second), Procs: r2.procs, Set: r2.set, Interval: 10 * time.Second})
+	}
+	at2(0, 1.0)
+	at2(18, 1.0)
+	assert.Empty(t, at2(20, 5.0), "1.0*0.9 + 5.0*0.1 = 1.4: under the threshold although the plain mean of 1.0, 1.0, 5.0 would be 2.3")
+}
+
+// ---- holders, signatures: identity and secrets ----
+
+func TestE3E4_HoldersOfTheSameSlotAndPidInTheSameSecondAreNotTheSame(t *testing.T) {
+	a := gate.Holder{Class: gate.ClassHeavy, Slot: 1, PID: 500, Started: t0.Add(100 * time.Millisecond)}
+	b := gate.Holder{Class: gate.ClassHeavy, Slot: 1, PID: 500, Started: t0.Add(700 * time.Millisecond)}
+	assert.NotEqual(t, holderKey(a), holderKey(b))
+}
+
+// One reading of "not orphaned" does not throw away the time already counted; staying not orphaned does.
+func TestE3_AFlickerInTheOrphanReadingKeepsTheFirstSeenTime(t *testing.T) {
+	r := newRig(t)
+	orphan := holder(1, 500, t0.Add(-time.Hour), true)
+	r.holders = []gate.Holder{orphan}
+	r.run(10 * time.Minute)
+	r.holders = []gate.Holder{holder(1, 500, orphan.Started, false)} // one pass reads it as alive
+	r.pass()
+	r.holders = []gate.Holder{orphan}
+	assert.Len(t, filterKind(r.run(6*time.Minute), KindSlotOrphaned), 1, "15 min from the first sighting, the flicker did not restart it")
+
+	r2 := newRig(t) // it stays not orphaned for good: forgotten
+	r2.holders = []gate.Holder{orphan}
+	r2.run(10 * time.Minute)
+	r2.holders = []gate.Holder{holder(1, 500, orphan.Started, false)}
+	r2.run(30 * time.Second)
+	assert.Zero(t, r2.mem.Orphans())
+}
+
+// A caller that cannot verify gates (IsGate nil) treats none as one, and does not crash on a process called pdx.
+func TestE1_WithoutAGateCheckNoProcessIsAGate(t *testing.T) {
+	procs := []resources.Proc{p(1, 0, "launchd", 0, 10), p(10, 1, "zsh", 0, 5), p(100, 10, "pdx", 1, 50), p(101, 100, "go", 400, 500)}
+	d := New(NewMemoryStore())
+	var n int
+	for i := 0; i < 30; i++ {
+		n += len(d.Pass(Input{Now: t0.Add(time.Duration(i) * tick), Procs: procs, Set: DefaultSettings()}))
+	}
+	assert.Equal(t, 1, n)
 }
