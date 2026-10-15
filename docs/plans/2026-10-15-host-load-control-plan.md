@@ -148,3 +148,79 @@ Load watcher (spec §12): W0 (threshold evaluation, lead, now) and, in parallel 
 and record → W2 registration and delivery → W3 brief, skill and auto-start → W4 `pdx gate free`; W5 UI when the B line
 resumes. The set goes live as a whole when W1–W4 are done and is tuned while it runs. W1–W5 do not depend on L1–L3;
 each phase one PR; the W plan (tasks per phase) is reviewed by codex with §12 before W1 starts.
+
+## W — load watcher (spec §12; A-line member; each phase one PR)
+
+Cost rule for every W phase: no new fork per tick. The resources sampler already runs one `ps -axo pid,ppid,pcpu,rss`
+per 5 s tick (`internal/resources/sample.go`); W reuses that list. Command lines are read only for a tree that is over a
+threshold, through the shared process snapshot (`agent.SharedProcessSnapshot`, G3a). Pressure comes from the gate's
+reader (`gate.NewHostReader`, the same `pressure.json` sample the gates share). Lead captures a 30 s idle pprof before
+and after W1 (daemon target stays ≤ 10 % of one core).
+
+### W1 — detection and record (daemon)
+
+1. `internal/watch` (pure, table tests): `Detector.Pass(now, procs, managed, pressure, slots) []Event`.
+   - Trees: from the sampler's `[]Proc` (pid, ppid, pcpu, rss), rooted at the child of a shell (`zsh`, `bash`, `sh`
+     by comm) or at a session root (`resources.Root`); a tree containing a gate holder's gate pid or command pid
+     (slot records, `gate.Pool.Held`) is **managed** and skipped for E1.
+   - E1: per tree, a rolling window of `T` s; fires when mean cores ≥ `X` or RSS ≥ `Y` MB over the window. Signature =
+     tool basename + subcommand/script word, paths and flag values dropped; first sighting per signature per host →
+     `new: true`, later → counted in the record only.
+   - E2: pressure level ≥ 2 for `T2`, or page rate > `R` for `T3` (from `gate.HostReader`).
+   - E3/E4: from `gate.Pool.Held()`: `Orphaned` for ≥ 15 min (E3), held ≥ `lifetime.alert_after_min` (E4); once per
+     holder (pid + start), not per pass.
+   - Not events: trees under `X` and `Y` however long they live (D11).
+2. Record: `~/.config/pdx/watch/events-YYYYMMDD.jsonl`, appended with `O_APPEND`, one JSON line per event (kind,
+   host, at, signature, argv scrubbed by `internal/redact` then cut to 200 bytes, cwd, session id from
+   `resources.Attribute`'s roots, peak cores and MB, duration, `new`); files older than 30 days removed at the first
+   pass of a day.
+3. Settings `[watch]` in `~/.config/pdx/config.toml`, read at every pass like the gate's (no restart):
+   `x_cores` (1.5), `y_mb` (1024), `t_s` (60), `pressure_t_s` (120), `page_rate` (50), `page_t_s` (60) — first values,
+   tuned from W0 and the live record.
+4. Wire into `internal/module/resources/sampler_loop.go` after the sample (one call per tick; a detector error is
+   logged, never stops the sampler).
+5. `pdx watch log [--since D] [--kind K] [--json]`: reads the local record files directly (works with the daemon
+   down).
+Tests: synthetic proc tables (a tree over/under each threshold; managed vs unmanaged; a tree that crosses the window
+boundary; signature normalization incl. `composer test:integration`, `vendor/bin/phpunit --testsuite integration`,
+`pnpm exec vitest run`); record rotation with an injected clock; mutation on each threshold comparison.
+
+### W2 — registration and delivery
+
+1. Daemon: `POST /api/watch/register {ref}`, `DELETE /api/watch/register`, `GET /api/watch` (current watcher,
+   registered at, by host); stored in a small table (deployed-schema rule: additive migration).
+2. Propagation: a registration is pushed to every paired host through the existing paired-host API (the same channel
+   the peer bridge uses); each host keeps the latest by registration time; the replaced watcher gets one message.
+3. Liveness: the registration ends when the registry no longer has the ref's session (relay lineage keeps it).
+4. Delivery: per host, events go to the watcher with the daemon's own peer send (the path `pdx msg` uses);
+   folding: one message per kind per host per 10 min, later ones counted into the next; E3 never folded; a send that
+   fails is retried on the next pass, kept in the record either way.
+5. CLI: `pdx watch register` (the calling session's ref), `pdx watch status`, `pdx watch unregister`,
+   `pdx watch log --host <alias>|--all` (through each host's `GET /api/watch/log`).
+Tests: register/replace/expire; fold timing with an injected clock; a send failure is retried; cross-host with two
+daemons in a test harness (as the peer bridge tests do).
+
+### W3 — the watcher session and auto-start
+
+1. `cmd/pdx/plugin/purdex/skills/pdx-watch/SKILL.md` and the built-in brief: the events, what the watcher may and must
+   not do (spec §12.3), how to read `pdx watch log` and `pdx gate status`, and to register itself first.
+2. Profile Sync keys `watch.auto_start` (true), `watch.model` (opus), `watch.home` (the host alias, default mlab);
+   read through the existing profile settings path.
+3. Auto-start: on E1/E2/E3 with no live watcher, the daemon of `watch.home` (an event elsewhere asks it through the
+   paired-host API) spawns a session with the brief and model (the spawn path `pdx spawn` uses, without a team), at
+   most one start per 30 min.
+Tests: no watcher + event → one spawn; a watcher present → none; two events within 30 min → one spawn; settings read
+from the profile.
+
+### W4 — `pdx gate free <class>-<k>`
+
+Lists the holders (`lsof` on the slot's lock: pid, command scrubbed, cwd, start, session), refuses a slot whose gate is
+alive unless `--force`, asks for `y` (or `--yes`), SIGTERM, 5 s, SIGKILL, then reports whether the slot is free.
+Tests: a held slot with a live gate is refused; an orphaned holder (a `sleep` keeping fd 3) is ended and the slot is
+free; `--yes` skips the question; the decision record gets one line.
+
+### W5 — UI (B line, when it resumes)
+
+Sidebar icon at the right of the host list's top row (none / active / unhandled count), the watcher area as its own
+tab region (watcher conversation, event log of all hosts with host/kind filters, "start the watcher"). Spec and plan
+by the B line from spec §12.5.
