@@ -1,0 +1,1480 @@
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+17179869184
+@@load
+5.83
+@@cpu
+18 16 65
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     5791.
+Pages active:                                 315091.
+Pages inactive:                               311952.
+Pages speculative:                              1833.
+Pages throttled:                                   0.
+Pages wired down:                             116606.
+Pages purgeable:                                1637.
+"Translation faults":                    18843049450.
+Pages copy-on-write:                      2528010042.
+Pages zero filled:                        2308191118.
+Pages reactivated:                           5706729.
+Pages purged:                               16905116.
+File-backed pages:                            167599.
+Anonymous pages:                              461277.
+Pages stored in compressor:                   528973.
+Pages occupied by compressor:                 263852.
+Decompressions:                           6425237318.
+Compressions:                             6670759639.
+Pageins:                                   348366343.
+Pageouts:                                    1538288.
+Swapins:                                     3653328.
+Swapouts:                                    3994903.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   239362496 197838984  13799804    94% 7807526 137998040    5%   /System/Volumes/Data
+@@s
+@@top_cpu
+64727  21.4  25408 php80
+77650  16.6 365312 claude
+64724  14.6  25424 php80
+34362  13.7 643184 claude
+64708   8.1  25440 php80
+@@top_mem
+34362  13.7 643184 claude
+33182   7.6 524016 claude
+97098   6.3 366896 claude
+77650  16.6 365312 claude
+24645   1.6 334880 claude
+@@gate
+{
+  "Heavy": [
+    {
+      "class": "heavy",
+      "slot": 1,
+      "pid": 66602,
+      "pgid": 56729,
+      "argv": [
+        "/tmp/x"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "started": "2026-10-16T05:21:11.775618+08:00",
+      "session": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  "Light": null,
+  "WaitHeavy": 11,
+  "WaitLight": 0,
+  "QueueHeavy": [
+    {
+      "class": "heavy",
+      "place": 1,
+      "pid": 72863,
+      "since": "2026-10-16T05:04:14.263396+08:00",
+      "argv": [
+        "go",
+        "test",
+        "-count=1",
+        "./cmd/pdx",
+        "./internal/execstat",
+        "./internal/hostmem",
+        "./internal/core"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 2,
+      "pid": 12860,
+      "since": "2026-10-16T05:11:49.689952+08:00",
+      "argv": [
+        "./bin/test-baseline.sh"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 3,
+      "pid": 15189,
+      "since": "2026-10-16T05:12:12.976517+08:00",
+      "argv": [
+        "pnpm",
+        "exec",
+        "tsc",
+        "--noEmit",
+        "-p",
+        "."
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 4,
+      "pid": 24886,
+      "since": "2026-10-16T05:14:00.069198+08:00",
+      "argv": [
+        "go",
+        "build",
+        "./internal/...",
+        "./cmd/..."
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 5,
+      "pid": 37086,
+      "since": "2026-10-16T05:16:20.576387+08:00",
+      "argv": [
+        "pnpm",
+        "check",
+        "--fast"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 6,
+      "pid": 39720,
+      "since": "2026-10-16T05:16:53.444123+08:00",
+      "argv": [
+        "go",
+        "vet",
+        "./internal/module/hostconfig/",
+        "./cmd/pdx/"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 7,
+      "pid": 50022,
+      "since": "2026-10-16T05:19:21.669895+08:00",
+      "argv": [
+        "pnpm",
+        "-C",
+        "desktop",
+        "run",
+        "typecheck"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 8,
+      "pid": 53395,
+      "since": "2026-10-16T05:20:25.734272+08:00",
+      "argv": [
+        "npx",
+        "tsc",
+        "-b",
+        "--force"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 9,
+      "pid": 53437,
+      "since": "2026-10-16T05:20:26.174861+08:00",
+      "argv": [
+        "go",
+        "vet",
+        "./internal/module/hostconfig/",
+        "./cmd/pdx/"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 10,
+      "pid": 53519,
+      "since": "2026-10-16T05:20:27.242265+08:00",
+      "argv": [
+        "npx",
+        "tsc",
+        "-b",
+        "--force"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 11,
+      "pid": 59636,
+      "since": "2026-10-16T05:21:36.410279+08:00",
+      "argv": [
+        "php",
+        "-d",
+        "memory_limit=1G",
+        "vendor/bin/phpunit"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  "QueueLight": null,
+  "Suspect": null,
+  "Profile": "default",
+  "Settings": [
+    {
+      "key": "admission.disk_min_gb",
+      "value": "10",
+      "source": "default"
+    },
+    {
+      "key": "admission.enabled",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "admission.max_page_rate",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "admission.max_pressure_level",
+      "value": "1",
+      "source": "default"
+    },
+    {
+      "key": "admission.on_unreadable",
+      "value": "level-only",
+      "source": "default"
+    },
+    {
+      "key": "cache.count1",
+      "value": "warn",
+      "source": "default"
+    },
+    {
+      "key": "enabled",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "intercept.mod_rewrite",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "intercept.tools",
+      "value": "go,pnpm,npx,vitest,tsc,composer,phpunit,pest",
+      "source": "default"
+    },
+    {
+      "key": "lifetime.alert_after_min",
+      "value": "60",
+      "source": "default"
+    },
+    {
+      "key": "lifetime.hold",
+      "value": "tree",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.go_mem_per_worker_mb",
+      "value": "150",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.go_p",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.mem_per_worker_mb",
+      "value": "400",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.mode",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.pnpm_concurrency",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.reserve_cores",
+      "value": "2",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.vitest_max_workers",
+      "value": "3",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.vitest_mem_per_worker_mb",
+      "value": "700",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.vitest_workers",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "priority.mode",
+      "value": "nice",
+      "source": "default"
+    },
+    {
+      "key": "priority.nice",
+      "value": "10",
+      "source": "default"
+    },
+    {
+      "key": "profile",
+      "value": "default",
+      "source": "default"
+    },
+    {
+      "key": "reap.enabled",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "reap.grace_s",
+      "value": "5",
+      "source": "default"
+    },
+    {
+      "key": "slots.heavy",
+      "value": "1",
+      "source": "config"
+    },
+    {
+      "key": "slots.light",
+      "value": "3",
+      "source": "default"
+    },
+    {
+      "key": "slots.order",
+      "value": "fifo",
+      "source": "default"
+    }
+  ]
+}
+
+@@gate_end
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+17179869184
+@@load
+5.45
+@@cpu
+16 14 70
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     7044.
+Pages active:                                 316238.
+Pages inactive:                               313258.
+Pages speculative:                              1565.
+Pages throttled:                                   0.
+Pages wired down:                             116607.
+Pages purgeable:                                1580.
+"Translation faults":                    18843121574.
+Pages copy-on-write:                      2528020488.
+Pages zero filled:                        2308206728.
+Pages reactivated:                           5706731.
+Pages purged:                               16905120.
+File-backed pages:                            167320.
+Anonymous pages:                              463741.
+Pages stored in compressor:                   526360.
+Pages occupied by compressor:                 260413.
+Decompressions:                           6425240357.
+Compressions:                             6670759966.
+Pageins:                                   348367359.
+Pageouts:                                    1538288.
+Swapins:                                     3653328.
+Swapouts:                                    3994903.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   239362496 197838776  13800012    94% 7807526 138000120    5%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+17179869184
+@@load
+5.45
+@@cpu
+25 22 53
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     5523.
+Pages active:                                 315751.
+Pages inactive:                               312818.
+Pages speculative:                              1753.
+Pages throttled:                                   0.
+Pages wired down:                             116668.
+Pages purgeable:                                1486.
+"Translation faults":                    18843255911.
+Pages copy-on-write:                      2528039430.
+Pages zero filled:                        2308227821.
+Pages reactivated:                           5706731.
+Pages purged:                               16905264.
+File-backed pages:                            165935.
+Anonymous pages:                              464387.
+Pages stored in compressor:                   527180.
+Pages occupied by compressor:                 262611.
+Decompressions:                           6425261548.
+Compressions:                             6670781827.
+Pageins:                                   348369185.
+Pageouts:                                    1538288.
+Swapins:                                     3653328.
+Swapouts:                                    3994903.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   239362496 197838844  13799944    94% 7807526 137999440    5%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+17179869184
+@@load
+5.45
+@@cpu
+22 16 62
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     5766.
+Pages active:                                 315140.
+Pages inactive:                               311845.
+Pages speculative:                              2020.
+Pages throttled:                                   0.
+Pages wired down:                             116601.
+Pages purgeable:                                1476.
+"Translation faults":                    18843341779.
+Pages copy-on-write:                      2528048112.
+Pages zero filled:                        2308240914.
+Pages reactivated:                           5706731.
+Pages purged:                               16905288.
+File-backed pages:                            166869.
+Anonymous pages:                              462136.
+Pages stored in compressor:                   528285.
+Pages occupied by compressor:                 263752.
+Decompressions:                           6425273264.
+Compressions:                             6670795115.
+Pageins:                                   348371453.
+Pageouts:                                    1538289.
+Swapins:                                     3653328.
+Swapouts:                                    3994903.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   239362496 197838864  13799924    94% 7807526 137999240    5%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+17179869184
+@@load
+5.45
+@@cpu
+14 11 75
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     5390.
+Pages active:                                 315642.
+Pages inactive:                               312710.
+Pages speculative:                              1457.
+Pages throttled:                                   0.
+Pages wired down:                             116605.
+Pages purgeable:                                1478.
+"Translation faults":                    18843399494.
+Pages copy-on-write:                      2528053851.
+Pages zero filled:                        2308254286.
+Pages reactivated:                           5706731.
+Pages purged:                               16905310.
+File-backed pages:                            165738.
+Anonymous pages:                              464071.
+Pages stored in compressor:                   527089.
+Pages occupied by compressor:                 263321.
+Decompressions:                           6425279709.
+Compressions:                             6670800429.
+Pageins:                                   348372719.
+Pageouts:                                    1538289.
+Swapins:                                     3653328.
+Swapouts:                                    3994903.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   239362496 197838916  13799872    94% 7807526 137998720    5%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+17179869184
+@@load
+5.45
+@@cpu
+15 12 72
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     6836.
+Pages active:                                 314321.
+Pages inactive:                               311313.
+Pages speculative:                              1527.
+Pages throttled:                                   0.
+Pages wired down:                             116593.
+Pages purgeable:                                1480.
+"Translation faults":                    18843465166.
+Pages copy-on-write:                      2528062283.
+Pages zero filled:                        2308268543.
+Pages reactivated:                           5706731.
+Pages purged:                               16905322.
+File-backed pages:                            165787.
+Anonymous pages:                              461374.
+Pages stored in compressor:                   529231.
+Pages occupied by compressor:                 264535.
+Decompressions:                           6425286732.
+Compressions:                             6670809797.
+Pageins:                                   348373697.
+Pageouts:                                    1538289.
+Swapins:                                     3653328.
+Swapouts:                                    3994903.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   239362496 197838948  13799840    94% 7807527 137998400    5%   /System/Volumes/Data
+@@s
+@@top_cpu
+34362  45.1 670464 claude
+65169  24.1  27536 php80
+65171  20.6  25456 php80
+65170  20.4  25424 php80
+65172  16.8   3536 zsh
+@@top_mem
+34362  45.1 670464 claude
+37716   0.3 476288 claude
+33182   0.3 447600 claude
+97098   5.2 392016 claude
+77650   0.4 350176 claude
+@@gate
+{
+  "Heavy": [
+    {
+      "class": "heavy",
+      "slot": 1,
+      "pid": 66602,
+      "pgid": 56729,
+      "argv": [
+        "/tmp/x"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "started": "2026-10-16T05:21:11.775618+08:00",
+      "session": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  "Light": null,
+  "WaitHeavy": 11,
+  "WaitLight": 0,
+  "QueueHeavy": [
+    {
+      "class": "heavy",
+      "place": 1,
+      "pid": 72863,
+      "since": "2026-10-16T05:04:14.263396+08:00",
+      "argv": [
+        "go",
+        "test",
+        "-count=1",
+        "./cmd/pdx",
+        "./internal/execstat",
+        "./internal/hostmem",
+        "./internal/core"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 2,
+      "pid": 12860,
+      "since": "2026-10-16T05:11:49.689952+08:00",
+      "argv": [
+        "./bin/test-baseline.sh"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 3,
+      "pid": 15189,
+      "since": "2026-10-16T05:12:12.976517+08:00",
+      "argv": [
+        "pnpm",
+        "exec",
+        "tsc",
+        "--noEmit",
+        "-p",
+        "."
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 4,
+      "pid": 24886,
+      "since": "2026-10-16T05:14:00.069198+08:00",
+      "argv": [
+        "go",
+        "build",
+        "./internal/...",
+        "./cmd/..."
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 5,
+      "pid": 37086,
+      "since": "2026-10-16T05:16:20.576387+08:00",
+      "argv": [
+        "pnpm",
+        "check",
+        "--fast"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 6,
+      "pid": 39720,
+      "since": "2026-10-16T05:16:53.444123+08:00",
+      "argv": [
+        "go",
+        "vet",
+        "./internal/module/hostconfig/",
+        "./cmd/pdx/"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 7,
+      "pid": 50022,
+      "since": "2026-10-16T05:19:21.669895+08:00",
+      "argv": [
+        "pnpm",
+        "-C",
+        "desktop",
+        "run",
+        "typecheck"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 8,
+      "pid": 53395,
+      "since": "2026-10-16T05:20:25.734272+08:00",
+      "argv": [
+        "npx",
+        "tsc",
+        "-b",
+        "--force"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 9,
+      "pid": 53437,
+      "since": "2026-10-16T05:20:26.174861+08:00",
+      "argv": [
+        "go",
+        "vet",
+        "./internal/module/hostconfig/",
+        "./cmd/pdx/"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 10,
+      "pid": 53519,
+      "since": "2026-10-16T05:20:27.242265+08:00",
+      "argv": [
+        "npx",
+        "tsc",
+        "-b",
+        "--force"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 11,
+      "pid": 59636,
+      "since": "2026-10-16T05:21:36.410279+08:00",
+      "argv": [
+        "php",
+        "-d",
+        "memory_limit=1G",
+        "vendor/bin/phpunit"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  "QueueLight": null,
+  "Suspect": null,
+  "Profile": "default",
+  "Settings": [
+    {
+      "key": "admission.disk_min_gb",
+      "value": "10",
+      "source": "default"
+    },
+    {
+      "key": "admission.enabled",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "admission.max_page_rate",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "admission.max_pressure_level",
+      "value": "1",
+      "source": "default"
+    },
+    {
+      "key": "admission.on_unreadable",
+      "value": "level-only",
+      "source": "default"
+    },
+    {
+      "key": "cache.count1",
+      "value": "warn",
+      "source": "default"
+    },
+    {
+      "key": "enabled",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "intercept.mod_rewrite",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "intercept.tools",
+      "value": "go,pnpm,npx,vitest,tsc,composer,phpunit,pest",
+      "source": "default"
+    },
+    {
+      "key": "lifetime.alert_after_min",
+      "value": "60",
+      "source": "default"
+    },
+    {
+      "key": "lifetime.hold",
+      "value": "tree",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.go_mem_per_worker_mb",
+      "value": "150",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.go_p",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.mem_per_worker_mb",
+      "value": "400",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.mode",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.pnpm_concurrency",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.reserve_cores",
+      "value": "2",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.vitest_max_workers",
+      "value": "3",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.vitest_mem_per_worker_mb",
+      "value": "700",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.vitest_workers",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "priority.mode",
+      "value": "nice",
+      "source": "default"
+    },
+    {
+      "key": "priority.nice",
+      "value": "10",
+      "source": "default"
+    },
+    {
+      "key": "profile",
+      "value": "default",
+      "source": "default"
+    },
+    {
+      "key": "reap.enabled",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "reap.grace_s",
+      "value": "5",
+      "source": "default"
+    },
+    {
+      "key": "slots.heavy",
+      "value": "1",
+      "source": "config"
+    },
+    {
+      "key": "slots.light",
+      "value": "3",
+      "source": "default"
+    },
+    {
+      "key": "slots.order",
+      "value": "fifo",
+      "source": "default"
+    }
+  ]
+}
+
+@@gate_end
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+17179869184
+@@load
+5.49
+@@cpu
+16 12 72
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     6308.
+Pages active:                                 314612.
+Pages inactive:                               312179.
+Pages speculative:                              1415.
+Pages throttled:                                   0.
+Pages wired down:                             116509.
+Pages purgeable:                                1362.
+"Translation faults":                    18843527579.
+Pages copy-on-write:                      2528069234.
+Pages zero filled:                        2308282881.
+Pages reactivated:                           5706731.
+Pages purged:                               16905456.
+File-backed pages:                            165589.
+Anonymous pages:                              462617.
+Pages stored in compressor:                   527337.
+Pages occupied by compressor:                 264102.
+Decompressions:                           6425295806.
+Compressions:                             6670816914.
+Pageins:                                   348374589.
+Pageouts:                                    1538290.
+Swapins:                                     3653328.
+Swapouts:                                    3994903.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   239362496 197839012  13799776    94% 7807530 137997760    5%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+17179869184
+@@load
+5.49
+@@cpu
+20 29 51
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     5597.
+Pages active:                                 310822.
+Pages inactive:                               302366.
+Pages speculative:                              6970.
+Pages throttled:                                   0.
+Pages wired down:                             116632.
+Pages purgeable:                                1267.
+"Translation faults":                    18843611465.
+Pages copy-on-write:                      2528078915.
+Pages zero filled:                        2308298242.
+Pages reactivated:                           5706748.
+Pages purged:                               16905615.
+File-backed pages:                            172782.
+Anonymous pages:                              447376.
+Pages stored in compressor:                   542178.
+Pages occupied by compressor:                 272736.
+Decompressions:                           6425314225.
+Compressions:                             6670850351.
+Pageins:                                   348378765.
+Pageouts:                                    1538290.
+Swapins:                                     3653328.
+Swapouts:                                    3994903.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   239362496 197839236  13799552    94% 7807876 137995520    5%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+17179869184
+@@load
+5.49
+@@cpu
+31 29 40
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     5959.
+Pages active:                                 307850.
+Pages inactive:                               297961.
+Pages speculative:                              8559.
+Pages throttled:                                   0.
+Pages wired down:                             117036.
+Pages purgeable:                                1234.
+"Translation faults":                    18843752978.
+Pages copy-on-write:                      2528097686.
+Pages zero filled:                        2308337706.
+Pages reactivated:                           5706748.
+Pages purged:                               16905710.
+File-backed pages:                            175283.
+Anonymous pages:                              439087.
+Pages stored in compressor:                   554998.
+Pages occupied by compressor:                 277760.
+Decompressions:                           6425336337.
+Compressions:                             6670885956.
+Pageins:                                   348381269.
+Pageouts:                                    1538292.
+Swapins:                                     3653328.
+Swapouts:                                    3994903.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   239362496 197841008  13797780    94% 7808072 137977800    5%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+17179869184
+@@load
+5.49
+@@cpu
+34 16 50
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     8504.
+Pages active:                                 307699.
+Pages inactive:                               297553.
+Pages speculative:                              8696.
+Pages throttled:                                   0.
+Pages wired down:                             116838.
+Pages purgeable:                                1227.
+"Translation faults":                    18843849490.
+Pages copy-on-write:                      2528107434.
+Pages zero filled:                        2308367107.
+Pages reactivated:                           5706749.
+Pages purged:                               16905743.
+File-backed pages:                            176304.
+Anonymous pages:                              437644.
+Pages stored in compressor:                   551559.
+Pages occupied by compressor:                 275835.
+Decompressions:                           6425351986.
+Compressions:                             6670898112.
+Pageins:                                   348382764.
+Pageouts:                                    1538294.
+Swapins:                                     3653328.
+Swapouts:                                    3994903.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   239362496 197849756  13789032    94% 7808165 137890320    5%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+17179869184
+@@load
+5.85
+@@cpu
+33 15 52
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     5425.
+Pages active:                                 307078.
+Pages inactive:                               297126.
+Pages speculative:                              8529.
+Pages throttled:                                   0.
+Pages wired down:                             116769.
+Pages purgeable:                                1223.
+"Translation faults":                    18843928069.
+Pages copy-on-write:                      2528113641.
+Pages zero filled:                        2308393781.
+Pages reactivated:                           5706749.
+Pages purged:                               16905773.
+File-backed pages:                            176412.
+Anonymous pages:                              436321.
+Pages stored in compressor:                   557826.
+Pages occupied by compressor:                 280198.
+Decompressions:                           6425362186.
+Compressions:                             6670914954.
+Pageins:                                   348384155.
+Pageouts:                                    1538295.
+Swapins:                                     3653328.
+Swapouts:                                    3994903.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   239362496 197853408  13785380    94% 7808188 137853800    5%   /System/Volumes/Data
+@@s
+@@top_cpu
+65528 202.0 130352 compile
+97098  26.3 370848 claude
+65571  21.1  27568 php80
+65576  19.0  25408 php80
+65578  17.2  25728 php80
+@@top_mem
+34362  11.8 464224 claude
+37716   0.5 392784 claude
+97098  26.3 370848 claude
+32275   2.1 322560 claude
+26788   0.0 315856 Brave Browser
+@@gate
+{
+  "Heavy": [
+    {
+      "class": "heavy",
+      "slot": 1,
+      "pid": 66602,
+      "pgid": 56729,
+      "argv": [
+        "/tmp/x"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "started": "2026-10-16T05:21:11.775618+08:00",
+      "session": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  "Light": [
+    {
+      "class": "light",
+      "slot": 1,
+      "pid": 65264,
+      "pgid": 65291,
+      "argv": [
+        "go",
+        "vet",
+        "./cmd/pdx/"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "started": "2026-10-16T05:22:33.599788+08:00",
+      "session": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  "WaitHeavy": 11,
+  "WaitLight": 0,
+  "QueueHeavy": [
+    {
+      "class": "heavy",
+      "place": 1,
+      "pid": 72863,
+      "since": "2026-10-16T05:04:14.263396+08:00",
+      "argv": [
+        "go",
+        "test",
+        "-count=1",
+        "./cmd/pdx",
+        "./internal/execstat",
+        "./internal/hostmem",
+        "./internal/core"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 2,
+      "pid": 12860,
+      "since": "2026-10-16T05:11:49.689952+08:00",
+      "argv": [
+        "./bin/test-baseline.sh"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 3,
+      "pid": 15189,
+      "since": "2026-10-16T05:12:12.976517+08:00",
+      "argv": [
+        "pnpm",
+        "exec",
+        "tsc",
+        "--noEmit",
+        "-p",
+        "."
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 4,
+      "pid": 24886,
+      "since": "2026-10-16T05:14:00.069198+08:00",
+      "argv": [
+        "go",
+        "build",
+        "./internal/...",
+        "./cmd/..."
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 5,
+      "pid": 37086,
+      "since": "2026-10-16T05:16:20.576387+08:00",
+      "argv": [
+        "pnpm",
+        "check",
+        "--fast"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 6,
+      "pid": 39720,
+      "since": "2026-10-16T05:16:53.444123+08:00",
+      "argv": [
+        "go",
+        "vet",
+        "./internal/module/hostconfig/",
+        "./cmd/pdx/"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 7,
+      "pid": 50022,
+      "since": "2026-10-16T05:19:21.669895+08:00",
+      "argv": [
+        "pnpm",
+        "-C",
+        "desktop",
+        "run",
+        "typecheck"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 8,
+      "pid": 53395,
+      "since": "2026-10-16T05:20:25.734272+08:00",
+      "argv": [
+        "npx",
+        "tsc",
+        "-b",
+        "--force"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 9,
+      "pid": 53437,
+      "since": "2026-10-16T05:20:26.174861+08:00",
+      "argv": [
+        "go",
+        "vet",
+        "./internal/module/hostconfig/",
+        "./cmd/pdx/"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 10,
+      "pid": 53519,
+      "since": "2026-10-16T05:20:27.242265+08:00",
+      "argv": [
+        "npx",
+        "tsc",
+        "-b",
+        "--force"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    },
+    {
+      "class": "heavy",
+      "place": 11,
+      "pid": 59636,
+      "since": "2026-10-16T05:21:36.410279+08:00",
+      "argv": [
+        "php",
+        "-d",
+        "memory_limit=1G",
+        "vendor/bin/phpunit"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "session": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  "QueueLight": null,
+  "Suspect": null,
+  "Profile": "default",
+  "Settings": [
+    {
+      "key": "admission.disk_min_gb",
+      "value": "10",
+      "source": "default"
+    },
+    {
+      "key": "admission.enabled",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "admission.max_page_rate",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "admission.max_pressure_level",
+      "value": "1",
+      "source": "default"
+    },
+    {
+      "key": "admission.on_unreadable",
+      "value": "level-only",
+      "source": "default"
+    },
+    {
+      "key": "cache.count1",
+      "value": "warn",
+      "source": "default"
+    },
+    {
+      "key": "enabled",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "intercept.mod_rewrite",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "intercept.tools",
+      "value": "go,pnpm,npx,vitest,tsc,composer,phpunit,pest",
+      "source": "default"
+    },
+    {
+      "key": "lifetime.alert_after_min",
+      "value": "60",
+      "source": "default"
+    },
+    {
+      "key": "lifetime.hold",
+      "value": "tree",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.go_mem_per_worker_mb",
+      "value": "150",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.go_p",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.mem_per_worker_mb",
+      "value": "400",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.mode",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.pnpm_concurrency",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.reserve_cores",
+      "value": "2",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.vitest_max_workers",
+      "value": "3",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.vitest_mem_per_worker_mb",
+      "value": "700",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.vitest_workers",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "priority.mode",
+      "value": "nice",
+      "source": "default"
+    },
+    {
+      "key": "priority.nice",
+      "value": "10",
+      "source": "default"
+    },
+    {
+      "key": "profile",
+      "value": "default",
+      "source": "default"
+    },
+    {
+      "key": "reap.enabled",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "reap.grace_s",
+      "value": "5",
+      "source": "default"
+    },
+    {
+      "key": "slots.heavy",
+      "value": "1",
+      "source": "config"
+    },
+    {
+      "key": "slots.light",
+      "value": "3",
+      "source": "default"
+    },
+    {
+      "key": "slots.order",
+      "value": "fifo",
+      "source": "default"
+    }
+  ]
+}
+
+@@gate_end
+@@end
