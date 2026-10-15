@@ -147,53 +147,15 @@ function scan(cmd) {
 
 // ---- reading one segment ----
 
-const PM_VALUE_OPTS = new Set(['-C', '--dir', '--prefix', '--filter', '-F', '--workspace', '-w', '--package', '-p', '--cwd'])
-const RUNNERS = new Set(['npx', 'pnpm', 'pnpx', 'yarn', 'npm', 'bunx', 'bun', 'corepack'])
-const PM_SUBCOMMANDS = new Set(['exec', 'run', 'run-script', 'dlx', 'x'])
-const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'fish', 'ksh'])
 const ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=/
 
 const base = (p) => p.slice(p.lastIndexOf('/') + 1)
-
-// commandOf strips what comes before the command proper: environment assignments, `env`, `time`,
-// `timeout N`, `nice`, `exec`, and a package runner with its own options. It returns the words that are
-// the command and its arguments (redirections left out), or [] when there is none.
-function commandOf(words) {
-  let w = words.filter((x) => !x.redirect).map((x) => x.text)
-  // a redirection's target (the word after a bare `>`) is not an argument
-  const idx = words.map((x, k) => (x.redirect && BARE.test(x.text) ? k + 1 : -1)).filter((k) => k >= 0)
-  if (idx.length) w = words.filter((x, k) => !x.redirect && !idx.includes(k)).map((x) => x.text)
-  for (let guard = 0; guard < 8 && w.length; guard++) {
-    const head = base(w[0])
-    if (ASSIGN.test(w[0])) { w = w.slice(1); continue }
-    if (head === 'env' || head === 'time' || head === 'exec' || head === 'command') { w = w.slice(1); continue }
-    if (head === 'nice') { w = w.slice(1); if (w[0] === '-n') w = w.slice(2); continue }
-    if (head === 'timeout') {
-      w = w.slice(1)
-      while (w.length && w[0].startsWith('-')) w = w.slice(w[0] === '-s' || w[0] === '-k' ? 2 : 1)
-      if (w.length) w = w.slice(1) // the duration
-      continue
-    }
-    if (RUNNERS.has(head)) {
-      w = w.slice(1)
-      while (w.length) {
-        if (PM_VALUE_OPTS.has(w[0])) { w = w.slice(2); continue }
-        if (w[0].startsWith('-') && !w[0].includes('=') && PM_VALUE_OPTS.has(w[0])) { w = w.slice(2); continue }
-        if (w[0].startsWith('-')) { w = w.slice(1); continue }
-        if (PM_SUBCOMMANDS.has(w[0])) { w = w.slice(1); continue }
-        break
-      }
-      continue
-    }
-    break
-  }
-  return w
-}
 
 // ---- the hook ----
 
 const PRE_MS = 3_000 // pdx.json, the permission check: a read that has not answered by then is a failed one
 const ASK_MS = 3_000 // `pdx gate would-wait` (about 70 ms): longer than this and the call is not held for it
+const PLAN_MS = 4_000 // all of the planning together: a hook that waits on a dead dependency must not hold every Bash call
 const MAX_ASKS = 3 // one call can hold several commands; the first that would wait decides, and no more than this are asked
 
 const parse = (s) => { try { return JSON.parse(s) } catch { return null } }
@@ -309,6 +271,12 @@ async function verdict($, command, background) {
   return v && typeof v.decision === 'string' ? v.decision : null
 }
 
+// withDeadline gives the answer of a plan, or null when it has not come within PLAN_MS (the call then runs as it is).
+async function withDeadline($, work) {
+  const cap = Promise.resolve().then(() => $.clock.sleep(PLAN_MS)).then(() => null, () => null)
+  return Promise.race([work, cap])
+}
+
 // planGate is everything decided before the call runs: the command to run, whether to run it in the background, and the
 // notes for the model. A plan that is null (or throws) means the call runs as it is.
 async function planGate($, e) {
@@ -320,7 +288,7 @@ async function planGate($, e) {
   const prefixed = prefixGated(command, sq(cfg.bin) + ' gate' + (cfg.config ? ' --config ' + sq(cfg.config) : '') + ' --auto -- ')
   if (prefixed.changed) {
     // A prefix can change what the engine asks permission for: then the call is left as it is.
-    const [before, after] = [await verdict($, e.command, wasBackground), await verdict($, prefixed.command, wasBackground)]
+    const [before, after] = await Promise.all([verdict($, e.command, wasBackground), verdict($, prefixed.command, wasBackground)])
     if (before !== null && before === after) {
       command = prefixed.command
       notes.push('Purdex mod 把直接呼叫 node_modules/.bin 或 vendor/bin 的指令交給 pdx gate（主機負載控制），實際執行的是：' + command)
@@ -334,14 +302,14 @@ async function planGate($, e) {
       const w = await askWouldWait($, cfg, argv)
       if (!w || w.would_wait !== true) continue
       // A call moved to the background must not raise a prompt the foreground call would not have.
-      const [before, after] = [await verdict($, e.command, false), await verdict($, command, true)]
+      const [before, after] = await Promise.all([verdict($, e.command, false), verdict($, command, true)])
       if (before === null || before !== after) {
         log($, 'the background would change the permission verdict (' + before + ' → ' + after + '): the call stays in the foreground')
         break
       }
       background = true
-      notes.push('Purdex mod 把這個指令改成背景執行：主機負載控制現在要讓它排隊。' + (typeof w.note === 'string' ? w.note + ' ' : '') +
-        '它輪到時會自己開始，結束時你會收到通知；不要重跑，也不要自己加 & 繞過排隊。')
+      notes.push('Purdex mod 把這個 Bash 呼叫（整段，包括它前後接的指令）改成背景執行：主機負載控制現在要讓其中的重指令排隊。' + (typeof w.note === 'string' ? w.note + ' ' : '') +
+        '它輪到時會自己開始，整段跑完時你會收到通知與輸出；在那之前不要假設它做完了，不要重跑，也不要自己加 & 繞過排隊。')
       break
     }
   }
@@ -352,7 +320,7 @@ async function planGate($, e) {
 export function registerGate(on) {
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     let plan = null
-    try { plan = await planGate($, e) } catch (err) { log($, 'planning failed, the call runs as it is: ' + (err && err.message ? err.message : String(err))) }
+    try { plan = await withDeadline($, planGate($, e)) } catch (err) { log($, 'planning failed, the call runs as it is: ' + (err && err.message ? err.message : String(err))) }
     if (!plan) return next(e)
     const r = await next({ ...e, command: plan.command, ...(plan.background ? { run_in_background: true } : {}) })
     if (!r || typeof r !== 'object' || 'deny' in r) return r

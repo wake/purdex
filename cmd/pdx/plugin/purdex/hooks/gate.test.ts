@@ -73,18 +73,20 @@ const BUSY = JSON.stringify({ would_wait: true, reason: 'slots', class: 'heavy',
   note: 'waiting for a heavy slot — 1 ahead; held 5m by "go test ./..." (purdex/spa). This is a normal queue: it starts by itself when that ends; do not interrupt it or run the command another way.' })
 
 type Rig = { calls: string[][]; ran: { command: string; bg: unknown; agent?: unknown }[]; checks: { command: string; bg: unknown }[]; verdict: (command: string, bg: unknown) => string | null }
-function rig(on: any, answer: (argv: string[]) => any, bash: (e: any) => any = () => BASH_OK, pdxJSON?: string): Rig {
+function rig(on: any, answer: (argv: string[]) => any, bash: (e: any) => any = () => BASH_OK, pdxJSON?: string, hang?: string): Rig {
   const r: Rig = { calls: [], ran: [], checks: [], verdict: () => 'allow' }
+  const never = () => new Promise(() => {}) // a dependency that never answers
   on('session.id', () => ({ value: 'sess-1' }))
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
   on('env.get', () => ({ value: '/bin/zsh' }))
   on('classic.Stop', async () => ({}))
   on('session.cwd', () => ({ value: '/work/purdex' }))
-  on('tool.check', { tool: 'Bash' }, (_$: any, e: any) => { r.checks.push({ command: e.input.command, bg: e.input.run_in_background }); const v = r.verdict(e.input.command, e.input.run_in_background); if (v === null) throw new Error('the engine could not check'); return { decision: v } })
+  on('tool.check', { tool: 'Bash' }, (_$: any, e: any) => {
+    if (hang === 'tool.check') return never(); r.checks.push({ command: e.input.command, bg: e.input.run_in_background }); const v = r.verdict(e.input.command, e.input.run_in_background); if (v === null) throw new Error('the engine could not check'); return { decision: v } })
   on('clock.sleep', async (_$: any, e: any) => { await new Promise((res) => setTimeout(res, e.ms)); return { value: undefined } })
-  on('fs.read', (_$: any, e: any) => (pdxJSON !== undefined && e.path.endsWith('/pdx.json') ? { value: pdxJSON } : { deny: 'ENOENT' }))
+  on('fs.read', (_$: any, e: any) => (hang === 'fs.read' ? never() : pdxJSON !== undefined && e.path.endsWith('/pdx.json') ? { value: pdxJSON } : { deny: 'ENOENT' }))
   on('ui.log', () => ({ value: undefined }))
-  on('process.run', (_$: any, e: any) => { r.calls.push([...e.argv]); return answer(e.argv) })
+  on('process.run', (_$: any, e: any) => { r.calls.push([...e.argv]); return hang === 'process.run' ? never() : answer(e.argv) })
   on('tool.call', { tool: 'Bash' }, (_$: any, e: any) => { r.ran.push({ command: e.command, bg: e.run_in_background, agent: e.agentId }); return bash(e) })
   return r
 }
@@ -122,6 +124,7 @@ test('a call that would wait runs in the background, with the gate\'s own words'
   expect(out.context[0]).toContain('改成背景執行')
   expect(out.context[0]).toContain('held 5m by "go test ./..." (purdex/spa)')
   expect(out.context[0]).toContain('不要重跑')
+  expect(out.context[0]).toContain('整段')
   // pdx was asked once, for the words of the command, not for the whole shell line
   expect(wouldWaits(r)).toEqual([['pdx', 'gate', 'would-wait', '--auto', '--json', '--', 'go', 'test', './...']])
 })
@@ -256,3 +259,25 @@ test('pdx.json names the binary and the config: the question and the prefix both
   expect(r.ran[0].command).toBe("'/opt/pdx/bin/pdx' gate --config '/home/me/.config/pdx2/config.toml' --auto -- ./vendor/bin/pest")
   expect(out.context).toHaveLength(2)
 })
+
+test('a compound call goes to the background as a whole, and the note says so', async ($, on) => {
+  const r = rig(on, () => ok(BUSY))
+  const out = await bash($, 'cd spa && go test ./... && cat result.json')
+  expect(r.ran).toHaveLength(1)
+  expect(r.ran[0].command).toBe('cd spa && go test ./... && cat result.json') // unchanged: it all runs, in order, in the background
+  expect(r.ran[0].bg).toBe(true)
+  expect(out.context[0]).toContain('整段，包括它前後接的指令')
+  expect(out.context[0]).toContain('不要假設它做完了')
+})
+
+// A dependency that never answers must not hold the call: the planning has one deadline and the call then runs as it is.
+for (const [name, hang] of [['fs.read', 'fs.read'], ['process.run', 'process.run'], ['tool.check', 'tool.check']] as const) {
+  test(`${name} never answers → the call runs as it was, within the planning deadline`, { timeoutMs: 15000 }, async ($, on) => {
+    const r = rig(on, () => ok(BUSY), () => BASH_OK, undefined, hang)
+    const began = Date.now()
+    const out = await bash($, './vendor/bin/pest')
+    expect(Date.now() - began).toBeLessThan(9000)
+    expect(out.result).toEqual(BASH_OK.result)
+    expect(r.ran).toHaveLength(1)
+  })
+}
