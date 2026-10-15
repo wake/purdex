@@ -103,6 +103,12 @@ func (fr *FrameReader) Next() (string, error) {
 	}
 }
 
+// IsBadFrame reports whether err is a frame-level fault of FrameReader.Next (a frame over the cap, or one without its @@end):
+// a frame that counts, like a ParseFast error, toward the five unparsable frames in a row that restart a session.
+func IsBadFrame(err error) bool {
+	return errors.Is(err, ErrFrameTooBig) || errors.Is(err, ErrIncompleteFrame)
+}
+
 // unread puts one line back in front of the stream.
 func (fr *FrameReader) unread(l string) {
 	fr.r = bufio.NewReaderSize(io.MultiReader(strings.NewReader(l+"\n"), fr.r), 4096)
