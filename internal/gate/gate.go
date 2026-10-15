@@ -82,12 +82,21 @@ type Gate struct {
 	Token   func() string
 }
 
+// sessionFromEnv is the Claude Code session a command runs in: CLAUDE_CODE_SESSION_ID (what Claude Code sets), else
+// CLAUDE_SESSION_ID (an older name some callers still set); "" when neither is.
+func sessionFromEnv(get func(string) string) string {
+	if v := get("CLAUDE_CODE_SESSION_ID"); v != "" {
+		return v
+	}
+	return get("CLAUDE_SESSION_ID")
+}
+
 // New is the gate of this host with the given config.
 func New(cfg Config) *Gate {
 	g := &Gate{
 		st: &state{cfg: cfg}, Now: time.Now, Stderr: os.Stderr, TreeEvery: 500 * time.Millisecond,
 		Poll:    func() time.Duration { return time.Second + time.Duration(mrand.Int63n(int64(2*time.Second))) },
-		Session: os.Getenv("CLAUDE_SESSION_ID"),
+		Session: sessionFromEnv(os.Getenv),
 		Procs:   procTable, IsTTY: stdinIsTTY, DiskFree: freeBytes, Facts: ReadHostFacts, PID: os.Getpid, Token: newToken, Holders: lsofHolders,
 	}
 	g.Pressure = NewHostReader(cfg.Dir)
