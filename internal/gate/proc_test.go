@@ -87,11 +87,12 @@ func TestTree_ReapEndsWhatTheWalkSaw(t *testing.T) {
 	assert.ErrorIs(t, syscall.Kill(pid, 0), syscall.ESRCH, "the leftover is gone")
 }
 
-// The first look at the process table may fail; the tree still gets its root and finds the children once a look works.
-// (M: the root is never known after a failed first look.)
-func TestTree_AFailedFirstLookStillFindsTheChildren(t *testing.T) {
+// If the process table cannot be read at the start, the tree cannot tell the command from a stranger that gets its pid
+// later, so it follows nothing and signals nothing. (M: learn the root at a later look.)
+func TestTree_AFailedFirstLookFollowsNothing(t *testing.T) {
 	calls := 0
 	tab := map[int]procInfo{100: {PPID: 1, Start: 5}, 200: {PPID: 100, Start: 6}}
+	var sent []int
 	procs := func() (map[int]procInfo, error) {
 		calls++
 		if calls <= 3 { // newTree tries three times
@@ -100,9 +101,30 @@ func TestTree_AFailedFirstLookStillFindsTheChildren(t *testing.T) {
 		return tab, nil
 	}
 	tr := newTree(100, procs)
+	tr.kill = func(pid int, sig syscall.Signal) error { sent = append(sent, pid); return nil }
+	assert.False(t, tr.known())
+	tr.scan()
+	assert.Empty(t, tr.seen, "the root's identity is unknown: nothing is followed")
+	// the root exits, its pid is reused by a stranger with children
+	tab = map[int]procInfo{100: {PPID: 1, Start: 99}, 300: {PPID: 100, Start: 100}}
+	tr.scan()
+	tr.reap(10 * time.Millisecond)
+	assert.Empty(t, tr.seen)
+	assert.Empty(t, sent, "and nothing is signalled")
+}
+
+// One failed look is not the end: the start tries again.
+func TestTree_TheStartTriesThreeTimes(t *testing.T) {
+	calls := 0
+	procs := func() (map[int]procInfo, error) {
+		calls++
+		if calls < 3 {
+			return nil, errors.New("sysctl failed")
+		}
+		return map[int]procInfo{100: {PPID: 1, Start: 5}, 200: {PPID: 100, Start: 6}}, nil
+	}
+	tr := newTree(100, procs)
+	assert.True(t, tr.known())
 	tr.scan()
 	assert.Equal(t, map[int]int64{200: 6}, tr.seen)
-	tab = map[int]procInfo{100: {PPID: 1, Start: 99}, 300: {PPID: 100, Start: 100}} // once known, a reused pid is still told
-	tr.scan()
-	assert.NotContains(t, tr.seen, 300)
 }
