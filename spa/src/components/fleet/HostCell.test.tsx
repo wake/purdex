@@ -64,6 +64,11 @@ describe('HostCell — the ring', () => {
     expect(len / whole).toBeCloseTo(0.5, 2)
     expect(ring().style.width).toBe('16px')
   })
+  it('a different score gives a different length', () => {
+    setup(view({ fast: fast({ load: 80 }) }))
+    const [len, whole] = (arc()!.getAttribute('stroke-dasharray') ?? '').split(' ').map(Number)
+    expect(len / whole).toBeCloseTo(0.8, 2)
+  })
   it('its colour is the zone the daemon sent, not a function of the score', () => {
     // a high score but a normal zone stays neutral; a low score in a danger zone is red
     const { unmount } = render(<HostCell view={view({ fast: fast({ load: 95, zone: 'normal' }) })} look={{}} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
