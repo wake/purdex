@@ -107,7 +107,7 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 	assert.Equal(t, http.StatusTemporaryRedirect, callWith(t, c, "GET", "/api/info/../config", tok, nil).Code)
 	for _, r := range []struct{ method, path string }{
 		{"GET", "/api/config"}, {"PUT", "/api/config"}, {"POST", "/api/daemon/restart"},
-		{"PUT", "/api/hostconfig/projects"}, {"POST", "/api/hostconfig/check-path"},
+		{"PUT", "/api/hostconfig/projects"}, {"PUT", "/api/hostconfig/probe-hosts"}, {"PUT", "/api/hostconfig/fleet"}, {"POST", "/api/hostconfig/check-path"},
 		{"GET", "/api/sessions"}, {"DELETE", "/api/sessions/x"}, {"PATCH", "/api/sessions/x"}, {"GET", "/api/sessions/x/home"},
 		{"POST", "/api/profiles"}, {"DELETE", "/api/profiles/p_0123456789ab"},
 		{"PUT", "/api/profiles/p_0123456789ab/attachment"},
