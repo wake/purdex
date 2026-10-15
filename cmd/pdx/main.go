@@ -94,6 +94,8 @@ func main() {
 		runKill(os.Args[2:])
 	case "lease":
 		runLease(os.Args[2:])
+	case "host":
+		runHost(os.Args[2:])
 	case "gate":
 		runGate(os.Args[2:])
 	case "watch":
