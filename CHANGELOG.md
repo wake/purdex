@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.0.0-alpha.742] - 2026-10-16
+
+> 只有 daemon 與 `pdx` CLI 改，mod、SPA、Electron 沒有改，不需要重跑 `pdx setup`。`host_minutes` 多三個欄位（新增欄位、預設 0），741 的 daemon 照樣讀寫，退回 741 不需要還原資料庫。部署後主機的區域（normal／warning／danger）改由記憶體壓力與換頁率決定。
+
+### Changed：資源租約的保留部分改看新訊號（負載控制 L2，spec §6）
+
+- **主機區域改看記憶體壓力與換頁率（L2b，PR #2953）**：與閘門同一組訊號——壓力等級 ≥ 2 或每秒換頁超過閘門的上限（50）是 warning，等級 ≥ 4 是 danger；升級立刻、降級要降一級並持續（warning 要換頁率低於上限的 0.9 倍）；兩個訊號都讀不到時是 unknown，不再當成 normal。CPU 負載只作參考。換頁率用取樣本來就讀的 `vm_stat` 計數，沒有多 fork。`mem_warn_pct`／`mem_danger_pct` 照收但不再影響 daemon 的區域（fleet 仍用，L3 之後才刪）。
+- **每分鐘紀錄改記閘門（L2b）**：`host_minutes` 新增 `heavy_running`、`light_running`、`gate_waiting`，從閘門的名額紀錄讀（只看、不清不鎖）；租約欄位寫 0。
+- **報表只讀每分鐘紀錄（L2c，PR #2956）**：`GET /api/resources/report` 不再讀租約與排隊位置表；新指令 `pdx host report [--since 24h] [--json]`（重指令分鐘與最大並行、輕指令最大並行、閘門排隊分鐘、各區域秒數；L2 之前的租約口徑另列 `legacy_minutes`）。`pdx lease report` 只印指路訊息。新 CLI 連到舊 daemon 會以 `incompatible_daemon` 結束，不把缺的欄位當 0。
+- **hostconfig 讀取放寬（L2a，PR #2951）**：讀已存的設定時，忽略之後要刪的租約鍵；打錯字或新版才有的鍵仍判為無效，避免讀成預設值或在讀回再寫入時刪掉新設定。用 PUT 寫入照樣嚴格。
+
+### Added：負載守門員（還不會通知任何 session）
+
+- **找守門員（W2a-3，PR #2949）**：daemon 依 `targets` 找目前的守門員並快取，比對各台的 `targets` 是否一致；`pdx watch status`、`GET /api/watch/status` 顯示這台看到的守門員、狀態與清單。叫醒與啟動在之後的 W3。
+
 ## [1.0.0-alpha.741] - 2026-10-16
 
 > mod 與 daemon 有改，SPA、Electron 沒有改。兩台都要重跑 `pdx setup` 才會換上新的 mod（mod ↔ daemon 協定仍是 8）。hostconfig 多了 `watch` 一列（缺少時用預設值），資料庫 schema 沒有變；退回 740 不需要還原資料庫，但要再跑一次 `pdx setup` 換回舊 mod。daemon 開始在資料目錄的 `watch/` 底下寫守門員的事件紀錄與 `state.json`。

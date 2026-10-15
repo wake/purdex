@@ -6,165 +6,30 @@
     "to": 1791547140000,
     "minutes": 1430
   },
-  "not_recorded": 1,
-  "requests": {
-    "total": 9,
-    "not_granted": 1,
-    "by_kind": [
-      {
-        "kind": "test-full",
-        "count": 4
-      },
-      {
-        "kind": "build",
-        "count": 3
-      },
-      {
-        "kind": "",
-        "count": 1
-      },
-      {
-        "kind": "test-pkg",
-        "count": 1
-      }
-    ]
-  },
-  "paths": {
-    "immediate": 4,
-    "waited": 2,
-    "overrun": 1,
-    "offer": 0,
-    "continued": 0
-  },
-  "wait_ms": {
-    "p50": 0,
-    "p90": 300000,
-    "max": 300000
-  },
-  "would_wait_r2": 3,
   "full": {
     "share": 0.0036713286713286712,
     "runs": 2,
     "longest_s": 300
   },
   "heavy": {
-    "minutes": 3,
+    "minutes": 4,
+    "max_running": 2,
     "max_load1": 11.2,
-    "max_mem": 83.5
+    "max_mem": 83.5,
+    "legacy_minutes": 1
   },
-  "kinds": [
-    {
-      "kind": "build",
-      "n": 2,
-      "weight": 35,
-      "peak_max": 28,
-      "mean_avg": 15
-    },
-    {
-      "kind": "test-full",
-      "n": 3,
-      "weight": 35,
-      "peak_max": 55,
-      "mean_avg": 35.666666666666664
-    },
-    {
-      "kind": "test-pkg",
-      "n": 1,
-      "weight": 15,
-      "peak_max": 10,
-      "mean_avg": 6
-    }
-  ],
+  "light": {
+    "max_running": 3
+  },
+  "gate": {
+    "waiting_minutes": 2,
+    "max_waiting": 4
+  },
   "zones": {
-    "minutes": 0,
-    "sampled_s": 0,
-    "normal": 0,
-    "warning": 0,
-    "danger": 0
-  },
-  "wait_by_reason": [],
-  "parks": 0,
-  "longest": [
-    {
-      "kind": "test-full",
-      "created_at": 1791462600000,
-      "waited_ms": 300000,
-      "dominant": "",
-      "zone": "",
-      "trend": ""
-    },
-    {
-      "kind": "test-full",
-      "created_at": 1791462000000,
-      "waited_ms": 12000,
-      "dominant": "",
-      "zone": "",
-      "trend": ""
-    },
-    {
-      "kind": "build",
-      "created_at": 1791463800000,
-      "waited_ms": 4000,
-      "dominant": "",
-      "zone": "",
-      "trend": ""
-    }
-  ],
-  "shadow": {
-    "n": 0,
-    "open": 0,
-    "wait_ms": {
-      "p50": 0,
-      "p90": 0,
-      "max": 0
-    },
-    "longest": []
-  },
-  "positions": {
-    "total": 0,
-    "by_end_reason": null,
-    "commands": {
-      "none": 0,
-      "one": 0,
-      "two": 0,
-      "three": 0,
-      "four_plus": 0
-    },
-    "requeued": 0,
-    "extensions": 0,
-    "offer_wait_ms": {
-      "n": 0,
-      "total": 0,
-      "p50": 0,
-      "p90": 0,
-      "max": 0
-    },
-    "idle_wait_ms": {
-      "n": 0,
-      "total": 0,
-      "p50": 0,
-      "p90": 0,
-      "max": 0
-    },
-    "queued_wait_ms": {
-      "p50": 0,
-      "p90": 0,
-      "max": 0
-    },
-    "offers": {
-      "offered": 0,
-      "delivered": 0,
-      "passed": 0,
-      "delivery_delay_ms": {
-        "n": 0,
-        "total": 0,
-        "p50": 0,
-        "p90": 0,
-        "max": 0
-      },
-      "lapsed_after_delivery": 0,
-      "notice_results": null
-    },
-    "nested": 0
+    "minutes": 3,
+    "sampled_s": 180,
+    "normal": 0.5,
+    "warning": 0.4166666666666667,
+    "danger": 0.08333333333333333
   }
 }
