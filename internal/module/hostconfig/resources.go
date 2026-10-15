@@ -27,19 +27,28 @@ var resourcesDefaultJSON = func() string {
 	return string(b)
 }()
 
+// retiredResourcesKeys are the keys of settings that were retired: a stored document may still hold them, and reading it
+// ignores them (the next write stores the document without them). A key that is neither known nor in this list is a typo or
+// something a newer binary wrote, and is refused on a read as on a write: ignoring it would read `{"mdoe":"off"}` as the
+// default mode, and a GET→PUT would delete the newer binary's setting. L3, which retires the lease's keys, takes them out of
+// the known keys and they land here (they are listed now so the list is the one place that says which keys are gone).
+var retiredResourcesKeys = []string{
+	"kinds", "deadline_s", "warmup_s", "floor_pct", "max_hold_s", "ewma_half_life_s", "heavy_min_weight",
+	"park_s", "gap_s", "load_cap_pct", "alert_lease_mem_pct", "mode",
+}
+
 // resourcesFields splits a resources object into its raw fields. A write
 // (strict) refuses anything but an object of the known keys: a misspelt field
 // must not save as "left out = default". A read of the stored document is
-// lenient: a key this binary does not know is ignored, so the retirement of a
-// setting (the lease's, L3) never makes every stored document invalid; the next
-// write stores the document without it.
+// lenient only for the retired keys (see retiredResourcesKeys).
 func resourcesFields(raw json.RawMessage, strict bool) (map[string]json.RawMessage, error) {
 	var fields map[string]json.RawMessage
 	if firstByte(raw) != '{' || json.Unmarshal(raw, &fields) != nil {
 		return nil, errors.New("items must be a JSON object")
 	}
 	for k := range fields {
-		if strict && k != "mode" && k != "kinds" && !slices.Contains(resourcesIntKeys, k) {
+		known := k == "mode" || k == "kinds" || slices.Contains(resourcesIntKeys, k)
+		if !known && (strict || !slices.Contains(retiredResourcesKeys, k)) {
 			return nil, errors.New("unknown resources field " + k + "; only mode, kinds and " +
 				strings.Join(resourcesIntKeys, ", "))
 		}
@@ -78,8 +87,8 @@ func normalizeResources(raw json.RawMessage) (resources.Settings, error) {
 	return parseResources(raw, true)
 }
 
-// normalizeStoredResources reads a stored value: the same, but a key this binary
-// does not know is ignored (see resourcesFields).
+// normalizeStoredResources reads a stored value: the same, but a retired key is
+// ignored (see retiredResourcesKeys).
 func normalizeStoredResources(raw json.RawMessage) (resources.Settings, error) {
 	return parseResources(raw, false)
 }
@@ -138,7 +147,7 @@ func parseResources(raw json.RawMessage, strict bool) (resources.Settings, error
 // readResources is the GET's view of the stored row. The row is one setting, so
 // a value that does not validate is invalid and answers {} — never the
 // defaults, which its owner did not write (ResourcesSettings refuses it too). A
-// key this binary does not know is ignored, not a reason to refuse the row.
+// retired key is ignored, not a reason to refuse the row.
 func readResources(raw json.RawMessage) readout {
 	s, err := normalizeStoredResources(raw)
 	if err != nil {
