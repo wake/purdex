@@ -96,11 +96,14 @@ Design:
   binary at once (no extra process beyond one `pdx` exec). `pnpm` is classified by its subcommand/script name
   (`check`, `test`, `typecheck`, `lint`, `-r`/`--recursive` → heavy; `vitest <files>` → light; install/add/etc. → none);
   `npx`/`pnpm exec`/`pnpm vitest|tsc` by the tool and its arguments. The shims inject the parallelism caps (§5).
-- **PATH precedence** (measured: nvm's bin precedes `~/.local/bin`): the shim dir must come before nvm. Two ways,
-  chosen in the plan after measuring Q3: (i) `pdx setup` prepends the shim dir in `~/.zshenv` (read by every zsh,
-  interactive or not) — new shells only; running Claude Code sessions keep their snapshot until restarted, which the
-  pause allows; (ii) `pdx setup` places wrappers in the active nvm bin dir and re-asserts them on each setup.
-  The `go` shim may also sit in `~/.local/bin` (already ahead of Homebrew) for immediate effect.
+- **PATH precedence** (measured: nvm's bin precedes `~/.local/bin`): the shim dir must come before nvm.
+  **`pdx setup` prepends it in `~/.zshenv`.** Measured 10-15: Claude Code runs every Bash tool call as
+  `/bin/zsh -c 'source <snapshot>; …'`; the snapshot does not set `PATH`, and `zsh -c` reads `~/.zshenv`
+  (a variable defined only there reaches a `zsh -c` started without it). So running sessions pick the shims up on
+  their next command, no restart. The user's own terminals get the same shims (intended: every heavy command on
+  the host is gated). The block in `~/.zshenv` is delimited (`# >>> pdx gate >>>` … `# <<< pdx gate <<<`), idempotent,
+  and removed by `pdx setup --uninstall-gate`. Non-zsh callers (launchd, `bash -c` scripts) are covered only where
+  they call `pdx gate`/`pdx lease run` themselves.
 - **Not covered by shims:** a direct `node_modules/.bin/vitest`, or a node program that starts vitest through its
   JS API. Aigora's `check.ts` already wraps each step in `pdx lease run` (becomes the gate alias, nested); for
   agents, the mod keeps a minimal rewrite that prefixes such commands with `pdx gate --auto --` (the only mod part
@@ -227,9 +230,7 @@ then L1–L3. Other lines resume after G2 is deployed and its acceptance (§10) 
 
 ## 11. Open questions (for the plan)
 
-- Q1. PATH precedence for the shims: `~/.zshenv` prepend (new shells; restart sessions during the pause) vs
-  wrappers in the nvm bin dir (immediate; re-asserted by `pdx setup`). Measure whether Claude Code's Bash
-  snapshot keeps the session-start `PATH`.
+- Q1. (resolved 10-15) PATH precedence: `~/.zshenv` prepend reaches running sessions (see §4).
 - Q2. `taskpolicy -b` cost per class (I/O throttling): measure before choosing the default.
 - Q3. Pressure thresholds (`max_page_rate`): measure on mlab with a known workload.
 - Q4. The minimal mod rewrite (direct `node_modules/.bin/…` calls by agents): keep it in L1, or rely on shims only.
