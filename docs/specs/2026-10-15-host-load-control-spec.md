@@ -44,7 +44,7 @@ The lease (`pdx lease`, v1/v2/amend A, P2e/P2f, load cap) did not hold the host,
 | D12 | When a heavy command would wait, the mod moves the agent's Bash call to the background with a note (L1), so a session does not sit in the foreground limit. Verified 10-15: a background task survives a relay and its completion notice reaches the new conversation. |
 | D13 | `pdx gate free <slot>`: lists the processes holding a slot and ends them after confirmation, only on a person's or the watcher's command; the gate itself never kills a running command (G2). |
 | D14 | **Settings live on each host's daemon** (10-15): the watcher's `watch` row and the thresholds in the daemon's host config; the gate's `[gate]` stays a file (the gate does not depend on the daemon, D3) but the App reads and writes it through a daemon API that edits it the way `pdx gate set` does; each host has its own resource-control switch (`gate.enabled`) the App can turn on and off. Not Profile Sync. Each host keeps its own copy. |
-| D15 | **Hosts** (10-15): the gate and the queue run on mlab and air26 only. air-2019 and mserv get **no daemon**; they are monitored only (no gate, no E1), by the fleet probing of a daemon host (§12.8). |
+| D15 | **Hosts** (10-15): the gate and the queue run on mlab and air26 only. air-2019 and mserv get **no daemon**; they are monitored only (no gate, no E1). All cross-host sampling is the fleet module's (primary a26, standby mlab, §12.8). |
 
 ## 2. Goals and non-goals
 
@@ -441,8 +441,9 @@ is free. A slot whose gate is still alive is refused (interrupt that command ins
 
 - The App's load-control UI as a whole (monitoring of the four hosts, the watcher, the queue state and the gate
   settings of each host, D14) is specified by the B line with the user (10-15); the items below are the watcher's part.
-- Sidebar: at the right of the top row of the host list (the "Main Station" row), a watcher icon in three states:
-  none, active, unhandled events (with a count). It opens the watcher area.
+- Sidebar: at the right of the sidebar's top row (`HomeRow`, the row that shows the profile name, which the user calls
+  the "Main Station" row; not the host list), a watcher icon in three states: none, active, unhandled events (with a
+  count). It opens the watcher area.
 - The watcher area is a tab region of its own, apart from session tabs: a fixed tab for the watcher session of the
   host that holds it (awake or resting; opening it and asking wakes a resting watcher), the event log of all hosts
   (filter by host and kind, unhandled count), "start the watcher" when there is none, and the `watch` settings of each
@@ -460,16 +461,18 @@ is free. A slot whose gate is still alive is refused (interrupt that command ins
 W1–W4 start now (A-line member), W5 when the B line resumes; none depends on L1–L3. The watcher set goes live as a
 whole when W1–W4 are done (W5 can follow). The first stage (G1–G3) ships without waiting for it.
 
-### 12.8 Hosts without a daemon: air-2019 and mserv (D15)
+### 12.8 Cross-host sampling: one fleet sampler (D15)
 
-- Monitored only: no gate, no queue, no E1 (no process trees to attribute). The watcher gets E2 for them, and an
-  `offline` state when a probe fails (air-2019 sleeps often).
-- **One cross-host sampler, not two.** These hosts are already probed by the fleet module (fleet status spec
-  `docs/specs/2026-10-14-fleet-status-spec.md`, on the B line's branch; user decision 2: probed over SSH by a daemon
-  host, the prober, mlab by default; F-1a merged, F-1b/F-1c not started). The watcher reads those samples; it does not
-  run its own SSH.
-- **Open (the B line is asking the user, 10-15):** which host probes by default (mlab per the 10-14 decision; a26 was
-  proposed because mlab is the host that overloads and its own probes stall when it pages), the interval (30 s now;
-  10 s proposed), and the extra fields E2 needs from the probe (memory pressure, page rate, the top CPU processes).
-  The fleet phases take the answer; W1–W4 do not depend on it, and E2 for these hosts is added once the probe carries
-  those fields.
+- air-2019 and mserv are monitored only: no gate, no queue, no E1 (no process trees to attribute). The watcher gets E2
+  for them, and an `offline` state when they cannot be read (air-2019 sleeps often).
+- **One cross-host sampler, the fleet module** (user decision 10-15, through the B line; the fleet status spec
+  `docs/specs/2026-10-14-fleet-status-spec.md` is the source of truth, kept by the B line, which also builds it). In
+  short: a primary and a standby in the order `[a26, mlab]`; the primary reads every host each second (real CPU use
+  from CPU-time deltas, memory use, pressure level, page rate, disk) and every 5 s two lists (top 5 processes by CPU
+  and by memory from one `ps`; the gate queue of mlab and a26); fixed rates, never slowed on a busy host; the results
+  go to the App only (no database, no per-sample log; `host_minutes` unchanged). The watcher runs no SSH of its own:
+  E2 for air-2019 and mserv is judged by the fleet primary on the samples it holds in memory, added after the fleet
+  phases land (not part of W1–W4).
+- **What the A line owes it:** `pdx gate status --json` runs without the daemon (§5, D3) and stays cheap enough for
+  the primary to read it over SSH every 5 s (`pdx` start-up cost: #2925). Its fields are settled with the B line
+  together with the UI's other APIs.
