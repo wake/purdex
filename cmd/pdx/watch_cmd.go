@@ -18,7 +18,8 @@ import (
 	"github.com/wake/purdex/internal/watch"
 )
 
-const watchUsage = `usage: pdx watch log [--since <24h|7d|2026-10-14>] [--kind unmanaged_heavy|pressure_high|slot_orphaned|slot_long] [--json] [--config <path>]
+const watchUsage = `usage: pdx watch config [get [key] | set key=value…] [--json] [--config <path>]
+       pdx watch log [--since <24h|7d|2026-10-14>] [--kind unmanaged_heavy|pressure_high|slot_orphaned|slot_long] [--json] [--config <path>]
 `
 
 func runWatch(args []string) {
@@ -27,6 +28,9 @@ func runWatch(args []string) {
 
 // watchMain is runWatch with its streams, for tests; it returns the exit code.
 func watchMain(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "config" {
+		return watchConfig(args[1:], stdout, stderr)
+	}
 	if len(args) == 0 || args[0] != "log" {
 		fmt.Fprint(stderr, watchUsage)
 		return 2

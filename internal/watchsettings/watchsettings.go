@@ -7,7 +7,13 @@ import "time"
 // Key is the service-registry key under which the hostconfig module publishes itself as a Reader.
 const Key = "hostconfig.watch-settings"
 
-// Settings is the host setting `watch`: the switch and the thresholds. The delivery keys (targets, mode, …) come with W2a.
+// The values `mode` takes.
+const (
+	ModePatrol   = "patrol"   // the watcher rests when idle
+	ModeResident = "resident" // it never rests
+)
+
+// Settings is the host setting `watch` (spec §12.2): the switch, the thresholds, and where the watcher is and how it is run.
 type Settings struct {
 	Enabled bool `json:"enabled"`
 	// E1: mean cores over TSeconds at or above XCores, or resident memory at or above YMB for that long.
@@ -19,11 +25,26 @@ type Settings struct {
 	PressureTSeconds int     `json:"pressure_t_s"`
 	PageRate         float64 `json:"page_rate"`
 	PageTSeconds     int     `json:"page_t_s"`
+	// Where events go and where a new watcher is started: host aliases, in order (this host's own alias included).
+	Targets []string `json:"targets"`
+	// Mode is ModePatrol or ModeResident; PatrolIdleMin is the rest countdown of patrol mode.
+	Mode          string `json:"mode"`
+	PatrolIdleMin int    `json:"patrol_idle_min"`
+	// AutoWake: whether an event wakes or starts a watcher.
+	AutoWake bool `json:"auto_wake"`
+	// Model of a new watcher; Workdir is its directory on this host (a checkout of the watch-desk branch); StartPrompt and
+	// WakePrompt replace the built-in prompts when set.
+	Model       string `json:"model"`
+	Workdir     string `json:"workdir"`
+	StartPrompt string `json:"start_prompt"`
+	WakePrompt  string `json:"wake_prompt"`
 }
 
 // Default is what a never-written setting answers: on (spec §12.2), with the first thresholds.
 func Default() Settings {
-	return Settings{Enabled: true, XCores: 1.5, YMB: 1024, TSeconds: 60, PressureLevel: 2, PressureTSeconds: 120, PageRate: 50, PageTSeconds: 60}
+	return Settings{Enabled: true, XCores: 1.5, YMB: 1024, TSeconds: 60, PressureLevel: 2, PressureTSeconds: 120, PageRate: 50, PageTSeconds: 60,
+		Targets: []string{"mlab", "a26"}, Mode: ModePatrol, PatrolIdleMin: 120, AutoWake: true, Model: "opus",
+		Workdir: "~/Workspace/wake/purdex-watch"}
 }
 
 // Seconds is n seconds as a duration.
