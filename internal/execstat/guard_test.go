@@ -114,7 +114,6 @@ var pending = map[string]string{
 	"internal/config/hostid.go":                     "D0b",
 	"internal/core/info_handler.go":                 "D0b",
 	"internal/fleet/run.go":                         "D0c",
-	"internal/gate/pressure.go":                     "D0c",
 	"internal/gate/stragglers.go":                   "D0c",
 	"internal/journal/gitrun.go":                    "D0b",
 	"internal/journal/project.go":                   "D0b",
