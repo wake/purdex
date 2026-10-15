@@ -20,10 +20,12 @@ type PressureReader interface {
 	Read() (Pressure, error)
 }
 
-// sampleReuse is how long a sample in the cache file is reused by other gates; rateWindow how far back the rate looks.
+// sampleReuse is how long a sample in the cache file is reused by other gates; rateWindow how far back the rate looks;
+// staleLimit how old a cached sample may be and still stand in for a reading when the sampler is stuck.
 const (
 	sampleReuse = 5 * time.Second
 	rateWindow  = 10 * time.Second
+	staleLimit  = time.Minute
 )
 
 // HostReader reads the real host: `sysctl kern.memorystatus_vm_pressure_level` and the pageout and swapout counters
@@ -118,9 +120,13 @@ func (r *HostReader) Read() (Pressure, error) {
 			}
 		}
 		if f := r.load(); len(f.Samples) > 0 {
-			return pressureOf(f.Samples, f.Samples[len(f.Samples)-1]), nil
+			last := f.Samples[len(f.Samples)-1]
+			if age := r.Now().Sub(time.UnixMilli(last.At)); age >= 0 && age <= staleLimit {
+				return pressureOf(f.Samples, last), nil
+			}
 		}
-		return Pressure{}, errors.New("another gate has been sampling the memory pressure for too long")
+		// no recent reading: an unreadable pressure, which the caller counts (three in a row and it falls back)
+		return Pressure{}, errors.New("another gate has been sampling the memory pressure for too long, and the cache is stale")
 	}
 	if p, ok := r.fresh(); ok {
 		return p, nil // another gate sampled while this one took the lock

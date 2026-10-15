@@ -147,6 +147,10 @@ func TestHostReader_WithoutTheSamplerLockItDoesNotSample(t *testing.T) {
 	assert.Equal(t, 1, p.Level, "the last cached reading, not a sample of its own")
 	assert.Equal(t, before, f.reads, "the host was not read")
 
+	f.now = f.now.Add(10 * time.Minute) // and now it is old: not a reading any more
+	_, err = r.Read()
+	assert.Error(t, err, "a stuck sampler cannot make an hour-old level look current")
+
 	empty := t.TempDir()
 	lock2, _ := os.OpenFile(filepath.Join(empty, "pressure.lock"), os.O_CREATE|os.O_RDWR, 0o644)
 	defer lock2.Close()

@@ -180,10 +180,13 @@ func (p *Pool) Enqueue() (*Ticket, error) {
 
 // liveBefore lists the live tickets older than t; a ticket whose lock is free belongs to a gate that is gone and is
 // removed on the way.
-func (p *Pool) liveBefore(t *Ticket) []string {
+func (p *Pool) liveBefore(t *Ticket) ([]string, error) {
 	ents, err := os.ReadDir(p.queueDir())
 	if err != nil {
-		return nil
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil // no queue yet
+		}
+		return nil, err // a queue that cannot be read is not an empty one: the oldest waiter would be passed
 	}
 	var names []string
 	for _, e := range ents {
@@ -201,7 +204,10 @@ func (p *Pool) liveBefore(t *Ticket) []string {
 		path := filepath.Join(p.queueDir(), n)
 		f, err := os.OpenFile(path, os.O_RDWR, 0)
 		if err != nil {
-			continue // removed meanwhile
+			if errors.Is(err, os.ErrNotExist) {
+				continue // removed meanwhile
+			}
+			return nil, err
 		}
 		if st, _ := flockNB(f); st == lockGot {
 			_ = os.Remove(path) // nobody holds it: its gate is gone
@@ -211,7 +217,7 @@ func (p *Pool) liveBefore(t *Ticket) []string {
 		_ = f.Close() // held, or a lock that cannot be probed: counted as waiting, the safe side of fairness
 		live = append(live, n)
 	}
-	return live
+	return live, nil
 }
 
 // Waiting is the number of live tickets in the queue (all of them, for the status).
@@ -257,7 +263,11 @@ func (p *Pool) TryTake(t *Ticket) (slot *Slot, ahead int, err error) {
 	}
 	defer syscall.Flock(int(mu.Fd()), syscall.LOCK_UN) //nolint:errcheck
 
-	ahead = len(p.liveBefore(t))
+	before, err := p.liveBefore(t)
+	if err != nil {
+		return nil, 0, dirError(err)
+	}
+	ahead = len(before)
 	var free []*os.File
 	var freeK []int
 	for k := 1; k <= p.Size; k++ {

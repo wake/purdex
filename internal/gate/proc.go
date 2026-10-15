@@ -58,6 +58,7 @@ func descendants(tab map[int]procInfo, root int) map[int]int64 {
 type tree struct {
 	root      int
 	rootStart int64 // when the root started, to tell it from a process that got its pid later
+	rootKnown bool  // rootStart was read; until it is, the first successful look sets it
 	procs     Procs
 	seen      map[int]int64
 	kill      func(pid int, sig syscall.Signal) error // a seam for tests
@@ -65,9 +66,11 @@ type tree struct {
 
 func newTree(root int, procs Procs) *tree {
 	t := &tree{root: root, procs: procs, seen: map[int]int64{}, kill: func(pid int, sig syscall.Signal) error { return syscall.Kill(pid, sig) }}
-	if tab, err := procs(); err == nil {
-		if p, ok := tab[root]; ok {
-			t.rootStart = p.Start
+	for try := 0; try < 3 && !t.rootKnown; try++ {
+		if tab, err := procs(); err == nil {
+			if p, ok := tab[root]; ok {
+				t.rootStart, t.rootKnown = p.Start, true
+			}
 		}
 	}
 	return t
@@ -80,7 +83,16 @@ func (t *tree) scan() {
 	if err != nil {
 		return
 	}
-	if r, ok := tab[t.root]; !ok || r.Start != t.rootStart {
+	r, ok := tab[t.root]
+	if !ok {
+		return
+	}
+	if !t.rootKnown {
+		// the look at the start failed (the command was just started and is not reaped yet, so the pid is still its):
+		// the first look that works tells who the root is
+		t.rootStart, t.rootKnown = r.Start, true
+	}
+	if r.Start != t.rootStart {
 		return
 	}
 	for pid, start := range descendants(tab, t.root) {

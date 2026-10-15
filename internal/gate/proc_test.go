@@ -1,6 +1,7 @@
 package gate
 
 import (
+	"errors"
 	"os/exec"
 	"syscall"
 	"testing"
@@ -84,4 +85,24 @@ func TestTree_ReapEndsWhatTheWalkSaw(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	assert.ErrorIs(t, syscall.Kill(pid, 0), syscall.ESRCH, "the leftover is gone")
+}
+
+// The first look at the process table may fail; the tree still gets its root and finds the children once a look works.
+// (M: the root is never known after a failed first look.)
+func TestTree_AFailedFirstLookStillFindsTheChildren(t *testing.T) {
+	calls := 0
+	tab := map[int]procInfo{100: {PPID: 1, Start: 5}, 200: {PPID: 100, Start: 6}}
+	procs := func() (map[int]procInfo, error) {
+		calls++
+		if calls <= 3 { // newTree tries three times
+			return nil, errors.New("sysctl failed")
+		}
+		return tab, nil
+	}
+	tr := newTree(100, procs)
+	tr.scan()
+	assert.Equal(t, map[int]int64{200: 6}, tr.seen)
+	tab = map[int]procInfo{100: {PPID: 1, Start: 99}, 300: {PPID: 100, Start: 100}} // once known, a reused pid is still told
+	tr.scan()
+	assert.NotContains(t, tr.seen, 300)
 }

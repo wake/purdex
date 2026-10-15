@@ -269,3 +269,22 @@ func TestPool_TicketsOfOneProcessInOneNanosecondAreDistinct(t *testing.T) {
 	assert.Nil(t, s, "the second waits behind the first")
 	assert.Equal(t, 1, ahead)
 }
+
+// A queue that cannot be read is not an empty queue: the oldest waiter must not be passed. (M: an unreadable queue counts
+// as nobody waiting.)
+func TestPool_AQueueThatCannotBeReadFailsClosed(t *testing.T) {
+	p := testPool(t, ClassHeavy, 1)
+	tk := ticketAt(t, p, 1)
+	defer tk.Drop()
+	require.NoError(t, os.RemoveAll(p.queueDir()))
+	require.NoError(t, os.WriteFile(p.queueDir(), nil, 0o644)) // a file where the queue directory was: ENOTDIR
+	s, _, err := p.TryTake(tk)
+	assert.Nil(t, s)
+	assert.ErrorIs(t, err, ErrBroken)
+
+	// a missing queue is an empty one
+	require.NoError(t, os.Remove(p.queueDir()))
+	s, _, err = p.TryTake(tk)
+	require.NoError(t, err)
+	assert.NotNil(t, s)
+}
