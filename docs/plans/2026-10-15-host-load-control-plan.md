@@ -264,11 +264,12 @@ second spawn for the same purpose while one is starting is refused.
 3. Rest (mode `patrol`): idle = no delivery and no turn of the watcher for `patrol_idle_min` → send "time to rest"
    → on the watcher's answer, or after 5 min, system end; the session id is kept for the next wake. `resident`:
    no countdown.
-4. Built-in prompts and the skill `skills/pdx-watch/SKILL.md` (spec §12.4): pull the `watch-desk` branch in
+4. Built-in prompts and the skill `skills/pdx-watch/SKILL.md` (spec §12.4): pull the `purdex-watch` branch in
    `workdir` at start and wake, commit and push after notes change, read the backlog, what each event and label means,
    what it may and must not do, `pdx watch ack`, the rest handshake. `start_prompt`/`wake_prompt` in the settings
    replace the built-ins when set.
-5. Lead sets up, once: the `watch-desk` branch (orphan, notes only) and the `workdir` checkout on mlab and a26.
+5. Lead sets up, once: the `purdex-watch` branch of the mlab repo (from its main, notes under `watch/`) and the
+   `workdir` checkout `~/Workspace/wake/mlab-purdex-watch` on a26 and mlab.
 Tests: start on event with nobody awake; wake a resting one; two hosts announce at once → one start; start fails →
 cooldown; patrol rest after the idle time (answer / no answer); resident never rests; custom prompts used.
 
