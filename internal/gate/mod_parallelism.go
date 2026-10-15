@@ -16,11 +16,20 @@ type HostFacts struct {
 func ReadHostFacts() HostFacts {
 	f := HostFacts{NCPU: runtime.NumCPU()}
 	if total, err := unix.SysctlUint64("hw.memsize"); err == nil {
-		if level, err := unix.SysctlUint32("kern.memorystatus_level"); err == nil && level > 0 && level <= 100 {
-			f.AvailMemMB = int(total >> 20 * uint64(level) / 100)
+		if level, err := unix.SysctlUint32("kern.memorystatus_level"); err == nil {
+			f.AvailMemMB = availMemMB(total, level)
 		}
 	}
 	return f
+}
+
+// availMemMB is the memory still available, in MB: the machine's bytes times the kernel's available percentage. 0 for a
+// percentage that is not 1 to 100 (unknown). The shift is done first: Go's * / >> share one precedence, left to right.
+func availMemMB(totalBytes uint64, levelPct uint32) int {
+	if levelPct == 0 || levelPct > 100 {
+		return 0
+	}
+	return int((totalBytes >> 20) * uint64(levelPct) / 100)
 }
 
 // Module 3, parallelism: how many cores one command may use. The result is capped by the memory its workers are
@@ -71,7 +80,10 @@ func parseParallelism(r raw) ParallelismConfig {
 			if !sub.has(key) {
 				return nil
 			}
-			p := sub.IntOrAuto(key, Param{Auto: true}, 1, 256)
+			p := sub.IntOrAuto(key, Param{N: -1}, 1, 256) // N -1 is what a refused value leaves
+			if !p.Auto && p.N == -1 {
+				return nil // a value that was refused sets nothing: the base value stays
+			}
 			return &p
 		}
 		o.GoP, o.VitestWorkers, o.PnpmWorkspace = pick("go_p"), pick("vitest_workers"), pick("pnpm_concurrency")

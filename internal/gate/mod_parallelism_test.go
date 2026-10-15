@@ -42,6 +42,18 @@ func TestParallelism_AutoFollowsCoresMemoryAndTheVitestCap(t *testing.T) {
 }
 
 // A number the person set is used as it is, and says so.
+// The percentage of memory still available becomes megabytes (the shift comes first: * / >> share one precedence).
+// (M: write it as total >> 20 * pct / 100.)
+func TestAvailMemMB(t *testing.T) {
+	assert.Equal(t, 8192, availMemMB(16<<30, 50))
+	assert.Equal(t, 16384, availMemMB(16<<30, 100))
+	assert.Equal(t, 163, availMemMB(16<<30, 1))
+	assert.Equal(t, 0, availMemMB(16<<30, 0), "0 is unknown")
+	assert.Equal(t, 0, availMemMB(16<<30, 101), "more than 100 is unknown")
+	assert.Equal(t, 0, availMemMB(0, 50))
+	assert.Positive(t, availMemMB(1<<62, 100), "a huge machine does not wrap")
+}
+
 func TestParallelism_ANumberIsUsedAsGiven(t *testing.T) {
 	c := parCfg("auto")
 	c.GoP = Param{N: 6}

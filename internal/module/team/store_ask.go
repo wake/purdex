@@ -143,6 +143,7 @@ func (s *Store) OverrideIfDecided(id string, decidedAt int64, hook *team.HookDec
 	if err != nil {
 		return team.Approval{}, false, fmt.Errorf("encode decided_by: %w", err)
 	}
+	approvalWrites.Add(1)
 	res, err := s.db.Exec(`
 		UPDATE approval_requests
 		SET state = ?, decided_at = ?, decided_by_json = ?, grant_json = ?

@@ -22,6 +22,10 @@ func (c CacheConfig) Apply(argv []string, foreground bool) (out []string, note s
 	out = make([]string, 0, len(argv))
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
+		if a == "-args" || a == "--args" {
+			out = append(out, argv[i:]...) // what follows belongs to the test binary, not to go test
+			break
+		}
 		switch {
 		case a == "-count=1" || a == "--count=1":
 			found = true
