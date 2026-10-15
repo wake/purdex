@@ -80,10 +80,15 @@ func TestWouldWait_PressureOverTheLimitIsAWaitAndNotesTheNumbers(t *testing.T) {
 
 func TestWouldWait_OffOrUnknownClassNeverWaits(t *testing.T) {
 	g, _ := testGate(t)
+	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1 })
+	hold := runAsync(g, context.Background(), Options{Argv: sh("sleep 1"), Class: ClassHeavy})
+	eventually(t, "a held slot", func() bool { return len(g.Status().Heavy) == 1 })
+	require.True(t, g.WouldWait(ClassHeavy).Wait)
 	g.SetConfig(func(c *Config) { c.Enabled = false })
-	assert.False(t, g.WouldWait(ClassHeavy).Wait)
+	assert.False(t, g.WouldWait(ClassHeavy).Wait, "the gate is off: nothing waits")
 	g.SetConfig(func(c *Config) { c.Enabled = true })
-	assert.False(t, g.WouldWait(Class("none")).Wait)
+	assert.False(t, g.WouldWait(Class("none")).Wait, "a class the gate does not hold never waits")
+	<-hold
 }
 
 func TestWouldWait_TakesNothingAndWritesNothing(t *testing.T) {
