@@ -39,6 +39,13 @@ type Module struct {
 
 	// broadcast sends a host event (type, JSON-string value); the core's event hub, replaced in tests.
 	broadcast func(eventType, value string)
+
+	// The journal API's seams, replaced in tests: the project's name and its origin's link (nil: the repository's own).
+	projectNameFn func(ctx context.Context, u UnitRow) string
+	remoteURLFn   func(ctx context.Context, dir string) string
+
+	skipMu     sync.Mutex
+	skipLogged map[string]bool // a month file left out of a unit is logged once (logSkipped)
 }
 
 func New() *Module { return &Module{} }

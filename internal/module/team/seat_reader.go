@@ -73,17 +73,21 @@ func (s *Store) SeatOf(sessionID string) (team.Seat, error) {
 		query, wire = `SELECT m.team_id FROM team_members m JOIN teams t ON t.id = m.team_id
 			WHERE m.session_id = ? AND m.state IN ('active', 'killing') AND t.ended_at = 0`, team.SeatMember
 	case sessionRoleMemberRemote:
-		query, wire = `SELECT team_id FROM remote_members WHERE member_session_id = ? AND state = 'active'`, team.SeatMemberRemote
+		query, wire = `SELECT team_id, lead_host_id, lead_session_id FROM remote_members WHERE member_session_id = ? AND state = 'active'`, team.SeatMemberRemote
 	default:
 		return team.Seat{Role: team.SeatNone}, nil
 	}
-	var teamID string
-	err = tx.QueryRow(query, sessionID).Scan(&teamID)
+	seat := team.Seat{Role: wire}
+	dest := []any{&seat.TeamID}
+	if wire == team.SeatMemberRemote { // where the lead is, for a reader that has to ask its host (the journal)
+		dest = append(dest, &seat.LeadHostID, &seat.LeadSessionID)
+	}
+	err = tx.QueryRow(query, sessionID).Scan(dest...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return team.Seat{Role: team.SeatNone}, nil
 	}
 	if err != nil {
 		return team.Seat{}, fmt.Errorf("seat %s: %w", sessionID, err)
 	}
-	return team.Seat{TeamID: teamID, Role: wire}, nil
+	return seat, nil
 }
