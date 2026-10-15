@@ -245,6 +245,18 @@ func TestLoad_ARuleThatIsNotAListOfTablesIsListed(t *testing.T) {
 	}
 }
 
+// A class override with a bad value leaves the base value alone (it is refused, not turned into "auto").
+func TestLoad_ABadClassOverrideKeepsTheBaseValue(t *testing.T) {
+	t.Setenv("PDX_GATE_DIR", "")
+	cfg, err := Load(writeConfig(t, "[gate.parallelism]\nmode = \"fixed\"\ngo_p = 7\n[gate.parallelism.heavy]\ngo_p = \"bad\"\nvitest_workers = 0\n[gate.parallelism.light]\ngo_p = 2\n"))
+	require.NoError(t, err)
+	assert.Len(t, cfg.Warnings, 2)
+	assert.Equal(t, 7, cfg.Parallelism.Resolve(ClassHeavy, HostFacts{NCPU: 10, AvailMemMB: 8000}).GoP, "heavy keeps the base 7")
+	assert.Equal(t, 2, cfg.Parallelism.Resolve(ClassLight, HostFacts{NCPU: 10, AvailMemMB: 8000}).GoP, "light's own value is used")
+	_, hasHeavy := cfg.Parallelism.ByClass[ClassHeavy]
+	assert.False(t, hasHeavy, "an override with nothing valid is not made")
+}
+
 func TestLoad_ABrokenFileGivesTheDefaultsAndTheError(t *testing.T) {
 	t.Setenv("PDX_GATE_DIR", "")
 	cfg, err := Load(writeConfig(t, "[gate\nslots = "))

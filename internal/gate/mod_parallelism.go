@@ -80,7 +80,10 @@ func parseParallelism(r raw) ParallelismConfig {
 			if !sub.has(key) {
 				return nil
 			}
-			p := sub.IntOrAuto(key, Param{Auto: true}, 1, 256)
+			p := sub.IntOrAuto(key, Param{N: -1}, 1, 256) // N -1 is what a refused value leaves
+			if !p.Auto && p.N == -1 {
+				return nil // a value that was refused sets nothing: the base value stays
+			}
 			return &p
 		}
 		o.GoP, o.VitestWorkers, o.PnpmWorkspace = pick("go_p"), pick("vitest_workers"), pick("pnpm_concurrency")
