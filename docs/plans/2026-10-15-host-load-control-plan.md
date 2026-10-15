@@ -163,12 +163,10 @@ can wait up to 4 s on `pressure.lock`). Proof per PR: an integration test with t
 argv read; and, lead-run before and after W1b, three 30 s idle pprof captures (host quiet, no session busy), CPU =
 mean of the three, target unchanged (daemon ≤ 10 % of one core).
 
-**Settings** (`watch` row in hostconfig, read at every pass; one value for all hosts: a change on any host is
-propagated to every paired host by the W2 channel, newest `updated_at` wins): `enabled` (true), `auto_start` (true),
-`model` (opus), `home` (host alias, mlab), thresholds `x_cores` (1.5), `y_mb` (1024), `t_s` (60), `pressure_t_s`
-(120), `page_rate` (50), `page_t_s` (60). The thresholds are first values; W0 and the live record tune them (spec
-§12.6). *(Profile Sync was the first idea; Profile Sync carries only the App's own stores and the daemon has no typed
-reader or "active profile" — see the lead's note to the user, 10-15.)*
+**Settings**: the `watch` row in each daemon's host config, read at every pass, per host (no cross-host sync now),
+keys and defaults in spec §12.2 (thresholds, `targets`, `mode`, `patrol_idle_min`, `auto_wake`, `model`, `workdir`,
+`start_prompt`, `wake_prompt`). W1b-3 adds the row with `enabled` and the thresholds; W2a adds the rest. The
+thresholds are first values; W0 and the live record tune them (spec §12.7).
 
 ### W1a — plumbing (no behaviour change)
 
@@ -216,55 +214,63 @@ re-arming; signature normalization incl. `composer test:integration`, `vendor/bi
 `new` and orphan times; rotation with an injected clock; failure seams (state write, record write, lsof) leave the
 sampler's publish intact; the fork-counter test above; mutation on every threshold comparison.
 
-### W2a — registration (local and across hosts)
+### W2a — where the watcher is (settings, holder, discovery)
 
-1. Store: `watch_registration` table (additive migration): `ref`, `session_id`, `host_id`, `registered_at`,
-   `ended_at` (tombstone).
-2. Local API (management token): `POST /api/watch/register`, `DELETE /api/watch/register`, `GET /api/watch`.
-   CLI: `pdx watch register` (the calling session's `_ref`), `pdx watch status`, `pdx watch unregister`.
-3. Across hosts: `POST /api/peers/watch/registration` added to `peers.HostRoutePolicy`; sent with `HostCaller`
-   (`to_host_id`, outbox retry) to every paired host on register, replace, unregister and expiry; each host keeps the
-   newest by `registered_at`, tombstones included, so an unregister or an expiry converges everywhere. An older peer
-   that answers 404 is marked "no watch support" and skipped. The replaced watcher gets one message.
-4. Liveness: on each pass the home of the registration checks the registry; a gone session (no relay lineage) →
-   tombstone + propagation. A relay keeps it (lineage).
-5. Settings propagation: `POST /api/peers/watch/settings` the same way (newest `updated_at` wins).
-Tests: register/replace/unregister/expire converge on two daemons in the peer-bridge test harness; an old peer;
-outbox retry; relay keeps the registration.
+1. Settings: the rest of the `watch` row (spec §12.2) with validation; `pdx watch config [get|set <key>=<value>]`
+   through the daemon API (the App's settings page uses the same API in W5).
+2. Holder state on each host (`~/.config/pdx/watch/holder.json`, atomic): this host's watcher session id, awake or
+   resting, last turn and last delivery times. `GET /api/peers/watch/holder` (added to `peers.HostRoutePolicy`)
+   answers "a watcher awake here / resting here (resumable) / none"; an older peer's 404 = "no watch support".
+3. Discovery and cache on every host: the remembered watcher (host + session) is used until a delivery fails or it
+   is gone; then (1) awake on a host in `targets` → use it; (2) the last watcher's host reachable → ask it to wake it
+   (`POST /api/peers/watch/wake`); (3) ask the first reachable host in `targets` to start one
+   (`POST /api/peers/watch/start`). (2) and (3) only with `auto_wake`. Calls with `HostCaller` (`to_host_id`).
+4. Daemons compare `targets` (through `holder`'s answer) and log a warning when they differ.
+5. CLI: `pdx watch status` (this host's view: remembered watcher, holder state, targets).
+Tests: two daemons in the peer-bridge harness — awake elsewhere is used; resting is woken on its host; none → start
+on the first reachable target; first target down → the second; the cache is not re-queried while deliveries
+succeed; an old peer; mismatched targets warn.
 
 ### W2b — delivery, backlog, handled
 
-1. Delivery: each host sends its events to the registered watcher with `peers.Sender` (the `/api/peers/send` path
-   `pdx msg` uses), `[負載守門] …` text with the event id. Folding per (host, kind) per 10 min, later events counted
-   into the next message; E3 never folded; a failed send is retried next pass from a persisted pending queue, without
-   counting twice.
-2. Backlog: on a new registration, each host sends one summary of its unhandled events since the last watcher's
-   last delivered id (counts by kind and label, the newest five, and `pdx watch log --all --unhandled`).
+1. Delivery: each host sends its events to the watcher with `peers.Sender` (the `/api/peers/send` path `pdx msg`
+   uses; across hosts by the peer address), `[負載守門] …` text with the event id. Folding per (host, kind) per 10
+   min, later events counted into the next message; E3 never folded; a failed send triggers discovery (W2a) and is
+   retried from a persisted pending queue, without counting twice.
+2. Backlog: when a watcher is woken or started, each host sends one summary of its unhandled events since its last
+   delivered id (counts by kind and label, the newest five, and `pdx watch log --all --unhandled`).
 3. Handled: `pdx watch ack <id>… | --all [--host]` marks events handled (a small ack log beside the records);
    `GET /api/watch/unhandled` returns the count per host (for W5's badge).
 4. `GET /api/peers/watch/log` (policy entry) and `pdx watch log --host <alias> | --all`.
 Tests: folding isolation per host and kind; E3 not folded; retry without double counting; restart with a pending
-queue; backlog on register (and none twice); ack and the count.
+queue; backlog on wake/start (and none twice); ack and the count.
 
-### W3a — standalone spawn primitive (daemon)
+### W3a — standalone spawn and resume (daemon)
 
 `team` gains an internal "system spawn": the tmux start and registration of `runSpawn`/`spawn_tmux.go` without a
-team, a lead or an origin inbox; cwd = a configured directory (the purdex checkout on the home host); the brief is
-delivered as the first prompt. Not exposed on the network; callable from the watch module only. Tests: a system
-spawn starts a session that is not in any team, gets the brief, is listed in `pdx peers`; refused when a spawn of the
-same purpose is already starting.
+team, a lead or an origin inbox, in a given cwd with a given model and first prompt; and "system resume": the same
+for an existing session id (`--resume`) with a given prompt; and "system end": ends such a session (as `pdx kill`
+does). Not exposed on the network; callable from the watch module only. Tests: a system spawn starts a session that
+is not in any team, gets its first prompt, is listed in `pdx peers`; resume continues the same session id; end; a
+second spawn for the same purpose while one is starting is refused.
 
-### W3b — the watcher session and auto-start
+### W3b — the watcher on its host: start, wake, rest
 
-1. `skills/pdx-watch/SKILL.md` and the built-in brief (spec §12.3): register first; read the backlog; what each
-   event and label means; what it may do and must not do; `pdx watch ack`.
-2. Auto-start on the home host: an E1/E2/E3 with no live registration → the home's daemon (an event on another host
-   asks it via `POST /api/peers/watch/start`) starts a system spawn with the brief and `watch.model`.
-   Single-flight on the home (one start in progress at a time, persisted cooldown 30 min, a start that does not
-   register within 3 min counts as failed and is retried after the cooldown). Inactive when `watch.auto_start` is
-   false.
-Tests: no watcher + event → one start; two daemons with simultaneous events → one start; a watcher present → none;
-start fails → retried after the cooldown; the session registers → no further start.
+1. Start (`/api/peers/watch/start` or a local event): system spawn in `workdir` with `model` and `start_prompt`;
+   one start at a time on this host, and before starting it announces to the other hosts (`/api/peers/watch/announce`);
+   simultaneous announcements → the smaller host id starts, the other stands down; a start that has no turn within 3
+   min counts as failed, retried after a 30 min cooldown (persisted).
+2. Wake (`/api/peers/watch/wake` or a local event): system resume of the resting session with `wake_prompt`.
+3. Rest (mode `patrol`): idle = no delivery and no turn of the watcher for `patrol_idle_min` → send "time to rest"
+   → on the watcher's answer, or after 5 min, system end; the session id is kept for the next wake. `resident`:
+   no countdown.
+4. Built-in prompts and the skill `skills/pdx-watch/SKILL.md` (spec §12.4): pull the `watch-desk` branch in
+   `workdir` at start and wake, commit and push after notes change, read the backlog, what each event and label means,
+   what it may and must not do, `pdx watch ack`, the rest handshake. `start_prompt`/`wake_prompt` in the settings
+   replace the built-ins when set.
+5. Lead sets up, once: the `watch-desk` branch (orphan, notes only) and the `workdir` checkout on mlab and a26.
+Tests: start on event with nobody awake; wake a resting one; two hosts announce at once → one start; start fails →
+cooldown; patrol rest after the idle time (answer / no answer); resident never rests; custom prompts used.
 
 ### W4 — `pdx gate free <class>-<k>`
 
@@ -276,7 +282,8 @@ by another holder; scrubbed output.
 
 ### W5 — UI (B line, when it resumes)
 
-Spec §12.5 with the W2b API (`GET /api/watch`, `/api/watch/unhandled`, `pdx watch log` data). The B line writes its
+Spec §12.6 with the W2 API (`pdx watch status` data, `/api/watch/unhandled`, `pdx watch log` data, the `watch`
+settings API incl. the two prompts). The B line writes its
 own spec section and plan.
 
 Order: W1a → W1b → W2a → W2b → W3a → W3b → W4 (W4 only needs W1a's `redact.Argv` and may go earlier). The set goes
