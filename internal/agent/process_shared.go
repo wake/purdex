@@ -12,10 +12,27 @@ import (
 // apart, and the cost is one read per TTL for the daemon instead of one `ps` per registry entry per read (G3a).
 const SharedSnapshotTTL = 2 * time.Second
 
-var shared struct {
-	mu   sync.Mutex
-	at   time.Time
+// sharedFailBackoff is how long a failed table read is answered with its error before the next read is tried: the callers
+// waiting on that read, and the ones arriving just after, share one failure instead of each repeating the read.
+const sharedFailBackoff = 500 * time.Millisecond
+
+// sharedViewWait is how long a SharedProcessView question waits for the table before it fails (its callers then read the
+// process themselves, as they did before the table was shared).
+const sharedViewWait = 2 * time.Second
+
+type sharedRead struct {
+	done chan struct{}
 	snap *ProcessSnapshot
+	err  error
+}
+
+var shared struct {
+	mu       sync.Mutex
+	at       time.Time
+	snap     *ProcessSnapshot
+	inflight *sharedRead
+	failedAt time.Time
+	failErr  error
 }
 
 // Seams, for tests.
@@ -25,22 +42,48 @@ var (
 )
 
 // SharedProcessSnapshot is a process table read no older than SharedSnapshotTTL, shared by every caller in the daemon: the
-// first caller after the TTL reads the table (the others wait for that one read, they do not start their own), the rest take
-// it. A failed read is not kept: the next caller tries again. Like any snapshot it knows nothing of a process that started
-// after it was read, and ErrNotInSnapshot says so; the caller reads that PID itself.
+// first caller after the TTL starts the read (on a goroutine of its own, outside the lock: darwin's sysctl cannot be
+// cancelled), the others wait for that one read and each can give up on its own ctx; they do not start reads of their own.
+// A failed read is answered to everyone for sharedFailBackoff, then tried again. Like any snapshot it knows nothing of a
+// process that started after it was read, and ErrNotInSnapshot says so; the caller reads that PID itself.
 func SharedProcessSnapshot(ctx context.Context) (*ProcessSnapshot, error) {
 	shared.mu.Lock()
-	defer shared.mu.Unlock()
-	if shared.snap != nil && sharedNow().Sub(shared.at) < SharedSnapshotTTL {
-		return shared.snap, nil
+	now := sharedNow()
+	if shared.snap != nil && now.Sub(shared.at) < SharedSnapshotTTL {
+		snap := shared.snap
+		shared.mu.Unlock()
+		return snap, nil
 	}
-	snap, err := sharedSnapshot(ctx)
-	if err != nil {
-		shared.snap = nil
+	if shared.failErr != nil && now.Sub(shared.failedAt) < sharedFailBackoff {
+		err := shared.failErr
+		shared.mu.Unlock()
 		return nil, err
 	}
-	shared.snap, shared.at = snap, sharedNow()
-	return snap, nil
+	r := shared.inflight
+	if r == nil {
+		r = &sharedRead{done: make(chan struct{})}
+		shared.inflight = r
+		go func() {
+			snap, err := sharedSnapshot(context.Background())
+			shared.mu.Lock()
+			r.snap, r.err = snap, err
+			if err != nil {
+				shared.snap, shared.failErr, shared.failedAt = nil, err, sharedNow()
+			} else {
+				shared.snap, shared.at, shared.failErr = snap, sharedNow(), nil
+			}
+			shared.inflight = nil
+			shared.mu.Unlock()
+			close(r.done)
+		}()
+	}
+	shared.mu.Unlock()
+	select {
+	case <-r.done:
+		return r.snap, r.err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // SharedProcessView is a ProcessView whose Read re-checks the process on every call (ReadFresh: a PID reused inside the TTL
@@ -50,8 +93,14 @@ type SharedProcessView struct{}
 
 var _ ProcessView = SharedProcessView{}
 
-func (SharedProcessView) with(f func(*ProcessSnapshot) error) error {
-	snap, err := SharedProcessSnapshot(context.Background())
+func (SharedProcessView) table() (*ProcessSnapshot, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), sharedViewWait)
+	defer cancel()
+	return SharedProcessSnapshot(ctx)
+}
+
+func (v SharedProcessView) with(f func(*ProcessSnapshot) error) error {
+	snap, err := v.table()
 	if err != nil {
 		return err
 	}
@@ -59,7 +108,7 @@ func (SharedProcessView) with(f func(*ProcessSnapshot) error) error {
 }
 
 func (v SharedProcessView) Alive(pid int) bool {
-	snap, err := SharedProcessSnapshot(context.Background())
+	snap, err := v.table()
 	return err == nil && snap.Alive(pid)
 }
 

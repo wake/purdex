@@ -143,11 +143,21 @@ func (s *ProcessSnapshot) read(pid int, fresh bool) (ProcessInfo, error) {
 	if e.startErr != nil {
 		return ProcessInfo{}, e.startErr
 	}
+	if fresh {
+		// Nothing is kept and no lock is held: the platform read may fall back to a `ps` that is slow, and a snapshot shared by
+		// the whole daemon must not make every other PID's reader wait for it. procArgsPlatform reads only what the snapshot
+		// fixed when it was taken.
+		exe, argv, err := procArgsPlatform(pid, e)
+		if err != nil {
+			return ProcessInfo{}, err
+		}
+		return ProcessInfo{PID: pid, PPID: e.ppid, ExePath: exe, Argv: argv, StartTime: e.start}, nil
+	}
 	// The lock spans the platform read so one PID's arguments are read once
 	// however many callers ask; a pass is single-goroutine, so nothing waits.
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if fresh || !e.argsRead {
+	if !e.argsRead {
 		e.exePath, e.argv, e.argsErr = procArgsPlatform(pid, e)
 		e.argsRead = true
 	}

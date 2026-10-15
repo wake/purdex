@@ -3,7 +3,9 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -11,7 +13,7 @@ import (
 func withSharedSeams(t *testing.T) (calls *int, now *time.Time, fail *bool) {
 	t.Helper()
 	oldNow, oldSnap := sharedNow, sharedSnapshot
-	shared.snap = nil
+	resetShared()
 	n := 0
 	clock := time.Unix(1_000_000, 0)
 	f := false
@@ -23,7 +25,7 @@ func withSharedSeams(t *testing.T) (calls *int, now *time.Time, fail *bool) {
 		}
 		return &ProcessSnapshot{procs: map[int]*snapshotEntry{1: {ppid: 0}}}, nil
 	}
-	t.Cleanup(func() { sharedNow, sharedSnapshot = oldNow, oldSnap; shared.snap = nil })
+	t.Cleanup(func() { sharedNow, sharedSnapshot = oldNow, oldSnap; resetShared() })
 	return &n, &clock, &f
 }
 
@@ -50,18 +52,74 @@ func TestSharedProcessSnapshot_OneReadPerTTL(t *testing.T) {
 	}
 }
 
-func TestSharedProcessSnapshot_AFailedReadIsNotKept(t *testing.T) {
-	calls, _, fail := withSharedSeams(t)
+func resetShared() {
+	shared.mu.Lock()
+	shared.snap, shared.inflight, shared.failErr = nil, nil, nil
+	shared.mu.Unlock()
+}
+
+// A failed read is answered to everyone for sharedFailBackoff (no retry storm), then tried again.
+func TestSharedProcessSnapshot_AFailureIsSharedThenRetried(t *testing.T) {
+	calls, now, fail := withSharedSeams(t)
 	*fail = true
-	if _, err := SharedProcessSnapshot(context.Background()); err == nil {
-		t.Fatal("want the read's error")
+	for i := 0; i < 5; i++ {
+		if _, err := SharedProcessSnapshot(context.Background()); err == nil {
+			t.Fatal("want the read's error")
+		}
+	}
+	if *calls != 1 {
+		t.Fatalf("5 callers after a failure read the table %d times, want 1", *calls)
 	}
 	*fail = false
+	*now = now.Add(sharedFailBackoff + time.Millisecond)
 	if _, err := SharedProcessSnapshot(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if *calls != 2 {
-		t.Fatalf("%d reads, want 2 (the failure is retried at once)", *calls)
+		t.Fatalf("%d reads, want 2 (retried after the backoff)", *calls)
+	}
+}
+
+// A read that does not return holds no lock: a waiter gives up on its own ctx, and the callers that come after wait for the
+// same read rather than starting one each.
+func TestSharedProcessSnapshot_ABlockedReadBlocksNoLockAndIsNotStartedTwice(t *testing.T) {
+	_, _, _ = withSharedSeams(t)
+	release := make(chan struct{})
+	var started atomic.Int32
+	sharedSnapshot = func(context.Context) (*ProcessSnapshot, error) {
+		started.Add(1)
+		<-release
+		return &ProcessSnapshot{procs: map[int]*snapshotEntry{}}, nil
+	}
+	t.Cleanup(func() { close(release) })
+	for i := 0; i < 3; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+		start := time.Now()
+		_, err := SharedProcessSnapshot(ctx)
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > time.Second {
+			t.Fatalf("waiter %d: err=%v after %v, want its own deadline", i, err, time.Since(start))
+		}
+	}
+	if n := started.Load(); n != 1 {
+		t.Fatalf("%d reads started while one was in flight, want 1", n)
+	}
+}
+
+// ReadFresh holds no lock of the snapshot while it reads (a slow `ps` fallback for one PID must not stop the others).
+func TestProcessSnapshot_ReadFreshTakesNoSnapshotLock(t *testing.T) {
+	snap := takeSnapshot(t)
+	snap.mu.Lock()
+	defer snap.mu.Unlock()
+	done := make(chan error, 1)
+	go func() { _, err := snap.ReadFresh(os.Getpid()); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("ReadFresh(self): %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ReadFresh waits for the snapshot's lock")
 	}
 }
 
