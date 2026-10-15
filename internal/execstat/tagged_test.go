@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os/exec"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -304,5 +305,45 @@ func TestOutputLongStderrMatchesTheStdlib(t *testing.T) {
 	}
 	if len(we.Stderr) < 64<<10 || !bytes.HasSuffix(ge.Stderr, []byte("THE-REASON\n")) || !bytes.Equal(ge.Stderr, we.Stderr) {
 		t.Fatalf("stderr differs from the standard library's: %d bytes vs %d, tail %q", len(ge.Stderr), len(we.Stderr), ge.Stderr[max(0, len(ge.Stderr)-30):])
+	}
+}
+
+// headTail against the same writes in the standard library's saver, for the three shapes a stream takes: small chunks, one huge
+// write, and a write that straddles the end of the head.
+func TestHeadTailWriterShapes(t *testing.T) {
+	mk := func(n int, off byte) []byte {
+		b := make([]byte, n)
+		for i := range b {
+			b[i] = 'a' + byte(i%26) + off%3
+		}
+		return b
+	}
+	for name, writes := range map[string][][]byte{
+		"small":     {mk(10, 0), mk(10, 1), mk(7, 2)},
+		"huge":      {mk(5000, 0)},
+		"straddle":  {mk(60, 0), mk(200, 1), mk(300, 2)},
+		"huge-many": {mk(40, 0), mk(900, 1), mk(25, 2), mk(1000, 0)},
+	} {
+		var out bytes.Buffer
+		ht := &headTail{limit: 100}
+		for _, w := range writes {
+			ht.Write(w)
+		}
+		got := ht.Bytes()
+		// reference: head 100, tail 100 of the concatenation, the rest counted
+		var all []byte
+		for _, w := range writes {
+			all = append(all, w...)
+		}
+		if len(all) <= 200 {
+			out.Write(all)
+		} else {
+			out.Write(all[:100])
+			out.WriteString("\n... omitting " + strconv.Itoa(len(all)-200) + " bytes ...\n")
+			out.Write(all[len(all)-100:])
+		}
+		if !bytes.Equal(got, out.Bytes()) {
+			t.Errorf("%s: got %q\nwant %q", name, got, out.Bytes())
+		}
 	}
 }
