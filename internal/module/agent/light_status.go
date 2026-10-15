@@ -2,6 +2,17 @@ package agent
 
 import "time"
 
+// LightGeneration moves every time the agent module takes in something that can change what a conversation shows from it: a
+// hook event (statuses, the background list, a turn edge) or an event of the Purdex mod (its light, an interruption). The
+// conversation stream compares it between its polls, so a quiet session costs a comparison instead of a lookup (G3c). It
+// moves before and after the work, so a reader never sees the old value together with the new state.
+func (m *Module) LightGeneration() uint64 {
+	if m == nil {
+		return 0
+	}
+	return m.lightGen.Load()
+}
+
 // LightStatus is the light (running | waiting | idle | error) of one frame: frameID, a live Claude Code root frame
 // that reports sessionID (the frame ConfirmedOwners confirmed, so no other frame can stand in for it). It reads the frames store and checks the recorded pid with a signal-0 probe: no tmux listing, no process
 // walk, so a caller may ask it every few hundred milliseconds (the conversation stream's header). It is not a proof
