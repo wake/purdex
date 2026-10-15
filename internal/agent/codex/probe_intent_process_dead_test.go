@@ -11,6 +11,7 @@ import (
 
 	"github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/agent/probe"
+	"github.com/wake/purdex/internal/execstat"
 )
 
 // fakePaneLister is a deterministic tmuxPaneLister test double. Tests register
@@ -435,5 +436,43 @@ func TestOnProcessDead_WrongKind_ReturnsEmpty(t *testing.T) {
 	})
 	if got != "" {
 		t.Errorf("onProcessDead(Kind=screen_change) = %q, want empty Status", got)
+	}
+}
+
+// The detectors armed at one time are a gauge: each one reads the pane list every tick, so the level is the multiplier of
+// that probe. It rises when the detector starts and returns when it ends.
+func TestStartProcessDeadDetector_GaugeTracksArmedDetectors(t *testing.T) {
+	execstat.ResetTags()
+	t.Cleanup(execstat.ResetTags)
+	withFastPoll(t, 1*time.Millisecond)
+	withPidAlive(t, func(pid int) bool { return true })
+	level := func() int64 {
+		for _, g := range execstat.Gauges() {
+			if g.Name == "codex-process-dead-detectors" {
+				return g.Value
+			}
+		}
+		return 0
+	}
+
+	lister := newFakePaneLister("%5")
+	out := make(chan agent.Signal, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		StartProcessDeadDetector(ctx, lister, "%5", 1234, out)
+		close(done)
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for level() != 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := level(); got != 1 {
+		t.Fatalf("while running: gauge = %d, want 1", got)
+	}
+	cancel()
+	<-done
+	if got := level(); got != 0 {
+		t.Fatalf("after it ended: gauge = %d, want 0", got)
 	}
 }

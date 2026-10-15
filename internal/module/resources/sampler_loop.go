@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/wake/purdex/internal/execstat"
 	"time"
 
 	"github.com/wake/purdex/internal/gate"
@@ -43,7 +44,8 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 	// restart.
 	set := m.settings()
 	m.mode = set.Mode
-	m.lastSettings.Store(&set) // for GET /api/resources, which reads no settings itself
+	execstat.SetGaugeText("resources-mode", set.Mode) // the sampler's own cost depends on it
+	m.lastSettings.Store(&set)                        // for GET /api/resources, which reads no settings itself
 	// The load watcher is independent of the lease mode: with the mode off the tick still samples while the watch setting is on,
 	// and publishes "off" all the same (nothing else of the module's work runs).
 	wset, watchOn := m.watchSettings()
