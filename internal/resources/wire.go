@@ -104,6 +104,9 @@ type HostUse struct {
 	MemUsedBytes      uint64  `json:"mem_used_bytes"`
 	Pressure          int     `json:"pressure"`           // 1, 2 or 4; 0 unknown
 	MemorystatusLevel int     `json:"memorystatus_level"` // 0 to 100; -1 unknown
+	// PageRate is the pages written out (pageouts + swapouts) per second over the last seconds, the second input of the zone
+	// beside Pressure; the gate admits by the same two figures. Absent while there is no baseline yet.
+	PageRate float64 `json:"page_rate,omitempty"`
 	// PcpuTotal is the sum of pcpu over all processes divided by ncpu, kept
 	// for calibrating learned weights.
 	PcpuTotal float64 `json:"pcpu_total"`

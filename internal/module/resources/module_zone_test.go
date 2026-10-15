@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/resources"
 )
 
@@ -54,8 +55,15 @@ func (r *zoneRig) tick(t *testing.T, raw resources.HostRaw) resources.HostUse {
 	return r.m.latest.Load().Host
 }
 
+// withPages is a reading that also carries the paging counters (pageouts + swapouts since boot).
+func withPages(raw resources.HostRaw, total uint64) resources.HostRaw {
+	raw.Pageouts, raw.PageCounters = total, true
+	return raw
+}
+
 // The snapshot carries the zone, the trend and when the zone last changed,
-// in measure mode too (the default of a module with no settings reader).
+// in measure mode too (the default of a module with no settings reader). The zone is the gate's signal: the memory pressure
+// level and the page rate (L2); the trend still follows memory in use.
 func TestSampler_PublishesZoneAndTrend(t *testing.T) {
 	r := newZoneRig(t)
 	var h resources.HostUse
@@ -67,33 +75,79 @@ func TestSampler_PublishesZoneAndTrend(t *testing.T) {
 	since := h.ZoneSince
 	assert.Equal(t, r.m.latest.Load().SampledAt.UnixMilli()-20_000, since, "the zone began at the first tick")
 
-	// Climb 0.5 points per tick = 6 per minute: rising once the window has data.
+	// Climb 0.5 points per tick = 6 per minute: rising once the window has data. Memory in use, however high, is not a zone.
 	for i := 0; i < 12; i++ {
 		h = r.tick(t, zoneRaw(41+0.5*float64(i), 1, 1))
 	}
 	assert.Equal(t, "normal", h.Zone)
 	assert.Equal(t, "rising", h.Trend)
 	assert.Equal(t, since, h.ZoneSince, "a zone that did not change keeps its start")
+	h = r.tick(t, zoneRaw(99, 50, 1))
+	assert.Equal(t, "normal", h.Zone, "neither memory in use nor load makes a zone: the pressure level and the page rate do")
 
-	// Into warning: the zone changes and ZoneSince moves to that tick.
-	h = r.tick(t, zoneRaw(85, 1, 1))
+	// Pressure warn: the zone changes and ZoneSince moves to that tick.
+	h = r.tick(t, zoneRaw(60, 1, 2))
 	assert.Equal(t, "warning", h.Zone)
 	assert.Equal(t, r.cur.UnixMilli(), h.ZoneSince)
 
-	// Flat for a full 120 s window: the trend settles; hysteresis keeps warning at 79.
+	// Flat for a full 120 s window: the trend settles. The level back at 1 leaves warning.
 	for i := 0; i < 26; i++ {
-		h = r.tick(t, zoneRaw(79, 1, 1))
+		h = r.tick(t, zoneRaw(79, 1, 2))
 	}
 	assert.Equal(t, "warning", h.Zone)
 	assert.Equal(t, "flat", h.Trend)
-	h = r.tick(t, zoneRaw(60, 1, 1))
+	h = r.tick(t, zoneRaw(79, 1, 1))
 	assert.Equal(t, "normal", h.Zone)
 
-	// Danger.
-	h = r.tick(t, zoneRaw(95, 1, 1))
-	assert.Equal(t, "danger", h.Zone)
+	// Danger: pressure critical alone.
 	h = r.tick(t, zoneRaw(40, 1, 4))
-	assert.Equal(t, "danger", h.Zone, "critical pressure alone is danger")
+	assert.Equal(t, "danger", h.Zone)
+	h = r.tick(t, zoneRaw(40, 1, 2))
+	assert.Equal(t, "warning", h.Zone, "danger is left one level at a time")
+}
+
+// The page rate is the other input, worked out with the gate's arithmetic from the counters the sampler reads: 500 pages in
+// 5 s is 100 pages/s, over the gate's 50; the zone is left only under 0.9 x the limit.
+func TestSampler_PageRateMakesTheWarningZone(t *testing.T) {
+	r := newZoneRig(t)
+	total := uint64(1000)
+	step := func(add uint64) resources.HostUse {
+		total += add
+		return r.tick(t, withPages(zoneRaw(40, 1, 1), total))
+	}
+	assert.Equal(t, "normal", step(0).Zone, "no baseline yet: the rate is 0")
+	h := step(500)
+	assert.Equal(t, "warning", h.Zone)
+	assert.InDelta(t, 100, h.PageRate, 0.001)
+	assert.Equal(t, "warning", step(200).Zone, "40 pages/s is under the limit but not under 0.9 x it, and the window still holds the burst")
+	for i := 0; i < 3; i++ {
+		h = step(0)
+	}
+	assert.Equal(t, "normal", h.Zone, "paging stopped: the rate fell, the zone was left")
+	assert.Equal(t, 0.0, h.PageRate)
+}
+
+// The limit is the gate's own (its admission.max_page_rate), read every tick.
+func TestSampler_PageRateLimitIsTheGates(t *testing.T) {
+	r := newZoneRig(t)
+	cfg := gate.Defaults()
+	cfg.Admission.PageRateAuto, cfg.Admission.MaxPageRate = false, 200
+	r.m.gateConfig = func() gate.Config { return cfg }
+	total := uint64(0)
+	r.tick(t, withPages(zoneRaw(40, 1, 1), total))
+	total += 500 // 100 pages/s: under 200
+	assert.Equal(t, "normal", r.tick(t, withPages(zoneRaw(40, 1, 1), total)).Zone)
+	total += 1500 // 300 pages/s: over
+	assert.Equal(t, "warning", r.tick(t, withPages(zoneRaw(40, 1, 1), total)).Zone)
+}
+
+// A reading without the counters leaves the rate 0 and the level alone decides.
+func TestSampler_NoCounters_LevelOnly(t *testing.T) {
+	r := newZoneRig(t)
+	h := r.tick(t, zoneRaw(40, 1, 1))
+	assert.Equal(t, 0.0, h.PageRate)
+	assert.Equal(t, "normal", h.Zone)
+	assert.Equal(t, "warning", r.tick(t, zoneRaw(40, 1, 2)).Zone)
 }
 
 // Modes advise and lease compute the same zones.
@@ -101,17 +155,17 @@ func TestSampler_ZonesInEveryMode(t *testing.T) {
 	for _, mode := range []string{resources.ModeMeasure, resources.ModeAdvise, resources.ModeLease} {
 		r := newZoneRig(t)
 		r.set.set(resources.Settings{Mode: mode})
-		h := r.tick(t, zoneRaw(85, 1, 1))
+		h := r.tick(t, zoneRaw(40, 1, 2))
 		assert.Equal(t, "warning", h.Zone, mode)
 	}
 }
 
-// The thresholds come from the settings.
-func TestSampler_ZoneUsesSettings(t *testing.T) {
+// The memory-in-use thresholds of the settings (mem_warn_pct, mem_danger_pct) no longer move the daemon's zone: they are kept
+// (the fleet view still judges a probed host by them) but this host's zone is the gate's signal.
+func TestSampler_MemThresholdsDoNotMoveTheZone(t *testing.T) {
 	r := newZoneRig(t)
 	r.set.set(resources.Settings{Mode: resources.ModeMeasure, MemWarnPct: intp(60), MemDangerPct: intp(70)})
-	assert.Equal(t, "warning", r.tick(t, zoneRaw(65, 1, 1)).Zone)
-	assert.Equal(t, "danger", r.tick(t, zoneRaw(72, 1, 1)).Zone)
+	assert.Equal(t, "normal", r.tick(t, zoneRaw(72, 1, 1)).Zone)
 }
 
 // Mode off, a failing sampler and an unusable reading publish zone unknown
@@ -119,19 +173,19 @@ func TestSampler_ZoneUsesSettings(t *testing.T) {
 func TestSampler_UnavailableIsUnknownAndAddsNoSamples(t *testing.T) {
 	r := newZoneRig(t)
 	for i := 0; i < 3; i++ {
-		r.tick(t, zoneRaw(85, 1, 1))
+		r.tick(t, zoneRaw(85, 1, 2))
 	}
 	before := len(r.m.ringCopy())
 	require.Equal(t, 3, before)
 
 	r.set.set(resources.Settings{Mode: resources.ModeOff})
-	h := r.tick(t, zoneRaw(85, 1, 1))
+	h := r.tick(t, zoneRaw(85, 1, 2))
 	assert.False(t, r.m.latest.Load().Available)
 	assert.Equal(t, "unknown", h.Zone)
 	assert.Equal(t, "unknown", h.Trend)
 	assert.Len(t, r.m.ringCopy(), before, "off adds no sample")
 
-	// Back on: the 79 would have held a warning latch, but the latch was reset.
+	// Back on: the warning would have held its latch, but the latch was reset.
 	r.set.set(resources.Settings{Mode: resources.ModeMeasure})
 	h = r.tick(t, zoneRaw(79, 1, 1))
 	assert.Equal(t, "normal", h.Zone)
@@ -172,7 +226,7 @@ func TestSampler_UnavailableIsUnknownAndAddsNoSamples(t *testing.T) {
 // does not blank it).
 func TestSampler_OneFailedTickKeepsTheZone(t *testing.T) {
 	r := newZoneRig(t)
-	r.tick(t, zoneRaw(85, 1, 1))
+	r.tick(t, zoneRaw(85, 1, 2))
 	r.m.sampler = &fakeSampler{fn: func(context.Context, int) (resources.HostRaw, []resources.Proc, error) {
 		return resources.HostRaw{}, nil, assert.AnError
 	}}

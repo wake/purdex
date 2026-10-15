@@ -23,12 +23,27 @@ func newMinuteFix(t *testing.T) *minuteFix {
 
 // tick feeds one good tick to the timeline and moves the clock one interval.
 func (f *minuteFix) tick(h resources.HostUse) {
-	held, err := f.m.store.Active()
+	f.m.noteMinute(h, f.clock.now())
+	f.advance(f.m.interval)
+}
+
+// gateFigs reads the minute rows' gate columns.
+func (f *minuteFix) gateFigs() [][3]int {
+	f.t.Helper()
+	rows, err := f.m.store.db.Query(`SELECT heavy_running, light_running, gate_waiting FROM host_minutes ORDER BY at`)
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	f.m.noteMinute(context.Background(), h, f.clock.now(), held, true)
-	f.advance(f.m.interval)
+	defer rows.Close()
+	var out [][3]int
+	for rows.Next() {
+		var r [3]int
+		if err := rows.Scan(&r[0], &r[1], &r[2]); err != nil {
+			f.t.Fatal(err)
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 func (f *minuteFix) minutes() []minuteRow {
@@ -121,31 +136,30 @@ func TestMinutes_FullRunAcrossAMinute(t *testing.T) {
 	}
 }
 
-// held, heavy_held, Σ charge, waiting and unleased: two held leases (35 and
-// 15) and one waiting.
-func TestMinutes_LeaseFigures(t *testing.T) {
+// The gate's figures (L2): heavy_running, light_running and gate_waiting are the minute's peaks of the slot records, whatever
+// the lease table holds; the lease columns (held, heavy_held, sum_charge, waiting, unleased) are written 0.
+func TestMinutes_GateFiguresReplaceTheLeaseFigures(t *testing.T) {
 	f := newMinuteFix(t)
+	// two held leases and a waiting one: they are in no column any more
 	f.heldLease("big", resources.ScopeProcess, 100)
 	f.heldLease("small", resources.ScopeProcess, 101)
-	if _, err := f.m.store.db.Exec(`UPDATE resource_leases SET weight = 35 WHERE id = 'big'`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.m.store.db.Exec(`UPDATE resource_leases SET weight = 15 WHERE id = 'small'`); err != nil {
-		t.Fatal(err)
-	}
 	f.waiting("w", f.nowMS()+30000)
-	f.m.setLeaseUse(map[string]resources.LeaseUsage{"big": {CPU: 20, Use: 20}, "small": {CPU: 5, Use: 5}})
-	f.tick(resources.HostUse{Measured: 60, NCPU: 10}) // both in warmup → charge 35 + 15 = 50; unleased 60 − 25 = 35
-	f.ticks(12, resources.HostUse{NCPU: 10})
-	r := f.minutes()[0]
-	if r.Held != 2 || r.HeavyHeld != 1 || r.Waiting != 1 || r.SumCharge != 50 || r.Unleased != 35 {
-		t.Errorf("row = %+v", r)
+	f.m.setLeaseUse(map[string]resources.LeaseUsage{"big": {CPU: 20, Use: 20}})
+	counts := [][3]int{{1, 0, 0}, {1, 2, 3}, {0, 3, 1}, {1, 1, 0}}
+	i := 0
+	f.m.gateCounts = func() (int, int, int, bool) {
+		c := counts[min(i, len(counts)-1)]
+		i++
+		return c[0], c[1], c[2], true
 	}
-	// With the heavy threshold lowered to 10 both count.
-	f.set.set(resources.Settings{Mode: resources.ModeLease, HeavyMinWeight: ptr(10)})
-	f.ticks(12, resources.HostUse{NCPU: 10})
-	if r := f.minutes()[1]; r.HeavyHeld != 2 {
-		t.Errorf("heavy_held with heavy_min_weight 10 = %d, want 2", r.HeavyHeld)
+	f.ticks(4, resources.HostUse{Measured: 60, NCPU: 10})
+	f.ticks(9, resources.HostUse{NCPU: 10}) // crosses into the next minute
+	r := f.minutes()[0]
+	if r.Held != 0 || r.HeavyHeld != 0 || r.Waiting != 0 || r.SumCharge != 0 || r.Unleased != 0 {
+		t.Errorf("the lease columns are not 0: %+v", r)
+	}
+	if got := f.gateFigs()[0]; got != [3]int{1, 3, 3} {
+		t.Errorf("heavy_running, light_running, gate_waiting = %v, want the peaks 1, 3, 3", got)
 	}
 }
 
@@ -175,7 +189,7 @@ func TestMinutes_WriteFailureLoggedOnceAndRecovers(t *testing.T) {
 		t.Error("recovery not logged")
 	}
 	m := newTestModule(idleSampler(), nil)
-	m.noteMinute(context.Background(), resources.HostUse{Full: true}, time.Now(), nil, true) // store == nil
+	m.noteMinute(resources.HostUse{Full: true}, time.Now()) // store == nil
 }
 
 // Ended rows and minute rows go at the same retention (14 days): boot prunes both.
@@ -270,23 +284,20 @@ func TestMigration_FromTheAlpha610Schema(t *testing.T) {
 	}
 }
 
-// A tick whose lease figures could not be read adds nothing: no part of it is
-// in the minute (not its full flag either).
-func TestMinutes_UnreadableLeasesAddNothing(t *testing.T) {
+// A gate directory that cannot be read gives zeros: the tick is in the minute all the same (the timeline no longer depends on
+// the lease table, which a tick used to need).
+func TestMinutes_UnreadableGateAddsZerosNotNothing(t *testing.T) {
 	f := newMinuteFix(t)
+	f.m.gateCounts = func() (int, int, int, bool) { return 0, 0, 0, false }
 	on := resources.HostUse{Full: true, Load1: 9, NCPU: 10}
-	f.tick(resources.HostUse{NCPU: 10})
-	f.m.noteMinute(context.Background(), on, f.clock.now(), nil, false) // measureLeases could not read the table
-	f.advance(f.m.interval)
-	// A cancelled context fails the waiting count the same way.
-	cancelled, cancel := context.WithCancel(context.Background())
-	cancel()
-	f.m.noteMinute(cancelled, on, f.clock.now(), nil, true)
-	f.advance(f.m.interval)
-	f.ticks(11, resources.HostUse{NCPU: 10})
+	f.tick(on)
+	f.ticks(12, resources.HostUse{NCPU: 10})
 	r := f.minutes()[0]
-	if r.Full || r.FullTicks != 0 || r.FullStarts != 0 || r.Load1 != 0 {
-		t.Errorf("row = %+v: a tick that could not be completed was folded in", r)
+	if !r.Full || r.FullTicks != 1 || r.Load1 != 9 {
+		t.Errorf("row = %+v: the tick was not folded in", r)
+	}
+	if got := f.gateFigs()[0]; got != [3]int{0, 0, 0} {
+		t.Errorf("gate figures = %v, want zeros", got)
 	}
 }
 

@@ -1,7 +1,6 @@
 package resourcesmod
 
 import (
-	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -59,18 +58,6 @@ func TestMinutes_UnknownZoneIsSampledButInNoBucket(t *testing.T) {
 	got := f.v2Minutes()
 	require.Len(t, got, 1)
 	assert.Equal(t, v2Minute{SampledS: 60, NormalS: 40, PressureMax: 1, ZoneMax: 0}, got[0])
-}
-
-// A tick that fails adds nothing (the lease table could not be read).
-func TestMinutes_FailedTickAddsNothing(t *testing.T) {
-	f := newMinuteFix(t)
-	f.m.noteMinute(context.Background(), zoned("danger", 4), f.clock.now(), nil, false)
-	f.advance(f.m.interval)
-	f.ticks(12, zoned("normal", 1)) // 11 in the first minute, the 12th flushes it
-	got := f.v2Minutes()
-	require.Len(t, got, 1)
-	assert.Equal(t, 55, got[0].SampledS)
-	assert.Equal(t, 0, got[0].DangerS)
 }
 
 // A minute that is written twice (a restart inside it, the sampler off and on)

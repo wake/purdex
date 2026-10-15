@@ -166,34 +166,48 @@ func (r *HostReader) Read() (Pressure, error) {
 	return pressureOf(keep, cur), nil
 }
 
-// pressureOf is the level of cur and the rate against the newest sample that is at least a second older and within
-// the window (the oldest in the window when none is a second older: a short baseline beats none).
-func pressureOf(samples []cachedSample, cur cachedSample) Pressure {
-	p := Pressure{Level: cur.Level}
-	var base *cachedSample
+// PageSample is a reading of the paging counters: pages written out (pageouts + swapouts) since boot, at a time.
+type PageSample struct {
+	At    time.Time
+	Total uint64
+}
+
+// RateOver is the page rate in pages per second at cur: against the oldest of the samples that are at least a second and at
+// most rateWindow (10 s) older (a short baseline beats none), 0 when there is none or the counter went back. It is the rate
+// of the gate's admission rule, exported so that the daemon's zone reads the same signal with the same arithmetic.
+func RateOver(samples []PageSample, cur PageSample) float64 {
+	var base *PageSample
 	for i := range samples {
 		s := &samples[i]
-		age := time.UnixMilli(cur.At).Sub(time.UnixMilli(s.At))
+		age := cur.At.Sub(s.At)
 		if age < time.Second || age > rateWindow {
 			continue
 		}
-		if base == nil || s.At < base.At {
+		if base == nil || s.At.Before(base.At) {
 			base = s // the oldest inside the window: the longest baseline
 		}
 	}
 	if base == nil {
-		return p // no baseline yet: the rate is unknown, taken as 0 (the level still holds)
+		return 0 // no baseline yet: the rate is unknown, taken as 0 (the level still holds)
 	}
-	dt := float64(cur.At-base.At) / 1000
+	dt := cur.At.Sub(base.At).Seconds()
 	if dt <= 0 {
-		return p
+		return 0
 	}
-	d := float64(cur.Pageouts+cur.Swapouts) - float64(base.Pageouts+base.Swapouts)
+	d := float64(cur.Total) - float64(base.Total)
 	if d < 0 {
 		d = 0
 	}
-	p.PageRate = d / dt
-	return p
+	return d / dt
+}
+
+// pressureOf is the level of cur and the rate against the cached samples.
+func pressureOf(samples []cachedSample, cur cachedSample) Pressure {
+	ps := make([]PageSample, len(samples))
+	for i, s := range samples {
+		ps[i] = PageSample{At: time.UnixMilli(s.At), Total: s.Pageouts + s.Swapouts}
+	}
+	return Pressure{Level: cur.Level, PageRate: RateOver(ps, PageSample{At: time.UnixMilli(cur.At), Total: cur.Pageouts + cur.Swapouts})}
 }
 
 func sysctlLevel() (int, error) {

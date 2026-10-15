@@ -1,7 +1,6 @@
 package resourcesmod
 
 import (
-	"context"
 	"time"
 
 	"github.com/wake/purdex/internal/resources"
@@ -10,7 +9,7 @@ import (
 // The host timeline (spec D-8.2): the sampler goroutine folds each good tick
 // into the current minute and writes the minute's row when the next minute's
 // first tick arrives. A row holds the minute's peaks (load1, mem, measured,
-// the lease counts, Σ charge, unleased), the last ncpu, and the `full`
+// the gate's running and waiting counts), the last ncpu, and the `full`
 // bookkeeping: how many ticks the flag was on, how many off→on transitions
 // happened in the minute, and the longest run of it that was running in the
 // minute (a run that began earlier and goes on counts). A tick that fails
@@ -21,10 +20,6 @@ import (
 // row a minute (INSERT OR REPLACE; the file is WAL with a 5 s busy timeout).
 // A write that fails is logged once per run of failures and not retried: the
 // minute is lost, the next one is written as usual.
-// minuteQueryBudget bounds the one query the timeline makes of its own, so a
-// busy database cannot hold the sampler past its interval.
-const minuteQueryBudget = time.Second
-
 type minuteAgg struct {
 	row      minuteRow
 	open     bool // row holds the current minute
@@ -34,33 +29,16 @@ type minuteAgg struct {
 }
 
 // noteMinute folds one good tick into the timeline. host is the tick's
-// published host figures (Full already latched); held and heldOK are what
-// measureLeases read this tick (heldOK false: the lease table could not be
-// read, and the tick adds nothing). The whole tick is worked out before any
-// of it is folded in, so a tick is in the minute entirely or not at all.
-func (m *Module) noteMinute(ctx context.Context, host resources.HostUse, now time.Time, held []leaseRow, heldOK bool) {
-	if m.store == nil || !heldOK {
+// published host figures (Full already latched). The gate's slot records give
+// the commands that run and wait (spec §6: they replace the lease counts, which
+// are written 0 from L2 on); a store or a gate directory that cannot be read
+// adds zeros, not an error. The whole tick is worked out before any of it is
+// folded in, so a tick is in the minute entirely or not at all.
+func (m *Module) noteMinute(host resources.HostUse, now time.Time) {
+	if m.store == nil {
 		return
 	}
-	cctx, cancel := context.WithTimeout(ctx, minuteQueryBudget)
-	defer cancel()
-	waiting, err := m.store.CountWaiting(cctx)
-	if err != nil {
-		return
-	}
-	s := m.settings()
-	use := m.leaseUseSnapshot()
-	var sum, cpu, mem float64
-	heavy := 0
-	for _, l := range held {
-		sum += resources.Charge(resources.Lease{ID: l.ID, Weight: l.Weight, GrantedAt: time.UnixMilli(l.GrantedAt),
-			Measured: l.EWMA, Samples: l.Samples}, now, s)
-		cpu += use[l.ID].CPU
-		mem += use[l.ID].Mem
-		if l.Weight >= s.HeavyMin() {
-			heavy++
-		}
-	}
+	heavyRunning, lightRunning, gateWaiting, _ := m.slotCounts()
 
 	a := &m.minute
 	at := now.Truncate(time.Minute).UnixMilli()
@@ -111,11 +89,10 @@ func (m *Module) noteMinute(ctx context.Context, host resources.HostUse, now tim
 	}
 	r.ZoneMax = max(r.ZoneMax, zoneRank)
 	r.PressureMax = max(r.PressureMax, host.Pressure)
-	r.Held = max(r.Held, len(held))
-	r.HeavyHeld = max(r.HeavyHeld, heavy)
-	r.SumCharge = max(r.SumCharge, sum)
-	r.Waiting = max(r.Waiting, waiting)
-	r.Unleased = max(r.Unleased, max(0, float64(host.Measured)-max(cpu, mem)))
+	// The lease columns (held, heavy_held, sum_charge, waiting, unleased) stay as the row was made: 0.
+	r.HeavyRunning = max(r.HeavyRunning, heavyRunning)
+	r.LightRunning = max(r.LightRunning, lightRunning)
+	r.GateWaiting = max(r.GateWaiting, gateWaiting)
 }
 
 // endMinute is the sampler going to mode off: the open minute is written and
