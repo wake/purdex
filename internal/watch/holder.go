@@ -93,23 +93,26 @@ func (s *HolderStore) Update(fn func(*Holder)) error {
 		return err
 	}
 	if s.path != "" {
-		if err := writeAtomic(s.path, b); err != nil {
-			return err
+		renamed, err := writeAtomic(s.path, b)
+		if renamed {
+			s.cur = next // the new file is what a restart reads: memory follows it even when its durability could not be confirmed
 		}
+		return err
 	}
 	s.cur = next
 	return nil
 }
 
-// writeAtomic puts data in path through a temp file, an fsync and a rename (and an fsync of the directory).
-func writeAtomic(path string, data []byte) error {
+// writeAtomic puts data in path through a temp file, an fsync and a rename (and an fsync of the directory). renamed says the new
+// content is in place, whatever the error: a failed fsync of the directory comes after the rename.
+func writeAtomic(path string, data []byte) (renamed bool, err error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+		return false, err
 	}
 	tmp, err := os.CreateTemp(dir, ".holder-*.tmp")
 	if err != nil {
-		return err
+		return false, err
 	}
 	_, werr := tmp.Write(data)
 	if werr == nil {
@@ -126,9 +129,9 @@ func writeAtomic(path string, data []byte) error {
 	}
 	if werr != nil {
 		_ = os.Remove(tmp.Name())
-		return werr
+		return false, werr
 	}
-	return syncDir(dir)
+	return true, syncDir(dir)
 }
 
 // NewMemoryHolder is a store that keeps nothing on disk (a daemon without a data dir).

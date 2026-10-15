@@ -60,17 +60,32 @@ func TestHolder_ACorruptOrInvalidFileIsSetAside(t *testing.T) {
 	}
 }
 
-func TestHolder_AFailedWriteLeavesTheStateAsItWas(t *testing.T) {
+// A write that failed before the rename leaves the state as it was; one whose directory sync failed after the rename has
+// changed the file, so memory follows it (the error says durability is unconfirmed) and a retry, a read and a restart agree.
+func TestHolder_AFailedWriteAndAFailedDirectorySync(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "holder.json")
 	s, _ := OpenHolder(p)
 	require.NoError(t, s.Update(func(h *Holder) { h.State, h.SessionID = HolderAwake, "s" }))
+
 	old := syncDir
 	defer func() { syncDir = old }()
 	syncDir = func(string) error { return os.ErrInvalid }
 	require.Error(t, s.Update(func(h *Holder) { h.State = HolderResting }))
-	// the rename happened but its sync failed: the in-memory state did not move, the caller retries
-	require.Equal(t, HolderAwake, s.Get().State)
+	require.Equal(t, HolderResting, s.Get().State, "the file says resting, so does memory")
+	r, _ := OpenHolder(p)
+	require.Equal(t, HolderResting, r.Get().State, "a restart reads the same")
+	syncDir = old
+	require.NoError(t, s.Update(func(h *Holder) { h.State = HolderResting }), "the retry has nothing to change")
+
+	// the write itself fails (the directory is gone / is a file): nothing changed
+	blocked := filepath.Join(dir, "sub")
+	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o600))
+	s2, _ := OpenHolder(filepath.Join(blocked, "holder.json"))
+	require.Error(t, s2.Update(func(h *Holder) { h.State, h.SessionID = HolderAwake, "z" }))
+	require.Equal(t, HolderNone, s2.Get().State)
 	ents, _ := os.ReadDir(dir)
-	require.Len(t, ents, 1, "no temp file left")
+	for _, e := range ents {
+		require.NotContains(t, e.Name(), ".tmp", "no temp file left")
+	}
 }
