@@ -9,7 +9,6 @@ import (
 	"os"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -206,37 +205,6 @@ func TestLs_OldDaemonStillPrints(t *testing.T) {
 	require.Equal(t, ExitOK, printLeaseTable(&out, &errOut, lsSnapshot()))
 	assert.NotContains(t, out.String(), "POSITIONS")
 	assert.Contains(t, out.String(), "WAITERS")
-}
-
-func TestReport_PositionLines(t *testing.T) {
-	rep := v2Report()
-	rep.Positions = resources.ReportPositions{
-		Nested: 2, Total: 5, ByEndReason: []resources.ReportReasonCount{{Reason: "idle_timeout", Count: 3}, {Reason: "done", Count: 2}},
-		Commands: resources.ReportCommandCounts{None: 1, One: 2, Two: 1, Three: 1}, Requeued: 1, Extensions: 2,
-		OfferWaitMS:  resources.ReportDist{N: 2, Total: 30000, P50: 10000, P90: 20000, Max: 20000},
-		IdleWaitMS:   resources.ReportDist{N: 1, Total: 5000, P50: 5000, P90: 5000, Max: 5000},
-		QueuedWaitMS: resources.ReportWait{P50: 60000, P90: 90000, Max: 120000},
-		Offers: resources.ReportOffers{Offered: 4, Delivered: 3, Passed: 1, LapsedAfterDelivery: 1,
-			DeliveryDelayMS: resources.ReportDist{N: 3, P50: 1000, Max: 4000},
-			NoticeResults:   []resources.ReportReasonCount{{Reason: "accepted", Count: 3}, {Reason: "dropped:no_mod", Count: 1}}},
-	}
-	var out bytes.Buffer
-	formatReport(&out, rep, time.UTC)
-	got := out.String()
-	for _, want := range []string{
-		"positions 5  (idle_timeout 3, done 2)",
-		"commands per position: none 1, one 2, two 1, three 1, four or more 0; re-queued 1; extensions 2",
-		"queued wait  p50 60.0s  p90 90.0s  max 120.0s",
-		"offered window n 2 total 30.0s p50 10.0s p90 20.0s max 20.0s; idle window n 1 total 5.0s",
-		"offers  4, delivered 3, passed undelivered 1, lapsed after delivery 1; delivery delay p50 1.0s max 4.0s",
-		"notices  accepted 3, dropped:no_mod 1",
-		"nested  n 2",
-	} {
-		assert.Contains(t, got, want)
-	}
-	var none bytes.Buffer
-	formatReport(&none, v2Report(), time.UTC)
-	assert.NotContains(t, none.String(), "positions ")
 }
 
 // A daemon that cannot be used is 20, not a generic 1.

@@ -7,7 +7,7 @@ import (
 	"github.com/wake/purdex/internal/execstat"
 	"time"
 
-	"github.com/wake/purdex/internal/gate"
+	"github.com/wake/purdex/internal/hostmem"
 	"github.com/wake/purdex/internal/resources"
 )
 
@@ -58,6 +58,7 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 	// The roots are read before the sampler (whose ps fork is the process
 	// read) and again after it; see sessions.
 	before, beforeErr := m.readRoots(sctx)
+	sampledAt := m.now() // before the reads: the cache below never claims a reading is newer than it is
 	raw, procs, err := m.sampler.Sample(sctx)
 	if ctx.Err() != nil {
 		return true // stopping: whatever the sampler said, it is not a failure
@@ -83,6 +84,7 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 		return false
 	}
 	m.watchNote("sampling", "")
+	m.cachePressure(raw, sampledAt)
 
 	sessions, agreed := m.sessions(sctx, raw, procs, before, beforeErr)
 	if watchOn {
@@ -263,8 +265,8 @@ func (m *Module) notePageRate(host *resources.HostUse, raw resources.HostRaw, at
 	if !raw.PageCounters {
 		return
 	}
-	cur := gate.PageSample{At: at, Total: raw.Pageouts + raw.Swapouts}
-	host.PageRate = gate.RateOver(m.pageRing, cur)
+	cur := hostmem.PageSample{At: at, Total: raw.Pageouts + raw.Swapouts}
+	host.PageRate = hostmem.RateOver(m.pageRing, cur)
 	keep := m.pageRing[:0]
 	for _, s := range m.pageRing {
 		if at.Sub(s.At) <= pageRingKeep && !s.At.After(at) {

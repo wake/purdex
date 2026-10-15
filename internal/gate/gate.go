@@ -239,7 +239,7 @@ func (g *Gate) Run(ctx context.Context, o Options) (int, error) {
 		return 2, errors.New("no command")
 	}
 	started := g.Now()
-	d := &Decision{Time: started, Argv: truncateArgv(o.Argv), Outcome: "interrupted"}
+	d := &Decision{Time: started, Argv: truncateArgv(o.Argv), Cwd: g.cwdOf(o), Session: g.Session, Outcome: "interrupted"}
 	code, err := g.run(ctx, o, d)
 	d.Exit, d.Duration = code, g.Now().Sub(started).Seconds()
 	if d.Outcome != "not-gated" { // the commands the gate does not hold are many and cheap: they leave no line and touch no file
@@ -276,7 +276,7 @@ func (g *Gate) run(ctx context.Context, o Options, d *Decision) (int, error) {
 		case !class.Valid():
 			d.Outcome = "not-gated"
 		default:
-			d.Outcome = "nested"
+			d.Outcome, d.Nested = "nested", true
 		}
 		return g.start(ctx, cfg, o, o.Argv, env, nil, sigs)
 	}

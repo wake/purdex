@@ -1,18 +1,12 @@
 package gate
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strconv"
-	"strings"
 	"time"
+
+	"github.com/wake/purdex/internal/hostmem"
 )
 
 // PressureReader reads the host's pressure; a seam so tests inject a level and a rate.
@@ -24,7 +18,7 @@ type PressureReader interface {
 // staleLimit how old a cached sample may be and still stand in for a reading when the sampler is stuck.
 const (
 	sampleReuse = 5 * time.Second
-	rateWindow  = 10 * time.Second
+	rateWindow  = hostmem.RateWindow
 	staleLimit  = time.Minute
 )
 
@@ -46,26 +40,15 @@ func NewHostReader(dir string) *HostReader {
 	return &HostReader{Dir: dir, Now: time.Now, Level: sysctlLevel, Pages: vmStatCounters, Wait: 4 * time.Second}
 }
 
-type cachedSample struct {
-	At       int64  `json:"at"` // unix ms
-	Level    int    `json:"level"`
-	Pageouts uint64 `json:"pageouts"`
-	Swapouts uint64 `json:"swapouts"`
-}
+// The cache file and its writer's protocol live in hostmem, shared with the daemon, which writes the same file.
+type (
+	cachedSample = hostmem.Sample
+	sampleFile   = hostmem.File
+)
 
-type sampleFile struct {
-	Samples []cachedSample `json:"samples"`
-}
+func (r *HostReader) cache() hostmem.Cache { return hostmem.Cache{Dir: r.Dir} }
 
-func (r *HostReader) path() string { return filepath.Join(r.Dir, "pressure.json") }
-
-func (r *HostReader) load() sampleFile {
-	var f sampleFile
-	if b, err := os.ReadFile(r.path()); err == nil {
-		_ = json.Unmarshal(b, &f)
-	}
-	return f
-}
+func (r *HostReader) load() sampleFile { return r.cache().Load() }
 
 // fresh is the pressure of the cached samples when the newest is younger than sampleReuse.
 func (r *HostReader) fresh() (Pressure, bool) {
@@ -81,23 +64,8 @@ func (r *HostReader) fresh() (Pressure, bool) {
 	return Pressure{}, false
 }
 
-// lockSampler takes the one-sampler lock without waiting; got is false when another gate is sampling.
-func (r *HostReader) lockSampler() (unlock func(), got bool) {
-	f, err := os.OpenFile(filepath.Join(r.Dir, "pressure.lock"), os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return func() {}, true // no lock to be had (a directory the gate cannot write): sample alone
-	}
-	st, _ := flockNB(f)
-	switch st {
-	case lockHeld:
-		_ = f.Close()
-		return func() {}, false
-	case lockBroken:
-		_ = f.Close()
-		return func() {}, true // the lock cannot be had at all: sample alone
-	}
-	return func() { _ = f.Close() }, true
-}
+// lockSampler takes the one-sampler lock without waiting; got is false when another gate (or the daemon) is sampling.
+func (r *HostReader) lockSampler() (unlock func(), got bool) { return r.cache().TryLock() }
 
 // Read gives the level and the rate. One gate at a time reads the host and writes the cache; the others wait a moment
 // for its sample and read the host themselves only if none comes. A cache that is missing, torn or unwritable is
@@ -132,7 +100,6 @@ func (r *HostReader) Read() (Pressure, error) {
 		return p, nil // another gate sampled while this one took the lock
 	}
 	now := r.Now()
-	f := r.load()
 	level, err := r.Level()
 	if err != nil {
 		return Pressure{}, fmt.Errorf("pressure level: %w", err)
@@ -144,82 +111,26 @@ func (r *HostReader) Read() (Pressure, error) {
 		return Pressure{Level: level}, nil
 	}
 	cur := cachedSample{At: now.UnixMilli(), Level: level, Pageouts: po, Swapouts: so}
-	keep := f.Samples[:0:0]
-	for _, s := range f.Samples {
-		if now.Sub(time.UnixMilli(s.At)) <= 3*rateWindow && s.At <= cur.At {
-			keep = append(keep, s)
-		}
-	}
-	keep = append(keep, cur)
-	if len(keep) > 16 {
-		keep = keep[len(keep)-16:]
-	}
-	if b, err := json.Marshal(sampleFile{Samples: keep}); err == nil {
-		if tf, err := os.CreateTemp(r.Dir, "pressure.json.*"); err == nil {
-			_, werr := tf.Write(b)
-			cerr := tf.Close()
-			if werr != nil || cerr != nil || os.Rename(tf.Name(), r.path()) != nil {
-				_ = os.Remove(tf.Name())
-			}
-		}
-	}
+	keep, _ := r.cache().Append(now, cur)
 	return pressureOf(keep, cur), nil
-}
-
-// PageSample is a reading of the paging counters: pages written out (pageouts + swapouts) since boot, at a time.
-type PageSample struct {
-	At    time.Time
-	Total uint64
-}
-
-// RateOver is the page rate in pages per second at cur: against the oldest of the samples that are at least a second and at
-// most rateWindow (10 s) older (a short baseline beats none), 0 when there is none or the counter went back. It is the rate
-// of the gate's admission rule, exported so that the daemon's zone reads the same signal with the same arithmetic.
-func RateOver(samples []PageSample, cur PageSample) float64 {
-	var base *PageSample
-	for i := range samples {
-		s := &samples[i]
-		age := cur.At.Sub(s.At)
-		if age < time.Second || age > rateWindow {
-			continue
-		}
-		if base == nil || s.At.Before(base.At) {
-			base = s // the oldest inside the window: the longest baseline
-		}
-	}
-	if base == nil {
-		return 0 // no baseline yet: the rate is unknown, taken as 0 (the level still holds)
-	}
-	dt := cur.At.Sub(base.At).Seconds()
-	if dt <= 0 {
-		return 0
-	}
-	d := float64(cur.Total) - float64(base.Total)
-	if d < 0 {
-		d = 0
-	}
-	return d / dt
 }
 
 // pressureOf is the level of cur and the rate against the cached samples.
 func pressureOf(samples []cachedSample, cur cachedSample) Pressure {
-	ps := make([]PageSample, len(samples))
+	ps := make([]hostmem.PageSample, len(samples))
 	for i, s := range samples {
-		ps[i] = PageSample{At: time.UnixMilli(s.At), Total: s.Pageouts + s.Swapouts}
+		ps[i] = hostmem.PageSample{At: time.UnixMilli(s.At), Total: s.Pageouts + s.Swapouts}
 	}
-	return Pressure{Level: cur.Level, PageRate: RateOver(ps, PageSample{At: time.UnixMilli(cur.At), Total: cur.Pageouts + cur.Swapouts})}
+	return Pressure{Level: cur.Level, PageRate: hostmem.RateOver(ps, hostmem.PageSample{At: time.UnixMilli(cur.At), Total: cur.Pageouts + cur.Swapouts})}
 }
 
-func sysctlLevel() (int, error) {
-	v, err := sysctlUint32("kern.memorystatus_vm_pressure_level")
-	return int(v), err
-}
+func sysctlLevel() (int, error) { return hostmem.Level() }
 
 // vmStatCounters reads Pageouts and Swapouts from vm_stat.
 func vmStatCounters() (uint64, uint64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "/usr/bin/vm_stat").Output()
+	out, err := hostmem.Run(ctx)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -228,29 +139,12 @@ func vmStatCounters() (uint64, uint64, error) {
 
 // parseVMStat takes the "Pageouts:" and "Swapouts:" lines of vm_stat's output.
 func parseVMStat(out []byte) (pageouts, swapouts uint64, err error) {
-	var gotP, gotS bool
-	sc := bufio.NewScanner(bytes.NewReader(out))
-	for sc.Scan() {
-		name, val, ok := strings.Cut(sc.Text(), ":")
-		if !ok {
-			continue
-		}
-		name = strings.Trim(name, `" `)
-		if name != "Pageouts" && name != "Swapouts" {
-			continue
-		}
-		n, perr := strconv.ParseUint(strings.TrimSuffix(strings.TrimSpace(val), "."), 10, 64)
-		if perr != nil {
-			return 0, 0, perr
-		}
-		if name == "Pageouts" {
-			pageouts, gotP = n, true
-		} else {
-			swapouts, gotS = n, true
-		}
+	v, err := hostmem.ParseVMStat(out)
+	if err != nil {
+		return 0, 0, err
 	}
-	if !gotP || !gotS {
-		return 0, 0, errors.New("vm_stat has no Pageouts/Swapouts line")
+	if err := v.CountersErr(); err != nil {
+		return 0, 0, err
 	}
-	return pageouts, swapouts, nil
+	return v.Pageouts, v.Swapouts, nil
 }

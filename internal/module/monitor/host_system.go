@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/wake/purdex/internal/hostmem"
 )
 
 type systemHostCollector struct{}
@@ -86,7 +88,7 @@ func collectDarwinMemory(ctx context.Context) (HostMemorySample, error) {
 	if err != nil {
 		return HostMemorySample{}, fmt.Errorf("sysctl hw.memsize: %w", err)
 	}
-	out, err := exec.CommandContext(ctx, "vm_stat").Output()
+	out, err := hostmem.Run(ctx)
 	if err != nil {
 		return HostMemorySample{}, fmt.Errorf("vm_stat: %w", err)
 	}
@@ -103,46 +105,14 @@ func collectDarwinMemory(ctx context.Context) (HostMemorySample, error) {
 }
 
 func parseDarwinVMStat(raw string) (pageSize, freePages, inactivePages uint64, err error) {
-	scanner := bufio.NewScanner(strings.NewReader(raw))
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.Contains(line, "page size of") {
-			fields := strings.Fields(line)
-			for i, field := range fields {
-				if field == "of" && i+1 < len(fields) {
-					pageSize, _ = strconv.ParseUint(fields[i+1], 10, 64)
-				}
-			}
-			continue
-		}
-		value, ok := parseDarwinVMStatLine(line)
-		if !ok {
-			continue
-		}
-		switch {
-		case strings.HasPrefix(line, "Pages free:"):
-			freePages = value
-		case strings.HasPrefix(line, "Pages inactive:"):
-			inactivePages = value
-		}
-	}
-	if err := scanner.Err(); err != nil {
+	v, err := hostmem.ParseVMStat([]byte(raw))
+	if err != nil {
 		return 0, 0, 0, err
 	}
-	if pageSize == 0 {
+	if v.PageSize == 0 {
 		return 0, 0, 0, fmt.Errorf("vm_stat: missing page size")
 	}
-	return pageSize, freePages, inactivePages, nil
-}
-
-func parseDarwinVMStatLine(line string) (uint64, bool) {
-	parts := strings.Split(line, ":")
-	if len(parts) != 2 {
-		return 0, false
-	}
-	raw := strings.TrimSpace(strings.TrimSuffix(parts[1], "."))
-	value, err := strconv.ParseUint(raw, 10, 64)
-	return value, err == nil
+	return v.PageSize, v.Free, v.Inactive, nil
 }
 
 func collectLinuxCPU() (HostCPUSample, error) {
