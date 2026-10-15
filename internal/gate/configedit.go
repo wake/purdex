@@ -239,8 +239,9 @@ func editTOML(text, header, leaf, lit string) string {
 		}
 		t := strings.TrimSpace(l)
 		if !strings.HasPrefix(t, "[") && !(in && keyLine.MatchString(l)) {
+			code := beforeComment(l)
 			for _, q := range []string{`"""`, `'''`} {
-				if strings.Count(l, q)%2 == 1 {
+				if strings.Count(code, q)%2 == 1 {
 					inString = q
 				}
 			}
@@ -273,6 +274,27 @@ func editTOML(text, header, leaf, lit string) string {
 		out += "\n\n"
 	}
 	return out + "[" + header + "]\n" + leaf + " = " + lit + "\n"
+}
+
+// beforeComment is the line without its trailing comment: the part before a # that is not inside quotes.
+func beforeComment(l string) string {
+	quote := byte(0)
+	for i := 0; i < len(l); i++ {
+		c := l[i]
+		switch {
+		case quote != 0:
+			if c == '\\' && quote == '"' {
+				i++
+			} else if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '#':
+			return l[:i]
+		}
+	}
+	return l
 }
 
 // tableName is the dotted name of a `[a.b]` header line, whatever the spaces and quotes around its parts (`[ a . "b" ]`);
