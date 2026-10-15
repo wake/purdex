@@ -50,11 +50,12 @@ func TestSet_FollowsSpacedQuotedHeadersAndMultilineValues(t *testing.T) {
 func TestRun_TheRecordedProfileIsTheOneAfterTheWait(t *testing.T) {
 	g, _ := testGate(t)
 	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1 })
-	hold := runAsync(g, context.Background(), Options{Argv: sh("sleep 2"), Class: ClassHeavy})
+	hold, release := holdSlot(t, g, ClassHeavy, "a")
 	eventually(t, "the first command to hold the slot", func() bool { return len(g.Status().Heavy) == 1 })
 	waiter := runAsync(g, context.Background(), Options{Argv: sh("true"), Class: ClassHeavy})
 	eventually(t, "the second to queue", func() bool { return g.Status().WaitHeavy >= 1 })
 	g.SetConfig(func(c *Config) { c.Profile = "night" })
+	release()
 	<-hold
 	<-waiter
 	recs := readDecisions(t, g)
@@ -102,8 +103,10 @@ func TestStatus_TheLockLookupsHaveOneBudget(t *testing.T) {
 		return nil
 	}
 	var holds []<-chan runResult
-	for _, c := range []Class{ClassHeavy, ClassHeavy, ClassLight, ClassLight} {
-		holds = append(holds, runAsync(g, context.Background(), Options{Argv: sh("sleep 2"), Class: c}))
+	var releases []func()
+	for i, c := range []Class{ClassHeavy, ClassHeavy, ClassLight, ClassLight} {
+		h, rel := holdSlot(t, g, c, string(rune('a'+i)))
+		holds, releases = append(holds, h), append(releases, rel)
 	}
 	eventually(t, "four held slots", func() bool { return len(g.Status().Heavy) == 2 && len(g.Status().Light) == 2 })
 	slow.Store(true)
@@ -112,6 +115,9 @@ func TestStatus_TheLockLookupsHaveOneBudget(t *testing.T) {
 	assert.Less(t, time.Since(begin), time.Second)
 	assert.Empty(t, st.Heavy[0].Locked, "an answer that came too late is not shown")
 	slow.Store(false)
+	for _, rel := range releases {
+		rel()
+	}
 	for _, h := range holds {
 		<-h
 	}

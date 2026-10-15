@@ -55,10 +55,13 @@ func TestRun_EveryCommandLeavesADecisionRecord(t *testing.T) {
 func TestRun_TheDecisionRecordSaysWhyItWaited(t *testing.T) {
 	g, _ := testGate(t)
 	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1 })
-	hold := runAsync(g, context.Background(), Options{Argv: sh("sleep 0.4"), Class: ClassHeavy})
+	hold, release := holdSlot(t, g, ClassHeavy, "a")
 	eventually(t, "the first command to hold the slot", func() bool { return len(g.Status().Heavy) == 1 })
-	r := runSync(t, g, Options{Argv: sh("true"), Class: ClassHeavy})
+	waiter := runAsync(g, context.Background(), Options{Argv: sh("true"), Class: ClassHeavy})
+	eventually(t, "the second to queue", func() bool { return g.Status().WaitHeavy >= 1 })
+	release()
 	<-hold
+	r := <-waiter
 	assert.Equal(t, 0, r.code)
 	recs := readDecisions(t, g)
 	require.Len(t, recs, 2)
@@ -92,9 +95,10 @@ func TestDecisions_AreRotated(t *testing.T) {
 func TestStatus_NamesWhoHoldsTheLock(t *testing.T) {
 	g, _ := testGate(t)
 	g.Holders = func(string) []Straggler { return []Straggler{{PID: 77, Cmd: "tmux"}} }
-	hold := runAsync(g, context.Background(), Options{Argv: sh("sleep 0.5"), Class: ClassHeavy})
+	hold, release := holdSlot(t, g, ClassHeavy, "a")
 	eventually(t, "a held slot", func() bool { return len(g.Status().Heavy) == 1 })
 	st := g.Status()
+	release()
 	<-hold
 	assert.Equal(t, []Straggler{{PID: 77, Cmd: "tmux"}}, st.Heavy[0].Locked)
 	assert.NotEmpty(t, st.Settings)
