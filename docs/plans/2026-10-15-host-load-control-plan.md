@@ -109,6 +109,12 @@ numeric feature gates (`internal/team/wire_relay.go:317-320`) still enable half/
 mixed pair (old mod + new daemon, new mod + old daemon). Add `skills/pdx-gate/SKILL.md` (what is gated, how to read
 `pdx gate status`, never bypass with `&`, `pdx gate -- <script>` for sequences).
 
+Added 10-15 (spec §6, D12): `gate.js` also prefixes `vendor/bin/{phpunit,pest}` (and `./` forms), and moves a
+foreground Bash call that would wait to `run_in_background: true` with a note (holder, time held, place, "starts by
+itself, you will be told, do not rerun"); a call that can start at once is left in the foreground. Tests: busy →
+background with the note; free → unchanged; a subagent's call the same; a rewrite that changes the permission verdict
+is not made.
+
 ## L2 — rework the kept parts first (one PR; deployable while the lease tables still exist)
 
 Zone memory input = the gate's pressure reader (shared code); `noteMinute` stops reading `resource_leases`
@@ -137,3 +143,7 @@ message other leads).
 ## Order
 
 G0 → G1 → G2 → release (G1, G2, G3a, G3b, G3c — G3b/G3c finished early and ride the first release) → acceptance → other lines resume → L1 → L2 (deploy) → L3. Each L phase is deployed before the next starts.
+
+Load watcher (spec §12): W0 (threshold evaluation, lead, now) → after acceptance, W1 detection and record → W2
+registration and delivery → W3 brief, skill and auto-start → W4 `pdx gate free` → W5 UI (B line). W1–W5 do not depend
+on L1–L3; each phase one PR.
