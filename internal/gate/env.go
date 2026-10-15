@@ -27,9 +27,6 @@ var agentValues = map[string]*regexp.Regexp{
 	"TERM_PROGRAM": regexp.MustCompile(`kiro`),
 }
 
-// ciVars are the variables that make std-env say CI: CI itself with any value, and the providers most used here.
-var ciVars = []string{"CI", "GITHUB_ACTIONS", "GITLAB_CI", "BUILDKITE", "JENKINS_URL", "TRAVIS", "CIRCLECI", "TEAMCITY_VERSION", "DRONE"}
-
 // EnvOf reads the agent and CI marks from an environment (KEY=VALUE words) and takes the terminal fact from the caller.
 func EnvOf(environ []string, stdinTTY bool) Env {
 	vars := make(map[string]string, len(environ))
@@ -49,12 +46,22 @@ func EnvOf(environ []string, stdinTTY bool) Env {
 			e.Agent = true
 		}
 	}
-	for _, k := range ciVars {
-		if vars[k] != "" {
-			e.CI = true
+	e.CI = isCI(vars)
+	return e
+}
+
+// isCI is std-env's isCI: the CI variable with any value, or else the first provider variable that is set (ciProviders,
+// in std-env's order) unless that provider is one that is not CI (a local run on the platform).
+func isCI(vars map[string]string) bool {
+	if vars["CI"] != "" {
+		return true
+	}
+	for _, p := range ciProviders {
+		if vars[p.Var] != "" {
+			return p.CI
 		}
 	}
-	return e
+	return false
 }
 
 // watchesByDefault says vitest, given no subcommand and no flag for it, would sit in watch mode: a person at a

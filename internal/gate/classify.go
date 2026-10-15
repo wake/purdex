@@ -155,10 +155,10 @@ func classifyVitest(args []string, e Env) Class {
 		switch {
 		case a == "--version" || a == "-v" || a == "--help" || a == "-h":
 			return ClassNone
-		case a == "--run" || a == "--no-watch" || a == "--watch=false":
-			explicit = 1
-		case a == "--watch" || a == "-w" || a == "--watch=true":
+		case a == "-w":
 			explicit = -1
+		case vitestBoolFlag(a) != 0:
+			explicit = vitestBoolFlag(a)
 		case a == "--changed" || a == "--related" || strings.HasPrefix(a, "--changed=") ||
 			a == "-t" || a == "--testNamePattern" || a == "--project" || a == "--shard":
 			narrowed = true
@@ -195,6 +195,35 @@ func classifyVitest(args []string, e Env) Class {
 		return ClassLight
 	}
 	return ClassHeavy
+}
+
+// vitestBoolFlag reads --run, --watch and --no-watch with an optional =true / =false: +1 when the flag makes vitest run once, -1
+// when it makes it watch, 0 when it is some other flag (or `--run=false`, which says nothing).
+func vitestBoolFlag(a string) int {
+	name, val, hasVal := strings.Cut(a, "=")
+	truth := !hasVal || val == "true"
+	falsy := hasVal && val == "false"
+	switch name {
+	case "--run":
+		if truth {
+			return 1
+		}
+	case "--watch":
+		if truth {
+			return -1
+		}
+		if falsy {
+			return 1
+		}
+	case "--no-watch":
+		if truth {
+			return 1
+		}
+		if falsy {
+			return -1
+		}
+	}
+	return 0
 }
 
 var vitestSubcommands = map[string]bool{"run": true, "watch": true, "dev": true, "related": true, "list": true, "init": true, "bench": true}

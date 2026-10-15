@@ -150,6 +150,12 @@ func TestClassify_VitestWatchOrRunOnce(t *testing.T) {
 		{"person at a terminal, run: once", "vitest run", person, ClassHeavy},
 		{"person at a terminal, --no-watch", "npx vitest --no-watch", person, ClassHeavy},
 		{"person at a terminal, --watch=false", "vitest --watch=false", person, ClassHeavy},
+		{"person at a terminal, --run=true", "vitest --run=true", person, ClassHeavy},
+		{"person at a terminal, --run=true with a file", "npx vitest --run=true src/a.test.ts", person, ClassLight},
+		{"person at a terminal, --run=false says nothing: watch", "vitest --run=false", person, ClassNone},
+		{"person at a terminal, --no-watch=true", "vitest --no-watch=true", person, ClassHeavy},
+		{"an agent, --no-watch=false: a watch", "vitest --no-watch=false", agent, ClassNone},
+		{"an agent, --watch=false", "vitest --watch=false", agent, ClassHeavy},
 		{"person at a terminal, related: watch", "vitest related src/a.ts", person, ClassNone},
 		{"person at a terminal, related --run", "vitest related --run src/a.ts", person, ClassLight},
 		{"an agent, bare: it runs once", "npx vitest", agent, ClassHeavy},
@@ -191,6 +197,16 @@ func TestEnvOf_AgentAndCI(t *testing.T) {
 		assert.True(t, EnvOf([]string{v}, true).CI, v)
 	}
 	assert.False(t, EnvOf([]string{"CI="}, true).CI)
+	// every provider of std-env 4: AWS CodeBuild, Bitbucket, Codefresh and Netlify are CI; a local Netlify, Vercel and
+	// CodeSandbox run is not (the provider says ci:false)
+	for _, v := range []string{"CODEBUILD_BUILD_ARN=x", "BITBUCKET_COMMIT=x", "CF_BUILD_ID=x", "NETLIFY=true", "APPVEYOR=1", "bamboo_planKey=x", "SEMAPHORE=1", "RENDER=1"} {
+		assert.True(t, EnvOf([]string{v}, true).CI, v)
+	}
+	for _, v := range []string{"NETLIFY_LOCAL=true", "VERCEL=1", "VERCEL_ENV=development", "CODESANDBOX_HOST=x"} {
+		assert.False(t, EnvOf([]string{v}, true).CI, v)
+	}
+	assert.True(t, EnvOf([]string{"VERCEL=1", "CI=1"}, true).CI, "CI itself always counts")
+	assert.Len(t, ciProviders, 57)
 	assert.True(t, EnvOf([]string{"X=1"}, true).StdinTTY)
 	assert.False(t, EnvOf([]string{"X=1"}, false).StdinTTY)
 	assert.True(t, EnvOf([]string{"BROKEN"}, true).StdinTTY, "a word without = is skipped, not an error")
