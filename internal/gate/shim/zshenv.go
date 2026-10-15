@@ -16,19 +16,41 @@ const (
 	blockEnd   = "# <<< pdx gate <<<"
 )
 
-// Block is the text `pdx setup` keeps in ~/.zshenv for shimDir: it puts the directory in front of PATH unless PATH has it
-// already (so a nested `zsh -c` does not grow PATH), and prints nothing.
+// Block is the text `pdx setup` keeps in ~/.zshenv for shimDir: it moves the directory to the front of PATH wherever it was
+// (path=(dir ${path:#dir}) puts it first and removes any other copy, so a nested `zsh -c` does not grow PATH), and prints
+// nothing. An interactive shell also registers a precmd that does the same before every prompt, because ~/.zshrc (brew, nvm,
+// bun, Herd) and a later `nvm use` put their directories in front of it after ~/.zshenv ran.
 func Block(shimDir string) string {
-	q := shQuoteInner(shimDir)
-	return blockBegin + "\n" +
-		`case ":$PATH:" in *":` + q + `:"*) ;; *) PATH="` + q + `:$PATH" ;; esac` + "\n" +
-		blockEnd + "\n"
+	return blockBegin + "\n" + strings.Join(blockBody(shimDir), "\n") + "\n" + blockEnd + "\n"
 }
 
-// bodyLine is what an old, half-written block's body line looks like (an unclosed begin marker followed by it).
+// blockBody are the lines between the markers.
+func blockBody(shimDir string) []string {
+	q := shQuoteInner(shimDir)
+	front := `path=("` + q + `" ${path:#"` + q + `"})`
+	return []string{
+		front,
+		`if [[ -o interactive ]]; then`,
+		`  _pdx_gate_front() { ` + front + ` }`,
+		`  precmd_functions=(${precmd_functions:#_pdx_gate_front} _pdx_gate_front)`,
+		`fi`,
+	}
+}
+
+// bodyLine is what the first version's single body line looked like (an unclosed begin marker followed by it).
 var bodyLine = regexp.MustCompile(`^case ":\$PATH:" in \*":.*:"\*\) ;; \*\) PATH=".*:\$PATH" ;; esac$`)
 
-// Strip removes every pdx gate block from s (several, from an old double install, too) and returns the rest untouched, byte for
+// bodyLines match, in order, the lines of the current block's body (any shim directory); an unclosed block is repaired by
+// dropping the longest prefix of them right after its marker.
+var bodyLines = []*regexp.Regexp{
+	regexp.MustCompile(`^path=\(".*" \$\{path:#".*"\}\)$`),
+	regexp.MustCompile(`^if \[\[ -o interactive \]\]; then$`),
+	regexp.MustCompile(`^  _pdx_gate_front\(\) \{ path=\(".*" \$\{path:#".*"\}\) \}$`),
+	regexp.MustCompile(`^  precmd_functions=\(\$\{precmd_functions:#_pdx_gate_front\} _pdx_gate_front\)$`),
+	regexp.MustCompile(`^fi$`),
+}
+
+// Strip removes every pdx gate block from s (several, from an old double install, too; the first version's one-line block and the current multi-line one) and returns the rest untouched, byte for
 // byte. A begin marker with no end marker is repaired: the marker line and the block's own body line right after it go, and
 // nothing else (the user's lines below are not part of the block). An end marker without a begin is left alone.
 func Strip(s string) string {
@@ -55,8 +77,13 @@ func Strip(s string) string {
 			i = end
 			continue
 		}
-		// unclosed: drop the marker and the body line that follows it, if it is ours
+		// unclosed: drop the marker and the body lines right after it that are ours (the first version's one line, or a prefix
+		// of the current body), and nothing else
 		if i+1 < len(lines) && bodyLine.MatchString(strings.TrimRight(lines[i+1], "\r\n")) {
+			i++
+			continue
+		}
+		for k := 0; k < len(bodyLines) && i+1 < len(lines) && bodyLines[k].MatchString(strings.TrimRight(lines[i+1], "\r\n")); k++ {
 			i++
 		}
 	}
