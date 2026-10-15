@@ -2521,5 +2521,20 @@
   "launch.err.unknown_outcome": "Not sure whether it was sent — refresh to check",
   "launch.no_generation": "Cannot confirm which generation of this session this is — please refresh",
   "split.close": "Close panel",
-  "split.panel": "Side panel"
+  "split.panel": "Side panel",
+
+  "fleet.zone.normal": "Normal",
+  "fleet.zone.warning": "High",
+  "fleet.zone.danger": "Overloaded",
+  "fleet.zone.offline": "Offline",
+  "fleet.no_data": "No data",
+  "fleet.cpu": "CPU {{v}}%",
+  "fleet.mem": "Memory {{v}}%",
+  "fleet.pressure": "Memory pressure level {{v}}",
+  "fleet.page_rate": "Paging {{v}} pages/s",
+  "fleet.disk": "Disk {{v}}% used",
+  "fleet.queue": "Queue: {{n}} waiting, longest {{s}} s",
+  "fleet.queue_held": "New work is paused",
+  "fleet.waiting_primary": "Waiting for the primary",
+  "fleet.primary_elsewhere": "The primary is not on this App"
 }
