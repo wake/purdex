@@ -114,6 +114,9 @@ type Pool struct {
 	Class Class
 	Size  int
 	Now   func() time.Time
+	// afterCreate runs in Enqueue between creating the ticket file and locking it; a test seam for the one moment a scan
+	// by another gate could meet an unlocked ticket.
+	afterCreate func()
 }
 
 func (p *Pool) slotPath(k int) string {
@@ -151,15 +154,20 @@ func (p *Pool) Enqueue() (*Ticket, error) {
 	}
 	// <time>-<pid>-<n>: n is this process's own counter, so two tickets made in one nanosecond by one process differ, and the
 	// file is created with O_EXCL so a name that is taken is never opened (and never removed) by the second maker.
+	//
+	// The ticket is made under a name with a dot in it (the scans skip those), locked, and only then renamed to its real
+	// name: a ticket that can be seen in the directory is always already locked. Made under the real name, a scan between
+	// "created" and "locked" would find a free lock, take the ticket for a dead gate's and remove it, and the new waiter
+	// would hold a lock on a file that is no longer in the queue and could be passed by anyone.
 	var (
-		name, path string
-		f          *os.File
-		err        error
+		name, tmp string
+		f         *os.File
+		err       error
 	)
 	for try := 0; try < 8; try++ {
 		name = fmt.Sprintf("%020d-%d-%06d", p.Now().UnixNano(), os.Getpid(), ticketSeq.Add(1))
-		path = filepath.Join(p.queueDir(), name)
-		f, err = os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644)
+		tmp = filepath.Join(p.queueDir(), name+".new")
+		f, err = os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644)
 		if !errors.Is(err, os.ErrExist) {
 			break
 		}
@@ -167,13 +175,23 @@ func (p *Pool) Enqueue() (*Ticket, error) {
 	if err != nil {
 		return nil, dirError(err)
 	}
-	if st, err := flockNB(f); st != lockGot {
+	if p.afterCreate != nil {
+		p.afterCreate()
+	}
+	fail := func(err error) (*Ticket, error) {
 		_ = f.Close()
-		_ = os.Remove(path) // ours: it was created here, exclusively
-		if err == nil {
-			err = errors.New("the new ticket is locked by somebody else")
-		}
+		_ = os.Remove(tmp) // ours: it was created here, exclusively
 		return nil, dirError(err)
+	}
+	if st, lerr := flockNB(f); st != lockGot {
+		if lerr == nil {
+			lerr = errors.New("the new ticket is locked by somebody else")
+		}
+		return fail(lerr)
+	}
+	path := filepath.Join(p.queueDir(), name)
+	if err := os.Rename(tmp, path); err != nil {
+		return fail(err)
 	}
 	return &Ticket{Name: name, path: path, f: f}, nil
 }

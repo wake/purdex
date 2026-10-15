@@ -288,3 +288,47 @@ func TestPool_AQueueThatCannotBeReadFailsClosed(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, s)
 }
+
+// A ticket that can be seen in the queue is already locked: a scan by another gate between "created" and "locked" must not
+// find a free lock and remove it. (M: make the ticket under its real name.)
+func TestPool_ATicketIsNotSeenBeforeItIsLocked(t *testing.T) {
+	p := testPool(t, ClassHeavy, 1)
+	scanned := false
+	p.afterCreate = func() {
+		scanned = true
+		// another gate, younger than the new ticket, takes the count of the tickets before it
+		other := &Ticket{Name: "99999999999999999999-1-000000"}
+		before, err := p.liveBefore(other)
+		require.NoError(t, err)
+		assert.Empty(t, before, "the ticket is not in the queue yet")
+	}
+	tk, err := p.Enqueue()
+	require.NoError(t, err)
+	require.True(t, scanned)
+	_, err = os.Stat(tk.path)
+	assert.NoError(t, err, "the ticket was not removed by the scan")
+	assert.Equal(t, 1, p.Waiting(), "and it is in the queue now, locked")
+
+	p.afterCreate = nil
+	later := ticketAt(t, p, 1<<62)
+	s, ahead, err := p.TryTake(later)
+	require.NoError(t, err)
+	assert.Nil(t, s, "a later arrival is not ahead of it")
+	assert.Equal(t, 1, ahead)
+}
+
+// A failed Enqueue leaves nothing behind in the queue directory.
+func TestPool_AFailedEnqueueLeavesNoFile(t *testing.T) {
+	p := testPool(t, ClassHeavy, 1)
+	p.afterCreate = func() {
+		ents, _ := os.ReadDir(p.queueDir())
+		for _, e := range ents {
+			require.Contains(t, e.Name(), ".new", "the ticket is under a name the scans skip")
+		}
+	}
+	tk, err := p.Enqueue()
+	require.NoError(t, err)
+	tk.Drop()
+	ents, _ := os.ReadDir(p.queueDir())
+	assert.Empty(t, ents)
+}
