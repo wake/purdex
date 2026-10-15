@@ -28,6 +28,8 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		g.say("%v: the command was not run (fix %s)", err, cfg.Dir)
 		return nil, ExitRefused, true
 	}
+	// The ticket lives in one directory; a setting that changes gate.dir while this command waits is for the next command.
+	dir := cfg.Dir
 	ticket, err := g.pool(cfg, class).Enqueue()
 	if err != nil {
 		return broken(err)
@@ -39,6 +41,7 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 	lastPlace := time.Time{}
 	for {
 		cfg = g.refresh()
+		cfg.Dir = dir
 		ok := true
 		if g.Pressure != nil && cfg.Admission.Enabled {
 			p, err := g.Pressure.Read()

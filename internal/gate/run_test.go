@@ -716,16 +716,19 @@ func TestRun_PriorityWrapsTheCommandUnlessForeground(t *testing.T) {
 	assert.Equal(t, "-n 10\n", string(b), "mode none is not wrapped")
 }
 
-func TestTruncateArgv_ScrubsSecrets(t *testing.T) {
+func TestTruncateArgv_ScrubsSecretsAndCutsTheRest(t *testing.T) {
 	got := truncateArgv([]string{"curl", "-H", "Authorization: Bearer abc", "https://x/?token=1", strings.Repeat("a", 300)})
 	assert.Equal(t, "<redacted>", got[2])
-	assert.Equal(t, "<redacted>", got[3])
+	assert.Equal(t, "https://x/?token=<redacted>", got[3])
 	assert.Len(t, got[4], 120+len("…"))
 	long := make([]string, 20)
 	for i := range long {
 		long[i] = "w"
 	}
 	assert.Len(t, truncateArgv(long), 13, "12 words and a mark")
+	// the cut comes after the scrub: a secret far into a long word does not survive in its first 120 bytes
+	got = truncateArgv([]string{"run", "--token=" + strings.Repeat("s", 400)})
+	assert.Equal(t, "--token=<redacted>", got[1])
 }
 
 func TestStatus_ASuspectRecordHasAFreeLockAndALivePid(t *testing.T) {
@@ -737,4 +740,54 @@ func TestStatus_ASuspectRecordHasAFreeLockAndALivePid(t *testing.T) {
 	assert.Empty(t, st.Heavy, "a free lock is a free slot")
 	require.Len(t, st.Suspect, 1)
 	assert.Empty(t, st.Suspect[0].Token)
+}
+
+// A setting that changes gate.dir while a command waits is for the next command: the ticket lives in one directory, and the
+// waiter keeps looking at that one. (M: re-read the directory with the rest of the settings.)
+func TestRun_AWaitingCommandStaysInItsDirectoryWhenTheSettingMoves(t *testing.T) {
+	g, _ := testGate(t)
+	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1 })
+	dirA := g.Config().Dir
+	dirB := t.TempDir() + "/other"
+	work := t.TempDir()
+	occ := runAsync(g, t.Context(), Options{Argv: sh(holdScript(work, "0")), Class: ClassHeavy})
+	eventually(t, "the occupant", func() bool { return exists(work + "/started-0") })
+	waiter := runAsync(g, t.Context(), Options{Argv: sh("touch " + work + "/ran"), Class: ClassHeavy})
+	eventually(t, "the waiter's ticket", func() bool { return g.Status().WaitHeavy == 1 })
+
+	g.Load = func() Config { c := g.Config(); c.Dir = dirB; return c } // the setting moves
+	never(t, "the waiter running before the slot is free", 200*time.Millisecond, func() bool { return exists(work + "/ran") })
+	require.NoError(t, os.WriteFile(work+"/go-0", nil, 0o644))
+	assert.Equal(t, 0, (<-waiter).code, "it took the freed slot of the directory it queued in")
+	assert.True(t, exists(work+"/ran"))
+	<-occ
+	_, err := os.Stat(dirB)
+	assert.True(t, os.IsNotExist(err), "and never touched the new directory")
+	_ = dirA
+}
+
+// The disk floor is looked at again once the slot is taken: a wait of hours can end with the disk full. (M: check the disk
+// before the queue only.)
+func TestRun_TheDiskIsLookedAtAgainAfterTheWait(t *testing.T) {
+	g, buf := testGate(t)
+	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1; c.Admission.DiskMinGB = 3 })
+	free := int64(100 << 30)
+	var mu sync.Mutex
+	g.DiskFree = func(string) (int64, error) { mu.Lock(); defer mu.Unlock(); return free, nil }
+	work := t.TempDir()
+	occ := runAsync(g, t.Context(), Options{Argv: sh(holdScript(work, "0")), Class: ClassHeavy})
+	eventually(t, "the occupant", func() bool { return exists(work + "/started-0") })
+	waiter := runAsync(g, t.Context(), Options{Argv: sh("touch " + work + "/ran"), Class: ClassHeavy})
+	eventually(t, "the waiter's ticket", func() bool { return g.Status().WaitHeavy == 1 })
+
+	mu.Lock()
+	free = 1 << 30 // the disk filled up while it waited
+	mu.Unlock()
+	require.NoError(t, os.WriteFile(work+"/go-0", nil, 0o644))
+	r := <-waiter
+	assert.Equal(t, ExitRefused, r.code)
+	assert.False(t, exists(work+"/ran"))
+	assert.Contains(t, buf.String(), "disk_min_gb")
+	<-occ
+	assert.Empty(t, g.Status().Heavy, "and the slot it had taken is free again")
 }

@@ -262,6 +262,13 @@ func (g *Gate) Run(ctx context.Context, o Options) (int, error) {
 		return g.start(ctx, cfg, o, argv, env, nil, sigs)
 	}
 	defer slot.Release()
+	if class == ClassHeavy {
+		// the wait may have taken minutes or hours: the floor is checked again, with today's settings, before the command starts
+		if msg := g.diskRefusal(g.Config(), o.Dir); msg != "" {
+			g.say("%s", msg)
+			return ExitRefused, nil
+		}
+	}
 	if len(added) > 0 {
 		g.say("%s", "limits added: "+strings.Join(added, ", "))
 	}
@@ -316,14 +323,12 @@ func (g *Gate) holder(o Options, token string) Holder {
 
 // truncateArgv keeps the record short: at most 12 words of 120 bytes. Words that look like a secret are not kept.
 func truncateArgv(argv []string) []string {
-	out := make([]string, 0, len(argv))
-	for i, a := range argv {
+	scrubbed := scrubArgv(argv) // before the cut: a secret in a long word must not survive in its first 120 bytes
+	out := make([]string, 0, len(scrubbed))
+	for i, a := range scrubbed {
 		if i >= 12 {
 			out = append(out, "…")
 			break
-		}
-		if looksSecret(a) {
-			a = "<redacted>"
 		}
 		if len(a) > 120 {
 			a = a[:120] + "…"
@@ -331,16 +336,6 @@ func truncateArgv(argv []string) []string {
 		out = append(out, a)
 	}
 	return out
-}
-
-func looksSecret(a string) bool {
-	l := strings.ToLower(a)
-	for _, k := range []string{"token=", "secret=", "password=", "passwd=", "apikey=", "api_key=", "authorization:", "bearer "} {
-		if strings.Contains(l, k) {
-			return true
-		}
-	}
-	return false
 }
 
 // Status is what `pdx gate status` shows: the holders of both pools, the number of waiters, and the records whose
