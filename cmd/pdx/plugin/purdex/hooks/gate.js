@@ -219,10 +219,15 @@ async function bounded($, read) {
   return Promise.race([Promise.resolve().then(read).catch(() => undefined), cap])
 }
 
-// gateConfig is the pdx binary to run, from pdx.json beside VERSION as ask.js does; `pdx` from PATH when there is none.
+// gateConfig is the pdx binary to run and the config file of the daemon that installed the mod, from pdx.json beside VERSION
+// as ask.js does; `pdx` from PATH and its default config when there is none. A second daemon on the host has its own
+// config, and with it its own gate directory: the hook must ask, and send the call to, that one.
 async function gateConfig($) {
   const cfg = parse(await bounded($, () => $.fs.read($.plugin.root + '/pdx.json')))
-  return { bin: isObject(cfg) && typeof cfg.pdx === 'string' && cfg.pdx ? cfg.pdx : 'pdx' }
+  return {
+    bin: isObject(cfg) && typeof cfg.pdx === 'string' && cfg.pdx ? cfg.pdx : 'pdx',
+    config: isObject(cfg) && typeof cfg.config === 'string' ? cfg.config : '',
+  }
 }
 
 // headOf reads one segment: where the command proper starts (past environment assignments and the plain wrappers env,
@@ -288,7 +293,7 @@ export function gatedCandidates(command) {
 // askWouldWait is the gate's answer for one command: { would_wait, note, … }, or null (no answer is "no").
 async function askWouldWait($, cfg, argv) {
   try {
-    const r = await $.process.run([cfg.bin, 'gate', 'would-wait', '--auto', '--json', '--', ...argv], { timeoutMs: ASK_MS })
+    const r = await $.process.run([cfg.bin, 'gate', 'would-wait', '--auto', '--json', ...(cfg.config ? ['--config', cfg.config] : []), '--', ...argv], { timeoutMs: ASK_MS })
     if (!r || r.exitCode !== 0) return null
     const o = parse(String(r.stdout || '').trim())
     return isObject(o) && typeof o.would_wait === 'boolean' ? o : null
@@ -312,7 +317,7 @@ async function planGate($, e) {
   const wasBackground = e.run_in_background === true
   let command = e.command
   const notes = []
-  const prefixed = prefixGated(command, sq(cfg.bin) + ' gate --auto -- ')
+  const prefixed = prefixGated(command, sq(cfg.bin) + ' gate' + (cfg.config ? ' --config ' + sq(cfg.config) : '') + ' --auto -- ')
   if (prefixed.changed) {
     // A prefix can change what the engine asks permission for: then the call is left as it is.
     const [before, after] = [await verdict($, e.command, wasBackground), await verdict($, prefixed.command, wasBackground)]

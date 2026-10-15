@@ -73,7 +73,7 @@ const BUSY = JSON.stringify({ would_wait: true, reason: 'slots', class: 'heavy',
   note: 'waiting for a heavy slot — 1 ahead; held 5m by "go test ./..." (purdex/spa). This is a normal queue: it starts by itself when that ends; do not interrupt it or run the command another way.' })
 
 type Rig = { calls: string[][]; ran: { command: string; bg: unknown; agent?: unknown }[]; checks: { command: string; bg: unknown }[]; verdict: (command: string, bg: unknown) => string | null }
-function rig(on: any, answer: (argv: string[]) => any, bash: (e: any) => any = () => BASH_OK): Rig {
+function rig(on: any, answer: (argv: string[]) => any, bash: (e: any) => any = () => BASH_OK, pdxJSON?: string): Rig {
   const r: Rig = { calls: [], ran: [], checks: [], verdict: () => 'allow' }
   on('session.id', () => ({ value: 'sess-1' }))
   on('session.start', async (_$: any, e: any) => ({ cwd: e.cwd }))
@@ -82,7 +82,7 @@ function rig(on: any, answer: (argv: string[]) => any, bash: (e: any) => any = (
   on('session.cwd', () => ({ value: '/work/purdex' }))
   on('tool.check', { tool: 'Bash' }, (_$: any, e: any) => { r.checks.push({ command: e.input.command, bg: e.input.run_in_background }); const v = r.verdict(e.input.command, e.input.run_in_background); if (v === null) throw new Error('the engine could not check'); return { decision: v } })
   on('clock.sleep', async (_$: any, e: any) => { await new Promise((res) => setTimeout(res, e.ms)); return { value: undefined } })
-  on('fs.read', () => ({ deny: 'ENOENT' }))
+  on('fs.read', (_$: any, e: any) => (pdxJSON !== undefined && e.path.endsWith('/pdx.json') ? { value: pdxJSON } : { deny: 'ENOENT' }))
   on('ui.log', () => ({ value: undefined }))
   on('process.run', (_$: any, e: any) => { r.calls.push([...e.argv]); return answer(e.argv) })
   on('tool.call', { tool: 'Bash' }, (_$: any, e: any) => { r.ran.push({ command: e.command, bg: e.run_in_background, agent: e.agentId }); return bash(e) })
@@ -247,4 +247,12 @@ test('pinned order: a call that can start at once is not touched by gate.js and 
   await bash($, 'go test ./...')
   expect(r.calls.map((a) => a[1] + ' ' + a[2])).toEqual(['gate would-wait', 'lease acquire', 'lease release'])
   expect(r.ran[0].bg).toBeUndefined()
+})
+
+test('pdx.json names the binary and the config: the question and the prefix both carry them', async ($, on) => {
+  const r = rig(on, () => ok(BUSY), () => BASH_OK, JSON.stringify({ pdx: '/opt/pdx/bin/pdx', config: '/home/me/.config/pdx2/config.toml' }))
+  const out = await bash($, './vendor/bin/pest')
+  expect(wouldWaits(r)).toEqual([['/opt/pdx/bin/pdx', 'gate', 'would-wait', '--auto', '--json', '--config', '/home/me/.config/pdx2/config.toml', '--', './vendor/bin/pest']])
+  expect(r.ran[0].command).toBe("'/opt/pdx/bin/pdx' gate --config '/home/me/.config/pdx2/config.toml' --auto -- ./vendor/bin/pest")
+  expect(out.context).toHaveLength(2)
 })
