@@ -833,7 +833,8 @@ func TestRun_ACommandIsNotRunWithoutItsHolderRecord(t *testing.T) {
 	g, buf := testGate(t)
 	dir := t.TempDir()
 	cfgDir := g.Config().Dir
-	require.NoError(t, os.MkdirAll(filepath.Join(cfgDir, "heavy-1.json"), 0o755)) // a directory where the record goes: the rename fails
+	require.NoError(t, os.MkdirAll(filepath.Join(cfgDir, "heavy-1.json"), 0o755))               // a directory where the record goes: the rename fails
+	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "heavy-1.json", "keep"), nil, 0o644)) // and not an empty one, which Remove would take away
 	r := runSync(t, g, Options{Argv: sh("touch " + dir + "/ran"), Class: ClassHeavy})
 	assert.Equal(t, ExitRefused, r.code)
 	assert.False(t, exists(dir+"/ran"))
