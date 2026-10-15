@@ -18,7 +18,7 @@ func TestRun_ASettingChangedWhileWaitingIsTheOneInForce(t *testing.T) {
 		c.Sources = map[string]Source{"priority.nice": SrcDefault, "priority.mode": SrcDefault}
 	})
 	g.Tools = Tools{Nice: "/usr/bin/nice"}
-	hold := runAsync(g, context.Background(), Options{Argv: sh("sleep 2"), Class: ClassHeavy})
+	hold, release := holdSlot(t, g, ClassHeavy, "a")
 	eventually(t, "the first command to hold the slot", func() bool { return len(g.Status().Heavy) == 1 })
 	waiter := runAsync(g, context.Background(), Options{Argv: sh("true"), Class: ClassHeavy})
 	eventually(t, "the second to queue", func() bool { return g.Status().WaitHeavy >= 1 })
@@ -26,6 +26,7 @@ func TestRun_ASettingChangedWhileWaitingIsTheOneInForce(t *testing.T) {
 		c.Priority.Nice = 4
 		c.Sources["priority.nice"] = SrcProfile
 	})
+	release()
 	<-hold
 	<-waiter
 	recs := readDecisions(t, g)

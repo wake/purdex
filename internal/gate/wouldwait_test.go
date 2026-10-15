@@ -1,7 +1,6 @@
 package gate
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -31,17 +30,18 @@ func TestWouldWait_FreeSlotMeansNoWait(t *testing.T) {
 func TestWouldWait_AllSlotsTakenSaysWhoAndHowLong(t *testing.T) {
 	g, _ := testGate(t)
 	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1 })
-	hold := runAsync(g, context.Background(), Options{Argv: sh("sleep 1.5"), Class: ClassHeavy})
+	hold, release := holdSlot(t, g, ClassHeavy, "a")
 	eventually(t, "a held slot", func() bool { return len(g.Status().Heavy) == 1 })
 	w := g.WouldWait(ClassHeavy)
 	assert.True(t, w.Wait)
 	assert.Equal(t, "slots", w.Reason)
 	assert.Equal(t, 1, w.Ahead)
-	assert.Contains(t, w.HeldBy, "sleep 1.5")
+	assert.Contains(t, w.HeldBy, "started-a")
 	assert.Contains(t, w.Note, "waiting for a heavy slot")
 	assert.Contains(t, w.Note, "do not interrupt it")
 	// the other class is not affected
 	assert.False(t, g.WouldWait(ClassLight).Wait)
+	release()
 	<-hold
 	assert.False(t, g.WouldWait(ClassHeavy).Wait)
 }
@@ -81,13 +81,14 @@ func TestWouldWait_PressureOverTheLimitIsAWaitAndNotesTheNumbers(t *testing.T) {
 func TestWouldWait_OffOrUnknownClassNeverWaits(t *testing.T) {
 	g, _ := testGate(t)
 	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1 })
-	hold := runAsync(g, context.Background(), Options{Argv: sh("sleep 1"), Class: ClassHeavy})
+	hold, release := holdSlot(t, g, ClassHeavy, "a")
 	eventually(t, "a held slot", func() bool { return len(g.Status().Heavy) == 1 })
 	require.True(t, g.WouldWait(ClassHeavy).Wait)
 	g.SetConfig(func(c *Config) { c.Enabled = false })
 	assert.False(t, g.WouldWait(ClassHeavy).Wait, "the gate is off: nothing waits")
 	g.SetConfig(func(c *Config) { c.Enabled = true })
 	assert.False(t, g.WouldWait(Class("none")).Wait, "a class the gate does not hold never waits")
+	release()
 	<-hold
 }
 
