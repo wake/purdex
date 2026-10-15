@@ -29,11 +29,23 @@ const SOLO_B = { kind: 'solo' as const, id: 'b', label: 'Solo B' }
 const TEAM_UNIT = { kind: 'team' as const, id: 'tm1', label: 'Journal team' }
 const addTab = (tab: Tab) => act(() => { useTabStore.setState((s) => ({ tabs: { ...s.tabs, [tab.id]: tab }, tabOrder: s.tabOrder.includes(tab.id) ? s.tabOrder : [...s.tabOrder, tab.id] })) })
 const setActive = (id: string | null) => act(() => { useTabStore.setState({ activeTabId: id }) })
-const setWidth = (w: number) => act(() => { Object.defineProperty(window, 'innerWidth', { configurable: true, value: w }); window.dispatchEvent(new Event('resize')) })
+// The stack measures the content box it floats in (ResizeObserver on its parent); `setWidth` resizes both, `fireContent` only the box.
+const observers = new Set<(w: number) => void>()
+const fireContent = (w: number) => observers.forEach((f) => f(w))
+class FakeRO {
+  private f: (w: number) => void
+  constructor(cb: ResizeObserverCallback) { this.f = (w) => cb([{ contentRect: { width: w } } as ResizeObserverEntry], this as unknown as ResizeObserver) }
+  observe() { observers.add(this.f) }
+  unobserve() {}
+  disconnect() { observers.delete(this.f) }
+}
+const setWidth = (w: number) => act(() => { Object.defineProperty(window, 'innerWidth', { configurable: true, value: w }); window.dispatchEvent(new Event('resize')); fireContent(w) })
 const q = (id: string) => screen.queryByTestId(id)
 const openAll = (key: string, host = HOST) => patchViewMemo(host, key, { journalOpen: true, roadmapOpen: true, tasksOpen: true })
 
 beforeEach(() => {
+  vi.stubGlobal('ResizeObserver', FakeRO)
+  observers.clear()
   cleanup()
   localStorage.clear()
   resetTeamStores()
@@ -51,7 +63,7 @@ beforeEach(() => {
   addTab(ccTabOf('lead', HOST, 'lead-tm', 'SL'))
   setJournalHost(HOST, true)
 })
-afterEach(() => { cleanup(); setWidth(1024) })
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 }) })
 
 const mountShell = () => render(<TeamDisplayProvider><CardStack /></TeamDisplayProvider>)
 
@@ -183,6 +195,26 @@ describe('the stack on a journal.v1 host', () => {
     setActive('a')
     mountShell()
     expect(q('journal-card-stack')).toBeNull()
+  })
+})
+
+describe('the available width is the content box, not the window', () => {
+  it('hides tasks, then roadmap, then the team card by the container width (the window stays wide)', () => {
+    const key = seedUnit(HOST, 'SL', TEAM_UNIT)
+    openAll(key)
+    useJournalUiStore.getState().setTeamOpen(KEY, true)
+    setActive('lead')
+    setWidth(2000)
+    render(<div><TeamDisplayProvider><CardStack /></TeamDisplayProvider></div>)
+    const present = () => ['journal-team-card', 'journal-roadmap-card', 'journal-card', 'journal-tasks-card'].filter((id) => q(id))
+    act(() => fireContent(1500))
+    expect(present()).toEqual(['journal-team-card', 'journal-roadmap-card', 'journal-card', 'journal-tasks-card'])
+    act(() => fireContent(1300))
+    expect(present()).toEqual(['journal-team-card', 'journal-roadmap-card', 'journal-card'])
+    act(() => fireContent(1000))
+    expect(present()).toEqual(['journal-card'])
+    act(() => fireContent(1500))
+    expect(present().length).toBe(4)
   })
 })
 

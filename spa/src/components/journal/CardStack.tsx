@@ -6,7 +6,7 @@
 // is a sibling of TabContent, so a tab switch does not unmount it, but a support toggle or a hide / show does (CLAUDE.md,
 // Tab-hosted checklist). The narrow-window drop is visibility only (card-layout.ts): nothing is written back.
 // The cards' bodies are J-2c (journal) and J-2d (tasks, roadmap); here they are frames with their header controls.
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ListChecks, MapTrifold } from '@phosphor-icons/react'
 import { CardFrame } from './CardFrame'
 import { visibleCards, teamColumnWidth } from './card-layout'
@@ -21,14 +21,30 @@ import { keepFocus } from '../../lib/keep-focus'
 import { patchUnitMemo, useViewMemo } from '../../lib/journal/use-view-memo'
 import type { ViewMemo } from '../../lib/journal/view-memory'
 
-function useWindowWidth(): number {
-  const [w, setW] = useState(() => (typeof window === 'undefined' ? 1440 : window.innerWidth))
+/**
+ * The width of the content box the stack floats in (its offset parent: the side bar and the activity bar already took theirs),
+ * observed with a ResizeObserver. Before the first measurement, or where there is no ResizeObserver, the window width.
+ */
+function useContentWidth(root: React.RefObject<HTMLElement | null>): number {
+  const [w, setW] = useState<number | null>(null)
+  useLayoutEffect(() => {
+    const parent = root.current?.parentElement
+    if (!parent || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver((entries) => {
+      const width = entries[entries.length - 1]?.contentRect.width
+      if (typeof width === 'number') setW(width)
+    })
+    ro.observe(parent)
+    return () => ro.disconnect()
+  }, [root])
+  const [win, setWin] = useState(() => (typeof window === 'undefined' ? 1440 : window.innerWidth))
   useEffect(() => {
-    const on = () => setW(window.innerWidth)
+    if (typeof ResizeObserver !== 'undefined') return
+    const on = () => setWin(window.innerWidth)
     window.addEventListener('resize', on)
     return () => window.removeEventListener('resize', on)
   }, [])
-  return w
+  return w ?? win
 }
 
 export function CardStack() {
@@ -52,7 +68,8 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
   const teamKey = team?.teamKey ?? null
   const teamOpen = useJournalUiStore((s) => teamKey !== null && s.teamOpen[teamKey] === true)
   const last = useJournalUiStore((s) => s.lastWidths)
-  const windowWidth = useWindowWidth()
+  const rootRef = useRef<HTMLDivElement>(null)
+  const available = useContentWidth(rootRef)
 
   const widths = {
     team: cardWidth('team', null, last),
@@ -63,7 +80,7 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
   const shown = visibleCards({
     open: { team: teamOpen, roadmap: memo.roadmapOpen, journal: memo.journalOpen, tasks: memo.tasksOpen },
     widths,
-    available: windowWidth,
+    available,
   })
 
   const patch = (p: Partial<ViewMemo>) => patchUnitMemo(memoHost, memoKey, p)
@@ -72,10 +89,9 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
     useJournalUiStore.getState().setLastWidth(card, w)
   }
   const teamColumn = shown.team || shown.roadmap
-  if (!teamColumn && !shown.journal && !shown.tasks) return null
 
   return (
-    <div data-testid="journal-card-stack" className="absolute z-20 top-0 right-3 bottom-0 flex items-start justify-end gap-3 pointer-events-none">
+    <div ref={rootRef} data-testid="journal-card-stack" className="absolute z-20 top-0 right-3 bottom-0 flex items-start justify-end gap-3 pointer-events-none">
       {teamColumn && (
         <div data-testid="journal-team-column" className="flex flex-col gap-3 items-end min-h-0 max-h-full" style={{ width: teamColumnWidth(shown, widths) }}>
           {shown.team && team && display && (
