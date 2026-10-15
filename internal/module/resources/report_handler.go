@@ -76,7 +76,9 @@ func (s *leaseStore) ReportPositions(since, until int64) ([]resources.ReportPosi
 }
 
 func (s *leaseStore) reportMinutes(since, until int64) ([]resources.ReportMinute, error) {
-	mrows, err := s.db.Query(`SELECT at, load1, mem, full_ticks, full_starts, full_longest_s, heavy_held,
+	// heavy_held is the lease's column (written 0 from L2 on); heavy_running is the gate's: a minute of either kind counts, so the
+	// report does not lose the minutes recorded after L2 while it is being moved to the gate's columns.
+	mrows, err := s.db.Query(`SELECT at, load1, mem, full_ticks, full_starts, full_longest_s, max(heavy_held, heavy_running),
 			sampled_s, normal_s, warning_s, danger_s
 		FROM host_minutes WHERE at >= ? AND at < ? ORDER BY at`, since, until)
 	if err != nil {

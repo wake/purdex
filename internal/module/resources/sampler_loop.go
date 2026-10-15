@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/resources"
 )
 
@@ -95,6 +96,7 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 	at := m.now()
 	host := resources.ComputeHost(raw)
 	host.Full = m.fullLatch.Update(host)
+	m.notePageRate(&host, raw, at)
 	m.noteZone(&host, at, set)
 	m.publish(&resources.Snapshot{
 		SampledAt: at,
@@ -108,8 +110,8 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 	m.lastProcs.Store(&procs)
 	// After the publish, on this goroutine and never on a request or hook
 	// path: it reads the process table once more when a lease is held.
-	held, heldOK := m.measureLeases(ctx, procs, raw)
-	m.noteMinute(ctx, host, m.now(), held, heldOK)
+	held, _ := m.measureLeases(ctx, procs, raw)
+	m.noteMinute(host, m.now())
 	m.admissionPass(ctx, "")
 	if m.store != nil && m.hasLeaseActivity(held) {
 		m.requestEvent() // while something is held or waits, the state is worth a push per window
@@ -238,12 +240,36 @@ func (m *Module) unavailable(reason string) *resources.Snapshot {
 	s.Mode = m.mode
 	// A host that cannot be read has no zone; the latch starts again from
 	// normal when readings come back.
-	m.zoneLatch.Update(resources.HostUse{}, false, resources.Settings{})
+	m.zoneLatch.Update(0, 0, 0, false)
 	if m.lastZone != resources.ZoneUnknown || m.zoneSince.IsZero() {
 		m.lastZone, m.zoneSince = resources.ZoneUnknown, m.now()
 	}
 	s.Host.Zone, s.Host.Trend, s.Host.ZoneSince = resources.ZoneUnknown.String(), resources.TrendUnknown.String(), m.zoneSince.UnixMilli()
 	return &s
+}
+
+// pageRingKeep is how long a paging counter is kept: the rate looks back at most gate's rateWindow (10 s); a little more
+// leaves the sample the window starts at.
+const pageRingKeep = 12 * time.Second
+
+// notePageRate works the page rate out of the counters the sampler read (pageouts + swapouts, vm_stat), with the arithmetic
+// of the gate's admission (gate.RateOver), and takes the limit the gate holds work at from its config. A reading without
+// the counters leaves the rate 0 and the ring as it was. Sampler goroutine only.
+func (m *Module) notePageRate(host *resources.HostUse, raw resources.HostRaw, at time.Time) {
+	m.rateLimit = m.gateCfg().Admission.PageRateLimit()
+	m.haveRate = raw.PageCounters
+	if !raw.PageCounters {
+		return
+	}
+	cur := gate.PageSample{At: at, Total: raw.Pageouts + raw.Swapouts}
+	host.PageRate = gate.RateOver(m.pageRing, cur)
+	keep := m.pageRing[:0]
+	for _, s := range m.pageRing {
+		if at.Sub(s.At) <= pageRingKeep && !s.At.After(at) {
+			keep = append(keep, s)
+		}
+	}
+	m.pageRing = append(keep, cur)
 }
 
 // noteZone adds the reading to the ring and fills the host's zone, trend and
@@ -253,7 +279,9 @@ func (m *Module) noteZone(host *resources.HostUse, at time.Time, set resources.S
 	m.ring.Add(resources.TrendSample{At: at, Mem: host.Mem, CPU: host.CPU, Pressure: host.Pressure})
 	window := m.ring.Since(at.Add(-set.TrendWindow()))
 	m.ringMu.Unlock()
-	zone := m.zoneLatch.Update(*host, true, set)
+	// A host that gave neither the pressure level nor the paging counters has no zone to judge (unknown, as for a sampler that
+	// fails), not a normal one; with one of the two the zone is judged by it.
+	zone := m.zoneLatch.Update(host.Pressure, host.PageRate, m.rateLimit, host.Pressure > 0 || m.haveRate)
 	if zone != m.lastZone || m.zoneSince.IsZero() {
 		m.lastZone, m.zoneSince = zone, at
 	}
