@@ -217,3 +217,40 @@ test('a tool that throws is run once and the error goes on', async ($, on) => {
   await bash($, 'go test ./...').catch(() => {})
   expect(r.ran).toHaveLength(1)
 })
+
+test('pdx.json names the binary and the config: the question and the prefix both carry them', async ($, on) => {
+  const r = rig(on, () => ok(BUSY), () => BASH_OK, JSON.stringify({ pdx: '/opt/pdx/bin/pdx', config: '/home/me/.config/pdx2/config.toml' }))
+  const out = await bash($, './vendor/bin/pest')
+  expect(wouldWaits(r)).toEqual([['/opt/pdx/bin/pdx', 'gate', 'would-wait', '--auto', '--json', '--config', '/home/me/.config/pdx2/config.toml', '--', './vendor/bin/pest']])
+  expect(r.ran[0].command).toBe("'/opt/pdx/bin/pdx' gate --config '/home/me/.config/pdx2/config.toml' --auto -- ./vendor/bin/pest")
+  expect(out.context).toHaveLength(2)
+})
+
+test('a compound call goes to the background as a whole, and the note says so', async ($, on) => {
+  const r = rig(on, () => ok(BUSY))
+  const out = await bash($, 'cd spa && go test ./... && cat result.json')
+  expect(r.ran).toHaveLength(1)
+  expect(r.ran[0].command).toBe('cd spa && go test ./... && cat result.json') // unchanged: it all runs, in order, in the background
+  expect(r.ran[0].bg).toBe(true)
+  expect(out.context[0]).toContain('整段，包括它前後接的指令')
+  expect(out.context[0]).toContain('不要假設它做完了')
+})
+
+// A dependency that never answers must not hold the call: the planning has one deadline and the call then runs as it is.
+for (const [name, hang] of [['fs.read', 'fs.read'], ['process.run', 'process.run'], ['tool.check', 'tool.check']] as const) {
+  test(`${name} never answers → the call runs as it was, within the planning deadline`, { timeoutMs: 15000 }, async ($, on) => {
+    const r = rig(on, () => ok(BUSY), () => BASH_OK, undefined, hang)
+    const began = Date.now()
+    const out = await bash($, './vendor/bin/pest')
+    expect(Date.now() - began).toBeLessThan(9000)
+    expect(out.result).toEqual(BASH_OK.result)
+    expect(r.ran).toHaveLength(1)
+  })
+}
+
+test('the fourth command of a call is asked about too: it is the one that waits', async ($, on) => {
+  const r = rig(on, (a) => ok(a.includes('test') ? BUSY : FREE))
+  await bash($, 'go version; go env; go list ./...; go test ./...')
+  expect(wouldWaits(r)).toHaveLength(4)
+  expect(r.ran[0].bg).toBe(true)
+})
