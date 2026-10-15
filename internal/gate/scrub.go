@@ -63,15 +63,24 @@ func scrubArgv(argv []string) []string {
 	}
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
+		// glued forms: `-Hname: value`, `--header=name: value`, `-psecret` (for the tools whose -p is a password)
+		if v, ok := strings.CutPrefix(a, "--header="); ok {
+			out = append(out, "--header="+scrubHeader(v))
+			continue
+		}
+		if v, ok := strings.CutPrefix(a, "-H"); ok && v != "" && !strings.HasPrefix(a, "--") {
+			out = append(out, "-H"+scrubHeader(v))
+			continue
+		}
+		if v, ok := strings.CutPrefix(a, "-p"); ok && v != "" && !strings.HasPrefix(a, "--") && passwordFlagTools[tool] {
+			out = append(out, "-p"+redacted)
+			continue
+		}
 		switch {
 		case headerFlags[a] && i+1 < len(argv):
 			out = append(out, a)
 			i++
-			next := argv[i]
-			if secretHeader.MatchString(next) {
-				next = redacted
-			}
-			out = append(out, scrubWord(next))
+			out = append(out, scrubHeader(argv[i]))
 			continue
 		case strings.HasPrefix(a, "-") && !strings.Contains(a, "=") && i+1 < len(argv) &&
 			(namesSecret(a) || (shortSecretFlags[a] && passwordFlagTools[tool])):
@@ -82,6 +91,15 @@ func scrubArgv(argv []string) []string {
 		out = append(out, scrubWord(a))
 	}
 	return out
+}
+
+// scrubHeader redacts a header that carries a credential whole (whatever its value looks like: a Basic credential is
+// short base64 that no pattern would catch), and scrubs any other header like a word.
+func scrubHeader(h string) string {
+	if secretHeader.MatchString(h) {
+		return redacted
+	}
+	return scrubWord(h)
 }
 
 // scrubWord redacts the value of `NAME=value` when NAME names a secret, an Authorization-like header and the password in a

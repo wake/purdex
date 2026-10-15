@@ -81,7 +81,7 @@ type Gate struct {
 // New is the gate of this host with the given config.
 func New(cfg Config) *Gate {
 	g := &Gate{
-		st: &state{cfg: cfg}, Now: time.Now, Stderr: os.Stderr, TreeEvery: time.Second,
+		st: &state{cfg: cfg}, Now: time.Now, Stderr: os.Stderr, TreeEvery: 500 * time.Millisecond,
 		Poll:    func() time.Duration { return time.Second + time.Duration(mrand.Int63n(int64(2*time.Second))) },
 		Session: os.Getenv("CLAUDE_SESSION_ID"),
 		Procs:   procTable, IsTTY: stdinIsTTY, DiskFree: freeBytes, Facts: ReadHostFacts, PID: os.Getpid, Token: newToken,
@@ -274,7 +274,10 @@ func (g *Gate) Run(ctx context.Context, o Options) (int, error) {
 	}
 	token := g.Token()
 	if err := slot.SetHolder(g.holder(o, token)); err != nil {
-		g.say("holder record: %v", err)
+		// the record is part of the nesting protocol: a command started without it could never prove its claim, and a
+		// heavy command below it would wait for the very slot its parent holds
+		g.say("holder record: %v: the command was not run", err)
+		return ExitRefused, nil
 	}
 	env = withEnv(env, HeldEnv, slot.Label()+":"+token)
 	return g.start(ctx, g.Config(), o, argv, env, slot, sigs)

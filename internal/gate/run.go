@@ -146,9 +146,12 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 			g.say("holder record: %v", err)
 		}
 	}
+	// The command's tree is followed by parentage as well as (off a terminal) by its process group: a child that left the
+	// group with setsid is still a child of the command while the command runs, and is remembered for the clean-up.
+	// What cannot be caught: a child that is forked, leaves the group and is orphaned within one TreeEvery of the last look.
 	var followed *tree
 	var tick <-chan time.Time
-	if tty {
+	if slot != nil {
 		followed = newTree(pid, g.Procs)
 		if !followed.known() {
 			g.say("the process table could not be read: what %s leaves running at the end will not be cleared", argv[0])
@@ -167,6 +170,11 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 	if grouped {
 		target = -pid
 	}
+	grace := cfg.Reap.Grace
+	if g.KillGrace > 0 {
+		grace = g.KillGrace
+	}
+	var killAt <-chan time.Time // set when the context is cancelled: SIGTERM now, SIGKILL when the grace is over
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	for {
@@ -186,22 +194,22 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 			g.say("%s has held its %s slot for %s (it is not stopped; see `pdx gate status`)", argv[0], slot.Class, cfg.Lifetime.AlertAfter)
 		case err := <-done:
 			code := exitCode(err, cmd)
-			if reap := cfg.Reap; reap.Enabled {
-				grace := reap.Grace
-				if g.KillGrace > 0 {
-					grace = g.KillGrace
-				}
-				switch {
-				case grouped:
+			if cfg.Reap.Enabled {
+				if grouped {
 					g.reap(pid, grace)
-				case followed != nil:
-					followed.reap(grace)
+				}
+				if followed != nil {
+					followed.reap(grace) // what left the group, or all of it at a terminal
 				}
 			}
 			return code, nil
 		case <-ctx.Done():
-			ctx = context.Background() // once: pass the cancel on as SIGTERM, then keep waiting for the command
-			_ = syscall.Kill(target, syscall.SIGTERM)
+			ctx = context.Background()                // once
+			_ = syscall.Kill(target, syscall.SIGTERM) // the cancel is passed on as SIGTERM…
+			killAt = time.After(grace)                // …and a command that ignores it does not keep the run (and its slot) for ever
+		case <-killAt:
+			killAt = nil
+			_ = syscall.Kill(target, syscall.SIGKILL)
 		}
 	}
 }

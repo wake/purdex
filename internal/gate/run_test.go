@@ -792,3 +792,51 @@ func TestRun_TheDiskIsLookedAtAgainAfterTheWait(t *testing.T) {
 	<-occ
 	assert.Empty(t, g.Status().Heavy, "and the slot it had taken is free again")
 }
+
+// A child that leaves the process group with setsid is still a child of the command while the command runs; the tree
+// remembers it and the clean-up ends it before the slot is given back. (M: clear the group only.) What this cannot catch: a
+// child that is forked, leaves the group and is orphaned within one TreeEvery of the last look (the parent exits at once).
+func TestRun_AChildThatLeftTheGroupIsEndedToo(t *testing.T) {
+	if _, err := exec.LookPath("perl"); err != nil {
+		t.Skip("perl is needed to call setsid")
+	}
+	g, _ := testGate(t)
+	dir := t.TempDir()
+	script := `perl -e 'use POSIX; if (fork == 0) { POSIX::setsid(); open F, ">", $ARGV[0]; print F $$; close F; exec "sleep", "300" } select(undef, undef, undef, 0.5)' ` + dir + `/pid; exit 0`
+	r := runSync(t, g, Options{Argv: sh(script), Class: ClassHeavy})
+	assert.Equal(t, 0, r.code)
+	pid := pidFrom(t, dir+"/pid")
+	assert.True(t, gone(pid), "the child that left the group is gone when the run returns")
+}
+
+// A cancelled run ends in bounded time even if the command ignores SIGTERM: SIGTERM, the grace, SIGKILL. (M: signal once.)
+func TestRun_ACancelledRunEndsEvenIfTheCommandIgnoresSigterm(t *testing.T) {
+	g, _ := testGate(t)
+	g.KillGrace = 200 * time.Millisecond
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	res := runAsync(g, ctx, Options{Argv: sh("trap '' TERM; touch " + dir + "/started; while :; do sleep 0.05; done"), Class: ClassHeavy})
+	eventually(t, "start", func() bool { return exists(dir + "/started") })
+	cancel()
+	select {
+	case r := <-res:
+		assert.Equal(t, 128+int(syscall.SIGKILL), r.code)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the run did not end after the cancel")
+	}
+	assert.Empty(t, g.Status().Heavy, "and its slot is free")
+}
+
+// The holder record is part of the nesting protocol: when it cannot be written the command is not run.
+// (M: log the failure and run on.)
+func TestRun_ACommandIsNotRunWithoutItsHolderRecord(t *testing.T) {
+	g, buf := testGate(t)
+	dir := t.TempDir()
+	cfgDir := g.Config().Dir
+	require.NoError(t, os.MkdirAll(filepath.Join(cfgDir, "heavy-1.json"), 0o755)) // a directory where the record goes: the rename fails
+	r := runSync(t, g, Options{Argv: sh("touch " + dir + "/ran"), Class: ClassHeavy})
+	assert.Equal(t, ExitRefused, r.code)
+	assert.False(t, exists(dir+"/ran"))
+	assert.Contains(t, buf.String(), "holder record")
+	assert.Empty(t, g.Status().Heavy)
+}

@@ -38,6 +38,12 @@ func TestScrubArgv(t *testing.T) {
 		{"docker -p is a port", []string{"docker", "run", "-p", "80:80", "img"}, []string{"docker", "run", "-p", "80:80", "img"}},
 		{"a password in a URL", []string{"git", "clone", "https://user:s3cret@host/repo.git"}, []string{"git", "clone", "https://user:<redacted>@host/repo.git"}},
 		{"a URL without one", []string{"curl", "https://user@host/x"}, []string{"curl", "https://user@host/x"}},
+		{"-Hname: value glued", []string{"curl", "-HAuthorization: Basic dXNlcjpwYXNz"}, []string{"curl", "-H<redacted>"}},
+		{"--header=name:value", []string{"curl", "--header=Cookie:sid=abc"}, []string{"curl", "--header=<redacted>"}},
+		{"--header=harmless", []string{"curl", "--header=Accept: text/html"}, []string{"curl", "--header=Accept: text/html"}},
+		{"-psecret glued after mysql", []string{"mysql", "-phunter2", "db"}, []string{"mysql", "-p<redacted>", "db"}},
+		{"-pNNN after go is not a password", []string{"go", "test", "-p4", "./..."}, []string{"go", "test", "-p4", "./..."}},
+		{"a Basic header in its own word", []string{"curl", "-H", "Authorization: Basic dXNlcjpwYXNz"}, []string{"curl", "-H", "<redacted>"}},
 		{"a flag that only looks alike", []string{"go", "test", "-run", "TestAuthor"}, []string{"go", "test", "-run", "TestAuthor"}},
 		{"a secret flag at the end", []string{"x", "--token"}, []string{"x", "--token"}},
 	} {
