@@ -63,6 +63,14 @@ func forkSites(src string) ([]string, error) {
 					sites = append(sites, id.Name+"."+x.Sel.Name+" at "+fset.Position(x.Pos()).String())
 				}
 			}
+		case *ast.CallExpr: // new(exec.Cmd)
+			if fn, ok := x.Fun.(*ast.Ident); ok && fn.Name == "new" && len(x.Args) == 1 && isExecCmd(x.Args[0], names) {
+				sites = append(sites, "new(exec.Cmd) at "+fset.Position(x.Pos()).String())
+			}
+		case *ast.ValueSpec: // var c exec.Cmd
+			if x.Type != nil && isExecCmd(x.Type, names) {
+				sites = append(sites, "exec.Cmd variable at "+fset.Position(x.Pos()).String())
+			}
 		case *ast.CompositeLit:
 			if sel, ok := x.Type.(*ast.SelectorExpr); ok {
 				if id, ok := sel.X.(*ast.Ident); ok && names[id.Name] == "os/exec" && sel.Sel.Name == "Cmd" {
@@ -73,6 +81,16 @@ func forkSites(src string) ([]string, error) {
 		return true
 	})
 	return sites, nil
+}
+
+// isExecCmd says whether the type expression is os/exec's Cmd (by whatever name exec is imported under).
+func isExecCmd(e ast.Expr, names map[string]string) bool {
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	id, ok := sel.X.(*ast.Ident)
+	return ok && names[id.Name] == "os/exec" && sel.Sel.Name == "Cmd"
 }
 
 // cliOnly are the files of the pdx binary that run only in the short-lived CLI process, never in the daemon: a counter in a
@@ -199,9 +217,12 @@ func TestTheGuardSeesEveryWayToFork(t *testing.T) {
 	cases := map[string]bool{
 		`package p; import "os/exec"; var _ = exec.Command("ps")`:                                           true,
 		`package p; import "os/exec"; func f(c context.Context) { exec.CommandContext(c, "ps") }`:           true,
-		`package p; import ex "os/exec"; var _ = ex.Command("ps")`:                                          true, // another name
-		`package p; import . "os/exec"; var _ = Command("ps")`:                                              true, // dot import
-		`package p; import "os/exec"; var _ = &exec.Cmd{Path: "x"}`:                                         true, // a literal
+		`package p; import ex "os/exec"; var _ = ex.Command("ps")`:                                          true,  // another name
+		`package p; import . "os/exec"; var _ = Command("ps")`:                                              true,  // dot import
+		`package p; import "os/exec"; var _ = &exec.Cmd{Path: "x"}`:                                         true,  // a literal
+		`package p; import "os/exec"; func f() { c := new(exec.Cmd); c.Start() }`:                           true,  // new
+		`package p; import ex "os/exec"; func f() { var c ex.Cmd; c.Start() }`:                              true,  // a variable
+		`package p; import "os/exec"; func f(c *exec.Cmd) { c.Start() }`:                                    false, // a parameter is not a creation
 		`package p; import "os"; var _, _ = os.StartProcess("x", nil, nil)`:                                 true,
 		`package p; import "syscall"; var _, _ = syscall.ForkExec("x", nil, nil)`:                           true,
 		`package p; import "github.com/creack/pty"; var _, _ = pty.Start(nil)`:                              true,

@@ -1,6 +1,7 @@
 package execstat
 
 import (
+	"bytes"
 	"context"
 	"os/exec"
 	"testing"
@@ -226,5 +227,66 @@ func TestAClockThatGoesBackStartsTheRecentCountsAgain(t *testing.T) {
 	got = find(t, "c")
 	if got.Last60 != 0 || got.Total != 4 {
 		t.Fatalf("old buckets must not return: %+v", got)
+	}
+}
+
+// A command that is still running is already a fork: Run, Output and CombinedOutput count at Start, not when the child ends.
+func TestRunOutputCombinedCountWhileTheChildIsStillRunning(t *testing.T) {
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("no sleep")
+	}
+	for name, run := range map[string]func(c *Cmd){
+		"run":      func(c *Cmd) { c.Run() },
+		"output":   func(c *Cmd) { c.Output() },
+		"combined": func(c *Cmd) { c.CombinedOutput() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			ResetTags()
+			c := Command("t.long", sleep, "5")
+			done := make(chan struct{})
+			go func() { run(c); close(done) }()
+			deadline := time.Now().Add(3 * time.Second)
+			for time.Now().Before(deadline) {
+				for _, s := range Tags() {
+					if s.Name == "t.long" && s.Total == 1 {
+						c.Process.Kill()
+						<-done
+						return
+					}
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			c.Process.Kill()
+			<-done
+			t.Fatal("the fork was not counted while the child was running")
+		})
+	}
+}
+
+// Output and CombinedOutput keep the stdlib's behaviour: the output comes back, a failing child's stderr is in the ExitError, and
+// a stream that was already set is refused.
+func TestOutputKeepsTheStdlibSemantics(t *testing.T) {
+	ResetTags()
+	out, err := Command("t.o", "sh", "-c", "echo out; echo err >&2").Output()
+	if err != nil || string(out) != "out\n" {
+		t.Fatalf("Output = %q, %v", out, err)
+	}
+	_, err = Command("t.o", "sh", "-c", "echo boom >&2; exit 3").Output()
+	ee, ok := err.(*exec.ExitError)
+	if !ok || string(ee.Stderr) != "boom\n" {
+		t.Fatalf("want an ExitError carrying stderr, got %#v", err)
+	}
+	both, err := Command("t.o", "sh", "-c", "echo out; echo err >&2").CombinedOutput()
+	if err != nil || len(both) != len("out\nerr\n") {
+		t.Fatalf("CombinedOutput = %q, %v", both, err)
+	}
+	c := Command("t.o", "true")
+	c.Stdout = &bytes.Buffer{}
+	if _, err := c.Output(); err == nil {
+		t.Fatal("Output with Stdout already set must fail")
+	}
+	if got := find(t, "t.o"); got.Total != 3 {
+		t.Fatalf("a refused Output starts nothing: %+v", got)
 	}
 }

@@ -1,7 +1,9 @@
 package execstat
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"os/exec"
 	"sort"
 	"sync"
@@ -265,37 +267,60 @@ func CommandContext(ctx context.Context, tag, name string, args ...string) *Cmd 
 // Tag is the tag the fork is counted under.
 func (c *Cmd) Tag() string { return c.tag }
 
-// finish records a command run to its end: a child that was started is a fork (with its time), one that was not is a failed start.
-func (c *Cmd) finish(t0 time.Time) {
-	if c.Cmd.Process != nil {
-		Observe(c.tag, time.Since(t0))
-		return
-	}
-	tags.get(c.tag).failedStart()
-}
-
-// Run implements (*exec.Cmd).Run.
+// Run implements (*exec.Cmd).Run as Start then Wait, so the fork counts when the child has started, not when it ends.
 func (c *Cmd) Run() error {
-	t0 := time.Now()
-	err := c.Cmd.Run()
-	c.finish(t0)
-	return err
+	if err := c.Start(); err != nil {
+		return err
+	}
+	return c.Wait()
 }
 
-// Output implements (*exec.Cmd).Output.
+// capped keeps the first limit bytes written to it (the stdlib keeps a head and a tail for ExitError.Stderr; the head is enough
+// for a message) and always reports the whole write as taken, so the child is never blocked by it.
+type capped struct {
+	buf   bytes.Buffer
+	limit int
+}
+
+func (w *capped) Write(p []byte) (int, error) {
+	if room := w.limit - w.buf.Len(); room > 0 {
+		w.buf.Write(p[:min(room, len(p))])
+	}
+	return len(p), nil
+}
+
+// Output implements (*exec.Cmd).Output over Start and Wait: Stdout is collected, and when Stderr is not set its head goes
+// to the ExitError.
 func (c *Cmd) Output() ([]byte, error) {
-	t0 := time.Now()
-	out, err := c.Cmd.Output()
-	c.finish(t0)
-	return out, err
+	if c.Stdout != nil {
+		return nil, errors.New("exec: Stdout already set")
+	}
+	var stdout bytes.Buffer
+	c.Stdout = &stdout
+	var stderr *capped
+	if c.Stderr == nil {
+		stderr = &capped{limit: 32 << 10}
+		c.Stderr = stderr
+	}
+	err := c.Run()
+	if ee, ok := err.(*exec.ExitError); ok && stderr != nil {
+		ee.Stderr = stderr.buf.Bytes()
+	}
+	return stdout.Bytes(), err
 }
 
-// CombinedOutput implements (*exec.Cmd).CombinedOutput.
+// CombinedOutput implements (*exec.Cmd).CombinedOutput over Start and Wait.
 func (c *Cmd) CombinedOutput() ([]byte, error) {
-	t0 := time.Now()
-	out, err := c.Cmd.CombinedOutput()
-	c.finish(t0)
-	return out, err
+	if c.Stdout != nil {
+		return nil, errors.New("exec: Stdout already set")
+	}
+	if c.Stderr != nil {
+		return nil, errors.New("exec: Stderr already set")
+	}
+	var b bytes.Buffer
+	c.Stdout, c.Stderr = &b, &b
+	err := c.Run()
+	return b.Bytes(), err
 }
 
 // Start implements (*exec.Cmd).Start: the fork is counted once the child has started (a command that is never waited for still
