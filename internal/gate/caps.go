@@ -61,16 +61,16 @@ func VitestArgs(argv []string, n int) ([]string, bool) {
 	if n <= 0 || !runsVitest(argv) {
 		return argv, false
 	}
-	for _, a := range argv {
-		if vitestLimit.MatchString(a) {
-			return argv, false
-		}
-	}
 	at := len(argv)
 	for i, a := range argv {
 		if a == "--" {
-			at = i
+			at = i // what follows belongs to the script or the tests: not a limit of vitest's, and the flag goes before it
 			break
+		}
+	}
+	for _, a := range argv[:at] {
+		if vitestLimit.MatchString(a) {
+			return argv, false
 		}
 	}
 	out := make([]string, 0, len(argv)+1)
@@ -99,6 +99,9 @@ func runsVitest(argv []string) bool {
 		case a == "--":
 			return false
 		case a == "exec" || a == "x" || a == "dlx" || a == "run":
+			continue
+		case runnerValueOpts[a]:
+			i++ // `--prefix spa`: the value is not the tool
 			continue
 		case strings.HasPrefix(a, "-"):
 			continue

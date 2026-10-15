@@ -58,6 +58,8 @@ func TestClassify_Table(t *testing.T) {
 		{"pnpm exec vitest run", ClassHeavy},
 		{"pnpm vitest run src/foo.test.ts", ClassLight},
 		{"pnpm -C spa exec vitest run", ClassHeavy},
+		{"pnpm --prefix spa exec vitest run", ClassHeavy},
+		{"pnpm --filter spa exec vitest run src/a.test.ts", ClassLight},
 		// tsc
 		{"tsc -b", ClassHeavy},
 		{"tsc -b --force", ClassHeavy},

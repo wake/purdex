@@ -39,6 +39,13 @@ var vitestValueFlags = map[string]bool{
 	"--poolOptions.threads.minThreads": true, "--poolOptions.forks.minForks": true, "--browser.name": true,
 }
 
+// runnerValueOpts are the options of a package runner (pnpm, yarn, npm) whose value is the next word: the word after
+// them is not the subcommand or the tool.
+var runnerValueOpts = map[string]bool{
+	"-C": true, "--dir": true, "--prefix": true, "--filter": true, "-F": true, "--workspace": true, "-w": true,
+	"--package": true, "-p": true, "--cwd": true,
+}
+
 // scripts a package runner is taken to run in full: a script by one of these names is a whole-project run.
 var heavyScripts = map[string]bool{
 	"check": true, "test": true, "typecheck": true, "lint": true, "build": true, "electron:build": true,
@@ -206,8 +213,7 @@ func classifyRunner(runner string, args []string) Class {
 		if !strings.HasPrefix(a, "-") {
 			break
 		}
-		switch a {
-		case "-C", "--dir", "--prefix", "--filter", "-F", "--workspace", "-w", "--package", "-p", "--cwd":
+		if runnerValueOpts[a] {
 			i++ // the option's value
 		}
 	}
