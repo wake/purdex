@@ -1,6 +1,7 @@
 package teammod
 
 import (
+	"math"
 	"time"
 
 	"github.com/wake/purdex/internal/module/agent"
@@ -15,6 +16,9 @@ import (
 const (
 	sweepInterval = time.Second
 	livenessEvery = 10
+	// sweepReadMax is the longest the sweeper goes without reading the open requests (G3b): it reads them when the store was
+	// written to, when one is due, on the liveness tick, and at the latest this often (a write nothing counted is found then).
+	sweepReadMax = 5 * time.Second
 )
 
 // runSweeper ticks until Stop.
@@ -76,9 +80,8 @@ func (m *Module) tick() {
 		m.kickNotices() // a notice whose send failed, or a lead whose inbox was not up yet
 	}
 	m.expireCommands() // a spawn or adopt not delivered within 10 minutes is void (X3a)
-	open, err := m.store.ListOpen()
-	if err != nil {
-		m.logf("[team] sweep: %v", err)
+	open, ok := m.openForTick(checkLive)
+	if !ok {
 		return
 	}
 	if len(open) == 0 {
@@ -127,6 +130,38 @@ func (m *Module) tick() {
 		}
 	}
 	m.reconcileUnattended(open)
+}
+
+// openForTick is the open requests for this tick, and false when the tick has nothing to do with them. They are read when
+// the store counted a write since the last read, when one of them falls due (deadline or lease) by now, on the liveness
+// tick (which asks about their origins) and at the latest every sweepReadMax; otherwise nothing can have changed since the
+// last read, and the tick returns without touching the database (G3b: it read every open request every second). A failed
+// read is logged and the tick ends, as before.
+func (m *Module) openForTick(checkLive bool) ([]team.Approval, bool) {
+	now := m.now()
+	gen := approvalWrites.Load()
+	if m.openRead && !checkLive && gen == m.openGen && now < m.openNext && now-m.openAt < sweepReadMax.Milliseconds() {
+		return nil, false
+	}
+	open, err := m.store.ListOpen()
+	if err != nil {
+		m.openRead = false
+		m.logf("[team] sweep: %v", err)
+		return nil, false
+	}
+	m.openRead, m.openGen, m.openAt = true, gen, now
+	// the next moment a request falls due: only deadlines and leases still ahead count; one already past that stays open (a
+	// final card, an unanswered one) is looked at again by the periodic read, not on every tick
+	m.openNext = int64(math.MaxInt64)
+	for _, a := range open {
+		if a.DeadlineAt > now && a.DeadlineAt < m.openNext {
+			m.openNext = a.DeadlineAt
+		}
+		if a.UnansweredAt == 0 && a.LeaseUntil > now && a.LeaseUntil < m.openNext {
+			m.openNext = a.LeaseUntil
+		}
+	}
+	return open, true
 }
 
 // closeExpired is the sweeper's close for a passed deadline or lease: the

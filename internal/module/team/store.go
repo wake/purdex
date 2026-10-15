@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	_ "modernc.org/sqlite"
 
@@ -20,8 +21,15 @@ import (
 var ErrNoSuchApproval = errors.New("no such approval")
 
 // Store is the SQLite persistence of approval requests.
+// approvalWrites counts the writes to approval_requests this process makes (insert, close, lease, unanswered), so the sweeper
+// can read the open requests when something may have changed and not every second (G3b). It is a hint: a write that does not
+// count (a plain touch of the row for a lock) costs the sweeper at most sweepReadMax of lateness.
+var approvalWrites atomic.Uint64
+
 type Store struct {
-	db *sql.DB
+	// listOpenReads counts ListOpen calls: what the sweeper's cadence test looks at.
+	listOpenReads atomic.Int64
+	db            *sql.DB
 	// handoffClaims holds the ids of the handoff ops whose `written` committed WITH the member claimed for the kill (set after the
 	// commit that did it): finishHandoffKill signals only for an op in it. A timestamp is no proof of who claimed a row (RT-3c codex).
 	handoffClaims sync.Map
@@ -479,6 +487,7 @@ func insertRowIn(ex dbtx, a team.Approval, hash, conflict string) (int64, error)
 	if err != nil {
 		return 0, fmt.Errorf("encode origin: %w", err)
 	}
+	approvalWrites.Add(1)
 	res, err := ex.Exec(`
 		INSERT INTO approval_requests
 			(id, kind, host_id, origin_session_id, origin_json, payload_json, request_hash, state, created_at, deadline_at, lease_until)
@@ -643,6 +652,7 @@ func closeRowIn(ex dbtx, id string, c Close, guard string, guardArg int64) (int6
 		guard += " AND deadline_at > ? AND lease_until > ?"
 		args = append(args, c.UnexpiredAt, c.UnexpiredAt)
 	}
+	approvalWrites.Add(1)
 	res, err := ex.Exec(`
 		UPDATE approval_requests
 		SET state = ?, decided_at = ?, decided_by_json = ?, grant_json = ?, close_reason = ?
@@ -667,6 +677,7 @@ func closeRowIn(ex dbtx, id string, c Close, guard string, guardArg int64) (int6
 // RenewLease moves an open request's lease forward to until (never back).
 // A closed or unknown id is left alone and is not an error.
 func (s *Store) RenewLease(id string, until int64) error {
+	approvalWrites.Add(1)
 	if _, err := s.db.Exec(`
 		UPDATE approval_requests SET lease_until = MAX(lease_until, ?)
 		WHERE id = ? AND state = 'open'`, until, id); err != nil {
@@ -678,6 +689,7 @@ func (s *Store) RenewLease(id string, until int64) error {
 // ExtendOpenLeases is the boot grace (spec §9.2): every open request's
 // lease becomes max(lease_until, until). It returns how many rows changed.
 func (s *Store) ExtendOpenLeases(until int64) (int64, error) {
+	approvalWrites.Add(1)
 	res, err := s.db.Exec(`
 		UPDATE approval_requests SET lease_until = ?
 		WHERE state = 'open' AND lease_until < ?`, until, until)
@@ -693,6 +705,7 @@ func (s *Store) ExtendOpenLeases(until int64) (int64, error) {
 
 // ListOpen returns every open request, oldest first (created_at, id).
 func (s *Store) ListOpen() ([]team.Approval, error) {
+	s.listOpenReads.Add(1)
 	rows, err := s.db.Query(`SELECT ` + selectCols + ` FROM approval_requests WHERE state = 'open' ORDER BY created_at, id`)
 	if err != nil {
 		return nil, fmt.Errorf("list open approvals: %w", err)
