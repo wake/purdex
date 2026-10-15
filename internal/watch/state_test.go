@@ -102,3 +102,18 @@ func TestStateStoreAtomicNoTempLeft(t *testing.T) {
 	ents, _ := os.ReadDir(dir)
 	require.Len(t, ents, 1)
 }
+
+func TestStateStoreFlushKeepsDirtyWhenTheDirectorySyncFails(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "state.json")
+	s, _ := OpenState(p)
+	old := syncDir
+	defer func() { syncDir = old }()
+	syncDir = func(string) error { return os.ErrInvalid }
+	s.Sighting("x", st0)
+	require.Error(t, s.Flush())
+	syncDir = old
+	require.NoError(t, os.Remove(p))
+	require.NoError(t, s.Flush(), "still dirty: the next pass writes it again")
+	_, err := os.Stat(p)
+	require.NoError(t, err)
+}

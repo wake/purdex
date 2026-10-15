@@ -61,10 +61,13 @@ func watchMain(args []string, stdout, stderr io.Writer) int {
 	if d == "" {
 		d = watch.DefaultDir()
 	}
-	recs, err := watch.ReadLog(d, from, watch.Kind(*kind))
+	recs, skipped, err := watch.ReadLogDiag(d, from, watch.Kind(*kind))
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if skipped > 0 {
+		fmt.Fprintf(stderr, "注意：略過 %d 行無法解析的紀錄（當機留下的半行，或檔案損毀）\n", skipped)
 	}
 	if len(recs) == 0 && !*asJSON {
 		fmt.Fprintln(stdout, "沒有符合的事件")

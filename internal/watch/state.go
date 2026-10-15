@@ -194,10 +194,22 @@ func (s *StateStore) Flush() error {
 		_ = os.Remove(tmp.Name())
 		return werr
 	}
-	if d, err := os.Open(filepath.Dir(s.path)); err == nil { // the rename itself survives a power cut; best effort
-		_ = d.Sync()
-		d.Close()
+	if err := syncDir(filepath.Dir(s.path)); err != nil { // the rename itself must survive a power cut; dirty stays, the next pass writes again
+		return err
 	}
 	s.dirty = false
 	return nil
+}
+
+// syncDir is a variable so a test can fail it.
+var syncDir = func(dir string) error {
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	serr := d.Sync()
+	if cerr := d.Close(); serr == nil {
+		serr = cerr
+	}
+	return serr
 }

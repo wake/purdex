@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -77,4 +79,16 @@ func TestWatchLogRefusesExtraArgumentsAndNeutralisesControlCharacters(t *testing
 	out.Reset()
 	require.Equal(t, 0, watchMain([]string{"log", "--dir", dir, "--json"}, &out, &errb))
 	require.Contains(t, out.String(), `\n99-99 fake line`, "JSON keeps the value, escaped")
+}
+
+func TestWatchLogSaysWhenItSkippedLines(t *testing.T) {
+	dir := seedWatchLog(t)
+	day := time.Now().UTC().Format("20060102")
+	f, err := os.OpenFile(filepath.Join(dir, "events-"+day+".jsonl"), os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, _ = f.WriteString("garbage\n")
+	f.Close()
+	var out, errb bytes.Buffer
+	require.Equal(t, 0, watchMain([]string{"log", "--dir", dir}, &out, &errb))
+	require.Contains(t, errb.String(), "略過 1 行")
 }

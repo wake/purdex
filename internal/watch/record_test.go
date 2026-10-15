@@ -102,8 +102,9 @@ func TestReadLogSkipsBadLinesAndMissingDir(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "events-20261015.jsonl"),
 		[]byte("garbage\n{\"id\":\"x\",\"kind\":\"pressure_high\",\"at\":\"2026-10-15T12:00:00Z\"}\n{\"id\":\"half"), 0o600))
-	recs, err = ReadLog(dir, time.Time{}, "")
+	recs, skipped, err := ReadLogDiag(dir, time.Time{}, "")
 	require.NoError(t, err)
+	require.Equal(t, 2, skipped, "the skipped lines are counted, not hidden")
 	require.Len(t, recs, 1, "a torn last line from a crash does not hide the rest")
 }
 

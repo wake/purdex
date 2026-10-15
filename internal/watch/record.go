@@ -129,11 +129,18 @@ func logFiles(dir string) ([]string, error) {
 // ReadLog reads the records in dir, oldest first, from since on (zero: all) and of kind (empty: all). A line that is not a record
 // (a torn last line after a crash) is skipped; a missing directory is no records.
 func ReadLog(dir string, since time.Time, kind Kind) ([]Record, error) {
-	var out []Record
+	recs, _, err := ReadLogDiag(dir, since, kind)
+	return recs, err
+}
+
+// ReadLogDiag is ReadLog that also says how many lines it skipped because they were not records. One torn line after a crash is
+// expected; more than that, or a skipped line in the middle of a file, is damage the caller should show.
+func ReadLogDiag(dir string, since time.Time, kind Kind) (recs []Record, skipped int, err error) {
+	out := recs
 	sinceDay := since.UTC().Format(logDayFormat)
 	names, err := logFiles(dir)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	for _, name := range names {
 		if !since.IsZero() && strings.TrimSuffix(strings.TrimPrefix(name, logPrefix), logSuffix) < sinceDay {
@@ -141,13 +148,14 @@ func ReadLog(dir string, since time.Time, kind Kind) ([]Record, error) {
 		}
 		f, err := os.Open(filepath.Join(dir, name))
 		if err != nil {
-			return out, err
+			return out, skipped, err
 		}
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 64*1024), 1024*1024)
 		for sc.Scan() {
 			var rec Record
 			if json.Unmarshal(sc.Bytes(), &rec) != nil || rec.ID == "" {
+				skipped++
 				continue
 			}
 			if (!since.IsZero() && rec.At.Before(since)) || (kind != "" && rec.Kind != kind) {
@@ -158,11 +166,11 @@ func ReadLog(dir string, since time.Time, kind Kind) ([]Record, error) {
 		serr := sc.Err()
 		f.Close()
 		if serr != nil {
-			return out, fmt.Errorf("%s: %w", name, serr)
+			return out, skipped, fmt.Errorf("%s: %w", name, serr)
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].At.Before(out[j].At) })
-	return out, nil
+	return out, skipped, nil
 }
 
 const crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
