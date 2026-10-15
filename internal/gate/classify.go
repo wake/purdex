@@ -55,7 +55,7 @@ var heavyScripts = map[string]bool{
 // Classify says how heavy a command is, from its argv (argv[0] may be a path). It is a pure function over the words
 // the shims hand over: go, pnpm/npx/yarn/npm, vitest, tsc and make. Anything else is none and passes through. A
 // command that cannot be read is none: the gate fails open on what it does not understand.
-func Classify(argv []string) Class {
+func Classify(argv []string, e Env) Class {
 	if len(argv) == 0 {
 		return ClassNone
 	}
@@ -64,11 +64,11 @@ func Classify(argv []string) Class {
 	case "go":
 		return classifyGo(args)
 	case "vitest":
-		return classifyVitest(args)
+		return classifyVitest(args, e)
 	case "tsc":
 		return classifyTsc(args)
 	case "pnpm", "pnpx", "npx", "yarn", "npm", "bunx", "bun":
-		return classifyRunner(filepath.Base(argv[0]), args)
+		return classifyRunner(filepath.Base(argv[0]), args, e)
 	case "make":
 		if len(args) == 1 && args[0] == "test" {
 			return ClassHeavy
@@ -143,20 +143,22 @@ func classifyGo(args []string) Class {
 	return ClassNone // version, env, mod, list, fmt, run, tool, generate…
 }
 
-// vitestRun reads vitest's words: whether it is a run (or the default command), and whether a file or filter narrows
-// it. `vitest watch` and `--version` are not runs the gate holds a slot for.
-func classifyVitest(args []string) Class {
-	run := false
+// classifyVitest reads vitest's words. Vitest watches (and never ends) only when told to (`watch`, `dev`, `--watch`,
+// `-w`) or, with nothing said, for a person at a terminal outside CI; in an agent's shell, a script or CI it runs once. A
+// run that names files or a filter is light, the rest is heavy. `--version`, `--help`, `list` and `init` run nothing.
+func classifyVitest(args []string, e Env) Class {
+	sub := ""     // the first word that is a subcommand
+	explicit := 0 // +1 run once (--run, --no-watch, --watch=false), -1 watch (--watch, -w); the last one wins
 	narrowed := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case a == "--version" || a == "-v" || a == "--help" || a == "-h":
 			return ClassNone
-		case a == "run":
-			run = true
-		case a == "related":
-			run, narrowed = true, true // `vitest related <files>` runs once, on what those files touch
+		case a == "--run" || a == "--no-watch" || a == "--watch=false":
+			explicit = 1
+		case a == "--watch" || a == "-w" || a == "--watch=true":
+			explicit = -1
 		case a == "--changed" || a == "--related" || strings.HasPrefix(a, "--changed=") ||
 			a == "-t" || a == "--testNamePattern" || a == "--project" || a == "--shard":
 			narrowed = true
@@ -170,18 +172,32 @@ func classifyVitest(args []string) Class {
 			} else if vitestValueFlags[name] {
 				i++
 			}
+		case sub == "" && !narrowed && vitestSubcommands[a]:
+			sub = a
 		default:
 			narrowed = true // a path or a filter
 		}
 	}
-	if !run {
-		return ClassNone // watch mode or a bare `vitest`: long-lived, not held
+	switch sub {
+	case "watch", "dev", "list", "init", "bench":
+		return ClassNone
+	case "related":
+		narrowed = true // `vitest related <files>`: the tests those files touch
+	}
+	if explicit < 0 {
+		return ClassNone
+	}
+	once := sub == "run" || explicit > 0
+	if !once && e.watchesByDefault() {
+		return ClassNone // a person at a terminal: the default is watch
 	}
 	if narrowed {
 		return ClassLight
 	}
 	return ClassHeavy
 }
+
+var vitestSubcommands = map[string]bool{"run": true, "watch": true, "dev": true, "related": true, "list": true, "init": true, "bench": true}
 
 func classifyTsc(args []string) Class {
 	build, project, files := false, false, false
@@ -208,7 +224,7 @@ func classifyTsc(args []string) Class {
 
 // classifyRunner reads `pnpm`, `npx`, `yarn`, `npm`: a script by a whole-project name is heavy, a recursive run is
 // heavy, and a tool run through them is classified as that tool.
-func classifyRunner(runner string, args []string) Class {
+func classifyRunner(runner string, args []string, e Env) Class {
 	recursive := false
 	i := 0
 	// options before the subcommand
@@ -240,7 +256,7 @@ func classifyRunner(runner string, args []string) Class {
 		if len(rest) == 0 {
 			return ClassNone
 		}
-		return withRecursive(Classify(rest), recursive)
+		return withRecursive(Classify(rest, e), recursive)
 	case "run", "run-script":
 		if len(rest) == 0 {
 			return ClassNone
@@ -248,13 +264,13 @@ func classifyRunner(runner string, args []string) Class {
 		return scriptClass(rest[0], recursive)
 	}
 	if runner == "npx" || runner == "pnpx" || runner == "bunx" {
-		return withRecursive(Classify(args[i:]), recursive)
+		return withRecursive(Classify(args[i:], e), recursive)
 	}
 	if heavyScripts[word] {
 		return ClassHeavy
 	}
 	// `pnpm vitest …`, `pnpm tsc -b`: the word is a tool in node_modules/.bin
-	if c := Classify(args[i:]); c != ClassNone {
+	if c := Classify(args[i:], e); c != ClassNone {
 		return withRecursive(c, recursive)
 	}
 	if recursive {

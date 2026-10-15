@@ -59,8 +59,9 @@ func TestClassify_Table(t *testing.T) {
 		{"vitest related src/a.ts", ClassLight},
 		{"vitest run --changed", ClassLight},
 		{"vitest run --project spa", ClassLight},
-		{"vitest", ClassNone},
+		{"vitest", ClassHeavy}, // no terminal, no agent: it runs once
 		{"vitest watch", ClassNone},
+		{"vitest dev", ClassNone},
 		{"vitest --version", ClassNone},
 		{"npx vitest run", ClassHeavy},
 		{"npx vitest run src/foo.test.ts", ClassLight},
@@ -115,7 +116,7 @@ func TestClassify_Table(t *testing.T) {
 		{"git status", ClassNone},
 		{"", ClassNone},
 	} {
-		assert.Equal(t, c.want, Classify(words(c.cmd)), c.cmd)
+		assert.Equal(t, c.want, Classify(words(c.cmd), Env{}), c.cmd)
 	}
 }
 
@@ -124,4 +125,73 @@ func TestClassify_ClassValid(t *testing.T) {
 	assert.True(t, ClassLight.Valid())
 	assert.False(t, ClassNone.Valid())
 	assert.False(t, Class("").Valid())
+}
+
+// Vitest (std-env 4, defaults.*.js): with no subcommand and no flag it watches when stdin is a terminal, outside CI, and
+// not for an agent; otherwise it runs once. Only a sure watch is none. (M: --run unknown; M: --no-watch / --watch=false
+// unknown; M: the terminal ignored; M: the agent ignored; M: CI ignored; M: --watch / -w ignored.)
+func TestClassify_VitestWatchOrRunOnce(t *testing.T) {
+	person := Env{StdinTTY: true}
+	agent := Env{StdinTTY: false, Agent: true}
+	agentTTY := Env{StdinTTY: true, Agent: true}
+	ci := Env{StdinTTY: true, CI: true}
+	script := Env{}
+	for _, c := range []struct {
+		name string
+		cmd  string
+		env  Env
+		want Class
+	}{
+		{"person at a terminal, bare: watch", "vitest", person, ClassNone},
+		{"person at a terminal, a file: watch", "vitest src/a.test.ts", person, ClassNone},
+		{"person at a terminal, via npx: watch", "npx vitest", person, ClassNone},
+		{"person at a terminal, --run: once, whole", "vitest --run", person, ClassHeavy},
+		{"person at a terminal, --run with a file: once, one file", "vitest --run src/a.test.ts", person, ClassLight},
+		{"person at a terminal, run: once", "vitest run", person, ClassHeavy},
+		{"person at a terminal, --no-watch", "npx vitest --no-watch", person, ClassHeavy},
+		{"person at a terminal, --watch=false", "vitest --watch=false", person, ClassHeavy},
+		{"person at a terminal, related: watch", "vitest related src/a.ts", person, ClassNone},
+		{"person at a terminal, related --run", "vitest related --run src/a.ts", person, ClassLight},
+		{"an agent, bare: it runs once", "npx vitest", agent, ClassHeavy},
+		{"an agent, pnpm vitest", "pnpm vitest", agent, ClassHeavy},
+		{"an agent with a terminal: still once", "vitest", agentTTY, ClassHeavy},
+		{"an agent, a file", "npx vitest src/a.test.ts", agent, ClassLight},
+		{"an agent, --run", "npx vitest --run", agent, ClassHeavy},
+		{"CI, bare: once", "vitest", ci, ClassHeavy},
+		{"a script (no terminal), bare: once", "vitest", script, ClassHeavy},
+		{"a script, a filter -t", "vitest -t foo", script, ClassLight},
+		{"an agent, --watch: a real watch", "vitest --watch", agent, ClassNone},
+		{"an agent, -w", "vitest -w", agent, ClassNone},
+		{"an agent, --watch=true", "vitest --watch=true", agent, ClassNone},
+		{"an agent, watch", "vitest watch", agent, ClassNone},
+		{"an agent, dev", "vitest dev", agent, ClassNone},
+		{"the last word wins: --run after --watch", "vitest --watch --run", agent, ClassHeavy},
+		{"the last word wins: --watch after --run", "vitest --run --watch", agent, ClassNone},
+		{"list runs nothing", "vitest list", agent, ClassNone},
+		{"--version", "vitest --version", agent, ClassNone},
+		{"through pnpm exec, with --prefix", "pnpm --prefix spa exec vitest", agent, ClassHeavy},
+		{"a script name vitest-like is not vitest", "pnpm run vitest-ui", agent, ClassNone},
+	} {
+		assert.Equal(t, c.want, Classify(words(c.cmd), c.env), c.name+": "+c.cmd)
+	}
+}
+
+// The agent and CI marks read from an environment are the ones std-env 4 reads.
+func TestEnvOf_AgentAndCI(t *testing.T) {
+	assert.Equal(t, Env{StdinTTY: true}, EnvOf([]string{"HOME=/h", "PATH=/usr/bin"}, true))
+	for _, v := range []string{"AI_AGENT=x", "CLAUDECODE=1", "CLAUDE_CODE=1", "REPL_ID=abc", "GEMINI_CLI=1", "CODEX_SANDBOX=seatbelt",
+		"CODEX_THREAD_ID=t", "OPENCODE=1", "AUGMENT_AGENT=1", "GOOSE_PROVIDER=p", "CURSOR_AGENT=1",
+		"PATH=/Users/x/.pi/agent/bin:/usr/bin", "EDITOR=devin", "TERM_PROGRAM=kiro"} {
+		assert.True(t, EnvOf([]string{v}, false).Agent, v)
+	}
+	for _, v := range []string{"AI_AGENT=", "CLAUDECODE=", "TERM_PROGRAM=iTerm.app", "EDITOR=vim", "PATH=/usr/bin"} {
+		assert.False(t, EnvOf([]string{v}, false).Agent, v)
+	}
+	for _, v := range []string{"CI=true", "CI=1", "GITHUB_ACTIONS=true", "GITLAB_CI=true", "BUILDKITE=true", "JENKINS_URL=http://j"} {
+		assert.True(t, EnvOf([]string{v}, true).CI, v)
+	}
+	assert.False(t, EnvOf([]string{"CI="}, true).CI)
+	assert.True(t, EnvOf([]string{"X=1"}, true).StdinTTY)
+	assert.False(t, EnvOf([]string{"X=1"}, false).StdinTTY)
+	assert.True(t, EnvOf([]string{"BROKEN"}, true).StdinTTY, "a word without = is skipped, not an error")
 }
