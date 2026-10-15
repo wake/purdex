@@ -141,7 +141,7 @@ func (m *Module) tick() {
 func (m *Module) openForTick(checkLive bool) ([]team.Approval, bool) {
 	now := m.now()
 	gen := approvalWrites.Load()
-	if m.openRead && !checkLive && !m.unattendedRetry() && m.notAutoApprovedN.Load() == 0 && gen == m.openGen && now < m.openNext && now-m.openAt < sweepReadMax.Milliseconds() {
+	if m.openRead && !checkLive && !m.openSettle && !m.unattendedRetry() && m.notAutoApprovedN.Load() == 0 && gen == m.openGen && now < m.openNext && now-m.openAt < sweepReadMax.Milliseconds() {
 		return nil, false
 	}
 	open, err := m.store.ListOpen()
@@ -150,8 +150,11 @@ func (m *Module) openForTick(checkLive bool) ([]team.Approval, bool) {
 		m.logf("[team] sweep: %v", err)
 		return nil, false
 	}
+	// A write counts before it commits, so a read made just after the count may have seen the state from before it: when the
+	// count moved, one more read follows on the next tick (openSettle), by which time the write has committed.
+	m.openSettle = gen != m.openGen
 	m.openRead, m.openGen, m.openAt = true, gen, now
-	m.openAutoApprovable = slices.ContainsFunc(open, autoApprovableRow)
+	m.openAutoApprovable = slices.ContainsFunc(open, func(a team.Approval) bool { return autoApprovableRow(a) || team.UnattendedRefusable(a.Kind) })
 	// the next moment a request falls due: only deadlines and leases still ahead count; one already past that stays open (a
 	// final card, an unanswered one) is looked at again by the periodic read, not on every tick
 	m.openNext = int64(math.MaxInt64)

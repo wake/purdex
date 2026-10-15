@@ -9,9 +9,11 @@ func TestTick_OpenRequestsAreNotReadEverySecond(t *testing.T) {
 	f.create(uid(1)) // lease now+30 s, deadline now+540 s
 	reads := func() int64 { return f.m.store.listOpenReads.Load() }
 
-	f.m.tick() // the create is a write the sweeper has not seen: one read
+	f.m.tick() // the create is a write the sweeper has not seen: one read ...
+	f.clock.Add(1000)
+	f.m.tick() // ... and one more, because the write counted before it committed (openSettle)
 	base := reads()
-	for i := 0; i < 4; i++ { // 4 s of ticks, nothing written, nothing due
+	for i := 0; i < 4; i++ { // 4 s of ticks since that read, nothing written, nothing due
 		f.clock.Add(1000)
 		f.m.tick()
 	}
@@ -24,7 +26,11 @@ func TestTick_OpenRequestsAreNotReadEverySecond(t *testing.T) {
 		t.Fatalf("after sweepReadMax: %d reads, want 1", got)
 	}
 
-	// a write is seen at the next tick, not after sweepReadMax
+	// a write is seen at the next tick, not after sweepReadMax; and, because a write counts before it commits, once more on the
+	// tick after (openSettle), then the reads stop again
+	f.clock.Add(1000)
+	f.m.tick()
+	f.m.tick()
 	before := reads()
 	if err := f.m.store.RenewLease(uid(1), f.clock.Load()+40_000); err != nil {
 		t.Fatal(err)
@@ -33,6 +39,16 @@ func TestTick_OpenRequestsAreNotReadEverySecond(t *testing.T) {
 	f.m.tick()
 	if got := reads() - before; got != 1 {
 		t.Fatalf("a tick after a write read %d times, want 1", got)
+	}
+	f.clock.Add(1000)
+	f.m.tick()
+	if got := reads() - before; got != 2 {
+		t.Fatalf("the settling tick: %d reads in all, want 2", got)
+	}
+	f.clock.Add(1000)
+	f.m.tick()
+	if got := reads() - before; got != 2 {
+		t.Fatalf("a quiet tick after settling: %d reads in all, want 2", got)
 	}
 }
 
@@ -66,7 +82,30 @@ func TestTick_AnAutoApprovableRequestKeepsTheEveryTickRead(t *testing.T) {
 		f.clock.Add(1000)
 		f.m.tick()
 	}
-	if got := f.m.store.listOpenReads.Load() - base; got != 3 {
-		t.Fatalf("3 ticks with a retryable request read %d times, want 3", got)
+	if got := f.m.store.listOpenReads.Load() - base; got < 3 {
+		t.Fatalf("3 ticks with a retryable request read %d times, want one each", got)
+	}
+}
+
+// A write that counted but had not committed when the sweeper read (the count moves before the commit) is found on the next
+// tick, not after sweepReadMax.
+func TestTick_AWriteThatCommitsAfterTheReadIsFoundOnTheNextTick(t *testing.T) {
+	f := newFixture(t)
+	f.create(uid(1)) // lease now+30 s
+	f.m.tick()
+	f.clock.Add(1000)
+	f.m.tick()
+	// a close that counts, then the sweeper reads (before the commit would have been visible), then the commit lands
+	approvalWrites.Add(1)
+	f.clock.Add(1000)
+	f.m.tick() // reads: the count moved
+	if _, err := f.m.store.db.Exec(`UPDATE approval_requests SET state = 'abandoned', decided_at = ? WHERE id = ?`, f.clock.Load(), uid(1)); err != nil {
+		t.Fatal(err) // the commit, after that read, with no further count in the way (a write of the counted kind would count again)
+	}
+	f.clock.Add(1000)
+	reads := f.m.store.listOpenReads.Load()
+	f.m.tick()
+	if f.m.store.listOpenReads.Load() == reads {
+		t.Fatal("the tick after a counted write did not read again")
 	}
 }

@@ -199,7 +199,8 @@ type Module struct {
 	// the sweeper's last read of the open requests (openForTick): whether there is one, the store's write count and the time (ms)
 	// it was taken at, and when the next one of them falls due. Only the sweeper goroutine (or a test) touches them.
 	openRead           bool
-	openAutoApprovable bool // the last read held a request the unattended switch may approve
+	openAutoApprovable bool // the last read held a request the unattended sweep works on (approve or refuse)
+	openSettle         bool // the store's write count moved since the read before: read once more on the next tick
 	openGen            uint64
 	openAt, openNext   int64
 	// bootAt is when Start ran (unix ms): no team ends before bootAt +
