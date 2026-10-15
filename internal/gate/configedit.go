@@ -211,6 +211,9 @@ func editTOML(text, header, leaf, lit string) string {
 }
 
 func writeAtomic(path string, data []byte) error {
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		path = real // a config.toml that is a link keeps being a link: the file it points to is replaced
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}

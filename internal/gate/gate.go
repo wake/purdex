@@ -286,6 +286,7 @@ func (g *Gate) run(ctx context.Context, o Options, d *Decision) (int, error) {
 	pool := cfg.Dir
 	cfg = g.Config()
 	cfg.Dir = pool
+	d.Profile = cfg.Profile
 	argv, note := cfg.Cache.Apply(o.Argv, cfg.foreground(o))
 	if note != "" {
 		g.say("%s", note)
@@ -409,12 +410,19 @@ func (g *Gate) Status() Status {
 	}
 }
 
+// statusLookupBudget is how long `pdx gate status` spends in total on asking who holds the locks.
+var statusLookupBudget = 3 * time.Second
+
 // withLocked adds, to each held slot, the processes that have its lock file open.
 func (g *Gate) withLocked(p *Pool, held []Holder) []Holder {
 	if g.Holders == nil {
 		return held
 	}
+	deadline := g.Now().Add(statusLookupBudget)
 	for i := range held {
+		if g.Now().After(deadline) {
+			break // a slow lsof must not hold status for minutes: the rest are shown without their lock holders
+		}
 		held[i].Locked = g.Holders(p.slotPath(held[i].Slot))
 	}
 	return held

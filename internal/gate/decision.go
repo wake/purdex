@@ -90,6 +90,11 @@ func (g *Gate) record(dir string, d *Decision) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return
 	}
+	unlock, err := lockFile(filepath.Join(dir, decisionsFile+".lock"))
+	if err != nil {
+		return
+	}
+	defer unlock() // size check, rotation and append are one step: two gates cannot rotate over each other
 	path := filepath.Join(dir, decisionsFile)
 	if st, err := os.Stat(path); err == nil && st.Size() > decisionsMaxSize {
 		_ = os.Rename(path, path+".1")
