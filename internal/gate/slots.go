@@ -169,8 +169,20 @@ func (t *Ticket) Drop() {
 	t.f = nil
 }
 
-// Enqueue takes a ticket. Its name sorts by arrival time, so the order of two tickets is the order of their names.
-func (p *Pool) Enqueue() (*Ticket, error) {
+// WaiterInfo is what a ticket says about the command that waits (JSON in the ticket file, written before the ticket is
+// visible): `pdx gate status` lists it. Argv is already cut and scrubbed as in a holder record.
+type WaiterInfo struct {
+	PID     int      `json:"pid"` // the gate
+	Argv    []string `json:"argv"`
+	Cwd     string   `json:"cwd"`
+	Session string   `json:"session,omitempty"`
+}
+
+// Enqueue takes a ticket that says nothing about its waiter.
+func (p *Pool) Enqueue() (*Ticket, error) { return p.EnqueueFor(WaiterInfo{}) }
+
+// EnqueueFor takes a ticket. Its name sorts by arrival time, so the order of two tickets is the order of their names.
+func (p *Pool) EnqueueFor(info WaiterInfo) (*Ticket, error) {
 	if err := os.MkdirAll(p.queueDir(), 0o755); err != nil {
 		return nil, dirError(err)
 	}
@@ -210,6 +222,13 @@ func (p *Pool) Enqueue() (*Ticket, error) {
 			lerr = errors.New("the new ticket is locked by somebody else")
 		}
 		return fail(lerr)
+	}
+	if info.PID != 0 || len(info.Argv) > 0 {
+		// Written before the rename, so a ticket that can be seen already says who it is. A write that fails leaves a ticket
+		// that says nothing: the queue works without it, only the listing is poorer.
+		if b, err := json.Marshal(info); err == nil {
+			_, _ = f.Write(b)
+		}
 	}
 	path := filepath.Join(p.queueDir(), name)
 	if err := os.Rename(tmp, path); err != nil {
@@ -488,6 +507,64 @@ func (p *Pool) Suspect() []Holder {
 			h.Class, h.Slot, h.Token = p.Class, k, ""
 			out = append(out, h)
 		}
+	}
+	return out
+}
+
+// Waiter is one live ticket of a pool as `pdx gate status` lists it.
+type Waiter struct {
+	Class   Class     `json:"class"`
+	Place   int       `json:"place"` // 1 = next in line among the waiters
+	PID     int       `json:"pid"`   // the waiting gate
+	Since   time.Time `json:"since"` // when it joined the queue
+	Argv    []string  `json:"argv,omitempty"`
+	Cwd     string    `json:"cwd,omitempty"`
+	Session string    `json:"session,omitempty"`
+}
+
+// Waiters lists the live tickets in arrival order; it removes nothing (a ticket whose gate is gone is just not listed).
+func (p *Pool) Waiters() []Waiter {
+	ents, err := os.ReadDir(p.queueDir())
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, e := range ents {
+		if e.IsDir() || strings.Contains(e.Name(), ".") {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	var out []Waiter
+	for _, n := range names {
+		path := filepath.Join(p.queueDir(), n)
+		f, err := os.OpenFile(path, os.O_RDWR, 0)
+		if err != nil {
+			continue
+		}
+		if st, _ := flockNB(f); st == lockGot {
+			_ = f.Close() // nobody holds it: its gate is gone
+			continue
+		}
+		b, _ := os.ReadFile(path)
+		_ = f.Close()
+		w := Waiter{Class: p.Class, Place: len(out) + 1}
+		parts := strings.Split(n, "-") // <unix-ns>-<pid>-<n>
+		if len(parts) == 3 {
+			if ns, err := strconv.ParseInt(parts[0], 10, 64); err == nil {
+				w.Since = time.Unix(0, ns)
+			}
+			w.PID, _ = strconv.Atoi(parts[1])
+		}
+		var info WaiterInfo
+		if json.Unmarshal(b, &info) == nil {
+			if info.PID > 0 {
+				w.PID = info.PID
+			}
+			w.Argv, w.Cwd, w.Session = info.Argv, info.Cwd, info.Session
+		}
+		out = append(out, w)
 	}
 	return out
 }

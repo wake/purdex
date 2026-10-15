@@ -36,7 +36,7 @@ const gateUsage = `usage: pdx gate [--class heavy|light] [--auto] [--tool <name>
            for a hook that decides whether to run a call in the background). Prints the reason and a line for an agent to read
   set      write one setting into [gate] of config.toml (or into [gate.profiles.<name>] with --profile); the gate reads it
            again at the next command and at the next look of every waiting one. Values: 2, true, "text", auto
-  profile  use: make a profile the active one (its settings win over [gate]); list: the profiles the file defines
+  profile  use: make a profile the active one (its settings win over [gate]; release is built in: normal priority, go test keeps -count=1); list: the profiles; flags may stand before or after the name
 `
 
 func runGate(args []string) {
@@ -222,7 +222,7 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	fmt.Fprintf(stdout, "閘門 %s（%s）\n", map[bool]string{true: "啟用", false: "停用"}[cfg.Enabled], g.DirOf())
-	printPool := func(name string, size int, held []gate.Holder, waiting int) {
+	printPool := func(name string, size int, held []gate.Holder, waiting int, queue []gate.Waiter) {
 		fmt.Fprintf(stdout, "%s %d/%d 使用中，%d 個在排隊\n", name, len(held), size, waiting)
 		for _, h := range held {
 			age := ""
@@ -242,9 +242,16 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 				fmt.Fprintf(stdout, "      拿著鎖的行程：%s\n", strings.Join(parts, "、"))
 			}
 		}
+		for _, w := range queue {
+			waited := ""
+			if !w.Since.IsZero() {
+				waited = "等 " + time.Since(w.Since).Round(time.Second).String()
+			}
+			fmt.Fprintf(stdout, "  排隊 #%d  pid %d  %s  %s  %s\n", w.Place, w.PID, waited, strings.Join(w.Argv, " "), w.Cwd)
+		}
 	}
-	printPool("重", cfg.Slots.Heavy, st.Heavy, st.WaitHeavy)
-	printPool("輕", cfg.Slots.Light, st.Light, st.WaitLight)
+	printPool("重", cfg.Slots.Heavy, st.Heavy, st.WaitHeavy, st.QueueHeavy)
+	printPool("輕", cfg.Slots.Light, st.Light, st.WaitLight, st.QueueLight)
 	for _, h := range st.Suspect {
 		fmt.Fprintf(stdout, "注意：%s-%d 的紀錄說 pid %d 還在，但鎖是空的（以鎖為準，視為空閒）\n", h.Class, h.Slot, h.PID)
 	}
@@ -258,16 +265,41 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// parseMixed parses fs over args wherever the flags stand: Go's flag package stops at the first word that is not a flag,
+// so `profile use night --config X` would otherwise be a usage error. It returns the words that are not flags, in order.
+func parseMixed(fs *flag.FlagSet, args []string) ([]string, error) {
+	// a `--` ends the flags for good: what follows it is words, whatever it looks like
+	var after []string
+	for i, a := range args {
+		if a == "--" {
+			args, after = args[:i], args[i+1:]
+			break
+		}
+	}
+	var words []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		if fs.NArg() == 0 {
+			return append(words, after...), nil
+		}
+		words = append(words, fs.Arg(0))
+		args = fs.Args()[1:]
+	}
+}
+
 func gateSet(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("gate set", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	profile := fs.String("profile", "", "write into this profile")
 	cfgPath := fs.String("config", "", "config.toml")
-	if err := fs.Parse(args); err != nil {
+	words, err := parseMixed(fs, args)
+	if err != nil {
 		return 2
 	}
-	key, value, ok := strings.Cut(strings.Join(fs.Args(), " "), "=")
-	if !ok || fs.NArg() == 0 {
+	key, value, ok := strings.Cut(strings.Join(words, " "), "=")
+	if !ok || len(words) == 0 {
 		fmt.Fprint(stderr, "usage: pdx gate set [--profile <name>] <module>.<key>=<value>\n")
 		return 2
 	}
@@ -297,7 +329,8 @@ func gateProfile(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	sub := args[0]
-	if err := fs.Parse(args[1:]); err != nil {
+	words, err := parseMixed(fs, args[1:])
+	if err != nil {
 		return 2
 	}
 	path := *cfgPath
@@ -305,24 +338,29 @@ func gateProfile(args []string, stdout, stderr io.Writer) int {
 		path = gate.DefaultConfigPath()
 	}
 	switch {
-	case sub == "use" && fs.NArg() == 1:
-		known, err := gate.UseProfile(path, fs.Arg(0))
+	case sub == "use" && len(words) == 1:
+		known, err := gate.UseProfile(path, words[0])
 		if err != nil {
 			fmt.Fprintf(stderr, "pdx gate profile: %v\n", err)
 			return 1
 		}
-		fmt.Fprintf(stdout, "目前的 profile：%s\n", fs.Arg(0))
-		if !known {
-			fmt.Fprintf(stdout, "（設定檔裡還沒有 [gate.profiles.%s]，所以目前沒有任何設定被改變；用 pdx gate set --profile %s <module>.<key>=<value> 加入）\n", fs.Arg(0), fs.Arg(0))
+		fmt.Fprintf(stdout, "目前的 profile：%s\n", words[0])
+		if words[0] == gate.ReleaseProfile {
+			fmt.Fprintln(stdout, "（release 是內建的：指令照原本的優先權執行、go test 的 -count=1 保留，不需要在設定檔裡寫 [gate.profiles.release]；要再改別的設定，用 pdx gate set --profile release <module>.<key>=<value>）")
+		} else if !known {
+			fmt.Fprintf(stdout, "（設定檔裡還沒有 [gate.profiles.%s]，所以目前沒有任何設定被改變；用 pdx gate set --profile %s <module>.<key>=<value> 加入）\n", words[0], words[0])
 		}
 		return 0
-	case sub == "list" && fs.NArg() == 0:
+	case sub == "list" && len(words) == 0:
 		cfg, err := gate.Load(path)
 		if err != nil {
 			fmt.Fprintf(stderr, "pdx gate profile: %v\n", err)
 			return 1
 		}
 		names := cfg.Profiles
+		if !slices.Contains(names, gate.ReleaseProfile) {
+			names = append(names, gate.ReleaseProfile) // built in
+		}
 		if !slices.Contains(names, "default") {
 			names = append([]string{"default"}, names...)
 		}

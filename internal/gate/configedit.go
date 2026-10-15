@@ -111,7 +111,7 @@ func UseProfile(path, name string) (known bool, err error) {
 			return true, nil
 		}
 	}
-	return name == "default", nil
+	return name == "default" || name == ReleaseProfile, nil
 }
 
 // configFor builds the config of a file's table as if profile (when not empty) were the active one.
