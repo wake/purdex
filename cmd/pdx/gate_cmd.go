@@ -23,6 +23,7 @@ import (
 
 const gateUsage = `usage: pdx gate [--class heavy|light] [--auto] [--tool <name>] [--fg] [--real <binary>] [--config <path>] -- <command…>
        pdx gate status [--json] [--config <path>]
+       pdx gate would-wait [--class heavy|light] [--json] [--config <path>]
        pdx gate set [--profile <name>] [--config <path>] <module>.<key>=<value>
        pdx gate profile use <name> | list [--config <path>]
   --class  the pool to take a slot from (default heavy); --auto classifies the command by its words instead
@@ -30,6 +31,8 @@ const gateUsage = `usage: pdx gate [--class heavy|light] [--auto] [--tool <name>
   --real   the binary to run in place of the command's first word (a shim passes the real one)
   --tool   a shim's call: the command is <name> followed by the words after --; the real binary is looked up on PATH
            without the shim directory, at this run; a command that is not heavy or light is run at once, unqueued
+  would-wait  would a command of that class wait for a slot right now? (fast: no daemon, no process started, takes nothing;
+           for a hook that decides whether to run a call in the background). Prints the reason and a line for an agent to read
   set      write one setting into [gate] of config.toml (or into [gate.profiles.<name>] with --profile); the gate reads it
            again at the next command and at the next look of every waiting one. Values: 2, true, "text", auto
   profile  use: make a profile the active one (its settings win over [gate]); list: the profiles the file defines
@@ -45,6 +48,8 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 		switch args[0] {
 		case "status":
 			return gateStatus(args[1:], stdout, stderr)
+		case "would-wait":
+			return gateWouldWait(args[1:], stdout, stderr)
 		case "set":
 			return gateSet(args[1:], stdout, stderr)
 		case "profile":
@@ -331,4 +336,34 @@ func orDash(s string) string {
 		return "—"
 	}
 	return s
+}
+
+// gateWouldWait answers whether a command of a class would wait now, without taking a slot. It exits 0 either way (the
+// answer is in the output); 2 is a usage error.
+func gateWouldWait(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("gate would-wait", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	class := fs.String("class", "heavy", "heavy or light")
+	asJSON := fs.Bool("json", false, "print JSON")
+	cfgPath := fs.String("config", "", "config.toml")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() > 0 || (*class != "heavy" && *class != "light") {
+		fmt.Fprint(stderr, "usage: pdx gate would-wait [--class heavy|light] [--json] [--config <path>]\n")
+		return 2
+	}
+	cfg := loadGateConfig(*cfgPath, stderr)
+	w := gate.New(cfg).WouldWait(gate.Class(*class))
+	if *asJSON {
+		b, _ := json.Marshal(w)
+		fmt.Fprintln(stdout, string(b))
+		return 0
+	}
+	if !w.Wait {
+		fmt.Fprintln(stdout, "no")
+		return 0
+	}
+	fmt.Fprintf(stdout, "yes (%s): %s\n", w.Reason, w.Note)
+	return 0
 }
