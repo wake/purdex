@@ -1,7 +1,7 @@
 # Host load control — plan
 
 Spec: `docs/specs/2026-10-15-host-load-control-spec.md` (user decisions D1–D6 final).
-Coordinator: purdex-1f. Members: lease member `_51epu8` (G0, G1, G2, L1–L3), A-line member `_bgz9kz` (G3).
+Coordinator: purdex-1f. Members: lease member `_51epu8` (G0, G1, L1–L3), A-line member `_bgz9kz` (G3, G2 — moved 10-15 so G2 runs beside G1).
 Test tiers (CLAUDE.md 測試分層) apply to every task: affected packages only, `-race` only where concurrency
 changed, `make lint`; the lead runs full suites at release. Every PR: codex R1 + R2 (attack → critic).
 
@@ -13,6 +13,9 @@ with and without `taskpolicy -b`; 5 s samples of load1, `kern.memorystatus_vm_pr
 `kern.memorystatus_level`, pageouts/swapouts. Second batch (D7): `go test ./...` with `-p 8` + `nice 10` vs `-p 3` +
 `taskpolicy -b`; vitest full with `--maxWorkers=8` + `nice` vs `--maxWorkers=3`. Output: defaults for
 `max_page_rate`, `reserve_cores`, `mem_per_worker_mb` and the priority mode per class (spec Q2, Q3).
+
+**Done 10-15** (results and the chosen defaults: spec §5.1). The two `go test ./...` runs were repeated on a quiet
+host after the first pair overlapped other sessions' work; the vitest pair is kept as lightly disturbed.
 
 ## G1 — `pdx gate` core (two PRs: G1a execution core + module schema, G1b tuning surface)
 
@@ -133,4 +136,4 @@ message other leads).
 
 ## Order
 
-G0 → G1 → G2 → release (G1, G2, G3a) → acceptance → other lines resume → L1 → L2 (deploy) → L3 (G3b/G3c as they finish). Each L phase is deployed before the next starts.
+G0 → G1 → G2 → release (G1, G2, G3a, G3b, G3c — G3b/G3c finished early and ride the first release) → acceptance → other lines resume → L1 → L2 (deploy) → L3. Each L phase is deployed before the next starts.
