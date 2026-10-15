@@ -214,7 +214,10 @@ func (g *Gate) nested(cfg Config, env []string, want Class) bool {
 
 // releaseProfile is the profile of a release run: the command runs as it was typed, at normal priority, with go's test
 // cache switched off if it says so (spec §5, cache module).
-const releaseProfile = "release"
+const releaseProfile = ReleaseProfile
+
+// ReleaseProfile is the one profile the gate knows without a table in the config.
+const ReleaseProfile = "release"
 
 // foreground says the command is exempt from the priority and cache modules: --fg, or the release profile.
 func (c Config) foreground(o Options) bool { return o.Foreground || c.Profile == releaseProfile }
@@ -366,11 +369,16 @@ func (g *Gate) signals() (<-chan os.Signal, func()) {
 }
 
 func (g *Gate) holder(o Options, token string) Holder {
-	cwd := o.Dir
-	if cwd == "" {
-		cwd, _ = os.Getwd()
+	return Holder{PID: g.PID(), Argv: truncateArgv(o.Argv), Cwd: g.cwdOf(o), Started: g.Now(), Session: g.Session, Token: token}
+}
+
+// cwdOf is the directory the command runs in.
+func (g *Gate) cwdOf(o Options) string {
+	if o.Dir != "" {
+		return o.Dir
 	}
-	return Holder{PID: g.PID(), Argv: truncateArgv(o.Argv), Cwd: cwd, Started: g.Now(), Session: g.Session, Token: token}
+	cwd, _ := os.Getwd()
+	return cwd
 }
 
 // truncateArgv keeps the record short: at most 12 words of 120 bytes, the secrets in them replaced before the cut (redact.Argv).
@@ -382,7 +390,11 @@ type Status struct {
 	Heavy, Light []Holder
 	WaitHeavy    int
 	WaitLight    int
-	Suspect      []Holder
+	// QueueHeavy and QueueLight list the commands that wait, first in line first (their number is WaitHeavy / WaitLight
+	// when nothing changed between the two looks).
+	QueueHeavy []Waiter
+	QueueLight []Waiter
+	Suspect    []Holder
 	// Profile is the active profile; Settings is every setting in force, with where it came from.
 	Profile  string
 	Settings []Setting
@@ -408,7 +420,7 @@ func (g *Gate) StatusWith(mode HoldersMode) Status {
 	heavy, light := h.Held(), l.Held()
 	g.fillLocked(h, heavy, l, light, mode)
 	return Status{
-		Heavy: heavy, Light: light, WaitHeavy: h.Waiting(), WaitLight: l.Waiting(),
+		Heavy: heavy, Light: light, WaitHeavy: h.Waiting(), WaitLight: l.Waiting(), QueueHeavy: h.Waiters(), QueueLight: l.Waiters(),
 		Suspect: append(h.Suspect(), l.Suspect()...), Profile: cfg.Profile, Settings: cfg.Effective(),
 	}
 }
