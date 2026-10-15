@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -62,7 +64,7 @@ func TestLeaseRunAlias_RunsThroughTheGate(t *testing.T) {
 	var out, errb bytes.Buffer
 	code := runLeaseCmd(context.Background(), []string{"run", "--kind", "test-pkg", "--ask", "--client-id", "7b3c6a04-93a7-4d5c-8f0e-2f5a6a0c9b11", "--command", "shown", "--", "go", "test", "./a"}, func(string) string { return "" }, &out, &errb)
 	assert.Equal(t, 5, code)
-	assert.Equal(t, [][]string{{"--class", "light", "--", "go", "test", "./a"}}, *calls)
+	assert.Equal(t, [][]string{{"--class", "light", "--class-source", "classifier", "--", "go", "test", "./a"}}, *calls)
 	assert.Equal(t, 1, strings.Count(errb.String(), "別名"), "one deprecation line: %q", errb.String())
 	assert.Contains(t, errb.String(), "--class light")
 }
@@ -71,7 +73,7 @@ func TestLeaseRunAlias_KeepsTheConfigPathAndMapsHeavy(t *testing.T) {
 	calls := aliasCapture(t, 0)
 	var out, errb bytes.Buffer
 	assert.Equal(t, 0, runLeaseRunAlias([]string{"--config", "/c.toml", "--kind", "test-full", "--wait", "5m", "--", "pnpm", "test"}, func(string) string { return "" }, &out, &errb))
-	assert.Equal(t, [][]string{{"--class", "heavy", "--config", "/c.toml", "--", "pnpm", "test"}}, *calls)
+	assert.Equal(t, [][]string{{"--class", "heavy", "--class-source", "classifier", "--config", "/c.toml", "--", "pnpm", "test"}}, *calls)
 }
 
 func TestLeaseRunAlias_UsageErrorsNeverReachTheGate(t *testing.T) {
@@ -122,4 +124,75 @@ func TestLeaseRunAlias_BuildRunsAtOnceWithoutASlot(t *testing.T) {
 	*calls = nil
 	runLeaseRunAlias([]string{"--kind", "test-full", "--", "go", "test", "./..."}, func(string) string { return "" }, &out, &errb)
 	assert.Len(t, *calls, 1)
+}
+
+// The gate's classifier decides when it knows the command; the kind only when it does not (#2964): a vitest run of named files
+// is light whatever the kind says, a script nobody told the gate about keeps the kind's pool.
+func TestLeaseRunClass_ClassifierFirstKindOtherwise(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "none.toml") // no file: the gate's defaults
+	files := []string{"pnpm", "exec", "vitest", "run", "test/x.test.ts"}
+	whole := []string{"pnpm", "exec", "vitest", "run"}
+	pkg := []string{"go", "test", "./internal/gate/"}
+	all := []string{"go", "test", "./..."}
+	script := []string{"./bin/test-baseline.sh"}
+	for _, c := range []struct {
+		kind    string
+		command []string
+		class   gate.Class
+		source  string
+	}{
+		{"test-full", files, gate.ClassLight, "classifier"}, // the 11-minute queue of #2964
+		{"vitest", files, gate.ClassLight, "classifier"},
+		{"test-pkg", files, gate.ClassLight, "classifier"},
+		{"test-full", whole, gate.ClassHeavy, "classifier"},
+		{"test-pkg", whole, gate.ClassHeavy, "classifier"}, // a light kind does not make a whole run light
+		{"test-full", pkg, gate.ClassLight, "classifier"},
+		{"vitest", all, gate.ClassHeavy, "classifier"},
+		{"test-full", []string{"pnpm", "check"}, gate.ClassHeavy, "classifier"},
+		{"test-full", script, gate.ClassHeavy, "kind"}, // not known to the rules: the kind decides
+		{"vitest", script, gate.ClassHeavy, "kind"},    // a kind nobody mapped is heavy
+		{"test-pkg", script, gate.ClassLight, "kind"},
+		{"lint-full", script, gate.ClassLight, "kind"},
+		{"build", files, gate.ClassNone, "kind"}, // packaging is never held back, whatever the rules say
+		{"build", all, gate.ClassNone, "kind"},
+	} {
+		class, source := leaseRunClass(c.kind, 0, c.command, cfg)
+		assert.Equal(t, c.class, class, "%s %v", c.kind, c.command)
+		assert.Equal(t, c.source, source, "%s %v", c.kind, c.command)
+	}
+	// --weight asks the same: the rules first, the weight for what they do not know
+	class, source := leaseRunClass("", 35, files, cfg)
+	assert.Equal(t, gate.ClassLight, class)
+	assert.Equal(t, "classifier", source)
+	class, source = leaseRunClass("", 5, script, cfg)
+	assert.Equal(t, gate.ClassLight, class)
+	assert.Equal(t, "kind", source)
+}
+
+// A gate that is off holds nothing, so its rules decide nothing: the kind maps as it always did.
+func TestLeaseRunClass_AGateThatIsOffLeavesItToTheKind(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+	assert.NoError(t, os.WriteFile(cfg, []byte("[gate]\nenabled = false\n"), 0o644))
+	class, source := leaseRunClass("test-full", 0, []string{"pnpm", "exec", "vitest", "run", "a.test.ts"}, cfg)
+	assert.Equal(t, gate.ClassHeavy, class)
+	assert.Equal(t, "kind", source)
+}
+
+// What the alias hands the gate carries where the class came from, and the gate refuses a source it does not know.
+func TestLeaseRunAlias_PassesTheClassSource(t *testing.T) {
+	calls := aliasCapture(t, 0)
+	cfg := filepath.Join(t.TempDir(), "none.toml")
+	var out, errb bytes.Buffer
+	for _, args := range [][]string{
+		{"--config", cfg, "--kind", "test-full", "--", "pnpm", "exec", "vitest", "run", "a.test.ts"},
+		{"--config", cfg, "--kind", "test-full", "--", "./bin/test-baseline.sh"},
+	} {
+		assert.Equal(t, 0, runLeaseRunAlias(args, func(string) string { return "" }, &out, &errb))
+	}
+	assert.Equal(t, [][]string{
+		{"--class", "light", "--class-source", "classifier", "--config", cfg, "--", "pnpm", "exec", "vitest", "run", "a.test.ts"},
+		{"--class", "heavy", "--class-source", "kind", "--config", cfg, "--", "./bin/test-baseline.sh"},
+	}, *calls)
+	var o, e bytes.Buffer
+	assert.Equal(t, 2, gateMain([]string{"--class", "heavy", "--class-source", "guess", "--", "true"}, &o, &e))
 }
