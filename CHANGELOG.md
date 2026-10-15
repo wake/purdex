@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.0.0-alpha.738] - 2026-10-15
+
+> daemon 與 SPA 有改，mod 與 Electron 沒有改。這一版新增重指令閘門 `pdx gate`，兩台都要重跑 `pdx setup` 才會裝上 shim（`~/.config/pdx/shims/`）與 `~/.zshenv` 區塊；裝上之後，所有 zsh（含正在跑的 session 的下一個指令）呼叫 `go`、`pnpm`、`npx`、`vitest`、`tsc`、`composer` 都會先經過閘門。資料庫 schema 沒有變，退回 737 不需要還原資料庫；要撤掉閘門可跑 `pdx setup --uninstall-gate`（只移除那個區塊與 shim）。舊的資源租約維持「只記錄」模式（advise），在之後的 L1–L3 才拆掉。
+
+### Added：主機負載控制第一階段（spec docs/specs/2026-10-15-host-load-control-spec.md）
+
+- **`pdx gate`（G1a，PR #2909／#2910／#2911／#2912）**：重指令先拿名額才執行。名額是 `~/.config/pdx/gate/` 底下的檔案鎖，不依賴 daemon；重指令一次一個（`slots.heavy` 1）、輕指令三個（`slots.light` 3），照到達順序排隊，等待時每分鐘印出誰佔著、佔多久、前面幾個。記憶體壓力到第 2 級或換頁率超過每秒 50 頁時不放行新的工作，正在跑的永遠不會被中斷。執行中把並行數設為「核心數 − 2」（mlab 為 8，依剩餘記憶體下修；vitest 上限 3），優先序用 `nice 10`。指令結束時收掉它的行程群組與行程樹，並把名額釋放給所有人；逃過清理、仍拿著鎖的行程（例如測試留下的 tmux server）會被點名，不再佔住名額。腳本裡的巢狀呼叫只佔一個名額；在 codex 的唯讀 sandbox 裡會直接執行並印一行說明。
+- **調整與檢視（G1b，PR #2919）**：`pdx gate set <模組>.<參數>=<值>` 改設定（保留註解、只改那一個值，下一個指令就生效）；`[gate.profiles.<名稱>]` 與 `pdx gate profile use|list`；每個工作一行決策紀錄（`decisions.jsonl`：等了多久、為什麼、套用的參數與來源、結束碼、耗時）；`pdx gate status` 列出每個設定的生效值與來源，以及每個名額目前拿著鎖的行程。
+- **攔截（G2，PR #2907／#2917）**：`pdx setup` 在 `~/.config/pdx/shims/` 寫入 `go`、`pnpm`、`npx`、`vitest`、`tsc`、`composer` 的 shim，並在 `~/.zshenv` 加一個區塊把它放在 PATH 最前面（已經在就不重複加、不輸出任何文字）；`pdx setup --uninstall-gate` 精確移除。shim 每次執行時才去找真正的執行檔，`nvm` 切版本也跟得上；pdx 不在時 shim 會直接執行真正的工具。分類：`go test` 多個套件或 `./...`、`go build ./...`、vitest 完整執行、`tsc -b`、`pnpm check`、`composer test`、不帶篩選的 `phpunit`／`pest` 是重指令；單一套件、指定檔案或篩選是輕指令；**打包一律不經過閘門**（`pnpm build`、`electron:build`、`vite build`、`electron-builder`、`go build -o`、單一目標的 `go build`、`composer build`、`pdx lease run --kind build`）。沒有子指令的 `vitest` 在 agent、腳本與 CI 裡是一次完整執行，只有人在互動終端機時才算 watch。`pdx lease run` 改成 `pdx gate` 的別名（`--kind`／`--weight` 對應到重或輕，`--ask`／`--queue`／`--wait` 不再有作用）。
+- **閘門的預設值依 G0 實測（PR #2908）**：`taskpolicy -b` 在每組乾淨對照都比較慢（10～46%），所以用 `nice`；`go test ./...` 用 8 個並行加 nice 是 382 秒、3 個並行加 taskpolicy 是 448 秒，記憶體壓力都正常；vitest 用 8 個 worker 只快 19%，卻讓記憶體壓力升到第 2 級並多出 101 個逾時失敗，所以上限維持 3。
+
+### Changed
+
+- **daemon 閒置耗用（G3，PR #2901／#2904／#2906）**：peer 清單的讀取共用一份每 2 秒更新的行程表，不再每筆各 fork 一次 `ps`；team 的檢查程序只在資料庫有提交、有申請到期、存活檢查那一拍或滿 5 秒時才讀開著的申請；對話畫面的即時連線在記錄檔沒變大、agent 沒收到新事件時，每拍只做一次大小比對，最多每 2 秒完整處理一次（agent 行程無事件結束時，狀態燈最慢 2 秒更新，原本約 0.5 秒）。
+- **peer 名稱與標題一次解析（#2892，PR #2895）**：一份來源清單只查一次名稱與標題。
+- **資源租約的負載上限（#2759，PR #2898）**：租約執行中、負載超過 `load_cap_pct` 時先不放行下一個請求。租約仍是只記錄模式，這項會在拆租約時一起移除。
+
+### Added（其他線）
+
+- **審核推播的同意／拒絕按鈕（P-1，PR #2883）**：審核推播直接帶「同意」「拒絕」兩個按鈕；人在電腦前時，推播延後 60 秒才送。
+- **工作簿日誌載入（J-2a，PR #2864／#2865／#2866）**：日誌的型別、解析、REST、置頂、檢視記憶，SPA 的日誌 store 與 `journal.changed` 事件分支，以及使用中 tab 的日誌單元常駐載入。
+- **fleet 葉套件（F-1a，PR #2885）**：`internal/fleet` 純函式套件，這一版沒有接線。
+- **負載守門員的底層管線（W1a，PR #2921）**：取樣器的 `ps` 多一欄指令名稱、`vm_stat` 保留換頁計數、`gate.ClassifyReason`、指令列遮蔽搬到 `internal/redact`。行為不變。
+
 ## [1.0.0-alpha.737] - 2026-10-15
 
 > 只有 daemon 改，mod、SPA、Electron 都沒有改，不需要重跑 `pdx setup`。資料庫 schema 沒有變（工作簿仍是 schema 4），退回 736 不需要還原資料庫。兩台主機的資源租約已在 736 部署後正式切到「租約」模式（lease）。
