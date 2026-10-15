@@ -20,6 +20,7 @@ import (
 
 	iagent "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/fleet"
 	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/hostmem"
 	"github.com/wake/purdex/internal/modevents"
@@ -285,6 +286,7 @@ func (m *Module) Dependencies() []string { return []string{"peers", "hostconfig"
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
 	c.Registry.Register(resources.HostReaderKey, resources.HostReader(m))
+	c.Registry.Register(fleet.LocalSourceKey, fleet.LocalSource(newLocalSource(m)))
 	if m.sampler == nil {
 		m.sampler = resources.NewSampler()
 		m.enableDiskGuard() // production wiring (a module with an injected sampler is a test's: its guard stays off)
