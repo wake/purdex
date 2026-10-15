@@ -399,6 +399,9 @@ func (m *Measure) reconcile(ctx context.Context, force bool) {
 		m.mu.Lock()
 		h := m.hosts[w.key]
 		h.zone.Reset()
+		if h.fast != nil {
+			h.fast.Zone = "unknown" // like rowSink.State: no zone shown until the new session reads
+		}
 		m.mu.Unlock()
 		cfg := m.d.Session
 		cfg.Home, cfg.Clock, cfg.Logf, cfg.Limit = m.d.Home, m.clock, m.d.Logf, m.limit
@@ -488,7 +491,7 @@ func localOS() string {
 	return ""
 }
 
-// readLocalLocked takes the newest reading of the own host from the LocalSource. now is the receive time.
+// readLocal takes the newest reading of the own host from the LocalSource (under its own lock). now is the receive time.
 func (m *Measure) readLocal(now time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

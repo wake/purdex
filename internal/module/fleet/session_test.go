@@ -179,7 +179,7 @@ cat "$D/frame1.txt"; exec sleep 600`)
 
 	eventually(t, "first reading", func() bool { return sk.readingCount() == 1 })
 	fc.Advance(4 * time.Second) // 1 s before the offline mark
-	lc.lateNext()               // the next reading of the clock is the reader stamping the second frame
+	lc.lateNext()               // (the skew set here is permanent: every later reading of the clock is 3 s late) the next reading of the clock is the reader stamping the second frame
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go"), nil, 0o644))
 	time.Sleep(300 * time.Millisecond) // the second frame arrived and was dropped
 	assert.Equal(t, 1, sk.readingCount(), "a stale frame reached the sink")

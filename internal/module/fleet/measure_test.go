@@ -412,6 +412,7 @@ func TestAPIShapes(t *testing.T) {
 
 // The own host reports its os the way a remote does ("Darwin" / "Linux"), from runtime.GOOS.
 func TestOwnHostFillsOS(t *testing.T) {
+	t.Cleanup(func() { localGOOS = runtime.GOOS })
 	for goos, want := range map[string]string{"darwin": "Darwin", "linux": "Linux", "windows": ""} {
 		localGOOS = goos
 		r := newMRig(t, silent)
@@ -422,7 +423,6 @@ func TestOwnHostFillsOS(t *testing.T) {
 		require.NotNil(t, h)
 		assert.Equal(t, want, h.OS, goos)
 	}
-	localGOOS = runtime.GOOS
 }
 
 // After Stop a primary that arrives late (the engine's drain) starts nothing: no session, no ssh left behind.
@@ -466,6 +466,7 @@ func TestZoneResetsWhenASessionIsRestarted(t *testing.T) {
 	r.setProbes(hostconfig.ProbeHost{ID: "ab12cd34", Name: "x", SSHAlias: "a19b"})
 	r.tick()
 	eventually(t, "restarted", func() bool { return startsOf(r.sshDir) == 2 })
+	assert.Equal(t, "unknown", r.host("ab12cd34").Fast.Zone, "the row kept the old zone until the next reading")
 	assert.Equal(t, "normal", r.feed("probe:ab12cd34", 1), "the old latch survived the restart")
 }
 
@@ -510,7 +511,7 @@ func TestReconcileStopsRemovedHostsInParallel(t *testing.T) {
 	// TERM is ignored (and inherited by sleep), so each session only ends when killGroup sends KILL after the grace.
 	r := newMRig(t, `trap '' TERM; echo ready >> "$D/ready"; sleep 600 & wait`)
 	r.fleet.PeerSSHAlias = ""
-	const grace = time.Second
+	const grace = 2 * time.Second // serial would take about 4 s, parallel about 2 s: the bound has a second of room
 	r.m.d.Session.TermGrace = grace
 	r.setProbes(hostconfig.ProbeHost{ID: "ab12cd34", Name: "x", SSHAlias: "a19"}, hostconfig.ProbeHost{ID: "ef56ab78", Name: "y", SSHAlias: "a20"})
 	r.start()
@@ -524,5 +525,5 @@ func TestReconcileStopsRemovedHostsInParallel(t *testing.T) {
 	r.tick()
 	took := time.Since(begin)
 	assert.GreaterOrEqual(t, took, grace, "the sessions only end after the grace")
-	assert.Less(t, took, 3*grace/2, "the second session was waited for after the first (serial stop)")
+	assert.Less(t, took, 3*time.Second, "the second session was waited for after the first (serial stop)")
 }
