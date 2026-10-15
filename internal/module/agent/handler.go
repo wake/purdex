@@ -784,9 +784,14 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// IdentityRecorded: a subscriber re-checks LiveBySessionID(S), which only
 	// sees S once the frame row holds it. If the identity write failed the
 	// event would be skipped there and never replayed, so do not publish it.
+	// A /clear's predecessor is recorded whether or not the identity write landed: it is a fact of the hook, not of the frame row.
+	prevSID := ""
+	if lifecycle == agentpkg.LifecycleSessionStart && frameMeta.Provenance != nil {
+		prevSID = m.notePredecessor(req, *frameMeta.Provenance, frameMeta.PrevSessionID, broadcastTs/int64(time.Millisecond))
+	}
 	if lifecycle == agentpkg.LifecycleSessionStart && frameMeta.Provenance != nil &&
 		frameMeta.Provenance.SessionID != "" && frameMeta.IdentityRecorded {
-		m.sessionStarts.publish(sessionStartEventFrom(req, *frameMeta.Provenance))
+		m.sessionStarts.publish(sessionStartEventFrom(req, *frameMeta.Provenance, prevSID))
 	}
 	// A root SessionStart is the launch panel's launch having worked: release the claim it was holding on this session.
 	if lifecycle == agentpkg.LifecycleSessionStart && frameMeta.Provenance != nil && req.TmuxSession != "" {

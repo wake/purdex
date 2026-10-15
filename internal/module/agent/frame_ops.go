@@ -92,6 +92,11 @@ type FrameTraceMeta struct {
 	// identity (see recordSessionIdentity). handleEvent publishes a
 	// SessionStart to subscribers only when it is true.
 	IdentityRecorded bool
+
+	// PrevSessionID is the session id the sender's frame held BEFORE the id this SessionStart carries replaced it
+	// ("" when the frame was new, or had not reported one). Set on the own-frame return of a SessionStart only;
+	// handleEvent turns it into a session_predecessors row when the start is a /clear.
+	PrevSessionID string
 }
 
 // recordSessionIdentity stores the sender's own agent session id and cwd on
@@ -1145,6 +1150,17 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 	// matters most: a pre-deploy session's frame only ever sees ordinary
 	// events, and they take UpdateHookPath, never Upsert.
 	identityRecorded := m.recordSessionIdentity(req, stored.FrameID)
+	// A /clear's predecessor is the id this frame's identity write displaced. It is captured in the write's own
+	// statement (prev_session_id), so it does not depend on which concurrent event of the new session won the race
+	// to write the new id; it counts only while the frame still holds the id this SessionStart carried.
+	prevSessionID := ""
+	if lifecycle == agentpkg.LifecycleSessionStart {
+		if cur, prev, found, terr := m.frames.SessionTransition(stored.FrameID); terr != nil {
+			log.Printf("[agent] session_transition_read_failed: frame=%s err=%v", stored.FrameID, terr)
+		} else if found && cur != "" && cur == m.payloadSessionID(req) && prev != cur {
+			prevSessionID = prev
+		}
+	}
 	projection, err := m.projectPane(req.TmuxPaneID)
 	// Phase 3 — three-state reason (plan §1.4):
 	//   parent_frame_found       → legacy lookup hit (line 220-228)
@@ -1192,6 +1208,7 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		MatchedAgentType: rebuiltAgentType,
 		Provenance:       prov,
 		IdentityRecorded: identityRecorded,
+		PrevSessionID:    prevSessionID,
 	}, err
 }
 
