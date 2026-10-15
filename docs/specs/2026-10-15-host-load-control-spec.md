@@ -38,6 +38,11 @@ The lease (`pdx lease`, v1/v2/amend A, P2e/P2f, load cap) did not hold the host,
 | D6 | Session count is not the problem; the spawned full-suite commands are (`feedback-load-root-is-test-commands`). |
 | D7 | **Finish each heavy command as fast as possible**: one full suite at a time, run near full width (parallelism ≈ cores − 2, bounded by free memory), lowered with `nice` rather than background QoS (`taskpolicy -b` measured 45 % slower on one package); then the next. Concurrency on a saturated CPU does not raise throughput, it slows every job and adds swapping. |
 | D8 | The seven items are **independent modules**, each with its own switch and parameters, tunable per situation and **at run time** (config re-read at every gate start and every waiting poll; `auto` values computed from the live host; profiles). |
+| D9 | **Packaging is never held back** (10-15): commands that build an artifact (the Purdex App build and the like, seconds to under a minute) pass through the gate; a whole-module compile check (`go build ./...`) stays heavy. |
+| D10 | The release tier does **not** accept Go's test cache: the release gate keeps `-count=1` (10-15). |
+| D11 | **Load watcher** (10-15): the daemon detects heavy commands outside the gate and high load, records them, and tells one registered watcher session by peer message (§12). One watcher for all hosts; a new registration replaces the old; with no watcher the events are only recorded, and a watcher reads them when it registers. Auto-start is a setting synced by Profile Sync; the watcher's model is selectable (Opus by default). Long-lived, low-usage background loops are not heavy commands and are not reported. |
+| D12 | When a heavy command would wait, the mod moves the agent's Bash call to the background with a note (L1), so a session does not sit in the foreground limit. Verified 10-15: a background task survives a relay and its completion notice reaches the new conversation. |
+| D13 | `pdx gate free <slot>`: lists the processes holding a slot and ends them after confirmation, only on a person's or the watcher's command; the gate itself never kills a running command (G2). |
 
 ## 2. Goals and non-goals
 
@@ -45,27 +50,33 @@ Goals
 - G1. No heavy command on mlab or air26 runs outside a slot, whoever starts it (agent Bash, subagent, script,
   `pnpm` script, codex sandbox, a member's `go test` inside a helper script).
 - G2. New heavy work is not admitted while the host is under memory pressure; work already running is never killed.
-- G3. A heavy job uses at most its share: capped parallelism and background QoS (E cores only), so the P cores
-  stay for the agents, the daemon and the person.
-- G4. A slot is held exactly as long as its process tree lives; no expiry, no leak, no orphan.
+- G3. A heavy job uses at most its share: capped parallelism and a lowered priority (`nice`, D7), so the agents, the
+  daemon and the person preempt it.
+- G4. A slot is held as long as its command runs; no expiry, no leak, no orphan. A process that escapes the clean-up
+  (a daemonized tmux server) does not keep the slot (§5 Slots).
+- G7. A heavy command that runs outside the gate, or a host under pressure, is noticed and reported (§12).
 - G5. The gate works with the daemon down, slow or restarting.
 - G6. Idle daemon CPU from ≈30 % to ≤ 10 % of one core; no `ps` fork per registry entry.
 
 Non-goals
 - CI offload (GitHub Actions for Purdex, Gitea Actions for Aigora): separate spec, after this.
-- Preemption (pausing or killing running jobs under pressure).
+- Preemption (pausing or killing running jobs under pressure). `pdx gate free` (D13) is a person's or the watcher's
+  explicit command, never automatic.
 - Windows/Linux hosts (mserv keeps running what it runs; Linux has cgroups, a later concern).
 
 ## 3. Heavy-command classes
 
 | Class | Commands (examples) | Slots | Notes |
 |---|---|---|---|
-| heavy | `go test` with more than one package or `./...`, `go build ./...`, `go vet ./...`; `vitest run` with no file argument; `tsc -b` / `tsc -p` of a whole project; `pnpm check`, `pnpm -r test` | `slots.heavy` (default 1, D7) | full suites |
-| light | `go test` of one package; `vitest run <files>` / `vitest related`; `go build ./cmd/x` | `slots.light` (default 3) | targeted runs must not wait behind a full suite |
-| none | everything else (`go version`, `go env`, `node -e`, `vitest --version`) | — | passes through untouched |
+| heavy | `go test` with more than one package or `./...`, `go build ./...` and other multi-package compile checks, `go vet ./...`; a vitest run with no file or filter; `tsc -b` / `tsc -p` of a whole project; `pnpm check`, `pnpm -r test`; `composer test`, `composer test:*`, `phpunit`/`pest` without a filter or file (incl. `--testsuite`) | `slots.heavy` (default 1, D7) | full suites |
+| light | `go test` of one package; `vitest run <files>` / `vitest related`; `phpunit --filter …` or with a test file | `slots.light` (default 3) | targeted runs must not wait behind a full suite |
+| none | packaging (D9): `pnpm build`, `pnpm electron:build`, `vite build`, `electron-vite build`, `electron-builder`, `go build -o …`, `go build ./cmd/x`, `composer build`, `pdx lease run --kind build`; vitest in watch mode; everything else (`go version`, `go env`, `node -e`, `vitest --version`, `composer install`) | — | passes through untouched |
 
 A light job that turns out to be broad (e.g. a pattern matching hundreds of files) is still light: the cap
-on its parallelism (§5) bounds the damage. Classification is a pure function with a table test.
+on its parallelism (§5) bounds the damage. Classification is a pure function with a table test:
+`Classify(argv, Env)`, where `Env` (stdin a terminal, an agent, CI) decides vitest without a subcommand: vitest 4.1
+watches only for a person at a terminal outside CI (`watch: !isCI && stdin.isTTY && !isAgent`), and runs once for an
+agent, a script or CI, so there it is a run.
 
 ## 4. Interception (DRAFT — pending the tool survey)
 
@@ -131,10 +142,14 @@ Design:
 
 - **Slots.** `~/.config/pdx/gate/<class>-<k>.lock`, k = 1…N, taken with `flock(LOCK_EX|LOCK_NB)` from Go
   (`syscall.Flock`; no external tool). **The lock fd is passed to the child** (`ExtraFiles`, not close-on-exec), so
-  the whole process tree holds the same open file description: the slot is released only when the last process of
-  the tree closes it. A gate killed with SIGKILL therefore does not free the slot while its children still run (no
-  expiry, no `max_hold`, no double booking). A process that closes all its fds on purpose (a daemonizing helper)
-  escapes; `pdx gate status` shows such a slot as "free, holder record points to a live pid" for the person to see.
+  the whole process tree holds the same open file description. **When the command ends** (normally, by a signal or a
+  timeout) the gate reaps its group and tree, names on stderr any process that still holds the lock (`lsof`; e.g.
+  "these processes escaped the clean-up and are still running: 67278 (tmux); the heavy slot is released"), then
+  removes the record and unlocks with `LOCK_UN` on its own fd, which releases the lock for every holder of that
+  description. Measured 10-15: a `tmux -L … new-session -d` started under the lock keeps fd 3, so without the unlock a
+  test that leaks its tmux server would hold the heavy slot for good. **A gate killed with SIGKILL** cannot unlock:
+  the slot stays held while any process of the tree lives (no expiry, no `max_hold`, no double booking); `pdx gate
+  status` shows "gate gone, tree alive" with the pids holding the lock, and `pdx gate free` (D13) ends them on request.
 - **Disk floor (heavy only).** Before taking a heavy slot the gate checks free space on the volume of the cwd and of
   `$TMPDIR` (`statfs`) against `admission.disk_min_gb` (default 10); below it the command is refused with the numbers.
   This replaces the lease's disk preflight from G1 on (the daemon's disk alert stays).
@@ -227,6 +242,17 @@ Remove:
   `pdx gate`** for one release cycle (16 lead scripts, Aigora `scripts/lib/check.ts`), then remove.
 - mod: `hooks/lease.js`, `registerLease`, `skills/pdx-lease/`, `lease.notice.v1` in `CAPS`; the embed guards
   that name them. Protocol: bump `VERSION` in `register.js` (coordinate with RT-4, which also bumps).
+- mod, what replaces it (`hooks/gate.js`, L1):
+  - the minimal rewrite for direct calls the shims cannot see: `node_modules/.bin/{vitest,tsc}` and
+    `vendor/bin/{phpunit,pest}` (and `./` forms) get the `pdx gate --auto --` prefix; a rewrite that would change the
+    call's permission verdict is not made (the call runs as is, and the watcher's detection covers it);
+  - **auto-background (D12)**: for a foreground Bash call that the gate would make wait (`pdx gate status --json`:
+    a heavy or light call with no free slot, or pressure above the admission limit), the hook rewrites the call to
+    `run_in_background: true` and adds a note to the result: who holds the slot, for how long, the place in the queue,
+    "it starts by itself and you will be told when it ends; do not run it again". A call that can start at once
+    stays in the foreground. Tests: busy → background with the note; free → unchanged; a subagent's call the same.
+- interim (until L1): csp-plugin's sessions run their integration tests through `composer test:integration`
+  (gated by the composer shim) rather than `vendor/bin/phpunit` directly; the lead tells them at the deploy.
 - daemon plumbing that only served lease notices: `modevents.CapLeaseNoticeV1`, `promptq.KindNotice` /
   `CapLeaseNotice` and their hand-out branch, team `LeadNoticer` (if nothing else uses it — plan verifies).
 - settings: `kinds`, `deadline_s`, `warmup_s`, `floor_pct`, `max_hold_s`, `ewma_half_life_s`,
@@ -278,10 +304,11 @@ in the release gate (`test-at.sh`). `CLAUDE.md` 測試分層 gains one line. vit
 | G1 | `pdx gate` core: slots (lock fd inherited by the tree), fair tickets, holder records, verified nesting without class escalation, TTY-aware process group reap, pressure admission with a shared atomic sample, disk floor, QoS, parallelism env, config, narrow fail-open; unit tests (fake clock/pressure reader, real flock in temp dirs, real process trees) | — |
 | G2 | interception: go shim + classifier, Node hook, `pdx setup` installs both and writes the Claude Code `env`; `pdx lease run` → gate alias | G1, §4 final |
 | G3 | daemon steady cost: shared process snapshot, team sweeper cadence, WS change notification | — (parallel to G1/G2) |
-| L1 | retire the lease in the mod (lease.js except the minimal rewrite for direct `node_modules/.bin` calls, skill, CAPS, every embed guard that names the lease, protocol bump with its test updates) | G2 deployed |
+| L1 | retire the lease in the mod (lease.js, skill, CAPS, every embed guard that names the lease, protocol bump with its test updates); `hooks/gate.js`: the minimal rewrite for direct `node_modules/.bin` and `vendor/bin/{phpunit,pest}` calls, auto-background when a call would wait (D12, §6) | G2 deployed |
 | L2 | rework the kept parts **before** anything is dropped: zone on pressure, `host_minutes` and the report read slot records instead of `resource_leases`/`resource_positions`, `pdx host report`, lenient hostconfig read | L1 |
 | L3 | retire the lease in the daemon + CLI (routes, verbs, notices, promptq kind, settings keys, DB drop) — only after L2 is deployed, so every binary in between still works | L2 deployed |
 | D | docs/scripts: CLAUDE.md, skill `pdx-gate`, lead scripts (`-count=1`, `pdx gate`), Aigora note | G2 |
+| W0–W5 | load watcher (§12) | W0 now; W1+ after acceptance |
 
 Rollout: G1+G2(+G3) deploy first with the lease switched to `advise` on both hosts (no double gating);
 then L1–L3. Other lines resume after G2 is deployed and its acceptance (§10) passes.
@@ -302,6 +329,10 @@ then L1–L3. Other lines resume after G2 is deployed and its acceptance (§10) 
 7. Load: a reference workload (vitest full + `go test ./...` + `tsc -b --force` started together) keeps
    interactive latency acceptable — load1 and `memorystatus_vm_pressure_level` logged every 10 s; no swap growth.
 8. Codex sandbox: a gated command inside a read-only sandbox runs (fail-open) with the stderr line.
+9. Escaped holder: a gated command that starts `tmux -L <label> new-session -d` and exits → the slot is free at once,
+   stderr names the tmux server; `tmux -L <label> kill-server` afterwards (and `unset TMUX` in the test shell).
+10. Packaging: `pnpm run electron:build` (and `pdx lease run --kind build -- …`) starts at once while a heavy job holds
+   the slot.
 
 ## 11. Open questions (for the plan)
 
@@ -313,3 +344,74 @@ then L1–L3. Other lines resume after G2 is deployed and its acceptance (§10) 
 Survey sources: Getty/loadguard, leahneukirchen/nq, Nukesor/pueue, discoteq/flock, fl4p/macos-oom-guard, GNU make
 job slots, vitest "improving performance", Turborepo `run`, pnpm recursive, Electron environment variables
 (links in `research-intercept-tools.md`).
+
+## 12. Load watcher (D11–D13)
+
+The gate sees only what passes its shims. The watcher covers the rest: heavy commands that run outside the gate,
+a host under pressure, and the states the gate cannot fix by itself (a slot held after its gate died).
+
+### 12.1 Detection and record (W1, daemon)
+
+- The daemon's sampler gains a process pass every 10 s. A **tree** is a process and its descendants, rooted at the
+  child of a shell (an agent's Bash, a terminal, a script). A tree under a `pdx gate` process is managed.
+- Events:
+  - **E1 `unmanaged_heavy`**: an unmanaged tree using ≥ X cores (average over T s) or ≥ Y MB for T s. Its command
+    signature (tool, subcommand, script name; paths and values dropped) seen for the first time is **new**; later
+    sightings are counted, not re-sent.
+  - **E2 `pressure_high`**: pressure level ≥ 2 for ≥ T2, or page rate above R for ≥ T3.
+  - **E3 `slot_orphaned`**: a slot held while its gate is gone, for ≥ 15 min (names the holders).
+  - **E4 `slot_long`**: a slot held ≥ `lifetime.alert_after_min` (60).
+  - Not an event: long-lived, low-usage processes (polling loops); they are not heavy (D11).
+- X, Y, T, T2, R, T3 come from W0. Targets: E1 fires for csp's `composer test:integration` and
+  `vendor/bin/phpunit --testsuite integration`; never for the Purdex App build, Claude Code sessions, the daemon or a
+  browser at rest; a few events a day at most on mlab.
+- Record: append-only JSON lines under `~/.config/pdx/watch/` (rotated, 30 days): kind, host, time, command (scrubbed
+  by `internal/redact`), cwd, the Claude session found in the ancestry, peak cores and memory, duration, `new`.
+
+### 12.2 Registration and delivery (W2)
+
+- `pdx watch register` from the watcher session records its `_ref` (stable across renames and relays) and is
+  propagated to every paired host: **one watcher for all hosts**; a later registration replaces the earlier one
+  everywhere, and the replaced session is told. `pdx watch status`, `pdx watch unregister`. The registration ends
+  when the session ends (registry liveness); a relay keeps it (lineage).
+- Delivery: each host's daemon sends its events to the watcher by `pdx msg` (peer path), at most one message per
+  event kind per host per 10 min (later ones are folded into a count). E3 is never folded.
+- **No watcher: record only.** `pdx watch log [--since] [--host]` reads the records of every host; a new watcher reads
+  them first.
+
+### 12.3 The watcher session (W3)
+
+- A built-in brief and skill (`pdx-watch`): what each event means; what the watcher may do (tell the person, message
+  the session that started the command, propose an intercept rule that is applied only when the person agrees, run
+  `pdx gate free` after confirming); what it must not do (end a process that holds no slot; change thresholds by
+  itself).
+- **Auto-start** (`watch.auto_start`, synced by Profile Sync): on E1, E2 or E3 with no watcher registered, the daemon
+  spawns one on the host named by `watch.home` (default mlab), with the brief. It is on by default and live from the
+  first deploy (10-15: "go live and sample while it runs"); thresholds start from W0's first data and are tuned on
+  the running system (§12.6).
+- **Model** `watch.model` (Profile Sync), default Opus: an idle watcher spends nothing.
+
+### 12.4 `pdx gate free <class>-<k>` (W4)
+
+Lists the processes holding the slot's lock (pid, command, cwd, start, session), asks for confirmation (`--yes` for a
+watcher that already has the person's agreement), sends SIGTERM, then SIGKILL after 5 s, and reports whether the slot
+is free. A slot whose gate is still alive is refused (interrupt that command instead) unless `--force`.
+
+### 12.5 UI (W5, the App; B line)
+
+- Sidebar: at the right of the top row of the host list (the "Main Station" row), a watcher icon in three states:
+  none, active, unhandled events (with a count). It opens the watcher area.
+- The watcher area is a tab region of its own, apart from session tabs: the watcher's conversation when one is
+  registered, the event log of all hosts (filter by host and kind), and "start the watcher" when there is none.
+
+### 12.6 W0: threshold evaluation (now)
+
+- E2: replay `host_minutes` (load1 and memory per minute since 10-09) against candidate thresholds.
+- E1: a 48 h process sampler (lead script, every 10 s, processes ≥ 0.25 core or ≥ 300 MB with their ancestry;
+  started 10-15 19:3x, ends by itself) replayed against candidate sets, e.g. 1.5 cores or 1 GB for 60 s, and 2 cores
+  or 2 GB for 120 s.
+- Output: events per day and what each set catches; the values become the `watch.*` defaults and keep being tuned
+  from the live record (thresholds are settings, read at every pass).
+
+W1–W4 start now (A-line member), W5 when the B line resumes; none depends on L1–L3. The watcher set goes live as a
+whole when W1–W4 are done (W5 can follow). The first stage (G1–G3) ships without waiting for it.
