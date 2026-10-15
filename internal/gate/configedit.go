@@ -24,6 +24,9 @@ var (
 	errNoSetKey = errors.New("a setting is written <module>.<key>=<value> (enabled and profile have no module)")
 )
 
+// editor is the text edit (a variable so a test can put a bad one in its place).
+var editor = editTOML
+
 // SetResult says what a set changed.
 type SetResult struct {
 	Key      string
@@ -61,7 +64,7 @@ func Set(path, profile, key, value string) (SetResult, error) {
 		return res, err
 	}
 	res.Old = effectiveOf(string(old), profile, key)
-	edited := editTOML(string(old), headerFor(profile, key), leafOf(key), lit)
+	edited := editor(string(old), headerFor(profile, key), leafOf(key), lit)
 	var top map[string]any
 	if _, err := toml.Decode(edited, &top); err != nil {
 		return res, fmt.Errorf("the file would not parse after the change (is %s set another way, e.g. a dotted key?): %w", key, err)

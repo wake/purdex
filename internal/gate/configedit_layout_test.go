@@ -24,11 +24,25 @@ func TestSet_AQuotedKeyWithADotIsNotTheTable(t *testing.T) {
 	text := "[\"gate.slots\"]\nheavy = 1\n"
 	p := cfgFile(t, text)
 	_, err := Set(p, "", "slots.heavy", "2")
-	if err != nil {
-		assert.Equal(t, text, read(t, p))
-		return
-	}
+	require.NoError(t, err)
 	assert.Contains(t, read(t, p), "[\"gate.slots\"]\nheavy = 1\n", "the other table is as it was")
+	cfg, _ := Load(p)
+	assert.Equal(t, 2, cfg.Slots.Heavy)
+}
+
+// The net is wired in: an editor that moves another setting is caught and the file is kept.
+func TestSet_AnEditThatMovesAnotherSettingIsRefused(t *testing.T) {
+	old := editor
+	editor = func(text, header, leaf, lit string) string {
+		return editTOML(text, header, leaf, lit) + "[intruder]\nx = 1\n"
+	}
+	defer func() { editor = old }()
+	text := "[gate.slots]\nheavy = 1\n"
+	p := cfgFile(t, text)
+	_, err := Set(p, "", "slots.heavy", "2")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "besides slots.heavy")
+	assert.Equal(t, text, read(t, p))
 }
 
 // Whatever the layout, a set that would change anything else is refused (the safety net under the line editor).
