@@ -30,7 +30,7 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 	}
 	// The ticket lives in one directory; a setting that changes gate.dir while this command waits is for the next command.
 	dir := cfg.Dir
-	ticket, err := g.pool(cfg, class).Enqueue()
+	ticket, err := g.pool(cfg, class).EnqueueFor(WaiterInfo{PID: g.PID(), Argv: truncateArgv(o.Argv), Cwd: g.cwdOf(o), Session: g.Session})
 	if err != nil {
 		return broken(err)
 	}
