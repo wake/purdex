@@ -178,6 +178,8 @@ func (m *Module) stopModLights() {
 // modMu and kicks the worker, nothing else — no frame store, no tmux, no
 // m.mu, no events bus, no registry call.
 func (m *Module) onModEvent(info modevents.StreamInfo, ev modevents.Event) {
+	m.lightGen.Add(1)
+	defer m.lightGen.Add(1)
 	now := m.modClock()
 	m.modMu.Lock()
 	st := m.modStreams[info.Stream]

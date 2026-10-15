@@ -1,5 +1,100 @@
 # Changelog
 
+## [1.0.0-alpha.742] - 2026-10-16
+
+> 只有 daemon 與 `pdx` CLI 改，mod、SPA、Electron 沒有改，不需要重跑 `pdx setup`。`host_minutes` 多三個欄位（新增欄位、預設 0），741 的 daemon 照樣讀寫，退回 741 不需要還原資料庫。部署後主機的區域（normal／warning／danger）改由記憶體壓力與換頁率決定。
+
+### Changed：資源租約的保留部分改看新訊號（負載控制 L2，spec §6）
+
+- **主機區域改看記憶體壓力與換頁率（L2b，PR #2953）**：與閘門同一組訊號——壓力等級 ≥ 2 或每秒換頁超過閘門的上限（50）是 warning，等級 ≥ 4 是 danger；升級立刻、降級要降一級並持續（warning 要換頁率低於上限的 0.9 倍）；兩個訊號都讀不到時是 unknown，不再當成 normal。CPU 負載只作參考。換頁率用取樣本來就讀的 `vm_stat` 計數，沒有多 fork。`mem_warn_pct`／`mem_danger_pct` 照收但不再影響 daemon 的區域（fleet 仍用，L3 之後才刪）。
+- **每分鐘紀錄改記閘門（L2b）**：`host_minutes` 新增 `heavy_running`、`light_running`、`gate_waiting`，從閘門的名額紀錄讀（只看、不清不鎖）；租約欄位寫 0。
+- **報表只讀每分鐘紀錄（L2c，PR #2956）**：`GET /api/resources/report` 不再讀租約與排隊位置表；新指令 `pdx host report [--since 24h] [--json]`（重指令分鐘與最大並行、輕指令最大並行、閘門排隊分鐘、各區域秒數；L2 之前的租約口徑另列 `legacy_minutes`）。`pdx lease report` 只印指路訊息。新 CLI 連到舊 daemon 會以 `incompatible_daemon` 結束，不把缺的欄位當 0。
+- **hostconfig 讀取放寬（L2a，PR #2951）**：讀已存的設定時，忽略之後要刪的租約鍵；打錯字或新版才有的鍵仍判為無效，避免讀成預設值或在讀回再寫入時刪掉新設定。用 PUT 寫入照樣嚴格。
+
+### Added：負載守門員（還不會通知任何 session）
+
+- **找守門員（W2a-3，PR #2949）**：daemon 依 `targets` 找目前的守門員並快取，比對各台的 `targets` 是否一致；`pdx watch status`、`GET /api/watch/status` 顯示這台看到的守門員、狀態與清單。叫醒與啟動在之後的 W3。
+
+## [1.0.0-alpha.741] - 2026-10-16
+
+> mod 與 daemon 有改，SPA、Electron 沒有改。兩台都要重跑 `pdx setup` 才會換上新的 mod（mod ↔ daemon 協定仍是 8）。hostconfig 多了 `watch` 一列（缺少時用預設值），資料庫 schema 沒有變；退回 740 不需要還原資料庫，但要再跑一次 `pdx setup` 換回舊 mod。daemon 開始在資料目錄的 `watch/` 底下寫守門員的事件紀錄與 `state.json`。
+
+### Removed：mod 端的資源租約（L1b，PR #2947）
+
+- mod 不再有租約 hook：刪掉 `hooks/lease.js` 與 `pdx-lease` skill，不再宣告 `lease.notice.v1`，也不再接收 daemon 的租約通知。重指令一律由閘門處理（L1a 的 `gate.js` 與 shim），新增 `pdx-gate` skill 說明排隊、結束碼與 `pdx lease run` 別名的語意。
+- mod 收到不認得的 job（例如退役的租約通知，或之後新增的種類）會回報 dropped／`unsupported_kind`，不再默默吞掉，daemon 的佇列不會因此卡到交付逾時。
+- daemon 端的租約（`pdx lease` 其餘指令、資料表、設定）還在，下一階段 L2 才拆。
+
+### Added：負載守門員（spec §12，還不會通知任何 session）
+
+- **偵測接進 daemon（W1b-3，PR #2940）**：daemon 每次主機取樣（5 秒）順便判斷 E1 閘門外的重指令樹、E2 記憶體壓力或換頁率持續過高、E3 gate 已不在但名額仍被佔住、E4 名額佔用過久，事件寫進資料目錄 `watch/` 的每日紀錄（保留 30 天）。不依賴租約模式；取樣失敗的那一拍跳過，寫檔錯誤只記 log。查持鎖行程（lsof）只在 E3 成立時做一次。`pdx watch log` 讀這些紀錄。
+- **守門員設定（W2a-1，PR #2943）**：hostconfig 的 `watch` 列除了偵測門檻，還有 `targets`（預設 `[air26, mlab]`）、`mode`（`patrol`／`resident`）、`patrol_idle_min`（120）、`auto_wake`、`model`（opus）、`workdir`（`~/Workspace/wake/mlab-purdex-watch`）、`start_prompt`、`wake_prompt`，寫入時逐欄驗證；`pdx watch config [get [key] | set key=value…]` 讀寫。
+- **守門員在哪（W2a-2，PR #2948）**：daemon 記住目前守門員所在的主機與 session（`holder.json`），其他主機的 daemon 可用 `POST /api/peers/watch/holder` 詢問（只開放這個路徑，有每台主機的頻率上限）。找人、叫醒、送達在之後的 W2b／W3。
+
+### Changed
+
+- **`pdx gate status` 列出排隊者（#2941，PR #2944）**：文字版多一段 `排隊 #n  pid  等多久  指令  cwd`；`--json` 新增 `QueueHeavy`／`QueueLight`（先到的在前，每筆 class、place、pid、since、argv、cwd、session）。`pdx gate set`／`profile` 的旗標放在名稱前後都可以。`release` 是內建 profile（等同 `--fg`、保留 `-count=1`），`pdx gate profile list` 會列出它；要加別的設定用 `pdx gate set --profile release …`。
+
+### Fixed
+
+- **閘門記錄的 session 一直是空的（#2945，PR #2946）**：閘門讀的是 `CLAUDE_SESSION_ID`，Claude Code 實際提供的是 `CLAUDE_CODE_SESSION_ID`；現在先讀後者、再退回前者。佔名額、排隊與決策紀錄都會帶上所屬 session。
+
+## [1.0.0-alpha.740] - 2026-10-16
+
+> mod 與 daemon（`pdx` CLI）有改，SPA、Electron 沒有改，資料庫 schema 沒有變。兩台都要重跑 `pdx setup` 才會換上新的 mod（mod ↔ daemon 協定仍是 8）；退回 739 不需要還原資料庫，但要再跑一次 `pdx setup` 換回舊 mod。
+
+### Added：主機負載控制 L1a（mod 端的閘門，spec docs/specs/2026-10-15-host-load-control-spec.md §6、D12）
+
+- **agent 直接呼叫的工具也經過閘門（PR #2929）**：mod 新增 `hooks/gate.js`。agent 的 Bash 直接呼叫 `node_modules/.bin/vitest`、`node_modules/.bin/tsc`、`vendor/bin/phpunit`、`vendor/bin/pest`（含 `./` 開頭）時，自動在前面加上 `pdx gate --auto --`，shim 管不到的這些呼叫也會排隊。權限判定會因此改變的呼叫不改寫。
+- **會排隊的前景呼叫自動轉到背景（D12）**：前景的 Bash 呼叫若 `pdx gate would-wait --auto` 回答「會等」，mod 把整段呼叫改成 `run_in_background` 並附一段說明，session 不會卡在前景的時間上限裡等名額（10-15 實測：背景任務跨接力仍會收到完成通知）。全程 fail open，規劃總期限 4 秒。順序固定為閘門先、舊租約後。
+- **`pdx gate would-wait`（PR #2923）**：不啟動任何行程、不拿名額，只回答「這一類（或用 `--auto` 依指令文字判斷的這個指令）現在會不會排隊」與原因；不需要 daemon，`--json` 給程式讀。
+
+### Added：負載守門員的核心（還沒接進 daemon，spec §12）
+
+- **偵測核心（W1b-1，PR #2922）**：`internal/watch` 的偵測器，判斷 E1（閘門外的重指令樹）、E2（記憶體壓力或換頁率持續過高）、E3（gate 已不在、名額仍被佔住 15 分鐘以上）、E4（名額佔用超過上限），每個事件一次、持續超標不重響。這一版只有程式庫，daemon 還沒呼叫它。
+- **事件紀錄與狀態（W1b-2，PR #2939）**：事件寫進每天一個 JSON lines 檔（保留 30 天，指令列先遮蔽敏感值），偵測器的跨重啟記憶存成原子寫入的 `state.json`；`pdx watch log [--since 24h|7d|日期] [--kind …] [--json]` 讀紀錄（daemon 接線前沒有任何紀錄）。
+
+### Changed
+
+- **`pdx gate status --json` 變輕（#2933，PR #2938）**：機器讀的 JSON 預設只對「gate 已不在」的名額查是誰拿著鎖（每查一次要掃全機行程，約 0.3 秒 CPU），每次從約 0.4 秒降到 0.06 秒 CPU；要完整資料加 `--holders`。人看的 `pdx gate status` 照舊全查。
+
+### Fixed（測試）
+
+- **測試不再碰真實的 gate 目錄（#2932，PR #2935）**：`cmd/pdx`、`internal/gate`、`internal/gate/shim` 的測試一律把 HOME 與 `PDX_GATE_DIR` 指到暫時目錄，並各有一個守門測試。起因是一個舊測試漏下的行程拿著 mlab 真實的重指令名額 3.5 小時。
+- **佔名額的測試不再靠牆鐘（#2936，PR #2937）**：改成等檔案才放行，主機忙的時候不會因為佔位的 `sleep` 先結束而誤判。
+
+## [1.0.0-alpha.739] - 2026-10-15
+
+> 緊急修正（738 的重指令閘門大部分沒攔到）。只改 `pdx setup` 寫進 `~/.zshenv` 的區塊，daemon、SPA、mod、Electron 行為都沒有改，資料庫 schema 沒有變。兩台都要重跑 `pdx setup`，舊區塊會被換成新的；退回 738 不需要還原資料庫。
+
+### Fixed
+
+- **閘門的 shim 一定排在 PATH 最前面（#2930，PR #2931）**：738 的區塊只在 PATH 裡「沒有」shim 目錄時才把它加到前面。登入 shell 讀完 `.zprofile`、`.zshrc` 之後，homebrew、nvm 又排到 shim 前面，所以部署後才開的終端機、tmux 與 Claude Code session，shim 雖然在 PATH 裡，`go`、`pnpm`、`npx` 卻都直接執行、沒經過閘門。現在區塊不管 shim 目錄原本在哪都把它移到最前面（不會讓 PATH 變長）；互動 shell 另外在每次出現提示字元前再移一次，蓋過 `.zshrc` 與之後的 `nvm use`。已知限制：舊版 Claude Code 的 shell 快照最後會整個重設 PATH，用那種快照的 session 要重開（或另行處理快照）才會經過閘門；`zsh -ic '<指令>'` 這種不出提示字元的互動呼叫，`pnpm`／`npx` 仍可能是 nvm 的。
+
+## [1.0.0-alpha.738] - 2026-10-15
+
+> daemon 與 SPA 有改，mod 與 Electron 沒有改。這一版新增重指令閘門 `pdx gate`，兩台都要重跑 `pdx setup` 才會裝上 shim（`~/.config/pdx/shims/`）與 `~/.zshenv` 區塊；裝上之後，所有 zsh（含正在跑的 session 的下一個指令）呼叫 `go`、`pnpm`、`npx`、`vitest`、`tsc`、`composer` 都會先經過閘門。資料庫 schema 沒有變，退回 737 不需要還原資料庫；要撤掉閘門可跑 `pdx setup --uninstall-gate`（只移除那個區塊與 shim）。舊的資源租約維持「只記錄」模式（advise），在之後的 L1–L3 才拆掉。
+
+### Added：主機負載控制第一階段（spec docs/specs/2026-10-15-host-load-control-spec.md）
+
+- **`pdx gate`（G1a，PR #2909／#2910／#2911／#2912）**：重指令先拿名額才執行。名額是 `~/.config/pdx/gate/` 底下的檔案鎖，不依賴 daemon；重指令一次一個（`slots.heavy` 1）、輕指令三個（`slots.light` 3），照到達順序排隊，等待時每分鐘印出誰佔著、佔多久、前面幾個。記憶體壓力到第 2 級或換頁率超過每秒 50 頁時不放行新的工作，正在跑的永遠不會被中斷。執行中把並行數設為「核心數 − 2」（mlab 為 8，依剩餘記憶體下修；vitest 上限 3），優先序用 `nice 10`。指令結束時收掉它的行程群組與行程樹，並把名額釋放給所有人；逃過清理、仍拿著鎖的行程（例如測試留下的 tmux server）會被點名，不再佔住名額。腳本裡的巢狀呼叫只佔一個名額；在 codex 的唯讀 sandbox 裡會直接執行並印一行說明。
+- **調整與檢視（G1b，PR #2919）**：`pdx gate set <模組>.<參數>=<值>` 改設定（保留註解、只改那一個值，下一個指令就生效）；`[gate.profiles.<名稱>]` 與 `pdx gate profile use|list`；每個工作一行決策紀錄（`decisions.jsonl`：等了多久、為什麼、套用的參數與來源、結束碼、耗時）；`pdx gate status` 列出每個設定的生效值與來源，以及每個名額目前拿著鎖的行程。
+- **攔截（G2，PR #2907／#2917）**：`pdx setup` 在 `~/.config/pdx/shims/` 寫入 `go`、`pnpm`、`npx`、`vitest`、`tsc`、`composer` 的 shim，並在 `~/.zshenv` 加一個區塊把它放在 PATH 最前面（已經在就不重複加、不輸出任何文字）；`pdx setup --uninstall-gate` 精確移除。shim 每次執行時才去找真正的執行檔，`nvm` 切版本也跟得上；pdx 不在時 shim 會直接執行真正的工具。分類：`go test` 多個套件或 `./...`、`go build ./...`、vitest 完整執行、`tsc -b`、`pnpm check`、`composer test`、不帶篩選的 `phpunit`／`pest` 是重指令；單一套件、指定檔案或篩選是輕指令；**打包一律不經過閘門**（`pnpm build`、`electron:build`、`vite build`、`electron-builder`、`go build -o`、單一目標的 `go build`、`composer build`、`pdx lease run --kind build`）。沒有子指令的 `vitest` 在 agent、腳本與 CI 裡是一次完整執行，只有人在互動終端機時才算 watch。`pdx lease run` 改成 `pdx gate` 的別名（`--kind`／`--weight` 對應到重或輕，`--ask`／`--queue`／`--wait` 不再有作用）。
+- **閘門的預設值依 G0 實測（PR #2908）**：`taskpolicy -b` 在每組乾淨對照都比較慢（10～46%），所以用 `nice`；`go test ./...` 用 8 個並行加 nice 是 382 秒、3 個並行加 taskpolicy 是 448 秒，記憶體壓力都正常；vitest 用 8 個 worker 只快 19%，卻讓記憶體壓力升到第 2 級並多出 101 個逾時失敗，所以上限維持 3。
+
+### Changed
+
+- **daemon 閒置耗用（G3，PR #2901／#2904／#2906）**：peer 清單的讀取共用一份每 2 秒更新的行程表，不再每筆各 fork 一次 `ps`；team 的檢查程序只在資料庫有提交、有申請到期、存活檢查那一拍或滿 5 秒時才讀開著的申請；對話畫面的即時連線在記錄檔沒變大、agent 沒收到新事件時，每拍只做一次大小比對，最多每 2 秒完整處理一次（agent 行程無事件結束時，狀態燈最慢 2 秒更新，原本約 0.5 秒）。
+- **peer 名稱與標題一次解析（#2892，PR #2895）**：一份來源清單只查一次名稱與標題。
+- **資源租約的負載上限（#2759，PR #2898）**：租約執行中、負載超過 `load_cap_pct` 時先不放行下一個請求。租約仍是只記錄模式，這項會在拆租約時一起移除。
+
+### Added（其他線）
+
+- **審核推播的同意／拒絕按鈕（P-1，PR #2883）**：審核推播直接帶「同意」「拒絕」兩個按鈕；人在電腦前時，推播延後 60 秒才送。
+- **工作簿日誌載入（J-2a，PR #2864／#2865／#2866）**：日誌的型別、解析、REST、置頂、檢視記憶，SPA 的日誌 store 與 `journal.changed` 事件分支，以及使用中 tab 的日誌單元常駐載入。
+- **fleet 葉套件（F-1a，PR #2885）**：`internal/fleet` 純函式套件，這一版沒有接線。
+- **負載守門員的底層管線（W1a，PR #2921）**：取樣器的 `ps` 多一欄指令名稱、`vm_stat` 保留換頁計數、`gate.ClassifyReason`、指令列遮蔽搬到 `internal/redact`。行為不變。
+
 ## [1.0.0-alpha.737] - 2026-10-15
 
 > 只有 daemon 改，mod、SPA、Electron 都沒有改，不需要重跑 `pdx setup`。資料庫 schema 沒有變（工作簿仍是 schema 4），退回 736 不需要還原資料庫。兩台主機的資源租約已在 736 部署後正式切到「租約」模式（lease）。

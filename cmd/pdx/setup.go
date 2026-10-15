@@ -22,6 +22,7 @@ func runSetup(args []string) {
 	var agentType string
 	remove := false
 	force := false
+	uninstallGate := false
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -34,7 +35,22 @@ func runSetup(args []string) {
 			remove = true
 		case "--force":
 			force = true
+		case "--uninstall-gate":
+			uninstallGate = true
 		}
+	}
+
+	// the gate's shims and ~/.zshenv block come out on their own, with no agent and no daemon
+	if uninstallGate {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			err = uninstallGateShims(home, os.Stdout)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "setup: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	if agentType == "" {
@@ -91,6 +107,7 @@ func runSetup(args []string) {
 			fmt.Printf("pdx hooks for %s removed\n", agentType)
 		} else {
 			fmt.Printf("pdx hooks for %s installed\n", agentType)
+			setupGateForUser(os.Stderr)
 		}
 		return
 	}
@@ -106,6 +123,7 @@ func runSetup(args []string) {
 		fmt.Printf("pdx hooks for %s removed\n", agentType)
 	} else {
 		fmt.Printf("pdx hooks for %s installed\n", agentType)
+		setupGateForUser(os.Stderr)
 	}
 }
 
