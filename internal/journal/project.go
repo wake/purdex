@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"github.com/wake/purdex/internal/execstat"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -37,7 +38,7 @@ var (
 	cache   = map[string]cached{}
 	// runGit prints the absolute common git dir of cwd; replaced in tests.
 	runGit = func(ctx context.Context, cwd string) (string, error) {
-		out, err := exec.CommandContext(ctx, "git", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
+		out, err := execstat.CommandContext(ctx, "journal.git-common-dir", "git", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
 		return strings.TrimSpace(string(out)), err
 	}
 	now = time.Now

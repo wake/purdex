@@ -4,9 +4,9 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"github.com/wake/purdex/internal/execstat"
 	"log"
 	"os"
-	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -42,7 +42,7 @@ func (c *darwinHostCollector) Close() { c.sampler.Close() }
 // runDarwinIostat is one `iostat -c 2 -w 1`: two samples a second apart, the second being the last second. LC_ALL=C keeps
 // the numbers and the header in the form the parser reads; the context kills the process.
 func runDarwinIostat(ctx context.Context) (string, error) {
-	cmd := exec.CommandContext(ctx, "iostat", "-c", "2", "-w", "1")
+	cmd := execstat.CommandContext(ctx, "monitor.iostat", "iostat", "-c", "2", "-w", "1")
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	cmd.WaitDelay = time.Second
 	out, err := cmd.Output()

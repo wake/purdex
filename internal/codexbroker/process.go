@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"os/exec"
+	"github.com/wake/purdex/internal/execstat"
 	"strconv"
 	"strings"
 	"time"
@@ -56,7 +56,7 @@ func (l *PsLister) List(ctx context.Context) ([]RawProcess, error) {
 	if len(argv) == 0 {
 		argv = defaultPsArgv()
 	}
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := execstat.CommandContext(ctx, "codexbroker.run", argv[0], argv[1:]...)
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, fmt.Errorf("ps: %w", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/wake/purdex/internal/execstat"
 	"os"
 	"os/exec"
 	"strings"
@@ -24,7 +25,7 @@ var (
 	// runRemote prints the URL of origin in dir; replaced in tests. A git that ran and found no origin returns
 	// errNoRemote; any other error (a timeout, git missing) is a failure that is not kept.
 	runRemote = func(ctx context.Context, dir string) (string, error) {
-		cmd := exec.CommandContext(ctx, "git", "-C", dir, "remote", "get-url", "origin")
+		cmd := execstat.CommandContext(ctx, "journal.git-remote", "git", "-C", dir, "remote", "get-url", "origin")
 		cmd.Env = gitEnv(os.Environ()) // the daemon's GIT_DIR / GIT_WORK_TREE must not redirect the question
 		out, err := cmd.Output()
 		if err := classifyRemote(ctx, err); err != nil {

@@ -4,9 +4,9 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"github.com/wake/purdex/internal/execstat"
 	"net/http"
 	"os"
-	"os/exec"
 	"runtime"
 	"strings"
 	"time"
@@ -183,7 +183,7 @@ const tmuxExecTimeout = 3 * time.Second
 func getTmuxVersion() string {
 	ctx, cancel := context.WithTimeout(context.Background(), tmuxExecTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "tmux", "-V").Output()
+	out, err := execstat.CommandContext(ctx, "core.tmux-version", "tmux", "-V").Output()
 	if err != nil {
 		return "unknown"
 	}

@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/wake/purdex/internal/execstat"
 	"log"
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -75,7 +75,7 @@ func (c *realPaneChecker) IsAlive(pane string) (bool, error) {
 // refresh runs tmux list-panes once. Caller holds c.mu.
 func (c *realPaneChecker) refresh(now time.Time) {
 	c.expiry = now.Add(c.ttl)
-	cmd := exec.Command("tmux", "list-panes", "-aF", "#{pane_id}")
+	cmd := execstat.Command("codexbroker.tmux-panes", "tmux", "list-panes", "-aF", "#{pane_id}")
 	out, err := cmd.Output()
 	if err != nil {
 		c.err = err

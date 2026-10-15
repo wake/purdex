@@ -3,7 +3,7 @@ package monitor
 import (
 	"context"
 	"fmt"
-	"os/exec"
+	"github.com/wake/purdex/internal/execstat"
 	"strconv"
 	"strings"
 
@@ -81,7 +81,7 @@ func isNoTmuxPanesOutput(out string) bool {
 type tmuxCLICommandRunner struct{}
 
 func (tmuxCLICommandRunner) Output(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "tmux", args...)
+	cmd := execstat.CommandContext(ctx, "monitor.tmux-panes", "tmux", args...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
