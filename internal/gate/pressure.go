@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/wake/purdex/internal/execstat"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -219,7 +219,7 @@ func sysctlLevel() (int, error) {
 func vmStatCounters() (uint64, uint64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "/usr/bin/vm_stat").Output()
+	out, err := execstat.CommandContext(ctx, "gate.vm_stat", "/usr/bin/vm_stat").Output()
 	if err != nil {
 		return 0, 0, err
 	}

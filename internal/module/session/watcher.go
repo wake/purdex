@@ -5,8 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/wake/purdex/internal/execstat"
 	"log"
-	"os/exec"
 	"sync"
 	"time"
 
@@ -358,7 +358,7 @@ func (m *SessionModule) watchSessions(ctx context.Context) {
 				}
 			}
 
-			cmd := exec.CommandContext(ctx, "tmux", "wait-for", waitForChannel)
+			cmd := execstat.CommandContext(ctx, "session.wait-for", "tmux", "wait-for", waitForChannel)
 			err := cmd.Run()
 			if m.afterWaitForRun != nil {
 				m.afterWaitForRun()

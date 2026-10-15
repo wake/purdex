@@ -16,10 +16,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/wake/purdex/internal/execstat"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -110,7 +110,7 @@ func (m *Module) defaultSpawnTestProxy(nonce string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, exe, "statusline-proxy")
+	cmd := execstat.CommandContext(ctx, "agent.statusline-selftest", exe, "statusline-proxy")
 	cmd.Env = append(os.Environ(), "PDX_STATUSLINE_TEST_SESSION="+nonce)
 	cmd.Stdin = strings.NewReader(`{"model":{"display_name":"pipeline-test"},"context_window":{"used_percentage":0},"cost":{"total_cost_usd":0}}`)
 	cmd.Stdout = nil

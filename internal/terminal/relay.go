@@ -4,11 +4,11 @@ package terminal
 import (
 	"context"
 	"encoding/json"
+	"github.com/wake/purdex/internal/execstat"
 	"io"
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"sync"
 	"time"
 
@@ -82,7 +82,7 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 	}
 	defer conn.Close()
 
-	c := exec.Command(r.cmd, r.args...)
+	c := execstat.Command("terminal.relay", r.cmd, r.args...)
 	c.Dir = r.cwd
 	c.Env = append(os.Environ(), "TERM=xterm-256color")
 
@@ -99,11 +99,12 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 		startSize = pty.Winsize{Cols: cols, Rows: rows}
 	}
 
-	ptmx, err := pty.StartWithSize(c, &startSize)
+	ptmx, err := pty.StartWithSize(c.Cmd, &startSize) // pty starts the embedded Cmd itself: the fork is counted here
 	if err != nil {
 		log.Printf("pty start: %v", err)
 		return
 	}
+	execstat.Observe("terminal.relay", 0)
 	if r.OnStart != nil {
 		r.OnStart()
 	}

@@ -3,10 +3,10 @@ package dev
 import (
 	"context"
 	"fmt"
+	"github.com/wake/purdex/internal/execstat"
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -208,7 +208,7 @@ func (m *DevModule) Stop(_ context.Context) error {
 
 func (m *DevModule) gitHash(paths ...string) string {
 	args := append([]string{"log", "-1", "--format=%h", "--"}, paths...)
-	cmd := exec.Command("git", args...)
+	cmd := execstat.Command("dev.git", "git", args...)
 	cmd.Dir = m.repoRoot
 	out, err := cmd.Output()
 	if err != nil {
@@ -222,7 +222,7 @@ func (m *DevModule) gitHash(paths ...string) string {
 func (m *DevModule) gitHead() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "git", "-C", m.repoRoot, "log", "-1", "--format=%h").Output()
+	out, err := execstat.CommandContext(ctx, "dev.git-log", "git", "-C", m.repoRoot, "log", "-1", "--format=%h").Output()
 	if err != nil {
 		return ""
 	}

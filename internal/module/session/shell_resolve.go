@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/wake/purdex/internal/execstat"
 	"io"
 	"net/http"
 	"os"
@@ -207,7 +208,7 @@ func runShellProbe(ctx context.Context, shell, token string) shellProbeOutcome {
 		script = `builtin command -v "$1"`
 	}
 
-	cmd := exec.CommandContext(ctx, shell, "-l", "-i", "-c", script, "_", token)
+	cmd := execstat.CommandContext(ctx, "session.shell-resolve", shell, "-l", "-i", "-c", script, "_", token)
 
 	// An rc file can start anything, so the shell gets a container of its own
 	// to be cleaned up by. Setsid rather than Setpgid: setsid gives a new
@@ -379,7 +380,7 @@ func killSessionStragglers(sid int) {
 func listPids() []int {
 	ctx, cancel := context.WithTimeout(context.Background(), shellProbeReadGrace)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "ps", "-A", "-o", "pid=").Output()
+	out, err := execstat.CommandContext(ctx, "session.ps-all", "ps", "-A", "-o", "pid=").Output()
 	if err != nil {
 		return nil
 	}
@@ -497,7 +498,7 @@ func passwdShellForCurrentUser(ctx context.Context) string {
 		// Under the caller's deadline like every other subprocess on this
 		// path: directory services can be slow or wedged, and this rung is
 		// reached exactly when the machine is already in an odd state.
-		out, err := exec.CommandContext(ctx, "dscl", ".", "-read", "/Users/"+u.Username, "UserShell").Output()
+		out, err := execstat.CommandContext(ctx, "session.dscl", "dscl", ".", "-read", "/Users/"+u.Username, "UserShell").Output()
 		if err == nil {
 			if shell := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(string(out)), "UserShell:")); shell != "" {
 				return shell

@@ -207,20 +207,20 @@ type Executor interface {
 // #1767). Everything else (Stdin, Stderr, Env, WaitDelay) is the embedded
 // Cmd's, so call sites keep their own setup.
 type observedCmd struct {
-	*exec.Cmd
-	counter *execstat.Counter
+	*execstat.Cmd // counted under a tag too (GET /api/debug/execstat), which the legacy counter below does not tell apart
+	counter       *execstat.Counter
 }
 
 func tmuxCmd(args ...string) *observedCmd {
-	return &observedCmd{exec.Command("tmux", args...), &execstat.Tmux}
+	return &observedCmd{execstat.Command("tmux.cmd", "tmux", args...), &execstat.Tmux}
 }
 
 func tmuxCmdContext(ctx context.Context, args ...string) *observedCmd {
-	return &observedCmd{exec.CommandContext(ctx, "tmux", args...), &execstat.Tmux}
+	return &observedCmd{execstat.CommandContext(ctx, "tmux.read", "tmux", args...), &execstat.Tmux}
 }
 
 func psCmd(args ...string) *observedCmd {
-	return &observedCmd{exec.Command("ps", args...), &execstat.PS}
+	return &observedCmd{execstat.Command("tmux.ps", "ps", args...), &execstat.PS}
 }
 
 func (c *observedCmd) Output() ([]byte, error) {

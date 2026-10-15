@@ -2,7 +2,7 @@ package gate
 
 import (
 	"context"
-	"os/exec"
+	"github.com/wake/purdex/internal/execstat"
 	"strconv"
 	"strings"
 	"time"
@@ -13,7 +13,7 @@ import (
 func lsofHolders(path string) []Straggler {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "lsof", "-F", "pc", "--", path).Output()
+	out, err := execstat.CommandContext(ctx, "gate.lsof", "lsof", "-F", "pc", "--", path).Output()
 	if err != nil && len(out) == 0 {
 		return nil
 	}
