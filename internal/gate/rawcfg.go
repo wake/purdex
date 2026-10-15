@@ -92,7 +92,7 @@ func (r raw) Float(key string, def, lo float64) float64 {
 		return def
 	}
 	f, ok := asFloat(v)
-	if !ok || f < lo {
+	if !ok || !finite(f) || f < lo {
 		r.warn(key, "want a number of at least %v, got %v", lo, v)
 		return def
 	}
@@ -205,7 +205,7 @@ func (r raw) FloatOrAuto(key string, def float64, defAuto bool, lo float64) (f f
 		return def, true
 	}
 	n, ok := asFloat(v)
-	if !ok || n < lo {
+	if !ok || !finite(n) || n < lo {
 		r.warn(key, `want "auto" or a number of at least %v, got %v`, lo, v)
 		return def, defAuto
 	}
@@ -226,6 +226,9 @@ func asInt(v any) (int, bool) {
 	}
 	return 0, false
 }
+
+// finite says the number is neither NaN nor an infinity (TOML can spell both: a NaN would pass every `< lo` test).
+func finite(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
 
 func asFloat(v any) (float64, bool) {
 	switch n := v.(type) {

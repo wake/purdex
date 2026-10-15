@@ -183,6 +183,22 @@ class = "enormous"
 	assert.Contains(t, cfg.Warnings[0]+cfg.Warnings[1]+cfg.Warnings[2]+cfg.Warnings[3], "slots.")
 }
 
+// TOML can spell nan and inf; a NaN passes every "< lo" test and would hold every command for good.
+func TestLoad_NaNAndInfinityAreRefused(t *testing.T) {
+	t.Setenv("PDX_GATE_DIR", "")
+	cfg, err := Load(writeConfig(t, "[gate.admission]\nmax_page_rate = nan\ndisk_min_gb = inf\n"))
+	require.NoError(t, err)
+	d := Defaults()
+	assert.Equal(t, d.Admission.MaxPageRate, cfg.Admission.MaxPageRate)
+	assert.Equal(t, d.Admission.PageRateAuto, cfg.Admission.PageRateAuto)
+	assert.Equal(t, d.Admission.DiskMinGB, cfg.Admission.DiskMinGB)
+	assert.Len(t, cfg.Warnings, 2)
+	assert.True(t, cfg.Admission.Admit(Pressure{Level: 1, PageRate: 1}), "and the default rate still admits a quiet host")
+	cfg, err = Load(writeConfig(t, "[gate.admission]\nmax_page_rate = -inf\n"))
+	require.NoError(t, err)
+	assert.Len(t, cfg.Warnings, 1)
+}
+
 func TestLoad_ABrokenFileGivesTheDefaultsAndTheError(t *testing.T) {
 	t.Setenv("PDX_GATE_DIR", "")
 	cfg, err := Load(writeConfig(t, "[gate\nslots = "))
