@@ -43,8 +43,8 @@ type Settings struct {
 // Default is what a never-written setting answers: on (spec §12.2), with the first thresholds.
 func Default() Settings {
 	return Settings{Enabled: true, XCores: 1.5, YMB: 1024, TSeconds: 60, PressureLevel: 2, PressureTSeconds: 120, PageRate: 50, PageTSeconds: 60,
-		Targets: []string{"mlab", "a26"}, Mode: ModePatrol, PatrolIdleMin: 120, AutoWake: true, Model: "opus",
-		Workdir: "~/Workspace/wake/purdex-watch"}
+		Targets: []string{"air26", "mlab"}, Mode: ModePatrol, PatrolIdleMin: 120, AutoWake: true, Model: "opus",
+		Workdir: "~/Workspace/wake/mlab-purdex-watch"}
 }
 
 // Seconds is n seconds as a duration.

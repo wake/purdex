@@ -58,8 +58,8 @@ func (f *fakeHostconfig) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func newFakeHostconfig() *fakeHostconfig {
 	return &fakeHostconfig{token: "tok", items: map[string]any{
 		"enabled": true, "x_cores": 1.5, "y_mb": float64(1024), "t_s": float64(60), "pressure_level": float64(2), "pressure_t_s": float64(120),
-		"page_rate": float64(50), "page_t_s": float64(60), "targets": []any{"mlab", "a26"}, "mode": "patrol", "patrol_idle_min": float64(120),
-		"auto_wake": true, "model": "opus", "workdir": "~/Workspace/wake/purdex-watch", "start_prompt": "", "wake_prompt": "",
+		"page_rate": float64(50), "page_t_s": float64(60), "targets": []any{"air26", "mlab"}, "mode": "patrol", "patrol_idle_min": float64(120),
+		"auto_wake": true, "model": "opus", "workdir": "~/Workspace/wake/mlab-purdex-watch", "start_prompt": "", "wake_prompt": "",
 	}}
 }
 
@@ -77,12 +77,12 @@ func TestWatchConfig_GetShowsEveryKeyAndOne(t *testing.T) {
 	cfg := watchCfgFile(t, srv, "tok")
 	var out, errb bytes.Buffer
 	require.Equal(t, 0, watchMain([]string{"config", "--config", cfg}, &out, &errb), errb.String())
-	for _, want := range []string{"enabled = true", "x_cores = 1.5", "targets = mlab,a26", "mode = patrol", "model = opus", "workdir = ~/Workspace/wake/purdex-watch"} {
+	for _, want := range []string{"enabled = true", "x_cores = 1.5", "targets = air26,mlab", "mode = patrol", "model = opus", "workdir = ~/Workspace/wake/mlab-purdex-watch"} {
 		require.Contains(t, out.String(), want)
 	}
 	out.Reset()
 	require.Equal(t, 0, watchMain([]string{"config", "get", "targets", "--config", cfg}, &out, &errb))
-	require.Equal(t, "mlab,a26\n", out.String())
+	require.Equal(t, "air26,mlab\n", out.String())
 	require.Equal(t, 2, watchMain([]string{"config", "get", "nope", "--config", cfg}, &out, &errb))
 }
 

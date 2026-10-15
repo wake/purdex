@@ -133,3 +133,14 @@ func TestWatch_TargetsFollowTheConfigsAliasRule(t *testing.T) {
 	rr = serve(m, http.MethodPut, "/api/hostconfig/watch", `{"items":`+strings.TrimSuffix(watchOK, "}")+`,"targets":[".."]},"baseRevision":1}`)
 	assert.Equal(t, http.StatusBadRequest, rr.Code, "a reserved alias")
 }
+
+// The defaults of spec §12.2 (user decision 10-15): air26 first, then mlab; the mlab repo's checkout dedicated to the watch branch.
+func TestWatch_TheDefaultsAreTheSpecs(t *testing.T) {
+	d := watchsettings.Default()
+	assert.Equal(t, []string{"air26", "mlab"}, d.Targets)
+	assert.Equal(t, "~/Workspace/wake/mlab-purdex-watch", d.Workdir)
+	assert.Equal(t, watchsettings.ModePatrol, d.Mode)
+	assert.Equal(t, 120, d.PatrolIdleMin)
+	assert.True(t, d.AutoWake)
+	assert.Equal(t, "opus", d.Model)
+}
