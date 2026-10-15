@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -34,7 +35,7 @@ func watchConfig(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "pdx watch config: %v\n", err)
 		return 1
 	}
-	base := fmt.Sprintf("http://%s:%d", cfg.Bind, cfg.Port)
+	base := watchDaemonBase(cfg)
 	items, rev, code := fetchWatchItems(base, cfg.Token, stderr)
 	if code != 0 {
 		return code
@@ -187,4 +188,9 @@ func parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
 		words = append(words, fs.Arg(0))
 		args = fs.Args()[1:]
 	}
+}
+
+// watchDaemonBase is the URL of this host's daemon: a wildcard bind is reached on the loopback, an IPv6 address is bracketed.
+func watchDaemonBase(cfg config.Config) string {
+	return "http://" + net.JoinHostPort(resolveDaemonHost(strings.Trim(cfg.Bind, "[]")), strconv.Itoa(cfg.Port))
 }

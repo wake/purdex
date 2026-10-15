@@ -15,6 +15,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/wake/purdex/internal/config"
 )
 
 // fakeHostconfig answers GET /api/hostconfig with a watch row and records the PUT.
@@ -134,4 +136,25 @@ func TestWatchConfig_AnOldDaemonAndAWrongToken(t *testing.T) {
 	errb.Reset()
 	require.Equal(t, 1, watchMain([]string{"config", "--config", watchCfgFile(t, srv, "wrong")}, &out, &errb))
 	require.True(t, strings.Contains(errb.String(), "401"))
+}
+
+func TestWatchDaemonBase(t *testing.T) {
+	for bind, want := range map[string]string{
+		"127.0.0.1": "http://127.0.0.1:7860", "0.0.0.0": "http://127.0.0.1:7860", "": "http://127.0.0.1:7860", "::": "http://127.0.0.1:7860",
+		"[::]": "http://127.0.0.1:7860", "::1": "http://[::1]:7860", "100.64.0.2": "http://100.64.0.2:7860",
+	} {
+		require.Equal(t, want, watchDaemonBase(config.Config{Bind: bind, Port: 7860}), "bind %q", bind)
+	}
+}
+
+// A daemon bound to every interface is reached on the loopback (the command used the bind as it stood: 0.0.0.0 is no address).
+func TestWatchConfig_ReachesAWildcardBoundDaemon(t *testing.T) {
+	srv := httptest.NewServer(newFakeHostconfig())
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	p := filepath.Join(t.TempDir(), "config.toml")
+	require.NoError(t, os.WriteFile(p, []byte(fmt.Sprintf("bind = \"0.0.0.0\"\nport = %s\ntoken = \"tok\"\ndata_dir = %q\n", u.Port(), t.TempDir())), 0o600))
+	var out, errb bytes.Buffer
+	require.Equal(t, 0, watchMain([]string{"config", "--config", p}, &out, &errb), errb.String())
+	require.Contains(t, out.String(), "enabled = true")
 }
