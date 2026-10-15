@@ -26,13 +26,13 @@ type AdmissionConfig struct {
 }
 
 func parseAdmission(r raw) AdmissionConfig {
-	rate, auto := r.FloatOrAuto("max_page_rate", autoPageRate, true, 0)
+	rate, auto := r.FloatOrAuto("max_page_rate", autoPageRate, true, 0, 1e9)
 	return AdmissionConfig{
 		Enabled:          r.Bool("enabled", true),
 		MaxPressureLevel: r.Int("max_pressure_level", 1, 1, 4),
 		MaxPageRate:      rate,
 		PageRateAuto:     auto,
-		DiskMinGB:        r.Float("disk_min_gb", 10, 0),
+		DiskMinGB:        r.Float("disk_min_gb", 10, 0, 1e6),
 		OnUnreadable:     r.Enum("on_unreadable", "level-only", "level-only", "admit"),
 	}
 }
@@ -58,7 +58,7 @@ func (a AdmissionConfig) DiskRefusal(path string, freeBytes int64) string {
 	if !a.Enabled || a.DiskMinGB <= 0 {
 		return ""
 	}
-	if freeBytes >= int64(a.DiskMinGB*(1<<30)) {
+	if float64(freeBytes) >= a.DiskMinGB*(1<<30) { // in floats: no conversion to overflow
 		return ""
 	}
 	return fmt.Sprintf("%s has %.1f GB free, below the %.1f GB of [gate.admission] disk_min_gb: the command was not run (free some space, or lower the floor)",

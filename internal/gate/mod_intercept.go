@@ -39,6 +39,9 @@ func parseIntercept(r raw) InterceptConfig {
 				r.warn("rule", "want a table with match and class, got %v", e)
 			}
 		}
+	case nil: // no rule
+	default:
+		r.warn("rule", "want a list of tables ([[gate.intercept.rule]]), got %v", v)
 	}
 	for _, m := range entries {
 		match, cls := stringOf(m["match"]), Class(stringOf(m["class"]))

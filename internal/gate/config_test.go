@@ -183,6 +183,80 @@ class = "enormous"
 	assert.Contains(t, cfg.Warnings[0]+cfg.Warnings[1]+cfg.Warnings[2]+cfg.Warnings[3], "slots.")
 }
 
+// TOML can spell nan and inf; a NaN passes every "< lo" test and would hold every command for good.
+func TestLoad_NaNAndInfinityAreRefused(t *testing.T) {
+	t.Setenv("PDX_GATE_DIR", "")
+	cfg, err := Load(writeConfig(t, "[gate.admission]\nmax_page_rate = nan\ndisk_min_gb = inf\n"))
+	require.NoError(t, err)
+	d := Defaults()
+	assert.Equal(t, d.Admission.MaxPageRate, cfg.Admission.MaxPageRate)
+	assert.Equal(t, d.Admission.PageRateAuto, cfg.Admission.PageRateAuto)
+	assert.Equal(t, d.Admission.DiskMinGB, cfg.Admission.DiskMinGB)
+	assert.Len(t, cfg.Warnings, 2)
+	assert.True(t, cfg.Admission.Admit(Pressure{Level: 1, PageRate: 1}), "and the default rate still admits a quiet host")
+	cfg, err = Load(writeConfig(t, "[gate.admission]\nmax_page_rate = -inf\n"))
+	require.NoError(t, err)
+	assert.Len(t, cfg.Warnings, 1)
+}
+
+// A value too large for the setting is refused (an absurd disk floor), as is [gate] or a module that is not a table.
+func TestLoad_ARangeAndNonTablesAreListed(t *testing.T) {
+	t.Setenv("PDX_GATE_DIR", "")
+	cfg, err := Load(writeConfig(t, "[gate.admission]\ndisk_min_gb = 1e300\nmax_page_rate = 1e300\n"))
+	require.NoError(t, err)
+	assert.Equal(t, Defaults().Admission, cfg.Admission)
+	assert.Len(t, cfg.Warnings, 2)
+
+	for _, body := range []string{"gate = false\n", "gate = \"off\"\n", "gate = 3\n"} {
+		cfg, err = Load(writeConfig(t, body))
+		require.NoError(t, err, body)
+		assert.Equal(t, Defaults().Slots, cfg.Slots, body)
+		require.Len(t, cfg.Warnings, 1, body)
+		assert.Contains(t, cfg.Warnings[0], "gate")
+	}
+	// a module written as a list of tables is not a table either
+	cfg, err = Load(writeConfig(t, "[[gate.slots]]\nheavy = 2\n[[gate.admission]]\nmax_pressure_level = 2\n"))
+	require.NoError(t, err)
+	assert.Equal(t, Defaults().Slots, cfg.Slots)
+	assert.Equal(t, Defaults().Admission, cfg.Admission)
+	assert.Len(t, cfg.Warnings, 2)
+
+	cfg, err = Load(writeConfig(t, "[gate]\nslots = \"bad\"\nreap = [1, 2]\n[gate.priority]\nmode = \"none\"\n"))
+	require.NoError(t, err)
+	assert.Equal(t, Defaults().Slots, cfg.Slots, "a module that is not a table keeps its defaults")
+	assert.Equal(t, "none", cfg.Priority.Mode, "and the others are read")
+	assert.Len(t, cfg.Warnings, 2)
+	assert.Contains(t, cfg.Warnings[0]+cfg.Warnings[1], "slots")
+}
+
+// intercept's rule must be a list of tables; a scalar or a single table is refused with a warning, not dropped.
+func TestLoad_ARuleThatIsNotAListOfTablesIsListed(t *testing.T) {
+	t.Setenv("PDX_GATE_DIR", "")
+	for _, body := range []string{
+		"[gate.intercept]\nrule = \"bad\"\n",
+		"[gate.intercept.rule]\nmatch = \"go test\"\nclass = \"heavy\"\n",
+		"[gate.intercept]\nrule = 3\n",
+	} {
+		cfg, err := Load(writeConfig(t, body))
+		require.NoError(t, err, body)
+		assert.Empty(t, cfg.Intercept.Rules, body)
+		require.Len(t, cfg.Warnings, 1, body)
+		assert.Contains(t, cfg.Warnings[0], "rule")
+	}
+}
+
+// A class override with a bad value leaves the base value alone (it is refused, not turned into "auto").
+func TestLoad_ABadClassOverrideKeepsTheBaseValue(t *testing.T) {
+	t.Setenv("PDX_GATE_DIR", "")
+	cfg, err := Load(writeConfig(t, "[gate.parallelism]\nmode = \"fixed\"\ngo_p = 7\n[gate.parallelism.heavy]\ngo_p = \"bad\"\nvitest_workers = 0\n[gate.parallelism.light]\ngo_p = 2\n"))
+	require.NoError(t, err)
+	assert.Len(t, cfg.Warnings, 2)
+	assert.Equal(t, 7, cfg.Parallelism.Resolve(ClassHeavy, HostFacts{NCPU: 10, AvailMemMB: 8000}).GoP, "heavy keeps the base 7")
+	assert.Equal(t, 2, cfg.Parallelism.Resolve(ClassLight, HostFacts{NCPU: 10, AvailMemMB: 8000}).GoP, "light's own value is used")
+	_, hasHeavy := cfg.Parallelism.ByClass[ClassHeavy]
+	assert.False(t, hasHeavy, "an override with nothing valid is not made")
+}
+
 func TestLoad_ABrokenFileGivesTheDefaultsAndTheError(t *testing.T) {
 	t.Setenv("PDX_GATE_DIR", "")
 	cfg, err := Load(writeConfig(t, "[gate\nslots = "))
