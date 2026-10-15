@@ -215,3 +215,76 @@ func TestSlot_Label(t *testing.T) {
 }
 
 var _ = syscall.LOCK_EX
+
+// Only EWOULDBLOCK means a lock is held; a lock that cannot be probed is broken, not busy, or a command would wait forever
+// on a slot nobody holds. (M: read every flock error as held.)
+func TestFlockNB_HeldIsNotBroken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "l")
+	a, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	require.NoError(t, err)
+	b, err := os.OpenFile(path, os.O_RDWR, 0)
+	require.NoError(t, err)
+	st, err := flockNB(a)
+	assert.Equal(t, lockGot, st)
+	assert.NoError(t, err)
+	st, err = flockNB(b)
+	assert.Equal(t, lockHeld, st, "another descriptor holds it")
+	assert.NoError(t, err)
+	require.NoError(t, a.Close())
+	st, _ = flockNB(b)
+	assert.Equal(t, lockGot, st, "released when the holder closes")
+	require.NoError(t, b.Close())
+	st, err = flockNB(b)
+	assert.Equal(t, lockBroken, st, "a closed descriptor cannot be locked: broken, not busy")
+	assert.Error(t, err)
+}
+
+func TestPool_ABrokenSlotLockIsBrokenNotBusy(t *testing.T) {
+	p := testPool(t, ClassHeavy, 1)
+	tk := ticketAt(t, p, 1)
+	old := lockProbe
+	lockProbe = func(*os.File) (lockState, error) { return lockBroken, syscall.ENOLCK }
+	defer func() { lockProbe = old }()
+	s, _, err := p.TryTake(tk)
+	assert.Nil(t, s)
+	assert.ErrorIs(t, err, ErrBroken, "the caller fails closed instead of queueing for ever")
+}
+
+// Two tickets made in the same nanosecond by one process are two tickets: the second must not open, lock-fail and remove
+// the first one's file. (M: name a ticket by time and pid alone, without O_EXCL.)
+func TestPool_TicketsOfOneProcessInOneNanosecondAreDistinct(t *testing.T) {
+	p := testPool(t, ClassHeavy, 1)
+	p.Now = func() time.Time { return time.Unix(0, 12345) }
+	a, err := p.Enqueue()
+	require.NoError(t, err)
+	b, err := p.Enqueue()
+	require.NoError(t, err)
+	assert.NotEqual(t, a.Name, b.Name)
+	assert.Less(t, a.Name, b.Name, "made later, ordered later")
+	assert.Equal(t, 2, p.Waiting(), "both are live")
+	_, err = os.Stat(a.path)
+	assert.NoError(t, err, "the first ticket's file is still there")
+	s, ahead, err := p.TryTake(b)
+	require.NoError(t, err)
+	assert.Nil(t, s, "the second waits behind the first")
+	assert.Equal(t, 1, ahead)
+}
+
+// A queue that cannot be read is not an empty queue: the oldest waiter must not be passed. (M: an unreadable queue counts
+// as nobody waiting.)
+func TestPool_AQueueThatCannotBeReadFailsClosed(t *testing.T) {
+	p := testPool(t, ClassHeavy, 1)
+	tk := ticketAt(t, p, 1)
+	defer tk.Drop()
+	require.NoError(t, os.RemoveAll(p.queueDir()))
+	require.NoError(t, os.WriteFile(p.queueDir(), nil, 0o644)) // a file where the queue directory was: ENOTDIR
+	s, _, err := p.TryTake(tk)
+	assert.Nil(t, s)
+	assert.ErrorIs(t, err, ErrBroken)
+
+	// a missing queue is an empty one
+	require.NoError(t, os.Remove(p.queueDir()))
+	s, _, err = p.TryTake(tk)
+	require.NoError(t, err)
+	assert.NotNil(t, s)
+}

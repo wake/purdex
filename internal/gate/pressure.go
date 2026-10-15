@@ -12,10 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
-
-	"golang.org/x/sys/unix"
 )
 
 // PressureReader reads the host's pressure; a seam so tests inject a level and a rate.
@@ -23,10 +20,12 @@ type PressureReader interface {
 	Read() (Pressure, error)
 }
 
-// sampleReuse is how long a sample in the cache file is reused by other gates; rateWindow how far back the rate looks.
+// sampleReuse is how long a sample in the cache file is reused by other gates; rateWindow how far back the rate looks;
+// staleLimit how old a cached sample may be and still stand in for a reading when the sampler is stuck.
 const (
 	sampleReuse = 5 * time.Second
 	rateWindow  = 10 * time.Second
+	staleLimit  = time.Minute
 )
 
 // HostReader reads the real host: `sysctl kern.memorystatus_vm_pressure_level` and the pageout and swapout counters
@@ -37,11 +36,14 @@ type HostReader struct {
 	Now   func() time.Time
 	Level func() (int, error)
 	Pages func() (pageouts, swapouts uint64, err error)
+	// Wait is how long a reader that did not get the sampler lock waits for the sampler's result (more than the 3 s a
+	// vm_stat may take); a seam for tests.
+	Wait time.Duration
 }
 
 // NewHostReader is the reader of this host.
 func NewHostReader(dir string) *HostReader {
-	return &HostReader{Dir: dir, Now: time.Now, Level: sysctlLevel, Pages: vmStatCounters}
+	return &HostReader{Dir: dir, Now: time.Now, Level: sysctlLevel, Pages: vmStatCounters, Wait: 4 * time.Second}
 }
 
 type cachedSample struct {
@@ -85,9 +87,14 @@ func (r *HostReader) lockSampler() (unlock func(), got bool) {
 	if err != nil {
 		return func() {}, true // no lock to be had (a directory the gate cannot write): sample alone
 	}
-	if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+	st, _ := flockNB(f)
+	switch st {
+	case lockHeld:
 		_ = f.Close()
 		return func() {}, false
+	case lockBroken:
+		_ = f.Close()
+		return func() {}, true // the lock cannot be had at all: sample alone
 	}
 	return func() { _ = f.Close() }, true
 }
@@ -103,13 +110,25 @@ func (r *HostReader) Read() (Pressure, error) {
 	unlock, got := r.lockSampler()
 	defer unlock()
 	if !got {
-		for i := 0; i < 6; i++ {
+		// Another gate is sampling. Take nothing and write nothing without the lock: wait for its sample, and if it does
+		// not come, give the last cached reading (older than the reuse time, but a reading) or an error.
+		deadline := time.Now().Add(r.Wait)
+		for time.Now().Before(deadline) {
 			time.Sleep(50 * time.Millisecond)
 			if p, ok := r.fresh(); ok {
 				return p, nil
 			}
 		}
-	} else if p, ok := r.fresh(); ok {
+		if f := r.load(); len(f.Samples) > 0 {
+			last := f.Samples[len(f.Samples)-1]
+			if age := r.Now().Sub(time.UnixMilli(last.At)); age >= 0 && age <= staleLimit {
+				return pressureOf(f.Samples, last), nil
+			}
+		}
+		// no recent reading: an unreadable pressure, which the caller counts (three in a row and it falls back)
+		return Pressure{}, errors.New("another gate has been sampling the memory pressure for too long, and the cache is stale")
+	}
+	if p, ok := r.fresh(); ok {
 		return p, nil // another gate sampled while this one took the lock
 	}
 	now := r.Now()
@@ -136,10 +155,11 @@ func (r *HostReader) Read() (Pressure, error) {
 		keep = keep[len(keep)-16:]
 	}
 	if b, err := json.Marshal(sampleFile{Samples: keep}); err == nil {
-		tmp := r.path() + "." + strconv.Itoa(os.Getpid())
-		if os.WriteFile(tmp, b, 0o644) == nil {
-			if os.Rename(tmp, r.path()) != nil {
-				_ = os.Remove(tmp)
+		if tf, err := os.CreateTemp(r.Dir, "pressure.json.*"); err == nil {
+			_, werr := tf.Write(b)
+			cerr := tf.Close()
+			if werr != nil || cerr != nil || os.Rename(tf.Name(), r.path()) != nil {
+				_ = os.Remove(tf.Name())
 			}
 		}
 	}
@@ -177,7 +197,7 @@ func pressureOf(samples []cachedSample, cur cachedSample) Pressure {
 }
 
 func sysctlLevel() (int, error) {
-	v, err := unix.SysctlUint32("kern.memorystatus_vm_pressure_level")
+	v, err := sysctlUint32("kern.memorystatus_vm_pressure_level")
 	return int(v), err
 }
 

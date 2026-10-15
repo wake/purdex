@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -123,6 +124,9 @@ func (p *Pool) recordPath(k int) string {
 }
 func (p *Pool) queueDir() string { return filepath.Join(p.Dir, "queue", string(p.Class)) }
 
+// ticketSeq numbers the tickets this process makes.
+var ticketSeq atomic.Uint64
+
 // Ticket is a place in the queue.
 type Ticket struct {
 	Name string
@@ -145,15 +149,30 @@ func (p *Pool) Enqueue() (*Ticket, error) {
 	if err := os.MkdirAll(p.queueDir(), 0o755); err != nil {
 		return nil, dirError(err)
 	}
-	name := fmt.Sprintf("%020d-%d", p.Now().UnixNano(), os.Getpid())
-	path := filepath.Join(p.queueDir(), name)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	// <time>-<pid>-<n>: n is this process's own counter, so two tickets made in one nanosecond by one process differ, and the
+	// file is created with O_EXCL so a name that is taken is never opened (and never removed) by the second maker.
+	var (
+		name, path string
+		f          *os.File
+		err        error
+	)
+	for try := 0; try < 8; try++ {
+		name = fmt.Sprintf("%020d-%d-%06d", p.Now().UnixNano(), os.Getpid(), ticketSeq.Add(1))
+		path = filepath.Join(p.queueDir(), name)
+		f, err = os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o644)
+		if !errors.Is(err, os.ErrExist) {
+			break
+		}
+	}
 	if err != nil {
 		return nil, dirError(err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	if st, err := flockNB(f); st != lockGot {
 		_ = f.Close()
-		_ = os.Remove(path)
+		_ = os.Remove(path) // ours: it was created here, exclusively
+		if err == nil {
+			err = errors.New("the new ticket is locked by somebody else")
+		}
 		return nil, dirError(err)
 	}
 	return &Ticket{Name: name, path: path, f: f}, nil
@@ -161,10 +180,13 @@ func (p *Pool) Enqueue() (*Ticket, error) {
 
 // liveBefore lists the live tickets older than t; a ticket whose lock is free belongs to a gate that is gone and is
 // removed on the way.
-func (p *Pool) liveBefore(t *Ticket) []string {
+func (p *Pool) liveBefore(t *Ticket) ([]string, error) {
 	ents, err := os.ReadDir(p.queueDir())
 	if err != nil {
-		return nil
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil // no queue yet
+		}
+		return nil, err // a queue that cannot be read is not an empty one: the oldest waiter would be passed
 	}
 	var names []string
 	for _, e := range ents {
@@ -182,17 +204,20 @@ func (p *Pool) liveBefore(t *Ticket) []string {
 		path := filepath.Join(p.queueDir(), n)
 		f, err := os.OpenFile(path, os.O_RDWR, 0)
 		if err != nil {
-			continue // removed meanwhile
+			if errors.Is(err, os.ErrNotExist) {
+				continue // removed meanwhile
+			}
+			return nil, err
 		}
-		if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil {
+		if st, _ := flockNB(f); st == lockGot {
 			_ = os.Remove(path) // nobody holds it: its gate is gone
 			_ = f.Close()
 			continue
 		}
-		_ = f.Close()
+		_ = f.Close() // held, or a lock that cannot be probed: counted as waiting, the safe side of fairness
 		live = append(live, n)
 	}
-	return live
+	return live, nil
 }
 
 // Waiting is the number of live tickets in the queue (all of them, for the status).
@@ -211,7 +236,7 @@ func (p *Pool) Waiting() int {
 		if err != nil {
 			continue
 		}
-		if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil {
+		if st, _ := flockNB(f); st == lockGot {
 			_ = os.Remove(path)
 			_ = f.Close()
 			continue
@@ -233,12 +258,16 @@ func (p *Pool) TryTake(t *Ticket) (slot *Slot, ahead int, err error) {
 		return nil, 0, dirError(err)
 	}
 	defer mu.Close()
-	if err := syscall.Flock(int(mu.Fd()), syscall.LOCK_EX); err != nil {
+	if err := flockWait(mu); err != nil {
 		return nil, 0, dirError(err)
 	}
 	defer syscall.Flock(int(mu.Fd()), syscall.LOCK_UN) //nolint:errcheck
 
-	ahead = len(p.liveBefore(t))
+	before, err := p.liveBefore(t)
+	if err != nil {
+		return nil, 0, dirError(err)
+	}
+	ahead = len(before)
 	var free []*os.File
 	var freeK []int
 	for k := 1; k <= p.Size; k++ {
@@ -247,8 +276,14 @@ func (p *Pool) TryTake(t *Ticket) (slot *Slot, ahead int, err error) {
 			closeAll(free)
 			return nil, ahead, dirError(err)
 		}
-		if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
-			_ = f.Close() // held
+		st, lerr := lockProbe(f)
+		if st == lockBroken {
+			_ = f.Close()
+			closeAll(free)
+			return nil, ahead, dirError(lerr)
+		}
+		if st == lockHeld {
+			_ = f.Close()
 			continue
 		}
 		free = append(free, f)
@@ -278,9 +313,9 @@ func (p *Pool) Held() []Holder {
 		if err != nil {
 			continue
 		}
-		free := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil
+		st, _ := flockNB(f)
 		_ = f.Close() // dropping the probe frees it again
-		if free {
+		if st == lockGot {
 			continue
 		}
 		h := Holder{Class: p.Class, Slot: k}
@@ -293,6 +328,46 @@ func (p *Pool) Held() []Holder {
 		out = append(out, h)
 	}
 	return out
+}
+
+// lockState is what trying a lock told: got it, somebody else holds it, or the lock itself is broken.
+type lockState int
+
+const (
+	lockGot lockState = iota
+	lockHeld
+	lockBroken
+)
+
+// flockNB tries a non-blocking exclusive lock. Only EWOULDBLOCK means somebody holds it; EINTR is tried again; anything
+// else (the file system cannot lock, a bad descriptor) says the lock is broken and is not to be read as "busy", which
+// would make a command wait forever on a slot nobody holds.
+func flockNB(f *os.File) (lockState, error) {
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		switch {
+		case err == nil:
+			return lockGot, nil
+		case errors.Is(err, syscall.EINTR):
+			continue
+		case errors.Is(err, syscall.EWOULDBLOCK):
+			return lockHeld, nil
+		}
+		return lockBroken, err
+	}
+}
+
+// lockProbe is how TryTake probes a slot; a seam so a test can make a lock break.
+var lockProbe = flockNB
+
+// flockWait takes an exclusive lock and waits for it; EINTR is tried again.
+func flockWait(f *os.File) error {
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX)
+		if !errors.Is(err, syscall.EINTR) {
+			return err
+		}
+	}
 }
 
 // pidAlive says a process with this pid exists.
@@ -312,10 +387,10 @@ func (p *Pool) Record(k int) (h Holder, held bool, ok bool) {
 		return h, false, true
 	}
 	defer f.Close()
-	if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) == nil {
+	if st, _ := flockNB(f); st == lockGot {
 		return h, false, true // free: the record is stale
 	}
-	return h, true, true
+	return h, true, true // held (or a lock that cannot be probed: not taken for free, so nobody passes on its word)
 }
 
 // Suspect lists the records whose gate is alive while the slot's lock is free: the lock is the truth, so the slot is
