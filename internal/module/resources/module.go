@@ -82,6 +82,7 @@ type Module struct {
 	zoneLatch resources.PressureZoneLatch
 	pageRing  []gate.PageSample
 	rateLimit float64
+	haveRate  bool // the last reading carried the paging counters
 	lastZone  resources.Zone
 	zoneSince time.Time
 	// gateConfig reads the gate's config; gateCounts the slot records (see gate_input.go). nil: a module that is not wired to the

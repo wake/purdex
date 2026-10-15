@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/wake/purdex/internal/resources"
 	_ "modernc.org/sqlite"
@@ -675,11 +676,21 @@ func migrateDecisionColumns(db *sql.DB) error {
 		if haveMin[c.name] {
 			continue
 		}
-		if _, err := db.Exec("ALTER TABLE host_minutes ADD COLUMN " + c.name + " " + c.def); err != nil {
+		if err := addColumn(db, "host_minutes", c.name, c.def); err != nil {
 			return fmt.Errorf("migrate resources db: add host_minutes.%s: %w", c.name, err)
 		}
 	}
 	return nil
+}
+
+// addColumn adds a column. A column that is there already — another opener of the same database added it between our look at
+// the columns and this statement — is what was wanted, not an error.
+func addColumn(db *sql.DB, table, name, def string) error {
+	_, err := db.Exec("ALTER TABLE " + table + " ADD COLUMN " + name + " " + def)
+	if err != nil && strings.Contains(err.Error(), "duplicate column name") {
+		return nil
+	}
+	return err
 }
 
 // columnSet lists a table's column names.

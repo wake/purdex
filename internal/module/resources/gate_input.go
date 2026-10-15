@@ -1,6 +1,8 @@
 package resourcesmod
 
 import (
+	"os"
+
 	"github.com/wake/purdex/internal/gate"
 )
 
@@ -43,6 +45,10 @@ func (m *Module) slotCounts() (heavy, light, waiting int, ok bool) {
 		return 0, 0, 0, false
 	}
 	cfg := m.gateConfig()
+	if _, err := os.Stat(cfg.Dir); err != nil {
+		// no directory yet means no gate has run (zeros are right); one that cannot be looked at is no reading
+		return 0, 0, 0, os.IsNotExist(err)
+	}
 	h := &gate.Pool{Dir: cfg.Dir, Class: gate.ClassHeavy, Size: cfg.Slots.Size(gate.ClassHeavy), Now: m.now}
 	l := &gate.Pool{Dir: cfg.Dir, Class: gate.ClassLight, Size: cfg.Slots.Size(gate.ClassLight), Now: m.now}
 	return len(h.Held()), len(l.Held()), h.PeekWaiting() + l.PeekWaiting(), true

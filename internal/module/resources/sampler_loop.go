@@ -257,6 +257,7 @@ const pageRingKeep = 12 * time.Second
 // the counters leaves the rate 0 and the ring as it was. Sampler goroutine only.
 func (m *Module) notePageRate(host *resources.HostUse, raw resources.HostRaw, at time.Time) {
 	m.rateLimit = m.gateCfg().Admission.PageRateLimit()
+	m.haveRate = raw.PageCounters
 	if !raw.PageCounters {
 		return
 	}
@@ -278,7 +279,9 @@ func (m *Module) noteZone(host *resources.HostUse, at time.Time, set resources.S
 	m.ring.Add(resources.TrendSample{At: at, Mem: host.Mem, CPU: host.CPU, Pressure: host.Pressure})
 	window := m.ring.Since(at.Add(-set.TrendWindow()))
 	m.ringMu.Unlock()
-	zone := m.zoneLatch.Update(host.Pressure, host.PageRate, m.rateLimit, true)
+	// A host that gave neither the pressure level nor the paging counters has no zone to judge (unknown, as for a sampler that
+	// fails), not a normal one; with one of the two the zone is judged by it.
+	zone := m.zoneLatch.Update(host.Pressure, host.PageRate, m.rateLimit, host.Pressure > 0 || m.haveRate)
 	if zone != m.lastZone || m.zoneSince.IsZero() {
 		m.lastZone, m.zoneSince = zone, at
 	}
