@@ -3,6 +3,7 @@ package fleetmod
 import (
 	"context"
 	"encoding/json"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -140,11 +141,12 @@ type Measure struct {
 	haveNewest bool
 	pushedSlow map[string]uint64
 
-	life   sync.Mutex // activate / deactivate
-	active bool
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
-	base   context.Context
+	life    sync.Mutex // activate / deactivate
+	active  bool
+	stopped bool // Stop was called: nothing is activated any more
+	cancel  context.CancelFunc
+	wg      sync.WaitGroup
+	base    context.Context
 
 	// touched only by the goroutine that runs reconcile (activate, then the tick loop)
 	sessions   map[string]*liveSession
@@ -185,6 +187,7 @@ func (m *Measure) resetLocked() {
 func (m *Measure) Start(ctx context.Context) error {
 	m.life.Lock()
 	m.base = ctx
+	m.stopped = false
 	m.life.Unlock()
 	if m.d.Role == nil {
 		return nil
@@ -198,12 +201,16 @@ func (m *Measure) Start(ctx context.Context) error {
 func (m *Measure) Stop() {
 	m.life.Lock()
 	defer m.life.Unlock()
+	m.stopped = true
 	m.deactivateLocked()
 }
 
 func (m *Measure) onRole(st leaf.RoleState) {
 	m.life.Lock()
 	defer m.life.Unlock()
+	if m.stopped {
+		return
+	}
 	switch {
 	case st.Role == leaf.RolePrimary && !m.active:
 		m.activateLocked()
@@ -213,6 +220,9 @@ func (m *Measure) onRole(st leaf.RoleState) {
 }
 
 func (m *Measure) activateLocked() {
+	if m.stopped {
+		return
+	}
 	base := m.base
 	if base == nil {
 		base = context.Background()
@@ -378,13 +388,20 @@ func (m *Measure) reconcile(ctx context.Context, force bool) {
 	}
 	m.mu.Unlock()
 
+	// Cancel all first, then wait side by side (like deactivateLocked): the tick is held for one grace, not one per host.
+	var sw sync.WaitGroup
 	for _, s := range stop {
-		s.stop()
+		sw.Add(1)
+		go func(s *session) { defer sw.Done(); s.stop() }(s)
 	}
+	sw.Wait()
 	for _, w := range start {
 		m.mu.Lock()
 		h := m.hosts[w.key]
 		h.zone.Reset()
+		if h.fast != nil {
+			h.fast.Zone = "unknown" // like rowSink.State: no zone shown until the new session reads
+		}
 		m.mu.Unlock()
 		cfg := m.d.Session
 		cfg.Home, cfg.Clock, cfg.Logf, cfg.Limit = m.d.Home, m.clock, m.d.Logf, m.limit
@@ -460,7 +477,21 @@ func orEmpty(p []leaf.Proc) []leaf.Proc {
 	return p
 }
 
-// readLocalLocked takes the newest reading of the own host from the LocalSource. now is the receive time.
+// localGOOS is runtime.GOOS; tests pin it.
+var localGOOS = runtime.GOOS
+
+// localOS is the own os in the words a remote frame uses (leaf.ParseFast): "Darwin" or "Linux", "" for anything else.
+func localOS() string {
+	switch localGOOS {
+	case "darwin":
+		return "Darwin"
+	case "linux":
+		return "Linux"
+	}
+	return ""
+}
+
+// readLocal takes the newest reading of the own host from the LocalSource (under its own lock). now is the receive time.
 func (m *Measure) readLocal(now time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -470,6 +501,7 @@ func (m *Measure) readLocal(now time.Time) {
 	}
 	if f, ok := m.d.Local.Fast(); ok && f.At.After(h.ownAt) {
 		h.ownAt, h.ownSeen = f.At, now
+		h.os = localOS()
 		pct, free, dok := m.disk()
 		lf := leaf.Fast{LocalFast: f, DiskPct: pct, DiskFreeGB: free, RateKnown: true, LevelKnown: f.Level > 0}
 		m.applyFastLocked(h, lf, now)
