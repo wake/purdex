@@ -124,6 +124,18 @@ func (s *ProcessSnapshot) PPID(pid int) (int, error) {
 }
 
 func (s *ProcessSnapshot) Read(pid int) (ProcessInfo, error) {
+	return s.read(pid, false)
+}
+
+// ReadFresh is Read without the kept answer: the arguments are read, and the process re-checked against the one the table
+// saw (ErrProcessChanged), on every call. A snapshot that lives for a while and is shared (SharedProcessSnapshot) uses it,
+// so a PID reused after an earlier Read is not answered with the old process's arguments. It costs the same fork-free
+// argument-area read Read costs once.
+func (s *ProcessSnapshot) ReadFresh(pid int) (ProcessInfo, error) {
+	return s.read(pid, true)
+}
+
+func (s *ProcessSnapshot) read(pid int, fresh bool) (ProcessInfo, error) {
 	e, err := s.entry(pid)
 	if err != nil {
 		return ProcessInfo{}, err
@@ -135,7 +147,7 @@ func (s *ProcessSnapshot) Read(pid int) (ProcessInfo, error) {
 	// however many callers ask; a pass is single-goroutine, so nothing waits.
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !e.argsRead {
+	if fresh || !e.argsRead {
 		e.exePath, e.argv, e.argsErr = procArgsPlatform(pid, e)
 		e.argsRead = true
 	}

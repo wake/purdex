@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"os/exec"
 	"testing"
 	"time"
 )
@@ -78,5 +79,24 @@ func TestSharedProcessView_AnswersFromTheSharedTable(t *testing.T) {
 	}
 	if *calls != 1 {
 		t.Fatalf("%d reads for four questions, want 1", *calls)
+	}
+}
+
+// A snapshot shared for a TTL must not answer for a process that left (and whose PID may be reused) after an earlier Read:
+// Read keeps its first answer, ReadFresh checks the process again every time (the shared view uses it).
+func TestProcessSnapshot_ReadFreshRechecksWhatReadKept(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	pid := startProcess(t, cmd)
+	snap := takeSnapshot(t)
+	if _, err := snap.Read(pid); err != nil {
+		t.Fatalf("first Read: %v", err)
+	}
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+	if _, err := snap.Read(pid); err != nil {
+		t.Fatalf("Read keeps its first answer, got %v", err)
+	}
+	if _, err := snap.ReadFresh(pid); !errors.Is(err, ErrProcessChanged) {
+		t.Fatalf("ReadFresh of a process that left after an earlier Read: %v, want ErrProcessChanged", err)
 	}
 }
