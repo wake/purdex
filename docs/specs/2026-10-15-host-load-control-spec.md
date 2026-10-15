@@ -115,10 +115,14 @@ Design:
   **`pdx setup` prepends it in `~/.zshenv`.** Measured 10-15: Claude Code runs every Bash tool call as
   `/bin/zsh -c 'source <snapshot>; …'`; the snapshot does not set `PATH`, and `zsh -c` reads `~/.zshenv`
   (a variable defined only there reaches a `zsh -c` started without it). So running sessions pick the shims up on
-  their next command, no restart. The user's own terminals get the same shims (intended: every heavy command on
+  their next command, no restart. **Exception (measured 10-15, #2930):** an older Claude Code's snapshot ends with
+  `export PATH='…'`, which overwrites what `~/.zshenv` set; a session that uses such a snapshot (e.g. one built 10-13)
+  must be restarted to get the shims. The user's own terminals get the same shims (intended: every heavy command on
   the host is gated). The block in `~/.zshenv` is delimited (`# >>> pdx gate >>>` … `# <<< pdx gate <<<`), idempotent
-  on disk **and at run time** (it prepends only when `:$PATH:` does not already contain the shim dir, so nested
-  `zsh -c` do not grow `PATH`), prints nothing, and is removed by `pdx setup --uninstall-gate` exactly (content before
+  on disk **and at run time**: it moves the shim dir to the front wherever it was (`path=(<dir> ${path:#<dir>})`, so
+  nested `zsh -c` do not grow `PATH`) — a "present" check is not enough, a login shell leaves the dir behind
+  `/opt/homebrew/bin` and nvm (#2930); an interactive shell also registers a `precmd` that does the same before every
+  prompt (`~/.zshrc` and `nvm use` put their directories in front of it later). It prints nothing, and is removed by `pdx setup --uninstall-gate` exactly (content before
   and after the block kept; a duplicated or unclosed old block is repaired, not left half). Non-zsh callers (launchd, `bash -c` scripts) are covered only where
   they call `pdx gate`/`pdx lease run` themselves.
 - **Not covered by shims:** a direct `node_modules/.bin/vitest`, or a node program that starts vitest through its
