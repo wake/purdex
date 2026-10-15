@@ -2,6 +2,7 @@ package shim
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -159,19 +160,19 @@ func (e *ConflictError) Error() string {
 // byte for byte what one of them writes; when Script changes, the old form is kept here (so an upgrade still recognizes it).
 var generations = []func(tool, pdxPath string) string{Script}
 
-// pdxPathOf is the pdx path written into a shim (the default of its PDX_BIN line), or "" when there is no such line.
-func pdxPathOf(content string) string {
+// pdxPathOf is the pdx path written into a shim (the default of its PDX_BIN line); ok is false when there is no such line.
+func pdxPathOf(content string) (path string, ok bool) {
 	const head = `PDX_BIN="${PDX_BIN:-`
 	i := strings.Index(content, head)
 	if i < 0 {
-		return ""
+		return "", false
 	}
 	rest := content[i+len(head):]
 	j := strings.Index(rest, "}\"\n")
 	if j < 0 {
-		return ""
+		return "", false
 	}
-	return shUnquoteInner(rest[:j])
+	return shUnquoteInner(rest[:j]), true
 }
 
 // owned reports whether the regular file at p is a shim pdx wrote for tool: its content is exactly what a generator writes for
@@ -185,8 +186,8 @@ func owned(p, tool string) bool {
 	if err != nil {
 		return false
 	}
-	pdx := pdxPathOf(string(b))
-	if pdx == "" {
+	pdx, ok := pdxPathOf(string(b))
+	if !ok {
 		return false
 	}
 	for _, gen := range generations {
@@ -219,6 +220,9 @@ func lock(home string) (func(), error) {
 // before writing any (a file there that is not a pdx shim is a ConflictError and nothing is written); it stages all the shims
 // and only then puts them in place; and it writes the .zshenv block last, so the shims are in place before PATH leads to them.
 func Install(home, pdxPath string) error {
+	if pdxPath == "" {
+		return errors.New("no pdx path for the shims")
+	}
 	unlock, err := lock(home)
 	if err != nil {
 		return fmt.Errorf("lock: %w", err)

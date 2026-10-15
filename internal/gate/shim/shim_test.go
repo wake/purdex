@@ -537,8 +537,14 @@ func TestOwnership_IsExactNotAMarker(t *testing.T) {
 	if !owned(p, "go") {
 		t.Fatal("a shim pdx wrote for a path with quotes and dollars is not recognized")
 	}
-	if got := pdxPathOf(readFile(t, p)); got != weird {
-		t.Fatalf("pdxPathOf = %q", got)
+	if got, ok := pdxPathOf(readFile(t, p)); !ok || got != weird {
+		t.Fatalf("pdxPathOf = %q, %v", got, ok)
+	}
+	if _, ok := pdxPathOf("#!/bin/sh\necho nothing\n"); ok {
+		t.Fatal("a file without the PDX_BIN line has a pdx path")
+	}
+	if err := Install(t.TempDir(), ""); err == nil {
+		t.Fatal("an empty pdx path was accepted")
 	}
 	// a user's file with the marker comment in it
 	forged := "#!/bin/sh\n# (pdx gate shim for go) -- my own wrapper, keep\nexec /usr/local/go/bin/go \"$@\"\n"
