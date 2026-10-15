@@ -36,6 +36,9 @@ func TestClassify_Table(t *testing.T) {
 		{"go build -toolexec ./wrap ./cmd/pdx", ClassLight},
 		{"go build ./...", ClassHeavy},
 		{"go build ./cmd/pdx", ClassLight},
+		{"go build -buildvcs ./...", ClassHeavy}, // bare, it takes no value
+		{"go build -buildvcs=false ./...", ClassHeavy},
+		{"npx --package vitest -- vitest run", ClassHeavy},
 		{"go build -o bin/pdx ./cmd/pdx", ClassLight},
 		{"go vet ./...", ClassHeavy},
 		{"go vet ./internal/store", ClassLight},
