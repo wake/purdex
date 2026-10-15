@@ -88,9 +88,11 @@ that are probed but have no daemon, with name, icon and colour; Mac App first, i
     and applies the caller's `role` / `term` like an announcement (below).
   - `POST /api/peers/fleet/announce` body `{to_host_id, from_alias, term}` → `{host_id}`.
 - **Heartbeat**: **both** roles call the other's `role` every 30 s (timeout 5 s, or the peers inter-daemon timeout if longer).
-  For the standby, the primary is alive when it answers and `newest_age_ms ≤ 10 000`; `newest_age_ms` is the age of the
-  primary's newest reading of **any** host it measures (its own or one over SSH), so a primary whose own-host source is not
-  wired yet does not look dead; null is alive during the first 60 s after it became primary, dead after.
+  For the standby, the primary is alive when it answers and `newest_age_ms` is null or ≤ 10 000; `newest_age_ms` is the
+  age of the primary's newest reading of **any** host it measures (its own or one over SSH). Only an answer whose newest
+  reading is older than 10 s counts as stuck; null (nothing measured yet, or nothing to measure) is alive — a takeover would
+  not help then and would only make the two daemons swap back and forth (1f's review of F-1b2, 10-16). No answer, or `off`,
+  is dead.
 - **Takeover**: the standby that finds the primary dead becomes primary with `term = highest seen + 1`, persists it, starts
   measuring, and announces (best effort; the next heartbeat repeats the information anyway).
 - **Two primaries** (a partition, a start with the other unreachable, or a takeover from a primary that was slow, not gone):
