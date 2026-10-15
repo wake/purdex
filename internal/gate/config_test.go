@@ -214,6 +214,13 @@ func TestLoad_ARangeAndNonTablesAreListed(t *testing.T) {
 		require.Len(t, cfg.Warnings, 1, body)
 		assert.Contains(t, cfg.Warnings[0], "gate")
 	}
+	// a module written as a list of tables is not a table either
+	cfg, err = Load(writeConfig(t, "[[gate.slots]]\nheavy = 2\n[[gate.admission]]\nmax_pressure_level = 2\n"))
+	require.NoError(t, err)
+	assert.Equal(t, Defaults().Slots, cfg.Slots)
+	assert.Equal(t, Defaults().Admission, cfg.Admission)
+	assert.Len(t, cfg.Warnings, 2)
+
 	cfg, err = Load(writeConfig(t, "[gate]\nslots = \"bad\"\nreap = [1, 2]\n[gate.priority]\nmode = \"none\"\n"))
 	require.NoError(t, err)
 	assert.Equal(t, Defaults().Slots, cfg.Slots, "a module that is not a table keeps its defaults")

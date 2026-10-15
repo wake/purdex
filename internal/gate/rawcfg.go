@@ -42,10 +42,7 @@ func newRaw(m map[string]any) raw {
 func (r raw) sub(name string) raw {
 	child, isTable := r.m[name].(map[string]any)
 	if v, present := r.m[name]; present && !isTable {
-		// a list of tables ([[gate.intercept.rule]]) is read by the module that owns it, so only non-lists are refused here
-		if _, isList := v.([]map[string]any); !isList {
-			r.warn(name, "want a table, got %v", v)
-		}
+		r.warn(name, "want a table, got %v", v) // [[gate.slots]], slots = 3 …; the one list of tables, intercept's rule, is read by its module without sub
 	}
 	if child == nil {
 		child = map[string]any{}
