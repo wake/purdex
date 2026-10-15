@@ -13,9 +13,9 @@ import (
 // reader degrades (the caller says so once).
 func SystemSources() FastSources {
 	m, err := NewMach()
-	return FastSources{
-		Mach: m, MachErr: err,
-		Level: Level,
+	src := FastSources{
+		MachErr: err,
+		Level:   Level,
 		// the compressor's swapouts: the same number as vm_stat's "Swapouts" line
 		Swapouts: func() (uint64, error) { return unix.SysctlUint64("vm.compressor.swapper.swapouts_total") },
 		Load1: func() (float64, error) {
@@ -46,4 +46,8 @@ func SystemSources() FastSources {
 			return float64(100 - min(n, 100)), err
 		},
 	}
+	if m != nil { // a typed nil in the interface would not read as "no Mach"
+		src.Mach = m
+	}
+	return src
 }

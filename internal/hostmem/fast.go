@@ -21,9 +21,15 @@ type Fast struct {
 	Missing []string
 }
 
+// MachReader is the two Mach calls (*Mach is the real one; a test supplies its own).
+type MachReader interface {
+	CPUTicks() (busy, total uint64, err error)
+	VM() (VMCounters, error)
+}
+
 // FastSources are the reads a FastReader makes, as seams: the real ones are the sysctls and Mach.
 type FastSources struct {
-	Mach       *Mach // nil: loading libSystem failed (or not macOS)
+	Mach       MachReader // nil: loading libSystem failed (or not macOS)
 	MachErr    error
 	Level      func() (int, error)
 	Swapouts   func() (uint64, error)
