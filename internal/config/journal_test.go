@@ -108,6 +108,32 @@ func TestJournalEnabled(t *testing.T) {
 	}
 }
 
+// Saving any other setting rewrites the whole file (UpdateChanged -> WriteFile): `enabled = false` must survive it, or the
+// journal would switch itself back on. Mutation gate: a tag that omits a false value -> red.
+func TestJournalEnabled_FalseSurvivesASaveOfAnotherSetting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeCfg(t, path, "[journal]\nenabled = false\nperson_name = \"Wake\"\n")
+	before, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := before.Clone()
+	after.Port = before.Port + 1
+	if _, err := config.UpdateChanged(path, before, after); err != nil {
+		t.Fatal(err)
+	}
+	got, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.JournalEnabled() {
+		t.Fatal("saving another setting switched the journal back on")
+	}
+	if got.JournalPersonName() != "Wake" {
+		t.Fatalf("person_name = %q after the save", got.JournalPersonName())
+	}
+}
+
 func TestJournalEnabled_CloneIsDeep(t *testing.T) {
 	cfg := loadToml(t, "[journal]\nenabled = false\n")
 	cp := cfg.Clone()
