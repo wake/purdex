@@ -1,0 +1,1115 @@
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+25769803776
+@@load
+2.90
+@@cpu
+10 5 85
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     9054.
+Pages active:                                 373737.
+Pages inactive:                               371822.
+Pages speculative:                              1010.
+Pages throttled:                                   0.
+Pages wired down:                             265548.
+Pages purgeable:                                4777.
+"Translation faults":                    17148924190.
+Pages copy-on-write:                      1258864605.
+Pages zero filled:                        6112083608.
+Pages reactivated:                        1259820743.
+Pages purged:                              368408850.
+File-backed pages:                            254270.
+Anonymous pages:                              492299.
+Pages stored in compressor:                  1176995.
+Pages occupied by compressor:                 512132.
+Decompressions:                           1573948070.
+Compressions:                             1683739258.
+Pageins:                                   344807983.
+Pageouts:                                     339631.
+Swapins:                                     5424754.
+Swapouts:                                    9276739.
+Pages tagged:                                 204384.
+Pages tagged resident:                        140038.
+Pages tagged compressed:                       64346.
+Pages tag-storage:                             49152.
+Pages tag-storage holding tags:                 6702.
+Pages tag-storage free:                           62.
+Pages tag-storage non-tag pageable:            42234.
+Pages tag-storage non-tag wired:                  39.
+Bytes of compressed tags:                   10727744.
+Tagged compressions:                        49984301.
+Tagged decompressions:                      47606900.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   482746452 354652780  92081476    80% 4508629 920814760    0%   /System/Volumes/Data
+@@s
+@@top_cpu
+  608  30.3  86640 WindowServer
+92459   9.1   4816 sysmond
+  754   8.9  15536 coreaudiod
+11838   7.6   9552 NewsToday2
+42809   4.9  64304 Purdex Helper
+@@top_mem
+38412   0.0 1083984 Brave Browser Helper (Renderer)
+97907   0.9 547616 SpringBoard
+45305   1.2 519312 claude
+68827   2.1 431792 claude
+38369   1.2 385056 Brave Browser
+@@gate
+{
+  "Heavy": [
+    {
+      "class": "heavy",
+      "slot": 1,
+      "pid": 3096,
+      "pgid": 3101,
+      "argv": [
+        "scripts/check.sh"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "started": "2026-10-16T05:16:17.167806+08:00",
+      "session": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  "Light": null,
+  "WaitHeavy": 0,
+  "WaitLight": 0,
+  "QueueHeavy": null,
+  "QueueLight": null,
+  "Suspect": null,
+  "Profile": "default",
+  "Settings": [
+    {
+      "key": "admission.disk_min_gb",
+      "value": "10",
+      "source": "default"
+    },
+    {
+      "key": "admission.enabled",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "admission.max_page_rate",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "admission.max_pressure_level",
+      "value": "1",
+      "source": "default"
+    },
+    {
+      "key": "admission.on_unreadable",
+      "value": "level-only",
+      "source": "default"
+    },
+    {
+      "key": "cache.count1",
+      "value": "warn",
+      "source": "default"
+    },
+    {
+      "key": "enabled",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "intercept.mod_rewrite",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "intercept.tools",
+      "value": "go,pnpm,npx,vitest,tsc,composer,phpunit,pest",
+      "source": "default"
+    },
+    {
+      "key": "lifetime.alert_after_min",
+      "value": "60",
+      "source": "default"
+    },
+    {
+      "key": "lifetime.hold",
+      "value": "tree",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.go_mem_per_worker_mb",
+      "value": "150",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.go_p",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.mem_per_worker_mb",
+      "value": "400",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.mode",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.pnpm_concurrency",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.reserve_cores",
+      "value": "2",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.vitest_max_workers",
+      "value": "3",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.vitest_mem_per_worker_mb",
+      "value": "700",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.vitest_workers",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "priority.mode",
+      "value": "nice",
+      "source": "default"
+    },
+    {
+      "key": "priority.nice",
+      "value": "10",
+      "source": "default"
+    },
+    {
+      "key": "profile",
+      "value": "default",
+      "source": "default"
+    },
+    {
+      "key": "reap.enabled",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "reap.grace_s",
+      "value": "5",
+      "source": "default"
+    },
+    {
+      "key": "slots.heavy",
+      "value": "1",
+      "source": "default"
+    },
+    {
+      "key": "slots.light",
+      "value": "3",
+      "source": "default"
+    },
+    {
+      "key": "slots.order",
+      "value": "fifo",
+      "source": "default"
+    }
+  ]
+}
+
+@@gate_end
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+25769803776
+@@load
+2.83
+@@cpu
+17 4 79
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     8767.
+Pages active:                                 374066.
+Pages inactive:                               372112.
+Pages speculative:                              1020.
+Pages throttled:                                   0.
+Pages wired down:                             265561.
+Pages purgeable:                                4521.
+"Translation faults":                    17148940487.
+Pages copy-on-write:                      1258866980.
+Pages zero filled:                        6112089524.
+Pages reactivated:                        1259820743.
+Pages purged:                              368408850.
+File-backed pages:                            254291.
+Anonymous pages:                              492907.
+Pages stored in compressor:                  1176252.
+Pages occupied by compressor:                 511767.
+Decompressions:                           1573948824.
+Compressions:                             1683739258.
+Pageins:                                   344808014.
+Pageouts:                                     339631.
+Swapins:                                     5424754.
+Swapouts:                                    9276739.
+Pages tagged:                                 204384.
+Pages tagged resident:                        140038.
+Pages tagged compressed:                       64346.
+Pages tag-storage:                             49152.
+Pages tag-storage holding tags:                 6702.
+Pages tag-storage free:                           22.
+Pages tag-storage non-tag pageable:            42274.
+Pages tag-storage non-tag wired:                  39.
+Bytes of compressed tags:                   10727744.
+Tagged compressions:                        49984301.
+Tagged decompressions:                      47606900.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   482746452 354652800  92081456    80% 4508629 920814560    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+25769803776
+@@load
+2.83
+@@cpu
+15 15 71
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     8594.
+Pages active:                                 370956.
+Pages inactive:                               368743.
+Pages speculative:                               656.
+Pages throttled:                                   0.
+Pages wired down:                             269514.
+Pages purgeable:                                3736.
+"Translation faults":                    17148971806.
+Pages copy-on-write:                      1258868931.
+Pages zero filled:                        6112095715.
+Pages reactivated:                        1259822614.
+Pages purged:                              368409122.
+File-backed pages:                            254631.
+Anonymous pages:                              485724.
+Pages stored in compressor:                  1182188.
+Pages occupied by compressor:                 514840.
+Decompressions:                           1573949846.
+Compressions:                             1683746301.
+Pageins:                                   344808673.
+Pageouts:                                     339631.
+Swapins:                                     5424754.
+Swapouts:                                    9276739.
+Pages tagged:                                 204336.
+Pages tagged resident:                        139950.
+Pages tagged compressed:                       64386.
+Pages tag-storage:                             49152.
+Pages tag-storage holding tags:                 6699.
+Pages tag-storage free:                          142.
+Pages tag-storage non-tag pageable:            42154.
+Pages tag-storage non-tag wired:                  39.
+Bytes of compressed tags:                   10737920.
+Tagged compressions:                        49984343.
+Tagged decompressions:                      47606902.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   482746452 354652832  92081424    80% 4508629 920814240    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+25769803776
+@@load
+2.83
+@@cpu
+17 8 74
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     8712.
+Pages active:                                 370896.
+Pages inactive:                               369051.
+Pages speculative:                               982.
+Pages throttled:                                   0.
+Pages wired down:                             267944.
+Pages purgeable:                                5680.
+"Translation faults":                    17148999268.
+Pages copy-on-write:                      1258870580.
+Pages zero filled:                        6112102032.
+Pages reactivated:                        1259829987.
+Pages purged:                              368409126.
+File-backed pages:                            255357.
+Anonymous pages:                              485572.
+Pages stored in compressor:                  1184055.
+Pages occupied by compressor:                 515718.
+Decompressions:                           1573952555.
+Compressions:                             1683750916.
+Pageins:                                   344809184.
+Pageouts:                                     339631.
+Swapins:                                     5424754.
+Swapouts:                                    9276739.
+Pages tagged:                                 204252.
+Pages tagged resident:                        139735.
+Pages tagged compressed:                       64517.
+Pages tag-storage:                             49152.
+Pages tag-storage holding tags:                 6697.
+Pages tag-storage free:                          108.
+Pages tag-storage non-tag pageable:            42188.
+Pages tag-storage non-tag wired:                  39.
+Bytes of compressed tags:                   10757504.
+Tagged compressions:                        49984474.
+Tagged decompressions:                      47606902.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   482746452 354652856  92081400    80% 4508630 920814000    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+25769803776
+@@load
+2.83
+@@cpu
+18 7 75
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     8108.
+Pages active:                                 347225.
+Pages inactive:                               345254.
+Pages speculative:                               724.
+Pages throttled:                                   0.
+Pages wired down:                             310862.
+Pages purgeable:                                3586.
+"Translation faults":                    17149021563.
+Pages copy-on-write:                      1258871720.
+Pages zero filled:                        6112120694.
+Pages reactivated:                        1259853311.
+Pages purged:                              368409130.
+File-backed pages:                            255109.
+Anonymous pages:                              438094.
+Pages stored in compressor:                  1198132.
+Pages occupied by compressor:                 521130.
+Decompressions:                           1573958857.
+Compressions:                             1683775003.
+Pageins:                                   344809200.
+Pageouts:                                     339631.
+Swapins:                                     5424754.
+Swapouts:                                    9276739.
+Pages tagged:                                 204178.
+Pages tagged resident:                        139038.
+Pages tagged compressed:                       65140.
+Pages tag-storage:                             49152.
+Pages tag-storage holding tags:                 6694.
+Pages tag-storage free:                           21.
+Pages tag-storage non-tag pageable:            42270.
+Pages tag-storage non-tag wired:                  44.
+Bytes of compressed tags:                   10877760.
+Tagged compressions:                        49985108.
+Tagged decompressions:                      47606913.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   482746452 354652856  92081400    80% 4508630 920814000    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+25769803776
+@@load
+2.83
+@@cpu
+20 7 73
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                    10767.
+Pages active:                                 351021.
+Pages inactive:                               350223.
+Pages speculative:                               645.
+Pages throttled:                                   0.
+Pages wired down:                             298324.
+Pages purgeable:                                9015.
+"Translation faults":                    17149039843.
+Pages copy-on-write:                      1258873884.
+Pages zero filled:                        6112124756.
+Pages reactivated:                        1259862245.
+Pages purged:                              368409140.
+File-backed pages:                            255076.
+Anonymous pages:                              446813.
+Pages stored in compressor:                  1200876.
+Pages occupied by compressor:                 522323.
+Decompressions:                           1573961175.
+Compressions:                             1683779127.
+Pageins:                                   344809261.
+Pageouts:                                     339631.
+Swapins:                                     5424754.
+Swapouts:                                    9276739.
+Pages tagged:                                 204033.
+Pages tagged resident:                        138893.
+Pages tagged compressed:                       65140.
+Pages tag-storage:                             49152.
+Pages tag-storage holding tags:                 6694.
+Pages tag-storage free:                           86.
+Pages tag-storage non-tag pageable:            42205.
+Pages tag-storage non-tag wired:                  44.
+Bytes of compressed tags:                   10880256.
+Tagged compressions:                        49985133.
+Tagged decompressions:                      47606935.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   482746452 354653244  92081012    80% 4508636 920810120    0%   /System/Volumes/Data
+@@s
+@@top_cpu
+11838  42.1 411808 NewsToday2
+  608  34.4  85552 WindowServer
+  754   9.5  15536 coreaudiod
+42814   6.7 205488 Purdex Helper (Renderer)
+92459   6.5   4000 sysmond
+@@top_mem
+38412   0.0 1016240 Brave Browser Helper (Renderer)
+97907   0.8 547008 SpringBoard
+45305   0.6 481200 claude
+68827   3.5 427952 claude
+11838  42.1 411808 NewsToday2
+@@gate
+{
+  "Heavy": [
+    {
+      "class": "heavy",
+      "slot": 1,
+      "pid": 3096,
+      "pgid": 3101,
+      "argv": [
+        "scripts/check.sh"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "started": "2026-10-16T05:16:17.167806+08:00",
+      "session": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  "Light": null,
+  "WaitHeavy": 0,
+  "WaitLight": 0,
+  "QueueHeavy": null,
+  "QueueLight": null,
+  "Suspect": null,
+  "Profile": "default",
+  "Settings": [
+    {
+      "key": "admission.disk_min_gb",
+      "value": "10",
+      "source": "default"
+    },
+    {
+      "key": "admission.enabled",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "admission.max_page_rate",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "admission.max_pressure_level",
+      "value": "1",
+      "source": "default"
+    },
+    {
+      "key": "admission.on_unreadable",
+      "value": "level-only",
+      "source": "default"
+    },
+    {
+      "key": "cache.count1",
+      "value": "warn",
+      "source": "default"
+    },
+    {
+      "key": "enabled",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "intercept.mod_rewrite",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "intercept.tools",
+      "value": "go,pnpm,npx,vitest,tsc,composer,phpunit,pest",
+      "source": "default"
+    },
+    {
+      "key": "lifetime.alert_after_min",
+      "value": "60",
+      "source": "default"
+    },
+    {
+      "key": "lifetime.hold",
+      "value": "tree",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.go_mem_per_worker_mb",
+      "value": "150",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.go_p",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.mem_per_worker_mb",
+      "value": "400",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.mode",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.pnpm_concurrency",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.reserve_cores",
+      "value": "2",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.vitest_max_workers",
+      "value": "3",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.vitest_mem_per_worker_mb",
+      "value": "700",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.vitest_workers",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "priority.mode",
+      "value": "nice",
+      "source": "default"
+    },
+    {
+      "key": "priority.nice",
+      "value": "10",
+      "source": "default"
+    },
+    {
+      "key": "profile",
+      "value": "default",
+      "source": "default"
+    },
+    {
+      "key": "reap.enabled",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "reap.grace_s",
+      "value": "5",
+      "source": "default"
+    },
+    {
+      "key": "slots.heavy",
+      "value": "1",
+      "source": "default"
+    },
+    {
+      "key": "slots.light",
+      "value": "3",
+      "source": "default"
+    },
+    {
+      "key": "slots.order",
+      "value": "fifo",
+      "source": "default"
+    }
+  ]
+}
+
+@@gate_end
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+25769803776
+@@load
+2.84
+@@cpu
+10 6 84
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                    14864.
+Pages active:                                 363982.
+Pages inactive:                               362692.
+Pages speculative:                               673.
+Pages throttled:                                   0.
+Pages wired down:                             268851.
+Pages purgeable:                               14191.
+"Translation faults":                    17149056539.
+Pages copy-on-write:                      1258876589.
+Pages zero filled:                        6112130237.
+Pages reactivated:                        1259862245.
+Pages purged:                              368409140.
+File-backed pages:                            255118.
+Anonymous pages:                              472229.
+Pages stored in compressor:                  1200618.
+Pages occupied by compressor:                 522241.
+Decompressions:                           1573961450.
+Compressions:                             1683779127.
+Pageins:                                   344809312.
+Pageouts:                                     339631.
+Swapins:                                     5424754.
+Swapouts:                                    9276739.
+Pages tagged:                                 203961.
+Pages tagged resident:                        138873.
+Pages tagged compressed:                       65088.
+Pages tag-storage:                             49152.
+Pages tag-storage holding tags:                 6694.
+Pages tag-storage free:                          101.
+Pages tag-storage non-tag pageable:            42194.
+Pages tag-storage non-tag wired:                  40.
+Bytes of compressed tags:                   10866752.
+Tagged compressions:                        49985133.
+Tagged decompressions:                      47606987.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   482746452 354653248  92081008    80% 4508636 920810080    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+25769803776
+@@load
+2.84
+@@cpu
+10 6 83
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                    16685.
+Pages active:                                 364021.
+Pages inactive:                               364062.
+Pages speculative:                               697.
+Pages throttled:                                   0.
+Pages wired down:                             265710.
+Pages purgeable:                               12268.
+"Translation faults":                    17149065942.
+Pages copy-on-write:                      1258878348.
+Pages zero filled:                        6112132580.
+Pages reactivated:                        1259862344.
+Pages purged:                              368409140.
+File-backed pages:                            255165.
+Anonymous pages:                              473615.
+Pages stored in compressor:                  1200204.
+Pages occupied by compressor:                 522128.
+Decompressions:                           1573961822.
+Compressions:                             1683779127.
+Pageins:                                   344809369.
+Pageouts:                                     339631.
+Swapins:                                     5424754.
+Swapouts:                                    9276739.
+Pages tagged:                                 203960.
+Pages tagged resident:                        138873.
+Pages tagged compressed:                       65087.
+Pages tag-storage:                             49152.
+Pages tag-storage holding tags:                 6694.
+Pages tag-storage free:                          105.
+Pages tag-storage non-tag pageable:            42190.
+Pages tag-storage non-tag wired:                  40.
+Bytes of compressed tags:                   10866240.
+Tagged compressions:                        49985133.
+Tagged decompressions:                      47606988.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   482746452 354653036  92081220    80% 4508636 920812200    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+25769803776
+@@load
+2.84
+@@cpu
+10 4 87
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                    18167.
+Pages active:                                 362995.
+Pages inactive:                               363692.
+Pages speculative:                               697.
+Pages throttled:                                   0.
+Pages wired down:                             265710.
+Pages purgeable:                               10476.
+"Translation faults":                    17149074727.
+Pages copy-on-write:                      1258879435.
+Pages zero filled:                        6112134443.
+Pages reactivated:                        1259862344.
+Pages purged:                              368409140.
+File-backed pages:                            255171.
+Anonymous pages:                              472213.
+Pages stored in compressor:                  1199927.
+Pages occupied by compressor:                 522042.
+Decompressions:                           1573962107.
+Compressions:                             1683779127.
+Pageins:                                   344809374.
+Pageouts:                                     339631.
+Swapins:                                     5424754.
+Swapouts:                                    9276739.
+Pages tagged:                                 203943.
+Pages tagged resident:                        138858.
+Pages tagged compressed:                       65085.
+Pages tag-storage:                             49152.
+Pages tag-storage holding tags:                 6694.
+Pages tag-storage free:                           51.
+Pages tag-storage non-tag pageable:            42244.
+Pages tag-storage non-tag wired:                  40.
+Bytes of compressed tags:                   10865792.
+Tagged compressions:                        49985133.
+Tagged decompressions:                      47606990.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   482746452 354653136  92081120    80% 4508636 920811200    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+25769803776
+@@load
+2.84
+@@cpu
+10 4 86
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                    19255.
+Pages active:                                 362325.
+Pages inactive:                               363368.
+Pages speculative:                               697.
+Pages throttled:                                   0.
+Pages wired down:                             265709.
+Pages purgeable:                                9068.
+"Translation faults":                    17149083428.
+Pages copy-on-write:                      1258880667.
+Pages zero filled:                        6112136315.
+Pages reactivated:                        1259862344.
+Pages purged:                              368409140.
+File-backed pages:                            255175.
+Anonymous pages:                              471215.
+Pages stored in compressor:                  1199639.
+Pages occupied by compressor:                 521949.
+Decompressions:                           1573962407.
+Compressions:                             1683779127.
+Pageins:                                   344809381.
+Pageouts:                                     339631.
+Swapins:                                     5424754.
+Swapouts:                                    9276739.
+Pages tagged:                                 203943.
+Pages tagged resident:                        138858.
+Pages tagged compressed:                       65085.
+Pages tag-storage:                             49152.
+Pages tag-storage holding tags:                 6694.
+Pages tag-storage free:                           54.
+Pages tag-storage non-tag pageable:            42241.
+Pages tag-storage non-tag wired:                  40.
+Bytes of compressed tags:                   10865792.
+Tagged compressions:                        49985133.
+Tagged decompressions:                      47606990.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   482746452 354653068  92081188    80% 4508636 920811880    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+10
+@@memsize
+25769803776
+@@load
+2.84
+@@cpu
+9 4 87
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                    20219.
+Pages active:                                 362573.
+Pages inactive:                               362473.
+Pages speculative:                               697.
+Pages throttled:                                   0.
+Pages wired down:                             265722.
+Pages purgeable:                                7916.
+"Translation faults":                    17149093916.
+Pages copy-on-write:                      1258882304.
+Pages zero filled:                        6112139109.
+Pages reactivated:                        1259862344.
+Pages purged:                              368409140.
+File-backed pages:                            255178.
+Anonymous pages:                              470565.
+Pages stored in compressor:                  1198589.
+Pages occupied by compressor:                 521619.
+Decompressions:                           1573963457.
+Compressions:                             1683779127.
+Pageins:                                   344809416.
+Pageouts:                                     339631.
+Swapins:                                     5424754.
+Swapouts:                                    9276739.
+Pages tagged:                                 203804.
+Pages tagged resident:                        138753.
+Pages tagged compressed:                       65051.
+Pages tag-storage:                             49152.
+Pages tag-storage holding tags:                 6694.
+Pages tag-storage free:                           89.
+Pages tag-storage non-tag pageable:            42206.
+Pages tag-storage non-tag wired:                  40.
+Bytes of compressed tags:                   10862912.
+Tagged compressions:                        49985133.
+Tagged decompressions:                      47607024.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused     ifree %iused  Mounted on
+/dev/disk3s5   482746452 354653104  92081152    80% 4508636 920811520    0%   /System/Volumes/Data
+@@s
+@@top_cpu
+  608  36.8  85520 WindowServer
+  754  10.3  15536 coreaudiod
+68545   9.3  96672 pdx
+38380   7.3  84592 Brave Browser Helper
+42809   5.0  62864 Purdex Helper
+@@top_mem
+38412   0.0 1016240 Brave Browser Helper (Renderer)
+97907   0.7 546976 SpringBoard
+45305   1.5 481376 claude
+68827   1.2 428016 claude
+11838   0.0 413136 NewsToday2
+@@gate
+{
+  "Heavy": [
+    {
+      "class": "heavy",
+      "slot": 1,
+      "pid": 3096,
+      "pgid": 3101,
+      "argv": [
+        "scripts/check.sh"
+      ],
+      "cwd": "/Users/user/Workspace/proj",
+      "started": "2026-10-16T05:16:17.167806+08:00",
+      "session": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  "Light": null,
+  "WaitHeavy": 0,
+  "WaitLight": 0,
+  "QueueHeavy": null,
+  "QueueLight": null,
+  "Suspect": null,
+  "Profile": "default",
+  "Settings": [
+    {
+      "key": "admission.disk_min_gb",
+      "value": "10",
+      "source": "default"
+    },
+    {
+      "key": "admission.enabled",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "admission.max_page_rate",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "admission.max_pressure_level",
+      "value": "1",
+      "source": "default"
+    },
+    {
+      "key": "admission.on_unreadable",
+      "value": "level-only",
+      "source": "default"
+    },
+    {
+      "key": "cache.count1",
+      "value": "warn",
+      "source": "default"
+    },
+    {
+      "key": "enabled",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "intercept.mod_rewrite",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "intercept.tools",
+      "value": "go,pnpm,npx,vitest,tsc,composer,phpunit,pest",
+      "source": "default"
+    },
+    {
+      "key": "lifetime.alert_after_min",
+      "value": "60",
+      "source": "default"
+    },
+    {
+      "key": "lifetime.hold",
+      "value": "tree",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.go_mem_per_worker_mb",
+      "value": "150",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.go_p",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.mem_per_worker_mb",
+      "value": "400",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.mode",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.pnpm_concurrency",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.reserve_cores",
+      "value": "2",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.vitest_max_workers",
+      "value": "3",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.vitest_mem_per_worker_mb",
+      "value": "700",
+      "source": "default"
+    },
+    {
+      "key": "parallelism.vitest_workers",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "priority.mode",
+      "value": "nice",
+      "source": "default"
+    },
+    {
+      "key": "priority.nice",
+      "value": "10",
+      "source": "default"
+    },
+    {
+      "key": "profile",
+      "value": "default",
+      "source": "default"
+    },
+    {
+      "key": "reap.enabled",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "reap.grace_s",
+      "value": "5",
+      "source": "default"
+    },
+    {
+      "key": "slots.heavy",
+      "value": "1",
+      "source": "default"
+    },
+    {
+      "key": "slots.light",
+      "value": "3",
+      "source": "default"
+    },
+    {
+      "key": "slots.order",
+      "value": "fifo",
+      "source": "default"
+    }
+  ]
+}
+
+@@gate_end
+@@end

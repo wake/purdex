@@ -129,6 +129,10 @@ func (r Runner) Run(ctx context.Context, alias string) Result {
 	return res
 }
 
+// Classify255 is classify255 for the long-lived sessions of the fleet module: the verdict for an ssh that ended with exit
+// status 255, from its stderr (which never leaves the daemon).
+func Classify255(stderr string) (Status, Code) { return classify255(stderr) }
+
 // classify255 tells apart the exit-255 cases by reading stderr; only the verdict leaves this function.
 func classify255(stderr string) (Status, Code) {
 	switch {

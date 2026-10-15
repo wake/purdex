@@ -27,6 +27,9 @@ type LastRun struct {
 	SessionID    string
 	Cwd          string
 	EndedAt      int64
+	// PaneID is the tmux pane the run ran in ("" for a row written before the column existed): a tmux session can hold
+	// several panes, each with its own run, and only the same pane's run is a /clear's predecessor.
+	PaneID string
 }
 
 // addFrameRootColumns brings a table created before tmux_instance / is_root existed up to the current schema.
@@ -73,10 +76,23 @@ func migrateLastRunTable(db *sql.DB) error {
 			agent_type    TEXT NOT NULL,
 			session_id    TEXT NOT NULL,
 			cwd           TEXT NOT NULL,
-			ended_at      INTEGER NOT NULL
+			ended_at      INTEGER NOT NULL,
+			pane_id       TEXT NOT NULL DEFAULT ''
 		)
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	var have int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('last_agent_run') WHERE name = 'pane_id'`).Scan(&have); err != nil {
+		return err
+	}
+	if have == 0 {
+		if _, err := db.Exec(`ALTER TABLE last_agent_run ADD COLUMN pane_id TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("add last_agent_run.pane_id: %w", err)
+		}
+	}
+	return nil
 }
 
 // SetTmuxInstance records the tmux generation a root frame was created or taken over under (the root SessionStart's
@@ -127,14 +143,14 @@ func (s *FramesStore) ClaimEnd(frameID, sessionID string, end *RunEnd) (bool, er
 	defer tx.Rollback() //nolint:errcheck // a no-op after Commit
 
 	var (
-		agentType, sid, cwd, instance string
-		root                          int
+		agentType, sid, cwd, instance, pane string
+		root                                int
 	)
 	err = tx.QueryRow(
 		`DELETE FROM agent_frames WHERE frame_id = ? AND (? = '' OR session_id = ?)
-		 RETURNING agent_type, session_id, cwd, tmux_instance, is_root`,
+		 RETURNING agent_type, session_id, cwd, tmux_instance, is_root, pane_id`,
 		frameID, sessionID, sessionID,
-	).Scan(&agentType, &sid, &cwd, &instance, &root)
+	).Scan(&agentType, &sid, &cwd, &instance, &root, &pane)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -143,17 +159,18 @@ func (s *FramesStore) ClaimEnd(frameID, sessionID string, end *RunEnd) (bool, er
 	}
 	if end != nil && end.Code != "" && root != 0 && instance != "" {
 		if _, err := tx.Exec(`
-			INSERT INTO last_agent_run (code, tmux_instance, agent_type, session_id, cwd, ended_at)
-			VALUES (?, ?, ?, ?, ?, ?)
+			INSERT INTO last_agent_run (code, tmux_instance, agent_type, session_id, cwd, ended_at, pane_id)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(code) DO UPDATE SET
 				tmux_instance = excluded.tmux_instance,
 				agent_type = excluded.agent_type,
 				session_id = excluded.session_id,
 				cwd = excluded.cwd,
-				ended_at = excluded.ended_at
+				ended_at = excluded.ended_at,
+				pane_id = excluded.pane_id
 			WHERE last_agent_run.tmux_instance = excluded.tmux_instance
 			   OR `+instanceStart("last_agent_run.tmux_instance")+` <= `+instanceStart("excluded.tmux_instance")+`
-		`, end.Code, instance, agentType, sid, cwd, end.EndedAt); err != nil {
+		`, end.Code, instance, agentType, sid, cwd, end.EndedAt, pane); err != nil {
 			return false, fmt.Errorf("record last run: %w", err)
 		}
 	}
@@ -173,8 +190,8 @@ func instanceStart(col string) string {
 func (s *FramesStore) LastRun(code string) (*LastRun, error) {
 	var r LastRun
 	err := s.db.QueryRow(`
-		SELECT code, tmux_instance, agent_type, session_id, cwd, ended_at FROM last_agent_run WHERE code = ?
-	`, code).Scan(&r.Code, &r.TmuxInstance, &r.AgentType, &r.SessionID, &r.Cwd, &r.EndedAt)
+		SELECT code, tmux_instance, agent_type, session_id, cwd, ended_at, pane_id FROM last_agent_run WHERE code = ?
+	`, code).Scan(&r.Code, &r.TmuxInstance, &r.AgentType, &r.SessionID, &r.Cwd, &r.EndedAt, &r.PaneID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

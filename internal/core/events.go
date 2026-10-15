@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"github.com/wake/purdex/internal/execstat"
 	"log"
 	"net/http"
 	"sync"
@@ -61,6 +62,12 @@ const FeatureAgentV2 = "agent.v2"
 // never sent a read frame. It still gets the burst-sized buffer of any opt-in.
 const FeatureReadsV1 = "reads.v1"
 
+// FeatureFleetV1 is the opt-in to fleet.changed (fleet spec rev 2 §6): the primary's once-a-second push of the measured
+// fleet, asked for with /ws/host-events?fleet=v1. Like reads.v1 it does NOT make the subscriber strict, and its frames do not
+// even use the shared send queue: they go through BroadcastNewestTo's per-subscriber slot, newest-wins, so a slow client
+// loses old pushes (the next one supersedes them) and is never disconnected over one.
+const FeatureFleetV1 = "fleet.v1"
+
 const (
 	// defaultSendBuffer is a subscriber's send buffer, in frames.
 	defaultSendBuffer = 64
@@ -93,7 +100,11 @@ type EventSubscriber struct {
 	conn     *websocket.Conn
 	send     chan []byte
 	features map[string]struct{} // what it opted into when it connected; never changes
-	strict   bool                // opted into any feature: a frame that does not fit ends it; never changes
+
+	newestMu   sync.Mutex    // the newest-wins slot of BroadcastNewestTo (not the send queue)
+	newest     []byte        // the newest frame not yet written; nil = none
+	newestWake chan struct{} // cap 1: the slot may hold a frame
+	strict     bool          // opted into any feature: a frame that does not fit ends it; never changes
 
 	mu     sync.Mutex // guards closed; held across a send so close never races it
 	closed bool
@@ -107,6 +118,8 @@ func newEventSubscriber(conn *websocket.Conn, features ...string) *EventSubscrib
 		conn: conn,
 		send: make(chan []byte, defaultSendBuffer),
 		done: make(chan struct{}),
+
+		newestWake: make(chan struct{}, 1),
 	}
 	if len(features) > 0 {
 		sub.features = make(map[string]struct{}, len(features))
@@ -203,6 +216,34 @@ func (sub *EventSubscriber) offer(data []byte) offerResult {
 	return offerEnded
 }
 
+// offerNewest puts data in the subscriber's newest-wins slot, replacing a frame that was not written yet, and wakes the write
+// pump. It never blocks, never uses the send queue, and never ends the subscriber. False when it is already removed.
+func (sub *EventSubscriber) offerNewest(data []byte) bool {
+	sub.mu.Lock()
+	closed := sub.closed
+	sub.mu.Unlock()
+	if closed {
+		return false
+	}
+	sub.newestMu.Lock()
+	sub.newest = data
+	sub.newestMu.Unlock()
+	select {
+	case sub.newestWake <- struct{}{}:
+	default:
+	}
+	return true
+}
+
+// TakeNewest returns and clears the frame in the newest-wins slot (the write pump's read, and the tests').
+func (sub *EventSubscriber) TakeNewest() ([]byte, bool) {
+	sub.newestMu.Lock()
+	defer sub.newestMu.Unlock()
+	d := sub.newest
+	sub.newest = nil
+	return d, d != nil
+}
+
 // Done is closed once the subscriber has been removed (its connection is
 // closed or closing).
 func (sub *EventSubscriber) Done() <-chan struct{} { return sub.done }
@@ -275,6 +316,13 @@ func (eb *EventsBroadcaster) Add(conn *websocket.Conn, features ...string) *Even
 				if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 					eb.Remove(sub)
 					return
+				}
+			case <-sub.newestWake:
+				if msg, ok := sub.TakeNewest(); ok {
+					if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+						eb.Remove(sub)
+						return
+					}
 				}
 			case <-ticker.C:
 				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
@@ -399,6 +447,24 @@ func (eb *EventsBroadcaster) BroadcastStrictTo(feature string, ev HostEvent) {
 	for _, sub := range failed {
 		log.Printf("events: %s frame could not be queued (send buffer full); closing the connection so the client reconnects", ev.Type)
 		eb.Remove(sub)
+	}
+}
+
+// BroadcastNewestTo sends ev to every subscriber that opted into feature, and to no other, best effort and newest-wins: each
+// subscriber keeps one pending frame, a newer one replaces it, so a slow client loses old pushes and is never disconnected
+// (unlike BroadcastStrictTo). The fleet.changed push uses it: every one supersedes the last.
+func (eb *EventsBroadcaster) BroadcastNewestTo(feature string, ev HostEvent) {
+	msg, err := json.Marshal(ev)
+	if err != nil {
+		log.Printf("events: marshal error: %v", err)
+		return
+	}
+	eb.mu.RLock()
+	defer eb.mu.RUnlock()
+	for sub := range eb.subscribers {
+		if sub.Wants(feature) {
+			sub.offerNewest(msg)
+		}
 	}
 }
 
@@ -547,7 +613,7 @@ func (eb *EventsBroadcaster) OnSubscribe(fn func(sub *EventSubscriber)) {
 // while ?nex=v2&nex=v1 would not; an ambiguous request gets the conservative
 // answer instead, since opting in changes what the connection is sent and
 // when it is closed. A bad value for one feature leaves the other alone.
-// reads is read the same way (exactly "v1"). The result is in a fixed order: nex, agent, reads.
+// reads is read the same way (exactly "v1"). fleet is read the same way. The result is in a fixed order: nex, agent, reads, fleet.
 func featuresOf(r *http.Request) []string {
 	q := r.URL.Query()
 	var features []string
@@ -559,6 +625,9 @@ func featuresOf(r *http.Request) []string {
 	}
 	if reads := q["reads"]; len(reads) == 1 && reads[0] == "v1" {
 		features = append(features, FeatureReadsV1)
+	}
+	if fleet := q["fleet"]; len(fleet) == 1 && fleet[0] == "v1" {
+		features = append(features, FeatureFleetV1)
 	}
 	return features
 }
@@ -582,6 +651,9 @@ func (eb *EventsBroadcaster) HandleHostEvents(w http.ResponseWriter, r *http.Req
 	})
 
 	sub := eb.Add(conn, features...)
+	execstat.Event("host-events-subscribe")
+	execstat.AdjustGauge("host-events-subscribers", 1)
+	defer func() { execstat.AdjustGauge("host-events-subscribers", -1) }()
 	defer eb.Remove(sub)
 
 	// Call all registered OnSubscribe callbacks.

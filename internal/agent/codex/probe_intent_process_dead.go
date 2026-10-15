@@ -9,6 +9,7 @@ package codex
 
 import (
 	"context"
+	"github.com/wake/purdex/internal/execstat"
 	"sync/atomic"
 	"time"
 
@@ -109,6 +110,8 @@ func StartProcessDeadDetector(
 ) {
 	ticker := time.NewTicker(currentProcessDeadPollInterval())
 	defer ticker.Stop()
+	execstat.AdjustGauge("codex-process-dead-detectors", 1) // each one reads the pane list once per tick (probe dedupe plan D4)
+	defer execstat.AdjustGauge("codex-process-dead-detectors", -1)
 
 	for {
 		select {

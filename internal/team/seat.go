@@ -37,3 +37,12 @@ type Seat struct {
 type SeatReader interface {
 	SeatOf(sessionID string) (Seat, error)
 }
+
+// PredecessorReaderKey is the service-registry key of the PredecessorReader.
+const PredecessorReaderKey = "team.predecessor"
+
+// PredecessorReader answers which session a relay's new session replaced (the session_lineage row), and when
+// (unix ms). ok is false for a session no relay produced. The conversation module reads it to scroll back across a relay.
+type PredecessorReader interface {
+	PredecessorOf(sessionID string) (prev string, at int64, ok bool, err error)
+}
