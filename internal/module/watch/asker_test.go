@@ -15,12 +15,10 @@ import (
 
 // fakeCaller answers HostCaller's Call by path.
 type fakeCaller struct {
-	ids   map[string]string // alias → host id
 	reply map[string]peersmod.CallResult
 	calls []string
 }
 
-func (f *fakeCaller) HostIDOf(alias string) string { return f.ids[alias] }
 func (f *fakeCaller) Call(_ context.Context, host, path string, body any) peersmod.CallResult {
 	f.calls = append(f.calls, host+" "+path)
 	b, _ := json.Marshal(body)
@@ -45,7 +43,8 @@ func done(v HolderView) peersmod.CallResult {
 func askerRig(t *testing.T) (*testRig, *fakeCaller) {
 	r := newRig(t)
 	r.m.core.Cfg.Peers.Alias = "mlab"
-	fc := &fakeCaller{ids: map[string]string{"air26": peerID}, reply: map[string]peersmod.CallResult{}}
+	r.m.core.Cfg.Peers.Hosts[0].Alias = "air26"
+	fc := &fakeCaller{reply: map[string]peersmod.CallResult{}}
 	r.m.caller = fc
 	return r, fc
 }
@@ -145,4 +144,14 @@ func TestStatusRoute_ShowsTheHolderTheRememberedWatcherAndTheSettings(t *testing
 	require.True(t, st.AutoWake)
 	require.Equal(t, "patrol", st.Mode)
 	require.Equal(t, []string{"air26", "mlab"}, st.Targets)
+}
+
+// targets are validated without regard to case, so a target written AIR26 is the paired host air26.
+func TestAsker_AnAliasIsFoundWithoutRegardToCase(t *testing.T) {
+	r, fc := askerRig(t)
+	fc.reply[pathHolder] = done(HolderView{HostID: peerID, State: "none"})
+	a, err := asker{r.m}.Holder(context.Background(), "AIR26")
+	require.NoError(t, err)
+	require.Equal(t, peerID, a.HostID)
+	require.Equal(t, []string{peerID + " " + pathHolder}, fc.calls)
 }

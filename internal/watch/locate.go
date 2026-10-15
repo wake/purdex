@@ -60,6 +60,7 @@ type remembered struct {
 // remembered watcher is kept in a file, so a restart does not start a second search.
 type Locator struct {
 	mu       sync.Mutex
+	searchMu sync.Mutex // one search at a time: two callers that both missed the cache must not both start a watcher
 	path     string
 	mem      remembered
 	ask      Asker
@@ -114,6 +115,15 @@ func (l *Locator) Failed() {
 func (l *Locator) Current(ctx context.Context, targets []string, autoWake bool) (Where, error) {
 	l.mu.Lock()
 	if c := l.mem.Current; c != nil {
+		w := *c
+		l.mu.Unlock()
+		return w, nil
+	}
+	l.mu.Unlock()
+	l.searchMu.Lock()
+	defer l.searchMu.Unlock()
+	l.mu.Lock()
+	if c := l.mem.Current; c != nil { // another caller's search found it while this one waited
 		w := *c
 		l.mu.Unlock()
 		return w, nil

@@ -22,7 +22,6 @@ const (
 // hostCaller is *peersmod.HostCaller as the module uses it (a test seam).
 type hostCaller interface {
 	Call(ctx context.Context, targetHostID, path string, body any) peersmod.CallResult
-	HostIDOf(alias string) string
 }
 
 // SessionControl is what the session part (W3) gives this module so the host it runs on can wake or start the watcher itself; it
@@ -77,8 +76,9 @@ func (a asker) call(ctx context.Context, alias, path string) (watch.HolderAnswer
 	if a.m.caller == nil {
 		return watch.HolderAnswer{}, errors.New("no host caller")
 	}
-	hostID := a.m.caller.HostIDOf(alias)
-	if hostID == "" {
+	entry, _, ok := a.m.peerEntry(alias) // the paired hosts, by alias without regard to case (as targets are validated)
+	hostID := entry.HostID
+	if !ok || hostID == "" {
 		return watch.HolderAnswer{}, fmt.Errorf("no paired host %q", alias)
 	}
 	res := a.m.caller.Call(ctx, hostID, path, map[string]string{"to_host_id": hostID})

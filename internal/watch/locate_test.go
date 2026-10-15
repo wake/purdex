@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -273,4 +275,54 @@ func TestLocate_ACorruptRememberedFileIsSetAside(t *testing.T) {
 	require.Nil(t, cur)
 	require.Nil(t, last)
 	require.FileExists(t, path+".corrupt")
+}
+
+// One search at a time: callers that all miss the cache together start one watcher, and the others get it.
+func TestLocate_ConcurrentCallersStartOneWatcher(t *testing.T) {
+	f := &lockedHosts{fakeHosts: fakeHosts{hold: map[string]HolderAnswer{
+		"air26": hostAns("a:1", HolderNone, "", "air26", "mlab"),
+		"mlab":  hostAns("m:1", HolderNone, "", "air26", "mlab"),
+	}}}
+	l := NewLocator("", f, nil)
+	var wg sync.WaitGroup
+	got := make([]Where, 8)
+	for i := range got {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			w, err := l.Current(context.Background(), targets, true)
+			require.NoError(t, err)
+			got[i] = w
+		}(i)
+	}
+	wg.Wait()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	require.Equal(t, []string{"air26"}, f.start, "one start, not one per caller")
+	for _, w := range got {
+		require.Equal(t, "new-on-air26", w.SessionID)
+	}
+}
+
+// lockedHosts is fakeHosts safe for concurrent use, and slow enough that callers overlap.
+type lockedHosts struct {
+	mu sync.Mutex
+	fakeHosts
+}
+
+func (l *lockedHosts) Holder(ctx context.Context, a string) (HolderAnswer, error) {
+	time.Sleep(10 * time.Millisecond)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.fakeHosts.Holder(ctx, a)
+}
+func (l *lockedHosts) Start(ctx context.Context, a string) (HolderAnswer, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.fakeHosts.Start(ctx, a)
+}
+func (l *lockedHosts) Wake(ctx context.Context, a string) (HolderAnswer, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.fakeHosts.Wake(ctx, a)
 }
