@@ -1,0 +1,931 @@
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+4.40
+@@cpu
+6 5 89
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                               11107.
+Pages active:                           1528200.
+Pages inactive:                         1488483.
+Pages speculative:                        39139.
+Pages throttled:                              0.
+Pages wired down:                        677985.
+Pages purgeable:                          10266.
+"Translation faults":                 553268064.
+Pages copy-on-write:                   25110853.
+Pages zero filled:                    305296655.
+Pages reactivated:                     83357314.
+Pages purged:                           2153635.
+File-backed pages:                       982001.
+Anonymous pages:                        2073821.
+Pages stored in compressor:             2775485.
+Pages occupied by compressor:            449123.
+Decompressions:                        25063148.
+Compressions:                          35116542.
+Pageins:                                9145665.
+Pageouts:                               2071957.
+Swapins:                               13480010.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138057240 332318420    30%  688768 3323184200    0%   /System/Volumes/Data
+@@s
+@@top_cpu
+18171  36.0 8914560 prl_vm_app
+ 2887   2.5 282804 Brave Browser
+25539   1.4 258112 Brave Browser Helper (Renderer)
+ 2894   1.3  40116 Brave Browser Helper
+29305   0.9    800 sh
+@@top_mem
+18171  36.0 8914560 prl_vm_app
+ 2887   2.5 282804 Brave Browser
+26124   0.0 281868 Brave Browser Helper (Renderer)
+25846   0.0 279052 Brave Browser Helper (Renderer)
+25801   0.0 262320 Brave Browser Helper (Renderer)
+@@gate none
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+4.40
+@@cpu
+15 8 78
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                9696.
+Pages active:                           1528310.
+Pages inactive:                         1488923.
+Pages speculative:                        39174.
+Pages throttled:                              0.
+Pages wired down:                        678019.
+Pages purgeable:                          10268.
+"Translation faults":                 553274411.
+Pages copy-on-write:                   25112265.
+Pages zero filled:                    305298285.
+Pages reactivated:                     83357315.
+Pages purged:                           2153635.
+File-backed pages:                       982068.
+Anonymous pages:                        2074339.
+Pages stored in compressor:             2775015.
+Pages occupied by compressor:            449830.
+Decompressions:                        25063618.
+Compressions:                          35116542.
+Pageins:                                9145678.
+Pageouts:                               2071957.
+Swapins:                               13480904.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138057240 332318420    30%  688768 3323184200    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+4.40
+@@cpu
+12 5 83
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                7403.
+Pages active:                           1530037.
+Pages inactive:                         1489572.
+Pages speculative:                        39125.
+Pages throttled:                              0.
+Pages wired down:                        678033.
+Pages purgeable:                          10292.
+"Translation faults":                 553279342.
+Pages copy-on-write:                   25112868.
+Pages zero filled:                    305301272.
+Pages reactivated:                     83357315.
+Pages purged:                           2153635.
+File-backed pages:                       982019.
+Anonymous pages:                        2076715.
+Pages stored in compressor:             2774982.
+Pages occupied by compressor:            449878.
+Decompressions:                        25063651.
+Compressions:                          35116542.
+Pageins:                                9145693.
+Pageouts:                               2071957.
+Swapins:                               13480968.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138056884 332318776    30%  688765 3323187760    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+4.40
+@@cpu
+12 4 83
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                5428.
+Pages active:                           1530874.
+Pages inactive:                         1490546.
+Pages speculative:                        39125.
+Pages throttled:                              0.
+Pages wired down:                        678066.
+Pages purgeable:                          10292.
+"Translation faults":                 553283511.
+Pages copy-on-write:                   25113485.
+Pages zero filled:                    305303645.
+Pages reactivated:                     83357315.
+Pages purged:                           2153635.
+File-backed pages:                       982019.
+Anonymous pages:                        2078526.
+Pages stored in compressor:             2774979.
+Pages occupied by compressor:            450006.
+Decompressions:                        25063654.
+Compressions:                          35116542.
+Pageins:                                9145695.
+Pageouts:                               2071957.
+Swapins:                               13481096.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138056884 332318776    30%  688765 3323187760    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+4.40
+@@cpu
+9 5 86
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                5637.
+Pages active:                           1530396.
+Pages inactive:                         1490885.
+Pages speculative:                        39139.
+Pages throttled:                              0.
+Pages wired down:                        677959.
+Pages purgeable:                          10292.
+"Translation faults":                 553285454.
+Pages copy-on-write:                   25114091.
+Pages zero filled:                    305303826.
+Pages reactivated:                     83357315.
+Pages purged:                           2153643.
+File-backed pages:                       982033.
+Anonymous pages:                        2078387.
+Pages stored in compressor:             2774979.
+Pages occupied by compressor:            450006.
+Decompressions:                        25063654.
+Compressions:                          35116542.
+Pageins:                                9145697.
+Pageouts:                               2071957.
+Swapins:                               13481096.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138056884 332318776    30%  688765 3323187760    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+4.05
+@@cpu
+4 4 92
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                5583.
+Pages active:                           1530385.
+Pages inactive:                         1490851.
+Pages speculative:                        39140.
+Pages throttled:                              0.
+Pages wired down:                        677976.
+Pages purgeable:                          10292.
+"Translation faults":                 553287543.
+Pages copy-on-write:                   25114699.
+Pages zero filled:                    305304101.
+Pages reactivated:                     83357315.
+Pages purged:                           2153643.
+File-backed pages:                       982034.
+Anonymous pages:                        2078342.
+Pages stored in compressor:             2774979.
+Pages occupied by compressor:            450006.
+Decompressions:                        25063654.
+Compressions:                          35116542.
+Pageins:                                9145699.
+Pageouts:                               2071957.
+Swapins:                               13481096.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138056888 332318772    30%  688766 3323187720    0%   /System/Volumes/Data
+@@s
+@@top_cpu
+18171  21.0 8914560 prl_vm_app
+  399   0.9  42356 io.tailscale.ipn.macsys.network-extension
+18633   0.5 110180 Purdex
+  222   0.2   8524 mDNSResponder
+  161   0.1  23172 loginwindow
+@@top_mem
+18171  21.0 8914560 prl_vm_app
+ 2887   0.0 282804 Brave Browser
+26124   0.0 281868 Brave Browser Helper (Renderer)
+25846   0.0 279060 Brave Browser Helper (Renderer)
+25801   0.0 262324 Brave Browser Helper (Renderer)
+@@gate none
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+4.05
+@@cpu
+8 6 86
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                5606.
+Pages active:                           1530265.
+Pages inactive:                         1490996.
+Pages speculative:                        39140.
+Pages throttled:                              0.
+Pages wired down:                        677993.
+Pages purgeable:                          10292.
+"Translation faults":                 553293419.
+Pages copy-on-write:                   25116136.
+Pages zero filled:                    305305696.
+Pages reactivated:                     83357315.
+Pages purged:                           2153643.
+File-backed pages:                       982042.
+Anonymous pages:                        2078359.
+Pages stored in compressor:             2774979.
+Pages occupied by compressor:            450006.
+Decompressions:                        25063654.
+Compressions:                          35116542.
+Pageins:                                9145708.
+Pageouts:                               2071957.
+Swapins:                               13481096.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138056888 332318772    30%  688766 3323187720    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+4.05
+@@cpu
+11 6 83
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                5999.
+Pages active:                           1530207.
+Pages inactive:                         1490599.
+Pages speculative:                        39140.
+Pages throttled:                              0.
+Pages wired down:                        678000.
+Pages purgeable:                          10292.
+"Translation faults":                 553295929.
+Pages copy-on-write:                   25116768.
+Pages zero filled:                    305306102.
+Pages reactivated:                     83357315.
+Pages purged:                           2153643.
+File-backed pages:                       982042.
+Anonymous pages:                        2077904.
+Pages stored in compressor:             2774979.
+Pages occupied by compressor:            450006.
+Decompressions:                        25063654.
+Compressions:                          35116542.
+Pageins:                                9145710.
+Pageouts:                               2071957.
+Swapins:                               13481096.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138056868 332318792    30%  688766 3323187920    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+4.05
+@@cpu
+25 17 59
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                1696.
+Pages active:                           1531776.
+Pages inactive:                         1492521.
+Pages speculative:                        39156.
+Pages throttled:                              0.
+Pages wired down:                        678582.
+Pages purgeable:                          10292.
+"Translation faults":                 553309345.
+Pages copy-on-write:                   25118282.
+Pages zero filled:                    305311130.
+Pages reactivated:                     83357336.
+Pages purged:                           2153671.
+File-backed pages:                       982136.
+Anonymous pages:                        2081317.
+Pages stored in compressor:             2774828.
+Pages occupied by compressor:            450417.
+Decompressions:                        25063808.
+Compressions:                          35116542.
+Pageins:                                9145798.
+Pageouts:                               2071957.
+Swapins:                               13481539.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138057180 332318480    30%  688791 3323184800    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+4.05
+@@cpu
+18 15 68
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                3088.
+Pages active:                           1531182.
+Pages inactive:                         1491597.
+Pages speculative:                        39165.
+Pages throttled:                              0.
+Pages wired down:                        678658.
+Pages purgeable:                          10292.
+"Translation faults":                 553328918.
+Pages copy-on-write:                   25119655.
+Pages zero filled:                    305314133.
+Pages reactivated:                     83357500.
+Pages purged:                           2153687.
+File-backed pages:                       982069.
+Anonymous pages:                        2079875.
+Pages stored in compressor:             2774824.
+Pages occupied by compressor:            450417.
+Decompressions:                        25063812.
+Compressions:                          35116542.
+Pageins:                                9145891.
+Pageouts:                               2071957.
+Swapins:                               13481539.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138056600 332319060    30%  688780 3323190600    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+3.88
+@@cpu
+19 5 76
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                2917.
+Pages active:                           1531251.
+Pages inactive:                         1491587.
+Pages speculative:                        39171.
+Pages throttled:                              0.
+Pages wired down:                        678660.
+Pages purgeable:                          10292.
+"Translation faults":                 553331701.
+Pages copy-on-write:                   25120260.
+Pages zero filled:                    305314994.
+Pages reactivated:                     83357500.
+Pages purged:                           2153687.
+File-backed pages:                       982075.
+Anonymous pages:                        2079934.
+Pages stored in compressor:             2774814.
+Pages occupied by compressor:            450481.
+Decompressions:                        25063822.
+Compressions:                          35116542.
+Pageins:                                9145893.
+Pageouts:                               2071957.
+Swapins:                               13481603.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138056624 332319036    30%  688780 3323190360    0%   /System/Volumes/Data
+@@s
+@@top_cpu
+18171  61.1 8914560 prl_vm_app
+ 2887   2.1 282816 Brave Browser
+  114   1.3  17820 mds
+  278   1.1  55704 mds_stores
+29373   1.0  12116 mdworker_shared
+@@top_mem
+18171  61.1 8914560 prl_vm_app
+ 2887   2.1 282816 Brave Browser
+25846   0.0 279060 Brave Browser Helper (Renderer)
+26124   0.0 278804 Brave Browser Helper (Renderer)
+25801   0.0 262568 Brave Browser Helper (Renderer)
+@@gate none
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+3.88
+@@cpu
+11 11 79
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                2707.
+Pages active:                           1531324.
+Pages inactive:                         1491717.
+Pages speculative:                        39172.
+Pages throttled:                              0.
+Pages wired down:                        678670.
+Pages purgeable:                          10353.
+"Translation faults":                 553338505.
+Pages copy-on-write:                   25121689.
+Pages zero filled:                    305317167.
+Pages reactivated:                     83357500.
+Pages purged:                           2153687.
+File-backed pages:                       982076.
+Anonymous pages:                        2080137.
+Pages stored in compressor:             2774750.
+Pages occupied by compressor:            450465.
+Decompressions:                        25063825.
+Compressions:                          35116542.
+Pageins:                                9145902.
+Pageouts:                               2071957.
+Swapins:                               13481603.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138056624 332319036    30%  688780 3323190360    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+3.88
+@@cpu
+13 4 82
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                2764.
+Pages active:                           1531323.
+Pages inactive:                         1491707.
+Pages speculative:                        39172.
+Pages throttled:                              0.
+Pages wired down:                        678669.
+Pages purgeable:                          10360.
+"Translation faults":                 553340576.
+Pages copy-on-write:                   25122302.
+Pages zero filled:                    305317418.
+Pages reactivated:                     83357500.
+Pages purged:                           2153687.
+File-backed pages:                       982076.
+Anonymous pages:                        2080126.
+Pages stored in compressor:             2774726.
+Pages occupied by compressor:            450449.
+Decompressions:                        25063849.
+Compressions:                          35116542.
+Pageins:                                9145904.
+Pageouts:                               2071957.
+Swapins:                               13481603.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138056624 332319036    30%  688780 3323190360    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+3.88
+@@cpu
+16 4 80
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                2755.
+Pages active:                           1531323.
+Pages inactive:                         1491737.
+Pages speculative:                        39176.
+Pages throttled:                              0.
+Pages wired down:                        678682.
+Pages purgeable:                          10372.
+"Translation faults":                 553343028.
+Pages copy-on-write:                   25122936.
+Pages zero filled:                    305318029.
+Pages reactivated:                     83357500.
+Pages purged:                           2153687.
+File-backed pages:                       982082.
+Anonymous pages:                        2080154.
+Pages stored in compressor:             2774690.
+Pages occupied by compressor:            450449.
+Decompressions:                        25063849.
+Compressions:                          35116542.
+Pageins:                                9145907.
+Pageouts:                               2071957.
+Swapins:                               13481603.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138056568 332319092    30%  688781 3323190920    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+3.88
+@@cpu
+6 5 89
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                2813.
+Pages active:                           1531287.
+Pages inactive:                         1491609.
+Pages speculative:                        39185.
+Pages throttled:                              0.
+Pages wired down:                        678688.
+Pages purgeable:                          10372.
+"Translation faults":                 553345644.
+Pages copy-on-write:                   25123576.
+Pages zero filled:                    305318505.
+Pages reactivated:                     83357500.
+Pages purged:                           2153688.
+File-backed pages:                       982091.
+Anonymous pages:                        2079990.
+Pages stored in compressor:             2774677.
+Pages occupied by compressor:            450513.
+Decompressions:                        25063862.
+Compressions:                          35116542.
+Pageins:                                9145909.
+Pageouts:                               2071957.
+Swapins:                               13481667.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138056568 332319092    30%  688781 3323190920    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+3.73
+@@cpu
+15 4 81
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                2784.
+Pages active:                           1531223.
+Pages inactive:                         1491621.
+Pages speculative:                        39184.
+Pages throttled:                              0.
+Pages wired down:                        678689.
+Pages purgeable:                          10372.
+"Translation faults":                 553347594.
+Pages copy-on-write:                   25124198.
+Pages zero filled:                    305318666.
+Pages reactivated:                     83357503.
+Pages purged:                           2153688.
+File-backed pages:                       982090.
+Anonymous pages:                        2079938.
+Pages stored in compressor:             2774676.
+Pages occupied by compressor:            450513.
+Decompressions:                        25063863.
+Compressions:                          35116542.
+Pageins:                                9145911.
+Pageouts:                               2071957.
+Swapins:                               13481667.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138056552 332319108    30%  688781 3323191080    0%   /System/Volumes/Data
+@@s
+@@top_cpu
+18171  90.2 8914560 prl_vm_app
+ 2887   0.7 282816 Brave Browser
+25846   0.4 279060 Brave Browser Helper (Renderer)
+26056   0.3 241636 Brave Browser Helper (Renderer)
+ 2894   0.1  40156 Brave Browser Helper
+@@top_mem
+18171  90.2 8914560 prl_vm_app
+ 2887   0.7 282816 Brave Browser
+25846   0.4 279060 Brave Browser Helper (Renderer)
+26124   0.0 278804 Brave Browser Helper (Renderer)
+25801   0.0 262568 Brave Browser Helper (Renderer)
+@@gate none
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+3.73
+@@cpu
+15 6 79
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                2280.
+Pages active:                           1531367.
+Pages inactive:                         1491730.
+Pages speculative:                        39182.
+Pages throttled:                              0.
+Pages wired down:                        678689.
+Pages purgeable:                          10372.
+"Translation faults":                 553354417.
+Pages copy-on-write:                   25125830.
+Pages zero filled:                    305320424.
+Pages reactivated:                     83357503.
+Pages purged:                           2153688.
+File-backed pages:                       982088.
+Anonymous pages:                        2080191.
+Pages stored in compressor:             2774487.
+Pages occupied by compressor:            450879.
+Decompressions:                        25064052.
+Compressions:                          35116542.
+Pageins:                                9145920.
+Pageouts:                               2071957.
+Swapins:                               13482113.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138056544 332319116    30%  688781 3323191160    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+3.73
+@@cpu
+16 4 79
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                2055.
+Pages active:                           1531421.
+Pages inactive:                         1491764.
+Pages speculative:                        39184.
+Pages throttled:                              0.
+Pages wired down:                        678692.
+Pages purgeable:                          10372.
+"Translation faults":                 553357221.
+Pages copy-on-write:                   25126648.
+Pages zero filled:                    305320836.
+Pages reactivated:                     83357503.
+Pages purged:                           2153688.
+File-backed pages:                       982090.
+Anonymous pages:                        2080279.
+Pages stored in compressor:             2774480.
+Pages occupied by compressor:            450879.
+Decompressions:                        25064059.
+Compressions:                          35116542.
+Pageins:                                9145922.
+Pageouts:                               2071957.
+Swapins:                               13482113.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138056552 332319108    30%  688781 3323191080    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+3.73
+@@cpu
+11 4 85
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                2170.
+Pages active:                           1531401.
+Pages inactive:                         1491786.
+Pages speculative:                        39118.
+Pages throttled:                              0.
+Pages wired down:                        678734.
+Pages purgeable:                          10372.
+"Translation faults":                 553359155.
+Pages copy-on-write:                   25127263.
+Pages zero filled:                    305321006.
+Pages reactivated:                     83357503.
+Pages purged:                           2153688.
+File-backed pages:                       982027.
+Anonymous pages:                        2080278.
+Pages stored in compressor:             2774479.
+Pages occupied by compressor:            450879.
+Decompressions:                        25064060.
+Compressions:                          35116542.
+Pageins:                                9145924.
+Pageouts:                               2071957.
+Swapins:                               13482113.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138052484 332323176    30%  688781 3323231760    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+3.73
+@@cpu
+17 6 77
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                3648.
+Pages active:                           1530619.
+Pages inactive:                         1492985.
+Pages speculative:                        37114.
+Pages throttled:                              0.
+Pages wired down:                        678663.
+Pages purgeable:                          10370.
+"Translation faults":                 553367387.
+Pages copy-on-write:                   25128392.
+Pages zero filled:                    305322529.
+Pages reactivated:                     83357503.
+Pages purged:                           2153692.
+File-backed pages:                       980023.
+Anonymous pages:                        2080695.
+Pages stored in compressor:             2774323.
+Pages occupied by compressor:            450943.
+Decompressions:                        25064216.
+Compressions:                          35116542.
+Pageins:                                9145931.
+Pageouts:                               2071957.
+Swapins:                               13482241.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138052480 332323180    30%  688781 3323231800    0%   /System/Volumes/Data
+@@end
+@@f
+@@os
+Darwin
+@@ncpu
+4
+@@memsize
+17179869184
+@@load
+4.07
+@@cpu
+20 4 77
+@@level
+1
+@@vm
+Mach Virtual Memory Statistics: (page size of 4096 bytes)
+Pages free:                                3954.
+Pages active:                           1529297.
+Pages inactive:                         1494220.
+Pages speculative:                        37114.
+Pages throttled:                              0.
+Pages wired down:                        678663.
+Pages purgeable:                          10370.
+"Translation faults":                 553370198.
+Pages copy-on-write:                   25129183.
+Pages zero filled:                    305322812.
+Pages reactivated:                     83357503.
+Pages purged:                           2153692.
+File-backed pages:                       980023.
+Anonymous pages:                        2080608.
+Pages stored in compressor:             2774090.
+Pages occupied by compressor:            450850.
+Decompressions:                        25064313.
+Compressions:                          35116542.
+Pageins:                                9145933.
+Pageouts:                               2071957.
+Swapins:                               13482305.
+Swapouts:                              14572118.
+@@disk
+Filesystem   1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk1s1   488245288 138052484 332323176    30%  688781 3323231760    0%   /System/Volumes/Data
+@@s
+@@top_cpu
+18171  73.9 8914560 prl_vm_app
+25801   7.6 258120 Brave Browser Helper (Renderer)
+ 2887   1.5 282816 Brave Browser
+25539   0.7 257060 Brave Browser Helper (Renderer)
+  161   0.1  23180 loginwindow
+@@top_mem
+18171  73.9 8914560 prl_vm_app
+ 2887   1.5 282816 Brave Browser
+25846   0.0 279060 Brave Browser Helper (Renderer)
+26124   0.0 278808 Brave Browser Helper (Renderer)
+25801   7.6 258120 Brave Browser Helper (Renderer)
+@@gate none
+@@end
