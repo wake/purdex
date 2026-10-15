@@ -73,16 +73,29 @@ func (s *Slot) Label() string { return string(s.Class) + "-" + strconv.Itoa(s.K)
 // gone, whatever happens to the gate: a gate killed with SIGKILL does not free the slot under a tree that still runs.
 func (s *Slot) File() *os.File { return s.f }
 
-// Release drops the slot: the record first, then the lock, for every process that inherited it too (the gate has
-// cleared the command's group by now; whatever escaped it does not keep the slot).
+// Release gives the gate's own hold on the slot back: it closes its descriptor, and does not unlock. The command and its
+// descendants inherited the same open file description (fd 3), so the lock stays for as long as any of them is alive: a
+// child that escaped the gate's clean-up (it left the group and was orphaned between two looks at the process table) keeps
+// the slot, and a second gate cannot start a heavy command on top of it. When nothing else holds the lock the slot is free
+// at once and the record goes; when something does, the record stays, and `pdx gate status` shows the slot as held by a
+// tree whose gate is gone (the price: a command that daemonizes and keeps fd 3 open, such as a tmux server started by a
+// test, holds the slot until it ends).
 func (s *Slot) Release() {
 	if s == nil || s.f == nil {
 		return
 	}
-	_ = os.Remove(s.rec)
-	_ = syscall.Flock(int(s.f.Fd()), syscall.LOCK_UN)
+	path := s.f.Name()
 	_ = s.f.Close()
 	s.f = nil
+	probe, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		_ = os.Remove(s.rec)
+		return
+	}
+	defer probe.Close() // closing the probe drops the lock it takes
+	if st, _ := flockNB(probe); st == lockGot {
+		_ = os.Remove(s.rec) // nobody else holds it: the slot is free and has no holder
+	}
 }
 
 // SetHolder writes the record of the command the slot is held for (atomically: a reader sees a whole record or none).

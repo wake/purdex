@@ -840,3 +840,37 @@ func TestRun_ACommandIsNotRunWithoutItsHolderRecord(t *testing.T) {
 	assert.Contains(t, buf.String(), "holder record")
 	assert.Empty(t, g.Status().Heavy)
 }
+
+// A child that escaped the clean-up (orphaned at once, so no look at the process table saw it) still holds the lock it
+// inherited, so the slot stays taken and status says so; once it ends the slot is free. (M: unlock on release.)
+func TestRun_AnEscapedChildKeepsTheSlotUntilItEnds(t *testing.T) {
+	if _, err := exec.LookPath("perl"); err != nil {
+		t.Skip("perl is needed to call setsid")
+	}
+	g, _ := testGate(t)
+	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1 })
+	g.TreeEvery = time.Hour // no look at the tree at all: the child is orphaned unseen
+	deadGate := exec.Command("true")
+	require.NoError(t, deadGate.Run())
+	g.PID = func() int { return deadGate.Process.Pid } // this test process stands in for a gate that has since exited
+	dir := t.TempDir()
+	script := `perl -e 'use POSIX; if (fork == 0) { POSIX::setsid(); open F, ">", $ARGV[0]; print F $$; close F; exec "sleep", "300" }' ` + dir + `/pid; exit 0`
+	r := runSync(t, g, Options{Argv: sh(script), Class: ClassHeavy})
+	assert.Equal(t, 0, r.code)
+	pid := pidFrom(t, dir+"/pid")
+	defer func() { _ = syscall.Kill(pid, syscall.SIGKILL) }()
+
+	held := g.Status().Heavy
+	require.Len(t, held, 1, "the slot is still taken by the escaped child")
+	assert.True(t, held[0].Orphaned, "and status says its gate is gone while the tree lives")
+	pool := g.pool(g.Config(), ClassHeavy)
+	tk, err := pool.Enqueue()
+	require.NoError(t, err)
+	s, _, err := pool.TryTake(tk)
+	require.NoError(t, err)
+	assert.Nil(t, s, "a second gate cannot take it")
+	tk.Drop()
+
+	require.NoError(t, syscall.Kill(pid, syscall.SIGKILL))
+	eventually(t, "the slot to be free", func() bool { return len(g.Status().Heavy) == 0 })
+}
