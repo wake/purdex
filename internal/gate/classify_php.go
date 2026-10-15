@@ -17,6 +17,10 @@ var phpunitValueFlags = map[string]bool{
 	"--coverage-php": true, "--coverage-xml": true, "--order-by": true, "--random-order-seed": true,
 	"--cache-result-file": true, "--cache-directory": true, "--test-suffix": true, "--default-time-limit": true,
 	"--generate-baseline": true, "--use-baseline": true, "--min": true, "--shard": true, "--processes": true,
+	// phpunit 10/11 and pest
+	"--exclude-filter": true, "--exclude-testsuite": true, "--test-directory": true, "--requires-php-extension": true,
+	"--issue": true, "--pr": true, "--pull-request": true, "--extension": true, "--coverage-filter": true, "--columns": true,
+	"--coverage-text-file": true,
 }
 
 // phpunitNoRun are the options that print something and run no test.
@@ -38,8 +42,10 @@ func classifyPhpunit(args []string) Class {
 			return ClassNone
 		case a == "--":
 			// everything after it is a path
-			if i+1 < len(args) {
-				narrowed = true
+			for _, w := range args[i+1:] {
+				if looksLikeTestPath(w) {
+					narrowed = true
+				}
 			}
 			i = len(args)
 		case name == "--filter":
@@ -52,7 +58,11 @@ func classifyPhpunit(args []string) Class {
 				i++
 			}
 		default:
-			narrowed = true // a test file or directory
+			// A test file or directory narrows the run. A word that does not look like a path is more likely the value of an option
+			// this table does not know (the next release adds some), and then the run is as wide as it was: heavy is the safe side.
+			if looksLikeTestPath(a) {
+				narrowed = true
+			}
 		}
 	}
 	if narrowed {
@@ -61,8 +71,14 @@ func classifyPhpunit(args []string) Class {
 	return ClassHeavy
 }
 
-// isComposerTestScript says whether a composer script name is a test script: `test`, `test:integration`, `tests`…
-func isComposerTestScript(name string) bool { return strings.HasPrefix(name, "test") }
+// looksLikeTestPath says whether a phpunit/pest word names a test file or directory: a .php file or anything with a slash.
+func looksLikeTestPath(w string) bool {
+	return strings.HasSuffix(w, ".php") || strings.ContainsAny(w, `/\`)
+}
+
+// isComposerTestScript says whether a composer script name is a test script: `test`, `test:integration`, `tests`, `Test`… The
+// case does not matter here: a script name composer treats as another one is wrongly held back at worst, never let through.
+func isComposerTestScript(name string) bool { return strings.HasPrefix(strings.ToLower(name), "test") }
 
 // firstWord is the index of the first word of args that is not an option, or -1.
 func firstWord(args []string) int {
