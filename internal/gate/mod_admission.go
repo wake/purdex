@@ -45,20 +45,38 @@ func (a AdmissionConfig) PageRateLimit() float64 {
 	return a.MaxPageRate
 }
 
+// Hold says whether new work is held back under p, and why in a few words ("pressure 2 > 1", "page rate 120/s >= 100/s"). It is
+// the rule itself: Admit is its negation, and `pdx gate status` shows the same answer, so the two cannot disagree.
+func (a AdmissionConfig) Hold(p Pressure) (held bool, reason string) {
+	if !a.Enabled {
+		return false, ""
+	}
+	switch {
+	case p.Level > a.MaxPressureLevel:
+		return true, fmt.Sprintf("pressure %d > %d", p.Level, a.MaxPressureLevel)
+	case p.PageRate >= a.PageRateLimit():
+		return true, fmt.Sprintf("page rate %.0f/s >= %.0f/s", p.PageRate, a.PageRateLimit())
+	}
+	return false, ""
+}
+
 // Admit says whether new work may start under p.
 func (a AdmissionConfig) Admit(p Pressure) bool {
-	if !a.Enabled {
-		return true
+	held, _ := a.Hold(p)
+	return !held
+}
+
+// DiskShort says whether the free space is below the floor, and in a few words how much ("disk 8 GB < 10").
+func (a AdmissionConfig) DiskShort(freeBytes int64) (short bool, reason string) {
+	if !a.Enabled || a.DiskMinGB <= 0 || float64(freeBytes) >= a.DiskMinGB*(1<<30) { // in floats: no conversion to overflow
+		return false, ""
 	}
-	return p.Level <= a.MaxPressureLevel && p.PageRate < a.PageRateLimit()
+	return true, fmt.Sprintf("disk %.0f GB < %.0f", float64(freeBytes)/(1<<30), a.DiskMinGB)
 }
 
 // DiskRefusal is the message of a refusal when the free space is below the floor, "" when it is enough.
 func (a AdmissionConfig) DiskRefusal(path string, freeBytes int64) string {
-	if !a.Enabled || a.DiskMinGB <= 0 {
-		return ""
-	}
-	if float64(freeBytes) >= a.DiskMinGB*(1<<30) { // in floats: no conversion to overflow
+	if short, _ := a.DiskShort(freeBytes); !short {
 		return ""
 	}
 	return fmt.Sprintf("%s has %.1f GB free, below the %.1f GB of [gate.admission] disk_min_gb: the command was not run (free some space, or lower the floor)",
