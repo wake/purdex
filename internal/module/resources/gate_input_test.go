@@ -2,6 +2,7 @@ package resourcesmod
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -33,16 +34,22 @@ func TestSlotCounts_ReadsTheGateDirectory(t *testing.T) {
 		tk.Drop()
 		return s
 	}
-	hs, ls := take(hp), take(lp)
+	hs, ls1, ls2 := take(hp), take(lp), take(lp)
 	defer hs.Release(nil)
-	defer ls.Release(nil)
+	defer ls1.Release(nil)
+	defer ls2.Release(nil)
+	// a ticket whose gate is gone is not a waiter, and reading the counts does not remove it (the daemon only observes)
+	dead := filepath.Join(cfg.Dir, "queue", "heavy", "00000000000000000001-999999-000001")
+	require.NoError(t, os.WriteFile(dead, nil, 0o644))
 	w, err := hp.EnqueueFor(gate.WaiterInfo{PID: os.Getpid(), Argv: []string{"go", "test"}})
 	require.NoError(t, err)
 	defer w.Drop()
 
 	heavy, light, waiting, ok = m.slotCounts()
 	require.True(t, ok)
-	assert.Equal(t, [3]int{1, 1, 1}, [3]int{heavy, light, waiting})
+	assert.Equal(t, [3]int{1, 2, 1}, [3]int{heavy, light, waiting})
+	_, err = os.Stat(dead)
+	assert.NoError(t, err, "the dead ticket is still there")
 }
 
 // A module not wired to the host reads nothing (and never the home directory it runs in).
