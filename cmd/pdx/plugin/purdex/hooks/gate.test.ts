@@ -204,7 +204,7 @@ test('both together: prefixed and moved to the background, one run', async ($, o
   expect(out.context).toHaveLength(2)
 })
 
-test('a denial from beneath (a queued lease) gets no note and the tool is not run again', async ($, on) => {
+test('a denial from beneath gets no note and the tool is not run again', async ($, on) => {
   const r = rig(on, () => ok(FREE), () => ({ deny: 'queued' }))
   const out = await bash($, './vendor/bin/pest')
   expect(out.deny).toBe('queued')
@@ -216,42 +216,6 @@ test('a tool that throws is run once and the error goes on', async ($, on) => {
   const r = rig(on, () => ok(BUSY), () => { throw new Error('the tool failed') })
   await bash($, 'go test ./...').catch(() => {})
   expect(r.ran).toHaveLength(1)
-})
-
-// ---- the order with the lease hook, which is retired in L1b ----
-//
-// gate.js is registered before lease.js, so it sees the call first. A call it moves to the background reaches the lease
-// hook as a background call: in an interactive session that is wrapped in `pdx lease run --ask` (the lease alias of the
-// gate), and the command inside is the one gate.js made. This test pins that order; L1b removes the lease half.
-
-const startInteractive = ($: any) => $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
-
-test('pinned order: gate.js moves the call to the background, then the lease hook wraps it', async ($, on) => {
-  const r = rig(on, (a) => (a[1] === 'gate' ? ok(BUSY) : ok('{}')))
-  await startInteractive($)
-  await bash($, 'go test ./...')
-  expect(r.calls[0].slice(1, 3)).toEqual(['gate', 'would-wait']) // gate.js asked first
-  expect(r.ran).toHaveLength(1)
-  expect(r.ran[0].bg).toBe(true)
-  expect(r.ran[0].command).toMatch(/^'pdx' lease run --ask --kind test-full /) // …and the lease hook wrapped what it handed on
-  expect(r.ran[0].command).toContain('go test ./...')
-})
-
-test('pinned order: a direct .bin call is prefixed by gate.js, which the lease hook then recognises as already gated', async ($, on) => {
-  const r = rig(on, (a) => (a[1] === 'gate' ? ok(BUSY) : ok('{}')))
-  await startInteractive($)
-  await bash($, './node_modules/.bin/vitest run')
-  expect(r.ran).toHaveLength(1)
-  expect(r.ran[0].bg).toBe(true)
-  expect(r.ran[0].command).toBe("'pdx' gate --auto -- ./node_modules/.bin/vitest run") // not wrapped a second time
-  expect(r.calls.filter((a) => a[1] === 'lease')).toEqual([])
-})
-
-test('pinned order: a call that can start at once is not touched by gate.js and the lease hook decides alone', async ($, on) => {
-  const r = rig(on, (a) => (a[1] === 'gate' ? ok(FREE) : a[2] === 'acquire' ? ok(JSON.stringify({ id: 'lease-1', granted: true })) : ok('{}')))
-  await bash($, 'go test ./...')
-  expect(r.calls.map((a) => a[1] + ' ' + a[2])).toEqual(['gate would-wait', 'lease acquire', 'lease release'])
-  expect(r.ran[0].bg).toBeUndefined()
 })
 
 test('pdx.json names the binary and the config: the question and the prefix both carry them', async ($, on) => {
