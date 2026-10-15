@@ -388,9 +388,13 @@ func (m *Measure) reconcile(ctx context.Context, force bool) {
 	}
 	m.mu.Unlock()
 
+	// Cancel all first, then wait side by side (like deactivateLocked): the tick is held for one grace, not one per host.
+	var sw sync.WaitGroup
 	for _, s := range stop {
-		s.stop()
+		sw.Add(1)
+		go func(s *session) { defer sw.Done(); s.stop() }(s)
 	}
+	sw.Wait()
 	for _, w := range start {
 		m.mu.Lock()
 		h := m.hosts[w.key]

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -438,4 +439,26 @@ func TestNoSessionStartsAfterStop(t *testing.T) {
 	active := r.m.active
 	r.m.life.Unlock()
 	assert.False(t, active)
+}
+
+// Removing several hosts at once stops their sessions side by side: a tick is held for one TermGrace, not one per host.
+func TestReconcileStopsRemovedHostsInParallel(t *testing.T) {
+	// TERM is ignored (and inherited by sleep), so each session only ends when killGroup sends KILL after the grace.
+	r := newMRig(t, `trap '' TERM; echo ready >> "$D/ready"; sleep 600 & wait`)
+	r.fleet.PeerSSHAlias = ""
+	const grace = time.Second
+	r.m.d.Session.TermGrace = grace
+	r.setProbes(hostconfig.ProbeHost{ID: "ab12cd34", Name: "x", SSHAlias: "a19"}, hostconfig.ProbeHost{ID: "ef56ab78", Name: "y", SSHAlias: "a20"})
+	r.start()
+	eventually(t, "both sessions trapped", func() bool {
+		b, _ := os.ReadFile(filepath.Join(r.sshDir, "ready"))
+		return strings.Count(string(b), "ready") == 2
+	})
+
+	r.setProbes()
+	begin := time.Now()
+	r.tick()
+	took := time.Since(begin)
+	assert.GreaterOrEqual(t, took, grace, "the sessions only end after the grace")
+	assert.Less(t, took, 3*grace/2, "the second session was waited for after the first (serial stop)")
 }
