@@ -58,15 +58,15 @@ func TestCache_Apply(t *testing.T) {
 
 func TestIntercept_Classify(t *testing.T) {
 	c := Defaults().Intercept
-	assert.Equal(t, ClassHeavy, c.Classify(words("go test ./...")))
-	assert.Equal(t, ClassNone, c.Classify(words("make test")), "make is not among the tools")
+	assert.Equal(t, ClassHeavy, c.Classify(words("go test ./..."), Env{}))
+	assert.Equal(t, ClassNone, c.Classify(words("make test"), Env{}), "make is not among the tools")
 	c.Tools = []string{"go", "make"}
-	assert.Equal(t, ClassHeavy, c.Classify(words("make test")))
-	assert.Equal(t, ClassNone, c.Classify(words("pnpm check")), "a tool that is not listed passes through")
+	assert.Equal(t, ClassHeavy, c.Classify(words("make test"), Env{}))
+	assert.Equal(t, ClassNone, c.Classify(words("pnpm check"), Env{}), "a tool that is not listed passes through")
 	c.Rules = []Rule{{Match: "pnpm run e2e", Class: ClassHeavy}, {Match: "go test ./...", Class: ClassNone}}
-	assert.Equal(t, ClassHeavy, c.Classify(words("pnpm run e2e --headed")), "a rule comes first, even for a tool not listed")
-	assert.Equal(t, ClassNone, c.Classify(words("go test ./...")), "and over the built-in table")
-	assert.Equal(t, ClassHeavy, c.Classify(words("go test ./a ./b")), "a rule matches whole words")
-	assert.Equal(t, ClassNone, c.Classify(nil))
-	assert.Equal(t, ClassHeavy, c.Classify(words("/opt/homebrew/bin/go test ./a ./b")), "by the name of the binary")
+	assert.Equal(t, ClassHeavy, c.Classify(words("pnpm run e2e --headed"), Env{}), "a rule comes first, even for a tool not listed")
+	assert.Equal(t, ClassNone, c.Classify(words("go test ./..."), Env{}), "and over the built-in table")
+	assert.Equal(t, ClassHeavy, c.Classify(words("go test ./a ./b"), Env{}), "a rule matches whole words")
+	assert.Equal(t, ClassNone, c.Classify(nil, Env{}))
+	assert.Equal(t, ClassHeavy, c.Classify(words("/opt/homebrew/bin/go test ./a ./b"), Env{}), "by the name of the binary")
 }
