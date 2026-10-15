@@ -27,7 +27,10 @@ type Applied struct {
 // Decision is the record of one command.
 type Decision struct {
 	Time     time.Time          `json:"time"`
-	Argv     []string           `json:"argv"`
+	Argv     []string           `json:"argv"` // truncated and with the secrets replaced, as in a holder's record
+	Cwd      string             `json:"cwd,omitempty"`
+	Session  string             `json:"session,omitempty"` // the Claude Code session the command ran in
+	Nested   bool               `json:"nested,omitempty"`  // it ran below a slot that really is held (outcome nested)
 	Class    Class              `json:"class,omitempty"`
 	Profile  string             `json:"profile"`
 	Outcome  string             `json:"outcome"` // slot | no-slot | off | nested | refused | interrupted
