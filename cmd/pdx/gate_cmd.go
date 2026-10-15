@@ -24,6 +24,7 @@ import (
 const gateUsage = `usage: pdx gate [--class heavy|light] [--auto] [--tool <name>] [--fg] [--real <binary>] [--config <path>] -- <command…>
        pdx gate status [--json [--holders]] [--config <path>]
        pdx gate would-wait [--class heavy|light] [--json] [--config <path>]
+       pdx gate would-wait --auto [--json] [--config <path>] -- <command…>
        pdx gate set [--profile <name>] [--config <path>] <module>.<key>=<value>
        pdx gate profile use <name> | list [--config <path>]
   --class  the pool to take a slot from (default heavy); --auto classifies the command by its words instead
@@ -31,7 +32,7 @@ const gateUsage = `usage: pdx gate [--class heavy|light] [--auto] [--tool <name>
   --real   the binary to run in place of the command's first word (a shim passes the real one)
   --tool   a shim's call: the command is <name> followed by the words after --; the real binary is looked up on PATH
            without the shim directory, at this run; a command that is not heavy or light is run at once, unqueued
-  would-wait  would a command of that class wait for a slot right now? (fast: no daemon, no process started, takes nothing;
+  would-wait  would a command of that class (or, with --auto, this command by its words) wait for a slot right now? (fast: no daemon, no process started, takes nothing;
            for a hook that decides whether to run a call in the background). Prints the reason and a line for an agent to read
   set      write one setting into [gate] of config.toml (or into [gate.profiles.<name>] with --profile); the gate reads it
            again at the next command and at the next look of every waiting one. Values: 2, true, "text", auto
@@ -350,18 +351,26 @@ func orDash(s string) string {
 func gateWouldWait(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("gate would-wait", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	flags, command, hasCmd := splitRunArgs(args)
 	class := fs.String("class", "heavy", "heavy or light")
+	auto := fs.Bool("auto", false, "classify the command after -- by its words")
 	asJSON := fs.Bool("json", false, "print JSON")
 	cfgPath := fs.String("config", "", "config.toml")
-	if err := fs.Parse(args); err != nil {
+	if err := fs.Parse(flags); err != nil {
 		return 2
 	}
-	if fs.NArg() > 0 || (*class != "heavy" && *class != "light") {
-		fmt.Fprint(stderr, "usage: pdx gate would-wait [--class heavy|light] [--json] [--config <path>]\n")
+	if fs.NArg() > 0 || (*class != "heavy" && *class != "light") || *auto != hasCmd {
+		fmt.Fprint(stderr, "usage: pdx gate would-wait [--class heavy|light] [--json] [--config <path>]\n       pdx gate would-wait --auto [--json] [--config <path>] -- <command…>\n")
 		return 2
 	}
 	cfg := loadGateConfig(*cfgPath, stderr)
-	w := gate.New(cfg).WouldWait(gate.Class(*class))
+	g := gate.New(cfg)
+	cl := gate.Class(*class)
+	if *auto {
+		// the same view of the environment as a shim's: no terminal, the caller's variables
+		cl = cfg.Intercept.Classify(command, gate.EnvOf(os.Environ(), false))
+	}
+	w := g.WouldWait(cl)
 	if *asJSON {
 		b, _ := json.Marshal(w)
 		fmt.Fprintln(stdout, string(b))
