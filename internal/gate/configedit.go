@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -64,6 +65,9 @@ func Set(path, profile, key, value string) (SetResult, error) {
 	var top map[string]any
 	if _, err := toml.Decode(edited, &top); err != nil {
 		return res, fmt.Errorf("the file would not parse after the change (is %s set another way, e.g. a dotted key?): %w", key, err)
+	}
+	if !onlyChanged(string(old), edited, append(strings.Split(headerFor(profile, key), "."), leafOf(key))) {
+		return res, fmt.Errorf("refused: the edit would have changed something besides %s (a layout this editor does not follow); change the file by hand", key)
 	}
 	// The value is checked on its own: with another profile active, that profile's value would hide a bad one.
 	checkAs := profile
@@ -129,6 +133,48 @@ func effectiveOf(text, profile, key string) string {
 	return configFor(top, profile).Values[key]
 }
 
+// onlyChanged says that, reading both texts as TOML, nothing differs except (possibly) the value at path. It is what
+// makes a text edit safe: whatever the layout of the file, a set that moved another setting is refused.
+func onlyChanged(before, after string, path []string) bool {
+	var a, b map[string]any
+	if _, err := toml.Decode(before, &a); err != nil {
+		return false
+	}
+	if _, err := toml.Decode(after, &b); err != nil {
+		return false
+	}
+	return sameExcept(a, b, path)
+}
+
+func sameExcept(a, b any, path []string) bool {
+	if len(path) == 0 {
+		return true
+	}
+	am, aok := a.(map[string]any)
+	bm, bok := b.(map[string]any)
+	if !aok || !bok {
+		return false
+	}
+	for k, av := range am {
+		bv, present := bm[k]
+		if k == path[0] {
+			if present && !sameExcept(av, bv, path[1:]) {
+				return false
+			}
+			continue
+		}
+		if !present || !reflect.DeepEqual(av, bv) {
+			return false
+		}
+	}
+	for k := range bm {
+		if _, present := am[k]; !present && k != path[0] {
+			return false
+		}
+	}
+	return true
+}
+
 func headerFor(profile, key string) string {
 	parts := []string{"gate"}
 	if profile != "" {
@@ -180,8 +226,22 @@ func editTOML(text, header, leaf, lit string) string {
 	}
 	keyLine := regexp.MustCompile(`^\s*` + regexp.QuoteMeta(leaf) + `\s*=`)
 	in, headerAt := false, -1
+	inString := "" // the quote of a multi-line string we are inside: its lines are text, not headers or keys
 	for i, l := range lines {
+		if inString != "" {
+			if strings.Contains(l, inString) {
+				inString = ""
+			}
+			continue
+		}
 		t := strings.TrimSpace(l)
+		if !strings.HasPrefix(t, "[") && !(in && keyLine.MatchString(l)) {
+			for _, q := range []string{`"""`, `'''`} {
+				if strings.Count(l, q)%2 == 1 {
+					inString = q
+				}
+			}
+		}
 		if strings.HasPrefix(t, "[") {
 			if in {
 				break
@@ -227,6 +287,8 @@ func tableName(line string) string {
 		case quote != 0:
 			if c == quote {
 				quote = 0
+			} else if c == '.' {
+				return "\x00" // a quoted key that holds a dot is one key, not a path: it is never the table asked for
 			} else {
 				name.WriteByte(c)
 			}
