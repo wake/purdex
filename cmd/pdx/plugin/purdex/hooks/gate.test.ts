@@ -21,6 +21,9 @@ const PREFIXED: [string, string][] = [
   ['./node_modules/.bin/tsc -b; ./vendor/bin/phpunit', P + './node_modules/.bin/tsc -b; ' + P + './vendor/bin/phpunit'],
   ['(cd x && ./vendor/bin/phpunit)', '(cd x && ' + P + './vendor/bin/phpunit)'],
   ['./vendor/bin/phpunit > out.txt', P + './vendor/bin/phpunit > out.txt'],
+  ['claude plugin test /tmp/x', P + 'claude plugin test /tmp/x'],
+  ['cd /tmp/x && claude plugin test . --file hooks/gate.test.ts', 'cd /tmp/x && ' + P + 'claude plugin test . --file hooks/gate.test.ts'],
+  ['FOO=1 /usr/local/bin/claude plugin test dir', 'FOO=1 ' + P + '/usr/local/bin/claude plugin test dir'],
 ]
 for (const [cmd, want] of PREFIXED) {
   test(`prefixGated ${JSON.stringify(cmd)}`, () => {
@@ -44,6 +47,11 @@ const UNCHANGED = [
   './node_modules/.bin/vitest-other run',
   'pdx gate --auto -- ./vendor/bin/pest', // already through the gate
   './vendor/bin/composer install',
+  'claude plugin list', // only the test run is held
+  'claude -p "plugin test"',
+  'claude plugin tests',
+  'echo claude plugin test', // an argument
+  'claude plugin test x &', // backgrounded by the shell itself
   '',
 ]
 for (const cmd of UNCHANGED) {
@@ -51,6 +59,11 @@ for (const cmd of UNCHANGED) {
     expect(prefixGated(cmd, P)).toEqual({ command: cmd, changed: false })
   })
 }
+
+test('gatedCandidates: claude plugin test is asked about, other claude commands are not', () => {
+  expect(gatedCandidates('cd x && claude plugin test . --file a.test.ts')).toEqual([['claude', 'plugin', 'test', '.', '--file', 'a.test.ts']])
+  expect(gatedCandidates('claude plugin list')).toEqual([])
+})
 
 test('gatedCandidates: the commands of a call the gate may hold, distinct ones, at most six, none for the unreadable', () => {
   expect(gatedCandidates('go test ./... && pnpm run build')).toEqual([['go', 'test', './...'], ['pnpm', 'run', 'build']])
