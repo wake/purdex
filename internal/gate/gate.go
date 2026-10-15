@@ -208,6 +208,13 @@ func (g *Gate) nested(cfg Config, env []string, want Class) bool {
 	return false
 }
 
+// releaseProfile is the profile of a release run: the command runs as it was typed, at normal priority, with go's test
+// cache switched off if it says so (spec §5, cache module).
+const releaseProfile = "release"
+
+// foreground says the command is exempt from the priority and cache modules: --fg, or the release profile.
+func (c Config) foreground(o Options) bool { return o.Foreground || c.Profile == releaseProfile }
+
 // Run takes a slot for the command, runs it, and gives the slot back when its process tree is gone. It returns the
 // command's exit code (128+n for a signal, ExitRefused for a command that was not run). An error is only for a command
 // that could not be started.
@@ -241,7 +248,7 @@ func (g *Gate) Run(ctx context.Context, o Options) (int, error) {
 		}
 	}
 
-	argv, note := cfg.Cache.Apply(o.Argv, o.Foreground)
+	argv, note := cfg.Cache.Apply(o.Argv, cfg.foreground(o))
 	if note != "" {
 		g.say("%s", note)
 	}

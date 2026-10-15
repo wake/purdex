@@ -116,7 +116,7 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 	}
 	args := append([]string{real}, argv[1:]...)
 	if slot != nil {
-		args = cfg.Priority.Wrap(args, g.Tools, o.Foreground)
+		args = cfg.Priority.Wrap(args, g.Tools, cfg.foreground(o))
 	}
 	cmd := &exec.Cmd{Path: args[0], Args: args, Env: env, Dir: o.Dir, Stdin: stdinOr(o.Stdin), Stdout: outOr(o.Stdout, os.Stdout), Stderr: outOr(o.Stderr, os.Stderr)}
 	// Output that is not a file goes through a pipe the command's leftovers keep open; Wait must not wait for them
@@ -147,6 +147,9 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 	var tick <-chan time.Time
 	if tty {
 		followed = newTree(pid, g.Procs)
+		if !followed.known() {
+			g.say("the process table could not be read: what %s leaves running at the end will not be cleared", argv[0])
+		}
 		t := time.NewTicker(g.TreeEvery)
 		defer t.Stop()
 		tick = t.C
