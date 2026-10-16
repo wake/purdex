@@ -1,5 +1,53 @@
 # Changelog
 
+## [1.0.0-alpha.744] - 2026-10-16
+
+> 743 的修正版。daemon、`pdx` CLI 與 mod 有改，SPA、Electron 沒有改。**兩台都要重跑 `pdx setup`** 才會換上新的 mod（協定不變）。資料庫沒有變，退回 743 不需要還原資料庫，但要再跑一次 `pdx setup` 換回 743 的 mod。
+
+### Fixed
+
+- **App 看不到主機格（PR #3004）**：743 的 fleet 模組沒有回報自己是否就緒，`/api/info` 因此一直沒有宣告 `fleet.v1`，App 就不顯示側欄的主機格（daemon 端的量測其實正常）。現在模組在啟動成功後回報就緒與目前的角色（主方／副方／關閉），停止後不再宣告；新增用真模組透過 `/api/info` 驗證的測試。
+
+### Changed：閘門
+
+- **每次 Bash 呼叫只問閘門一次（G-D1c，PR #2994）**：一次呼叫裡有好幾個會經過閘門的指令時，mod 改用 `pdx gate would-wait --auto-batch` 一次問完（原本每個指令各開一個 pdx 行程，最多 6 個），答案和逐一詢問相同；pdx 太舊、不認得批次時自動退回逐一詢問。
+
+### 部署備註
+
+- 743 部署時 mlab 先重啟、當時 air26 還是舊版，mlab 當上了 fleet 主方。744 一樣先重啟 mlab，它會發現 air26 排在前面而退成副方，主方回到 air26（使用者 10-16 定的順序 `[air26, mlab]`）。
+
+## [1.0.0-alpha.743] - 2026-10-16
+
+> daemon、`pdx` CLI 與 SPA 有改，mod、Electron 沒有改，不需要重跑 `pdx setup`。資料庫只有新增：`session_predecessors` 表、`agent_frames.prev_session_id`、`last_agent_run.pane_id`（都有預設值），退回 742 不需要還原資料庫。日誌改為預設開啟（兩台在 `config.toml` 加 `[journal] person_name = "Wake"`，不設 `push_projects`）；關閉方式是 `[journal] enabled = false` 再重啟。退回 742 後，各專案的日誌 worktree（`<DataDir>/journal/<project>/wt`）會留在磁碟上，無害，要清再手動刪。新增依賴 `github.com/ebitengine/purego`（不需要 cgo，`CGO_ENABLED=0` 照樣建置兩種架構）。
+
+### Added：主機狀態（fleet，spec rev 2）
+
+- **側欄最下面的主機格（F-2b，PR #2995；資料層 F-2a1，PR #2981）**：每台主機一格，主機色的方塊加上負載環（顏色看區域：正常／偏高／過載／離線），有人排隊時方塊右上角顯示排隊數，被記憶體壓力擋住時轉紅。滑過看五項讀數與佇列；窄的活動列改成直排。App 只向主方拿資料（`fleet=v1` 的推送，每秒一次），讀數歷史只留在 App 記憶體。
+- **主方與副方（F-1b2，PR #2978）**：順序 `[air26, mlab]`，主方量，副方每 30 秒確認主方還活著；主方沒回應、或有回應但最新讀數超過 10 秒，副方就接手，不切回。主方還沒有任何讀數時視為活著（不換手）。只有通過驗證、且在順序內的主機能呼叫 `/api/peers/fleet/role`、`/announce`。
+- **量測（F-1c1 PR #2975、F-1c2 PR #2982、#2986）**：主方用自己 daemon 的讀數量本機（不 fork），其他主機（另一台 daemon 主機、只探查的 air19 與 mserv）各開一條長駐 SSH，遠端迴圈每秒回報 CPU、記憶體、壓力等級、換頁率、磁碟，每 5 秒回報最吃 CPU／記憶體的行程與閘門佇列。實測遠端迴圈在 mlab 約佔一顆核心的 3.5%。`GET /api/fleet`（裝置權杖可讀）；daemon 停止時一定收掉 SSH 與它的子行程（忽略 TERM 的也會在寬限後 KILL）。
+- **本機讀數來源（LocalSource，PR #2984）**：resources 模組每秒讀一次本機（`host_processor_info`／`host_statistics64` 經 purego，其餘 sysctl），只在這台是主方時跑；讀不到的項目標在 `missing`，不填 0。
+- **主機設定（F-1b1，PR #2972）**：hostconfig 新增 `fleet` 列（順序、這台用來連另一台 daemon 主機的 SSH 別名、開關）與 `probe_hosts` 列（只探查的主機）。部署時寫入：air26 用 `mlab`、mlab 用 `air26`；只探查的主機 air19、mserv（兩台同一份）。**air19 與 mserv 的圖示和顏色要等下一版的主機頁才能挑**，這一版顯示為灰底的預設圖示。
+
+### Added：日誌（journal）接上 daemon（J-1e，PR #2900、#2979）
+
+- daemon 接上日誌：每個 lead／solo 回合多一次 Haiku 呼叫（走 mod，不在主機上開行程），drainer、任務鏡像（每 5 秒）、git 迴圈（每 10 分鐘，只在本機 commit）開始跑；`journal.v1` 能力亮起。**畫面這一版不變**，App 仍顯示工作簿；日誌的卡片介面在之後的版本。
+
+### Added：往回翻到接力前與 `/clear` 前（S-1，PR #2878）
+
+- 對話的 snapshot 多一個 `window.predecessor`（上一段的 session、原因是 relay 或 clear、時間），App 可以用同一支 API 以舊 id 往回讀。
+
+### Changed：閘門（負載控制）
+
+- **閘門回報是否被壓力擋住（PR #2971）**：`pdx gate status` 與 `--json` 多 `Admission {held, reason}`，和放行用的是同一條規則。
+- **單一專案的 tsc 是輕指令（PR #2988）**：`tsc -p <project>`（不帶 `-b`）歸輕指令，`pnpm exec`／`pnpm -C <dir> exec` 的寫法裡外一致；`tsc -b` 與不帶參數的 tsc 仍是重指令。
+- **呼叫者不在的排隊自動退出（PR #2991）**：排隊中的 `pdx gate` 發現父行程變了就放棄排隊、不執行（結束碼 129，紀錄為 `orphaned`）；刻意脫離終端機的背景工作可設 `PDX_GATE_KEEP_ORPHAN=1`。
+- **決策紀錄帶指令、cwd、session（PR #2959）**：`decisions.jsonl` 每筆多 `argv`、`cwd`、`session`，巢狀的標 `nested`。
+- **記憶體讀數統一（G-D1a／b，PR #2961、#2962）**：閘門、resources、monitor 共用同一個 `vm_stat` 解析；daemon 跑著時，每次取樣順便寫閘門的 `pressure.json`，閘門 CLI 不必自己 fork。
+
+### Added：開子行程計數（去重計畫 D0，PR #2963、#2987）
+
+- daemon 開子行程一律經 `execstat`（帶呼叫點標籤），`GET /api/debug/execstat` 看各呼叫點的次數與耗時；AST 守門測試擋新的直接 `exec.Command`。第一批 18 個檔已改走計數（含 fleet 的 SSH）。
+
 ## [1.0.0-alpha.742] - 2026-10-16
 
 > 只有 daemon 與 `pdx` CLI 改，mod、SPA、Electron 沒有改，不需要重跑 `pdx setup`。`host_minutes` 多三個欄位（新增欄位、預設 0），741 的 daemon 照樣讀寫，退回 741 不需要還原資料庫。部署後主機的區域（normal／warning／danger）改由記憶體壓力與換頁率決定。

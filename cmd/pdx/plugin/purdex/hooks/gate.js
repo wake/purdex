@@ -156,7 +156,7 @@ const base = (p) => p.slice(p.lastIndexOf('/') + 1)
 const PRE_MS = 3_000 // pdx.json, the permission check: a read that has not answered by then is a failed one
 const ASK_MS = 3_000 // `pdx gate would-wait` (about 70 ms): longer than this and the call is not held for it
 const PLAN_MS = 4_000 // all of the planning together: a hook that waits on a dead dependency must not hold every Bash call
-const MAX_ASKS = 6 // one call can hold several commands: all of them (distinct ones, at most this many) are asked at once, and the first that would wait decides
+const MAX_ASKS = 6 // one call can hold several commands: all of them (distinct ones, at most this many) are asked in one process, and the first that would wait decides
 
 const parse = (s) => { try { return JSON.parse(s) } catch { return null } }
 const isObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v)
@@ -278,6 +278,24 @@ async function askWouldWait($, cfg, argv) {
   }
 }
 
+// askWouldWaitAll is the gate's answers for all the candidates of a call in one process: an array in the order of argvs, each
+// as askWouldWait gives it. A pdx that does not know the batch form (older than the mod) or an answer that cannot be read
+// falls back to asking one by one, so the answer for each command is the one it would have had.
+export async function askWouldWaitAll($, cfg, argvs) {
+  if (argvs.length === 0) return []
+  if (argvs.length === 1) return [await askWouldWait($, cfg, argvs[0])]
+  try {
+    const r = await $.process.run([cfg.bin, 'gate', 'would-wait', '--auto-batch', JSON.stringify(argvs), '--json', ...(cfg.config ? ['--config', cfg.config] : [])], { timeoutMs: ASK_MS })
+    if (r && r.exitCode === 0) {
+      const a = parse(String(r.stdout || '').trim())
+      if (Array.isArray(a) && a.length === argvs.length) return a.map((o) => (isObject(o) && typeof o.would_wait === 'boolean' ? o : null))
+    }
+  } catch (err) {
+    log($, 'would-wait batch failed: ' + (err && err.message ? err.message : String(err)))
+  }
+  return Promise.all(argvs.map((argv) => askWouldWait($, cfg, argv)))
+}
+
 // verdict is the engine's permission decision for a call, or null when it could not be had.
 async function verdict($, command, background) {
   const v = await bounded($, () => $.tool.check({ tool: 'Bash', input: { command, run_in_background: background } }))
@@ -312,7 +330,7 @@ async function planGate($, e) {
   let background = wasBackground
   if (!wasBackground) {
     const cands = gatedCandidates(e.command)
-    const answers = await Promise.all(cands.map((argv) => askWouldWait($, cfg, argv)))
+    const answers = await askWouldWaitAll($, cfg, cands)
     for (const w of answers) {
       if (!w || w.would_wait !== true) continue
       // A call moved to the background must not raise a prompt the foreground call would not have.
