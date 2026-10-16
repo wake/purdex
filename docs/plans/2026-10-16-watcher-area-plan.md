@@ -95,7 +95,14 @@ goes past 1f (`internal/fleet` is shared with the A line's sampler).
     the watcher (W5e's start and wake).
   - **Nothing added around it** (user, 10-16: 「守門員應該就是現在 tab 本來的樣子，包括底下 status bar」): no bar above
     the pane, the stock bottom status bar with its Deck / Chat switch. Where the watcher is and whether it is awake show
-    on the shield and its title (T-a3.3). How a resting watcher is woken from this tab is settled with the user in W5e.
+    on the shield and its title (T-a3.3).
+  - **Starting and waking look like a rebuild** (user, 10-16: the watcher is a tab like any other, with its own tmux,
+    cwd and command, on mlab or a26; never "type in Deck to wake"). When no watcher runs, the tab shows **the watcher's
+    launch panel** where a session tab shows its launch / rebuild panel: in Deck and Chat of a resting `pdx-watch` (in
+    place of the stock `LaunchPanel`, whose generic plan would start a second, unregistered kind of agent there), and
+    as the whole pane when there is no session (`watch-guardian` content). It lists the host, `pdx-watch`, `workdir`,
+    `agent_command` and, resting, the conversation it resumes (from the holder's `watch` row and status). W5a3 shows it
+    without a button; W5e adds 啟動守門員 (`POST /api/watch/start`) and 叫醒守門員 (`POST /api/watch/wake`).
   - The tab is locked like every area tab: no close, no tear-off, no merge.
 - **Mixed versions.** An App older than W5a1 that receives the `watch` workspace by sync shows it in its sidebar with
   unknown panes. Both Macs load the SPA from mlab's dev server, so they update together. The acceptance checks the
@@ -319,15 +326,17 @@ Every PR follows these rules:
       `fleetHostsView` does.
     - Session: `useSessionStore.sessions[appHost].find(s => s.name === name)`. `name` is the status's `tmux_session`
       when A3 adds it, and `pdx-watch` until then.
-  - **otherwise** → `{kind: 'watch-guardian'}`, whose panel reads:
+  - **otherwise** → `{kind: 'watch-guardian'}`, whose panel is the watcher's launch panel (§1; no button before W5e),
+    headed by:
     - none: 「這台主機群目前沒有守門員」 and 「啟動後，它會看管重指令名額與記憶體壓力，事件交給它處理。」 (the start
       button comes in W5e);
     - unknown: 「讀不到守門員狀態」;
     - the holder not connected to this App: 「守門員在 {alias}，這台 App 沒有連到它」;
     - the holder connected but its session list has no `pdx-watch`: 「{alias} 上沒有 pdx-watch」.
   - A session list that is still loading leaves the content as it is (it is not read as "no pdx-watch").
-- **T-a3.5 The terminated branch.** `SessionPaneContent`: when the pane is terminated and its tab is `watch-guardian`,
-  render `WatchGuardianPane`'s panel for the current derivation instead of `TerminatedPane` (no rebuild offer). Nothing
+- **T-a3.5 The launch-panel slots.** `SessionPaneContent`, for the `watch-guardian` tab only: (1) when the pane is
+  terminated, render the watcher's launch panel instead of `TerminatedPane`; (2) when the session has no agent (the
+  `showLaunchView` case, Deck and Chat), render the watcher's launch panel instead of the stock `LaunchPanel`. Nothing
   else in the stock session tab changes.
 - **T-a3.6 Tests**:
   - each content case of T-a3.4, through the real reconcile;
@@ -337,7 +346,9 @@ Every PR follows these rules:
   - a failover: the status goes from host A awake to host B awake → the content becomes B's session;
   - edge-triggered: a content that arrived by sync is not overwritten while this device's derivation is unchanged, and
     two devices with the same derivation converge (two reconcilers and one `applyTabs` each way);
-  - terminated: the guardian tab shows the panel, and no rebuild button exists;
+  - terminated, and a resting `pdx-watch` at a shell in Deck / Chat: the guardian tab shows the watcher's launch panel
+    (host, `pdx-watch`, `workdir`, `agent_command`, the resumed conversation), never `TerminatedPane` or the stock
+    `LaunchPanel`; a session tab elsewhere still shows the stock ones;
   - a tab switch away and back keeps the chosen view (the stock session-view store);
 
   M: enforce the content on every run (not edge-triggered) → the sync test goes red; show `TerminatedPane` for the
@@ -467,9 +478,10 @@ used slots, a paused lane, the gate words, waiting warning at 2 min, the pairing
   - the offline note per host.
 - **The count**: the shield's `CountBadge` and the tab label 事件 n. The shield opens 事件 while n > 0.
 - **啟動守門員**: `POST /api/watch/start`, answered 200, 202 `{host}` or 409 `{cooldown_until}`.
-- **Waking a resting watcher from the guardian tab** (`POST /api/watch/wake {prompt}`, ≤ 4 KB with the wake prompt):
-  where the person types it, given that the tab stays the stock session tab (for example Deck's own input while the
-  watcher rests), is settled with the user before W5e.
+- **The launch panel's button** (§1): 啟動守門員 → `POST /api/watch/start` (200 already awake, 202 `{host}`, 409
+  `{cooldown_until}` shown as the time it may start again); 叫醒守門員 → `POST /api/watch/wake` with an empty prompt
+  (the wake prompt alone). Busy until the watcher registers (`watch.changed`), then the tab shows its session. Pressed,
+  not run on opening (spec §10 Q5, to be confirmed).
 - **No 全部略過** (user, 10-16, #3017): nothing in the area changes an event.
 - **Tests** for each item. The A line tests the `watch.v1` declaration with the real module (1f, 10-16).
 

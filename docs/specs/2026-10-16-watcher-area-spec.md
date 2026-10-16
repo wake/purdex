@@ -86,9 +86,9 @@ would run it outside `pdx-watch`.
 
 | Watch state | The tab shows |
 |---|---|
-| none (no current, no last) | A centred panel: 「這台主機群目前沒有守門員」, 「啟動後，它會看管重指令名額與記憶體壓力，事件交給它處理。」 and a **啟動守門員** button → `POST /api/watch/start` (A3) on any reachable daemon host; the daemon runs §12.3's order (first reachable host in `targets`). Busy state while it starts; an error line if the start failed (the cooldown time from the answer). |
+| none (no current, no last; or the `pdx-watch` tmux session is gone) | **The watcher's launch panel** (below) with **啟動守門員** → `POST /api/watch/start` (A3) on any reachable daemon host; the daemon runs §12.3's order (first reachable host in `targets`), creates `pdx-watch` in `workdir` and runs `agent_command` with the start prompt. Busy state while it starts; an error line if the start failed (the cooldown time from the answer). When the watcher registers, the tab becomes its session. |
 | awake | The watcher's session on its host, as the stock session tab (terminal, Deck, Chat; the bottom status bar). |
-| resting | The holder's `pdx-watch` session, which stays at a shell while the watcher rests (load-control spec §12.4/§12.6), as the same stock session tab. How the person wakes it from here (`POST /api/watch/wake` with a prompt, A3) is settled with the user before W5e (§10 Q5). "Resting" and "none" are different answers of the status and never look alike. |
+| resting | The holder's `pdx-watch` session, which stays at a shell while the watcher rests (load-control spec §12.4/§12.6), as the same stock session tab: the terminal view shows the shell; in Deck and Chat, where a session with no agent shows the App's launch panel (`LaunchPanel`), the guardian tab shows **the watcher's launch panel** with **叫醒守門員** → `POST /api/watch/wake` (A3) on the holding host, which types `agent_command --resume <the kept session>` with the wake prompt into `pdx-watch`. "Resting" and "none" are different answers of the status and never look alike. |
 
 - **Follows the watcher**: the tab's session is set from the watch status whenever the watcher's host or session
   changes (it is stored and synced like any session tab, and rewritten on the next change). After a failover (a26
@@ -271,8 +271,12 @@ W5a1 … W5a3, W5b, W5b1, W5b2 and W5c1 need nothing from the A line.
 - Q2 (A line): how the watcher's session is identified — **decided**: the fixed tmux session `pdx-watch` (load-control
   spec §12.4). The UI uses `tmux_session` from the status when it carries it, `pdx-watch` until then.
 - Q3 (user): **decided 10-16** — the 守門員 tab is a full session tab with terminal, Deck and Chat (§4).
-- Q5 (user, before W5e): waking a resting watcher from the 守門員 tab while it stays the stock session tab — for example
-  Deck's own input sends the text through `POST /api/watch/wake` while the watcher rests.
+- Q5 (user, 10-16): the watcher is started and woken like a session tab's rebuild, never by typing in Deck. **The
+  watcher's launch panel** stands where a session tab shows its launch or rebuild panel: the host it runs on (mlab or
+  a26), the tmux session `pdx-watch`, the working directory (`workdir`), the command (`agent_command`), and for a resting
+  watcher the conversation it resumes; one button, 啟動守門員 or 叫醒守門員, which asks the daemon (it picks the host and
+  keeps two hosts from starting two), then the tab shows the session. Proposed default: the button, not a run on
+  opening, so that looking at a resting watcher does not wake it (to be confirmed by the user).
 
 Out of scope: iOS; alerts or pushes on zone changes (the watcher's job); any history kept on a daemon for the charts;
 `pdx gate free` from the UI (the watcher's command after the person agrees).
