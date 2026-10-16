@@ -245,13 +245,12 @@ succeed; an old peer; mismatched targets warn.
 4. `GET /api/peers/watch/log` (policy entry) and `pdx watch log --host <alias> | --all`.
 5. For the watcher area (B line spec `docs/specs/2026-10-16-watcher-area-spec.md` §8 A3; admin token; the writes 403
    to device tokens and not in `HostRoutePolicy`): `GET /api/watch/events?since=&limit=` → `{events}` newest first
-   with the fields that spec lists (the record's fields plus `status` `pending|handled|skipped`, `note`,
-   `handled_at`); `POST /api/watch/skip {all: true}` → every pending event of this host becomes `skipped` with the
-   note 「沒有守門員，已略過」 — **only if the person keeps that button** (open, the B line asks; leave it out until
-   then); the `watch.events` push (spec §12.6: `{host_id, unhandled, cause}`, one per record / ack / skip operation).
+   with the fields that spec lists (the record's fields plus `status` `pending|handled`, `note`, `handled_at`); the
+   `watch.events` push (spec §12.6: `{host_id, unhandled, cause}`, one per record / ack operation). No skip route
+   (user decision 10-16: no "skip all" button).
 Tests: folding isolation per host and kind; E3 not folded; retry without double counting; restart with a pending
 queue; backlog on wake/start (and none twice); ack without a note refused, ack and the count, the note in
-`/api/watch/events`; skip (if kept) turns pending only, handled stay; one `watch.events` per operation (ack of three
+`/api/watch/events`; one `watch.events` per operation (ack of three
 ids → one push), none for a refused ack; device token → 403 on the writes.
 
 ### W3a — the `pdx-watch` tmux session: registration, reconcile, control helpers (daemon)
@@ -349,12 +348,15 @@ interface, plus one test with the real agent module registered in core):
    what it may and must not do, `pdx watch ack`, the rest handshake, the stand-down notice. `start_prompt` /
    `wake_prompt` in the settings replace the built-ins when set.
 5. Slot counts (spec §12.4 "Slot counts", user decision 10-16): the skill's procedure (read `pdx gate status --json`,
-   `pdx gate set slots.<class>=<n>` here or `ssh <alias> pdx gate set …` there, bounds heavy 1–2 and light 2–4, read
+   `pdx gate set slots.<class>=<n>` here or `ssh <alias> pdx gate set …` there, within that host's `slot_bounds`, read
    back, tell the person host, class, old → new and why; one change per host and class per 10 min). The CLI side
    needs one addition, made here: `pdx gate set` gains `--expect <old>` (the write is refused when the current value
-   differs, so two writers cannot undo each other unseen) and prints the value read back. The bounds, the 10 min rule,
-   the other host and the message are the watcher's behaviour (the skill), checked in the live acceptance below, not
-   enforced by the CLI.
+   differs, so two writers cannot undo each other unseen) and prints the value read back. The `watch` row gains
+   `slot_bounds` (spec §12.2; user decision 10-16: adjustable, default `{"heavy": [1, 2], "light": [2, 4]}`) in
+   `watchsettings.Settings`, `Default()` and the normaliser (each class `[min, max]`, 1 ≤ min ≤ max ≤ 64; a missing
+   key on read = the default, as for the other delivery keys), shown and set by `pdx watch config`. Keeping within
+   them, the 10 min rule, the other host and the message are the watcher's behaviour (the skill), checked in the live
+   acceptance below, not enforced by the CLI.
 6. Lead sets up, once: the `purdex-watch` branch of the mlab repo (from its main, notes under `watch/`) and the
    `workdir` checkout `~/Workspace/wake/mlab-purdex-watch` on a26 and mlab (a separate clone), and trusts that folder
    in Claude Code once on each host (the first-run "trust this folder?" question would stop a daemon-started watcher).
@@ -365,11 +367,13 @@ not start twice; two hosts announce at once → one start; wake a resting one �
 transcript gone → a start; patrol rest after the idle time (answer / no answer), `/exit` only to the same frame, no
 signal to a pid whose start time changed (pid reused), SIGKILL only after SIGTERM's 10 s; resident never rests;
 custom prompts used; `pdx gate set --expect`: a raise and a lower each succeed with the right old value and print the
-read-back, a changed value is refused and leaves the file as it was.
+read-back, a changed value is refused and leaves the file as it was; `slot_bounds`: default on a row without it,
+round trip, min > max / 0 / 65 / a missing class refused.
 Live acceptance (after deploy, mlab, with the person): the watcher is asked to raise `slots.heavy` 1 → 2, then to
 lower it back; each time its message names the host, the class, old → new and why, and `pdx gate status --json`
-shows the new value; asked to go to 3, it declines (bound); a second change of the same class within 10 min is
-declined; the same raise on a26 by `ssh air26 pdx gate set …` from mlab.
+shows the new value; asked to go to 3, it declines (bound); after the person sets `slot_bounds.heavy` to `[1, 3]`
+the same request is carried out; a second change of the same class within 10 min is declined; the same raise on a26
+by `ssh air26 pdx gate set …` from mlab.
 
 ### W4 — `pdx gate free <class>-<k>`
 
@@ -384,7 +388,7 @@ by another holder; scrubbed output.
 Spec §12.6 with the W2/W3 API: `/api/watch/status` (the watcher events go to: host id, alias, session id, state,
 `pdx-watch`; or none) and `watch.changed` (W3a.5) to bind the watcher tab to the holder host's `pdx-watch` and rebind
 it on a failover; `POST /api/watch/start` and `/api/watch/wake` (W3b); `/api/watch/unhandled`, `/api/watch/events`,
-`/api/watch/skip` if kept, and the `watch.events` push (W2b.5); the `watch` settings API incl. `agent_command` and the two prompts. The B line writes its own spec section and
+and the `watch.events` push (W2b.5); the `watch` settings API incl. `agent_command` and the two prompts. The B line writes its own spec section and
 plan (`docs/specs/2026-10-16-watcher-area-spec.md`), and owns its tests: the tab follows a failover, "resting" and
 "none" shown apart.
 
