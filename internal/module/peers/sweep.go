@@ -10,12 +10,12 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/wake/purdex/internal/execstat"
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/peers/ccuds"
 )
@@ -212,7 +212,7 @@ const defaultZombieSettle = 200 * time.Millisecond
 // the first field is the state letters, the second the parent pid. Anything
 // that does not parse is an error.
 func defaultProcState(pid int) (string, int, error) {
-	out, err := exec.Command("ps", "-o", "stat=,ppid=", "-p", strconv.Itoa(pid)).Output()
+	out, err := execstat.Command("peers.ps-stat", "ps", "-o", "stat=,ppid=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {
 		return "", 0, fmt.Errorf("ps -p %d: %w", pid, err)
 	}

@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/wake/purdex/internal/execstat"
 )
 
 // buildTarget names a GOOS/GOARCH pair. The zero value means "the host".
@@ -113,7 +114,7 @@ func (m *DevModule) buildBinary(ctx context.Context, t buildTarget, hash, versio
 	if err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, goExe, "build", "-ldflags", ldflags, "-o", out, "./cmd/pdx")
+	cmd := execstat.CommandContext(ctx, "dev.go-build", goExe, "build", "-ldflags", ldflags, "-o", out, "./cmd/pdx")
 	cmd.Dir = m.repoRoot
 	// Inherit env so GOCACHE / HOME work; PATH is the tool PATH so go finds
 	// the rest of the toolchain under a minimal launcher PATH.

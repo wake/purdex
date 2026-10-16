@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/wake/purdex/internal/buildinfo"
+	"github.com/wake/purdex/internal/execstat"
 )
 
 // daemonRebuildMu serializes concurrent rebuild requests. Used by Task 4.
@@ -92,7 +92,7 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 	// Bound the git query with a short timeout to avoid blocking the mutex.
 	hashCtx, hashCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer hashCancel()
-	hashOut, _ := exec.CommandContext(hashCtx, "git", "-C", m.repoRoot, "log", "-1", "--format=%h").Output()
+	hashOut, _ := execstat.CommandContext(hashCtx, "dev.git-hash", "git", "-C", m.repoRoot, "log", "-1", "--format=%h").Output()
 	hash := strings.TrimSpace(string(hashOut))
 
 	if err := m.buildBinary(ctx, buildTarget{}, hash, m.readVersionFile(), newPath, func(line string) {
@@ -129,7 +129,7 @@ func (m *DevModule) handleDaemonRebuild(w http.ResponseWriter, r *http.Request) 
 
 func (m *DevModule) handleDaemonCheck(w http.ResponseWriter, _ *http.Request) {
 	latest := ""
-	cmd := exec.Command("git", "log", "-1", "--format=%h")
+	cmd := execstat.Command("dev.git-log", "git", "log", "-1", "--format=%h")
 	cmd.Dir = m.repoRoot
 	if out, err := cmd.Output(); err == nil {
 		latest = strings.TrimSpace(string(out))

@@ -11,6 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
+	"github.com/wake/purdex/internal/execstat"
 	"github.com/wake/purdex/internal/terminal"
 )
 
@@ -157,4 +158,44 @@ func TestPongTimeoutClosesRelayConnection(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected server to close connection after pong timeout")
 	}
+}
+
+func relaySeries(name string) (execstat.Series, bool) {
+	for _, s := range execstat.Tags() {
+		if s.Name == name {
+			return s, true
+		}
+	}
+	return execstat.Series{}, false
+}
+
+// The relay starts its command through the pty library, which starts the embedded Cmd itself: a start that works is a counted
+// fork, one that fails (no such command) a counted failed start.
+func TestRelayCountsItsForkAndItsFailedStart(t *testing.T) {
+	execstat.ResetTags()
+	t.Cleanup(execstat.ResetTags)
+
+	run := func(cmd string) {
+		relay := terminal.NewRelay(cmd, nil, "/tmp")
+		srv := httptest.NewServer(http.HandlerFunc(relay.HandleWebSocket))
+		defer srv.Close()
+		ws, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+		require.NoError(t, err)
+		ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+		for {
+			if _, _, err := ws.ReadMessage(); err != nil {
+				break
+			}
+		}
+		ws.Close()
+	}
+
+	run("/nonexistent/pdx-relay-test-cmd")
+	require.Eventually(t, func() bool { s, ok := relaySeries("terminal.relay"); return ok && s.StartFailed == 1 }, 3*time.Second, 10*time.Millisecond)
+	if s, _ := relaySeries("terminal.relay"); s.Total != 0 {
+		t.Fatalf("a start that failed is not a fork: %+v", s)
+	}
+
+	run("true")
+	require.Eventually(t, func() bool { s, ok := relaySeries("terminal.relay"); return ok && s.Total == 1 }, 3*time.Second, 10*time.Millisecond)
 }

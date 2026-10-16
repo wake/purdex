@@ -347,3 +347,15 @@ func TestHeadTailWriterShapes(t *testing.T) {
 		}
 	}
 }
+
+// A caller that starts the embedded Cmd itself reports the outcome: NoteStarted counts a fork, NoteStartFailed a failed start.
+func TestNoteStartFailedCountsAFailedStart(t *testing.T) {
+	ResetTags()
+	c := Command("t.pty", "x")
+	c.NoteStartFailed()
+	c.NoteStartFailed()
+	c.NoteStarted()
+	if got := find(t, "t.pty"); got.Total != 1 || got.StartFailed != 2 {
+		t.Fatalf("want 1 fork and 2 failed starts, got %+v", got)
+	}
+}
