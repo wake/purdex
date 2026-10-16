@@ -1,6 +1,8 @@
 package fleet
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -165,7 +167,7 @@ func gateStatus() gate.Status {
 }
 
 func TestQueueSummary(t *testing.T) {
-	q := QueueSummary(gateStatus(), LocalFast{Level: 1}, t0)
+	q := QueueSummary(gateStatus(), false, LocalFast{Level: 1}, t0)
 	assert.Equal(t, 1, q.HeavyUsed)
 	assert.Equal(t, 2, q.HeavyTotal)
 	assert.Equal(t, 2, q.LightUsed)
@@ -191,7 +193,7 @@ func TestQueueSummaryAdmissionHeldFromSettings(t *testing.T) {
 		"auto rate at 50":     {LocalFast{Level: 1, PageRate: 50}, true},
 		"unknown level, calm": {LocalFast{}, false},
 	} {
-		assert.Equal(t, c.held, QueueSummary(st, c.f, t0).AdmissionHeld, name)
+		assert.Equal(t, c.held, QueueSummary(st, false, c.f, t0).AdmissionHeld, name)
 	}
 }
 
@@ -200,13 +202,13 @@ func TestQueueSummaryAdmissionSettingsVary(t *testing.T) {
 	st.Settings = []gate.Setting{
 		{Key: "admission.enabled", Value: "true"}, {Key: "admission.max_page_rate", Value: "120"}, {Key: "admission.max_pressure_level", Value: "2"},
 	}
-	assert.False(t, QueueSummary(st, LocalFast{Level: 2, PageRate: 100}, t0).AdmissionHeld)
-	assert.True(t, QueueSummary(st, LocalFast{Level: 2, PageRate: 120}, t0).AdmissionHeld)
-	assert.True(t, QueueSummary(st, LocalFast{Level: 4}, t0).AdmissionHeld)
+	assert.False(t, QueueSummary(st, false, LocalFast{Level: 2, PageRate: 100}, t0).AdmissionHeld)
+	assert.True(t, QueueSummary(st, false, LocalFast{Level: 2, PageRate: 120}, t0).AdmissionHeld)
+	assert.True(t, QueueSummary(st, false, LocalFast{Level: 4}, t0).AdmissionHeld)
 	st.Settings[0].Value = "false"
-	assert.False(t, QueueSummary(st, LocalFast{Level: 4, PageRate: 900}, t0).AdmissionHeld, "admission switched off")
+	assert.False(t, QueueSummary(st, false, LocalFast{Level: 4, PageRate: 900}, t0).AdmissionHeld, "admission switched off")
 	st.Settings = nil
-	assert.False(t, QueueSummary(st, LocalFast{Level: 4}, t0).AdmissionHeld, "no admission settings: not held")
+	assert.False(t, QueueSummary(st, false, LocalFast{Level: 4}, t0).AdmissionHeld, "no admission settings: not held")
 }
 
 func TestQueueSummaryCapsWaitersAndCommand(t *testing.T) {
@@ -215,8 +217,120 @@ func TestQueueSummaryCapsWaitersAndCommand(t *testing.T) {
 		st.QueueHeavy = append(st.QueueHeavy, gate.Waiter{Place: i + 1, Since: t0.Add(-time.Duration(i) * time.Second), Argv: []string{string(make([]rune, 300))}})
 	}
 	st.QueueHeavy[0].Argv = []string{"é", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}
-	q := QueueSummary(st, LocalFast{}, t0)
+	q := QueueSummary(st, false, LocalFast{}, t0)
 	assert.Len(t, q.Waiters, maxQueueShown)
 	assert.Equal(t, 29, q.LongestWaitS, "the longest wait counts the waiters that are not shown")
 	assert.LessOrEqual(t, len([]rune(q.Waiters[0].Command)), maxCommandRunes)
+}
+
+// holdersStatus is a gate with two heavy holders and one light holder, each with a token (the gate's own secret).
+func holdersStatus() gate.Status {
+	st := gateStatus()
+	st.Heavy = []gate.Holder{
+		{Class: "heavy", Slot: 1, PID: 10, PGID: 11, Argv: []string{"go", "test", "./..."}, Cwd: "/Users/u/Workspace/org/proj", Started: t0.Add(-90 * time.Second), Session: "sess-a", Token: "SECRET-1"},
+		{Class: "heavy", Slot: 2, PID: 12, Argv: []string{"pnpm", "build"}, Started: t0.Add(-5 * time.Second), Token: "SECRET-2"},
+	}
+	st.Light = []gate.Holder{{Class: "light", Slot: 3, PID: 14, Argv: []string{"git", "status"}, Cwd: "/x/y", Started: t0.Add(-2 * time.Second), Session: "sess-b", Token: "SECRET-3"}}
+	return st
+}
+
+// Holders come heavy first, then light, with the command shortened, the project, the session, when it started and the
+// gate's pid (the 名額鎖 column); the waiters carry their session.
+// Mutation gate: holders read from the wrong pool / the order swapped / a field dropped -> red.
+func TestQueueSummaryHolders(t *testing.T) {
+	st := holdersStatus()
+	st.QueueHeavy[0].Session = "sess-w"
+	q := QueueSummary(st, false, LocalFast{Level: 1}, t0)
+	require.Len(t, q.Holders, 3)
+	assert.Equal(t, QueueHolder{Class: "heavy", Slot: 1, Command: "go test ./...", Project: "proj", Session: "sess-a", Since: t0.Add(-90 * time.Second), PID: 10}, q.Holders[0])
+	assert.Equal(t, "pnpm build", q.Holders[1].Command)
+	assert.Equal(t, "", q.Holders[1].Project)
+	assert.Equal(t, "", q.Holders[1].Session)
+	assert.Equal(t, QueueHolder{Class: "light", Slot: 3, Command: "git status", Project: "y", Session: "sess-b", Since: t0.Add(-2 * time.Second), PID: 14}, q.Holders[2])
+	assert.Equal(t, "sess-w", q.Waiters[0].Session)
+	assert.Equal(t, 3, q.HeavyUsed+q.LightUsed, "the used counts are unchanged")
+}
+
+// At most maxQueueShown holders are listed; the used counts still count them all.
+func TestQueueSummaryCapsHolders(t *testing.T) {
+	st := gate.Status{Settings: []gate.Setting{{Key: "slots.heavy", Value: "30"}, {Key: "slots.light", Value: "30"}}}
+	for i := 0; i < 15; i++ {
+		st.Heavy = append(st.Heavy, gate.Holder{Class: "heavy", Slot: i + 1, PID: 100 + i, Argv: []string{"go", "test"}, Started: t0})
+		st.Light = append(st.Light, gate.Holder{Class: "light", Slot: i + 1, PID: 200 + i, Argv: []string{"git"}, Started: t0})
+	}
+	q := QueueSummary(st, false, LocalFast{}, t0)
+	require.Len(t, q.Holders, maxQueueShown)
+	assert.Equal(t, 15, q.HeavyUsed)
+	assert.Equal(t, 15, q.LightUsed)
+	assert.Equal(t, "heavy", q.Holders[14].Class, "heavy first")
+	assert.Equal(t, "light", q.Holders[15].Class)
+	assert.Equal(t, 204, q.Holders[19].PID, "cut at the cap")
+}
+
+// The slot's token is the secret of PDX_GATE_HELD: nothing in the serialised summary may carry it, by key or by value.
+// Mutation gate: a Token field on QueueHolder that is filled -> red.
+func TestQueueSummaryNeverCarriesATokenOut(t *testing.T) {
+	q := QueueSummary(holdersStatus(), true, LocalFast{}, t0)
+	b, err := json.Marshal(q)
+	require.NoError(t, err)
+	assert.NotContains(t, strings.ToLower(string(b)), "token")
+	assert.NotContains(t, string(b), "SECRET")
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(b, &m))
+	for _, h := range m["holders"].([]any) {
+		for k := range h.(map[string]any) {
+			assert.NotEqual(t, "token", strings.ToLower(k))
+		}
+	}
+}
+
+// The status' own admission decides when it was there (even when it says "not held"); without it the host's level and rate
+// against the effective settings decide, and the reason is empty.
+// Mutation gate: drop the presence check (always rebuild, or always trust the value) -> red.
+func TestQueueSummaryAdmissionFromTheStatusOrRebuilt(t *testing.T) {
+	calm := LocalFast{Level: 1}
+	hot := LocalFast{Level: 4} // the settings of gateStatus() would hold at level 4
+
+	st := gateStatus()
+	st.Admission = gate.AdmissionState{Held: true, Reason: "memory pressure level 2"}
+	q := QueueSummary(st, true, calm, t0)
+	assert.True(t, q.AdmissionHeld, "the status says held; the calm host does not override it")
+	assert.Equal(t, "memory pressure level 2", q.AdmissionReason)
+
+	st.Admission = gate.AdmissionState{} // present, and "not held"
+	q = QueueSummary(st, true, hot, t0)
+	assert.False(t, q.AdmissionHeld, "a present admission that says not held is not rebuilt from the level")
+	assert.Equal(t, "", q.AdmissionReason)
+
+	// an old status has no admission object: the zero value must not read as "not held"
+	q = QueueSummary(st, false, hot, t0)
+	assert.True(t, q.AdmissionHeld, "no admission in the status: rebuilt from the level and the settings")
+	assert.Equal(t, "", q.AdmissionReason, "a rebuilt answer has no reason")
+}
+
+// A class whose effective slot count is 0 is paused (the gate accepts 0 from W3c); no slots.* setting at all is not.
+func TestQueueSummaryPausedFromTheEffectiveSlots(t *testing.T) {
+	set := func(heavy, light string) gate.Status {
+		st := gate.Status{}
+		if heavy != "" {
+			st.Settings = append(st.Settings, gate.Setting{Key: "slots.heavy", Value: heavy})
+		}
+		if light != "" {
+			st.Settings = append(st.Settings, gate.Setting{Key: "slots.light", Value: light})
+		}
+		return st
+	}
+	q := QueueSummary(set("2", "0"), false, LocalFast{}, t0)
+	assert.False(t, q.HeavyPaused)
+	assert.True(t, q.LightPaused)
+	assert.Equal(t, 0, q.LightTotal)
+	q = QueueSummary(set("0", "8"), false, LocalFast{}, t0)
+	assert.True(t, q.HeavyPaused)
+	assert.False(t, q.LightPaused)
+	q = QueueSummary(set("", ""), false, LocalFast{}, t0)
+	assert.False(t, q.HeavyPaused, "no setting: not paused (an older gate)")
+	assert.False(t, q.LightPaused)
+	q = QueueSummary(set("x", "-1"), false, LocalFast{}, t0)
+	assert.False(t, q.HeavyPaused, "an unreadable value is not a pause")
+	assert.False(t, q.LightPaused)
 }

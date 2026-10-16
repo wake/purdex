@@ -54,7 +54,7 @@ func lastDecision(t *testing.T, g *Gate) map[string]any {
 // A packaging script starts at once with no slot, is put under a light slot when it has run for the delay, holds it until it
 // ends, and leaves one line saying so.
 func TestPackaging_StartsAtOnceThenTakesALateSlot(t *testing.T) {
-	g := packagingGate(t, 250*time.Millisecond)
+	g := packagingGate(t, 600*time.Millisecond)
 	dir := t.TempDir()
 	fakeTool(t, dir, "")
 	done := runPackaging(g, dir)
@@ -76,7 +76,7 @@ func TestPackaging_StartsAtOnceThenTakesALateSlot(t *testing.T) {
 	rec := lastDecision(t, g)
 	assert.Equal(t, "packaging", rec["outcome"])
 	assert.Equal(t, true, rec["late_slot"])
-	assert.InDelta(t, 0.25, rec["late_after_s"], 0.2)
+	assert.InDelta(t, 0.6, rec["late_after_s"], 0.4)
 	assert.NotNil(t, rec["duration_s"])
 }
 

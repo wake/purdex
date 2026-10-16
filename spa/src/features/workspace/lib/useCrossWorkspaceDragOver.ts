@@ -1,6 +1,7 @@
 import { useCallback, useRef } from 'react'
 import type { DragOverEvent } from '@dnd-kit/core'
-import { useWorkspaceStore } from '../store'
+import { useWorkspaceStore, WATCH_WORKSPACE_ID } from '../store'
+import { isWatchTabId } from '../../../lib/watch/ids'
 import type { DragData, TabDragData } from './computeDragEndAction'
 
 /**
@@ -40,6 +41,8 @@ export function useCrossWorkspaceDragOver() {
     const toWs = overData.sourceWsId
     if (fromWs === toWs) return
     if (toWs === null || fromWs === null) return
+    // The watcher area's tabs never leave it, and no other tab goes in (its tab row only reorders).
+    if (isWatchTabId(activeData.tabId) || toWs === WATCH_WORKSPACE_ID) return
 
     const key = `${activeData.tabId}:${toWs}:${overData.tabId}`
     if (lastKeyRef.current === key) return

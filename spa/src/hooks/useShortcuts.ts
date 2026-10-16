@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
+import { getReturnWorkspaceId, visibleWorkspaces, WATCH_WORKSPACE_ID } from '../features/workspace/store'
 import { useHistoryStore } from '../stores/useHistoryStore'
 import { createTab } from '../types/tab'
 import { getVisibleTabIds as getVisibleTabIdsShared } from '../features/workspace'
@@ -130,7 +131,7 @@ export function useShortcuts(): void {
           useProfileSwitcherStore.getState().setOpen(true)
           return
         }
-        const first = useWorkspaceStore.getState().workspaces[0]
+        const first = visibleWorkspaces(useWorkspaceStore.getState().workspaces)[0]
         if (!first) return
         useWorkspaceStore.getState().setActiveWorkspace(first.id)
         const nextTab = first.activeTabId && tabState.tabs[first.activeTabId] ? first.activeTabId : first.tabs[0]
@@ -140,7 +141,8 @@ export function useShortcuts(): void {
       }
 
       if (action.startsWith('switch-workspace-')) {
-        const workspaces = useWorkspaceStore.getState().workspaces
+        // The watcher area is not in the list the user counts: ⌘N indexes the sidebar's workspaces.
+        const workspaces = visibleWorkspaces(useWorkspaceStore.getState().workspaces)
         if (workspaces.length === 0) return
         const index = parseInt(action.replace('switch-workspace-', ''), 10) - 1
         const targetWs = workspaces[index]
@@ -153,11 +155,13 @@ export function useShortcuts(): void {
 
       if (action === 'prev-workspace' || action === 'next-workspace') {
         const wsStore = useWorkspaceStore.getState()
-        const workspaces = wsStore.workspaces
+        const workspaces = visibleWorkspaces(wsStore.workspaces)
         if (workspaces.length === 0) return
         // Block navigation when in Home mode
         if (wsStore.activeWorkspaceId === null) return
-        const currentIdx = workspaces.findIndex((w) => w.id === wsStore.activeWorkspaceId)
+        // From inside the watcher area, prev / next step from the workspace the user came from.
+        const from = wsStore.activeWorkspaceId === WATCH_WORKSPACE_ID ? getReturnWorkspaceId() : wsStore.activeWorkspaceId
+        const currentIdx = workspaces.findIndex((w) => w.id === from)
         const delta = action === 'next-workspace' ? 1 : -1
         const nextIdx = (currentIdx + delta + workspaces.length) % workspaces.length
         const targetWs = workspaces[nextIdx]

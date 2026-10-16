@@ -115,6 +115,7 @@ func (m *Module) reconcile(ctx context.Context, onlyIfStale bool) (h watch.Holde
 		m.rec.qmu.Unlock()
 	}
 	m.rec.mu.Unlock()
+	m.notifyChanged() // before the hooks: the notice is about the holder, and a slow hook must not delay it
 	m.drainRegistered()
 	return h, registered, true, err
 }
@@ -245,6 +246,7 @@ func (m *Module) fresh(ctx context.Context) {
 	if _, _, _, err := m.reconcile(cctx, true); err != nil {
 		m.logf("[watch] reconcile: %v", err)
 	}
+	m.refreshRemote(cctx)
 }
 
 // reconcileBackground is a reconcile no caller waits for (a SessionStart, the ticker, the start of the daemon).

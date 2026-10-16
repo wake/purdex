@@ -115,6 +115,8 @@ type Locator struct {
 	gen        int
 	hints      []hint
 	afterProbe func()
+	// onChange, when set, is called (without the locator's lock held) after the remembered watcher changed.
+	onChange func()
 }
 
 type hint struct {
@@ -138,6 +140,23 @@ func NewLocator(path string, ask Asker, warnf func(string, ...any)) *Locator {
 	return l
 }
 
+// SetOnChange sets the function called after the remembered watcher (Current) changed: a search remembered one, a failed delivery
+// or a better announced watcher forgot it. It runs without the locator's lock, in the goroutine that made the change.
+func (l *Locator) SetOnChange(fn func()) {
+	l.mu.Lock()
+	l.onChange = fn
+	l.mu.Unlock()
+}
+
+func (l *Locator) changed() {
+	l.mu.Lock()
+	fn := l.onChange
+	l.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 // Remembered is the watcher events go to now (nil: none is known) and the last one there was.
 func (l *Locator) Remembered() (current, last *Where) {
 	l.mu.Lock()
@@ -158,8 +177,15 @@ func clone(w *Where) *Where {
 // A watcher announced by the host of the remembered one, with another session, replaces it whatever its since (the host
 // restarted its watcher). Anything that is not awake, is the remembered watcher itself, or does not beat it, changes nothing.
 func (l *Locator) Prefer(a HolderAnswer) {
+	if l.prefer(a) {
+		l.changed()
+	}
+}
+
+// prefer is Prefer; it says whether the remembered watcher was forgotten.
+func (l *Locator) prefer(a HolderAnswer) bool {
 	if a.State != HolderAwake || a.SessionID == "" {
-		return
+		return false
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -172,19 +198,60 @@ func (l *Locator) Prefer(a HolderAnswer) {
 	}
 	c := l.mem.Current
 	if c == nil || (c.HostID == a.HostID && c.SessionID == a.SessionID) {
-		return
+		return false
 	}
 	if c.HostID == a.HostID { // the same host now has another watcher awake: the remembered one is an earlier run of it
 		l.mem.Current = nil
 		l.save()
-		return
+		return true
 	}
 	cur := HolderAnswer{HostID: c.HostID, State: c.State, SessionID: c.SessionID, Since: c.Since}
 	if !Earlier(a, cur) {
-		return
+		return false
 	}
 	l.mem.Current = nil
 	l.save()
+	return true
+}
+
+// Observe records what the host alias (whose id is a.HostID) says now about the watcher the locator knows on that host, the
+// remembered one or the last one: the cache is otherwise only written when a search finds a watcher, so a remote watcher that
+// rested, was woken or vanished would be reported as it was found. An awake watcher there becomes the remembered one; a resting one
+// is no longer a place to deliver to (Current is cleared) but stays the last one, marked resting, for a wake; a host that holds
+// none forgets what was known of it. A host the locator knows nothing of is left alone.
+//
+// asked is the watcher the question was about, as the locator held it when the question went out. The answer arrives later, so it
+// is applied only if that watcher is still the one held for that host (same session, not found again since) and no other host has
+// become the remembered one meanwhile; otherwise it is stale and dropped (the next refresh asks again).
+func (l *Locator) Observe(alias string, asked Where, a HolderAnswer) {
+	l.mu.Lock()
+	known := func(w *Where) bool { return w != nil && w.HostID == a.HostID }
+	same := func(w *Where) bool { return known(w) && w.SessionID == asked.SessionID && w.At.Equal(asked.At) }
+	if !same(l.mem.Current) && !(l.mem.Current == nil && same(l.mem.Last)) {
+		l.mu.Unlock()
+		return
+	}
+	switch {
+	case a.State == HolderAwake && a.SessionID != "":
+		w := Where{Alias: alias, HostID: a.HostID, SessionID: a.SessionID, State: HolderAwake, At: l.now(), Since: a.Since}
+		l.mem.Current, l.mem.Last = &w, &w
+	case a.State == HolderResting && a.SessionID != "":
+		w := Where{Alias: alias, HostID: a.HostID, SessionID: a.SessionID, State: HolderResting, At: l.now(), Since: a.Since}
+		if known(l.mem.Current) {
+			l.mem.Current = nil
+		}
+		l.mem.Last = &w
+	default: // none
+		if known(l.mem.Current) {
+			l.mem.Current = nil
+		}
+		if known(l.mem.Last) {
+			l.mem.Last = nil
+		}
+	}
+	l.save()
+	l.mu.Unlock()
+	l.changed()
 }
 
 // supersededSince says whether a hint that arrived after generation start beats w (the watcher a search settled on): a watcher
@@ -213,22 +280,25 @@ func (l *Locator) generation() int {
 // forgetCurrent drops the remembered watcher (it stays the last one).
 func (l *Locator) forgetCurrent() {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	l.mem.Current = nil
 	l.save()
+	l.mu.Unlock()
+	l.changed()
 }
 
 // Failed says a delivery to w failed or w is gone: the next Current looks again. Only when w is still the remembered watcher: a
 // late failure of an earlier delivery must not clear what a search found since. The watcher stays as the last one, for a wake.
 func (l *Locator) Failed(w Where) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	c := l.mem.Current
 	if c == nil || c.HostID != w.HostID || c.SessionID != w.SessionID {
+		l.mu.Unlock()
 		return
 	}
 	l.mem.Current = nil
 	l.save()
+	l.mu.Unlock()
+	l.changed()
 }
 
 // probeBudget is how long one target may take to answer the holder question; the targets are asked side by side, so a dead
@@ -427,10 +497,11 @@ func (l *Locator) setUncertain(alias string) {
 
 func (l *Locator) remember(w Where) {
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	l.mem.Current, l.mem.Last = &w, &w
 	l.mem.Uncertain = nil // a watcher is accounted for
 	l.save()
+	l.mu.Unlock()
+	l.changed()
 }
 
 // save writes the file; a failure is not fatal (the next search finds the watcher again) and is only logged.

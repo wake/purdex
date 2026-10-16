@@ -1,0 +1,81 @@
+import { describe, it, expect, beforeEach } from 'vitest'
+import type { PaneContent, PaneLayout, Tab } from '../../types/tab'
+import { getPaneLabel, getPaneIcon, type TFunction } from '../pane-labels'
+import { tabToUrl } from '../route-utils'
+import { contentMatches } from '../pane-utils'
+import { isLightTab } from '../pane-weight'
+import { layoutFromWire, layoutToWire, identityOfSync } from '../profile/host-identity'
+import { ICON_MAP } from '../../components/tab-icon-map'
+import { clearModuleRegistry, getModule, getPaneRenderer } from '../module-registry'
+import { registerBuiltinModules } from '../register-modules'
+import { useFleetStore } from '../fleet/store'
+import { getTabBadgePane, getTabHostId } from '../host-color'
+
+const t: TFunction = (key) => key
+const sessions = { getByCode: () => undefined }
+const workspaces = { getById: () => undefined }
+const host = (id: string): PaneContent => ({ kind: 'watch-host', fleetHostId: id })
+const leaf = (content: PaneContent): PaneLayout => ({ type: 'leaf', pane: { id: 'p', content } })
+
+describe('watch pane kinds', () => {
+  beforeEach(() => useFleetStore.getState().reset())
+
+  it('labels: guardian, events, and the host alias from the fleet snapshot (id as fallback)', () => {
+    expect(getPaneLabel({ kind: 'watch-guardian' }, sessions, workspaces, t)).toBe('watch.pane.guardian')
+    expect(getPaneLabel({ kind: 'watch-events' }, sessions, workspaces, t)).toBe('watch.pane.events')
+    expect(getPaneLabel(host('h1'), sessions, workspaces, t)).toBe('h1')
+    useFleetStore.setState({
+      snapshot: { hostId: 'p', term: 1, order: ['h1'], hosts: { h1: { id: 'h1', alias: 'mlab' } as never } },
+    })
+    expect(getPaneLabel(host('h1'), sessions, workspaces, t)).toBe('mlab')
+  })
+
+  it('icons exist in ICON_MAP', () => {
+    expect(getPaneIcon({ kind: 'watch-guardian' })).toBe('ShieldCheck')
+    expect(getPaneIcon({ kind: 'watch-events' })).toBe('ListBullets')
+    expect(getPaneIcon(host('h'))).toBe('Desktop')
+    for (const n of ['ShieldCheck', 'ListBullets', 'Desktop']) expect(ICON_MAP[n]).toBeTruthy()
+  })
+
+  it('route is /', () => {
+    expect(tabToUrl('t', { kind: 'watch-guardian' })).toBe('/')
+    expect(tabToUrl('t', { kind: 'watch-events' })).toBe('/')
+    expect(tabToUrl('t', host('h'))).toBe('/')
+  })
+
+  it('contentMatches: host by fleetHostId, the others by kind', () => {
+    expect(contentMatches(host('a'), host('a'))).toBe(true)
+    expect(contentMatches(host('a'), host('b'))).toBe(false)
+    expect(contentMatches({ kind: 'watch-guardian' }, { kind: 'watch-guardian' })).toBe(true)
+    expect(contentMatches({ kind: 'watch-events' }, { kind: 'watch-events' })).toBe(true)
+  })
+
+  it('none is a light tab', () => {
+    for (const c of [{ kind: 'watch-guardian' }, { kind: 'watch-events' }, host('h')] as PaneContent[]) {
+      expect(isLightTab(leaf(c))).toBe(false)
+    }
+  })
+
+  it('mapContent leaves fleetHostId unchanged (it is global, not an App host id)', () => {
+    const layout = leaf(host('d1_abc'))
+    const identity = identityOfSync({})
+    expect(layoutToWire(layout, identity)).toBe(layout)
+    expect(layoutFromWire(layout, () => 'MAPPED')).toBe(layout)
+  })
+
+  it('host-bearing readers ignore a watch-host pane', () => {
+    const tab = { id: 't', layout: leaf(host('h')) } as unknown as Tab
+    expect(getTabBadgePane(tab)).toBeNull()
+    expect(getTabHostId(tab)).toBeNull()
+  })
+
+  it('registers the three kinds in one non-disableable module', () => {
+    clearModuleRegistry()
+    registerBuiltinModules()
+    const m = getModule('watch-area')
+    expect(m).toBeTruthy()
+    expect(m!.disableable).toBeFalsy()
+    expect(m!.panes?.map((p) => p.kind).sort()).toEqual(['watch-events', 'watch-guardian', 'watch-host'])
+    expect(getPaneRenderer('watch-host')).toBeTruthy()
+  })
+})

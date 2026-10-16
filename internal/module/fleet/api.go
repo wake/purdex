@@ -23,6 +23,8 @@ type FleetAnswer struct {
 func (m *Measure) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/fleet", m.handleFleet)
 	mux.HandleFunc("GET /api/fleet/ssh-aliases", m.handleAliases)
+	// Admin only like the alias list: in neither the device allow-list nor the peer policy.
+	mux.HandleFunc("POST /api/fleet/probe-check", m.handleProbeCheck)
 }
 
 // Answer is the body of GET /api/fleet for the role as it is now.

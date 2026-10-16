@@ -4,7 +4,7 @@ import { useI18nStore } from '../stores/useI18nStore'
 import { useNewTabLayoutStore } from '../stores/useNewTabLayoutStore'
 import { useModuleEnabledStore, isModuleEnabledIn } from '../stores/useModuleEnabledStore'
 import { useTabStore } from '../stores/useTabStore'
-import { useWorkspaceStore } from '../features/workspace/store'
+import { useWorkspaceStore, visibleWorkspaces } from '../features/workspace/store'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useBreakpoint } from '../hooks/useBreakpoint'
 import { resolvePreset } from '../lib/resolve-preset'
@@ -101,7 +101,7 @@ export function NewTabPage({ onSelect, currentTabId, currentPaneId }: Props) {
     const workspaceLookup = { getById: (id: string) => workspaces.find((w) => w.id === id) }
     const movable = MOVABLE_KINDS as readonly string[]
     const out: { tabId: string; label: string; workspaceName: string }[] = []
-    for (const ws of workspaces) {
+    for (const ws of visibleWorkspaces(workspaces)) { // the watcher area's tabs are not for relocating
       for (const tabId of ws.tabs) {
         if (tabId === currentTabId) continue
         const tab = tabs[tabId]

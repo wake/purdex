@@ -1,4 +1,5 @@
 import type { Workspace } from '../../../types/tab'
+import { WATCH_WORKSPACE_ID } from '../../../lib/watch/ids'
 
 interface GetVisibleTabIdsParams {
   tabs: Record<string, unknown>
@@ -31,6 +32,7 @@ export function getVisibleTabIds(params: GetVisibleTabIdsParams): string[] {
   const scope =
     workspaces.find((w) => w.id === activeWorkspaceId)
     ?? (activeTabId !== null ? workspaces.find((w) => w.tabs.includes(activeTabId)) : undefined)
+    ?? workspaces.find((w) => w.id !== WATCH_WORKSPACE_ID) // a fall-back never lands in the watcher area
     ?? workspaces[0]
   return scope.tabs.filter((id) => !!tabs[id])
 }
