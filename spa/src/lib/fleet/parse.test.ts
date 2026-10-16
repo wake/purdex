@@ -28,9 +28,14 @@ describe('the daemon samples', () => {
     expect(air.fast).toMatchObject({ level: 2, page_rate: 61, zone: 'warning' })
     expect(air.slow?.top_cpu[0]).toEqual({ pid: 91, name: 'cc1plus', cpu: 120, rss_mb: 400 })
     expect(air.slow?.queue).toEqual({
-      heavy_used: 2, heavy_total: 2, light_used: 0, light_total: 4,
-      waiters: [{ class: 'heavy', place: 1, command: 'go test ./...', project: 'purdex', since: Date.parse('2026-10-16T11:57:30Z') }],
-      longest_wait_s: 150, admission_held: false,
+      heavy_used: 2, heavy_total: 2, light_used: 1, light_total: 4,
+      holders: [
+        { class: 'heavy', slot: 1, command: 'go test -race ./internal/module/fleet/', project: 'purdex', session: '9c2f7a10-1b3d-4e55-9a60-7f0e2c8d5b11', since: Date.parse('2026-10-16T11:58:28Z'), pid: 10 },
+        { class: 'heavy', slot: 2, command: 'pnpm build', project: 'spa', session: '', since: Date.parse('2026-10-16T11:59:46Z'), pid: 11 },
+        { class: 'light', slot: 1, command: 'git status', project: 'purdex', session: '', since: Date.parse('2026-10-16T11:59:58Z'), pid: 13 },
+      ],
+      waiters: [{ class: 'heavy', place: 1, command: 'go test ./...', project: 'purdex', session: '11111111-aaaa-4bbb-8ccc-222222222222', since: Date.parse('2026-10-16T11:57:30Z') }],
+      longest_wait_s: 150, admission_held: true, admission_reason: 'memory pressure level 2', heavy_paused: false, light_paused: false,
     })
     expect(mlab.slow?.queue).toBeUndefined()
     expect(a19).toMatchObject({ name: 'air-2019', icon: 'Laptop', icon_weight: 'fill', os: 'Linux' })
@@ -52,7 +57,53 @@ describe('the daemon samples', () => {
     expect(mlab.fast?.cpu).toBe(14)
     expect(mlab.slow).toBeUndefined()
     expect(air.slow?.queue?.heavy_used).toBe(1)
+    // an older pdx (no admission object): the daemon rebuilt it, with no reason; the light class is paused
+    expect(air.slow?.queue).toMatchObject({ admission_held: true, admission_reason: '', heavy_paused: false, light_paused: true, light_total: 0 })
+    expect(air.slow?.queue?.holders).toHaveLength(1)
     expect(mserv).toMatchObject({ status: 'offline', error: 'unreachable', last_ok_at: null, fast: null })
+  })
+})
+
+describe('the queue, both shapes', () => {
+  // the 744 daemon's queue: none of the W5b fields
+  const old744 = {
+    heavy_used: 1, heavy_total: 2, light_used: 0, light_total: 4, longest_wait_s: 30, admission_held: false,
+    waiters: [{ class: 'heavy', place: 1, command: 'go test', project: 'purdex', since: '2026-10-16T11:59:30Z' }],
+  }
+  const slowOf = (queue: unknown) => ({ id: 'air26:def456', kind: 'daemon', alias: 'air26', status: 'ok', slow: { at: '2026-10-16T12:00:00Z', top_cpu: [], top_mem: [], queue } })
+  const queueOf = (queue: unknown) => {
+    const p = parseFleetPush({ term: 1, primary: 'air26', hosts: [slowOf(queue)] })
+    return p?.hosts[0].slow?.queue
+  }
+
+  it('a 744 daemon still parses: holders [], reason "", not paused, the waiter has no session', () => {
+    expect(queueOf(old744)).toEqual({
+      heavy_used: 1, heavy_total: 2, light_used: 0, light_total: 4, holders: [], longest_wait_s: 30, admission_held: false,
+      admission_reason: '', heavy_paused: false, light_paused: false,
+      waiters: [{ class: 'heavy', place: 1, command: 'go test', project: 'purdex', session: '', since: Date.parse('2026-10-16T11:59:30Z') }],
+    })
+  })
+
+  it('the new fields are read, and a holder that does not read is dropped alone', () => {
+    const q = queueOf({
+      ...old744, admission_held: true, admission_reason: 'disk low', heavy_paused: true, light_paused: false,
+      holders: [
+        { class: 'heavy', slot: 1, command: 'go test', project: 'purdex', session: 's1', since: '2026-10-16T11:58:00Z', pid: 7 },
+        { class: 'heavy', slot: 'x', command: 'bad slot', since: '2026-10-16T11:58:00Z' },
+        { class: 'light', slot: 2, command: 'no time' },
+        { slot: 3, command: 'sparse', since: '2026-10-16T11:58:30Z' },
+      ],
+    })
+    expect(q).toMatchObject({ admission_held: true, admission_reason: 'disk low', heavy_paused: true, light_paused: false })
+    expect(q?.holders).toEqual([
+      { class: 'heavy', slot: 1, command: 'go test', project: 'purdex', session: 's1', since: Date.parse('2026-10-16T11:58:00Z'), pid: 7 },
+      { class: '', slot: 3, command: 'sparse', project: '', session: '', since: Date.parse('2026-10-16T11:58:30Z'), pid: 0 },
+    ])
+  })
+
+  it('holders that are not a list, and flags that are not true, read as the defaults', () => {
+    const q = queueOf({ ...old744, holders: 'nope', admission_reason: 7, heavy_paused: 'yes', light_paused: 1 })
+    expect(q).toMatchObject({ holders: [], admission_reason: '', heavy_paused: false, light_paused: false })
   })
 })
 

@@ -3,7 +3,7 @@
 import {
   ERROR_CODES, HOST_KINDS, HOST_STATUSES, ZONES,
   type FleetAnswer, type FleetErrorCode, type FleetFast, type FleetHost, type FleetHostStatus, type FleetProc, type FleetPush,
-  type FleetPushHost, type FleetQueue, type FleetSlow, type FleetWaiter,
+  type FleetHolder, type FleetPushHost, type FleetQueue, type FleetSlow, type FleetWaiter,
 } from './types'
 
 type Rec = Record<string, unknown>
@@ -44,9 +44,32 @@ export function parseQueue(v: unknown): FleetQueue | undefined {
   const waiters: FleetWaiter[] = []
   for (const w of v.waiters) {
     const since = isRec(w) ? time(w.since) : null
-    if (isRec(w) && since !== null && num(w.place) && str(w.command) && str(w.project)) waiters.push({ class: str(w.class) ? w.class : '', place: w.place, command: w.command, project: w.project, since })
+    if (isRec(w) && since !== null && num(w.place) && str(w.command) && str(w.project)) {
+      waiters.push({ class: str(w.class) ? w.class : '', place: w.place, command: w.command, project: w.project, session: str(w.session) ? w.session : '', since })
+    }
   }
-  return { heavy_used: v.heavy_used, heavy_total: v.heavy_total, light_used: v.light_used, light_total: v.light_total, waiters, longest_wait_s: num(v.longest_wait_s) ? v.longest_wait_s : 0, admission_held: v.admission_held === true }
+  return {
+    heavy_used: v.heavy_used, heavy_total: v.heavy_total, light_used: v.light_used, light_total: v.light_total,
+    holders: parseHolders(v.holders), waiters, longest_wait_s: num(v.longest_wait_s) ? v.longest_wait_s : 0,
+    admission_held: v.admission_held === true, admission_reason: str(v.admission_reason) ? v.admission_reason : '',
+    heavy_paused: v.heavy_paused === true, light_paused: v.light_paused === true,
+  }
+}
+
+/** Lenient: a daemon older than W5b sends no holders (→ []), and a holder that does not read is left out, never the whole queue. */
+function parseHolders(v: unknown): FleetHolder[] {
+  if (!Array.isArray(v)) return []
+  const out: FleetHolder[] = []
+  for (const h of v) {
+    const since = isRec(h) ? time(h.since) : null
+    if (isRec(h) && since !== null && num(h.slot) && str(h.command)) {
+      out.push({
+        class: str(h.class) ? h.class : '', slot: h.slot, command: h.command, project: str(h.project) ? h.project : '',
+        session: str(h.session) ? h.session : '', since, pid: num(h.pid) ? h.pid : 0,
+      })
+    }
+  }
+  return out
 }
 
 export function parseSlow(v: unknown): FleetSlow | null {

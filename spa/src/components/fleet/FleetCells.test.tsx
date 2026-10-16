@@ -20,7 +20,7 @@ function answer(hostId: string, a: ReturnType<typeof primaryAnswer> | ReturnType
 
 const FOUR = [
   host('d-a', { name: 'air26', fast: fast({ load: 30 }) }),
-  host('d-b', { name: 'mlab', fast: fast({ load: 92, zone: 'danger' }), slow: { at: 1, top_cpu: [], top_mem: [], queue: { heavy_used: 2, heavy_total: 2, light_used: 0, light_total: 4, waiters: [{ class: 'heavy', place: 1, command: 'make', project: 'p', since: 0 }], longest_wait_s: 1, admission_held: false } } }),
+  host('d-b', { name: 'mlab', fast: fast({ load: 92, zone: 'danger' }), slow: { at: 1, top_cpu: [], top_mem: [], queue: { heavy_used: 2, heavy_total: 2, light_used: 0, light_total: 4, holders: [], waiters: [{ class: 'heavy', place: 1, command: 'make', project: 'p', session: '', since: 0 }], longest_wait_s: 1, admission_held: false, admission_reason: '', heavy_paused: false, light_paused: false } } }),
   host('p1', { kind: 'probe', name: 'air19', status: 'offline', fast: null }),
   host('p2', { kind: 'probe', name: 'mserv', fast: fast({ load: 10 }) }),
 ]
