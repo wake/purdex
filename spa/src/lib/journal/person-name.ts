@@ -12,7 +12,13 @@ export function splitByName(text: string, name: string | undefined): NamePart[] 
   if (n === '') return [{ text, hit: false }]
   const parts: NamePart[] = []
   let from = 0
-  for (const m of text.matchAll(new RegExp(escapeRegExp(n), 'gu'))) {
+  // A name that starts / ends with a Latin letter or a digit is a whole word ("Al" is not in "Alert"), case-insensitive; a CJK
+  // edge takes no boundary (those scripts have no word gaps and no case).
+  const wordy = /[\p{Script=Latin}\p{N}]/u
+  const chars = [...n]
+  const head = wordy.test(chars[0]) ? '(?<![\\p{L}\\p{N}])' : ''
+  const tail = wordy.test(chars[chars.length - 1]) ? '(?![\\p{L}\\p{N}])' : ''
+  for (const m of text.matchAll(new RegExp(head + escapeRegExp(n) + tail, 'giu'))) {
     if (m.index > from) parts.push({ text: text.slice(from, m.index), hit: false })
     parts.push({ text: m[0], hit: true })
     from = m.index + m[0].length

@@ -23,6 +23,18 @@ describe('splitByName', () => {
     expect(() => splitByName('text', '[')).not.toThrow()
     expect(hits('[ok]', '[')).toEqual(['['])
   })
+  it('a Latin name is a whole word: Al is not marked inside Alert or Walnut (M: no word boundary)', () => {
+    expect(hits('Alert: Walnut and Alan', 'Al')).toEqual([])
+    expect(hits('Wake and Wakefield', 'Wake')).toEqual(['Wake'])
+    expect(hits('ask Al, (Al) or al', 'Al')).toEqual(['Al', 'Al', 'al'])
+    expect(hits('Al', 'Al')).toEqual(['Al'])
+    expect(hits('Al is here; so is Al', 'Al')).toEqual(['Al', 'Al'])
+    expect(hits('R2D2 and R2', 'R2')).toEqual(['R2'])
+    expect(joined('ask Al, (Al) or al', 'Al')).toBe('ask Al, (Al) or al')
+  })
+  it('a CJK name is found inside a sentence, with no word boundary', () => {
+    expect(hits('請王小明看一下', '王小明')).toEqual(['王小明'])
+  })
   it('an empty or missing name marks nothing', () => {
     expect(splitByName('Wake is here', '')).toEqual([{ text: 'Wake is here', hit: false }])
     expect(splitByName('Wake is here', '   ')).toEqual([{ text: 'Wake is here', hit: false }])
