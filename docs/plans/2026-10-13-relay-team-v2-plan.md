@@ -430,9 +430,86 @@ Expected files: `W/wire_unattended.go`, `T/unattended_preview.go`, `T/unattended
 
 **T48 `GET /api/team/unattended/preview`** — read-only; every list computed by the **same helper** the switch-on sweep uses, so the preview cannot drift (the sweep's rules: T4, T22, T29). Shape in the App contract. Tests: one fixture host with each case (rule on/off; quota 0 and 2; threshold / idle from mod 7 and 8 / reask / member_relay / old manual-member cards; an open member ask; a lead and an adopt card; a spawn card; a paused session) → the expected lists (M: change the sweep's rule for one case and the preview test fails). Capability `team.unattended_preview.v1`.
 
+## RT-7 — change a member's model (user 10-16; spec §4.9)
+
+Expected files: `W/wire_relay.go`, `W/wire_relay_member.go`, `T/relay_member.go`, `T/relay_store.go` (+ migration),
+`T/model_change.go` (new), `T/team_store.go`, `T/roster.go`, `T/launch.go`, `T/relay_boot.go`, `internal/tmuxpane/`
+(new: the check-and-type and pane helpers moved out of `internal/watch/pane.go`, which then uses them), `hooks/register.js`
++ `hooks/relay.test.ts`, `cmd/pdx/member_cmd.go` (new), `skills/pdx-team/SKILL.md` + tests. Two PRs: **RT-7a** the
+pane package move (pure move, byte-level listing, no behaviour change) and **RT-7b** the change itself.
+
+**T49 The op is a relay op** (so it shares the relay's one-open-op-per-session rule, lock, lead check and boot
+reconciliation): `relay_ops.mode = 'model_change'` with new columns `to_model`, `to_effort`, `from_model`,
+`from_effort`, `old_pid`, `old_proc_start`, `attempt` (`forward` | `rollback`), `launch_sent_at`, `deadline_at`,
+`notified_state` (migration adds them with defaults; a test opens an old schema that already has rows).
+- **Request** `pdx member model <ref> <model> [--effort e]` → the same wire and identity as `pdx relay <ref>`
+  (`origin_inbox` names the caller; the lead check of `relay_member.go`): refused `not_your_member`, `relay_open` (any
+  open op of the session: a relay, an idle intercept of RT-4, another change), `model_change_unsupported` (the member's
+  origin is adopted — by the member row's origin, not by whether a spawn op exists — or it is remote), `mod_too_old`
+  (its mod protocol < 11), invalid model/effort. `--effort` omitted → the member's current effort (from its row), so
+  the launch never falls back to the host's default by accident. The op is created in the session's relay transaction.
+- **The turn boundary comes from the member's mod** (mod protocol **'11'**): the mod takes the control message as it
+  takes a lead's relay (`requested → seen`), waits for its running turn to end, then holds prompts (the relay lock, as
+  `writing` does) and reports `ready`; the daemon only acts from `ready`. While held, a prompt that arrives is answered
+  "暫停：正在換 model" like the relay's hold.
+- **exiting** (from `ready`): the daemon records `old_pid` / `old_proc_start` from the member row, types `/exit` (the
+  `tmuxpane` check-and-type, in the member's own pane by its `%N`), and after 60 s re-checks the same process
+  (pid + start time; a missing start time or an unreadable table = do not signal, retry next pass) before SIGTERM, and
+  again before SIGKILL 10 s later; ESRCH = gone. Done when the old process is gone and the pane is at a shell.
+- **launching**: `launchLine(member_command, plugin dir, to_model, to_effort)` + `--resume <session id>`, typed with
+  the check-and-type helper; `launch_sent_at` and `deadline_at` (+3 min) written **before** the keys are sent (a
+  restart after that never sends the line twice: it only waits). Done when a verified SessionStart of the same session
+  id arrives **after `launch_sent_at`**, in that pane, from a process whose pid + start time differ from `old_*` and
+  whose argv carries `--model <to_model>` (and `--effort` when set). The argv comes from a new process-args reader
+  (one `ps -o args= -p <pid>` through `execstat`, tag `team.proc-args`, behind a seam for tests); a read that fails is
+  retried on the next pass and never counts as a match — no completion without a positive argv match. Whatever its
+  model, the first verified SessionStart of the session after `launch_sent_at` records that process as
+  `fwd_pid` / `fwd_proc_start` (new columns), so a rollback can end exactly it. Then, in one transaction: op `done`, the member row (`team_members`: pid, proc_start, model, effort)
+  and the spawn op's model/effort. Session id, ref, address, title, task and team are untouched (tested).
+- **Rollback**: `deadline_at` passed with no completion → `attempt = rollback`: if `fwd_pid` / `fwd_proc_start` are
+  recorded, that process (and only it: pid + start re-checked before each step) is ended as in `exiting`; a process
+  in the pane that is not the recorded one is never signalled (→ `failed`, `pane_busy`). Then the launch line with
+  `from_model` / `from_effort`, under the same write-before-send and completion rules; its completion → the op ends
+  `done` with outcome `rolled_back`; none by its deadline → `failed` (`member_down`, the exact hand command). **No new
+  terminal state**: the op ends `done` (outcome `changed` or `rolled_back`), `failed` or `cancelled`, the states the
+  relay's `Terminal()` and the one-open-op index already know.
+- **pane_busy**: after the exit the pane is not at a shell → nothing typed; op `failed` (`pane_busy`); the notice says
+  what runs in the pane and the hand command.
+- **Release, kill, team end**: in `requested` / `seen` / `ready` they cancel the op first. The mod learns it two ways:
+  a `relay_cancel` control message on the same channel as the request, and its own check of the op's state every
+  30 s while it holds (`pdx relay status`), so a lost message never leaves prompts held; on `cancelled` it drops the
+  hold and says so in the session. In
+  `exiting` / `launching` they are refused with `model_change_open` and the CLI says to wait or retry. Boot
+  reconciliation re-checks that the member still belongs to the lead before any step, and abandons an op whose member
+  does not (no launch).
+- **RT-4**: an idle intercept for a session with an open model-change op is `silent` (one open op rule).
+- **Notices** (started, done old → new, rolled back with why, failed with why and the hand command): sent from the op's
+  state by the relay notifier loop; `notified_state` is updated in the same transaction as the state change that
+  needs a notice and cleared when the notice is handed to the peer outbox, so a restart re-sends at most once per state.
+**T50 CLI, roster and skill** — `pdx member model … [--wait 9m]` prints state changes like `pdx relay --wait`; exit 0
+done, 10 refused, 11 still going at `--wait`, 14 rolled back or failed. `pdx team`'s MODEL shows `sonnet→opus …`
+while an op is open. The pdx-team skill (lead section) gains the command and "never type /model into a member". The
+skill and `register.js` change → `pdx setup`; the plugin-content test covers the new skill text.
+Tests: identity (another lead's member, M); each refusal incl. adopted by origin, remote, `relay_open` both ways (a
+relay asked during a pending change, a change asked during a relay) and `mod_too_old`; `--effort` explicit / omitted /
+member without one; the mod holds only from its turn end (a turn in progress delays `ready`, M; a prompt during hold
+gets the notice); exiting: signals only to the same pid + start, none when the start time is unreadable, ESRCH;
+launching: a stale SessionStart (before `launch_sent_at`), another pane, the old pid, another session id, the old
+model in argv, or an argv read that fails are not completion (M); a wrong-model process is recorded as `fwd_*`, ended
+on rollback, and the old model comes back; a foreign process in the pane is never signalled; after `rolled_back` (and
+after `failed`, `cancelled`) a new relay or model change can be created and release/kill are not blocked; cancel at
+`ready` by the message and, with the message lost, by the 30 s check; done updates `team_members` and the spawn op in one transaction and keeps id,
+ref, address, title, task; the next relay and kill use the new pid; rollback on deadline (M) → `rolled_back`;
+rollback fails → `failed`/`member_down`; `pane_busy`; restart cut points: after `ready`, after `/exit` typed, after a
+signal, after `launch_sent_at`, after the rollback's line — each resumes without a second line or a wrong kill;
+release/kill/team end in each state; RT-4 intercept with an open change → silent; notices once per state across a
+restart; old-schema migration with rows; tmux under `-L` with `unset TMUX`.
+Order: after RT-4b (both change the relay op and the mod protocol: RT-4b takes '10', RT-7 '11'); owner: the A-line
+member after W2b.
+
 ## Order and owners
 
-RT-1a → RT-1b → RT-1c (deploy) → RT-2a1 → RT-2a2 → RT-2b → RT-2c (deploy) → RT-3a1 → RT-3a2 → RT-3b → RT-3c (deploy) → RT-4 → RT-5a (after lease v2 P1b; #2765 is merged, d3a6e69f, so the seam is there) → RT-5b → RT-6.
+RT-1a → RT-1b → RT-1c (deploy) → RT-2a1 → RT-2a2 → RT-2b → RT-2c (deploy) → RT-3a1 → RT-3a2 → RT-3b → RT-3c (deploy) → RT-4a → RT-4b → RT-7a → RT-7b → RT-5a (after lease v2 P1b; #2765 is merged, d3a6e69f, so the seam is there) → RT-5b → RT-6.
 - Gate M-1 (T41) can run any time before RT-4, by anyone with a throwaway session.
 - RT-6 needs RT-3a1 (the idle split) and RT-2b (asks); it may run beside RT-3b.
 - One Sonnet member implements in order. The lead reviews each PR, releases it, and bumps and deploys at the three marks.
