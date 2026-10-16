@@ -71,7 +71,7 @@ describe('HostPage — a probe host\'s page', () => {
   it('a paired host asks before it drops a dirty draft; declining stays', () => {
     selectDirty('p1')
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
-    mount(`/hosts/${H}/overview`)
+    mount('/hosts')
     fireEvent.click(screen.getByText('Test Host'))
     expect(confirm).toHaveBeenCalledTimes(1)
     expect(screen.getByTestId('probe-page-stub')).toBeTruthy()
@@ -81,7 +81,7 @@ describe('HostPage — a probe host\'s page', () => {
   it('accepting leaves the probe page and drops the draft', () => {
     selectDirty('p1')
     vi.spyOn(window, 'confirm').mockReturnValue(true)
-    mount(`/hosts/${H}/overview`)
+    mount('/hosts')
     fireEvent.click(screen.getByText('Test Host'))
     expect(screen.queryByTestId('probe-page-stub')).toBeNull()
     expect(useFleetDraftStore.getState().selectedProbe).toBeNull()
@@ -91,7 +91,7 @@ describe('HostPage — a probe host\'s page', () => {
   it('the paired-phones page asks the same way', () => {
     selectDirty('p1')
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
-    mount(`/hosts/${H}/overview`)
+    mount('/hosts')
     fireEvent.click(screen.getByText('Paired phones'))
     expect(confirm).toHaveBeenCalledTimes(1)
     expect(screen.queryByTestId('paired-phones')).toBeNull()
@@ -101,7 +101,7 @@ describe('HostPage — a probe host\'s page', () => {
     useFleetDraftStore.getState().beginProbe(entry('p1'), false, { revisions: {}, rows: {} })
     useFleetDraftStore.getState().selectProbe({ id: 'p1', isNew: false })
     const confirm = vi.spyOn(window, 'confirm')
-    mount(`/hosts/${H}/overview`)
+    mount('/hosts')
     fireEvent.click(screen.getByText('Test Host'))
     expect(confirm).not.toHaveBeenCalled()
     expect(screen.queryByTestId('probe-page-stub')).toBeNull()
@@ -110,7 +110,7 @@ describe('HostPage — a probe host\'s page', () => {
   it('accepting the discard of a NEW draft leaves no ghost row in the sidebar', () => {
     selectDirty('newone01', true)
     vi.spyOn(window, 'confirm').mockReturnValue(true)
-    mount(`/hosts/${H}/overview`)
+    mount('/hosts')
     expect(screen.getByTestId('probe-item-newone01')).toBeTruthy()
     fireEvent.click(screen.getByText('Test Host'))
     expect(screen.queryByTestId('probe-item-newone01')).toBeNull()
@@ -119,7 +119,7 @@ describe('HostPage — a probe host\'s page', () => {
   it('declining through the sidebar + keeps the draft and the page', async () => {
     selectDirty('p1')
     vi.spyOn(window, 'confirm').mockReturnValue(false)
-    mount(`/hosts/${H}/overview`)
+    mount('/hosts')
     const add = screen.getByTestId('probe-group-add') as HTMLButtonElement
     await waitFor(() => expect(add.disabled).toBe(false))
     fireEvent.click(add)
@@ -132,7 +132,7 @@ describe('HostPage — a probe host\'s page', () => {
 
     it('leaves the probe page and shows the requested host page', async () => {
       useFleetDraftStore.getState().selectProbe({ id: 'p1', isNew: false })
-      const loc = mount(`/hosts/${H}/overview`)
+      const loc = mount('/hosts')
       expect(screen.getByTestId('probe-page-stub')).toBeTruthy()
       act(() => { loc.navigate(outside) })
       await waitFor(() => expect(screen.queryByTestId('probe-page-stub')).toBeNull())
@@ -143,7 +143,7 @@ describe('HostPage — a probe host\'s page', () => {
     it('a dirty draft asks first: declining keeps the probe page', () => {
       selectDirty('p1')
       const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
-      const loc = mount(`/hosts/${H}/overview`)
+      const loc = mount('/hosts')
       act(() => { loc.navigate(outside) })
       expect(confirm).toHaveBeenCalledTimes(1)
       expect(screen.getByTestId('probe-page-stub')).toBeTruthy()
@@ -153,7 +153,7 @@ describe('HostPage — a probe host\'s page', () => {
     it('a dirty draft asks first: accepting leaves', () => {
       selectDirty('p1')
       const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
-      const loc = mount(`/hosts/${H}/overview`)
+      const loc = mount('/hosts')
       act(() => { loc.navigate(outside) })
       expect(confirm).toHaveBeenCalledTimes(1)
       expect(screen.queryByTestId('probe-page-stub')).toBeNull()

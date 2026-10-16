@@ -277,19 +277,24 @@ export function HostPage({ isActive }: PaneRendererProps) {
   // tab switch keeps it. Only the sidebar's own choices leave it (`leaveProbeDraft` asks about unsaved changes first): the
   // route's canonical rewrite when hosts hydrate late must not close it.
   const selectedProbe = useFleetDraftStore((s) => s.selectedProbe)
-  // The path this page itself last asked for (canonical rewrite, sidebar pick). Any other location change while a probe host
-  // is open is an outside navigation (session launcher, headless launcher, hidden pane): it leaves the probe page, asking
-  // about an unsaved draft first; declining keeps the probe page.
+  // The path this page itself last asked for (canonical rewrite, sidebar pick); everything else is not an outside navigation.
   const ownPath = useRef<string | null>(null)
-  const firstLocation = useRef(true)
-  const isActiveRef = useRef(isActive)
-  useEffect(() => { isActiveRef.current = isActive }, [isActive])
+  // An outside navigation (session launcher, headless launcher, hidden pane) is a host URL this page did not ask for. It
+  // usually comes from ANOTHER tab: the URL changes first and useRouteSync activates the Hosts tab one commit later (or
+  // mounts this page), so it is remembered here until this instance is active. A bare /hosts (tab switch back, shortcuts) is
+  // never one. Acting on it leaves the probe page, asking about an unsaved draft first; declining keeps the probe page.
+  const pendingOutside = useRef(false)
   useEffect(() => {
-    if (firstLocation.current) { firstLocation.current = false; return }
     if (ownPath.current === location) { ownPath.current = null; return }
-    if (!isActiveRef.current || !useFleetDraftStore.getState().selectedProbe) return
-    if (leaveProbeDraft(null)) useFleetDraftStore.getState().selectProbe(null)
+    const parsed = parseRoute(location)
+    if (parsed?.kind === 'hosts' && parsed.hostId) pendingOutside.current = true
   }, [location])
+  useEffect(() => {
+    if (!pendingOutside.current || !isActive) return
+    pendingOutside.current = false
+    if (!selectedProbe) return
+    if (leaveProbeDraft(null)) useFleetDraftStore.getState().selectProbe(null)
+  }, [isActive, location, selectedProbe])
 
   // R2 attacker A2 fix — snapshot module-scoped lastSelection ONCE per render
   // and pass it to every helper.  preResolveHostId, resolveSelection, and
