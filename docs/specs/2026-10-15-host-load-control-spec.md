@@ -397,6 +397,7 @@ daemon settings. Not Profile Sync: Profile Sync carries the App's own stores and
 | `workdir` | `~/Workspace/wake/mlab-purdex-watch` (both hosts) | the watcher's directory on this host: a checkout of the mlab repo used only for its `purdex-watch` branch |
 | `start_prompt` | built-in | the first prompt of a new watcher; at most 4 KB, no control characters (no newline: it is typed into a shell, §12.4) |
 | `wake_prompt` | built-in | the prompt that resumes a resting watcher; same limits |
+| `slot_bounds` | `{"heavy": [1, 2], "light": [2, 4]}` | the range the watcher may set this host's gate slot counts to (§12.4 "Slot counts"); user decision 10-16: adjustable, these defaults. Each class `[min, max]` with 1 ≤ min ≤ max ≤ 64 |
 
 ### 12.3 Where the watcher is, and delivery (W2)
 
@@ -427,8 +428,8 @@ daemon settings. Not Profile Sync: Profile Sync carries the App's own stores and
 - Delivery: at most one message per event kind per host per 10 min (later ones are folded into a count); E3 is never
   folded. A woken or new watcher first gets a summary of the unhandled events since the last delivery.
 - `pdx watch log [--since] [--host|--all]` reads the records; `pdx watch ack <id>… --note "<one line>"` marks events
-  handled with the watcher's note (required; the UI shows it); an event is `pending`, `handled` or `skipped` (the
-  last only by the area's "skip all", if the person keeps that button).
+  handled with the watcher's note (required; the UI shows it); an event is `pending` or `handled`. There is no
+  "skip all" (user decision 10-16: the button is not wanted).
 
 ### 12.4 The watcher session (W3)
 
@@ -504,7 +505,9 @@ model name.
 - **Slot counts** (the user's 10-16 decision, made concrete): the watcher reads the value first (`pdx gate status
   --json`), changes it with `pdx gate set slots.<heavy|light>=<n>` on the host it runs on (the gate reads its config at
   every run, so no daemon call is needed), or with `ssh <alias> pdx gate set …` for the other gated host, and stays
-  within heavy 1–2 and light 2–4 (lead's starting bounds for 16 GB hosts, tuned like the thresholds). It reads the
+  within that host's `slot_bounds` (§12.2; user decision 10-16: adjustable, default heavy 1–2 and light 2–4), read
+  with `pdx watch config get` (on the other host over the same `ssh`). A count already outside the bounds (set by the
+  person) may be moved toward them, never further out. It reads the
   value again after the write and tells the person the host, the class, old → new and why; a write that fails or reads
   back differently is reported as failed, not retried. One change per host and class per 10 min, so two quick changes
   cannot undo each other unseen.
@@ -536,10 +539,11 @@ is free. A slot whose gate is still alive is refused (interrupt that command ins
   answers: a resting watcher's tab opens its tmux session at a shell and offers to wake it; with none the area offers
   "start the watcher". The strip's mode and model are read from the holder's `watch` row, not from the status.
 - **Events push** (agreed with the B line 10-16): a separate kind, `watch.events`, on the event stream: `{host_id,
-  unhandled, cause}` with `cause` one of `recorded`, `acked`, `skipped`; one per operation (an ack of several ids, or
-  a skip of all, is one push), a plain `Broadcast`. It keeps `watch.changed` about the watcher alone.
+  unhandled, cause}` with `cause` one of `recorded`, `acked`; one per operation (an ack of several ids is one push),
+  a plain `Broadcast`. It keeps `watch.changed` about the watcher alone.
 - The area's own spec, with the API it needs from the A line, is `docs/specs/2026-10-16-watcher-area-spec.md` (B line,
-  §8 A1–A3); the A3 items are planned in W2b (events, ack with a note, skip, the push) and W3b (start, wake).
+  §8 A1–A3); the A3 items are planned in W2b (events, ack with a note, the push) and W3b (start, wake). No skip
+  route (user decision 10-16).
 
 ### 12.7 W0: threshold evaluation (now)
 
