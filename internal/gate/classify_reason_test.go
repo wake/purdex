@@ -73,6 +73,18 @@ func TestClassifyReason_Table(t *testing.T) {
 		{"pnpm --prefix spa run build --help", Env{}, ClassNone, ReasonPackaging},
 		{"pnpm run electron:build --help", Env{}, ClassNone, ReasonPackaging},
 		{"pnpm run --help", Env{}, ClassNone, ReasonInfoOnly},
+		{"pnpm --prefix spa run --help", Env{}, ClassNone, ReasonInfoOnly}, // the option's value is skipped to find the subcommand
+		{"pnpm --help", Env{}, ClassNone, ReasonInfoOnly},
+		{"pnpm --version", Env{}, ClassNone, ReasonInfoOnly},
+		{"npx vitest --help", Env{}, ClassNone, ReasonInfoOnly},
+		{"pnpm x vitest --help", Env{}, ClassNone, ReasonInfoOnly},
+		{"pnpm dlx vitest --help", Env{}, ClassNone, ReasonInfoOnly},
+		{"yarn help", Env{}, ClassNone, ReasonInfoOnly},
+		{"npx help", Env{}, ClassNone, ReasonKnownPassthrough}, // npx runs a tool called help: not a help subcommand
+		{"electron-vite build --help", Env{}, ClassNone, ReasonInfoOnly},
+		{"electron-builder --help", Env{}, ClassNone, ReasonInfoOnly},
+		{"vitest run --reporter=dot --help", Env{}, ClassNone, ReasonInfoOnly}, // an = option takes no next word: a real request
+		{"go test ./... -args x --help", Env{}, ClassHeavy, ReasonHeavy},       // after -args it is the test binary's
 		{"pnpm exec vitest run --help", Env{}, ClassNone, ReasonInfoOnly},
 		{"phpunit --coverage-html --help", Env{}, ClassHeavy, ReasonHeavy},
 		{"vite build --help", Env{}, ClassNone, ReasonInfoOnly},
