@@ -124,3 +124,18 @@ func TestReadLogReportsWhatItCannotRead(t *testing.T) {
 		require.Error(t, err)
 	}
 }
+
+func TestRecordFull_ReturnsTheLineItWrote(t *testing.T) {
+	dir := t.TempDir()
+	r := NewRecorder(dir, "mlab")
+	at := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	rec, err := r.RecordFull(Event{Kind: KindPressureHigh, At: at, Pressure: 2, Detail: "pressure level 2 for 2m0s"})
+	require.NoError(t, err)
+	require.NotEmpty(t, rec.ID)
+	require.Equal(t, "mlab", rec.Host)
+	require.Equal(t, KindPressureHigh, rec.Kind)
+	got, err := ReadLog(dir, time.Time{}, "")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, rec.ID, got[0].ID)
+}

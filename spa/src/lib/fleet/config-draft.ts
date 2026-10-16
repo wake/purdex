@@ -13,7 +13,12 @@ export interface FleetRowDraft { order: string; peer: string; enabled: boolean; 
 /** What the probe-host section says about the request in flight: kept here so a tab switch mid-request cannot allow a second save. */
 export interface ProbeUi { busy: boolean; dialogError: string | null; listError: string | null; changed: string[] | null }
 
+/** The probe host whose own page the Hosts page shows (F-2d). `isNew`: it is not in any daemon's list yet (its draft starts blank). */
+export interface ProbeSelection { id: string; isNew: boolean }
+
 interface DraftState {
+  selectedProbe: ProbeSelection | null
+  selectProbe: (sel: ProbeSelection | null) => void
   ui: ProbeUi
   setUi: (patch: Partial<ProbeUi>) => void
   probe: ProbeSession | null
@@ -32,10 +37,11 @@ interface DraftState {
 }
 
 const emptyUi: ProbeUi = { busy: false, dialogError: null, listError: null, changed: null }
-const empty = { ui: emptyUi, probe: null, deleting: null, probeConfirm: null, fleetRows: {}, fleetConfirm: {} }
+const empty = { selectedProbe: null, ui: emptyUi, probe: null, deleting: null, probeConfirm: null, fleetRows: {}, fleetConfirm: {} }
 
 export const useFleetDraftStore = create<DraftState>((set) => ({
   ...empty,
+  selectProbe: (selectedProbe) => set({ selectedProbe }),
   setUi: (patch) => set((s) => ({ ui: { ...s.ui, ...patch } })),
   beginProbe: (entry, isNew, base) => set({ probe: { initial: entry, draft: entry, isNew, base } }),
   setProbeDraft: (fn) => set((s) => (s.probe ? { probe: { ...s.probe, draft: fn(s.probe.draft) } } : s)),

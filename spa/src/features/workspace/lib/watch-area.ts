@@ -10,7 +10,11 @@ import { useTabStore } from '../../../stores/useTabStore'
 import { useFleetStore } from '../../../lib/fleet/store'
 import { readMasterWorld } from '../../../lib/profile/master-world'
 import { useWorkspaceStore, getReturnWorkspaceId } from '../store'
-import { WATCH_WORKSPACE_ID, fleetHostIdOfTabId, isWatchTabId, watchHostTabId } from '../../../lib/watch/ids'
+import { WATCH_GUARDIAN_TAB_ID, WATCH_WORKSPACE_ID, fleetHostIdOfTabId, isWatchTabId, watchHostTabId } from '../../../lib/watch/ids'
+import { useWatchStatusStore, deriveGuardian } from '../../../lib/watch/status-store'
+import { useHostStore } from '../../../stores/useHostStore'
+import { useSessionStore } from '../../../stores/useSessionStore'
+import { tmuxSessionContent } from '../../../lib/open-session-tab'
 
 /** A host that this device listed and then did not list for this long loses its tab. */
 export const ABSENT_REMOVE_MS = 60_000
@@ -51,6 +55,40 @@ function dropTab(tabId: string): void {
   if (owner && wasActive && neighbour !== null) useWorkspaceStore.getState().setWorkspaceActiveTab(owner.id, neighbour)
 }
 
+const GUARDIAN_PANEL: PaneContent = { kind: 'watch-guardian' }
+
+interface GuardianWish {
+  wanted: PaneContent
+  /** True when turning a session into the panel is backed by evidence that does not depend on this device's reach. */
+  downgradeOk: boolean
+}
+
+/**
+ * What the guardian pane should hold now (plan §1, T-a3.4), or null = write nothing: the derivation is not settled (no
+ * answer yet, a connected host that has not answered since it connected, the holder's session list not loaded).
+ * Session → panel (`downgradeOk`) only when the evidence is the same on every device: `none` from an `ok` host, or the
+ * holder reachable, its list loaded, and no such session. Not for an unreachable holder, a failed read or a forgotten host.
+ */
+function guardianWish(): GuardianWish | null {
+  const byHost = useWatchStatusStore.getState().byHost
+  const host = useHostStore.getState()
+  const connected = Object.keys(host.hosts).filter((id) => host.runtime[id]?.status === 'connected')
+  if (connected.length === 0 || connected.some((id) => !(id in byHost))) return null
+  const g = deriveGuardian(byHost)
+  if (g.state === 'unknown') return null
+  if ((g.state === 'awake' || g.state === 'resting') && g.reachable && g.appHostId) {
+    const all = useSessionStore.getState().sessions
+    if (!Object.hasOwn(all, g.appHostId)) return null // `sessions[host]` exists only once a fetch landed: loaded
+    const found = all[g.appHostId].find((x) => x.name === g.tmuxSession)
+    if (found) return { wanted: tmuxSessionContent(g.appHostId, found), downgradeOk: false }
+    return { wanted: GUARDIAN_PANEL, downgradeOk: true }
+  }
+  return { wanted: GUARDIAN_PANEL, downgradeOk: g.state === 'none' }
+}
+
+const contentKey = (c: PaneContent): string =>
+  c.kind === 'tmux-session' ? `${c.hostId}\0${c.sessionCode}\0${c.tmuxInstance}` : 'panel'
+
 export interface WatchReconciler {
   /** One pass. Writes only on a difference. Returns when the next pass is due for a pending removal, else null. */
   reconcile: (view: WatchFleetView | null, now?: number) => number | null
@@ -60,6 +98,38 @@ export interface WatchReconciler {
 export function createWatchReconciler(): WatchReconciler {
   /** fleet host id → the last time a non-stale snapshot listed it. In memory only: a restart forgets, and forgets safely. */
   const lastListed = new Map<string, number>()
+  /** The derivation behind the guardian pane's content, as this device last wrote it. Edge-triggered: see `reconcileGuardian`. */
+  let guardianKey: string | undefined
+
+  /**
+   * The guardian tab: made first when it is missing, and its pane content set when THIS device's derivation changes — not on
+   * every run. A content that arrived by sync from another device stays until this device's own derivation changes; both
+   * devices read the same daemons, so they converge without ping-pong.
+   */
+  const reconcileGuardian = (): void => {
+    const tabs = useTabStore.getState().tabs
+    const area = () => useWorkspaceStore.getState().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!
+    const made = !(WATCH_GUARDIAN_TAB_ID in tabs)
+    if (made) useTabStore.getState().addTab(hostTab(WATCH_GUARDIAN_TAB_ID, GUARDIAN_PANEL))
+    if (!area().tabs.includes(WATCH_GUARDIAN_TAB_ID)) {
+      useWorkspaceStore.getState().addTabToWorkspace(WATCH_WORKSPACE_ID, WATCH_GUARDIAN_TAB_ID)
+      // First of the row when it is created; after that the reader's order stands.
+      const rest = area().tabs.filter((id) => id !== WATCH_GUARDIAN_TAB_ID)
+      useWorkspaceStore.getState().reorderWorkspaceTabs(WATCH_WORKSPACE_ID, [WATCH_GUARDIAN_TAB_ID, ...rest])
+    }
+
+    const wish = guardianWish()
+    if (wish === null) return
+    const key = contentKey(wish.wanted)
+    if (key === guardianKey) return
+    const tab = useTabStore.getState().tabs[WATCH_GUARDIAN_TAB_ID]
+    if (!tab || tab.layout.type !== 'leaf') return // not remembered: the next run retries
+    const cur = tab.layout.pane.content
+    if (JSON.stringify(cur) === JSON.stringify(wish.wanted)) { guardianKey = key; return }
+    if (wish.wanted.kind === 'watch-guardian' && !wish.downgradeOk) return // this device cannot tell; leave the session
+    useTabStore.getState().setPaneContent(WATCH_GUARDIAN_TAB_ID, tab.layout.pane.id, wish.wanted)
+    guardianKey = key
+  }
 
   const reconcile = (view: WatchFleetView | null, now: number = Date.now()): number | null => {
     const ws = useWorkspaceStore.getState()
@@ -91,6 +161,9 @@ export function createWatchReconciler(): WatchReconciler {
     for (const id of useWorkspaceStore.getState().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!.tabs) {
       if (!isWatchTabId(id) && returnTo) useWorkspaceStore.getState().insertTab(id, returnTo)
     }
+
+    // 2b. The guardian tab, with or without a fleet view.
+    reconcileGuardian()
 
     // 3. Host tabs, only with a fleet view; without one they are left as they are.
     if (!view) return null
@@ -179,7 +252,10 @@ export function startWatchArea(): () => void {
     timer = next === null ? null : setTimeout(run, Math.max(0, next - Date.now()))
   }
 
-  const unsubscribe = [useFleetStore.subscribe(run), useWorkspaceStore.subscribe(run), useTabStore.subscribe(run)]
+  const unsubscribe = [
+    useFleetStore.subscribe(run), useWorkspaceStore.subscribe(run), useTabStore.subscribe(run),
+    useWatchStatusStore.subscribe(run), useSessionStore.subscribe(run), // the guardian pane follows where the watcher is
+  ]
   run()
   return () => {
     for (const off of unsubscribe) off()
