@@ -530,3 +530,60 @@ func TestReconcileStopsRemovedHostsInParallel(t *testing.T) {
 	assert.GreaterOrEqual(t, took, grace, "the sessions only end after the grace")
 	assert.Less(t, took, 3*time.Second, "the second session was waited for after the first (serial stop)")
 }
+
+func fullOf(p PushPayload, id string) *HostJSON {
+	for _, h := range p.Hosts {
+		if h.ID == id {
+			return h.Full
+		}
+	}
+	return nil
+}
+
+// A look change on a probe host rides the next pushes as Full for that host only, for lookRepeat pushes (a push a slow
+// subscriber never got must not lose it), then stops; a push without a look change never carries Full.
+func TestPushCarriesFullWhenLookChanges(t *testing.T) {
+	r := newMRig(t, silent)
+	r.fleet.PeerSSHAlias = ""
+	r.start()
+	sub := r.subscribe(core.FeatureFleetV1)
+	r.setProbes(hostconfig.ProbeHost{ID: "ab12cd34", Name: "x", SSHAlias: "a19", Icon: "Desktop"})
+	r.tick()
+	p, ok := pushOf(t, sub)
+	require.True(t, ok)
+	require.Len(t, p.Hosts, 2)
+	assert.Nil(t, fullOf(p, "mlab:abc123"), "the baseline push carries no Full")
+	assert.Nil(t, fullOf(p, "ab12cd34"), "the baseline push carries no Full")
+
+	r.fc.Advance(time.Second)
+	r.tick()
+	p, _ = pushOf(t, sub)
+	assert.Nil(t, fullOf(p, "ab12cd34"), "no look change, no Full")
+
+	r.setProbes(hostconfig.ProbeHost{ID: "ab12cd34", Name: "x", SSHAlias: "a19", Icon: "Laptop"})
+	for i := 0; i < lookRepeat; i++ {
+		r.fc.Advance(time.Second)
+		r.tick()
+		p, _ = pushOf(t, sub)
+		f := fullOf(p, "ab12cd34")
+		require.NotNil(t, f, "push %d after the change", i)
+		assert.Equal(t, "Laptop", f.Icon)
+		assert.Equal(t, "probe", f.Kind)
+		assert.Nil(t, fullOf(p, "mlab:abc123"), "only the host whose look changed")
+	}
+	r.fc.Advance(time.Second)
+	r.tick()
+	p, _ = pushOf(t, sub)
+	assert.Nil(t, fullOf(p, "ab12cd34"), "the window is over")
+
+	// a dropped push (never taken) does not lose it: the next push still carries Full
+	r.setProbes(hostconfig.ProbeHost{ID: "ab12cd34", Name: "x", SSHAlias: "a19", Icon: "Cpu"})
+	r.fc.Advance(time.Second)
+	r.tick() // dropped: nobody takes it
+	r.fc.Advance(time.Second)
+	r.tick()
+	p, _ = pushOf(t, sub)
+	f := fullOf(p, "ab12cd34")
+	require.NotNil(t, f)
+	assert.Equal(t, "Cpu", f.Icon)
+}

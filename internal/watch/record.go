@@ -63,10 +63,17 @@ func NewRecorder(dir, host string) *Recorder {
 
 // Record writes the event and returns its id. The first record of a day also removes the logs older than 30 days.
 func (r *Recorder) Record(ev Event) (string, error) {
+	rec, err := r.RecordFull(ev)
+	return rec.ID, err
+}
+
+// RecordFull is Record that returns the whole line it wrote (the delivery queue takes it from there). On an error the record is
+// the zero value unless the line was written and only the close failed.
+func (r *Recorder) RecordFull(ev Event) (Record, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := os.MkdirAll(r.dir, 0o700); err != nil {
-		return "", err
+		return Record{}, err
 	}
 	today := r.now().UTC().Format(logDayFormat)
 	if r.cleaned != today {
@@ -81,17 +88,20 @@ func (r *Recorder) Record(ev Event) (string, error) {
 	}
 	b, err := json.Marshal(rec)
 	if err != nil {
-		return "", err
+		return Record{}, err
 	}
 	f, err := os.OpenFile(filepath.Join(r.dir, logPrefix+ev.At.UTC().Format(logDayFormat)+logSuffix), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
-		return "", err
+		return Record{}, err
 	}
 	_, werr := f.Write(append(b, '\n'))
 	if cerr := f.Close(); werr == nil {
 		werr = cerr
 	}
-	return rec.ID, werr
+	if werr != nil {
+		return Record{}, werr
+	}
+	return rec, nil
 }
 
 // clean removes the log files whose day is more than 30 days before today.

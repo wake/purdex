@@ -4,7 +4,12 @@
 import type { HistoryRange } from '../fleet/history'
 
 const ranges = new Map<string, HistoryRange>()
+/** The queue block's sub-tab: 當下 (now) or 歷史 (history, W5d). */
+export type QueueTab = 'now' | 'history'
+const queueTabs = new Map<string, QueueTab>()
 
 export const readRange = (fleetHostId: string): HistoryRange => ranges.get(fleetHostId) ?? '5m'
 export const writeRange = (fleetHostId: string, range: HistoryRange): void => { ranges.set(fleetHostId, range) }
-export const clearViewMemory = (): void => { ranges.clear() }
+export const readQueueTab = (fleetHostId: string): QueueTab => queueTabs.get(fleetHostId) ?? 'now'
+export const writeQueueTab = (fleetHostId: string, tab: QueueTab): void => { queueTabs.set(fleetHostId, tab) }
+export const clearViewMemory = (): void => { ranges.clear(); queueTabs.clear() }
