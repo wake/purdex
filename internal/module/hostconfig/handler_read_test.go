@@ -49,7 +49,7 @@ func TestHandlerGet_UnreadableValueIsInvalidOthersIntact(t *testing.T) {
 		"probeHosts":{"items":[],"revision":0},
 		"fleet":{"items":{"order":["air26","mlab"],"peer_ssh_alias":"","enabled":true},"revision":0},
 		"workbook":{"items":{"push_wait_s":8},"revision":0},
-		"watch":{"items":{"enabled":true,"x_cores":1.5,"y_mb":1024,"t_s":60,"pressure_level":2,"pressure_t_s":120,"page_rate":50,"page_t_s":60,"targets":["air26","mlab"],"mode":"patrol","patrol_idle_min":120,"auto_wake":true,"model":"opus","workdir":"~/Workspace/wake/mlab-purdex-watch","start_prompt":"","wake_prompt":""},"revision":0}
+		"watch":{"items":{"enabled":true,"x_cores":1.5,"y_mb":1024,"t_s":60,"pressure_level":2,"pressure_t_s":120,"page_rate":50,"page_t_s":60,"targets":["air26","mlab"],"mode":"patrol","patrol_idle_min":120,"auto_wake":true,"agent_command":"claude --dangerously-skip-permissions --model opus","workdir":"~/Workspace/wake/mlab-purdex-watch","start_prompt":"","wake_prompt":""},"revision":0}
 	}`, rr.Body.String())
 }
 

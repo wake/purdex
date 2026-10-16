@@ -34,9 +34,9 @@ const vmOffSpeculative = 92
 // Mach is the loaded Mach entry points. One value is safe for one goroutine at a time.
 type Mach struct {
 	hostSelf   func() uint32
-	processor  func(host uint32, flavor int32, cpuCount *uint32, info *uintptr, infoCnt *uint32) int32
+	processor  func(host uint32, flavor int32, cpuCount *uint32, info *unsafe.Pointer, infoCnt *uint32) int32
 	vmStats    func(host uint32, flavor int32, info *int32, count *uint32) int32
-	vmDealloc  func(task uint32, addr uintptr, size uintptr) int32
+	vmDealloc  func(task uint32, addr unsafe.Pointer, size uintptr) int32
 	taskSelf   *uint32
 	host       uint32
 	vmStatsBuf [vmStatsWords]int32
@@ -68,7 +68,7 @@ func NewMach() (m *Mach, err error) {
 	if err != nil || sym == 0 {
 		return nil, errors.New("hostmem: mach_task_self_ not found")
 	}
-	m.taskSelf = (*uint32)(unsafe.Pointer(sym)) //nolint:govet // a libSystem global, not Go memory
+	m.taskSelf = (*uint32)(*(*unsafe.Pointer)(unsafe.Pointer(&sym))) // a libSystem global, not Go memory
 	m.host = m.hostSelf()
 	if m.host == 0 {
 		return nil, errors.New("hostmem: mach_host_self returned no port")
@@ -79,7 +79,7 @@ func NewMach() (m *Mach, err error) {
 // CPUTicks are the ticks of every core summed: busy (user + system + nice) and total (those and idle), since boot.
 func (m *Mach) CPUTicks() (busy, total uint64, err error) {
 	var cpus, cnt uint32
-	var info uintptr
+	var info unsafe.Pointer
 	if kr := m.processor(m.host, processorCPULoadInfo, &cpus, &info, &cnt); kr != 0 {
 		return 0, 0, fmt.Errorf("host_processor_info: kern_return %d", kr)
 	}
@@ -87,7 +87,7 @@ func (m *Mach) CPUTicks() (busy, total uint64, err error) {
 	if cpus == 0 || cnt < cpus*cpuStateCount {
 		return 0, 0, fmt.Errorf("host_processor_info: %d cpus, %d words", cpus, cnt)
 	}
-	words := unsafe.Slice((*uint32)(unsafe.Pointer(info)), int(cnt))
+	words := unsafe.Slice((*uint32)(info), int(cnt))
 	for c := uint32(0); c < cpus; c++ {
 		user, sys, idle, nice := uint64(words[c*4]), uint64(words[c*4+1]), uint64(words[c*4+2]), uint64(words[c*4+3])
 		busy += user + sys + nice

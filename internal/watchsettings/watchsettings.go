@@ -32,19 +32,25 @@ type Settings struct {
 	PatrolIdleMin int    `json:"patrol_idle_min"`
 	// AutoWake: whether an event wakes or starts a watcher.
 	AutoWake bool `json:"auto_wake"`
-	// Model of a new watcher; Workdir is its directory on this host (a checkout of the watch-desk branch); StartPrompt and
-	// WakePrompt replace the built-in prompts when set.
-	Model       string `json:"model"`
-	Workdir     string `json:"workdir"`
-	StartPrompt string `json:"start_prompt"`
-	WakePrompt  string `json:"wake_prompt"`
+	// AgentCommand is the command run in the pdx-watch tmux session to start or resume the watcher (spec §12.2; it replaced
+	// `model`). Workdir is its directory on this host (a checkout of the watch-desk branch); StartPrompt and WakePrompt replace
+	// the built-in prompts when set.
+	AgentCommand string `json:"agent_command"`
+	Workdir      string `json:"workdir"`
+	StartPrompt  string `json:"start_prompt"`
+	WakePrompt   string `json:"wake_prompt"`
 }
 
 // Default is what a never-written setting answers: on (spec §12.2), with the first thresholds.
 func Default() Settings {
 	return Settings{Enabled: true, XCores: 1.5, YMB: 1024, TSeconds: 60, PressureLevel: 2, PressureTSeconds: 120, PageRate: 50, PageTSeconds: 60,
-		Targets: []string{"air26", "mlab"}, Mode: ModePatrol, PatrolIdleMin: 120, AutoWake: true, Model: "opus",
+		Targets: []string{"air26", "mlab"}, Mode: ModePatrol, PatrolIdleMin: 120, AutoWake: true, AgentCommand: LegacyModelCommand("opus"),
 		Workdir: "~/Workspace/wake/mlab-purdex-watch"}
+}
+
+// LegacyModelCommand is the agent_command a row written with `model` (741–744) stood for.
+func LegacyModelCommand(model string) string {
+	return "claude --dangerously-skip-permissions --model " + model
 }
 
 // Seconds is n seconds as a duration.

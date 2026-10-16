@@ -25,6 +25,10 @@ type PaneOwner struct {
 	LastSeenAt     int64
 	StartedAt      int64  // the frame's start (same unit as LastSeenAt); fixed for the life of the run
 	Status         string // string(frame.Status) — the owning frame's Purdex agent status
+	// PID and ProcessStartTime are the agent process the frame was verified against (additive: a caller that must signal or
+	// re-check the agent holds the pid and the start time that tells it from a reused pid).
+	PID              int
+	ProcessStartTime string
 }
 
 // resolvePaneOwners returns the root agent frames of one pane.
@@ -159,6 +163,9 @@ func (m *Module) resolvePaneOwners(ctx context.Context, paneID string, panePID i
 			LastSeenAt:     frame.LastSeenAt,
 			StartedAt:      frame.StartedAt,
 			Status:         string(frame.Status),
+
+			PID:              frame.PID,
+			ProcessStartTime: frame.ProcessStartTime,
 		})
 	}
 	// One last look before the result is called an answer. The paths that
