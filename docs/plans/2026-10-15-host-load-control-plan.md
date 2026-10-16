@@ -352,8 +352,8 @@ interface, plus one test with the real agent module registered in core):
    back, tell the person host, class, old → new and why; one change per host and class per 10 min). The CLI side
    needs one addition, made here: `pdx gate set` gains `--expect <old>` (the write is refused when the current value
    differs, so two writers cannot undo each other unseen) and prints the value read back. The `watch` row gains
-   `slot_bounds` (spec §12.2; user decision 10-16: adjustable, default `{"heavy": [1, 2], "light": [2, 4]}`) in
-   `watchsettings.Settings`, `Default()` and the normaliser (each class `[min, max]`, 1 ≤ min ≤ max ≤ 64; a missing
+   `slot_bounds` (spec §12.2; user decision 10-16: adjustable, default `{"heavy": [0, 3], "light": [0, 5]}`) in
+   `watchsettings.Settings`, `Default()` and the normaliser (each class `[min, max]`, 0 ≤ min ≤ max ≤ 64; a missing
    key on read = the default, as for the other delivery keys), shown and set by `pdx watch config`. Keeping within
    them, the 10 min rule, the other host and the message are the watcher's behaviour (the skill), checked in the live
    acceptance below, not enforced by the CLI.
@@ -368,12 +368,28 @@ transcript gone → a start; patrol rest after the idle time (answer / no answer
 signal to a pid whose start time changed (pid reused), SIGKILL only after SIGTERM's 10 s; resident never rests;
 custom prompts used; `pdx gate set --expect`: a raise and a lower each succeed with the right old value and print the
 read-back, a changed value is refused and leaves the file as it was; `slot_bounds`: default on a row without it,
-round trip, min > max / 0 / 65 / a missing class refused.
+round trip, min > max / -1 / 65 / a missing class refused.
 Live acceptance (after deploy, mlab, with the person): the watcher is asked to raise `slots.heavy` 1 → 2, then to
 lower it back; each time its message names the host, the class, old → new and why, and `pdx gate status --json`
-shows the new value; asked to go to 3, it declines (bound); after the person sets `slot_bounds.heavy` to `[1, 3]`
-the same request is carried out; a second change of the same class within 10 min is declined; the same raise on a26
-by `ssh air26 pdx gate set …` from mlab.
+shows the new value; asked to go to 4, it declines (bound); after the person sets `slot_bounds.heavy` to `[0, 4]`
+the same request is carried out; asked to pause light, it sets `slots.light=0`, a `vitest related` then waits with
+the reason `paused`, and it raises light again when asked; a second change of the same class within 10 min is
+declined; the same raise on a26 by `ssh air26 pdx gate set …` from mlab.
+
+### W3c — the gate: a slot count of 0 pauses the class (lease member, one PR, before W3b)
+
+User decision 10-16 (spec §5 `slots`, §12.2 `slot_bounds`): `slots.heavy` / `slots.light` accept 0. Today
+`parseSlots` reads them with `r.Int(…, 1, 64)` and a 0 is refused (back to the default), so the watcher must not set
+0 until this ships.
+1. `parseSlots` takes 0..64; `pdx gate set slots.<class>=0` and profiles accept it.
+2. A class at 0: a new command of it waits (never starts, never fails), its wait reason is `paused` (in the waiter's
+   line, `pdx gate status`, `decisions.jsonl` `wait_reasons`, and the mod's would-wait text), and it starts on the
+   first poll after the count is raised; running commands and the other class are untouched. `pdx gate status
+   [--json]` shows the class as paused (`"paused": true` per class in the JSON, for the fleet's queue view).
+3. Late claims (#2996b) and overflow slots of a paused class: none are taken while it is 0.
+Tests: 0 accepted by parse, set and a profile; a heavy command at `slots.heavy=0` waits with `paused` and starts after
+`set slots.heavy=1`; light unaffected while heavy is paused; a running command is not touched by the change to 0;
+status text and JSON; no late claim while paused; mutation on the 0 comparison.
 
 ### W4 — `pdx gate free <class>-<k>`
 
@@ -392,6 +408,7 @@ and the `watch.events` push (W2b.5); the `watch` settings API incl. `agent_comma
 plan (`docs/specs/2026-10-16-watcher-area-spec.md`), and owns its tests: the tab follows a failover, "resting" and
 "none" shown apart.
 
-Order: W1a → W1b → W2a → W2b → W3a → W3b → W4 (W4 only needs W1a's `redact.Argv` and may go earlier). W3a can be
+Order: W1a → W1b → W2a → W2b → W3a → W3c → W3b → W4 (W4 only needs W1a's `redact.Argv` and may go earlier; W3c is
+the lease member's, independent of W3a, and only has to land before W3b's skill lets the watcher set 0). W3a can be
 deployed alone (it registers the manual watcher; W2 delivers to it); start, wake and rest arrive with W3b. The set
 goes live as a whole when W1b–W4 are merged and deployed; W5 follows.
