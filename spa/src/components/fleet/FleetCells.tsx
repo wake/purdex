@@ -1,12 +1,12 @@
-// spa/src/components/fleet/FleetCells.tsx — the fleet row at the bottom of the sidebar (fleet spec rev 2 §8.1): one cell per
-// host, under the BottomNav in the wide bar (one row, CellSep between cells) and a column in the narrow bar. Reads the
-// fleet from `useFleetStore` only; nothing here knows the wire.
-import { Fragment, useMemo } from 'react'
+// spa/src/components/fleet/FleetCells.tsx — the fleet cells at the bottom of the sidebar (fleet spec rev 2 §8.1): one cell per
+// host, under the BottomNav. The wide bar lays them out like the session list's member beads (TeamMemberBeads: flex-wrap,
+// gap-0.5, no separators), so they wrap with the sidebar's width; the narrow bar stacks them in a column. Reads the fleet
+// from `useFleetStore` only; nothing here knows the wire.
+import { useMemo } from 'react'
 import { useFleetStore, fleetHostsView, type FleetHostView } from '../../lib/fleet/store'
 import { useFleetConfigStore } from '../../lib/fleet/config-store'
 import { useHostStore } from '../../stores/useHostStore'
 import { useHostLookResolver, type HostLook } from '../../lib/host-look'
-import { CellSep } from '../team/TeamCell'
 import { HostCell } from './HostCell'
 
 export interface FleetCellsProps {
@@ -57,13 +57,10 @@ export function FleetCells({ variant, onOpenHost, onOpenHosts }: FleetCellsProps
     <div
       data-testid="fleet-cells"
       data-variant={variant}
-      className={wide ? 'flex flex-nowrap shrink-0 items-center gap-1 px-2 pb-2 pt-1' : 'flex shrink-0 flex-col items-center gap-1 pb-1'}
+      className={wide ? 'flex flex-wrap shrink-0 items-center content-start gap-0.5 px-2 pb-2 pt-1' : 'flex shrink-0 flex-col items-center gap-1 pb-1'}
     >
-      {views.map((v, i) => (
-        <Fragment key={v.id}>
-          {wide && i > 0 && <CellSep />}
-          <HostCell view={v} look={look(v)} variant={variant} isActive={false} waitingPrimary={waitingPrimary} primaryElsewhere={primaryElsewhere && !snapshot} onOpen={() => open(v)} />
-        </Fragment>
+      {views.map((v) => (
+        <HostCell key={v.id} view={v} look={look(v)} variant={variant} isActive={false} waitingPrimary={waitingPrimary} primaryElsewhere={primaryElsewhere && !snapshot} onOpen={() => open(v)} />
       ))}
     </div>
   )
