@@ -356,7 +356,7 @@ describe('PROJECTIONS', () => {
     const valueFields = Object.keys(state).filter((k) => typeof state[k] !== 'function').sort()
     const listed = [...settingsFieldsByStore()[STORAGE_KEYS.UI_SETTINGS]].sort()
     expect(listed).toEqual(valueFields.filter((k) => k !== 'terminalSettingsVersion'))
-    expect(listed).toHaveLength(25)
+    expect(listed).toHaveLength(26) // 25 + fleetCellIndicator (#3033, settings ordinal 11)
   })
 })
 
@@ -733,11 +733,11 @@ describe('shape: fingerprint and ordinal', () => {
       }
     }
 
-    it('theme, iconStyle and customIcon are all listed; no new marker; settings ordinal 10 (QR-2b)', () => {
+    it('theme, iconStyle and customIcon are all listed; no new marker; settings ordinal 11 (fleet cell indicator, #3033)', () => {
       expect(PROJECTIONS.settings.filter((p) => p.startsWith('purdex-worker-settings.')).sort()).toEqual([...WORKER].sort())
       expect(Object.keys(useWorkerSettingsStore.getState())).toContain('customIcon')
       expect(WIRE_MARKERS.settings).toEqual(['@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1', '@wire:hosts-retired=1'])
-      expect(SECTION_SCHEMA_ORDINAL.settings).toBe(10)
+      expect(SECTION_SCHEMA_ORDINAL.settings).toBe(11)
     })
 
     it('the two shapes differ by exactly the worker paths', async () => {
@@ -763,6 +763,44 @@ describe('shape: fingerprint and ordinal', () => {
     })
   })
 
+  // 「主機格指示」 (#3033): `purdex-ui-settings.fleetCellIndicator` joins `settings` beside the sidebar badge settings — a
+  // projection change, so the fingerprint moves by itself (no marker) and the ordinal goes 10 → 11. The ordinal-10 client
+  // meets a settings row of this build as newer and locks; this build pulls an ordinal-10 row.
+  describe('fleet cell indicator: the ordinal-10 settings client and this build', () => {
+    const FIELD = 'purdex-ui-settings.fleetCellIndicator'
+    async function oldShapes(): Promise<Record<SectionKind, Shape>> {
+      const row = async (kind: SectionKind): Promise<Shape> => ({ fingerprint: await sectionFingerprint(kind), ordinal: SECTION_SCHEMA_ORDINAL[kind] })
+      return {
+        hosts: await row('hosts'),
+        tabs: await row('tabs'),
+        workspaces: await row('workspaces'),
+        settings: { fingerprint: await fingerprintOf([...PROJECTIONS.settings.filter((p) => p !== FIELD), ...WIRE_MARKERS.settings]), ordinal: 10 },
+      }
+    }
+
+    it('the field is listed, the store has it, no new marker, settings ordinal 11', () => {
+      expect(PROJECTIONS.settings).toContain(FIELD)
+      expect(Object.keys(useUISettingsStore.getState())).toContain('fleetCellIndicator')
+      expect(WIRE_MARKERS.settings).toEqual(['@wire:host-id=d1', '@wire:host-look=1', '@wire:shown-hosts=1', '@wire:hosts-retired=1'])
+      expect(SECTION_SCHEMA_ORDINAL.settings).toBe(11)
+    })
+
+    it('an index holding a settings row of this build → sot-is-newer (locked:schema) for the ordinal-10 client', async () => {
+      const entry: SotIndexEntry = {
+        section: 'settings', rev: 1, hash: 'h', fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings,
+      }
+      expect(profileLock([entry], await oldShapes())).toMatchObject({ section: 'settings', kind: 'settings', verdict: 'sot-is-newer' })
+    })
+
+    it('this build meets an ordinal-10 settings row as i-am-newer (pulls it, no lock)', async () => {
+      const mine = { fingerprint: await sectionFingerprint('settings'), ordinal: SECTION_SCHEMA_ORDINAL.settings }
+      const old = (await oldShapes()).settings
+      expect(compareShape(mine, old)).toBe('i-am-newer')
+      const oldRow: SotIndexEntry = { section: 'settings', rev: 1, hash: 'h', ...old }
+      expect(profileLock([oldRow], { ...(await oldShapes()), settings: mine })).toBeNull()
+    })
+  })
+
   // GUARD (spec §4.5). If this fails: a projection changed — bump
   // `SECTION_SCHEMA_ORDINAL.<kind>` and update this snapshot in the same commit.
   // Never update the snapshot alone: a fingerprint that changes with an unchanged
@@ -779,8 +817,8 @@ describe('shape: fingerprint and ordinal', () => {
           3,
         ],
         "settings": [
-          "331b7b525166cd52317426c587d59d1a60c5a281296c6a4092bda2996cfd486b",
-          10,
+          "61fa43c32496f09b198f4e3ece877909ee587886e0edcc414c5ba805fcbb10db",
+          11,
         ],
         "tabs": [
           "ce81d1cfb4d3f20253306eab14a9be981fb0eecedab2599f07baccf0238a286f",

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/wake/purdex/internal/gate"
@@ -71,6 +72,10 @@ type Detector struct {
 
 	orphanMiss map[string]int // consecutive passes a once-orphaned holder was not orphaned
 	started    bool
+
+	// Diag, when set, is told what the detector cannot use of what it read: the source and the problem ("" = fine again). It is called
+	// every pass; the receiver keeps it to the changes.
+	Diag func(source, problem string)
 
 	pressure, pages episode
 	havePages       bool
@@ -367,9 +372,16 @@ func (d *Detector) slotEvents(in Input) []Event {
 	present := map[string]bool{}
 	orphaned := map[string]bool{}
 	lockLookups := 0
+	var unmeasured []string
 	for _, h := range holders {
 		key := holderKey(h)
 		present[key] = true
+		// A slot held with no record, or one whose record has no start or no pid, has nothing to measure: Now minus a zero time is 292 years
+		// (#3049). It is no event; the diagnostic below says it is there.
+		if h.NoRecord || h.Started.IsZero() || h.PID <= 0 {
+			unmeasured = append(unmeasured, fmt.Sprintf("%s-%d", h.Class, h.Slot))
+			continue
+		}
 		base := Event{At: in.Now, Slot: fmt.Sprintf("%s-%d", h.Class, h.Slot), HolderPID: h.PID, Argv: h.Argv, Cwd: h.Cwd,
 			Session: h.Session, Duration: in.Now.Sub(h.Started)}
 		if h.Orphaned {
@@ -393,6 +405,13 @@ func (d *Detector) slotEvents(in Input) []Event {
 			ev.Kind = KindSlotLong
 			events = append(events, ev)
 		}
+	}
+	if d.Diag != nil {
+		problem := ""
+		if len(unmeasured) > 0 {
+			problem = "held with no readable start or pid, not measured: " + strings.Join(unmeasured, ", ")
+		}
+		d.Diag("slot records", problem)
 	}
 	// A holder that is not orphaned in one pass keeps its first-seen time for orphanGrace passes (the reading may flicker); one
 	// that is gone altogether, or that stays not orphaned, is forgotten, also one remembered from before a restart.

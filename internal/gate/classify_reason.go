@@ -10,6 +10,9 @@ func noneReason(argv []string, e Env) Reason {
 	if len(argv) == 0 {
 		return ReasonUnknown
 	}
+	if infoOnly(argv) {
+		return ReasonInfoOnly
+	}
 	args := argv[1:]
 	switch name := filepath.Base(argv[0]); name {
 	case "go":

@@ -23,6 +23,7 @@
   --color-terminal-fg: var(--terminal-fg);
   --color-terminal-cursor: var(--terminal-cursor);
   --color-status-error: var(--status-error);
+  --color-status-error-text: var(--status-error-text, var(--status-error));
   --color-status-warning: var(--status-warning);
   --color-status-warning-text: var(--status-warning-text, var(--status-warning));
   --color-status-success: var(--status-success);
@@ -33,6 +34,7 @@
   --color-journal-kind-task-done: var(--journal-kind-task-done, var(--status-success));
   --color-journal-kind-comm: var(--journal-kind-comm, var(--text-secondary));
   --color-journal-kind-request: var(--journal-kind-request, var(--accent));
+  --color-status-success-text: var(--status-success-text, var(--status-success));
 }
 
 /* === Dark (default, matches current hardcoded values) === */
@@ -112,6 +114,9 @@
   --journal-kind-task-done: #4c5e33;
   --journal-kind-comm: #615080;
   --journal-kind-request: #913c4c;
+  /* The three above are background tints in this theme; these are their text-strength siblings (watch area), >= 4.5:1 on #f5f5f5. */
+  --status-success-text: #1e7b34;
+  --status-error-text: #b42318;
 }
 
 /* === Nord === */

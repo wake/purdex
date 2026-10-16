@@ -1,29 +1,35 @@
-// spa/src/components/fleet/HostCell.tsx — one host's cell of the sidebar's fleet row (fleet spec rev 2 §8.1, the approved
-// round-5 prototype). Sized like a TeamCell: h-6, rounded-md, hover bg-surface-hover, selected bg-surface-active.
-//   box    18×18 rounded-[4px] in the host's colour, the icon white (90 %, 100 % hovered / selected). Offline: the colour at
-//          35 % under a fine hatch, the icon at 35 %.
-//   badge  the queue count on the box's top-right corner: daemon hosts only, only while someone waits, never offline.
-//          Neutral grey; status-warning from 2 min or 3 waiting; status-error while admission is held.
-//   ring   16 px, the ContextRing geometry: length = the composite score, colour = the ZONE the daemon sent (never derived
-//          from the score here). Offline or no reading: a dashed track, no arc.
+// spa/src/components/fleet/HostCell.tsx — one host's cell of the sidebar's fleet row (fleet spec rev 2 §8.1), built from the
+// App's own pieces so it reads like the members beside it (the user's 10-16 call: the first look was too bright and too wide).
+//   cell   a member bead's box: h-6, rounded-md, gap-1, 3 px each side (a bead's wider left padding is room for the subagent
+//          dots, which a host has not); hover bg-surface-hover, selected bg-surface-active.
+//   badge  the App's `HostBadge` as beside a member in the session list: the sidebar badge settings (size, inset, corner, line
+//          colour), the host's colours resolved as for an agent member (terminal, falling back to console) — the light
+//          layer behind, the icon in the middle layer (main on hover). Offline: the badge dimmed.
+//   queue  the count on the badge's top-right corner: daemon hosts only, only while someone waits, never offline. Neutral grey;
+//          status-warning from 2 min or 3 waiting; status-error while admission is held.
+//   then, by the 「主機格指示」 setting (`fleetCellIndicator`, the user 10-16), in the same square after the badge:
+//   ring   (default) the App's `ContextRing` (the member status ring), the badge's size: length = the composite score, tone =
+//          the ZONE the daemon sent (normal ok / warning warn / danger danger — never derived from the score here), nothing
+//          in the middle (a host has no model). Offline or no reading: the track only.
+//   bars   `HostBars`: left CPU %, right the memory pressure level (`bars-pressure`, memory used % when the level is unknown)
+//          or memory used % (`bars-memory`), each in its own band. Offline or no reading: the grey tracks only.
 import { useMemo } from 'react'
-import { ringGeometry, ringTransform } from '../../lib/usage-display'
-import { DEFAULT_HOST_ICON, isPhosphorIconName, resolveHostColors } from '../../lib/host-color'
+import { resolveHostBadge } from '../../lib/host-color'
 import type { HostLook } from '../../lib/host-look'
+import type { UsageTone } from '../../lib/usage-display'
 import type { FleetHostView } from '../../lib/fleet/store'
-import type { FleetZone } from '../../lib/fleet/types'
-import { WorkspaceIcon } from '../../features/workspace/components/WorkspaceIcon'
+import type { FleetFast, FleetZone } from '../../lib/fleet/types'
+import { useSidebarHostBadgeGeometry } from '../../hooks/useSidebarHostBadgeGeometry'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useUISettingsStore, isFleetCellIndicator, FLEET_CELL_INDICATOR_DEFAULT, type FleetCellIndicator } from '../../stores/useUISettingsStore'
+import { HostBadge } from '../HostBadge'
+import { ContextRing } from '../team/ModelIcon'
 import { CountBadge } from './CountBadge'
+import { HostBars } from './HostBars'
+import { cpuReading, memoryReading, pressureReading } from '../../lib/fleet/bar-readings'
 
 export const WAIT_LONG_MS = 120_000
-const BLOCK = 18
-const RING = 16
-const RING_R = RING / 2 - 2
-const RING_C = 2 * Math.PI * RING_R
-const OFFLINE_STRIPES = 'repeating-linear-gradient(135deg, color-mix(in srgb, var(--text-muted) 45%, transparent) 0 1px, transparent 1px 4px)'
-const NEUTRAL_STROKE = 'stroke-text-secondary'
-const ZONE_STROKE: Record<FleetZone, string> = { normal: NEUTRAL_STROKE, warning: 'stroke-status-warning', danger: 'stroke-status-error' }
+const ZONE_TONE: Record<FleetZone, UsageTone> = { normal: 'ok', warning: 'warn', danger: 'danger' }
 
 export interface HostCellProps {
   view: FleetHostView
@@ -85,17 +91,17 @@ function tooltip(t: (k: string, p?: Record<string, string | number>) => string, 
 
 export function HostCell({ view, look, variant, isActive, waitingPrimary, primaryElsewhere, onOpen }: HostCellProps) {
   const t = useI18nStore((s) => s.t)
+  const { box, inset, radius, lineColor } = useSidebarHostBadgeGeometry()
+  const stored = useUISettingsStore((s) => s.fleetCellIndicator)
+  const indicator: FleetCellIndicator = isFleetCellIndicator(stored) ? stored : FLEET_CELL_INDICATOR_DEFAULT
+  const { colors, color, icon, iconWeight } = look
+  // Resolved as the badge beside an agent member is (KnownHostBadge: terminal for an agent), so the two read the same.
+  const badge = useMemo(() => resolveHostBadge({ colors, color, icon, iconWeight }, 'terminal'), [colors, color, icon, iconWeight])
   const off = isOffline(view)
-  const main = useMemo(() => resolveHostColors({ colors: look.colors, color: look.color }, 'console')?.main ?? 'var(--text-muted)', [look.colors, look.color])
-  const icon = look.icon && isPhosphorIconName(look.icon) ? look.icon : DEFAULT_HOST_ICON
   const f = off ? null : view.fast
-  const geo = f ? ringGeometry(f.load, 'used') : null
   const zone: FleetZone | 'offline' | 'nodata' = off ? 'offline' : f ? f.zone : 'nodata'
   const q = view.kind === 'daemon' && !off ? view.slow?.queue : undefined
   const waiting = q?.waiters.length ?? 0
-  const boxStyle: React.CSSProperties = off
-    ? { width: BLOCK, height: BLOCK, backgroundColor: `color-mix(in srgb, ${main} 35%, transparent)`, backgroundImage: OFFLINE_STRIPES }
-    : { width: BLOCK, height: BLOCK, backgroundColor: main }
   const narrow = variant === 'narrow'
 
   return (
@@ -107,27 +113,28 @@ export function HostCell({ view, look, variant, isActive, waitingPrimary, primar
       aria-label={accessibleName(t, view, { waitingPrimary, primaryElsewhere })}
       title={tooltip(t, view, { waitingPrimary, primaryElsewhere })}
       onClick={onOpen}
-      className={`group relative flex items-center h-6 rounded-md cursor-pointer shrink-0 ${narrow ? 'gap-0.5 px-0.5' : 'gap-1 pl-1 pr-1'} ${isActive ? 'bg-surface-active' : 'hover:bg-surface-hover'}`}
+      className={`group relative flex items-center h-6 rounded-md cursor-pointer shrink-0 transition-colors ${narrow ? 'gap-0.5 px-0.5' : 'gap-1 px-[3px]'} ${isActive ? 'bg-surface-active' : 'hover:bg-surface-hover'}`}
     >
       <span className="relative inline-flex shrink-0">
-        <span data-testid={`host-block-${view.id}`} className="inline-flex items-center justify-center overflow-hidden rounded-[4px]" style={boxStyle}>
-          <span data-testid={`host-block-icon-${view.id}`} className={`inline-flex text-white/90 group-hover:text-white group-data-[active=true]:text-white ${off ? 'opacity-35' : ''}`}>
-            <WorkspaceIcon icon={icon} name="" size={14} weight="fill" />
-          </span>
+        <span data-testid={`host-badge-dim-${view.id}`} className={`inline-flex ${off ? 'opacity-40' : ''}`}>
+          <HostBadge colors={badge.colors} icon={badge.icon} iconWeight={badge.iconWeight} box={box} inset={inset} radius={radius} lineColor={lineColor} testId={`host-badge-${view.id}`} />
         </span>
         {q && waiting > 0 && <CountBadge n={waiting} className={queueTone(waiting, q.longest_wait_s * 1000, q.admission_held)} testId={`queue-badge-${view.id}`} />}
       </span>
-      <span className="relative inline-grid shrink-0" style={{ width: RING, height: RING }} data-testid={`load-ring-${view.id}`} data-zone={zone}>
-        <svg width={RING} height={RING} viewBox={`0 0 ${RING} ${RING}`} className="absolute inset-0 block">
-          <circle cx={RING / 2} cy={RING / 2} r={RING_R} fill="none" stroke="var(--border-default)" strokeWidth={2.5} strokeDasharray={geo ? undefined : '1.6 1.9'} />
-          {f && geo && geo.sharePct > 0 && (
-            <circle
-              className={ZONE_STROKE[f.zone] ?? NEUTRAL_STROKE} cx={RING / 2} cy={RING / 2} r={RING_R} fill="none" strokeWidth={2.5} strokeLinecap="round"
-              strokeDasharray={`${((geo.sharePct / 100) * RING_C).toFixed(2)} ${RING_C.toFixed(2)}`} transform={ringTransform(RING, geo.direction)}
-            />
-          )}
-        </svg>
-      </span>
+      {indicator === 'ring' ? (
+        <span className="inline-flex shrink-0" data-testid={`load-ring-${view.id}`} data-zone={zone}>
+          <ContextRing pct={f?.load} model={undefined} size={box} tone={f ? ZONE_TONE[f.zone] : undefined} noShape />
+        </span>
+      ) : (
+        <span className="inline-flex shrink-0" data-testid={`load-bars-${view.id}`} data-zone={zone}>
+          <HostBars left={f ? cpuReading(f.cpu) : null} right={f ? memoryBar(indicator, f) : null} size={box} />
+        </span>
+      )}
     </button>
   )
+}
+
+/** The right bar: the pressure level (memory used % when it is unknown), or memory used %. */
+function memoryBar(indicator: Exclude<FleetCellIndicator, 'ring'>, f: FleetFast) {
+  return indicator === 'bars-pressure' ? pressureReading(f.level, f.mem) : memoryReading(f.mem)
 }
