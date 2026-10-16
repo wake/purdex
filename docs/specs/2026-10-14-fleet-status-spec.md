@@ -250,7 +250,7 @@ The fleet module's role is read by the measuring side through `fleet.RoleView` (
 **Restyle (user, 10-16: 「太刺眼」; F-2b2)**, replacing the box and ring above:
 - the host icon is the App's host badge (`HostBadge` with the user's badge settings, the same small badge as beside a
   member in the session list: dark background, the icon in the host's colour), the same size;
-- the ring is `ContextRing` itself (the title bar's member ring, same thickness and colours, a dot in the middle): length =
+- the ring is `ContextRing` itself (the title bar's member ring, same thickness and colours; the middle empty — its shape is an agent's model, which a host has not; user 10-16): length =
   the composite score, tone from the zone (normal = the ok green, warning, danger); offline = the track only;
 - the cells are laid out like the session list's member beads (`TeamMemberBeads`: `gap-0.5`, no separators, wrapping
   with the sidebar's width): up to five on one line at the default width.

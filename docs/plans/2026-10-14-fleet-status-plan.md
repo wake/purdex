@@ -198,7 +198,7 @@ Spec §6 (`POST /api/fleet/probe-check`), §8.1 (restyle) and §8.2 (probe hosts
 subagent full review; F-2c also goes past 1f (`internal/module/fleet`).
 
 - **F-2b2** — the cells' restyle (spec §8.1): `HostBadge` with the user's badge settings in place of the coloured box,
-  `ContextRing` itself (a dot in the middle, through an optional prop that leaves every existing caller's output the same)
+  `ContextRing` itself (nothing in the middle, through an optional prop that leaves every existing caller's output the same)
   in place of the cell's own ring, zone → ok / warn / danger tone, the `TeamMemberBeads` layout (`gap-0.5`, no separators,
   wrap). Screenshots from a harness of the real components, dark and light, approved by the user before merge. Tests:
   the badge and ring components with the host's colours and the zone tone (M: normal back to grey), offline without an
