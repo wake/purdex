@@ -127,6 +127,26 @@ describe('the 待確認 detail', () => {
     term.remove()
     input.remove()
   })
+  it('an Esc that ends an input-method composition does not close it', () => {
+    mount()
+    fireEvent.click(openOf('c1'))
+    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', isComposing: true })) })
+    expect(q('journal-detail-card')).toBeTruthy()
+    act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })) })
+    expect(q('journal-detail-card')).toBeNull()
+  })
+  it('the Esc listener is added once per open detail, not again on a re-render of the stack', () => {
+    mount()
+    const add = vi.spyOn(window, 'addEventListener')
+    fireEvent.click(openOf('c1'))
+    const keydowns = () => add.mock.calls.filter((c) => c[0] === 'keydown').length
+    const afterOpen = keydowns()
+    expect(afterOpen).toBe(1)
+    act(() => { patchViewMemo(HOST, key, { tasksOpen: true }) })
+    expect(q('journal-tasks-card')).toBeTruthy()
+    expect(keydowns()).toBe(afterOpen)
+    add.mockRestore()
+  })
   it('only one is open at a time: another row replaces it', () => {
     mount()
     fireEvent.click(openOf('c1'))

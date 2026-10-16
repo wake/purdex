@@ -6,7 +6,7 @@
 // is a sibling of TabContent, so a tab switch does not unmount it, but a support toggle or a hide / show does (CLAUDE.md,
 // Tab-hosted checklist). The narrow-window drop is visibility only (card-layout.ts): nothing is written back.
 // The cards' bodies are J-2c (journal) and J-2d (tasks, roadmap); here they are frames with their header controls.
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ListChecks, MapTrifold } from '@phosphor-icons/react'
 import { CardFrame } from './CardFrame'
 import { ConfirmDetail } from './ConfirmDetail'
@@ -96,7 +96,7 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
     patch({ widths: { ...memo.widths, [card]: w } })
     useJournalUiStore.getState().setLastWidth(card, w)
   }
-  const closeDetail = () => patch({ detailId: null })
+  const closeDetail = useCallback(() => patchUnitMemo(memoHost, memoKey, { detailId: null }), [memoHost, memoKey])
   const teamColumn = shown.team || shown.roadmap
 
   return (

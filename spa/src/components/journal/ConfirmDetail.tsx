@@ -19,7 +19,7 @@ const isOwnEsc = (target: EventTarget | null): boolean => target instanceof Elem
 export function ConfirmDetail({ entry, personName, onClose }: Props) {
   const t = useI18nStore((s) => s.t)
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented && !isOwnEsc(e.target)) onClose() }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.isComposing && !e.defaultPrevented && !isOwnEsc(e.target)) onClose() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
