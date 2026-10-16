@@ -460,15 +460,25 @@ reconciliation): `relay_ops.mode = 'model_change'` with new columns `to_model`, 
   the check-and-type helper; `launch_sent_at` and `deadline_at` (+3 min) written **before** the keys are sent (a
   restart after that never sends the line twice: it only waits). Done when a verified SessionStart of the same session
   id arrives **after `launch_sent_at`**, in that pane, from a process whose pid + start time differ from `old_*` and
-  whose argv carries `--model <to_model>` (and `--effort` when set) — read from the process walk the registration
-  already does. Then, in one transaction: op `done`, the member row (`team_members`: pid, proc_start, model, effort)
+  whose argv carries `--model <to_model>` (and `--effort` when set). The argv comes from a new process-args reader
+  (one `ps -o args= -p <pid>` through `execstat`, tag `team.proc-args`, behind a seam for tests); a read that fails is
+  retried on the next pass and never counts as a match — no completion without a positive argv match. Whatever its
+  model, the first verified SessionStart of the session after `launch_sent_at` records that process as
+  `fwd_pid` / `fwd_proc_start` (new columns), so a rollback can end exactly it. Then, in one transaction: op `done`, the member row (`team_members`: pid, proc_start, model, effort)
   and the spawn op's model/effort. Session id, ref, address, title, task and team are untouched (tested).
-- **Rollback**: `deadline_at` passed with no such SessionStart → `attempt = rollback`: exiting again only if a process
-  is in the pane (same pid + start checks), then the launch line with `from_model` / `from_effort`; its registration
-  → `rolled_back`; none by its deadline → `failed` (`member_down`, the exact hand command in the notice).
+- **Rollback**: `deadline_at` passed with no completion → `attempt = rollback`: if `fwd_pid` / `fwd_proc_start` are
+  recorded, that process (and only it: pid + start re-checked before each step) is ended as in `exiting`; a process
+  in the pane that is not the recorded one is never signalled (→ `failed`, `pane_busy`). Then the launch line with
+  `from_model` / `from_effort`, under the same write-before-send and completion rules; its completion → the op ends
+  `done` with outcome `rolled_back`; none by its deadline → `failed` (`member_down`, the exact hand command). **No new
+  terminal state**: the op ends `done` (outcome `changed` or `rolled_back`), `failed` or `cancelled`, the states the
+  relay's `Terminal()` and the one-open-op index already know.
 - **pane_busy**: after the exit the pane is not at a shell → nothing typed; op `failed` (`pane_busy`); the notice says
   what runs in the pane and the hand command.
-- **Release, kill, team end**: in `requested` / `seen` / `ready` they cancel the op first (the mod drops its hold); in
+- **Release, kill, team end**: in `requested` / `seen` / `ready` they cancel the op first. The mod learns it two ways:
+  a `relay_cancel` control message on the same channel as the request, and its own check of the op's state every
+  30 s while it holds (`pdx relay status`), so a lost message never leaves prompts held; on `cancelled` it drops the
+  hold and says so in the session. In
   `exiting` / `launching` they are refused with `model_change_open` and the CLI says to wait or retry. Boot
   reconciliation re-checks that the member still belongs to the lead before any step, and abandons an op whose member
   does not (no launch).
@@ -484,8 +494,11 @@ Tests: identity (another lead's member, M); each refusal incl. adopted by origin
 relay asked during a pending change, a change asked during a relay) and `mod_too_old`; `--effort` explicit / omitted /
 member without one; the mod holds only from its turn end (a turn in progress delays `ready`, M; a prompt during hold
 gets the notice); exiting: signals only to the same pid + start, none when the start time is unreadable, ESRCH;
-launching: a stale SessionStart (before `launch_sent_at`), another pane, the old pid, another session id, or the old
-model in argv are not completion (M); done updates `team_members` and the spawn op in one transaction and keeps id,
+launching: a stale SessionStart (before `launch_sent_at`), another pane, the old pid, another session id, the old
+model in argv, or an argv read that fails are not completion (M); a wrong-model process is recorded as `fwd_*`, ended
+on rollback, and the old model comes back; a foreign process in the pane is never signalled; after `rolled_back` (and
+after `failed`, `cancelled`) a new relay or model change can be created and release/kill are not blocked; cancel at
+`ready` by the message and, with the message lost, by the 30 s check; done updates `team_members` and the spawn op in one transaction and keeps id,
 ref, address, title, task; the next relay and kill use the new pid; rollback on deadline (M) → `rolled_back`;
 rollback fails → `failed`/`member_down`; `pane_busy`; restart cut points: after `ready`, after `/exit` typed, after a
 signal, after `launch_sent_at`, after the rollback's line — each resumes without a second line or a wrong kill;
