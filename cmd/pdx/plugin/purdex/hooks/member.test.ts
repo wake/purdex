@@ -927,6 +927,20 @@ test('RT-4 R2: an unanswered hello is retried from a timer, doubling the pause, 
   expect(await $.session.compact(compactEvent('auto'))).toEqual({ skip: expect.any(String) })
 })
 
+// One timer at a time: the hello that a turn end sends, and fails, does not add a second timer to the one that is waiting.
+// Mutation gate: no pending guard → a hello at 65 s that this test says is not there (red).
+test('RT-4 R2: a failed turn-end hello does not add a second retry timer', async ($, on) => {
+  const f = memberWorld(on, 'member', (argv) => (argv[1] === 'hello' ? { exitCode: 20, stderr: 'unreachable' } : undefined))
+  await start($, f)
+  await f.clock.advance(5_000)
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  await complete($, 't1') // the turn end says hello again: it fails too
+  await f.clock.advance(100)
+  expect(calls(f, 'hello').length).toBe(2)
+  await f.clock.advance(70_000) // 70 s: the timer of the first failure fired at 30 s; its next waits for 60 s more
+  expect(calls(f, 'hello').length).toBe(3)
+})
+
 // A reload loses the mod's clock: the report then carries no --period (the daemon's own period stands in), and still reaches the daemon.
 test('RT-4 T42: with no turn seen since the mod started the report has no period', async ($, on) => {
   const f = memberWorld(on, 'member', memberPdx())
