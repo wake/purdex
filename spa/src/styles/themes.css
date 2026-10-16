@@ -29,11 +29,13 @@
   --color-status-success: var(--status-success);
   /* The journal's kind chips (J-2c): six hues, themes.css only. A custom theme lacks them and falls back to a token it has. */
   --color-journal-kind-exec: var(--journal-kind-exec, var(--accent));
-  --color-journal-kind-exec-done: var(--journal-kind-exec-done, var(--status-success));
+  --color-journal-kind-exec-done: var(--journal-kind-exec-done, var(--status-success-text, var(--status-success)));
   --color-journal-kind-task-new: var(--journal-kind-task-new, var(--accent));
-  --color-journal-kind-task-done: var(--journal-kind-task-done, var(--status-success));
+  --color-journal-kind-task-done: var(--journal-kind-task-done, var(--status-success-text, var(--status-success)));
   --color-journal-kind-comm: var(--journal-kind-comm, var(--text-secondary));
   --color-journal-kind-request: var(--journal-kind-request, var(--accent));
+  /* The journal's warning text (待確認 chip, highlighted names): themes.css only; Nord lightens it, every other theme falls back to status-warning-text. */
+  --color-journal-warning-text: var(--journal-warning-text, var(--status-warning-text, var(--status-warning)));
   --color-status-success-text: var(--status-success-text, var(--status-success));
 }
 
@@ -145,9 +147,10 @@
   --terminal-cursor: #d8dee9;
   --status-error: #bf616a;
   --status-warning: #ebcb8b;
-  /* Lightened from the fill: on the card (#434c5e) under the 待確認 chip (15%) and the highlighted name (20%) the fill itself reads at 4.10 / 3.71. */
-  --status-warning-text: #f5e5c5;
+  --status-warning-text: #ebcb8b;
   --status-success: #a3be8c;
+  /* The journal's own warning text, lightened from the fill: on the card (#434c5e) under the 待確認 chip (15%) and the highlighted name (20%) the fill itself reads at 4.10 / 3.71. */
+  --journal-warning-text: #f5e5c5;
   /* This surface is a mid grey: the prototype's hues lightened until the chip text reads at 4.5:1 on the chip. */
   --journal-kind-exec: #d4e1fb;
   --journal-kind-exec-done: #cde8db;

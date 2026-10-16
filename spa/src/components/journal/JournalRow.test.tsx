@@ -70,13 +70,13 @@ describe('JournalRow', () => {
   it('a 待確認 row opens its detail through one labelled button; other rows have none', () => {
     const c = ctxOf()
     const { unmount } = render(<JournalRow entry={confirm()} ctx={c} />)
-    const open = screen.getByRole('button', { name: 'Open details' })
+    const open = screen.getByRole('button', { name: 'Open details: Wake, four things need a decision' })
     fireEvent.click(open)
     expect(c.onToggleDetail).toHaveBeenCalledWith('c1')
     unmount()
     const c2 = ctxOf()
     render(<JournalRow entry={entry()} ctx={c2} />)
-    expect(screen.queryByRole('button', { name: 'Open details' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^Open details/ })).toBeNull()
     fireEvent.click(screen.getByTestId('journal-entry'))
     expect(c2.onToggleDetail).not.toHaveBeenCalled()
   })
@@ -92,7 +92,16 @@ describe('JournalRow', () => {
   it('the open-details button names itself in Chinese too', () => {
     useI18nStore.getState().setLocale('zh-TW')
     render(<JournalRow entry={confirm()} ctx={ctxOf()} />)
-    expect(screen.getByRole('button', { name: '打開詳情' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '打開詳情：Wake, four things need a decision' })).toBeTruthy()
+  })
+  it('each open-details button carries its own row\'s text, so a screen reader can tell them apart; a long text is cut (M: one fixed label)', () => {
+    const long = 'x'.repeat(60)
+    render(<><JournalRow entry={confirm({ id: 'c1', text: 'first question' })} ctx={ctxOf()} /><JournalRow entry={confirm({ id: 'c2', text: long })} ctx={ctxOf()} /></>)
+    const labels = screen.getAllByTestId('journal-row-open').map((b) => b.getAttribute('aria-label'))
+    expect(labels[0]).toBe('Open details: first question')
+    expect(labels[1]).toBe(`Open details: ${'x'.repeat(40)}…`)
+    expect(labels[0]).not.toBe(labels[1])
+    expect(screen.getAllByTestId('journal-row-open')[1].getAttribute('title')).toBe(labels[1])
   })
   it('the pin button toggles the pin and does not open the detail', () => {
     const c = ctxOf()

@@ -371,7 +371,7 @@
   "journal.kind.request": "Request",
   "journal.kind.confirm": "To confirm",
   "journal.row.resolved": "Answered",
-  "journal.row.openDetail": "Open details",
+  "journal.row.openDetail": "Open details: {{text}}",
   "journal.band.answered": "{{done}}/{{total}} answered",
   "journal.band.title": "Pinned ({{count}})",
   "journal.detail.title": "To confirm · original question",

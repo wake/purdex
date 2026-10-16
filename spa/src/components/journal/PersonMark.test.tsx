@@ -31,7 +31,7 @@ describe('PersonMark', () => {
   it('the highlight uses theme tokens only', () => {
     render(<PersonMark text="Wake" name="Wake" />)
     const el = screen.getByTestId('journal-person')
-    expect(el.className).toContain('text-status-warning-text')
+    expect(el.className).toContain('text-journal-warning-text')
     expect(el.className).toContain('bg-status-warning/')
     expect(el.getAttribute('style')).toBeNull()
   })

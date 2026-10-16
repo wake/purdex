@@ -58,11 +58,10 @@ describe('status-warning-text', () => {
     }
   })
 
-  it('the light theme\'s is the dark amber #8a6d00; the dark-surface themes keep their warning colour (Nord\'s is lightened: journal chip and name need 4.5:1, see journal/kind-tokens.test.ts)', () => {
+  it('the light theme\'s is the dark amber #8a6d00; the dark-surface themes keep their warning colour', () => {
     const css = blocks()
     expect(css.light['status-warning-text']).toBe('#8a6d00')
-    expect(css.nord['status-warning-text']).toBe('#f5e5c5')
-    for (const id of ['dark', 'dracula']) expect(css[id]['status-warning-text']).toBe(css[id]['status-warning'])
+    for (const id of ['dark', 'nord', 'dracula']) expect(css[id]['status-warning-text']).toBe(css[id]['status-warning'])
   })
 
   it('is readable (WCAG AA, 4.5:1) on every theme\'s primary and elevated surface', () => {

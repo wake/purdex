@@ -1,6 +1,6 @@
 // The journal's kind chips (spec §11, the approved prototype's seven kinds, each its own colour) use theme tokens, never colour codes.
 // The six hues that are not warning live in themes.css only (the theme editor's token list is untouched): each builtin theme gives
-// its own value, a custom theme that lacks them falls back to a token it does have. 待確認 is `status-warning-text`, not one of these.
+// its own value, a custom theme that lacks them falls back to a token it does have. 待確認 is `journal-warning-text`, not one of these.
 import { describe, it, expect } from 'vitest'
 
 // node:fs / node:path / __dirname are untyped under tsconfig.app.json (see src/index.css.test.ts); they work at runtime.
@@ -17,8 +17,8 @@ const source = (rel: string): string => readFileSync(resolve(DIR, rel), 'utf8')
 
 const KINDS = ['exec', 'exec-done', 'task-new', 'task-done', 'comm', 'request'] as const
 const FALLBACK: Record<(typeof KINDS)[number], string> = {
-  exec: 'var(--accent)', 'exec-done': 'var(--status-success)', 'task-new': 'var(--accent)',
-  'task-done': 'var(--status-success)', comm: 'var(--text-secondary)', request: 'var(--accent)',
+  exec: 'var(--accent)', 'exec-done': 'var(--status-success-text, var(--status-success))', 'task-new': 'var(--accent)',
+  'task-done': 'var(--status-success-text, var(--status-success))', comm: 'var(--text-secondary)', request: 'var(--accent)',
 }
 // The approved prototype's colours (docs/prototypes/workbook-journal-v4/components/types.ts KIND_COLOR), used as they are on the dark theme.
 const PROTOTYPE = { exec: '#5b8def', 'exec-done': '#2f9e6b', 'task-new': '#f08a4b', 'task-done': '#b5e07a', comm: '#bb9af7', request: '#f2647f' } as const
@@ -72,19 +72,20 @@ describe('journal kind tokens', () => {
     }
   })
 
-  // The 待確認 chip (text-status-warning-text on bg-status-warning/15, KindChip) and the person's highlighted name (the same text colour
+  // The 待確認 chip (text-journal-warning-text on bg-status-warning/15, KindChip) and the person's highlighted name (the same text colour
   // on bg-status-warning/20, PersonMark) are not `journal-kind-*` tokens, so the test above does not cover them.
   it('the sources use the opacities the next test assumes', () => {
-    expect(source('../../components/journal/KindChip.tsx')).toContain('text-status-warning-text bg-status-warning/15')
-    expect(source('../../components/journal/PersonMark.tsx')).toContain('bg-status-warning/20 text-status-warning-text')
+    expect(source('../../components/journal/KindChip.tsx')).toContain('text-journal-warning-text bg-status-warning/15')
+    expect(source('../../components/journal/PersonMark.tsx')).toContain('bg-status-warning/20 text-journal-warning-text')
   })
 
-  it.each([['the 待確認 chip', 0.15], ['the highlighted person name', 0.2]] as const)('the other themes keep %s at WCAG AA (4.5:1): warning-text on the card surface with the warning fill over it', (_what, alpha) => {
+  it.each([['the 待確認 chip', 0.15], ['the highlighted person name', 0.2]] as const)('the other themes keep %s at WCAG AA (4.5:1): journal-warning-text (else status-warning-text) on the card surface with the warning fill over it', (_what, alpha) => {
     for (const [id, v] of Object.entries(blocks())) {
       if (id === 'dark') continue
       // The rows sit on the card (CardFrame: bg-surface-elevated); no journal component draws on surface-secondary.
       const bg = over(rgb(v['surface-elevated']), rgb(v['status-warning']), alpha)
-      expect(ratio(rgb(v['status-warning-text']), bg), id).toBeGreaterThanOrEqual(4.5)
+      // Only Nord sets --journal-warning-text; the other themes fall back to their status-warning-text (the CSS fallback chain).
+      expect(ratio(rgb(v['journal-warning-text'] ?? v['status-warning-text']), bg), id).toBeGreaterThanOrEqual(4.5)
     }
   })
 })

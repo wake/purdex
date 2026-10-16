@@ -9,7 +9,7 @@ beforeEach(() => { cleanup(); useI18nStore.getState().setLocale('en') })
 
 const TOKEN: Record<EntryKind, string> = {
   exec: 'journal-kind-exec', exec_done: 'journal-kind-exec-done', task_new: 'journal-kind-task-new', task_done: 'journal-kind-task-done',
-  comm: 'journal-kind-comm', request: 'journal-kind-request', confirm: 'status-warning-text',
+  comm: 'journal-kind-comm', request: 'journal-kind-request', confirm: 'journal-warning-text',
 }
 
 describe('KindChip', () => {
