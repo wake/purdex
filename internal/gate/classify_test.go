@@ -19,7 +19,17 @@ func TestClassify_Table(t *testing.T) {
 		{"go test ./...", ClassHeavy},
 		{"go test -race ./...", ClassHeavy},
 		{"go test -count=1 -timeout 30m ./internal/...", ClassHeavy},
-		{"go test ./internal/store ./internal/team", ClassHeavy},
+		{"go test ./internal/store ./internal/team", ClassLight}, // two packages (#3073)
+		{"go test ./a ./b ./c", ClassHeavy},
+		{"go test -race ./internal/watch/ ./internal/module/team/", ClassLight},
+		{"go test ./a -benchtime 50x", ClassLight}, // the value of -benchtime is no package
+		{"go test ./a -test.benchtime 50x", ClassLight},
+		{"go test ./a ./b -benchtime=1x", ClassLight},
+		{"go test ./a ./b --benchtime 1x ./c", ClassHeavy},
+		{"go test ./a -fuzzcachedir d -mutexprofile m -testlogfile l ./b", ClassLight},
+		{"go test ./a -blockprofilerate 1 -memprofilerate 1 -mutexprofilefraction 1 ./b ./c", ClassHeavy},
+		{"go vet ./a ./b", ClassLight},
+		{"go vet ./a ./b ./c", ClassHeavy},
 		{"go test -run TestX ./...", ClassHeavy},
 		{"go test ./internal/store/", ClassLight},
 		{"go test -race -count=1 ./internal/module/team/", ClassLight},
@@ -88,10 +98,11 @@ func TestClassify_Table(t *testing.T) {
 		// tsc
 		{"tsc -b", ClassHeavy},
 		{"tsc -b --force", ClassHeavy},
-		{"tsc -p spa/tsconfig.json --noEmit", ClassLight}, // one project, no references (#2985)
-		{"tsc --noEmit -p .", ClassLight},
-		{"tsc --project spa/tsconfig.json", ClassLight},
-		{"tsc --project=spa/tsconfig.json --noEmit", ClassLight},
+		{"tsc -p spa/tsconfig.json --noEmit", ClassHeavy}, // a whole project: the SPA's is 1.24 GB (#3073)
+		{"tsc --noEmit -p .", ClassHeavy},
+		{"tsc --noEmit -p tsconfig.app.json", ClassHeavy},
+		{"tsc --project spa/tsconfig.json", ClassHeavy},
+		{"tsc --project=spa/tsconfig.json --noEmit", ClassHeavy},
 		{"tsc -b -p spa", ClassHeavy}, // -b wins: it builds the references
 		{"tsc --build --project spa", ClassHeavy},
 		{"tsc -p spa --version", ClassNone},
@@ -152,7 +163,7 @@ func TestClassify_Table(t *testing.T) {
 		{"tsc src/a.ts -w", ClassNone},
 		{"tsc --watch false", ClassHeavy}, // tsc reads the false: it runs once
 		{"tsc -b --watch false", ClassHeavy},
-		{"tsc -p spa --watch false", ClassLight},
+		{"tsc -p spa --watch false", ClassHeavy},
 		{"tsc --noEmit", ClassHeavy},
 		{"tsc src/a.ts", ClassLight},
 		{"tsc --version", ClassNone},
