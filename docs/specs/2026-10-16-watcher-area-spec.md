@@ -223,9 +223,14 @@ writes use `pdx gate set`'s validation.
   - `POST /api/watch/skip` with `{all: true}` → every pending event of this host becomes skipped, note 「沒有守門員，已略過」.
   - `POST /api/watch/start` → starts a watcher by §12.3 (202 with the chosen host, or 409 with the cooldown end).
   - `POST /api/watch/wake` with `{prompt}` → resumes the resting watcher with `wake_prompt` followed by the prompt.
-  - `watch.changed` on the daemon's event stream when the watcher's fields above change, once per change (§12.6); and,
-    for the badge and the events list, a push when an event is recorded, acked or skipped — either the same event with
-    an `events` marker or a separate kind (open with the A line, 10-16). A plain `Broadcast` either way.
+  - `watch.changed` on the daemon's event stream when the watcher's fields above change, once per change (§12.6);
+    and **`watch.events`** `{host_id, unhandled, cause: recorded|acked|skipped}` for the badge and the events list,
+    once per operation (an ack of three ids sends one). Both plain `Broadcast` (agreed with the A line, #3010).
+  - The A line's plan (10-16): `GET /api/watch/events` and `pdx watch ack <id>… --note` (required, one line ≤ 500
+    bytes) in W2b; `POST /api/watch/skip` only if the user keeps 全部略過 (§10 Q1); `POST /api/watch/start` follows
+    §12.3 — 200 when one is already awake, else 202 `{host}` (the chosen host's alias and id) or 409
+    `{cooldown_until}`; `POST /api/watch/wake {prompt}` resumes with `wake_prompt` + a space + the prompt (≤ 4 KB in
+    all, no control characters, else 400), in W3b.
   - The A line's watcher identification (the fixed tmux session `pdx-watch`) comes as its spec §12.4／§12.6 and plan
     W3 update after 743; A3 is aligned with it then.
 
