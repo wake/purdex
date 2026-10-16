@@ -511,25 +511,28 @@ func TestStart_UnattendedOffLeavesRowsOpen(t *testing.T) {
 
 // Rule 9: a click and the daemon race on the CAS; exactly one wins and one
 // closed is broadcast. A losing click answers 409 already_decided carrying
-// the row decided by unattended.
+// the row decided by unattended. The row is a self_relay one: a lead request
+// is refused by the sweep (RT-1b: cancelled, no decider), so it is no race
+// between two deciders.
 func TestDecide_RacesUnattendedOneWins(t *testing.T) {
 	f := newFixture(t)
-	f.create(uid(1))
+	relay := f.begin("sid-2")
 	f.events()
 	f.unatt.set(true)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() { defer wg.Done(); f.sweep() }()
-	code, body := f.decide(uid(1), "approve")
+	code, body := f.decide(relay.RequestID, "approve")
 	wg.Wait()
-	a, _, _ := f.m.store.Get(uid(1))
+	a, _, _ := f.m.store.Get(relay.RequestID)
 	switch code {
 	case http.StatusOK:
 		if a.DecidedBy == nil || a.DecidedBy.Kind != "app" {
 			t.Fatalf("click won but the row is decided by %+v", a.DecidedBy)
 		}
 	case http.StatusConflict:
-		if e := decodeErr(t, body); e.Error != team.ErrAlreadyDecided || e.Approval == nil || e.Approval.DecidedBy.Kind != team.ClientKindUnattended {
+		e := decodeErr(t, body)
+		if e.Error != team.ErrAlreadyDecided || e.Approval == nil || e.Approval.DecidedBy == nil || e.Approval.DecidedBy.Kind != team.ClientKindUnattended {
 			t.Fatalf("click lost: %s", body)
 		}
 	default:

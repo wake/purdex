@@ -61,7 +61,12 @@ func forkSites(src string) ([]string, error) {
 			}
 			if path, bound := names[id.Name]; bound && id.Obj == nil { // Obj == nil: the package, not a local of that name
 				if forkAPIs[path][x.Sel.Name] {
-					sites = append(sites, id.Name+"."+x.Sel.Name+" at "+fset.Position(x.Pos()).String())
+					site := id.Name + "." + x.Sel.Name + " at " + fset.Position(x.Pos()).String()
+					if path == "github.com/creack/pty" {
+						sites = append(sites, ptyPrefix+site)
+					} else {
+						sites = append(sites, site)
+					}
 				}
 			}
 		case *ast.StarExpr: // *exec.Cmd is only a reference; a use of the type that is not behind a star creates a value
@@ -76,6 +81,17 @@ func forkSites(src string) ([]string, error) {
 		return true
 	})
 	return sites, nil
+}
+
+// ptyPrefix marks the sites that are calls of the pty library: the library starts the embedded Cmd itself, so the call is a
+// fork the helpers cannot see. They are not refused outright but listed (ptyCounted).
+const ptyPrefix = "pty:"
+
+// ptyCounted are the files that start a child through the pty library, with how many such calls each has. Each one reports its
+// start by hand (Cmd.NoteStarted when it worked, Cmd.NoteStartFailed when not), and a test of that file proves both counts; a new
+// pty start, or one more call in a listed file, fails the guard until it is listed here with such a test.
+var ptyCounted = map[string]int{
+	"internal/terminal/relay.go": 1, // TestRelayCountsItsForkAndItsFailedStart
 }
 
 // isExecCmd says whether the type expression is os/exec's Cmd (by whatever name exec is imported under).
@@ -105,29 +121,12 @@ var cliOnly = map[string]string{
 // pending are the daemon's files that still fork on their own. The list may only shrink: each batch of the plan (D0b, D0c)
 // moves files onto Command/CommandContext and deletes them from here (the value says which batch); a new fork in the daemon has
 // to use the helpers.
-var pending = map[string]string{
-	"internal/agent/hook_version.go":                "D0c",
-	"internal/agent/process_info.go":                "D0c",
-	"internal/fleet/run.go":                         "D0c",
-	"internal/gate/stragglers.go":                   "D0c",
-	"internal/module/dev/build.go":                  "D0c",
-	"internal/module/dev/daemon.go":                 "D0c",
-	"internal/module/dev/module.go":                 "D0c",
-	"internal/module/dev/stream.go":                 "D0c",
-	"internal/module/peers/sweep.go":                "D0c",
-	"internal/module/session/home_reader_darwin.go": "D0c",
-	"internal/module/session/shell_resolve.go":      "D0c",
-	"internal/module/session/watcher.go":            "D0c",
-	"internal/peers/ccuds/virtual_peer.go":          "D0c",
-	"internal/peers/proxyhelper/client.go":          "D0c",
-	"internal/peers/registry.go":                    "D0c",
-	"internal/terminal/relay.go":                    "D0c",
-	"internal/tmux/executor.go":                     "D0c",
-}
+var pending = map[string]string{}
 
 func TestEveryForkInTheDaemonGoesThroughTheHelpers(t *testing.T) {
 	root := filepath.Join("..", "..")
 	hit := map[string][]string{}
+	ptySeen := map[string]bool{}
 	for _, dir := range []string{"cmd", "internal"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -152,13 +151,31 @@ func TestEveryForkInTheDaemonGoesThroughTheHelpers(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if len(sites) > 0 {
-				hit[rel] = sites
+			var forks []string
+			ptys := 0
+			for _, site := range sites {
+				if strings.HasPrefix(site, ptyPrefix) {
+					ptys++
+				} else {
+					forks = append(forks, site)
+				}
+			}
+			ptySeen[rel] = true
+			if ptys != ptyCounted[rel] {
+				t.Errorf("%s has %d pty.Start* calls, ptyCounted says %d: list a pty start with the test that proves its counts", rel, ptys, ptyCounted[rel])
+			}
+			if len(forks) > 0 {
+				hit[rel] = forks
 			}
 			return nil
 		})
 		if err != nil {
 			t.Fatal(err)
+		}
+	}
+	for f := range ptyCounted {
+		if !ptySeen[f] {
+			t.Errorf("%s is on ptyCounted but was not found", f)
 		}
 	}
 	var fresh []string

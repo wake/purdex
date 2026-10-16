@@ -12,7 +12,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -20,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wake/purdex/internal/execstat"
 	"github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/peers/ccuds"
 )
@@ -66,7 +66,7 @@ type Starter func(ctx context.Context) (Proc, error)
 // stderr line forwarded to stderr with a "peer-proxy[<pid>]: " prefix.
 func ExecStarter(exe string, stderr io.Writer) Starter {
 	return func(ctx context.Context) (Proc, error) {
-		cmd := exec.CommandContext(ctx, exe, "peer-proxy")
+		cmd := execstat.CommandContext(ctx, "peers.proxyhelper", exe, "peer-proxy")
 		cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + os.Getenv("HOME")}
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		cmd.WaitDelay = execWaitDelay
@@ -90,7 +90,7 @@ func ExecStarter(exe string, stderr io.Writer) Starter {
 
 // execProc is Proc over exec.Cmd.
 type execProc struct {
-	cmd    *exec.Cmd
+	cmd    *execstat.Cmd
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
 	stderr *prefixWriter
