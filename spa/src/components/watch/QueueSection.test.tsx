@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, fireEvent, within, act } from '@testing-library/react'
 import { QueueSection } from './QueueSection'
-import { clearViewMemory, readQueueTab } from '../../lib/watch/view-memory'
+import { clearViewMemory, readQueueTab, writeQueueTab } from '../../lib/watch/view-memory'
 import type { FleetQueue, FleetHolder, FleetWaiter } from '../../lib/fleet/types'
 import { useI18nStore } from '../../stores/useI18nStore'
 const t = (k: string, p?: Record<string, string | number>) => useI18nStore.getState().t(k, p)
@@ -190,5 +190,64 @@ describe('QueueSection — switch and states', () => {
   it('a title, in the section', () => {
     renderQ(queue())
     expect(screen.getByRole('button', { name: t('watch.queue.title') })).toBeInTheDocument()
+  })
+})
+
+describe('QueueSection — review follow-up', () => {
+  it('layout: slots and waiting cards sit in wrapping, shrinkable containers (nothing hidden at any width)', () => {
+    renderQ(queue({ heavy_used: 1, holders: [holder()], waiters: [waiter(), waiter({ place: 2 })] }))
+    const slots = screen.getByTestId('slot-line-heavy')
+    const waiting = screen.getByTestId('queue-line-heavy')
+    for (const el of [slots, waiting]) {
+      expect(el.className).toContain('flex-wrap')
+      expect(el.className).toContain('min-w-0')
+      expect(el.className).not.toContain('overflow-x-auto')
+    }
+    expect(screen.getByTestId('lane-heavy').className).not.toMatch(/\bflex items-center\b/)
+    expect(within(slots).getByTestId('gate')).toBeInTheDocument()
+    expect(within(slots).getByTestId('q-holder')).toBeInTheDocument()
+    expect(within(waiting).getAllByTestId('q-waiting')).toHaveLength(2)
+  })
+
+  it('held and paused at once: the lane says 已暫停, the gate line says 暫停放行 (held outranks paused outranks full)', () => {
+    renderQ(queue({ heavy_paused: true, admission_held: true, admission_reason: 'mem' }))
+    expect(lane('heavy').getByText(t('watch.queue.paused'))).toBeInTheDocument()
+    const gate = lane('heavy').getByTestId('gate')
+    expect(gate).toHaveAttribute('data-state', 'held')
+    expect(gate).toHaveTextContent(t('watch.queue.gate.held'))
+  })
+
+  it('longest is never below the daemon figure when one waiter has no since', () => {
+    renderQ(queue({ longest_wait_s: 200, waiters: [waiter({ since: NOW - 30_000 }), waiter({ place: 2, since: null })] }))
+    expect(screen.getByTestId('queue-count')).toHaveTextContent(t('watch.queue.longest', { t: '3:20' }))
+  })
+
+  it('longest keeps ticking from the frame arrival when every since is null', () => {
+    renderQ(queue({ longest_wait_s: 100, waiters: [waiter({ since: null })] }))
+    expect(screen.getByTestId('queue-count')).toHaveTextContent(t('watch.queue.longest', { t: '1:40' }))
+    act(() => { vi.advanceTimersByTime(5000) })
+    expect(screen.getByTestId('queue-count')).toHaveTextContent(t('watch.queue.longest', { t: '1:45' }))
+  })
+
+  it('the interval runs only while 當下 is shown', () => {
+    writeQueueTab('d-a', 'history')
+    const set = vi.spyOn(globalThis, 'setInterval')
+    const clear = vi.spyOn(globalThis, 'clearInterval')
+    const { unmount } = renderQ(queue({ waiters: [waiter()] }))
+    expect(set).not.toHaveBeenCalled()
+    unmount()
+    expect(clear).not.toHaveBeenCalled()
+  })
+
+  it('hover pairing survives a re-order: the hovered waiter keeps its card when it moves from place 2 to 1', () => {
+    const a = waiter({ place: 1, command: 'cmd-a', since: NOW - 50_000 })
+    const b = waiter({ place: 2, command: 'cmd-b', since: NOW - 40_000 })
+    const { rerender } = renderQ(queue({ waiters: [a, b] }))
+    fireEvent.mouseEnter(screen.getAllByTestId('q-waiting')[1])
+    rerender(<QueueSection fleetHostId="d-a" queue={queue({ waiters: [{ ...b, place: 1 }, { ...a, place: 2 }] })} offline={false} />)
+    const cards = screen.getAllByTestId('q-waiting')
+    expect(cards[0]).toHaveTextContent('cmd-b')
+    expect(cards[0]).toHaveAttribute('data-hot')
+    expect(cards[1]).not.toHaveAttribute('data-hot')
   })
 })

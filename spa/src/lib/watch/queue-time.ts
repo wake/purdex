@@ -4,7 +4,8 @@ import type { FleetHolder, FleetWaiter } from '../fleet/types'
 
 export type QueueClass = 'heavy' | 'light'
 export const holderKey = (h: FleetHolder) => `h${h.class}${h.slot}-${h.pid}`
-export const waiterKey = (w: FleetWaiter) => `w${w.class}${w.place}`
+// Not the place: a waiter moves up as others leave, and the highlight must stay on the same command across frames.
+export const waiterKey = (w: FleetWaiter) => `w${w.class}|${w.command}|${w.project}|${w.session}|${w.since ?? ''}`
 
 /** A wait turns warning past 2 minutes. */
 export const WAIT_LONG_S = 120

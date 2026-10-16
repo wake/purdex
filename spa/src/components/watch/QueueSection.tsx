@@ -10,25 +10,34 @@ import { mss, secondsSince } from '../../lib/watch/queue-time'
 import { readQueueTab, writeQueueTab, type QueueTab } from '../../lib/watch/view-memory'
 import { QueueNow } from './QueueNow'
 
-function useNowEverySecond(): number {
+// One interval, only while `active` (the 當下 body is shown); cleared on unmount or when it stops being active.
+function useNowEverySecond(active: boolean): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
+    if (!active) return
     const id = setInterval(() => setNow(Date.now()), 1000)
     return () => clearInterval(id)
-  }, [])
+  }, [active])
   return now
 }
 
 function QueueBody({ fleetHostId, queue }: { fleetHostId: string; queue: FleetQueue }) {
   const t = useI18nStore((s) => s.t)
-  const now = useNowEverySecond()
   // The tab outlives this component (the pane unmounts on a tab switch): the memory is the source, the state only re-renders.
   const [tab, setTabState] = useState<QueueTab>(() => readQueueTab(fleetHostId))
   const setTab = (v: QueueTab) => { writeQueueTab(fleetHostId, v); setTabState(v) }
+  const now = useNowEverySecond(tab === 'now')
+  // When this frame arrived: with no `since` to count from, the daemon's figure keeps ticking from here.
+  // (Stamped with the section's own clock, at most a second old, so render stays pure.)
+  const [arrived, setArrived] = useState({ queue, at: now })
+  if (arrived.queue !== queue) setArrived({ queue, at: now })
   const n = queue.waiters.length
   const known = queue.waiters.map((w) => secondsSince(w.since, now)).filter((s): s is number => s !== null)
-  // The local clock when the daemon gave `since`; else the daemon's own figure from the frame.
-  const longest = known.length > 0 ? Math.max(...known) : queue.longest_wait_s
+  // The local clock where the daemon gave `since`, never below the daemon's figure (a waiter without `since` cannot shrink it);
+  // when none has a `since`, the daemon's figure plus the time since its frame arrived.
+  const longest = known.length > 0
+    ? Math.max(...known, queue.longest_wait_s)
+    : queue.longest_wait_s + Math.max(0, (now - arrived.at) / 1000)
   const num = n > 0 ? 'text-status-warning-text font-semibold' : ''
   return (
     <div data-testid="queue-panel">

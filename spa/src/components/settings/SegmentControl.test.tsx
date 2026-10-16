@@ -60,4 +60,10 @@ describe('SegmentControl disabled option', () => {
     fireEvent.click(b)
     expect(onChange).not.toHaveBeenCalled()
   })
+  it('a disabled option has no hover lighting', () => {
+    render(<SegmentControl options={[{ value: 'a', label: 'A' }, { value: 'b', label: 'B', disabled: true }]} value="a" onChange={() => {}} />)
+    const cls = screen.getByRole('button', { name: 'B' }).className
+    expect(cls).not.toMatch(/(^|\s)hover:/)
+    expect(cls).toContain('enabled:hover:')
+  })
 })

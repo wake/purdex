@@ -58,7 +58,7 @@ export function QueueNow({ queue: q, now }: { queue: FleetQueue; now: number }) 
           {waiting.map((w) => {
             const s = secondsSince(w.since, now)
             return (
-              <tr key={waiterKey(w)} data-testid="q-row" data-hot={hot === waiterKey(w) || undefined} onMouseEnter={() => setHot(waiterKey(w))} onMouseLeave={() => setHot(null)} className={rowHot(waiterKey(w))}>
+              <tr key={`${waiterKey(w)}-${w.place}`} data-testid="q-row" data-hot={hot === waiterKey(w) || undefined} onMouseEnter={() => setHot(waiterKey(w))} onMouseLeave={() => setHot(null)} className={rowHot(waiterKey(w))}>
                 <td className={TD}>{cls(w.class)}</td>
                 <td className={`${TD} font-mono text-text-primary`}><span className="font-sans text-text-muted tabular-nums mr-2">{t('watch.queue.place', { n: w.place })}</span>{w.command}</td>
                 <td className={`${TD} text-text-secondary`}>{w.project}</td>

@@ -84,9 +84,12 @@ export function QueueLane({ cls, used, total, paused, held, heldReason, holders,
   // Slots are drawn by position: the holders first, then free ones up to the total (a lane never hides a running command).
   const slots = Math.max(total, holders.length)
   const full = !isPaused && holders.length >= total
+  // Gate line priority: admission_held > paused > full. The spec does not order them; admission_held is queue-wide (the
+  // watcher's or the gate's own hold stops everything, whatever a class's slots say), as the prototype's `blocked` does.
+  // A lane that is paused AND held still shows 「已暫停」 beside its name; only the gate line's word follows the rule.
   const gate: Gate = held ? 'held' : isPaused ? 'paused' : full ? 'wait' : 'open'
   return (
-    <div data-testid={`lane-${cls}`} className={`flex items-center gap-2.5 ${small ? 'py-1.5' : 'py-2'}`}>
+    <div data-testid={`lane-${cls}`} className={`flex items-start gap-2.5 ${small ? 'py-1.5' : 'py-2'}`}>
       <div className="w-28 shrink-0">
         <div className="flex items-center gap-1.5">
           <span className={small ? 'text-xs text-text-secondary' : 'text-sm font-medium text-text-primary'}>{t(`watch.queue.lane.${cls}`)}</span>
@@ -94,18 +97,20 @@ export function QueueLane({ cls, used, total, paused, held, heldReason, holders,
         </div>
         <div className="text-[10px] text-text-muted tabular-nums">{t('watch.queue.slots', { used, total })}</div>
       </div>
-      <div className="flex items-center gap-1.5">
-        {Array.from({ length: slots }).map((_, i) => {
-          const h = holders[i]
-          return h
-            ? <RunningCard key={holderKey(h)} h={h} now={now} small={small} hover={hover} />
-            : <div key={`free${i}`} data-testid="q-free" className={`shrink-0 ${size(small)} rounded-md border border-dashed border-border-default grid place-items-center text-[10px] text-text-muted`}>{t('watch.queue.free')}</div>
-        })}
-      </div>
-      <GateLine state={gate} reason={heldReason} />
-      <div className="flex items-center gap-1.5 min-w-0 overflow-x-auto" data-testid={`queue-line-${cls}`}>
-        {waiters.length === 0 && <span className="text-xs text-text-muted">{t('watch.queue.none')}</span>}
-        {waiters.map((w) => <WaitingCard key={waiterKey(w)} w={w} now={now} small={small} hover={hover} />)}
+      <div className="flex-1 min-w-0 flex flex-col gap-1.5">
+        <div data-testid={`slot-line-${cls}`} className="flex flex-wrap items-center gap-1.5 min-w-0">
+          {Array.from({ length: slots }).map((_, i) => {
+            const h = holders[i]
+            return h
+              ? <RunningCard key={holderKey(h)} h={h} now={now} small={small} hover={hover} />
+              : <div key={`free${i}`} data-testid="q-free" className={`shrink-0 ${size(small)} rounded-md border border-dashed border-border-default grid place-items-center text-[10px] text-text-muted`}>{t('watch.queue.free')}</div>
+          })}
+          <GateLine state={gate} reason={heldReason} />
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5 min-w-0" data-testid={`queue-line-${cls}`}>
+          {waiters.length === 0 && <span className="text-xs text-text-muted">{t('watch.queue.none')}</span>}
+          {waiters.map((w) => <WaitingCard key={`${waiterKey(w)}-${w.place}`} w={w} now={now} small={small} hover={hover} />)}
+        </div>
       </div>
     </div>
   )
