@@ -79,16 +79,16 @@ Hover tooltips stay as F-2b built them.
 
 The watcher is an ordinary Claude Code session started by the daemon of the host that holds it (load-control spec
 §12.4). The tab is a **full session tab** of that session (user, 10-16: 「要，就是現在的完整 tab 可用三種模式」): the
-three views terminal, Deck and Chat, the status strip, drafts and the conversation work as in any session tab. A bar
-above it carries the status text below. One difference: when the watcher's session ends, the tab shows the watcher's
+three views terminal, Deck and Chat, the bottom status bar, drafts and the conversation work as in any session tab,
+and nothing is added around it (user, 10-16: 「守門員應該就是現在 tab 本來的樣子，包括底下 status bar」). One difference: when the watcher's session ends, the tab shows the watcher's
 state (the table below) instead of offering a rebuild, because the daemon starts and wakes the watcher, and a rebuild
 would run it outside `pdx-watch`.
 
 | Watch state | The tab shows |
 |---|---|
 | none (no current, no last) | A centred panel: 「這台主機群目前沒有守門員」, 「啟動後，它會看管重指令名額與記憶體壓力，事件交給它處理。」 and a **啟動守門員** button → `POST /api/watch/start` (A3) on any reachable daemon host; the daemon runs §12.3's order (first reachable host in `targets`). Busy state while it starts; an error line if the start failed (the cooldown time from the answer). |
-| awake | The watcher's tmux session pane on its host. The strip's status text: 「守門員 · 在 {host} · 醒著 · {巡檢模式｜常駐模式} · {model}」. |
-| resting | The holder's `pdx-watch` tmux session, which stays at a shell while the watcher rests (load-control spec §12.4/§12.6), with a band above the pane: 「守門員休息中（{since} 起）」 and an input 「提問會叫醒守門員」; sending → `POST /api/watch/wake` with the text (A3) on the holding host; the band goes when the watcher is awake. "Resting" and "none" are different answers of the status and never look alike. |
+| awake | The watcher's session on its host, as the stock session tab (terminal, Deck, Chat; the bottom status bar). |
+| resting | The holder's `pdx-watch` session, which stays at a shell while the watcher rests (load-control spec §12.4/§12.6), as the same stock session tab. How the person wakes it from here (`POST /api/watch/wake` with a prompt, A3) is settled with the user before W5e (§10 Q5). "Resting" and "none" are different answers of the status and never look alike. |
 
 - **Follows the watcher**: the tab's session is set from the watch status whenever the watcher's host or session
   changes (it is stored and synced like any session tab, and rewritten on the next change). After a failover (a26
@@ -254,7 +254,7 @@ W5c (about 1700, 1100 and 1400 lines) gives these phases:
 |---|---|---|
 | W5a1 | The area (reserved workspace, the three pane kinds, tab order sync, host tabs following the fleet), host cells' click target, the host tab's header and 行程 | F-2a1, F-2b |
 | W5a2 | The host tab's 資源 (gauges, charts, range) | W5a1 |
-| W5a3 | The watcher in the area: the status from `watch/status` (no count yet), the shield, the 守門員 tab (status panel, the `pdx-watch` terminal on the holder, the resting band without its input) | W5a1 |
+| W5a3 | The watcher in the area: the status from `watch/status` (no count yet), the shield, the 守門員 tab (the stock `pdx-watch` session tab on the holder, or the status panel) | W5a1 |
 | W5b | The queue wire: `queue.holders` / `waiters[].session` / `admission_reason` / the paused flags in `internal/fleet` + golden JSON + SPA types | #2971 |
 | W5b1 | Queue 當下: the lanes and the table | W5a1, W5b |
 | W5b2 | The queued symbol on the agent icon (§2.3) | W5b |
@@ -271,6 +271,8 @@ W5a1 … W5a3, W5b, W5b1, W5b2 and W5c1 need nothing from the A line.
 - Q2 (A line): how the watcher's session is identified — **decided**: the fixed tmux session `pdx-watch` (load-control
   spec §12.4). The UI uses `tmux_session` from the status when it carries it, `pdx-watch` until then.
 - Q3 (user): **decided 10-16** — the 守門員 tab is a full session tab with terminal, Deck and Chat (§4).
+- Q5 (user, before W5e): waking a resting watcher from the 守門員 tab while it stays the stock session tab — for example
+  Deck's own input sends the text through `POST /api/watch/wake` while the watcher rests.
 
 Out of scope: iOS; alerts or pushes on zone changes (the watcher's job); any history kept on a daemon for the charts;
 `pdx gate free` from the UI (the watcher's command after the person agrees).
