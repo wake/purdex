@@ -117,13 +117,14 @@ func (m *Module) Start(ctx context.Context) error {
 }
 
 func (m *Module) Stop(context.Context) error {
-	if m.measure != nil {
-		m.measure.Stop()
-	}
+	// The engine goes first: its drain may still announce a primary, and the measure must be the last to hear it.
 	if m.cancel != nil {
 		m.cancel()
 	}
 	m.wg.Wait()
+	if m.measure != nil {
+		m.measure.Stop()
+	}
 	return nil
 }
 

@@ -1,12 +1,13 @@
 package fleetmod
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -409,4 +410,120 @@ func TestAPIShapes(t *testing.T) {
 	assert.Equal(t, map[string]any{"aliases": []any{"mserv", "a19"}}, get("/api/fleet/ssh-aliases"))
 }
 
-var _ = context.Background
+// The own host reports its os the way a remote does ("Darwin" / "Linux"), from runtime.GOOS.
+func TestOwnHostFillsOS(t *testing.T) {
+	t.Cleanup(func() { localGOOS = runtime.GOOS })
+	for goos, want := range map[string]string{"darwin": "Darwin", "linux": "Linux", "windows": ""} {
+		localGOOS = goos
+		r := newMRig(t, silent)
+		r.start()
+		r.setLocal(10, 1)
+		r.tick()
+		h := r.host("mlab:abc123")
+		require.NotNil(t, h)
+		assert.Equal(t, want, h.OS, goos)
+	}
+}
+
+// After Stop a primary that arrives late (the engine's drain) starts nothing: no session, no ssh left behind.
+func TestNoSessionStartsAfterStop(t *testing.T) {
+	r := newMRig(t, silent)
+	r.role.Set(leaf.RoleState{Role: leaf.RoleStandby, Term: 3, Primary: "air26", Self: "mlab"})
+	r.start()
+	r.m.Stop()
+	r.role.Set(leaf.RoleState{Role: leaf.RolePrimary, Term: 4, Primary: "mlab", Self: "mlab"})
+	r.m.onRole(r.role.State())
+	time.Sleep(200 * time.Millisecond)
+	assert.Equal(t, 0, startsOf(r.sshDir), "no ssh started after Stop")
+	r.m.life.Lock()
+	active := r.m.active
+	r.m.life.Unlock()
+	assert.False(t, active)
+}
+
+// feed gives a host row one reading of the memory level and returns the zone it shows. A level 4 latches danger, which a
+// level 1 only leaves after 10 s: right after a reset the latch is gone, so level 1 reads normal at once.
+func (r *mrig) feed(key string, level int) string {
+	r.t.Helper()
+	r.m.mu.Lock()
+	defer r.m.mu.Unlock()
+	h := r.m.hosts[key]
+	require.NotNil(r.t, h)
+	r.m.applyFastLocked(h, leaf.Fast{LocalFast: leaf.LocalFast{At: r.fc.Now(), Level: level, NCPU: 4}}, r.fc.Now())
+	return h.fast.Zone
+}
+
+// A host row survives its session being restarted (an alias change): the new session starts from an unknown zone, not from
+// the latch the old one left.
+func TestZoneResetsWhenASessionIsRestarted(t *testing.T) {
+	r := newMRig(t, silent)
+	r.fleet.PeerSSHAlias = ""
+	r.setProbes(hostconfig.ProbeHost{ID: "ab12cd34", Name: "x", SSHAlias: "a19"})
+	r.start()
+	eventually(t, "started", func() bool { return startsOf(r.sshDir) == 1 })
+	require.Equal(t, "danger", r.feed("probe:ab12cd34", 4))
+
+	r.setProbes(hostconfig.ProbeHost{ID: "ab12cd34", Name: "x", SSHAlias: "a19b"})
+	r.tick()
+	eventually(t, "restarted", func() bool { return startsOf(r.sshDir) == 2 })
+	assert.Equal(t, "unknown", r.host("ab12cd34").Fast.Zone, "the row kept the old zone until the next reading")
+	assert.Equal(t, "normal", r.feed("probe:ab12cd34", 1), "the old latch survived the restart")
+}
+
+// A remote host that goes offline or fails shows an unknown zone, and starts again from normal when it comes back.
+func TestZoneResetsWhenARemoteHostIsNotOK(t *testing.T) {
+	r := newMRig(t, silent)
+	r.fleet.PeerSSHAlias = ""
+	r.setProbes(hostconfig.ProbeHost{ID: "ab12cd34", Name: "x", SSHAlias: "a19"})
+	r.start()
+	require.Equal(t, "danger", r.feed("probe:ab12cd34", 4))
+
+	r.m.mu.Lock()
+	h := r.m.hosts["probe:ab12cd34"]
+	r.m.mu.Unlock()
+	(&rowSink{m: r.m, h: h}).State(leaf.StatusOffline, leaf.CodeTimeout, r.fc.Now())
+	assert.Equal(t, "unknown", r.host("ab12cd34").Fast.Zone, "an offline host keeps no zone")
+	assert.Equal(t, "normal", r.feed("probe:ab12cd34", 1), "the old latch survived going offline")
+}
+
+// The own host with no new reading for a while reads offline with an unknown zone, and starts again from normal.
+func TestZoneResetsWhenTheOwnHostGoesStale(t *testing.T) {
+	r := newMRig(t, silent)
+	r.fleet.PeerSSHAlias = ""
+	r.start()
+	r.setLocal(10, 4)
+	r.tick()
+	require.Equal(t, "danger", r.host("mlab:abc123").Fast.Zone)
+
+	r.fc.Advance(ownStaleAfter + time.Second)
+	r.tick()
+	h := r.host("mlab:abc123")
+	require.Equal(t, "offline", h.Status)
+	assert.Equal(t, "unknown", h.Fast.Zone)
+
+	r.setLocal(10, 1)
+	r.tick()
+	assert.Equal(t, "normal", r.host("mlab:abc123").Fast.Zone, "the old latch survived going stale")
+}
+
+// Removing several hosts at once stops their sessions side by side: a tick is held for one TermGrace, not one per host.
+func TestReconcileStopsRemovedHostsInParallel(t *testing.T) {
+	// TERM is ignored (and inherited by sleep), so each session only ends when killGroup sends KILL after the grace.
+	r := newMRig(t, `trap '' TERM; echo ready >> "$D/ready"; sleep 600 & wait`)
+	r.fleet.PeerSSHAlias = ""
+	const grace = 2 * time.Second // serial would take about 4 s, parallel about 2 s: the bound has a second of room
+	r.m.d.Session.TermGrace = grace
+	r.setProbes(hostconfig.ProbeHost{ID: "ab12cd34", Name: "x", SSHAlias: "a19"}, hostconfig.ProbeHost{ID: "ef56ab78", Name: "y", SSHAlias: "a20"})
+	r.start()
+	eventually(t, "both sessions trapped", func() bool {
+		b, _ := os.ReadFile(filepath.Join(r.sshDir, "ready"))
+		return strings.Count(string(b), "ready") == 2
+	})
+
+	r.setProbes()
+	begin := time.Now()
+	r.tick()
+	took := time.Since(begin)
+	assert.GreaterOrEqual(t, took, grace, "the sessions only end after the grace")
+	assert.Less(t, took, 3*time.Second, "the second session was waited for after the first (serial stop)")
+}

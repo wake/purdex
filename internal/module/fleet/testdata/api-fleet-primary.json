@@ -7,6 +7,7 @@
       "id": "mlab:abc123",
       "kind": "daemon",
       "alias": "mlab",
+      "os": "Darwin",
       "status": "ok",
       "last_ok_at": "2026-10-16T12:00:00Z",
       "fast": {
