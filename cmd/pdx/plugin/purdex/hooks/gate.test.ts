@@ -50,6 +50,8 @@ const UNCHANGED = [
   'claude plugin list', // only the test run is held
   'claude mcp test x', // `test` is not claude plugin test
   'claude test dir',
+  'foo plugin test dir', // only claude's test run is held
+  'pnpm plugin test x',
   'claude plugin',
   'claude -p "plugin test"',
   'claude plugin tests',
