@@ -86,7 +86,7 @@ type daemon struct {
 	id     string
 }
 
-func (d *daemon) getNow() time.Time { d.clk.Lock(); defer d.clk.Unlock(); return d.now }
+func (d *daemon) getNow() time.Time  { d.clk.Lock(); defer d.clk.Unlock(); return d.now }
 func (d *daemon) setNow(t time.Time) { d.clk.Lock(); d.now = t; d.clk.Unlock() }
 
 type pair struct{ a, b *daemon }
