@@ -33,6 +33,9 @@ vi.mock('../../lib/fleet/probe-check', async (orig) => ({
   runProbeCheck: (...a: unknown[]) => runProbeCheck(...a),
 }))
 
+const readAllFleets = vi.fn()
+vi.mock('../../lib/fleet/reread', () => ({ readAllFleets: () => readAllFleets(), readFleetOf: vi.fn() }))
+
 import { ProbeHostPage } from './ProbeHostPage'
 import { startNewProbe } from './useProbeEditor'
 import { useFleetConfigStore } from '../../lib/fleet/config-store'
@@ -102,6 +105,16 @@ describe('ProbeHostPage — the form writes both daemons', () => {
     expect(by[A][2]).toBe(3)
     expect(by[B][1][0].ssh_alias).toBe('b-other')
     expect(by[B][2]).toBe(8)
+  })
+
+  it('a successful save reads the fleet again at once (the look reaches this App before the next push)', async () => {
+    readAllFleets.mockClear()
+    await mounted()
+    pickAliases()
+    expect(readAllFleets).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('probe-save'))
+    await waitFor(() => expect(putProbeHosts).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(readAllFleets).toHaveBeenCalledTimes(1))
   })
 
   it('a 409 from one daemon reloads both and says the list changed elsewhere; the form and draft stay', async () => {

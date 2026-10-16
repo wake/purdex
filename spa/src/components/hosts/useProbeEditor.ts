@@ -7,6 +7,7 @@ import { useFleetDaemons }from '../../lib/fleet/use-fleet-daemons'
 import { canon, mergedProbeEntries, missingAliases, useFleetConfigStore, type DaemonOutcome, type MissingAlias, type ProbeBase, type ProbeEdit } from '../../lib/fleet/config-store'
 import { useFleetDraftStore } from '../../lib/fleet/config-draft'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { readAllFleets } from '../../lib/fleet/reread'
 import { hostLabel, hostLookOf } from '../../lib/host-look'
 
 export type T = (k: string, p?: Record<string, string>) => string
@@ -76,7 +77,7 @@ export function useProbeEditor() {
     const show = (text: string) => ui(from === 'form' ? { dialogError: text } : { listError: text })
     try {
       const r = await useFleetConfigStore.getState().saveProbe(hostIds, edit, opts)
-      if (r.kind === 'saved') { drafts().endProbe(); drafts().setProbeConfirm(null); drafts().setDeleting(null); return true }
+      if (r.kind === 'saved') { readAllFleets(); drafts().endProbe(); drafts().setProbeConfirm(null); drafts().setDeleting(null); return true }
       else if (r.kind === 'confirm') drafts().setProbeConfirm({ edit, notices: r.notices, base: opts.base })
       else if (r.kind === 'missing_alias') show(missingText(t, r.rows))
       else if (r.kind === 'changed') { ui({ changed: r.hosts }); show(t('fleet_hosts.probe.changed_on', { hosts: labels(r.hosts) })) }
