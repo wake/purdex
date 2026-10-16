@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -197,6 +198,40 @@ func TestParseSlowTellsAnAbsentAdmissionFromNotHeld(t *testing.T) {
 		assert.Equal(t, c.reason, s.Gate.Admission.Reason, name)
 		assert.Equal(t, 1, s.Gate.WaitHeavy, "the rest of the status still decodes: %s", name)
 	}
+}
+
+// A gate status as the gate's own encoder prints it (testdata/gate-status-2h5w.json: two heavy holders, three heavy and two
+// light waiters, an Admission that holds): through the frame, then the summary. The slot tokens never come out.
+func TestGateStatusSampleThroughTheFrameAndTheSummary(t *testing.T) {
+	raw, err := os.ReadFile("testdata/gate-status-2h5w.json")
+	require.NoError(t, err)
+	procs := "@@s\n@@top_cpu\n 12 30.5 2048 x\n@@top_mem\n 12 30.5 2048 x\n"
+	s, ok := ParseSlow(linuxFrame("", procs+"@@gate\n"+string(raw)+"@@gate_end\n"), t0)
+	require.True(t, ok)
+	require.NotNil(t, s.Gate)
+	assert.True(t, s.AdmissionKnown)
+
+	q := QueueSummary(*s.Gate, s.AdmissionKnown, LocalFast{Level: 1}, t0)
+	require.Len(t, q.Holders, 2)
+	assert.Equal(t, QueueHolder{Class: "heavy", Slot: 1, Command: "go test -race ./internal/module/fleet/", Project: "fleet-queue-holders",
+		Session: "9c2f7a10-1b3d-4e55-9a60-7f0e2c8d5b11", Since: time.Date(2026, 10, 16, 11, 58, 28, 0, time.UTC), PID: 41021}, q.Holders[0])
+	assert.Equal(t, 41188, q.Holders[1].PID)
+	assert.Equal(t, "", q.Holders[1].Session, "a holder without a session")
+	require.Len(t, q.Waiters, 5)
+	assert.Equal(t, "heavy", q.Waiters[2].Class)
+	assert.Equal(t, "light", q.Waiters[3].Class, "heavy waiters first, then light")
+	assert.Equal(t, "11111111-aaaa-4bbb-8ccc-222222222222", q.Waiters[0].Session)
+	assert.Equal(t, "", q.Waiters[1].Session)
+	assert.Equal(t, 2, q.HeavyUsed)
+	assert.Equal(t, 2, q.HeavyTotal)
+	assert.Equal(t, 8, q.LightTotal)
+	assert.False(t, q.HeavyPaused || q.LightPaused)
+	assert.True(t, q.AdmissionHeld, "from the status, not from the calm level 1")
+	assert.Equal(t, "memory pressure level 2", q.AdmissionReason)
+	b, err := json.Marshal(q)
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), "DO-NOT-LEAK")
+	assert.NotContains(t, string(b), "token")
 }
 
 func TestParseSlowGateVariants(t *testing.T) {

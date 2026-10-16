@@ -1,0 +1,142 @@
+{
+  "Heavy": [
+    {
+      "class": "heavy",
+      "slot": 1,
+      "pid": 41021,
+      "pgid": 41030,
+      "argv": [
+        "go",
+        "test",
+        "-race",
+        "./internal/module/fleet/"
+      ],
+      "cwd": "/Users/wake/Workspace/wake/purdex/.claude/worktrees/fleet-queue-holders",
+      "started": "2026-10-16T11:58:28Z",
+      "session": "9c2f7a10-1b3d-4e55-9a60-7f0e2c8d5b11",
+      "token": "tok-DO-NOT-LEAK-heavy-1"
+    },
+    {
+      "class": "heavy",
+      "slot": 2,
+      "pid": 41188,
+      "pgid": 41190,
+      "argv": [
+        "pnpm",
+        "--dir",
+        "spa",
+        "exec",
+        "vitest",
+        "run",
+        "src/lib/fleet"
+      ],
+      "cwd": "/Users/wake/Workspace/wake/purdex/spa",
+      "started": "2026-10-16T11:59:46Z",
+      "token": "tok-DO-NOT-LEAK-heavy-2"
+    }
+  ],
+  "Light": null,
+  "WaitHeavy": 3,
+  "WaitLight": 2,
+  "QueueHeavy": [
+    {
+      "class": "heavy",
+      "place": 1,
+      "pid": 41300,
+      "since": "2026-10-16T11:58:45Z",
+      "argv": [
+        "go",
+        "test",
+        "./internal/core/"
+      ],
+      "cwd": "/Users/wake/Workspace/wake/purdex",
+      "session": "11111111-aaaa-4bbb-8ccc-222222222222"
+    },
+    {
+      "class": "heavy",
+      "place": 2,
+      "pid": 41311,
+      "since": "2026-10-16T11:58:59Z",
+      "argv": [
+        "npx",
+        "tsc",
+        "-b",
+        "--force"
+      ],
+      "cwd": "/Users/wake/Workspace/wake/aigora/spa"
+    },
+    {
+      "class": "heavy",
+      "place": 3,
+      "pid": 41322,
+      "since": "2026-10-16T11:59:20Z",
+      "argv": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "cwd": "/Users/wake/Workspace/wake/mlab"
+    }
+  ],
+  "QueueLight": [
+    {
+      "class": "light",
+      "place": 1,
+      "pid": 41400,
+      "since": "2026-10-16T11:59:51Z",
+      "argv": [
+        "git",
+        "status",
+        "--porcelain"
+      ],
+      "cwd": "/Users/wake/Workspace/wake/purdex",
+      "session": "33333333-cccc-4ddd-8eee-444444444444"
+    },
+    {
+      "class": "light",
+      "place": 2,
+      "pid": 41411,
+      "since": "2026-10-16T11:59:57Z",
+      "argv": [
+        "git",
+        "log",
+        "--oneline",
+        "-5"
+      ],
+      "cwd": "/Users/wake/Workspace/wake/purdex"
+    }
+  ],
+  "Suspect": null,
+  "Profile": "default",
+  "Settings": [
+    {
+      "key": "admission.enabled",
+      "value": "true",
+      "source": "default"
+    },
+    {
+      "key": "admission.max_page_rate",
+      "value": "auto",
+      "source": "default"
+    },
+    {
+      "key": "admission.max_pressure_level",
+      "value": "1",
+      "source": "default"
+    },
+    {
+      "key": "slots.heavy",
+      "value": "2",
+      "source": "default"
+    },
+    {
+      "key": "slots.light",
+      "value": "8",
+      "source": "default"
+    }
+  ],
+  "Admission": {
+    "held": true,
+    "reason": "memory pressure level 2"
+  }
+}
