@@ -283,16 +283,19 @@ func (g *Gate) run(ctx context.Context, o Options, d *Decision) (int, error) {
 	defer stop()
 
 	// Nothing to hold: the gate is off, the command is not heavy, or it runs below a slot that really is held.
-	if !cfg.Enabled || !class.Valid() || g.nested(cfg, env, class) {
+	if !cfg.Enabled || !class.Valid() || g.nested(cfg, env, class) || g.underLate(cfg) {
 		switch {
 		case !cfg.Enabled:
 			d.Outcome = "off"
 		case !class.Valid():
 			d.Outcome = "not-gated"
+			if kind := cfg.watchKind(o.Argv, EnvOf(env, g.IsTTY != nil && g.IsTTY())); kind != "" {
+				return g.runWatched(ctx, cfg, o, env, sigs, d, kind)
+			}
 		default:
 			d.Outcome, d.Nested = "nested", true
 		}
-		return g.start(ctx, cfg, o, o.Argv, env, nil, sigs)
+		return g.start(ctx, cfg, o, o.Argv, env, nil, sigs, nil, d)
 	}
 	if class == ClassHeavy {
 		if msg := g.diskRefusal(cfg, o.Dir); msg != "" {
@@ -323,7 +326,7 @@ func (g *Gate) run(ctx context.Context, o Options, d *Decision) (int, error) {
 	argv, env, added := Capped(argv, env, limits.GoP, limits.VitestWorkers, limits.PnpmWorkspace)
 	if slot == nil { // the directory is denied (a sandbox): run without a slot
 		d.Outcome = "no-slot"
-		return g.start(ctx, cfg, o, argv, env, nil, sigs)
+		return g.start(ctx, cfg, o, argv, env, nil, sigs, nil, d)
 	}
 	defer func() {
 		if left := slot.Release(g.Holders); len(left) > 0 {
@@ -355,7 +358,27 @@ func (g *Gate) run(ctx context.Context, o Options, d *Decision) (int, error) {
 		return ExitRefused, nil
 	}
 	env = withEnv(env, HeldEnv, slot.Label()+":"+token)
-	return g.start(ctx, cfg, o, argv, env, slot, sigs)
+	return g.start(ctx, cfg, o, argv, env, slot, sigs, nil, d)
+}
+
+// runWatched runs a command that takes no slot as this process's child, so that it can be timed and, for a packaging script, put
+// under a slot when it has run long (#2996). A script that already runs below a held slot (the claim in its environment, or a
+// late holder above it) is only written down: its work is counted already.
+func (g *Gate) runWatched(ctx context.Context, cfg Config, o Options, env []string, sigs <-chan os.Signal, d *Decision, kind string) (int, error) {
+	started := g.Now()
+	var lw *lateWatch
+	d.Outcome = "none"
+	if kind == watchPackaging {
+		d.Outcome = "packaging"
+		if cfg.Packaging.LateSlotAfter > 0 && envValue(env, HeldEnv) == "" && !g.underLate(cfg) {
+			lw = &lateWatch{after: cfg.Packaging.LateSlotAfter, class: cfg.Packaging.LateSlotClass}
+		}
+	}
+	code, err := g.start(ctx, cfg, o, o.Argv, env, nil, sigs, lw, d)
+	if kind == watchUnknown && g.Now().Sub(started) < cfg.Packaging.RecordUnknown {
+		d.Outcome = "not-gated" // too short to be worth a line
+	}
+	return code, err
 }
 
 // diskRefusal is the message of a refusal when the disk of the command's directory or of $TMPDIR is below the floor

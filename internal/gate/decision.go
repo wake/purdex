@@ -31,12 +31,17 @@ type Decision struct {
 	Cwd     string    `json:"cwd,omitempty"`
 	Session string    `json:"session,omitempty"` // the Claude Code session the command ran in
 	Nested  bool      `json:"nested,omitempty"`  // it ran below a slot that really is held (outcome nested)
-	Class   Class     `json:"class,omitempty"`
+	// LateSlot says a packaging script was put under a slot after it had run for LateAfterS seconds (#2996). Outcome is "packaging"
+	// for such a script (whether or not it ran long enough to be put under one), and "none" for an unknown `run` script that ran
+	// long enough to be written down.
+	LateSlot   bool    `json:"late_slot,omitempty"`
+	LateAfterS float64 `json:"late_after_s,omitempty"`
+	Class      Class   `json:"class,omitempty"`
 	// ClassSource is how the class was had: classifier (the gate's rules by the command's words), kind (the old lease kind
 	// of `pdx lease run`, for a command the rules do not know); empty when the person named the class.
 	ClassSource string             `json:"class_source,omitempty"`
 	Profile     string             `json:"profile"`
-	Outcome     string             `json:"outcome"` // slot | no-slot | off | nested | refused | interrupted
+	Outcome     string             `json:"outcome"` // slot | no-slot | off | nested | refused | interrupted | orphaned | packaging | none
 	Slot        string             `json:"slot,omitempty"`
 	WaitS       float64            `json:"wait_s"`
 	WaitWhy     []string           `json:"wait_reasons,omitempty"` // queue | memory-pressure | pressure-unreadable

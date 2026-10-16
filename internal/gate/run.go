@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -123,6 +124,93 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 	}
 }
 
+// treeBusy says whether anything below root holds a slot or waits for one: a late slot for the root would count the same work
+// twice (and root would hold one while its own child waits for another, which is what #2985 was).
+func (g *Gate) treeBusy(cfg Config, root int) bool {
+	tab, err := g.Procs()
+	if err != nil {
+		return false
+	}
+	below := descendants(tab, root)
+	if len(below) == 0 {
+		return false
+	}
+	for _, c := range []Class{ClassHeavy, ClassLight} {
+		p := g.pool(cfg, c)
+		for _, h := range p.Held() {
+			if _, ok := below[h.PID]; ok {
+				return true
+			}
+			if _, ok := below[h.PGID]; ok && h.PGID > 1 {
+				return true
+			}
+		}
+		for _, w := range p.Waiters() {
+			if _, ok := below[w.PID]; ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// underLate says whether this process runs below a command that was put under a slot late: such a command has no environment
+// claim to hand down (it started before it had a slot), so the record's pid is the proof. What runs below it is covered by its slot.
+func (g *Gate) underLate(cfg Config) bool {
+	tab, err := g.Procs()
+	if err != nil {
+		return false
+	}
+	up := ancestors(tab, g.PID())
+	if len(up) == 0 {
+		return false
+	}
+	for _, c := range []Class{ClassHeavy, ClassLight} {
+		for _, h := range g.pool(cfg, c).Held() {
+			if !h.Late || h.PGID <= 1 || h.Orphaned {
+				continue
+			}
+			for _, a := range up {
+				if a == h.PGID {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// Watch kinds: what the gate does with a command that takes no slot but that it runs itself instead of handing over.
+const (
+	watchPackaging = "packaging" // a packaging script: written down, and put under a slot when it runs long
+	watchUnknown   = "unknown"   // a script of the project's own that no rule knows: only timed
+)
+
+// watchKind says whether the gate runs this command itself, though it takes no slot. "" for all the rest, which the gate lets
+// through (the shims exec them without making a gate at all).
+func (c Config) watchKind(argv []string, e Env) string {
+	if !c.Enabled {
+		return ""
+	}
+	cls, why := c.Intercept.ClassifyReason(argv, e)
+	if cls.Valid() {
+		return ""
+	}
+	switch {
+	case why == ReasonPackaging:
+		return watchPackaging
+	case why == ReasonUnknown && c.Packaging.RecordUnknown > 0 && len(argv) > 0:
+		switch filepath.Base(argv[0]) {
+		case "pnpm", "npm", "yarn", "bun": // a `run` script of the project, not an `npx` tool
+			return watchUnknown
+		}
+	}
+	return ""
+}
+
+// WatchKind is watchKind for a caller outside the package (the shim path, which has to decide before it makes a gate).
+func (c Config) WatchKind(argv []string, e Env) string { return c.watchKind(argv, e) }
+
 // parentPID is the parent of this process now; 0 when the gate has no way to ask.
 func (g *Gate) parentPID() int {
 	if g.Getppid == nil {
@@ -160,7 +248,17 @@ func signalNumber(s os.Signal) int {
 // exits — except at a terminal, where a group of its own would be stopped by SIGTTIN at the first read, so it stays in
 // the gate's and the tree is followed by parentage instead. Without a slot (passed through, off, unslotted) it just
 // runs; the slot above it, if any, clears it.
-func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []string, slot *Slot, sigs <-chan os.Signal) (int, error) {
+// lateWatch is what start is told about a command that takes no slot at its start but may be put under one later (packaging):
+// after is how long it must have run, class the pool the late slot comes from. A nil lateWatch is a command that is only run.
+type lateWatch struct {
+	after time.Duration
+	class Class
+}
+
+// lateRecheck is how long start waits to look again when a late slot was due and the command's tree held or waited for a slot.
+var lateRecheck = 5 * time.Second
+
+func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []string, slot *Slot, sigs <-chan os.Signal, lw *lateWatch, d *Decision) (int, error) {
 	real := o.Real
 	if real == "" {
 		p, err := exec.LookPath(argv[0])
@@ -178,8 +276,13 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 	// Output that is not a file goes through a pipe the command's leftovers keep open; Wait must not wait for them
 	// (they are cleared right after, below).
 	cmd.WaitDelay = 300 * time.Millisecond
-	tty := slot != nil && g.IsTTY != nil && g.IsTTY()
-	grouped := slot != nil && !tty
+	// Whether the terminal already signals the command (Ctrl-C reaches its group) has nothing to do with the command having a slot.
+	// A command that may be put under a slot later is made ready at its start: it gets its own process group (off a terminal) and
+	// its tree is followed from the first moment, so the clean-up at its end covers what it started before the slot came.
+	tty := g.IsTTY != nil && g.IsTTY()
+	watching := lw != nil && lw.after > 0
+	tracked := slot != nil || watching
+	grouped := tracked && !tty
 	if grouped {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
@@ -204,7 +307,7 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 	// What cannot be caught: a child that is forked, leaves the group and is orphaned within one TreeEvery of the last look.
 	var followed *tree
 	var tick <-chan time.Time
-	if slot != nil {
+	if tracked {
 		followed = newTree(pid, g.Procs)
 		if !followed.known() {
 			g.say("the process table could not be read: what %s leaves running at the end will not be cleared", argv[0])
@@ -212,6 +315,21 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 		t := time.NewTicker(g.TreeEvery)
 		defer t.Stop()
 		tick = t.C
+	}
+	var lateC <-chan time.Time
+	var lateSlot *Slot
+	began := g.Now()
+	if watching {
+		t := time.NewTimer(lw.after)
+		defer t.Stop()
+		lateC = t.C
+		defer func() {
+			if lateSlot != nil {
+				if left := lateSlot.Release(g.Holders); len(left) > 0 {
+					g.say("these processes escaped the clean-up and are still running: %s; the %s slot is released", describeStragglers(left), lateSlot.Class)
+				}
+			}
+		}()
 	}
 	var longRun <-chan time.Time
 	if slot != nil && cfg.Lifetime.AlertAfter > 0 {
@@ -245,9 +363,35 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 			followed.scan()
 		case <-longRun:
 			g.say("%s has held its %s slot for %s (it is not stopped; see `pdx gate status`)", argv[0], slot.Class, cfg.Lifetime.AlertAfter)
+		case <-lateC:
+			lateC = nil
+			if g.treeBusy(cfg, pid) {
+				lateC = time.After(lateRecheck) // it holds or waits for a slot below: not a second one for the same work
+				continue
+			}
+			s, err := g.pool(cfg, lw.class).TakeLate()
+			switch {
+			case err != nil:
+				g.say("late slot: %v (the command goes on without one)", err)
+			case s == nil:
+				g.say("late slot: no room beyond the %s pool (the command goes on without one)", lw.class)
+			default:
+				h := g.holder(o, g.Token())
+				h.Late, h.PGID = true, pid
+				if err := s.SetHolder(h); err != nil {
+					g.say("late slot record: %v (the command goes on without one)", err)
+					s.Release(nil)
+					break
+				}
+				lateSlot = s
+				if d != nil {
+					d.LateSlot, d.LateAfterS = true, g.Now().Sub(began).Seconds()
+				}
+				g.say("%s has run for %s: it now holds a %s slot until it ends (it is not stopped; people behind it queue)", argv[0], lw.after, lw.class)
+			}
 		case err := <-done:
 			code := exitCode(err, cmd)
-			if cfg.Reap.Enabled {
+			if cfg.Reap.Enabled && (slot != nil || lateSlot != nil) {
 				if grouped {
 					g.reap(pid, grace)
 				}
