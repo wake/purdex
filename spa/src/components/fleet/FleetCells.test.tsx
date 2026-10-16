@@ -52,7 +52,7 @@ describe('FleetCells — the row', () => {
     expect(row.className).toContain('flex-nowrap')
     expect(row.className).not.toContain('flex-wrap ')
     expect(row.className).not.toContain('flex-col')
-    expect(within(row).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['air26', 'mlab', 'air19', 'mserv'])
+    expect(within(row).getAllByRole('button').map((b) => b.getAttribute('aria-label')?.split(', ')[0])).toEqual(['air26', 'mlab', 'air19', 'mserv'])
     expect(within(row).getAllByTestId('cell-sep')).toHaveLength(3)
   })
   it('the narrow variant stacks them in a column without separators', () => {

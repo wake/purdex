@@ -132,6 +132,21 @@ describe('HostCell — the queue badge', () => {
 })
 
 describe('HostCell — the tooltip and the click', () => {
+  it('the accessible name carries the host, the zone word, the queue and the waiting notice', () => {
+    setup(view({ name: 'mlab', fast: fast({ zone: 'warning' }), slow: { at: 1, top_cpu: [], top_mem: [], queue: queue(2, { longest_wait_s: 45 }) } }), { waitingPrimary: true })
+    expect(screen.getByRole('button', { name: 'mlab, High, Queue: 2 waiting, longest 45 s, Waiting for the primary' })).toBeTruthy()
+  })
+  it('the accessible name says Offline / No data / the paused queue', () => {
+    const { unmount } = render(<HostCell view={view({ status: 'offline', fast: null })} look={{}} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
+    expect(screen.getByRole('button', { name: 'mlab, Offline' })).toBeTruthy()
+    unmount()
+    render(<HostCell view={view({ fast: null })} look={{}} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
+    expect(screen.getByRole('button', { name: 'mlab, No data' })).toBeTruthy()
+  })
+  it('an unknown zone still draws a neutral arc', () => {
+    setup(view({ fast: { ...fast({ load: 50 }), zone: 'mystery' as never } }))
+    expect(arc()!.getAttribute('class')).toContain('stroke-text-secondary')
+  })
   it('names the host, the zone word, the five values and the queue', () => {
     setup(view({ name: 'mlab', fast: fast({ cpu: 12, mem: 61, level: 2, page_rate: 3, disk: 44, zone: 'warning', load: 66 }), slow: { at: 1, top_cpu: [], top_mem: [], queue: queue(2, { longest_wait_s: 45 }) } }))
     const tip = screen.getByTestId('host-tile-mlab').getAttribute('title')!

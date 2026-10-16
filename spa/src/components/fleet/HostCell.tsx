@@ -22,7 +22,8 @@ const RING = 16
 const RING_R = RING / 2 - 2
 const RING_C = 2 * Math.PI * RING_R
 const OFFLINE_STRIPES = 'repeating-linear-gradient(135deg, color-mix(in srgb, var(--text-muted) 45%, transparent) 0 1px, transparent 1px 4px)'
-const ZONE_STROKE: Record<FleetZone, string> = { normal: 'stroke-text-secondary', warning: 'stroke-status-warning', danger: 'stroke-status-error' }
+const NEUTRAL_STROKE = 'stroke-text-secondary'
+const ZONE_STROKE: Record<FleetZone, string> = { normal: NEUTRAL_STROKE, warning: 'stroke-status-warning', danger: 'stroke-status-error' }
 
 export interface HostCellProps {
   view: FleetHostView
@@ -44,6 +45,22 @@ function isOffline(v: FleetHostView): boolean {
 function queueTone(n: number, longestMs: number, held: boolean): string {
   if (held) return 'bg-status-error text-white'
   return longestMs >= WAIT_LONG_MS || n >= 3 ? 'bg-status-warning text-text-inverse' : 'bg-text-muted text-white'
+}
+
+/** The cell's accessible name: the host, its zone word, the queue summary when one is shown, and the waiting-primary notice. */
+function accessibleName(t: (k: string, p?: Record<string, string | number>) => string, v: FleetHostView, p: { waitingPrimary: boolean; primaryElsewhere: boolean }): string {
+  const parts: string[] = [v.name]
+  if (isOffline(v)) parts.push(t('fleet.zone.offline'))
+  else if (!v.fast) parts.push(t('fleet.no_data'))
+  else parts.push(t(`fleet.zone.${v.fast.zone}`))
+  const q = v.kind === 'daemon' && !isOffline(v) ? v.slow?.queue : undefined
+  if (q && q.waiters.length > 0) {
+    parts.push(t('fleet.queue', { n: q.waiters.length, s: Math.round(q.longest_wait_s) }))
+    if (q.admission_held) parts.push(t('fleet.queue_held'))
+  }
+  if (p.primaryElsewhere) parts.push(t('fleet.primary_elsewhere'))
+  else if (p.waitingPrimary) parts.push(t('fleet.waiting_primary'))
+  return parts.join(', ')
 }
 
 function tooltip(t: (k: string, p?: Record<string, string | number>) => string, v: FleetHostView, p: { waitingPrimary: boolean; primaryElsewhere: boolean }): string {
@@ -87,7 +104,7 @@ export function HostCell({ view, look, variant, isActive, waitingPrimary, primar
       data-testid={`host-tile-${view.id}`}
       data-active={String(isActive)}
       data-variant={variant}
-      aria-label={view.name}
+      aria-label={accessibleName(t, view, { waitingPrimary, primaryElsewhere })}
       title={tooltip(t, view, { waitingPrimary, primaryElsewhere })}
       onClick={onOpen}
       className={`group relative flex items-center h-6 rounded-md cursor-pointer shrink-0 ${narrow ? 'gap-0.5 px-0.5' : 'gap-1 pl-1 pr-1'} ${isActive ? 'bg-surface-active' : 'hover:bg-surface-hover'}`}
@@ -105,7 +122,7 @@ export function HostCell({ view, look, variant, isActive, waitingPrimary, primar
           <circle cx={RING / 2} cy={RING / 2} r={RING_R} fill="none" stroke="var(--border-default)" strokeWidth={2.5} strokeDasharray={geo ? undefined : '1.6 1.9'} />
           {f && geo && geo.sharePct > 0 && (
             <circle
-              className={ZONE_STROKE[f.zone]} cx={RING / 2} cy={RING / 2} r={RING_R} fill="none" strokeWidth={2.5} strokeLinecap="round"
+              className={ZONE_STROKE[f.zone] ?? NEUTRAL_STROKE} cx={RING / 2} cy={RING / 2} r={RING_R} fill="none" strokeWidth={2.5} strokeLinecap="round"
               strokeDasharray={`${((geo.sharePct / 100) * RING_C).toFixed(2)} ${RING_C.toFixed(2)}`} transform={ringTransform(RING, geo.direction)}
             />
           )}
