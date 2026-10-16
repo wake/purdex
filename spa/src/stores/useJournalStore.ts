@@ -272,7 +272,9 @@ export const useJournalStore = create<JournalState>()((set, get) => {
       const apply = (value: boolean): void => set((s) => {
         const h = s.byHost[hostId]
         const cur = h?.units[unitKey]
-        return h && cur ? { byHost: { ...s.byHost, [hostId]: { ...h, units: { ...h.units, [unitKey]: withPin(cur, entry, value) } } } } : {}
+        // The entry as the store holds it NOW (a read may have changed its other fields since the click), not the object clicked.
+        const now = cur?.entries.find((e) => e.id === entryId) ?? cur?.pinned.find((e) => e.id === entryId)
+        return h && cur && now ? { byHost: { ...s.byHost, [hostId]: { ...h, units: { ...h.units, [unitKey]: withPin(cur, now, value) } } } } : {}
       })
       apply(pinned)
       const epoch = get().epoch[hostId] ?? 0

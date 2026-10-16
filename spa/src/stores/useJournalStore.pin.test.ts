@@ -210,6 +210,26 @@ describe('setPin', () => {
     await st().setPin('h1', 's1', 'b', true)
     expect(getJournal).not.toHaveBeenCalled()
   })
+  it('a failed PUT puts back only the pin: the entry is taken from the store, so a text a read brought meanwhile stays (M: the clicked object)', async () => {
+    const read = deferred<unknown>()
+    getJournal.mockReturnValueOnce(read.promise)
+    const rp = st().loadJournal('h1', 's1') // out before the click, so the click survives it
+    const put = deferred<unknown>()
+    setPinned.mockReturnValue(put.promise)
+    const p = st().setPin('h1', 's1', 'b', true)
+    read.resolve(page({
+      entries: [wireEntry('a', { at: T0 }), wireEntry('b', { at: T0 + 10, text: 'edited by the server' }), wireConfirm('c', { at: T0 + 5 })],
+      pinned: [wireConfirm('c', { at: T0 + 5 })],
+    }))
+    await rp
+    expect(shown('b')).toBe(true)
+    put.reject(new Error('boom'))
+    await p
+    const b = unit().entries.find((e) => e.id === 'b')!
+    expect(b.pinned).toBe(false)
+    expect(b.text).toBe('edited by the server')
+    expect(band()).toEqual(['c'])
+  })
   it('a pin on an entry the unit does not hold does nothing', async () => {
     await st().setPin('h1', 's1', 'nope', true)
     expect(setPinned).not.toHaveBeenCalled()
