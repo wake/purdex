@@ -330,3 +330,90 @@ func TestTypeInto_ARecordedSessionIdThatIsNotThePanesIsNotTypedInto(t *testing.T
 	}
 	waitFor(t, "the typed command to run", func() bool { _, err := os.Stat(typed); return err == nil })
 }
+
+// Buffers belong to the whole tmux server: a buffer of the same name that someone else holds is neither overwritten nor pasted
+// nor deleted, and a refused or failed typing leaves no buffer of ours behind.
+func TestTypeLine_LeavesOtherBuffersAloneAndCleansUp(t *testing.T) {
+	p := newTestPane(t)
+	ctx := context.Background()
+	_, pane, _, err := p.EnsureSession(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the shell", func() bool { st, err := p.PaneAtShell(ctx); return err == nil && st.AtShell })
+	p.testRun(t, "set-buffer", "-b", pasteBuffer, "someone else's buffer")
+
+	typed := filepath.Join(t.TempDir(), "typed")
+	if err := p.TypeLine(ctx, "touch '"+typed+"'"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the typed command to run", func() bool { _, err := os.Stat(typed); return err == nil })
+	if got := p.testRun(t, "show-buffer", "-b", pasteBuffer); got != "someone else's buffer" {
+		t.Errorf("the other buffer is now %q", got)
+	}
+
+	// a refused typing (busy) leaves nothing of ours either
+	p.testRun(t, "send-keys", "-t", pane, "sleep 30", "Enter")
+	waitFor(t, "sleep in the foreground", func() bool { s, err := p.PaneAtShell(ctx); return err == nil && s.Command == "sleep" })
+	if err := p.TypeLine(ctx, "echo no"); !errors.Is(err, ErrPaneBusy) {
+		t.Fatalf("busy: %v", err)
+	}
+	for _, name := range strings.Fields(p.testRun(t, "list-buffers", "-F", "#{buffer_name}")) {
+		if name != pasteBuffer {
+			t.Errorf("a buffer of ours is left behind: %q", name)
+		}
+	}
+}
+
+// /exit goes in one conditional command: a pane that is not the recorded one, or is in a mode, gets nothing.
+func TestSendExit_IsRefusedForAnotherPaneOrAMode(t *testing.T) {
+	p := newTestPane(t)
+	ctx := context.Background()
+	sid, pane, _, err := p.EnsureSession(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the shell", func() bool { st, err := p.PaneAtShell(ctx); return err == nil && st.AtShell })
+	got := filepath.Join(t.TempDir(), "got")
+	p.testRun(t, "send-keys", "-t", pane, "cat > '"+got+"'", "Enter")
+	waitFor(t, "cat in the foreground", func() bool { s, err := p.PaneAtShell(ctx); return err == nil && s.Command == "cat" })
+
+	if err := p.sendExitTo(ctx, "$"+fmt.Sprint(len(sid)+900), pane); !errors.Is(err, ErrPaneBusy) {
+		t.Fatalf("not the recorded session: %v, want ErrPaneBusy", err)
+	}
+	p.testRun(t, "copy-mode", "-t", pane)
+	if err := p.SendExit(ctx); !errors.Is(err, ErrPaneBusy) {
+		t.Fatalf("in a mode: %v, want ErrPaneBusy", err)
+	}
+	p.testRun(t, "send-keys", "-t", pane, "-X", "cancel")
+	p.testRun(t, "send-keys", "-t", pane, "C-d")
+	waitFor(t, "cat to end", func() bool { s, err := p.PaneAtShell(ctx); return err == nil && s.AtShell })
+	if b, _ := os.ReadFile(got); len(b) != 0 {
+		t.Errorf("a refused /exit reached the pane: %q", b)
+	}
+}
+
+// When the conditional command itself fails (tmux error, a cancelled context), the buffer the line was loaded into is removed:
+// a stand-in tmux that fails every if-shell proves the cleanup, which the refusal branch cannot (it deletes the buffer itself).
+func TestTypeInto_AFailedConditionalCommandLeavesNoBuffer(t *testing.T) {
+	p := newTestPane(t)
+	ctx := context.Background()
+	sid, pane, _, err := p.EnsureSession(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := p.bin
+	wrapper := filepath.Join(t.TempDir(), "tmux-fails-if-shell")
+	script := "#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = if-shell ] && exit 1; done\nexec " + real + " \"$@\"\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p.bin = wrapper
+	if err := p.typeInto(ctx, "echo no", sid, pane); err == nil {
+		t.Fatal("the failing if-shell must be an error")
+	}
+	p.bin = real
+	if got := strings.TrimSpace(p.testRun(t, "list-buffers", "-F", "#{buffer_name}")); got != "" {
+		t.Errorf("a buffer is left behind after a failed command: %q", got)
+	}
+}

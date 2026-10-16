@@ -2,6 +2,8 @@ package watch
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -26,8 +29,14 @@ import (
 // PaneSession is the reserved name of the watcher's tmux session.
 const PaneSession = "pdx-watch"
 
-// pasteBuffer is the named tmux buffer a line travels in: loaded from stdin, so it never passes through a command parser.
+// pasteBuffer is the prefix of the tmux buffer a line travels in: loaded from stdin, so it never passes through a command
+// parser. Buffers belong to the whole tmux server, so every typing uses a buffer of its own (the prefix and 16 random hex
+// digits): another client's buffer of the same name is neither overwritten nor pasted, and two typings cannot trade lines.
 const pasteBuffer = "pdx-watch-line"
+
+// refusedSentinel is what the refusal branch of a conditional command prints (display-message -p), so the outcome comes back from
+// the very command that made the check, not from a later look at tmux's state.
+const refusedSentinel = "pdx-watch:refused"
 
 // maxTypedLine bounds a line typed into the pane (agent_command ≤ 512 B plus an id and a prompt ≤ 4 KB, quoted).
 const maxTypedLine = 16 << 10
@@ -305,12 +314,22 @@ func checkLine(what, s string) error {
 	return nil
 }
 
-// typeCondition is the tmux format TypeLine's if-shell tests on the target pane: it is still pane paneID of session sessionID
-// named pdx-watch (a restarted server can hand a pane id to another session between our lookup and this command), a shell is in
-// the foreground, and the pane is not in a mode. Both ids were checked against $N / %N patterns when they were read.
+// identityCondition is the part of a conditional command that says the target is still pane paneID of session sessionID named
+// pdx-watch (a restarted tmux server can hand a pane id to another session between our lookup and the command). Both ids were
+// checked against the $N / %N patterns when they were read.
+func identityCondition(sessionID, paneID string) string {
+	return "#{&&:#{==:#{session_id}," + sessionID + "},#{&&:#{==:#{pane_id}," + paneID + "},#{==:#{session_name}," + PaneSession + "}}}"
+}
+
+// typeCondition: the identity, a shell in the foreground, and the pane not in a mode.
 func typeCondition(sessionID, paneID string) string {
-	return "#{&&:#{&&:#{==:#{session_id}," + sessionID + "},#{&&:#{==:#{pane_id}," + paneID + "},#{==:#{session_name}," + PaneSession + "}}}," +
+	return "#{&&:" + identityCondition(sessionID, paneID) + "," +
 		"#{&&:#{m/r:^-?(zsh|bash|sh|fish)$,#{pane_current_command}},#{==:#{pane_in_mode},0}}}"
+}
+
+// exitCondition: the identity and the pane not in a mode (typed into copy mode, "/exit" would be a search).
+func exitCondition(sessionID, paneID string) string {
+	return "#{&&:" + identityCondition(sessionID, paneID) + ",#{==:#{pane_in_mode},0}}"
 }
 
 // TypeLine types line into the pane and presses Enter, only if the pane is at a shell at that moment. The line is loaded into a
@@ -332,47 +351,69 @@ func (p *PaneControl) TypeLine(ctx context.Context, line string) error {
 	return p.typeInto(ctx, line, p.sessionID, p.paneID)
 }
 
-// typeInto is TypeLine's tmux half for the pane the caller names: the line travels in the buffer, the if-shell checks the pane's
-// identity and state and pastes in one command, and a buffer left behind says the condition was false.
+// typeInto is TypeLine's tmux half for the pane the caller names: the line travels in a buffer of its own, and ONE if-shell checks
+// the pane's identity and state and pastes (the refusal branch deletes the buffer and prints refusedSentinel, which is how the
+// outcome comes back). An error leaves no buffer behind.
 func (p *PaneControl) typeInto(ctx context.Context, line, sessionID, pane string) error {
-	if _, err := p.tmux(ctx, line, "load-buffer", "-b", pasteBuffer, "-"); err != nil {
-		return err
-	}
-	typed := fmt.Sprintf("paste-buffer -d -p -b %s -t %s ; send-keys -t %s Enter", pasteBuffer, pane, pane)
-	if _, err := p.tmux(ctx, "", "if-shell", "-F", "-t", pane, typeCondition(sessionID, pane), typed); err != nil {
-		p.dropBuffer(ctx)
-		return err
-	}
-	out, err := p.tmux(ctx, "", "list-buffers", "-F", "#{buffer_name}")
+	buf, err := newBufferName()
 	if err != nil {
 		return err
 	}
-	for _, name := range strings.Split(out, "\n") {
-		if name == pasteBuffer { // still there: paste-buffer -d did not run, the condition was false
-			p.dropBuffer(ctx)
-			return ErrPaneBusy
-		}
+	if _, err := p.tmux(ctx, line, "load-buffer", "-b", buf, "-"); err != nil {
+		p.dropBuffer(buf)
+		return err
+	}
+	typed := fmt.Sprintf("paste-buffer -d -p -b %s -t %s ; send-keys -t %s Enter", buf, pane, pane)
+	refused := fmt.Sprintf("delete-buffer -b %s ; display-message -p %s", buf, refusedSentinel)
+	out, err := p.tmux(ctx, "", "if-shell", "-F", "-t", pane, typeCondition(sessionID, pane), typed, refused)
+	if err != nil {
+		p.dropBuffer(buf) // the context may be the reason: the cleanup has its own
+		return err
+	}
+	if strings.Contains(out, refusedSentinel) {
+		return ErrPaneBusy
 	}
 	return nil
 }
 
-// dropBuffer removes the line buffer, best effort.
-func (p *PaneControl) dropBuffer(ctx context.Context) {
-	_, _ = p.tmux(ctx, "", "delete-buffer", "-b", pasteBuffer)
+// newBufferName is pasteBuffer plus 16 random hex digits.
+func newBufferName() (string, error) {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return pasteBuffer + "-" + hex.EncodeToString(b[:]), nil
 }
 
-// SendExit types /exit and Enter into the pane: the agent's own input, so the shell rule does not apply (fixed text; if the agent
-// ended in between, the shell answers "command not found", which is harmless). The caller reconciles first and checks that the
-// frame it means is still the one running; this checks only that the pane is still pdx-watch's.
+// dropBuffer removes a line buffer, best effort, under a context of its own: the caller's may be the one that was cancelled.
+func (p *PaneControl) dropBuffer(name string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, _ = p.tmux(ctx, "", "delete-buffer", "-b", name)
+}
+
+// SendExit types /exit and Enter into the pane: the agent's own input, so the shell rule does not apply. The caller reconciles
+// first and checks that the frame it means is still the one running (tmux cannot see frames); this command checks, in tmux, that
+// the pane is still pdx-watch's recorded one and not in a mode, and sends both keys in that one command. If the agent ended in
+// between, the shell answers "command not found", which is harmless; ErrPaneBusy is a pane that is no longer the recorded one
+// or is in a mode.
 func (p *PaneControl) SendExit(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if _, err := p.readLocked(ctx); err != nil {
 		return err
 	}
-	if _, err := p.tmux(ctx, "", "send-keys", "-t", p.paneID, "-l", "/exit"); err != nil {
+	return p.sendExitTo(ctx, p.sessionID, p.paneID)
+}
+
+func (p *PaneControl) sendExitTo(ctx context.Context, sessionID, pane string) error {
+	sent := fmt.Sprintf("send-keys -t %s -l /exit ; send-keys -t %s Enter", pane, pane)
+	out, err := p.tmux(ctx, "", "if-shell", "-F", "-t", pane, exitCondition(sessionID, pane), sent, "display-message -p "+refusedSentinel)
+	if err != nil {
 		return err
 	}
-	_, err := p.tmux(ctx, "", "send-keys", "-t", p.paneID, "Enter")
-	return err
+	if strings.Contains(out, refusedSentinel) {
+		return ErrPaneBusy
+	}
+	return nil
 }
