@@ -48,7 +48,7 @@ F-1b2 merges, then its last task wires the real one), F-2a2 and F-2b (after F-2a
 
 Every PR: TDD, one commit per task, a mutation table in the PR body (each named mutation made, the test seen red,
 reverted). Daemon: `go test` of the touched packages, `-race` on `internal/module/fleet`, `gofmt -l`, `go vet` of those
-packages; never `go test ./...`. SPA: `vitest related --run` on the changed files, `tsc -b --force`, `eslint` on the
+packages; never `go test ./...`. SPA: `vitest run` on the test files of the change (not `vitest related`, heavy since #3024), `tsc -b --force`, `eslint` on the
 changed files; never the full vitest or the full lint.
 
 ## 3. F-1b1 — host config rows
@@ -191,3 +191,40 @@ changed files; never the full vitest or the full lint.
 - Tests: box colours and the white icon; offline hatch + dashed ring; ring length = composite, colour = zone (M: colour by
   score); badge only on daemon hosts with waiters and not offline, its three colours (M: badge at 0 waiters); four cells
   in one row at 240 px; the narrow column; click targets; the two tooltip states.
+
+## 10. Rev 3.2 additions (user, 10-16): F-2b2, F-2c, F-2d
+
+Spec §6 (`POST /api/fleet/probe-check`), §8.1 (restyle) and §8.2 (probe hosts' own entries). Quick flow; each PR one
+subagent full review; F-2c also goes past 1f (`internal/module/fleet`).
+
+- **F-2b2** — the cells' restyle (spec §8.1): `HostBadge` with the user's badge settings in place of the coloured box,
+  `ContextRing` itself (nothing in the middle, through an optional prop that leaves every existing caller's output the same)
+  in place of the cell's own ring, zone → ok / warn / danger tone, the `TeamMemberBeads` layout (`gap-0.5`, no separators,
+  wrap). Screenshots from a harness of the real components, dark and light, approved by the user before merge. Tests:
+  the badge and ring components with the host's colours and the zone tone (M: normal back to grey), offline without an
+  arc, the row wraps (M: no `flex-wrap`).
+- **F-2c** — `internal/module/fleet`: `POST /api/fleet/probe-check {ssh_alias}` → `ValidAlias`, then
+  `leaf.Runner{}.Run(ctx, alias)` (one shot, its own timeout, `execstat` tag `fleet.ssh-run` already), mapped to `{ssh,
+  measure, error, reading}` as spec §6; a per-alias single flight (a second request while one runs waits for the same
+  answer); admin only (device token 403, not in the peer policy); never stderr in the answer. Tests: each `Code` → its
+  `{ssh, measure}` (M: `remote_exit` as ssh failed), the reading on ok, an unknown alias → `alias_gone` without running
+  ssh, device token 403, single flight (two requests, one run), the stderr absent. Commands: `go test -race
+  ./internal/module/fleet/`, `go test ./internal/fleet/`, `go test ./internal/execstat/`, `go vet`, `gofmt -l`.
+- **F-2d** — SPA, the Hosts page (spec §8.2):
+  - `HostSidebar` gains the 「觀察主機」 group after the paired hosts: badge, name, status dot (`useFleetStore` snapshot),
+    `+` on the heading. Selecting one selects `probe:<id>` (the page's selection key; no sub-pages). The selected probe
+    entry's row collapses like the others (the collapse fix of 10-16).
+  - `components/hosts/ProbeHostPage.tsx`: the header; 樣式與連線 inline (the fields of `ProbeHostDialog` moved into a
+    form component both use, the draft kept in `useFleetDraftStore` so a tab switch keeps it); 儲存 through the existing
+    `config-store` write to both daemons (409 / 400 as today); 刪除 with a confirmation.
+  - `ProbeCheck` (`lib/fleet/probe-check.ts` + a component): calls each fleet daemon's `POST /api/fleet/probe-check` with
+    that daemon's alias, on open, after an alias change is saved, and on 「重新檢查」; one line per daemon host with the two
+    marks and the reason words of spec §8.2; an offline daemon host 「{host} 離線，無法檢查」; a 404 (a daemon before F-2c)
+    「這台 daemon 還不支援檢查」.
+  - The overview's `ProbeHostsSection` becomes the short list (rows open the entry) with 「新增觀察主機」.
+  - The watcher area's W5c1 reuses the page's form and `ProbeCheck` for a probe host's 設定.
+  - Tests: the sidebar group and selection; the form round trip writes both daemons with their own alias (M: one alias for
+    both); the check lines for ok / auth / unreachable / remote_exit / offline / 404 (M: read `unknown` as ✓); the draft
+    survives a tab switch (real `TabContent`); the overview list opens the entry.
+- Order: F-2b2 now (priority); F-2c and F-2d in parallel after it (F-2d mocks the route until F-2c lands; its check lines
+  show the 404 text against a daemon without it).
