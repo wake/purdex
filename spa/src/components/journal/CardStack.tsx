@@ -134,7 +134,7 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
           fill
           actions={
             <>
-              <HeaderToggle testId="journal-toggle-roadmap" pressed={memo.roadmapOpen} label={t('journal.card.roadmap')} onClick={() => patch({ roadmapOpen: !memo.roadmapOpen })}><MapTrifold size={13} /></HeaderToggle>
+              <HeaderToggle testId="journal-toggle-roadmap" pressed={memo.roadmapOpen} label={t('journal.card.roadmap')} onClick={() => patch(detail ? { detailId: null, roadmapOpen: !memo.roadmapOpen } : { roadmapOpen: !memo.roadmapOpen })}><MapTrifold size={13} /></HeaderToggle>
               <HeaderToggle testId="journal-toggle-tasks" pressed={memo.tasksOpen} label={t('journal.card.tasks')} onClick={() => patch({ tasksOpen: !memo.tasksOpen })}><ListChecks size={13} /></HeaderToggle>
             </>
           }
