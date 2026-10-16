@@ -68,6 +68,11 @@ type Holder struct {
 // pool is over its size by as many as are held, for as long as they are. Their numbers run from Size+1.
 const overSlots = 8
 
+// maxSlotNumber is the highest slot number there can be: the largest pool size the config allows, and the late slots beyond it.
+// The pool size is read again for every command, so a slot taken under a bigger size (or a late one numbered above the size
+// of that time) must still be found after the size has been lowered: every scan runs to here, not to the size of now.
+const maxSlotNumber = 64 + overSlots
+
 // Slot is a slot held by this process.
 type Slot struct {
 	Class Class
@@ -417,7 +422,7 @@ func (p *Pool) TryTake(t *Ticket) (slot *Slot, ahead int, err error) {
 // overHeld is how many slots beyond the pool's size are held now.
 func (p *Pool) overHeld() int {
 	n := 0
-	for k := p.Size + 1; k <= p.Size+overSlots; k++ {
+	for k := p.Size + 1; k <= maxSlotNumber; k++ {
 		f, err := os.OpenFile(p.slotPath(k), os.O_RDWR, 0)
 		if err != nil {
 			continue
@@ -447,7 +452,10 @@ func (p *Pool) TakeLate() (*Slot, error) {
 		return nil, dirError(err)
 	}
 	defer syscall.Flock(int(mu.Fd()), syscall.LOCK_UN) //nolint:errcheck
-	for k := 1; k <= p.Size+overSlots; k++ {
+	if p.overHeld() >= overSlots {
+		return nil, nil // as many late holders as there is room for
+	}
+	for k := 1; k <= maxSlotNumber; k++ {
 		f, err := os.OpenFile(p.slotPath(k), os.O_CREATE|os.O_RDWR, 0o644)
 		if err != nil {
 			return nil, dirError(err)
@@ -480,7 +488,7 @@ func closeAll(fs []*os.File) {
 // ignored), and the size it was asked with.
 func (p *Pool) Held() []Holder {
 	var out []Holder
-	for k := 1; k <= p.Size+overSlots; k++ {
+	for k := 1; k <= maxSlotNumber; k++ {
 		f, err := os.OpenFile(p.slotPath(k), os.O_RDWR, 0)
 		if err != nil {
 			continue
@@ -570,7 +578,7 @@ func (p *Pool) Record(k int) (h Holder, held bool, ok bool) {
 // free, and the record says something is off (a gate that dropped its lock without exiting).
 func (p *Pool) Suspect() []Holder {
 	var out []Holder
-	for k := 1; k <= p.Size+overSlots; k++ {
+	for k := 1; k <= maxSlotNumber; k++ {
 		h, held, ok := p.Record(k)
 		if ok && !held && h.PID > 0 && pidAlive(h.PID) {
 			h.Class, h.Slot, h.Token = p.Class, k, ""
