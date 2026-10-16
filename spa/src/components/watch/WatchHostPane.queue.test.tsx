@@ -44,6 +44,13 @@ describe('WatchHostPane — 重指令排隊', () => {
     expect(screen.queryByText(t('watch.queue.title'))).toBeNull()
   })
 
+  it('a probe host never shows one, even if a frame carried a queue', () => {
+    load([host('d-a'), host('p1', { kind: 'probe', alias: 'air19', slow: { at: 1, top_cpu: [], top_mem: [], queue: q } })])
+    renderPane('p1')
+    expect(screen.queryByText(t('watch.queue.title'))).toBeNull()
+    expect(screen.queryByTestId('q-holder')).toBeNull()
+  })
+
   it('a daemon host that sends no queue (an older daemon) has none either', () => {
     load([host('d-a', { slow: { at: 1, top_cpu: [], top_mem: [] } })])
     renderPane('d-a')
