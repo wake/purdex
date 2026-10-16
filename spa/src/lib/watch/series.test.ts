@@ -34,6 +34,7 @@ describe('collectedMinutes / summarize', () => {
   it('collected minutes come from the first point', () => {
     expect(collectedMinutes([{ t: 1_000_000 - 150_000, avg: 1, max: 1 }], 1_000_000)).toBe(2.5)
     expect(collectedMinutes([], 1_000_000)).toBe(0)
+    expect(collectedMinutes([{ t: 1_000_000 - 240_000, avg: 1, max: 1 }, { t: 1_000_000 - 30_000, avg: 1, max: 1 }], 1_000_000)).toBe(4) // from the FIRST point, not the last
   })
   it('the average is of the averages and the peak is the largest max', () => {
     expect(summarize([{ t: 1, avg: 10, max: 30 }, { t: 2, avg: 20, max: 90 }])).toEqual({ avg: 15, peak: 90 })
