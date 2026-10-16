@@ -1,7 +1,7 @@
 // spa/src/components/journal/JournalFilters.test.tsx — the filter chips of the journal card (J-2c, spec Q-C). The chosen filter lives
 // in the unit's view memo (Tab-hosted rule), so the test reads it from there, not from the DOM.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { JournalFilters } from './JournalFilters'
 import { clearViewMemos, patchViewMemo, readViewMemo } from '../../lib/journal/view-memory'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -22,10 +22,10 @@ describe('JournalFilters', () => {
     render(<JournalFilters host={H} unitKey={K} openCount={0} />)
     click('exec')
     expect(readViewMemo(H, K).filter).toBe('exec')
-    expect(screen.getByTestId('journal-filter-exec').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('journal-filter-exec').getAttribute('aria-pressed')).toBe('true')
     click('exec')
     expect(readViewMemo(H, K).filter).toBe('all')
-    expect(screen.getByTestId('journal-filter-all').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('journal-filter-all').getAttribute('aria-pressed')).toBe('true')
   })
   it('switching straight from one filter to another does not pass through all', () => {
     render(<JournalFilters host={H} unitKey={K} openCount={0} />)
@@ -36,7 +36,15 @@ describe('JournalFilters', () => {
   it('shows the filter the memo holds (a remount keeps it)', () => {
     patchViewMemo(H, K, { filter: 'confirm' })
     render(<JournalFilters host={H} unitKey={K} openCount={0} />)
-    expect(screen.getByTestId('journal-filter-confirm').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('journal-filter-confirm').getAttribute('aria-pressed')).toBe('true')
+  })
+  it('is a labelled group of toggle buttons, not a tablist (M: tab roles)', () => {
+    render(<JournalFilters host={H} unitKey={K} openCount={0} />)
+    const group = screen.getByRole('group', { name: 'Filter the journal' })
+    expect(within(group).getAllByRole('button')).toHaveLength(5)
+    expect(screen.queryByRole('tablist')).toBeNull()
+    expect(screen.queryAllByRole('tab')).toHaveLength(0)
+    expect(screen.getByRole('button', { name: 'All' }).getAttribute('aria-pressed')).toBe('true')
   })
   it('the 待確認 chip carries the open item count, nothing at 0', () => {
     const { rerender } = render(<JournalFilters host={H} unitKey={K} openCount={4} />)

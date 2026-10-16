@@ -355,6 +355,7 @@
   "journal.card.unreachable": "日誌在 {{host}}，這台 App 沒有連到",
   "journal.card.empty": "日誌還沒有內容",
   "journal.pin.failed": "釘選沒有成功，已恢復原狀",
+  "journal.filter.label": "篩選日誌",
   "journal.filter.all": "全部",
   "journal.filter.exec": "執行",
   "journal.filter.task": "任務",

@@ -10,16 +10,15 @@ export function JournalFilters({ host, unitKey, openCount }: Props) {
   const t = useI18nStore((s) => s.t)
   const { filter } = useViewMemo(host, unitKey)
   return (
-    <div className="flex flex-wrap gap-1 px-3 pb-2" role="tablist">
+    <div className="flex flex-wrap gap-1 px-3 pb-2" role="group" aria-label={t('journal.filter.label')}>
       {FILTER_IDS.map((id) => {
         const on = filter === id
         return (
           <button
             key={id}
             type="button"
-            role="tab"
             data-testid={`journal-filter-${id}`}
-            aria-selected={on}
+            aria-pressed={on}
             onClick={() => patchUnitMemo(host, unitKey, { filter: nextFilter(filter, id) })}
             className={`px-2 py-0.5 rounded-full border text-[11px] cursor-pointer ${on ? 'border-accent text-text-primary bg-accent-muted' : 'border-border-default text-text-secondary hover:text-text-primary hover:bg-surface-hover'}`}
           >
