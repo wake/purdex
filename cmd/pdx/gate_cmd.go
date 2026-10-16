@@ -258,6 +258,11 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	printPool("重", cfg.Slots.Heavy, st.Heavy, st.WaitHeavy, st.QueueHeavy)
 	printPool("輕", cfg.Slots.Light, st.Light, st.WaitLight, st.QueueLight)
+	if st.Admission.Held {
+		fmt.Fprintf(stdout, "放行：被主機狀況擋住（%s）\n", st.Admission.Reason)
+	} else {
+		fmt.Fprintln(stdout, "放行：正常")
+	}
 	for _, h := range st.Suspect {
 		fmt.Fprintf(stdout, "注意：%s-%d 的紀錄說 pid %d 還在，但鎖是空的（以鎖為準，視為空閒）\n", h.Class, h.Slot, h.PID)
 	}

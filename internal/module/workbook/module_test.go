@@ -23,7 +23,7 @@ func TestModule_NameAndDependencies(t *testing.T) {
 	for _, d := range m.Dependencies() {
 		got[d] = true
 	}
-	for _, want := range []string{"agent", "team", "conversation", "hostconfig"} {
+	for _, want := range []string{"agent", "team", "conversation", "hostconfig", "peers"} {
 		if !got[want] {
 			t.Errorf("missing dependency %q in %v", want, m.Dependencies())
 		}

@@ -84,3 +84,61 @@ func TestJournalConfig_CloneIsDeep(t *testing.T) {
 		t.Fatalf("original changed to %q", cfg.JournalPersonName())
 	}
 }
+
+// The journal is on unless config.toml says `enabled = false`: a missing section, a missing key and an empty section all
+// mean on. Mutation gate: default off / ignore the value -> red.
+func TestJournalEnabled(t *testing.T) {
+	for _, c := range []struct {
+		name, toml string
+		want       bool
+	}{
+		{"absent section", "port = 9000\n", true},
+		{"empty section", "[journal]\n", true},
+		{"other key only", "[journal]\nperson_name = \"Wake\"\n", true},
+		{"explicitly on", "[journal]\nenabled = true\n", true},
+		{"explicitly off", "[journal]\nenabled = false\n", false},
+	} {
+		if got := loadToml(t, c.toml).JournalEnabled(); got != c.want {
+			t.Errorf("%s: JournalEnabled() = %v, want %v", c.name, got, c.want)
+		}
+	}
+	var zero config.Config
+	if !zero.JournalEnabled() {
+		t.Error("a zero Config must have the journal on")
+	}
+}
+
+// Saving any other setting rewrites the whole file (UpdateChanged -> WriteFile): `enabled = false` must survive it, or the
+// journal would switch itself back on. Mutation gate: a tag that omits a false value -> red.
+func TestJournalEnabled_FalseSurvivesASaveOfAnotherSetting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	writeCfg(t, path, "[journal]\nenabled = false\nperson_name = \"Wake\"\n")
+	before, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := before.Clone()
+	after.Port = before.Port + 1
+	if _, err := config.UpdateChanged(path, before, after); err != nil {
+		t.Fatal(err)
+	}
+	got, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.JournalEnabled() {
+		t.Fatal("saving another setting switched the journal back on")
+	}
+	if got.JournalPersonName() != "Wake" {
+		t.Fatalf("person_name = %q after the save", got.JournalPersonName())
+	}
+}
+
+func TestJournalEnabled_CloneIsDeep(t *testing.T) {
+	cfg := loadToml(t, "[journal]\nenabled = false\n")
+	cp := cfg.Clone()
+	*cp.Journal.Enabled = true
+	if cfg.JournalEnabled() {
+		t.Fatal("Clone shares the enabled flag")
+	}
+}

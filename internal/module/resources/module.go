@@ -20,6 +20,7 @@ import (
 
 	iagent "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/fleet"
 	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/hostmem"
 	"github.com/wake/purdex/internal/modevents"
@@ -215,6 +216,8 @@ type Module struct {
 	useAt       map[string]time.Time
 	measureNote string
 	lastProcs   atomic.Pointer[[]resources.Proc]
+	// newGate makes the gate the fleet summary reads (a test seam: nil is gate.New).
+	newGate func(gate.Config) *gate.Gate
 
 	// runCtx ends when Stop is called; it is made in New so that a Stop
 	// before Start still keeps a later Start from running.
@@ -285,6 +288,7 @@ func (m *Module) Dependencies() []string { return []string{"peers", "hostconfig"
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
 	c.Registry.Register(resources.HostReaderKey, resources.HostReader(m))
+	c.Registry.Register(fleet.LocalSourceKey, fleet.LocalSource(newLocalSource(m)))
 	if m.sampler == nil {
 		m.sampler = resources.NewSampler()
 		m.enableDiskGuard() // production wiring (a module with an injected sampler is a test's: its guard stays off)

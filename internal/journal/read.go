@@ -69,6 +69,31 @@ type Skipped struct{ Name, Reason string }
 // a check cannot take more than the limits. A month that is refused, over a limit or unreadable is skipped and reported,
 // never a reason to hide the other months. Only a folder that cannot be listed is an error.
 func ReadUnit(dir string) ([]Entry, []Skipped, error) {
+	kept, skipped, err := keptMonths(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	var all []Entry
+	seen := map[string]bool{}
+	for i := len(kept) - 1; i >= 0; i-- { // oldest first, so a duplicate id keeps the older file's entry
+		for _, e := range parseLines(kept[i].name, splitLines(kept[i].text)) {
+			if !seen[e.ID] {
+				seen[e.ID] = true
+				all = append(all, e)
+			}
+		}
+	}
+	slices.SortStableFunc(all, less)
+	return all, skipped, nil
+}
+
+// takenMonth is a month file ReadUnit keeps: its name and its text.
+type takenMonth struct{ name, text string }
+
+// keptMonths picks the month files of dir that make the unit and reads them: newest first, each through the guard of
+// readMonth, the newest taking the unit's byte budget first. What it leaves out is reported. ReadUnit and SetPinnedIn both
+// use it, so the file that changes is always one the reader shows. A folder that is not there is no files.
+func keptMonths(dir string) (kept []takenMonth, skipped []Skipped, err error) {
 	names, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -83,12 +108,6 @@ func ReadUnit(dir string) ([]Entry, []Skipped, error) {
 		}
 	}
 	slices.Sort(months)
-	type taken struct {
-		name string
-		text string
-	}
-	var skipped []Skipped
-	var kept []taken // newest first
 	remaining := maxUnitBytes
 	for i := len(months) - 1; i >= 0; i-- { // the newest months take the budget first
 		text, reason := readMonth(filepath.Join(dir, months[i]), min(maxMonthBytes, remaining), maxMonthBytes)
@@ -97,20 +116,9 @@ func ReadUnit(dir string) ([]Entry, []Skipped, error) {
 			continue
 		}
 		remaining -= int64(len(text))
-		kept = append(kept, taken{months[i], text})
+		kept = append(kept, takenMonth{months[i], text})
 	}
-	var all []Entry
-	seen := map[string]bool{}
-	for i := len(kept) - 1; i >= 0; i-- { // oldest first, so a duplicate id keeps the older file's entry
-		for _, e := range parseLines(kept[i].name, splitLines(kept[i].text)) {
-			if !seen[e.ID] {
-				seen[e.ID] = true
-				all = append(all, e)
-			}
-		}
-	}
-	slices.SortStableFunc(all, less)
-	return all, skipped, nil
+	return kept, skipped, nil
 }
 
 // readMonth reads one month file through one descriptor: at most limit bytes. A reason, instead of text, says why the file

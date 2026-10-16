@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/wake/purdex/internal/execstat"
 	"log"
 	"net/http"
 	"os"
@@ -220,6 +221,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"schema_invalid"}`, http.StatusBadRequest)
 		return
 	}
+	execstat.Event("hook." + m.hookEventLabel(req.AgentType, req.PurdexName)) // the denominator of the hook path's cost (probe dedupe plan)
 
 	// The identity version is allocated HERE — before verification, which is
 	// the first thing on this path that waits. Verification reads the sender's
@@ -784,9 +786,14 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// IdentityRecorded: a subscriber re-checks LiveBySessionID(S), which only
 	// sees S once the frame row holds it. If the identity write failed the
 	// event would be skipped there and never replayed, so do not publish it.
+	// A /clear's predecessor is recorded whether or not the identity write landed: it is a fact of the hook, not of the frame row.
+	prevSID := ""
+	if lifecycle == agentpkg.LifecycleSessionStart && frameMeta.Provenance != nil {
+		prevSID = m.notePredecessor(req, *frameMeta.Provenance, frameMeta.PrevSessionID, broadcastTs/int64(time.Millisecond))
+	}
 	if lifecycle == agentpkg.LifecycleSessionStart && frameMeta.Provenance != nil &&
 		frameMeta.Provenance.SessionID != "" && frameMeta.IdentityRecorded {
-		m.sessionStarts.publish(sessionStartEventFrom(req, *frameMeta.Provenance))
+		m.sessionStarts.publish(sessionStartEventFrom(req, *frameMeta.Provenance, prevSID))
 	}
 	// A root SessionStart is the launch panel's launch having worked: release the claim it was holding on this session.
 	if lifecycle == agentpkg.LifecycleSessionStart && frameMeta.Provenance != nil && req.TmuxSession != "" {
@@ -1562,4 +1569,19 @@ func (m *Module) sessionNameOfPane(ctx context.Context, paneID string) string {
 		return ""
 	}
 	return p.SessionName
+}
+
+// hookEventLabel is the event's catalog name for the counters, or "unknown": the name came over the wire, and a registry
+// keyed by whatever a client sends would grow without bound.
+func (m *Module) hookEventLabel(agentType, purdexName string) string {
+	if m == nil || m.registry == nil {
+		return "unknown"
+	}
+	provider, _ := m.registry.Get(agentType)
+	if installer, ok := provider.(agentpkg.HookInstaller); ok {
+		if _, found := agentpkg.LookupByPurdexName(installer.Events(), purdexName); found {
+			return purdexName
+		}
+	}
+	return "unknown"
 }
