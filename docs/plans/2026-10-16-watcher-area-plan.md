@@ -138,7 +138,10 @@ Every PR follows these rules:
 - **Method**: TDD, one commit per task, and a mutation table in the PR body. For each named mutation, the PR shows
   the mutation made, the test seen red, and the revert.
 - **SPA checks**:
-  - `vitest run <the test files of the change>`, by name (never `vitest related`: it counts as heavy since #3024 and, on a widely imported file, pulls in half the suite);
+  - while developing and for mutations: `vitest run <the test files of the change>`, by name;
+  - once before the PR is ready (the merge tier, CLAUDE.md test tiers): `vitest related --run <every SPA file the PR
+    changes>` — a heavy command since #3024, so it waits in the gate's heavy queue; it is never dropped for load, and a
+    failure is checked against origin/main before it is called pre-existing;
   - `tsc -b --force` (the worktree's `node_modules` is a symlink, so a plain `-b` can be green from another worktree's
     cache);
   - `eslint` on the changed files.
@@ -392,7 +395,7 @@ Every PR follows these rules:
 
   M: drop the presence check → "old status" goes red.
 - **Commands**: `go test -race ./internal/fleet/`, `go test ./internal/module/fleet/`, `go vet`, `gofmt -l`; SPA
-  `vitest run src/lib/fleet/parse.test.ts` (and the other fleet tests touched).
+  `vitest run src/lib/fleet/parse.test.ts` while developing, then `vitest related --run` on the two files before merge.
 
 ## 7. W5b1 — queue 當下 UI
 

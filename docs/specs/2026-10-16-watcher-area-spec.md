@@ -139,8 +139,9 @@ switch (狀態 only) and the 狀態｜設定 `SegmentControl`.
   - Five gauges (netdata easy-pie: 56 px, 4 px stroke, track `--border-default`, round cap, from 12 o'clock counter-
     clockwise, `ringTransform('ccw')`), value in the middle: CPU 實際使用率 %, 記憶體使用率 %, 記憶體壓力 (正常／警告／
     嚴重 at 33／66／100 % of the arc), 換頁率 頁／秒 (full at 800), 磁碟空間 %. Tones: CPU and memory by `usageTone`
-    (70／90), pressure by level, paging > 50 warn and > 800 error, disk ≥ 85 warn and ≥ 95 error. Offline: `—`,
-    no arc.
+    (70／90), pressure by level, paging > 50 warn and > 800 error, disk ≥ 85 warn and ≥ 95 error; **normal is green,
+    high yellow, overloaded red** (user, 10-16: the colour carries meaning on every state, as on the sidebar host ring;
+    the light theme uses the `-text` strength of each status colour). Offline: `—`, no arc.
   - One chart row per reading (label 8 rem · chart · 「平均 … · 峰值 …」 9.5 rem): the line is the average, a faint band
     the peak; only the stretches above the dashed warning line take the warning or error colour. A shared time axis
     under the last row (現在 … −n 分／小時) and 「累積中：已收集 n 分鐘」 while the App's history is shorter than the

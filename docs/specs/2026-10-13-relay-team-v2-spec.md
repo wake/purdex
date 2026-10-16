@@ -196,6 +196,37 @@ An agent's own `pdx lead request` and `pdx adopt` open a card as today; the pers
 - The session row shows 「已寫好接力檔」 while a fresh half handoff exists: `GET /api/relay/fresh` and the host event `relay.fresh` for every session (solo included), and the roster for team rows.
 - iOS: a `member_relay` card where one still exists (G-1). Badge per U-8.3 (88 has taken it).
 
+### 4.9 Changing a member's model (user 10-16)
+
+User request (via 88, 10-16): 「有辦法作一個指令，讓 lead 可以改變 member 使用的 model 嗎？」→ 「排進去」.
+
+- **Command**: `pdx member model <ref> <model> [--effort <e>]`, by the lead, for its own members only (`not_your_member`
+  otherwise). A spawned member on this host. An adopted member, or one on another host, is refused
+  (`model_change_unsupported`): the daemon did not launch it and does not know its command.
+- **What happens**: the member is restarted **in the same conversation**: the daemon waits for it to be between turns
+  (never interrupts a running turn; while it waits, `pdx team` shows the change as pending), ends Claude Code there
+  (`/exit`, then by pid and start time after a grace, as the watcher's rest does), and runs the member's own launch line
+  again in the same pane — the host's `member_command`, the Purdex plugin dir, the new model and effort — with
+  `--resume <its session id>`. Session id, ref, address, title, task and team stay the same; the conversation is kept
+  whole (the new model reads it again on its first turn).
+- **Never through `/model`**: Claude Code's `/model` also writes this host's global default
+  (`~/.claude/settings.json`'s `model`), which every later session on the host would start with.
+- **High context**: the command does not relay. A lead that wants both runs `pdx relay <ref>` first, then the model
+  change on the new session.
+- **It is a relay op** (mode `model_change`): one open op per session, so a relay, an idle intercept (§4.3a/§4.4) and a
+  model change never overlap; the member's own mod finds the turn boundary and holds prompts meanwhile, as for a
+  lead's relay. `--effort` left out keeps the member's current effort. A member whose mod is too old to take the
+  change is refused (`mod_too_old`). Release, kill or the team's end cancel a change that has not started the restart,
+  and wait for (are refused during) one that has.
+- **Done** when the member's SessionStart (verified, the same session id) arrives with the new model: `pdx team`'s
+  MODEL / EFFORT show it. **Fails** without a half state: refused before anything is done when the member is
+  mid-relay (`relay_open`); after the exit, a pane that is not at a shell is reported and nothing is typed; a restart
+  that does not register within 3 min is rolled back — the same launch with the **old** model and effort — and if
+  that does not register either, the member is reported down with the exact command to start it by hand. The lead is
+  told in every case.
+- **Unattended mode**: allowed (it is the lead's own team; no quota is spent).
+- **App** (B line, later): a "change model" item on a member row, on the same API.
+
 ## 5. Phases (A line unless noted; one PR each ≤ 800 lines / 20 files)
 
 | phase | content |

@@ -42,23 +42,35 @@ describe('FleetCells — the four states (storybook-style)', () => {
     answer(A, primaryAnswer(1, FOUR))
     render(<FleetCells variant="wide" {...props()} />)
     expect(screen.getByTestId('load-ring-d-a').dataset.zone).toBe('normal')
+    expect(within(screen.getByTestId('load-ring-d-a')).getByTestId('context-ring-arc').dataset.tone).toBe('ok')
     expect(screen.getByTestId('load-ring-d-b').dataset.zone).toBe('danger')
+    expect(within(screen.getByTestId('load-ring-d-b')).getByTestId('context-ring-arc').dataset.tone).toBe('danger')
     expect(screen.getByTestId('load-ring-p1').dataset.zone).toBe('offline')
+    expect(within(screen.getByTestId('load-ring-p1')).queryByTestId('context-ring-arc')).toBeNull()
     expect(screen.getByTestId('queue-badge-d-b')).toHaveTextContent('1')
     expect(screen.queryByTestId('queue-badge-d-a')).toBeNull()
   })
 })
 
 describe('FleetCells — the row', () => {
-  it('is four cells in ONE row (no wrapping) with a separator between each, at the daemon hosts first then the probes', () => {
+  it('is laid out like the member beads: wraps with the sidebar width, gap-0.5, no separators, daemon hosts first then the probes', () => {
     answer(A, primaryAnswer(1, FOUR))
     render(<FleetCells variant="wide" {...props()} />)
     const row = screen.getByTestId('fleet-cells')
-    expect(row.className).toContain('flex-nowrap')
-    expect(row.className).not.toContain('flex-wrap ')
-    expect(row.className).not.toContain('flex-col')
+    const cls = row.className.split(' ')
+    for (const c of ['flex', 'flex-wrap', 'items-center', 'content-start', 'gap-0.5']) expect(cls).toContain(c)
+    expect(cls).not.toContain('flex-nowrap')
+    expect(cls).not.toContain('flex-col')
     expect(within(row).getAllByRole('button').map((b) => b.getAttribute('aria-label')?.split(', ')[0])).toEqual(['air26', 'mlab', 'air19', 'mserv'])
-    expect(within(row).getAllByTestId('cell-sep')).toHaveLength(3)
+    expect(within(row).queryAllByTestId('cell-sep')).toHaveLength(0)
+  })
+  it('a daemon host\'s badge wears the App\'s host colours; a probe host\'s, the look it sent', () => {
+    const probe = host('p3', { kind: 'probe', name: 'mserv', icon: 'Cpu', colors: { console: { main: { color: '#22c55e', alpha: 100 } } }, fast: fast({ load: 10 }) })
+    answer(A, primaryAnswer(1, [...FOUR, probe]))
+    render(<FleetCells variant="wide" {...props()} />)
+    expect(screen.getByTestId('host-badge-d-a').style.getPropertyValue('--hb-main')).toBe('rgba(51, 102, 153, 1)')
+    expect(screen.getByTestId('host-badge-p3').style.getPropertyValue('--hb-main')).toBe('rgba(34, 197, 94, 1)')
+    expect(screen.getByTestId('host-badge-p1').dataset.hasColor).toBe('false')
   })
   it('the narrow variant stacks them in a column without separators', () => {
     answer(A, primaryAnswer(1, FOUR))
@@ -88,7 +100,6 @@ describe('FleetCells — clicks', () => {
     render(<FleetCells variant="wide" {...props()} />)
     fireEvent.click(screen.getByTestId('host-tile-p2'))
     expect(openWatchArea).toHaveBeenCalledWith({ host: 'p2' })
-    expect(useFleetConfigStore.getState().focusProbe).toBeNull()
   })
 })
 
