@@ -44,12 +44,19 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
     [selectedHostId]: true,
   }))
 
+  // A host that becomes selected (fallback / external change) opens again, even if it was collapsed by hand.
+  const [lastSelectedHostId, setLastSelectedHostId] = useState(selectedHostId)
+  if (lastSelectedHostId !== selectedHostId) {
+    setLastSelectedHostId(selectedHostId)
+    setExpanded((prev) => ({ ...prev, [selectedHostId]: true }))
+  }
+
   // Read sub-pages from the contribution registry (order guaranteed by registry sort).
   // Do NOT memoize — ctx may change scope-narrow inputs React cannot track in deps.
   const subPages = listContributions('host')
 
   const toggleExpand = (hostId: string) => {
-    setExpanded((prev) => ({ ...prev, [hostId]: !prev[hostId] }))
+    setExpanded((prev) => ({ ...prev, [hostId]: !(prev[hostId] ?? hostId === selectedHostId) }))
   }
 
   return (
@@ -61,7 +68,7 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
         {hostOrder.map((hostId) => {
           const host = hosts[hostId]
           if (!host) return null
-          const isExpanded = expanded[hostId] || hostId === selectedHostId
+          const isExpanded = expanded[hostId] ?? hostId === selectedHostId
           const hidden = !isShown(hostId)
           const selected = selectedHostId === hostId
           // ctx carries runtime[hostId] so disabled(ctx) predicates can react
