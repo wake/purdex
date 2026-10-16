@@ -7,7 +7,7 @@ describe('the roadmap status styles', () => {
     expect(ROADMAP_STATUS_STYLE['未開始'].text).toBe('text-text-muted')
     expect(ROADMAP_STATUS_STYLE['進行中'].text).toBe('text-accent')
     expect(ROADMAP_STATUS_STYLE['審查中'].text).toBe('text-text-secondary')
-    expect(ROADMAP_STATUS_STYLE['完成'].text).toBe('text-status-success')
+    expect(ROADMAP_STATUS_STYLE['完成'].text).toBe('text-status-success-text')
     expect(ROADMAP_STATUS_STYLE['暫停'].text).toBe('text-status-warning-text')
   })
   it('covers every status the wire can carry, each with its own label id (the colour is never the only cue)', () => {

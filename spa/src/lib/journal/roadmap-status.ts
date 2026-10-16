@@ -15,7 +15,7 @@ export const ROADMAP_STATUS_STYLE: Record<RoadmapStatus, RoadmapStatusStyle> = {
   未開始: { id: 'todo', text: 'text-text-muted', dot: 'bg-text-muted' },
   進行中: { id: 'doing', text: 'text-accent', dot: 'bg-accent' },
   審查中: { id: 'review', text: 'text-text-secondary', dot: 'bg-text-secondary' },
-  完成: { id: 'done', text: 'text-status-success', dot: 'bg-status-success' },
+  完成: { id: 'done', text: 'text-status-success-text', dot: 'bg-status-success-text' },
   暫停: { id: 'paused', text: 'text-status-warning-text', dot: 'bg-status-warning' },
 }
 

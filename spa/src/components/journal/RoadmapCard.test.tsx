@@ -119,9 +119,9 @@ describe('the roadmap card: tables', () => {
     expect(status('J-3').className).toContain('text-text-muted')
     expect(status('J-2').className).toContain('text-accent')
     expect(status('J-4').className).toContain('text-text-secondary')
-    expect(status('J-1').className).toContain('text-status-success')
+    expect(status('J-1').className).toContain('text-status-success-text')
     expect(status('J-5').className).toContain('text-status-warning-text')
-    expect(status('J-5').className).not.toContain('text-status-success')
+    expect(status('J-5').className).not.toContain('text-status-success-text')
   })
   it('the words come in zh-TW too', () => {
     useI18nStore.getState().setLocale('zh-TW')

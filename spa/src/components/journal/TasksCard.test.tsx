@@ -129,7 +129,7 @@ describe('the tasks card: rows', () => {
     expect(within(taskRow('1')).getByTestId('journal-task-state').textContent).toBe('Open')
     expect(within(taskRow('2')).getByTestId('journal-task-state').textContent).toBe('Done')
     expect(within(taskRow('3')).getByTestId('journal-task-state').textContent).toBe('Dropped')
-    expect(within(taskRow('2')).getByTestId('journal-task-state').className).toContain('text-status-success')
+    expect(within(taskRow('2')).getByTestId('journal-task-state').className).toContain('text-status-success-text')
     expect(screen.getByTestId('journal-tasks-card').innerHTML).not.toMatch(/#[0-9a-f]{3,8}\b(?![\w-])|rgb\(/i)
   })
   it('highlights the person\'s name in an owner', () => {

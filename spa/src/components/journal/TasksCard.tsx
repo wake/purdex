@@ -13,7 +13,7 @@ import type { JournalTask, TaskState } from '../../lib/journal/types'
 
 const STATE_STYLE: Record<TaskState, { dot: string; text: string }> = {
   open: { dot: 'bg-accent', text: 'text-accent' },
-  done: { dot: 'bg-status-success', text: 'text-status-success' },
+  done: { dot: 'bg-status-success-text', text: 'text-status-success-text' },
   dropped: { dot: 'bg-text-muted', text: 'text-text-muted' },
 }
 
