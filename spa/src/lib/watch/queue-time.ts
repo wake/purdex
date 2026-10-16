@@ -1,5 +1,10 @@
 // spa/src/lib/watch/queue-time.ts — the host tab's queue times, counted locally from a command's `since` (ms; null when the daemon
-// sent none or a zero/pre-2000 stamp).
+// sent none or a zero/pre-2000 stamp), and the keys that pair a card with its table row on hover.
+import type { FleetHolder, FleetWaiter } from '../fleet/types'
+
+export type QueueClass = 'heavy' | 'light'
+export const holderKey = (h: FleetHolder) => `h${h.class}${h.slot}-${h.pid}`
+export const waiterKey = (w: FleetWaiter) => `w${w.class}${w.place}`
 
 /** A wait turns warning past 2 minutes. */
 export const WAIT_LONG_S = 120

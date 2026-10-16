@@ -2,11 +2,8 @@
 // prototype's Queue.tsx): the name and 「名額 used / total」, one card per slot, the gate line, then the waiting cards.
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { FleetHolder, FleetWaiter } from '../../lib/fleet/types'
-import { mss, WAIT_LONG_S } from '../../lib/watch/queue-time'
+import { mss, WAIT_LONG_S, holderKey, waiterKey, type QueueClass } from '../../lib/watch/queue-time'
 
-export type QueueClass = 'heavy' | 'light'
-export const holderKey = (h: FleetHolder) => `h${h.class}${h.slot}-${h.pid}`
-export const waiterKey = (w: FleetWaiter) => `w${w.class}${w.place}`
 
 type Gate = 'open' | 'wait' | 'held' | 'paused'
 

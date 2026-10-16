@@ -3,8 +3,8 @@
 import { useState } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { FleetQueue } from '../../lib/fleet/types'
-import { mss, secondsSince, WAIT_LONG_S } from '../../lib/watch/queue-time'
-import { QueueLane, holderKey, waiterKey, type QueueClass } from './QueueLane'
+import { mss, secondsSince, WAIT_LONG_S, holderKey, waiterKey, type QueueClass } from '../../lib/watch/queue-time'
+import { QueueLane } from './QueueLane'
 
 const TH = 'font-normal py-1 pr-3 border-b border-border-subtle text-left whitespace-nowrap'
 const TD = 'py-1 pr-3 border-b border-border-subtle/50'
