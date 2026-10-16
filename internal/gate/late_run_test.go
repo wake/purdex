@@ -347,3 +347,50 @@ func TestPackaging_LeftoversAreClearedAfterALateSlot(t *testing.T) {
 	eventually(t, "the leftover to be cleared", func() bool { return syscall.Kill(childPID, 0) != nil })
 	assert.Empty(t, lightHeld(g))
 }
+
+// A packaging script that already runs below a held slot (the claim is in its environment) is only written down: its work is
+// counted already, so it never takes a late slot of its own.
+func TestPackaging_UnderAClaimItTakesNoLateSlot(t *testing.T) {
+	g := packagingGate(t, 150*time.Millisecond)
+	dir := t.TempDir()
+	fakeTool(t, dir, "")
+	done := runAsync(g, context.Background(), Options{
+		Argv: []string{"pnpm", "run", "build"}, Real: filepath.Join(dir, "fakepnpm"),
+		Env: cleanEnv(HeldEnv + "=heavy:1"),
+	})
+	eventually(t, "start", func() bool { return exists(dir + "/started") })
+	time.Sleep(500 * time.Millisecond)
+	assert.Empty(t, lightHeld(g), "it runs inside someone's slot already")
+	require.NoError(t, os.WriteFile(dir+"/go", nil, 0o644))
+	assert.Equal(t, 0, (<-done).code)
+	rec := lastDecision(t, g)
+	assert.Equal(t, "packaging", rec["outcome"])
+	assert.NotContains(t, rec, "late_slot")
+}
+
+// Only a late holder's pid covers the processes below it; an ordinary holder whose process group is an ancestor does not.
+func TestUnderLate_OnlyLateHoldersCoverTheirTree(t *testing.T) {
+	g, _ := testGate(t)
+	g.Holders = nil
+	s, err := g.pool(g.Config(), ClassLight).TakeLate()
+	require.NoError(t, err)
+	defer s.Release(nil)
+	require.NoError(t, s.SetHolder(Holder{PID: os.Getpid(), PGID: 1001, Late: false, Argv: []string{"x"}}))
+	ig := *g
+	ig.PID = func() int { return 2002 }
+	ig.Procs = descendantProcs(2002, 1001)
+	assert.False(t, ig.underLate(ig.Config()), "not a late holder")
+	require.NoError(t, s.SetHolder(Holder{PID: os.Getpid(), PGID: 1001, Late: true, Argv: []string{"x"}}))
+	assert.True(t, ig.underLate(ig.Config()))
+}
+
+// The gate runs a `run` script of the project itself, not an `npx` tool, to time it.
+func TestWatchKind_RunScriptsAreWatchedNpxToolsAreNot(t *testing.T) {
+	g := packagingGate(t, time.Second)
+	cfg := g.Config()
+	e := EnvOf(nil, false)
+	assert.Equal(t, watchUnknown, cfg.watchKind([]string{"pnpm", "run", "e2e"}, e))
+	assert.Equal(t, watchPackaging, cfg.watchKind([]string{"pnpm", "run", "build"}, e))
+	assert.Empty(t, cfg.watchKind([]string{"npx", "e2e"}, e))
+	assert.Empty(t, cfg.watchKind([]string{"npx", "run", "e2e"}, e))
+}
