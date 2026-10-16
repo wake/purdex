@@ -14,6 +14,10 @@ import (
 // in config.toml only: it is not a field of PUT /api/config, because it decides which repositories the daemon pushes to.
 // Every key may be left out.
 type JournalConfig struct {
+	// Enabled turns the whole journal on or off. Absent (nil) = on. Off: no journal job is queued (no second model call
+	// after a turn), the drainer, the task mirror and the git loop are not started, the journal API answers 503 and the
+	// daemon does not announce journal.v1. Read at start: a change applies after a restart.
+	Enabled *bool `toml:"enabled,omitempty" json:"enabled,omitempty"`
 	// PushProjects lists the projects whose journal branch (purdex/journal) is pushed, as `host/owner/repo`
 	// (`github.com/wake/purdex`), matched against the normalised remote.origin.url. Empty or absent (the default): every
 	// journal stays local. Read again at every push round, so an edit applies without a restart.
@@ -27,6 +31,11 @@ type JournalConfig struct {
 // DefaultJournalPersonName is the person's name in the journal when [journal] person_name is not set. It equals
 // journal.DefaultPersonName (a test pins the two together).
 const DefaultJournalPersonName = "使用者"
+
+// JournalEnabled says whether the journal runs: on unless [journal] enabled is false.
+func (c Config) JournalEnabled() bool {
+	return c.Journal == nil || c.Journal.Enabled == nil || *c.Journal.Enabled
+}
 
 // JournalPersonName is the configured person name, trimmed, or the default when it is unset or blank.
 func (c Config) JournalPersonName() string {

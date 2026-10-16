@@ -5,8 +5,8 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"github.com/wake/purdex/internal/execstat"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -30,7 +30,7 @@ func GetTmuxInstance() string {
 func GetTmuxInstanceContext(parent context.Context) string {
 	ctx, cancel := context.WithTimeout(parent, tmuxExecTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "tmux", "display-message", "-p", "#{pid}:#{start_time}")
+	cmd := execstat.CommandContext(ctx, "config.tmux-instance", "tmux", "display-message", "-p", "#{pid}:#{start_time}")
 	// A killed probe must not keep Output() waiting on a grandchild that
 	// inherited the pipe.
 	cmd.WaitDelay = 500 * time.Millisecond

@@ -31,6 +31,14 @@ const HeldEnv = "PDX_GATE_HELD"
 // broken (sysexits EX_TEMPFAIL).
 const ExitRefused = 75
 
+// ExitOrphaned is the exit code of a command that waited for a slot and whose caller went away meanwhile: nobody is left to
+// read its output, so it was not run (129, as for a hangup).
+const ExitOrphaned = 129
+
+// KeepOrphanEnv set to anything but "" and "0" lets a command that waits go on waiting when its caller is gone (a detached job
+// on purpose: `nohup pdx gate … &` that outlives the terminal).
+const KeepOrphanEnv = "PDX_GATE_KEEP_ORPHAN"
+
 // Options is one run.
 type Options struct {
 	Argv  []string // the command as the person typed it; argv[0] is its name
@@ -81,6 +89,8 @@ type Gate struct {
 	// Holders names the other processes that hold a slot's lock file when the slot is released.
 	Holders func(path string) []Straggler
 	PID     func() int
+	// Getppid is the parent of this process now (os.Getppid); a seam so a test can reparent it.
+	Getppid func() int
 	Token   func() string
 }
 
@@ -99,7 +109,7 @@ func New(cfg Config) *Gate {
 		st: &state{cfg: cfg}, Now: time.Now, Stderr: os.Stderr, TreeEvery: 500 * time.Millisecond,
 		Poll:    func() time.Duration { return time.Second + time.Duration(mrand.Int63n(int64(2*time.Second))) },
 		Session: sessionFromEnv(os.Getenv),
-		Procs:   procTable, IsTTY: stdinIsTTY, DiskFree: freeBytes, Facts: ReadHostFacts, PID: os.Getpid, Token: newToken, Holders: lsofHolders,
+		Procs:   procTable, IsTTY: stdinIsTTY, DiskFree: freeBytes, Facts: ReadHostFacts, PID: os.Getpid, Getppid: os.Getppid, Token: newToken, Holders: lsofHolders,
 	}
 	g.Pressure = NewHostReader(cfg.Dir)
 	g.Tools = hostTools()
@@ -411,6 +421,47 @@ type Status struct {
 	// Profile is the active profile; Settings is every setting in force, with where it came from.
 	Profile  string
 	Settings []Setting
+	// Admission says whether a heavy start would be held back by the host right now (memory pressure, page rate, disk), by the
+	// rule that decides it for a command.
+	Admission AdmissionState
+}
+
+// AdmissionState is whether the gate is holding new heavy work because of the host, and why.
+type AdmissionState struct {
+	Held   bool   `json:"held"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// admission reads the host without sampling it (the level from the kernel, the rate from the cache other gates keep; the free
+// space of the working directory and of $TMPDIR) and applies the rule that admits a command. A host that cannot be read is not
+// held: status shows what is known. The disk it looks at is the status process's own: the person's directory for `pdx gate
+// status`, the daemon's working directory and $TMPDIR when the daemon asks (the fleet's summary), which for the fleet is the
+// main disk, the one that matters; a command's own directory is only known to the command (its start checks that one).
+func (g *Gate) admission(cfg Config) AdmissionState {
+	if !cfg.Admission.Enabled {
+		return AdmissionState{}
+	}
+	if pk, ok := g.Pressure.(PressurePeeker); ok {
+		if p, have := pk.Peek(); have {
+			if held, why := cfg.Admission.Hold(p); held {
+				return AdmissionState{Held: true, Reason: why}
+			}
+		}
+	}
+	if g.DiskFree != nil {
+		cwd, _ := os.Getwd()
+		for _, path := range []string{cwd, os.TempDir()} {
+			if path == "" {
+				continue
+			}
+			if free, err := g.DiskFree(path); err == nil {
+				if short, why := cfg.Admission.DiskShort(free); short {
+					return AdmissionState{Held: true, Reason: why}
+				}
+			}
+		}
+	}
+	return AdmissionState{}
 }
 
 // HoldersMode says for which held slots Status asks who has the lock file open (an lsof, which looks at every process of
@@ -434,7 +485,7 @@ func (g *Gate) StatusWith(mode HoldersMode) Status {
 	g.fillLocked(h, heavy, l, light, mode)
 	return Status{
 		Heavy: heavy, Light: light, WaitHeavy: h.Waiting(), WaitLight: l.Waiting(), QueueHeavy: h.Waiters(), QueueLight: l.Waiters(),
-		Suspect: append(h.Suspect(), l.Suspect()...), Profile: cfg.Profile, Settings: cfg.Effective(),
+		Suspect: append(h.Suspect(), l.Suspect()...), Profile: cfg.Profile, Settings: cfg.Effective(), Admission: g.admission(cfg),
 	}
 }
 

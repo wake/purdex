@@ -1,0 +1,5 @@
+{
+  "role": "standby",
+  "term": 4,
+  "primary": "air26"
+}

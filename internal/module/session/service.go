@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/wake/purdex/internal/execstat"
 	"log"
 	"net/http"
 	"time"
@@ -69,10 +70,12 @@ func (m *SessionModule) ListSessionsContext(ctx context.Context) ([]SessionInfo,
 }
 
 func (m *SessionModule) listSessions(ctx context.Context) ([]SessionInfo, error) {
+	execstat.Event("session-list-build") // a build costs 2 + N tmux reads today (probe dedupe plan D2)
 	sessions, err := m.tmux.ListSessions(ctx)
 	if err != nil {
 		return nil, err
 	}
+	execstat.SetGauge("sessions", int64(len(sessions)))
 
 	// Sampled once per list so every entry in one payload reports the same
 	// generation, and sampled here rather than on the watcher tick so a

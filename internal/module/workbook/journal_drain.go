@@ -67,6 +67,8 @@ type Drainer struct {
 
 	markDone func(id int64) error // test seam: nil = Store.MarkOutboxDone
 
+	notify func(JournalChange) // told, per resource, what a done row changed (SetNotify); nil: nobody
+
 	selfName   func(sessionID string) string // the session's virtual name (SetNames); nil: entries carry no actor
 	personName func() string                 // the person's name (SetNames); nil: the default
 }
@@ -162,7 +164,8 @@ func (d *Drainer) pass() (wrote, tried int, err error) {
 			continue
 		}
 		tried++
-		if err := d.writeRow(it); err != nil {
+		res, err := d.writeRow(it)
+		if err != nil {
 			d.failed(it, err)
 			continue
 		}
@@ -178,6 +181,7 @@ func (d *Drainer) pass() (wrote, tried int, err error) {
 		delete(d.retry, it.ID)
 		d.mu.Unlock()
 		n++
+		d.announce(res) // after the mark: a row that will be written again announces when it is done
 	}
 	return n, tried, nil
 }
@@ -237,53 +241,65 @@ func (d *Drainer) projectLock(id string) *sync.Mutex {
 
 // home is where one unit's files are.
 type home struct {
+	wt                                 string // the worktree the paths below are in
 	journalDir, tasksFile, roadmapFile string
 	solo                               bool
 	convKey                            string
 }
 
-func (d *Drainer) writeRow(it OutboxItem) error {
+// unitHome is where a registered unit's files are: its month files and tasks file are named by its label and key, the
+// roadmap is the project's. The drainer writes them and the journal API reads them through this one function, so they
+// cannot disagree about where a unit lives.
+func unitHome(reg UnitRow) home {
+	slug := unitSlug(reg.Label, reg.Key)
+	return home{
+		wt:          reg.WtPath,
+		journalDir:  filepath.Join(reg.WtPath, ".purdex", "journal", slug),
+		tasksFile:   filepath.Join(reg.WtPath, ".purdex", "tasks", slug+".md"),
+		roadmapFile: filepath.Join(reg.WtPath, ".purdex", "roadmap.md"),
+	}
+}
+
+func (d *Drainer) writeRow(it OutboxItem) (rowResult, error) {
 	if it.Kind == OutboxTask { // belongs to no workbook entry
 		return d.writeTaskRow(it)
 	}
 	ent, err := d.st.Entry(it.EntryID)
 	if err != nil {
-		return err
+		return rowResult{}, err
 	}
 	if ent.State == StatePending {
-		return nil // not reached: ReadyOutbox filters; kept so a direct caller can never write early
+		return rowResult{}, nil // not reached: ReadyOutbox filters; kept so a direct caller can never write early
 	}
 	reg, err := d.unit(it, ent)
 	if err != nil {
-		return err
+		return rowResult{}, err
 	}
 	lock := d.projectLock(reg.ProjectID)
 	lock.Lock()
 	defer lock.Unlock()
-	slug := unitSlug(reg.Label, reg.Key)
-	h := home{
-		journalDir:  filepath.Join(reg.WtPath, ".purdex", "journal", slug),
-		tasksFile:   filepath.Join(reg.WtPath, ".purdex", "tasks", slug+".md"),
-		roadmapFile: filepath.Join(reg.WtPath, ".purdex", "roadmap.md"),
-		solo:        reg.Kind == UnitSolo, convKey: ent.ConvKey,
+	h := unitHome(reg)
+	if err := h.verify(); err != nil {
+		return rowResult{}, err // the row stays undone, retried and logged
 	}
+	h.solo, h.convKey = reg.Kind == UnitSolo, ent.ConvKey
 	switch it.Kind {
 	case OutboxTurn:
 		var p turnPayload
 		if err := json.Unmarshal([]byte(it.Payload), &p); err != nil {
-			return fmt.Errorf("decode outbox row %d: %w", it.ID, err) // stays undone: a binary that can decode it may come back
+			return rowResult{}, fmt.Errorf("decode outbox row %d: %w", it.ID, err) // stays undone: a binary that can decode it may come back
 		}
-		return d.writeTurn(h, ent, p)
+		return rowResult{unit: reg, what: turnWhat(h.solo, ent, p)}, d.writeTurn(h, ent, p)
 	case OutboxJournal:
 		var p journalPayload
 		if err := json.Unmarshal([]byte(it.Payload), &p); err != nil {
-			return fmt.Errorf("decode outbox row %d: %w", it.ID, err) // stays undone: a binary that can decode it may come back
+			return rowResult{}, fmt.Errorf("decode outbox row %d: %w", it.ID, err) // stays undone: a binary that can decode it may come back
 		}
-		return d.writeJournal(h, ent, p)
+		return rowResult{unit: reg, what: journalWhat(p)}, d.writeJournal(h, ent, p)
 	}
 	// A kind this binary does not know (a newer daemon wrote it, then this one was rolled back) stays undone, retried
 	// and logged, so the upgraded binary can write it.
-	return fmt.Errorf("unknown outbox kind %q", it.Kind)
+	return rowResult{}, fmt.Errorf("unknown outbox kind %q", it.Kind)
 }
 
 // unit finds the unit's registration, making it (and asking the resolver for its project) on the first write.

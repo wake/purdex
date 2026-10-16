@@ -142,6 +142,15 @@ func ParseRoadmap(file string) ([]Feature, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseRoadmapLines(lines)
+}
+
+// ParseRoadmapText is ParseRoadmap for text that was read already.
+func ParseRoadmapText(text string) ([]Feature, error) {
+	return parseRoadmapLines(strings.Split(text, "\n"))
+}
+
+func parseRoadmapLines(lines []string) ([]Feature, error) {
 	fs, err := scanRoadmap(lines)
 	if err != nil {
 		return nil, err

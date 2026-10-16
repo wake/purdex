@@ -339,10 +339,10 @@ func classifyTsc(args []string) Class {
 		}
 	}
 	switch {
-	case build || project:
-		return ClassHeavy
-	case files:
-		return ClassLight
+	case build:
+		return ClassHeavy // -b builds the project references: every project of the graph
+	case project, files:
+		return ClassLight // -p names one project's tsconfig (its own files only), or the files are named
 	}
 	return ClassHeavy // a bare tsc compiles the whole project
 }

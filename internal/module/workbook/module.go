@@ -12,6 +12,7 @@ import (
 	"log"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/wake/purdex/internal/convturns"
 	"github.com/wake/purdex/internal/core"
@@ -33,21 +34,34 @@ type Module struct {
 	prompts PromptFiles // where Start wrote the prompts
 	lines   *PushLines  // the push hold's waiter; registered under workbooklines.Key
 
+	journalRun *journalRun // the drainer, task mirror and git loop; nil while the journal is off or not wired (guarded by mu)
+	journalOff bool        // [journal] enabled = false: the journal API answers 503 (guarded by mu)
+
+	gitInterval time.Duration // test seam: the git loop's commit period (zero: its default, ten minutes)
+
 	engine       *Engine // the subscriber and the job queue; nil until Start
 	unsubTurnEnd func()
 	stopReaper   context.CancelFunc
 
 	// broadcast sends a host event (type, JSON-string value); the core's event hub, replaced in tests.
 	broadcast func(eventType, value string)
+
+	// The journal API's seams, replaced in tests: the project's name and its origin's link (nil: the repository's own).
+	projectNameFn func(ctx context.Context, u UnitRow) string
+	remoteURLFn   func(ctx context.Context, dir string) string
+
+	skipMu     sync.Mutex
+	skipLogged map[string]bool // a month file left out of a unit is logged once (logSkipped)
 }
 
 func New() *Module { return &Module{} }
 
 func (m *Module) Name() string { return "workbook" }
 
-// Dependencies: agent (turn ends), team (lineage root and seat), conversation (last turns), hostconfig (settings).
+// Dependencies: agent (turn ends), team (lineage root and seat), conversation (last turns), hostconfig (settings), peers
+// (a live session's working directory and address, for the journal).
 func (m *Module) Dependencies() []string {
-	return []string{"agent", "team", "conversation", "hostconfig"}
+	return []string{"agent", "team", "conversation", "hostconfig", "peers"}
 }
 
 // Init opens workbook.db. A failure leaves the module off (recorded, logged, nil returned).
@@ -78,11 +92,19 @@ func (m *Module) Init(c *core.Core) error {
 	return nil
 }
 
-// Status is what the daemon reports for the module (the capability follows `ready`).
+// Status is what the daemon reports for the module (the capability follows `ready`; journal.v1 follows `journal`, true
+// while the journal's loops are running).
 func (m *Module) Status() map[string]any {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return map[string]any{"ready": m.ready, "init_error": m.initErr}
+	return map[string]any{"ready": m.ready, "init_error": m.initErr, "journal": m.ready && m.journalRun != nil}
+}
+
+// journalDisabled says the journal is switched off in the config.
+func (m *Module) journalDisabled() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.journalOff
 }
 
 // live is the open store, nil when the module is off.
@@ -171,6 +193,7 @@ func (m *Module) startEngine(st *Store) {
 		defer m.core.CfgMu.RUnlock()
 		return m.core.Cfg.JournalPersonName()
 	}
+	jr := m.prepareJournal(st, &d) // sets d.Journal, so it comes before NewEngine
 	eng := NewEngine(d)
 	eng.SetWaiter(m.lines)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -184,8 +207,11 @@ func (m *Module) startEngine(st *Store) {
 		}
 	}
 	m.mu.Lock()
-	m.engine, m.unsubTurnEnd, m.stopReaper = eng, unsub, cancel
+	m.engine, m.unsubTurnEnd, m.stopReaper, m.journalRun = eng, unsub, cancel, jr
 	m.mu.Unlock()
+	if jr != nil {
+		jr.start()
+	}
 }
 
 // Jobs is what the mod socket's workbook routes call; nil while the module is off.
@@ -214,8 +240,8 @@ func (m *Module) disable(err error) {
 // Stop ends the engine and the reaper, so nothing writes after it returns; the store itself is released by Close.
 func (m *Module) Stop(context.Context) error {
 	m.mu.Lock()
-	st, eng, unsub, stopReaper := m.store, m.engine, m.unsubTurnEnd, m.stopReaper
-	m.store, m.ready, m.engine, m.unsubTurnEnd, m.stopReaper = nil, false, nil, nil, nil
+	st, eng, unsub, stopReaper, jr := m.store, m.engine, m.unsubTurnEnd, m.stopReaper, m.journalRun
+	m.store, m.ready, m.engine, m.unsubTurnEnd, m.stopReaper, m.journalRun = nil, false, nil, nil, nil, nil
 	if st != nil {
 		m.closing = st // released by Close, after the HTTP server drained (#1033)
 	}
@@ -229,6 +255,9 @@ func (m *Module) Stop(context.Context) error {
 	}
 	if eng != nil {
 		eng.Stop()
+	}
+	if jr != nil {
+		jr.stop() // the loops write to the store and the files: they end before Close releases the store
 	}
 	return nil
 }

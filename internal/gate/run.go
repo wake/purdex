@@ -35,12 +35,23 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		return broken(err)
 	}
 	defer ticket.Drop()
+	// Whoever called this command is the one who waits for its output. When that process is gone (this one is handed to init
+	// or to another reaper) nobody will read what it prints, and a slot taken then would run a whole suite for no one, so the
+	// ticket is given up. A command that was started with no parent to lose (its parent was init already), or that was told
+	// to outlive its caller, keeps waiting.
+	parent := g.parentPID()
+	keepOrphan := !orphanCheckOn(o.Env)
 	var good *Pressure
 	fails := 0
 	warned := false
 	lastPlace := time.Time{}
 	waitStart := time.Time{} // set at the first look that did not get a slot
 	for {
+		if !keepOrphan && parent > 1 && g.parentPID() != parent {
+			g.say("the process that ran this command is gone: it is not queued any more, and was not run")
+			d.Outcome = "orphaned"
+			return nil, ExitOrphaned, true
+		}
 		cfg = g.refresh()
 		cfg.Dir = dir
 		ok := true
@@ -110,6 +121,23 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		case <-time.After(g.Poll()):
 		}
 	}
+}
+
+// parentPID is the parent of this process now; 0 when the gate has no way to ask.
+func (g *Gate) parentPID() int {
+	if g.Getppid == nil {
+		return 0
+	}
+	return g.Getppid()
+}
+
+// orphanCheckOn says whether a waiting command is dropped when its caller is gone: yes unless KeepOrphanEnv says no.
+func orphanCheckOn(env []string) bool {
+	if env == nil {
+		env = os.Environ()
+	}
+	v := envValue(env, KeepOrphanEnv)
+	return v == "" || v == "0"
 }
 
 // lastPressure is the last good reading, or the zero Pressure when there has not been one.

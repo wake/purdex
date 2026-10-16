@@ -4,9 +4,9 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"github.com/wake/purdex/internal/execstat"
 	"net/http"
 	"os"
-	"os/exec"
 	"runtime"
 	"strings"
 	"time"
@@ -90,6 +90,16 @@ func (c *Core) moduleReady(name string) bool {
 	return ready
 }
 
+// moduleFlag is a true boolean in the module's Status under key.
+func (c *Core) moduleFlag(name, key string) bool {
+	st, ok := c.ModuleStatus(name)
+	if !ok {
+		return false
+	}
+	on, _ := st[key].(bool)
+	return on
+}
+
 // capabilityList is the static list plus the conditional capabilities: push.v1 while the push module is ready, and
 // devices.v1 while the devices module is. Every other name above is unconditional; keep it that way unless a feature really
 // can be switched off at boot.
@@ -107,6 +117,12 @@ func (c *Core) capabilityList() []string {
 	if c.moduleReady("workbook") {
 		out = append(out, "workbook.v1") // GET /api/workbook/conversations/{provider}/{session_id}, GET /api/workbook/entries, workbook.entry / workbook.status events
 		out = append(out, "workbook.v2") // entries' kind / usage / todo_changes, the conversation's todos and refresh_available, GET …/todos, POST …/refresh, workbook.todos / workbook.refresh_available events
+		if c.moduleFlag("workbook", "journal") {
+			out = append(out, "journal.v1") // GET /api/journal, /api/journal/tasks, /api/journal/roadmap, PUT /api/journal/pin, journal.changed events; only while the journal runs ([journal] enabled, and wired)
+		}
+	}
+	if c.moduleReady("fleet") {
+		out = append(out, "fleet.v1") // GET /api/fleet, GET /api/fleet/ssh-aliases, the opt-in fleet.changed push (?fleet=v1)
 	}
 	return out
 }
@@ -183,7 +199,7 @@ const tmuxExecTimeout = 3 * time.Second
 func getTmuxVersion() string {
 	ctx, cancel := context.WithTimeout(context.Background(), tmuxExecTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "tmux", "-V").Output()
+	out, err := execstat.CommandContext(ctx, "core.tmux-version", "tmux", "-V").Output()
 	if err != nil {
 		return "unknown"
 	}
