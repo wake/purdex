@@ -9,6 +9,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ListChecks, MapTrifold } from '@phosphor-icons/react'
 import { CardFrame } from './CardFrame'
+import { ConfirmDetail } from './ConfirmDetail'
 import { JournalCard, JournalTitle } from './JournalCard'
 import { visibleCards, teamColumnWidth } from './card-layout'
 import { useJournalTarget } from './useJournalTarget'
@@ -72,6 +73,12 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const available = useContentWidth(rootRef)
 
+  // The open 待確認 detail takes the roadmap's place (a card to the journal's left): it counts as the roadmap for the narrow-window
+  // drop, and `roadmapOpen` itself is never touched, so closing the detail brings the roadmap back as it was.
+  const unit = target.unit
+  const detailEntry = memo.journalOpen && unit && memo.detailId !== null ? (unit.entries.find((e) => e.id === memo.detailId) ?? unit.pinned.find((e) => e.id === memo.detailId)) : undefined
+  const detail = detailEntry?.kind === 'confirm' ? detailEntry : undefined
+
   const widths = {
     team: cardWidth('team', null, last),
     roadmap: cardWidth('roadmap', memo.widths.roadmap, last),
@@ -79,7 +86,7 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
     tasks: cardWidth('tasks', memo.widths.tasks, last),
   }
   const shown = visibleCards({
-    open: { team: teamOpen, roadmap: memo.roadmapOpen, journal: memo.journalOpen, tasks: memo.tasksOpen },
+    open: { team: teamOpen, roadmap: memo.roadmapOpen || detail !== undefined, journal: memo.journalOpen, tasks: memo.tasksOpen },
     widths,
     available,
   })
@@ -89,6 +96,7 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
     patch({ widths: { ...memo.widths, [card]: w } })
     useJournalUiStore.getState().setLastWidth(card, w)
   }
+  const closeDetail = () => patch({ detailId: null })
   const teamColumn = shown.team || shown.roadmap
 
   return (
@@ -107,7 +115,12 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
               />
             </CardFrame>
           )}
-          {shown.roadmap && (
+          {shown.roadmap && detail && unit && (
+            <CardFrame testId="journal-detail-card" width={widths.roadmap} onCommitWidth={commit('roadmap')} title={t('journal.detail.title')} onClose={closeDetail}>
+              <ConfirmDetail entry={detail} personName={unit.personName} onClose={closeDetail} />
+            </CardFrame>
+          )}
+          {shown.roadmap && !detail && (
             <CardFrame testId="journal-roadmap-card" width={widths.roadmap} onCommitWidth={commit('roadmap')} title={t('journal.card.roadmap')} onClose={() => patch({ roadmapOpen: false })} />
           )}
         </div>
@@ -127,7 +140,7 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
           }
           onClose={() => patch({ journalOpen: false })}
         >
-          {target.unit && <JournalCard key={`${target.memoHost}\u0000${target.memoKey}`} target={target} unit={target.unit} />}
+          {unit && <JournalCard key={`${target.memoHost}\u0000${target.memoKey}`} target={target} unit={unit} />}
           {target.unreachableHost !== null && !target.unit && (
             <div data-testid="journal-unreachable" className="p-3 text-text-secondary">{t('journal.card.unreachable', { host: target.unreachableHost })}</div>
           )}
