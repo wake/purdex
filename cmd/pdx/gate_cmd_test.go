@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +21,24 @@ func gateEnv(t *testing.T, gateSection string) (cfgPath, dir string) {
 	cfgPath = filepath.Join(dir, "config.toml")
 	require.NoError(t, os.WriteFile(cfgPath, []byte("[gate]\n"+gateSection), 0o600))
 	return cfgPath, dir
+}
+
+// A class at slots=0 is shown as paused in the text and in the JSON (W3c); slots.<class> keeps its 0 in the settings (the fleet
+// reads that one).
+func TestGate_StatusShowsAPausedClass(t *testing.T) {
+	cfg, _ := gateEnv(t, "[gate.slots]\nheavy = 0\n[gate.admission]\ndisk_min_gb = 0\n")
+	var out, errb bytes.Buffer
+	require.Equal(t, 0, gateMain([]string{"status", "--config", cfg}, &out, &errb))
+	assert.Contains(t, out.String(), "重 0/0 使用中")
+	assert.Contains(t, out.String(), "已暫停（名額 0）")
+	assert.Equal(t, 1, strings.Count(out.String(), "已暫停"), "only the heavy class")
+	assert.Regexp(t, `slots\.heavy\s+0\s+config`, out.String())
+	out.Reset()
+	require.Equal(t, 0, gateMain([]string{"status", "--json", "--config", cfg}, &out, &errb))
+	var st map[string]any
+	require.NoError(t, json.Unmarshal(out.Bytes(), &st))
+	assert.Equal(t, true, st["PausedHeavy"])
+	assert.Equal(t, false, st["PausedLight"])
 }
 
 func TestGate_RunsTheCommandAndReturnsItsExitCode(t *testing.T) {

@@ -56,7 +56,11 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		cfg = g.refresh()
 		cfg.Dir = dir
 		ok := true
-		if g.Pressure != nil && cfg.Admission.Enabled {
+		paused := cfg.Slots.Paused(class) // a class with no slot: it waits for the count to be raised, whatever the host does
+		if paused {
+			ok = false
+		}
+		if g.Pressure != nil && cfg.Admission.Enabled && !paused {
 			p, err := g.Pressure.Read()
 			switch {
 			case err == nil:
@@ -95,6 +99,8 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		}
 		now := g.Now()
 		switch {
+		case paused:
+			d.why("paused")
 		case ok:
 			d.why("queue")
 		case good == nil:
@@ -107,10 +113,13 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		}
 		if lastPlace.IsZero() || now.Sub(lastPlace) >= time.Minute {
 			lastPlace = now
-			if ok {
+			switch {
+			case paused:
+				g.say("%s", pausedLine(class))
+			case ok:
 				holders := g.pool(cfg, class).Held()
 				g.say("%s", waitingLine(class, ahead+len(holders), holders, now)) // everything in front of it: the running and the queued
-			} else {
+			default:
 				g.say("%s", pressureLine(lastPressure(good), cfg.Admission, good != nil))
 			}
 		}
@@ -380,7 +389,7 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 			case err != nil:
 				g.say("late slot: %v (the command goes on without one)", err)
 			case s == nil:
-				g.say("late slot: no room beyond the %s pool (the command goes on without one)", lw.class)
+				g.say("late slot: no room beyond the %s pool, or the class is paused (the command goes on without one)", lw.class)
 			default:
 				h := g.holder(o, g.Token())
 				h.Late, h.PGID = true, pid

@@ -447,6 +447,9 @@ type Status struct {
 	// Admission says whether a heavy start would be held back by the host right now (memory pressure, page rate, disk), by the
 	// rule that decides it for a command.
 	Admission AdmissionState
+	// PausedHeavy and PausedLight say a class has a slot count of 0: its new commands wait until the count is raised.
+	PausedHeavy bool `json:"PausedHeavy"`
+	PausedLight bool `json:"PausedLight"`
 }
 
 // AdmissionState is whether the gate is holding new heavy work because of the host, and why.
@@ -509,6 +512,7 @@ func (g *Gate) StatusWith(mode HoldersMode) Status {
 	return Status{
 		Heavy: heavy, Light: light, WaitHeavy: h.Waiting(), WaitLight: l.Waiting(), QueueHeavy: h.Waiters(), QueueLight: l.Waiters(),
 		Suspect: append(h.Suspect(), l.Suspect()...), Profile: cfg.Profile, Settings: cfg.Effective(), Admission: g.admission(cfg),
+		PausedHeavy: cfg.Slots.Paused(ClassHeavy), PausedLight: cfg.Slots.Paused(ClassLight),
 	}
 }
 
