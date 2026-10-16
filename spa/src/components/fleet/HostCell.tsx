@@ -93,7 +93,7 @@ export function HostCell({ view, look, variant, isActive, waitingPrimary, primar
   const ref = useRef<HTMLButtonElement>(null)
   const [anchor, setAnchor] = useState<HostCardAnchor | null>(null)
   const [cardOpen, setCardOpen] = useState(false)
-  const owner = useRef({}).current
+  const [owner] = useState(() => ({}))
   useEffect(() => () => { if (openCell?.owner === owner) openCell = null }, [owner])
   const openCard = () => {
     if (openCell && openCell.owner !== owner) openCell.close()
