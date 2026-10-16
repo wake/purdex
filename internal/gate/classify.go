@@ -127,44 +127,99 @@ func heavyReason(argv []string, e Env) Reason {
 	return ReasonHeavy
 }
 
-// takesValue says whether the flag a takes the next word as its value in any of the tools the table reads (the union of their tables:
-// where two tools disagree the line is gated, never let through). A help word in that place is the value, not a request
-// (`go test -bench --help ./...` runs the whole suite).
-func takesValue(a string) bool {
-	if !strings.HasPrefix(a, "-") {
-		return false // (a flag written -run=x is no key of the tables: its value is in the word)
-	}
-	return goValueFlags["-"+strings.TrimLeft(a, "-")] || vitestValueFlags[a] || runnerValueOpts[a] || a == "--file"
+// infoTools are the tools whose own help or version a command can ask for.
+var infoTools = map[string]bool{
+	"go": true, "vitest": true, "tsc": true, "make": true, "composer": true, "phpunit": true, "pest": true, "claude": true,
+	"vite": true, "electron-vite": true, "electron-builder": true,
 }
 
-// infoOnly says whether the command only asks the tool for its help or version (#3043): `--help`, `-h`, `--version` among its words, or a
-// `help` subcommand of a runner or of go. Such a command runs nothing worth a slot, whatever the rest of the line says. A word after `--`
-// or `-args` belongs to what the tool runs, so it is not looked at (`go test -args -h` runs the test binary); nor is the value of a flag
-// that takes one (`vitest -t --help`).
+// infoRunners are the package runners: their own help comes before the subcommand, and what follows a script's name is the script's.
+var infoRunners = map[string]bool{"pnpm": true, "pnpx": true, "npx": true, "yarn": true, "npm": true, "bunx": true, "bun": true}
+
+func isHelpWord(a string) bool { return a == "--help" || a == "-h" || a == "--version" }
+
+// helpAsked reads the words a tool is given (after its own name): `--help`, `-h` or `--version` is a request for its help when it is not
+// something else. A word after `--` or `-args` belongs to what the tool runs (`go test -args -h` runs the test binary). A help word right
+// after an option that has no `=` may be that option's value (`go test -bench --help ./...` runs every test and benchmark; `phpunit
+// --coverage-html --help` writes there): the tools take their values in many ways and the tables of them are never complete, so it is
+// left to the gate to judge, and the command is classified as it was. `help` as the first word is the help subcommand of go and composer.
+func helpAsked(tool string, words []string) bool {
+	if len(words) > 0 && words[0] == "help" && (tool == "go" || tool == "composer") {
+		return true
+	}
+	afterOption := false
+	for _, a := range words {
+		switch {
+		case a == "--" || a == "-args" || a == "--args":
+			return false
+		case isHelpWord(a) && !afterOption:
+			return true
+		}
+		afterOption = strings.HasPrefix(a, "-") && !strings.Contains(a, "=")
+	}
+	return false
+}
+
+// infoOnly says whether the command only asks a tool for its help or version (#3043): such a command runs nothing worth a slot, whatever
+// the rest of the line says. For the package runners the help has to be the runner's own, or the tool it runs (`npx vitest --help`,
+// `pnpm exec vitest --help`): a help word after the name of a script is passed to the script, which runs (`pnpm run build --help` builds).
 func infoOnly(argv []string) bool {
 	if len(argv) < 2 {
 		return false
 	}
-	switch filepath.Base(argv[0]) {
-	case "go", "vitest", "tsc", "pnpm", "pnpx", "npx", "yarn", "npm", "bunx", "bun", "make", "composer", "phpunit", "pest", "claude", "vite", "electron-vite", "electron-builder":
-	default:
-		return false
+	name := filepath.Base(argv[0])
+	switch {
+	case infoTools[name]:
+		return helpAsked(name, argv[1:])
+	case infoRunners[name]:
+		return runnerInfoOnly(name, argv[1:])
 	}
-	switch filepath.Base(argv[0]) {
-	case "go", "pnpm", "npm", "yarn", "bun", "composer":
-		if argv[1] == "help" {
+	return false
+}
+
+func runnerInfoOnly(name string, words []string) bool {
+	i := 0
+	for i < len(words) && strings.HasPrefix(words[i], "-") { // the runner's own options come first
+		if isHelpWord(words[i]) {
 			return true
 		}
+		if runnerValueOpts[words[i]] {
+			i++
+		}
+		i++
 	}
-	for i := 1; i < len(argv); i++ {
-		a := argv[i]
-		switch {
-		case a == "--" || a == "-args" || a == "--args":
+	if i >= len(words) {
+		return false
+	}
+	toolAt := func(j int) bool { // words[j] is the tool the runner runs
+		if j >= len(words) || !infoTools[filepath.Base(words[j])] {
 			return false
-		case a == "--help" || a == "-h" || a == "--version":
-			return true
-		case takesValue(a):
-			i++ // its value, whatever it looks like
+		}
+		return helpAsked(filepath.Base(words[j]), words[j+1:])
+	}
+	switch w := words[i]; {
+	case w == "help":
+		return name != "npx" && name != "pnpx" && name != "bunx"
+	case name == "npx" || name == "pnpx" || name == "bunx":
+		return toolAt(i)
+	case w == "exec" || w == "x" || w == "dlx":
+		j := i + 1
+		for j < len(words) && strings.HasPrefix(words[j], "-") {
+			if runnerValueOpts[words[j]] {
+				j++
+			}
+			j++
+		}
+		return toolAt(j)
+	case w == "run" || w == "run-script":
+		// only a help word before the script's name is the runner's
+		for _, a := range words[i+1:] {
+			if !strings.HasPrefix(a, "-") {
+				return false
+			}
+			if isHelpWord(a) {
+				return true
+			}
 		}
 	}
 	return false

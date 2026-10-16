@@ -415,6 +415,10 @@ func TestWatchKind_RunScriptsAreWatchedNpxToolsAreNot(t *testing.T) {
 	assert.Equal(t, watchPackaging, cfg.watchKind([]string{"pnpm", "run", "build"}, e))
 	assert.Empty(t, cfg.watchKind([]string{"npx", "e2e"}, e))
 	assert.Empty(t, cfg.watchKind([]string{"npx", "run", "e2e"}, e))
+	// a script that gets --help still runs: it is watched like any build (R2 of #3043)
+	assert.Equal(t, watchPackaging, cfg.watchKind([]string{"pnpm", "--prefix", "spa", "run", "build", "--help"}, e))
+	assert.Equal(t, watchPackaging, cfg.watchKind([]string{"pnpm", "run", "electron:build", "--help"}, e))
+	assert.Empty(t, cfg.watchKind([]string{"pnpm", "run", "--help"}, e), "the runner's own help is no run")
 	for _, sub := range []string{"exec", "x", "dlx"} {
 		assert.Empty(t, cfg.watchKind([]string{"pnpm", sub, "some-tool"}, e), sub)
 		assert.Empty(t, cfg.watchKind([]string{"npm", sub, "some-tool"}, e), sub)

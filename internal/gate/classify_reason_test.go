@@ -69,7 +69,12 @@ func TestClassifyReason_Table(t *testing.T) {
 		{"go help test", Env{}, ClassNone, ReasonInfoOnly},
 		{"pnpm help", Env{}, ClassNone, ReasonInfoOnly},
 		{"npm help install", Env{}, ClassNone, ReasonInfoOnly},
-		{"pnpm run build --help", Env{}, ClassNone, ReasonInfoOnly}, // not a packaging run: nothing is built
+		{"pnpm run build --help", Env{}, ClassNone, ReasonPackaging}, // the script runs with --help: a build, not a request for help
+		{"pnpm --prefix spa run build --help", Env{}, ClassNone, ReasonPackaging},
+		{"pnpm run electron:build --help", Env{}, ClassNone, ReasonPackaging},
+		{"pnpm run --help", Env{}, ClassNone, ReasonInfoOnly},
+		{"pnpm exec vitest run --help", Env{}, ClassNone, ReasonInfoOnly},
+		{"phpunit --coverage-html --help", Env{}, ClassHeavy, ReasonHeavy},
 		{"vite build --help", Env{}, ClassNone, ReasonInfoOnly},
 		{"go test ./... -args -h", Env{}, ClassHeavy, ReasonHeavy},
 		{"tsc --watch", Env{}, ClassNone, ReasonWatchMode},
