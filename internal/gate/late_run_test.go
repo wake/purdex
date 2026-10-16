@@ -247,7 +247,7 @@ func TestPackaging_ACommandBelowALateHolderPassesAsNested(t *testing.T) {
 // An unknown `run` script is only timed: no slot, ever, and a line only when it ran at least record_unknown_s.
 func TestUnknownScript_OnlyTimedAndOnlyWhenLongEnough(t *testing.T) {
 	g := packagingGate(t, 100*time.Millisecond)
-	g.SetConfig(func(c *Config) { c.Packaging.RecordUnknown = 300 * time.Millisecond })
+	g.SetConfig(func(c *Config) { c.Packaging.RecordUnknown = 1500 * time.Millisecond })
 	dir := t.TempDir()
 	fakeTool(t, dir, "")
 	run := func() int {
@@ -265,7 +265,7 @@ func TestUnknownScript_OnlyTimedAndOnlyWhenLongEnough(t *testing.T) {
 	_ = os.Remove(dir + "/started")
 	res := runAsync(g, context.Background(), Options{Argv: []string{"pnpm", "run", "e2e"}, Real: filepath.Join(dir, "fakepnpm")})
 	eventually(t, "start", func() bool { return exists(dir + "/started") })
-	time.Sleep(600 * time.Millisecond)
+	time.Sleep(1800 * time.Millisecond)
 	assert.Empty(t, lightHeld(g), "never put under a slot, however long it runs")
 	assert.Empty(t, g.pool(g.Config(), ClassHeavy).Held())
 	require.NoError(t, os.WriteFile(dir+"/go", nil, 0o644))
