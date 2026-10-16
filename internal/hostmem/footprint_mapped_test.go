@@ -57,7 +57,7 @@ func TestFootprint_IsNotTheResidentSize(t *testing.T) {
 	for i := 0; i < len(data); i += 4096 {
 		sum += data[i]
 	}
-	_ = sum
+	t.Logf("touched every page of the mapping (checksum %d: the loop must not be optimised away)", sum)
 
 	fp1, err := f.Of(os.Getpid())
 	require.NoError(t, err)
