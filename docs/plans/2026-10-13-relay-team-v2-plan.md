@@ -330,23 +330,56 @@ Expected files: `hooks/register.js`, `hooks/relay.test.ts`, `W/wire_relay_member
 - `noticeIdle` and `noticeUsage` skip members whose mod protocol ≥ 9 (`MinIdleInterceptModVersion = 9`) (M: an old member still gets them).
 - Tests: intercept → one notice per idle period (M); a context-full compaction in a member runs and is reported as today; a member with mod 8 gets both old notices; mod side: skip only in a member with no turn running.
 
-**T42b Solo and lead intercept** (spec §4.3a, U-4.3, user 10-16) — H (`session.compact`), the self-relay ask path, `T/compacted.go`.
-- Mod: the same recognition as T42 for a session that is not a member → `{skip: '閒置壓縮已擋下'}`; then, unattended:
-  the §4.3 first half unless a fresh `half` handoff exists; attended: the self-relay ask with `reason: idle_intercept`
-  once per idle period, unless this idle period already has an idle ask (open or answered) or a fresh handoff. The
-  answer `compact` sets a one-shot pass for the next idle compaction of this idle period (and starts one at once if
-  the mod API can; check `session` in the mod API and record the finding in the PR); `deny` / timeout → nothing.
-  A new turn ends the idle period and clears the pass.
-- Daemon: the ask accepts `reason: idle_intercept` and the answer `compact`; an App that sends only approve/deny keeps
-  working (deny = 不處理). Capability `team.idle_intercept.v1` for the App's third button (B line).
-- Tests (mod): a solo session's idle compaction is skipped (M); a context-full one in a turn runs; unattended → first
-  half, no card; unattended with a fresh handoff → silent skip; attended → one card per idle period, none when an
-  idle ask already happened in it; `compact` lets the next one through once (M); a new turn clears the pass; a lead
-  goes this way, a member the T42 way. Daemon: the reason and the answer round-trip; an old App's deny.
+**T42b Solo and lead intercept** (spec §4.3a, U-4.3, user 10-16). Two PRs: **RT-4a** = T42 rebased on main with the
+routing change below (member path) and the protocol bump; **RT-4b** = the solo/lead path, the card and its answers.
+Expected files add `W/wire_relay.go`, `W/wire.go`, `T/relay_begin.go`, `T/relay_decide.go`, `T/unattended.go`,
+`cmd/pdx/relay.go`.
+- **The daemon decides, the mod only skips and reports** (replaces T42's mod-side branch on the cached role). On an idle
+  compaction (T42's recognition) the mod answers `{skip}` and posts `pdx relay compacted --intercepted --period <p>`;
+  `p` is the idle period's identity: the end time of the last main turn (a new turn starts a new period; it survives a
+  mod reload because it comes from the transcript's last turn, not from mod memory). The daemon, under the session's
+  relay lock, reads the **authoritative** role and answers one of: `member` (T42's notice to the lead), `silent`,
+  `ask` (attended: it has created the `idle_intercept` ask), `half` (unattended: it has started the first half), `pass`
+  (the person answered `compact` for this period: the mod lets the next compaction through). So a release or an adopt
+  between two intercepts is routed by the daemon's role, never the mod's cache.
+- **One decision per period, kept by the daemon**: a row per session (`relay_intercepts`: session, period, outcome,
+  at). `silent` when, in this period: an idle ask is open, answered or its first half is beginning or done; a fresh
+  `half` handoff exists; or an intercept outcome is already recorded (a card answered `deny`, timed out, or `compact`
+  spent). Creating the ask or starting the half and recording the period happen in one transaction with the
+  session's one-open-op rule, so the 40-min idle timer, a `halfLater` begin and the intercept cannot both act.
+- **An open idle card is never cancelled by an intercept** (today a non-member in `awaiting` goes `toIdle` +
+  `cancelled{compacted}` and then compacts): the intercept is `silent`, the card stays open and its timeout still runs
+  the first half (§4.3).
+- **The ask**: `reason: idle_intercept` (new wire constant; CLI and `relay_begin` validation accept it). Attended:
+  timeout → **nothing** (unlike the idle ask, whose timeout runs the first half); `deny` → nothing; `approve` → the
+  relay as `/relay` (a fresh handoff reused); `compact` (new `Decision` value; the op closes `cancelled` with reason
+  `compact`; the CLI's JSON and exit code say `compact`, exit 0) → the period's outcome becomes `pass` and the mod's
+  settle branch remembers it, so the next idle compaction in this period is let through once (and, if the mod API can
+  start a compaction, it does so at once — record the finding in the PR). Unattended at creation: the first half
+  (no card, no quota); no first half if a fresh handoff exists (→ `silent`).
+- **Switching unattended on with an `idle_intercept` card open**: the sweep treats it as an idle card: close it and run
+  the first half (no quota, no clear) unless a fresh handoff exists; never the general `autoApprove`.
+- **Versions**: mod protocol `VERSION` → **'10'** for this path ('9' = member intercept only). The daemon's hello
+  answer carries `idle_intercept: 1` (members) or `2` (all sessions); the mod skips an idle compaction only when the
+  daemon's level covers the session (a daemon that does not say → no skip: the compaction happens as before). A
+  daemon seeing a mod < 10 for a non-member never answers `ask`/`half` (that mod cannot settle `compact`) — it answers
+  `silent` only if the mod skipped, and logs. App: capability `team.idle_intercept.v1` for the third button (B line).
+- **Gate**: M-1 passed on Claude Code 2.1.299 (#2870). RT-4b re-runs M-1's two checks (skip honoured; no immediate
+  retry) on the Claude Code version installed at the time and records it in the PR; if either fails, RT-4b is
+  blocked and the lead is told (no fallback for solo sessions: their compaction then happens as before).
+- Tests (mod): any session's idle compaction is skipped only when the daemon's level covers it (M); a context-full one
+  in a turn runs; the period id comes from the last turn and survives a reload. Daemon: routing by the authoritative
+  role, incl. a release and an adopt between two intercepts; one decision per period across a mod reload and a
+  retry 54 min later (M); idle card open → `silent` and the card's timeout still runs the half; races under `-race`:
+  idle-timer begin in flight × intercept, `halfLater` begin in flight × intercept, a fresh half written while the
+  intercept is decided; attended `idle_intercept` timeout → nothing, `deny` → nothing, `compact` → `pass` once (M);
+  unattended at creation → half, with a fresh handoff → `silent`; switching unattended on with the card open → half,
+  no quota, not `autoApprove`; mixed versions: new mod × daemon without the level → no skip; mod 9 × new daemon
+  for a solo session → no `ask`.
 
 **T43 Skill text**: the intercept notice and the three answers; §4.3a's card and answers.
 
-`VERSION` → '9'.
+`VERSION` → '9' in RT-4a, '10' in RT-4b (T42b).
 
 ## RT-5a — spawn resource check: seam, check, card (after lease v2 P1b; #2765 merged as d3a6e69f; daemon)
 

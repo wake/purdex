@@ -139,6 +139,10 @@ Lead-only CLI (agents):
   skipped silently after the card.
 - **App**: the card's third answer is new (`compact`); an App without it shows the card's two usual answers, where
   "no" is 不處理. The App part is the B line's (88).
+- **Who decides**: the mod only skips and reports the idle period; the daemon decides with the session's
+  authoritative role (member or not), keeps one decision per idle period (so a mod reload or Claude Code's retry
+  54 min later never brings a second card), and never cancels an open idle card for an intercept. A daemon too old
+  to decide for this session → the mod does not skip and the compaction happens as before.
 
 ### 4.4 Members: idle and the lead's decision (U-5.2, U-7)
 
