@@ -32,7 +32,16 @@ const (
 	KindFill      = "fill"     // type text into the empty composer without pressing Enter (K-1)
 	KindClearIf   = "clear_if" // clear the composer only if it still holds exactly the job's text
 	KindRead      = "read"     // report the composer's text
+	// KindNotice is a notice of the daemon to the session (lease v2 amendment A §2.10): submitted as a plugin message,
+	// not as the person's words, by a mod that announced CapLeaseNotice. At most once by key.
+	KindNotice = "notice"
 )
+
+// CapLeaseNotice is the capability a mod announces to take notice jobs (modevents.CapLeaseNoticeV1 spells the same).
+const CapLeaseNotice = "lease.notice.v1"
+
+// MaxNoticeBytes is the largest notice text, in UTF-8 bytes; the mod parses jobs with the same limit.
+const MaxNoticeBytes = 4000
 
 // Wire format (daemon <-> mod). prompt/next answers {"job":{"id","kind","session_id","text"?}} with kind submit |
 // interrupt | fill | clear_if | read (text: submit, fill, clear_if). The mod reports with prompt/result
@@ -80,6 +89,30 @@ var (
 // Owners says which stream owns a session's prompts now ("" / false: none).
 type Owners interface {
 	OwnerOf(sessionID string) (stream string, ok bool)
+	// OwnerOfCap is the live stream of the session that announced the capability most recently: the owner of the jobs
+	// that need it (notices).
+	OwnerOfCap(sessionID, capability string) (stream string, ok bool)
+}
+
+// mayHandOut says whether the head of the session's queue is a job this stream owns: a notice goes to the stream that
+// announced CapLeaseNotice, any other job (and an empty queue, which only decides who may wait) to the prompt owner.
+// q.mu held.
+func (q *Queue) mayHandOut(sessionID, stream string) bool {
+	kind := KindSubmit
+	if l := q.queues[sessionID]; len(l) > 0 {
+		kind = l[0].job.Kind
+	}
+	o, ok := q.ownerFor(kind, sessionID)
+	return ok && o == stream
+}
+
+// ownerFor is the owner of the session's jobs of a kind: a notice goes to the stream that can take notices, anything
+// else to the prompt owner.
+func (q *Queue) ownerFor(kind, sessionID string) (string, bool) {
+	if kind == KindNotice {
+		return q.owners.OwnerOfCap(sessionID, CapLeaseNotice)
+	}
+	return q.owners.OwnerOf(sessionID)
 }
 
 // Job is what the mod fetches.
@@ -309,11 +342,14 @@ func (q *Queue) sweepLedger() {
 	}
 }
 
-// evict forgets a ledger row; EVERY typed row leaves a tombstone holding its recorded answer, so a replay of its id is
+// evict forgets a ledger row; EVERY typed row, and every notice that was sent, leaves a tombstone holding its recorded answer, so a replay of its id is
 // answered the same and never types again. q.mu held.
 func (q *Queue) evict(k string, e *entry) {
 	delete(q.ledger, k)
-	if e.job.Kind == KindFill && k != "" {
+	// A notice that was sent (or may have been) is remembered too: its key must never send it twice. busy and timeout
+	// were never sent, so their key is free again and leaves no tombstone.
+	noticeSent := e.job.Kind == KindNotice && e.res.Status != Busy && e.res.Status != Timeout
+	if (e.job.Kind == KindFill || noticeSent) && k != "" {
 		res := q.view(e)
 		res.Text = "" // the answer, not the user's text
 		if res.Phase == PhaseUnknown {
@@ -360,6 +396,19 @@ func (q *Queue) SubmitFill(ctx context.Context, sessionID, clientMsgID, text str
 	return q.submitKeyed(ctx, KindFill, sessionID, clientMsgID, text)
 }
 
+// SubmitNotice sends the session a notice as a plugin message and waits for the mod's report: accepted, dropped,
+// busy (a turn was running: nothing was sent) or timeout (nothing was handed out in time) — busy and timeout may be
+// sent again under the same key, anything else is answered again from the ledger and never sent twice. no_mod when no
+// live stream of the session announced CapLeaseNotice. The memory of a sent key is bounded like a typed row's (the ledger
+// for LedgerTTL, then a tombstone for TombstoneTTL, at most maxTombstones): the durable authority that never asks for the
+// same notice twice is the caller's own slot state (the outbox of P2d-1b keeps it in the position row).
+func (q *Queue) SubmitNotice(ctx context.Context, sessionID, key, text string) (Result, error) {
+	if strings.TrimSpace(text) == "" || len(text) > MaxNoticeBytes {
+		return Result{Status: Dropped, Reason: "bad_text"}, nil
+	}
+	return q.submitKeyed(ctx, KindNotice, sessionID, key, text)
+}
+
 func (q *Queue) submitKeyed(ctx context.Context, kind, sessionID, clientMsgID, text string) (Result, error) {
 	q.mu.Lock()
 	q.sweepLedger()
@@ -375,11 +424,11 @@ func (q *Queue) submitKeyed(ctx context.Context, kind, sessionID, clientMsgID, t
 			return q.await(ctx, e), nil // joins the first request's wait, or answers the settled ledger row
 		}
 	}
-	if t, dead := q.tombs[clientMsgID]; dead && clientMsgID != "" && kind == KindFill {
+	if t, dead := q.tombs[clientMsgID]; dead && clientMsgID != "" && (kind == KindFill || kind == KindNotice) {
 		q.mu.Unlock() // an evicted typed row: its recorded answer, never typed again
 		return t.res, nil
 	}
-	if _, ok := q.owners.OwnerOf(sessionID); !ok {
+	if _, ok := q.ownerFor(kind, sessionID); !ok {
 		q.mu.Unlock()
 		return Result{Status: NoMod}, nil
 	}
@@ -514,7 +563,7 @@ func (q *Queue) Next(ctx context.Context, stream, sessionID string, wait time.Du
 		// The owner is read inside the critical section that creates the lease, so a request is never leased on the word of
 		// an owner read before another poll or an expiry changed the queue. (The registry itself can still move on right
 		// after: the mod re-reads its session id before it submits, and the result's owner re-check settles the rest.)
-		owner, ok := q.owners.OwnerOf(sessionID)
+		_, ok := q.owners.OwnerOf(sessionID)
 		if ok {
 			q.seen[sessionID] = q.Now()
 		}
@@ -523,7 +572,7 @@ func (q *Queue) Next(ctx context.Context, stream, sessionID string, wait time.Du
 		if b := q.busy[sessionID]; b != nil && q.Now().Sub(b.handedAt) >= q.handTimeout() {
 			q.finish(b, Result{Status: Unknown, Reason: "no_result"})
 		}
-		if ok && owner == stream && q.busy[sessionID] == nil {
+		if q.busy[sessionID] == nil && q.mayHandOut(sessionID, stream) {
 			// A request nobody fetched within the wait is stale whether or not its caller is still there (a caller that
 			// went away leaves it queued): a prompt must never be typed minutes after it was asked for.
 			for l := q.queues[sessionID]; len(l) > 0 && q.Now().Sub(l[0].queuedAt) > q.wait(); l = q.queues[sessionID] {
@@ -533,7 +582,7 @@ func (q *Queue) Next(ctx context.Context, stream, sessionID string, wait time.Du
 				}
 				q.finish(l[0], Result{Status: Timeout})
 			}
-			if l := q.queues[sessionID]; len(l) > 0 {
+			if l := q.queues[sessionID]; len(l) > 0 && q.mayHandOut(sessionID, stream) {
 				e := l[0]
 				q.queues[sessionID] = l[1:]
 				e.state, e.stream, e.handedAt = stHanded, stream, q.Now()
@@ -593,7 +642,7 @@ func (q *Queue) Result(stream, jobID string, o Outcome) error {
 	if e == nil || e.stream != stream || e.state != stHanded {
 		return ErrNotLeased
 	}
-	if owner, ok := q.owners.OwnerOf(e.job.SessionID); !ok || owner != stream {
+	if owner, ok := q.ownerFor(e.job.Kind, e.job.SessionID); !ok || owner != stream {
 		q.finish(e, Result{Status: Unknown, Reason: "not_owner"})
 		return ErrNotOwner
 	}

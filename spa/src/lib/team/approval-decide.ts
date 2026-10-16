@@ -25,7 +25,7 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useUndoToast } from '../../stores/useUndoToast'
 import { hostLabel, hostLookOf } from '../host-look'
-import { ApprovalApiError, decideApproval, setSelfRelayPause } from './approval-api'
+import { ApprovalApiError, decideApproval } from './approval-api'
 import { closedToastText } from './approval-format'
 import { gotoRequester } from './approval-goto'
 import { clientDescriptor } from './client-label'
@@ -53,11 +53,8 @@ export interface SubmitOptions {
    *  decision resent from the queue — leaves the tabs alone: a switch made later would take the tab from whatever the
    *  person is doing by then. */
   reveal?: boolean
-  /** A pause queued with the decision (「這個 session 不再詢問」 clicked while disconnected): sent first, best effort;
-   *  a network failure keeps it with the decision if that is re-queued too. */
-  pauseSession?: string
-  /** The host's `hostEpoch` when the person clicked, for a caller that awaited something of its own first (the dialog's
-   *  pause). Default: the value now. A forget since then voids the send and its answer. */
+  /** The host's `hostEpoch` when the person clicked, for a caller that awaited something of its own first.
+   *  Default: the value now. A forget since then voids the send and its answer. */
   epoch?: number
 }
 
@@ -66,20 +63,6 @@ export async function submitDecision(hostId: string, approval: Approval, decisio
   // The host was removed or re-pointed since the click: this decision is the old daemon's, the id is now another's.
   const forgotten = (): boolean => (useApprovalStore.getState().hostEpoch[hostId] ?? 0) !== epoch
   if (forgotten()) return 'failed'
-  let pauseLeft = opts.pauseSession
-  if (pauseLeft) {
-    try {
-      await setSelfRelayPause(hostId, pauseLeft, 'off')
-      pauseLeft = undefined
-    } catch (e: unknown) {
-      if (forgotten()) return 'failed'
-      const code = e instanceof ApprovalApiError ? e.code : 'network'
-      if (code !== 'network') {
-        pauseLeft = undefined
-        useUndoToast.getState().show(useI18nStore.getState().t('approval.dialog.pause_failed', { code }))
-      }
-    }
-  }
   const client = await clientDescriptor()
   if (forgotten()) return 'failed'
   // Before the send: the daemon's `closed` broadcast can outrun the HTTP answer, and it must read as ours.
@@ -108,11 +91,6 @@ export async function submitDecision(hostId: string, approval: Approval, decisio
       const adopt = adoptPayloadOf(approval)
       if (adopt.target_host_id !== '') startAdoptionWait(hostId, approval.id, adopt)
     }
-    if (pauseLeft) {
-      // The pause hit the network but the decision went through (PR #1742 attacker A-1): say so, as the
-      // connected path does — the session was not paused and may ask again.
-      useUndoToast.getState().show(useI18nStore.getState().t('approval.dialog.pause_failed', { code: 'network' }))
-    }
     return 'closed'
   } catch (e: unknown) {
     if (forgotten()) return 'failed'
@@ -125,7 +103,7 @@ export async function submitDecision(hostId: string, approval: Approval, decisio
       // `connected` nothing would ever resend a fresh click — the person clicks again instead. A decision that came
       // FROM the queue is re-queued regardless: the runtime lags the daemon dying again, and it was already made.
       if (opts.fromQueue || useHostStore.getState().runtime[hostId]?.status !== 'connected') {
-        store.queueDecision(hostId, approval, decision, grant, pauseLeft)
+        store.queueDecision(hostId, approval, decision, grant)
         return 'queued'
       }
       toastFailed(err)

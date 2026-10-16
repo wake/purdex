@@ -27,6 +27,11 @@ const (
 	// CallWait is the old path (no session, or a script nobody watches): the
 	// request waits until granted.
 	CallWait = "wait"
+	// CallAuto leaves the choice to the daemon: a caller under an interactive
+	// session (one whose mod can run a prompt job, so a notice can reach it) is
+	// queued, any other waits as before. It is resolved when the request is
+	// created; the row keeps queue or wait.
+	CallAuto = "auto"
 )
 
 // Why a queue-mode request did not run (the queued_reason column).
@@ -37,7 +42,11 @@ const (
 
 // Limits of a position (amendment A V16, V19, V20).
 const (
-	PositionWindow      = 3 * time.Minute
+	PositionWindow = 3 * time.Minute
+	// NoticeFallbackPass is how long an undelivered offer holds the host when its
+	// notice could only be told to the person (user_alert): the session cannot
+	// hear it, so the offer passes early (P2f-2).
+	NoticeFallbackPass  = 60 * time.Second
 	PositionMaxCommands = 3
 	PositionMaxSpan     = 30 * time.Minute
 )

@@ -15,6 +15,9 @@ const (
 	PromptResultPath = "/mod/v1/prompt/result"
 	maxPromptText    = 32 << 10    // bytes of a read text accepted (at least promptq.MaxTextBytes, which the mod cuts to)
 	CapPromptV1      = "prompt.v1" // announced by a mod that can run a prompt job
+	// CapLeaseNoticeV1 is announced by a mod that can take a notice job of the daemon (lease v2 amendment A §2.10):
+	// a plugin message submitted when no turn runs. promptq.CapLeaseNotice spells the same.
+	CapLeaseNoticeV1 = "lease.notice.v1"
 )
 
 // PromptResult is the body of POST /mod/v1/prompt/result.
@@ -57,7 +60,7 @@ func (h *handler) promptService() PromptService {
 }
 
 // promptNext serves POST /mod/v1/prompt/next {stream, session_id, wait_ms}: 200 {"job":…} or 204, 400, 503. Only the stream
-// that is the session's own, live and prompt-capable may poll, and one poll per stream runs at a time.
+// that is the session's own, live and prompt- or notice-capable may poll, and one poll per stream runs at a time.
 func (h *handler) promptNext(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Stream    string `json:"stream"`
@@ -77,7 +80,8 @@ func (h *handler) promptNext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	may := func() bool {
-		return h.reg != nil && h.reg.StreamCapable(in.Stream, in.SessionID, CapPromptV1, CapsFresh)
+		// a stream that can take notices polls too: the queue hands it only the jobs it owns
+		return h.reg != nil && (h.reg.StreamCapable(in.Stream, in.SessionID, CapPromptV1, CapsFresh) || h.reg.StreamCapable(in.Stream, in.SessionID, CapLeaseNoticeV1, CapsFresh))
 	}
 	if !may() {
 		w.WriteHeader(http.StatusNoContent)

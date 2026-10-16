@@ -23,14 +23,26 @@ const (
 )
 
 // Seat is where a session sits in a team right now. TeamID is the team's id on the lead's host (for a remote member,
-// the one it joined); empty for SeatNone.
+// the one it joined); empty for SeatNone. For SeatMemberRemote only, LeadHostID is the lead's host (its daemon host id) and
+// LeadSessionID the lead's session on that host, as recorded when the member joined: where the team's journal can be asked.
 type Seat struct {
-	TeamID string
-	Role   string
+	TeamID        string
+	Role          string
+	LeadHostID    string
+	LeadSessionID string
 }
 
 // SeatReader answers a session's seat from the store as it is now (an ended member is none). A store error is an
 // error, never none.
 type SeatReader interface {
 	SeatOf(sessionID string) (Seat, error)
+}
+
+// PredecessorReaderKey is the service-registry key of the PredecessorReader.
+const PredecessorReaderKey = "team.predecessor"
+
+// PredecessorReader answers which session a relay's new session replaced (the session_lineage row), and when
+// (unix ms). ok is false for a session no relay produced. The conversation module reads it to scroll back across a relay.
+type PredecessorReader interface {
+	PredecessorOf(sessionID string) (prev string, at int64, ok bool, err error)
 }

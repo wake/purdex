@@ -39,6 +39,8 @@ type SessionStartEvent struct {
 	FrameID        string
 	Cwd            string
 	TranscriptPath string
+	// PrevSessionID is the session id this one replaced when Source is "clear" and the daemon knows it ("" otherwise).
+	PrevSessionID string
 	// Overflow, when true, carries no session: events were coalesced away because the subscriber fell behind; the subscriber must re-check every session it cares about.
 	Overflow bool
 }
@@ -222,7 +224,7 @@ func (m *Module) SubscribeSessionStart(fn func(SessionStartEvent)) func() {
 
 // sessionStartEventFrom builds the event from the granted envelope plus the
 // two fields the envelope does not carry (source, tmux session name).
-func sessionStartEventFrom(req EventRequest, prov Provenance) SessionStartEvent {
+func sessionStartEventFrom(req EventRequest, prov Provenance, prevSessionID string) SessionStartEvent {
 	var raw struct {
 		Source string `json:"source"`
 	}
@@ -230,7 +232,7 @@ func sessionStartEventFrom(req EventRequest, prov Provenance) SessionStartEvent 
 	return SessionStartEvent{
 		AgentType: prov.AgentType, SessionID: prov.SessionID, Source: raw.Source,
 		TmuxSession: req.TmuxSession, TmuxPaneID: prov.TmuxPaneID, FrameID: prov.FrameID,
-		Cwd: prov.Cwd, TranscriptPath: prov.TranscriptPath,
+		Cwd: prov.Cwd, TranscriptPath: prov.TranscriptPath, PrevSessionID: prevSessionID,
 	}
 }
 

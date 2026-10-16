@@ -171,8 +171,13 @@ export function parsePromptJob(res) {
     return { id: j.id, kind: j.kind, sessionId: j.session_id, text: j.text }
   }
   if (j.kind === 'read') return { id: j.id, kind: 'read', sessionId: j.session_id, text: '' }
+  // A well-formed job of a kind this mod does not know (the retired `notice` of the resource lease, or one a later daemon adds)
+  // is handed on to be reported dropped, so the daemon does not hold the stream's queue until its hand-out times out.
+  if (typeof j.kind === 'string' && j.kind !== '' && !PROMPT_KINDS.has(j.kind)) return { id: j.id, kind: 'unsupported', sessionId: j.session_id, text: '' }
   return null
 }
+
+const PROMPT_KINDS = new Set(['interrupt', 'submit', 'fill', 'clear_if', 'read'])
 
 // fillRefusal is the drop reason of a `$.prompt.fill` answer that did not fill: dialog_open | no_composer | refused (the hook's
 // own refusal and anything unexpected carry no `refusal`), or '' when the composer was filled.

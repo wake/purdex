@@ -46,6 +46,9 @@ export function memberRelayNames(a: Approval): { lead: string; member: string; p
   return { lead, member, pct: Math.round(payload.used_percentage), payload }
 }
 
+/** `close_reason` of a lead / adopt card unattended mode refused (`team.person.v1`). */
+export const UNATTENDED_REFUSED = 'unattended_refused'
+
 /**
  * The toast for a request closed by someone else (spec §6.3 / §6.5): `<主機>：<session> 的 <kind> 已由 <client> 核准／拒絕`;
  * a timeout, cancel or abandonment names the state instead.
@@ -55,8 +58,12 @@ export function closedToastText(t: T, host: string, a: Approval): string {
   const kind = approvalKindLabel(t, a.kind)
   if ((a.state === 'approved' || a.state === 'denied') && a.decided_by) {
     const decision = t(a.state === 'approved' ? 'approval.decision.approved' : 'approval.decision.denied')
+    // A person's own terminal command (`team.person.v1`): the daemon's label says who, the toast says how.
+    if (a.decided_by.kind === 'person') return t('approval.toast.decided_by_person', { host, session, kind, decision })
     return t('approval.toast.decided_elsewhere', { host, session, kind, client: a.decided_by.label, decision })
   }
+  // Unattended mode refuses lead and adopt cards (`team.person.v1`): not a failure, the mode did what it says.
+  if (a.state === 'cancelled' && a.close_reason === UNATTENDED_REFUSED) return t('approval.toast.unattended_refused', { host, session, kind })
   return t('approval.toast.ended', { host, session, kind, state: t(`approval.state.${a.state}`) })
 }
 

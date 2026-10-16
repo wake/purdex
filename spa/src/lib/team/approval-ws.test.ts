@@ -304,3 +304,38 @@ describe('approval-ws: a close decided by unattended', () => {
     expect(useUndoToast.getState().toast?.message).toBe('mlab：purdex-7c 的 lead 申請 已由 Purdex.app @ air26 核准')
   })
 })
+
+// Relay v2 App contract 2 (`team.person.v1`).
+describe('approval-ws: a person\'s command and the unattended refusal', () => {
+  const closedEv = (over: Partial<Approval>) => JSON.stringify({ op: 'closed', approval: { ...approval(), decided_at: 5, ...over } })
+
+  it('an open card a person\'s command approved closes like any approval, and says it was the terminal command', () => {
+    useApprovalStore.getState().applyOpened(H, approval())
+    handleApprovalEvent(H, closedEv({ state: 'approved', decided_by: { kind: 'person', label: '使用者（終端機指令）' } }))
+    expect(useApprovalStore.getState().entries).toEqual({})
+    expect(useUndoToast.getState().toast?.message).toBe('mlab：purdex-7c 的 lead 申請 已由終端機指令核准')
+  })
+
+  it('a row created already approved only ever arrives as `closed`: no error, no toast, nothing left in the store', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    handleApprovalEvent(H, closedEv({ state: 'approved', decided_by: { kind: 'person', label: '使用者（終端機指令）' } }))
+    expect(useApprovalStore.getState().entries).toEqual({})
+    expect(useUndoToast.getState().toast).toBeNull()
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it('a lead card unattended mode refused (cancelled + unattended_refused) closes the dialog with the unattended wording, not as an error', () => {
+    useApprovalStore.getState().applyOpened(H, approval())
+    handleApprovalEvent(H, closedEv({ state: 'cancelled', close_reason: 'unattended_refused' }))
+    expect(useApprovalStore.getState().entries).toEqual({})
+    expect(useUndoToast.getState().toast?.message).toBe('mlab：purdex-7c 的 lead 申請 已由無人值守模式拒絕')
+  })
+
+  it('the frame is valid wire: a person decider and the cancelled close are not rejected', () => {
+    const a = approval({ state: 'cancelled', close_reason: 'unattended_refused' })
+    expect(parseApprovalEvent(JSON.stringify({ op: 'closed', approval: a }))).toEqual({ op: 'closed', approval: a })
+    const b = approval({ state: 'approved', decided_by: { kind: 'person', label: '使用者（終端機指令）' } })
+    expect(parseApprovalEvent(JSON.stringify({ op: 'closed', approval: b }))).toEqual({ op: 'closed', approval: b })
+  })
+})

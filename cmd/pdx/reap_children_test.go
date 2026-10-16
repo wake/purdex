@@ -106,13 +106,19 @@ func reapRunning(t *testing.T) {
 // started afterwards keeps its exit status for its own Wait (the watcher waits for the given pids only).
 // Mutation gate: wait4(-1) in the watcher → the new child's Wait gets ECHILD → red.
 func reapSurvivor(t *testing.T) {
-	old := exec.Command("/bin/sleep", "1")
-	if err := old.Start(); err != nil { // the previous image's child, unwaited
+	// The previous image's child, unwaited, runs until the test lets it go by a file (a clock would end it too early on a
+	// loaded host: #2936).
+	gofile := t.TempDir() + "/go"
+	old := exec.Command("/bin/sh", "-c", "while [ ! -e "+gofile+" ]; do sleep 0.02; done")
+	if err := old.Start(); err != nil {
 		t.Fatal(err)
 	}
 	reaped, survivors, _ := reapInheritedChildren()
 	if reaped != 0 || len(survivors) != 1 || survivors[0] != old.Process.Pid {
 		t.Fatalf("reaped=%d survivors=%v, want the one running child %d", reaped, survivors, old.Process.Pid)
+	}
+	if err := os.WriteFile(gofile, nil, 0o644); err != nil { // now the survivor may end
+		t.Fatal(err)
 	}
 	mine := exec.Command("/bin/sh", "-c", "exit 7") // this image's own child, started after the boot step
 	if err := mine.Start(); err != nil {

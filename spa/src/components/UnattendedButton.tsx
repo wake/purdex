@@ -28,10 +28,17 @@ type T = (key: string, params?: Record<string, string | number>) => string
 
 const HOST_SEPARATOR = ', '
 
-function tooltipOf(t: T, agg: UnattendedAggregate, label: (hostId: string) => string): string {
+/**
+ * The v2 rule (relay v2 App contract 2): relay requests follow the quota, "become lead" and adopt are always refused. A daemon
+ * without `team.person.v1` still approves those two, so when any shown host has not been shown to have it - an unknown flag
+ * counts as lacking - one more sentence says so. `on` / `off` mean every shown host is reachable, so `agg.reachable` is them all.
+ */
+function tooltipOf(t: T, agg: UnattendedAggregate, label: (hostId: string) => string, personOf: (hostId: string) => boolean): string {
   if (agg.mode === 'none') return t('unattended.tooltip.none')
-  if (agg.mode === 'on') return t('unattended.tooltip.on')
-  if (agg.mode === 'off') return t('unattended.tooltip.off')
+  if (agg.mode === 'on' || agg.mode === 'off') {
+    const rule = t(agg.mode === 'on' ? 'unattended.tooltip.on' : 'unattended.tooltip.off')
+    return agg.reachable.every(personOf) ? rule : `${rule}${t('unattended.tooltip.legacy_daemon')}`
+  }
   const names = (ids: string[]) => ids.map(label).join(HOST_SEPARATOR)
   const lines = [t('unattended.button_partial')]
   if (agg.off.length > 0) lines.push(t('unattended.tooltip.partial_off', { hosts: names(agg.off) }))
@@ -58,6 +65,7 @@ export function UnattendedButton() {
   const agg = aggregateUnattended(hostOrder.filter(isShown), runtime, byHost)
   const label = (hostId: string) => hostLabel(hostId, lookOf(hostId))
   const { mode } = agg
+  const personOf = (hostId: string) => byHost[hostId]?.personSupport === 'yes'
   const pausedN = hostOrder.filter(isShown).reduce((n, h) => n + (pausedByHost[h]?.sessions.length ?? 0), 0)
 
   const press = async () => {
@@ -93,7 +101,7 @@ export function UnattendedButton() {
         aria-label={pausedN > 0 ? `${t(name)}, ${t('paused.dot', { n: pausedN })}` : t(name)}
         disabled={mode === 'none'}
         className={`${BUTTON} ${look}`}
-        title={pausedN > 0 ? `${tooltipOf(t, agg, label)}\n${t('paused.dot', { n: pausedN })}` : tooltipOf(t, agg, label)}
+        title={pausedN > 0 ? `${tooltipOf(t, agg, label, personOf)}\n${t('paused.dot', { n: pausedN })}` : tooltipOf(t, agg, label, personOf)}
         // A mouse press leaves focus on the pane (shell polish spec §4).
         onMouseDown={keepFocus}
         onClick={() => { void press() }}

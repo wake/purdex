@@ -69,28 +69,32 @@ type Module struct {
 	unsub    func()
 
 	// The agent-event side (agent_trigger.go).
-	gate        *Gate
-	asks        *openAsks
-	reader      team.OpenApprovalsReader                                         // fresh read of the open set at send time (purdex.open_approvals); nil = unknown
-	sessions    func(ctx context.Context) (map[string]session.SessionRef, error) // ONE read of every tmux session (name -> code, creation time); nil = from the session module
-	sessBudget  time.Duration                                                    // how long a snapshot waits for that read; 0 = sessionBudget
-	sessBusy    atomic.Bool                                                      // a session read is still running: never more than one outstanding
-	sessStalled atomic.Bool                                                      // the "still busy" line was already logged for this stall
-	membership  func(sessionID string) (bool, error)                             // a test seam: team.MembershipReader; nil = from the registry
-	memBudget   time.Duration                                                    // how long an event waits for the membership read; 0 = membershipBudget
-	memBusy     atomic.Bool                                                      // a membership read is still running: never more than one outstanding
-	rs          *readSync                                                        // read sync: the pending reads per registration and their flush timers (readsync.go)
-	regSeq      map[string]uint64                                                // the order registrations were made in (this run), to tell a rotated token from the one it replaced
-	regNext     uint64
-	readsFeed   reads.Feed // a test seam: the reads module's feed; nil = from the registry
-	unsubReads  func()
-	closes      *closeCoalescer // closed badge cards waiting for their 2 s window (badge_close.go); fires into the sender's queue
-	holds       holdSet
-	wbHolds     wbHoldSet                  // Stop pushes held for the session workbook's line (agent_trigger.go)
-	wbWait      func() time.Duration       // a test seam: the push_wait_s setting; nil = from the registry
-	wbLines     func() workbooklines.Lines // a test seam: the workbook's waiter; nil = from the registry
-	holdFor     time.Duration              // how long a waiting event waits for its hook_ask (spec §5.2 rule 8); a test seam
-	unsubNotify func()
+	gate           *Gate
+	asks           *openAsks
+	reader         team.OpenApprovalsReader                                         // fresh read of the open set at send time (purdex.open_approvals); nil = unknown
+	sessions       func(ctx context.Context) (map[string]session.SessionRef, error) // ONE read of every tmux session (name -> code, creation time); nil = from the session module
+	sessBudget     time.Duration                                                    // how long a snapshot waits for that read; 0 = sessionBudget
+	sessBusy       atomic.Bool                                                      // a session read is still running: never more than one outstanding
+	sessStalled    atomic.Bool                                                      // the "still busy" line was already logged for this stall
+	membership     func(sessionID string) (bool, error)                             // a test seam: team.MembershipReader; nil = from the registry
+	memBudget      time.Duration                                                    // how long an event waits for the membership read; 0 = membershipBudget
+	memBusy        atomic.Bool                                                      // a membership read is still running: never more than one outstanding
+	rs             *readSync                                                        // read sync: the pending reads per registration and their flush timers (readsync.go)
+	regSeq         map[string]uint64                                                // the order registrations were made in (this run), to tell a rotated token from the one it replaced
+	regNext        uint64
+	readsFeed      reads.Feed // a test seam: the reads module's feed; nil = from the registry
+	unsubReads     func()
+	closes         *closeCoalescer // closed badge cards waiting for their 2 s window (badge_close.go); fires into the sender's queue
+	holds          holdSet
+	ap             approvalPush               // the state of each approval push (approval_push.go)
+	apClock        func() time.Time           // a test seam: nil = time.Now
+	apAfterRead    func(id string)            // a test seam: runs between the late check's read of the card and its push path
+	apAfterReserve func(id string)            // a test seam: runs after a push path reserved the card, before it enqueues
+	wbHolds        wbHoldSet                  // Stop pushes held for the session workbook's line (agent_trigger.go)
+	wbWait         func() time.Duration       // a test seam: the push_wait_s setting; nil = from the registry
+	wbLines        func() workbooklines.Lines // a test seam: the workbook's waiter; nil = from the registry
+	holdFor        time.Duration              // how long a waiting event waits for its hook_ask (spec §5.2 rule 8); a test seam
+	unsubNotify    func()
 }
 
 // presenceChecker answers "does a present Mac show this session" (push spec R6, §5.4): by tmux session name for an
@@ -250,6 +254,7 @@ func (m *Module) Start(ctx context.Context) error {
 	m.sender.Store(snd)
 	m.core.Registry.Register(team.PauseNotifyKey, m.pauseNotifier()) // the team module's pause outbox asks for a phone push through it
 	m.holds.reset()
+	m.ap.start()
 	m.wbHolds.reset()
 	m.closes.reset()
 	snd.reads = m.rs
@@ -354,6 +359,7 @@ func (m *Module) Stop(context.Context) error {
 		m.unsubNotify()
 		m.unsubNotify = nil
 	}
+	m.ap.stop()      // no new approval push path; the ones under way finish before the sender goes
 	m.wbHolds.stop() // before the sender: a hold that is mid-send enqueues onto a live sender, then nothing more
 	m.holds.stopAll()
 	m.closes.stop() // a window that has not ended sends nothing
@@ -362,142 +368,6 @@ func (m *Module) Stop(context.Context) error {
 		snd.Stop() // a callback that already holds snd only enqueues onto a stopped sender: harmless
 	}
 	return nil // the store is released by Close, after the HTTP server drained (#1033)
-}
-
-// maxOpenKeys caps purdex.open_approval_keys (spec §6); open_approvals still reports the full count.
-const maxOpenKeys = 32
-
-// maxSessionIDKey bounds the session id a "c:" key may carry (a Claude Code session id is a 36-byte UUID). A longer one is
-// not a real id: it would make 32 keys overflow the 4 KiB payload of every push of the host while its card is open, so such
-// a card keys by its own approval id instead.
-const maxSessionIDKey = 64
-
-// sessionBudget bounds the one session read a snapshot makes; past it every approval falls back to its id.
-const sessionBudget = time.Second
-
-// sessionSkew is how much later than an approval a tmux session may have been created and still be the approval's own
-// (tmux's #{session_created} has one-second resolution; the approval's clock is the daemon's).
-const sessionSkew = 2 * time.Second
-
-// readSessions is the one tmux read of a snapshot, bounded by the budget even when the reader ignores its context.
-func (m *Module) readSessions(ctx context.Context) map[string]session.SessionRef {
-	if m.sessions == nil {
-		return nil
-	}
-	budget := m.sessBudget
-	if budget <= 0 {
-		budget = sessionBudget
-	}
-	// Single flight: a reader that ignores its context keeps its goroutine, so while one is outstanding no other starts.
-	if !m.sessBusy.CompareAndSwap(false, true) {
-		if m.sessStalled.CompareAndSwap(false, true) { // once per stall, not per Job
-			log.Printf("[push] the previous tmux session read has not returned; not starting another (badge keys fall back to approval ids)")
-		}
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(ctx, budget)
-	defer cancel()
-	type result struct {
-		refs map[string]session.SessionRef
-		err  error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		refs, err := m.sessions(ctx)
-		m.sessStalled.Store(false)
-		m.sessBusy.Store(false)
-		ch <- result{refs, err}
-	}()
-	select {
-	case r := <-ch:
-		if r.err != nil {
-			log.Printf("[push] could not read the tmux sessions: %v (badge keys fall back to approval ids)", r.err)
-			return nil
-		}
-		return r.refs
-	case <-ctx.Done():
-		log.Printf("[push] the tmux session read took over %v (badge keys fall back to approval ids)", budget)
-		return nil
-	}
-}
-
-// ownSession is the session code of the tmux session an approval was raised in; "" when it cannot be vouched for. The name
-// alone is not enough: a session killed and recreated under the same name is another session, and it was created after the
-// approval. An unknown creation time on either side is not vouched for either.
-func ownSession(refs map[string]session.SessionRef, name string, approvalAtMs int64) string {
-	ref, ok := refs[name]
-	if !ok || name == "" || ref.Created <= 0 || approvalAtMs <= 0 {
-		return ""
-	}
-	if ref.Created*1000 > approvalAtMs+sessionSkew.Milliseconds() {
-		return ""
-	}
-	return ref.Code
-}
-
-// openState reads the open approval set now: the count of the cards the badge counts (push.CountsForBadge: lead,
-// self_relay, member_relay, adopt, hook_ask, hook_permission — whether or not they got a visible push) for
-// `purdex.open_approvals`, and the sorted, de-duplicated badge keys for `purdex.open_approval_keys` ("s:<session_code>" when
-// the approval's own tmux session resolves, else "c:<origin session_id>" when it has one, else "a:<approval_id>", at most
-// maxOpenKeys). The Job's own approval is resolved from what the Job carries, independently of the open set (it may
-// have closed while the Job was queued, or the open-set read may have failed): its session_code is snap.code. The sender
-// asks once per Job and shares the answer across its devices; the tmux read is a single bounded call, made only if the Job's
-// approval or a pushed open approval has a tmux origin. Nothing is kept between sends, so there is nothing to drift.
-// ok=false (no reader, or the read failed) means the count and keys are unknown: the payload then leaves both fields out.
-func (m *Module) openState(ctx context.Context, j Job) openSnap {
-	var pushed []team.Approval
-	openOK := false
-	if r := m.reader; r != nil {
-		open, err := r.OpenApprovals()
-		if err != nil {
-			log.Printf("[push] could not read the open approvals: %v (open_approvals left out of this push)", err)
-		} else {
-			openOK = true
-			for _, a := range open {
-				if push.CountsForBadge(string(a.Kind)) { // the cards the badge counts, pushed or not (badge spec §3.1)
-					pushed = append(pushed, a)
-				}
-			}
-		}
-	}
-	needSessions := j.Approval != nil && j.Approval.TmuxSession != ""
-	for _, a := range pushed {
-		if tmuxSessionOf(a.Origin.Tmux) != "" {
-			needSessions = true
-		}
-	}
-	var refs map[string]session.SessionRef
-	if needSessions {
-		refs = m.readSessions(ctx)
-	}
-	snap := openSnap{ok: openOK}
-	if j.Approval != nil {
-		snap.code = ownSession(refs, j.Approval.TmuxSession, j.Approval.CreatedAt)
-	}
-	if !openOK {
-		return snap
-	}
-	snap.n = len(pushed)
-	set := map[string]struct{}{}
-	for _, a := range pushed {
-		switch code := ownSession(refs, tmuxSessionOf(a.Origin.Tmux), a.CreatedAt); {
-		case code != "":
-			set["s:"+code] = struct{}{}
-		case a.Origin.SessionID != "" && len(a.Origin.SessionID) <= maxSessionIDKey: // several cards of one unresolved session count once
-			set["c:"+a.Origin.SessionID] = struct{}{}
-		default:
-			set["a:"+a.ID] = struct{}{}
-		}
-	}
-	snap.keys = make([]string, 0, len(set))
-	for k := range set {
-		snap.keys = append(snap.keys, k)
-	}
-	sort.Strings(snap.keys)
-	if len(snap.keys) > maxOpenKeys {
-		snap.keys = snap.keys[:maxOpenKeys]
-	}
-	return snap
 }
 
 // onApproval runs on the approval feed's own goroutine (never under the team module's lock). Only an `opened` approval of
@@ -511,41 +381,21 @@ func (m *Module) onApproval(op string, a team.Approval) {
 			m.closes.add(a.ID) // a card the badge counts went away: tell the phones that asked, after the 2 s window
 		}
 	}
+	if op == "closed" {
+		if _, pushed := push.ApprovalContent(toPushApproval(a), "", "en"); pushed {
+			m.closedApproval(a) // the tombstone: a late callback or a push path that has not enqueued yet stops
+		}
+	}
 	snd := m.sender.Load() // one read: Stop may clear it at any moment
 	if op != "opened" || snd == nil {
 		return
 	}
 	pa := toPushApproval(a)
 	if _, pushed := push.ApprovalContent(pa, "", "en"); !pushed {
+		logApproval(a, "not pushed: kind")
 		return
 	}
-	// PA-1 §4.3: a person at the computer needs no phone push, whatever the approval's origin (none included); an older
-	// App's window that shows the requesting session does the same for its own session.
-	if m.presence.AtComputer() {
-		return
-	}
-	if name := tmuxSessionOf(a.Origin.Tmux); name != "" && m.presence.ShowsName(name) {
-		return
-	}
-	devs := m.snapshot()
-	if len(devs) == 0 {
-		return
-	}
-	ids := make([]string, len(devs))
-	for i, d := range devs {
-		ids[i] = d.DeviceID
-	}
-	// Approval: the sender resolves session_code (#2235) from its one snapshot; nothing here may touch tmux.
-	ja := &JobApproval{ID: a.ID, TmuxSession: tmuxSessionOf(a.Origin.Tmux), CreatedAt: a.CreatedAt}
-	if m.presence.AtComputer() { // the person came back since the check above: nothing is told
-		return
-	}
-	// Rule 8 (§4.4): the ask counts as pushed only when its push was actually queued for the devices.
-	if snd.Enqueue(Job{DeviceIDs: ids, Approval: ja, Make: func(d push.Device) (push.Content, bool) {
-		return push.ApprovalContent(pa, d.HostLabel, d.Locale)
-	}}) {
-		m.asks.Opened(a)
-	}
+	m.openedApproval(a, pa)
 }
 
 func toPushApproval(a team.Approval) push.Approval {

@@ -883,3 +883,75 @@ func TestOuterChain_PairingFlowWorksWithAnEmptyToken(t *testing.T) {
 		}
 	}
 }
+
+// The profiler (/debug/pprof/*) sits behind the daemon's own authentication on the real daemon routes: no token is 401, a peer host's token
+// is refused like a wrong one, and the admin token reaches it (cmdline answers, a named profile answers, the index lists them). Mutation
+// gates: not registered → 404 for the admin (red); registered on a path outside the general chain → the unauthenticated request gets in (red).
+func TestDaemonPprofRequiresHostToken(t *testing.T) {
+	c := newTestCore(&config.Config{Token: "host-token", DataDir: t.TempDir(), Peers: config.PeersConfig{
+		Hosts: []config.PeerHost{{Alias: "host-a", HostID: "hostid-a", InboundToken: "host-a-token"}}}})
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+	h := newOuterHandler(c, mux, mux, nil)
+
+	for _, path := range []string{"/debug/pprof/", "/debug/pprof/cmdline", "/debug/pprof/heap?debug=1", "/debug/pprof/goroutine?debug=1", "/debug/pprof/symbol", "/debug/pprof/profile?seconds=1", "/debug/pprof/trace?seconds=1"} {
+		if rec := doRequest(t, h, "GET", path, ""); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s without a token: got %d, want 401", path, rec.Code)
+		}
+		if rec := doRequest(t, h, "GET", path, "wrong-token"); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s with a wrong token: got %d, want 401", path, rec.Code)
+		}
+		if rec := doRequest(t, h, "GET", path, "host-a-token"); rec.Code != http.StatusUnauthorized { // a paired peer host's inbound token
+			t.Fatalf("%s with a peer host's token: got %d, want 401", path, rec.Code)
+		}
+	}
+	// HEAD and a non-canonical path are no way in either
+	if rec := doRequest(t, h, "HEAD", "/debug/pprof/cmdline", ""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("HEAD without a token: got %d, want 401", rec.Code)
+	}
+	if rec := doRequest(t, h, "GET", "/debug/pprof/../pprof/cmdline", ""); rec.Code == http.StatusOK {
+		t.Fatalf("an unclean path without a token: got 200")
+	}
+	// a profile that asks for too long is refused before it starts (the admin's request, so past the chain)
+	for _, q := range []string{"profile?seconds=3600", "profile?seconds=-1", "profile?seconds=x", "trace?seconds=11"} {
+		if rec := doRequest(t, h, "GET", "/debug/pprof/"+q, "host-token"); rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: got %d, want 400", q, rec.Code)
+		}
+	}
+	rec := doRequest(t, h, "GET", "/debug/pprof/cmdline", "host-token")
+	if rec.Code != http.StatusOK || rec.Body.Len() == 0 {
+		t.Fatalf("cmdline with the host token: got %d, %d bytes, want 200 and the command line", rec.Code, rec.Body.Len())
+	}
+	if rec := doRequest(t, h, "GET", "/debug/pprof/heap?debug=1", "host-token"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "heap profile") {
+		t.Fatalf("heap with the host token: got %d %q", rec.Code, rec.Body.String())
+	}
+	if rec := doRequest(t, h, "GET", "/debug/pprof/", "host-token"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "goroutine") {
+		t.Fatalf("index with the host token: got %d", rec.Code)
+	}
+	// a write method is no profiler call
+	if rec := doRequest(t, h, "POST", "/debug/pprof/cmdline", "host-token"); rec.Code == http.StatusOK {
+		t.Fatalf("POST /debug/pprof/cmdline: got 200, want a refusal")
+	}
+}
+
+// The fork counters (/api/debug/execstat) sit behind the same authentication as the profiler: no token, a wrong one and a paired
+// peer host's inbound token are all 401; the admin token gets the report. Mutation gate: registered outside the general chain → the
+// unauthenticated request gets in (red).
+func TestDaemonExecstatRequiresHostToken(t *testing.T) {
+	c := newTestCore(&config.Config{Token: "host-token", DataDir: t.TempDir(), Peers: config.PeersConfig{
+		Hosts: []config.PeerHost{{Alias: "host-a", HostID: "hostid-a", InboundToken: "host-a-token"}}}})
+	mux := http.NewServeMux()
+	c.RegisterCoreRoutes(mux)
+	h := newOuterHandler(c, mux, mux, nil)
+
+	const path = "/api/debug/execstat"
+	for name, token := range map[string]string{"no token": "", "a wrong token": "wrong-token", "a peer host's token": "host-a-token"} {
+		if rec := doRequest(t, h, "GET", path, token); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s: got %d, want 401", name, rec.Code)
+		}
+	}
+	rec := doRequest(t, h, "GET", path, "host-token")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"tags"`) {
+		t.Fatalf("admin token: got %d %q, want 200 with the report", rec.Code, rec.Body.String())
+	}
+}

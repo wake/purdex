@@ -88,7 +88,7 @@ type LeaseRequest struct {
 	// fields).
 	Parkable bool `json:"parkable,omitempty"`
 	// Mode is how the caller wants a busy host answered (CallQueue, CallAsk,
-	// CallWait; empty reads as wait). Command and Cwd are shown in the queue;
+	// CallWait; empty reads as wait; CallAuto lets the daemon choose). Command and Cwd are shown in the queue;
 	// both are cut by the daemon and env is never sent.
 	Mode    string `json:"mode,omitempty"`
 	Command string `json:"command,omitempty"`
@@ -137,6 +137,10 @@ type LeaseResponse struct {
 	QueuedReason string `json:"queued_reason,omitempty"`
 	// Notice is the final notice a release answer carries (amendment A §3.3).
 	Notice string `json:"notice,omitempty"`
+	// Nested is the id of the outer lease whose process tree the caller runs in
+	// (P2f): the answer is held with no row of its own (ID is empty), and the
+	// command runs under the outer lease's weight.
+	Nested string `json:"nested,omitempty"`
 }
 
 // LeaseView is one held lease in a Snapshot.

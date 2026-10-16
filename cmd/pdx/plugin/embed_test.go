@@ -4,18 +4,21 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 	"testing/fstest"
 
-	"github.com/wake/purdex/internal/resources"
+	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/team"
 )
 
 func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
 	f := Files()
-	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "hooks/events.js", "hooks/lease.js", "hooks/member.js", "hooks/prompts.js", "hooks/workbook.js", "skills/pdx-team/SKILL.md", "skills/pdx-lease/SKILL.md"} {
+	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "hooks/events.js", "hooks/gate.js", "hooks/member.js", "hooks/prompts.js", "hooks/workbook.js", "skills/pdx-team/SKILL.md", "skills/pdx-gate/SKILL.md"} {
 		if _, err := fs.Stat(f, rel); err != nil {
 			t.Errorf("%s: %v", rel, err)
 		}
@@ -28,7 +31,7 @@ func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []struct{ name, file string }{{"registerAsk", "ask.js"}, {"registerEvents", "events.js"}, {"registerLease", "lease.js"}} {
+	for _, c := range []struct{ name, file string }{{"registerAsk", "ask.js"}, {"registerEvents", "events.js"}, {"registerGate", "gate.js"}} {
 		if !importsAndCalls(string(reg), c.name, c.file) {
 			t.Errorf("register.js does not import and register ./%s", c.file)
 		}
@@ -72,10 +75,10 @@ type registration struct {
 // one it reads — on('<event>', …) or on?.('<event>', …) with a quoted literal as the whole
 // first argument, its arguments on any line — or one that cannot register anything: a
 // function's parameter, a property key, the two calls that hand `on` to the other files
-// (registerAsk(on), registerEvents(on), registerLease(on), whose files are scanned too). Anything else (an
+// (registerAsk(on), registerEvents(on), registerGate(on), whose files are scanned too). Anything else (an
 // alias, `on` passed elsewhere, a variable or template event name) is an error.
 var (
-	handsOnTo   = regexp.MustCompile(`(?:^|[^\w$.])(?:registerAsk|registerEvents|registerLease)\s*\(\s*$`)
+	handsOnTo   = regexp.MustCompile(`(?:^|[^\w$.])(?:registerAsk|registerEvents|registerGate)\s*\(\s*$`)
 	onParameter = regexp.MustCompile(`(?:^|[^\w$.])function\s*\*?\s*[\w$]*\s*\(\s*$`)
 )
 
@@ -117,11 +120,11 @@ func scanRegistrations(file, src string) (regs []registration, problems []string
 				regs = append(regs, r)
 			}
 		case next < len(code) && code[next] == ')' && (handsOnTo.MatchString(code[:at]) || onParameter.MatchString(code[:at])):
-			// registerAsk(on) / registerEvents(on) / registerLease(on), or function register(on)
+			// registerAsk(on) / registerEvents(on) / registerGate(on), or function register(on)
 		case next < len(code) && code[next] == ':' && prev >= 0 && (code[prev] == '{' || code[prev] == ','):
 			// a property key: { on: … }
 		default:
-			problems = append(problems, where(at)+": `on` is used other than in on('<event>', …), registerAsk(on), registerEvents(on) or registerLease(on) (an alias, an argument, a parameter of an arrow, …): the guard cannot follow it, so call on('<event>', …) directly")
+			problems = append(problems, where(at)+": `on` is used other than in on('<event>', …), registerAsk(on), registerEvents(on) or registerGate(on) (an alias, an argument, a parameter of an arrow, …): the guard cannot follow it, so call on('<event>', …) directly")
 		}
 	}
 	return regs, problems
@@ -394,7 +397,7 @@ func TestHooks_NoEventRegisteredTwiceWithoutMatcher(t *testing.T) {
 		{"hooks/events.js", "turn.complete", "{ turnId: /^/ }"},
 		{"hooks/register.js", "turn.complete", ""},
 		{"hooks/ask.js", "tool.call", "{ tool: 'AskUserQuestion' }"},
-		{"hooks/lease.js", "tool.call", "{ tool: 'Bash' }"},
+		{"hooks/gate.js", "tool.call", "{ tool: 'Bash' }"},
 		{"hooks/events.js", "ui.render", "{ component: 'SessionMode' }"},
 	} {
 		found := false
@@ -404,6 +407,72 @@ func TestHooks_NoEventRegisteredTwiceWithoutMatcher(t *testing.T) {
 		if !found {
 			t.Errorf("the scan did not find %+v among %d registrations", want, len(regs))
 		}
+	}
+}
+
+// gate.js is one file with no import: `$` handed to a function imported from another file is a mod tree Claude Code 2.1.296
+// refuses to load, and every session on it stays on the old mod (#2871). events.js does not import it either.
+func TestHooks_GateIsSelfContained(t *testing.T) {
+	g, err := fs.ReadFile(Files(), "hooks/gate.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if regexp.MustCompile(`(?m)^\s*import\b`).Match(g) {
+		t.Error("gate.js imports another file: `$` must not cross an import (#2871)")
+	}
+	ev, err := fs.ReadFile(Files(), "hooks/events.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(ev), "from './gate.js'") {
+		t.Error("events.js imports gate.js")
+	}
+}
+
+// TestHooks_OldestInstalledClaudeCodeLoadsTheModTree (#2871): a mod tree an older Claude Code refuses to load keeps
+// every session on it on the previous mod ("reload failed, the previous version stays loaded"). The loader of 2.1.296
+// was stricter than the newer ones (`$` may go only into a function declared in the same file), so the tree is
+// validated by the oldest Claude Code installed here; without one the test is skipped.
+func TestHooks_OldestInstalledClaudeCodeLoadsTheModTree(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("no home directory")
+	}
+	vers, _ := filepath.Glob(filepath.Join(home, ".local", "share", "claude", "versions", "*"))
+	var oldest string
+	var oldestKey [3]int
+	for _, v := range vers {
+		var key [3]int
+		if _, err := fmt.Sscanf(filepath.Base(v), "%d.%d.%d", &key[0], &key[1], &key[2]); err != nil {
+			continue
+		}
+		if oldest == "" || key[0] < oldestKey[0] || key[0] == oldestKey[0] && (key[1] < oldestKey[1] || key[1] == oldestKey[1] && key[2] < oldestKey[2]) {
+			oldest, oldestKey = v, key
+		}
+	}
+	if oldest == "" {
+		t.Skip("no installed Claude Code to validate with")
+	}
+	dir := t.TempDir()
+	if err := fs.WalkDir(Files(), ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		dst := filepath.Join(dir, p)
+		if d.IsDir() {
+			return os.MkdirAll(dst, 0o755)
+		}
+		b, err := fs.ReadFile(Files(), p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dst, b, 0o644)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(oldest, "plugin", "validate", dir).CombinedOutput()
+	if err != nil {
+		t.Errorf("%s plugin validate: %v\n%s", filepath.Base(oldest), err, out)
 	}
 }
 
@@ -515,85 +584,68 @@ func TestScanRegistrations_FailsClosed(t *testing.T) {
 	}
 	// What the mod itself does with `on` passes: registerAsk(on), registerEvents(on), a
 	// function's parameter, a property key, a property access.
-	ok := "export function register(on) {\n  registerAsk(on)\n  registerEvents( on )\n  registerLease(on)\n  on('tool.call', { tool: 'Bash' }, h)\n}\nconst label = { on: 'x', off: 'y' }[k]\n$.ui.on('x', h)\nconst json = once + on_ + $on\n"
+	ok := "export function register(on) {\n  registerAsk(on)\n  registerEvents( on )\n  registerGate(on)\n  on('tool.call', { tool: 'Bash' }, h)\n}\nconst label = { on: 'x', off: 'y' }[k]\n$.ui.on('x', h)\nconst json = once + on_ + $on\n"
 	regs, problems := scanRegistrations("a.js", ok)
 	if len(problems) > 0 || len(regs) != 1 || regs[0] != (registration{"a.js", "tool.call", "{ tool: 'Bash' }"}) {
 		t.Errorf("scan = %+v, problems %q; want the one registration and no problem", regs, problems)
 	}
 }
 
-// registerLease(on) is allowed like the other two, and a typo of it still fails closed.
-func TestScanRegistrations_AllowsRegisterLease(t *testing.T) {
-	regs, problems := scanRegistrations("a.js", "export function register(on) {\n  registerLease(on)\n}\n")
+// registerGate(on) is allowed like the others, and a typo of it still fails closed.
+func TestScanRegistrations_AllowsRegisterGate(t *testing.T) {
+	regs, problems := scanRegistrations("a.js", "export function register(on) {\n  registerGate(on)\n}\n")
 	if len(problems) > 0 || len(regs) != 0 {
 		t.Errorf("scan = %+v, problems %q; want nothing registered and no problem", regs, problems)
 	}
-	_, problems = scanRegistrations("a.js", "export function register(on) {\n  registerLeas(on)\n}\n")
+	_, problems = scanRegistrations("a.js", "export function register(on) {\n  registerGat(on)\n}\n")
 	if len(problems) == 0 || !strings.Contains(strings.Join(problems, "\n"), "used other than") {
-		t.Errorf("a registerLeas(on) typo must fail closed, problems = %q", problems)
+		t.Errorf("a registerGat(on) typo must fail closed, problems = %q", problems)
 	}
 }
 
-// The lease skill tells an agent to wrap heavy commands in `pdx lease run`, what
-// counts as heavy, how to behave while waiting, and never to acquire in a
-// subshell (the lease is held for acquire's parent, which exits at once).
-func TestSkill_LeaseMentionsRun(t *testing.T) {
-	b, err := fs.ReadFile(Files(), "skills/pdx-lease/SKILL.md")
+// registerLease(on) is gone: a stale call of it fails closed like any other name the scan cannot follow.
+func TestScanRegistrations_RetiredRegisterLeaseFailsClosed(t *testing.T) {
+	_, problems := scanRegistrations("a.js", "export function register(on) {\n  registerLease(on)\n}\n")
+	if len(problems) == 0 || !strings.Contains(strings.Join(problems, "\n"), "used other than") {
+		t.Errorf("a registerLease(on) must fail closed, problems = %q", problems)
+	}
+}
+
+// The gate skill tells an agent what is held and why not to get around it, how to read the status, and how to use the gate
+// in a script. The exit code and the strings it names are the real ones.
+func TestSkill_GateSaysWhatAnAgentNeeds(t *testing.T) {
+	b, err := fs.ReadFile(Files(), "skills/pdx-gate/SKILL.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(b)
 	for _, want := range []string{
-		"name: pdx-lease",
-		"pdx lease run --kind <kind> -- <指令…>", // the line an agent copies
-		"`test-full`", "`build`", "`test-pkg`", "`lint-full`", // D-7 kinds
-		"--maxWorkers=3", // R7
-		"等待就是主機忙，不是卡住",
-		"不要用 `run_in_background` 繞過排隊", // R8
-		"不要在子 shell 裡直接 acquire",
-		"agent 一律用 `pdx lease run`",
-		"pdx lease ls",
-		// Review of P1-3c: the contract an agent following the text literally needs.
-		"`--kind`、`--weight`、`--wait`、`--client-id`、`--config`）都要放在 `--` 之前", // flags before the separator
-		"pdx lease run --kind build -- pnpm run build --wait 2m",             // the wrong example is shown as wrong
-		"**12**", "**126**", "**127**", "以 `pdx lease:` 開頭的一行", // pdx's own exit codes
-		"Purdex mod 已經替你處理前景的重 Bash", "你不必自己包 `pdx lease run`", "`advise` 期間 mod 只記錄不擋", // Task 2.4: the mod covers foreground Bash
-		"完整 vitest 的名額規定照舊",                               // the coordinator-slot rule stays until P2 (Task 2.4)
-		"sh -c 'cd spa && npx vitest run --maxWorkers=3'", // runs from the repo root
+		"name: pdx-gate",
+		"排隊就是主機忙，不是卡住",
+		"你不必自己包 `pdx gate`",
+		"**不要用 `&`、`run_in_background` 或 `nohup` 繞過排隊**",
+		"不要重跑、不要自己加 `&`、不要假設它做完了", // what to do with the mod's background note
+		"整個", // the whole call goes to the background
+		"node_modules/.bin/vitest", "vendor/bin/pest", "pdx gate --auto --",
+		"pdx gate status", "pdx gate status --json", "pdx gate would-wait --auto --",
+		"拿著鎖的行程",
+		"pdx gate -- ./script.sh", "不要只包腳本裡的某一步",
+		"旗標都放在 `--` 之前",
+		"**75**", "`pdx gate:`", // the gate's own exit code (gate.ExitRefused) and its stderr prefix
+		"`pdx lease run --kind … -- <指令…>` 目前是 `pdx gate` 的別名", "`--ask`／`--queue`／`--wait` 已沒有作用", "`build` 不經閘門直接執行", "實際數字以 `pdx gate status` 顯示的生效設定為準", // the retired verb is named once, as an alias
 	} {
 		if !strings.Contains(s, want) {
-			t.Errorf("SKILL.md of pdx-lease lacks %q", want)
+			t.Errorf("SKILL.md of pdx-gate lacks %q", want)
 		}
 	}
-	// The weights in the table are the built-in ones of spec D-7.
-	for _, row := range []string{"| `test-full` |", "| 35 |", "| 15 |", "| 10 |"} {
-		if !strings.Contains(s, row) {
-			t.Errorf("weight table lacks %q", row)
+	// What the lease told and the gate does not: none of it may survive in the skill.
+	for _, gone := range []string{"輪到你了", "pdx lease confirm", "pdx lease cancel", "pdx lease acquire", "advise", "--maxWorkers=3"} {
+		if strings.Contains(s, gone) {
+			t.Errorf("SKILL.md of pdx-gate still says %q", gone)
 		}
 	}
-}
-
-// The weights the skill prints are the built-in ones: a change of D-7 that
-// forgets the skill fails here.
-func TestSkill_LeaseWeightsAreTheBuiltInOnes(t *testing.T) {
-	b, err := fs.ReadFile(Files(), "skills/pdx-lease/SKILL.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	row := regexp.MustCompile("(?m)^\\| `([a-z-]+)` \\|.*\\| (\\d+) \\|$")
-	got := map[string]int{}
-	for _, m := range row.FindAllStringSubmatch(string(b), -1) {
-		n := 0
-		fmt.Sscan(m[2], &n)
-		got[m[1]] = n
-	}
-	if len(got) != len(resources.DefaultKinds) {
-		t.Fatalf("skill table = %v, built-in = %v", got, resources.DefaultKinds)
-	}
-	for k, w := range resources.DefaultKinds {
-		if got[k] != w {
-			t.Errorf("kind %s: skill says %d, built-in is %d", k, got[k], w)
-		}
+	if want := fmt.Sprintf("**%d**", gate.ExitRefused); !strings.Contains(s, want) {
+		t.Errorf("SKILL.md of pdx-gate does not name the gate's refusal code %s", want)
 	}
 }
 

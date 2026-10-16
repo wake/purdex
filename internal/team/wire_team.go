@@ -75,7 +75,7 @@ const (
 const (
 	TeamEndLeadGone = "lead_gone" // Team.EndReason: the lead's conversation ended (§7.1)
 
-	SpawnRegisterS = 20 // §7.2 step 5: a launched member must register within this
+	SpawnRegisterS = 60 // §7.2 step 5: a launched member must register within this (20 until #2853: a cold Claude Code on a loaded host took longer)
 	SpawnPollWaitS = 25 // POST /api/team/spawns answers within this, running or not
 
 	// DefaultMemberCommand is host config team.member_command when unset
@@ -270,6 +270,9 @@ type SpawnOp struct {
 type KillRequest struct {
 	OriginInbox string `json:"origin_inbox"` // CLAUDE_CODE_MESSAGING_SOCKET of the lead
 	Target      string `json:"target"`       // the member's ref or address, as `pdx kill <ref>` takes it
+	// Handoff: the member writes its handoff first and is killed once the file is written (RT-3c): `pdx kill <ref> --handoff`. The
+	// answer is then 201 and the op (RelayCreateResponse), not the member.
+	Handoff bool `json:"handoff,omitempty"`
 }
 
 // TeamView is GET /api/team: the caller's team and every member of it, in

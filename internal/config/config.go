@@ -322,6 +322,15 @@ func (c Config) Clone() Config {
 		p := *c.Push
 		out.Push = &p
 	}
+	if c.Journal != nil {
+		j := *c.Journal
+		j.PushProjects = slices.Clone(c.Journal.PushProjects)
+		if c.Journal.Enabled != nil {
+			on := *c.Journal.Enabled
+			j.Enabled = &on
+		}
+		out.Journal = &j
+	}
 
 	return out
 }
@@ -343,6 +352,8 @@ type Config struct {
 	Peers        PeersConfig    `toml:"peers"          json:"peers"`
 	Nex          NexConfig      `toml:"nex"            json:"nex"`
 	Push         *PushConfig    `toml:"push,omitempty" json:"push,omitempty"`
+	// Journal is a pointer for the reason Push is: a config without the section is written back without one.
+	Journal *JournalConfig `toml:"journal,omitempty" json:"journal,omitempty"`
 
 	// Path is the file Load read (or would have read: a missing file still
 	// sets it), so a caller can name this daemon's config to a child — the

@@ -1,5 +1,7 @@
 package team
 
+import "encoding/json"
+
 // ---- P5a: relay ops, lineage, switches, pause (spec §8.1, §8.3, §8.4, §8.7) ----
 
 // RelayKind is who started a relay op (spec §8.1).
@@ -49,6 +51,7 @@ const (
 	RelayReasonDenied            = "denied"              // cancelled
 	RelayReasonTimeout           = "timeout"             // cancelled
 	RelayReasonCompacted         = "compacted"           // cancelled
+	RelayReasonHalf              = "half"                // cancelled: a half (or handoff) op whose file was written - its end, not a failure (RT-3a1, S-9)
 	RelayBeginReasonIdle         = "idle"                // begin's reason for an idle relay ask (the threshold ask has none)
 	RelayReasonResumed           = "resumed"             // cancelled: a prompt arrived while an idle ask was open (idle relay D6); only an idle op takes it
 	RelayReasonAbandoned         = "abandoned"           // cancelled
@@ -61,6 +64,7 @@ const (
 	ErrMemberRelayIsLeads = "member_relay_is_leads" // a member's relay is the lead's (U9)
 	ErrSelfRelayOff       = "self_relay_off"        // the host switch is off
 	ErrSelfRelayPaused    = "self_relay_paused"     // the session is paused
+	ErrReuseInvalid       = "reuse_invalid"         // begin's reuse_op is not this session's fresh half (RT-3a1)
 	ErrRelayOpen          = "relay_open"            // an op is already open for this session; carries Op
 	ErrUnknownSession     = "unknown_session"       // 404: session_id is not a live CC session on this host
 	ErrBadTransition      = "bad_transition"        // report: the op's state does not lead to this one; carries Op
@@ -68,36 +72,41 @@ const (
 
 // Relay limits (spec §8.1, §8.7).
 const (
-	RelayThresholdPct     = 70      // U1: used ≥ 70 % triggers the ask
-	RelayIdleMinutes      = 40      // idle relay D1: a session idle this long is told to / asks for a relay
-	RelayIdleThresholdPct = 40      // idle relay D1: … when its context use is at least this much
-	RelayMinGrowth        = 20000   // §8.1 loop guard: tokens a seeded conversation must grow before asking again
-	SelfRelayDeadlineS    = 600     // §8.7: 10 minutes, absolute
-	RelayDir              = "relay" // <data_dir>/relay/<op id>.md
+	RelayThresholdPct     = 70    // U1: used ≥ 70 % triggers the ask
+	RelayIdleMinutes      = 40    // idle relay D1: a session idle this long is told to / asks for a relay
+	RelayIdleThresholdPct = 40    // idle relay D1: … when its context use is at least this much
+	RelayMinGrowth        = 20000 // §8.1 loop guard: tokens a seeded conversation must grow before asking again
+	SelfRelayDeadlineS    = 600   // §8.7: 10 minutes, absolute
+	// SelfRelayIdleDeadlineS is an idle card's life while the host switch is off (RT-3a1 T29): five minutes, then it times out.
+	SelfRelayIdleDeadlineS = 300
+	RelayDir               = "relay" // <data_dir>/relay/<op id>.md
 )
 
 // RelayOp is one relay operation, self or member (spec §8.1).
 type RelayOp struct {
-	ID             string     `json:"id"`
-	Kind           RelayKind  `json:"kind"`
-	HostID         string     `json:"host_id"`
-	SessionID      string     `json:"session_id"`               // the session being relayed (old id)
-	NewSessionID   string     `json:"new_session_id,omitempty"` // after cleared
-	Ref            string     `json:"ref"`                      // old ref
-	NewRef         string     `json:"new_ref,omitempty"`
-	TeamID         string     `json:"team_id,omitempty"`    // member relays (P6)
-	RequestID      string     `json:"request_id,omitempty"` // the self_relay or member_relay approval row (a member op created requested has none)
-	State          RelayState `json:"state"`
-	Reason         string     `json:"reason,omitempty"`
-	HandoffPath    string     `json:"handoff_path"`         // <data_dir>/relay/<op id>.md
-	PID            int        `json:"pid,omitempty"`        // the process the op is bound to (P6-2a); 0 on an op from before it
-	PaneID         string     `json:"pane_id,omitempty"`    // the tmux pane "%N" it runs in, "" when none
-	SeenAt         int64      `json:"seen_at,omitempty"`    // when the member's mod first saw the control message (P6-2b-2); 0 = not yet
-	ProcStart      string     `json:"proc_start,omitempty"` // the process's start time as the registry shows it; pid + proc_start is the identity (a pid is reused)
-	Pruned         bool       `json:"pruned,omitempty"`
-	UsedPercentage *float64   `json:"used_percentage,omitempty"`
-	CreatedAt      int64      `json:"created_at"`
-	UpdatedAt      int64      `json:"updated_at"`
+	ID           string     `json:"id"`
+	Kind         RelayKind  `json:"kind"`
+	HostID       string     `json:"host_id"`
+	SessionID    string     `json:"session_id"`               // the session being relayed (old id)
+	NewSessionID string     `json:"new_session_id,omitempty"` // after cleared
+	Ref          string     `json:"ref"`                      // old ref
+	NewRef       string     `json:"new_ref,omitempty"`
+	TeamID       string     `json:"team_id,omitempty"`    // member relays (P6)
+	RequestID    string     `json:"request_id,omitempty"` // the self_relay or member_relay approval row (a member op created requested has none)
+	State        RelayState `json:"state"`
+	Reason       string     `json:"reason,omitempty"`
+	HandoffPath  string     `json:"handoff_path"`         // <data_dir>/relay/<op id>.md
+	PID          int        `json:"pid,omitempty"`        // the process the op is bound to (P6-2a); 0 on an op from before it
+	PaneID       string     `json:"pane_id,omitempty"`    // the tmux pane "%N" it runs in, "" when none
+	SeenAt       int64      `json:"seen_at,omitempty"`    // when the member's mod first saw the control message (P6-2b-2); 0 = not yet
+	ProcStart    string     `json:"proc_start,omitempty"` // the process's start time as the registry shows it; pid + proc_start is the identity (a pid is reused)
+	// Mode is how far the op goes (RT-3a1): "" a full relay, RelayModeHalf the handoff file only (an idle session's half, S-9), RelayModeHandoff
+	// the file and then the member's kill (RT-3c).
+	Mode           string   `json:"mode,omitempty"`
+	Pruned         bool     `json:"pruned,omitempty"`
+	UsedPercentage *float64 `json:"used_percentage,omitempty"`
+	CreatedAt      int64    `json:"created_at"`
+	UpdatedAt      int64    `json:"updated_at"`
 }
 
 // SelfRelayPayload is Approval.Payload for KindSelfRelay (dialog body, spec §8.7).
@@ -120,6 +129,12 @@ type SelfRelayPayload struct {
 	// Person: the begin was a person's own /relay (RT-1a), approved at begin by the person. The row's, set by the daemon when it
 	// consumed the token; a caller cannot send it.
 	Person bool `json:"person,omitempty"`
+	// Half / ReuseOp: what the caller asked for (RT-3a1), kept so a replay of the begin can be told from another request.
+	Half    bool   `json:"half,omitempty"`
+	ReuseOp string `json:"reuse_op,omitempty"`
+	// HalfOnTimeout: an idle card whose session's mod (protocol >= MinHalfModVersion) writes a half when the card times out. The row's, set
+	// by the daemon at begin; the push says "a handoff file in 5 minutes" only for such a card (RT-3a2).
+	HalfOnTimeout bool `json:"half_on_timeout,omitempty"`
 }
 
 // RelayLastAskPct is the context use at which a self-relay ask is the LAST one (relay/team rules v2, §4.2): from here an ask that
@@ -135,6 +150,20 @@ type RelayWaiting struct {
 	RequestID    string  `json:"request_id"`
 	Op           RelayOp `json:"op"`
 	UnansweredAt int64   `json:"unanswered_at"`
+}
+
+// RelayFreshHalf is a session's fresh half: the handoff file an idle half wrote, and when.
+type RelayFreshHalf struct {
+	OpID      string `json:"op_id"`
+	Path      string `json:"path"`
+	WrittenAt int64  `json:"written_at"`
+}
+
+// RelayFreshRequest is POST /api/relay/fresh: the mod reports the half's file stale (S-10). Only stale:true is defined.
+type RelayFreshRequest struct {
+	SessionID string `json:"session_id"`
+	OpID      string `json:"op_id"`
+	Stale     bool   `json:"stale"`
 }
 
 // RelayHelloRequest is POST /api/relay/hello.
@@ -160,6 +189,8 @@ type RelayHelloResponse struct {
 	// picks it up (written: /clear and seed; claimed / writing: failed, mod_reloaded). Absent for every other
 	// state, and from a daemon older than this field (the mod then behaves as before).
 	ActiveRelay *RelayClaimResponse `json:"active_relay,omitempty"`
+	// FreshHalf is this session's fresh half (RT-3a1 C#18): an idle half whose handoff file is still current. A reloaded mod can reuse it.
+	FreshHalf *RelayFreshHalf `json:"fresh_half,omitempty"`
 	// Waiting is this session's unanswered final card (RT-2a1): a mod that reloaded and holds no request adopts it again.
 	// Absent for an ordinary open card and from a daemon older than this field.
 	Waiting *RelayWaiting `json:"waiting,omitempty"`
@@ -191,6 +222,12 @@ type RelayBeginRequest struct {
 	// resumed the session. Valid (this session's, unused, under 24 h) it is consumed and the begin opens a card for a person; unknown,
 	// used or another session's it is ignored and the ordinary rules apply.
 	ReaskID string `json:"reask_id,omitempty"`
+	// ReuseOp (RT-3a1 T31) names a fresh half's op whose handoff file this begin reuses instead of writing a new one. Valid: the session's own
+	// cancelled / half op, still the session's fresh half, its file there and not empty. Else 409 reuse_invalid and nothing is written.
+	ReuseOp string `json:"reuse_op,omitempty"`
+	// Half (with reason idle, RT-3a1) asks for the idle half: the daemon claims the op at once (mode half, approved by its own client, no
+	// quota, no card) and the mod writes the handoff file only - no /clear, no seed. Without reason idle it is 400.
+	Half bool `json:"half,omitempty"`
 	// PersonToken (with Manual) says the begin is the person's own /relay: the one-use token the daemon minted for the mod
 	// (POST /api/relay/person). Valid, it makes the relay direct: no card, no quota, whatever the switches. Invalid → 409
 	// person_token_invalid and nothing is written. Without it a manual begin is a card, as before (an older mod).
@@ -271,4 +308,68 @@ const LineageReaderKey = "team.lineage"
 // refs it took over from — newest first, the whole chain, uncapped (§8.4).
 type LineageReader interface {
 	PreviousRefs() (map[string][]string, error)
+}
+
+// Op modes (RelayOp.Mode) and the first mod protocol that speaks the half path (RT-3a1).
+const (
+	RelayModeHalf    = "half"
+	RelayModeHandoff = "handoff"
+	// MinHalfModVersion is the mod protocol that runs the idle half itself; an older mod keeps today's auto-approve, never a half.
+	MinHalfModVersion = 8
+	// MinHandoffModVersion is the mod protocol that writes a handoff op's file and goes on (pdx kill --handoff, RT-3c).
+	MinHandoffModVersion = 8
+)
+
+// The lead's texts about a handoff kill (RT-3c T38), word for word.
+const (
+	// HandoffClosedFmt: %s the member's address, %s its title, %s the handoff file.
+	HandoffClosedFmt = "[pdx team] member %s「%s」已交接：%s，已關閉。內容請由你決定要不要寫進記憶與文件。"
+	// HandoffNotClosedFmt: the file is written but the member was not closed (the kill did not complete, or the daemon stopped between).
+	HandoffNotClosedFmt = "[pdx team] member %s「%s」的交接檔已寫好（%s），但關閉沒完成，請再下一次 pdx kill。"
+)
+
+// ---- The fresh handoffs of a host (RT-3a2 T32, S-21) ----
+
+// RelayFreshRoute is GET /api/relay/fresh: the sessions that hold a fresh half now.
+const RelayFreshRoute = "/api/relay/fresh"
+
+// RelayFreshEventType is the HostEvent.Type of the same list: {op:"snapshot"} to each new subscriber, {op:"changed"} after each change.
+const RelayFreshEventType = "relay.fresh"
+
+// RelayFreshSession is one session's fresh half: the handoff file an idle half wrote for it.
+type RelayFreshSession struct {
+	SessionID string `json:"session_id"`
+	Ref       string `json:"ref"`
+	OpID      string `json:"op_id"`
+	Path      string `json:"path"`
+	WrittenAt int64  `json:"written_at"`
+}
+
+// RelayFreshView is the answer of GET /api/relay/fresh, oldest first.
+type RelayFreshView struct {
+	Sessions []RelayFreshSession `json:"sessions"` // never null (MarshalJSON)
+}
+
+// MarshalJSON writes no sessions as sessions:[], not null.
+func (v RelayFreshView) MarshalJSON() ([]byte, error) {
+	type plain RelayFreshView
+	if v.Sessions == nil {
+		v.Sessions = []RelayFreshSession{}
+	}
+	return json.Marshal(plain(v))
+}
+
+// RelayFreshEventValue is HostEvent.Value (JSON string) for RelayFreshEventType.
+type RelayFreshEventValue struct {
+	Op       string              `json:"op"` // "snapshot" | "changed"
+	Sessions []RelayFreshSession `json:"sessions"`
+}
+
+// MarshalJSON writes no sessions as sessions:[], not null.
+func (v RelayFreshEventValue) MarshalJSON() ([]byte, error) {
+	type plain RelayFreshEventValue
+	if v.Sessions == nil {
+		v.Sessions = []RelayFreshSession{}
+	}
+	return json.Marshal(plain(v))
 }

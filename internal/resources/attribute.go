@@ -11,6 +11,7 @@ type Proc struct {
 	PID, PPID int
 	Pcpu      float64 // percent of one core, as ps reports it
 	RSSBytes  uint64
+	Comm      string // the command's name (ps ucomm, at most 16 bytes, may hold spaces); "" when the line had none
 }
 
 // Root is where a session's process tree starts: the agent process itself.

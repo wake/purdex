@@ -36,6 +36,7 @@ const (
 	defaultCallCap  = 300                    // calls per host per hour
 	leaseSlack      = 10 * time.Second       // a lease lasts timeout_ms + this
 	completeTimeout = 30_000                 // ms: timeout_ms of a job's call
+	journalTimeout  = 60_000                 // ms: timeout_ms of a journal job's call (the mod allows up to 120 000)
 	reapEvery       = 5 * time.Second        // how often leases that ran out are looked for
 )
 
@@ -47,6 +48,15 @@ type Deps struct {
 	Seats   team.SeatReader             // nil: role is not recorded
 	Capable func(sessionID string) bool // whether the session's mod announced workbook.v2 (nil: nobody is)
 	HostID  string
+
+	// Journal resolves a unit's journal files and a session's name for the journal job. Nil: no journal job is queued.
+	Journal JournalSource
+	// OnJournalResult receives a journal job's validated result. J-1b2 replaces it with the outbox insert; nil: the
+	// result is only logged.
+	OnJournalResult func(JournalOutcome)
+	// PersonName is the person's name in the journal (config [journal] person_name), read each time a journal job is
+	// built, so a config reload applies to the next job. Nil or empty: the default.
+	PersonName func() string
 
 	// RefreshSessions lists the sessions whose live stream announced workbook.refresh within 30 s, with when (nil: none).
 	RefreshSessions func() []CapSession
@@ -100,6 +110,9 @@ func NewEngine(d Deps) *Engine {
 	}
 	if d.Logf == nil {
 		d.Logf = log.Printf
+	}
+	if d.Journal != nil && d.Store != nil {
+		d.Store.EnableJournalOutbox() // a journal source is wired: result transactions also write their outbox rows
 	}
 	return &Engine{d: d, convs: map[string]*convQ{}, waiting: map[string]*waitState{}, leases: map[string]*lease{}, callCap: defaultCallCap}
 }

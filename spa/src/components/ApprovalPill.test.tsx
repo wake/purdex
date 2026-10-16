@@ -7,6 +7,7 @@ import { render, screen, fireEvent, act } from '@testing-library/react'
 import { ApprovalPill } from './ApprovalPill'
 import { useApprovalStore } from '../stores/useApprovalStore'
 import { useI18nStore } from '../stores/useI18nStore'
+import { usePausedStore } from '../stores/usePausedStore'
 import type { Approval } from '../lib/team/types'
 
 const lead = (id: string, deadline: number, created = 1_000): Approval => ({
@@ -29,6 +30,7 @@ beforeEach(() => {
   vi.useFakeTimers({ now: 1_000 })
   useI18nStore.getState().setLocale('zh-TW')
   useApprovalStore.getState().reset()
+  usePausedStore.getState().reset()
 })
 afterEach(() => {
   vi.useRealTimers()
@@ -156,5 +158,40 @@ describe('ApprovalPill', () => {
     } finally {
       delete (HTMLElement.prototype as { animate?: unknown }).animate
     }
+  })
+})
+
+describe('ApprovalPill: cards that went unanswered', () => {
+  const SENTINEL = Date.UTC(9999, 11, 31)
+  const unanswered = (id: string, created = 1_000): Approval => ({ ...relay(id, SENTINEL, created), unanswered_at: created + 500 })
+
+  // Mutation gate: let the sentinel deadline count as the nearest -> the countdown is ~2.9e11 s -> red.
+  it('the nearest deadline skips an unanswered card', () => {
+    useApprovalStore.getState().applyOpened('h1', unanswered('a'))
+    useApprovalStore.getState().applyOpened('h1', lead('b', 1_000 + 65_000, 2_000))
+    render(<ApprovalPill />)
+    expect(pill().textContent).toBe('待核准 2 · 1:05')
+  })
+
+  it('only unanswered cards open: the pill stays, with no countdown', () => {
+    useApprovalStore.getState().applyOpened('h1', unanswered('a'))
+    render(<ApprovalPill />)
+    expect(pill().textContent).toBe('待核准 1 · 已暫停作業')
+  })
+
+  it('nothing open: no pill', () => {
+    const { container } = render(<ApprovalPill />)
+    expect(container.querySelector('[data-testid="approval-pill"]')).toBeNull()
+  })
+
+  // Mutation gate: drop rule (b) from nearestDeadline -> the card past its deadline is still "nearest" -> red.
+  it('a card held since opened that ran out, with its session paused for relay_unanswered: no countdown', () => {
+    useApprovalStore.getState().applyOpened('h1', relay('a', 1_000 + 5_000))
+    render(<ApprovalPill />)
+    expect(pill().textContent).toBe('待核准 1 · 0:05')
+    act(() => { vi.advanceTimersByTime(6_000) })
+    expect(pill().textContent).toBe('待核准 1 · 0:00')
+    act(() => { usePausedStore.getState().set('h1', [{ session_id: 'S-a', ref: '_x', title: '', role: 'solo', causes: ['relay_unanswered'], since: 1, lead_ref: '', bounced: 0 }], 1) })
+    expect(pill().textContent).toBe('待核准 1 · 已暫停作業')
   })
 })

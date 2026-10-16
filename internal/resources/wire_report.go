@@ -1,8 +1,7 @@
 package resources
 
-// The monitoring report (spec D-8.3, R10): what the stored lease rows and the
-// host timeline say about whether the admission rule suits the host. It reads
-// stored rows only and never samples.
+// The monitoring report (spec §6, R10): what the stored host minutes say about whether the host's load control suits it. It reads
+// stored rows only and never samples. Since L2c it reads host_minutes alone: the lease tables are no part of it.
 
 // MaxReportSince is the longest period a report may ask for: the retention of
 // the rows it reads.
@@ -11,8 +10,8 @@ const MaxReportSince = 14 * 24 // hours
 // ReportPath is the route.
 const ReportPath = "/api/resources/report"
 
-// Report is the answer of GET /api/resources/report. Every list is sorted, so
-// the same rows always give the same bytes.
+// Report is the answer of GET /api/resources/report. Every figure is worked out from the minute rows of the period, so the same
+// rows always give the same bytes.
 type Report struct {
 	// Since and Until are the period, unix ms.
 	Since int64 `json:"since"`
@@ -20,36 +19,15 @@ type Report struct {
 	// Coverage says which part of the period the host timeline has rows for: a
 	// report over a period the timeline only partly covers shows it.
 	Coverage ReportCoverage `json:"coverage"`
-	// NotRecorded counts leases of the period that were granted before the
-	// decision record existed (dec_recorded = 0): they are in no figure that
-	// needs the decision.
-	NotRecorded int `json:"not_recorded"`
-
-	Requests ReportRequests `json:"requests"`
-	// Paths counts the recorded grants by how they were let in.
-	Paths ReportPaths `json:"paths"`
-	// WaitMS is the wait of the recorded grants, nearest-rank percentiles.
-	WaitMS ReportWait `json:"wait_ms"`
-	// WouldWaitR2 is how many recorded grants the pre-R9 formula would have
-	// held back at the moment they were granted.
-	WouldWaitR2 int         `json:"would_wait_r2"`
-	Full        ReportFull  `json:"full"`
-	Heavy       ReportHeavy `json:"heavy"`
-	// Kinds is the measured use of each kind against its weight.
-	Kinds []ReportKind `json:"kinds"`
-
-	// Lease v2 (spec D-7). Zones is the share of time per zone; WaitByReason
-	// groups the recorded waits by the reason that held the row longest; Parks
-	// is how often rows were parked; Longest the five longest waits.
-	Zones        ReportZones        `json:"zones"`
-	WaitByReason []ReportReasonWait `json:"wait_by_reason"`
-	Parks        int                `json:"parks"`
-	Longest      []ReportWaitRow    `json:"longest"`
-	// Shadow is the advise counterfactual: how long v2 would have made the
-	// requests wait (the input of gate G2).
-	Shadow ReportShadow `json:"shadow"`
-	// Positions is amendment A: the queue unit, by session (A §5).
-	Positions ReportPositions `json:"positions"`
+	Full     ReportFull     `json:"full"`
+	// Heavy is what the host did while the gate had a heavy command running.
+	Heavy ReportHeavy `json:"heavy"`
+	// Light is the light commands the gate let run.
+	Light ReportLight `json:"light"`
+	// Gate is how often commands waited for a slot.
+	Gate ReportGate `json:"gate"`
+	// Zones is the share of time per zone.
+	Zones ReportZones `json:"zones"`
 }
 
 // ReportZones is the share of sampled time in each zone, from the minute rows
@@ -63,48 +41,6 @@ type ReportZones struct {
 	Danger   float64 `json:"danger"`
 }
 
-// ReportReasonWait is the wait of the recorded grants whose dominant reason (the
-// largest entry of wait_reasons) is Reason, nearest-rank percentiles in ms.
-type ReportReasonWait struct {
-	Reason string `json:"reason"`
-	N      int    `json:"n"`
-	P50    int64  `json:"p50"`
-	P90    int64  `json:"p90"`
-	Max    int64  `json:"max"`
-}
-
-// ReportWaitRow is one of the longest waits, with why and the zone and trend at
-// the grant.
-type ReportWaitRow struct {
-	Kind      string           `json:"kind"`
-	CreatedAt int64            `json:"created_at"`
-	WaitedMS  int64            `json:"waited_ms"`
-	Dominant  string           `json:"dominant"`
-	Reasons   map[string]int64 `json:"reasons,omitempty"`
-	Zone      string           `json:"zone"`
-	Trend     string           `json:"trend"`
-}
-
-// ReportShadow is the advise shadow's verdicts. N counts the rows with one;
-// Open how many of them are lower bounds (the row ended before the shadow
-// would have granted it).
-type ReportShadow struct {
-	N       int               `json:"n"`
-	Open    int               `json:"open"`
-	WaitMS  ReportWait        `json:"wait_ms"`
-	Longest []ReportShadowRow `json:"longest"`
-}
-
-// ReportShadowRow is one of the longest shadow waits.
-type ReportShadowRow struct {
-	Kind      string           `json:"kind"`
-	CreatedAt int64            `json:"created_at"`
-	WaitMS    int64            `json:"wait_ms"`
-	Open      bool             `json:"open"`
-	Dominant  string           `json:"dominant"`
-	Reasons   map[string]int64 `json:"reasons,omitempty"`
-}
-
 // ReportCoverage is the host timeline's reach in the period.
 type ReportCoverage struct {
 	// From and To are the first and the last minute row (unix ms of the
@@ -112,40 +48,6 @@ type ReportCoverage struct {
 	From    int64 `json:"from"`
 	To      int64 `json:"to"`
 	Minutes int   `json:"minutes"`
-}
-
-// ReportRequests counts the leases created in the period.
-type ReportRequests struct {
-	Total int `json:"total"`
-	// NotGranted are those that never got in (cancelled, abandoned, or still
-	// waiting).
-	NotGranted int               `json:"not_granted"`
-	ByKind     []ReportKindCount `json:"by_kind"`
-}
-
-// ReportKindCount is one kind's number of requests. Kind is "" for a request
-// that named a weight.
-type ReportKindCount struct {
-	Kind  string `json:"kind"`
-	Count int    `json:"count"`
-}
-
-// ReportPaths counts recorded grants by path (D-8.1).
-type ReportPaths struct {
-	Immediate int `json:"immediate"`
-	Waited    int `json:"waited"`
-	Overrun   int `json:"overrun"`
-	// Offer is the first command of an offered position, Continued a command
-	// granted inside a position's idle window (amendment A).
-	Offer     int `json:"offer"`
-	Continued int `json:"continued"`
-}
-
-// ReportWait is the wait percentiles in ms; all 0 with no recorded grant.
-type ReportWait struct {
-	P50 int64 `json:"p50"`
-	P90 int64 `json:"p90"`
-	Max int64 `json:"max"`
 }
 
 // ReportFull is how long the host was full, from the minute rows.
@@ -158,79 +60,27 @@ type ReportFull struct {
 	LongestS int `json:"longest_s"`
 }
 
-// ReportHeavy is what the host did while two or more heavy leases were held.
+// ReportHeavy is what the host did while the gate had a heavy command running. Minutes counts the minutes with at least one (the
+// gate lets one run), MaxRunning is the largest number in a minute; both come from the gate's heavy_running alone. LegacyMinutes is
+// the retired lease's figure for the rows written before L2 (minutes with two or more heavy leases held): a different thing, kept
+// apart so that the two are never added up.
 type ReportHeavy struct {
-	Minutes  int     `json:"minutes"`
-	MaxLoad1 float64 `json:"max_load1"`
-	MaxMem   float64 `json:"max_mem"`
+	Minutes       int     `json:"minutes"`
+	MaxRunning    int     `json:"max_running"`
+	MaxLoad1      float64 `json:"max_load1"`
+	MaxMem        float64 `json:"max_mem"`
+	LegacyMinutes int     `json:"legacy_minutes"`
 }
 
-// ReportKind is one kind's measured use. Weight is the largest weight the kind
-// was granted with in the period. PeakMax is the largest peak of any of its
-// leases and MeanAvg the average of their means, both host percent, over the
-// granted leases that were measured.
-type ReportKind struct {
-	Kind    string  `json:"kind"`
-	N       int     `json:"n"`
-	Weight  int     `json:"weight"`
-	PeakMax float64 `json:"peak_max"`
-	MeanAvg float64 `json:"mean_avg"`
+// ReportLight is the gate's light slots in use.
+type ReportLight struct {
+	// MaxRunning is the largest number of light commands running in any minute.
+	MaxRunning int `json:"max_running"`
 }
 
-// ReportPositions describes the positions created in the period (amendment A §5).
-type ReportPositions struct {
-	Total       int                 `json:"total"`
-	ByEndReason []ReportReasonCount `json:"by_end_reason"`
-	// Commands counts positions by how many commands they started.
-	Commands ReportCommandCounts `json:"commands"`
-	// Requeued are positions made by a limit for the ask rows of another.
-	Requeued int `json:"requeued"`
-	// Extensions is how many final notices were given.
-	Extensions int `json:"extensions"`
-	// OfferWaitMS and IdleWaitMS are the time the offered / idle windows held the
-	// host while someone waited, over the positions that have any (#10): the cost of V16 and V17.
-	OfferWaitMS ReportDist `json:"offer_wait_ms"`
-	IdleWaitMS  ReportDist `json:"idle_wait_ms"`
-	// QueuedWaitMS is offered_at - created_at over the offered positions.
-	QueuedWaitMS ReportWait   `json:"queued_wait_ms"`
-	Offers       ReportOffers `json:"offers"`
-}
-
-// ReportReasonCount is a count by end reason.
-type ReportReasonCount struct {
-	Reason string `json:"reason"`
-	Count  int    `json:"count"`
-}
-
-// ReportCommandCounts counts positions by commands started.
-type ReportCommandCounts struct {
-	None     int `json:"none"`
-	One      int `json:"one"`
-	Two      int `json:"two"`
-	Three    int `json:"three"`
-	FourPlus int `json:"four_plus"`
-}
-
-// ReportDist is a total with nearest-rank percentiles; all 0 with no value.
-type ReportDist struct {
-	N     int   `json:"n"`
-	Total int64 `json:"total"`
-	P50   int64 `json:"p50"`
-	P90   int64 `json:"p90"`
-	Max   int64 `json:"max"`
-}
-
-// ReportOffers is how the offers went.
-type ReportOffers struct {
-	Offered   int `json:"offered"`
-	Delivered int `json:"delivered"`
-	// Passed is the number of times an offer was not delivered in time and
-	// passed (the sum of offer_passes).
-	Passed int `json:"passed"`
-	// DeliveryDelayMS is delivered_at - offered_at over the delivered offers.
-	DeliveryDelayMS ReportDist `json:"delivery_delay_ms"`
-	// LapsedAfterDelivery are the positions that ended no_answer.
-	LapsedAfterDelivery int `json:"lapsed_after_delivery"`
-	// NoticeResults counts positions by the outcome of their last notice.
-	NoticeResults []ReportReasonCount `json:"notice_results"`
+// ReportGate is the waiting at the gate, from the minute peaks of gate_waiting.
+type ReportGate struct {
+	// WaitingMinutes is how many minutes had a command waiting at the gate at some moment; MaxWaiting the longest queue seen.
+	WaitingMinutes int `json:"waiting_minutes"`
+	MaxWaiting     int `json:"max_waiting"`
 }

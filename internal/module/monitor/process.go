@@ -3,8 +3,8 @@ package monitor
 import (
 	"context"
 	"fmt"
+	"github.com/wake/purdex/internal/execstat"
 	"math"
-	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -242,7 +242,7 @@ func selectTopProcesses(processes []Process, limit int) []Process {
 type processCLICommandRunner struct{}
 
 func (processCLICommandRunner) Output(ctx context.Context, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "ps", args...)
+	cmd := execstat.CommandContext(ctx, "monitor.ps", "ps", args...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

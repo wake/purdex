@@ -6,6 +6,7 @@ package teammod
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/wake/purdex/internal/core"
@@ -56,18 +57,21 @@ func sleepCtx(ctx context.Context, d time.Duration) {
 // A pane that answers but is not the op's means the session died with its
 // server: the op is abandoned. An unreadable pane is looked at again.
 //
-// Every poll judges the deadline first (spec §7.2 step 5: "Wait up to 20 s
+// Every poll judges the deadline first (spec §7.2 step 5: "Wait up to 60 s
 // … On timeout: kill"; review R1, ruled again after the critic): past
 // launched_at + the budget the op times out (timeOutSpawn), even when the
 // member has shown up by then — there is no record of when it registered to
 // compare with the deadline.
 func (m *Module) spawnRegister(op spawnRow) (*team.Origin, bool) {
+	last := "" // what the previous poll found missing: the timeout's detail says it (#2853)
 	for {
 		if m.now() >= op.LaunchedAt+m.spawnBudget {
-			m.timeOutSpawn(op)
+			m.timeOutSpawn(op, last)
 			return nil, false
 		}
-		if o, ok := m.memberOnPane(op.PaneID); ok {
+		o, missing := m.paneState(op.PaneID) // one read of the frames and the registry per poll
+		last = missing
+		if missing == "" {
 			id, err := m.paneIdentity(op.PaneID)
 			if err == nil && !ownsPane(op, id) {
 				m.abortSpawn(op.ID, op.TmuxID, op.TmuxInstance, fmt.Errorf("pane %s is no longer this op's: %+v", op.PaneID, id))
@@ -95,7 +99,7 @@ func (m *Module) spawnRegister(op spawnRow) (*team.Origin, bool) {
 // under its recorded generation; a runner that lost it, to a registration
 // or another timeout, touches nothing. A daemon that dies between the CAS
 // and the kill leaves the session of a failed op behind.
-func (m *Module) timeOutSpawn(op spawnRow) {
+func (m *Module) timeOutSpawn(op spawnRow, lastSeen string) {
 	won, err := m.store.FailSpawnOpAtStep(op.ID, team.StepLaunched, team.SpawnReasonStartTimeout, m.now())
 	if err != nil {
 		m.logf("[team] spawn %s: %v", op.ID, err)
@@ -103,11 +107,45 @@ func (m *Module) timeOutSpawn(op spawnRow) {
 	if !won {
 		return
 	}
-	m.logf("[team] spawn %s failed: %s", op.ID, team.SpawnReasonStartTimeout)
+	m.logf("[team] spawn %s failed: %s (last seen: %s)", op.ID, team.SpawnReasonStartTimeout, lastSeen)
+	m.spawnSeen.set(op.ID, lastSeen)
 	m.rosterChanged() // the timeout is committed: the seat is free again (in_use)
 	m.kickFacts()     // a forwarded op's spawn_failed fact is committed with it
 	m.wake(op.ID)
 	m.killSpawnSession(op.ID, op.TmuxID, op.TmuxInstance)
+}
+
+// paneState says what the registration is waiting for on pane, in the words of the timeout's detail (#2853): no frame on the pane yet, a
+// frame not verified yet, a frame without a session id, or a session id the registry does not list (yet). The second value is empty when
+// the member is there.
+func (m *Module) paneState(pane string) (team.Origin, string) {
+	if pane == "" {
+		return team.Origin{}, "沒有 pane"
+	}
+	frames, err := m.frames.LiveSessions(m.stopCtx, "cc")
+	if err != nil {
+		m.logf("[team] spawn registration: frames: %v", err) // the cause stays in the log; the detail says only that
+		return team.Origin{}, "讀不到 frame"
+	}
+	state := "pane 上還沒有 frame"
+	for _, f := range frames {
+		if f.PaneID != pane {
+			continue
+		}
+		switch {
+		case !f.Verified:
+			state = "有 frame，尚未驗證"
+		case f.SessionID == "":
+			state = "有 frame，還沒有 session id"
+		default:
+			o, ok, err := m.origins.ResolveOriginBySession(f.SessionID)
+			if err == nil && ok {
+				return o, ""
+			}
+			state = "有 session id，registry 還沒有它"
+		}
+	}
+	return team.Origin{}, state
 }
 
 // startTimeoutDetail is why a member did not register in time, for the failed op (#2761). The signal is the mod's own hello:
@@ -115,8 +153,21 @@ func (m *Module) timeOutSpawn(op spawnRow) {
 // is late on such a host is a busy host; a host that never heard one is the one that needs `pdx setup`. Both name the budget
 // and, when the resources module has a sample, the host's load under it. Computed when the op is read, so the words of one
 // failed op can change if a hello arrives later.
-func (m *Module) startTimeoutDetail() string {
+func (m *Module) startTimeoutDetail(op spawnRow) string {
 	secs := m.spawnBudget / 1000
+	waited := ""
+	if op.LaunchedAt > 0 && op.UpdatedAt >= op.LaunchedAt {
+		waited = fmt.Sprintf("已等 %d 秒", (op.UpdatedAt-op.LaunchedAt)/1000)
+	}
+	if v, ok := m.spawnSeen.get(op.ID); ok && v != "" { // lost with a restart (or aged out): then only the seconds are said
+		if waited != "" {
+			waited += "；"
+		}
+		waited += "最後看到：" + v
+	}
+	if waited != "" {
+		waited = "（" + waited + "）"
+	}
 	m.mu.Lock()
 	seen := false
 	for _, h := range m.modSeen {
@@ -128,9 +179,9 @@ func (m *Module) startTimeoutDetail() string {
 	m.mu.Unlock()
 	load := m.hostLoadNote()
 	if seen {
-		return fmt.Sprintf("主機忙：member 沒在 %d 秒內完成啟動%s，名額已釋出，可以稍後重試", secs, load)
+		return fmt.Sprintf("主機忙：member 沒在 %d 秒內完成啟動%s%s，名額已釋出，可以稍後重試", secs, waited, load)
 	}
-	return fmt.Sprintf("member 沒在 %d 秒內完成啟動%s，這台主機從沒看過 Purdex hooks（pdx setup --agent cc）", secs, load)
+	return fmt.Sprintf("member 沒在 %d 秒內完成啟動%s%s，這台主機從沒看過 Purdex hooks（pdx setup --agent cc）", secs, waited, load)
 }
 
 // hostLoadNote is "（load 1/5/15，N 核；記憶體已用 X%，壓力：…）" from the latest resources sample, or "" without one: the
@@ -160,22 +211,6 @@ func (m *Module) hostLoadNote() string {
 		note += "，壓力：嚴重"
 	}
 	return "（" + note + "）"
-}
-
-func (m *Module) memberOnPane(pane string) (team.Origin, bool) {
-	frames, err := m.frames.LiveSessions(m.stopCtx, "cc")
-	if pane == "" || err != nil {
-		return team.Origin{}, false
-	}
-	for _, f := range frames {
-		if f.PaneID != pane || !f.Verified || f.SessionID == "" {
-			continue
-		}
-		if o, ok, err := m.origins.ResolveOriginBySession(f.SessionID); err == nil && ok {
-			return o, true
-		}
-	}
-	return team.Origin{}, false
 }
 
 // spawnFinish is registered → done (spec §7.2 step 6): the member row, its
@@ -237,4 +272,37 @@ func (m *Module) spawnFinish(op spawnRow, o *team.Origin) {
 	m.rosterChanged()
 	m.logf("[team] spawn %s done: member %s (%s) in %s", op.ID, o.Ref, op.SessionID, op.TmuxName)
 	m.wake(op.ID)
+}
+
+// spawnSeenBook remembers, for the ops that timed out, what their registration last found missing, so the failed op's detail can say it
+// (#2853). It is bounded: the oldest entries go past spawnSeenCap, so a daemon that spawns for months holds a few hundred strings.
+const spawnSeenCap = 256
+
+type spawnSeenBook struct {
+	mu    sync.Mutex
+	m     map[string]string
+	order []string
+}
+
+func (b *spawnSeenBook) set(id, state string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.m == nil {
+		b.m = map[string]string{}
+	}
+	if _, had := b.m[id]; !had {
+		b.order = append(b.order, id)
+		for len(b.order) > spawnSeenCap {
+			delete(b.m, b.order[0])
+			b.order = b.order[1:]
+		}
+	}
+	b.m[id] = state
+}
+
+func (b *spawnSeenBook) get(id string) (string, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	v, ok := b.m[id]
+	return v, ok
 }

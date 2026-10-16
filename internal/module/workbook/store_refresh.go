@@ -75,6 +75,11 @@ func (s *Store) FinishRefresh(entryID int64, d RefreshDone) (res TodoResult, ok 
 		if res, err = applyTodoChanges(tx, conv, entryID, d.Todos, ClosedByRefresh, now); err != nil {
 			return err
 		}
+		if len(res.Changed) > 0 { // a refresh that changed no todo has nothing to mirror
+			if err := s.turnOutbox(tx, entryID, res, now); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.Exec(`UPDATE wb_entries SET state = 'ok', reason = '', thing = ?, entry = ?, latency_ms = ?,
 				usage_in = ?, usage_out = ?, usage_cache_read = ?, updated_at = ? WHERE id = ?`,
 			thing, RefreshLine(entryID, res.Changed), d.LatencyMS, nullInt(d.Usage.In), nullInt(d.Usage.Out), nullInt(d.Usage.CacheRead), now, entryID); err != nil {

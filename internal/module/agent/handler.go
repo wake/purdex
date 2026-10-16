@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/wake/purdex/internal/execstat"
 	"log"
 	"net/http"
 	"os"
@@ -105,6 +106,9 @@ type EventRequest struct {
 	SenderPID       int             `json:"sender_pid"`
 	SenderStartTime string          `json:"sender_start_time"`
 	SenderUncertain bool            `json:"sender_uncertain"`
+	// Forks is how many child processes the pdx hook CLI started to build this event (tmux, ps); counted by the daemon under
+	// "hook-cli" so the cost of a hook shows next to its event. Optional: an older hook omits it.
+	Forks int `json:"forks,omitempty"`
 
 	// identitySeq versions this event's identity write against the other
 	// events in flight for the same frame. Unexported on purpose: it is not
@@ -168,6 +172,8 @@ func (m *Module) classifyLifecycleForReq(req EventRequest) agentpkg.LifecycleEve
 // read-only handlers (fs search, nex preflights, upload), which follow their
 // request, this is deliberate (#1293).
 func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
+	m.lightGen.Add(1)
+	defer m.lightGen.Add(1)
 	// The hook's arrival, on the mod clock: the time a turn edge it makes is
 	// ranked by (hookedge.go). Taken before anything that waits, so a mod
 	// event that lands while this hook is processed counts as newer.
@@ -218,6 +224,10 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"schema_invalid"}`, http.StatusBadRequest)
 		return
 	}
+	execstat.Event("hook." + m.hookEventLabel(req.AgentType, req.PurdexName)) // the denominator of the hook path's cost (probe dedupe plan)
+	// The CLI's forks are counted at the same point as the event they belong to, before verification: the cost per event is
+	// hook-cli ÷ hook.<name>, and an event verification then refuses was still forked for by its CLI.
+	execstat.ObserveForks("hook-cli", req.Forks)
 
 	// The identity version is allocated HERE — before verification, which is
 	// the first thing on this path that waits. Verification reads the sender's
@@ -407,6 +417,33 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		result.Status = ""
 	}
 
+	// A PostToolUse that names a subagent (non-empty agent_id) is that
+	// subagent's tool call, which carries the main session's id: it must not
+	// move the main conversation's light or turn boundary (#2873). It goes
+	// through the status-less detail-only branch below.
+	subagentToolUse := isSubagentToolUse(req, result)
+	if subagentToolUse {
+		result.Status = ""
+		// The one exception: the agent that caused the pane's current waiting
+		// (its own permission prompt, now granted) clears it, back to the
+		// status the light had before. Any other subagent stays ignored.
+		if m.framePriorStatus(req) == agentpkg.StatusWaiting {
+			if prior, ok := m.takeSubagentWait(req, false); ok {
+				// Not consumed: the record must survive a failed or lost
+				// frame write so the hook's retry can still clear the light.
+				// The frame no longer being waiting is what stops a repeat.
+				result.Status = prior
+				subagentToolUse = false
+			}
+		}
+	} else if req.AgentType == "cc" && result.Valid && result.Status != "" {
+		if result.Status == agentpkg.StatusWaiting {
+			m.noteWaiting(req, m.framePriorStatus(req))
+		} else {
+			m.dropWait(req) // anything else the main light does ends a recorded wait
+		}
+	}
+
 	// Error guard: when the SENDER'S frame is in error, only whitelisted events
 	// can clear it. It reads the pane's own frame, not the session-level
 	// status, so another pane's error (or the mod's, which the session view
@@ -461,7 +498,7 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// detail-only Subagents membership update; here there is no Subagents
 	// mutation to perform).
 	if req.AgentType == "cc" &&
-		(req.PurdexName == "PdxPreToolUse" || req.PurdexName == "PdxPostToolUseFailure") {
+		(req.PurdexName == "PdxPreToolUse" || req.PurdexName == "PdxPostToolUseFailure" || subagentToolUse) {
 		if req.TmuxSession == "" {
 			trace.Finish("completed", "detail_only_no_session")
 			traceFinished = true
@@ -755,9 +792,14 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// IdentityRecorded: a subscriber re-checks LiveBySessionID(S), which only
 	// sees S once the frame row holds it. If the identity write failed the
 	// event would be skipped there and never replayed, so do not publish it.
+	// A /clear's predecessor is recorded whether or not the identity write landed: it is a fact of the hook, not of the frame row.
+	prevSID := ""
+	if lifecycle == agentpkg.LifecycleSessionStart && frameMeta.Provenance != nil {
+		prevSID = m.notePredecessor(req, *frameMeta.Provenance, frameMeta.PrevSessionID, broadcastTs/int64(time.Millisecond))
+	}
 	if lifecycle == agentpkg.LifecycleSessionStart && frameMeta.Provenance != nil &&
 		frameMeta.Provenance.SessionID != "" && frameMeta.IdentityRecorded {
-		m.sessionStarts.publish(sessionStartEventFrom(req, *frameMeta.Provenance))
+		m.sessionStarts.publish(sessionStartEventFrom(req, *frameMeta.Provenance, prevSID))
 	}
 	// A root SessionStart is the launch panel's launch having worked: release the claim it was holding on this session.
 	if lifecycle == agentpkg.LifecycleSessionStart && frameMeta.Provenance != nil && req.TmuxSession != "" {
@@ -1472,7 +1514,7 @@ func (m *Module) handleDetect(w http.ResponseWriter, r *http.Request) {
 		if len(versionArgs) > 0 {
 			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 			defer cancel()
-			out, err := exec.CommandContext(ctx, path, versionArgs...).Output()
+			out, err := execstat.CommandContext(ctx, "agent.hook-version", path, versionArgs...).Output()
 			if err == nil {
 				info.Version = strings.TrimSpace(string(out))
 			}
@@ -1533,4 +1575,19 @@ func (m *Module) sessionNameOfPane(ctx context.Context, paneID string) string {
 		return ""
 	}
 	return p.SessionName
+}
+
+// hookEventLabel is the event's catalog name for the counters, or "unknown": the name came over the wire, and a registry
+// keyed by whatever a client sends would grow without bound.
+func (m *Module) hookEventLabel(agentType, purdexName string) string {
+	if m == nil || m.registry == nil {
+		return "unknown"
+	}
+	provider, _ := m.registry.Get(agentType)
+	if installer, ok := provider.(agentpkg.HookInstaller); ok {
+		if _, found := agentpkg.LookupByPurdexName(installer.Events(), purdexName); found {
+			return purdexName
+		}
+	}
+	return "unknown"
 }

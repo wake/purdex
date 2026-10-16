@@ -32,6 +32,8 @@ import (
 
 // Module is the agent hook event module.
 type Module struct {
+	// lightGen is LightGeneration's counter (G3c)
+	lightGen  atomic.Uint64
 	core      *core.Core
 	events    *store.AgentEventStore
 	frames    *store.FramesStore
@@ -64,6 +66,8 @@ type Module struct {
 	// ownerResolver is the test seam for the transcript handler; nil means
 	// resolveSessionOwnerErr.
 	ownerResolver func(ctx context.Context, code string) (PaneOwner, bool, error)
+
+	subWaits subagentWaits // who caused each pane's waiting light (#2873)
 
 	mu             sync.Mutex
 	currentStatus  map[string]agentpkg.Status
@@ -319,6 +323,7 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register("agent.events", m.events)
 	c.Registry.Register("agent.module", m)
 	c.Registry.Register(OwnerResolverKey, OwnerResolver(m))
+	c.Registry.Register(PredecessorReaderKey, PredecessorReaderOf(m))
 	c.Registry.Register(AgentRunningKey, AgentRunning(m))
 	c.Registry.Register(TerminalSessionsKey, TerminalSessions(m))
 	c.Registry.Register(NotifyFeedKey, NotifyFeed(m))

@@ -154,9 +154,10 @@ export interface Grant {
 export interface Client {
   /**
    * `terminal` on the closes the terminal made (answered_local, terminal_override); `unattended` on the approvals the
-   * daemon made itself while 無人值守模式 was on (U23, `team.UnattendedClient()`: no `addr`).
+   * daemon made itself while 無人值守模式 was on (U23, `team.UnattendedClient()`: no `addr`); `person` on the cards a
+   * person's own terminal command decided (`team.person.v1`, label 「使用者（終端機指令）」).
    */
-  kind: 'app' | 'terminal' | 'unattended'
+  kind: 'app' | 'terminal' | 'unattended' | 'person'
   label: string
   addr?: string
 }
@@ -175,6 +176,9 @@ export interface Approval {
   decided_by?: Client
   /** Any close; `omitempty`, so absent while open. */
   decided_at?: number
+  /** A final self-relay card past its deadline stays open (`relay.unanswered.v1`): when it ran out, unix ms. Then `deadline_at` is
+   *  the 9999-12-31 sentinel, so a card with this set shows no countdown. Absent or 0 = an ordinary card. */
+  unanswered_at?: number
   /** A request the daemon cancelled at approve (an adopt whose re-check failed): the refusal's code, e.g. `adopt_target_is_lead`. */
   close_reason?: string
   /** approved only. */
@@ -268,8 +272,30 @@ export function isApproval(v: unknown): v is Approval {
     && isNumber(v.lease_until)
     && optional(v.decided_by, isRecord)
     && optional(v.decided_at, isNumber)
+    && optional(v.unanswered_at, isNumber)
     && optional(v.grant, isRecord)
     && optional(v.hook, isRecord)
+}
+
+/** `/api/info` capabilities entry of a daemon that leaves a final relay card open past its deadline (`unanswered_at`, pause cause `relay_unanswered`). */
+export const UNANSWERED_CAPABILITY = 'relay.unanswered.v1'
+
+/** `/api/info` capabilities entry of a daemon that has the person decider and, under 無人值守模式, refuses lead / adopt cards itself (`decided_by.kind = "person"`, `unattended_refused`, PUT `refused`). */
+export const PERSON_CAPABILITY = 'team.person.v1'
+
+/**
+ * What a card this app already holds takes from a later read of the same request (a reconnect snapshot, or the re-read at its
+ * deadline): when the fresh row ran out (`isUnanswered`) and the held one does not know yet, only `unanswered_at` and `deadline_at`
+ * (now the sentinel). Everything else stays, so the entry and the dialog keep their identity. Otherwise the held object itself.
+ */
+export function withUnanswered(held: Approval, fresh: Approval): Approval {
+  if (!isUnanswered(fresh) || isUnanswered(held)) return held
+  return { ...held, unanswered_at: fresh.unanswered_at, deadline_at: fresh.deadline_at }
+}
+
+/** A card the daemon left open past its deadline (`unanswered_at > 0`): its `deadline_at` is a sentinel, never to be counted down. */
+export function isUnanswered(a: Approval): boolean {
+  return typeof a.unanswered_at === 'number' && a.unanswered_at > 0
 }
 
 /** The self-relay payload, defensively: a missing or non-finite percentage reads as 0, strings as ''. */
@@ -368,6 +394,8 @@ export interface UnattendedView extends UnattendedState {
   next_before?: number
   /** PUT only: open requests the switch-on approved. */
   swept?: number
+  /** PUT only (`team.person.v1`): the lead / adopt cards the switch-on refused (they close `cancelled` / `unattended_refused`). */
+  refused?: number
   /** PUT only: auto-approvable requests still open after the sweep (the daemon's next tick approves them). */
   pending?: number
   /** PUT only: the write took effect but the list could not be read — `approved` is `[]` and says nothing. */

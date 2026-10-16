@@ -196,6 +196,15 @@ type Module struct {
 	unsubTurnEnd func()
 	turnEndMu    sync.RWMutex // held (read) by a turn-end write in flight; Stop takes it once to wait for them
 	tickN        int          // sweeper ticks so far; only the sweeper goroutine (or a test) touches it
+	// the sweeper's last read of the open requests (openForTick): whether there is one, the store's write count and the time (ms)
+	// it was taken at, and when the next one of them falls due. Only the sweeper goroutine (or a test) touches them.
+	openRead           bool
+	openDV             int64 // the store's data_version at the last read, and whether it had one
+	openDVOk           bool
+	openAutoApprovable bool // the last read held a request the unattended sweep works on (approve or refuse)
+	openSettle         bool // the store's write count moved since the read before: read once more on the next tick
+	openGen            uint64
+	openAt, openNext   int64
 	// bootAt is when Start ran (unix ms): no team ends before bootAt +
 	// BootGraceS, the grace open requests get (spec §9.2). 0 for a module
 	// that never started (most tests): no grace.
@@ -248,6 +257,11 @@ type Module struct {
 	// production sends on it).
 	rosterSig     chan struct{}
 	rosterBarrier chan chan struct{}
+	fresh         freshStream   // the relay.fresh stream (relay_fresh_events.go)
+	spawnSeen     spawnSeenBook // timed-out spawn op id -> what its registration found missing (spawn_register.go): the detail's "last seen"
+	handoffKills  sync.Map      // op ids whose handoff kill is being finished (kill_handoff.go): a repeated report signals once
+	// afterRetentionFreshRead, when set, runs in sweepRetention between its two reads; tests delete a fresh row there. nil in production.
+	afterRetentionFreshRead func()
 
 	// afterRead, when set, runs in pollRow right after the row is read
 	// and before the wait. Tests use it to close the row in that window
@@ -365,7 +379,10 @@ type Module struct {
 	killProcess func(pid int) error
 	// sender sends the notices (peers.SenderKey; nil → notices stay owed); noticeSig wakes the drain
 	// (kickNotices); noticeLogAt is the drain's own record of when a row's failure was last logged.
-	sender      peersmod.Sender
+	sender peersmod.Sender
+	// selfNotice sends a notice to the lead from the lead's OWN inbox, for a member this host has no inbox for (a member of another
+	// host; peers.SelfNoticeSenderKey; nil → such notices are not sent, logged).
+	selfNotice  peersmod.SelfNoticeSender
 	noticeSig   chan struct{}
 	noticeLogAt map[string]int64
 	// cmdCaller is the peers module's HostCaller (peers.HostCallerKey; nil → cross-host commands are unavailable) and cmdPump
@@ -453,6 +470,11 @@ func (m *Module) Init(c *core.Core) error {
 			m.sender = snd
 		}
 	}
+	if svc, ok := c.Registry.Get(peersmod.SelfNoticeSenderKey); ok {
+		if snd, ok := svc.(peersmod.SelfNoticeSender); ok {
+			m.selfNotice = snd
+		}
+	}
 	sw, ok := c.Registry.Get(hostconfig.RelaySwitchesKey)
 	if !ok {
 		return fmt.Errorf("team: service %q not registered", hostconfig.RelaySwitchesKey)
@@ -536,10 +558,13 @@ func (m *Module) Init(c *core.Core) error {
 	// The session workbook reads one chain root and one team seat at a time.
 	c.Registry.Register(team.LineageRootKey, store)
 	c.Registry.Register(team.SeatReaderKey, store)
+	c.Registry.Register(team.PredecessorReaderKey, store)                       // the conversation module's scroll-back across a relay
 	c.Registry.Register(team.ModReadKey, team.ModReader(store))                 // the mod socket's team read (TI-5a)
 	c.Registry.Register(team.MembershipReaderKey, team.MembershipReader(store)) // the push module's badge rules (BG-1a)
+	c.Registry.Register(team.LeadNoticerKey, team.LeadNoticer(m))               // the lease notice outbox's fallback (lease v2 P2d-2)
 	c.Registry.Register(team.ApprovalFeedKey, team.ApprovalFeed(m))
 	c.Registry.Register(team.ApprovalEventsKey, team.ApprovalEvents(m))
+	c.Registry.Register(team.JournalFeedKey, team.JournalFeed(store)) // the workbook journal's tasks, reports and teams (J-0a)
 	return nil
 }
 
@@ -595,6 +620,8 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/relay/ask", m.handleRelayAsk)  // a member's mod asks its lead to relay it (member relay ask §3.1)
 	mux.HandleFunc("GET /api/relay/wait/{id}", m.handleRelayWait)
 	mux.HandleFunc("POST /api/relay/self", m.handleRelaySelf)
+	mux.HandleFunc("POST /api/relay/fresh", m.handleRelayFresh) // the mod reports a fresh half stale (RT-3a1)
+	mux.HandleFunc("GET "+team.RelayFreshRoute, m.handleRelayFreshGet)
 	mux.HandleFunc("POST /api/relay/ops/{id}/report", m.handleRelayReport)
 	mux.HandleFunc("GET /api/relay/ops/{id}", m.handleRelayOp)
 	mux.HandleFunc("POST /api/relay/ops/{id}/claim", m.handleRelayClaim)
@@ -627,6 +654,7 @@ func (m *Module) Start(context.Context) error {
 	m.core.Events.OnSubscribe(m.sendSnapshot)
 	m.core.Events.OnSubscribe(m.sendUnattendedSnapshot)
 	m.core.Events.OnSubscribe(m.sendRosterSnapshot)
+	m.core.Events.OnSubscribe(m.sendFreshSnapshot)
 	m.sweepWG.Add(5)
 	go m.runNotices()     // first: a notice owed across the restart goes out before the sweeper's first tick
 	go m.runPauseOutbox() // what a pause owes, written before a restart, is sent now

@@ -18,6 +18,9 @@ const (
 	PeerNameSourceRegistry         = "registry"
 	PeerNameSourceConversationName = "conversation_name"
 	PeerNameSourceDir              = "dir"
+	// PeerNameSourcePool marks a name whose suffix was drawn from the name
+	// pool (name pool spec §4) or re-drawn after a collision (§5).
+	PeerNameSourcePool = "pool"
 )
 
 // peerNameChunk bounds the number of bound parameters in one IN (...) query.
@@ -76,7 +79,8 @@ func (s *PeerNameStore) Assign(ctx context.Context, sessionID, ref, name, source
 	case name == "":
 		return PeerNameEntry{}, errors.New("peer name: empty name")
 	case source != PeerNameSourceLineage && source != PeerNameSourceRegistry &&
-		source != PeerNameSourceConversationName && source != PeerNameSourceDir:
+		source != PeerNameSourceConversationName && source != PeerNameSourceDir &&
+		source != PeerNameSourcePool:
 		return PeerNameEntry{}, fmt.Errorf("peer name: unknown source %q", source)
 	}
 	return s.writeThenRead(ctx, sid, `
@@ -102,6 +106,49 @@ func (s *PeerNameStore) AdoptLineage(ctx context.Context, sessionID, name string
 		UPDATE peer_names SET name = ?, source = 'lineage'
 		WHERE session_id = ? AND source <> 'lineage'`,
 		name, sid)
+}
+
+// RenamePool gives sessionID a new name when its stored name is still
+// oldName (name pool spec §5: the newcomer of two live holders of one pool
+// name re-draws). It is a compare-and-set in one statement, so an AdoptLineage
+// or another rename that landed first wins and this call changes nothing:
+// ok is false, and the entry is the row as it is stored (zero when the
+// session has no row). A lineage row stays lineage (a lineage name is final
+// as a source; only its pool suffix moves); any other row becomes pool.
+//
+// Like AdoptLineage it changes only name and source — assigned_at stays the
+// first sighting's, which ByRefs orders a shared ref by.
+func (s *PeerNameStore) RenamePool(ctx context.Context, sessionID, oldName, newName string) (PeerNameEntry, bool, error) {
+	sid := normPeerSID(sessionID)
+	if sid == "" || oldName == "" || newName == "" {
+		return PeerNameEntry{}, false, errors.New("peer name: empty session id or name")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return PeerNameEntry{}, false, err
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once Commit succeeds
+	res, err := tx.ExecContext(ctx, `
+		UPDATE peer_names
+		SET name = ?, source = CASE source WHEN 'lineage' THEN 'lineage' ELSE 'pool' END
+		WHERE session_id = ? AND name = ?`,
+		newName, sid, oldName)
+	if err != nil {
+		return PeerNameEntry{}, false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return PeerNameEntry{}, false, err
+	}
+	var e PeerNameEntry
+	switch err := tx.QueryRowContext(ctx, `SELECT name, source FROM peer_names WHERE session_id = ?`, sid).
+		Scan(&e.Name, &e.Source); {
+	case errors.Is(err, sql.ErrNoRows):
+		return PeerNameEntry{}, false, tx.Commit()
+	case err != nil:
+		return PeerNameEntry{}, false, fmt.Errorf("peer name %s: %w", sid, err)
+	}
+	return e, n == 1, tx.Commit()
 }
 
 func (s *PeerNameStore) writeThenRead(ctx context.Context, sid, write string, args ...any) (PeerNameEntry, error) {

@@ -2,7 +2,7 @@
 // app-level overlays, next to HandoffDialogHost. It renders the oldest open request across hosts from
 // `useApprovalStore`, which the `approval.request` WS branch and the daemon's snapshot feed (P3b); several requests
 // queue, one dialog at a time. The body switches on `kind`: `lead` (reason, editable grant) and `self_relay` (the
-// session, its usage, what approving does, and 「這個 session 不再詢問」, which pauses that session's asks — P5a).
+// session, its usage and what approving does — P5a).
 //
 // It cannot be dismissed: no Escape, no backdrop click. A request ends by a decision — 核准 / 拒絕, one click each on any
 // Purdex.app (U5b, U13a) — or by the daemon closing it (decided elsewhere, timeout, cancel), which removes it from the
@@ -28,7 +28,6 @@ import { useEffect, useId, useRef, useState } from 'react'
 import { ArrowsClockwise, ArrowsInSimple } from '@phosphor-icons/react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useHostStore } from '../stores/useHostStore'
-import { useUndoToast } from '../stores/useUndoToast'
 import { approvalKey, selectCurrent, selectOpenCount, useApprovalStore, type ApprovalEntry, type Decision } from '../stores/useApprovalStore'
 import { ApprovalPill } from './ApprovalPill'
 import { AdoptionWaitCard } from './AdoptionWaitCard'
@@ -37,8 +36,9 @@ import { hostLabel, useHostLook } from '../lib/host-look'
 import { deriveTeamLabel, goTrim, labelProblem, TEAM_LABEL_MAX_WIDTH } from '../lib/team/label'
 import { cellWidth } from '../lib/textwidth'
 import { adoptPayloadOf, adoptTargetLabel, clipForDisplay, leadPayloadOf, selfRelayPayloadOf, DEFAULT_MAX_MEMBERS, MAX_MAX_MEMBERS, type Grant } from '../lib/team/types'
+import { useCardUnanswered } from '../lib/team/approval-unanswered'
+import { startUnansweredReread } from '../lib/team/approval-reread'
 import { approvalSessionLabel, formatCountdown, formatOriginAddress, memberRelayNames } from '../lib/team/approval-format'
-import { ApprovalApiError, setSelfRelayPause } from '../lib/team/approval-api'
 import { buttonBase, fieldClass, keyboardGuard, parseRoots, tabStops, teamNameOk } from './approval-dialog-helpers'
 import { submitDecision } from '../lib/team/approval-decide'
 import { parseOriginTmux } from '../lib/team/approval-goto'
@@ -48,6 +48,8 @@ import { RelayBrief, RelayTitle } from './approval/RelayBrief'
 export function ApprovalDialogHost() {
   const current = useApprovalStore(selectCurrent)
   const minimized = useApprovalStore((s) => s.minimized)
+  // A card that ran out while open is read again by this host (its daemon sends no event for that); see approval-reread.ts.
+  useEffect(() => startUnansweredReread(), [])
   // The remote-adopt wait card outlives the (closed) approval, so it is mounted whether or not a request is open.
   if (!current) return <AdoptionWaitCard />
   // Keyed by the request: the next one is a fresh dialog (the payload's defaults, nothing in flight). Minimizing does
@@ -85,10 +87,11 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
   // prefilled with the requested one; while it is empty the placeholder says what the daemon will take from the name.
   const [teamLabel, setTeamLabel] = useState(payload.team_label ?? '')
   const [rootsText, setRootsText] = useState(payload.roots.join('\n'))
-  // 「這個 session 不再詢問」 (spec §8.7 (a)): applied with the decision, whichever it is.
-  const [noMoreAsking, setNoMoreAsking] = useState(false)
   const [busy, setBusy] = useState(false)
   const [now, setNow] = useState(() => Date.now())
+  // Nobody answered this card: no countdown, the session is paused (relay v2 App contract 3). Also true for a card held since
+  // `opened` that ran out while open, once the pause data says so.
+  const unanswered = useCardUnanswered(hostId, approval, now)
   // Ref, not state: two clicks in one event burst both see `busy === false` before React commits the first setBusy.
   const inFlight = useRef(false)
   const overlayRef = useRef<HTMLDivElement>(null)
@@ -240,27 +243,13 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
       // A second click in the same tick still sees locked=false (React has not re-rendered the queued state):
       // the store is read synchronously so the FIRST queued decision wins (PR #1742 attacker A-2).
       if (useApprovalStore.getState().queued[approvalKey(hostId, approval.id)]) return
-      // Spec §9.4: kept locally, sent on reconnect (the snapshot re-adds the request, or shows it gone). A ticked
-      // 「這個 session 不再詢問」 is queued WITH the decision and sent before it on reconnect (PR #1742 R1): the
-      // person asked for it, and dropping it would let the session ask again.
-      const pause = isSelfRelay && noMoreAsking ? approval.origin.session_id : undefined
-      useApprovalStore.getState().queueDecision(hostId, approval, decision, grant, pause)
+      // Spec §9.4: kept locally, sent on reconnect (the snapshot re-adds the request, or shows it gone).
+      useApprovalStore.getState().queueDecision(hostId, approval, decision, grant)
       return
     }
     inFlight.current = true
     setBusy(true)
-    // Taken before the pause's await: a host forgotten meanwhile (#1978) voids the decision, not just its answer.
-    const epoch = useApprovalStore.getState().hostEpoch[hostId] ?? 0
-    if (isSelfRelay && noMoreAsking) {
-      // Best effort, before the decision: a pause that fails must not swallow the click.
-      try {
-        await setSelfRelayPause(hostId, approval.origin.session_id, 'off')
-      } catch (e: unknown) {
-        const code = e instanceof ApprovalApiError ? e.code : 'network'
-        useUndoToast.getState().show(t('approval.dialog.pause_failed', { code }))
-      }
-    }
-    const outcome = await submitDecision(hostId, approval, decision, grant, { epoch, ...(reveal ? { reveal } : {}) })
+    const outcome = await submitDecision(hostId, approval, decision, grant, reveal ? { reveal } : {})
     // 'closed' and 'decided_elsewhere' unmount this dialog through the store; the other two keep it.
     if (outcome === 'failed' || outcome === 'queued') {
       inFlight.current = false
@@ -379,8 +368,17 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
                 <dd data-testid="approval-reason" className="whitespace-pre-wrap text-text-primary">{payload.reason}</dd>
               </>
             )}
-            <dt className="text-text-muted">{t('approval.dialog.deadline')}</dt>
-            <dd data-testid="approval-countdown" className="font-mono text-text-primary">{formatCountdown(approval.deadline_at - now)}</dd>
+            {unanswered ? (
+              <>
+                <dt className="text-text-muted">{t('approval.dialog.unanswered_label')}</dt>
+                <dd data-testid="approval-unanswered" className="text-text-primary">{t('approval.dialog.unanswered')}</dd>
+              </>
+            ) : (
+              <>
+                <dt className="text-text-muted">{t('approval.dialog.deadline')}</dt>
+                <dd data-testid="approval-countdown" className="font-mono text-text-primary">{formatCountdown(approval.deadline_at - now)}</dd>
+              </>
+            )}
           </dl>
           {isSelfRelay && <RelayBrief hostId={hostId} sessionId={approval.origin.session_id} />}
           {isMemberRelay && <RelayBrief hostId={hostId} sessionId={memberRelay.payload.member_session_id} />}
@@ -389,19 +387,7 @@ function OpenApprovalDialog({ entry, minimized }: { entry: ApprovalEntry; minimi
           ) : isMemberRelay ? (
             <p data-testid="approval-member-relay-note" className="mt-3 text-xs text-text-secondary">{t('approval.dialog.member_relay_note')}</p>
           ) : isSelfRelay ? (
-            <>
-              <p data-testid="approval-self-relay-note" className="mt-3 text-xs text-text-secondary">{t('approval.dialog.self_relay_note')}</p>
-              <label className="mt-2 flex items-center gap-2 text-xs text-text-secondary">
-                <input
-                  type="checkbox"
-                  checked={noMoreAsking}
-                  disabled={locked}
-                  onChange={(e) => setNoMoreAsking(e.target.checked)}
-                  data-testid="approval-no-more-asking"
-                />
-                {t('approval.dialog.no_more_asking')}
-              </label>
-            </>
+            <p data-testid="approval-self-relay-note" className="mt-3 text-xs text-text-secondary">{t('approval.dialog.self_relay_note')}</p>
           ) : (
             <>
               {nameShown && (

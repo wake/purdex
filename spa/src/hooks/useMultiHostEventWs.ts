@@ -29,6 +29,9 @@ import { RELAY_QUOTA_EVENT_TYPE, UNATTENDED_EVENT_TYPE } from '../lib/team/types
 import { handleRosterEvent } from '../lib/team/roster-ws'
 import { ROSTER_EVENT_TYPE } from '../lib/team/roster'
 import { handleWorkbookEvent, isWorkbookEvent } from '../lib/workbook/workbook-ws'
+import { handleJournalEvent, isJournalEvent } from '../lib/journal/journal-ws'
+import { handleFleetEvent } from '../lib/fleet/fleet-ws'
+import { FLEET_EVENT_TYPE } from '../lib/fleet/types'
 import { connectionKey } from '../lib/host-connection-key'
 import { decideHookFrame, parseAgentSnapshot, type HookCursor } from '../lib/agent-lights/hook-cursor'
 
@@ -131,6 +134,9 @@ export function useMultiHostEventWs() {
       // `reads=v1` opts in to `session.reads` (every remembered read, on connect) and `session.read` (one per accepted
       // read) — read sync (app-badge spec §7.2). A daemon that does not know it ignores the parameter.
       wsUrlObj.searchParams.set('reads', 'v1')
+      // `fleet=v1` opts in to `fleet.changed`, the primary's whole fleet once a second (fleet spec §6). A daemon that does not
+      // know it ignores the parameter; a standby never sends it.
+      wsUrlObj.searchParams.set('fleet', 'v1')
       const wsUrl = wsUrlObj.toString()
       const baseUrl = useHostStore.getState().getDaemonBase(hostId)
 
@@ -313,6 +319,21 @@ export function useMultiHostEventWs() {
             const now = useHostStore.getState().hosts[hostId]
             if (!now || connectionKey(now) !== configKey) return
             handleWorkbookEvent(hostId, event.type, event.value)
+            return
+          }
+          if (event.type === FLEET_EVENT_TYPE) {
+            // The fleet (F-2a1): merged from the primary only (the store decides), bound to the connection like the frames above.
+            const now = useHostStore.getState().hosts[hostId]
+            if (!now || connectionKey(now) !== configKey) return
+            handleFleetEvent(hostId, event.value)
+            return
+          }
+          if (isJournalEvent(event.type)) {
+            // The workbook journal (J-2a): marks the named resource of a unit stale, never a reason to fetch. Bound to
+            // the connection exactly like the workbook frames above.
+            const now = useHostStore.getState().hosts[hostId]
+            if (!now || connectionKey(now) !== configKey) return
+            handleJournalEvent(hostId, event.type, event.value)
             return
           }
           // `handoff` / `relay` events: the daemon stopped emitting them in

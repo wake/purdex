@@ -27,6 +27,7 @@ import (
 	conversationmod "github.com/wake/purdex/internal/module/conversation"
 	"github.com/wake/purdex/internal/module/dev"
 	devicesmod "github.com/wake/purdex/internal/module/devices"
+	fleetmod "github.com/wake/purdex/internal/module/fleet"
 	fsmod "github.com/wake/purdex/internal/module/fs"
 	hostconfigmod "github.com/wake/purdex/internal/module/hostconfig"
 	hosttransfermod "github.com/wake/purdex/internal/module/hosttransfer"
@@ -41,6 +42,7 @@ import (
 	resourcesmod "github.com/wake/purdex/internal/module/resources"
 	"github.com/wake/purdex/internal/module/session"
 	teammod "github.com/wake/purdex/internal/module/team"
+	watchmod "github.com/wake/purdex/internal/module/watch"
 	workbookmod "github.com/wake/purdex/internal/module/workbook"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
@@ -50,7 +52,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: pdx <command> [flags]\n")
-		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, hook, setup, token, peers, msg, lead, adopt, release, spawn, kill, team, task, report, lease, relay, ask, nex, path, version\n")
+		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, hook, setup, token, peers, msg, lead, adopt, release, spawn, kill, team, task, report, lease, host, gate, watch, relay, ask, nex, path, journal, version\n")
 		os.Exit(1)
 	}
 
@@ -93,6 +95,12 @@ func main() {
 		runKill(os.Args[2:])
 	case "lease":
 		runLease(os.Args[2:])
+	case "host":
+		runHost(os.Args[2:])
+	case "gate":
+		runGate(os.Args[2:])
+	case "watch":
+		runWatch(os.Args[2:])
 	case "team":
 		runTeam(os.Args[2:])
 	case "task":
@@ -107,6 +115,8 @@ func main() {
 		runNexMain(os.Args[2:])
 	case "path":
 		runPath(os.Args[2:])
+	case "journal":
+		runJournal(os.Args[2:])
 	case "peer-proxy":
 		os.Exit(runPeerProxy())
 	case "version":
@@ -442,11 +452,17 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 		// Each conversation's pdx-assigned virtual name (Peer Address v5),
 		// falling back on the recorded registry names for a base.
 		peersMod.WithPeerNames(meta.PeerNames(), meta.ConversationNames())
+		// A new conversation's name ends in a free name from the 30-name pool
+		// instead of two ref characters (name pool spec); deploy every host
+		// together, uniqueness across hosts holds only when all run it.
+		peersMod.WithNamePool(peersmod.RandomNamePicker())
 	}
 	c.AddModule(peersMod)
 	// resources samples the host on its own ticker; it reads the session
 	// roots from the peers origin resolver, so it comes after peers.
 	c.AddModule(resourcesmod.New())
+	c.AddModule(watchmod.New())
+	c.AddModule(fleetmod.New()) // the fleet status: primary / standby roles (F-1b2)
 	c.AddModule(fsmod.New())
 	c.AddModule(logs.New())
 	// conversation serves GET /api/conversations/{provider}/{session_id}; its resolver consults the conversation

@@ -41,6 +41,8 @@ type ApprovalOrigin struct {
 type Content struct {
 	Title, Body string
 	Kind        string // lead | self_relay | hook_ask | agent
+	// Category is the iOS notification category (aps.category): the actions the phone shows under the notification. "" = none.
+	Category    string
 	ApprovalID  string
 	SessionCode string
 	SessionID   string
@@ -136,24 +138,26 @@ func originLabel(o ApprovalOrigin) string {
 
 var texts = map[string]map[string]string{
 	"zh-TW": {
-		"lead":               "%s：%s 申請成為 lead",
-		"self_relay":         "%s：%s 申請接力（已用 %d%%）",
-		"self_relay_by":      "核准後這個 session 會寫接力檔、清空並在原處接手（約 1 分鐘）",
-		"self_relay_idle":    "%s：%s 閒置 %d 分鐘，申請接力（已用 %d%%）",
-		"self_relay_idle_by": "趁快取還在時接力最省；不核准的話，Claude Code 稍後會自行壓縮",
-		"member_relay":       "%s：%s 要幫 member %s 接力（context %d%%）",
-		"member_relay_by":    "member 額度用完，要核准嗎？",
-		"hook_ask":           "%s：%s 在等你回答",
+		"lead":                 "%s：%s 申請成為 lead",
+		"self_relay":           "%s：%s 申請接力（已用 %d%%）",
+		"self_relay_by":        "核准後這個 session 會寫接力檔、清空並在原處接手（約 1 分鐘）",
+		"self_relay_idle":      "%s：%s 閒置 %d 分鐘，申請接力（已用 %d%%）",
+		"self_relay_idle_by":   "趁快取還在時接力最省；不核准的話，Claude Code 稍後會自行壓縮",
+		"self_relay_idle_half": "趁快取還在時接力最省；不核准的話，5 分鐘後會先寫好接力檔（不清空）",
+		"member_relay":         "%s：%s 要幫 member %s 接力（context %d%%）",
+		"member_relay_by":      "member 額度用完，要核准嗎？",
+		"hook_ask":             "%s：%s 在等你回答",
 	},
 	"en": {
-		"lead":               "%s: %s requests to become lead",
-		"self_relay":         "%s: %s requests a relay (%d%% used)",
-		"self_relay_by":      "Once approved, this session writes its relay file, clears, and takes over in place (about 1 minute)",
-		"self_relay_idle":    "%s: %s has been idle %d min and requests a relay (%d%% used)",
-		"self_relay_idle_by": "Relaying while the cache is warm is cheapest; otherwise Claude Code compacts it later",
-		"member_relay":       "%s: %s wants to relay member %s (context %d%%)",
-		"member_relay_by":    "The member quota is used up. Approve?",
-		"hook_ask":           "%s: %s is waiting for your answer",
+		"lead":                 "%s: %s requests to become lead",
+		"self_relay":           "%s: %s requests a relay (%d%% used)",
+		"self_relay_by":        "Once approved, this session writes its relay file, clears, and takes over in place (about 1 minute)",
+		"self_relay_idle":      "%s: %s has been idle %d min and requests a relay (%d%% used)",
+		"self_relay_idle_by":   "Relaying while the cache is warm is cheapest; otherwise Claude Code compacts it later",
+		"self_relay_idle_half": "Relaying while the cache is warm is cheapest; otherwise a handoff file is written in 5 minutes (nothing is cleared)",
+		"member_relay":         "%s: %s wants to relay member %s (context %d%%)",
+		"member_relay_by":      "The member quota is used up. Approve?",
+		"hook_ask":             "%s: %s is waiting for your answer",
 	},
 }
 
@@ -175,12 +179,20 @@ func CountsForBadge(kind string) bool {
 	return false
 }
 
+// ApprovalCategory is the notification category of an approval push the person can answer with a yes or a no (the 同意 /
+// 拒絕 buttons): lead, self_relay and member_relay. A hook_ask needs answers or a message, so it has none (tap to open).
+const ApprovalCategory = "PDX_APPROVAL"
+
 // ApprovalContent is the push for a newly opened approval, or false when this approval is not pushed: only lead,
 // self_relay, member_relay and an answerable hook_ask (not terminal_only) are (spec §5.1).
 func ApprovalContent(a Approval, hostLabel, locale string) (Content, bool) {
 	t := table(locale)
 	who := originLabel(a.Origin)
 	c := Content{Kind: a.Kind, ApprovalID: a.ID, CollapseID: a.ID}
+	switch a.Kind {
+	case "lead", "self_relay", "member_relay":
+		c.Category = ApprovalCategory
+	}
 	switch a.Kind {
 	case "lead":
 		var p struct {
@@ -194,11 +206,16 @@ func ApprovalContent(a Approval, hostLabel, locale string) (Content, bool) {
 			Used        float64 `json:"used_percentage"`
 			Reason      string  `json:"reason"`
 			IdleMinutes int     `json:"idle_minutes"`
+			// HalfOnTimeout: the session's mod writes a half when the card times out (the daemon set it at begin, from the mod's protocol)
+			HalfOnTimeout bool `json:"half_on_timeout"`
 		}
 		_ = json.Unmarshal(a.Payload, &p)
 		if p.Reason == "idle" && p.IdleMinutes >= 1 && p.IdleMinutes <= 59 { // an idle ask (idle relay spec §3.2) says how long and why now; a damaged one reads as an ordinary ask
 			c.Title = fmt.Sprintf(t["self_relay_idle"], hostLabel, who, p.IdleMinutes, int(math.Round(p.Used)))
 			c.Body = t["self_relay_idle_by"]
+			if p.HalfOnTimeout {
+				c.Body = t["self_relay_idle_half"]
+			}
 			break
 		}
 		c.Title = fmt.Sprintf(t["self_relay"], hostLabel, who, int(math.Round(p.Used)))
@@ -320,14 +337,15 @@ func (c Content) payload(hostID, body string, rs []reads.Read) ([]byte, error) {
 	if c.OpenApprovalKeys != nil {
 		purdex["open_approval_keys"] = c.OpenApprovalKeys
 	}
-	return json.Marshal(map[string]any{
-		"aps": map[string]any{
-			"alert":              map[string]string{"title": c.Title, "body": body},
-			"sound":              "default",
-			"thread-id":          hostID,
-			"interruption-level": "time-sensitive",
-			"mutable-content":    1,
-		},
-		"purdex": purdex,
-	})
+	aps := map[string]any{
+		"alert":              map[string]string{"title": c.Title, "body": body},
+		"sound":              "default",
+		"thread-id":          hostID,
+		"interruption-level": "time-sensitive",
+		"mutable-content":    1,
+	}
+	if c.Category != "" {
+		aps["category"] = c.Category
+	}
+	return json.Marshal(map[string]any{"aps": aps, "purdex": purdex})
 }

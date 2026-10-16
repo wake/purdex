@@ -4,9 +4,9 @@ package core
 import (
 	"context"
 	"encoding/json"
+	"github.com/wake/purdex/internal/execstat"
 	"net/http"
 	"os"
-	"os/exec"
 	"runtime"
 	"strings"
 	"time"
@@ -66,6 +66,7 @@ var capabilities = []string{
 	"session.read_sync.v1",    // read sync (badge spec §7): POST /api/sessions/{code}/read, /ws/host-events?reads=v1 (session.reads / session.read), prefs.read_sync, purdex.reads / purdex.event_cursor on pushes, kind "reads" flush
 	"team.person.v1",          // person-typed commands: person tokens, direct /relay, decided_by.kind person, unattended_refused, PUT unattended refused (RT-1)
 	"relay.unanswered.v1",     // pause cause relay_unanswered, approval unanswered_at, a person's release = deny, the bounce text by cause (RT-2a)
+	"relay.half.v1",           // an idle card of 300 s whose timeout writes a half (relay_ops.mode, begin --half / --reuse, POST /api/relay/fresh), GET /api/relay/fresh, relay.fresh events, fresh_handoff on RosterSession, fresh_half on hello (RT-3a)
 }
 
 // pushReady reports whether the push module is mounted AND has its key (its Status says ready). A mounted module whose
@@ -89,6 +90,16 @@ func (c *Core) moduleReady(name string) bool {
 	return ready
 }
 
+// moduleFlag is a true boolean in the module's Status under key.
+func (c *Core) moduleFlag(name, key string) bool {
+	st, ok := c.ModuleStatus(name)
+	if !ok {
+		return false
+	}
+	on, _ := st[key].(bool)
+	return on
+}
+
 // capabilityList is the static list plus the conditional capabilities: push.v1 while the push module is ready, and
 // devices.v1 while the devices module is. Every other name above is unconditional; keep it that way unless a feature really
 // can be switched off at boot.
@@ -106,6 +117,12 @@ func (c *Core) capabilityList() []string {
 	if c.moduleReady("workbook") {
 		out = append(out, "workbook.v1") // GET /api/workbook/conversations/{provider}/{session_id}, GET /api/workbook/entries, workbook.entry / workbook.status events
 		out = append(out, "workbook.v2") // entries' kind / usage / todo_changes, the conversation's todos and refresh_available, GET …/todos, POST …/refresh, workbook.todos / workbook.refresh_available events
+		if c.moduleFlag("workbook", "journal") {
+			out = append(out, "journal.v1") // GET /api/journal, /api/journal/tasks, /api/journal/roadmap, PUT /api/journal/pin, journal.changed events; only while the journal runs ([journal] enabled, and wired)
+		}
+	}
+	if c.moduleReady("fleet") {
+		out = append(out, "fleet.v1") // GET /api/fleet, GET /api/fleet/ssh-aliases, the opt-in fleet.changed push (?fleet=v1)
 	}
 	return out
 }
@@ -182,7 +199,7 @@ const tmuxExecTimeout = 3 * time.Second
 func getTmuxVersion() string {
 	ctx, cancel := context.WithTimeout(context.Background(), tmuxExecTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "tmux", "-V").Output()
+	out, err := execstat.CommandContext(ctx, "core.tmux-version", "tmux", "-V").Output()
 	if err != nil {
 		return "unknown"
 	}

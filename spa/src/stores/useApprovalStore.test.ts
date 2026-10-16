@@ -1,7 +1,7 @@
 // spa/src/stores/useApprovalStore.test.ts — the open approval requests this app shows (lead-team spec §6.3),
 // per host, oldest first, with the decisions clicked while a host was not connected (spec §9.4).
 import { beforeEach, describe, expect, it } from 'vitest'
-import { approvalKey, selectCurrent, selectNearestDeadline, selectOpenCount, selectOpenCountFor, useApprovalStore } from './useApprovalStore'
+import { approvalKey, selectCurrent, selectOpenCount, selectOpenCountFor, useApprovalStore } from './useApprovalStore'
 import type { Approval } from '../lib/team/types'
 
 const approval = (over: Partial<Approval> = {}): Approval => ({
@@ -46,6 +46,28 @@ describe('useApprovalStore', () => {
       s().applyOpened('h1', approval({ id: 'a' }))
       s().applySnapshot('h1', [approval({ id: 'a' }), approval({ id: 'z', state: 'denied' })])
       expect(ids()).toEqual(['h1:a'])
+    })
+
+    // A card held since `opened` ran out while the socket was down: the daemon sends no event op for that, so the reconnect
+    // snapshot is the only place its `unanswered_at` (and the sentinel deadline) arrives (relay v2 App contract 3).
+    // Mutation gate: keep the held object as before → the held card still has the old deadline and no unanswered_at → red.
+    it('a request still open takes unanswered_at and the sentinel deadline from the snapshot, and keeps its key', () => {
+      const SENTINEL = Date.UTC(9999, 11, 31)
+      s().applyOpened('h1', approval({ id: 'a' }))
+      const before = s().entries[approvalKey('h1', 'a')]
+      s().applySnapshot('h1', [approval({ id: 'a', unanswered_at: 600_000, deadline_at: SENTINEL })])
+      const held = s().entries[approvalKey('h1', 'a')]
+      expect(held.approval.unanswered_at).toBe(600_000)
+      expect(held.approval.deadline_at).toBe(SENTINEL)
+      expect(held.approval.created_at).toBe(before.approval.created_at)
+      expect(ids()).toEqual(['h1:a'])
+    })
+
+    it('a snapshot without unanswered_at leaves the held request as it was', () => {
+      s().applyOpened('h1', approval({ id: 'a', deadline_at: 123_000 }))
+      const before = s().entries[approvalKey('h1', 'a')]
+      s().applySnapshot('h1', [approval({ id: 'a', deadline_at: 999_000 })])
+      expect(s().entries[approvalKey('h1', 'a')]).toBe(before)
     })
   })
 
@@ -212,15 +234,22 @@ describe('useApprovalStore', () => {
     })
   })
 
-  describe('selectNearestDeadline', () => {
-    it('is the smallest deadline_at across hosts; null when empty', () => {
-      expect(selectNearestDeadline(s())).toBeNull()
-      s().applyOpened('h1', approval({ id: 'a', created_at: 1_000, deadline_at: 900_000 }))
-      s().applyOpened('h2', approval({ id: 'b', created_at: 2_000, deadline_at: 300_000 }))
-      s().applyOpened('h3', approval({ id: 'c', created_at: 3_000, deadline_at: 600_000 }))
-      expect(selectNearestDeadline(s())).toBe(300_000)
-      s().applyClosed('h2', approval({ id: 'b', state: 'approved' }))
-      expect(selectNearestDeadline(s())).toBe(600_000)
+  describe('applyUnanswered', () => {
+    const SENTINEL = Date.UTC(9999, 11, 31)
+    it('takes unanswered_at and the sentinel deadline from a fresh open read, and nothing else', () => {
+      s().applyOpened('h1', approval({ id: 'a', lease_until: 31_000 }))
+      s().applyUnanswered('h1', approval({ id: 'a', unanswered_at: 600_000, deadline_at: SENTINEL, lease_until: 99_000 }))
+      const held = s().entries[approvalKey('h1', 'a')].approval
+      expect([held.unanswered_at, held.deadline_at, held.lease_until]).toEqual([600_000, SENTINEL, 31_000])
+    })
+    it('ignores a read that is closed, not unanswered, for another host, or for a request not held', () => {
+      s().applyOpened('h1', approval({ id: 'a' }))
+      const before = s().entries
+      s().applyUnanswered('h1', approval({ id: 'a', state: 'approved', unanswered_at: 600_000 }))
+      s().applyUnanswered('h1', approval({ id: 'a' }))
+      s().applyUnanswered('h2', approval({ id: 'a', unanswered_at: 600_000 }))
+      s().applyUnanswered('h1', approval({ id: 'zz', unanswered_at: 600_000 }))
+      expect(s().entries).toBe(before)
     })
   })
 

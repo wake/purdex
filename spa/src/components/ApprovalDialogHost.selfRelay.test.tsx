@@ -1,6 +1,6 @@
 // spa/src/components/ApprovalDialogHost.selfRelay.test.tsx — the `self_relay` body (lead-team spec §8.7 (b)): host,
-// session (title / address / ref / cwd), `已用 72%`, the note, one-click 核准 / 拒絕 with no grant, and
-// 「這個 session 不再詢問」, which POSTs the pause before the decision.
+// session (title / address / ref / cwd), `已用 72%`, the note, and one-click 核准 / 拒絕 with no grant. The old
+// 「這個 session 不再詢問」 box is gone (relay v2 App contract 1): a decision sends only the decision.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import { ApprovalDialogHost } from './ApprovalDialogHost'
@@ -8,17 +8,16 @@ import { useApprovalStore } from '../stores/useApprovalStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useUndoToast } from '../stores/useUndoToast'
-import { ApprovalApiError, decideApproval, setSelfRelayPause } from '../lib/team/approval-api'
+import { decideApproval } from '../lib/team/approval-api'
 import { __resetClientDescriptorForTests } from '../lib/team/client-label'
 import type { Approval } from '../lib/team/types'
 
 vi.mock('../lib/team/approval-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/team/approval-api')>()),
   decideApproval: vi.fn(),
-  setSelfRelayPause: vi.fn(),
+  setSelfRelayPause: vi.fn(), // gone from the module: a stray caller would fail loudly here
 }))
 const mockedDecide = vi.mocked(decideApproval)
-const mockedPause = vi.mocked(setSelfRelayPause)
 
 const H = 'h1'
 const relay = (over: Partial<Approval> = {}): Approval => ({
@@ -40,7 +39,6 @@ beforeEach(() => {
   })
   useUndoToast.setState({ toast: null, notice: null })
   mockedDecide.mockReset()
-  mockedPause.mockReset().mockResolvedValue({ self_relay: 'paused', host_switch: true, member: false })
   __resetClientDescriptorForTests()
   Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
 })
@@ -59,7 +57,9 @@ describe('ApprovalDialogHost — self_relay', () => {
     expect(screen.getByTestId('approval-cwd').textContent).toBe('/w/purdex')
     expect(screen.getByTestId('approval-usage').textContent).toBe('已用 72%')
     expect(screen.getByTestId('approval-self-relay-note').textContent).toBe('核准後這個 session 會寫接力檔、清空並在原處接手（約 1 分鐘）')
-    expect(screen.getByText('這個 session 不再詢問')).toBeTruthy()
+    expect(screen.queryByTestId('approval-no-more-asking')).toBeNull()
+    expect(screen.queryByText('這個 session 不再詢問')).toBeNull()
+    expect(screen.queryByRole('checkbox')).toBeNull()
     expect(screen.queryByTestId('approval-max-members')).toBeNull()
     expect(screen.queryByTestId('approval-roots')).toBeNull()
     expect(screen.queryByTestId('approval-reason')).toBeNull()
@@ -72,55 +72,32 @@ describe('ApprovalDialogHost — self_relay', () => {
     fireEvent.click(screen.getByTestId('approval-approve'))
     await waitFor(() => expect(mockedDecide).toHaveBeenCalledTimes(1))
     expect(mockedDecide.mock.calls[0][2]).toEqual({ decision: 'approve', client: { kind: 'app', label: 'Purdex.app' } })
-    expect(mockedPause).not.toHaveBeenCalled()
     await waitFor(() => expect(screen.queryByTestId('approval-dialog')).toBeNull())
   })
 
-  it('「這個 session 不再詢問」 POSTs the pause for the origin session before the decision', async () => {
+  it('a deny sends only the decision: no pause request goes out before or after it', async () => {
     mockedDecide.mockResolvedValueOnce(relay({ state: 'denied', decided_by: { kind: 'app', label: 'Purdex.app' } }))
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
     render(<ApprovalDialogHost />)
     open(relay())
-    fireEvent.click(screen.getByTestId('approval-no-more-asking'))
     fireEvent.click(screen.getByTestId('approval-deny'))
     await waitFor(() => expect(mockedDecide).toHaveBeenCalledTimes(1))
-    expect(mockedPause).toHaveBeenCalledWith(H, 'S9', 'off')
-    expect(mockedPause.mock.invocationCallOrder[0]).toBeLessThan(mockedDecide.mock.invocationCallOrder[0])
+    await waitFor(() => expect(screen.queryByTestId('approval-dialog')).toBeNull())
+    expect(fetchSpy.mock.calls.filter(([u]) => String(u).includes('/api/relay/self'))).toEqual([])
+    fetchSpy.mockRestore()
   })
 
-  it('while disconnected the decision is queued WITH the pause, nothing is sent now (PR #1742 R1)', async () => {
+  it('while disconnected the decision is queued alone: nothing is sent now and no pause rides along', async () => {
     render(<ApprovalDialogHost />)
     open(relay())
     act(() => { useHostStore.getState().setRuntime(H, { status: 'reconnecting' }) })
-    fireEvent.click(screen.getByTestId('approval-no-more-asking'))
     fireEvent.click(screen.getByTestId('approval-deny'))
     await waitFor(() => expect(Object.keys(useApprovalStore.getState().queued)).toHaveLength(1))
-    expect(mockedPause).not.toHaveBeenCalled()
     expect(mockedDecide).not.toHaveBeenCalled()
     const q = Object.values(useApprovalStore.getState().queued)[0]
     expect(q.decision).toBe('deny')
     expect(q.grant).toBeUndefined()
-    expect(q.pauseSession).toBe('S9')
-  })
-
-  it('a queued pause is sent before its queued decision on reconnect; a network failure keeps both queued', async () => {
-    const { submitDecision } = await import('../lib/team/approval-decide')
-    mockedPause.mockRejectedValueOnce(new ApprovalApiError(0, 'network', 'Failed to fetch'))
-    mockedDecide.mockRejectedValueOnce(new ApprovalApiError(0, 'network', 'Failed to fetch'))
-    await submitDecision(H, relay(), 'deny', undefined, { fromQueue: true, pauseSession: 'S9' })
-    const q = Object.values(useApprovalStore.getState().queued)[0]
-    expect(q?.pauseSession).toBe('S9') // kept with the re-queued decision
-    mockedDecide.mockResolvedValueOnce(relay({ state: 'denied', decided_by: { kind: 'app', label: 'Purdex.app' } }))
-    await submitDecision(H, relay(), 'deny', undefined, { fromQueue: true, pauseSession: 'S9' })
-    expect(mockedPause).toHaveBeenLastCalledWith(H, 'S9', 'off')
-    expect(mockedPause.mock.invocationCallOrder.at(-1)!).toBeLessThan(mockedDecide.mock.invocationCallOrder.at(-1)!)
-  })
-
-  it('a queued pause that hits the network while its decision goes through is not silent (PR #1742 A-1)', async () => {
-    const { submitDecision } = await import('../lib/team/approval-decide')
-    mockedPause.mockRejectedValueOnce(new ApprovalApiError(0, 'network', 'Failed to fetch'))
-    mockedDecide.mockResolvedValueOnce(relay({ state: 'denied', decided_by: { kind: 'app', label: 'Purdex.app' } }))
-    expect(await submitDecision(H, relay(), 'deny', undefined, { fromQueue: true, pauseSession: 'S9' })).toBe('closed')
-    expect(useUndoToast.getState().toast?.message).toContain('無法暫停')
+    expect(Object.keys(q)).not.toContain('pauseSession')
   })
 
   it('offline, two decision clicks in one tick: the FIRST queued decision wins (PR #1742 A-2)', async () => {
@@ -133,17 +110,6 @@ describe('ApprovalDialogHost — self_relay', () => {
     })
     await waitFor(() => expect(Object.keys(useApprovalStore.getState().queued)).toHaveLength(1))
     expect(Object.values(useApprovalStore.getState().queued)[0].decision).toBe('approve')
-  })
-
-  it('a pause that fails toasts and the decision still goes out', async () => {
-    mockedPause.mockRejectedValueOnce(new ApprovalApiError(0, 'network', 'Failed to fetch'))
-    mockedDecide.mockResolvedValueOnce(relay({ state: 'denied', decided_by: { kind: 'app', label: 'Purdex.app' } }))
-    render(<ApprovalDialogHost />)
-    open(relay())
-    fireEvent.click(screen.getByTestId('approval-no-more-asking'))
-    fireEvent.click(screen.getByTestId('approval-deny'))
-    await waitFor(() => expect(mockedDecide).toHaveBeenCalledTimes(1))
-    expect(useUndoToast.getState().toast?.message).toContain('無法暫停')
   })
 
   it('a lead request still renders the lead body (the kind switch is per request)', () => {

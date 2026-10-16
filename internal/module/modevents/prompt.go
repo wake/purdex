@@ -17,6 +17,12 @@ func (o streamOwners) OwnerOf(sessionID string) (string, bool) {
 	return o.reg.NewestCapableStream(sessionID, modevents.CapPromptV1, modevents.CapsFresh)
 }
 
+// OwnerOfCap is the live stream of the session that announced the capability most recently: the owner of a notice job
+// (lease.notice.v1).
+func (o streamOwners) OwnerOfCap(sessionID, capability string) (string, bool) {
+	return o.reg.NewestCapableStream(sessionID, capability, modevents.CapsFresh)
+}
+
 // promptSvc adapts the queue to the socket's PromptService.
 type promptSvc struct{ q *promptq.Queue }
 

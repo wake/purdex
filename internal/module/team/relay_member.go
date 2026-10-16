@@ -100,12 +100,12 @@ func (m *Module) handleRelayCreate(w http.ResponseWriter, r *http.Request) {
 		m.writeJSON(w, http.StatusConflict, team.APIError{Error: team.ErrRelayOpen, Detail: "this member's previous relay (to this session) is still settling", Op: &prev})
 		return
 	}
-	m.createMemberRelayFor(w, req, t, mr)
+	m.createMemberRelayFor(w, req, t, mr, false)
 }
 
 // createMemberRelayFor is handleRelayCreate's write for a member that has been matched and checked: the lead's `pdx relay _ref`
 // and the daemon's own accept of an ask while the host is unattended (RT-2b T22) both end here. Caller holds createMu.
-func (m *Module) createMemberRelayFor(w http.ResponseWriter, req team.RelayCreateRequest, t team.Team, mr memberRow) {
+func (m *Module) createMemberRelayFor(w http.ResponseWriter, req team.RelayCreateRequest, t team.Team, mr memberRow, handoff bool) {
 	fail := func(err error) {
 		m.logf("[team] member relay %s: %v", req.ID, err)
 		m.writeErr(w, http.StatusInternalServerError, errStorage, "team.db failed; see the daemon log", nil)
@@ -123,7 +123,11 @@ func (m *Module) createMemberRelayFor(w http.ResponseWriter, req team.RelayCreat
 		m.writeErr(w, http.StatusNotFound, team.ErrUnknownSession, "member "+mr.Ref+" is not a running session", nil)
 		return
 	}
-	if !m.modProtocolAtLeast(mr.SessionID, team.MinMemberRelayModVersion) {
+	minMod := team.MinMemberRelayModVersion
+	if handoff {
+		minMod = team.MinHandoffModVersion // an older mod would write the file and then /clear
+	}
+	if !m.modProtocolAtLeast(mr.SessionID, minMod) {
 		m.writeErr(w, http.StatusConflict, team.ErrRelayUnsupported, noMemberModDetail(mr.Ref), nil)
 		return
 	}
@@ -148,6 +152,12 @@ func (m *Module) createMemberRelayFor(w http.ResponseWriter, req team.RelayCreat
 		State: team.RelayRequested, HandoffPath: filepath.Join(m.relayDir, req.ID+".md"),
 		PID: mr.PID, PaneID: mr.PaneID, ProcStart: start, CreatedAt: now, UpdatedAt: now,
 	}
+	if handoff { // the member writes its handoff and is closed (RT-3c): its own file, else the fresh one a half or an earlier handoff left
+		op.Mode = team.RelayModeHandoff
+		if path, ok := m.freshFileOf(mr.SessionID); ok {
+			op.HandoffPath = path
+		}
+	}
 	if m.beforeMemberRelayInsert != nil {
 		m.beforeMemberRelayInsert(mr)
 	}
@@ -162,7 +172,11 @@ func (m *Module) createMemberRelayFor(w http.ResponseWriter, req team.RelayCreat
 		spent bool
 		held  *team.Approval // the member_relay row this create opened (pool spent out), for the announce after the commit
 	)
-	op, _, err = m.store.CreateMemberRelayOp(op, m.memberRelayGate(leadOrigin, mr, &spent, &held))
+	gate := m.memberRelayGate(leadOrigin, mr, &spent, &held)
+	if handoff { // a handoff spends no pool and opens no card: the lead asked for it, and the member is closed after it
+		gate = func(*sql.Tx, *team.RelayOp) (bool, error) { return false, nil }
+	}
+	op, _, err = m.store.CreateMemberRelayOp(op, gate)
 	switch {
 	case errors.Is(err, ErrMemberNotActive):
 		m.writeErr(w, http.StatusConflict, team.ErrNotYourMember, "member "+mr.Ref+" left the team while the relay was being opened", nil)

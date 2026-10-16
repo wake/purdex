@@ -77,7 +77,14 @@ func (m *Module) handleRelayClaim(w http.ResponseWriter, r *http.Request) {
 	if res == ReportApplied {
 		m.logf("[team] relay op %s → claimed", id)
 	}
-	m.writeJSON(w, http.StatusOK, team.RelayClaimResponse{Op: op, Lead: m.leadOf(op)})
+	m.rosterChanged() // a claim ends the session's fresh half (RT-3a1): the relay.fresh list and the roster follow; a retry (Noop) repeats it, free by the hash gate
+	resp := team.RelayClaimResponse{Op: op, Lead: m.leadOf(op)}
+	if op.Mode == team.RelayModeHandoff { // the op's file is the member's fresh half: the mod need not write it again (RT-3c)
+		if path, ok := m.freshFileOf(op.SessionID); ok && path == op.HandoffPath {
+			resp.Reuse = true
+		}
+	}
+	m.writeJSON(w, http.StatusOK, resp)
 }
 
 // leadOf is who leads the op's team now, or nil when the team is gone.

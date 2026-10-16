@@ -15,43 +15,21 @@ import (
 
 var updateGolden = flag.Bool("update", false, "rewrite the golden report files")
 
-// The fixture day: 24 hours of a host with known rows, so that every figure of
-// the report can be worked out by hand (the comments do).
+// The fixture day: 24 hours of a host with known minute rows, so that every figure of the report can be worked out by hand (the
+// comments do).
 var reportDay0 = time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
-
-type fixtureLease struct {
-	id, kind         string
-	weight           int
-	createdOffsetMin int // minutes after the day's start; negative: before it
-	granted          bool
-	recorded         bool
-	path             string
-	waitedMS         int64
-	r2               bool
-	peak, mean       float64
-	samples          int
-}
-
-var fixtureLeases = []fixtureLease{
-	{"l01", "test-full", 35, 10, true, true, resources.PathImmediate, 0, false, 40, 30, 10},
-	{"l02", "test-full", 35, 20, true, true, resources.PathWaited, 12000, true, 55, 41, 20},
-	{"l03", "test-full", 35, 30, true, true, resources.PathOverrun, 300000, true, 50, 36, 15},
-	{"l04", "build", 35, 40, true, true, resources.PathImmediate, 0, false, 20, 12, 8},
-	{"l05", "build", 35, 50, true, true, resources.PathWaited, 4000, true, 28, 18, 12},
-	{"l06", "test-pkg", 15, 60, true, true, resources.PathImmediate, 0, false, 10, 6, 5},
-	{"l07", "", 20, 70, true, true, resources.PathImmediate, 0, false, 0, 0, 0},             // an explicit weight, never measured
-	{"l08", "test-full", 35, 80, true, false, "", 0, false, 33, 20, 7},                      // granted before the decision record existed
-	{"l09", "build", 35, 90, false, false, "", 0, false, 0, 0, 0},                           // cancelled before it was granted
-	{"l10", "test-full", 35, -30, true, true, resources.PathImmediate, 0, false, 99, 99, 9}, // before the period
-}
 
 // fixtureMinutes: 1440 minute rows, minutes 700 to 709 missing. Hand figures:
 //
-//	full: minutes 100-104 are full for 12 ticks each (one run of 5 minutes, 300 s,
-//	      started at 100; longest-so-far 60..300), minute 500 for 3 ticks (a run of
-//	      15 s): Σ full_ticks = 63 -> 315 s of 1430 × 60 = 85800 s covered.
-//	heavy: minutes 200-202 hold two heavy leases (load1 9.5/11.2/10.0,
-//	      mem 70/83.5/80); 203 holds only one (load1 20, not counted).
+//	full:  minutes 100-104 are full for 12 ticks each (one run of 5 minutes, 300 s, started at 100), minute 500 for 3 ticks (a run
+//	       of 15 s): Σ full_ticks = 63 -> 315 s of 1430 × 60 = 85800 s covered.
+//	heavy: minutes 200-202 and 204 have a heavy command running in the gate's columns (load1 9.5/11.2/10.0/4, mem 70/83.5/80/55; two at
+//	       once in 201): 4 minutes, most 2 (not in the last one), highest load1 11.2, memory 83.5. Minute 203 has two heavy leases held
+//	       in the retired lease's column (load1 20, mem 99): a legacy minute, in no figure of the gate's.
+//	light: at most 3 (minute 300).
+//	gate:  minutes 400-401 have a command waiting (1, then 4): 2 minutes, longest queue 4.
+//	zones: minutes 600-602 carry zone seconds, 60 s each: normal 60+30+0, warning 0+30+45, danger 0+0+15 of 180 s
+//	       (the rows with no zone seconds are left out).
 func fixtureMinutes() []minuteRow {
 	var out []minuteRow
 	for i := 0; i < 1440; i++ {
@@ -68,43 +46,39 @@ func fixtureMinutes() []minuteRow {
 		case i == 500:
 			r.Full, r.FullTicks, r.FullStarts, r.FullLongestS = true, 3, 1, 15
 		case i == 200:
-			r.HeavyHeld, r.Load1, r.Mem = 2, 9.5, 70
+			r.HeavyRunning, r.Load1, r.Mem = 1, 9.5, 70
 		case i == 201:
-			r.HeavyHeld, r.Load1, r.Mem = 2, 11.2, 83.5
+			r.HeavyRunning, r.Load1, r.Mem = 2, 11.2, 83.5
 		case i == 202:
-			r.HeavyHeld, r.Load1, r.Mem = 2, 10, 80
+			r.HeavyRunning, r.Load1, r.Mem = 1, 10, 80
 		case i == 203:
-			r.HeavyHeld, r.Load1, r.Mem = 1, 20, 99
+			r.HeavyHeld, r.Load1, r.Mem = 2, 20, 99
+		case i == 204:
+			r.HeavyRunning, r.Load1, r.Mem = 1, 4, 55
+		case i == 205:
+			r.HeavyHeld = 1 // one lease alone was never "two or more"
+		case i == 300:
+			r.LightRunning = 3
+		case i == 301:
+			r.LightRunning = 2
+		case i == 400:
+			r.GateWaiting = 1
+		case i == 401:
+			r.GateWaiting = 4
+		case i == 600:
+			r.SampledS, r.NormalS = 60, 60
+		case i == 601:
+			r.SampledS, r.NormalS, r.WarningS = 60, 30, 30
+		case i == 602:
+			r.SampledS, r.WarningS, r.DangerS = 60, 45, 15
 		}
 		out = append(out, r)
 	}
 	return out
 }
 
-// seedReportDay writes the fixture into a store.
 func seedReportDay(t *testing.T, s *leaseStore) {
 	t.Helper()
-	for _, l := range fixtureLeases {
-		created := reportDay0.Add(time.Duration(l.createdOffsetMin) * time.Minute).UnixMilli()
-		var granted any
-		state := "ended"
-		if l.granted {
-			granted = created + l.waitedMS
-		}
-		rec := 0
-		if l.recorded {
-			rec = 1
-		}
-		_, err := s.db.Exec(`INSERT INTO resource_leases
-			(id, client_id, state, kind, weight, holder_pid, scope, created_at, deadline_at, lease_until, granted_at, ended_at, end_reason,
-			 waited_ms, peak_use, mean_use, samples, dec_recorded, dec_path, would_wait_r2)
-			VALUES (?, ?, ?, ?, ?, 1, 'process', ?, ?, ?, ?, ?, 'released', ?, ?, ?, ?, ?, ?, ?)`,
-			l.id, "c-"+l.id, state, l.kind, l.weight, created, created+300000, created+30000, granted, created+600000,
-			l.waitedMS, l.peak, l.mean, l.samples, rec, l.path, b2i(l.r2))
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
 	for _, m := range fixtureMinutes() {
 		if err := s.InsertMinute(m); err != nil {
 			t.Fatal(err)
@@ -134,41 +108,23 @@ func TestReport_FixtureDayExactly(t *testing.T) {
 	s := newTestStore(t)
 	seedReportDay(t, s)
 	since, until := reportDay0.UnixMilli(), reportDay0.Add(24*time.Hour).UnixMilli()
-	leases, minutes, err := s.ReportRows(since, until)
+	minutes, err := s.ReportMinutes(since, until)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rep := resources.BuildReport(since, until, leases, minutes)
+	rep := resources.BuildReport(since, until, minutes)
 	got, _ := json.MarshalIndent(rep, "", "  ")
 	goldenCheck(t, "report-day.json", append(got, '\n'))
 
-	// The figures worked out by hand above, so the golden file is not just
-	// whatever the code printed.
+	// The figures worked out by hand above, so the golden file is not just whatever the code printed.
 	want := resources.Report{
 		Since: since, Until: until,
-		Coverage:    resources.ReportCoverage{From: since, To: reportDay0.Add(1439 * time.Minute).UnixMilli(), Minutes: 1430},
-		NotRecorded: 1,
-		Requests: resources.ReportRequests{Total: 9, NotGranted: 1, ByKind: []resources.ReportKindCount{
-			{Kind: "test-full", Count: 4}, {Kind: "build", Count: 3}, {Kind: "", Count: 1}, {Kind: "test-pkg", Count: 1}}},
-		Paths:       resources.ReportPaths{Immediate: 4, Waited: 2, Overrun: 1},
-		WaitMS:      resources.ReportWait{P50: 0, P90: 300000, Max: 300000},
-		WouldWaitR2: 3,
-		Full:        resources.ReportFull{Share: 315.0 / 85800.0, Runs: 2, LongestS: 300},
-		Heavy:       resources.ReportHeavy{Minutes: 3, MaxLoad1: 11.2, MaxMem: 83.5},
-		Kinds: []resources.ReportKind{
-			{Kind: "build", N: 2, Weight: 35, PeakMax: 28, MeanAvg: 15},
-			{Kind: "test-full", N: 3, Weight: 35, PeakMax: 55, MeanAvg: 107.0 / 3.0}, // l01, l02, l03: l08 was granted before the record existed
-			{Kind: "test-pkg", N: 1, Weight: 15, PeakMax: 10, MeanAvg: 6},
-		},
-		// Lease v2 figures: the fixture has no zone seconds, reasons or shadow
-		// verdicts; the longest waits are the three recorded rows that waited.
-		WaitByReason: []resources.ReportReasonWait{},
-		Longest: []resources.ReportWaitRow{
-			{Kind: "test-full", CreatedAt: reportDay0.Add(30 * time.Minute).UnixMilli(), WaitedMS: 300000}, // l03
-			{Kind: "test-full", CreatedAt: reportDay0.Add(20 * time.Minute).UnixMilli(), WaitedMS: 12000},  // l02
-			{Kind: "build", CreatedAt: reportDay0.Add(50 * time.Minute).UnixMilli(), WaitedMS: 4000},       // l05
-		},
-		Shadow: resources.ReportShadow{Longest: []resources.ReportShadowRow{}},
+		Coverage: resources.ReportCoverage{From: since, To: reportDay0.Add(1439 * time.Minute).UnixMilli(), Minutes: 1430},
+		Full:     resources.ReportFull{Share: 315.0 / 85800.0, Runs: 2, LongestS: 300},
+		Heavy:    resources.ReportHeavy{Minutes: 4, MaxRunning: 2, MaxLoad1: 11.2, MaxMem: 83.5, LegacyMinutes: 1},
+		Light:    resources.ReportLight{MaxRunning: 3},
+		Gate:     resources.ReportGate{WaitingMinutes: 2, MaxWaiting: 4},
+		Zones:    resources.ReportZones{Minutes: 3, SampledS: 180, Normal: 90.0 / 180, Warning: 75.0 / 180, Danger: 15.0 / 180},
 	}
 	wb, _ := json.MarshalIndent(want, "", "  ")
 	if !bytes.Equal(got, wb) {
@@ -176,48 +132,22 @@ func TestReport_FixtureDayExactly(t *testing.T) {
 	}
 }
 
-// Nearest-rank percentiles (rank = ceil(p/100 × n)), on small known lists.
-func TestReport_NearestRank(t *testing.T) {
-	mk := func(ws ...int64) []resources.ReportLease {
-		var out []resources.ReportLease
-		for _, w := range ws {
-			out = append(out, resources.ReportLease{GrantedAt: 1, Recorded: true, Path: resources.PathWaited, WaitedMS: w})
-		}
-		return out
-	}
-	for _, c := range []struct {
-		waits         []int64
-		p50, p90, max int64
-	}{
-		{[]int64{10}, 10, 10, 10},
-		{[]int64{10, 20}, 10, 20, 20},                      // rank 1, 2
-		{[]int64{50, 10, 40, 20, 30}, 30, 50, 50},          // rank 3, 5
-		{[]int64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}, 5, 9, 10}, // rank 5, 9
-		{nil, 0, 0, 0},
-	} {
-		got := resources.BuildReport(0, 1, mk(c.waits...), nil).WaitMS
-		if got.P50 != c.p50 || got.P90 != c.p90 || got.Max != c.max {
-			t.Errorf("%v: %+v, want %d/%d/%d", c.waits, got, c.p50, c.p90, c.max)
-		}
-	}
-}
-
-// A period the timeline does not reach shows in coverage, adds nothing to the
-// full figures, and a missing minute is no data (not a zero).
+// A period the timeline does not reach shows in coverage, adds nothing to the full figures, and a missing minute is no data (not a
+// zero).
 func TestReport_CoverageAndMissingMinutes(t *testing.T) {
-	rep := resources.BuildReport(0, 1, nil, nil)
-	if rep.Coverage.Minutes != 0 || rep.Full.Share != 0 || rep.Requests.ByKind == nil || rep.Kinds == nil {
+	rep := resources.BuildReport(0, 1, nil)
+	if rep.Coverage.Minutes != 0 || rep.Full.Share != 0 || rep.Heavy.Minutes != 0 {
 		t.Errorf("empty report = %+v", rep)
 	}
 	// 2 minute rows, 30 full ticks (150 s) over 2 × 60 s: capped at 1.
-	rep = resources.BuildReport(0, 1, nil, []resources.ReportMinute{{At: 60000, FullTicks: 12}, {At: 0, FullTicks: 18}})
+	rep = resources.BuildReport(0, 1, []resources.ReportMinute{{At: 60000, FullTicks: 12}, {At: 0, FullTicks: 18}})
 	if rep.Coverage.From != 0 || rep.Coverage.To != 60000 || rep.Full.Share != 1 {
 		t.Errorf("report = %+v", rep)
 	}
 }
 
-// The route: since is validated, the answer is the report of the rows in the
-// period, and rows outside it are not in it.
+// The route: since is validated, the answer is the report of the minute rows in the period, and rows outside it are not in it. The
+// lease tables are not read: a lease row in the period changes nothing.
 func TestReport_Route(t *testing.T) {
 	f := newPassFix(t, resources.ModeLease)
 	mux := http.NewServeMux()
@@ -232,19 +162,22 @@ func TestReport_Route(t *testing.T) {
 			t.Errorf("%s: %d %s", bad, rec.Code, rec.Body.String())
 		}
 	}
-	// A lease created 2 hours ago is in a 3h report and not in a 1h one.
+	// A minute 2 hours ago is in a 3h report and not in a 1h one.
+	if err := f.m.store.InsertMinute(minuteRow{At: f.nowMS() - 2*3600*1000, NCPU: 10, HeavyRunning: 1}); err != nil {
+		t.Fatal(err)
+	}
 	r := baseRow("old", "c-old")
-	r.CreatedAt = f.nowMS() - 2*3600*1000
+	r.CreatedAt = f.nowMS() - 30*60*1000
 	mustCreate(t, f.m.store, r)
-	count := func(q string) int {
+	minutes := func(q string) int {
 		rec := get(q)
 		var rep resources.Report
 		if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &rep) != nil {
 			t.Fatalf("%s: %d %s", q, rec.Code, rec.Body.String())
 		}
-		return rep.Requests.Total
+		return rep.Heavy.Minutes
 	}
-	if count("?since=3h") != 1 || count("?since=1h") != 0 || count("") != 1 || count("?since=14d") != 1 {
+	if minutes("?since=3h") != 1 || minutes("?since=1h") != 0 || minutes("") != 1 || minutes("?since=14d") != 1 {
 		t.Error("the period does not select the rows")
 	}
 	// Reading the report samples nothing and writes nothing.
@@ -256,14 +189,23 @@ func TestReport_Route(t *testing.T) {
 	}
 }
 
-// A lease granted before the decision record existed is in no per-kind figure
-// either, whatever it measured.
-func TestReport_UnrecordedLeaseIsInNoKindFigure(t *testing.T) {
-	rep := resources.BuildReport(0, 1, []resources.ReportLease{
-		{Kind: "build", Weight: 35, GrantedAt: 1, Recorded: true, Path: resources.PathImmediate, Samples: 4, PeakUse: 20, MeanUse: 10},
-		{Kind: "build", Weight: 35, GrantedAt: 1, Recorded: false, Samples: 9, PeakUse: 90, MeanUse: 80},
-	}, nil)
-	if len(rep.Kinds) != 1 || rep.Kinds[0].N != 1 || rep.Kinds[0].PeakMax != 20 || rep.Kinds[0].MeanAvg != 10 || rep.NotRecorded != 1 {
-		t.Errorf("report = %+v", rep)
+// The gate's columns and the retired lease's column are read apart: a row from before L2 is a legacy minute, never a heavy one.
+func TestReport_ReadsTheGatesColumns(t *testing.T) {
+	s := newTestStore(t)
+	at := reportDay0.UnixMilli()
+	for i, row := range []minuteRow{
+		{At: at, NCPU: 10, HeavyHeld: 2},
+		{At: at + 60000, NCPU: 10, HeavyRunning: 1, LightRunning: 3, GateWaiting: 2},
+	} {
+		if err := s.InsertMinute(row); err != nil {
+			t.Fatalf("row %d: %v", i, err)
+		}
+	}
+	minutes, err := s.ReportMinutes(at, at+3*60000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(minutes) != 2 || minutes[0].HeavyRunning != 0 || minutes[0].HeavyHeld != 2 || minutes[1].HeavyRunning != 1 || minutes[1].LightRunning != 3 || minutes[1].GateWaiting != 2 {
+		t.Fatalf("minutes = %+v", minutes)
 	}
 }

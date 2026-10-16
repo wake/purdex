@@ -15,6 +15,9 @@ func (e *Engine) apply(l *lease, r Result) (follow *job) {
 	if j.kind == JobRefresh {
 		return e.applyRefresh(j, l, r)
 	}
+	if j.kind == JobJournal {
+		return e.applyJournalJob(j, r)
+	}
 	if !r.Answered {
 		return e.failedCall(j, r, l.timeoutMS)
 	}
@@ -31,6 +34,9 @@ func (e *Engine) apply(l *lease, r Result) (follow *job) {
 		e.logTodos(res)
 		if ok {
 			e.notifyLine(j.entryID, false)
+		}
+		if err == nil && ok {
+			return e.journalAfter(j) // a skipped turn can still hold events and answers
 		}
 		return nil
 	}
@@ -50,7 +56,7 @@ func (e *Engine) apply(l *lease, r Result) (follow *job) {
 	j.out = Output{Thing: fixed.Thing, Push: fixed.Push, Entry: fixed.Entry, ThingDone: fixed.ThingDone}
 	if !rewrite {
 		e.finishOK(j)
-		return nil
+		return e.journalAfter(j)
 	}
 	e.qmu.Lock()
 	capped := e.capReached()
@@ -58,10 +64,10 @@ func (e *Engine) apply(l *lease, r Result) (follow *job) {
 	if capped {
 		j.entry = fixed.Entry
 		e.finishCut(j)
-		return nil
+		return e.journalAfter(j)
 	}
 	return &job{conv: j.conv, entryID: j.entryID, session: j.session, kind: JobRewrite, attempt: 1,
-		entry: fixed.Entry, out: j.out, usage: j.usage, lat: j.lat}
+		entry: fixed.Entry, out: j.out, usage: j.usage, lat: j.lat, then: e.journalAfter(j)}
 }
 
 func (e *Engine) finishOK(j *job) {
@@ -81,7 +87,7 @@ func (e *Engine) applyRewrite(j *job, r Result) *job {
 		e.d.Logf("[workbook] a re-write did not answer (%s); the entry is cut", logKind(r.Reason))
 	}
 	e.finishCut(j)
-	return nil
+	return j.then
 }
 
 // failedCall maps a call that did not answer (spec §5.1 table).

@@ -29,11 +29,12 @@ import (
 )
 
 const leaseUsage = "usage: pdx lease ls [--json] [--config <path>]\n" +
-	"       pdx lease acquire (--kind <k> | --weight <n>) [--wait <dur>] [--session <sid>] [--tool-use <id>] [--holder-pid <pid>] [--holder-start <text>] [--client-id <uuid>] [--config <path>]\n" +
-	"       pdx lease run (--kind <k> | --weight <n>) [--wait <dur>] [--client-id <uuid>] [--config <path>] -- <command…>\n" +
-	"       pdx lease report [--since 24h] [--json] [--config <path>]   (since: a duration such as 90m or 24h, or days as 7d; at most 14d)\n" +
-	"       pdx lease release (<id> | --client-id <uuid>) [--json] [--config <path>]\n" +
-	"       (--wait: how long to queue before being let in anyway; default the host setting deadline_s, 5 minutes unless changed. acquire holds for --holder-pid, default the parent of pdx: a bare acquire in a subshell or $(…) names a process that exits at once. Give --holder-pid a long-lived pid, or use pdx lease run.)"
+	"       pdx lease acquire (--kind <k> | --weight <n>) [--queue | --ask | --wait [<dur>]] [--command <text>] [--cwd <dir>] [--session <sid>] [--tool-use <id>] [--holder-pid <pid>] [--holder-start <text>] [--client-id <uuid>] [--config <path>]\n" +
+	"       pdx lease run (--kind <k> | --weight <n>) [--queue | --ask | --wait [<dur>]] [--command <text>] [--client-id <uuid>] [--config <path>] -- <command…>\n" +
+	"       (pdx lease report is now pdx host report)\n" +
+	"       pdx lease release (<id> | --client-id <uuid>) [--notice] [--json] [--config <path>]\n" +
+	"       pdx lease confirm <id> | cancel <id> | done   (your own background request, queued request or position; a pos_ id goes to the position)\n" +
+	"       (--queue: a busy host answers at once with your place (exit 15); --ask: for a background command, wait for the answer to the question; --wait: wait for room (a duration is accepted and ignored). With none of them PDX_LEASE_CALLER decides: fg queue, bg ask, else wait. acquire holds for --holder-pid, default the parent of pdx: a bare acquire in a subshell or $(…) names a process that exits at once. Give --holder-pid a long-lived pid, or use pdx lease run.)"
 
 // leaseAttemptTimeout bounds one request to the daemon; a snapshot is a read
 // of memory, so a daemon slower than this is not answering.
@@ -64,6 +65,12 @@ func runLease(args []string) {
 	os.Exit(runLeaseCmd(ctx, args, os.Getenv, os.Stdout, os.Stderr))
 }
 
+// leaseRun is what `pdx lease run` does: the gate alias. A var so the tests of the old, daemon-lease implementation (runLeaseRun,
+// which L2 removes together with them) can point it back at that.
+var leaseRun = func(_ context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer, _ []daemonclient.Option) int {
+	return runLeaseRunAlias(args, getenv, stdout, stderr)
+}
+
 // runLeaseCmd dispatches `pdx lease <verb>`.
 func runLeaseCmd(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer, clientOpts ...daemonclient.Option) int {
 	if len(args) > 0 {
@@ -71,13 +78,15 @@ func runLeaseCmd(ctx context.Context, args []string, getenv func(string) string,
 		case "ls":
 			return runLeaseLs(ctx, args[1:], stdout, stderr, clientOpts)
 		case "acquire":
-			return runLeaseAcquire(ctx, args[1:], stdout, stderr, clientOpts)
+			return runLeaseAcquire(ctx, args[1:], getenv, stdout, stderr, clientOpts)
 		case "release":
 			return runLeaseRelease(ctx, args[1:], stdout, stderr, clientOpts)
 		case "run":
-			return runLeaseRun(ctx, args[1:], stdout, stderr, clientOpts)
+			return leaseRun(ctx, args[1:], getenv, stdout, stderr, clientOpts)
 		case "report":
-			return runLeaseReport(ctx, args[1:], stdout, stderr, clientOpts)
+			return runLeaseReportMoved(stderr)
+		case "confirm", "cancel", "done":
+			return runLeaseVerb(ctx, args[0], args[1:], stdout, stderr, clientOpts)
 		}
 	}
 	msg := "需要一個子指令"
@@ -252,6 +261,9 @@ func printLeaseSections(w io.Writer, snap resources.Snapshot) error {
 			return err
 		}
 	}
+	if err := printPositions(w, snap, leaseNow()); err != nil {
+		return err
+	}
 	if len(snap.Waiters) > 0 {
 		header := []string{"WAITERS", "SESSION", "KIND", "WEIGHT", "WAITED", "DEADLINE IN"}
 		withReason := false
@@ -328,7 +340,7 @@ var (
 	trendText  = map[string]string{"rising": "上升", "flat": "持平", "falling": "下降", "unknown": "未知"}
 	reasonText = map[string]string{
 		"gap": "間隔中", "danger": "危險區", "warning_flat": "警戒且持平",
-		"rising": "用量上升", "behind": "排在後面", "cut": "等待基準", "parked": "保留中",
+		"rising": "用量上升", "behind": "排在後面", "cut": "等待基準", "parked": "保留中", "load": "負載上限",
 	}
 )
 

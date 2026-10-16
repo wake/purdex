@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/wake/purdex/internal/execstat"
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -331,7 +331,7 @@ func isGoCache(root *os.Root) bool {
 func resolveGoCacheDir() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if out, err := exec.CommandContext(ctx, "go", "env", "GOCACHE").Output(); err == nil {
+	if out, err := execstat.CommandContext(ctx, "resources.go-env", "go", "env", "GOCACHE").Output(); err == nil {
 		if d := strings.TrimSpace(string(out)); d != "" && d != "off" && filepath.IsAbs(d) {
 			return d
 		}

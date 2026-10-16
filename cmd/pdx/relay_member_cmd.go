@@ -86,7 +86,7 @@ func runRelayMember(ctx context.Context, target string, args []string, stdout, s
 	if *wait == 0 {
 		return relayPrintJSON(stdout, stderr, res.Op)
 	}
-	return followRelayOp(ctx, client, res.Op, *wait, stdout, stderr)
+	return followRelayOp(ctx, client, res.Op, *wait, stdout, stderr, func(op team.RelayOp) int { return finishRelayOp(op, stdout, stderr) })
 }
 
 // runRelayDeny is `pdx relay <ref> --deny`: the lead declines the member's open ask (RT-2b T21). Exit 0 with the ask's id on stdout;
@@ -109,7 +109,7 @@ const awaitingApprovalLine = "等待核准：member 額度用完（無人值守�
 
 // followRelayOp long-polls the op until it is terminal or the bound passes (the --wait bound is a cancellation, not a
 // context deadline: see runRelayWait).
-func followRelayOp(ctx context.Context, client *daemonclient.Client, op team.RelayOp, wait time.Duration, stdout, stderr io.Writer) int {
+func followRelayOp(ctx context.Context, client *daemonclient.Client, op team.RelayOp, wait time.Duration, stdout, stderr io.Writer, finish func(team.RelayOp) int) int {
 	deadline, cancel := context.WithCancel(ctx)
 	defer cancel()
 	bound := time.AfterFunc(wait, cancel)
@@ -122,7 +122,7 @@ func followRelayOp(ctx context.Context, client *daemonclient.Client, op team.Rel
 			told = true
 		}
 		if op.State.Terminal() {
-			return finishRelayOp(op, stdout, stderr)
+			return finish(op)
 		}
 		if ctx.Err() != nil {
 			fmt.Fprintln(stderr, "pdx relay: 等待已中斷，接力仍在進行")
@@ -138,7 +138,7 @@ func followRelayOp(ctx context.Context, client *daemonclient.Client, op team.Rel
 			if ferr == nil && final.ID != "" {
 				op = final
 				if op.State.Terminal() {
-					return finishRelayOp(op, stdout, stderr)
+					return finish(op)
 				}
 			}
 			if op.State == team.RelayAwaitingApproval {

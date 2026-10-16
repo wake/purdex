@@ -594,7 +594,7 @@ pdx spawn [--repo <key|org/repo>] [--host <alias>] [--cwd <dir>] [--title <t>] [
    - The launch command is the host config `team.member_command`, default `claude --dangerously-skip-permissions` (the expansion of `cld-yolo`, because the daemon cannot rely on a shell alias).
    - **⟲ changed by U20 (was U18's "no `--model` or `--effort`"):** when the request carries them, the daemon appends `--model '<m>'` (single-quoted) and `--effort <e>`, after validating both again (`400 bad_request`). Without them the member runs the host's default model.
    - **A member always carries the Purdex mod:** the command always gets `--plugin-dir <data_dir>/cc-plugin/purdex`. Even with the global install the plugin loads once (M5), so spawn never depends on the user's settings.
-5. **Wait up to 20 s for the member to register.** Same shape as take-to-terminal: a verified frame for the pane with a session id, plus a registry entry, so the ref is known.
+5. **Wait up to 60 s for the member to register.** (20 s until #2853: a cold Claude Code loads its plugins, MCP servers and hooks, which on a loaded host takes more than 20 s.) The deadline only judges a member that really did not come up; a late failure says how long it waited and what was last seen on the pane (no frame / frame not verified / no session id / not in the registry). Same shape as take-to-terminal: a verified frame for the pane with a session id, plus a registry entry, so the ref is known.
    - On timeout: kill the tmux session, fail `member_start_timeout`. The member does not count against the limit.
 6. **Store the member** (`team_members`: team, session id, pane, tmux name, title, spawn op, `state=active`) and set its title. Answer `{ref, address, tmux_session, session_id}`.
 
@@ -930,7 +930,7 @@ The daemon reads actual state; it never waits for lost hooks.
 
 **Spawn ops not finished:**
 - if the tmux session exists, continue from the recorded step: launch, or wait for registration;
-- past the 20 s budget, kill it and fail.
+- past the 60 s budget, kill it and fail.
 
 **Open approval requests of every kind** get the lease grace above. A self-relay request's lease is renewed by the mod's `pdx relay wait`.
 

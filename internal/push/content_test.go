@@ -72,14 +72,25 @@ func TestApprovalContent_ThreeKindsInBothLocales(t *testing.T) {
 		t.Fatalf("self_relay en = %+v", c)
 	}
 
-	idle := approvalOpened("self_relay", map[string]any{"used_percentage": 55.4, "reason": "idle", "idle_minutes": 40}, "", "worker-7")
+	// A card whose session's mod writes a half on the timeout (half_on_timeout) says so; any other idle card keeps the old wording,
+	// since a mod before protocol 8 compacts later and writes nothing.
+	idle := approvalOpened("self_relay", map[string]any{"used_percentage": 55.4, "reason": "idle", "idle_minutes": 40, "half_on_timeout": true}, "", "worker-7")
 	c, ok = ApprovalContent(idle, "mlab", "zh-TW")
-	if !ok || c.Title != "mlab：worker-7 閒置 40 分鐘，申請接力（已用 55%）" || !strings.Contains(c.Body, "趁快取還在時接力最省") || c.Kind != "self_relay" {
+	if !ok || c.Title != "mlab：worker-7 閒置 40 分鐘，申請接力（已用 55%）" || !strings.Contains(c.Body, "趁快取還在時接力最省；不核准的話，5 分鐘後會先寫好接力檔（不清空）") || c.Kind != "self_relay" {
 		t.Fatalf("idle self_relay zh-TW = %+v", c)
 	}
 	c, _ = ApprovalContent(idle, "mlab", "en")
-	if c.Title != "mlab: worker-7 has been idle 40 min and requests a relay (55% used)" || !strings.Contains(c.Body, "cache is warm") {
+	if c.Title != "mlab: worker-7 has been idle 40 min and requests a relay (55% used)" || !strings.Contains(c.Body, "cache is warm is cheapest; otherwise a handoff file is written in 5 minutes (nothing is cleared)") {
 		t.Fatalf("idle self_relay en = %+v", c)
+	}
+	oldMod := approvalOpened("self_relay", map[string]any{"used_percentage": 55.4, "reason": "idle", "idle_minutes": 40}, "", "worker-7")
+	c, _ = ApprovalContent(oldMod, "mlab", "zh-TW")
+	if !strings.Contains(c.Body, "不核准的話，Claude Code 稍後會自行壓縮") || strings.Contains(c.Body, "接力檔") {
+		t.Fatalf("idle self_relay zh-TW without half_on_timeout = %+v, want the compaction wording", c)
+	}
+	c, _ = ApprovalContent(oldMod, "mlab", "en")
+	if !strings.Contains(c.Body, "otherwise Claude Code compacts it later") || strings.Contains(c.Body, "handoff file") {
+		t.Fatalf("idle self_relay en without half_on_timeout = %+v, want the compaction wording", c)
 	}
 	// Any other reason keeps the ordinary text.
 	other := approvalOpened("self_relay", map[string]any{"used_percentage": 71.6, "reason": "x", "idle_minutes": 40}, "", "worker-7")

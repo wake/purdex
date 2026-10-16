@@ -107,69 +107,6 @@ func TestEvent_SentWhileOnlyAnIdlePositionLives(t *testing.T) {
 	assert.Equal(t, resources.PosIdle, snap.Positions[0].State)
 }
 
-// ---- the report ----
-
-func TestBuildReport_PositionFigures(t *testing.T) {
-	rows := []resources.ReportPosition{
-		{EndReason: resources.EndDone, CommandsStarted: 1, CreatedAt: 1000, OfferedAt: 2000, DeliveredAt: 2500, OfferWaitMS: 500, IdleWaitMS: 1000, NoticeResult: "accepted"},
-		{EndReason: resources.EndReleasedAfterLimit, CommandsStarted: 3, Extensions: 1, CreatedAt: 1000, OfferedAt: 5000, DeliveredAt: 7000, OfferWaitMS: 1500, NoticeResult: "accepted"},
-		{EndReason: resources.EndNoAnswer, CommandsStarted: 0, CreatedAt: 1000, OfferedAt: 3000, DeliveredAt: 3100, OfferPasses: 2, NoticeResult: "unknown"},
-		{EndReason: resources.EndAbandoned, CommandsStarted: 5, RequeuedFrom: "pos_x", CreatedAt: 1000},
-		{EndReason: resources.EndDone, CommandsStarted: 2, CreatedAt: 1000, OfferedAt: 1500},
-	}
-	got := resources.BuildPositionReport(rows)
-	assert.Equal(t, 5, got.Total)
-	assert.Equal(t, []resources.ReportReasonCount{{Reason: "abandoned", Count: 1}, {Reason: "done", Count: 2}, {Reason: "no_answer", Count: 1}, {Reason: "released_after_limit", Count: 1}}, got.ByEndReason)
-	assert.Equal(t, resources.ReportCommandCounts{None: 1, One: 1, Two: 1, Three: 1, FourPlus: 1}, got.Commands)
-	assert.Equal(t, 1, got.Requeued)
-	assert.Equal(t, 1, got.Extensions)
-	assert.Equal(t, resources.ReportDist{N: 2, Total: 2000, P50: 500, P90: 1500, Max: 1500}, got.OfferWaitMS)
-	assert.Equal(t, resources.ReportDist{N: 1, Total: 1000, P50: 1000, P90: 1000, Max: 1000}, got.IdleWaitMS)
-	// offered_at - created_at: 1000, 4000, 2000, 500
-	assert.Equal(t, resources.ReportWait{P50: 1000, P90: 4000, Max: 4000}, got.QueuedWaitMS)
-	assert.Equal(t, 4, got.Offers.Offered)
-	assert.Equal(t, 3, got.Offers.Delivered)
-	assert.Equal(t, 2, got.Offers.Passed)
-	// delivered - offered: 500, 2000, 100
-	assert.Equal(t, resources.ReportDist{N: 3, Total: 2600, P50: 500, P90: 2000, Max: 2000}, got.Offers.DeliveryDelayMS)
-	assert.Equal(t, 1, got.Offers.LapsedAfterDelivery)
-	assert.Equal(t, []resources.ReportReasonCount{{Reason: "accepted", Count: 2}, {Reason: "unknown", Count: 1}}, got.Offers.NoticeResults)
-
-	empty := resources.BuildPositionReport(nil)
-	assert.Zero(t, empty.Total)
-	assert.NotNil(t, empty.ByEndReason, "lists are empty, not null")
-	b, err := json.Marshal(empty)
-	require.NoError(t, err)
-	assert.NotContains(t, string(b), "null")
-}
-
-func TestBuildReport_OfferAndContinuedPaths(t *testing.T) {
-	leases := []resources.ReportLease{
-		{Kind: "build", GrantedAt: 5, Recorded: true, Path: resources.PathOffer},
-		{Kind: "build", GrantedAt: 6, Recorded: true, Path: resources.PathContinued},
-		{Kind: "build", GrantedAt: 7, Recorded: true, Path: resources.PathContinued},
-		{Kind: "build", GrantedAt: 8, Recorded: true, Path: resources.PathImmediate},
-	}
-	r := resources.BuildReport(0, 100, leases, nil)
-	assert.Equal(t, 1, r.Paths.Offer)
-	assert.Equal(t, 2, r.Paths.Continued)
-	assert.Equal(t, 1, r.Paths.Immediate)
-}
-
-// The report endpoint carries the position figures from the stored rows.
-func TestReport_EndpointHasThePositions(t *testing.T) {
-	f := newPosFix(t)
-	run := decodeLease(t, f.postAs(newCID(), pidA, resources.CallQueue, "go build"))
-	f.release(run.ID, true)
-	rec := f.do(http.MethodGet, "/api/resources/report?since=1h", nil)
-	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
-	var rep resources.Report
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &rep))
-	assert.Equal(t, 1, rep.Positions.Total)
-	assert.Equal(t, 1, rep.Positions.Commands.One)
-	assert.Equal(t, 1, rep.Paths.Immediate)
-}
-
 // countingRoots is the root source with the batch address lookup of the peers
 // module's resolver, counting the registry reads.
 type countingRoots struct {

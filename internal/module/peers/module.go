@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/wake/purdex/internal/execstat"
 	"log"
 	"net/http"
 	"os"
@@ -267,6 +268,22 @@ type Module struct {
 	peerNames PeerNameStore
 	convNames ConversationNameReader
 
+	// remoteNames is the name pool's view of the other hosts (namepool_snapshot.go);
+	// nil (the default until WithNamePool) means no pool. namePoolRefresh
+	// overrides the refresher's period in tests.
+	remoteNames     *remoteNameSnapshot
+	namePoolRefresh time.Duration
+	// namePicker is the name pool (namepool.go); nil means the pool is off.
+	// Picking and storing a pool name, and settling two holders of one, are
+	// serialised.
+	namePicker NamePicker
+	// poolSem is the cancellable lock around picking and storing a pool name
+	// (lockPool); poolReady is closed once the refresher's first pass over
+	// the other hosts is done (awaitPoolReady), nil before Start.
+	poolSem   chan struct{}
+	poolOnce  sync.Once
+	poolReady chan struct{}
+
 	// putHostAfterSnapshot is a test seam: called by handlePutHost right
 	// after its pre-lock snapshot, so a test can force a concurrent
 	// mutation into that window. No-op in production.
@@ -288,7 +305,7 @@ func New(audit AuditStore, titles TitleStore) *Module {
 	stopCtx, stopCancel := context.WithCancel(context.Background())
 	m := &Module{
 		registryDir:          registryDir,
-		liveness:             ipeers.DefaultLiveness(),
+		liveness:             sharedProcessLiveness(ipeers.DefaultLiveness()),
 		snapshotProcs:        snapshotProcesses,
 		budget:               ipeers.InventoryBudget,
 		now:                  time.Now, // the one clock seam; every other clock reader below takes m.now
@@ -589,6 +606,15 @@ func (m *Module) ownerPass(src agent.ProcessSource) agent.OwnerPass {
 	return &perSessionPass{r: m.owners}
 }
 
+// sharedProcessLiveness is base with its process reads (Info, StartTime) answered from the daemon's shared process table
+// (agentpkg.SharedProcessSnapshot, at most a TTL old) instead of a `ps` fork per registry entry per read: the registry is
+// read by /api/peers, the origin resolver, the team sweeper's lead presence and the name pool, several times a second
+// between them (G3a, host-load-control spec §7). The verdicts stay base's, as in inventoryLiveness, and a process the
+// table does not know (started since, or gone) is read by base exactly as before.
+func sharedProcessLiveness(base ipeers.Liveness) ipeers.Liveness {
+	return inventoryLiveness(base, agentpkg.SharedProcessView{})
+}
+
 // snapshotProcesses is the production snapshotProcs.
 func snapshotProcesses(ctx context.Context) (agentpkg.ProcessView, error) {
 	snap, err := agentpkg.SnapshotProcesses(ctx)
@@ -632,6 +658,7 @@ func (m *Module) snapshotWithin(ctx context.Context) (agentpkg.ProcessView, erro
 // request, so the local row's titles and the host/host_id embedded in its
 // own Peers records are always built from the same values.
 func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers.Envelope {
+	execstat.Event("peers-envelope") // one local inventory = about 20 forks today (probe dedupe plan D3)
 	// ONE budget for the whole local inventory (#1293 §3.2): both tmux-
 	// instance probes, the session list, the process snapshot and every owner
 	// lookup run under invCtx, so a hung tmux costs the budget once, not once
@@ -824,6 +851,8 @@ func (m *Module) localEnvelope(ctx context.Context, hostID, alias string) ipeers
 	// hangs, or a pass whose budget is already spent, costs this pass its
 	// names (every row takes the ref form), never the GET or the send.
 	virtualNames := m.resolveNames(invCtx, append(entryNameCandidates(entries, proxyPIDs, previousRefs), execNameCandidates(execs, previousRefs)...))
+	// Two live holders of one pool name: the newcomer picks again (spec §5).
+	m.settlePoolCollisions(invCtx, entries, proxyPIDs, previousRefs, virtualNames)
 	peerRecords := ipeers.Build(ipeers.BuildInput{
 		HostID:       hostID,
 		Alias:        alias,
@@ -1158,6 +1187,10 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 	fetchCtx, cancel := context.WithTimeout(ctx, remoteFetchTimeout)
 	defer cancel()
 
+	var ticket uint64 // orders this answer against concurrent fetches of the host
+	if m.remoteNames != nil {
+		ticket = m.remoteNames.ticket()
+	}
 	env, err := m.fetch(fetchCtx, m.client, h.URL, h.Token)
 	if err != nil {
 		return ipeers.HostResult{
@@ -1235,6 +1268,11 @@ func (m *Module) fetchHostResult(ctx context.Context, h config.PeerHost) ipeers.
 		// the page render, and {ok:false, error:""} would be a red row
 		// with no reason. Same string verifyHost uses for the 502 case.
 		rowErr = "peer reported ok=false"
+	}
+	if env.OK && rowErr == "" {
+		// The name pool's snapshot of what this host holds, from the rows as
+		// normalizeRemoteRows settled them, never the raw envelope.
+		m.noteRemoteNames(resultHostID, peers, env.AddressVersion, ticket)
 	}
 
 	// unknown is the remote's own reported list of alive-but-undecodable

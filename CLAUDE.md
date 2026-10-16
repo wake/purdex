@@ -22,18 +22,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Peer addresses（跨主機 agent 訊息）
 
 - **日常地址是 `<host>/<name>`**，`<name>` 是 pdx 替這個對話配的**虛擬名**（Peer Address v5）：
-  `<基底>-<ref 前兩碼>`，例如 ref `_q34psn`、基底 `purdex-b0` → `mlab/purdex-b0-q3`。
+  `<基底>-<名字>`，名字是 daemon 從 30 個短名字（adam、emma、kenji、yuki…，各國常見員工名）的池子裡，
+  挑一個「現在沒有活著的對話在用」的，例如 `mlab/purdex-b0-kenji`；30 個都被占住時退回舊式
+  `<基底>-<ref 前兩碼>`（例如 ref `_q34psn` → `mlab/purdex-b0-q3`）。**已經有名字的舊對話維持原名**。
   基底取這個對話**第一次**被 daemon 看到時的名字（當時的 CLI 名字；沒有就用記過的名字；
   執行體用工作目錄名），**配一次就終生不變**：`/rename`、Claude Code 每次啟動換名都不影響；
-  接力（relay）後的新 session 沿用前任的名字（後綴不重算）；手動 `/clear` 是新對話，重新配。
+  接力（relay）後的新 session 沿用前任的名字（含名字，後綴不重算）；手動 `/clear` 是新對話，重新配。
+  名字在對話結束後釋放；**兩個活著的對話撞到同一個名字時（例如 resume 一個舊對話，它的名字已被別的活著對話
+  占用；或兩台主機同時挑到同名），行程開始較晚的那個換一個新名字**，先占用的不變；換名前送到該名字會回
+  `ambiguous`，括號形式與 `<host>/_<ref>` 仍到得了各自的對話。**換名會讓一個活著的對話換地址，所以跨時間交接
+  （把地址記下來之後才用）一律用 `<host>/_<ref>`，不要記名字。**
   `pdx peers` 與 `pdx msg whoami` 會連同 ref 一起顯示成 `<host>/<name> [<ref>]`。
 - **Claude Code 自己的 session 名字（CLI 名字）不是地址，不路由**：拿它送會回 `peer_not_found`；
   它若剛好是某個活著的對話的 CLI 名字，detail 會附 `did you mean <host>/<虛擬名>?`。
   地址一律問 `pdx msg whoami`（自己的）／`pdx peers --all`（別人的），不要從 CLI 名字推。
   例外：對方主機的 daemon 還是舊版（列沒有虛擬名）時，對它照舊用 CLI 名字定址。
 - **`pdx msg send` 接受三種寫法**：
-  - `pdx msg send mlab/purdex-b0-q3 "..."` —— 日常型，不必引號。
-  - `pdx msg send "mlab/purdex-b0-q3 [q34psn]" "..."` —— 表格看到什麼就整串貼上。
+  - `pdx msg send mlab/purdex-b0-kenji "..."` —— 日常型，不必引號。
+  - `pdx msg send "mlab/purdex-b0-kenji [q34psn]" "..."` —— 表格看到什麼就整串貼上。
     **括號形式的 name 會拿去跟 ref 核對**，對不上就**拒送**（`name_mismatch`），
     不是「以 ref 為準」照送 —— 那個 name 是給人看的檢查碼。含空白，一定要引號。
   - `pdx msg send mlab/_q34psn "..."` —— 精確型；兩個對話剛好配到同一個虛擬名
@@ -91,11 +97,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 3. spec **預設不單獨派 codex review**；只有 phase 切分或介面契約有爭議時才單獨審一輪
 4. 依據定稿的 spec 撰寫 plan
 5. 委派 codex 審閱 plan，**prompt 附上 spec 路徑一起審**（spec 與 plan 合併為一輪）
-6. 依據 plan 使用自己的 subagent 進行開發
+6. 依據 plan 使用自己的 subagent 進行開發；測試照「測試分層」只跑受影響的，完整套件留給發版
 7. PR & 委派 codex 兩輪 review（見下節）；修完 review 問題後**只 re-review 增量**，不重跑整支 branch
 8. 確認完成後進行 PR merge，完成後清理 worktree 並關閉
 9. 獨立一個 bump PR 以更新 `VERSION` + `CHANGELOG.md` 並 merge；**bump PR 與純搬移 PR 不派 codex**（純搬移用逐宣告位元組比對證明）
 10. 更新 main branch 對齊 origin/main
+
+### 測試分層（2026-10-15 定案）
+
+mlab 是多條線、多個 session 共用的主機：一個 `go test ./...` 或 vitest 全套就會吃滿全部核心，同時跑幾個就會讓 daemon 查詢與 `pdx msg` 逾時。所以測試分三層，**越前面越輕，完整套件一版只跑一次**：
+
+| 層 | 誰 | 跑什麼 |
+|---|---|---|
+| 開發中（TDD） | subagent／member | 只跑改到的測試檔或套件；`-race` 只在改到鎖／goroutine 時跑那個套件 |
+| PR merge 前 | member | SPA：`npx vitest related --run <改到的檔案>`＋`tsc`（見下）。Go：改到的套件（並行相關才 `-race`）＋`make lint`。mod：受影響的 mod 測試檔＋`go test ./cmd/pdx/plugin/`。mutation 只針對新增的測試。純搬移：逐宣告位元組比對＋編譯 |
+| 發版 | lead | go 全套（`-p 3`、`-timeout 30m`）、vitest 全套（`--maxWorkers=3`）＋`tsc -b --force`、mod 全部；沒改到的區塊沿用上一次的結果。紅了就找出是哪張 PR，往前修，不出版 |
+
+- **tsc**：`spa/tsconfig*.json` 的 `tsBuildInfoFile` 還在 `node_modules/.tmp/` 時，worktree 把 `node_modules` symlink 到主 checkout 會共用增量快取、顯示假綠（#2796），PR 層要用 `tsc -b --force`；快取改成每個 worktree 一份之後，PR 層用 `tsc -b`（增量）即可，`--force` 只留在發版。
+- **重指令一律經過閘門**（`go`／`pnpm`／`npx`／`vitest`／`tsc`／`composer` 由 shim 自動交給 `pdx gate`；腳本裡可明寫 `pdx gate --class heavy -- …`；mod 會把直接呼叫 `node_modules/.bin`、`vendor/bin` 的指令補上前綴，會排隊的前景呼叫自動轉背景）；被排隊時照提示等，不要自己加 `&`、改用真實執行檔路徑或其他方式繞過。
+- **codex review 的 prompt 一律附上**：「不要執行 go test ./... 或完整 vitest；要驗證最多只跑受影響的單一套件／測試檔」。
+- **派 subagent／member 的 brief 一律附上這三層**。
 
 ### PR Review 兩輪制 (委派 Codex 進行)
 

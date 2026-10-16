@@ -1199,7 +1199,7 @@ const nextReqs = (w: W) => w.wbReqs.filter((r) => r.url.endsWith('/next'))
 const resultReqs = (w: W) => w.wbReqs.filter((r) => r.url.endsWith('/result'))
 const USAGE = { input_tokens: 100, output_tokens: 20, cache_read_input_tokens: 50, cache_creation_input_tokens: 7 }
 
-test('every batch announces workbook.v2, workbook.refresh and prompt.v1 and nothing else', async ($, on) => {
+test('every batch announces workbook.v2, workbook.refresh, prompt.v1 and nothing else', async ($, on) => {
   const w = evWorld(on)
   await start($, w)
   await turnStart($, 't1')
@@ -1680,6 +1680,29 @@ test('a submit the engine refuses is reported dropped refused', async ($, on) =>
   expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'refused' })
 })
 
+// ---- the daemon's resource-lease notice job is retired (L1b): the mod no longer announces `lease.notice.v1`, and a notice job
+// that a daemon still hands out (a reload before the new caps arrived) is not run: it is reported dropped `unsupported_kind`, so
+// the daemon does not hold the stream's queue until its hand-out times out. The same for any kind this mod does not know.
+for (const kind of ['notice', 'something_new']) {
+  test(`a ${kind} job is not run and is reported dropped unsupported_kind`, async ($, on) => {
+    const w = evWorld(on, { promptNext: nextOnce(PJOB({ kind, text: '輪到你了' })) })
+    await start($, w)
+    await w.clock.settle()
+    expect(w.submitCalls).toHaveLength(0)
+    expect(pqResult(w)).toHaveLength(1)
+    expect(pqResult(w)[0].body).toEqual({ stream: pqNext(w)[0].body.stream, job_id: 'pj-' + PJ, status: 'dropped', reason: 'unsupported_kind' })
+  })
+}
+
+// A job of a known kind with a bad payload is still not a job (fail closed, nothing reported), as before.
+test('a submit job with a blank text is not a job: nothing runs, nothing is reported', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(PJOB({ kind: 'submit', text: '   ' })) })
+  await start($, w)
+  await w.clock.settle()
+  expect(w.submitCalls).toHaveLength(0)
+  expect(pqResult(w)).toHaveLength(0)
+})
+
 test('an interrupt aborts the running main turn', async ($, on) => {
   const g = gated(PJOB({ kind: 'interrupt', text: undefined }))
   const w = evWorld(on, { promptNext: g.fn })
@@ -1776,7 +1799,6 @@ test('an abort the engine refuses (the turn ended meanwhile) is dropped not_runn
 for (const [name, job] of [
   ['a bad job id', PJOB({ id: 'x' })],
   ['a bad session id', PJOB({ session_id: 'nope' })],
-  ['an unknown kind', PJOB({ kind: 'steer' })],
   ['blank text', PJOB({ text: '   ' })],
   ['over-long text', PJOB({ text: 'x'.repeat(8001) })],
   ['text that is not a string', PJOB({ text: 5 })],
@@ -1791,6 +1813,17 @@ for (const [name, job] of [
     expect(pqResult(w)).toHaveLength(0)
   })
 }
+
+// A well-formed job of a kind this mod does not know is not run either, but the daemon is told (dropped unsupported_kind), so
+// that it does not hold the stream's queue until its hand-out times out (L1b; the retired `notice` is one such kind).
+test('a job with an unknown kind is not run and is reported dropped unsupported_kind', async ($, on) => {
+  const w = evWorld(on, { promptNext: nextOnce(PJOB({ kind: 'steer' })) })
+  await start($, w)
+  await w.clock.settle()
+  expect(w.submitCalls).toHaveLength(0)
+  expect(w.abortCalls).toHaveLength(0)
+  expect(pqResult(w)[0].body).toMatchObject({ status: 'dropped', reason: 'unsupported_kind' })
+})
 
 // Mutation gate: no pause after a failed or instant-empty poll → a busy loop → red.
 test('a failed poll backs off, and an instant empty answer waits before the next poll', async ($, on) => {

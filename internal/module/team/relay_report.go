@@ -156,6 +156,9 @@ func (m *Module) handleRelayReport(w http.ResponseWriter, r *http.Request) {
 	case ReportApplied:
 		m.logf("[team] relay op %s → %s%s", id, op.State, reasonSuffix(op))
 		m.afterReport(op)
+		if op.Mode == team.RelayModeHandoff && op.Reason == team.RelayReasonHalf && op.Kind == team.RelayKindMember {
+			m.goTracked(func() { m.finishHandoffKill(op) }) // the signal after the commit that claimed the kill; never on a re-send (RT-3c)
+		}
 		m.handoverNoticeAsync(op) // only on Applied, never on a re-send (Noop)
 		m.outcomeNoticeAsync(op)  // the lead hears a member op end, once per transition
 	case ReportNoop:
@@ -212,6 +215,9 @@ func (m *Module) afterReport(op team.RelayOp) {
 		// (relay_store_report.go moveTeamRoles); done re-announces after a
 		// restart between the two. Unchanged is free (the hash gate).
 		m.rosterChanged()
+	}
+	if op.Mode != "" && op.Reason == team.RelayReasonHalf {
+		m.rosterChanged() // the written half became the session's fresh half: the relay.fresh list and the roster follow (RT-3a2)
 	}
 	if op.State.Terminal() && op.RequestID != "" {
 		m.closeRequestOfReportedOp(op)

@@ -56,6 +56,7 @@ const (
 	DefaultAlertStuckS      = 600
 	DefaultAlertLeaseMemPct = 20
 	DefaultAlertPush        = 0
+	DefaultLoadCapPct       = 100 // 1.0 x ncpu (user, 2026-10-15)
 
 	minDeadlineS, maxDeadlineS         = 10, 590
 	minWarmupS, maxWarmupS             = 0, 300
@@ -77,6 +78,7 @@ const (
 	minAlertStuckS, maxAlertStuckS           = 60, 7200
 	minAlertLeaseMemPct, maxAlertLeaseMemPct = 5, 90
 	minAlertPush, maxAlertPush               = 0, 1
+	minLoadCapPct, maxLoadCapPct             = 0, 500
 )
 
 // DefaultKinds are the built-in kinds and their weights (spec D-7).
@@ -136,6 +138,9 @@ type Settings struct {
 	AlertLeaseMemPct *int `json:"alert_lease_mem_pct,omitempty"`
 	// AlertPush (0 or 1) lets user alerts also go out as push.
 	AlertPush *int `json:"alert_push,omitempty"`
+	// LoadCapPct is the load1 ceiling, in percent of the cpu count (100: load1 equal to ncpu), at and above which a
+	// waiter is not granted while a lease is running; 0 turns the ceiling off. Memory is read by the trend, cpu by this.
+	LoadCapPct *int `json:"load_cap_pct,omitempty"`
 }
 
 func intp(n int) *int { return &n }
@@ -193,6 +198,7 @@ func (s Settings) Validate() error {
 		{"alert_stuck_s", s.AlertStuckS, minAlertStuckS, maxAlertStuckS},
 		{"alert_lease_mem_pct", s.AlertLeaseMemPct, minAlertLeaseMemPct, maxAlertLeaseMemPct},
 		{"alert_push", s.AlertPush, minAlertPush, maxAlertPush},
+		{"load_cap_pct", s.LoadCapPct, minLoadCapPct, maxLoadCapPct},
 	} {
 		if f.v != nil && (*f.v < f.lo || *f.v > f.hi) {
 			return fmt.Errorf("%w: %s must be between %d and %d", ErrSettings, f.name, f.lo, f.hi)
@@ -231,6 +237,7 @@ func (s Settings) Effective() Settings {
 		AlertStuckS:      intp(clampInt(s.AlertStuckS, DefaultAlertStuckS, minAlertStuckS, maxAlertStuckS)),
 		AlertLeaseMemPct: intp(clampInt(s.AlertLeaseMemPct, DefaultAlertLeaseMemPct, minAlertLeaseMemPct, maxAlertLeaseMemPct)),
 		AlertPush:        intp(clampInt(s.AlertPush, DefaultAlertPush, minAlertPush, maxAlertPush)),
+		LoadCapPct:       intp(clampInt(s.LoadCapPct, DefaultLoadCapPct, minLoadCapPct, maxLoadCapPct)),
 	}
 	for name, w := range s.Kinds {
 		out.Kinds[name] = min(max(w, minKindWeight), maxKindWeight)
@@ -328,6 +335,15 @@ func (s Settings) TrendMemPPM() float64 {
 // TrendCPUPPM is the same for the cpu share; 0 means cpu takes no part.
 func (s Settings) TrendCPUPPM() float64 {
 	return float64(clampInt(s.TrendCPUDPPM, DefaultTrendCPUDPPM, minTrendCPUDPPM, maxTrendCPUDPPM)) / 10
+}
+
+// LoadCap is the load1 ceiling for a host of ncpu cores; 0 when the ceiling is off or the core count is unknown.
+func (s Settings) LoadCap(ncpu int) float64 {
+	pct := clampInt(s.LoadCapPct, DefaultLoadCapPct, minLoadCapPct, maxLoadCapPct)
+	if pct == 0 || ncpu <= 0 {
+		return 0
+	}
+	return float64(pct) / 100 * float64(ncpu)
 }
 
 // Park is how long a parked waiter keeps its place.

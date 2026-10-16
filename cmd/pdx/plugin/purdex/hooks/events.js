@@ -481,6 +481,7 @@ async function pqRun($, job) {
   try {
     // A /clear or resume in progress (session.end seen, the switch not yet) still reports the old id: nothing runs then
     if (ev.switching || job.sessionId !== String(await $.session.id())) out = pqOut('dropped', 'session_changed')
+    else if (job.kind === 'unsupported') out = pqOut('dropped', 'unsupported_kind')
     else if (job.kind === 'submit') out = await pqSubmit($, job)
     else if (job.kind === 'fill') out = await pqFill($, job)
     else if (job.kind === 'clear_if') out = await pqClearIf($, job)

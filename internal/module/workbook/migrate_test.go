@@ -62,8 +62,8 @@ func TestMigrateV2_CarriesAV1FileForward(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	if v := version(t, s); v != 2 {
-		t.Fatalf("version = %d, want 2", v)
+	if v := version(t, s); v != schemaVersion {
+		t.Fatalf("version = %d, want %d", v, schemaVersion)
 	}
 	e, err := s.Entry(1)
 	if err != nil || e.Thing != "舊事" || e.Push != "舊推播" || e.Entry != "舊紀錄。" || e.State != StateOK || e.TurnAt != 1700000000000 {
@@ -93,7 +93,7 @@ func TestMigrateV2_FreshAndAlreadyV2(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := mustInsert(t, s, pending("c", "s1", "t1", 1))
-	if v := version(t, s); v != 2 {
+	if v := version(t, s); v != schemaVersion {
 		t.Fatalf("fresh version = %d", v)
 	}
 	s.Close()
@@ -105,7 +105,7 @@ func TestMigrateV2_FreshAndAlreadyV2(t *testing.T) {
 	if e, err := again.Entry(id); err != nil || e.ConvKey != "c" {
 		t.Fatalf("row after reopen: %+v %v", e, err)
 	}
-	if v := version(t, again); v != 2 {
+	if v := version(t, again); v != schemaVersion {
 		t.Fatalf("version = %d", v)
 	}
 }
@@ -146,8 +146,8 @@ func TestMigrateV2_FailedStepLeavesVersion1AndRetries(t *testing.T) {
 		t.Fatalf("retry: %v", err)
 	}
 	defer s.Close()
-	if version(t, s) != 2 {
-		t.Fatal("the retry did not reach version 2")
+	if version(t, s) != schemaVersion {
+		t.Fatal("the retry did not reach the newest version")
 	}
 }
 
@@ -220,7 +220,7 @@ func TestMigrate_ConcurrentOpenersBothSucceed(t *testing.T) {
 				}
 			}
 			var rows, v int
-			if err := last.db.QueryRow(`SELECT count(*), max(version) FROM schema_version`).Scan(&rows, &v); err != nil || rows != 1 || v != 2 {
+			if err := last.db.QueryRow(`SELECT count(*), max(version) FROM schema_version`).Scan(&rows, &v); err != nil || rows != 1 || v != schemaVersion {
 				t.Fatalf("fromV1=%v: version rows=%d max=%d err=%v", fromV1, rows, v, err)
 			}
 			last.Close()

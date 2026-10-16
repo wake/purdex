@@ -39,7 +39,7 @@ Answers the codex plan review (`lease-v2-amend-a-codex-plan-review.md`, findings
 **F3 — `run_in_background`, rewriting, exporting an env var on every Bash call.**
 - The mod sees the flag: `if (e.run_in_background === true) return next(e)` (`lease.js:472`). v1 measured that the flag is absent on a foreground call and `true` on a background one (`docs/specs/2026-10-08-host-resource-lease-spec.md:145`).
 - The hook is registered for every Bash call (`lease.js:508-510`), and `next({ ...e, command })` replaces the command (`lease.js:486,500`). M-R2 measured that the rewritten command is what runs, while the model's own transcript keeps the original (spec v1 `:33,:50-51`). The model notices a rewrite that is not announced (`:54`).
-- So "export `PDX_LEASE_CALLER`" means prefixing the command (the tool input has no env field). **Not settled by code:** `tool.call` wraps the permission check. `tool.call` starts first and `tool.check` / the dialog run inside `next(e)` (`docs/plans/2026-10-08-interface-u1-2-plan.md:170`; `docs/specs/2026-10-06-lead-team-relay-spec.md:265`). So the permission matching and the dialog probably see the **prefixed** command, which can turn an allow-listed or read-only command into a prompt. **M-P2 measures this at the start of P2c-2**, before the mod change. If it does change permissions, see Q1.
+- **Superseded by the M-P2 (a) result and the lead's decision on Q1 (below): the mod does not prefix.** So "export `PDX_LEASE_CALLER`" meant prefixing the command (the tool input has no env field). **Not settled by code (now measured):** `tool.call` wraps the permission check. `tool.call` starts first and `tool.check` / the dialog run inside `next(e)` (`docs/plans/2026-10-08-interface-u1-2-plan.md:170`; `docs/specs/2026-10-06-lead-team-relay-spec.md:265`). So the permission matching and the dialog probably see the **prefixed** command, which can turn an allow-listed or read-only command into a prompt. **M-P2 measures this at the start of P2c-2**, before the mod change. If it does change permissions, see Q1.
   - The installed mod types confirm the order (`~/.config/pdx/cc-plugin/purdex/.claude-plugin/types/claude-code/index.d.ts`): a call "runs through every hook …, the permission check and its dialog, then the tool" (`:3022-3025`); `tool.check`'s input is "the tool's arguments as the permission decision reads them", pinned, while "`tool.call` rewrites a call" (`:12814-12832`). So the decision reads the rewritten command. Its effect on allowlist and read-only matching is still M-P2's to measure. The same types offer `$.tool.check({ tool, input })`, a permission verdict with no dialog and no run (`:3032-3041`), which Q1's guarded variant uses.
 - **Interactive or not (coordinator Q2):** `session.start`'s input carries `isInteractive`, "true under the REPL, false for a `-p` run or the SDK" (measured as MP7, `docs/specs/2026-10-06-lead-team-relay-plan-v2.md:7673`). The mod already keys on it: `register.js:1436-1437` and `events.js:1060`. A subagent's Bash call goes through the same mod hooks in the same process, with `e.agentId` set (`events.js:832`). **Not settled by code:** (a) whether `session.start` fires again after `pdx setup` hot-reloads the mod (strong evidence yes: the U1 reporter and the #2441 reload recovery start only from `session.start`, `events.js:698-732`, `register.js:1265-1272,1452`); (b) whether `$.session.id()` in a subagent's call is the main conversation's id. T22 (e)/(f) measures both, with fallbacks.
 
@@ -366,6 +366,7 @@ Estimates are diff lines (insertions + deletions) / files. Revision 2's fixes gr
 | P2c-1a | clients: modes, queue / ask, script step, final notice | ~600 / 7 |
 | P2c-1b | clients: new verbs, `ls`, report | ~450 / 6 |
 | P2c-2 | the mod, the skill, the probes | ~700 / 6 |
+| P2c-3 | a command Claude Code moved to the background keeps its lease until the task ends (#2841, M-P1) | ~250 / 4 |
 | P2d-1a | the notice job kind (promptq + mod) | ~450 / 8 |
 | P2d-1b | the notice outbox, delivery, `MainTurnRunning` | ~750 / 6 |
 | P2d-2 | fallback without a mod channel | ~450 / 8 |
@@ -573,7 +574,7 @@ Branch `feat/lease-v2-amend-p2b4b`.
 
 Branch `feat/lease-v2-amend-p2c1a`, from `origin/main` after P2b′-4b. Cherry-pick `c798af59c` and amend it (§6). Delete the stray empty file `cmd/pdx/--config` it added.
 
-**T16 Modes** — `lease_acquire.go`, `lease_run.go`, `lease_cmd.go`. `--queue`, `--ask`, `--wait` choose the mode. Without one, `PDX_LEASE_CALLER` decides (`fg` → queue, `bg` → ask, else wait). The env is read through `runLeaseCmd`'s `getenv` (`lease_cmd.go:68`), for both `run` and `acquire` (Q12).
+**T16 Modes** — `lease_acquire.go`, `lease_run.go`, `lease_cmd.go`. `--queue`, `--ask`, `--wait` choose the mode. Without one, `PDX_LEASE_CALLER` decides (`fg` → queue, `bg` → ask); with neither the mode is `auto` and the daemon decides (queue under an interactive session, else wait; see Q1). *(Shipped as P2c-1c.)* The env is read through `runLeaseCmd`'s `getenv` (`lease_cmd.go:68`), for both `run` and `acquire` (Q12).
 - `--wait` keeps its old duration form for scripts and the old skill text. A custom flag accepts a bare `--wait`, `--wait=<dur>` and `--wait <dur>` (a token that parses as a duration is taken). The duration is accepted and ignored (Q11).
 - `TestCaller_EnvPicksTheModeAndFlagsOverride`. (M: swap `fg` and `bg`.)
 - `TestWaitFlag_BareAndDurationForms`.
@@ -594,7 +595,7 @@ Branch `feat/lease-v2-amend-p2c1a`, from `origin/main` after P2b′-4b. Cherry-p
   - `TestRun_AbandonedStillFailsOpen`.
   - `TestRun_SendsCommandAndCwd`.
 
-**T18 Script step** — the mod exports `PDX_LEASE_SHELL=$$` beside the caller. `run` appends T-script when `os.Getppid() != PDX_LEASE_SHELL` (inside a script), with the kind filled in (Q13).
+**T18 Script step** — no env var (Q13 is void): `run` finds the agent pid from `CLAUDE_CODE_MESSAGING_SOCKET` (`/tmp/cc-socks/<pid>.sock`) and appends T-script when its parent is neither the agent nor a child of the agent (anything deeper is a step of a script), with the kind filled in. *(Shipped as P2c-1c.)*
 - `TestRun_ScriptStepAddsTheWholeScriptLine`. (M: invert the comparison.)
 
 **T19 The final notice** — `lease_run.go`, `lease_acquire.go`: `pdx lease release` gains `--notice` (adds `notice=1` to the DELETE). `run` releases by id with `notice=1` **after** the child exited, reads `notice`, and prints `pdx lease: <notice>` to stderr after the child's output (the deferred release is restructured; the path interrupted before the child started, `lease_run.go:118-123`, releases without `notice=1`).
@@ -649,23 +650,30 @@ Branch `feat/lease-v2-amend-p2c2`, after P2c-1b is **merged** (the mod's tests c
 
 Results go in the PR body and into Q1 and Q14. **If (a) shows any permission change, stop and ask the lead (Q1) before T24.** Fallbacks: (e) no → lease.js asks the daemon once per mod load, through a new `GET /api/resources/caller?session=<sid>` that answers `{interactive}` from `modevents.Registry.SessionCapable(sid, CapPromptV1, CapsFresh)` (`internal/modevents/registry.go:273-285`: a live stream that announced the prompt capability, which only an interactive reporter does), +~80 lines in this PR; (f) the ids differ → lease.js passes the id it read at `session.start` as `--session`.
 
-**T23 Queue answers** (kept from `eec9a8cda`): exit 15 counts only with a queued line. `{deny}` uses T-queued / T-queued-own; `next(e)` is not called and no release is sent. The `replaced` branch is removed. In an **interactive** session acquire gets `--queue --command <e.command, first 200 bytes> --cwd <session cwd>` (Q14); in a non-interactive one `--wait` (today's behaviour, coordinator Q2).
+**T22 results (2026-10-14, Claude Code 2.1.299, a haiku probe session in default permission mode with a `--plugin-dir` probe mod, allowlist `Bash(git status:*)` and a few `Bash(<tool>:*)` rules; the table of (a) is under Q1):**
+- (a) any prefix changes the prompts; see Q1 and the lead's decision (no prefix).
+- (b) moot: no `$$` is sent any more (T18 reads the agent pid instead).
+- (c) **The wrap `pdx lease run --ask … -- "${SHELL:-/bin/sh}" -c '<cmd>'` itself raises a prompt** ("A variable in braces in this command can't be checked before it runs"; with `"$SHELL"`: "Quoted text in this command can't be checked before it runs"), even with `pdx` allow-listed and the original allow-listed. With a **literal** shell path (`/bin/zsh -c '<cmd>'`) and `pdx` allow-listed it ran with no prompt, the output reached the background output, and the completion notice arrived. T25 therefore wraps with a literal shell (`$.env.get('SHELL')` if it is a plain path, else `/bin/sh`).
+- (d) `$.session.cwd()` answers the session's directory; that is what `--cwd` carries.
+- (e) after the probe mod's folder was rewritten the engine reloaded it ("reloaded (2 hooks …)") and `session.start` fired again with `isInteractive:true` (the module's variables started over). The mod no longer depends on it for the foreground (the daemon decides); it sets its `interactive` flag from `session.start` for the background wrap only.
+- (f), (g) not measured: they served T24, which is dropped.
+
+**T23 Queue answers** (kept from `eec9a8cda`): exit 15 counts only with a queued line. `{deny}` uses T-queued / T-queued-own; `next(e)` is not called and no release is sent. The `replaced` branch is removed. *(Amended, Q1: no mode flag at all.)* acquire gets `--command <e.command, first 200 bytes> --cwd <session cwd>` and **no** `--queue` / `--ask` / `--wait`: the daemon resolves `auto` (queue under an interactive session, wait otherwise, coordinator Q2).
 - Kept from eec9a8cda, text updated: `queued: the command is not run, the model gets the queued text as a deny, and nothing is released`.
 - `own_running: the deny says to wait for its own previous command`.
 - Kept: `exit 15 without a queued line runs the command and releases`.
-- `acquire passes --queue, the original command (first 200 bytes) and the cwd`.
-- `a non-interactive session acquires with --wait`. (M: pass `--queue` regardless.)
+- `acquire passes the original command (first 200 bytes) and the cwd, and no mode`. (M: pass `--queue` regardless.)
 
-**T24 The caller export** (coordinator Q2) — lease.js registers `session.start` with the matcher `{ isInteractive: true }` (a matched registration; `embed_test.go`'s registration rows gain it) and keeps a module flag. In an interactive session, **every** Bash call, heavy or not, foreground or background, a subagent's included (its notices go to the main conversation, whose mod polls prompts), becomes `export PDX_LEASE_CALLER=<fg|bg> PDX_LEASE_SHELL=$$` + `\n` + the original. A non-interactive session (`claude -p`), or a load that has seen no `session.start` (T22 (e)), gets no export, so nested calls use wait mode. Not announced: it produces no output (M-R2's tampering signal was output that did not match).
+**T24 ~~The caller export~~ — dropped (lead, Q1): the mod adds no prefix; `auto` (above) replaces it.** The original text follows for the record. (coordinator Q2) — lease.js registers `session.start` with the matcher `{ isInteractive: true }` (a matched registration; `embed_test.go`'s registration rows gain it) and keeps a module flag. In an interactive session, **every** Bash call, heavy or not, foreground or background, a subagent's included (its notices go to the main conversation, whose mod polls prompts), becomes `export PDX_LEASE_CALLER=<fg|bg> PDX_LEASE_SHELL=$$` + `\n` + the original. A non-interactive session (`claude -p`), or a load that has seen no `session.start` (T22 (e)), gets no export, so nested calls use wait mode. Not announced: it produces no output (M-R2's tampering signal was output that did not match).
 - `every foreground Bash of an interactive session runs with PDX_LEASE_CALLER=fg exported`. (M: drop the export for non-heavy commands.)
 - `every background Bash of an interactive session runs with PDX_LEASE_CALLER=bg exported`.
 - `a subagent's Bash call is exported like the main conversation's`.
 - `a non-interactive session's Bash is not prefixed`. (M: drop the interactive check.)
 - The existing `non-heavy Bash passes through untouched (no process.run)` becomes `non-heavy Bash only gets the export (no process.run)`.
 
-**T25 Background heavy → ask** — interactive sessions only. `run_in_background:true` and `classify` heavy: the command becomes `pdx lease run --ask --kind <k> --command <original, 200 B> -- "${SHELL:-/bin/sh}" -c '<original, single-quote escaped>'`, after the export. A `context` note tells the model (Q15). A background command already wrapped in `pdx lease` is not wrapped again. A non-interactive session's background calls pass through as today (nothing can ask it).
+**T25 Background heavy → ask** (*amended: the shell is a literal path, see T22 (c); the wrap is made only when `$.tool.check` gives the same verdict for the original and the wrapped command, Q1*) — interactive sessions only. `run_in_background:true` and `classify` heavy: the command becomes `pdx lease run --ask --kind <k> --command <original, 200 B> -- <literal shell path> -c '<original, single-quote escaped>'` (no export, no variable: T22 (c)). A `context` note tells the model (Q15). A background command already wrapped in `pdx lease` is not wrapped again. A non-interactive session's background calls pass through as today (nothing can ask it).
 - `a heavy background Bash is wrapped in pdx lease run --ask with its kind and command`. (M: skip the wrap.)
-- `a background pdx lease run is only exported, not wrapped twice`.
+- `a background pdx lease run is left as it is, not wrapped twice`; a command with a `pdx lease` segment anywhere in it is not wrapped either (the inner run would find its own session's position running).
 - `the wrap is announced in the context`.
 - `a non-interactive heavy background Bash is not wrapped`.
 
@@ -686,7 +694,20 @@ Results go in the PR body and into Q1 and Q14. **If (a) shows any permission cha
 - Remove "排太久會放行" and "預設最多等 5 分鐘".
 - Update the pinned lines in `cmd/pdx/plugin/embed_test.go:541-555`.
 
+**T28 result (M-P1): `next(e)` DOES resolve early.** A foreground command that runs past Claude Code's default 120 s timeout is moved to the background and `next(e)` resolves at that moment (a `sleep 160` call: resolved after 122 s with `backgroundTaskId` and `timedOutAfterMs: 120000`; the command finished 38 s later). A command killed by an explicit short `timeout` resolves at the kill (6 s for `timeout: 5000`, exit 143). So for a heavy command longer than 2 minutes the release (and the §3.3 end with `--notice`) fires at 2:00 while the process still runs. No behaviour change here; follow-up issue #2841.
+
 **T28 M-P1 probe** (v2 §6, carried over): a heavy-classified foreground `sleep 150`-class command with a short Bash timeout. Does `next(e)` resolve when CC moves it to the background, and when does the release (now also the §3.3 end, with `--notice`) fire? Method and result go in the PR body. No behaviour change here; a follow-up issue if it does resolve early.
+
+### P2c-3 — a backgrounded foreground command keeps its lease (#2841) (~250 / 4)
+
+Branch `feat/lease-v2-amend-p2c3`. Added by the lead after the T28 result: a foreground command past Claude Code's 120 s timeout (or one the person sent to the background with Ctrl+B) is moved to the background and `next(e)` resolves while the process runs on, so P2c-2 released its lease at 2:00. Before the switch to mode lease this must not happen, or queueing means nothing for the longest commands.
+
+**T35 Hand-over and watch** — `lease.js`, one call in `events.js`:
+- `leaseCall` reads `r.result.backgroundTaskId`. When it is set the lease is **not** released: `{cfg, clientId, answer}` goes into `bgLeases` (task id → handle, at most 20), `finally` does nothing (`done`), and the result's context says the command was moved to the background and keeps the host until it ends.
+- `leaseBackgroundChanged($, background)` (exported; `events.js` `stopped()` calls it with the task list every `classic.Stop` has, the one place the mod sees them): a handed-over task that is not listed as `running` is released **with `--notice --json`** (two tries, then one without), once.
+- The final notice has no tool result to ride in, so it waits in `pendingNotices` and goes into the **next Bash result's context** (never into a deny).
+- **Backstop** (no code): if the watcher never fires (a reload of the mod empties `bgLeases`, the session ends), the daemon's sweeper ends the held row as `holder_gone` (the session's agent is gone) or `vanished` (a session-new lease with no process of the session under it for `emptySamplesToVanish` samples) or `expired` at `max_hold_s`. A sweeper end never carries a notice (V21 holds: an ordinary end).
+- Tests (`lease.test.ts`, through the real `classic.Stop`): `a command moved to the background keeps its lease until the task ends` (M: release when next resolves), `a task that is gone from the list releases the lease too`, `the final notice of a background release goes into the next Bash result` (M: drop the notice), `a background release that does not answer is tried again, then let go without a notice`. Mutations: release at `next`, a watcher that never releases, a running task released, a dropped notice, `events.js` not calling the hook: all red.
 
 ### P2d-1a — the notice job kind (~450 / 8)
 
@@ -700,6 +721,15 @@ Branch `feat/lease-v2-amend-p2d1a`. Touches the interface line's `promptq` and `
 - (e) Fed T-offer, does the model re-run the named command? Fed T-ask, does it run `pdx lease confirm`?
 
 Numbers go in the PR body. If (b) changed, stop and ask the lead.
+
+**T29 results (2026-10-14, Claude Code 2.1.299, haiku probe session, default permission mode, a probe mod whose timer calls `$.prompt.submit({ text })` without `asUser`):**
+- (a) Idle: `turn.start` fires 2.5–2.6 s after the call, with a `turnId` (so `ev.turnId` covers it); the turn text is "The `<plugin>` plugin sent a message:\n`<text>`" followed by "This is how Claude Code surfaces a prompt a plugin submits between turns — it starts this turn in the user's place. Address the message above."; the call resolves `{text, origin:{kind:'plugin', name}}`, no `drop`.
+- (b) A turn in progress: no refusal, the call **blocks until idle** (unchanged: the check-then-submit design of T31 stays).
+- (c) A permission dialog open: the call blocks; after Esc the dialog's turn ended and the notice's turn started 2 s later (32.7 s in all).
+- (d) Right after `/clear`: it works, a new context starts with the notice (6.3 s including the clear).
+- (e) T-offer text: the model re-ran the named command. **T-ask text: the model declined `pdx lease confirm`** ("a plugin sent this, not you; confirming would start `pnpm run build`; reply 執行 or 取消"), in a context where it had never started that command. Decision (lead, 2026-10-14): reword T-ask in P2d-1b so the model recognises its own call — the original command (first 200 bytes), the directory and "you started it with `run_in_background` at HH:MM", and that it is the same command it asked for, postponed because the host was busy, so `confirm` starts it as planned and is not a new instruction; then test with a real case (the same session starts a heavy background command that is queued, and sees whether it confirms) and write what was observed into this plan; if the model still asks the person, that is accepted (a person present decides; absent: cancelled after 3 minutes and the session gets the cancel notice and may re-run) but recorded for a later design decision.
+
+**P2d-1b result of that real case** (2026-10-14, CC 2.1.299, haiku probe, default permission mode): the probe session itself started `sleep 3; echo built-ok` with `run_in_background`; when it had finished, the new T-ask text (the exact `OfferNotice` wording, row id `row-1234`) was submitted through the probe mod's `$.prompt.submit` (no `asUser`). The model **did run `pdx lease confirm row-1234`** at once — it no longer treated the message as a stranger's instruction. What it then reported came from the probe, not the wording: the `pdx` on PATH was an older build without the `confirm` subcommand (`unknown subcommand "confirm"`), the id was a made-up one so `pdx lease ls` did not list it, and the background command had already finished. It also said it could not verify where the message came from and asked the person what to do; that is the accepted fallback. Not covered: a live row that `confirm` answers, which needs the P2d-1b daemon on the PATH `pdx` (done in the deploy acceptance, lead's).
 
 **T30 The job kind** — `internal/promptq/queue.go`:
 - `KindNotice`.
@@ -767,7 +797,7 @@ Branch `feat/lease-v2-amend-p2d2`. It pulls P3b's T24 (team seam) forward, and t
 | new CLI (P2c-1) + old daemon | POST with `mode` is 400 (`DisallowUnknownFields`) → `postMayHaveLanded` false → fail open, the command runs | the CLI and the daemon are one binary: they differ only between the install and the daemon restart |
 | new mod (P2c-2) + old CLI | `--queue` is a usage error, exit 2 → `readAcquire` null → fail open; **the B wrap would not run the background command** | the mod is embedded in the binary (`cmd/pdx/plugin/embed.go:13-17`, handed to setup at `cmd/pdx/main.go:57-59`), so a `pdx setup` run from the binary that contains P2c-2 installs a mod and a CLI that match; `pdx.json` points at that installed binary |
 | new daemon (P2d) + old mod between restart and `pdx setup` | no `lease.notice.v1` owner → `no_mod` → fallback, while the mod channel is retried | advise: no positions, so no notices |
-| codex sessions, scripts, launchd, `claude -p` (no `PDX_LEASE_CALLER`) | wait mode, today's behaviour | A §2 "S unchanged"; coordinator Q2 |
+| codex sessions, scripts, launchd, `claude -p` (no flag, no `PDX_LEASE_CALLER`) | mode `auto`: the daemon finds no interactive session above the caller → wait mode, today's behaviour | A §2 "S unchanged"; coordinator Q2; lead Q1 |
 | older daemon after a rollback | reads named columns only; would grant leftover ask rows | §2.9: drain first; R8 as the second line |
 
 **Order:**
@@ -797,6 +827,13 @@ The lead may batch bumps (P2b′ in one deploy, P2c in one, P2d in one). Within 
 - **air26, smoke:** the post-deploy checks, then lease for a short window with two throwaway sessions: one F queued → offer delivered → re-run; one B → ask → confirm; back to advise, drained.
 - Anything that fails here stops the switch.
 
+**G1 reading (the night measure, mlab, advise, 10-13 21:07 → 10-14 21:07, `pdx lease report --since 24h`; for the user's decision before the switch).** The numbers: 793 heavy requests (test-full 330, weight 242, build 193, test-pkg 18, lint-full 10); the host was in the **warning zone 98.7%** of the minutes (normal 1.3%, danger 0), `full` 98.4%, 2+ heavy commands running together for 766 of 1439 minutes (load1 up to 42.9, memory up to 83.8%). Advise let 753 in at once. The shadow says what v2 would have done on the **current thresholds** (zone warning = load at or above the core count; a flat trend with a lease running blocks), from the per-request reasons in `resources.db` (`v2_wait_ms`, `wait_reasons`):
+- **What a normal heavy command would queue after the switch:** the shadow would have made essentially every recorded request wait (755 of 793; the other 37 have no shadow row): **p50 26 s, p90 229 s, longest 1012 s**; 250 of them over a minute, 47 over five. By kind (p50 / p90): test-full 41 s / 315 s, lint-full 44 s / 233 s, weight 23 s / 201 s, build 23 s / 133 s, test-pkg 13 s / 102 s. 431 of the 756 are lower bounds (the request ended before the shadow let it in), so the real figure is higher. Where the time goes (summed): warning_flat 26 349 s, behind (the queue ahead) 20 692 s, rising 7 413 s, the 30 s gap 3 175 s.
+- **Why:** the host is "warning" nearly all the time, and in warning a flat usage with one lease running means *wait*. So on these thresholds v2 behaves as "one heavy command at a time, plus a 30 s gap and a rising/flat check", not as protection that only acts on a bad moment.
+- **If warning_flat did not block (only `rising` and `danger` block; the 30 s gap and the queue stay):** first-order estimate, taking each request's own `warning_flat` time out of its shadow wait: **p50 11 s, p90 133 s, longest 604 s**; over a minute 155 (from 250), over five 19 (from 47); by kind p50 / p90: test-full 18 s / 172 s, lint-full 18 s / 75 s, weight 9 s / 118 s, build 8 s / 85 s, test-pkg 10 s / 102 s. Every request would still queue a little (the gap and `behind`), so this is not "no waiting"; it is about 2.4x less at p50 and 1.7x less at p90. It is a floor on what remains, not an exact replay: the real queue would reshuffle (a request let in earlier changes who is `behind`), and the 431 lower bounds stay lower bounds. A proper figure needs the shadow re-run with the rule changed (`admit_v2.go` `headReason`, one case); say if the user wants that before deciding.
+- **Reading:** on today's thresholds the switch makes the day's ordinary `go test`/build wait about half a minute and the unlucky one up to ten to seventeen minutes, because warning is the normal state of this host. Choices for the user: (a) switch as is and accept the queue; (b) first change the zone thresholds (warning at a load well above the core count, since the host runs at 2+ heavy for half the time anyway); (c) let warning_flat through (`rising`/`danger` only), an estimated cut of about 55% in p50. (b) and (c) are lead/user decisions and a small change of `admit_v2.go`; none is made here.
+- **Decision (user, 2026-10-14): (c).** In the warning zone a flat trend with a lease running is granted; only `rising` / unknown and `danger` hold the head; the 30 s gap and `behind` stay. Done in **P2e** (`admit_v2.go` `headReason`, the spec's V2 table, the tests). Acceptance for P2e: after the deploy, re-run the shadow over a day (`pdx lease report --since 24h`, the shadow section) and check that p50 / p90 land near the 11 s / 133 s above; far from them means the estimate missed something (the reshuffled queue) and goes back to the lead.
+
 **Post-switch verification (first hour, then the next day's report):** on both hosts `pdx lease ls` and `pdx lease report` show positions moving, offers delivered (`delivered_at` set) and no `通知沒送到`, no store errors in the log.
 **Rollback condition:** any of — an F session never offered while its host was free for over a minute; an ask row run without a confirm; a store error or a reconcile repair after the switch; repeated `user_alert` or passed offers for sessions that were idle. Then switch both hosts to advise (drain, §2.9) and investigate before anything else.
 
@@ -821,6 +858,22 @@ The branch is not merged; it is a source of commits.
    - Default: implement per spec if M-P2 is clean.
    - Guarded variant (no spec change): before prefixing, the mod asks `$.tool.check` for the original and for the prefixed command (d.ts `:3032-3041`; no dialog, nothing runs). It prefixes only when both verdicts are the same. Otherwise it leaves the command alone, so a nested `pdx lease run` falls back to wait. M-P2 also measures the cost of the two checks per Bash call.
    - Fallback needing a lead decision: do not prefix foreground commands. Prefix background commands only (they are rewritten anyway). Make `pdx lease run`/`acquire` default to queue mode when the daemon finds a session for the caller, and wait only without one. That changes A §2's "unset → wait" for agents.
+   - **M-P2 (a) measured (2026-10-14, Claude Code 2.1.299, default permission mode, allowlist `Bash(git status:*)`, a haiku probe session with a `--plugin-dir` probe mod rewriting `tool.call`):**
+
+     | command sent | `git status` | `ls` |
+     |---|---|---|
+     | no prefix | no prompt | no prompt |
+     | `export PDX_LEASE_CALLER=fg PDX_LEASE_SHELL=$$` + newline (the spec) | prompt | prompt |
+     | `export PDX_LEASE_CALLER=fg` + newline (no `$$`) | prompt | prompt |
+     | inline `PDX_LEASE_CALLER=fg <cmd>` | — | prompt |
+     | inline `PDX_LEASE_CALLER=fg PDX_LEASE_SHELL=$$ <cmd>` | not measured | prompt |
+
+     With `$$` the dialog reason is "'export' operand 'PDX_LEASE_SHELL=${…}' is runtime-determined and may carry an array subscript"; without it, "requires approval". The dialog shows the **prefixed** command. So a prefix of any shape costs a prompt on allow-listed and read-only commands.
+   - **Decision (lead, 2026-10-14): none of the three options as written; the foreground gets no prefix at all.** (1) The user's rule is "a session never sits on a pending lock", and the guarded variant falls back to wait exactly where an allowlist hits, so a nested call would block the session; (3) extra confirmations are out. Instead:
+     - (a) A foreground Bash gets nothing added. `pdx lease run` / `acquire` with no flag and no `PDX_LEASE_CALLER` send mode `auto`; the daemon resolves it at create time: an agent session above the holder pid that is interactive (`SessionCapable(sid, CapPromptV1)`) → queue, anything else → wait. A daemon without `auto` answers 400 and the CLI sends wait. *(P2c-1c.)*
+     - (b) A background heavy command is wrapped in `pdx lease run --ask` (T25) only if `$.tool.check` gives the same verdict for the original and the wrapped command; otherwise it is let through as today, with a context note "這個背景指令沒有納入資源排隊". A `pdx lease run` nested in an unwrapped background command takes `auto` → queue (exit 15, the session is told when it is its turn and re-runs). *(P2c-2.)*
+     - (c) T-script no longer needs `PDX_LEASE_SHELL`: the CLI walks up to the agent (T18). *(P2c-1c.)*
+   - Most live sessions on this host run `--dangerously-skip-permissions`; the product must still be right in default mode, hence no foreground prefix.
 2. ~~`claude -p` and subagents~~ — **coordinator:** no export in non-interactive sessions (wait mode); subagents are exported like their main conversation, whose mod gets the notices. How the mod knows: `session.start.isInteractive` (F3); T22 (e)–(g) measures the reload and subagent cases, with fallbacks.
 3. ~~Ask rows when their position is released after the limit~~ — **coordinator:** re-queued at the back as a new position of the same session.
 4. **Positions in advise.** Default: none (lease only), so the code runs for real only after the switch, hence the acceptance window in §5.
@@ -831,8 +884,8 @@ The branch is not merged; it is a source of commits.
 9. **`/clear` ends a position** (the agent pid listed under another session id twice). A §3.1 says "the session's agent process", which survives a `/clear`. Default: end it, since the new conversation cannot re-attach anyway.
 10. **Cancel of a running position:** default 409 `running` (`done` lets it go after the command). Alternative: treat it as `done`.
 11. **`deadline_s`, `park_s`, `wait_s`, `--wait <dur>`** stay accepted and unused. The hostconfig normaliser rejects unknown keys, so removing them would invalidate stored settings. A later cleanup can drop them.
-12. **`acquire` reads `PDX_LEASE_CALLER` as `run` does** (A §2 names only `run`), so a script's `acquire` inside a foreground call does not block.
-13. **`PDX_LEASE_SHELL=$$`** is an extra env var the spec does not name, used only to tell a script's inner step from a direct call for T-script. A subshell may add T-script where it does not belong.
+12. **`acquire` reads `PDX_LEASE_CALLER` as `run` does** (A §2 names only `run`); both send `auto` when it is unset.
+13. ~~`PDX_LEASE_SHELL=$$`~~ — void (Q1): T-script reads the agent pid from `CLAUDE_CODE_MESSAGING_SOCKET` and the parent chain. A script that the shell `exec`s as its last command looks like a direct call and gets no T-script line.
 14. **The cwd of a mod-managed F command** is the session's start cwd (`events.js:717`), not the Bash tool's current directory, unless M-P2 (d) shows something better. A `cd x && …` is still visible in the command text.
 15. **The B wrap's `context` note** must exist: M-R2, the model reports tampering otherwise. Proposed: 「Purdex mod 把這個背景指令交給 `pdx lease run --ask` 排隊（主機資源規則）：主機有空就立刻執行；忙的話輪到時會先問你。實際執行的是：<command>」. It runs under `"${SHELL:-/bin/sh}" -c`, without CC's shell snapshot (aliases and functions).
 16. **The channel touches the interface line's files** (`internal/promptq`, `events.js`, `workbook.js` CAPS, and now one accessor in `internal/module/agent/light_status.go`): a new kind, a capability and a read-only accessor, no change to App behaviour. Coordinate with 88 before P2d-1a. The alternative is a lease-only long poll from the mod, but then "no mod" cannot be told.

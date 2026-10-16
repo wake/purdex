@@ -20,8 +20,14 @@ import (
 
 	iagent "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/fleet"
+	"github.com/wake/purdex/internal/gate"
+	"github.com/wake/purdex/internal/hostmem"
+	"github.com/wake/purdex/internal/modevents"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/resources"
+	"github.com/wake/purdex/internal/team"
+	"github.com/wake/purdex/internal/watchsettings"
 )
 
 // failuresBeforeUnavailable is how many ticks in a row must fail before the
@@ -35,6 +41,10 @@ const sampleBudget = 3 * time.Second
 // Module owns the sampler loop and the latest Snapshot.
 type Module struct {
 	core *core.Core
+	// interactive answers sessionInteractive in a test; nil reads the mod event registry.
+	interactive func(sid string) bool
+	// modStreams lists the mod streams of a session for the log line of a notice that found no mod; nil reads the registry.
+	modStreams func(sid string) []modevents.StreamInfo
 
 	sampler  resources.Sampler
 	roots    resources.RootSource // nil: no sessions are attributed
@@ -47,6 +57,9 @@ type Module struct {
 	// ancestryOf turns the process snapshot into the parent/start lookup of
 	// session_attr.go; nil uses the snapshot itself (a seam for tests).
 	ancestryOf func(*iagent.ProcessSnapshot) ancestry
+
+	// watch is the load watcher's state (watch.go).
+	watch watchState
 
 	// latest is the last published snapshot; nil until the first tick ends.
 	// A published snapshot is never modified.
@@ -63,11 +76,21 @@ type Module struct {
 	// ringMu guards ring: the sampler goroutine adds to it, and a request
 	// (GET ?samples=1) reads a copy. zoneLatch, lastZone and zoneSince are the
 	// sampler goroutine's own.
-	ringMu    sync.Mutex
-	ring      resources.Ring
-	zoneLatch resources.ZoneLatch
+	ringMu sync.Mutex
+	ring   resources.Ring
+	// zoneLatch is the daemon's zone: the memory pressure level and the page rate, the gate's own signal. pageRing holds the
+	// recent paging counters the rate is worked out from (hostmem.RateOver, the gate's arithmetic), and rateLimit the rate at
+	// which the gate holds new work (its config, read every tick).
+	zoneLatch resources.PressureZoneLatch
+	pageRing  []hostmem.PageSample
+	rateLimit float64
+	haveRate  bool // the last reading carried the paging counters
 	lastZone  resources.Zone
 	zoneSince time.Time
+	// gateConfig reads the gate's config; gateCounts the slot records (see gate_input.go). nil: a module that is not wired to the
+	// host (Init wires both).
+	gateConfig func() gate.Config
+	gateCounts func() (heavy, light, waiting int, ok bool)
 	// minute is the host timeline's open minute (D-8.2).
 	minute minuteAgg
 	// mode is the setting's mode as of the last tick (the sampler goroutine's
@@ -177,7 +200,7 @@ type Module struct {
 	// failed is kept and tried again, never repeated once it won).
 	pendingCosts []pendingCost
 	// deliverable says whether the session can take a notice now (its main turn is
-	// not running); nil reads as true. P2d wires the real answer.
+	// not running); nil asks the agent module (canDeliver).
 	deliverable func(sessionID string) bool
 	// skipPass makes admissionPass a no-op (a test seam).
 	skipPass    bool
@@ -193,6 +216,8 @@ type Module struct {
 	useAt       map[string]time.Time
 	measureNote string
 	lastProcs   atomic.Pointer[[]resources.Proc]
+	// newGate makes the gate the fleet summary reads (a test seam: nil is gate.New).
+	newGate func(gate.Config) *gate.Gate
 
 	// runCtx ends when Stop is called; it is made in New so that a Stop
 	// before Start still keeps a later Start from running.
@@ -203,6 +228,13 @@ type Module struct {
 	started   bool
 	stopped   bool // Stop was called: the module cannot be started again
 	closeOnce sync.Once
+
+	// The notice outbox (notices.go). noticeQ is a test seam: nil reads the prompt queue from the registry.
+	noticeQ    noticeSender
+	leadNotice team.LeadNoticer     // a test seam: nil reads the team module's from the registry (notices_fallback.go)
+	alertOut   func(core.HostEvent) // a test seam: nil broadcasts on core.Events
+	noticeWake chan struct{}
+	notices    noticeState
 }
 
 // New returns the module with production defaults; Init installs the platform
@@ -218,7 +250,9 @@ func New() *Module {
 		stopRun:      stopRun,
 		gen:          make(chan struct{}),
 		evSig:        make(chan struct{}, 1),
+		noticeWake:   make(chan struct{}, 1),
 		sweepEvery:   sweepInterval,
+		watch:        watchState{env: defaultWatchEnv()},
 	}
 }
 
@@ -231,6 +265,7 @@ func (m *Module) wake() {
 	close(m.gen)
 	m.gen = make(chan struct{})
 	m.requestEvent() // a grant or an end is worth an event
+	m.kickNotices()  // and a transition may have armed a notice slot
 }
 
 // genChan is the channel the next wake closes. A poller takes it before it
@@ -253,12 +288,17 @@ func (m *Module) Dependencies() []string { return []string{"peers", "hostconfig"
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
 	c.Registry.Register(resources.HostReaderKey, resources.HostReader(m))
+	c.Registry.Register(fleet.LocalSourceKey, fleet.LocalSource(newLocalSource(m)))
 	if m.sampler == nil {
 		m.sampler = resources.NewSampler()
 		m.enableDiskGuard() // production wiring (a module with an injected sampler is a test's: its guard stays off)
+		if m.gateConfig == nil {
+			m.gateConfig = hostGateConfig() // and so does the reading of the gate's config and slot records
+		}
 	}
 	m.openStore(c)
 	m.findSettings(c)
+	m.findWatchSettings(c)
 	if c.Events != nil {
 		c.Events.OnSubscribe(m.sendEventSnapshot)
 	}
@@ -358,6 +398,10 @@ func (m *Module) Start(context.Context) error {
 	}
 	m.wg.Add(1)
 	go m.runEvents(m.runCtx)
+	if m.store != nil {
+		m.wg.Add(1)
+		go m.runNotices(m.runCtx) // after the boot reconcile: the slots that were armed before a restart are sent again
+	}
 	return nil
 }
 
@@ -411,4 +455,22 @@ func (m *Module) Close() error {
 		}
 	})
 	return nil
+}
+
+// findWatchSettings looks up the hostconfig module's watch setting reader; without one the watcher stays off.
+func (m *Module) findWatchSettings(c *core.Core) {
+	if m.watch.src != nil {
+		return
+	}
+	svc, ok := c.Registry.Get(watchsettings.Key)
+	if !ok {
+		m.logf("[watch] service %q not registered: the watcher stays off", watchsettings.Key)
+		return
+	}
+	rd, ok := svc.(watchsettings.Reader)
+	if !ok {
+		m.logf("[watch] service %q is %T, not a Reader: the watcher stays off", watchsettings.Key, svc)
+		return
+	}
+	m.watch.src = rd
 }

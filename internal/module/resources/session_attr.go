@@ -34,18 +34,26 @@ var _ ancestry = (*iagent.ProcessSnapshot)(nil)
 // counts only when its start time is the one the registry recorded (at second
 // precision): a pid that was reused is another process.
 func (m *Module) sessionOfProcess(ctx context.Context, pid int) (session string, agentPID int, agentStart string) {
+	session, agentPID, agentStart, _ = m.sessionOfProcessChecked(ctx, pid)
+	return session, agentPID, agentStart
+}
+
+// sessionOfProcessChecked is sessionOfProcess that also says whether the answer
+// "none" is a failure to look (the process table or the registry could not be
+// read) rather than a finding.
+func (m *Module) sessionOfProcessChecked(ctx context.Context, pid int) (session string, agentPID int, agentStart string, failed bool) {
 	if m.roots == nil || pid <= 0 {
-		return "", 0, ""
+		return "", 0, "", false
 	}
 	ctx, cancel := context.WithTimeout(ctx, sampleBudget)
 	defer cancel()
 	snap, err := m.procSnapshot(ctx)
 	if err != nil {
-		return "", 0, ""
+		return "", 0, "", true
 	}
 	roots, err := m.roots.ProcessRoots(snap)
 	if err != nil {
-		return "", 0, ""
+		return "", 0, "", true
 	}
 	byPID := make(map[int]string, len(roots))
 	startOf := make(map[int]string, len(roots))
@@ -62,15 +70,15 @@ func (m *Module) sessionOfProcess(ctx context.Context, pid int) (session string,
 			want, err := ipeers.ParseProcStart(startOf[pid])
 			got, gerr := view.Start(pid)
 			if err != nil || gerr != nil || got.IsZero() || !got.Truncate(time.Second).Equal(want.Truncate(time.Second)) {
-				return "", 0, ""
+				return "", 0, "", false
 			}
-			return sid, pid, startOf[pid]
+			return sid, pid, startOf[pid], false
 		}
 		parent, err := view.PPID(pid)
 		if err != nil || parent <= 1 || parent == pid {
-			return "", 0, ""
+			return "", 0, "", false
 		}
 		pid = parent
 	}
-	return "", 0, ""
+	return "", 0, "", false
 }

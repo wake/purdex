@@ -97,6 +97,14 @@ func TestDeriveCCStatus_PdxPostToolUse_Running(t *testing.T) {
 	}
 }
 
+// A subagent's PostToolUse names its agent_id; the handler keys on it (#2873).
+func TestDeriveCCStatus_PdxPostToolUse_AgentIdInDetail(t *testing.T) {
+	r := deriveViaProvider("PdxPostToolUse", map[string]any{"tool_name": "Write", "agent_id": "a1"})
+	if r.Detail["agent_id"] != "a1" {
+		t.Fatalf("agent_id = %v, want a1", r.Detail["agent_id"])
+	}
+}
+
 func TestDeriveCCStatus_PdxStop_Idle(t *testing.T) {
 	r := deriveViaProvider("PdxStop", map[string]any{"last_assistant_message": "Done"})
 	if !r.Valid || r.Status != agent.StatusIdle {

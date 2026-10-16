@@ -8,17 +8,15 @@ import { useApprovalStore } from '../stores/useApprovalStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useUndoToast } from '../stores/useUndoToast'
-import { decideApproval, setSelfRelayPause } from '../lib/team/approval-api'
+import { decideApproval } from '../lib/team/approval-api'
 import { __resetClientDescriptorForTests } from '../lib/team/client-label'
 import type { Approval } from '../lib/team/types'
 
 vi.mock('../lib/team/approval-api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../lib/team/approval-api')>()),
   decideApproval: vi.fn(),
-  setSelfRelayPause: vi.fn(),
 }))
 const mockedDecide = vi.mocked(decideApproval)
-const mockedPause = vi.mocked(setSelfRelayPause)
 
 const H = 'h1'
 const memberRelay = (over: Partial<Approval> = {}): Approval => ({
@@ -42,7 +40,6 @@ beforeEach(() => {
   })
   useUndoToast.setState({ toast: null, notice: null })
   mockedDecide.mockReset()
-  mockedPause.mockReset()
   __resetClientDescriptorForTests()
   Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
 })
@@ -56,7 +53,7 @@ describe('ApprovalDialogHost — member_relay', () => {
     expect(screen.getByText('purdex-iface-lead 要幫 member purdex-iface-solo 接力（context 72%）；member 額度用完，要核准嗎？')).toBeTruthy()
   })
 
-  it('shows host, the lead\'s session, address and cwd, the member and its ref, the usage and the note; no grant, no reason, no 「不再詢問」', () => {
+  it('shows host, the lead\'s session, address and cwd, the member and its ref, the usage and the note; no grant, no reason', () => {
     render(<ApprovalDialogHost />)
     open(memberRelay())
     expect(screen.getByTestId('approval-host').textContent).toBe('mlab')
@@ -103,7 +100,6 @@ describe('ApprovalDialogHost — member_relay', () => {
     await waitFor(() => expect(mockedDecide).toHaveBeenCalledTimes(1))
     expect(mockedDecide.mock.calls[0][1]).toBe('req-m1')
     expect(mockedDecide.mock.calls[0][2]).toEqual({ decision: 'approve', client: { kind: 'app', label: 'Purdex.app' } })
-    expect(mockedPause).not.toHaveBeenCalled()
     await waitFor(() => expect(screen.queryByTestId('approval-dialog')).toBeNull())
   })
 
@@ -116,7 +112,7 @@ describe('ApprovalDialogHost — member_relay', () => {
     expect(mockedDecide.mock.calls[0][2]).toEqual({ decision: 'deny', client: { kind: 'app', label: 'Purdex.app' } })
   })
 
-  it('while disconnected the decision is queued with no grant and no pause (nothing to pause: this is the lead\'s member, not the session)', async () => {
+  it('while disconnected the decision is queued with no grant', async () => {
     render(<ApprovalDialogHost />)
     open(memberRelay())
     act(() => { useHostStore.getState().setRuntime(H, { status: 'reconnecting' }) })
@@ -125,7 +121,7 @@ describe('ApprovalDialogHost — member_relay', () => {
     const q = Object.values(useApprovalStore.getState().queued)[0]
     expect(q.decision).toBe('approve')
     expect(q.grant).toBeUndefined()
-    expect(q.pauseSession).toBeUndefined()
+    expect(Object.keys(q)).not.toContain('pauseSession')
     expect(mockedDecide).not.toHaveBeenCalled()
   })
 

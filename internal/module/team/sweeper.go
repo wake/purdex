@@ -1,6 +1,8 @@
 package teammod
 
 import (
+	"math"
+	"slices"
 	"time"
 
 	"github.com/wake/purdex/internal/module/agent"
@@ -15,6 +17,9 @@ import (
 const (
 	sweepInterval = time.Second
 	livenessEvery = 10
+	// sweepReadMax is the longest the sweeper goes without reading the open requests (G3b): it reads them when the store was
+	// written to, when one is due, on the liveness tick, and at the latest this often (a write nothing counted is found then).
+	sweepReadMax = 5 * time.Second
 )
 
 // runSweeper ticks until Stop.
@@ -62,6 +67,7 @@ func (m *Module) tick() {
 		m.persistUsage()
 		m.endGoneTeams()
 		m.markGoneMembers()
+		m.sweepFreshHalves()          // a fresh half of a session that is gone (RT-3a1)
 		m.settleStuckKillingMembers() // a kill that claimed its member and never ended (#2152)
 		m.markGoneRemoteMembers()     // sessions here that a lead on another host adopted (X2c)
 		m.endUnpairedRemoteMembers()  // a lead host that is no longer paired (§3.2)
@@ -75,9 +81,8 @@ func (m *Module) tick() {
 		m.kickNotices() // a notice whose send failed, or a lead whose inbox was not up yet
 	}
 	m.expireCommands() // a spawn or adopt not delivered within 10 minutes is void (X3a)
-	open, err := m.store.ListOpen()
-	if err != nil {
-		m.logf("[team] sweep: %v", err)
+	open, ok := m.openForTick(checkLive)
+	if !ok {
 		return
 	}
 	if len(open) == 0 {
@@ -126,6 +131,60 @@ func (m *Module) tick() {
 		}
 	}
 	m.reconcileUnattended(open)
+}
+
+// openForTick is the open requests for this tick, and false when the tick has nothing to do with them. They are read when
+// the store counted a write since the last read, when one of them falls due (deadline or lease) by now, on the liveness
+// tick (which asks about their origins) and at the latest every sweepReadMax; otherwise nothing can have changed since the
+// last read (and no request is waiting for the unattended switch's per-tick retry), and the tick returns without touching the database (G3b: it read every open request every second). A failed
+// read is logged and the tick ends, as before.
+func (m *Module) openForTick(checkLive bool) ([]team.Approval, bool) {
+	now := m.now()
+	gen := approvalWrites.Load()
+	// SQLite's data_version, from a connection of ours, moves when another connection COMMITS: read before ListOpen, so a commit
+	// after it is seen by the next tick whatever the write's duration. Where there is none (a memory store) the write count
+	// stands in for it, with one more read after it moves (openSettle).
+	dv, dvOk := m.store.DataVersion()
+	same := gen == m.openGen && dvOk == m.openDVOk && dv == m.openDV
+	if m.openRead && !checkLive && !m.openSettle && !m.unattendedRetry() && m.notAutoApprovedN.Load() == 0 && same && now < m.openNext && now-m.openAt < sweepReadMax.Milliseconds() {
+		return nil, false
+	}
+	open, err := m.store.ListOpen()
+	if err != nil {
+		m.openRead = false
+		m.logf("[team] sweep: %v", err)
+		return nil, false
+	}
+	// Without data_version, a write counts before it commits, so a read made just after the count may have seen the state from
+	// before it: when the count moved, one more read follows on the next tick (openSettle), by which time the write has
+	// usually committed (a transaction that outlasts a tick is found by the periodic read).
+	m.openSettle = !dvOk && gen != m.openGen
+	m.openRead, m.openGen, m.openAt, m.openDV, m.openDVOk = true, gen, now, dv, dvOk
+	m.openAutoApprovable = slices.ContainsFunc(open, func(a team.Approval) bool { return autoApprovableRow(a) || team.UnattendedRefusable(a.Kind) })
+	// the next moment a request falls due: only deadlines and leases still ahead count; one already past that stays open (a
+	// final card, an unanswered one) is looked at again by the periodic read, not on every tick
+	m.openNext = int64(math.MaxInt64)
+	for _, a := range open {
+		if a.DeadlineAt > now && a.DeadlineAt < m.openNext {
+			m.openNext = a.DeadlineAt
+		}
+		if a.UnansweredAt == 0 && a.LeaseUntil > now && a.LeaseUntil < m.openNext {
+			m.openNext = a.LeaseUntil
+		}
+	}
+	return open, true
+}
+
+// unattendedRetry is whether the unattended switch is on and the last read held a request it may approve: such a request is
+// retried on every tick while it stays open (a transient store error must not wait for sweepReadMax), so those ticks read.
+// The switch is read without createMu: a stale answer costs one tick of lateness, not a wrong approval (the sweep itself
+// re-reads it under the lock).
+func (m *Module) unattendedRetry() bool {
+	if !m.openAutoApprovable || m.unattended == nil {
+		return false
+	}
+	st, err := m.unattended.Unattended()
+	return err == nil && st.On
 }
 
 // closeExpired is the sweeper's close for a passed deadline or lease: the

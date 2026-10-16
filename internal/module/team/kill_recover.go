@@ -35,10 +35,14 @@ func (m *Module) recoverKillingMembers() {
 		if !live {
 			continue
 		}
+		handoff, wasHandoff := m.handoffOfKilling(mr)
 		if ok, err := m.store.GiveBackMemberKilling(mr.SpawnOp, mr.SessionID, m.now()); err != nil {
 			m.logf("[team] boot: killing member %s: give back: %v", mr.SpawnOp, err)
 		} else if ok {
 			m.logf("[team] boot: member %s was being killed when the daemon stopped; its session is still there, so it is active again", mr.Ref)
+			if wasHandoff {
+				m.tellHandoffNotClosed(mr, handoff)
+			}
 		}
 	}
 	if len(rows) > 0 {
@@ -69,11 +73,15 @@ func (m *Module) settleStuckKillingMembers() {
 				m.rosterChanged()
 			}
 		case peersmod.PresenceLive:
+			handoff, wasHandoff := m.handoffOfKilling(mr) // read before the give-back changes the row
 			if ok, err := m.store.GiveBackMemberKilling(mr.SpawnOp, mr.SessionID, m.now()); err != nil {
 				m.logf("[team] sweep killing member %s: give back: %v", mr.SpawnOp, err)
 			} else if ok {
 				m.logf("[team] member %s (%s) was killing for too long and its process is still there; active again", mr.Ref, mr.SessionID)
 				m.rosterChanged()
+				if wasHandoff {
+					m.tellHandoffNotClosed(mr, handoff)
+				}
 			}
 		}
 	}

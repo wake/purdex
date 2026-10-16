@@ -60,6 +60,7 @@ A pure function of one reading, with hysteresis:
 - Otherwise **flat**.
 - Fewer than 6 samples, or a span shorter than half the window, gives **unknown**; admission treats unknown as rising.
 - Thresholds: `trend_mem_ppm` **2.0**, and `trend_cpu_ppm` **off (0)**. The first defaults were 1.0 and 5.0 over a 60 s window; **G1 (2026-10-13, lead's decision)** changed them: on 45 minutes of real 5 s samples from a busy mlab (load1 16–36 on 10 cores, so cpu 155–428 %), the old defaults judged only 4 % of the samples flat, because load1 is itself a 1-minute average that drifts several points a minute under such a load, while memory (not cpu) is what takes the host down. With cpu out of the direction, a 120 s window and 2.0 points per minute, 81 % of the same samples are flat (table in the P1c-3 PR). A load at or above the core count is still the warning zone (D-1′): CPU saturation only slows commands down, so running one heavy command at a time is the intended behaviour there.
+- **In plain words (load ceiling, user 2026-10-15):** "flat" and "rising" look at memory only; the cpu is watched by its own ceiling, `load_cap_pct` (below): with a lease running and load1 at or above `load_cap_pct`/100 × cores, the next request waits (reason `load`), in the normal and warning zones, whatever the trend. With nothing running, one is still let in, so a host whose base load sits above the ceiling is not closed for good. Measured on mlab (10 cores) over two days, the average load1 by heavy leases held was 8.2 (0), 21.7 (1), 23.0 (2), 24.7 (3), 30.0 (4), 32.3 (5): the first heavy command already goes past 20.
 
 ### D-3′ Admission (replaces v1 D-2, D-3, R5, R6, R9)
 
@@ -71,10 +72,11 @@ A pure function of one reading, with hysteresis:
   | zone | no lease running | running, falling | running, flat | running, rising or unknown |
   |---|---|---|---|---|
   | normal | grant | grant | grant | observe |
-  | warning | grant | grant | observe | observe |
+  | warning | grant | grant | grant | observe |
   | danger | observe | observe | observe | observe |
   | unknown | grant (fail open, D-5) | grant | grant | grant |
 
+- **P2e (G1, user 2026-10-14, option c):** in the warning zone a flat trend with a lease running is **granted** (the table above shows it); only `rising` / unknown trend and the danger zone hold the head. Reason: on the night measure the host sat in warning 98.7% of the time, and blocking on flat made v2 "one heavy command at a time" (p50 26 s, p90 229 s); the gap and the queue stay. `warning_flat` is no longer produced; it stays in the vocabulary for rows written before.
 - At most one grant per pass (a grant starts a gap).
 - **Mode advise** still grants everything at once. The counterfactual runs as an in-memory **shadow queue**:
   - every request joins it at creation;
@@ -150,7 +152,7 @@ A daemon that is down or does not answer means the command runs. Zone unknown me
   - `dec_zone`, `dec_trend`, `dec_running` (bool), `dec_gap_ms` (remaining gap at the decision);
   - `parks` (count), `parked_until`;
   - `v2_wait_ms`, `v2_wait_open` (advise shadow, D-3′);
-  - `wait_reasons`: a JSON map of ms by reason (`gap`, `danger`, `warning_flat`, `rising`, `behind`, `cut`, `parked`).
+  - `wait_reasons`: a JSON map of ms by reason (`gap`, `danger`, `warning_flat`, `rising`, `load`, `behind`, `cut`, `parked`).
 - **How `wait_reasons` is counted.**
   - The module keeps, per waiting row, the reason the last pass gave it and when (`reason`, `since`). Each pass first adds `now − since` to the **previous** reason, then stores the new reason with `since = now`. The time between two passes belongs to the reason that was in force during it.
   - On grant and on every end of a waiting row (cancel, abandon, a lost CAS that ends it), the open interval is flushed first, then the JSON is written in the same UPDATE, and the entry is dropped.
@@ -185,6 +187,7 @@ A daemon that is down or does not answer means the command runs. Zone unknown me
 | `trend_window_s` | **120** | 20..300 | was 60 before G1 |
 | `trend_mem_dppm` | **20** | 1..100 | tenths of a point per minute (2.0); was 10 before G1 |
 | `trend_cpu_dppm` | **0** | 0..500 | (0 = cpu takes no part in the direction; was 50 before G1) |
+| `load_cap_pct` | **100** | 0..500 | load1 ceiling in percent of the core count (100 = load1 equal to ncpu); at or above it, with a lease running, the head waits (`load`); 0 = off |
 | `deadline_s` | **540** (from P2a; 300 until then) | 10..590 | meaning changed: hold per call |
 | `park_s` | 900 | 60..3600 | |
 | `alert_danger_s` | 180 | 30..3600 | |

@@ -68,6 +68,12 @@ const relaySchema = `
 		updated_by       TEXT    NOT NULL DEFAULT '',
 		rev              INTEGER NOT NULL DEFAULT 0
 	);
+	CREATE TABLE IF NOT EXISTS relay_fresh_half (
+		session_id TEXT PRIMARY KEY,
+		op_id      TEXT    NOT NULL,
+		path       TEXT    NOT NULL,
+		written_at INTEGER NOT NULL
+	);
 	CREATE TABLE IF NOT EXISTS session_prefs (
 		session_id        TEXT PRIMARY KEY,
 		self_relay_paused INTEGER NOT NULL DEFAULT 0,
@@ -75,14 +81,14 @@ const relaySchema = `
 	);`
 
 const relayCols = `id, kind, host_id, session_id, new_session_id, ref, new_ref, team_id, request_id,
-	state, reason, handoff_path, pruned, used_percentage, created_at, updated_at, pid, pane_id, proc_start, seen_at`
+	state, reason, handoff_path, pruned, used_percentage, created_at, updated_at, pid, pane_id, proc_start, seen_at, mode`
 
 func scanRelayOp(r rowScanner) (team.RelayOp, error) {
 	var op team.RelayOp
 	var pruned int
 	var used sql.NullFloat64
 	if err := r.Scan(&op.ID, &op.Kind, &op.HostID, &op.SessionID, &op.NewSessionID, &op.Ref, &op.NewRef, &op.TeamID, &op.RequestID,
-		&op.State, &op.Reason, &op.HandoffPath, &pruned, &used, &op.CreatedAt, &op.UpdatedAt, &op.PID, &op.PaneID, &op.ProcStart, &op.SeenAt); err != nil {
+		&op.State, &op.Reason, &op.HandoffPath, &pruned, &used, &op.CreatedAt, &op.UpdatedAt, &op.PID, &op.PaneID, &op.ProcStart, &op.SeenAt, &op.Mode); err != nil {
 		return team.RelayOp{}, err
 	}
 	op.Pruned = pruned != 0
@@ -107,10 +113,10 @@ func insertRelayOpIn(ex dbtx, op team.RelayOp) error {
 	}
 	if _, err := ex.Exec(`
 		INSERT INTO relay_ops (id, kind, host_id, session_id, new_session_id, ref, new_ref, team_id, request_id,
-			state, reason, handoff_path, pruned, used_percentage, created_at, updated_at, pid, pane_id, proc_start)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
+			state, reason, handoff_path, pruned, used_percentage, created_at, updated_at, pid, pane_id, proc_start, mode)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)`,
 		op.ID, string(op.Kind), op.HostID, op.SessionID, op.NewSessionID, op.Ref, op.NewRef, op.TeamID, op.RequestID,
-		string(op.State), op.Reason, op.HandoffPath, used, op.CreatedAt, op.UpdatedAt, op.PID, op.PaneID, op.ProcStart); err != nil {
+		string(op.State), op.Reason, op.HandoffPath, used, op.CreatedAt, op.UpdatedAt, op.PID, op.PaneID, op.ProcStart, op.Mode); err != nil {
 		if strings.Contains(err.Error(), "relay_ops.session_id") { // the partial unique index relay_ops_one_open
 			return fmt.Errorf("insert relay op %s: %w", op.ID, ErrRelayOpOpen)
 		}

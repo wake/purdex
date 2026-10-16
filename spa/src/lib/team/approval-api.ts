@@ -10,7 +10,7 @@
 // queues the decision on that code alone.
 import { pinnedHostFetch } from '../host-api'
 import { useHostStore } from '../../stores/useHostStore'
-import type { APIError, Approval, ApprovalErrorCode, DecideRequest, InflightResponse } from './types'
+import { isApproval, type APIError, type Approval, type ApprovalErrorCode, type DecideRequest, type InflightResponse } from './types'
 
 /** `fetchInflight`'s budget: the restart confirm's own (daemon-restart.ts `WORKER_COUNT_TIMEOUT_MS`). */
 export const INFLIGHT_TIMEOUT_MS = 3_000
@@ -100,21 +100,20 @@ export async function fetchAdoption(hostId: string, approvalId: string, waitS: n
   return { approval_id: typeof r.approval_id === 'string' ? r.approval_id : approvalId, state: typeof r.state === 'string' ? r.state : '', ...(typeof r.code === 'string' && r.code !== '' ? { code: r.code } : {}) }
 }
 
+/**
+ * `GET /api/team/approvals/{id}` without `wait`: the row as it is now (the daemon also renews its lease). 404 `not_found` when the
+ * request is gone; a body that is not an Approval is `bad_response`.
+ */
+export async function fetchApproval(hostId: string, id: string): Promise<Approval> {
+  const r = await send<unknown>(hostId, `/api/team/approvals/${encodeURIComponent(id)}`, { method: 'GET' })
+  if (!isApproval(r)) throw new ApprovalApiError(200, 'bad_response', 'the approval is not the wire shape')
+  return r
+}
+
 /** `GET /api/team/approvals?state=open`. `approvals` is `[]` from the daemon, but null is tolerated. */
 export async function listOpenApprovals(hostId: string): Promise<Approval[]> {
   const r = await send<{ approvals?: Approval[] | null }>(hostId, '/api/team/approvals?state=open', { method: 'GET' })
   return Array.isArray(r.approvals) ? r.approvals : []
-}
-
-/** `POST /api/relay/self` (spec §8.7 (a)): the dialog's 「這個 session 不再詢問」 sets the per-session pause. */
-export interface RelaySelfResponse { self_relay: 'on' | 'off' | 'paused'; host_switch: boolean; member: boolean }
-
-export function setSelfRelayPause(hostId: string, sessionId: string, action: 'off' | 'on' | 'status'): Promise<RelaySelfResponse> {
-  return send<RelaySelfResponse>(hostId, '/api/relay/self', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, action }),
-  })
 }
 
 const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.trunc(v) : 0)

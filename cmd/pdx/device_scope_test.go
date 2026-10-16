@@ -59,7 +59,7 @@ func TestDeviceAllowed_EveryEntryIsARegisteredPattern(t *testing.T) {
 
 func TestDeviceAllowed_ExactSet(t *testing.T) {
 	want := []string{
-		"GET /api/info", "POST /api/ws-ticket", "GET /api/hostconfig",
+		"GET /api/info", "POST /api/ws-ticket", "GET /api/hostconfig", "GET /api/fleet",
 		"/ws/host-events", "/ws/terminal/{code}", "GET /ws/conversations/{provider}/{session_id}",
 		"POST /api/sessions", "POST /api/sessions/{code}/send-keys", "POST /api/sessions/{code}/read", "POST /api/sessions/{code}/submit", "POST /api/sessions/{code}/recall", "GET /api/sessions/{code}/provenance", "GET /api/sessions/{code}/transcript",
 		"GET /api/sessions/{code}/launch-plan", "POST /api/sessions/{code}/launch", // the no-agent launch panel
@@ -73,6 +73,7 @@ func TestDeviceAllowed_ExactSet(t *testing.T) {
 		"POST /api/agent/upload",
 		"GET /api/workbook/conversations/{provider}/{session_id}", "GET /api/workbook/entries",
 		"GET /api/workbook/conversations/{provider}/{session_id}/todos", // not the refresh: that is the Mac App's
+		"GET /api/journal", "GET /api/journal/tasks", "GET /api/journal/roadmap", "PUT /api/journal/pin", // the workbook journal (iOS later)
 	}
 	got := make([]string, 0, len(deviceAllowed))
 	for p := range deviceAllowed {
@@ -106,7 +107,7 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 	assert.Equal(t, http.StatusTemporaryRedirect, callWith(t, c, "GET", "/api/info/../config", tok, nil).Code)
 	for _, r := range []struct{ method, path string }{
 		{"GET", "/api/config"}, {"PUT", "/api/config"}, {"POST", "/api/daemon/restart"},
-		{"PUT", "/api/hostconfig/projects"}, {"POST", "/api/hostconfig/check-path"},
+		{"PUT", "/api/hostconfig/projects"}, {"GET", "/api/fleet/ssh-aliases"}, {"POST", "/api/fleet"}, {"PUT", "/api/hostconfig/probe-hosts"}, {"PUT", "/api/hostconfig/fleet"}, {"POST", "/api/hostconfig/check-path"},
 		{"GET", "/api/sessions"}, {"DELETE", "/api/sessions/x"}, {"PATCH", "/api/sessions/x"}, {"GET", "/api/sessions/x/home"},
 		{"POST", "/api/profiles"}, {"DELETE", "/api/profiles/p_0123456789ab"},
 		{"PUT", "/api/profiles/p_0123456789ab/attachment"},
@@ -117,16 +118,24 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 		{"GET", "/api/team/paused/x/release"}, {"DELETE", "/api/team/paused/x"}, {"POST", "/api/team/paused"},
 		{"POST", "/api/devices"}, {"GET", "/api/devices"}, {"DELETE", "/api/devices/d_aaaaaaaaaaaa"},
 		{"GET", "/api/fs/read"}, {"POST", "/api/host-transfer/redeem"}, {"GET", "/api/nothing-here"},
+		{"GET", "/debug/pprof/"}, {"GET", "/debug/pprof/cmdline"}, {"GET", "/debug/pprof/heap"}, {"GET", "/debug/pprof/profile"}, {"GET", "/api/debug/execstat"}, // the profiler and the fork counters are the admin's alone
+		{"POST", "/api/journal"}, {"GET", "/api/journal/pin"}, {"DELETE", "/api/journal/pin"}, {"GET", "/api/journal/other"}, // only the four journal routes
 	} {
 		assert.True(t, forbidden(callWith(t, c, r.method, r.path, tok, nil)), "%s %s", r.method, r.path)
 	}
+	// The fleet's peer calls are the paired daemons' (host tokens), never a phone's: refused before the handler, whichever way.
+	for _, p := range []string{"/api/peers/fleet/role", "/api/peers/fleet/announce"} {
+		rec := callWith(t, c, "POST", p, tok, map[string]any{"to_host_id": "x", "from_alias": "air26", "role": "primary", "term": 99})
+		assert.Contains(t, []int{http.StatusUnauthorized, http.StatusForbidden}, rec.Code, "POST %s: %s", p, rec.Body.String())
+	}
 	// Reachable: the scope lets these through to their own handlers (whatever those answer, not device_forbidden).
 	for _, r := range []struct{ method, path string }{
-		{"GET", "/api/info"}, {"GET", "/api/hostconfig"}, {"GET", "/api/sessions/x/launch-plan"}, {"POST", "/api/sessions/x/launch"}, {"POST", "/api/sessions/x/read"}, {"PUT", "/api/team/relay-quota"}, {"PUT", "/api/team/max-members"}, {"GET", "/api/sessions/x/provenance"}, {"GET", "/api/team/unattended"},
+		{"GET", "/api/info"}, {"GET", "/api/hostconfig"}, {"GET", "/api/fleet"}, {"GET", "/api/sessions/x/launch-plan"}, {"POST", "/api/sessions/x/launch"}, {"POST", "/api/sessions/x/read"}, {"PUT", "/api/team/relay-quota"}, {"PUT", "/api/team/max-members"}, {"GET", "/api/sessions/x/provenance"}, {"GET", "/api/team/unattended"},
 		{"GET", "/api/push/devices"}, {"GET", "/api/profiles"}, {"GET", "/api/profiles/p_0123456789ab"}, {"PUT", "/api/devices/self"},
 		{"GET", "/api/conversations/claude/sid"}, {"POST", "/api/ws-ticket"},
 		{"POST", "/api/agent/upload"},
 		{"GET", "/api/team/paused"}, {"POST", "/api/team/paused/x/release"},
+		{"GET", "/api/journal"}, {"GET", "/api/journal/tasks"}, {"GET", "/api/journal/roadmap"}, {"PUT", "/api/journal/pin"},
 	} {
 		assert.False(t, forbidden(callWith(t, c, r.method, r.path, tok, nil)), "%s %s", r.method, r.path)
 	}

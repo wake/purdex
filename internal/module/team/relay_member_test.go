@@ -25,6 +25,7 @@ func (f *fixture) memberTeam(ver string) memberRow {
 		f.t.Fatal(err)
 	}
 	f.liveMember("sid-m1", "_mem001", "one", "self/w-one", "tm-1")
+	f.origins.setInbox("sid-m1", "/tmp/m1.sock") // a local session the registry has an inbox for: its notices to the lead go from it
 	if ver != "" {
 		if code, body := f.do(http.MethodPost, "/api/relay/hello", team.RelayHelloRequest{SessionID: "sid-m1", ModVersion: ver, Agent: "cc"}); code != http.StatusOK {
 			f.t.Fatalf("hello: %d %s", code, body)

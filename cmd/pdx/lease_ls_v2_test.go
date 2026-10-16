@@ -52,7 +52,7 @@ func TestLeaseLs_V2ReasonNames(t *testing.T) {
 	now := lsNow
 	for reason, want := range map[string]string{
 		"gap": "間隔中", "danger": "危險區", "warning_flat": "警戒且持平", "rising": "用量上升",
-		"behind": "排在後面", "cut": "等待基準", "parked": "保留中",
+		"behind": "排在後面", "cut": "等待基準", "parked": "保留中", "load": "負載上限",
 	} {
 		assert.Equal(t, want+" 5s", waitReasonText(resources.WaiterView{Reason: reason, ReasonSince: now.Add(-5 * time.Second).UnixMilli()}, now), reason)
 	}

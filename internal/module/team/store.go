@@ -4,11 +4,15 @@
 package teammod
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -18,9 +22,25 @@ import (
 // ErrNoSuchApproval is returned by the per-id methods for an unknown id.
 var ErrNoSuchApproval = errors.New("no such approval")
 
+// approvalWrites counts the writes to approval_requests this process makes (insert, close, lease, unanswered), so the sweeper
+// can read the open requests when something may have changed and not every second (G3b). It is a hint: a write that does not
+// count (a plain touch of the row for a lock) costs the sweeper at most sweepReadMax of lateness.
+var approvalWrites atomic.Uint64
+
 // Store is the SQLite persistence of approval requests.
 type Store struct {
-	db *sql.DB
+	// the sweeper's own connection for PRAGMA data_version (see DataVersion); memory marks a store that has only one connection
+	// and so cannot spare it
+	memory    bool
+	dvMu      sync.Mutex
+	dvConn    *sql.Conn
+	dvDisable bool
+	// listOpenReads counts ListOpen calls: what the sweeper's cadence test looks at.
+	listOpenReads atomic.Int64
+	db            *sql.DB
+	// handoffClaims holds the ids of the handoff ops whose `written` committed WITH the member claimed for the kill (set after the
+	// commit that did it): finishHandoffKill signals only for an op in it. A timestamp is no proof of who claimed a row (RT-3c codex).
+	handoffClaims sync.Map
 	// localHostID is this daemon's host id (set at Init): the sweepers look at the rows that live on it.
 	localHostID string
 	// afterPauseLock, when set, runs in CreateSelfRelayOrPause right after the writer lock is taken (test seam: a quota PUT
@@ -118,6 +138,38 @@ type Store struct {
 	afterReportInsert func() error
 }
 
+// DataVersion is SQLite's data_version for team.db as seen from a connection of its own: it changes when ANOTHER connection
+// COMMITS a change to the file, so the sweeper learns of a write at its commit, not at the moment the write began (G3b). ok is
+// false where there is no such answer (a memory store has one connection and cannot spare it; or the pragma failed), and the
+// sweeper then relies on its write count. The connection is kept for the life of the store (closed by Close).
+func (s *Store) DataVersion() (int64, bool) {
+	if s == nil || s.memory {
+		return 0, false
+	}
+	s.dvMu.Lock()
+	defer s.dvMu.Unlock()
+	if s.dvDisable {
+		return 0, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if s.dvConn == nil {
+		c, err := s.db.Conn(ctx)
+		if err != nil {
+			return 0, false
+		}
+		s.dvConn = c
+	}
+	var v int64
+	if err := s.dvConn.QueryRowContext(ctx, `PRAGMA data_version`).Scan(&v); err != nil {
+		s.dvDisable = true
+		_ = s.dvConn.Close()
+		s.dvConn = nil
+		return 0, false
+	}
+	return v, true
+}
+
 // OpenStore opens (or creates) team.db at path. ":memory:" is for tests.
 func OpenStore(path string) (*Store, error) {
 	dsn := path
@@ -129,7 +181,8 @@ func OpenStore(path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open team db: %w", err)
 	}
-	if path == ":memory:" {
+	memory := path == ":memory:"
+	if memory {
 		db.SetMaxOpenConns(1)
 	}
 	if _, err := db.Exec(`
@@ -309,11 +362,20 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (unanswered_at): %w", err)
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, memory: memory}, nil
 }
 
 // Close closes the database.
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	s.dvMu.Lock()
+	if s.dvConn != nil {
+		_ = s.dvConn.Close()
+		s.dvConn = nil
+	}
+	s.dvDisable = true
+	s.dvMu.Unlock()
+	return s.db.Close()
+}
 
 const selectCols = `id, kind, host_id, origin_json, payload_json, request_hash, state,
 	created_at, deadline_at, lease_until, decided_by_json, decided_at, grant_json, close_reason, unanswered_at`
@@ -475,6 +537,7 @@ func insertRowIn(ex dbtx, a team.Approval, hash, conflict string) (int64, error)
 	if err != nil {
 		return 0, fmt.Errorf("encode origin: %w", err)
 	}
+	approvalWrites.Add(1)
 	res, err := ex.Exec(`
 		INSERT INTO approval_requests
 			(id, kind, host_id, origin_session_id, origin_json, payload_json, request_hash, state, created_at, deadline_at, lease_until)
@@ -639,6 +702,7 @@ func closeRowIn(ex dbtx, id string, c Close, guard string, guardArg int64) (int6
 		guard += " AND deadline_at > ? AND lease_until > ?"
 		args = append(args, c.UnexpiredAt, c.UnexpiredAt)
 	}
+	approvalWrites.Add(1)
 	res, err := ex.Exec(`
 		UPDATE approval_requests
 		SET state = ?, decided_at = ?, decided_by_json = ?, grant_json = ?, close_reason = ?
@@ -663,6 +727,7 @@ func closeRowIn(ex dbtx, id string, c Close, guard string, guardArg int64) (int6
 // RenewLease moves an open request's lease forward to until (never back).
 // A closed or unknown id is left alone and is not an error.
 func (s *Store) RenewLease(id string, until int64) error {
+	approvalWrites.Add(1)
 	if _, err := s.db.Exec(`
 		UPDATE approval_requests SET lease_until = MAX(lease_until, ?)
 		WHERE id = ? AND state = 'open'`, until, id); err != nil {
@@ -674,6 +739,7 @@ func (s *Store) RenewLease(id string, until int64) error {
 // ExtendOpenLeases is the boot grace (spec §9.2): every open request's
 // lease becomes max(lease_until, until). It returns how many rows changed.
 func (s *Store) ExtendOpenLeases(until int64) (int64, error) {
+	approvalWrites.Add(1)
 	res, err := s.db.Exec(`
 		UPDATE approval_requests SET lease_until = ?
 		WHERE state = 'open' AND lease_until < ?`, until, until)
@@ -689,6 +755,7 @@ func (s *Store) ExtendOpenLeases(until int64) (int64, error) {
 
 // ListOpen returns every open request, oldest first (created_at, id).
 func (s *Store) ListOpen() ([]team.Approval, error) {
+	s.listOpenReads.Add(1)
 	rows, err := s.db.Query(`SELECT ` + selectCols + ` FROM approval_requests WHERE state = 'open' ORDER BY created_at, id`)
 	if err != nil {
 		return nil, fmt.Errorf("list open approvals: %w", err)

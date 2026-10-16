@@ -162,7 +162,7 @@ describe('what the section says instead of rows', () => {
   it('the title and the one-line explanation are there', () => {
     show([{ hostId: A, rows: [q('p1')] }])
     expect(screen.getByTestId('quota-title')).toHaveTextContent('接力額度')
-    expect(screen.getByTestId('quota-explain')).toHaveTextContent('無人值守時，額度 ≥ 1 才會自動接力，每次扣 1；0 就等你核准。整條接力鏈共用。')
+    expect(screen.getByTestId('quota-explain')).toHaveTextContent('無人值守時，額度 ≥ 1 才會自動接力，每次扣 1；用到 0 時 session 會暫停作業，等你解除。整條接力鏈共用。')
   })
 
   it('headings by host only when asked (more than one host has a section)', () => {

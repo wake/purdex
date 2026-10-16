@@ -50,7 +50,7 @@ func (m *Module) acceptAskUnattended(a RelayAsk) (accepted bool) {
 	}
 	req := team.RelayCreateRequest{ID: m.newID(), Target: mr.Ref}
 	cw := newCapture()
-	m.createMemberRelayFor(cw, req, t, mr)
+	m.createMemberRelayFor(cw, req, t, mr, false)
 	switch cw.status {
 	case http.StatusCreated:
 	case http.StatusConflict:

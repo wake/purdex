@@ -52,11 +52,11 @@
 
 import { register as registerAsk } from './ask.js'
 import { backgroundBusy, registerEvents } from './events.js'
-import { registerLease } from './lease.js'
+import { registerGate } from './gate.js'
 import { CONSUMED, CONSUMED_REASK, claimOp, controlOp, controlReask, leadLine, parseTeamArgs, rosterLines } from './member.js'
 import { DEFAULT_BODIES, FIXED } from './prompts.js'
 
-const VERSION = '7' // the mod ↔ daemon protocol version `pdx relay hello --version` reports (5: the paused latch and the reask control; 6: person tokens, /team and the direct /relay; 7: the ask ladder - lastAskPct only on an answer, no ask past 90 %, an unanswered final card)
+const VERSION = '8' // the mod ↔ daemon protocol version `pdx relay hello --version` reports (5: the paused latch and the reask control; 6: person tokens, /team and the direct /relay; 7: the ask ladder - lastAskPct only on an answer, no ask past 90 %, an unanswered final card; 8: the idle half - an idle card's timeout writes the handoff file without clearing, and a later relay reuses it)
 const DEFAULT_THRESHOLD = 70
 const DEFAULT_MIN_GROWTH = 20000
 const REASK_POINTS = 10
@@ -99,6 +99,8 @@ const RELAY_PAUSED = '這個 session 已用 /relay off 暫停自我接力；要�
 const RELAY_NO_USAGE = '目前讀不到 context 用量，稍後再試'
 const RELAY_NOT_STARTED = '接力沒有開始（這個 session 剛換過或被清除）'
 const RELAY_MEMBER = 'member 的接力由 lead 安排'
+const STATUS_HALF = '已寫好接力檔'
+const toastHalf = (path) => '快取即將過期，已先寫好接力檔（' + path + '）。要接力請打 /relay 或 /relay now，會直接接上後半：清空並由新對話接手，不用重寫接力檔；不需要就直接關掉這個 session，或照常繼續。'
 const TOAST_GAVE_UP = '接力檔不完整，已放棄接力；對話照常繼續'
 const toastSeedFailed = (path) => '接力未完成：接力檔在 ' + path + '，可手動貼給新 session'
 
@@ -135,6 +137,10 @@ const fresh = () => ({
   idleAsk: false, // an idle ask is out (beginning / awaiting): it holds no prompt, a prompt withdraws it (D6)
   idleWithdraw: false, // a prompt arrived while the idle begin was out: the op it opens is withdrawn at once
   askEpoch: 0, // bumped by everything that makes an ask in the air stale (a /clear, a session reset, a compaction); never reset, like gen
+  half: undefined, // { op, path, at, sid }: the fresh half this session wrote (idle half, RT-3b): the next relay may reuse its file until the conversation moves
+  halfBeginning: false, // a half begin is out: it holds no prompt
+  halfStatus: false, // the status line says 「已寫好接力檔」 and nothing else has replaced it
+  mainTurns: 0, // main-conversation turn.starts so far: a hello answer older than a turn restores no half
   askBusy: undefined, // a token while a member's `pdx relay ask` is out (member relay ask, D3: it changes no relay state)
   teamQueued: undefined, // { parsed, viaLead }: a /team (become lead) or /team spawn typed while a relay ran: run at the next return to idle (newest wins)
   leadAsk: undefined, // { gen, sid }: a /lead prompt is out until the agent's turn ends or the session moves on
@@ -226,6 +232,7 @@ function stderrCode(r) {
 async function hello($, seq) {
   try {
     const sid = await $.session.id()
+    const turns = s.mainTurns
     const r = await pdx($, ['relay', 'hello', '--session', sid, '--version', VERSION, '--agent', 'cc'], CALL_TIMEOUT_MS)
     if (seq !== s.helloSeq) return // a newer hello answers for the session now
     const h = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
@@ -252,6 +259,12 @@ async function hello($, seq) {
       disarmIdle()
     }
     if (s.idleWanted && s.state === 'idle') armIdle($) // the turn that ended before this answer (a new turn.start cleared the wish)
+    const fh = h.fresh_half
+    if (!s.half && fh && typeof fh === 'object' && typeof fh.op_id === 'string' && fh.op_id !== '' && typeof fh.path === 'string' && fh.path !== '') {
+      const back = { op: fh.op_id, path: fh.path, at: Number(fh.written_at) || 0, sid }
+      if (s.mainTurns === turns && !s.turnRunning) s.half = back // a reloaded mod takes back the half the daemon still holds (RT-3b)
+      else { s.half = back; dropHalf($, true) } // a turn began while hello was out: the half is already stale, and the daemon is told
+    }
     if (h.active_relay && typeof h.active_relay === 'object') recoverLater($, h.active_relay, sid)
     if (h.waiting && typeof h.waiting === 'object') adoptWaitingLater($, h.waiting, sid)
     drainReask($) // a reask that came before hello answered
@@ -581,7 +594,7 @@ function toIdle($) {
   const p = s.pending
   if (p && p.locked) later($, 0, () => unlockRelay($, p))
   letGo()
-  Object.assign(s, { gen: s.gen + 1, state: 'idle', pending: undefined, begun: undefined, fixRounds: 0, writeTurnId: undefined, seedTurnId: undefined, idleAsk: false, idleWithdraw: false })
+  Object.assign(s, { gen: s.gen + 1, state: 'idle', pending: undefined, begun: undefined, fixRounds: 0, writeTurnId: undefined, seedTurnId: undefined, idleAsk: false, idleWithdraw: false, halfBeginning: false })
   if (s.control.length > 0) claimLater($) // a control that came while a relay ran (claim checks the turn) is not left waiting for a later turn
   drainReask($) // a reask that came while a relay ran: begun now, not at some later turn (a running turn drains it at its end)
   runQueuedTeam($) // a /team that waited for this relay
@@ -713,7 +726,7 @@ async function maybeBegin($) {
 //
 // `manual` is a person's /relay (MR-1, U-M1): `--manual` lifts a member's refusals at the daemon, which still opens a
 // card a person must approve. The threshold path (maybeBegin) never passes it.
-async function begin($, sid, gen, u, adopted, manual = false, idle = false, reaskId = '', personToken = '') {
+async function begin($, sid, gen, u, adopted, manual = false, idle = false, reaskId = '', personToken = '', half = false, noReuse = false) {
   const argv = ['relay', 'begin', '--self', '--session', sid, '--used', String(u.percent), '--window', String(u.window)]
   if (manual) argv.push('--manual')
   if (manual && personToken) argv.push('--person', personToken) // a person's own /relay (RT-1a): the daemon relays at once, no card, no quota
@@ -721,6 +734,16 @@ async function begin($, sid, gen, u, adopted, manual = false, idle = false, reas
   const latchEpoch = s.latchEpoch // a reask that arrives while this begin is out clears the latch for good: this answer must not set it again
   const idleMinutes = s.idleMinutes // the numbers of this ask, whatever hello says meanwhile
   if (idle) argv.push('--reason', 'idle', '--idle-minutes', String(idleMinutes))
+  if (half) argv.push('--half') // an idle card timed out: the daemon opens a half, claimed at once (RT-3b T35)
+  // Every begin that is not a half offers the fresh half's file for reuse while it still checks out (RT-3b T36); the daemon says
+  // reuse_invalid when it is no longer the session's fresh half.
+  let reuse = ''
+  if (!half && !noReuse && s.half) {
+    const offered = s.half
+    if ((await checkHandoff($, offered)).ok && s.half === offered) reuse = offered.op
+  }
+  const reusePath = reuse && s.half ? s.half.path : ''
+  if (reuse) argv.push('--reuse', reuse)
   const r = await pdx($, argv, CALL_TIMEOUT_MS)
   const now = await $.session.id().catch(() => undefined)
   const body = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
@@ -730,6 +753,11 @@ async function begin($, sid, gen, u, adopted, manual = false, idle = false, reas
     if (opened) report($, body.op.id, 'cancelled', ['--error', 'abandoned'])
     if (mine) toIdle($) // same generation, another session id: nothing will ever answer for this begin
     return { kind: 'abandoned' }
+  }
+  if (!opened && reuse && mine && now === sid && r.exitCode === 13 && stderrCode(r) === 'reuse_invalid') {
+    // the half is no longer this session's fresh half (the daemon's row is gone): drop it and ask again without it
+    if (s.half && s.half.op === reuse) s.half = undefined
+    return begin($, sid, gen, u, adopted, manual, idle, reaskId, personToken, half, true)
   }
   const threshold = !manual && !idle // the threshold's ask and a reask: the only ones the +10 and 90 % guards count
   if (!opened) {
@@ -755,6 +783,8 @@ async function begin($, sid, gen, u, adopted, manual = false, idle = false, reas
   }
   if (threshold) s.lastAskPct = u.percent // the daemon opened the request: answered
   s.pending = {
+    half: body.op.mode === 'half', // a half (this call's, or an idle begin the daemon answered half itself): written, never cleared
+    reused: !half && reusePath !== '' && body.op.handoff_path === reusePath, // the op carries the fresh half's file: no write turn
     idle, // an idle ask never holds a prompt (D6)
     idlePct: u.percent,
     idleMinutes: idle ? idleMinutes : undefined, // what the ask was opened with (s.idleMinutes is overwritten by a later hello)
@@ -776,7 +806,7 @@ async function begin($, sid, gen, u, adopted, manual = false, idle = false, reas
   }
   s.state = 'awaiting'
   s.fixRounds = 0
-  $.ui.status(STATUS_WAITING)
+  if (!s.pending.half) { $.ui.status(STATUS_WAITING); s.halfStatus = false }
   const p = s.pending
   adopted(p)
   later($, STEP_MS, async () => {
@@ -1242,7 +1272,7 @@ function waitLoop($) {
   const p = s.pending
   if (p.wait) return p.wait
   p.wait = (async () => {
-    $.ui.toast(TOAST_WAITING) // once per request (one loop per request)
+    if (!p.half) $.ui.toast(TOAST_WAITING) // once per request (one loop per request); a half waits for no one
     for (;;) {
       // Until the daemon says the card went unanswered the call carries --return-unanswered, which makes the CLI come back at the
       // mark; after it, the loop goes on as before until the card closes (an approval, a denial, a compaction).
@@ -1293,8 +1323,13 @@ function settle($, p, outcome) {
   if (s.pending !== p) return
   $.ui.status(undefined)
   if (s.state !== 'awaiting') return
-  if (outcome !== 'approved') return toIdle($) // an idle ask's answer no longer counts against the threshold's +10 guard (RT-2c T26)
+  if (outcome !== 'approved') {
+    toIdle($) // an idle ask's answer no longer counts against the threshold's +10 guard (RT-2c T26)
+    if (outcome === 'timeout' && p.idle && !p.half) halfLater($) // the idle card ran out: write the half now (RT-3b T35)
+    return
+  }
   s.state = 'approved'
+  if (p.reused) return reuseWritten($, p)
   startWrite($, p)
 }
 
@@ -1385,13 +1420,29 @@ async function claim($, gen) {
     op, requestId: undefined, path: op.handoff_path, oldSession: sid, oldRef: op.ref, before: usageLine(u),
     nonce: undefined, nonceState: undefined, who: '', lead: body.lead && typeof body.lead === 'object' ? body.lead : undefined, answer,
   }
+  if (op.mode === 'handoff') p.handoff = true // pdx kill --handoff (RT-3c): written, then the daemon closes the member - no /clear, no half
   s.pending = p
   s.state = 'approved'
   s.fixRounds = 0
+  halfSpent($) // a member relay claimed: the daemon deleted the half's row
   // A turn the user started while the claim was out (id, the daemon, usage) is not interrupted: the write
   // waits for its turn.complete (P6-6 R1).
+  if (p.handoff && body.reuse === true) return handoffReused($, p)
   if (s.turnRunning) s.writeDeferred = p
   else startWrite($, p)
+}
+
+// handoffReused: the daemon says the handoff op's file is the member's fresh handoff. If it still checks out nothing is written: writing
+// and written are reported and the member goes idle until the daemon closes it; if not, it is written as any handoff.
+function handoffReused($, p) {
+  later($, STEP_MS, async () => {
+    if (s.pending !== p || s.state !== 'approved') return
+    if (!(await checkHandoff($, p)).ok) return s.turnRunning ? (s.writeDeferred = p) : startWrite($, p)
+    if (s.pending !== p || s.state !== 'approved') return
+    report($, p.op.id, 'writing')
+    report($, p.op.id, 'written')
+    toIdle($)
+  })
 }
 
 function claimLater($) {
@@ -1423,7 +1474,7 @@ function disarmIdle() {
 // the feature. Re-arming replaces the timer.
 function armIdle($) {
   disarmIdle()
-  if (!s.helloOK || s.role === 'member' || s.idleMinutes <= 0 || s.state !== 'idle') return
+  if (!s.helloOK || s.role === 'member' || s.idleMinutes <= 0 || s.state !== 'idle' || s.half) return
   const t = { gen: s.gen, handle: undefined }
   s.idleTimer = t
   t.handle = $.clock.after(s.idleMinutes * 60_000, () => { void idleFire($, t).catch((err) => log($, 'idle ask failed: ' + String(err))) })
@@ -1431,7 +1482,7 @@ function armIdle($) {
 
 // idleLive: the cheap part of the gate, asked again after every await of the fire (as maybeBegin does).
 const idleLive = (t) => s.idleTimer === t && s.gen === t.gen && s.interactive && s.helloOK && s.role !== 'member' &&
-  s.idleMinutes > 0 && s.state === 'idle' && !s.turnRunning && s.control.length === 0 && !s.pausedLatch
+  s.idleMinutes > 0 && s.state === 'idle' && !s.turnRunning && s.control.length === 0 && !s.pausedLatch && !s.half // a fresh half asks nothing more until the conversation moves
 
 // idleFire is the timer's handler (never inside a hook): the maybeBegin gate with the idle threshold and the growth guard,
 // and no running background task or session cron (D8). It opens the same self-relay request, with the reason, and takes
@@ -1462,6 +1513,75 @@ function withdrawIdle($, p) {
   toIdle($)
   $.ui.status(undefined)
   report($, p.op.id, 'cancelled', ['--error', 'resumed'])
+}
+
+// ---- the idle half (RT-3b, relay/team rules v2 T35, T36) ----
+
+// halfLive: the gate of a half begin, asked again after every await (as idleLive is): an ordinary idle session whose hello advertised
+// the feature, with nothing running and no half already.
+const halfLive = (gen) => s.gen === gen && s.interactive && s.helloOK && s.role !== 'member' && s.state === 'idle' && !s.turnRunning &&
+  s.control.length === 0 && !s.pausedLatch && !s.half && s.idleMinutes > 0
+
+// halfLater: an idle card settled `timeout`. From a timer, the mod asks the daemon for a half - the handoff file written, nothing
+// cleared - which the daemon claims at once. It holds no prompt (it takes neither idleAsk nor the hold) and asks for no one.
+function halfLater($) {
+  const gen = s.gen
+  later($, 0, async () => {
+    if (!halfLive(gen) || !hasCSPRNG()) return
+    const u = (await $.session.usage().catch(() => undefined))?.context
+    const sid = await $.session.id().catch(() => undefined)
+    if (!u || u.percent === undefined || !sid || !halfLive(gen) || backgroundBusy()) return
+    s.state = 'beginning'
+    s.halfBeginning = true
+    const begun = deferred()
+    s.begun = begun
+    await begin($, sid, gen, u, begun.resolve, false, true, '', '', true).finally(() => {
+      if (s.gen === gen) s.halfBeginning = false
+      begun.resolve(undefined)
+    })
+  })
+}
+
+// reuseWritten: the daemon opened this relay on the fresh half's file, which still checks out, so there is nothing to write: writing and
+// written are reported and the relay goes on to /clear. A file that stopped checking out is written again as an ordinary relay.
+function reuseWritten($, p) {
+  later($, STEP_MS, async () => {
+    p.who = await whoami($)
+    if (s.pending !== p || s.state !== 'approved') return
+    const c = await checkHandoff($, p)
+    if (s.pending !== p || s.state !== 'approved') return
+    if (!c.ok) {
+      s.half = undefined
+      startWrite($, p) // the same path, written over
+      return
+    }
+    halfSpent($) // the claim spends it
+    report($, p.op.id, 'writing')
+    report($, p.op.id, 'written')
+    s.state = 'clearing'
+    startClear($, p)
+  })
+}
+
+// halfSpent: a relay claimed (the daemon deleted the half's row at the claim), so the mod forgets the half without telling anyone, and
+// the status line stops promising a file.
+function halfSpent($) {
+  s.half = undefined
+  if (s.halfStatus) { s.halfStatus = false; $.ui.status(undefined) }
+}
+
+// dropHalf forgets the fresh half: the conversation moved on, so its file no longer says where it is. `stale` also tells the daemon
+// (from a timer, under the session id the half was written in); a compaction does not, the daemon deletes the row at one.
+function dropHalf($, stale) {
+  const h = s.half
+  if (!h) return
+  s.half = undefined
+  if (s.halfStatus) { s.halfStatus = false; $.ui.status(undefined) } // the status line no longer promises a file
+  if (!stale) return
+  later($, 0, async () => {
+    const r = await pdx($, ['relay', 'fresh', '--session', h.sid, '--op', h.op, '--stale'], CALL_TIMEOUT_MS)
+    if (r.exitCode !== 0) log($, 'relay fresh --stale failed (exit ' + r.exitCode + ')')
+  })
 }
 
 function compactedLater($, trigger) {
@@ -1640,6 +1760,30 @@ async function onWriteTurnDone($) {
   s.writeTurnId = undefined // checked once
   const c = await checkHandoff($, p)
   if (s.pending !== p) return
+  if (c.ok && p.handoff) {
+    // A handoff ends where its file is written (RT-3c T39): the daemon closes the member. No /clear, no seed, no half, no status or
+    // toast, no threshold check.
+    report($, p.op.id, 'written')
+    toIdle($)
+    return
+  }
+  if (c.ok && p.half) {
+    // A half ends where its file is written: no /clear, no seed (RT-3b T35). The session is idle again and keeps the half for the next
+    // relay; the threshold check runs once now, so at >= the threshold it asks at once and reuses it.
+    report($, p.op.id, 'written')
+    let at = 0
+    try { at = await $.clock.now() } catch {}
+    if (s.pending !== p) return // the conversation moved on while the clock was read
+    // The half is recorded BEFORE the idle state is exposed: a reask, a control claim or a queued /team that toIdle starts at once
+    // must find it (and reuse it), not begin as if there were none (codex R1).
+    s.half = { op: p.op.id, path: p.path, at, sid: p.oldSession }
+    toIdle($)
+    $.ui.status(STATUS_HALF)
+    s.halfStatus = true
+    $.ui.toast(toastHalf(p.path))
+    await maybeBegin($)
+    return
+  }
   if (c.ok) {
     s.state = 'clearing'
     report($, p.op.id, 'written')
@@ -1681,7 +1825,7 @@ export function register(on) {
   // The event reporter (interface U1 spec §6.5): unmatched on events this module does not
   // hook, matched on the ones it does; registered first, so its hooks wrap the relay's.
   registerEvents(on)
-  registerLease(on)
+  registerGate(on) // tool.call{Bash} only: host load control for the calls the PATH shims cannot see
 
   // The member-relay control message (P6-6, M1): consumed whatever the state (codex finding 1), so the model never
   // sees it. The daemon is told the mod has it now (Q2 branch A); the claim waits for the running turn.
@@ -1745,14 +1889,17 @@ export function register(on) {
   // the relay's.
   on('turn.start', async ($, e, next) => {
     const p = s.pending
-    if (s.interactive && !e.agentId) { s.turnRunning = true; disarmIdle() }
+    let own = false // the mod's own write / seed turn
+    if (s.interactive && !e.agentId) { s.turnRunning = true; s.mainTurns++; disarmIdle() }
     if (s.interactive && s.leadAsk && s.leadAsk.turnId === undefined && typeof e.text === 'string' && e.text.includes(s.leadAsk.nonce)) s.leadAsk.turnId = e.turnId
     if (s.interactive && p && p.nonce && s.state === p.nonceState && typeof e.text === 'string' && e.text.includes(p.nonce)) {
       const writing = s.state === 'approved'
       if (writing) s.writeTurnId = e.turnId
       else s.seedTurnId = e.turnId
       p.nonce = undefined
+      own = true
     }
+    if (s.interactive && !e.agentId && s.half && !own) dropHalf($, true) // the conversation moved on: the half's file is stale (RT-3b T36)
     return next(e)
   })
 
@@ -1802,6 +1949,7 @@ export function register(on) {
     s.control = [] // a control message named the old session id: it is the old conversation's
     s.helloOK = false // nor does the old session's hello: the new one is sent below
     if (s.state === 'clearing' && p) {
+      halfSpent($) // the mod's own /clear: the relay spent the half (the daemon deleted its row at the claim)
       s.state = 'seeding'
       report($, p.op.id, 'cleared', ['--new-session', await $.session.id()])
       helloLater($)
@@ -1832,6 +1980,7 @@ export function register(on) {
     // generation bump above has begin() cancel the op when it answers.
     // toIdle first: a prompt held on the request goes on before the report.
     const was = s.state
+    dropHalf($, true) // the user's own /clear: the half's file is stale (RT-3b T36)
     toIdle($)
     if (p && (was === 'awaiting' || was === 'approved')) report($, p.op.id, 'cancelled', ['--error', 'abandoned'])
     else if (p && was === 'seeding') report($, p.op.id, 'failed', ['--error', 'handoff_incomplete'])
@@ -1890,14 +2039,15 @@ export function register(on) {
       }
       return next(e)
     }
-    if (s.state === 'awaiting' && s.pending && s.pending.idle) {
+    if (s.halfBeginning) return next(e) // a half holds no prompt
+    if (s.state === 'awaiting' && s.pending && s.pending.idle && !s.pending.half) {
       withdrawIdle($, s.pending)
       return next(e)
     }
     const open = s.state === 'awaiting' ? s.pending : undefined
     const begun = s.state === 'beginning' ? s.begun : undefined
     if (!open && !begun) return next(e)
-    if (open && open.unanswered) return next(e) // the daemon paused the session over this card: nothing is held on it (RT-2c T27)
+    if (open && (open.unanswered || open.half)) return next(e) // the daemon paused the session over this card: nothing is held on it (RT-2c T27)
     let approved = false
     holding += 1
     try {
@@ -1939,6 +2089,7 @@ export function register(on) {
     } else if (s.state === 'beginning') {
       toIdle($) // the begin still out answers for a gone generation: its op is cancelled{abandoned}
     }
+    dropHalf($, false) // the daemon deletes the half's row at a compaction (RT-3b T36)
     s.lastAskPct = undefined // after a compaction the next ask needs ≥ threshold again
     s.askEpoch++ // an ask in the air answers for the context that is gone: it must not put its lastAskPct back
     s.askBusy = undefined

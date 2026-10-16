@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/wake/purdex/internal/resources"
 	_ "modernc.org/sqlite"
@@ -598,6 +599,8 @@ var decisionColumns = []struct{ name, def string }{
 	{"offered_at", "INTEGER NOT NULL DEFAULT 0"},
 	{"confirmed_at", "INTEGER NOT NULL DEFAULT 0"},
 	{"notice", "TEXT NOT NULL DEFAULT ''"},
+	// P2f: how many nested answers (a run below this row's holder) it covered.
+	{"nested_runs", "INTEGER NOT NULL DEFAULT 0"},
 }
 
 // hostMinutesSchema is the D-8.2 timeline: one row per minute, written by the
@@ -634,6 +637,11 @@ var minuteColumns = []struct{ name, def string }{
 	{"danger_s", "INTEGER NOT NULL DEFAULT 0"},
 	{"pressure_max", "INTEGER NOT NULL DEFAULT 0"},
 	{"zone_max", "INTEGER NOT NULL DEFAULT 0"},
+	// Host load control (L2): the minute's peaks of the gate's slot records, which replace the lease columns above
+	// (held, heavy_held, sum_charge, waiting, unleased, written 0 from L2 on; a row from before keeps them).
+	{"heavy_running", "INTEGER NOT NULL DEFAULT 0"},
+	{"light_running", "INTEGER NOT NULL DEFAULT 0"},
+	{"gate_waiting", "INTEGER NOT NULL DEFAULT 0"},
 }
 
 // migrateDecisionColumns adds what the D-8 monitoring record needs, and is a
@@ -668,11 +676,21 @@ func migrateDecisionColumns(db *sql.DB) error {
 		if haveMin[c.name] {
 			continue
 		}
-		if _, err := db.Exec("ALTER TABLE host_minutes ADD COLUMN " + c.name + " " + c.def); err != nil {
+		if err := addColumn(db, "host_minutes", c.name, c.def); err != nil {
 			return fmt.Errorf("migrate resources db: add host_minutes.%s: %w", c.name, err)
 		}
 	}
 	return nil
+}
+
+// addColumn adds a column. A column that is there already — another opener of the same database added it between our look at
+// the columns and this statement — is what was wanted, not an error.
+func addColumn(db *sql.DB, table, name, def string) error {
+	_, err := db.Exec("ALTER TABLE " + table + " ADD COLUMN " + name + " " + def)
+	if err != nil && strings.Contains(err.Error(), "duplicate column name") {
+		return nil
+	}
+	return err
 }
 
 // columnSet lists a table's column names.
@@ -712,6 +730,8 @@ type minuteRow struct {
 	// pressure level and zone.
 	SampledS, NormalS, WarningS, DangerS int
 	PressureMax, ZoneMax                 int
+	// Host load control: the minute's peaks of the heavy and light commands holding a slot and of the commands waiting for one.
+	HeavyRunning, LightRunning, GateWaiting int
 }
 
 // InsertMinute stores one row. A minute that is already stored is merged, not
@@ -725,8 +745,8 @@ func (s *leaseStore) InsertMinute(r minuteRow) error {
 	}
 	if _, err := s.db.Exec(`INSERT INTO host_minutes
 		(at, load1, ncpu, mem, measured, full, full_ticks, full_starts, full_longest_s, held, heavy_held, sum_charge, waiting, unleased,
-			sampled_s, normal_s, warning_s, danger_s, pressure_max, zone_max)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			sampled_s, normal_s, warning_s, danger_s, pressure_max, zone_max, heavy_running, light_running, gate_waiting)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(at) DO UPDATE SET
 			load1 = max(load1, excluded.load1), ncpu = excluded.ncpu, mem = max(mem, excluded.mem),
 			measured = max(measured, excluded.measured), full = max(full, excluded.full),
@@ -736,9 +756,12 @@ func (s *leaseStore) InsertMinute(r minuteRow) error {
 			waiting = max(waiting, excluded.waiting), unleased = max(unleased, excluded.unleased),
 			sampled_s = sampled_s + excluded.sampled_s, normal_s = normal_s + excluded.normal_s,
 			warning_s = warning_s + excluded.warning_s, danger_s = danger_s + excluded.danger_s,
-			pressure_max = max(pressure_max, excluded.pressure_max), zone_max = max(zone_max, excluded.zone_max)`,
+			pressure_max = max(pressure_max, excluded.pressure_max), zone_max = max(zone_max, excluded.zone_max),
+			heavy_running = max(heavy_running, excluded.heavy_running), light_running = max(light_running, excluded.light_running),
+			gate_waiting = max(gate_waiting, excluded.gate_waiting)`,
 		r.At, r.Load1, r.NCPU, r.Mem, r.Measured, full, r.FullTicks, r.FullStarts, r.FullLongestS, r.Held, r.HeavyHeld,
-		r.SumCharge, r.Waiting, r.Unleased, r.SampledS, r.NormalS, r.WarningS, r.DangerS, r.PressureMax, r.ZoneMax); err != nil {
+		r.SumCharge, r.Waiting, r.Unleased, r.SampledS, r.NormalS, r.WarningS, r.DangerS, r.PressureMax, r.ZoneMax,
+		r.HeavyRunning, r.LightRunning, r.GateWaiting); err != nil {
 		return fmt.Errorf("insert host minute: %w", err)
 	}
 	return nil

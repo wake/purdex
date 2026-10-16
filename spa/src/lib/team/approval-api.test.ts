@@ -3,7 +3,7 @@
 // `{error, detail, approval}`; the 409s carry the Approval, so the caller can say who handled it.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
-import { ApprovalApiError, decideApproval, fetchInflight, listOpenApprovals } from './approval-api'
+import { ApprovalApiError, decideApproval, fetchApproval, fetchInflight, listOpenApprovals } from './approval-api'
 import { leadPayloadOf, selfRelayPayloadOf, type Approval } from './types'
 
 const testGlobal = globalThis as typeof globalThis & { fetch: ReturnType<typeof vi.fn> }
@@ -136,6 +136,26 @@ describe('approval-api', () => {
       expect(await listOpenApprovals(hostId)).toEqual([])
       testGlobal.fetch.mockResolvedValueOnce(json({}))
       expect(await listOpenApprovals(hostId)).toEqual([])
+    })
+  })
+
+  describe('fetchApproval', () => {
+    it('GETs /api/team/approvals/{id} (no wait) and returns the row, unanswered_at included', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json(approval({ id: 'req/1', unanswered_at: 7 })))
+      const a = await fetchApproval(hostId, 'req/1')
+      const [url, init] = testGlobal.fetch.mock.calls[0]
+      expect(url).toBe('http://100.64.0.2:7860/api/team/approvals/req%2F1')
+      expect(init.method).toBe('GET')
+      expect(a.unanswered_at).toBe(7)
+    })
+    it('a body that is not an Approval is bad_response', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ id: 'req-1' }))
+      expect((await rejection(fetchApproval(hostId, 'req-1'))).code).toBe('bad_response')
+    })
+    it('404 not_found is an ApprovalApiError with status 404', async () => {
+      testGlobal.fetch.mockResolvedValueOnce(json({ error: 'not_found', detail: 'no such approval request' }, 404))
+      const err = await rejection(fetchApproval(hostId, 'gone'))
+      expect([err.status, err.code]).toEqual([404, 'not_found'])
     })
   })
 

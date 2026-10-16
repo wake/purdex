@@ -14,7 +14,7 @@
 // persisted, so a reload shows the dialog again. It is temporary: whatever leaves nothing open clears it, so the next
 // request opens the dialog; a new request (`applyOpened`) never does — only a click restores.
 import { create } from 'zustand'
-import type { Approval, Grant } from '../lib/team/types'
+import { withUnanswered, type Approval, type Grant } from '../lib/team/types'
 
 /** Tombstones kept per host; past this the oldest is dropped (a request id is a UUID, 256 is hours of closes). */
 export const TOMBSTONES_PER_HOST = 256
@@ -31,8 +31,6 @@ export interface QueuedDecision {
   approval: Approval
   decision: Decision
   grant?: Grant
-  /** 「這個 session 不再詢問」 was ticked: the session id to pause (POST /api/relay/self off) before the decision. */
-  pauseSession?: string
 }
 
 /** NUL-joined, as the pane-keyed dialogs do: a host id or a request id may contain any printable separator. */
@@ -56,13 +54,16 @@ export interface ApprovalStoreState {
   setMinimized: (v: boolean) => void
   /** Replace the host's whole open set from a snapshot and clear its tombstones; returns the ids held before that are not in it. */
   applySnapshot: (hostId: string, approvals: Approval[]) => string[]
+  /** A later read of a request this app holds (the re-read at its deadline): if it ran out, take `unanswered_at` and the sentinel
+   *  deadline from it (`withUnanswered`). Nothing for an unknown or no-longer-open request. */
+  applyUnanswered: (hostId: string, fresh: Approval) => void
   /** Add an opened request; false when it was already held, is not open, or was closed before (tombstoned). */
   applyOpened: (hostId: string, approval: Approval) => boolean
   /** Remove a request on any close and tombstone its id (absent or not). Tells whether the decision was ours, elsewhere, or the request unknown. */
   applyClosed: (hostId: string, approval: Approval) => 'absent' | 'ours' | 'elsewhere'
   markDecidedHere: (hostId: string, id: string) => void
   unmarkDecidedHere: (hostId: string, id: string) => void
-  queueDecision: (hostId: string, approval: Approval, decision: Decision, grant?: Grant, pauseSession?: string) => void
+  queueDecision: (hostId: string, approval: Approval, decision: Decision, grant?: Grant) => void
   /** Remove and return the host's queued decisions (each is sent at most once). */
   takeQueued: (hostId: string) => QueuedDecision[]
   /**
@@ -119,12 +120,29 @@ export const useApprovalStore = create<ApprovalStoreState>()((set, get) => ({
     }
     for (const a of open) {
       const key = approvalKey(hostId, a.id)
-      // Keep the held object when the same request is still open: the dialog is keyed on it.
-      next[key] = get().entries[key] ?? { hostId, approval: a }
+      // Keep the held object when the same request is still open: the dialog is keyed on it. One exception: a card that ran out
+      // while this app held it (the daemon sends no event op for that, `relay.unanswered.v1`) arrives here, with `unanswered_at`
+      // and the sentinel deadline; `withUnanswered` takes those two fields and keeps everything else.
+      const held = get().entries[key]
+      if (held === undefined) next[key] = { hostId, approval: a }
+      else {
+        const merged = withUnanswered(held.approval, a)
+        next[key] = merged === held.approval ? held : { ...held, approval: merged }
+      }
     }
     // The daemon's snapshot is authoritative: whatever it lists is open now, tombstones or not.
     set({ entries: next, closedIds: without(get().closedIds, hostId), ...endMinimizeIfEmpty(next) })
     return vanished
+  },
+
+  applyUnanswered: (hostId, fresh) => {
+    if (fresh.state !== 'open') return
+    const key = approvalKey(hostId, fresh.id)
+    const held = get().entries[key]
+    if (held === undefined) return
+    const merged = withUnanswered(held.approval, fresh)
+    if (merged === held.approval) return
+    set((s) => ({ entries: { ...s.entries, [key]: { ...held, approval: merged } } }))
   },
 
   applyOpened: (hostId, approval) => {
@@ -158,8 +176,8 @@ export const useApprovalStore = create<ApprovalStoreState>()((set, get) => ({
   markDecidedHere: (hostId, id) => set((s) => ({ decidedHere: { ...s.decidedHere, [approvalKey(hostId, id)]: true } })),
   unmarkDecidedHere: (hostId, id) => set((s) => ({ decidedHere: without(s.decidedHere, approvalKey(hostId, id)) })),
 
-  queueDecision: (hostId, approval, decision, grant, pauseSession) =>
-    set((s) => ({ queued: { ...s.queued, [approvalKey(hostId, approval.id)]: { hostId, approval, decision, grant, ...(pauseSession ? { pauseSession } : {}) } } })),
+  queueDecision: (hostId, approval, decision, grant) =>
+    set((s) => ({ queued: { ...s.queued, [approvalKey(hostId, approval.id)]: { hostId, approval, decision, grant } } })),
 
   takeQueued: (hostId) => {
     const taken: QueuedDecision[] = []
@@ -206,13 +224,6 @@ export const selectCurrent = (s: ApprovalStoreState): ApprovalEntry | null => {
 }
 
 export const selectOpenCount = (s: ApprovalStoreState): number => Object.keys(s.entries).length
-
-/** The deadline the pill counts down to (U22 (b)): the smallest `deadline_at` across hosts; null when nothing is open. */
-export const selectNearestDeadline = (s: ApprovalStoreState): number | null => {
-  let nearest: number | null = null
-  for (const e of Object.values(s.entries)) if (nearest === null || e.approval.deadline_at < nearest) nearest = e.approval.deadline_at
-  return nearest
-}
 
 export const selectOpenCountFor = (hostId: string) => (s: ApprovalStoreState): number => {
   let n = 0
