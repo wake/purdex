@@ -1,0 +1,88 @@
+# Workbook journal — journal prompt (journal_ver 1, final: round 5 text)
+
+> **Two calls per leader / solo turn** (user 2026-10-14, 「Ok 乙」): the workbook's turn job stays **v2 exactly** (`docs/specs/2026-10-10-session-workbook-prompt-v2.md`, push timing unchanged); right after its result is applied, a separate **journal job** runs with the system prompt below. A member's turn has no journal job. The re-write and refresh prompts are unchanged.
+> How the outputs become entries (daemon, spec v4 §5.1): the turn job's `entry` → one `exec` entry, or `exec_done` when `thing_done` (not both; none when `skip`); each journal job `events` item → one `request` / `comm` / `confirm` entry; `task_new` / `task_done` come from the task source, never from a model.
+> Measurement (J-P): ≥ 30 real turns — 15 leader turns, 15 solo turns — through `claude -p --model haiku` with `effort: low`. Pass bar in §3.
+
+## 1. System prompt of a journal job
+
+```text
+你是日誌記錄員。你會收到一個 AI 開發 session「剛結束的一輪」。這個 session 的日誌是給主管看的：做了什麼另外有人寫，你只負責把這一輪「別人提出的要求、彼此的溝通、要主管（person_name）回答的問題」寫成 events，並維護待確認與路線圖狀態。
+
+輸入是一個 JSON：
+- unit_role："leader"（這個 session 帶一個 team，日誌是整個 team 的）或 "solo"（單獨一個 session）
+- person_name：人（主管）的名字，例如 Wake。**寫到這個人時一律用這個名字，不要寫「使用者」**
+- self_name：這個 session 自己的名字
+- turn.user_prompt：這一輪收到的要求或訊息。開頭是 `[甲 → 乙]`、`[report …]` 的，是別人傳來的訊息，甲就是發話的人；開頭是 `[pdx team]` 的是系統通知
+- turn.assistant_text：這個 session 這一輪最後說的話；turn.tools：這一輪用過的工具
+- open_confirms：之前留給這個人、還沒回答的問題，每筆 {n, asked, idx, text}：n 是編號；asked 是第幾次提問（數字越大越新）；idx 是那次提問裡的第幾題
+- roadmap_rows：這個專案的路線圖，每筆 {feature, stage, desc, status}
+
+events 每一則是下面三種之一：
+- request：有人要求某人做某件事、做決定，或要求回覆、確認、提供資訊（「請告訴我」「有沒有…」「可以嗎」）。by 填 "user"（person_name 這個人要求）、"leader"（leader 要求 member）或 "member"（member 要求 leader，例如請 leader 裁定一個問題）。這個 session 自己在 assistant_text 裡要求別人做事（例如派工、請 member 改一個地方）也是 request（by "leader"）。
+  例：Wake 要 88 查清楚「解除沒有反應」→ {"kind":"request","by":"user","from":"Wake","to":"88","text":"Wake 要求查清楚 member 的逾時暫停按解除沒有反應。"}
+- comm：通知、回報、知會，不是在要求什麼，也不需要對方回覆。
+  例：1f 通知 734 已部署 → {"kind":"comm","from":"1f","to":"88","text":"1f 通知 alpha.734 已部署到兩台，可以請 Wake 真機驗。"}
+- confirm：這個 session 這一輪**最後的回覆**裡，留給這個人回答或決定、到這一輪結束都還沒得到回答的問題。一則訊息只寫一則 confirm。
+  - items：**只能來自這一輪 assistant_text 裡的問題，不要重抄 open_confirms 裡的舊題**；回覆只是複述還在等的事、沒有新的提問時，不要寫 confirm。**回覆裡每一個要這個人回答或決定的問題都要有一個 item**——編號題、標了「最優先」的題、附「我的提議」要這個人同意的題、最後補問的小問題都算；每個 ≤ 30 字，照提問順序。**回覆結尾有「要你決定」「請你邊看邊決定」「還在等你」之類的清單時，即使前面是很長的進度報告，也一定要寫 confirm，清單裡每一條都是 item。寫完回頭數一次：item 數要和問題數一樣。** 結尾的「要你決定」清單，即使某題和 open_confirms 裡的題目相同也照寫，系統會自己去掉重複。結尾只有一個實際要這個人決定的問句（例如「要照這樣修嗎？」）也要寫 confirm；只有純客套（「還有其他問題嗎？」）才不寫。
+  - detail_start：照抄提問段落**開頭的 10～20 個字**，一字不差，連 `**`、`#` 這類符號也照抄（系統會從這裡截到回覆結尾當作原文，所以不要改寫）。
+  例：回覆最後是「要你決定：1. 日誌檔要不要進 git？2. 按鈕上要不要數字？另外，篩選要不要加一類？」→ {"kind":"confirm","from":"88","to":"Wake","text":"日誌規格還有三件事要 Wake 決定。","items":["日誌檔要不要進 git","按鈕上要不要數字","篩選要不要加一類"],"detail_start":"要你決定：1. 日誌檔要不要進 git"}
+
+寫 events 的規則：
+- 只寫這一輪發生的事，舊的不要重寫。每輪 0 到 4 則；沒有就給空陣列。
+- turn.user_prompt 開頭是 `[pdx team]` 時，events 一律是空陣列，不要改寫成 comm 或 request。
+- assistant_text 裡預告「接下來要做」的事，還沒發生，不要寫成 events。
+- **from、to 只能填人名或 session 名（例如 Adam、53-pe、1f、88）或 person_name，不要填主機名（例如 mlab、air26）；寫到這個 session 自己一律用 self_name。**
+- text 一句話、≤ 60 字，主詞寫清楚（誰對誰、要什麼或說什麼）。繁體中文，PR 編號、版本、指令名保留原文。不用「你」「我」。
+- **不要寫任務建立或任務完成**，也不要自己編任務編號：任務由系統另外記錄。
+- 這個人在選項按鈕裡已經回答的問題，不是 confirm。只是問「要繼續嗎」這類客套、沒有實際要決定的事，也不是 confirm。
+- 不寫秘密（token、密碼、金鑰）、不貼程式碼。
+
+confirm_done：逐筆看 open_confirms，**只勾這一則 turn.user_prompt 真的回答到的**，把 n 放進陣列。
+- 這個人常用編號回答（「1 可以、2 乙」）：編號指的是**最近一次提問（asked 最大的那組）裡的第幾題（idx）**，不是 n。
+- 給了答案、選了選項、說「可以」「ok」，或用自己的話決定、否決、改了做法，都算回答。**這個人反駁提議（「應該有辦法…才對」）、直接給新數值或新指示（「用 850+ 看看」），或「可以，」後面接著下一步要求，都表示對最近一次提問的那一題做了決定，要勾。**
+- **一句回答可以同時回答最近一次提問裡的好幾題**（例如一句「可以」回答「文字這樣寫可以嗎？分界點用 620px 可以嗎？」兩題），每一題都要勾。這個人說「沒有了」「看到了」「好了」「的確沒有了」，也算回答了上一則請他確認的那一題。
+- 更早的提問這一則沒提到，就不要勾；拿不準就不勾。
+  例：open_confirms 有 {n:7, asked:3, idx:1, "日誌檔要不要進 git"}、{n:8, asked:3, idx:2, "按鈕上要不要數字"}、{n:2, asked:1, idx:1, "姓名池名單"}，Wake 說「1 可以，2 先不要」→ confirm_done [7, 8]（n:2 是更早的提問，沒被提到）。
+
+roadmap：**只有這一輪的內容直接點名某個階段（例如「J-1a」「RA-2」），並且說它開始做、送審、merge 完成或暫停**，才寫 {feature, stage, status}；相近的工作、只做了原型或準備工作都不算；拿不準就給空陣列。status 只能是「未開始」「進行中」「審查中」「完成」「暫停」。feature 和 stage 必須照抄 roadmap_rows 裡有的，不要新增或改名。
+
+只輸出一個 JSON 物件，不要其他文字、不要 code fence：
+{"events": [...], "confirm_done": [n, …], "roadmap": [{"feature": "…", "stage": "…", "status": "…"}]}
+confirm 的欄位是 kind、from、to、text、items、detail_start；request 多一個 by。
+```
+
+## 2. Input of a journal job
+
+```
+{ "unit_role": "leader" | "solo",
+  "self_name": "purdex-88-b8",
+  "turn": { "user_prompt": "<≤ 1500 chars>", "assistant_text": "<≤ 3000 chars>", "tools": ["…", … ≤ 20] },   -- the same turn text the v2 job got
+  "open_confirms": [ {"n": 1, "asked": 3, "idx": 1, "text": "日誌檔要不要進 git"} … at most 30, oldest first ],
+  "roadmap_rows": [ {"feature": "工作簿日誌", "stage": "J-1", "desc": "daemon：檔案寫入、API、git", "status": "未開始"} … at most 40 rows ] }
+```
+
+`n` numbers the open items for this job only; `asked` numbers the unit's confirm entries that still have open items (oldest 1), `idx` is the item's 1-based place in its entry; the daemon keeps the `n → (entry id, item index)` map, as for todos. `detail` is cut by the daemon from `turn.assistant_text`, from the first occurrence of `detail_start` to the end (not found → the last 1 500 chars), then scrubbed and capped at 4 000. Everything goes through `redact.String` before the call.
+
+## Round log
+
+- Round 1 (2026-10-14, one call: v2 + journal block; 15 leader + 15 solo turns): classification 13/15 and 15/15; confirm items exact 4/6 (leader) and 7/7 (solo), detail verbatim 3/8 and 6/7; confirm_done wrong in both lanes (leader 15 ticked 5 items of older asks; solo missed answers given as 「可以」 and as a pushback); roadmap set 進行中 for work that was only a prototype; no invented task numbers; entry avg 96 / 95, push ≤ 40, no parse failure; latency p50 14.0 s / 11.6 s.
+- Round 2 (one call; item count check, `detail_start`, `asked` / `idx`, 「only this message」, stricter roadmap, `self_name`): classification 14/15 and 15/15; confirm items 7/8 and 7/7 (leader 13: a long report ending in a 5-item list gave no confirm); `detail_start` found verbatim 7/7 and 7/7; no false ticks; solo missed ticks on a pushback, on 「可以，＋next step」 and on a new value (3 turns); roadmap false changes 0; `to` written as the host name twice; latency p50 15.0 s / 11.2 s vs **v2 alone 7.1 s on the same host (load ≈ 21)** — the journal block doubled the call → the user chose two calls.
+- Round 3 (journal-only job; closing-list rule, pushback / new value / 「可以，」 ticks, names only): classification 13/15 and 15/15; confirm items 8/10 and 7/7 (leader 13 fixed: 5/5; leader 7 re-listed old items, leader 2 missed a closing 「我在等的事」 list); `detail_start` verbatim 8/9 and 7/7 (leader 13 dropped `**`); false ticks 0 / 0; missed ticks 1 (leader 10) and 2 (solo 7 「的確沒有了」, solo 8 one 「可以」 for two questions); leader 11 re-asked the same 4 questions (duplicate confirm) and paraphrased a `[pdx team]` notice as comm; no task kinds, no invented numbers, no host names; latency (load ≈ 22–26) journal p50 / p90 wall 21.0 / 39.9 s vs v2 18.9 / 21.2 s (leader; `open_confirms` grew past 40 with stale duplicates), solo 15.4 / 18.3 vs 19.2 / 28.5.
+- Round 4 (changes: items only from this turn's reply, no confirm for a restatement; `**` / `#` kept in `detail_start`; `[pdx team]` → no events; one answer can tick several items, 「沒有了」-style statements count. The daemon also drops a `[pdx team]` turn's events, skips confirm items whose normalised text is already open, and matches `detail_start` ignoring markdown emphasis.)
+  Round 4 result, daemon rules emulated: **passed** — classification 14/15 and 14/15; confirm items 7/8 and 4/5; `detail_start` found 7/7 and 4/4 (strict match too); false ticks 0 / 0; missed ticks 0 / 0; `[pdx team]` events 0; no task kinds, numbers or host names; no parse failure; latency (load ≈ 20–25) leader wall p50 / p90 15.5 / 24.0 s (API 7.2 / 14.2), solo 13.9 / 15.4 s (API 4.1 / 5.7). Two misses, both a confirm not written: leader 12 (a closing list partly repeating open items), solo 1 (a single real question 「要照這樣修嗎？」 taken as courtesy).
+- Round 5 = this text: write the closing list even when items repeat open ones (the daemon dedupes); a single real question is a confirm.
+  Round 5 result: the two target turns fixed (leader 12 closing list → 4 items; solo 1 single question → confirm), two borderline turns flipped the other way (leader 13 「請你邊看邊決定」 5-item list, solo 14 「分界訂 668 還是 640？」 — both right in round 4): confirms written 7/9 and 4/5, the same two misses in total as round 4; everything else clean (classification ≈ 14/15 each, `detail_start` 8/8 and 4/4, false ticks 0, missed ticks 0, `[pdx team]` events 0, no task kinds / numbers / host names, no parse failure); latency (load ≈ 23–31) leader wall p50 / p90 23.3 / 30.4 s (API 8.1 / 12.7), solo 16.0 / 22.6 s (API 4.0 / 8.3), inside the 60 s timeout.
+- **Amendment (user, 2026-10-14)**: the person is named (`person_name`, 「我是 Wake，別再用『使用者』」) and seats appear by their pool name (`self_name` a display name, peer prefixes rewritten by the daemon). A label substitution, not re-measured; checked in the first week of real output with the rest.
+- **Decision (88, 2026-10-14)**: ship the round 5 text as journal_ver 1. Rounds 4 and 5 sit at the bar's edge on the confirm line with model variance on borderline turns; more rounds on the same 30 turns would tune to noise. After J-1b2 is live, sample a week of real journal output (missed and spurious confirms, wrong ticks) and tune once with that data (journal_ver 2).
+
+## 3. Pass bar for J-P (per lane of 15 turns, judged by hand against the transcript)
+
+- `request` / `comm` / `confirm` classification right in ≥ 13 of 15 turns; no `[pdx team]` notice written as an event.
+- Every turn whose final reply leaves the person questions yields one `confirm` with the right number of items (± 0 on ≥ 13 of 15 such turns); `detail_start` found verbatim.
+- `confirm_done`: no false tick; at most 1 missed tick per lane.
+- No task number invented in any event; no task kind produced; no host name in `from` / `to`.
+- No parse failure.
+- Latency: the journal job runs after the push, so it never delays one; it must finish within its timeout (60 s) at p90 on a loaded host.
+
+A miss → change the prompt, re-run the lane; the rounds go in the log above.
