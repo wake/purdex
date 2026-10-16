@@ -17,6 +17,8 @@
 | U6 | Settings live on each daemon (the `watch` row in host config; the gate's `[gate]` through a daemon API), not Profile Sync; each daemon host has its own 資源管制 switch (`gate.enabled`). |
 | U7 | Words: 正常／偏高／過載／離線 for a host's zone; the shield badge is the host cells' `CountBadge` (≈ 11 px), the shield is green. |
 | U8 | Design and prototypes are done with Opus; the style follows the real App (the prototype imports the App's own `TabBar`, `Section`, `SettingItem`, `SegmentControl`, `ToggleSwitch`, `HostBadge`). |
+| U9 | (10-16, #3017) **No 全部略過**: nothing in the area closes an event; an event is pending or handled by the watcher, nothing else. |
+| U10 | (10-16, #3017) The watcher's bounds for changing the slot counts are a setting of the `watch` row, `slot_bounds` (default heavy 1–2, light 2–4), edited in the area's 守門員 settings. |
 
 ## 2. Entry points
 
@@ -28,6 +30,7 @@
   | State | Look | Title |
   |---|---|---|
   | no watcher (`current` empty and nobody awake or resting) | outline, `text-muted` | 守門員（未啟動） |
+  | no host answered the status (an older daemon, or none reachable) | outline, `text-muted` | 守門員（讀不到狀態） |
   | awake | filled, `status-success` | 守門員（醒著） |
   | resting | filled, `status-success` | 守門員（休息中） |
   | unhandled events > 0 (any of the above) | the state's look + red `CountBadge` with the count | 守門員（n 件待處理） |
@@ -75,7 +78,10 @@ Hover tooltips stay as F-2b built them.
 ## 4. The 守門員 tab
 
 The watcher is an ordinary Claude Code session started by the daemon of the host that holds it (load-control spec
-§12.4). The tab shows that session like any session tab: the session strip (Deck / rebuild / detach) and the terminal.
+§12.4). The tab shows that session's terminal under a strip of its own (the status text below). It offers no rebuild
+and no detach: the daemon owns the watcher, and a rebuild would start a second agent outside `pdx-watch`. Deck is
+not offered for now (§10 Q3). The terminal is drawn from the watch status each time and is never stored in the tab,
+so the session strip's pane actions of a session tab do not apply (plan §1).
 
 | Watch state | The tab shows |
 |---|---|
@@ -96,10 +102,10 @@ filter rows of chips (主機／種類／狀態), then the events newest first wi
 
 - **Count line**: 「n 件待守門員處理」 (status-warning) or 「沒有待處理的事件」.
 - **Guardian line**: 「守門員在 {host}・{醒著｜休息中，有新事件會自動醒來｜醒著，正在處理}・{mode}・{model}」, or when
-  there is none 「沒有守門員：事件不會被處理。可以到「守門員」頁簽啟動，或全部略過。」
+  there is none 「沒有守門員：事件不會被處理。可以到「守門員」頁簽啟動。」
 - **Row**: time; a kind tag (one hue per kind) and, for E1, its label tag; the host label; the status on the right;
   the command (mono) or for E2 「{host} 整機記憶體壓力過高」; a facts line (cwd・session・峰值 n 核心・n MB・持續 …);
-  under a handled row the watcher's note with a filled shield, under a skipped one the skip reason with an arrow.
+  under a handled row the watcher's note with a filled shield.
 
   | Kind (wire) | Tag text | Short (filter) |
   |---|---|---|
@@ -110,10 +116,9 @@ filter rows of chips (主機／種類／狀態), then the events newest first wi
 
   E1 labels: `gate_gap` 漏網 (status-error), `unknown` 未知工具 (status-warning), `allowed` 允許的 (text-secondary).
 - **Statuses**: pending 「待守門員處理」 (or 「待處理（沒有守門員）」 when there is none), handled 「守門員已處理」 + its
-  note, skipped 「已略過」.
-- **Nobody marks an event handled** (U3). The one person-side action is **全部略過**, shown only when there is no
-  watcher and n > 0: it sets every pending event of every daemon host to skipped (A3) so the badge does not count
-  events nobody will ever handle. (Kept from the prototype; see §10 Q1.)
+  note.
+- **Nobody closes an event** (U3, U9): the area has no button that changes an event; the count goes down only when the
+  watcher acknowledges.
 - **Sources**: each daemon host's own record (mlab and a26); the App reads both and merges by time. E2 for a19 and
   mserv arrives later from the fleet primary (load-control spec §12.8) and needs no UI change: it is an event of the
   host that records it, labelled with the probe host.
@@ -167,9 +172,13 @@ Offline: 「這台離線，無法讀寫設定。」 and nothing editable.
    (nice／背景／不調整), nice 值, 壓力門檻 (等級), 換頁率門檻 (頁／秒), 磁碟最低剩餘 (GB). Each change is one
    `key=value` write, like `pdx gate set` (applies to the next command).
 4. **守門員** (the host's `watch` row, existing `GET /api/hostconfig` + `PUT /api/hostconfig/watch`, read-modify-write
-   of the whole row): 啟用守門員, the six detection thresholds, 通知與開啟順序 (`targets`), 模式 (常駐／巡檢), 巡檢閒置
-   分鐘, 自動喚醒, 模型, 工作目錄, 啟動 prompt and 喚醒 prompt (textareas; empty = built-in). When the two daemons'
-   `targets` differ, a warning line under the field (the daemons warn as well, §12.3).
+   of the whole row): 啟用守門員, the seven detection fields (`x_cores`, `y_mb`, `t_s`, `pressure_level`,
+   `pressure_t_s`, `page_rate`, `page_t_s`), 通知與開啟順序 (`targets`), 模式 (常駐／巡檢), 巡檢閒置分鐘, 自動喚醒,
+   啟動指令 (`agent_command`, which replaced the model name on the A line, 10-16), 工作目錄, 啟動 prompt and 喚醒
+   prompt (textareas; empty = built-in), and **守門員可調的名額範圍** (`slot_bounds`, U10): for 重指令 and 輕指令 a
+   最少 and a 最多 (each class 1 ≤ min ≤ max ≤ 64; default heavy 1–2, light 2–4; a pair that breaks the rule is
+   refused by the daemon and its 400 text shown under the pair). When the two daemons' `targets` differ, a warning line
+   under the field (the daemons warn as well, §12.3).
 
 ### 6.3 設定, probe hosts (a19, mserv)
 
@@ -187,15 +196,15 @@ A note 「沒有 daemon 的主機：由主方用 SSH 探查；沒有資源管制
 | **slot holders** (command, project, session, since, pid), waiter `session`, admission reason | `slow.queue.holders`, `slow.queue.waiters[].session`, `slow.queue.admission_reason` | **B line adds** (W5b): from `gate.Status.Heavy/Light` (already read over SSH and locally) and `Admission{Held,Reason}` (#2971) |
 | queue history | `GET /api/gate/decisions` | **A line** (A1) |
 | gate settings, profiles, `gate.enabled` | `GET/PUT /api/gate/config`, `POST /api/gate/profile` | **A line** (A2) |
-| watcher where/state, events, unhandled, skip, start, wake, `watch.changed` | `/api/watch/*` | **A line** (A3; W2b/W3b) |
+| watcher where/state, events, unhandled, start, wake, `watch.changed`, `watch.events` | `/api/watch/*` | **A line** (A3; W2b/W3b) |
 | `watch` settings | `GET /api/hostconfig`, `PUT /api/hostconfig/watch` | existing |
 | probe-host settings | F-2a2 | B line |
 
 ## 8. What the A line is asked for
 
 All admin-token routes on each daemon host; the App calls each daemon host it is connected to. Times RFC 3339.
-The A line takes them after 743, in the order A1 → A3 → A2 (1f, 10-16). The writes (A2's `PUT`/`POST`, A3's skip,
-start and wake) are refused to device tokens (403) and are not opened to peers (`HostRoutePolicy`): only the Mac App,
+The A line takes them after 743, in the order A1 → A3 → A2 (1f, 10-16). The writes (A2's `PUT`/`POST`, A3's start
+and wake) are refused to device tokens (403) and are not opened to peers (`HostRoutePolicy`): only the Mac App,
 which holds each host's admin token as it does for the other host-config writes, changes a host's load policy. A2's
 writes use `pdx gate set`'s validation.
 
@@ -217,17 +226,17 @@ writes use `pdx gate set`'s validation.
   - `GET /api/watch/events?since=<time>&limit=<n>` → `{events: [...]}` newest first: `id`, `kind`, `at`, the E1 fields
     (`label`, `command` scrubbed, `cwd`, `session`, `peak_cores`, `peak_mb`, `duration_s`, `new`), the E2 fields
     (`pressure`, `page_rate`, `detail`), the E3/E4 fields (`slot`, `holder_pid`, `lock_pids`), and `status`
-    (`pending|handled|skipped`), `note`, `handled_at`.
+    (`pending|handled`), `note`, `handled_at`.
   - `GET /api/watch/unhandled` (plan W2b) → `{count}` for this host.
   - Handled with a note: `pdx watch ack <id>… --note "<one line>"` (the watcher's command; the note is required).
-  - `POST /api/watch/skip` with `{all: true}` → every pending event of this host becomes skipped, note 「沒有守門員，已略過」.
+  - No skip route (U9; #3017).
   - `POST /api/watch/start` → starts a watcher by §12.3 (202 with the chosen host, or 409 with the cooldown end).
   - `POST /api/watch/wake` with `{prompt}` → resumes the resting watcher with `wake_prompt` followed by the prompt.
   - `watch.changed` on the daemon's event stream when the watcher's fields above change, once per change (§12.6);
-    and **`watch.events`** `{host_id, unhandled, cause: recorded|acked|skipped}` for the badge and the events list,
+    and **`watch.events`** `{host_id, unhandled, cause: recorded|acked}` for the badge and the events list,
     once per operation (an ack of three ids sends one). Both plain `Broadcast` (agreed with the A line, #3010).
   - The A line's plan (10-16): `GET /api/watch/events` and `pdx watch ack <id>… --note` (required, one line ≤ 500
-    bytes) in W2b; `POST /api/watch/skip` only if the user keeps 全部略過 (§10 Q1); `POST /api/watch/start` follows
+    bytes) in W2b; `POST /api/watch/start` follows
     §12.3 — 200 when one is already awake, else 202 `{host}` (the chosen host's alias and id) or 409
     `{cooldown_until}`; `POST /api/watch/wake {prompt}` resumes with `wake_prompt` + a space + the prompt (≤ 4 KB in
     all, no control characters, else 400), in W3b.
@@ -236,23 +245,32 @@ writes use `pdx gate set`'s validation.
 
 ## 9. Phasing (one phase = one PR, ≤ 800 lines or ≤ 20 files)
 
+The phases are planned in `docs/plans/2026-10-16-watcher-area-plan.md` §2. Splitting the first draft's W5a, W5b and
+W5c (about 1700, 1100 and 1400 lines) gives these phases:
+
 | Phase | Content | Depends |
 |---|---|---|
-| W5a | The area (reserved workspace, the three pane kinds, tab order sync, host tabs following the fleet), the shield (states from `watch/status` only, no count yet), host cells' click target, the host tab's header and 狀態 without the queue (gauges, charts, processes) | F-2a1, F-2b |
-| W5b | Queue 當下: `queue.holders` / `waiters[].session` / `admission_reason` in `internal/fleet` + golden JSON + SPA wire; the lanes and the table | W5a, #2971 |
-| W5b2 | The queued symbol on the agent icon (§2.3) | W5b's wire (can go before W5b's UI) |
-| W5c | 設定: the 守門員 section (existing API), probe-host settings (F-2a2's editor), then the gate sections once A2 lands | W5a; A2 |
-| W5d | Queue 歷史 | W5a; A1 |
-| W5e | The 守門員 tab and the 事件 tab, the shield's count, `watch.changed` | W5a; A3 |
+| W5a1 | The area (reserved workspace, the three pane kinds, tab order sync, host tabs following the fleet), the shield (states from `watch/status`, no count yet), host cells' click target, the host tab's header and 行程, the 守門員 tab's status panel | F-2a1, F-2b |
+| W5a2 | The host tab's 資源 (gauges, charts, range) | W5a1 |
+| W5a3 | The 守門員 tab's terminal (`pdx-watch` on the holder) and the resting band without its input | W5a1 |
+| W5b | The queue wire: `queue.holders` / `waiters[].session` / `admission_reason` in `internal/fleet` + golden JSON + SPA types | #2971 |
+| W5b1 | Queue 當下: the lanes and the table | W5a1, W5b |
+| W5b2 | The queued symbol on the agent icon (§2.3) | W5b |
+| W5c1 | 狀態｜設定; the 守門員 section (existing API, with `slot_bounds`), probe-host settings (F-2a2's editor) | W5a1 |
+| W5c2 | The gate sections | W5c1; A2 |
+| W5d | Queue 歷史 | W5b1; A1 |
+| W5e | The 事件 tab, the count, the two pushes, 啟動守門員, the wake input | W5a3; A3 |
 
-W5a, W5b and the first half of W5c need nothing from the A line and can start after 743.
+W5a1 … W5a3, W5b, W5b1, W5b2 and W5c1 need nothing from the A line.
 
 ## 10. Open points
 
-- Q1 (user): 全部略過 when there is no watcher — keep it (the prototype has it), or drop it so that nothing is ever
-  closed by a person (U3 read strictly)? The spec keeps it; it marks events skipped, not handled.
-- Q2 (A line): how the watcher's session is identified (the proposed fixed tmux name `pdx-watch`) — the UI only needs
-  `tmux_session` in the status (§4), whatever the choice.
+- Q1 (user): 全部略過 — **decided 10-16: dropped** (U9, #3017).
+- Q2 (A line): how the watcher's session is identified — **decided**: the fixed tmux session `pdx-watch` (load-control
+  spec §12.4). The UI uses `tmux_session` from the status when it carries it, `pdx-watch` until then.
+- Q3 (user): the 守門員 tab without Deck (§4). The prototype showed Deck, rebuild and detach on its strip; rebuild and
+  detach are left out on purpose, and Deck can come later through a stored pane if the watcher should be readable in
+  Deck view.
 
 Out of scope: iOS; alerts or pushes on zone changes (the watcher's job); any history kept on a daemon for the charts;
 `pdx gate free` from the UI (the watcher's command after the person agrees).
