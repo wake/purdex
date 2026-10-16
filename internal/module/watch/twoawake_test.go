@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -84,6 +85,8 @@ type daemon struct {
 	now    time.Time // read and written through getNow/setNow (the module reads the clock from other goroutines)
 	alias  string
 	id     string
+	// noAutoWake turns the auto_wake setting off for a test (read by the module's goroutines, so atomic)
+	noAutoWake atomic.Bool
 }
 
 func (d *daemon) getNow() time.Time  { d.clk.Lock(); defer d.clk.Unlock(); return d.now }
@@ -154,7 +157,13 @@ func newPair(t *testing.T, orderA, orderB []string) *pair {
 			now: time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC), alias: alias, id: id}
 		s := watchsettings.Default()
 		s.Targets = order
-		m.settings = func() (watchsettings.Settings, error) { return s, nil }
+		m.settings = func() (watchsettings.Settings, error) {
+			out := s
+			out.AutoWake = out.AutoWake && !d.noAutoWake.Load()
+			return out, nil
+		}
+		// events never go to a live watcher, and a test drives each delivery pass itself
+		m.dlv.notifier, m.manualDelivery = &fakeNotifier{}, true
 		m.panes, m.ownerSrc, m.standDowner = d.panes, d.owners, d.stand
 		m.now = d.getNow
 		d.mux = http.NewServeMux()

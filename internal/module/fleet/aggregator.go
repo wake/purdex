@@ -104,6 +104,9 @@ type PushHost struct {
 	LastOKAt *time.Time `json:"last_ok_at"`     // always present: null before the first good reading
 	Fast     *FastView  `json:"fast"`           // always present: null before the first reading
 	Slow     *SlowView  `json:"slow,omitempty"` // only in the push right after it changed
+	// Full is the host's whole row as GET /api/fleet has it, present only while the host's look (kind, alias, name, icon, colors,
+	// icon_weight) is fresh: for lookRepeat pushes after it changed or the host joined the push sequence.
+	Full *HostJSON `json:"full,omitempty"`
 }
 
 type hostRow struct {
@@ -147,6 +150,8 @@ type Measure struct {
 	newestAt   time.Time
 	haveNewest bool
 	pushedSlow map[string]uint64
+	lookSig    map[string]string // the look last seen per host in the push sequence
+	lookLeft   map[string]int    // pushes still to carry Full for that host
 
 	life    sync.Mutex // activate / deactivate
 	active  bool
@@ -189,6 +194,8 @@ func (m *Measure) resetLocked() {
 	m.haveNewest = false
 	m.newestAt = time.Time{}
 	m.pushedSlow = map[string]uint64{}
+	m.lookSig = map[string]string{}
+	m.lookLeft = map[string]int{}
 	m.sessions = map[string]*liveSession{}
 	m.haveRev = false
 }

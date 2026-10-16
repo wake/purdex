@@ -8,7 +8,8 @@ import { WatchGuardianPane } from './WatchGuardianPane'
 import { WatchLaunchPanel } from './WatchLaunchPanel'
 import { useWatchStatusStore } from '../../lib/watch/status-store'
 import type { WatchStatus } from '../../lib/watch/status-types'
-import { useHostStore } from '../../stores/useHostStore'
+import { useHostStore, lookKeyOf } from '../../stores/useHostStore'
+import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useSessionStore } from '../../stores/useSessionStore'
 import zh from '../../locales/zh-TW.json'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -25,6 +26,7 @@ beforeEach(() => {
   readWatchRow.mockResolvedValue({ revision: 1, row: {}, agentCommand: 'claude --model opus', workdir: '~/Workspace/wake/mlab-purdex-watch' })
   useWatchStatusStore.getState().reset()
   useSessionStore.setState({ sessions: {} })
+  useHostLookStore.setState({ looks: {} })
   useHostStore.setState({
     hosts: { h1: { id: 'h1', name: 'mlab', ip: '1', port: 1, token: 't', order: 0, daemonId: 'd1' } },
     hostOrder: ['h1'], activeHostId: 'h1', runtime: { h1: { status: 'connected' } },
@@ -57,6 +59,28 @@ describe('WatchGuardianPane headings', () => {
     render(<WatchGuardianPane pane={pane} isActive />)
     expect(screen.getByTestId('watch-launch-title')).toHaveTextContent(t('watch.launch.no_session_title', { alias: 'mlab' }))
     expect(await screen.findByTestId('watch-launch-command')).toHaveTextContent('claude --model opus')
+  })
+})
+
+describe('the host name comes through the look', () => {
+  const setLookName = () => {
+    const key = lookKeyOf(useHostStore.getState().hosts.h1, {})
+    useHostLookStore.setState({ looks: { [key]: { name: 'Look Name' } } })
+  }
+
+  it('the guardian pane title uses the look name, not HostConfig.name', () => {
+    answer('h1', status('d1', 'awake'))
+    useSessionStore.setState({ sessions: { h1: [] } })
+    setLookName()
+    render(<WatchGuardianPane pane={pane} isActive />)
+    expect(screen.getByTestId('watch-launch-title')).toHaveTextContent(t('watch.launch.no_session_title', { alias: 'Look Name' }))
+  })
+
+  it('the launch panel host row uses the look name', () => {
+    answer('h1', status('d1', 'resting'))
+    setLookName()
+    render(<WatchLaunchPanel title="x" />)
+    expect(screen.getByTestId('watch-launch-host')).toHaveTextContent('Look Name')
   })
 })
 
