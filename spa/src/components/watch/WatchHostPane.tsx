@@ -1,8 +1,8 @@
 // spa/src/components/watch/WatchHostPane.tsx — one host's tab of the watcher area (watcher area spec §6): the header, 資源 and
-// 行程. The queue is W5b1, and 設定 W5c1; they fill in under this header.
+// 重指令排隊 (W5b1, daemon hosts) and 行程. 設定 is W5c1; it fills in under this header.
 //
-// Tab-hosted checklist: the readings come from the fleet store on every mount, but the choices the reader makes (the range now;
-// 狀態｜設定 and the queue sub-tab in W5b1/W5c1) live outside the component (`lib/watch/view-memory`), because the pane unmounts
+// Tab-hosted checklist: the readings come from the fleet store on every mount, but the choices the reader makes (the range and the queue sub-tab now;
+// 狀態｜設定 in W5c1) live outside the component (`lib/watch/view-memory`), because the pane unmounts
 // when another tab is shown. W5a2 adds the 資源 section (gauges, charts) and the range switch.
 import { useEffect, useMemo, useState } from 'react'
 import type { PaneRendererProps } from '../../lib/module-registry'
@@ -21,6 +21,7 @@ import { RANGES, stepMs } from '../../lib/watch/series'
 import { readRange, writeRange } from '../../lib/watch/view-memory'
 import { Gauge } from './Gauge'
 import { MetricRow, TimeAxis } from './MetricChart'
+import { QueueSection } from './QueueSection'
 
 const RANGE_OPTS = (t: (k: string) => string) => RANGES.map((r) => ({ value: r, label: t(`watch.host.range.${r}`) }))
 
@@ -153,6 +154,7 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
         <Section title={t('watch.host.resources', { range: t(`watch.host.range.${range}`) })}>
           <Resources view={view} range={range} now={now} />
         </Section>
+        {view.kind === 'daemon' && (offline || view.slow?.queue) && <QueueSection fleetHostId={view.id} queue={view.slow?.queue} offline={offline} />}
         <Section title={t('watch.host.procs')}>
           <div className="grid grid-cols-2 gap-8">
             <ProcTable testId="procs-cpu" title={t('watch.host.top_cpu')} rows={view.slow?.top_cpu ?? []} unit="cpu" offline={offline} />
