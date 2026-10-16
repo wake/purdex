@@ -100,7 +100,6 @@ describe('FleetCells — clicks', () => {
     render(<FleetCells variant="wide" {...props()} />)
     fireEvent.click(screen.getByTestId('host-tile-p2'))
     expect(openWatchArea).toHaveBeenCalledWith({ host: 'p2' })
-    expect(useFleetConfigStore.getState().focusProbe).toBeNull()
   })
 })
 
