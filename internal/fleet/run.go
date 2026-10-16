@@ -95,7 +95,7 @@ func (r Runner) Run(ctx context.Context, alias string) Result {
 
 	stdout := &capped{max: MaxStdout, onFull: cancel}
 	stderr := &headTail{max: MaxStderr}
-	cmd := execstat.CommandContext(cctx, "fleet.ssh", ssh, Args(alias)...)
+	cmd := execstat.CommandContext(cctx, "fleet.ssh-run", ssh, Args(alias)...)
 	cmd.Stdin = nil // /dev/null
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.WaitDelay = time.Second
