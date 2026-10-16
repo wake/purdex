@@ -61,3 +61,22 @@ func CountUnhandled(recs []Record, acks map[string]Ack) int {
 	}
 	return n
 }
+
+// LoggedRecord is a record as `pdx watch log --json` prints it: the record's own fields, flat, with handled set and the ack's note,
+// time and who.
+type LoggedRecord struct {
+	Record
+	Note      string     `json:"note,omitempty"`
+	HandledAt *time.Time `json:"handled_at,omitempty"`
+	HandledBy string     `json:"handled_by,omitempty"`
+}
+
+// HandledRecord is r with its ack (nil: pending).
+func HandledRecord(r Record, a *Ack) LoggedRecord {
+	out := LoggedRecord{Record: r}
+	if a != nil {
+		at := a.At
+		out.Handled, out.Note, out.HandledAt, out.HandledBy = true, a.Note, &at, a.By
+	}
+	return out
+}

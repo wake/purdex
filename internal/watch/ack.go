@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -170,33 +171,41 @@ func (s *AckStore) Ack(ids []string, known func(id string) bool, a Ack) ([]AckRe
 		}
 		return res, nil
 	}
-	var b strings.Builder
-	for _, n := range fresh {
-		line, err := json.Marshal(n)
-		if err != nil {
-			return nil, err
-		}
-		b.Write(line)
-		b.WriteByte('\n')
+	// The whole file is made again and put in place in one step (a temp file and a rename): a write that fails leaves the old file, so
+	// a batch is in the file whole or not at all. The file holds a month of acks at most.
+	all := make([]Ack, 0, len(s.acks)+len(fresh))
+	for _, n := range s.acks {
+		all = append(all, n)
 	}
-	if err := os.MkdirAll(s.dir, 0o700); err != nil {
+	all = append(all, fresh...)
+	if err := s.writeAll(all); err != nil {
 		return nil, err
-	}
-	f, err := os.OpenFile(filepath.Join(s.dir, ackFile), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	_, werr := f.WriteString(b.String())
-	if cerr := f.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr != nil {
-		return nil, werr
 	}
 	for _, n := range fresh {
 		s.acks[n.ID] = n
 	}
 	return res, nil
+}
+
+// writeAll puts acks in the file, oldest first.
+func (s *AckStore) writeAll(acks []Ack) error {
+	sort.SliceStable(acks, func(i, j int) bool {
+		if acks[i].At.Equal(acks[j].At) {
+			return acks[i].ID < acks[j].ID
+		}
+		return acks[i].At.Before(acks[j].At)
+	})
+	var b strings.Builder
+	for _, a := range acks {
+		line, err := json.Marshal(a)
+		if err != nil {
+			return err
+		}
+		b.Write(line)
+		b.WriteByte('\n')
+	}
+	_, err := writeAtomic(filepath.Join(s.dir, ackFile), []byte(b.String()))
+	return err
 }
 
 // Prune forgets the acks older than ackKeep (the events they were about are out of the log) and rewrites the file.
@@ -205,20 +214,17 @@ func (s *AckStore) Prune() {
 	defer s.mu.Unlock()
 	cut := s.now().Add(-ackKeep)
 	kept := map[string]Ack{}
-	var b strings.Builder
+	var list []Ack
 	for id, a := range s.acks {
-		if a.At.Before(cut) {
-			continue
+		if !a.At.Before(cut) {
+			kept[id] = a
+			list = append(list, a)
 		}
-		kept[id] = a
-		line, _ := json.Marshal(a)
-		b.Write(line)
-		b.WriteByte('\n')
 	}
 	if len(kept) == len(s.acks) || s.dir == "" {
 		return
 	}
-	if _, err := writeAtomic(filepath.Join(s.dir, ackFile), []byte(b.String())); err != nil {
+	if err := s.writeAll(list); err != nil {
 		return // the old file stays whole; the next start tries again
 	}
 	s.acks = kept

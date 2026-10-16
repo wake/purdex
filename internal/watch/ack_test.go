@@ -1,6 +1,7 @@
 package watch
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,4 +128,47 @@ func TestCountUnhandled(t *testing.T) {
 	acks := map[string]Ack{b.ID: {Note: "n"}}
 	require.Equal(t, 2, CountUnhandled([]Record{a, b, d}, acks))
 	require.Equal(t, 0, CountUnhandled(nil, acks))
+}
+
+// A batch is written whole or not at all: a write that fails leaves the file as it was, so a restart does not find half of an ack.
+func TestAckStore_AFailedBatchLeavesTheFileAsItWas(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("a directory cannot be made unwritable for root")
+	}
+	c := newOutboxClock()
+	s, dir := openAcks(t, c)
+	known := func(string) bool { return true }
+	_, err := s.Ack([]string{"mlab-1"}, known, Ack{Note: "first"})
+	require.NoError(t, err)
+	before, err := os.ReadFile(filepath.Join(dir, ackFile))
+	require.NoError(t, err)
+
+	require.NoError(t, os.Chmod(dir, 0o500)) // no new file can be made in it
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	_, err = s.Ack([]string{"mlab-2", "mlab-3"}, known, Ack{Note: "second"})
+	require.Error(t, err)
+	require.NoError(t, os.Chmod(dir, 0o700))
+	after, err := os.ReadFile(filepath.Join(dir, ackFile))
+	require.NoError(t, err)
+	require.Equal(t, string(before), string(after), "the file is as it was")
+	again, err := OpenAcks(dir, c.now)
+	require.NoError(t, err)
+	require.False(t, again.Handled("mlab-2"))
+	require.False(t, s.Handled("mlab-2"), "and so is memory")
+	require.True(t, again.Handled("mlab-1"))
+}
+
+func TestHandledRecord_CarriesTheAckInTheLogJSON(t *testing.T) {
+	c := newOutboxClock()
+	r := rec(KindPressureHigh, c)
+	got := HandledRecord(r, nil)
+	require.False(t, got.Handled)
+	got = HandledRecord(r, &Ack{Note: "ok", At: c.t, By: "mlab/w"})
+	require.True(t, got.Handled)
+	require.Equal(t, "ok", got.Note)
+	raw, err := json.Marshal(got)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), `"handled":true`)
+	require.Contains(t, string(raw), `"note":"ok"`)
+	require.Contains(t, string(raw), `"id":"`+r.ID+`"`, "the record's own fields are still there, flat")
 }

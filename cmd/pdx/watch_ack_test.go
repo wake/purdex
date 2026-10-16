@@ -122,3 +122,22 @@ func TestWatchLog_UnhandledLeavesOutAckedEventsAndTheListShowsTheNote(t *testing
 	require.Contains(t, out.String(), "high b")
 	_ = b
 }
+
+func TestWatchLog_JSONShowsTheHandledState(t *testing.T) {
+	dir := t.TempDir()
+	rc := watch.NewRecorder(dir, "mlab")
+	a, err := rc.RecordFull(watch.Event{Kind: watch.KindPressureHigh, At: time.Now().Add(-time.Minute), Pressure: 2, Detail: "high a"})
+	require.NoError(t, err)
+	acks, err := watch.OpenAcks(dir, time.Now)
+	require.NoError(t, err)
+	_, err = acks.Ack([]string{a.ID}, func(string) bool { return true }, watch.Ack{Note: "查過了", By: "mlab/w"})
+	require.NoError(t, err)
+
+	var out, errb bytes.Buffer
+	require.Equal(t, 0, watchMain([]string{"log", "--json", "--dir", dir}, &out, &errb), errb.String())
+	var line map[string]any
+	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(out.String())), &line))
+	require.Equal(t, true, line["handled"])
+	require.Equal(t, "查過了", line["note"])
+	require.Equal(t, a.ID, line["id"])
+}

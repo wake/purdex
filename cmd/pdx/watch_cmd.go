@@ -104,7 +104,11 @@ func watchMain(args []string, stdout, stderr io.Writer) int {
 	}
 	for _, r := range recs {
 		if *asJSON {
-			b, _ := json.Marshal(r)
+			var ack *watch.Ack
+			if a, done := acks[r.ID]; done {
+				ack = &a
+			}
+			b, _ := json.Marshal(watch.HandledRecord(r, ack))
 			fmt.Fprintln(stdout, string(b))
 			continue
 		}
