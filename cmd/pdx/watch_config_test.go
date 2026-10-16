@@ -100,7 +100,7 @@ func TestWatchConfig_SetEditsTheTypedValuesAndKeepsTheRest(t *testing.T) {
 	require.Equal(t, 2.5, items["x_cores"])
 	require.Equal(t, []any{"a26", "mlab"}, items["targets"])
 	require.Equal(t, "resident", items["mode"])
-	require.Equal(t, "hi\nthere", items["start_prompt"])
+	require.Equal(t, `hi\nthere`, items["start_prompt"], "a backslash-n stays two characters: the daemon refuses a real newline, so the CLI must not make one")
 	require.Equal(t, float64(30), items["t_s"])
 	require.Equal(t, float64(1024), items["y_mb"], "what was not set is written back as it was")
 	require.Equal(t, "claude --dangerously-skip-permissions --model opus", items["agent_command"])
