@@ -20,9 +20,11 @@ const oneOf = <T extends string>(list: readonly T[], v: unknown): v is T => str(
 
 export function parseFast(v: unknown): FleetFast | null {
   if (!isRec(v)) return null
-  const { cpu, mem, level, page_rate, disk, zone, load } = v
+  const { cpu, mem, level, disk, zone, load } = v
   const at = time(v.at)
-  if (at === null || !num(cpu) || !num(mem) || !num(level) || !num(page_rate) || !num(disk) || !num(load) || !oneOf(ZONES, zone)) return null
+  // page_rate is a counter difference: a negative one is a reset, read as 0 (the daemon does the same, load.go).
+  const page_rate = typeof v.page_rate === 'number' && Number.isFinite(v.page_rate) ? Math.max(v.page_rate, 0) : null
+  if (at === null || !num(cpu) || !num(mem) || !num(level) || page_rate === null || !num(disk) || !num(load) || !oneOf(ZONES, zone)) return null
   const opt = (x: unknown): number => (num(x) ? x : 0)
   return { at, cpu, mem, level, page_rate, disk, disk_free_gb: opt(v.disk_free_gb), load1: opt(v.load1), ncpu: opt(v.ncpu), zone, load }
 }

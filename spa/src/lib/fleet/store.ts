@@ -28,6 +28,8 @@ interface HostEntry {
   term: number
   /** A primary's fleet, as its last answer and pushes made it. */
   data?: FleetData
+  /** Consecutive pushes (of the data's term) that left an id out; an id is dropped at 2. */
+  missing?: Record<string, number>
 }
 export interface FleetSnapshot extends FleetData { hostId: string }
 export type PushResult = 'applied' | 'ignored' | 'reread'
@@ -148,6 +150,8 @@ export const useFleetStore = create<FleetState>((set, get) => {
         return push.term > (s.snapshot?.term ?? -1) ? 'reread' : 'ignored'
       }
       if (push.term < e.data.term) return 'ignored'
+      // No hosts: the daemon is rebuilding its order (just became primary again). Nothing is dropped; read it again.
+      if (push.hosts.length === 0) return 'reread'
       const hosts = { ...e.data.hosts }
       const order = [...e.data.order]
       let unknown = false
@@ -168,15 +172,20 @@ export const useFleetStore = create<FleetState>((set, get) => {
         hosts[row.id] = merged
         touched.push(merged)
       }
-      // The push is the whole fleet (the daemon sends every host of its order each second): an id it leaves out is gone.
+      // The push is the whole fleet (the daemon sends every host of its order each second): an id it leaves out is gone, but
+      // only after two pushes in a row of the same term (an id may flip to its alias for a second).
       const listed = new Set(push.hosts.map((r) => r.id))
-      const gone = order.filter((id) => !listed.has(id))
-      for (const id of gone) delete hosts[id]
-      const kept = order.filter((id) => listed.has(id))
-      for (const id of gone) fleetHistory.forget(id)
+      const before = push.term === e.data.term ? (e.missing ?? {}) : {}
+      const missing: Record<string, number> = {}
+      const kept: string[] = []
+      for (const id of order) {
+        if (listed.has(id)) { kept.push(id); continue }
+        const n = (before[id] ?? 0) + 1
+        if (n >= 2) { delete hosts[id]; fleetHistory.forget(id) } else { missing[id] = n; kept.push(id) }
+      }
       recordHistory(touched)
       const data: FleetData = { term: Math.max(push.term, e.data.term), hosts, order: kept }
-      set((st) => derive(st, { ...st.byHost, [hostId]: { ...e, term: data.term, data } }, true))
+      set((st) => derive(st, { ...st.byHost, [hostId]: { ...e, term: data.term, data, missing } }, true))
       return unknown ? 'reread' : 'applied'
     },
 

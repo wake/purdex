@@ -19,7 +19,7 @@ const RANGE_MS: Record<HistoryRange, number> = { '5m': 5 * 60_000, '1h': 3600_00
 
 interface Bucket { t: number; sum: number; n: number; max: number }
 interface Track { raw: Array<{ t: number; v: number }>; buckets: Bucket[] }
-interface HostHistory { lastAt: number; items: Record<HistoryItem, Track> }
+interface HostHistory { lastAt: number; lastRawAt: number; items: Record<HistoryItem, Track> }
 
 const emptyTrack = (): Track => ({ raw: [], buckets: [] })
 
@@ -28,19 +28,24 @@ export class FleetHistory {
 
   /**
    * One 1 s reading of a host. A point not newer than the host's last one is ignored (a re-sent or out-of-order reading).
-   * A reading dated more than a few seconds ahead of this App's clock (the daemon's clock is ahead) is taken as received now,
-   * so it cannot push `lastAt` ahead of the readings that follow, nor trim the history.
+   * Dedupe is on the reading's own `at` (a stale reading re-sent each second is one point, even a future-dated one that is stored at the receive time). A reading dated more than a few
+   * seconds ahead of this App's clock (the daemon's clock is ahead) is stored at the receive time, kept after the last stored
+   * point, so it cannot push `lastAt` far ahead of the readings that follow, nor trim the history.
    */
   record(hostId: string, reading: FleetFast): void {
     const now = Date.now()
-    const fast = reading.at > now + FUTURE_TOLERANCE_MS ? { ...reading, at: now } : reading
     let hh = this.hosts.get(hostId)
     if (!hh) {
-      hh = { lastAt: -Infinity, items: Object.fromEntries(HISTORY_ITEMS.map((i) => [i, emptyTrack()])) as Record<HistoryItem, Track> }
+      hh = { lastAt: -Infinity, lastRawAt: -Infinity, items: Object.fromEntries(HISTORY_ITEMS.map((i) => [i, emptyTrack()])) as Record<HistoryItem, Track> }
       this.hosts.set(hostId, hh)
     }
-    if (fast.at <= hh.lastAt) return
-    hh.lastAt = fast.at
+    if (reading.at === hh.lastRawAt) return
+    hh.lastRawAt = reading.at
+    const ahead = reading.at > now + FUTURE_TOLERANCE_MS
+    const t = ahead ? Math.max(now, hh.lastAt + 1) : reading.at
+    if (t <= hh.lastAt) return
+    const fast = { ...reading, at: t }
+    hh.lastAt = t
     for (const item of HISTORY_ITEMS) {
       const v = fast[item]
       const tr = hh.items[item]

@@ -84,4 +84,24 @@ describe('FleetHistory', () => {
     h.record('a', fast({ at: now + S, cpu: 4 })) // clamped to the receive time, so the next normal one is newer
     expect(h.series('a', 'cpu', '5m', now + 2 * S).map((p) => p.avg)).toEqual([1, 2, 4])
   })
+
+  it('the same future reading re-sent each second is recorded once', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(10_000_000)
+    const at = Date.now() + 3600_000
+    h.record('a', fast({ at, cpu: 7 }))
+    vi.setSystemTime(10_001_000)
+    h.record('a', fast({ at, cpu: 7 }))
+    vi.setSystemTime(10_002_000)
+    h.record('a', fast({ at, cpu: 7 }))
+    vi.useRealTimers()
+    expect(h.rawCount('a')).toBe(1)
+  })
+
+  it('skew straddling the tolerance leaves no gap: an unclamped future reading, then a clamped one', () => {
+    const now = Date.now()
+    h.record('a', fast({ at: now + 4_900, cpu: 1 }))
+    h.record('a', fast({ at: now + 5_900, cpu: 2 })) // now past the tolerance: clamped, but still after the last
+    expect(h.rawCount('a')).toBe(2)
+  })
 })

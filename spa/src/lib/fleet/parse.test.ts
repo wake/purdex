@@ -92,8 +92,12 @@ describe('parseFleetAnswer', () => {
 })
 
 describe('negative numbers (F-2a1 review)', () => {
-  it.each(['cpu', 'mem', 'disk', 'load', 'level', 'page_rate'])('a negative %s makes the reading unreadable', (k) => {
+  it.each(['cpu', 'mem', 'disk', 'load', 'level'])('a negative %s makes the reading unreadable', (k) => {
     expect(parseFast({ ...wireFast(fast()), [k]: -1 })).toBeNull()
+  })
+  it('a negative page_rate (a counter difference) is read as 0, not a lost reading', () => {
+    expect(parseFast({ ...wireFast(fast()), page_rate: -7 })).toMatchObject({ page_rate: 0, cpu: 20 })
+    expect(parseFast({ ...wireFast(fast()), page_rate: 'x' })).toBeNull()
   })
   it.each(['disk_free_gb', 'load1', 'ncpu'])('a negative %s is treated like an invalid optional value (0)', (k) => {
     expect(parseFast({ ...wireFast(fast()), [k]: -3 })).toMatchObject({ [k]: 0 })

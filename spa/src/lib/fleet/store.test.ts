@@ -143,8 +143,29 @@ describe('a host leaving the fleet (F-2a1 review)', () => {
   it('a push is the whole fleet (push.go sends every host of `order`): an id missing from it is dropped with its history', () => {
     answer(A, primaryAnswer(2, [host('d-a'), host('d-b')]))
     expect(st().applyPush(A, push(2, rows('d-a')))).toBe('applied')
+    expect(st().applyPush(A, push(2, rows('d-a')))).toBe('applied') // omitted by two consecutive pushes
     expect(st().snapshot?.order).toEqual(['d-a'])
     expect(st().snapshot?.hosts['d-b']).toBeUndefined()
+    expect(fleetHistory.rawCount('d-b')).toBe(0)
+  })
+
+  it('a push with no hosts never deletes (the order is being rebuilt): it asks for a re-read', () => {
+    answer(A, primaryAnswer(2, [host('d-a'), host('d-b')]))
+    expect(st().applyPush(A, push(2, []))).toBe('reread')
+    expect(st().snapshot?.order).toEqual(['d-a', 'd-b'])
+    expect(fleetHistory.rawCount('d-b')).toBe(1)
+  })
+
+  it('an id is dropped only when two consecutive pushes omit it; a push that lists it again resets the count', () => {
+    answer(A, primaryAnswer(2, [host('d-a'), host('d-b')]))
+    st().applyPush(A, push(2, rows('d-a')))
+    expect(st().snapshot?.order).toEqual(['d-a', 'd-b'])
+    st().applyPush(A, push(2, rows('d-a', 'd-b'))) // the alias flip is over
+    st().applyPush(A, push(2, rows('d-a')))
+    expect(st().snapshot?.order).toEqual(['d-a', 'd-b'])
+    expect(fleetHistory.rawCount('d-b')).toBe(2)
+    st().applyPush(A, push(2, rows('d-a')))
+    expect(st().snapshot?.order).toEqual(['d-a'])
     expect(fleetHistory.rawCount('d-b')).toBe(0)
   })
 
