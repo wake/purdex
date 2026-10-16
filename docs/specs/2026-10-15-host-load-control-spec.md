@@ -444,10 +444,13 @@ model name.
   §12.3) and moves `holder.json` accordingly: a verified watcher there → `awake` with its session id, frame, pane and
   process (pid and its start time), `since` kept when it is the same frame and set now when it is a new one; no agent
   there while the holder says `awake` → `resting` with the session id kept (the agent rested, exited or crashed); a
-  lookup that fails → no change (never read as "no agent"). It runs on a hook request from `pdx-watch` (SessionStart,
-  SessionEnd), when the daemon starts (so a watcher that started before this daemon, such as the manual one of 10-16,
-  is picked up without a restart of the watcher), before every start, wake and rest step, and every 5 min as a safety
-  net (one owner lookup; no fork on the sampler's tick).
+  lookup that fails → no change (never read as "no agent"). It runs on a verified SessionStart from `pdx-watch` (the
+  agent module's existing SessionStart subscription), when the daemon starts (so a watcher that started before this
+  daemon, such as the manual one of 10-16, is picked up without a restart of the watcher), when the holder is asked
+  and the last reconcile is older than 30 s, after a delivery to the watcher fails, before every start, wake and rest
+  step and every 10 s while one of them waits for its outcome, and every 5 min as a safety net (one owner lookup each;
+  no fork on the sampler's tick). An agent that ends is therefore seen within 30 s of anyone asking, with no
+  SessionEnd plumbing.
 - **Registration** is reconcile finding a new frame: the daemon records it and announces it to the other hosts (§12.3).
   When the "two awake" rule of §12.3 picks the other host's watcher, this daemon sends its own watcher a `[負載守門]`
   notice asking it to stand down and end; the daemon does not kill it, and it stays `awake` in `holder.json` until it
@@ -458,8 +461,13 @@ model name.
   looked up again, never typed into by an old id). The command line is `agent_command`, then `--resume <id>` for a wake
   (the id must be a session id, a UUID), then the prompt as one POSIX single-quoted word (`'` written as `'\''`), so
   `$(…)`, backticks, `;` and quotes in a prompt reach Claude Code as text; prompts and `agent_command` hold no control
-  characters (§12.2), so no newline can end the line early. It is sent with `send-keys -l`, then Enter as its own key.
-  A pane that is not at a shell is reported (`pane_busy`), never typed into.
+  characters (§12.2), so no newline can end the line early. The check and the typing are one tmux command, so nothing
+  can take the pane between them on tmux's side: the line is loaded into a named tmux buffer from stdin (it never
+  passes through a command parser), then one `if-shell -F` on the pane's format (a shell, not in a mode) runs
+  `paste-buffer -d -p` (bracketed paste) and Enter; when the condition is false the buffer is left, which the daemon
+  reads as `pane_busy`, deletes it, and reports; the pane is never typed into. `/exit` for a rest is fixed text sent
+  to the agent after reconcile confirms the same frame; if the agent ended in between, the shell prints "command not
+  found", which is harmless.
 - **Start** (on the host that will hold it, one at a time, §12.3): reconcile first. A verified watcher already there
   → success with nothing to do. `pdx-watch` missing → create it detached in `workdir`. Pane at a shell → type
   `agent_command` with `start_prompt`. Anything else in the pane (another agent, or a program that is not a shell) →
