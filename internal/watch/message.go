@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // The texts of the [負載守門] messages the watcher reads (host-load-control spec §12.3). Each names the event ids, so the watcher
@@ -31,7 +32,21 @@ func kindLabel(k Kind) string {
 }
 
 // line is the sentence of an event, bounded: a long cwd or detail must not make a message the receiving host refuses.
-func line(r Record) string { return clip(eventLine(r), maxLineRunes) }
+func line(r Record) string { return clip(Plain(eventLine(r)), maxLineRunes) }
+
+// Plain turns every control character (a newline, an escape) into a space, so a field of an event, which is whatever a process had on
+// its command line, cannot start a line of its own in what the watcher reads.
+func Plain(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
+			return ' '
+		}
+		return r
+	}, s)
+}
+
+// HasControl says whether s holds a control character.
+func HasControl(s string) bool { return Plain(s) != s }
 
 func clip(s string, n int) string {
 	r := []rune(s)
@@ -114,4 +129,83 @@ const EventSinkKey = "watch.events.sink"
 // EventSink takes a recorded event for delivery to the watcher.
 type EventSink interface {
 	Enqueue(rec Record)
+}
+
+// Lean is the record as a message carries it: the fields the sentence needs, with a bound on the long ones, so a message stays small.
+func Lean(r Record) Record {
+	r.Argv = leanArgv(r.Argv)
+	r.Cwd = clip(Plain(r.Cwd), 512)
+	r.Detail = clip(Plain(r.Detail), 512)
+	r.Slot = Plain(r.Slot)
+	r.Session = Plain(r.Session)
+	r.Signature = ""
+	return r
+}
+
+func leanArgv(a []string) []string {
+	if len(a) > 40 {
+		a = a[:40]
+	}
+	out := make([]string, len(a))
+	for i, w := range a {
+		out[i] = clip(Plain(w), recordArgvMax)
+	}
+	return out
+}
+
+// Render is what the watcher reads for the message: the text, the ids it is about, and whether there is anything to say. seen says
+// whether an event was already delivered (nil: none was); those are left out, so a message that is partly new is told only for its
+// new part. The receiving host calls it with its own memory, on a message that came from another host.
+func (m Message) Render(seen func(id string) bool) (text string, ids []string, ok bool) {
+	if seen == nil {
+		seen = func(string) bool { return false }
+	}
+	switch m.Form {
+	case FormEvent:
+		if len(m.Records) != 1 || seen(m.Records[0].ID) {
+			return "", nil, false
+		}
+		return EventText(m.Records[0]), []string{m.Records[0].ID}, true
+	case FormBacklog:
+		var fresh []Record
+		for _, r := range m.Records {
+			if !seen(r.ID) {
+				fresh = append(fresh, r)
+				ids = append(ids, r.ID)
+			}
+		}
+		if len(fresh) == 0 {
+			return "", nil, false
+		}
+		return BacklogText(m.Host, fresh, m.Part, m.Parts), ids, true
+	case FormFold:
+		for _, id := range m.EventIDs {
+			if !seen(id) {
+				ids = append(ids, id)
+			}
+		}
+		if len(ids) == 0 {
+			return "", nil, false
+		}
+		count := m.FoldCount - (len(m.EventIDs) - len(ids))
+		return FoldText(m.Host, m.FoldKind, ids, max(count, len(ids))), ids, true
+	}
+	return "", nil, false
+}
+
+// KnownKind says whether k is a kind of event; KnownLabel whether l is a label of one (or none).
+func KnownKind(k Kind) bool {
+	switch k {
+	case KindUnmanagedHeavy, KindPressureHigh, KindSlotOrphaned, KindSlotLong:
+		return true
+	}
+	return false
+}
+
+func KnownLabel(l Label) bool {
+	switch l {
+	case "", LabelGateGap, LabelUnknown, LabelAllowed:
+		return true
+	}
+	return false
 }

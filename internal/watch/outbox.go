@@ -21,19 +21,35 @@ const maxFoldIDs = 200 // ids a folded bucket remembers (its count is exact)
 
 // MaxMessageIDs is the most event ids one message carries; a backlog is cut into messages of this size (the receiving route accepts
 // more, so the limit here is never the one that refuses).
-const MaxMessageIDs = 200
+const MaxMessageIDs = 100
 
-// Message is one message to the watcher.
+// Message is one message to the watcher. What it says is structured (Form and the fields after it): the host that receives it
+// renders the text itself from a fixed template, so a message from another host never brings sentences of its own into the
+// watcher's prompt. Text is the sender's own rendering, for its logs and tests; it is not sent.
 type Message struct {
-	ID       string    `json:"id"`
-	Backlog  bool      `json:"backlog,omitempty"`
-	Host     string    `json:"host"`
-	EventIDs []string  `json:"event_ids"`
-	Text     string    `json:"text"`
-	Created  time.Time `json:"created"`
-	Attempts int       `json:"attempts,omitempty"`
-	LastTry  time.Time `json:"last_try,omitempty"`
+	ID   string `json:"id"`
+	Host string `json:"host"`
+	// Form is FormEvent (Records holds the one event), FormFold (FoldKind, FoldCount and EventIDs: events counted into one
+	// message) or FormBacklog (Records holds this part of the summary; Part of Parts).
+	Form      string    `json:"form"`
+	Records   []Record  `json:"records,omitempty"`
+	FoldKind  Kind      `json:"fold_kind,omitempty"`
+	FoldCount int       `json:"fold_count,omitempty"`
+	Part      int       `json:"part,omitempty"`
+	Parts     int       `json:"parts,omitempty"`
+	EventIDs  []string  `json:"event_ids"`
+	Text      string    `json:"text,omitempty"`
+	Created   time.Time `json:"created"`
+	Attempts  int       `json:"attempts,omitempty"`
+	LastTry   time.Time `json:"last_try,omitempty"`
 }
+
+// The forms of a Message.
+const (
+	FormEvent   = "event"
+	FormFold    = "fold"
+	FormBacklog = "backlog"
+)
 
 type foldBucket struct {
 	Host  string    `json:"host"`
@@ -48,6 +64,7 @@ type outboxState struct {
 	Folded        map[Kind]*foldBucket `json:"folded"`
 	LastDelivered string               `json:"last_delivered,omitempty"`
 	BacklogFor    string               `json:"backlog_for,omitempty"`
+	Dropped       []string             `json:"dropped,omitempty"` // events of messages the receiver refused for good: never queued again
 }
 
 // Outbox is the queue.
@@ -114,8 +131,10 @@ func (o *Outbox) save() {
 	}
 }
 
-func (o *Outbox) newMessage(host string, ids []string, text string, backlog bool) Message {
-	return Message{ID: "msg-" + newID(o.now()), Backlog: backlog, Host: host, EventIDs: ids, Text: text, Created: o.now()}
+func (o *Outbox) newMessage(m Message) Message {
+	m.ID, m.Created = "msg-"+newID(o.now()), o.now()
+	m.Text, _, _ = m.Render(nil)
+	return m
 }
 
 // open says whether a message of the kind may be made now: none was, the last one is older than the window, or the clock went back.
@@ -135,11 +154,11 @@ func (o *Outbox) Add(r Record) bool {
 	defer o.mu.Unlock()
 	defer o.save()
 	if r.Kind == KindSlotOrphaned {
-		o.st.Pending = append(o.st.Pending, o.newMessage(r.Host, []string{r.ID}, EventText(r), false))
+		o.st.Pending = append(o.st.Pending, o.newMessage(Message{Host: r.Host, Form: FormEvent, Records: []Record{Lean(r)}, EventIDs: []string{r.ID}}))
 		return true
 	}
 	if o.open(r.Kind) {
-		o.st.Pending = append(o.st.Pending, o.newMessage(r.Host, []string{r.ID}, EventText(r), false))
+		o.st.Pending = append(o.st.Pending, o.newMessage(Message{Host: r.Host, Form: FormEvent, Records: []Record{Lean(r)}, EventIDs: []string{r.ID}}))
 		o.st.LastSent[r.Kind] = o.now()
 		return true
 	}
@@ -177,7 +196,7 @@ func (o *Outbox) FlushFolded() int {
 			continue
 		}
 		b := o.st.Folded[k]
-		o.st.Pending = append(o.st.Pending, o.newMessage(b.Host, b.IDs, FoldText(b.Host, k, b.IDs, b.Count), false))
+		o.st.Pending = append(o.st.Pending, o.newMessage(Message{Host: b.Host, Form: FormFold, FoldKind: k, FoldCount: b.Count, EventIDs: b.IDs}))
 		o.st.LastSent[k] = o.now()
 		delete(o.st.Folded, k)
 		n++
@@ -253,18 +272,25 @@ func (o *Outbox) Delivered(id string) {
 	}
 }
 
-// Drop removes a message the receiver refused for good. It was not delivered, so the last delivered id does not move.
+// Drop removes a message the receiver refused for good. It was not delivered, so the last delivered id does not move; its events are
+// remembered as dropped, so a backlog does not bring them back for the next watcher.
 func (o *Outbox) Drop(id string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	for i, m := range o.st.Pending {
 		if m.ID == id {
+			o.st.Dropped = append(o.st.Dropped, m.EventIDs...)
+			if len(o.st.Dropped) > maxDropped {
+				o.st.Dropped = o.st.Dropped[len(o.st.Dropped)-maxDropped:]
+			}
 			o.st.Pending = append(o.st.Pending[:i], o.st.Pending[i+1:]...)
 			o.save()
 			return
 		}
 	}
 }
+
+const maxDropped = 2000
 
 // LastDelivered is the newest event id of a message the watcher received.
 func (o *Outbox) LastDelivered() string {
@@ -299,8 +325,15 @@ func (o *Outbox) Backlog(session string, recs []Record) bool {
 			queued[id] = true
 		}
 	}
+	dropped := map[string]bool{}
+	for _, id := range o.st.Dropped {
+		dropped[id] = true
+	}
 	var cand []Record
 	for _, r := range recs {
+		if dropped[r.ID] {
+			continue
+		}
 		b := o.st.Folded[r.Kind]
 		if r.ID > o.st.LastDelivered || queued[r.ID] || (b != nil && !r.At.Before(b.Since)) {
 			cand = append(cand, r)
@@ -314,10 +347,11 @@ func (o *Outbox) Backlog(session string, recs []Record) bool {
 		for p := 0; p < parts; p++ {
 			chunk := cand[p*MaxMessageIDs : min((p+1)*MaxMessageIDs, len(cand))]
 			ids := make([]string, len(chunk))
+			lean := make([]Record, len(chunk))
 			for i, r := range chunk {
-				ids[i] = r.ID
+				ids[i], lean[i] = r.ID, Lean(r)
 			}
-			o.st.Pending = append(o.st.Pending, o.newMessage(chunk[0].Host, ids, BacklogText(chunk[0].Host, chunk, p+1, parts), true))
+			o.st.Pending = append(o.st.Pending, o.newMessage(Message{Host: chunk[0].Host, Form: FormBacklog, Records: lean, Part: p + 1, Parts: parts, EventIDs: ids}))
 		}
 		o.st.Folded = map[Kind]*foldBucket{}
 		made = true
@@ -327,12 +361,14 @@ func (o *Outbox) Backlog(session string, recs []Record) bool {
 }
 
 // Inbox is the receiving side: the ids of the events whose message this host's watcher already got, kept in a file, so a retry or a
-// reply that was lost does not give the watcher the same event twice.
+// reply that was lost does not give the watcher the same event twice. An answer of "delivered" is given only once the ids are on disk
+// (Persist): the sender removes the message on it.
 type Inbox struct {
-	mu   sync.Mutex
-	path string
-	ids  []string
-	seen map[string]bool
+	mu    sync.Mutex
+	path  string
+	ids   []string
+	seen  map[string]bool
+	dirty bool // ids not yet written
 }
 
 const inboxKeep = 2000
@@ -361,22 +397,28 @@ func OpenInbox(path string) (*Inbox, error) {
 	return in, nil
 }
 
-// Seen says whether every one of ids was delivered before (a list with nothing in it is not a duplicate of anything).
-func (in *Inbox) Seen(ids []string) bool {
+// SeenID says whether the event was delivered before.
+func (in *Inbox) SeenID(id string) bool {
 	in.mu.Lock()
 	defer in.mu.Unlock()
+	return in.seen[id]
+}
+
+// Seen says whether every one of ids was delivered before (a list with nothing in it is not a duplicate of anything).
+func (in *Inbox) Seen(ids []string) bool {
 	if len(ids) == 0 {
 		return false
 	}
 	for _, id := range ids {
-		if !in.seen[id] {
+		if !in.SeenID(id) {
 			return false
 		}
 	}
 	return true
 }
 
-// Mark records ids as delivered; the file keeps the latest inboxKeep.
+// Mark records ids as delivered in memory and writes the file; the file keeps the latest inboxKeep. An error means the ids are known
+// in this process only: Persist writes them again.
 func (in *Inbox) Mark(ids []string) error {
 	in.mu.Lock()
 	defer in.mu.Unlock()
@@ -384,19 +426,35 @@ func (in *Inbox) Mark(ids []string) error {
 		if !in.seen[id] {
 			in.seen[id] = true
 			in.ids = append(in.ids, id)
+			in.dirty = true
 		}
 	}
 	for len(in.ids) > inboxKeep {
 		delete(in.seen, in.ids[0])
 		in.ids = in.ids[1:]
 	}
-	if in.path == "" {
+	return in.persistLocked()
+}
+
+// Persist writes the ids that an earlier Mark could not; nil when everything is on disk.
+func (in *Inbox) Persist() error {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return in.persistLocked()
+}
+
+func (in *Inbox) persistLocked() error {
+	if !in.dirty || in.path == "" {
+		in.dirty = false
 		return nil
 	}
 	b, err := json.Marshal(in.ids)
 	if err != nil {
 		return err
 	}
-	_, err = writeAtomic(in.path, b)
-	return err
+	if _, err = writeAtomic(in.path, b); err != nil {
+		return err
+	}
+	in.dirty = false
+	return nil
 }

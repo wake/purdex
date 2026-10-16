@@ -27,7 +27,7 @@ import (
 const pathEvent = "/api/peers/watch/event"
 
 const (
-	maxEventBody   = 32 << 10
+	maxEventBody   = 256 << 10
 	maxEventText   = 8 << 10
 	maxEventIDs    = 300
 	retryBase      = 30 * time.Second
@@ -38,18 +38,11 @@ const (
 
 var eventIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,80}$`)
 
-// eventMsg is one message on the wire (the outbox's Message without its retry state).
-type eventMsg struct {
-	ID       string   `json:"id"`
-	Backlog  bool     `json:"backlog,omitempty"`
-	Host     string   `json:"host,omitempty"`
-	EventIDs []string `json:"event_ids"`
-	Text     string   `json:"text"`
-}
-
+// eventBody is the request of pathEvent. The message is structured: the receiving host renders the text itself (watch.Message.Render),
+// so nothing a sender writes reaches the watcher's prompt except the fields of the events, bounded and set in a fixed sentence.
 type eventBody struct {
-	ToHostID string   `json:"to_host_id"`
-	Message  eventMsg `json:"message"`
+	ToHostID string        `json:"to_host_id"`
+	Message  watch.Message `json:"message"`
 }
 
 // deliveryState is the module's delivery part: the queue, the receiving side's remembered ids and the loop's wake-up.
@@ -65,6 +58,9 @@ type deliveryState struct {
 }
 
 var errNoWatcherHere = errors.New("no watcher is awake on this host")
+
+// errBadMessage is a message this host will not pass on (a shape or size it does not accept); sending it again changes nothing.
+var errBadMessage = errors.New("the message is not one this host accepts")
 
 // errRefusedForGood is a refusal that sending the same message again cannot change (the receiver says it is malformed or too big).
 var errRefusedForGood = errors.New("refused for good")
@@ -214,17 +210,21 @@ func (m *Module) makeBacklog(session string) {
 
 // sendMessage hands msg to the watcher at where: on this host straight to its notifier, on another through the peer route.
 func (m *Module) sendMessage(ctx context.Context, where watch.Where, msg watch.Message) error {
-	em := eventMsg{ID: msg.ID, Backlog: msg.Backlog, Host: msg.Host, EventIDs: msg.EventIDs, Text: msg.Text}
+	msg.Text, msg.Attempts, msg.LastTry = "", 0, time.Time{} // the sender's rendering and retry state are its own
 	m.core.CfgMu.RLock()
 	ownID := m.core.Cfg.HostID
 	m.core.CfgMu.RUnlock()
 	if where.HostID == ownID {
-		return m.receiveEvent(ctx, em)
+		err := m.receiveEvent(ctx, msg)
+		if errors.Is(err, errBadMessage) {
+			return fmt.Errorf("%w: %v", errRefusedForGood, err)
+		}
+		return err
 	}
 	if m.caller == nil {
 		return errors.New("no host caller")
 	}
-	res := m.caller.Call(ctx, where.HostID, pathEvent, eventBody{ToHostID: where.HostID, Message: em})
+	res := m.caller.Call(ctx, where.HostID, pathEvent, eventBody{ToHostID: where.HostID, Message: msg})
 	switch res.Class {
 	case peersmod.ClassDone:
 		return nil
@@ -238,13 +238,20 @@ func (m *Module) sendMessage(ctx context.Context, where watch.Where, msg watch.M
 	return fmt.Errorf("%s %d %s", res.Class, res.Status, res.Detail)
 }
 
-// receiveEvent delivers a message to this host's own awake watcher, once per set of event ids. A host whose holder says awake but
-// whose watcher cannot be told reconciles (the watcher may be gone).
-func (m *Module) receiveEvent(ctx context.Context, em eventMsg) error {
+// receiveEvent tells this host's own awake watcher what the message says that it has not been told: the text is made here, from the
+// events not delivered before. It answers nil only when everything in the message is on disk as delivered, so the sender may drop
+// it; an event that was delivered but could not be written down is answered with an error, and the sender's retry (which finds the
+// event already known and only writes it down) gets the file right without telling the watcher twice. A host whose holder says awake
+// but whose watcher cannot be told reconciles (the watcher may be gone).
+func (m *Module) receiveEvent(ctx context.Context, msg watch.Message) error {
 	m.dlv.recvMu.Lock()
 	defer m.dlv.recvMu.Unlock()
-	if m.dlv.inbox.Seen(em.EventIDs) {
-		return nil
+	text, ids, ok := msg.Render(m.dlv.inbox.SeenID)
+	if !ok {
+		return m.dlv.inbox.Persist() // nothing new: all of it was delivered before; say so once that is on disk
+	}
+	if len(text) > maxEventText || ipeers.ValidateText(text) != nil {
+		return fmt.Errorf("%w: the text it makes is not acceptable", errBadMessage)
 	}
 	m.fresh(ctx)
 	own := m.hs().Get()
@@ -255,40 +262,75 @@ func (m *Module) receiveEvent(ctx context.Context, em eventMsg) error {
 	if n == nil {
 		n = peerNotifier{m}
 	}
-	if err := n.Notify(ctx, own, em.Text); err != nil {
+	if err := n.Notify(ctx, own, text); err != nil {
 		if _, _, rerr := m.Reconcile(ctx); rerr != nil {
 			m.logf("[watch] reconcile after a failed delivery: %v", rerr)
 		}
 		return err
 	}
-	if err := m.dlv.inbox.Mark(em.EventIDs); err != nil {
-		m.logf("[watch] remember delivered events: %v", err)
-	}
 	now := m.now()
 	if _, err := m.hs().UpdateCommitted(func(h *watch.Holder) { h.LastDelivery = now }); err != nil {
 		m.logf("[watch] holder last delivery: %v", err)
 	}
+	if err := m.dlv.inbox.Mark(ids); err != nil {
+		m.logf("[watch] the delivered events could not be written down (answering with an error so the sender asks again): %v", err)
+		return fmt.Errorf("remember delivered events: %w", err)
+	}
 	return nil
 }
 
-// validEventMsg checks a message from another host: its text is a [負載守門] text of bounded size and its ids are plain ids.
-func validEventMsg(em *eventMsg) string {
-	if len(em.Text) == 0 || len(em.Text) > maxEventText || !strings.HasPrefix(em.Text, "[負載守門]") {
-		return "the text must be a [負載守門] message of at most 8 KiB"
+// validMessage checks a message from another host: its shape, its sizes and the names in it. It returns what is wrong, or "".
+func validMessage(msg *watch.Message) string {
+	if !eventIDPattern.MatchString(msg.ID) || !eventIDPattern.MatchString(msg.Host) {
+		return "the message needs an id and a host of plain characters"
 	}
-	if err := ipeers.ValidateText(em.Text); err != nil {
-		return err.Error()
-	}
-	if len(em.EventIDs) == 0 || len(em.EventIDs) > maxEventIDs {
+	if len(msg.EventIDs) == 0 || len(msg.EventIDs) > maxEventIDs {
 		return "event_ids must hold 1 to 300 ids"
 	}
-	for _, id := range em.EventIDs {
+	for _, id := range msg.EventIDs {
 		if !eventIDPattern.MatchString(id) {
 			return "an event id has characters it may not have"
 		}
 	}
-	if len(em.ID) == 0 || len(em.ID) > 80 {
-		return "the message needs an id"
+	if len(msg.Records) > watch.MaxMessageIDs || msg.FoldCount < 0 || msg.FoldCount > 1_000_000 || msg.Part < 0 || msg.Part > 1000 || msg.Parts < 0 || msg.Parts > 1000 {
+		return "a count is out of range"
+	}
+	switch msg.Form {
+	case watch.FormEvent:
+		if len(msg.Records) != 1 {
+			return "an event message holds one record"
+		}
+	case watch.FormBacklog:
+		if len(msg.Records) == 0 {
+			return "a backlog message holds records"
+		}
+	case watch.FormFold:
+		if !watch.KnownKind(msg.FoldKind) || len(msg.Records) != 0 {
+			return "a fold message names a kind and holds no records"
+		}
+	default:
+		return "unknown form"
+	}
+	for _, r := range msg.Records {
+		switch {
+		case !eventIDPattern.MatchString(r.ID) || r.Host != msg.Host || !strings.HasPrefix(r.ID, r.Host+"-"):
+			return "a record must belong to the message's host"
+		case !watch.KnownKind(r.Kind) || !watch.KnownLabel(r.Label):
+			return "a record has a kind or label that is not known"
+		case len(r.Argv) > 40 || len(r.Cwd) > 1024 || len(r.Detail) > 1024 || len(r.Slot) > 64 || len(r.Holders) > 64:
+			return "a record field is too long"
+		}
+		for _, w := range r.Argv {
+			if len(w) > 400 {
+				return "a record field is too long"
+			}
+			if watch.HasControl(w) {
+				return "a record field has a control character"
+			}
+		}
+		if watch.HasControl(r.Cwd) || watch.HasControl(r.Detail) || watch.HasControl(r.Slot) || watch.HasControl(r.Session) {
+			return "a record field has a control character"
+		}
 	}
 	return ""
 }
@@ -315,7 +357,7 @@ func (m *Module) handlePeerEvent(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, st, ipeers.ErrRateLimited, "host rate limit exceeded")
 		return
 	case http.StatusRequestEntityTooLarge:
-		m.writeErr(w, st, ipeers.ErrBadRequest, "body over 32 KiB")
+		m.writeErr(w, st, ipeers.ErrBadRequest, "body over 256 KiB")
 		return
 	default:
 		m.writeErr(w, st, ipeers.ErrBadRequest, "invalid JSON body")
@@ -325,7 +367,7 @@ func (m *Module) handlePeerEvent(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusConflict, "wrong_host", "this request is addressed to another host")
 		return
 	}
-	if why := validEventMsg(&req.Message); why != "" {
+	if why := validMessage(&req.Message); why != "" {
 		m.writeErr(w, http.StatusBadRequest, ipeers.ErrBadRequest, why)
 		return
 	}
@@ -333,6 +375,8 @@ func (m *Module) handlePeerEvent(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		m.writeJSON(w, http.StatusOK, map[string]any{"ok": true, "host_id": ours}) // the caller checks the answer names the host it asked
+	case errors.Is(err, errBadMessage):
+		m.writeErr(w, http.StatusBadRequest, ipeers.ErrBadRequest, err.Error())
 	case errors.Is(err, errNoWatcherHere):
 		m.writeErr(w, http.StatusConflict, "no_watcher", err.Error())
 	default:
