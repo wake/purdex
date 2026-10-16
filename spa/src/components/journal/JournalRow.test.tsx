@@ -57,6 +57,16 @@ describe('JournalRow', () => {
     expect(row.className).not.toMatch(/(^|\s)(border-l|border-s)(-\S+)?(\s|$)|border-status|border-yellow|ring-status/)
     expect(row.getAttribute('style')).toBeNull()
   })
+  it('a compact 待確認 row says how many items are answered, in words and not as a raw key', () => {
+    render(<JournalRow entry={confirm()} compact ctx={ctxOf()} />)
+    expect(screen.getByTestId('journal-answered').textContent).toBe('1/2 answered')
+    expect(screen.queryByTestId('journal-checklist')).toBeNull()
+    cleanup()
+    useI18nStore.getState().setLocale('zh-TW')
+    render(<JournalRow entry={confirm()} compact ctx={ctxOf()} />)
+    expect(screen.getByTestId('journal-answered').textContent).toBe('已答 1／2 項')
+    expect(document.body.textContent).not.toContain('journal.band')
+  })
   it('clicking a 待確認 row opens its detail; other rows are not clickable', () => {
     const c = ctxOf()
     const { unmount } = render(<JournalRow entry={confirm()} ctx={c} />)
