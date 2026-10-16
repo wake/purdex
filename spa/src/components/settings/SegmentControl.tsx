@@ -1,6 +1,7 @@
 interface Option<T extends string> {
   value: T
   label: string
+  disabled?: boolean
 }
 
 interface Props<T extends string> {
@@ -21,11 +22,12 @@ export function SegmentControl<T extends string>({ options, value, onChange }: P
             key={opt.value}
             type="button"
             aria-pressed={isActive}
+            disabled={opt.disabled}
             onClick={() => { if (!isActive) onChange(opt.value) }}
-            className={`px-4 py-1.5 text-xs border transition-colors cursor-pointer ${
+            className={`px-4 py-1.5 text-xs border transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
               isActive
                 ? 'bg-surface-elevated border-border-active text-text-primary'
-                : 'bg-transparent border-border-default text-text-muted hover:text-text-primary hover:border-text-muted'
+                : 'bg-transparent border-border-default text-text-muted enabled:hover:text-text-primary enabled:hover:border-text-muted'
             } ${isFirst ? 'rounded-l-md' : ''} ${isLast ? 'rounded-r-md' : ''}`}
           >
             {opt.label}
