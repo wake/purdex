@@ -59,7 +59,11 @@ type Module struct {
 	// chg is the last watch.changed payload; emit is a test seam (nil: the event stream of core).
 	chg    changeState
 	remote remoteState
-	emit   func(core.HostEvent)
+	// dlv is the delivery of events to the watcher (delivery.go).
+	dlv deliveryState
+	// manualDelivery keeps Start from running the delivery loop: a test calls deliverPass itself.
+	manualDelivery bool
+	emit           func(core.HostEvent)
 	// beforeChgLock is a test seam at the point a notifier is about to wait for the notice lock.
 	beforeChgLock func()
 	// tickEvery is the period of the safety-net ticker (a test shortens it); unsubscribe and stop undo Start.
@@ -113,7 +117,13 @@ func (m *Module) Init(c *core.Core) error {
 	m.loc = watch.NewLocator(remembered, asker{m}, m.logf)
 	m.rec.registered = m.onRegistered
 	m.baseline() // what the module starts with is not a change
-	m.loc.SetOnChange(m.notifyChanged)
+	m.loc.SetOnChange(func() { m.notifyChanged(); m.wakeDelivery() })
+	dir := ""
+	if c.Cfg != nil && c.Cfg.DataDir != "" {
+		dir = filepath.Join(c.Cfg.DataDir, "watch")
+	}
+	m.initDelivery(dir)
+	c.Registry.Register(watch.EventSinkKey, watch.EventSink(m))
 	c.Registry.Register(LocatorKey, m.loc)
 	return nil
 }
@@ -145,6 +155,13 @@ func (m *Module) Start(context.Context) error {
 	m.running, m.runCtx = true, ctx
 	m.runMu.Unlock()
 	m.reconcileBackground("start")
+	if !m.manualDelivery {
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			m.deliveryLoop(ctx)
+		}()
+	}
 	every := m.tickEvery
 	if every <= 0 {
 		every = safetyNet
@@ -185,6 +202,7 @@ func (m *Module) Stop(context.Context) error {
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/peers/watch/holder", m.handlePeerHolder)
 	mux.HandleFunc("POST /api/peers/watch/announce", m.handlePeerAnnounce)
+	mux.HandleFunc("POST /api/peers/watch/event", m.handlePeerEvent)
 	mux.HandleFunc("GET /api/watch/holder", m.handleLocalHolder)
 	mux.HandleFunc("GET /api/watch/status", m.handleStatus)
 }
