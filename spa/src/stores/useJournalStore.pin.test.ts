@@ -155,6 +155,35 @@ describe('setPin', () => {
     await p
     expect(shown('b')).toBe(false)
   })
+  it('a read sent BEFORE the click that lands after it carries the old state: the click stays, also after the PUT succeeds (M: unconditional drop)', async () => {
+    const read = deferred<unknown>()
+    getJournal.mockReturnValueOnce(read.promise)
+    const rp = st().loadJournal('h1', 's1') // out before the click
+    const put = deferred<unknown>()
+    setPinned.mockReturnValue(put.promise)
+    const p = st().setPin('h1', 's1', 'b', true)
+    read.resolve(page({
+      entries: [wireEntry('a', { at: T0 }), wireEntry('b', { at: T0 + 10 }), wireConfirm('c', { at: T0 + 5 })],
+      pinned: [wireConfirm('c', { at: T0 + 5 })],
+    }))
+    await rp
+    expect(shown('b')).toBe(true)
+    expect(band()).toEqual(['b', 'c'])
+    put.resolve(OK)
+    await p
+    expect(shown('b')).toBe(true)
+    expect(band()).toEqual(['b', 'c'])
+  })
+  it('a read sent AFTER the click wins, and a later success does not bring the click back', async () => {
+    const put = deferred<unknown>()
+    setPinned.mockReturnValue(put.promise)
+    const p = st().setPin('h1', 's1', 'b', true)
+    await st().loadJournal('h1', 's1') // started after the click: b is not pinned
+    expect(shown('b')).toBe(false)
+    put.resolve(OK)
+    await p
+    expect(shown('b')).toBe(false)
+  })
   it('a pin on an entry the unit does not hold does nothing', async () => {
     await st().setPin('h1', 's1', 'nope', true)
     expect(setPinned).not.toHaveBeenCalled()

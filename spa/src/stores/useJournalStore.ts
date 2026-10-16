@@ -106,15 +106,29 @@ const nextStamp = (): number => ++clock
  * Pending optimistic pins, per (host, unit, entry). `gen` is the entry's newest mutation; `base` is the value the server is known
  * to hold (the entry's value before the first unconfirmed click, or that of the newest confirmed mutation, `baseGen`). A failed
  * PUT reverts to `base` only when its generation is still the newest (a later click owns the display), and only while the record
- * exists: a server read of the entry deletes it, because what the server says wins from then on.
+ * exists: a server read of the entry deletes it, because what the server says wins from then on. `at` is the store-clock stamp of the
+ * newest click and `value` what that click shows: only a read that STARTED after `at` speaks for the entry; one sent before the
+ * click and landing after it carries the old state, so the click keeps the display.
  */
-interface PinRec { gen: number; base: boolean; baseGen: number }
+interface PinRec { gen: number; base: boolean; baseGen: number; at: number; value: boolean }
 const pins = new Map<string, PinRec>()
 let pinGen = 0
 const pinKey = (hostId: string, unitKey: string, entryId: string): string => `${hostId}\u0000${unitKey}\u0000${entryId}`
-const dropPins = (hostId: string, unitKey: string, only?: ReadonlySet<string>): void => {
+/** A read that started at `startedAt` ends the pending pins it speaks for (those clicked before it started, and named by `only` when given). */
+const dropPins = (hostId: string, unitKey: string, startedAt: number, only?: ReadonlySet<string>): void => {
   const prefix = `${hostId}\u0000${unitKey}\u0000`
-  for (const k of [...pins.keys()]) if (k.startsWith(prefix) && (!only || only.has(k.slice(prefix.length)))) pins.delete(k)
+  for (const [k, rec] of [...pins]) if (k.startsWith(prefix) && rec.at < startedAt && (!only || only.has(k.slice(prefix.length)))) pins.delete(k)
+}
+/** Pins still pending after a read: the click keeps the display over what the (older) read carried. */
+function keepPins(hostId: string, unitKey: string, u: UnitState): UnitState {
+  const prefix = `${hostId}\u0000${unitKey}\u0000`
+  let out = u
+  for (const [k, rec] of pins) {
+    if (!k.startsWith(prefix)) continue
+    const entry = out.entries.find((e) => e.id === k.slice(prefix.length))
+    if (entry) out = withPin(out, entry, rec.value)
+  }
+  return out
 }
 /** `entry` with its pin set to `value`, in the stream and in the band (newest first). */
 function withPin(u: UnitState, entry: JournalEntry, value: boolean): UnitState {
@@ -192,7 +206,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
         const h = s.byHost[hostId] ?? { units: {}, unitOfSession: {} }
         const held = h.units[key]
         // What the server says about an entry wins over a pending optimistic pin of it (the newest page speaks for the whole band).
-        dropPins(hostId, key, older ? new Set(page.entries.map((e) => e.id)) : undefined)
+        dropPins(hostId, key, startedAt, older ? new Set(page.entries.map((e) => e.id)) : undefined)
         let entries = mergeEntries(held?.entries ?? [], page.entries)
         if (!older) {
           // Held rows the page does not carry (older months) follow the band the server just sent.
@@ -213,7 +227,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
           tasks: held?.tasks ?? null, roadmap: held?.roadmap ?? null,
           staleAt: held?.staleAt ?? zero(), readAt, touched: nextStamp(),
         }
-        const units = { ...h.units, [key]: next }
+        const units = { ...h.units, [key]: keepPins(hostId, key, next) }
         return { byHost: { ...s.byHost, [hostId]: trim(units, { ...h.unitOfSession, [sessionId]: key }) } }
       }))
     },
@@ -252,7 +266,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
       const pending = pins.get(k)
       if (shown === pinned && !pending) return
       const gen = ++pinGen
-      pins.set(k, { gen, base: pending?.base ?? shown, baseGen: pending?.baseGen ?? 0 })
+      pins.set(k, { gen, base: pending?.base ?? shown, baseGen: pending?.baseGen ?? 0, at: nextStamp(), value: pinned })
       const apply = (value: boolean): void => set((s) => {
         const h = s.byHost[hostId]
         const cur = h?.units[unitKey]
