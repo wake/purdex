@@ -125,3 +125,25 @@ func TestHandleEventCountsTheForksTheHookReports(t *testing.T) {
 		t.Fatalf("a request refused as schema_invalid must not count its forks: %d", got)
 	}
 }
+
+// An event that verification refuses still counts as an event AND its forks: the two are counted at the same point, so the
+// cost per event (hook-cli ÷ hook.<name>) stays a ratio of like with like.
+func TestHandleEventCountsForksAndEventTogetherEvenWhenVerifyRefuses(t *testing.T) {
+	execstat.ResetTags()
+	t.Cleanup(execstat.ResetTags)
+	m := newTestModule(t) // it installs an accepting verify; the refusing one goes in after it
+	orig := verifyEventFn
+	verifyEventFn = func(*Module, EventRequest) verifyDecision { return verifyDecision{Accepted: false, Reason: "pid_dead"} }
+	t.Cleanup(func() { verifyEventFn = orig })
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+	body := `{"tmux_session":"work","tmux_pane_id":"%1","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"cc","sender_pid":4242,"sender_start_time":"Sun Apr 20 01:30:00 2026","forks":2}`
+	req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	m.handleEvent(httptest.NewRecorder(), req)
+	if got := eventCount("hook.PdxSessionStart"); got != 1 {
+		t.Errorf("hook.PdxSessionStart = %d, want 1", got)
+	}
+	if got := tagCount("hook-cli"); got != 2 {
+		t.Errorf("hook-cli = %d, want 2", got)
+	}
+}
