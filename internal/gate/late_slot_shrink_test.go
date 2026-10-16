@@ -13,9 +13,9 @@ import (
 // time, is still seen after the size is lowered: it counts against the capacity, is listed, and does not let more late holders in
 // than there is room for (R1 of #3011).
 func TestPool_ASlotAboveALoweredSizeIsStillSeen(t *testing.T) {
-	big := lateTestPool(t, 4)
+	big := lateTestPool(t, 20) // so that the slot above the lowered size is beyond Size+overSlots and beyond 8+overSlots too
 	var slots []*Slot
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 20; i++ {
 		tk, err := big.Enqueue()
 		require.NoError(t, err)
 		s, _, err := big.TryTake(tk)
@@ -24,15 +24,15 @@ func TestPool_ASlotAboveALoweredSizeIsStillSeen(t *testing.T) {
 		require.NotNil(t, s)
 		slots = append(slots, s)
 	}
-	require.NoError(t, slots[3].SetHolder(Holder{PID: os.Getpid(), Argv: []string{"go", "test", "./..."}}))
-	for _, s := range slots[:3] {
+	require.NoError(t, slots[19].SetHolder(Holder{PID: os.Getpid(), Argv: []string{"go", "test", "./..."}}))
+	for _, s := range slots[:19] {
 		s.Release(nil)
 	}
 
 	small := &Pool{Dir: big.Dir, Class: ClassLight, Size: 1, Now: time.Now}
 	held := small.Held()
-	require.Len(t, held, 1, "slot 4 is held, whatever the size is now")
-	assert.Equal(t, 4, held[0].Slot)
+	require.Len(t, held, 1, "slot 20 is held, whatever the size is now")
+	assert.Equal(t, 20, held[0].Slot)
 	assert.True(t, held[0].Over, "above the size of now")
 
 	tk, err := small.Enqueue()
@@ -42,7 +42,7 @@ func TestPool_ASlotAboveALoweredSizeIsStillSeen(t *testing.T) {
 	tk.Drop()
 	assert.Nil(t, s, "the one slot of the pool is free, and the job above it still runs: the pool is full")
 
-	slots[3].Release(nil)
+	slots[19].Release(nil)
 	tk, err = small.Enqueue()
 	require.NoError(t, err)
 	s, _, err = small.TryTake(tk)
