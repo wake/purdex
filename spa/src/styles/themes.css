@@ -29,9 +29,9 @@
   --color-status-success: var(--status-success);
   /* The journal's kind chips (J-2c): six hues, themes.css only. A custom theme lacks them and falls back to a token it has. */
   --color-journal-kind-exec: var(--journal-kind-exec, var(--accent));
-  --color-journal-kind-exec-done: var(--journal-kind-exec-done, var(--status-success));
+  --color-journal-kind-exec-done: var(--journal-kind-exec-done, var(--status-success-text, var(--status-success)));
   --color-journal-kind-task-new: var(--journal-kind-task-new, var(--accent));
-  --color-journal-kind-task-done: var(--journal-kind-task-done, var(--status-success));
+  --color-journal-kind-task-done: var(--journal-kind-task-done, var(--status-success-text, var(--status-success)));
   --color-journal-kind-comm: var(--journal-kind-comm, var(--text-secondary));
   --color-journal-kind-request: var(--journal-kind-request, var(--accent));
   /* The journal's warning text (待確認 chip, highlighted names): themes.css only; Nord lightens it, every other theme falls back to status-warning-text. */

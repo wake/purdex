@@ -17,8 +17,8 @@ const source = (rel: string): string => readFileSync(resolve(DIR, rel), 'utf8')
 
 const KINDS = ['exec', 'exec-done', 'task-new', 'task-done', 'comm', 'request'] as const
 const FALLBACK: Record<(typeof KINDS)[number], string> = {
-  exec: 'var(--accent)', 'exec-done': 'var(--status-success)', 'task-new': 'var(--accent)',
-  'task-done': 'var(--status-success)', comm: 'var(--text-secondary)', request: 'var(--accent)',
+  exec: 'var(--accent)', 'exec-done': 'var(--status-success-text, var(--status-success))', 'task-new': 'var(--accent)',
+  'task-done': 'var(--status-success-text, var(--status-success))', comm: 'var(--text-secondary)', request: 'var(--accent)',
 }
 // The approved prototype's colours (docs/prototypes/workbook-journal-v4/components/types.ts KIND_COLOR), used as they are on the dark theme.
 const PROTOTYPE = { exec: '#5b8def', 'exec-done': '#2f9e6b', 'task-new': '#f08a4b', 'task-done': '#b5e07a', comm: '#bb9af7', request: '#f2647f' } as const
