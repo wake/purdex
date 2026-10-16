@@ -1,0 +1,84 @@
+// spa/src/components/journal/JournalRow.tsx — one entry of the stream or of the pinned band (J-2c, spec §11): time, kind chip,
+// actor (`A → B`), text, refs; the person's name highlighted in actor and text. A 待確認 row shows its checklist read-only (Haiku
+// ticks it; an answered item is struck through and checked), has NO coloured left edge (the yellow is the chip and the boxes only)
+// and opens its detail on click. The pin button is always in the DOM but only visible on hover (or while pinned).
+import { CheckSquare, PushPin, Square } from '@phosphor-icons/react'
+import { KindChip } from './KindChip'
+import { PersonMark } from './PersonMark'
+import { RefChips } from './RefChips'
+import { answered } from '../../lib/journal/filters'
+import { timeOf } from '../../lib/journal/stream'
+import { useI18nStore } from '../../stores/useI18nStore'
+import { keepFocus } from '../../lib/keep-focus'
+import type { JournalEntry } from '../../lib/journal/types'
+
+export interface RowContext {
+  personName: string
+  remoteUrl: string
+  /** The 待確認 whose detail is open. */
+  selectedId: string | null
+  onToggleDetail: (entryId: string) => void
+  onTogglePin: (entry: JournalEntry) => void
+}
+
+export function JournalRow({ entry, compact, ctx }: { entry: JournalEntry; compact?: boolean; ctx: RowContext }) {
+  const t = useI18nStore((s) => s.t)
+  const confirm = entry.kind === 'confirm'
+  const { done, total } = answered(entry)
+  const resolved = confirm && total > 0 && done === total
+  const label = t(entry.pinned ? 'journal.pin.unpin' : 'journal.pin.pin')
+  const open = () => ctx.onToggleDetail(entry.id)
+  return (
+    <div
+      data-testid="journal-entry"
+      data-entry-id={entry.id}
+      data-kind={entry.kind}
+      data-selected={ctx.selectedId === entry.id || undefined}
+      role={confirm ? 'button' : undefined}
+      tabIndex={confirm ? 0 : undefined}
+      onClick={confirm ? open : undefined}
+      onKeyDown={confirm ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open() } } : undefined}
+      className={`group relative flex gap-2 py-1.5 px-1 -mx-1 rounded border-b border-border-subtle/50 last:border-b-0 ${confirm ? 'cursor-pointer hover:bg-surface-hover' : ''} ${ctx.selectedId === entry.id ? 'bg-surface-hover ring-1 ring-border-active' : ''}`}
+    >
+      <span className="w-9 shrink-0 tabular-nums text-[10.5px] text-text-muted pt-0.5">{timeOf(entry.at)}</span>
+      <div className="min-w-0 flex-1 pr-5">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <KindChip kind={entry.kind} />
+          <span className="text-[10.5px] text-text-secondary break-words min-w-0"><PersonMark text={entry.actor} name={ctx.personName} /></span>
+          {resolved && <span className="text-[10px] px-1 rounded bg-surface-hover text-text-muted">{t('journal.row.resolved')}</span>}
+        </div>
+        <div className={`mt-0.5 leading-[17px] break-words ${compact ? 'line-clamp-2' : ''} ${resolved ? 'text-text-secondary' : 'text-text-primary'}`}>
+          <PersonMark text={entry.text} name={ctx.personName} />
+        </div>
+        {confirm && compact && total > 0 && (
+          <div data-testid="journal-answered" className="mt-0.5 text-[11px] text-status-warning-text">{t('journal.band.answered', { done, total })}</div>
+        )}
+        {confirm && !compact && total > 0 && (
+          <ul data-testid="journal-checklist" className="mt-1 space-y-0.5">
+            {entry.items.map((it, i) => (
+              <li key={i} data-done={it.done || undefined} className="flex items-start gap-1.5 leading-[16px]">
+                {it.done
+                  ? <CheckSquare size={13} weight="fill" className="shrink-0 mt-px text-status-success" />
+                  : <Square size={13} className="shrink-0 mt-px text-status-warning-text" />}
+                <span className={it.done ? 'text-text-muted line-through' : 'text-text-primary'}>{it.text}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        {!compact && <RefChips refs={entry.refs} remoteUrl={ctx.remoteUrl} />}
+      </div>
+      <button
+        type="button"
+        data-testid="journal-pin-toggle"
+        aria-label={label}
+        aria-pressed={entry.pinned}
+        title={label}
+        onMouseDown={keepFocus}
+        onClick={(e) => { e.stopPropagation(); ctx.onTogglePin(entry) }}
+        className={`absolute top-1 right-0.5 p-0.5 rounded cursor-pointer hover:bg-surface-hover focus:opacity-100 ${entry.pinned ? 'text-text-primary' : 'text-text-muted opacity-0 group-hover:opacity-100'}`}
+      >
+        <PushPin size={12} weight={entry.pinned ? 'fill' : 'regular'} />
+      </button>
+    </div>
+  )
+}
