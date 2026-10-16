@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	leaf "github.com/wake/purdex/internal/fleet"
+	"github.com/wake/purdex/internal/devices"
 	"github.com/wake/purdex/internal/middleware"
 )
 
@@ -38,6 +39,8 @@ func (r *checkRig) post(body string, p *middleware.Principal) *httptest.Response
 	req := httptest.NewRequest(http.MethodPost, "/api/fleet/probe-check", strings.NewReader(body))
 	if p != nil {
 		req = req.WithContext(middleware.WithPrincipal(req.Context(), *p))
+	} else {
+		req = req.WithContext(devices.WithAdmin(req.Context())) // what TokenAuthWith does for the admin token
 	}
 	rr := httptest.NewRecorder()
 	r.mux.ServeHTTP(rr, req)
@@ -59,7 +62,7 @@ func decodeCheck(t *testing.T, rr *httptest.ResponseRecorder) checkBody {
 	return b
 }
 
-var admin = &middleware.Principal{Kind: middleware.PrincipalAdmin}
+var admin *middleware.Principal // nil: the admin token carries the devices admin mark, no middleware principal
 
 func TestProbeCheck_EveryCodeMapsToItsPair(t *testing.T) {
 	cases := []struct {
@@ -108,6 +111,7 @@ func TestProbeCheck_ReadingOnOK(t *testing.T) {
 	require.Equal(t, 40.25, b.Reading["mem"])
 	require.Equal(t, 61.0, b.Reading["disk"])
 	require.Contains(t, b.Reading, "level")
+	require.Nil(t, b.Reading["level"], "level is JSON null on the one-shot probe")
 }
 
 func TestProbeCheck_AliasNotInConfigIsAliasGoneWithoutRunning(t *testing.T) {
@@ -120,18 +124,48 @@ func TestProbeCheck_AliasNotInConfigIsAliasGoneWithoutRunning(t *testing.T) {
 	require.Zero(t, ran.Load())
 }
 
-func TestProbeCheck_NonAdminPrincipalIs403(t *testing.T) {
+// Through the real TokenAuthWith: the admin token reaches the route, a device (principal in the context), a host principal and
+// a request that got in without the admin mark (a ticket) do not; no credential is a 401.
+func TestProbeCheck_AdminOnlyThroughRealMiddleware(t *testing.T) {
 	var ran atomic.Int32
-	r := newCheckRig(t, func(context.Context, string) leaf.Result { ran.Add(1); return leaf.Result{} })
-	host := &middleware.Principal{Kind: middleware.PrincipalHost, Alias: "mlab"}
-	require.Equal(t, http.StatusForbidden, r.post(`{"ssh_alias":"box"}`, host).Code)
-	require.Equal(t, http.StatusForbidden, r.post(`{"ssh_alias":"box"}`, &middleware.Principal{Kind: "device"}).Code)
-	require.Zero(t, ran.Load())
+	r := newCheckRig(t, func(context.Context, string) leaf.Result { ran.Add(1); return leaf.Result{Status: leaf.StatusOK} })
+	h := middleware.TokenAuthWith(func() string { return "adm" }, nil, nil)(r.mux)
+	do := func(token string, mutate func(*http.Request) *http.Request) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/fleet/probe-check", strings.NewReader(`{"ssh_alias":"box"}`))
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		if mutate != nil {
+			req = mutate(req)
+		}
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr.Code
+	}
+	require.Equal(t, http.StatusOK, do("adm", nil))
+	require.EqualValues(t, 1, ran.Load())
+	require.Equal(t, http.StatusUnauthorized, do("", nil))
+	require.Equal(t, http.StatusUnauthorized, do("wrong", nil))
+	// the handler itself, behind a chain that let something else in
+	bare := func(ctx func(context.Context) context.Context) int {
+		req := httptest.NewRequest(http.MethodPost, "/api/fleet/probe-check", strings.NewReader(`{"ssh_alias":"box"}`))
+		rr := httptest.NewRecorder()
+		r.mux.ServeHTTP(rr, req.WithContext(ctx(req.Context())))
+		return rr.Code
+	}
+	require.Equal(t, http.StatusForbidden, bare(func(c context.Context) context.Context {
+		return devices.WithPrincipal(c, devices.Principal{ID: "d_aaaaaaaaaaaa"})
+	}))
+	require.Equal(t, http.StatusForbidden, bare(func(c context.Context) context.Context {
+		return middleware.WithPrincipal(c, middleware.Principal{Kind: middleware.PrincipalHost, Alias: "mlab"})
+	}))
+	require.Equal(t, http.StatusForbidden, bare(func(c context.Context) context.Context { return c }), "no admin mark")
+	require.EqualValues(t, 1, ran.Load())
 }
 
 func TestProbeCheck_BadBodyIs400(t *testing.T) {
 	r := newCheckRig(t, nil)
-	for _, body := range []string{``, `not json`, `{}`, `{"ssh_alias":""}`, `{"ssh_alias":5}`, `{"ssh_alias":"a","x":1}`,
+	for _, body := range []string{``, `not json`, `{}`, `{"ssh_alias":""}`, `{"ssh_alias":5}`, `{"ssh_alias":"a","x":1}`, `{"ssh_alias":"a"}x`,
 		`{"ssh_alias":"` + strings.Repeat("a", 5000) + `"}`} {
 		require.Equal(t, http.StatusBadRequest, r.post(body, admin).Code, body)
 	}
@@ -209,4 +243,162 @@ func TestProbeCheck_DefaultRunnerGoesThroughRunner(t *testing.T) {
 	require.Equal(t, "remote_exit", *b.Error)
 	require.Equal(t, "ok", b.SSH)
 	require.Equal(t, "failed", b.Measure)
+}
+
+func TestProbeCheck_PanickingRunnerDoesNotWedgeTheAlias(t *testing.T) {
+	var ran atomic.Int32
+	r := newCheckRig(t, func(context.Context, string) leaf.Result {
+		if ran.Add(1) == 1 {
+			panic("boom")
+		}
+		return leaf.Result{Status: leaf.StatusOK}
+	})
+	func() {
+		defer func() { _ = recover() }()
+		r.post(`{"ssh_alias":"box"}`, admin)
+	}()
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- r.post(`{"ssh_alias":"box"}`, admin) }()
+	select {
+	case rr := <-done:
+		require.Equal(t, "ok", decodeCheck(t, rr).SSH)
+	case <-time.After(3 * time.Second):
+		t.Fatal("the next request joined a dead call")
+	}
+	require.EqualValues(t, 2, ran.Load())
+}
+
+func TestProbeCheck_JoinerPanicOfLeaderGetsAnAnswer(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	r := newCheckRig(t, func(context.Context, string) leaf.Result {
+		close(started)
+		<-release
+		panic("boom")
+	})
+	go func() {
+		defer func() { _ = recover() }()
+		r.post(`{"ssh_alias":"box"}`, admin)
+	}()
+	<-started
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- r.post(`{"ssh_alias":"box"}`, admin) }()
+	require.Eventually(t, func() bool { return r.m.probeWaiters("box") == 1 }, 2*time.Second, time.Millisecond)
+	close(release)
+	select {
+	case rr := <-done:
+		b := decodeCheck(t, rr)
+		require.Equal(t, "unknown", b.SSH)
+		require.Equal(t, "unreachable", *b.Error)
+	case <-time.After(3 * time.Second):
+		t.Fatal("the joiner hung behind a panicked leader")
+	}
+}
+
+func TestProbeCheck_CancelledJoinerLeavesTheLeaderAlone(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	r := newCheckRig(t, func(context.Context, string) leaf.Result {
+		close(started)
+		<-release
+		return leaf.Result{Status: leaf.StatusOK}
+	})
+	leader := make(chan *httptest.ResponseRecorder, 1)
+	go func() { leader <- r.post(`{"ssh_alias":"box"}`, admin) }()
+	<-started
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "/api/fleet/probe-check", strings.NewReader(`{"ssh_alias":"box"}`)).WithContext(devices.WithAdmin(ctx))
+	joined := make(chan int, 1)
+	go func() { rr := httptest.NewRecorder(); r.mux.ServeHTTP(rr, req); joined <- rr.Code }()
+	require.Eventually(t, func() bool { return r.m.probeWaiters("box") == 1 }, 2*time.Second, time.Millisecond)
+	cancel()
+	select {
+	case code := <-joined:
+		require.Equal(t, http.StatusRequestTimeout, code)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the cancelled joiner did not return")
+	}
+	close(release)
+	require.Equal(t, "ok", decodeCheck(t, <-leader).SSH)
+}
+
+func TestProbeCheck_JoinerHasItsOwnBound(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	r := newCheckRig(t, func(context.Context, string) leaf.Result {
+		close(started)
+		<-release
+		return leaf.Result{Status: leaf.StatusOK}
+	})
+	defer close(release)
+	r.m.probeTimeout = 20 * time.Millisecond
+	r.m.probeJoinSlack = 20 * time.Millisecond
+	go r.post(`{"ssh_alias":"box"}`, admin)
+	<-started
+	b := decodeCheck(t, r.post(`{"ssh_alias":"box"}`, admin))
+	require.Equal(t, "timeout", *b.Error)
+}
+
+func TestProbeCheck_StopEndsAHangingRun(t *testing.T) {
+	started, ended := make(chan struct{}), make(chan struct{})
+	r := newCheckRig(t, func(ctx context.Context, _ string) leaf.Result {
+		close(started)
+		<-ctx.Done()
+		close(ended)
+		return leaf.Result{Status: leaf.StatusOffline, Code: leaf.CodeUnreachable}
+	})
+	go r.post(`{"ssh_alias":"box"}`, admin)
+	<-started
+	r.m.Stop()
+	select {
+	case <-ended:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop left the run going")
+	}
+}
+
+func TestProbeCheck_DeadlineOnlyRewritesUnreachable(t *testing.T) {
+	for _, c := range []struct{ code, want leaf.Code }{
+		{leaf.CodeUnreachable, leaf.CodeTimeout}, {leaf.CodeAuth, leaf.CodeAuth}, {leaf.CodeRemoteExit, leaf.CodeRemoteExit},
+	} {
+		r := newCheckRig(t, func(ctx context.Context, _ string) leaf.Result {
+			<-ctx.Done()
+			return leaf.Result{Status: leaf.StatusError, Code: c.code}
+		})
+		r.m.probeTimeout = 20 * time.Millisecond
+		b := decodeCheck(t, r.post(`{"ssh_alias":"box"}`, admin))
+		require.Equal(t, string(c.want), *b.Error, c.code)
+	}
+}
+
+func TestProbeCheck_EmptyCodeOnNonOKIsUnreachable(t *testing.T) {
+	r := newCheckRig(t, func(context.Context, string) leaf.Result { return leaf.Result{Status: leaf.StatusError} })
+	rr := r.post(`{"ssh_alias":"box"}`, admin)
+	b := decodeCheck(t, rr)
+	require.Equal(t, "unreachable", *b.Error)
+	require.Equal(t, "unknown", b.SSH)
+	require.Equal(t, "unknown", b.Measure)
+}
+
+func TestProbeCheck_DifferentAliasesRunConcurrently(t *testing.T) {
+	var started atomic.Int32
+	both := make(chan struct{})
+	r := newCheckRig(t, func(context.Context, string) leaf.Result {
+		if started.Add(1) == 2 {
+			close(both)
+		}
+		select {
+		case <-both:
+		case <-time.After(2 * time.Second):
+		}
+		return leaf.Result{Status: leaf.StatusOK}
+	})
+	var wg sync.WaitGroup
+	for _, a := range []string{"a", "b"} {
+		wg.Add(1)
+		go func() { defer wg.Done(); r.post(`{"ssh_alias":"`+a+`"}`, admin) }()
+	}
+	wg.Wait()
+	select {
+	case <-both:
+	default:
+		t.Fatal("the second alias waited for the first (a global lock)")
+	}
 }
