@@ -239,7 +239,16 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 			if h.Orphaned {
 				gone = "  （gate 已不在，樹還活著）"
 			}
-			fmt.Fprintf(stdout, "  %s-%d  pid %d  %s  %s  %s%s\n", h.Class, h.Slot, h.PID, age, strings.Join(h.Argv, " "), h.Cwd, gone)
+			mark := ""
+			switch {
+			case h.Late && h.Over:
+				mark = "  （晚占、超額）"
+			case h.Late:
+				mark = "  （晚占）"
+			case h.Over:
+				mark = "  （超額）"
+			}
+			fmt.Fprintf(stdout, "  %s-%d  pid %d  %s  %s  %s%s%s\n", h.Class, h.Slot, h.PID, age, strings.Join(h.Argv, " "), h.Cwd, gone, mark)
 			if len(h.Locked) > 0 {
 				parts := make([]string, len(h.Locked))
 				for i, p := range h.Locked {

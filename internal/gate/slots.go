@@ -50,6 +50,10 @@ type Holder struct {
 	Cwd     string    `json:"cwd"`
 	Started time.Time `json:"started"`
 	Session string    `json:"session,omitempty"`
+	// Late says the slot was taken after the command had been running for a while (a packaging script put under a slot, #2996),
+	// not before it started; Over (set when read, never stored) says it is beyond the size of the pool.
+	Late bool `json:"late,omitempty"`
+	Over bool `json:"over,omitempty"`
 	// Token is the secret of the slot's PDX_GATE_HELD: a command below the holder presents it to pass through.
 	Token string `json:"token,omitempty"`
 	// Orphaned (set when read, never stored): the slot is locked but the gate that took it is gone; the lock lives on
@@ -60,6 +64,15 @@ type Holder struct {
 	Locked []Straggler `json:"locked,omitempty"`
 }
 
+// overSlots is how many slots beyond the pool's size a late holder (a packaging script that has run long, #2996) can take: the
+// pool is over its size by as many as are held, for as long as they are. Their numbers run from Size+1.
+const overSlots = 8
+
+// maxSlotNumber is the highest slot number there can be: the largest pool size the config allows, and the late slots beyond it.
+// The pool size is read again for every command, so a slot taken under a bigger size (or a late one numbered above the size
+// of that time) must still be found after the size has been lowered: every scan runs to here, not to the size of now.
+const maxSlotNumber = 64 + overSlots
+
 // Slot is a slot held by this process.
 type Slot struct {
 	Class Class
@@ -68,6 +81,9 @@ type Slot struct {
 	rec   string
 	h     Holder // what the record says now
 }
+
+// Over says whether the slot is beyond the size of its pool (a late holder took it while the pool was full).
+func (s *Slot) Over(size int) bool { return s.K > size }
 
 // Label is the head of the value of PDX_GATE_HELD, e.g. heavy-1 (the token follows after a colon).
 func (s *Slot) Label() string { return string(s.Class) + "-" + strconv.Itoa(s.K) }
@@ -386,7 +402,8 @@ func (p *Pool) TryTake(t *Ticket) (slot *Slot, ahead int, err error) {
 		free = append(free, f)
 		freeK = append(freeK, k)
 	}
-	if ahead >= len(free) {
+	// A slot held beyond the size of the pool (a late holder) uses up a free one: the pool is full while it is held.
+	if ahead >= len(free)-p.overHeld() {
 		closeAll(free)
 		return nil, ahead, nil
 	}
@@ -402,6 +419,65 @@ func (p *Pool) TryTake(t *Ticket) (slot *Slot, ahead int, err error) {
 	return &Slot{Class: p.Class, K: freeK[0], f: free[0], rec: p.recordPath(freeK[0])}, ahead, nil
 }
 
+// overHeld is how many slots beyond the pool's size are held now.
+func (p *Pool) overHeld() int {
+	n := 0
+	for k := p.Size + 1; k <= maxSlotNumber; k++ {
+		f, err := os.OpenFile(p.slotPath(k), os.O_RDWR, 0)
+		if err != nil {
+			continue
+		}
+		if st, _ := flockNB(f); st != lockGot {
+			n++
+		}
+		_ = f.Close()
+	}
+	return n
+}
+
+// TakeLate takes a slot for a command that is already running, without a ticket and without asking whether the host admits
+// more work: the lowest free slot of the pool, or when the pool is full one beyond its size. nil when even those are taken
+// (overSlots late holders at once). It holds the same admit lock as TryTake, so the two never take the same slot or count a
+// slot twice.
+func (p *Pool) TakeLate() (*Slot, error) {
+	if err := os.MkdirAll(p.Dir, 0o755); err != nil {
+		return nil, dirError(err)
+	}
+	mu, err := os.OpenFile(filepath.Join(p.Dir, string(p.Class)+".admit"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, dirError(err)
+	}
+	defer mu.Close()
+	if err := flockWait(mu); err != nil {
+		return nil, dirError(err)
+	}
+	defer syscall.Flock(int(mu.Fd()), syscall.LOCK_UN) //nolint:errcheck
+	if p.overHeld() >= overSlots {
+		return nil, nil // as many late holders as there is room for
+	}
+	for k := 1; k <= maxSlotNumber; k++ {
+		f, err := os.OpenFile(p.slotPath(k), os.O_CREATE|os.O_RDWR, 0o644)
+		if err != nil {
+			return nil, dirError(err)
+		}
+		st, lerr := lockProbe(f)
+		if st == lockBroken {
+			_ = f.Close()
+			return nil, dirError(lerr)
+		}
+		if st == lockHeld {
+			_ = f.Close()
+			continue
+		}
+		if err := os.Remove(p.recordPath(k)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			_ = f.Close()
+			return nil, dirError(err)
+		}
+		return &Slot{Class: p.Class, K: k, f: f, rec: p.recordPath(k)}, nil
+	}
+	return nil, nil
+}
+
 func closeAll(fs []*os.File) {
 	for _, f := range fs {
 		_ = f.Close() // closing drops the probe's lock
@@ -412,7 +488,7 @@ func closeAll(fs []*os.File) {
 // ignored), and the size it was asked with.
 func (p *Pool) Held() []Holder {
 	var out []Holder
-	for k := 1; k <= p.Size; k++ {
+	for k := 1; k <= maxSlotNumber; k++ {
 		f, err := os.OpenFile(p.slotPath(k), os.O_RDWR, 0)
 		if err != nil {
 			continue
@@ -428,6 +504,7 @@ func (p *Pool) Held() []Holder {
 			h.Class, h.Slot = p.Class, k
 			h.Orphaned = h.PID > 0 && !pidAlive(h.PID)
 		}
+		h.Over = k > p.Size
 		h.Token = "" // never shown
 		out = append(out, h)
 	}
@@ -501,7 +578,7 @@ func (p *Pool) Record(k int) (h Holder, held bool, ok bool) {
 // free, and the record says something is off (a gate that dropped its lock without exiting).
 func (p *Pool) Suspect() []Holder {
 	var out []Holder
-	for k := 1; k <= p.Size; k++ {
+	for k := 1; k <= maxSlotNumber; k++ {
 		h, held, ok := p.Record(k)
 		if ok && !held && h.PID > 0 && pidAlive(h.PID) {
 			h.Class, h.Slot, h.Token = p.Class, k, ""

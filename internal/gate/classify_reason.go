@@ -175,7 +175,7 @@ func runnerNoneReason(runner string, args []string, e Env) Reason {
 		if len(rest) == 0 {
 			return ReasonKnownPassthrough
 		}
-		if packagingScripts[rest[0]] {
+		if isPackagingScript(rest[0]) {
 			return ReasonPackaging
 		}
 		return ReasonUnknown // a script of the project's own that the table does not call heavy
@@ -183,7 +183,7 @@ func runnerNoneReason(runner string, args []string, e Env) Reason {
 	if runner == "npx" || runner == "pnpx" || runner == "bunx" {
 		return noneReason(args[i:], e)
 	}
-	if packagingScripts[word] {
+	if isPackagingScript(word) {
 		return ReasonPackaging
 	}
 	if r := noneReason(args[i:], e); r != ReasonUnknown {
@@ -200,12 +200,12 @@ func yarnForeachNoneReason(args []string) Reason {
 			i++
 		case strings.HasPrefix(a, "-"):
 		case a == "run":
-			if i+1 < len(args) && packagingScripts[args[i+1]] {
+			if i+1 < len(args) && isPackagingScript(args[i+1]) {
 				return ReasonPackaging
 			}
 			return ReasonUnknown
 		default:
-			if packagingScripts[a] {
+			if isPackagingScript(a) {
 				return ReasonPackaging
 			}
 			return ReasonUnknown

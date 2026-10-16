@@ -52,9 +52,20 @@ var heavyScripts = map[string]bool{
 	"check": true, "test": true, "typecheck": true, "lint": true,
 }
 
-// packagingScripts are scripts that package or build an output: they run for seconds to a minute and are never held back
-// (user 10-15), whichever way they are asked for (also `pnpm -r build`). They are none, not heavy, and not light either.
-var packagingScripts = map[string]bool{"build": true, "electron:build": true}
+// packagingBases are the names that say a script packages or builds an output: build, package, pack, dist, bundle, and each of them
+// with a suffix after a colon (build:mac, package:win:dev), and electron:build. Such a script is never held back (user 10-15),
+// whichever way it is asked for (also `pnpm -r build`): it is none, not heavy, and not light either. It is put under a slot
+// late, when it has run long (#2996). A script of an unknown name is not one: a dev server must not take a slot for ever.
+var packagingBases = map[string]bool{"build": true, "package": true, "pack": true, "dist": true, "bundle": true}
+
+// isPackagingScript says whether the script name is a packaging one.
+func isPackagingScript(name string) bool {
+	if name == "electron:build" || packagingBases[name] {
+		return true
+	}
+	base, _, suffixed := strings.Cut(name, ":")
+	return suffixed && packagingBases[base]
+}
 
 // Reason is why a command got its class (ClassifyReason): the two pools, and for a command the gate lets through the kind of
 // letting. The load watcher reads it to tell a command that should have been gated from one that is allowed.
@@ -391,7 +402,7 @@ func classifyRunner(runner string, args []string, e Env) Class {
 	if runner == "npx" || runner == "pnpx" || runner == "bunx" {
 		return withRecursive(Classify(args[i:], e), recursive)
 	}
-	if packagingScripts[word] {
+	if isPackagingScript(word) {
 		return ClassNone
 	}
 	if heavyScripts[word] {
@@ -421,12 +432,12 @@ func yarnForeach(args []string) Class {
 			i++
 		case strings.HasPrefix(a, "-"):
 		case a == "run":
-			if i+1 < len(args) && !packagingScripts[args[i+1]] && (heavyScripts[args[i+1]] || all) {
+			if i+1 < len(args) && !isPackagingScript(args[i+1]) && (heavyScripts[args[i+1]] || all) {
 				return ClassHeavy
 			}
 			return ClassNone
 		default:
-			if !packagingScripts[a] && (heavyScripts[a] || all) {
+			if !isPackagingScript(a) && (heavyScripts[a] || all) {
 				return ClassHeavy
 			}
 			return ClassNone
@@ -436,7 +447,7 @@ func yarnForeach(args []string) Class {
 }
 
 func scriptClass(name string, recursive bool) Class {
-	if packagingScripts[name] {
+	if isPackagingScript(name) {
 		return ClassNone
 	}
 	if heavyScripts[name] || recursive {

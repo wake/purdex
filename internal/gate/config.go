@@ -32,6 +32,7 @@ type Config struct {
 	Parallelism ParallelismConfig
 	Priority    PriorityConfig
 	Lifetime    LifetimeConfig
+	Packaging   PackagingConfig
 	Reap        ReapConfig
 	Cache       CacheConfig
 
@@ -86,6 +87,7 @@ func FromTable(gate map[string]any) Config {
 		Parallelism: parseParallelism(r.sub("parallelism")),
 		Priority:    parsePriority(r.sub("priority")),
 		Lifetime:    parseLifetime(r.sub("lifetime")),
+		Packaging:   parsePackaging(r.sub("packaging")),
 		Reap:        parseReap(r.sub("reap")),
 		Cache:       parseCache(r.sub("cache")),
 	}
