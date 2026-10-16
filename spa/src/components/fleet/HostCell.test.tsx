@@ -31,6 +31,75 @@ const ring = () => screen.getByTestId('load-ring-mlab')
 const arc = () => within(ring()).queryByTestId('context-ring-arc')
 const hostBadge = () => screen.getByTestId('host-badge-mlab')
 const badge = () => screen.queryByTestId('queue-badge-mlab')
+const bars = () => screen.getByTestId('load-bars-mlab')
+const barOf = (side: 'left' | 'right') => within(bars()).getByTestId(`host-bar-${side}`)
+const fillOf = (side: 'left' | 'right') => within(barOf(side)).queryByTestId('host-bar-fill')
+
+// 「主機格指示」: the setting picks what sits after the badge — the ring, or two bars (CPU + memory pressure / memory used).
+describe('HostCell — the indicator setting', () => {
+  it('default: the ring, no bars', () => {
+    setup(view())
+    expect(ring()).toBeTruthy()
+    expect(screen.queryByTestId('load-bars-mlab')).toBeNull()
+  })
+  it('bars-pressure: two bars in the ring\'s place and the ring\'s size; left CPU, right the pressure level', () => {
+    useUISettingsStore.setState({ fleetCellIndicator: 'bars-pressure' })
+    setup(view({ fast: fast({ cpu: 75, level: 2, mem: 30, zone: 'warning' }) }))
+    expect(screen.queryByTestId('load-ring-mlab')).toBeNull()
+    expect(within(bars()).queryByTestId('context-ring')).toBeNull()
+    expect(within(bars()).getByTestId('host-bars').style.width).toBe('16px')
+    expect(bars().dataset.zone).toBe('warning')
+    expect(barOf('left').dataset.pct).toBe('75')
+    expect(barOf('left').dataset.tone).toBe('warn')
+    expect(Number(barOf('right').dataset.pct)).toBeCloseTo(200 / 3, 5)
+    expect(barOf('right').dataset.tone).toBe('warn')
+  })
+  it('bars-pressure: an unknown level (0) falls back to memory used %', () => {
+    useUISettingsStore.setState({ fleetCellIndicator: 'bars-pressure' })
+    setup(view({ fast: fast({ cpu: 10, level: 0, mem: 91 }) }))
+    expect(barOf('right').dataset.pct).toBe('91')
+    expect(barOf('right').dataset.tone).toBe('danger')
+  })
+  it('bars-memory: the right bar is memory used %, whatever the level', () => {
+    useUISettingsStore.setState({ fleetCellIndicator: 'bars-memory' })
+    setup(view({ fast: fast({ cpu: 30, level: 1, mem: 82 }) }))
+    expect(barOf('left').dataset.pct).toBe('30')
+    expect(barOf('left').dataset.tone).toBe('ok')
+    expect(barOf('right').dataset.pct).toBe('82')
+    expect(barOf('right').dataset.tone).toBe('warn')
+  })
+  it('bars, offline: grey tracks, no fill; the badge still dimmed', () => {
+    useUISettingsStore.setState({ fleetCellIndicator: 'bars-memory' })
+    setup(view({ status: 'offline', fast: null }))
+    expect(fillOf('left')).toBeNull()
+    expect(fillOf('right')).toBeNull()
+    expect(bars().dataset.zone).toBe('offline')
+    expect(screen.getByTestId('host-badge-dim-mlab').className).toContain('opacity-40')
+  })
+  it('bars, no reading yet: tracks only', () => {
+    useUISettingsStore.setState({ fleetCellIndicator: 'bars-pressure' })
+    setup(view({ fast: null }))
+    expect(fillOf('left')).toBeNull()
+    expect(fillOf('right')).toBeNull()
+  })
+  it('bars keep the queue count on the badge\'s corner', () => {
+    useUISettingsStore.setState({ fleetCellIndicator: 'bars-pressure' })
+    setup(view({ slow: { at: 1, top_cpu: [], top_mem: [], queue: queue(2) } }))
+    expect(badge()).toHaveTextContent('2')
+    expect(badge()!.parentElement!.contains(hostBadge())).toBe(true)
+  })
+  it('the narrow variant follows the same setting', () => {
+    useUISettingsStore.setState({ fleetCellIndicator: 'bars-memory' })
+    setup(view(), { variant: 'narrow' })
+    expect(bars()).toBeTruthy()
+    expect(screen.queryByTestId('load-ring-mlab')).toBeNull()
+  })
+  it('a corrupt stored value draws the ring', () => {
+    useUISettingsStore.setState({ fleetCellIndicator: 'pie' as never })
+    setup(view())
+    expect(ring()).toBeTruthy()
+  })
+})
 
 describe('HostCell — the cell', () => {
   it('is a member bead\'s box: h-6 rounded-md gap-1, 3px each side, hover surface, selected surface', () => {
