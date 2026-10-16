@@ -577,6 +577,12 @@ describe('fleet host cell indicator', () => {
     expect(useUISettingsStore.getState().fleetCellIndicator).toBe('bars-memory')
   })
 
+  it('rehydrate with no indicator field at all reads as the ring', async () => {
+    localStorage.setItem(STORAGE_KEYS.UI_SETTINGS, JSON.stringify({ state: {}, version: 4 }))
+    await useUISettingsStore.persist.rehydrate()
+    expect(useUISettingsStore.getState().fleetCellIndicator).toBe('ring')
+  })
+
   it('rehydrate repairs a corrupt stored value to the ring (a synced payload is healed by the same rehydrate)', async () => {
     useUISettingsStore.setState({ fleetCellIndicator: 'bars-pressure' })
     localStorage.setItem(STORAGE_KEYS.UI_SETTINGS, JSON.stringify({ state: { fleetCellIndicator: 'pie' }, version: 4 }))

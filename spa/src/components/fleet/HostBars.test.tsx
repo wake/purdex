@@ -3,6 +3,16 @@ import { render, screen, within } from '@testing-library/react'
 import { HostBars } from './HostBars'
 import { cpuReading, memoryReading, pressureReading } from '../../lib/fleet/bar-readings'
 
+describe('non-finite readings read as 0 (#3047 review)', () => {
+  it.each([NaN, Infinity, -Infinity])('%s in -> a finite pct and a finite bar height', (v) => {
+    expect(cpuReading(v).pct).toBe(0)
+    expect(memoryReading(v).pct).toBe(0)
+    expect(pressureReading(0, v).pct).toBe(0)
+    render(<HostBars left={cpuReading(v)} right={memoryReading(v)} size={16} />)
+    for (const b of screen.getAllByTestId(/^host-bar-(left|right)$/)) expect(Number.isFinite(Number(b.getAttribute('data-pct')))).toBe(true)
+  })
+})
+
 describe('readings — the bands are the ring\'s (70 warn, 90 danger)', () => {
   it.each([[69, 'ok'], [70, 'warn'], [89, 'warn'], [90, 'danger'], [0, 'ok']] as const)('CPU %i%% -> %s', (cpu, tone) => {
     expect(cpuReading(cpu)).toEqual({ pct: cpu, tone })
