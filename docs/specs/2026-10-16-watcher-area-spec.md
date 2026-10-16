@@ -18,7 +18,7 @@
 | U7 | Words: 正常／偏高／過載／離線 for a host's zone; the shield badge is the host cells' `CountBadge` (≈ 11 px), the shield is green. |
 | U8 | Design and prototypes are done with Opus; the style follows the real App (the prototype imports the App's own `TabBar`, `Section`, `SettingItem`, `SegmentControl`, `ToggleSwitch`, `HostBadge`). |
 | U9 | (10-16, #3017) **No 全部略過**: nothing in the area closes an event; an event is pending or handled by the watcher, nothing else. |
-| U10 | (10-16, #3017) The watcher's bounds for changing the slot counts are a setting of the `watch` row, `slot_bounds` (default heavy 1–2, light 2–4), edited in the area's 守門員 settings. |
+| U10 | (10-16, #3017) The watcher's bounds for changing the slot counts are a setting of the `watch` row, `slot_bounds` (default heavy 0–3, light 0–5 after #3019; 0 lets the watcher pause a class), edited in the area's 守門員 settings. |
 
 ## 2. Entry points
 
@@ -65,7 +65,7 @@ Hover tooltips stay as F-2b built them.
   |---|---|---|
   | 守門員 | `{ kind: 'watch-guardian' }` (§4: shows the watcher's tmux session pane when there is one) | 守門員 |
   | 事件 | `{ kind: 'watch-events' }` | 事件, or 事件 n while n > 0 |
-  | host | `{ kind: 'watch-host'; hostId }` — every host of the fleet (daemon and probe hosts) | the host's alias |
+  | host | `{ kind: 'watch-host'; fleetHostId }` — every host of the fleet (daemon and probe hosts); the fleet id, global, not an App host id | the host's alias |
 
 - The host tabs follow the fleet's host list: a host added (probe host saved, a paired daemon) gets a tab appended at
   the end; a host removed loses its tab; the user's order is kept for the rest. Tab order is part of the synced
@@ -150,7 +150,9 @@ switch (狀態 only) and the 狀態｜設定 `SegmentControl`.
   - **當下**: 「排隊 n · 最久 m:ss」 (warning when n > 0); two lanes, 重指令 (h-7) and 輕指令 (h-6): the lane's name and
     「名額 used / total」, one card per slot (running: accent tint, command, elapsed m:ss; free: dashed 「空名額」), the
     gate (a 1 px line with 「等名額」 when the slots are full, line and 「暫停放行」 in status-error while admission
-    holds; no word when it holds nobody), then the waiting cards (place, command, wait; warning past 2 min). Under the
+    holds; no word when it holds nobody; a class paused at 0 slots (#3019) shows 「已暫停」 on its lane and
+    「暫停（新指令排隊）」 on its gate line in status-warning), then the waiting cards (place, command, wait; warning
+    past 2 min). Under the
     lanes a table grouped 執行中 / 排隊中（n）: 類別 · 指令 · 專案 · 時間 (已跑／等) · 名額鎖 (pid). Hovering a card or a
     row highlights its pair. Elapsed times count locally each second from `since`; the data refreshes with the 5 s
     frame.
@@ -176,7 +178,8 @@ Offline: 「這台離線，無法讀寫設定。」 and nothing editable.
    `pressure_t_s`, `page_rate`, `page_t_s`), 通知與開啟順序 (`targets`), 模式 (常駐／巡檢), 巡檢閒置分鐘, 自動喚醒,
    啟動指令 (`agent_command`, which replaced the model name on the A line, 10-16), 工作目錄, 啟動 prompt and 喚醒
    prompt (textareas; empty = built-in), and **守門員可調的名額範圍** (`slot_bounds`, U10): for 重指令 and 輕指令 a
-   最少 and a 最多 (each class 1 ≤ min ≤ max ≤ 64; default heavy 1–2, light 2–4; a pair that breaks the rule is
+   最少 and a 最多 (each class 0 ≤ min ≤ max ≤ 64, #3019; default heavy 0–3, light 0–5; 0 means the watcher may pause
+   the class: new commands of it queue, running ones go on; a pair that breaks the rule is
    refused by the daemon and its 400 text shown under the pair). When the two daemons' `targets` differ, a warning line
    under the field (the daemons warn as well, §12.3).
 
@@ -250,13 +253,13 @@ W5c (about 1700, 1100 and 1400 lines) gives these phases:
 
 | Phase | Content | Depends |
 |---|---|---|
-| W5a1 | The area (reserved workspace, the three pane kinds, tab order sync, host tabs following the fleet), the shield (states from `watch/status`, no count yet), host cells' click target, the host tab's header and 行程, the 守門員 tab's status panel | F-2a1, F-2b |
+| W5a1 | The area (reserved workspace, the three pane kinds, tab order sync, host tabs following the fleet), host cells' click target, the host tab's header and 行程 | F-2a1, F-2b |
 | W5a2 | The host tab's 資源 (gauges, charts, range) | W5a1 |
-| W5a3 | The 守門員 tab's terminal (`pdx-watch` on the holder) and the resting band without its input | W5a1 |
-| W5b | The queue wire: `queue.holders` / `waiters[].session` / `admission_reason` in `internal/fleet` + golden JSON + SPA types | #2971 |
+| W5a3 | The watcher in the area: the status from `watch/status` (no count yet), the shield, the 守門員 tab (status panel, the `pdx-watch` terminal on the holder, the resting band without its input) | W5a1 |
+| W5b | The queue wire: `queue.holders` / `waiters[].session` / `admission_reason` / the paused flags in `internal/fleet` + golden JSON + SPA types | #2971 |
 | W5b1 | Queue 當下: the lanes and the table | W5a1, W5b |
 | W5b2 | The queued symbol on the agent icon (§2.3) | W5b |
-| W5c1 | 狀態｜設定; the 守門員 section (existing API, with `slot_bounds`), probe-host settings (F-2a2's editor) | W5a1 |
+| W5c1 | 狀態｜設定; the 守門員 section (existing API, with `slot_bounds`), probe-host settings (F-2a2's editor) | W5a3 |
 | W5c2 | The gate sections | W5c1; A2 |
 | W5d | Queue 歷史 | W5b1; A1 |
 | W5e | The 事件 tab, the count, the two pushes, 啟動守門員, the wake input | W5a3; A3 |
