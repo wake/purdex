@@ -41,10 +41,11 @@ that are probed but have no daemon, with name, icon and colour; Mac App first, i
    Words: 正常 / 偏高 / 過載 / 離線.
 7. **The sidebar shows the fleet as one row of host cells at the bottom of the sidebar** (replaces rev 1's rows and compact
    strip; the 10-14 decisions 1 and 3 on the expanded / collapsed looks are withdrawn, the user's 10-15 call): per host a
-   cell = the host's icon box (its colour) with the heavy-queue count as a badge at its top-right corner (daemon hosts only,
-   only while someone waits, its colour by how bad the queue is), and a ring beside it = the **composite load**; the
-   BottomNav buttons above keep their own expanded / collapsed looks. A click opens the watcher area on that host's tab.
-   Offline: the box keeps a faint host colour under a hatch.
+   cell = the host's badge (the App's host badge, as beside a member) with the heavy-queue count at its top-right corner
+   (daemon hosts only, only while someone waits, its colour by how bad the queue is), and a ring beside it = the
+   **composite load** (the App's member status ring); the BottomNav buttons above keep their own expanded / collapsed
+   looks. A click opens the watcher area on that host's tab. Offline: the badge dimmed, the ring's track only (§8.1, the
+   10-16 restyle).
 
 ## 3. Facts this rests on
 
@@ -141,7 +142,7 @@ that are probed but have no daemon, with name, icon and colour; Mac App first, i
   with backoff to 60 s, reset by a good frame; every wait is cut short by a stop.
 - **Composite load** (the ring), 0–100 = the largest of: CPU %; memory %; the level (1 → 30, 2 → 75, 4 → 100); page rate
   (pages/s, capped at 100); disk % only when ≥ 85. The **ring's colour is the zone** (§2.6), not the score: a host at CPU
-  95 % with no memory pressure shows a long neutral ring ("busy, fine").
+  95 % with no memory pressure shows a long green ring ("busy, fine").
 - **Zone latch** (memory part, so the ring does not flicker): warning entered at level ≥ 2 or page rate ≥ 50, left after
   10 s with level 1 and rate < 40; danger entered at level 4, left after 10 s below 4; one level at a time; plus rev 1's
   disk latch; the worse of the two.
@@ -219,22 +220,29 @@ The fleet module's role is read by the measuring side through `fleet.RoleView` (
 
 ### 8.1 The sidebar host cells (decision 7)
 
-- One row at the very bottom of the wide sidebar, under the BottomNav (whose own expanded / collapsed looks are unchanged),
-  the four hosts in the fleet order (daemon hosts in the App's host order, then the probe hosts in their stored order).
-  It fits one row at the default sidebar width (each daemon host's cell ≈ 46 × 24 px).
-- A cell, sized like a `TeamCell` (`h-6`, `rounded-md`, hover `bg-surface-hover`, selected `bg-surface-active`, `CellSep`
-  between cells):
-  - **The host box**, 18 × 18, `rounded-[4px]`, the host's colours (`resolveHostColors`), the icon white (90 %, 100 % when
-    hovered or selected). Offline: the host colour at 35 % under a fine hatch, the icon at 35 %.
-  - **The queue badge** (daemon hosts, only while someone waits; not while offline) on the box's top-right corner, ≈ 11 px,
-    the count in 8 px semibold tabular figures, a 1 px ring in the sidebar's background colour. Colour: neutral grey while
-    the longest wait is under 2 min; `status-warning` from 2 min or 3 waiters; `status-error` while admission is held.
-  - **The composite load ring**, 16 px, the `ContextRing` geometry (2.5 stroke, `--border-default` track, round cap, from
-    12 o'clock counter-clockwise): length = the composite score, colour = the zone (neutral / warning / error); offline =
-    a dashed track, no arc.
+- One block at the very bottom of the wide sidebar, under the BottomNav (whose own expanded / collapsed looks are unchanged),
+  the hosts in the fleet order (daemon hosts in the App's host order, then the probe hosts in their stored order). Laid out
+  like the session list's member beads (`flex flex-wrap items-center content-start gap-0.5`, no separators): it wraps with
+  the sidebar's width, and five cells fit one line at the default width (each cell 42 × 24 px with the default badge size).
+- The 10-16 restyle (the user: the first look, a box filled with the host colour and a thin grey / yellow ring, was too
+  bright and too wide): every piece is the App's own, so a cell reads like the members beside it.
+- A cell, a member bead's box (`h-6`, `rounded-md`, `gap-1`, 3 px each side; hover `bg-surface-hover`, selected
+  `bg-surface-active`):
+  - **The host badge**: the App's `HostBadge` as beside a member in the session list — the sidebar badge settings (size,
+    inset, corner, line colour), the host's colours resolved as for an agent member (`terminal`, falling back to
+    `console`): the light layer behind, the icon in the middle layer, the main layer on hover. A probe host's look comes
+    from the wire. Offline: the badge at 40 % opacity.
+  - **The queue badge** (daemon hosts, only while someone waits; not while offline) on the host badge's top-right corner,
+    ≈ 11 px, the count in 8 px semibold tabular figures, a 1 px ring in the sidebar's background colour. Colour: neutral
+    grey while the longest wait is under 2 min; `status-warning` from 2 min or 3 waiters; `status-error` while admission is
+    held.
+  - **The composite load ring**: the App's `ContextRing` (the member status ring) at the badge's size — 2.5 stroke,
+    `--border-default` track, round cap, from 12 o'clock counter-clockwise: length = the composite score, tone = the zone
+    (normal → ok green / warning → warn / danger → danger), nothing in the middle (a host has no model). Offline or no
+    reading: the track only.
 - Tooltip: name, the zone word, the five values, the queue summary (daemon hosts), and 「等待主方」 when stale.
 - Click: opens the watcher area on that host's tab (watcher area spec).
-- **Narrow activity bar**: the four cells stacked vertically (box + ring only), same click and tooltip.
+- **Narrow activity bar**: the cells stacked vertically (badge + ring, 2 px apart), same click and tooltip.
 - The badge is one component (`CountBadge`, ≈ 11 px, 8 px figures, ring in the background colour); the watcher shield in
   the HomeRow reuses it (watcher area spec, not this one).
 - **Click, until the watcher area lands**: a daemon host's cell opens that host on the Hosts page; a probe host's opens the
