@@ -481,7 +481,7 @@ used slots, a paused lane, the gate words, waiting warning at 2 min, the pairing
 - **The launch panel's button** (§1): 啟動守門員 → `POST /api/watch/start` (200 already awake, 202 `{host}`, 409
   `{cooldown_until}` shown as the time it may start again); 叫醒守門員 → `POST /api/watch/wake` with an empty prompt
   (the wake prompt alone). Busy until the watcher registers (`watch.changed`), then the tab shows its session. Pressed,
-  not run on opening (spec §10 Q5, to be confirmed).
+  not run on opening (user, 10-16).
 - **No 全部略過** (user, 10-16, #3017): nothing in the area changes an event.
 - **Tests** for each item. The A line tests the `watch.v1` declaration with the real module (1f, 10-16).
 

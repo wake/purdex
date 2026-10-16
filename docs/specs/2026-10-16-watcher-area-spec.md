@@ -275,8 +275,8 @@ W5a1 … W5a3, W5b, W5b1, W5b2 and W5c1 need nothing from the A line.
   watcher's launch panel** stands where a session tab shows its launch or rebuild panel: the host it runs on (mlab or
   a26), the tmux session `pdx-watch`, the working directory (`workdir`), the command (`agent_command`), and for a resting
   watcher the conversation it resumes; one button, 啟動守門員 or 叫醒守門員, which asks the daemon (it picks the host and
-  keeps two hosts from starting two), then the tab shows the session. Proposed default: the button, not a run on
-  opening, so that looking at a resting watcher does not wake it (to be confirmed by the user).
+  keeps two hosts from starting two), then the tab shows the session. **The button, not a run on
+  opening** (user, 10-16: 「按按鈕就好」), so that looking at a resting watcher does not wake it.
 
 Out of scope: iOS; alerts or pushes on zone changes (the watcher's job); any history kept on a daemon for the charts;
 `pdx gate free` from the UI (the watcher's command after the person agrees).
