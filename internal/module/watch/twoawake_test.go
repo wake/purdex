@@ -19,6 +19,7 @@ import (
 	"github.com/wake/purdex/internal/module/agent"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/team"
 	"github.com/wake/purdex/internal/watch"
 	"github.com/wake/purdex/internal/watchsettings"
 )
@@ -38,9 +39,20 @@ type stands struct {
 	win   []watch.HolderAnswer
 	fail  int // fail this many sends first
 	calls int
+	enter chan struct{} // when set, each send announces itself here...
+	block chan struct{} // ...and waits for this to be closed
 }
 
 func (s *stands) StandDown(ctx context.Context, own watch.Holder, winner watch.HolderAnswer) error {
+	s.mu.Lock()
+	enter, block := s.enter, s.block
+	s.mu.Unlock()
+	if enter != nil {
+		enter <- struct{}{}
+	}
+	if block != nil {
+		<-block
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if dl, ok := ctx.Deadline(); ok {
@@ -68,10 +80,14 @@ type daemon struct {
 	panes  *fakePanes
 	owners *fakeOwners
 	stand  *stands
-	now    time.Time
+	clk    sync.Mutex
+	now    time.Time // read and written through getNow/setNow (the module reads the clock from other goroutines)
 	alias  string
 	id     string
 }
+
+func (d *daemon) getNow() time.Time { d.clk.Lock(); defer d.clk.Unlock(); return d.now }
+func (d *daemon) setNow(t time.Time) { d.clk.Lock(); d.now = t; d.clk.Unlock() }
 
 type pair struct{ a, b *daemon }
 
@@ -83,6 +99,14 @@ type loopback struct {
 	old   map[string]bool    // hosts that are an older daemon (404)
 	mu    sync.Mutex
 	paths []string
+}
+
+func (l *loopback) setDown(host string, v bool) { l.mu.Lock(); l.down[host] = v; l.mu.Unlock() }
+func (l *loopback) setOld(host string, v bool)  { l.mu.Lock(); l.old[host] = v; l.mu.Unlock() }
+func (l *loopback) pathsNow() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]string(nil), l.paths...)
 }
 
 func (l *loopback) Call(ctx context.Context, hostID, path string, body any) peersmod.CallResult {
@@ -132,7 +156,7 @@ func newPair(t *testing.T, orderA, orderB []string) *pair {
 		s.Targets = order
 		m.settings = func() (watchsettings.Settings, error) { return s, nil }
 		m.panes, m.ownerSrc, m.standDowner = d.panes, d.owners, d.stand
-		m.now = func() time.Time { return d.now }
+		m.now = d.getNow
 		d.mux = http.NewServeMux()
 		m.RegisterRoutes(d.mux)
 		// the holder route is rate limited per host; the harness makes a lot of calls
@@ -172,7 +196,7 @@ var (
 // targets, and exactly one stand-down notice goes out, to the loser's own watcher.
 func TestTwoAwake_SimultaneousRegistrationsPickOneAndOneNoticeToTheLoser(t *testing.T) {
 	p := newPair(t, bothOrder, oppositeOrder)
-	p.b.now = p.a.now.Add(time.Hour)
+	p.b.setNow(p.a.getNow().Add(time.Hour))
 
 	var wg sync.WaitGroup
 	for _, d := range []*daemon{p.a, p.b} {
@@ -203,20 +227,20 @@ func TestTwoAwake_SimultaneousRegistrationsPickOneAndOneNoticeToTheLoser(t *test
 func TestTwoAwake_AnAnnounceAfterTheHolderAnswerReachesTheSamePick(t *testing.T) {
 	p := newPair(t, bothOrder, oppositeOrder)
 	// B's watcher registers first, with A unreachable: nothing is announced, B's locator settles on itself
-	p.b.now = p.a.now.Add(time.Hour)
-	p.b.loop().down[idA] = true
+	p.b.setNow(p.a.getNow().Add(time.Hour))
+	p.b.loop().setDown(idA, true)
 	p.b.register(t, "frame-b")
 	wb, err := p.b.m.loc.Current(context.Background(), oppositeOrder, true)
 	require.NoError(t, err)
 	require.Equal(t, idB, wb.HostID, "B knows only itself")
 	require.Equal(t, 0, p.b.stand.count())
 
-	// A's older watcher registers; its announce reaches B
+	// A's older watcher registers; its announce reaches B, which asks A for its holder as it is now
+	p.b.loop().setDown(idA, false)
 	p.a.register(t, "frame-a")
 	require.Eventually(t, func() bool { return p.b.stand.count() == 1 }, 3*time.Second, 5*time.Millisecond)
 	cur, _ := p.b.m.loc.Remembered()
 	require.Nil(t, cur, "B's locator forgot the watcher it had, the announced one beats it")
-	p.b.loop().down[idA] = false
 	w, err := p.b.m.loc.Current(context.Background(), oppositeOrder, true)
 	require.NoError(t, err)
 	require.Equal(t, idA, w.HostID)
@@ -226,7 +250,7 @@ func TestTwoAwake_AnAnnounceAfterTheHolderAnswerReachesTheSamePick(t *testing.T)
 // Equal since (the same second): the smaller host id wins.
 func TestTwoAwake_EqualSinceTheSmallerHostIDWins(t *testing.T) {
 	p := newPair(t, bothOrder, oppositeOrder)
-	p.b.now = p.a.now // the same instant
+	p.b.setNow(p.a.getNow()) // the same instant
 	p.a.register(t, "frame-a")
 	p.b.register(t, "frame-b")
 	require.Eventually(t, func() bool { return p.a.stand.count() == 1 }, 3*time.Second, 5*time.Millisecond)
@@ -239,7 +263,7 @@ func TestTwoAwake_EqualSinceTheSmallerHostIDWins(t *testing.T) {
 // next trigger.
 func TestTwoAwake_OneNoticePerFrameAndAFailedOneIsRetried(t *testing.T) {
 	p := newPair(t, bothOrder, oppositeOrder)
-	p.b.now = p.a.now.Add(time.Hour)
+	p.b.setNow(p.a.getNow().Add(time.Hour))
 	p.b.stand.fail = 1 // the first send fails
 	p.a.register(t, "frame-a")
 	p.b.register(t, "frame-b")
@@ -263,11 +287,11 @@ func TestTwoAwake_OneNoticePerFrameAndAFailedOneIsRetried(t *testing.T) {
 // A host that is an older daemon (the announce route answers 404) or cannot be reached is not a failure: the registration stands.
 func TestAnnounce_AnOlderOrUnreachableHostIsIgnored(t *testing.T) {
 	p := newPair(t, bothOrder, oppositeOrder)
-	p.a.loop().old[idB] = true
+	p.a.loop().setOld(idB, true)
 	p.a.register(t, "frame-a")
 	require.Equal(t, watch.HolderAwake, p.a.m.holder.Get().State)
-	p.a.loop().old[idB] = false
-	p.a.loop().down[idB] = true
+	p.a.loop().setOld(idB, false)
+	p.a.loop().setDown(idB, true)
 	p.a.register(t, "frame-a2")
 	require.Equal(t, "frame-a2", p.a.m.holder.Get().FrameID)
 	require.Equal(t, 0, p.a.stand.count())
@@ -278,7 +302,7 @@ func TestAnnounce_GoesToTheOtherTargetsOncePerNewFrame(t *testing.T) {
 	p := newPair(t, bothOrder, oppositeOrder)
 	p.a.register(t, "frame-a")
 	p.a.register(t, "frame-a") // the same frame again
-	got := p.a.loop().paths
+	got := p.a.loop().pathsNow()
 	require.Equal(t, []string{idB + " " + pathAnnounce, idB + " " + pathHolder}, got[:2], "the announce, then the holder question of the settle")
 	n := 0
 	for _, s := range got {
@@ -324,9 +348,12 @@ func TestAnnounceRoute_IsInTheHostRoutePolicy(t *testing.T) {
 	require.False(t, peersmod.HostRoutePolicy(httptest.NewRequest(http.MethodPost, "/api/peers/watch/other", nil)))
 }
 
-type fakeOrigins struct{ inbox string }
+type fakeOrigins struct{ inbox, ref string }
 
 func (f fakeOrigins) InboxOf(string) (string, bool, error) { return f.inbox, f.inbox != "", nil }
+func (f fakeOrigins) ResolveOriginBySession(string) (team.Origin, bool, error) {
+	return team.Origin{Ref: f.ref}, f.ref != "", nil
+}
 
 type fakeSelfNotice struct {
 	mu   sync.Mutex
@@ -346,18 +373,22 @@ func TestStandDowner_SendsFromTheWatchersOwnInboxToThePdxWatchSession(t *testing
 	r := newRig(t)
 	r.m.core.Cfg.Peers.Alias = "mlab"
 	sn := &fakeSelfNotice{}
-	r.m.core.Registry.Register(peersmod.OriginResolverKey, fakeOrigins{inbox: "/tmp/cc-socks/42.sock"})
+	r.m.core.Registry.Register(peersmod.OriginResolverKey, fakeOrigins{inbox: "/tmp/cc-socks/42.sock", ref: "_abc123"})
 	r.m.core.Registry.Register(peersmod.SelfNoticeSenderKey, peersmod.SelfNoticeSender(sn))
 
 	require.NoError(t, peerStandDowner{r.m}.StandDown(context.Background(), watch.Holder{State: watch.HolderAwake, SessionID: "sess-1", FrameID: "f"}, watch.HolderAnswer{HostID: peerID}))
 	require.Len(t, sn.reqs, 1)
-	require.Equal(t, "mlab/tmux:pdx-watch", sn.reqs[0].To)
+	require.Equal(t, "mlab/_abc123", sn.reqs[0].To, "addressed by the watcher's own ref, not by the tmux session name the next watcher reuses")
 	require.Equal(t, "/tmp/cc-socks/42.sock", sn.reqs[0].OriginInbox)
 	require.True(t, strings.HasPrefix(sn.reqs[0].Text, "[負載守門]"))
 	require.Contains(t, sn.reqs[0].Text, peerID)
 
-	// no live inbox for the watcher / no resolver: an error, so the notice is tried again later
-	r.m.core.Registry.Register(peersmod.OriginResolverKey, fakeOrigins{})
+	// no live address for the watcher (it is gone): an error, nothing is sent to whoever took its place
+	r.m.core.Registry.Register(peersmod.OriginResolverKey, fakeOrigins{inbox: "/tmp/cc-socks/42.sock"})
+	require.Error(t, peerStandDowner{r.m}.StandDown(context.Background(), watch.Holder{SessionID: "sess-1", FrameID: "f"}, watch.HolderAnswer{HostID: peerID}))
+	require.Len(t, sn.reqs, 1)
+	// no live inbox / no resolver: an error, so the notice is tried again later
+	r.m.core.Registry.Register(peersmod.OriginResolverKey, fakeOrigins{ref: "_abc123"})
 	require.Error(t, peerStandDowner{r.m}.StandDown(context.Background(), watch.Holder{SessionID: "sess-1", FrameID: "f"}, watch.HolderAnswer{HostID: peerID}))
 	r2 := newRig(t)
 	require.Error(t, peerStandDowner{r2.m}.StandDown(context.Background(), watch.Holder{SessionID: "s"}, watch.HolderAnswer{}))
@@ -416,7 +447,7 @@ func TestStandDown_IsNotSentForAFrameThatIsNoLongerTheWatcher(t *testing.T) {
 // leave the settle without time.
 func TestTwoAwake_TheSettleHasTheStandDownBudget(t *testing.T) {
 	p := newPair(t, bothOrder, oppositeOrder)
-	p.b.now = p.a.now.Add(time.Hour)
+	p.b.setNow(p.a.getNow().Add(time.Hour))
 	p.a.register(t, "frame-a")
 	p.b.register(t, "frame-b")
 	require.Eventually(t, func() bool { return p.b.stand.count() == 1 }, 3*time.Second, 5*time.Millisecond)
@@ -424,4 +455,76 @@ func TestTwoAwake_TheSettleHasTheStandDownBudget(t *testing.T) {
 	defer p.b.stand.mu.Unlock()
 	require.NotEmpty(t, p.b.stand.left)
 	require.Greater(t, p.b.stand.left[0], reconcileBudget+2*time.Second, "more than a reconcile's budget is left on the context")
+}
+
+// An announce is a hint to look, not the truth: this host decides on the announcer's holder as the announcer answers it NOW, so a
+// stale or fabricated announce (an early since, a session that is not the watcher) moves nothing.
+func TestAnnounce_IsOnlyAHintTheAnnouncersOwnAnswerDecides(t *testing.T) {
+	p := newPair(t, bothOrder, oppositeOrder)
+	p.b.setNow(p.a.getNow()) // B awake since 12:00
+	p.b.register(t, "frame-b")
+	require.Equal(t, 0, p.b.stand.count())
+
+	// A is not awake at all, and announces an old watcher from long ago
+	forged := `{"to_host_id":"` + idB + `","holder":{"host_id":"` + idA + `","state":"awake","session_id":"ghost","since":"2001-01-01T00:00:00Z"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/peers/watch/announce", strings.NewReader(forged))
+	req = req.WithContext(middleware.WithPrincipal(req.Context(), middleware.Principal{Kind: middleware.PrincipalHost, Alias: "mlab", HostID: idA}))
+	rr := httptest.NewRecorder()
+	p.b.mux.ServeHTTP(rr, req)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	time.Sleep(200 * time.Millisecond)
+	require.Equal(t, 0, p.b.stand.count(), "A has no watcher awake: nothing to yield to")
+	cur, _ := p.b.m.loc.Remembered()
+	_ = cur
+
+	// A's real watcher is younger than B's, and the announce claims it is ancient: B still stays
+	p.a.setNow(p.b.getNow().Add(time.Hour))
+	p.a.register(t, "frame-a")
+	req = httptest.NewRequest(http.MethodPost, "/api/peers/watch/announce", strings.NewReader(forged))
+	req = req.WithContext(middleware.WithPrincipal(req.Context(), middleware.Principal{Kind: middleware.PrincipalHost, Alias: "mlab", HostID: idA}))
+	p.b.mux.ServeHTTP(httptest.NewRecorder(), req)
+	time.Sleep(200 * time.Millisecond)
+	require.Equal(t, 0, p.b.stand.count(), "the announce's since is not believed; A's own answer says it is younger")
+	require.Equal(t, 1, p.a.stand.count(), "A, the younger one, yields (its own registration compared the two real answers)")
+}
+
+// A queued registration of a frame that is no longer the watcher is not announced.
+func TestOnRegistered_SkipsAFrameThatIsNoLongerTheWatcher(t *testing.T) {
+	p := newPair(t, bothOrder, oppositeOrder)
+	p.a.register(t, "frame-a1")
+	old := p.a.m.holder.Get()
+	p.a.register(t, "frame-a2")
+	before := len(p.a.loop().pathsNow())
+	p.a.m.onRegistered(old)
+	require.Equal(t, before, len(p.a.loop().pathsNow()), "nothing is asked or announced for the old frame")
+}
+
+// A second trigger that arrives while the first notice is being sent waits for its outcome: when the first fails, the second sends it.
+func TestStandDown_ASecondTriggerDuringAFailingSendIsNotLost(t *testing.T) {
+	p := newPair(t, bothOrder, oppositeOrder)
+	p.b.register(t, "frame-b")
+	own := p.b.m.holder.Get()
+	p.b.stand.mu.Lock()
+	p.b.stand.enter = make(chan struct{}, 4)
+	p.b.stand.block = make(chan struct{})
+	p.b.stand.fail = 1
+	enter, block := p.b.stand.enter, p.b.stand.block
+	p.b.stand.mu.Unlock()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); p.b.m.standDown(context.Background(), own, watch.HolderAnswer{HostID: idA}) }()
+		if i == 0 {
+			<-enter // the first send is in flight
+		}
+	}
+	time.Sleep(100 * time.Millisecond) // the second trigger is waiting for it
+	p.b.stand.mu.Lock()
+	p.b.stand.block = nil // later sends do not block
+	p.b.stand.mu.Unlock()
+	close(block)
+	wg.Wait()
+	require.Equal(t, 1, p.b.stand.count(), "the first send failed, the waiting second one sent it")
+	require.Equal(t, 2, p.b.stand.calls)
 }

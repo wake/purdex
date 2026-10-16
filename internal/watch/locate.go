@@ -110,7 +110,19 @@ type Locator struct {
 	now      func() time.Time
 	warnf    func(format string, args ...any)
 	warnedOn map[string]string // host → the targets it reported when we last warned
+	// hints are the watchers Prefer was told of; gen counts them. A search that started before a hint and would settle on a worse
+	// watcher than that hint looks again (afterProbe is a test seam between the probes and the decision).
+	gen        int
+	hints      []hint
+	afterProbe func()
 }
+
+type hint struct {
+	gen int
+	a   HolderAnswer
+}
+
+const maxHints = 8
 
 // NewLocator reads the remembered watcher from path ("" keeps it in memory). A file that cannot be read is set aside.
 func NewLocator(path string, ask Asker, warnf func(string, ...any)) *Locator {
@@ -151,6 +163,13 @@ func (l *Locator) Prefer(a HolderAnswer) {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	// Remember it for a search that is in progress (it may have asked this host before the watcher changed): the search compares
+	// its pick against the hints that arrived after it began.
+	l.gen++
+	l.hints = append(l.hints, hint{gen: l.gen, a: a})
+	if len(l.hints) > maxHints {
+		l.hints = l.hints[len(l.hints)-maxHints:]
+	}
 	c := l.mem.Current
 	if c == nil || (c.HostID == a.HostID && c.SessionID == a.SessionID) {
 		return
@@ -164,6 +183,37 @@ func (l *Locator) Prefer(a HolderAnswer) {
 	if !Earlier(a, cur) {
 		return
 	}
+	l.mem.Current = nil
+	l.save()
+}
+
+// supersededSince says whether a hint that arrived after generation start beats w (the watcher a search settled on): a watcher
+// that is older, or another session of w's own host. The search then did not see it and must look again.
+func (l *Locator) supersededSince(start int, w Where) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	pick := HolderAnswer{HostID: w.HostID, State: w.State, SessionID: w.SessionID, Since: w.Since}
+	for _, h := range l.hints {
+		if h.gen <= start || (h.a.HostID == w.HostID && h.a.SessionID == w.SessionID) {
+			continue
+		}
+		if h.a.HostID == w.HostID || Earlier(h.a, pick) {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *Locator) generation() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.gen
+}
+
+// forgetCurrent drops the remembered watcher (it stays the last one).
+func (l *Locator) forgetCurrent() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.mem.Current = nil
 	l.save()
 }
@@ -201,7 +251,19 @@ func (l *Locator) Current(ctx context.Context, targets []string, autoWake bool) 
 	if w, ok := l.cached(); ok { // another caller's search found it while this one waited
 		return w, nil
 	}
-	return l.search(ctx, targets, autoWake)
+	return l.searchSettled(ctx, targets, autoWake)
+}
+
+// searchSettled runs search and looks again (a few times) when a watcher that Prefer was told of while it ran beats what it settled on.
+func (l *Locator) searchSettled(ctx context.Context, targets []string, autoWake bool) (Where, error) {
+	for attempt := 0; ; attempt++ {
+		start := l.generation()
+		w, err := l.search(ctx, targets, autoWake)
+		if err != nil || attempt >= 2 || !l.supersededSince(start, w) {
+			return w, err
+		}
+		l.forgetCurrent()
+	}
 }
 
 func (l *Locator) cached() (Where, bool) {
@@ -279,6 +341,9 @@ func (l *Locator) search(ctx context.Context, targets []string, autoWake bool) (
 			ans := p.a
 			awakeAns = &ans
 		}
+	}
+	if l.afterProbe != nil {
+		l.afterProbe()
 	}
 	if awake != nil {
 		l.remember(*awake)

@@ -128,3 +128,28 @@ func TestLocator_PreferReplacesAWatcherOfTheSameHostWithAnotherSession(t *testin
 	require.NoError(t, err)
 	require.Equal(t, "s-new", w.SessionID)
 }
+
+// A watcher that Prefer is told of while a search is between its probes and its decision is not lost: the search that would have
+// settled on the worse one looks again.
+func TestLocate_APreferDuringTheSearchIsNotLost(t *testing.T) {
+	f := &fakeHosts{hold: map[string]HolderAnswer{
+		"air26": awakeSince("a:1", "s-a", tAwake.Add(time.Hour)),
+		"mlab":  {HostID: "m:1", State: HolderNone},
+	}}
+	l, _ := newLoc(t, f)
+	fired := 0
+	l.afterProbe = func() {
+		fired++
+		if fired == 1 { // the older watcher came up after mlab was asked, and said so
+			f.fmu.Lock()
+			f.hold["mlab"] = awakeSince("m:1", "s-m", tAwake)
+			f.fmu.Unlock()
+			l.Prefer(awakeSince("m:1", "s-m", tAwake))
+		}
+	}
+	w, err := l.Current(context.Background(), targets, true)
+	require.NoError(t, err)
+	require.Equal(t, "mlab", w.Alias, "the older watcher won although it was announced mid-search")
+	cur, _ := l.Remembered()
+	require.Equal(t, "s-m", cur.SessionID)
+}

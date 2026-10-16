@@ -11,6 +11,7 @@ import (
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/module/peers"
 	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/team"
 	"github.com/wake/purdex/internal/watch"
 )
 
@@ -41,8 +42,14 @@ type StandDowner interface {
 
 // twoAwake is the module's state for the rule: the frames this host already told to stand down (once per frame).
 type twoAwake struct {
-	mu        sync.Mutex
-	stoodDown map[string]bool
+	mu     sync.Mutex
+	frames map[string]*standState // by frame id
+}
+
+// standState is where the notice for one frame is: being sent (inflight is open), or delivered.
+type standState struct {
+	delivered bool
+	inflight  chan struct{}
 }
 
 // onRegistered is the registration hook (reconcile finds a new watcher frame): announce it to the other hosts, then apply the
@@ -53,6 +60,11 @@ func (m *Module) onRegistered(h watch.Holder) {
 		return
 	}
 	defer done()
+	// The hooks run in the order the frames were committed, and an earlier one may have waited behind a slow peer: a frame that is
+	// no longer this host's watcher is not announced (the current one has its own turn).
+	if cur := m.hs().Get(); cur.State != watch.HolderAwake || cur.FrameID != h.FrameID {
+		return
+	}
 	m.announce(ctx, h)
 	m.settle(ctx)
 }
@@ -124,38 +136,62 @@ func (m *Module) settle(ctx context.Context) {
 }
 
 // standDown tells this host's watcher (the frame own) to stand down, once per frame: the announce and the settle can both lead
-// here for the same pair, and the watcher must get one notice.
+// here for the same pair, and the watcher must get one notice. A trigger that finds the notice being sent waits for its outcome:
+// if it was delivered there is nothing to do, if it failed this trigger sends it itself (a failed send is not lost to the trigger
+// that arrived while it was in flight).
 func (m *Module) standDown(ctx context.Context, own watch.Holder, winner watch.HolderAnswer) {
 	if own.FrameID == "" {
 		return
 	}
-	// The watcher to tell is the one that is awake NOW: the answers of the other hosts took time, and a watcher that restarted in
-	// between is another frame (the notice goes to the tmux session, not to a frame).
-	if cur := m.hs().Get(); cur.State != watch.HolderAwake || cur.FrameID != own.FrameID {
-		return
-	}
-	m.two.mu.Lock()
-	if m.two.stoodDown == nil {
-		m.two.stoodDown = map[string]bool{}
-	}
-	if m.two.stoodDown[own.FrameID] {
-		m.two.mu.Unlock()
-		return
-	}
-	m.two.stoodDown[own.FrameID] = true
-	m.two.mu.Unlock()
-	err := errors.New("no stand-down sender")
-	if m.standDowner != nil {
-		err = m.standDowner.StandDown(ctx, own, winner)
-	}
-	if err != nil {
+	for {
+		// The watcher to tell is the one that is awake NOW: the answers of the other hosts took time, and a watcher that restarted in
+		// between is another frame.
+		if cur := m.hs().Get(); cur.State != watch.HolderAwake || cur.FrameID != own.FrameID {
+			return
+		}
 		m.two.mu.Lock()
-		delete(m.two.stoodDown, own.FrameID) // not told: a later announce or settle tries again
+		if m.two.frames == nil {
+			m.two.frames = map[string]*standState{}
+		}
+		st := m.two.frames[own.FrameID]
+		switch {
+		case st != nil && st.delivered:
+			m.two.mu.Unlock()
+			return
+		case st != nil && st.inflight != nil:
+			wait := st.inflight
+			m.two.mu.Unlock()
+			select {
+			case <-wait:
+				continue // delivered, or failed and removed: look again
+			case <-ctx.Done():
+				return
+			}
+		}
+		st = &standState{inflight: make(chan struct{})}
+		m.two.frames[own.FrameID] = st
 		m.two.mu.Unlock()
-		m.logf("[watch] stand-down of %s (the watcher of %s stays): %v", own.SessionID, winner.HostID, err)
+
+		err := errors.New("no stand-down sender")
+		if m.standDowner != nil {
+			err = m.standDowner.StandDown(ctx, own, winner)
+		}
+		m.two.mu.Lock()
+		if err == nil {
+			st.delivered = true
+		} else {
+			delete(m.two.frames, own.FrameID) // not told: a later trigger tries again
+		}
+		close(st.inflight)
+		st.inflight = nil
+		m.two.mu.Unlock()
+		if err != nil {
+			m.logf("[watch] stand-down of %s (the watcher of %s stays): %v", own.SessionID, winner.HostID, err)
+			return
+		}
+		m.logf("[watch] this host's watcher %s was told to stand down: the one on %s has been awake longer", own.SessionID, winner.HostID)
 		return
 	}
-	m.logf("[watch] this host's watcher %s was told to stand down: the one on %s has been awake longer", own.SessionID, winner.HostID)
 }
 
 // handlePeerAnnounce serves POST /api/peers/watch/announce: a paired host registered a watcher. The order is the holder route's
@@ -198,16 +234,22 @@ func (m *Module) handlePeerAnnounce(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, ipeers.ErrBadRequest, "the holder must be this host's own awake watcher")
 		return
 	}
-	ans := answerOf(h)
-	m.loc.Prefer(ans)
 	m.writeJSON(w, http.StatusOK, map[string]any{"ok": true, "host_id": ours}) // the caller checks the answer names the host it asked
-	// and if this host's own watcher is the one that loses, tell it (after the answer: the announcer does not wait for it)
+	// The announce is a hint to look, not the truth: what it says (a session, a since) is the announcer's claim and may be late or
+	// wrong. After the answer, this host asks the announcer for its holder as it is now and decides on that: it switches the
+	// locator to it if it beats the remembered watcher, and tells its own watcher to stand down if that one loses.
+	alias := entry.Alias
 	go func() {
 		ctx, done, ok := m.enterFor(context.Background(), standDownBudget)
 		if !ok {
 			return
 		}
 		defer done()
+		ans, err := (asker{m}).Holder(ctx, alias)
+		if err != nil || ans.State != watch.HolderAwake || ans.SessionID == "" {
+			return // nothing awake there now
+		}
+		m.loc.Prefer(ans)
 		own := m.hs().Get()
 		if own.State == watch.HolderAwake && watch.Earlier(ans, answerOf(m.viewOf(own))) {
 			m.standDown(ctx, own, ans)
@@ -220,13 +262,16 @@ func standDownText(winner watch.HolderAnswer) string {
 	return "[負載守門] 另一台主機（" + winner.HostID + "）的守門員比你醒得久，之後事件都送給那一位。請把你的筆記寫好並推送，然後結束這個 session（/exit）。"
 }
 
-// originSource is the part of the peers module's OriginResolver the notice needs.
+// originSource is the part of the peers module's OriginResolver the notice needs: the watcher's inbox, and its address by the
+// ref of its conversation (which names that session and no other, unlike the tmux session name that the next watcher reuses).
 type originSource interface {
 	InboxOf(sessionID string) (inbox string, ok bool, err error)
+	ResolveOriginBySession(sessionID string) (team.Origin, bool, error)
 }
 
 // peerStandDowner delivers the notice through the peers module: from the watcher's own inbox (a notice about itself, so the
-// self-notice sender, which alone skips the self_target refusal), to the tmux session pdx-watch of this host.
+// self-notice sender, which alone skips the self_target refusal), to its own address by ref. A watcher that restarted since has
+// another session and another ref, so the notice for the old one cannot reach the new one.
 type peerStandDowner struct{ m *Module }
 
 func (s peerStandDowner) StandDown(ctx context.Context, own watch.Holder, winner watch.HolderAnswer) error {
@@ -254,15 +299,23 @@ func (s peerStandDowner) StandDown(ctx context.Context, own watch.Holder, winner
 	if !found {
 		return errors.New("the watcher has no live inbox")
 	}
+	origin, found, err := origins.ResolveOriginBySession(own.SessionID)
+	if err != nil {
+		return err
+	}
+	if !found || origin.Ref == "" {
+		return errors.New("the watcher has no live address")
+	}
 	s.m.core.CfgMu.RLock()
 	alias := s.m.core.Cfg.PeerAlias()
 	s.m.core.CfgMu.RUnlock()
-	resp, err := sender.SendSelfNotice(ctx, ipeers.SendRequest{To: alias + "/tmux:" + watch.PaneSession, Text: standDownText(winner), OriginInbox: inbox})
+	to := alias + "/" + origin.Ref
+	resp, err := sender.SendSelfNotice(ctx, ipeers.SendRequest{To: to, Text: standDownText(winner), OriginInbox: inbox})
 	if err != nil {
 		return err
 	}
 	if resp.Result == ipeers.ResultDeliveryUncertain {
-		s.m.logf("[watch] stand-down notice to %s/tmux:%s: delivery uncertain; not resent", alias, watch.PaneSession)
+		s.m.logf("[watch] stand-down notice to %s: delivery uncertain; not resent", to)
 	}
 	return nil
 }
