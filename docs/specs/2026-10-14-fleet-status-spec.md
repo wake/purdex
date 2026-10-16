@@ -177,8 +177,9 @@ that are probed but have no daemon, with name, icon and colour; Mac App first, i
 - **`POST /api/fleet/probe-check`** `{ssh_alias}` (admin only; device 403; not a peer route; F-2c): this daemon probes the
   alias once with the one-shot `fleet.Runner` (`internal/fleet/run.go`: the fixed argv, `BatchMode`, strict host key, its
   own timeout) after `ValidAlias`, and answers `{ssh: "ok"|"failed"|"unknown", measure: "ok"|"failed"|"unknown", error:
-  <Code>|null, reading: {cpu, mem, level, disk}|null}`. `ok` → both ok with the reading; `auth`, `host_key`, `alias_gone`
-  → ssh failed; `timeout`, `unreachable` → both unknown (the host could not be reached); `remote_exit`, `parse` → ssh ok,
+  <Code>|null, reading: {cpu, mem, level, disk}|null}` (`level` is null: the one-shot probe does not read the pressure
+  level, `internal/fleet/parse.go:15`). `ok` → both ok with the reading; `auth`, `host_key`, `alias_gone`
+  → ssh failed, measure unknown; `timeout`, `unreachable` → both unknown (the host could not be reached); `remote_exit`, `parse` → ssh ok,
   measure failed. Never the stderr. One check per alias at a time (a second one while the first runs gets the first's
   answer).
 - Device tokens may read `GET /api/fleet` and receive `fleet.changed` (iOS later).
