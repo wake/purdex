@@ -174,6 +174,13 @@ that are probed but have no daemon, with name, icon and colour; Mac App first, i
   and the `fleet` row; `PUT /api/hostconfig/probe-hosts` and `PUT /api/hostconfig/fleet` as rev 1 (whole list, `baseRevision`,
   409 with the current copy, 400 with a plain-text reason; an alias not in the SSH config → `unknown_ssh_alias: <alias>`);
   admin only. `GET /api/fleet/ssh-aliases` lists the eligible aliases (admin only).
+- **`POST /api/fleet/probe-check`** `{ssh_alias}` (admin only; device 403; not a peer route; F-2c): this daemon probes the
+  alias once with the one-shot `fleet.Runner` (`internal/fleet/run.go`: the fixed argv, `BatchMode`, strict host key, its
+  own timeout) after `ValidAlias`, and answers `{ssh: "ok"|"failed"|"unknown", measure: "ok"|"failed"|"unknown", error:
+  <Code>|null, reading: {cpu, mem, level, disk}|null}`. `ok` → both ok with the reading; `auth`, `host_key`, `alias_gone`
+  → ssh failed; `timeout`, `unreachable` → both unknown (the host could not be reached); `remote_exit`, `parse` → ssh ok,
+  measure failed. Never the stderr. One check per alias at a time (a second one while the first runs gets the first's
+  answer).
 - Device tokens may read `GET /api/fleet` and receive `fleet.changed` (iOS later).
 
 ## 7. The local source (interface with the A line)
@@ -240,12 +247,33 @@ The fleet module's role is read by the measuring side through `fleet.RoleView` (
 - **Click, until the watcher area lands**: a daemon host's cell opens that host on the Hosts page; a probe host's opens the
   Hosts page's probe-host section with that row highlighted once.
 
+**Restyle (user, 10-16: 「太刺眼」; F-2b2)**, replacing the box and ring above:
+- the host icon is the App's host badge (`HostBadge` with the user's badge settings, the same small badge as beside a
+  member in the session list: dark background, the icon in the host's colour), the same size;
+- the ring is `ContextRing` itself (the title bar's member ring, same thickness and colours, a dot in the middle): length =
+  the composite score, tone from the zone (normal = the ok green, warning, danger); offline = the track only;
+- the cells are laid out like the session list's member beads (`TeamMemberBeads`: `gap-0.5`, no separators, wrapping
+  with the sidebar's width): up to five on one line at the default width.
+
 ### 8.2 The Hosts page
 
-Rev 1's 「只探查的主機」 section stays, with two changes: the section lists the probe hosts once (not under each daemon), and
-saving writes the list to **both** daemons (each daemon's row carries its own `ssh_alias`; the dialog asks for the alias per
-daemon, each picked from that daemon's `GET /api/fleet/ssh-aliases`). A 409 from either reloads both and says the list
-changed elsewhere. The `fleet` row (order, the alias for the other daemon host) is edited on each daemon host's page.
+The probe hosts are edited once and written to **both** daemons (each daemon's row carries its own `ssh_alias`, picked from
+that daemon's `GET /api/fleet/ssh-aliases`); a 409 from either reloads both and says the list changed elsewhere. The `fleet`
+row (order, the alias for the other daemon host) is edited on each daemon host's page.
+
+**Probe hosts have their own entries (user, 10-16; F-2d)**, replacing the editing dialog in the overview:
+- The Hosts page's sidebar lists them under a heading 「觀察主機」, after the paired hosts: the badge, the name and a status
+  dot from the fleet (ok / offline / error); a `+` on the heading adds one. A probe host has one page, no sub-pages.
+- The page: a header (badge, name, the zone word or 離線, 「量測：{primary}（主）」, the last good reading's time when offline);
+  **樣式與連線** inline — name, icon, colour (the existing pickers) and the SSH alias per daemon host; 儲存 writes both
+  daemons as before; 刪除 with a confirmation.
+- **連線檢查**: one line per daemon host (each reaches the host through its own alias): 「SSH 金鑰」 and 「量測讀數」, each
+  ✓, ✗ with the reason (金鑰被拒／主機金鑰不符／SSH 設定裡沒有這個別名；連不到主機；讀不到量測), or — while unknown, from
+  that daemon's `POST /api/fleet/probe-check`. It runs when the page opens, after a save that changed an alias, and on
+  「重新檢查」. A daemon host that is offline shows 「{host} 離線，無法檢查」.
+- The overview's section becomes a short list of the probe hosts (badge, name, status) whose rows open their entries, with
+  「新增觀察主機」; it no longer edits.
+- No pairing: a probe host is reached by SSH only.
 
 ## 9. Out of scope
 
@@ -266,3 +294,6 @@ primary cannot reach.
 | F-2a1 | SPA | types / parse, `useFleetStore` (primary choice, re-read on stale, 「等待主方」), the in-memory history, `fleet.v1` probe, the `fleet=v1` event opt-in and branch (reworks #2879) |
 | F-2a2 | SPA | the Hosts page probe-host section writing both daemons, the `fleet` row editor (reworks #2881; #2880, the editor extraction, stands) |
 | F-2b | SPA | `CountBadge`, the sidebar host cells, the narrow column, interim click targets; i18n; tests |
+| F-2b2 | SPA | the cells' restyle (§8.1, user 10-16) |
+| F-2c | daemon | `POST /api/fleet/probe-check` (§6) |
+| F-2d | SPA | probe hosts' own entries on the Hosts page, the connection check, the overview list (§8.2) |
