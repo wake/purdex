@@ -18,7 +18,7 @@
 | U7 | Words: 正常／偏高／過載／離線 for a host's zone; the shield badge is the host cells' `CountBadge` (≈ 11 px), the shield is green. |
 | U8 | Design and prototypes are done with Opus; the style follows the real App (the prototype imports the App's own `TabBar`, `Section`, `SettingItem`, `SegmentControl`, `ToggleSwitch`, `HostBadge`). |
 | U9 | (10-16, #3017) **No 全部略過**: nothing in the area closes an event; an event is pending or handled by the watcher, nothing else. |
-| U10 | (10-16, #3017) The watcher's bounds for changing the slot counts are a setting of the `watch` row, `slot_bounds` (default heavy 0–3, light 0–5 after #3019; 0 lets the watcher pause a class), edited in the area's 守門員 settings. |
+| U10 | (10-16, #3020, replacing #3017/#3019) **No bounds on the watcher's slot changes**: the watcher and the person have full control; a slot count is limited only by the gate's own range 0–64, and 0 pauses a class (new commands of it queue, running ones go on; A line W3c). The area has no slot-bounds setting. |
 
 ## 2. Entry points
 
@@ -150,7 +150,7 @@ switch (狀態 only) and the 狀態｜設定 `SegmentControl`.
   - **當下**: 「排隊 n · 最久 m:ss」 (warning when n > 0); two lanes, 重指令 (h-7) and 輕指令 (h-6): the lane's name and
     「名額 used / total」, one card per slot (running: accent tint, command, elapsed m:ss; free: dashed 「空名額」), the
     gate (a 1 px line with 「等名額」 when the slots are full, line and 「暫停放行」 in status-error while admission
-    holds; no word when it holds nobody; a class paused at 0 slots (#3019) shows 「已暫停」 on its lane and
+    holds; no word when it holds nobody; a class paused at 0 slots (U10, W3c) shows 「已暫停」 on its lane and
     「暫停（新指令排隊）」 on its gate line in status-warning), then the waiting cards (place, command, wait; warning
     past 2 min). Under the
     lanes a table grouped 執行中 / 排隊中（n）: 類別 · 指令 · 專案 · 時間 (已跑／等) · 名額鎖 (pid). Hovering a card or a
@@ -177,11 +177,8 @@ Offline: 「這台離線，無法讀寫設定。」 and nothing editable.
    of the whole row): 啟用守門員, the seven detection fields (`x_cores`, `y_mb`, `t_s`, `pressure_level`,
    `pressure_t_s`, `page_rate`, `page_t_s`), 通知與開啟順序 (`targets`), 模式 (常駐／巡檢), 巡檢閒置分鐘, 自動喚醒,
    啟動指令 (`agent_command`, which replaced the model name on the A line, 10-16), 工作目錄, 啟動 prompt and 喚醒
-   prompt (textareas; empty = built-in), and **守門員可調的名額範圍** (`slot_bounds`, U10): for 重指令 and 輕指令 a
-   最少 and a 最多 (each class 0 ≤ min ≤ max ≤ 64, #3019; default heavy 0–3, light 0–5; 0 means the watcher may pause
-   the class: new commands of it queue, running ones go on; a pair that breaks the rule is
-   refused by the daemon and its 400 text shown under the pair). When the two daemons' `targets` differ, a warning line
-   under the field (the daemons warn as well, §12.3).
+   prompt (textareas; empty = built-in). No slot bounds (U10). When the two daemons' `targets` differ, a warning
+   line under the field (the daemons warn as well, §12.3).
 
 ### 6.3 設定, probe hosts (a19, mserv)
 
@@ -259,7 +256,7 @@ W5c (about 1700, 1100 and 1400 lines) gives these phases:
 | W5b | The queue wire: `queue.holders` / `waiters[].session` / `admission_reason` / the paused flags in `internal/fleet` + golden JSON + SPA types | #2971 |
 | W5b1 | Queue 當下: the lanes and the table | W5a1, W5b |
 | W5b2 | The queued symbol on the agent icon (§2.3) | W5b |
-| W5c1 | 狀態｜設定; the 守門員 section (existing API, with `slot_bounds`), probe-host settings (F-2a2's editor) | W5a3 |
+| W5c1 | 狀態｜設定; the 守門員 section (existing API), probe-host settings (F-2a2's editor) | W5a3 |
 | W5c2 | The gate sections | W5c1; A2 |
 | W5d | Queue 歷史 | W5b1; A1 |
 | W5e | The 事件 tab, the count, the two pushes, 啟動守門員, the wake input | W5a3; A3 |

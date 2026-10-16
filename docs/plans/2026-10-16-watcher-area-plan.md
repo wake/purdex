@@ -1,6 +1,6 @@
 # Watcher area — plan (rev 1.1: W5a1 … W5e)
 
-Spec: `docs/specs/2026-10-16-watcher-area-spec.md` (B line, with A3 as agreed in #3010, U9/U10 from #3017/#3019).
+Spec: `docs/specs/2026-10-16-watcher-area-spec.md` (B line, with A3 as agreed in #3010, U9 from #3017, U10 from #3020).
 Load-control spec §12.4–§12.6 for the watcher itself. Facts below were read on origin/main `bd4b0d7d1` (alpha.745 +
 #3014), 2026-10-16.
 
@@ -17,8 +17,9 @@ Load-control spec §12.4–§12.6 for the watcher itself. Facts below were read 
 - the watcher status and the holder's `watch` row move together into W5a3, with the shield;
 - mixed-version rollout.
 
-It also takes 1f's two notes:
-- `slot_bounds` defaults heavy 0–3, light 0–5, with 0 meaning paused (#3019);
+It also takes 1f's notes:
+- no slot bounds at all (#3020, replacing #3017/#3019): a slot count is limited only by the gate's 0–64, and 0 pauses a
+  class (W3c);
 - W2b will declare `watch.v1` (Q4).
 
 **Flow: the quick one** (user-facing, wanted soon): this plan → one focused subagent review (done) → TDD by subagents
@@ -100,7 +101,7 @@ goes past 1f (`internal/fleet` is shared with the A line's sampler).
 | W5b | queue wire: `slow.queue.holders`, `waiters[].session`, `admission_reason`, `heavy_paused` / `light_paused` (daemon + golden JSON + SPA types/parse) | — | 53-pe | ~450 |
 | W5b1 | queue 當下 UI: lanes (paused included), gate line, waiting cards, table, hover pairing | W5a1, W5b | B subagent | ~700 |
 | W5b2 | the hourglass on the agent icon | W5b | B subagent | ~350 |
-| W5c1 | 狀態｜設定 switch; 設定: the 守門員 section (existing API, with `slot_bounds`), probe-host settings (F-2a2's editor) | W5a3 (row reader) | B subagent | ~800 |
+| W5c1 | 狀態｜設定 switch; 設定: the 守門員 section (existing API), probe-host settings (F-2a2's editor) | W5a3 (row reader) | B subagent | ~800 |
 | W5c2 | 設定: 設定組, 資源管制, gate settings | W5c1, A2 | B subagent | ~600 |
 | W5d | queue 歷史 | W5b1, A1 | B subagent | ~700 |
 | W5e | 事件 tab, the count (shield, tab label), the two pushes, 啟動守門員, the wake input | W5a3, A3 (`watch.v1`) | B subagent | ~900 |
@@ -335,7 +336,7 @@ Every PR follows these rules:
     session, since (Started), pid (the gate's pid: the 名額鎖 column)}`, at most `maxQueueShown`. **Never the slot's
     `Token`**: `QueueHolder` has no such field, and a test asserts that no `token` key is serialised.
   - `Session` on `QueueWaiter`.
-  - `AdmissionReason string`, and `HeavyPaused` / `LightPaused bool` (#3019, W3c: the gate status gains a `paused` per
+  - `AdmissionReason string`, and `HeavyPaused` / `LightPaused bool` (W3c, #3020: the gate status gains a `paused` per
     class).
 
   The status's own fields decide when present: the local `gate.Status` always carries `Admission`. A remote
@@ -409,13 +410,9 @@ used slots, a paused lane, the gate words, waiting warning at 2 min, the pairing
   - 自動喚醒;
   - 啟動指令 (`agent_command`; the spec's 模型 became this on the A line, 10-16);
   - 工作目錄;
-  - 啟動 prompt and 喚醒 prompt (textareas; empty = built-in);
-  - 守門員可調的名額範圍 (`slot_bounds`, #3017 / #3019):
-    - 最少 / 最多 for 重指令 and 輕指令, default heavy 0–3 and light 0–5; the daemon checks 0 ≤ min ≤ max ≤ 64 per
-      class;
-    - the hint 「0 表示守門員可以暫停這一類（新的指令排隊，已在跑的不受影響）」;
-    - a pair the daemon refuses shows the 400 text under that pair;
-    - a 744 daemon's row without `slot_bounds` shows the defaults as 預設 and still writes.
+  - 啟動 prompt and 喚醒 prompt (textareas; empty = built-in).
+
+  No slot bounds (spec U10, #3020). The slot counts themselves are gate settings (W5c2, 0–64, 0 = paused).
 
   Each value carries its source (預設 when the row does not set it). A failed write restores the field and shows the
   daemon's 400 text under it. When the two daemons' `targets` differ, a warning line. Offline: nothing editable.
@@ -424,8 +421,7 @@ used slots, a paused lane, the gate words, waiting warning at 2 min, the pairing
 - **Tests**:
   - load; one write; 409 reload; the 400 text shown and the field restored;
   - the `targets` warning; offline;
-  - the probe editor saves both daemons;
-  - a `slot_bounds` pair: write, refused, and absent on a 744 row.
+  - the probe editor saves both daemons.
 
   M: write only the changed field (not the whole row) → the round-trip test goes red.
 
@@ -479,5 +475,5 @@ used slots, a paused lane, the gate words, waiting warning at 2 min, the pairing
 - **Q4 (A line)**: `watch.v1` in `/api/info` when W2b's events, ack and `watch.events` land, with the real-module
   test. Agreed by 1f, 10-16.
 - **A3's `tmux_session`**: W5a3 uses the fixed `pdx-watch` until the status carries it.
-- **W3c (A line)**: the gate accepts 0 slots and `pdx gate status --json` gains `paused` per class (#3019). W5b reads
+- **W3c (A line)**: the gate accepts 0 slots and `pdx gate status --json` gains `paused` per class (#3020). W5b reads
   `paused` when it is present.
