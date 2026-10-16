@@ -22,11 +22,13 @@ func TestClassify_Table(t *testing.T) {
 		{"go test ./internal/store ./internal/team", ClassLight}, // two packages (#3073)
 		{"go test ./a ./b ./c", ClassHeavy},
 		{"go test -race ./internal/watch/ ./internal/module/team/", ClassLight},
-		{"go test ./a -benchtime 50x", ClassLight}, // the value of -benchtime is no package
-		{"go test ./a -test.benchtime 50x", ClassLight},
+		{"go test ./a ./b -benchtime 50x", ClassLight}, // the value of -benchtime is no package
+		{"go test ./a ./b -test.benchtime 50x", ClassLight},
+		{"go test ./a ./b -test.run X --benchtime 1x", ClassLight},
 		{"go test ./a ./b -benchtime=1x", ClassLight},
 		{"go test ./a ./b --benchtime 1x ./c", ClassHeavy},
-		{"go test ./a -fuzzcachedir d -mutexprofile m -testlogfile l ./b", ClassLight},
+		{"go test ./a ./b -fuzzcachedir d -mutexprofile m -testlogfile l", ClassLight},
+		{"go test ./a ./b -blockprofilerate 1 -memprofilerate 1 -mutexprofilefraction 1", ClassLight},
 		{"go test ./a -blockprofilerate 1 -memprofilerate 1 -mutexprofilefraction 1 ./b ./c", ClassHeavy},
 		{"go vet ./a ./b", ClassLight},
 		{"go vet ./a ./b ./c", ClassHeavy},
