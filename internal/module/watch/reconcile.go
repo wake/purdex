@@ -246,6 +246,7 @@ func (m *Module) fresh(ctx context.Context) {
 	if _, _, _, err := m.reconcile(cctx, true); err != nil {
 		m.logf("[watch] reconcile: %v", err)
 	}
+	m.refreshRemote(cctx)
 }
 
 // reconcileBackground is a reconcile no caller waits for (a SessionStart, the ticker, the start of the daemon).

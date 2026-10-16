@@ -42,7 +42,8 @@ type ChangedPayload struct {
 }
 
 // watcherNow is the watcher events go to: the one the locator remembers, else this host's own when it holds one (awake or
-// resting). A remembered watcher on this very host is read from the live holder, not from what the locator last learned.
+// resting), else a resting one the locator knows on another host, else none. A remembered watcher on this very host is read from
+// the live holder, not from what the locator last learned; one on another host is as fresh as the last refresh (refreshRemote).
 func (m *Module) watcherNow() *WatcherView {
 	own := m.hs().Get()
 	m.core.CfgMu.RLock()
@@ -51,14 +52,21 @@ func (m *Module) watcherNow() *WatcherView {
 	selfView := func() *WatcherView {
 		return &WatcherView{HostID: ownID, Alias: ownAlias, SessionID: own.SessionID, State: string(own.State), TmuxSession: watch.PaneSession}
 	}
-	if cur, _ := m.loc.Remembered(); cur != nil {
+	viewOf := func(w *watch.Where) *WatcherView {
+		return &WatcherView{HostID: w.HostID, Alias: w.Alias, SessionID: w.SessionID, State: string(w.State), TmuxSession: watch.PaneSession}
+	}
+	cur, last := m.loc.Remembered()
+	if cur != nil {
 		if cur.HostID == ownID && own.State != watch.HolderNone {
 			return selfView()
 		}
-		return &WatcherView{HostID: cur.HostID, Alias: cur.Alias, SessionID: cur.SessionID, State: string(cur.State), TmuxSession: watch.PaneSession}
+		return viewOf(cur)
 	}
 	if own.State != watch.HolderNone {
 		return selfView()
+	}
+	if last != nil && last.HostID != ownID && last.State == watch.HolderResting {
+		return viewOf(last)
 	}
 	return nil
 }

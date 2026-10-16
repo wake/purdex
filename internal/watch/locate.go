@@ -214,6 +214,41 @@ func (l *Locator) prefer(a HolderAnswer) bool {
 	return true
 }
 
+// Observe records what the host alias (whose id is a.HostID) says now about the watcher the locator knows on that host, the
+// remembered one or the last one: the cache is otherwise only written when a search finds a watcher, so a remote watcher that
+// rested, was woken or vanished would be reported as it was found. An awake watcher there becomes the remembered one; a resting one
+// is no longer a place to deliver to (Current is cleared) but stays the last one, marked resting, for a wake; a host that holds
+// none forgets what was known of it. A host the locator knows nothing of is left alone.
+func (l *Locator) Observe(alias string, a HolderAnswer) {
+	l.mu.Lock()
+	known := func(w *Where) bool { return w != nil && w.HostID == a.HostID }
+	if !known(l.mem.Current) && !known(l.mem.Last) {
+		l.mu.Unlock()
+		return
+	}
+	switch {
+	case a.State == HolderAwake && a.SessionID != "":
+		w := Where{Alias: alias, HostID: a.HostID, SessionID: a.SessionID, State: HolderAwake, At: l.now(), Since: a.Since}
+		l.mem.Current, l.mem.Last = &w, &w
+	case a.State == HolderResting && a.SessionID != "":
+		w := Where{Alias: alias, HostID: a.HostID, SessionID: a.SessionID, State: HolderResting, At: l.now(), Since: a.Since}
+		if known(l.mem.Current) {
+			l.mem.Current = nil
+		}
+		l.mem.Last = &w
+	default: // none
+		if known(l.mem.Current) {
+			l.mem.Current = nil
+		}
+		if known(l.mem.Last) {
+			l.mem.Last = nil
+		}
+	}
+	l.save()
+	l.mu.Unlock()
+	l.changed()
+}
+
 // supersededSince says whether a hint that arrived after generation start beats w (the watcher a search settled on): a watcher
 // that is older, or another session of w's own host. The search then did not see it and must look again.
 func (l *Locator) supersededSince(start int, w Where) bool {

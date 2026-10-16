@@ -57,8 +57,9 @@ type Module struct {
 	two         twoAwake
 	standDowner StandDowner
 	// chg is the last watch.changed payload; emit is a test seam (nil: the event stream of core).
-	chg  changeState
-	emit func(core.HostEvent)
+	chg    changeState
+	remote remoteState
+	emit   func(core.HostEvent)
 	// beforeChgLock is a test seam at the point a notifier is about to wait for the notice lock.
 	beforeChgLock func()
 	// tickEvery is the period of the safety-net ticker (a test shortens it); unsubscribe and stop undo Start.
@@ -159,6 +160,7 @@ func (m *Module) Start(context.Context) error {
 				return
 			case <-t.C:
 				m.reconcileBackground("ticker")
+				m.refreshRemoteBackground()
 			}
 		}
 	}()

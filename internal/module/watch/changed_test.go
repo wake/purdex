@@ -11,6 +11,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	peersmod "github.com/wake/purdex/internal/module/peers"
+
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/watch"
@@ -192,4 +194,110 @@ func TestChanged_ASlowNotifierDoesNotSendAnOlderStateAfterANewerOne(t *testing.T
 	_ = json.Unmarshal([]byte(r.m.chg.last), &cur)
 	r.m.chg.mu.Unlock()
 	require.Equal(t, "sess-2", cur.Watcher.SessionID, "and the comparison did not go back")
+}
+
+// Spec §12.4: a watcher on another host is known from the last search; its host does not say when it rests or goes. refreshRemote
+// asks that host again, so the status and watch.changed follow it, and asks at most once per staleAfter.
+func remoteRig(t *testing.T) (*recRig, *fakeCaller, *events) {
+	t.Helper()
+	r := newRecRig(t)
+	r.m.core.Cfg.Peers.Alias = "mlab"
+	r.m.core.Cfg.Peers.Hosts[0].Alias = "air26"
+	fc := &fakeCaller{reply: map[string]peersmod.CallResult{}}
+	r.m.caller = fc
+	ev := &events{}
+	r.m.emit = ev.add
+	since := time.Date(2026, 10, 16, 1, 0, 0, 0, time.UTC)
+	fc.reply[pathHolder] = done(HolderView{HostID: peerID, State: "awake", SessionID: "s-26", Since: since})
+	_, err := r.m.loc.Current(context.Background(), []string{"air26"}, false)
+	require.NoError(t, err)
+	require.Equal(t, 1, ev.n(), "the search found the watcher on air26")
+	return r, fc, ev
+}
+
+func TestRefreshRemote_ARemoteWatcherThatRestsIsRestingInTheStatusWithOneChange(t *testing.T) {
+	r, fc, ev := remoteRig(t)
+	fc.reply[pathHolder] = done(HolderView{HostID: peerID, State: "resting", SessionID: "s-26"})
+	r.now = r.now.Add(staleAfter + time.Second)
+	r.m.refreshRemote(context.Background())
+
+	st := statusOf(t, r.testRig)
+	require.NotNil(t, st.Watcher)
+	require.Equal(t, "resting", st.Watcher.State)
+	require.Equal(t, peerID, st.Watcher.HostID)
+	require.Equal(t, 2, ev.n())
+	require.Equal(t, "resting", ev.last().Watcher.State)
+}
+
+func TestRefreshRemote_ARemoteWatcherThatIsGoneIsNone(t *testing.T) {
+	r, fc, ev := remoteRig(t)
+	fc.reply[pathHolder] = done(HolderView{HostID: peerID, State: "none"})
+	r.now = r.now.Add(staleAfter + time.Second)
+	r.m.refreshRemote(context.Background())
+
+	require.Nil(t, statusOf(t, r.testRig).Watcher)
+	require.Equal(t, 2, ev.n())
+	require.Nil(t, ev.last().Watcher)
+}
+
+func TestRefreshRemote_ARemoteWatcherThatIsGoneWhileThisHostHoldsOneShowsThisHosts(t *testing.T) {
+	r, fc, _ := remoteRig(t)
+	r.owners.set(watcherOwner("mine"), true, nil)
+	fc.reply[pathHolder] = done(HolderView{HostID: peerID, State: "none"})
+	r.now = r.now.Add(staleAfter + time.Second)
+	r.m.refreshRemote(context.Background())
+	r.reconcile(t)
+
+	st := statusOf(t, r.testRig)
+	require.NotNil(t, st.Watcher)
+	require.Equal(t, ourID, st.Watcher.HostID)
+}
+
+func TestRefreshRemote_ARestingRemoteWatcherThatIsWokenIsAwakeAgain(t *testing.T) {
+	r, fc, ev := remoteRig(t)
+	fc.reply[pathHolder] = done(HolderView{HostID: peerID, State: "resting", SessionID: "s-26"})
+	r.now = r.now.Add(staleAfter + time.Second)
+	r.m.refreshRemote(context.Background())
+	require.Equal(t, 2, ev.n())
+
+	fc.reply[pathHolder] = done(HolderView{HostID: peerID, State: "awake", SessionID: "s-26", Since: r.now})
+	r.now = r.now.Add(staleAfter + time.Second)
+	r.m.refreshRemote(context.Background())
+	require.Equal(t, "awake", statusOf(t, r.testRig).Watcher.State)
+	require.Equal(t, 3, ev.n())
+}
+
+func TestRefreshRemote_AsksAtMostOncePerStaleAfter(t *testing.T) {
+	r, fc, _ := remoteRig(t)
+	n0 := len(fc.calls)
+	r.now = r.now.Add(staleAfter + time.Second)
+	for i := 0; i < 5; i++ {
+		r.m.refreshRemote(context.Background())
+	}
+	require.Equal(t, n0+1, len(fc.calls), "one question inside the bound")
+	r.now = r.now.Add(staleAfter + time.Second)
+	r.m.refreshRemote(context.Background())
+	require.Equal(t, n0+2, len(fc.calls))
+}
+
+func TestRefreshRemote_AHostThatCannotBeAskedLeavesWhatIsKnown(t *testing.T) {
+	r, fc, ev := remoteRig(t)
+	delete(fc.reply, pathHolder) // 404: an old daemon
+	r.now = r.now.Add(staleAfter + time.Second)
+	r.m.refreshRemote(context.Background())
+	require.Equal(t, "awake", statusOf(t, r.testRig).Watcher.State)
+	require.Equal(t, 1, ev.n())
+}
+
+// A status read of a running module refreshes the remote watcher itself (it is one of the holder reads that call fresh).
+func TestRefreshRemote_AStatusReadRefreshesTheRemoteWatcher(t *testing.T) {
+	r, fc, _ := remoteRig(t)
+	require.NoError(t, r.m.Start(context.Background()))
+	t.Cleanup(func() { _ = r.m.Stop(context.Background()) })
+	fc.reply[pathHolder] = done(HolderView{HostID: peerID, State: "resting", SessionID: "s-26"})
+	r.now = r.now.Add(staleAfter + time.Second)
+
+	st := statusOf(t, r.testRig)
+	require.NotNil(t, st.Watcher)
+	require.Equal(t, "resting", st.Watcher.State)
 }
