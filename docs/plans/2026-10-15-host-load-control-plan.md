@@ -391,29 +391,47 @@ status text and JSON; no late claim while paused; mutation on the 0 comparison.
 
 Spec §5.2. The queue is `internal/gate/slots.go`: tickets `queue/<class>/<unix-ns>-<pid>-<n>` held by flock, served in
 name order by `TryTake` → `liveBefore` under `<class>.admit`; `Waiters()` lists them.
-1. Rank side files: `<ticket>.rank` JSON (`rank`, `at`, `by`, `reason`, `until`), written to `<ticket>.rank.new` and
-   renamed (atomic; the dotted names are already skipped by the ticket scans). `Ticket.Drop` removes it with the ticket;
-   the scan that removes a dead gate's ticket removes its rank file, and a rank file whose ticket is gone is removed.
-2. Order: `liveBefore` becomes "live tickets ahead of t in the serving order" (spec §5.2: front by `at`, normal and back
-   by name; `hold` ones never ahead of anybody, an expired `until` reads as normal). `TryTake` on a ticket that is held
-   returns no slot with the reason `held`. Everything stays under the class's admit lock, so a rank change and a take
-   never interleave inside one decision.
-3. CLI `pdx gate queue [--class heavy|light] [--json]` (the waiters with their rank) and `pdx gate queue
-   front|back|hold|normal <pid|ticket>… --reason "<line>" [--until <dur|RFC 3339>]`: a pid names that gate's ticket in
-   either class; the reason is required (one line, ≤ 200 bytes, no control characters); `--until` only with `hold`; a
-   ticket that is no longer waiting is reported, not an error for the others; prints old → new per ticket. `by` = the
-   session id the gate reads from the environment, else `person`.
-4. Visible: `Waiter` gains `Rank`, `RankReason`, `RankBy`, `HeldUntil` (status text and JSON); the waiting command's
-   wait line names a hold (by, reason) or being passed by front tickets; the decision record gains `rank` and `held_s`.
-   The would-wait answer of the mod counts the serving order, not arrival order.
-5. The watcher's skill (W3b.4) gets the procedure: read the queue, move with a reason, tell the person; it never asks
+1. One lock for every queue change. Under the class's admit lock (`<class>.admit`, as `TryTake` holds it): `SetRank`
+   (open the ticket, check its flock is still held, write `<ticket>.rank.new` and rename it; after the rename check the
+   ticket again and, if it is gone, remove the rank and answer "no longer waiting"), `ClearRank`, `Ticket.Drop` (now
+   takes the admit lock briefly to remove the ticket and its rank together), and the scans' clean-up of a dead gate's
+   ticket and of a rank file whose ticket is gone. So a rank never outlives its ticket unseen, and the CLI never reports
+   success for a ticket that is no longer waiting.
+2. One snapshot for every reader. `Pool.Snapshot()` under the admit lock: the holders (incl. late and over-size ones),
+   the free capacity, and the live tickets with their ranks in serving order (spec §5.2: front by `at`, then by ticket
+   name on a tie; normal and back by name; hold ones listed after, never counted ahead; an expired `until` reads as
+   normal; a rank file that cannot be read, is malformed, or names an unknown rank reads as **normal** with a
+   `rank_error` shown — arrival order, today's behaviour, so a broken file never strands a waiter). `TryTake`,
+   `pdx gate status`, `pdx gate queue` and would-wait all read from it, so counts, places and ranks always agree.
+3. `TryTake(t)` returns `Take{Slot, Ahead, AheadFront, Rank}` (the waiter's own rank, by, reason, until): no slot when
+   the ticket is held (reason `held`) or when the tickets ahead in serving order use up the free capacity. Late claims
+   keep their place (spec §5.2): `TakeLate` takes capacity without a ticket and ignores ranks, because the command is
+   already running (D9); its holder counts against the pool as today.
+4. The wait loop reads its own rank on every poll, also on a poll where the admission check (pressure) keeps it from
+   calling `TryTake` (a `Snapshot` read then), and keeps `held_s` as the sum of the polls' intervals spent in `hold`
+   (several holds, a hold during a pressure wait, an expiry, a release and a new hold all add up correctly); the
+   decision record gains `rank` (the last one) and `held_s`. The wait line names a hold (`held by <by>: <reason>`,
+   with `until`) or the front tickets ahead (`behind N moved to the front`).
+5. would-wait answers for a hypothetical new `normal` ticket at the end of the normal group: ahead = live front +
+   normal tickets (back and hold excluded), against the holders and free capacity of the same snapshot.
+6. CLI `pdx gate queue [--class heavy|light] [--json]` (the snapshot) and `pdx gate queue front|back|hold|normal
+   <pid|ticket>… --reason "<line>" [--until <dur|RFC 3339>]`: a pid names that gate's ticket in either class; reason
+   required (one line, ≤ 200 bytes, no control characters); `--until` only with `hold`; a ticket no longer waiting is
+   reported for that ticket, the others go on; prints old → new per ticket. `by` = the session id the gate reads from
+   the environment, else `person`. `Waiter` / status JSON gain `rank`, `rank_reason`, `rank_by`, `held_until`,
+   `rank_error`.
+7. The watcher's skill (W3b.4) gets the procedure: read the queue, move with a reason, tell the person; it never asks
    anyone to cut their command down (spec §5.2).
-Tests: order table (front before normal before back; two fronts by `at`; a hold skipped and not counted ahead; an expired
-hold is normal); a held waiter is not served while a slot is free, and is served after `normal`; others pass a hold;
-rank file removed with its ticket and when orphaned; a rank written between two `TryTake`s is honoured by the second;
-CLI: missing reason refused, `--until` without `hold` refused, unknown pid reported, old → new printed; status JSON
-fields; wait line for a hold; `held_s` in the decision record; `-race` on `TryTake` with concurrent rank writes; mutation
-on the order comparison and the hold check.
+Tests: order table (front before normal before back; two fronts by `at`, a tie by ticket name; a hold skipped and not
+counted ahead; an expired hold is normal; malformed JSON, unknown rank, unreadable file and a bad `until` read as normal
+with `rank_error`); a held waiter is not served while a slot is free, and is served after `normal`; others pass a hold;
+races under `-race`: `SetRank` against `Drop` (no orphan rank, "no longer waiting" reported), a rank written between two
+`TryTake`s is honoured by the second, `Snapshot` during rank writes and drops (no duplicate place, order matches ranks);
+`TakeLate` while a front waiter queues → the late claim takes the slot and the front waiter is next once it ends; a pool
+shrunk with an over-size holder; `held_s` across two holds, a hold during a pressure wait and an expiry; would-wait:
+back and hold tickets do not make a new command wait, a front one does; CLI: missing reason refused, `--until` without
+`hold` refused, unknown pid reported, old → new printed; status JSON fields; mutation on the order comparison, the
+hold check and the would-wait count.
 
 ### W4 — `pdx gate free <class>-<k>`
 

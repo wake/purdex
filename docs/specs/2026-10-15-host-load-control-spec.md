@@ -247,7 +247,11 @@ about 120 min). The queue was arrival order only; the watcher and the person nee
 - **The order that serves the queue**: `front` tickets (in the order they were moved there), then `normal` (arrival
   order), then `back` (arrival order). A `hold` ticket is not served and does not count as ahead of anybody: the others
   pass it; it waits until it is set back to `normal` (or another rank), or its `until` passes. Nothing is cancelled: for
-  the owner it is only a longer wait, its command unchanged.
+  the owner it is only a longer wait, its command unchanged. Two fronts moved at the same instant go by ticket name. A
+  rank file that cannot be read or makes no sense reads as `normal` (arrival order) and is shown as an error, so a broken
+  file never strands a waiter. A late claim (#2996: a packaging command already running) still takes its slot without
+  regard to ranks — it is running, not waiting. "Would this command wait?" is answered for a new `normal` ticket at the
+  end of the normal group: back and hold tickets never make it wait.
 - **Who and how**: `pdx gate queue front|back|hold|normal <pid or ticket>… --reason "<one line>" [--until <duration or
   time>]` (`--until` only with `hold`), on the host whose queue it is (the watcher reaches the other gated host over
   `ssh <alias> pdx gate queue …`). The reason is required. It prints each ticket's old → new rank. `by` is the Claude
