@@ -30,7 +30,9 @@
             "pid": 4242,
             "name": "node",
             "cpu": 41.5,
-            "rss_mb": 812.5
+            "rss_mb": 812.5,
+            "mem_mb": 1024.3,
+            "mem_kind": "footprint"
           }
         ],
         "top_mem": [
@@ -38,7 +40,17 @@
             "pid": 4242,
             "name": "node",
             "cpu": 41.5,
-            "rss_mb": 812.5
+            "rss_mb": 812.5,
+            "mem_mb": 1024.3,
+            "mem_kind": "footprint"
+          },
+          {
+            "pid": 77,
+            "name": "rootd",
+            "cpu": 0.2,
+            "rss_mb": 300,
+            "mem_mb": 300,
+            "mem_kind": "rss"
           }
         ]
       }
