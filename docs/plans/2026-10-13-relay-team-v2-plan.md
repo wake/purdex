@@ -342,23 +342,36 @@ Expected files add `W/wire_relay.go`, `W/wire.go`, `T/relay_begin.go`, `T/relay_
   `ask` (attended: it has created the `idle_intercept` ask), `half` (unattended: it has started the first half), `pass`
   (the person answered `compact` for this period: the mod lets the next compaction through). So a release or an adopt
   between two intercepts is routed by the daemon's role, never the mod's cache.
-- **One decision per period, kept by the daemon**: a row per session (`relay_intercepts`: session, period, outcome,
-  at). `silent` when, in this period: an idle ask is open, answered or its first half is beginning or done; a fresh
-  `half` handoff exists; or an intercept outcome is already recorded (a card answered `deny`, timed out, or `compact`
-  spent). Creating the ask or starting the half and recording the period happen in one transaction with the
-  session's one-open-op rule, so the 40-min idle timer, a `halfLater` begin and the intercept cannot both act.
+- **One decision per period, kept by the daemon**: a row per session (`relay_intercepts`: session, period, state,
+  at) with the states `asked` (card open), `left` (answered `deny`, or timed out), `half` (first half started),
+  `pass_pending` (answered `compact`, not yet used) and `pass_spent`. The answer to an intercept report: `pass` when
+  the row is `pass_pending`; `silent` when the row is `asked`, `left`, `half` or `pass_spent`, or when, in this
+  period, an idle ask is open, answered or its first half is beginning or done, or a fresh `half` handoff exists;
+  else `ask` / `half` (and the row is written). Creating the ask or starting the half and writing the row happen in
+  one transaction with the session's one-open-op rule, so the 40-min idle timer, a `halfLater` begin and the
+  intercept cannot both act.
+- **The hook decides at once; the daemon is told after.** `session.compact` must answer in the hook, so the mod never
+  waits for the daemon there: the hook lets the compaction through only when the mod holds an **armed pass** for the
+  current period (and disarms it in the same step); otherwise it answers `{skip}`. The report to the daemon is sent
+  from a timer as today: `--intercepted` after a skip, `--pass-used` after a pass, on which the daemon moves the row
+  `pass_pending` → `pass_spent` (only from `pass_pending`; a second `--pass-used` is a no-op). The mod arms the pass
+  when it learns `compact` — from the card's settle, or from the daemon's `pass` answer to an intercept report (a mod
+  reloaded after the answer has lost the armed flag: its next intercept is skipped, the daemon answers `pass`, the
+  mod re-arms, and the try after that goes through or the mod starts one itself if its API can).
 - **An open idle card is never cancelled by an intercept** (today a non-member in `awaiting` goes `toIdle` +
   `cancelled{compacted}` and then compacts): the intercept is `silent`, the card stays open and its timeout still runs
   the first half (§4.3).
 - **The ask**: `reason: idle_intercept` (new wire constant; CLI and `relay_begin` validation accept it). Attended:
   timeout → **nothing** (unlike the idle ask, whose timeout runs the first half); `deny` → nothing; `approve` → the
   relay as `/relay` (a fresh handoff reused); `compact` (new `Decision` value; the op closes `cancelled` with reason
-  `compact`; the CLI's JSON and exit code say `compact`, exit 0) → the period's outcome becomes `pass` and the mod's
-  settle branch remembers it, so the next idle compaction in this period is let through once (and, if the mod API can
-  start a compaction, it does so at once — record the finding in the PR). Unattended at creation: the first half
-  (no card, no quota); no first half if a fresh handoff exists (→ `silent`).
-- **Switching unattended on with an `idle_intercept` card open**: the sweep treats it as an idle card: close it and run
-  the first half (no quota, no clear) unless a fresh handoff exists; never the general `autoApprove`.
+  `compact`; the CLI's JSON and exit code say `compact`, exit 0) → the row becomes `pass_pending` and the mod's settle
+  branch arms the pass (above); if the mod API can start a compaction it does so at once (record the finding in the
+  PR). Unattended at creation: the first half (no card, no quota); no first half if a fresh handoff exists
+  (→ `silent`).
+- **Switching unattended on with an `idle_intercept` card open**: the sweep closes it `cancelled` with the reason
+  `unattended_half` (distinct from a timeout) and writes the row `half`; the CLI reports that reason in its JSON (exit
+  12, cancelled) and the mod's settle branch runs the first half on it (no quota, no clear) unless a fresh handoff
+  exists. A plain timeout stays exit 11 → nothing. Never the general `autoApprove`.
 - **Versions**: mod protocol `VERSION` → **'10'** for this path ('9' = member intercept only). The daemon's hello
   answer carries `idle_intercept: 1` (members) or `2` (all sessions); the mod skips an idle compaction only when the
   daemon's level covers the session (a daemon that does not say → no skip: the compaction happens as before). A
@@ -372,7 +385,9 @@ Expected files add `W/wire_relay.go`, `W/wire.go`, `T/relay_begin.go`, `T/relay_
   role, incl. a release and an adopt between two intercepts; one decision per period across a mod reload and a
   retry 54 min later (M); idle card open → `silent` and the card's timeout still runs the half; races under `-race`:
   idle-timer begin in flight × intercept, `halfLater` begin in flight × intercept, a fresh half written while the
-  intercept is decided; attended `idle_intercept` timeout → nothing, `deny` → nothing, `compact` → `pass` once (M);
+  intercept is decided; attended `idle_intercept` timeout → nothing, `deny` → nothing, `compact` → `pass_pending` → one
+  compaction let through → `pass_spent`, a second report a no-op, a reload between answer and use re-arms from the
+  daemon (M); a switch-on close (`unattended_half`) runs the half, a plain timeout does not;
   unattended at creation → half, with a fresh handoff → `silent`; switching unattended on with the card open → half,
   no quota, not `autoApprove`; mixed versions: new mod × daemon without the level → no skip; mod 9 × new daemon
   for a solo session → no `ask`.
