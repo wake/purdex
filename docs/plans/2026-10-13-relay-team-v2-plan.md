@@ -357,7 +357,12 @@ Expected files add `W/wire_relay.go`, `W/wire.go`, `T/relay_begin.go`, `T/relay_
   `pass_pending` → `pass_spent` (only from `pass_pending`; a second `--pass-used` is a no-op). The mod arms the pass
   when it learns `compact` — from the card's settle, or from the daemon's `pass` answer to an intercept report (a mod
   reloaded after the answer has lost the armed flag: its next intercept is skipped, the daemon answers `pass`, the
-  mod re-arms, and the try after that goes through or the mod starts one itself if its API can).
+  mod re-arms, and the try after that goes through or the mod starts one itself if its API can). **A pass is bound to
+  the context it was given for**: `pass_pending` stores the session's context tokens when `compact` was answered, and
+  the hook honours an armed pass only while the current usage is at least 90 % of that. A compaction cuts the context
+  far below, so a pass re-armed after a crash between the compaction and `--pass-used` is never honoured again (and
+  Claude Code does not idle-compact a context under its minimum anyway); the daemon also turns `pass_pending` into
+  `pass_spent` when a report for the period shows the context under that bound.
 - **An open idle card is never cancelled by an intercept** (today a non-member in `awaiting` goes `toIdle` +
   `cancelled{compacted}` and then compacts): the intercept is `silent`, the card stays open and its timeout still runs
   the first half (§4.3).
@@ -387,7 +392,8 @@ Expected files add `W/wire_relay.go`, `W/wire.go`, `T/relay_begin.go`, `T/relay_
   idle-timer begin in flight × intercept, `halfLater` begin in flight × intercept, a fresh half written while the
   intercept is decided; attended `idle_intercept` timeout → nothing, `deny` → nothing, `compact` → `pass_pending` → one
   compaction let through → `pass_spent`, a second report a no-op, a reload between answer and use re-arms from the
-  daemon (M); a switch-on close (`unattended_half`) runs the half, a plain timeout does not;
+  daemon (M); a crash between the let-through compaction and `--pass-used` → the re-armed pass is not honoured
+  (usage under 90 % of the bound) and the row ends `pass_spent`; a switch-on close (`unattended_half`) runs the half, a plain timeout does not;
   unattended at creation → half, with a fresh handoff → `silent`; switching unattended on with the card open → half,
   no quota, not `autoApprove`; mixed versions: new mod × daemon without the level → no skip; mod 9 × new daemon
   for a solo session → no `ask`.
