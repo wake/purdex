@@ -22,11 +22,14 @@ import (
 	"github.com/wake/purdex/internal/module/hostconfig"
 )
 
-// rig is a Measure on fakes: a hand-driven clock, a FakeLocal, a FakeRole, the real events broadcaster.
+// rig is a Measure on fakes: a hand-driven clock, a FakeLocal, a FakeRole, the real events broadcaster. The one-second loop
+// has a clock of its own that nothing advances (loop): the tests step the measuring by hand with tick(), and a loop that
+// also woke up on fc.Advance would run a second tick at an unpredictable moment (#2990).
 type mrig struct {
 	t      *testing.T
 	m      *Measure
 	fc     *fakeClock
+	loop   *fakeClock
 	local  *leaf.FakeLocal
 	role   *leaf.FakeRole
 	events *core.EventsBroadcaster
@@ -44,12 +47,12 @@ type mrig struct {
 
 func newMRig(t *testing.T, script string) *mrig {
 	t.Helper()
-	r := &mrig{t: t, fc: newFakeClock(), local: leaf.NewFakeLocal(), events: core.NewEventsBroadcaster()}
+	r := &mrig{t: t, fc: newFakeClock(), loop: newFakeClock(), local: leaf.NewFakeLocal(), events: core.NewEventsBroadcaster()}
 	r.role = leaf.NewFakeRole(leaf.RoleState{Role: leaf.RolePrimary, Term: 3, Primary: "mlab", Self: "mlab"})
 	r.fleet = hostconfig.FleetConfig{Order: []string{"air26", "mlab"}, PeerSSHAlias: "a26", Enabled: true}
 	r.ssh, r.sshDir = fakeSSH(t, script)
 	r.m = NewMeasure(Deps{
-		Home: t.TempDir(), Clock: r.fc, Local: r.local, Role: r.role, Events: r.events,
+		Home: t.TempDir(), Clock: r.fc, LoopClock: r.loop, Local: r.local, Role: r.role, Events: r.events,
 		Probe: func() ([]hostconfig.ProbeHost, int64, error) {
 			r.probeReads.Add(1)
 			r.mu.Lock()
