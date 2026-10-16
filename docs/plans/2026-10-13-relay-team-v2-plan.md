@@ -430,6 +430,42 @@ Expected files: `W/wire_unattended.go`, `T/unattended_preview.go`, `T/unattended
 
 **T48 `GET /api/team/unattended/preview`** — read-only; every list computed by the **same helper** the switch-on sweep uses, so the preview cannot drift (the sweep's rules: T4, T22, T29). Shape in the App contract. Tests: one fixture host with each case (rule on/off; quota 0 and 2; threshold / idle from mod 7 and 8 / reask / member_relay / old manual-member cards; an open member ask; a lead and an adopt card; a spawn card; a paused session) → the expected lists (M: change the sweep's rule for one case and the preview test fails). Capability `team.unattended_preview.v1`.
 
+## RT-7 — change a member's model (user 10-16; spec §4.9)
+
+Expected files: `W/wire_team.go`, `T/member_model.go` (new), `T/member_model_store.go` (new), `T/launch.go`,
+`T/module.go`, `cmd/pdx/member_cmd.go` (new), `skills/pdx-team/SKILL.md` + tests (~8). One PR (split daemon / CLI if
+it passes 800 lines).
+
+**T49 Daemon** — `POST /api/team/member/model {ref, model, effort}`: the caller must be the member's lead (same check
+as `pdx relay`/`pdx kill`); refused: not a member of this lead, adopted (no spawn op), remote, an open relay, an open
+model change, an invalid model/effort (`team.ValidModel`/`ValidEffort`). An op row (`member_model_ops`: id, member
+session, from model/effort, to model/effort, state `waiting_turn → exiting → launching → done | rolled_back | failed`,
+reason, at) so a daemon restart picks it up (boot reconciliation like spawn ops).
+- `waiting_turn`: until the member's state says between turns (its turn-end hook; the same signal the idle notices
+  use). Never interrupts a turn.
+- `exiting`: `/exit` typed into its pane, then, after 60 s with the same process (pid + start time re-checked),
+  SIGTERM, 10 s, SIGKILL (the W3a-2a/W3b rest pattern). Done when the pane's foreground is a shell again.
+- `launching`: `launchLine(member_command, plugin dir, new model, new effort)` + `--resume <session id>`, typed with
+  the check-and-type single tmux command (named buffer from stdin + `if-shell -F` at a shell + bracketed paste +
+  Enter; buffer left = `pane_busy`) — reuse or move W3a-2a's helper rather than copy it. Done when a verified
+  SessionStart of the same session id arrives in that pane within 3 min; the spawn op's model/effort are updated
+  (the roster's source).
+- Rollback: no registration in 3 min → `exiting` again if a process is there, then the old model's launch line; its
+  registration → `rolled_back` (reported); none → `failed` with `member_down` and the exact hand command.
+- Never `/model` (it writes the host's global default).
+- Lead notices: started, done (old → new), rolled back (why), failed (why, hand command).
+**T50 CLI and skill** — `pdx member model <ref> <model> [--effort e] [--wait 9m]`: prints the state changes like
+`pdx relay --wait`; exit 0 done, 10 refused, 11 still waiting at `--wait` (it goes on), 14 rolled back or failed.
+`pdx team`: a pending change shows in MODEL as `sonnet→opus …`. pdx-team skill: the lead section gains the command and
+"never type /model into a member".
+Tests: each refusal (M on the lead check); waits for the turn to end (a turn in progress delays the exit, M); exit
+then SIGTERM/SIGKILL only on the same pid + start time; the launch line has `--resume <sid>`, the new model and effort
+and the host's member_command, never `/model`; registration → done and the roster shows the new model; no
+registration → rollback with the old model (M) → `rolled_back`; rollback fails → `failed`/`member_down` with the hand
+command; pane not at a shell → nothing typed; a daemon restart mid-change resumes the op from its state; tmux under
+`-L` with `unset TMUX`.
+Owner: the A-line member after W2b; independent of RT-4..RT-6.
+
 ## Order and owners
 
 RT-1a → RT-1b → RT-1c (deploy) → RT-2a1 → RT-2a2 → RT-2b → RT-2c (deploy) → RT-3a1 → RT-3a2 → RT-3b → RT-3c (deploy) → RT-4 → RT-5a (after lease v2 P1b; #2765 is merged, d3a6e69f, so the seam is there) → RT-5b → RT-6.
