@@ -95,7 +95,52 @@ func TestClassify_Table(t *testing.T) {
 		{"tsc -b -p spa", ClassHeavy}, // -b wins: it builds the references
 		{"tsc --build --project spa", ClassHeavy},
 		{"tsc -p spa --version", ClassNone},
-		{"tsc --watch", ClassNone}, // never ends (#2989)
+		// a request for the tool's help or version runs nothing worth a slot (#3043)
+		{"claude plugin test --help", ClassNone},
+		{"claude plugin test -h", ClassNone},
+		{"go test -h", ClassNone},
+		{"go test ./... --help", ClassNone},
+		{"go help test", ClassNone},
+		{"vitest --help", ClassNone},
+		{"vitest run --version", ClassNone},
+		{"npx vitest related --help", ClassNone},
+		{"pnpm --help", ClassNone},
+		{"pnpm run --help", ClassNone}, // before the script's name: the runner's
+		{"pnpm exec vitest --help", ClassNone},
+		{"npx tsc --version", ClassNone},
+		{"pnpm help", ClassNone},
+		{"npm help install", ClassNone},
+		{"composer help", ClassNone},
+		{"vendor/bin/phpunit -h", ClassNone},
+		{"make test --help", ClassNone},
+		// ... but not a help word that is something else: a script's own (it runs), the value of an option (it may be one: the gate
+		// judges the line as it was), after -- or -args (R2 of #3043)
+		{"tsc -b --help", ClassNone},         // after an option info_only does not say, but tsc's own rule does: --help runs nothing
+		{"pnpm run build --help", ClassNone}, // the script runs with --help (packaging: no class, but not info_only: see the reason table)
+		{"pnpm --prefix spa run build --help", ClassNone},
+		{"pnpm run test --help", ClassHeavy},
+		{"pnpm test --help", ClassHeavy},
+		{"npm test --help", ClassHeavy},
+		{"phpunit --coverage-html --help", ClassHeavy},
+		{"pest --coverage-html --help", ClassHeavy},
+		{"phpunit --testsuite --help", ClassHeavy},
+		{"composer -d --help install", ClassNone},
+		{"go test -bench=--help ./...", ClassHeavy}, // the = form is one word
+		{"vitest run --reporter=--help", ClassHeavy},
+		{"go test ./... -run TestHelp", ClassHeavy}, // a name with help in it
+		{"vitest run src/help.test.ts", ClassLight},
+		{"vitest run ./--help", ClassLight},
+		{"go test -hv ./...", ClassHeavy},      // combined short flags are no exact help word
+		{"go test ./... -args -h", ClassHeavy}, // after -args it goes to the test binary, which runs
+		{"go test ./... -args --help", ClassHeavy},
+		{"go test -bench --help ./...", ClassHeavy}, // -bench takes a regexp
+		{"go test ./... -run --help", ClassHeavy},
+		{"go test --count --help ./...", ClassHeavy},
+		{"vitest run -t --help", ClassLight},             // the value of -t
+		{"claude plugin test -- --help", ClassHeavy},     // after -- it is the runner's
+		{"claude plugin test --file --help", ClassLight}, // --file's value
+		{"pnpm run help", ClassNone},                     // a script of the project called help: unknown, not info (no class)
+		{"tsc --watch", ClassNone},                       // never ends (#2989)
 		{"tsc -w", ClassNone},
 		{"tsc --Watch", ClassNone}, // tsc lowercases option names
 		{"tsc -W", ClassNone},

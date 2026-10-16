@@ -18,6 +18,7 @@ import {
   isHostColorSet,
   resolveHostColorSet,
   resolveHostColors,
+  resolveHostBadge,
 } from './host-color'
 import type { PaneLayout, Tab } from '../types/tab'
 import type { HostConfig } from '../stores/useHostStore'
@@ -540,5 +541,24 @@ describe('resolveHostColorSet / resolveHostColors', () => {
       middle: 'rgba(59, 130, 246, 0.6)',
       light: 'rgba(59, 130, 246, 0.22)',
     })
+  })
+})
+
+// One copy of "a host's look -> what its badge draws" for the tab rows, the team seats and the fleet cells.
+describe('resolveHostBadge', () => {
+  const colors = { console: { main: { color: '#3b82f6', alpha: 100 } }, terminal: { main: { color: '#22c55e', alpha: 100 } } }
+  it('resolves the colours under the given mode', () => {
+    expect(resolveHostBadge({ colors }, 'console').colors?.main).toBe('rgba(59, 130, 246, 1)')
+    expect(resolveHostBadge({ colors }, 'terminal').colors?.main).toBe('rgba(34, 197, 94, 1)')
+  })
+  it('reads the legacy single colour', () => {
+    expect(resolveHostBadge({ color: '#3b82f6' }, 'console').colors?.light).toBe('rgba(59, 130, 246, 0.22)')
+  })
+  it('passes a catalogued icon and weight; drops an unknown name or weight (WorkspaceIcon would print it as text)', () => {
+    expect(resolveHostBadge({ icon: 'Laptop', iconWeight: 'bold' }, 'console')).toEqual({ colors: null, icon: 'Laptop', iconWeight: 'bold' })
+    expect(resolveHostBadge({ icon: 'desktop', iconWeight: 'heavy' }, 'console')).toEqual({ colors: null, icon: undefined, iconWeight: undefined })
+  })
+  it('no look at all: nothing to draw', () => {
+    expect(hasHostBadge(resolveHostBadge({}, 'console'))).toBe(false)
   })
 })

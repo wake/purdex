@@ -45,11 +45,16 @@ const TONE_CLASS: Record<UsageTone, string> = { ok: 'stroke-status-success', war
  * Context usage as a USED ring (grows counterclockwise from 12 o'clock, coloured by used %); the model shape sits in the
  * middle. `symbolColor` (a CSS colour) paints the shape — the one-line cell passes the seat host's main colour; absent, it
  * inherits the text colour.
+ *
+ * Two options for the fleet's host cell (fleet spec §8.1), off for every other caller: `tone` colours the arc instead of the
+ * used %, so the arc can show a level another party judged (the zone the daemon sent); `noShape` leaves the middle empty
+ * (a host has no model, and the "?" would read as "model unknown").
  */
-export function ContextRing({ pct, model, size = 22, symbolColor }: { pct: number | undefined; model: ModelFamily | undefined; size?: number; symbolColor?: string }) {
+export function ContextRing({ pct, model, size = 22, symbolColor, tone, noShape = false }: { pct: number | undefined; model: ModelFamily | undefined; size?: number; symbolColor?: string; tone?: UsageTone; noShape?: boolean }) {
   const r = size / 2 - 2
   const c = 2 * Math.PI * r
   const geo = pct === undefined ? null : ringGeometry(pct, 'used')
+  const arcTone = tone ?? geo?.tone
   // The shape lives in the ring's own coordinate system: its 12x12 box (g wide, NOT rounded to an integer) is centred on
   // (size/2, size/2) by arithmetic, so no DOM-level pixel snapping can push it off the ring's middle.
   const g = size * 0.42
@@ -59,13 +64,13 @@ export function ContextRing({ pct, model, size = 22, symbolColor }: { pct: numbe
     <span className="relative inline-grid flex-shrink-0" style={{ width: size, height: size, color: symbolColor }} data-testid="context-ring">
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="absolute inset-0 block">
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="var(--border-default)" strokeWidth={2.5} />
-        {geo && (
+        {geo && arcTone && (
           <circle
             data-testid="context-ring-arc"
             data-shown={geo.sharePct}
-            data-tone={geo.tone}
+            data-tone={arcTone}
             data-direction={geo.direction}
-            className={TONE_CLASS[geo.tone]}
+            className={TONE_CLASS[arcTone]}
             cx={size / 2}
             cy={size / 2}
             r={r}
@@ -76,7 +81,7 @@ export function ContextRing({ pct, model, size = 22, symbolColor }: { pct: numbe
             transform={ringTransform(size, geo.direction)}
           />
         )}
-        {model ? (
+        {noShape ? null : model ? (
           <g data-testid={`model-icon-${model}`} fill="currentColor" role="img" aria-label={MODEL_LABEL[model]}>
             <path d={PATHS[model]} transform={`translate(${o.toFixed(4)}, ${o.toFixed(4)}) scale(${(g / 12).toFixed(5)})`} />
           </g>

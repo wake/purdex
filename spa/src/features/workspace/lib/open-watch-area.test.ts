@@ -3,7 +3,7 @@ import { useWorkspaceStore, WATCH_WORKSPACE_ID, __resetReturnWorkspaceForTest, g
 import { useTabStore } from '../../../stores/useTabStore'
 import { useFleetStore, type FleetSnapshot } from '../../../lib/fleet/store'
 import { createTab } from '../../../types/tab'
-import { watchHostTabId } from '../../../lib/watch/ids'
+import { WATCH_GUARDIAN_TAB_ID as G, watchHostTabId } from '../../../lib/watch/ids'
 import { getVisibleTabIds } from './getVisibleTabIds'
 import { openWatchArea } from './open-watch-area'
 
@@ -46,7 +46,7 @@ describe('openWatchArea in a world that is not settled', () => {
 describe('openWatchArea', () => {
   it('entering from a session workspace: creates the area and its tabs, selects the host tab, remembers where from', () => {
     openWatchArea({ host: 'h2' })
-    expect(area()!.tabs).toEqual([watchHostTabId('h1'), watchHostTabId('h2')])
+    expect(area()!.tabs).toEqual([G, watchHostTabId('h1'), watchHostTabId('h2')])
     expect(useTabStore.getState().activeTabId).toBe(watchHostTabId('h2'))
     expect(ws().activeWorkspaceId).toBe(WATCH_WORKSPACE_ID)
     expect(area()!.activeTabId).toBe(watchHostTabId('h2'))
@@ -58,7 +58,7 @@ describe('openWatchArea', () => {
     openWatchArea({ host: 'h2' })
     expect(useTabStore.getState().activeTabId).toBe(watchHostTabId('h2'))
     expect(getReturnWorkspaceId()).toBe(a)
-    expect(area()!.tabs).toHaveLength(2)
+    expect(area()!.tabs).toHaveLength(3)
   })
 
   it('a host the fleet lists but that has no tab yet gets one first', () => {
@@ -69,14 +69,15 @@ describe('openWatchArea', () => {
     expect(useTabStore.getState().activeTabId).toBe(watchHostTabId('h3'))
   })
 
-  it('an unknown host id selects the first tab', () => {
+  it('an unknown host id selects the first tab (the guardian)', () => {
     openWatchArea({ host: 'nope' })
-    expect(useTabStore.getState().activeTabId).toBe(watchHostTabId('h1'))
+    expect(useTabStore.getState().activeTabId).toBe(G)
   })
 
-  it('the guardian target falls back to the first tab while no guardian tab exists (W5a3 adds it)', () => {
+  it('the guardian target selects the guardian tab', () => {
     openWatchArea({ tab: 'guardian' })
-    expect(useTabStore.getState().activeTabId).toBe(watchHostTabId('h1'))
+    expect(useTabStore.getState().activeTabId).toBe(G)
+    expect(area()!.activeTabId).toBe(G)
   })
 
   it('a restart with the area active reopens it: the bar lists the area tabs', () => {
@@ -84,6 +85,6 @@ describe('openWatchArea', () => {
     const { workspaces, activeWorkspaceId } = ws()
     const { tabs, tabOrder, activeTabId } = useTabStore.getState()
     expect(getVisibleTabIds({ tabs, tabOrder, activeTabId, workspaces, activeWorkspaceId }))
-      .toEqual([watchHostTabId('h1'), watchHostTabId('h2')])
+      .toEqual([G, watchHostTabId('h1'), watchHostTabId('h2')])
   })
 })
