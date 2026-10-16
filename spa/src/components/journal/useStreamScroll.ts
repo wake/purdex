@@ -79,7 +79,6 @@ export function useStreamScroll({ host, unitKey, streamKey = `${host}\0${unitKey
     el.scrollTop = el.scrollHeight
     lastTop.current = el.scrollTop
     lastAtBottom.current = true
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- the pill belongs to the list that was just replaced
     setBelow(0)
     save()
   }, [filter, save])
@@ -93,7 +92,6 @@ export function useStreamScroll({ host, unitKey, streamKey = `${host}\0${unitKey
       // Another unit's list (the opening effect above already put the view where that unit was left): none of it is new.
       prevKey.current = streamKey
       anchor.current = null
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- the pill belongs to the unit that was just left
       setBelow(0)
       return
     }
