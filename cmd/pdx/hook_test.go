@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -457,5 +458,76 @@ func TestRunHook_PopulatesProvenance(t *testing.T) {
 	}
 	if got.SenderUncertain {
 		t.Fatal("sender_uncertain = true, want false")
+	}
+}
+
+// outputCounted counts a command that started (even one that exits non-zero) and not one that never did.
+func TestOutputCountedCountsOnlyStartedForks(t *testing.T) {
+	hookForks.Store(0)
+	if out, err := outputCounted(exec.Command("echo", "x")); err != nil || strings.TrimSpace(string(out)) != "x" {
+		t.Fatalf("echo: %q %v", out, err)
+	}
+	if got := hookForks.Load(); got != 1 {
+		t.Fatalf("after one started command: %d", got)
+	}
+	_, _ = outputCounted(exec.Command("false"))
+	if got := hookForks.Load(); got != 2 {
+		t.Fatalf("a command that exits non-zero was still forked: %d", got)
+	}
+	if _, err := outputCounted(exec.Command("/nonexistent/pdx-no-such-binary")); err == nil {
+		t.Fatal("a missing binary must fail")
+	}
+	if got := hookForks.Load(); got != 2 {
+		t.Fatalf("a command that could not start is not a fork: %d", got)
+	}
+}
+
+// runHook sends the forks it made while building the event; nothing forked → the field is absent from the wire.
+func TestRunHook_SendsItsForkCount(t *testing.T) {
+	origInfo, origResolve, origPost, origLoad, origStdin := queryTmuxSessionInfoFn, resolveHookProvenanceFn, postHookEventFn, loadConfigFn, os.Stdin
+	t.Cleanup(func() {
+		queryTmuxSessionInfoFn, resolveHookProvenanceFn, postHookEventFn, loadConfigFn, os.Stdin = origInfo, origResolve, origPost, origLoad, origStdin
+	})
+	loadConfigFn = func(string) (config.Config, error) { return config.Config{}, nil }
+	resolveHookProvenanceFn = func() hookProvenance {
+		return hookProvenance{TmuxPaneID: "%5", SenderPID: 42, SenderStartTime: "Sun Apr 20 01:30:00 2026"}
+	}
+	var got hookPayload
+	postHookEventFn = func(_ context.Context, _ string, _ string, payload hookPayload) error {
+		got = payload
+		return nil
+	}
+	run := func() {
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = w.Close()
+		os.Stdin = r
+		runHook([]string{"--agent", "cc", "PdxSessionStart"})
+	}
+
+	hookForks.Store(0)
+	queryTmuxSessionInfoFn = func() (string, string) { return "$1", "work" }
+	run()
+	if got.Forks != 0 {
+		t.Fatalf("nothing forked, Forks = %d", got.Forks)
+	}
+	if b, _ := json.Marshal(got); strings.Contains(string(b), `"forks"`) {
+		t.Fatalf("no forks must leave the field out: %s", b)
+	}
+
+	hookForks.Store(0)
+	queryTmuxSessionInfoFn = func() (string, string) {
+		_, _ = outputCounted(exec.Command("echo", "a"))
+		_, _ = outputCounted(exec.Command("echo", "b"))
+		return "$1", "work"
+	}
+	run()
+	if got.Forks != 2 {
+		t.Fatalf("two forks while building the event, Forks = %d", got.Forks)
+	}
+	if b, _ := json.Marshal(got); !strings.Contains(string(b), `"forks":2`) {
+		t.Fatalf("the count must be on the wire: %s", b)
 	}
 }

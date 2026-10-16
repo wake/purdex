@@ -348,6 +348,34 @@ func TestHeadTailWriterShapes(t *testing.T) {
 	}
 }
 
+// ObserveForks adds the forks a remote process (the pdx hook CLI) reports: n of them under the tag, nothing for n < 1, and no
+// more than maxReportedForks for one report so a client cannot swell a tag.
+func TestObserveForksCountsAReportAndBoundsIt(t *testing.T) {
+	ResetTags()
+	t.Cleanup(ResetTags)
+	total := func() int64 {
+		for _, s := range Tags() {
+			if s.Name == "hook-cli" {
+				return s.Total
+			}
+		}
+		return 0
+	}
+	ObserveForks("hook-cli", 3)
+	if got := total(); got != 3 {
+		t.Fatalf("after a report of 3: %d", got)
+	}
+	ObserveForks("hook-cli", 0)
+	ObserveForks("hook-cli", -5)
+	if got := total(); got != 3 {
+		t.Fatalf("a report of 0 or less must add nothing: %d", got)
+	}
+	ObserveForks("hook-cli", 1_000_000)
+	if got := total(); got != 3+maxReportedForks {
+		t.Fatalf("a huge report must be cut to %d: total %d", maxReportedForks, got)
+	}
+}
+
 // A caller that starts the embedded Cmd itself reports the outcome: NoteStarted counts a fork, NoteStartFailed a failed start.
 func TestNoteStartFailedCountsAFailedStart(t *testing.T) {
 	ResetTags()

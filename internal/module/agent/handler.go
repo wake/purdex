@@ -106,6 +106,9 @@ type EventRequest struct {
 	SenderPID       int             `json:"sender_pid"`
 	SenderStartTime string          `json:"sender_start_time"`
 	SenderUncertain bool            `json:"sender_uncertain"`
+	// Forks is how many child processes the pdx hook CLI started to build this event (tmux, ps); counted by the daemon under
+	// "hook-cli" so the cost of a hook shows next to its event. Optional: an older hook omits it.
+	Forks int `json:"forks,omitempty"`
 
 	// identitySeq versions this event's identity write against the other
 	// events in flight for the same frame. Unexported on purpose: it is not
@@ -222,6 +225,9 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	execstat.Event("hook." + m.hookEventLabel(req.AgentType, req.PurdexName)) // the denominator of the hook path's cost (probe dedupe plan)
+	// The CLI's forks are counted at the same point as the event they belong to, before verification: the cost per event is
+	// hook-cli ÷ hook.<name>, and an event verification then refuses was still forked for by its CLI.
+	execstat.ObserveForks("hook-cli", req.Forks)
 
 	// The identity version is allocated HERE — before verification, which is
 	// the first thing on this path that waits. Verification reads the sender's

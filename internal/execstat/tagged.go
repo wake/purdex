@@ -138,6 +138,23 @@ func Observe(tag string, d time.Duration) {
 	s.addDuration(d)
 }
 
+// maxReportedForks bounds what one report can add: the count comes over the wire (pdx hook counts its own forks and sends them
+// with the event), so a client cannot swell a tag by sending a large number.
+const maxReportedForks = 32
+
+// ObserveForks records n forks of tag made by a process the daemon does not run (the pdx hook CLI reports the forks it made
+// for one event). They count when reported and carry no duration; n outside 1..maxReportedForks is cut to that range.
+func ObserveForks(tag string, n int) {
+	if n < 1 {
+		return
+	}
+	n = min(n, maxReportedForks)
+	s := tags.get(tag)
+	for range n {
+		s.count()
+	}
+}
+
 // Event records one occurrence of a trigger by name ("hook.PdxPreToolUse", "session-list-build", "peers-envelope", "sse-subscribe").
 func Event(name string) { events.get(name).count() }
 

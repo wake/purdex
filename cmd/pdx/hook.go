@@ -31,6 +31,8 @@ type hookPayload struct {
 	SenderPID       int             `json:"sender_pid"`
 	SenderStartTime string          `json:"sender_start_time"`
 	SenderUncertain bool            `json:"sender_uncertain,omitempty"`
+	// Forks is how many child processes this hook started to build the event (hookForks); the daemon counts them as "hook-cli".
+	Forks int `json:"forks,omitempty"`
 }
 
 type hookProvenance struct {
@@ -155,6 +157,7 @@ func runHook(args []string) {
 	provenance := resolveHookProvenanceFn()
 	raw := readStdinUntil(budget, os.Stdin)
 	payload := buildHookPayload(tmuxSessionID, tmuxSession, purdexName, bytes.NewReader(raw), agentType, provenance)
+	payload.Forks = int(hookForks.Load())
 
 	cfg, err := loadConfigFn("")
 	var url, token string
@@ -306,7 +309,7 @@ func filePathOnly(toolInput json.RawMessage) json.RawMessage {
 // the session name, or "" on any error. Retained for non-hook callers
 // (cmd/pdx/statusline_proxy.go) that only need the name.
 func queryTmuxSession() string {
-	out, err := exec.Command(tmuxExecutable(), "display-message", "-p", "#{session_name}").Output()
+	out, err := outputCounted(exec.Command(tmuxExecutable(), "display-message", "-p", "#{session_name}"))
 	if err != nil {
 		return ""
 	}
@@ -319,7 +322,7 @@ func queryTmuxSession() string {
 // the primary key the daemon uses to bypass the name cache rename-race
 // window when resolving session codes for hook events.
 func queryTmuxSessionInfo() (string, string) {
-	out, err := exec.Command(tmuxExecutable(), "display-message", "-p", "#{session_id}|#{session_name}").Output()
+	out, err := outputCounted(exec.Command(tmuxExecutable(), "display-message", "-p", "#{session_id}|#{session_name}"))
 	if err != nil {
 		return "", ""
 	}
