@@ -49,6 +49,14 @@ beforeEach(() => {
   useI18nStore.getState().setLocale('en')
   loadOlder = vi.fn().mockResolvedValue(undefined)
   Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get() { return heightOf(this) } })
+  // A row / divider starts below the rows and dividers before it.
+  Object.defineProperty(HTMLElement.prototype, 'offsetTop', {
+    configurable: true,
+    get() {
+      const all = Array.from(this.closest('[data-testid="journal-stream"]')?.querySelectorAll('[data-testid="journal-entry"], [data-testid="journal-day"]') ?? [])
+      return Math.max(0, all.indexOf(this)) * ROW
+    },
+  })
   Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, get() { return VIEW } })
   Object.defineProperty(HTMLElement.prototype, 'scrollTop', {
     configurable: true,
@@ -60,6 +68,7 @@ afterEach(() => {
   cleanup()
   delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollHeight
   delete (HTMLElement.prototype as unknown as Record<string, unknown>).clientHeight
+  delete (HTMLElement.prototype as unknown as Record<string, unknown>).offsetTop
   delete (HTMLElement.prototype as unknown as Record<string, unknown>).scrollTop
 })
 
@@ -185,6 +194,25 @@ describe('the previous month', () => {
     await act(async () => { finish() })
     scrollTo(0)
     expect(loadOlder).toHaveBeenCalledTimes(2)
+  })
+  it('a month arriving together with a new event: the reading position holds and the new event is still counted (M: the early return skipped the count)', () => {
+    loadOlder.mockImplementation(() => new Promise<void>(() => {}))
+    render(<Harness initial={range(10, 21)} more />)
+    scrollTo(60)
+    scrollTo(0)
+    expect(loadOlder).toHaveBeenCalledTimes(1)
+    push(range(1, 22)) // nine older rows above, one new row below
+    expect(top()).toBe(9 * ROW)
+    expect(screen.getByTestId('journal-new-pill').textContent).toContain('1')
+  })
+  it('a month arriving together with a new event, the reader at the bottom: follows the new event', () => {
+    loadOlder.mockImplementation(() => new Promise<void>(() => {}))
+    render(<Harness initial={range(10, 12)} more />) // short: the top is the bottom
+    scrollTo(0)
+    expect(readViewMemo(H, K).pinnedToBottom).toBe(true)
+    push(range(1, 16))
+    expect(top()).toBe(maxTop(stream()))
+    expect(screen.queryByTestId('journal-new-pill')).toBeNull()
   })
   it('a month with nothing the filter shows does not strand the reader at the top: the next month is asked for, and the position holds when a row arrives (M: no second ask)', async () => {
     let n = 0

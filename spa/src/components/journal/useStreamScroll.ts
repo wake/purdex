@@ -32,13 +32,19 @@ function appended(old: readonly JournalEntry[], now: readonly JournalEntry[]): n
   return at >= 0 ? now.length - 1 - at : Math.max(1, now.length - old.length)
 }
 
+/** Where the row of that entry starts inside the scrolling element, or null when it is not drawn. */
+function rowTop(el: HTMLElement, id: string): number | null {
+  for (const row of el.querySelectorAll<HTMLElement>('[data-entry-id]')) if (row.getAttribute('data-entry-id') === id) return row.offsetTop
+  return null
+}
+
 export function useStreamScroll({ host, unitKey, streamKey = `${host}\0${unitKey}`, shown, filter, more, loadOlder }: Opts) {
   const ref = useRef<HTMLDivElement>(null)
   const [below, setBelow] = useState(0)
   const prev = useRef<readonly JournalEntry[]>(shown)
   const prevFilter = useRef(filter)
   const prevKey = useRef(streamKey)
-  const anchor = useRef<{ height: number; top: number } | null>(null)
+  const anchor = useRef<{ height: number; top: number; row: { id: string; offset: number } | null } | null>(null)
   const loading = useRef(false)
   const chain = useRef(0)
   const failed = useRef(false)
@@ -92,12 +98,16 @@ export function useStreamScroll({ host, unitKey, streamKey = `${host}\0${unitKey
       return
     }
     if (!el || old === shown) return
+    // Older rows came in above: keep the row that was at the top where it was. Rows that came in below at the same time
+    // (a new event) do not move it, so the shift is measured at that row, not as the growth of the whole list.
     if (anchor.current && shown[0]?.id !== old[0]?.id) {
-      el.scrollTop = anchor.current.top + (el.scrollHeight - anchor.current.height)
+      const a = anchor.current
+      const now = a.row ? rowTop(el, a.row.id) : null
+      el.scrollTop = a.top + (a.row && now !== null ? now - a.row.offset : el.scrollHeight - a.height)
       lastTop.current = el.scrollTop
       anchor.current = null
-      return
     }
+    // New entries at the end follow the reader at the bottom, else they are counted for the pill.
     if (shown[shown.length - 1]?.id === old[old.length - 1]?.id) return
     const pinned = host !== null && unitKey !== null ? readViewMemo(host, unitKey).pinnedToBottom : true
     if (pinned) { el.scrollTop = el.scrollHeight; lastTop.current = el.scrollTop }
@@ -109,7 +119,9 @@ export function useStreamScroll({ host, unitKey, streamKey = `${host}\0${unitKey
     if (!el || loading.current) return
     loading.current = true
     chain.current++
-    anchor.current = { height: el.scrollHeight, top: el.scrollTop }
+    const first = prev.current[0]
+    const offset = first ? rowTop(el, first.id) : null
+    anchor.current = { height: el.scrollHeight, top: el.scrollTop, row: first && offset !== null ? { id: first.id, offset } : null }
     // A failed read leaves things as they were: no automatic second ask.
     void loadOlder().then(() => true, () => false).then((ok) => { loading.current = false; failed.current = !ok; setLoaded((n) => n + 1) })
   }, [loadOlder])
