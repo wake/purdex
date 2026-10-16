@@ -245,31 +245,52 @@ succeed; an old peer; mismatched targets warn.
 Tests: folding isolation per host and kind; E3 not folded; retry without double counting; restart with a pending
 queue; backlog on wake/start (and none twice); ack and the count.
 
-### W3a — standalone spawn and resume (daemon)
+### W3a — the `pdx-watch` tmux session: registration and control (daemon)
 
-`team` gains an internal "system spawn": the tmux start and registration of `runSpawn`/`spawn_tmux.go` without a
-team, a lead or an origin inbox, in a given cwd with a given model and first prompt; and "system resume": the same
-for an existing session id (`--resume`) with a given prompt; and "system end": ends such a session (as `pdx kill`
-does). Not exposed on the network; callable from the watch module only. Tests: a system spawn starts a session that
-is not in any team, gets its first prompt, is listed in `pdx peers`; resume continues the same session id; end; a
-second spawn for the same purpose while one is starting is refused.
+Spec §12.4 (user decisions 10-16: one fixed tmux session `pdx-watch`, active and passive start, `agent_command`).
+Replaces the earlier "system spawn" design: no team plumbing.
+
+1. Registration: the agent module's SessionStart path, when the request's tmux session is `pdx-watch`, tells the
+   watch module (an in-process hook, like the launch claim release); the watch module writes `holder.json` (session
+   id, awake, at), and the W2a discovery answers it from then on. A later awake watcher on another host while the
+   remembered one is alive gets the stand-down notice (§12.4). No mod change: the hook request already carries
+   `tmux_session`.
+2. Control helpers in the watch module, through the person's tmux server (no `-L`): `ensureSession(workdir)` (create
+   `pdx-watch` detached in `workdir` when missing); `agentRunning()` (the pane's foreground process is an agent, from
+   the existing pane projection, no extra fork per pass); `run(cmdline)` (type a command into the first pane with
+   `send-keys -l` and Enter, quoting the prompt for the shell); `endAgent()` (`/exit`, then end the process after the
+   grace). Every tmux call goes through `execstat` with a tag.
+3. `watch` row: `agent_command` replaces `model` (spec §12.2): the normaliser refuses `model` on write; the lenient
+   read turns a stored `model` into `claude --dangerously-skip-permissions --model <model>` (a 741–744 row).
+4. API (the watcher area's §8 A3, B line): `/api/watch/status` adds `tmux_session` and `agent_command`;
+   `POST /api/watch/start`, `POST /api/watch/wake {prompt}` (local admin only; device tokens 403);
+   `watch.changed` on the event stream when the holder state changes.
+Tests (tmux under `-L <label>` with `unset TMUX`, never the default server): a SessionStart from `pdx-watch` registers,
+one from another tmux session does not; a manual start (the 10-16 one) registers with no restart; ensure creates once;
+run types the command with the prompt quoted; end then grace; `model` rows read as `agent_command`; a second watcher
+on another host gets the notice.
 
 ### W3b — the watcher on its host: start, wake, rest
 
-1. Start (`/api/peers/watch/start` or a local event): system spawn in `workdir` with `model` and `start_prompt`;
-   one start at a time on this host, and before starting it announces to the other hosts (`/api/peers/watch/announce`);
-   simultaneous announcements → the smaller host id starts, the other stands down; a start that has no turn within 3
-   min counts as failed, retried after a 30 min cooldown (persisted).
-2. Wake (`/api/peers/watch/wake` or a local event): system resume of the resting session with `wake_prompt`.
+1. Start (active: `POST /api/watch/start`, `pdx watch start`, the App's button; passive: `/api/peers/watch/start` or a
+   local event with nobody awake and `auto_wake`): W3a `ensureSession` + `run(agent_command + start_prompt)`; one start
+   at a time on this host, and before starting it announces to the other hosts (`/api/peers/watch/announce`);
+   simultaneous announcements → the smaller host id starts, the other stands down; a start with no SessionStart from
+   `pdx-watch` within 3 min counts as failed, retried after a 30 min cooldown (persisted). An agent already running in
+   `pdx-watch` is a success with nothing to do.
+2. Wake (`POST /api/watch/wake`, `/api/peers/watch/wake` or a local event): `run(agent_command --resume <id> +
+   wake_prompt)` in the same pane; no kept id → a start.
 3. Rest (mode `patrol`): idle = no delivery and no turn of the watcher for `patrol_idle_min` → send "time to rest"
-   → on the watcher's answer, or after 5 min, system end; the session id is kept for the next wake. `resident`:
-   no countdown.
+   → on the watcher's answer, or after 5 min, W3a `endAgent`; the session id is kept for the next wake and the tmux
+   session stays. `resident`: no countdown.
 4. Built-in prompts and the skill `skills/pdx-watch/SKILL.md` (spec §12.4): pull the `purdex-watch` branch in
    `workdir` at start and wake, commit and push after notes change, read the backlog, what each event and label means,
    what it may and must not do, `pdx watch ack`, the rest handshake. `start_prompt`/`wake_prompt` in the settings
    replace the built-ins when set.
 5. Lead sets up, once: the `purdex-watch` branch of the mlab repo (from its main, notes under `watch/`) and the
-   `workdir` checkout `~/Workspace/wake/mlab-purdex-watch` on a26 and mlab.
+   `workdir` checkout `~/Workspace/wake/mlab-purdex-watch` on a26 and mlab (a separate clone), and trusts that folder
+   in Claude Code once on each host (the first-run "trust this folder?" question would stop a daemon-started watcher).
+   Done on mlab 10-16 (branch pushed, f4aab9a; the manual watcher runs there); a26 still to do.
 Tests: start on event with nobody awake; wake a resting one; two hosts announce at once → one start; start fails →
 cooldown; patrol rest after the idle time (answer / no answer); resident never rests; custom prompts used.
 

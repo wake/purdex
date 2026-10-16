@@ -393,13 +393,16 @@ daemon settings. Not Profile Sync: Profile Sync carries the App's own stores and
 | `mode` | `patrol` | `resident` (never rests) or `patrol` (rests when idle) |
 | `patrol_idle_min` | 120 | the rest countdown |
 | `auto_wake` | true | whether an event wakes or starts a watcher |
-| `model` | opus | a new watcher |
+| `agent_command` | `claude --dangerously-skip-permissions --model opus` | the command run in the `pdx-watch` tmux session to start or resume the watcher (§12.4); replaces `model` (user decision 10-16). A row written by 741–744 has `model` instead: it is read as `claude --dangerously-skip-permissions --model <model>` until the row is next written, and a write no longer accepts `model` |
 | `workdir` | `~/Workspace/wake/mlab-purdex-watch` (both hosts) | the watcher's directory on this host: a checkout of the mlab repo used only for its `purdex-watch` branch |
 | `start_prompt` | built-in | the first prompt of a new watcher |
 | `wake_prompt` | built-in | the prompt that resumes a resting watcher |
 
 ### 12.3 Where the watcher is, and delivery (W2)
 
+- **Which session is the watcher.** The Claude Code session running in the tmux session named `pdx-watch` on a host
+  (§12.4). The daemon learns it from that session's own SessionStart (the hook request carries the tmux session name),
+  so a watcher started by hand counts as well as one the daemon started; nothing else marks a session as the watcher.
 - **One watcher for all hosts.** Each daemon remembers where the current watcher is (host and session) and sends its
   events there with the peer path (`pdx msg`'s). It looks again only when a delivery fails or the remembered watcher
   is gone, in this order: (1) a watcher awake on any host in `targets` → use it; (2) the last watcher's host is
@@ -417,21 +420,44 @@ daemon settings. Not Profile Sync: Profile Sync carries the App's own stores and
 
 ### 12.4 The watcher session (W3)
 
-- **Started and managed by the daemon of the host that holds it**: a session outside any team, in `workdir`, with
-  `model` and `start_prompt`; woken with `wake_prompt` by resuming the same session.
+User decisions (10-16, confirmed "是鎖 tmux sess"): the watcher lives in **one fixed tmux session, `pdx-watch`**, on the
+host that holds it; it is started **actively** (the person: the App's "start the watcher", or `pdx watch start`) and
+**passively** (an event with nobody awake and `auto_wake` on, §12.3), and both start it in that same tmux session; the
+App's watcher tab is bound to that session; the command that runs the agent is a setting (`agent_command`), not a
+model name.
+
+- **The `pdx-watch` tmux session.** In the person's normal tmux server (never a `-L` socket), cwd `workdir`, outside
+  any team. The name is reserved: whatever Claude Code session runs there is the watcher (§12.3), and the daemon never
+  uses the name for anything else. The tmux session outlives the agent: when the agent rests or exits, the pane is left
+  at a shell, and the next start or wake runs in it again.
+- **Registration.** When a SessionStart arrives from a session whose tmux session is `pdx-watch`, the daemon records it
+  as this host's watcher (`holder.json`: session id, awake, the time) and announces it to the other hosts (§12.3). A
+  second awake watcher on another host, while the first is remembered and alive, is told so (a `[負載守門]` notice
+  asking it to stand down and end); the daemon does not kill it.
+- **Start** (on the host that will hold it, one at a time, §12.3): if `pdx-watch` does not exist, create it detached in
+  `workdir`; if an agent is already running in it, nothing to do; otherwise run `agent_command` with `start_prompt` in
+  the session's first pane. A start with no SessionStart within 3 min counts as failed (§ plan W3b cooldown).
+- **Wake**: run `agent_command --resume <the kept session id>` with `wake_prompt` in the same pane; with no kept id,
+  a start.
 - **Rest (patrol mode).** The daemon counts the idle time (no event delivered, no turn of the watcher) and at
   `patrol_idle_min` sends "time to rest"; the watcher writes its notes, pushes them and answers; the daemon then ends
-  the session (after 5 min without an answer, it ends it anyway) and keeps the session id for the next wake. In
-  `resident` mode there is no countdown.
+  the agent (`/exit` typed into the pane; after 5 min without an answer, the agent's process is ended) and keeps the
+  session id for the next wake. The tmux session stays. In `resident` mode there is no countdown.
+- **First run on a host.** Claude Code asks once whether to trust a new folder; the lead trusts `workdir` on each host
+  when making the checkout (plan W3b step 5), so a daemon-started watcher never stops at that question.
+- **Transitional (10-16).** Until W3 ships, the lead starts the watcher by hand in `pdx-watch` on mlab
+  (`agent_command` = Opus); the registration above picks it up once W3a is deployed, with no restart.
 - **Memory and documents in git.** The watcher works in `workdir`, a checkout of the `purdex-watch` branch of the mlab
   repo (`ssh://git@lab.protype.tw:9079/wake/mlab.git`; branched from its main, never merged back; notes under
   `watch/`): it pulls the branch when it starts or wakes, and commits and pushes after it changes its notes. A watcher
   started on another host after a failover pulls the same branch. The lead makes the checkout once on each host (plan
-  W3 step 5); the daemon never clones.
+  W3 step 5; a separate clone of the mlab repo, not a worktree of another checkout; mlab done 10-16, first commit
+  f4aab9a); the daemon never clones.
 - A built-in brief and skill (`pdx-watch`): the above; what each event and label means; what the watcher may do (tell
   the person, message the session that started the command, propose an intercept rule that is applied only when the
-  person agrees, run `pdx gate free` after confirming); what it must not do (end a process that holds no slot; change
-  thresholds by itself).
+  person agrees, run `pdx gate free` after confirming, **raise or lower the gate's slot counts** — user decision 10-16,
+  telling the person each time why and to what); what it must not do (end a process that holds no slot; change the
+  `watch` thresholds by itself).
 - Live from the first deploy (10-15: "go live and sample while it runs"); thresholds start from W0's first data and
   are tuned on the running system (§12.7).
 
@@ -452,6 +478,10 @@ is free. A slot whose gate is still alive is refused (interrupt that command ins
   host that holds it (awake or resting; opening it and asking wakes a resting watcher), the event log of all hosts
   (filter by host and kind, unhandled count), "start the watcher" when there is none, and the `watch` settings of each
   host (§12.2, including the two prompts).
+- The watcher tab is bound to the holder host's `pdx-watch` tmux session (§12.4) and cannot be closed; when the
+  watcher moves to another host (failover), the tab follows the new holder. The area's own spec, with the API it needs
+  from the A line, is `docs/specs/2026-10-16-watcher-area-spec.md` (B line, §8 A1–A3; on the branch
+  `docs/workbook-journal-spec` until the B line merges it).
 
 ### 12.7 W0: threshold evaluation (now)
 
