@@ -289,6 +289,42 @@ describe('HostCell — the tooltip and the click', () => {
     fireEvent.mouseLeave(tile())
     expect(screen.queryByTestId('host-card')).toBeNull()
   })
+  it('closes the card on a scroll of any ancestor, and on a window resize', () => {
+    setup(view())
+    fireEvent.mouseEnter(tile())
+    expect(screen.getByTestId('host-card')).toBeTruthy()
+    fireEvent.scroll(document.body)
+    expect(screen.queryByTestId('host-card')).toBeNull()
+    fireEvent.mouseEnter(tile())
+    expect(screen.getByTestId('host-card')).toBeTruthy()
+    fireEvent(window, new Event('resize'))
+    expect(screen.queryByTestId('host-card')).toBeNull()
+  })
+  it('scroll / resize listeners are gone once the card is closed', () => {
+    const add = vi.spyOn(window, 'addEventListener')
+    const rm = vi.spyOn(window, 'removeEventListener')
+    setup(view())
+    fireEvent.mouseEnter(tile())
+    expect(add.mock.calls.some((c) => c[0] === 'scroll')).toBe(true)
+    fireEvent.mouseLeave(tile())
+    expect(rm.mock.calls.some((c) => c[0] === 'scroll')).toBe(true)
+    expect(rm.mock.calls.some((c) => c[0] === 'resize')).toBe(true)
+    add.mockRestore(); rm.mockRestore()
+  })
+  it('one card at a time: focus on cell A then hover on cell B shows only B\'s card', () => {
+    const mk = (id: string) => ({ ...host(id, { name: id, fast: fast({ load: 40 }) }) }) as FleetHostView
+    render(<>
+      {[mk('a'), mk('b')].map((v) => (
+        <HostCell key={v.id} view={v} look={{ colors: COLORS, icon: 'Desktop' }} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={vi.fn()} />
+      ))}
+    </>)
+    fireEvent.focus(screen.getByTestId('host-tile-a'))
+    expect(screen.getAllByTestId('host-card')).toHaveLength(1)
+    fireEvent.mouseEnter(screen.getByTestId('host-tile-b'))
+    const cards = screen.getAllByTestId('host-card')
+    expect(cards).toHaveLength(1)
+    expect(within(cards[0]).getByText('b')).toBeTruthy()
+  })
   it('keyboard focus shows the card, blur hides it', () => {
     setup(view())
     fireEvent.focus(tile())

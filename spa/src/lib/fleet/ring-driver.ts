@@ -15,7 +15,8 @@ export function levelScore(level: number): number {
   return 0
 }
 
-export function ringDriver(f: Pick<FleetFast, 'cpu' | 'mem' | 'level' | 'page_rate' | 'disk'>): RingDriver {
+/** null when every score is 0 (all 0 or unknown): the ring is empty, so no row is marked. */
+export function ringDriver(f: Pick<FleetFast, 'cpu' | 'mem' | 'level' | 'page_rate' | 'disk'>): RingDriver | null {
   const scores: [RingDriver, number][] = [
     ['cpu', clamp100(f.cpu)],
     ['mem', clamp100(f.mem)],
@@ -25,5 +26,5 @@ export function ringDriver(f: Pick<FleetFast, 'cpu' | 'mem' | 'level' | 'page_ra
   ]
   let best = scores[0]
   for (const s of scores) if (s[1] > best[1]) best = s
-  return best[0]
+  return best[1] > 0 ? best[0] : null
 }

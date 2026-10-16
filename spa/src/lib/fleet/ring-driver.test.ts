@@ -22,6 +22,9 @@ describe('ringDriver — the reading that sets the ring length', () => {
   })
   it('level 1 scores 30; unknown level 0 scores nothing', () => {
     expect(ringDriver({ ...base, level: 1, cpu: 29, mem: 29 })).toBe('pressure')
-    expect(ringDriver({ ...base, level: 0, cpu: 0, mem: 0 })).toBe('cpu')
+    expect(ringDriver({ ...base, level: 0, cpu: 0, mem: 0 })).toBeNull()
+  })
+  it('everything 0 (or unknown): no driver, the ring is empty', () => {
+    expect(ringDriver({ cpu: 0, mem: 0, level: 0, page_rate: 0, disk: 0 })).toBeNull()
   })
 })

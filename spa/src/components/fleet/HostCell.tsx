@@ -15,7 +15,7 @@
 //          in the middle (a host has no model). Offline or no reading: the track only.
 //   bars   `HostBars`: left CPU %, right the memory pressure level (`bars-pressure`, memory used % when the level is unknown)
 //          or memory used % (`bars-memory`), each in its own band. Offline or no reading: the grey tracks only.
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { resolveHostBadge } from '../../lib/host-color'
 import type { HostLook } from '../../lib/host-look'
 import type { UsageTone } from '../../lib/usage-display'
@@ -30,6 +30,9 @@ import { CountBadge } from './CountBadge'
 import { HostBars } from './HostBars'
 import { HostCard, type HostCardAnchor } from './HostCard'
 import { cpuReading, memoryReading, pressureReading } from '../../lib/fleet/bar-readings'
+
+// One card at a time: the close function of the cell whose card is open (hover on B closes the card focus left on A).
+let openCell: { owner: object; close: () => void } | null = null
 
 export const WAIT_LONG_MS = 120_000
 const ZONE_TONE: Record<FleetZone, UsageTone> = { normal: 'ok', warning: 'warn', danger: 'danger' }
@@ -90,13 +93,31 @@ export function HostCell({ view, look, variant, isActive, waitingPrimary, primar
   const ref = useRef<HTMLButtonElement>(null)
   const [anchor, setAnchor] = useState<HostCardAnchor | null>(null)
   const [cardOpen, setCardOpen] = useState(false)
+  const owner = useRef({}).current
+  useEffect(() => () => { if (openCell?.owner === owner) openCell = null }, [owner])
   const openCard = () => {
+    if (openCell && openCell.owner !== owner) openCell.close()
+    openCell = { owner, close: () => setCardOpen(false) }
     const el = ref.current
     const strip = el?.closest('[data-testid="fleet-cells"]')
     setAnchor(el ? { cell: el.getBoundingClientRect(), strip: strip ? strip.getBoundingClientRect() : null } : null)
     setCardOpen(true)
   }
-  const closeCard = () => setCardOpen(false)
+  function closeCard() {
+    if (openCell?.owner === owner) openCell = null
+    setCardOpen(false)
+  }
+  // The anchor is measured once, so close the card when anything scrolls (capture: any ancestor) or the window resizes.
+  useEffect(() => {
+    if (!cardOpen) return
+    const close = () => { if (openCell?.owner === owner) openCell = null; setCardOpen(false) }
+    window.addEventListener('scroll', close, true)
+    window.addEventListener('resize', close)
+    return () => {
+      window.removeEventListener('scroll', close, true)
+      window.removeEventListener('resize', close)
+    }
+  }, [cardOpen, owner])
 
   return (
     <button
