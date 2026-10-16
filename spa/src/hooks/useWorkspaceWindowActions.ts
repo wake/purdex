@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 import { markTabsMoving } from '../lib/team/moving-tabs'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
+import { WATCH_WORKSPACE_ID } from '../lib/watch/ids'
 
 /**
  * Workspace tear-off / merge handlers for Electron multi-window.
@@ -13,7 +14,8 @@ export function useWorkspaceWindowActions() {
 
   const prepareWorkspacePayload = useCallback((wsId: string) => {
     const ws = workspaces.find(w => w.id === wsId)
-    if (!ws || ws.tabs.length === 0) return null
+    // The watcher area stays in this window.
+    if (!ws || wsId === WATCH_WORKSPACE_ID || ws.tabs.length === 0) return null
     const tabData = ws.tabs.map(id => tabs[id]).filter(Boolean)
     if (tabData.length === 0) return null
     return { ws, payload: JSON.stringify({ workspace: ws, tabData }) }

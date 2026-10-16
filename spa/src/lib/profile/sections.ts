@@ -34,6 +34,7 @@ import {
   type WireResolver,
 } from './host-identity'
 import { PROJECTIONS, project, tabsSectionKey, workspaceIdOf } from './projections'
+import { WATCH_WORKSPACE_ID } from '../watch/ids'
 import type {
   HostsPayload,
   HostsSource,
@@ -508,7 +509,7 @@ export function repairTabOwnership(
   const { activeTabId } = world
   const owner = activeTabId === null ? undefined : workspaces.find((ws) => ws.tabs.includes(activeTabId))
 
-  let activeWorkspaceId = world.activeWorkspaceId ?? (owner ?? workspaces[0])?.id ?? null
+  let activeWorkspaceId = world.activeWorkspaceId ?? (owner ?? workspaces.find((ws) => ws.id !== WATCH_WORKSPACE_ID))?.id ?? null
   if (activeTabId !== null && owner !== undefined) {
     const pointed = world.workspaces.find((ws) => ws.id === world.activeWorkspaceId)
     const lostByPointed = pointed !== undefined && pointed.tabs.includes(activeTabId) && owner.id !== pointed.id
