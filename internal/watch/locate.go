@@ -143,7 +143,8 @@ func clone(w *Where) *Where {
 
 // Prefer is told of a watcher that is awake (another host announced it): when it beats the remembered one by the "awake the
 // longest" rule, the remembered one is forgotten (it stays the last one) and the next Current looks again and picks by that rule.
-// Anything that is not awake, is the remembered watcher itself, or does not beat it, changes nothing.
+// A watcher announced by the host of the remembered one, with another session, replaces it whatever its since (the host
+// restarted its watcher). Anything that is not awake, is the remembered watcher itself, or does not beat it, changes nothing.
 func (l *Locator) Prefer(a HolderAnswer) {
 	if a.State != HolderAwake || a.SessionID == "" {
 		return
@@ -152,6 +153,11 @@ func (l *Locator) Prefer(a HolderAnswer) {
 	defer l.mu.Unlock()
 	c := l.mem.Current
 	if c == nil || (c.HostID == a.HostID && c.SessionID == a.SessionID) {
+		return
+	}
+	if c.HostID == a.HostID { // the same host now has another watcher awake: the remembered one is an earlier run of it
+		l.mem.Current = nil
+		l.save()
 		return
 	}
 	cur := HolderAnswer{HostID: c.HostID, State: c.State, SessionID: c.SessionID, Since: c.Since}

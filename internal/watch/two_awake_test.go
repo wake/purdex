@@ -106,3 +106,25 @@ func TestLocator_PreferForgetsARememberedWatcherThatTheAnnouncedOneBeats(t *test
 	cur, _ = l.Remembered()
 	require.NotNil(t, cur)
 }
+
+// The host of the remembered watcher announces another session (it restarted its watcher): the remembered one is an earlier run
+// of it and is forgotten at once, although the new one is younger.
+func TestLocator_PreferReplacesAWatcherOfTheSameHostWithAnotherSession(t *testing.T) {
+	f := &fakeHosts{hold: map[string]HolderAnswer{
+		"air26": awakeSince("a:1", "s-old", tAwake),
+		"mlab":  {HostID: "m:1", State: HolderNone},
+	}}
+	l, _ := newLoc(t, f)
+	_, err := l.Current(context.Background(), targets, true)
+	require.NoError(t, err)
+
+	l.Prefer(awakeSince("a:1", "s-new", tAwake.Add(time.Hour)))
+	cur, last := l.Remembered()
+	require.Nil(t, cur, "the old session of that host is not trusted any more")
+	require.NotNil(t, last)
+
+	f.hold["air26"] = awakeSince("a:1", "s-new", tAwake.Add(time.Hour))
+	w, err := l.Current(context.Background(), targets, true)
+	require.NoError(t, err)
+	require.Equal(t, "s-new", w.SessionID)
+}

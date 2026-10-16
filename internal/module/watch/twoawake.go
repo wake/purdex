@@ -48,7 +48,7 @@ type twoAwake struct {
 // onRegistered is the registration hook (reconcile finds a new watcher frame): announce it to the other hosts, then apply the
 // two-awake rule against what they answer. It runs after the reconcile lock is released.
 func (m *Module) onRegistered(h watch.Holder) {
-	ctx, done, ok := m.enter(context.Background())
+	ctx, done, ok := m.enterFor(context.Background(), standDownBudget)
 	if !ok {
 		return
 	}
@@ -129,6 +129,11 @@ func (m *Module) standDown(ctx context.Context, own watch.Holder, winner watch.H
 	if own.FrameID == "" {
 		return
 	}
+	// The watcher to tell is the one that is awake NOW: the answers of the other hosts took time, and a watcher that restarted in
+	// between is another frame (the notice goes to the tmux session, not to a frame).
+	if cur := m.hs().Get(); cur.State != watch.HolderAwake || cur.FrameID != own.FrameID {
+		return
+	}
 	m.two.mu.Lock()
 	if m.two.stoodDown == nil {
 		m.two.stoodDown = map[string]bool{}
@@ -195,10 +200,10 @@ func (m *Module) handlePeerAnnounce(w http.ResponseWriter, r *http.Request) {
 	}
 	ans := answerOf(h)
 	m.loc.Prefer(ans)
-	m.writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	m.writeJSON(w, http.StatusOK, map[string]any{"ok": true, "host_id": ours}) // the caller checks the answer names the host it asked
 	// and if this host's own watcher is the one that loses, tell it (after the answer: the announcer does not wait for it)
 	go func() {
-		ctx, done, ok := m.enter(context.Background())
+		ctx, done, ok := m.enterFor(context.Background(), standDownBudget)
 		if !ok {
 			return
 		}

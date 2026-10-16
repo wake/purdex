@@ -16,6 +16,7 @@ import (
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/middleware"
+	"github.com/wake/purdex/internal/module/agent"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/watch"
@@ -32,15 +33,19 @@ const (
 
 type stands struct {
 	mu    sync.Mutex
+	left  []time.Duration // the time each send had left on its context
 	sent  []watch.Holder
 	win   []watch.HolderAnswer
 	fail  int // fail this many sends first
 	calls int
 }
 
-func (s *stands) StandDown(_ context.Context, own watch.Holder, winner watch.HolderAnswer) error {
+func (s *stands) StandDown(ctx context.Context, own watch.Holder, winner watch.HolderAnswer) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if dl, ok := ctx.Deadline(); ok {
+		s.left = append(s.left, time.Until(dl))
+	}
 	s.calls++
 	if s.fail > 0 {
 		s.fail--
@@ -99,6 +104,13 @@ func (l *loopback) Call(ctx context.Context, hostID, path string, body any) peer
 	to.mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		return peersmod.CallResult{Class: peersmod.ClassRefused, Status: rr.Code, Code: "refused", Detail: rr.Body.String()}
+	}
+	// HostCaller treats a 2xx whose JSON does not name the host it asked as a wrong host
+	var named struct {
+		HostID string `json:"host_id"`
+	}
+	if json.Unmarshal(rr.Body.Bytes(), &named) != nil || named.HostID != hostID {
+		return peersmod.CallResult{Class: peersmod.ClassWrongHost, Status: rr.Code, Detail: "the answer does not name the host asked"}
 	}
 	return peersmod.CallResult{Class: peersmod.ClassDone, Status: rr.Code, Body: rr.Body.Bytes()}
 }
@@ -358,4 +370,58 @@ func TestStart_InstallsThePeersStandDowner(t *testing.T) {
 	t.Cleanup(func() { _ = r.m.Stop(context.Background()) })
 	_, ok := r.m.standDowner.(peerStandDowner)
 	require.True(t, ok)
+}
+
+// The announce's answer names the receiving host (the caller treats any other 2xx as a wrong host), so a successful announce is
+// not logged as a failure.
+func TestAnnounce_TheAnswerNamesTheReceivingHost(t *testing.T) {
+	var logs []string
+	var mu sync.Mutex
+	p := newPair(t, bothOrder, oppositeOrder)
+	p.a.m.logf = func(f string, a ...any) { mu.Lock(); logs = append(logs, f); mu.Unlock() }
+	p.a.register(t, "frame-a")
+	mu.Lock()
+	defer mu.Unlock()
+	for _, l := range logs {
+		require.NotContains(t, l, "announce to", "a good announce is not reported as a failure")
+	}
+	r := newRig(t)
+	ok := `{"to_host_id":"` + ourID + `","holder":{"host_id":"` + peerID + `","state":"awake","session_id":"s"}}`
+	req := httptest.NewRequest(http.MethodPost, "/api/peers/watch/announce", strings.NewReader(ok))
+	req = req.WithContext(middleware.WithPrincipal(req.Context(), *host))
+	rr := httptest.NewRecorder()
+	r.mux.ServeHTTP(rr, req)
+	require.Contains(t, rr.Body.String(), `"host_id":"`+ourID+`"`)
+}
+
+// A watcher that restarted while the other hosts were being asked is another frame: the notice is not sent for the old snapshot.
+func TestStandDown_IsNotSentForAFrameThatIsNoLongerTheWatcher(t *testing.T) {
+	p := newPair(t, bothOrder, oppositeOrder)
+	p.b.register(t, "frame-b1")
+	old := p.b.m.holder.Get()
+	p.b.register(t, "frame-b2") // the watcher restarted
+	p.b.m.standDown(context.Background(), old, watch.HolderAnswer{HostID: idA})
+	require.Equal(t, 0, p.b.stand.count(), "frame-b1 is gone")
+	p.b.m.standDown(context.Background(), p.b.m.holder.Get(), watch.HolderAnswer{HostID: idA})
+	require.Equal(t, 1, p.b.stand.count())
+
+	// and not for a watcher that is no longer awake
+	p.b.owners.set(agent.PaneOwner{}, false, nil)
+	_, _, _ = p.b.m.Reconcile(context.Background())
+	p.b.m.standDown(context.Background(), p.b.m.holder.Get(), watch.HolderAnswer{HostID: idA})
+	require.Equal(t, 1, p.b.stand.count())
+}
+
+// The registration's announce and settle run under the stand-down budget, not a reconcile's: a normal slow peer call does not
+// leave the settle without time.
+func TestTwoAwake_TheSettleHasTheStandDownBudget(t *testing.T) {
+	p := newPair(t, bothOrder, oppositeOrder)
+	p.b.now = p.a.now.Add(time.Hour)
+	p.a.register(t, "frame-a")
+	p.b.register(t, "frame-b")
+	require.Eventually(t, func() bool { return p.b.stand.count() == 1 }, 3*time.Second, 5*time.Millisecond)
+	p.b.stand.mu.Lock()
+	defer p.b.stand.mu.Unlock()
+	require.NotEmpty(t, p.b.stand.left)
+	require.Greater(t, p.b.stand.left[0], reconcileBudget+2*time.Second, "more than a reconcile's budget is left on the context")
 }
