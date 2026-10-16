@@ -39,6 +39,14 @@ func TestGate_StatusShowsAPausedClass(t *testing.T) {
 	require.NoError(t, json.Unmarshal(out.Bytes(), &st))
 	assert.Equal(t, true, st["PausedHeavy"])
 	assert.Equal(t, false, st["PausedLight"])
+
+	cfg, _ = gateEnv(t, "[gate.slots]\nlight = 0\n[gate.admission]\ndisk_min_gb = 0\n")
+	out.Reset()
+	require.Equal(t, 0, gateMain([]string{"status", "--json", "--config", cfg}, &out, &errb))
+	st = nil
+	require.NoError(t, json.Unmarshal(out.Bytes(), &st))
+	assert.Equal(t, false, st["PausedHeavy"])
+	assert.Equal(t, true, st["PausedLight"])
 }
 
 func TestGate_RunsTheCommandAndReturnsItsExitCode(t *testing.T) {

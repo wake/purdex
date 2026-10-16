@@ -57,9 +57,6 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		cfg.Dir = dir
 		ok := true
 		paused := cfg.Slots.Paused(class) // a class with no slot: it waits for the count to be raised, whatever the host does
-		if paused {
-			ok = false
-		}
 		if g.Pressure != nil && cfg.Admission.Enabled && !paused {
 			p, err := g.Pressure.Read()
 			switch {
