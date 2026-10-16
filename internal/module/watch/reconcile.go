@@ -115,6 +115,7 @@ func (m *Module) reconcile(ctx context.Context, onlyIfStale bool) (h watch.Holde
 		m.rec.qmu.Unlock()
 	}
 	m.rec.mu.Unlock()
+	m.notifyChanged() // before the hooks: the notice is about the holder, and a slow hook must not delay it
 	m.drainRegistered()
 	return h, registered, true, err
 }
