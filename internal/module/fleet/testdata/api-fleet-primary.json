@@ -84,19 +84,52 @@
         "queue": {
           "heavy_used": 2,
           "heavy_total": 2,
-          "light_used": 0,
+          "light_used": 1,
           "light_total": 4,
+          "holders": [
+            {
+              "class": "heavy",
+              "slot": 1,
+              "command": "go test -race ./internal/module/fleet/",
+              "project": "purdex",
+              "session": "9c2f7a10-1b3d-4e55-9a60-7f0e2c8d5b11",
+              "since": "2026-10-16T11:58:28Z",
+              "pid": 10
+            },
+            {
+              "class": "heavy",
+              "slot": 2,
+              "command": "pnpm build",
+              "project": "spa",
+              "session": "",
+              "since": "2026-10-16T11:59:46Z",
+              "pid": 11
+            },
+            {
+              "class": "light",
+              "slot": 1,
+              "command": "git status",
+              "project": "purdex",
+              "session": "",
+              "since": "2026-10-16T11:59:58Z",
+              "pid": 13
+            }
+          ],
           "waiters": [
             {
               "class": "heavy",
               "place": 1,
               "command": "go test ./...",
               "project": "purdex",
+              "session": "11111111-aaaa-4bbb-8ccc-222222222222",
               "since": "2026-10-16T11:57:30Z"
             }
           ],
           "longest_wait_s": 150,
-          "admission_held": false
+          "admission_held": true,
+          "admission_reason": "memory pressure level 2",
+          "heavy_paused": false,
+          "light_paused": false
         }
       }
     },

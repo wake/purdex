@@ -61,10 +61,24 @@
           "heavy_used": 1,
           "heavy_total": 2,
           "light_used": 0,
-          "light_total": 4,
+          "light_total": 0,
+          "holders": [
+            {
+              "class": "heavy",
+              "slot": 1,
+              "command": "go test",
+              "project": "purdex",
+              "session": "",
+              "since": "2026-10-16T11:58:28Z",
+              "pid": 10
+            }
+          ],
           "waiters": [],
           "longest_wait_s": 0,
-          "admission_held": false
+          "admission_held": true,
+          "admission_reason": "",
+          "heavy_paused": false,
+          "light_paused": true
         }
       }
     },

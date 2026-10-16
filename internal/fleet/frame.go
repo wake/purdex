@@ -268,6 +268,10 @@ func dfFreeGB(s string) float64 {
 // Slow is the five-second part of a frame.
 type Slow struct {
 	LocalSlow
+	// AdmissionKnown: the gate status carried an Admission object (an older pdx's does not; gate.Status holds a value and
+	// cannot tell "absent" from "not held", so the decode keeps the presence here). QueueSummary reads the status' own answer
+	// only when it was there.
+	AdmissionKnown bool
 	// GateBad: the gate section was there but did not parse (or was cut); Gate is nil and the queue is blank, the lists stay.
 	GateBad bool
 	// GateNone: the host has no pdx (the loop printed `@@gate none`).
@@ -296,11 +300,20 @@ func ParseSlow(frame string, at time.Time) (s Slow, ok bool) {
 		s.GateBad = true
 		return s, true
 	}
-	var st gate.Status
+	// The wrapper's Admission is shallower than the embedded status' own, so it takes the key: a pointer, nil when the object
+	// is absent or null.
+	var wire struct {
+		gate.Status
+		Admission *gate.AdmissionState
+	}
 	dec := json.NewDecoder(strings.NewReader(body))
-	if err := dec.Decode(&st); err != nil {
+	if err := dec.Decode(&wire); err != nil {
 		s.GateBad = true
 		return s, true
+	}
+	st := wire.Status
+	if wire.Admission != nil {
+		st.Admission, s.AdmissionKnown = *wire.Admission, true
 	}
 	// The slot tokens are secrets of the remote host; nothing here needs them.
 	for _, hs := range [][]gate.Holder{st.Heavy, st.Light, st.Suspect} {
