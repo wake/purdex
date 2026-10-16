@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useLocation } from 'wouter'
 import type { PaneRendererProps } from '../lib/module-registry'
 import { encodeHostRouteId, isHostSubPage, type HostSubPage } from '../lib/host-routes'
@@ -277,6 +277,19 @@ export function HostPage({ isActive }: PaneRendererProps) {
   // tab switch keeps it. Only the sidebar's own choices leave it (`leaveProbeDraft` asks about unsaved changes first): the
   // route's canonical rewrite when hosts hydrate late must not close it.
   const selectedProbe = useFleetDraftStore((s) => s.selectedProbe)
+  // The path this page itself last asked for (canonical rewrite, sidebar pick). Any other location change while a probe host
+  // is open is an outside navigation (session launcher, headless launcher, hidden pane): it leaves the probe page, asking
+  // about an unsaved draft first; declining keeps the probe page.
+  const ownPath = useRef<string | null>(null)
+  const firstLocation = useRef(true)
+  const isActiveRef = useRef(isActive)
+  useEffect(() => { isActiveRef.current = isActive }, [isActive])
+  useEffect(() => {
+    if (firstLocation.current) { firstLocation.current = false; return }
+    if (ownPath.current === location) { ownPath.current = null; return }
+    if (!isActiveRef.current || !useFleetDraftStore.getState().selectedProbe) return
+    if (leaveProbeDraft(null)) useFleetDraftStore.getState().selectProbe(null)
+  }, [location])
 
   // R2 attacker A2 fix — snapshot module-scoped lastSelection ONCE per render
   // and pass it to every helper.  preResolveHostId, resolveSelection, and
@@ -336,6 +349,7 @@ export function HostPage({ isActive }: PaneRendererProps) {
     // setLocation, which would otherwise navigate the user mid-interaction.
     if (!isActive) return
     if (canonicalPath && canonicalPath !== location) {
+      ownPath.current = canonicalPath
       setLocation(canonicalPath, { replace: true })
     }
   }, [isActive, canonicalPath, location, setLocation])
@@ -388,7 +402,9 @@ export function HostPage({ isActive }: PaneRendererProps) {
           if (selectedProbe && !leaveProbeDraft(null)) return
           setShowPaired(false)
           useFleetDraftStore.getState().selectProbe(null)
-          setLocation(buildHostPath({ hostId, subPage }), { replace: true })
+          const next = buildHostPath({ hostId, subPage })
+          ownPath.current = next
+          setLocation(next, { replace: true })
         }}
         onAddHost={() => setShowAddHost(true)}
         onShareHosts={() => setShowShare(true)}

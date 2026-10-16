@@ -1,5 +1,5 @@
 // F-2d review fixes: leaving a probe host's page (route rewrites, paired hosts, +) and its unsaved draft.
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { Router } from 'wouter'
 import { memoryLocation } from 'wouter/memory-location'
@@ -125,5 +125,39 @@ describe('HostPage — a probe host\'s page', () => {
     fireEvent.click(add)
     expect(useFleetDraftStore.getState().selectedProbe?.id).toBe('p1')
     expect(useFleetDraftStore.getState().probe?.draft.name).toBe('typed')
+  })
+
+  describe('an outside navigation (launcher, headless launcher, hidden pane)', () => {
+    const outside = `/hosts/${encodeURIComponent(H)}/projects`
+
+    it('leaves the probe page and shows the requested host page', async () => {
+      useFleetDraftStore.getState().selectProbe({ id: 'p1', isNew: false })
+      const loc = mount(`/hosts/${H}/overview`)
+      expect(screen.getByTestId('probe-page-stub')).toBeTruthy()
+      act(() => { loc.navigate(outside) })
+      await waitFor(() => expect(screen.queryByTestId('probe-page-stub')).toBeNull())
+      expect(useFleetDraftStore.getState().selectedProbe).toBeNull()
+      expect(loc.history!.at(-1)).toBe(outside)
+    })
+
+    it('a dirty draft asks first: declining keeps the probe page', () => {
+      selectDirty('p1')
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+      const loc = mount(`/hosts/${H}/overview`)
+      act(() => { loc.navigate(outside) })
+      expect(confirm).toHaveBeenCalledTimes(1)
+      expect(screen.getByTestId('probe-page-stub')).toBeTruthy()
+      expect(useFleetDraftStore.getState().probe?.draft.name).toBe('typed')
+    })
+
+    it('a dirty draft asks first: accepting leaves', () => {
+      selectDirty('p1')
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+      const loc = mount(`/hosts/${H}/overview`)
+      act(() => { loc.navigate(outside) })
+      expect(confirm).toHaveBeenCalledTimes(1)
+      expect(screen.queryByTestId('probe-page-stub')).toBeNull()
+      expect(useFleetDraftStore.getState().probe).toBeNull()
+    })
   })
 })
