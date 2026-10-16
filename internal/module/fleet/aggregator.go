@@ -34,8 +34,12 @@ const (
 type Deps struct {
 	Home  string
 	Clock timeSource // nil = the real one
-	Local leaf.LocalSource
-	Role  leaf.RoleView
+	// LoopClock makes the timers of the one-second loop only (everything else, the readings' times included, uses Clock). Nil =
+	// Clock. A test that steps the measuring by hand (tick()) gives it a clock nobody advances, so the loop never ticks on its
+	// own and cannot race the test's own tick.
+	LoopClock timeSource
+	Local     leaf.LocalSource
+	Role      leaf.RoleView
 	// Probe and Fleet read the host config rows. Both re-read ~/.ssh/config on every call, so they run only when the config's
 	// revision moved (Revisions), never per tick.
 	Probe func() ([]hostconfig.ProbeHost, int64, error)
@@ -130,9 +134,10 @@ type hostRow struct {
 // Measure is the measuring side: while this daemon is primary it reads its own host from the LocalSource, keeps one SSH
 // session per other host, and pushes the fleet once a second.
 type Measure struct {
-	d     Deps
-	clock timeSource
-	limit *hourlyLimiter
+	d         Deps
+	clock     timeSource
+	loopClock timeSource // the one-second loop's timers (Deps.LoopClock, else clock)
+	limit     *hourlyLimiter
 
 	mu         sync.Mutex
 	hosts      map[string]*hostRow
@@ -165,6 +170,9 @@ func NewMeasure(d Deps) *Measure {
 	m := &Measure{d: d, clock: d.Clock, limit: &hourlyLimiter{}}
 	if m.clock == nil {
 		m.clock = realClock{}
+	}
+	if m.loopClock = d.LoopClock; m.loopClock == nil {
+		m.loopClock = m.clock
 	}
 	if m.d.Logf == nil {
 		m.d.Logf = func(string, ...any) {}
@@ -238,7 +246,7 @@ func (m *Measure) activateLocked() {
 	go func() {
 		defer m.wg.Done()
 		for {
-			t := m.clock.NewTimer(tickEvery)
+			t := m.loopClock.NewTimer(tickEvery)
 			select {
 			case <-ctx.Done():
 				t.Stop()
