@@ -10,6 +10,8 @@ import type { JournalEntry } from '../../lib/journal/types'
 export const NEAR_BOTTOM = 24
 export const NEAR_TOP = 8
 const SAVE_MS = 150
+/** Loading the previous month adds no row when the filter hides all of it: ask again at most this many times in a row. */
+export const MAX_CHAIN = 5
 
 interface Opts {
   host: string | null
@@ -38,6 +40,10 @@ export function useStreamScroll({ host, unitKey, streamKey = `${host}\0${unitKey
   const prevKey = useRef(streamKey)
   const anchor = useRef<{ height: number; top: number } | null>(null)
   const loading = useRef(false)
+  const chain = useRef(0)
+  const failed = useRef(false)
+  const handledLoad = useRef(0)
+  const [loaded, setLoaded] = useState(0)
   const lastTop = useRef(0)
   const lastAtBottom = useRef(true)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -98,13 +104,32 @@ export function useStreamScroll({ host, unitKey, streamKey = `${host}\0${unitKey
     else setBelow((b) => b + appended(old, shown))
   }, [shown, host, unitKey, streamKey])
 
-  const older = useCallback(() => {
+  const run = useCallback(() => {
     const el = ref.current
     if (!el || loading.current) return
     loading.current = true
+    chain.current++
     anchor.current = { height: el.scrollHeight, top: el.scrollTop }
-    void loadOlder().finally(() => { loading.current = false })
+    // A failed read leaves things as they were: no automatic second ask.
+    void loadOlder().then(() => true, () => false).then((ok) => { loading.current = false; failed.current = !ok; setLoaded((n) => n + 1) })
   }, [loadOlder])
+
+  /** The reader (scrolling to the top, or the button) asks for the previous month: a new run of automatic asks begins. */
+  const older = useCallback(() => {
+    if (loading.current) return
+    chain.current = 0
+    run()
+  }, [run])
+
+  // After a month arrived (declared after the list effect, so a prepended list has already been laid out): drop the anchor; if the
+  // month added no row under this filter the reader is still at the top and no scroll event will come, so ask for the next one.
+  useLayoutEffect(() => {
+    if (loaded === handledLoad.current) return
+    handledLoad.current = loaded
+    anchor.current = null
+    const el = ref.current
+    if (el && more && !failed.current && chain.current < MAX_CHAIN && el.scrollTop <= NEAR_TOP) run()
+  }, [loaded, more, run])
 
   const onScroll = useCallback(() => {
     const el = ref.current

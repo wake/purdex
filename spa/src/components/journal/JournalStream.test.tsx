@@ -2,7 +2,7 @@
 // away, the previous month keeps the reading position, and the memo that survives an unmount (J-2c, spec §11).
 // jsdom has no layout: every divider / row is 20px tall, the viewport 100px, and scrollTop clamps like a browser's.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useImperativeHandle, useState } from 'react'
 import { JournalStream } from './JournalStream'
 import type { RowContext } from './JournalRow'
@@ -185,6 +185,26 @@ describe('the previous month', () => {
     await act(async () => { finish() })
     scrollTo(0)
     expect(loadOlder).toHaveBeenCalledTimes(2)
+  })
+  it('a month with nothing the filter shows does not strand the reader at the top: the next month is asked for, and the position holds when a row arrives (M: no second ask)', async () => {
+    let n = 0
+    loadOlder.mockImplementation(async () => { n++; await Promise.resolve(); if (n === 3) await push(range(1, 21)) }) // months 1 and 2 add no row under this filter
+    render(<Harness initial={range(10, 21)} more filter="exec" />)
+    scrollTo(60)
+    scrollTo(0)
+    await waitFor(() => expect(loadOlder).toHaveBeenCalledTimes(3))
+    await waitFor(() => expect(top()).toBe(9 * ROW))
+    expect(loadOlder).toHaveBeenCalledTimes(3)
+  })
+  it('keeps asking only so many times in a row when no month has a matching row', async () => {
+    render(<Harness initial={range(10, 21)} more filter="exec" />)
+    scrollTo(60)
+    scrollTo(0)
+    await waitFor(() => expect(loadOlder).toHaveBeenCalledTimes(5))
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(loadOlder).toHaveBeenCalledTimes(5)
+    scrollTo(0) // the reader asks again by hand: a new run
+    await waitFor(() => expect(loadOlder).toHaveBeenCalledTimes(10))
   })
   it('with nothing older, the top asks for nothing', () => {
     render(<Harness initial={range(10, 21)} more={false} />)
