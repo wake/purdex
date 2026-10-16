@@ -81,7 +81,7 @@ The watcher is an ordinary Claude Code session started by the daemon of the host
 |---|---|
 | none (no current, no last) | A centred panel: 「這台主機群目前沒有守門員」, 「啟動後，它會看管重指令名額與記憶體壓力，事件交給它處理。」 and a **啟動守門員** button → `POST /api/watch/start` (A3) on any reachable daemon host; the daemon runs §12.3's order (first reachable host in `targets`). Busy state while it starts; an error line if the start failed (the cooldown time from the answer). |
 | awake | The watcher's tmux session pane on its host. The strip's status text: 「守門員 · 在 {host} · 醒著 · {巡檢模式｜常駐模式} · {model}」. |
-| resting | A panel in the terminal's colours with 「守門員休息中（{since} 起）」 and an input 「提問會叫醒守門員」; sending → `POST /api/watch/wake` with the text (A3) on the holding host; the tab switches to the session pane when the watcher is awake. |
+| resting | The holder's `pdx-watch` tmux session, which stays at a shell while the watcher rests (load-control spec §12.4/§12.6), with a band above the pane: 「守門員休息中（{since} 起）」 and an input 「提問會叫醒守門員」; sending → `POST /api/watch/wake` with the text (A3) on the holding host; the band goes when the watcher is awake. "Resting" and "none" are different answers of the status and never look alike. |
 
 - **Follows the watcher**: the pane is derived from the watch status, never persisted. After a failover (a26 closed →
   mlab) the tab shows the new holder's session; the strip names the host.
@@ -211,8 +211,9 @@ writes use `pdx gate set`'s validation.
   `{key, value}` (one value, written the way `pdx gate set` writes it; 400 with the reason for an unknown key or a bad
   value); `POST /api/gate/profile` with `{name}` (`""` = none). `gate.enabled` is one of the keys.
 - **A3 watch**:
-  - `GET /api/watch/status` (exists) gains `tmux_session` (the session code of the watcher's pane on the holding host)
-    and `model`; the state of the holder (`awake|resting|none`) as today.
+  - `GET /api/watch/status` names the watcher this host sends to — host id, alias, session id, `awake` or `resting`,
+    the tmux session `pdx-watch` — or none (agreed in the load-control spec §12.6, #3007). The strip's mode and model
+    come from the holder's `watch` row (`GET /api/hostconfig`), not from the status.
   - `GET /api/watch/events?since=<time>&limit=<n>` → `{events: [...]}` newest first: `id`, `kind`, `at`, the E1 fields
     (`label`, `command` scrubbed, `cwd`, `session`, `peak_cores`, `peak_mb`, `duration_s`, `new`), the E2 fields
     (`pressure`, `page_rate`, `detail`), the E3/E4 fields (`slot`, `holder_pid`, `lock_pids`), and `status`
@@ -222,8 +223,9 @@ writes use `pdx gate set`'s validation.
   - `POST /api/watch/skip` with `{all: true}` → every pending event of this host becomes skipped, note 「沒有守門員，已略過」.
   - `POST /api/watch/start` → starts a watcher by §12.3 (202 with the chosen host, or 409 with the cooldown end).
   - `POST /api/watch/wake` with `{prompt}` → resumes the resting watcher with `wake_prompt` followed by the prompt.
-  - A `watch.changed` event on the daemon's event stream when an event is recorded, acked or skipped, and when the
-    holder's state changes (a plain `Broadcast`: the volume is small, no newest-wins).
+  - `watch.changed` on the daemon's event stream when the watcher's fields above change, once per change (§12.6); and,
+    for the badge and the events list, a push when an event is recorded, acked or skipped — either the same event with
+    an `events` marker or a separate kind (open with the A line, 10-16). A plain `Broadcast` either way.
   - The A line's watcher identification (the fixed tmux session `pdx-watch`) comes as its spec §12.4／§12.6 and plan
     W3 update after 743; A3 is aligned with it then.
 
