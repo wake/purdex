@@ -54,6 +54,9 @@ type Module struct {
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
+
+	mu sync.Mutex
+	up bool // Init succeeded and Stop has not run: the module can serve (guarded by mu)
 }
 
 func New() *Module {
@@ -96,7 +99,25 @@ func (m *Module) Init(c *core.Core) error {
 	c.Registry.Register(RoleViewKey, fleet.RoleView(m.engine))
 	m.measure = m.newMeasure()
 	m.engine.SetNewestAge(m.measure.NewestAge)
+	m.mu.Lock()
+	m.up = true
+	m.mu.Unlock()
 	return nil
+}
+
+// Status is what /api/info reports under "fleet", and what capabilityList reads to announce fleet.v1 (spec §6: the module
+// announces it with moduleReady("fleet")). ready is true from a successful Init until Stop. A daemon with `[fleet] enabled =
+// false`, or that is not in the order, is still ready: GET /api/fleet answers `{role: "off", reason}` there, which is the
+// answer a client that probed the capability expects. role is the engine's current role (primary / standby / off), "" before Init.
+func (m *Module) Status() map[string]any {
+	m.mu.Lock()
+	up, eng := m.up, m.engine
+	m.mu.Unlock()
+	role := ""
+	if up && eng != nil {
+		role = eng.State().Role // the engine's own lock, taken after m.mu is released
+	}
+	return map[string]any{"ready": up, "role": role}
 }
 
 func (m *Module) hostID() string {
@@ -117,6 +138,9 @@ func (m *Module) Start(ctx context.Context) error {
 }
 
 func (m *Module) Stop(context.Context) error {
+	m.mu.Lock()
+	m.up = false
+	m.mu.Unlock()
 	// The engine goes first: its drain may still announce a primary, and the measure must be the last to hear it.
 	if m.cancel != nil {
 		m.cancel()
