@@ -2,10 +2,13 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import { FleetCells } from './FleetCells'
 import { useFleetConfigStore } from '../../lib/fleet/config-store'
+import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
 import { useFleetStore } from '../../lib/fleet/store'
 import { fleetHistory } from '../../lib/fleet/history'
 import { useHostStore } from '../../stores/useHostStore'
 import { fast, host, primaryAnswer, standbyAnswer } from '../../lib/fleet/__fixtures__/builders'
+
+vi.mock('../../features/workspace/lib/open-watch-area', () => ({ openWatchArea: vi.fn() }))
 
 const A = 'cfg-a'
 const B = 'cfg-b'
@@ -32,7 +35,7 @@ beforeEach(() => {
   useHostStore.setState({ hosts: { [A]: hostCfg(A, 'd-a'), [B]: hostCfg(B, 'd-b') }, hostOrder: [A, B], activeHostId: A, runtime: {} } as never)
 })
 
-const props = () => ({ onOpenHost: vi.fn(), onOpenHosts: vi.fn() })
+const props = () => ({})
 
 describe('FleetCells — the four states (storybook-style)', () => {
   it('normal, overloaded, offline and queued, side by side', () => {
@@ -72,30 +75,20 @@ describe('FleetCells — the row', () => {
 })
 
 describe('FleetCells — clicks', () => {
-  it('a daemon host opens that host on the Hosts page', () => {
+  beforeEach(() => vi.mocked(openWatchArea).mockClear())
+
+  it('a daemon host opens its tab in the watcher area, by the fleet host id', () => {
     answer(A, primaryAnswer(1, FOUR))
-    const p = props()
-    render(<FleetCells variant="wide" {...p} />)
+    render(<FleetCells variant="wide" {...props()} />)
     fireEvent.click(screen.getByTestId('host-tile-d-b'))
-    expect(p.onOpenHost).toHaveBeenCalledWith(B)
-    expect(p.onOpenHosts).not.toHaveBeenCalled()
+    expect(openWatchArea).toHaveBeenCalledWith({ host: 'd-b' })
   })
-  it('the probe click opens the primary\'s overview: with B as the primary it is onOpenHost(B)', () => {
-    answer(B, primaryAnswer(1, FOUR))
-    const p = props()
-    render(<FleetCells variant="wide" {...p} />)
-    fireEvent.click(screen.getByTestId('host-tile-p1'))
-    expect(p.onOpenHost).toHaveBeenCalledWith(B)
-    expect(useFleetConfigStore.getState().focusProbe).toBe('p1')
-  })
-  it('a probe host opens the Hosts page on the primary\'s overview and asks the probe section to highlight its row', () => {
+  it('a probe host opens its tab too, and no longer asks the probe section to highlight a row', () => {
     answer(A, primaryAnswer(1, FOUR))
-    const p = props()
-    render(<FleetCells variant="wide" {...p} />)
+    render(<FleetCells variant="wide" {...props()} />)
     fireEvent.click(screen.getByTestId('host-tile-p2'))
-    expect(p.onOpenHost).toHaveBeenCalledWith(A)
-    expect(useFleetConfigStore.getState().focusProbe).toBe('p2')
-    expect(p.onOpenHosts).not.toHaveBeenCalled()
+    expect(openWatchArea).toHaveBeenCalledWith({ host: 'p2' })
+    expect(useFleetConfigStore.getState().focusProbe).toBeNull()
   })
 })
 

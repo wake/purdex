@@ -15,8 +15,6 @@ export interface ActivityBarProps {
   onReorderWorkspaces?: (orderedIds: string[]) => void
   onContextMenuWorkspace?: (e: React.MouseEvent, wsId: string) => void
   onOpenHosts: () => void
-  /** The fleet cells' daemon-host click (fleet spec §8.1, until the watcher area lands): that App host on the Hosts page. Falls back to `onOpenHosts`. */
-  onOpenHost?: (hostConfigId: string) => void
   onOpenSettings: () => void
 
   // Phase 2 additions — only used by ActivityBarWide when tabPosition='left'
