@@ -9,10 +9,10 @@ import { TabIcon } from '../TabIcon'
 import { HostBadge } from '../HostBadge'
 import { useSessionAgentIndicator } from '../../hooks/useSessionAgentIndicator'
 import { useHostLook } from '../../lib/host-look'
-import { useUISettingsStore } from '../../stores/useUISettingsStore'
+import { useSidebarHostBadgeGeometry } from '../../hooks/useSidebarHostBadgeGeometry'
 import { useAgentStore } from '../../stores/useAgentStore'
 import { compositeKey } from '../../lib/composite-key'
-import { hasHostBadge, isIconWeight, isPhosphorIconName, resolveHostColors } from '../../lib/host-color'
+import { hasHostBadge, resolveHostBadge } from '../../lib/host-color'
 
 interface IconProps {
   hostId: string
@@ -46,16 +46,8 @@ export function TeamSeatIcon({ hostId, sessionCode, isActive = false, size = 14,
 function KnownHostBadge({ hostId, sessionCode }: { hostId: string; sessionCode: string }) {
   const look = useHostLook(hostId)
   const agentType = useAgentStore((s) => s.agentTypes[compositeKey(hostId, sessionCode)])
-  const box = useUISettingsStore((s) => s.hostBadgeSidebarBox)
-  const inset = useUISettingsStore((s) => s.hostBadgeSidebarInset)
-  const radius = useUISettingsStore((s) => s.hostBadgeSidebarRadius)
-  const lineColor = useUISettingsStore((s) => s.hostBadgeSidebarLineColor)
-  const colors = useMemo(() => resolveHostColors({ colors: look.colors, color: look.color }, agentType ? 'terminal' : 'console'), [look, agentType])
-  const badge = {
-    colors,
-    icon: isPhosphorIconName(look.icon) ? look.icon : undefined,
-    iconWeight: isIconWeight(look.iconWeight) ? look.iconWeight : undefined,
-  }
+  const { box, inset, radius, lineColor } = useSidebarHostBadgeGeometry()
+  const badge = useMemo(() => resolveHostBadge(look, agentType ? 'terminal' : 'console'), [look, agentType])
   if (!hasHostBadge(badge)) return null
   return <HostBadge colors={badge.colors} icon={badge.icon} iconWeight={badge.iconWeight} box={box} inset={inset} radius={radius} lineColor={lineColor} />
 }

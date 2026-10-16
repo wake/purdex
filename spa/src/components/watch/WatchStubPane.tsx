@@ -1,5 +1,4 @@
-// The guardian and events panes of the watcher area. Stubs in W5a1: the guardian tab is filled by W5a3, the events tab
-// by W5e, and the reconcile creates neither tab before then.
+// The events pane of the watcher area: a stub until W5e, and the reconcile creates no tab for it before then.
 export function WatchStubPane() {
   return <div className="h-full w-full" data-testid="watch-stub-pane" />
 }

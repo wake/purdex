@@ -169,7 +169,9 @@ func (m *Module) watchRuntimeFor() *watchRuntime {
 	if host == "" {
 		host, _ = os.Hostname()
 	}
-	m.watch.rt = &watchRuntime{det: watch.New(st), rec: watch.NewRecorder(dir, host), state: st}
+	det := watch.New(st)
+	det.Diag = m.watchNote
+	m.watch.rt = &watchRuntime{det: det, rec: watch.NewRecorder(dir, host), state: st}
 	return m.watch.rt
 }
 
