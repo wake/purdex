@@ -340,11 +340,11 @@ var vitestSubcommands = map[string]bool{"run": true, "watch": true, "dev": true,
 func tscWatches(args []string) bool {
 	watch := false
 	for i, a := range args {
-		if a != "-w" && a != "--watch" {
+		if a = strings.ToLower(a); a != "-w" && a != "--watch" { // tsc lowercases option names and boolean values
 			continue
 		}
 		watch = true
-		if i+1 < len(args) && args[i+1] == "false" {
+		if i+1 < len(args) && strings.ToLower(args[i+1]) == "false" {
 			watch = false
 		}
 	}

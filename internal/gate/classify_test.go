@@ -90,6 +90,10 @@ func TestClassify_Table(t *testing.T) {
 		{"tsc -p spa --version", ClassNone},
 		{"tsc --watch", ClassNone}, // never ends (#2989)
 		{"tsc -w", ClassNone},
+		{"tsc --Watch", ClassNone}, // tsc lowercases option names
+		{"tsc -W", ClassNone},
+		{"tsc --WATCH", ClassNone},
+		{"tsc --watch FALSE", ClassHeavy},
 		{"tsc -b -w", ClassNone},
 		{"tsc --build --watch", ClassNone},
 		{"tsc -p spa --noEmit --watch", ClassNone},
