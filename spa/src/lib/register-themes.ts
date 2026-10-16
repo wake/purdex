@@ -79,7 +79,7 @@ const nordTokens: ThemeTokens = {
   'terminal-cursor': '#d8dee9',
   'status-error': '#bf616a33',
   'status-warning': '#ebcb8b',
-  'status-warning-text': '#ebcb8b',
+  'status-warning-text': '#f5e5c5',
   'status-success': '#a3be8c33',
 }
 

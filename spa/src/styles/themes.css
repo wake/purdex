@@ -140,7 +140,8 @@
   --terminal-cursor: #d8dee9;
   --status-error: #bf616a;
   --status-warning: #ebcb8b;
-  --status-warning-text: #ebcb8b;
+  /* Lightened from the fill: on the card (#434c5e) under the 待確認 chip (15%) and the highlighted name (20%) the fill itself reads at 4.10 / 3.71. */
+  --status-warning-text: #f5e5c5;
   --status-success: #a3be8c;
   /* This surface is a mid grey: the prototype's hues lightened until the chip text reads at 4.5:1 on the chip. */
   --journal-kind-exec: #d4e1fb;

@@ -11,6 +11,10 @@ import { resolve } from 'node:path'
 // @ts-expect-error __dirname is untyped here.
 const themesCss: string = readFileSync(resolve(__dirname, '../../styles/themes.css'), 'utf8')
 
+// @ts-expect-error __dirname is untyped here.
+const DIR: string = __dirname
+const source = (rel: string): string => readFileSync(resolve(DIR, rel), 'utf8')
+
 const KINDS = ['exec', 'exec-done', 'task-new', 'task-done', 'comm', 'request'] as const
 const FALLBACK: Record<(typeof KINDS)[number], string> = {
   exec: 'var(--accent)', 'exec-done': 'var(--status-success)', 'task-new': 'var(--accent)',
@@ -65,6 +69,22 @@ describe('journal kind tokens', () => {
           expect(ratio(colour, chip), `${id} ${k} on ${surface}`).toBeGreaterThanOrEqual(4.5)
         }
       }
+    }
+  })
+
+  // The 待確認 chip (text-status-warning-text on bg-status-warning/15, KindChip) and the person's highlighted name (the same text colour
+  // on bg-status-warning/20, PersonMark) are not `journal-kind-*` tokens, so the test above does not cover them.
+  it('the sources use the opacities the next test assumes', () => {
+    expect(source('../../components/journal/KindChip.tsx')).toContain('text-status-warning-text bg-status-warning/15')
+    expect(source('../../components/journal/PersonMark.tsx')).toContain('bg-status-warning/20 text-status-warning-text')
+  })
+
+  it.each([['the 待確認 chip', 0.15], ['the highlighted person name', 0.2]] as const)('the other themes keep %s at WCAG AA (4.5:1): warning-text on the card surface with the warning fill over it', (_what, alpha) => {
+    for (const [id, v] of Object.entries(blocks())) {
+      if (id === 'dark') continue
+      // The rows sit on the card (CardFrame: bg-surface-elevated); no journal component draws on surface-secondary.
+      const bg = over(rgb(v['surface-elevated']), rgb(v['status-warning']), alpha)
+      expect(ratio(rgb(v['status-warning-text']), bg), id).toBeGreaterThanOrEqual(4.5)
     }
   })
 })
