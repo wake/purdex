@@ -23,6 +23,10 @@ const maxFoldIDs = 200 // ids a folded bucket remembers (its count is exact)
 // more, so the limit here is never the one that refuses).
 const MaxMessageIDs = 100
 
+// MaxMessageBytes is the most a backlog message is let grow to as JSON, a good deal under the body cap of the route that receives it
+// (256 KiB), so that no event a host legitimately makes can get a whole summary refused as too big.
+const MaxMessageBytes = 120 << 10
+
 // Message is one message to the watcher. What it says is structured (Form and the fields after it): the host that receives it
 // renders the text itself from a fixed template, so a message from another host never brings sentences of its own into the
 // watcher's prompt. Text is the sender's own rendering, for its logs and tests; it is not sent.
@@ -58,13 +62,22 @@ type foldBucket struct {
 	IDs   []string  `json:"ids"`
 }
 
+// droppedEvent is the tombstone of an event the receiver refused for good. It is kept as long as the event can still be in the log
+// a backlog reads (dropKeep), and not by count: a count would let the oldest come back.
+type droppedEvent struct {
+	ID string    `json:"id"`
+	At time.Time `json:"at"`
+}
+
+const dropKeep = 31 * 24 * time.Hour // a little over the 30 days of log a backlog reads
+
 type outboxState struct {
 	Pending       []Message            `json:"pending"`
 	LastSent      map[Kind]time.Time   `json:"last_sent"`
 	Folded        map[Kind]*foldBucket `json:"folded"`
 	LastDelivered string               `json:"last_delivered,omitempty"`
 	BacklogFor    string               `json:"backlog_for,omitempty"`
-	Dropped       []string             `json:"dropped,omitempty"` // events of messages the receiver refused for good: never queued again
+	Dropped       []droppedEvent       `json:"dropped,omitempty"` // events of messages the receiver refused for good: never queued again
 }
 
 // Outbox is the queue.
@@ -273,24 +286,29 @@ func (o *Outbox) Delivered(id string) {
 }
 
 // Drop removes a message the receiver refused for good. It was not delivered, so the last delivered id does not move; its events are
-// remembered as dropped, so a backlog does not bring them back for the next watcher.
+// remembered as dropped, so a backlog does not bring them back for the next watcher. Tombstones older than dropKeep are forgotten.
 func (o *Outbox) Drop(id string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	for i, m := range o.st.Pending {
-		if m.ID == id {
-			o.st.Dropped = append(o.st.Dropped, m.EventIDs...)
-			if len(o.st.Dropped) > maxDropped {
-				o.st.Dropped = o.st.Dropped[len(o.st.Dropped)-maxDropped:]
-			}
-			o.st.Pending = append(o.st.Pending[:i], o.st.Pending[i+1:]...)
-			o.save()
-			return
+	now := o.now()
+	kept := o.st.Dropped[:0]
+	for _, d := range o.st.Dropped {
+		if now.Sub(d.At) <= dropKeep {
+			kept = append(kept, d)
 		}
 	}
+	o.st.Dropped = kept
+	for i, m := range o.st.Pending {
+		if m.ID == id {
+			for _, e := range m.EventIDs {
+				o.st.Dropped = append(o.st.Dropped, droppedEvent{ID: e, At: now})
+			}
+			o.st.Pending = append(o.st.Pending[:i], o.st.Pending[i+1:]...)
+			break
+		}
+	}
+	o.save()
 }
-
-const maxDropped = 2000
 
 // LastDelivered is the newest event id of a message the watcher received.
 func (o *Outbox) LastDelivered() string {
@@ -326,8 +344,8 @@ func (o *Outbox) Backlog(session string, recs []Record) bool {
 		}
 	}
 	dropped := map[string]bool{}
-	for _, id := range o.st.Dropped {
-		dropped[id] = true
+	for _, d := range o.st.Dropped {
+		dropped[d.ID] = true
 	}
 	var cand []Record
 	for _, r := range recs {
@@ -343,15 +361,26 @@ func (o *Outbox) Backlog(session string, recs []Record) bool {
 	if len(cand) > 0 {
 		sort.SliceStable(cand, func(i, j int) bool { return cand[i].ID < cand[j].ID })
 		o.st.Pending = nil
-		parts := (len(cand) + MaxMessageIDs - 1) / MaxMessageIDs
-		for p := 0; p < parts; p++ {
-			chunk := cand[p*MaxMessageIDs : min((p+1)*MaxMessageIDs, len(cand))]
-			ids := make([]string, len(chunk))
-			lean := make([]Record, len(chunk))
-			for i, r := range chunk {
-				ids[i], lean[i] = r.ID, Lean(r)
+		// cut by what the message will weigh as JSON, and by the count: a long command line is far heavier than a short one
+		var chunks [][]Record
+		var cur []Record
+		size := 0
+		for _, r := range cand {
+			l := Lean(r)
+			raw, _ := json.Marshal(l)
+			if len(cur) > 0 && (len(cur) >= MaxMessageIDs || size+len(raw) > MaxMessageBytes) {
+				chunks = append(chunks, cur)
+				cur, size = nil, 0
 			}
-			o.st.Pending = append(o.st.Pending, o.newMessage(Message{Host: chunk[0].Host, Form: FormBacklog, Records: lean, Part: p + 1, Parts: parts, EventIDs: ids}))
+			cur, size = append(cur, l), size+len(raw)
+		}
+		chunks = append(chunks, cur)
+		for p, chunk := range chunks {
+			ids := make([]string, len(chunk))
+			for i, r := range chunk {
+				ids[i] = r.ID
+			}
+			o.st.Pending = append(o.st.Pending, o.newMessage(Message{Host: chunk[0].Host, Form: FormBacklog, Records: chunk, Part: p + 1, Parts: len(chunks), EventIDs: ids}))
 		}
 		o.st.Folded = map[Kind]*foldBucket{}
 		made = true

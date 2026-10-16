@@ -136,8 +136,11 @@ func Lean(r Record) Record {
 	r.Argv = leanArgv(r.Argv)
 	r.Cwd = clip(Plain(r.Cwd), 512)
 	r.Detail = clip(Plain(r.Detail), 512)
-	r.Slot = Plain(r.Slot)
-	r.Session = Plain(r.Session)
+	r.Slot = clip(Plain(r.Slot), 64)
+	r.Session = clip(Plain(r.Session), 128)
+	if len(r.Holders) > 64 {
+		r.Holders = r.Holders[:64]
+	}
 	r.Signature = ""
 	return r
 }

@@ -1,6 +1,7 @@
 package watch
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -410,4 +411,58 @@ func TestEventText_AControlCharacterInAFieldCannotStartALine(t *testing.T) {
 	for _, w := range r2.Argv {
 		require.False(t, HasControl(w))
 	}
+}
+
+// A backlog is cut by the size of what it will send, not by the number of events alone: every message stays well under the body cap
+// of the route (256 KiB) even when every event carries the longest command line a message allows.
+func TestOutbox_ABacklogOfTheLongestCommandsStaysUnderTheBodyCap(t *testing.T) {
+	c := newOutboxClock()
+	o, _ := openTestOutbox(t, c)
+	var recs []Record
+	for i := 0; i < MaxMessageIDs*3; i++ {
+		r := rec(KindUnmanagedHeavy, c)
+		r.Argv = make([]string, 60)
+		for j := range r.Argv {
+			r.Argv[j] = strings.Repeat("長", 300)
+		}
+		r.Cwd, r.Detail = strings.Repeat("c", 5000), strings.Repeat("d", 5000)
+		recs = append(recs, r)
+	}
+	require.True(t, o.Backlog("s", recs))
+	got := 0
+	for o.Pending() > 0 {
+		m, _ := o.Next()
+		raw, err := json.Marshal(m)
+		require.NoError(t, err)
+		require.Less(t, len(raw), MaxMessageBytes, "a message the route would refuse as too big")
+		got += len(m.EventIDs)
+		o.Delivered(m.ID)
+	}
+	require.Equal(t, len(recs), got, "and every event is in one of them")
+}
+
+// A refused-for-good event stays out of a backlog for as long as the log keeps it, however many were dropped before it.
+func TestOutbox_DroppedEventsStayDroppedWhateverTheCount(t *testing.T) {
+	c := newOutboxClock()
+	o, err := OpenOutbox("", c.now) // in memory: 2500 drops would be 2500 fsyncs of a growing file
+	require.NoError(t, err)
+	first := rec(KindUnmanagedHeavy, c)
+	o.Add(first)
+	o.Drop(headID(t, o))
+	for i := 0; i < 2500; i++ {
+		c.add(time.Millisecond)
+		r := rec(KindSlotOrphaned, c) // never folded: each its own message
+		o.Add(r)
+		o.Drop(headID(t, o))
+	}
+	require.False(t, o.Backlog("s", []Record{first}), "the first dropped event is still not owed")
+	c.add(32 * 24 * time.Hour)
+	o.Drop("none") // any change prunes the old tombstones
+	late := rec(KindPressureHigh, c)
+	o.Add(late)
+	o.Drop(headID(t, o))
+	o.mu.Lock()
+	n := len(o.st.Dropped)
+	o.mu.Unlock()
+	require.Equal(t, 1, n, "tombstones older than the log's keep are pruned")
 }

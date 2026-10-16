@@ -317,11 +317,11 @@ func validMessage(msg *watch.Message) string {
 			return "a record must belong to the message's host"
 		case !watch.KnownKind(r.Kind) || !watch.KnownLabel(r.Label):
 			return "a record has a kind or label that is not known"
-		case len(r.Argv) > 40 || len(r.Cwd) > 1024 || len(r.Detail) > 1024 || len(r.Slot) > 64 || len(r.Holders) > 64:
+		case len(r.Argv) > 40 || len(r.Cwd) > 2200 || len(r.Detail) > 2200 || len(r.Slot) > 200 || len(r.Holders) > 64:
 			return "a record field is too long"
 		}
 		for _, w := range r.Argv {
-			if len(w) > 400 {
+			if len(w) > 900 {
 				return "a record field is too long"
 			}
 			if watch.HasControl(w) {
@@ -365,6 +365,11 @@ func (m *Module) handlePeerEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ToHostID != ours {
 		m.writeErr(w, http.StatusConflict, "wrong_host", "this request is addressed to another host")
+		return
+	}
+	// The sender speaks for itself: the host name its events carry is the host part of the id this call was verified to come from.
+	if want, _, _ := strings.Cut(entry.HostID, ":"); req.Message.Host != want {
+		m.writeErr(w, http.StatusBadRequest, ipeers.ErrBadRequest, "the message must come from the host that sends it")
 		return
 	}
 	if why := validMessage(&req.Message); why != "" {

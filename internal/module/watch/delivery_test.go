@@ -281,6 +281,19 @@ func TestEventRoute_Refusals(t *testing.T) {
 
 func mustJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
 
+// The sender of a message is the host the call was verified to come from: a paired host cannot speak for another.
+func TestEventRoute_AHostCannotSpeakForAnother(t *testing.T) {
+	p := newPair(t, bothOrder, oppositeOrder)
+	_, nb := withNotifiers(p)
+	p.b.register(t, "wb")
+	hostA := &middleware.Principal{Kind: middleware.PrincipalHost, Alias: "mlab", HostID: idA}
+	forged := evRecord(watch.KindPressureHigh, "other")
+	m := eventMessage(forged)
+	rr := postEvent(p.a, p.b, hostA, `{"to_host_id":"`+idB+`","message":`+mustJSON(m)+`}`)
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Equal(t, 0, nb.count())
+}
+
 // The text the watcher reads is made by the receiving host: whatever "text" a sender adds to the message is not in it.
 func TestEventRoute_TheWatcherReadsTheReceiversOwnSentence(t *testing.T) {
 	p := newPair(t, bothOrder, oppositeOrder)
@@ -411,4 +424,19 @@ func TestDelivery_ARefusalForNowKeepsTheMessage(t *testing.T) {
 		require.Greater(t, len(fc.calls), before, "status %d: it was tried", status)
 		require.Equal(t, 1, r.m.dlv.outbox.Pending(), "status %d: kept", status)
 	}
+}
+
+// What a host makes of an event (watch.Lean) is always something the receiving route accepts, whatever the event holds.
+func TestValidMessage_AcceptsWhatLeanMakesOfTheLongestEvent(t *testing.T) {
+	rec := evRecord(watch.KindUnmanagedHeavy, "mlab")
+	rec.Argv = make([]string, 80)
+	for i := range rec.Argv {
+		rec.Argv[i] = strings.Repeat("長", 500)
+	}
+	rec.Cwd, rec.Detail, rec.Slot = strings.Repeat("長", 5000), strings.Repeat("長", 5000), strings.Repeat("s", 500)
+	msg := eventMessage(rec)
+	require.Equal(t, "", validMessage(&msg))
+	raw, err := json.Marshal(eventBody{ToHostID: idB, Message: msg})
+	require.NoError(t, err)
+	require.Less(t, len(raw), maxEventBody)
 }
