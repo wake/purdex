@@ -41,7 +41,7 @@ func (m *Module) isSelf(alias string) bool {
 }
 
 func answerOf(v HolderView) watch.HolderAnswer {
-	return watch.HolderAnswer{HostID: v.HostID, State: watch.HolderState(v.State), SessionID: v.SessionID, Targets: v.Targets}
+	return watch.HolderAnswer{HostID: v.HostID, State: watch.HolderState(v.State), SessionID: v.SessionID, Since: v.Since, Targets: v.Targets}
 }
 
 func (a asker) Holder(ctx context.Context, alias string) (watch.HolderAnswer, error) {
