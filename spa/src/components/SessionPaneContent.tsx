@@ -23,6 +23,8 @@ import { QuestionDock } from './dock/QuestionDock'
 import { openAsks } from '../lib/conversations/asks'
 import { DeckPane } from './deck/DeckPane'
 import { LaunchPanel } from './LaunchPanel'
+import { WatchLaunchPanel } from './watch/WatchLaunchPanel'
+import { WATCH_GUARDIAN_TAB_ID } from '../lib/watch/ids'
 import { LaunchPlanError } from './LaunchPlanError'
 import { useLaunchPlan, useLaunchPlanInstance } from '../hooks/useLaunchPlan'
 import { useSessionStore } from '../stores/useSessionStore'
@@ -91,6 +93,10 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
     return ''
   })
 
+  // The guardian tab is a stock session tab; only its launch / rebuild slots differ (watcher area plan T-a3.5): no rebuild
+  // (the daemon restarts the watcher), and the watcher's own launch panel where the stock one would start another agent.
+  const isGuardian = tabId === WATCH_GUARDIAN_TAB_ID
+
   // Link-source workspace for terminal link openers (PR-5): use the workspace
   // that owns this tab, not active workspace. `undefined` for standalone tabs.
   const workspaceId = useWorkspaceStore((s) =>
@@ -156,6 +162,7 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
   )
 
   if (content.kind === 'tmux-session' && content.terminated) {
+    if (isGuardian) return <WatchLaunchPanel title={t('watch.launch.not_running')} />
     return <TerminatedPane content={content} tabId={tabId} paneId={pane.id} />
   }
 
@@ -191,7 +198,8 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
       </div>
       {showLaunchView && (
         <div data-testid="session-view-launch" className="absolute inset-0 bg-surface-primary">
-          {launchReady && (
+          {isGuardian && <WatchLaunchPanel title={t('watch.launch.not_running')} />}
+          {!isGuardian && launchReady && (
             <LaunchPanel
               hostId={hostId}
               sessionCode={sessionCode}
@@ -202,7 +210,7 @@ export function SessionPaneContent({ pane, isActive, isFocusTarget = false }: Pa
               onSwitchToTerminal={switchToTerminal}
             />
           )}
-          {planStatus === 'error' && <LaunchPlanError onRefresh={launchPlan.refresh} onSwitchToTerminal={switchToTerminal} />}
+          {!isGuardian && planStatus === 'error' && <LaunchPlanError onRefresh={launchPlan.refresh} onSwitchToTerminal={switchToTerminal} />}
         </div>
       )}
       {!showLaunchView && view === 'deck' && (
