@@ -80,6 +80,14 @@ describe('FleetCells — clicks', () => {
     expect(p.onOpenHost).toHaveBeenCalledWith(B)
     expect(p.onOpenHosts).not.toHaveBeenCalled()
   })
+  it('the probe click opens the primary\'s overview: with B as the primary it is onOpenHost(B)', () => {
+    answer(B, primaryAnswer(1, FOUR))
+    const p = props()
+    render(<FleetCells variant="wide" {...p} />)
+    fireEvent.click(screen.getByTestId('host-tile-p1'))
+    expect(p.onOpenHost).toHaveBeenCalledWith(B)
+    expect(useFleetConfigStore.getState().focusProbe).toBe('p1')
+  })
   it('a probe host opens the Hosts page on the primary\'s overview and asks the probe section to highlight its row', () => {
     answer(A, primaryAnswer(1, FOUR))
     const p = props()

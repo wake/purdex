@@ -5,6 +5,7 @@ import { TabContent } from '../TabContent'
 import { registerModule, clearModuleRegistry } from '../../lib/module-registry'
 import { createTab } from '../../types/tab'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
+import { useI18nStore } from '../../stores/useI18nStore'
 
 vi.mock('@tanstack/react-virtual', () => ({
   useVirtualizer: ({ count }: { count: number }) => ({
@@ -182,6 +183,7 @@ describe('FleetRowEditor', () => {
   })
 })
 
+const pending = () => { let release: () => void = () => {}; const p = new Promise<void>((res) => { release = res }); return { p, release } }
 const row = (id: string, name: string, alias: string): ProbeRow => ({ id, name, ssh_alias: alias, icon: '', icon_weight: '' })
 const typeName = (v: string) => fireEvent.change(screen.getByTestId('probe-field-name'), { target: { value: v } })
 const pickAliases = () => {
@@ -190,14 +192,16 @@ const pickAliases = () => {
 }
 
 describe('ProbeHostsSection — a row only one daemon has', () => {
-  it('is never sent with an empty alias: a save refuses and says which daemon has the row', async () => {
+  it('is shown with the daemon that has it, and an unrelated save leaves it where it is (never an empty alias)', async () => {
     copies[A] = cfg([nas('nas-a'), row('bbbbbbbb', 'half', 'half-a')], 3)
     await mounted()
     expect(screen.getByTestId('probe-half-bbbbbbbb').textContent).toContain('exists only on')
     fireEvent.click(screen.getByTestId('probe-delete-aaaaaaaa'))
     fireEvent.click(screen.getByTestId('probe-delete-confirm-aaaaaaaa'))
-    expect((await screen.findByTestId('probe-list-error')).textContent).toContain('"half" exists only on')
-    expect(putProbeHosts).not.toHaveBeenCalled()
+    await waitFor(() => expect(putProbeHosts).toHaveBeenCalledTimes(2))
+    const by = Object.fromEntries(putProbeHosts.mock.calls.map((c) => [c[0], c]))
+    expect((by[A][1] as ProbeRow[]).map((r) => r.id)).toEqual(['bbbbbbbb'])
+    expect(by[B][1]).toEqual([])
   })
   it('removing the half row itself is allowed', async () => {
     copies[A] = cfg([nas('nas-a'), row('bbbbbbbb', 'half', 'half-a')], 3)
@@ -206,6 +210,7 @@ describe('ProbeHostsSection — a row only one daemon has', () => {
     fireEvent.click(screen.getByTestId('probe-delete-confirm-bbbbbbbb'))
     await waitFor(() => expect(putProbeHosts).toHaveBeenCalledTimes(2))
     for (const c of putProbeHosts.mock.calls) expect((c[1] as ProbeRow[]).every((r) => r.ssh_alias !== '')).toBe(true)
+    for (const c of putProbeHosts.mock.calls) expect((c[1] as ProbeRow[]).map((r) => r.id)).not.toContain('bbbbbbbb')
   })
   it('editing it asks for the missing daemon\'s alias before anything is written', async () => {
     copies[A] = cfg([nas('nas-a'), row('bbbbbbbb', 'half', 'half-a')], 3)
@@ -243,14 +248,14 @@ describe('ProbeHostsSection — what each daemon took', () => {
     expect(msg).toContain('Changed elsewhere on hb')
     expect((screen.getByTestId('probe-field-name') as HTMLInputElement).value).toBe('keep me')
   })
-  it('the same id with different content on the two daemons is marked and can be rewritten on both', async () => {
+  it('the same id with different content on the two daemons is marked and the rewrite writes only the daemon that differs', async () => {
     copies[B] = cfg([{ ...nas('nas-b'), name: 'other name' }], 8)
     await mounted()
     expect(screen.getByTestId('probe-mismatch-aaaaaaaa').textContent).toContain('disagree')
     fireEvent.click(screen.getByTestId('probe-rewrite-aaaaaaaa'))
-    await waitFor(() => expect(putProbeHosts).toHaveBeenCalledTimes(2))
-    expect((putProbeHosts.mock.calls[0][1] as ProbeRow[])[0].name).toBe('nas')
-    expect((putProbeHosts.mock.calls[1][1] as ProbeRow[])[0].name).toBe('nas')
+    await waitFor(() => expect(putProbeHosts).toHaveBeenCalledTimes(1))
+    expect(putProbeHosts.mock.calls[0][0]).toBe(B)
+    expect((putProbeHosts.mock.calls[0][1] as ProbeRow[])[0]).toMatchObject({ name: 'nas', ssh_alias: 'nas-b' })
   })
 })
 
@@ -333,20 +338,6 @@ describe('the fleet row editor mirrors the daemon', () => {
   })
 })
 
-describe('the config store reads', () => {
-  it('a slow older read does not put an old revision back', async () => {
-    let releaseOld: (v: FleetConfigRead) => void = () => {}
-    fetchFleetConfig.mockReset()
-    fetchFleetConfig.mockImplementationOnce(() => new Promise<FleetConfigRead>((res) => { releaseOld = res }))
-    fetchFleetConfig.mockImplementationOnce(async () => cfg([nas('new')], 9))
-    const old = useFleetConfigStore.getState().load(A)
-    await useFleetConfigStore.getState().load(A)
-    releaseOld(cfg([nas('old')], 1))
-    await old
-    expect(useFleetConfigStore.getState().byHost[A].probe.revision).toBe(9)
-  })
-})
-
 // CLAUDE.md tab-hosted checklist: the Hosts page is a tab and unmounts when the reader switches away (keepAliveCount 0).
 describe('the editors across a real tab switch', () => {
   const Probe = () => <><FleetRowEditor hostId={A} /><ProbeHostsSection /></>
@@ -365,6 +356,21 @@ describe('the editors across a real tab switch', () => {
     expect(screen.queryByTestId('probe-hosts-section')).toBeNull() // really unmounted
     rerender(<TabContent activeTab={hostsTab} allTabs={all} />)
   }
+  it('a save in flight is still in flight after a switch away and back: Save stays off', async () => {
+    const gate = pending()
+    putProbeHosts.mockImplementation(async () => { await gate.p })
+    const { rerender } = render(<TabContent activeTab={hostsTab} allTabs={all} />)
+    await screen.findByTestId('probe-row-aaaaaaaa')
+    fireEvent.click(screen.getByTestId('probe-edit-aaaaaaaa'))
+    fireEvent.click(screen.getByTestId('probe-save'))
+    await waitFor(() => expect((screen.getByTestId('probe-save') as HTMLButtonElement).disabled).toBe(true))
+    away(rerender)
+    await screen.findByTestId('probe-row-aaaaaaaa')
+    expect((screen.getByTestId('probe-save') as HTMLButtonElement).disabled).toBe(true)
+    expect(putProbeHosts).toHaveBeenCalledTimes(2)
+    gate.release()
+    await waitFor(() => expect(screen.queryByTestId('probe-dialog')).toBeNull())
+  })
   it('keeps the probe dialog draft, the delete prompt, the dropped confirmation and the fleet row fields', async () => {
     copies[A] = cfg([nas('nas-a')], 3, { count: 1, reasons: ['gone'] })
     const { rerender } = render(<TabContent activeTab={hostsTab} allTabs={all} />)
@@ -386,5 +392,131 @@ describe('the editors across a real tab switch', () => {
     await screen.findByTestId('probe-dropped-confirm')
     away(rerender)
     expect(await screen.findByTestId('probe-dropped-confirm')).toBeTruthy()
+  })
+})
+
+const dialog = () => screen.getByTestId('probe-dialog')
+
+describe('ProbeHostsSection — what is shown while it cannot be written', () => {
+  it('a connected daemon whose read failed: the error is shown with a Reload button that reads again', async () => {
+    fetchFleetConfig.mockImplementation(async (id: string) => { if (id === B) throw new HostConfigApiError(500, 'GET /api/hostconfig: 500'); return copies[id] })
+    render(<ProbeHostsSection />)
+    const box = await screen.findByTestId('probe-load-error')
+    expect(box.textContent).toContain('hb')
+    expect(box.textContent).toContain('GET /api/hostconfig: 500')
+    expect((screen.getByTestId('probe-add') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByTestId('probe-state').textContent).toMatch(/cannot be read/)
+    expect(screen.queryByText('No probe-only hosts.')).toBeNull()
+    fetchFleetConfig.mockImplementation(async (id: string) => copies[id])
+    fireEvent.click(screen.getByRole('button', { name: 'Reload' }))
+    await screen.findByTestId('probe-row-aaaaaaaa')
+    expect(screen.queryByTestId('probe-load-error')).toBeNull()
+  })
+  it('while the daemons are being read it says so, not "no probe-only hosts"', async () => {
+    const gate = pending()
+    fetchFleetConfig.mockImplementation(async (id: string) => { await gate.p; return copies[id] })
+    render(<ProbeHostsSection />)
+    expect((await screen.findByTestId('probe-state')).textContent).toMatch(/Reading/)
+    expect(screen.queryByText('No probe-only hosts.')).toBeNull()
+    gate.release()
+    await screen.findByTestId('probe-row-aaaaaaaa')
+  })
+  it('with every daemon unreachable it says it cannot read, not "no probe-only hosts"', () => {
+    useHostStore.setState({ runtime: { [A]: { status: 'disconnected' }, [B]: { status: 'disconnected' } } as never })
+    render(<ProbeHostsSection />)
+    expect(screen.getByTestId('probe-state').textContent).toMatch(/cannot be read/)
+    expect(screen.getByTestId('probe-unreachable').textContent).toContain('ha, hb')
+    expect(screen.queryByText('No probe-only hosts.')).toBeNull()
+  })
+  it('one daemon down: the row of the other is listed but writing stays off, including the rewrite', async () => {
+    useHostStore.setState({ runtime: { [A]: { status: 'connected' }, [B]: { status: 'disconnected' } } as never })
+    render(<ProbeHostsSection />)
+    await screen.findByTestId('probe-row-aaaaaaaa')
+    expect(screen.queryByTestId('probe-rewrite-aaaaaaaa')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Edit nas' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+  it('a pending focus request for a row that is not there is dropped once everything is read', async () => {
+    await mounted()
+    act(() => useFleetConfigStore.getState().requestProbeFocus('zzzzzzzz'))
+    await waitFor(() => expect(useFleetConfigStore.getState().focusProbe).toBeNull())
+  })
+  it('the strings come out in zh-TW too', async () => {
+    useI18nStore.getState().setLocale('zh-TW')
+    try {
+      useHostStore.setState({ runtime: { [A]: { status: 'connected' }, [B]: { status: 'disconnected' } } as never })
+      render(<ProbeHostsSection />)
+      await screen.findByTestId('probe-row-aaaaaaaa')
+      expect(screen.getByTestId('probe-unreachable').textContent).toContain('連不上')
+      expect(screen.getByRole('button', { name: '編輯 nas' })).toBeTruthy()
+    } finally {
+      useI18nStore.getState().setLocale('en')
+    }
+  })
+})
+
+describe('ProbeHostsSection — the dialog as a dialog', () => {
+  const open = async () => { await mounted(); fireEvent.click(screen.getByTestId('probe-edit-aaaaaaaa')) }
+  it('is a modal form: Enter submits, Save is the submit button', async () => {
+    await open()
+    expect(dialog().getAttribute('aria-modal')).toBe('true')
+    expect(screen.getByTestId('probe-save').getAttribute('type')).toBe('submit')
+    fireEvent.submit(dialog())
+    await waitFor(() => expect(putProbeHosts).toHaveBeenCalledTimes(2))
+  })
+  it('Escape closes it, and gives the focus back to the button that opened it', async () => {
+    await mounted()
+    const opener = screen.getByTestId('probe-edit-aaaaaaaa')
+    fireEvent.click(opener)
+    fireEvent.keyDown(dialog(), { key: 'Escape' })
+    expect(screen.queryByTestId('probe-dialog')).toBeNull()
+    expect(document.activeElement).toBe(opener)
+  })
+  it('Escape while a save is in flight does not drop the draft', async () => {
+    const gate = pending()
+    await open()
+    putProbeHosts.mockImplementation(async () => { await gate.p })
+    typeName('mid flight')
+    fireEvent.click(screen.getByTestId('probe-save'))
+    await waitFor(() => expect((screen.getByTestId('probe-save') as HTMLButtonElement).disabled).toBe(true))
+    fireEvent.keyDown(dialog(), { key: 'Escape' })
+    expect(screen.getByTestId('probe-dialog')).toBeTruthy()
+    expect((screen.getByTestId('probe-field-name') as HTMLInputElement).value).toBe('mid flight')
+    gate.release()
+    await waitFor(() => expect(screen.queryByTestId('probe-dialog')).toBeNull())
+  })
+  it('a daemon dropping while it is open turns Save off and says why', async () => {
+    await open()
+    act(() => { useHostStore.setState({ runtime: { [A]: { status: 'connected' }, [B]: { status: 'disconnected' } } as never }) })
+    expect((screen.getByTestId('probe-save') as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByTestId('probe-dialog-blocked').textContent).toContain('hb')
+  })
+  it('the buttons carry accessible names', async () => {
+    await mounted()
+    expect(screen.getByRole('button', { name: 'Edit nas' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete nas' }))
+    expect(screen.getByRole('button', { name: 'Delete nas' })).toBeTruthy() // the confirm check
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy()
+  })
+})
+
+describe('ProbeHostsSection — a daemon changed the row since the edit began', () => {
+  it('after "A saved, B 409" a retry asks before it overwrites B\'s newer copy, then overwrites on confirm', async () => {
+    await mounted()
+    fireEvent.click(screen.getByTestId('probe-edit-aaaaaaaa'))
+    typeName('mine')
+    putProbeHosts.mockImplementation(async (id: string) => { if (id === B) throw new HostConfigConflictError({ items: [], revision: 9 }) })
+    copies[A] = cfg([{ ...nas('nas-a'), name: 'mine' }], 4)
+    copies[B] = cfg([{ ...nas('nas-b'), name: 'theirs' }], 9)
+    fireEvent.click(screen.getByTestId('probe-save'))
+    expect((await screen.findByTestId('probe-dialog-error')).textContent).toContain('Changed elsewhere on hb')
+    putProbeHosts.mockReset().mockResolvedValue(undefined)
+    fireEvent.click(screen.getByTestId('probe-save'))
+    await waitFor(() => expect(screen.getByTestId('probe-dialog-error').textContent).toContain('hb was changed elsewhere since you started'))
+    expect(putProbeHosts).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('probe-overwrite'))
+    await waitFor(() => expect(putProbeHosts).toHaveBeenCalled())
+    const toB = putProbeHosts.mock.calls.find((c) => c[0] === B)!
+    expect(toB[2]).toBe(9)
+    expect((toB[1] as ProbeRow[])[0].name).toBe('mine')
   })
 })

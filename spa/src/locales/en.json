@@ -2574,5 +2574,12 @@
   "fleet_hosts.row.err_order_count": "The order must list 1 to 4 host aliases.",
   "fleet_hosts.row.err_order_shape": "\"{{alias}}\" is not a valid host alias (letters, digits, . _ -, up to 64, starting with a letter or digit).",
   "fleet_hosts.row.err_order_dup": "\"{{alias}}\" is listed twice.",
-  "fleet_hosts.row.err_peer_unknown": "\"{{alias}}\" is not an SSH alias this daemon knows."
+  "fleet_hosts.row.err_peer_unknown": "\"{{alias}}\" is not an SSH alias this daemon knows.",
+  "fleet_hosts.probe.load_error": "Could not read the host configuration from {{hosts}}: {{text}}",
+  "fleet_hosts.probe.reload": "Reload",
+  "fleet_hosts.probe.loading": "Reading the probe hosts…",
+  "fleet_hosts.probe.unreadable": "The probe hosts cannot be read right now.",
+  "fleet_hosts.probe.changed_on": "{{hosts}} was changed elsewhere since you started. Saving now would overwrite that.",
+  "fleet_hosts.probe.overwrite": "Overwrite anyway",
+  "fleet_hosts.probe.alias_unverified": "unverified"
 }

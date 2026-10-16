@@ -2574,5 +2574,12 @@
   "fleet_hosts.row.err_order_count": "順序必須列出 1 到 4 個主機 alias。",
   "fleet_hosts.row.err_order_shape": "「{{alias}}」不是有效的主機 alias（英數字、. _ -，最長 64，且以英數字開頭）。",
   "fleet_hosts.row.err_order_dup": "「{{alias}}」重複了。",
-  "fleet_hosts.row.err_peer_unknown": "「{{alias}}」不是這台 daemon 認得的 SSH alias。"
+  "fleet_hosts.row.err_peer_unknown": "「{{alias}}」不是這台 daemon 認得的 SSH alias。",
+  "fleet_hosts.probe.load_error": "無法讀取 {{hosts}} 的主機設定：{{text}}",
+  "fleet_hosts.probe.reload": "重新讀取",
+  "fleet_hosts.probe.loading": "正在讀取只探查的主機…",
+  "fleet_hosts.probe.unreadable": "目前讀不到只探查的主機。",
+  "fleet_hosts.probe.changed_on": "{{hosts}} 在你開始編輯後已被其他地方更新，現在存檔會蓋掉那份內容。",
+  "fleet_hosts.probe.overwrite": "仍然覆寫",
+  "fleet_hosts.probe.alias_unverified": "未驗證"
 }

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useFleetConfigStore, type ProbeEntry } from '../../lib/fleet/config-store'
 import { probeNameError } from '../../lib/fleet/config-validate'
@@ -14,14 +14,18 @@ import { HostIconPicker } from './HostIconPicker'
  * DAEMON — each picked from that daemon's own `GET /api/fleet/ssh-aliases`, because each daemon reaches the host through its
  * own SSH config. The 400 text of a failed save is shown here.
  */
-export function ProbeHostDialog({ draft, hostIds, isNew, busy, error, onChange, onSave, onCancel }: {
+export function ProbeHostDialog({ draft, hostIds, isNew, busy, blocked, error, children, onChange, onSave, onCancel }: {
   /** The draft lives outside this component (`useFleetDraftStore`): it survives a tab switch. */
   draft: ProbeEntry
   /** The daemon hosts the entry is written to. */
   hostIds: string[]
   isNew: boolean
   busy: boolean
+  /** Why a save cannot go out right now (a daemon dropped, a read failed); Save is off while this is set. */
+  blocked: string | null
   error: string | null
+  /** Extra actions next to Save (the section's "overwrite anyway"). */
+  children?: ReactNode
   onChange: (fn: (d: ProbeEntry) => ProbeEntry) => void
   onSave: (entry: ProbeEntry) => void
   onCancel: () => void
@@ -34,7 +38,7 @@ export function ProbeHostDialog({ draft, hostIds, isNew, busy, error, onChange, 
   const title = t(isNew ? 'fleet_hosts.probe.add_title' : 'fleet_hosts.probe.edit_title')
 
   const submit = () => {
-    if (busy) return
+    if (busy || blocked) return
     const name = draft.name.trim()
     const bad = probeNameError(name)
     if (bad) return setInvalid(bad)
@@ -46,9 +50,10 @@ export function ProbeHostDialog({ draft, hostIds, isNew, busy, error, onChange, 
   const input = 'mt-1 w-full bg-surface-primary border border-border-default rounded px-2 py-1.5 text-sm text-text-primary'
 
   return (
-    <div role="dialog" data-testid="probe-dialog" aria-label={title}
+    <form role="dialog" aria-modal="true" data-testid="probe-dialog" aria-label={title} noValidate
       className="p-4 bg-surface-secondary border border-border-default rounded-lg mb-4"
-      onKeyDown={(e) => { if (e.key === 'Escape') onCancel() }}>
+      onSubmit={(e) => { e.preventDefault(); submit() }}
+      onKeyDown={(e) => { if (e.key === 'Escape' && !busy) onCancel() }}>
       <h3 className="text-sm font-semibold mb-3">{title}</h3>
       <label className="block text-xs text-text-secondary mb-2">{t('fleet_hosts.probe.name')}
         <input data-testid="probe-field-name" autoFocus className={input} value={draft.name}
@@ -87,13 +92,15 @@ export function ProbeHostDialog({ draft, hostIds, isNew, busy, error, onChange, 
           return next ? { ...d, colors: next.colors } : d
         })} />
       {invalid && <p data-testid="probe-dialog-invalid" className="mt-2 text-xs text-red-400">{t(invalid)}</p>}
+      {blocked && <p data-testid="probe-dialog-blocked" className="mt-2 text-xs text-status-warning-text whitespace-pre-wrap">{blocked}</p>}
       {error && <p data-testid="probe-dialog-error" className="mt-2 text-xs text-red-400 whitespace-pre-wrap">{error}</p>}
       <div className="flex gap-2 mt-3">
-        <button type="button" data-testid="probe-save" onClick={submit} disabled={busy}
+        <button type="submit" data-testid="probe-save" disabled={busy || !!blocked}
           className="px-3 py-1.5 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50">{t('common.save')}</button>
-        <button type="button" onClick={onCancel}
-          className="px-3 py-1.5 rounded text-xs bg-surface-tertiary text-text-secondary cursor-pointer">{t('common.cancel')}</button>
+        <button type="button" data-testid="probe-cancel" onClick={onCancel} disabled={busy}
+          className="px-3 py-1.5 rounded text-xs bg-surface-tertiary text-text-secondary cursor-pointer disabled:opacity-50">{t('common.cancel')}</button>
+        {children}
       </div>
-    </div>
+    </form>
   )
 }
