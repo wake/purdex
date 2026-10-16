@@ -131,8 +131,8 @@ func heavyReason(argv []string, e Env) Reason {
 // where two tools disagree the line is gated, never let through). A help word in that place is the value, not a request
 // (`go test -bench --help ./...` runs the whole suite).
 func takesValue(a string) bool {
-	if !strings.HasPrefix(a, "-") || strings.Contains(a, "=") {
-		return false
+	if !strings.HasPrefix(a, "-") {
+		return false // (a flag written -run=x is no key of the tables: its value is in the word)
 	}
 	return goValueFlags["-"+strings.TrimLeft(a, "-")] || vitestValueFlags[a] || runnerValueOpts[a] || a == "--file"
 }
