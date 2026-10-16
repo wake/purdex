@@ -26,6 +26,16 @@ type Holder struct {
 	Since        time.Time   `json:"since,omitempty"` // when it entered this state
 	LastTurn     time.Time   `json:"last_turn,omitempty"`
 	LastDelivery time.Time   `json:"last_delivery,omitempty"`
+	// What reconcile (spec §12.4) records of the watcher it found: the frame, the tmux session ($N) and pane (%N) it runs in, its
+	// process (pid and the start time that tells it from a reused pid, which W3b re-checks before a signal) and its transcript.
+	// FrameID, PaneID, TmuxSessionID, PID and ProcessStartTime are empty while the holder rests; the session id and the
+	// transcript path are kept for the next wake.
+	FrameID          string `json:"frame_id,omitempty"`
+	PaneID           string `json:"pane_id,omitempty"`
+	TmuxSessionID    string `json:"tmux_session_id,omitempty"`
+	PID              int    `json:"pid,omitempty"`
+	ProcessStartTime string `json:"process_start_time,omitempty"`
+	TranscriptPath   string `json:"transcript_path,omitempty"`
 }
 
 // valid says whether h is a state a file may hold: a watcher state has a session, "none" has none.

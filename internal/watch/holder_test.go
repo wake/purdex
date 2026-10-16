@@ -89,3 +89,31 @@ func TestHolder_AFailedWriteAndAFailedDirectorySync(t *testing.T) {
 		require.NotContains(t, e.Name(), ".tmp", "no temp file left")
 	}
 }
+
+// What reconcile records of the watcher run (frame, tmux ids, process, transcript) survives a restart, and a file written before
+// these fields existed still reads.
+func TestHolder_TheRecordedRunSurvivesARestartAndAnOldFileStillReads(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "holder.json")
+	s, _ := OpenHolder(p)
+	require.NoError(t, s.Update(func(h *Holder) {
+		h.State, h.SessionID = HolderAwake, "sess"
+		h.FrameID, h.PaneID, h.TmuxSessionID, h.PID, h.ProcessStartTime, h.TranscriptPath = "f", "%7", "$3", 4242, "t0", "/t.jsonl"
+	}))
+	r, err := OpenHolder(p)
+	require.NoError(t, err)
+	got := r.Get()
+	require.Equal(t, "f", got.FrameID)
+	require.Equal(t, "%7", got.PaneID)
+	require.Equal(t, "$3", got.TmuxSessionID)
+	require.Equal(t, 4242, got.PID)
+	require.Equal(t, "t0", got.ProcessStartTime)
+	require.Equal(t, "/t.jsonl", got.TranscriptPath)
+
+	old := filepath.Join(dir, "old.json")
+	require.NoError(t, os.WriteFile(old, []byte(`{"state":"resting","session_id":"s-old"}`), 0o600))
+	o, err := OpenHolder(old)
+	require.NoError(t, err)
+	require.Equal(t, HolderResting, o.Get().State)
+	require.Equal(t, "s-old", o.Get().SessionID)
+}

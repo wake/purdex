@@ -46,6 +46,7 @@ func answerOf(v HolderView) watch.HolderAnswer {
 
 func (a asker) Holder(ctx context.Context, alias string) (watch.HolderAnswer, error) {
 	if a.m.isSelf(alias) {
+		a.m.fresh(ctx)
 		return answerOf(a.m.view()), nil
 	}
 	return a.call(ctx, alias, pathHolder)

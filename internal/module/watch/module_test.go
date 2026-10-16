@@ -135,6 +135,6 @@ func TestLocalHolder_IsTheSameViewAndTheHolderSurvivesARestart(t *testing.T) {
 func TestModule_NameAndDependencies(t *testing.T) {
 	m := New()
 	require.Equal(t, "watch", m.Name())
-	require.Equal(t, []string{"peers", "hostconfig"}, m.Dependencies())
+	require.Equal(t, []string{"peers", "hostconfig", "agent"}, m.Dependencies())
 	var _ core.Module = m
 }
