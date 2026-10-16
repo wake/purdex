@@ -102,6 +102,7 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 
 	ptmx, err := pty.StartWithSize(c.Cmd, &startSize) // pty starts the embedded Cmd itself: the fork is counted here
 	if err != nil {
+		c.NoteStartFailed()
 		log.Printf("pty start: %v", err)
 		return
 	}

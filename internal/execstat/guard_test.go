@@ -32,8 +32,10 @@ func forkSites(src string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var sites, ptySites []string
-	noted := false               // a NoteStarted() call: the file counts the forks the pty library makes
+	var sites []string
+	type ptyCall struct{ site, cmd string } // a pty.Start* call and the variable whose .Cmd it starts ("" when it is not X.Cmd)
+	var ptyCalls []ptyCall
+	noted := map[string]bool{}   // the variables X with an X.NoteStarted() call: they count the forks the pty library makes
 	names := map[string]string{} // the name an import is bound to → its path
 	for _, imp := range f.Imports {
 		path, _ := strconv.Unquote(imp.Path.Value)
@@ -53,6 +55,7 @@ func forkSites(src string) ([]string, error) {
 		}
 	}
 	pointers := map[ast.Expr]bool{}
+	var pendingPty []string // the variable of each pty.Start*(X.Cmd, …), in source order
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.SelectorExpr:
@@ -64,14 +67,24 @@ func forkSites(src string) ([]string, error) {
 				if forkAPIs[path][x.Sel.Name] {
 					site := id.Name + "." + x.Sel.Name + " at " + fset.Position(x.Pos()).String()
 					if path == "github.com/creack/pty" {
-						ptySites = append(ptySites, site)
+						ptyCalls = append(ptyCalls, ptyCall{site: site})
 					} else {
 						sites = append(sites, site)
 					}
 				}
 			}
 			if x.Sel.Name == "NoteStarted" {
-				noted = true
+				noted[id.Name] = true
+			}
+		case *ast.CallExpr: // pty.Start*(X.Cmd, …): remember X, to pair it with X.NoteStarted()
+			if fn, ok := x.Fun.(*ast.SelectorExpr); ok {
+				if id, ok := fn.X.(*ast.Ident); ok && id.Obj == nil && names[id.Name] == "github.com/creack/pty" && forkAPIs["github.com/creack/pty"][fn.Sel.Name] && len(x.Args) > 0 {
+					if arg, ok := x.Args[0].(*ast.SelectorExpr); ok && arg.Sel.Name == "Cmd" {
+						if v, ok := arg.X.(*ast.Ident); ok {
+							pendingPty = append(pendingPty, v.Name)
+						}
+					}
+				}
 			}
 		case *ast.StarExpr: // *exec.Cmd is only a reference; a use of the type that is not behind a star creates a value
 			if isExecCmd(x.X, names) {
@@ -84,8 +97,13 @@ func forkSites(src string) ([]string, error) {
 		}
 		return true
 	})
-	if !noted { // pty.Start* starts the Cmd itself, so it is a counted fork only next to execstat's NoteStarted
-		sites = append(sites, ptySites...)
+	// pty.Start* starts the Cmd itself, so it is a counted fork only when its argument is X.Cmd for an execstat Cmd X and the
+	// file calls X.NoteStarted(); every call is checked on its own.
+	for i, c := range ptyCalls {
+		if i < len(pendingPty) && pendingPty[i] != "" && noted[pendingPty[i]] && len(pendingPty) == len(ptyCalls) {
+			continue
+		}
+		sites = append(sites, c.site)
 	}
 	return sites, nil
 }
@@ -203,7 +221,7 @@ func TestTheGuardSeesEveryWayToFork(t *testing.T) {
 		`package p; import "syscall"; var _, _ = syscall.ForkExec("x", nil, nil)`:                                                          true,
 		`package p; import "github.com/creack/pty"; var _, _ = pty.Start(nil)`:                                                             true,
 		`package p; import "github.com/creack/pty"; var _, _ = pty.StartWithSize(nil, nil)`:                                                true,
-		`package p; import "github.com/creack/pty"; func f(c interface{ NoteStarted() }) { pty.StartWithSize(nil, nil); c.NoteStarted() }`: false, // counted by hand
+		`package p; import "github.com/creack/pty"; func f(c interface{ NoteStarted() }) { pty.StartWithSize(nil, nil); c.NoteStarted() }`: true, // no X.Cmd to pair
 		`package p; import "github.com/wake/purdex/internal/execstat"; var _ = execstat.Command("t", "ps")`:                                false,
 		`package p; import "os/exec"; var e *exec.ExitError; var _ = e`:                                                                    false, // a type, not a fork
 		`package p; import "os/exec"; func f(exec struct{ Command func() }) { exec.Command() }`:                                            false, // a local named exec

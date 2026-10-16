@@ -379,6 +379,10 @@ func (c *Cmd) noteStarted(t0 time.Time) {
 // fork is counted and Wait adds its time.
 func (c *Cmd) NoteStarted() { c.noteStarted(time.Now()) }
 
+// NoteStartFailed is NoteStarted's other half: the caller that starts the embedded Cmd itself calls it when that start failed,
+// so the failure is counted as a failed start.
+func (c *Cmd) NoteStartFailed() { tags.get(c.tag).failedStart() }
+
 // Wait implements (*exec.Cmd).Wait.
 func (c *Cmd) Wait() error {
 	err := c.Cmd.Wait()
