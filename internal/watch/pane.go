@@ -267,7 +267,7 @@ func (p *PaneControl) PaneAtShell(ctx context.Context) (PaneState, error) {
 }
 
 // CommandLine builds the line to type (spec §12.4): agent_command, then --resume <id> for a wake (a UUID), then the prompt as
-// one POSIX single-quoted word ('  written as '\''), so $(…), backticks, ; and quotes in a prompt reach the agent as text. A
+// one POSIX single-quoted word ('  written as '\”), so $(…), backticks, ; and quotes in a prompt reach the agent as text. A
 // control character anywhere (a newline, NUL, ESC) is refused: it could end the line early.
 func CommandLine(agentCommand, resumeID, prompt string) (string, error) {
 	if err := checkLine("agent_command", agentCommand); err != nil {
@@ -305,8 +305,13 @@ func checkLine(what, s string) error {
 	return nil
 }
 
-// shellCondition is the tmux format TypeLine's if-shell tests on the target pane: a shell in the foreground, not in a mode.
-const shellCondition = `#{&&:#{m/r:^-?(zsh|bash|sh|fish)$,#{pane_current_command}},#{==:#{pane_in_mode},0}}`
+// typeCondition is the tmux format TypeLine's if-shell tests on the target pane: it is still pane paneID of session sessionID
+// named pdx-watch (a restarted server can hand a pane id to another session between our lookup and this command), a shell is in
+// the foreground, and the pane is not in a mode. Both ids were checked against $N / %N patterns when they were read.
+func typeCondition(sessionID, paneID string) string {
+	return "#{&&:#{&&:#{==:#{session_id}," + sessionID + "},#{&&:#{==:#{pane_id}," + paneID + "},#{==:#{session_name}," + PaneSession + "}}}," +
+		"#{&&:#{m/r:^-?(zsh|bash|sh|fish)$,#{pane_current_command}},#{==:#{pane_in_mode},0}}}"
+}
 
 // TypeLine types line into the pane and presses Enter, only if the pane is at a shell at that moment. The line is loaded into a
 // named buffer from stdin, then ONE if-shell -F on the pane's own format runs paste-buffer -d -p and Enter, so nothing can take
@@ -324,12 +329,17 @@ func (p *PaneControl) TypeLine(ctx context.Context, line string) error {
 	if _, err := p.readLocked(ctx); err != nil { // the ids are current (a recreated session is found here)
 		return err
 	}
-	pane := p.paneID
+	return p.typeInto(ctx, line, p.sessionID, p.paneID)
+}
+
+// typeInto is TypeLine's tmux half for the pane the caller names: the line travels in the buffer, the if-shell checks the pane's
+// identity and state and pastes in one command, and a buffer left behind says the condition was false.
+func (p *PaneControl) typeInto(ctx context.Context, line, sessionID, pane string) error {
 	if _, err := p.tmux(ctx, line, "load-buffer", "-b", pasteBuffer, "-"); err != nil {
 		return err
 	}
 	typed := fmt.Sprintf("paste-buffer -d -p -b %s -t %s ; send-keys -t %s Enter", pasteBuffer, pane, pane)
-	if _, err := p.tmux(ctx, "", "if-shell", "-F", "-t", pane, shellCondition, typed); err != nil {
+	if _, err := p.tmux(ctx, "", "if-shell", "-F", "-t", pane, typeCondition(sessionID, pane), typed); err != nil {
 		p.dropBuffer(ctx)
 		return err
 	}

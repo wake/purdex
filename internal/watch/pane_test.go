@@ -301,3 +301,32 @@ func TestSendExit_TypesSlashExitAndEnterIntoTheAgentsInput(t *testing.T) {
 	p.testRun(t, "send-keys", "-t", pane, "C-d")
 	waitFor(t, "/exit to arrive", func() bool { b, _ := os.ReadFile(got); return string(b) == "/exit\n" })
 }
+
+// The condition of the typing carries the pane's identity: a pane id that is now another session's (a restarted server hands ids
+// out again) is not typed into even though it is a shell. typeInto is called with an id the session does not have.
+func TestTypeInto_ARecordedSessionIdThatIsNotThePanesIsNotTypedInto(t *testing.T) {
+	p := newTestPane(t)
+	ctx := context.Background()
+	sid, pane, _, err := p.EnsureSession(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the shell", func() bool { st, err := p.PaneAtShell(ctx); return err == nil && st.AtShell })
+	never := filepath.Join(t.TempDir(), "never")
+	wrong := "$" + fmt.Sprint(len(sid)+900)
+	if err := p.typeInto(ctx, "touch '"+never+"'", wrong, pane); !errors.Is(err, ErrPaneBusy) {
+		t.Fatalf("a pane that is not the recorded session's: %v, want ErrPaneBusy", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if _, err := os.Stat(never); err == nil {
+		t.Error("typed into a pane whose session id is not the recorded one")
+	}
+	if strings.Contains(p.testRun(t, "list-buffers", "-F", "#{buffer_name}"), pasteBuffer) {
+		t.Error("a refused line must leave no buffer behind")
+	}
+	typed := filepath.Join(t.TempDir(), "typed")
+	if err := p.typeInto(ctx, "touch '"+typed+"'", sid, pane); err != nil {
+		t.Fatalf("the right ids: %v", err)
+	}
+	waitFor(t, "the typed command to run", func() bool { _, err := os.Stat(typed); return err == nil })
+}
