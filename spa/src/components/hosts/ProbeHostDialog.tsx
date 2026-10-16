@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useFleetConfigStore, type ProbeEntry } from '../../lib/fleet/config-store'
+import { probeNameError } from '../../lib/fleet/config-validate'
 import { withColorLayer, withIcon } from '../../stores/useHostStore'
 import type { HostColorMode } from '../../lib/host-color'
 import { hostLabel, hostLookOf } from '../../lib/host-look'
@@ -13,19 +14,21 @@ import { HostIconPicker } from './HostIconPicker'
  * DAEMON — each picked from that daemon's own `GET /api/fleet/ssh-aliases`, because each daemon reaches the host through its
  * own SSH config. The 400 text of a failed save is shown here.
  */
-export function ProbeHostDialog({ initial, hostIds, isNew, busy, error, onSave, onCancel }: {
-  initial: ProbeEntry
+export function ProbeHostDialog({ draft, hostIds, isNew, busy, error, onChange, onSave, onCancel }: {
+  /** The draft lives outside this component (`useFleetDraftStore`): it survives a tab switch. */
+  draft: ProbeEntry
   /** The daemon hosts the entry is written to. */
   hostIds: string[]
   isNew: boolean
   busy: boolean
   error: string | null
+  onChange: (fn: (d: ProbeEntry) => ProbeEntry) => void
   onSave: (entry: ProbeEntry) => void
   onCancel: () => void
 }) {
   const t = useI18nStore((s) => s.t)
   const byHost = useFleetConfigStore((s) => s.byHost)
-  const [draft, setDraft] = useState(initial)
+  const setDraft = onChange
   const [mode, setMode] = useState<HostColorMode>('console')
   const [invalid, setInvalid] = useState<string | null>(null)
   const title = t(isNew ? 'fleet_hosts.probe.add_title' : 'fleet_hosts.probe.edit_title')
@@ -33,7 +36,8 @@ export function ProbeHostDialog({ initial, hostIds, isNew, busy, error, onSave, 
   const submit = () => {
     if (busy) return
     const name = draft.name.trim()
-    if (!name) return setInvalid('fleet_hosts.probe.err_name')
+    const bad = probeNameError(name)
+    if (bad) return setInvalid(bad)
     if (hostIds.some((id) => !draft.aliases[id])) return setInvalid('fleet_hosts.probe.err_alias')
     setInvalid(null)
     onSave({ ...draft, name })

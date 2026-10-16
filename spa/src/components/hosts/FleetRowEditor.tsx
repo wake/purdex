@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
-import { useFleetConfigStore, type DroppedNotice } from '../../lib/fleet/config-store'
+import { useFleetConfigStore } from '../../lib/fleet/config-store'
+import { useFleetDraftStore } from '../../lib/fleet/config-draft'
+import { fleetRowError } from '../../lib/fleet/config-validate'
 import { useFleetStore } from '../../lib/fleet/store'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -19,41 +21,49 @@ export function FleetRowEditor({ hostId }: { hostId: string }) {
   const supported = useFleetStore((s) => s.byHost[hostId]?.support === 'yes')
   const online = useHostStore((s) => s.runtime[hostId]?.status === 'connected')
   const cfg = useFleetConfigStore((s) => s.byHost[hostId])
-  const [order, setOrder] = useState('')
-  const [peer, setPeer] = useState('')
-  const [enabled, setEnabled] = useState(true)
+  const draft = useFleetDraftStore((s) => s.fleetRows[hostId])
+  const confirm = useFleetDraftStore((s) => s.fleetConfirm[hostId]) ?? null
   const [busy, setBusy] = useState(false)
-  const [message, setMessage] = useState<{ kind: 'error' | 'conflict' | 'saved'; text?: string } | null>(null)
-  const [confirm, setConfirm] = useState<DroppedNotice[] | null>(null)
+  const [message, setMessage] = useState<{ kind: 'error' | 'conflict' | 'saved' | 'invalid'; text?: string } | null>(null)
 
   useEffect(() => {
     if (supported && online) void useFleetConfigStore.getState().load(hostId)
   }, [hostId, supported, online])
 
-  // The form follows the daemon's copy whenever it is (re)read.
+  // The form shows the reader's edit when there is one (kept outside the component: a tab switch unmounts this), else the
+  // daemon's copy. An edit made against an older revision of the row is stale once the row is read again: it is dropped.
   const items = cfg?.status === 'ready' ? cfg.fleet.items : null
-  const revision = cfg?.fleet.revision
+  const revision = cfg?.fleet.revision ?? 0
   useEffect(() => {
-    if (!items) return
-    setOrder(items.order.join(', '))
-    setPeer(items.peer_ssh_alias)
-    setEnabled(items.enabled)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-sync on a new revision only, not on every render's `items`
-  }, [revision, cfg?.status])
+    if (draft && cfg?.status === 'ready' && draft.rev !== revision) {
+      useFleetDraftStore.getState().setFleetRow(hostId, null)
+      useFleetDraftStore.getState().setFleetConfirm(hostId, null)
+    }
+  }, [draft, revision, cfg?.status, hostId])
+  const live = draft && draft.rev === revision ? draft : null
+  const order = live?.order ?? items?.order.join(', ') ?? ''
+  const peer = live?.peer ?? items?.peer_ssh_alias ?? ''
+  const enabled = live?.enabled ?? items?.enabled ?? true
+  const edit = (patch: Partial<{ order: string; peer: string; enabled: boolean }>) =>
+    useFleetDraftStore.getState().setFleetRow(hostId, { order, peer, enabled, ...patch, rev: revision })
 
   if (!supported || !cfg) return null
   const aliases = cfg.aliases
   const options = peer && !aliases.includes(peer) ? [peer, ...aliases] : aliases
 
   const save = async (confirmDropped: boolean) => {
+    const bad = fleetRowError(splitOrder(order), peer, aliases)
+    if (bad) { setMessage({ kind: 'invalid', text: t(bad.key, { alias: bad.alias ?? '' }) }); return }
     setBusy(true)
     setMessage(null)
     try {
       const r = await useFleetConfigStore.getState().saveFleetRow(hostId, { order: splitOrder(order), peer_ssh_alias: peer, enabled }, { confirmDropped })
-      if (r.kind === 'confirm') setConfirm(r.notices)
+      if (r.kind === 'confirm') useFleetDraftStore.getState().setFleetConfirm(hostId, r.notices)
       else {
-        setConfirm(null)
-        setMessage(r.kind === 'error' ? { kind: 'error', text: r.text } : { kind: r.kind })
+        useFleetDraftStore.getState().setFleetConfirm(hostId, null)
+        if (r.kind === 'saved') useFleetDraftStore.getState().setFleetRow(hostId, null)
+        // A conflict re-reads the row: the edit (based on the old revision) is stale then, and the notice says so.
+        setMessage(r.kind === 'error' ? { kind: 'error', text: r.text } : r.kind === 'conflict' ? { kind: 'conflict' } : { kind: 'saved' })
       }
     } finally {
       setBusy(false)
@@ -66,18 +76,18 @@ export function FleetRowEditor({ hostId }: { hostId: string }) {
       <div data-testid="fleet-row-editor" className="space-y-3">
         <label className="block text-xs text-text-secondary">{t('fleet_hosts.row.order')}
           <input data-testid="fleet-row-order" className={`${input} mt-1 font-mono`} value={order} spellCheck={false}
-            onChange={(e) => setOrder(e.target.value)} />
+            onChange={(e) => edit({ order: e.target.value })} />
           <span className="block mt-1 text-text-muted">{t('fleet_hosts.row.order_hint')}</span>
         </label>
         <label className="block text-xs text-text-secondary">{t('fleet_hosts.row.peer_alias')}
-          <select data-testid="fleet-row-peer" className={`${input} mt-1`} value={peer} onChange={(e) => setPeer(e.target.value)}>
+          <select data-testid="fleet-row-peer" className={`${input} mt-1`} value={peer} onChange={(e) => edit({ peer: e.target.value })}>
             <option value="">{t('fleet_hosts.row.peer_none')}</option>
             {options.map((a) => <option key={a} value={a}>{a}</option>)}
           </select>
         </label>
         <div className="flex items-center justify-between text-xs text-text-secondary">
           {t('fleet_hosts.row.enabled')}
-          <ToggleSwitch label={t('fleet_hosts.row.enabled')} checked={enabled} onChange={setEnabled} />
+          <ToggleSwitch label={t('fleet_hosts.row.enabled')} checked={enabled} onChange={(v) => edit({ enabled: v })} />
         </div>
         {confirm && (
           <div data-testid="fleet-row-dropped-confirm" className="p-3 rounded border border-border-default text-xs">
@@ -91,11 +101,12 @@ export function FleetRowEditor({ hostId }: { hostId: string }) {
             <div className="flex gap-2 mt-2">
               <button type="button" data-testid="fleet-row-dropped-save" disabled={busy} onClick={() => void save(true)}
                 className="px-3 py-1 rounded bg-accent text-white cursor-pointer disabled:opacity-50">{t('fleet_hosts.dropped.save_anyway')}</button>
-              <button type="button" onClick={() => setConfirm(null)}
+              <button type="button" onClick={() => useFleetDraftStore.getState().setFleetConfirm(hostId, null)}
                 className="px-3 py-1 rounded bg-surface-tertiary text-text-secondary cursor-pointer">{t('common.cancel')}</button>
             </div>
           </div>
         )}
+        {message?.kind === 'invalid' && <p data-testid="fleet-row-invalid" className="text-xs text-red-400">{message.text}</p>}
         {message?.kind === 'error' && <p data-testid="fleet-row-error" className="text-xs text-red-400 whitespace-pre-wrap">{message.text}</p>}
         {message?.kind === 'conflict' && <p data-testid="fleet-row-conflict" className="text-xs text-status-warning-text">{t('fleet_hosts.row.conflict')}</p>}
         {message?.kind === 'saved' && <p className="text-xs text-text-muted">{t('fleet_hosts.row.saved', { host: hostLabel(hostId, hostLookOf(hostId)) })}</p>}

@@ -55,7 +55,7 @@ describe('saveProbeList', () => {
     putProbeHosts.mockImplementation(async (id: string) => { if (id === B) throw new HostConfigConflictError({ items: [], revision: 9 }) })
     fetchFleetConfig.mockClear()
     const r = await useFleetConfigStore.getState().saveProbeList([A, B], [entry])
-    expect(r).toEqual({ kind: 'conflict' })
+    expect(r).toEqual({ kind: 'conflict', outcomes: [{ hostId: A, ok: true }, { hostId: B, ok: false, conflict: true }] })
     expect(fetchFleetConfig.mock.calls.map((c) => c[0]).sort()).toEqual([A, B])
   })
 
@@ -63,7 +63,7 @@ describe('saveProbeList', () => {
     await ready()
     putProbeHosts.mockRejectedValueOnce(new HostConfigApiError(400, 'unknown_ssh_alias: nas-a'))
     const r = await useFleetConfigStore.getState().saveProbeList([A, B], [entry])
-    expect(r).toEqual({ kind: 'error', text: 'unknown_ssh_alias: nas-a' })
+    expect(r).toEqual({ kind: 'error', text: 'unknown_ssh_alias: nas-a', outcomes: [{ hostId: A, ok: false, text: 'unknown_ssh_alias: nas-a' }, { hostId: B, ok: true }] })
   })
 
   it('dropped > 0 asks first and writes nothing; confirmed, it writes', async () => {
@@ -96,7 +96,7 @@ describe('saveFleetRow', () => {
     putFleetRow.mockRejectedValueOnce(new HostConfigConflictError({ items: {}, revision: 5 }))
     expect((await useFleetConfigStore.getState().saveFleetRow(A, { order: ['a'], peer_ssh_alias: '', enabled: true })).kind).toBe('conflict')
     putFleetRow.mockRejectedValueOnce(new HostConfigApiError(400, 'order: bad'))
-    expect(await useFleetConfigStore.getState().saveFleetRow(A, { order: ['a'], peer_ssh_alias: '', enabled: true })).toEqual({ kind: 'error', text: 'order: bad' })
+    expect(await useFleetConfigStore.getState().saveFleetRow(A, { order: ['a'], peer_ssh_alias: '', enabled: true })).toEqual({ kind: 'error', text: 'order: bad', outcomes: [{ hostId: A, ok: false, text: 'order: bad' }] })
   })
   it('a dropped marker on the fleet row asks first', async () => {
     const c = cfg([], 3)
