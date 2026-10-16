@@ -37,6 +37,11 @@ func normalizeWatch(raw json.RawMessage) (watchsettings.Settings, error) {
 	if firstByte(raw) != '{' {
 		return watchsettings.Settings{}, errors.New("items must be a JSON object")
 	}
+	// Before the decode: encoding/json turns an invalid byte in a string into U+FFFD, so a check made afterwards never sees it
+	// and the command or prompt would be stored changed.
+	if !utf8.Valid(raw) {
+		return watchsettings.Settings{}, errors.New("watch: the body is not valid UTF-8")
+	}
 	var in struct {
 		Enabled          *bool     `json:"enabled"`
 		XCores           *float64  `json:"x_cores"`

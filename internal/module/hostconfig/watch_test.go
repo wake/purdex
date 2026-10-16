@@ -207,3 +207,22 @@ func TestWatch_ModelIsTheOldSpellingOfAgentCommand(t *testing.T) {
 	rr = serve(m2, http.MethodPut, "/api/hostconfig/watch", string(put))
 	assert.Equal(t, http.StatusOK, rr.Code, "GET → PUT unchanged round trips: "+rr.Body.String())
 }
+
+// An invalid UTF-8 byte in the command or a prompt is refused, not replaced by U+FFFD and stored: the JSON decode alone would
+// have changed it before any check on the string saw it.
+func TestWatch_InvalidUTF8IsRefusedNotRewritten(t *testing.T) {
+	m := newTestModule(t)
+	// interpreted Go strings: \xff here is the byte 0xff itself, not a JSON escape
+	for name, extra := range map[string]string{
+		"agent_command": ",\"agent_command\":\"claude \xff\"",
+		"start_prompt":  ",\"start_prompt\":\"a\xffb\"",
+		"wake_prompt":   ",\"wake_prompt\":\"a\xc3(\"",
+	} {
+		body := `{"items":` + strings.TrimSuffix(watchOK, "}") + extra + `},"baseRevision":0}`
+		rr := serve(m, http.MethodPut, "/api/hostconfig/watch", body)
+		assert.Equal(t, http.StatusBadRequest, rr.Code, name+": "+rr.Body.String())
+	}
+	e, err := m.store.Get(KeyWatch)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), e.Revision, "nothing stored")
+}
