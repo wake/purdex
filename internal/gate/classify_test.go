@@ -64,7 +64,14 @@ func TestClassify_Table(t *testing.T) {
 		{"vitest run --maxWorkers=3", ClassHeavy},
 		{"vitest run src/lib/foo.test.ts", ClassLight},
 		{"vitest run -t foo", ClassLight},
-		{"vitest related src/a.ts", ClassLight},
+		{"vitest related src/a.ts", ClassHeavy}, // follows the import graph: close to the whole suite for a shared file (#3024)
+		{"vitest related --run src/a.ts", ClassHeavy},
+		{"npx vitest related --run src/components/hosts/HostSidebar.tsx", ClassHeavy},
+		{"pnpm exec vitest related src/a.ts", ClassHeavy},
+		{"vitest run --related src/a.ts", ClassHeavy},
+		{"vitest run src/a.test.ts", ClassLight}, // named test files stay light
+		{"npx vitest run src/components/fleet/HostCell.test.tsx src/components/fleet/FleetCells.test.tsx", ClassLight},
+		{"vitest src/related.test.ts", ClassLight}, // a file whose name has the word is a filter, not the subcommand
 		{"vitest run --changed", ClassLight},
 		{"vitest run --project spa", ClassLight},
 		{"vitest", ClassHeavy}, // no terminal, no agent: it runs once
@@ -203,7 +210,7 @@ func TestClassify_VitestWatchOrRunOnce(t *testing.T) {
 		{"--no-watch=true changes nothing for an agent either", "vitest --no-watch=true", agent, ClassHeavy},
 		{"an agent, --watch=false", "vitest --watch=false", agent, ClassHeavy},
 		{"person at a terminal, related: watch", "vitest related src/a.ts", person, ClassNone},
-		{"person at a terminal, related --run", "vitest related --run src/a.ts", person, ClassLight},
+		{"person at a terminal, related --run", "vitest related --run src/a.ts", person, ClassHeavy},
 		{"an agent, bare: it runs once", "npx vitest", agent, ClassHeavy},
 		{"an agent, pnpm vitest", "pnpm vitest", agent, ClassHeavy},
 		{"an agent with a terminal: still once", "vitest", agentTTY, ClassHeavy},
