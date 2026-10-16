@@ -9,6 +9,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ListChecks, MapTrifold } from '@phosphor-icons/react'
 import { CardFrame } from './CardFrame'
+import { JournalCard, JournalTitle } from './JournalCard'
 import { visibleCards, teamColumnWidth } from './card-layout'
 import { useJournalTarget } from './useJournalTarget'
 import { TeamPanel } from '../team/TeamPanel'
@@ -116,7 +117,8 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
           testId="journal-card"
           width={widths.journal}
           onCommitWidth={commit('journal')}
-          title={target.unit?.unit.label ?? ''}
+          title={<JournalTitle target={target} />}
+          fill
           actions={
             <>
               <HeaderToggle testId="journal-toggle-roadmap" pressed={memo.roadmapOpen} label={t('journal.card.roadmap')} onClick={() => patch({ roadmapOpen: !memo.roadmapOpen })}><MapTrifold size={13} /></HeaderToggle>
@@ -125,6 +127,7 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
           }
           onClose={() => patch({ journalOpen: false })}
         >
+          {target.unit && <JournalCard key={`${target.memoHost}\u0000${target.memoKey}`} target={target} unit={target.unit} />}
           {target.unreachableHost !== null && !target.unit && (
             <div data-testid="journal-unreachable" className="p-3 text-text-secondary">{t('journal.card.unreachable', { host: target.unreachableHost })}</div>
           )}
