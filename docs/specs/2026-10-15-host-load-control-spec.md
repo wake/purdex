@@ -274,40 +274,57 @@ Lead decision 10-16 (the watcher's option 1 of 3): a pairwise rule, because it h
 to collide; a weight (tsc counts as two slots) would also keep tsc from running beside a `go vet`, and an estimate of each
 command's memory is the hardest to get right.
 
-- **A rule** is two patterns and a reason: `[[gate.conflict]]` with `a`, `b` (patterns), `reason` (one line), `by` and
-  `at`. A pattern is a command line in the words the gate already reads (as `[[gate.intercept.rule]]`): its first word is
-  the tool and must equal the command's tool word; every other word of the pattern must be one of the command's words, in
-  any order (`tsc -b` matches `tsc -b --force` and `tsc --force -b`; `vitest related` matches `vitest related --run a.ts`).
-  The command's words are read after the runner words the classifier already strips (`npx`, `pnpm exec|dlx`, `npm exec`,
-  `yarn`, `bunx`, `bun x`, a `node_modules/.bin/` path), so `npx tsc -b` is `tsc -b`. A rule may pair a pattern with
-  itself (no two `tsc -b` together). Rules are not per class: a command conflicts with a holder or a ticket of either
-  class. **Default: no rules.** The watcher (or the person) adds them; nothing is built in (user decision 10-16: full
-  control, no guard the gate invents for them).
+- **A rule** belongs to one class (both `tsc -b` and `vitest related` are heavy since #3040) and is two patterns and a
+  reason: `{class, a, b, reason, by, at}`. A rule is decided inside that class's admit lock, the same lock that already
+  makes a take atomic (§5.2), so two gates of the class can never both pass it; rules across classes are not in this
+  phase (they would need one lock over both classes).
+- **A pattern** is the start of a command line, matched like `[[gate.intercept.rule]]`: the command's words (below) equal
+  the pattern's words, or begin with them followed by more words. `tsc -b` matches `tsc -b --force`, not `tsc --force -b`
+  (the watcher adds a second rule for another spelling it sees); `vitest related` matches `vitest related --run a.ts`. A
+  prefix never mistakes the value of an option for a word of the pattern. A rule may pair a pattern with itself (no two
+  `tsc -b` together).
+- **The command's words** are its argv after the runner words the classifier reads, each tool word by its base name:
+  `npx`, `pnpx`, `bunx`, `bun x` `<tool …>`; `pnpm|npm|yarn|bun exec|x` `<tool …>` (the runner's options before the
+  subcommand skipped, with their values for the options that take one — the classifier's `runnerValueOpts`, in both the
+  `--opt value` and `--opt=value` forms — and a `--` after `exec` skipped); `pnpm <tool …>` when the word is a tool the
+  classifier knows; `node_modules/.bin/<tool>` or any path to a tool as its base name, also after a runner. A package
+  script is not opened: `pnpm run typecheck` is `pnpm run typecheck` (a rule names the script when the script is the
+  thing that collides).
+- **Every holder carries its command from the take on.** The take writes the slot's record inside the admit lock, and
+  (with #3049's placeholder) that record now carries the taking command's argv, read from its ticket — so the next gate
+  that takes the lock sees what holds the slot, never an empty record. A late claim (#2996) passes its command's argv to
+  `TakeLate`, which writes it the same way. A holder whose record cannot be read (a gate killed between removing its record
+  and unlocking, §5) matches no pattern; it is shown as `no_record`.
+- **Rules are read inside the lock.** The rules live in the gate directory (`conflicts.json`, written atomically), not in
+  `config.toml`; the walk below reads them while holding the class's admit lock, so a rule added before a take is honoured
+  by that take. A command already running is never touched.
 - **What a rule does to the queue.** Inside the serving order of §5.2 a waiting ticket is **blocked** when its command
-  matches one side of a rule and a current holder (late claims and over-size holders included) **or a ticket ahead of it**
-  (front and normal tickets ahead; a `hold` ticket is never ahead of anybody) matches the other side. A blocked ticket keeps
-  its place and takes no capacity from the tickets behind it: the next ticket that is not blocked may take the free slot.
+  matches one side of a rule of its class and a current holder of the class (late claims and over-size holders included)
+  **or a ticket ahead of it** (front and normal tickets ahead; a `hold` ticket is never ahead of anybody) matches the other
+  side. A blocked ticket keeps its place and takes no capacity: the next ticket that is not blocked may take a free slot.
   Because a ticket that conflicts with any ticket ahead of it is itself blocked, nothing that conflicts with a blocked
   ticket can pass it; when the holder it waits for ends, the blocked ticket is next among those that conflict with it (no
-  starvation by a stream of the other kind). A ticket is served when it is not blocked and the tickets ahead of it that
-  are not blocked leave a free slot; every reader (TryTake, status, queue, would-wait) gets this from the one snapshot of
-  §5.2. A late claim (#2996) is already running and ignores rules, as it ignores ranks; it does become a holder that
-  blocks others. A holder whose record has no argv (no record or the take's placeholder, #3049) matches no pattern.
+  starvation by a stream of the other kind). Capacity is the pool's free slots as today (holders beyond the pool's size,
+  `overHeld`, already counted), taken by the tickets that are neither held nor blocked, in serving order. A late claim is
+  already running and ignores rules, as it ignores ranks; once its record is written it blocks others like any holder.
+  Every reader (TryTake, status, queue, would-wait) gets this from the one snapshot of §5.2.
 - **would-wait** answers for a new `normal` ticket at the end of the normal group: it waits when a holder or a front or
-  normal ticket conflicts with it, as well as when capacity is used up.
-- **Who and how**: `pdx gate conflict` (list, `--json`), `pdx gate conflict add "<a>" "<b>" --reason "<line>"` and `pdx
-  gate conflict remove <n | "<a>" "<b>">`, on the host whose gate it is (the watcher reaches the other gated host over
-  `ssh <alias> pdx gate conflict …`). The reason is required (one line, ≤ 200 bytes). `by` is the Claude session that ran
-  it, or `person`. Adding a rule that exists (the same two patterns, either order) changes nothing and says so; removing
-  one that does not exist says so. An edit is a read–modify–write of the config file under its lock, so two edits at the
-  same moment both land (they commute; no `--expect` is needed). A rule applies to the next poll of every waiting gate, as
-  any config change does (§5 run-time tuning); a command already running is never touched.
+  normal ticket of the class conflicts with it, as well as when capacity is used up.
+- **Who and how**: `pdx gate conflict` (list, `--json`), `pdx gate conflict add --class heavy "<a>" "<b>" --reason
+  "<line>"` and `pdx gate conflict remove <n | --class heavy "<a>" "<b>">`, on the host whose gate it is (the watcher
+  reaches the other gated host over `ssh <alias> pdx gate conflict …`). The reason is required (one line, ≤ 200 bytes).
+  `by` is the Claude session that ran it, or `person`. **Default: no rules**: the watcher (or the person) adds them;
+  nothing is built in (user decision 10-16: full control, no guard the gate invents for them). Adding a rule that exists
+  (same class and the same two patterns, either order) changes nothing and says so; removing one that does not exist says
+  so. An edit takes `conflicts.lock`, re-reads the file, resolves an index against what it read, and replaces the file
+  atomically: no edit is lost; two edits of the same rule at the same moment end as the one that took the lock last
+  leaves it (add then remove → gone; remove then add → there), and each prints what it found and what it left.
 - **Seen everywhere it waits**: the waiting command's line says `waits for <slot or ticket>: <a> × <b> (<reason>)`;
   `pdx gate status [--json]` lists the rules and, per waiter, `conflict_with` (the slot or ticket) and the rule; the
   decision record gains `conflict` (the last rule that blocked it) and `conflict_s` (time spent blocked). The fleet's
   queue view carries them from the status JSON (B line).
-- **Not in this phase**: rules that weigh memory, or that differ by time of day (a profile can already swap the whole
-  config, §5).
+- **Not in this phase**: rules across classes; rules that weigh memory or differ by time of day; opening a package script
+  to see the tools it runs.
 
 ## 6. Retiring the lease (D2)
 

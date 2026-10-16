@@ -442,51 +442,69 @@ hold check and the would-wait count.
 
 ### GC — conflicts: two kinds of command that do not run together (#3058; lease member, one PR, after GQ)
 
-Spec §5.3. Built on GQ's admit lock and `Snapshot` (the serving order); nothing here changes how ranks order the queue.
-1. `toolWords(argv) []string`: the command's words with the runner words the classifier already reads taken off, in the
-   same cases as `classifyRunner` (`npx`/`pnpx`/`bunx <tool …>`, `pnpm|npm|yarn|bun exec|x <tool …>`, `pnpm <tool …>`
-   when the word is a tool, the options before the subcommand, `bun x`), and `filepath.Base` of the first word (so
-   `node_modules/.bin/tsc` is `tsc`); `pnpm run <script>` stays `pnpm run <script>`. One function, used by the matcher
-   only; `classifyRunner` is not rewritten in this PR (a shared table of runner words if it falls out naturally).
-2. `Conflict{A, B, Reason, By string; At time.Time}` and `matches(pattern, words)`: the pattern's first word equals
-   `words[0]`; every other pattern word is in `words` (exact word, any order). `conflicts(x, y []string) *Conflict` is
-   symmetric (A–B or B–A). Parsed from `[[gate.conflict]]` like `[[gate.intercept.rule]]` (`raw`; a malformed entry is a
-   config warning and is skipped, never a gate failure). Default empty.
-3. In `Snapshot`, after the serving order: walk it once with the holders' argv (records; a holder with no argv matches
-   nothing) and the free capacity. For each ticket in order (hold tickets skipped, as in GQ): **blocked** if a holder or
-   any earlier front/normal ticket conflicts with it (record which, and the rule); else **served** if capacity is left
-   (and take one); else **waiting for capacity**. A blocked ticket takes no capacity. `TryTake(t)` gives a slot exactly
-   when the walk marks `t` served; otherwise `Take` carries `Blocked{With, Rule}` (a slot label or a ticket) besides
-   GQ's `Ahead`/`Rank`. Late claims (`TakeLate`) do not consult rules (spec §5.3); their holders are in the walk.
-4. The wait loop's line for a blocked waiter: `waits for <slot or ticket>: <a> × <b> (<reason>)`; it keeps
-   `conflict_s` like GQ's `held_s` (the sum of poll intervals spent blocked) and the decision record gains `conflict`
-   (the last rule) and `conflict_s`.
-5. would-wait (GQ.5): a hypothetical new `normal` ticket at the end of the normal group, walked the same way: it waits
-   when it would be blocked or when capacity is used up.
-6. CLI `pdx gate conflict [--json]` (the rules with their index), `pdx gate conflict add "<a>" "<b>" --reason "<line>"`,
-   `pdx gate conflict remove <n | "<a>" "<b>">`: a read–modify–write of `config.toml` under the lock `pdx gate set`
-   already takes (`configedit.go`: `lockFile(path + ".lock")`), appending or removing one `[[gate.conflict]]` table as
-   text so the person's comments and other tables stay; the new file is parsed before the rename, as `Set` does. Reason
-   required (one line, ≤ 200 bytes, no control characters); a pattern must have a tool word and parse as words (no empty
-   pattern); an existing pair (either order) → "already there", nothing written; removing a missing one → "no such rule".
-   `by` = the session id from the environment, else `person`; `at` = now.
-7. `pdx gate status [--json]`: the rules (index, a, b, reason, by, at) and, per waiter, `conflict_with` and `conflict_rule`.
-8. The watcher's skill (W3b.4 / the manual watcher's notes): when a measured pair thrashes, add a rule with the
-   measurement as its reason, tell the person; remove it when the measurement no longer holds.
-Tests: matcher table (`tsc -b` vs `tsc -b --force`, `tsc --force -b`, `npx tsc -b`, `pnpm exec tsc -b`, `pnpm tsc -b`,
-`node_modules/.bin/tsc -b`; `vitest related` vs `npx vitest related --run a.ts`; `pnpm run build` stays a script and does
-not match `vite build`; a pattern word that is a prefix of a command word does not match; same-pattern rule); the walk:
-a ticket that conflicts with a holder is blocked and a non-conflicting ticket behind it takes the free slot; a ticket
-behind a blocked one that conflicts with it waits even with a slot free (no starvation); two tickets that conflict with
-each other and no holder → the first is served, the second blocked; a front ticket that conflicts with a holder is
-blocked and does not hold back non-conflicting normal ones; a hold ticket that conflicts with a later one does not block
-it; a late claim is never blocked and, once it holds, blocks a conflicting waiter; a holder with no argv blocks nothing;
-the rule removed → the blocked ticket is served on the next poll; races under `-race`: `TryTake` from two gates whose
-commands conflict, with two slots free → exactly one is served; a rule added between two polls is honoured by the
-second; would-wait for a command that conflicts with a holder / with a front ticket / with a back ticket (back: does not
-make it wait); CLI: missing reason refused, empty pattern refused, add twice → one rule, remove by index and by pair,
-two `add`s at once both land, comments and other tables kept; status JSON fields; mutation on the matcher (first word,
-any-order words), the blocked check (holder side and ticket-ahead side) and capacity not taken by a blocked ticket.
+Spec §5.3. Built on GQ's admit lock and `Snapshot` (the serving order) of one class; nothing here changes how ranks order
+the queue. Codex plan review 10-17 (task-mvb5792n-bnh6m5) found the first draft unsafe — rules across classes under two
+locks, and a taken slot whose record had no argv until later — so rules are per class and the take publishes its argv.
+0. **The take publishes the command (first, before any rule).** `TryTake(t)` writes the slot's placeholder record (#3049,
+   `writePlaceholder`) with the argv, cwd and session of the ticket's `WaiterInfo` (the ticket file already carries them,
+   `EnqueueFor`), still inside the class's admit lock; `TakeLate(info WaiterInfo)` does the same (the caller in `run.go`
+   passes the running command's argv). `SetHolder` later overwrites the record as today (atomic, temp + rename). Tests:
+   right after `TryTake`/`TakeLate` returns, `Held()` shows the argv (no window with an empty record); `-race` with a
+   reader polling `Held()` during takes.
+1. `commandWords(argv) []string` (spec §5.3 "the command's words"), cases spelled out, each with a table test: `npx`,
+   `pnpx`, `bunx`, `bun x` `<tool …>`; `pnpm|npm|yarn|bun exec|x <tool …>` with the runner options before the subcommand
+   skipped together with their values for `runnerValueOpts` (both `--opt value` and `--opt=value`), and a `--` right
+   after `exec`/`x` skipped; `pnpm <tool …>` when `Classify` knows the tool; the tool word (argv[0] and the one after a
+   runner) by `filepath.Base` (`/repo/node_modules/.bin/tsc`, `./node_modules/.bin/tsc`, `/opt/homebrew/bin/pnpm`);
+   `pnpm run <script>` and `npm run <script>` stay as they are (scripts are not opened). One function used only by the
+   matcher; `classifyRunner` is not rewritten in this PR (it may share `runnerValueOpts`).
+2. `matchesPrefix(pattern, words)`: the pattern's words equal the first len(pattern) command words (as
+   `InterceptConfig.Classify` matches a rule, but on words, after item 1). `Conflict{Class, A, B, Reason, By string; At
+   time.Time}`; `conflicts(rule, x, y)` is symmetric (A–B or B–A) and requires both commands to be of the rule's class.
+3. Storage: `conflicts.json` in the gate directory (`{"rules": [...]}`), read with the same tolerance as a rank file
+   (unreadable or malformed → no rules, shown as `conflicts_error` in status; a broken file never strands a waiter), and
+   read **inside the admit lock** by `Snapshot`, so the walk always uses the rules as they are at the take.
+4. The walk in `Snapshot`, after GQ's serving order, for one class: capacity = the pool's free slots exactly as `TryTake`
+   computes it today (`overHeld()` already counted, so an over-size holder is not counted twice); holders = every locked
+   slot's record, late and over-size included. For each ticket in order (hold tickets skipped): **blocked** if a holder of
+   the class or any earlier front/normal ticket conflicts with it under a rule of the class (record which, and the rule);
+   else **served** if capacity is left (and take one); else **waiting for capacity**. A blocked ticket takes no capacity.
+   `TryTake(t)` gives a slot exactly when the walk marks `t` served; otherwise `Take` carries `Blocked{With, Rule}` besides
+   GQ's `Ahead`/`Rank`. Late claims (`TakeLate`) do not consult rules (spec §5.3); their records are in the walk.
+5. The wait loop's line for a blocked waiter: `waits for <slot or ticket>: <a> × <b> (<reason>)`; it keeps `conflict_s`
+   like GQ's `held_s`; the decision record gains `conflict` (the last rule) and `conflict_s`.
+6. would-wait (GQ.5): a hypothetical new `normal` ticket at the end of the normal group, walked the same way.
+7. CLI `pdx gate conflict [--json]`, `pdx gate conflict add --class <c> "<a>" "<b>" --reason "<line>"`, `pdx gate conflict
+   remove <n | --class <c> "<a>" "<b>">`: take `conflicts.lock` (flock), re-read `conflicts.json`, resolve an index
+   against what was read, decide, write temp + rename, release; print what was found and what was left. Reason required
+   (one line, ≤ 200 bytes, no control characters); a pattern must have at least a tool word; class `heavy` or `light`; an
+   existing pair (same class, either order) → "already there", nothing written; a missing one → "no such rule". `by` =
+   the session id from the environment, else `person`; `at` = now.
+8. `pdx gate status [--json]`: the rules (index, class, a, b, reason, by, at), `conflicts_error`, and per waiter
+   `conflict_with` and `conflict_rule`.
+9. The watcher's notes (W3b.4 / the manual watcher): when a measured pair thrashes, add a rule with the measurement as its
+   reason and tell the person; remove it when the measurement no longer holds.
+Tests: `commandWords` table — every case of item 1, plus `npx --package typescript -- tsc -b` (value and `--`), `pnpm
+--filter spa exec tsc -b`, `pnpm --filter=spa exec tsc -b`, `npm exec -- tsc -b`, `yarn dlx tsc` (stays `yarn dlx tsc`:
+dlx is not exec), `pnpm exec ./node_modules/.bin/tsc -b`, `/opt/homebrew/bin/pnpm tsc -b`, `pnpm run build` (stays a
+script); `matchesPrefix` — `tsc -b` vs `tsc -b --force` (match) and `tsc --force -b` (no match), `vitest related` vs
+`vitest --project related run` (no match: not a prefix), a pattern longer than the command (no match), same-pattern rule,
+a rule of the other class (no effect); the walk — a ticket that conflicts with a holder is blocked and a non-conflicting
+ticket behind it takes the free slot; a ticket behind a blocked one that conflicts with it waits even with a slot free;
+two tickets that conflict with each other and no holder → the first is served, the second blocked; a front ticket that
+conflicts with a holder is blocked and does not hold back non-conflicting normal ones; a hold ticket that conflicts with a
+later one does not block it; an over-size holder (pool shrunk) still blocks and is not counted twice against capacity,
+with a blocked ticket ahead and a free normal one behind; a late claim is never blocked and, once taken, blocks a
+conflicting waiter; a `no_record` holder blocks nothing; a rule removed → the blocked ticket is served on the next poll.
+Races under `-race` (internal/gate): two gates whose commands conflict, two slots free, taking at once → exactly one is
+served (item 0 makes the second see the first's argv); `TakeLate` and a conflicting `TryTake` at once → the late claim
+holds and the waiter is blocked; two waiters that read the old (empty) rules, a rule added, then both `TryTake` → the
+rule holds (rules read inside the lock); `Snapshot` while ranks and rules change. would-wait for a command that conflicts
+with a holder / a front ticket / a back ticket (back: does not make it wait). CLI: missing reason refused, empty pattern
+refused, add twice → one rule, remove by index and by pair, two adds at once both land, add and remove of the same pair at
+once → the result matches the order the lock was taken and both print what they found; a malformed `conflicts.json` →
+no rules and `conflicts_error`; status JSON fields. Mutation on the prefix match, the runner-word skipping, the blocked
+check (holder side and ticket-ahead side), capacity not taken by a blocked ticket, and the argv in the take's placeholder.
 
 ### W4 — `pdx gate free <class>-<k>`
 
