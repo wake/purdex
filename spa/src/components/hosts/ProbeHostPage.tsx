@@ -38,7 +38,11 @@ export function ProbeHostPage({ probeId }: { probeId: string }) {
   }, [mine, ready, entry, isNewHere, probeId])
 
   const finish = (edit: ProbeEdit, ok: boolean) => { if (ok && edit.kind === 'remove') drafts().selectProbe(null) }
-  const save = (e: ProbeEntry, confirmChanged = false) => void run({ kind: 'upsert', entry: e }, 'form', { base: mine?.base, confirmChanged })
+  const save = async (e: ProbeEntry, confirmChanged = false) => {
+    const ok = await run({ kind: 'upsert', entry: e }, 'form', { base: mine?.base, confirmChanged })
+    // Saved: it is stored now, so the selection is no longer "new" (the begin-draft effect would open a second blank draft).
+    if (ok && isNewHere) drafts().selectProbe({ id: probeId, isNew: false })
+  }
   const remove = async () => {
     drafts().setDeleting(null)
     const edit: ProbeEdit = { kind: 'remove', id: probeId }
@@ -122,9 +126,9 @@ export function ProbeHostPage({ probeId }: { probeId: string }) {
         <section>
           <h3 className="text-sm font-semibold mb-2">{t('fleet_hosts.entry.section_style')}</h3>
           <ProbeHostForm key={mine.initial.id} draft={mine.draft} hostIds={hostIds} isNew={mine.isNew} busy={busy}
-            blocked={writable ? null : blocked} error={dialogError} onChange={(fn) => drafts().setProbeDraft(fn)} onSave={(e) => save(e)} onCancel={cancel}>
+            blocked={writable ? null : blocked} error={dialogError} onChange={(fn) => drafts().setProbeDraft(fn)} onSave={(e) => void save(e)} onCancel={cancel}>
             {changed && (
-              <button type="button" data-testid="probe-overwrite" disabled={busy || !writable} onClick={() => save(mine.draft, true)}
+              <button type="button" data-testid="probe-overwrite" disabled={busy || !writable} onClick={() => void save(mine.draft, true)}
                 className="px-3 py-1.5 rounded text-xs bg-status-warning text-text-inverse cursor-pointer disabled:opacity-50">{t('fleet_hosts.probe.overwrite')}</button>
             )}
           </ProbeHostForm>

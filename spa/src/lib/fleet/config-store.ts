@@ -242,7 +242,7 @@ function rowFromEntry(e: ProbeEntry, hostId: string): ProbeRow {
 const DEFAULT_WEIGHT = 'regular'
 
 /** Key order and hex case do not matter: the same colours compare equal however the daemon wrote them. */
-function canon(v: unknown): unknown {
+export function canon(v: unknown): unknown {
   if (typeof v === 'string') return /^#[0-9a-f]{6}$/i.test(v) ? v.toLowerCase() : v
   if (Array.isArray(v)) return v.map(canon)
   if (v && typeof v === 'object') {

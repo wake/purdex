@@ -8,7 +8,7 @@ import { MAX_PROBE_HOSTS, selectProbeGuarded, startNewProbe, useProbeEditor } fr
  * the host's own entry on the Hosts page, and 「新增觀察主機」. Nothing is edited here.
  */
 export function ProbeHostsSection() {
-  const { t, known, ready, failed, unreachable, writable } = useProbeEditor()
+  const { t, known, ready, failed, unreachable, writable, blocked } = useProbeEditor()
   const rows = useProbeRows()
   if (known.length === 0) return null
 
@@ -16,7 +16,7 @@ export function ProbeHostsSection() {
     <div data-testid="probe-hosts-section" className="mt-6">
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-sm font-semibold">{t('fleet_hosts.probe.title')}</h3>
-        <button type="button" data-testid="probe-add" disabled={!writable || rows.length >= MAX_PROBE_HOSTS} onClick={startNewProbe}
+        <button type="button" data-testid="probe-add" disabled={!writable || rows.length >= MAX_PROBE_HOSTS} title={blocked ?? undefined} onClick={() => startNewProbe()}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50">
           <Plus size={14} />{t('fleet_hosts.probe.add')}
         </button>

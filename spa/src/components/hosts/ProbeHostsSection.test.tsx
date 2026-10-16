@@ -108,6 +108,17 @@ describe('ProbeHostsSection (the short list)', () => {
       fireEvent.click(await screen.findByTestId('probe-row-aaaaaaaa'))
       expect(useFleetDraftStore.getState().selectedProbe?.id).toBe('aaaaaaaa')
     })
+    it('a draft with the same content in another key order is not dirty (colour toggled on and off)', async () => {
+      const confirm = vi.spyOn(window, 'confirm')
+      render(<ProbeHostsSection />)
+      const d = useFleetDraftStore.getState()
+      const initial = { id: 'bbbbbbbb', name: 'other', icon: '', icon_weight: '', colors: { console: { main: { color: '#fff' } } }, aliases: { ha: 'x' } }
+      d.beginProbe(initial as never, false, { revisions: {}, rows: {} })
+      d.setProbeDraft(() => ({ aliases: { ha: 'x' }, colors: { console: { main: { color: '#fff' } } }, icon_weight: '', icon: '', name: 'other', id: 'bbbbbbbb' }) as never)
+      fireEvent.click(await screen.findByTestId('probe-row-aaaaaaaa'))
+      expect(confirm).not.toHaveBeenCalled()
+      expect(useFleetDraftStore.getState().selectedProbe?.id).toBe('aaaaaaaa')
+    })
     it('does not ask when the draft is unchanged', async () => {
       const confirm = vi.spyOn(window, 'confirm')
       render(<ProbeHostsSection />)

@@ -1,6 +1,6 @@
 // F-2d: the connection check of a probe host — one line per fleet daemon host, two marks each.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react'
 
 const runProbeCheck = vi.fn()
 vi.mock('../../lib/fleet/probe-check', async (orig) => ({
@@ -111,6 +111,32 @@ describe('ProbeCheck', () => {
     await waitFor(() => expect(runProbeCheck).toHaveBeenCalledTimes(2))
     rerender(<ProbeCheck aliases={{ ...aliases, [A]: 'other-a' }} />)
     await waitFor(() => expect(runProbeCheck.mock.calls.some((c) => c[1] === 'other-a')).toBe(true))
+  })
+
+  it('a daemon that was offline at open and reconnects is checked then, without 重新檢查', async () => {
+    useHostStore.setState({ runtime: { [A]: { status: 'connected' }, [B]: { status: 'disconnected' } } as never })
+    runProbeCheck.mockResolvedValue(ans({ ssh: 'ok', measure: 'ok' }))
+    render(<ProbeCheck aliases={aliases} />)
+    await waitFor(() => expect(line(B).textContent).toContain('hb is offline'))
+    act(() => { useHostStore.setState({ runtime: { [A]: { status: 'connected' }, [B]: { status: 'connected' } } as never }) })
+    await waitFor(() => expect(mark(B, 'ssh')).toContain('✓'))
+    expect(runProbeCheck.mock.calls.some((c) => c[0] === B && c[1] === 'nas-b')).toBe(true)
+  })
+
+  it('a check still in flight when the aliases change cannot overwrite the newer answer', async () => {
+    const release: Array<(v: unknown) => void> = []
+    runProbeCheck.mockImplementation(() => new Promise((res) => { release.push(res) }))
+    const one = { [A]: 'old-a' }
+    const { rerender } = render(<ProbeCheck aliases={one} />)
+    await waitFor(() => expect(release.length).toBe(1))
+    rerender(<ProbeCheck aliases={{ [A]: 'new-a' }} />)
+    await waitFor(() => expect(release.length).toBe(2))
+    release[1](ans({ ssh: 'ok', measure: 'ok' }))
+    await waitFor(() => expect(mark(A, 'ssh')).toContain('✓'))
+    release[0](ans({ ssh: 'failed', error: 'auth' }))
+    await act(async () => { await Promise.resolve() })
+    expect(mark(A, 'ssh')).toContain('✓')
+    expect(mark(A, 'ssh')).not.toContain('✗')
   })
 
   it('comes out in zh-TW too', async () => {

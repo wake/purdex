@@ -1,8 +1,9 @@
 // F-2d: the 「觀察主機」 group of the Hosts page's sidebar.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, within, waitFor } from '@testing-library/react'
 import { HostSidebar } from './HostSidebar'
 import { useHostStore } from '../../stores/useHostStore'
+import { useFleetConfigStore } from '../../lib/fleet/config-store'
 import { useFleetStore } from '../../lib/fleet/store'
 import { clearContributions } from '../../lib/settings-contribution-registry'
 import { clearModuleRegistry } from '../../lib/module-registry'
@@ -12,6 +13,16 @@ vi.mock('../../lib/host-api', async (importOriginal) => {
   const actual = await importOriginal() as Record<string, unknown>
   return { ...actual, listSessions: vi.fn().mockResolvedValue([]) }
 })
+
+vi.mock('../../lib/fleet/config-api', () => ({
+  fetchFleetConfig: async () => ({
+    probe: { items: [], revision: 1, dropped: null, invalid: false },
+    fleet: { items: { order: [], peer_ssh_alias: '', enabled: true }, revision: 1, dropped: null, invalid: false },
+  }),
+  fetchSshAliases: async () => [],
+  putProbeHosts: vi.fn(),
+  putFleetRow: vi.fn(),
+}))
 
 const HOST_ID = 'test-host'
 const probe = (id: string, name: string, status: 'ok' | 'offline' | 'error') => ({
@@ -24,8 +35,9 @@ beforeEach(() => {
   useHostStore.setState({
     hosts: { [HOST_ID]: { id: HOST_ID, name: 'Test Host', ip: '1.2.3.4', port: 7860, order: 0 } },
     hostOrder: [HOST_ID],
-    runtime: {},
+    runtime: { [HOST_ID]: { status: 'connected' } } as never,
   })
+  useFleetConfigStore.getState().reset()
   useFleetStore.setState({
     byHost: { [HOST_ID]: { gen: 1, support: 'yes', term: 0 } } as never,
     snapshot: {
@@ -68,11 +80,24 @@ describe('HostSidebar — observed hosts', () => {
     expect(screen.getByTestId('probe-item-p1')).toBeTruthy()
   })
 
-  it('the + on the heading adds one', () => {
+  it('the + on the heading adds one', async () => {
     const onAddProbe = vi.fn()
     render(<HostSidebar {...props({ onAddProbe })} />)
-    fireEvent.click(screen.getByTestId('probe-group-add'))
+    const add = screen.getByTestId('probe-group-add') as HTMLButtonElement
+    await waitFor(() => expect(add.disabled).toBe(false))
+    fireEvent.click(add)
     expect(onAddProbe).toHaveBeenCalledTimes(1)
+  })
+
+  it('the + is disabled with the reason as its title while a daemon is unreachable', () => {
+    useHostStore.setState({ runtime: { [HOST_ID]: { status: 'disconnected' } } as never })
+    const onAddProbe = vi.fn()
+    render(<HostSidebar {...props({ onAddProbe })} />)
+    const add = screen.getByTestId('probe-group-add') as HTMLButtonElement
+    expect(add.disabled).toBe(true)
+    expect(add.title).toContain(HOST_ID === 'test-host' ? 'Test Host' : HOST_ID)
+    fireEvent.click(add)
+    expect(onAddProbe).not.toHaveBeenCalled()
   })
 
   it('a paired host still collapses when its selected row is clicked (unchanged)', () => {

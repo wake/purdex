@@ -10,6 +10,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { useFleetDaemons } from '../../lib/fleet/use-fleet-daemons'
 import { ProbeBadge, ProbeStatusDot } from './probe-rows'
 import { useProbeRows } from './use-probe-rows'
+import { MAX_PROBE_HOSTS, useProbeEditor } from './useProbeEditor'
 
 interface Props {
   selectedHostId: string
@@ -46,6 +47,9 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
   const runtime = useHostStore((s) => s.runtime)
   const lookOf = useHostLookResolver()
   const probeRows = useProbeRows()
+  // The `+` is off for the same reasons as the overview's 「新增觀察主機」 (a daemon unreachable, the list unread, the limit).
+  const { writable, blocked } = useProbeEditor()
+  const addProbeDisabled = !writable || probeRows.length >= MAX_PROBE_HOSTS
   const { known: fleetDaemons } = useFleetDaemons()
   const [probesOpen, setProbesOpen] = useState(true)
   // Every host is listed in every workbench; a hidden one only looks muted (H2d-2, user rule 1).
@@ -184,8 +188,8 @@ export function HostSidebar({ selectedHostId, selectedSubPage, onSelect, onAddHo
                 <span>{t('fleet_hosts.group')}</span>
               </button>
               {onAddProbe && fleetDaemons.length > 0 && (
-                <button type="button" data-testid="probe-group-add" title={t('fleet_hosts.probe.add')} aria-label={t('fleet_hosts.probe.add')} onClick={onAddProbe}
-                  className="p-1 rounded text-text-muted hover:text-text-secondary cursor-pointer"><Plus size={12} /></button>
+                <button type="button" data-testid="probe-group-add" title={addProbeDisabled && blocked ? blocked : t('fleet_hosts.probe.add')} aria-label={t('fleet_hosts.probe.add')} disabled={addProbeDisabled} onClick={onAddProbe}
+                  className="p-1 rounded text-text-muted hover:text-text-secondary cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"><Plus size={12} /></button>
               )}
             </div>
             {probesOpen && probeRows.map((row) => {

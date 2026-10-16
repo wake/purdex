@@ -229,6 +229,20 @@ describe('ProbeHostPage — a new probe host', () => {
     expect((putProbeHosts.mock.calls[0][1] as ProbeRow[]).map((r) => r.id)).toEqual([ID, sel.id])
   })
 
+  it('after the save the selection is no longer "new", so no second blank draft can open', async () => {
+    putProbeHosts.mockImplementation(async (id: string, items: ProbeRow[], rev: number) => { copies[id] = cfg(items, rev + 1) })
+    await act(async () => { await useFleetConfigStore.getState().loadMany([A, B]) })
+    startNewProbe()
+    const sel = useFleetDraftStore.getState().selectedProbe!
+    render(<ProbeHostPage probeId={sel.id} />)
+    await screen.findByTestId('probe-field-name')
+    typeName('new one')
+    pickAliases()
+    fireEvent.click(screen.getByTestId('probe-save'))
+    await waitFor(() => expect(useFleetDraftStore.getState().selectedProbe).toEqual({ id: sel.id, isNew: false }))
+    await waitFor(() => expect((screen.getByTestId('probe-field-name') as HTMLInputElement).value).toBe('new one'))
+  })
+
   it('an id that is nowhere says so', async () => {
     useFleetDraftStore.getState().selectProbe({ id: 'zzzzzzzz', isNew: false })
     render(<ProbeHostPage probeId="zzzzzzzz" />)

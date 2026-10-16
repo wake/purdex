@@ -62,10 +62,11 @@ export function ProbeCheck({ aliases }: { aliases: Record<string, string> }) {
     if (seq.current === my) setRunning(false)
   }, [])
 
-  const key = JSON.stringify([known, aliases])
+  const connected = known.map((id) => runtime[id]?.status === 'connected')
+  const key = JSON.stringify([known, aliases, connected])
   useEffect(() => {
     void run()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` covers the daemon list and the saved aliases
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `key` covers the daemon list, whether each is connected, and the saved aliases
   }, [key])
 
   return (
