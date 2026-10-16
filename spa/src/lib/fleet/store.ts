@@ -89,6 +89,11 @@ function recordHistory(hosts: Iterable<FleetHost>): void {
   for (const h of hosts) if (h.fast) fleetHistory.record(h.id, h.fast)
 }
 
+/** Ids that were in the fleet and are not any more: their history goes (a removed probe host, a changed daemon id). */
+function forgetGone(before: Iterable<string>, hosts: Record<string, FleetHost>): void {
+  for (const id of before) if (!(id in hosts)) fleetHistory.forget(id)
+}
+
 function toData(answer: Extract<FleetAnswer, { role: 'primary' }>): FleetData {
   const hosts: Record<string, FleetHost> = {}
   const order: string[] = []
@@ -123,14 +128,15 @@ export const useFleetStore = create<FleetState>((set, get) => {
       const e = live(hostId, gen)
       if (!e || e.support !== 'yes') return
       const next: HostEntry = { gen, support: 'yes', role: answer.role, term: 'term' in answer ? answer.term : 0 }
-      if (answer.role === 'primary') {
-        next.data = toData(answer)
+      if (answer.role === 'primary') next.data = toData(answer)
+      const byHost = { ...get().byHost, [hostId]: next }
+      const chosen = answer.role === 'primary' && chooseCurrent(byHost) === hostId
+      // Only the chosen primary feeds the history: the loser of a double claim is not the fleet.
+      if (chosen && next.data) {
+        forgetGone(get().snapshot?.order ?? [], next.data.hosts)
         recordHistory(next.data.order.map((id) => next.data!.hosts[id]))
       }
-      set((s) => {
-        const byHost = { ...s.byHost, [hostId]: next }
-        return derive(s, byHost, answer.role === 'primary' && chooseCurrent(byHost) === hostId)
-      })
+      set((s) => derive(s, byHost, chosen))
     },
 
     applyPush: (hostId, push) => {
@@ -162,8 +168,14 @@ export const useFleetStore = create<FleetState>((set, get) => {
         hosts[row.id] = merged
         touched.push(merged)
       }
+      // The push is the whole fleet (the daemon sends every host of its order each second): an id it leaves out is gone.
+      const listed = new Set(push.hosts.map((r) => r.id))
+      const gone = order.filter((id) => !listed.has(id))
+      for (const id of gone) delete hosts[id]
+      const kept = order.filter((id) => listed.has(id))
+      for (const id of gone) fleetHistory.forget(id)
       recordHistory(touched)
-      const data: FleetData = { term: Math.max(push.term, e.data.term), hosts, order }
+      const data: FleetData = { term: Math.max(push.term, e.data.term), hosts, order: kept }
       set((st) => derive(st, { ...st.byHost, [hostId]: { ...e, term: data.term, data } }, true))
       return unknown ? 'reread' : 'applied'
     },
@@ -184,9 +196,12 @@ export const useFleetStore = create<FleetState>((set, get) => {
     forgetHost: (hostId) => {
       if (!get().byHost[hostId]) return
       const byHost = { ...get().byHost }
+      const had = byHost[hostId].data?.order ?? []
       delete byHost[hostId]
       set((s) => {
         const d = derive(s, byHost, false)
+        // The ids only this host's fleet had (another primary may still list the rest).
+        forgetGone(had, d.snapshot && d.primaryHostId ? d.snapshot.hosts : {})
         const gens = { ...s.gens, [hostId]: (s.gens[hostId] ?? 0) + 1 }
         if (s.snapshot?.hostId !== hostId || d.primaryHostId) return { ...d, gens }
         return { ...d, gens, snapshot: null, waitingPrimary: false }

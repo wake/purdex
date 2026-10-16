@@ -82,4 +82,14 @@ describe('useMultiHostEventWs fleet=v1 (F-2a1)', () => {
     expect(handleFleetEvent).toHaveBeenCalledWith(HOST, value)
     view.unmount()
   })
+
+  it('a fleet.changed frame from a connection the host has since left is dropped', async () => {
+    const view = await connect()
+    // the host is re-pointed at another daemon: this socket's connection key no longer matches
+    act(() => { useHostStore.setState({ hosts: { [HOST]: { id: HOST, name: 'Host', ip: '9.9.9.9', port: 7860, order: 0 } } }) })
+    const value = JSON.stringify({ term: 2, primary: 'air26', hosts: [] })
+    act(() => { sockets[0].emit(JSON.stringify({ type: 'fleet.changed', session: '', value })) })
+    expect(handleFleetEvent).not.toHaveBeenCalled()
+    view.unmount()
+  })
 })

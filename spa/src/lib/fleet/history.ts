@@ -14,6 +14,7 @@ export interface HistoryPoint { t: number; avg: number; max: number }
 const RAW_MS = 10 * 60_000
 const BUCKET_MS = 10_000
 const BUCKETS_MS = 24 * 3600_000
+const FUTURE_TOLERANCE_MS = 5_000
 const RANGE_MS: Record<HistoryRange, number> = { '5m': 5 * 60_000, '1h': 3600_000, '6h': 6 * 3600_000, '24h': 24 * 3600_000 }
 
 interface Bucket { t: number; sum: number; n: number; max: number }
@@ -25,8 +26,14 @@ const emptyTrack = (): Track => ({ raw: [], buckets: [] })
 export class FleetHistory {
   private hosts = new Map<string, HostHistory>()
 
-  /** One 1 s reading of a host. A point not newer than the host's last one is ignored (a re-sent or out-of-order reading). */
-  record(hostId: string, fast: FleetFast): void {
+  /**
+   * One 1 s reading of a host. A point not newer than the host's last one is ignored (a re-sent or out-of-order reading).
+   * A reading dated more than a few seconds ahead of this App's clock (the daemon's clock is ahead) is taken as received now,
+   * so it cannot push `lastAt` ahead of the readings that follow, nor trim the history.
+   */
+  record(hostId: string, reading: FleetFast): void {
+    const now = Date.now()
+    const fast = reading.at > now + FUTURE_TOLERANCE_MS ? { ...reading, at: now } : reading
     let hh = this.hosts.get(hostId)
     if (!hh) {
       hh = { lastAt: -Infinity, items: Object.fromEntries(HISTORY_ITEMS.map((i) => [i, emptyTrack()])) as Record<HistoryItem, Track> }

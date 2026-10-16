@@ -76,4 +76,12 @@ describe('FleetHistory', () => {
     expect(set).not.toHaveBeenCalled()
     set.mockRestore()
   })
+
+  it('a reading dated far in the future does not shut out the normal ones that follow', () => {
+    const now = Date.now()
+    h.record('a', fast({ at: now - 2 * S, cpu: 1 }))
+    h.record('a', fast({ at: now + 3600_000, cpu: 2 })) // the daemon's clock is an hour ahead
+    h.record('a', fast({ at: now + S, cpu: 4 })) // clamped to the receive time, so the next normal one is newer
+    expect(h.series('a', 'cpu', '5m', now + 2 * S).map((p) => p.avg)).toEqual([1, 2, 4])
+  })
 })

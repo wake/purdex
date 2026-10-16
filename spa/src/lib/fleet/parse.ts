@@ -8,7 +8,7 @@ import {
 
 type Rec = Record<string, unknown>
 const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v)
-const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
 const str = (v: unknown): v is string => typeof v === 'string'
 /** RFC3339 → ms since epoch; anything else is null. */
 const time = (v: unknown): number | null => {
@@ -98,7 +98,7 @@ export function parseFleetPush(raw: unknown): FleetPush | null {
     if (!isRec(h) || !str(h.id) || h.id === '') continue
     const row: FleetPushHost = { id: h.id }
     if (h.fast === null) row.fast = null
-    else { const fast = parseFast(h.fast); if (fast) row.fast = fast }
+    else if (h.fast !== undefined) row.fast = parseFast(h.fast) // unreadable → null, like parseHost
     if (h.last_ok_at !== undefined) row.last_ok_at = time(h.last_ok_at)
     const slow = parseSlow(h.slow)
     if (slow) row.slow = slow

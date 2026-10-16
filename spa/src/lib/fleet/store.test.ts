@@ -3,7 +3,7 @@ import { fleetHostsView, useFleetStore } from './store'
 import { fleetHistory } from './history'
 import { useHostStore } from '../../stores/useHostStore'
 import { fast, host, primaryAnswer, standbyAnswer } from './__fixtures__/builders'
-import type { FleetPush } from './types'
+import type { FleetAnswer, FleetPush } from './types'
 import { parseFleetAnswer, parseFleetPush } from './parse'
 import primaryJson from './__fixtures__/api-fleet-primary.json'
 import changedJson from './__fixtures__/fleet-changed.json'
@@ -15,7 +15,7 @@ const st = () => useFleetStore.getState()
 const hostCfg = (id: string, daemonId: string) => ({ id, name: id, ip: '100.64.0.2', port: 7860, token: 't', order: 0, daemonId })
 
 /** Start a host's generation, mark it supporting and apply its answer, as fleet-support does. */
-function answer(hostId: string, a: ReturnType<typeof primaryAnswer> | ReturnType<typeof standbyAnswer>) {
+function answer(hostId: string, a: FleetAnswer) {
   const gen = st().begin(hostId)
   st().setSupport(hostId, gen, 'yes')
   st().applyFetched(hostId, gen, a)
@@ -115,15 +115,79 @@ describe('fleet.changed', () => {
   })
 
   it('a host the snapshot has not seen asks for a re-read unless the push carries the whole row', () => {
-    expect(st().applyPush(A, push(2, [{ id: 'd-new', fast: fast({ at: 2_000_000 }) }]))).toBe('reread')
+    const whole = [{ id: 'd-a', fast: fast({ at: 2_000_000 }) }, { id: 'd-b', fast: fast({ at: 2_000_000 }) }]
+    expect(st().applyPush(A, push(2, [...whole, { id: 'd-new', fast: fast({ at: 2_000_000 }) }]))).toBe('reread')
     expect(st().snapshot?.hosts['d-new']).toBeUndefined()
-    expect(st().applyPush(A, push(2, [{ id: 'p1', fast: fast({ at: 3_000_000 }), full: host('p1', { kind: 'probe' }) }]))).toBe('applied')
+    expect(st().applyPush(A, push(2, [...whole, { id: 'p1', fast: fast({ at: 3_000_000 }), full: host('p1', { kind: 'probe' }) }]))).toBe('applied')
     expect(st().snapshot?.order).toEqual(['d-a', 'd-b', 'p1'])
   })
 
   it('a push for a host with no supporting answer yet is ignored', () => {
     useFleetStore.getState().reset()
     expect(st().applyPush(A, push(2, [{ id: 'd-a', fast: fast() }]))).toBe('ignored')
+  })
+})
+
+describe('a host leaving the fleet (F-2a1 review)', () => {
+  const rows = (...ids: string[]): FleetPush['hosts'] => ids.map((id) => ({ id, fast: fast({ at: 2_000_000 }) }))
+
+  it('a fetched answer that no longer lists an id drops its history', () => {
+    answer(A, primaryAnswer(2, [host('d-a'), host('p1', { kind: 'probe' })]))
+    expect(fleetHistory.rawCount('p1')).toBe(1)
+    const gen = st().genOf(A)
+    st().applyFetched(A, gen, primaryAnswer(2, [host('d-a')]))
+    expect(fleetHistory.rawCount('p1')).toBe(0)
+    expect(fleetHistory.rawCount('d-a')).toBe(1)
+  })
+
+  it('a push is the whole fleet (push.go sends every host of `order`): an id missing from it is dropped with its history', () => {
+    answer(A, primaryAnswer(2, [host('d-a'), host('d-b')]))
+    expect(st().applyPush(A, push(2, rows('d-a')))).toBe('applied')
+    expect(st().snapshot?.order).toEqual(['d-a'])
+    expect(st().snapshot?.hosts['d-b']).toBeUndefined()
+    expect(fleetHistory.rawCount('d-b')).toBe(0)
+  })
+
+  it('forgetting a host forgets the ids of its fleet, unless another primary still lists them', () => {
+    answer(A, primaryAnswer(2, [host('d-a'), host('x1')]))
+    st().forgetHost(A)
+    expect(fleetHistory.rawCount('x1')).toBe(0)
+    answer(A, primaryAnswer(2, [host('d-a'), host('x1')]))
+    answer(B, primaryAnswer(5, [host('d-a')]))
+    st().forgetHost(A)
+    expect(fleetHistory.rawCount('d-a')).toBe(1)
+  })
+
+  it('only the chosen primary feeds the history', () => {
+    answer(B, primaryAnswer(5, [host('d-a', { fast: fast({ at: 5_000, cpu: 5 }) })]))
+    answer(A, primaryAnswer(2, [host('d-a', { fast: fast({ at: 6_000, cpu: 99 }) })]))
+    expect(fleetHistory.series('d-a', 'cpu', '5m', 6_000).map((p) => p.avg)).toEqual([5])
+  })
+})
+
+describe('term and malformed readings (F-2a1 review)', () => {
+  it('a fetched answer with a lower term for the same primary replaces the old one; later pushes compare with it', () => {
+    answer(A, primaryAnswer(7, [host('d-a')]))
+    st().applyFetched(A, st().genOf(A), primaryAnswer(1, [host('d-a')])) // state.json lost: term back to 1
+    expect(st().snapshot?.term).toBe(1)
+    expect(st().applyPush(A, push(1, [{ id: 'd-a', fast: fast({ at: 2_000_000, cpu: 9 }) }]))).toBe('applied')
+    expect(st().snapshot?.hosts['d-a'].fast?.cpu).toBe(9)
+  })
+
+  it('a push row with a null fast clears the reading (a malformed one is parsed to null)', () => {
+    answer(A, primaryAnswer(2, [host('d-a')]))
+    const p = parseFleetPush({ term: 2, primary: 'x', hosts: [{ id: 'd-a', fast: { cpu: 'high' } }] })!
+    st().applyPush(A, p)
+    expect(st().snapshot?.hosts['d-a'].fast).toBeNull()
+  })
+
+  it('an off answer is not a fleet and not primaryElsewhere', () => {
+    answer(A, { role: 'off', reason: 'own alias not in order' })
+    expect(st().primaryHostId).toBeNull()
+    expect(st().snapshot).toBeNull()
+    expect(st().primaryElsewhere).toBe(false)
+    expect(st().waitingPrimary).toBe(false)
+    expect(st().byHost[A].role).toBe('off')
   })
 })
 

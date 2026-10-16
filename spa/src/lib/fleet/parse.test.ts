@@ -1,7 +1,7 @@
 // The four JSON samples in __fixtures__/ are copied byte for byte from the daemon's testdata
 // (internal/module/fleet/testdata, F-1c2 #2982): when the daemon changes its wire format these go red.
 import { describe, it, expect } from 'vitest'
-import { parseFleetAnswer, parseFleetPush } from './parse'
+import { parseFast, parseFleetAnswer, parseFleetPush } from './parse'
 import { wireFast, fast, host } from './__fixtures__/builders'
 import primaryJson from './__fixtures__/api-fleet-primary.json'
 import standbyJson from './__fixtures__/api-fleet-standby.json'
@@ -91,7 +91,22 @@ describe('parseFleetAnswer', () => {
   })
 })
 
+describe('negative numbers (F-2a1 review)', () => {
+  it.each(['cpu', 'mem', 'disk', 'load', 'level', 'page_rate'])('a negative %s makes the reading unreadable', (k) => {
+    expect(parseFast({ ...wireFast(fast()), [k]: -1 })).toBeNull()
+  })
+  it.each(['disk_free_gb', 'load1', 'ncpu'])('a negative %s is treated like an invalid optional value (0)', (k) => {
+    expect(parseFast({ ...wireFast(fast()), [k]: -3 })).toMatchObject({ [k]: 0 })
+  })
+})
+
 describe('parseFleetPush', () => {
+  it('a malformed fast makes the row fast null, a missing one stays absent', () => {
+    const p = parseFleetPush({ term: 1, primary: 'a', hosts: [{ id: 'a', fast: { cpu: 'x' } }, { id: 'b' }] })
+    expect(p?.hosts[0].fast).toBeNull()
+    expect('fast' in p!.hosts[1]).toBe(false)
+  })
+
   it('drops a row without an id and refuses a payload without a term', () => {
     const p = parseFleetPush({ term: 4, primary: 'air26', hosts: [{ id: 'a', status: 'ok', error: null, last_ok_at: null, fast: wireFast(fast({ cpu: 9 })) }, { status: 'ok' }] })
     expect(p?.hosts.map((h) => h.id)).toEqual(['a'])
