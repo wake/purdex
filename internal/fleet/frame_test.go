@@ -170,6 +170,35 @@ func TestParseFastRefusesBadFrames(t *testing.T) {
 	}
 }
 
+// A remote `pdx gate status --json` from an older pdx has no Admission object; one that has it, saying "not held", is a
+// different thing. The frame tells them apart (gate.Status holds a value, which cannot).
+// Mutation gate: decode straight into gate.Status (presence lost) -> the "absent" and "not held" rows read alike -> red.
+func TestParseSlowTellsAnAbsentAdmissionFromNotHeld(t *testing.T) {
+	procs := "@@s\n@@top_cpu\n 12 30.5 2048 x\n@@top_mem\n 12 30.5 2048 x\n"
+	frame := func(extra string) string {
+		return linuxFrame("", procs+"@@gate\n{\"Heavy\": null, \"WaitHeavy\": 1"+extra+"}\n@@gate_end\n")
+	}
+	for name, c := range map[string]struct {
+		extra  string
+		known  bool
+		held   bool
+		reason string
+	}{
+		"older pdx: no object":    {"", false, false, ""},
+		"null is no object":       {`, "Admission": null`, false, false, ""},
+		"present, not held":       {`, "Admission": {"held": false}`, true, false, ""},
+		"present, held, a reason": {`, "Admission": {"held": true, "reason": "memory pressure level 2"}`, true, true, "memory pressure level 2"},
+	} {
+		s, ok := ParseSlow(frame(c.extra), t0)
+		require.True(t, ok, name)
+		require.NotNil(t, s.Gate, name)
+		assert.Equal(t, c.known, s.AdmissionKnown, name)
+		assert.Equal(t, c.held, s.Gate.Admission.Held, name)
+		assert.Equal(t, c.reason, s.Gate.Admission.Reason, name)
+		assert.Equal(t, 1, s.Gate.WaitHeavy, "the rest of the status still decodes: %s", name)
+	}
+}
+
 func TestParseSlowGateVariants(t *testing.T) {
 	procs := "@@s\n@@top_cpu\n 12  30.5 2048 Google Chrome\n 13 1.0 1024 sh\nnot a line\n@@top_mem\n 12 30.5 2048 Google Chrome\n"
 	frame := func(gate string) string { return linuxFrame("", procs+gate) }

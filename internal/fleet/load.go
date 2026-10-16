@@ -134,33 +134,66 @@ type QueueWaiter struct {
 	Place   int       `json:"place"`
 	Command string    `json:"command"`
 	Project string    `json:"project"`
+	Session string    `json:"session"`
 	Since   time.Time `json:"since"`
+}
+
+// QueueHolder is one command that holds a slot. It carries no token on purpose: the slot's Token is the secret of the
+// command's PDX_GATE_HELD, which lets a command below the holder pass through the gate, and must never leave the host.
+type QueueHolder struct {
+	Class   string    `json:"class"`
+	Slot    int       `json:"slot"`
+	Command string    `json:"command"`
+	Project string    `json:"project"`
+	Session string    `json:"session"`
+	Since   time.Time `json:"since"` // when the command started
+	PID     int       `json:"pid"`   // the gate's pid: the process that holds the slot's lock (the 名額鎖 column)
 }
 
 // Queue is the heavy-command queue of a daemon host (spec §5).
 type Queue struct {
-	HeavyUsed     int           `json:"heavy_used"`
-	HeavyTotal    int           `json:"heavy_total"`
-	LightUsed     int           `json:"light_used"`
-	LightTotal    int           `json:"light_total"`
-	Waiters       []QueueWaiter `json:"waiters"`
-	LongestWaitS  int           `json:"longest_wait_s"`
-	AdmissionHeld bool          `json:"admission_held"`
+	HeavyUsed       int           `json:"heavy_used"`
+	HeavyTotal      int           `json:"heavy_total"`
+	LightUsed       int           `json:"light_used"`
+	LightTotal      int           `json:"light_total"`
+	Holders         []QueueHolder `json:"holders"`
+	Waiters         []QueueWaiter `json:"waiters"`
+	LongestWaitS    int           `json:"longest_wait_s"`
+	AdmissionHeld   bool          `json:"admission_held"`
+	AdmissionReason string        `json:"admission_reason"`
+	HeavyPaused     bool          `json:"heavy_paused"`
+	LightPaused     bool          `json:"light_paused"`
 }
 
 // QueueSummary condenses a gate status. Slot totals and the admission rule come from the status' effective settings (an
-// older gate without them leaves the totals 0 and admission open). Admission held is worked out from the host's level and
-// page rate against its own effective admission.* settings, with the gate's own rule (gate.AdmissionConfig.Admit): the A line
-// may add an Admission field to the status later, which then takes over; until it lands this is the only source. Waiters
-// are first in line first, heavy then light, at most maxQueueShown; the longest wait counts all of them.
-func QueueSummary(st gate.Status, f LocalFast, now time.Time) Queue {
+// older gate without them leaves the totals 0 and admission open). A class whose slot setting is 0 is paused (the gate accepts
+// 0 from W3c; no setting, or one that does not read, is not a pause).
+//
+// admissionKnown says the status carried an Admission object (the local gate always does; a remote `pdx gate status --json`
+// from an older pdx does not, and an absent object must stay distinct from "not held", which a value struct cannot say). When
+// it did, its Held and Reason are the answer. When it did not, held is worked out from the host's level and page rate against
+// its own effective admission.* settings, with the gate's own rule (gate.AdmissionConfig.Admit), and the reason is empty.
+//
+// Holders are heavy then light, waiters first in line first, heavy then light, each at most maxQueueShown; the longest wait
+// counts all of the waiters.
+func QueueSummary(st gate.Status, admissionKnown bool, f LocalFast, now time.Time) Queue {
 	set := make(map[string]string, len(st.Settings))
 	for _, s := range st.Settings {
 		set[s.Key] = s.Value
 	}
-	q := Queue{HeavyUsed: len(st.Heavy), LightUsed: len(st.Light), Waiters: []QueueWaiter{}}
+	q := Queue{HeavyUsed: len(st.Heavy), LightUsed: len(st.Light), Holders: []QueueHolder{}, Waiters: []QueueWaiter{}}
 	q.HeavyTotal, _ = strconv.Atoi(set["slots.heavy"])
 	q.LightTotal, _ = strconv.Atoi(set["slots.light"])
+	q.HeavyPaused, q.LightPaused = pausedSlots(set, "slots.heavy"), pausedSlots(set, "slots.light")
+	for _, h := range append(append([]gate.Holder{}, st.Heavy...), st.Light...) {
+		if len(q.Holders) >= maxQueueShown {
+			break
+		}
+		q.Holders = append(q.Holders, QueueHolder{
+			Class: string(h.Class), Slot: h.Slot, Command: shorten(strings.Join(h.Argv, " ")),
+			Project: projectOf(h.Cwd), Session: h.Session, Since: h.Started, PID: h.PID,
+		})
+	}
 	var longest time.Duration
 	for _, w := range append(append([]gate.Waiter{}, st.QueueHeavy...), st.QueueLight...) {
 		if !w.Since.IsZero() {
@@ -169,15 +202,27 @@ func QueueSummary(st gate.Status, f LocalFast, now time.Time) Queue {
 		if len(q.Waiters) < maxQueueShown {
 			q.Waiters = append(q.Waiters, QueueWaiter{
 				Class: string(w.Class), Place: w.Place, Command: shorten(strings.Join(w.Argv, " ")),
-				Project: projectOf(w.Cwd), Since: w.Since,
+				Project: projectOf(w.Cwd), Session: w.Session, Since: w.Since,
 			})
 		}
 	}
 	q.LongestWaitS = int(longest.Seconds())
-	if cfg, ok := admissionOf(set); ok {
+	if admissionKnown {
+		q.AdmissionHeld, q.AdmissionReason = st.Admission.Held, st.Admission.Reason
+	} else if cfg, ok := admissionOf(set); ok {
 		q.AdmissionHeld = !cfg.Admit(gate.Pressure{Level: f.Level, PageRate: f.PageRate})
 	}
 	return q
+}
+
+// pausedSlots says the setting is there and reads as exactly 0.
+func pausedSlots(set map[string]string, key string) bool {
+	v, ok := set[key]
+	if !ok {
+		return false
+	}
+	n, err := strconv.Atoi(v)
+	return err == nil && n == 0
 }
 
 func shorten(s string) string {
