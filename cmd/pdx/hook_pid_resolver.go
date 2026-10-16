@@ -61,7 +61,7 @@ func resolveHookProvenance() hookProvenance {
 }
 
 func readProcessInfo(pid int) (procInfo, error) {
-	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "ppid=", "-o", "args=").Output()
+	out, err := outputCounted(exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "ppid=", "-o", "args="))
 	if err != nil {
 		return procInfo{}, err
 	}
@@ -91,7 +91,7 @@ func readProcessInfo(pid int) (procInfo, error) {
 }
 
 func readProcessStartTime(pid int) (string, error) {
-	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "lstart=").Output()
+	out, err := outputCounted(exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "lstart="))
 	if err != nil {
 		return "", err
 	}

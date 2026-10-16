@@ -87,3 +87,41 @@ func TestHandleEventCountsDenominator(t *testing.T) {
 		t.Errorf("hook.unknown = %d, want 1", got)
 	}
 }
+
+func tagCount(name string) int64 {
+	for _, s := range execstat.Tags() {
+		if s.Name == name {
+			return s.Total
+		}
+	}
+	return 0
+}
+
+// The forks a pdx hook reports with its event are counted under "hook-cli", once per fork; an event without the field (an older
+// hook) and a request refused as schema_invalid add none.
+func TestHandleEventCountsTheForksTheHookReports(t *testing.T) {
+	execstat.ResetTags()
+	t.Cleanup(execstat.ResetTags)
+	m := newTestModule(t)
+	m.registry.Register(agentcc.NewProvider(nil, nil, nil, nil))
+	post := func(body string) {
+		req := httptest.NewRequest("POST", "/api/agent/event", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		m.handleEvent(httptest.NewRecorder(), req)
+	}
+	body := func(extra string) string {
+		return `{"tmux_session":"work","tmux_pane_id":"%1","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"cc","sender_pid":4242,"sender_start_time":"Sun Apr 20 01:30:00 2026"` + extra + `}`
+	}
+	post(body(""))
+	if got := tagCount("hook-cli"); got != 0 {
+		t.Fatalf("an event without forks: %d", got)
+	}
+	post(body(`,"forks":3`))
+	if got := tagCount("hook-cli"); got != 3 {
+		t.Fatalf("an event reporting 3 forks: %d", got)
+	}
+	post(`{"tmux_session":"work","purdex_name":"PdxSessionStart","raw_event":{},"agent_type":"cc","forks":5}`)
+	if got := tagCount("hook-cli"); got != 3 {
+		t.Fatalf("a request refused as schema_invalid must not count its forks: %d", got)
+	}
+}
