@@ -56,6 +56,12 @@ func TestClassifyReason_Table(t *testing.T) {
 		// watch mode: never ends
 		{"vitest", tty, ClassNone, ReasonWatchMode},
 		{"vitest --watch", Env{}, ClassNone, ReasonWatchMode},
+		{"vitest related --run src/a.ts", Env{}, ClassHeavy, ReasonVitestRelated},
+		{"npx vitest related --run src/a.ts", Env{}, ClassHeavy, ReasonVitestRelated},
+		{"pnpm exec vitest related src/a.ts", Env{}, ClassHeavy, ReasonVitestRelated},
+		{"vitest run --related src/a.ts", Env{}, ClassHeavy, ReasonVitestRelated},
+		{"vitest run", Env{}, ClassHeavy, ReasonHeavy},
+		{"vitest run src/a.test.ts", Env{}, ClassLight, ReasonLight},
 		{"tsc --watch", Env{}, ClassNone, ReasonWatchMode},
 		{"tsc -b -w", Env{}, ClassNone, ReasonWatchMode},
 		{"pnpm tsc --watch", Env{}, ClassNone, ReasonWatchMode},

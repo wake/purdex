@@ -74,6 +74,7 @@ type Reason string
 const (
 	ReasonHeavy            Reason = "heavy"             // a whole run: takes a heavy slot
 	ReasonLight            Reason = "light"             // a narrowed run: takes a light slot
+	ReasonVitestRelated    Reason = "vitest_related"    // vitest related: the tests those files touch, which for a widely imported file is most of the suite (heavy)
 	ReasonPackaging        Reason = "packaging"         // a build that writes its output: never held back (user 10-15)
 	ReasonWatchMode        Reason = "watch_mode"        // a tool that watches and never ends (vitest watch, a dev server)
 	ReasonKnownPassthrough Reason = "known_passthrough" // a known tool's command the gate lets through without judging its cost (go version, pnpm install, composer install…); a label only
@@ -84,12 +85,25 @@ const (
 func ClassifyReason(argv []string, e Env) (Class, Reason) {
 	switch c := Classify(argv, e); c {
 	case ClassHeavy:
-		return c, ReasonHeavy
+		return c, heavyReason(argv, e)
 	case ClassLight:
 		return c, ReasonLight
 	default:
 		return c, noneReason(argv, e)
 	}
+}
+
+// heavyReason is vitest_related for a `vitest related` that was made heavy because of what it follows, heavy for the rest.
+func heavyReason(argv []string, e Env) Reason {
+	for i, a := range argv {
+		if filepath.Base(a) == "vitest" {
+			if _, r := vitestVerdict(argv[i+1:], e); r == ReasonVitestRelated {
+				return r
+			}
+			break
+		}
+	}
+	return ReasonHeavy
 }
 
 // Classify says how heavy a command is, from its argv (argv[0] may be a path). It is a pure function over the words
@@ -256,6 +270,7 @@ func vitestVerdict(args []string, e Env) (Class, Reason) {
 	explicit := 0    // +1 run once (--no-watch, --watch=false), -1 watch (--watch, -w); the last one wins
 	runFlag := false // --run / --run=true: vitest sets watch to false after everything else, whatever else was said
 	narrowed := false
+	related := false // the tests that import the named files, found through the import graph (#3024)
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -267,7 +282,9 @@ func vitestVerdict(args []string, e Env) (Class, Reason) {
 			runFlag = true
 		case vitestBoolFlag(a) != 0:
 			explicit = vitestBoolFlag(a)
-		case a == "--changed" || a == "--related" || strings.HasPrefix(a, "--changed=") ||
+		case a == "--related":
+			narrowed, related = true, true
+		case a == "--changed" || strings.HasPrefix(a, "--changed=") ||
 			a == "-t" || a == "--testNamePattern" || a == "--project" || a == "--shard":
 			narrowed = true
 			if (a == "-t" || a == "--testNamePattern" || a == "--project" || a == "--shard") && i+1 < len(args) {
@@ -291,6 +308,7 @@ func vitestVerdict(args []string, e Env) (Class, Reason) {
 		return ClassNone, ReasonKnownPassthrough
 	case "related":
 		narrowed = true // `vitest related <files>`: the tests those files touch
+		related = true
 	}
 	// --run wins over `watch`, `dev` and --watch (vitest sets watch to false when options.run is true, after the
 	// subcommand has set it), so it comes first; then a watch that was asked for; then what the place decides.
@@ -303,6 +321,12 @@ func vitestVerdict(args []string, e Env) (Class, Reason) {
 	}
 	if !once && e.watchesByDefault() {
 		return ClassNone, ReasonWatchMode // a person at a terminal: the default is watch
+	}
+	if related {
+		// How much it runs depends on where the files sit in the import graph, not on how many are named: for a file many others
+		// import it is close to the whole suite, which took 13 minutes on average on 10-16 beside two other vitests in the light
+		// pool. One full-width run at a time is shorter than several that share the cores (D7).
+		return ClassHeavy, ReasonVitestRelated
 	}
 	if narrowed {
 		return ClassLight, ReasonLight
