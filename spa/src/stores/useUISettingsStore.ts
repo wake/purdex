@@ -114,6 +114,19 @@ export function sanitizeHostBadgePrefs<T extends object>(data: T): T {
   return out as T
 }
 
+// ---------------------------------------------------------------------------
+// Fleet host cell indicator (「主機格指示」): what the sidebar's fleet host cell draws after its badge
+// ---------------------------------------------------------------------------
+
+/** `ring`: the composite load ring; `bars-pressure` / `bars-memory`: two bars, CPU % left and memory pressure / memory used % right. */
+export const FLEET_CELL_INDICATORS = ['ring', 'bars-pressure', 'bars-memory'] as const
+export type FleetCellIndicator = (typeof FLEET_CELL_INDICATORS)[number]
+export const FLEET_CELL_INDICATOR_DEFAULT: FleetCellIndicator = 'ring'
+
+export function isFleetCellIndicator(v: unknown): v is FleetCellIndicator {
+  return typeof v === 'string' && (FLEET_CELL_INDICATORS as readonly string[]).includes(v)
+}
+
 interface UISettings {
   /**
    * 收到第一筆 terminal data 後，延遲多久才移除 overlay 顯示畫面（ms）。
@@ -195,6 +208,10 @@ interface UISettings {
   setHostBadgeTabBarInset: (px: number) => void
   hostBadgeTabBarRadius: number
   setHostBadgeTabBarRadius: (px: number) => void
+
+  /** 「主機格指示」: the sidebar fleet host cell's indicator after the badge. Synced with the profile like the badge settings. */
+  fleetCellIndicator: FleetCellIndicator
+  setFleetCellIndicator: (v: FleetCellIndicator) => void
 }
 
 // persist hydrates synchronously INSIDE `create()` (purdexStorage is synchronous),
@@ -260,6 +277,11 @@ export const useUISettingsStore = create<UISettings>()(
         setHostBadgeTabBarBox: (px) => set({ hostBadgeTabBarBox: clampHostBadgeBox(px) }),
         setHostBadgeTabBarInset: (px) => set({ hostBadgeTabBarInset: clampHostBadgeInset(px) }),
         setHostBadgeTabBarRadius: (px) => set({ hostBadgeTabBarRadius: clampHostBadgeRadius(px) }),
+
+        fleetCellIndicator: FLEET_CELL_INDICATOR_DEFAULT,
+        setFleetCellIndicator: (v) => {
+          if (isFleetCellIndicator(v)) set({ fleetCellIndicator: v })
+        },
       }
     },
     {
@@ -334,6 +356,9 @@ export const useUISettingsStore = create<UISettings>()(
         }
         const badgeChanged = badgeKeys.some((k) => badgeSanitized[k] !== badgeCurrent[k])
         if (badgeChanged) setUISettingsState(badgeSanitized as Partial<UISettings>)
+
+        // The same repair for the fleet cell indicator: a stored or synced value this build does not know reads as the ring.
+        if (!isFleetCellIndicator(state.fleetCellIndicator)) setUISettingsState({ fleetCellIndicator: FLEET_CELL_INDICATOR_DEFAULT })
       },
     },
   ),

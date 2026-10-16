@@ -112,6 +112,22 @@ describe('TerminalSection', () => {
     expect(useUISettingsStore.getState().tabIndicatorStyle).toBe('iconDot')
   })
 
+  it('host cell indicator (主機格指示): three options under the sidebar badge setting, the ring by default, a click switches it', () => {
+    useUISettingsStore.setState({ fleetCellIndicator: 'ring' })
+    render(<TerminalSection />)
+    expect(screen.getByText('Host cell indicator')).toBeTruthy()
+    expect(screen.getByText('Ring: overall load; bars: CPU left, memory right')).toBeTruthy()
+    const buttons = within(screen.getByTestId('fleet-cell-indicator')).getAllByRole('button')
+    expect(buttons.map((b) => b.textContent)).toEqual(['Ring', 'Bars: CPU + memory pressure', 'Bars: CPU + memory used'])
+    expect(buttons[0].className).toContain('border-border-active')
+    fireEvent.click(buttons[1])
+    expect(useUISettingsStore.getState().fleetCellIndicator).toBe('bars-pressure')
+    fireEvent.click(buttons[2])
+    expect(useUISettingsStore.getState().fleetCellIndicator).toBe('bars-memory')
+    fireEvent.click(buttons[0])
+    expect(useUISettingsStore.getState().fleetCellIndicator).toBe('ring')
+  })
+
   it('updates ccIconVariant when a cc icon button is clicked', () => {
     render(<TerminalSection />)
     fireEvent.click(screen.getByRole('button', { name: /Star/ }))

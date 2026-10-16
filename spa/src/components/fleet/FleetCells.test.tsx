@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, within } from '@testing-library/react'
+import { render, screen, fireEvent, within, act } from '@testing-library/react'
 import { FleetCells } from './FleetCells'
+import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useFleetConfigStore } from '../../lib/fleet/config-store'
 import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
 import { useFleetStore } from '../../lib/fleet/store'
@@ -29,6 +30,7 @@ const FOUR = [
 ]
 
 beforeEach(() => {
+  useUISettingsStore.setState(useUISettingsStore.getInitialState())
   st().reset()
   useFleetConfigStore.getState().reset()
   fleetHistory.clear()
@@ -49,6 +51,21 @@ describe('FleetCells — the four states (storybook-style)', () => {
     expect(within(screen.getByTestId('load-ring-p1')).queryByTestId('context-ring-arc')).toBeNull()
     expect(screen.getByTestId('queue-badge-d-b')).toHaveTextContent('1')
     expect(screen.queryByTestId('queue-badge-d-a')).toBeNull()
+  })
+})
+
+describe('FleetCells — the indicator setting (主機格指示)', () => {
+  it('switching it redraws every cell, wide and narrow, with no remount needed', () => {
+    answer(A, primaryAnswer(1, FOUR))
+    const { rerender } = render(<FleetCells variant="wide" />)
+    expect(screen.getAllByTestId(/^load-ring-/)).toHaveLength(4)
+    act(() => useUISettingsStore.getState().setFleetCellIndicator('bars-pressure'))
+    expect(screen.queryAllByTestId(/^load-ring-/)).toHaveLength(0)
+    expect(screen.getAllByTestId(/^load-bars-/)).toHaveLength(4)
+    rerender(<FleetCells variant="narrow" />)
+    expect(screen.getAllByTestId(/^load-bars-/)).toHaveLength(4)
+    act(() => useUISettingsStore.getState().setFleetCellIndicator('ring'))
+    expect(screen.getAllByTestId(/^load-ring-/)).toHaveLength(4)
   })
 })
 

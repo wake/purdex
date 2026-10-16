@@ -54,6 +54,9 @@ type Holder struct {
 	// not before it started; Over (set when read, never stored) says it is beyond the size of the pool.
 	Late bool `json:"late,omitempty"`
 	Over bool `json:"over,omitempty"`
+	// NoRecord (set when read, never stored): the slot is locked but there is no record of who holds it, so Started is zero and PID
+	// is 0. It is a slot held by a process that inherited the lock after the gate released it; nothing is known to measure (#3049).
+	NoRecord bool `json:"no_record,omitempty"`
 	// Token is the secret of the slot's PDX_GATE_HELD: a command below the holder presents it to pass through.
 	Token string `json:"token,omitempty"`
 	// Orphaned (set when read, never stored): the slot is locked but the gate that took it is gone; the lock lives on
@@ -410,13 +413,33 @@ func (p *Pool) TryTake(t *Ticket) (slot *Slot, ahead int, err error) {
 	// keep the lowest free slot; the other probes are given back
 	closeAll(free[1:])
 	// The lock is ours now, so a record left by an earlier holder (kept because a child of it still held the lock) is stale:
-	// remove it before anything else, or a command still carrying the old token could pass the nesting check against our
-	// lock until SetHolder writes ours.
-	if err := os.Remove(p.recordPath(freeK[0])); err != nil && !errors.Is(err, os.ErrNotExist) {
-		closeAll(free[:1]) // the lock is let go again: a record that cannot be removed must not stay beside a lock we hand out
+	// replace it before anything else, or a command still carrying the old token could pass the nesting check against our
+	// lock until SetHolder writes ours. The replacement says who took the slot and when (no token): the gate has work to do
+	// before it writes the holder, and a slot with no record in that time read as a holder of no pid and no start (#3049).
+	if err := p.writePlaceholder(freeK[0]); err != nil {
+		closeAll(free[:1]) // the lock is let go again: a record that cannot be replaced must not stay beside a lock we hand out
 		return nil, ahead, dirError(err)
 	}
 	return &Slot{Class: p.Class, K: freeK[0], f: free[0], rec: p.recordPath(freeK[0])}, ahead, nil
+}
+
+// writePlaceholder replaces the record of slot k, whatever it holds, by one that names this process and the moment: atomically, with
+// no token, so that nothing can pass the nesting check on it and a reader never meets a locked slot with no record.
+func (p *Pool) writePlaceholder(k int) error {
+	now := time.Now()
+	if p.Now != nil {
+		now = p.Now()
+	}
+	b, err := json.Marshal(Holder{Class: p.Class, Slot: k, PID: os.Getpid(), Started: now})
+	if err != nil {
+		return err
+	}
+	rec := p.recordPath(k)
+	tmp := rec + "." + strconv.Itoa(os.Getpid())
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, rec)
 }
 
 // overHeld is how many slots beyond the pool's size are held now.
@@ -469,7 +492,7 @@ func (p *Pool) TakeLate() (*Slot, error) {
 			_ = f.Close()
 			continue
 		}
-		if err := os.Remove(p.recordPath(k)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := p.writePlaceholder(k); err != nil {
 			_ = f.Close()
 			return nil, dirError(err)
 		}
@@ -498,10 +521,9 @@ func (p *Pool) Held() []Holder {
 		if st == lockGot {
 			continue
 		}
-		h := Holder{Class: p.Class, Slot: k}
-		if b, err := os.ReadFile(p.recordPath(k)); err == nil {
-			_ = json.Unmarshal(b, &h)
-			h.Class, h.Slot = p.Class, k
+		h := Holder{Class: p.Class, Slot: k, NoRecord: true}
+		if b, err := os.ReadFile(p.recordPath(k)); err == nil && json.Unmarshal(b, &h) == nil {
+			h.Class, h.Slot, h.NoRecord = p.Class, k, false
 			h.Orphaned = h.PID > 0 && !pidAlive(h.PID)
 		}
 		h.Over = k > p.Size

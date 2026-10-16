@@ -11,6 +11,22 @@ import { isRefShownNow } from './shown-hosts'
 import { currentTeamState } from './team/team-state'
 import { openTeamSeat } from './team/team-actions'
 import type { Session } from './host-api'
+import type { PaneContent } from '../types/tab'
+
+/**
+ * The pane content that attaches to `session` on `hostId`. Shared by every opener (and by the watcher area's guardian tab).
+ * The generation comes from the session payload being opened, never from ambient host state (spec §4.5).
+ */
+export function tmuxSessionContent(hostId: string, session: Session): Extract<PaneContent, { kind: 'tmux-session' }> {
+  return {
+    kind: 'tmux-session',
+    hostId,
+    sessionCode: session.code,
+    mode: 'terminal',
+    cachedName: session.name,
+    tmuxInstance: session.tmux_instance ?? '',
+  }
+}
 
 /**
  * Open a new tab attached to `session` on `hostId`, insert it into a workspace (the active one, else the first, else
@@ -38,16 +54,7 @@ export interface TabPlacement {
 /** `openSessionTab` without the team redirect: always a NEW tab, optionally at a given place. */
 export function openSessionTabAt(hostId: string, session: Session, place?: TabPlacement): string | null {
   if (!isRefShownNow(hostId)) return null
-  const tabId = useTabStore.getState().openSingletonTab({
-    kind: 'tmux-session',
-    hostId,
-    sessionCode: session.code,
-    mode: 'terminal',
-    cachedName: session.name,
-    // Generation from the session payload we are opening, never from
-    // ambient host state (spec §4.5).
-    tmuxInstance: session.tmux_instance ?? '',
-  })
+  const tabId = useTabStore.getState().openSingletonTab(tmuxSessionContent(hostId, session))
   useWorkspaceStore.getState().insertTab(tabId, place?.workspaceId, place?.afterTabId)
   // `insertTab` does nothing for a workspace that is gone: a tab no workspace owns is unreachable, so it goes where a tab
   // with no place goes (the active workspace, else the first, else Unsorted).

@@ -122,6 +122,20 @@ describe('fleet.changed', () => {
     expect(st().snapshot?.order).toEqual(['d-a', 'd-b', 'p1'])
   })
 
+  it('a push with the whole row changes an existing host\'s look and keeps its fast / slow merge', () => {
+    answer(A, primaryAnswer(2, [host('d-a'), host('p1', { kind: 'probe', name: 'air19', icon: 'Desktop' })]))
+    const before = fleetHostsView(st().snapshot, useHostStore.getState()).find((h) => h.id === 'p1')
+    expect(before?.icon).toBe('Desktop')
+    const full = host('p1', { kind: 'probe', name: 'air19', icon: 'Laptop' })
+    expect(st().applyPush(A, push(2, [{ id: 'd-a', fast: fast({ at: 2_000_000 }) }, { id: 'p1', fast: fast({ at: 2_000_000, cpu: 7 }), full }]))).toBe('applied')
+    const after = fleetHostsView(st().snapshot, useHostStore.getState()).find((h) => h.id === 'p1')
+    expect(after?.icon).toBe('Laptop')
+    expect(st().snapshot?.hosts.p1.fast?.cpu).toBe(7)
+    // a later push without it keeps the new look
+    st().applyPush(A, push(2, [{ id: 'd-a', fast: fast({ at: 3_000_000 }) }, { id: 'p1', fast: fast({ at: 3_000_000 }) }]))
+    expect(st().snapshot?.hosts.p1.icon).toBe('Laptop')
+  })
+
   it('a push for a host with no supporting answer yet is ignored', () => {
     useFleetStore.getState().reset()
     expect(st().applyPush(A, push(2, [{ id: 'd-a', fast: fast() }]))).toBe('ignored')
