@@ -233,7 +233,7 @@ The fleet module's role is read by the measuring side through `fleet.RoleView` (
     `console`): the light layer behind, the icon in the middle layer, the main layer on hover. A probe host's look comes
     from the wire. Offline: the badge at 40 % opacity.
   - **The queue badge** (daemon hosts, only while someone waits; not while offline) on the host badge's top-right corner,
-    ≈ 11 px, the count in 8 px semibold tabular figures, a 1 px ring in the sidebar's background colour. Colour: neutral
+    12 px, the count in 8 px semibold tabular figures, a 1 px ring in the sidebar's background colour. Colour: neutral
     grey while the longest wait is under 2 min; `status-warning` from 2 min or 3 waiters; `status-error` while admission is
     held.
   - **The composite load ring**: the App's `ContextRing` (the member status ring) at the badge's size — 2.5 stroke,
@@ -243,7 +243,8 @@ The fleet module's role is read by the measuring side through `fleet.RoleView` (
 - Tooltip: name, the zone word, the five values, the queue summary (daemon hosts), and 「等待主方」 when stale.
 - Click: opens the watcher area on that host's tab (watcher area spec).
 - **Narrow activity bar**: the cells stacked vertically (badge + ring, 2 px apart), same click and tooltip.
-- The badge is one component (`CountBadge`, ≈ 11 px, 8 px figures, ring in the background colour); the watcher shield in
+- The badge is one component (`CountBadge`, 12 px — an even height, so the 6 px figures sit in the middle — 8 px figures,
+  ring in the background colour); the watcher shield in
   the HomeRow reuses it (watcher area spec, not this one).
 - **Click, until the watcher area lands**: a daemon host's cell opens that host on the Hosts page; a probe host's opens the
   Hosts page's probe-host section with that row highlighted once.
