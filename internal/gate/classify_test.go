@@ -95,7 +95,30 @@ func TestClassify_Table(t *testing.T) {
 		{"tsc -b -p spa", ClassHeavy}, // -b wins: it builds the references
 		{"tsc --build --project spa", ClassHeavy},
 		{"tsc -p spa --version", ClassNone},
-		{"tsc --watch", ClassNone}, // never ends (#2989)
+		// a request for the tool's help or version runs nothing worth a slot (#3043)
+		{"claude plugin test --help", ClassNone},
+		{"claude plugin test -h", ClassNone},
+		{"go test -h", ClassNone},
+		{"go test ./... --help", ClassNone},
+		{"go help test", ClassNone},
+		{"vitest --help", ClassNone},
+		{"vitest run --version", ClassNone},
+		{"npx vitest related --help", ClassNone},
+		{"pnpm run build --help", ClassNone},
+		{"pnpm help", ClassNone},
+		{"npm help install", ClassNone},
+		{"composer help", ClassNone},
+		{"vendor/bin/phpunit -h", ClassNone},
+		{"tsc -b --help", ClassNone},
+		{"make test --help", ClassNone},
+		// ... but not a help word that is something else
+		{"go test ./... -args -h", ClassHeavy}, // after -args it goes to the test binary, which runs
+		{"go test ./... -args --help", ClassHeavy},
+		{"vitest run -t --help", ClassLight},             // the value of -t
+		{"claude plugin test -- --help", ClassHeavy},     // after -- it is the runner's
+		{"claude plugin test --file --help", ClassLight}, // --file's value
+		{"pnpm run help", ClassNone},                     // a script of the project called help: unknown, not info (no class)
+		{"tsc --watch", ClassNone},                       // never ends (#2989)
 		{"tsc -w", ClassNone},
 		{"tsc --Watch", ClassNone}, // tsc lowercases option names
 		{"tsc -W", ClassNone},

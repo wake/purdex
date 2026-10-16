@@ -76,6 +76,7 @@ const (
 	ReasonLight            Reason = "light"             // a narrowed run: takes a light slot
 	ReasonVitestRelated    Reason = "vitest_related"    // vitest related: the tests those files touch, which for a widely imported file is most of the suite (heavy)
 	ReasonPackaging        Reason = "packaging"         // a build that writes its output: never held back (user 10-15)
+	ReasonInfoOnly         Reason = "info_only"         // --help, -h, --version or the help subcommand: the tool prints a text and runs nothing (#3043)
 	ReasonWatchMode        Reason = "watch_mode"        // a tool that watches and never ends (vitest watch, a dev server)
 	ReasonKnownPassthrough Reason = "known_passthrough" // a known tool's command the gate lets through without judging its cost (go version, pnpm install, composer install…); a label only
 	ReasonUnknown          Reason = "unknown"           // a tool or script the table does not know, or a command line it cannot read
@@ -126,11 +127,53 @@ func heavyReason(argv []string, e Env) Reason {
 	return ReasonHeavy
 }
 
+// helpValueFlags are the flags of the classified tools whose next word is a value: a help word in that place is the value, not a request.
+var helpValueFlags = map[string]bool{
+	"-run": true, "-skip": true, "-tags": true, "-t": true, "--testNamePattern": true, "--project": true, "--shard": true,
+	"--reporter": true, "--file": true, "--filter": true, "--config": true,
+}
+
+// infoOnly says whether the command only asks the tool for its help or version (#3043): `--help`, `-h`, `--version` among its words, or a
+// `help` subcommand of a runner or of go. Such a command runs nothing worth a slot, whatever the rest of the line says. A word after `--`
+// or `-args` belongs to what the tool runs, so it is not looked at (`go test -args -h` runs the test binary); nor is the value of a flag
+// that takes one (`vitest -t --help`).
+func infoOnly(argv []string) bool {
+	if len(argv) < 2 {
+		return false
+	}
+	switch filepath.Base(argv[0]) {
+	case "go", "vitest", "tsc", "pnpm", "pnpx", "npx", "yarn", "npm", "bunx", "bun", "make", "composer", "phpunit", "pest", "claude", "vite", "electron-vite", "electron-builder":
+	default:
+		return false
+	}
+	switch filepath.Base(argv[0]) {
+	case "go", "pnpm", "npm", "yarn", "bun", "composer":
+		if argv[1] == "help" {
+			return true
+		}
+	}
+	for i := 1; i < len(argv); i++ {
+		a := argv[i]
+		switch {
+		case a == "--" || a == "-args" || a == "--args":
+			return false
+		case a == "--help" || a == "-h" || a == "--version":
+			return true
+		case helpValueFlags[a]:
+			i++ // its value, whatever it looks like
+		}
+	}
+	return false
+}
+
 // Classify says how heavy a command is, from its argv (argv[0] may be a path). It is a pure function over the words
 // the shims hand over: go, pnpm/npx/yarn/npm, vitest, tsc, make, composer and the PHP test runners phpunit and pest. Anything else is none and passes through. A
 // command that cannot be read is none: the gate fails open on what it does not understand.
 func Classify(argv []string, e Env) Class {
 	if len(argv) == 0 {
+		return ClassNone
+	}
+	if infoOnly(argv) {
 		return ClassNone
 	}
 	args := argv[1:]
