@@ -6,7 +6,7 @@ import { createTab } from '../../../types/tab'
 import { watchHostTabId } from '../../../lib/watch/ids'
 import { buildTabsSection } from '../../../lib/profile/sections'
 import { applyTabs } from '../../../lib/profile/applier'
-import { ABSENT_REMOVE_MS, createWatchReconciler, startWatchArea } from './watch-area'
+import { ABSENT_REMOVE_MS, createWatchReconciler, startWatchArea, leaveAreaForForeignActiveTab } from './watch-area'
 
 const ws = () => useWorkspaceStore.getState()
 const watchTabs = () => ws().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)?.tabs ?? []
@@ -165,6 +165,27 @@ describe('Profile Sync round trip', () => {
     expect(seen[2]).toBe(seen[3]) // stable
     expect(orderOf(A)).toEqual(orderOf(B))
     expect(new Set(orderOf(A))).toEqual(new Set(['a', 'b', 'c'].map(watchHostTabId)))
+  })
+})
+
+describe('leaving the area', () => {
+  it('a session tab that becomes active while the area is shown takes the user back to its workspace', () => {
+    const a = ws().workspaces.find((w) => w.id !== WATCH_WORKSPACE_ID)!
+    const tab = createTab({ kind: 'new-tab' })
+    useTabStore.getState().addTab(tab)
+    ws().setActiveWorkspace(WATCH_WORKSPACE_ID)
+    ws().insertTab(tab.id) // redirected to the return workspace
+    useTabStore.getState().setActiveTab(tab.id)
+    leaveAreaForForeignActiveTab()
+    expect(ws().activeWorkspaceId).toBe(a.id)
+  })
+
+  it('an area tab keeps the area', () => {
+    createWatchReconciler().reconcile(view(['a']), T0)
+    ws().setActiveWorkspace(WATCH_WORKSPACE_ID)
+    useTabStore.getState().setActiveTab(watchHostTabId('a'))
+    leaveAreaForForeignActiveTab()
+    expect(ws().activeWorkspaceId).toBe(WATCH_WORKSPACE_ID)
   })
 })
 

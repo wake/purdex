@@ -6,6 +6,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import App from './App'
 import { useConfigStore } from './stores/useConfigStore'
+import { useWorkspaceStore } from './stores/useWorkspaceStore'
+import { useI18nStore } from './stores/useI18nStore'
+import { WATCH_WORKSPACE_ID } from './features/workspace/store'
+
+const activityBarProps = vi.hoisted(() => vi.fn())
 
 vi.mock('./features/workspace/lib/icon-path-cache', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./features/workspace/lib/icon-path-cache')>()),
@@ -14,7 +19,7 @@ vi.mock('./features/workspace/lib/icon-path-cache', async (importOriginal) => ({
 vi.mock('./components/TitleBar', () => ({
   TitleBar: ({ title }: { title: string }) => <div data-testid="app-title-bar">{title}</div>,
 }))
-vi.mock('./components/ActivityBar', () => ({ ActivityBar: () => null }))
+vi.mock('./components/ActivityBar', () => ({ ActivityBar: (props: unknown) => { activityBarProps(props); return null } }))
 vi.mock('./components/TabBar', () => ({ TabBar: () => null }))
 vi.mock('./components/TabContent', () => ({ TabContent: () => null }))
 vi.mock('./components/StatusBar', () => ({ StatusBar: () => null }))
@@ -95,5 +100,28 @@ describe('App — title bar', () => {
     setElectronApi(true)
     render(<App />)
     expect(screen.getByTestId('app-title-bar')).toBeInTheDocument()
+  })
+})
+
+describe('App — the watcher area is not a workspace the UI lists', () => {
+  beforeEach(() => {
+    activityBarProps.mockClear()
+    useWorkspaceStore.getState().reset()
+  })
+
+  it('the bars get the workspaces without the area, and the title says 守門員專區 while it is shown', () => {
+    const a = useWorkspaceStore.getState().addWorkspace('Alpha')
+    useWorkspaceStore.getState().ensureWatchWorkspace()
+    render(<App />)
+    const last = activityBarProps.mock.calls.at(-1)![0] as { workspaces: { id: string }[] }
+    expect(last.workspaces.map((w) => w.id)).toEqual([a.id])
+    expect(screen.getByTestId('app-title-bar')).toHaveTextContent('Alpha')
+
+    useWorkspaceStore.getState().setActiveWorkspace(WATCH_WORKSPACE_ID)
+    activityBarProps.mockClear()
+    render(<App />)
+    expect(screen.getAllByTestId('app-title-bar').at(-1)).toHaveTextContent(useI18nStore.getState().t('watch.area.name'))
+    const again = activityBarProps.mock.calls.at(-1)![0] as { workspaces: { id: string }[] }
+    expect(again.workspaces.map((w) => w.id)).toEqual([a.id])
   })
 })

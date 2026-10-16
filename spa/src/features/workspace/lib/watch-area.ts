@@ -111,6 +111,20 @@ export function createWatchReconciler(): WatchReconciler {
   return { reconcile }
 }
 
+/**
+ * Selecting any other session tab leaves the area (spec §3): while `watch` is the active workspace and the active tab
+ * belongs to another one — a session opened, a terminal link, ⌘T (whose tab `insertTab` sent to the return workspace) —
+ * that workspace becomes the active one. An area tab, or a tab no workspace owns yet, changes nothing.
+ */
+export function leaveAreaForForeignActiveTab(): void {
+  const ws = useWorkspaceStore.getState()
+  if (ws.activeWorkspaceId !== WATCH_WORKSPACE_ID) return
+  const tabId = useTabStore.getState().activeTabId
+  if (tabId === null || isWatchTabId(tabId)) return
+  const owner = ws.findWorkspaceByTab(tabId)
+  if (owner && owner.id !== WATCH_WORKSPACE_ID) ws.setActiveWorkspace(owner.id)
+}
+
 /** The fleet store's view for the reconcile: no snapshot → null; no current primary counts as stale. */
 export function readFleetView(): WatchFleetView | null {
   const s = useFleetStore.getState()
@@ -132,6 +146,7 @@ export function startWatchArea(): () => void {
     if (running) return // our own writes re-enter through the subscriptions
     if (!useWorkspaceStore.getState().workspaces.some((w) => w.id === WATCH_WORKSPACE_ID)) return
     if (!readMasterWorld().settled) return
+    leaveAreaForForeignActiveTab()
     running = true
     let next: number | null = null
     try {

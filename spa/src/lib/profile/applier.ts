@@ -33,6 +33,7 @@ import {
   isSyncableWorkspaceId,
 } from './sections'
 import type { SettingsBuildInput } from './sections'
+import { WATCH_WORKSPACE_ID } from '../watch/ids'
 import type {
   SectionKind,
   SettingsPayload,
@@ -154,7 +155,7 @@ export function applyWorkspaces(local: WorkspacesSlice, incoming: WorkspacesPayl
   const deviceLocal = [...localById.values()].filter((w) => !isSyncableWorkspaceId(w.id))
   const workspaces = [...order.map((id) => workspaceFrom(id, incoming.workspaces[id], localById.get(id))), ...deviceLocal]
   const kept = new Set(workspaces.map((w) => w.id))
-  const active = local.activeWorkspaceId !== null && kept.has(local.activeWorkspaceId) ? local.activeWorkspaceId : (workspaces[0]?.id ?? null)
+  const active = local.activeWorkspaceId !== null && kept.has(local.activeWorkspaceId) ? local.activeWorkspaceId : (workspaces.find((w) => w.id !== WATCH_WORKSPACE_ID)?.id ?? null)
   return {
     next: { workspaces, activeWorkspaceId: active },
     addedWorkspaceIds: order.filter((id) => !localById.has(id)),

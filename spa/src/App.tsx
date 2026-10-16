@@ -10,6 +10,8 @@ import { TitleBar } from './components/TitleBar'
 import { useConfigStore } from './stores/useConfigStore'
 import { useTabStore } from './stores/useTabStore'
 import { useWorkspaceStore } from './stores/useWorkspaceStore'
+import { visibleWorkspaces, WATCH_WORKSPACE_ID } from './features/workspace/store'
+import { useI18nStore } from './stores/useI18nStore'
 import { useHostStore } from './stores/useHostStore'
 import { useLayoutStore } from './stores/useLayoutStore'
 import { useMultiHostEventWs } from './hooks/useMultiHostEventWs'
@@ -89,6 +91,9 @@ export default function App() {
 
   // Reconcile workspaceExpanded only when the id set actually changes
   // (workspace rename / tab reorder replace the `workspaces` ref but preserve ids).
+  // The watcher area is a workspace the UI never lists: the bars, Home, the title and the new-workspace name see the rest.
+  const listedWorkspaces = useMemo(() => visibleWorkspaces(workspaces), [workspaces])
+  const t = useI18nStore((s) => s.t)
   const wsIdsKey = useMemo(() => workspaces.map((w) => w.id).join(','), [workspaces])
   useEffect(() => {
     useLayoutStore.getState().reconcileWorkspaceExpanded(wsIdsKey ? wsIdsKey.split(',') : [])
@@ -98,7 +103,9 @@ export default function App() {
 
   // --- Derived state ---
   const activeTab = activeTabId ? tabs[activeTabId] : undefined
-  const titleText = activeWorkspaceId ? (workspaces.find(w => w.id === activeWorkspaceId)?.name ?? 'Purdex') : 'Purdex'
+  const titleText = activeWorkspaceId === WATCH_WORKSPACE_ID
+    ? t('watch.area.name')
+    : activeWorkspaceId ? (workspaces.find(w => w.id === activeWorkspaceId)?.name ?? 'Purdex') : 'Purdex'
 
   // --- Bootstrap: fetch config (sessions fetched by multi-host WS onOpen) ---
   useEffect(() => {
@@ -168,15 +175,15 @@ export default function App() {
   // (Profile Sync spec §4.3). On a device with a local profile the Home button never calls this: it opens the
   // profile switcher instead (`useProfileSwitcherTrigger`).
   const handleSelectHome = useCallback(() => {
-    const first = useWorkspaceStore.getState().workspaces[0]
+    const first = visibleWorkspaces(useWorkspaceStore.getState().workspaces)[0]
     if (first) handleSelectWorkspace(first.id)
   }, [handleSelectWorkspace])
 
   const handleAddWorkspace = useCallback(() => {
-    const names = workspaces.map(w => w.name)
+    const names = listedWorkspaces.map(w => w.name)
     const ws = useWorkspaceStore.getState().addWorkspace(nextWorkspaceName(names))
     openWsSettings(ws.id)
-  }, [workspaces, openWsSettings])
+  }, [listedWorkspaces, openWsSettings])
 
   const handleOpenHosts = useCallback(() => {
     openSingletonAndSelect({ kind: 'hosts' })
@@ -205,7 +212,7 @@ export default function App() {
         <TitleBar title={titleText} />
         <div className="flex-1 flex min-h-0">
           <ActivityBar
-            workspaces={workspaces}
+            workspaces={listedWorkspaces}
             activeWorkspaceId={activeWorkspaceId}
             onSelectWorkspace={handleSelectWorkspace}
             onSelectHome={handleSelectHome}
