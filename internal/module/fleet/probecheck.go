@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wake/purdex/internal/devices"
 	leaf "github.com/wake/purdex/internal/fleet"
 	"github.com/wake/purdex/internal/middleware"
 )
@@ -17,14 +18,20 @@ const (
 	probeCheckTimeout = 15 * time.Second
 	// probeCheckBodyCap is the most the request body may be: it carries one alias.
 	probeCheckBodyCap = 1 << 10
+	// probeJoinGrace is how long past the check's own timeout a joined request waits for the run it joined.
+	probeJoinGrace = 2 * time.Second
 )
 
 // probeCheck is the state of POST /api/fleet/probe-check (spec §6): one shot of the fleet Runner per alias at a time.
 // Embedded in Measure; the seams are for tests (nil / zero = the real thing).
 type probeCheck struct {
-	probeRun     func(ctx context.Context, alias string) leaf.Result // nil = leaf.Runner (execstat tag fleet.ssh-run)
-	probeValid   func(home, alias string) bool                       // nil = Session.Valid, else leaf.ValidAlias
-	probeTimeout time.Duration                                       // zero = probeCheckTimeout
+	probeRun       func(ctx context.Context, alias string) leaf.Result // nil = leaf.Runner (execstat tag fleet.ssh-run)
+	probeValid     func(home, alias string) bool                       // nil = Session.Valid, else leaf.ValidAlias
+	probeTimeout   time.Duration                                       // zero = probeCheckTimeout
+	probeJoinSlack time.Duration                                       // zero = probeJoinGrace
+
+	pctx    context.Context // the parent of the runs in flight; cancelled by Stop
+	pcancel context.CancelFunc
 
 	pmu    sync.Mutex
 	flight map[string]*probeCall
@@ -33,6 +40,7 @@ type probeCheck struct {
 type probeCall struct {
 	done    chan struct{}
 	ans     probeAnswer
+	set     bool // ans was set by the run (a panic leaves it unset)
 	waiters int
 }
 
@@ -82,7 +90,13 @@ func mapProbe(res leaf.Result) probeAnswer {
 }
 
 func (m *Measure) handleProbeCheck(w http.ResponseWriter, r *http.Request) {
-	// admin only: a phone is refused by the device allow-list, a peer by being no peer route; this is the third line.
+	// Admin only. The admin token reaches /api/fleet through TokenAuthWith, which marks the context (devices.WithAdmin); a
+	// device, a ticket or a host principal does not carry the mark. A device is also refused before this by the device
+	// allow-list (cmd/pdx/device_scope.go, default deny), and the route is no peer route.
+	if _, isDevice := devices.PrincipalFrom(r.Context()); isDevice || !devices.IsAdmin(r.Context()) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	if p, ok := middleware.PrincipalFrom(r.Context()); ok && p.Kind != middleware.PrincipalAdmin {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
@@ -92,7 +106,7 @@ func (m *Measure) handleProbeCheck(w http.ResponseWriter, r *http.Request) {
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, probeCheckBodyCap))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil || req.SSHAlias == "" {
+	if err := dec.Decode(&req); err != nil || req.SSHAlias == "" || dec.More() {
 		http.Error(w, "body must be {\"ssh_alias\": \"<alias>\"}", http.StatusBadRequest)
 		return
 	}
@@ -119,9 +133,21 @@ func (m *Measure) checkProbe(ctx context.Context, alias string) (probeAnswer, er
 	if c := m.flight[alias]; c != nil {
 		c.waiters++
 		m.pmu.Unlock()
+		slack := m.probeJoinSlack
+		if slack <= 0 {
+			slack = probeJoinGrace
+		}
+		bound := m.probeTimeout
+		if bound <= 0 {
+			bound = probeCheckTimeout
+		}
+		timer := time.NewTimer(bound + slack)
+		defer timer.Stop()
 		select {
 		case <-c.done:
 			return c.ans, nil
+		case <-timer.C:
+			return mapProbe(leaf.Result{Status: leaf.StatusOffline, Code: leaf.CodeTimeout}), nil
 		case <-ctx.Done():
 			return probeAnswer{}, ctx.Err()
 		}
@@ -133,12 +159,46 @@ func (m *Measure) checkProbe(ctx context.Context, alias string) (probeAnswer, er
 	m.flight[alias] = c
 	m.pmu.Unlock()
 
-	c.ans = m.runProbe(alias)
+	// Whatever happens in the run (a panic included) the entry goes and the joined requests are released.
+	defer func() {
+		m.pmu.Lock()
+		delete(m.flight, alias)
+		if !c.set {
+			c.ans = mapProbe(leaf.Result{Status: leaf.StatusOffline, Code: leaf.CodeUnreachable})
+		}
+		m.pmu.Unlock()
+		close(c.done)
+	}()
+	ans := m.runProbe(alias)
 	m.pmu.Lock()
-	delete(m.flight, alias)
+	c.ans, c.set = ans, true
 	m.pmu.Unlock()
-	close(c.done)
-	return c.ans, nil
+	return ans, nil
+}
+
+// probeContext is the parent of every run: the module's base context, cancelled by Stop.
+func (m *Measure) probeContext() context.Context {
+	m.life.Lock()
+	base := m.base
+	m.life.Unlock()
+	if base == nil {
+		base = context.Background()
+	}
+	m.pmu.Lock()
+	defer m.pmu.Unlock()
+	if m.pctx == nil || m.pctx.Err() != nil {
+		m.pctx, m.pcancel = context.WithCancel(base)
+	}
+	return m.pctx
+}
+
+// cancelProbes ends the runs in flight (Stop).
+func (m *Measure) cancelProbes() {
+	m.pmu.Lock()
+	defer m.pmu.Unlock()
+	if m.pcancel != nil {
+		m.pcancel()
+	}
 }
 
 func (m *Measure) runProbe(alias string) probeAnswer {
@@ -146,7 +206,7 @@ func (m *Measure) runProbe(alias string) probeAnswer {
 	if timeout <= 0 {
 		timeout = probeCheckTimeout
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(m.probeContext(), timeout)
 	defer cancel()
 	run := m.probeRun
 	if run == nil {
@@ -154,9 +214,13 @@ func (m *Measure) runProbe(alias string) probeAnswer {
 	}
 	res := run(ctx, alias)
 	if res.Stderr != "" {
-		m.d.Logf("[fleet] probe-check %s: %s: %s", alias, res.Code, res.Stderr) // the log only, never the answer
+		m.d.Logf("[fleet] probe-check %s: %s: %q", alias, res.Code, res.Stderr) // the log only, never the answer
 	}
-	if res.Status != leaf.StatusOK && errors.Is(ctx.Err(), context.DeadlineExceeded) && res.Code != leaf.CodeTimeout {
+	if res.Status != leaf.StatusOK && res.Code == "" {
+		res = leaf.Result{Status: leaf.StatusOffline, Code: leaf.CodeUnreachable}
+	}
+	// A deadline that passed while ssh ended as "unreachable" is a timeout; a genuine auth / host_key answer stays.
+	if res.Status != leaf.StatusOK && res.Code == leaf.CodeUnreachable && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		res = leaf.Result{Status: leaf.StatusOffline, Code: leaf.CodeTimeout}
 	}
 	return mapProbe(res)

@@ -13,8 +13,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	leaf "github.com/wake/purdex/internal/fleet"
 	"github.com/wake/purdex/internal/devices"
+	leaf "github.com/wake/purdex/internal/fleet"
 	"github.com/wake/purdex/internal/middleware"
 )
 
@@ -229,7 +229,8 @@ func defaultRunnerCheck(t *testing.T, look func(string) (string, error)) checkBo
 	mux := http.NewServeMux()
 	m.Routes(mux)
 	rr := httptest.NewRecorder()
-	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/fleet/probe-check", strings.NewReader(`{"ssh_alias":"box"}`)))
+	req := httptest.NewRequest(http.MethodPost, "/api/fleet/probe-check", strings.NewReader(`{"ssh_alias":"box"}`))
+	mux.ServeHTTP(rr, req.WithContext(devices.WithAdmin(req.Context())))
 	return decodeCheck(t, rr)
 }
 

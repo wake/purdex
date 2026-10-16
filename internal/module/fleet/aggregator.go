@@ -212,6 +212,7 @@ func (m *Measure) Stop() {
 	m.life.Lock()
 	defer m.life.Unlock()
 	m.stopped = true
+	m.cancelProbes() // an ssh check in flight must not outlive Stop
 	m.deactivateLocked()
 }
 
