@@ -162,7 +162,9 @@ that are probed but have no daemon, with name, icon and colour; Mac App first, i
   `/ws/host-events` (a `FeatureFleetV1` in `featuresOf`; older SPAs and iOS never get it); delivered best-effort,
   newest-wins per subscriber (a slow subscriber loses old pushes, it is not disconnected). Payload `{term, primary,
   hosts}`: the `fast` part of every host; the `slow` part of a host only in the push right after it changed (every 5 s);
-  `status` / `error` changes in the next push. Never sent by a standby.
+  `status` / `error` changes in the next push; a host's whole row (`full`, the `GET /api/fleet` shape) in the push right
+  after its look (name, icon, colors, icon weight) changed or it joined, so a probe host's new icon reaches every App
+  without a re-read (user 10-17: a saved icon did not show). Never sent by a standby.
 - The App connects to both daemons already. It reads `GET /api/fleet` from each, follows the one that says `primary`
   (two primaries → the higher term; equal → the earlier in `order`), and merges `fleet.changed` from that one only; a push
   from another daemon carrying a higher term makes it re-read both and switch. No push for 10 s, or the primary
