@@ -13,11 +13,11 @@ const row = (pts: HistoryPoint[], k: 'cpu' | 'level' = 'cpu', offline = false) =
 
 describe('MetricRow', () => {
   it('splits the line at the warning line: only the stretches above it take the warning or error colour', () => {
-    row([at(100, 50), at(80, 60), at(60, 80), at(40, 95), at(20, 40)])
+    row([at(5, 50), at(4, 60), at(3, 80), at(2, 95), at(1, 40)])
     const tones = within(screen.getByTestId('metric-cpu')).getAllByTestId('chart-line').map((p) => p.getAttribute('data-tone'))
     expect(tones).toEqual(['ok', 'warn', 'danger'])
     expect(screen.getAllByTestId('chart-line')[0].getAttribute('class')).toContain('text-text-secondary')
-    expect(screen.getAllByTestId('chart-line')[2].getAttribute('class')).toContain('text-status-error')
+    expect(screen.getAllByTestId('chart-line')[2].getAttribute('class')).toContain('text-status-error-text')
   })
 
   it('draws the dashed warning line', () => {
@@ -26,7 +26,7 @@ describe('MetricRow', () => {
   })
 
   it('the faint band follows the peak (max), the line the average', () => {
-    row([at(20, 40, 95), at(10, 40, 95)])
+    row([at(2, 40, 95), at(1, 40, 95)])
     // viewBox height 36: Y(v) = 35 - v/100 * 32. avg 40 -> 22.2, max 95 -> 4.6
     const band = screen.getByTestId('chart-band').getAttribute('d')!
     const line = screen.getByTestId('chart-line').getAttribute('d')!
@@ -49,6 +49,17 @@ describe('MetricRow', () => {
     row([])
     expect(screen.queryByTestId('chart-line')).toBeNull()
     expect(screen.getByTestId('metric-cpu')).toHaveTextContent(t('watch.host.avg_peak', { avg: '—', peak: '—' }))
+  })
+
+  it('pressure level 0 (unknown) is no line and no summary word', () => {
+    row([at(20, 0), at(10, 0)], 'level')
+    expect(screen.queryByTestId('chart-line')).toBeNull()
+    expect(screen.getByTestId('metric-level')).toHaveTextContent(t('watch.host.avg_peak', { avg: '—', peak: '—' }))
+  })
+
+  it('a hole in the history is not bridged by a line', () => {
+    row([at(200, 10), at(199, 10), at(60, 10), at(59, 10)])
+    expect(screen.getAllByTestId('chart-line')).toHaveLength(2)
   })
 
   it('offline dims the chart', () => {

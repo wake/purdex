@@ -27,7 +27,7 @@ describe('Gauge', () => {
     expect(container.querySelector('circle[stroke="var(--border-default)"]')).not.toBeNull()
   })
 
-  it.each([[30, 'ok', 'stroke-text-secondary'], [75, 'warn', 'stroke-status-warning'], [95, 'danger', 'stroke-status-error']] as const)('cpu %s is %s', (cpu, tone, cls) => {
+  it.each([[30, 'ok', 'stroke-status-success-text'], [75, 'warn', 'stroke-status-warning-text'], [95, 'danger', 'stroke-status-error-text']] as const)('cpu %s is %s', (cpu, tone, cls) => {
     render(<Gauge def={metricDef('cpu')} fast={fast({ cpu })} offline={false} />)
     expect(screen.getByTestId('gauge-cpu')).toHaveAttribute('data-tone', tone)
     expect(arc()!.getAttribute('class')).toContain(cls)

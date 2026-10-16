@@ -4,7 +4,7 @@
 // Tab-hosted checklist: the readings come from the fleet store on every mount, but the choices the reader makes (the range now;
 // 狀態｜設定 and the queue sub-tab in W5b1/W5c1) live outside the component (`lib/watch/view-memory`), because the pane unmounts
 // when another tab is shown. W5a2 adds the 資源 section (gauges, charts) and the range switch.
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { PaneRendererProps } from '../../lib/module-registry'
 import { useFleetStore, fleetHostsView, type FleetHostView } from '../../lib/fleet/store'
 import type { FleetProc } from '../../lib/fleet/types'
@@ -17,7 +17,7 @@ import { Section } from '../hosts/form-fields'
 import { SegmentControl } from '../settings/SegmentControl'
 import { fleetHistory, type HistoryRange } from '../../lib/fleet/history'
 import { METRICS } from '../../lib/watch/metrics'
-import { RANGES } from '../../lib/watch/series'
+import { RANGES, stepMs } from '../../lib/watch/series'
 import { readRange, writeRange } from '../../lib/watch/view-memory'
 import { Gauge } from './Gauge'
 import { MetricRow, TimeAxis } from './MetricChart'
@@ -27,15 +27,18 @@ const RANGE_OPTS = (t: (k: string) => string) => RANGES.map((r) => ({ value: r, 
 /** 資源: five gauges from the latest frame, one chart row per reading from the App's in-memory history, one shared axis. */
 function Resources({ view, range, now }: { view: FleetHostView; range: HistoryRange; now: number }) {
   const offline = isOffline(view)
-  const series = METRICS.map((d) => ({ def: d, points: fleetHistory.series(view.id, d.k, range, now) }))
+  // Memoised per step (1 s for 5 分, 10 s otherwise, the pace at which the history can change): the rows only redraw when their points do.
+  const at = Math.floor(now / stepMs(range)) * stepMs(range)
+  const hostId = view.id
+  const series = useMemo(() => METRICS.map((d) => ({ def: d, points: fleetHistory.series(hostId, d.k, range, at) })), [hostId, range, at])
   return (
     <div data-testid="metrics">
       <div data-testid="gauges" className="flex flex-wrap gap-x-10 gap-y-4 mb-5">
         {METRICS.map((d) => <Gauge key={d.k} def={d} fast={view.fast} offline={offline} />)}
       </div>
       <ChartNote />
-      {series.map((s) => <MetricRow key={s.def.k} def={s.def} points={s.points} now={now} range={range} offline={offline} />)}
-      <TimeAxis points={series[0].points} now={now} range={range} />
+      {series.map((s) => <MetricRow key={s.def.k} def={s.def} points={s.points} now={at} range={range} offline={offline} />)}
+      <TimeAxis points={series[0].points} now={at} range={range} />
     </div>
   )
 }
@@ -46,7 +49,7 @@ function ChartNote() {
 }
 
 const ZONE_CLASS: Record<string, string> = {
-  normal: 'text-status-success', warning: 'text-status-warning', danger: 'text-status-error', offline: 'text-text-muted', nodata: 'text-text-muted',
+  normal: 'text-status-success-text', warning: 'text-status-warning-text', danger: 'text-status-error-text', offline: 'text-text-muted', nodata: 'text-text-muted',
 }
 
 function isOffline(v: FleetHostView): boolean {
@@ -102,8 +105,14 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
   )
 
   // The charts end at "now": it moves with the snapshot, whose 1 s pushes redraw the pane (the history has no subscription).
+  // A 5 s tick (one interval per pane, cleared on unmount) keeps the axis and 「累積中」 moving while no snapshot arrives (a stale fleet).
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 5000)
+    return () => clearInterval(id)
+  }, [])
   // eslint-disable-next-line react-hooks/purity, react-hooks/exhaustive-deps
-  const now = useMemo(() => Date.now(), [snapshot])
+  const now = useMemo(() => Date.now(), [snapshot, tick])
 
   if (!snapshot) return <p className="p-6 text-sm text-text-muted">{t('watch.host.no_fleet')}</p>
   if (!view) return <p className="p-6 text-sm text-text-muted">{t('watch.host.no_host')}</p>

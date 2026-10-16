@@ -9,7 +9,7 @@ const SIZE = 56
 const STROKE = 4
 const R = SIZE / 2 - 2
 const C = 2 * Math.PI * R
-const ARC: Record<Tone, string> = { ok: 'stroke-text-secondary', warn: 'stroke-status-warning', danger: 'stroke-status-error' }
+const ARC: Record<Tone, string> = { ok: 'stroke-status-success-text', warn: 'stroke-status-warning-text', danger: 'stroke-status-error-text' }
 
 export function Gauge({ def, fast, offline }: { def: MetricDef; fast: FleetFast | null; offline: boolean }) {
   const t = useI18nStore((s) => s.t)

@@ -1,6 +1,6 @@
 // The host tab's 資源 section: five gauges from the latest frame, a chart row per reading from the in-memory history, the range switch.
-import { describe, it, expect, beforeEach } from 'vitest'
-import { render, screen, fireEvent, within } from '@testing-library/react'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { render, screen, fireEvent, within, act } from '@testing-library/react'
 import { WatchHostPane } from './WatchHostPane'
 import { useFleetStore } from '../../lib/fleet/store'
 import { fleetHistory } from '../../lib/fleet/history'
@@ -70,5 +70,26 @@ describe('WatchHostPane — 資源', () => {
     load([host('d-a')])
     renderPane('d-a')
     expect(screen.queryByTestId('view-switch')).toBeNull()
+  })
+
+  describe('a stale fleet (no snapshot arrives)', () => {
+    afterEach(() => vi.useRealTimers())
+    it('the axis keeps moving: a 5 s tick re-reads now', () => {
+      vi.useFakeTimers()
+      const now = Date.now()
+      fleetHistory.record('d-a', fast({ at: now - 130_000 }))
+      load([host('d-a', { alias: 'air26' })])
+      renderPane('d-a')
+      expect(screen.getByTestId('axis-collecting')).toHaveTextContent(t('watch.host.collecting', { n: 2 }))
+      act(() => { vi.advanceTimersByTime(65_000) })
+      expect(screen.getByTestId('axis-collecting')).toHaveTextContent(t('watch.host.collecting', { n: 3 }))
+    })
+    it('the interval is cleared on unmount', () => {
+      vi.useFakeTimers()
+      load([host('d-a')])
+      const { unmount } = renderPane('d-a')
+      unmount()
+      expect(vi.getTimerCount()).toBe(0)
+    })
   })
 })

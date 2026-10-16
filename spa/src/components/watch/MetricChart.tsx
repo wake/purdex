@@ -1,16 +1,17 @@
 // spa/src/components/watch/MetricChart.tsx — one chart row of the host tab's 資源 and the shared time axis under the last row (ported
 // from the approved prototype's useChart / MetricRow / Axis, and `SeriesPaths` from prototypes/load-control/ui.tsx). The line is the
 // average, a faint band the peak, a dashed warning line; only the stretches above it take the warning or error colour.
+import { memo, useMemo } from 'react'
 import type { HistoryPoint, HistoryRange } from '../../lib/fleet/history'
 import type { MetricDef, Tone } from '../../lib/watch/metrics'
-import { RANGE_MS, collectedMinutes, stretches, summarize, toPoints, type SPt } from '../../lib/watch/series'
+import { RANGE_MS, collectedMinutes, decimate, stretches, summarize, toPoints, type SPt } from '../../lib/watch/series'
 import { useI18nStore } from '../../stores/useI18nStore'
 
 export const ROW = 'grid grid-cols-[8rem_minmax(0,1fr)_9.5rem] items-center gap-x-4'
 const COVER_SLACK_MS = 15_000
 const CH = 36
 const W = 400
-const LINE_CLASS: Record<Tone, string> = { ok: 'text-text-secondary', warn: 'text-status-warning', danger: 'text-status-error' }
+const LINE_CLASS: Record<Tone, string> = { ok: 'text-text-secondary', warn: 'text-status-warning-text', danger: 'text-status-error-text' }
 
 /** Average line + peak band, one path per tone stretch. X/Y map a point to the viewBox. */
 function SeriesPaths({ pts, toneOf, X, Y }: { pts: SPt[]; toneOf: (v: number) => Tone; X: (x: number) => number; Y: (v: number) => number }) {
@@ -33,9 +34,11 @@ function SeriesPaths({ pts, toneOf, X, Y }: { pts: SPt[]; toneOf: (v: number) =>
   )
 }
 
-export function MetricRow({ def, points, now, range, offline }: { def: MetricDef; points: HistoryPoint[]; now: number; range: HistoryRange; offline: boolean }) {
+function MetricRowImpl({ def, points, now, range, offline }: { def: MetricDef; points: HistoryPoint[]; now: number; range: HistoryRange; offline: boolean }) {
   const t = useI18nStore((s) => s.t)
-  const { avg, peak } = summarize(points)
+  const unknownZero = def.k === 'level'
+  const { avg, peak } = useMemo(() => summarize(points, unknownZero), [points, unknownZero])
+  const pts = useMemo(() => decimate(toPoints(points, now, range, { unknownZero })), [points, now, range, unknownZero])
   const yMax = def.yMax(Number.isNaN(peak) ? 0 : peak)
   const Y = (v: number) => CH - 1 - Math.min(1, Math.max(0, v / yMax)) * (CH - 4)
   const f = (v: number) => (Number.isNaN(v) ? '—' : def.fmt(v, t))
@@ -46,13 +49,15 @@ export function MetricRow({ def, points, now, range, offline }: { def: MetricDef
         <svg viewBox={`0 0 ${W} ${CH}`} preserveAspectRatio="none" className="w-full block" style={{ height: CH }} aria-hidden="true">
           {[0.5, CH - 0.5].map((y) => <line key={y} x1="0" x2={W} y1={y} y2={y} stroke="var(--border-subtle)" vectorEffect="non-scaling-stroke" />)}
           {def.warnAt < yMax && <line x1="0" x2={W} y1={Y(def.warnAt)} y2={Y(def.warnAt)} stroke="var(--border-default)" strokeDasharray="3 3" vectorEffect="non-scaling-stroke" />}
-          <SeriesPaths pts={toPoints(points, now, range)} toneOf={def.toneOf} X={(x) => x * W} Y={Y} />
+          <SeriesPaths pts={pts} toneOf={def.toneOf} X={(x) => x * W} Y={Y} />
         </svg>
       </div>
       <span className="text-[10px] text-text-muted tabular-nums text-right whitespace-nowrap">{t('watch.host.avg_peak', { avg: f(avg), peak: f(peak) })}</span>
     </div>
   )
 }
+
+export const MetricRow = memo(MetricRowImpl)
 
 /** The shared axis under the last row: 現在 … −n 分／小時, and how much the App has collected while that is short of the range. */
 export function TimeAxis({ points, now, range }: { points: HistoryPoint[]; now: number; range: HistoryRange }) {

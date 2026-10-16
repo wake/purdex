@@ -33,9 +33,9 @@ beforeEach(() => {
 
 describe('WatchHostPane — header', () => {
   it.each([
-    ['normal', 'fleet.zone.normal', 'text-status-success'],
-    ['warning', 'fleet.zone.warning', 'text-status-warning'],
-    ['danger', 'fleet.zone.danger', 'text-status-error'],
+    ['normal', 'fleet.zone.normal', 'text-status-success-text'],
+    ['warning', 'fleet.zone.warning', 'text-status-warning-text'],
+    ['danger', 'fleet.zone.danger', 'text-status-error-text'],
   ] as const)('shows the %s zone word in its colour', (zone, key, cls) => {
     load([host('d-a', { alias: 'air26', fast: fast({ zone }) })])
     renderPane('d-a')

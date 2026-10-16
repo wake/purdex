@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { stretches, toPoints, collectedMinutes, summarize, RANGE_MS } from './series'
+import { stretches, toPoints, collectedMinutes, summarize, decimate, RANGE_MS } from './series'
 import { usageTone } from '../usage-display'
 
 const P = (v: number, x = 0, p = v) => ({ x, v, p })
@@ -25,8 +25,8 @@ describe('toPoints', () => {
   it('maps t onto [now - range, now]', () => {
     const now = 1_000_000_000
     const pts = toPoints([{ t: now - RANGE_MS['5m'], avg: 1, max: 2 }, { t: now - RANGE_MS['5m'] / 2, avg: 3, max: 4 }, { t: now, avg: 5, max: 6 }], now, '5m')
-    expect(pts.map((p) => p.x)).toEqual([0, 0.5, 1])
-    expect(pts[1]).toMatchObject({ v: 3, p: 4 })
+    expect(pts.filter((p) => !Number.isNaN(p.v)).map((p) => p.x)).toEqual([0, 0.5, 1]) // the holes between them are NaN breaks
+    expect(pts[2]).toMatchObject({ v: 3, p: 4 })
   })
 })
 
@@ -42,5 +42,50 @@ describe('collectedMinutes / summarize', () => {
   it('an empty series is NaN', () => {
     const s = summarize([])
     expect(Number.isNaN(s.avg) && Number.isNaN(s.peak)).toBe(true)
+  })
+})
+
+describe('gaps', () => {
+  const NOW = 10_000_000_000
+  it('a 20-minute hole in a 1 h series breaks the line: two runs, no segment across the hole', () => {
+    const pts = []
+    for (let m = 60; m >= 0; m--) if (m < 25 || m > 45) for (let k = 0; k < 6; k++) pts.push({ t: NOW - m * 60_000 + k * 10_000, avg: 10, max: 10 })
+    const st = stretches(toPoints(pts.filter((q) => q.t <= NOW), NOW, '1h'), usageTone)
+    expect(st.length).toBe(2)
+    for (const s of st) for (let i = 1; i < s.pts.length; i++) expect(s.pts[i].x - s.pts[i - 1].x).toBeLessThan(0.01)
+  })
+  it('raw 1 s points: a 3 s step breaks, a 2 s step does not', () => {
+    const mk = (gap: number) => toPoints([{ t: NOW - 10_000, avg: 1, max: 1 }, { t: NOW - 10_000 + gap, avg: 1, max: 1 }], NOW, '5m')
+    expect(stretches(mk(3000), usageTone).length).toBe(2)
+    expect(stretches(mk(2000), usageTone).length).toBe(1)
+  })
+})
+
+describe('unknown pressure', () => {
+  const NOW = 10_000_000_000
+  const lv = [{ t: NOW - 3000, avg: 0, max: 0 }, { t: NOW - 2000, avg: 0, max: 0 }, { t: NOW - 1000, avg: 2, max: 2 }]
+  it('level 0 is a gap, not a real 0', () => {
+    const pts = toPoints(lv, NOW, '5m', { unknownZero: true })
+    expect(pts.slice(0, 2).every((p) => Number.isNaN(p.v))).toBe(true)
+    expect(stretches(pts, usageTone).flatMap((s) => s.pts).length).toBe(1)
+  })
+  it('summarize leaves it out; all-unknown is NaN', () => {
+    expect(summarize(lv, true)).toEqual({ avg: 2, peak: 2 })
+    const s = summarize(lv.slice(0, 2), true)
+    expect(Number.isNaN(s.avg) && Number.isNaN(s.peak)).toBe(true)
+  })
+})
+
+describe('decimate', () => {
+  it('24 h of 10 s buckets (8640 points) comes down to ~400 and the band keeps the true peak', () => {
+    const NOW = 10_000_000_000
+    const hist = Array.from({ length: 8640 }, (_, i) => ({ t: NOW - (8639 - i) * 10_000, avg: 20, max: i === 4321 ? 97 : 25 }))
+    const out = decimate(toPoints(hist, NOW, '24h'))
+    expect(out.length).toBeLessThanOrEqual(402)
+    expect(Math.max(...out.map((p) => p.p))).toBe(97)
+  })
+  it('a small series is untouched', () => {
+    const pts = [P(1, 0.1), P(2, 0.2)]
+    expect(decimate(pts)).toEqual(pts)
   })
 })
