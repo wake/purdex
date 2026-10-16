@@ -69,14 +69,25 @@ func isWatcher(o agent.PaneOwner, found bool, firstPane string) bool {
 // Reconcile moves the holder to what the agent module says about pdx-watch and returns it. A lookup that fails changes nothing
 // and is returned as the error (never read as "no agent"). registered says this call found a new watcher frame.
 func (m *Module) Reconcile(ctx context.Context) (h watch.Holder, registered bool, err error) {
+	h, registered, _, err = m.reconcile(ctx, false)
+	return h, registered, err
+}
+
+// reconcile runs one reconcile. onlyIfStale makes it do nothing (ran=false) when, once it holds the exclusive right to reconcile,
+// the last one is younger than staleAfter: readers that found the holder stale at the same moment queue here and the first one's
+// reconcile serves all of them, instead of each repeating the lookups.
+func (m *Module) reconcile(ctx context.Context, onlyIfStale bool) (h watch.Holder, registered, ran bool, err error) {
 	m.rec.mu.Lock()
 	defer m.rec.mu.Unlock()
+	if onlyIfStale && !m.rec.last.IsZero() && m.now().Sub(m.rec.last) <= staleAfter {
+		return m.holder.Get(), false, false, nil
+	}
 	defer func() { m.rec.last = m.now() }()
 	h, registered, err = m.reconcileLocked(ctx)
 	if registered && m.rec.registered != nil {
 		m.rec.registered(h)
 	}
-	return h, registered, err
+	return h, registered, true, err
 }
 
 func (m *Module) reconcileLocked(ctx context.Context) (watch.Holder, bool, error) {
@@ -129,28 +140,32 @@ func (m *Module) rest(cur watch.Holder) (watch.Holder, bool, error) {
 	return m.holder.Get(), false, err
 }
 
-// fresh reconciles when the last reconcile is older than staleAfter (or never happened) and the module has started; a failure is
+// fresh reconciles when the last reconcile is older than staleAfter (or never happened) and the module is running; a failure is
 // logged and the holder is read as it is. It is what a holder read (peer route, status, the locator's question) calls first.
 func (m *Module) fresh(ctx context.Context) {
 	if !m.started.Load() {
 		return
 	}
-	m.rec.mu.Lock()
-	current := !m.rec.last.IsZero() && m.now().Sub(m.rec.last) <= staleAfter
-	m.rec.mu.Unlock()
-	if current {
-		return
-	}
 	cctx, cancel := context.WithTimeout(ctx, reconcileBudget)
 	defer cancel()
-	if _, _, err := m.Reconcile(cctx); err != nil {
+	if _, _, _, err := m.reconcile(cctx, true); err != nil {
 		m.logf("[watch] reconcile: %v", err)
 	}
 }
 
-// reconcileBackground is a reconcile no caller waits for (a SessionStart, the ticker, the start of the daemon).
+// reconcileBackground is a reconcile no caller waits for (a SessionStart, the ticker, the start of the daemon). It runs only while
+// the module runs, Stop waits for the one in flight, and Stop cancels its context.
 func (m *Module) reconcileBackground(why string) {
-	ctx, cancel := context.WithTimeout(context.Background(), reconcileBudget)
+	m.runMu.Lock()
+	if !m.running {
+		m.runMu.Unlock()
+		return
+	}
+	m.wg.Add(1)
+	parent := m.runCtx
+	m.runMu.Unlock()
+	defer m.wg.Done()
+	ctx, cancel := context.WithTimeout(parent, reconcileBudget)
 	defer cancel()
 	if _, _, err := m.Reconcile(ctx); err != nil {
 		m.logf("[watch] reconcile (%s): %v", why, err)

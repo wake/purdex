@@ -59,6 +59,11 @@ type Module struct {
 	unsubscribe func()
 	stop        context.CancelFunc
 	wg          sync.WaitGroup
+	// runMu guards running and runCtx: a background reconcile starts only while running, and Stop waits for the ones in flight
+	// (the SessionStart subscription may call back after unsubscribe returns).
+	runMu   sync.Mutex
+	running bool
+	runCtx  context.Context
 }
 
 // New returns the module with production defaults.
@@ -120,10 +125,13 @@ func (m *Module) Start(context.Context) error {
 	} else {
 		m.logf("[watch] service %q not registered: a watcher is noticed by the ticker and by holder reads only", agent.TerminalSessionsKey)
 	}
-	m.started.Store(true)
-	m.reconcileBackground("start")
 	ctx, cancel := context.WithCancel(context.Background())
 	m.stop = cancel
+	m.runMu.Lock()
+	m.running, m.runCtx = true, ctx
+	m.runMu.Unlock()
+	m.started.Store(true)
+	m.reconcileBackground("start")
 	every := m.tickEvery
 	if every <= 0 {
 		every = safetyNet
@@ -147,6 +155,9 @@ func (m *Module) Start(context.Context) error {
 
 func (m *Module) Stop(context.Context) error {
 	m.started.Store(false)
+	m.runMu.Lock()
+	m.running = false
+	m.runMu.Unlock()
 	if m.unsubscribe != nil {
 		m.unsubscribe()
 	}

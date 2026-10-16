@@ -21,6 +21,8 @@ import (
 // touches a tmux server. One test registers the real agent module's types in the registry, to prove the wiring.
 
 type fakePanes struct {
+	gate      chan struct{} // when set, Find waits for it (or for the context)
+	delay     time.Duration
 	mu        sync.Mutex
 	sid, pane string
 	found     bool
@@ -30,9 +32,17 @@ type fakePanes struct {
 
 func (f *fakePanes) Find(context.Context) (string, string, bool, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls++
-	return f.sid, f.pane, f.found, f.err
+	gate, delay := f.gate, f.delay
+	sid, pane, found, err := f.sid, f.pane, f.found, f.err
+	f.mu.Unlock()
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+	if gate != nil {
+		<-gate
+	}
+	return sid, pane, found, err
 }
 
 func (f *fakePanes) count() int {
@@ -373,4 +383,67 @@ func TestWiring_TheRealAgentModulesServicesAreWhatReconcileUses(t *testing.T) {
 	r2.m.ownerSrc = nil
 	_, _, err = r2.m.Reconcile(context.Background())
 	require.ErrorIs(t, err, errNoOwnerLookup)
+}
+
+// Readers that find the holder stale at the same moment share one reconcile: the others re-check once they may reconcile and find
+// it fresh, instead of each repeating the lookups one after another.
+func TestReads_ConcurrentStaleReadsShareOneReconcile(t *testing.T) {
+	r := newRecRig(t)
+	r.owners.set(watcherOwner("f1"), true, nil)
+	require.NoError(t, r.m.Start(context.Background()))
+	t.Cleanup(func() { _ = r.m.Stop(context.Background()) })
+	base := r.panes.count()
+	r.now = r.now.Add(time.Minute) // everything is stale
+	r.panes.mu.Lock()
+	r.panes.delay = 50 * time.Millisecond
+	r.panes.mu.Unlock()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rr := httptest.NewRecorder()
+			r.mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/watch/holder", nil))
+		}()
+	}
+	wg.Wait()
+	require.Equal(t, base+1, r.panes.count(), "eight readers, one reconcile")
+}
+
+// Stop returns only when a reconcile that a SessionStart started has finished, and a callback that arrives after Stop does nothing
+// (the subscription's contract allows both).
+func TestStop_WaitsForAReconcileInFlightAndLaterEventsDoNothing(t *testing.T) {
+	r := newRecRig(t)
+	ts := &fakeSessions{}
+	r.m.core.Registry.Register(agent.TerminalSessionsKey, agent.TerminalSessions(ts))
+	r.owners.set(watcherOwner("f1"), true, nil)
+	require.NoError(t, r.m.Start(context.Background()))
+	base := r.panes.count()
+
+	gate := make(chan struct{})
+	r.panes.mu.Lock()
+	r.panes.gate = gate
+	r.panes.mu.Unlock()
+	go ts.fn(agent.SessionStartEvent{TmuxSession: watch.PaneSession})
+	require.Eventually(t, func() bool { return r.panes.count() == base+1 }, 3*time.Second, 5*time.Millisecond, "the reconcile is in flight")
+
+	stopped := make(chan struct{})
+	go func() { _ = r.m.Stop(context.Background()); close(stopped) }()
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned while a reconcile was still running")
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(gate)
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Stop did not return after the reconcile finished")
+	}
+
+	after := r.panes.count()
+	ts.fn(agent.SessionStartEvent{TmuxSession: watch.PaneSession}) // a callback after Stop
+	ts.fn(agent.SessionStartEvent{Overflow: true})
+	require.Equal(t, after, r.panes.count(), "nothing runs after Stop")
 }
