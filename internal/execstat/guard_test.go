@@ -33,9 +33,6 @@ func forkSites(src string) ([]string, error) {
 		return nil, err
 	}
 	var sites []string
-	type ptyCall struct{ site, cmd string } // a pty.Start* call and the variable whose .Cmd it starts ("" when it is not X.Cmd)
-	var ptyCalls []ptyCall
-	noted := map[string]int{}    // the variables X with an X.NoteStarted() call: they count the forks the pty library makes
 	names := map[string]string{} // the name an import is bound to → its path
 	for _, imp := range f.Imports {
 		path, _ := strconv.Unquote(imp.Path.Value)
@@ -55,7 +52,6 @@ func forkSites(src string) ([]string, error) {
 		}
 	}
 	pointers := map[ast.Expr]bool{}
-	var pendingPty []string // the variable of each pty.Start*(X.Cmd, …), in source order
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.SelectorExpr:
@@ -67,22 +63,9 @@ func forkSites(src string) ([]string, error) {
 				if forkAPIs[path][x.Sel.Name] {
 					site := id.Name + "." + x.Sel.Name + " at " + fset.Position(x.Pos()).String()
 					if path == "github.com/creack/pty" {
-						ptyCalls = append(ptyCalls, ptyCall{site: site})
+						sites = append(sites, ptyPrefix+site)
 					} else {
 						sites = append(sites, site)
-					}
-				}
-			}
-			if x.Sel.Name == "NoteStarted" {
-				noted[id.Name]++
-			}
-		case *ast.CallExpr: // pty.Start*(X.Cmd, …): remember X, to pair it with X.NoteStarted()
-			if fn, ok := x.Fun.(*ast.SelectorExpr); ok {
-				if id, ok := fn.X.(*ast.Ident); ok && id.Obj == nil && names[id.Name] == "github.com/creack/pty" && forkAPIs["github.com/creack/pty"][fn.Sel.Name] && len(x.Args) > 0 {
-					if arg, ok := x.Args[0].(*ast.SelectorExpr); ok && arg.Sel.Name == "Cmd" {
-						if v, ok := arg.X.(*ast.Ident); ok {
-							pendingPty = append(pendingPty, v.Name)
-						}
 					}
 				}
 			}
@@ -97,19 +80,18 @@ func forkSites(src string) ([]string, error) {
 		}
 		return true
 	})
-	// pty.Start* starts the Cmd itself, so it is a counted fork only when its argument is X.Cmd for an execstat Cmd X and the
-	// file calls X.NoteStarted(); every call is checked on its own.
-	starts := map[string]int{}
-	for _, v := range pendingPty {
-		starts[v]++
-	}
-	for i, c := range ptyCalls {
-		if len(pendingPty) == len(ptyCalls) && noted[pendingPty[i]] >= starts[pendingPty[i]] { // one NoteStarted per start
-			continue
-		}
-		sites = append(sites, c.site)
-	}
 	return sites, nil
+}
+
+// ptyPrefix marks the sites that are calls of the pty library: the library starts the embedded Cmd itself, so the call is a
+// fork the helpers cannot see. They are not refused outright but listed (ptyCounted).
+const ptyPrefix = "pty:"
+
+// ptyCounted are the files that start a child through the pty library, with how many such calls each has. Each one reports its
+// start by hand (Cmd.NoteStarted when it worked, Cmd.NoteStartFailed when not), and a test of that file proves both counts; a new
+// pty start, or one more call in a listed file, fails the guard until it is listed here with such a test.
+var ptyCounted = map[string]int{
+	"internal/terminal/relay.go": 1, // TestRelayCountsItsForkAndItsFailedStart
 }
 
 // isExecCmd says whether the type expression is os/exec's Cmd (by whatever name exec is imported under).
@@ -144,6 +126,7 @@ var pending = map[string]string{}
 func TestEveryForkInTheDaemonGoesThroughTheHelpers(t *testing.T) {
 	root := filepath.Join("..", "..")
 	hit := map[string][]string{}
+	ptySeen := map[string]bool{}
 	for _, dir := range []string{"cmd", "internal"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -168,13 +151,31 @@ func TestEveryForkInTheDaemonGoesThroughTheHelpers(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if len(sites) > 0 {
-				hit[rel] = sites
+			var forks []string
+			ptys := 0
+			for _, site := range sites {
+				if strings.HasPrefix(site, ptyPrefix) {
+					ptys++
+				} else {
+					forks = append(forks, site)
+				}
+			}
+			ptySeen[rel] = true
+			if ptys != ptyCounted[rel] {
+				t.Errorf("%s has %d pty.Start* calls, ptyCounted says %d: list a pty start with the test that proves its counts", rel, ptys, ptyCounted[rel])
+			}
+			if len(forks) > 0 {
+				hit[rel] = forks
 			}
 			return nil
 		})
 		if err != nil {
 			t.Fatal(err)
+		}
+	}
+	for f := range ptyCounted {
+		if !ptySeen[f] {
+			t.Errorf("%s is on ptyCounted but was not found", f)
 		}
 	}
 	var fresh []string
@@ -208,33 +209,27 @@ func TestEveryForkInTheDaemonGoesThroughTheHelpers(t *testing.T) {
 
 func TestTheGuardSeesEveryWayToFork(t *testing.T) {
 	cases := map[string]bool{
-		`package p; import "os/exec"; var _ = exec.Command("ps")`:                                                                                                  true,
-		`package p; import "os/exec"; func f(c context.Context) { exec.CommandContext(c, "ps") }`:                                                                  true,
-		`package p; import ex "os/exec"; var _ = ex.Command("ps")`:                                                                                                 true,  // another name
-		`package p; import . "os/exec"; var _ = Command("ps")`:                                                                                                     true,  // dot import
-		`package p; import "os/exec"; var _ = &exec.Cmd{Path: "x"}`:                                                                                                true,  // a literal
-		`package p; import "os/exec"; func f() { c := new(exec.Cmd); c.Start() }`:                                                                                  true,  // new
-		`package p; import ex "os/exec"; func f() { var c ex.Cmd; c.Start() }`:                                                                                     true,  // a variable
-		`package p; import "os/exec"; var cmds [1]exec.Cmd; var _ = cmds`:                                                                                          true,  // an array
-		`package p; import "os/exec"; type t struct{ cmd exec.Cmd }`:                                                                                               true,  // a field
-		`package p; import "os/exec"; type A = exec.Cmd; var a A`:                                                                                                  true,  // an alias
-		`package p; import "os/exec"; var s []*exec.Cmd; var _ = s`:                                                                                                false, // references
-		`package p; import "os/exec"; func f(exec struct{ Cmd int }) int { return exec.Cmd }`:                                                                      false, // a local named exec
-		`package p; import "os/exec"; func f(c *exec.Cmd) { c.Start() }`:                                                                                           false, // a parameter is not a creation
-		`package p; import "os"; var _, _ = os.StartProcess("x", nil, nil)`:                                                                                        true,
-		`package p; import "syscall"; var _, _ = syscall.ForkExec("x", nil, nil)`:                                                                                  true,
-		`package p; import "github.com/creack/pty"; var _, _ = pty.Start(nil)`:                                                                                     true,
-		`package p; import "github.com/creack/pty"; var _, _ = pty.StartWithSize(nil, nil)`:                                                                        true,
-		`package p; import "github.com/creack/pty"; func f(c interface{ NoteStarted() }) { pty.StartWithSize(nil, nil); c.NoteStarted() }`:                         true,  // no X.Cmd to pair
-		`package p; import "github.com/creack/pty"; func f(c interface{ NoteStarted() }) { pty.StartWithSize(c.Cmd, nil); c.NoteStarted() }`:                       false, // counted by hand
-		`package p; import "github.com/creack/pty"; func f(c, d interface{ NoteStarted() }) { pty.Start(c.Cmd); pty.Start(d.Cmd); c.NoteStarted() }`:               true,  // d is never noted
-		`package p; import "github.com/creack/pty"; func f(c, o interface{ NoteStarted() }) { pty.Start(c.Cmd); o.NoteStarted() }`:                                 true,  // another variable's NoteStarted
-		`package p; import "github.com/creack/pty"; func f(c interface{ NoteStarted() }) { pty.Start(c.Cmd); pty.Start(c.Cmd); c.NoteStarted() }`:                  true,  // two starts, one count
-		`package p; import "github.com/creack/pty"; func f(c interface{ NoteStarted() }) { pty.Start(c.Cmd); c.NoteStarted(); pty.Start(c.Cmd); c.NoteStarted() }`: false, // each start counted
-		`package p; import "github.com/wake/purdex/internal/execstat"; var _ = execstat.Command("t", "ps")`:                                                        false,
-		`package p; import "os/exec"; var e *exec.ExitError; var _ = e`:                                                                                            false, // a type, not a fork
-		`package p; import "os/exec"; func f(exec struct{ Command func() }) { exec.Command() }`:                                                                    false, // a local named exec
-		`package p; import "os"; var _ = os.Getpid()`:                                                                                                              false,
+		`package p; import "os/exec"; var _ = exec.Command("ps")`:                                           true,
+		`package p; import "os/exec"; func f(c context.Context) { exec.CommandContext(c, "ps") }`:           true,
+		`package p; import ex "os/exec"; var _ = ex.Command("ps")`:                                          true,  // another name
+		`package p; import . "os/exec"; var _ = Command("ps")`:                                              true,  // dot import
+		`package p; import "os/exec"; var _ = &exec.Cmd{Path: "x"}`:                                         true,  // a literal
+		`package p; import "os/exec"; func f() { c := new(exec.Cmd); c.Start() }`:                           true,  // new
+		`package p; import ex "os/exec"; func f() { var c ex.Cmd; c.Start() }`:                              true,  // a variable
+		`package p; import "os/exec"; var cmds [1]exec.Cmd; var _ = cmds`:                                   true,  // an array
+		`package p; import "os/exec"; type t struct{ cmd exec.Cmd }`:                                        true,  // a field
+		`package p; import "os/exec"; type A = exec.Cmd; var a A`:                                           true,  // an alias
+		`package p; import "os/exec"; var s []*exec.Cmd; var _ = s`:                                         false, // references
+		`package p; import "os/exec"; func f(exec struct{ Cmd int }) int { return exec.Cmd }`:               false, // a local named exec
+		`package p; import "os/exec"; func f(c *exec.Cmd) { c.Start() }`:                                    false, // a parameter is not a creation
+		`package p; import "os"; var _, _ = os.StartProcess("x", nil, nil)`:                                 true,
+		`package p; import "syscall"; var _, _ = syscall.ForkExec("x", nil, nil)`:                           true,
+		`package p; import "github.com/creack/pty"; var _, _ = pty.Start(nil)`:                              true,
+		`package p; import "github.com/creack/pty"; var _, _ = pty.StartWithSize(nil, nil)`:                 true,
+		`package p; import "github.com/wake/purdex/internal/execstat"; var _ = execstat.Command("t", "ps")`: false,
+		`package p; import "os/exec"; var e *exec.ExitError; var _ = e`:                                     false, // a type, not a fork
+		`package p; import "os/exec"; func f(exec struct{ Command func() }) { exec.Command() }`:             false, // a local named exec
+		`package p; import "os"; var _ = os.Getpid()`:                                                       false,
 	}
 	for src, want := range cases {
 		sites, err := forkSites(src)
