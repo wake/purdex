@@ -44,7 +44,7 @@ func (m *Module) refreshRemote(ctx context.Context) {
 	if ans.HostID == "" {
 		ans.HostID = target.HostID
 	}
-	m.loc.Observe(target.Alias, ans)
+	m.loc.Observe(target.Alias, *target, ans)
 }
 
 // refreshRemoteBackground is refreshRemote for the ticker, tracked by Stop like a reconcile.

@@ -219,10 +219,15 @@ func (l *Locator) prefer(a HolderAnswer) bool {
 // rested, was woken or vanished would be reported as it was found. An awake watcher there becomes the remembered one; a resting one
 // is no longer a place to deliver to (Current is cleared) but stays the last one, marked resting, for a wake; a host that holds
 // none forgets what was known of it. A host the locator knows nothing of is left alone.
-func (l *Locator) Observe(alias string, a HolderAnswer) {
+//
+// asked is the watcher the question was about, as the locator held it when the question went out. The answer arrives later, so it
+// is applied only if that watcher is still the one held for that host (same session, not found again since) and no other host has
+// become the remembered one meanwhile; otherwise it is stale and dropped (the next refresh asks again).
+func (l *Locator) Observe(alias string, asked Where, a HolderAnswer) {
 	l.mu.Lock()
 	known := func(w *Where) bool { return w != nil && w.HostID == a.HostID }
-	if !known(l.mem.Current) && !known(l.mem.Last) {
+	same := func(w *Where) bool { return known(w) && w.SessionID == asked.SessionID && w.At.Equal(asked.At) }
+	if !same(l.mem.Current) && !(l.mem.Current == nil && same(l.mem.Last)) {
 		l.mu.Unlock()
 		return
 	}

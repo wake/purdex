@@ -301,3 +301,28 @@ func TestRefreshRemote_AStatusReadRefreshesTheRemoteWatcher(t *testing.T) {
 	require.NotNil(t, st.Watcher)
 	require.Equal(t, "resting", st.Watcher.State)
 }
+
+// An answer to a refresh that went out before the locator moved on is stale and changes nothing: the same host's watcher found
+// again with a new session is not cleared by the old session's late "none"/"resting", and a late "awake" does not bring it back.
+func TestRefreshRemote_ALateAnswerAboutAnOlderWatcherIsDropped(t *testing.T) {
+	for _, late := range []string{"none", "resting", "awake"} {
+		t.Run(late, func(t *testing.T) {
+			r, fc, _ := remoteRig(t)
+			old, _ := r.m.loc.Remembered()
+			asked := *old // what the refresh asked about
+			// the watcher there is replaced: a new session is found
+			r.m.loc.Failed(asked)
+			fc.reply[pathHolder] = done(HolderView{HostID: peerID, State: "awake", SessionID: "s-new", Since: r.now})
+			r.now = r.now.Add(time.Second)
+			_, err := r.m.loc.Current(context.Background(), []string{"air26"}, false)
+			require.NoError(t, err)
+
+			r.m.loc.Observe("air26", asked, watch.HolderAnswer{HostID: peerID, State: watch.HolderState(late), SessionID: "s-26"})
+
+			cur, _ := r.m.loc.Remembered()
+			require.NotNil(t, cur)
+			require.Equal(t, "s-new", cur.SessionID)
+			require.Equal(t, watch.HolderAwake, cur.State)
+		})
+	}
+}
