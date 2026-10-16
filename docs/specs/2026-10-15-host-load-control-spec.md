@@ -263,6 +263,52 @@ about 120 min). The queue was arrival order only; the watcher and the person nee
 - **Not in this phase**: pausing a command that already runs (SIGSTOP) to let another through. Raised only if the queue
   order proves not enough.
 
+### 5.3 Conflicts: two kinds of command that do not run together (#3058)
+
+Measured 10-16 on mlab (#3058, the watcher's log): with `slots.heavy = 2`, every combination of two heavy commands ran
+without trouble from 21:24 to 23:39 **except** `tsc -b --force` beside `vitest related` (tsc's node 1.3–1.6 GB, related's
+node 0.9–1.0 GB plus workers, over an evening base of a dozen agents at 0.5–0.7 GB each): twice it thrashed (decompressions
+130,000/s at 22:34, pressure level 2 for a minute at 23:39) and the watcher had to drop the whole class to one slot, which
+left 10 commands waiting up to 21 min behind one pair. Slot counts cannot say "not these two together"; this section can.
+Lead decision 10-16 (the watcher's option 1 of 3): a pairwise rule, because it holds back only the pair that was measured
+to collide; a weight (tsc counts as two slots) would also keep tsc from running beside a `go vet`, and an estimate of each
+command's memory is the hardest to get right.
+
+- **A rule** is two patterns and a reason: `[[gate.conflict]]` with `a`, `b` (patterns), `reason` (one line), `by` and
+  `at`. A pattern is a command line in the words the gate already reads (as `[[gate.intercept.rule]]`): its first word is
+  the tool and must equal the command's tool word; every other word of the pattern must be one of the command's words, in
+  any order (`tsc -b` matches `tsc -b --force` and `tsc --force -b`; `vitest related` matches `vitest related --run a.ts`).
+  The command's words are read after the runner words the classifier already strips (`npx`, `pnpm exec|dlx`, `npm exec`,
+  `yarn`, `bunx`, `bun x`, a `node_modules/.bin/` path), so `npx tsc -b` is `tsc -b`. A rule may pair a pattern with
+  itself (no two `tsc -b` together). Rules are not per class: a command conflicts with a holder or a ticket of either
+  class. **Default: no rules.** The watcher (or the person) adds them; nothing is built in (user decision 10-16: full
+  control, no guard the gate invents for them).
+- **What a rule does to the queue.** Inside the serving order of §5.2 a waiting ticket is **blocked** when its command
+  matches one side of a rule and a current holder (late claims and over-size holders included) **or a ticket ahead of it**
+  (front and normal tickets ahead; a `hold` ticket is never ahead of anybody) matches the other side. A blocked ticket keeps
+  its place and takes no capacity from the tickets behind it: the next ticket that is not blocked may take the free slot.
+  Because a ticket that conflicts with any ticket ahead of it is itself blocked, nothing that conflicts with a blocked
+  ticket can pass it; when the holder it waits for ends, the blocked ticket is next among those that conflict with it (no
+  starvation by a stream of the other kind). A ticket is served when it is not blocked and the tickets ahead of it that
+  are not blocked leave a free slot; every reader (TryTake, status, queue, would-wait) gets this from the one snapshot of
+  §5.2. A late claim (#2996) is already running and ignores rules, as it ignores ranks; it does become a holder that
+  blocks others. A holder whose record has no argv (no record or the take's placeholder, #3049) matches no pattern.
+- **would-wait** answers for a new `normal` ticket at the end of the normal group: it waits when a holder or a front or
+  normal ticket conflicts with it, as well as when capacity is used up.
+- **Who and how**: `pdx gate conflict` (list, `--json`), `pdx gate conflict add "<a>" "<b>" --reason "<line>"` and `pdx
+  gate conflict remove <n | "<a>" "<b>">`, on the host whose gate it is (the watcher reaches the other gated host over
+  `ssh <alias> pdx gate conflict …`). The reason is required (one line, ≤ 200 bytes). `by` is the Claude session that ran
+  it, or `person`. Adding a rule that exists (the same two patterns, either order) changes nothing and says so; removing
+  one that does not exist says so. An edit is a read–modify–write of the config file under its lock, so two edits at the
+  same moment both land (they commute; no `--expect` is needed). A rule applies to the next poll of every waiting gate, as
+  any config change does (§5 run-time tuning); a command already running is never touched.
+- **Seen everywhere it waits**: the waiting command's line says `waits for <slot or ticket>: <a> × <b> (<reason>)`;
+  `pdx gate status [--json]` lists the rules and, per waiter, `conflict_with` (the slot or ticket) and the rule; the
+  decision record gains `conflict` (the last rule that blocked it) and `conflict_s` (time spent blocked). The fleet's
+  queue view carries them from the status JSON (B line).
+- **Not in this phase**: rules that weigh memory, or that differ by time of day (a profile can already swap the whole
+  config, §5).
+
 ## 6. Retiring the lease (D2)
 
 Remove:

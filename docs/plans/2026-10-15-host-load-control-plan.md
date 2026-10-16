@@ -433,6 +433,54 @@ back and hold tickets do not make a new command wait, a front one does; CLI: mis
 `hold` refused, unknown pid reported, old → new printed; status JSON fields; mutation on the order comparison, the
 hold check and the would-wait count.
 
+### GC — conflicts: two kinds of command that do not run together (#3058; lease member, one PR, after GQ)
+
+Spec §5.3. Built on GQ's admit lock and `Snapshot` (the serving order); nothing here changes how ranks order the queue.
+1. `toolWords(argv) []string`: the command's words with the runner words the classifier already reads taken off, in the
+   same cases as `classifyRunner` (`npx`/`pnpx`/`bunx <tool …>`, `pnpm|npm|yarn|bun exec|x <tool …>`, `pnpm <tool …>`
+   when the word is a tool, the options before the subcommand, `bun x`), and `filepath.Base` of the first word (so
+   `node_modules/.bin/tsc` is `tsc`); `pnpm run <script>` stays `pnpm run <script>`. One function, used by the matcher
+   only; `classifyRunner` is not rewritten in this PR (a shared table of runner words if it falls out naturally).
+2. `Conflict{A, B, Reason, By string; At time.Time}` and `matches(pattern, words)`: the pattern's first word equals
+   `words[0]`; every other pattern word is in `words` (exact word, any order). `conflicts(x, y []string) *Conflict` is
+   symmetric (A–B or B–A). Parsed from `[[gate.conflict]]` like `[[gate.intercept.rule]]` (`raw`; a malformed entry is a
+   config warning and is skipped, never a gate failure). Default empty.
+3. In `Snapshot`, after the serving order: walk it once with the holders' argv (records; a holder with no argv matches
+   nothing) and the free capacity. For each ticket in order (hold tickets skipped, as in GQ): **blocked** if a holder or
+   any earlier front/normal ticket conflicts with it (record which, and the rule); else **served** if capacity is left
+   (and take one); else **waiting for capacity**. A blocked ticket takes no capacity. `TryTake(t)` gives a slot exactly
+   when the walk marks `t` served; otherwise `Take` carries `Blocked{With, Rule}` (a slot label or a ticket) besides
+   GQ's `Ahead`/`Rank`. Late claims (`TakeLate`) do not consult rules (spec §5.3); their holders are in the walk.
+4. The wait loop's line for a blocked waiter: `waits for <slot or ticket>: <a> × <b> (<reason>)`; it keeps
+   `conflict_s` like GQ's `held_s` (the sum of poll intervals spent blocked) and the decision record gains `conflict`
+   (the last rule) and `conflict_s`.
+5. would-wait (GQ.5): a hypothetical new `normal` ticket at the end of the normal group, walked the same way: it waits
+   when it would be blocked or when capacity is used up.
+6. CLI `pdx gate conflict [--json]` (the rules with their index), `pdx gate conflict add "<a>" "<b>" --reason "<line>"`,
+   `pdx gate conflict remove <n | "<a>" "<b>">`: a read–modify–write of `config.toml` under the lock `pdx gate set`
+   already takes (`configedit.go`: `lockFile(path + ".lock")`), appending or removing one `[[gate.conflict]]` table as
+   text so the person's comments and other tables stay; the new file is parsed before the rename, as `Set` does. Reason
+   required (one line, ≤ 200 bytes, no control characters); a pattern must have a tool word and parse as words (no empty
+   pattern); an existing pair (either order) → "already there", nothing written; removing a missing one → "no such rule".
+   `by` = the session id from the environment, else `person`; `at` = now.
+7. `pdx gate status [--json]`: the rules (index, a, b, reason, by, at) and, per waiter, `conflict_with` and `conflict_rule`.
+8. The watcher's skill (W3b.4 / the manual watcher's notes): when a measured pair thrashes, add a rule with the
+   measurement as its reason, tell the person; remove it when the measurement no longer holds.
+Tests: matcher table (`tsc -b` vs `tsc -b --force`, `tsc --force -b`, `npx tsc -b`, `pnpm exec tsc -b`, `pnpm tsc -b`,
+`node_modules/.bin/tsc -b`; `vitest related` vs `npx vitest related --run a.ts`; `pnpm run build` stays a script and does
+not match `vite build`; a pattern word that is a prefix of a command word does not match; same-pattern rule); the walk:
+a ticket that conflicts with a holder is blocked and a non-conflicting ticket behind it takes the free slot; a ticket
+behind a blocked one that conflicts with it waits even with a slot free (no starvation); two tickets that conflict with
+each other and no holder → the first is served, the second blocked; a front ticket that conflicts with a holder is
+blocked and does not hold back non-conflicting normal ones; a hold ticket that conflicts with a later one does not block
+it; a late claim is never blocked and, once it holds, blocks a conflicting waiter; a holder with no argv blocks nothing;
+the rule removed → the blocked ticket is served on the next poll; races under `-race`: `TryTake` from two gates whose
+commands conflict, with two slots free → exactly one is served; a rule added between two polls is honoured by the
+second; would-wait for a command that conflicts with a holder / with a front ticket / with a back ticket (back: does not
+make it wait); CLI: missing reason refused, empty pattern refused, add twice → one rule, remove by index and by pair,
+two `add`s at once both land, comments and other tables kept; status JSON fields; mutation on the matcher (first word,
+any-order words), the blocked check (holder side and ticket-ahead side) and capacity not taken by a blocked ticket.
+
 ### W4 — `pdx gate free <class>-<k>`
 
 Lists the holders (`lsof` on the slot lock: pid, command via `redact.Argv`, cwd, start, session), refuses a slot
@@ -450,7 +498,8 @@ and the `watch.events` push (W2b.5); the `watch` settings API incl. `agent_comma
 plan (`docs/specs/2026-10-16-watcher-area-spec.md`), and owns its tests: the tab follows a failover, "resting" and
 "none" shown apart.
 
-Order: W1a → W1b → W2a → W2b → W3a → GQ → W3c → W3b → W4 (W4 only needs W1a's `redact.Argv` and may go earlier; W3c is
+Order: W1a → W1b → W2a → W2b → W3a → GQ → GC → W3c → W3b → W4 (GC needs GQ's `Snapshot`; W4 only needs W1a's
+`redact.Argv` and may go earlier; W3c is
 the lease member's, independent of W3a, and only has to land before W3b's skill lets the watcher set 0). W3a can be
 deployed alone (it registers the manual watcher; W2 delivers to it); start, wake and rest arrive with W3b. The set
 goes live as a whole when W1b–W4 are merged and deployed; W5 follows.
