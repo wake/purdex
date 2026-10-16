@@ -370,6 +370,31 @@ func TestIntercept_AReAdoptedMemberIsToldAgainWithNoPeriodToo(t *testing.T) {
 	}
 }
 
+// A member released and adopted again between the daemon's first read of it and its claim: the notice is not sent on the old membership's
+// word, the claim is given back, and the next report tells the new one. Mutation gates: no second read -> a notice for the old membership
+// (red); the claim not given back (rec or told) -> the next report is silent (red).
+func TestIntercept_AMemberReAdoptedUnderTheReportIsToldByTheNextOne(t *testing.T) {
+	f := idleSetup(t)
+	f.setModVersion("sid-ma", "9")
+	f.forgetSent()
+	f.usage.onStatus = func() {
+		if ok, err := f.m.store.ReleaseMember("op-a", "sid-ma", f.clock.Load()); err != nil || !ok {
+			t.Errorf("release: %v %v", ok, err)
+		}
+		seedMember(t, f.m.store, "op-b", uid(1), "sid-ma", f.clock.Load()+7)
+	}
+	if _, res := f.interceptedSince("sid-ma", 5000); res.Noticed {
+		t.Fatal("the report was told on the word of a membership that had ended")
+	}
+	f.m.sweepWG.Wait()
+	if n := len(f.sender.calls()); n != 0 {
+		t.Fatalf("%d notices went to the old membership's lead", n)
+	}
+	if _, res := f.interceptedSince("sid-ma", 5000); !res.Noticed {
+		t.Fatal("the claim was not given back: the new membership is never told")
+	}
+}
+
 // The notice that could not be sent gives both claims back: the next report tells.
 func TestIntercept_ARunningMemberLeavesBothClaimsFree(t *testing.T) {
 	f := idleSetup(t)
