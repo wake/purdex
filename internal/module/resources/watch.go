@@ -173,6 +173,20 @@ func (m *Module) watchRuntimeFor() *watchRuntime {
 	return m.watch.rt
 }
 
+// eventSink is the watch module's delivery queue, looked up at each pass (the modules start in no fixed order); nil when it is not
+// registered (the events are then only recorded).
+func (m *Module) eventSink() watch.EventSink {
+	if m.core == nil || m.core.Registry == nil {
+		return nil
+	}
+	svc, ok := m.core.Registry.Get(watch.EventSinkKey)
+	if !ok {
+		return nil
+	}
+	sink, _ := svc.(watch.EventSink)
+	return sink
+}
+
 // watchPass is one detector pass over a good sample. It never fails the tick: a gate config, record or state problem is logged
 // once per run and the pass goes on with what it has.
 func (m *Module) watchPass(ctx context.Context, raw resources.HostRaw, procs []resources.Proc, roots []resources.Root, ws watchsettings.Settings) {
@@ -208,9 +222,17 @@ func (m *Module) watchPass(ctx context.Context, raw resources.HostRaw, procs []r
 	}
 	events := rt.det.Pass(in)
 	recErr := ""
+	sink := m.eventSink()
 	for _, ev := range events {
-		if _, err := rt.rec.Record(ev); err != nil && recErr == "" {
-			recErr = err.Error()
+		rec, err := rt.rec.RecordFull(ev)
+		if err != nil {
+			if recErr == "" {
+				recErr = err.Error()
+			}
+			continue
+		}
+		if sink != nil {
+			sink.Enqueue(rec) // delivery to the watcher is the watch module's (a record is on disk first, so a lost queue is still in the backlog)
 		}
 	}
 	m.watchNote("record", recErr)
