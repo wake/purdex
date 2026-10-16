@@ -117,3 +117,35 @@ func TestHolder_TheRecordedRunSurvivesARestartAndAnOldFileStillReads(t *testing.
 	require.Equal(t, HolderResting, o.Get().State)
 	require.Equal(t, "s-old", o.Get().SessionID)
 }
+
+// UpdateCommitted says whether the change took effect: a failed directory sync comes after the rename, so it is committed with an
+// error; a write that fails before the rename is not; no change is not.
+func TestHolder_UpdateCommittedSaysWhatTookEffect(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := OpenHolder(filepath.Join(dir, "holder.json"))
+	c, err := s.UpdateCommitted(func(h *Holder) { h.State, h.SessionID = HolderAwake, "s" })
+	require.NoError(t, err)
+	require.True(t, c)
+	c, err = s.UpdateCommitted(func(h *Holder) {})
+	require.NoError(t, err)
+	require.False(t, c, "no change")
+	c, err = s.UpdateCommitted(func(h *Holder) { h.State = HolderNone })
+	require.Error(t, err, "none with a session id is not a valid holder")
+	require.False(t, c)
+
+	old := syncDir
+	defer func() { syncDir = old }()
+	syncDir = func(string) error { return os.ErrInvalid }
+	c, err = s.UpdateCommitted(func(h *Holder) { h.State = HolderResting })
+	require.Error(t, err)
+	require.True(t, c, "the rename happened: it is committed although the sync failed")
+	require.Equal(t, HolderResting, s.Get().State)
+
+	syncDir = old
+	blocked := filepath.Join(dir, "sub")
+	require.NoError(t, os.WriteFile(blocked, []byte("x"), 0o600))
+	s2, _ := OpenHolder(filepath.Join(blocked, "holder.json"))
+	c, err = s2.UpdateCommitted(func(h *Holder) { h.State, h.SessionID = HolderAwake, "z" })
+	require.Error(t, err)
+	require.False(t, c, "a write that failed before the rename changed nothing")
+}

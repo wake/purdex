@@ -20,7 +20,13 @@ import (
 // Reconcile is tested at its two seams (the tmux lookup of pdx-watch and the agent module's owner resolver), faked; no test here
 // touches a tmux server. One test registers the real agent module's types in the registry, to prove the wiring.
 
+type paneAnswer struct {
+	sid, pane string
+	found     bool
+}
+
 type fakePanes struct {
+	script    []paneAnswer  // answers handed out in order before the fixed one below is used
 	gate      chan struct{} // when set, Find waits for it (or for the context)
 	delay     time.Duration
 	mu        sync.Mutex
@@ -35,6 +41,10 @@ func (f *fakePanes) Find(context.Context) (string, string, bool, error) {
 	f.calls++
 	gate, delay := f.gate, f.delay
 	sid, pane, found, err := f.sid, f.pane, f.found, f.err
+	if len(f.script) > 0 {
+		sid, pane, found = f.script[0].sid, f.script[0].pane, f.script[0].found
+		f.script = f.script[1:]
+	}
 	f.mu.Unlock()
 	if delay > 0 {
 		time.Sleep(delay)
@@ -446,4 +456,174 @@ func TestStop_WaitsForAReconcileInFlightAndLaterEventsDoNothing(t *testing.T) {
 	ts.fn(agent.SessionStartEvent{TmuxSession: watch.PaneSession}) // a callback after Stop
 	ts.fn(agent.SessionStartEvent{Overflow: true})
 	require.Equal(t, after, r.panes.count(), "nothing runs after Stop")
+}
+
+// holderWrap wraps the real store: it can make a write fail AFTER it was committed (the directory fsync that comes after the
+// rename), or fail BEFORE it (nothing changed).
+type holderWrap struct {
+	*watch.HolderStore
+	afterCommit bool
+	beforeWrite bool
+}
+
+func (w *holderWrap) UpdateCommitted(fn func(*watch.Holder)) (bool, error) {
+	if w.beforeWrite {
+		return false, errors.New("write failed before the rename")
+	}
+	committed, err := w.HolderStore.UpdateCommitted(fn)
+	if w.afterCommit && committed {
+		return true, errors.New("directory fsync failed")
+	}
+	return committed, err
+}
+
+// A write that reports an error after it was committed has changed the holder: the new frame is registered and announced once, not
+// lost (the next reconcile would see the same frame and think it already was). A write that failed before the rename changed
+// nothing: not registered, and the next reconcile tries again.
+func TestReconcile_RegistrationIsWhatWasCommittedNotWhetherTheWriteCameBackClean(t *testing.T) {
+	r := newRecRig(t)
+	var announced []string
+	r.m.rec.registered = func(h watch.Holder) { announced = append(announced, h.FrameID) }
+	w := &holderWrap{HolderStore: r.m.holder, afterCommit: true}
+	r.m.store = w
+	r.owners.set(watcherOwner("f1"), true, nil)
+
+	_, reg, err := r.m.Reconcile(context.Background())
+	require.Error(t, err, "the durability error is still reported")
+	require.True(t, reg, "but the frame is in the holder, so it is registered")
+	require.Equal(t, []string{"f1"}, announced)
+	w.afterCommit = false
+	_, reg = r.reconcile(t)
+	require.False(t, reg)
+	require.Equal(t, []string{"f1"}, announced, "announced once")
+
+	// a write that never happened
+	r2 := newRecRig(t)
+	var announced2 []string
+	r2.m.rec.registered = func(h watch.Holder) { announced2 = append(announced2, h.FrameID) }
+	w2 := &holderWrap{HolderStore: r2.m.holder, beforeWrite: true}
+	r2.m.store = w2
+	r2.owners.set(watcherOwner("f1"), true, nil)
+	_, reg, err = r2.m.Reconcile(context.Background())
+	require.Error(t, err)
+	require.False(t, reg)
+	require.Empty(t, announced2)
+	w2.beforeWrite = false
+	_, reg = r2.reconcile(t)
+	require.True(t, reg, "the next reconcile registers it")
+	require.Equal(t, []string{"f1"}, announced2)
+}
+
+// The registered hook runs after the reconcile lock is released: it may ask for a reconcile itself, and a slow one does not hold
+// the readers.
+func TestReconcile_TheHookRunsOutsideTheLock(t *testing.T) {
+	r := newRecRig(t)
+	r.owners.set(watcherOwner("f1"), true, nil)
+	inHook := make(chan struct{})
+	release := make(chan struct{})
+	r.m.rec.registered = func(watch.Holder) {
+		close(inHook)
+		_, _, _ = r.m.Reconcile(context.Background()) // re-entrant: would deadlock under the lock
+		<-release
+	}
+	done := make(chan struct{})
+	go func() {
+		_, _, _ = r.m.Reconcile(context.Background())
+		close(done)
+	}()
+	select {
+	case <-inHook:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the hook did not run")
+	}
+	other := make(chan struct{})
+	go func() {
+		_, _, _ = r.m.Reconcile(context.Background()) // a reconcile while the hook is blocked
+		close(other)
+	}()
+	select {
+	case <-other:
+	case <-time.After(3 * time.Second):
+		t.Fatal("a blocked hook holds the reconcile lock")
+	}
+	close(release)
+	<-done
+}
+
+// A new frame is recorded only when the session and its first pane are still what the owner was asked about.
+func TestReconcile_APaneThatMovedDuringTheLookupIsNotRegistered(t *testing.T) {
+	r := newRecRig(t)
+	called := false
+	r.m.rec.registered = func(watch.Holder) { called = true }
+	r.owners.set(watcherOwner("f1"), true, nil)
+	// the first Find says %7, the one before recording says another first pane (a pane was added in front)
+	r.panes.script = []paneAnswer{{"$3", "%7", true}, {"$3", "%5", true}}
+	_, reg, err := r.m.Reconcile(context.Background())
+	require.ErrorIs(t, err, errPaneMoved)
+	require.False(t, reg)
+	require.False(t, called)
+	require.Equal(t, watch.HolderNone, r.m.holder.Get().State)
+
+	// the session recreated under a new $N in between
+	r.panes.script = []paneAnswer{{"$3", "%7", true}, {"$4", "%7", true}}
+	_, _, err = r.m.Reconcile(context.Background())
+	require.ErrorIs(t, err, errPaneMoved)
+	// and gone
+	r.panes.script = []paneAnswer{{"$3", "%7", true}, {"", "", false}}
+	_, _, err = r.m.Reconcile(context.Background())
+	require.ErrorIs(t, err, errPaneMoved)
+
+	// stable: registered
+	_, reg = r.reconcile(t)
+	require.True(t, reg)
+	require.True(t, called)
+}
+
+// A read that began before Stop is waited for by Stop, like a background reconcile, and cannot write after it.
+func TestStop_WaitsForAReadTriggeredReconcileToo(t *testing.T) {
+	r := newRecRig(t)
+	r.owners.set(watcherOwner("f1"), true, nil)
+	require.NoError(t, r.m.Start(context.Background()))
+	r.now = r.now.Add(time.Minute) // stale
+	gate := make(chan struct{})
+	r.panes.mu.Lock()
+	r.panes.gate = gate
+	r.panes.mu.Unlock()
+	base := r.panes.count()
+	go func() {
+		rr := httptest.NewRecorder()
+		r.mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/watch/holder", nil))
+	}()
+	require.Eventually(t, func() bool { return r.panes.count() == base+1 }, 3*time.Second, 5*time.Millisecond)
+
+	stopped := make(chan struct{})
+	go func() { _ = r.m.Stop(context.Background()); close(stopped) }()
+	select {
+	case <-stopped:
+		t.Fatal("Stop returned while a read-triggered reconcile was running")
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(gate)
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Stop did not return")
+	}
+	after := r.panes.count()
+	rr := httptest.NewRecorder()
+	r.mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/watch/holder", nil))
+	require.Equal(t, after, r.panes.count(), "a read after Stop reconciles nothing")
+}
+
+// A clock that went back does not make the last reconcile look young for the hour it went back.
+func TestReads_AClockThatWentBackIsStale(t *testing.T) {
+	r := newRecRig(t)
+	r.owners.set(watcherOwner("f1"), true, nil)
+	require.NoError(t, r.m.Start(context.Background()))
+	t.Cleanup(func() { _ = r.m.Stop(context.Background()) })
+	base := r.panes.count()
+	r.now = r.now.Add(-time.Hour)
+	rr := httptest.NewRecorder()
+	r.mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/watch/holder", nil))
+	require.Equal(t, base+1, r.panes.count(), "the read reconciles")
 }

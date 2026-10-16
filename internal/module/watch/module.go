@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/wake/purdex/internal/config"
@@ -49,11 +48,11 @@ type Module struct {
 	loc     *watch.Locator
 
 	// panes finds the pdx-watch tmux session; ownerSrc is the agent module's resolver (nil: looked up in the registry). rec is the
-	// state of reconcile (reconcile.go); started says Start ran, which is when reads begin to reconcile.
+	// state of reconcile (reconcile.go); store is the holder as reconcile writes it (nil: holder; a test wraps it).
 	panes    paneFinder
 	ownerSrc ownerLookup
 	rec      reconcileState
-	started  atomic.Bool
+	store    holderStore
 	// tickEvery is the period of the safety-net ticker (a test shortens it); unsubscribe and stop undo Start.
 	tickEvery   time.Duration
 	unsubscribe func()
@@ -130,7 +129,6 @@ func (m *Module) Start(context.Context) error {
 	m.runMu.Lock()
 	m.running, m.runCtx = true, ctx
 	m.runMu.Unlock()
-	m.started.Store(true)
 	m.reconcileBackground("start")
 	every := m.tickEvery
 	if every <= 0 {
@@ -154,7 +152,6 @@ func (m *Module) Start(context.Context) error {
 }
 
 func (m *Module) Stop(context.Context) error {
-	m.started.Store(false)
 	m.runMu.Lock()
 	m.running = false
 	m.runMu.Unlock()

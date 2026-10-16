@@ -35,13 +35,30 @@ type paneFinder interface {
 	Find(ctx context.Context) (sessionID, paneID string, found bool, err error)
 }
 
-var errNoOwnerLookup = errors.New("the agent module's owner resolver is not available")
+// holderStore is the holder as reconcile uses it (a test wraps it to fail a write after it was committed).
+type holderStore interface {
+	Get() watch.Holder
+	UpdateCommitted(fn func(*watch.Holder)) (committed bool, err error)
+}
+
+func (m *Module) hs() holderStore {
+	if m.store != nil {
+		return m.store
+	}
+	return m.holder
+}
+
+var (
+	errNoOwnerLookup = errors.New("the agent module's owner resolver is not available")
+	errPaneMoved     = errors.New("pdx-watch changed while it was being looked up; it will be looked up again")
+)
 
 // reconcileState is what the module keeps between reconciles.
 type reconcileState struct {
 	mu   sync.Mutex // one reconcile at a time
 	last time.Time  // when the last one finished (attempted: a failing lookup is not retried by every read)
-	// registered, when set, is called with the holder after a reconcile found a NEW watcher frame (W3a-2c announces it).
+	// registered, when set, is called with the holder after a reconcile found a NEW watcher frame (W3a-2c announces it). It is
+	// called after the reconcile lock is released (it may take a while, and may itself ask for a reconcile), once per new frame.
 	registered func(watch.Holder)
 }
 
@@ -75,23 +92,28 @@ func (m *Module) Reconcile(ctx context.Context) (h watch.Holder, registered bool
 
 // reconcile runs one reconcile. onlyIfStale makes it do nothing (ran=false) when, once it holds the exclusive right to reconcile,
 // the last one is younger than staleAfter: readers that found the holder stale at the same moment queue here and the first one's
-// reconcile serves all of them, instead of each repeating the lookups.
+// reconcile serves all of them, instead of each repeating the lookups. A clock that went back makes the last reconcile "stale".
 func (m *Module) reconcile(ctx context.Context, onlyIfStale bool) (h watch.Holder, registered, ran bool, err error) {
 	m.rec.mu.Lock()
-	defer m.rec.mu.Unlock()
-	if onlyIfStale && !m.rec.last.IsZero() && m.now().Sub(m.rec.last) <= staleAfter {
-		return m.holder.Get(), false, false, nil
+	if onlyIfStale && !m.rec.last.IsZero() {
+		if age := m.now().Sub(m.rec.last); age >= 0 && age <= staleAfter {
+			h = m.hs().Get()
+			m.rec.mu.Unlock()
+			return h, false, false, nil
+		}
 	}
-	defer func() { m.rec.last = m.now() }()
 	h, registered, err = m.reconcileLocked(ctx)
-	if registered && m.rec.registered != nil {
-		m.rec.registered(h)
+	m.rec.last = m.now()
+	hook := m.rec.registered
+	m.rec.mu.Unlock()
+	if registered && hook != nil {
+		hook(h)
 	}
 	return h, registered, true, err
 }
 
 func (m *Module) reconcileLocked(ctx context.Context) (watch.Holder, bool, error) {
-	cur := m.holder.Get()
+	cur := m.hs().Get()
 	sid, pane, found, err := m.panes.Find(ctx)
 	if err != nil {
 		return cur, false, fmt.Errorf("find %s: %w", watch.PaneSession, err)
@@ -114,17 +136,29 @@ func (m *Module) reconcileLocked(ctx context.Context) (watch.Holder, bool, error
 	if !isWatcher(owner, ok, pane) {
 		return m.rest(cur)
 	}
-	registered := false
-	err = m.holder.Update(func(h *watch.Holder) {
-		if !(h.State == watch.HolderAwake && h.FrameID == owner.FrameID) {
-			registered = true
+	sameFrame := cur.State == watch.HolderAwake && cur.FrameID == owner.FrameID
+	if !sameFrame {
+		// A new watcher is about to be recorded (and announced): the session and its first pane must still be the ones the owner
+		// was asked about. tmux can restart, or a pane can be added in front, between the lookup and the answer.
+		sid2, pane2, found2, err := m.panes.Find(ctx)
+		if err != nil {
+			return cur, false, fmt.Errorf("find %s: %w", watch.PaneSession, err)
+		}
+		if !found2 || sid2 != sid || pane2 != pane {
+			return cur, false, errPaneMoved
+		}
+	}
+	committed, err := m.hs().UpdateCommitted(func(h *watch.Holder) {
+		if !sameFrame {
 			h.Since = m.now()
 		}
 		h.State, h.SessionID = watch.HolderAwake, owner.SessionID
 		h.FrameID, h.PaneID, h.TmuxSessionID = owner.FrameID, pane, sid
 		h.PID, h.ProcessStartTime, h.TranscriptPath = owner.PID, owner.ProcessStartTime, owner.TranscriptPath
 	})
-	return m.holder.Get(), registered && err == nil, err
+	// Registration is what was committed, not whether the write came back clean: a directory fsync that failed after the rename
+	// has changed the holder (memory follows the file), and the next reconcile would see the same frame and never announce it.
+	return m.hs().Get(), !sameFrame && committed, err
 }
 
 // rest: no watcher is there. An awake holder becomes resting with its session id and transcript path kept (the agent rested,
@@ -133,40 +167,47 @@ func (m *Module) rest(cur watch.Holder) (watch.Holder, bool, error) {
 	if cur.State != watch.HolderAwake {
 		return cur, false, nil
 	}
-	err := m.holder.Update(func(h *watch.Holder) {
+	_, err := m.hs().UpdateCommitted(func(h *watch.Holder) {
 		h.State, h.Since = watch.HolderResting, m.now()
 		h.FrameID, h.PaneID, h.TmuxSessionID, h.PID, h.ProcessStartTime = "", "", "", 0, ""
 	})
-	return m.holder.Get(), false, err
+	return m.hs().Get(), false, err
+}
+
+// enter admits one reconcile that no Stop has begun: it counts it for Stop to wait for and gives it a context that ends with the
+// module, with the caller's, and after reconcileBudget. done must be called when it is over.
+func (m *Module) enter(parent context.Context) (ctx context.Context, done func(), ok bool) {
+	m.runMu.Lock()
+	defer m.runMu.Unlock()
+	if !m.running {
+		return nil, nil, false
+	}
+	m.wg.Add(1)
+	ctx, cancel := context.WithTimeout(m.runCtx, reconcileBudget)
+	stop := context.AfterFunc(parent, cancel)
+	return ctx, func() { stop(); cancel(); m.wg.Done() }, true
 }
 
 // fresh reconciles when the last reconcile is older than staleAfter (or never happened) and the module is running; a failure is
 // logged and the holder is read as it is. It is what a holder read (peer route, status, the locator's question) calls first.
 func (m *Module) fresh(ctx context.Context) {
-	if !m.started.Load() {
+	cctx, done, ok := m.enter(ctx)
+	if !ok {
 		return
 	}
-	cctx, cancel := context.WithTimeout(ctx, reconcileBudget)
-	defer cancel()
+	defer done()
 	if _, _, _, err := m.reconcile(cctx, true); err != nil {
 		m.logf("[watch] reconcile: %v", err)
 	}
 }
 
-// reconcileBackground is a reconcile no caller waits for (a SessionStart, the ticker, the start of the daemon). It runs only while
-// the module runs, Stop waits for the one in flight, and Stop cancels its context.
+// reconcileBackground is a reconcile no caller waits for (a SessionStart, the ticker, the start of the daemon).
 func (m *Module) reconcileBackground(why string) {
-	m.runMu.Lock()
-	if !m.running {
-		m.runMu.Unlock()
+	ctx, done, ok := m.enter(context.Background())
+	if !ok {
 		return
 	}
-	m.wg.Add(1)
-	parent := m.runCtx
-	m.runMu.Unlock()
-	defer m.wg.Done()
-	ctx, cancel := context.WithTimeout(parent, reconcileBudget)
-	defer cancel()
+	defer done()
 	if _, _, err := m.Reconcile(ctx); err != nil {
 		m.logf("[watch] reconcile (%s): %v", why, err)
 	}
