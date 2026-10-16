@@ -50,3 +50,20 @@ describe('SegmentControl', () => {
     expect(screen.getByText('Beta').className).not.toContain('rounded-r-md')
   })
 })
+
+describe('SegmentControl disabled option', () => {
+  it('a disabled option cannot be picked', () => {
+    const onChange = vi.fn()
+    render(<SegmentControl options={[{ value: 'a', label: 'A' }, { value: 'b', label: 'B', disabled: true }]} value="a" onChange={onChange} />)
+    const b = screen.getByRole('button', { name: 'B' })
+    expect(b).toBeDisabled()
+    fireEvent.click(b)
+    expect(onChange).not.toHaveBeenCalled()
+  })
+  it('a disabled option has no hover lighting', () => {
+    render(<SegmentControl options={[{ value: 'a', label: 'A' }, { value: 'b', label: 'B', disabled: true }]} value="a" onChange={() => {}} />)
+    const cls = screen.getByRole('button', { name: 'B' }).className
+    expect(cls).not.toMatch(/(^|\s)hover:/)
+    expect(cls).toContain('enabled:hover:')
+  })
+})
