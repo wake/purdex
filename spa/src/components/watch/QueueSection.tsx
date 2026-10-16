@@ -44,7 +44,8 @@ function QueueBody({ fleetHostId, queue }: { fleetHostId: string; queue: FleetQu
           {n > 0 && <span className={num}>{t('watch.queue.longest', { t: mss(now - longest * 1000, now) })}</span>}
         </span>
       </div>
-      <QueueNow queue={queue} now={now} />
+      {/* 歷史 is W5d's; until then it cannot be picked, and a remembered one shows no body. */}
+      {tab === 'now' && <QueueNow queue={queue} now={now} />}
     </div>
   )
 }
