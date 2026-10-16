@@ -88,6 +88,15 @@ func TestClassify_Table(t *testing.T) {
 		{"tsc -b -p spa", ClassHeavy}, // -b wins: it builds the references
 		{"tsc --build --project spa", ClassHeavy},
 		{"tsc -p spa --version", ClassNone},
+		{"tsc --watch", ClassNone}, // never ends (#2989)
+		{"tsc -w", ClassNone},
+		{"tsc -b -w", ClassNone},
+		{"tsc --build --watch", ClassNone},
+		{"tsc -p spa --noEmit --watch", ClassNone},
+		{"tsc src/a.ts -w", ClassNone},
+		{"tsc --watch false", ClassHeavy}, // tsc reads the false: it runs once
+		{"tsc -b --watch false", ClassHeavy},
+		{"tsc -p spa --watch false", ClassLight},
 		{"tsc --noEmit", ClassHeavy},
 		{"tsc src/a.ts", ClassLight},
 		{"tsc --version", ClassNone},
