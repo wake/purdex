@@ -67,6 +67,8 @@ func TestClassifyReason_Table(t *testing.T) {
 		{"claude plugin test --help", Env{}, ClassNone, ReasonInfoOnly},
 		{"go test -h", Env{}, ClassNone, ReasonInfoOnly},
 		{"go help test", Env{}, ClassNone, ReasonInfoOnly},
+		{"pnpm help", Env{}, ClassNone, ReasonInfoOnly},
+		{"npm help install", Env{}, ClassNone, ReasonInfoOnly},
 		{"pnpm run build --help", Env{}, ClassNone, ReasonInfoOnly}, // not a packaging run: nothing is built
 		{"vite build --help", Env{}, ClassNone, ReasonInfoOnly},
 		{"go test ./... -args -h", Env{}, ClassHeavy, ReasonHeavy},
