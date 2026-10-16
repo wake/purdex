@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { CardStack } from './CardStack'
+import { ConfirmDetail } from './ConfirmDetail'
 import { TeamDisplayProvider } from '../team/TeamDisplayProvider'
 import { HOST, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
 import { ccTabOf, seedUnit, setJournalHost } from '../../lib/journal/__tests__/journal-fixture'
@@ -127,6 +128,28 @@ describe('the 待確認 detail', () => {
     term.remove()
     input.remove()
   })
+  it('an Esc another handler already took (preventDefault) does not close it (M: no defaultPrevented check)', () => {
+    mount()
+    fireEvent.click(openOf('c1'))
+    const taken = (e: Event) => e.preventDefault()
+    document.addEventListener('keydown', taken) // runs before the window listener on the way up
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    document.removeEventListener('keydown', taken)
+    expect(q('journal-detail-card')).toBeTruthy()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(q('journal-detail-card')).toBeNull()
+  })
+  it.each([['select', () => document.createElement('select')], ['contenteditable=""', () => { const d = document.createElement('div'); d.setAttribute('contenteditable', ''); return d }], ['contenteditable="true"', () => { const d = document.createElement('div'); d.setAttribute('contenteditable', 'true'); return d }]])('Esc typed into a %s is that field\'s, not the detail\'s', (_what, make) => {
+    mount()
+    fireEvent.click(openOf('c1'))
+    const field = make()
+    const inner = document.createElement('span') // the caret may sit in a child
+    field.appendChild(inner)
+    document.body.appendChild(field)
+    fireEvent.keyDown(inner, { key: 'Escape' })
+    expect(q('journal-detail-card')).toBeTruthy()
+    field.remove()
+  })
   it('an Esc that ends an input-method composition does not close it', () => {
     mount()
     fireEvent.click(openOf('c1'))
@@ -220,5 +243,30 @@ describe('the 待確認 detail', () => {
     mount()
     patchViewMemo(HOST, key, { detailId: 'c1', journalOpen: false })
     expect(q('journal-detail-card')).toBeNull()
+  })
+})
+
+describe('ConfirmDetail alone', () => {
+  const at = new Date(2026, 9, 14, 14, 5).getTime()
+  const base: JournalEntry = { id: 'c', kind: 'confirm', by: '', at, actor: 'Kenji → Wake', text: 'decide', refs: [], items: [{ text: 'one', done: false }, { text: 'two', done: true }], detail: 'q', pinned: false }
+  const stateText = () => screen.getByTestId('journal-detail-state').textContent
+  beforeEach(() => { cleanup(); useI18nStore.getState().setLocale('en') })
+  it('a closed detail no longer answers Esc (M: the listener is not removed on unmount)', () => {
+    const onClose = vi.fn()
+    const { unmount } = render(<ConfirmDetail entry={base} personName="Wake" onClose={onClose} />)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+    unmount()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+  it('says waiting, waiting (pinned) or resolved from the entry\'s state', () => {
+    const { rerender } = render(<ConfirmDetail entry={base} personName="Wake" onClose={() => {}} />)
+    const waiting = stateText()
+    rerender(<ConfirmDetail entry={{ ...base, pinned: true }} personName="Wake" onClose={() => {}} />)
+    const waitingPinned = stateText()
+    rerender(<ConfirmDetail entry={{ ...base, pinned: true, items: base.items.map((i) => ({ ...i, done: true })) }} personName="Wake" onClose={() => {}} />)
+    const resolved = stateText()
+    expect([waiting, waitingPinned, resolved]).toEqual(['Waiting for your reply', 'Waiting for your reply, pinned', 'All answered'])
   })
 })
