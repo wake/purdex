@@ -200,7 +200,7 @@ Design:
   | Module | Item | Parameters (default) |
   |---|---|---|
   | `intercept` | 1 | `tools` (go, pnpm, npx, vitest, tsc), `mod_rewrite` (true), extra `[[gate.intercept.rule]]` (match → class, before the built-ins) |
-  | `slots` | 1 | `heavy` (1), `light` (3), `order` (fifo) |
+  | `slots` | 1 | `heavy` (1), `light` (3), `order` (fifo); **0 pauses the class** (user decision 10-16): new commands of it wait with the reason `paused` until it is raised again, commands already running go on, and `pdx gate status` shows the class as paused |
   | `admission` | 2 | `enabled`, `max_pressure_level` (1), `max_page_rate` (auto = 50 pages/s over 10 s, G0; the level is the primary signal), `disk_min_gb` (10), `on_unreadable` (level-only) |
   | `parallelism` | 3 | `mode` (auto \| fixed \| off), `reserve_cores` (2), `mem_per_worker_mb` per tool (go 150, vitest 700, others 400), `go_p` / `vitest_workers` / `pnpm_concurrency` (auto), `vitest_max_workers` (3), per-class overrides |
   | `priority` | 4 | `mode` (nice \| background \| none), `nice` (10) |
@@ -397,7 +397,7 @@ daemon settings. Not Profile Sync: Profile Sync carries the App's own stores and
 | `workdir` | `~/Workspace/wake/mlab-purdex-watch` (both hosts) | the watcher's directory on this host: a checkout of the mlab repo used only for its `purdex-watch` branch |
 | `start_prompt` | built-in | the first prompt of a new watcher; at most 4 KB, no control characters (no newline: it is typed into a shell, §12.4) |
 | `wake_prompt` | built-in | the prompt that resumes a resting watcher; same limits |
-| `slot_bounds` | `{"heavy": [1, 2], "light": [2, 4]}` | the range the watcher may set this host's gate slot counts to (§12.4 "Slot counts"); user decision 10-16: adjustable, these defaults. Each class `[min, max]` with 1 ≤ min ≤ max ≤ 64 |
+| `slot_bounds` | `{"heavy": [0, 3], "light": [0, 5]}` | the range the watcher may set this host's gate slot counts to (§12.4 "Slot counts"); user decision 10-16: adjustable, these defaults. Each class `[min, max]` with 0 ≤ min ≤ max ≤ 64; 0 pauses the class (§5) |
 
 ### 12.3 Where the watcher is, and delivery (W2)
 
@@ -505,7 +505,9 @@ model name.
 - **Slot counts** (the user's 10-16 decision, made concrete): the watcher reads the value first (`pdx gate status
   --json`), changes it with `pdx gate set slots.<heavy|light>=<n>` on the host it runs on (the gate reads its config at
   every run, so no daemon call is needed), or with `ssh <alias> pdx gate set …` for the other gated host, and stays
-  within that host's `slot_bounds` (§12.2; user decision 10-16: adjustable, default heavy 1–2 and light 2–4), read
+  within that host's `slot_bounds` (§12.2; user decision 10-16: adjustable, default heavy 0–3 and light 0–5; 0 pauses
+  the class, §5: its message then says what is paused and why, and it raises the count again as soon as the reason is
+  gone), read
   with `pdx watch config get` (on the other host over the same `ssh`). A count already outside the bounds (set by the
   person) may be moved toward them, never further out. It reads the
   value again after the write and tells the person the host, the class, old → new and why; a write that fails or reads
