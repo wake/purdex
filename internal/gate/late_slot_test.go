@@ -54,7 +54,7 @@ func TestTakeLate_UsesAFreeSlotElseGoesOver(t *testing.T) {
 func TestTakeLate_RunsOutOfOverSlots(t *testing.T) {
 	p := lateTestPool(t, 1)
 	var got []*Slot
-	for i := 0; i < 1+overSlots; i++ {
+	for i := 0; i < 1+8; i++ { // eight beyond the pool: a number the spec states, not the constant itself
 		s, err := p.TakeLate()
 		require.NoError(t, err)
 		require.NotNil(t, s, "late holder %d", i)
