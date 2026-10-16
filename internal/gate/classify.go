@@ -95,13 +95,33 @@ func ClassifyReason(argv []string, e Env) (Class, Reason) {
 
 // heavyReason is vitest_related for a `vitest related` that was made heavy because of what it follows, heavy for the rest.
 func heavyReason(argv []string, e Env) Reason {
-	for i, a := range argv {
-		if filepath.Base(a) == "vitest" {
-			if _, r := vitestVerdict(argv[i+1:], e); r == ReasonVitestRelated {
-				return r
-			}
-			break
+	if len(argv) == 0 {
+		return ReasonHeavy
+	}
+	rest := argv[1:]
+	switch filepath.Base(argv[0]) {
+	case "vitest":
+	case "pnpm", "pnpx", "npx", "yarn", "npm", "bunx", "bun":
+		// the tool the runner runs: the first word that is not an option, after an optional exec / dlx
+		i := 0
+		for i < len(rest) && strings.HasPrefix(rest[i], "-") {
+			i++
 		}
+		if i < len(rest) && (rest[i] == "exec" || rest[i] == "x" || rest[i] == "dlx") {
+			i++
+			for i < len(rest) && strings.HasPrefix(rest[i], "-") {
+				i++
+			}
+		}
+		if i >= len(rest) || filepath.Base(rest[i]) != "vitest" {
+			return ReasonHeavy
+		}
+		rest = rest[i+1:]
+	default:
+		return ReasonHeavy
+	}
+	if _, r := vitestVerdict(rest, e); r == ReasonVitestRelated {
+		return r
 	}
 	return ReasonHeavy
 }

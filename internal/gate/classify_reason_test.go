@@ -60,6 +60,8 @@ func TestClassifyReason_Table(t *testing.T) {
 		{"npx vitest related --run src/a.ts", Env{}, ClassHeavy, ReasonVitestRelated},
 		{"pnpm exec vitest related src/a.ts", Env{}, ClassHeavy, ReasonVitestRelated},
 		{"vitest run --related src/a.ts", Env{}, ClassHeavy, ReasonVitestRelated},
+		{"go test ./vitest related --run", Env{}, ClassHeavy, ReasonHeavy}, // the word elsewhere in a heavy command is no vitest
+		{"pnpm exec vitest run", Env{}, ClassHeavy, ReasonHeavy},
 		{"vitest run", Env{}, ClassHeavy, ReasonHeavy},
 		{"vitest run src/a.test.ts", Env{}, ClassLight, ReasonLight},
 		{"tsc --watch", Env{}, ClassNone, ReasonWatchMode},
