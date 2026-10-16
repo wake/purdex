@@ -7,6 +7,7 @@ import { RANGE_MS, collectedMinutes, stretches, summarize, toPoints, type SPt } 
 import { useI18nStore } from '../../stores/useI18nStore'
 
 export const ROW = 'grid grid-cols-[8rem_minmax(0,1fr)_9.5rem] items-center gap-x-4'
+const COVER_SLACK_MS = 15_000
 const CH = 36
 const W = 400
 const LINE_CLASS: Record<Tone, string> = { ok: 'text-text-secondary', warn: 'text-status-warning', danger: 'text-status-error' }
@@ -58,6 +59,9 @@ export function TimeAxis({ points, now, range }: { points: HistoryPoint[]; now: 
   const t = useI18nStore((s) => s.t)
   const win = RANGE_MS[range] / 60_000
   const collected = collectedMinutes(points, now)
+  // `series` cuts the history at the range start, so a full history's first point is never earlier than that: only a first point more
+  // than a bucket (10 s) and a bit later than the start means the App has not collected the whole range yet.
+  const partial = collected * 60_000 < RANGE_MS[range] - COVER_SLACK_MS
   const label = (min: number) => (min === 0 ? t('watch.host.axis_now') : min < 60 ? t('watch.host.axis_min', { n: min }) : t('watch.host.axis_hour', { n: +(min / 60).toFixed(1) }))
   return (
     <div className={`${ROW} pt-0.5`}>
@@ -69,7 +73,7 @@ export function TimeAxis({ points, now, range }: { points: HistoryPoint[]; now: 
           </span>
         ))}
       </div>
-      <span data-testid="axis-collecting" className="text-[10px] text-text-muted text-right">{collected < win ? t('watch.host.collecting', { n: Math.floor(collected) }) : ''}</span>
+      <span data-testid="axis-collecting" className="text-[10px] text-text-muted text-right">{partial ? t('watch.host.collecting', { n: Math.floor(collected) }) : ''}</span>
     </div>
   )
 }

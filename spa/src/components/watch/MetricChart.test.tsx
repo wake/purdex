@@ -66,6 +66,10 @@ describe('TimeAxis', () => {
     render(<TimeAxis points={[at(300, 1)]} now={NOW} range="5m" />)
     expect(screen.getByTestId('axis-collecting')).toHaveTextContent(/^$/)
   })
+  it('a series that starts within a few seconds of the range start counts as covering it (the history is cut at the range, so its first point is never earlier)', () => {
+    render(<TimeAxis points={[at(295, 1)]} now={NOW} range="5m" />)
+    expect(screen.getByTestId('axis-collecting')).toHaveTextContent(/^$/)
+  })
   it('an empty series has collected 0 minutes', () => {
     render(<TimeAxis points={[]} now={NOW} range="1h" />)
     expect(screen.getByTestId('axis-collecting')).toHaveTextContent(t('watch.host.collecting', { n: 0 }))

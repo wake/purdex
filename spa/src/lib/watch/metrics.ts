@@ -57,7 +57,7 @@ export function gaugeOf(k: HistoryItem, f: FleetFast, t: T): GaugeReading {
       return { value: pressureWord(f.level, t), pct: f.level === 1 ? 33 : f.level === 2 ? 66 : 100, tone: levelTone(f.level) }
     }
     case 'page_rate':
-      return { value: f.page_rate.toLocaleString(), unit: t('watch.host.unit.pages'), pct: Math.min(100, (f.page_rate / PAGING_FULL) * 100), tone: pagingTone(f.page_rate) }
+      return { value: Math.round(f.page_rate).toLocaleString(), unit: t('watch.host.unit.pages'), pct: Math.min(100, (f.page_rate / PAGING_FULL) * 100), tone: pagingTone(f.page_rate) }
     case 'mem': return { value: f.mem.toFixed(0), unit: '%', pct: f.mem, tone: usageTone(f.mem) }
     case 'disk': return { value: f.disk.toFixed(0), unit: '%', pct: f.disk, tone: diskTone(f.disk) }
     default: return { value: f.cpu.toFixed(0), unit: '%', pct: f.cpu, tone: usageTone(f.cpu) }

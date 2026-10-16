@@ -26,6 +26,9 @@ describe('the gauge of a reading', () => {
   it('pressure level 0 (unknown) has no arc', () => {
     expect(gaugeOf('level', fast({ level: 0 }), t)).toMatchObject({ pct: 0, value: '—' })
   })
+  it('paging reads in whole pages per second', () => {
+    expect(gaugeOf('page_rate', fast({ page_rate: 6.877 }), t).value).toBe('7')
+  })
   it('paging is full at 800 pages/s', () => {
     expect(gaugeOf('page_rate', fast({ page_rate: 400 }), t)).toMatchObject({ pct: 50, tone: 'warn' })
     expect(gaugeOf('page_rate', fast({ page_rate: 801 }), t).pct).toBe(100)
