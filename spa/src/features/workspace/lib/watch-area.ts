@@ -125,6 +125,10 @@ export function leaveAreaForForeignActiveTab(): void {
   if (owner && owner.id !== WATCH_WORKSPACE_ID) ws.setActiveWorkspace(owner.id)
 }
 
+/** The reconciler `startWatchArea` runs (and `openWatchArea` borrows, so both share one device's memory of what it saw). */
+let current: WatchReconciler = createWatchReconciler()
+export const currentWatchReconciler = (): WatchReconciler => current
+
 /** The fleet store's view for the reconcile: no snapshot → null; no current primary counts as stale. */
 export function readFleetView(): WatchFleetView | null {
   const s = useFleetStore.getState()
@@ -139,6 +143,7 @@ export function readFleetView(): WatchFleetView | null {
  */
 export function startWatchArea(): () => void {
   const reconciler = createWatchReconciler()
+  current = reconciler
   let timer: ReturnType<typeof setTimeout> | null = null
   let running = false
 
@@ -164,5 +169,6 @@ export function startWatchArea(): () => void {
     for (const off of unsubscribe) off()
     if (timer !== null) clearTimeout(timer)
     timer = null
+    if (current === reconciler) current = createWatchReconciler()
   }
 }
