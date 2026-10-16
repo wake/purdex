@@ -14,6 +14,8 @@ const SAVE_MS = 150
 interface Opts {
   host: string | null
   unitKey: string | null
+  /** Names the unit the list belongs to (`host\0unitKey`): a different key is a different list, not new events. */
+  streamKey?: string
   /** What the stream shows (filtered), oldest first. */
   shown: readonly JournalEntry[]
   filter: string
@@ -28,11 +30,12 @@ function appended(old: readonly JournalEntry[], now: readonly JournalEntry[]): n
   return at >= 0 ? now.length - 1 - at : Math.max(1, now.length - old.length)
 }
 
-export function useStreamScroll({ host, unitKey, shown, filter, more, loadOlder }: Opts) {
+export function useStreamScroll({ host, unitKey, streamKey = `${host}\0${unitKey}`, shown, filter, more, loadOlder }: Opts) {
   const ref = useRef<HTMLDivElement>(null)
   const [below, setBelow] = useState(0)
   const prev = useRef<readonly JournalEntry[]>(shown)
   const prevFilter = useRef(filter)
+  const prevKey = useRef(streamKey)
   const anchor = useRef<{ height: number; top: number } | null>(null)
   const loading = useRef(false)
   const lastTop = useRef(0)
@@ -74,6 +77,14 @@ export function useStreamScroll({ host, unitKey, shown, filter, more, loadOlder 
     const old = prev.current
     prev.current = shown
     const el = ref.current
+    if (prevKey.current !== streamKey) {
+      // Another unit's list (the opening effect above already put the view where that unit was left): none of it is new.
+      prevKey.current = streamKey
+      anchor.current = null
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- the pill belongs to the unit that was just left
+      setBelow(0)
+      return
+    }
     if (!el || old === shown) return
     if (anchor.current && shown[0]?.id !== old[0]?.id) {
       el.scrollTop = anchor.current.top + (el.scrollHeight - anchor.current.height)
@@ -85,7 +96,7 @@ export function useStreamScroll({ host, unitKey, shown, filter, more, loadOlder 
     const pinned = host !== null && unitKey !== null ? readViewMemo(host, unitKey).pinnedToBottom : true
     if (pinned) { el.scrollTop = el.scrollHeight; lastTop.current = el.scrollTop }
     else setBelow((b) => b + appended(old, shown))
-  }, [shown, host, unitKey])
+  }, [shown, host, unitKey, streamKey])
 
   const older = useCallback(() => {
     const el = ref.current

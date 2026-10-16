@@ -25,18 +25,23 @@ const entry = (n: number, over: Partial<JournalEntry> = {}): JournalEntry => ({
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => entry(from + i))
 const ctx: RowContext = { personName: 'Wake', remoteUrl: '', selectedId: null, onToggleDetail: () => {}, onTogglePin: () => {} }
 
-/** The test pushes a new list into the mounted harness through this handle. */
-const handle: { current: { set: (e: JournalEntry[]) => void } | null } = { current: null }
+/** The test pushes a new list (or switches the mounted stream to another unit) through this handle. */
+interface Handle { set: (e: JournalEntry[]) => void; switchTo: (unit: string, e: JournalEntry[]) => void }
+const handle: { current: Handle | null } = { current: null }
 let loadOlder = vi.fn<() => Promise<unknown>>()
 function Harness({ initial, more = false, filter = 'all' }: { initial: JournalEntry[]; more?: boolean; filter?: string }) {
-  const [entries, setEntries] = useState(initial)
-  useImperativeHandle(handle as React.Ref<{ set: (e: JournalEntry[]) => void }>, () => ({ set: setEntries }), [])
-  return <JournalStream host={H} unitKey={K} entries={entries} filter={filter} more={more} onLoadOlder={loadOlder} ctx={ctx} />
+  const [state, setState] = useState({ unit: K, entries: initial })
+  useImperativeHandle(handle as React.Ref<Handle>, () => ({
+    set: (entries) => setState((s) => ({ ...s, entries })),
+    switchTo: (unit, entries) => setState({ unit, entries }),
+  }), [])
+  return <JournalStream host={H} unitKey={state.unit} entries={state.entries} filter={filter} more={more} onLoadOlder={loadOlder} ctx={ctx} />
 }
 const stream = () => screen.getByTestId('journal-stream')
 const top = () => stream().scrollTop
 const scrollTo = (n: number) => { stream().scrollTop = n; fireEvent.scroll(stream()) }
 const push = (e: JournalEntry[]) => act(() => { handle.current?.set(e) })
+const switchTo = (unit: string, e: JournalEntry[]) => act(() => { handle.current?.switchTo(unit, e) })
 
 beforeEach(() => {
   cleanup()
@@ -98,6 +103,39 @@ describe('the stream', () => {
     push(range(1, 13))
     expect(screen.getByTestId('journal-new-pill')).toBeTruthy()
     scrollTo(maxTop(stream()))
+    expect(screen.queryByTestId('journal-new-pill')).toBeNull()
+  })
+})
+
+describe('switching the mounted stream to another unit (a tab switch)', () => {
+  const B = 'solo:b'
+  const other = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => entry(from + i, { id: `b${String(from + i).padStart(3, '0')}` }))
+  it('the other unit\'s whole list is not "new events"; it opens at its own place (M: no unit-change detection)', () => {
+    render(<Harness initial={range(1, 12)} />)
+    switchTo(B, other(1, 14))
+    scrollTo(40) // B: the reader leaves the bottom
+    switchTo(K, range(1, 12))
+    expect(screen.queryByTestId('journal-new-pill')).toBeNull()
+    expect(top()).toBe(maxTop(stream())) // A was left at its bottom
+    switchTo(B, other(1, 14)) // B was left away from the bottom
+    expect(screen.queryByTestId('journal-new-pill')).toBeNull()
+    expect(top()).toBe(40)
+    push(other(1, 15)) // a real new event in B still counts
+    expect(screen.getByTestId('journal-new-pill').textContent).toContain('1')
+  })
+  it('a unit not seen before opens at the bottom with no pill', () => {
+    render(<Harness initial={range(1, 12)} />)
+    scrollTo(40)
+    switchTo(B, other(1, 18))
+    expect(screen.queryByTestId('journal-new-pill')).toBeNull()
+    expect(top()).toBe(maxTop(stream()))
+  })
+  it('a pill of the unit that was left does not follow to the other one', () => {
+    render(<Harness initial={range(1, 12)} />)
+    scrollTo(40)
+    push(range(1, 13))
+    expect(screen.getByTestId('journal-new-pill')).toBeTruthy()
+    switchTo(B, other(1, 18))
     expect(screen.queryByTestId('journal-new-pill')).toBeNull()
   })
 })
