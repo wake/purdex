@@ -5,6 +5,9 @@
 // `<seq>` (solo, the `#` stripped by the API). So both sides reduce to the seq.
 import type { EntryKind, JournalEntry, JournalTask, TaskState } from './types'
 
+/** What the pointer is on: a task, or a task_new / task_done row (`key` is the seq both reduce to). Momentary: never a view memo. */
+export interface TaskHover { key: string; from: 'row' | 'task' }
+
 const STATE_ORDER: Record<TaskState, number> = { open: 0, done: 1, dropped: 2 }
 const TASK_KINDS: ReadonlySet<EntryKind> = new Set<EntryKind>(['task_new', 'task_done'])
 

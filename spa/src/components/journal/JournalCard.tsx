@@ -13,6 +13,7 @@ import { useViewMemo } from '../../lib/journal/use-view-memo'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useJournalStore, type UnitState } from '../../stores/useJournalStore'
+import type { TaskHover } from '../../lib/journal/tasks'
 import type { JournalEntry } from '../../lib/journal/types'
 
 /** The frame's title: the connection dot of the host the journal is read from, and the unit's name. */
@@ -36,7 +37,15 @@ function RoleLine({ target, unit }: { target: JournalTarget; unit: UnitState }) 
   return <div data-testid="journal-role" className="px-3 pb-1 -mt-0.5 text-[11px] text-text-muted truncate">{text}</div>
 }
 
-export function JournalCard({ target, unit }: { target: JournalTarget; unit: UnitState }) {
+interface CardProps {
+  target: JournalTarget
+  unit: UnitState
+  /** The tasks tab's hover link, shared with the tasks card by the stack (momentary, not part of the view memo). */
+  hover?: TaskHover | null
+  onHover?: (h: TaskHover | null) => void
+}
+
+export function JournalCard({ target, unit, hover, onHover }: CardProps) {
   const { memoHost: host, memoKey: key, read } = target
   const memo = useViewMemo(host, key)
   const shown = useMemo(() => unit.entries.filter((e) => matchesFilter(e, memo.filter)), [unit.entries, memo.filter])
@@ -57,8 +66,8 @@ export function JournalCard({ target, unit }: { target: JournalTarget; unit: Uni
     [readHost, readSession],
   )
   const ctx: RowContext = useMemo(
-    () => ({ personName: unit.personName, remoteUrl: unit.project.remoteUrl, selectedId: memo.detailId, onToggleDetail, onTogglePin }),
-    [unit.personName, unit.project.remoteUrl, memo.detailId, onToggleDetail, onTogglePin],
+    () => ({ personName: unit.personName, remoteUrl: unit.project.remoteUrl, selectedId: memo.detailId, onToggleDetail, onTogglePin, hover, onHover }),
+    [unit.personName, unit.project.remoteUrl, memo.detailId, onToggleDetail, onTogglePin, hover, onHover],
   )
 
   return (

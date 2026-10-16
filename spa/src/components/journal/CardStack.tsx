@@ -5,12 +5,13 @@
 // scroll live OUTSIDE this component (lib/journal/view-memory.ts per unit, useJournalUiStore per team / last widths) — the stack
 // is a sibling of TabContent, so a tab switch does not unmount it, but a support toggle or a hide / show does (CLAUDE.md,
 // Tab-hosted checklist). The narrow-window drop is visibility only (card-layout.ts): nothing is written back.
-// The cards' bodies are J-2c (journal) and J-2d (tasks, roadmap); here they are frames with their header controls.
+// The cards' bodies: JournalCard (J-2c), TasksCard and RoadmapCard (J-2d).
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ListChecks, MapTrifold } from '@phosphor-icons/react'
 import { CardFrame } from './CardFrame'
 import { ConfirmDetail } from './ConfirmDetail'
 import { JournalCard, JournalTitle } from './JournalCard'
+import { TasksCard } from './TasksCard'
 import { visibleCards, teamColumnWidth } from './card-layout'
 import { useJournalTarget } from './useJournalTarget'
 import { TeamPanel } from '../team/TeamPanel'
@@ -21,6 +22,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { cardWidth, useJournalUiStore, type CardKey } from '../../stores/useJournalUiStore'
 import { keepFocus } from '../../lib/keep-focus'
 import { patchUnitMemo, useViewMemo } from '../../lib/journal/use-view-memo'
+import type { TaskHover } from '../../lib/journal/tasks'
 import type { ViewMemo } from '../../lib/journal/view-memory'
 
 /**
@@ -72,6 +74,8 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
   const last = useJournalUiStore((s) => s.lastWidths)
   const rootRef = useRef<HTMLDivElement>(null)
   const available = useContentWidth(rootRef)
+  // The tasks tab's hover link (a task <-> its task_new / task_done rows): momentary, so the stack's own state, never the view memo.
+  const [hover, setHover] = useState<TaskHover | null>(null)
 
   // The open 待確認 detail takes the roadmap's place (a card to the journal's left): it counts as the roadmap for the narrow-window
   // drop, and `roadmapOpen` itself is never touched, so closing the detail brings the roadmap back as it was.
@@ -140,14 +144,16 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
           }
           onClose={() => patch({ journalOpen: false })}
         >
-          {unit && <JournalCard key={`${target.memoHost}\u0000${target.memoKey}`} target={target} unit={unit} />}
+          {unit && <JournalCard key={`${target.memoHost}\u0000${target.memoKey}`} target={target} unit={unit} hover={hover} onHover={setHover} />}
           {target.unreachableHost !== null && !target.unit && (
             <div data-testid="journal-unreachable" className="p-3 text-text-secondary">{t('journal.card.unreachable', { host: target.unreachableHost })}</div>
           )}
         </CardFrame>
       )}
       {shown.tasks && (
-        <CardFrame testId="journal-tasks-card" width={widths.tasks} onCommitWidth={commit('tasks')} title={t('journal.card.tasks')} onClose={() => patch({ tasksOpen: false })} />
+        <CardFrame testId="journal-tasks-card" width={widths.tasks} onCommitWidth={commit('tasks')} title={t('journal.card.tasks')} onClose={() => patch({ tasksOpen: false })}>
+          {unit && <TasksCard key={`${target.memoHost}\u0000${target.memoKey}`} target={target} unit={unit} hover={hover} onHover={setHover} />}
+        </CardFrame>
       )}
     </div>
   )

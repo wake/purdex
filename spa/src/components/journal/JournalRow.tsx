@@ -8,6 +8,7 @@ import { PersonMark } from './PersonMark'
 import { RefChips } from './RefChips'
 import { answered } from '../../lib/journal/filters'
 import { timeOf } from '../../lib/journal/stream'
+import { taskKeyOfEntry, type TaskHover } from '../../lib/journal/tasks'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { keepFocus } from '../../lib/keep-focus'
 import type { JournalEntry } from '../../lib/journal/types'
@@ -19,6 +20,9 @@ export interface RowContext {
   selectedId: string | null
   onToggleDetail: (entryId: string) => void
   onTogglePin: (entry: JournalEntry) => void
+  /** The tasks tab's hover link (J-2d): what the pointer is on, and the way to say it is on a task_new / task_done row. Optional. */
+  hover?: TaskHover | null
+  onHover?: (h: TaskHover | null) => void
 }
 
 export function JournalRow({ entry, compact, ctx }: { entry: JournalEntry; compact?: boolean; ctx: RowContext }) {
@@ -28,13 +32,19 @@ export function JournalRow({ entry, compact, ctx }: { entry: JournalEntry; compa
   const resolved = confirm && total > 0 && done === total
   const label = t(entry.pinned ? 'journal.pin.unpin' : 'journal.pin.pin')
   const open = () => ctx.onToggleDetail(entry.id)
+  const taskKey = taskKeyOfEntry(entry)
+  // Lit while the pointer is on its task (not while it is on this row: the row has its own hover look).
+  const linked = taskKey !== null && ctx.hover?.from === 'task' && ctx.hover.key === taskKey
   return (
     <div
       data-testid="journal-entry"
       data-entry-id={entry.id}
       data-kind={entry.kind}
       data-selected={ctx.selectedId === entry.id || undefined}
-      className={`group relative flex gap-2 py-1.5 px-1 -mx-1 rounded border-b border-border-subtle/50 last:border-b-0 ${ctx.selectedId === entry.id ? 'bg-surface-hover ring-1 ring-border-active' : ''}`}
+      data-linked={linked || undefined}
+      onMouseEnter={taskKey !== null ? () => ctx.onHover?.({ key: taskKey, from: 'row' }) : undefined}
+      onMouseLeave={taskKey !== null ? () => ctx.onHover?.(null) : undefined}
+      className={`group relative flex gap-2 py-1.5 px-1 -mx-1 rounded border-b border-border-subtle/50 last:border-b-0 ${ctx.selectedId === entry.id ? 'bg-surface-hover ring-1 ring-border-active' : ''}${linked ? ' bg-accent-muted ring-1 ring-accent' : ''}`}
     >
       {confirm && (
         // The row is a plain container; this button covers it (under the content, which lets clicks through except on its own
