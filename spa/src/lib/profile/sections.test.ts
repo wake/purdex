@@ -236,6 +236,9 @@ const KIND_DECISION: Record<PaneContent['kind'], 'device-local' | 'syncs'> = {
   'image-preview': 'syncs',
   'pdf-preview': 'syncs',
   execution: 'syncs',
+  'watch-guardian': 'syncs',
+  'watch-events': 'syncs',
+  'watch-host': 'syncs',
 }
 
 const FS: FileSource = { type: 'daemon', hostId: 'h1' }
@@ -246,6 +249,7 @@ function contentOf(kind: PaneContent['kind']): PaneContent {
     case 'browser': return { kind, url: 'https://a.test' }
     case 'editor': case 'image-preview': case 'pdf-preview': return { kind, source: FS, filePath: '/f' }
     case 'execution': return { kind, executionId: 'e1' }
+    case 'watch-host': return { kind, fleetHostId: 'f1' }
     default: return { kind } as PaneContent
   }
 }

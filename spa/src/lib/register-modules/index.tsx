@@ -20,6 +20,8 @@ import { BrowserPane } from '../../components/BrowserPane'
 import { BrowserNewTabSection } from '../../components/BrowserNewTabSection'
 import { MemoryMonitorPage } from '../../components/MemoryMonitorPage'
 import { HostPage } from '../../components/HostPage'
+import { WatchHostPane } from '../../components/watch/WatchHostPane'
+import { WatchStubPane } from '../../components/watch/WatchStubPane'
 import WorkerDeckPane from '../../components/execution/WorkerDeckPane'
 import { resolveExecutionHostId } from '../nex/resolve-host'
 import { setExecutionPaneMode, viewModeOf } from '../nex/view-mode'
@@ -251,6 +253,17 @@ export function registerBuiltinModules(): void {
       labelKey: 'settings.section.monitor',
       component: PerformanceMonitorSettingsSection,
     }],
+  })
+  // The watcher area (守門員專區): three pane kinds, one module, never disableable. The guardian and events panes are
+  // stubs until W5a3 / W5e; the reconcile creates no tab for them yet.
+  registerModule({
+    id: 'watch-area',
+    name: 'Watcher Area',
+    panes: [
+      { kind: 'watch-guardian', component: WatchStubPane },
+      { kind: 'watch-events', component: WatchStubPane },
+      { kind: 'watch-host', component: WatchHostPane },
+    ],
   })
   registerModule({
     id: 'hosts',

@@ -465,6 +465,9 @@
   "page.pane.settings": "Settings",
   "page.pane.hosts": "Hosts",
   "page.pane.execution": "Execution",
+  "watch.area.name": "Watcher area",
+  "watch.pane.guardian": "Guardian",
+  "watch.pane.events": "Events",
   "page.pane.terminated": "{{name}}（Terminated）",
   "page.pane.settings_ws": "Settings — {{name}}",
 
