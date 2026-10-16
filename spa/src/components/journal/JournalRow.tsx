@@ -12,6 +12,9 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { keepFocus } from '../../lib/keep-focus'
 import type { JournalEntry } from '../../lib/journal/types'
 
+/** How much of the row's text the open-details button's label carries. */
+const OPEN_LABEL_CHARS = 40
+
 export interface RowContext {
   personName: string
   remoteUrl: string
@@ -28,6 +31,8 @@ export function JournalRow({ entry, compact, ctx }: { entry: JournalEntry; compa
   const resolved = confirm && total > 0 && done === total
   const label = t(entry.pinned ? 'journal.pin.unpin' : 'journal.pin.pin')
   const open = () => ctx.onToggleDetail(entry.id)
+  // Every 待確認 row has one of these buttons: the label carries the row's own text, so a screen reader can tell them apart.
+  const openLabel = t('journal.row.openDetail', { text: entry.text.length > OPEN_LABEL_CHARS ? `${entry.text.slice(0, OPEN_LABEL_CHARS)}…` : entry.text })
   return (
     <div
       data-testid="journal-entry"
@@ -42,8 +47,8 @@ export function JournalRow({ entry, compact, ctx }: { entry: JournalEntry; compa
         <button
           type="button"
           data-testid="journal-row-open"
-          aria-label={t('journal.row.openDetail')}
-          title={t('journal.row.openDetail')}
+          aria-label={openLabel}
+          title={openLabel}
           onClick={open}
           className="absolute inset-0 rounded cursor-pointer hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-active"
         />

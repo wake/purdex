@@ -371,7 +371,7 @@
   "journal.kind.request": "請求",
   "journal.kind.confirm": "待確認",
   "journal.row.resolved": "已答完",
-  "journal.row.openDetail": "打開詳情",
+  "journal.row.openDetail": "打開詳情：{{text}}",
   "journal.band.answered": "已答 {{done}}／{{total}} 項",
   "journal.stream.older": "載入更早的事件",
   "journal.stream.noMatch": "沒有符合的事件",
