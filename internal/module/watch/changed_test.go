@@ -153,3 +153,43 @@ func TestChanged_StartPicksUpAWatcherAsAChange(t *testing.T) {
 	require.Equal(t, 1, ev.n())
 	require.Equal(t, "awake", ev.last().Watcher.State)
 }
+
+// A notifier that is slow to get the notice lock does not send an older state after a newer one: the state is read inside the lock.
+func TestChanged_ASlowNotifierDoesNotSendAnOlderStateAfterANewerOne(t *testing.T) {
+	r := newRecRig(t)
+	ev := &events{}
+	r.m.emit = ev.add
+
+	gate := make(chan struct{})
+	reached := make(chan struct{})
+	var once sync.Once
+	r.m.beforeChgLock = func() {
+		first := false
+		once.Do(func() { first = true })
+		if first {
+			close(reached)
+			<-gate // the first notifier stalls at the lock, as one that lost the race for it would
+		}
+	}
+
+	require.NoError(t, r.m.holder.Update(func(h *watch.Holder) {
+		h.State, h.SessionID, h.FrameID, h.PaneID, h.TmuxSessionID = watch.HolderAwake, "sess-1", "f1", "%7", "$3"
+	}))
+	done := make(chan struct{})
+	go func() { r.m.notifyChanged(); close(done) }()
+	<-reached
+
+	// meanwhile the holder moves on and a second notifier runs to the end
+	require.NoError(t, r.m.holder.Update(func(h *watch.Holder) { h.SessionID, h.FrameID = "sess-2", "f2" }))
+	r.m.notifyChanged()
+	require.Equal(t, "sess-2", ev.last().Watcher.SessionID)
+
+	close(gate)
+	<-done
+	require.Equal(t, "sess-2", ev.last().Watcher.SessionID, "the stalled notifier did not send the older state after the newer one")
+	r.m.chg.mu.Lock()
+	var cur ChangedPayload
+	_ = json.Unmarshal([]byte(r.m.chg.last), &cur)
+	r.m.chg.mu.Unlock()
+	require.Equal(t, "sess-2", cur.Watcher.SessionID, "and the comparison did not go back")
+}

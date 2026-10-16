@@ -78,16 +78,21 @@ type changeState struct {
 }
 
 // notifyChanged sends watch.changed when the payload differs from the last one sent: a reconcile that changed nothing, or only the
-// last turn or last delivery, sends nothing. The comparison and the send are under one lock, so notices leave in the order the
-// states were read.
+// last turn or last delivery, sends nothing. The reading, the comparison and the send are under one lock, so notices leave in the
+// order of the states and the last one sent is the state of the last caller.
 func (m *Module) notifyChanged() {
+	if m.beforeChgLock != nil {
+		m.beforeChgLock()
+	}
+	m.chg.mu.Lock()
+	defer m.chg.mu.Unlock()
+	// The state is read INSIDE the lock: a caller that read it before waiting for the lock could send an older state after a newer
+	// one and leave the client (and the comparison) on it. Read here, the last notice sent is always the state of the last caller.
 	b, err := json.Marshal(m.payloadNow())
 	if err != nil {
 		m.logf("[watch] encode watch.changed: %v", err)
 		return
 	}
-	m.chg.mu.Lock()
-	defer m.chg.mu.Unlock()
 	if string(b) == m.chg.last {
 		return
 	}
