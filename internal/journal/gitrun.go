@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/wake/purdex/internal/execstat"
 	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -56,7 +56,7 @@ func (g *Git) git(ctx context.Context, dir string, timeout time.Duration, args .
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	full := append([]string{"-c", "core.hooksPath=" + os.DevNull, "-c", "commit.gpgsign=false"}, args...)
-	cmd := exec.CommandContext(ctx, "git", full...)
+	cmd := execstat.CommandContext(ctx, "journal.git", "git", full...)
 	cmd.Dir = dir
 	cmd.Env = gitEnv(os.Environ())
 	var out bytes.Buffer
@@ -73,7 +73,7 @@ func (g *Git) git(ctx context.Context, dir string, timeout time.Duration, args .
 }
 
 func gitVersion(ctx context.Context) (int, int, error) {
-	out, err := exec.CommandContext(ctx, "git", "--version").Output()
+	out, err := execstat.CommandContext(ctx, "journal.git-version", "git", "--version").Output()
 	if err != nil {
 		return 0, 0, err
 	}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/wake/purdex/internal/execstat"
 	"os/exec"
 	"strings"
 	"time"
@@ -85,7 +86,7 @@ func execLsof(timeout time.Duration, sockPath string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "lsof", "-nP", "--", sockPath)
+	cmd := execstat.CommandContext(ctx, "codexbroker.lsof", "lsof", "-nP", "--", sockPath)
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	err := cmd.Run()

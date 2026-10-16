@@ -5,9 +5,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/wake/purdex/internal/execstat"
 	"math"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -40,7 +41,7 @@ var (
 	// runCmd runs one command and returns its stdout. env is appended to the
 	// process environment.
 	runCmd = func(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
-		cmd := exec.CommandContext(ctx, name, args...)
+		cmd := execstat.CommandContext(ctx, "resources."+filepath.Base(name), name, args...)
 		cmd.Env = append(os.Environ(), env...)
 		return cmd.Output()
 	}

@@ -9,6 +9,7 @@ package fleetmod
 
 import (
 	"context"
+	"github.com/wake/purdex/internal/execstat"
 	"io"
 	"os"
 	"os/exec"
@@ -257,8 +258,8 @@ func (s *session) once(ctx context.Context) (sawGood bool) {
 		emit(leaf.StatusOffline, leaf.CodeUnreachable)
 		return false
 	}
-	cmd := exec.Command(ssh, args...)
-	cmd.Stdin = nil // /dev/null
+	cmd := execstat.Command("fleet.ssh", ssh, args...) // counted at Start; the group is reaped through cmd.Process.Wait below, so no wall time is added
+	cmd.Stdin = nil                                    // /dev/null
 	cmd.Stdout, cmd.Stderr = outW, errW
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {

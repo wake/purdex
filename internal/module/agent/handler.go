@@ -1508,7 +1508,7 @@ func (m *Module) handleDetect(w http.ResponseWriter, r *http.Request) {
 		if len(versionArgs) > 0 {
 			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 			defer cancel()
-			out, err := exec.CommandContext(ctx, path, versionArgs...).Output()
+			out, err := execstat.CommandContext(ctx, "agent.hook-version", path, versionArgs...).Output()
 			if err == nil {
 				info.Version = strings.TrimSpace(string(out))
 			}

@@ -4,8 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"github.com/wake/purdex/internal/execstat"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -85,7 +85,7 @@ func isOwnGate(ctx context.Context, pid int) bool {
 func lsofCwd(ctx context.Context, pid int) string {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "lsof", "-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn").Output()
+	out, err := execstat.CommandContext(ctx, "resources.lsof-cwd", "lsof", "-a", "-p", strconv.Itoa(pid), "-d", "cwd", "-Fn").Output()
 	if err != nil && len(out) == 0 {
 		return ""
 	}

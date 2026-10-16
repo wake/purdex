@@ -2,10 +2,10 @@ package logs
 
 import (
 	"context"
+	"github.com/wake/purdex/internal/execstat"
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -62,7 +62,7 @@ func (m *LogsModule) handleDaemonLog(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cmd := exec.Command("tail", "-n", strconv.Itoa(tailN), logPath)
+	cmd := execstat.Command("logs.tail", "tail", "-n", strconv.Itoa(tailN), logPath)
 	out, err := cmd.Output()
 	if err != nil {
 		http.Error(w, "failed to read log", http.StatusInternalServerError)
