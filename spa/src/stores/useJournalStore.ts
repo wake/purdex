@@ -14,7 +14,9 @@
 // compare store-clock stamps), so an event landing during a read keeps the unit stale.
 // A read that lands after its host was forgotten (`epoch`) or its connection ended (`gens`) is dropped.
 import { create } from 'zustand'
-import { getJournal, getRoadmap, getTasks, type Outcome } from '../lib/journal/api'
+import { getJournal, getRoadmap, getTasks, setPinned, type Outcome } from '../lib/journal/api'
+import { useI18nStore } from './useI18nStore'
+import { useUndoToast } from './useUndoToast'
 import { cursorOf, mergeEntries, sortPinned } from '../lib/journal/merge'
 import { forgetViewMemosOfHost } from '../lib/journal/view-memory'
 import { unitKeyOf, type ChangedWhat, type JournalEntry, type JournalProject, type JournalTask, type JournalUnit, type RemoteLead, type RoadmapFeature } from '../lib/journal/types'
@@ -85,6 +87,8 @@ interface JournalState {
   loadJournal: (hostId: string, sessionId: string, opts?: { older?: boolean }) => Promise<LoadResult>
   loadTasks: (hostId: string, sessionId: string) => Promise<LoadResult>
   loadRoadmap: (hostId: string, sessionId: string) => Promise<LoadResult>
+  /** Pin / unpin an entry of the unit this session names: the screen follows at once, the PUT follows; see `pins` below for how a failure or a later read settles it. */
+  setPin: (hostId: string, sessionId: string, entryId: string, pinned: boolean) => Promise<void>
   /** `journal.changed`: raise the flag of the named resource of that unit (`roadmap`: every unit of the host). A unit not held is ignored. */
   markStale: (hostId: string, unitKey: string, what: ChangedWhat) => void
   setRoute: (hostId: string, sessionId: string, route: JournalRoute) => void
@@ -97,6 +101,30 @@ export const sessionKey = (hostId: string, sessionId: string): string => `${host
 
 let clock = 0
 const nextStamp = (): number => ++clock
+
+/**
+ * Pending optimistic pins, per (host, unit, entry). `gen` is the entry's newest mutation; `base` is the value the server is known
+ * to hold (the entry's value before the first unconfirmed click, or that of the newest confirmed mutation, `baseGen`). A failed
+ * PUT reverts to `base` only when its generation is still the newest (a later click owns the display), and only while the record
+ * exists: a server read of the entry deletes it, because what the server says wins from then on.
+ */
+interface PinRec { gen: number; base: boolean; baseGen: number }
+const pins = new Map<string, PinRec>()
+let pinGen = 0
+const pinKey = (hostId: string, unitKey: string, entryId: string): string => `${hostId}\u0000${unitKey}\u0000${entryId}`
+const dropPins = (hostId: string, unitKey: string, only?: ReadonlySet<string>): void => {
+  const prefix = `${hostId}\u0000${unitKey}\u0000`
+  for (const k of [...pins.keys()]) if (k.startsWith(prefix) && (!only || only.has(k.slice(prefix.length)))) pins.delete(k)
+}
+/** `entry` with its pin set to `value`, in the stream and in the band (newest first). */
+function withPin(u: UnitState, entry: JournalEntry, value: boolean): UnitState {
+  const next = { ...entry, pinned: value }
+  return {
+    ...u,
+    entries: u.entries.map((e) => (e.id === entry.id ? next : e)),
+    pinned: value ? sortPinned([...u.pinned, next]) : u.pinned.filter((e) => e.id !== entry.id),
+  }
+}
 
 export const useJournalStore = create<JournalState>()((set, get) => {
   /** The unit a session names on a host, if its answer was loaded. */
@@ -163,7 +191,15 @@ export const useJournalStore = create<JournalState>()((set, get) => {
         const key = unitKeyOf(page.unit)
         const h = s.byHost[hostId] ?? { units: {}, unitOfSession: {} }
         const held = h.units[key]
-        const entries = mergeEntries(held?.entries ?? [], page.entries)
+        // What the server says about an entry wins over a pending optimistic pin of it (the newest page speaks for the whole band).
+        dropPins(hostId, key, older ? new Set(page.entries.map((e) => e.id)) : undefined)
+        let entries = mergeEntries(held?.entries ?? [], page.entries)
+        if (!older) {
+          // Held rows the page does not carry (older months) follow the band the server just sent.
+          const band = new Set(page.pinned.map((e) => e.id))
+          const inPage = new Set(page.entries.map((e) => e.id))
+          entries = entries.map((e) => (inPage.has(e.id) || e.pinned === band.has(e.id) ? e : { ...e, pinned: band.has(e.id) }))
+        }
         const readAt = { ...(held?.readAt ?? zero()) }
         // Only a read of the newest page speaks for "entries are fresh"; an older page says nothing about new events.
         if (!older) readAt.entries = startedAt
@@ -206,6 +242,39 @@ export const useJournalStore = create<JournalState>()((set, get) => {
       }))
     },
 
+    setPin: async (hostId, sessionId, entryId, pinned) => {
+      const u = unitOf(hostId, sessionId)
+      const entry = u?.entries.find((e) => e.id === entryId) ?? u?.pinned.find((e) => e.id === entryId)
+      if (!u || !entry) return
+      const unitKey = unitKeyOf(u.unit)
+      const k = pinKey(hostId, unitKey, entryId)
+      const shown = u.pinned.some((e) => e.id === entryId)
+      const pending = pins.get(k)
+      if (shown === pinned && !pending) return
+      const gen = ++pinGen
+      pins.set(k, { gen, base: pending?.base ?? shown, baseGen: pending?.baseGen ?? 0 })
+      const apply = (value: boolean): void => set((s) => {
+        const h = s.byHost[hostId]
+        const cur = h?.units[unitKey]
+        return h && cur ? { byHost: { ...s.byHost, [hostId]: { ...h, units: { ...h.units, [unitKey]: withPin(cur, entry, value) } } } } : {}
+      })
+      apply(pinned)
+      const epoch = get().epoch[hostId] ?? 0
+      let ok = false
+      try { ok = (await setPinned(hostId, sessionId, entryId, pinned)).kind === 'ok' } catch { /* ok stays false */ }
+      const rec = pins.get(k)
+      if ((get().epoch[hostId] ?? 0) !== epoch || !rec) return // the host was forgotten, or a server read has the last word
+      if (ok) {
+        if (rec.gen === gen) pins.delete(k)
+        else if (gen > rec.baseGen) pins.set(k, { ...rec, base: pinned, baseGen: gen })
+        return
+      }
+      if (rec.gen !== gen) return // a later click owns the display now
+      pins.delete(k)
+      apply(rec.base)
+      useUndoToast.getState().show(useI18nStore.getState().t('journal.pin.failed'))
+    },
+
     markStale: (hostId, unitKey, what) => set((s) => {
       const h = s.byHost[hostId]
       if (!h) return {}
@@ -229,6 +298,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
 
     forgetHost: (hostId) => {
       forgetViewMemosOfHost(hostId)
+      for (const k of [...pins.keys()]) if (k.startsWith(`${hostId}\u0000`)) pins.delete(k)
       set((s) => ({
         support: drop(s.support, hostId), sticky: drop(s.sticky, hostId), gens: drop(s.gens, hostId), byHost: drop(s.byHost, hostId),
         routes: Object.fromEntries(Object.entries(s.routes).filter(([k, r]) => !k.startsWith(`${hostId}\u0000`) && !(r.kind === 'follow' && r.hostId === hostId))),
@@ -236,7 +306,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
       }))
     },
 
-    reset: () => { clock = 0; latest.clear(); set({ support: {}, sticky: {}, gens: {}, byHost: {}, routes: {}, epoch: {}, staleRev: 0 }) },
+    reset: () => { clock = 0; latest.clear(); pins.clear(); set({ support: {}, sticky: {}, gens: {}, byHost: {}, routes: {}, epoch: {}, staleRev: 0 }) },
   }
 })
 

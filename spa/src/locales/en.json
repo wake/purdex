@@ -354,6 +354,7 @@
   "journal.card.resize": "Drag to resize",
   "journal.card.unreachable": "The journal is on {{host}}; this App is not connected to it",
   "journal.card.empty": "Nothing in the journal yet",
+  "journal.pin.failed": "Could not change the pin; the entry is back as it was",
   "journal.filter.all": "All",
   "journal.filter.exec": "Execution",
   "journal.filter.task": "Tasks",
