@@ -145,6 +145,10 @@ export function tabToUrl(tabId: string, content: PaneContent): string {
       return '/'
     case 'pdf-preview':
       return '/'
+    case 'watch-guardian':
+    case 'watch-events':
+    case 'watch-host':
+      return '/'
     case 'execution':
       return content.host ? `/execution/${content.host}/${content.executionId}` : `/execution/${content.executionId}`
   }

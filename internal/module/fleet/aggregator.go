@@ -139,6 +139,8 @@ type Measure struct {
 	loopClock timeSource // the one-second loop's timers (Deps.LoopClock, else clock)
 	limit     *hourlyLimiter
 
+	probeCheck // POST /api/fleet/probe-check (probecheck.go)
+
 	mu         sync.Mutex
 	hosts      map[string]*hostRow
 	order      []string
@@ -210,6 +212,7 @@ func (m *Measure) Stop() {
 	m.life.Lock()
 	defer m.life.Unlock()
 	m.stopped = true
+	m.cancelProbes() // an ssh check in flight must not outlive Stop
 	m.deactivateLocked()
 }
 

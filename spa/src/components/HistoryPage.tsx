@@ -4,6 +4,7 @@ import { createTab } from '../types/tab'
 import type { PaneRendererProps } from '../lib/module-registry'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useHostStore } from '../stores/useHostStore'
+import { openWatchArea } from '../features/workspace/lib/open-watch-area'
 import { hostRefOf, landOnHostsPageIfHidden } from '../lib/shown-hosts'
 
  
@@ -30,6 +31,10 @@ export function HistoryPage(_props: PaneRendererProps) {
             key={`${record.tabId}-${record.visitedAt}-${i}`}
             className="flex items-center gap-3 px-3 py-2 rounded-md hover:bg-white/5 text-left text-sm text-text-primary transition-colors"
             onClick={() => {
+              // The watcher area's panes live only in the area: open it, never make an ordinary tab of the record.
+              const c = record.paneContent
+              if (c.kind === 'watch-host') return openWatchArea({ host: c.fleetHostId })
+              if (c.kind === 'watch-guardian' || c.kind === 'watch-events') return openWatchArea({ tab: 'guardian' })
               if (isOpen) {
                 setActiveTab(record.tabId)
               } else {

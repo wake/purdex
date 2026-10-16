@@ -148,6 +148,11 @@ export type PaneContent =
   // `fromTitle` (worker theme spec §8.4): the source tab's title at
   // Hand-to-nex time — the worker tab title's second source, after Nexen's
   // session_title. Kept even when `from` is not (the session was killed).
+  // The watcher area (守門員專區): `fleetHostId` is the fleet's host id (a daemon's own host id or a probe row's id) —
+  // global, and deliberately NOT named `hostId`, so no generic reader of a pane's `hostId` takes it for an App host.
+  | { kind: 'watch-guardian' }
+  | { kind: 'watch-events' }
+  | { kind: 'watch-host'; fleetHostId: string }
   | { kind: 'execution'; executionId: string; host?: string; from?: ExecutionFrom; mode?: ExecutionViewMode; fromTitle?: string }
 
 /** The two views of one worker (spec §1): room（指揮室）and chat（聊天模式）. */

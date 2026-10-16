@@ -27,7 +27,7 @@ import { useConflictPanelStore } from '../../../stores/useConflictPanelStore'
 import { useI18nStore } from '../../../stores/useI18nStore'
 import { MASTER_PROFILE_ID } from '../../../stores/useLocalProfilesStore'
 import { useProfileSwitcherStore } from '../../../stores/useProfileSwitcherStore'
-import { useWorkspaceStore } from '../store'
+import { useWorkspaceStore, visibleWorkspaces } from '../store'
 
 /** `profile` is the section's id in `registerSettingsSection` (as ProfileSwitcher.tsx). */
 const PROFILE_SETTINGS_PATH = '/settings/profile'
@@ -63,7 +63,7 @@ export function ProfileConflictButton() {
     if (lock.workspaceId === null) return 'settings'
     if (screen === 'slave') return 'switch'
     // The master on screen: the live store IS the master world — is that workspace's row in the sidebar?
-    if (screen === 'master' && liveWorkspaces.some((w) => w.id === lock.workspaceId)) return 'show'
+    if (screen === 'master' && visibleWorkspaces(liveWorkspaces).some((w) => w.id === lock.workspaceId)) return 'show'
     return 'settings'
   }
 
