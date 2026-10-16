@@ -213,6 +213,11 @@ User request (via 88, 10-16): 「有辦法作一個指令，讓 lead 可以改�
   (`~/.claude/settings.json`'s `model`), which every later session on the host would start with.
 - **High context**: the command does not relay. A lead that wants both runs `pdx relay <ref>` first, then the model
   change on the new session.
+- **It is a relay op** (mode `model_change`): one open op per session, so a relay, an idle intercept (§4.3a/§4.4) and a
+  model change never overlap; the member's own mod finds the turn boundary and holds prompts meanwhile, as for a
+  lead's relay. `--effort` left out keeps the member's current effort. A member whose mod is too old to take the
+  change is refused (`mod_too_old`). Release, kill or the team's end cancel a change that has not started the restart,
+  and wait for (are refused during) one that has.
 - **Done** when the member's SessionStart (verified, the same session id) arrives with the new model: `pdx team`'s
   MODEL / EFFORT show it. **Fails** without a half state: refused before anything is done when the member is
   mid-relay (`relay_open`); after the exit, a pane that is not at a shell is reported and nothing is typed; a restart
