@@ -49,6 +49,10 @@ export function useStreamScroll({ host, unitKey, streamKey = `${host}\0${unitKey
   const chain = useRef(0)
   const failed = useRef(false)
   const handledLoad = useRef(0)
+  /** Bumped on every unit switch: an answer that belongs to an earlier one is dropped. */
+  const generation = useRef(0)
+  /** `loaded`, readable from the unit-switch effect. */
+  const loadedCount = useRef(0)
   const [loaded, setLoaded] = useState(0)
   const lastTop = useRef(0)
   const lastAtBottom = useRef(true)
@@ -92,6 +96,14 @@ export function useStreamScroll({ host, unitKey, streamKey = `${host}\0${unitKey
       // Another unit's list (the opening effect above already put the view where that unit was left): none of it is new.
       prevKey.current = streamKey
       anchor.current = null
+      // The loading state belongs to the unit that was left: reset it, so this hook holds on its own and the new unit can load its
+      // own months (an answer still on its way for the old one is dropped by `generation`). `handledLoad` follows the count
+      // that is already there, or the old unit's last answer would look like a new one and ask again.
+      generation.current++
+      loading.current = false
+      chain.current = 0
+      failed.current = false
+      handledLoad.current = loadedCount.current
       setBelow(0)
       return
     }
@@ -121,7 +133,14 @@ export function useStreamScroll({ host, unitKey, streamKey = `${host}\0${unitKey
     const offset = first ? rowTop(el, first.id) : null
     anchor.current = { height: el.scrollHeight, top: el.scrollTop, row: first && offset !== null ? { id: first.id, offset } : null }
     // A failed read leaves things as they were: no automatic second ask.
-    void loadOlder().then(() => true, () => false).then((ok) => { loading.current = false; failed.current = !ok; setLoaded((n) => n + 1) })
+    const mine = generation.current
+    void loadOlder().then(() => true, () => false).then((ok) => {
+      if (mine !== generation.current) return // another unit's answer: it has nothing to say about this one
+      loading.current = false
+      failed.current = !ok
+      loadedCount.current++
+      setLoaded(loadedCount.current)
+    })
   }, [loadOlder])
 
   /** The reader (scrolling to the top, or the button) asks for the previous month: a new run of automatic asks begins. */
