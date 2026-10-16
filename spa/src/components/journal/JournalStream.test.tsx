@@ -139,6 +139,23 @@ describe('switching the mounted stream to another unit (a tab switch)', () => {
     expect(screen.queryByTestId('journal-new-pill')).toBeNull()
     expect(top()).toBe(maxTop(stream()))
   })
+  it('a month still loading for the unit that was left does not stop the other one from loading its own, and its late answer does not touch it (M: no reset on a unit switch)', async () => {
+    const finish: Array<() => void> = []
+    loadOlder.mockImplementation(() => new Promise<void>((res) => { finish.push(res) }))
+    render(<Harness initial={range(10, 21)} more />)
+    scrollTo(60)
+    scrollTo(0)
+    expect(loadOlder).toHaveBeenCalledTimes(1) // A asks and has not been answered yet
+    switchTo(B, other(10, 21)) // the same mounted stream moves to B, which opens at its bottom
+    scrollTo(0)
+    expect(loadOlder).toHaveBeenCalledTimes(2) // B can ask for its own previous month
+    await act(async () => { finish[0]() }) // A's answer arrives late
+    scrollTo(0)
+    expect(loadOlder).toHaveBeenCalledTimes(2) // still B's own ask in flight: A's answer neither freed it nor asked again
+    await act(async () => { finish[1]() })
+    scrollTo(0)
+    expect(loadOlder).toHaveBeenCalledTimes(3) // B's answer frees it
+  })
   it('a pill of the unit that was left does not follow to the other one', () => {
     render(<Harness initial={range(1, 12)} />)
     scrollTo(40)
@@ -261,6 +278,13 @@ describe('what survives an unmount (the memo)', () => {
     unmount()
     render(<Harness initial={range(1, 20)} />)
     expect(top()).toBe(maxTop(stream()))
+  })
+  it('a stream that was never scrolled does not overwrite the memo it was opened from when it unmounts (M: save on every unmount)', () => {
+    patchViewMemo(H, K, { scroll: 25, pinnedToBottom: true }) // a stale position, the reader had been at the bottom
+    const { unmount } = render(<Harness initial={range(1, 12)} />)
+    expect(top()).toBe(maxTop(stream())) // opened at the bottom, not at 25
+    unmount()
+    expect(readViewMemo(H, K)).toMatchObject({ scroll: 25, pinnedToBottom: true })
   })
   it('another filter starts at its own bottom', () => {
     const { rerender } = render(<Harness initial={range(1, 12)} filter="all" />)

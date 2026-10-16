@@ -20,12 +20,23 @@ function sources(dir: string): string[] {
   return files
 }
 
+// The plain token as a utility class (any colour prefix) or as a literal var(); `status-success-text` is the one the journal uses.
+const PLAIN = /\b(?:text|bg|border|ring|fill|stroke|divide|outline)-status-success(?!-text)\b|var\(--status-success\)/g
+
 describe('the journal draws green with the text-strength token', () => {
+  it('the pattern catches every colour utility and the literal var, and lets the text token through', () => {
+    for (const bad of ['text-status-success', 'bg-status-success/20', 'border-status-success', 'ring-status-success', 'fill-status-success', 'stroke-status-success', 'divide-status-success', 'outline-status-success', 'hover:ring-status-success', 'var(--status-success)']) {
+      expect(bad.match(PLAIN), bad).not.toBeNull()
+    }
+    for (const ok of ['text-status-success-text', 'ring-status-success-text', 'var(--status-success-text)']) {
+      expect(ok.match(PLAIN), ok).toBeNull()
+    }
+  })
   it('no journal source uses the plain status-success as a text, icon or dot colour', () => {
     const offenders: string[] = []
     for (const file of [...sources(resolve(SRC, 'components/journal')), ...sources(resolve(SRC, 'lib/journal'))]) {
       const text = readFileSync(file, 'utf8') as string
-      for (const m of text.matchAll(/\b(?:text|bg|border)-status-success(?!-text)\b/g)) offenders.push(`${file.slice(SRC.length + 1)}: ${m[0]}`)
+      for (const m of text.matchAll(PLAIN)) offenders.push(`${file.slice(SRC.length + 1)}: ${m[0]}`)
     }
     expect(offenders).toEqual([])
   })

@@ -12,6 +12,12 @@ vi.mock('../../lib/journal/api', () => ({
   getRoadmap: vi.fn(),
   setPinned: (...a: unknown[]) => setPinned(...a),
 }))
+// The stream is the real one; the spy only records the `entries` array each render hands it.
+const seenEntries = vi.hoisted(() => [] as unknown[])
+vi.mock('./JournalStream', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./JournalStream')>()
+  return { ...real, JournalStream: (p: React.ComponentProps<typeof real.JournalStream>) => { seenEntries.push(p.entries); return <real.JournalStream {...p} /> } }
+})
 vi.mock('../team/TeamSeatIcon', () => ({
   TeamSeatIcon: () => <span data-testid="seat-icon" />,
   TeamSeatHostBadge: () => <span data-testid="seat-host" />,
@@ -153,5 +159,47 @@ describe('the journal card', () => {
     expect(getJournal).toHaveBeenCalledTimes(1)
     expect(getJournal.mock.calls[0].slice(0, 2)).toEqual([HOST, 'SA'])
     expect(getJournal.mock.calls[0][2]).toMatch(/^2026-10:e1$/)
+  })
+  it('a store or memo update that leaves the unit\'s entries alone hands the stream the same array (M: filter again on every render)', () => {
+    const key = seedA()
+    mount()
+    const first = seenEntries[seenEntries.length - 1]
+    seenEntries.length = 0
+    act(() => { patchViewMemo(HOST, key, { tasksOpen: true }) }) // the memo changed, not the filter
+    act(() => { // the same entries, read again; and an unrelated unit appears
+      useJournalStore.setState((st) => {
+        const h = st.byHost[HOST]
+        return { byHost: { ...st.byHost, [HOST]: { ...h, units: { ...h.units, [key]: { ...h.units[key], readAt: { entries: 2, tasks: 2, roadmap: 2 } } } } } }
+      })
+    })
+    seedUnit(HOST, 'SB', { kind: 'solo', id: 'b', label: 'Solo B' }, { entries: [E_EXEC] })
+    expect(seenEntries.length).toBeGreaterThan(1) // it did render again
+    expect(new Set(seenEntries).size).toBe(1)
+    expect(seenEntries[0]).toBe(first)
+  })
+  it('the filter, the pill and the older-month button do not follow the card to another unit of the same stack (M: the view memo pinned to the first unit)', () => {
+    const keyA = seedA({ more: true })
+    patchViewMemo(HOST, keyA, { filter: 'task', pinnedToBottom: false })
+    const keyB = seedUnit(HOST, 'SB', { kind: 'solo', id: 'b', label: 'Solo B' }, { entries: [E_EXEC, E_TASK, E_CONF], more: false })
+    patchViewMemo(HOST, keyB, { journalOpen: true, filter: 'confirm' })
+    mount()
+    expect(streamIds()).toEqual(['t1'])
+    expect(screen.getByTestId('journal-filter-task').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByTestId('journal-load-older')).toBeTruthy()
+    act(() => { // a new task arrives for A while the reader is away from the bottom: the pill counts it
+      useJournalStore.setState((st) => {
+        const h = st.byHost[HOST]
+        return { byHost: { ...st.byHost, [HOST]: { ...h, units: { ...h.units, [keyA]: { ...h.units[keyA], entries: [...h.units[keyA].entries, entry('t2', { kind: 'task_new', at: AT + 3000, text: '#18 another' })] } } } } }
+      })
+    })
+    expect(screen.getByTestId('journal-new-pill')).toBeTruthy()
+    setActive('b')
+    expect(streamIds()).toEqual(['c1'])
+    expect(screen.getByTestId('journal-filter-confirm').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByTestId('journal-filter-task').getAttribute('aria-pressed')).toBe('false')
+    expect(screen.queryByTestId('journal-load-older')).toBeNull()
+    expect(screen.queryByTestId('journal-new-pill')).toBeNull()
+    expect(readViewMemo(HOST, keyA).filter).toBe('task')
+    expect(readViewMemo(HOST, keyB).filter).toBe('confirm')
   })
 })

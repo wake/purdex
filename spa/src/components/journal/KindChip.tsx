@@ -1,5 +1,5 @@
 // spa/src/components/journal/KindChip.tsx — the kind chip of a journal row. Theme tokens only (the approved prototype's seven
-// kinds, each its own colour): 待確認 is the warning colour (`status-warning-text`), the other six are `journal-kind-*` from
+// kinds, each its own colour): 待確認 is the warning colour (`journal-warning-text`), the other six are `journal-kind-*` from
 // themes.css (readable on each builtin theme's card; a custom theme falls back to accent / success / secondary text).
 // The icon and the label tell the kinds apart as well, so colour is never the only cue.
 import { ChatCircleDots, CheckCircle, CheckSquare, Gear, PlusSquare, Question, Warning } from '@phosphor-icons/react'
@@ -11,7 +11,7 @@ const ICONS: Record<EntryKind, typeof Gear> = {
 }
 
 const TONE: Record<EntryKind, string> = {
-  confirm: 'text-status-warning-text bg-status-warning/15 border-status-warning/40',
+  confirm: 'text-journal-warning-text bg-status-warning/15 border-status-warning/40',
   exec: 'text-journal-kind-exec bg-journal-kind-exec/15 border-journal-kind-exec/40',
   exec_done: 'text-journal-kind-exec-done bg-journal-kind-exec-done/15 border-journal-kind-exec-done/40',
   task_new: 'text-journal-kind-task-new bg-journal-kind-task-new/15 border-journal-kind-task-new/40',

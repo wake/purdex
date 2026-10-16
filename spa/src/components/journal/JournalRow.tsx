@@ -13,6 +13,9 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { keepFocus } from '../../lib/keep-focus'
 import type { JournalEntry } from '../../lib/journal/types'
 
+/** How much of the row's text the open-details button's label carries. */
+const OPEN_LABEL_CHARS = 40
+
 export interface RowContext {
   personName: string
   remoteUrl: string
@@ -35,6 +38,8 @@ export function JournalRow({ entry, compact, ctx }: { entry: JournalEntry; compa
   const taskKey = taskKeyOfEntry(entry)
   // Lit while the pointer is on its task (not while it is on this row: the row has its own hover look).
   const linked = taskKey !== null && ctx.hover?.from === 'task' && ctx.hover.key === taskKey
+  // Every 待確認 row has one of these buttons: the label carries the row's own text, so a screen reader can tell them apart.
+  const openLabel = t('journal.row.openDetail', { text: entry.text.length > OPEN_LABEL_CHARS ? `${entry.text.slice(0, OPEN_LABEL_CHARS)}…` : entry.text })
   return (
     <div
       data-testid="journal-entry"
@@ -52,8 +57,8 @@ export function JournalRow({ entry, compact, ctx }: { entry: JournalEntry; compa
         <button
           type="button"
           data-testid="journal-row-open"
-          aria-label={t('journal.row.openDetail')}
-          title={t('journal.row.openDetail')}
+          aria-label={openLabel}
+          title={openLabel}
           onClick={open}
           className="absolute inset-0 rounded cursor-pointer hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-active"
         />
@@ -69,7 +74,7 @@ export function JournalRow({ entry, compact, ctx }: { entry: JournalEntry; compa
           <PersonMark text={entry.text} name={ctx.personName} />
         </div>
         {confirm && compact && total > 0 && (
-          <div data-testid="journal-answered" className="mt-0.5 text-[11px] text-status-warning-text">{t('journal.band.answered', { done, total })}</div>
+          <div data-testid="journal-answered" className="mt-0.5 text-[11px] text-journal-warning-text">{t('journal.band.answered', { done, total })}</div>
         )}
         {confirm && !compact && total > 0 && (
           <ul data-testid="journal-checklist" className="mt-1 space-y-0.5">
@@ -77,7 +82,7 @@ export function JournalRow({ entry, compact, ctx }: { entry: JournalEntry; compa
               <li key={i} data-done={it.done || undefined} className="flex items-start gap-1.5 leading-[16px]">
                 {it.done
                   ? <CheckSquare size={13} weight="fill" className="shrink-0 mt-px text-status-success-text" />
-                  : <Square size={13} className="shrink-0 mt-px text-status-warning-text" />}
+                  : <Square size={13} className="shrink-0 mt-px text-journal-warning-text" />}
                 <span className={it.done ? 'text-text-muted line-through' : 'text-text-primary'}>{it.text}</span>
               </li>
             ))}

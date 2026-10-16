@@ -19,7 +19,7 @@ const isOwnEsc = (target: EventTarget | null): boolean => target instanceof Elem
 export function ConfirmDetail({ entry, personName, onClose }: Props) {
   const t = useI18nStore((s) => s.t)
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented && !isOwnEsc(e.target)) onClose() }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.isComposing && !e.defaultPrevented && !isOwnEsc(e.target)) onClose() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
@@ -31,7 +31,7 @@ export function ConfirmDetail({ entry, personName, onClose }: Props) {
         <KindChip kind={entry.kind} />
         <span className="tabular-nums">{dayKey(entry.at)} {timeOf(entry.at)}</span>
         <span className="text-text-secondary"><PersonMark text={entry.actor} name={personName} /></span>
-        <span data-testid="journal-detail-state" className={`px-1 rounded ${resolved ? 'bg-surface-hover' : 'bg-status-warning/20 text-status-warning-text'}`}>
+        <span data-testid="journal-detail-state" className={`px-1 rounded ${resolved ? 'bg-surface-hover' : 'bg-status-warning/20 text-journal-warning-text'}`}>
           {t(resolved ? 'journal.detail.resolved' : entry.pinned ? 'journal.detail.waitingPinned' : 'journal.detail.waiting')}
         </span>
       </div>
@@ -46,7 +46,7 @@ export function ConfirmDetail({ entry, personName, onClose }: Props) {
             <li key={i} data-done={it.done || undefined} className="flex items-start gap-1.5 leading-[17px]">
               {it.done
                 ? <CheckSquare size={14} weight="fill" className="shrink-0 text-status-success-text" />
-                : <Square size={14} className="shrink-0 text-status-warning-text" />}
+                : <Square size={14} className="shrink-0 text-journal-warning-text" />}
               <span className={it.done ? 'text-text-muted line-through' : ''}>{it.text}</span>
             </li>
           ))}
