@@ -59,7 +59,7 @@ export function JournalRow({ entry, compact, ctx }: { entry: JournalEntry; compa
           <PersonMark text={entry.text} name={ctx.personName} />
         </div>
         {confirm && compact && total > 0 && (
-          <div data-testid="journal-answered" className="mt-0.5 text-[11px] text-status-warning-text">{t('journal.band.answered', { done, total })}</div>
+          <div data-testid="journal-answered" className="mt-0.5 text-[11px] text-journal-warning-text">{t('journal.band.answered', { done, total })}</div>
         )}
         {confirm && !compact && total > 0 && (
           <ul data-testid="journal-checklist" className="mt-1 space-y-0.5">
@@ -67,7 +67,7 @@ export function JournalRow({ entry, compact, ctx }: { entry: JournalEntry; compa
               <li key={i} data-done={it.done || undefined} className="flex items-start gap-1.5 leading-[16px]">
                 {it.done
                   ? <CheckSquare size={13} weight="fill" className="shrink-0 mt-px text-status-success-text" />
-                  : <Square size={13} className="shrink-0 mt-px text-status-warning-text" />}
+                  : <Square size={13} className="shrink-0 mt-px text-journal-warning-text" />}
                 <span className={it.done ? 'text-text-muted line-through' : 'text-text-primary'}>{it.text}</span>
               </li>
             ))}
