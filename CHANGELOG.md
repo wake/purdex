@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-alpha.744] - 2026-10-16
+
+> 743 的修正版。daemon、`pdx` CLI 與 mod 有改，SPA、Electron 沒有改。**兩台都要重跑 `pdx setup`** 才會換上新的 mod（協定不變）。資料庫沒有變，退回 743 不需要還原資料庫，但要再跑一次 `pdx setup` 換回 743 的 mod。
+
+### Fixed
+
+- **App 看不到主機格（PR #3004）**：743 的 fleet 模組沒有回報自己是否就緒，`/api/info` 因此一直沒有宣告 `fleet.v1`，App 就不顯示側欄的主機格（daemon 端的量測其實正常）。現在模組在啟動成功後回報就緒與目前的角色（主方／副方／關閉），停止後不再宣告；新增用真模組透過 `/api/info` 驗證的測試。
+
+### Changed：閘門
+
+- **每次 Bash 呼叫只問閘門一次（G-D1c，PR #2994）**：一次呼叫裡有好幾個會經過閘門的指令時，mod 改用 `pdx gate would-wait --auto-batch` 一次問完（原本每個指令各開一個 pdx 行程，最多 6 個），答案和逐一詢問相同；pdx 太舊、不認得批次時自動退回逐一詢問。
+
+### 部署備註
+
+- 743 部署時 mlab 先重啟、當時 air26 還是舊版，mlab 當上了 fleet 主方。744 一樣先重啟 mlab，它會發現 air26 排在前面而退成副方，主方回到 air26（使用者 10-16 定的順序 `[air26, mlab]`）。
+
 ## [1.0.0-alpha.743] - 2026-10-16
 
 > daemon、`pdx` CLI 與 SPA 有改，mod、Electron 沒有改，不需要重跑 `pdx setup`。資料庫只有新增：`session_predecessors` 表、`agent_frames.prev_session_id`、`last_agent_run.pane_id`（都有預設值），退回 742 不需要還原資料庫。日誌改為預設開啟（兩台在 `config.toml` 加 `[journal] person_name = "Wake"`，不設 `push_projects`）；關閉方式是 `[journal] enabled = false` 再重啟。退回 742 後，各專案的日誌 worktree（`<DataDir>/journal/<project>/wt`）會留在磁碟上，無害，要清再手動刪。新增依賴 `github.com/ebitengine/purego`（不需要 cgo，`CGO_ENABLED=0` 照樣建置兩種架構）。
