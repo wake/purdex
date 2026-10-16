@@ -236,6 +236,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (targetWsId === WATCH_WORKSPACE_ID && !isWatchTabId(tabId)) {
           targetWsId = getReturnWorkspaceId() ?? get().ensureUnsortedWorkspace().id
           afterTabId = undefined
+        } else if (targetWsId !== WATCH_WORKSPACE_ID && isWatchTabId(tabId)) {
+          // The reverse: an area tab belongs to the area, or to nowhere.
+          if (!get().workspaces.some((ws) => ws.id === WATCH_WORKSPACE_ID)) return
+          targetWsId = WATCH_WORKSPACE_ID
+          afterTabId = undefined
         }
 
         // Concurrent-delete guard: if the caller passes a target workspace

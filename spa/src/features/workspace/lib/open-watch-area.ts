@@ -2,6 +2,7 @@
 import { useTabStore } from '../../../stores/useTabStore'
 import { useWorkspaceStore } from '../store'
 import { WATCH_GUARDIAN_TAB_ID, WATCH_WORKSPACE_ID, watchHostTabId } from '../../../lib/watch/ids'
+import { readMasterWorld } from '../../../lib/profile/master-world'
 import { currentWatchReconciler, readFleetView } from './watch-area'
 
 export type WatchTarget = { tab: 'guardian' } | { host: string }
@@ -14,6 +15,8 @@ export type WatchTarget = { tab: 'guardian' } | { host: string }
  * area's first tab.
  */
 export function openWatchArea(target: WatchTarget): void {
+  // A world that is switching or applying is not ours to write into (the same gate as `startWatchArea`).
+  if (!readMasterWorld().settled) return
   useWorkspaceStore.getState().ensureWatchWorkspace()
   currentWatchReconciler().reconcile(readFleetView())
 

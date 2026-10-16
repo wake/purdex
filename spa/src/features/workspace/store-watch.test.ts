@@ -108,6 +108,20 @@ describe('the watch workspace in the store', () => {
       expect(ws().workspaces.find((x) => x.id === UNSORTED_WORKSPACE_ID)!.tabs).toEqual([tab.id])
     })
 
+    it('the reverse: a watch tab targeted at an ordinary workspace goes to the area instead', () => {
+      const a = ws().addWorkspace('A')
+      ws().ensureWatchWorkspace()
+      ws().insertTab('watch-guardian', a.id)
+      expect(ws().workspaces.find((x) => x.id === a.id)!.tabs).toEqual([])
+      expect(ws().workspaces.find((x) => x.id === WATCH_WORKSPACE_ID)!.tabs).toEqual(['watch-guardian'])
+    })
+
+    it('a watch tab with no area to go to is refused (not dropped into an ordinary workspace)', () => {
+      const a = ws().addWorkspace('A')
+      ws().insertTab('watch-guardian', a.id)
+      expect(ws().workspaces.find((x) => x.id === a.id)!.tabs).toEqual([])
+    })
+
     it('a watch tab may enter the area', () => {
       ws().addWorkspace('A')
       ws().ensureWatchWorkspace()

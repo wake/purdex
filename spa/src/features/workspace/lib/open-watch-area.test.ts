@@ -32,6 +32,17 @@ beforeEach(() => {
   setFleet(['h1', 'h2'])
 })
 
+describe('openWatchArea in a world that is not settled', () => {
+  it('writes nothing', () => {
+    useWorkspaceStore.setState({ worldEpoch: 7 }) // the tab and workspace stores now disagree: unsettled
+    openWatchArea({ host: 'h1' })
+    expect(ws().workspaces.some((w) => w.id === WATCH_WORKSPACE_ID)).toBe(false)
+    expect(ws().activeWorkspaceId).toBe(a)
+    expect(Object.keys(useTabStore.getState().tabs).some((id) => id.startsWith('watch-'))).toBe(false)
+    useWorkspaceStore.setState({ worldEpoch: 0 })
+  })
+})
+
 describe('openWatchArea', () => {
   it('entering from a session workspace: creates the area and its tabs, selects the host tab, remembers where from', () => {
     openWatchArea({ host: 'h2' })
