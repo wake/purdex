@@ -3,19 +3,20 @@
 // alive pool does not keep unmounts when the reader switches away, and component state would start empty on the way back.
 // Memory only: a reload starts empty. `reset()` is for tests and for the config store's own reset.
 import { create } from 'zustand'
-import type { DroppedNotice, ProbeEntry } from './config-store'
+import type { DroppedNotice, ProbeBase, ProbeEdit, ProbeEntry } from './config-store'
 
-export interface ProbeSession { initial: ProbeEntry; draft: ProbeEntry; isNew: boolean }
+/** `base`: what each daemon held when the edit began; a save is checked against it (see `ProbeBase`). */
+export interface ProbeSession { initial: ProbeEntry; draft: ProbeEntry; isNew: boolean; base: ProbeBase }
 /** A fleet-row edit, based on `rev` (the row's revision when the edit began); a newer revision makes it stale. */
 export interface FleetRowDraft { order: string; peer: string; enabled: boolean; rev: number }
 
 interface DraftState {
   probe: ProbeSession | null
   deleting: string | null
-  probeConfirm: { entries: ProbeEntry[]; notices: DroppedNotice[] } | null
+  probeConfirm: { edit: ProbeEdit; notices: DroppedNotice[]; base?: ProbeBase } | null
   fleetRows: Record<string, FleetRowDraft>
   fleetConfirm: Record<string, DroppedNotice[]>
-  beginProbe: (entry: ProbeEntry, isNew: boolean) => void
+  beginProbe: (entry: ProbeEntry, isNew: boolean, base: ProbeBase) => void
   setProbeDraft: (fn: (d: ProbeEntry) => ProbeEntry) => void
   endProbe: () => void
   setDeleting: (id: string | null) => void
@@ -29,7 +30,7 @@ const empty = { probe: null, deleting: null, probeConfirm: null, fleetRows: {}, 
 
 export const useFleetDraftStore = create<DraftState>((set) => ({
   ...empty,
-  beginProbe: (entry, isNew) => set({ probe: { initial: entry, draft: entry, isNew } }),
+  beginProbe: (entry, isNew, base) => set({ probe: { initial: entry, draft: entry, isNew, base } }),
   setProbeDraft: (fn) => set((s) => (s.probe ? { probe: { ...s.probe, draft: fn(s.probe.draft) } } : s)),
   endProbe: () => set({ probe: null }),
   setDeleting: (id) => set({ deleting: id }),
