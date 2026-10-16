@@ -76,7 +76,7 @@ export function JournalRow({ entry, compact, ctx }: { entry: JournalEntry; compa
             {entry.items.map((it, i) => (
               <li key={i} data-done={it.done || undefined} className="flex items-start gap-1.5 leading-[16px]">
                 {it.done
-                  ? <CheckSquare size={13} weight="fill" className="shrink-0 mt-px text-status-success" />
+                  ? <CheckSquare size={13} weight="fill" className="shrink-0 mt-px text-status-success-text" />
                   : <Square size={13} className="shrink-0 mt-px text-status-warning-text" />}
                 <span className={it.done ? 'text-text-muted line-through' : 'text-text-primary'}>{it.text}</span>
               </li>

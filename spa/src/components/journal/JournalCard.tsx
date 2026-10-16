@@ -22,7 +22,7 @@ export function JournalTitle({ target }: { target: JournalTarget }) {
   const live = useHostStore((s) => (target.memoHost === null ? false : s.runtime[target.memoHost]?.status === 'connected'))
   return (
     <span className="flex items-center gap-2 min-w-0">
-      <span data-testid="journal-live-dot" data-live={live} title={t(live ? 'journal.card.live' : 'journal.card.offline')} className={`w-2 h-2 rounded-full shrink-0 ${live ? 'bg-status-success' : 'bg-text-muted'}`} />
+      <span data-testid="journal-live-dot" data-live={live} title={t(live ? 'journal.card.live' : 'journal.card.offline')} className={`w-2 h-2 rounded-full shrink-0 ${live ? 'bg-status-success-text' : 'bg-text-muted'}`} />
       <span className="truncate">{target.unit?.unit.label ?? ''}</span>
     </span>
   )
