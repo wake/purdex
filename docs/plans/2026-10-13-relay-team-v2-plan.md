@@ -330,7 +330,21 @@ Expected files: `hooks/register.js`, `hooks/relay.test.ts`, `W/wire_relay_member
 - `noticeIdle` and `noticeUsage` skip members whose mod protocol ≥ 9 (`MinIdleInterceptModVersion = 9`) (M: an old member still gets them).
 - Tests: intercept → one notice per idle period (M); a context-full compaction in a member runs and is reported as today; a member with mod 8 gets both old notices; mod side: skip only in a member with no turn running.
 
-**T43 Skill text**: the intercept notice and the three answers.
+**T42b Solo and lead intercept** (spec §4.3a, U-4.3, user 10-16) — H (`session.compact`), the self-relay ask path, `T/compacted.go`.
+- Mod: the same recognition as T42 for a session that is not a member → `{skip: '閒置壓縮已擋下'}`; then, unattended:
+  the §4.3 first half unless a fresh `half` handoff exists; attended: the self-relay ask with `reason: idle_intercept`
+  once per idle period, unless this idle period already has an idle ask (open or answered) or a fresh handoff. The
+  answer `compact` sets a one-shot pass for the next idle compaction of this idle period (and starts one at once if
+  the mod API can; check `session` in the mod API and record the finding in the PR); `deny` / timeout → nothing.
+  A new turn ends the idle period and clears the pass.
+- Daemon: the ask accepts `reason: idle_intercept` and the answer `compact`; an App that sends only approve/deny keeps
+  working (deny = 不處理). Capability `team.idle_intercept.v1` for the App's third button (B line).
+- Tests (mod): a solo session's idle compaction is skipped (M); a context-full one in a turn runs; unattended → first
+  half, no card; unattended with a fresh handoff → silent skip; attended → one card per idle period, none when an
+  idle ask already happened in it; `compact` lets the next one through once (M); a new turn clears the pass; a lead
+  goes this way, a member the T42 way. Daemon: the reason and the answer round-trip; an old App's deny.
+
+**T43 Skill text**: the intercept notice and the three answers; §4.3a's card and answers.
 
 `VERSION` → '9'.
 
