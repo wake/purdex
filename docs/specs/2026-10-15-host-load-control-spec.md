@@ -236,6 +236,29 @@ memory pressure. vitest does not scale with workers (≈ 85 % of its wall time i
 import, setup) and 8 workers reach pressure level 2, so its width is capped (§5 parallelism). No clean run exceeded
 28 pages/s; `max_page_rate` auto = 50 sits above all of them, with the pressure level as the primary signal (Q3).
 
+### 5.2 Queue order: front, back, hold (#3034)
+
+User principle (10-16): load is handled like traffic control — the unimportant wait, the important go through first —
+never by cutting anyone's work down (the one exception: a command that cannot finish under a normal load, or runs past
+about 120 min). The queue was arrival order only; the watcher and the person need to move a waiting command.
+
+- **A rank per waiting ticket**, in a side file `queue/<class>/<ticket>.rank` (a dotted name, so the scans that list
+  tickets skip it): `{"rank": "front"|"back"|"hold", "at", "by", "reason", "until"?}`. No file = `normal`.
+- **The order that serves the queue**: `front` tickets (in the order they were moved there), then `normal` (arrival
+  order), then `back` (arrival order). A `hold` ticket is not served and does not count as ahead of anybody: the others
+  pass it; it waits until it is set back to `normal` (or another rank), or its `until` passes. Nothing is cancelled: for
+  the owner it is only a longer wait, its command unchanged.
+- **Who and how**: `pdx gate queue front|back|hold|normal <pid or ticket>… --reason "<one line>" [--until <duration or
+  time>]` (`--until` only with `hold`), on the host whose queue it is (the watcher reaches the other gated host over
+  `ssh <alias> pdx gate queue …`). The reason is required. It prints each ticket's old → new rank. `by` is the Claude
+  session that ran it (from the environment the gate already reads), or `person` from a plain terminal. Anyone who can
+  run `pdx` on the host may do it: no other limit (user decision 10-16, full control for the watcher and the person).
+- **Seen everywhere it waits**: `pdx gate status [--json]` lists each waiter's rank, reason and `until`; the waiting
+  command's own line says why it waits (`held by <by>: <reason>` / `behind N moved to the front`); its decision record
+  gains `rank` (the last one) and `held_s`. The fleet's queue view carries the rank (B line, from the status JSON).
+- **Not in this phase**: pausing a command that already runs (SIGSTOP) to let another through. Raised only if the queue
+  order proves not enough.
+
 ## 6. Retiring the lease (D2)
 
 Remove:

@@ -387,6 +387,34 @@ Tests: 0 accepted by parse, set and a profile; a heavy command at `slots.heavy=0
 `set slots.heavy=1`; light unaffected while heavy is paused; a running command is not touched by the change to 0;
 status text and JSON; no late claim while paused; mutation on the 0 comparison.
 
+### GQ — queue order: front, back, hold (#3034; lease member, one PR)
+
+Spec §5.2. The queue is `internal/gate/slots.go`: tickets `queue/<class>/<unix-ns>-<pid>-<n>` held by flock, served in
+name order by `TryTake` → `liveBefore` under `<class>.admit`; `Waiters()` lists them.
+1. Rank side files: `<ticket>.rank` JSON (`rank`, `at`, `by`, `reason`, `until`), written to `<ticket>.rank.new` and
+   renamed (atomic; the dotted names are already skipped by the ticket scans). `Ticket.Drop` removes it with the ticket;
+   the scan that removes a dead gate's ticket removes its rank file, and a rank file whose ticket is gone is removed.
+2. Order: `liveBefore` becomes "live tickets ahead of t in the serving order" (spec §5.2: front by `at`, normal and back
+   by name; `hold` ones never ahead of anybody, an expired `until` reads as normal). `TryTake` on a ticket that is held
+   returns no slot with the reason `held`. Everything stays under the class's admit lock, so a rank change and a take
+   never interleave inside one decision.
+3. CLI `pdx gate queue [--class heavy|light] [--json]` (the waiters with their rank) and `pdx gate queue
+   front|back|hold|normal <pid|ticket>… --reason "<line>" [--until <dur|RFC 3339>]`: a pid names that gate's ticket in
+   either class; the reason is required (one line, ≤ 200 bytes, no control characters); `--until` only with `hold`; a
+   ticket that is no longer waiting is reported, not an error for the others; prints old → new per ticket. `by` = the
+   session id the gate reads from the environment, else `person`.
+4. Visible: `Waiter` gains `Rank`, `RankReason`, `RankBy`, `HeldUntil` (status text and JSON); the waiting command's
+   wait line names a hold (by, reason) or being passed by front tickets; the decision record gains `rank` and `held_s`.
+   The would-wait answer of the mod counts the serving order, not arrival order.
+5. The watcher's skill (W3b.4) gets the procedure: read the queue, move with a reason, tell the person; it never asks
+   anyone to cut their command down (spec §5.2).
+Tests: order table (front before normal before back; two fronts by `at`; a hold skipped and not counted ahead; an expired
+hold is normal); a held waiter is not served while a slot is free, and is served after `normal`; others pass a hold;
+rank file removed with its ticket and when orphaned; a rank written between two `TryTake`s is honoured by the second;
+CLI: missing reason refused, `--until` without `hold` refused, unknown pid reported, old → new printed; status JSON
+fields; wait line for a hold; `held_s` in the decision record; `-race` on `TryTake` with concurrent rank writes; mutation
+on the order comparison and the hold check.
+
 ### W4 — `pdx gate free <class>-<k>`
 
 Lists the holders (`lsof` on the slot lock: pid, command via `redact.Argv`, cwd, start, session), refuses a slot
@@ -404,7 +432,7 @@ and the `watch.events` push (W2b.5); the `watch` settings API incl. `agent_comma
 plan (`docs/specs/2026-10-16-watcher-area-spec.md`), and owns its tests: the tab follows a failover, "resting" and
 "none" shown apart.
 
-Order: W1a → W1b → W2a → W2b → W3a → W3c → W3b → W4 (W4 only needs W1a's `redact.Argv` and may go earlier; W3c is
+Order: W1a → W1b → W2a → W2b → W3a → GQ → W3c → W3b → W4 (W4 only needs W1a's `redact.Argv` and may go earlier; W3c is
 the lease member's, independent of W3a, and only has to land before W3b's skill lets the watcher set 0). W3a can be
 deployed alone (it registers the manual watcher; W2 delivers to it); start, wake and rest arrive with W3b. The set
 goes live as a whole when W1b–W4 are merged and deployed; W5 follows.
