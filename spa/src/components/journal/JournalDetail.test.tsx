@@ -108,6 +108,23 @@ describe('the 待確認 detail', () => {
     expect(q('journal-detail-card')).toBeNull()
     expect(readViewMemo(HOST, key).detailId).toBeNull()
   })
+  it('Esc typed into the terminal or a text field is that field\'s, not the detail\'s (M: a bare window listener)', () => {
+    mount()
+    fireEvent.click(rowOf('c1'))
+    const term = document.createElement('div')
+    term.className = 'xterm'
+    const area = document.createElement('textarea')
+    term.appendChild(area)
+    const input = document.createElement('input')
+    document.body.append(term, input)
+    fireEvent.keyDown(area, { key: 'Escape' })
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(q('journal-detail-card')).toBeTruthy()
+    fireEvent.keyDown(document.body, { key: 'Escape' })
+    expect(q('journal-detail-card')).toBeNull()
+    term.remove()
+    input.remove()
+  })
   it('only one is open at a time: another row replaces it', () => {
     mount()
     fireEvent.click(rowOf('c1'))

@@ -12,10 +12,14 @@ import type { JournalEntry } from '../../lib/journal/types'
 
 interface Props { entry: JournalEntry; personName: string; onClose: () => void }
 
+/** Esc typed into the terminal (vim, a prompt) or into any text field belongs to that field, not to the detail. */
+const OWN_ESC = '.xterm, input, textarea, select, [contenteditable=""], [contenteditable="true"]'
+const isOwnEsc = (target: EventTarget | null): boolean => target instanceof Element && target.closest(OWN_ESC) !== null
+
 export function ConfirmDetail({ entry, personName, onClose }: Props) {
   const t = useI18nStore((s) => s.t)
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented) onClose() }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.defaultPrevented && !isOwnEsc(e.target)) onClose() }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
