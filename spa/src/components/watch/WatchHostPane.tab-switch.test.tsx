@@ -12,6 +12,7 @@ import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { createTab } from '../../types/tab'
 import type { Tab } from '../../types/tab'
 import { host, primaryAnswer } from '../../lib/fleet/__fixtures__/builders'
+import { readQueueTab, writeQueueTab } from '../../lib/watch/view-memory'
 import { useI18nStore } from '../../stores/useI18nStore'
 const t = (k: string, p?: Record<string, string | number>) => useI18nStore.getState().t(k, p)
 
@@ -48,4 +49,21 @@ describe('the host tab across tab switches', () => {
     expect(screen.getByRole('button', { name: t('watch.host.resources', { range: t('watch.host.range.1h') }) })).toBeInTheDocument()
     expect(screen.getByTestId('axis')).toHaveTextContent(t('watch.host.axis_hour', { n: 1 }))
   }, 30_000) // the first TabContent render pulls in its lazy modules, which is slow on a loaded host
+
+  it('keeps the queue sub-tab (read back from view memory, not component state) across the switch', () => {
+    const q = { heavy_used: 0, heavy_total: 2, light_used: 0, light_total: 3, holders: [], waiters: [], longest_wait_s: 0, admission_held: false, admission_reason: '', heavy_paused: false, light_paused: false }
+    const st = useFleetStore.getState()
+    const gen = st.begin('cfg-a')
+    st.setSupport('cfg-a', gen, 'yes')
+    st.applyFetched('cfg-a', gen, primaryAnswer(2, [host('d-a', { alias: 'air26', slow: { at: 1, top_cpu: [], top_mem: [], queue: q } })]))
+    // 歷史 is disabled until W5d, so the remembered choice is set the way W5d's switch will: through view memory.
+    writeQueueTab('d-a', 'history')
+    const { rerender } = render(<TabContent activeTab={hostTab} allTabs={all} />)
+    expect(readQueueTab('d-a')).toBe('history')
+    expect(within(screen.getByTestId('queue-tabs')).getByRole('button', { name: t('watch.queue.tab.history') })).toHaveAttribute('aria-pressed', 'true')
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    expect(screen.queryByTestId('queue-tabs')).toBeNull()
+    rerender(<TabContent activeTab={hostTab} allTabs={all} />)
+    expect(within(screen.getByTestId('queue-tabs')).getByRole('button', { name: t('watch.queue.tab.history') })).toHaveAttribute('aria-pressed', 'true')
+  }, 30_000)
 })
