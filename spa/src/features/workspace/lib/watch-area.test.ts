@@ -6,6 +6,7 @@ import { createTab } from '../../../types/tab'
 import { watchHostTabId } from '../../../lib/watch/ids'
 import { buildTabsSection } from '../../../lib/profile/sections'
 import { applyTabs } from '../../../lib/profile/applier'
+import { openWatchArea } from './open-watch-area'
 import { ABSENT_REMOVE_MS, createWatchReconciler, startWatchArea, leaveAreaForForeignActiveTab } from './watch-area'
 
 const ws = () => useWorkspaceStore.getState()
@@ -165,6 +166,66 @@ describe('Profile Sync round trip', () => {
     expect(seen[2]).toBe(seen[3]) // stable
     expect(orderOf(A)).toEqual(orderOf(B))
     expect(new Set(orderOf(A))).toEqual(new Set(['a', 'b', 'c'].map(watchHostTabId)))
+  })
+})
+
+describe('dropping the active tab of the area', () => {
+  it('activates a neighbour in the area, not nothing', () => {
+    const r = createWatchReconciler()
+    r.reconcile(view(['a', 'b', 'c']), T0)
+    useTabStore.getState().setActiveTab(watchHostTabId('b'))
+    ws().setWorkspaceActiveTab(WATCH_WORKSPACE_ID, watchHostTabId('b'))
+    r.reconcile(view(['a', 'c']), T0 + 1000)
+    r.reconcile(view(['a', 'c']), T0 + ABSENT_REMOVE_MS)
+    expect(watchTabs()).toEqual([watchHostTabId('a'), watchHostTabId('c')])
+    expect(useTabStore.getState().activeTabId).toBe(watchHostTabId('c'))
+    expect(ws().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!.activeTabId).toBe(watchHostTabId('c'))
+  })
+})
+
+describe('through startWatchArea', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('sweeps the watch tabs adoption left in Unsorted after a sync apply removed the area', () => {
+    createWatchReconciler().reconcile(view(['a']), T0)
+    const aId = ws().workspaces.find((w) => w.id !== WATCH_WORKSPACE_ID)!.id
+    ws().removeTabFromWorkspace(WATCH_WORKSPACE_ID, watchHostTabId('a'))
+    ws().addTabToWorkspace(aId, watchHostTabId('a')) // where adoption puts it
+    useWorkspaceStore.setState({ workspaces: ws().workspaces.filter((w) => w.id !== WATCH_WORKSPACE_ID) })
+    const stop = startWatchArea()
+    expect(watchHostTabId('a') in useTabStore.getState().tabs).toBe(false)
+    expect(ws().workspaces.find((w) => w.id === aId)!.tabs).toEqual([])
+    expect(ws().workspaces.some((w) => w.id === WATCH_WORKSPACE_ID)).toBe(false)
+    stop()
+  })
+
+  it('opening a session while the area is shown leaves it for the return workspace', () => {
+    const a = ws().workspaces.find((w) => w.id !== WATCH_WORKSPACE_ID)!.id
+    setFleet(['h1'])
+    const stop = startWatchArea()
+    ws().setActiveWorkspace(a)
+    ws().setActiveWorkspace(WATCH_WORKSPACE_ID)
+    const session = createTab({ kind: 'new-tab' })
+    useTabStore.getState().addTab(session)
+    useTabStore.getState().setActiveTab(session.id)
+    ws().insertTab(session.id) // the store sends it to the return workspace
+    expect(ws().activeWorkspaceId).toBe(a)
+    stop()
+  })
+
+  it('openWatchArea from a session workspace stays in the area: no loop, no bounce', () => {
+    const a = ws().workspaces.find((w) => w.id !== WATCH_WORKSPACE_ID)!.id
+    const session = createTab({ kind: 'new-tab' })
+    useTabStore.getState().addTab(session)
+    ws().insertTab(session.id, a)
+    useTabStore.getState().setActiveTab(session.id)
+    ws().setActiveWorkspace(a)
+    setFleet(['h1'])
+    const stop = startWatchArea()
+    openWatchArea({ host: 'h1' })
+    expect(ws().activeWorkspaceId).toBe(WATCH_WORKSPACE_ID)
+    expect(useTabStore.getState().activeTabId).toBe(watchHostTabId('h1'))
+    stop()
   })
 })
 

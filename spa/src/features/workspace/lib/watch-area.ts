@@ -30,7 +30,14 @@ function hostTab(id: string, content: PaneContent): Tab {
 function dropTab(tabId: string): void {
   const ws = useWorkspaceStore.getState()
   const owner = ws.findWorkspaceByTab(tabId)
-  if (owner) ws.removeTabFromWorkspace(owner.id, tabId)
+  // If it was the active tab, a neighbour in the same row takes over (as closing a tab does), not nothing.
+  let neighbour: string | null = null
+  if (owner) {
+    const i = owner.tabs.indexOf(tabId)
+    neighbour = owner.tabs[i + 1] ?? owner.tabs[i - 1] ?? null
+    ws.removeTabFromWorkspace(owner.id, tabId)
+  }
+  const wasActive = useTabStore.getState().activeTabId === tabId
   useTabStore.setState((s) => {
     if (!(tabId in s.tabs)) return s
     const { [tabId]: _gone, ...tabs } = s.tabs
@@ -38,9 +45,10 @@ function dropTab(tabId: string): void {
       tabs,
       tabOrder: s.tabOrder.filter((id) => id !== tabId),
       visitHistory: s.visitHistory.filter((id) => id !== tabId),
-      activeTabId: s.activeTabId === tabId ? null : s.activeTabId,
+      activeTabId: s.activeTabId === tabId ? (neighbour !== null && neighbour in s.tabs ? neighbour : null) : s.activeTabId,
     }
   })
+  if (owner && wasActive && neighbour !== null) useWorkspaceStore.getState().setWorkspaceActiveTab(owner.id, neighbour)
 }
 
 export interface WatchReconciler {
@@ -57,6 +65,9 @@ export function createWatchReconciler(): WatchReconciler {
     const ws = useWorkspaceStore.getState()
     const watch = ws.workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)
 
+    // No workspace at all is a store that has not loaded, not a removed area: nothing is swept then.
+    if (!watch && ws.workspaces.length === 0) return null
+
     // 1. Area tabs found outside the area move back; with no area at all they are strays and go (an apply or a profile
     //    switch removed it, and it stays removed until the next open).
     for (const w of ws.workspaces) {
@@ -69,7 +80,11 @@ export function createWatchReconciler(): WatchReconciler {
         }
       }
     }
-    if (!watch) return null
+    if (!watch) {
+      // Tabs of the removed area that no workspace lists (adoption has not run yet) go as well.
+      for (const id of Object.keys(useTabStore.getState().tabs)) if (isWatchTabId(id)) dropTab(id)
+      return null
+    }
 
     // 2. Non-watch tabs found in the area (another window's rehydrate) go to the return workspace.
     const returnTo = getReturnWorkspaceId()
@@ -149,9 +164,10 @@ export function startWatchArea(): () => void {
 
   const run = (): void => {
     if (running) return // our own writes re-enter through the subscriptions
-    if (!useWorkspaceStore.getState().workspaces.some((w) => w.id === WATCH_WORKSPACE_ID)) return
     if (!readMasterWorld().settled) return
-    leaveAreaForForeignActiveTab()
+    // No area (a sync apply or a profile switch removed it): it stays removed, and the tabs it left behind are swept.
+    const hasArea = useWorkspaceStore.getState().workspaces.some((w) => w.id === WATCH_WORKSPACE_ID)
+    if (hasArea) leaveAreaForForeignActiveTab()
     running = true
     let next: number | null = null
     try {
