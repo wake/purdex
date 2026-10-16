@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import { FleetCells } from './FleetCells'
+import { useFleetConfigStore } from '../../lib/fleet/config-store'
 import { useFleetStore } from '../../lib/fleet/store'
 import { fleetHistory } from '../../lib/fleet/history'
 import { useHostStore } from '../../stores/useHostStore'
@@ -26,6 +27,7 @@ const FOUR = [
 
 beforeEach(() => {
   st().reset()
+  useFleetConfigStore.getState().reset()
   fleetHistory.clear()
   useHostStore.setState({ hosts: { [A]: hostCfg(A, 'd-a'), [B]: hostCfg(B, 'd-b') }, hostOrder: [A, B], activeHostId: A, runtime: {} } as never)
 })
@@ -69,7 +71,7 @@ describe('FleetCells — the row', () => {
   })
 })
 
-describe('FleetCells — clicks (until the watcher area lands)', () => {
+describe('FleetCells — clicks', () => {
   it('a daemon host opens that host on the Hosts page', () => {
     answer(A, primaryAnswer(1, FOUR))
     const p = props()
@@ -78,13 +80,14 @@ describe('FleetCells — clicks (until the watcher area lands)', () => {
     expect(p.onOpenHost).toHaveBeenCalledWith(B)
     expect(p.onOpenHosts).not.toHaveBeenCalled()
   })
-  it('a probe host opens the Hosts page (no host selected)', () => {
+  it('a probe host opens the Hosts page on the primary\'s overview and asks the probe section to highlight its row', () => {
     answer(A, primaryAnswer(1, FOUR))
     const p = props()
     render(<FleetCells variant="wide" {...p} />)
     fireEvent.click(screen.getByTestId('host-tile-p2'))
-    expect(p.onOpenHosts).toHaveBeenCalledTimes(1)
-    expect(p.onOpenHost).not.toHaveBeenCalled()
+    expect(p.onOpenHost).toHaveBeenCalledWith(A)
+    expect(useFleetConfigStore.getState().focusProbe).toBe('p2')
+    expect(p.onOpenHosts).not.toHaveBeenCalled()
   })
 })
 
