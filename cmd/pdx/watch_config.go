@@ -19,7 +19,7 @@ import (
 
 // watchConfigKeys are the keys of the setting, in the order they are shown.
 var watchConfigKeys = []string{"enabled", "x_cores", "y_mb", "t_s", "pressure_level", "pressure_t_s", "page_rate", "page_t_s",
-	"targets", "mode", "patrol_idle_min", "auto_wake", "model", "workdir", "start_prompt", "wake_prompt"}
+	"targets", "mode", "patrol_idle_min", "auto_wake", "agent_command", "workdir", "start_prompt", "wake_prompt"}
 
 func watchConfig(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("watch config", flag.ContinueOnError)
@@ -145,8 +145,9 @@ func watchValueText(v any) string {
 	}
 }
 
-// parseWatchValue reads text as the type of the current value (bool, number, list of strings, string). In a string, \n and \t
-// are a newline and a tab (prompts are multi-line).
+// parseWatchValue reads text as the type of the current value (bool, number, list of strings, string). A string is taken as typed:
+// the daemon refuses a control character in the command and the prompts (they are typed into a shell), so \n is not turned into
+// a newline.
 func parseWatchValue(cur any, s string) (any, error) {
 	switch cur.(type) {
 	case bool:
@@ -171,7 +172,7 @@ func parseWatchValue(cur any, s string) (any, error) {
 		}
 		return out, nil
 	default:
-		return strings.NewReplacer(`\n`, "\n", `\t`, "\t").Replace(s), nil
+		return s, nil
 	}
 }
 

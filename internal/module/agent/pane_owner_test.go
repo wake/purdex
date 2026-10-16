@@ -94,6 +94,10 @@ func TestResolvePaneOwners_LiveRootWithSessionID_Returned(t *testing.T) {
 		LastSeenAt: 42,
 		StartedAt:  42, // seedIdentityFrame starts the frame when it was last seen
 		Status:     string(agentpkg.StatusIdle),
+		// the process itself (host-load-control W3a step 0): a caller that must signal or re-check the agent has its pid and
+		// the start time that tells it from a reused pid
+		PID:              100,
+		ProcessStartTime: "t100",
 	}
 	if got != want {
 		t.Fatalf("owner = %+v, want %+v", got, want)

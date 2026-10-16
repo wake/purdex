@@ -3,6 +3,7 @@ package hostconfig
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -74,7 +75,7 @@ func TestWatch_AStoredBadValueIsAnErrorAndInvalidInTheGet(t *testing.T) {
 	assert.Contains(t, string(got["watch"]), `"enabled":true`)
 }
 
-const watchDelivery = `,"targets":["a26","mlab"],"mode":"resident","patrol_idle_min":30,"auto_wake":false,"model":"sonnet","workdir":"/srv/watch","start_prompt":"go\nnow","wake_prompt":"wake"`
+const watchDelivery = `,"targets":["a26","mlab"],"mode":"resident","patrol_idle_min":30,"auto_wake":false,"agent_command":"claude --model sonnet","workdir":"/srv/watch","start_prompt":"go now","wake_prompt":"wake"`
 
 func TestWatch_TheDeliveryFieldsRoundTrip(t *testing.T) {
 	m := newTestModule(t)
@@ -86,15 +87,15 @@ func TestWatch_TheDeliveryFieldsRoundTrip(t *testing.T) {
 	assert.Equal(t, watchsettings.ModeResident, s.Mode)
 	assert.Equal(t, 30, s.PatrolIdleMin)
 	assert.False(t, s.AutoWake, "false is a value, not a left-out field")
-	assert.Equal(t, "sonnet", s.Model)
+	assert.Equal(t, "claude --model sonnet", s.AgentCommand)
 	assert.Equal(t, "/srv/watch", s.Workdir)
-	assert.Equal(t, "go\nnow", s.StartPrompt)
+	assert.Equal(t, "go now", s.StartPrompt)
 	assert.Equal(t, "wake", s.WakePrompt)
 }
 
 func TestWatch_TheDeliveryFieldsAreValidated(t *testing.T) {
 	m := newTestModule(t)
-	long := strings.Repeat("x", 9000)
+	long := strings.Repeat("x", 4097)
 	for name, extra := range map[string]string{
 		"no targets":        `,"targets":[]`,
 		"too many targets":  `,"targets":["a","b","c","d","e","f","g","h","i"]`,
@@ -107,6 +108,13 @@ func TestWatch_TheDeliveryFieldsAreValidated(t *testing.T) {
 		"patrol idle huge":  `,"patrol_idle_min":1441`,
 		"a bad model":       `,"model":"bad model"`,
 		"an empty model":    `,"model":""`,
+		"a multi-line cmd":  `,"agent_command":"claude\nrm -rf x"`,
+		"a cmd with ESC":    `,"agent_command":"claude \u001b"`,
+		"a cmd with NUL":    `,"agent_command":"claude \u0000"`,
+		"an empty cmd":      `,"agent_command":""`,
+		"a cmd too long":    `,"agent_command":"` + strings.Repeat("c", 513) + `"`,
+		"a newline prompt":  `,"start_prompt":"a\nb"`,
+		"a tab prompt":      `,"wake_prompt":"a\tb"`,
 		"relative workdir":  `,"workdir":"work"`,
 		"workdir with ctl":  `,"workdir":"/a\u0007b"`,
 		"auto_wake string":  `,"auto_wake":"yes"`,
@@ -142,5 +150,79 @@ func TestWatch_TheDefaultsAreTheSpecs(t *testing.T) {
 	assert.Equal(t, watchsettings.ModePatrol, d.Mode)
 	assert.Equal(t, 120, d.PatrolIdleMin)
 	assert.True(t, d.AutoWake)
-	assert.Equal(t, "opus", d.Model)
+	assert.Equal(t, "claude --dangerously-skip-permissions --model opus", d.AgentCommand)
+}
+
+// Spec §12.2 `agent_command`: the old spelling `model` is read as the command it stood for; a write with both is refused; what
+// is stored is always agent_command; the GET answers agent_command and no model.
+func TestWatch_ModelIsTheOldSpellingOfAgentCommand(t *testing.T) {
+	const legacy = "claude --dangerously-skip-permissions --model sonnet"
+	m := newTestModule(t)
+	body := func(extra string, rev int) string {
+		return `{"items":` + strings.TrimSuffix(watchOK, "}") + extra + `},"baseRevision":` + strconv.Itoa(rev) + `}`
+	}
+
+	// a PUT with model only (an older client's read-modify-write) is stored as agent_command
+	rr := serve(m, http.MethodPut, "/api/hostconfig/watch", body(`,"model":"sonnet"`, 0))
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	e, err := m.store.Get(KeyWatch)
+	require.NoError(t, err)
+	assert.Contains(t, string(e.Value), `"agent_command":"`+legacy+`"`)
+	assert.NotContains(t, string(e.Value), `"model"`, "what is stored is always agent_command")
+	s, err := m.WatchSettings()
+	require.NoError(t, err)
+	assert.Equal(t, legacy, s.AgentCommand)
+
+	// both → 400, nothing stored
+	rr = serve(m, http.MethodPut, "/api/hostconfig/watch", body(`,"model":"opus","agent_command":"claude"`, 1))
+	assert.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+	e, err = m.store.Get(KeyWatch)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), e.Revision)
+
+	// a row written by 741–744 (model, no agent_command) reads as the command, and a restart reads what is stored
+	m2 := newTestModule(t)
+	_, _, err = m2.store.Put(KeyWatch, 0, func(Entry) (json.RawMessage, error) {
+		return json.RawMessage(strings.TrimSuffix(watchOK, "}") + `,"model":"haiku"}`), nil
+	})
+	require.NoError(t, err)
+	s, err = m2.WatchSettings()
+	require.NoError(t, err)
+	assert.Equal(t, "claude --dangerously-skip-permissions --model haiku", s.AgentCommand)
+
+	// the GET answers agent_command and no model; its items PUT back unchanged
+	rr = serve(m2, http.MethodGet, "/api/hostconfig", "")
+	var got struct {
+		Watch struct {
+			Items    map[string]any `json:"items"`
+			Revision int            `json:"revision"`
+		} `json:"watch"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &got))
+	items := got.Watch.Items
+	assert.Equal(t, "claude --dangerously-skip-permissions --model haiku", items["agent_command"])
+	_, hasModel := items["model"]
+	assert.False(t, hasModel)
+	put, _ := json.Marshal(map[string]any{"items": items, "baseRevision": got.Watch.Revision})
+	rr = serve(m2, http.MethodPut, "/api/hostconfig/watch", string(put))
+	assert.Equal(t, http.StatusOK, rr.Code, "GET → PUT unchanged round trips: "+rr.Body.String())
+}
+
+// An invalid UTF-8 byte in the command or a prompt is refused, not replaced by U+FFFD and stored: the JSON decode alone would
+// have changed it before any check on the string saw it.
+func TestWatch_InvalidUTF8IsRefusedNotRewritten(t *testing.T) {
+	m := newTestModule(t)
+	// interpreted Go strings: \xff here is the byte 0xff itself, not a JSON escape
+	for name, extra := range map[string]string{
+		"agent_command": ",\"agent_command\":\"claude \xff\"",
+		"start_prompt":  ",\"start_prompt\":\"a\xffb\"",
+		"wake_prompt":   ",\"wake_prompt\":\"a\xc3(\"",
+	} {
+		body := `{"items":` + strings.TrimSuffix(watchOK, "}") + extra + `},"baseRevision":0}`
+		rr := serve(m, http.MethodPut, "/api/hostconfig/watch", body)
+		assert.Equal(t, http.StatusBadRequest, rr.Code, name+": "+rr.Body.String())
+	}
+	e, err := m.store.Get(KeyWatch)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), e.Revision, "nothing stored")
 }

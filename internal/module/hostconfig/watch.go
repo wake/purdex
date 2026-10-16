@@ -37,6 +37,11 @@ func normalizeWatch(raw json.RawMessage) (watchsettings.Settings, error) {
 	if firstByte(raw) != '{' {
 		return watchsettings.Settings{}, errors.New("items must be a JSON object")
 	}
+	// Before the decode: encoding/json turns an invalid byte in a string into U+FFFD, so a check made afterwards never sees it
+	// and the command or prompt would be stored changed.
+	if !utf8.Valid(raw) {
+		return watchsettings.Settings{}, errors.New("watch: the body is not valid UTF-8")
+	}
 	var in struct {
 		Enabled          *bool     `json:"enabled"`
 		XCores           *float64  `json:"x_cores"`
@@ -50,7 +55,8 @@ func normalizeWatch(raw json.RawMessage) (watchsettings.Settings, error) {
 		Mode             *string   `json:"mode"`
 		PatrolIdleMin    *int      `json:"patrol_idle_min"`
 		AutoWake         *bool     `json:"auto_wake"`
-		Model            *string   `json:"model"`
+		Model            *string   `json:"model"` // the old spelling of agent_command (741–744)
+		AgentCommand     *string   `json:"agent_command"`
 		Workdir          *string   `json:"workdir"`
 		StartPrompt      *string   `json:"start_prompt"`
 		WakePrompt       *string   `json:"wake_prompt"`
@@ -76,7 +82,7 @@ func normalizeWatch(raw json.RawMessage) (watchsettings.Settings, error) {
 		PressureLevel: *in.PressureLevel, PressureTSeconds: *in.PressureTSeconds, PageRate: *in.PageRate, PageTSeconds: *in.PageTSeconds,
 	}
 	def := watchsettings.Default()
-	s.Targets, s.Mode, s.PatrolIdleMin, s.AutoWake, s.Model, s.Workdir = def.Targets, def.Mode, def.PatrolIdleMin, def.AutoWake, def.Model, def.Workdir
+	s.Targets, s.Mode, s.PatrolIdleMin, s.AutoWake, s.AgentCommand, s.Workdir = def.Targets, def.Mode, def.PatrolIdleMin, def.AutoWake, def.AgentCommand, def.Workdir
 	if in.Targets != nil {
 		s.Targets = *in.Targets
 	}
@@ -89,8 +95,16 @@ func normalizeWatch(raw json.RawMessage) (watchsettings.Settings, error) {
 	if in.AutoWake != nil {
 		s.AutoWake = *in.AutoWake
 	}
-	if in.Model != nil {
-		s.Model = *in.Model
+	switch {
+	case in.Model != nil && in.AgentCommand != nil:
+		return watchsettings.Settings{}, errors.New("model is the old spelling of agent_command: send one of them")
+	case in.Model != nil: // an older client's read-modify-write, or a row of 741–744: the command it stood for
+		if !watchModelRe.MatchString(*in.Model) {
+			return watchsettings.Settings{}, errors.New("model must be a model name")
+		}
+		s.AgentCommand = watchsettings.LegacyModelCommand(*in.Model)
+	case in.AgentCommand != nil:
+		s.AgentCommand = *in.AgentCommand
 	}
 	if in.Workdir != nil {
 		s.Workdir = *in.Workdir
@@ -153,13 +167,14 @@ var (
 
 const (
 	maxWatchTargets = 8
-	maxWatchPrompt  = 8 << 10
+	maxWatchPrompt  = 4 << 10
+	maxWatchCommand = 512
 	maxWatchWorkdir = 1024
 )
 
 // validateWatchDelivery checks the delivery fields (spec §12.2): targets are 1–8 distinct host aliases, mode is patrol or
-// resident, the model a plain model name, the workdir an absolute or ~/ path, the prompts bounded text without control
-// characters other than newline and tab.
+// resident, the agent command one line of at most 512 bytes, the workdir an absolute or ~/ path, the prompts at most 4 KB of
+// text on one line (both are typed into a shell, so no control character, newline included, may end the line early).
 func validateWatchDelivery(s watchsettings.Settings) error {
 	if n := len(s.Targets); n < 1 || n > maxWatchTargets {
 		return fmt.Errorf("targets must list 1 to %d host aliases", maxWatchTargets)
@@ -178,8 +193,8 @@ func validateWatchDelivery(s watchsettings.Settings) error {
 	if s.Mode != watchsettings.ModePatrol && s.Mode != watchsettings.ModeResident {
 		return errors.New("mode must be patrol or resident")
 	}
-	if !watchModelRe.MatchString(s.Model) {
-		return errors.New("model must be a model name")
+	if s.AgentCommand == "" || len(s.AgentCommand) > maxWatchCommand || !utf8.ValidString(s.AgentCommand) || hasControl(s.AgentCommand, false) {
+		return fmt.Errorf("agent_command must be one line of at most %d bytes without control characters", maxWatchCommand)
 	}
 	if s.Workdir != "" {
 		if len(s.Workdir) > maxWatchWorkdir || !(strings.HasPrefix(s.Workdir, "/") || s.Workdir == "~" || strings.HasPrefix(s.Workdir, "~/")) || hasControl(s.Workdir, false) {
@@ -187,8 +202,8 @@ func validateWatchDelivery(s watchsettings.Settings) error {
 		}
 	}
 	for name, p := range map[string]string{"start_prompt": s.StartPrompt, "wake_prompt": s.WakePrompt} {
-		if len(p) > maxWatchPrompt || !utf8.ValidString(p) || hasControl(p, true) {
-			return fmt.Errorf("%s must be text of at most %d bytes", name, maxWatchPrompt)
+		if len(p) > maxWatchPrompt || !utf8.ValidString(p) || hasControl(p, false) {
+			return fmt.Errorf("%s must be one line of text of at most %d bytes", name, maxWatchPrompt)
 		}
 	}
 	return nil
