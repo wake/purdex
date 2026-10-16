@@ -12,6 +12,7 @@ import { readMasterWorld } from '../../../lib/profile/master-world'
 import { useWorkspaceStore, getReturnWorkspaceId } from '../store'
 import { WATCH_GUARDIAN_TAB_ID, WATCH_WORKSPACE_ID, fleetHostIdOfTabId, isWatchTabId, watchHostTabId } from '../../../lib/watch/ids'
 import { useWatchStatusStore, deriveGuardian } from '../../../lib/watch/status-store'
+import { useHostStore } from '../../../stores/useHostStore'
 import { useSessionStore } from '../../../stores/useSessionStore'
 import { tmuxSessionContent } from '../../../lib/open-session-tab'
 
@@ -56,20 +57,33 @@ function dropTab(tabId: string): void {
 
 const GUARDIAN_PANEL: PaneContent = { kind: 'watch-guardian' }
 
+interface GuardianWish {
+  wanted: PaneContent
+  /** True when turning a session into the panel is backed by evidence that does not depend on this device's reach. */
+  downgradeOk: boolean
+}
+
 /**
- * What the guardian pane should hold now (plan T-a3.4): the holder's real `pdx-watch` session when it is awake or resting,
- * its host is connected to this App and its session list has it; else the panel. `null` = leave the content as it is (the
- * holder's session list has not arrived: that is not "no pdx-watch").
+ * What the guardian pane should hold now (plan §1, T-a3.4), or null = write nothing: the derivation is not settled (no
+ * answer yet, a connected host that has not answered since it connected, the holder's session list not loaded).
+ * Session → panel (`downgradeOk`) only when the evidence is the same on every device: `none` from an `ok` host, or the
+ * holder reachable, its list loaded, and no such session. Not for an unreachable holder, a failed read or a forgotten host.
  */
-function guardianContent(): PaneContent | null {
-  const g = deriveGuardian(useWatchStatusStore.getState().byHost)
+function guardianWish(): GuardianWish | null {
+  const byHost = useWatchStatusStore.getState().byHost
+  const host = useHostStore.getState()
+  const connected = Object.keys(host.hosts).filter((id) => host.runtime[id]?.status === 'connected')
+  if (connected.length === 0 || connected.some((id) => !(id in byHost))) return null
+  const g = deriveGuardian(byHost)
+  if (g.state === 'unknown') return null
   if ((g.state === 'awake' || g.state === 'resting') && g.reachable && g.appHostId) {
     const all = useSessionStore.getState().sessions
-    if (!Object.hasOwn(all, g.appHostId)) return null
+    if (!Object.hasOwn(all, g.appHostId)) return null // `sessions[host]` exists only once a fetch landed: loaded
     const found = all[g.appHostId].find((x) => x.name === g.tmuxSession)
-    if (found) return tmuxSessionContent(g.appHostId, found)
+    if (found) return { wanted: tmuxSessionContent(g.appHostId, found), downgradeOk: false }
+    return { wanted: GUARDIAN_PANEL, downgradeOk: true }
   }
-  return GUARDIAN_PANEL
+  return { wanted: GUARDIAN_PANEL, downgradeOk: g.state === 'none' }
 }
 
 const contentKey = (c: PaneContent): string =>
@@ -104,15 +118,17 @@ export function createWatchReconciler(): WatchReconciler {
       useWorkspaceStore.getState().reorderWorkspaceTabs(WATCH_WORKSPACE_ID, [WATCH_GUARDIAN_TAB_ID, ...rest])
     }
 
-    const wanted = guardianContent()
-    if (wanted === null) return
-    const key = contentKey(wanted)
+    const wish = guardianWish()
+    if (wish === null) return
+    const key = contentKey(wish.wanted)
     if (key === guardianKey) return
-    guardianKey = key
     const tab = useTabStore.getState().tabs[WATCH_GUARDIAN_TAB_ID]
-    if (!tab || tab.layout.type !== 'leaf') return
-    if (JSON.stringify(tab.layout.pane.content) === JSON.stringify(wanted)) return
-    useTabStore.getState().setPaneContent(WATCH_GUARDIAN_TAB_ID, tab.layout.pane.id, wanted)
+    if (!tab || tab.layout.type !== 'leaf') return // not remembered: the next run retries
+    const cur = tab.layout.pane.content
+    if (JSON.stringify(cur) === JSON.stringify(wish.wanted)) { guardianKey = key; return }
+    if (wish.wanted.kind === 'watch-guardian' && !wish.downgradeOk) return // this device cannot tell; leave the session
+    useTabStore.getState().setPaneContent(WATCH_GUARDIAN_TAB_ID, tab.layout.pane.id, wish.wanted)
+    guardianKey = key
   }
 
   const reconcile = (view: WatchFleetView | null, now: number = Date.now()): number | null => {
