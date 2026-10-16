@@ -78,10 +78,11 @@ Hover tooltips stay as F-2b built them.
 ## 4. The 守門員 tab
 
 The watcher is an ordinary Claude Code session started by the daemon of the host that holds it (load-control spec
-§12.4). The tab shows that session's terminal under a strip of its own (the status text below). It offers no rebuild
-and no detach: the daemon owns the watcher, and a rebuild would start a second agent outside `pdx-watch`. Deck is
-not offered for now (§10 Q3). The terminal is drawn from the watch status each time and is never stored in the tab,
-so the session strip's pane actions of a session tab do not apply (plan §1).
+§12.4). The tab is a **full session tab** of that session (user, 10-16: 「要，就是現在的完整 tab 可用三種模式」): the
+three views terminal, Deck and Chat, the status strip, drafts and the conversation work as in any session tab. A bar
+above it carries the status text below. One difference: when the watcher's session ends, the tab shows the watcher's
+state (the table below) instead of offering a rebuild, because the daemon starts and wakes the watcher, and a rebuild
+would run it outside `pdx-watch`.
 
 | Watch state | The tab shows |
 |---|---|
@@ -89,8 +90,9 @@ so the session strip's pane actions of a session tab do not apply (plan §1).
 | awake | The watcher's tmux session pane on its host. The strip's status text: 「守門員 · 在 {host} · 醒著 · {巡檢模式｜常駐模式} · {model}」. |
 | resting | The holder's `pdx-watch` tmux session, which stays at a shell while the watcher rests (load-control spec §12.4/§12.6), with a band above the pane: 「守門員休息中（{since} 起）」 and an input 「提問會叫醒守門員」; sending → `POST /api/watch/wake` with the text (A3) on the holding host; the band goes when the watcher is awake. "Resting" and "none" are different answers of the status and never look alike. |
 
-- **Follows the watcher**: the pane is derived from the watch status, never persisted. After a failover (a26 closed →
-  mlab) the tab shows the new holder's session; the strip names the host.
+- **Follows the watcher**: the tab's session is set from the watch status whenever the watcher's host or session
+  changes (it is stored and synced like any session tab, and rewritten on the next change). After a failover (a26
+  closed → mlab) the tab shows the new holder's session; the bar names the host.
 - The holding host's daemon must say which tmux session the watcher lives in (A3, `tmux_session`), so the pane is a
   normal `tmux-session` pane on that host; the A line's identification of the watcher (e.g. a fixed tmux name, still
   open on its side) does not change this tab.
@@ -268,9 +270,7 @@ W5a1 … W5a3, W5b, W5b1, W5b2 and W5c1 need nothing from the A line.
 - Q1 (user): 全部略過 — **decided 10-16: dropped** (U9, #3017).
 - Q2 (A line): how the watcher's session is identified — **decided**: the fixed tmux session `pdx-watch` (load-control
   spec §12.4). The UI uses `tmux_session` from the status when it carries it, `pdx-watch` until then.
-- Q3 (user): the 守門員 tab without Deck (§4). The prototype showed Deck, rebuild and detach on its strip; rebuild and
-  detach are left out on purpose, and Deck can come later through a stored pane if the watcher should be readable in
-  Deck view.
+- Q3 (user): **decided 10-16** — the 守門員 tab is a full session tab with terminal, Deck and Chat (§4).
 
 Out of scope: iOS; alerts or pushes on zone changes (the watcher's job); any history kept on a daemon for the charts;
 `pdx gate free` from the UI (the watcher's command after the person agrees).

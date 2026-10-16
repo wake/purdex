@@ -1,11 +1,11 @@
-# Watcher area — plan (rev 1.1: W5a1 … W5e)
+# Watcher area — plan (rev 1.2: W5a1 … W5e)
 
 Spec: `docs/specs/2026-10-16-watcher-area-spec.md` (B line, with A3 as agreed in #3010, U9 from #3017, U10 from #3020).
 Load-control spec §12.4–§12.6 for the watcher itself. Facts below were read on origin/main `bd4b0d7d1` (alpha.745 +
 #3014), 2026-10-16.
 
 **Rev 1.1** takes the focused plan review (subagent, 0 critical, 11 important, 5 minor; all taken):
-- the guardian tab draws a bare `TerminalView` instead of `SessionPaneContent` on a synthetic pane;
+- the guardian tab's session pane (rev 1.2: a full session tab, user 10-16; see §1);
 - `watch-host` carries `fleetHostId`, so that no generic `content.hostId` reader takes it for an App host;
 - a host tab is removed only by the device that saw its host leave;
 - the full list of workspace consumers;
@@ -21,6 +21,9 @@ It also takes 1f's notes:
 - no slot bounds at all (#3020, replacing #3017/#3019): a slot count is limited only by the gate's 0–64, and 0 pauses a
   class (W3c);
 - W2b will declare `watch.v1` (Q4).
+
+**Rev 1.2** (user, 10-16): the guardian tab is a full session tab with its three views (terminal, Deck, Chat); §1 and
+W5a3 rewritten, Q3 closed.
 
 **Flow: the quick one** (user-facing, wanted soon): this plan → one focused subagent review (done) → TDD by subagents
 (Sonnet, one PR per phase, own worktree) → one full subagent review per PR → merge. No codex round. W5b (daemon) also
@@ -76,17 +79,23 @@ goes past 1f (`internal/fleet` is shared with the A line's sampler).
   `watch.changed`, `watch.events` and `watch.v1` do not exist yet. W5a3 reads the status of every connected host on
   connect and every 30 s while the window is visible; a 404 means "no watch support". W5e replaces the timer with the
   pushes and keys the events tab on `watch.v1`.
-- **The guardian tab draws a bare `TerminalView`** (`components/TerminalView.tsx`: `wsUrl`, `hostId`, `sessionCode`,
-  `getTicket`, `visible`; no pane id). It does not draw `SessionPaneContent`, for these reasons:
-  - that component looks its tab up by pane id (`SessionPaneContent.tsx:86-91`) and writes session-view, draft, queue and
-    rebuild state keyed by pane id, which the live-pane GC drops for a pane that is not in the tab store
-    (`lib/conversations/pane-release.ts:55-86`);
-  - it holds a conversation stream for the session (`hooks/useConversationOfPane.ts`);
-  - its terminated and rebuild paths (`TerminatedPane.tsx:72-176`) need a stored pane.
-
-  The guardian tab draws its own strip (status text only) and handles a missing `pdx-watch` itself. It offers **no
-  rebuild and no detach**: the daemon owns the watcher, and a rebuild would start a second agent outside `pdx-watch`.
-  **Deck is not offered** (open point Q3, §13). This is the spec's §4 as updated; the prototype showed all three buttons.
+- **The guardian tab is a full session tab** (user, 10-16: 「要，就是現在的完整 tab 可用三種模式」 — terminal, Deck and
+  Chat). Its one leaf pane, in the store under the fixed tab id `watch-guardian`, holds the real `tmux-session` content of
+  the holder's `pdx-watch` session, so `SessionPaneContent`, the status strip's view buttons (`PaneModeButtons`), the
+  conversation, drafts and session-view state all work as in any session tab. When there is no session to show (none,
+  unknown, the holder not connected, no `pdx-watch` in its list) the pane holds `{kind: 'watch-guardian'}`, a panel.
+  - **Who writes it**: the reconcile, edge-triggered. When this device's derived guardian (holder host, session code)
+    changes, it sets the pane's content once (`setPaneContent` on the fixed tab). It does not keep enforcing, so a
+    content that arrived by sync from another device stays until this device's own derivation changes. Both devices
+    read the same daemons, so they converge without ping-pong. The `tmux-session` content syncs like any session tab's
+    (its `hostId` is translated by `host-identity`).
+  - **No rebuild**: when the pdx-watch session ends, the pane would be marked terminated and offer a rebuild, which
+    would start the watcher outside `pdx-watch`. For the guardian tab id, `SessionPaneContent`'s terminated branch shows
+    the guardian panel instead of `TerminatedPane`, and the next derivation sets the panel content. The daemon restarts
+    the watcher (W5e's start and wake).
+  - **The banner**: the status text and the resting band are an App-level bar above the tab content while the guardian
+    tab is active (`GuardianBanner`), not a pane wrapper, so the session pane stays the stock one.
+  - The tab is locked like every area tab: no close, no tear-off, no merge.
 - **Mixed versions.** An App older than W5a1 that receives the `watch` workspace by sync shows it in its sidebar with
   unknown panes. Both Macs load the SPA from mlab's dev server, so they update together. The acceptance checks the
   second Mac right after the deploy. iOS does not apply workspaces.
@@ -97,7 +106,7 @@ goes past 1f (`internal/fleet` is shared with the A line's sampler).
 |---|---|---|---|---|
 | W5a1 | pane kinds, the `watch` workspace, its guards and consumer audit, the `fixed` tab row, `openWatchArea`, host cells' click, host tab header + 行程 | — | B subagent | ~1000 |
 | W5a2 | host tab 資源: gauges, charts, range switch, history adapter, view memory | W5a1 | B subagent | ~800 |
-| W5a3 | the watcher in the area: watch status store, the shield, the guardian tab (status panel and the `pdx-watch` terminal, strip, resting band without input), the holder's `watch` row reader | W5a1 | B subagent | ~900 |
+| W5a3 | the watcher in the area: watch status store, the shield, the guardian tab (the full `pdx-watch` session tab on the holder or the status panel, the banner, the resting band without input), the holder's `watch` row reader | W5a1 | B subagent | ~900 |
 | W5b | queue wire: `slow.queue.holders`, `waiters[].session`, `admission_reason`, `heavy_paused` / `light_paused` (daemon + golden JSON + SPA types/parse) | — | 53-pe | ~450 |
 | W5b1 | queue 當下 UI: lanes (paused included), gate line, waiting cards, table, hover pairing | W5a1, W5b | B subagent | ~700 |
 | W5b2 | the hourglass on the agent icon | W5b | B subagent | ~350 |
@@ -300,34 +309,42 @@ Every PR follows these rules:
     active.
   - Not in the narrow bar, which has no `HomeRow`; there the host cells are the way in.
   - Tests: the four looks, the click, aria-pressed.
-- **T-a3.4 The guardian tab** (`components/watch/WatchGuardianPane.tsx`). The reconcile now creates the guardian tab
-  first. It shows one of the following, from `deriveGuardian`:
-  - **none**: 「這台主機群目前沒有守門員」 and 「啟動後，它會看管重指令名額與記憶體壓力，事件交給它處理。」 (the
-    start button comes in W5e).
-  - **unknown**: 「讀不到守門員狀態」.
-  - **awake or resting, with the holder connected and its session found**: the strip and a `TerminalView`.
+- **T-a3.4 The guardian tab's content** (`features/workspace/lib/watch-area.ts` reconcile +
+  `components/watch/WatchGuardianPane.tsx` for the panel kind). The reconcile now creates the guardian tab first, and
+  sets its pane content from `deriveGuardian` when that derivation changes (edge-triggered, §1):
+  - **awake or resting, with the holder connected and its session found** → `{kind: 'tmux-session', hostId: appHost,
+    sessionCode, mode: 'terminal', cachedName: name, tmuxInstance}` (the builder of `lib/open-session-tab.ts:45`):
     - Holder: `deriveGuardian().hostId` (a daemon host id) maps to the App host whose `daemonId` matches, as
       `fleetHostsView` does.
-    - Session: `useSessionStore.sessions[appHost].find(s => s.name === name)`. `name` is the status's
-      `tmux_session` when A3 adds it, and `pdx-watch` until then.
-    - `TerminalView`: `wsUrl` is the host's `/ws/terminal/<code>`, as `SessionPaneContent.tsx:180-189` builds it;
-      `getTicket` is `fetchWsTicket(appHost)`; `visible` is the pane's `isActive`. Its `key` is `<appHost>:<code>`, so
-      a failover re-mounts it.
-    - The strip reads 「守門員 · 在 {alias} · 醒著／休息中 · {巡檢模式｜常駐模式}」, then 「· {model}」 when `modelOf`
-      gives one.
-    - Resting adds the band 「守門員休息中（{since} 起）」 above the terminal. Its input comes in W5e.
-  - **the holder not connected to this App**: 「守門員在 {alias}，這台 App 沒有連到它」.
-  - **the holder connected but its session list has no `pdx-watch`**: 「{alias} 上沒有 pdx-watch」.
-- **T-a3.5 Tests**:
-  - each case of T-a3.4;
-  - a failover: the status goes from host A awake to host B awake, and the terminal re-mounts on B's session code;
-  - a tab switch away and back still shows the terminal (nothing persisted);
-  - nothing is written to `useTabStore`, `useSessionViewStore` or the conversation stores while the guardian tab is
-    shown (spies);
-  - a real tab of `pdx-watch` open at the same time keeps working (two terminals on one tmux session is normal tmux).
+    - Session: `useSessionStore.sessions[appHost].find(s => s.name === name)`. `name` is the status's `tmux_session`
+      when A3 adds it, and `pdx-watch` until then.
+  - **otherwise** → `{kind: 'watch-guardian'}`, whose panel reads:
+    - none: 「這台主機群目前沒有守門員」 and 「啟動後，它會看管重指令名額與記憶體壓力，事件交給它處理。」 (the start
+      button comes in W5e);
+    - unknown: 「讀不到守門員狀態」;
+    - the holder not connected to this App: 「守門員在 {alias}，這台 App 沒有連到它」;
+    - the holder connected but its session list has no `pdx-watch`: 「{alias} 上沒有 pdx-watch」.
+  - A session list that is still loading leaves the content as it is (it is not read as "no pdx-watch").
+- **T-a3.5 The terminated branch and the banner.**
+  - `SessionPaneContent`: when the pane is terminated and its tab is `watch-guardian`, render `WatchGuardianPane`'s
+    panel for the current derivation instead of `TerminatedPane` (no rebuild offer).
+  - `components/watch/GuardianBanner.tsx`, rendered by `App` above the tab content while the active tab is
+    `watch-guardian` and its content is a session: 「守門員 · 在 {alias} · 醒著／休息中 · {巡檢模式｜常駐模式}」, then
+    「· {model}」 when `modelOf` gives one. Resting adds 「守門員休息中（{since} 起）」 (its input comes in W5e).
+- **T-a3.6 Tests**:
+  - each content case of T-a3.4, through the real reconcile;
+  - the three views: with the guardian tab holding the session, the status strip's view buttons switch terminal → Deck
+    → Chat and back, through the real `SessionPaneContent` and `useSessionViewStore` (the same as a session tab);
+  - a failover: the status goes from host A awake to host B awake → the content becomes B's session;
+  - edge-triggered: a content that arrived by sync is not overwritten while this device's derivation is unchanged, and
+    two devices with the same derivation converge (two reconcilers and one `applyTabs` each way);
+  - terminated: the guardian tab shows the panel, and no rebuild button exists;
+  - a tab switch away and back keeps the chosen view (the stock session-view store);
+  - the banner's text for awake, resting and the model.
 
-  M: persist the session code in the tab → the failover test goes red.
-- **T-a3.6 i18n** for the above.
+  M: enforce the content on every run (not edge-triggered) → the sync test goes red; show `TerminatedPane` for the
+  guardian tab → the terminated test goes red.
+- **T-a3.7 i18n** for the above.
 
 ## 6. W5b — the queue wire (53-pe)
 
@@ -472,8 +489,8 @@ used slots, a paused lane, the gate words, waiting warning at 2 min, the pairing
 ## 13. Asks and open points
 
 - **Q1**: decided 10-16 (#3017): no 全部略過, no skip route, `watch.events` causes are `recorded | acked` only.
-- **Q3 (user)**: the guardian tab without Deck, rebuild or detach (§1). Rebuild and detach are left out on purpose.
-  Deck could come later through a stored pane, if the user wants the watcher in Deck view.
+- **Q3**: decided 10-16 — the guardian tab is a full session tab with terminal, Deck and Chat (§1). Only the rebuild
+  of a terminated pane is replaced by the panel, because the daemon restarts the watcher.
 - **Q4 (A line)**: `watch.v1` in `/api/info` when W2b's events, ack and `watch.events` land, with the real-module
   test. Agreed by 1f, 10-16.
 - **A3's `tmux_session`**: W5a3 uses the fixed `pdx-watch` until the status carries it.
