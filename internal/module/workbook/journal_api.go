@@ -137,7 +137,7 @@ func (m *Module) seatOf(sessionID string) (team.Seat, error) {
 }
 
 // resolveJournal finds the unit a session reads and answers the request itself when there is none: 400 without a session, 503
-// while the module is off, 409 (with the lead's host and session) for a member of a team led on another host, 404 when the
+// while the module is off or the journal is switched off ([journal] enabled = false), 409 (with the lead's host and session) for a member of a team led on another host, 404 when the
 // unit has not written anything yet. A lead or a member of a live team reads its team's unit (which lives in the lead's
 // project, wherever the member works); anyone else reads the unit of its own conversation.
 func (m *Module) resolveJournal(w http.ResponseWriter, sessionID string) (journalTarget, bool) {
@@ -146,7 +146,7 @@ func (m *Module) resolveJournal(w http.ResponseWriter, sessionID string) (journa
 		return journalTarget{}, false
 	}
 	st := m.live()
-	if st == nil {
+	if st == nil || m.journalDisabled() { // module off, or [journal] enabled = false
 		writeError(w, http.StatusServiceUnavailable, "unavailable")
 		return journalTarget{}, false
 	}
