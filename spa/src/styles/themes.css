@@ -23,9 +23,11 @@
   --color-terminal-fg: var(--terminal-fg);
   --color-terminal-cursor: var(--terminal-cursor);
   --color-status-error: var(--status-error);
+  --color-status-error-text: var(--status-error-text, var(--status-error));
   --color-status-warning: var(--status-warning);
   --color-status-warning-text: var(--status-warning-text, var(--status-warning));
   --color-status-success: var(--status-success);
+  --color-status-success-text: var(--status-success-text, var(--status-success));
 }
 
 /* === Dark (default, matches current hardcoded values) === */
@@ -91,6 +93,9 @@
   --status-warning: #fef3cd;
   --status-warning-text: #8a6d00;
   --status-success: #d4edda;
+  /* The three above are background tints in this theme; these are their text-strength siblings (watch area), >= 4.5:1 on #f5f5f5. */
+  --status-success-text: #1e7b34;
+  --status-error-text: #b42318;
 }
 
 /* === Nord === */
