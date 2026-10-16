@@ -4,7 +4,7 @@
 // W5e adds 啟動守門員 and 叫醒守門員 here.
 import { useEffect, useMemo, useState } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useHostStore } from '../../stores/useHostStore'
+import { useHostLook } from '../../lib/host-look'
 import { useWatchStatusStore, deriveGuardian } from '../../lib/watch/status-store'
 import { readWatchRow, type WatchRow } from '../../lib/watch/watch-row'
 
@@ -26,7 +26,7 @@ export function WatchLaunchPanel({ title, hint }: Props) {
   const t = useI18nStore((s) => s.t)
   const byHost = useWatchStatusStore((s) => s.byHost)
   const g = useMemo(() => deriveGuardian(byHost), [byHost])
-  const hostName = useHostStore((s) => (g.appHostId ? s.hosts[g.appHostId]?.name : undefined))
+  const look = useHostLook(g.appHostId ?? null)
 
   // The row is read when the holder changes (and not on every status read).
   const holder = g.appHostId
@@ -46,7 +46,7 @@ export function WatchLaunchPanel({ title, hint }: Props) {
         {hint && <p data-testid="watch-launch-hint" className="text-xs text-text-muted">{hint}</p>}
         {holder && (
           <>
-            <Row testId="watch-launch-host" label={t('watch.launch.host')} value={hostName ?? g.alias ?? holder} />
+            <Row testId="watch-launch-host" label={t('watch.launch.host')} value={look.name ?? g.alias ?? holder} />
             <Row testId="watch-launch-session" label={t('watch.launch.session')} value={g.tmuxSession} />
             {row?.workdir && <Row testId="watch-launch-workdir" label={t('watch.launch.workdir')} value={row.workdir} />}
             {row?.agentCommand && <Row testId="watch-launch-command" label={t('watch.launch.command')} value={row.agentCommand} />}
