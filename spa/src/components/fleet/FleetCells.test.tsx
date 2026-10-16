@@ -4,12 +4,12 @@ import { FleetCells } from './FleetCells'
 import { useFleetStore } from '../../lib/fleet/store'
 import { fleetHistory } from '../../lib/fleet/history'
 import { useHostStore } from '../../stores/useHostStore'
-import { fast, host, primaryAnswer, standbyAnswer } from '../../lib/fleet/fixtures'
+import { fast, host, primaryAnswer, standbyAnswer } from '../../lib/fleet/__fixtures__/builders'
 
 const A = 'cfg-a'
 const B = 'cfg-b'
 const st = () => useFleetStore.getState()
-const hostCfg = (id: string, daemonId: string) => ({ id, name: id, ip: '100.64.0.2', port: 7860, token: 't', order: 0, daemonId, colors: { console: { main: { color: '#336699', alpha: 100 } } } })
+const hostCfg = (id: string, daemonId: string) => ({ id, name: ({ 'cfg-a': 'air26', 'cfg-b': 'mlab' } as Record<string, string>)[id] ?? id, ip: '100.64.0.2', port: 7860, token: 't', order: 0, daemonId, colors: { console: { main: { color: '#336699', alpha: 100 } } } })
 
 function answer(hostId: string, a: ReturnType<typeof primaryAnswer> | ReturnType<typeof standbyAnswer>) {
   const gen = st().begin(hostId)
@@ -19,7 +19,7 @@ function answer(hostId: string, a: ReturnType<typeof primaryAnswer> | ReturnType
 
 const FOUR = [
   host('d-a', { name: 'air26', fast: fast({ load: 30 }) }),
-  host('d-b', { name: 'mlab', fast: fast({ load: 92, zone: 'danger' }), slow: { at: 1, top_cpu: [], top_mem: [], queue: { heavy: { used: 2, total: 2 }, light: { used: 0, total: 4 }, waiters: [{ place: 1, command: 'make', project: 'p', since: 0 }], longest_wait_ms: 1000, admission_held: false } } }),
+  host('d-b', { name: 'mlab', fast: fast({ load: 92, zone: 'danger' }), slow: { at: 1, top_cpu: [], top_mem: [], queue: { heavy_used: 2, heavy_total: 2, light_used: 0, light_total: 4, waiters: [{ class: 'heavy', place: 1, command: 'make', project: 'p', since: 0 }], longest_wait_s: 1, admission_held: false } } }),
   host('p1', { kind: 'probe', name: 'air19', status: 'offline', fast: null }),
   host('p2', { kind: 'probe', name: 'mserv', fast: fast({ load: 10 }) }),
 ]

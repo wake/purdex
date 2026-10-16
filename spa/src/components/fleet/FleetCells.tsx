@@ -17,9 +17,9 @@ export interface FleetCellsProps {
 }
 
 /** No fleet from a primary this App can see: the App's own hosts, without readings. */
-function configuredViews(hostOrder: string[], hosts: ReturnType<typeof useHostStore.getState>['hosts']): FleetHostView[] {
+function configuredViews(hostOrder: string[], hosts: Record<string, unknown>): FleetHostView[] {
   return hostOrder.filter((id) => hosts[id]).map((id) => ({
-    id, hostConfigId: id, kind: 'daemon', alias: '', name: hosts[id].name, icon: '', os: '', status: 'ok', error: null, last_ok_at: null, fast: null, slow: null,
+    id, hostConfigId: id, kind: 'daemon', alias: '', name: id, icon: '', os: '', status: 'ok', error: null, last_ok_at: null, fast: null, slow: null,
   }))
 }
 
@@ -31,8 +31,8 @@ export function FleetCells({ variant, onOpenHost, onOpenHosts }: FleetCellsProps
   const hostOrder = useHostStore((s) => s.hostOrder)
   const lookOf = useHostLookResolver()
   const views = useMemo(
-    () => (snapshot ? fleetHostsView(snapshot, { hosts, hostOrder }) : primaryElsewhere ? configuredViews(hostOrder, hosts) : []),
-    [snapshot, primaryElsewhere, hosts, hostOrder],
+    () => (snapshot ? fleetHostsView(snapshot, { hosts, hostOrder }) : primaryElsewhere ? configuredViews(hostOrder, hosts) : []).map((v) => (v.hostConfigId ? { ...v, name: lookOf(v.hostConfigId).name ?? v.name } : v)),
+    [snapshot, primaryElsewhere, hosts, hostOrder, lookOf],
   )
   if (views.length === 0) return null
 

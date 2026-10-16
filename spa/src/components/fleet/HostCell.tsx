@@ -37,7 +37,7 @@ export interface HostCellProps {
   onOpen: () => void
 }
 
-export function isOffline(v: FleetHostView): boolean {
+function isOffline(v: FleetHostView): boolean {
   return v.status !== 'ok'
 }
 
@@ -58,7 +58,7 @@ function tooltip(t: (k: string, p?: Record<string, string | number>) => string, 
   }
   const q = v.kind === 'daemon' && !isOffline(v) ? v.slow?.queue : undefined
   if (q && q.waiters.length > 0) {
-    lines.push(t('fleet.queue', { n: q.waiters.length, s: Math.round(q.longest_wait_ms / 1000) }))
+    lines.push(t('fleet.queue', { n: q.waiters.length, s: Math.round(q.longest_wait_s) }))
     if (q.admission_held) lines.push(t('fleet.queue_held'))
   }
   if (p.primaryElsewhere) lines.push(t('fleet.primary_elsewhere'))
@@ -98,7 +98,7 @@ export function HostCell({ view, look, variant, isActive, waitingPrimary, primar
             <WorkspaceIcon icon={icon} name="" size={14} weight="fill" />
           </span>
         </span>
-        {q && waiting > 0 && <CountBadge n={waiting} className={queueTone(waiting, q.longest_wait_ms, q.admission_held)} testId={`queue-badge-${view.id}`} />}
+        {q && waiting > 0 && <CountBadge n={waiting} className={queueTone(waiting, q.longest_wait_s * 1000, q.admission_held)} testId={`queue-badge-${view.id}`} />}
       </span>
       <span className="relative inline-grid shrink-0" style={{ width: RING, height: RING }} data-testid={`load-ring-${view.id}`} data-zone={zone}>
         <svg width={RING} height={RING} viewBox={`0 0 ${RING} ${RING}`} className="absolute inset-0 block">

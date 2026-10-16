@@ -6,7 +6,7 @@ import { ActivityBarWide } from './ActivityBarWide'
 import { useLayoutStore, WORKER_LIST_DEFAULT } from '../../../stores/useLayoutStore'
 import type { Workspace } from '../../../types/tab'
 import { useFleetStore } from '../../../lib/fleet/store'
-import { fast, host, primaryAnswer } from '../../../lib/fleet/fixtures'
+import { fast, host, primaryAnswer } from '../../../lib/fleet/__fixtures__/builders'
 
 // The real DndContext still renders (so useSortable / useDroppable stay wired); the wrapper only records the props the
 // bar hands it, so the tests can fire its drag-end handler and run its modifiers the way dnd-kit would.

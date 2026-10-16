@@ -1,15 +1,15 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { HostCell, type HostCellProps } from './HostCell'
-import { fast, host } from '../../lib/fleet/fixtures'
+import { fast, host } from '../../lib/fleet/__fixtures__/builders'
 import type { FleetHostView } from '../../lib/fleet/store'
 import type { FleetQueue } from '../../lib/fleet/types'
 
 const COLORS = { console: { main: { color: '#336699', alpha: 100 } } }
 const queue = (n: number, over: Partial<FleetQueue> = {}): FleetQueue => ({
-  heavy: { used: 2, total: 2 }, light: { used: 0, total: 4 },
-  waiters: Array.from({ length: n }, (_, i) => ({ place: i + 1, command: 'make', project: 'p', since: 0 })),
-  longest_wait_ms: 30_000, admission_held: false, ...over,
+  heavy_used: 2, heavy_total: 2, light_used: 0, light_total: 4,
+  waiters: Array.from({ length: n }, (_, i) => ({ class: 'heavy', place: i + 1, command: 'make', project: 'p', since: 0 })),
+  longest_wait_s: 30, admission_held: false, ...over,
 })
 const view = (over: Partial<FleetHostView> = {}): FleetHostView => ({ ...host('mlab', { name: 'mlab', fast: fast({ load: 40 }) }), ...over })
 
@@ -114,11 +114,11 @@ describe('HostCell — the queue badge', () => {
     expect(badge()).toBeNull()
   })
   it('is neutral grey under 2 minutes and under 3 waiters', () => {
-    setup(view({ slow: slow(queue(2, { longest_wait_ms: 119_000 })) }))
+    setup(view({ slow: slow(queue(2, { longest_wait_s: 119 })) }))
     expect(badge()!.className).toContain('bg-text-muted')
   })
   it('turns warning from 2 minutes', () => {
-    setup(view({ slow: slow(queue(1, { longest_wait_ms: 120_000 })) }))
+    setup(view({ slow: slow(queue(1, { longest_wait_s: 120 })) }))
     expect(badge()!.className).toContain('bg-status-warning')
   })
   it('turns warning from 3 waiters', () => {
@@ -133,7 +133,7 @@ describe('HostCell — the queue badge', () => {
 
 describe('HostCell — the tooltip and the click', () => {
   it('names the host, the zone word, the five values and the queue', () => {
-    setup(view({ name: 'mlab', fast: fast({ cpu: 12, mem: 61, level: 2, page_rate: 3, disk: 44, zone: 'warning', load: 66 }), slow: { at: 1, top_cpu: [], top_mem: [], queue: queue(2, { longest_wait_ms: 45_000 }) } }))
+    setup(view({ name: 'mlab', fast: fast({ cpu: 12, mem: 61, level: 2, page_rate: 3, disk: 44, zone: 'warning', load: 66 }), slow: { at: 1, top_cpu: [], top_mem: [], queue: queue(2, { longest_wait_s: 45 }) } }))
     const tip = screen.getByTestId('host-tile-mlab').getAttribute('title')!
     expect(tip).toContain('mlab')
     expect(tip).toContain('High')

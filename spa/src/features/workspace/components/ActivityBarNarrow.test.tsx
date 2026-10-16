@@ -5,7 +5,7 @@ import { ActivityBarNarrow } from './ActivityBarNarrow'
 import { useLocalProfilesStore } from '../../../stores/useLocalProfilesStore'
 import { useLayoutStore } from '../../../stores/useLayoutStore'
 import { useFleetStore } from '../../../lib/fleet/store'
-import { host, primaryAnswer } from '../../../lib/fleet/fixtures'
+import { host, primaryAnswer } from '../../../lib/fleet/__fixtures__/builders'
 import { __resetProfileSwitcherForTest } from '../../../stores/useProfileSwitcherStore'
 
 // The list itself is WorkerList's business (its own tests); here it only has to be there or not.
