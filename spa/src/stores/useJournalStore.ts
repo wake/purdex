@@ -113,6 +113,8 @@ const nextStamp = (): number => ++clock
 interface PinRec { gen: number; base: boolean; baseGen: number; at: number; value: boolean }
 const pins = new Map<string, PinRec>()
 let pinGen = 0
+/** PUTs out per entry (`overlapped`: more than one was out at the same time, so the server may hold them in a different order). */
+const flights = new Map<string, { n: number; overlapped: boolean }>()
 const pinKey = (hostId: string, unitKey: string, entryId: string): string => `${hostId}\u0000${unitKey}\u0000${entryId}`
 /** A read that started at `startedAt` ends the pending pins it speaks for (those clicked before it started, and named by `only` when given). */
 const dropPins = (hostId: string, unitKey: string, startedAt: number, only?: ReadonlySet<string>): void => {
@@ -274,19 +276,30 @@ export const useJournalStore = create<JournalState>()((set, get) => {
       })
       apply(pinned)
       const epoch = get().epoch[hostId] ?? 0
+      const flight = flights.get(k) ?? { n: 0, overlapped: false }
+      flight.n++
+      if (flight.n > 1) flight.overlapped = true
+      flights.set(k, flight)
       let ok = false
       try { ok = (await setPinned(hostId, sessionId, entryId, pinned)).kind === 'ok' } catch { /* ok stays false */ }
-      const rec = pins.get(k)
-      if ((get().epoch[hostId] ?? 0) !== epoch || !rec) return // the host was forgotten, or a server read has the last word
-      if (ok) {
-        if (rec.gen === gen) pins.delete(k)
-        else if (gen > rec.baseGen) pins.set(k, { ...rec, base: pinned, baseGen: gen })
-        return
+      // PUTs of one entry can reach the server in the opposite order of the clicks: when the last one ends, read the unit once more.
+      const reread = --flight.n === 0 && flight.overlapped
+      if (flight.n === 0 && flights.get(k) === flight) flights.delete(k)
+      try {
+        const rec = pins.get(k)
+        if ((get().epoch[hostId] ?? 0) !== epoch || !rec) return // the host was forgotten, or a server read has the last word
+        if (ok) {
+          if (rec.gen === gen) pins.delete(k)
+          else if (gen > rec.baseGen) pins.set(k, { ...rec, base: pinned, baseGen: gen })
+          return
+        }
+        if (rec.gen !== gen) return // a later click owns the display now
+        pins.delete(k)
+        apply(rec.base)
+        useUndoToast.getState().show(useI18nStore.getState().t('journal.pin.failed'))
+      } finally {
+        if (reread && (get().epoch[hostId] ?? 0) === epoch) await get().loadJournal(hostId, sessionId)
       }
-      if (rec.gen !== gen) return // a later click owns the display now
-      pins.delete(k)
-      apply(rec.base)
-      useUndoToast.getState().show(useI18nStore.getState().t('journal.pin.failed'))
     },
 
     markStale: (hostId, unitKey, what) => set((s) => {
@@ -313,6 +326,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
     forgetHost: (hostId) => {
       forgetViewMemosOfHost(hostId)
       for (const k of [...pins.keys()]) if (k.startsWith(`${hostId}\u0000`)) pins.delete(k)
+      for (const k of [...flights.keys()]) if (k.startsWith(`${hostId}\u0000`)) flights.delete(k)
       set((s) => ({
         support: drop(s.support, hostId), sticky: drop(s.sticky, hostId), gens: drop(s.gens, hostId), byHost: drop(s.byHost, hostId),
         routes: Object.fromEntries(Object.entries(s.routes).filter(([k, r]) => !k.startsWith(`${hostId}\u0000`) && !(r.kind === 'follow' && r.hostId === hostId))),
@@ -320,7 +334,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
       }))
     },
 
-    reset: () => { clock = 0; latest.clear(); pins.clear(); set({ support: {}, sticky: {}, gens: {}, byHost: {}, routes: {}, epoch: {}, staleRev: 0 }) },
+    reset: () => { clock = 0; latest.clear(); pins.clear(); flights.clear(); set({ support: {}, sticky: {}, gens: {}, byHost: {}, routes: {}, epoch: {}, staleRev: 0 }) },
   }
 })
 

@@ -96,6 +96,11 @@ describe('setPin', () => {
     const p1 = st().setPin('h1', 's1', 'b', true)
     await st().setPin('h1', 's1', 'b', false)
     await st().setPin('h1', 's1', 'b', true)
+    // the PUTs overlapped, so the unit is read once more at the end: the server holds the last click
+    getJournal.mockResolvedValue(page({
+      entries: [wireEntry('a', { at: T0 }), wireEntry('b', { at: T0 + 10, pinned: true }), wireConfirm('c', { at: T0 + 5 })],
+      pinned: [wireEntry('b', { at: T0 + 10, pinned: true }), wireConfirm('c', { at: T0 + 5 })],
+    }))
     first.reject(new Error('late'))
     await p1
     expect(shown('b')).toBe(true)
@@ -183,6 +188,27 @@ describe('setPin', () => {
     put.resolve(OK)
     await p
     expect(shown('b')).toBe(false)
+  })
+  it('two PUTs of one entry that finish in the opposite order: the unit is read once more after the last one (M: no re-read)', async () => {
+    const first = deferred<unknown>()
+    const second = deferred<unknown>()
+    setPinned.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
+    getJournal.mockClear()
+    const p1 = st().setPin('h1', 's1', 'b', true)
+    const p2 = st().setPin('h1', 's1', 'b', false)
+    second.resolve(OK)
+    await p2
+    expect(getJournal).not.toHaveBeenCalled() // the first PUT is still out
+    first.resolve(OK)
+    await p1
+    expect(getJournal).toHaveBeenCalledTimes(1)
+    expect(getJournal).toHaveBeenCalledWith('h1', 's1', undefined)
+  })
+  it('a lone PUT does not read again', async () => {
+    setPinned.mockResolvedValue(OK)
+    getJournal.mockClear()
+    await st().setPin('h1', 's1', 'b', true)
+    expect(getJournal).not.toHaveBeenCalled()
   })
   it('a pin on an entry the unit does not hold does nothing', async () => {
     await st().setPin('h1', 's1', 'nope', true)
