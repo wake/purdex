@@ -19,7 +19,7 @@ function newProbeId(): string {
 }
 
 /** The daemon hosts that carry `fleet.v1` and are online: the probe list is written to every one of them. */
-export function useFleetDaemonHostIds(): string[] {
+function useFleetDaemonHostIds(): string[] {
   const hostOrder = useHostStore((s) => s.hostOrder)
   const online = useHostStore((s) => s.runtime)
   const byHost = useFleetStore((s) => s.byHost)
