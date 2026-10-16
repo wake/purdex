@@ -1,10 +1,10 @@
-// spa/src/components/watch/WatchHostPane.tsx — one host's tab of the watcher area (watcher area spec §6). W5a1: the header and
-// 行程. The 資源 section (gauges, charts) is W5a2, the queue W5b1, and 設定 W5c1; they fill in under this header.
+// spa/src/components/watch/WatchHostPane.tsx — one host's tab of the watcher area (watcher area spec §6): the header, 資源 and
+// 行程. The queue is W5b1, and 設定 W5c1; they fill in under this header.
 //
-// Tab-hosted checklist: nothing here is state worth keeping across a tab switch (the readings come from the fleet store on every
-// mount); the choices that are (the range, 狀態｜設定, the queue sub-tab) arrive with their controls in W5a2/W5b1/W5c1 and live
-// outside the component (`lib/watch/view-memory`).
-import { useMemo } from 'react'
+// Tab-hosted checklist: the readings come from the fleet store on every mount, but the choices the reader makes (the range now;
+// 狀態｜設定 and the queue sub-tab in W5b1/W5c1) live outside the component (`lib/watch/view-memory`), because the pane unmounts
+// when another tab is shown. W5a2 adds the 資源 section (gauges, charts) and the range switch.
+import { useEffect, useMemo, useState } from 'react'
 import type { PaneRendererProps } from '../../lib/module-registry'
 import { useFleetStore, fleetHostsView, type FleetHostView } from '../../lib/fleet/store'
 import type { FleetProc } from '../../lib/fleet/types'
@@ -14,9 +14,42 @@ import { useHostLookResolver, type HostLook } from '../../lib/host-look'
 import { resolveHostColors } from '../../lib/host-color'
 import { HostBadge } from '../HostBadge'
 import { Section } from '../hosts/form-fields'
+import { SegmentControl } from '../settings/SegmentControl'
+import { fleetHistory, type HistoryRange } from '../../lib/fleet/history'
+import { METRICS } from '../../lib/watch/metrics'
+import { RANGES, stepMs } from '../../lib/watch/series'
+import { readRange, writeRange } from '../../lib/watch/view-memory'
+import { Gauge } from './Gauge'
+import { MetricRow, TimeAxis } from './MetricChart'
+
+const RANGE_OPTS = (t: (k: string) => string) => RANGES.map((r) => ({ value: r, label: t(`watch.host.range.${r}`) }))
+
+/** 資源: five gauges from the latest frame, one chart row per reading from the App's in-memory history, one shared axis. */
+function Resources({ view, range, now }: { view: FleetHostView; range: HistoryRange; now: number }) {
+  const offline = isOffline(view)
+  // Memoised per step (1 s for 5 分, 10 s otherwise, the pace at which the history can change): the rows only redraw when their points do.
+  const at = Math.floor(now / stepMs(range)) * stepMs(range)
+  const hostId = view.id
+  const series = useMemo(() => METRICS.map((d) => ({ def: d, points: fleetHistory.series(hostId, d.k, range, at) })), [hostId, range, at])
+  return (
+    <div data-testid="metrics">
+      <div data-testid="gauges" className="flex flex-wrap gap-x-10 gap-y-4 mb-5">
+        {METRICS.map((d) => <Gauge key={d.k} def={d} fast={view.fast} offline={offline} />)}
+      </div>
+      <ChartNote />
+      {series.map((s) => <MetricRow key={s.def.k} def={s.def} points={s.points} now={at} range={range} offline={offline} />)}
+      <TimeAxis points={series[0].points} now={at} range={range} />
+    </div>
+  )
+}
+
+function ChartNote() {
+  const t = useI18nStore((s) => s.t)
+  return <p className="text-[11px] text-text-muted mb-1">{t('watch.host.chart_note')}</p>
+}
 
 const ZONE_CLASS: Record<string, string> = {
-  normal: 'text-status-success', warning: 'text-status-warning', danger: 'text-status-error', offline: 'text-text-muted', nodata: 'text-text-muted',
+  normal: 'text-status-success-text', warning: 'text-status-warning-text', danger: 'text-status-error-text', offline: 'text-text-muted', nodata: 'text-text-muted',
 }
 
 function isOffline(v: FleetHostView): boolean {
@@ -62,11 +95,24 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
   const hosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)
   const lookOf = useHostLookResolver()
+  // The range outlives this component (the pane unmounts on a tab switch): the memory is the source, the state only re-renders.
+  const [range, setRangeState] = useState<HistoryRange>(() => readRange(fleetHostId))
+  const setRange = (r: HistoryRange) => { writeRange(fleetHostId, r); setRangeState(r) }
 
   const view = useMemo(
     () => (snapshot ? fleetHostsView(snapshot, { hosts, hostOrder }).find((v) => v.id === fleetHostId) : undefined),
     [snapshot, hosts, hostOrder, fleetHostId],
   )
+
+  // The charts end at "now": it moves with the snapshot, whose 1 s pushes redraw the pane (the history has no subscription).
+  // A 5 s tick (one interval per pane, cleared on unmount) keeps the axis and 「累積中」 moving while no snapshot arrives (a stale fleet).
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 5000)
+    return () => clearInterval(id)
+  }, [])
+  // eslint-disable-next-line react-hooks/purity, react-hooks/exhaustive-deps
+  const now = useMemo(() => Date.now(), [snapshot, tick])
 
   if (!snapshot) return <p className="p-6 text-sm text-text-muted">{t('watch.host.no_fleet')}</p>
   if (!view) return <p className="p-6 text-sm text-text-muted">{t('watch.host.no_host')}</p>
@@ -99,7 +145,14 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
           <span className="text-xs text-text-muted" data-testid="measure-source">
             {t('watch.host.measured', { alias: primaryAlias })}{lastOk !== null && t('watch.host.last_ok', { time: lastOk })}
           </span>
+          <span className="flex-1" />
+          <span data-testid="range-switch" role="group" aria-label={t('watch.host.range_label')}>
+            <SegmentControl options={RANGE_OPTS(t)} value={range} onChange={setRange} />
+          </span>
         </div>
+        <Section title={t('watch.host.resources', { range: t(`watch.host.range.${range}`) })}>
+          <Resources view={view} range={range} now={now} />
+        </Section>
         <Section title={t('watch.host.procs')}>
           <div className="grid grid-cols-2 gap-8">
             <ProcTable testId="procs-cpu" title={t('watch.host.top_cpu')} rows={view.slow?.top_cpu ?? []} unit="cpu" offline={offline} />

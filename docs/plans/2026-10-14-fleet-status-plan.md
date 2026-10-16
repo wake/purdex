@@ -48,7 +48,8 @@ F-1b2 merges, then its last task wires the real one), F-2a2 and F-2b (after F-2a
 
 Every PR: TDD, one commit per task, a mutation table in the PR body (each named mutation made, the test seen red,
 reverted). Daemon: `go test` of the touched packages, `-race` on `internal/module/fleet`, `gofmt -l`, `go vet` of those
-packages; never `go test ./...`. SPA: `vitest run` on the test files of the change (not `vitest related`, heavy since #3024), `tsc -b --force`, `eslint` on the
+packages; never `go test ./...`. SPA: `vitest run` on the test files of the change while developing, `vitest related --run` on the changed files once before
+merge (heavy queue since #3024, never dropped for load), `tsc -b --force`, `eslint` on the
 changed files; never the full vitest or the full lint.
 
 ## 3. F-1b1 — host config rows
