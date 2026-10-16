@@ -1,9 +1,10 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent, within, act } from '@testing-library/react'
 import { HostCell, type HostCellProps } from './HostCell'
 import { fast, host } from '../../lib/fleet/__fixtures__/builders'
 import type { FleetHostView } from '../../lib/fleet/store'
 import type { FleetQueue } from '../../lib/fleet/types'
+import { useUISettingsStore } from '../../stores/useUISettingsStore'
 
 const COLORS = { console: { main: { color: '#336699', alpha: 100 } } }
 const queue = (n: number, over: Partial<FleetQueue> = {}): FleetQueue => ({
@@ -13,6 +14,10 @@ const queue = (n: number, over: Partial<FleetQueue> = {}): FleetQueue => ({
 })
 const view = (over: Partial<FleetHostView> = {}): FleetHostView => ({ ...host('mlab', { name: 'mlab', fast: fast({ load: 40 }) }), ...over })
 
+beforeEach(() => {
+  useUISettingsStore.setState(useUISettingsStore.getInitialState())
+})
+
 function setup(v: FleetHostView, over: Partial<HostCellProps> = {}) {
   const props: HostCellProps = {
     view: v, look: { colors: COLORS, icon: 'Desktop' }, variant: 'wide', isActive: false, waitingPrimary: false, primaryElsewhere: false, onOpen: vi.fn(), ...over,
@@ -20,78 +25,129 @@ function setup(v: FleetHostView, over: Partial<HostCellProps> = {}) {
   render(<HostCell {...props} />)
   return props
 }
+const tile = () => screen.getByTestId('host-tile-mlab')
 const ring = () => screen.getByTestId('load-ring-mlab')
-const arc = () => ring().querySelector('circle[stroke-linecap="round"]')
-const block = () => screen.getByTestId('host-block-mlab')
+const arc = () => within(ring()).queryByTestId('context-ring-arc')
+const hostBadge = () => screen.getByTestId('host-badge-mlab')
 const badge = () => screen.queryByTestId('queue-badge-mlab')
 
-describe('HostCell — the box', () => {
-  it('is an 18px rounded-[4px] box in the host colour with a white icon', () => {
-    setup(view())
-    expect(block().className).toContain('rounded-[4px]')
-    expect(block().style.width).toBe('18px')
-    expect(block().style.height).toBe('18px')
-    expect(block().style.backgroundColor).toBe('rgb(51, 102, 153)')
-    expect(screen.getByTestId('host-block-icon-mlab').className).toContain('text-white/90')
-    expect(screen.getByTestId('host-block-icon-mlab').className).toContain('group-hover:text-white')
-  })
-  it('is the TeamCell shape: h-6 rounded-md, hover surface, selected surface', () => {
+describe('HostCell — the cell', () => {
+  it('is a member bead\'s box: h-6 rounded-md gap-1, 3px each side, hover surface, selected surface', () => {
     const { rerender } = render(<HostCell view={view()} look={{ colors: COLORS }} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
-    const tile = screen.getByTestId('host-tile-mlab')
-    expect(tile.className).toContain('h-6')
-    expect(tile.className).toContain('rounded-md')
-    expect(tile.className).toContain('hover:bg-surface-hover')
+    for (const c of ['group', 'h-6', 'rounded-md', 'gap-1', 'px-[3px]', 'hover:bg-surface-hover']) expect(tile().className.split(' ')).toContain(c)
     rerender(<HostCell view={view()} look={{ colors: COLORS }} variant="wide" isActive waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
-    expect(screen.getByTestId('host-tile-mlab').className).toContain('bg-surface-active')
-  })
-  it('offline: the colour at 35% under a hatch, the icon at 35%', () => {
-    setup(view({ status: 'offline', fast: null }))
-    expect(block().style.backgroundColor).toContain('35%')
-    expect(block().style.backgroundImage).toContain('repeating-linear-gradient')
-    expect(screen.getByTestId('host-block-icon-mlab').className).toContain('opacity-35')
-  })
-  it('online has no hatch and no dimmed icon', () => {
-    setup(view())
-    expect(block().style.backgroundImage).toBe('')
-    expect(screen.getByTestId('host-block-icon-mlab').className).not.toContain('opacity-35')
+    expect(tile().className).toContain('bg-surface-active')
   })
 })
 
-describe('HostCell — the ring', () => {
+describe('HostCell — the host badge (the App\'s HostBadge, as beside a member)', () => {
+  it('is a HostBadge: the host colour\'s light layer behind, the icon in its middle layer (main on hover)', () => {
+    setup(view())
+    const b = hostBadge()
+    expect(b.hasAttribute('data-host-badge')).toBe(true)
+    expect(b.style.background).toBe('rgba(51, 102, 153, 0.22)')
+    expect(b.style.getPropertyValue('--hb-main')).toBe('rgba(51, 102, 153, 1)')
+    expect(b.style.getPropertyValue('--hb-middle')).toBe('rgba(51, 102, 153, 0.6)')
+    expect(b.style.color).toBe('var(--hb-icon, var(--hb-middle))')
+  })
+  it('takes the sidebar badge settings (size 16, corner 4 by default)', () => {
+    setup(view())
+    expect(hostBadge().style.width).toBe('16px')
+    expect(hostBadge().style.height).toBe('16px')
+    expect(hostBadge().style.borderRadius).toBe('4px')
+  })
+  it('follows a changed sidebar badge size, and so does the ring', () => {
+    setup(view())
+    act(() => useUISettingsStore.setState({ hostBadgeSidebarBox: 20 } as never))
+    expect(hostBadge().style.width).toBe('20px')
+    expect(within(ring()).getByTestId('context-ring').style.width).toBe('20px')
+  })
+  it('a neutral line colour setting greys the icon, like the member badges', () => {
+    useUISettingsStore.setState({ hostBadgeSidebarLineColor: 'neutral' } as never)
+    setup(view())
+    expect(hostBadge().style.color).toBe('var(--text-muted)')
+  })
+  it('resolves the colours as the badge beside an agent member does (terminal, falling back to console)', () => {
+    setup(view(), { look: { colors: { ...COLORS, terminal: { main: { color: '#22c55e', alpha: 100 } } } } })
+    expect(hostBadge().style.getPropertyValue('--hb-main')).toBe('rgba(34, 197, 94, 1)')
+  })
+  it('a host with no colour: the neutral badge (no background, muted icon)', () => {
+    setup(view(), { look: {} })
+    expect(hostBadge().dataset.hasColor).toBe('false')
+    expect(hostBadge().style.background).toBe('')
+  })
+  it('an unknown icon name (from the wire) never shows as text', () => {
+    setup(view(), { look: { colors: COLORS, icon: 'desktop' } })
+    expect(hostBadge().textContent).toBe('')
+  })
+  it('offline: the badge dimmed, no hatch', () => {
+    setup(view({ status: 'offline', fast: null }))
+    expect(screen.getByTestId('host-badge-dim-mlab').className).toContain('opacity-40')
+    expect(tile().innerHTML).not.toContain('repeating-linear-gradient')
+    expect(hostBadge().style.background).toBe('rgba(51, 102, 153, 0.22)')
+  })
+  it('online (with or without a reading): not dimmed', () => {
+    setup(view({ fast: null }))
+    expect(screen.getByTestId('host-badge-dim-mlab').className).not.toContain('opacity-40')
+  })
+})
+
+describe('HostCell — the ring (the App\'s ContextRing, as the member status)', () => {
+  it('is a ContextRing the badge\'s size, like the team cell\'s', () => {
+    setup(view())
+    const r = within(ring()).getByTestId('context-ring')
+    expect(r.style.width).toBe('16px')
+    expect(r.querySelector('circle')!.getAttribute('stroke')).toBe('var(--border-default)')
+    expect(r.querySelector('circle')!.getAttribute('stroke-width')).toBe('2.5')
+  })
   it('its arc length follows the composite score', () => {
     setup(view({ fast: fast({ load: 50 }) }))
+    expect(arc()!.dataset.shown).toBe('50')
     const [len, whole] = (arc()!.getAttribute('stroke-dasharray') ?? '').split(' ').map(Number)
     expect(len / whole).toBeCloseTo(0.5, 2)
-    expect(ring().style.width).toBe('16px')
   })
   it('a different score gives a different length', () => {
     setup(view({ fast: fast({ load: 80 }) }))
     const [len, whole] = (arc()!.getAttribute('stroke-dasharray') ?? '').split(' ').map(Number)
     expect(len / whole).toBeCloseTo(0.8, 2)
   })
+  it('normal is the ok tone (green, like a healthy member ring)', () => {
+    setup(view({ fast: fast({ load: 30, zone: 'normal' }) }))
+    expect(arc()!.dataset.tone).toBe('ok')
+    expect(arc()!.getAttribute('class')).toBe('stroke-status-success')
+  })
+  it('warning is the warn tone', () => {
+    setup(view({ fast: fast({ load: 60, zone: 'warning' }) }))
+    expect(arc()!.getAttribute('class')).toBe('stroke-status-warning')
+  })
   it('its colour is the zone the daemon sent, not a function of the score', () => {
-    // a high score but a normal zone stays neutral; a low score in a danger zone is red
+    // a high score in a normal zone stays green; a low score in a danger zone is red
     const { unmount } = render(<HostCell view={view({ fast: fast({ load: 95, zone: 'normal' }) })} look={{}} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
-    expect(arc()!.getAttribute('class')).toContain('stroke-text-secondary')
+    expect(arc()!.getAttribute('class')).toBe('stroke-status-success')
     unmount()
     render(<HostCell view={view({ fast: fast({ load: 5, zone: 'danger' }) })} look={{}} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
-    expect(arc()!.getAttribute('class')).toContain('stroke-status-error')
+    expect(arc()!.getAttribute('class')).toBe('stroke-status-error')
     expect(ring().dataset.zone).toBe('danger')
   })
-  it('warning zone is status-warning', () => {
-    setup(view({ fast: fast({ load: 60, zone: 'warning' }) }))
-    expect(arc()!.getAttribute('class')).toContain('stroke-status-warning')
+  it('the middle is empty: a host has no model', () => {
+    setup(view())
+    const svg = within(ring()).getByTestId('context-ring').querySelector('svg')!
+    expect(svg.querySelectorAll('g, path, text')).toHaveLength(0)
   })
-  it('offline: a dashed track and no arc', () => {
+  it('offline: the track only, no arc', () => {
     setup(view({ status: 'offline', fast: null }))
     expect(arc()).toBeNull()
-    expect(ring().querySelector('circle')!.getAttribute('stroke-dasharray')).toBeTruthy()
+    expect(within(ring()).getByTestId('context-ring').querySelectorAll('circle')).toHaveLength(1)
     expect(ring().dataset.zone).toBe('offline')
   })
-  it('no reading yet: dashed track, no arc, the box is not hatched', () => {
+  it('no reading yet: the track only, no arc', () => {
     setup(view({ fast: null }))
     expect(arc()).toBeNull()
-    expect(block().style.backgroundImage).toBe('')
+    expect(ring().dataset.zone).toBe('nodata')
+  })
+  it('an unknown zone (the parser drops one; defensive) still draws the score\'s arc', () => {
+    setup(view({ fast: { ...fast({ load: 50 }), zone: 'mystery' as never } }))
+    expect(arc()!.dataset.shown).toBe('50')
   })
 })
 
@@ -100,6 +156,13 @@ describe('HostCell — the queue badge', () => {
   it('shows the waiter count on a daemon host that has waiters', () => {
     setup(view({ slow: slow(queue(2)) }))
     expect(badge()).toHaveTextContent('2')
+  })
+  it('sits on the host badge\'s corner (its positioned parent holds the host badge)', () => {
+    setup(view({ slow: slow(queue(2)) }))
+    const anchor = badge()!.parentElement!
+    expect(anchor.className).toContain('relative')
+    expect(anchor.contains(hostBadge())).toBe(true)
+    expect(anchor.contains(ring())).toBe(false)
   })
   it('is absent at 0 waiters', () => {
     setup(view({ slow: slow(queue(0)) }))
@@ -143,13 +206,9 @@ describe('HostCell — the tooltip and the click', () => {
     render(<HostCell view={view({ fast: null })} look={{}} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
     expect(screen.getByRole('button', { name: 'mlab, No data' })).toBeTruthy()
   })
-  it('an unknown zone still draws a neutral arc', () => {
-    setup(view({ fast: { ...fast({ load: 50 }), zone: 'mystery' as never } }))
-    expect(arc()!.getAttribute('class')).toContain('stroke-text-secondary')
-  })
   it('names the host, the zone word, the five values and the queue', () => {
     setup(view({ name: 'mlab', fast: fast({ cpu: 12, mem: 61, level: 2, page_rate: 3, disk: 44, zone: 'warning', load: 66 }), slow: { at: 1, top_cpu: [], top_mem: [], queue: queue(2, { longest_wait_s: 45 }) } }))
-    const tip = screen.getByTestId('host-tile-mlab').getAttribute('title')!
+    const tip = tile().getAttribute('title')!
     expect(tip).toContain('mlab')
     expect(tip).toContain('High')
     expect(tip).toContain('CPU 12%')
@@ -162,34 +221,34 @@ describe('HostCell — the tooltip and the click', () => {
   })
   it('says Offline for an offline host and shows no values', () => {
     setup(view({ status: 'offline', fast: null }))
-    const tip = screen.getByTestId('host-tile-mlab').getAttribute('title')!
+    const tip = tile().getAttribute('title')!
     expect(tip).toContain('Offline')
     expect(tip).not.toContain('CPU')
   })
   it('says "Waiting for the primary" when the primary is waited for', () => {
     setup(view(), { waitingPrimary: true })
-    expect(screen.getByTestId('host-tile-mlab').getAttribute('title')).toContain('Waiting for the primary')
+    expect(tile().getAttribute('title')).toContain('Waiting for the primary')
   })
   it('says "The primary is not on this App" when only a standby answered', () => {
     setup(view({ fast: null }), { primaryElsewhere: true })
-    const tip = screen.getByTestId('host-tile-mlab').getAttribute('title')!
+    const tip = tile().getAttribute('title')!
     expect(tip).toContain('The primary is not on this App')
     expect(tip).not.toContain('Waiting for the primary')
   })
   it('a healthy cell mentions neither', () => {
     setup(view())
-    const tip = screen.getByTestId('host-tile-mlab').getAttribute('title')!
-    expect(tip).not.toContain('primary')
+    expect(tile().getAttribute('title')).not.toContain('primary')
   })
   it('click calls onOpen', () => {
     const p = setup(view())
-    fireEvent.click(screen.getByTestId('host-tile-mlab'))
+    fireEvent.click(tile())
     expect(p.onOpen).toHaveBeenCalledTimes(1)
   })
-  it('the narrow variant still has the box and the ring, tighter', () => {
+  it('the narrow variant has the same badge and ring, tighter', () => {
     setup(view(), { variant: 'narrow' })
-    expect(block()).toBeTruthy()
-    expect(ring()).toBeTruthy()
-    expect(screen.getByTestId('host-tile-mlab').dataset.variant).toBe('narrow')
+    expect(hostBadge().style.width).toBe('16px')
+    expect(within(ring()).getByTestId('context-ring')).toBeTruthy()
+    expect(tile().dataset.variant).toBe('narrow')
+    expect(tile().className.split(' ')).toContain('gap-0.5')
   })
 })
