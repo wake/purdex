@@ -130,6 +130,7 @@ const fresh = () => ({
   reaskSeen: [], // the ids of reask controls already taken, oldest first (MAX_REASKS_SEEN)
   reaskPending: '', // a reask that arrived while a turn ran or a relay was in progress: begun at the next turn end
   idleMinutes: 0, // idle relay (D9): hello's idle_minutes, or the env's; 0 = off (an older daemon, or no hello yet)
+  idleIntercept: 0, // hello's idle_intercept: whose idle compactions the daemon decides (1 = members); 0 = an older daemon: nothing is skipped (RT-4)
   idleThreshold: 0,
   envIdleMinutes: 0, // PDX_RELAY_IDLE_MINUTES, honoured only when hello advertised the feature
   envIdleThreshold: 0, // PDX_RELAY_IDLE_THRESHOLD
@@ -249,6 +250,7 @@ async function hello($, seq) {
       if (s.role === 'member' && h.role !== 'member') s.lastAskPct = undefined
       s.role = h.role
     }
+    s.idleIntercept = Number(h.idle_intercept) > 0 ? Number(h.idle_intercept) : 0
     if (!s.envThreshold && h.threshold > 0) s.threshold = h.threshold
     if (h.min_growth > 0) s.minGrowth = h.min_growth
     // Idle relay (D9): the daemon's numbers switch the feature on; without them it is off whatever the env says.
@@ -1593,12 +1595,12 @@ function interceptedLater($) {
   later($, 0, async () => {
     const sid = await $.session.id()
     const argv = ['relay', 'compacted', '--session', sid, '--trigger', 'idle', '--intercepted']
-    if (since > 0) argv.push('--idle-since', String(since)) // names this idle stretch for the daemon: one notice per stretch
+    if (since > 0) argv.push('--period', String(since)) // names this idle period for the daemon: one decision per period
     const r = await pdx($, argv, CALL_TIMEOUT_MS)
-    // The daemon does not know this session as a member (released, or the role is stale): this idle compaction was stopped for nothing, so
-    // the role is dropped and hello says what it is now; the next one runs.
+    // The daemon decides by its own, authoritative role. `silent`: it does not know this session as a member (released, or the role is
+    // stale): this idle compaction was stopped for nothing, so the role is dropped and hello says what it is now; the next one runs.
     const body = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
-    if (body && body.not_member === true && s.gen === gen && s.role === 'member') {
+    if (body && body.route === 'silent' && s.gen === gen && s.role === 'member') {
       s.role = 'none'
       helloLater($)
     }
@@ -2101,7 +2103,8 @@ export function register(on) {
     const trigger = e.trigger === 'auto' && !s.turnRunning && s.idleMinutes > 0 ? 'idle' : e.trigger
     // A member's idle compaction (RT-4 T42, Gate M-1): an auto compaction with no main turn running. It is stopped, and the daemon tells
     // the lead to decide (relay, hand over and close, close). A context-full compaction runs inside a turn; a relay under way keeps its rule below.
-    if (s.helloOK && s.role === 'member' && e.trigger === 'auto' && !s.turnRunning && s.state === 'idle') {
+    // Only when the daemon says it decides these (hello's idle_intercept covers members): an older daemon leaves the compaction as before.
+    if (s.helloOK && s.idleIntercept >= 1 && s.role === 'member' && e.trigger === 'auto' && !s.turnRunning && s.state === 'idle') {
       interceptedLater($)
       return { skip: SKIP_MEMBER_IDLE }
     }

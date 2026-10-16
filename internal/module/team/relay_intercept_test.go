@@ -25,7 +25,7 @@ func (f *fixture) intercepted(sid string) (int, team.RelayCompactedResponse) {
 
 func (f *fixture) interceptedSince(sid string, since int64) (int, team.RelayCompactedResponse) {
 	f.t.Helper()
-	code, raw := f.do(http.MethodPost, "/api/relay/compacted", team.RelayCompactedRequest{SessionID: sid, Trigger: "idle", Intercepted: true, IdleSince: since})
+	code, raw := f.do(http.MethodPost, "/api/relay/compacted", team.RelayCompactedRequest{SessionID: sid, Trigger: "idle", Intercepted: true, Period: since})
 	var res team.RelayCompactedResponse
 	if code == http.StatusOK {
 		if err := json.Unmarshal(raw, &res); err != nil {
@@ -168,8 +168,8 @@ func TestIntercept_NeedsNoEarlierTick(t *testing.T) {
 	}
 }
 
-// A short turn between two interceptions that no liveness tick saw still opens a new idle stretch: the mod names it by idle_since
-// (codex R1). Mutation gates: ignore idle_since (use the tick's period) → the second is silent (red); the same since told twice → red.
+// A short turn between two interceptions that no liveness tick saw still opens a new idle stretch: the mod names it by period
+// (codex R1). Mutation gates: ignore period (use the tick's period) → the second is silent (red); the same since told twice → red.
 func TestIntercept_AStretchIsNamedByWhenTheLastTurnEnded(t *testing.T) {
 	f := idleSetup(t)
 	f.setModVersion("sid-ma", "9")
@@ -202,16 +202,59 @@ func TestIntercept_ARunningMemberIsNotTold(t *testing.T) {
 	}
 }
 
-// A session that is no active member (released; a stale role in its mod) is answered not_member, so the mod drops the role.
+// A session that is no active member (released; a stale role in its mod) is answered route silent, so the mod drops the role.
 // Mutation gate: member always true → the mod never learns (red).
 func TestIntercept_OfANonMemberSaysNotMember(t *testing.T) {
 	f := newFixture(t)
 	code, res := f.intercepted("sid-1")
-	if code != http.StatusOK || res.Noticed || !res.NotMember {
-		t.Fatalf("intercepted = %d %+v, want 200, not noticed, not_member", code, res)
+	if code != http.StatusOK || res.Noticed || res.Route != team.InterceptRouteSilent {
+		t.Fatalf("intercepted = %d %+v, want 200, not noticed, route silent", code, res)
 	}
 	g := idleSetup(t)
-	if _, res := g.intercepted("sid-ma"); res.NotMember {
-		t.Fatal("an active member was told it is no member")
+	if _, res := g.intercepted("sid-ma"); res.Route != team.InterceptRouteMember {
+		t.Fatalf("an active member was routed %q, want member", res.Route)
+	}
+}
+
+// Hello says which idle compactions the daemon decides: level 1 (members). A mod skips only when it hears that.
+// Mutation gate: the field not set → red.
+func TestIntercept_HelloAdvertisesTheLevel(t *testing.T) {
+	f := newFixture(t)
+	_, body := f.do(http.MethodPost, "/api/relay/hello", team.RelayHelloRequest{SessionID: "sid-1", ModVersion: "9", Agent: "cc"})
+	var h team.RelayHelloResponse
+	if err := json.Unmarshal(body, &h); err != nil || h.IdleIntercept != team.IdleInterceptMembers || team.IdleInterceptMembers != 1 {
+		t.Fatalf("hello idle_intercept = %d (%v), want 1", h.IdleIntercept, err)
+	}
+}
+
+// A mod that reloads in an idle period has lost its clock: its next report (no period) is judged by the daemon's own period, which the
+// first report (with one) already told, so the lead hears of the period once. The other way round (no period first, then a turn and a
+// period) is a new period. Mutation gates: no daemon-period claim in the period branch → a second notice (red).
+func TestIntercept_AReloadedModDoesNotTellThePeriodAgain(t *testing.T) {
+	f := idleSetup(t)
+	f.setModVersion("sid-ma", "9")
+	f.forgetSent()
+	if _, res := f.interceptedSince("sid-ma", 1000); !res.Noticed {
+		t.Fatal("the first report was not told")
+	}
+	if _, res := f.interceptedSince("sid-ma", 0); res.Noticed || res.Route != team.InterceptRouteMember {
+		t.Fatalf("the report of the reloaded mod = %+v, want member and not told again", res)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if n := len(f.sender.calls()); n != 1 {
+		t.Fatalf("%d notices in one idle period across a mod reload, want 1", n)
+	}
+}
+
+// The notice that could not be sent gives both claims back: the next report tells.
+func TestIntercept_ARunningMemberLeavesBothClaimsFree(t *testing.T) {
+	f := idleSetup(t)
+	f.setModVersion("sid-ma", "9")
+	f.usage.setStatus("tm-op-a", "running")
+	f.forgetSent()
+	f.interceptedSince("sid-ma", 1000)
+	f.usage.setStatus("tm-op-a", "idle")
+	if _, res := f.interceptedSince("sid-ma", 0); !res.Noticed {
+		t.Fatal("a report that was not told used up the daemon's period")
 	}
 }

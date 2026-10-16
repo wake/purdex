@@ -194,6 +194,8 @@ type RelayHelloResponse struct {
 	// Waiting is this session's unanswered final card (RT-2a1): a mod that reloaded and holds no request adopts it again.
 	// Absent for an ordinary open card and from a daemon older than this field.
 	Waiting *RelayWaiting `json:"waiting,omitempty"`
+	// IdleIntercept is the level of Claude Code idle compactions this daemon decides for (RT-4): 1 = members. Absent from an older daemon.
+	IdleIntercept int `json:"idle_intercept,omitempty"`
 }
 
 // RelayBeginRequest is POST /api/relay/begin. It carries no model or
@@ -323,6 +325,13 @@ const (
 // A member's idle compaction that its mod intercepted (RT-4 T42): the first mod protocol that does it (the daemon then drops the two
 // older idle notices for that member), and the one notice the lead gets, once per idle period. Args: address, title, the context ("55%" or "未知"), ref ×3.
 const (
+	// InterceptRouteMember / InterceptRouteSilent: the daemon's answers to an intercept report (RelayCompactedResponse.Route).
+	InterceptRouteMember = "member"
+	InterceptRouteSilent = "silent"
+	// IdleInterceptMembers is the hello answer's idle_intercept level for a daemon that decides intercepts for members only; a mod skips an
+	// idle compaction only when the level covers its session (absent or 0 = a daemon that does not decide: the compaction happens as before).
+	IdleInterceptMembers = 1
+
 	MinIdleInterceptModVersion = 9
 	IdleInterceptNoticeFmt     = "[pdx team] member %s「%s」閒置，快取快過期，context %s。請決定：接力（pdx relay _%s）、交接後關閉（pdx kill _%s --handoff）、直接關閉（pdx kill _%s）。"
 )

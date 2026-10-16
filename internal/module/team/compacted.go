@@ -43,8 +43,12 @@ func (m *Module) handleRelayCompacted(w http.ResponseWriter, r *http.Request) {
 			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "a manual compaction is never intercepted", nil)
 			return
 		}
-		noticed, member := m.interceptedIdle(req.SessionID, req.IdleSince)
-		m.writeJSON(w, http.StatusOK, team.RelayCompactedResponse{Noticed: noticed, NotMember: !member})
+		noticed, member := m.interceptedIdle(req.SessionID, req.Period)
+		route := team.InterceptRouteMember
+		if !member {
+			route = team.InterceptRouteSilent
+		}
+		m.writeJSON(w, http.StatusOK, team.RelayCompactedResponse{Noticed: noticed, Route: route})
 		return
 	}
 	// whatever the trigger, the context the idle half summarised is gone: its file is stale (RT-3a1 T31)

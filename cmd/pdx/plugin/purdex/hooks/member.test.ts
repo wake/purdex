@@ -12,7 +12,7 @@ const OP = { id: OPID, kind: 'member_relay', host_id: 'h', session_id: 'sid-old'
 const LEAD = { address: 'mlab/purdex-1f-vq', ref: '_h9movr', team_id: 'team-1' }
 const CLAIM = JSON.stringify({ op: OP, lead: LEAD })
 const GOOD_FILE = '# HANDOFF\n' + ['## 1. a', '## 2. b', '## 3. c', '## 4. d', '## 5. e', '## 6. f', '## 7. g', '## 8. h'].map((h) => h + '\n' + 'x'.repeat(40)).join('\n')
-const HELLO = (role: string) => JSON.stringify({ ok: true, role, self_relay: 'on', threshold: 70, min_growth: 20000 })
+const HELLO = (role: string, level = 1) => JSON.stringify({ ok: true, role, self_relay: 'on', threshold: 70, min_growth: 20000, ...(level > 0 ? { idle_intercept: level } : {}) })
 const sub = (a: string[]) => a.slice(1).join(' ')
 
 type R = { exitCode: number; stdout?: string; stderr?: string }
@@ -869,17 +869,18 @@ test('RT-4 T42: a member whose relay is under way is not intercepted (the relay�
   expect(compactCalls(f)).toEqual([])
 })
 
-// The report names the idle stretch by when the last main turn ended; the guard needs hello answered; a daemon that says not_member makes
-// the mod drop its role and say hello again. Mutation gates: no --idle-since → red; no helloOK in the guard → red; the role kept → red.
+// The report names the idle stretch by when the last main turn ended; the guard needs hello answered; a daemon that routes the intercept silent makes
+// the mod drop its role and say hello again. Mutation gates: no --period → red; no helloOK in the guard → red; the role kept → red.
 test('RT-4 T42: the interception names the idle stretch by the end of the last turn', async ($, on) => {
   const f = memberWorld(on, 'member', memberPdx())
   await start($, f)
+  await f.clock.advance(1000) // the mock clock starts at 0, which is "no turn seen": a real clock never reads 0
   await $.turn.start({ text: 'work', turnId: 't1' })
   await complete($, 't1')
   await f.clock.advance(5000)
   expect(await $.session.compact(compactEvent('auto'))).toEqual({ skip: expect.any(String) })
   await f.clock.advance(100)
-  expect(compactCalls(f)).toEqual([expect.stringMatching(/^relay compacted --session sid-old --trigger idle --intercepted --idle-since [1-9][0-9]*$/)])
+  expect(compactCalls(f)).toEqual([expect.stringMatching(/^relay compacted --session sid-old --trigger idle --intercepted --period [1-9][0-9]*$/)])
 })
 
 test('RT-4 T42: before hello has answered nothing is intercepted (the role is not the daemon’s yet)', async ($, on) => {
@@ -889,10 +890,30 @@ test('RT-4 T42: before hello has answered nothing is intercepted (the role is no
   expect(r.skip).toBeUndefined()
 })
 
-test('RT-4 T42: a daemon that says not_member makes the mod drop the role: hello again, and the next idle compaction runs', async ($, on) => {
+// A daemon that does not say it decides idle compactions (an older one, or level 0) leaves the compaction as before: nothing is skipped.
+// Mutation gate: the level not read (skip on the role alone) → red.
+test('RT-4 T42: a member of a daemon without idle_intercept is not intercepted', async ($, on) => {
+  const f = memberWorld(on, 'member', (argv) => (argv[1] === 'hello' ? { exitCode: 0, stdout: HELLO('member', 0) } : undefined))
+  await start($, f)
+  const r = await $.session.compact(compactEvent('auto'))
+  expect(r.skip).toBeUndefined()
+  await f.clock.advance(100)
+  expect(compactCalls(f).filter((c: string) => c.includes('--intercepted'))).toEqual([]) // the compaction runs and is reported as an ordinary one
+})
+
+// A reload loses the mod's clock: the report then carries no --period (the daemon's own period stands in), and still reaches the daemon.
+test('RT-4 T42: with no turn seen since the mod started the report has no period', async ($, on) => {
+  const f = memberWorld(on, 'member', memberPdx())
+  await start($, f)
+  expect(await $.session.compact(compactEvent('auto'))).toEqual({ skip: expect.any(String) })
+  await f.clock.advance(100)
+  expect(compactCalls(f)).toEqual(['relay compacted --session sid-old --trigger idle --intercepted'])
+})
+
+test('RT-4 T42: a daemon that routes the intercept silent makes the mod drop the role: hello again, and the next idle compaction runs', async ($, on) => {
   let role = 'member'
   const f = memberWorld(on, 'member', (argv) => {
-    if (argv[1] === 'compacted') return { exitCode: 0, stdout: '{"noticed":false,"not_member":true}' }
+    if (argv[1] === 'compacted') return { exitCode: 0, stdout: '{"noticed":false,"route":"silent"}' }
     if (argv[1] === 'hello') return { exitCode: 0, stdout: HELLO(role) }
     return undefined
   })

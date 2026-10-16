@@ -753,3 +753,21 @@ func TestRelayCmd_CompactedInterceptedReachesTheWire(t *testing.T) {
 		}
 	}
 }
+
+// The idle period's identity reaches the wire as `period`. Mutation gate: the flag not read → 0 (red).
+func TestRelayCmd_CompactedPeriodReachesTheWire(t *testing.T) {
+	d := &fakeRelayDaemon{}
+	if code, _, stderr := driveRelay(t, context.Background(), d, "compacted", "--session", "sid-1", "--trigger", "idle", "--intercepted", "--period", "1760000000000"); code != ExitOK {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	paths, bodies := d.snapshot()
+	var sent team.RelayCompactedRequest
+	for i, p := range paths {
+		if strings.HasSuffix(p, "/api/relay/compacted") {
+			_ = json.Unmarshal([]byte(bodies[i]), &sent)
+		}
+	}
+	if sent.Period != 1760000000000 {
+		t.Errorf("period = %d", sent.Period)
+	}
+}

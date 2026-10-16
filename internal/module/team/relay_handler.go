@@ -121,6 +121,7 @@ func (m *Module) handleRelayHello(w http.ResponseWriter, r *http.Request) {
 		OK: true, Role: role, SelfRelay: state,
 		Threshold: team.RelayThresholdPct, MinGrowth: team.RelayMinGrowth,
 		IdleMinutes: team.RelayIdleMinutes, IdleThreshold: team.RelayIdleThresholdPct,
+		IdleIntercept: team.IdleInterceptMembers,
 	}
 	if h, ok, err := m.store.FreshHalfOf(req.SessionID); err != nil {
 		m.logf("[team] relay hello %s: fresh half: %v", req.SessionID, err)
