@@ -48,6 +48,9 @@ const UNCHANGED = [
   'pdx gate --auto -- ./vendor/bin/pest', // already through the gate
   './vendor/bin/composer install',
   'claude plugin list', // only the test run is held
+  'claude mcp test x', // `test` is not claude plugin test
+  'claude test dir',
+  'claude plugin',
   'claude -p "plugin test"',
   'claude plugin tests',
   'echo claude plugin test', // an argument
