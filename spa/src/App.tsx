@@ -220,7 +220,6 @@ export default function App() {
             onReorderWorkspaces={handleReorderWorkspaces}
             onContextMenuWorkspace={handleWsContextMenu}
             onOpenHosts={handleOpenHosts}
-            onOpenHost={handleNavigateToHost}
             onOpenSettings={handleOpenSettings}
             // Phase 2
             tabsById={tabs}
@@ -234,8 +233,10 @@ export default function App() {
             onAddTabToWorkspace={handleAddTabToWorkspace}
           />
           <div className="flex-1 flex flex-col min-w-0">
-            {tabPosition !== 'left' && (
+            {/* The watcher area is not in the sidebar, so its tabs always get the top row, whatever `tabPosition` says. */}
+            {(tabPosition !== 'left' || activeWorkspaceId === WATCH_WORKSPACE_ID) && (
               <TabBar
+                fixed={activeWorkspaceId === WATCH_WORKSPACE_ID}
                 tabs={displayTabs}
                 activeTabId={activeTabId}
                 onSelectTab={handleSelectTab}
