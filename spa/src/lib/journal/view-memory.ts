@@ -58,6 +58,19 @@ export function patchViewMemo(hostId: string, unitKey: string, patch: Partial<Vi
   bump()
 }
 
+/** Move a memo to another key in one step (the unreachable stand-in -> the resolved unit). Nothing to move, or the target already
+ *  holds state: no-op (the source is then left alone). Returns whether it moved. */
+export function migrateViewMemo(fromHost: string, fromKey: string, toHost: string, toKey: string): boolean {
+  const from = keyOf(fromHost, fromKey)
+  const to = keyOf(toHost, toKey)
+  const m = memos.get(from)
+  if (from === to || !m || memos.has(to)) return false
+  memos.delete(from)
+  memos.set(to, m)
+  bump()
+  return true
+}
+
 export function forgetViewMemo(hostId: string, unitKey: string): void {
   memos.delete(keyOf(hostId, unitKey))
   bump()

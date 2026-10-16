@@ -7,7 +7,7 @@ import { CardStack } from './CardStack'
 import { TeamDisplayProvider } from '../team/TeamDisplayProvider'
 import { HOST, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
 import { ccTabOf, seedUnit, setJournalHost } from '../../lib/journal/__tests__/journal-fixture'
-import { clearViewMemos } from '../../lib/journal/view-memory'
+import { clearViewMemos, patchViewMemo, readViewMemo } from '../../lib/journal/view-memory'
 import { clearModuleRegistry } from '../../lib/module-registry'
 import { useTabStore } from '../../stores/useTabStore'
 import { useJournalStore } from '../../stores/useJournalStore'
@@ -73,5 +73,36 @@ describe('A-1: the read host decides', () => {
     expect(result.current.memoKey).toBe('unreachable:lead-daemon')
     act(() => { follow() })
     expect(result.current.journalHost).toBe(false)
+  })
+})
+
+describe('A-2: the unreachable stand-in view state follows the route', () => {
+  it('unreachable -> follow -> loaded keeps the card open with its width, filter and scroll', () => {
+    setJournalHost(HOST, true)
+    setJournalHost(LEAD_HOST, true)
+    unreachable()
+    patchViewMemo(HOST, 'unreachable:lead-daemon', { journalOpen: true, filter: 'task', scroll: 120, widths: { journal: 500, roadmap: null, tasks: null } })
+    const { result } = renderHook(() => useJournalTarget(), { wrapper })
+    expect(result.current.memoKey).toBe('unreachable:lead-daemon')
+    act(() => { seedUnit(LEAD_HOST, 'L', UNIT); follow() })
+    expect(result.current.memoHost).toBe(LEAD_HOST)
+    const m = readViewMemo(LEAD_HOST, 'team:tm1')
+    expect(m.journalOpen).toBe(true)
+    expect(m.filter).toBe('task')
+    expect(m.scroll).toBe(120)
+    expect(m.widths.journal).toBe(500)
+    expect(readViewMemo(HOST, 'unreachable:lead-daemon').journalOpen).toBe(false)
+  })
+  it('does not overwrite a resolved key that already has state', () => {
+    setJournalHost(HOST, true)
+    setJournalHost(LEAD_HOST, true)
+    unreachable()
+    patchViewMemo(HOST, 'unreachable:lead-daemon', { journalOpen: true, filter: 'task' })
+    patchViewMemo(LEAD_HOST, 'team:tm1', { filter: 'comm' })
+    renderHook(() => useJournalTarget(), { wrapper })
+    act(() => { seedUnit(LEAD_HOST, 'L', UNIT); follow() })
+    const m = readViewMemo(LEAD_HOST, 'team:tm1')
+    expect(m.filter).toBe('comm')
+    expect(m.journalOpen).toBe(false)
   })
 })

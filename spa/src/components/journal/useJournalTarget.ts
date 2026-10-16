@@ -2,7 +2,8 @@
 // active tab: its host's sticky journal.v1 answer, the team, the unit the loader resolved, and where it is read from.
 // Same origin as the loader (journal-loader.ts): the tab's own `cc` session; a team tab with no `cc` leaf falls back to the
 // lead's host for the support check only (no unit is loaded for it).
-import { useMemo } from 'react'
+import { useLayoutEffect, useMemo } from 'react'
+import { migrateViewMemo } from '../../lib/journal/view-memory'
 import { ownSessionOf } from '../team/own-workbook'
 import { useTitleBarTeam } from '../team/useTitleBarTeam'
 import type { TeamPanelTeam } from '../team/team-display'
@@ -46,5 +47,11 @@ export function useJournalTarget(): JournalTarget {
   const unreachableHost = route?.kind === 'unreachable' ? route.leadHostId : null
   // The view memo's key: the unit, or — where the lead's daemon is not connected — a stand-in so the card can still be opened to say so.
   const memoKey = unitKey ?? (unreachableHost !== null ? `unreachable:${unreachableHost}` : null)
+  // The route resolved from `unreachable`: the stand-in's view state (open, widths, filter, scroll) moves to the resolved unit, once.
+  // Stateless: the follow route still names the lead's daemon; every caller of this hook runs it, the move is idempotent.
+  const standIn = route?.kind === 'follow' && origin ? `unreachable:${route.leadHostId}` : null
+  useLayoutEffect(() => {
+    if (standIn !== null && origin && read && unitKey !== null) migrateViewMemo(origin.hostId, standIn, read.hostId, unitKey)
+  }, [standIn, origin, read?.hostId, unitKey]) // eslint-disable-line react-hooks/exhaustive-deps
   return { hostId, journalHost, team, origin, read, unit, unitKey, unreachableHost, memoHost: read?.hostId ?? origin?.hostId ?? null, memoKey }
 }
