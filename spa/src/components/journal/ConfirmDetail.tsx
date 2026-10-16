@@ -45,7 +45,7 @@ export function ConfirmDetail({ entry, personName, onClose }: Props) {
           {entry.items.map((it, i) => (
             <li key={i} data-done={it.done || undefined} className="flex items-start gap-1.5 leading-[17px]">
               {it.done
-                ? <CheckSquare size={14} weight="fill" className="shrink-0 text-status-success" />
+                ? <CheckSquare size={14} weight="fill" className="shrink-0 text-status-success-text" />
                 : <Square size={14} className="shrink-0 text-status-warning-text" />}
               <span className={it.done ? 'text-text-muted line-through' : ''}>{it.text}</span>
             </li>
