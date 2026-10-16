@@ -320,6 +320,13 @@ const (
 	MinHandoffModVersion = 8
 )
 
+// A member's idle compaction that its mod intercepted (RT-4 T42): the first mod protocol that does it (the daemon then drops the two
+// older idle notices for that member), and the one notice the lead gets, once per idle period. Args: address, title, the context ("55%" or "未知"), ref ×3.
+const (
+	MinIdleInterceptModVersion = 9
+	IdleInterceptNoticeFmt     = "[pdx team] member %s「%s」閒置，快取快過期，context %s。請決定：接力（pdx relay _%s）、交接後關閉（pdx kill _%s --handoff）、直接關閉（pdx kill _%s）。"
+)
+
 // The lead's texts about a handoff kill (RT-3c T38), word for word.
 const (
 	// HandoffClosedFmt: %s the member's address, %s its title, %s the handoff file.

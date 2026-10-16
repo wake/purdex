@@ -56,7 +56,7 @@ import { registerGate } from './gate.js'
 import { CONSUMED, CONSUMED_REASK, claimOp, controlOp, controlReask, leadLine, parseTeamArgs, rosterLines } from './member.js'
 import { DEFAULT_BODIES, FIXED } from './prompts.js'
 
-const VERSION = '8' // the mod ↔ daemon protocol version `pdx relay hello --version` reports (5: the paused latch and the reask control; 6: person tokens, /team and the direct /relay; 7: the ask ladder - lastAskPct only on an answer, no ask past 90 %, an unanswered final card; 8: the idle half - an idle card's timeout writes the handoff file without clearing, and a later relay reuses it)
+const VERSION = '9' // the mod ↔ daemon protocol version `pdx relay hello --version` reports (5: the paused latch and the reask control; 6: person tokens, /team and the direct /relay; 7: the ask ladder - lastAskPct only on an answer, no ask past 90 %, an unanswered final card; 8: the idle half - an idle card's timeout writes the handoff file without clearing, and a later relay reuses it; 9: a member's idle compaction is intercepted and its lead told)
 const DEFAULT_THRESHOLD = 70
 const DEFAULT_MIN_GROWTH = 20000
 const REASK_POINTS = 10
@@ -99,6 +99,7 @@ const RELAY_PAUSED = '這個 session 已用 /relay off 暫停自我接力；要�
 const RELAY_NO_USAGE = '目前讀不到 context 用量，稍後再試'
 const RELAY_NOT_STARTED = '接力沒有開始（這個 session 剛換過或被清除）'
 const RELAY_MEMBER = 'member 的接力由 lead 安排'
+const SKIP_MEMBER_IDLE = 'member 閒置：已通知 lead 決定'
 const STATUS_HALF = '已寫好接力檔'
 const toastHalf = (path) => '快取即將過期，已先寫好接力檔（' + path + '）。要接力請打 /relay 或 /relay now，會直接接上後半：清空並由新對話接手，不用重寫接力檔；不需要就直接關掉這個 session，或照常繼續。'
 const TOAST_GAVE_UP = '接力檔不完整，已放棄接力；對話照常繼續'
@@ -137,6 +138,7 @@ const fresh = () => ({
   idleAsk: false, // an idle ask is out (beginning / awaiting): it holds no prompt, a prompt withdraws it (D6)
   idleWithdraw: false, // a prompt arrived while the idle begin was out: the op it opens is withdrawn at once
   askEpoch: 0, // bumped by everything that makes an ask in the air stale (a /clear, a session reset, a compaction); never reset, like gen
+  lastTurnDoneAt: 0, // when the last main turn ended (the engine's clock, ms): names an idle stretch for the daemon (RT-4)
   half: undefined, // { op, path, at, sid }: the fresh half this session wrote (idle half, RT-3b): the next relay may reuse its file until the conversation moves
   halfBeginning: false, // a half begin is out: it holds no prompt
   halfStatus: false, // the status line says 「已寫好接力檔」 and nothing else has replaced it
@@ -1584,6 +1586,25 @@ function dropHalf($, stale) {
   })
 }
 
+// interceptedLater tells the daemon, from a timer, that the member's idle compaction was stopped (RT-4 T42).
+function interceptedLater($) {
+  const since = s.lastTurnDoneAt
+  const gen = s.gen
+  later($, 0, async () => {
+    const sid = await $.session.id()
+    const argv = ['relay', 'compacted', '--session', sid, '--trigger', 'idle', '--intercepted']
+    if (since > 0) argv.push('--idle-since', String(since)) // names this idle stretch for the daemon: one notice per stretch
+    const r = await pdx($, argv, CALL_TIMEOUT_MS)
+    // The daemon does not know this session as a member (released, or the role is stale): this idle compaction was stopped for nothing, so
+    // the role is dropped and hello says what it is now; the next one runs.
+    const body = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
+    if (body && body.not_member === true && s.gen === gen && s.role === 'member') {
+      s.role = 'none'
+      helloLater($)
+    }
+  })
+}
+
 function compactedLater($, trigger) {
   if (trigger !== 'auto' && trigger !== 'manual' && trigger !== 'idle') return
   later($, 0, async () => {
@@ -1909,6 +1930,7 @@ export function register(on) {
       r = await next(e)
     } finally {
       if (s.interactive && !e.agentId) s.turnRunning = false // a hook beneath that throws must not leave the turn running for good
+      if (s.interactive && !e.agentId) { try { s.lastTurnDoneAt = await $.clock.now() } catch {} }
     }
     if (!s.interactive || e.agentId) return r
     if (s.leadAsk && s.leadAsk.turnId !== undefined && e.turnId === s.leadAsk.turnId) s.leadAsk = undefined // the /lead turn has ended: it may be asked again
@@ -2077,6 +2099,12 @@ export function register(on) {
     // Claude Code's idle compaction runs between turns; a context-full auto compaction runs inside one (spec §4.5). Only
     // told apart once hello advertised the feature (an older daemon does not know `idle`).
     const trigger = e.trigger === 'auto' && !s.turnRunning && s.idleMinutes > 0 ? 'idle' : e.trigger
+    // A member's idle compaction (RT-4 T42, Gate M-1): an auto compaction with no main turn running. It is stopped, and the daemon tells
+    // the lead to decide (relay, hand over and close, close). A context-full compaction runs inside a turn; a relay under way keeps its rule below.
+    if (s.helloOK && s.role === 'member' && e.trigger === 'auto' && !s.turnRunning && s.state === 'idle') {
+      interceptedLater($)
+      return { skip: SKIP_MEMBER_IDLE }
+    }
     if (s.state === 'approved') {
       if (e.trigger === 'auto') return { skip: SKIP_COMPACT }
       return compactedAfter($, e, await next(e), trigger)

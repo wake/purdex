@@ -35,7 +35,7 @@ const relayUsage = "usage: pdx relay hello --session <sid> [--version <v>] [--ag
 	"       pdx relay prompts [--config <path>]\n" +
 	"       pdx relay lock|unlock <op> --session <sid> [--config <path>]\n" +
 	"       pdx relay claim|seen <op> --session <sid> [--config <path>]\n" +
-	"       pdx relay compacted --session <sid> --trigger auto|manual|idle [--config <path>]\n" +
+	"       pdx relay compacted --session <sid> --trigger auto|manual|idle [--intercepted [--idle-since <ms>]] [--config <path>]\n" +
 	"       pdx relay fresh --session <sid> --op <id> --stale [--config <path>]\n" +
 	"       pdx relay <ref|address> [--wait <dur> | --deny] [--config <path>]"
 
@@ -192,6 +192,8 @@ func runRelayCompacted(ctx context.Context, args []string, stdout, stderr io.Wri
 	var req team.RelayCompactedRequest
 	fs.StringVar(&req.SessionID, "session", "", "")
 	fs.StringVar(&req.Trigger, "trigger", "", "")
+	fs.BoolVar(&req.Intercepted, "intercepted", false, "")
+	fs.Int64Var(&req.IdleSince, "idle-since", 0, "")
 	cfgPath, ok := relayFlags(fs, args, stderr)
 	if !ok {
 		return ExitUsage

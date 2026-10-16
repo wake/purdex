@@ -729,3 +729,27 @@ func TestRelayCmd_FreshPostsTheStaleReport(t *testing.T) {
 		}
 	}
 }
+
+// RT-4 T42: `--intercepted` reaches the wire (the mod stopped an idle compaction); without it the request says nothing of it.
+// Mutation gate: drop the flag → intercepted never set (red).
+func TestRelayCmd_CompactedInterceptedReachesTheWire(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want bool
+	}{{[]string{"compacted", "--session", "sid-1", "--trigger", "idle", "--intercepted"}, true}, {[]string{"compacted", "--session", "sid-1", "--trigger", "idle"}, false}} {
+		d := &fakeRelayDaemon{}
+		if code, _, stderr := driveRelay(t, context.Background(), d, c.args...); code != ExitOK {
+			t.Fatalf("%v: code=%d stderr=%q", c.args, code, stderr)
+		}
+		paths, bodies := d.snapshot()
+		var sent team.RelayCompactedRequest
+		for i, p := range paths {
+			if strings.HasSuffix(p, "/api/relay/compacted") {
+				_ = json.Unmarshal([]byte(bodies[i]), &sent)
+			}
+		}
+		if sent.Intercepted != c.want {
+			t.Errorf("%v: intercepted = %v, want %v", c.args, sent.Intercepted, c.want)
+		}
+	}
+}

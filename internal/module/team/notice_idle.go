@@ -68,6 +68,9 @@ func (m *Module) noticeIdle() {
 			continue
 		}
 		since := m.idleStart(mr.SessionID, now)
+		if m.modProtocolAtLeast(mr.SessionID, team.MinIdleInterceptModVersion) {
+			continue // its mod stops the idle compaction and the daemon tells the lead then (RT-4): the period is kept, nothing is said here
+		}
 		if now-since < after {
 			continue
 		}
@@ -193,5 +196,86 @@ func (m *Module) pruneIdle(live map[string]struct{}) {
 		if _, ok := live[sid]; !ok {
 			delete(m.memberIdle, sid)
 		}
+	}
+	for sid := range m.interceptTold {
+		if _, ok := live[sid]; !ok {
+			delete(m.interceptTold, sid)
+		}
+	}
+}
+
+// interceptedIdle tells the lead that the member's mod stopped Claude Code's idle compaction (RT-4 T42): once per idle stretch, with the
+// three answers. The stretch is named by idleSince, when the member's last turn ended by the mod's clock: a short turn between two
+// interceptions that the liveness tick never saw is still a new stretch (a mod that cannot say, 0, falls back to the tick's period). Not
+// told when the member is running by now (the mod's report was queued behind a turn): that is no idle member. noticed says a notice
+// went; member says the session is an active local member of a live team at all.
+func (m *Module) interceptedIdle(sessionID string, idleSince int64) (noticed, member bool) {
+	mr, t, ok, err := m.store.ActiveMemberInLiveTeam(sessionID)
+	if err != nil {
+		m.logf("[team] idle intercept %s: %v", sessionID, err)
+		return false, true // not known to be released: the mod keeps its role
+	}
+	if !ok {
+		return false, false
+	}
+	if m.sender == nil || m.stopping() {
+		return false, true
+	}
+	if m.status != nil {
+		if st, known := m.status.AgentStatus(mr.TmuxSession); known && st != agentIdle {
+			return false, true // running or waiting on a person: not idle
+		}
+	}
+	var gen uint64
+	if idleSince > 0 {
+		if !m.claimInterceptTold(sessionID, idleSince) {
+			return false, true
+		}
+	} else {
+		m.idleStart(sessionID, m.now()) // a period exists to be told once
+		var won bool
+		if gen, won = m.claimIdleTold(sessionID); !won {
+			return false, true
+		}
+	}
+	ctx := "未知"
+	if m.usage != nil {
+		if u, ok := m.usage.ContextUsage(sessionID); ok && u.UsedPercentage != nil {
+			ctx = fmt.Sprintf("%d%%", int(*u.UsedPercentage))
+		}
+	}
+	address, title := m.memberNoticeName(mr)
+	ref := strings.TrimPrefix(mr.Ref, "_")
+	text := fmt.Sprintf(team.IdleInterceptNoticeFmt, address, title, ctx, ref, ref, ref)
+	if !m.goTracked(func() { m.noticeToLead(mr, t, text, "idle intercept notice") }) {
+		if idleSince > 0 {
+			m.releaseInterceptTold(sessionID, idleSince)
+		} else {
+			m.releaseIdleTold(sessionID, gen)
+		}
+		return false, true
+	}
+	return true, true
+}
+
+// claimInterceptTold marks the idle stretch idleSince of the session told; false when it already was (the last one told is kept).
+func (m *Module) claimInterceptTold(sessionID string, idleSince int64) bool {
+	m.idleMu.Lock()
+	defer m.idleMu.Unlock()
+	if m.interceptTold == nil {
+		m.interceptTold = map[string]int64{}
+	}
+	if m.interceptTold[sessionID] == idleSince {
+		return false
+	}
+	m.interceptTold[sessionID] = idleSince
+	return true
+}
+
+func (m *Module) releaseInterceptTold(sessionID string, idleSince int64) {
+	m.idleMu.Lock()
+	defer m.idleMu.Unlock()
+	if m.interceptTold[sessionID] == idleSince {
+		delete(m.interceptTold, sessionID)
 	}
 }
