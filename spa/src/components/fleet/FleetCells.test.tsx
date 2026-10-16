@@ -126,13 +126,14 @@ describe('FleetCells — the two waiting tooltips', () => {
     answer(A, primaryAnswer(1, FOUR))
     st().checkStale(Date.now() + 60_000)
     render(<FleetCells variant="wide" {...props()} />)
-    expect(screen.getByTestId('host-tile-d-a').getAttribute('title')).toContain('Waiting for the primary')
+    fireEvent.mouseEnter(screen.getByTestId('host-tile-d-a'))
+    expect(screen.getByTestId('host-card').textContent).toContain('Waiting for the primary')
   })
   it('only a standby answered: the App hosts show without values and say the primary is not on this App', () => {
     answer(A, standbyAnswer(1, 'air26'))
     render(<FleetCells variant="wide" {...props()} />)
-    const tip = screen.getByTestId('host-tile-cfg-a').getAttribute('title')!
-    expect(tip).toContain('The primary is not on this App')
+    fireEvent.mouseEnter(screen.getByTestId('host-tile-cfg-a'))
+    expect(screen.getByTestId('host-card').textContent).toContain('The primary is not on this App')
     expect(screen.getByTestId('load-ring-cfg-a').dataset.zone).toBe('nodata')
     expect(within(screen.getByTestId('fleet-cells')).getAllByRole('button')).toHaveLength(2)
   })
