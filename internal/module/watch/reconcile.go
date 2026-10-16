@@ -218,13 +218,18 @@ func (m *Module) rest(cur watch.Holder) (watch.Holder, bool, error) {
 // enter admits one reconcile that no Stop has begun: it counts it for Stop to wait for and gives it a context that ends with the
 // module, with the caller's, and after reconcileBudget. done must be called when it is over.
 func (m *Module) enter(parent context.Context) (ctx context.Context, done func(), ok bool) {
+	return m.enterFor(parent, reconcileBudget)
+}
+
+// enterFor is enter with a budget of its own (the registration's announce-and-settle gets standDownBudget, not a reconcile's).
+func (m *Module) enterFor(parent context.Context, budget time.Duration) (ctx context.Context, done func(), ok bool) {
 	m.runMu.Lock()
 	defer m.runMu.Unlock()
 	if !m.running {
 		return nil, nil, false
 	}
 	m.wg.Add(1)
-	ctx, cancel := context.WithTimeout(m.runCtx, reconcileBudget)
+	ctx, cancel := context.WithTimeout(m.runCtx, budget)
 	stop := context.AfterFunc(parent, cancel)
 	return ctx, func() { stop(); cancel(); m.wg.Done() }, true
 }

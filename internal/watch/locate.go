@@ -16,8 +16,9 @@ type Where struct {
 	Alias     string      `json:"alias"` // the host's alias in `targets`
 	HostID    string      `json:"host_id"`
 	SessionID string      `json:"session_id"`
-	State     HolderState `json:"state"` // awake or resting, as the host last said
-	At        time.Time   `json:"at"`    // when this was learned
+	State     HolderState `json:"state"`           // awake or resting, as the host last said
+	At        time.Time   `json:"at"`              // when this was learned
+	Since     time.Time   `json:"since,omitempty"` // when the host's holder entered that state (the "awake the longest" rule)
 }
 
 // HolderAnswer is what a host says about the watcher it holds (the wire answer of POST /api/peers/watch/holder).
@@ -25,7 +26,23 @@ type HolderAnswer struct {
 	HostID    string
 	State     HolderState
 	SessionID string
-	Targets   []string // that host's setting, nil when it could not say
+	Since     time.Time // when it entered that state; zero when the host could not say (an older daemon)
+	Targets   []string  // that host's setting, nil when it could not say
+}
+
+// Earlier says whether the watcher of a wins over the watcher of b when both are awake (spec §12.3 "Two awake at once"): the one
+// awake the longest, which is the earliest since; on a tie (the same second) the smaller host id. A host that cannot say since is
+// the youngest. The rule needs no message order, so every daemon that knows both answers picks the same one, whatever the order
+// of its targets.
+func Earlier(a, b HolderAnswer) bool {
+	az, bz := a.Since.IsZero(), b.Since.IsZero()
+	switch {
+	case az != bz:
+		return bz // the one that has a since is older than the one that has none
+	case !az && a.Since.Unix() != b.Since.Unix():
+		return a.Since.Before(b.Since)
+	}
+	return a.HostID < b.HostID
 }
 
 // Errors an Asker answers with. Anything else is a host that could not be reached.
@@ -93,7 +110,19 @@ type Locator struct {
 	now      func() time.Time
 	warnf    func(format string, args ...any)
 	warnedOn map[string]string // host → the targets it reported when we last warned
+	// hints are the watchers Prefer was told of; gen counts them. A search that started before a hint and would settle on a worse
+	// watcher than that hint looks again (afterProbe is a test seam between the probes and the decision).
+	gen        int
+	hints      []hint
+	afterProbe func()
 }
+
+type hint struct {
+	gen int
+	a   HolderAnswer
+}
+
+const maxHints = 8
 
 // NewLocator reads the remembered watcher from path ("" keeps it in memory). A file that cannot be read is set aside.
 func NewLocator(path string, ask Asker, warnf func(string, ...any)) *Locator {
@@ -122,6 +151,71 @@ func clone(w *Where) *Where {
 	}
 	c := *w
 	return &c
+}
+
+// Prefer is told of a watcher that is awake (another host announced it): when it beats the remembered one by the "awake the
+// longest" rule, the remembered one is forgotten (it stays the last one) and the next Current looks again and picks by that rule.
+// A watcher announced by the host of the remembered one, with another session, replaces it whatever its since (the host
+// restarted its watcher). Anything that is not awake, is the remembered watcher itself, or does not beat it, changes nothing.
+func (l *Locator) Prefer(a HolderAnswer) {
+	if a.State != HolderAwake || a.SessionID == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	// Remember it for a search that is in progress (it may have asked this host before the watcher changed): the search compares
+	// its pick against the hints that arrived after it began.
+	l.gen++
+	l.hints = append(l.hints, hint{gen: l.gen, a: a})
+	if len(l.hints) > maxHints {
+		l.hints = l.hints[len(l.hints)-maxHints:]
+	}
+	c := l.mem.Current
+	if c == nil || (c.HostID == a.HostID && c.SessionID == a.SessionID) {
+		return
+	}
+	if c.HostID == a.HostID { // the same host now has another watcher awake: the remembered one is an earlier run of it
+		l.mem.Current = nil
+		l.save()
+		return
+	}
+	cur := HolderAnswer{HostID: c.HostID, State: c.State, SessionID: c.SessionID, Since: c.Since}
+	if !Earlier(a, cur) {
+		return
+	}
+	l.mem.Current = nil
+	l.save()
+}
+
+// supersededSince says whether a hint that arrived after generation start beats w (the watcher a search settled on): a watcher
+// that is older, or another session of w's own host. The search then did not see it and must look again.
+func (l *Locator) supersededSince(start int, w Where) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	pick := HolderAnswer{HostID: w.HostID, State: w.State, SessionID: w.SessionID, Since: w.Since}
+	for _, h := range l.hints {
+		if h.gen <= start || (h.a.HostID == w.HostID && h.a.SessionID == w.SessionID) {
+			continue
+		}
+		if h.a.HostID == w.HostID || Earlier(h.a, pick) {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *Locator) generation() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.gen
+}
+
+// forgetCurrent drops the remembered watcher (it stays the last one).
+func (l *Locator) forgetCurrent() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.mem.Current = nil
+	l.save()
 }
 
 // Failed says a delivery to w failed or w is gone: the next Current looks again. Only when w is still the remembered watcher: a
@@ -157,7 +251,19 @@ func (l *Locator) Current(ctx context.Context, targets []string, autoWake bool) 
 	if w, ok := l.cached(); ok { // another caller's search found it while this one waited
 		return w, nil
 	}
-	return l.search(ctx, targets, autoWake)
+	return l.searchSettled(ctx, targets, autoWake)
+}
+
+// searchSettled runs search and looks again (a few times) when a watcher that Prefer was told of while it ran beats what it settled on.
+func (l *Locator) searchSettled(ctx context.Context, targets []string, autoWake bool) (Where, error) {
+	for attempt := 0; ; attempt++ {
+		start := l.generation()
+		w, err := l.search(ctx, targets, autoWake)
+		if err != nil || attempt >= 2 || !l.supersededSince(start, w) {
+			return w, err
+		}
+		l.forgetCurrent()
+	}
 }
 
 func (l *Locator) cached() (Where, bool) {
@@ -199,7 +305,7 @@ func (l *Locator) try(ctx context.Context, alias string, act func(context.Contex
 	res, err := act(ctx, alias)
 	if err == nil {
 		if res.State == HolderAwake && res.SessionID != "" {
-			return &Where{Alias: alias, HostID: res.HostID, SessionID: res.SessionID, State: HolderAwake, At: l.now()}, true
+			return &Where{Alias: alias, HostID: res.HostID, SessionID: res.SessionID, State: HolderAwake, At: l.now(), Since: res.Since}, true
 		}
 		return nil, true
 	}
@@ -213,7 +319,7 @@ func (l *Locator) try(ctx context.Context, alias string, act func(context.Contex
 		return nil, false
 	}
 	if a.State == HolderAwake && a.SessionID != "" {
-		return &Where{Alias: alias, HostID: a.HostID, SessionID: a.SessionID, State: HolderAwake, At: l.now()}, true
+		return &Where{Alias: alias, HostID: a.HostID, SessionID: a.SessionID, State: HolderAwake, At: l.now(), Since: a.Since}, true
 	}
 	return nil, true
 }
@@ -221,7 +327,8 @@ func (l *Locator) try(ctx context.Context, alias string, act func(context.Contex
 func (l *Locator) search(ctx context.Context, targets []string, autoWake bool) (Where, error) {
 	reachable := map[string]HolderAnswer{} // the targets that answered the holder question
 	var awake *Where
-	// (1) the first watcher awake on a target
+	var awakeAns *HolderAnswer // the answer the awake pick came from
+	// (1) the watcher awake the longest on a target (spec §12.3), not the first one in the order of targets
 	for i, p := range l.probeAll(ctx, targets) {
 		if p.err != nil {
 			continue // unreachable, or no watch support: not a candidate for anything
@@ -229,9 +336,14 @@ func (l *Locator) search(ctx context.Context, targets []string, autoWake bool) (
 		alias := targets[i]
 		reachable[alias] = p.a
 		l.compareTargets(alias, targets, p.a)
-		if p.a.State == HolderAwake && p.a.SessionID != "" && awake == nil {
-			awake = &Where{Alias: alias, HostID: p.a.HostID, SessionID: p.a.SessionID, State: HolderAwake, At: l.now()}
+		if p.a.State == HolderAwake && p.a.SessionID != "" && (awake == nil || Earlier(p.a, *awakeAns)) {
+			awake = &Where{Alias: alias, HostID: p.a.HostID, SessionID: p.a.SessionID, State: HolderAwake, At: l.now(), Since: p.a.Since}
+			ans := p.a
+			awakeAns = &ans
 		}
+	}
+	if l.afterProbe != nil {
+		l.afterProbe()
 	}
 	if awake != nil {
 		l.remember(*awake)

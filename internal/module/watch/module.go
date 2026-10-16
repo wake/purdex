@@ -53,6 +53,9 @@ type Module struct {
 	ownerSrc ownerLookup
 	rec      reconcileState
 	store    holderStore
+	// two is the state of the two-awake rule; standDowner delivers the notice to this host's own watcher (nil: logged, not sent).
+	two         twoAwake
+	standDowner StandDowner
 	// tickEvery is the period of the safety-net ticker (a test shortens it); unsubscribe and stop undo Start.
 	tickEvery   time.Duration
 	unsubscribe func()
@@ -102,6 +105,7 @@ func (m *Module) Init(c *core.Core) error {
 		remembered = filepath.Join(c.Cfg.DataDir, "watch", "remembered.json")
 	}
 	m.loc = watch.NewLocator(remembered, asker{m}, m.logf)
+	m.rec.registered = m.onRegistered
 	c.Registry.Register(LocatorKey, m.loc)
 	return nil
 }
@@ -112,6 +116,9 @@ func (m *Module) Init(c *core.Core) error {
 func (m *Module) Start(context.Context) error {
 	if m.panes == nil {
 		m.panes = watch.NewPaneControl("")
+	}
+	if m.standDowner == nil {
+		m.standDowner = peerStandDowner{m}
 	}
 	if svc, ok := m.core.Registry.Get(agent.TerminalSessionsKey); ok {
 		if ts, ok := svc.(agent.TerminalSessions); ok {
@@ -168,6 +175,7 @@ func (m *Module) Stop(context.Context) error {
 // RegisterRoutes wires the routes: the peers' holder question, and the local view the CLI reads.
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/peers/watch/holder", m.handlePeerHolder)
+	mux.HandleFunc("POST /api/peers/watch/announce", m.handlePeerAnnounce)
 	mux.HandleFunc("GET /api/watch/holder", m.handleLocalHolder)
 	mux.HandleFunc("GET /api/watch/status", m.handleStatus)
 }
@@ -185,8 +193,10 @@ type HolderView struct {
 }
 
 // view is this host's holder as the routes answer it.
-func (m *Module) view() HolderView {
-	h := m.holder.Get()
+func (m *Module) view() HolderView { return m.viewOf(m.holder.Get()) }
+
+// viewOf is the holder h as the routes answer it (this host's id and targets added).
+func (m *Module) viewOf(h watch.Holder) HolderView {
 	v := HolderView{State: string(h.State), SessionID: h.SessionID, Since: h.Since, LastTurn: h.LastTurn, LastDelivery: h.LastDelivery}
 	if m.core != nil && m.core.Cfg != nil {
 		m.core.CfgMu.RLock()
