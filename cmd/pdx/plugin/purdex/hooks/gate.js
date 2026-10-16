@@ -165,6 +165,10 @@ const withNotes = (r, notes) => (notes.length && r && typeof r === 'object' ? { 
 
 // A tool binary called by path, which no shim sees.
 const GATED_BIN = /(?:^|\/)(?:node_modules\/\.bin\/(?:vitest|tsc)|vendor\/bin\/(?:phpunit|pest))$/
+// `claude plugin test`: the mods' test run, which no shim sees (claude is the agent itself). The gate's classifier holds a whole
+// run and lets one narrowed with --file through as a light one; it is prefixed and asked about like a tool binary called by path.
+const isPluginTest = (c) => base(c.first) === 'claude' && c.argv[1] === 'plugin' && c.argv[2] === 'test'
+const isGatedBin = (c) => GATED_BIN.test(c.first) || isPluginTest(c)
 // The first words of the commands the gate may hold; anything else is not asked about.
 const TOOLS = new Set(['go', 'pnpm', 'pnpx', 'npx', 'yarn', 'npm', 'bunx', 'bun', 'vitest', 'tsc', 'make', 'composer', 'phpunit', 'pest'])
 
@@ -234,11 +238,11 @@ export function readCommand(command) {
   return out
 }
 
-// prefixGated puts `prefix` in front of every call of a tool binary by path. changed says whether it did.
+// prefixGated puts `prefix` in front of every call of a tool binary by path, and of `claude plugin test`. changed says whether it did.
 export function prefixGated(command, prefix) {
   const cmds = readCommand(command)
   if (!cmds) return { command, changed: false }
-  const at = cmds.filter((c) => GATED_BIN.test(c.first)).map((c) => c.at)
+  const at = cmds.filter(isGatedBin).map((c) => c.at)
   if (at.length === 0) return { command, changed: false }
   let out = command
   for (const i of at.sort((a, b) => b - a)) out = out.slice(0, i) + prefix + out.slice(i)
@@ -252,7 +256,7 @@ export function gatedCandidates(command) {
   const seen = new Set()
   const out = []
   for (const c of cmds) {
-    if (!TOOLS.has(base(c.first)) && !GATED_BIN.test(c.first)) continue
+    if (!TOOLS.has(base(c.first)) && !isGatedBin(c)) continue
     const key = JSON.stringify(c.argv)
     if (seen.has(key)) continue
     seen.add(key)
