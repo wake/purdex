@@ -45,6 +45,8 @@ const setWidth = (w: number) => act(() => { Object.defineProperty(window, 'inner
 const q = (id: string) => screen.queryByTestId(id)
 const rowOf = (id: string, area: 'journal-stream' | 'journal-pinned-band' = 'journal-stream') =>
   within(screen.getByTestId(area)).getAllByTestId('journal-entry').find((n) => n.getAttribute('data-entry-id') === id)!
+/** A 待確認 row opens its detail through its own labelled button (the row itself is a plain container). */
+const openOf = (id: string, area: 'journal-stream' | 'journal-pinned-band' = 'journal-stream') => within(rowOf(id, area)).getByTestId('journal-row-open')
 
 let key = ''
 const mount = (over: { roadmapOpen?: boolean } = {}) => {
@@ -77,7 +79,7 @@ describe('the 待確認 detail', () => {
   it('a click on a 待確認 row opens its detail to the left of the journal card, with the original text and the items', () => {
     mount()
     expect(q('journal-detail-card')).toBeNull()
-    fireEvent.click(rowOf('c1'))
+    fireEvent.click(openOf('c1'))
     const stack = screen.getByTestId('journal-card-stack')
     expect([...stack.children].map((c) => (c as HTMLElement).dataset.testid)).toEqual(['journal-team-column', 'journal-card'])
     expect(within(screen.getByTestId('journal-team-column')).getByTestId('journal-detail-card')).toBeTruthy()
@@ -88,29 +90,29 @@ describe('the 待確認 detail', () => {
   })
   it('the original sits in its own scrollable block', () => {
     mount()
-    fireEvent.click(rowOf('c1'))
+    fireEvent.click(openOf('c1'))
     expect(screen.getByTestId('journal-detail-text').className).toContain('overflow-y-auto')
   })
   it('a second click on the same row closes it', () => {
     mount()
-    fireEvent.click(rowOf('c1'))
-    fireEvent.click(rowOf('c1'))
+    fireEvent.click(openOf('c1'))
+    fireEvent.click(openOf('c1'))
     expect(q('journal-detail-card')).toBeNull()
     expect(readViewMemo(HOST, key).detailId).toBeNull()
   })
   it('Esc closes it, and the close button does too', () => {
     mount()
-    fireEvent.click(rowOf('c1'))
+    fireEvent.click(openOf('c1'))
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(q('journal-detail-card')).toBeNull()
-    fireEvent.click(rowOf('c1'))
+    fireEvent.click(openOf('c1'))
     fireEvent.click(screen.getByTestId('journal-detail-card-close'))
     expect(q('journal-detail-card')).toBeNull()
     expect(readViewMemo(HOST, key).detailId).toBeNull()
   })
   it('Esc typed into the terminal or a text field is that field\'s, not the detail\'s (M: a bare window listener)', () => {
     mount()
-    fireEvent.click(rowOf('c1'))
+    fireEvent.click(openOf('c1'))
     const term = document.createElement('div')
     term.className = 'xterm'
     const area = document.createElement('textarea')
@@ -127,21 +129,21 @@ describe('the 待確認 detail', () => {
   })
   it('only one is open at a time: another row replaces it', () => {
     mount()
-    fireEvent.click(rowOf('c1'))
-    fireEvent.click(rowOf('c2'))
+    fireEvent.click(openOf('c1'))
+    fireEvent.click(openOf('c2'))
     expect(screen.getAllByTestId('journal-detail')).toHaveLength(1)
     expect(screen.getByTestId('journal-detail-text').textContent).toContain('original question of c2')
     expect(readViewMemo(HOST, key).detailId).toBe('c2')
   })
   it('a row of the pinned band opens it too', () => {
     mount()
-    fireEvent.click(rowOf('c1', 'journal-pinned-band'))
+    fireEvent.click(openOf('c1', 'journal-pinned-band'))
     expect(screen.getByTestId('journal-detail-text').textContent).toContain('original question of c1')
   })
   it('it takes the roadmap place; the roadmap memory is untouched and the roadmap is back once it closes (M: closing the roadmap)', () => {
     mount({ roadmapOpen: true })
     expect(q('journal-roadmap-card')).toBeTruthy()
-    fireEvent.click(rowOf('c1'))
+    fireEvent.click(openOf('c1'))
     expect(q('journal-roadmap-card')).toBeNull()
     expect(q('journal-detail-card')).toBeTruthy()
     expect(readViewMemo(HOST, key).roadmapOpen).toBe(true)
@@ -152,14 +154,14 @@ describe('the 待確認 detail', () => {
   })
   it('with the roadmap closed, closing the detail leaves no roadmap behind', () => {
     mount({ roadmapOpen: false })
-    fireEvent.click(rowOf('c1'))
-    fireEvent.click(rowOf('c1'))
+    fireEvent.click(openOf('c1'))
+    fireEvent.click(openOf('c1'))
     expect(q('journal-roadmap-card')).toBeNull()
     expect(readViewMemo(HOST, key).roadmapOpen).toBe(false)
   })
   it('a narrow window hides it with the roadmap and brings it back when wide again; the detail id never changes (M: write the hide back)', () => {
     mount()
-    fireEvent.click(rowOf('c1'))
+    fireEvent.click(openOf('c1'))
     expect(q('journal-detail-card')).toBeTruthy()
     setWidth(800)
     expect(q('journal-detail-card')).toBeNull()

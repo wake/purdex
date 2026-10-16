@@ -23,7 +23,7 @@ describe('PinnedBand', () => {
   })
   it('a 待確認 shows 「answered n of m」 and not its checklist', () => {
     render(<PinnedBand pinned={[confirm()]} ctx={ctx()} />)
-    expect(screen.getByTestId('journal-answered').textContent).toBe('Answered 1 of 2')
+    expect(screen.getByTestId('journal-answered').textContent).toBe('1/2 answered')
     expect(screen.queryByTestId('journal-checklist')).toBeNull()
   })
   it('nothing pinned: nothing drawn', () => {
