@@ -366,6 +366,7 @@
   "journal.kind.request": "Request",
   "journal.kind.confirm": "To confirm",
   "journal.row.resolved": "Answered",
+  "journal.row.openDetail": "Open details",
   "journal.band.answered": "{{done}}/{{total}} answered",
   "journal.stream.older": "Load earlier events",
   "journal.stream.noMatch": "No matching events",

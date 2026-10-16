@@ -67,16 +67,32 @@ describe('JournalRow', () => {
     expect(screen.getByTestId('journal-answered').textContent).toBe('已答 1／2 項')
     expect(document.body.textContent).not.toContain('journal.band')
   })
-  it('clicking a 待確認 row opens its detail; other rows are not clickable', () => {
+  it('a 待確認 row opens its detail through one labelled button; other rows have none', () => {
     const c = ctxOf()
     const { unmount } = render(<JournalRow entry={confirm()} ctx={c} />)
-    fireEvent.click(screen.getByTestId('journal-entry'))
+    const open = screen.getByRole('button', { name: 'Open details' })
+    fireEvent.click(open)
     expect(c.onToggleDetail).toHaveBeenCalledWith('c1')
     unmount()
     const c2 = ctxOf()
     render(<JournalRow entry={entry()} ctx={c2} />)
+    expect(screen.queryByRole('button', { name: 'Open details' })).toBeNull()
     fireEvent.click(screen.getByTestId('journal-entry'))
     expect(c2.onToggleDetail).not.toHaveBeenCalled()
+  })
+  it('the row itself is a plain container, and no button sits inside another button (M: a role="button" row holding the pin button)', () => {
+    const { container } = render(<JournalRow entry={confirm({ refs: ['#2829'] })} ctx={ctxOf()} />)
+    const row = screen.getByTestId('journal-entry')
+    expect(row.getAttribute('role')).toBeNull()
+    expect(row.getAttribute('tabindex')).toBeNull()
+    expect(container.querySelectorAll('[role="button"]')).toHaveLength(0)
+    expect(container.querySelectorAll('button button, button a, [role="button"] button, [role="button"] a')).toHaveLength(0)
+    expect(container.querySelectorAll('button')).toHaveLength(2) // open details, pin
+  })
+  it('the open-details button names itself in Chinese too', () => {
+    useI18nStore.getState().setLocale('zh-TW')
+    render(<JournalRow entry={confirm()} ctx={ctxOf()} />)
+    expect(screen.getByRole('button', { name: '打開詳情' })).toBeTruthy()
   })
   it('the pin button toggles the pin and does not open the detail', () => {
     const c = ctxOf()

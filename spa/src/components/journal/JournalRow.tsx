@@ -1,7 +1,7 @@
 // spa/src/components/journal/JournalRow.tsx — one entry of the stream or of the pinned band (J-2c, spec §11): time, kind chip,
 // actor (`A → B`), text, refs; the person's name highlighted in actor and text. A 待確認 row shows its checklist read-only (Haiku
 // ticks it; an answered item is struck through and checked), has NO coloured left edge (the yellow is the chip and the boxes only)
-// and opens its detail on click. The pin button is always in the DOM but only visible on hover (or while pinned).
+// and opens its detail through a button covering the row. The pin button is always in the DOM but only visible on hover (or while pinned).
 import { CheckSquare, PushPin, Square } from '@phosphor-icons/react'
 import { KindChip } from './KindChip'
 import { PersonMark } from './PersonMark'
@@ -34,14 +34,22 @@ export function JournalRow({ entry, compact, ctx }: { entry: JournalEntry; compa
       data-entry-id={entry.id}
       data-kind={entry.kind}
       data-selected={ctx.selectedId === entry.id || undefined}
-      role={confirm ? 'button' : undefined}
-      tabIndex={confirm ? 0 : undefined}
-      onClick={confirm ? open : undefined}
-      onKeyDown={confirm ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open() } } : undefined}
-      className={`group relative flex gap-2 py-1.5 px-1 -mx-1 rounded border-b border-border-subtle/50 last:border-b-0 ${confirm ? 'cursor-pointer hover:bg-surface-hover' : ''} ${ctx.selectedId === entry.id ? 'bg-surface-hover ring-1 ring-border-active' : ''}`}
+      className={`group relative flex gap-2 py-1.5 px-1 -mx-1 rounded border-b border-border-subtle/50 last:border-b-0 ${ctx.selectedId === entry.id ? 'bg-surface-hover ring-1 ring-border-active' : ''}`}
     >
-      <span className="w-9 shrink-0 tabular-nums text-[10.5px] text-text-muted pt-0.5">{timeOf(entry.at)}</span>
-      <div className="min-w-0 flex-1 pr-5">
+      {confirm && (
+        // The row is a plain container; this button covers it (under the content, which lets clicks through except on its own
+        // links and the pin button), so a button never sits inside another button.
+        <button
+          type="button"
+          data-testid="journal-row-open"
+          aria-label={t('journal.row.openDetail')}
+          title={t('journal.row.openDetail')}
+          onClick={open}
+          className="absolute inset-0 rounded cursor-pointer hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-border-active"
+        />
+      )}
+      <span className={`relative w-9 shrink-0 tabular-nums text-[10.5px] text-text-muted pt-0.5 ${confirm ? 'pointer-events-none' : ''}`}>{timeOf(entry.at)}</span>
+      <div className={`relative min-w-0 flex-1 pr-5 ${confirm ? 'pointer-events-none' : ''}`}>
         <div className="flex items-center gap-1.5 flex-wrap">
           <KindChip kind={entry.kind} />
           <span className="text-[10.5px] text-text-secondary break-words min-w-0"><PersonMark text={entry.actor} name={ctx.personName} /></span>
@@ -65,7 +73,7 @@ export function JournalRow({ entry, compact, ctx }: { entry: JournalEntry; compa
             ))}
           </ul>
         )}
-        {!compact && <RefChips refs={entry.refs} remoteUrl={ctx.remoteUrl} />}
+        {!compact && <div className="pointer-events-auto"><RefChips refs={entry.refs} remoteUrl={ctx.remoteUrl} /></div>}
       </div>
       <button
         type="button"
@@ -74,7 +82,7 @@ export function JournalRow({ entry, compact, ctx }: { entry: JournalEntry; compa
         aria-pressed={entry.pinned}
         title={label}
         onMouseDown={keepFocus}
-        onClick={(e) => { e.stopPropagation(); ctx.onTogglePin(entry) }}
+        onClick={() => ctx.onTogglePin(entry)}
         className={`absolute top-1 right-0.5 p-0.5 rounded cursor-pointer hover:bg-surface-hover focus:opacity-100 ${entry.pinned ? 'text-text-primary' : 'text-text-muted opacity-0 group-hover:opacity-100'}`}
       >
         <PushPin size={12} weight={entry.pinned ? 'fill' : 'regular'} />
