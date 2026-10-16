@@ -275,6 +275,18 @@ type originSource interface {
 type peerStandDowner struct{ m *Module }
 
 func (s peerStandDowner) StandDown(ctx context.Context, own watch.Holder, winner watch.HolderAnswer) error {
+	return peerNotifier(s).Notify(ctx, own, standDownText(winner))
+}
+
+// WatcherNotifier delivers a [負載守門] text to this host's own watcher: the stand-down notice and the events.
+type WatcherNotifier interface {
+	Notify(ctx context.Context, own watch.Holder, text string) error
+}
+
+// peerNotifier is the WatcherNotifier through the peers module (see peerStandDowner for the origin and the address).
+type peerNotifier struct{ m *Module }
+
+func (s peerNotifier) Notify(ctx context.Context, own watch.Holder, text string) error {
 	reg := s.m.core.Registry
 	osvc, ok := reg.Get(peers.OriginResolverKey)
 	if !ok {
@@ -310,12 +322,12 @@ func (s peerStandDowner) StandDown(ctx context.Context, own watch.Holder, winner
 	alias := s.m.core.Cfg.PeerAlias()
 	s.m.core.CfgMu.RUnlock()
 	to := alias + "/" + origin.Ref
-	resp, err := sender.SendSelfNotice(ctx, ipeers.SendRequest{To: to, Text: standDownText(winner), OriginInbox: inbox})
+	resp, err := sender.SendSelfNotice(ctx, ipeers.SendRequest{To: to, Text: text, OriginInbox: inbox})
 	if err != nil {
 		return err
 	}
 	if resp.Result == ipeers.ResultDeliveryUncertain {
-		s.m.logf("[watch] stand-down notice to %s: delivery uncertain; not resent", to)
+		s.m.logf("[watch] notice to %s: delivery uncertain; not resent", to)
 	}
 	return nil
 }
