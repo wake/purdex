@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/wake/purdex/internal/execstat"
 )
 
 // Status is how a probe went (spec §5).
@@ -93,7 +95,7 @@ func (r Runner) Run(ctx context.Context, alias string) Result {
 
 	stdout := &capped{max: MaxStdout, onFull: cancel}
 	stderr := &headTail{max: MaxStderr}
-	cmd := exec.CommandContext(cctx, ssh, Args(alias)...)
+	cmd := execstat.CommandContext(cctx, "fleet.ssh", ssh, Args(alias)...)
 	cmd.Stdin = nil // /dev/null
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.WaitDelay = time.Second

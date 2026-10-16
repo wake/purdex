@@ -32,7 +32,8 @@ func forkSites(src string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var sites []string
+	var sites, ptySites []string
+	noted := false               // a NoteStarted() call: the file counts the forks the pty library makes
 	names := map[string]string{} // the name an import is bound to → its path
 	for _, imp := range f.Imports {
 		path, _ := strconv.Unquote(imp.Path.Value)
@@ -61,8 +62,16 @@ func forkSites(src string) ([]string, error) {
 			}
 			if path, bound := names[id.Name]; bound && id.Obj == nil { // Obj == nil: the package, not a local of that name
 				if forkAPIs[path][x.Sel.Name] {
-					sites = append(sites, id.Name+"."+x.Sel.Name+" at "+fset.Position(x.Pos()).String())
+					site := id.Name + "." + x.Sel.Name + " at " + fset.Position(x.Pos()).String()
+					if path == "github.com/creack/pty" {
+						ptySites = append(ptySites, site)
+					} else {
+						sites = append(sites, site)
+					}
 				}
+			}
+			if x.Sel.Name == "NoteStarted" {
+				noted = true
 			}
 		case *ast.StarExpr: // *exec.Cmd is only a reference; a use of the type that is not behind a star creates a value
 			if isExecCmd(x.X, names) {
@@ -75,6 +84,9 @@ func forkSites(src string) ([]string, error) {
 		}
 		return true
 	})
+	if !noted { // pty.Start* starts the Cmd itself, so it is a counted fork only next to execstat's NoteStarted
+		sites = append(sites, ptySites...)
+	}
 	return sites, nil
 }
 
@@ -105,25 +117,7 @@ var cliOnly = map[string]string{
 // pending are the daemon's files that still fork on their own. The list may only shrink: each batch of the plan (D0b, D0c)
 // moves files onto Command/CommandContext and deletes them from here (the value says which batch); a new fork in the daemon has
 // to use the helpers.
-var pending = map[string]string{
-	"internal/agent/hook_version.go":                "D0c",
-	"internal/agent/process_info.go":                "D0c",
-	"internal/fleet/run.go":                         "D0c",
-	"internal/gate/stragglers.go":                   "D0c",
-	"internal/module/dev/build.go":                  "D0c",
-	"internal/module/dev/daemon.go":                 "D0c",
-	"internal/module/dev/module.go":                 "D0c",
-	"internal/module/dev/stream.go":                 "D0c",
-	"internal/module/peers/sweep.go":                "D0c",
-	"internal/module/session/home_reader_darwin.go": "D0c",
-	"internal/module/session/shell_resolve.go":      "D0c",
-	"internal/module/session/watcher.go":            "D0c",
-	"internal/peers/ccuds/virtual_peer.go":          "D0c",
-	"internal/peers/proxyhelper/client.go":          "D0c",
-	"internal/peers/registry.go":                    "D0c",
-	"internal/terminal/relay.go":                    "D0c",
-	"internal/tmux/executor.go":                     "D0c",
-}
+var pending = map[string]string{}
 
 func TestEveryForkInTheDaemonGoesThroughTheHelpers(t *testing.T) {
 	root := filepath.Join("..", "..")
@@ -192,27 +186,28 @@ func TestEveryForkInTheDaemonGoesThroughTheHelpers(t *testing.T) {
 
 func TestTheGuardSeesEveryWayToFork(t *testing.T) {
 	cases := map[string]bool{
-		`package p; import "os/exec"; var _ = exec.Command("ps")`:                                           true,
-		`package p; import "os/exec"; func f(c context.Context) { exec.CommandContext(c, "ps") }`:           true,
-		`package p; import ex "os/exec"; var _ = ex.Command("ps")`:                                          true,  // another name
-		`package p; import . "os/exec"; var _ = Command("ps")`:                                              true,  // dot import
-		`package p; import "os/exec"; var _ = &exec.Cmd{Path: "x"}`:                                         true,  // a literal
-		`package p; import "os/exec"; func f() { c := new(exec.Cmd); c.Start() }`:                           true,  // new
-		`package p; import ex "os/exec"; func f() { var c ex.Cmd; c.Start() }`:                              true,  // a variable
-		`package p; import "os/exec"; var cmds [1]exec.Cmd; var _ = cmds`:                                   true,  // an array
-		`package p; import "os/exec"; type t struct{ cmd exec.Cmd }`:                                        true,  // a field
-		`package p; import "os/exec"; type A = exec.Cmd; var a A`:                                           true,  // an alias
-		`package p; import "os/exec"; var s []*exec.Cmd; var _ = s`:                                         false, // references
-		`package p; import "os/exec"; func f(exec struct{ Cmd int }) int { return exec.Cmd }`:               false, // a local named exec
-		`package p; import "os/exec"; func f(c *exec.Cmd) { c.Start() }`:                                    false, // a parameter is not a creation
-		`package p; import "os"; var _, _ = os.StartProcess("x", nil, nil)`:                                 true,
-		`package p; import "syscall"; var _, _ = syscall.ForkExec("x", nil, nil)`:                           true,
-		`package p; import "github.com/creack/pty"; var _, _ = pty.Start(nil)`:                              true,
-		`package p; import "github.com/creack/pty"; var _, _ = pty.StartWithSize(nil, nil)`:                 true,
-		`package p; import "github.com/wake/purdex/internal/execstat"; var _ = execstat.Command("t", "ps")`: false,
-		`package p; import "os/exec"; var e *exec.ExitError; var _ = e`:                                     false, // a type, not a fork
-		`package p; import "os/exec"; func f(exec struct{ Command func() }) { exec.Command() }`:             false, // a local named exec
-		`package p; import "os"; var _ = os.Getpid()`:                                                       false,
+		`package p; import "os/exec"; var _ = exec.Command("ps")`:                                                                          true,
+		`package p; import "os/exec"; func f(c context.Context) { exec.CommandContext(c, "ps") }`:                                          true,
+		`package p; import ex "os/exec"; var _ = ex.Command("ps")`:                                                                         true,  // another name
+		`package p; import . "os/exec"; var _ = Command("ps")`:                                                                             true,  // dot import
+		`package p; import "os/exec"; var _ = &exec.Cmd{Path: "x"}`:                                                                        true,  // a literal
+		`package p; import "os/exec"; func f() { c := new(exec.Cmd); c.Start() }`:                                                          true,  // new
+		`package p; import ex "os/exec"; func f() { var c ex.Cmd; c.Start() }`:                                                             true,  // a variable
+		`package p; import "os/exec"; var cmds [1]exec.Cmd; var _ = cmds`:                                                                  true,  // an array
+		`package p; import "os/exec"; type t struct{ cmd exec.Cmd }`:                                                                       true,  // a field
+		`package p; import "os/exec"; type A = exec.Cmd; var a A`:                                                                          true,  // an alias
+		`package p; import "os/exec"; var s []*exec.Cmd; var _ = s`:                                                                        false, // references
+		`package p; import "os/exec"; func f(exec struct{ Cmd int }) int { return exec.Cmd }`:                                              false, // a local named exec
+		`package p; import "os/exec"; func f(c *exec.Cmd) { c.Start() }`:                                                                   false, // a parameter is not a creation
+		`package p; import "os"; var _, _ = os.StartProcess("x", nil, nil)`:                                                                true,
+		`package p; import "syscall"; var _, _ = syscall.ForkExec("x", nil, nil)`:                                                          true,
+		`package p; import "github.com/creack/pty"; var _, _ = pty.Start(nil)`:                                                             true,
+		`package p; import "github.com/creack/pty"; var _, _ = pty.StartWithSize(nil, nil)`:                                                true,
+		`package p; import "github.com/creack/pty"; func f(c interface{ NoteStarted() }) { pty.StartWithSize(nil, nil); c.NoteStarted() }`: false, // counted by hand
+		`package p; import "github.com/wake/purdex/internal/execstat"; var _ = execstat.Command("t", "ps")`:                                false,
+		`package p; import "os/exec"; var e *exec.ExitError; var _ = e`:                                                                    false, // a type, not a fork
+		`package p; import "os/exec"; func f(exec struct{ Command func() }) { exec.Command() }`:                                            false, // a local named exec
+		`package p; import "os"; var _ = os.Getpid()`:                                                                                      false,
 	}
 	for src, want := range cases {
 		sites, err := forkSites(src)

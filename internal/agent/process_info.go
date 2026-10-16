@@ -22,7 +22,7 @@ var runPS = defaultRunPS
 // time, success or failure; never the arguments or output).
 func defaultRunPS(ctx context.Context, args ...string) ([]byte, error) {
 	t0 := time.Now()
-	out, err := exec.CommandContext(ctx, "ps", args...).Output()
+	out, err := execstat.CommandContext(ctx, "agent.ps", "ps", args...).Output()
 	execstat.PS.Observe(time.Since(t0))
 	return out, err
 }
