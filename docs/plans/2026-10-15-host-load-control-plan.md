@@ -348,15 +348,12 @@ interface, plus one test with the real agent module registered in core):
    what it may and must not do, `pdx watch ack`, the rest handshake, the stand-down notice. `start_prompt` /
    `wake_prompt` in the settings replace the built-ins when set.
 5. Slot counts (spec §12.4 "Slot counts", user decision 10-16): the skill's procedure (read `pdx gate status --json`,
-   `pdx gate set slots.<class>=<n>` here or `ssh <alias> pdx gate set …` there, within that host's `slot_bounds`, read
-   back, tell the person host, class, old → new and why; one change per host and class per 10 min). The CLI side
+   `pdx gate set --expect <read value> slots.<class>=<n>` here or `ssh <alias> pdx gate set …` there, read back, tell
+   the person host, class, old → new and why; no bounds or rate limit beyond the gate's range 0–64, user decision
+   10-16). The CLI side
    needs one addition, made here: `pdx gate set` gains `--expect <old>` (the write is refused when the current value
-   differs, so two writers cannot undo each other unseen) and prints the value read back. The `watch` row gains
-   `slot_bounds` (spec §12.2; user decision 10-16: adjustable, default `{"heavy": [0, 3], "light": [0, 5]}`) in
-   `watchsettings.Settings`, `Default()` and the normaliser (each class `[min, max]`, 0 ≤ min ≤ max ≤ 64; a missing
-   key on read = the default, as for the other delivery keys), shown and set by `pdx watch config`. Keeping within
-   them, the 10 min rule, the other host and the message are the watcher's behaviour (the skill), checked in the live
-   acceptance below, not enforced by the CLI.
+   differs, so two writers cannot undo each other unseen) and prints the value read back. The other host and the
+   message are the watcher's behaviour (the skill), checked in the live acceptance below.
 6. Lead sets up, once: the `purdex-watch` branch of the mlab repo (from its main, notes under `watch/`) and the
    `workdir` checkout `~/Workspace/wake/mlab-purdex-watch` on a26 and mlab (a separate clone), and trusts that folder
    in Claude Code once on each host (the first-run "trust this folder?" question would stop a daemon-started watcher).
@@ -367,18 +364,17 @@ not start twice; two hosts announce at once → one start; wake a resting one �
 transcript gone → a start; patrol rest after the idle time (answer / no answer), `/exit` only to the same frame, no
 signal to a pid whose start time changed (pid reused), SIGKILL only after SIGTERM's 10 s; resident never rests;
 custom prompts used; `pdx gate set --expect`: a raise and a lower each succeed with the right old value and print the
-read-back, a changed value is refused and leaves the file as it was; `slot_bounds`: default on a row without it,
-round trip, min > max / -1 / 65 / a missing class refused.
+read-back, a changed value is refused and leaves the file as it was.
 Live acceptance (after deploy, mlab, with the person): the watcher is asked to raise `slots.heavy` 1 → 2, then to
 lower it back; each time its message names the host, the class, old → new and why, and `pdx gate status --json`
-shows the new value; asked to go to 4, it declines (bound); after the person sets `slot_bounds.heavy` to `[0, 4]`
-the same request is carried out; asked to pause light, it sets `slots.light=0`, a `vitest related` then waits with
-the reason `paused`, and it raises light again when asked; a second change of the same class within 10 min is
-declined; the same raise on a26 by `ssh air26 pdx gate set …` from mlab.
+shows the new value; asked to pause light, it sets `slots.light=0`, a `vitest related` then waits with the reason
+`paused`, and it raises light again when asked; the person changes `slots.heavy` by hand between the watcher's read
+and its write → its `--expect` write is refused and it reads again instead of overwriting; the same raise on a26 by
+`ssh air26 pdx gate set …` from mlab.
 
 ### W3c — the gate: a slot count of 0 pauses the class (lease member, one PR, before W3b)
 
-User decision 10-16 (spec §5 `slots`, §12.2 `slot_bounds`): `slots.heavy` / `slots.light` accept 0. Today
+User decision 10-16 (spec §5 `slots`): `slots.heavy` / `slots.light` accept 0. Today
 `parseSlots` reads them with `r.Int(…, 1, 64)` and a 0 is refused (back to the default), so the watcher must not set
 0 until this ships.
 1. `parseSlots` takes 0..64; `pdx gate set slots.<class>=0` and profiles accept it.

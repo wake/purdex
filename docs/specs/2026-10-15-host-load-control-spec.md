@@ -397,7 +397,6 @@ daemon settings. Not Profile Sync: Profile Sync carries the App's own stores and
 | `workdir` | `~/Workspace/wake/mlab-purdex-watch` (both hosts) | the watcher's directory on this host: a checkout of the mlab repo used only for its `purdex-watch` branch |
 | `start_prompt` | built-in | the first prompt of a new watcher; at most 4 KB, no control characters (no newline: it is typed into a shell, §12.4) |
 | `wake_prompt` | built-in | the prompt that resumes a resting watcher; same limits |
-| `slot_bounds` | `{"heavy": [0, 3], "light": [0, 5]}` | the range the watcher may set this host's gate slot counts to (§12.4 "Slot counts"); user decision 10-16: adjustable, these defaults. Each class `[min, max]` with 0 ≤ min ≤ max ≤ 64; 0 pauses the class (§5) |
 
 ### 12.3 Where the watcher is, and delivery (W2)
 
@@ -504,15 +503,12 @@ model name.
   `watch` thresholds by itself).
 - **Slot counts** (the user's 10-16 decision, made concrete): the watcher reads the value first (`pdx gate status
   --json`), changes it with `pdx gate set slots.<heavy|light>=<n>` on the host it runs on (the gate reads its config at
-  every run, so no daemon call is needed), or with `ssh <alias> pdx gate set …` for the other gated host, and stays
-  within that host's `slot_bounds` (§12.2; user decision 10-16: adjustable, default heavy 0–3 and light 0–5; 0 pauses
-  the class, §5: its message then says what is paused and why, and it raises the count again as soon as the reason is
-  gone), read
-  with `pdx watch config get` (on the other host over the same `ssh`). A count already outside the bounds (set by the
-  person) may be moved toward them, never further out. It reads the
-  value again after the write and tells the person the host, the class, old → new and why; a write that fails or reads
-  back differently is reported as failed, not retried. One change per host and class per 10 min, so two quick changes
-  cannot undo each other unseen.
+  every run, so no daemon call is needed), or with `ssh <alias> pdx gate set …` for the other gated host. **No bounds
+  and no rate limit beyond the gate's own range 0–64** (user decision 10-16: the watcher, and the person when there
+  is no watcher, need full control); 0 pauses the class (§5). The write carries `--expect <the value just read>`, so a
+  change the person or another writer made in between is never overwritten unseen: a refused write is read again and
+  reconsidered. It reads the value again after the write and tells the person the host, the class, old → new and why
+  (for a pause: what is paused); a write that fails or reads back differently is reported as failed.
 - Live from the first deploy (10-15: "go live and sample while it runs"); thresholds start from W0's first data and
   are tuned on the running system (§12.7).
 
