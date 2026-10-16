@@ -1,11 +1,18 @@
 // spa/src/lib/fleet/config-store.ts — the fleet's host-config rows as the Hosts page edits them (fleet spec §8.2, plan F-2a2).
 //
 // The probe-host list lives on BOTH daemons: each daemon's row carries its own `ssh_alias`, everything else (id, name, look)
-// is the same. `mergedProbeEntries` folds the two copies into one list keyed by id; `saveProbeList` writes it back to every
-// listed daemon with that daemon's own revision. A 409 from either reloads both and says the list changed elsewhere; a 400's
-// text is returned for the dialog. A GET that carries `dropped` (rows the daemon left out of its answer, e.g. an ssh config
-// that could not be read for a moment) or `invalid` must NOT be written back silently — that would delete the left-out rows —
-// so a save then returns `confirm` with the reasons, and goes through only when called again with `confirmDropped`.
+// is the same. `mergedProbeEntries` folds the two copies into one list keyed by id for display; a save is an EDIT (`ProbeEdit`:
+// upsert one row, remove one, or rewrite one the daemons disagree on) applied to EACH daemon's OWN rows, so a row the reader did
+// not touch keeps every daemon's own version (a mismatch is never silently overwritten). The writes go out in parallel, each
+// with that daemon's revision; the store then reads both again and returns what each daemon took. A GET that carries `dropped`
+// (rows the daemon left out of its answer, e.g. an ssh config that could not be read for a moment) or `invalid` must NOT be
+// written back silently — that would delete the left-out rows — so a save then returns `confirm` with the reasons, and goes
+// through only when called again with `confirmDropped`.
+//
+// An edit remembers what it started from (`ProbeBase`: each daemon's revision and copy of the row). When a daemon's list moved
+// since, the edit goes through only if that daemon's copy of THE ROW is still what the edit started from (or already what the
+// edit writes); otherwise the save returns `changed` and waits for `confirmChanged` — a retry after "A saved, B answered 409"
+// never overwrites B's newer content unseen.
 //
 // F-2b (the sidebar cells) opens the probe section on a row with `requestProbeFocus(id)`: the section highlights the row once
 // and clears the request (`focusProbe` back to null). The request waits in the store until a mounted section consumes it.
@@ -32,6 +39,8 @@ export interface DaemonFleetConfig {
   probe: Versioned<ProbeRow[]>
   fleet: Versioned<FleetRow>
   aliases: string[]
+  /** False when the daemon's alias list could not be read: its aliases cannot be verified here (the daemon still checks). */
+  aliasesLoaded: boolean
 }
 
 export interface DroppedNotice { hostId: string; count: number; reasons: string[]; invalid: boolean }
@@ -39,8 +48,17 @@ export interface DroppedNotice { hostId: string; count: number; reasons: string[
 export interface DaemonOutcome { hostId: string; ok: boolean; conflict?: boolean; text?: string }
 /** A probe row that cannot be written to every daemon: `missing` have no alias for it, `presentOn` have one. */
 export interface MissingAlias { id: string; name: string; missing: string[]; presentOn: string[] }
+/** What a save changes: one row written, one removed, or one row the daemons disagree on made equal (to the first daemon's copy). */
+export type ProbeEdit =
+  | { kind: 'upsert'; entry: ProbeEntry }
+  | { kind: 'remove'; id: string }
+  | { kind: 'rewrite'; id: string }
+/** Each daemon's revision of the probe list and copy of the edited row when the edit began. */
+export interface ProbeBase { revisions: Record<string, number>; rows: Record<string, ProbeRow | null> }
 export type SaveResult =
   | { kind: 'saved' }
+  /** A daemon's copy of the edited row is not what the edit started from: ask, then save with `confirmChanged`. */
+  | { kind: 'changed'; hosts: string[] }
   | { kind: 'confirm'; notices: DroppedNotice[] }
   | { kind: 'missing_alias'; rows: MissingAlias[] }
   /** At least one daemon answered 409; `outcomes` says which daemons took the write and which did not. */
@@ -53,6 +71,7 @@ const EMPTY: DaemonFleetConfig = {
   probe: { items: [], revision: 0, ...emptyMarks },
   fleet: { items: { order: [], peer_ssh_alias: '', enabled: true }, revision: 0, ...emptyMarks },
   aliases: [],
+  aliasesLoaded: false,
 }
 
 interface State {
@@ -61,7 +80,7 @@ interface State {
   focusProbe: string | null
   load: (hostId: string) => Promise<void>
   loadMany: (hostIds: string[]) => Promise<void>
-  saveProbeList: (hostIds: string[], entries: ProbeEntry[], opts?: { confirmDropped?: boolean }) => Promise<SaveResult>
+  saveProbe: (hostIds: string[], edit: ProbeEdit, opts?: { confirmDropped?: boolean; confirmChanged?: boolean; base?: ProbeBase }) => Promise<SaveResult>
   saveFleetRow: (hostId: string, row: FleetRow, opts?: { confirmDropped?: boolean }) => Promise<SaveResult>
   requestProbeFocus: (id: string) => void
   clearProbeFocus: () => void
@@ -85,7 +104,11 @@ const queued = <T>(fn: () => Promise<T>): Promise<T> => {
   return next
 }
 
-/** Per daemon host: the newest read in flight. An older read that answers later is dropped, so it cannot put an old revision back. */
+/**
+ * Per daemon host: the newest read in flight. An older read that answers later is dropped, so it cannot put an old revision
+ * back. The counter is global and never reset (a read started before `reset()` can never match a number handed out after it).
+ */
+let loadCounter = 0
 const loadSeq = new Map<string, number>()
 
 export const useFleetConfigStore = create<State>((set, get) => ({
@@ -93,14 +116,15 @@ export const useFleetConfigStore = create<State>((set, get) => ({
   focusProbe: null,
 
   load: async (hostId) => {
-    const seq = (loadSeq.get(hostId) ?? 0) + 1
+    const seq = ++loadCounter
     loadSeq.set(hostId, seq)
     const current = () => loadSeq.get(hostId) === seq
     set((s) => ({ byHost: { ...s.byHost, [hostId]: s.byHost[hostId] ?? EMPTY } }))
     try {
-      const [cfg, aliases] = await Promise.all([fetchFleetConfig(hostId), fetchSshAliases(hostId).catch(() => [] as string[])])
+      let aliasesLoaded = true
+      const [cfg, aliases] = await Promise.all([fetchFleetConfig(hostId), fetchSshAliases(hostId).catch(() => { aliasesLoaded = false; return [] as string[] })])
       if (!current()) return
-      set((s) => ({ byHost: { ...s.byHost, [hostId]: { status: 'ready', probe: cfg.probe, fleet: cfg.fleet, aliases } } }))
+      set((s) => ({ byHost: { ...s.byHost, [hostId]: { status: 'ready', probe: cfg.probe, fleet: cfg.fleet, aliases, aliasesLoaded } } }))
     } catch (err) {
       if (!current()) return
       const error = err instanceof Error ? err.message : String(err)
@@ -110,30 +134,61 @@ export const useFleetConfigStore = create<State>((set, get) => ({
 
   loadMany: async (hostIds) => { await Promise.all(hostIds.map((id) => get().load(id))) },
 
-  saveProbeList: (hostIds, entries, opts) => queued(async (): Promise<SaveResult> => {
+  saveProbe: (hostIds, edit, opts) => queued(async (): Promise<SaveResult> => {
     const { byHost } = get()
     const notRead = hostIds.find((id) => byHost[id]?.status !== 'ready')
     if (notRead) return { kind: 'error', text: byHost[notRead]?.error ?? 'not loaded', outcomes: [] }
-    // A daemon refuses a row whose alias it does not know (`unknown_ssh_alias`), and an empty alias is unknown: sending one
-    // would half-succeed on every save. A row without an alias for a target daemon is refused here, never sent.
-    const missing = missingAliases(hostIds, entries)
-    if (missing.length) return { kind: 'missing_alias', rows: missing }
+    const id = edit.kind === 'upsert' ? edit.entry.id : edit.id
+    const rowOf = (h: string): ProbeRow | null => byHost[h].probe.items.find((r) => r.id === id) ?? null
+
+    // Which daemons are written, and the list each one gets: ITS OWN rows with the edit applied.
+    let targets = hostIds
+    let build: (h: string) => ProbeRow[]
+    let intended: (h: string) => ProbeRow | null = () => null
+    if (edit.kind === 'upsert') {
+      // A daemon refuses a row whose alias it does not know (`unknown_ssh_alias`), and an empty alias is unknown: sending one
+      // would half-succeed on every save. A row without a usable alias for a target daemon is refused here, never sent.
+      const missing = aliasProblems(hostIds, edit.entry, byHost)
+      if (missing) return { kind: 'missing_alias', rows: [missing] }
+      intended = (h) => rowFromEntry(edit.entry, h)
+      build = (h) => {
+        const mine = byHost[h].probe.items
+        const row = rowFromEntry(edit.entry, h)
+        return mine.some((r) => r.id === id) ? mine.map((r) => (r.id === id ? row : r)) : [...mine, row]
+      }
+    } else if (edit.kind === 'remove') {
+      build = (h) => byHost[h].probe.items.filter((r) => r.id !== id)
+    } else {
+      const canonical = hostIds.map(rowOf).find((r): r is ProbeRow => r !== null)
+      targets = canonical ? hostIds.filter((h) => { const r = rowOf(h); return r !== null && lookKey(r) !== lookKey(canonical) }) : []
+      if (!canonical || targets.length === 0) return { kind: 'saved' }
+      build = (h) => byHost[h].probe.items.map((r) => (r.id === id ? { ...canonical, ssh_alias: r.ssh_alias } : r))
+    }
+
     if (!opts?.confirmDropped) {
-      const notices = noticesOf(hostIds, byHost, (c) => c.probe)
+      const notices = noticesOf(targets, byHost, (c) => c.probe)
       if (notices.length) return { kind: 'confirm', notices }
     }
-    const settled = await Promise.allSettled(hostIds.map((hostId) => {
-      const rows: ProbeRow[] = entries.map((e) => {
-        const row: ProbeRow = { id: e.id, name: e.name, ssh_alias: e.aliases[hostId], icon: e.icon, icon_weight: e.icon_weight }
-        if (e.colors) row.colors = e.colors
-        return row
-      })
-      return putProbeHosts(hostId, rows, byHost[hostId].probe.revision)
-    }))
+
+    // The revision each daemon is written at: the current one (the list we build from is the current one). If the daemon's list
+    // moved since the edit began, its copy of the edited row must still be what the edit started from, or already what it writes.
+    const revisions: Record<string, number> = {}
+    const changed: string[] = []
+    for (const h of targets) {
+      const cur = byHost[h].probe
+      const baseRev = opts?.base?.revisions[h]
+      revisions[h] = cur.revision
+      if (baseRev === undefined || baseRev === cur.revision || opts?.confirmChanged) continue
+      const now = rowOf(h)
+      if (!sameRow(now, opts?.base?.rows[h] ?? null) && !sameRow(now, intended(h))) changed.push(h)
+    }
+    if (changed.length) return { kind: 'changed', hosts: changed }
+
+    const settled = await Promise.allSettled(targets.map((h) => putProbeHosts(h, build(h), revisions[h])))
     // Whatever happened, the revisions moved or may have: read both again (a half-written pair shows as it is).
     await get().loadMany(hostIds)
     const outcomes: DaemonOutcome[] = settled.map((r, i) => {
-      const hostId = hostIds[i]
+      const hostId = targets[i]
       if (r.status === 'fulfilled') return { hostId, ok: true }
       const e: unknown = r.reason
       if (e instanceof HostConfigConflictError) return { hostId, ok: false, conflict: true }
@@ -178,8 +233,48 @@ export function missingAliases(hostIds: string[], entries: ProbeEntry[]): Missin
   return out
 }
 
-const sameLook = (a: ProbeRow, b: ProbeRow): boolean =>
-  a.name === b.name && a.icon === b.icon && a.icon_weight === b.icon_weight && JSON.stringify(a.colors ?? null) === JSON.stringify(b.colors ?? null)
+/** The daemons where `entry` has no usable alias: none given, or one the daemon's loaded alias list does not carry. */
+function aliasProblems(hostIds: string[], entry: ProbeEntry, byHost: Record<string, DaemonFleetConfig>): MissingAlias | null {
+  const bad = (h: string) => {
+    const alias = entry.aliases[h]
+    return !alias || (byHost[h].aliasesLoaded && !byHost[h].aliases.includes(alias))
+  }
+  const missing = hostIds.filter(bad)
+  return missing.length ? { id: entry.id, name: entry.name, missing, presentOn: hostIds.filter((h) => !bad(h)) } : null
+}
+
+function rowFromEntry(e: ProbeEntry, hostId: string): ProbeRow {
+  const row: ProbeRow = { id: e.id, name: e.name.trim(), ssh_alias: e.aliases[hostId], icon: e.icon, icon_weight: e.icon_weight }
+  if (e.colors) row.colors = e.colors
+  return row
+}
+
+const DEFAULT_WEIGHT = 'regular'
+
+/** Key order and hex case do not matter: the same colours compare equal however the daemon wrote them. */
+function canon(v: unknown): unknown {
+  if (typeof v === 'string') return /^#[0-9a-f]{6}$/i.test(v) ? v.toLowerCase() : v
+  if (Array.isArray(v)) return v.map(canon)
+  if (v && typeof v === 'object') {
+    return Object.fromEntries(Object.entries(v as Record<string, unknown>).filter(([, x]) => x !== undefined).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([k, x]) => [k, canon(x)]))
+  }
+  return v
+}
+
+/** What two daemons must agree on: the name and the look, with an empty icon weight meaning the default weight. */
+const lookKey = (r: ProbeRow): string => JSON.stringify(canon({ name: r.name, icon: r.icon, weight: r.icon_weight || DEFAULT_WEIGHT, colors: r.colors ?? null }))
+const sameRow = (a: ProbeRow | null, b: ProbeRow | null): boolean => (a === null || b === null ? a === b : a.ssh_alias === b.ssh_alias && lookKey(a) === lookKey(b))
+
+/** The revisions and the edited row's copies to remember when an edit begins (`id` null: no row yet). */
+export function probeBaseOf(hostIds: string[], byHost: Record<string, DaemonFleetConfig>, id: string | null): ProbeBase {
+  const revisions: Record<string, number> = {}
+  const rows: Record<string, ProbeRow | null> = {}
+  for (const h of hostIds) {
+    revisions[h] = byHost[h]?.probe.revision ?? 0
+    rows[h] = id === null ? null : byHost[h]?.probe.items.find((r) => r.id === id) ?? null
+  }
+  return { revisions, rows }
+}
 
 /**
  * The two daemons' copies as one list: ordered by the first daemon that has the row, each row's aliases per daemon. The
@@ -193,7 +288,7 @@ export function mergedProbeEntries(hostIds: string[], byHost: Record<string, Dae
       const have = out.get(r.id)
       if (have) {
         have.aliases[hostId] = r.ssh_alias
-        if (!sameLook(firstRow.get(r.id) as ProbeRow, r)) have.mismatch = true
+        if (lookKey(firstRow.get(r.id) as ProbeRow) !== lookKey(r)) have.mismatch = true
         continue
       }
       const e: ProbeEntry = { id: r.id, name: r.name, icon: r.icon, icon_weight: r.icon_weight, aliases: { [hostId]: r.ssh_alias } }

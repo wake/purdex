@@ -55,7 +55,9 @@ describe('HostIconPicker', () => {
     const onChange = vi.fn()
     render(<HostIconPicker icon={undefined} weight="nope" onChange={onChange} />)
     fireEvent.click(screen.getByTestId('host-icon-preview'))
-    expect(screen.getByTestId('host-icon-preview')).toHaveAttribute('aria-expanded', 'true')
+    const first = screen.getAllByRole('button').find((b) => b.getAttribute('data-icon'))!
+    fireEvent.click(first)
+    expect(onChange).toHaveBeenCalledWith(first.getAttribute('data-icon'), 'regular')
   })
 })
 
