@@ -3,6 +3,7 @@
 import { describe, it, expect } from 'vitest'
 import { ENTRY_KINDS, TASK_STATES } from './types'
 import { FILTER_IDS } from './filters'
+import { ROADMAP_STATUS_IDS } from './roadmap-status'
 import en from '../../locales/en.json'
 import zh from '../../locales/zh-TW.json'
 
@@ -31,7 +32,7 @@ function sources(): string[] {
 
 // `journal.changed` / `journal.v1` are the daemon's event and capability names, not text keys.
 const NOT_TEXT = new Set(['journal.changed', 'journal.v1'])
-const DYNAMIC: Record<string, readonly string[]> = { 'journal.kind.': ENTRY_KINDS, 'journal.filter.': FILTER_IDS, 'journal.tasks.state.': TASK_STATES }
+const DYNAMIC: Record<string, readonly string[]> = { 'journal.kind.': ENTRY_KINDS, 'journal.filter.': FILTER_IDS, 'journal.tasks.state.': TASK_STATES, 'journal.roadmap.status.': ROADMAP_STATUS_IDS }
 
 /** Every key literal ('journal.x.y' or `journal.x.${id}`, which expands over the ids that fill it). */
 function usedKeys(): { key: string; file: string }[] {

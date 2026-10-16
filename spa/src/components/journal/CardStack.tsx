@@ -12,6 +12,7 @@ import { CardFrame } from './CardFrame'
 import { ConfirmDetail } from './ConfirmDetail'
 import { JournalCard, JournalTitle } from './JournalCard'
 import { TasksCard } from './TasksCard'
+import { RoadmapCard } from './RoadmapCard'
 import { visibleCards, teamColumnWidth } from './card-layout'
 import { useJournalTarget } from './useJournalTarget'
 import { TeamPanel } from '../team/TeamPanel'
@@ -125,7 +126,9 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
             </CardFrame>
           )}
           {shown.roadmap && !detail && (
-            <CardFrame testId="journal-roadmap-card" width={widths.roadmap} onCommitWidth={commit('roadmap')} title={t('journal.card.roadmap')} onClose={() => patch({ roadmapOpen: false })} />
+            <CardFrame testId="journal-roadmap-card" width={widths.roadmap} onCommitWidth={commit('roadmap')} title={t('journal.card.roadmap')} onClose={() => patch({ roadmapOpen: false })}>
+              {unit && <RoadmapCard key={`${target.memoHost}\u0000${target.memoKey}`} target={target} unit={unit} />}
+            </CardFrame>
           )}
         </div>
       )}
