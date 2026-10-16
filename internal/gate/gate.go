@@ -44,6 +44,8 @@ type Options struct {
 	Argv  []string // the command as the person typed it; argv[0] is its name
 	Real  string   // the binary to run in place of argv[0] (a shim passes the real one: its own name finds the shim)
 	Class Class    // "" classifies Argv
+	// ClassSource says where a given Class came from, for the decision record ("classifier", "kind"); "" for one the person chose.
+	ClassSource string
 	// Foreground keeps the command at normal priority and untouched by the cache module, for a release gate on an idle host.
 	Foreground bool
 	Env        []string
@@ -270,10 +272,12 @@ func (g *Gate) run(ctx context.Context, o Options, d *Decision) (int, error) {
 	if env == nil {
 		env = os.Environ()
 	}
-	class := o.Class
+	class, source := o.Class, o.ClassSource
 	if class == "" {
 		class = cfg.Intercept.Classify(o.Argv, EnvOf(env, g.IsTTY != nil && g.IsTTY()))
+		source = "classifier"
 	}
+	d.ClassSource = source
 	d.Class, d.Profile, d.dir = class, cfg.Profile, cfg.Dir
 	sigs, stop := g.signals()
 	defer stop()

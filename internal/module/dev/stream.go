@@ -4,8 +4,9 @@ import (
 	"bufio"
 	"context"
 	"io"
-	"os/exec"
 	"sync"
+
+	"github.com/wake/purdex/internal/execstat"
 )
 
 type BuildEventType string
@@ -119,7 +120,7 @@ func (m *DevModule) streamTool(ctx context.Context, session *BuildSession, phase
 func streamCmdEnv(ctx context.Context, session *BuildSession, phase, dir string, env []string, name string, args ...string) error {
 	session.append(BuildEvent{Type: BuildEventPhase, Phase: phase})
 
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := execstat.CommandContext(ctx, "dev.stream", name, args...)
 	cmd.Dir = dir
 	cmd.Env = env
 	stdout, err := cmd.StdoutPipe()

@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"github.com/wake/purdex/internal/agent"
+	"github.com/wake/purdex/internal/execstat"
 )
 
 // maxRegistryFileBytes is the size cap enforced on every "<pid>.json"
@@ -105,7 +105,7 @@ type Liveness struct {
 // letter is Z for a zombie. The letter is not localized (unlike comm / the
 // <defunct> annotation some ps builds print), so no text of ps's is matched.
 func psZombie(pid int) bool {
-	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "stat=")
+	cmd := execstat.Command("peers.ps-stat-registry", "ps", "-p", strconv.Itoa(pid), "-o", "stat=")
 	cmd.Env = append(os.Environ(), "LC_ALL=C")
 	out, err := cmd.Output()
 	if err != nil {

@@ -239,11 +239,20 @@ succeed; an old peer; mismatched targets warn.
    retried from a persisted pending queue, without counting twice.
 2. Backlog: when a watcher is woken or started, each host sends one summary of its unhandled events since its last
    delivered id (counts by kind and label, the newest five, and `pdx watch log --all --unhandled`).
-3. Handled: `pdx watch ack <id>… | --all [--host]` marks events handled (a small ack log beside the records);
-   `GET /api/watch/unhandled` returns the count per host (for W5's badge).
+3. Handled: `pdx watch ack <id>… | --all [--host] --note "<one line>"` (note required, one line, ≤ 500 bytes) marks
+   events handled (a small ack log beside the records: id, status, note, at); `GET /api/watch/unhandled` → `{count}`
+   for this host (W5's badge).
 4. `GET /api/peers/watch/log` (policy entry) and `pdx watch log --host <alias> | --all`.
+5. For the watcher area (B line spec `docs/specs/2026-10-16-watcher-area-spec.md` §8 A3; admin token; the writes 403
+   to device tokens and not in `HostRoutePolicy`): `GET /api/watch/events?since=&limit=` → `{events}` newest first
+   with the fields that spec lists (the record's fields plus `status` `pending|handled|skipped`, `note`,
+   `handled_at`); `POST /api/watch/skip {all: true}` → every pending event of this host becomes `skipped` with the
+   note 「沒有守門員，已略過」 — **only if the person keeps that button** (open, the B line asks; leave it out until
+   then); the `watch.events` push (spec §12.6: `{host_id, unhandled, cause}`, one per record / ack / skip operation).
 Tests: folding isolation per host and kind; E3 not folded; retry without double counting; restart with a pending
-queue; backlog on wake/start (and none twice); ack and the count.
+queue; backlog on wake/start (and none twice); ack without a note refused, ack and the count, the note in
+`/api/watch/events`; skip (if kept) turns pending only, handled stay; one `watch.events` per operation (ack of three
+ids → one push), none for a refused ack; device token → 403 on the writes.
 
 ### W3a — the `pdx-watch` tmux session: registration, reconcile, control helpers (daemon)
 
@@ -317,16 +326,18 @@ interface, plus one test with the real agent module registered in core):
 
 ### W3b — the watcher on its host: start, wake, rest, prompts, slot counts
 
-1. Start (active: `POST /api/watch/start`, `pdx watch start`, the App's button; passive: `/api/peers/watch/start` or a
-   local event with nobody awake and `auto_wake`; the routes are added here, local admin only, device tokens 403):
-   W3a reconcile → verified watcher there: success, nothing typed → `ensureSession` → `paneAtShell` (else
+1. Start. Active (`POST /api/watch/start`, `pdx watch start`, the App's button; admin token, device tokens 403, not in
+   `HostRoutePolicy`): the W2a discovery with `auto_wake` taken as on — an awake watcher → 200 with it; else wake the
+   last one or start on the first reachable target (spec §12.3) → 202 `{host}` (the chosen host's alias and id), or
+   409 `{cooldown_until}` while the chosen host's cooldown runs. Passive (`/api/peers/watch/start`, or a local event
+   with nobody awake and `auto_wake`). On the host that starts it: W3a reconcile → verified watcher there: success, nothing typed → `ensureSession` → `paneAtShell` (else
    `pane_busy`, reported) → announce (`/api/peers/watch/announce`; simultaneous announcements → the smaller host id
    starts, the other stands down) → `typeLine(commandLine(agent_command, "", start_prompt))` → success when reconcile
    registers a new frame within 3 min; none → failed, retried after a 30 min cooldown (persisted). One start or wake
    at a time on this host (a mutex plus the persisted in-progress mark, so a restart mid-start does not start twice).
 2. Wake (`POST /api/watch/wake {prompt}`, `/api/peers/watch/wake` or a local event): reconcile → holder `resting`, no
-   owner, pane at a shell, the kept transcript on disk → `typeLine(commandLine(agent_command, <kept id>, prompt or
-   wake_prompt))`; success = reconcile registers that same session id within 3 min. No kept id or no transcript →
+   owner, pane at a shell, the kept transcript on disk → `typeLine(commandLine(agent_command, <kept id>, wake_prompt
+   followed by the request's prompt, joined by a space; the whole ≤ 4 KB, no control characters, else 400))`; success = reconcile registers that same session id within 3 min. No kept id or no transcript →
    start (1). An awake watcher → nothing to do.
 3. Rest (mode `patrol`): idle = no delivery and no turn of the watcher for `patrol_idle_min` → send "time to rest" →
    on the watcher's answer, or after 5 min, W3a `endAgent` (`/exit` to the same frame only) → 5 min later, the same
@@ -372,8 +383,8 @@ by another holder; scrubbed output.
 
 Spec §12.6 with the W2/W3 API: `/api/watch/status` (the watcher events go to: host id, alias, session id, state,
 `pdx-watch`; or none) and `watch.changed` (W3a.5) to bind the watcher tab to the holder host's `pdx-watch` and rebind
-it on a failover; `POST /api/watch/start` and `/api/watch/wake` (W3b); `/api/watch/unhandled`, `pdx watch log` data,
-and the `watch` settings API incl. `agent_command` and the two prompts. The B line writes its own spec section and
+it on a failover; `POST /api/watch/start` and `/api/watch/wake` (W3b); `/api/watch/unhandled`, `/api/watch/events`,
+`/api/watch/skip` if kept, and the `watch.events` push (W2b.5); the `watch` settings API incl. `agent_command` and the two prompts. The B line writes its own spec section and
 plan (`docs/specs/2026-10-16-watcher-area-spec.md`), and owns its tests: the tab follows a failover, "resting" and
 "none" shown apart.
 

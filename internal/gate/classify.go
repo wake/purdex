@@ -117,8 +117,28 @@ func Classify(argv []string, e Env) Class {
 		return classifyComposer(args, e)
 	case "phpunit", "pest":
 		return classifyPhpunit(args)
+	case "claude":
+		return classifyClaude(args)
 	}
 	return ClassNone
+}
+
+// classifyClaude reads `claude plugin test`: the mods' test run starts a Claude Code engine and a test runner per file, so a
+// whole run (no --file) is heavy and a run narrowed to files (--file, once or repeated) is light. No other claude command is
+// held: the agent itself must never be. The gate sees it only through the mod's prefix (claude is not shimmed).
+func classifyClaude(args []string) Class {
+	if len(args) < 2 || args[0] != "plugin" || args[1] != "test" {
+		return ClassNone
+	}
+	for _, a := range args[2:] {
+		if a == "--" {
+			break
+		}
+		if a == "--file" || strings.HasPrefix(a, "--file=") {
+			return ClassLight
+		}
+	}
+	return ClassHeavy
 }
 
 // goPackages reads the go flags and gives the package words, whether a compile-only (-c) was asked, and whether a

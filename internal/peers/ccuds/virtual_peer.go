@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -74,7 +73,7 @@ type VirtualPeer struct {
 // trimmed line — the exact string the harness compares byte-for-byte
 // against its own ps invocation.
 func DefaultProcStart(pid int) (string, error) {
-	cmd := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "lstart=")
+	cmd := execstat.Command("peers.ps-lstart", "ps", "-p", strconv.Itoa(pid), "-o", "lstart=")
 	env := make([]string, 0, len(os.Environ())+1)
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "TZ=") {

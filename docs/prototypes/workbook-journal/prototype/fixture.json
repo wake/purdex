@@ -1,0 +1,253 @@
+{
+ "session": "purdex-coordinator",
+ "style": "report-to-manager, full sentences",
+ "events": [
+  {
+   "date": "2026-10-13",
+   "time": "13:15",
+   "kind": "req",
+   "kindLabel": "請求",
+   "actor": "使用者 → 我",
+   "title": "主機當機重開了，你請我檢查進度，並把 lead 和 member 恢復起來。",
+   "body": "",
+   "refs": []
+  },
+  {
+   "date": "2026-10-13",
+   "time": "13:20",
+   "kind": "task",
+   "kindLabel": "任務建立",
+   "actor": "我 → purdex-a-line",
+   "title": "派 purdex-a-line 修 #2757：當機後，88 想把 air26 上原本的 iOS member 收回來，卻被系統擋下。",
+   "body": "原因是 team 結束時沒有把 member 的狀態一起清掉，系統以為它還在舊的 team 裡。",
+   "refs": [
+    "#2757"
+   ]
+  },
+  {
+   "date": "2026-10-13",
+   "time": "13:23",
+   "kind": "done",
+   "kindLabel": "執行完成",
+   "actor": "我",
+   "title": "A 線已經恢復：我重新成為 lead，開了新的 member purdex-a-line，手上的工作沒有中斷。",
+   "body": "當機時 /private/tmp 被清空，部署腳本和規則盤點都不見了；我已經重建，並改放到重開機也不會被清掉的位置。",
+   "refs": []
+  },
+  {
+   "date": "2026-10-13",
+   "time": "14:34",
+   "kind": "done",
+   "kindLabel": "執行完成",
+   "actor": "我",
+   "title": "照你的指示，撤掉 air26 上那個因斷線留下的 member（aigora 的 D 線 iOS）的身分。",
+   "body": "改之前先備份了資料庫；aigora 的 lead 現在可以直接把它收回。",
+   "refs": []
+  },
+  {
+   "date": "2026-10-13",
+   "time": "14:58",
+   "kind": "req",
+   "kindLabel": "請求",
+   "actor": "我 → 使用者",
+   "title": "接力和無人值守的規則整理出 6 件事需要你決定，例如接力卡逾時後怎麼處理、你親手打 /relay 時要不要再出卡。",
+   "body": "17:13 已全部定案。",
+   "refs": []
+  },
+  {
+   "date": "2026-10-13",
+   "time": "15:04",
+   "kind": "comm",
+   "kindLabel": "溝通",
+   "actor": "mlab 維運 → 我",
+   "title": "mlab 維運回報：今早當機，是因為 3 支卡住的測試共吃掉 10.8 GB 記憶體，而資源租約沒有擋下它們。",
+   "body": "我查出兩台的資源租約從 10/09 起一直停在「只記錄、不擋」的試跑模式，原本預定試跑一天後要切換，卻沒有切。已開 #2759 處理。",
+   "refs": [
+    "#2759"
+   ]
+  },
+  {
+   "date": "2026-10-13",
+   "time": "15:06",
+   "kind": "comm",
+   "kindLabel": "溝通",
+   "actor": "mlab 維運 → 我",
+   "title": "mlab 維運回報：當機時系統裡有 261 個沒人管的 tmux 行程，共佔 766 MiB 記憶體。",
+   "body": "已開 #2760 追查它們是從哪裡來的。",
+   "refs": [
+    "#2760"
+   ]
+  },
+  {
+   "date": "2026-10-13",
+   "time": "15:52",
+   "kind": "req",
+   "kindLabel": "請求",
+   "actor": "使用者 → 我",
+   "title": "你定案了資源租約的新規則：依主機忙碌程度分成三區決定放不放行，發現異常只告警、不自動停掉指令，監控統一由 daemon 負責。",
+   "body": "規則已寫進 #2759，接著寫 spec 和實作計畫。",
+   "refs": [
+    "#2759"
+   ]
+  },
+  {
+   "date": "2026-10-13",
+   "time": "16:23",
+   "kind": "comm",
+   "kindLabel": "溝通",
+   "actor": "88 → 我",
+   "title": "88 回報：主機很忙的時候，開 member 常常失敗，因為啟動只有 20 秒的時限，而且錯誤訊息還會叫人去重裝 hooks。",
+   "body": "已開 #2761。",
+   "refs": [
+    "#2761"
+   ]
+  },
+  {
+   "date": "2026-10-13",
+   "time": "16:48",
+   "kind": "taskdone",
+   "kindLabel": "任務完成",
+   "actor": "purdex-a-line",
+   "title": "purdex-a-line 修好 #2757 並合併：已經結束的 team，不會再擋住收回 member。",
+   "body": "",
+   "refs": [
+    "#2757"
+   ]
+  },
+  {
+   "date": "2026-10-13",
+   "time": "17:07",
+   "kind": "done",
+   "kindLabel": "執行完成",
+   "actor": "我",
+   "title": "alpha.727 已部署到 mlab 和 air26，88 可以收回它的 iOS member 了。",
+   "body": "部署時順便查明那 261 個 tmux 行程的來源：是某個測試結束後沒把自己開的 tmux 關掉，不是 daemon 重啟造成的。",
+   "refs": [
+    "alpha.727"
+   ]
+  },
+  {
+   "date": "2026-10-13",
+   "time": "17:08",
+   "kind": "task",
+   "kindLabel": "任務建立",
+   "actor": "我 → purdex-lease-v2",
+   "title": "開了新的 member purdex-lease-v2，實作資源租約 v2，分 7 個 PR 依序做。",
+   "body": "",
+   "refs": [
+    "#2759"
+   ]
+  },
+  {
+   "date": "2026-10-13",
+   "time": "17:16",
+   "kind": "task",
+   "kindLabel": "任務建立",
+   "actor": "我 → purdex-a-line",
+   "title": "派 purdex-a-line 修 #2760：讓那個測試結束時，把自己開的 tmux 關乾淨。",
+   "body": "",
+   "refs": [
+    "#2760"
+   ]
+  },
+  {
+   "date": "2026-10-13",
+   "time": "17:19",
+   "kind": "req",
+   "kindLabel": "請求",
+   "actor": "使用者 → 我",
+   "title": "你決定 #2761 的啟動時限維持 20 秒、不要放寬，但錯誤訊息要分清楚是「主機忙」還是「沒裝 hooks」，並附上當下的負載數字。",
+   "body": "這是 88 轉達的；我已轉給 purdex-a-line 照改。",
+   "refs": [
+    "#2761"
+   ]
+  },
+  {
+   "date": "2026-10-13",
+   "time": "18:29",
+   "kind": "taskdone",
+   "kindLabel": "任務完成",
+   "actor": "purdex-a-line",
+   "title": "purdex-a-line 完成 #2761：開 member 逾時時，訊息會說明是主機忙還是沒裝 hooks，主機忙的話還會附上 load 和記憶體用量。",
+   "body": "",
+   "refs": [
+    "#2761"
+   ]
+  },
+  {
+   "date": "2026-10-13",
+   "time": "18:31",
+   "kind": "exec",
+   "kindLabel": "執行",
+   "actor": "我",
+   "title": "規劃時發現一個權限漏洞：agent 其實有辦法自己核准自己的申請，例如直接替自己打 /relay，或用設定檔裡的 token 呼叫核准的 API。",
+   "body": "目前只靠規定禁止，技術上擋不住；已開 #2774，要另外設計 App 和 agent 的權限分離。",
+   "refs": [
+    "#2774"
+   ]
+  },
+  {
+   "date": "2026-10-13",
+   "time": "18:40",
+   "kind": "task",
+   "kindLabel": "任務建立",
+   "actor": "我 → purdex-a-line",
+   "title": "派 purdex-a-line 實作你定的接力／team 規則 v2，分 15 個 PR 依序做。",
+   "body": "",
+   "refs": []
+  },
+  {
+   "date": "2026-10-13",
+   "time": "18:57",
+   "kind": "done",
+   "kindLabel": "執行完成",
+   "actor": "我",
+   "title": "alpha.728 已部署到兩台，包含開 member 逾時訊息的修正、測試不再留下 tmux，以及資源租約 v2 的第一段。",
+   "body": "新的放行規則目前只記錄、不擋任何指令；先觀察一天，看會不會擋太多，再正式啟用。",
+   "refs": [
+    "alpha.728"
+   ]
+  },
+  {
+   "date": "2026-10-13",
+   "time": "19:19",
+   "kind": "done",
+   "kindLabel": "執行完成",
+   "actor": "我",
+   "title": "alpha.729 已部署到兩台，包含 88 做的 badge 計數規則（daemon 的部分）。",
+   "body": "iOS 那邊可以開始接著做了。",
+   "refs": [
+    "alpha.729"
+   ]
+  }
+ ],
+ "team": {
+  "name": "A 線：資源租約＋派工回報",
+  "label": "A 線",
+  "lead": {
+   "title": "purdex-coordinator",
+   "address": "mlab/purdex-1f-vq"
+  },
+  "cap": 3,
+  "members": [
+   {
+    "title": "purdex-a-line",
+    "ref": "_tfick3",
+    "model": "Sonnet",
+    "effort": "medium",
+    "ctx": 27,
+    "task": "接力／team 規則 v2：RT-1a（PR #2780）",
+    "queued": []
+   },
+   {
+    "title": "purdex-lease-v2",
+    "ref": "_vd409v",
+    "model": "Sonnet",
+    "effort": "medium",
+    "ctx": 55,
+    "task": "資源租約 v2：P1c",
+    "queued": []
+   }
+  ]
+ }
+}
