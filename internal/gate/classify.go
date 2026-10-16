@@ -127,10 +127,14 @@ func heavyReason(argv []string, e Env) Reason {
 	return ReasonHeavy
 }
 
-// helpValueFlags are the flags of the classified tools whose next word is a value: a help word in that place is the value, not a request.
-var helpValueFlags = map[string]bool{
-	"-run": true, "-skip": true, "-tags": true, "-t": true, "--testNamePattern": true, "--project": true, "--shard": true,
-	"--reporter": true, "--file": true, "--filter": true, "--config": true,
+// takesValue says whether the flag a takes the next word as its value in any of the tools the table reads (the union of their tables:
+// where two tools disagree the line is gated, never let through). A help word in that place is the value, not a request
+// (`go test -bench --help ./...` runs the whole suite).
+func takesValue(a string) bool {
+	if !strings.HasPrefix(a, "-") || strings.Contains(a, "=") {
+		return false
+	}
+	return goValueFlags["-"+strings.TrimLeft(a, "-")] || vitestValueFlags[a] || runnerValueOpts[a] || a == "--file"
 }
 
 // infoOnly says whether the command only asks the tool for its help or version (#3043): `--help`, `-h`, `--version` among its words, or a
@@ -159,7 +163,7 @@ func infoOnly(argv []string) bool {
 			return false
 		case a == "--help" || a == "-h" || a == "--version":
 			return true
-		case helpValueFlags[a]:
+		case takesValue(a):
 			i++ // its value, whatever it looks like
 		}
 	}

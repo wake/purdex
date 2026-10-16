@@ -114,6 +114,9 @@ func TestClassify_Table(t *testing.T) {
 		// ... but not a help word that is something else
 		{"go test ./... -args -h", ClassHeavy}, // after -args it goes to the test binary, which runs
 		{"go test ./... -args --help", ClassHeavy},
+		{"go test -bench --help ./...", ClassHeavy}, // -bench takes a regexp
+		{"go test ./... -run --help", ClassHeavy},
+		{"go test --count --help ./...", ClassHeavy},
 		{"vitest run -t --help", ClassLight},             // the value of -t
 		{"claude plugin test -- --help", ClassHeavy},     // after -- it is the runner's
 		{"claude plugin test --file --help", ClassLight}, // --file's value
