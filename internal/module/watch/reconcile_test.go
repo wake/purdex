@@ -627,3 +627,61 @@ func TestReads_AClockThatWentBackIsStale(t *testing.T) {
 	r.mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/watch/holder", nil))
 	require.Equal(t, base+1, r.panes.count(), "the read reconciles")
 }
+
+// The hook sees the frames in the order they were committed, even when an earlier hook is slow: the cross-host rule does not depend
+// on message order, but the announcements should not be reversed by this side.
+func TestReconcile_TheHooksRunInCommitOrderEvenWhenAnEarlierOneIsSlow(t *testing.T) {
+	r := newRecRig(t)
+	var mu sync.Mutex
+	var order []string
+	firstIn := make(chan struct{})
+	release := make(chan struct{})
+	r.m.rec.registered = func(h watch.Holder) {
+		if h.FrameID == "f1" {
+			close(firstIn)
+			<-release
+		}
+		mu.Lock()
+		order = append(order, h.FrameID)
+		mu.Unlock()
+	}
+	r.owners.set(watcherOwner("f1"), true, nil)
+	done1 := make(chan struct{})
+	go func() { _, _, _ = r.m.Reconcile(context.Background()); close(done1) }()
+	<-firstIn
+
+	// frame 2 is committed while frame 1's hook is still running
+	r.owners.set(watcherOwner("f2"), true, nil)
+	done2 := make(chan struct{})
+	go func() { _, _, _ = r.m.Reconcile(context.Background()); close(done2) }()
+	select {
+	case <-done2: // the reconcile itself does not wait for the slow hook
+	case <-time.After(3 * time.Second):
+		t.Fatal("a slow hook holds up the next reconcile")
+	}
+	mu.Lock()
+	require.Empty(t, order, "frame 2 is not announced before frame 1")
+	mu.Unlock()
+	close(release)
+	<-done1
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []string{"f1", "f2"}, order)
+}
+
+// A clock that went back does not give a new watcher a since earlier than the state before it.
+func TestReconcile_SinceNeverGoesBack(t *testing.T) {
+	r := newRecRig(t)
+	r.owners.set(watcherOwner("f1"), true, nil)
+	h1, _ := r.reconcile(t)
+	r.now = r.now.Add(-time.Hour) // the wall clock went back
+	r.owners.set(watcherOwner("f2"), true, nil)
+	h2, reg := r.reconcile(t)
+	require.True(t, reg)
+	require.False(t, h2.Since.Before(h1.Since), "a new frame after a clock step back keeps the earlier since as its floor")
+
+	r.owners.set(agent.PaneOwner{}, false, nil)
+	h3, _ := r.reconcile(t)
+	require.Equal(t, watch.HolderResting, h3.State)
+	require.False(t, h3.Since.Before(h2.Since), "resting too")
+}

@@ -57,9 +57,14 @@ var (
 type reconcileState struct {
 	mu   sync.Mutex // one reconcile at a time
 	last time.Time  // when the last one finished (attempted: a failing lookup is not retried by every read)
-	// registered, when set, is called with the holder after a reconcile found a NEW watcher frame (W3a-2c announces it). It is
-	// called after the reconcile lock is released (it may take a while, and may itself ask for a reconcile), once per new frame.
+	// registered, when set, is called with the holder after a reconcile found a NEW watcher frame (W3a-2c announces it): once per new
+	// frame, in the order the frames were committed, and never with the reconcile lock held (it may take a while, and may itself ask
+	// for a reconcile). Whoever commits a frame queues it under the lock; one goroutine at a time drains the queue, so a slow hook
+	// delays the later ones but not the reconcile.
 	registered func(watch.Holder)
+	qmu        sync.Mutex
+	queue      []watch.Holder
+	draining   bool
 }
 
 // owners is the agent module's resolver, looked up in the registry when first needed.
@@ -104,12 +109,48 @@ func (m *Module) reconcile(ctx context.Context, onlyIfStale bool) (h watch.Holde
 	}
 	h, registered, err = m.reconcileLocked(ctx)
 	m.rec.last = m.now()
-	hook := m.rec.registered
-	m.rec.mu.Unlock()
-	if registered && hook != nil {
-		hook(h)
+	if registered && m.rec.registered != nil {
+		m.rec.qmu.Lock()
+		m.rec.queue = append(m.rec.queue, h) // in commit order: this is still under the reconcile lock
+		m.rec.qmu.Unlock()
 	}
+	m.rec.mu.Unlock()
+	m.drainRegistered()
 	return h, registered, true, err
+}
+
+// drainRegistered calls the registered hook for the queued frames, oldest first. If another goroutine (or an outer call of this
+// very goroutine, from inside a hook) is already draining, the frames it queued are left to that drain: no hook runs twice, none
+// runs out of order, and a hook that asks for a reconcile does not wait for itself.
+func (m *Module) drainRegistered() {
+	m.rec.qmu.Lock()
+	if m.rec.draining {
+		m.rec.qmu.Unlock()
+		return
+	}
+	m.rec.draining = true
+	m.rec.qmu.Unlock()
+	for {
+		m.rec.qmu.Lock()
+		if len(m.rec.queue) == 0 {
+			m.rec.draining = false
+			m.rec.qmu.Unlock()
+			return
+		}
+		next := m.rec.queue[0]
+		m.rec.queue = m.rec.queue[1:]
+		m.rec.qmu.Unlock()
+		m.rec.registered(next)
+	}
+}
+
+// since is the time a state is entered: now, but never before the previous state's, so a wall clock that went back cannot make a
+// new watcher look as if it had been awake longer than the ones before it (§12.3 picks the earliest since).
+func (m *Module) since(prev time.Time) time.Time {
+	if now := m.now(); !now.Before(prev) {
+		return now
+	}
+	return prev
 }
 
 func (m *Module) reconcileLocked(ctx context.Context) (watch.Holder, bool, error) {
@@ -150,7 +191,7 @@ func (m *Module) reconcileLocked(ctx context.Context) (watch.Holder, bool, error
 	}
 	committed, err := m.hs().UpdateCommitted(func(h *watch.Holder) {
 		if !sameFrame {
-			h.Since = m.now()
+			h.Since = m.since(cur.Since)
 		}
 		h.State, h.SessionID = watch.HolderAwake, owner.SessionID
 		h.FrameID, h.PaneID, h.TmuxSessionID = owner.FrameID, pane, sid
@@ -168,7 +209,7 @@ func (m *Module) rest(cur watch.Holder) (watch.Holder, bool, error) {
 		return cur, false, nil
 	}
 	_, err := m.hs().UpdateCommitted(func(h *watch.Holder) {
-		h.State, h.Since = watch.HolderResting, m.now()
+		h.State, h.Since = watch.HolderResting, m.since(cur.Since)
 		h.FrameID, h.PaneID, h.TmuxSessionID, h.PID, h.ProcessStartTime = "", "", "", 0, ""
 	})
 	return m.hs().Get(), false, err
