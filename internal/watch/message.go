@@ -75,8 +75,9 @@ func FoldText(host string, kind Kind, ids []string, count int) string {
 		messagePrefix, host, int(FoldWindow/time.Minute), count, kindLabel(kind), strings.Join(shown, "、"), host, kind)
 }
 
-// BacklogText is the summary a new or woken watcher first gets: counts by kind, the newest events, and how to see all.
-func BacklogText(host string, recs []Record) string {
+// BacklogText is the summary a new or woken watcher first gets: counts by kind, the newest events, and how to see all. A large
+// backlog comes in parts (part of parts), each about its own events.
+func BacklogText(host string, recs []Record, part, nparts int) string {
 	counts := map[Kind]int{}
 	var kinds []Kind
 	for _, r := range recs {
@@ -85,12 +86,16 @@ func BacklogText(host string, recs []Record) string {
 		}
 		counts[r.Kind]++
 	}
-	var parts []string
+	var kindParts []string
 	for _, k := range kinds {
-		parts = append(parts, fmt.Sprintf("%s ×%d", kindLabel(k), counts[k]))
+		kindParts = append(kindParts, fmt.Sprintf("%s ×%d", kindLabel(k), counts[k]))
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s %s 有 %d 件事件還沒送給守門員（%s）。最新 %d 件：", messagePrefix, host, len(recs), strings.Join(parts, "、"), min(backlogShow, len(recs)))
+	where := ""
+	if nparts > 1 {
+		where = fmt.Sprintf("（第 %d／%d 段）", part, nparts)
+	}
+	fmt.Fprintf(&b, "%s%s %s 有 %d 件事件還沒送給守門員（%s）。最新 %d 件：", messagePrefix, where, host, len(recs), strings.Join(kindParts, "、"), min(backlogShow, len(recs)))
 	from := max(0, len(recs)-backlogShow)
 	for _, r := range recs[from:] {
 		fmt.Fprintf(&b, "\n- %s %s", r.ID, eventLine(r))

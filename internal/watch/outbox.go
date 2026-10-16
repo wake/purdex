@@ -19,6 +19,10 @@ const FoldWindow = 10 * time.Minute
 
 const maxFoldIDs = 200 // ids a folded bucket remembers (its count is exact)
 
+// MaxMessageIDs is the most event ids one message carries; a backlog is cut into messages of this size (the receiving route accepts
+// more, so the limit here is never the one that refuses).
+const MaxMessageIDs = 200
+
 // Message is one message to the watcher.
 type Message struct {
 	ID       string    `json:"id"`
@@ -32,9 +36,10 @@ type Message struct {
 }
 
 type foldBucket struct {
-	Host  string   `json:"host"`
-	Count int      `json:"count"`
-	IDs   []string `json:"ids"`
+	Host  string    `json:"host"`
+	Since time.Time `json:"since"` // the first event folded into it: the backlog takes every event of the kind from then on
+	Count int       `json:"count"`
+	IDs   []string  `json:"ids"`
 }
 
 type outboxState struct {
@@ -51,6 +56,15 @@ type Outbox struct {
 	path string
 	now  func() time.Time
 	st   outboxState
+	logf func(format string, args ...any)
+}
+
+// SetLogf sets where a failed write of the queue is reported (nil: nowhere). The queue goes on in memory and every change writes
+// the whole file again, so a later change makes up for a write that failed.
+func (o *Outbox) SetLogf(f func(format string, args ...any)) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.logf = f
 }
 
 // OpenOutbox reads the queue from path (empty: none). A file that cannot be read is kept as path+".bad" and the queue starts
@@ -86,16 +100,18 @@ func (o *Outbox) reset() {
 	o.st = outboxState{LastSent: map[Kind]time.Time{}, Folded: map[Kind]*foldBucket{}}
 }
 
-// save writes the state; a failure is returned to no one (the queue goes on in memory) but is retried by the next change.
+// save writes the state. A failure is reported, not returned: the queue goes on in memory, and the next change writes it again.
 func (o *Outbox) save() {
 	if o.path == "" {
 		return
 	}
 	b, err := json.Marshal(o.st)
-	if err != nil {
-		return
+	if err == nil {
+		_, err = writeAtomic(o.path, b)
 	}
-	_, _ = writeAtomic(o.path, b)
+	if err != nil && o.logf != nil {
+		o.logf("[watch] the event queue %s could not be written (a restart now loses what is only in memory): %v", o.path, err)
+	}
 }
 
 func (o *Outbox) newMessage(host string, ids []string, text string, backlog bool) Message {
@@ -131,6 +147,9 @@ func (o *Outbox) Add(r Record) bool {
 	if b == nil {
 		b = &foldBucket{Host: r.Host}
 		o.st.Folded[r.Kind] = b
+	}
+	if b.Count == 0 {
+		b.Since = r.At
 	}
 	b.Count++
 	if len(b.IDs) < maxFoldIDs {
@@ -259,20 +278,34 @@ func (o *Outbox) Backlog(session string, recs []Record) bool {
 		return false
 	}
 	o.st.BacklogFor = session
+	// owed: after the watermark, or still in the queue or a folded bucket (a later event of another kind may have been delivered
+	// first, so the watermark alone would drop an event that is still folded)
+	queued := map[string]bool{}
+	for _, m := range o.st.Pending {
+		for _, id := range m.EventIDs {
+			queued[id] = true
+		}
+	}
 	var cand []Record
 	for _, r := range recs {
-		if r.ID > o.st.LastDelivered {
+		b := o.st.Folded[r.Kind]
+		if r.ID > o.st.LastDelivered || queued[r.ID] || (b != nil && !r.At.Before(b.Since)) {
 			cand = append(cand, r)
 		}
 	}
 	made := false
 	if len(cand) > 0 {
 		sort.SliceStable(cand, func(i, j int) bool { return cand[i].ID < cand[j].ID })
-		ids := make([]string, len(cand))
-		for i, r := range cand {
-			ids[i] = r.ID
+		o.st.Pending = nil
+		parts := (len(cand) + MaxMessageIDs - 1) / MaxMessageIDs
+		for p := 0; p < parts; p++ {
+			chunk := cand[p*MaxMessageIDs : min((p+1)*MaxMessageIDs, len(cand))]
+			ids := make([]string, len(chunk))
+			for i, r := range chunk {
+				ids[i] = r.ID
+			}
+			o.st.Pending = append(o.st.Pending, o.newMessage(chunk[0].Host, ids, BacklogText(chunk[0].Host, chunk, p+1, parts), true))
 		}
-		o.st.Pending = []Message{o.newMessage(cand[0].Host, ids, BacklogText(cand[0].Host, cand), true)}
 		o.st.Folded = map[Kind]*foldBucket{}
 		made = true
 	}

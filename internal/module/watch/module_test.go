@@ -35,6 +35,7 @@ func newRig(t *testing.T) *testRig {
 	m.logf = func(string, ...any) {}
 	require.NoError(t, m.Init(c))
 	m.settings = func() (watchsettings.Settings, error) { return watchsettings.Default(), nil }
+	m.manualDelivery = true // a test drives delivery itself; the loop would read the test's clock from another goroutine
 	mux := http.NewServeMux()
 	m.RegisterRoutes(mux)
 	return &testRig{m: m, mux: mux}

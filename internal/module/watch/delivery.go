@@ -76,6 +76,7 @@ func (m *Module) initDelivery(dir string) {
 		m.dlv.logDir = dir
 	}
 	var err error
+	defer func() { m.dlv.outbox.SetLogf(func(f string, a ...any) { m.logf(f, a...) }) }()
 	if m.dlv.outbox, err = watch.OpenOutbox(outPath, func() time.Time { return m.now() }); err != nil {
 		m.logf("[watch] %v", err)
 	}

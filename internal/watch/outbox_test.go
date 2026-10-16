@@ -242,3 +242,65 @@ func TestInbox_KeepsOnlyTheLatestIDs(t *testing.T) {
 	require.False(t, in.Seen([]string{"id-00000"}), "the oldest is forgotten")
 	require.True(t, in.Seen([]string{fmt.Sprintf("id-%05d", inboxKeep+9)}))
 }
+
+// A folded event older than the delivery watermark (a later event of another kind was delivered first) is still owed to the watcher:
+// the backlog takes the events in the queue and the folded buckets whatever the watermark says.
+func TestOutbox_TheBacklogKeepsAFoldedEventOlderThanTheLastDeliveredOne(t *testing.T) {
+	c := newOutboxClock()
+	o, _ := openTestOutbox(t, c)
+	a1 := rec(KindUnmanagedHeavy, c)
+	o.Add(a1) // message
+	a2 := rec(KindUnmanagedHeavy, c)
+	o.Add(a2) // folded
+	b := rec(KindPressureHigh, c)
+	o.Add(b) // message, a newer id than a2
+	o.mu.Lock()
+	bMsg := o.st.Pending[1] // the pressure message is the second of the queue
+	o.mu.Unlock()
+	o.Delivered(bMsg.ID)
+	require.Equal(t, b.ID, o.LastDelivered(), "the watermark is past the folded a2")
+
+	require.True(t, o.Backlog("sess", []Record{a1, a2, b}))
+	m, _ := o.Next()
+	require.Equal(t, []string{a1.ID, a2.ID}, m.EventIDs, "the queued and the folded event stay owed; the delivered one is not repeated")
+}
+
+// A backlog is cut into messages the receiver accepts (at most MaxMessageIDs ids each), in order, and every event is in one.
+func TestOutbox_ALargeBacklogIsSplitIntoMessagesOfBoundedSize(t *testing.T) {
+	c := newOutboxClock()
+	o, _ := openTestOutbox(t, c)
+	var recs []Record
+	for i := 0; i < MaxMessageIDs*2+30; i++ {
+		recs = append(recs, rec(KindUnmanagedHeavy, c))
+	}
+	require.True(t, o.Backlog("s", recs))
+	require.Equal(t, 3, o.Pending())
+	var got []string
+	for o.Pending() > 0 {
+		m, _ := o.Next()
+		require.LessOrEqual(t, len(m.EventIDs), MaxMessageIDs)
+		require.True(t, m.Backlog)
+		require.Contains(t, m.Text, m.EventIDs[len(m.EventIDs)-1], "the newest of its part is listed")
+		got = append(got, m.EventIDs...)
+		o.Delivered(m.ID)
+	}
+	var want []string
+	for _, r := range recs {
+		want = append(want, r.ID)
+	}
+	require.Equal(t, want, got)
+}
+
+// A queue that cannot be written is reported, not silently kept in memory: the daemon goes on, and the next change writes it again.
+func TestOutbox_ASaveThatFailsIsReported(t *testing.T) {
+	c := newOutboxClock()
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "file")
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), 0o600))
+	o, _ := OpenOutbox(filepath.Join(blocker, "outbox.json"), c.now) // its directory is a file: the open reports it, the outbox works
+	var logged []string
+	o.SetLogf(func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) })
+	require.True(t, o.Add(rec(KindUnmanagedHeavy, c)))
+	require.NotEmpty(t, logged, "the failed write is reported")
+	require.Equal(t, 1, o.Pending(), "and the queue goes on in memory")
+}
