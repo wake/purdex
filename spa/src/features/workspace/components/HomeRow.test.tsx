@@ -45,10 +45,11 @@ describe('HomeRow', () => {
     expect(onSelectHome).toHaveBeenCalledTimes(1)
   })
 
-  it.each(['top', 'left', 'both'] as const)("is one plain button: no expand/collapse chevron (tabPosition='%s')", (tabPosition) => {
+  it.each(['top', 'left', 'both'] as const)("is one plain button beside the shield: no expand/collapse chevron (tabPosition='%s')", (tabPosition) => {
     useLayoutStore.setState({ tabPosition, activityBarWidth: 'wide', workspaceExpanded: { home: true } })
     renderRow()
-    expect(screen.getAllByRole('button')).toHaveLength(1)
+    // The Home button, and the watcher shield after it (W5a3).
+    expect(screen.getAllByRole('button').map((b) => b.getAttribute('data-testid'))).toEqual(['home-button', 'watch-shield'])
     expect(screen.queryByLabelText(/expand home|collapse home/i)).not.toBeInTheDocument()
   })
 

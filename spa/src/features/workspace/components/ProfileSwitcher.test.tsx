@@ -616,7 +616,8 @@ describe('the Home button shows the profile on screen', () => {
       expect(img).toHaveAttribute('alt', '')
       expect(img).toHaveAttribute('width', '16')
       expect(label).toHaveTextContent(en['nav.home'])
-      expect(screen.getByTestId('home-header').children).toHaveLength(1)
+      // The Home button, then the watcher shield (W5a3); no conflict icon, no switcher.
+      expect(Array.from(screen.getByTestId('home-header').children).map((c) => c.getAttribute('data-testid'))).toEqual(['home-button', 'watch-shield'])
       expect(screen.queryByTestId('profile-icon')).toBeNull()
     })
 
