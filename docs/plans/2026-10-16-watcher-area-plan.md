@@ -336,15 +336,16 @@ Every PR follows these rules:
     session, since (Started), pid (the gate's pid: the 名額鎖 column)}`, at most `maxQueueShown`. **Never the slot's
     `Token`**: `QueueHolder` has no such field, and a test asserts that no `token` key is serialised.
   - `Session` on `QueueWaiter`.
-  - `AdmissionReason string`, and `HeavyPaused` / `LightPaused bool` (W3c, #3020: the gate status gains a `paused` per
-    class).
+  - `AdmissionReason string`, and `HeavyPaused` / `LightPaused bool`: true when the status's effective settings carry
+    `slots.<class>` = `0` (W3c lets a class be set to 0, #3020; an older gate refuses 0 and falls back to the default,
+    so a 0 means W3c). `QueueSummary` already reads `slots.*` from `st.Settings` for the totals, so this needs no new
+    key from the A line, whatever W3c's own `paused` JSON looks like.
 
   The status's own fields decide when present: the local `gate.Status` always carries `Admission`. A remote
   `pdx gate status --json` from an older pdx lacks it, and an absent object must stay distinct from "not held":
   `frame.go:299-311` decodes into `gate.Status`, where the value struct cannot tell the two apart. So `frame.go`
-  decodes into a wrapper with `Admission *gate.AdmissionState` and the paused flags as pointers, and passes the
-  presence on. `internal/gate` is not changed (it is shared with the A line). Without the object, the existing
-  rebuild decides and the reason is empty; without `paused`, false.
+  decodes into a wrapper with `Admission *gate.AdmissionState` and passes the presence on. `internal/gate` is not
+  changed (it is shared with the A line). Without the object, the existing rebuild decides and the reason is empty.
 - **T-b.2 Golden JSON**: update the fixtures shared with the SPA (`spa/src/lib/fleet/__fixtures__/fleet-changed.json`,
   `api-fleet-primary.json`) and their daemon golden tests. The remote frame's `gateShare` cut (`internal/fleet/loop.go:15`,
   32 KiB) is unaffected, because the holders are already in `--json`. Tests with a captured `pdx gate status --json`
@@ -359,7 +360,8 @@ Every PR follows these rules:
   tokens. The session id joins them. The fleet's peer routes (role and announce) carry no frames.
 - **Tests**:
   - holders from both pools; the cap; the session carried;
-  - admission from the status vs rebuilt; an old status without the object; paused present and absent;
+  - admission from the status vs rebuilt; an old status without the object; `slots.light=0` → light paused with a
+    total of 0, and no `slots.*` → not paused;
   - no token.
 
   M: drop the presence check → "old status" goes red.
@@ -475,5 +477,5 @@ used slots, a paused lane, the gate words, waiting warning at 2 min, the pairing
 - **Q4 (A line)**: `watch.v1` in `/api/info` when W2b's events, ack and `watch.events` land, with the real-module
   test. Agreed by 1f, 10-16.
 - **A3's `tmux_session`**: W5a3 uses the fixed `pdx-watch` until the status carries it.
-- **W3c (A line)**: the gate accepts 0 slots and `pdx gate status --json` gains `paused` per class (#3020). W5b reads
-  `paused` when it is present.
+- **W3c (A line)**: the gate accepts 0 slots (#3020). W5b tells a paused class from its effective `slots.<class>` = 0,
+  not from W3c's own `paused` key (told to 1f, 10-16).
