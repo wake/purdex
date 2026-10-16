@@ -14,7 +14,7 @@ import { ShareHostsDialog } from './hosts/ShareHostsDialog'
 import { PairPhoneDialog } from './hosts/PairPhoneDialog'
 import { PairedPhonesSection } from './hosts/PairedPhonesSection'
 import { ProbeHostPage } from './hosts/ProbeHostPage'
-import { startNewProbe } from './hosts/useProbeEditor'
+import { selectProbeGuarded, startNewProbe } from './hosts/useProbeEditor'
 import { useFleetDraftStore } from '../lib/fleet/config-draft'
 
 export type { HostSubPage } from '../lib/host-routes'
@@ -387,7 +387,7 @@ export function HostPage({ isActive }: PaneRendererProps) {
         onSelect={(hostId, subPage) => {
           setShowPaired(false)
           if (hostId.startsWith('probe:')) {
-            useFleetDraftStore.getState().selectProbe({ id: hostId.slice('probe:'.length), isNew: false })
+            selectProbeGuarded({ id: hostId.slice('probe:'.length), isNew: false })
             return
           }
           useFleetDraftStore.getState().selectProbe(null)

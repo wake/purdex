@@ -1,5 +1,5 @@
 // F-2d: the overview's probe-host list — a short list whose rows open the entry; it no longer edits.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 
 const fetchFleetConfig = vi.fn()
@@ -43,6 +43,8 @@ beforeEach(() => {
   useFleetStore.setState({ byHost: { [A]: { gen: 1, support: 'yes', term: 0 }, [B]: { gen: 1, support: 'yes', term: 0 } } as never })
 })
 
+afterEach(() => { vi.restoreAllMocks() })
+
 describe('ProbeHostsSection (the short list)', () => {
   it('lists each probe host once with its badge, name and status', async () => {
     render(<ProbeHostsSection />)
@@ -80,6 +82,40 @@ describe('ProbeHostsSection (the short list)', () => {
     fetchFleetConfig.mockImplementation(() => new Promise(() => {}))
     render(<ProbeHostsSection />)
     expect(screen.getByTestId('probe-state').textContent).toMatch(/Reading/)
+  })
+
+  describe('switching with an unsaved draft of another probe host', () => {
+    const entry = (id: string, name: string) => ({ id, name, icon: '', icon_weight: '', aliases: {} })
+    const dirty = () => {
+      const d = useFleetDraftStore.getState()
+      d.beginProbe(entry('bbbbbbbb', 'other'), false, { revisions: {}, rows: {} })
+      d.setProbeDraft((x) => ({ ...x, name: 'typed' }))
+      d.selectProbe({ id: 'bbbbbbbb', isNew: false })
+    }
+    it('asks first and stays when the reader declines', async () => {
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+      render(<ProbeHostsSection />)
+      dirty()
+      fireEvent.click(await screen.findByTestId('probe-row-aaaaaaaa'))
+      expect(confirm).toHaveBeenCalledTimes(1)
+      expect(useFleetDraftStore.getState().selectedProbe?.id).toBe('bbbbbbbb')
+      expect(useFleetDraftStore.getState().probe?.draft.name).toBe('typed')
+    })
+    it('switches when the reader accepts', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true)
+      render(<ProbeHostsSection />)
+      dirty()
+      fireEvent.click(await screen.findByTestId('probe-row-aaaaaaaa'))
+      expect(useFleetDraftStore.getState().selectedProbe?.id).toBe('aaaaaaaa')
+    })
+    it('does not ask when the draft is unchanged', async () => {
+      const confirm = vi.spyOn(window, 'confirm')
+      render(<ProbeHostsSection />)
+      useFleetDraftStore.getState().beginProbe(entry('bbbbbbbb', 'other'), false, { revisions: {}, rows: {} })
+      fireEvent.click(await screen.findByTestId('probe-row-aaaaaaaa'))
+      expect(confirm).not.toHaveBeenCalled()
+      expect(useFleetDraftStore.getState().selectedProbe?.id).toBe('aaaaaaaa')
+    })
   })
 
   it('renders nothing when no daemon carries fleet.v1', () => {

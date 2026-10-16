@@ -92,6 +92,23 @@ export function useProbeEditor() {
   return { t, known, hostIds, byHost, entries, ready, unreachable, failed, writable, halfRows, loadError, blocked, run }
 }
 
+/**
+ * Another probe host's page is about to replace the draft: if the draft has unsaved changes, ask first (「捨棄未儲存的變更？」).
+ * One draft is kept at a time, so this is where a switch could lose typing.
+ */
+export function confirmDiscardDraft(nextId: string): boolean {
+  const p = useFleetDraftStore.getState().probe
+  if (!p || p.initial.id === nextId || JSON.stringify(p.draft) === JSON.stringify(p.initial)) return true
+  return window.confirm(useI18nStore.getState().t('fleet_hosts.entry.discard_confirm'))
+}
+
+/** Select a probe host's page, unless the reader keeps an unsaved draft of another one. */
+export function selectProbeGuarded(sel: { id: string; isNew: boolean }): boolean {
+  if (!confirmDiscardDraft(sel.id)) return false
+  useFleetDraftStore.getState().selectProbe(sel)
+  return true
+}
+
 /** The sidebar's `+` and the overview's 「新增觀察主機」: select a fresh id as a new probe host; its page starts the blank draft. */
 export function startNewProbe(): void {
   const drafts = useFleetDraftStore.getState()
@@ -99,7 +116,9 @@ export function startNewProbe(): void {
   const taken = new Set(mergedProbeEntries(Object.keys(cfg), cfg).map((e) => e.id))
   const snap = useFleetStore.getState().snapshot
   if (snap) for (const id of snap.order) taken.add(id)
+  const id = newProbeId(taken)
+  if (!confirmDiscardDraft(id)) return
   drafts.endProbe()
   drafts.setUi({ dialogError: null, changed: null })
-  drafts.selectProbe({ id: newProbeId(taken), isNew: true })
+  drafts.selectProbe({ id, isNew: true })
 }

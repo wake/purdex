@@ -2622,5 +2622,6 @@
   "fleet_hosts.entry.section_style": "樣式與連線",
   "fleet_hosts.entry.new_name": "新的觀察主機",
   "fleet_hosts.entry.delete_confirm": "要從兩台 daemon 刪除「{{name}}」嗎？",
-  "fleet_hosts.entry.not_found": "清單裡沒有這台觀察主機。"
+  "fleet_hosts.entry.not_found": "清單裡沒有這台觀察主機。",
+  "fleet_hosts.entry.discard_confirm": "捨棄未儲存的變更？"
 }

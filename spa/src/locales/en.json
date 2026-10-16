@@ -2622,5 +2622,6 @@
   "fleet_hosts.entry.section_style": "Style and connection",
   "fleet_hosts.entry.new_name": "New observed host",
   "fleet_hosts.entry.delete_confirm": "Delete \"{{name}}\" from both daemons?",
-  "fleet_hosts.entry.not_found": "This observed host is not in the list."
+  "fleet_hosts.entry.not_found": "This observed host is not in the list.",
+  "fleet_hosts.entry.discard_confirm": "Discard unsaved changes?"
 }

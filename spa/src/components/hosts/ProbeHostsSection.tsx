@@ -1,8 +1,7 @@
 import { Plus } from '@phosphor-icons/react'
-import { useFleetDraftStore } from '../../lib/fleet/config-draft'
 import { ProbeBadge, ProbeStatusDot } from './probe-rows'
 import { useProbeRows } from './use-probe-rows'
-import { MAX_PROBE_HOSTS, startNewProbe, useProbeEditor } from './useProbeEditor'
+import { MAX_PROBE_HOSTS, selectProbeGuarded, startNewProbe, useProbeEditor } from './useProbeEditor'
 
 /**
  * 「觀察主機」 on the overview of a `fleet.v1` host (fleet spec §8.2): a short list — badge, name, status — whose rows open
@@ -27,7 +26,7 @@ export function ProbeHostsSection() {
         <ul className="border border-border-subtle rounded-lg divide-y divide-border-subtle">
           {rows.map((r) => (
             <li key={r.id}>
-              <button type="button" data-testid={`probe-row-${r.id}`} onClick={() => useFleetDraftStore.getState().selectProbe({ id: r.id, isNew: r.isNew })}
+              <button type="button" data-testid={`probe-row-${r.id}`} onClick={() => selectProbeGuarded({ id: r.id, isNew: r.isNew })}
                 className="w-full flex items-center gap-3 px-3 py-2 text-left cursor-pointer hover:bg-surface-secondary/50">
                 <ProbeBadge row={r} />
                 <span className="flex-1 truncate text-sm text-text-primary">{r.name}</span>
