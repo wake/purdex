@@ -13,9 +13,6 @@
 // since, the edit goes through only if that daemon's copy of THE ROW is still what the edit started from (or already what the
 // edit writes); otherwise the save returns `changed` and waits for `confirmChanged` — a retry after "A saved, B answered 409"
 // never overwrites B's newer content unseen.
-//
-// F-2b (the sidebar cells) opens the probe section on a row with `requestProbeFocus(id)`: the section highlights the row once
-// and clears the request (`focusProbe` back to null). The request waits in the store until a mounted section consumes it.
 import { create } from 'zustand'
 import { HostConfigApiError, HostConfigConflictError } from '../host-config-api'
 import { useFleetDraftStore } from './config-draft'
@@ -76,14 +73,10 @@ const EMPTY: DaemonFleetConfig = {
 
 interface State {
   byHost: Record<string, DaemonFleetConfig>
-  /** A probe row F-2b wants shown: set by `requestProbeFocus`, cleared by the section that highlighted it. */
-  focusProbe: string | null
   load: (hostId: string) => Promise<void>
   loadMany: (hostIds: string[]) => Promise<void>
   saveProbe: (hostIds: string[], edit: ProbeEdit, opts?: { confirmDropped?: boolean; confirmChanged?: boolean; base?: ProbeBase }) => Promise<SaveResult>
   saveFleetRow: (hostId: string, row: FleetRow, opts?: { confirmDropped?: boolean }) => Promise<SaveResult>
-  requestProbeFocus: (id: string) => void
-  clearProbeFocus: () => void
   reset: () => void
 }
 
@@ -113,7 +106,6 @@ const loadSeq = new Map<string, number>()
 
 export const useFleetConfigStore = create<State>((set, get) => ({
   byHost: {},
-  focusProbe: null,
 
   load: async (hostId) => {
     const seq = ++loadCounter
@@ -218,9 +210,7 @@ export const useFleetConfigStore = create<State>((set, get) => ({
     return { kind: 'saved' }
   }),
 
-  requestProbeFocus: (id) => set({ focusProbe: id }),
-  clearProbeFocus: () => set({ focusProbe: null }),
-  reset: () => { chain = Promise.resolve(); loadSeq.clear(); useFleetDraftStore.getState().reset(); set({ byHost: {}, focusProbe: null }) },
+  reset: () => { chain = Promise.resolve(); loadSeq.clear(); useFleetDraftStore.getState().reset(); set({ byHost: {} }) },
 }))
 
 /** Rows that lack an alias for some target daemon (a half row: it exists on one daemon only, or was dropped on the other). */

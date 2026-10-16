@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useLocation } from 'wouter'
 import type { PaneRendererProps } from '../lib/module-registry'
 import { encodeHostRouteId, isHostSubPage, type HostSubPage } from '../lib/host-routes'
@@ -13,6 +13,9 @@ import { ReceiveHostsDialog } from './hosts/ReceiveHostsDialog'
 import { ShareHostsDialog } from './hosts/ShareHostsDialog'
 import { PairPhoneDialog } from './hosts/PairPhoneDialog'
 import { PairedPhonesSection } from './hosts/PairedPhonesSection'
+import { ProbeHostPage } from './hosts/ProbeHostPage'
+import { startNewProbe } from './hosts/useProbeEditor'
+import { useFleetDraftStore } from '../lib/fleet/config-draft'
 
 export type { HostSubPage } from '../lib/host-routes'
 
@@ -270,6 +273,14 @@ export function HostPage({ isActive }: PaneRendererProps) {
   // 已配對的手機 is across hosts, not a sub-page of one: it takes the content area until a host sub-page is picked.
   const [showPaired, setShowPaired] = useState(false)
   const t = useI18nStore((s) => s.t)
+  // A probe host's own page (F-2d) takes the content area like the paired phones; the selection lives in the draft store so a
+  // tab switch keeps it. Any navigation of the Hosts route (not the first render) goes back to the host pages.
+  const selectedProbe = useFleetDraftStore((s) => s.selectedProbe)
+  const firstLocation = useRef(true)
+  useEffect(() => {
+    if (firstLocation.current) { firstLocation.current = false; return }
+    useFleetDraftStore.getState().selectProbe(null)
+  }, [location])
 
   // R2 attacker A2 fix — snapshot module-scoped lastSelection ONCE per render
   // and pass it to every helper.  preResolveHostId, resolveSelection, and
@@ -369,21 +380,28 @@ export function HostPage({ isActive }: PaneRendererProps) {
   return (
     <div className="flex h-full">
       <HostSidebar
-        selectedHostId={selection?.hostId ?? ''}
+        selectedHostId={selectedProbe ? '' : (selection?.hostId ?? '')}
         selectedSubPage={sidebarSubPage}
+        selectedProbeId={selectedProbe?.id ?? null}
+        onAddProbe={() => { setShowPaired(false); startNewProbe() }}
         onSelect={(hostId, subPage) => {
           setShowPaired(false)
+          if (hostId.startsWith('probe:')) {
+            useFleetDraftStore.getState().selectProbe({ id: hostId.slice('probe:'.length), isNew: false })
+            return
+          }
+          useFleetDraftStore.getState().selectProbe(null)
           setLocation(buildHostPath({ hostId, subPage }), { replace: true })
         }}
         onAddHost={() => setShowAddHost(true)}
         onShareHosts={() => setShowShare(true)}
         onReceiveHosts={() => setShowReceive(true)}
         onPairPhone={() => setShowPair(true)}
-        onShowPairedPhones={() => setShowPaired(true)}
-        pairedPhonesActive={showPaired}
+        onShowPairedPhones={() => { useFleetDraftStore.getState().selectProbe(null); setShowPaired(true) }}
+        pairedPhonesActive={showPaired && !selectedProbe}
       />
       <div className="flex-1 overflow-y-auto p-6">
-        {showPaired ? <PairedPhonesSection /> : renderContent()}
+        {selectedProbe ? <ProbeHostPage key={selectedProbe.id} probeId={selectedProbe.id} /> : showPaired ? <PairedPhonesSection /> : renderContent()}
       </div>
       {showAddHost && <AddHostDialog onClose={() => setShowAddHost(false)} />}
       {showShare && <ShareHostsDialog onClose={() => setShowShare(false)} />}

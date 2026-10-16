@@ -3,7 +3,6 @@
 // fleet from `useFleetStore` only; nothing here knows the wire.
 import { Fragment, useMemo } from 'react'
 import { useFleetStore, fleetHostsView, type FleetHostView } from '../../lib/fleet/store'
-import { useFleetConfigStore } from '../../lib/fleet/config-store'
 import { useHostStore } from '../../stores/useHostStore'
 import { useHostLookResolver, type HostLook } from '../../lib/host-look'
 import { CellSep } from '../team/TeamCell'
@@ -41,14 +40,10 @@ export function FleetCells({ variant, onOpenHost, onOpenHosts }: FleetCellsProps
     if (v.hostConfigId) return lookOf(v.hostConfigId)
     return { colors: v.colors, icon: v.icon, iconWeight: v.icon_weight as HostLook['iconWeight'] }
   }
-  // A probe host's cell opens the Hosts page on the primary's overview (a fleet.v1 host: where the probe-host section mounts) and
-  // asks that section to highlight the row once (`requestProbeFocus` waits in the store until a mounted section takes it).
+  // A probe host's cell opens the Hosts page on the primary's overview (a fleet.v1 host), where the probe-host list is.
   const open = (v: FleetHostView) => {
     if (v.hostConfigId) return onOpenHost(v.hostConfigId)
-    if (v.kind === 'probe' && snapshot) {
-      useFleetConfigStore.getState().requestProbeFocus(v.id)
-      return onOpenHost(snapshot.hostId)
-    }
+    if (v.kind === 'probe' && snapshot) return onOpenHost(snapshot.hostId)
     onOpenHosts()
   }
   const wide = variant === 'wide'

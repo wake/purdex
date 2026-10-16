@@ -1,57 +1,37 @@
-// F-2a2: the Hosts page's probe-host section (written to BOTH daemons) and the `fleet` row editor.
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, act, cleanup } from '@testing-library/react'
-import { TabContent } from '../TabContent'
-import { registerModule, clearModuleRegistry } from '../../lib/module-registry'
-import { createTab } from '../../types/tab'
-import { useUISettingsStore } from '../../stores/useUISettingsStore'
-import { useI18nStore } from '../../stores/useI18nStore'
-
-vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getTotalSize: () => count * 38,
-    getVirtualItems: () => Array.from({ length: count }, (_, i) => ({ index: i, key: i, start: i * 38, size: 38 })),
-  }),
-}))
-vi.mock('../../features/workspace/lib/icon-path-cache', () => ({
-  getIconPath: () => 'M0,0L10,10', isWeightLoaded: () => true, prefetchWeight: () => Promise.resolve(),
-}))
+// F-2d: the overview's probe-host list — a short list whose rows open the entry; it no longer edits.
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 
 const fetchFleetConfig = vi.fn()
 const fetchSshAliases = vi.fn()
-const putProbeHosts = vi.fn()
-const putFleetRow = vi.fn()
 vi.mock('../../lib/fleet/config-api', () => ({
   fetchFleetConfig: (...a: unknown[]) => fetchFleetConfig(...a),
   fetchSshAliases: (...a: unknown[]) => fetchSshAliases(...a),
-  putProbeHosts: (...a: unknown[]) => putProbeHosts(...a),
-  putFleetRow: (...a: unknown[]) => putFleetRow(...a),
+  putProbeHosts: vi.fn(),
+  putFleetRow: vi.fn(),
 }))
 
 import { ProbeHostsSection } from './ProbeHostsSection'
-import { FleetRowEditor } from './FleetRowEditor'
 import { useFleetConfigStore } from '../../lib/fleet/config-store'
+import { useFleetDraftStore } from '../../lib/fleet/config-draft'
 import { useFleetStore } from '../../lib/fleet/store'
 import { useHostStore } from '../../stores/useHostStore'
-import { HostConfigApiError, HostConfigConflictError } from '../../lib/host-config-api'
 import type { FleetConfigRead, ProbeRow } from '../../lib/fleet/config-api'
 
 const A = 'ha'
 const B = 'hb'
 const nas = (alias: string): ProbeRow => ({ id: 'aaaaaaaa', name: 'nas', ssh_alias: alias, icon: '', icon_weight: '' })
-const cfg = (items: ProbeRow[], revision: number, dropped: FleetConfigRead['probe']['dropped'] = null): FleetConfigRead => ({
-  probe: { items, revision, dropped, invalid: false },
+const cfg = (items: ProbeRow[], revision: number): FleetConfigRead => ({
+  probe: { items, revision, dropped: null, invalid: false },
   fleet: { items: { order: ['air26', 'mlab'], peer_ssh_alias: 'mlab', enabled: true }, revision: 5, dropped: null, invalid: false },
 })
 let copies: Record<string, FleetConfigRead>
 
 beforeEach(() => {
-  for (const f of [fetchFleetConfig, fetchSshAliases, putProbeHosts, putFleetRow]) f.mockReset()
+  fetchFleetConfig.mockReset(); fetchSshAliases.mockReset()
   copies = { [A]: cfg([nas('nas-a')], 3), [B]: cfg([nas('nas-b')], 8) }
   fetchFleetConfig.mockImplementation(async (id: string) => copies[id])
-  fetchSshAliases.mockImplementation(async (id: string) => (id === A ? ['nas-a', 'a-other'] : ['nas-b', 'b-other']))
-  putProbeHosts.mockResolvedValue(undefined)
-  putFleetRow.mockResolvedValue(undefined)
+  fetchSshAliases.mockResolvedValue([])
   useFleetConfigStore.getState().reset()
   const host = (id: string) => ({ id, name: id, ip: '127.0.0.1', port: 7860, token: 't' })
   useHostStore.setState({
@@ -59,464 +39,52 @@ beforeEach(() => {
     hostOrder: [A, B],
     runtime: { [A]: { status: 'connected' }, [B]: { status: 'connected' } } as never,
   })
-  useFleetStore.setState({
-    byHost: { [A]: { gen: 1, support: 'yes', term: 0 }, [B]: { gen: 1, support: 'yes', term: 0 } } as never,
-  })
+  useFleetStore.getState().reset()
+  useFleetStore.setState({ byHost: { [A]: { gen: 1, support: 'yes', term: 0 }, [B]: { gen: 1, support: 'yes', term: 0 } } as never })
 })
-afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
-async function mounted() {
-  render(<ProbeHostsSection />)
-  await screen.findByTestId('probe-row-aaaaaaaa')
-}
-
-describe('ProbeHostsSection', () => {
-  it('lists the probe hosts once, with each daemon\'s alias', async () => {
-    await mounted()
+describe('ProbeHostsSection (the short list)', () => {
+  it('lists each probe host once with its badge, name and status', async () => {
+    render(<ProbeHostsSection />)
+    const r = await screen.findByTestId('probe-row-aaaaaaaa')
+    expect(r.textContent).toContain('nas')
+    expect(r.querySelector('[data-testid="probe-badge"]')).toBeTruthy()
+    expect(r.querySelector('[data-testid="probe-status"]')).toBeTruthy()
     expect(screen.getAllByTestId(/^probe-row-/)).toHaveLength(1)
-    expect(screen.getByTestId('probe-row-aaaaaaaa').textContent).toContain('nas-a')
-    expect(screen.getByTestId('probe-row-aaaaaaaa').textContent).toContain('nas-b')
   })
 
-  it('the dialog asks the alias per daemon, options from each daemon, and writes both with their own alias and revision', async () => {
-    await mounted()
-    fireEvent.click(screen.getByTestId('probe-edit-aaaaaaaa'))
-    const a = screen.getByTestId(`probe-alias-${A}`) as HTMLSelectElement
-    const b = screen.getByTestId(`probe-alias-${B}`) as HTMLSelectElement
-    expect([...a.options].map((o) => o.value)).toEqual(['', 'nas-a', 'a-other'])
-    expect([...b.options].map((o) => o.value)).toEqual(['', 'nas-b', 'b-other'])
-    fireEvent.change(a, { target: { value: 'a-other' } })
-    fireEvent.change(b, { target: { value: 'b-other' } })
-    fireEvent.click(screen.getByTestId('probe-save'))
-    await waitFor(() => expect(putProbeHosts).toHaveBeenCalledTimes(2))
-    const by = Object.fromEntries(putProbeHosts.mock.calls.map((c) => [c[0], c]))
-    expect(by[A][1][0].ssh_alias).toBe('a-other')
-    expect(by[A][2]).toBe(3)
-    expect(by[B][1][0].ssh_alias).toBe('b-other')
-    expect(by[B][2]).toBe(8)
+  it('a row opens the entry', async () => {
+    render(<ProbeHostsSection />)
+    fireEvent.click(await screen.findByTestId('probe-row-aaaaaaaa'))
+    expect(useFleetDraftStore.getState().selectedProbe).toEqual({ id: 'aaaaaaaa', isNew: false })
   })
 
-  it('a 409 from one daemon reloads both and says the list changed elsewhere', async () => {
-    await mounted()
-    putProbeHosts.mockImplementation(async (id: string) => { if (id === B) throw new HostConfigConflictError({ items: [], revision: 9 }) })
-    fetchFleetConfig.mockClear()
-    fireEvent.click(screen.getByTestId('probe-edit-aaaaaaaa'))
-    fireEvent.click(screen.getByTestId('probe-save'))
-    // The dialog stays (the draft is not lost) and says what each daemon took.
-    const msg = await screen.findByTestId('probe-dialog-error')
-    expect(msg.textContent).toMatch(/elsewhere|別處/)
-    expect(screen.getByTestId('probe-dialog')).toBeTruthy()
-    expect(fetchFleetConfig.mock.calls.map((c) => c[0]).sort()).toEqual([A, B])
+  it('「新增觀察主機」 selects a fresh id as a new entry', async () => {
+    render(<ProbeHostsSection />)
+    await screen.findByTestId('probe-row-aaaaaaaa')
+    await waitFor(() => expect((screen.getByTestId('probe-add') as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByTestId('probe-add'))
+    const sel = useFleetDraftStore.getState().selectedProbe!
+    expect(sel.isNew).toBe(true)
+    expect(sel.id).not.toBe('aaaaaaaa')
   })
 
-  it('the 400 text shows inside the dialog', async () => {
-    await mounted()
-    putProbeHosts.mockRejectedValueOnce(new HostConfigApiError(400, 'unknown_ssh_alias: nas-a'))
-    fireEvent.click(screen.getByTestId('probe-edit-aaaaaaaa'))
-    fireEvent.click(screen.getByTestId('probe-save'))
-    expect((await screen.findByTestId('probe-dialog-error')).textContent).toContain('ha refused it: unknown_ssh_alias: nas-a')
-    expect(screen.getByTestId('probe-dialog')).toBeTruthy()
+  it('has no edit or delete controls any more', async () => {
+    render(<ProbeHostsSection />)
+    await screen.findByTestId('probe-row-aaaaaaaa')
+    expect(screen.queryByTestId('probe-edit-aaaaaaaa')).toBeNull()
+    expect(screen.queryByTestId('probe-delete-aaaaaaaa')).toBeNull()
   })
 
-  it('remove asks once: the first click writes nothing, the confirm writes both', async () => {
-    await mounted()
-    fireEvent.click(screen.getByTestId('probe-delete-aaaaaaaa'))
-    expect(putProbeHosts).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByTestId('probe-delete-confirm-aaaaaaaa'))
-    await waitFor(() => expect(putProbeHosts).toHaveBeenCalledTimes(2))
-    expect(putProbeHosts.mock.calls.every((c) => (c[1] as unknown[]).length === 0)).toBe(true)
-  })
-
-  it('dropped > 0: saving first shows the notice with the reason and writes nothing until confirmed', async () => {
-    copies[A] = cfg([nas('nas-a')], 3, { count: 2, reasons: ['unknown_ssh_alias: gone'] })
-    await mounted()
-    fireEvent.click(screen.getByTestId('probe-delete-aaaaaaaa'))
-    fireEvent.click(screen.getByTestId('probe-delete-confirm-aaaaaaaa'))
-    const notice = await screen.findByTestId('probe-dropped-confirm')
-    expect(notice.textContent).toContain('unknown_ssh_alias: gone')
-    expect(putProbeHosts).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByTestId('probe-dropped-save'))
-    await waitFor(() => expect(putProbeHosts).toHaveBeenCalledTimes(2))
-  })
-
-  it('a focus request highlights the row once and is cleared', async () => {
-    await mounted()
-    vi.useFakeTimers()
-    act(() => useFleetConfigStore.getState().requestProbeFocus('aaaaaaaa'))
-    expect(screen.getByTestId('probe-row-aaaaaaaa').getAttribute('data-highlighted')).toBe('true')
-    expect(useFleetConfigStore.getState().focusProbe).toBeNull()
-    act(() => { vi.advanceTimersByTime(2500) })
-    expect(screen.getByTestId('probe-row-aaaaaaaa').getAttribute('data-highlighted')).toBeNull()
+  it('says it is reading while the daemons are read, not "no probe hosts"', () => {
+    fetchFleetConfig.mockImplementation(() => new Promise(() => {}))
+    render(<ProbeHostsSection />)
+    expect(screen.getByTestId('probe-state').textContent).toMatch(/Reading/)
   })
 
   it('renders nothing when no daemon carries fleet.v1', () => {
     useFleetStore.setState({ byHost: { [A]: { gen: 1, support: 'no', term: 0 } } as never })
     const { container } = render(<ProbeHostsSection />)
     expect(container.innerHTML).toBe('')
-  })
-})
-
-describe('FleetRowEditor', () => {
-  it('round trips order, peer alias and enabled with the row\'s revision', async () => {
-    render(<FleetRowEditor hostId={A} />)
-    const order = (await screen.findByTestId('fleet-row-order')) as HTMLInputElement
-    await waitFor(() => expect(order.value).toBe('air26, mlab'))
-    fireEvent.change(order, { target: { value: 'mlab, air26' } })
-    fireEvent.change(screen.getByTestId('fleet-row-peer'), { target: { value: 'a-other' } })
-    fireEvent.click(screen.getByLabelText('Fleet enabled on this daemon'))
-    fireEvent.click(screen.getByTestId('fleet-row-save'))
-    await waitFor(() => expect(putFleetRow).toHaveBeenCalledTimes(1))
-    expect(putFleetRow).toHaveBeenCalledWith(A, { order: ['mlab', 'air26'], peer_ssh_alias: 'a-other', enabled: false }, 5)
-  })
-
-  it('shows the 400 text and the conflict notice', async () => {
-    render(<FleetRowEditor hostId={A} />)
-    await screen.findByTestId('fleet-row-order')
-    await waitFor(() => expect((screen.getByTestId('fleet-row-save') as HTMLButtonElement).disabled).toBe(false))
-    fireEvent.change(screen.getByTestId('fleet-row-peer'), { target: { value: '' } }) // this daemon's alias list has no `mlab`
-    putFleetRow.mockRejectedValueOnce(new HostConfigApiError(400, 'order: bad'))
-    fireEvent.click(screen.getByTestId('fleet-row-save'))
-    expect((await screen.findByTestId('fleet-row-error')).textContent).toBe('order: bad')
-    putFleetRow.mockRejectedValueOnce(new HostConfigConflictError({ items: {}, revision: 6 }))
-    fireEvent.click(screen.getByTestId('fleet-row-save'))
-    expect(await screen.findByTestId('fleet-row-conflict')).toBeTruthy()
-  })
-})
-
-const pending = () => { let release: () => void = () => {}; const p = new Promise<void>((res) => { release = res }); return { p, release } }
-const row = (id: string, name: string, alias: string): ProbeRow => ({ id, name, ssh_alias: alias, icon: '', icon_weight: '' })
-const typeName = (v: string) => fireEvent.change(screen.getByTestId('probe-field-name'), { target: { value: v } })
-const pickAliases = () => {
-  fireEvent.change(screen.getByTestId(`probe-alias-${A}`), { target: { value: 'a-other' } })
-  fireEvent.change(screen.getByTestId(`probe-alias-${B}`), { target: { value: 'b-other' } })
-}
-
-describe('ProbeHostsSection — a row only one daemon has', () => {
-  it('is shown with the daemon that has it, and an unrelated save leaves it where it is (never an empty alias)', async () => {
-    copies[A] = cfg([nas('nas-a'), row('bbbbbbbb', 'half', 'half-a')], 3)
-    await mounted()
-    expect(screen.getByTestId('probe-half-bbbbbbbb').textContent).toContain('exists only on')
-    fireEvent.click(screen.getByTestId('probe-delete-aaaaaaaa'))
-    fireEvent.click(screen.getByTestId('probe-delete-confirm-aaaaaaaa'))
-    await waitFor(() => expect(putProbeHosts).toHaveBeenCalledTimes(2))
-    const by = Object.fromEntries(putProbeHosts.mock.calls.map((c) => [c[0], c]))
-    expect((by[A][1] as ProbeRow[]).map((r) => r.id)).toEqual(['bbbbbbbb'])
-    expect(by[B][1]).toEqual([])
-  })
-  it('removing the half row itself is allowed', async () => {
-    copies[A] = cfg([nas('nas-a'), row('bbbbbbbb', 'half', 'half-a')], 3)
-    await mounted()
-    fireEvent.click(screen.getByTestId('probe-delete-bbbbbbbb'))
-    fireEvent.click(screen.getByTestId('probe-delete-confirm-bbbbbbbb'))
-    await waitFor(() => expect(putProbeHosts).toHaveBeenCalledTimes(2))
-    for (const c of putProbeHosts.mock.calls) expect((c[1] as ProbeRow[]).every((r) => r.ssh_alias !== '')).toBe(true)
-    for (const c of putProbeHosts.mock.calls) expect((c[1] as ProbeRow[]).map((r) => r.id)).not.toContain('bbbbbbbb')
-  })
-  it('editing it asks for the missing daemon\'s alias before anything is written', async () => {
-    copies[A] = cfg([nas('nas-a'), row('bbbbbbbb', 'half', 'half-a')], 3)
-    await mounted()
-    fireEvent.click(screen.getByTestId('probe-edit-bbbbbbbb'))
-    fireEvent.click(screen.getByTestId('probe-save'))
-    expect(screen.getByTestId('probe-dialog-invalid')).toBeTruthy()
-    expect(putProbeHosts).not.toHaveBeenCalled()
-  })
-})
-
-describe('ProbeHostsSection — what each daemon took', () => {
-  it('A saved and B failed: the dialog and draft stay, the text says where it was written and why B refused', async () => {
-    await mounted()
-    putProbeHosts.mockImplementation(async (id: string) => { if (id === B) throw new HostConfigApiError(400, 'unknown_ssh_alias: nas-b') })
-    fetchFleetConfig.mockClear()
-    fireEvent.click(screen.getByTestId('probe-edit-aaaaaaaa'))
-    typeName('renamed')
-    fireEvent.click(screen.getByTestId('probe-save'))
-    const msg = (await screen.findByTestId('probe-dialog-error')).textContent!
-    expect(msg).toContain('Written on ha')
-    expect(msg).toContain('hb refused it: unknown_ssh_alias: nas-b')
-    expect(msg).toMatch(/now differ/)
-    expect((screen.getByTestId('probe-field-name') as HTMLInputElement).value).toBe('renamed')
-    expect(fetchFleetConfig.mock.calls.map((c) => c[0]).sort()).toEqual([A, B])
-  })
-  it('one saved and one 409: the draft stays and the message names the daemon that holds the other version', async () => {
-    await mounted()
-    putProbeHosts.mockImplementation(async (id: string) => { if (id === B) throw new HostConfigConflictError({ items: [], revision: 9 }) })
-    fireEvent.click(screen.getByTestId('probe-edit-aaaaaaaa'))
-    typeName('keep me')
-    fireEvent.click(screen.getByTestId('probe-save'))
-    const msg = (await screen.findByTestId('probe-dialog-error')).textContent!
-    expect(msg).toContain('Written on ha')
-    expect(msg).toContain('Changed elsewhere on hb')
-    expect((screen.getByTestId('probe-field-name') as HTMLInputElement).value).toBe('keep me')
-  })
-  it('the same id with different content on the two daemons is marked and the rewrite writes only the daemon that differs', async () => {
-    copies[B] = cfg([{ ...nas('nas-b'), name: 'other name' }], 8)
-    await mounted()
-    expect(screen.getByTestId('probe-mismatch-aaaaaaaa').textContent).toContain('disagree')
-    fireEvent.click(screen.getByTestId('probe-rewrite-aaaaaaaa'))
-    await waitFor(() => expect(putProbeHosts).toHaveBeenCalledTimes(1))
-    expect(putProbeHosts.mock.calls[0][0]).toBe(B)
-    expect((putProbeHosts.mock.calls[0][1] as ProbeRow[])[0]).toMatchObject({ name: 'nas', ssh_alias: 'nas-b' })
-  })
-})
-
-describe('ProbeHostsSection — fewer reachable daemons than known ones', () => {
-  it('writing is off and the text says which daemon is unreachable', async () => {
-    useHostStore.setState({ runtime: { [A]: { status: 'connected' }, [B]: { status: 'disconnected' } } as never })
-    render(<ProbeHostsSection />)
-    await screen.findByTestId('probe-row-aaaaaaaa')
-    expect(screen.getByTestId('probe-unreachable').textContent).toContain('hb')
-    expect((screen.getByTestId('probe-add') as HTMLButtonElement).disabled).toBe(true)
-    expect((screen.getByTestId('probe-edit-aaaaaaaa') as HTMLButtonElement).disabled).toBe(true)
-    expect((screen.getByTestId('probe-delete-aaaaaaaa') as HTMLButtonElement).disabled).toBe(true)
-    expect(putProbeHosts).not.toHaveBeenCalled()
-  })
-})
-
-describe('ProbeHostsSection — the dialog mirrors the daemon', () => {
-  const openAdd = async () => { await mounted(); fireEvent.click(screen.getByTestId('probe-add')) }
-  it('a name over 40 characters is refused before anything is sent', async () => {
-    await openAdd()
-    typeName('x'.repeat(41))
-    pickAliases()
-    fireEvent.click(screen.getByTestId('probe-save'))
-    expect(screen.getByTestId('probe-dialog-invalid').textContent).toContain('1 to 40')
-    expect(putProbeHosts).not.toHaveBeenCalled()
-  })
-  it('40 characters pass, counted as characters (not bytes)', async () => {
-    await openAdd()
-    typeName('機'.repeat(40))
-    pickAliases()
-    fireEvent.click(screen.getByTestId('probe-save'))
-    await waitFor(() => expect(putProbeHosts).toHaveBeenCalledTimes(2))
-  })
-  it('a control character is refused', async () => {
-    await openAdd()
-    typeName('bad\u0007name')
-    pickAliases()
-    fireEvent.click(screen.getByTestId('probe-save'))
-    expect(screen.getByTestId('probe-dialog-invalid').textContent).toContain('control')
-    expect(putProbeHosts).not.toHaveBeenCalled()
-  })
-  it('a new id avoids the ids already in the list', async () => {
-    let n = 0
-    vi.spyOn(crypto, 'getRandomValues').mockImplementation(((a: Uint8Array) => { a.set(n++ === 0 ? [0xaa, 0xaa, 0xaa, 0xaa] : [1, 2, 3, 4]); return a }) as never)
-    await openAdd()
-    typeName('new one')
-    pickAliases()
-    fireEvent.click(screen.getByTestId('probe-save'))
-    await waitFor(() => expect(putProbeHosts).toHaveBeenCalledTimes(2))
-    expect((putProbeHosts.mock.calls[0][1] as ProbeRow[]).map((r) => r.id)).toEqual(['aaaaaaaa', '01020304'])
-  })
-})
-
-describe('the fleet row editor mirrors the daemon', () => {
-  const save = async (order: string) => {
-    render(<FleetRowEditor hostId={A} />)
-    const input = (await screen.findByTestId('fleet-row-order')) as HTMLInputElement
-    await waitFor(() => expect(input.value).toBe('air26, mlab'))
-    fireEvent.change(input, { target: { value: order } })
-    fireEvent.change(screen.getByTestId('fleet-row-peer'), { target: { value: '' } })
-    fireEvent.click(screen.getByTestId('fleet-row-save'))
-  }
-  it.each([
-    ['five aliases', 'a, b, c, d, e', /1 to 4/],
-    ['none', ' , ', /1 to 4/],
-    ['a bad shape', 'air26, bad alias', /not a valid host alias/],
-    ['a duplicate, compared in lower case', 'air26, AIR26', /listed twice/],
-  ])('%s is refused with a message and nothing is sent', async (_n, order, msg) => {
-    await save(order)
-    expect((await screen.findByTestId('fleet-row-invalid')).textContent).toMatch(msg)
-    expect(putFleetRow).not.toHaveBeenCalled()
-  })
-  it('a peer alias this daemon does not know is refused', async () => {
-    render(<FleetRowEditor hostId={A} />)
-    await waitFor(() => expect((screen.getByTestId('fleet-row-save') as HTMLButtonElement).disabled).toBe(false))
-    // the stored row names `mlab`, which this daemon's alias list does not carry
-    fireEvent.click(screen.getByTestId('fleet-row-save'))
-    expect((await screen.findByTestId('fleet-row-invalid')).textContent).toContain('"mlab" is not an SSH alias this daemon knows')
-    expect(putFleetRow).not.toHaveBeenCalled()
-  })
-})
-
-// CLAUDE.md tab-hosted checklist: the Hosts page is a tab and unmounts when the reader switches away (keepAliveCount 0).
-describe('the editors across a real tab switch', () => {
-  const Probe = () => <><FleetRowEditor hostId={A} /><ProbeHostsSection /></>
-  const Other = () => <div data-testid="other-tab" />
-  const hostsTab = { ...createTab({ kind: 'hosts' }), id: 't-hosts' }
-  const dashTab = { ...createTab({ kind: 'dashboard' }), id: 't-dash' }
-  const all = [hostsTab, dashTab]
-  beforeEach(() => {
-    cleanup(); clearModuleRegistry()
-    registerModule({ id: 'hosts', name: 'Hosts', panes: [{ kind: 'hosts', component: Probe }] })
-    registerModule({ id: 'dashboard', name: 'Dashboard', panes: [{ kind: 'dashboard', component: Other }] })
-    useUISettingsStore.setState({ keepAliveCount: 0 })
-  })
-  const away = (rerender: (ui: React.ReactElement) => void) => {
-    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
-    expect(screen.queryByTestId('probe-hosts-section')).toBeNull() // really unmounted
-    rerender(<TabContent activeTab={hostsTab} allTabs={all} />)
-  }
-  it('a save in flight is still in flight after a switch away and back: Save stays off', async () => {
-    const gate = pending()
-    putProbeHosts.mockImplementation(async () => { await gate.p })
-    const { rerender } = render(<TabContent activeTab={hostsTab} allTabs={all} />)
-    await screen.findByTestId('probe-row-aaaaaaaa')
-    fireEvent.click(screen.getByTestId('probe-edit-aaaaaaaa'))
-    fireEvent.click(screen.getByTestId('probe-save'))
-    await waitFor(() => expect((screen.getByTestId('probe-save') as HTMLButtonElement).disabled).toBe(true))
-    away(rerender)
-    await screen.findByTestId('probe-row-aaaaaaaa')
-    expect((screen.getByTestId('probe-save') as HTMLButtonElement).disabled).toBe(true)
-    expect(putProbeHosts).toHaveBeenCalledTimes(2)
-    gate.release()
-    await waitFor(() => expect(screen.queryByTestId('probe-dialog')).toBeNull())
-  })
-  it('keeps the probe dialog draft, the delete prompt, the dropped confirmation and the fleet row fields', async () => {
-    copies[A] = cfg([nas('nas-a')], 3, { count: 1, reasons: ['gone'] })
-    const { rerender } = render(<TabContent activeTab={hostsTab} allTabs={all} />)
-    await screen.findByTestId('probe-row-aaaaaaaa')
-    const order = (await screen.findByTestId('fleet-row-order')) as HTMLInputElement
-    await waitFor(() => expect(order.value).toBe('air26, mlab'))
-    fireEvent.change(order, { target: { value: 'mlab, air26' } })
-    fireEvent.click(screen.getByTestId('probe-edit-aaaaaaaa'))
-    typeName('half typed')
-    away(rerender)
-    await screen.findByTestId('probe-row-aaaaaaaa')
-    expect((screen.getByTestId('probe-field-name') as HTMLInputElement).value).toBe('half typed')
-    expect((screen.getByTestId('fleet-row-order') as HTMLInputElement).value).toBe('mlab, air26')
-    // the delete prompt and the dropped confirmation
-    fireEvent.click(screen.getAllByText('Cancel')[0])
-    fireEvent.click(screen.getByTestId('probe-delete-aaaaaaaa'))
-    away(rerender)
-    fireEvent.click(await screen.findByTestId('probe-delete-confirm-aaaaaaaa'))
-    await screen.findByTestId('probe-dropped-confirm')
-    away(rerender)
-    expect(await screen.findByTestId('probe-dropped-confirm')).toBeTruthy()
-  })
-})
-
-const dialog = () => screen.getByTestId('probe-dialog')
-
-describe('ProbeHostsSection — what is shown while it cannot be written', () => {
-  it('a connected daemon whose read failed: the error is shown with a Reload button that reads again', async () => {
-    fetchFleetConfig.mockImplementation(async (id: string) => { if (id === B) throw new HostConfigApiError(500, 'GET /api/hostconfig: 500'); return copies[id] })
-    render(<ProbeHostsSection />)
-    const box = await screen.findByTestId('probe-load-error')
-    expect(box.textContent).toContain('hb')
-    expect(box.textContent).toContain('GET /api/hostconfig: 500')
-    expect((screen.getByTestId('probe-add') as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByTestId('probe-state').textContent).toMatch(/cannot be read/)
-    expect(screen.queryByText('No probe-only hosts.')).toBeNull()
-    fetchFleetConfig.mockImplementation(async (id: string) => copies[id])
-    fireEvent.click(screen.getByRole('button', { name: 'Reload' }))
-    await screen.findByTestId('probe-row-aaaaaaaa')
-    expect(screen.queryByTestId('probe-load-error')).toBeNull()
-  })
-  it('while the daemons are being read it says so, not "no probe-only hosts"', async () => {
-    const gate = pending()
-    fetchFleetConfig.mockImplementation(async (id: string) => { await gate.p; return copies[id] })
-    render(<ProbeHostsSection />)
-    expect((await screen.findByTestId('probe-state')).textContent).toMatch(/Reading/)
-    expect(screen.queryByText('No probe-only hosts.')).toBeNull()
-    gate.release()
-    await screen.findByTestId('probe-row-aaaaaaaa')
-  })
-  it('with every daemon unreachable it says it cannot read, not "no probe-only hosts"', () => {
-    useHostStore.setState({ runtime: { [A]: { status: 'disconnected' }, [B]: { status: 'disconnected' } } as never })
-    render(<ProbeHostsSection />)
-    expect(screen.getByTestId('probe-state').textContent).toMatch(/cannot be read/)
-    expect(screen.getByTestId('probe-unreachable').textContent).toContain('ha, hb')
-    expect(screen.queryByText('No probe-only hosts.')).toBeNull()
-  })
-  it('one daemon down: the row of the other is listed but writing stays off, including the rewrite', async () => {
-    useHostStore.setState({ runtime: { [A]: { status: 'connected' }, [B]: { status: 'disconnected' } } as never })
-    render(<ProbeHostsSection />)
-    await screen.findByTestId('probe-row-aaaaaaaa')
-    expect(screen.queryByTestId('probe-rewrite-aaaaaaaa')).toBeNull()
-    expect((screen.getByRole('button', { name: 'Edit nas' }) as HTMLButtonElement).disabled).toBe(true)
-  })
-  it('a pending focus request for a row that is not there is dropped once everything is read', async () => {
-    await mounted()
-    act(() => useFleetConfigStore.getState().requestProbeFocus('zzzzzzzz'))
-    await waitFor(() => expect(useFleetConfigStore.getState().focusProbe).toBeNull())
-  })
-  it('the strings come out in zh-TW too', async () => {
-    useI18nStore.getState().setLocale('zh-TW')
-    try {
-      useHostStore.setState({ runtime: { [A]: { status: 'connected' }, [B]: { status: 'disconnected' } } as never })
-      render(<ProbeHostsSection />)
-      await screen.findByTestId('probe-row-aaaaaaaa')
-      expect(screen.getByTestId('probe-unreachable').textContent).toContain('連不上')
-      expect(screen.getByRole('button', { name: '編輯 nas' })).toBeTruthy()
-    } finally {
-      useI18nStore.getState().setLocale('en')
-    }
-  })
-})
-
-describe('ProbeHostsSection — the dialog as a dialog', () => {
-  const open = async () => { await mounted(); fireEvent.click(screen.getByTestId('probe-edit-aaaaaaaa')) }
-  it('is a modal form: Enter submits, Save is the submit button', async () => {
-    await open()
-    expect(dialog().getAttribute('aria-modal')).toBe('true')
-    expect(screen.getByTestId('probe-save').getAttribute('type')).toBe('submit')
-    fireEvent.submit(dialog())
-    await waitFor(() => expect(putProbeHosts).toHaveBeenCalledTimes(2))
-  })
-  it('Escape closes it, and gives the focus back to the button that opened it', async () => {
-    await mounted()
-    const opener = screen.getByTestId('probe-edit-aaaaaaaa')
-    fireEvent.click(opener)
-    fireEvent.keyDown(dialog(), { key: 'Escape' })
-    expect(screen.queryByTestId('probe-dialog')).toBeNull()
-    expect(document.activeElement).toBe(opener)
-  })
-  it('Escape while a save is in flight does not drop the draft', async () => {
-    const gate = pending()
-    await open()
-    putProbeHosts.mockImplementation(async () => { await gate.p })
-    typeName('mid flight')
-    fireEvent.click(screen.getByTestId('probe-save'))
-    await waitFor(() => expect((screen.getByTestId('probe-save') as HTMLButtonElement).disabled).toBe(true))
-    fireEvent.keyDown(dialog(), { key: 'Escape' })
-    expect(screen.getByTestId('probe-dialog')).toBeTruthy()
-    expect((screen.getByTestId('probe-field-name') as HTMLInputElement).value).toBe('mid flight')
-    gate.release()
-    await waitFor(() => expect(screen.queryByTestId('probe-dialog')).toBeNull())
-  })
-  it('a daemon dropping while it is open turns Save off and says why', async () => {
-    await open()
-    act(() => { useHostStore.setState({ runtime: { [A]: { status: 'connected' }, [B]: { status: 'disconnected' } } as never }) })
-    expect((screen.getByTestId('probe-save') as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByTestId('probe-dialog-blocked').textContent).toContain('hb')
-  })
-  it('the buttons carry accessible names', async () => {
-    await mounted()
-    expect(screen.getByRole('button', { name: 'Edit nas' })).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: 'Delete nas' }))
-    expect(screen.getByRole('button', { name: 'Delete nas' })).toBeTruthy() // the confirm check
-    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy()
-  })
-})
-
-describe('ProbeHostsSection — a daemon changed the row since the edit began', () => {
-  it('after "A saved, B 409" a retry asks before it overwrites B\'s newer copy, then overwrites on confirm', async () => {
-    await mounted()
-    fireEvent.click(screen.getByTestId('probe-edit-aaaaaaaa'))
-    typeName('mine')
-    putProbeHosts.mockImplementation(async (id: string) => { if (id === B) throw new HostConfigConflictError({ items: [], revision: 9 }) })
-    copies[A] = cfg([{ ...nas('nas-a'), name: 'mine' }], 4)
-    copies[B] = cfg([{ ...nas('nas-b'), name: 'theirs' }], 9)
-    fireEvent.click(screen.getByTestId('probe-save'))
-    expect((await screen.findByTestId('probe-dialog-error')).textContent).toContain('Changed elsewhere on hb')
-    putProbeHosts.mockReset().mockResolvedValue(undefined)
-    fireEvent.click(screen.getByTestId('probe-save'))
-    await waitFor(() => expect(screen.getByTestId('probe-dialog-error').textContent).toContain('hb was changed elsewhere since you started'))
-    expect(putProbeHosts).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByTestId('probe-overwrite'))
-    await waitFor(() => expect(putProbeHosts).toHaveBeenCalled())
-    const toB = putProbeHosts.mock.calls.find((c) => c[0] === B)!
-    expect(toB[2]).toBe(9)
-    expect((toB[1] as ProbeRow[])[0].name).toBe('mine')
   })
 })
