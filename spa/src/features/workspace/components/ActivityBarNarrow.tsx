@@ -11,6 +11,7 @@ import { HoverTooltip } from '../../../components/HoverTooltip'
 import { useProfileSwitcherTrigger } from '../../../stores/useProfileSwitcherStore'
 import { ProfileIcon, ProfileSwitcher } from './ProfileSwitcher'
 import { BottomNav } from './BottomNav'
+import { FleetCells } from '../../../components/fleet/FleetCells'
 import { FloatingPanel } from '../../../components/FloatingPanel'
 import { WorkerList } from '../../../components/executions/WorkerList'
 
@@ -102,6 +103,7 @@ export function ActivityBarNarrow({
   onReorderWorkspaces,
   onContextMenuWorkspace,
   onOpenHosts,
+  onOpenHost,
   onOpenSettings,
 }: ActivityBarProps) {
   const t = useI18nStore((s) => s.t)
@@ -199,6 +201,7 @@ export function ActivityBarNarrow({
         onOpenHosts={onOpenHosts}
         onOpenSettings={onOpenSettings}
       />
+      <FleetCells variant="narrow" onOpenHost={onOpenHost ?? (() => onOpenHosts())} onOpenHosts={onOpenHosts} />
       {workersPanelOpen && (
         <FloatingPanel
           title={t('nav.workers')}

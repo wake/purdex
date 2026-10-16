@@ -213,6 +213,7 @@ export default function App() {
             onReorderWorkspaces={handleReorderWorkspaces}
             onContextMenuWorkspace={handleWsContextMenu}
             onOpenHosts={handleOpenHosts}
+            onOpenHost={handleNavigateToHost}
             onOpenSettings={handleOpenSettings}
             // Phase 2
             tabsById={tabs}

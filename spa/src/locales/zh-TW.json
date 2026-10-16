@@ -2521,5 +2521,20 @@
   "launch.err.unknown_outcome": "不確定有沒有送出，請重新整理確認",
   "launch.no_generation": "無法確認這個 session 的世代，請重新整理",
   "split.close": "關閉面板",
-  "split.panel": "側邊面板"
+  "split.panel": "側邊面板",
+
+  "fleet.zone.normal": "正常",
+  "fleet.zone.warning": "偏高",
+  "fleet.zone.danger": "過載",
+  "fleet.zone.offline": "離線",
+  "fleet.no_data": "沒有資料",
+  "fleet.cpu": "CPU {{v}}%",
+  "fleet.mem": "記憶體 {{v}}%",
+  "fleet.pressure": "記憶體壓力 {{v}} 級",
+  "fleet.page_rate": "換頁 {{v}} 頁/秒",
+  "fleet.disk": "磁碟已用 {{v}}%",
+  "fleet.queue": "排隊：{{n}} 個等待，最久 {{s}} 秒",
+  "fleet.queue_held": "暫停放行",
+  "fleet.waiting_primary": "等待主方",
+  "fleet.primary_elsewhere": "主方不在這台 App"
 }
