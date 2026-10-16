@@ -7,6 +7,7 @@ import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
+import { useFleetStore } from '../lib/fleet/store'
 import { useI18nStore } from '../stores/useI18nStore'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { getPaneIcon, getPaneLabel } from '../lib/pane-labels'
@@ -124,6 +125,8 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
 
   const sessionLookup = { getByCode: (code: string) => sessions.find((sess) => sess.code === code) }
   const workspaceLookup = { getById: (id: string) => workspaces.find((w) => w.id === id) }
+  // A watch-host tab is named by the fleet's alias: subscribe, so the label follows the snapshot (getPaneLabel reads it).
+  useFleetStore((s) => (primaryContent.kind === 'watch-host' ? s.snapshot?.hosts[primaryContent.fleetHostId]?.alias : undefined))
   const baseLabel = getPaneLabel(primaryContent, sessionLookup, workspaceLookup, t)
   const session = sessionCode ? sessionLookup.getByCode(sessionCode) : undefined
 
