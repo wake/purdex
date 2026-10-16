@@ -120,10 +120,19 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 	if *tool != "" && *class == "" {
 		cfg, _ := gate.Load(gateConfigPath(*cfgPath))
 		cls := cfg.Intercept.Classify(command, gate.EnvOf(os.Environ(), gateStdinIsTTY()))
-		if !cfg.Enabled || !cls.Valid() {
+		if !cfg.Enabled {
 			return gateExecDirect(realBin, command, stderr)
 		}
-		c = cls
+		if !cls.Valid() {
+			// A packaging script, or a `run` script nobody has a rule for, takes no slot but is run by the gate as its child (to
+			// be written down, and for packaging to be put under a slot when it runs long, #2996); the gate classifies it again.
+			if cfg.WatchKind(command, gate.EnvOf(os.Environ(), gateStdinIsTTY())) == "" {
+				return gateExecDirect(realBin, command, stderr)
+			}
+			c = ""
+		} else {
+			c = cls
+		}
 	}
 	cfg := loadGateConfig(*cfgPath, stderr)
 	g := gate.New(cfg)

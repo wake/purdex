@@ -200,7 +200,7 @@ Design:
   | Module | Item | Parameters (default) |
   |---|---|---|
   | `intercept` | 1 | `tools` (go, pnpm, npx, vitest, tsc), `mod_rewrite` (true), extra `[[gate.intercept.rule]]` (match → class, before the built-ins) |
-  | `slots` | 1 | `heavy` (1), `light` (3), `order` (fifo) |
+  | `slots` | 1 | `heavy` (1), `light` (3), `order` (fifo); **0 pauses the class** (user decision 10-16): new commands of it wait with the reason `paused` until it is raised again, commands already running go on, and `pdx gate status` shows the class as paused |
   | `admission` | 2 | `enabled`, `max_pressure_level` (1), `max_page_rate` (auto = 50 pages/s over 10 s, G0; the level is the primary signal), `disk_min_gb` (10), `on_unreadable` (level-only) |
   | `parallelism` | 3 | `mode` (auto \| fixed \| off), `reserve_cores` (2), `mem_per_worker_mb` per tool (go 150, vitest 700, others 400), `go_p` / `vitest_workers` / `pnpm_concurrency` (auto), `vitest_max_workers` (3), per-class overrides |
   | `priority` | 4 | `mode` (nice \| background \| none), `nice` (10) |
@@ -427,8 +427,8 @@ daemon settings. Not Profile Sync: Profile Sync carries the App's own stores and
 - Delivery: at most one message per event kind per host per 10 min (later ones are folded into a count); E3 is never
   folded. A woken or new watcher first gets a summary of the unhandled events since the last delivery.
 - `pdx watch log [--since] [--host|--all]` reads the records; `pdx watch ack <id>… --note "<one line>"` marks events
-  handled with the watcher's note (required; the UI shows it); an event is `pending`, `handled` or `skipped` (the
-  last only by the area's "skip all", if the person keeps that button).
+  handled with the watcher's note (required; the UI shows it); an event is `pending` or `handled`. There is no
+  "skip all" (user decision 10-16: the button is not wanted).
 
 ### 12.4 The watcher session (W3)
 
@@ -503,11 +503,12 @@ model name.
   `watch` thresholds by itself).
 - **Slot counts** (the user's 10-16 decision, made concrete): the watcher reads the value first (`pdx gate status
   --json`), changes it with `pdx gate set slots.<heavy|light>=<n>` on the host it runs on (the gate reads its config at
-  every run, so no daemon call is needed), or with `ssh <alias> pdx gate set …` for the other gated host, and stays
-  within heavy 1–2 and light 2–4 (lead's starting bounds for 16 GB hosts, tuned like the thresholds). It reads the
-  value again after the write and tells the person the host, the class, old → new and why; a write that fails or reads
-  back differently is reported as failed, not retried. One change per host and class per 10 min, so two quick changes
-  cannot undo each other unseen.
+  every run, so no daemon call is needed), or with `ssh <alias> pdx gate set …` for the other gated host. **No bounds
+  and no rate limit beyond the gate's own range 0–64** (user decision 10-16: the watcher, and the person when there
+  is no watcher, need full control); 0 pauses the class (§5). The write carries `--expect <the value just read>`, so a
+  change the person or another writer made in between is never overwritten unseen: a refused write is read again and
+  reconsidered. It reads the value again after the write and tells the person the host, the class, old → new and why
+  (for a pause: what is paused); a write that fails or reads back differently is reported as failed.
 - Live from the first deploy (10-15: "go live and sample while it runs"); thresholds start from W0's first data and
   are tuned on the running system (§12.7).
 
@@ -536,10 +537,11 @@ is free. A slot whose gate is still alive is refused (interrupt that command ins
   answers: a resting watcher's tab opens its tmux session at a shell and offers to wake it; with none the area offers
   "start the watcher". The strip's mode and model are read from the holder's `watch` row, not from the status.
 - **Events push** (agreed with the B line 10-16): a separate kind, `watch.events`, on the event stream: `{host_id,
-  unhandled, cause}` with `cause` one of `recorded`, `acked`, `skipped`; one per operation (an ack of several ids, or
-  a skip of all, is one push), a plain `Broadcast`. It keeps `watch.changed` about the watcher alone.
+  unhandled, cause}` with `cause` one of `recorded`, `acked`; one per operation (an ack of several ids is one push),
+  a plain `Broadcast`. It keeps `watch.changed` about the watcher alone.
 - The area's own spec, with the API it needs from the A line, is `docs/specs/2026-10-16-watcher-area-spec.md` (B line,
-  §8 A1–A3); the A3 items are planned in W2b (events, ack with a note, skip, the push) and W3b (start, wake).
+  §8 A1–A3); the A3 items are planned in W2b (events, ack with a note, the push) and W3b (start, wake). No skip
+  route (user decision 10-16).
 
 ### 12.7 W0: threshold evaluation (now)
 

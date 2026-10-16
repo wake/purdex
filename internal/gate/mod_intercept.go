@@ -58,6 +58,26 @@ func parseIntercept(r raw) InterceptConfig {
 
 func stringOf(v any) string { s, _ := v.(string); return s }
 
+// ClassifyReason is Classify with the reason the table gives for a command it lets through (a rule that matches gives none).
+func (c InterceptConfig) ClassifyReason(argv []string, e Env) (Class, Reason) {
+	if len(argv) == 0 {
+		return ClassNone, ""
+	}
+	line := strings.Join(append([]string{filepath.Base(argv[0])}, argv[1:]...), " ")
+	for _, r := range c.Rules {
+		if line == r.Match || strings.HasPrefix(line, r.Match+" ") {
+			return r.Class, ""
+		}
+	}
+	name := filepath.Base(argv[0])
+	for _, t := range c.Tools {
+		if t == name {
+			return ClassifyReason(argv, e)
+		}
+	}
+	return ClassNone, ""
+}
+
 // Classify is the class of a command under this module: a rule that matches decides; else a tool that is not listed is
 // none; else the built-in table (Classify).
 func (c InterceptConfig) Classify(argv []string, e Env) Class {
