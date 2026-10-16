@@ -426,7 +426,9 @@ daemon settings. Not Profile Sync: Profile Sync carries the App's own stores and
   one has to be started.
 - Delivery: at most one message per event kind per host per 10 min (later ones are folded into a count); E3 is never
   folded. A woken or new watcher first gets a summary of the unhandled events since the last delivery.
-- `pdx watch log [--since] [--host|--all]` reads the records; `pdx watch ack` marks events handled (the UI's count).
+- `pdx watch log [--since] [--host|--all]` reads the records; `pdx watch ack <id>… --note "<one line>"` marks events
+  handled with the watcher's note (required; the UI shows it); an event is `pending`, `handled` or `skipped` (the
+  last only by the area's "skip all", if the person keeps that button).
 
 ### 12.4 The watcher session (W3)
 
@@ -532,9 +534,12 @@ is free. A slot whose gate is still alive is refused (interrupt that command ins
   name `pdx-watch`), or none; and `watch.changed` on the event stream (payload: the same fields) whenever one of them
   changes, sent once per change (not for the last-turn or last-delivery times). "Resting" and "none" are different
   answers: a resting watcher's tab opens its tmux session at a shell and offers to wake it; with none the area offers
-  "start the watcher". The area's own spec, with the API it needs
-  from the A line, is `docs/specs/2026-10-16-watcher-area-spec.md` (B line, §8 A1–A3; on the branch
-  `docs/workbook-journal-spec` until the B line merges it).
+  "start the watcher". The strip's mode and model are read from the holder's `watch` row, not from the status.
+- **Events push** (agreed with the B line 10-16): a separate kind, `watch.events`, on the event stream: `{host_id,
+  unhandled, cause}` with `cause` one of `recorded`, `acked`, `skipped`; one per operation (an ack of several ids, or
+  a skip of all, is one push), a plain `Broadcast`. It keeps `watch.changed` about the watcher alone.
+- The area's own spec, with the API it needs from the A line, is `docs/specs/2026-10-16-watcher-area-spec.md` (B line,
+  §8 A1–A3); the A3 items are planned in W2b (events, ack with a note, skip, the push) and W3b (start, wake).
 
 ### 12.7 W0: threshold evaluation (now)
 
