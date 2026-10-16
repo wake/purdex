@@ -20,7 +20,8 @@ import (
 
 const watchUsage = `usage: pdx watch status [--json] [--config <path>]
        pdx watch config [get [key] | set key=value…] [--json] [--config <path>]
-       pdx watch log [--since <24h|7d|2026-10-14>] [--kind unmanaged_heavy|pressure_high|slot_orphaned|slot_long] [--json] [--config <path>]
+       pdx watch log [--since <24h|7d|2026-10-14>] [--kind unmanaged_heavy|pressure_high|slot_orphaned|slot_long] [--unhandled] [--json] [--config <path>]
+       pdx watch ack <id>… | --all  --note "<one line>" [--json] [--config <path>]
 `
 
 func runWatch(args []string) {
@@ -35,6 +36,9 @@ func watchMain(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "config" {
 		return watchConfig(args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "ack" {
+		return watchAck(args[1:], stdout, stderr)
+	}
 	if len(args) == 0 || args[0] != "log" {
 		fmt.Fprint(stderr, watchUsage)
 		return 2
@@ -43,6 +47,7 @@ func watchMain(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	since := fs.String("since", "", "only events from this long ago (24h, 7d) or this date (2026-10-14)")
 	kind := fs.String("kind", "", "only this kind of event")
+	unhandled := fs.Bool("unhandled", false, "only the events no one has marked handled")
 	asJSON := fs.Bool("json", false, "one JSON record per line")
 	dir := fs.String("dir", "", "the watcher's directory (default: <data_dir>/watch of the config)")
 	cfgPath := fs.String("config", "", "config.toml (default ~/.config/pdx/config.toml): its data_dir says where the daemon keeps the log")
@@ -77,6 +82,19 @@ func watchMain(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	acks, aerr := watch.ReadAcks(d)
+	if aerr != nil {
+		fmt.Fprintf(stderr, "注意：讀不到處理紀錄（%v），事件都當作待處理\n", aerr)
+	}
+	if *unhandled {
+		kept := recs[:0]
+		for _, r := range recs {
+			if _, done := acks[r.ID]; !done {
+				kept = append(kept, r)
+			}
+		}
+		recs = kept
+	}
 	if skipped > 0 {
 		fmt.Fprintf(stderr, "注意：略過 %d 行無法解析的紀錄（當機留下的半行，或檔案損毀）\n", skipped)
 	}
@@ -90,7 +108,11 @@ func watchMain(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stdout, string(b))
 			continue
 		}
-		fmt.Fprintln(stdout, plainText(watchLine(r)))
+		line := plainText(watchLine(r))
+		if a, done := acks[r.ID]; done {
+			line += "  ✓ " + plainText(a.Note)
+		}
+		fmt.Fprintln(stdout, line)
 	}
 	return 0
 }

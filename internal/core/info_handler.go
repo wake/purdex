@@ -124,6 +124,9 @@ func (c *Core) capabilityList() []string {
 	if c.moduleReady("fleet") {
 		out = append(out, "fleet.v1") // GET /api/fleet, GET /api/fleet/ssh-aliases, the opt-in fleet.changed push (?fleet=v1)
 	}
+	if c.moduleReady("watch") {
+		out = append(out, "watch.v1") // GET /api/watch/status, /events, /unhandled, POST /api/watch/ack, the watch.changed and watch.events pushes
+	}
 	return out
 }
 
