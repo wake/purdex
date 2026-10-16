@@ -291,6 +291,28 @@ func TestIntercept_AReAdoptedMemberIsToldAgainForTheSamePeriod(t *testing.T) {
 	waitFor(t, func() bool { return len(f.sender.calls()) == 2 })
 }
 
+// The same with a mod that has no clock (period 0): the daemon's own idle period was the old membership's, so a new membership starts one
+// afresh. Mutation gate: the old period kept (no drop) → the new lead is not told (red).
+func TestIntercept_AReAdoptedMemberIsToldAgainWithNoPeriodToo(t *testing.T) {
+	f := idleSetup(t)
+	f.setModVersion("sid-ma", "9")
+	f.forgetSent()
+	if _, res := f.interceptedSince("sid-ma", 0); !res.Noticed {
+		t.Fatal("the first report was not told")
+	}
+	if _, res := f.interceptedSince("sid-ma", 0); res.Noticed {
+		t.Fatal("the same period told twice")
+	}
+	f.m.idleMu.Lock()
+	rec := f.m.interceptTold["sid-ma"]
+	rec.member = "another-team|1"
+	f.m.interceptTold["sid-ma"] = rec
+	f.m.idleMu.Unlock()
+	if _, res := f.interceptedSince("sid-ma", 0); !res.Noticed {
+		t.Fatal("the new membership's lead was never told")
+	}
+}
+
 // The notice that could not be sent gives both claims back: the next report tells.
 func TestIntercept_ARunningMemberLeavesBothClaimsFree(t *testing.T) {
 	f := idleSetup(t)
