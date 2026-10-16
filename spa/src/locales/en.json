@@ -497,6 +497,7 @@
   "watch.host.col_process": "Process",
   "watch.host.col_cpu": "CPU",
   "watch.host.col_mem": "Memory",
+  "watch.host.mem_rss_hint": "Footprint unavailable — this is RSS",
   "watch.host.offline_no_data": "Offline, no data",
   "watch.host.no_fleet": "No fleet data available",
   "watch.host.no_host": "No data for this host",

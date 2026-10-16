@@ -497,6 +497,7 @@
   "watch.host.col_process": "行程",
   "watch.host.col_cpu": "CPU",
   "watch.host.col_mem": "記憶體",
+  "watch.host.mem_rss_hint": "讀不到 footprint，這是 RSS",
   "watch.host.offline_no_data": "離線，沒有資料",
   "watch.host.no_fleet": "讀不到主機群資料",
   "watch.host.no_host": "讀不到這台主機的資料",
