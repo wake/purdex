@@ -238,7 +238,12 @@ async function hello($, seq) {
   try {
     const sid = await $.session.id()
     const turns = s.mainTurns
-    const r = await pdx($, ['relay', 'hello', '--session', sid, '--version', VERSION, '--agent', 'cc'], CALL_TIMEOUT_MS)
+    // The level of idle_intercept this mod already knows goes with the hello (once an answer has brought it): the daemon drops a member's
+    // older idle notices only after it has seen a mod say so, so an answer lost on the way never leaves an idle member unwatched.
+    const known = s.idleIntercept
+    const argv = ['relay', 'hello', '--session', sid, '--version', VERSION, '--agent', 'cc']
+    if (known > 0) argv.push('--idle-intercept', String(known))
+    const r = await pdx($, argv, CALL_TIMEOUT_MS)
     if (seq !== s.helloSeq) return // a newer hello answers for the session now
     const h = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
     if (!h || typeof h !== 'object') {
@@ -255,6 +260,8 @@ async function hello($, seq) {
       s.role = h.role
     }
     s.idleIntercept = Number(h.idle_intercept) > 0 ? Number(h.idle_intercept) : 0
+    // The answer brought a level this hello did not carry: say hello once more with it (the acknowledgement the daemon waits for).
+    if (s.idleIntercept > known) helloLater($)
     if (!s.envThreshold && h.threshold > 0) s.threshold = h.threshold
     if (h.min_growth > 0) s.minGrowth = h.min_growth
     // Idle relay (D9): the daemon's numbers switch the feature on; without them it is off whatever the env says.

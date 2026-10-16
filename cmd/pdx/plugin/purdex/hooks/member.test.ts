@@ -921,9 +921,11 @@ test('RT-4 R2: an unanswered hello is retried from a timer, doubling the pause, 
   await f.clock.advance(57_000)
   expect(calls(f, 'hello').length).toBe(2) // the pause doubled: not yet at 60 s
   await f.clock.advance(2_000)
-  expect(calls(f, 'hello').length).toBe(3) // answered
+  expect(calls(f, 'hello').length).toBe(4) // the third was answered; the fourth is the acknowledgement that carries the level it brought
   await f.clock.advance(300_000)
-  expect(calls(f, 'hello').length).toBe(3) // and no more retries
+  expect(calls(f, 'hello').length).toBe(4) // and no more retries or acknowledgements
+  expect(calls(f, 'hello').slice(0, 3).every((c: string) => !c.includes('--idle-intercept'))).toBe(true) // before an answer the mod knows nothing
+  expect(calls(f, 'hello')[3]).toContain('--idle-intercept 1')
   expect(await $.session.compact(compactEvent('auto'))).toEqual({ skip: expect.any(String) })
 })
 

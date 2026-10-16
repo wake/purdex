@@ -171,6 +171,10 @@ type RelayHelloRequest struct {
 	SessionID  string `json:"session_id"`
 	ModVersion string `json:"mod_version,omitempty"` // the mod ↔ daemon PROTOCOL version as a decimal string ("1"; P5b-1's VERSION), not a pdx release; P6 compares it for relay_unsupported
 	Agent      string `json:"agent,omitempty"`       // "cc"
+	// IdleIntercept is the level of idle_intercept the mod has already heard from a hello answer (0 = none yet). The daemon drops a
+	// member's older idle notices only once it has seen a mod say it knows: an answer that was lost on the way can then never leave
+	// a member that nobody intercepts and nobody is told about (RT-4a).
+	IdleIntercept int `json:"idle_intercept,omitempty"`
 }
 
 // RelayHelloResponse answers hello: the session's role and effective self-relay state.

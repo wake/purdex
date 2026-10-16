@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,8 +14,13 @@ import (
 // ---- RT-4 T42: the member idle intercept ----
 
 func (f *fixture) setModVersion(sid, ver string) {
+	f.setModHello(sid, ver, team.IdleInterceptMembers)
+}
+
+// setModHello is the hello the daemon last saw from the session: the protocol version and the idle_intercept level the mod said it knows.
+func (f *fixture) setModHello(sid, ver string, level int) {
 	f.m.mu.Lock()
-	f.m.modSeen[sid] = helloInfo{ModVersion: ver, Agent: "cc", At: f.clock.Load()}
+	f.m.modSeen[sid] = helloInfo{ModVersion: ver, Agent: "cc", At: f.clock.Load(), IdleIntercept: level}
 	f.m.mu.Unlock()
 }
 
@@ -180,7 +186,7 @@ func TestIntercept_AStretchIsNamedByWhenTheLastTurnEnded(t *testing.T) {
 	if _, res := f.interceptedSince("sid-ma", 1000); res.Noticed {
 		t.Fatal("the same stretch was told twice")
 	}
-	if _, res := f.interceptedSince("sid-ma", f.clock.Load()+9000); !res.Noticed { // a turn ended after the notice; no tick saw it
+	if _, res := f.interceptedSince("sid-ma", 9000); !res.Noticed { // a turn ran in between; no tick saw it
 		t.Fatal("a later stretch (a turn ended after the first) was not told")
 	}
 	waitFor(t, func() bool { return len(f.sender.calls()) == 2 })
@@ -246,26 +252,6 @@ func TestIntercept_AReloadedModDoesNotTellThePeriodAgain(t *testing.T) {
 	}
 }
 
-// The other way round (R2 of RT-4a): the reloaded mod's report (no period) is told first; the report of the old runtime, queued before the
-// reload, arrives after it with a period that is older than that notice: it is the same stretch, not a second notice. A turn that ended
-// after the notice is a new stretch. Mutation gates: period compared by equality only → a second notice (red); the notice's time not kept
-// by the daemon-period path → a second notice (red).
-func TestIntercept_AnOlderPeriodArrivingAfterTheReloadedModsReportIsTheSameStretch(t *testing.T) {
-	f := idleSetup(t)
-	f.setModVersion("sid-ma", "9")
-	f.forgetSent()
-	if _, res := f.interceptedSince("sid-ma", 0); !res.Noticed {
-		t.Fatal("the report of the reloaded mod was not told")
-	}
-	before := f.clock.Load() - 5000 // the old runtime's last turn ended before the notice
-	if _, res := f.interceptedSince("sid-ma", before); res.Noticed {
-		t.Fatal("the old runtime's report of the same stretch told the lead a second time")
-	}
-	if _, res := f.interceptedSince("sid-ma", f.clock.Load()+1); !res.Noticed {
-		t.Fatal("a stretch that began after the notice was not told")
-	}
-}
-
 // The claim belongs to the membership, not to the session: a member released and adopted again (another team, or the same one later),
 // before the next prune, is a new member whose lead has heard nothing. Mutation gate: the claim keyed by the session alone → no notice (red).
 func TestIntercept_AReAdoptedMemberIsToldAgainForTheSamePeriod(t *testing.T) {
@@ -289,6 +275,77 @@ func TestIntercept_AReAdoptedMemberIsToldAgainForTheSamePeriod(t *testing.T) {
 		t.Fatal("the new membership's lead was never told")
 	}
 	waitFor(t, func() bool { return len(f.sender.calls()) == 2 })
+}
+
+// Several reports of one session at once, all naming a period or none naming one: the claim is one
+// step, so the lead is told once. Mutation gate: the two claims taken in separate steps → two notices (red, under -race and by count).
+func TestIntercept_ConcurrentReportsOfOneStretchTellTheLeadOnce(t *testing.T) {
+	for round := 0; round < 20; round++ {
+		f := idleSetup(t)
+		f.setModVersion("sid-ma", "9")
+		f.forgetSent()
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for _, period := range [][]int64{{5000, 5000, 5000, 5000}, {0, 0, 0, 0}}[round%2] {
+			wg.Add(1)
+			go func(p int64) {
+				defer wg.Done()
+				<-start
+				f.interceptedSince("sid-ma", p)
+			}(period)
+		}
+		close(start)
+		wg.Wait()
+		f.m.sweepWG.Wait()
+		// four reports of one kind at once: the claim is one step, so one notice (mixed kinds are the accepted window: the old runtime's
+		// report arriving after its successor's)
+		if n := len(f.sender.calls()); n != 1 {
+			t.Fatalf("round %d: %d notices for one idle stretch, want 1", round, n)
+		}
+	}
+}
+
+// The older idle notices are dropped only when the daemon has seen the mod say it knows the level: a hello answer that was lost leaves the
+// member with the older notice. Mutation gate: the version alone decides → no notice at all (red).
+func TestIntercept_TheOlderNoticeStaysUntilTheModSaysItKnowsTheLevel(t *testing.T) {
+	f := idleSetup(t)
+	f.setModHello("sid-ma", "9", 0) // the daemon got the hello; the answer may not have reached the mod
+	f.forgetSent()
+	f.advance(41 * 60_000)
+	f.idleCheck()
+	if n := len(f.sender.calls()); n != 1 {
+		t.Fatalf("%d notices from the older path, want 1 (the mod has not said it will intercept)", n)
+	}
+	g := idleSetup(t)
+	g.setModHello("sid-ma", "9", team.IdleInterceptMembers)
+	g.forgetSent()
+	g.advance(41 * 60_000)
+	g.idleCheck()
+	if n := len(g.sender.calls()); n != 0 {
+		t.Fatalf("%d notices from the older path, want 0 (the mod intercepts)", n)
+	}
+}
+
+// The hello request's level is stored and survives the round trip through the table.
+func TestIntercept_TheModsLevelIsStoredWithItsHello(t *testing.T) {
+	f := newFixture(t)
+	f.do(http.MethodPost, "/api/relay/hello", team.RelayHelloRequest{SessionID: "sid-1", ModVersion: "9", Agent: "cc", IdleIntercept: 1})
+	if !f.m.modInterceptAcked("sid-1") {
+		t.Fatal("a mod that said it knows the level is not acked")
+	}
+	f.do(http.MethodPost, "/api/relay/hello", team.RelayHelloRequest{SessionID: "sid-1", ModVersion: "9", Agent: "cc"})
+	if f.m.modInterceptAcked("sid-1") {
+		t.Fatal("a later hello that does not say it (a reloaded mod) keeps the ack")
+	}
+	rows, err := f.m.store.LoadModHello(10)
+	if err != nil || rows["sid-1"].IdleIntercept != 0 {
+		t.Fatalf("stored = %+v (%v)", rows["sid-1"], err)
+	}
+	f.do(http.MethodPost, "/api/relay/hello", team.RelayHelloRequest{SessionID: "sid-1", ModVersion: "9", Agent: "cc", IdleIntercept: 1})
+	rows, err = f.m.store.LoadModHello(10)
+	if err != nil || rows["sid-1"].IdleIntercept != 1 {
+		t.Fatalf("stored = %+v (%v)", rows["sid-1"], err)
+	}
 }
 
 // The same with a mod that has no clock (period 0): the daemon's own idle period was the old membership's, so a new membership starts one

@@ -24,7 +24,7 @@ import (
 // relayUsage is the grammar-rejection message for `pdx relay` (exit 2).
 // These are the mod's calls (lead-team-relay spec §8.3) plus `pdx relay <ref>`
 // (the lead's member relay, P6-5).
-const relayUsage = "usage: pdx relay hello --session <sid> [--version <v>] [--agent cc] [--config <path>]\n" +
+const relayUsage = "usage: pdx relay hello --session <sid> [--version <v>] [--idle-intercept <n>] [--agent cc] [--config <path>]\n" +
 	"       pdx relay begin --self --session <sid> --used <pct> --window <n> [--manual] [--reason idle --idle-minutes <n>] [--reask <uuid>] [--person <token>] [--half | --reuse <op>] [--config <path>]\n" +
 	"       pdx relay person --session <sid> --command relay|adopt|lead|spawn [--config <path>]\n" +
 	"       pdx relay ask --session <sid> --used <pct> --window <n> [--request-id <uuid>] [--config <path>]\n" +
@@ -271,6 +271,7 @@ func runRelayHello(ctx context.Context, args []string, stdout, stderr io.Writer,
 	fs.StringVar(&req.SessionID, "session", "", "")
 	fs.StringVar(&req.ModVersion, "version", "", "")
 	fs.StringVar(&req.Agent, "agent", "cc", "")
+	fs.IntVar(&req.IdleIntercept, "idle-intercept", 0, "")
 	cfgPath, ok := relayFlags(fs, args, stderr)
 	if !ok {
 		return ExitUsage
