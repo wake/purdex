@@ -3,14 +3,15 @@ import { useWorkspaceStore, WATCH_WORKSPACE_ID } from '../store'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useFleetStore, type FleetSnapshot } from '../../../lib/fleet/store'
 import { createTab } from '../../../types/tab'
-import { watchHostTabId } from '../../../lib/watch/ids'
+import { WATCH_GUARDIAN_TAB_ID, watchHostTabId } from '../../../lib/watch/ids'
 import { buildTabsSection } from '../../../lib/profile/sections'
 import { applyTabs } from '../../../lib/profile/applier'
 import { openWatchArea } from './open-watch-area'
 import { ABSENT_REMOVE_MS, createWatchReconciler, startWatchArea, leaveAreaForForeignActiveTab } from './watch-area'
 
 const ws = () => useWorkspaceStore.getState()
-const watchTabs = () => ws().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)?.tabs ?? []
+// The host tabs of the area: the guardian tab is made by every pass and is covered by watch-area.guardian.test.ts.
+const watchTabs = () => (ws().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)?.tabs ?? []).filter((id) => id !== WATCH_GUARDIAN_TAB_ID)
 const view = (ids: string[], stale = false) => ({ hostIds: ids, stale })
 const T0 = 1_000_000
 
@@ -121,13 +122,13 @@ describe('reconcileWatchTabs', () => {
 describe('Profile Sync round trip', () => {
   it('a tabs.watch payload keeps order and locked through applyTabs', () => {
     createWatchReconciler().reconcile(view(['a', 'b', 'c']), T0)
-    ws().reorderWorkspaceTabs(WATCH_WORKSPACE_ID, ['c', 'a', 'b'].map(watchHostTabId))
+    ws().reorderWorkspaceTabs(WATCH_WORKSPACE_ID, [WATCH_GUARDIAN_TAB_ID, ...['c', 'a', 'b'].map(watchHostTabId)])
     const watch = ws().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!
     const payload = buildTabsSection(watch, useTabStore.getState().tabs)
-    expect(payload.order).toEqual(['c', 'a', 'b'].map(watchHostTabId))
+    expect(payload.order).toEqual([WATCH_GUARDIAN_TAB_ID, ...['c', 'a', 'b'].map(watchHostTabId)])
     const local = { tabs: {}, workspaces: [{ ...watch, tabs: [], activeTabId: null }] }
     const out = applyTabs(local, WATCH_WORKSPACE_ID, payload)
-    expect(out.next.workspaces[0].tabs).toEqual(['c', 'a', 'b'].map(watchHostTabId))
+    expect(out.next.workspaces[0].tabs).toEqual([WATCH_GUARDIAN_TAB_ID, ...['c', 'a', 'b'].map(watchHostTabId)])
     for (const id of out.next.workspaces[0].tabs) expect(out.next.tabs[id].locked).toBe(true)
   })
 
@@ -165,7 +166,7 @@ describe('Profile Sync round trip', () => {
     }
     expect(seen[2]).toBe(seen[3]) // stable
     expect(orderOf(A)).toEqual(orderOf(B))
-    expect(new Set(orderOf(A))).toEqual(new Set(['a', 'b', 'c'].map(watchHostTabId)))
+    expect(new Set(orderOf(A))).toEqual(new Set([WATCH_GUARDIAN_TAB_ID, ...['a', 'b', 'c'].map(watchHostTabId)]))
   })
 })
 

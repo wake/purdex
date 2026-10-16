@@ -7,20 +7,26 @@
 //          layer behind, the icon in the middle layer (main on hover). Offline: the badge dimmed.
 //   queue  the count on the badge's top-right corner: daemon hosts only, only while someone waits, never offline. Neutral grey;
 //          status-warning from 2 min or 3 waiting; status-error while admission is held.
-//   ring   the App's `ContextRing` (the member status ring), the badge's size: length = the composite score, tone = the ZONE
-//          the daemon sent (normal ok / warning warn / danger danger — never derived from the score here), nothing in the
-//          middle (a host has no model). Offline or no reading: the track only.
+//   then, by the 「主機格指示」 setting (`fleetCellIndicator`, the user 10-16), in the same square after the badge:
+//   ring   (default) the App's `ContextRing` (the member status ring), the badge's size: length = the composite score, tone =
+//          the ZONE the daemon sent (normal ok / warning warn / danger danger — never derived from the score here), nothing
+//          in the middle (a host has no model). Offline or no reading: the track only.
+//   bars   `HostBars`: left CPU %, right the memory pressure level (`bars-pressure`, memory used % when the level is unknown)
+//          or memory used % (`bars-memory`), each in its own band. Offline or no reading: the grey tracks only.
 import { useMemo } from 'react'
 import { resolveHostBadge } from '../../lib/host-color'
 import type { HostLook } from '../../lib/host-look'
 import type { UsageTone } from '../../lib/usage-display'
 import type { FleetHostView } from '../../lib/fleet/store'
-import type { FleetZone } from '../../lib/fleet/types'
+import type { FleetFast, FleetZone } from '../../lib/fleet/types'
 import { useSidebarHostBadgeGeometry } from '../../hooks/useSidebarHostBadgeGeometry'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useUISettingsStore, isFleetCellIndicator, FLEET_CELL_INDICATOR_DEFAULT, type FleetCellIndicator } from '../../stores/useUISettingsStore'
 import { HostBadge } from '../HostBadge'
 import { ContextRing } from '../team/ModelIcon'
 import { CountBadge } from './CountBadge'
+import { HostBars } from './HostBars'
+import { cpuReading, memoryReading, pressureReading } from '../../lib/fleet/bar-readings'
 
 export const WAIT_LONG_MS = 120_000
 const ZONE_TONE: Record<FleetZone, UsageTone> = { normal: 'ok', warning: 'warn', danger: 'danger' }
@@ -86,6 +92,8 @@ function tooltip(t: (k: string, p?: Record<string, string | number>) => string, 
 export function HostCell({ view, look, variant, isActive, waitingPrimary, primaryElsewhere, onOpen }: HostCellProps) {
   const t = useI18nStore((s) => s.t)
   const { box, inset, radius, lineColor } = useSidebarHostBadgeGeometry()
+  const stored = useUISettingsStore((s) => s.fleetCellIndicator)
+  const indicator: FleetCellIndicator = isFleetCellIndicator(stored) ? stored : FLEET_CELL_INDICATOR_DEFAULT
   const { colors, color, icon, iconWeight } = look
   // Resolved as the badge beside an agent member is (KnownHostBadge: terminal for an agent), so the two read the same.
   const badge = useMemo(() => resolveHostBadge({ colors, color, icon, iconWeight }, 'terminal'), [colors, color, icon, iconWeight])
@@ -113,9 +121,20 @@ export function HostCell({ view, look, variant, isActive, waitingPrimary, primar
         </span>
         {q && waiting > 0 && <CountBadge n={waiting} className={queueTone(waiting, q.longest_wait_s * 1000, q.admission_held)} testId={`queue-badge-${view.id}`} />}
       </span>
-      <span className="inline-flex shrink-0" data-testid={`load-ring-${view.id}`} data-zone={zone}>
-        <ContextRing pct={f?.load} model={undefined} size={box} tone={f ? ZONE_TONE[f.zone] : undefined} noShape />
-      </span>
+      {indicator === 'ring' ? (
+        <span className="inline-flex shrink-0" data-testid={`load-ring-${view.id}`} data-zone={zone}>
+          <ContextRing pct={f?.load} model={undefined} size={box} tone={f ? ZONE_TONE[f.zone] : undefined} noShape />
+        </span>
+      ) : (
+        <span className="inline-flex shrink-0" data-testid={`load-bars-${view.id}`} data-zone={zone}>
+          <HostBars left={f ? cpuReading(f.cpu) : null} right={f ? memoryBar(indicator, f) : null} size={box} />
+        </span>
+      )}
     </button>
   )
+}
+
+/** The right bar: the pressure level (memory used % when it is unknown), or memory used %. */
+function memoryBar(indicator: Exclude<FleetCellIndicator, 'ring'>, f: FleetFast) {
+  return indicator === 'bars-pressure' ? pressureReading(f.level, f.mem) : memoryReading(f.mem)
 }

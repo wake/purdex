@@ -244,10 +244,19 @@ The fleet module's role is read by the measuring side through `fleet.RoleView` (
     12 px, the count in 8 px semibold tabular figures, a 1 px ring in the sidebar's background colour. Colour: neutral
     grey while the longest wait is under 2 min; `status-warning` from 2 min or 3 waiters; `status-error` while admission is
     held.
-  - **The composite load ring**: the App's `ContextRing` (the member status ring) at the badge's size — 2.5 stroke,
-    `--border-default` track, round cap, from 12 o'clock counter-clockwise: length = the composite score, tone = the zone
-    (normal → ok green / warning → warn / danger → danger), nothing in the middle (a host has no model). Offline or no
-    reading: the track only.
+  - **The indicator**, in the badge-sized square after the badge, picked by the setting 「主機格指示」 (Settings → Terminal,
+    under the sidebar host badge; `useUISettingsStore.fleetCellIndicator`, synced with the profile like the badge
+    settings; the user's 10-16 call). One of:
+    - **環** (default) — the composite load ring: the App's `ContextRing` (the member status ring) at the badge's size —
+      2.5 stroke, `--border-default` track, round cap, from 12 o'clock counter-clockwise: length = the composite score,
+      tone = the zone (normal → ok green / warning → warn / danger → danger), nothing in the middle (a host has no model).
+      Offline or no reading: the track only.
+    - **雙柱：CPU＋記憶體壓力** — two 4 px bars on the ring's track colour, each a reading as its fill height in its own
+      band (the ring's status tokens): left = CPU % (70 warn / 90 danger); right = the memory pressure level (1 / 2 / 4 →
+      a third ok / two thirds warn / full danger), falling back to memory used % (70 / 90) when the level is 0 (a Linux
+      host without PSI). Pressure, not used %, because a Mac's used % sits at 70–90 % most of the time (file cache).
+    - **雙柱：CPU＋記憶體使用率** — the same two bars with memory used % (70 / 90) on the right.
+    Offline or no reading, either bar variant: the grey tracks only.
 - Tooltip: name, the zone word, the five values, the queue summary (daemon hosts), and 「等待主方」 when stale.
 - Click: opens the watcher area on that host's tab (watcher area spec).
 - **Narrow activity bar**: the cells stacked vertically (badge + ring, 2 px apart), same click and tooltip.
