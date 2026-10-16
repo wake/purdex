@@ -38,9 +38,9 @@ export interface FleetFast {
 export interface FleetProc { pid: number; name: string; cpu: number; rss_mb: number }
 
 /** Times are RFC3339 strings on the wire (UTC); parse.ts turns them into ms since epoch, which is all the App holds. */
-export interface FleetWaiter { class: string; place: number; command: string; project: string; session: string; since: number }
+export interface FleetWaiter { class: string; place: number; command: string; project: string; session: string; since: number | null }
 /** A command that holds a slot. `since` is when it started; `pid` is the gate's pid (the 名額鎖 column). The daemon never sends the slot's token. */
-export interface FleetHolder { class: string; slot: number; command: string; project: string; session: string; since: number; pid: number }
+export interface FleetHolder { class: string; slot: number; command: string; project: string; session: string; since: number | null; pid: number }
 export interface FleetQueue {
   heavy_used: number
   heavy_total: number

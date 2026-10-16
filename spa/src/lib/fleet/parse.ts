@@ -16,6 +16,9 @@ const time = (v: unknown): number | null => {
   const t = Date.parse(v)
   return Number.isFinite(t) ? t : null
 }
+/** A queue entry's start / join time: a zero Go time.Time arrives as 0001-01-01 and reads as a huge negative; anything before 2000 means "unknown". */
+const MIN_SINCE = Date.UTC(2000, 0, 1)
+const sinceOf = (t: number): number | null => (t >= MIN_SINCE ? t : null)
 const oneOf = <T extends string>(list: readonly T[], v: unknown): v is T => str(v) && (list as readonly string[]).includes(v)
 
 export function parseFast(v: unknown): FleetFast | null {
@@ -43,9 +46,9 @@ export function parseQueue(v: unknown): FleetQueue | undefined {
   if (!num(v.heavy_used) || !num(v.heavy_total) || !num(v.light_used) || !num(v.light_total) || !Array.isArray(v.waiters)) return undefined
   const waiters: FleetWaiter[] = []
   for (const w of v.waiters) {
-    const since = isRec(w) ? time(w.since) : null
-    if (isRec(w) && since !== null && num(w.place) && str(w.command) && str(w.project)) {
-      waiters.push({ class: str(w.class) ? w.class : '', place: w.place, command: w.command, project: w.project, session: str(w.session) ? w.session : '', since })
+    const at = isRec(w) ? time(w.since) : null
+    if (isRec(w) && at !== null && num(w.place) && str(w.command) && str(w.project)) {
+      waiters.push({ class: str(w.class) ? w.class : '', place: w.place, command: w.command, project: w.project, session: str(w.session) ? w.session : '', since: sinceOf(at) })
     }
   }
   return {
@@ -61,11 +64,11 @@ function parseHolders(v: unknown): FleetHolder[] {
   if (!Array.isArray(v)) return []
   const out: FleetHolder[] = []
   for (const h of v) {
-    const since = isRec(h) ? time(h.since) : null
-    if (isRec(h) && since !== null && num(h.slot) && str(h.command)) {
+    const at = isRec(h) ? time(h.since) : null
+    if (isRec(h) && at !== null && num(h.slot) && str(h.command)) {
       out.push({
         class: str(h.class) ? h.class : '', slot: h.slot, command: h.command, project: str(h.project) ? h.project : '',
-        session: str(h.session) ? h.session : '', since, pid: num(h.pid) ? h.pid : 0,
+        session: str(h.session) ? h.session : '', since: sinceOf(at), pid: num(h.pid) ? h.pid : 0,
       })
     }
   }

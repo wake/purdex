@@ -101,6 +101,28 @@ describe('the queue, both shapes', () => {
     ])
   })
 
+  // a zero Go time.Time (a holder with no Started, a waiter with no Since) is "0001-01-01T00:00:00Z": parsed as ms it is about
+  // -62e12, and the "已跑 / 等" counter would show a time of millions of years. It reads as unknown (null), the entry stays.
+  it('a zero or pre-2000 time reads as null, the holder and the waiter are kept; a real time is kept as ms', () => {
+    const q = queueOf({
+      ...old744,
+      holders: [
+        { class: 'heavy', slot: 1, command: 'zero', since: '0001-01-01T00:00:00Z', pid: 1 },
+        { class: 'heavy', slot: 2, command: 'old', since: '1999-12-31T23:59:59Z', pid: 2 },
+        { class: 'heavy', slot: 3, command: 'edge', since: '2000-01-01T00:00:00Z', pid: 3 },
+        { class: 'heavy', slot: 4, command: 'real', since: '2026-10-16T11:58:00Z', pid: 4 },
+      ],
+      waiters: [
+        { class: 'heavy', place: 1, command: 'zero', project: 'p', since: '0001-01-01T00:00:00Z' },
+        { class: 'heavy', place: 2, command: 'real', project: 'p', since: '2026-10-16T11:59:30Z' },
+      ],
+    })
+    expect(q?.holders.map((h) => [h.command, h.since])).toEqual([
+      ['zero', null], ['old', null], ['edge', Date.UTC(2000, 0, 1)], ['real', Date.parse('2026-10-16T11:58:00Z')],
+    ])
+    expect(q?.waiters.map((w) => [w.command, w.since])).toEqual([['zero', null], ['real', Date.parse('2026-10-16T11:59:30Z')]])
+  })
+
   it('holders that are not a list, and flags that are not true, read as the defaults', () => {
     const q = queueOf({ ...old744, holders: 'nope', admission_reason: 7, heavy_paused: 'yes', light_paused: 1 })
     expect(q).toMatchObject({ holders: [], admission_reason: '', heavy_paused: false, light_paused: false })
