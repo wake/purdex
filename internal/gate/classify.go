@@ -335,7 +335,26 @@ func vitestBoolFlag(a string) int {
 
 var vitestSubcommands = map[string]bool{"run": true, "watch": true, "dev": true, "related": true, "list": true, "init": true, "bench": true}
 
+// tscWatches says whether tsc is told to watch (-w, --watch) and so never ends. tsc reads a boolean flag's next word when it is
+// `true` or `false`, so `--watch false` runs once.
+func tscWatches(args []string) bool {
+	watch := false
+	for i, a := range args {
+		if a = strings.ToLower(a); a != "-w" && a != "--watch" { // tsc lowercases option names and boolean values
+			continue
+		}
+		watch = true
+		if i+1 < len(args) && strings.ToLower(args[i+1]) == "false" {
+			watch = false
+		}
+	}
+	return watch
+}
+
 func classifyTsc(args []string) Class {
+	if tscWatches(args) {
+		return ClassNone // watches and never ends: a slot would be held for good (#2989)
+	}
 	build, project, files := false, false, false
 	for _, a := range args {
 		switch {

@@ -17,7 +17,12 @@ func noneReason(argv []string, e Env) Reason {
 	case "vitest":
 		_, r := vitestVerdict(args, e)
 		return r
-	case "tsc", "phpunit", "pest":
+	case "tsc":
+		if tscWatches(args) {
+			return ReasonWatchMode
+		}
+		return ReasonKnownPassthrough
+	case "phpunit", "pest":
 		return ReasonKnownPassthrough // --version, --help, --init, --list-tests…: nothing is run
 	case "make":
 		// a target is the project's own: only the ones every Makefile means the same by are known to cost little
