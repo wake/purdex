@@ -901,6 +901,32 @@ test('RT-4 T42: a member of a daemon without idle_intercept is not intercepted',
   expect(compactCalls(f).filter((c: string) => c.includes('--intercepted'))).toEqual([]) // the compaction runs and is reported as an ordinary one
 })
 
+// R2 of RT-4a: a hello whose answer is lost is said again from a timer (an idle session has no turn end to retry at), with a pause that
+// doubles; the answer arms the intercept. Mutation gates: no timer → no second hello (red); the pause not doubled → the third hello comes at
+// 60 s (red); a timer per failure (more than one hello per pause) → red.
+test('RT-4 R2: an unanswered hello is retried from a timer, doubling the pause, and the answer arms the intercept', async ($, on) => {
+  let failures = 2
+  const f = memberWorld(on, 'member', (argv) => {
+    if (argv[1] === 'hello' && failures-- > 0) return { exitCode: 20, stderr: 'unreachable' }
+    return undefined
+  })
+  await start($, f)
+  await f.clock.advance(100)
+  expect(calls(f, 'hello').length).toBe(1) // the first one failed
+  expect((await $.session.compact(compactEvent('auto'))).skip).toBeUndefined() // no answer yet: no level, nothing skipped
+  await f.clock.advance(29_000)
+  expect(calls(f, 'hello').length).toBe(1)
+  await f.clock.advance(2_000) // 30 s after the failure
+  expect(calls(f, 'hello').length).toBe(2) // retried; failed again
+  await f.clock.advance(57_000)
+  expect(calls(f, 'hello').length).toBe(2) // the pause doubled: not yet at 60 s
+  await f.clock.advance(2_000)
+  expect(calls(f, 'hello').length).toBe(3) // answered
+  await f.clock.advance(300_000)
+  expect(calls(f, 'hello').length).toBe(3) // and no more retries
+  expect(await $.session.compact(compactEvent('auto'))).toEqual({ skip: expect.any(String) })
+})
+
 // A reload loses the mod's clock: the report then carries no --period (the daemon's own period stands in), and still reaches the daemon.
 test('RT-4 T42: with no turn seen since the mod started the report has no period', async ($, on) => {
   const f = memberWorld(on, 'member', memberPdx())

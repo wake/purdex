@@ -117,6 +117,8 @@ const fresh = () => ({
   helloOK: false, // this session's hello answered (exit 0, JSON): only then is the threshold the daemon's
   helloSeq: 0, // the newest hello sent; an older one's answer is dropped
   helloBusy: false, // the newest hello has not answered yet
+  helloRetryMs: 0, // the pause before the next timed hello retry (0 = none yet; doubles to five minutes; cleared by an answer)
+  helloRetryPending: false, // a timed hello retry is waiting
   gen: 0, // bumped at every return to idle and every session change: a begin answers only for its own
   state: 'idle', // idle | beginning | awaiting | approved | clearing | seeding
   begun: undefined, // while beginning: a deferred resolving to the request begin opened and adopted, or undefined
@@ -241,9 +243,11 @@ async function hello($, seq) {
     const h = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
     if (!h || typeof h !== 'object') {
       s.roleCheckedAt = undefined // an unanswered re-check is not a check: the next turn at the threshold may try again
-      return // any other exit: not answered; said again at the next turn end
+      retryHelloLater($) // not answered: said again at the next turn end, and from a timer (an idle session has no turn end to wait for)
+      return
     }
     s.helloOK = true
+    s.helloRetryMs = 0
     if (h.role) {
       // A member that is none now (released, or its team ended) asks afresh: the +10 guard of an ask the daemon
       // refused as member must not hold it back (a refusal at 95% would otherwise mean never again).
@@ -282,7 +286,24 @@ async function hello($, seq) {
 function helloLater($) {
   const seq = ++s.helloSeq
   s.helloBusy = true
-  $.clock.after(0, () => { void hello($, seq).catch(() => {}) })
+  $.clock.after(0, () => { void hello($, seq).catch(() => retryHelloLater($)) })
+}
+
+const HELLO_RETRY_FIRST_MS = 30_000
+const HELLO_RETRY_MAX_MS = 300_000
+
+// retryHelloLater says hello again after a pause while no hello has been answered (the daemon was down, or its answer was lost): the
+// mod learns what the daemon decides for idle compactions (hello's idle_intercept) only from an answer, and an idle session has no turn
+// end to retry at. One timer at a time; the pause doubles up to five minutes; a /clear (a new generation) drops it.
+function retryHelloLater($) {
+  if (!s.interactive || s.helloOK || s.helloRetryPending) return
+  const gen = s.gen
+  s.helloRetryMs = Math.min(s.helloRetryMs > 0 ? s.helloRetryMs * 2 : HELLO_RETRY_FIRST_MS, HELLO_RETRY_MAX_MS)
+  s.helloRetryPending = true
+  $.clock.after(s.helloRetryMs, () => {
+    s.helloRetryPending = false
+    if (s.gen === gen && s.interactive && !s.helloOK && !s.helloBusy) helloLater($)
+  })
 }
 
 // transientReport: a report that did not reach the daemon — 20 unreachable

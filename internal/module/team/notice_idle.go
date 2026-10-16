@@ -226,21 +226,33 @@ func (m *Module) interceptedIdle(sessionID string, period int64) (noticed, membe
 			return false, true // running or waiting on a person: not idle
 		}
 	}
+	// The claim is the membership's, not the session's: a member released and adopted again by another lead (same session, before the
+	// next prune) is a new member whose lead has heard nothing.
+	membership := mr.TeamID + "|" + strconv.FormatInt(mr.CreatedAt, 10)
+	now := m.now()
 	var gen uint64
+	var prev interceptToldRec
+	if m.interceptMembership(sessionID) != membership {
+		m.dropIdlePeriod(sessionID) // the daemon's own period was another membership's
+	}
 	if period > 0 {
-		if !m.claimInterceptTold(sessionID, period) {
+		var won bool
+		if prev, won = m.claimInterceptTold(sessionID, membership, period, now); !won {
 			return false, true
 		}
 		// The daemon's own period is told as well: a mod that reloads in this stretch has lost its clock (period 0 from then on) and
 		// is then judged by that period, so it must not tell the lead a second time.
-		m.idleStart(sessionID, m.now())
+		m.idleStart(sessionID, now)
 		gen, _ = m.claimIdleTold(sessionID)
 	} else {
-		m.idleStart(sessionID, m.now()) // a period exists to be told once
+		m.idleStart(sessionID, now) // a period exists to be told once
 		var won bool
 		if gen, won = m.claimIdleTold(sessionID); !won {
 			return false, true
 		}
+		// ... and the time of the notice is kept: a report of a stretch that ended before it (from a mod of the same session that was
+		// reloaded, its report still on the way) is that stretch, told already.
+		prev = m.setInterceptToldAt(sessionID, membership, now)
 	}
 	ctx := "未知"
 	if m.usage != nil {
@@ -252,9 +264,7 @@ func (m *Module) interceptedIdle(sessionID string, period int64) (noticed, membe
 	ref := strings.TrimPrefix(mr.Ref, "_")
 	text := fmt.Sprintf(team.IdleInterceptNoticeFmt, address, title, ctx, ref, ref, ref)
 	if !m.goTracked(func() { m.noticeToLead(mr, t, text, "idle intercept notice") }) {
-		if period > 0 {
-			m.releaseInterceptTold(sessionID, period)
-		}
+		m.restoreInterceptTold(sessionID, membership, now, prev)
 		if gen != 0 {
 			m.releaseIdleTold(sessionID, gen)
 		}
@@ -263,24 +273,64 @@ func (m *Module) interceptedIdle(sessionID string, period int64) (noticed, membe
 	return true, true
 }
 
-// claimInterceptTold marks the idle stretch period of the session told; false when it already was (the last one told is kept).
-func (m *Module) claimInterceptTold(sessionID string, period int64) bool {
+// interceptToldRec is the last notice of a session's intercepts: the membership it was told for and the daemon's time (unix ms).
+type interceptToldRec struct {
+	member string
+	at     int64
+}
+
+// claimInterceptTold marks the stretch that ended at period (the mod's clock, unix ms) of the member told at now; false when a notice
+// was sent for this membership after that stretch ended: it is that stretch (the same report again, or one that was on its way when the
+// mod reloaded and its successor already told it). prev is what to give back if the notice does not go.
+func (m *Module) claimInterceptTold(sessionID, member string, period, now int64) (prev interceptToldRec, ok bool) {
 	m.idleMu.Lock()
 	defer m.idleMu.Unlock()
 	if m.interceptTold == nil {
-		m.interceptTold = map[string]int64{}
+		m.interceptTold = map[string]interceptToldRec{}
 	}
-	if m.interceptTold[sessionID] == period {
-		return false
+	prev = m.interceptTold[sessionID]
+	if prev.member == member && period <= prev.at {
+		return prev, false
 	}
-	m.interceptTold[sessionID] = period
-	return true
+	m.interceptTold[sessionID] = interceptToldRec{member: member, at: now}
+	return prev, true
 }
 
-func (m *Module) releaseInterceptTold(sessionID string, period int64) {
+// setInterceptToldAt records a notice told by the daemon's own period (the mod had no clock) at now.
+func (m *Module) setInterceptToldAt(sessionID, member string, now int64) (prev interceptToldRec) {
 	m.idleMu.Lock()
 	defer m.idleMu.Unlock()
-	if m.interceptTold[sessionID] == period {
-		delete(m.interceptTold, sessionID)
+	if m.interceptTold == nil {
+		m.interceptTold = map[string]interceptToldRec{}
 	}
+	prev = m.interceptTold[sessionID]
+	m.interceptTold[sessionID] = interceptToldRec{member: member, at: now}
+	return prev
+}
+
+// restoreInterceptTold gives the claim back when the notice did not go: only what this call wrote is undone.
+func (m *Module) restoreInterceptTold(sessionID, member string, now int64, prev interceptToldRec) {
+	m.idleMu.Lock()
+	defer m.idleMu.Unlock()
+	if cur, ok := m.interceptTold[sessionID]; ok && cur.member == member && cur.at == now {
+		if prev == (interceptToldRec{}) {
+			delete(m.interceptTold, sessionID)
+		} else {
+			m.interceptTold[sessionID] = prev
+		}
+	}
+}
+
+// interceptMembership is the membership the last notice of the session was told for ("" = none).
+func (m *Module) interceptMembership(sessionID string) string {
+	m.idleMu.Lock()
+	defer m.idleMu.Unlock()
+	return m.interceptTold[sessionID].member
+}
+
+// dropIdlePeriod forgets the daemon's idle period of the session (a new membership starts one afresh).
+func (m *Module) dropIdlePeriod(sessionID string) {
+	m.idleMu.Lock()
+	defer m.idleMu.Unlock()
+	delete(m.memberIdle, sessionID)
 }

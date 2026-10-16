@@ -180,7 +180,7 @@ func TestIntercept_AStretchIsNamedByWhenTheLastTurnEnded(t *testing.T) {
 	if _, res := f.interceptedSince("sid-ma", 1000); res.Noticed {
 		t.Fatal("the same stretch was told twice")
 	}
-	if _, res := f.interceptedSince("sid-ma", 9000); !res.Noticed { // a turn ran in between; no tick saw it
+	if _, res := f.interceptedSince("sid-ma", f.clock.Load()+9000); !res.Noticed { // a turn ended after the notice; no tick saw it
 		t.Fatal("a later stretch (a turn ended after the first) was not told")
 	}
 	waitFor(t, func() bool { return len(f.sender.calls()) == 2 })
@@ -244,6 +244,51 @@ func TestIntercept_AReloadedModDoesNotTellThePeriodAgain(t *testing.T) {
 	if n := len(f.sender.calls()); n != 1 {
 		t.Fatalf("%d notices in one idle period across a mod reload, want 1", n)
 	}
+}
+
+// The other way round (R2 of RT-4a): the reloaded mod's report (no period) is told first; the report of the old runtime, queued before the
+// reload, arrives after it with a period that is older than that notice: it is the same stretch, not a second notice. A turn that ended
+// after the notice is a new stretch. Mutation gates: period compared by equality only → a second notice (red); the notice's time not kept
+// by the daemon-period path → a second notice (red).
+func TestIntercept_AnOlderPeriodArrivingAfterTheReloadedModsReportIsTheSameStretch(t *testing.T) {
+	f := idleSetup(t)
+	f.setModVersion("sid-ma", "9")
+	f.forgetSent()
+	if _, res := f.interceptedSince("sid-ma", 0); !res.Noticed {
+		t.Fatal("the report of the reloaded mod was not told")
+	}
+	before := f.clock.Load() - 5000 // the old runtime's last turn ended before the notice
+	if _, res := f.interceptedSince("sid-ma", before); res.Noticed {
+		t.Fatal("the old runtime's report of the same stretch told the lead a second time")
+	}
+	if _, res := f.interceptedSince("sid-ma", f.clock.Load()+1); !res.Noticed {
+		t.Fatal("a stretch that began after the notice was not told")
+	}
+}
+
+// The claim belongs to the membership, not to the session: a member released and adopted again (another team, or the same one later),
+// before the next prune, is a new member whose lead has heard nothing. Mutation gate: the claim keyed by the session alone → no notice (red).
+func TestIntercept_AReAdoptedMemberIsToldAgainForTheSamePeriod(t *testing.T) {
+	f := idleSetup(t)
+	f.setModVersion("sid-ma", "9")
+	f.forgetSent()
+	period := f.clock.Load() - 100
+	if _, res := f.interceptedSince("sid-ma", period); !res.Noticed {
+		t.Fatal("the first report was not told")
+	}
+	if _, res := f.interceptedSince("sid-ma", period); res.Noticed {
+		t.Fatal("the same period told twice")
+	}
+	// the membership of the session changes (a release, then an adopt): what the old one was told says nothing about the new
+	f.m.idleMu.Lock()
+	rec := f.m.interceptTold["sid-ma"]
+	rec.member = "another-team|1"
+	f.m.interceptTold["sid-ma"] = rec
+	f.m.idleMu.Unlock()
+	if _, res := f.interceptedSince("sid-ma", period); !res.Noticed {
+		t.Fatal("the new membership's lead was never told")
+	}
+	waitFor(t, func() bool { return len(f.sender.calls()) == 2 })
 }
 
 // The notice that could not be sent gives both claims back: the next report tells.
