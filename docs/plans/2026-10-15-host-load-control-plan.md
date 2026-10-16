@@ -233,10 +233,17 @@ succeed; an old peer; mismatched targets warn.
 
 ### W2b — delivery, backlog, handled
 
-1. Delivery: each host sends its events to the watcher with `peers.Sender` (the `/api/peers/send` path `pdx msg`
-   uses; across hosts by the peer address), `[負載守門] …` text with the event id. Folding per (host, kind) per 10
-   min, later events counted into the next message; E3 never folded; a failed send triggers discovery (W2a) and is
-   retried from a persisted pending queue, without counting twice.
+1. Delivery: the resources module hands each recorded event to the watch module's queue (`watch.EventSink`, found in the
+   registry). A message is `[負載守門] …` text with the event id. It is sent to the watcher with the daemon-to-daemon route
+   `POST /api/peers/watch/event` (`HostCaller`, in `HostRoutePolicy`, `HostLimiter` and a body cap like the other watch
+   routes), not with `peers.Sender`: `/api/peers/send` needs a live session on this host as the origin, and a daemon has
+   none. The daemon of the watcher's host notifies its own watcher with `SendSelfNotice` from the watcher's own inbox (the
+   stand-down notice's path); a watcher on the sending host takes the same local function. Folding per (host, kind) per 10
+   min, later events counted into one message when the window ends; E3 never folded. The queue is a file
+   (`outbox.json`): a message is frozen when made, a retry sends the same text (30 s, doubling, up to 5 min) and nothing is
+   counted twice; the sender removes it only on a clear success. The receiver keeps the delivered event ids
+   (`delivered.json`, the latest 2000), so a retry or a lost reply never gives the watcher an event twice. A failed send
+   makes the locator look again (W2a); a failed notify on the receiving host reconciles its holder (W3a-2b).
 2. Backlog: when a watcher is woken or started, each host sends one summary of its unhandled events since its last
    delivered id (counts by kind and label, the newest five, and `pdx watch log --all --unhandled`).
 3. Handled: `pdx watch ack <id>… | --all [--host] --note "<one line>"` (note required, one line, ≤ 500 bytes) marks

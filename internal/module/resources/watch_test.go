@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -342,6 +343,45 @@ func TestWatch_TheGateConfigIsTheDaemonsOwnFile(t *testing.T) {
 func TestWatch_NeverWrittenSettingMeansOn(t *testing.T) {
 	r := newWatchRig(t, resources.ModeMeasure)
 	r.m.watch.src = &fakeWatchSettings{s: watchsettings.Default()}
+	r.setProcs(heavyTree(3))
+	r.ticks(30)
+	if len(r.records()) != 1 {
+		t.Fatalf("records = %+v", r.records())
+	}
+}
+
+type fakeEventSink struct {
+	mu   sync.Mutex
+	recs []watch.Record
+}
+
+func (f *fakeEventSink) Enqueue(rec watch.Record) {
+	f.mu.Lock()
+	f.recs = append(f.recs, rec)
+	f.mu.Unlock()
+}
+
+// A recorded event is handed to the watch module's delivery queue (found in the registry), once, as the record on disk says it.
+func TestWatch_ARecordedEventIsHandedToTheDeliveryQueueOnce(t *testing.T) {
+	r := newWatchRig(t, resources.ModeMeasure)
+	sink := &fakeEventSink{}
+	r.m.core.Registry.Register(watch.EventSinkKey, sink)
+	r.setProcs(heavyTree(3))
+	r.ticks(30)
+	recs := r.records()
+	if len(recs) != 1 {
+		t.Fatalf("records = %+v", recs)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.recs) != 1 || sink.recs[0].ID != recs[0].ID || sink.recs[0].Kind != watch.KindUnmanagedHeavy {
+		t.Fatalf("sink got %+v; the record is %+v", sink.recs, recs[0])
+	}
+}
+
+// Without the watch module's sink (not registered) the event is still recorded.
+func TestWatch_WithoutASinkTheEventIsOnlyRecorded(t *testing.T) {
+	r := newWatchRig(t, resources.ModeMeasure)
 	r.setProcs(heavyTree(3))
 	r.ticks(30)
 	if len(r.records()) != 1 {
