@@ -10,10 +10,12 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/agent"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/watch"
@@ -44,6 +46,23 @@ type Module struct {
 	// session starts and wakes the watcher on this host (W3); nil until then.
 	session SessionControl
 	loc     *watch.Locator
+
+	// panes finds the pdx-watch tmux session; ownerSrc is the agent module's resolver (nil: looked up in the registry). rec is the
+	// state of reconcile (reconcile.go); store is the holder as reconcile writes it (nil: holder; a test wraps it).
+	panes    paneFinder
+	ownerSrc ownerLookup
+	rec      reconcileState
+	store    holderStore
+	// tickEvery is the period of the safety-net ticker (a test shortens it); unsubscribe and stop undo Start.
+	tickEvery   time.Duration
+	unsubscribe func()
+	stop        context.CancelFunc
+	wg          sync.WaitGroup
+	// runMu guards running and runCtx: a background reconcile starts only while running, and Stop waits for the ones in flight
+	// (the SessionStart subscription may call back after unsubscribe returns).
+	runMu   sync.Mutex
+	running bool
+	runCtx  context.Context
 }
 
 // New returns the module with production defaults.
@@ -52,7 +71,7 @@ func New() *Module {
 }
 
 func (m *Module) Name() string           { return "watch" }
-func (m *Module) Dependencies() []string { return []string{"peers", "hostconfig"} }
+func (m *Module) Dependencies() []string { return []string{"peers", "hostconfig", "agent"} }
 
 // Init opens holder.json in <data_dir>/watch. A file that cannot be read is set aside and the host holds none; the daemon never
 // fails for it.
@@ -87,8 +106,64 @@ func (m *Module) Init(c *core.Core) error {
 	return nil
 }
 
-func (m *Module) Start(context.Context) error { return nil }
-func (m *Module) Stop(context.Context) error  { return nil }
+// Start reconciles once (a watcher that started before this daemon, such as the manual one of 10-16, is picked up without a
+// restart of the watcher), then keeps reconciling: on each verified SessionStart from pdx-watch (and on an overflow of that
+// subscription), and every 5 minutes as a safety net. Holder reads reconcile when the last one is older than 30 s.
+func (m *Module) Start(context.Context) error {
+	if m.panes == nil {
+		m.panes = watch.NewPaneControl("")
+	}
+	if svc, ok := m.core.Registry.Get(agent.TerminalSessionsKey); ok {
+		if ts, ok := svc.(agent.TerminalSessions); ok {
+			m.unsubscribe = ts.SubscribeSessionStart(func(ev agent.SessionStartEvent) {
+				if ev.Overflow || ev.TmuxSession == watch.PaneSession {
+					m.reconcileBackground("session start")
+				}
+			})
+		}
+	} else {
+		m.logf("[watch] service %q not registered: a watcher is noticed by the ticker and by holder reads only", agent.TerminalSessionsKey)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.stop = cancel
+	m.runMu.Lock()
+	m.running, m.runCtx = true, ctx
+	m.runMu.Unlock()
+	m.reconcileBackground("start")
+	every := m.tickEvery
+	if every <= 0 {
+		every = safetyNet
+	}
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				m.reconcileBackground("ticker")
+			}
+		}
+	}()
+	return nil
+}
+
+func (m *Module) Stop(context.Context) error {
+	m.runMu.Lock()
+	m.running = false
+	m.runMu.Unlock()
+	if m.unsubscribe != nil {
+		m.unsubscribe()
+	}
+	if m.stop != nil {
+		m.stop()
+	}
+	m.wg.Wait()
+	return nil
+}
 
 // RegisterRoutes wires the routes: the peers' holder question, and the local view the CLI reads.
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
@@ -197,11 +272,13 @@ func (m *Module) handlePeerHolder(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusConflict, "wrong_host", "this request is addressed to another host")
 		return
 	}
+	m.fresh(r.Context())
 	m.writeJSON(w, http.StatusOK, m.view())
 }
 
 // handleLocalHolder serves GET /api/watch/holder to the admin token (the CLI's view of this host).
-func (m *Module) handleLocalHolder(w http.ResponseWriter, _ *http.Request) {
+func (m *Module) handleLocalHolder(w http.ResponseWriter, r *http.Request) {
+	m.fresh(r.Context())
 	m.writeJSON(w, http.StatusOK, m.view())
 }
 
@@ -219,7 +296,8 @@ type Status struct {
 	Targets  []string     `json:"targets"`
 }
 
-func (m *Module) handleStatus(w http.ResponseWriter, _ *http.Request) {
+func (m *Module) handleStatus(w http.ResponseWriter, r *http.Request) {
+	m.fresh(r.Context())
 	st := Status{Self: m.view()}
 	st.Current, st.Last = m.loc.Remembered()
 	if s, err := m.readSettings(); err == nil {

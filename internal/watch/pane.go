@@ -170,6 +170,18 @@ func (p *PaneControl) lookup(ctx context.Context) (found bool, err error) {
 	return true, nil
 }
 
+// Find reads the pdx-watch session's ids without creating anything: found is false when there is no such session (nor a tmux
+// server), an error when the lookup itself failed (which is not "no session": a caller must not treat it as one).
+func (p *PaneControl) Find(ctx context.Context) (sessionID, paneID string, found bool, err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	found, err = p.lookup(ctx)
+	if err != nil || !found {
+		return "", "", false, err
+	}
+	return p.sessionID, p.paneID, true, nil
+}
+
 // EnsureSession makes sure pdx-watch exists (created detached in workdir when missing) and records its $N and the first pane's
 // %N. workdir is an absolute path or ~/…; tmux -c would neither expand ~ nor refuse a bad path (it falls back to $HOME), so the
 // directory is checked here.
