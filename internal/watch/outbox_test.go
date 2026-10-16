@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -303,4 +304,38 @@ func TestOutbox_ASaveThatFailsIsReported(t *testing.T) {
 	require.True(t, o.Add(rec(KindUnmanagedHeavy, c)))
 	require.NotEmpty(t, logged, "the failed write is reported")
 	require.Equal(t, 1, o.Pending(), "and the queue goes on in memory")
+}
+
+// A message is bounded whatever the record holds (a very long cwd or detail), keeps its prefix and ends with the event id, so the
+// receiver never refuses it for its size.
+func TestEventText_IsBoundedAndKeepsTheIDAtTheEnd(t *testing.T) {
+	c := newOutboxClock()
+	r := rec(KindUnmanagedHeavy, c)
+	r.Cwd = strings.Repeat("長", 20000)
+	r.Detail = strings.Repeat("d", 20000)
+	text := EventText(r)
+	require.LessOrEqual(t, len(text), 2000)
+	require.True(t, strings.HasPrefix(text, "[負載守門]"))
+	require.True(t, strings.HasSuffix(text, "（事件 "+r.ID+"）"))
+
+	var recs []Record
+	for i := 0; i < 5; i++ {
+		x := rec(KindPressureHigh, c)
+		x.Detail = strings.Repeat("長", 20000)
+		recs = append(recs, x)
+	}
+	require.LessOrEqual(t, len(BacklogText("mlab", recs, 1, 1)), 8<<10, "a backlog of five long events still fits the receiver's limit")
+}
+
+func TestOutbox_DropRemovesAMessageWithoutMovingTheWatermark(t *testing.T) {
+	c := newOutboxClock()
+	o, _ := openTestOutbox(t, c)
+	o.Add(rec(KindUnmanagedHeavy, c))
+	o.Add(rec(KindPressureHigh, c))
+	first := headID(t, o)
+	o.Drop(first)
+	require.Equal(t, 1, o.Pending())
+	require.Equal(t, "", o.LastDelivered(), "a dropped message was not delivered")
+	m, _ := o.Next()
+	require.NotEqual(t, first, m.ID)
 }

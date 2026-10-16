@@ -253,6 +253,19 @@ func (o *Outbox) Delivered(id string) {
 	}
 }
 
+// Drop removes a message the receiver refused for good. It was not delivered, so the last delivered id does not move.
+func (o *Outbox) Drop(id string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for i, m := range o.st.Pending {
+		if m.ID == id {
+			o.st.Pending = append(o.st.Pending[:i], o.st.Pending[i+1:]...)
+			o.save()
+			return
+		}
+	}
+}
+
 // LastDelivered is the newest event id of a message the watcher received.
 func (o *Outbox) LastDelivered() string {
 	o.mu.Lock()

@@ -270,3 +270,38 @@ func TestInit_RegistersTheEventSinkAndTheQueueIsAFileBesideTheHolder(t *testing.
 	require.NoError(t, err)
 	require.Equal(t, 1, o.Pending(), "a restart keeps the queue")
 }
+
+// A message the receiving host refuses for good (400, 413) is dropped and the ones behind it still go; one it refuses for now
+// (409: no watcher awake there; 429) stays and is tried again.
+func deliveryRig(t *testing.T) (*recRig, *fakeCaller) {
+	r, fc, _ := remoteRig(t)
+	require.NoError(t, r.m.Start(context.Background())) // a pass runs only while the module runs; the loop itself is off in tests
+	t.Cleanup(func() { _ = r.m.Stop(context.Background()) })
+	return r, fc
+}
+
+func TestDelivery_APermanentRefusalDoesNotBlockTheQueue(t *testing.T) {
+	for _, status := range []int{http.StatusBadRequest, http.StatusRequestEntityTooLarge} {
+		r, fc := deliveryRig(t)
+		fc.reply[pathEvent] = peersmod.CallResult{Class: peersmod.ClassRefused, Status: status, Code: "bad_request", Detail: "nope"}
+		r.m.Enqueue(evRecord(watch.KindPressureHigh, "mlab"))
+		r.m.Enqueue(evRecord(watch.KindSlotOrphaned, "mlab"))
+		before := len(fc.calls)
+		r.m.deliverPass(context.Background())
+		require.Equal(t, 0, r.m.dlv.outbox.Pending(), "both were refused for good: neither waits at the head")
+		require.Equal(t, before+2, len(fc.calls), "the second was tried in the same pass")
+		require.Equal(t, "", r.m.dlv.outbox.LastDelivered(), "a dropped message is not a delivered one")
+	}
+}
+
+func TestDelivery_ARefusalForNowKeepsTheMessage(t *testing.T) {
+	for _, status := range []int{http.StatusConflict, http.StatusTooManyRequests, http.StatusBadGateway} {
+		r, fc := deliveryRig(t)
+		fc.reply[pathEvent] = peersmod.CallResult{Class: peersmod.ClassRefused, Status: status, Code: "no_watcher", Detail: "later"}
+		r.m.Enqueue(evRecord(watch.KindPressureHigh, "mlab"))
+		before := len(fc.calls)
+		r.m.deliverPass(context.Background())
+		require.Greater(t, len(fc.calls), before, "status %d: it was tried", status)
+		require.Equal(t, 1, r.m.dlv.outbox.Pending(), "status %d: kept", status)
+	}
+}

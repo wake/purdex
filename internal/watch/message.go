@@ -13,6 +13,7 @@ const (
 	messagePrefix = "[負載守門]"
 	argvShow      = 120 // runes of a command shown in a message
 	backlogShow   = 5   // events a backlog summary lists
+	maxLineRunes  = 300 // runes of one event's sentence, so that a message stays far below what the receiver accepts
 )
 
 func kindLabel(k Kind) string {
@@ -28,6 +29,9 @@ func kindLabel(k Kind) string {
 	}
 	return string(k)
 }
+
+// line is the sentence of an event, bounded: a long cwd or detail must not make a message the receiving host refuses.
+func line(r Record) string { return clip(eventLine(r), maxLineRunes) }
 
 func clip(s string, n int) string {
 	r := []rune(s)
@@ -62,7 +66,7 @@ func eventLine(r Record) string {
 
 // EventText is the message of one event.
 func EventText(r Record) string {
-	return messagePrefix + " " + eventLine(r) + "（事件 " + r.ID + "）"
+	return messagePrefix + " " + line(r) + "（事件 " + r.ID + "）"
 }
 
 // FoldText is the message that counts the events of one kind folded into the window before it.
@@ -98,7 +102,7 @@ func BacklogText(host string, recs []Record, part, nparts int) string {
 	fmt.Fprintf(&b, "%s%s %s 有 %d 件事件還沒送給守門員（%s）。最新 %d 件：", messagePrefix, where, host, len(recs), strings.Join(kindParts, "、"), min(backlogShow, len(recs)))
 	from := max(0, len(recs)-backlogShow)
 	for _, r := range recs[from:] {
-		fmt.Fprintf(&b, "\n- %s %s", r.ID, eventLine(r))
+		fmt.Fprintf(&b, "\n- %s %s", r.ID, line(r))
 	}
 	b.WriteString("\n全部用 pdx watch log --all 查看；處理完用 pdx watch ack <id>… --note \"<一行>\"。")
 	return b.String()

@@ -66,6 +66,9 @@ type deliveryState struct {
 
 var errNoWatcherHere = errors.New("no watcher is awake on this host")
 
+// errRefusedForGood is a refusal that sending the same message again cannot change (the receiver says it is malformed or too big).
+var errRefusedForGood = errors.New("refused for good")
+
 // initDelivery opens the outbox and the delivered ids beside holder.json; a file that cannot be read is set aside (and logged), and the
 // daemon goes on with an empty one.
 func (m *Module) initDelivery(dir string) {
@@ -174,6 +177,12 @@ func (m *Module) deliverPass(ctx context.Context) {
 		}
 		err := m.sendMessage(cctx, where, msg)
 		done()
+		if errors.Is(err, errRefusedForGood) {
+			// a poison message must not hold the ones behind it: it is dropped and logged (it stays in the record and in the log)
+			m.dlv.outbox.Drop(msg.ID)
+			m.logf("[watch] event message %s dropped: %v", msg.ID, err)
+			continue
+		}
 		if err != nil {
 			m.dlv.outbox.Tried(msg.ID)
 			m.loc.Failed(where) // the next pass looks for the watcher again (W2a)
@@ -221,8 +230,12 @@ func (m *Module) sendMessage(ctx context.Context, where watch.Where, msg watch.M
 		return nil
 	case peersmod.ClassUnsupported:
 		return errors.New("that host has no event delivery")
+	case peersmod.ClassRefused:
+		if res.Status == http.StatusBadRequest || res.Status == http.StatusRequestEntityTooLarge {
+			return fmt.Errorf("%w: %d %s %s", errRefusedForGood, res.Status, res.Code, res.Detail)
+		}
 	}
-	return fmt.Errorf("%s %s", res.Class, res.Detail)
+	return fmt.Errorf("%s %d %s", res.Class, res.Status, res.Detail)
 }
 
 // receiveEvent delivers a message to this host's own awake watcher, once per set of event ids. A host whose holder says awake but
