@@ -35,10 +35,12 @@ export function useJournalTarget(): JournalTarget {
   const team = useTitleBarTeam()
   const layout = useTabStore((s) => (s.activeTabId ? s.tabs[s.activeTabId]?.layout : undefined))
   const origin = useMemo(() => (layout ? ownSessionOf(layout) : null), [layout])
-  const hostId = origin?.hostId ?? team?.lead.hostId ?? ''
-  const journalHost = useIsJournalHost(hostId)
   const route = useJournalStore((s) => (origin ? s.routes[sessionKey(origin.hostId, origin.sessionId)] : undefined))
   const read = origin === null ? null : route?.kind === 'follow' ? { hostId: route.hostId, sessionId: route.sessionId } : route?.kind === 'unreachable' || route?.kind === 'none' ? null : origin
+  // The host the unit is read FROM decides (spec §11): the followed lead's host, else the tab's own; while the route is unresolved
+  // (unreachable / none) the tab's own host decides. A tab with no cc session uses its team's lead host.
+  const hostId = read?.hostId ?? origin?.hostId ?? team?.lead.hostId ?? ''
+  const journalHost = useIsJournalHost(hostId)
   const unit = useJournalStore((s) => (read ? selectUnit(s, read.hostId, read.sessionId) : undefined))
   const unitKey = unit ? unitKeyOf(unit.unit) : null
   const unreachableHost = route?.kind === 'unreachable' ? route.leadHostId : null
