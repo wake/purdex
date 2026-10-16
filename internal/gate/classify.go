@@ -74,7 +74,9 @@ type Reason string
 const (
 	ReasonHeavy            Reason = "heavy"             // a whole run: takes a heavy slot
 	ReasonLight            Reason = "light"             // a narrowed run: takes a light slot
+	ReasonVitestRelated    Reason = "vitest_related"    // vitest related: the tests those files touch, which for a widely imported file is most of the suite (heavy)
 	ReasonPackaging        Reason = "packaging"         // a build that writes its output: never held back (user 10-15)
+	ReasonInfoOnly         Reason = "info_only"         // --help, -h, --version or the help subcommand: the tool prints a text and runs nothing (#3043)
 	ReasonWatchMode        Reason = "watch_mode"        // a tool that watches and never ends (vitest watch, a dev server)
 	ReasonKnownPassthrough Reason = "known_passthrough" // a known tool's command the gate lets through without judging its cost (go version, pnpm install, composer install…); a label only
 	ReasonUnknown          Reason = "unknown"           // a tool or script the table does not know, or a command line it cannot read
@@ -84,7 +86,7 @@ const (
 func ClassifyReason(argv []string, e Env) (Class, Reason) {
 	switch c := Classify(argv, e); c {
 	case ClassHeavy:
-		return c, ReasonHeavy
+		return c, heavyReason(argv, e)
 	case ClassLight:
 		return c, ReasonLight
 	default:
@@ -92,11 +94,145 @@ func ClassifyReason(argv []string, e Env) (Class, Reason) {
 	}
 }
 
+// heavyReason is vitest_related for a `vitest related` that was made heavy because of what it follows, heavy for the rest.
+func heavyReason(argv []string, e Env) Reason {
+	if len(argv) == 0 {
+		return ReasonHeavy
+	}
+	rest := argv[1:]
+	switch filepath.Base(argv[0]) {
+	case "vitest":
+	case "pnpm", "pnpx", "npx", "yarn", "npm", "bunx", "bun":
+		// the tool the runner runs: the first word that is not an option, after an optional exec / dlx
+		i := 0
+		for i < len(rest) && strings.HasPrefix(rest[i], "-") {
+			i++
+		}
+		if i < len(rest) && (rest[i] == "exec" || rest[i] == "x" || rest[i] == "dlx") {
+			i++
+			for i < len(rest) && strings.HasPrefix(rest[i], "-") {
+				i++
+			}
+		}
+		if i >= len(rest) || filepath.Base(rest[i]) != "vitest" {
+			return ReasonHeavy
+		}
+		rest = rest[i+1:]
+	default:
+		return ReasonHeavy
+	}
+	if _, r := vitestVerdict(rest, e); r == ReasonVitestRelated {
+		return r
+	}
+	return ReasonHeavy
+}
+
+// infoTools are the tools whose own help or version a command can ask for.
+var infoTools = map[string]bool{
+	"go": true, "vitest": true, "tsc": true, "make": true, "composer": true, "phpunit": true, "pest": true, "claude": true,
+	"vite": true, "electron-vite": true, "electron-builder": true,
+}
+
+// infoRunners are the package runners: their own help comes before the subcommand, and what follows a script's name is the script's.
+var infoRunners = map[string]bool{"pnpm": true, "pnpx": true, "npx": true, "yarn": true, "npm": true, "bunx": true, "bun": true}
+
+func isHelpWord(a string) bool { return a == "--help" || a == "-h" || a == "--version" }
+
+// helpAsked reads the words a tool is given (after its own name): `--help`, `-h` or `--version` is a request for its help when it is not
+// something else. A word after `--` or `-args` belongs to what the tool runs (`go test -args -h` runs the test binary). A help word right
+// after an option that has no `=` may be that option's value (`go test -bench --help ./...` runs every test and benchmark; `phpunit
+// --coverage-html --help` writes there): the tools take their values in many ways and the tables of them are never complete, so it is
+// left to the gate to judge, and the command is classified as it was. `help` as the first word is the help subcommand of go and composer.
+func helpAsked(tool string, words []string) bool {
+	if len(words) > 0 && words[0] == "help" && (tool == "go" || tool == "composer") {
+		return true
+	}
+	afterOption := false
+	for _, a := range words {
+		switch {
+		case a == "--" || a == "-args" || a == "--args":
+			return false
+		case isHelpWord(a) && !afterOption:
+			return true
+		}
+		afterOption = strings.HasPrefix(a, "-") && !strings.Contains(a, "=")
+	}
+	return false
+}
+
+// infoOnly says whether the command only asks a tool for its help or version (#3043): such a command runs nothing worth a slot, whatever
+// the rest of the line says. For the package runners the help has to be the runner's own, or the tool it runs (`npx vitest --help`,
+// `pnpm exec vitest --help`): a help word after the name of a script is passed to the script, which runs (`pnpm run build --help` builds).
+func infoOnly(argv []string) bool {
+	if len(argv) < 2 {
+		return false
+	}
+	name := filepath.Base(argv[0])
+	switch {
+	case infoTools[name]:
+		return helpAsked(name, argv[1:])
+	case infoRunners[name]:
+		return runnerInfoOnly(name, argv[1:])
+	}
+	return false
+}
+
+func runnerInfoOnly(name string, words []string) bool {
+	i := 0
+	for i < len(words) && strings.HasPrefix(words[i], "-") { // the runner's own options come first
+		if isHelpWord(words[i]) {
+			return true
+		}
+		if runnerValueOpts[words[i]] {
+			i++
+		}
+		i++
+	}
+	if i >= len(words) {
+		return false
+	}
+	toolAt := func(j int) bool { // words[j] is the tool the runner runs
+		if j >= len(words) || !infoTools[filepath.Base(words[j])] {
+			return false
+		}
+		return helpAsked(filepath.Base(words[j]), words[j+1:])
+	}
+	switch w := words[i]; {
+	case w == "help":
+		return name != "npx" && name != "pnpx" && name != "bunx"
+	case name == "npx" || name == "pnpx" || name == "bunx":
+		return toolAt(i)
+	case w == "exec" || w == "x" || w == "dlx":
+		j := i + 1
+		for j < len(words) && strings.HasPrefix(words[j], "-") {
+			if runnerValueOpts[words[j]] {
+				j++
+			}
+			j++
+		}
+		return toolAt(j)
+	case w == "run" || w == "run-script":
+		// only a help word before the script's name is the runner's
+		for _, a := range words[i+1:] {
+			if !strings.HasPrefix(a, "-") {
+				return false
+			}
+			if isHelpWord(a) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Classify says how heavy a command is, from its argv (argv[0] may be a path). It is a pure function over the words
 // the shims hand over: go, pnpm/npx/yarn/npm, vitest, tsc, make, composer and the PHP test runners phpunit and pest. Anything else is none and passes through. A
 // command that cannot be read is none: the gate fails open on what it does not understand.
 func Classify(argv []string, e Env) Class {
 	if len(argv) == 0 {
+		return ClassNone
+	}
+	if infoOnly(argv) {
 		return ClassNone
 	}
 	args := argv[1:]
@@ -256,6 +392,7 @@ func vitestVerdict(args []string, e Env) (Class, Reason) {
 	explicit := 0    // +1 run once (--no-watch, --watch=false), -1 watch (--watch, -w); the last one wins
 	runFlag := false // --run / --run=true: vitest sets watch to false after everything else, whatever else was said
 	narrowed := false
+	related := false // the tests that import the named files, found through the import graph (#3024)
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
@@ -267,7 +404,9 @@ func vitestVerdict(args []string, e Env) (Class, Reason) {
 			runFlag = true
 		case vitestBoolFlag(a) != 0:
 			explicit = vitestBoolFlag(a)
-		case a == "--changed" || a == "--related" || strings.HasPrefix(a, "--changed=") ||
+		case a == "--related":
+			narrowed, related = true, true
+		case a == "--changed" || strings.HasPrefix(a, "--changed=") ||
 			a == "-t" || a == "--testNamePattern" || a == "--project" || a == "--shard":
 			narrowed = true
 			if (a == "-t" || a == "--testNamePattern" || a == "--project" || a == "--shard") && i+1 < len(args) {
@@ -291,6 +430,7 @@ func vitestVerdict(args []string, e Env) (Class, Reason) {
 		return ClassNone, ReasonKnownPassthrough
 	case "related":
 		narrowed = true // `vitest related <files>`: the tests those files touch
+		related = true
 	}
 	// --run wins over `watch`, `dev` and --watch (vitest sets watch to false when options.run is true, after the
 	// subcommand has set it), so it comes first; then a watch that was asked for; then what the place decides.
@@ -303,6 +443,12 @@ func vitestVerdict(args []string, e Env) (Class, Reason) {
 	}
 	if !once && e.watchesByDefault() {
 		return ClassNone, ReasonWatchMode // a person at a terminal: the default is watch
+	}
+	if related {
+		// How much it runs depends on where the files sit in the import graph, not on how many are named: for a file many others
+		// import it is close to the whole suite, which took 13 minutes on average on 10-16 beside two other vitests in the light
+		// pool. One full-width run at a time is shorter than several that share the cores (D7).
+		return ClassHeavy, ReasonVitestRelated
 	}
 	if narrowed {
 		return ClassLight, ReasonLight

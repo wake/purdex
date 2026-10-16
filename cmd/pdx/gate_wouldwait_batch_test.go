@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -44,7 +45,13 @@ func TestGate_WouldWaitBatchAnswersAsOneByOne(t *testing.T) {
 	go func() {
 		hold <- gateMain([]string{"--config", cfg, "--class", "heavy", "--fg", "--", "sh", "-c", "while [ ! -e " + gofile + " ]; do sleep 0.02; done"}, &hout, &herr)
 	}()
-	eventuallyOutput(t, func() bool { return wouldWaitAuto(t, cfg, "go", "test", "./...")["would_wait"] == true })
+	// The lock is taken before the holder record is written: until the note names the holder's command ("another command" is what
+	// it says for a record not yet written), two looks can differ in who holds the slot (#3037).
+	eventuallyOutput(t, func() bool {
+		w := wouldWaitAuto(t, cfg, "go", "test", "./...")
+		note, _ := w["note"].(string)
+		return w["would_wait"] == true && strings.Contains(note, "sh -c")
+	})
 	same("a heavy slot held")
 	got := wouldWaitBatchOf(t, cfg, argvs)
 	assert.Equal(t, true, got[0]["would_wait"])

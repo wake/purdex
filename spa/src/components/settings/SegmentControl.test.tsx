@@ -22,6 +22,12 @@ describe('SegmentControl', () => {
     expect(btn.className).toContain('border-border-active')
   })
 
+  it('exposes the active option with aria-pressed', () => {
+    render(<SegmentControl options={OPTIONS} value="b" onChange={vi.fn()} />)
+    expect(screen.getByText('Beta')).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText('Alpha')).toHaveAttribute('aria-pressed', 'false')
+  })
+
   it('calls onChange with selected value', () => {
     const onChange = vi.fn()
     render(<SegmentControl options={OPTIONS} value="a" onChange={onChange} />)

@@ -292,3 +292,24 @@ export function resolveHostColors(host: HostColorSource | undefined, mode: HostC
   if (!main || !middle || !light) return null
   return { main, middle, light }
 }
+
+/** What a host badge draws: the resolved colours (null = none), the icon and weight (undefined = the defaults). */
+export interface ResolvedHostBadge {
+  colors: ResolvedHostColors | null
+  icon: string | undefined
+  iconWeight: IconWeight | undefined
+}
+
+/**
+ * A host's look → what its `HostBadge` draws under `mode`. The one copy the tab rows (`useTabHostBadge`), the team seats
+ * (`TeamSeatHostBadge`) and the fleet cells share. Last line of defence: an icon or weight stored before the guards existed
+ * (or written by a stranger, or sent over the wire) never reaches `WorkspaceIcon`, which renders an unknown name as literal
+ * text inside the badge.
+ */
+export function resolveHostBadge(look: HostColorSource & { icon?: unknown; iconWeight?: unknown }, mode: HostColorMode): ResolvedHostBadge {
+  return {
+    colors: resolveHostColors({ colors: look.colors, color: look.color }, mode),
+    icon: isPhosphorIconName(look.icon) ? look.icon : undefined,
+    iconWeight: isIconWeight(look.iconWeight) ? look.iconWeight : undefined,
+  }
+}

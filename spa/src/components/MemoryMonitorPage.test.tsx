@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryMonitorPage } from './MemoryMonitorPage'
 import { useWorkspaceStore } from '../features/workspace/store'
 import { useHostStore } from '../stores/useHostStore'
@@ -39,6 +39,13 @@ const monitorSnapshot: MonitorSnapshot = {
   },
   sessions: [],
   config: monitorConfig,
+}
+
+// Drives the component's timers with fake time so the interval/retry tests do not depend on wall-clock speed.
+async function advance(ms: number) {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(ms)
+  })
 }
 
 describe('MemoryMonitorPage', () => {
@@ -347,7 +354,8 @@ describe('MemoryMonitorPage', () => {
   })
 
   it('keeps retrying after a transient refresh failure while preserving the last summary', async () => {
-    const fastConfig = { ...monitorConfig, refresh_interval_ms: 10 }
+    vi.useFakeTimers()
+    const fastConfig = { ...monitorConfig, refresh_interval_ms: 1000 }
     vi.mocked(fetchMonitorConfig).mockResolvedValue(fastConfig)
     vi.mocked(fetchMonitorSnapshot)
       .mockResolvedValueOnce(monitorSnapshot)
@@ -363,15 +371,21 @@ describe('MemoryMonitorPage', () => {
 
     render(<MemoryMonitorPage />)
 
-    expect(await screen.findByText('Pending')).toBeInTheDocument()
-    expect(await screen.findByText('Unable to load monitor data: temporary failure')).toBeInTheDocument()
+    await advance(0)
     expect(screen.getByText('Pending')).toBeInTheDocument()
-    await waitFor(() => expect(vi.mocked(fetchMonitorSnapshot).mock.calls.length).toBeGreaterThanOrEqual(3))
-    expect(await screen.findByText('80.0%')).toBeInTheDocument()
+    expect(vi.mocked(fetchMonitorSnapshot)).toHaveBeenCalledTimes(1)
+    await advance(1000)
+    expect(vi.mocked(fetchMonitorSnapshot)).toHaveBeenCalledTimes(2)
+    expect(screen.getByText('Unable to load monitor data: temporary failure')).toBeInTheDocument()
+    expect(screen.getByText('Pending')).toBeInTheDocument()
+    await advance(1000)
+    expect(vi.mocked(fetchMonitorSnapshot).mock.calls.length).toBeGreaterThanOrEqual(3)
+    expect(screen.getByText('80.0%')).toBeInTheDocument()
   })
 
   it('uses fetched config interval when retrying after an initial snapshot failure', async () => {
-    const fastConfig = { ...monitorConfig, refresh_interval_ms: 10 }
+    vi.useFakeTimers()
+    const fastConfig = { ...monitorConfig, refresh_interval_ms: 1000 }
     vi.mocked(fetchMonitorConfig).mockResolvedValue(fastConfig)
     vi.mocked(fetchMonitorSnapshot)
       .mockRejectedValueOnce(new Error('initial snapshot failed'))
@@ -385,9 +399,15 @@ describe('MemoryMonitorPage', () => {
 
     render(<MemoryMonitorPage />)
 
-    expect(await screen.findByText('Unable to load monitor data: initial snapshot failed')).toBeInTheDocument()
-    await waitFor(() => expect(vi.mocked(fetchMonitorSnapshot).mock.calls.length).toBeGreaterThanOrEqual(2))
-    expect(await screen.findByText('80.0%')).toBeInTheDocument()
+    await advance(0)
+    expect(screen.getByText('Unable to load monitor data: initial snapshot failed')).toBeInTheDocument()
+    expect(vi.mocked(fetchMonitorSnapshot)).toHaveBeenCalledTimes(1)
+    // Well short of the fetched 1000 ms interval (and of the 5000 ms default): no retry yet.
+    await advance(900)
+    expect(vi.mocked(fetchMonitorSnapshot)).toHaveBeenCalledTimes(1)
+    await advance(100)
+    expect(vi.mocked(fetchMonitorSnapshot)).toHaveBeenCalledTimes(2)
+    expect(screen.getByText('80.0%')).toBeInTheDocument()
   })
 
   it('renders one monitor row for each open leaf pane', async () => {
@@ -487,6 +507,7 @@ describe('MemoryMonitorPage', () => {
   })
 
   it('pulls Electron client metrics at the monitor interval', async () => {
+    vi.useFakeTimers()
     const getProcessMetrics = vi.fn()
       .mockResolvedValueOnce([{ paneId: 'pane-browser', kind: 'browser', memoryKB: 2048, cpuPercent: 4.5, state: 'active' }])
       .mockResolvedValue([{ paneId: 'pane-browser', kind: 'browser', memoryKB: 4096, cpuPercent: 8.25, state: 'background' }])
@@ -495,7 +516,7 @@ describe('MemoryMonitorPage', () => {
       getProcessMetrics,
       onMetricsUpdate,
     } as unknown as typeof window.electronAPI
-    vi.mocked(fetchMonitorConfig).mockResolvedValue({ ...monitorConfig, refresh_interval_ms: 10 })
+    vi.mocked(fetchMonitorConfig).mockResolvedValue({ ...monitorConfig, refresh_interval_ms: 1000 })
     useTabStore.setState({
       tabs: {
         'tab-browser': tabWithLeaf('tab-browser', 'pane-browser', { kind: 'browser', url: 'https://example.com' }),
@@ -507,12 +528,17 @@ describe('MemoryMonitorPage', () => {
 
     render(<MemoryMonitorPage />)
 
-    const browserRow = await screen.findByTestId('monitor-row-tab-browser-pane-browser')
-    expect(await within(browserRow).findByText('CPU 4.5%')).toBeInTheDocument()
+    await advance(0)
+    const browserRow = screen.getByTestId('monitor-row-tab-browser-pane-browser')
+    expect(within(browserRow).getByText('CPU 4.5%')).toBeInTheDocument()
     expect(within(browserRow).getByText('Memory 2 MB')).toBeInTheDocument()
     expect(within(browserRow).getByText('active')).toBeInTheDocument()
-    await waitFor(() => expect(getProcessMetrics.mock.calls.length).toBeGreaterThanOrEqual(2))
-    expect(await within(browserRow).findByText('CPU 8.3%')).toBeInTheDocument()
+    const callsBefore = getProcessMetrics.mock.calls.length
+    await advance(900)
+    expect(getProcessMetrics.mock.calls.length).toBe(callsBefore)
+    await advance(100)
+    expect(getProcessMetrics.mock.calls.length).toBeGreaterThan(callsBefore)
+    expect(within(browserRow).getByText('CPU 8.3%')).toBeInTheDocument()
     expect(within(browserRow).getByText('Memory 4 MB')).toBeInTheDocument()
     expect(within(browserRow).getByText('background')).toBeInTheDocument()
     expect(onMetricsUpdate).not.toHaveBeenCalled()

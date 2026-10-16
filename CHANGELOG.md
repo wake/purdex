@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.0.0-alpha.746] - 2026-10-16
+
+> daemon、`pdx` CLI 與 SPA 有改，mod、Electron 沒有改，**不需要重跑 `pdx setup`**。資料庫沒有變，退回 745 不需要還原資料庫。
+
+### Changed：閘門
+
+- **`vitest related` 改算重指令（#3024，PR #3040）**：`related` 會沿 import 帶進所有受影響的測試，改到共用元件時等於跑大半套件；改排 heavy 名額、一次一條近滿寬度跑完，不再和其他 vitest 疊在 light 名額裡讓記憶體翻攪。`vitest run <測試檔>`、`-t`、`--changed`、`--project` 仍是 light。
+- **一棵打包樹只晚占一條名額（#3031，PR #3036）**：最外層的打包 gate 開跑時就在子行程環境放標記，內層打包 gate（例如 `pnpm run electron:build` 裡的 `npx electron-builder`）不再各自晚占。
+
+### Added：守門員
+
+- **狀態與推送跟著遠端的守門員（W3a-2d，PR #3022）**：`/api/watch/status` 帶守門員所在主機、session、醒著／休息，守門員在另一台時每 30 秒向那台確認一次；有變動時在事件串流送 `watch.changed`（一次變動一次）。W3a 至此完成。
+
+### Added：主機狀態與守門員專區
+
+- **觀察主機的連線檢查（F-2c，PR #3032）**：`POST /api/fleet/probe-check`（管理者限定、裝置 403、不開給其他主機）用一次性 SSH 檢查「SSH 金鑰可用」「讀得到量測」，失敗分類為金鑰被拒／主機金鑰不符／連不到／讀不到量測；每次 15 秒逾時，同一台同時只跑一次，SSH 的原始錯誤只進 log。
+- **佇列資料（W5b，PR #3025）**：fleet 的 `slow.queue` 帶名額持有者（不含 token）、排隊者的 session、記憶體壓力擋下的原因與各類是否暫停。
+- **守門員專區第一段（W5a1，PR #3029）**與**主機設定側欄的箭頭可以收合（PR #3030）**：App 端，已在 SPA dev server 上生效。
+
+### Fixed
+
+- 測試：`TestGate_WouldWaitBatchAnswersAsOneByOne` 不再在 holder 紀錄寫好前就比對（#3037，PR #3041）。
+
+### 文件
+
+- 閘門佇列順位（提前／延後／暫緩，#3035）、閒置壓縮一律攔截（U-4.3，#3038）的 spec 與 plan。
+
+### 發版測試
+
+- go 全套綠；tsc -b --force 綠；`make lint` 綠（這一版起補回 PR 層的 make lint，涵蓋 744–746 間沒跑的 12 張）。vitest 18526／18528：2 個失敗都是 `MemoryMonitorPage` 的計時測試（#3026），在 745 與 746 單獨重跑同樣失敗，元件自 745 未改，不是這版的回歸。mod 自 745 未改，沿用。
+
 ## [1.0.0-alpha.745] - 2026-10-16
 
 > daemon、`pdx` CLI、mod 與 SPA 有改，Electron 沒有改。**兩台都要重跑 `pdx setup`** 才會換上新的 mod（只改 `gate.js`，協定不變）。資料庫沒有變。守門員設定的 `model` 欄位改名為 `agent_command`：745 讀到舊列時在記憶體裡轉換，不會自己改寫；在 745 下用 `PUT /api/hostconfig/watch` 寫過的列只有 `agent_command`，退回 744 前要把它改回 `model` 再寫一次，否則 744 讀不進那一列（退回 744 之後也要再跑一次 `pdx setup` 換回 744 的 mod）。

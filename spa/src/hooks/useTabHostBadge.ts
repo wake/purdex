@@ -1,23 +1,17 @@
 import { useMemo } from 'react'
-import type { IconWeight, Tab } from '../types/tab'
+import type { Tab } from '../types/tab'
 import { useHostLook } from '../lib/host-look'
 import { useAgentStore } from '../stores/useAgentStore'
 import { compositeKey } from '../lib/composite-key'
 import {
   getTabBadgePane,
-  isIconWeight,
-  isPhosphorIconName,
-  resolveHostColors,
+  resolveHostBadge,
   type HostColorMode,
-  type ResolvedHostColors,
+  type ResolvedHostBadge,
 } from '../lib/host-color'
 
 /** Resolved badge identity for a tab. `colors` null = host has no color; `icon` undefined = default icon. */
-export interface TabHostBadge {
-  colors: ResolvedHostColors | null
-  icon: string | undefined
-  iconWeight: IconWeight | undefined
-}
+export type TabHostBadge = ResolvedHostBadge
 
 /**
  * Badge identity of the tab's host (first tmux pane in pre-order), or `null` when
@@ -32,7 +26,8 @@ export interface TabHostBadge {
  *
  * The host's look comes from `useHostLook` (one host object subscribed; the look
  * object is memoised per host), resolved under `useMemo` so tab rows do not
- * re-render on unrelated store writes.
+ * re-render on unrelated store writes. `resolveHostBadge` is the last line of
+ * defence on the icon and weight.
  */
 export function useTabHostBadge(tab: Tab): TabHostBadge | null {
   const badgePane = getTabBadgePane(tab)
@@ -46,15 +41,8 @@ export function useTabHostBadge(tab: Tab): TabHostBadge | null {
   const agentType = useAgentStore((s) => (ck ? s.agentTypes[ck] : undefined))
   const mode: HostColorMode = agentType ? 'terminal' : 'console'
 
-  const resolved = useMemo(() => resolveHostColors({ colors: look.colors, color: look.color }, mode), [look, mode])
+  const badge = useMemo(() => resolveHostBadge(look, mode), [look, mode])
 
   if (!hostId) return null
-  return {
-    colors: resolved,
-    // Last line of defence: a value stored before the guard existed (or written by
-    // a stranger) must never reach `WorkspaceIcon`, which renders an unknown name
-    // as literal text inside the badge.
-    icon: isPhosphorIconName(look.icon) ? look.icon : undefined,
-    iconWeight: isIconWeight(look.iconWeight) ? look.iconWeight : undefined,
-  }
+  return badge
 }
