@@ -370,7 +370,7 @@ func (g *Gate) runWatched(ctx context.Context, cfg Config, o Options, env []stri
 	d.Outcome = "none"
 	if kind == watchPackaging {
 		d.Outcome = "packaging"
-		if cfg.Packaging.LateSlotAfter > 0 && envValue(env, HeldEnv) == "" && !g.underLate(cfg) {
+		if cfg.Packaging.LateSlotAfter > 0 && !g.nested(cfg, env, ClassLight) && !g.underLate(cfg) {
 			lw = &lateWatch{after: cfg.Packaging.LateSlotAfter, class: cfg.Packaging.LateSlotClass}
 		}
 	}

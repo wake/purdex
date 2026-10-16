@@ -354,9 +354,16 @@ func TestPackaging_UnderAClaimItTakesNoLateSlot(t *testing.T) {
 	g := packagingGate(t, 150*time.Millisecond)
 	dir := t.TempDir()
 	fakeTool(t, dir, "")
+	// a real holder (pid 1001) whose claim this gate's process descends from
+	holder, err := g.pool(g.Config(), ClassHeavy).TakeLate()
+	require.NoError(t, err)
+	defer holder.Release(nil)
+	require.NoError(t, holder.SetHolder(Holder{PID: 1001, Token: "tok", Argv: []string{"x"}}))
+	g.PID = func() int { return 2002 }
+	g.Procs = descendantProcs(2002, 1001)
 	done := runAsync(g, context.Background(), Options{
 		Argv: []string{"pnpm", "run", "build"}, Real: filepath.Join(dir, "fakepnpm"),
-		Env: cleanEnv(HeldEnv + "=heavy:1"),
+		Env: cleanEnv(HeldEnv + "=" + string(ClassHeavy) + "-" + strconv.Itoa(holder.K) + ":tok"),
 	})
 	eventually(t, "start", func() bool { return exists(dir + "/started") })
 	time.Sleep(500 * time.Millisecond)
@@ -366,6 +373,21 @@ func TestPackaging_UnderAClaimItTakesNoLateSlot(t *testing.T) {
 	rec := lastDecision(t, g)
 	assert.Equal(t, "packaging", rec["outcome"])
 	assert.NotContains(t, rec, "late_slot")
+}
+
+// A claim that no holder stands behind (stale, or typed by hand) does not stop the late slot (R1 of #2996b).
+func TestPackaging_AStaleClaimDoesNotSuppressTheLateSlot(t *testing.T) {
+	g := packagingGate(t, 150*time.Millisecond)
+	dir := t.TempDir()
+	fakeTool(t, dir, "")
+	done := runAsync(g, context.Background(), Options{
+		Argv: []string{"pnpm", "run", "build"}, Real: filepath.Join(dir, "fakepnpm"),
+		Env: cleanEnv(HeldEnv + "=heavy-3:stale"),
+	})
+	eventually(t, "the late slot", func() bool { return len(lightHeld(g)) == 1 })
+	require.NoError(t, os.WriteFile(dir+"/go", nil, 0o644))
+	assert.Equal(t, 0, (<-done).code)
+	assert.Equal(t, true, lastDecision(t, g)["late_slot"])
 }
 
 // Only a late holder's pid covers the processes below it; an ordinary holder whose process group is an ancestor does not.
@@ -393,4 +415,8 @@ func TestWatchKind_RunScriptsAreWatchedNpxToolsAreNot(t *testing.T) {
 	assert.Equal(t, watchPackaging, cfg.watchKind([]string{"pnpm", "run", "build"}, e))
 	assert.Empty(t, cfg.watchKind([]string{"npx", "e2e"}, e))
 	assert.Empty(t, cfg.watchKind([]string{"npx", "run", "e2e"}, e))
+	for _, sub := range []string{"exec", "x", "dlx"} {
+		assert.Empty(t, cfg.watchKind([]string{"pnpm", sub, "some-tool"}, e), sub)
+		assert.Empty(t, cfg.watchKind([]string{"npm", sub, "some-tool"}, e), sub)
+	}
 }

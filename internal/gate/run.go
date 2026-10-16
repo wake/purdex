@@ -201,7 +201,13 @@ func (c Config) watchKind(argv []string, e Env) string {
 		return watchPackaging
 	case why == ReasonUnknown && c.Packaging.RecordUnknown > 0 && len(argv) > 0:
 		switch filepath.Base(argv[0]) {
-		case "pnpm", "npm", "yarn", "bun": // a `run` script of the project, not an `npx` tool
+		case "pnpm", "npm", "yarn", "bun": // a script of the project, not a tool run through the package manager
+			if len(argv) > 1 {
+				switch argv[1] {
+				case "exec", "x", "dlx", "create", "init":
+					return ""
+				}
+			}
 			return watchUnknown
 		}
 	}
