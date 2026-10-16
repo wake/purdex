@@ -32,3 +32,24 @@ func TestClassify_ClaudePluginTest(t *testing.T) {
 		assert.Equal(t, c.want, Classify(words(c.cmd), Env{}), c.cmd)
 	}
 }
+
+// The path the gate really takes is InterceptConfig.Classify with the default tools: claude is listed there, or the classifier above is
+// never reached (R1 of #2970).
+func TestIntercept_DefaultToolsReachTheClaudeClassifier(t *testing.T) {
+	cfg, err := Load(t.TempDir() + "/none.toml") // no file: the defaults
+	assert.NoError(t, err)
+	for _, c := range []struct {
+		cmd  string
+		want Class
+	}{
+		{"claude plugin test /tmp/x", ClassHeavy},
+		{"claude plugin test /tmp/x --file hooks/a.test.ts", ClassLight},
+		{"claude -p hi", ClassNone},
+		{"claude plugin list", ClassNone},
+	} {
+		assert.Equal(t, c.want, cfg.Intercept.Classify(words(c.cmd), Env{}), c.cmd)
+	}
+	// a config that names its own tools without claude does not hold it
+	own := InterceptConfig{Tools: []string{"go"}}
+	assert.Equal(t, ClassNone, own.Classify(words("claude plugin test x"), Env{}))
+}
