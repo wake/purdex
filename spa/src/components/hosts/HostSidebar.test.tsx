@@ -227,6 +227,18 @@ describe('HostSidebar', () => {
     expect(sessionsButtons.length).toBeGreaterThanOrEqual(1)
   })
 
+  it('clicking the selected host collapses it, clicking again expands it, without calling onSelect on collapse', () => {
+    render(<HostSidebar {...defaultProps} />)
+    expect(screen.getAllByText('Sessions').length).toBeGreaterThanOrEqual(1)
+
+    fireEvent.click(screen.getByText('Test Host'))
+    expect(screen.queryByText('Sessions')).not.toBeInTheDocument()
+    expect(defaultProps.onSelect).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByText('Test Host'))
+    expect(screen.getAllByText('Sessions').length).toBeGreaterThanOrEqual(1)
+  })
+
   it('expanding a different collapsed host preserves selectedSubPage when still selectable for target (R3 P1)', () => {
     // R3 standard P1 — D2 was over-aggressive (always picked first selectable
     // for target host).  Correct behaviour: preserve the user's current

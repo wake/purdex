@@ -103,7 +103,6 @@ export function ActivityBarNarrow({
   onReorderWorkspaces,
   onContextMenuWorkspace,
   onOpenHosts,
-  onOpenHost,
   onOpenSettings,
 }: ActivityBarProps) {
   const t = useI18nStore((s) => s.t)
@@ -201,7 +200,7 @@ export function ActivityBarNarrow({
         onOpenHosts={onOpenHosts}
         onOpenSettings={onOpenSettings}
       />
-      <FleetCells variant="narrow" onOpenHost={onOpenHost ?? (() => onOpenHosts())} onOpenHosts={onOpenHosts} />
+      <FleetCells variant="narrow" />
       {workersPanelOpen && (
         <FloatingPanel
           title={t('nav.workers')}

@@ -6,6 +6,9 @@ import { useTabStore } from '../../stores/useTabStore'
 import { useHistoryStore } from '../../stores/useHistoryStore'
 import { useWorkspaceSettingsStore } from '../../stores/useWorkspaceSettingsStore'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { WATCH_WORKSPACE_ID, isWatchTabId } from '../../lib/watch/ids'
+
+export { WATCH_WORKSPACE_ID, isWatchTabId } from '../../lib/watch/ids'
 
 /**
  * The id of the `Unsorted` workspace — where a tab goes when there is no workspace to put it in (Profile Sync
@@ -20,6 +23,26 @@ import { useI18nStore } from '../../stores/useI18nStore'
  * one is found by this id and never renamed.
  */
 export const UNSORTED_WORKSPACE_ID = 'unsorted'
+
+/**
+ * The last active workspace other than `watch`, kept in memory only: where a tab goes when its target would be the
+ * watcher area (which holds no tab but its own), and where Home / prev / next shortcuts are relative to from inside the
+ * area. Not persisted: a restart with `watch` active falls back to the first non-watch workspace.
+ */
+let returnWorkspaceId: string | null = null
+
+/** The workspace to return to from the watcher area: the remembered one if it still exists, else the first non-watch one. */
+export function getReturnWorkspaceId(): string | null {
+  const { workspaces } = useWorkspaceStore.getState()
+  const remembered = workspaces.find((ws) => ws.id === returnWorkspaceId && ws.id !== WATCH_WORKSPACE_ID)
+  return remembered?.id ?? workspaces.find((ws) => ws.id !== WATCH_WORKSPACE_ID)?.id ?? null
+}
+
+/** The workspaces the user sees and picks among: everything but the watcher area. */
+export const visibleWorkspaces = (workspaces: readonly Workspace[]): Workspace[] =>
+  workspaces.filter((ws) => ws.id !== WATCH_WORKSPACE_ID)
+
+export const __resetReturnWorkspaceForTest = (): void => { returnWorkspaceId = null }
 
 interface WorkspaceState {
   workspaces: Workspace[]
@@ -40,6 +63,8 @@ interface WorkspaceState {
   findWorkspaceByTab: (tabId: string) => Workspace | null
   /** The `Unsorted` workspace (`UNSORTED_WORKSPACE_ID`): the existing one as it is, else a new one, appended. */
   ensureUnsortedWorkspace: () => Workspace
+  /** The watcher area's workspace (`WATCH_WORKSPACE_ID`): the existing one as it is, else a new one, appended last. Never activates it. */
+  ensureWatchWorkspace: () => Workspace
   /** No `workspaceId` → the active workspace → else the first → else a new `Unsorted`. Never a silent no-op. */
   insertTab: (tabId: string, workspaceId?: string, afterTabId?: string | null) => void
   closeTabInWorkspace: (tabId: string, opts?: { skipHistory?: boolean }) => void
@@ -71,6 +96,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       },
 
       removeWorkspace: (wsId, opts) => {
+        // The watcher area is never removed by the user's workspace actions; only a sync apply or a profile switch
+        // (which do not come through here) can take it away, and `startWatchArea` leaves it removed until the next open.
+        if (wsId === WATCH_WORKSPACE_ID) return
         if (!get().workspaces.some((ws) => ws.id === wsId)) return
         // Tear-off / merge paths reuse the same `workspace.id` on the receiving
         // window; in those cases the caller passes `keepSettings: true` so
@@ -86,16 +114,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
           const index = state.workspaces.findIndex((ws) => ws.id === wsId)
           const survivors = state.workspaces[index].tabs.filter((id) => Object.hasOwn(liveTabs, id))
           let remaining = state.workspaces.filter((ws) => ws.id !== wsId)
+          // `watch` is never an heir: it holds no tab but its own.
+          const heirs = remaining.filter((ws) => ws.id !== WATCH_WORKSPACE_ID)
           let heirId: string | null = null
           if (survivors.length > 0) {
-            const heir: Workspace = remaining[Math.min(index, remaining.length - 1)]
+            const heir: Workspace = heirs[Math.min(index, heirs.length - 1)]
               ?? { ...createWorkspace(useI18nStore.getState().t('workspace.unsorted')), id: UNSORTED_WORKSPACE_ID }
             heirId = heir.id
             const merged = { ...heir, tabs: [...heir.tabs, ...survivors], activeTabId: heir.activeTabId ?? survivors[0] }
-            remaining = remaining.length === 0 ? [merged] : remaining.map((ws) => (ws.id === heir.id ? merged : ws))
+            remaining = heirs.length === 0 ? [...remaining, merged] : remaining.map((ws) => (ws.id === heir.id ? merged : ws))
           }
           const activeId = state.activeWorkspaceId === wsId || state.activeWorkspaceId === null
-            ? (heirId ?? remaining[0]?.id ?? null)
+            ? (heirId ?? heirs[0]?.id ?? null)
             : state.activeWorkspaceId
           return { workspaces: remaining, activeWorkspaceId: activeId }
         })
@@ -184,6 +214,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         return ws
       },
 
+      ensureWatchWorkspace: () => {
+        const existing = get().workspaces.find((ws) => ws.id === WATCH_WORKSPACE_ID)
+        if (existing) return existing
+        const ws: Workspace = { ...createWorkspace(useI18nStore.getState().t('watch.area.name')), id: WATCH_WORKSPACE_ID }
+        set((state) => ({ workspaces: [...state.workspaces, ws] }))
+        return ws
+      },
+
       insertTab: (tabId, workspaceId, afterTabId) => {
         // `== null`, not `=== undefined`: `null` used to mean "force standalone" and is gone from the type; from
         // an untyped caller it is "no target given", like everything else that is not a workspace id.
@@ -191,7 +229,18 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         if (targetWsId == null) {
           const { workspaces, activeWorkspaceId } = get()
           const active = workspaces.find((ws) => ws.id === activeWorkspaceId)
-          targetWsId = (active ?? workspaces[0] ?? get().ensureUnsortedWorkspace()).id
+          targetWsId = (active ?? visibleWorkspaces(workspaces)[0] ?? get().ensureUnsortedWorkspace()).id
+        }
+        // The watcher area holds its own tabs and nothing else: a tab bound for it (an explicit target, or the active
+        // workspace being `watch` while the area is shown) goes to the workspace the user came from.
+        if (targetWsId === WATCH_WORKSPACE_ID && !isWatchTabId(tabId)) {
+          targetWsId = getReturnWorkspaceId() ?? get().ensureUnsortedWorkspace().id
+          afterTabId = undefined
+        } else if (targetWsId !== WATCH_WORKSPACE_ID && isWatchTabId(tabId)) {
+          // The reverse: an area tab belongs to the area, or to nowhere.
+          if (!get().workspaces.some((ws) => ws.id === WATCH_WORKSPACE_ID)) return
+          targetWsId = WATCH_WORKSPACE_ID
+          afterTabId = undefined
         }
 
         // Concurrent-delete guard: if the caller passes a target workspace
@@ -359,3 +408,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
 syncManager.register(STORAGE_KEYS.WORKSPACES, useWorkspaceStore)
 registerFencedStore(STORAGE_KEYS.WORKSPACES, useWorkspaceStore)
+
+// Remember the last workspace the user was in that is not the watcher area (see `returnWorkspaceId`).
+useWorkspaceStore.subscribe((state) => {
+  const id = state.activeWorkspaceId
+  if (id !== null && id !== WATCH_WORKSPACE_ID) returnWorkspaceId = id
+})

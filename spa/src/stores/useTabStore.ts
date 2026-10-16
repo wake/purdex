@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { isWatchTabId } from '../lib/watch/ids'
 import { persist } from 'zustand/middleware'
 import type { Tab, PaneContent, PaneLayout, TerminatedReason, LayoutPattern, PaneRebuildRecord, RebuildPatch, TmuxSessionContent } from '../types/tab'
 import type { FileSource } from '../types/fs'
@@ -887,6 +888,8 @@ export const useTabStore = create<TabState>()(
         set((state) => {
           const tab = state.tabs[id]
           if (!tab) return state
+          // The watcher area's tabs are locked for good: it is not the user's to unlock (menu, settings page, API alike).
+          if (isWatchTabId(id)) return state
           return { tabs: { ...state.tabs, [id]: { ...tab, locked: !tab.locked } } }
         }),
 

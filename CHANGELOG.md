@@ -1,5 +1,44 @@
 # Changelog
 
+## [1.0.0-alpha.745] - 2026-10-16
+
+> daemon、`pdx` CLI、mod 與 SPA 有改，Electron 沒有改。**兩台都要重跑 `pdx setup`** 才會換上新的 mod（只改 `gate.js`，協定不變）。資料庫沒有變。守門員設定的 `model` 欄位改名為 `agent_command`：745 讀到舊列時在記憶體裡轉換，不會自己改寫；在 745 下用 `PUT /api/hostconfig/watch` 寫過的列只有 `agent_command`，退回 744 前要把它改回 `model` 再寫一次，否則 744 讀不進那一列（退回 744 之後也要再跑一次 `pdx setup` 換回 744 的 mod）。
+
+### Added：守門員（W3a，spec §12.3–§12.4）
+
+- **認出守門員（W3a-2b，PR #3015）**：在 tmux session `pdx-watch` 第一個 pane 裡跑的 Claude Code（cc 的 root agent，session id 與 hook 請求相符）就是這台的守門員；子代理、其他 agent、別的 pane、舊一輪遲到的 SessionStart 都不算。daemon 啟動時、收到 `pdx-watch` 的 SessionStart、有人問狀態（超過 30 秒）與每 5 分鐘都會重新確認，所以**部署後現在手動開的守門員會被自動登記，不用重開**；agent 結束後轉成「休息中」並保留 session id。
+- **兩台同時有守門員醒著（W3a-2c，PR #3016）**：每台 daemon 用同一條規則選，醒得最久的留下（同一秒則 host id 小的），與 `targets` 順序、訊息先後無關；另一台的 daemon 會請自己的守門員停下（只通知，不結束行程）。
+- **pane 輔助函式（W3a-2a，PR #3014）**：建 `pdx-watch`、判斷 pane 是否停在 shell、組指令列（prompt 以單引號包成一個字、拒絕控制字元）、檢查與打字在同一個 tmux 指令裡完成。這一版還沒有呼叫者（開啟／喚醒／休息在 W3b）。
+- **守門員設定與查詢（W3a-1，PR #3012）**：`watch` 設定的 `model` 改為 `agent_command`（啟動守門員的整行指令，預設 `claude --dangerously-skip-permissions --model opus`）；舊的 `model` 寫法讀與寫都會轉換，兩個都帶回 400；一行、512 bytes 內、不得有控制字元；`start_prompt`／`wake_prompt` 4 KB 內、不得有控制字元。agent 模組回報 pane 擁有者時一併帶 pid 與行程啟動時間。
+
+### Added：主機頁的觀察主機（F-2a2，PR #3000–#3002）
+
+- 主方的主機總覽裡可以新增、編輯、刪除只觀察的主機（air19、mserv），挑圖示與顏色，並設定兩台 daemon 各自用的 SSH 別名，存到兩台；任一台寫入失敗時保留對話框與草稿。圖示／顏色挑選器抽成共用元件。
+
+### Changed：閘門
+
+- **打包指令不再被擋，60 秒後補占名額（#2996，PR #3011、#3018）**：`build`／`package`／`pack`／`dist`／`bundle`（含 `:*`）與 `electron:build` 由閘門當父行程立刻開跑，跑超過 60 秒才補占一個 light 名額（名額滿就超額占，不擋、不殺）；子孫已持有名額時不補占；不認得的 `run` 腳本只記錄耗時（10 秒以上）。設定在 `[gate.packaging]`。是否轉送 Ctrl-C 只看是不是在終端機，不再跟有沒有名額綁在一起（終端機下子行程不會收到兩次）。
+- **`pdx lease run` 先用閘門的分類（PR #2970）**：`--kind` 只在閘門認不得時才用；`claude plugin test` 改經閘門。`claude` 加進預設的 `intercept.tools`；自己寫過 `tools` 清單的設定要自己加上 `claude`。
+- **`tsc --watch`／`-w` 不佔名額（#2989，PR #3021）**：常駐監看不是一次性的編譯；`--watch false` 照舊算一次性。
+
+### Changed：fork 計數（D0c）
+
+- **剩下 17 個檔案的 fork 改走 `execstat`（PR #2992）**：待辦清單清空，pty 改用 `ptyCounted` 清單＋行為測試守門。
+- **hook CLI 自己的 fork 也算（PR #3008）**：`pdx hook` 呼叫 tmux／ps 的次數隨事件送到 daemon，記在 tag `hook-cli`（單次上限 32），只做觀測。
+
+### Fixed
+
+- **`make lint` 在 `internal/hostmem` 失敗（PR #3013）**：`go vet` 的 unsafeptr 檢查（743 的 purego 程式碼；`//nolint:govet` 是 golangci 的寫法，`go vet` 不認）。改用 purego 直接傳指標，行為不變。
+- 測試：fleet 推送測試不再與量測迴圈競爭（#2990，PR #3006）；team 的無人值守競爭測試改用 self_relay 列（#2997，PR #3003）。
+
+### 文件
+
+- 守門員正式版 spec／plan（#3007、#3010、#3017、#3019、#3020）：守門員在固定 tmux session `pdx-watch`、驗證式登記、`watch.events` 推送、沒有「全部略過」、名額 0＝暫停這一類（W3c）、守門員與使用者調名額不設上下限與頻率限制。守門員專區 spec（B 線，#3009）。
+
+### 發版測試
+
+- go 全套綠；tsc -b --force 綠；mod `gate.test.ts` 78/78（其他 mod 檔自 743 未改，沿用）。vitest 18441／18445：4 個失敗都是高負載下的時序問題，單獨重跑皆通過——`host-look.guard`（掃整個 repo 超過 60 秒）重跑綠；`MemoryMonitorPage` 三個計時重試在 745 與 744 單獨重跑都 40/40，744 也曾失敗，不是這版的回歸（#3026 追蹤）。
+
 ## [1.0.0-alpha.744] - 2026-10-16
 
 > 743 的修正版。daemon、`pdx` CLI 與 mod 有改，SPA、Electron 沒有改。**兩台都要重跑 `pdx setup`** 才會換上新的 mod（協定不變）。資料庫沒有變，退回 743 不需要還原資料庫，但要再跑一次 `pdx setup` 換回 743 的 mod。

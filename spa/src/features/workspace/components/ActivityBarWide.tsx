@@ -81,7 +81,6 @@ export function ActivityBarWide(props: ActivityBarProps) {
     onReorderWorkspaces,
     onContextMenuWorkspace,
     onOpenHosts,
-    onOpenHost,
     onOpenSettings,
     tabsById = {},
     activeTabId = null,
@@ -388,7 +387,7 @@ export function ActivityBarWide(props: ActivityBarProps) {
           onOpenSettings={onOpenSettings}
           onToggleCompact={toggleBottomNavCompact}
         />
-        <FleetCells variant="wide" onOpenHost={onOpenHost ?? (() => onOpenHosts())} onOpenHosts={onOpenHosts} />
+        <FleetCells variant="wide" />
       </div>
       <div data-testid="activity-bar-resize" className="hidden lg:flex">
         <RegionResize

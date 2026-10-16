@@ -9,8 +9,9 @@ import { useUISettingsStore } from '../../stores/useUISettingsStore'
 const COLORS = { console: { main: { color: '#336699', alpha: 100 } } }
 const queue = (n: number, over: Partial<FleetQueue> = {}): FleetQueue => ({
   heavy_used: 2, heavy_total: 2, light_used: 0, light_total: 4,
-  waiters: Array.from({ length: n }, (_, i) => ({ class: 'heavy', place: i + 1, command: 'make', project: 'p', since: 0 })),
-  longest_wait_s: 30, admission_held: false, ...over,
+  holders: [],
+  waiters: Array.from({ length: n }, (_, i) => ({ class: 'heavy', place: i + 1, command: 'make', project: 'p', session: '', since: 0 })),
+  longest_wait_s: 30, admission_held: false, admission_reason: '', heavy_paused: false, light_paused: false, ...over,
 })
 const view = (over: Partial<FleetHostView> = {}): FleetHostView => ({ ...host('mlab', { name: 'mlab', fast: fast({ load: 40 }) }), ...over })
 

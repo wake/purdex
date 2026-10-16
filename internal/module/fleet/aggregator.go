@@ -139,6 +139,8 @@ type Measure struct {
 	loopClock timeSource // the one-second loop's timers (Deps.LoopClock, else clock)
 	limit     *hourlyLimiter
 
+	probeCheck // POST /api/fleet/probe-check (probecheck.go)
+
 	mu         sync.Mutex
 	hosts      map[string]*hostRow
 	order      []string
@@ -210,6 +212,7 @@ func (m *Measure) Stop() {
 	m.life.Lock()
 	defer m.life.Unlock()
 	m.stopped = true
+	m.cancelProbes() // an ssh check in flight must not outlive Stop
 	m.deactivateLocked()
 }
 
@@ -441,7 +444,7 @@ func (r *rowSink) Reading(f leaf.Fast, s *leaf.Slow) {
 	defer m.mu.Unlock()
 	m.applyFastLocked(r.h, f, f.At)
 	if s != nil {
-		m.applySlowLocked(r.h, s.TopCPU, s.TopMem, s.Gate, s.At)
+		m.applySlowLocked(r.h, s.TopCPU, s.TopMem, s.Gate, s.AdmissionKnown, s.At)
 	}
 	r.h.os, r.h.status, r.h.code, r.h.lastOK = f.OS, leaf.StatusOK, leaf.CodeNone, f.At
 	m.noteReadingLocked(m.clock.Now())
@@ -468,10 +471,10 @@ func (m *Measure) applyFastLocked(h *hostRow, f leaf.Fast, at time.Time) {
 		Load: leaf.Composite(f.LocalFast, f.DiskPct, true)}
 }
 
-func (m *Measure) applySlowLocked(h *hostRow, topCPU, topMem []leaf.Proc, g *gate.Status, at time.Time) {
+func (m *Measure) applySlowLocked(h *hostRow, topCPU, topMem []leaf.Proc, g *gate.Status, admissionKnown bool, at time.Time) {
 	v := &SlowView{At: at, TopCPU: orEmpty(topCPU), TopMem: orEmpty(topMem)}
 	if g != nil && h.kind == KindDaemon {
-		q := leaf.QueueSummary(*g, h.lastFast, at)
+		q := leaf.QueueSummary(*g, admissionKnown, h.lastFast, at)
 		v.Queue = &q
 	}
 	h.slow = v
@@ -521,7 +524,7 @@ func (m *Measure) readLocal(now time.Time) {
 	}
 	if s, ok := m.d.Local.Slow(); ok && s.At.After(h.ownSlow) {
 		h.ownSlow = s.At
-		m.applySlowLocked(h, s.TopCPU, s.TopMem, s.Gate, now)
+		m.applySlowLocked(h, s.TopCPU, s.TopMem, s.Gate, true, now) // the local gate status always carries its Admission
 	}
 	// No new reading for a while: the own host reads offline too (it keeps the last values), never ok on an old figure.
 	if !h.ownSeen.IsZero() && now.Sub(h.ownSeen) >= ownStaleAfter && h.status == leaf.StatusOK {

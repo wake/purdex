@@ -25,6 +25,7 @@ import (
 
 func golden(t *testing.T, name string, got []byte) {
 	t.Helper()
+	require.NotContains(t, string(got), "DO-NOT-LEAK", "a slot token went out in %s", name)
 	var buf bytes.Buffer
 	require.NoError(t, json.Indent(&buf, got, "", "  "))
 	buf.WriteByte('\n')
@@ -68,14 +69,22 @@ func goldenRig(t *testing.T) *mrig {
 	// the other daemon host: over ssh, with its heavy-command queue
 	inject(t, r, "peer", leaf.Fast{LocalFast: leaf.LocalFast{At: now, CPU: 78, Mem: 83.5, Level: 2, PageRate: 61, Load1: 9.1, NCPU: 8},
 		OS: "Darwin", DiskPct: 71, DiskFreeGB: 66.5, RateKnown: true, LevelKnown: true},
-		&leaf.Slow{LocalSlow: leaf.LocalSlow{At: now,
+		&leaf.Slow{AdmissionKnown: true, LocalSlow: leaf.LocalSlow{At: now,
 			TopCPU: []leaf.Proc{{PID: 91, Name: "cc1plus", CPU: 120, RSSMB: 400}},
 			TopMem: []leaf.Proc{{PID: 77, Name: "Electron", CPU: 3, RSSMB: 1500}},
 			Gate: &gate.Status{
-				Heavy: []gate.Holder{{Class: "heavy", Slot: 1, PID: 10}, {Class: "heavy", Slot: 2, PID: 11}},
+				// the tokens are the gate's secrets: the golden file must not carry them
+				Heavy: []gate.Holder{
+					{Class: "heavy", Slot: 1, PID: 10, Argv: []string{"go", "test", "-race", "./internal/module/fleet/"}, Cwd: "/Users/wake/Workspace/wake/purdex",
+						Started: now.Add(-92 * time.Second), Session: "9c2f7a10-1b3d-4e55-9a60-7f0e2c8d5b11", Token: "tok-DO-NOT-LEAK-1"},
+					{Class: "heavy", Slot: 2, PID: 11, Argv: []string{"pnpm", "build"}, Cwd: "/Users/wake/Workspace/wake/aigora/spa",
+						Started: now.Add(-14 * time.Second), Token: "tok-DO-NOT-LEAK-2"}},
+				Light: []gate.Holder{{Class: "light", Slot: 1, PID: 13, Argv: []string{"git", "status"}, Cwd: "/Users/wake/Workspace/wake/purdex",
+					Started: now.Add(-2 * time.Second), Token: "tok-DO-NOT-LEAK-3"}},
 				QueueHeavy: []gate.Waiter{{Class: "heavy", Place: 1, PID: 12, Since: now.Add(-150 * time.Second),
-					Argv: []string{"go", "test", "./..."}, Cwd: "/Users/wake/Workspace/wake/purdex"}},
-				Settings: []gate.Setting{{Key: "slots.heavy", Value: "2"}, {Key: "slots.light", Value: "4"}},
+					Argv: []string{"go", "test", "./..."}, Cwd: "/Users/wake/Workspace/wake/purdex", Session: "11111111-aaaa-4bbb-8ccc-222222222222"}},
+				Settings:  []gate.Setting{{Key: "slots.heavy", Value: "2"}, {Key: "slots.light", Value: "4"}},
+				Admission: gate.AdmissionState{Held: true, Reason: "memory pressure level 2"},
 			}}})
 
 	// a probe host that answers
@@ -116,8 +125,11 @@ func TestGolden_FleetChanged(t *testing.T) {
 		&leaf.Slow{LocalSlow: leaf.LocalSlow{At: now,
 			TopCPU: []leaf.Proc{{PID: 91, Name: "cc1plus", CPU: 118, RSSMB: 401}},
 			TopMem: []leaf.Proc{{PID: 77, Name: "Electron", CPU: 3, RSSMB: 1500}},
-			Gate: &gate.Status{Heavy: []gate.Holder{{Class: "heavy", Slot: 1, PID: 10}},
-				Settings: []gate.Setting{{Key: "slots.heavy", Value: "2"}, {Key: "slots.light", Value: "4"}}}}})
+			// an older pdx (no Admission object, so the host's own level decides, level 2 here) with the light class paused
+			Gate: &gate.Status{Heavy: []gate.Holder{{Class: "heavy", Slot: 1, PID: 10, Argv: []string{"go", "test"}, Cwd: "/Users/wake/Workspace/wake/purdex",
+				Started: now.Add(-93 * time.Second), Token: "tok-DO-NOT-LEAK-1"}},
+				Settings: []gate.Setting{{Key: "slots.heavy", Value: "2"}, {Key: "slots.light", Value: "0"}, {Key: "admission.enabled", Value: "true"},
+					{Key: "admission.max_pressure_level", Value: "1"}, {Key: "admission.max_page_rate", Value: "auto"}}}}})
 	inject(t, r, "probe:ab12cd34", leaf.Fast{LocalFast: leaf.LocalFast{At: now, CPU: 4, Mem: 22, Load1: 0.2, NCPU: 4},
 		OS: "Linux", DiskPct: 35, DiskFreeGB: 210}, nil)
 	r.tick()
