@@ -140,6 +140,35 @@ describe('switching the mounted stream to another unit (a tab switch)', () => {
   })
 })
 
+describe('saving the scroll position', () => {
+  afterEach(() => { vi.useRealTimers() })
+  it('a burst of scrolls saves the last position after the debounce, and the next burst saves again', () => {
+    vi.useFakeTimers()
+    render(<Harness initial={range(1, 12)} />)
+    scrollTo(40) // leaves the bottom: saved at once
+    scrollTo(45)
+    scrollTo(50)
+    expect(readViewMemo(H, K).scroll).toBe(40)
+    act(() => { vi.advanceTimersByTime(200) })
+    expect(readViewMemo(H, K).scroll).toBe(50)
+    scrollTo(55)
+    act(() => { vi.advanceTimersByTime(200) })
+    expect(readViewMemo(H, K).scroll).toBe(55)
+  })
+  it('a pending save that a unit switch cancelled does not stop the other unit\'s positions from being saved (M: the timer is not cleared out of its ref)', () => {
+    vi.useFakeTimers()
+    render(<Harness initial={range(1, 12)} />)
+    scrollTo(40)
+    scrollTo(45) // a save is pending
+    act(() => { handle.current?.switchTo('solo:b', range(1, 12)) }) // the switch cancels it (and saves what A had)
+    expect(readViewMemo(H, K).scroll).toBe(45)
+    scrollTo(30) // leaves the bottom of B: saved at once
+    scrollTo(35) // a plain scroll: saved after the debounce
+    act(() => { vi.advanceTimersByTime(200) })
+    expect(readViewMemo(H, 'solo:b').scroll).toBe(35)
+  })
+})
+
 describe('the previous month', () => {
   it('scrolling to the top asks for it once, and the reading position holds when it arrives (M: scrollTop not compensated)', async () => {
     let finish: () => void = () => {}

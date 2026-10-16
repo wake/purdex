@@ -54,7 +54,7 @@ export function useStreamScroll({ host, unitKey, streamKey = `${host}\0${unitKey
     el.scrollTop = m.pinnedToBottom ? el.scrollHeight : m.scroll
     lastTop.current = el.scrollTop
     lastAtBottom.current = m.pinnedToBottom
-    return () => { if (timer.current) clearTimeout(timer.current); save() }
+    return () => { if (timer.current) { clearTimeout(timer.current); timer.current = null } save() }
   }, [host, unitKey, save])
 
   // A different filter shows a different list: start at its bottom.
@@ -127,7 +127,7 @@ export function useStreamScroll({ host, unitKey, streamKey = `${host}\0${unitKey
     save()
   }, [save])
 
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current) }, [])
+  useEffect(() => () => { if (timer.current) { clearTimeout(timer.current); timer.current = null } }, [])
 
   return { ref, below, onScroll, toBottom, older }
 }
