@@ -59,7 +59,7 @@ func newFakeHostconfig() *fakeHostconfig {
 	return &fakeHostconfig{token: "tok", items: map[string]any{
 		"enabled": true, "x_cores": 1.5, "y_mb": float64(1024), "t_s": float64(60), "pressure_level": float64(2), "pressure_t_s": float64(120),
 		"page_rate": float64(50), "page_t_s": float64(60), "targets": []any{"air26", "mlab"}, "mode": "patrol", "patrol_idle_min": float64(120),
-		"auto_wake": true, "model": "opus", "workdir": "~/Workspace/wake/mlab-purdex-watch", "start_prompt": "", "wake_prompt": "",
+		"auto_wake": true, "agent_command": "claude --dangerously-skip-permissions --model opus", "workdir": "~/Workspace/wake/mlab-purdex-watch", "start_prompt": "", "wake_prompt": "",
 	}}
 }
 
@@ -77,7 +77,7 @@ func TestWatchConfig_GetShowsEveryKeyAndOne(t *testing.T) {
 	cfg := watchCfgFile(t, srv, "tok")
 	var out, errb bytes.Buffer
 	require.Equal(t, 0, watchMain([]string{"config", "--config", cfg}, &out, &errb), errb.String())
-	for _, want := range []string{"enabled = true", "x_cores = 1.5", "targets = air26,mlab", "mode = patrol", "model = opus", "workdir = ~/Workspace/wake/mlab-purdex-watch"} {
+	for _, want := range []string{"enabled = true", "x_cores = 1.5", "targets = air26,mlab", "mode = patrol", "agent_command = claude --dangerously-skip-permissions --model opus", "workdir = ~/Workspace/wake/mlab-purdex-watch"} {
 		require.Contains(t, out.String(), want)
 	}
 	out.Reset()
@@ -100,10 +100,10 @@ func TestWatchConfig_SetEditsTheTypedValuesAndKeepsTheRest(t *testing.T) {
 	require.Equal(t, 2.5, items["x_cores"])
 	require.Equal(t, []any{"a26", "mlab"}, items["targets"])
 	require.Equal(t, "resident", items["mode"])
-	require.Equal(t, "hi\nthere", items["start_prompt"])
+	require.Equal(t, `hi\nthere`, items["start_prompt"], "a backslash-n stays two characters: the daemon refuses a real newline, so the CLI must not make one")
 	require.Equal(t, float64(30), items["t_s"])
 	require.Equal(t, float64(1024), items["y_mb"], "what was not set is written back as it was")
-	require.Equal(t, "opus", items["model"])
+	require.Equal(t, "claude --dangerously-skip-permissions --model opus", items["agent_command"])
 }
 
 func TestWatchConfig_SetRefusals(t *testing.T) {
