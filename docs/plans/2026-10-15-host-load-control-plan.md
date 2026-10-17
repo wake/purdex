@@ -445,12 +445,16 @@ hold check and the would-wait count.
 Spec §5.3. Built on GQ's admit lock and `Snapshot` (the serving order) of one class; nothing here changes how ranks order
 the queue. Codex plan review 10-17 (task-mvb5792n-bnh6m5) found the first draft unsafe — rules across classes under two
 locks, and a taken slot whose record had no argv until later — so rules are per class and the take publishes its argv.
-0. **The take publishes the command (first, before any rule).** `TryTake(t)` writes the slot's placeholder record (#3049,
-   `writePlaceholder`) with the argv, cwd and session of the ticket's `WaiterInfo` (the ticket file already carries them,
-   `EnqueueFor`), still inside the class's admit lock; `TakeLate(info WaiterInfo)` does the same (the caller in `run.go`
-   passes the running command's argv). `SetHolder` later overwrites the record as today (atomic, temp + rename). Tests:
-   right after `TryTake`/`TakeLate` returns, `Held()` shows the argv (no window with an empty record); `-race` with a
-   reader polling `Held()` during takes.
+0. **The take publishes the command (first, before any rule).** `EnqueueFor(info)` keeps `info` on the `Ticket` (in
+   memory); `TryTake(t)` writes the slot's placeholder record (#3049, `writePlaceholder(k, info)`) with the argv, cwd and
+   session of `t`'s `WaiterInfo`, still inside the class's admit lock. The take never reads the ticket file back: that
+   write ignores its errors and may leave an empty or partial file (it is only for the listing), so it cannot be what a
+   rule matches. A placeholder that cannot be written already fails the take and lets the lock go (today's
+   `writePlaceholder` error path), so a slot is never handed out without its argv on disk. `TakeLate(info WaiterInfo)`
+   does the same (the caller in `run.go` passes the running command's argv). `SetHolder` later overwrites the record as
+   today (atomic, temp + rename). Tests: right after `TryTake`/`TakeLate` returns, `Held()` shows the argv (no window with
+   an empty record), also when the ticket file was left empty (the take uses the ticket's in-memory info); a placeholder
+   write that fails → no slot, lock free; `-race` with a reader polling `Held()` during takes.
 1. `commandWords(argv) []string` (spec §5.3 "the command's words"), cases spelled out, each with a table test: `npx`,
    `pnpx`, `bunx`, `bun x` `<tool …>`; `pnpm|npm|yarn|bun exec|x <tool …>` with the runner options before the subcommand
    skipped together with their values for `runnerValueOpts` (both `--opt value` and `--opt=value`), and a `--` right
@@ -497,8 +501,12 @@ later one does not block it; an over-size holder (pool shrunk) still blocks and 
 with a blocked ticket ahead and a free normal one behind; a late claim is never blocked and, once taken, blocks a
 conflicting waiter; a `no_record` holder blocks nothing; a rule removed → the blocked ticket is served on the next poll.
 Races under `-race` (internal/gate): two gates whose commands conflict, two slots free, taking at once → exactly one is
-served (item 0 makes the second see the first's argv); `TakeLate` and a conflicting `TryTake` at once → the late claim
-holds and the waiter is blocked; two waiters that read the old (empty) rules, a rule added, then both `TryTake` → the
+served (item 0 makes the second see the first's argv); `TakeLate` and a conflicting `TryTake` at once, two slots free,
+repeated → the outcome follows who took the admit lock first, read from the slot numbers (both take the lowest free
+slot): the late claim on slot 1 → the waiter is blocked; the waiter on slot 1 → the late claim on slot 2 and both hold
+(spec §5.3: a late claim ignores rules) — never the waiter served beside a late claim that took the lock before it; the
+same two in a fixed order (`TakeLate` returns, then `TryTake`; and the reverse) give each outcome deterministically; two
+waiters that read the old (empty) rules, a rule added, then both `TryTake` → the
 rule holds (rules read inside the lock); `Snapshot` while ranks and rules change. would-wait for a command that conflicts
 with a holder / a front ticket / a back ticket (back: does not make it wait). CLI: missing reason refused, empty pattern
 refused, add twice → one rule, remove by index and by pair, two adds at once both land, add and remove of the same pair at

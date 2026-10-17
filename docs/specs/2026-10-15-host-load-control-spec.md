@@ -291,10 +291,12 @@ command's memory is the hardest to get right.
   script is not opened: `pnpm run typecheck` is `pnpm run typecheck` (a rule names the script when the script is the
   thing that collides).
 - **Every holder carries its command from the take on.** The take writes the slot's record inside the admit lock, and
-  (with #3049's placeholder) that record now carries the taking command's argv, read from its ticket — so the next gate
-  that takes the lock sees what holds the slot, never an empty record. A late claim (#2996) passes its command's argv to
-  `TakeLate`, which writes it the same way. A holder whose record cannot be read (a gate killed between removing its record
-  and unlocking, §5) matches no pattern; it is shown as `no_record`.
+  (with #3049's placeholder) that record now carries the taking command's argv — the argv the gate made its ticket with and
+  keeps in memory, not read back from the ticket file (whose write may fail and is only for the listing) — so the next
+  gate that takes the lock sees what holds the slot, never an empty record. A record that cannot be written fails the take
+  and lets the slot go, as today. A late claim (#2996) passes its command's argv to `TakeLate`, which writes it the same
+  way. A holder whose record cannot be read (a gate killed between removing its record and unlocking, §5) or carries no
+  argv matches no pattern; it is shown as `no_record`.
 - **Rules are read inside the lock.** The rules live in the gate directory (`conflicts.json`, written atomically), not in
   `config.toml`; the walk below reads them while holding the class's admit lock, so a rule added before a take is honoured
   by that take. A command already running is never touched.
@@ -306,7 +308,9 @@ command's memory is the hardest to get right.
   ticket can pass it; when the holder it waits for ends, the blocked ticket is next among those that conflict with it (no
   starvation by a stream of the other kind). Capacity is the pool's free slots as today (holders beyond the pool's size,
   `overHeld`, already counted), taken by the tickets that are neither held nor blocked, in serving order. A late claim is
-  already running and ignores rules, as it ignores ranks; once its record is written it blocks others like any holder.
+  already running and ignores rules, as it ignores ranks; once its record is written it blocks others like any holder. So
+  the order of the admit lock decides a late claim against a conflicting take: the late claim first → the waiter is
+  blocked; the take first → both run (a rule keeps waiting commands apart; it never stops one that is already running).
   Every reader (TryTake, status, queue, would-wait) gets this from the one snapshot of §5.2.
 - **would-wait** answers for a new `normal` ticket at the end of the normal group: it waits when a holder or a front or
   normal ticket of the class conflicts with it, as well as when capacity is used up.
