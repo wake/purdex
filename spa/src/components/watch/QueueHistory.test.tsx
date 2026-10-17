@@ -141,13 +141,18 @@ describe('QueueHistory — the hover card', () => {
   })
 
   it('leaves out a line whose field is absent (no reason, no parameters, no session, no end for a command that never ran)', async () => {
-    fetchGateDecisions.mockResolvedValue(ok([rec({ session: undefined, cwd: undefined, outcome: 'refused', durationS: 0 })]))
+    fetchGateDecisions.mockResolvedValue(ok([rec({ session: undefined, cwd: undefined, outcome: 'orphaned', durationS: 0 })]))
     renderH(); await flush()
     fireEvent.mouseEnter(screen.getByTestId('hist-row'))
     expect(screen.queryByTestId('hist-tip-why')).toBeNull()
     expect(screen.queryByTestId('hist-tip-params')).toBeNull()
     expect(screen.queryByTestId('hist-tip-where')).toBeNull()
-    expect((screen.getByTestId('hist-tip-times').textContent ?? '').match(/\d\d:\d\d:\d\d/g)).toHaveLength(2)
+    // never started: only when it was queued, no start and no end
+    const times = screen.getByTestId('hist-tip-times')
+    expect(times.textContent?.match(/\d\d:\d\d:\d\d/g)).toHaveLength(1)
+    expect(times).toHaveTextContent(t('watch.history.tip.queued', { t: '' }).trim())
+    expect(times).not.toHaveTextContent(t('watch.history.tip.started', { t: '' }).trim())
+    expect(times).not.toHaveTextContent(t('watch.history.tip.ended', { t: '' }).trim())
   })
 })
 

@@ -68,8 +68,7 @@ function Tip({ row, top, t }: { row: HistoryRow; top: number; t: T }) {
       {where !== '' && <div data-testid="hist-tip-where" className="mt-0.5 text-text-secondary break-all">{where}</div>}
       <div data-testid="hist-tip-times" className="mt-1 text-text-muted tabular-nums">
         {t('watch.history.tip.queued', { t: clockS(row.arriveMs) })}
-        {' · '}{t('watch.history.tip.started', { t: clockS(row.startMs) })}
-        {row.started && <>{' · '}{t('watch.history.tip.ended', { t: clockS(row.endMs) })}</>}
+        {row.started && <>{' · '}{t('watch.history.tip.started', { t: clockS(row.startMs) })}{' · '}{t('watch.history.tip.ended', { t: clockS(row.endMs) })}</>}
       </div>
       {why !== '' && <div data-testid="hist-tip-why" className="text-text-muted">{t('watch.history.tip.why', { why })}</div>}
       {params.length > 0 && (
