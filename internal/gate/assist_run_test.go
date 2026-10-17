@@ -144,8 +144,12 @@ os.environ['HOME'] = home
 os.environ['PATH'] = home + '/bin:' + os.environ['PATH']
 cmd = re.sub(r'^git-(\w+)', r'git \1', cmd)
 os.chdir(home)
-os.setsid()
-os.execvp('sh', ['sh', '-c', cmd])
+pid = os.fork()
+if pid == 0:
+    os.setsid()  # as sshd gives each remote command a session of its own
+    os.execvp('sh', ['sh', '-c', cmd])
+_, st = os.waitpid(pid, 0)
+sys.exit(os.waitstatus_to_exitcode(st) % 256 if os.waitstatus_to_exitcode(st) >= 0 else 128 - os.waitstatus_to_exitcode(st))
 `
 
 const fakePdx = `#!/bin/sh
@@ -202,6 +206,9 @@ func runOn(t *testing.T, g *Gate, h *assistHost, dir string, argv ...string) (As
 	var out, errb bytes.Buffer
 	res := g.RunAssist(context.Background(), Options{Argv: argv, Dir: dir, Stdout: &out, Stderr: &errb},
 		AssistRun{Host: "air26", Repo: h.repo, SSH: h.ssh, AdmitWait: 60 * time.Second})
+	if res.Err != nil {
+		t.Logf("run ended with %v; stdout %q stderr %q", res.Err, out.String(), errb.String())
+	}
 	return res, out.String(), errb.String()
 }
 

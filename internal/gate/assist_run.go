@@ -131,8 +131,8 @@ func (a AssistRun) sshCmd(ctx context.Context, script string, args ...string) *e
 
 // RunAssist sends the command of o to the host and runs it there, streaming its output to o.Stdout and o.Stderr. It never runs the
 // command on this host.
-func (g *Gate) RunAssist(ctx context.Context, o Options, a AssistRun) AssistResult {
-	res := AssistResult{Job: a.Job}
+func (g *Gate) RunAssist(ctx context.Context, o Options, a AssistRun) (res AssistResult) {
+	res = AssistResult{Job: a.Job}
 	if res.Job == "" {
 		res.Job = newJobID()
 	}

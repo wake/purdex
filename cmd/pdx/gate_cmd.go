@@ -78,6 +78,8 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 	cfgPath := fs.String("config", "", "config.toml (default ~/.config/pdx/config.toml)")
 	waitMax := fs.Float64("wait-max", 0, "seconds the command may wait for its slot; past them it is not run and the exit code is 75")
 	classSource := fs.String("class-source", "", "where --class came from, for the decision record (classifier or kind)")
+	assistHost := fs.String("assist-host", "", "(tests and manual checks) send the command to this assist host instead of running it here")
+	assistSSH := fs.String("assist-ssh", "", "(tests and manual checks) the ssh program for --assist-host")
 	if err := fs.Parse(flags); err != nil {
 		return 2
 	}
@@ -151,6 +153,14 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 	g := gate.New(cfg)
 	g.Stderr = stderr
 	g.Load = gateReloader(*cfgPath, cfg)
+	if *assistHost != "" {
+		res := g.RunAssist(context.Background(), gate.Options{Argv: command, Stdout: stdout, Stderr: stderr}, gate.AssistRun{Host: *assistHost, SSH: *assistSSH})
+		if !res.Started {
+			fmt.Fprintf(stderr, "pdx gate: %v: the command was not run on %s\n", res.Err, *assistHost)
+			return gate.ExitRefused
+		}
+		return res.Code
+	}
 	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Real: realBin, Class: c, ClassSource: *classSource, Foreground: *fg, WaitMax: time.Duration(*waitMax * float64(time.Second)), Stdout: stdout, Stderr: stderr})
 	return code
 }
