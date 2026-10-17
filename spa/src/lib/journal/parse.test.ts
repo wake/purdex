@@ -105,6 +105,9 @@ describe('session page fields', () => {
     expect(p?.page).toBe('')
     expect(p?.truncated).toBe(false)
   })
+  it.each([['page', 123], ['page', null], ['page', {}], ['truncated', 'true'], ['truncated', 1], ['truncated', null]])('a %s of the wrong type (%j) is a malformed envelope, not a default', (field, value) => {
+    expect(parseJournalPage(wirePage({ [field]: value }))).toBeNull()
+  })
   it('reads page and truncated when sent', () => {
     const p = parseJournalPage(wirePage({ page: 'sess-1', truncated: true }))
     expect(p?.page).toBe('sess-1')
@@ -121,6 +124,9 @@ describe('parseSessions', () => {
       { sessionId: 'a', startedAt: 10, endedAt: 20, via: 'root', current: false },
       { sessionId: 'b', startedAt: 10, endedAt: 0, via: 'clear', current: true },
     ])
+  })
+  it.each([['yes'], [1], [null], [{}]])('an incomplete of the wrong type (%j) is a malformed envelope', (value) => {
+    expect(parseSessions({ sessions: [], incomplete: value })).toBeNull()
   })
   it('reads incomplete', () => {
     expect(parseSessions({ sessions: [], incomplete: true })?.incomplete).toBe(true)
