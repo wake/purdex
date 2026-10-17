@@ -326,3 +326,32 @@ func TestRefreshRemote_ALateAnswerAboutAnOlderWatcherIsDropped(t *testing.T) {
 		})
 	}
 }
+
+// The start attempt is in the notice: the App sees "starting" while a start goes on in the background and the cooldown the moment it
+// failed, so its busy state ends at once (#3131).
+func TestChanged_TheStartAttemptIsInTheNotice(t *testing.T) {
+	r := newSessionRig(t, "") // the typed command never makes a watcher appear
+	ev := &events{}
+	r.m.emit = ev.add
+	r.m.startGrace, r.m.registerWithin = 20*time.Millisecond, 120*time.Millisecond
+	ans, err := r.m.session.Start(context.Background())
+	require.NoError(t, err)
+	require.True(t, ans.Starting)
+	require.True(t, ev.last().Holder.Starting, "the notice says a start is under way")
+	require.Nil(t, ev.last().Holder.CooldownUntil)
+
+	require.Eventually(t, func() bool { return r.m.sess.Get().CooldownUntil.After(time.Time{}) }, 3*time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { p := ev.last(); return !p.Holder.Starting && p.Holder.CooldownUntil != nil }, 3*time.Second, 5*time.Millisecond,
+		"and that it failed, with the time the next may be tried")
+	require.True(t, ev.last().Holder.CooldownUntil.Equal(r.m.sess.Get().CooldownUntil))
+}
+
+// The status view leaves the attempt out while there is none (no zero time on the wire).
+func TestStatus_NoAttemptNoStartingAndNoCooldownField(t *testing.T) {
+	r := newRig(t)
+	rr := httptest.NewRecorder()
+	r.mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/watch/status", nil).WithContext(adminCtx))
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.NotContains(t, rr.Body.String(), "cooldown_until")
+	require.NotContains(t, rr.Body.String(), "starting")
+}

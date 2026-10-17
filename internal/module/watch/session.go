@@ -145,7 +145,7 @@ func (c *sessionCtl) run(ctx context.Context, kind, extra string) (watch.HolderA
 	if st.InProgress != nil {
 		// a mark with no job behind it is from a run of the daemon that ended: if the watcher registered meanwhile, that start worked
 		if h, _, err := m.Reconcile(ctx); err == nil && h.State == watch.HolderAwake {
-			_ = m.sess.Update(func(x *watch.SessionState) { x.InProgress = nil })
+			_ = m.updateSession(func(x *watch.SessionState) { x.InProgress = nil })
 			c.release()
 			return answerOf(m.view()), nil
 		}
@@ -172,7 +172,7 @@ func (c *sessionCtl) run(ctx context.Context, kind, extra string) (watch.HolderA
 	}
 	if h.State == watch.HolderAwake { // a watcher is there: nothing to type
 		if st.InProgress != nil {
-			_ = m.sess.Update(func(x *watch.SessionState) { x.InProgress = nil })
+			_ = m.updateSession(func(x *watch.SessionState) { x.InProgress = nil })
 		}
 		c.release()
 		return answerOf(m.view()), nil
@@ -202,7 +202,7 @@ func (c *sessionCtl) await(ctx context.Context, j *job) (watch.HolderAnswer, err
 
 // failedStart records a start or wake that did not come up: the mark is cleared and the cooldown begins.
 func (m *Module) failedStart(now time.Time) error {
-	return m.sess.Update(func(x *watch.SessionState) {
+	return m.updateSession(func(x *watch.SessionState) {
 		x.InProgress = nil
 		x.CooldownUntil = now.Add(watch.StartCooldown)
 	})
@@ -258,7 +258,7 @@ func (c *sessionCtl) work(j *job, kind, extra string, before watch.Holder, s wat
 		return
 	}
 	began := m.now()
-	if err := m.sess.Update(func(x *watch.SessionState) {
+	if err := m.updateSession(func(x *watch.SessionState) {
 		x.InProgress = &watch.InProgress{Kind: kind, Since: began, SessionID: resume, Frame: before.FrameID}
 	}); err != nil { // the mark is what keeps a restart from starting twice: no mark, no start
 		j.err = fmt.Errorf("session.json: %w", err)
@@ -314,10 +314,17 @@ func (m *Module) endAttempt(began time.Time, failed bool) {
 	if failed {
 		err = m.failedStart(m.now())
 	} else {
-		err = m.sess.Update(func(x *watch.SessionState) { x.InProgress = nil })
+		err = m.updateSession(func(x *watch.SessionState) { x.InProgress = nil })
 	}
 	if err != nil {
 		m.logf("[watch] session.json: %v", err)
 	}
 	_ = began
+}
+
+// updateSession changes session.json and tells the watch.changed subscribers when the start attempt in it (starting, cooldown) moved.
+func (m *Module) updateSession(fn func(*watch.SessionState)) error {
+	err := m.sess.Update(fn)
+	m.notifyChanged()
+	return err
 }

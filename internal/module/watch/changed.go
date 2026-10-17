@@ -3,6 +3,7 @@ package watchmod
 import (
 	"encoding/json"
 	"sync"
+	"time"
 
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/watch"
@@ -31,6 +32,10 @@ type HolderPanes struct {
 	SessionID     string `json:"session_id,omitempty"`
 	TmuxSessionID string `json:"tmux_session_id,omitempty"`
 	PaneID        string `json:"pane_id,omitempty"`
+	// Starting: a start or wake of this host's watcher is going on (it answered 202 and goes on in the background); CooldownUntil: a
+	// failed one keeps the next from being tried until then. The App ends its busy state on either.
+	Starting      bool       `json:"starting,omitempty"`
+	CooldownUntil *time.Time `json:"cooldown_until,omitempty"`
 }
 
 // ChangedPayload is the payload of watch.changed (and what the status adds): the watcher events go to (nil: none) and this host's
@@ -73,10 +78,16 @@ func (m *Module) watcherNow() *WatcherView {
 
 func (m *Module) payloadNow() ChangedPayload {
 	own := m.hs().Get()
-	return ChangedPayload{
-		Watcher: m.watcherNow(),
-		Holder:  HolderPanes{State: string(own.State), SessionID: own.SessionID, TmuxSessionID: own.TmuxSessionID, PaneID: own.PaneID},
+	panes := HolderPanes{State: string(own.State), SessionID: own.SessionID, TmuxSessionID: own.TmuxSessionID, PaneID: own.PaneID}
+	if m.sess != nil {
+		st := m.sess.Get()
+		panes.Starting = st.InProgress != nil
+		if !st.CooldownUntil.IsZero() {
+			until := st.CooldownUntil
+			panes.CooldownUntil = &until
+		}
 	}
+	return ChangedPayload{Watcher: m.watcherNow(), Holder: panes}
 }
 
 // changeState is what the module remembers of the last notice.
