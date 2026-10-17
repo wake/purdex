@@ -300,12 +300,27 @@ func parseLocal(v any) (LocalPolicy, error) {
 // glued to other text: Render inserts single-quoted values, which are only
 // safe as a whole unquoted shell word (optionally after "--opt=").
 func checkPlaceholderContext(run string) error {
+	// Independent of the quote scan below: every placeholder, wherever it
+	// is, must be a whole word (so "x\{files}" fails here whatever the
+	// scanner thinks of the backslash).
+	for _, loc := range placeholderRe.FindAllStringIndex(run, -1) {
+		s, e := loc[0], loc[1]
+		if s > 0 && run[s-1] != ' ' && run[s-1] != '\t' && run[s-1] != '=' {
+			return fmt.Errorf("placeholder %s must be a separate word", run[s:e])
+		}
+		if e < len(run) && run[e] != ' ' && run[e] != '\t' {
+			return fmt.Errorf("placeholder %s must be a separate word", run[s:e])
+		}
+	}
 	var quote byte
 	for i := 0; i < len(run); i++ {
 		c := run[i]
 		switch {
 		case quote == '"' && c == '\\':
-			i++ // inside double quotes a backslash escapes the next byte
+			// POSIX: inside double quotes a backslash escapes only these.
+			if i+1 < len(run) && strings.IndexByte("$`\"\\\n", run[i+1]) >= 0 {
+				i++
+			}
 		case quote != 0:
 			if c == quote {
 				quote = 0
@@ -316,18 +331,6 @@ func checkPlaceholderContext(run string) error {
 			quote = c
 		case c == '\\':
 			i++
-		case c == '{':
-			loc := placeholderRe.FindStringIndex(run[i:])
-			if loc == nil || loc[0] != 0 {
-				continue
-			}
-			end := i + loc[1]
-			if i > 0 && run[i-1] != ' ' && run[i-1] != '\t' && run[i-1] != '=' {
-				return fmt.Errorf("placeholder %s must be a separate word", run[i:end])
-			}
-			if end < len(run) && run[end] != ' ' && run[end] != '\t' {
-				return fmt.Errorf("placeholder %s must be a separate word", run[i:end])
-			}
 		}
 	}
 	if quote != 0 {

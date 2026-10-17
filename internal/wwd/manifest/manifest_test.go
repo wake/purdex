@@ -267,14 +267,17 @@ func TestDefinitionHashSummaryEnvOrderAndArgsKind(t *testing.T) {
 
 func TestParseRejectsQuotedOrGluedPlaceholders(t *testing.T) {
 	for name, run := range map[string]string{
-		"single quoted": `tool '{files}'`,
-		"double quoted": `tool "{files}"`,
-		"glued prefix":  `tool x{files}`,
-		"glued suffix":  `tool {files}x`,
-		"inside quote":  `sh -c 'run {files}'`,
-		"unterminated":  `tool 'abc {files}`,
-		"escaped quote": `tool "x\" {files} y" z\"`,
-		"escaped then":  `tool "a\\" "b {files}"`,
+		"single quoted":   `tool '{files}'`,
+		"double quoted":   `tool "{files}"`,
+		"glued prefix":    `tool x{files}`,
+		"glued suffix":    `tool {files}x`,
+		"inside quote":    `sh -c 'run {files}'`,
+		"unterminated":    `tool 'abc {files}`,
+		"escaped quote":   `tool "x\" {files} y" z\"`,
+		"escaped then":    `tool "a\\" "b {files}"`,
+		"backslash brace": `tool "x\{files}"`,
+		"quoted after =":  `tool --opt="{files}"`,
+		"lone backslash":  `tool "a\b {files}"`,
 	} {
 		src := "[tasks.a]\nrun = " + strconv.Quote(run) + "\nargs = \"files\"\n"
 		if _, err := Parse([]byte(src)); err == nil {
