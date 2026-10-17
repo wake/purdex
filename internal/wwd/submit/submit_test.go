@@ -170,6 +170,27 @@ func TestPrepareRefusesAShallowClone(t *testing.T) {
 	}
 }
 
+func TestPrepareUsesTheManifestOfTheSnapshot(t *testing.T) {
+	dir := newRepo(t)
+	// an uncommitted edit is in the snapshot, so its values (not the committed ones) are submitted
+	write(t, filepath.Join(dir, ".wwd/tasks.toml"), strings.Replace(testManifest, `timeout = "10m"`, `timeout = "45m"`, 1))
+	p, err := Prepare(context.Background(), Request{Dir: dir, Task: "go-changed", Args: []string{"./a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Body.TimeoutS != 45*60 {
+		t.Fatalf("timeout_s = %d, want the snapshot's 2700", p.Body.TimeoutS)
+	}
+}
+
+func TestPrepareRefusesALocalOnlyTask(t *testing.T) {
+	dir := newRepo(t)
+	write(t, filepath.Join(dir, ".wwd/tasks.toml"), testManifest+"\n[tasks.vet]\nrun = \"go vet\"\nargs = \"pass\"\nlocal = true\n")
+	if _, err := Prepare(context.Background(), Request{Dir: dir, Task: "vet", Args: []string{"./a"}}); err == nil || !IsUsage(err) {
+		t.Fatalf("err = %v, want a usage error for a pass task", err)
+	}
+}
+
 func TestPrepareNoManifestIsUsage(t *testing.T) {
 	dir := newRepo(t)
 	if err := os.Remove(filepath.Join(dir, ".wwd/tasks.toml")); err != nil {

@@ -76,39 +76,40 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 	if err != nil {
 		return nil, usagef("not inside a git repository: %v", err)
 	}
-	m, err := manifest.Load(filepath.Join(root, ManifestPath))
+	snap, err := gate.SnapshotTree(ctx, req.Git, req.Dir)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, usagef("%s has no %s", root, ManifestPath)
-		}
+		return nil, fmt.Errorf("snapshot: %w", err)
+	}
+	if !sameDir(root, snap.Root) {
+		return nil, fmt.Errorf("the repository changed while the snapshot was taken (%s, then %s)", root, snap.Root)
+	}
+	// The manifest comes from the snapshot, the same bytes the worker will read, never from the working tree on its own.
+	src, err := g.run(ctx, "show", snap.SHA+":"+ManifestPath)
+	if err != nil {
+		return nil, usagef("%s has no %s", root, ManifestPath)
+	}
+	m, err := manifest.Parse([]byte(src))
+	if err != nil {
 		return nil, usagef("%v", err)
 	}
 	task := m.Tasks[req.Task]
 	if task == nil {
 		return nil, usagef("task %q is not in %s (have: %s)", req.Task, ManifestPath, strings.Join(taskNames(m), ", "))
 	}
+	if task.Args == manifest.ArgsPass {
+		return nil, usagef("task %q is local-only (args = \"pass\") and is never queued", req.Task)
+	}
 	class, err := resolveClass(task.Class, req.Class)
 	if err != nil {
 		return nil, err
 	}
-	// Dry-run the rendering with a stand-in workspace so a bad argument is refused before anything is snapshotted.
+	// A stand-in workspace: the real one is the worker's; here only the arguments are checked.
 	check := manifest.RenderEnv{Workspace: "/wwd-check", Report: "/wwd-check/report.json", Junit: "/wwd-check/junit.xml"}
 	if task.Args == manifest.ArgsFiles {
-		check.Exists = func(string) bool { return true }
+		check.Exists = func(rel string) bool { return g.exists(ctx, snap.SHA, rel) }
 	}
 	if _, err := task.Render(req.Args, check); err != nil {
 		return nil, usagef("%v", err)
-	}
-
-	snap, err := gate.SnapshotTree(ctx, req.Git, req.Dir)
-	if err != nil {
-		return nil, fmt.Errorf("snapshot: %w", err)
-	}
-	if task.Args == manifest.ArgsFiles {
-		check.Exists = func(rel string) bool { return g.exists(ctx, snap.SHA, rel) }
-		if _, err := task.Render(req.Args, check); err != nil {
-			return nil, usagef("%v", err)
-		}
 	}
 	gitDir, err := g.run(ctx, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
@@ -150,6 +151,12 @@ func relCwd(_, taskCwd string) string {
 		return "."
 	}
 	return filepath.ToSlash(filepath.Clean(taskCwd))
+}
+
+func sameDir(a, b string) bool {
+	ra, err1 := filepath.EvalSymlinks(a)
+	rb, err2 := filepath.EvalSymlinks(b)
+	return err1 == nil && err2 == nil && ra == rb
 }
 
 func nonNil(s []string) []string {
