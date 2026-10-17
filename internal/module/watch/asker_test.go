@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -118,7 +119,7 @@ func TestAsker_WakeAndStartGoToThePeerRoutesOrTheLocalSession(t *testing.T) {
 
 type fakeSession struct{}
 
-func (fakeSession) Wake(context.Context) (watch.HolderAnswer, error) {
+func (fakeSession) Wake(context.Context, string) (watch.HolderAnswer, error) {
 	return watch.HolderAnswer{HostID: ourID, State: watch.HolderAwake, SessionID: "local-woken"}, nil
 }
 func (fakeSession) Start(context.Context) (watch.HolderAnswer, error) {
@@ -165,4 +166,21 @@ func TestAsker_ThisHostWithoutAnAliasIsKnownByItsHostIDName(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "mine", a.SessionID)
 	require.Empty(t, fc.calls)
+}
+
+func TestAsker_AHostsCooldownIsRememberedAndTheStartRouteAnswers409WithItsTime(t *testing.T) {
+	r, fc := askerRig(t)
+	until := time.Date(2026, 10, 17, 13, 0, 0, 0, time.UTC)
+	r.m.now = func() time.Time { return until.Add(-time.Hour) }
+	fc.reply[pathStart] = peersmod.CallResult{Class: peersmod.ClassRefused, Status: 409, Code: "cooldown", Detail: until.Format(time.RFC3339)}
+	_, err := asker{r.m}.Start(context.Background(), "air26")
+	require.ErrorIs(t, err, watch.ErrNoSession, "the locator treats it as a refusal")
+	got, ok := r.m.earliestCooldown()
+	require.True(t, ok)
+	require.True(t, got.Equal(until))
+
+	fc.reply[pathStart] = peersmod.CallResult{Class: peersmod.ClassRefused, Status: 409, Code: "cooldown", Detail: "not a time"}
+	_, _ = asker{r.m}.Start(context.Background(), "air26")
+	got, _ = r.m.earliestCooldown()
+	require.True(t, got.Equal(until), "a detail that is not a time changes nothing")
 }
