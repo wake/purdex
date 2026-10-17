@@ -130,6 +130,7 @@ type jPage struct {
 	PersonName   string   `json:"person_name"`
 	Entries      []jEntry `json:"entries"`
 	Pinned       []jEntry `json:"pinned"`
+	Confirms     []jEntry `json:"confirms"`
 	More         bool     `json:"more"`
 	OpenConfirms int      `json:"open_confirms"`
 }
@@ -160,7 +161,7 @@ func tm(month time.Month, day, hour int) time.Time {
 
 // A solo session reads its own conversation's journal: every entry oldest first by (at, id) whatever order the files hold
 // them in, with the wire shape the App parses strictly (times in milliseconds, lists that are never null, the unit, the
-// project, the person's name), the pinned band newest first and the number of open questions.
+// project, the person's name), the open 待確認 entries (confirms) newest first and the number of open questions.
 // Mutation gate: the order the files hold -> the late-written early entry is last (red); at in seconds -> the number is wrong
 // (red); a nil list left null -> the App refuses the row (red); the unit's id is the key with its prefix (red).
 func TestJournalAPI_ASoloSessionReadsItsConversation(t *testing.T) {
@@ -170,7 +171,7 @@ func TestJournalAPI_ASoloSessionReadsItsConversation(t *testing.T) {
 	j.write(u,
 		journal.Entry{ID: "late", Kind: journal.KindExec, At: tm(time.November, 3, 10), Actor: "Kenji", Text: "written first, happened last", Refs: []string{"#2829"}},
 		journal.Entry{ID: "early", Kind: journal.KindRequest, By: journal.ByUser, At: tm(time.November, 3, 9), Actor: "Wake → Kenji", Text: "written second"},
-		journal.Entry{ID: "ask", Kind: journal.KindConfirm, At: tm(time.October, 30, 8), Actor: "Kenji → Wake", Text: "要不要", Pinned: true,
+		journal.Entry{ID: "ask", Kind: journal.KindConfirm, At: tm(time.October, 30, 8), Actor: "Kenji → Wake", Text: "要不要",
 			Items: []journal.Item{{Text: "甲?"}, {Text: "乙?", Done: true}, {Text: "丙?"}}, Detail: "原文"},
 	)
 	code, p, raw := j.page("/api/journal?session_id=s2")
@@ -189,13 +190,13 @@ func TestJournalAPI_ASoloSessionReadsItsConversation(t *testing.T) {
 	if p.More || p.OpenConfirms != 2 {
 		t.Errorf("more = %v, open_confirms = %d, want false and 2", p.More, p.OpenConfirms)
 	}
-	if !slices.Equal(ids(p.Pinned), []string{"ask"}) {
-		t.Errorf("pinned = %v", ids(p.Pinned))
+	if !slices.Equal(ids(p.Confirms), []string{"ask"}) {
+		t.Errorf("confirms = %v", ids(p.Confirms))
 	}
-	// the pinned band and the open questions cover the whole unit, not the page: a page of one entry still carries both
+	// the confirms band and the open questions cover the whole unit, not the page: a page of one entry still carries both
 	_, one, _ := j.page("/api/journal?session_id=s2&limit=1")
-	if !slices.Equal(ids(one.Entries), []string{"late"}) || !one.More || !slices.Equal(ids(one.Pinned), []string{"ask"}) || one.OpenConfirms != 2 {
-		t.Errorf("a page of one: entries %v more=%v pinned %v open_confirms=%d", ids(one.Entries), one.More, ids(one.Pinned), one.OpenConfirms)
+	if !slices.Equal(ids(one.Entries), []string{"late"}) || !one.More || !slices.Equal(ids(one.Confirms), []string{"ask"}) || one.OpenConfirms != 2 {
+		t.Errorf("a page of one: entries %v more=%v confirms %v open_confirms=%d", ids(one.Entries), one.More, ids(one.Confirms), one.OpenConfirms)
 	}
 	var late jEntry
 	for _, e := range p.Entries {
@@ -207,7 +208,7 @@ func TestJournalAPI_ASoloSessionReadsItsConversation(t *testing.T) {
 		t.Errorf("late = %+v", late)
 	}
 	for _, e := range p.Entries {
-		if e.ID == "ask" && (len(e.Items) != 3 || !e.Items[1].Done || e.Items[0].Done || e.Detail != "原文" || !e.Pinned) {
+		if e.ID == "ask" && (len(e.Items) != 3 || !e.Items[1].Done || e.Items[0].Done || e.Detail != "原文") {
 			t.Errorf("ask = %+v", e)
 		}
 	}
@@ -255,10 +256,10 @@ func TestJournalAPI_AnEmptyUnitAnswersEmptyLists(t *testing.T) {
 	j := newJournalAPI(t)
 	j.unit("solo:s1", "專案 A")
 	code, p, raw := j.page("/api/journal?session_id=s1")
-	if code != http.StatusOK || len(p.Entries) != 0 || len(p.Pinned) != 0 || p.More || p.OpenConfirms != 0 {
+	if code != http.StatusOK || len(p.Entries) != 0 || len(p.Confirms) != 0 || p.More || p.OpenConfirms != 0 {
 		t.Fatalf("code %d, page %+v", code, p)
 	}
-	for _, must := range []string{`"entries":[]`, `"pinned":[]`} {
+	for _, must := range []string{`"entries":[]`, `"confirms":[]`} {
 		if !strings.Contains(raw, must) {
 			t.Errorf("the answer lacks %s:\n%s", must, raw)
 		}
@@ -350,9 +351,9 @@ func TestJournalAPI_ARemoteMemberIsToldWhereTheLeadIs(t *testing.T) {
 			t.Errorf("%s %s: code %d, body %s", c.method, c.url, code, body)
 		}
 	}
-	code, body := j.request(http.MethodPut, "/api/journal/pin", map[string]any{"session_id": "rm", "entry_id": "x", "pinned": true})
+	code, body := j.request(http.MethodPut, "/api/journal/confirm", map[string]any{"session_id": "rm", "entry_id": "x", "idx": 0, "done": true})
 	if code != http.StatusConflict || !strings.Contains(string(body), `"lead_host_id":"host-L"`) {
-		t.Errorf("pin: code %d, body %s", code, body)
+		t.Errorf("confirm: code %d, body %s", code, body)
 	}
 }
 
