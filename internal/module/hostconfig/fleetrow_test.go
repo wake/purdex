@@ -47,6 +47,35 @@ func TestFleet_RoundTripAndDefaultsForLeftOutFields(t *testing.T) {
 	assert.Equal(t, FleetConfig{Order: []string{"mlab"}, PeerSSHAlias: "", Enabled: false}, cfg)
 }
 
+// source picks where the fleet's readings come from: "ssh" or "pool", left out = the old way; nothing else saves.
+func TestFleet_SourceRoundTripsAndIsStrict(t *testing.T) {
+	m := newTestModule(t)
+	cfg, _, err := m.FleetConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "", cfg.Source, "never written: the old way")
+
+	code, body := putFleet(m, `{"order":["mlab"],"source":"pool"}`, "0")
+	require.Equal(t, http.StatusOK, code, body)
+	cfg, _, err = m.FleetConfig()
+	require.NoError(t, err)
+	assert.Equal(t, FleetSourcePool, cfg.Source)
+
+	for why, items := range map[string]string{
+		"unknown word": `{"order":["mlab"],"source":"wwd"}`,
+		"number":       `{"order":["mlab"],"source":1}`,
+		"null":         `{"order":["mlab"],"source":null}`,
+		"empty":        `{"order":["mlab"],"source":""}`,
+	} {
+		code, body := putFleet(m, items, "1")
+		assert.Equal(t, http.StatusBadRequest, code, "%s: %s", why, body)
+	}
+	code, body = putFleet(m, `{"order":["mlab"],"source":"ssh"}`, "1")
+	require.Equal(t, http.StatusOK, code, body)
+	cfg, _, err = m.FleetConfig()
+	require.NoError(t, err)
+	assert.Equal(t, FleetSourceSSH, cfg.Source)
+}
+
 func TestFleet_IsStrictAndBounded(t *testing.T) {
 	withSSHAliases(t, "air-2026")
 	m := newTestModule(t)

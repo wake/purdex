@@ -31,11 +31,8 @@ func TestModule_MountsTheMeasuringSide(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
-// The switch: PDX_FLEET_SOURCE=pool gives the measuring side the pool as its source; anything else leaves it as it was.
-func TestModule_PoolSourceOnlyWhenTheSwitchSaysSo(t *testing.T) {
-	t.Setenv(SourceEnv, "ssh")
-	assert.Nil(t, newRig(t).m.measure.d.Pool, "the default keeps the SSH and local sources")
-	t.Setenv(SourceEnv, "pool")
+// The module can always reach the pool; whether it does is the fleet row's source (tested on the Measure), so no restart is needed.
+func TestModule_TheMeasureCanReachThePool(t *testing.T) {
 	assert.NotNil(t, newRig(t).m.measure.d.Pool)
 }
 
