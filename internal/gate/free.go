@@ -12,6 +12,11 @@ import (
 	agentpkg "github.com/wake/purdex/internal/agent"
 )
 
+// Why lsof is enough: a flock belongs to the open file description, which a command's children share (fd 3), so a process that still has
+// the lock file open and descends from the command is what holds the slot. A process that opens the file on its own is not told apart
+// (the residual risk); the only ones that do are pdx's own short probes (gate status, the daemon's read), which are in protectedCmd, and
+// the person's answer to the listing is the last guard.
+//
 // pdx gate free <class>-<k> (host-load-control spec §12.5, plan W4): end the processes that hold a slot's lock, for a slot that stays
 // held after its gate is gone (or, with force, one whose gate is alive). The processes are those that have the slot's lock file open
 // (lsof); each gets SIGTERM, and SIGKILL only if it is alive after the grace and still holds the lock; then the slot is looked at again.

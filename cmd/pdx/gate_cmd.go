@@ -39,7 +39,10 @@ const gateUsage = `usage: pdx gate [--class heavy|light] [--auto] [--tool <name>
   would-wait  would a command of that class (or, with --auto, this command by its words) wait for a slot right now? (fast: no daemon, no process started, takes nothing;
            for a hook that decides whether to run a call in the background). Prints the reason and a line for an agent to read
   free     end the processes that hold a slot's lock (a slot that stays held after its gate is gone): lists them, asks y, SIGTERM, SIGKILL after 5 s;
-           a slot whose gate is alive is refused unless --force
+           a slot whose gate is alive is refused unless --force.
+           The processes are those that have the slot's lock file open (lsof): a flock belongs to the open file description, which children share, so
+           an escaped child that kept the file open is what holds the slot; a process that opens the file on its own is not told apart (the short
+           probes of pdx itself, shells and tmux are never ended)
   set      write one setting into [gate] of config.toml (or into [gate.profiles.<name>] with --profile); the gate reads it
            again at the next command and at the next look of every waiting one. Values: 2, true, "text", auto
   profile  use: make a profile the active one (its settings win over [gate]; release is built in: normal priority, go test keeps -count=1); list: the profiles; flags may stand before or after the name
