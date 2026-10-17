@@ -73,12 +73,22 @@ func TestGateConflict_AddListRemove(t *testing.T) {
 	code, out, _ = conflictCmd(t, cfg, "remove", "9")
 	assert.Equal(t, 0, code)
 	assert.Contains(t, out, "no such rule: #9 (there are 1)")
+	code, out, _ = conflictCmd(t, cfg, "remove", "0")
+	assert.Equal(t, 0, code)
+	assert.Contains(t, out, "no such rule: #0 (there are 1)")
+	code, out, _ = conflictCmd(t, cfg, "remove", "2")
+	assert.Equal(t, 0, code)
+	assert.Contains(t, out, "no such rule: #2 (there are 1)", "one past the end is not a rule")
 	code, out, _ = conflictCmd(t, cfg, "remove", "--class", "heavy", "nope", "never")
 	assert.Equal(t, 0, code)
 	assert.Contains(t, out, "no such rule: heavy: nope × never")
 	_, out, _ = conflictCmd(t, cfg)
 	assert.Contains(t, out, "tsc -b × vitest related")
 	assert.NotContains(t, out, "go vet")
+	code, out, _ = conflictCmd(t, cfg, "remove", "1")
+	assert.Equal(t, 0, code)
+	assert.Contains(t, out, "removed #1 heavy: tsc -b × vitest related", "the last rule goes by its index too")
+	assert.Contains(t, out, "0 rule(s) now")
 }
 
 // The refusals: missing reason, empty pattern, a bad class, a reason that is not one short line, wrong shapes.
