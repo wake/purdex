@@ -41,11 +41,12 @@ const basename = (p: string): string => p.replace(/\/+$/, '').split('/').pop() ?
 export function toRow(r: GateDecision, i: number): HistoryRow {
   const started = !NEVER_STARTED.has(r.outcome)
   const arriveMs = Date.parse(r.time)
-  const runS = started ? r.durationS : 0
+  // `duration_s` runs from when the gate began waiting to the end, so it already holds the wait: the run is what is left.
+  const runS = started ? Math.max(0, r.durationS - r.waitS) : 0
   const startMs = arriveMs + r.waitS * 1000
   return {
     key: `${r.time}|${r.session ?? ''}|${i}`,
-    arriveMs, startMs, endMs: startMs + runS * 1000,
+    arriveMs, startMs, endMs: arriveMs + r.durationS * 1000,
     cls: r.class ?? '',
     command: r.argv.join(' '),
     project: r.cwd ? basename(r.cwd) : '',
@@ -53,7 +54,7 @@ export function toRow(r: GateDecision, i: number): HistoryRow {
     waitS: r.waitS, runS, started,
     failed: started && r.exit !== 0,
     exit: r.exit,
-    cores: started && r.cpuS !== undefined && r.durationS > 0 ? r.cpuS / r.durationS : null,
+    cores: started && r.cpuS !== undefined && runS > 0 ? r.cpuS / runS : null,
     maxRssMb: started ? r.maxRssMb ?? null : null,
     majorFaults: started ? r.majorFaults ?? null : null,
     record: r,

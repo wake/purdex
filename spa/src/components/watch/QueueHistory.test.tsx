@@ -47,7 +47,7 @@ describe('QueueHistory — the bar', () => {
   })
 
   it('hatched = waited, solid = ran; a wait under 3 s has no hatched part', async () => {
-    fetchGateDecisions.mockResolvedValue(ok([rec({ time: '2026-10-17T11:30:00Z', waitS: 90, durationS: 90 }), rec({ waitS: 1, durationS: 60 })]))
+    fetchGateDecisions.mockResolvedValue(ok([rec({ time: '2026-10-17T11:30:00Z', waitS: 90, durationS: 180 }), rec({ waitS: 1, durationS: 60 })]))
     renderH(); await flush()
     const [a, b] = screen.getAllByTestId('hist-row')
     expect(within(a).getByTestId('hist-bar-wait')).toBeInTheDocument()
@@ -64,6 +64,15 @@ describe('QueueHistory — the bar', () => {
     expect(within(row).queryByTestId('hist-bar-run')).toBeNull()
     expect(within(row).getByText(t('watch.history.never_ran'))).toBeInTheDocument()
     for (const id of ['hist-cores', 'hist-mem', 'hist-faults', 'hist-exit']) expect(within(row).getByTestId(id)).toHaveTextContent('—')
+  })
+
+  it('duration_s holds the wait: a started command whose duration equals its wait draws only the hatched part and no cores', async () => {
+    fetchGateDecisions.mockResolvedValue(ok([rec({ waitS: 120, durationS: 120, cpuS: 9 })]))
+    renderH(); await flush()
+    const row = screen.getByTestId('hist-row')
+    expect(within(row).getByTestId('hist-bar-wait')).toBeInTheDocument()
+    expect(within(row).queryByTestId('hist-bar-run')).toBeNull()
+    expect(within(row).getByTestId('hist-cores')).toHaveTextContent('—')
   })
 
   it('a failed record (exit != 0) is red in the bar and the exit code; a good one is not', async () => {

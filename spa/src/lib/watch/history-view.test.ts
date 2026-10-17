@@ -9,14 +9,18 @@ const rec = (o: Partial<GateDecision> = {}): GateDecision => ({
 
 describe('toRow', () => {
   it('times: the command started at time + wait, ended after the run', () => {
+    // duration_s counts from when the gate began waiting, so it holds the wait: 30 s waited + 60 s ran.
     const r = toRow(rec({ waitS: 30, durationS: 90 }), 0)
     expect(r.startMs - r.arriveMs).toBe(30_000)
-    expect(r.endMs - r.startMs).toBe(90_000)
+    expect(r.endMs - r.arriveMs).toBe(90_000)
+    expect(r.runS).toBe(60)
     expect(r.project).toBe('purdex')
   })
 
   it('cores = cpu_s / duration_s; absent usage stays null (not 0)', () => {
     expect(toRow(rec({ cpuS: 150, durationS: 60 }), 0).cores).toBe(2.5)
+    // the cores are over the run only: 150 cpu s / (90 - 30) s
+    expect(toRow(rec({ cpuS: 150, waitS: 30, durationS: 90 }), 0).cores).toBe(2.5)
     const bare = toRow(rec(), 0)
     expect([bare.cores, bare.maxRssMb, bare.majorFaults]).toEqual([null, null, null])
   })
@@ -24,6 +28,12 @@ describe('toRow', () => {
   it('a zero value is kept, and a zero duration gives no cores', () => {
     expect(toRow(rec({ majorFaults: 0, maxRssMb: 0 }), 0)).toMatchObject({ majorFaults: 0, maxRssMb: 0 })
     expect(toRow(rec({ cpuS: 3, durationS: 0 }), 0).cores).toBeNull()
+  })
+
+  it('a started command with no run left (duration <= wait) has no run part and no cores', () => {
+    const r = toRow(rec({ cpuS: 3, waitS: 60, durationS: 60 }), 0)
+    expect(r).toMatchObject({ runS: 0, cores: null, started: true })
+    expect(toRow(rec({ cpuS: 3, waitS: 70, durationS: 60 }), 0).runS).toBe(0)
   })
 
   it('a refused or interrupted command only waited: no run, no failure, no usage', () => {
@@ -47,12 +57,12 @@ describe('toRows / scale', () => {
 
   it('the scale is the longest wait + run rounded up to 5 minutes, at least 5', () => {
     expect(scaleMinutes([])).toBe(5)
-    expect(scaleMinutes(toRows([rec({ waitS: 100, durationS: 200 })]))).toBe(5)
-    expect(scaleMinutes(toRows([rec({ waitS: 100, durationS: 200 }), rec({ waitS: 60, durationS: 660 })]))).toBe(15)
+    expect(scaleMinutes(toRows([rec({ waitS: 100, durationS: 300 })]))).toBe(5) // 5 min exactly
+    expect(scaleMinutes(toRows([rec({ waitS: 100, durationS: 300 }), rec({ waitS: 60, durationS: 720 })]))).toBe(15)
   })
 
   it('bar parts are fractions of the one scale; a wait under 3 s has no hatched part', () => {
-    const rows = toRows([rec({ waitS: 150, durationS: 150 })])
+    const rows = toRows([rec({ waitS: 150, durationS: 300 })])
     expect(barParts(rows[0], 10)).toEqual({ wait: 0.25, run: 0.25 })
     expect(barParts(toRow(rec({ waitS: 2, durationS: 60 }), 0), 5).wait).toBe(0)
   })
