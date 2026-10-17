@@ -192,7 +192,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		res.State, res.Reason, res.Exit = wire.StateFailed, "lost", -1
 	case ctx.Err() != nil || cancelled.Load():
 		res.State, res.Reason, res.Exit = wire.StateCancelled, "", -1
-	case timedOut.Load():
+	case timedOut.Load() && !notStarted.Load(): // a command that never started cannot have run out of time
 		res.State, res.Reason, res.Exit = wire.StateFailed, "timeout", ExitTimeout
 	case notRun && code == gate.ExitRefused && gateErr == nil && !notStarted.Load() && finished.Sub(started) >= task.QueueTimeout:
 		res.State, res.Reason, res.Exit = wire.StateExpired, "queue_timeout", -1 // waited for a slot as long as a queued job may

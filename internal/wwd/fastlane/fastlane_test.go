@@ -589,6 +589,33 @@ func TestLeaseLostWhileWaitingToDeliverNeverTriesAgain(t *testing.T) {
 	}
 }
 
+func TestNotStartedWinsOverATimeoutThatFiredBetweenTheMarks(t *testing.T) {
+	tk := task(t, "one-file")
+	tk.Timeout = 5 * time.Millisecond
+	g := &fakeGate{skipMark: true, run: func(ctx context.Context, o gate.Options) int {
+		mark(o) // admitted: the task's timer starts
+		time.Sleep(60 * time.Millisecond)
+		for _, kv := range o.Env { // the start failed after all
+			if nonce, ok := strings.CutPrefix(kv, gate.AdmittedMarkEnv+"="); ok {
+				io.WriteString(o.Stderr, gate.NotStartedMark(nonce))
+			}
+		}
+		return 127
+	}}
+	rec := newRec()
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: tk, Args: []string{"a.test.ts"}, Gate: g, Recorder: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Cleanup()
+	if res.State != wire.StateFailed || res.Reason != "infra" || res.Err == nil {
+		t.Fatalf("a command that did not start was reported as %+v", res)
+	}
+	if o := rec.h.outcome; o.Exit != nil {
+		t.Fatalf("an infrastructure failure must have no exit: %+v", o)
+	}
+}
+
 func TestAnImmediateRefusalIsNotAnExpiryEvenWithAShortQueueTimeout(t *testing.T) {
 	tk := task(t, "one-file")
 	tk.QueueTimeout = 500 * time.Millisecond
