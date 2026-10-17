@@ -21,7 +21,8 @@ function findTeam(rosters: Record<string, TeamRoster[]>, match: (t: TeamRoster) 
 
 function nameOfTeam(team: TeamRoster, fallbackTitle: string | undefined): LeadName | undefined {
   const teamName = team.team_name.trim()
-  const title = (fallbackTitle ?? team.lead.title ?? '').trim()
+  // a caller title that is empty or blank counts as not passed
+  const title = fallbackTitle?.trim() || team.lead.title?.trim() || ''
   if (teamName === '') return undefined // no name (an older daemon): the caller falls back to the lead's own title
   return title !== '' && title !== teamName ? { name: teamName, title } : { name: teamName }
 }
