@@ -15,7 +15,7 @@ import "time"
 // WouldWait is the answer.
 type WouldWait struct {
 	Wait   bool   `json:"would_wait"`
-	Reason string `json:"reason,omitempty"` // slots (all taken) | queue (a slot is free but others are in front) | pressure
+	Reason string `json:"reason,omitempty"` // slots (all taken) | queue (a slot is free but others are in front) | pressure | paused (the class has no slot: slots.<class> = 0)
 	Class  Class  `json:"class"`
 	// Ahead counts the commands in front: the running ones and the queued ones.
 	Ahead int `json:"ahead"`
@@ -64,7 +64,7 @@ func (g *Gate) WouldWait(class Class) WouldWait {
 	}
 	pool := g.pool(cfg, class)
 	held := pool.Held()
-	queued := pool.PeekWaiting() // counts the live tickets and removes nothing
+	queued := pool.peekSnapshot().AheadOfNew() // the live front and normal tickets: back and held ones are passed by a new command (spec 5.2); removes nothing
 	w.Ahead = len(held) + queued
 	now := g.Now()
 	if len(held) > 0 {
@@ -78,6 +78,10 @@ func (g *Gate) WouldWait(class Class) WouldWait {
 	}
 	free := cfg.Slots.Size(class) - len(held)
 	switch {
+	case cfg.Slots.Paused(class):
+		w.Wait, w.Reason = true, "paused"
+		w.Note = pausedLine(class)
+		return w
 	case free <= 0:
 		w.Wait, w.Reason = true, "slots"
 	case queued >= free:

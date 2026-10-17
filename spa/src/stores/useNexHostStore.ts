@@ -79,6 +79,15 @@ export function selectReadSyncV1(hostId: string): (s: Pick<NexHostState, 'byHost
   return (s) => s.byHost[hostId]?.daemonCapabilities?.includes('session.read_sync.v1') === true
 }
 
+/**
+ * The daemon lists `relay.half.v1` (relay v2 contract 5): `GET /api/relay/fresh`, the `relay.fresh` host event and
+ * `RosterSession.fresh_handoff` are served. A client asks for none of it, and shows none of it, against a host that does not
+ * declare it. Key presence, never a version compare; false until the host's info has been fetched.
+ */
+export function selectRelayHalfV1(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
+  return (s) => s.byHost[hostId]?.daemonCapabilities?.includes('relay.half.v1') === true
+}
+
 /** The daemon lists `team.ask_chat.v1`: a `hook_ask` can be answered in words (decide `deny` + `hook.message`). */
 export function selectAskChatV1(hostId: string): (s: Pick<NexHostState, 'byHost'>) => boolean {
   return (s) => s.byHost[hostId]?.daemonCapabilities?.includes('team.ask_chat.v1') === true

@@ -52,6 +52,8 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 			return gateStatus(args[1:], stdout, stderr)
 		case "would-wait":
 			return gateWouldWait(args[1:], stdout, stderr)
+		case "queue":
+			return gateQueue(args[1:], stdout, stderr)
 		case "set":
 			return gateSet(args[1:], stdout, stderr)
 		case "profile":
@@ -239,6 +241,9 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "閘門 %s（%s）\n", map[bool]string{true: "啟用", false: "停用"}[cfg.Enabled], g.DirOf())
 	printPool := func(name string, size int, held []gate.Holder, waiting int, queue []gate.Waiter) {
 		fmt.Fprintf(stdout, "%s %d/%d 使用中，%d 個在排隊\n", name, len(held), size, waiting)
+		if size == 0 && cfg.Enabled { // a disabled gate lets everything through, so nothing waits
+			fmt.Fprintln(stdout, "  已暫停（名額 0）：新的指令排隊等候，原因 paused；名額調回後自動開始，已在跑的不受影響")
+		}
 		for _, h := range held {
 			age := ""
 			if !h.Started.IsZero() {
@@ -274,6 +279,9 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 				waited = "等 " + time.Since(w.Since).Round(time.Second).String()
 			}
 			fmt.Fprintf(stdout, "  排隊 #%d  pid %d  %s  %s  %s\n", w.Place, w.PID, waited, strings.Join(w.Argv, " "), w.Cwd)
+			if w.Rank != "" && w.Rank != gate.RankNormal || w.RankError != "" {
+				fmt.Fprintf(stdout, "    順序：%s%s\n", w.Rank, rankNote(w)) // moved in the queue (pdx gate queue): who, why, until
+			}
 		}
 	}
 	printPool("重", cfg.Slots.Heavy, st.Heavy, st.WaitHeavy, st.QueueHeavy)
@@ -325,22 +333,33 @@ func gateSet(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	profile := fs.String("profile", "", "write into this profile")
 	cfgPath := fs.String("config", "", "config.toml")
+	expect := fs.String("expect", "", "write only if the value now is this one (the value you read); refused with exit 3 otherwise")
 	words, err := parseMixed(fs, args)
 	if err != nil {
 		return 2
 	}
+	var want *string
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "expect" {
+			want = expect
+		}
+	})
 	key, value, ok := strings.Cut(strings.Join(words, " "), "=")
 	if !ok || len(words) == 0 {
-		fmt.Fprint(stderr, "usage: pdx gate set [--profile <name>] <module>.<key>=<value>\n")
+		fmt.Fprint(stderr, "usage: pdx gate set [--profile <name>] [--expect <value now>] <module>.<key>=<value>\n")
 		return 2
 	}
 	path := *cfgPath
 	if path == "" {
 		path = gate.DefaultConfigPath()
 	}
-	res, err := gate.Set(path, *profile, strings.TrimSpace(key), value)
+	res, err := gate.SetExpect(path, *profile, strings.TrimSpace(key), value, want)
 	if err != nil {
 		fmt.Fprintf(stderr, "pdx gate set: %v\n", err)
+		var ee *gate.ExpectError
+		if errors.As(err, &ee) {
+			return gateExitExpect
+		}
 		return 1
 	}
 	where := "[gate]"
@@ -348,8 +367,14 @@ func gateSet(args []string, stdout, stderr io.Writer) int {
 		where = "profile " + res.Profile
 	}
 	fmt.Fprintf(stdout, "%s（%s）：%s → %s（%s）\n", res.Key, where, orDash(res.Old), res.New, res.NewSrc)
+	if res.ReadBack != "" {
+		fmt.Fprintf(stdout, "讀回：%s = %s\n", res.Key, res.ReadBack)
+	}
 	return 0
 }
+
+// gateExitExpect is the exit code of a write that --expect refused.
+const gateExitExpect = 3
 
 func gateProfile(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("gate profile", flag.ContinueOnError)

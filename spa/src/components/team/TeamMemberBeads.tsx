@@ -10,6 +10,8 @@ import { HOOK_PAD, TeamHook } from './TeamHook'
 import { notInApp } from './seat-flags'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
 import { useMemberDrag } from './useMemberDrag'
+import { HalfHandoffMark } from '../relay/HalfHandoffMark'
+import { useFreshHandoffOfSeat } from '../../hooks/useFreshHandoff'
 import { useI18nStore } from '../../stores/useI18nStore'
 
 interface Props {
@@ -28,6 +30,11 @@ function tooltipOf(m: TeamSeatView, t: (key: string, params?: Record<string, str
   if (m.role !== 'member' || !['joining', 'releasing', 'killing'].includes(m.state)) return `${m.title}${gone}`
   const word = t(`team.seat_state.${m.state}`)
   return `${m.title} · ${m.hostAlias !== '' ? t('team.seat_state_suffix', { alias: m.hostAlias, state: word }) : word}${gone}`
+}
+
+/** The member's handoff mark, beside the bead's icon (a hook per bead, so a roster change re-renders only the bead it touches). */
+function BeadHandoff({ teamKey, sessionId }: { teamKey: string; sessionId: string }) {
+  return <HalfHandoffMark handoff={useFreshHandoffOfSeat(teamKey, sessionId)} variant="icon" size={11} />
 }
 
 export function TeamMemberBeads({ teamKey, members, activeTabId, withHost, onOpen, onReorder, onBlankClick }: Props) {
@@ -89,6 +96,7 @@ export function TeamMemberBeads({ teamKey, members, activeTabId, withHost, onOpe
             )}
             <TeamSeatIcon hostId={m.hostId} sessionCode={m.sessionCode} isActive={isActive} subagents />
             {withHost && <TeamSeatHostBadge hostId={m.hostId} sessionCode={m.sessionCode} />}
+            <BeadHandoff teamKey={teamKey} sessionId={m.sessionId} />
           </button>
         )
       })}

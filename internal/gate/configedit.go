@@ -32,6 +32,8 @@ type SetResult struct {
 	Key      string
 	Profile  string // the profile table written to, "" for [gate] itself
 	Old, New string // effective value before and after (of the active profile)
+	// ReadBack is the value read from the file again, under the lock, after an --expect write (the profile written to is the active one).
+	ReadBack string
 	NewSrc   Source
 }
 
@@ -39,6 +41,22 @@ type SetResult struct {
 // empty. The key is "module.key" (or "enabled", "profile"); value is TOML ("2", "true", "\"nice\"", "[\"go\"]"), and a
 // bare word such as auto or nice is taken as a string.
 func Set(path, profile, key, value string) (SetResult, error) {
+	return SetExpect(path, profile, key, value, nil)
+}
+
+// ExpectError: the write was refused because the value now in the file is not the one the caller read (two writers must not undo each
+// other unseen).
+type ExpectError struct {
+	Key, Have, Want string
+}
+
+func (e *ExpectError) Error() string {
+	return fmt.Sprintf("%s is %q now, not the %q that was expected: read it again", e.Key, e.Have, e.Want)
+}
+
+// SetExpect is Set that, when expect is not nil, writes only if the effective value before the write (the text Old holds) is *expect.
+// The comparison and the write are done under the file's lock, so no other writer can come in between.
+func SetExpect(path, profile, key, value string, expect *string) (SetResult, error) {
 	res := SetResult{Key: key, Profile: profile}
 	if path == "" {
 		return res, errors.New("no config path")
@@ -53,6 +71,15 @@ func Set(path, profile, key, value string) (SetResult, error) {
 	if err != nil {
 		return res, err
 	}
+	// One lock per file, however it is named: the directory is resolved even when the file is not there yet, then the file itself.
+	if dir, derr := filepath.EvalSymlinks(filepath.Dir(path)); derr == nil {
+		path = filepath.Join(dir, filepath.Base(path))
+	}
+	if real, rerr := filepath.EvalSymlinks(path); rerr == nil {
+		path = real
+	} else if fi, lerr := os.Lstat(path); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return res, fmt.Errorf("%s is a symlink to nothing: refusing to replace it", path)
+	}
 	unlock, err := lockFile(path + ".lock")
 	if err != nil {
 		return res, err
@@ -64,6 +91,15 @@ func Set(path, profile, key, value string) (SetResult, error) {
 		return res, err
 	}
 	res.Old = effectiveOf(string(old), profile, key)
+	if expect != nil && profile == "" {
+		var cur map[string]any
+		if _, err := toml.Decode(string(old), &cur); err == nil && configFor(cur, "").Sources[key] == SrcProfile {
+			return res, fmt.Errorf("refused: %s is set by the active profile, so a write to [gate] would not change it (and the value you read is not the one written): use --profile <name>", key)
+		}
+	}
+	if expect != nil && res.Old != strings.TrimSpace(*expect) {
+		return res, &ExpectError{Key: key, Have: res.Old, Want: strings.TrimSpace(*expect)}
+	}
 	edited := editor(string(old), headerFor(profile, key), leafOf(key), lit)
 	var top map[string]any
 	if _, err := toml.Decode(edited, &top); err != nil {
@@ -93,6 +129,18 @@ func Set(path, profile, key, value string) (SetResult, error) {
 	res.New, res.NewSrc = active.Values[key], active.Sources[key]
 	if err := writeAtomic(path, []byte(edited)); err != nil {
 		return res, err
+	}
+	if expect != nil { // read it back from the file, under the same lock, as the next gate run will
+		raw, rerr := os.ReadFile(path)
+		var back map[string]any
+		if _, derr := toml.Decode(string(raw), &back); rerr != nil || derr != nil {
+			return res, fmt.Errorf("written, but the file could not be read back")
+		}
+		got := configFor(back, profile).Values[key]
+		if got != res.New {
+			return res, fmt.Errorf("written, but read back %q (wanted %q): the file was changed by hand meanwhile", got, res.New)
+		}
+		res.ReadBack = got
 	}
 	return res, nil
 }
@@ -400,10 +448,21 @@ func writeAtomic(path string, data []byte) error {
 		tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil { // the data is on disk before the name points at it
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return err
+	}
+	if d, err := os.Open(filepath.Dir(path)); err == nil { // and the rename itself survives a crash
+		_ = d.Sync()
+		d.Close()
+	}
+	return nil
 }
 
 // lockFile serialises two `pdx gate set` so neither loses the other's change.

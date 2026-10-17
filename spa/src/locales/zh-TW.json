@@ -2877,5 +2877,10 @@
   "watch.queue.place": "第 {{n}} 位",
   "watch.queue.ran": "已跑 {{t}}",
   "watch.queue.waited": "等 {{t}}",
-  "watch.queue.pid": "pid {{pid}}"
+  "watch.queue.pid": "pid {{pid}}",
+  "relay.half.label": "已寫好接力檔",
+  "relay.half.label_not_cleared": "已寫好接力檔（未清空）",
+  "relay.half.tooltip": "接力檔：{{path}}（{{time}} 寫好）",
+  "relay.half.tooltip_path": "接力檔：{{path}}",
+  "relay.half.toast": "{{host}}：{{session}}：已寫好接力檔（未清空）"
 }

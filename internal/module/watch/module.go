@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/wake/purdex/internal/config"
@@ -77,6 +79,15 @@ type Module struct {
 	registerWithin time.Duration
 	pollEvery      time.Duration
 	statFile       func(string) bool
+	// rst is the rest of the watcher (rest.go); exit sends /exit to its pane; the others are seams for the tests (nil: the real ones).
+	rst       restState
+	admit     sync.RWMutex // an event is admitted (read side) or the rest acts on its check (write side)
+	activity  atomic.Int64 // events being delivered to the watcher: a rest step compares it
+	exit      exiter
+	mtimeOf   func(string) time.Time
+	procStart func(int) (string, error)
+	signalFn  func(int, syscall.Signal) error
+	restEvery time.Duration
 	// cooldowns are the failed starts that paired hosts reported.
 	cooldowns cooldownBook
 	// manualDelivery keeps Start from running the delivery loop: a test calls deliverPass itself.
@@ -170,6 +181,11 @@ func (m *Module) Start(context.Context) error {
 			m.typer = pc
 		}
 	}
+	if m.exit == nil {
+		if pc, ok := m.panes.(*watch.PaneControl); ok {
+			m.exit = pc
+		}
+	}
 	if m.session == nil && m.typer != nil {
 		m.session = &sessionCtl{m: m}
 	}
@@ -198,6 +214,13 @@ func (m *Module) Start(context.Context) error {
 		go func() {
 			defer m.wg.Done()
 			m.deliveryLoop(ctx)
+		}()
+	}
+	if !m.manualDelivery {
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			m.restLoop(ctx)
 		}()
 	}
 	every := m.tickEvery
