@@ -45,13 +45,16 @@ func BuildEnv(jobID, workspace string, taskEnv, parent []string) ([]string, erro
 		"XDG_DATA_HOME":   filepath.Join(workspace, ".local", "share"),
 		"XDG_STATE_HOME":  filepath.Join(workspace, ".local", "state"),
 		MarkEnv:           jobID,
+		// Purdex state directories, inside the workspace so a job never reads or writes the host's own.
+		"PDX_GATE_DIR":         filepath.Join(workspace, ".pdx", "gate"),
+		"PDX_CODEX_STATE_ROOT": filepath.Join(workspace, ".pdx", "codex"),
 	}
 	if p, ok := parentVal["PATH"]; ok {
 		env["PATH"] = p
 	}
 	for _, e := range taskEnv {
 		name, value, fixed := strings.Cut(e, "=")
-		if fixedNames[name] || strings.HasPrefix(name, "WWD_") {
+		if fixedNames[name] || strings.HasPrefix(name, "WWD_") || strings.HasPrefix(name, "PDX_") {
 			return nil, fmt.Errorf("run: the task env may not set %s", name)
 		}
 		if fixed {

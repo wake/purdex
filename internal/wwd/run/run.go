@@ -58,6 +58,9 @@ type Result struct {
 	StdoutPath string // standard output alone (go-json reads it)
 	Tail       []byte // the end of the log, for the summary
 	LogCut     bool   // the log reached the capture cap
+	// CaptureErr is a failure to write the log or stdout file (disk full, quota). The command's own result stands, but the
+	// files and the summary built from them are incomplete: the worker treats it as an infrastructure failure (spec §5.1).
+	CaptureErr error
 }
 
 // Run starts the command, waits for it, and ends its whole process group on timeout or cancel (TERM, then KILL after
@@ -77,7 +80,7 @@ func Run(ctx context.Context, spec Spec) Result {
 	if err := os.MkdirAll(spec.OutDir, 0o700); err != nil {
 		return failStart(res, err)
 	}
-	for _, d := range []string{"HOME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"} {
+	for _, d := range []string{"HOME", "TMPDIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "PDX_GATE_DIR", "PDX_CODEX_STATE_ROOT"} {
 		if v, ok := envValue(env, d); ok {
 			if err := os.MkdirAll(v, 0o700); err != nil {
 				return failStart(res, err)
@@ -106,7 +109,7 @@ func Run(ctx context.Context, spec Spec) Result {
 
 	res.StartedAt = time.Now()
 	if err := cmd.Start(); err != nil {
-		res.Tail, res.LogCut = cp.close()
+		res.Tail, res.LogCut, res.CaptureErr = cp.close()
 		return failStart(res, err)
 	}
 	pgid := cmd.Process.Pid // Setpgid makes the child its own group leader
@@ -138,7 +141,7 @@ func Run(ctx context.Context, spec Spec) Result {
 	// The leader is gone; anything it left behind in the group goes too.
 	_ = syscall.Kill(-pgid, syscall.SIGKILL)
 	res.FinishedAt = time.Now()
-	res.Tail, res.LogCut = cp.close()
+	res.Tail, res.LogCut, res.CaptureErr = cp.close()
 
 	if res.Outcome == Exited {
 		var ee *exec.ExitError
@@ -169,17 +172,33 @@ func failStart(res Result, err error) Result {
 	return res
 }
 
-// endGroup sends TERM to the group, and KILL if the leader is still there after killAfter; it returns the leader's Wait error.
+// endGroup sends TERM to the group and gives the whole group killAfter to go away: KILL comes only when that time has passed
+// with a process still in the group, even when the leader itself left at once (a child that is still cleaning up keeps its
+// grace period). It returns the leader's Wait error.
 func endGroup(pgid int, killAfter time.Duration, done <-chan error) error {
 	_ = syscall.Kill(-pgid, syscall.SIGTERM)
-	t := time.NewTimer(killAfter)
-	defer t.Stop()
-	select {
-	case err := <-done:
-		return err
-	case <-t.C:
-		_ = syscall.Kill(-pgid, syscall.SIGKILL)
-		return <-done
+	deadline := time.Now().Add(killAfter)
+	var waitErr error
+	leaderGone := false
+	for {
+		if !leaderGone {
+			select {
+			case waitErr = <-done:
+				leaderGone = true
+			default:
+			}
+		}
+		if leaderGone && syscall.Kill(-pgid, 0) != nil { // nobody left in the group
+			return waitErr
+		}
+		if !time.Now().Before(deadline) {
+			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+			if !leaderGone {
+				waitErr = <-done
+			}
+			return waitErr
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

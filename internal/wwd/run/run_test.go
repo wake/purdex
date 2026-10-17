@@ -224,6 +224,62 @@ func TestLogIsCappedAndTheTailKept(t *testing.T) {
 	}
 }
 
+func TestPurdexStateDirectoriesAreInsideTheWorkspace(t *testing.T) {
+	s := spec(t, "env")
+	r := Run(context.Background(), s)
+	out := readFile(t, r.StdoutPath)
+	for _, want := range []string{"PDX_GATE_DIR=" + s.Workspace + "/.pdx/gate", "PDX_CODEX_STATE_ROOT=" + s.Workspace + "/.pdx/codex"} {
+		if !strings.Contains(out, want+"\n") {
+			t.Errorf("env lacks %q:\n%s", want, out)
+		}
+	}
+	for _, e := range []string{"PDX_GATE_DIR=/shared", "PDX_GATE_DIR", "PDX_DEV_MODE=1", "PDX_TEST_CFG"} {
+		bad := spec(t, "true")
+		bad.TaskEnv = []string{e}
+		if r := Run(context.Background(), bad); r.Outcome != StartFailed {
+			t.Errorf("%s: outcome = %s, want start_failed", e, r.Outcome)
+		}
+	}
+}
+
+func TestChildThatIgnoresTermKeepsItsGraceAfterTheLeaderLeft(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	// the leader ends on TERM at once; its child ignores TERM and must live until KillAfter, then be killed
+	s := spec(t, "sh", "-c", "(trap '' TERM; sleep 30) & echo $! > "+pidFile+"; wait")
+	s.Timeout = 200 * time.Millisecond
+	s.KillAfter = 1500 * time.Millisecond
+	start := time.Now()
+	r := Run(context.Background(), s)
+	d := time.Since(start)
+	if r.Outcome != TimedOut {
+		t.Fatalf("result = %+v", r)
+	}
+	if d < 1500*time.Millisecond {
+		t.Fatalf("the group was killed after %v, before KillAfter (%v)", d, s.KillAfter)
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(readFile(t, pidFile)))
+	if pid > 0 && alive(pid) {
+		syscall.Kill(pid, syscall.SIGKILL)
+		t.Fatal("the child survived KILL")
+	}
+}
+
+func TestCaptureFailureIsReported(t *testing.T) {
+	dir := t.TempDir()
+	c, err := newCapture(filepath.Join(dir, "log"), filepath.Join(dir, "stdout"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.log.Close() // a write to it now fails, as it would on a full disk
+	n, err := c.Stdout().Write([]byte("data"))
+	if n != 4 || err != nil {
+		t.Fatalf("a failing disk must not stall the command: n=%d err=%v", n, err)
+	}
+	if _, _, cerr := c.close(); cerr == nil {
+		t.Fatal("the write failure was not reported")
+	}
+}
+
 func TestRunsInTheGivenDirectory(t *testing.T) {
 	s := spec(t, "pwd")
 	sub := filepath.Join(s.Workspace, "spa")

@@ -115,7 +115,7 @@ func (c *capture) write(p []byte, stdout bool) (int, error) {
 	return len(p), nil
 }
 
-func (c *capture) close() (tail []byte, logCut bool) {
+func (c *capture) close() (tail []byte, logCut bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.closed = true
@@ -125,5 +125,5 @@ func (c *capture) close() (tail []byte, logCut bool) {
 	if len(t) > tailBytes {
 		t = t[len(t)-tailBytes:]
 	}
-	return append([]byte(nil), t...), c.logCut
+	return append([]byte(nil), t...), c.logCut, c.lastError
 }
