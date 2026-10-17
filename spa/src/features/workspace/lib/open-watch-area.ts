@@ -1,7 +1,7 @@
 // Opens the watcher area (守門員專區) on a tab, and leaves it. The entry points are the host cells (W5a1) and the shield
 // (W5a3); the way back is the area's back button and ⌘W (journal v5 §3.7).
 import { useTabStore } from '../../../stores/useTabStore'
-import { useWorkspaceStore, getReturnWorkspaceId, getWatchReturnTarget, setWatchReturnTarget } from '../store'
+import { useWorkspaceStore, getReturnWorkspaceId, getWatchReturnTarget } from '../store'
 import { WATCH_EVENTS_TAB_ID, WATCH_GUARDIAN_TAB_ID, WATCH_WORKSPACE_ID, watchHostTabId } from '../../../lib/watch/ids'
 import { readMasterWorld } from '../../../lib/profile/master-world'
 import { currentWatchReconciler, readFleetView } from './watch-area'
@@ -10,17 +10,14 @@ export type WatchTarget = { tab: 'guardian' | 'events' } | { host: string }
 
 /**
  * Ensures the area's workspace, brings its host tabs up to the fleet's host list, then selects the target the way
- * `handleSelectTab` does (active tab, active workspace, the workspace's own active tab). Entered from outside, the
- * workspace and tab on screen become the way back (`leaveWatchArea`); from inside the area that stays as it was. A target
- * with no tab — an unknown host, a guardian or events tab that does not exist yet — selects the area's first tab.
+ * `handleSelectTab` does (active tab, active workspace, the workspace's own active tab). Entering from outside takes
+ * the way back (`leaveWatchArea`) through the store's own entry rule (`watchReturnTarget`, store.ts), as a synced entry
+ * does; from inside the area it stays as it was. A target with no tab — an unknown host, a guardian or events tab that
+ * does not exist yet — selects the area's first tab.
  */
 export function openWatchArea(target: WatchTarget): void {
   // A world that is switching or applying is not ours to write into (the same gate as `startWatchArea`).
   if (!readMasterWorld().settled) return
-  const from = useWorkspaceStore.getState().activeWorkspaceId
-  if (from !== WATCH_WORKSPACE_ID) {
-    setWatchReturnTarget(from === null ? null : { workspaceId: from, tabId: useTabStore.getState().activeTabId })
-  }
   useWorkspaceStore.getState().ensureWatchWorkspace()
   currentWatchReconciler().reconcile(readFleetView())
 

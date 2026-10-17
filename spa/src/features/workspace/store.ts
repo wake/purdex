@@ -46,13 +46,13 @@ export const visibleWorkspaces = (workspaces: readonly Workspace[]): Workspace[]
 export interface WatchReturnTarget { workspaceId: string; tabId: string | null }
 
 /**
- * Taken by `openWatchArea` when the area is entered from outside it; moving inside the area, or opening it again from
- * there, keeps it. In memory only, like `returnWorkspaceId`: after a restart with the area shown there is none.
+ * This window's way back, taken when its `activeWorkspaceId` goes from another workspace to `watch` (the subscription
+ * at the end of this file) — by `openWatchArea` here or by another window's write synced in; moving inside the area
+ * keeps it. In memory only, like `returnWorkspaceId`: after a restart with the area shown there is none.
  */
 let watchReturnTarget: WatchReturnTarget | null = null
 
 export const getWatchReturnTarget = (): WatchReturnTarget | null => watchReturnTarget
-export const setWatchReturnTarget = (target: WatchReturnTarget | null): void => { watchReturnTarget = target }
 
 export const __resetReturnWorkspaceForTest = (): void => { returnWorkspaceId = null; watchReturnTarget = null }
 
@@ -421,8 +421,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 syncManager.register(STORAGE_KEYS.WORKSPACES, useWorkspaceStore)
 registerFencedStore(STORAGE_KEYS.WORKSPACES, useWorkspaceStore)
 
-// Remember the last workspace the user was in that is not the watcher area (see `returnWorkspaceId`).
-useWorkspaceStore.subscribe((state) => {
+// Remember the last workspace the user was in that is not the watcher area (see `returnWorkspaceId`), and take the way
+// back on entering the area (see `watchReturnTarget`). Every window runs this on its own store, so a window that a
+// synced write takes into the area keeps the workspace it showed itself, and the tab active in it just before.
+useWorkspaceStore.subscribe((state, prev) => {
   const id = state.activeWorkspaceId
   if (id !== null && id !== WATCH_WORKSPACE_ID) returnWorkspaceId = id
+  if (id === WATCH_WORKSPACE_ID && prev.activeWorkspaceId !== WATCH_WORKSPACE_ID) {
+    const from = prev.workspaces.find((ws) => ws.id === prev.activeWorkspaceId)
+    watchReturnTarget = from ? { workspaceId: from.id, tabId: from.activeTabId } : null
+  }
 })
