@@ -70,7 +70,7 @@ func commandWords(argv []string) []string {
 		return withBaseTool(args[i:])
 	case "bun":
 		if len(args) > 0 && args[0] == "x" {
-			return withBaseTool(skipDashDash(args[1:]))
+			return withBaseTool(args[1:][skipRunnerOptions(args[1:]):])
 		}
 		fallthrough
 	case "pnpm", "npm", "yarn":
@@ -80,7 +80,8 @@ func commandWords(argv []string) []string {
 		}
 		switch args[i] {
 		case "exec", "x":
-			return withBaseTool(skipDashDash(args[i+1:]))
+			rest := args[i+1:] // exec takes options of its own (`npm exec --package typescript -- tsc -b`), and a `--` before the tool
+			return withBaseTool(rest[skipRunnerOptions(rest):])
 		}
 		if Classify(args[i:], Env{}) != ClassNone {
 			return withBaseTool(args[i:]) // `pnpm tsc -b`: the word is a tool in node_modules/.bin
@@ -108,14 +109,6 @@ func skipRunnerOptions(args []string) int {
 		}
 	}
 	return len(args)
-}
-
-// skipDashDash drops one `--` standing first.
-func skipDashDash(args []string) []string {
-	if len(args) > 0 && args[0] == "--" {
-		return args[1:]
-	}
-	return args
 }
 
 // withBaseTool is words with the first one (the tool) reduced to its base name.

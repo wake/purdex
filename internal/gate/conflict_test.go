@@ -40,6 +40,10 @@ func TestCommandWords(t *testing.T) {
 		{"pnpm vitest related a.ts", "vitest related a.ts"},
 		{"npm exec -- tsc -b", "tsc -b"},
 		{"npm exec tsc -b", "tsc -b"},
+		{"npm exec --package typescript -- tsc -b", "tsc -b"},
+		{"npm exec --package=typescript -- tsc -b", "tsc -b"},
+		{"pnpm exec --filter spa tsc -b", "tsc -b"},
+		{"bun x --bun tsc -b", "tsc -b"},
 		{"yarn exec tsc -b", "tsc -b"},
 		{"yarn x tsc", "tsc"},
 		{"yarn dlx tsc", "yarn dlx tsc"}, // dlx is not exec
