@@ -2,6 +2,7 @@ package resourcesmod
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,14 +20,14 @@ func TestBoot_PrunesOldMinutesBeforeTheSampler(t *testing.T) {
 	if err := f.m.store.InsertMinute(minuteRow{At: now - 3600*1000, NCPU: 10}); err != nil {
 		t.Fatal(err)
 	}
-	var seen int
+	var seen atomic.Int64
 	f.m.sampler = &fakeSampler{fn: func(context.Context, int) (resources.HostRaw, []resources.Proc, error) {
-		if seen == 0 {
+		if seen.Load() == 0 {
 			rows, err := f.m.store.ReportMinutes(0, now+1)
 			if err != nil {
 				t.Error(err)
 			}
-			seen = len(rows) + 1000 // the first sample sees the pruned table
+			seen.Store(int64(len(rows)) + 1000) // the first sample sees the pruned table
 		}
 		return idleRaw(), nil, nil
 	}}
@@ -34,8 +35,8 @@ func TestBoot_PrunesOldMinutesBeforeTheSampler(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = f.m.Stop(context.Background()) })
-	waitFor(t, "the first sample", func() bool { return f.m.latest.Load() != nil })
-	if seen != 1001 {
-		t.Fatalf("the sampler saw %d minute rows before it, want only the recent one", seen-1000)
+	waitFor(t, "the first sample", func() bool { return seen.Load() != 0 })
+	if got := seen.Load(); got != 1001 {
+		t.Fatalf("the sampler saw %d minute rows before it, want only the recent one", got-1000)
 	}
 }
