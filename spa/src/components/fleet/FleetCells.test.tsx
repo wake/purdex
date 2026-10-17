@@ -7,6 +7,7 @@ import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
 import { useFleetStore } from '../../lib/fleet/store'
 import { fleetHistory } from '../../lib/fleet/history'
 import { useHostStore } from '../../stores/useHostStore'
+import { useLayoutStore } from '../../stores/useLayoutStore'
 import { fast, host, primaryAnswer, standbyAnswer } from '../../lib/fleet/__fixtures__/builders'
 
 vi.mock('../../features/workspace/lib/open-watch-area', () => ({ openWatchArea: vi.fn() }))
@@ -70,12 +71,14 @@ describe('FleetCells — the indicator setting (主機格指示)', () => {
 })
 
 describe('FleetCells — the row', () => {
-  it('is laid out like the member beads: wraps with the sidebar width, gap-0.5, no separators, daemon hosts first then the probes', () => {
+  // The gap between hosts narrows (journal v5 U9, §3.6): gap-0 from the beads' gap-0.5.
+  it('is laid out like the member beads: wraps with the sidebar width, no gap between cells, no separators, daemon hosts first then the probes', () => {
     answer(A, primaryAnswer(1, FOUR))
     render(<FleetCells variant="wide" {...props()} />)
     const row = screen.getByTestId('fleet-cells')
     const cls = row.className.split(' ')
-    for (const c of ['flex', 'flex-wrap', 'items-center', 'content-start', 'gap-0.5']) expect(cls).toContain(c)
+    for (const c of ['flex', 'flex-wrap', 'items-center', 'content-start', 'gap-0']) expect(cls).toContain(c)
+    for (const c of ['gap-0.5', 'gap-1', 'gap-px']) expect(cls).not.toContain(c)
     expect(cls).not.toContain('flex-nowrap')
     expect(cls).not.toContain('flex-col')
     expect(within(row).getAllByRole('button').map((b) => b.getAttribute('aria-label')?.split(', ')[0])).toEqual(['air26', 'mlab', 'air19', 'mserv'])
@@ -89,11 +92,42 @@ describe('FleetCells — the row', () => {
     expect(screen.getByTestId('host-badge-p3').style.getPropertyValue('--hb-main')).toBe('rgba(34, 197, 94, 1)')
     expect(screen.getByTestId('host-badge-p1').dataset.hasColor).toBe('false')
   })
-  it('the narrow variant stacks them in a column without separators', () => {
+  // jsdom lays nothing out, so the sum is taken from the classes: a cell is 3 px + badge + gap-1 + ml-0.5 + indicator + 3 px.
+  // At gap-px the fifth cell would wrap at the default width (5 × 44 + 4 = 224 > 223), which is why the gap is 0, not 1 px.
+  it('five cells still fit one line at the default sidebar width', () => {
+    const FIVE = [...FOUR, host('p3', { kind: 'probe', name: 'p3', fast: fast({ load: 5 }) })]
+    answer(A, primaryAnswer(1, FIVE))
+    render(<FleetCells variant="wide" {...props()} />)
+    const spacing = (el: Element, prefix: string) => {
+      for (const c of el.className.split(' ')) {
+        if (c === `${prefix}-px`) return 1
+        const arb = c.match(new RegExp(`^${prefix}-\\[(\\d+)px\\]$`))
+        if (arb) return Number(arb[1])
+        const step = c.match(new RegExp(`^${prefix}-(\\d+(?:\\.\\d+)?)$`))
+        if (step) return Number(step[1]) * 4
+      }
+      return 0
+    }
+    const row = screen.getByTestId('fleet-cells')
+    const cells = within(row).getAllByRole('button')
+    expect(cells).toHaveLength(5)
+    const cell = cells[0]
+    const ring = within(cell).getByTestId('load-ring-d-a')
+    const box = parseFloat(within(cell).getByTestId('host-badge-d-a').style.width)
+    const ringBox = parseFloat(within(ring).getByTestId('context-ring').style.width)
+    const cellW = 2 * spacing(cell, 'px') + box + spacing(cell, 'gap') + spacing(ring, 'ml') + ringBox
+    expect(cellW).toBe(44)
+    const bar = useLayoutStore.getInitialState().activityBarWideSize
+    const room = bar - 1 /* the bar's border-r */ - 2 * spacing(row, 'px')
+    expect(5 * cellW + 4 * spacing(row, 'gap')).toBeLessThanOrEqual(room)
+  })
+  it('the narrow variant stacks them in a column without separators, no gap between cells', () => {
     answer(A, primaryAnswer(1, FOUR))
     render(<FleetCells variant="narrow" {...props()} />)
     const col = screen.getByTestId('fleet-cells')
     expect(col.className).toContain('flex-col')
+    expect(col.className.split(' ')).toContain('gap-0')
+    for (const c of ['gap-0.5', 'gap-1', 'gap-px']) expect(col.className.split(' ')).not.toContain(c)
     expect(within(col).getAllByRole('button')).toHaveLength(4)
     expect(within(col).queryAllByTestId('cell-sep')).toHaveLength(0)
   })

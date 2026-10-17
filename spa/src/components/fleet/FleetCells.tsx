@@ -1,7 +1,9 @@
 // spa/src/components/fleet/FleetCells.tsx — the fleet cells at the bottom of the sidebar (fleet spec rev 2 §8.1): one cell per
-// host, under the BottomNav. The wide bar lays them out like the session list's member beads (TeamMemberBeads: flex-wrap,
-// gap-0.5, no separators), so they wrap with the sidebar's width; the narrow bar stacks them in a column. Reads the fleet
-// from `useFleetStore` only; nothing here knows the wire.
+// host, under the BottomNav. The wide bar lays them out like the session list's member beads (TeamMemberBeads: flex-wrap, no
+// separators), so they wrap with the sidebar's width; the narrow bar stacks them in a column. No gap between cells in either
+// (journal v5 U9: the hosts closer together; the cells' own 3 px sides still part them): at 0, five 44 px cells fit one line
+// at the default 240 px width, at 1 px the fifth would wrap. Reads the fleet from `useFleetStore` only; nothing here knows the
+// wire.
 import { useMemo } from 'react'
 import { useFleetStore, fleetHostsView, type FleetHostView } from '../../lib/fleet/store'
 import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
@@ -46,7 +48,7 @@ export function FleetCells({ variant }: FleetCellsProps) {
     <div
       data-testid="fleet-cells"
       data-variant={variant}
-      className={wide ? 'flex flex-wrap shrink-0 items-center content-start gap-0.5 px-2 pb-2 pt-1' : 'flex shrink-0 flex-col items-center gap-1 pb-1'}
+      className={wide ? 'flex flex-wrap shrink-0 items-center content-start gap-0 px-2 pb-2 pt-1' : 'flex shrink-0 flex-col items-center gap-0 pb-1'}
     >
       {views.map((v) => (
         <HostCell key={v.id} view={v} look={look(v)} variant={variant} isActive={false} waitingPrimary={waitingPrimary} primaryElsewhere={primaryElsewhere && !snapshot} onOpen={() => open(v)} />
