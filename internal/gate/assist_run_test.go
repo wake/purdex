@@ -139,15 +139,21 @@ host = args[i]
 cmd = ' '.join(args[i + 1:])
 if os.environ.get('FAKE_SSH_FAIL'):
     sys.exit(255)
+import time
 home = os.environ['FAKE_HOME']
 os.environ['HOME'] = home
 os.environ['PATH'] = home + '/bin:' + os.environ['PATH']
 cmd = re.sub(r'^git-(\w+)', r'git \1', cmd)
+if os.path.exists(home + '/cleanup-fails') and 'worktree remove' in cmd:
+    sys.exit(1)
 os.chdir(home)
 pid = os.fork()
 if pid == 0:
     os.setsid()  # as sshd gives each remote command a session of its own
     os.execvp('sh', ['sh', '-c', cmd])
+if os.path.exists(home + '/ssh-drop'):
+    time.sleep(1.0)
+    sys.exit(255)  # the connection goes while the remote command goes on
 _, st = os.waitpid(pid, 0)
 sys.exit(os.waitstatus_to_exitcode(st) % 256 if os.waitstatus_to_exitcode(st) >= 0 else 128 - os.waitstatus_to_exitcode(st))
 `
@@ -169,6 +175,7 @@ exec "$@"
 
 const fakePnpm = `#!/bin/sh
 echo x >> "$HOME/pnpm-count"
+sleep 1
 mkdir -p node_modules && echo installed > node_modules/marker
 `
 
@@ -345,4 +352,89 @@ func TestRunAssist_AnInterruptEndsTheRemoteGroup(t *testing.T) {
 		return exec.Command("kill", "-0", pid).Run() != nil
 	})
 	assert.Empty(t, h.listDir(t, "Assist/tmp.noindex"))
+}
+
+// A run cancelled before the host's script got as far as its pid file does not start there at all (the tombstone).
+func TestRunAssist_ACancelMarkBeforeTheStartStopsTheRun(t *testing.T) {
+	g, _ := testGate(t)
+	dir := workRepo(t)
+	h := newAssistHost(t, filepath.Base(dir))
+	writeFile(t, h.remote("Assist/jobs.noindex/jobx.cancel"), "", 0o644)
+	var out, errb bytes.Buffer
+	res := g.RunAssist(context.Background(), Options{Argv: []string{"sh", "-c", "touch $HOME/ran"}, Dir: dir, Stdout: &out, Stderr: &errb},
+		AssistRun{Host: "air26", Repo: h.repo, SSH: h.ssh, Job: "jobx"})
+	assert.False(t, res.Started)
+	assert.NoFileExists(t, h.remote("ran"))
+	assert.Empty(t, h.listDir(t, "Assist/jobs.noindex"), "the tombstone goes with the job")
+}
+
+// The connection going while the command runs is not the command's exit: it is ended on the host before its directory is removed.
+// Mutation gate: no endRemote on 255 → the sleep goes on after the directory is gone (red).
+func TestRunAssist_ALostConnectionEndsTheRemoteRun(t *testing.T) {
+	g, _ := testGate(t)
+	dir := workRepo(t)
+	h := newAssistHost(t, filepath.Base(dir))
+	writeFile(t, h.remote("ssh-drop"), "", 0o644)
+	pidFile := h.remote("sleeper.pid")
+	res, _, _ := runOn(t, g, h, dir, "sh", "-c", `sleep 300 & echo $! > `+pidFile+`; wait`)
+	assert.True(t, res.Started)
+	assert.Equal(t, 255, res.Code)
+	require.Error(t, res.Err)
+	assert.Contains(t, res.Err.Error(), "connection")
+	pid := strings.TrimSpace(mustReadOr(pidFile))
+	eventually(t, "the remote sleep to be gone", func() bool { return exec.Command("kill", "-0", pid).Run() != nil })
+	assert.Empty(t, h.listDir(t, "Assist/tmp.noindex"))
+}
+
+// Two jobs with the same new lockfile install it once (the second waits for the first); three different lockfiles at once do not
+// remove a set that a running job links. Mutation gates: no lock → two installs (red); no spare of linked sets → the running job loses
+// its modules (red).
+func TestRunAssist_DependenciesAreSharedAndKeptWhileInUse(t *testing.T) {
+	g, _ := testGate(t)
+	dir := workRepo(t)
+	writeFile(t, dir+"/spa/pnpm-lock.yaml", "lock: same\n", 0o644)
+	h := newAssistHost(t, filepath.Base(dir))
+	count := func() int { return strings.Count(mustReadOr(h.remote("pnpm-count")), "x") }
+	results := make(chan AssistResult, 2)
+	for i := 0; i < 2; i++ {
+		go func() { res, _, _ := runOn(t, g, h, dir, "sh", "-c", "cat spa/node_modules/marker"); results <- res }()
+	}
+	for i := 0; i < 2; i++ {
+		res := <-results
+		require.NoError(t, res.Err)
+		assert.Equal(t, 0, res.Code)
+	}
+	assert.Equal(t, 1, count(), "installed once for two jobs")
+
+	// a job that runs long on this set while two newer sets come and go
+	hold := h.remote("hold-a")
+	done := make(chan AssistResult, 1)
+	go func() {
+		res, _, _ := runOn(t, g, h, dir, "sh", "-c", "touch "+h.remote("a-started")+`; while [ ! -e `+hold+` ]; do sleep 0.1; done; cat spa/node_modules/marker`)
+		done <- res
+	}()
+	eventually(t, "job A", func() bool { return exists(h.remote("a-started")) })
+	for _, lock := range []string{"lock: b\n", "lock: c\n"} {
+		writeFile(t, dir+"/spa/pnpm-lock.yaml", lock, 0o644)
+		time.Sleep(1100 * time.Millisecond)
+		res, _, _ := runOn(t, g, h, dir, "true")
+		require.NoError(t, res.Err)
+	}
+	writeFile(t, hold, "", 0o644)
+	res := <-done
+	require.NoError(t, res.Err)
+	assert.Equal(t, 0, res.Code, "job A still had its modules when it read them")
+}
+
+// A cleanup that cannot run is reported, not only logged.
+func TestRunAssist_ACleanupThatFailsIsReported(t *testing.T) {
+	g, _ := testGate(t)
+	dir := workRepo(t)
+	h := newAssistHost(t, filepath.Base(dir))
+	writeFile(t, h.remote("cleanup-fails"), "", 0o644) // the fake ssh refuses the cleanup script
+	res, _, _ := runOn(t, g, h, dir, "true")
+	assert.True(t, res.Started)
+	assert.Equal(t, 0, res.Code)
+	require.Error(t, res.CleanupErr)
+	assert.Contains(t, res.CleanupErr.Error(), res.Job)
 }

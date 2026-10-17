@@ -42,6 +42,8 @@ type AssistResult struct {
 	RunS      float64 // the run itself
 	Job       string
 	Err       error // why it did not start (or, after the start, what went wrong around it)
+	// CleanupErr is set when the job could not be removed from the host (it is left for the sweep of assist-check).
+	CleanupErr error
 }
 
 func newJobID() string {
@@ -89,12 +91,26 @@ for d in . spa; do
   h=$(shasum -a 256 "$W/$d/pnpm-lock.yaml" | cut -c1-16)
   D="$HOME/Assist/deps.noindex/$repo/$label-$h"
   if [ ! -d "$D/node_modules" ]; then
-    (cd "$W/$d" && pnpm install --frozen-lockfile) >&2
-    mkdir -p "$D" && mv "$W/$d/node_modules" "$D/node_modules"
+    if mkdir "$D.lock" 2>/dev/null; then
+      if (cd "$W/$d" && pnpm install --frozen-lockfile) >&2 && mkdir -p "$D" && mv "$W/$d/node_modules" "$D/node_modules"; then
+        rmdir "$D.lock"
+      else
+        rmdir "$D.lock"; echo "install of $d failed" >&2; exit 1
+      fi
+    else
+      # another job is installing this set: wait for it (a lock older than 15 minutes is a dead installer's)
+      [ -z "$(find "$D.lock" -maxdepth 0 -mmin +15 2>/dev/null)" ] || rmdir "$D.lock" 2>/dev/null || true
+      i=0
+      while [ ! -d "$D/node_modules" ] && [ -d "$D.lock" ] && [ "$i" -lt 600 ]; do sleep 1; i=$((i+1)); done
+      [ -d "$D/node_modules" ] || { echo "the install of $d by another job did not finish" >&2; exit 1; }
+    fi
   fi
   touch "$D"
   ln -s "$D/node_modules" "$W/$d/node_modules"
-  ls -dt "$HOME/Assist/deps.noindex/$repo/$label-"* 2>/dev/null | tail -n +3 | while read -r old; do rm -rf "$old"; done
+  used=$(for l in "$HOME"/Assist/tmp.noindex/*/node_modules "$HOME"/Assist/tmp.noindex/*/spa/node_modules; do [ -L "$l" ] && readlink "$l"; done)
+  ls -dt "$HOME/Assist/deps.noindex/$repo/$label-"*[0-9a-f] 2>/dev/null | tail -n +3 | while read -r old; do
+    case "$used" in *"$old/node_modules"*) ;; *) rm -rf "$old" ;; esac
+  done
 done
 `
 
@@ -105,11 +121,12 @@ if [ -e "$J.reclaimed" ]; then echo reclaimed=1; fi
 git -C "$R" worktree remove --force "$W" >/dev/null 2>&1 || rm -rf "$W"
 git -C "$R" worktree prune >/dev/null 2>&1
 git -C "$R" update-ref -d "refs/assist/$job" >/dev/null 2>&1
-rm -f "$J.pid" "$J.reclaimed"
+rm -f "$J.pid" "$J.reclaimed" "$J.cancel"
 `
 
 // remoteKill ends the job's process group (args: job): TERM now, KILL ten seconds later.
-const remoteKill = `J=$HOME/Assist/jobs.noindex/$1.pid
+const remoteKill = `touch "$HOME/Assist/jobs.noindex/$1.cancel"
+J=$HOME/Assist/jobs.noindex/$1.pid
 [ -f "$J" ] || exit 0
 p=$(cat "$J"); [ -n "$p" ] || exit 0
 g=$(ps -o pgid= -p "$p" 2>/dev/null | tr -d ' ')
@@ -166,7 +183,8 @@ func (g *Gate) RunAssist(ctx context.Context, o Options, a AssistRun) (res Assis
 		cmd := a.sshCmd(c, remoteCleanup, repo, a.Job)
 		cmd.Stdout = &out
 		if err := cmd.Run(); err != nil {
-			g.say("assist cleanup on %s: %v", a.Host, err)
+			res.CleanupErr = fmt.Errorf("cleanup of job %s on %s: %w", a.Job, a.Host, err)
+			g.say("%v", res.CleanupErr)
 		}
 		res.Reclaimed = strings.Contains(out.String(), "reclaimed=1")
 	}
@@ -206,6 +224,7 @@ func (g *Gate) RunAssist(ctx context.Context, o Options, a AssistRun) (res Assis
 repo=$1; job=$2; rel=$3; wait=$4; nonce=$5; shift 5
 cd "$HOME/Assist/tmp.noindex/$job/$rel" || exit 70
 echo $$ > "$HOME/Assist/jobs.noindex/$job.pid"
+[ ! -e "$HOME/Assist/jobs.noindex/$job.cancel" ] || exit 75  # cancelled before it got here
 PDX_GATE_ADMITTED_MARK=$nonce PDX_GATE_TAG="assist:$job" exec pdx gate --wait-max "$wait" -- "$@"
 `
 	args := append([]string{repo, a.Job, snap.Rel, fmt.Sprintf("%d", int(wait.Seconds())), nonce}, o.Argv...)
@@ -234,6 +253,16 @@ loop:
 			res.RunS = g.Now().Sub(runStart).Seconds()
 			code := exitCode(err, run)
 			res.Started = filter.sawAdmit && !filter.sawNoStart
+			if code == 255 && !cancelled {
+				// ssh itself failed (the connection went): whatever the host is still running for the job is ended before its
+				// directory is removed, and the exit code is not the command's
+				g.endRemote(a, a.Job)
+				if res.Started {
+					res.Code = code
+					res.Err = fmt.Errorf("the ssh connection to %s was lost while the command ran; it was ended on the host", a.Host)
+					break loop
+				}
+			}
 			switch {
 			case res.Started:
 				res.Code = code
