@@ -72,6 +72,8 @@ var deviceAllowed = map[string]bool{
 	"GET /api/journal/tasks":   true,
 	"GET /api/journal/roadmap": true,
 	"PUT /api/journal/pin":     true,
+	// the team members' status lines (journal.members.v1): read-only
+	"GET /api/journal/members": true,
 }
 
 // nexEnginePattern is the one pattern that mounts the whole embedded engine; for a device the scope looks past the pattern.
