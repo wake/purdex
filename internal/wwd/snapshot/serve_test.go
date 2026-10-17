@@ -397,3 +397,32 @@ func TestGitEnv_HasNoInheritedGitVariables(t *testing.T) {
 		}
 	}
 }
+
+func TestListPins_ListsTheJobsThatArePinnedAndOnlyThose(t *testing.T) {
+	repo, _, snap := origin(t)
+	ctx := context.Background()
+	ids, err := ListPins(ctx, repo)
+	require.NoError(t, err)
+	assert.Equal(t, []string{}, ids, "no refs/wwd/ is an empty list, not an error")
+
+	require.NoError(t, Pin(ctx, repo, "j_2", snap))
+	require.NoError(t, Pin(ctx, repo, "j_1", snap))
+	gitOut(t, repo, "update-ref", "refs/wwd/nested/x", snap) // not a job id: the sweep must not see it
+	gitOut(t, repo, "update-ref", "refs/wwd/-dash", snap)
+	gitOut(t, repo, "update-ref", "refs/heads/j_3", snap) // not under refs/wwd/
+	ids, err = ListPins(ctx, repo)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"j_1", "j_2"}, ids)
+
+	require.NoError(t, Unpin(ctx, repo, "j_1"))
+	ids, err = ListPins(ctx, repo)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"j_2"}, ids)
+}
+
+func TestListPins_ARepositoryGitCannotReadIsAnError(t *testing.T) {
+	_, err := ListPins(context.Background(), filepath.Join(t.TempDir(), "nope"))
+	assert.Error(t, err)
+	_, err = ListPins(context.Background(), t.TempDir()) // exists, is not a repository
+	assert.Error(t, err)
+}
