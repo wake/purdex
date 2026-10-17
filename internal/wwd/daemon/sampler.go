@@ -26,6 +26,9 @@ type SamplerOptions struct {
 	Slots                    wire.Slots
 	WorkerEnabled            bool
 	OwnerRule                string // free text shown in facts.worker.owner_rule ("" without an owner rule)
+	// State, when set, is where the worker settings and the exceptions come from
+	// (Slots, WorkerEnabled and OwnerRule are then only the fallback).
+	State *HostState
 	// OnFacts, when set, is called with every new record (outside the sampler's
 	// lock). It must not block.
 	OnFacts func(wire.Facts)
@@ -76,14 +79,21 @@ func (s *Sampler) Tick(now time.Time) {
 	f.V, f.HostID, f.Alias, f.OSVersion = wire.Proto, s.opts.HostID, s.opts.Alias, s.opts.OSVersion
 	f.Platform, f.Arch = runtime.GOOS, runtime.GOARCH
 	reading.Apply(&f)
-	f.Exception = []wire.FactExc{} // exceptions arrive with WWD-1f
+	f.Exception = []wire.FactExc{}
 	f.Worker = wire.FactsWorker{Enabled: s.opts.WorkerEnabled, Slots: s.opts.Slots, OwnerRule: s.opts.OwnerRule}
+	var holds []derived.Hold
+	if st := s.opts.State; st != nil {
+		st.Prune(now) // an exception that ended is announced before this record shows it gone
+		ws := st.Worker()
+		f.Worker = wire.FactsWorker{Enabled: ws.Enabled, Slots: ws.Slots, OwnerRule: ws.OwnerRule}
+		f.Exception, holds = st.Active(), st.Holds()
+	}
 
 	s.mu.Lock()
 	in := derived.Input{
 		Pressure: f.Mem.Pressure, PressureKnown: f.Mem.Pressure > 0,
 		Slots: f.Worker.Slots, Running: f.Worker.Running,
-		OwnerActive: f.Owner != nil && f.Owner.Active, AvailableMB: f.Mem.AvailableMB,
+		OwnerActive: f.Owner != nil && f.Owner.Active, AvailableMB: f.Mem.AvailableMB, Exceptions: holds,
 	}
 	if f.Mem.CompressorMB != nil {
 		in.CompressorMB = *f.Mem.CompressorMB
