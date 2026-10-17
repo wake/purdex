@@ -116,6 +116,10 @@ type EventRequest struct {
 	// it on arrival, and that arrival order is the whole meaning of the
 	// number. See FramesStore.NextIdentitySeq.
 	identitySeq int64
+
+	// verifiedInfo is the process info verifyEvent read for SenderPID, handed on so applyFrameEvent does not read the same
+	// process again (#3092). Unexported: no sender supplies it; nil when verification was skipped or stubbed.
+	verifiedInfo *agentpkg.ProcessInfo
 }
 
 // classifyLifecycle resolves an EventRequest to its LifecycleEventKind via
@@ -265,13 +269,15 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 			session, req.AgentType, req.PurdexName, trace.ChainID())
 	}
 
-	if decision := verifyEventFn(m, req); !decision.Accepted {
+	decision := verifyEventFn(m, req)
+	if !decision.Accepted {
 		trace.Verify(req, "rejected", decision.Reason, map[string]any{"decision": "rejected", "reason": decision.Reason})
 		trace.Finish("completed", "verify_rejected")
 		traceFinished = true
 		writeVerifyRejected(w, req, decision.Reason)
 		return
 	}
+	req.verifiedInfo = decision.Info
 	trace.Verify(req, "accepted", "verify_passed", map[string]any{"decision": "accepted"})
 
 	if nonTmux {

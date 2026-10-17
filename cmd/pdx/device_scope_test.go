@@ -73,7 +73,7 @@ func TestDeviceAllowed_ExactSet(t *testing.T) {
 		"POST /api/agent/upload",
 		"GET /api/workbook/conversations/{provider}/{session_id}", "GET /api/workbook/entries",
 		"GET /api/workbook/conversations/{provider}/{session_id}/todos", // not the refresh: that is the Mac App's
-		"GET /api/journal", "GET /api/journal/tasks", "GET /api/journal/roadmap", "PUT /api/journal/pin", "GET /api/journal/members", // the workbook journal (iOS later)
+		"GET /api/journal", "GET /api/journal/tasks", "GET /api/journal/roadmap", "PUT /api/journal/confirm", "GET /api/journal/members", // the workbook journal (iOS later)
 	}
 	got := make([]string, 0, len(deviceAllowed))
 	for p := range deviceAllowed {
@@ -119,7 +119,7 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 		{"POST", "/api/devices"}, {"GET", "/api/devices"}, {"DELETE", "/api/devices/d_aaaaaaaaaaaa"},
 		{"GET", "/api/fs/read"}, {"POST", "/api/host-transfer/redeem"}, {"GET", "/api/nothing-here"},
 		{"GET", "/debug/pprof/"}, {"GET", "/debug/pprof/cmdline"}, {"GET", "/debug/pprof/heap"}, {"GET", "/debug/pprof/profile"}, {"GET", "/api/debug/execstat"}, // the profiler and the fork counters are the admin's alone
-		{"POST", "/api/journal"}, {"GET", "/api/journal/pin"}, {"DELETE", "/api/journal/pin"}, {"GET", "/api/journal/other"}, // only the five journal routes
+		{"POST", "/api/journal"}, {"PUT", "/api/journal/pin"}, {"GET", "/api/journal/confirm"}, {"DELETE", "/api/journal/confirm"}, {"PUT", "/api/journal/members"}, {"GET", "/api/journal/other"}, // only the five journal routes
 	} {
 		assert.True(t, forbidden(callWith(t, c, r.method, r.path, tok, nil)), "%s %s", r.method, r.path)
 	}
@@ -135,7 +135,7 @@ func TestDeviceScope_RealDaemonRoutes(t *testing.T) {
 		{"GET", "/api/conversations/claude/sid"}, {"POST", "/api/ws-ticket"},
 		{"POST", "/api/agent/upload"},
 		{"GET", "/api/team/paused"}, {"POST", "/api/team/paused/x/release"},
-		{"GET", "/api/journal"}, {"GET", "/api/journal/tasks"}, {"GET", "/api/journal/roadmap"}, {"PUT", "/api/journal/pin"}, {"GET", "/api/journal/members"},
+		{"GET", "/api/journal"}, {"GET", "/api/journal/tasks"}, {"GET", "/api/journal/roadmap"}, {"PUT", "/api/journal/confirm"}, {"GET", "/api/journal/members"},
 	} {
 		assert.False(t, forbidden(callWith(t, c, r.method, r.path, tok, nil)), "%s %s", r.method, r.path)
 	}

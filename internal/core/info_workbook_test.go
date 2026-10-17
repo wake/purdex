@@ -27,10 +27,12 @@ func TestHandleInfo_WorkbookCapabilityFollowsReadiness(t *testing.T) {
 func TestHandleInfo_JournalCapabilityFollowsTheJournalFlag(t *testing.T) {
 	off := &devicesStub{stubModule{name: "workbook"}, map[string]any{"ready": true, "init_error": "", "journal": false}}
 	assert.NotContains(t, infoOf(t, devicesCore(off))["capabilities"], "journal.v1", "journal off")
+	assert.NotContains(t, infoOf(t, devicesCore(off))["capabilities"], "journal.confirm.v1", "journal off")
 	assert.Contains(t, infoOf(t, devicesCore(off))["capabilities"], "workbook.v1", "the workbook itself is still there")
 
 	on := &devicesStub{stubModule{name: "workbook"}, map[string]any{"ready": true, "init_error": "", "journal": true}}
 	assert.Contains(t, infoOf(t, devicesCore(on))["capabilities"], "journal.v1")
+	assert.Contains(t, infoOf(t, devicesCore(on))["capabilities"], "journal.confirm.v1")
 
 	notReady := &devicesStub{stubModule{name: "workbook"}, map[string]any{"ready": false, "init_error": "x", "journal": true}}
 	assert.NotContains(t, infoOf(t, devicesCore(notReady))["capabilities"], "journal.v1", "a module that is not ready announces nothing")

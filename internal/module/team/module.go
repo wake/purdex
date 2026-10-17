@@ -73,6 +73,9 @@ type Module struct {
 	core    *core.Core
 	store   *Store
 	origins OriginResolver
+	// passPresence is the registry read of the liveness pass in progress (nil between passes): leadPresence answers
+	// from it, so a pass reads the peers registry once however many members and leads it asks about (#3092).
+	passPresence atomic.Pointer[presencePass]
 	// responders answers "can anyone remote answer a hook_ask right now?"
 	// (spec §6.6 step 1): the WS half (core.Events.HasSubscribers) in P8a;
 	// the iOS line adds the push registry behind the same interface.
@@ -889,4 +892,21 @@ func (m *Module) wake(id string) {
 	for _, ch := range ws {
 		close(ch)
 	}
+}
+
+// presenceSnapshotter is what the peers OriginResolver adds to OriginResolver: one registry read for a whole pass.
+// A resolver without it is asked per question.
+type presenceSnapshotter interface {
+	PresenceSnapshot() peersmod.PresenceReader
+}
+
+// presencePass boxes a pass's presence reader for the atomic pointer.
+type presencePass struct{ peersmod.PresenceReader }
+
+// leadPresence is origins.LeadPresence, answered from the liveness pass's registry read while one is in progress.
+func (m *Module) leadPresence(sessionID string, pid int, procStart string) peersmod.Presence {
+	if s := m.passPresence.Load(); s != nil {
+		return s.PresenceReader.LeadPresence(sessionID, pid, procStart)
+	}
+	return m.origins.LeadPresence(sessionID, pid, procStart)
 }

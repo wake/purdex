@@ -118,7 +118,8 @@ func (c *Core) capabilityList() []string {
 		out = append(out, "workbook.v1") // GET /api/workbook/conversations/{provider}/{session_id}, GET /api/workbook/entries, workbook.entry / workbook.status events
 		out = append(out, "workbook.v2") // entries' kind / usage / todo_changes, the conversation's todos and refresh_available, GET …/todos, POST …/refresh, workbook.todos / workbook.refresh_available events
 		if c.moduleFlag("workbook", "journal") {
-			out = append(out, "journal.v1") // GET /api/journal, /api/journal/tasks, /api/journal/roadmap, PUT /api/journal/pin, journal.changed events; only while the journal runs ([journal] enabled, and wired)
+			out = append(out, "journal.v1")         // GET /api/journal, /api/journal/tasks, /api/journal/roadmap, journal.changed events (entries carry no pin; pages carry confirms[]); only while the journal runs ([journal] enabled, and wired)
+			out = append(out, "journal.confirm.v1") // PUT /api/journal/confirm {session_id, entry_id, idx, done}: a person checks / unchecks a 待確認 item (manual, Haiku leaves it); same condition as journal.v1
 		}
 		if c.moduleFlag("workbook", "journal_members") {
 			out = append(out, "journal.members.v1") // GET /api/journal/members: the team's current members with their task and last report; only while the journal runs with a team feed

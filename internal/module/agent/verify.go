@@ -16,6 +16,8 @@ import (
 type verifyDecision struct {
 	Accepted bool
 	Reason   string
+	// Info is the process info the verification read for the sender, when it read one; the frame path reuses it.
+	Info *agentpkg.ProcessInfo
 }
 
 var (
@@ -79,7 +81,7 @@ func (m *Module) verifyEvent(req EventRequest) verifyDecision {
 	if !provider.Identify(info) {
 		return verifyDecision{Reason: "identify_mismatch"}
 	}
-	return verifyDecision{Accepted: true}
+	return verifyDecision{Accepted: true, Info: &info}
 }
 
 // resolvePanePID returns the PID of the pane's own current process.
@@ -128,4 +130,13 @@ func writeVerifyRejected(w http.ResponseWriter, req EventRequest, reason string)
 		"status": "rejected",
 		"reason": reason,
 	})
+}
+
+// senderProcessInfo is the sender's process info for the frame path: the one verifyEvent already read for this event when
+// it is for the same pid, otherwise a fresh read (#3092: this used to read, and on darwin fork ps for, the same process twice).
+func (m *Module) senderProcessInfo(req EventRequest) (agentpkg.ProcessInfo, error) {
+	if v := req.verifiedInfo; v != nil && v.PID == req.SenderPID {
+		return *v, nil
+	}
+	return readProcessInfoFn(req.SenderPID)
 }

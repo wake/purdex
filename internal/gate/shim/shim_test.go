@@ -609,7 +609,7 @@ func TestToolsHaveComposerAndNotThePHPRunners(t *testing.T) {
 	for _, tool := range Tools {
 		have[tool] = true
 	}
-	for _, want := range []string{"go", "pnpm", "npx", "vitest", "tsc", "composer"} {
+	for _, want := range []string{"go", "pnpm", "npx", "vitest", "tsc", "composer", "xcodebuild", "swift", "swift-build", "swift-test"} {
 		if !have[want] {
 			t.Errorf("no shim for %s", want)
 		}

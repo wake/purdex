@@ -26,9 +26,11 @@ const gateUsage = `usage: pdx gate [--class heavy|light] [--auto] [--tool <name>
        pdx gate would-wait [--class heavy|light] [--json] [--config <path>]
        pdx gate would-wait --auto [--json] [--config <path>] -- <command…>
        pdx gate would-wait --auto-batch '<[["go","test"],["ls"]]>' [--json] [--config <path>]
+       pdx gate free <heavy|light>-<k> [--yes] [--force] [--config <path>]
        pdx gate set [--profile <name>] [--config <path>] <module>.<key>=<value>
        pdx gate profile use <name> | list [--config <path>]
   --class  the pool to take a slot from (default heavy); --auto classifies the command by its words instead
+  --wait-max  seconds the command may wait for its slot; past them nothing is run and the exit code is 75 (PDX_GATE_ADMITTED_MARK=1 prints a marker on stderr right before the command starts)
   --fg     keep normal priority (no background QoS), for a release gate on an idle host
   --real   the binary to run in place of the command's first word (a shim passes the real one)
   --tool   a shim's call: the command is <name> followed by the words after --; the real binary is looked up on PATH
@@ -36,6 +38,11 @@ const gateUsage = `usage: pdx gate [--class heavy|light] [--auto] [--tool <name>
   hosts    the assist hosts for this session and the repo of this directory: which are on, ready and allowed, and why not (see pdx assist)
   would-wait  would a command of that class (or, with --auto, this command by its words) wait for a slot right now? (fast: no daemon, no process started, takes nothing;
            for a hook that decides whether to run a call in the background). Prints the reason and a line for an agent to read
+  free     end the processes that hold a slot's lock (a slot that stays held after its gate is gone): lists them, asks y, SIGTERM, SIGKILL after 5 s;
+           a slot whose gate is alive is refused unless --force.
+           The processes are those that have the slot's lock file open (lsof): a flock belongs to the open file description, which children share, so
+           an escaped child that kept the file open is what holds the slot; a process that opens the file on its own is not told apart (the short
+           probes of pdx itself, shells and tmux are never ended)
   set      write one setting into [gate] of config.toml (or into [gate.profiles.<name>] with --profile); the gate reads it
            again at the next command and at the next look of every waiting one. Values: 2, true, "text", auto
   profile  use: make a profile the active one (its settings win over [gate]; release is built in: normal priority, go test keeps -count=1); list: the profiles; flags may stand before or after the name
@@ -57,6 +64,8 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 			return gateQueue(args[1:], stdout, stderr)
 		case "conflict":
 			return gateConflict(args[1:], stdout, stderr)
+		case "free":
+			return gateFree(args[1:], stdout, stderr)
 		case "set":
 			return gateSet(args[1:], stdout, stderr)
 		case "hosts":
@@ -75,8 +84,15 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 	real := fs.String("real", "", "binary to run in place of the first word")
 	tool := fs.String("tool", "", "the shim that called: find the real binary behind it")
 	cfgPath := fs.String("config", "", "config.toml (default ~/.config/pdx/config.toml)")
+	waitMax := fs.Float64("wait-max", 0, "seconds the command may wait for its slot; past them it is not run and the exit code is 75")
 	classSource := fs.String("class-source", "", "where --class came from, for the decision record (classifier or kind)")
+	assistHost := fs.String("assist-host", "", "(tests and manual checks) send the command to this assist host instead of running it here")
+	assistSSH := fs.String("assist-ssh", "", "(tests and manual checks) the ssh program for --assist-host")
 	if err := fs.Parse(flags); err != nil {
+		return 2
+	}
+	if *waitMax < 0 {
+		fmt.Fprintf(stderr, "pdx gate: --wait-max must not be negative, got %v\n", *waitMax)
 		return 2
 	}
 	if *classSource != "" && *classSource != classByClassifier && *classSource != classByKind {
@@ -145,7 +161,15 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 	g := gate.New(cfg)
 	g.Stderr = stderr
 	g.Load = gateReloader(*cfgPath, cfg)
-	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Real: realBin, Class: c, ClassSource: *classSource, Foreground: *fg, Stdout: stdout, Stderr: stderr})
+	if *assistHost != "" {
+		res := g.RunAssist(context.Background(), gate.Options{Argv: command, Stdout: stdout, Stderr: stderr}, gate.AssistRun{Host: *assistHost, SSH: *assistSSH})
+		if !res.Started {
+			fmt.Fprintf(stderr, "pdx gate: %v: the command was not run on %s\n", res.Err, *assistHost)
+			return gate.ExitRefused
+		}
+		return res.Code
+	}
+	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Real: realBin, Class: c, ClassSource: *classSource, Foreground: *fg, WaitMax: time.Duration(*waitMax * float64(time.Second)), Stdout: stdout, Stderr: stderr})
 	return code
 }
 

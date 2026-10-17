@@ -65,16 +65,21 @@ func (m *Module) tick() {
 		m.pruneHookLocks()
 		m.pruneAskFlags()
 		m.persistUsage()
+		// One registry read answers every presence question of this pass (#3092).
+		if snap, ok := m.origins.(presenceSnapshotter); ok {
+			m.passPresence.Store(&presencePass{snap.PresenceSnapshot()})
+		}
 		m.endGoneTeams()
 		m.markGoneMembers()
 		m.sweepFreshHalves()          // a fresh half of a session that is gone (RT-3a1)
 		m.settleStuckKillingMembers() // a kill that claimed its member and never ended (#2152)
 		m.markGoneRemoteMembers()     // sessions here that a lead on another host adopted (X2c)
-		m.endUnpairedRemoteMembers()  // a lead host that is no longer paired (§3.2)
-		m.scanUnpaired()              // a host whose pairing is gone: its remote members are gone, its commands dropped (X3a)
-		m.noticeUsage()               // after the gone teams and members are settled: a member at the threshold and idle tells its lead once (P7-1)
-		m.noticeIdle()                // a member idle for RelayIdleMinutes with a large context tells its lead once per idle period (idle relay §3.3)
-		m.settleAsks()                // expire / withdraw relay asks after the settlements above, then resend unsent notices (member relay ask §3.3)
+		m.passPresence.Store(nil)
+		m.endUnpairedRemoteMembers() // a lead host that is no longer paired (§3.2)
+		m.scanUnpaired()             // a host whose pairing is gone: its remote members are gone, its commands dropped (X3a)
+		m.noticeUsage()              // after the gone teams and members are settled: a member at the threshold and idle tells its lead once (P7-1)
+		m.noticeIdle()               // a member idle for RelayIdleMinutes with a large context tells its lead once per idle period (idle relay §3.3)
+		m.settleAsks()               // expire / withdraw relay asks after the settlements above, then resend unsent notices (member relay ask §3.3)
 		// Titles and names change in the registry without a write of ours:
 		// the hash gate in rosterChanged makes the unchanged case a read.
 		m.rosterChanged()
@@ -232,7 +237,7 @@ func (m *Module) endGoneTeams() {
 			m.logf("[team] sweep team %s: its request row: ok=%v err=%v", t.ID, ok, err)
 			continue
 		}
-		if m.origins.LeadPresence(t.LeadSessionID, req.Origin.PID, req.Origin.ProcStart) != peersmod.PresenceGone {
+		if m.leadPresence(t.LeadSessionID, req.Origin.PID, req.Origin.ProcStart) != peersmod.PresenceGone {
 			continue // live, or nothing proves the lead's conversation ended
 		}
 		if m.beforeEndTeam != nil {
@@ -317,7 +322,7 @@ func (m *Module) markGoneMembers() {
 		return
 	}
 	for _, mr := range members {
-		if m.origins.LeadPresence(mr.SessionID, mr.PID, mr.ProcStart) != peersmod.PresenceGone {
+		if m.leadPresence(mr.SessionID, mr.PID, mr.ProcStart) != peersmod.PresenceGone {
 			continue
 		}
 		if m.beforeMarkGone != nil {

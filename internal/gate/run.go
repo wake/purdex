@@ -48,6 +48,7 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 	fails := 0
 	warned := false
 	lastPlace := time.Time{}
+	began := g.Now()         // when the wait began: WaitMax counts from here, whatever the first look took
 	waitStart := time.Time{} // set at the first look that did not get a slot
 	var (
 		pollAt   time.Time              // when the previous poll looked
@@ -98,6 +99,13 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 			tk, err := pool.TryTakeRanked(ticket)
 			if err != nil {
 				return broken(err)
+			}
+			if tk.Slot != nil && o.WaitMax > 0 && g.Now().Sub(began) > o.WaitMax {
+				tk.Slot.Release(nil) // got after the deadline (the look itself waited for the admit lock): it is not run
+				ticket.Drop()
+				g.say("not admitted within %s: the command was not run", o.WaitMax)
+				d.Outcome = "wait-max"
+				return nil, ExitRefused, true
 			}
 			if tk.Slot != nil {
 				ticket.Drop()
@@ -171,12 +179,22 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 				g.say("%s", pressureLine(lastPressure(good), cfg.Admission, good != nil))
 			}
 		}
+		sleep := g.Poll()
+		if o.WaitMax > 0 {
+			left := o.WaitMax - now.Sub(began)
+			if left <= 0 {
+				g.say("not admitted within %s: the command was not run", o.WaitMax)
+				d.Outcome = "wait-max"
+				return nil, ExitRefused, true
+			}
+			sleep = min(sleep, left)
+		}
 		select {
 		case sig := <-sigs:
 			return nil, 128 + signalNumber(sig), true
 		case <-ctx.Done():
 			return nil, 130, true
-		case <-time.After(g.Poll()):
+		case <-time.After(sleep):
 		}
 	}
 }
@@ -357,7 +375,15 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 	if slot != nil {
 		cmd.ExtraFiles = []*os.File{slot.File()}
 	}
+	nonce := envValue(env, AdmittedMarkEnv)
+	if nonce != "" {
+		cmd.Env = withoutEnv(cmd.Env, AdmittedMarkEnv)         // the command must not learn the nonce
+		_, _ = io.WriteString(cmd.Stderr, AdmittedMark(nonce)) // before the start: nothing the command prints can come first
+	}
 	if err := cmd.Start(); err != nil {
+		if nonce != "" {
+			_, _ = io.WriteString(cmd.Stderr, NotStartedMark(nonce))
+		}
 		g.say("%v", err)
 		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
 			return 127, err
@@ -551,5 +577,5 @@ func freeBytes(path string) (int64, error) {
 // waiterInfo is what the gate says about the command it runs, for its ticket and for the record of the slot it takes (a late claim
 // too): the same argv in both, so whoever takes the admit lock next sees what holds the slot.
 func (g *Gate) waiterInfo(o Options) WaiterInfo {
-	return WaiterInfo{PID: g.PID(), Argv: truncateArgv(o.Argv), Cwd: g.cwdOf(o), Session: g.Session}
+	return WaiterInfo{PID: g.PID(), Argv: truncateArgv(o.Argv), Cwd: g.cwdOf(o), Session: g.Session, Tag: tagOf(o)}
 }
