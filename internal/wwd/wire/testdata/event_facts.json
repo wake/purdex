@@ -8,4 +8,4 @@
   "tools": {"go": null, "node": null, "pnpm": null, "php": null, "xcode": null},
   "owner": null, "exceptions": [],
   "derived": {"zone": "unknown", "headroom": {"heavy": 0, "light": 0}, "sessions_room": 0},
-  "worker": {"enabled": false, "slots": {"heavy": 0, "light": 0}, "running": {"heavy": 0, "light": 0}}}}
+  "worker": {"enabled": false, "slots": {"heavy": 0, "light": 0}, "running": {"heavy": 0, "light": 0}, "owner_rule": ""}}}

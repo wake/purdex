@@ -24,34 +24,59 @@ type Options struct {
 	Token                  string
 	WorkerEnabled          bool
 	Sampler                *Sampler // nil: the facts routes are not registered
+	Peers                  []PeerAddr
+	HTTPClient             *http.Client // for forwarding and polling; nil: a client with timeouts that follows no redirect
 }
 
 // Daemon holds the state both HTTP surfaces serve.
 type Daemon struct {
-	opts Options
+	opts   Options
+	broker *Broker
+	pool   *PoolPoller
+	fwd    *http.Client
 }
 
-func New(o Options) *Daemon { return &Daemon{opts: o} }
+func New(o Options) *Daemon {
+	// forwarding may wait for a slow answer; polling must finish inside one interval.
+	// Both carry the pool token, so neither follows a redirect.
+	fwd, poll := o.HTTPClient, o.HTTPClient
+	if fwd == nil {
+		fwd = &http.Client{Timeout: forwardTimeout, CheckRedirect: noRedirect}
+	}
+	if poll == nil {
+		poll = &http.Client{Timeout: peerTimeout, CheckRedirect: noRedirect}
+	}
+	return &Daemon{opts: o, broker: NewBroker(), pool: NewPoolPoller(o.Peers, o.Token, poll), fwd: fwd}
+}
 
-// routes registers the routes available on both surfaces.
-func (d *Daemon) routes(mux *http.ServeMux) {
+// Events is the broker the SSE streams read; the sampler and the queue publish to it.
+func (d *Daemon) Events() *Broker { return d.broker }
+
+// PublishJob announces a job state change on /v1/events (non-blocking; the queue's
+// Options.Publish). Ad-hoc jobs reach the local socket only.
+func (d *Daemon) PublishJob(ev wire.JobEvent) { d.broker.PublishJob(ev) }
+
+// routes registers the routes available on both surfaces. peer is true for TCP.
+func (d *Daemon) routes(mux *http.ServeMux, peer bool) {
 	mux.HandleFunc("GET /v1/info", d.handleInfo)
-	d.factsRoutes(mux)
+	mux.HandleFunc("GET /v1/events", d.handleEvents(peer))
+	d.factsRoutes(mux, peer)
 }
 
 // TCPHandler serves the tailnet/loopback listeners: every request, including
 // unknown paths, needs the pool token. Job submission is not registered here.
 func (d *Daemon) TCPHandler() http.Handler {
 	mux := http.NewServeMux()
-	d.routes(mux)
-	return d.requireToken(mux)
+	d.routes(mux, true)
+	return d.requireToken(rejectHostParam(mux))
 }
 
 // SocketHandler serves the local socket (same user, trusted, no token). It
 // additionally carries the routes that exist only locally.
 func (d *Daemon) SocketHandler() http.Handler {
 	mux := http.NewServeMux()
-	d.routes(mux)
+	d.routes(mux, false)
+	d.poolRoutes(mux)
 	// Submission is local only (spec §4.4); the queue arrives in WWD-3b.
 	mux.HandleFunc("POST /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "job queue not implemented", http.StatusNotImplemented)

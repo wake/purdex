@@ -17,6 +17,9 @@ var deviceAllowed = map[string]bool{
 	"POST /api/ws-ticket": true,
 	"GET /api/hostconfig": true,
 	"GET /api/fleet":      true, // the fleet status (fleet spec §6): the primary / standby answer; the alias list next to it is the admin's
+	// the resource pool (wwd spec §10), read-only: the hosts with their facts, and a host's facts history
+	"GET /api/pool/hosts":         true,
+	"GET /api/pool/facts/history": true,
 	// WebSockets: host events, terminal (and ?mirror=1), conversations
 	"/ws/host-events":                               true,
 	"/ws/terminal/{code}":                           true,

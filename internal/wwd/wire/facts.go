@@ -115,10 +115,14 @@ type Derived struct {
 	SessionsRoom int   `json:"sessions_room"`
 }
 
+// FactsWorker is a host's worker state as every reader sees it. OwnerRule is
+// the same free text as WorkerSettings.owner_rule ("" when the host has no
+// owner rule).
 type FactsWorker struct {
-	Enabled bool  `json:"enabled"`
-	Slots   Slots `json:"slots"`
-	Running Slots `json:"running"`
+	Enabled   bool   `json:"enabled"`
+	Slots     Slots  `json:"slots"`
+	Running   Slots  `json:"running"`
+	OwnerRule string `json:"owner_rule"`
 }
 
 // Validate checks the version and enumerations.
