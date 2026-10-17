@@ -67,6 +67,27 @@ type Prepared struct {
 	Root     string // the repo's top level
 }
 
+// WorkingManifest is the manifest of the repo that holds dir, read from the working tree (what `pdx test --list` shows). A
+// problem with the repo or the file is a UsageError.
+func WorkingManifest(ctx context.Context, dir, gitBin string) (*manifest.Manifest, string, error) {
+	g := &gitRunner{bin: gitBin, dir: dir}
+	if g.bin == "" {
+		g.bin = "git"
+	}
+	root, err := g.run(ctx, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return nil, "", usagef("not inside a git repository: %v", err)
+	}
+	m, err := manifest.Load(filepath.Join(root, ManifestPath))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, root, usagef("%s has no %s", root, ManifestPath)
+		}
+		return nil, root, usagef("%v", err)
+	}
+	return m, root, nil
+}
+
 // Prepare reads the manifest, validates the request and takes the snapshot.
 func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 	g := &gitRunner{bin: req.Git, dir: req.Dir}

@@ -102,6 +102,8 @@ func main() {
 		runHost(os.Args[2:])
 	case "gate":
 		runGate(os.Args[2:])
+	case "test":
+		runTest(os.Args[2:])
 	case "watch":
 		runWatch(os.Args[2:])
 	case "assist":

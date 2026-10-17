@@ -32,6 +32,13 @@ var ErrNotLocal = errors.New("fastlane: the task does not allow the local fast l
 // ErrLocksBusy: another job on this host holds a lock the task needs. The caller sends the task through the queue.
 var ErrLocksBusy = errors.New("fastlane: a lock of the task is held by another job on this host")
 
+// ArgError: the arguments do not fit the task (a file that is not there, a path that leaves the tree, a flag where a file is
+// expected). Nothing was run.
+type ArgError struct{ Err error }
+
+func (e *ArgError) Error() string { return e.Err.Error() }
+func (e *ArgError) Unwrap() error { return e.Err }
+
 // ExitTimeout is the exit status for a command that ran out of time (spec §8.1).
 const ExitTimeout = 124
 
@@ -124,7 +131,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		Exists: func(rel string) bool { return submit.TreeFileExists(req.Root, rel) },
 	})
 	if err != nil {
-		return fail(err)
+		return fail(&ArgError{Err: err})
 	}
 
 	env := withTaskEnv(req.Env, task.Env)
