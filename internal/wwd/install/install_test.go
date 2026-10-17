@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -119,6 +120,22 @@ func TestPlist(t *testing.T) {
 	}
 	if !strings.HasPrefix(p, "<?xml") {
 		t.Error("not a plist document")
+	}
+}
+
+// macOS's own parser has the last word on whether the plist is well formed.
+func TestPlistPassesPlutilLint(t *testing.T) {
+	plutil, err := exec.LookPath("plutil")
+	if err != nil {
+		t.Skip("no plutil on this host")
+	}
+	p := filepath.Join(t.TempDir(), "gs.wake.wwd.plist")
+	text := Plist(PlistOpts{Label: Label, Binary: "/Users/a&b/bin/wwd", Config: "/Users/a&b/c.toml", Log: "/Users/a&b/l.log", Path: "/opt/homebrew/bin:/usr/bin"})
+	if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(plutil, "-lint", p).CombinedOutput(); err != nil {
+		t.Fatalf("plutil -lint: %v: %s", err, out)
 	}
 }
 
