@@ -366,7 +366,7 @@ func (m *Module) sweepUnattended(why string) (approved, pending, refused int) {
 		return 0, 0, 0
 	}
 	for _, a := range open {
-		if team.UnattendedRefusable(a.Kind) {
+		if team.UnattendedRefusable(a.Kind) || agentSpawnCard(a) {
 			// An agent's lead or adopt request is not approved while unattended (RT-1b): it is refused, with the reason the
 			// requester's CLI turns into the text. A person's typed command never reaches here: it is approved at its create.
 			if _, won, err := m.closeAs(a.ID, Close{State: team.StateCancelled, DecidedAt: m.now(), Reason: team.ErrUnattendedRefused}); err != nil {
@@ -432,4 +432,14 @@ func (m *Module) reconcileUnattended(open []team.Approval) {
 		return
 	}
 	m.forgetClosedRefusals(still)
+}
+
+// agentSpawnCard is an open spawn_resources card of an agent's spawn: the switch-on sweep refuses it like a lead or adopt request
+// (RT-5a). A card of the person's own /team spawn is left for the person.
+func agentSpawnCard(a team.Approval) bool {
+	if a.Kind != team.KindSpawnResources {
+		return false
+	}
+	var p team.SpawnResourcesPayload
+	return json.Unmarshal(a.Payload, &p) != nil || !p.Person
 }

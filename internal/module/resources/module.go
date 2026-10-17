@@ -328,6 +328,21 @@ func (m *Module) LatestHost() (resources.HostUse, bool) {
 	return snap.Host, true
 }
 
+// LatestHostDetail is LatestHost with the held leases and the queue (resources.HostDetailReader). The host figures are the
+// published snapshot's; the lease lists are read from resources.db now (three small reads), so call it when a person is about to
+// be asked, not per request. A failed lease read leaves the lists empty: the zone stands on its own. ok is false before a usable
+// sample, as LatestHost.
+func (m *Module) LatestHostDetail() (resources.HostDetail, bool) {
+	snap := m.latest.Load()
+	if snap == nil || !snap.Available {
+		return resources.HostDetail{}, false
+	}
+	cp := *snap
+	cp.Leases, cp.Waiters = nil, nil
+	m.addLeases(&cp)
+	return resources.HostDetail{Host: cp.Host, Leases: cp.Leases, Waiters: cp.Waiters}, true
+}
+
 // openStore opens resources.db in the data dir. A failure is logged and
 // leaves m.store nil (measure-only); the daemon never fails for it.
 func (m *Module) openStore(c *core.Core) {

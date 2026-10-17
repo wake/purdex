@@ -154,6 +154,11 @@ func (m *Module) acceptSpawn(w http.ResponseWriter, req team.SpawnRequest, origi
 		if stored != hash {
 			return fail(http.StatusConflict, team.ErrIDConflict, "id already used by a different spawn")
 		}
+		if row.State == team.SpawnAwaitingResources { // the client is still polling: its card stays alive (abandoned when it stops)
+			if err := m.store.RenewLease(row.ID, m.now()+team.LeaseS*1000); err != nil {
+				m.logf("[team] spawn %s: renew its card: %v", row.ID, err)
+			}
+		}
 		return row, true
 	}
 	person := req.PersonToken != ""
@@ -186,10 +191,29 @@ func (m *Module) acceptSpawn(w http.ResponseWriter, req team.SpawnRequest, origi
 		m.afterSpawnTeamRead()
 	}
 	now := m.now()
-	row, _, inserted, err := m.store.AcceptSpawnOp(spawnRow{ID: req.ID, TeamID: t.ID, HostID: m.hostID(),
+	// The host zone (spec §4.6): warning or danger asks the person first, or refuses an agent's spawn while unattended.
+	cardPayload := m.spawnResourcesPayload(req, cwd, person)
+	if cardPayload != nil && !person && m.unattendedOn() {
+		return fail(http.StatusConflict, team.ErrUnattendedRefused, team.UnattendedRefusedText)
+	}
+	op := spawnRow{ID: req.ID, TeamID: t.ID, HostID: m.hostID(),
 		OriginSessionID: origin.SessionID, Cwd: cwd, Title: req.Title, Model: req.Model, Effort: req.Effort,
 		TmuxName: name, Step: team.StepAccepted, State: team.SpawnRunning, CreatedAt: now, UpdatedAt: now,
-		TaskSubject: taskSubjectOf(req.Task), TaskDescription: taskDescriptionOf(req.Task), TaskDoneJSON: taskDoneJSONOf(req.Task), Person: person}, hash)
+		TaskSubject: taskSubjectOf(req.Task), TaskDescription: taskDescriptionOf(req.Task), TaskDoneJSON: taskDoneJSONOf(req.Task), Person: person}
+	var (
+		row      spawnRow
+		inserted bool
+		card     team.Approval
+	)
+	if cardPayload == nil {
+		row, _, inserted, err = m.store.AcceptSpawnOp(op, hash)
+	} else {
+		var cardHash string
+		if card, cardHash, err = m.spawnCardRow(req.ID, origin, cardPayload, now); err == nil {
+			op.State = team.SpawnAwaitingResources
+			row, _, inserted, err = m.store.AcceptSpawnOpWithCard(op, hash, card, cardHash)
+		}
+	}
 	switch {
 	case errors.Is(err, ErrSpawnNotLead):
 		return fail(http.StatusConflict, team.ErrNotLead, "this session no longer leads team "+t.ID)
@@ -207,6 +231,11 @@ func (m *Module) acceptSpawn(w http.ResponseWriter, req team.SpawnRequest, origi
 	}
 	m.logf("[team] spawn %s accepted: team %s, %s in %s", row.ID, t.ID, row.TmuxName, row.Cwd)
 	m.rosterChanged() // the accept is committed: a starting spawn takes a seat (in_use)
+	if cardPayload != nil {
+		m.logf("[team] spawn %s waits for the person: host zone %s (mem %.0f%%, pressure %d)", row.ID, cardPayload.Zone, cardPayload.MemPct, cardPayload.Pressure)
+		m.broadcast("opened", &card)
+		return row, true // no runner until the card is approved
+	}
 	m.startSpawn(row.ID)
 	return row, true
 }
@@ -239,7 +268,7 @@ func (m *Module) awaitSpawn(ctx context.Context, id string) (spawnRow, error) {
 	ch := m.addWaiter(id)
 	defer m.removeWaiter(id, ch)
 	row, ok, err := m.store.GetSpawnOp(id)
-	if err == nil && ok && row.State == team.SpawnRunning {
+	if err == nil && ok && (row.State == team.SpawnRunning || row.State == team.SpawnAwaitingResources) {
 		t := time.NewTimer(m.spawnWait)
 		defer t.Stop()
 		select {
@@ -265,6 +294,17 @@ func (m *Module) spawnView(r spawnRow, leadAddress string) (team.SpawnOp, error)
 		LeadAddress: leadAddress, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}
 	if r.State == team.SpawnFailed && r.Reason == team.SpawnReasonStartTimeout {
 		op.Detail = m.startTimeoutDetail(r)
+	}
+	if r.State == team.SpawnFailed && r.Reason == team.ErrUnattendedRefused {
+		op.Detail = team.UnattendedRefusedText
+	}
+	if r.State == team.SpawnAwaitingResources {
+		if a, ok, err := m.store.Get(r.ID); err == nil && ok {
+			var p team.SpawnResourcesPayload
+			if json.Unmarshal(a.Payload, &p) == nil {
+				op.Resources = &p
+			}
+		}
 	}
 	if r.State != team.SpawnDone {
 		return op, nil

@@ -28,6 +28,9 @@ const (
 	SpawnReasonLaunchFailed = "launch_failed"         // the launch line was not sent; the session was killed
 	SpawnReasonNameTaken    = "tmux_name_taken"       // SpawnTmuxName(id) existed before this op created it
 	SpawnReasonAbandoned    = "abandoned"             // boot found the op's tmux session gone mid-spawn
+	SpawnReasonDenied       = "spawn_denied"          // the person said no to the resource card (CLI exit 10)
+	SpawnReasonTimeout      = "spawn_timeout"         // the resource card timed out (CLI exit 11)
+	SpawnReasonCLIGone      = "spawn_abandoned"       // the resource card was abandoned: the CLI stopped polling
 )
 
 // MemberState is a member row's state (spec §7.3).
@@ -57,8 +60,11 @@ type SpawnState string
 
 const (
 	SpawnRunning SpawnState = "running"
-	SpawnDone    SpawnState = "done"   // Member is set
-	SpawnFailed  SpawnState = "failed" // Reason is set
+	// SpawnAwaitingResources: the host is in the warning or danger zone and a spawn_resources card waits for the person
+	// (RT-5a). The op holds its seat; nothing has been started.
+	SpawnAwaitingResources SpawnState = "awaiting_resources"
+	SpawnDone              SpawnState = "done"   // Member is set
+	SpawnFailed            SpawnState = "failed" // Reason is set
 )
 
 // Spawn steps: SpawnOp.Step, how far a spawn got. Persisted after each
@@ -262,8 +268,10 @@ type SpawnOp struct {
 	LeadAddress string     `json:"lead_address,omitempty"` // for the brief's first line (§7.2)
 	TaskID      string     `json:"task_id,omitempty"`      // done only: the display id of the task the spawn created (T-2)
 	Member      *Member    `json:"member,omitempty"`       // done only
-	CreatedAt   int64      `json:"created_at"`             // unix ms
-	UpdatedAt   int64      `json:"updated_at"`             // unix ms
+	// Resources: awaiting_resources only - the host as the resource card shows it (RT-5a), for the CLI to say why it waits.
+	Resources *SpawnResourcesPayload `json:"resources,omitempty"`
+	CreatedAt int64                  `json:"created_at"` // unix ms
+	UpdatedAt int64                  `json:"updated_at"` // unix ms
 }
 
 // KillRequest is POST /api/team/kill.

@@ -18,7 +18,35 @@ const (
 	// KindMemberRelay is the approval a lead's member relay waits on when the lead's pool is spent (RQ-2). RQ-2a is its
 	// state machine; no path opens such a row until RQ-2b, and an older SPA skips an unknown kind row by row.
 	KindMemberRelay Kind = "member_relay"
+	// KindSpawnResources is the card a spawn waits on when the host is in the warning or danger zone (RT-5a, spec §4.6). Its
+	// id is the spawn op's id. It is never auto-approved: a person decides, or it times out.
+	KindSpawnResources Kind = "spawn_resources"
 )
+
+// SpawnResourcesDeadlineS is the life of a spawn_resources card: it closes before `pdx spawn`'s 9-minute wait gives up (S-5).
+const SpawnResourcesDeadlineS = 480
+
+// SpawnResourcesPayload is Approval.Payload for KindSpawnResources: what the person is asked to let through and the host as it
+// was when the spawn asked. The figures are the resources sample's; Leases and Queue are short labels of the heavy leases held
+// and waiting.
+type SpawnResourcesPayload struct {
+	SpawnID   string   `json:"spawn_id"`
+	Zone      string   `json:"zone"` // warning | danger
+	Trend     string   `json:"trend,omitempty"`
+	ZoneSince int64    `json:"zone_since,omitempty"` // unix ms
+	MemPct    float64  `json:"mem_pct"`
+	Pressure  int      `json:"pressure"` // 1, 2 or 4; 0 unknown
+	Load1     float64  `json:"load1"`
+	NCPU      int      `json:"ncpu"`
+	Leases    []string `json:"leases,omitempty"`
+	Queue     []string `json:"queue,omitempty"`
+	Cwd       string   `json:"cwd"`
+	Title     string   `json:"title,omitempty"`
+	Model     string   `json:"model,omitempty"`
+	Effort    string   `json:"effort,omitempty"`
+	// Person: the spawn was the person's own /team spawn (it is never refused by the unattended switch).
+	Person bool `json:"person,omitempty"`
+}
 
 type State string
 
