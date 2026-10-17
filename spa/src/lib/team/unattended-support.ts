@@ -37,6 +37,7 @@ export function startUnattendedSupport(): () => void {
     useWorkbookStore.getState().fence(hostId) // same for the workbook: a new connection generation, support unknown until this answer
     useJournalStore.getState().fence(hostId) // and the journal: unknown until this answer, but its sticky last answer stays
     useJournalMembersStore.getState().fence(hostId) // and the member lines' gate
+    useRelayQuotaStore.getState().fence(hostId) // and the quota reads: a read out over the last connection writes nothing
     fetchHostInfo(hostId).then(
       (info) => {
         if (current.get(hostId) !== generation) return
@@ -109,6 +110,7 @@ export function startUnattendedSupport(): () => void {
           useWorkbookStore.getState().fence(hostId) // the connection is gone: requests still out must not land
           useJournalStore.getState().fence(hostId) // unknown now; the sticky answer stays so the journal UI does not flash back
           useJournalMembersStore.getState().fence(hostId)
+          useRelayQuotaStore.getState().fence(hostId) // a quota read out over this connection must not land either
         }
         continue
       }
