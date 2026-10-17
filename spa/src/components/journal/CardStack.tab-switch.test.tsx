@@ -36,10 +36,10 @@ const heightOf = (el: Element) => el.querySelectorAll('[data-testid="journal-ent
 const maxTop = (el: Element) => Math.max(0, heightOf(el) - VIEW)
 
 const AT = new Date(2026, 9, 14, 9, 0).getTime()
-const taskEntry = (n: number): JournalEntry => ({ id: `t${String(n).padStart(3, '0')}`, kind: 'task_new', by: '', at: AT + n * 60_000, actor: 'Adam', text: `#${n} task ${n}`, refs: [], items: [], detail: '', pinned: false })
+const taskEntry = (n: number): JournalEntry => ({ id: `t${String(n).padStart(3, '0')}`, kind: 'task_new', by: '', at: AT + n * 60_000, actor: 'Adam', text: `#${n} task ${n}`, refs: [], items: [], detail: '' })
 const TASKS = Array.from({ length: 12 }, (_, i) => taskEntry(i + 1))
 const CONFIRM: JournalEntry = {
-  id: 'c1', kind: 'confirm', by: '', at: AT + 99 * 60_000, actor: 'Kenji → Wake', text: 'decide', refs: [], pinned: true,
+  id: 'c1', kind: 'confirm', by: '', at: AT + 99 * 60_000, actor: 'Kenji → Wake', text: 'decide', refs: [],
   items: [{ text: 'q1', done: false }], detail: 'the original question',
 }
 const SOLO_A = { kind: 'solo' as const, id: 'a', label: 'Solo A' }
@@ -105,8 +105,8 @@ beforeEach(() => {
     }))
   })
   setJournalHost(HOST, true)
-  seedUnit(HOST, 'SA', SOLO_A, { entries: TASKS, pinned: [CONFIRM], openConfirms: 1, tasks: [], roadmap: [] })
-  seedUnit(HOST, 'SB', SOLO_B, { entries: TASKS, pinned: [], tasks: [], roadmap: [] })
+  seedUnit(HOST, 'SA', SOLO_A, { entries: TASKS, confirms: [CONFIRM], openConfirms: 1, tasks: [], roadmap: [] })
+  seedUnit(HOST, 'SB', SOLO_B, { entries: TASKS, confirms: [], tasks: [], roadmap: [] })
   patchViewMemo(HOST, 'solo:a', { journalOpen: true, widths: { journal: 480, roadmap: 380, tasks: 400 } })
   setActive('a')
 })
@@ -123,7 +123,7 @@ function arrange() {
   fireEvent.click(screen.getByTestId('journal-filter-task'))
   stream().scrollTop = 40
   fireEvent.scroll(stream())
-  fireEvent.click(within(screen.getByTestId('journal-pinned-band')).getByTestId('journal-row-open'))
+  fireEvent.click(within(screen.getByTestId('journal-confirm-band')).getByTestId('journal-row-open'))
 }
 
 /** Everything `arrange` made, as the screen shows it. */
@@ -179,6 +179,21 @@ describe('the card stack across tab switches', () => {
   })
 })
 
+describe('固定 across tab switches and a remount', () => {
+  it('a fixed card is still fixed after switching away and back (an outside click then keeps it), and the stack remounting keeps it too', () => {
+    const r = render(<Shell />)
+    fireEvent.click(screen.getByTestId('journal-card-fix'))
+    awayAndBack()
+    expect(screen.getByTestId('journal-card-fix').getAttribute('aria-pressed')).toBe('true')
+    r.rerender(<Shell stack={false} />)
+    r.rerender(<Shell stack />)
+    expect(screen.getByTestId('journal-card-fix').getAttribute('aria-pressed')).toBe('true')
+    fireEvent.pointerDown(document.body)
+    expect(q('journal-card')).toBeTruthy()
+    expect(readViewMemo(HOST, 'solo:b').fixed.journal).toBe(false)
+  })
+})
+
 describe('the card stack unmounted and mounted again', () => {
   it('hiding the whole stack and showing it again restores the same arrangement', () => {
     const r = render(<Shell />)
@@ -196,5 +211,31 @@ describe('the card stack unmounted and mounted again', () => {
     r.rerender(<Shell stack />)
     setActive('a')
     expectArranged()
+  })
+})
+
+describe('the detail kept after its last item was answered', () => {
+  /** The server answered the last item: the entry is gone from the band and was never in the stream. */
+  const answered = () => act(() => { seedUnit(HOST, 'SA', SOLO_A, { entries: TASKS, confirms: [], openConfirms: 0, tasks: [], roadmap: [] }) })
+  const openDetail = () => fireEvent.click(within(screen.getByTestId('journal-confirm-band')).getByTestId('journal-row-open'))
+
+  it('survives the stack remounting and a switch away and back', () => {
+    const r = render(<Shell />)
+    openDetail()
+    answered()
+    expect(screen.getByTestId('journal-detail-card').textContent).toContain('the original question')
+    r.rerender(<Shell stack={false} />)
+    r.rerender(<Shell stack />)
+    expect(screen.getByTestId('journal-detail-card').textContent).toContain('the original question')
+    awayAndBack()
+    expect(screen.getByTestId('journal-detail-card').textContent).toContain('the original question')
+  })
+  it('another unit holding the same entry id never shows this unit\'s copy', () => {
+    render(<Shell />)
+    openDetail()
+    answered()
+    setActive('b')
+    act(() => patchViewMemo(HOST, 'solo:b', { journalOpen: true, detailId: 'c1' }))
+    expect(q('journal-detail-card')).toBeNull()
   })
 })

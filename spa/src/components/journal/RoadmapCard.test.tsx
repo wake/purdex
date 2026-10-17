@@ -8,7 +8,7 @@ vi.mock('../../lib/journal/api', () => ({
   getJournal: vi.fn(),
   getTasks: vi.fn(),
   getRoadmap: (...a: unknown[]) => getRoadmap(...a),
-  setPinned: vi.fn(),
+  setConfirmItem: vi.fn(),
 }))
 vi.mock('../team/TeamSeatIcon', () => ({
   TeamSeatIcon: () => <span data-testid="seat-icon" />,

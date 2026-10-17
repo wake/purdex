@@ -68,11 +68,30 @@ describe('entries order', () => {
     expect(unit().more).toBe(false)
   })
 
-  it('the pinned band is newest first by at, equal times by id (descending)', async () => {
+  it('the band (old daemon: pinned[]) is newest first by at, equal times by id (descending)', async () => {
     getJournal.mockResolvedValue(page({ pinned: [wireConfirm('p1', { at: T0 }), wireConfirm('p3', { at: T0 + 5 }), wireConfirm('p2', { at: T0 })], open_confirms: 3 }))
     await st().loadJournal('h1', 's1')
-    expect(unit().pinned.map((e) => e.id)).toEqual(['p3', 'p2', 'p1'])
+    expect(unit().confirms.map((e) => e.id)).toEqual(['p3', 'p2', 'p1'])
     expect(unit().openConfirms).toBe(3)
+  })
+
+  it('with journal.confirm.v1 the band is confirms[], not pinned[]; without it, pinned[]', async () => {
+    const wire = { confirms: [wireConfirm('k1', { at: T0 })], pinned: [wireConfirm('p1', { at: T0 })], open_confirms: 1 }
+    getJournal.mockResolvedValue(page(wire))
+    st().setSupport('h1', true, true)
+    await st().loadJournal('h1', 's1')
+    expect(unit().confirms.map((e) => e.id)).toEqual(['k1'])
+    st().reset()
+    getJournal.mockResolvedValue(page(wire))
+    st().setSupport('h1', true, false)
+    await st().loadJournal('h1', 's1')
+    expect(unit().confirms.map((e) => e.id)).toEqual(['p1'])
+  })
+  it('a daemon that declares the capability but sent no confirms[] falls back to pinned[]', async () => {
+    getJournal.mockResolvedValue(page({ pinned: [wireConfirm('p1')], open_confirms: 1 }))
+    st().setSupport('h1', true, true)
+    await st().loadJournal('h1', 's1')
+    expect(unit().confirms.map((e) => e.id)).toEqual(['p1'])
   })
 })
 

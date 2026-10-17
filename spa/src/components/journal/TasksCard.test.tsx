@@ -9,7 +9,7 @@ vi.mock('../../lib/journal/api', () => ({
   getJournal: vi.fn(),
   getTasks: (...a: unknown[]) => getTasks(...a),
   getRoadmap: vi.fn(),
-  setPinned: vi.fn(),
+  setConfirmItem: vi.fn(),
 }))
 vi.mock('../team/TeamSeatIcon', () => ({
   TeamSeatIcon: () => <span data-testid="seat-icon" />,
@@ -45,7 +45,7 @@ import type { JournalEntry, JournalTask } from '../../lib/journal/types'
 
 const AT = new Date(2026, 9, 14, 14, 5).getTime()
 const entry = (id: string, over: Partial<JournalEntry> = {}): JournalEntry => ({
-  id, kind: 'exec', by: '', at: AT, actor: 'Adam', text: `text ${id}`, refs: [], items: [], detail: '', pinned: false, ...over,
+  id, kind: 'exec', by: '', at: AT, actor: 'Adam', text: `text ${id}`, refs: [], items: [], detail: '', ...over,
 })
 const task = (number: string, title: string, state: JournalTask['state'], over: Partial<JournalTask> = {}): JournalTask => ({ number, title, state, owner: '', refs: [], detail: '', ...over })
 

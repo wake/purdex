@@ -2,6 +2,8 @@
 // matching the real J-1e answer later means editing this file and parse.ts only. J-1e is not built yet: every shape below is
 // the contract as the plans state it (assumptions are marked ASSUMED), and the fixtures in the tests are written from it.
 export const JOURNAL_CAPABILITY = 'journal.v1'
+/** Hand checks (`PUT /api/journal/confirm`) and the page's `confirms[]` band (JV-1a). */
+export const JOURNAL_CONFIRM_CAPABILITY = 'journal.confirm.v1'
 /** `GET /api/journal/members` (JV-1c; journal-v5 spec §4.3): what the team panel's member rows show on their 2nd and 3rd line. */
 export const JOURNAL_MEMBERS_CAPABILITY = 'journal.members.v1'
 
@@ -39,7 +41,6 @@ export interface JournalEntry {
   items: ConfirmItem[]
   /** 待確認 only: the original question text. */
   detail: string
-  pinned: boolean
 }
 
 export interface JournalPage {
@@ -48,7 +49,9 @@ export interface JournalPage {
   personName: string
   /** Oldest first (the daemon sorts by (at, id); the store sorts again). */
   entries: JournalEntry[]
-  /** Newest first. */
+  /** The open 待確認 of the whole unit, newest first (`confirms[]`); null = the daemon sent none (it predates journal.confirm.v1). */
+  confirms: JournalEntry[] | null
+  /** Newest first. The pre-confirm.v1 band: the band's source ONLY when the host does not declare journal.confirm.v1; otherwise ignored. */
   pinned: JournalEntry[]
   /** There are older months before the oldest entry of this page. */
   more: boolean

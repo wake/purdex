@@ -24,7 +24,7 @@ export const setJournalHost = (hostId: string, yes: boolean | null): void => {
 export function seedUnit(hostId: string, sessionId: string, unit: JournalUnit, over: Partial<UnitState> = {}): string {
   const key = `${unit.kind}:${unit.id}`
   const u: UnitState = {
-    unit, project: { name: 'purdex', remoteUrl: '' }, personName: 'Wake', entries: [], pinned: [], more: false, openConfirms: 0,
+    unit, project: { name: 'purdex', remoteUrl: '' }, personName: 'Wake', entries: [], confirms: [], more: false, openConfirms: 0,
     tasks: null, roadmap: null, staleAt: { entries: 0, tasks: 0, roadmap: 0 }, readAt: { entries: 1, tasks: 1, roadmap: 1 }, touched: 1, ...over,
   }
   useJournalStore.setState((s) => {

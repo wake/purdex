@@ -55,7 +55,7 @@ function JournalCardButton({ target }: { target: JournalTarget }) {
   const open = memo.journalOpen
   const label = tr(open ? 'journal.journal.close' : 'journal.journal.open')
   return (
-    <div data-testid="journal-journal-wrap" className="shrink-0 flex items-center mr-0.5" style={NO_DRAG}>
+    <div data-testid="journal-journal-wrap" data-journal-keep="" className="shrink-0 flex items-center mr-0.5" style={NO_DRAG}>
       <button
         type="button"
         data-testid="journal-journal-button"
