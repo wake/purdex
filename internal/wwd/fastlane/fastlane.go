@@ -1,0 +1,279 @@
+// Package fastlane is the local fast lane of `pdx test` (spec §5.2): a task that allows it runs at once in the caller's own
+// working tree — no snapshot, no queue, no other host — holding one of the gate's light slots, and leaves a job record with the
+// result. Single-file tests always take this lane and never leave the host (D12). The job is registered with the local wwd
+// before the command starts, so the locks it holds are visible to the worker on this host (§4.1, §5 Locks), and a lock that is
+// busy sends the call to the normal queue instead of failing it.
+package fastlane
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync/atomic"
+	"time"
+
+	"github.com/wake/purdex/internal/gate"
+	"github.com/wake/purdex/internal/wwd/manifest"
+	"github.com/wake/purdex/internal/wwd/run"
+	"github.com/wake/purdex/internal/wwd/submit"
+	"github.com/wake/purdex/internal/wwd/summary"
+	"github.com/wake/purdex/internal/wwd/wire"
+)
+
+// ErrNotLocal: the task, or this many arguments, may not take the fast lane (the manifest's `local`).
+var ErrNotLocal = errors.New("fastlane: the task does not allow the local fast lane for these arguments")
+
+// ErrLocksBusy: another job on this host holds a lock the task needs. The caller sends the task through the queue.
+var ErrLocksBusy = errors.New("fastlane: a lock of the task is held by another job on this host")
+
+// ExitTimeout is the exit status for a command that ran out of time (spec §8.1).
+const ExitTimeout = 124
+
+// Gater runs a command under a gate slot; *gate.Gate is one.
+type Gater interface {
+	Run(ctx context.Context, o gate.Options) (int, error)
+}
+
+// Recorder registers a fast-lane run with the local wwd (its fast-lane entry checks the locks against every job on this host
+// and records the run as running). Register returns ErrLocksBusy when a lock is taken.
+type Recorder interface {
+	Register(ctx context.Context, body submit.Body) (Handle, error)
+}
+
+// Handle is one registered run. Its lease is renewed like a worker's (spec §4.2): a lease that cannot be renewed ends the
+// command, and a lease that lapses is never requeued (a local run is not run again by a worker).
+type Handle interface {
+	JobID() string
+	// Lease is how long a renewal keeps the run; RenewEvery how often to renew.
+	Lease() time.Duration
+	RenewEvery() time.Duration
+	// Heartbeat renews the lease; cancel is true when the job was cancelled (pdx jobs cancel).
+	Heartbeat(ctx context.Context) (cancel bool, err error)
+	// Finish stores the outcome; the log file is uploaded with it.
+	Finish(ctx context.Context, o Outcome) error
+}
+
+// Outcome is what a finished run reports to its record.
+type Outcome struct {
+	State      wire.JobState
+	Exit       *int
+	Summary    wire.Summary
+	Reason     string
+	LogPath    string
+	StartedAt  time.Time
+	FinishedAt time.Time
+}
+
+// Request is one fast-lane run.
+type Request struct {
+	Root string         // the repo's top level (the caller's working tree)
+	Task *manifest.Task // the declared task
+	Args []string
+	// Body is the record to register (submit.Prepare with Local set).
+	Body submit.Body
+	Gate Gater
+	// Recorder may be nil: the run is then not recorded and holds no lock.
+	Recorder Recorder
+	Env      []string // the caller's environment; the command keeps it (warm caches are the point of the lane)
+	// OutDir holds the log and report files; a temporary directory when empty (removed by the caller via Result.Cleanup).
+	OutDir string
+	Stdin  *os.File
+}
+
+// Result is how the run ended.
+type Result struct {
+	JobID    string
+	State    wire.JobState
+	Exit     int // the command's exit status; ExitTimeout when it ran out of time
+	Summary  wire.Summary
+	Reason   string
+	LogPath  string
+	Err      error // a failure of the lane itself (the gate refused, the record could not be made): no test result
+	Cleanup  func()
+	SumErr   error // why the summary could not be built, when it could not
+	FinishAt time.Time
+}
+
+// Run runs the task in req.Root now. ErrNotLocal and ErrLocksBusy come back as the error with nothing run.
+func Run(ctx context.Context, req Request) (Result, error) {
+	task := req.Task
+	if !task.Local.Permits(len(req.Args)) {
+		return Result{}, ErrNotLocal
+	}
+	out := req.OutDir
+	cleanup := func() {}
+	if out == "" {
+		d, err := os.MkdirTemp("", "wwd-fastlane-")
+		if err != nil {
+			return Result{}, err
+		}
+		out = d
+		cleanup = func() { os.RemoveAll(d) }
+	}
+	res := Result{Cleanup: cleanup}
+	fail := func(err error) (Result, error) { cleanup(); return Result{}, err }
+
+	report, junit := filepath.Join(out, "report.json"), filepath.Join(out, "junit.xml")
+	argv, err := task.Render(req.Args, manifest.RenderEnv{
+		Workspace: out, Report: report, Junit: junit,
+		Exists: func(rel string) bool {
+			st, err := os.Stat(filepath.Join(req.Root, filepath.FromSlash(rel)))
+			return err == nil && st.Mode().IsRegular()
+		},
+	})
+	if err != nil {
+		return fail(err)
+	}
+
+	env := req.Env
+	var handle Handle
+	if req.Recorder != nil {
+		h, err := req.Recorder.Register(ctx, req.Body)
+		if err != nil {
+			return fail(err)
+		}
+		handle = h
+		res.JobID = h.JobID()
+		env = withMark(env, h.JobID())
+	}
+
+	cp, err := run.OpenCapture(filepath.Join(out, "log"), filepath.Join(out, "stdout"), 0)
+	if err != nil {
+		finishFailed(handle, "infra", time.Now())
+		return fail(err)
+	}
+	runCtx, stop := context.WithTimeout(ctx, task.Timeout)
+	defer stop()
+	// The lease: renewed while the command runs; cancelled by the origin or not renewable for a whole lease ends the command.
+	var cancelled, leaseLost atomic.Bool
+	hbCtx, hbStop := context.WithCancel(context.WithoutCancel(ctx))
+	hbDone := make(chan struct{})
+	if handle != nil {
+		go func() {
+			defer close(hbDone)
+			heartbeat(hbCtx, handle, &cancelled, &leaseLost, stop)
+		}()
+	} else {
+		close(hbDone)
+	}
+	started := time.Now()
+	code, gateErr := req.Gate.Run(runCtx, gate.Options{
+		Argv: argv, Class: gate.ClassLight, ClassSource: "kind", Env: env,
+		Dir: filepath.Join(req.Root, filepath.FromSlash(task.Cwd)), Stdin: nil,
+		Stdout: cp.Stdout(), Stderr: cp.Stderr(),
+	})
+	finished := time.Now()
+	hbStop()
+	<-hbDone
+	tail, _, capErr := cp.Close()
+	res.FinishAt, res.LogPath, res.Exit = finished, filepath.Join(out, "log"), code
+
+	switch {
+	case leaseLost.Load():
+		res.State, res.Reason, res.Exit = wire.StateFailed, "lost", -1
+	case ctx.Err() != nil || cancelled.Load():
+		res.State, res.Reason, res.Exit = wire.StateCancelled, "", -1
+	case runCtx.Err() != nil:
+		res.State, res.Reason, res.Exit = wire.StateFailed, "timeout", ExitTimeout
+	case gateErr != nil || code == gate.ExitRefused || code == gate.ExitOrphaned:
+		res.State, res.Reason = wire.StateFailed, "infra"
+		res.Err = gateErr
+		if res.Err == nil {
+			res.Err = fmt.Errorf("the gate did not run the command (exit %d)", code)
+		}
+	case code == 0:
+		res.State = wire.StateSucceeded
+	default:
+		res.State = wire.StateFailed
+	}
+	if capErr != nil && res.Err == nil && res.State != wire.StateCancelled {
+		res.Err = fmt.Errorf("the output could not be stored: %w", capErr)
+		res.Reason = "infra"
+	}
+
+	if res.Err == nil && res.State != wire.StateCancelled {
+		res.Summary, res.SumErr = buildSummary(task, out, report, junit, tail)
+	} else {
+		res.Summary = wire.Summary{Failures: []wire.Failure{}, Tail: lines(tail)}
+	}
+	if handle != nil {
+		var exit *int
+		if res.State == wire.StateSucceeded || (res.State == wire.StateFailed && res.Reason == "") || res.Reason == "timeout" {
+			e := res.Exit
+			exit = &e
+		}
+		if ferr := handle.Finish(context.WithoutCancel(ctx), Outcome{
+			State: res.State, Exit: exit, Summary: res.Summary, Reason: res.Reason,
+			LogPath: res.LogPath, StartedAt: started, FinishedAt: finished,
+		}); ferr != nil && res.Err == nil {
+			res.Err = fmt.Errorf("the result could not be recorded: %w", ferr)
+		}
+	}
+	return res, nil
+}
+
+// heartbeat renews the lease every RenewEvery until ctx ends. A cancel answer, or no successful renewal for a whole lease
+// (judged on this process's monotonic clock), stops the command through stop.
+func heartbeat(ctx context.Context, h Handle, cancelled, leaseLost *atomic.Bool, stop context.CancelFunc) {
+	every, lease := h.RenewEvery(), h.Lease()
+	if every <= 0 || lease <= 0 {
+		return
+	}
+	last := time.Now()
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		cancel, err := h.Heartbeat(ctx)
+		switch {
+		case ctx.Err() != nil:
+			return
+		case err == nil && cancel:
+			cancelled.Store(true)
+			stop()
+			return
+		case err == nil:
+			last = time.Now()
+		case time.Since(last) > lease:
+			leaseLost.Store(true)
+			stop()
+			return
+		}
+	}
+}
+
+func finishFailed(h Handle, reason string, at time.Time) {
+	if h != nil {
+		_ = h.Finish(context.Background(), Outcome{State: wire.StateFailed, Reason: reason, StartedAt: at, FinishedAt: time.Now()})
+	}
+}
+
+func withMark(env []string, id string) []string {
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if len(kv) >= len(run.MarkEnv)+1 && kv[:len(run.MarkEnv)+1] == run.MarkEnv+"=" {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, run.MarkEnv+"="+id)
+}
+
+func buildSummary(task *manifest.Task, out, report, junit string, tail []byte) (wire.Summary, error) {
+	in := summary.Input{Log: tail, Root: out}
+	in.Stdout, _ = os.ReadFile(filepath.Join(out, "stdout"))
+	in.Report, _ = os.ReadFile(report)
+	in.Junit, _ = os.ReadFile(junit)
+	return summary.Parse(task.Summary, in)
+}
+
+func lines(b []byte) []string {
+	s, _ := summary.Parse("plain", summary.Input{Log: b})
+	return s.Tail
+}

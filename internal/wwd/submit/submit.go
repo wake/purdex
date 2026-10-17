@@ -57,6 +57,9 @@ type Request struct {
 	Class     wire.JobClass
 	Submitter wire.Submitter
 	Git       string // the git program ("" = git)
+	// Local prepares a fast-lane record (spec §5.2): no snapshot, HEAD named in its place, the manifest read from the working
+	// tree, local-only (pass) tasks allowed, never cacheable.
+	Local bool
 }
 
 // Prepared is a submission ready to send, with what the caller needs to decide how to run it.
@@ -77,19 +80,35 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 	if err != nil {
 		return nil, usagef("not inside a git repository: %v", err)
 	}
-	snap, err := gate.SnapshotTree(ctx, req.Git, req.Dir)
-	if err != nil {
-		return nil, fmt.Errorf("snapshot: %w", err)
+	var snap gate.SnapshotInfo
+	var src []byte
+	if req.Local {
+		// The fast lane runs in the working tree as it is: no snapshot is taken, the record names HEAD, and the manifest is
+		// the file in the tree (the command runs against that tree).
+		head, err := g.run(ctx, "rev-parse", "--verify", "-q", "HEAD^{commit}")
+		if err != nil || head == "" {
+			return nil, usagef("the repository has no commit to record a local run against")
+		}
+		snap = gate.SnapshotInfo{SHA: head, Root: root, Rel: "."}
+		if src, err = os.ReadFile(filepath.Join(root, ManifestPath)); err != nil {
+			return nil, usagef("%s has no %s", root, ManifestPath)
+		}
+	} else {
+		var err error
+		if snap, err = gate.SnapshotTree(ctx, req.Git, req.Dir); err != nil {
+			return nil, fmt.Errorf("snapshot: %w", err)
+		}
+		if !sameDir(root, snap.Root) {
+			return nil, fmt.Errorf("the repository changed while the snapshot was taken (%s, then %s)", root, snap.Root)
+		}
+		// The manifest comes from the snapshot, the same bytes the worker will read, never from the working tree on its own.
+		out, err := g.run(ctx, "show", snap.SHA+":"+ManifestPath)
+		if err != nil {
+			return nil, usagef("%s has no %s", root, ManifestPath)
+		}
+		src = []byte(out)
 	}
-	if !sameDir(root, snap.Root) {
-		return nil, fmt.Errorf("the repository changed while the snapshot was taken (%s, then %s)", root, snap.Root)
-	}
-	// The manifest comes from the snapshot, the same bytes the worker will read, never from the working tree on its own.
-	src, err := g.run(ctx, "show", snap.SHA+":"+ManifestPath)
-	if err != nil {
-		return nil, usagef("%s has no %s", root, ManifestPath)
-	}
-	m, err := manifest.Parse([]byte(src))
+	m, err := manifest.Parse(src)
 	if err != nil {
 		return nil, usagef("%v", err)
 	}
@@ -97,7 +116,7 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 	if task == nil {
 		return nil, usagef("task %q is not in %s (have: %s)", req.Task, ManifestPath, strings.Join(taskNames(m), ", "))
 	}
-	if task.Args == manifest.ArgsPass {
+	if task.Args == manifest.ArgsPass && !req.Local {
 		return nil, usagef("task %q is local-only (args = \"pass\") and is never queued", req.Task)
 	}
 	class, err := resolveClass(task.Class, req.Class)
@@ -108,6 +127,12 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 	check := manifest.RenderEnv{Workspace: "/wwd-check", Report: "/wwd-check/report.json", Junit: "/wwd-check/junit.xml"}
 	if task.Args == manifest.ArgsFiles {
 		check.Exists = func(rel string) bool { return g.exists(ctx, snap.SHA, rel) }
+		if req.Local {
+			check.Exists = func(rel string) bool {
+				st, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel)))
+				return err == nil && st.Mode().IsRegular()
+			}
+		}
 	}
 	if _, err := task.Render(req.Args, check); err != nil {
 		return nil, usagef("%v", err)
@@ -141,7 +166,7 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 		Class:         class,
 		Labels:        nonNil(task.Labels),
 		Locks:         nonNil(task.Locks),
-		Cacheable:     task.Cacheable,
+		Cacheable:     task.Cacheable && !req.Local, // a local run has no snapshot tree to key a result by
 		TimeoutS:      int(task.Timeout.Seconds()),
 		SupersedeKey:  supersedeKey(root, task.Name),
 		Interruptible: task.Interruptible,
