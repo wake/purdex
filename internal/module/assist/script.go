@@ -32,6 +32,9 @@ func (m *Module) runScript(h gate.AssistHost, name string, args []string, timeou
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil // the script exited 0; a leftover of its group held the pipes and is ended just below
+	}
 	if cmd.Process != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) // whatever the script left running in its group goes with it
 	}
