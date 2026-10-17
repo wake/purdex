@@ -183,6 +183,10 @@ describe('WatchSettings — a probe host', () => {
     render(<WatchSettings kind="probe" fleetHostId={ID} offline={false} peerIds={[]} />)
     expect(screen.getByTestId('watch-set-probe')).toHaveTextContent(t('watch.set.probe_note'))
     const name = await screen.findByTestId('probe-field-name')
+    // The editor alone: no second header (badge and name) and no delete button.
+    expect(screen.queryByTestId('probe-page')).toBeNull()
+    expect(screen.queryByTestId('probe-page-name')).toBeNull()
+    expect(screen.queryByTestId('probe-delete')).toBeNull()
     fireEvent.change(name, { target: { value: 'nas2' } })
     fireEvent.click(screen.getByTestId('probe-save'))
     await waitFor(() => expect(putProbeHosts).toHaveBeenCalledTimes(2))

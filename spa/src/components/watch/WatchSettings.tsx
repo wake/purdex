@@ -7,7 +7,7 @@ import { HostConfigApiError, HostConfigConflictError } from '../../lib/host-conf
 import { parseWatchRow, readWatchRow, type WatchRow } from '../../lib/watch/watch-row'
 import { isSet, putWatchRow, rowWith, valueOf, type WatchKey } from '../../lib/watch/watch-row-write'
 import { Section } from '../hosts/form-fields'
-import { ProbeHostPage } from '../hosts/ProbeHostPage'
+import { ProbeHostEditor } from '../hosts/ProbeHostEditor'
 import { SegmentControl } from '../settings/SegmentControl'
 import { SettingItem } from '../settings/SettingItem'
 import { ToggleSwitch } from '../settings/ToggleSwitch'
@@ -176,7 +176,7 @@ export function WatchSettings({ kind, fleetHostId, hostConfigId, offline, peerId
     return (
       <div data-testid="watch-set-probe">
         <p className="mb-4 text-xs text-text-secondary">{t('watch.set.probe_note')}</p>
-        <ProbeHostPage key={fleetHostId} probeId={fleetHostId} />
+        <ProbeHostEditor key={fleetHostId} probeId={fleetHostId} />
       </div>
     )
   }
