@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -425,4 +426,25 @@ func TestListPins_ARepositoryGitCannotReadIsAnError(t *testing.T) {
 	assert.Error(t, err)
 	_, err = ListPins(context.Background(), t.TempDir()) // exists, is not a repository
 	assert.Error(t, err)
+}
+
+// Thousands of pins with long names are more than a short answer: the list is not cut at the limit of the small git commands.
+func TestListPins_ManyPinsWithLongNamesAreAllListed(t *testing.T) {
+	repo, _, snap := origin(t)
+	const n = 7500 // x ~145 bytes is over 1 MiB
+	var in strings.Builder
+	want := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("j%0127d", i) // 128 characters, the longest a job id may be
+		want = append(want, id)
+		in.WriteString("create refs/wwd/" + id + " " + snap + "\n")
+	}
+	cmd := exec.Command("git", "-C", repo, "update-ref", "--stdin")
+	cmd.Stdin = strings.NewReader(in.String())
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
+	ids, err := ListPins(context.Background(), repo)
+	require.NoError(t, err)
+	assert.Len(t, ids, n)
+	assert.Equal(t, want[0], ids[0])
 }

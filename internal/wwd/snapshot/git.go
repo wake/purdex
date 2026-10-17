@@ -135,11 +135,15 @@ func Unpin(ctx context.Context, repoDir, jobID string) error {
 	return err
 }
 
+// maxPinList bounds the list of pins: a job id is 128 characters at the most, so this is hundreds of thousands of pins, far more than the
+// retention keeps; over it ListPins fails rather than hold an unbounded answer.
+const maxPinList = 64 << 20
+
 // ListPins is the job ids that have a ref under refs/wwd/ in repoDir: what the queue's sweep compares with its jobs to find a pin whose
 // job is over or unknown. A ref whose name is not a job id (a nested one, one that starts with '-') is left out, so that the sweep can
 // never be led to remove a ref that Pin did not make. No refs/wwd/ is an empty list; a repoDir that git cannot read is an error.
 func ListPins(ctx context.Context, repoDir string) ([]string, error) {
-	out, err := git(ctx, "wwd.snapshot-list", repoDir, "for-each-ref", "--format=%(refname)", "refs/wwd/")
+	out, err := gitLimited(ctx, "wwd.snapshot-list", repoDir, maxPinList, "for-each-ref", "--format=%(refname)", "refs/wwd/")
 	if err != nil {
 		return nil, err
 	}
