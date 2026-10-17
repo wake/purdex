@@ -213,3 +213,29 @@ describe('the card stack unmounted and mounted again', () => {
     expectArranged()
   })
 })
+
+describe('the detail kept after its last item was answered', () => {
+  /** The server answered the last item: the entry is gone from the band and was never in the stream. */
+  const answered = () => act(() => { seedUnit(HOST, 'SA', SOLO_A, { entries: TASKS, confirms: [], openConfirms: 0, tasks: [], roadmap: [] }) })
+  const openDetail = () => fireEvent.click(within(screen.getByTestId('journal-confirm-band')).getByTestId('journal-row-open'))
+
+  it('survives the stack remounting and a switch away and back', () => {
+    const r = render(<Shell />)
+    openDetail()
+    answered()
+    expect(screen.getByTestId('journal-detail-card').textContent).toContain('the original question')
+    r.rerender(<Shell stack={false} />)
+    r.rerender(<Shell stack />)
+    expect(screen.getByTestId('journal-detail-card').textContent).toContain('the original question')
+    awayAndBack()
+    expect(screen.getByTestId('journal-detail-card').textContent).toContain('the original question')
+  })
+  it('another unit holding the same entry id never shows this unit\'s copy', () => {
+    render(<Shell />)
+    openDetail()
+    answered()
+    setActive('b')
+    act(() => patchViewMemo(HOST, 'solo:b', { journalOpen: true, detailId: 'c1' }))
+    expect(q('journal-detail-card')).toBeNull()
+  })
+})
