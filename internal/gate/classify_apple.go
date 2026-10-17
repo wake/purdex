@@ -1,5 +1,7 @@
 package gate
 
+import "strings"
+
 // Apple toolchains (#3111): xcodebuild and swift. A test run starts a simulator and about eight cores for every run, a package build
 // compiles with several swift-frontend processes of 300 MB each, and none of it went through the gate (air26 reached load 235 with
 // one mutation run that started an `xcodebuild test` per mutant). Heavy: xcodebuild unless it only prints something, `swift build`,
@@ -30,14 +32,22 @@ func classifySwift(args []string) Class {
 	if i < 0 || (args[i] != "build" && args[i] != "test") {
 		return ClassNone
 	}
-	return classifySwiftDriver(args[i+1:])
+	return classifySwiftDriver(args[i+1:], args[i] == "test")
 }
 
-// classifySwiftDriver is the words after the subcommand (or after swift-build / swift-test, whose name is the subcommand).
-func classifySwiftDriver(words []string) Class {
-	for _, a := range words {
-		switch a {
-		case "--show-bin-path", "--help", "-h", "--version", "--list-tests", "-l", "--list-tests-json":
+// classifySwiftDriver is the words after the subcommand (or after swift-build / swift-test, whose name is the subcommand). The words that
+// only print (--show-bin-path, --help, --list-tests, and `list` right after `test`) make it none, but a word that is the value of a
+// -X option is the compiler's or linker's (`swift build -Xswiftc --version` builds), so it is skipped.
+func classifySwiftDriver(words []string, test bool) Class {
+	if test && len(words) > 0 && words[0] == "list" {
+		return ClassNone
+	}
+	for i := 0; i < len(words); i++ {
+		a := words[i]
+		switch {
+		case strings.HasPrefix(a, "-X") && !strings.Contains(a, "="):
+			i++ // -Xswiftc, -Xcc, -Xcxx, -Xlinker…: the next word is theirs
+		case a == "--show-bin-path" || a == "--help" || a == "-h" || a == "--version" || a == "--list-tests" || a == "-l" || a == "--list-tests-json":
 			return ClassNone
 		}
 	}

@@ -133,6 +133,13 @@ func TestClassify_Table(t *testing.T) {
 		{"swift test --list-tests", ClassNone},
 		{"swift --version", ClassNone},
 		{"swift build --version", ClassNone},
+		{"swift build -Xswiftc --version", ClassHeavy}, // the value of -Xswiftc is the compiler's: this builds
+		{"swift build -Xcc --help", ClassHeavy},
+		{"swift build -Xlinker -h -c release", ClassHeavy},
+		{"swift test list", ClassNone},
+		{"swift test --filter list", ClassHeavy}, // the value of an option, not the subcommand list
+		{"swift build list", ClassHeavy},
+		{"swift-test list", ClassNone},
 		{"swift-build --version", ClassNone},
 		{"swift package resolve", ClassNone},
 		{"swift package describe", ClassNone},

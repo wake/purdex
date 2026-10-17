@@ -278,8 +278,10 @@ func Classify(argv []string, e Env) Class {
 		return classifyXcodebuild(args)
 	case "swift":
 		return classifySwift(args)
-	case "swift-build", "swift-test":
-		return classifySwiftDriver(args)
+	case "swift-build":
+		return classifySwiftDriver(args, false)
+	case "swift-test":
+		return classifySwiftDriver(args, true)
 	}
 	return ClassNone
 }
