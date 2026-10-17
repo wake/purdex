@@ -14,6 +14,13 @@ const ring = (hot: boolean) => (hot ? 'ring-1 ring-accent' : '')
 
 interface Hover { hot: string | null; setHot: (k: string | null) => void }
 
+/**
+ * The slot holder stands out from the waiting cards in the running colour (journal v5 §3.8, U13): a 12 % tint, a 1 px outline
+ * and, at its left, a dot that breathes with the sidebar's running light (index.css `animate-breathe`, reused; still under
+ * prefers-reduced-motion). Running green as a theme token is status-success (lib/nex/state-dot.ts); its text tier, because the
+ * light theme's plain status-success is a pale fill an outline or a dot would lose. On the tint the elapsed time is
+ * text-secondary, not muted: muted reads under 4.5:1 there in every builtin theme (QueueLane.running.test.tsx measures it).
+ */
 function RunningCard({ h, now, small, hover }: { h: FleetHolder; now: number; small: boolean; hover: Hover }) {
   const k = holderKey(h)
   const hot = hover.hot === k
@@ -21,10 +28,11 @@ function RunningCard({ h, now, small, hover }: { h: FleetHolder; now: number; sm
     <div
       data-testid="q-holder" data-hot={hot || undefined} title={h.command}
       onMouseEnter={() => hover.setHot(k)} onMouseLeave={() => hover.setHot(null)}
-      className={`shrink-0 flex items-center gap-2 ${size(small)} px-2 rounded-md border border-accent/50 bg-accent/10 text-xs font-mono cursor-default ${ring(hot)}`}
+      className={`shrink-0 flex items-center gap-1.5 ${size(small)} px-2 rounded-md border border-status-success-text bg-status-success-text/12 text-xs font-mono cursor-default ${ring(hot)}`}
     >
+      <span data-testid="q-holder-dot" aria-hidden="true" className="shrink-0 w-1.5 h-1.5 rounded-full bg-status-success-text animate-breathe motion-reduce:animate-none" />
       <span className="flex-1 min-w-0 truncate text-text-primary">{h.command}</span>
-      <span className="shrink-0 tabular-nums text-text-muted">{mss(h.since, now)}</span>
+      <span className="shrink-0 tabular-nums text-text-secondary">{mss(h.since, now)}</span>
     </div>
   )
 }
