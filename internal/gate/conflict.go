@@ -116,6 +116,9 @@ func withBaseTool(words []string) []string {
 	if len(words) == 0 {
 		return nil
 	}
-	out := append([]string{filepath.Base(words[0])}, words[1:]...)
-	return out
+	if first := strings.Fields(words[0]); len(first) > 1 {
+		// one word holding a whole command line (`npm exec --call "tsc -b"`): it is read as the words it holds
+		words = append(first, words[1:]...)
+	}
+	return append([]string{filepath.Base(words[0])}, words[1:]...)
 }

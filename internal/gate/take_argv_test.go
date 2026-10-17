@@ -120,3 +120,19 @@ func TestTake_NoWindowWithAnEmptyRecordWhileTakesRace(t *testing.T) {
 	close(stop)
 	wg.Wait()
 }
+
+// The ticket keeps a copy of the argv it was made with: the caller reusing its slice does not change the command a take publishes.
+// Mutation gate: the slice shared → the record carries the changed word (red).
+func TestTake_TheTicketKeepsItsOwnCopyOfTheArgv(t *testing.T) {
+	rp := newRankPool(t, 1)
+	info := takeInfo("e")
+	tk, err := rp.EnqueueFor(info)
+	require.NoError(t, err)
+	defer tk.Drop()
+	info.Argv[0] = "changed"
+	got, err := rp.TryTakeRanked(tk)
+	require.NoError(t, err)
+	require.NotNil(t, got.Slot)
+	defer got.Slot.Release(nil)
+	assert.Equal(t, "tsc", rp.Held()[0].Argv[0])
+}

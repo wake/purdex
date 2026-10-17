@@ -264,6 +264,7 @@ func (p *Pool) EnqueueFor(info WaiterInfo) (*Ticket, error) {
 	if err := os.Rename(tmp, path); err != nil {
 		return fail(err)
 	}
+	info.Argv = append([]string(nil), info.Argv...) // the ticket keeps its own copy: the caller's slice may be reused or changed
 	return &Ticket{Name: name, path: path, f: f, p: p, info: info}, nil
 }
 

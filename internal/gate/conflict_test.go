@@ -41,6 +41,7 @@ func TestCommandWords(t *testing.T) {
 		{"npm exec -- tsc -b", "tsc -b"},
 		{"npm exec tsc -b", "tsc -b"},
 		{"npm exec --package typescript -- tsc -b", "tsc -b"},
+		{"npm exec --call tsc", "tsc"},
 		{"npm exec --package=typescript -- tsc -b", "tsc -b"},
 		{"pnpm exec --filter spa tsc -b", "tsc -b"},
 		{"bun x --bun tsc -b", "tsc -b"},
@@ -59,6 +60,9 @@ func TestCommandWords(t *testing.T) {
 		assert.Equal(t, c.want, got, c.cmd)
 	}
 	assert.Nil(t, commandWords(nil))
+	// a whole command line in one word is read as the words it holds
+	assert.Equal(t, []string{"tsc", "-b"}, commandWords([]string{"npm", "exec", "--call", "tsc -b"}))
+	assert.Equal(t, []string{"tsc", "-b", "--force"}, commandWords([]string{"npx", "/repo/node_modules/.bin/tsc -b", "--force"}))
 }
 
 // A prefix of the command's words. Mutation gates: a contains match instead of a prefix → `tsc --force -b` red; a pattern longer
