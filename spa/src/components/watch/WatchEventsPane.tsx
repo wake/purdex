@@ -206,7 +206,7 @@ export function WatchEventsPane(_props: PaneRendererProps) {
               </h3>
               <ul>
                 {g.rows.map((r) => (
-                  <EventItem key={`${r.hostId}\0${r.event.id}`} row={r} hostName={r.event.host || nameOf(r.hostId)} noGuardian={!hasGuardian} />
+                  <EventItem key={`${r.hostId}\0${r.event.id}`} row={r} hostName={nameOf(r.hostId)} noGuardian={!hasGuardian} />
                 ))}
               </ul>
             </section>
