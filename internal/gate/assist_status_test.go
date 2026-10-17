@@ -147,6 +147,39 @@ func TestStatus_TheQueueAndTheOutTicketsAreOfOneLook(t *testing.T) {
 	<-flipped
 }
 
+// Status looks at the dispatch pools all the time, and a send still finds its free slot every time: the look is made under the lock the
+// send takes its slot under, so the instant of the look can never be taken for a holder. (No retry here: ServeOut itself.)
+func TestStatus_ALookNeverMakesAFreeDispatchSlotReadAsTaken(t *testing.T) {
+	g, _ := testGate(t)
+	cfg := g.Config()
+	writeAssistFile(t, cfg.Dir, map[string]AssistHost{"air26": {SSH: "air26", On: true, Slots: 1, Can: []string{"go test"}, Gen: 1}})
+	pool := g.pool(cfg, ClassHeavy)
+	tk, err := pool.EnqueueFor(WaiterInfo{PID: 5, Argv: []string{"go", "test"}})
+	require.NoError(t, err)
+	t.Cleanup(tk.Drop)
+	dispatch := DispatchPool(cfg.Dir, "air26", 1, g.Now)
+	stop := make(chan struct{})
+	looked := make(chan struct{})
+	go func() {
+		defer close(looked)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				g.Status()
+			}
+		}
+	}()
+	defer func() { close(stop); <-looked }()
+	for i := 0; i < 150; i++ {
+		slot, err := pool.ServeOut(tk.Name, dispatch, WaiterInfo{PID: 5}, OutInfo{Host: "air26", Job: "j", At: g.Now()})
+		require.NoError(t, err)
+		require.NotNil(t, slot, "send %d: the slot is free, a look must not make it read as taken", i)
+		require.NoError(t, tk.Return(slot, nil))
+	}
+}
+
 // A command that is out stays listed when assist.json cannot be read or has no host any more.
 func TestStatus_AnOutCommandIsListedWithoutAnyHostRecord(t *testing.T) {
 	g, _ := testGate(t)

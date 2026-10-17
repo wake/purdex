@@ -69,7 +69,7 @@ func (g *Gate) walkAssist(ctx context.Context, cfg Config, class Class, o Option
 			continue // someone in front of this ticket has the first claim on this host
 		}
 		// A host with no free dispatch slot is not a candidate (plan X2b item 3): this costs no ssh, and ServeOut decides for good.
-		if free, err := DispatchPool(cfg.Dir, name, dispatchSize(h.Slots), g.Now).freeCapacity(); err == nil && free <= 0 {
+		if _, free := observeDispatch(DispatchPool(cfg.Dir, name, dispatchSize(h.Slots), g.Now)); free <= 0 {
 			continue
 		}
 		p, sig := g.probeUntilSignal(ctx, AssistRun{Host: name, SSH: w.SSH}, h, o.Argv, sigs)

@@ -89,6 +89,22 @@ func ListHolds(dir string, now time.Time) []HoldEntry {
 	return out
 }
 
+// observeDispatch reads a dispatch pool — who holds its slots and how many are free — under the pool's admit lock, the lock a send
+// takes its slot under. A look at a slot's lock is an exclusive try for an instant; made inside the lock it cannot meet a send that is
+// taking that slot, which would see the instant as a holder and read the pool as full. (A look that cannot get the lock in a second
+// is made without it: status must answer.) free is 0 when the pool cannot be read.
+func observeDispatch(p *Pool) (held []Holder, free int) {
+	if unlock, err := p.lockAdmitWithin(time.Second); err == nil {
+		defer unlock()
+	}
+	held = p.Held()
+	free, err := p.freeCapacity()
+	if err != nil {
+		free = 0
+	}
+	return held, free
+}
+
 // assistStatus fills the assist parts of a status; with no assist.json host there is nothing to add.
 func (g *Gate) assistStatus(cfg Config, st *Status) {
 	// (The commands that are out, OutHeavy and OutLight, are in the queue directory, not in assist.json: StatusWith lists them whatever
@@ -105,10 +121,13 @@ func (g *Gate) assistStatus(cfg Config, st *Status) {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	free := map[string]int{}
 	for _, name := range names {
 		h := f.Hosts[name]
 		size := dispatchSize(h.Slots)
-		hs := AssistHostStatus{Host: name, On: h.On, Size: size, Held: DispatchPool(cfg.Dir, name, size, g.Now).Held()}
+		held, n := observeDispatch(DispatchPool(cfg.Dir, name, size, g.Now))
+		free[name] = n
+		hs := AssistHostStatus{Host: name, On: h.On, Size: size, Held: held}
 		if hs.Held == nil {
 			hs.Held = []Holder{}
 		}
@@ -128,8 +147,7 @@ func (g *Gate) assistStatus(cfg Config, st *Status) {
 		h := f.Hosts[name]
 		r, checked := ready[name]
 		fresh := checked && r.Gen == h.Gen && r.Err == "" && r.Answer.Assist && r.Answer.Switch == "on" && now.Sub(r.At) >= 0 && now.Sub(r.At) <= AssistFreshness
-		free, ferr := DispatchPool(cfg.Dir, name, dispatchSize(h.Slots), g.Now).freeCapacity()
-		open[name] = h.On && h.Op == nil && fresh && ferr == nil && free > 0
+		open[name] = h.On && h.Op == nil && fresh && free[name] > 0
 	}
 	for _, q := range [][]Waiter{st.QueueHeavy, st.QueueLight} {
 		for i := range q {
