@@ -76,14 +76,14 @@ describe('team names (U15)', () => {
     useTeamRosterStore.getState().apply('other', [roster('Payments')]) // another host's roster still names it
     render(<UnattendedHeldSection rows={[{ hostId: H, a: selfRelay('a1', 1_000) }]} />)
     const row = screen.getByTestId('held-row')
-    expect(row.textContent).toContain('mlab：Payments · 接力申請')
+    expect(row.textContent).toContain('mlab：Payments iface-lead · 接力申請')
     expect(within(row).getByTestId('held-lead-title')).toHaveTextContent('iface-lead')
   })
 
   it('a member relay names the lead by its team', () => {
     useTeamRosterStore.getState().apply(H, [roster('Payments')])
     render(<UnattendedHeldSection rows={[{ hostId: H, a: memberRelay('m1', 1_000) }]} />)
-    expect(screen.getByTestId('held-row').textContent).toContain('mlab：Payments 要幫 member iface-solo 接力')
+    expect(screen.getByTestId('held-row').textContent).toContain('mlab：Payments iface-lead 要幫 member iface-solo 接力')
   })
 
   it('a daemon without names keeps the lead title', () => {
