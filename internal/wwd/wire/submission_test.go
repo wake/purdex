@@ -83,3 +83,23 @@ func TestResultReasonIsAnOpenString(t *testing.T) {
 		}
 	}
 }
+
+// A Job received from a peer (claim response, list, detail, event) obeys the same non-negative invariants as a submission, so a
+// negative duration never reaches scheduling code.
+func TestReceivedJobRejectsNegativeDurations(t *testing.T) {
+	good := string(fixture(t, "job_queued.json"))
+	for name, raw := range map[string]string{
+		"queue_timeout_s": strings.Replace(good, `"queue_timeout_s": 0`, `"queue_timeout_s": -1`, 1),
+		"timeout_s":       strings.Replace(good, `"timeout_s": 1800`, `"timeout_s": -1`, 1),
+	} {
+		if raw == good {
+			t.Fatalf("%s: replacement changed nothing", name)
+		}
+		if _, err := Decode[Job]([]byte(raw)); err == nil {
+			t.Errorf("a job with a negative %s was accepted", name)
+		}
+		if _, err := Decode[JobsListResponse]([]byte(`{"jobs":[` + raw + `]}`)); err == nil {
+			t.Errorf("a list carrying a job with a negative %s was accepted", name)
+		}
+	}
+}

@@ -136,6 +136,9 @@ func (j Job) Validate() error {
 	if !j.State.Valid() {
 		return fmt.Errorf("job: invalid state %q", j.State)
 	}
+	if j.TimeoutS < 0 || j.QueueTimeoutS < 0 {
+		return fmt.Errorf("job: negative duration (timeout_s %d, queue_timeout_s %d)", j.TimeoutS, j.QueueTimeoutS)
+	}
 	return nil
 }
 
