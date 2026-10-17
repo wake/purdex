@@ -268,3 +268,29 @@ func TestAssistTextOutputCarriesNoControlCharacters(t *testing.T) {
 	require.NotContains(t, o.String(), "\x1b")
 	require.NotContains(t, o.String(), "\x07")
 }
+
+func TestAssistAnAnswerOfTheWrongShapeFails(t *testing.T) {
+	for _, c := range []struct {
+		answer string
+		args   []string
+	}{
+		{`{}`, []string{"deny", "--team", "t1"}},
+		{`[]`, []string{"allow", "--team", "t1", "--reason", "r"}},
+		{`{"result":"bogus"}`, []string{"deny", "--session", "_abcdef"}},
+		{`{}`, []string{"host", "set", "air26", "--slots", "1"}},
+		{`{}`, []string{"on", "air26", "--reason", "r"}},
+		{`{}`, []string{"reserve", "off"}},
+		{`{"on":true}`, []string{"reserve", "off"}},
+	} {
+		rc, out, errb, _ := callAssist(t, 200, c.answer, c.args...)
+		require.Equal(t, 1, rc, c.args)
+		require.Empty(t, out, c.args)
+		require.Contains(t, errb, "not what this command expects", c.args)
+	}
+}
+
+func TestAssistHostRemoveSanitizesTheAlias(t *testing.T) {
+	_, out, _, _ := callAssist(t, 200, `{"result":"removed"}`, "host", "remove", "a\x1b]0;x\x07b")
+	require.NotContains(t, out, "\x1b")
+	require.NotContains(t, out, "\x07")
+}

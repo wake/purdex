@@ -309,7 +309,7 @@ func assistHost(args []string, stdout, stderr io.Writer) int {
 	if verb == "remove" {
 		body, rc := assistCall(*c.cfgPath, http.MethodDelete, "/api/assist/host/"+url.PathEscape(alias), nil, stderr)
 		if rc == 0 {
-			fmt.Fprintf(stdout, "已移除 %s\n", alias)
+			fmt.Fprintf(stdout, "已移除 %s\n", sanitizeCell(alias))
 		}
 		_ = body
 		return rc
@@ -346,8 +346,11 @@ func assistHost(args []string, stdout, stderr io.Writer) int {
 		return rc
 	}
 	var r struct{ Result string }
-	_ = json.Unmarshal(body, &r)
-	fmt.Fprintf(stdout, "%s：%s\n", sanitizeCell(alias), map[string]string{"added": "已新增", "changed": "已更新", "unchanged": "沒有變動"}[r.Result])
+	words := map[string]string{"added": "已新增", "changed": "已更新", "unchanged": "沒有變動"}
+	if json.Unmarshal(body, &r) != nil || words[r.Result] == "" {
+		return unexpectedAnswer(stderr)
+	}
+	fmt.Fprintf(stdout, "%s：%s\n", sanitizeCell(alias), words[r.Result])
 	return 0
 }
 
@@ -372,8 +375,10 @@ func assistSwitch(on bool, args []string, stdout, stderr io.Writer) int {
 	if rc != 0 {
 		return rc
 	}
-	var r struct{ Detail string }
-	_ = json.Unmarshal(body, &r)
+	var r struct{ Host, Detail string }
+	if json.Unmarshal(body, &r) != nil || r.Host == "" {
+		return unexpectedAnswer(stderr)
+	}
 	state := "關"
 	if on {
 		state = "開"
@@ -413,7 +418,9 @@ func assistAllow(allow bool, args []string, stdout, stderr io.Writer) int {
 		return rc
 	}
 	var r struct{ Result, ID, Name string }
-	_ = json.Unmarshal(body, &r)
+	if json.Unmarshal(body, &r) != nil || (r.Result != "already" && r.Result != "allowed" && r.Result != "removed") {
+		return unexpectedAnswer(stderr)
+	}
 	switch r.Result {
 	case "already":
 		fmt.Fprintf(stdout, "%s %s（%s）已在名單上\n", kind, sanitizeCell(r.ID), sanitizeCell(r.Name))
@@ -512,12 +519,23 @@ func assistReserve(args []string, stdout, stderr io.Writer) int {
 	if rc != 0 {
 		return rc
 	}
-	var r struct{ Until time.Time }
-	_ = json.Unmarshal(body, &r)
+	var r struct {
+		On    *bool
+		Until time.Time
+	}
+	if json.Unmarshal(body, &r) != nil || r.On == nil || *r.On != (word == "on") {
+		return unexpectedAnswer(stderr)
+	}
 	if word == "on" {
 		fmt.Fprintf(stdout, "mlab 已保留至 %s\n", r.Until.Local().Format("15:04"))
 	} else {
 		fmt.Fprintln(stdout, "已解除 mlab 保留")
 	}
 	return 0
+}
+
+// unexpectedAnswer is the failure for a 2xx answer that is JSON but not what the route answers (a version mismatch, a proxy).
+func unexpectedAnswer(stderr io.Writer) int {
+	fmt.Fprintln(stderr, "pdx assist: the daemon's answer is not what this command expects (version mismatch?); nothing is known about the result")
+	return 1
 }
