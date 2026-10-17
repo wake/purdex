@@ -69,10 +69,12 @@ const NONE: TabAgentAggregate = {
 
 /**
  * The aggregate of `panes` (from `tabAgentPanes`). `awaiting` holds the keys of execution panes waiting on a
- * permission request (the hand): such a pane counts as `waiting` at least, whatever its stored status says.
+ * permission request (the hand): such a pane counts as `waiting` at least, whatever its stored status says. `members`
+ * holds the active team members' keys: their unread is hidden (the tab is unread when a NON-member pane is), their
+ * status is not touched (member spec R3).
  */
 export function aggregateTabAgents(
-  panes: TabAgentPane[], data: TabAgentData, awaiting: ReadonlySet<string> = new Set(),
+  panes: TabAgentPane[], data: TabAgentData, awaiting: ReadonlySet<string> = new Set(), members: ReadonlySet<string> = new Set(),
 ): TabAgentAggregate {
   if (panes.length === 0) return NONE
   let status: AgentStatus | undefined
@@ -85,7 +87,7 @@ export function aggregateTabAgents(
     if (awaiting.has(key) && statusRank(s) < statusRank('waiting')) s = 'waiting'
     const r = statusRank(s)
     if (r > rank) { rank = r; status = s; repKey = key }
-    if (data.unread[key]) isUnread = true
+    if (data.unread[key] && !members.has(key)) isUnread = true
     const b = backgroundOf(data.lastEvents[key])
     if (b && (!background || BACKGROUND_RANK[b] > BACKGROUND_RANK[background])) background = b
   }

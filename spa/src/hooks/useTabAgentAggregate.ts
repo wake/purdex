@@ -4,6 +4,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { useAgentStore } from '../stores/useAgentStore'
 import { useExecutionStore } from '../stores/useExecutionStore'
 import { useExecutionListStore } from '../stores/useExecutionListStore'
+import { useActiveMemberKeys } from './useActiveMemberKeys'
 import { aggregateTabAgents, type TabAgentAggregate, type TabAgentPane } from '../lib/agent-lights/tab-aggregate'
 import { hostListTruncated, isAwaitingApproval, liveWorkerSummary, rowWorkerSummary } from '../lib/nex/worker-summary'
 import type { HostListCaches } from '../lib/nex/execution-list-effects'
@@ -43,5 +44,6 @@ export function useTabAgentAggregate(panes: TabAgentPane[]): TabAgentAggregate {
   const liveFlags = useExecutionStore((s) => (listFlags.includes('L') ? liveAwaitingFlags(s.executions, execPanes) : ''))
   const awaitingId = awaitingKeys(execPanes, listFlags, liveFlags).join('\n')
   const awaiting = useMemo(() => new Set(awaitingId ? awaitingId.split('\n') : []), [awaitingId])
-  return useAgentStore(useShallow((s) => aggregateTabAgents(panes, s, awaiting)))
+  const members = useActiveMemberKeys() // a roster change re-draws a mounted tab's unread mark (member spec R3)
+  return useAgentStore(useShallow((s) => aggregateTabAgents(panes, s, awaiting, members)))
 }
