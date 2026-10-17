@@ -42,6 +42,10 @@ type Queue struct {
 	now  func() time.Time
 	pub  func(wire.JobEvent)
 	newI func() string
+	seq  *sequencer
+
+	// afterCommit is a test hook: it runs between a transaction's commit and the publishing of its events.
+	afterCommit func()
 }
 
 // New returns the queue over db, whose tables Migrate has created.
@@ -52,7 +56,7 @@ func New(db *sql.DB, o Options) (*Queue, error) {
 	if o.Origin == "" {
 		return nil, errors.New("queue: Options.Origin is required")
 	}
-	q := &Queue{db: db, opt: o, now: o.Now, pub: o.Publish, newI: o.NewID}
+	q := &Queue{db: db, opt: o, now: o.Now, pub: o.Publish, newI: o.NewID, seq: newSequencer()}
 	if q.now == nil {
 		q.now = time.Now
 	}
@@ -63,41 +67,72 @@ func New(db *sql.DB, o Options) (*Queue, error) {
 }
 
 // write runs fn in one immediate transaction on its own connection, then tells Publish about the jobs fn reported as changed (after
-// the commit, so no subscriber sees a state that was rolled back).
+// the commit, so no subscriber sees a state that was rolled back). Each event is the job as this change left it, read inside the
+// transaction, so a later transaction that changes the same job cannot turn this event into its own; and events leave in commit
+// order, one transaction's after the previous one's (see sequencer).
 func (q *Queue) write(ctx context.Context, fn func(c *sql.Conn, changed *[]string) error) error {
-	changed, err := q.commit(ctx, fn)
+	events, ticket, err := q.commit(ctx, fn)
 	if err != nil {
 		return err
 	}
-	q.publish(ctx, changed)
+	if q.afterCommit != nil {
+		q.afterCommit()
+	}
+	q.seq.await(ticket)
+	defer q.seq.done(ticket)
+	q.publish(events)
 	return nil
 }
 
-// commit is the transaction alone: it gives its connection back before it returns, so the event reads that follow can have a
-// connection even when the database was opened with one (SetMaxOpenConns(1)).
-func (q *Queue) commit(ctx context.Context, fn func(c *sql.Conn, changed *[]string) error) ([]string, error) {
+// commit is the transaction alone: it gives its connection back before it returns, so whatever a subscriber does next can have a
+// connection even when the database was opened with one (SetMaxOpenConns(1)). It returns the events and the ticket that orders
+// them; when the commit fails after the ticket was taken, the ticket is passed on here, so nobody waits for it.
+func (q *Queue) commit(ctx context.Context, fn func(c *sql.Conn, changed *[]string) error) (events []wire.JobEvent, ticket uint64, err error) {
 	c, err := q.db.Conn(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer c.Close()
-	var changed []string
-	if err := inImmediateTx(ctx, c, func() error { return fn(c, &changed) }); err != nil {
-		return nil, err
+	taken := false
+	err = inImmediateTx(ctx, c, func() error {
+		var changed []string
+		if err := fn(c, &changed); err != nil {
+			return err
+		}
+		for _, id := range changed {
+			j, err := getOn(ctx, c, id, false)
+			if err != nil {
+				return err
+			}
+			events = append(events, wire.JobEvent{Host: q.opt.Origin, Job: j})
+		}
+		ticket, taken = q.seq.ticket(), true
+		return nil
+	})
+	if err != nil {
+		if taken {
+			q.seq.await(ticket)
+			q.seq.done(ticket)
+		}
+		return nil, 0, err
 	}
-	return changed, nil
+	return events, ticket, nil
 }
 
-// publish announces committed changes. The change is durable already, so the request's own cancellation (a client that hung up
-// after the commit) must not lose the event: the reads ignore the caller's context.
-func (q *Queue) publish(ctx context.Context, ids []string) {
+// publish announces committed changes. The change is durable already and the payload is in hand, so neither the request's
+// cancellation nor a subscriber's failure may turn it into a failed request (the client would submit the job again): a panic in
+// Publish is caught. Publish must not block (wwd's hub buffers) and must not call a queue method that writes: the queue does not wait
+// on a slow subscriber on purpose, because it cannot tell it from a stuck one.
+func (q *Queue) publish(events []wire.JobEvent) {
 	if q.pub == nil {
 		return
 	}
-	ctx = context.WithoutCancel(ctx)
-	for _, id := range ids {
-		if j, err := q.Get(ctx, id); err == nil {
-			q.pub(wire.JobEvent{Host: q.opt.Origin, Job: j})
-		}
+	for _, ev := range events {
+		q.deliver(ev)
 	}
+}
+
+func (q *Queue) deliver(ev wire.JobEvent) {
+	defer func() { _ = recover() }()
+	q.pub(ev)
 }

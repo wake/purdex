@@ -24,9 +24,27 @@ const jobColumns = `id, origin, repo_name, repo_root, repo_remote, snap_commit, 
 	task, args, class, labels, locks, cacheable, timeout_s, supersede_key, interruptible, queue_timeout_s, adhoc,
 	sub_session, sub_ref, sub_team, sub_host, created_at, state, attempts, claim_worker, claim_since, result`
 
-// Get returns one job. The claim_id is never part of it.
+// Get returns one job (the local view: ad-hoc jobs included). The claim_id is never part of it.
 func (q *Queue) Get(ctx context.Context, id string) (wire.Job, error) {
-	j, err := scanJob(q.db.QueryRowContext(ctx, `SELECT `+jobColumns+` FROM jobs WHERE id = ?`, id))
+	return getOn(ctx, q.db, id, false)
+}
+
+// GetForPeers is Get for a request from another host: an ad-hoc job is not found, whatever its id (spec 4.4, 8.3, 11).
+func (q *Queue) GetForPeers(ctx context.Context, id string) (wire.Job, error) {
+	return getOn(ctx, q.db, id, true)
+}
+
+// rowQuerier is a *sql.DB or a *sql.Conn: a job is read on a connection inside a transaction, or on the pool.
+type rowQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func getOn(ctx context.Context, rq rowQuerier, id string, forPeers bool) (wire.Job, error) {
+	query := `SELECT ` + jobColumns + ` FROM jobs WHERE id = ?`
+	if forPeers {
+		query += ` AND adhoc = 0`
+	}
+	j, err := scanJob(rq.QueryRowContext(ctx, query, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return wire.Job{}, ErrNotFound
 	}
