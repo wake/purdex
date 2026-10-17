@@ -58,7 +58,11 @@ export function useStreamScroll({ host, unitKey, streamKey = `${host}\0${unitKey
   const lastAtBottom = useRef(true)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  /** The reader scrolled since the last save: only then does an unmount write the position (an untouched stream must not overwrite the memo it was opened from). */
+  const dirty = useRef(false)
+
   const save = useCallback(() => {
+    dirty.current = false
     if (host !== null && unitKey !== null) patchViewMemo(host, unitKey, { scroll: lastTop.current, pinnedToBottom: lastAtBottom.current })
   }, [host, unitKey])
 
@@ -70,7 +74,7 @@ export function useStreamScroll({ host, unitKey, streamKey = `${host}\0${unitKey
     el.scrollTop = m.pinnedToBottom ? el.scrollHeight : m.scroll
     lastTop.current = el.scrollTop
     lastAtBottom.current = m.pinnedToBottom
-    return () => { if (timer.current) { clearTimeout(timer.current); timer.current = null } save() }
+    return () => { if (timer.current) { clearTimeout(timer.current); timer.current = null } if (dirty.current) save() }
   }, [host, unitKey, save])
 
   // A different filter shows a different list: start at its bottom.
@@ -164,6 +168,7 @@ export function useStreamScroll({ host, unitKey, streamKey = `${host}\0${unitKey
     const el = ref.current
     if (!el) return
     lastTop.current = el.scrollTop
+    dirty.current = true
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= NEAR_BOTTOM
     if (atBottom !== lastAtBottom.current) { lastAtBottom.current = atBottom; save() }
     else if (!timer.current) timer.current = setTimeout(() => { timer.current = null; save() }, SAVE_MS)

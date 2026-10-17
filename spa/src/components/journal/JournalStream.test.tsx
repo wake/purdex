@@ -279,6 +279,13 @@ describe('what survives an unmount (the memo)', () => {
     render(<Harness initial={range(1, 20)} />)
     expect(top()).toBe(maxTop(stream()))
   })
+  it('a stream that was never scrolled does not overwrite the memo it was opened from when it unmounts (M: save on every unmount)', () => {
+    patchViewMemo(H, K, { scroll: 25, pinnedToBottom: true }) // a stale position, the reader had been at the bottom
+    const { unmount } = render(<Harness initial={range(1, 12)} />)
+    expect(top()).toBe(maxTop(stream())) // opened at the bottom, not at 25
+    unmount()
+    expect(readViewMemo(H, K)).toMatchObject({ scroll: 25, pinnedToBottom: true })
+  })
   it('another filter starts at its own bottom', () => {
     const { rerender } = render(<Harness initial={range(1, 12)} filter="all" />)
     scrollTo(40)
