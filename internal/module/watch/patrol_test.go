@@ -236,7 +236,7 @@ func TestPatrol_AfterARestartTheCountStartsFromTheDaemonsStart(t *testing.T) {
 func TestPatrol_AClockThatWentBackCountsFromNowNotFromTheFuture(t *testing.T) {
 	r := newPatrolRig(t)
 	r.m.patrol.last = r.now.Add(3 * time.Hour) // a note stamped by a clock that was ahead
-	r.step(29 * time.Minute) // the first look: the stamp is replaced by now
+	r.step(29 * time.Minute)                   // the first look: the stamp is replaced by now
 	require.Empty(t, r.reasons())
 	r.step(29 * time.Minute)
 	require.Empty(t, r.reasons(), "an interval has not passed since the first look")
