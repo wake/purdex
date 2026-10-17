@@ -26,6 +26,7 @@ func SystemSources() Sources {
 	}
 	return Sources{
 		Procs: procs,
+		Tools: systemTools(),
 		Now:   time.Now,
 		CPU: func() (RawCPU, error) {
 			if mach == nil {

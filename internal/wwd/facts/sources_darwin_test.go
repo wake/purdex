@@ -7,6 +7,13 @@ import (
 	"time"
 )
 
+func deref(p *string) string {
+	if p == nil {
+		return "<null>"
+	}
+	return *p
+}
+
 // A smoke test against the real host: the sources must produce a plausible
 // record (this is what the fixtures stand in for everywhere else).
 func TestSystemSourcesSmoke(t *testing.T) {
@@ -32,6 +39,10 @@ func TestSystemSourcesSmoke(t *testing.T) {
 	if r.Mem.SwapUsedMB == nil || r.Mem.CompressorMB == nil || r.Mem.PageOutRate == nil || r.Mem.SwapOutRate == nil {
 		t.Errorf("counters missing on macOS: %+v", r.Mem)
 	}
+	if r.Tools.PHP == nil {
+		t.Errorf("php must be a list")
+	}
+	t.Logf("tools: go=%v node=%v pnpm=%v php=%v xcode=%v", deref(r.Tools.Go), deref(r.Tools.Node), deref(r.Tools.Pnpm), r.Tools.PHP, deref(r.Tools.Xcode))
 	if len(r.Disk) == 0 || r.Disk[0].FreeGB <= 0 || r.Disk[0].UsedPct <= 0 || r.Disk[0].UsedPct > 100 {
 		t.Errorf("disk: %+v", r.Disk)
 	}

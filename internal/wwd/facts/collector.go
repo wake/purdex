@@ -130,6 +130,9 @@ type Sources struct {
 	// Procs reads the process table (nil: this platform has none yet; procs and
 	// residents stay empty).
 	Procs func(now time.Time) (ProcSnapshot, ProcContext, error)
+	// Tools reads the toolchain versions (nil: tools stay all-null). It caches
+	// internally; calling it every sample is fine.
+	Tools func() wire.Tools
 }
 
 // Top-N sizes of the procs list (spec §3.1: the top 12 by memory and by CPU).
@@ -147,12 +150,13 @@ type Reading struct {
 	Disk      []wire.Disk
 	Procs     []wire.Proc
 	Residents []wire.Resident
+	Tools     wire.Tools
 }
 
 // Apply writes the reading into a facts record.
 func (r Reading) Apply(f *wire.Facts) {
 	f.At, f.CPU, f.Mem, f.Disk = r.At, r.CPU, r.Mem, r.Disk
-	f.Procs, f.Residents = r.Procs, r.Residents
+	f.Procs, f.Residents, f.Tools = r.Procs, r.Residents, r.Tools
 }
 
 // Collector takes Readings; one value belongs to one goroutine.
@@ -170,7 +174,10 @@ func NewCollector(src Sources) *Collector {
 // (Disk empty) and is joined into the error; the other fields still come back.
 func (c *Collector) Sample() (Reading, error) {
 	now := c.src.Now()
-	r := Reading{At: now, Disk: []wire.Disk{}, Procs: []wire.Proc{}, Residents: []wire.Resident{}}
+	r := Reading{At: now, Disk: []wire.Disk{}, Procs: []wire.Proc{}, Residents: []wire.Resident{}, Tools: wire.Tools{PHP: []string{}}}
+	if c.src.Tools != nil {
+		r.Tools = c.src.Tools()
+	}
 	var errs []error
 	if cpu, err := c.src.CPU(); err != nil {
 		errs = append(errs, err)
