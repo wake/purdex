@@ -2,6 +2,8 @@ package gate
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -43,4 +45,18 @@ func TestSetExpect_TheDefaultCountsAsTheCurrentValue(t *testing.T) {
 	require.NoError(t, err)
 	_, err = SetExpect(p, "", "slots.heavy", "1", ptr(d))
 	assert.Error(t, err, "it is 5 now")
+}
+
+// A config reached through a symlink and through its real path is one file with one lock.
+func TestSetExpect_ASymlinkedConfigIsLockedByItsRealPath(t *testing.T) {
+	real := cfgFile(t, "[gate.slots]\nheavy = 2\n")
+	link := filepath.Join(t.TempDir(), "link.toml")
+	require.NoError(t, os.Symlink(real, link))
+	_, err := SetExpect(link, "", "slots.heavy", "4", ptr("2"))
+	require.NoError(t, err)
+	assert.Contains(t, read(t, real), "heavy = 4")
+	_, err = os.Stat(real + ".lock")
+	assert.NoError(t, err, "the lock sits beside the real file")
+	_, err = os.Stat(link + ".lock")
+	assert.True(t, os.IsNotExist(err), "and not beside the link")
 }

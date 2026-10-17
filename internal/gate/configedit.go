@@ -69,6 +69,9 @@ func SetExpect(path, profile, key, value string, expect *string) (SetResult, err
 	if err != nil {
 		return res, err
 	}
+	if real, rerr := filepath.EvalSymlinks(path); rerr == nil {
+		path = real // one lock per file, however it is named
+	}
 	unlock, err := lockFile(path + ".lock")
 	if err != nil {
 		return res, err
