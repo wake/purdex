@@ -2,7 +2,7 @@
 // old daemon said about its teams is not the new one's. Same triggers as unattended-support.ts.
 import { describe, it, expect, beforeEach } from 'vitest'
 import { useHostStore } from '../../stores/useHostStore'
-import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
+import { connectionGeneration, useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { startRosterForget } from './roster-forget'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { teamKeyOf } from './team-views'
@@ -69,5 +69,19 @@ describe('the arrangement outlives the roster (plan review #5)', () => {
     useTeamUiStore.setState({ memberOrder: {}, collapsed: { [key]: true }, panelMode: {}, ghostWorkspace: {} })
     useTeamRosterStore.getState().forgetHost('h1')
     expect(useTeamUiStore.getState().collapsed[key]).toBe(true)
+  })
+
+  it('a removed or re-pointed host with NO roster (only a session list) is still forgotten, and its fetch in flight discarded', () => {
+    const store = useTeamRosterStore.getState()
+    store.forgetHost('h1')
+    store.markSessionsLive('h1')
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, h1: host('h1', '5.6.7.8') } }))
+    expect(useTeamRosterStore.getState().liveSessionHosts).toEqual({})
+    store.markSessionsLive('h2')
+    const g2 = connectionGeneration('h2')
+    useHostStore.setState({ hosts: { h1: host('h1', '5.6.7.8') }, hostOrder: ['h1'] })
+    expect(useTeamRosterStore.getState().liveSessionHosts).toEqual({})
+    // the generation moved too: a fetch that started before the removal cannot pass its check
+    expect(connectionGeneration('h2')).not.toBe(g2)
   })
 })

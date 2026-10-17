@@ -219,6 +219,9 @@ func TestClassify_Table(t *testing.T) {
 		{"pnpm", ClassNone},
 		{"npx", ClassNone},
 		{"make test", ClassHeavy},
+		{"make lint", ClassHeavy}, // gofmt and go vet ./... (#3089)
+		{"/usr/bin/make lint", ClassHeavy},
+		{"make lint --help", ClassNone},
 		{"make build", ClassNone},
 		// everything else
 		{"ls -la", ClassNone},

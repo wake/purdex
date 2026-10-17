@@ -1,5 +1,5 @@
 // U1-3c: the tab light over all panes through useTabDisplay.
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useAgentStore } from '../stores/useAgentStore'
 import type { NormalizedEvent, SubagentRef } from '../stores/useAgentStore'
@@ -16,7 +16,16 @@ import { emptyListCache } from '../lib/nex/execution-list-effects'
 import type { ExecutionSummary } from '../lib/nex/types'
 import type { PaneLayout, Tab } from '../types/tab'
 import { CC_ICON_VARIANTS } from '../lib/agent-icons'
+import { useFleetStore } from '../lib/fleet/store'
+import { queuedBySession } from '../lib/watch/queued-sessions'
+import type { FleetSnapshot } from '../lib/fleet/store'
+import type { FleetWaiter } from '../lib/fleet/types'
 import { useTabDisplay } from './useTabDisplay'
+
+vi.mock('../lib/watch/queued-sessions', async (orig) => {
+  const m = await orig<typeof import('../lib/watch/queued-sessions')>()
+  return { ...m, queuedBySession: vi.fn(m.queuedBySession) }
+})
 
 const tmux = (id: string, sessionCode: string, hostId = 'h1'): PaneLayout =>
   ({ type: 'leaf', pane: { id, content: { kind: 'tmux-session', hostId, sessionCode, mode: 'terminal', cachedName: sessionCode, tmuxInstance: '' } } })
@@ -119,5 +128,101 @@ describe('useTabDisplay — the light over all panes (U1-3c)', () => {
     const before = renders
     act(() => { useAgentStore.setState({ statuses: { ...useAgentStore.getState().statuses, 'h1:zzz': 'error' }, unread: { 'h1:zzz': true } }) })
     expect(renders).toBe(before)
+  })
+})
+
+describe('useTabDisplay — the queue hourglass (W5b2)', () => {
+  const agentTmux = (sessionId: string): PaneLayout => ({ type: 'leaf', pane: { id: 'p1', content: { kind: 'tmux-session', hostId: 'h1', sessionCode: 'a', mode: 'terminal', cachedName: 'a', tmuxInstance: '',
+    rebuild: { sessionName: 'a', tmuxInstance: '', agent: { type: 'cc', sessionId, updatedAt: 1 }, capturedAt: 1 } } } })
+  const waiter = (over: Partial<FleetWaiter> = {}): FleetWaiter =>
+    ({ class: 'heavy', place: 1, command: 'go test', project: 'p', session: 'sid-1', since: Date.now() - 125_000, ...over })
+  const snapshot = (waiters: FleetWaiter[]): FleetSnapshot => ({ hostId: 'h', term: 1, order: ['d1'], hosts: { d1: {
+    id: 'd1', kind: 'daemon', alias: 'd1', name: 'd1', icon: '', os: '', status: 'ok', error: null, last_ok_at: 0, fast: null,
+    slow: { at: 0, top_cpu: [], top_mem: [], queue: { heavy_used: 1, heavy_total: 1, light_used: 0, light_total: 1, holders: [], waiters, longest_wait_s: 0,
+      admission_held: false, admission_reason: '', heavy_paused: false, light_paused: false } } } } })
+  const live = { primaryHostId: 'h', stale: false, waitingPrimary: false }
+  const withFleet = (waiters: FleetWaiter[] | null) => useFleetStore.setState({ snapshot: waiters ? snapshot(waiters) : null, ...live })
+  const e = (b: NormalizedEvent['background']): NormalizedEvent => ({ agent_type: 'cc', status: 'idle', raw_event_name: 'x', broadcast_ts: 1, background: b })
+  const echoT = (k: string, p?: Record<string, string | number>) => (p ? `${k}${JSON.stringify(p)}` : k)
+
+  beforeEach(() => {
+    useFleetStore.setState({ snapshot: null, primaryHostId: null, stale: false, waitingPrimary: false })
+    useI18nStore.setState({ t: echoT })
+  })
+
+  it('no fleet: no hourglass', () => {
+    useAgentStore.setState({ statuses: { 'h1:a': 'idle' } })
+    const { result } = renderHook(() => useTabDisplay(tab(agentTmux('sid-1'))))
+    expect(result.current.background).toBeUndefined()
+    expect(result.current.backgroundWaiters).toBeUndefined()
+  })
+
+  it('a waiter of the pane session ranks above a workflow and hands its waiters to the symbol', () => {
+    withFleet([waiter({ place: 2 })])
+    useAgentStore.setState({ statuses: { 'h1:a': 'idle' }, lastEvents: { 'h1:a': e('workflow') } })
+    const { result } = renderHook(() => useTabDisplay(tab(agentTmux('SID-1'))))
+    expect(result.current.background).toBe('queued')
+    expect(result.current.backgroundWaiters).toEqual([expect.objectContaining({ place: 2, command: 'go test' })])
+  })
+
+  it('no primary, a stale or waiting primary, an offline daemon: no hourglass; it comes back with the connection', () => {
+    withFleet([waiter()])
+    useAgentStore.setState({ statuses: { 'h1:a': 'idle' } })
+    const { result } = renderHook(() => useTabDisplay(tab(agentTmux('sid-1'))))
+    expect(result.current.background).toBe('queued')
+    act(() => { useFleetStore.setState({ primaryHostId: null }) })
+    expect(result.current.background).toBeUndefined()
+    act(() => { useFleetStore.setState({ ...live, stale: true, waitingPrimary: true }) })
+    expect(result.current.background).toBeUndefined()
+    act(() => { useFleetStore.setState({ ...live, waitingPrimary: true }) })
+    expect(result.current.background).toBeUndefined()
+    act(() => {
+      const snap = useFleetStore.getState().snapshot!
+      useFleetStore.setState({ ...live, snapshot: { ...snap, hosts: { d1: { ...snap.hosts.d1, status: 'offline' } } } })
+    })
+    expect(result.current.background).toBeUndefined()
+    act(() => { withFleet([waiter()]) })
+    expect(result.current.background).toBe('queued')
+  })
+
+  it('goes when the waiter goes', () => {
+    withFleet([waiter()])
+    useAgentStore.setState({ statuses: { 'h1:a': 'idle' }, lastEvents: { 'h1:a': e('workflow') } })
+    const { result } = renderHook(() => useTabDisplay(tab(agentTmux('sid-1'))))
+    expect(result.current.background).toBe('queued')
+    act(() => { withFleet([waiter({ session: 'someone-else' })]) })
+    expect(result.current.background).toBe('workflow')
+    expect(result.current.backgroundWaiters).toBeUndefined()
+  })
+
+  it('a fleet push that changes nothing for the tab does not re-render it', () => {
+    const mine = waiter({ since: 1000 })
+    withFleet([mine])
+    useAgentStore.setState({ statuses: { 'h1:a': 'idle' } })
+    let renders = 0
+    const t1 = tab(agentTmux('sid-1'))
+    renderHook(() => { renders++; return useTabDisplay(t1) })
+    const before = renders
+    act(() => { withFleet([mine, waiter({ session: 'other', place: 2 })]) })
+    expect(renders).toBe(before)
+  })
+
+  it('the queue is worked out once per tab per fleet push', () => {
+    withFleet([waiter({ since: 1000 })])
+    useAgentStore.setState({ statuses: { 'h1:a': 'idle' } })
+    const t1 = tab(agentTmux('sid-1'))
+    renderHook(() => useTabDisplay(t1))
+    vi.mocked(queuedBySession).mockClear()
+    act(() => { withFleet([waiter({ since: 1000 }), waiter({ session: 'other', place: 2 })]) })
+    expect(queuedBySession).toHaveBeenCalledTimes(1)
+  })
+
+  it('a tab with no hourglass holds no per-minute timer', () => {
+    vi.useFakeTimers()
+    try {
+      useAgentStore.setState({ statuses: { 'h1:a': 'idle' } })
+      renderHook(() => useTabDisplay(tab(agentTmux('sid-1'))))
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers() }
   })
 })
