@@ -98,7 +98,7 @@ func TestNormalizeRelay_PromptFields(t *testing.T) {
 	}
 	_, err = normalizeRelay(json.RawMessage(`{"prompt_writ":"x"}`))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "self_solo, self_lead, prompt_write, prompt_fix and prompt_seed")
+	assert.Contains(t, err.Error(), "self_solo, self_lead, spawn_resource_check, prompt_write, prompt_fix and prompt_seed")
 
 	m := newTestModule(t)
 	for _, items := range []string{`{"prompt_fix":"[pdx-relay"}`, `{"prompt_seed":"a\u007fb"}`, `{"prompt_write":null}`,
