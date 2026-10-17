@@ -169,6 +169,7 @@ while [ "$1" != -- ]; do shift; done
 shift
 case "$mode" in
   wait75) echo "pdx gate: not admitted within 60s: the command was not run" >&2; exit 75;;
+  slowmark) sleep 3;;
   nostart) printf '\036pdx-gate-admitted:%s\n' "$PDX_GATE_ADMITTED_MARK" >&2; printf '\036pdx-gate-not-started:%s\n' "$PDX_GATE_ADMITTED_MARK" >&2; exit 126;;
 esac
 printf '\036pdx-gate-admitted:%s\n' "$PDX_GATE_ADMITTED_MARK" >&2

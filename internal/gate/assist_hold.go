@@ -8,7 +8,7 @@ import (
 )
 
 // Holds keep a host out of the walk for a while after a run failed there before it started (plan contract 9): one file per
-// host and repo, assist-hold/<host>.<repo>.json = {until, why}. Many gates write them, so a write takes assist-hold.lock and keeps
+// host and repo, assist-hold/<host>@<repo>.json = {until, why} ("@" cannot be in a name, so two pairs never share a file). Many gates write them, so a write takes assist-hold.lock and keeps
 // the later until; a reader takes the file as one atomic read.
 const (
 	holdAfterFailure = 5 * time.Minute // ssh, push, worktree, install, or the host's gate ended before the start
@@ -22,7 +22,7 @@ type AssistHold struct {
 }
 
 func holdPath(dir, host, repo string) string {
-	return filepath.Join(dir, "assist-hold", host+"."+repo+".json")
+	return filepath.Join(dir, "assist-hold", host+"@"+repo+".json")
 }
 
 // HoldHost keeps host out for repo until now+d. A hold already there that lasts longer stays.

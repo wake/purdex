@@ -170,6 +170,47 @@ func TestDispatch_NoFreeDispatchSlotKeepsTheTicketHere(t *testing.T) {
 	assert.Contains(t, out.String(), "ran-here")
 }
 
+// The connection goes before the host's mark arrives: the command may be running there, so it is not run here, the host is held and
+// nothing is left (R2: no run on two hosts).
+func TestDispatch_ALostConnectionBeforeTheMarkIsNotRunAgainHere(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "ran-here")
+	r := sendOut(t, "slowmark", `case "$PDX_GATE_TAG" in assist:*) ;; *) touch `+marker+`;; esac`, func(h *assistHost, g *Gate) {
+		writeFile(t, h.remote("ssh-drop"), "", 0o644)
+	})
+	assert.Equal(t, ExitRefused, r.code)
+	assert.Contains(t, r.errs, "was not run here")
+	assert.NoFileExists(t, marker, "never run on this host as well")
+	_, held := HeldHost(r.dir, "air26", r.repo, r.g.Now())
+	assert.True(t, held)
+	r.nothingLeft(t)
+	assert.Equal(t, "refused", r.lastDecision(t).Outcome)
+}
+
+// Two host/repo pairs whose names join into the same string have a hold of their own.
+func TestHoldHost_PairsDoNotShareAFile(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	require.NoError(t, HoldHost(dir, "a.b", "c", time.Minute, "x", now))
+	_, held := HeldHost(dir, "a", "b.c", now)
+	assert.False(t, held)
+}
+
+// A gate that is off takes no ticket: the command runs here and the request to send it says it was not honoured.
+func TestDispatch_AGateThatIsOffSaysItDidNotSend(t *testing.T) {
+	g, errs := testGate(t)
+	cfg := g.Config()
+	cfg.Enabled = false
+	g2 := New(cfg)
+	g2.Stderr = errs
+	var out bytes.Buffer
+	code, err := g2.Run(context.Background(), Options{Argv: sh(`echo ran-here`), Class: ClassHeavy, Env: cleanEnv(), Stdout: &out, Stderr: errs,
+		Assist: &AssistTarget{Host: "air26"}})
+	require.NoError(t, err)
+	assert.Equal(t, 0, code)
+	assert.Contains(t, errs.String(), "not sent to air26")
+	assert.Contains(t, out.String(), "ran-here")
+}
+
 // Holds keep the later until, and expire.
 func TestHoldHost_KeepsTheLaterUntilAndExpires(t *testing.T) {
 	dir := t.TempDir()

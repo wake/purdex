@@ -76,6 +76,8 @@ type Options struct {
 	// ExitRefused (a run sent from another host uses it to know that nothing started there).
 	WaitMax time.Duration
 	// Assist, when set, sends the command to that assist host once it has a ticket; a failure there brings the ticket back to its place.
+	// It is taken only on the queue path (a gate that is off, or a nested command, runs here and says so); who may go first is the
+	// caller's to decide (the automatic walk of X2b): this does not look at the order of the queue.
 	Assist *AssistTarget
 	Stdin  io.Reader
 	Stdout io.Writer
@@ -322,6 +324,9 @@ func (g *Gate) run(ctx context.Context, o Options, d *Decision) (int, error) {
 
 	// Nothing to hold: the gate is off, the command is not heavy, or it runs below a slot that really is held.
 	if !cfg.Enabled || !class.Valid() || g.nested(cfg, env, class) || g.underLate(cfg) {
+		if o.Assist != nil {
+			g.say("not sent to %s: this command takes no slot here (the gate is off, or it runs below one)", o.Assist.Host)
+		}
 		switch {
 		case !cfg.Enabled:
 			d.Outcome = "off"

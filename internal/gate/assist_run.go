@@ -46,6 +46,9 @@ type AssistResult struct {
 	Cancelled bool
 	// NotAdmitted says the host's gate did not admit the command within its wait (exit 75), which holds the host off for less.
 	NotAdmitted bool
+	// Uncertain says the connection went before the host's gate was seen to admit the command: it may have started there, so the
+	// command must not be run again somewhere else.
+	Uncertain bool
 	// CleanupErr is set when the job could not be removed from the host (it is left for the sweep of assist-check).
 	CleanupErr error
 }
@@ -292,6 +295,7 @@ loop:
 				res.Err = errors.New("cancelled")
 			default:
 				res.NotAdmitted = code == ExitRefused && !filter.sawNoStart
+				res.Uncertain = code == 255
 				res.Err = failedBeforeStart(a.Host, code, filter)
 			}
 			break loop
