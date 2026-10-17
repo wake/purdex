@@ -44,8 +44,14 @@ export function rowWith(w: WatchRow, key: WatchKey, value: unknown): Record<stri
   return items
 }
 
-/** The stored row after a write; null when the daemon's answer does not read (the caller then reads again). 409 → HostConfigConflictError. */
-export async function putWatchRow(hostId: string, items: Record<string, unknown>, baseRevision: number): Promise<WatchRow | null> {
+/**
+ * The stored row after a write. The daemon answers a PUT (200) and a lost compare-and-set (409) alike with the GET's shape
+ * `{items, revision, invalid?, dropped?}`: internal/module/hostconfig/handler.go:177 `writeJSON(w, status, collectionOf("put", key, entry))`,
+ * the struct at handler.go:18-23, `collectionOf` at handler.go:59-72 (a stored row is normalised, so `items` is always an object). So
+ * the answer is the new row and there is no second GET; one that does not read is a failure, not a case to work around.
+ * 409 → HostConfigConflictError carrying that same shape.
+ */
+export async function putWatchRow(hostId: string, items: Record<string, unknown>, baseRevision: number): Promise<WatchRow> {
   const res = await hostFetch(hostId, '/api/hostconfig/watch', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -58,5 +64,7 @@ export async function putWatchRow(hostId: string, items: Record<string, unknown>
     const text = (await res.text().catch(() => '')).trim()
     throw new HostConfigApiError(res.status, text || `${res.status} ${res.statusText}`.trim())
   }
-  return parseWatchRow(await res.json().catch(() => null))
+  const stored = parseWatchRow(await res.json().catch(() => null))
+  if (!stored) throw new HostConfigApiError(res.status, 'unreadable answer')
+  return stored
 }

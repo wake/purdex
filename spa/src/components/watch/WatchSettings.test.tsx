@@ -89,6 +89,8 @@ describe('WatchSettings — the 守門員 section', () => {
     expect([id, path]).toEqual(['A', '/api/hostconfig/watch'])
     expect(JSON.parse(init.body as string)).toEqual({ items: { ...FULL, y_mb: 2048 }, baseRevision: 3 })
     await waitFor(() => expect(screen.getByTestId('watch-set-y_mb')).toHaveValue('2048'))
+    // The PUT's own answer is the new row (same shape as the GET): no second read.
+    expect(hostFetch.mock.calls.filter((c) => c[0] === 'A' && (c[2] as RequestInit | undefined)?.method !== 'PUT')).toHaveLength(1)
     // The next write is built on the stored row and its new revision.
     edit('t_s', '90')
     await waitFor(() => expect(puts()).toHaveLength(2))
@@ -124,6 +126,15 @@ describe('WatchSettings — the 守門員 section', () => {
     expect(await screen.findByTestId('watch-set-error-y_mb')).toHaveTextContent('y_mb must be between 64 and 1048576')
     expect(screen.getByTestId('watch-set-y_mb')).toHaveValue('1024')
     expect(screen.queryByTestId('watch-set-conflict')).toBeNull()
+  })
+
+  it('an answer that does not read is a failed write: the error shows and the field goes back', async () => {
+    putReply = () => json(200, { nonsense: true })
+    daemonPage()
+    await screen.findByTestId('watch-set-y_mb')
+    edit('y_mb', '2048')
+    expect(await screen.findByTestId('watch-set-error-y_mb')).toBeInTheDocument()
+    expect(screen.getByTestId('watch-set-y_mb')).toHaveValue('1024')
   })
 
   it('a value that is not a number is refused here, nothing is sent', async () => {

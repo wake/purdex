@@ -92,15 +92,15 @@ function GuardianSection({ hostConfigId, offline, peerIds }: { hostConfigId: str
     setBusy(true)
     const adopt = (w: WatchRow) => { rowRef.current = w; setState({ status: 'ready', w }) }
     try {
-      const next = await putWatchRow(hostConfigId, rowWith(base, key, value), base.revision) ?? await readWatchRow(hostConfigId)
-      if (next) adopt(next)
+      adopt(await putWatchRow(hostConfigId, rowWith(base, key, value), base.revision))
       return true
     } catch (e) {
       if (e instanceof HostConfigConflictError) {
         // The daemon's copy wins: show it, and say so; the reader makes the change again on top of it.
-        const current = parseWatchRow(e.current)
-        const fresh = current ?? await readWatchRow(hostConfigId)
-        if (fresh) adopt(fresh)
+        // Same shape as the GET (see putWatchRow); a copy that does not read is a failure of this write.
+        const fresh = parseWatchRow(e.current)
+        if (!fresh) { setErrors((er) => ({ ...er, [key]: t('watch.set.write_failed') })); return false }
+        adopt(fresh)
         setNotice(t('watch.set.conflict'))
       } else {
         const msg = e instanceof HostConfigApiError ? e.message : t('watch.set.write_failed')
