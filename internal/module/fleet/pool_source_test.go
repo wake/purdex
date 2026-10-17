@@ -38,7 +38,7 @@ func factsOf(alias string, at time.Time, cpuIdle float64, pressure int, zone wir
 	return &wire.Facts{
 		V: wire.Proto, HostID: alias + "-id", Alias: alias, At: at, Platform: "darwin",
 		CPU:     wire.CPU{NCPU: 10, Load1: 2, IdlePct: cpuIdle},
-		Mem:     wire.Mem{TotalMB: 16000, AvailableMB: 8000, Pressure: pressure, PageOutRate: ptr(3.0)},
+		Mem:     wire.Mem{TotalMB: 16000, AvailableMB: 4000, Pressure: pressure, PageOutRate: ptr(3.0)},
 		Disk:    []wire.Disk{{Mount: "/", FreeGB: 120, UsedPct: 40}},
 		Procs:   []wire.Proc{{PID: 1, Name: "a", CPUPct: 10, MemMB: 900}, {PID: 2, Name: "b", CPUPct: 80, MemMB: 100}},
 		Derived: wire.Derived{Zone: zone},
@@ -74,7 +74,7 @@ func TestPoolSource_RowsFromFacts(t *testing.T) {
 	require.NotNil(t, self.Fast)
 	assert.Equal(t, "ok", self.Status)
 	assert.Equal(t, 95.0, self.Fast.CPU, "cpu is 100 - idle")
-	assert.Equal(t, 50.0, self.Fast.Mem, "mem is the used share")
+	assert.Equal(t, 75.0, self.Fast.Mem, "mem is the used share")
 	assert.Equal(t, 2, self.Fast.Level)
 	assert.Equal(t, 3.0, self.Fast.PageRate)
 	assert.Equal(t, 40.0, self.Fast.Disk)
@@ -93,6 +93,23 @@ func TestPoolSource_RowsFromFacts(t *testing.T) {
 	require.NotNil(t, peer.Fast)
 	assert.Equal(t, 10.0, peer.Fast.CPU)
 	assert.Empty(t, r.m.sessions, "no ssh session in pool mode")
+}
+
+// Facts that stop moving go stale even though wwd keeps answering; facts of a peer wwd says is unreachable are not believed.
+func TestPoolSource_StaleFactsAndUnreachableWithOldFacts(t *testing.T) {
+	r, fp := newPoolRig(t)
+	now := r.fc.Now()
+	old := peerOK("air26", now, 50, 1, wire.ZoneNormal)
+	old.Reachable = false // unreachable, but its last facts are still in the answer
+	fp.set(wire.Pool{Peers: []wire.Peer{peerOK("mlab", now, 50, 1, wire.ZoneNormal), old}}, nil)
+	r.start()
+	r.tick()
+	assert.Equal(t, "ok", r.host("mlab:abc123").Status)
+	assert.Equal(t, "offline", r.host("air26:def456").Status, "an unreachable peer's facts are not used")
+
+	r.fc.Advance(ownStaleAfter + time.Second) // the same facts (same At) come back: nothing new was read
+	r.tick()
+	assert.Equal(t, "offline", r.host("mlab:abc123").Status, "an old reading is not ok")
 }
 
 // A peer wwd cannot reach, a missing peer and a failing wwd all read offline; a returning wwd brings the row back.

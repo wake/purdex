@@ -33,7 +33,7 @@ func TestModule_MountsTheMeasuringSide(t *testing.T) {
 
 // The switch: PDX_FLEET_SOURCE=pool gives the measuring side the pool as its source; anything else leaves it as it was.
 func TestModule_PoolSourceOnlyWhenTheSwitchSaysSo(t *testing.T) {
-	t.Setenv(SourceEnv, "")
+	t.Setenv(SourceEnv, "ssh")
 	assert.Nil(t, newRig(t).m.measure.d.Pool, "the default keeps the SSH and local sources")
 	t.Setenv(SourceEnv, "pool")
 	assert.NotNil(t, newRig(t).m.measure.d.Pool)
