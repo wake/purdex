@@ -1,5 +1,4 @@
 // spa/src/components/team/TeamPanelRow.tsx — one person's row in the full list (moved out of TeamPanel.tsx, #2418).
-import { useState } from 'react'
 import { Notebook } from '@phosphor-icons/react'
 import type { TeamSeatView } from './team-display'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
@@ -13,6 +12,7 @@ import { PauseReleaseButton } from '../PauseReleaseButton'
 import { pausedLightText } from '../../lib/team/paused-text'
 import { useIsJournalHost } from '../../lib/journal/use-journal-host'
 import type { JournalMember } from '../../lib/journal/types'
+import { useCoarseNow } from '../../hooks/useCoarseNow'
 import { memberLastLine, memberTaskLine } from './member-lines'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
@@ -48,7 +48,6 @@ export function PanelRow({ noDrill, member, teamKey, seat, color, isActive, onOp
   const wb = journalHost || noDrill ? { ...wb0, has: false, conv: undefined } : wb0
   const status = wb.conv?.status.trim() ?? ''
   const task = firstSentence(status)
-  const [now] = useState(() => Date.now()) // the age of the last report, as of when the row was drawn
   const { remember, restore } = useReturnFocus()
   const transition = transitionOf(seat)
   const away = notInApp(seat)
@@ -133,9 +132,7 @@ export function PanelRow({ noDrill, member, teamKey, seat, color, isActive, onOp
         </div>
       )}
       {member?.last && (
-        <div data-testid="team-panel-member-last" title={member.last.text} className="pl-[26px] mt-0.5 text-[11px] leading-[16px] text-text-muted truncate">
-          {memberLastLine(t, member.last, now)}
-        </div>
+        <MemberLastLine last={member.last} />
       )}
       {/* Line 2 (older hosts): the task (only with a workbook that has a status); without one the row stays one line */}
       {task !== '' && (
@@ -143,6 +140,17 @@ export function PanelRow({ noDrill, member, teamKey, seat, color, isActive, onOp
           {task}
         </div>
       )}
+    </div>
+  )
+}
+
+/** Line 3 of a member row. Its own component so that only a row WITH a last report subscribes to the minute clock. */
+function MemberLastLine({ last }: { last: NonNullable<JournalMember['last']> }) {
+  const t = useI18nStore((s) => s.t)
+  const now = useCoarseNow()
+  return (
+    <div data-testid="team-panel-member-last" title={last.text} className="pl-[26px] mt-0.5 text-[11px] leading-[16px] text-text-muted truncate">
+      {memberLastLine(t, last, now)}
     </div>
   )
 }
