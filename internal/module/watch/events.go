@@ -256,7 +256,8 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 				m.writeErr(w, status, "ack_failed", err.Error())
 				return
 			}
-			resp.Hosts, resp.Remaining = m.leftEverywhere(ctx, began, resp.Unhandled, nil)
+			hosts, total := m.leftEverywhere(ctx, began, resp.Unhandled, nil)
+			resp.Hosts, resp.Remaining = hosts, &total
 			m.writeJSON(w, http.StatusOK, resp)
 			return
 		}
