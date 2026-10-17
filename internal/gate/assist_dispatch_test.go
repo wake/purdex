@@ -103,7 +103,9 @@ func TestDispatch_AFailureBeforeTheStartRunsItHereAndHoldsTheHost(t *testing.T) 
 	assert.WithinDuration(t, r.g.Now().Add(holdAfterFailure), hold.Until, 30*time.Second)
 	assert.NotEmpty(t, hold.Why)
 	r.nothingLeft(t)
-	assert.Equal(t, "slot", r.lastDecision(t).Outcome)
+	d := r.lastDecision(t)
+	assert.Equal(t, "slot", d.Outcome)
+	assert.Empty(t, d.Host, "nothing ran on the host")
 }
 
 // The host's gate not admitting in time (75) holds it for 2 minutes only.
@@ -128,7 +130,7 @@ func TestDispatch_AReclaimSendsItBackToTheQueue(t *testing.T) {
 	r.nothingLeft(t)
 	d := r.lastDecision(t)
 	assert.True(t, d.Reclaimed)
-	assert.Equal(t, "air26", d.Host)
+	assert.Empty(t, d.Host, "it ran here in the end")
 	assert.Equal(t, "slot", d.Outcome, "it ran here in the end")
 }
 

@@ -46,17 +46,22 @@ func (g *Gate) tryAssist(ctx context.Context, cfg Config, class Class, o Options
 		return 0, false
 	}
 	res := g.RunAssist(ctx, o, AssistRun{Host: a.Host, Job: job, Repo: repo, SSH: a.SSH, Git: a.Git})
-	d.Host, d.TransferS, d.RunS, d.Reclaimed = a.Host, res.TransferS, res.RunS, res.Reclaimed
+	d.TransferS, d.RunS, d.Reclaimed = res.TransferS, res.RunS, res.Reclaimed
 	// Every way out lets the dispatch slot go: a return to the queue lets it go first (Ticket.Return), the others here.
-	back := func(hold time.Duration, why string) {
+	// A ticket that cannot be put back is not left out for ever (nothing would serve it): the command is refused.
+	back := func(hold time.Duration, why string) (int, bool) {
 		if hold > 0 {
 			if err := HoldHost(cfg.Dir, a.Host, repo, hold, why, g.Now()); err != nil {
 				g.say("%s: the hold could not be written: %v", a.Host, err)
 			}
 		}
 		if err := ticket.Return(slot, g.Holders); err != nil {
-			g.say("%s: the ticket could not be put back: %v", a.Host, err)
+			g.say("%s: the ticket could not be put back (%v): the command was not run", a.Host, err)
+			ticket.Drop()
+			d.Outcome = "refused"
+			return ExitRefused, true
 		}
+		return 0, false
 	}
 	switch {
 	case res.Cancelled:
@@ -66,18 +71,16 @@ func (g *Gate) tryAssist(ctx context.Context, cfg Config, class Class, o Options
 		return res.Code, true
 	case res.Reclaimed:
 		g.say("%s was taken back; waiting again on mlab", a.Host)
-		back(0, "")
-		return 0, false
+		return back(0, "")
 	case !res.Started:
 		why := fmt.Sprint(res.Err)
 		g.say("%s: %s; waiting on this host", a.Host, why)
 		if res.NotAdmitted {
-			back(holdAfterNoSlot, why)
-		} else {
-			back(holdAfterFailure, why)
+			return back(holdAfterNoSlot, why)
 		}
-		return 0, false
+		return back(holdAfterFailure, why)
 	}
+	d.Host = a.Host // it ran there
 	ticket.Drop()
 	slot.Release(g.Holders)
 	d.Outcome = "assist"
