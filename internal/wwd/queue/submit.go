@@ -48,12 +48,12 @@ func insertJob(ctx context.Context, c *sql.Conn, id, origin string, s wire.JobSu
 	_, err := c.ExecContext(ctx, `INSERT INTO jobs (
 			id, origin, repo_name, repo_root, repo_remote, snap_commit, snap_tree, snap_base, snap_rel_cwd,
 			task, args, class, labels, locks, cacheable, timeout_s, supersede_key, interruptible, queue_timeout_s, adhoc,
-			sub_session, sub_ref, sub_team, sub_host, created_at, state, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?)`,
+			sub_session, sub_ref, sub_team, sub_host, created_at, state, updated_at, git_dir)
+		VALUES (?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?)`,
 		id, origin, s.Repo.Name, s.Repo.Root, s.Repo.Remote, s.Snapshot.Commit, s.Snapshot.Tree, s.Snapshot.Base, s.Snapshot.RelCwd,
 		s.Task, list(s.Args), string(s.Class), list(s.Labels), list(s.Locks), b2i(s.Cacheable), s.TimeoutS, s.SupersedeKey,
 		b2i(s.Interruptible), s.QueueTimeoutS, b2i(s.AdHoc),
-		s.Submitter.Session, s.Submitter.Ref, s.Submitter.Team, s.Submitter.Host, nowMS, string(wire.StateQueued), nowMS)
+		s.Submitter.Session, s.Submitter.Ref, s.Submitter.Team, s.Submitter.Host, nowMS, string(wire.StateQueued), nowMS, s.GitDir)
 	return err
 }
 
