@@ -312,6 +312,11 @@ func checkPlaceholderContext(run string) error {
 			return fmt.Errorf("placeholder %s must be a separate word", run[s:e])
 		}
 	}
+	// A command substitution would re-split a substituted value; a run that
+	// takes placeholders may not contain one.
+	if placeholderRe.MatchString(run) && (strings.Contains(run, "$(") || strings.Contains(run, "`")) {
+		return fmt.Errorf("run with placeholders must not use command substitution")
+	}
 	var quote byte
 	for i := 0; i < len(run); i++ {
 		c := run[i]

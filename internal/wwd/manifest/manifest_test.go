@@ -278,6 +278,8 @@ func TestParseRejectsQuotedOrGluedPlaceholders(t *testing.T) {
 		"backslash brace": `tool "x\{files}"`,
 		"quoted after =":  `tool --opt="{files}"`,
 		"lone backslash":  `tool "a\b {files}"`,
+		"cmd subst":       `tool $(printf '%s' {files} )`,
+		"backtick subst":  "tool `echo {files} `",
 	} {
 		src := "[tasks.a]\nrun = " + strconv.Quote(run) + "\nargs = \"files\"\n"
 		if _, err := Parse([]byte(src)); err == nil {
