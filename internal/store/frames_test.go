@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -1436,5 +1437,58 @@ func TestFramesStore_ListRootsBySessionID_CaseInsensitive(t *testing.T) {
 	got, err = s.ListRootsBySessionID("0A1B2C3D-0000-4000-8000-000000000002")
 	if err != nil || len(got) != 1 || got[0].FrameID != lo.FrameID {
 		t.Fatalf("upper query for a lower-case frame: %+v, %v", got, err)
+	}
+}
+
+func TestFramesStore_ListByPanes_MatchesListAllFilter(t *testing.T) {
+	s := openTestFramesStore(t)
+	for i, pane := range []string{"%1", "%1", "%2", "%3", "%4"} {
+		if _, err := s.Upsert(Frame{PaneID: pane, AgentType: "cc", PID: 100 + i, ProcessStartTime: "t", StartedAt: int64(10 - i), LastSeenAt: 1}); err != nil {
+			t.Fatalf("upsert: %v", err)
+		}
+	}
+	all, err := s.ListAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"%1": true, "%3": true, "%missing": true}
+	var wantFrames []Frame
+	for _, f := range all {
+		if want[f.PaneID] {
+			wantFrames = append(wantFrames, f)
+		}
+	}
+	got, err := s.ListByPanes([]string{"%3", "%1", "%1", "%missing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, wantFrames) {
+		t.Fatalf("ListByPanes = %+v, want %+v", got, wantFrames)
+	}
+}
+
+func TestFramesStore_ListByPanes_EmptyAndChunked(t *testing.T) {
+	s := openTestFramesStore(t)
+	if got, err := s.ListByPanes(nil); err != nil || len(got) != 0 {
+		t.Fatalf("empty = %v, %v", got, err)
+	}
+	// more panes than one SQLite variable chunk
+	var ids []string
+	for i := 0; i < 1200; i++ {
+		id := fmt.Sprintf("%%%04d", i)
+		ids = append(ids, id)
+		if i%100 == 0 {
+			if _, err := s.Upsert(Frame{PaneID: id, AgentType: "cc", PID: i + 1, ProcessStartTime: "t", StartedAt: 1, LastSeenAt: 1}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	got, err := s.ListByPanes(ids)
+	if err != nil {
+		t.Fatalf("1200 panes: %v", err)
+	}
+	all, _ := s.ListAll()
+	if !reflect.DeepEqual(got, all) {
+		t.Fatalf("chunked read = %d frames, ListAll %d (order must match ListAll)", len(got), len(all))
 	}
 }
