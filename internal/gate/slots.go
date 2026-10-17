@@ -176,12 +176,22 @@ type Ticket struct {
 	Name string
 	path string
 	f    *os.File
+	p    *Pool // the pool it queues in: its admit lock orders the removal with every other queue change (rank.go)
 }
 
 // Drop removes the ticket (the slot was taken or the gate gives up).
 func (t *Ticket) Drop() {
 	if t == nil || t.f == nil {
 		return
+	}
+	// Under the admit lock like every queue change: the ticket and its rank go together, and a SetRank that meets the ticket gone
+	// answers "no longer waiting" instead of leaving a rank behind. A lock that cannot be taken still removes the ticket: giving up
+	// must not wait on a directory that is in trouble.
+	if t.p != nil {
+		if unlock, err := t.p.lockAdmitWithin(dropLockWait); err == nil {
+			defer unlock()
+		}
+		_ = os.Remove(t.p.rankPath(t.Name))
 	}
 	_ = os.Remove(t.path)
 	_ = t.f.Close()
@@ -253,7 +263,7 @@ func (p *Pool) EnqueueFor(info WaiterInfo) (*Ticket, error) {
 	if err := os.Rename(tmp, path); err != nil {
 		return fail(err)
 	}
-	return &Ticket{Name: name, path: path, f: f}, nil
+	return &Ticket{Name: name, path: path, f: f, p: p}, nil
 }
 
 // liveBefore lists the live tickets older than t; a ticket whose lock is free belongs to a gate that is gone and is
@@ -353,6 +363,7 @@ func (p *Pool) waiting(clean bool) int {
 		if st, _ := flockNB(f); st == lockGot {
 			if clean {
 				_ = os.Remove(path)
+				_ = os.Remove(path + ".rank") // a rank never outlives its ticket
 			}
 			_ = f.Close()
 			continue
@@ -366,37 +377,66 @@ func (p *Pool) waiting(clean bool) int {
 // TryTake takes a slot if the ticket may have one now: the live tickets before it are fewer than the free slots.
 // ahead is how many live tickets are before it (for the place the gate prints). ok is false when it must wait.
 func (p *Pool) TryTake(t *Ticket) (slot *Slot, ahead int, err error) {
-	if err := os.MkdirAll(p.Dir, 0o755); err != nil {
-		return nil, 0, dirError(err)
-	}
-	mu, err := os.OpenFile(filepath.Join(p.Dir, string(p.Class)+".admit"), os.O_CREATE|os.O_RDWR, 0o644)
-	if err != nil {
-		return nil, 0, dirError(err)
-	}
-	defer mu.Close()
-	if err := flockWait(mu); err != nil {
-		return nil, 0, dirError(err)
-	}
-	defer syscall.Flock(int(mu.Fd()), syscall.LOCK_UN) //nolint:errcheck
+	tk, err := p.TryTakeRanked(t)
+	return tk.Slot, tk.Ahead, err
+}
 
-	before, err := p.liveBefore(t)
+// Take is TryTake's answer with the ticket's rank: Slot is nil when it must wait; Ahead is the tickets served before it (none while it
+// is held) and AheadFront how many of those were moved to the front; Rank is the ticket's own. Held is true for a hold: it takes no
+// slot however many are free.
+type Take struct {
+	Slot       *Slot
+	Ahead      int
+	AheadFront int
+	Rank       RankInfo
+	Held       bool
+}
+
+// TryTakeRanked is TryTake that also says where the ticket stands in the serving order (rank.go).
+func (p *Pool) TryTakeRanked(t *Ticket) (Take, error) {
+	unlock, err := p.lockAdmit()
 	if err != nil {
-		return nil, 0, dirError(err)
+		return Take{}, err
 	}
-	ahead = len(before)
+	defer unlock()
+
+	snap, err := p.snapshotLocked()
+	if err != nil {
+		return Take{}, err
+	}
+	ahead, aheadFront, rank, found := snap.Ahead(t.Name)
+	if !found {
+		// Not listed (its file was removed from under it): it stands where its name puts it, behind the live tickets older than it,
+		// as before ranks - never at the head of the line.
+		rank = RankInfo{Rank: RankNormal}
+		ahead, aheadFront = snap.PlaceOfMissing(t.Name)
+	}
+	out := Take{Ahead: ahead, AheadFront: aheadFront, Rank: rank}
+	if rank.Rank == RankHold {
+		out.Held = true
+		return out, nil // held: not served while a slot is free either
+	}
+	slot, err := p.takeLocked(ahead)
+	out.Slot = slot
+	return out, err
+}
+
+// takeLocked is the slot part of TryTake, with the admit lock held and the ahead tickets counted: a slot when the free ones outnumber
+// them.
+func (p *Pool) takeLocked(ahead int) (*Slot, error) {
 	var free []*os.File
 	var freeK []int
 	for k := 1; k <= p.Size; k++ {
 		f, err := os.OpenFile(p.slotPath(k), os.O_CREATE|os.O_RDWR, 0o644)
 		if err != nil {
 			closeAll(free)
-			return nil, ahead, dirError(err)
+			return nil, dirError(err)
 		}
 		st, lerr := lockProbe(f)
 		if st == lockBroken {
 			_ = f.Close()
 			closeAll(free)
-			return nil, ahead, dirError(lerr)
+			return nil, dirError(lerr)
 		}
 		if st == lockHeld {
 			_ = f.Close()
@@ -408,7 +448,7 @@ func (p *Pool) TryTake(t *Ticket) (slot *Slot, ahead int, err error) {
 	// A slot held beyond the size of the pool (a late holder) uses up a free one: the pool is full while it is held.
 	if ahead >= len(free)-p.overHeld() {
 		closeAll(free)
-		return nil, ahead, nil
+		return nil, nil
 	}
 	// keep the lowest free slot; the other probes are given back
 	closeAll(free[1:])
@@ -418,9 +458,9 @@ func (p *Pool) TryTake(t *Ticket) (slot *Slot, ahead int, err error) {
 	// before it writes the holder, and a slot with no record in that time read as a holder of no pid and no start (#3049).
 	if err := p.writePlaceholder(freeK[0]); err != nil {
 		closeAll(free[:1]) // the lock is let go again: a record that cannot be replaced must not stay beside a lock we hand out
-		return nil, ahead, dirError(err)
+		return nil, dirError(err)
 	}
-	return &Slot{Class: p.Class, K: freeK[0], f: free[0], rec: p.recordPath(freeK[0])}, ahead, nil
+	return &Slot{Class: p.Class, K: freeK[0], f: free[0], rec: p.recordPath(freeK[0])}, nil
 }
 
 // writePlaceholder replaces the record of slot k, whatever it holds, by one that names this process and the moment: atomically, with

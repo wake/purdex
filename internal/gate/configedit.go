@@ -437,10 +437,21 @@ func writeAtomic(path string, data []byte) error {
 		tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil { // the data is on disk before the name points at it
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return err
+	}
+	if d, err := os.Open(filepath.Dir(path)); err == nil { // and the rename itself survives a crash
+		_ = d.Sync()
+		d.Close()
+	}
+	return nil
 }
 
 // lockFile serialises two `pdx gate set` so neither loses the other's change.
