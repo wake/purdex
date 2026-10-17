@@ -39,18 +39,22 @@ type Decision struct {
 	Class      Class   `json:"class,omitempty"`
 	// ClassSource is how the class was had: classifier (the gate's rules by the command's words), kind (the old lease kind
 	// of `pdx lease run`, for a command the rules do not know); empty when the person named the class.
-	ClassSource string             `json:"class_source,omitempty"`
-	Profile     string             `json:"profile"`
-	Outcome     string             `json:"outcome"` // slot | no-slot | off | nested | refused | interrupted | orphaned | packaging | none
-	Slot        string             `json:"slot,omitempty"`
-	WaitS       float64            `json:"wait_s"`
-	WaitWhy     []string           `json:"wait_reasons,omitempty"` // queue | memory-pressure | pressure-unreadable
-	Applied     map[string]Applied `json:"applied,omitempty"`
-	Added       []string           `json:"limits_added,omitempty"`
-	Left        []string           `json:"left_running,omitempty"`
-	Exit        int                `json:"exit"`
-	Duration    float64            `json:"duration_s"`
-	dir         string
+	ClassSource string   `json:"class_source,omitempty"`
+	Profile     string   `json:"profile"`
+	Outcome     string   `json:"outcome"` // slot | no-slot | off | nested | refused | interrupted | orphaned | packaging | none
+	Slot        string   `json:"slot,omitempty"`
+	WaitS       float64  `json:"wait_s"`
+	WaitWhy     []string `json:"wait_reasons,omitempty"` // queue | memory-pressure | pressure-unreadable | paused | held
+	// Rank is the ticket's last rank while it waited (front | back | hold; absent for a plain normal ticket) and HeldS the seconds it
+	// spent on hold (spec §5.2).
+	Rank     string             `json:"rank,omitempty"`
+	HeldS    float64            `json:"held_s,omitempty"`
+	Applied  map[string]Applied `json:"applied,omitempty"`
+	Added    []string           `json:"limits_added,omitempty"`
+	Left     []string           `json:"left_running,omitempty"`
+	Exit     int                `json:"exit"`
+	Duration float64            `json:"duration_s"`
+	dir      string
 }
 
 func (d *Decision) why(reason string) {

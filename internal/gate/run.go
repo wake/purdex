@@ -48,6 +48,11 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 	warned := false
 	lastPlace := time.Time{}
 	waitStart := time.Time{} // set at the first look that did not get a slot
+	var (
+		pollAt   time.Time // when the previous poll looked
+		prevHold bool      // the previous poll found the ticket on hold: the time since then is held time
+		heldFor  time.Duration
+	)
 	for {
 		if !keepOrphan && parent > 1 && g.parentPID() != parent {
 			g.say("the process that ran this command is gone: it is not queued any more, and was not run")
@@ -79,26 +84,40 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 				}
 			}
 		}
-		ahead := 0
+		ahead, aheadFront := 0, 0
+		var rank RankInfo
+		pool := g.pool(cfg, class)
 		if ok {
-			slot, a, err := g.pool(cfg, class).TryTake(ticket)
+			tk, err := pool.TryTakeRanked(ticket)
 			if err != nil {
 				return broken(err)
 			}
-			if slot != nil {
+			if tk.Slot != nil {
 				ticket.Drop()
+				d.Rank, d.HeldS = rankName(tk.Rank), heldFor.Seconds()
 				if !waitStart.IsZero() {
 					d.WaitS = g.Now().Sub(waitStart).Seconds()
 					g.say("%s", grantedLine(class, g.Now().Sub(waitStart)))
 				}
-				return slot, 0, false
+				return tk.Slot, 0, false
 			}
-			ahead = a
+			ahead, aheadFront, rank = tk.Ahead, tk.AheadFront, tk.Rank
+		} else {
+			rank = rankOfTicket(pool.peekSnapshot(), ticket.Name) // a poll the pressure check keeps from asking still reads its rank
 		}
 		now := g.Now()
+		// The time the ticket spent on hold: each interval between two polls counts when the earlier poll found it held (a hold
+		// during a pressure wait, an expiry, a release and a new hold all add up the same way).
+		if prevHold && !pollAt.IsZero() {
+			heldFor += now.Sub(pollAt)
+		}
+		pollAt, prevHold = now, rank.Rank == RankHold
+		d.Rank, d.HeldS = rankName(rank), heldFor.Seconds()
 		switch {
 		case paused:
 			d.why("paused")
+		case rank.Rank == RankHold:
+			d.why("held")
 		case ok:
 			d.why("queue")
 		case good == nil:
@@ -114,9 +133,11 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 			switch {
 			case paused:
 				g.say("%s", pausedLine(class))
+			case rank.Rank == RankHold:
+				g.say("%s", heldLine(class, rank, now))
 			case ok:
-				holders := g.pool(cfg, class).Held()
-				g.say("%s", waitingLine(class, ahead+len(holders), holders, now)) // everything in front of it: the running and the queued
+				holders := pool.Held()
+				g.say("%s", withFrontNote(waitingLine(class, ahead+len(holders), holders, now), aheadFront)) // everything in front of it: the running and the queued
 			default:
 				g.say("%s", pressureLine(lastPressure(good), cfg.Admission, good != nil))
 			}
