@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { HostConfigApiError, HostConfigConflictError } from '../../lib/host-config-api'
+import { forgetWatchDraft, readWatchDraft, watchDraftKey, writeWatchDraft } from '../../lib/watch/draft-memory'
 import { parseWatchRow, readWatchRow, type WatchRow } from '../../lib/watch/watch-row'
 import { isSet, putWatchRow, rowWith, valueOf, type WatchKey } from '../../lib/watch/watch-row-write'
 import { Section } from '../hosts/form-fields'
@@ -38,12 +39,24 @@ function targetsOf(w: WatchRow): string[] {
 }
 
 /** A text-like control: edited locally, committed on blur / Enter, put back to the stored value when the write is refused. */
-function TextControl({ k, kind, stored, onCommit, label }: { k: WatchKey; kind: Kind; stored: string; onCommit: (raw: string) => Promise<boolean>; label: string }) {
-  const [draft, setDraft] = useState(stored)
-  useEffect(() => { setDraft(stored) }, [stored])
+function TextControl({ k, kind, stored, onCommit, label, draftKey }: {
+  k: WatchKey; kind: Kind; stored: string; onCommit: (raw: string) => Promise<boolean>; label: string; draftKey: string
+}) {
+  // The unsent text lives in `lib/watch/draft-memory`, not only here: the tab unmounts on a switch (checklist).
+  const [draft, setDraftState] = useState(() => readWatchDraft(draftKey) ?? stored)
+  const setDraft = (text: string) => { writeWatchDraft(draftKey, text); setDraftState(text) }
+  const settle = (text: string) => { forgetWatchDraft(draftKey); setDraftState(text) }
+  // A stored value that changed under the box (a write landed, a 409 reloaded) replaces whatever was typed.
+  const seen = useRef(stored)
+  useEffect(() => {
+    if (seen.current !== stored) { seen.current = stored; settle(stored) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- settle only closes over the key
+  }, [stored])
   const commit = async () => {
-    if (draft === stored) return
-    if (!(await onCommit(draft))) setDraft(stored)
+    if (draft === stored) { forgetWatchDraft(draftKey); return }
+    const ok = await onCommit(draft)
+    forgetWatchDraft(draftKey) // sent, refused (400) or reloaded (409): the draft has ended either way
+    if (!ok) setDraftState(stored)
   }
   if (kind === 'textarea') {
     return <textarea aria-label={label} data-testid={`watch-set-${k}`} rows={3} className={`${INPUT} w-96 font-mono`} value={draft}
@@ -154,7 +167,7 @@ function GuardianSection({ hostConfigId, offline, peerIds }: { hostConfigId: str
                 <SegmentControl options={[{ value: 'resident', label: t('watch.set.mode.resident') }, { value: 'patrol', label: t('watch.set.mode.patrol') }]}
                   value={v === 'resident' ? 'resident' : 'patrol'} onChange={(m) => void write('mode', m)} />
               ) : (
-                <TextControl k={f.key} kind={f.kind} label={label} stored={show(f.kind, v)} onCommit={commitText(f)} />
+                <TextControl k={f.key} kind={f.kind} label={label} stored={show(f.kind, v)} draftKey={watchDraftKey(hostConfigId, f.key)} onCommit={commitText(f)} />
               )}
             </SettingItem>
             <div className="-mt-2 mb-1 text-[11px] text-text-muted" data-testid={`watch-set-source-${f.key}`}>{source}</div>
