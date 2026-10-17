@@ -8,10 +8,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/wake/purdex/internal/wwd/facts"
 )
 
 // MarkEnv is the environment variable that names the job a process belongs to.
-const MarkEnv = "WWD_JOB"
+const MarkEnv = facts.JobMarkerEnv
 
 // fixedNames are set by the runner and cannot be allowed or overridden by a manifest: they point at the job's workspace or
 // identify the job.
@@ -24,7 +26,8 @@ var fixedNames = map[string]bool{
 // the job mark, and what the task's env list asks for. An entry is "NAME" (taken from parent when it has it) or "NAME=value"
 // (fixed). parent is only read for allowed names; nothing else of it reaches the command.
 func BuildEnv(jobID, workspace string, taskEnv, parent []string) ([]string, error) {
-	if jobID == "" || strings.ContainsAny(jobID, "=\x00\n") {
+	// the id must be one the facts' shared check recognises as a mark, or the sweep and the attribution could not find the job
+	if _, ok := facts.JobFromEnv([]string{MarkEnv + "=" + jobID}); !ok {
 		return nil, fmt.Errorf("run: invalid job id %q", jobID)
 	}
 	if !filepath.IsAbs(workspace) {
