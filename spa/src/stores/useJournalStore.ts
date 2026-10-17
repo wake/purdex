@@ -53,6 +53,8 @@ export interface UnitState {
   sessions: SessionLink[] | null
   /** A predecessor reader is not registered: sessions older than the first listed may be missing. */
   sessionsIncomplete: boolean
+  /** The last read of the chain failed (the daemon's 503: a loop, a chain too long, a read error, no lead); ends only when a chain arrives. The current page is unaffected. */
+  sessionsFailed: boolean
   /** The other sessions' pages that were read, by leader session id (least recently read first). */
   pages: Record<string, PageState>
   /** null = never loaded (loaded when the tasks / roadmap tab opens, then kept fresh). */
@@ -287,7 +289,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
           more: paged ? false : older || !held || held.entries.length === 0 ? page.more : held.more,
           currentPage: paged ? page.page : (held?.currentPage ?? ''),
           truncated: paged ? page.truncated : (held?.truncated ?? false),
-          sessions: held?.sessions ?? null, sessionsIncomplete: held?.sessionsIncomplete ?? false, pages: held?.pages ?? {},
+          sessions: held?.sessions ?? null, sessionsIncomplete: held?.sessionsIncomplete ?? false, sessionsFailed: held?.sessionsFailed ?? false, pages: held?.pages ?? {},
           tasks: held?.tasks ?? null, roadmap: held?.roadmap ?? null,
           staleAt: held?.staleAt ?? zero(), readAt, touched: nextStamp(),
         }
@@ -309,13 +311,22 @@ export const useJournalStore = create<JournalState>()((set, get) => {
     loadSessions: async (hostId, sessionId) => {
       if (!unitOf(hostId, sessionId)) return { kind: 'no_unit' }
       const startedKey = get().byHost[hostId]?.unitOfSession[sessionId]
-      return read(hostId, slotOf(hostId, sessionId, 'sessions'), () => getJournalSessions(hostId, sessionId), (chain) => set((s) => {
+      const res = await read(hostId, slotOf(hostId, sessionId, 'sessions'), () => getJournalSessions(hostId, sessionId), (chain) => set((s) => {
         const h = s.byHost[hostId]
         const key = h?.unitOfSession[sessionId]
         const held = key === undefined ? undefined : h?.units[key]
         if (!h || key === undefined || key !== startedKey || !held) return {}
-        return { byHost: { ...s.byHost, [hostId]: { ...h, units: { ...h.units, [key]: { ...held, sessions: chain.sessions, sessionsIncomplete: chain.incomplete } } } } }
+        return { byHost: { ...s.byHost, [hostId]: { ...h, units: { ...h.units, [key]: { ...held, sessions: chain.sessions, sessionsIncomplete: chain.incomplete, sessionsFailed: false } } } }
       }))
+      // A chain that could not be read is an error to show (the pager is unusable), not "no earlier sessions"; the rows of the current page stay.
+      if (res.kind === 'failed' || res.kind === 'none') {
+        set((s) => {
+          const h = s.byHost[hostId]
+          const held = startedKey === undefined ? undefined : h?.units[startedKey]
+          return h && held && h.unitOfSession[sessionId] === startedKey ? { byHost: { ...s.byHost, [hostId]: { ...h, units: { ...h.units, [startedKey!]: { ...held, sessionsFailed: true } } } } } : {}
+        })
+      }
+      return res
     },
 
     loadPage: async (hostId, sessionId, pageId) => {
