@@ -37,7 +37,7 @@ function chain(): Element[] {
   for (let el = screen.getByTestId('workbook-body').parentElement; el && el !== area; el = el.parentElement) out.push(el)
   return out
 }
-function expectFollowsArea(mode: 'full' | 'max') {
+function expectFollowsArea() {
   const body = screen.getByTestId('workbook-body')
   for (const c of ['flex-1', 'min-h-0', 'overflow-y-auto']) expect(cls(body)).toContain(c)
   expect(body.className).not.toMatch(/(^|\s)max-h-/)
@@ -47,8 +47,7 @@ function expectFollowsArea(mode: 'full' | 'max') {
     expect(cls(el), el.getAttribute('data-testid') ?? el.className).toEqual(expect.arrayContaining(['flex', 'flex-col', 'min-h-0']))
   }
   const area = screen.getByTestId('team-panel-area')
-  if (mode === 'max') expect(cls(area)).toContain('inset-3') // a definite height: the pane's
-  else expect(area.className).toMatch(/max-h-\[calc\(100%-12px\)\]/) // bounded by the pane
+  expect(area.className).toMatch(/max-h-\[calc\(100%-12px\)\]/) // bounded by the pane
 }
 
 beforeEach(() => {
@@ -63,7 +62,7 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe('a tab\'s own workbook', () => {
-  const own = (mode: 'full' | 'max') => {
+  const own = (mode: 'full') => {
     seedScene({ members: [['A', 'a-tm']], tabs: [['lead', 'lead-tm'], ['ma', 'a-tm'], ['x', null]], workspaces: [{ id: 'w1', tabs: ['lead', 'ma', 'x'] }], activeTabId: 'x' })
     act(() => {
       const tab = ccTab('cc1', 'S1')
@@ -73,18 +72,16 @@ describe('a tab\'s own workbook', () => {
     seedWorkbook(HOST, 'S1', { status: 's', entries: [entry(2)] })
     mount()
   }
-  it('full: the scroll box and its containers follow the area', () => { own('full'); expectFollowsArea('full') })
-  it('max: fills the pane', () => { own('max'); expectFollowsArea('max') })
+  it('full: the scroll box and its containers follow the area', () => { own('full'); expectFollowsArea() })
 })
 
 describe('a team\'s drilled-in seat workbook', () => {
-  const drilled = (mode: 'full' | 'max') => {
+  const drilled = (mode: 'full') => {
     seedScene({ members: [['A', 'a-tm']], tabs: [['lead', 'lead-tm'], ['ma', 'a-tm']], workspaces: [{ id: 'w1', tabs: ['lead', 'ma'] }], activeTabId: 'lead' })
     seedWorkbook(HOST, 'A', { status: 's', entries: [entry(2)] })
     useTeamUiStore.getState().setPanelMode(KEY, mode)
     useTeamUiStore.getState().setTeamDrill(KEY, { hostId: HOST, sessionId: 'A' })
     mount()
   }
-  it('full', () => { drilled('full'); expectFollowsArea('full') })
-  it('max', () => { drilled('max'); expectFollowsArea('max') })
+  it('full', () => { drilled('full'); expectFollowsArea() })
 })

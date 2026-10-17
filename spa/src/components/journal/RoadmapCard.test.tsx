@@ -8,7 +8,7 @@ vi.mock('../../lib/journal/api', () => ({
   getJournal: vi.fn(),
   getTasks: vi.fn(),
   getRoadmap: (...a: unknown[]) => getRoadmap(...a),
-  setPinned: vi.fn(),
+  setConfirmItem: vi.fn(),
 }))
 vi.mock('../team/TeamSeatIcon', () => ({
   TeamSeatIcon: () => <span data-testid="seat-icon" />,
@@ -17,7 +17,7 @@ vi.mock('../team/TeamSeatIcon', () => ({
 
 import { CardStack } from './CardStack'
 import { TeamDisplayProvider } from '../team/TeamDisplayProvider'
-import { HOST, KEY, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
+import { HOST, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
 import { ccTabOf, seedUnit, setJournalHost } from '../../lib/journal/__tests__/journal-fixture'
 import { clearViewMemos, patchViewMemo } from '../../lib/journal/view-memory'
 import { clearModuleRegistry } from '../../lib/module-registry'
@@ -51,7 +51,7 @@ beforeEach(() => {
   localStorage.clear()
   resetTeamStores()
   useJournalStore.getState().reset()
-  useJournalUiStore.setState({ lastWidths: {}, teamOpen: {} })
+  useJournalUiStore.setState({ lastWidths: {} })
   clearViewMemos()
   clearModuleRegistry()
   getRoadmap.mockReset()
@@ -137,17 +137,16 @@ describe('the roadmap card: tables', () => {
 })
 
 describe('the roadmap card in the stack', () => {
-  it('alone on the left without a team; under the team card with one', () => {
+  it('alone on the left, with or without a team', () => {
     seedSolo(FEATURES)
     const r = mount()
-    expect([...screen.getByTestId('journal-team-column').children].map((c) => (c as HTMLElement).dataset.testid)).toEqual(['journal-roadmap-card'])
+    expect([...screen.getByTestId('journal-side-column').children].map((c) => (c as HTMLElement).dataset.testid)).toEqual(['journal-roadmap-card'])
     r.unmount()
     const key = seedUnit(HOST, 'SL', TEAM, { roadmap: FEATURES })
     patchViewMemo(HOST, key, { journalOpen: true, roadmapOpen: true })
-    useJournalUiStore.getState().setTeamOpen(KEY, true)
     setActive('lead')
     mount()
-    expect([...screen.getByTestId('journal-team-column').children].map((c) => (c as HTMLElement).dataset.testid)).toEqual(['journal-team-card', 'journal-roadmap-card'])
+    expect([...screen.getByTestId('journal-side-column').children].map((c) => (c as HTMLElement).dataset.testid)).toEqual(['journal-roadmap-card'])
     expect(card().getAllByTestId('journal-roadmap-feature')).toHaveLength(2)
   })
 })

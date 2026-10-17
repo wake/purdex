@@ -9,15 +9,16 @@
 //
 // Data. A unit lives under `byHost[host].units[unitKey]` (`unitKey` = `<kind>:<id>` from the daemon's answer);
 // `unitOfSession` remembers which unit a session's answer named. Entries are merged by id and ALWAYS re-sorted by (at, id);
-// the pinned band is the server's list, newest first. EVENTS NEVER FETCH: `markStale` only raises a flag, the loader decides
+// the 待確認 band (`confirms`) is the server's list of every open 待確認 of the unit, newest first (a host without journal.confirm.v1 sends
+// the old `pinned[]` instead, which then is the band). EVENTS NEVER FETCH: `markStale` only raises a flag, the loader decides
 // whether to read (journal-loader.ts). A flag is cleared by a read that STARTED after the event (`staleAt` > `readAt`
 // compare store-clock stamps), so an event landing during a read keeps the unit stale.
 // A read that lands after its host was forgotten (`epoch`) or its connection ended (`gens`) is dropped.
 import { create } from 'zustand'
-import { getJournal, getRoadmap, getTasks, setPinned, type Outcome } from '../lib/journal/api'
+import { getJournal, getRoadmap, getTasks, setConfirmItem, type Outcome } from '../lib/journal/api'
 import { useI18nStore } from './useI18nStore'
 import { useUndoToast } from './useUndoToast'
-import { cursorOf, mergeEntries, sortPinned } from '../lib/journal/merge'
+import { cursorOf, mergeEntries, sortBand } from '../lib/journal/merge'
 import { forgetViewMemosOfHost } from '../lib/journal/view-memory'
 import { unitKeyOf, type ChangedWhat, type JournalEntry, type JournalProject, type JournalTask, type JournalUnit, type RemoteLead, type RoadmapFeature } from '../lib/journal/types'
 
@@ -34,8 +35,8 @@ export interface UnitState {
   personName: string
   /** Oldest first, unique by id. */
   entries: JournalEntry[]
-  /** Newest first. */
-  pinned: JournalEntry[]
+  /** The open 待確認 band, newest first: every entry with an unchecked item, across the whole unit. */
+  confirms: JournalEntry[]
   /** The oldest loaded entry is not the unit's first: an older month can be loaded. */
   more: boolean
   openConfirms: number
@@ -69,6 +70,8 @@ interface JournalState {
   support: Record<string, boolean>
   /** The last yes/no answer, kept through unknown; absent = never answered. */
   sticky: Record<string, boolean>
+  /** Live journal.confirm.v1 of the current connection (cleared by `fence`): hand checks can be written and the band reads `confirms[]`. */
+  confirmSupport: Record<string, boolean>
   /** Connection generation per host: bumped by `fence`. */
   gens: Record<string, number>
   byHost: Record<string, HostJournal>
@@ -82,13 +85,13 @@ interface JournalState {
   /** The connection is gone or a new probe starts: support is unknown, the sticky answer stays. */
   fence: (hostId: string) => void
   /** The probe's answer for the current generation. */
-  setSupport: (hostId: string, yes: boolean) => void
+  setSupport: (hostId: string, yes: boolean, confirm?: boolean) => void
   /** The latest page (no `older`) or the next older page of the unit this session names. */
   loadJournal: (hostId: string, sessionId: string, opts?: { older?: boolean }) => Promise<LoadResult>
   loadTasks: (hostId: string, sessionId: string) => Promise<LoadResult>
   loadRoadmap: (hostId: string, sessionId: string) => Promise<LoadResult>
-  /** Pin / unpin an entry of the unit this session names: the screen follows at once, the PUT follows; see `pins` below for how a failure or a later read settles it. */
-  setPin: (hostId: string, sessionId: string, entryId: string, pinned: boolean) => Promise<void>
+  /** Check / uncheck item `idx` of a 待確認 of the unit this session names: the screen follows at once, the PUT follows; see `checks` below for how a failure or a later read settles it. */
+  setConfirm: (hostId: string, sessionId: string, entryId: string, idx: number, done: boolean, fallback?: JournalEntry) => Promise<void>
   /** `journal.changed`: raise the flag of the named resource of that unit (`roadmap`: every unit of the host). A unit not held is ignored. */
   markStale: (hostId: string, unitKey: string, what: ChangedWhat) => void
   setRoute: (hostId: string, sessionId: string, route: JournalRoute) => void
@@ -103,42 +106,57 @@ let clock = 0
 const nextStamp = (): number => ++clock
 
 /**
- * Pending optimistic pins, per (host, unit, entry). `gen` is the entry's newest mutation; `base` is the value the server is known
- * to hold (the entry's value before the first unconfirmed click, or that of the newest confirmed mutation, `baseGen`). A failed
+ * Pending optimistic hand checks, per (host, unit, entry, item). `gen` is the item's newest mutation; `base` is the value the server is
+ * known to hold (the item's value before the first unconfirmed click, or that of the newest confirmed mutation, `baseGen`). A failed
  * PUT reverts to `base` only when its generation is still the newest (a later click owns the display), and only while the record
  * exists: a server read of the entry deletes it, because what the server says wins from then on. `at` is the store-clock stamp of the
- * newest click and `value` what that click shows: only a read that STARTED after `at` speaks for the entry; one sent before the
+ * newest click and `value` what that click shows: only a read that STARTED after `at` speaks for the item; one sent before the
  * click and landing after it carries the old state, so the click keeps the display.
  */
-interface PinRec { gen: number; base: boolean; baseGen: number; at: number; value: boolean }
-const pins = new Map<string, PinRec>()
-let pinGen = 0
-/** PUTs out per entry (`overlapped`: more than one was out at the same time, so the server may hold them in a different order). */
+interface CheckRec { gen: number; base: boolean; baseGen: number; at: number; value: boolean }
+const checks = new Map<string, CheckRec>()
+let checkGen = 0
+/** PUTs out per item (`overlapped`: more than one was out at the same time, so the server may hold them in a different order). */
 const flights = new Map<string, { n: number; overlapped: boolean }>()
-const pinKey = (hostId: string, unitKey: string, entryId: string): string => `${hostId}\u0000${unitKey}\u0000${entryId}`
-/** A read that started at `startedAt` ends the pending pins it speaks for (those clicked before it started, and named by `only` when given). */
-const dropPins = (hostId: string, unitKey: string, startedAt: number, only?: ReadonlySet<string>): void => {
+const checkKey = (hostId: string, unitKey: string, entryId: string, idx: number): string => `${hostId}\u0000${unitKey}\u0000${entryId}\u0000${idx}`
+/**
+ * The newest copy of an entry only the band holds (an older session / month: not in `entries`), kept while it has pending checks.
+ * Checking its last item takes it out of `confirms[]`, so a failed write would find it nowhere to roll back into: the rollback
+ * restores it from here. Dropped with the pending checks of the entry (a server read, forgetHost, reset).
+ */
+const orphans = new Map<string, JournalEntry>()
+const entryKey = (hostId: string, unitKey: string, entryId: string): string => `${hostId}\u0000${unitKey}\u0000${entryId}`
+/** A read that started at `startedAt` ends the pending checks it speaks for (those clicked before it started, and of an entry named by `only` when given). */
+const dropChecks = (hostId: string, unitKey: string, startedAt: number, only?: ReadonlySet<string>): void => {
   const prefix = `${hostId}\u0000${unitKey}\u0000`
-  for (const [k, rec] of [...pins]) if (k.startsWith(prefix) && rec.at < startedAt && (!only || only.has(k.slice(prefix.length)))) pins.delete(k)
+  for (const [k, rec] of [...checks]) if (k.startsWith(prefix) && rec.at < startedAt && (!only || only.has(k.slice(prefix.length).split('\u0000')[0]))) checks.delete(k)
 }
-/** Pins still pending after a read: the click keeps the display over what the (older) read carried. */
-function keepPins(hostId: string, unitKey: string, u: UnitState): UnitState {
+/** Checks still pending after a read: the click keeps the display over what the (older) read carried. */
+function keepChecks(hostId: string, unitKey: string, u: UnitState): UnitState {
   const prefix = `${hostId}\u0000${unitKey}\u0000`
   let out = u
-  for (const [k, rec] of pins) {
+  for (const [k, rec] of checks) {
     if (!k.startsWith(prefix)) continue
-    const entry = out.entries.find((e) => e.id === k.slice(prefix.length))
-    if (entry) out = withPin(out, entry, rec.value)
+    const [entryId, idx] = k.slice(prefix.length).split('\u0000')
+    const entry = out.entries.find((e) => e.id === entryId) ?? out.confirms.find((e) => e.id === entryId)
+    if (entry) out = withItem(out, entry, Number(idx), rec.value)
   }
   return out
 }
-/** `entry` with its pin set to `value`, in the stream and in the band (newest first). */
-function withPin(u: UnitState, entry: JournalEntry, value: boolean): UnitState {
-  const next = { ...entry, pinned: value }
+/**
+ * `entry` with item `idx` set to `value`, in the stream and in the band. An entry with an unchecked item is in the band (newest first),
+ * one with every item checked leaves it; the open count moves by the one item. No-op when the item is not there or already has the value.
+ */
+function withItem(u: UnitState, entry: JournalEntry, idx: number, value: boolean): UnitState {
+  const cur = entry.items[idx]
+  if (!cur || cur.done === value) return u
+  const next = { ...entry, items: entry.items.map((it, i) => (i === idx ? { ...it, done: value } : it)) }
+  const rest = u.confirms.filter((e) => e.id !== entry.id)
   return {
     ...u,
     entries: u.entries.map((e) => (e.id === entry.id ? next : e)),
-    pinned: value ? sortPinned([...u.pinned, next]) : u.pinned.filter((e) => e.id !== entry.id),
+    confirms: next.items.some((it) => !it.done) ? sortBand([...rest, next]) : rest,
+    openConfirms: Math.max(0, u.openConfirms + (value ? -1 : 1)),
   }
 }
 
@@ -188,10 +206,10 @@ export const useJournalStore = create<JournalState>()((set, get) => {
   }
 
   return {
-    support: {}, sticky: {}, gens: {}, byHost: {}, routes: {}, epoch: {}, staleRev: 0,
+    support: {}, confirmSupport: {}, sticky: {}, gens: {}, byHost: {}, routes: {}, epoch: {}, staleRev: 0,
 
-    fence: (hostId) => set((s) => ({ support: drop(s.support, hostId), gens: { ...s.gens, [hostId]: (s.gens[hostId] ?? 0) + 1 } })),
-    setSupport: (hostId, yes) => set((s) => ({ support: { ...s.support, [hostId]: yes }, sticky: { ...s.sticky, [hostId]: yes } })),
+    fence: (hostId) => set((s) => ({ support: drop(s.support, hostId), confirmSupport: drop(s.confirmSupport, hostId), gens: { ...s.gens, [hostId]: (s.gens[hostId] ?? 0) + 1 } })),
+    setSupport: (hostId, yes, confirm = false) => set((s) => ({ support: { ...s.support, [hostId]: yes }, confirmSupport: { ...s.confirmSupport, [hostId]: yes && confirm }, sticky: { ...s.sticky, [hostId]: yes } })),
 
     loadJournal: async (hostId, sessionId, opts) => {
       const older = opts?.older === true
@@ -207,14 +225,20 @@ export const useJournalStore = create<JournalState>()((set, get) => {
         const key = unitKeyOf(page.unit)
         const h = s.byHost[hostId] ?? { units: {}, unitOfSession: {} }
         const held = h.units[key]
-        // What the server says about an entry wins over a pending optimistic pin of it (the newest page speaks for the whole band).
-        dropPins(hostId, key, startedAt, older ? new Set(page.entries.map((e) => e.id)) : undefined)
+        // What the server says about an item wins over a pending optimistic check of it (the newest page speaks for the whole band).
+        dropChecks(hostId, key, startedAt, older ? new Set(page.entries.map((e) => e.id)) : undefined)
+        // The band is `confirms[]` where the host declares journal.confirm.v1 (and sent it), else the old `pinned[]`.
+        const confirmBand = s.confirmSupport[hostId] === true && page.confirms !== null
         let entries = mergeEntries(held?.entries ?? [], page.entries)
-        if (!older) {
-          // Held rows the page does not carry (older months) follow the band the server just sent.
-          const band = new Set(page.pinned.map((e) => e.id))
+        if (!older && confirmBand) {
+          // Held rows the page does not carry (older months) follow the band the server just sent: an open one takes its items, one missing from it is answered.
+          const band = new Map(page.confirms!.map((e) => [e.id, e]))
           const inPage = new Set(page.entries.map((e) => e.id))
-          entries = entries.map((e) => (inPage.has(e.id) || e.pinned === band.has(e.id) ? e : { ...e, pinned: band.has(e.id) }))
+          entries = entries.map((e) => {
+            if (inPage.has(e.id) || e.kind !== 'confirm') return e
+            const open = band.get(e.id)
+            return { ...e, items: open ? open.items : e.items.map((it) => (it.done ? it : { ...it, done: true })) }
+          })
         }
         const readAt = { ...(held?.readAt ?? zero()) }
         // Only a read of the newest page speaks for "entries are fresh"; an older page says nothing about new events.
@@ -222,14 +246,14 @@ export const useJournalStore = create<JournalState>()((set, get) => {
         const next: UnitState = {
           unit: page.unit, project: page.project, personName: page.personName, entries,
           // The band and the open count are the unit's live state: only the newest page carries them.
-          pinned: older ? (held?.pinned ?? []) : sortPinned(page.pinned),
+          confirms: older ? (held?.confirms ?? []) : sortBand(confirmBand ? page.confirms! : page.pinned),
           openConfirms: older ? (held?.openConfirms ?? 0) : page.openConfirms,
           // `more` describes the OLDEST loaded entry: an older page sets it; a newest-page re-read keeps it once older months are held.
           more: older || !held || held.entries.length === 0 ? page.more : held.more,
           tasks: held?.tasks ?? null, roadmap: held?.roadmap ?? null,
           staleAt: held?.staleAt ?? zero(), readAt, touched: nextStamp(),
         }
-        const units = { ...h.units, [key]: keepPins(hostId, key, next) }
+        const units = { ...h.units, [key]: keepChecks(hostId, key, next) }
         return { byHost: { ...s.byHost, [hostId]: trim(units, { ...h.unitOfSession, [sessionId]: key }) } }
       }))
     },
@@ -258,48 +282,61 @@ export const useJournalStore = create<JournalState>()((set, get) => {
       }))
     },
 
-    setPin: async (hostId, sessionId, entryId, pinned) => {
+    setConfirm: async (hostId, sessionId, entryId, idx, done, fallback) => {
+      if (get().confirmSupport[hostId] !== true) return
       const u = unitOf(hostId, sessionId)
-      const entry = u?.entries.find((e) => e.id === entryId) ?? u?.pinned.find((e) => e.id === entryId)
-      if (!u || !entry) return
+      if (!u) return
       const unitKey = unitKeyOf(u.unit)
-      const k = pinKey(hostId, unitKey, entryId)
-      const shown = u.pinned.some((e) => e.id === entryId)
-      const pending = pins.get(k)
-      if (shown === pinned && !pending) return
-      const gen = ++pinGen
-      pins.set(k, { gen, base: pending?.base ?? shown, baseGen: pending?.baseGen ?? 0, at: nextStamp(), value: pinned })
+      // Last resorts when neither the stream nor the band holds the entry (every item answered, it left the band): the copy kept for a
+      // rollback, then the caller's own (the detail keeps showing the last copy it saw).
+      const entry = u.entries.find((e) => e.id === entryId) ?? u.confirms.find((e) => e.id === entryId) ?? orphans.get(entryKey(hostId, unitKey, entryId)) ?? fallback
+      if (!entry || entry.kind !== 'confirm' || entry.id !== entryId) return
+      if (!u.entries.some((e) => e.id === entryId) && !u.confirms.some((e) => e.id === entryId)) orphans.set(entryKey(hostId, unitKey, entryId), entry)
+      const k = checkKey(hostId, unitKey, entryId, idx)
+      const shown = entry.items[idx]?.done
+      if (shown === undefined) return
+      const pending = checks.get(k)
+      if (shown === done && !pending) return
+      const gen = ++checkGen
+      checks.set(k, { gen, base: pending?.base ?? shown, baseGen: pending?.baseGen ?? 0, at: nextStamp(), value: done })
       const apply = (value: boolean): void => set((s) => {
         const h = s.byHost[hostId]
         const cur = h?.units[unitKey]
         // The entry as the store holds it NOW (a read may have changed its other fields since the click), not the object clicked.
-        const now = cur?.entries.find((e) => e.id === entryId) ?? cur?.pinned.find((e) => e.id === entryId)
-        return h && cur && now ? { byHost: { ...s.byHost, [hostId]: { ...h, units: { ...h.units, [unitKey]: withPin(cur, now, value) } } } } : {}
+        const ek = entryKey(hostId, unitKey, entryId)
+        const now = cur?.entries.find((e) => e.id === entryId) ?? cur?.confirms.find((e) => e.id === entryId) ?? orphans.get(ek)
+        if (!h || !cur || !now) return {}
+        const nextUnit = withItem(cur, now, idx, value)
+        // An entry the stream does not hold lives only in the band: remember its newest copy for a rollback after it left.
+        if (!cur.entries.some((e) => e.id === entryId)) orphans.set(ek, nextUnit.confirms.find((e) => e.id === entryId) ?? { ...now, items: now.items.map((it, i) => (i === idx ? { ...it, done: value } : it)) })
+        return { byHost: { ...s.byHost, [hostId]: { ...h, units: { ...h.units, [unitKey]: nextUnit } } } }
       })
-      apply(pinned)
+      apply(done)
       const epoch = get().epoch[hostId] ?? 0
       const flight = flights.get(k) ?? { n: 0, overlapped: false }
       flight.n++
       if (flight.n > 1) flight.overlapped = true
       flights.set(k, flight)
       let ok = false
-      try { ok = (await setPinned(hostId, sessionId, entryId, pinned)).kind === 'ok' } catch { /* ok stays false */ }
-      // PUTs of one entry can reach the server in the opposite order of the clicks: when the last one ends, read the unit once more.
+      try { ok = (await setConfirmItem(hostId, sessionId, entryId, idx, done)).kind === 'ok' } catch { /* ok stays false */ }
+      // PUTs of one item can reach the server in the opposite order of the clicks: when the last one ends, read the unit once more.
       const reread = --flight.n === 0 && flight.overlapped
       if (flight.n === 0 && flights.get(k) === flight) flights.delete(k)
       try {
-        const rec = pins.get(k)
+        const rec = checks.get(k)
         if ((get().epoch[hostId] ?? 0) !== epoch || !rec) return // the host was forgotten, or a server read has the last word
         if (ok) {
-          if (rec.gen === gen) pins.delete(k)
-          else if (gen > rec.baseGen) pins.set(k, { ...rec, base: pinned, baseGen: gen })
+          if (rec.gen === gen) checks.delete(k)
+          else if (gen > rec.baseGen) checks.set(k, { ...rec, base: done, baseGen: gen })
           return
         }
         if (rec.gen !== gen) return // a later click owns the display now
-        pins.delete(k)
+        checks.delete(k)
         apply(rec.base)
-        useUndoToast.getState().show(useI18nStore.getState().t('journal.pin.failed'))
+        useUndoToast.getState().show(useI18nStore.getState().t('journal.confirm.failed'))
       } finally {
+        const ek = entryKey(hostId, unitKey, entryId)
+        if (![...checks.keys()].some((c) => c.startsWith(`${ek}\u0000`))) orphans.delete(ek) // nothing pending on the entry: no rollback needs its copy
         if (reread && (get().epoch[hostId] ?? 0) === epoch) await get().loadJournal(hostId, sessionId)
       }
     },
@@ -327,16 +364,17 @@ export const useJournalStore = create<JournalState>()((set, get) => {
 
     forgetHost: (hostId) => {
       forgetViewMemosOfHost(hostId)
-      for (const k of [...pins.keys()]) if (k.startsWith(`${hostId}\u0000`)) pins.delete(k)
+      for (const k of [...checks.keys()]) if (k.startsWith(`${hostId}\u0000`)) checks.delete(k)
       for (const k of [...flights.keys()]) if (k.startsWith(`${hostId}\u0000`)) flights.delete(k)
+      for (const k of [...orphans.keys()]) if (k.startsWith(`${hostId}\u0000`)) orphans.delete(k)
       set((s) => ({
-        support: drop(s.support, hostId), sticky: drop(s.sticky, hostId), gens: drop(s.gens, hostId), byHost: drop(s.byHost, hostId),
+        support: drop(s.support, hostId), confirmSupport: drop(s.confirmSupport, hostId), sticky: drop(s.sticky, hostId), gens: drop(s.gens, hostId), byHost: drop(s.byHost, hostId),
         routes: Object.fromEntries(Object.entries(s.routes).filter(([k, r]) => !k.startsWith(`${hostId}\u0000`) && !(r.kind === 'follow' && r.hostId === hostId))),
         epoch: { ...s.epoch, [hostId]: (s.epoch[hostId] ?? 0) + 1 },
       }))
     },
 
-    reset: () => { clock = 0; latest.clear(); pins.clear(); flights.clear(); set({ support: {}, sticky: {}, gens: {}, byHost: {}, routes: {}, epoch: {}, staleRev: 0 }) },
+    reset: () => { clock = 0; latest.clear(); checks.clear(); flights.clear(); orphans.clear(); set({ support: {}, confirmSupport: {}, sticky: {}, gens: {}, byHost: {}, routes: {}, epoch: {}, staleRev: 0 }) },
   }
 })
 

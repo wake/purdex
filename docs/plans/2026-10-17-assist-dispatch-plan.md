@@ -253,8 +253,8 @@ X2b — the automatic walk (§3, with spec decision 12's host order):
 1. Capability per host from `assist.json` (`Can` / `Cannot`: command-word prefixes with GC's `matchesPrefix`), written by
    the watcher from the assist READMEs (`pdx assist host set`); a command no assist host can run stays on mlab. Under
    decision 12 the watcher writes air26's table as the test kinds it runs (vitest, tsc, go test / vet, lint, `pnpm
-   check`) and mserv's as the PHP kinds only, empty until its check against mlab — so a non-PHP test never has mserv as
-   a candidate, and the code needs no host-specific rule for it.
+   check`) and mserv's as the A-grade kinds only (each added after its same-commit check, mserv's README) — so a kind
+   outside the A grade never has mserv as a candidate, and the code needs no host-specific rule for it.
 2. ~~Estimates~~ — **not built** (lead 1f, 10-17): decision 12 chooses by host order, not by expected finish, so nothing
    reads an estimate. The record already keeps `run_s` and `transfer_s` (X2a.8); an estimate can be built from the
    history later if a choice ever needs one.
@@ -282,7 +282,7 @@ it → the exit code; reclaim (also while queued on air26) → back with the mes
 (success, failure, 75, reclaim, cancel, the gate killed); signal → remote group ended; cleanup on every path. (X2b): the
 walk's choice table (heavy goes to a free air26 even when mlab has a free slot; light only when it would wait on mlab,
 until decision 12's light point is confirmed; air26 before mserv; no
-capability → mlab, and a non-PHP test never goes to mserv; a not-usable host, or one held for the pair or as a host, is
+capability → mlab, and a kind outside mserv's table never goes to mserv; a not-usable host, or one held for the pair or as a host, is
 never a candidate; a head that fits nothing lets later tickets take slots); load limits (load1 under but load5 over →
 held; idle under `IdleMin` → held; all under → sent). A fake ssh (a script on PATH that runs the remote command locally in a temp `~/Assist`) keeps the tests off
 the network.
@@ -296,7 +296,7 @@ ticket stays). Transfer `git archive <sha> | ssh mserv 'mkdir -p … && tar -x -
 ~/Assist/assist.env`, printing the admitted mark itself (mserv has no gate). Dependencies `pnpm install
 --frozen-lockfile` (`--ignore-scripts` where mserv's README says). Capability from mserv's README (no `go vet ./...`,
 `go test ./...`, `go build ./cmd/pdx`, cgo or node-gyp builds, browser tests, swift, macOS-only tests), and under spec
-decision 12 the watcher writes only the PHP kinds, after its check against mlab. Clean up `rm -rf`
+decision 12 the watcher writes only the A-grade kinds, each after its same-commit check. Clean up `rm -rf`
 the job directory.
 Tests: the admission numbers (just under / over each), the scope command line, archive transfer with a fake ssh, the
 capability table, a `host: mserv` conflict rule.

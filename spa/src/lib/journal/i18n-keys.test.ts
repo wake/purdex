@@ -30,8 +30,10 @@ function sources(): string[] {
   return files.filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f) && !/fixtures?\.ts$|-fixture\.ts$/.test(f))
 }
 
-// `journal.changed` / `journal.v1` are the daemon's event and capability names, not text keys.
+// `journal.changed` / `journal.v1` are the daemon's event and capability names, not text keys; so is every `journal.<x>.v<n>`
+// (journal.members.v1 and the capabilities after it).
 const NOT_TEXT = new Set(['journal.changed', 'journal.v1'])
+const CAPABILITY = /^journal\.[\w.]+\.v\d+$/
 const DYNAMIC: Record<string, readonly string[]> = { 'journal.kind.': ENTRY_KINDS, 'journal.filter.': FILTER_IDS, 'journal.tasks.state.': TASK_STATES, 'journal.roadmap.status.': ROADMAP_STATUS_IDS }
 
 /** Every key literal ('journal.x.y' or `journal.x.${id}`, which expands over the ids that fill it). */
@@ -41,7 +43,7 @@ function usedKeys(): { key: string; file: string }[] {
     const code: string = readFileSync(file, 'utf8')
     for (const m of code.matchAll(/(['"`])(journal\.[\w.]*(?:\$\{[^}]*\}[\w.]*)?)\1/g)) {
       const lit = m[2]
-      if (NOT_TEXT.has(lit)) continue
+      if (NOT_TEXT.has(lit) || CAPABILITY.test(lit)) continue
       const dyn = lit.match(/^(journal\.[\w.]*)\$\{[^}]*\}$/)
       if (!dyn) { out.push({ key: lit, file }); continue }
       const ids = DYNAMIC[dyn[1]]
@@ -59,7 +61,7 @@ describe('journal i18n keys', () => {
     expect(names).toContain('journal.band.answered')
     expect(names).toContain('journal.kind.confirm')
     expect(names).toContain('journal.stream.newEvents')
-    expect(names).toContain('journal.pin.failed')
+    expect(names).toContain('journal.confirm.failed')
   })
   it.each([['en', en], ['zh-TW', zh]] as const)('%s has every key the journal sources use', (_name, locale) => {
     const dict = locale as Record<string, string>

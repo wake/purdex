@@ -1,9 +1,9 @@
-// spa/src/components/journal/JournalCard.tsx — the body of the journal card (J-2c, spec §11): role line, filters, the pinned band and the
+// spa/src/components/journal/JournalCard.tsx — the body of the journal card (J-2c, spec §11): role line, filters, the 待確認 band and the
 // stream. The title (live dot + unit name), the roadmap / tasks toggles and the close button are the frame's (CardStack). Every
 // piece of view state — filter, scroll, pinned-to-bottom, the open detail — is the unit's view memo (lib/journal/view-memory.ts).
 import { useCallback, useMemo } from 'react'
 import { JournalFilters } from './JournalFilters'
-import { PinnedBand } from './PinnedBand'
+import { ConfirmBand } from './ConfirmBand'
 import { JournalStream } from './JournalStream'
 import type { RowContext } from './JournalRow'
 import type { JournalTarget } from './useJournalTarget'
@@ -47,25 +47,26 @@ export function JournalCard({ target, unit }: { target: JournalTarget; unit: Uni
     if (host === null || key === null) return
     patchViewMemo(host, key, { detailId: readViewMemo(host, key).detailId === entryId ? null : entryId })
   }, [host, key])
-  const onTogglePin = useCallback((entry: JournalEntry) => {
+  // Hand checks need journal.confirm.v1 on the host the journal is read from; without it the boxes are read-only.
+  const canCheck = useJournalStore((s) => readHost !== undefined && s.confirmSupport[readHost] === true)
+  const onToggleItem = useCallback((entry: JournalEntry, idx: number, done: boolean) => {
     if (readHost === undefined || readSession === undefined) return
-    const pinnedNow = useJournalStore.getState().byHost[readHost]?.units[`${unit.unit.kind}:${unit.unit.id}`]?.pinned.some((p) => p.id === entry.id) ?? entry.pinned
-    void useJournalStore.getState().setPin(readHost, readSession, entry.id, !pinnedNow)
-  }, [readHost, readSession, unit.unit.kind, unit.unit.id])
+    void useJournalStore.getState().setConfirm(readHost, readSession, entry.id, idx, done)
+  }, [readHost, readSession])
   const onLoadOlder = useCallback(
     () => (readHost !== undefined && readSession !== undefined ? useJournalStore.getState().loadJournal(readHost, readSession, { older: true }) : Promise.resolve()),
     [readHost, readSession],
   )
   const ctx: RowContext = useMemo(
-    () => ({ personName: unit.personName, remoteUrl: unit.project.remoteUrl, selectedId: memo.detailId, onToggleDetail, onTogglePin }),
-    [unit.personName, unit.project.remoteUrl, memo.detailId, onToggleDetail, onTogglePin],
+    () => ({ personName: unit.personName, remoteUrl: unit.project.remoteUrl, selectedId: memo.detailId, onToggleDetail, onToggleItem: canCheck ? onToggleItem : undefined }),
+    [unit.personName, unit.project.remoteUrl, memo.detailId, onToggleDetail, onToggleItem, canCheck],
   )
 
   return (
     <div data-testid="journal-card-body" className="h-full flex flex-col">
       <RoleLine target={target} unit={unit} />
       <JournalFilters host={host} unitKey={key} openCount={unit.openConfirms} />
-      <PinnedBand pinned={unit.pinned} ctx={ctx} />
+      <ConfirmBand entries={unit.confirms} ctx={ctx} />
       <JournalStream host={host} unitKey={key} entries={shown} filter={memo.filter} more={unit.more} onLoadOlder={onLoadOlder} ctx={ctx} />
     </div>
   )

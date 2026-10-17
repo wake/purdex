@@ -102,7 +102,7 @@ describe('the strip for a tab of no team', () => {
     expect(screen.queryByTestId('own-title-strip')).toBeNull()
     expect(screen.getByTestId('team-seat-workbook')).toBeTruthy()
   })
-  it.each(['line', 'max'] as const)('from %s: the strip and the Notebook button both give back that mode, again on a second round trip', (mode) => {
+  it.each(['line', 'full'] as const)('from %s: the strip and the Notebook button both give back that mode, again on a second round trip', (mode) => {
     setActive('cc1')
     mountBar()
     act(() => useTeamUiStore.getState().setSharedPanelMode(mode))

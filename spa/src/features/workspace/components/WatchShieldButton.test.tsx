@@ -111,6 +111,16 @@ describe('WatchShieldButton — the events count (W5e)', () => {
     expect(screen.getByTestId('watch-shield-count')).toHaveTextContent('99+')
   })
 
+  // journal v5 U9 shrinks the host cells' count badge only (§3.6): the shield's keeps its 12 px size and 4 px offset.
+  it('the badge keeps its size: 12px, 8px figures, 4px out of the corner (not the host cell\'s small one)', () => {
+    answer('awake')
+    counts({ h1: 12 })
+    render(<WatchShieldButton />)
+    const cls = screen.getByTestId('watch-shield-count').className.split(' ')
+    for (const c of ['h-[12px]', 'min-w-[12px]', 'text-[8px]', '-top-[4px]', '-right-[4px]']) expect(cls).toContain(c)
+    for (const c of ['h-[9px]', 'min-w-[9px]', 'text-[7px]', '-top-[5px]', '-right-[5px]']) expect(cls).not.toContain(c)
+  })
+
   it('follows the count when it changes', () => {
     answer('none')
     counts({ h1: 1 })

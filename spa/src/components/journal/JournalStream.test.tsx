@@ -20,10 +20,10 @@ const maxTop = (el: Element) => Math.max(0, heightOf(el) - VIEW)
 
 const D = new Date(2026, 9, 14, 9, 0).getTime()
 const entry = (n: number, over: Partial<JournalEntry> = {}): JournalEntry => ({
-  id: `e${String(n).padStart(3, '0')}`, kind: 'exec', by: '', at: D + n * 60_000, actor: 'Adam', text: `event ${n}`, refs: [], items: [], detail: '', pinned: false, ...over,
+  id: `e${String(n).padStart(3, '0')}`, kind: 'exec', by: '', at: D + n * 60_000, actor: 'Adam', text: `event ${n}`, refs: [], items: [], detail: '', ...over,
 })
 const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => entry(from + i))
-const ctx: RowContext = { personName: 'Wake', remoteUrl: '', selectedId: null, onToggleDetail: () => {}, onTogglePin: () => {} }
+const ctx: RowContext = { personName: 'Wake', remoteUrl: '', selectedId: null, onToggleDetail: () => {} }
 
 /** The test pushes a new list (or switches the mounted stream to another unit) through this handle. */
 interface Handle { set: (e: JournalEntry[]) => void; switchTo: (unit: string, e: JournalEntry[]) => void }

@@ -1,8 +1,8 @@
 // spa/src/components/journal/ConfirmDetail.tsx — the detail of one 待確認: the original question as written in a scrollable block, the
-// per-item state below it (read-only: Haiku ticks them). It opens to the left of the journal card, in the roadmap's place
+// per-item state below it (Haiku ticks them; with journal.confirm.v1 the person can also check and uncheck by hand). It opens to the left of the journal card, in the roadmap's place
 // (CardStack); Esc closes it (J-2c, spec §11).
 import { useEffect } from 'react'
-import { CheckSquare, Square } from '@phosphor-icons/react'
+import { ItemCheck } from './ItemCheck'
 import { KindChip } from './KindChip'
 import { PersonMark } from './PersonMark'
 import { answered } from '../../lib/journal/filters'
@@ -10,13 +10,19 @@ import { dayKey, timeOf } from '../../lib/journal/stream'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { JournalEntry } from '../../lib/journal/types'
 
-interface Props { entry: JournalEntry; personName: string; onClose: () => void }
+interface Props {
+  entry: JournalEntry
+  personName: string
+  onClose: () => void
+  /** Check / uncheck item `idx` by hand; undefined = read-only (no journal.confirm.v1). */
+  onToggleItem?: (idx: number, done: boolean) => void
+}
 
 /** Esc typed into the terminal (vim, a prompt) or into any text field belongs to that field, not to the detail. */
 const OWN_ESC = '.xterm, input, textarea, select, [contenteditable=""], [contenteditable="true"]'
 const isOwnEsc = (target: EventTarget | null): boolean => target instanceof Element && target.closest(OWN_ESC) !== null
 
-export function ConfirmDetail({ entry, personName, onClose }: Props) {
+export function ConfirmDetail({ entry, personName, onClose, onToggleItem }: Props) {
   const t = useI18nStore((s) => s.t)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !e.isComposing && !e.defaultPrevented && !isOwnEsc(e.target)) onClose() }
@@ -32,7 +38,7 @@ export function ConfirmDetail({ entry, personName, onClose }: Props) {
         <span className="tabular-nums">{dayKey(entry.at)} {timeOf(entry.at)}</span>
         <span className="text-text-secondary"><PersonMark text={entry.actor} name={personName} /></span>
         <span data-testid="journal-detail-state" className={`px-1 rounded ${resolved ? 'bg-surface-hover' : 'bg-status-warning/20 text-journal-warning-text'}`}>
-          {t(resolved ? 'journal.detail.resolved' : entry.pinned ? 'journal.detail.waitingPinned' : 'journal.detail.waiting')}
+          {t(resolved ? 'journal.detail.resolved' : 'journal.detail.waiting')}
         </span>
       </div>
       <div className="flex-1 min-h-0 flex flex-col px-3 py-2.5 gap-1">
@@ -44,9 +50,7 @@ export function ConfirmDetail({ entry, personName, onClose }: Props) {
         <ul data-testid="journal-detail-items" className="space-y-1 shrink-0 max-h-[40%] overflow-y-auto">
           {entry.items.map((it, i) => (
             <li key={i} data-done={it.done || undefined} className="flex items-start gap-1.5 leading-[17px]">
-              {it.done
-                ? <CheckSquare size={14} weight="fill" className="shrink-0 text-status-success-text" />
-                : <Square size={14} className="shrink-0 text-journal-warning-text" />}
+              <ItemCheck done={it.done} size={14} onToggle={onToggleItem && ((done) => onToggleItem(i, done))} />
               <span className={it.done ? 'text-text-muted line-through' : ''}>{it.text}</span>
             </li>
           ))}

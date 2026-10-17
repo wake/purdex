@@ -11,7 +11,7 @@ const k = (host: string, team: string) => teamKeyOf(host, team)
 beforeEach(() => {
   localStorage.clear()
   useUISettingsStore.setState({ tabIndicatorStyle: 'badge', hostBadgeSidebarBox: 16 })
-  useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, panelLast: {}, sharedPanelMode: 'titlebar', sharedPanelLast: 'full', legacyMax: false, ghostWorkspace: {}, teamDrill: {}, endedSeats: {}, panel: { width: 312 }, teamBeadHost: true })
+  useTeamUiStore.setState({ memberOrder: {}, collapsed: {}, panelMode: {}, panelLast: {}, sharedPanelMode: 'titlebar', sharedPanelLast: 'full', ghostWorkspace: {}, teamDrill: {}, endedSeats: {}, panel: { width: 312 }, teamBeadHost: true })
 })
 
 describe('useTeamUiStore', () => {
@@ -361,12 +361,11 @@ describe('the four states (WA-2a′)', () => {
     expect(st().panelMode[key]).toBe('titlebar')
     st().toggleTitleBar(key)
     expect(key in st().panelMode).toBe(false) // full is the absence
-    st().setPanelMode(key, 'max')
-    st().setPanelMode(key, 'titlebar')
-    expect(st().panelLast[key]).toBe('max')
-    st().toggleTitleBar(key)
-    expect(st().panelMode[key]).toBe('max')
     st().setPanelMode(key, 'line')
+    st().setPanelMode(key, 'titlebar')
+    expect(st().panelLast[key]).toBe('line')
+    st().toggleTitleBar(key)
+    expect(st().panelMode[key]).toBe('line')
     st().toggleTitleBar(key)
     st().toggleTitleBar(key)
     expect(st().panelMode[key]).toBe('line')
@@ -375,9 +374,9 @@ describe('the four states (WA-2a′)', () => {
   it('each team remembers its own state and the shared (non-team) value starts in the title bar', () => {
     const other = k('h1', 't2')
     st().setPanelMode(key, 'titlebar')
-    st().setPanelMode(other, 'max')
+    st().setPanelMode(other, 'line')
     expect(st().panelMode[key]).toBe('titlebar')
-    expect(st().panelMode[other]).toBe('max')
+    expect(st().panelMode[other]).toBe('line')
     expect(st().sharedPanelMode).toBe('titlebar')
     st().setSharedPanelMode('line')
     st().setSharedPanelMode('titlebar')
@@ -386,7 +385,7 @@ describe('the four states (WA-2a′)', () => {
   })
 
   it('the states survive a reload', () => {
-    st().setPanelMode(key, 'max')
+    st().setPanelMode(key, 'line')
     st().setPanelMode(key, 'titlebar')
     st().setSharedPanelMode('full')
     const saved = localStorage.getItem('purdex-team-ui')!
@@ -394,44 +393,35 @@ describe('the four states (WA-2a′)', () => {
     localStorage.setItem('purdex-team-ui', saved)
     useTeamUiStore.persist.rehydrate()
     expect(st().panelMode[key]).toBe('titlebar')
-    expect(st().panelLast[key]).toBe('max')
+    expect(st().panelLast[key]).toBe('line')
     expect(st().sharedPanelMode).toBe('full')
   })
 
-  it('an old store maps line -> line, full -> full, and expanded:true waits for the team showing', () => {
+  it('an old store maps line -> line, full -> full; an old expanded flag is ignored', () => {
     reload({ panelMode: { [key]: 'line' }, panel: { width: 500, expanded: true } })
     expect(st().panelMode[key]).toBe('line')
     expect(st().panel).toEqual({ width: 500, followsMin: false })
-    expect(st().legacyMax).toBe(true)
-    st().takeLegacyMax(k('h1', 't2'))
-    expect(st().panelMode[k('h1', 't2')]).toBe('max')
-    expect(st().panelMode[key]).toBe('line')
-    expect(st().legacyMax).toBe(false)
-    st().takeLegacyMax(k('h1', 't3')) // taken once
-    expect(k('h1', 't3') in st().panelMode).toBe(false)
+    expect('legacyMax' in st()).toBe(false)
   })
 
-  it('expanded:true with no team showing is dropped; not expanded asks for nothing', () => {
-    reload({ panel: { width: 500, expanded: true } })
-    st().takeLegacyMax(null)
-    expect(st().legacyMax).toBe(false)
-    expect(st().panelMode).toEqual({})
-    reload({ panel: { width: 500, expanded: false } })
-    expect(st().legacyMax).toBe(false)
+  it('the max state is gone: a saved max reads as full (the absence), in every record', () => {
+    reload({ panelMode: { a: 'max', b: 'line' }, panelLast: { a: 'max', b: 'line' }, sharedPanelMode: 'max', sharedPanelLast: 'max' })
+    expect(st().panelMode).toEqual({ b: 'line' })
+    expect(st().panelLast).toEqual({ b: 'line' })
+    expect(st().sharedPanelMode).toBe('full') // the shared (non-team) value too, like each team's max
+    expect(st().sharedPanelLast).toBe('full')
   })
 
-  it('heal drops bad values and never persists the legacy flag', () => {
-    reload({ panelMode: { a: 'bogus', b: 3, c: 'max', d: 'full', e: 'titlebar' }, panelLast: { a: 'titlebar', b: 'x', c: 'max' }, sharedPanelMode: 'nope', sharedPanelLast: 'titlebar' })
-    expect(st().panelMode).toEqual({ c: 'max', e: 'titlebar' })
-    expect(st().panelLast).toEqual({ c: 'max' })
+  it('heal drops bad values', () => {
+    reload({ panelMode: { a: 'bogus', b: 3, c: 'line', d: 'full', e: 'titlebar' }, panelLast: { a: 'titlebar', b: 'x', c: 'line' }, sharedPanelMode: 'nope', sharedPanelLast: 'titlebar' })
+    expect(st().panelMode).toEqual({ c: 'line', e: 'titlebar' })
+    expect(st().panelLast).toEqual({ c: 'line' })
     expect(st().sharedPanelMode).toBe('titlebar')
     expect(st().sharedPanelLast).toBe('full')
-    st().setPanelMode(key, 'line')
-    expect('legacyMax' in JSON.parse(localStorage.getItem('purdex-team-ui')!).state).toBe(false)
   })
 
   it('the state and the way back are pruned and restored with the team', () => {
-    st().setPanelMode(key, 'max')
+    st().setPanelMode(key, 'line')
     st().setPanelMode(key, 'titlebar')
     const snap = st().snapshotHostTeams('h1')
     st().forgetHostTeams('h1')
@@ -439,7 +429,7 @@ describe('the four states (WA-2a′)', () => {
     expect(st().panelLast).toEqual({})
     st().restoreHostTeams(snap)
     expect(st().panelMode[key]).toBe('titlebar')
-    expect(st().panelLast[key]).toBe('max')
+    expect(st().panelLast[key]).toBe('line')
   })
 })
 
