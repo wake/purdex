@@ -106,6 +106,7 @@ func TestDispatch_AFailureBeforeTheStartRunsItHereAndHoldsTheHost(t *testing.T) 
 	d := r.lastDecision(t)
 	assert.Equal(t, "slot", d.Outcome)
 	assert.Empty(t, d.Host, "nothing ran on the host")
+	assert.NotEmpty(t, d.AssistWhy, "the reason is in the record")
 }
 
 // The host's gate not admitting in time (75) holds it for 2 minutes only.
@@ -183,7 +184,9 @@ func TestDispatch_ALostConnectionBeforeTheMarkIsNotRunAgainHere(t *testing.T) {
 	_, held := HeldHost(r.dir, "air26", r.repo, r.g.Now())
 	assert.True(t, held)
 	r.nothingLeft(t)
-	assert.Equal(t, "refused", r.lastDecision(t).Outcome)
+	d := r.lastDecision(t)
+	assert.Equal(t, "refused", d.Outcome)
+	assert.Contains(t, d.AssistWhy, "connection lost")
 }
 
 // Two host/repo pairs whose names join into the same string have a hold of their own.

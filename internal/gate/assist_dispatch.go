@@ -70,10 +70,12 @@ func (g *Gate) tryAssist(ctx context.Context, cfg Config, class Class, o Options
 		d.Outcome = "assist"
 		return res.Code, true
 	case res.Reclaimed:
+		d.AssistWhy = "taken back by the host"
 		g.say("%s was taken back; waiting again on mlab", a.Host)
 		return back(0, "")
 	case res.Uncertain:
 		// the connection went before the mark: the host may be running it, so it is neither run here nor put back
+		d.AssistWhy = "connection lost before the command was seen to start"
 		g.say("%s: the connection was lost before the command was seen to start; it may be running there, so it was not run here", a.Host)
 		if err := HoldHost(cfg.Dir, a.Host, repo, holdAfterFailure, "connection lost", g.Now()); err != nil {
 			g.say("%s: the hold could not be written: %v", a.Host, err)
@@ -84,6 +86,7 @@ func (g *Gate) tryAssist(ctx context.Context, cfg Config, class Class, o Options
 		return ExitRefused, true
 	case !res.Started:
 		why := fmt.Sprint(res.Err)
+		d.AssistWhy = why
 		g.say("%s: %s; waiting on this host", a.Host, why)
 		if res.NotAdmitted {
 			return back(holdAfterNoSlot, why)

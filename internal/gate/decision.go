@@ -62,6 +62,8 @@ type Decision struct {
 	TransferS float64 `json:"transfer_s,omitempty"`
 	RunS      float64 `json:"run_s,omitempty"`
 	Reclaimed bool    `json:"reclaimed,omitempty"`
+	// AssistWhy is why an attempt to send the command did not run it there (the command then ran here, or was refused).
+	AssistWhy string  `json:"assist_why,omitempty"`
 	Exit      int     `json:"exit"`
 	Duration  float64 `json:"duration_s"`
 	// The usage of the command tree (setUsage): absent for a command that never started, and for a record of an older gate.
