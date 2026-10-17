@@ -15,11 +15,12 @@ const SEP = '\n'
  */
 export function useActiveMemberKeys(): ReadonlySet<string> {
   const rosterByHost = useTeamRosterStore((s) => s.byHost)
+  const liveJoined = useTeamRosterStore((s) => Object.keys(s.liveHosts).sort().join(SEP))
   const sessionsByHost = useSessionStore((s) => s.sessions)
   const hostMapKey = useHostStore((s) => JSON.stringify(teamHostMap(s)))
   const joined = useMemo(
-    () => [...activeMemberKeys({ rosterByHost, sessionsByHost, hostIdByDaemonId: JSON.parse(hostMapKey) })].sort().join(SEP),
-    [rosterByHost, sessionsByHost, hostMapKey],
+    () => [...activeMemberKeys({ rosterByHost, liveRosterHosts: new Set(liveJoined ? liveJoined.split(SEP) : []), sessionsByHost, hostIdByDaemonId: JSON.parse(hostMapKey) })].sort().join(SEP),
+    [rosterByHost, liveJoined, sessionsByHost, hostMapKey],
   )
   return useMemo(() => new Set(joined ? joined.split(SEP) : []), [joined])
 }

@@ -53,6 +53,17 @@ describe('useAgentNotifications — a member is quiet (R1), read at the event', 
     Object.defineProperty(window, 'electronAPI', { value: undefined, writable: true, configurable: true })
   })
 
+  it('R4 reconnect: after the socket closes the roster is kept but the seat is not a member, so a waiting notifies', () => {
+    renderHook(() => useAgentNotifications())
+    act(() => useTeamRosterStore.getState().apply(H, [roster(['worker'])]))
+    send(ev({}))
+    expect(showNotification).toHaveBeenCalledTimes(0)
+    act(() => useTeamRosterStore.getState().dropConnection(H))
+    expect(useTeamRosterStore.getState().byHost[H]).toHaveLength(1)
+    send(ev({ broadcast_ts: 99 }))
+    expect(showNotification).toHaveBeenCalledTimes(1)
+  })
+
   it('a session that becomes a member after mount gets no waiting notification; leaving the team brings it back', () => {
     renderHook(() => useAgentNotifications())
 

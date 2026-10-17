@@ -50,4 +50,16 @@ describe('useTeamRosterStore', () => {
     expect(storeSource).not.toMatch(/persist\s*\(/)
     expect(storeSource).not.toMatch(/zustand\/middleware/)
   })
+
+  it('apply marks the host as having a roster from THIS connection; dropConnection clears the mark but keeps the roster', () => {
+    const s = useTeamRosterStore.getState()
+    s.apply('h1', [team('a')])
+    expect(useTeamRosterStore.getState().liveHosts).toEqual({ h1: true })
+    s.dropConnection('h1')
+    expect(useTeamRosterStore.getState().liveHosts).toEqual({})
+    expect(useTeamRosterStore.getState().byHost.h1).toEqual([team('a')])
+    s.apply('h1', [team('a')])
+    s.forgetHost('h1')
+    expect(useTeamRosterStore.getState().liveHosts).toEqual({})
+  })
 })

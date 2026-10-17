@@ -48,4 +48,18 @@ describe('useActiveMemberKeys', () => {
     act(() => useSessionStore.setState({ sessions: { ...sessions } }))
     expect(result.current).toBe(first)
   })
+
+  it('R4 reconnect: a close keeps the roster but none of its seats are members; the session list alone does not bring them back; the snapshot does', () => {
+    useTeamRosterStore.getState().apply('h1', [rosterWith(['w'])])
+    const { result } = renderHook(() => useActiveMemberKeys())
+    expect([...result.current]).toEqual(['h1:bbbbbb'])
+    act(() => useTeamRosterStore.getState().dropConnection('h1')) // socket closed
+    expect(useTeamRosterStore.getState().byHost.h1).toHaveLength(1) // beads / quotas still read it
+    expect(result.current.size).toBe(0)
+    // reopen: the session list is fetched first (a new session may have reused the name), the roster snapshot not yet
+    act(() => useSessionStore.setState({ sessions: { h1: [...sessions.h1] } }))
+    expect(result.current.size).toBe(0)
+    act(() => useTeamRosterStore.getState().apply('h1', [rosterWith(['w'])])) // this connection's snapshot
+    expect([...result.current]).toEqual(['h1:bbbbbb'])
+  })
 })

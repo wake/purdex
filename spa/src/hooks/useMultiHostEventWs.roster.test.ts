@@ -120,4 +120,20 @@ describe('useMultiHostEventWs team.roster', () => {
     expect(useTeamRosterStore.getState().byHost[HOST]).toEqual(snapshot.teams)
     view.unmount()
   })
+
+  it('R4: a socket close drops the host from liveHosts but keeps the roster; a reopen waits for the new snapshot', async () => {
+    const view = renderHook(() => useMultiHostEventWs())
+    await waitFor(() => expect(sockets).toHaveLength(1))
+    act(() => { sockets[0].onopen?.() })
+    act(() => { sockets[0].emit(frame(snapshot)) })
+    expect(useTeamRosterStore.getState().liveHosts).toEqual({ [HOST]: true })
+    act(() => { sockets[0].onclose?.() })
+    expect(useTeamRosterStore.getState().liveHosts).toEqual({})
+    expect(useTeamRosterStore.getState().byHost[HOST]).toEqual(snapshot.teams)
+    act(() => { sockets[0].onopen?.() }) // reopened: nothing from this connection yet
+    expect(useTeamRosterStore.getState().liveHosts).toEqual({})
+    act(() => { sockets[0].emit(frame(snapshot)) })
+    expect(useTeamRosterStore.getState().liveHosts).toEqual({ [HOST]: true })
+    view.unmount()
+  })
 })
