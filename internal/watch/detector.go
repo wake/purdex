@@ -229,6 +229,7 @@ func (d *Detector) unmanagedTrees(in Input) []Event {
 		if st.ep.step(in.Now, over, 0, set.TS) {
 			if !st.resident && d.residentAndQuiet(in, tab, root, st, set) {
 				st.resident = true // a long-lived app of /Applications whose memory is all that is over: no event (#2965); its cores still count
+				st.ep = episode{}  // the episode that fired on memory is over: cores that are over right after start one of their own
 				continue
 			}
 			events = append(events, d.treeEvent(in, tab, root, st))

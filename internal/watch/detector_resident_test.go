@@ -93,3 +93,15 @@ func TestE1_AResidentAppThatLaterBurnsCoresIsReported(t *testing.T) {
 	r.procs = herd(2.5, 1058)
 	assert.NotEmpty(t, r.run(3*time.Minute))
 }
+
+// The episode that fired on memory and was set aside does not hold the cores back: a resident app that burns cores from the very next
+// pass is reported once the window of cores has been seen. Mutation gate: the episode kept → no event, ever (red).
+func TestE1_AResidentAppThatBurnsCoresRightAfterTheSkippedEventIsReported(t *testing.T) {
+	r, _ := residentRig(t, herdPath, 4*24*time.Hour)
+	r.procs = herd(0.2, 1058)
+	for i := 0; i < 20 && r.now.Sub(t0) <= 61*time.Second; i++ {
+		assert.Empty(t, r.pass()) // up to and including the pass that sets the memory event aside
+	}
+	r.procs = herd(2.5, 1058)
+	assert.NotEmpty(t, r.run(3*time.Minute))
+}
