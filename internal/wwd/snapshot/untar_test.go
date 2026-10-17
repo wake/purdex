@@ -158,6 +158,36 @@ func TestUntar_ATerminalSymlinkThatResolvesOutsideIsRefused(t *testing.T) {
 	assert.NoError(t, err, "a link that points at nothing yet, inside, is allowed")
 }
 
+// A missing component before the '..' that leaves does not hide the escape: whoever makes `missing` later gets a link that leads out.
+// Links that stay inside, however they climb, are fine.
+func TestUntar_AMissingComponentDoesNotHideAnEscapingSymlink(t *testing.T) {
+	_, err := Untar(tarOf(t,
+		ent{name: "y", link: "."},
+		ent{name: "q", link: "y/y/missing/../../newdir"},
+	), filepath.Join(t.TempDir(), "ws"))
+	assert.Error(t, err)
+
+	_, err = Untar(tarOf(t, // a link inside a directory that is itself reached through a link
+		ent{name: "d/", mode: 0o755},
+		ent{name: "dl", link: "d"},
+		ent{name: "dl/up", link: "../../x"},
+	), filepath.Join(t.TempDir(), "ws"))
+	assert.Error(t, err, "dl/up is d/up: ../../x leaves")
+
+	_, err = Untar(tarOf(t, ent{name: "loop1", link: "loop2"}, ent{name: "loop2", link: "loop1"}), filepath.Join(t.TempDir(), "ws"))
+	assert.Error(t, err, "a loop is refused")
+
+	_, err = Untar(tarOf(t,
+		ent{name: "a/", mode: 0o755},
+		ent{name: "a/b/", mode: 0o755},
+		ent{name: "x.txt", body: "x\n"},
+		ent{name: "a/b/up", link: "../../x.txt"},
+		ent{name: "a/b/same", link: "../b/../b"},
+		ent{name: "a/later", link: "not/made/yet/../../ok"},
+	), filepath.Join(t.TempDir(), "ws"))
+	assert.NoError(t, err, "links that climb and stay inside")
+}
+
 // The same chain when the directory it points at outside is there: nothing is made in it.
 func TestUntar_ASymlinkChainIntoAnExistingDirectoryOutsideWritesNothingThere(t *testing.T) {
 	base := t.TempDir()

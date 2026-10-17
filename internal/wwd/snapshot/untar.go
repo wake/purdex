@@ -38,17 +38,21 @@ func Untar(r io.Reader, dst string) (commit string, err error) {
 	defer root.Close()
 	tr := tar.NewReader(r)
 	var total int64
-	var links []string
+	links := map[string]string{}
 	for n := 0; ; n++ {
 		h, err := tr.Next()
 		if errors.Is(err, io.EOF) {
 			// Root never follows a symlink out, but it does not stop one from being made, and a consumer of the workspace that does not go
-			// through a root would follow it: every link is resolved through the root once more, now that the tree is complete (a link
-			// can lead out through a chain of the archive's own links, which only the whole tree shows). A link that points at nothing
-			// yet, inside, is fine; one that cannot be resolved inside is not.
-			for _, l := range links {
-				if _, err := root.Stat(l); err != nil && !errors.Is(err, fs.ErrNotExist) {
-					return "", fmt.Errorf("snapshot tar: symlink %q leads out of the workspace: %w", l, err)
+			// through a root would follow it. Now that the tree is complete every link is resolved on paper, whether or not its target is
+			// there (a missing component can be made later and then the link leads out), and through the archive's own links (a chain
+			// can leave only through the whole tree); a link that would leave, or loops, is an error. One that points at nothing yet,
+			// inside, is fine.
+			for l := range links {
+				if linkLeaves(links, l) {
+					return "", fmt.Errorf("snapshot tar: symlink %q -> %q leads out of the workspace", l, links[l])
+				}
+				if _, err := root.Stat(l); err != nil && !errors.Is(err, fs.ErrNotExist) { // and what the file system itself says
+					return "", fmt.Errorf("snapshot tar: symlink %q: %w", l, err)
 				}
 			}
 			return commit, nil
@@ -109,9 +113,42 @@ func Untar(r io.Reader, dst string) (commit string, err error) {
 			if err := root.Symlink(h.Linkname, name); err != nil {
 				return "", err
 			}
-			links = append(links, name)
+			links[name] = h.Linkname
 		default:
 			return "", fmt.Errorf("snapshot tar: %q is of a kind a snapshot does not have (%c)", h.Name, h.Typeflag)
 		}
 	}
+}
+
+// linkLeaves says whether the symlink name, resolved on paper, leaves the workspace. The path is the directory of the link followed by
+// its target, taken component by component: a component that is another symlink of the archive is replaced by that link's target, ".."
+// goes up one (above the root is leaving), and any other name is taken as a directory that is or will be there. More than 255
+// expansions is a loop, and a loop is leaving too (a path that never ends cannot be shown to stay).
+func linkLeaves(links map[string]string, name string) bool {
+	pending := append(strings.Split(path.Dir(name), "/"), strings.Split(links[name], "/")...)
+	var stack []string
+	for budget := 255; len(pending) > 0; {
+		c := pending[0]
+		pending = pending[1:]
+		switch c {
+		case "", ".":
+			continue
+		case "..":
+			if len(stack) == 0 {
+				return true
+			}
+			stack = stack[:len(stack)-1]
+			continue
+		}
+		next := append(append([]string(nil), stack...), c)
+		if target, ok := links[strings.Join(next, "/")]; ok {
+			if budget--; budget < 0 || path.IsAbs(target) {
+				return true
+			}
+			pending = append(strings.Split(target, "/"), pending...) // relative to the directory the link is in: the stack
+			continue
+		}
+		stack = next
+	}
+	return false
 }
