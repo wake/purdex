@@ -124,6 +124,7 @@ func (m *Module) handleUnattendedPut(w http.ResponseWriter, r *http.Request) {
 	}
 	if changed {
 		m.logf("[team] unattended %s by app %q from %s (swept %d, pending %d)", onOff(st.On), client.Label, client.Addr, swept, pending)
+		m.wakeWatcher("unattended_changed", unattendedWakeDetail(st.On, client.Label))
 	}
 	// The write took effect: a list that cannot be read must not turn that
 	// into a 500 the App could not tell from a failed write. It answers
