@@ -13,7 +13,8 @@ import (
 	"github.com/wake/purdex/internal/tmux"
 )
 
-// originProbeTimeout bounds one pane read: a roster build must not wait on a tmux that does not answer.
+// originProbeTimeout bounds ALL the pane reads of one roster build or fresh list: they must not wait on a tmux that does not answer,
+// whatever the number of sessions (a read that finds the budget spent answers at once).
 const originProbeTimeout = 2 * time.Second
 
 var originPanePattern = regexp.MustCompile(`^%[0-9]+$`)
@@ -31,13 +32,11 @@ func originPane(origin string) string {
 }
 
 // paneIdentityOf reads the pane an Origin.Tmux names; false when it is not in tmux, tmux is not wired, or tmux does not answer.
-func (m *Module) paneIdentityOf(origin string) (tmux.PaneIdentity, bool) {
+func (m *Module) paneIdentityOf(ctx context.Context, origin string) (tmux.PaneIdentity, bool) {
 	pane := originPane(origin)
 	if pane == "" || m.tmux == nil {
 		return tmux.PaneIdentity{}, false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), originProbeTimeout)
-	defer cancel()
 	id, err := m.tmux.PaneIdentity(ctx, pane, spawnTagOption)
 	if err != nil {
 		return tmux.PaneIdentity{}, false
@@ -46,8 +45,8 @@ func (m *Module) paneIdentityOf(origin string) (tmux.PaneIdentity, bool) {
 }
 
 // sessionCodeOf is the session code of the tmux session an Origin.Tmux runs in ("" when unknown).
-func (m *Module) sessionCodeOf(origin string) string {
-	id, ok := m.paneIdentityOf(origin)
+func (m *Module) sessionCodeOf(ctx context.Context, origin string) string {
+	id, ok := m.paneIdentityOf(ctx, origin)
 	if !ok {
 		return ""
 	}
@@ -62,6 +61,7 @@ func (m *Module) sessionCodeOf(origin string) string {
 // A pane that does not answer is tried again with the next session, at most maxGenerationMisses times.
 type generationMemo struct {
 	m      *Module
+	ctx    context.Context // one budget for the build (originProbeTimeout)
 	val    string
 	misses int
 }
@@ -75,7 +75,7 @@ func (g *generationMemo) of(origin string) string {
 	if g.val != "" || g.misses >= maxGenerationMisses {
 		return g.val
 	}
-	if id, ok := g.m.paneIdentityOf(origin); ok {
+	if id, ok := g.m.paneIdentityOf(g.ctx, origin); ok {
 		g.val = id.Instance
 	} else {
 		g.misses++

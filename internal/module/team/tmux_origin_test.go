@@ -1,14 +1,17 @@
 package teammod
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/team"
+	"github.com/wake/purdex/internal/tmux"
 )
 
 // ---- the tmux generation of a roster seat and the session code of a fresh half ----
@@ -132,5 +135,39 @@ func TestRoster_StoredSeatShowsTheRecordedGeneration(t *testing.T) {
 	}
 	if storedInstance("", "7:77") != "" {
 		t.Fatal("an instance without a tmux session name was shown")
+	}
+}
+
+// hangingTmux is a tmux that never answers a pane read until its context ends.
+type hangingTmux struct {
+	tmuxOps
+}
+
+func (h *hangingTmux) PaneIdentity(ctx context.Context, _, _ string) (tmux.PaneIdentity, error) {
+	<-ctx.Done()
+	return tmux.PaneIdentity{}, ctx.Err()
+}
+
+// A tmux that does not answer costs the fresh list ONE budget, not one per session: the list comes back with no codes after about
+// originProbeTimeout, whatever the number of halves. Mutation gate: a budget per session → the elapsed time is 3x → red.
+func TestFreshSurface_SilentTmuxCostsOneBudgetForTheWholeList(t *testing.T) {
+	f := newFixture(t)
+	f.m.tmux = &hangingTmux{tmuxOps: f.m.tmux}
+	for _, sid := range []string{"sid-1", "sid-2", "sid-3"} {
+		f.showIn(sid, "_"+sid, "sess:@1.%0")
+		f.freshHalfWithFile(sid)
+	}
+	start := time.Now()
+	v := f.getFresh()
+	if len(v.Sessions) != 3 {
+		t.Fatalf("sessions = %+v, want the three halves", v.Sessions)
+	}
+	if took := time.Since(start); took > originProbeTimeout+time.Second {
+		t.Fatalf("the list took %v with a silent tmux, want about one budget (%v)", took, originProbeTimeout)
+	}
+	for _, s := range v.Sessions {
+		if s.Code != "" {
+			t.Fatalf("a code from a silent tmux: %+v", s)
+		}
 	}
 }

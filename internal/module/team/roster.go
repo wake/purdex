@@ -6,6 +6,7 @@ package teammod
 // team.roster host event. This file only materializes it.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -121,7 +122,9 @@ func (m *Module) buildRoster() (team.Roster, error) {
 		m.logf("[team] roster team colours: %v", cerr) // the panel falls back to its automatic colour
 	}
 	alias, _ := m.selfHost()
-	gen := &generationMemo{m: m}
+	genCtx, genCancel := context.WithTimeout(context.Background(), originProbeTimeout)
+	defer genCancel()
+	gen := &generationMemo{m: m, ctx: genCtx}
 	out := team.Roster{Teams: make([]team.TeamRoster, 0, len(teams))}
 	for i, t := range teams {
 		tr := team.TeamRoster{ID: t.ID, HostID: t.HostID, TeamName: t.TeamName, TeamLabel: t.TeamLabel, CreatedAt: t.CreatedAt,
