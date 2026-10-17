@@ -191,6 +191,27 @@ func TestPrepareRefusesALocalOnlyTask(t *testing.T) {
 	}
 }
 
+func TestPrepareRefusesWhenTheDirectoryIsSwappedBeforeTheBaseQuery(t *testing.T) {
+	a, b := newRepo(t), newRepo(t)
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(a, link); err != nil {
+		t.Fatal(err)
+	}
+	beforeGit = func(args []string) {
+		for _, a2 := range args {
+			if a2 == "merge-base" {
+				os.Remove(link)
+				os.Symlink(b, link)
+				return
+			}
+		}
+	}
+	t.Cleanup(func() { beforeGit = nil })
+	if _, err := Prepare(context.Background(), Request{Dir: link, Task: "lint"}); err == nil {
+		t.Fatal("a directory swapped before the base query was accepted")
+	}
+}
+
 func TestPrepareNoManifestIsUsage(t *testing.T) {
 	dir := newRepo(t)
 	if err := os.Remove(filepath.Join(dir, ".wwd/tasks.toml")); err != nil {

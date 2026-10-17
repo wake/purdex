@@ -123,7 +123,9 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 	if err != nil {
 		return nil, err
 	}
+	base := g.base(ctx, snap.SHA)
 	// The answers above came from req.Dir after the snapshot: if the path was pointed at another repository meanwhile, refuse.
+	// This is the last use of req.Dir, so the check covers every query.
 	if again, err := g.run(ctx, "rev-parse", "--show-toplevel"); err != nil || !sameDir(again, root) {
 		return nil, fmt.Errorf("the repository changed while the submission was prepared")
 	}
@@ -132,7 +134,7 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 	}
 	sub := wire.JobSubmission{
 		Repo:          repo,
-		Snapshot:      wire.Snapshot{Commit: snap.SHA, Tree: tree, Base: g.base(ctx, snap.SHA), RelCwd: relCwd(snap.Rel, task.Cwd)},
+		Snapshot:      wire.Snapshot{Commit: snap.SHA, Tree: tree, Base: base, RelCwd: relCwd(snap.Rel, task.Cwd)},
 		Task:          task.Name,
 		Args:          nonNil(req.Args),
 		Class:         class,
@@ -209,7 +211,13 @@ type gitRunner struct {
 	dir string
 }
 
+// beforeGit is called before every git command; tests use it to change the world between two queries.
+var beforeGit func(args []string)
+
 func (g *gitRunner) run(ctx context.Context, args ...string) (string, error) {
+	if beforeGit != nil {
+		beforeGit(args)
+	}
 	cmd := execstat.CommandContext(ctx, "wwd.submit.git", g.bin, append([]string{"-C", g.dir}, args...)...)
 	cmd.Env = gate.CleanGitEnv(os.Environ())
 	var out, errb bytes.Buffer
