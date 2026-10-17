@@ -176,7 +176,8 @@ type Ticket struct {
 	Name string
 	path string
 	f    *os.File
-	p    *Pool // the pool it queues in: its admit lock orders the removal with every other queue change (rank.go)
+	info WaiterInfo // what the gate said about its command when it queued: the take writes it into the slot's record (kept in memory, never read back from the file)
+	p    *Pool      // the pool it queues in: its admit lock orders the removal with every other queue change (rank.go)
 }
 
 // Drop removes the ticket (the slot was taken or the gate gives up).
@@ -263,7 +264,8 @@ func (p *Pool) EnqueueFor(info WaiterInfo) (*Ticket, error) {
 	if err := os.Rename(tmp, path); err != nil {
 		return fail(err)
 	}
-	return &Ticket{Name: name, path: path, f: f, p: p}, nil
+	info.Argv = append([]string(nil), info.Argv...) // the ticket keeps its own copy: the caller's slice may be reused or changed
+	return &Ticket{Name: name, path: path, f: f, p: p, info: info}, nil
 }
 
 // liveBefore lists the live tickets older than t; a ticket whose lock is free belongs to a gate that is gone and is
@@ -416,14 +418,14 @@ func (p *Pool) TryTakeRanked(t *Ticket) (Take, error) {
 		out.Held = true
 		return out, nil // held: not served while a slot is free either
 	}
-	slot, err := p.takeLocked(ahead)
+	slot, err := p.takeLocked(ahead, t.info)
 	out.Slot = slot
 	return out, err
 }
 
 // takeLocked is the slot part of TryTake, with the admit lock held and the ahead tickets counted: a slot when the free ones outnumber
 // them.
-func (p *Pool) takeLocked(ahead int) (*Slot, error) {
+func (p *Pool) takeLocked(ahead int, info WaiterInfo) (*Slot, error) {
 	var free []*os.File
 	var freeK []int
 	for k := 1; k <= p.Size; k++ {
@@ -456,7 +458,7 @@ func (p *Pool) takeLocked(ahead int) (*Slot, error) {
 	// replace it before anything else, or a command still carrying the old token could pass the nesting check against our
 	// lock until SetHolder writes ours. The replacement says who took the slot and when (no token): the gate has work to do
 	// before it writes the holder, and a slot with no record in that time read as a holder of no pid and no start (#3049).
-	if err := p.writePlaceholder(freeK[0]); err != nil {
+	if err := p.writePlaceholder(freeK[0], info, false); err != nil {
 		closeAll(free[:1]) // the lock is let go again: a record that cannot be replaced must not stay beside a lock we hand out
 		return nil, dirError(err)
 	}
@@ -465,12 +467,12 @@ func (p *Pool) takeLocked(ahead int) (*Slot, error) {
 
 // writePlaceholder replaces the record of slot k, whatever it holds, by one that names this process and the moment: atomically, with
 // no token, so that nothing can pass the nesting check on it and a reader never meets a locked slot with no record.
-func (p *Pool) writePlaceholder(k int) error {
+func (p *Pool) writePlaceholder(k int, info WaiterInfo, late bool) error {
 	now := time.Now()
 	if p.Now != nil {
 		now = p.Now()
 	}
-	b, err := json.Marshal(Holder{Class: p.Class, Slot: k, PID: os.Getpid(), Started: now})
+	b, err := json.Marshal(Holder{Class: p.Class, Slot: k, PID: os.Getpid(), Started: now, Argv: info.Argv, Cwd: info.Cwd, Session: info.Session, Late: late})
 	if err != nil {
 		return err
 	}
@@ -502,7 +504,7 @@ func (p *Pool) overHeld() int {
 // more work: the lowest free slot of the pool, or when the pool is full one beyond its size. nil when even those are taken
 // (overSlots late holders at once). It holds the same admit lock as TryTake, so the two never take the same slot or count a
 // slot twice.
-func (p *Pool) TakeLate() (*Slot, error) {
+func (p *Pool) TakeLate(info WaiterInfo) (*Slot, error) {
 	if p.Size == 0 {
 		return nil, nil // a paused class takes no claim, late or over
 	}
@@ -535,7 +537,7 @@ func (p *Pool) TakeLate() (*Slot, error) {
 			_ = f.Close()
 			continue
 		}
-		if err := p.writePlaceholder(k); err != nil {
+		if err := p.writePlaceholder(k, info, true); err != nil {
 			_ = f.Close()
 			return nil, dirError(err)
 		}

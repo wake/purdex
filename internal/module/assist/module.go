@@ -58,8 +58,11 @@ type Module struct {
 	passMu sync.Mutex
 	kick   chan struct{}
 
-	stop context.CancelFunc
-	wg   sync.WaitGroup
+	// ctxMu guards ctx, the parent of every script: Stop cancels it, so a script in flight does not hold the shutdown.
+	ctxMu sync.Mutex
+	ctx   context.Context
+	stop  context.CancelFunc
+	wg    sync.WaitGroup
 }
 
 // New returns the module with production defaults.
@@ -91,12 +94,36 @@ func (m *Module) Init(c *core.Core) error {
 	return nil
 }
 
-// Start does nothing yet: the poller and the reconciler come with the switches (X1a-3).
-func (m *Module) Start(context.Context) error { return nil }
+// Start runs the reconciler and the checks at once and then every pollEvery (and right after a switch).
+func (m *Module) Start(context.Context) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	m.ctxMu.Lock()
+	m.ctx, m.stop = ctx, cancel
+	m.ctxMu.Unlock()
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		t := time.NewTicker(m.pollEvery)
+		defer t.Stop()
+		for {
+			m.pass()
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			case <-m.kick:
+			}
+		}
+	}()
+	return nil
+}
 
 func (m *Module) Stop(context.Context) error {
-	if m.stop != nil {
-		m.stop()
+	m.ctxMu.Lock()
+	stop := m.stop
+	m.ctxMu.Unlock()
+	if stop != nil {
+		stop()
 	}
 	m.wg.Wait()
 	return nil
@@ -128,6 +155,8 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/assist", m.handleStatus)
 	mux.HandleFunc("POST /api/assist/host", m.handleHostSet)
 	mux.HandleFunc("DELETE /api/assist/host/{alias}", m.handleHostRemove)
+	mux.HandleFunc("POST /api/assist/switch", m.handleSwitch)
+	mux.HandleFunc("POST /api/assist/reserve", m.handleReserve)
 	mux.HandleFunc("POST /api/assist/allow", m.handleAllow)
 	mux.HandleFunc("POST /api/assist/deny", m.handleDeny)
 	mux.HandleFunc("GET /api/assist/hosts", m.handleHosts)
@@ -151,4 +180,14 @@ func (m *Module) readyCopy() map[string]gate.AssistReady {
 		out[k] = v
 	}
 	return out
+}
+
+// scriptCtx is the parent of a script's context: the module's, once started.
+func (m *Module) scriptCtx() context.Context {
+	m.ctxMu.Lock()
+	defer m.ctxMu.Unlock()
+	if m.ctx == nil {
+		return context.Background()
+	}
+	return m.ctx
 }
