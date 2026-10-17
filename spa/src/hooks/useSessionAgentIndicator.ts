@@ -5,6 +5,7 @@ import { useAgentStore } from '../stores/useAgentStore'
 import { useUISettingsStore } from '../stores/useUISettingsStore'
 import { compositeKey } from '../lib/composite-key'
 import { getAgentIcon } from '../lib/agent-icons'
+import { useActiveMemberKeys } from './useActiveMemberKeys'
 
 export type TabIconComponent = ComponentType<{ size: number; className?: string }>
 
@@ -32,7 +33,9 @@ export function useSessionAgentIndicator(
   const ck = sessionCode && hostId ? compositeKey(hostId, sessionCode) : undefined
 
   const agentStatus = useAgentStore((s) => (ck ? s.statuses[ck] : undefined))
-  const isUnread = useAgentStore((s) => (ck ? !!s.unread[ck] : false))
+  // A team member's unread mark is hidden, its state kept (member spec R3); status is not touched.
+  const members = useActiveMemberKeys()
+  const isUnread = useAgentStore((s) => (ck ? !!s.unread[ck] && !members.has(ck) : false))
   const subagentRefs = useAgentStore((s) => (ck ? (s.subagents[ck] ?? EMPTY_SUBAGENT_REFS) : EMPTY_SUBAGENT_REFS))
   const agentType = useAgentStore((s) => (ck ? s.agentTypes[ck] : undefined))
   const tabIndicatorStyle = useUISettingsStore((s) => s.tabIndicatorStyle)
