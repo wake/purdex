@@ -42,7 +42,20 @@ export function getReturnWorkspaceId(): string | null {
 export const visibleWorkspaces = (workspaces: readonly Workspace[]): Workspace[] =>
   workspaces.filter((ws) => ws.id !== WATCH_WORKSPACE_ID)
 
-export const __resetReturnWorkspaceForTest = (): void => { returnWorkspaceId = null }
+/** Where the watcher area's back button and ⌘W lead (journal v5 §3.7): a workspace and the tab that was on screen in it. */
+export interface WatchReturnTarget { workspaceId: string; tabId: string | null }
+
+/**
+ * This window's way back, taken when its `activeWorkspaceId` goes from another workspace to `watch` (the subscription
+ * at the end of this file) — by `openWatchArea` here or by another window's write synced in; moving inside the area
+ * keeps it; `reset` clears it. A target whose workspace is gone (another world has other ids) is no target on leaving
+ * (`leaveWatchArea`). In memory only, like `returnWorkspaceId`: after a restart with the area shown there is none.
+ */
+let watchReturnTarget: WatchReturnTarget | null = null
+
+export const getWatchReturnTarget = (): WatchReturnTarget | null => watchReturnTarget
+
+export const __resetReturnWorkspaceForTest = (): void => { returnWorkspaceId = null; watchReturnTarget = null }
 
 interface WorkspaceState {
   workspaces: Workspace[]
@@ -387,7 +400,11 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       // emptying it does not change whose it is: the Electron tear-off `replace` path (useElectronIpc.ts) resets a
       // window that may be showing a slave, and a tag thrown back to `master` / 0 there would disagree with
       // `useLocalProfilesStore` for ever (lib/profile/master-world.ts: unsettled, and nothing repairs it).
-      reset: () => set({ workspaces: [], activeWorkspaceId: null }),
+      // The way back into the emptied world goes with it (`watchReturnTarget`).
+      reset: () => {
+        watchReturnTarget = null
+        set({ workspaces: [], activeWorkspaceId: null })
+      },
     }),
     {
       name: STORAGE_KEYS.WORKSPACES,
@@ -409,8 +426,15 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 syncManager.register(STORAGE_KEYS.WORKSPACES, useWorkspaceStore)
 registerFencedStore(STORAGE_KEYS.WORKSPACES, useWorkspaceStore)
 
-// Remember the last workspace the user was in that is not the watcher area (see `returnWorkspaceId`).
-useWorkspaceStore.subscribe((state) => {
+// Remember the last workspace the user was in that is not the watcher area (see `returnWorkspaceId`), and take the way
+// back on entering the area (see `watchReturnTarget`). Every window runs this on its own store, so a window that a
+// synced write takes into the area keeps the workspace it showed itself, and the tab active in it just before.
+// A world change does not touch it: `leaveWatchArea` checks the target against the workspaces there are when it is used.
+useWorkspaceStore.subscribe((state, prev) => {
   const id = state.activeWorkspaceId
   if (id !== null && id !== WATCH_WORKSPACE_ID) returnWorkspaceId = id
+  if (id === WATCH_WORKSPACE_ID && prev.activeWorkspaceId !== WATCH_WORKSPACE_ID) {
+    const from = prev.workspaces.find((ws) => ws.id === prev.activeWorkspaceId)
+    watchReturnTarget = from ? { workspaceId: from.id, tabId: from.activeTabId } : null
+  }
 })

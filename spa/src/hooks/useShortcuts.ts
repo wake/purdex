@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { getReturnWorkspaceId, visibleWorkspaces, WATCH_WORKSPACE_ID } from '../features/workspace/store'
+import { leaveWatchArea } from '../features/workspace/lib/open-watch-area'
 import { useHistoryStore } from '../stores/useHistoryStore'
 import { createTab } from '../types/tab'
 import { getVisibleTabIds as getVisibleTabIdsShared } from '../features/workspace'
@@ -63,6 +64,11 @@ export function useShortcuts(): void {
       }
 
       if (action === 'close-tab') {
+        // In the watcher area ⌘W is its back button (journal v5 §3.7): it leaves the area; the area's tabs never close.
+        if (useWorkspaceStore.getState().activeWorkspaceId === WATCH_WORKSPACE_ID) {
+          leaveWatchArea()
+          return
+        }
         const { activeTabId } = tabState
         if (!activeTabId || !tabState.tabs[activeTabId]) return
         // In the bar — or in NO bar: a tab nobody has adopted yet (adopt-standalone.ts waits 500 ms) has no
