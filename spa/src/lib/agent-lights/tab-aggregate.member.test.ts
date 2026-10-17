@@ -22,12 +22,17 @@ describe('aggregateTabAgents — team members (R3)', () => {
     expect(aggregateTabAgents(panes('h1:a'), data({ unread: { 'h1:a': true } })).isUnread).toBe(true)
   })
 
-  it('status, representative pane and approval hand are untouched by membership', () => {
+  it('status and representative pane are untouched by membership', () => {
     const d = data({ statuses: { 'h1:a': 'waiting', 'h1:b': 'running' }, unread: { 'h1:a': true } })
-    const a = aggregateTabAgents(panes('h1:a', 'h1:b'), d, new Set(['h1:a']), new Set(['h1:a']))
+    const a = aggregateTabAgents(panes('h1:a', 'h1:b'), d, none, new Set(['h1:a']))
     expect(a.status).toBe('waiting')
     expect(a.repKey).toBe('h1:a')
-    expect(a.isAwaitingApproval).toBe(true)
     expect(a.isUnread).toBe(false)
+  })
+
+  it('the approval hand is untouched by membership', () => {
+    const a = aggregateTabAgents(panes('h1:a'), data(), new Set(['h1:a']), new Set(['h1:a']))
+    expect(a.isAwaitingApproval).toBe(true)
+    expect(a.status).toBe('waiting')
   })
 })
