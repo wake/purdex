@@ -37,13 +37,19 @@ var ErrAlreadyHeld = errors.New("locks: the owner already holds keys")
 // Table is the keys held on this host. The zero value is not usable; use New.
 type Table struct {
 	mu     sync.Mutex
-	byKey  map[string]string   // key -> owner
-	byHold map[string][]string // owner -> its keys (sorted)
+	byKey  map[string]string // key -> owner
+	byHold map[string]hold   // owner -> what it holds
+	gen    uint64
+}
+
+type hold struct {
+	keys []string // sorted
+	gen  uint64   // which Acquire made it: a late finish of an older one must not touch a newer one
 }
 
 // New returns an empty table.
 func New() *Table {
-	return &Table{byKey: map[string]string{}, byHold: map[string][]string{}}
+	return &Table{byKey: map[string]string{}, byHold: map[string]hold{}}
 }
 
 // normalize checks the keys and returns them sorted. A key is non-empty text without NUL or newline; a repeated key is an
@@ -92,23 +98,43 @@ func (t *Table) Acquire(owner string, keys []string, record func() error) error 
 	for _, k := range sorted {
 		t.byKey[k] = owner
 	}
-	t.byHold[owner] = sorted
+	t.gen++
+	mine := t.gen
+	t.byHold[owner] = hold{keys: sorted, gen: mine}
 	t.mu.Unlock()
 
-	if record != nil {
-		if err := record(); err != nil {
-			t.Release(owner)
-			return err
-		}
+	if record == nil {
+		return nil
 	}
-	return nil
+	err = record()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if cur, ok := t.byHold[owner]; !ok || cur.gen != mine {
+		// Released while it was being recorded (a cancel, a cleanup): the keys may be somebody else's by now, so the job must
+		// not start, and nothing of a newer acquisition by the same owner is touched.
+		if err == nil {
+			err = ErrReleased
+		}
+		return err
+	}
+	if err != nil {
+		t.releaseLocked(owner)
+	}
+	return err
 }
+
+// ErrReleased: the owner's keys were released while its Acquire was still recording the job. The caller must not start it.
+var ErrReleased = errors.New("locks: released before the job was recorded")
 
 // Release removes every key owner holds. Releasing an owner that holds nothing is not an error.
 func (t *Table) Release(owner string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for _, k := range t.byHold[owner] {
+	t.releaseLocked(owner)
+}
+
+func (t *Table) releaseLocked(owner string) {
+	for _, k := range t.byHold[owner].keys {
 		if t.byKey[k] == owner {
 			delete(t.byKey, k)
 		}

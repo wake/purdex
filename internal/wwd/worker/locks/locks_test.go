@@ -121,6 +121,48 @@ func TestKeysAreReservedWhileTheJobIsBeingRecorded(t *testing.T) {
 	}
 }
 
+func TestReleaseDuringRecordMeansTheJobMustNotStart(t *testing.T) {
+	tb := New()
+	recording, finish := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- tb.Acquire("j_1", []string{"db"}, func() error { close(recording); <-finish; return nil })
+	}()
+	<-recording
+	tb.Release("j_1") // a cancel arrives while the job is being recorded
+	if err := tb.Acquire("j_2", []string{"db"}, nil); err != nil {
+		t.Fatalf("the key should be free after the release: %v", err)
+	}
+	close(finish)
+	if err := <-done; !errors.Is(err, ErrReleased) {
+		t.Fatalf("a record that finished after its release must not count as acquired: %v", err)
+	}
+	if h, _ := tb.Holder("db"); h != "j_2" {
+		t.Fatalf("holder = %q, want j_2 untouched", h)
+	}
+}
+
+func TestLateFailureOfAnOlderAcquireDoesNotReleaseANewerOne(t *testing.T) {
+	tb := New()
+	recording, finish := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- tb.Acquire("j_1", []string{"db"}, func() error { close(recording); <-finish; return errors.New("queue failed") })
+	}()
+	<-recording
+	tb.Release("j_1")
+	if err := tb.Acquire("j_1", []string{"db"}, nil); err != nil { // the same owner again
+		t.Fatal(err)
+	}
+	close(finish)
+	if err := <-done; err == nil {
+		t.Fatal("want the record's error")
+	}
+	if h, ok := tb.Holder("db"); !ok || h != "j_1" {
+		t.Fatalf("the older acquire's failure released the newer one's keys: %q %v", h, ok)
+	}
+}
+
 func TestConflictsDoesNotRegister(t *testing.T) {
 	tb := New()
 	_ = tb.Acquire("j_1", []string{"b"}, nil)
