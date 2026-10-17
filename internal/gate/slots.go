@@ -216,7 +216,14 @@ type WaiterInfo struct {
 func (p *Pool) Enqueue() (*Ticket, error) { return p.EnqueueFor(WaiterInfo{}) }
 
 // EnqueueFor takes a ticket. Its name sorts by arrival time, so the order of two tickets is the order of their names.
-func (p *Pool) EnqueueFor(info WaiterInfo) (*Ticket, error) {
+func (p *Pool) EnqueueFor(info WaiterInfo) (*Ticket, error) { return p.EnqueueRanked(info, nil) }
+
+// EnqueueRanked is EnqueueFor for a ticket that is born with a rank (PDX_GATE_RANK=back, rank_env.go). The rank file is written
+// and the ticket renamed into view under one hold of the admit lock, the one every serve (TryTake) and every queue scan takes, so
+// no gate can look at the queue between "visible" and "ranked": the ticket is never seen as normal. The rank file is written
+// first, under the final name: a scan without the lock (peekSnapshot) lists tickets only, so a rank file with no ticket is
+// invisible, and a scan that cleans up holds the lock and so cannot run between the two steps.
+func (p *Pool) EnqueueRanked(info WaiterInfo, born *BornRank) (*Ticket, error) {
 	if err := os.MkdirAll(p.queueDir(), 0o755); err != nil {
 		return nil, dirError(err)
 	}
@@ -265,7 +272,20 @@ func (p *Pool) EnqueueFor(info WaiterInfo) (*Ticket, error) {
 		}
 	}
 	path := filepath.Join(p.queueDir(), name)
-	if err := os.Rename(tmp, path); err != nil {
+	if born != nil {
+		unlock, err := p.lockAdmit()
+		if err != nil {
+			return fail(err)
+		}
+		defer unlock()
+		if err := p.writeRankFile(name, rankFile{Rank: born.Rank, At: p.Now().UnixNano(), By: born.By, Reason: born.Reason}); err != nil {
+			return fail(err)
+		}
+		if err := os.Rename(tmp, path); err != nil {
+			_ = os.Remove(p.rankPath(name))
+			return fail(err)
+		}
+	} else if err := os.Rename(tmp, path); err != nil {
 		return fail(err)
 	}
 	info.Argv = append([]string(nil), info.Argv...) // the ticket keeps its own copy: the caller's slice may be reused or changed

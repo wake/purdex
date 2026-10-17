@@ -34,6 +34,7 @@ const gateUsage = `usage: pdx gate [--class heavy|light] [--auto] [--tool <name>
   --real   the binary to run in place of the command's first word (a shim passes the real one)
   --tool   a shim's call: the command is <name> followed by the words after --; the real binary is looked up on PATH
            without the shim directory, at this run; a command that is not heavy or light is run at once, unqueued
+  PDX_GATE_RANK=back  in the environment: this command's ticket is queued at rank back (served after every normal one); PDX_GATE_RANK_REASON=<one line> says why. Other values are ignored
   hosts    the assist hosts for this session and the repo of this directory: which are on, ready and allowed, and why not (see pdx assist)
   would-wait  would a command of that class (or, with --auto, this command by its words) wait for a slot right now? (fast: no daemon, no process started, takes nothing;
            for a hook that decides whether to run a call in the background). Prints the reason and a line for an agent to read

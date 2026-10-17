@@ -353,23 +353,31 @@ func (p *Pool) SetRank(ticket string, rank Rank, by, reason string, until time.T
 	if !until.IsZero() {
 		rf.Until = until.UnixNano()
 	}
-	b, err := json.Marshal(rf)
-	if err != nil {
+	if err := p.writeRankFile(ticket, rf); err != nil {
 		return old, err
-	}
-	tmp := p.rankPath(ticket) + ".new"
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
-		return old, dirError(err)
-	}
-	if err := os.Rename(tmp, p.rankPath(ticket)); err != nil {
-		_ = os.Remove(tmp)
-		return old, dirError(err)
 	}
 	if !p.ticketWaiting(ticket) { // it went while the file was written
 		_ = os.Remove(p.rankPath(ticket))
 		return old, ErrNotWaiting
 	}
 	return old, nil
+}
+
+// writeRankFile writes <ticket>.rank atomically (a temp name, then rename); the caller holds the admit lock.
+func (p *Pool) writeRankFile(ticket string, rf rankFile) error {
+	b, err := json.Marshal(rf)
+	if err != nil {
+		return err
+	}
+	tmp := p.rankPath(ticket) + ".new"
+	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+		return dirError(err)
+	}
+	if err := os.Rename(tmp, p.rankPath(ticket)); err != nil {
+		_ = os.Remove(tmp)
+		return dirError(err)
+	}
+	return nil
 }
 
 // ClearRank puts the named ticket back to normal (removes its rank file); ErrNotWaiting when it is not in the queue.
