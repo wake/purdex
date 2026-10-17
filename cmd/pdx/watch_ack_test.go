@@ -141,3 +141,60 @@ func TestWatchLog_JSONShowsTheHandledState(t *testing.T) {
 	require.Equal(t, "查過了", line["note"])
 	require.Equal(t, a.ID, line["id"])
 }
+
+func TestWatchAck_HostIsForAllAndIsSentWithTheNote(t *testing.T) {
+	var got map[string]any
+	srv := ackServer(t, ackWire{Results: []watch.AckResult{{ID: "*@a26", Outcome: watch.AckHandled}}, Handled: 2}, 0, &got)
+	defer srv.Close()
+	cfg := watchCfgFile(t, srv, "tok")
+	var out, errb bytes.Buffer
+	require.Equal(t, 0, watchMain([]string{"ack", "--all", "--host", "a26", "--note", "all of a26", "--config", cfg}, &out, &errb), errb.String())
+	require.Equal(t, "a26", got["host"])
+	require.Equal(t, true, got["all"])
+	require.Equal(t, "all of a26", got["note"])
+	out.Reset()
+	errb.Reset()
+	require.Equal(t, 2, watchMain([]string{"ack", "a26-1", "--host", "a26", "--note", "n", "--config", cfg}, &out, &errb), "--host is for --all")
+}
+
+func TestWatchAck_EveryFailureKindIsNamedAndIsNonzero(t *testing.T) {
+	for _, outcome := range []watch.AckOutcome{watch.AckNotFound, watch.AckUnreachable, watch.AckUnsupported, watch.AckRefused, watch.AckAmbiguous} {
+		srv := ackServer(t, ackWire{Results: []watch.AckResult{{ID: "a26-1", Outcome: outcome}, {ID: "mlab-1", Outcome: watch.AckHandled}}, Handled: 1}, 0, nil)
+		var out, errb bytes.Buffer
+		require.Equal(t, 1, watchMain([]string{"ack", "a26-1", "mlab-1", "--note", "n", "--config", watchCfgFile(t, srv, "tok")}, &out, &errb), string(outcome))
+		require.Contains(t, errb.String(), "a26-1", "the id that was not handled is listed")
+		require.NotContains(t, errb.String(), "mlab-1 ", "and the one that was is not")
+		require.Contains(t, out.String(), "已處理  mlab-1")
+		srv.Close()
+	}
+}
+
+func TestWatchLog_HostAndAllGoThroughTheDaemonAndAHostThatFailedIsNamedWithExitOne(t *testing.T) {
+	at := time.Now().Add(-time.Minute)
+	var gotQuery string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/watch/log" || r.Header.Get("Authorization") != "Bearer tok" {
+			http.NotFound(w, r)
+			return
+		}
+		gotQuery = r.URL.RawQuery
+		_, _ = w.Write([]byte(`{"events":[{"id":"mlab-1","host":"mlab","kind":"pressure_high","at":"` + at.UTC().Format(time.RFC3339) + `","detail":"high","status":"handled","note":"查過了","handled_from_host":"a26"}],
+			"hosts":[{"host":"mlab","ok":true},{"host":"a26","ok":false,"error":"unreachable"}]}`))
+	}))
+	defer srv.Close()
+	cfg := watchCfgFile(t, srv, "tok")
+	var out, errb bytes.Buffer
+	require.Equal(t, 1, watchMain([]string{"log", "--all", "--unhandled", "--kind", "pressure_high", "--config", cfg}, &out, &errb), "a host could not be read: exit 1")
+	require.Contains(t, gotQuery, "host=all")
+	require.Contains(t, gotQuery, "unhandled=1")
+	require.Contains(t, gotQuery, "kind=pressure_high")
+	require.Contains(t, out.String(), "high", "the events of the others are printed")
+	require.Contains(t, out.String(), "✓ 查過了（a26）", "with the note and from which host it was handled")
+	require.Contains(t, errb.String(), "a26 的事件讀不到：unreachable")
+
+	out.Reset()
+	errb.Reset()
+	require.Equal(t, 1, watchMain([]string{"log", "--host", "a26", "--config", cfg}, &out, &errb))
+	require.Contains(t, gotQuery, "host=a26")
+	require.Equal(t, 2, watchMain([]string{"log", "--host", "a26", "--all", "--config", cfg}, &out, &errb), "one or the other")
+}
