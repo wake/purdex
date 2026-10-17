@@ -152,13 +152,16 @@ type ackBody struct {
 	OriginInbox string   `json:"origin_inbox,omitempty"` // the caller's own session, so the ack says who gave the order
 }
 
-// ackResponse is the answer: what became of each id, and the count after. Unhandled is what is left on the hosts listed in Hosts (this
-// host and the other targets) added up, or -1 when one of them did not say; a peer's answer carries only its own count and no Hosts.
+// ackResponse is the answer: what became of each id, and the count after. Unhandled keeps its meaning (what is left on the host the ack
+// was about: this host, or the one named by --host), so a CLI that predates Hosts reads it as it always did. Hosts is what is left on
+// this host and on every other target, and Remaining their sum, or -1 when one of them did not say; a peer's answer carries only its
+// own Unhandled.
 type ackResponse struct {
 	Results   []watch.AckResult `json:"results"`
 	Handled   int               `json:"handled"`
 	Unhandled int               `json:"unhandled"`
 	Hosts     []HostLeft        `json:"hosts,omitempty"`
+	Remaining *int              `json:"remaining,omitempty"`
 }
 
 // HostLeft is how many events are still pending on a host (-1: the host did not say).
@@ -253,7 +256,7 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 				m.writeErr(w, status, "ack_failed", err.Error())
 				return
 			}
-			resp.Hosts, resp.Unhandled = m.leftEverywhere(ctx, began, resp.Unhandled, nil)
+			resp.Hosts, resp.Remaining = m.leftEverywhere(ctx, began, resp.Unhandled, nil)
 			m.writeJSON(w, http.StatusOK, resp)
 			return
 		}
@@ -264,7 +267,7 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 		}
 		res, left := m.forwardAck(ctx, entry, nil, true, req.Note, by)
 		hosts, total := m.leftEverywhere(ctx, began, m.unhandledOrMinus(), map[string]int{entry.Alias: left})
-		m.writeJSON(w, http.StatusOK, ackResponse{Results: res, Handled: countHandled(res), Unhandled: total, Hosts: hosts})
+		m.writeJSON(w, http.StatusOK, ackResponse{Results: res, Handled: countHandled(res), Unhandled: left, Hosts: hosts, Remaining: &total}) // Unhandled: what is left on that host
 		return
 	}
 
@@ -318,7 +321,7 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 		res = append(res, x)
 	}
 	hosts, total := m.leftEverywhere(ctx, began, m.unhandledOrMinus(), known)
-	m.writeJSON(w, http.StatusOK, ackResponse{Results: res, Handled: countHandled(res), Unhandled: total, Hosts: hosts})
+	m.writeJSON(w, http.StatusOK, ackResponse{Results: res, Handled: countHandled(res), Unhandled: m.unhandledOrZero(), Hosts: hosts, Remaining: &total})
 }
 
 func countHandled(res []watch.AckResult) int {

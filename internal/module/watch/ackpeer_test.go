@@ -308,6 +308,7 @@ func TestAck_AllOnAnotherHostReportsThatHostsCount(t *testing.T) {
 	_, resp := ap.ackOn(t, ap.a, map[string]any{"all": true, "host": "a26", "note": "again"})
 	require.Equal(t, 0, resp.Handled)
 	require.Equal(t, []HostLeft{{Host: "mlab", Unhandled: 2}, {Host: "a26", Unhandled: 0}}, resp.Hosts, "a26 has none left, a still has its own")
+	require.Equal(t, 0, resp.Unhandled, "unhandled keeps its meaning: what is left on the host named")
 	require.Equal(t, 2, ap.unhandledOn(t, ap.a), "a still has its own")
 }
 
@@ -318,7 +319,8 @@ func TestAck_TheRemainingCountListsEveryTargetHost(t *testing.T) {
 	code, resp := ap.ackOn(t, ap.a, map[string]any{"ids": []string{ap.aIDs[0]}, "note": "n"})
 	require.Equal(t, http.StatusOK, code)
 	require.Equal(t, []HostLeft{{Host: "mlab", Unhandled: 1}, {Host: "a26", Unhandled: 2}}, resp.Hosts, "a has one left, b still has both")
-	require.Equal(t, 3, resp.Unhandled, "the sum, not a's count")
+	require.Equal(t, 3, *resp.Remaining, "the sum")
+	require.Equal(t, 1, resp.Unhandled, "and unhandled keeps its meaning: what is left on the host asked (a CLI that predates hosts reads it so)")
 
 	// the ids of the other host: its own answer is used, a is asked for nothing it has already said
 	code, resp = ap.ackOn(t, ap.a, map[string]any{"ids": []string{ap.bIDs[0]}, "note": "n"})
@@ -329,7 +331,7 @@ func TestAck_TheRemainingCountListsEveryTargetHost(t *testing.T) {
 	code, resp = ap.ackOn(t, ap.a, map[string]any{"all": true, "note": "n"})
 	require.Equal(t, http.StatusOK, code)
 	require.Equal(t, []HostLeft{{Host: "mlab", Unhandled: 0}, {Host: "a26", Unhandled: 1}}, resp.Hosts)
-	require.Equal(t, 1, resp.Unhandled)
+	require.Equal(t, 1, *resp.Remaining)
 }
 
 // A host that cannot be asked is "?" (-1) and makes the sum unknown; it is never counted as 0.
@@ -339,7 +341,8 @@ func TestAck_AHostThatCannotBeAskedIsUnknownNotZero(t *testing.T) {
 	code, resp := ap.ackOn(t, ap.a, map[string]any{"ids": []string{ap.aIDs[0]}, "note": "n"})
 	require.Equal(t, http.StatusOK, code)
 	require.Equal(t, []HostLeft{{Host: "mlab", Unhandled: 1}, {Host: "a26", Unhandled: -1}}, resp.Hosts)
-	require.Equal(t, -1, resp.Unhandled)
+	require.Equal(t, -1, *resp.Remaining)
+	require.Equal(t, 1, resp.Unhandled, "this host's own count is still unhandled")
 }
 
 // The peer route answers a count-only question without needing ids or a note.

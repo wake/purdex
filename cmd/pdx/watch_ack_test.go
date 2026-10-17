@@ -201,12 +201,20 @@ func TestWatchLog_HostAndAllGoThroughTheDaemonAndAHostThatFailedIsNamedWithExitO
 
 // Per host, so a count of one host is never read as "everything is done" (#3143).
 func TestRenderAck_ListsTheRemainingCountOfEveryHost(t *testing.T) {
-	out := renderAck(ackWire{Results: []watch.AckResult{{ID: "mlab-1", Outcome: watch.AckHandled}}, Handled: 1, Unhandled: 2,
+	out := renderAck(ackWire{Results: []watch.AckResult{{ID: "mlab-1", Outcome: watch.AckHandled}}, Handled: 1, Unhandled: 0, Remaining: intp(2),
 		Hosts: []ackHostLeft{{Host: "mini-lab", Unhandled: 0}, {Host: "air26", Unhandled: 2}}})
 	require.Contains(t, out, "各主機還有 2 筆待處理（mini-lab 0、air26 2）")
 
-	out = renderAck(ackWire{Results: []watch.AckResult{{ID: "mlab-1", Outcome: watch.AckHandled}}, Handled: 1, Unhandled: -1,
+	out = renderAck(ackWire{Results: []watch.AckResult{{ID: "mlab-1", Outcome: watch.AckHandled}}, Handled: 1, Unhandled: 0, Remaining: intp(-1),
 		Hosts: []ackHostLeft{{Host: "mini-lab", Unhandled: 0}, {Host: "air26", Unhandled: -1}}})
 	require.Contains(t, out, "待處理數不完整（mini-lab 0、air26 ?）")
 	require.NotContains(t, out, "還有 0 筆", "an unknown host is not zero")
+}
+
+func intp(n int) *int { return &n }
+
+// A daemon that predates the per-host list sends only unhandled: shown as before.
+func TestRenderAck_AnOlderDaemonsAnswerIsShownAsBefore(t *testing.T) {
+	out := renderAck(ackWire{Results: []watch.AckResult{{ID: "mlab-1", Outcome: watch.AckHandled}}, Handled: 1, Unhandled: 3})
+	require.Contains(t, out, "還有 3 筆待處理")
 }
