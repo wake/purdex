@@ -135,20 +135,39 @@ func TestExceptionLifecycleAndEventsOnce(t *testing.T) {
 		t.Fatalf("facts exceptions %+v", fe)
 	}
 
-	if !r.st.RemoveException("app-dev-package") {
-		t.Fatal("remove said it was not there")
+	if ok, err := r.st.RemoveException("app-dev-package"); err != nil || !ok {
+		t.Fatalf("remove: ok=%v err=%v", ok, err)
 	}
 	x, _ = wire.Decode[wire.ExceptionEvent](recv(t, r.ch).Data)
 	if x.Active || x.Name != "app-dev-package" {
 		t.Fatalf("%+v", x)
 	}
-	if r.st.RemoveException("app-dev-package") {
-		t.Error("removing twice was reported as a change")
+	if ok, err := r.st.RemoveException("app-dev-package"); ok || err != nil {
+		t.Errorf("removing twice: ok=%v err=%v", ok, err)
 	}
 	none(t, r.ch)
 	if len(r.st.Active()) != 0 || len(r.st.Holds()) != 0 {
 		t.Fatal("still active")
 	}
+}
+
+// A removal the database could not make must not look done: the exception would
+// come back after a restart (R1).
+func TestRemoveExceptionReportsAStorageFailureAndKeepsTheException(t *testing.T) {
+	r := newRig(t)
+	if _, err := r.st.AddException(exc("keeps", time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	recv(t, r.ch)
+	r.st.store.Close() // the database goes away
+	ok, err := r.st.RemoveException("keeps")
+	if err == nil || ok {
+		t.Fatalf("ok=%v err=%v: a failed delete must be an error", ok, err)
+	}
+	if len(r.st.Active()) != 1 {
+		t.Error("the exception was dropped from memory though its row is still there")
+	}
+	none(t, r.ch) // and nothing was announced
 }
 
 func TestExceptionsEndByTimeOrByTheirProcess(t *testing.T) {

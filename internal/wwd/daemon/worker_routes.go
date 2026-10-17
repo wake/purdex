@@ -98,7 +98,12 @@ func (d *Daemon) handlePostException(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Daemon) handleDeleteException(w http.ResponseWriter, r *http.Request) {
-	if !d.opts.State.RemoveException(r.PathValue("name")) {
+	removed, err := d.opts.State.RemoveException(r.PathValue("name"))
+	if err != nil {
+		stateError(w, err)
+		return
+	}
+	if !removed {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such exception"})
 		return
 	}

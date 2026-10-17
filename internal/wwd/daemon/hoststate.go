@@ -3,6 +3,7 @@ package daemon
 import (
 	"errors"
 	"fmt"
+	"log"
 	"reflect"
 	"regexp"
 	"sort"
@@ -173,25 +174,29 @@ func (s *HostState) AddException(e wire.Exception) (changed bool, err error) {
 	return true, nil
 }
 
-// RemoveException ends an exception; false when there was none.
-func (s *HostState) RemoveException(name string) bool {
+// RemoveException ends an exception; false when there was none. When the
+// database cannot make the change the exception stays in force and the error is
+// returned: saved first, then announced.
+func (s *HostState) RemoveException(name string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.removeLocked(name)
-}
-
-func (s *HostState) removeLocked(name string) bool {
 	if _, ok := s.excs[name]; !ok {
-		return false
+		return false, nil
 	}
 	if s.store != nil {
-		_ = s.store.DeleteException(name) // a row left behind is dropped as ended on the next start
+		if err := s.store.DeleteException(name); err != nil {
+			return false, err
+		}
 	}
+	s.dropLocked(name)
+	return true, nil
+}
+
+func (s *HostState) dropLocked(name string) {
 	delete(s.excs, name)
 	if s.opts.Events != nil {
 		s.opts.Events.PublishException(wire.ExceptionEvent{Host: s.opts.Host, Name: name, Active: false})
 	}
-	return true
 }
 
 // Prune ends the exceptions whose time has come or whose process is gone, each
@@ -207,7 +212,14 @@ func (s *HostState) Prune(now time.Time) {
 	}
 	sort.Strings(names)
 	for _, n := range names {
-		s.removeLocked(n)
+		// An ended exception is over whether or not its row could be deleted (a row
+		// left behind is dropped as ended on the next start), so it is announced.
+		if s.store != nil {
+			if err := s.store.DeleteException(n); err != nil {
+				log.Printf("wwd: dropping the ended exception %q from wwd.db: %v", n, err)
+			}
+		}
+		s.dropLocked(n)
 	}
 }
 
