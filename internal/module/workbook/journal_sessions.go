@@ -20,8 +20,14 @@ import (
 // pageEntryCap bounds one session page.
 const pageEntryCap = 1000
 
-// maxChain bounds the walk back over predecessors (a loop or a runaway record cannot hold a request).
-const maxChain = 512
+// maxChain bounds the walk back over predecessors; a chain longer than it is an error, not a root. A variable so a test can
+// lower it.
+var maxChain = 512
+
+var (
+	errChainLoop    = errors.New("predecessor loop in the session chain")
+	errChainTooLong = errors.New("session chain longer than the limit")
+)
 
 // Session links on the wire.
 const (
@@ -72,37 +78,55 @@ func (m *Module) clearPredecessor() agent.PredecessorReader {
 
 // predecessorLink is the session `sid` replaced. A relay's record wins over a /clear's for the same session (a relay's
 // /clear is recorded first as a plain clear, and the lineage row lands a moment later), as in the conversation module. A
-// missing reader is skipped; a read error is logged and treated as none.
-func (m *Module) predecessorLink(sid string) (prev string, at int64, via string) {
-	if r := m.relayPredecessor(); r != nil {
+// reader that is not registered is skipped and marks the chain incomplete; a read error is returned (the chain must not be
+// cut short without saying so).
+func (m *Module) predecessorLink(sid string) (prev string, at int64, via string, incomplete bool, err error) {
+	if r := m.relayPredecessor(); r == nil {
+		incomplete = true
+	} else {
 		p, a, ok, err := r.PredecessorOf(sid)
 		if err != nil {
-			log.Printf("[workbook] journal: relay predecessor of %s: %v", sid, err)
-		} else if ok && p != "" && p != sid {
-			return p, a, viaRelay
+			return "", 0, "", incomplete, fmt.Errorf("relay predecessor of %s: %w", sid, err)
+		}
+		if ok && p != "" && p != sid {
+			return p, a, viaRelay, incomplete, nil
 		}
 	}
-	if r := m.clearPredecessor(); r != nil {
+	if r := m.clearPredecessor(); r == nil {
+		incomplete = true
+	} else {
 		p, a, ok, err := r.PredecessorOf(sid)
 		if err != nil {
-			log.Printf("[workbook] journal: clear predecessor of %s: %v", sid, err)
-		} else if ok && p != "" && p != sid {
-			return p, a, viaClear
+			return "", 0, "", incomplete, fmt.Errorf("clear predecessor of %s: %w", sid, err)
+		}
+		if ok && p != "" && p != sid {
+			return p, a, viaClear, incomplete, nil
 		}
 	}
-	return "", 0, ""
+	return "", 0, "", incomplete, nil
 }
 
 // sessionChain is the leader's sessions oldest first, ending at current. Each link after the first says how it began (the
-// record that session replaced the one before it) and when.
-func (m *Module) sessionChain(current string) []chainLink {
+// record that session replaced the one before it) and when. incomplete says a predecessor reader is not registered, so the
+// chain may be cut short. A read error, a loop or a chain over maxChain is an error.
+func (m *Module) sessionChain(current string) (chain []chainLink, incomplete bool, err error) {
 	rev := []chainLink{}
 	seen := map[string]bool{current: true}
 	sid := current
-	for i := 0; i < maxChain; i++ {
-		prev, at, via := m.predecessorLink(sid)
-		if prev == "" || seen[prev] {
+	for {
+		prev, at, via, inc, err := m.predecessorLink(sid)
+		if err != nil {
+			return nil, false, err
+		}
+		incomplete = incomplete || inc
+		if prev == "" {
 			break
+		}
+		if seen[prev] {
+			return nil, false, errChainLoop
+		}
+		if len(rev) >= maxChain {
+			return nil, false, errChainTooLong
 		}
 		rev = append(rev, chainLink{sid: sid, startAt: at, via: via})
 		seen[prev] = true
@@ -110,7 +134,7 @@ func (m *Module) sessionChain(current string) []chainLink {
 	}
 	rev = append(rev, chainLink{sid: sid, via: viaRoot})
 	slices.Reverse(rev)
-	return rev
+	return rev, incomplete, nil
 }
 
 // leaderSession is the leader session whose chain the reader asks for: a team's current lead, else the reader itself. A
@@ -176,6 +200,9 @@ func workbookID(entryID string) (int64, bool) {
 	return n, err == nil && n > 0
 }
 
+// orphan is the owner of an entry whose sid is not on the leader's chain: it belongs to no page.
+const orphan = -2
+
 // attribute gives, for each entry of all, the index of its session in the chain: the sid it was written with; else (turn: /
 // ev:) the workbook entry's session; else the span its time falls in. A session outside the chain falls through to the span.
 func attribute(st *Store, x sessionIndex, all []journal.Entry) ([]int, error) {
@@ -183,8 +210,12 @@ func attribute(st *Store, x sessionIndex, all []journal.Entry) ([]int, error) {
 	var need []int64
 	for i, e := range all {
 		out[i] = -1
-		if p, ok := x.pos[e.SID]; ok && e.SID != "" {
-			out[i] = p
+		if e.SID != "" { // written by a session that is not on the chain stays off every page (an orphan), never re-dated
+			if p, ok := x.pos[e.SID]; ok {
+				out[i] = p
+			} else {
+				out[i] = orphan
+			}
 			continue
 		}
 		if id, ok := workbookID(e.ID); ok {
@@ -199,7 +230,7 @@ func attribute(st *Store, x sessionIndex, all []journal.Entry) ([]int, error) {
 		}
 	}
 	for i, e := range all {
-		if out[i] >= 0 {
+		if out[i] != -1 {
 			continue
 		}
 		if id, ok := workbookID(e.ID); ok {
@@ -231,7 +262,12 @@ func (m *Module) handleJournalSessions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "unavailable", "detail": err.Error()})
 		return
 	}
-	chain := m.sessionChain(leader)
+	chain, incomplete, err := m.sessionChain(leader)
+	if err != nil {
+		log.Printf("[workbook] journal: session chain of %s: %v", leader, err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "unavailable", "detail": err.Error()})
+		return
+	}
 	out := make([]journalSessionJSON, 0, len(chain))
 	for i, c := range chain {
 		js := journalSessionJSON{SessionID: c.sid, StartedAt: c.startAt, Via: c.via, Current: i == len(chain)-1}
@@ -247,5 +283,9 @@ func (m *Module) handleJournalSessions(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, js)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})
+	resp := map[string]any{"sessions": out}
+	if incomplete {
+		resp["incomplete"] = true // a predecessor reader is not registered: sessions older than the first listed may be missing
+	}
+	writeJSON(w, http.StatusOK, resp)
 }

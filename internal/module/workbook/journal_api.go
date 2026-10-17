@@ -339,7 +339,13 @@ func (m *Module) writeSessionPage(w http.ResponseWriter, r *http.Request, tgt jo
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "unavailable", "detail": err.Error()})
 		return
 	}
-	idx := newSessionIndex(m.sessionChain(leader))
+	chain, _, err := m.sessionChain(leader)
+	if err != nil {
+		log.Printf("[workbook] journal: session chain of %s: %v", leader, err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "unavailable", "detail": err.Error()})
+		return
+	}
+	idx := newSessionIndex(chain)
 	want := len(idx.chain) - 1
 	if page := r.URL.Query().Get("page"); page != "" {
 		p, found := idx.pos[page]
