@@ -148,14 +148,16 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	// command's stderr right before it starts the command (AdmittedMarkEnv), and that line is taken out of the output here.
 	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
-	var admitted, timedOut atomic.Bool
+	var admitted, timedOut, notStarted atomic.Bool
 	var timer atomic.Pointer[time.Timer]
 	nonce := newNonce()
 	env = append(env, gate.AdmittedMarkEnv+"="+nonce)
-	stderr := &admitFilter{w: cp.Stderr(), mark: gate.AdmittedMark(nonce), onAdmitted: func() {
-		admitted.Store(true)
-		timer.Store(time.AfterFunc(task.Timeout, func() { timedOut.Store(true); stop() }))
-	}}
+	stderr := &admitFilter{w: cp.Stderr(), admitted: gate.AdmittedMark(nonce), notStartedMark: gate.NotStartedMark(nonce),
+		onAdmitted: func() {
+			admitted.Store(true)
+			timer.Store(time.AfterFunc(task.Timeout, func() { timedOut.Store(true); stop() }))
+		},
+		onNotStarted: func() { notStarted.Store(true) }}
 	// The lease: renewed while the command runs and until the result is delivered; cancelled by the origin, or not renewable
 	// for a whole lease, ends the command.
 	var cancelled, leaseLost atomic.Bool
@@ -184,7 +186,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	tail, _, capErr := cp.Close()
 	res.FinishAt, res.LogPath, res.Exit = finished, filepath.Join(out, "log"), code
 
-	notRun := !admitted.Load() && (gateErr != nil || code == gate.ExitRefused || code == gate.ExitOrphaned)
+	notRun := notStarted.Load() || (!admitted.Load() && (gateErr != nil || code == gate.ExitRefused || code == gate.ExitOrphaned))
 	switch {
 	case leaseLost.Load():
 		res.State, res.Reason, res.Exit = wire.StateFailed, "lost", -1
@@ -192,7 +194,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		res.State, res.Reason, res.Exit = wire.StateCancelled, "", -1
 	case timedOut.Load():
 		res.State, res.Reason, res.Exit = wire.StateFailed, "timeout", ExitTimeout
-	case notRun && code == gate.ExitRefused && gateErr == nil && finished.Sub(started) >= task.QueueTimeout-time.Second:
+	case notRun && code == gate.ExitRefused && gateErr == nil && !notStarted.Load() && finished.Sub(started) >= task.QueueTimeout:
 		res.State, res.Reason, res.Exit = wire.StateExpired, "queue_timeout", -1 // waited for a slot as long as a queued job may
 	case notRun:
 		res.State, res.Reason = wire.StateFailed, "infra"
@@ -245,37 +247,61 @@ var ErrStale = errors.New("fastlane: the run's claim is no longer valid")
 func deliver(ctx context.Context, h Handle, o Outcome, leaseLost *atomic.Bool) error {
 	deadline := time.Now().Add(deliverFor)
 	pause := deliverBackoff
+	lost := func(cause error) error {
+		return fmt.Errorf("%w (the lease was lost before the result was delivered%s)", ErrStale, causeText(cause))
+	}
 	for {
+		if leaseLost.Load() { // checked before every try: a claim that was lost is never answered for
+			return lost(nil)
+		}
 		err := h.Finish(ctx, o)
 		if err == nil || errors.Is(err, ErrStale) {
 			return err
 		}
 		if leaseLost.Load() {
-			return fmt.Errorf("%w (the lease was lost meanwhile: %v)", ErrStale, err)
+			return lost(err)
 		}
 		if time.Now().Add(pause).After(deadline) {
 			return err
 		}
-		time.Sleep(pause)
+		// the pause ends early when the lease is lost
+		for end := time.Now().Add(pause); time.Now().Before(end) && !leaseLost.Load(); {
+			time.Sleep(min(10*time.Millisecond, time.Until(end)))
+		}
 		if pause *= 2; pause > 10*time.Second {
 			pause = 10 * time.Second
 		}
 	}
 }
 
+func causeText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return ": " + err.Error()
+}
+
 // admitFilter takes the gate's admitted mark out of the command's stderr and says when it saw it. The gate writes the mark
 // in one write before the command starts, so nothing of the command's can come before it.
 type admitFilter struct {
-	w          io.Writer
-	mark       string
-	onAdmitted func()
-	seen       atomic.Bool
+	w              io.Writer
+	admitted       string
+	notStartedMark string // follows the admitted mark when the command could not be started after all
+	onAdmitted     func()
+	onNotStarted   func()
+	seenAdmitted   atomic.Bool
+	seenNotStarted atomic.Bool
 }
 
 func (f *admitFilter) Write(p []byte) (int, error) {
-	if !f.seen.Load() && string(p) == f.mark {
-		f.seen.Store(true)
+	switch {
+	case !f.seenAdmitted.Load() && string(p) == f.admitted:
+		f.seenAdmitted.Store(true)
 		f.onAdmitted()
+		return len(p), nil
+	case f.seenAdmitted.Load() && !f.seenNotStarted.Load() && string(p) == f.notStartedMark:
+		f.seenNotStarted.Store(true)
+		f.onNotStarted()
 		return len(p), nil
 	}
 	return f.w.Write(p)

@@ -369,7 +369,7 @@ func TestTheAdmittedMarkIsNotInTheOutput(t *testing.T) {
 
 func TestAWaitThatOutlastsTheQueueTimeoutExpires(t *testing.T) {
 	tk := task(t, "one-file")
-	tk.QueueTimeout = 1200 * time.Millisecond
+	tk.QueueTimeout = 200 * time.Millisecond
 	rec := newRec()
 	g := &fakeGate{skipMark: true, run: func(context.Context, gate.Options) int {
 		time.Sleep(300 * time.Millisecond)
@@ -484,6 +484,122 @@ func TestTheLeaseIsStillRenewedWhileTheResultIsBeingDelivered(t *testing.T) {
 	defer res.Cleanup()
 	if res.Err != nil {
 		t.Fatalf("err = %v", res.Err)
+	}
+}
+
+// realGate is a gate over a temp directory with one light slot, as the gate's own tests build it.
+func realGate(t *testing.T) *gate.Gate {
+	t.Helper()
+	t.Setenv(gate.RankEnv, "")
+	t.Setenv(gate.RankReasonEnv, "")
+	t.Setenv(gate.HeldEnv, "")
+	cfg := gate.Defaults()
+	cfg.Dir = t.TempDir()
+	cfg.Slots.Heavy, cfg.Slots.Light = 1, 1
+	cfg.Priority.Mode = "none"
+	cfg.Admission.DiskMinGB = 0
+	cfg.Parallelism = gate.ParallelismConfig{Mode: "fixed", ByClass: map[gate.Class]gate.ParallelismOverride{}}
+	cfg.Cache.Count1 = "off"
+	g := gate.New(cfg)
+	g.Tools = gate.Tools{}
+	g.Pressure = nil
+	g.Facts = func() gate.HostFacts { return gate.HostFacts{NCPU: 10, AvailMemMB: 8000} }
+	g.Poll = func() time.Duration { return 10 * time.Millisecond }
+	g.IsTTY = func() bool { return false }
+	g.Stderr = io.Discard
+	return g
+}
+
+const shellTask = `
+[tasks.missing-binary]
+run = "wwd-no-such-binary-xyz"
+args = "none"
+local = true
+timeout = "5s"
+`
+
+func shellTaskNamed(t *testing.T, name string) *manifest.Task {
+	t.Helper()
+	m, err := manifest.Parse([]byte(shellTask))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m.Tasks[name]
+}
+
+func TestRealGateAdmitsAndMarksAreStripped(t *testing.T) {
+	m, err := manifest.Parse([]byte("[tasks.t]\nrun = \"echo hello\"\nargs = \"none\"\nlocal = true\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tk := m.Tasks["t"]
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: tk, Gate: realGate(t), Env: os.Environ()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Cleanup()
+	b, _ := os.ReadFile(res.LogPath)
+	if res.State != wire.StateSucceeded || res.Err != nil || strings.TrimSpace(string(b)) != "hello" {
+		t.Fatalf("result = %+v, log = %q", res, b)
+	}
+}
+
+func TestRealGateCommandThatCannotStartIsInfrastructure(t *testing.T) {
+	rec := newRec()
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: shellTaskNamed(t, "missing-binary"), Gate: realGate(t), Recorder: rec, Env: os.Environ()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Cleanup()
+	if res.State != wire.StateFailed || res.Reason != "infra" || res.Err == nil {
+		t.Fatalf("a binary that does not exist was taken for a test result: %+v", res)
+	}
+	if o := rec.h.outcome; o == nil || o.Exit != nil || o.Reason != "infra" {
+		t.Fatalf("recorded = %+v", o)
+	}
+}
+
+func TestLeaseLostWhileWaitingToDeliverNeverTriesAgain(t *testing.T) {
+	old := deliverBackoff
+	deliverBackoff = 200 * time.Millisecond
+	defer func() { deliverBackoff = old }()
+	rec := newRec()
+	rec.h.every, rec.h.lease = 10*time.Millisecond, 50*time.Millisecond
+	var beating atomic.Bool
+	beating.Store(true)
+	rec.h.heartbeat = func() (bool, error) {
+		if beating.Load() {
+			return false, nil
+		}
+		return false, errors.New("409")
+	}
+	var tries atomic.Int32
+	rec.h.finishFn = func() error {
+		tries.Add(1)
+		beating.Store(false) // from now on the origin refuses the heartbeats: the lease will be lost during the pause
+		return errors.New("down")
+	}
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: task(t, "one-file"), Args: []string{"a.test.ts"}, Gate: &fakeGate{}, Recorder: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Cleanup()
+	if tries.Load() != 1 || !errors.Is(res.Err, ErrStale) {
+		t.Fatalf("tries %d err %v: a lost claim must not be answered for again", tries.Load(), res.Err)
+	}
+}
+
+func TestAnImmediateRefusalIsNotAnExpiryEvenWithAShortQueueTimeout(t *testing.T) {
+	tk := task(t, "one-file")
+	tk.QueueTimeout = 500 * time.Millisecond
+	g := &fakeGate{skipMark: true, run: func(context.Context, gate.Options) int { return gate.ExitRefused }}
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: tk, Args: []string{"a.test.ts"}, Gate: g})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Cleanup()
+	if res.State != wire.StateFailed || res.Reason != "infra" {
+		t.Fatalf("result = %+v", res)
 	}
 }
 
