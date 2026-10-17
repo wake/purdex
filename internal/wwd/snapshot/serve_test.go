@@ -208,11 +208,12 @@ func TestPin_PinsKeepsAndUnpins(t *testing.T) {
 	assert.Equal(t, snap, gitOut(t, repo, "rev-parse", PinRef("j_pin")))
 	other := gitOut(t, repo, "rev-parse", "HEAD")
 	assert.Error(t, Pin(ctx, repo, "j_pin", other), "a job id names one snapshot")
-	assert.Error(t, Pin(ctx, repo, "j_none", strings.Repeat("c", 40)), "a commit the repository does not have")
+	assert.ErrorContains(t, Pin(ctx, repo, "j_none", strings.Repeat("c", 40)), "does not have the commit", "a commit the repository does not have")
 	for _, bad := range []string{"", "../x", "a/b", "-x", "a..b", "x.lock", strings.Repeat("a", 200)} {
-		assert.Error(t, Pin(ctx, repo, bad, snap), "job id %q", bad)
+		assert.ErrorContains(t, Pin(ctx, repo, bad, snap), "is not a job id", "job id %q is refused by us, before git is asked", bad)
+		assert.ErrorContains(t, Unpin(ctx, repo, bad), "is not a job id", "and so for Unpin: %q", bad)
 	}
-	assert.Error(t, Pin(ctx, repo, "j_x", "HEAD"), "a commit id, not a name")
+	assert.ErrorContains(t, Pin(ctx, repo, "j_x", "HEAD"), "is not a commit id", "a commit id, not a name")
 
 	// the commit survives a gc while it is pinned and goes with the pin
 	gitOut(t, repo, "reflog", "expire", "--expire=now", "--all")
