@@ -273,11 +273,26 @@ func TestParseRejectsQuotedOrGluedPlaceholders(t *testing.T) {
 		"glued suffix":  `tool {files}x`,
 		"inside quote":  `sh -c 'run {files}'`,
 		"unterminated":  `tool 'abc {files}`,
+		"escaped quote": `tool "x\" {files} y" z\"`,
+		"escaped then":  `tool "a\\" "b {files}"`,
 	} {
 		src := "[tasks.a]\nrun = " + strconv.Quote(run) + "\nargs = \"files\"\n"
 		if _, err := Parse([]byte(src)); err == nil {
 			t.Errorf("%s: Parse accepted %s", name, run)
 		}
+	}
+}
+
+func TestRenderQuotesShellMetacharacterFilenames(t *testing.T) {
+	task := mustParse(t, sample).Tasks["spa-file"]
+	got, err := task.Render([]string{"$(touch x).ts"}, RenderEnv{
+		Report: "/w/r.json", Workspace: "/w", Exists: exists("spa/$(touch x).ts"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(got, " '$(touch x).ts'") {
+		t.Fatalf("got %s", got)
 	}
 }
 

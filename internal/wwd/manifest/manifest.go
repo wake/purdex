@@ -304,6 +304,8 @@ func checkPlaceholderContext(run string) error {
 	for i := 0; i < len(run); i++ {
 		c := run[i]
 		switch {
+		case quote == '"' && c == '\\':
+			i++ // inside double quotes a backslash escapes the next byte
 		case quote != 0:
 			if c == quote {
 				quote = 0
