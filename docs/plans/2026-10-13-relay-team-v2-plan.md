@@ -414,6 +414,7 @@ Expected files: `internal/resources/*` (the seam), `internal/module/resources/*`
   - else the op is written in state `awaiting_resources` (holding a seat, so `team_full` stays exact) and a `spawn_resources` row (id = the spawn id) in the same transaction; the runner does not start.
 - The row: approve → `running`, `startSpawn`; deny → `failed` / `spawn_denied`; timeout → `failed` / `spawn_timeout`; abandon (the CLI stopped polling) → `failed` / `spawn_abandoned`; the seat is freed on every failure.
 - Not auto-approvable; a switch-on sweep refuses an open one of an agent's spawn (`unattended_refused`) and leaves a person's.
+- **Gate**: 出卡受主機設定 `relay.spawn_resource_check` 控制，預設關（關著或讀不到時 spawn 完全照舊：不讀 zone、不出卡）；88 的 Mac App 能正確顯示 spawn_resources 卡之後由 lead 打開。
 - Tests: normal → runs (M); warning → card, op waiting, seat held (M); approve → runs; deny / timeout → failed, seat freed; unattended agent spawn → 409 (M); unattended person spawn → card; unknown → runs.
 
 ## RT-5b — CLI and push for the spawn card

@@ -89,7 +89,7 @@ func (r spawnRow) checkRunning() error {
 		return fmt.Errorf("task: %w", r.taskErr())
 	case r.TaskSubject == "" && (r.TaskDescription != "" || r.taskDoneJSON() != "[]"):
 		return errors.New("a task description or done-when without a subject")
-	case r.State != team.SpawnRunning || r.Reason != "" || !known:
+	case (r.State != team.SpawnRunning && !(r.State == team.SpawnAwaitingResources && r.Step == team.StepAccepted)) || r.Reason != "" || !known:
 		return fmt.Errorf("state %q, reason %q, step %q is no running step", r.State, r.Reason, r.Step)
 	case partial || has[1] != (rank >= 1) || has[2] != (rank >= 2) || has[3] != (rank >= 3):
 		return fmt.Errorf("its milestones do not match step %s", r.Step)
@@ -187,6 +187,17 @@ var (
 // gone (P4-6's sweeper), when the place frees (spec §13 D4). Conservative:
 // a registry read made before the transaction could undercount.
 func (s *Store) AcceptSpawnOp(op spawnRow, hash string) (spawnRow, string, bool, error) {
+	return s.acceptSpawnOp(op, hash, nil, "")
+}
+
+// AcceptSpawnOpWithCard is AcceptSpawnOp for an op that waits for its resource card (RT-5a): op.State is
+// SpawnAwaitingResources and the card (kind spawn_resources, id = the op's id) is inserted in the same transaction, so a seat
+// is never held without a card to release it, nor a card left without its op.
+func (s *Store) AcceptSpawnOpWithCard(op spawnRow, hash string, card team.Approval, cardHash string) (spawnRow, string, bool, error) {
+	return s.acceptSpawnOp(op, hash, &card, cardHash)
+}
+
+func (s *Store) acceptSpawnOp(op spawnRow, hash string, card *team.Approval, cardHash string) (spawnRow, string, bool, error) {
 	fail := func(err error) (spawnRow, string, bool, error) {
 		return spawnRow{}, "", false, fmt.Errorf("accept spawn op %s: %w", op.ID, err)
 	}
@@ -225,6 +236,9 @@ func (s *Store) AcceptSpawnOp(op spawnRow, hash string) (spawnRow, string, bool,
 		return fail(err)
 	}
 	stored, storedHash, inserted, err := insertSpawnOp(tx, op, hash)
+	if err == nil && inserted && card != nil {
+		_, err = insertRowIn(tx, *card, cardHash, "")
+	}
 	if err == nil {
 		err = tx.Commit()
 	}

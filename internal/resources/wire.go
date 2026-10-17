@@ -88,6 +88,22 @@ type HostReader interface {
 	LatestHost() (host HostUse, ok bool)
 }
 
+// HostDetailReader is what a reader that needs the situation behind the zone asks for (the spawn resource card, RT-5a): the
+// latest host reading with the held leases and the queue, as copies. The object registered under HostReaderKey offers it too, so
+// there is one key; a reader type-asserts for it and treats its absence as "unknown".
+type HostDetailReader interface {
+	LatestHostDetail() (HostDetail, bool)
+}
+
+// HostDetail is the host part of the latest snapshot and the lease lists that explain it.
+type HostDetail struct {
+	Host HostUse `json:"host"`
+	// SampledAt is when the reading was taken, unix ms.
+	SampledAt int64        `json:"sampled_at"`
+	Leases    []LeaseView  `json:"leases,omitempty"`
+	Waiters   []WaiterView `json:"waiters,omitempty"`
+}
+
 // HostUse is the host-wide part of a Snapshot.
 type HostUse struct {
 	// Measured is the D-1 figure, 0 to 100.

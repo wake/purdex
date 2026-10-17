@@ -18,7 +18,62 @@ const (
 	// KindMemberRelay is the approval a lead's member relay waits on when the lead's pool is spent (RQ-2). RQ-2a is its
 	// state machine; no path opens such a row until RQ-2b, and an older SPA skips an unknown kind row by row.
 	KindMemberRelay Kind = "member_relay"
+	// KindSpawnResources is the card a spawn waits on when the host is in the warning or danger zone (RT-5a, spec §4.6). Its
+	// id is the spawn op's id. It is never auto-approved: a person decides, or it times out.
+	KindSpawnResources Kind = "spawn_resources"
 )
+
+// SpawnResourcesDeadlineS is the life of a spawn_resources card: it closes before `pdx spawn`'s 9-minute wait gives up (S-5).
+const SpawnResourcesDeadlineS = 480
+
+// SpawnResourcesPayload is Approval.Payload for KindSpawnResources (App contract item 6, plan): what the person is asked to let
+// through, who asks, and the host as it was when the spawn asked.
+type SpawnResourcesPayload struct {
+	SpawnID     string `json:"spawn_id"`
+	TeamID      string `json:"team_id"`
+	LeadRef     string `json:"lead_ref"`
+	LeadTitle   string `json:"lead_title"`
+	Cwd         string `json:"cwd"`
+	Title       string `json:"title"`
+	Model       string `json:"model"`
+	Effort      string `json:"effort"`
+	TaskSubject string `json:"task_subject"`
+	// Person: the spawn was the person's own /team spawn (it is never refused by the unattended switch).
+	Person bool                   `json:"person"`
+	Host   SpawnResourcesHost     `json:"host"`
+	Heavy  []SpawnResourcesHeavy  `json:"heavy"`
+	Queue  []SpawnResourcesQueued `json:"queue"`
+}
+
+// SpawnResourcesHost is the resources sample the card is judged on (zone warning | danger).
+type SpawnResourcesHost struct {
+	Zone      string  `json:"zone"`
+	Trend     string  `json:"trend"`
+	Mem       float64 `json:"mem"`      // percent in use
+	Pressure  int     `json:"pressure"` // 1, 2 or 4; 0 unknown
+	Load1     float64 `json:"load1"`
+	NCPU      int     `json:"ncpu"`
+	SampledAt int64   `json:"sampled_at"` // unix ms
+}
+
+// SpawnResourcesHeavy is a held heavy lease.
+type SpawnResourcesHeavy struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	SessionID string `json:"session_id"`
+	Ref       string `json:"ref"`
+	Title     string `json:"title"`
+	AgeS      int64  `json:"age_s"`
+	RSSBytes  int64  `json:"rss_bytes"`
+}
+
+// SpawnResourcesQueued is a request waiting for a lease.
+type SpawnResourcesQueued struct {
+	ID       string `json:"id"`
+	Kind     string `json:"kind"`
+	Position int    `json:"position"`
+	Reason   string `json:"reason"`
+}
 
 type State string
 

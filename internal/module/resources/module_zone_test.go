@@ -297,3 +297,16 @@ func TestGet_SamplesIsRaceFree(t *testing.T) {
 }
 
 func intp(n int) *int { return &n }
+
+func TestLatestHostDetail_ZoneAndAbsent(t *testing.T) {
+	r := newZoneRig(t)
+	if _, ok := r.m.LatestHostDetail(); ok {
+		t.Fatal("a detail before the first sample")
+	}
+	r.tick(t, zoneRaw(40, 1, 2)) // pressure warn
+	d, ok := r.m.LatestHostDetail()
+	if !ok || d.Host.Zone != "warning" {
+		t.Fatalf("detail = %+v, ok=%v; want the published warning zone", d, ok)
+	}
+	var _ resources.HostDetailReader = r.m
+}
