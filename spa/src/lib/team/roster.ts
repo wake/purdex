@@ -44,6 +44,21 @@ export interface RosterSession {
    *  unanswered: `relay_unanswered`, relay v2 RT-2a2), and since when. Absent = not paused
    *  (the wire's null, a missing field and a malformed value all read the same). */
   paused?: RosterPause
+  /** `relay.half.v1`: this session's handoff file is written and the session was not cleared (relay v2 contract 5). Absent = none
+   *  (the wire omits it; a malformed value reads the same). */
+  fresh_handoff?: FreshHandoff
+}
+
+/** The handoff file a session has written: the relay op, the path, and when (unix ms). */
+export interface FreshHandoff { op_id: string; path: string; written_at: number }
+
+/** `{op_id, path, written_at}` from the wire; anything malformed is null. */
+export function parseFreshHandoff(v: unknown): FreshHandoff | null {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return null
+  const { op_id, path, written_at } = v as Record<string, unknown>
+  if (typeof op_id !== 'string' || typeof path !== 'string' || path === '') return null
+  if (typeof written_at !== 'number' || !Number.isFinite(written_at)) return null
+  return { op_id, path, written_at }
 }
 
 export type PauseCause = 'quota' | 'lead' | 'relay_unanswered'
@@ -147,13 +162,14 @@ const HOST_ID_MAX = 128
  *  and free of control / formatting characters (the alias also non-blank). Anything else is dropped (the field is absent),
  *  never a reason to drop the frame. */
 function cleanHost<T extends RosterSession>(s: T): T {
-  const { host_id, host_alias, host_untrusted: _wire, context_unavailable, paused: wirePaused, ...rest } = s
+  const { host_id, host_alias, host_untrusted: _wire, context_unavailable, paused: wirePaused, fresh_handoff: wireFresh, ...rest } = s
   void _wire // computed here, never taken from the wire
   const idOk = isStr(host_id) && host_id.length <= HOST_ID_MAX && !UNPRINTABLE.test(host_id)
   // A host_id that was sent (not absent, not "") but failed the check says "another host, whom we cannot name": dropping it
   // would read as the lead's own host, so the seat is marked instead.
   const untrusted = host_id !== undefined && host_id !== '' && !idOk
   const paused = parsePausedField(wirePaused as unknown)
+  const freshHandoff = parseFreshHandoff(wireFresh as unknown)
   const aliasOk = isStr(host_alias) && host_alias.length <= HOST_ALIAS_MAX && !UNPRINTABLE.test(host_alias) && host_alias.trim() !== ''
   return {
     ...rest,
@@ -162,6 +178,7 @@ function cleanHost<T extends RosterSession>(s: T): T {
     ...(aliasOk ? { host_alias } : {}),
     ...(context_unavailable === true ? { context_unavailable: true } : {}),
     ...(paused !== null ? { paused } : {}),
+    ...(freshHandoff !== null ? { fresh_handoff: freshHandoff } : {}),
   } as T
 }
 
