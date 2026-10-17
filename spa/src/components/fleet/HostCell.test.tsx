@@ -267,6 +267,43 @@ describe('HostCell — the queue badge', () => {
     setup(view({ slow: slow(queue(1, { admission_held: true })) }))
     expect(badge()!.className).toContain('bg-status-error')
   })
+  // The user's U9 (journal v5 §3.6): smaller and further to the upper right than the shield's.
+  it('is the small badge: 9px, 7px figures, 5px out of the host badge\'s corner', () => {
+    setup(view({ slow: slow(queue(2)) }))
+    const cls = badge()!.className.split(' ')
+    for (const c of ['h-[9px]', 'min-w-[9px]', 'text-[7px]', '-top-[5px]', '-right-[5px]']) expect(cls).toContain(c)
+    for (const c of ['h-[12px]', 'min-w-[12px]', 'text-[8px]', '-top-[4px]', '-right-[4px]']) expect(cls).not.toContain(c)
+  })
+  // Two digits widen the badge to the left (it is anchored by its right edge), so its reach toward the indicator is the one-digit
+  // badge's: 5 px past the host badge, and the wide cell puts the indicator 6 px after it (gap-1 + ml-0.5). Nothing clips it.
+  it.each(['ring', 'bars-pressure'] as const)('two digits (%s): the count whole, on the host badge\'s side, short of the indicator', (ind) => {
+    useUISettingsStore.setState({ fleetCellIndicator: ind })
+    setup(view({ slow: slow(queue(12)) }))
+    expect(badge()).toHaveTextContent('12')
+    const anchor = badge()!.parentElement!
+    expect(anchor.contains(hostBadge())).toBe(true)
+    const indicator = ind === 'ring' ? ring() : bars()
+    expect(anchor.contains(indicator)).toBe(false)
+    const px = (cls: string[], re: RegExp, scale = 1) => { const m = cls.map((c) => c.match(re)).find(Boolean); return m ? Number(m[1]) * scale : NaN }
+    const reach = px(badge()!.className.split(' '), /^-right-\[(\d+)px\]$/)
+    const room = px(tile().className.split(' '), /^gap-(\d+(?:\.\d+)?)$/, 4) + px(indicator.className.split(' '), /^ml-(\d+(?:\.\d+)?)$/, 4)
+    expect(reach).toBe(5)
+    expect(room).toBeGreaterThan(reach)
+    for (const el of [anchor, tile()]) expect(el.className.split(' ')).not.toContain('overflow-hidden')
+  })
+})
+
+// U9: the ring (or the bars) moves 2 px further right of the host badge, to give the queue badge room.
+describe('HostCell — the indicator\'s left margin', () => {
+  it.each([
+    ['ring', 'wide'], ['ring', 'narrow'], ['bars-pressure', 'wide'], ['bars-memory', 'narrow'],
+  ] as const)('%s, %s: ml-0.5 after the cell\'s gap', (ind, variant) => {
+    useUISettingsStore.setState({ fleetCellIndicator: ind })
+    setup(view(), { variant })
+    const el = ind === 'ring' ? ring() : bars()
+    expect(el.className.split(' ')).toContain('ml-0.5')
+    expect(tile().className.split(' ')).toContain(variant === 'wide' ? 'gap-1' : 'gap-0.5')
+  })
 })
 
 describe('HostCell — the tooltip and the click', () => {

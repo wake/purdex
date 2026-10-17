@@ -8,9 +8,12 @@
 //          layer behind, the icon in the middle layer (main on hover). Offline: the badge dimmed.
 //   hover  a card (HostCard) with the host's readings, the ring's driver and the queue; no native title. The badge icon is always
 //          the highlighted look (`bright`: main colour, or text-secondary when plain).
-//   queue  the count on the badge's top-right corner: daemon hosts only, only while someone waits, never offline. Neutral grey;
-//          status-warning from 2 min or 3 waiting; status-error while admission is held.
-//   then, by the 「主機格指示」 setting (`fleetCellIndicator`, the user 10-16), in the same square after the badge:
+//   queue  the count on the badge's top-right corner, `CountBadge` at its small size (9 px, 5 px out of the corner; journal v5 U9):
+//          daemon hosts only, only while someone waits, never offline. Neutral grey; status-warning from 2 min or 3 waiting;
+//          status-error while admission is held. More digits widen it to the left, so it reaches no closer to the indicator.
+//   then, by the 「主機格指示」 setting (`fleetCellIndicator`, the user 10-16), in the same square after the badge, 2 px further
+//   right than the cell's gap (`ml-0.5`, U9: room for the queue count; 6 px from the badge in the wide bar, 4 px in the narrow,
+//   whose 40 px cell still fits the narrow bar's 41 px):
 //   ring   (default) the App's `ContextRing` (the member status ring), the badge's size: length = the composite score, tone =
 //          the ZONE the daemon sent (normal ok / warning warn / danger danger — never derived from the score here), nothing
 //          in the middle (a host has no model). Offline or no reading: the track only.
@@ -139,14 +142,14 @@ export function HostCell({ view, look, variant, isActive, waitingPrimary, primar
         <span data-testid={`host-badge-dim-${view.id}`} className={`inline-flex ${off ? 'opacity-40' : ''}`}>
           <HostBadge colors={badge.colors} icon={badge.icon} iconWeight={badge.iconWeight} box={box} inset={inset} radius={radius} lineColor={lineColor} testId={`host-badge-${view.id}`} bright />
         </span>
-        {q && waiting > 0 && <CountBadge n={waiting} className={queueTone(waiting, q.longest_wait_s * 1000, q.admission_held)} testId={`queue-badge-${view.id}`} />}
+        {q && waiting > 0 && <CountBadge n={waiting} size="sm" className={queueTone(waiting, q.longest_wait_s * 1000, q.admission_held)} testId={`queue-badge-${view.id}`} />}
       </span>
       {indicator === 'ring' ? (
-        <span className="inline-flex shrink-0" data-testid={`load-ring-${view.id}`} data-zone={zone}>
+        <span className="inline-flex shrink-0 ml-0.5" data-testid={`load-ring-${view.id}`} data-zone={zone}>
           <ContextRing pct={f?.load} model={undefined} size={box} tone={f ? ZONE_TONE[f.zone] : undefined} noShape />
         </span>
       ) : (
-        <span className="inline-flex shrink-0" data-testid={`load-bars-${view.id}`} data-zone={zone}>
+        <span className="inline-flex shrink-0 ml-0.5" data-testid={`load-bars-${view.id}`} data-zone={zone}>
           <HostBars left={f ? cpuReading(f.cpu) : null} right={f ? memoryBar(indicator, f) : null} size={box} />
         </span>
       )}
