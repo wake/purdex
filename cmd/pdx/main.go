@@ -102,6 +102,8 @@ func main() {
 		runGate(os.Args[2:])
 	case "watch":
 		runWatch(os.Args[2:])
+	case "assist":
+		runAssist(os.Args[2:])
 	case "team":
 		runTeam(os.Args[2:])
 	case "task":
