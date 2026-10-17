@@ -27,7 +27,7 @@ import type { ExecutionSummary } from '../lib/nex/types'
 import { useSessionAgentIndicator } from './useSessionAgentIndicator'
 import { useTabAgentAggregate } from './useTabAgentAggregate'
 import { useTabQueued } from './useTabQueued'
-import { queuedTooltip } from '../lib/watch/queued-sessions'
+import type { FleetWaiter } from '../lib/fleet/types'
 import { tabAgentPanes } from '../lib/agent-lights/tab-aggregate'
 import type { TabIconComponent } from './useSessionAgentIndicator'
 
@@ -50,8 +50,8 @@ export interface TabDisplayData {
   isAwaitingApproval: boolean
   /** The highest background-work kind over the tab's panes (N6): the corner symbol of the agent icon. */
   background: BackgroundKind | undefined
-  /** The symbol's tooltip when it is the queue hourglass (排隊中：第 n 位…); undefined for the event kinds (they use their kind's label). */
-  backgroundTitle: string | undefined
+  /** The waiters behind the symbol when it is the queue hourglass (its tooltip is built where it is drawn); else undefined. */
+  backgroundWaiters: FleetWaiter[] | undefined
 }
 
 /**
@@ -86,8 +86,8 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const firstHostId = useHostStore((s) => s.hostOrder[0] ?? '')
   // eslint-disable-next-line react-hooks/exhaustive-deps -- firstHostId is an input of the resolution inside
   const panes = useMemo(() => tabAgentPanes(tab.layout), [tab.layout, firstHostId])
-  const agg = useTabAgentAggregate(panes)
-  const queued = useTabQueued(panes)
+  const queued = useTabQueued(panes) // once per tab: the aggregate takes its keys, the symbol its waiters
+  const agg = useTabAgentAggregate(panes, queued.keys)
   const agentStatus = agg.status
   const isUnread = agg.isUnread
   // the dots come from the representative pane
@@ -144,9 +144,7 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   // (TabStatusIndicator), never label text. Lifecycle-aware: an ended worker or an old daemon never sets it.
   // Over every execution pane of the tab (useTabAgentAggregate), not only the primary one.
 
-  // Minutes are counted when the tab renders (the snapshot's own push moves them on); no timer for a tooltip.
-  const backgroundTitle = agg.background === 'queued' && queued.waiters.length > 0
-    ? queuedTooltip(queued.waiters, Date.now(), t) : undefined
+  const backgroundWaiters = agg.background === 'queued' && queued.waiters.length > 0 ? queued.waiters : undefined
 
   return {
     displayTitle,
@@ -160,6 +158,6 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
     isTerminated,
     isAwaitingApproval: agg.isAwaitingApproval,
     background: agg.background,
-    backgroundTitle,
+    backgroundWaiters,
   }
 }

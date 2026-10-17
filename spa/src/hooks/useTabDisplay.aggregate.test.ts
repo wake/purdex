@@ -1,5 +1,5 @@
 // U1-3c: the tab light over all panes through useTabDisplay.
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import { useAgentStore } from '../stores/useAgentStore'
 import type { NormalizedEvent, SubagentRef } from '../stores/useAgentStore'
@@ -17,9 +17,15 @@ import type { ExecutionSummary } from '../lib/nex/types'
 import type { PaneLayout, Tab } from '../types/tab'
 import { CC_ICON_VARIANTS } from '../lib/agent-icons'
 import { useFleetStore } from '../lib/fleet/store'
+import { queuedBySession } from '../lib/watch/queued-sessions'
 import type { FleetSnapshot } from '../lib/fleet/store'
 import type { FleetWaiter } from '../lib/fleet/types'
 import { useTabDisplay } from './useTabDisplay'
+
+vi.mock('../lib/watch/queued-sessions', async (orig) => {
+  const m = await orig<typeof import('../lib/watch/queued-sessions')>()
+  return { ...m, queuedBySession: vi.fn(m.queuedBySession) }
+})
 
 const tmux = (id: string, sessionCode: string, hostId = 'h1'): PaneLayout =>
   ({ type: 'leaf', pane: { id, content: { kind: 'tmux-session', hostId, sessionCode, mode: 'terminal', cachedName: sessionCode, tmuxInstance: '' } } })
@@ -148,15 +154,15 @@ describe('useTabDisplay — the queue hourglass (W5b2)', () => {
     useAgentStore.setState({ statuses: { 'h1:a': 'idle' } })
     const { result } = renderHook(() => useTabDisplay(tab(agentTmux('sid-1'))))
     expect(result.current.background).toBeUndefined()
-    expect(result.current.backgroundTitle).toBeUndefined()
+    expect(result.current.backgroundWaiters).toBeUndefined()
   })
 
-  it('a waiter of the pane session ranks above a workflow and names place, minutes and command', () => {
+  it('a waiter of the pane session ranks above a workflow and hands its waiters to the symbol', () => {
     withFleet([waiter({ place: 2 })])
     useAgentStore.setState({ statuses: { 'h1:a': 'idle' }, lastEvents: { 'h1:a': e('workflow') } })
     const { result } = renderHook(() => useTabDisplay(tab(agentTmux('SID-1'))))
     expect(result.current.background).toBe('queued')
-    expect(result.current.backgroundTitle).toMatch(/^tab\.queued\.tooltip\{"place":2,"m":2,"command":"go test"/)
+    expect(result.current.backgroundWaiters).toEqual([expect.objectContaining({ place: 2, command: 'go test' })])
   })
 
   it('no primary, a stale or waiting primary, an offline daemon: no hourglass; it comes back with the connection', () => {
@@ -186,17 +192,7 @@ describe('useTabDisplay — the queue hourglass (W5b2)', () => {
     expect(result.current.background).toBe('queued')
     act(() => { withFleet([waiter({ session: 'someone-else' })]) })
     expect(result.current.background).toBe('workflow')
-    expect(result.current.backgroundTitle).toBeUndefined()
-  })
-
-  it('three waiters of the session: the longest wait and the count of the others', () => {
-    const now = Date.now()
-    withFleet([waiter({ command: 'new', since: now - 1000 }), waiter({ command: 'old', since: now - 600_000, place: 3 }), waiter({ command: 'mid', since: now - 5000 })])
-    useAgentStore.setState({ statuses: { 'h1:a': 'idle' } })
-    const { result } = renderHook(() => useTabDisplay(tab(agentTmux('sid-1'))))
-    expect(result.current.backgroundTitle).toMatch(/"command":"old"/)
-    expect(result.current.backgroundTitle).toMatch(/"m":10/)
-    expect(result.current.backgroundTitle).toMatch(/tab\.queued\.more\{"n":2\}$/)
+    expect(result.current.backgroundWaiters).toBeUndefined()
   })
 
   it('a fleet push that changes nothing for the tab does not re-render it', () => {
@@ -209,5 +205,24 @@ describe('useTabDisplay — the queue hourglass (W5b2)', () => {
     const before = renders
     act(() => { withFleet([mine, waiter({ session: 'other', place: 2 })]) })
     expect(renders).toBe(before)
+  })
+
+  it('the queue is worked out once per tab per fleet push', () => {
+    withFleet([waiter({ since: 1000 })])
+    useAgentStore.setState({ statuses: { 'h1:a': 'idle' } })
+    const t1 = tab(agentTmux('sid-1'))
+    renderHook(() => useTabDisplay(t1))
+    vi.mocked(queuedBySession).mockClear()
+    act(() => { withFleet([waiter({ since: 1000 }), waiter({ session: 'other', place: 2 })]) })
+    expect(queuedBySession).toHaveBeenCalledTimes(1)
+  })
+
+  it('a tab with no hourglass holds no per-minute timer', () => {
+    vi.useFakeTimers()
+    try {
+      useAgentStore.setState({ statuses: { 'h1:a': 'idle' } })
+      renderHook(() => useTabDisplay(tab(agentTmux('sid-1'))))
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers() }
   })
 })

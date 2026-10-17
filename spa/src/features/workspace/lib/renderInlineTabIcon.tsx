@@ -2,6 +2,7 @@ import type { AgentStatus, BackgroundKind, SubagentRef } from '../../../stores/u
 import type { TabIndicatorStyle } from '../../../stores/useUISettingsStore'
 import { TabStatusIndicator } from '../../../components/TabStatusIndicator'
 import { SubagentDots } from '../../../components/SubagentDots'
+import type { FleetWaiter } from '../../../lib/fleet/types'
 import { BackgroundSymbol } from '../../../components/BackgroundSymbol'
 
 interface Params {
@@ -18,8 +19,8 @@ interface Params {
   awaitingApproval?: boolean
   /** The tab's highest background-work kind (N6), drawn as in TabIcon. */
   background?: BackgroundKind
-  /** Tooltip of the background symbol (the queue hourglass). */
-  backgroundTitle?: string
+  /** The waiters behind the queue hourglass (its tooltip). */
+  backgroundWaiters?: FleetWaiter[]
 }
 
 // Left-mode variant of the top-tab renderer in SortableTab.tsx. Slot/icon
@@ -46,7 +47,7 @@ export function renderInlineTabIcon({
   isUnread = false,
   awaitingApproval = false,
   background,
-  backgroundTitle,
+  backgroundWaiters,
 }: Params) {
   // 「等待核准」 is a waiting light whatever `agentStatus` says: on the first paint after a cold load the summary
   // already carries the pending request while useWorkerAgentProjection (an App-level effect) has not written it.
@@ -77,7 +78,7 @@ export function renderInlineTabIcon({
         <TabStatusIndicator status={status} mode="replace" isActive={isActive} awaitingApproval={awaitingApproval} />
         {showDotUnreadPip && UNREAD_PIP}
         {subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} />}
-        {background && <BackgroundSymbol kind={background} title={backgroundTitle} top={0} left={0} />}
+        {background && <BackgroundSymbol kind={background} waiters={backgroundWaiters} top={0} left={0} />}
       </span>
     )
   }
@@ -96,7 +97,7 @@ export function renderInlineTabIcon({
         {IconComponent && (background ? (
           <span className="relative inline-flex">
             <IconComponent size={ICON_SIZE} className="flex-shrink-0" />
-            <BackgroundSymbol kind={background} title={backgroundTitle} />
+            <BackgroundSymbol kind={background} waiters={backgroundWaiters} />
           </span>
         ) : (
           <IconComponent size={ICON_SIZE} className="flex-shrink-0" />
@@ -121,7 +122,7 @@ export function renderInlineTabIcon({
         awaitingApproval={awaitingApproval}
       />
       {!lightsOff && subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} left={-4} />}
-      {!lightsOff && background && <BackgroundSymbol kind={background} title={backgroundTitle} />}
+      {!lightsOff && background && <BackgroundSymbol kind={background} waiters={backgroundWaiters} />}
     </span>
   )
 }
