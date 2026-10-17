@@ -249,8 +249,11 @@ func (d *Detector) unmanagedTrees(in Input) []Event {
 					d.Diag("simulator", fmt.Sprintf("launchd_sim (pid %d) sums %d MB of RSS across its daemons, shared pages counted once per process: memory alone is not an event, its cores still count", root, u.rss/mib))
 				}
 				st.simNoted = true
-			} else {
+			} else if st.simNoted {
 				st.simNoted = false
+				if d.Diag != nil {
+					d.Diag("simulator", "") // fine again: the receiver keeps what it was told, so a second stretch is told anew
+				}
 			}
 		}
 		over := d.overThreshold(st, in.Now, tset)
