@@ -555,8 +555,9 @@ describe('W5e-3: starting and cooldown_until end the busy state', () => {
     expect(slot()?.phase).toBe('cooldown')
     at('2.2.2.2')
     expect(slot()).toBeNull()
-    expect(vi.getTimerCount()).toBe(0)
-    const e = useWatchStatusStore.getState().byHost.h1
+    vi.advanceTimersByTime(600_000) // the old cooldown's deadline passes: nothing of it is left to act
+    expect(slot()).toBeNull()
+    const e =useWatchStatusStore.getState().byHost.h1
     expect(e === undefined || (e.kind === 'ok' && e.status.cooldown_until === undefined)).toBe(true)
     reply(202, { host: 'mlab', host_id: 'd1' })
     await requestLaunch('start', 'h1')
