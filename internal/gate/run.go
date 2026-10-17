@@ -387,7 +387,9 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 				lateC = time.After(lateRecheck) // it holds or waits for a slot below: not a second one for the same work
 				continue
 			}
-			s, err := g.pool(cfg, lw.class).TakeLate()
+			// the settings as they are now: a class set to 0 (or raised from it) since the command started decides this claim, not the
+			// ones the command was started under (W3c)
+			s, err := g.pool(g.refresh(), lw.class).TakeLate()
 			switch {
 			case err != nil:
 				g.say("late slot: %v (the command goes on without one)", err)

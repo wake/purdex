@@ -148,6 +148,22 @@ func TestPaused_NoLateClaimWhilePaused(t *testing.T) {
 	s.Release(nil)
 }
 
+// The class is paused AFTER the script started: the late claim reads the settings as they are when the timer fires, so it takes
+// nothing. Mutation gate: the pool built from the settings the command started under → a late slot is taken (red).
+func TestPaused_AClassPausedAfterTheStartTakesNoLateSlot(t *testing.T) {
+	g := packagingGate(t, 600*time.Millisecond)
+	dir := t.TempDir()
+	fakeTool(t, dir, "")
+	done := runPackaging(g, dir)
+	eventually(t, "start", func() bool { return exists(dir + "/started") })
+	g.SetConfig(func(c *Config) { c.Slots.Light = 0 })
+	time.Sleep(1200 * time.Millisecond)
+	assert.Empty(t, lightHeld(g), "no late slot for a class paused since the start")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go"), nil, 0o644))
+	assert.Equal(t, 0, (<-done).code)
+	assert.NotContains(t, lastDecision(t, g), "late_slot")
+}
+
 // A packaging script of a paused class gets no late slot; it is not stopped either.
 func TestPaused_APackagingScriptGetsNoLateSlotWhileItsClassIsPaused(t *testing.T) {
 	g := packagingGate(t, 150*time.Millisecond)
