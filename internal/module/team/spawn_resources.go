@@ -115,6 +115,23 @@ func (m *Module) settleSpawnCard(a team.Approval, start bool) {
 	m.wake(a.ID) // the spawn client waits on the op's id
 }
 
+// closeOrphanSpawnCards cancels a resource card whose op was failed under it (the team ended): the person is not asked to let
+// through a spawn that no longer exists, and an approve of it would report a success that starts nothing.
+func (m *Module) closeOrphanSpawnCards() {
+	ids, err := m.store.OrphanSpawnCards()
+	if err != nil {
+		m.logf("[team] sweep: orphan spawn cards: %v", err)
+		return
+	}
+	for _, id := range ids {
+		if _, won, err := m.closeAs(id, Close{State: team.StateCancelled, DecidedAt: m.now()}); err != nil {
+			m.logf("[team] sweep: close orphan spawn card %s: %v", id, err)
+		} else if won {
+			m.logf("[team] spawn card %s cancelled: its spawn is no longer waiting", id)
+		}
+	}
+}
+
 // bootSettleAwaitingSpawns settles ops whose card closed without the follow-up (a crash between the two writes), and fails an op
 // that has no open card at all. An op whose card is still open keeps waiting; the sweeper owns its deadline.
 func (m *Module) bootSettleAwaitingSpawns() {

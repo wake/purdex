@@ -31,6 +31,26 @@ func (s *Store) SettleAwaitingSpawn(id string, approve bool, reason string, at i
 	return oneRow(res, err, "fail awaiting spawn op "+id)
 }
 
+// OrphanSpawnCards are the open spawn_resources cards whose op is not awaiting any more (its team ended and failed it, or the
+// row is gone): nothing is left for the card to let through.
+func (s *Store) OrphanSpawnCards() ([]string, error) {
+	rows, err := s.db.Query(`SELECT id FROM approval_requests WHERE kind = ? AND state = 'open'
+		AND id NOT IN (SELECT id FROM spawn_ops WHERE state = 'awaiting_resources')`, string(team.KindSpawnResources))
+	if err != nil {
+		return nil, fmt.Errorf("list orphan spawn cards: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("list orphan spawn cards: %w", err)
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // AwaitingSpawnOps are the ops that wait for a card, oldest first: boot settles those whose card closed while the daemon was
 // down or between the card's close and its follow-up.
 func (s *Store) AwaitingSpawnOps() ([]spawnRow, error) {

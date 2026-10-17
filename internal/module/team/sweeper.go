@@ -70,6 +70,7 @@ func (m *Module) tick() {
 			m.passPresence.Store(&presencePass{snap.PresenceSnapshot()})
 		}
 		m.endGoneTeams()
+		m.closeOrphanSpawnCards() // a resource card whose team ended under its waiting spawn (RT-5a)
 		m.markGoneMembers()
 		m.sweepFreshHalves()          // a fresh half of a session that is gone (RT-3a1)
 		m.settleStuckKillingMembers() // a kill that claimed its member and never ended (#2152)

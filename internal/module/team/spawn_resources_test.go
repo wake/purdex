@@ -203,6 +203,20 @@ func TestSpawnResources_BootSettlesFromTheClosedCard(t *testing.T) {
 	}
 }
 
+// Ending the team leaves no card to approve: the sweep cancels it once the op has failed.
+func TestSpawnResources_TeamEndCancelsTheCard(t *testing.T) {
+	f, root := newSpawnFixture(t, 1)
+	warnedSpawn(t, f, root)
+	if won, err := f.m.store.EndTeam(uid(1), "sid-1", "test", f.clock.Load()); err != nil || !won {
+		t.Fatalf("EndTeam: won=%v err=%v", won, err)
+	}
+	f.m.closeOrphanSpawnCards()
+	a, _, _ := f.m.store.Get(spawnID(1))
+	if a.State != team.StateCancelled {
+		t.Fatalf("card = %+v; want cancelled once its spawn failed with the team", a)
+	}
+}
+
 // Ending the team fails its waiting op too.
 func TestSpawnResources_TeamEndFailsAWaitingOp(t *testing.T) {
 	f, root := newSpawnFixture(t, 1)
