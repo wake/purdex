@@ -5,6 +5,7 @@ import { QueueSection } from './QueueSection'
 import { clearViewMemory, readQueueTab, writeQueueTab } from '../../lib/watch/view-memory'
 import type { FleetQueue, FleetHolder, FleetWaiter } from '../../lib/fleet/types'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useNexHostStore } from '../../stores/useNexHostStore'
 const t = (k: string, p?: Record<string, string | number>) => useI18nStore.getState().t(k, p)
 
 const NOW = Date.parse('2026-10-16T12:00:00Z')
@@ -17,7 +18,7 @@ const queue = (o: Partial<FleetQueue> = {}): FleetQueue => ({
 const renderQ = (q: FleetQueue | undefined, offline = false) => render(<QueueSection fleetHostId="d-a" queue={q} offline={offline} />)
 const lane = (c: 'heavy' | 'light') => within(screen.getByTestId(`lane-${c}`))
 
-beforeEach(() => { clearViewMemory(); vi.useFakeTimers(); vi.setSystemTime(NOW) })
+beforeEach(() => { clearViewMemory(); useNexHostStore.setState({ byHost: {} } as never);vi.useFakeTimers(); vi.setSystemTime(NOW) })
 afterEach(() => vi.useRealTimers())
 
 describe('QueueSection — lanes', () => {
@@ -230,10 +231,13 @@ describe('QueueSection — review follow-up', () => {
   })
 
   it('the interval runs only while 當下 is shown', () => {
+    // 歷史 is only shown for a host that announces `gate.decisions.v1`; the host is not connected, so the body itself reads nothing.
+    useNexHostStore.setState({ byHost: { 'cfg-a': { daemonCapabilities: ['gate.decisions.v1'] } } } as never)
     writeQueueTab('d-a', 'history')
     const set = vi.spyOn(globalThis, 'setInterval')
     const clear = vi.spyOn(globalThis, 'clearInterval')
-    const { unmount } = renderQ(queue({ waiters: [waiter()] }))
+    const { unmount } = render(<QueueSection fleetHostId="d-a" hostConfigId="cfg-a" queue={queue({ waiters: [waiter()] })} offline={false} />)
+    expect(screen.getByTestId('queue-history')).toBeInTheDocument()
     expect(set).not.toHaveBeenCalled()
     unmount()
     expect(clear).not.toHaveBeenCalled()
