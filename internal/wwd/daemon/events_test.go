@@ -84,6 +84,26 @@ func TestBrokerFansOutAndDropsAdHocForPeers(t *testing.T) {
 	}
 }
 
+// A fast-lane job runs in the submitter's own working tree and never leaves the host (spec 4.1, 5.2, 11): its events reach the local
+// subscribers and never a peer, whether or not it is also ad-hoc. Mutation gate: the filter on AdHoc alone → the peer gets it.
+func TestBrokerDropsLocalJobEventsForPeers(t *testing.T) {
+	b := NewBroker()
+	local, cancelL := b.Subscribe(false)
+	peer, cancelP := b.Subscribe(true)
+	defer cancelL()
+	defer cancelP()
+
+	for _, adhoc := range []bool{false, true} {
+		ev := jobEvent(adhoc)
+		ev.Job.Local, ev.Job.Cacheable = true, false
+		b.PublishJob(ev)
+		if e := recv(t, local); e.Type != wire.EventJob {
+			t.Fatalf("local got %s", e.Type)
+		}
+		none(t, peer)
+	}
+}
+
 func TestBrokerNeverBlocksOnASlowSubscriber(t *testing.T) {
 	b := NewBroker()
 	slow, cancel := b.Subscribe(false) // nobody reads from it
