@@ -7,8 +7,11 @@ package fastlane
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,10 +121,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	report, junit := filepath.Join(out, "report.json"), filepath.Join(out, "junit.xml")
 	argv, err := task.Render(req.Args, manifest.RenderEnv{
 		Workspace: out, Report: report, Junit: junit,
-		Exists: func(rel string) bool {
-			st, err := os.Stat(filepath.Join(req.Root, filepath.FromSlash(rel)))
-			return err == nil && st.Mode().IsRegular()
-		},
+		Exists: func(rel string) bool { return submit.TreeFileExists(req.Root, rel) },
 	})
 	if err != nil {
 		return fail(err)
@@ -144,11 +144,23 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		finishFailed(handle, "infra", time.Now())
 		return fail(err)
 	}
-	runCtx, stop := context.WithTimeout(ctx, task.Timeout)
+	// The task's time starts when the gate admits the command, not while it waits for a slot: the gate prints a mark on the
+	// command's stderr right before it starts the command (AdmittedMarkEnv), and that line is taken out of the output here.
+	runCtx, stop := context.WithCancel(ctx)
 	defer stop()
-	// The lease: renewed while the command runs; cancelled by the origin or not renewable for a whole lease ends the command.
+	var admitted, timedOut atomic.Bool
+	var timer atomic.Pointer[time.Timer]
+	nonce := newNonce()
+	env = append(env, gate.AdmittedMarkEnv+"="+nonce)
+	stderr := &admitFilter{w: cp.Stderr(), mark: gate.AdmittedMark(nonce), onAdmitted: func() {
+		admitted.Store(true)
+		timer.Store(time.AfterFunc(task.Timeout, func() { timedOut.Store(true); stop() }))
+	}}
+	// The lease: renewed while the command runs and until the result is delivered; cancelled by the origin, or not renewable
+	// for a whole lease, ends the command.
 	var cancelled, leaseLost atomic.Bool
 	hbCtx, hbStop := context.WithCancel(context.WithoutCancel(ctx))
+	defer hbStop()
 	hbDone := make(chan struct{})
 	if handle != nil {
 		go func() {
@@ -161,23 +173,28 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	started := time.Now()
 	code, gateErr := req.Gate.Run(runCtx, gate.Options{
 		Argv: argv, Class: gate.ClassLight, ClassSource: "kind", Env: env,
-		Dir:    filepath.Join(req.Root, filepath.FromSlash(task.Cwd)),
-		Stdout: cp.Stdout(), Stderr: cp.Stderr(),
+		Dir:     filepath.Join(req.Root, filepath.FromSlash(task.Cwd)),
+		WaitMax: task.QueueTimeout,
+		Stdout:  cp.Stdout(), Stderr: stderr,
 	})
 	finished := time.Now()
-	hbStop()
-	<-hbDone
+	if t := timer.Load(); t != nil {
+		t.Stop()
+	}
 	tail, _, capErr := cp.Close()
 	res.FinishAt, res.LogPath, res.Exit = finished, filepath.Join(out, "log"), code
 
+	notRun := !admitted.Load() && (gateErr != nil || code == gate.ExitRefused || code == gate.ExitOrphaned)
 	switch {
 	case leaseLost.Load():
 		res.State, res.Reason, res.Exit = wire.StateFailed, "lost", -1
 	case ctx.Err() != nil || cancelled.Load():
 		res.State, res.Reason, res.Exit = wire.StateCancelled, "", -1
-	case runCtx.Err() != nil:
+	case timedOut.Load():
 		res.State, res.Reason, res.Exit = wire.StateFailed, "timeout", ExitTimeout
-	case gateErr != nil || code == gate.ExitRefused || code == gate.ExitOrphaned:
+	case notRun && code == gate.ExitRefused && gateErr == nil && finished.Sub(started) >= task.QueueTimeout-time.Second:
+		res.State, res.Reason, res.Exit = wire.StateExpired, "queue_timeout", -1 // waited for a slot as long as a queued job may
+	case notRun:
 		res.State, res.Reason = wire.StateFailed, "infra"
 		res.Err = gateErr
 		if res.Err == nil {
@@ -193,7 +210,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		res.Reason = "infra"
 	}
 
-	if res.Err == nil && res.State != wire.StateCancelled {
+	if res.Err == nil && res.State != wire.StateCancelled && res.State != wire.StateExpired {
 		res.Summary, res.SumErr = buildSummary(task, out, report, junit, tail)
 	} else {
 		res.Summary = wire.Summary{Failures: []wire.Failure{}, Tail: lines(tail)}
@@ -204,14 +221,70 @@ func Run(ctx context.Context, req Request) (Result, error) {
 			e := res.Exit
 			exit = &e
 		}
-		if ferr := handle.Finish(context.WithoutCancel(ctx), Outcome{
-			State: res.State, Exit: exit, Summary: res.Summary, Reason: res.Reason,
-			LogPath: res.LogPath, StartedAt: started, FinishedAt: finished,
-		}); ferr != nil && res.Err == nil {
+		o := Outcome{State: res.State, Exit: exit, Summary: res.Summary, Reason: res.Reason, LogPath: res.LogPath, StartedAt: started, FinishedAt: finished}
+		if ferr := deliver(context.WithoutCancel(ctx), handle, o, &leaseLost); ferr != nil && res.Err == nil {
 			res.Err = fmt.Errorf("the result could not be recorded: %w", ferr)
 		}
 	}
+	hbStop()
+	<-hbDone
 	return res, nil
+}
+
+// How a finished run's result is delivered when the origin is briefly unreachable (spec §4.2): retried with a growing pause
+// while the lease is still renewed, for up to deliverFor; a claim that is no longer valid (ErrStale, or a lease lost meanwhile)
+// discards the result.
+var (
+	deliverFor     = 10 * time.Minute
+	deliverBackoff = 500 * time.Millisecond
+)
+
+// ErrStale is what a Handle's Finish returns when the origin no longer accepts this run's claim.
+var ErrStale = errors.New("fastlane: the run's claim is no longer valid")
+
+func deliver(ctx context.Context, h Handle, o Outcome, leaseLost *atomic.Bool) error {
+	deadline := time.Now().Add(deliverFor)
+	pause := deliverBackoff
+	for {
+		err := h.Finish(ctx, o)
+		if err == nil || errors.Is(err, ErrStale) {
+			return err
+		}
+		if leaseLost.Load() {
+			return fmt.Errorf("%w (the lease was lost meanwhile: %v)", ErrStale, err)
+		}
+		if time.Now().Add(pause).After(deadline) {
+			return err
+		}
+		time.Sleep(pause)
+		if pause *= 2; pause > 10*time.Second {
+			pause = 10 * time.Second
+		}
+	}
+}
+
+// admitFilter takes the gate's admitted mark out of the command's stderr and says when it saw it. The gate writes the mark
+// in one write before the command starts, so nothing of the command's can come before it.
+type admitFilter struct {
+	w          io.Writer
+	mark       string
+	onAdmitted func()
+	seen       atomic.Bool
+}
+
+func (f *admitFilter) Write(p []byte) (int, error) {
+	if !f.seen.Load() && string(p) == f.mark {
+		f.seen.Store(true)
+		f.onAdmitted()
+		return len(p), nil
+	}
+	return f.w.Write(p)
+}
+
+func newNonce() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 // heartbeat renews the lease every RenewEvery until ctx ends. A cancel answer, or no successful renewal for a whole lease

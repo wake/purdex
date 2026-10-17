@@ -128,10 +128,7 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 	if task.Args == manifest.ArgsFiles {
 		check.Exists = func(rel string) bool { return g.exists(ctx, snap.SHA, rel) }
 		if req.Local {
-			check.Exists = func(rel string) bool {
-				st, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel)))
-				return err == nil && st.Mode().IsRegular()
-			}
+			check.Exists = func(rel string) bool { return TreeFileExists(root, rel) }
 		}
 	}
 	if _, err := task.Render(req.Args, check); err != nil {
@@ -186,6 +183,24 @@ func relCwd(_, taskCwd string) string {
 		return "."
 	}
 	return filepath.ToSlash(filepath.Clean(taskCwd))
+}
+
+// TreeFileExists reports whether rel (a slash path relative to root) is a regular file in the working tree whose real location,
+// after every symlink on the way is followed, is still inside the tree: a link out of the tree is not a file of it.
+func TreeFileExists(root, rel string) bool {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return false
+	}
+	real, err := filepath.EvalSymlinks(filepath.Join(root, filepath.FromSlash(rel)))
+	if err != nil {
+		return false
+	}
+	if r, err := filepath.Rel(realRoot, real); err != nil || r == ".." || strings.HasPrefix(r, "../") {
+		return false
+	}
+	st, err := os.Stat(real)
+	return err == nil && st.Mode().IsRegular()
 }
 
 func sameDir(a, b string) bool {

@@ -3,6 +3,7 @@ package fastlane
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,12 +64,22 @@ type fakeGate struct {
 	mu    sync.Mutex
 	calls []gate.Options
 	run   func(ctx context.Context, o gate.Options) int
+	// skipMark: the gate never admits the command (it printed no mark); a run func may print the mark itself later.
+	skipMark bool
 }
 
 func (g *fakeGate) Run(ctx context.Context, o gate.Options) (int, error) {
 	g.mu.Lock()
 	g.calls = append(g.calls, o)
 	g.mu.Unlock()
+	// like the real gate: the admitted mark goes to the command's stderr right before the command starts
+	if !g.skipMark {
+		for _, kv := range o.Env {
+			if nonce, ok := strings.CutPrefix(kv, gate.AdmittedMarkEnv+"="); ok {
+				io.WriteString(o.Stderr, gate.AdmittedMark(nonce))
+			}
+		}
+	}
 	if g.run == nil {
 		return 0, nil
 	}
@@ -83,6 +94,7 @@ type fakeHandle struct {
 	mu        sync.Mutex
 	outcome   *Outcome
 	finishErr error
+	finishFn  func() error
 }
 
 func (h *fakeHandle) JobID() string             { return h.id }
@@ -98,6 +110,9 @@ func (h *fakeHandle) Finish(_ context.Context, o Outcome) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.outcome = &o
+	if h.finishFn != nil {
+		return h.finishFn()
+	}
 	return h.finishErr
 }
 
@@ -309,9 +324,195 @@ func TestCallerCancel(t *testing.T) {
 	}
 }
 
+func mark(o gate.Options) {
+	for _, kv := range o.Env {
+		if nonce, ok := strings.CutPrefix(kv, gate.AdmittedMarkEnv+"="); ok {
+			io.WriteString(o.Stderr, gate.AdmittedMark(nonce))
+		}
+	}
+}
+
+func TestWaitingForASlotDoesNotCountAgainstTheTaskTimeout(t *testing.T) {
+	tk := task(t, "one-file")
+	tk.Timeout = 100 * time.Millisecond
+	rec := newRec()
+	g := &fakeGate{skipMark: true, run: func(_ context.Context, o gate.Options) int {
+		time.Sleep(300 * time.Millisecond) // waiting for a slot, three times the task's time
+		mark(o)                            // admitted now
+		return 0
+	}}
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: tk, Args: []string{"a.test.ts"}, Gate: g, Recorder: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Cleanup()
+	if res.State != wire.StateSucceeded || res.Reason != "" {
+		t.Fatalf("a wait for a slot was counted as run time: %+v", res)
+	}
+}
+
+func TestTheAdmittedMarkIsNotInTheOutput(t *testing.T) {
+	g := &fakeGate{run: func(_ context.Context, o gate.Options) int { o.Stderr.Write([]byte("real stderr\n")); return 0 }}
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: task(t, "one-file"), Args: []string{"a.test.ts"}, Gate: g})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Cleanup()
+	b, _ := os.ReadFile(res.LogPath)
+	if strings.Contains(string(b), "pdx-gate-admitted") || !strings.Contains(string(b), "real stderr") {
+		t.Fatalf("log = %q", b)
+	}
+	if g.calls[0].WaitMax != task(t, "one-file").QueueTimeout {
+		t.Fatalf("WaitMax = %v, want the task's queue timeout", g.calls[0].WaitMax)
+	}
+}
+
+func TestAWaitThatOutlastsTheQueueTimeoutExpires(t *testing.T) {
+	tk := task(t, "one-file")
+	tk.QueueTimeout = 1200 * time.Millisecond
+	rec := newRec()
+	g := &fakeGate{skipMark: true, run: func(context.Context, gate.Options) int {
+		time.Sleep(300 * time.Millisecond)
+		return gate.ExitRefused
+	}}
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: tk, Args: []string{"a.test.ts"}, Gate: g, Recorder: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Cleanup()
+	if res.State != wire.StateExpired || res.Reason != "queue_timeout" {
+		t.Fatalf("result = %+v", res)
+	}
+	if o := rec.h.outcome; o.State != wire.StateExpired || o.Exit != nil {
+		t.Fatalf("recorded = %+v", o)
+	}
+}
+
+func TestACommandThatExits75AfterBeingAdmittedIsATestResult(t *testing.T) {
+	rec := newRec()
+	g := &fakeGate{run: func(context.Context, gate.Options) int { return gate.ExitRefused }} // the mark was printed: it ran
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: task(t, "one-file"), Args: []string{"a.test.ts"}, Gate: g, Recorder: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Cleanup()
+	if res.Err != nil || res.State != wire.StateFailed || res.Exit != 75 || rec.h.outcome.Exit == nil || *rec.h.outcome.Exit != 75 {
+		t.Fatalf("result = %+v", res)
+	}
+}
+
+func TestATransientFailureToRecordTheResultIsRetried(t *testing.T) {
+	old := deliverBackoff
+	deliverBackoff = 5 * time.Millisecond
+	defer func() { deliverBackoff = old }()
+	rec := newRec()
+	var tries atomic.Int32
+	rec.h.finishFn = func() error {
+		if tries.Add(1) < 3 {
+			return errors.New("wwd unreachable")
+		}
+		return nil
+	}
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: task(t, "one-file"), Args: []string{"a.test.ts"}, Gate: &fakeGate{}, Recorder: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Cleanup()
+	if res.Err != nil || tries.Load() != 3 || rec.h.outcome == nil {
+		t.Fatalf("tries %d, result %+v", tries.Load(), res)
+	}
+}
+
+func TestAStaleClaimDiscardsTheResultAtOnce(t *testing.T) {
+	old := deliverBackoff
+	deliverBackoff = 5 * time.Millisecond
+	defer func() { deliverBackoff = old }()
+	rec := newRec()
+	var tries atomic.Int32
+	rec.h.finishFn = func() error { tries.Add(1); return ErrStale }
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: task(t, "one-file"), Args: []string{"a.test.ts"}, Gate: &fakeGate{}, Recorder: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Cleanup()
+	if tries.Load() != 1 || !errors.Is(res.Err, ErrStale) {
+		t.Fatalf("tries %d, err %v", tries.Load(), res.Err)
+	}
+}
+
+func TestDeliveryGivesUpAfterTheBoundedPeriod(t *testing.T) {
+	oldB, oldF := deliverBackoff, deliverFor
+	deliverBackoff, deliverFor = 5*time.Millisecond, 60*time.Millisecond
+	defer func() { deliverBackoff, deliverFor = oldB, oldF }()
+	rec := newRec()
+	rec.h.finishFn = func() error { return errors.New("still down") }
+	start := time.Now()
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: task(t, "one-file"), Args: []string{"a.test.ts"}, Gate: &fakeGate{}, Recorder: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Cleanup()
+	if res.Err == nil || time.Since(start) > 2*time.Second {
+		t.Fatalf("err %v after %v", res.Err, time.Since(start))
+	}
+}
+
+func TestTheLeaseIsStillRenewedWhileTheResultIsBeingDelivered(t *testing.T) {
+	old := deliverBackoff
+	deliverBackoff = 30 * time.Millisecond
+	defer func() { deliverBackoff = old }()
+	rec := newRec()
+	rec.h.every, rec.h.lease = 10*time.Millisecond, time.Minute
+	var beats atomic.Int32
+	rec.h.heartbeat = func() (bool, error) { beats.Add(1); return false, nil }
+	var tries atomic.Int32
+	var beatsAtFirstTry int32
+	rec.h.finishFn = func() error {
+		if tries.Add(1) == 1 {
+			beatsAtFirstTry = beats.Load()
+			return errors.New("down")
+		}
+		if beats.Load() <= beatsAtFirstTry {
+			return errors.New("the heartbeat stopped while the result was undelivered")
+		}
+		return nil
+	}
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: task(t, "one-file"), Args: []string{"a.test.ts"}, Gate: &fakeGate{}, Recorder: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Cleanup()
+	if res.Err != nil {
+		t.Fatalf("err = %v", res.Err)
+	}
+}
+
+func TestAFileThatIsASymlinkOutOfTheTreeIsRefused(t *testing.T) {
+	root := tree(t)
+	outside := filepath.Join(t.TempDir(), "secret.ts")
+	if err := os.WriteFile(outside, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link.ts")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Dir(outside), filepath.Join(root, "linkdir")); err != nil {
+		t.Fatal(err)
+	}
+	g := &fakeGate{}
+	for _, f := range []string{"link.ts", "linkdir/secret.ts"} {
+		if _, err := Run(context.Background(), Request{Root: root, Task: task(t, "one-file"), Args: []string{f}, Gate: g}); err == nil {
+			t.Errorf("%s: a path that leaves the tree was accepted", f)
+		}
+	}
+	if len(g.calls) != 0 {
+		t.Fatal("the command ran")
+	}
+}
+
 func TestGateRefusalIsInfrastructureNotATestResult(t *testing.T) {
 	rec := newRec()
-	g := &fakeGate{run: func(context.Context, gate.Options) int { return gate.ExitRefused }}
+	g := &fakeGate{skipMark: true, run: func(context.Context, gate.Options) int { return gate.ExitRefused }}
 	res, err := Run(context.Background(), Request{Root: tree(t), Task: task(t, "one-file"), Args: []string{"a.test.ts"}, Gate: g, Recorder: rec})
 	if err != nil {
 		t.Fatal(err)
@@ -362,6 +563,9 @@ func TestALeaseThatCannotBeRenewedEndsTheCommandAsLost(t *testing.T) {
 
 func TestAFailedRecordOfTheResultIsReported(t *testing.T) {
 	rec := newRec()
+	oldB, oldF := deliverBackoff, deliverFor
+	deliverBackoff, deliverFor = 5*time.Millisecond, 30*time.Millisecond
+	defer func() { deliverBackoff, deliverFor = oldB, oldF }()
 	rec.h.finishErr = errors.New("wwd unreachable")
 	res, err := Run(context.Background(), Request{Root: tree(t), Task: task(t, "one-file"), Args: []string{"a.test.ts"}, Gate: &fakeGate{}, Recorder: rec})
 	if err != nil {

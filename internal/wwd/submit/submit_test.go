@@ -262,6 +262,34 @@ func TestPrepareLocalChecksFilesInTheWorkingTree(t *testing.T) {
 	}
 }
 
+func TestTreeFileExistsDoesNotFollowLinksOutOfTheTree(t *testing.T) {
+	root := newRepo(t)
+	outside := t.TempDir()
+	write(t, filepath.Join(outside, "secret.ts"), "x")
+	if err := os.Symlink(filepath.Join(outside, "secret.ts"), filepath.Join(root, "file-link.ts")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "dir-link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("spa/src/a.test.ts", filepath.Join(root, "inside-link.ts")); err != nil {
+		t.Fatal(err)
+	}
+	for rel, want := range map[string]bool{
+		"spa/src/a.test.ts":            true,
+		"inside-link.ts":               true, // a link that stays inside the tree is fine
+		"file-link.ts":                 false,
+		"dir-link/secret.ts":           false,
+		"spa":                          false, // a directory is not a file
+		"spa/src/missing.ts":           false,
+		"../" + filepath.Base(outside): false,
+	} {
+		if got := TreeFileExists(root, rel); got != want {
+			t.Errorf("TreeFileExists(%q) = %v, want %v", rel, got, want)
+		}
+	}
+}
+
 func TestPrepareNoManifestIsUsage(t *testing.T) {
 	dir := newRepo(t)
 	if err := os.Remove(filepath.Join(dir, ".wwd/tasks.toml")); err != nil {
