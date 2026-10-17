@@ -2,6 +2,7 @@ package facts
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -159,7 +160,8 @@ func TestJobMarkerParse(t *testing.T) {
 	if id, ok := JobFromEnv(env); !ok || id != "j_01ABC" {
 		t.Fatalf("%q %v", id, ok)
 	}
-	for _, bad := range [][]string{nil, {"WWD_JOB="}, {"XWWD_JOB=j_1"}, {"WWD_JOBS=j_1"}} {
+	long := "WWD_JOB=j_" + strings.Repeat("a", 65)
+	for _, bad := range [][]string{nil, {"WWD_JOB="}, {"XWWD_JOB=j_1"}, {"WWD_JOBS=j_1"}, {"WWD_JOB=victim"}, {"WWD_JOB=j_"}, {"WWD_JOB=j_a b"}, {long}, {"WWD_JOB=j_x\n"}} {
 		if id, ok := JobFromEnv(bad); ok {
 			t.Errorf("%v accepted as %q", bad, id)
 		}

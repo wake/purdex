@@ -14,10 +14,15 @@ import (
 // share JobFromEnv as the one check for "this belongs to a wwd job".
 const JobMarkerEnv = "WWD_JOB"
 
-// JobFromEnv returns the job id out of a process environment (KEY=VALUE).
+var reJobID = regexp.MustCompile(`^j_[0-9A-Za-z_-]{1,64}$`)
+
+// JobFromEnv returns the job id out of a process environment (KEY=VALUE). The
+// value must look like a job id (`j_` and up to 64 id characters); anything else
+// is not a marker. (Facts are observations, not authorisation: a same-user
+// process can still set a well-formed one.)
 func JobFromEnv(env []string) (string, bool) {
 	for _, kv := range env {
-		if v, ok := strings.CutPrefix(kv, JobMarkerEnv+"="); ok && v != "" {
+		if v, ok := strings.CutPrefix(kv, JobMarkerEnv+"="); ok && reJobID.MatchString(v) {
 			return v, true
 		}
 	}
