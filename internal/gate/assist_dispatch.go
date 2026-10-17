@@ -9,7 +9,8 @@ import (
 // AssistTarget asks a command to be sent to an assist host instead of waiting for a slot here (the hidden --assist-host; the
 // automatic walk of X2b fills it too).
 type AssistTarget struct {
-	Host  string
+	Host  string // the name of the host: its dispatch slots, its holds, the record
+	Dest  string // the ssh alias to connect to ("" = Host)
 	SSH   string // the ssh program ("" = ssh)
 	Git   string // the git program ("" = git)
 	Repo  string // the repo's name on the host ("" = the top level's basename)
@@ -46,7 +47,11 @@ func (g *Gate) tryAssist(ctx context.Context, cfg Config, class Class, o Options
 		return 0, false
 	}
 	d.Tried = a.Host
-	res := g.RunAssist(ctx, o, AssistRun{Host: a.Host, Job: job, Repo: repo, SSH: a.SSH, Git: a.Git})
+	dest := a.Dest
+	if dest == "" {
+		dest = a.Host
+	}
+	res := g.RunAssist(ctx, o, AssistRun{Host: dest, Job: job, Repo: repo, SSH: a.SSH, Git: a.Git})
 	d.TransferS, d.RunS, d.Reclaimed = res.TransferS, res.RunS, res.Reclaimed
 	// Every way out lets the dispatch slot go: a return to the queue lets it go first (Ticket.Return), the others here.
 	// A ticket that cannot be put back is not left out for ever (nothing would serve it): the command is refused.

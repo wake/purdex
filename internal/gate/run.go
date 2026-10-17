@@ -43,6 +43,15 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 			return nil, code, true
 		}
 	}
+	// The automatic walk: a heavy ticket with an assist candidate goes out at once (even with a free slot here); a light one is
+	// offered at the first look that finds it waiting, and every assistWalkEvery after that.
+	var lastWalk time.Time
+	if o.Assist == nil && o.Walk != nil {
+		lastWalk = g.Now()
+		if code, handled := g.walkAssist(ctx, cfg, class, o, ticket, d, false); handled {
+			return nil, code, true
+		}
+	}
 	// Whoever called this command is the one who waits for its output. When that process is gone (this one is handed to init
 	// or to another reaper) nobody will read what it prints, and a slot taken then would run a whole suite for no one, so the
 	// ticket is given up. A command that was started with no parent to lose (its parent was init already), or that was told
@@ -182,6 +191,12 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 				g.say("%s", withFrontNote(waitingLine(class, ahead+len(holders), holders, now), aheadFront)) // everything in front of it: the running and the queued
 			default:
 				g.say("%s", pressureLine(lastPressure(good), cfg.Admission, good != nil))
+			}
+		}
+		if o.Assist == nil && o.Walk != nil && now.Sub(lastWalk) >= assistWalkEvery {
+			lastWalk = now
+			if code, handled := g.walkAssist(ctx, cfg, class, o, ticket, d, true); handled {
+				return nil, code, true
 			}
 		}
 		sleep := g.Poll()
