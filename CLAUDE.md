@@ -115,7 +115,6 @@ mlab 是多條線、多個 session 共用的主機：一個 `go test ./...` 或 
 
 - **tsc**：`spa/tsconfig*.json` 的 `tsBuildInfoFile` 還在 `node_modules/.tmp/` 時，worktree 把 `node_modules` symlink 到主 checkout 會共用增量快取、顯示假綠（#2796），PR 層要用 `tsc -b --force`；快取改成每個 worktree 一份之後，PR 層用 `tsc -b`（增量）即可，`--force` 只留在發版。
 - **重指令一律經過閘門**（`go`／`pnpm`／`npx`／`vitest`／`tsc`／`composer` 由 shim 自動交給 `pdx gate`；腳本裡可明寫 `pdx gate --class heavy -- …`；mod 會把直接呼叫 `node_modules/.bin`、`vendor/bin` 的指令補上前綴，會排隊的前景呼叫自動轉背景）；被排隊時照提示等，不要自己加 `&`、改用真實執行檔路徑或其他方式繞過。
-- **codex review 的 prompt 一律附上**：「不要執行 go test ./... 或完整 vitest；要驗證最多只跑受影響的單一套件／測試檔」。
 - **派 subagent／member 的 brief 一律附上這三層**。
 
 ### PR Review 兩輪制 (委派 Codex 進行)
