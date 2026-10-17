@@ -73,6 +73,26 @@ func TestFreshSurface_CodeFollowsTheTmuxSession(t *testing.T) {
 	}
 }
 
+// A pane id a restarted tmux gave to another session proves nothing: the entry's pane must be in the session of its name.
+// Mutation gate: the name check left out → the code of sess-b is given to a seat that names sess-a → red.
+func TestFreshSurface_NoCodeWhenThePaneIsAnotherSessions(t *testing.T) {
+	f := newFixture(t)
+	f.tmux.AddSession("sess-a", "/") // $0, pane %0
+	f.tmux.AddSession("sess-b", "/") // $1, pane %1
+	f.showIn("sid-1", "_abc123", "sess-a:@1.%1")
+	f.showIn("sid-m1", "_mem001", "sess-b:@1.%1")
+	f.freshHalfWithFile("sid-1")
+	if v := f.getFresh(); len(v.Sessions) != 1 || v.Sessions[0].Code != "" {
+		t.Fatalf("fresh = %+v, want the half without a code: %%1 is not in sess-a", v.Sessions)
+	}
+	f.freshHalfWithFile("sid-m1")
+	for _, s := range f.getFresh().Sessions {
+		if s.SessionID == "sid-m1" && s.Code != codeOf(t, "$1") {
+			t.Fatalf("a pane in its own session: %+v, want code %s", s, codeOf(t, "$1"))
+		}
+	}
+}
+
 // A fresh half whose tmux does not answer still shows, without a code.
 func TestFreshSurface_NoCodeWhenTmuxDoesNotAnswer(t *testing.T) {
 	f := newFixture(t)

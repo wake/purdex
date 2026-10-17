@@ -41,6 +41,16 @@ func (m *Module) paneIdentityOf(ctx context.Context, origin string) (tmux.PaneId
 	if err != nil {
 		return tmux.PaneIdentity{}, false
 	}
+	// A restarted tmux hands out pane ids again: the pane must still be in the tmux session of the entry's NAME, else it is some other
+	// session's and nothing is known.
+	name := tmuxName(origin)
+	if name == "" {
+		return tmux.PaneIdentity{}, false
+	}
+	byName, err := m.tmux.PaneIdentity(ctx, "="+name+":", spawnTagOption)
+	if err != nil || byName.SessionID != id.SessionID || byName.Instance != id.Instance {
+		return tmux.PaneIdentity{}, false
+	}
 	return id, true
 }
 
