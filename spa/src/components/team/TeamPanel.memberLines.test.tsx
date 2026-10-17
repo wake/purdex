@@ -14,7 +14,9 @@ vi.mock('./TeamSeatIcon', () => ({
 import { TeamPanelArea } from './TeamPanelArea'
 import { TeamDisplayProvider } from './TeamDisplayProvider'
 import { MEMBER_REFRESH_DEBOUNCE_MS, ageText, memberLastLine, memberTaskLine } from './member-lines'
-import { HOST, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
+import { HOST, member as rosterMember, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
+import { seedUnit, setJournalHost } from '../../lib/journal/__tests__/journal-fixture'
+import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import type { JournalMember } from '../../lib/journal/types'
 import { membersKey, useJournalMembersStore } from '../../stores/useJournalMembersStore'
 import { useJournalStore } from '../../stores/useJournalStore'
@@ -34,7 +36,7 @@ const row = (sessionId: string) => screen.getAllByTestId('team-panel-row').find(
 const mount = () => render(<TeamDisplayProvider><TeamPanelArea /></TeamDisplayProvider>)
 
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] })
+  vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
   vi.setSystemTime(NOW)
   cleanup()
   localStorage.clear()
@@ -94,12 +96,13 @@ describe('member lines in the full panel', () => {
   })
 
   it('reads the LEADER\'s host once the panel shows, and again after the host says the journal changed', async () => {
+    seedUnit(HOST, 'L', { kind: 'team', id: 'tm1', label: 'T' })
     support(true)
     mount()
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     expect(getJournalMembers).toHaveBeenCalledTimes(1)
     expect(getJournalMembers).toHaveBeenCalledWith(HOST, 'L')
-    act(() => useJournalStore.setState((s) => ({ staleRev: s.staleRev + 1 })))
+    act(() => useJournalStore.getState().markStale(HOST, 'team:tm1', 'entries'))
     await act(async () => { await vi.advanceTimersByTimeAsync(MEMBER_REFRESH_DEBOUNCE_MS - 1) })
     expect(getJournalMembers).toHaveBeenCalledTimes(1)
     await act(async () => { await vi.advanceTimersByTimeAsync(1) })
@@ -131,5 +134,70 @@ describe('the line texts', () => {
   it('the task line in English', () => {
     useI18nStore.getState().setLocale('en')
     expect(memberTaskLine(t, { number: '3', title: 'T', state: 'pending' })).toBe('#3 T · to do')
+  })
+})
+
+describe('JV-2d codex R5', () => {
+  const settle = async (ms = 0) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms) }) }
+  const patchMembers = (f: (members: ReturnType<typeof rosterMember>[]) => void) => act(() => {
+    const roster = structuredClone(useTeamRosterStore.getState().byHost[HOST])
+    f(roster[0].members as ReturnType<typeof rosterMember>[])
+    useTeamRosterStore.setState({ byHost: { [HOST]: roster } })
+  })
+
+  it('a member joining re-reads, and the new member shows its lines', async () => {
+    support(true)
+    getJournalMembers.mockResolvedValue({ kind: 'ok', value: [member()] })
+    mount()
+    await settle()
+    expect(getJournalMembers).toHaveBeenCalledTimes(1)
+    getJournalMembers.mockResolvedValue({ kind: 'ok', value: [member(), member({ sessionId: 'C' })] })
+    patchMembers((ms) => { ms.push(rosterMember('C', 3, 'c-tm')) })
+    await settle(MEMBER_REFRESH_DEBOUNCE_MS)
+    expect(getJournalMembers).toHaveBeenCalledTimes(2)
+    expect(within(row('C')).getByTestId('team-panel-member-task')).toBeTruthy()
+  })
+
+  it('a member handing off to a new session re-reads', async () => {
+    support(true)
+    getJournalMembers.mockResolvedValue({ kind: 'ok', value: [member()] })
+    mount()
+    await settle()
+    expect(getJournalMembers).toHaveBeenCalledTimes(1)
+    getJournalMembers.mockResolvedValue({ kind: 'ok', value: [member({ sessionId: 'A2' })] })
+    patchMembers((ms) => { ms[0] = { ...rosterMember('A2', 1, 'a-tm') } })
+    await settle(MEMBER_REFRESH_DEBOUNCE_MS)
+    expect(getJournalMembers).toHaveBeenCalledTimes(2)
+    expect(within(row('A2')).getByTestId('team-panel-member-task')).toBeTruthy()
+  })
+
+  it('the age moves on by itself: a minute later the text says one minute more', async () => {
+    support(true)
+    hold([member()])
+    mount()
+    expect(within(row('A')).getByTestId('team-panel-member-last').textContent).toBe('3 分前 完成：checks passed')
+    await settle(60_000)
+    expect(within(row('A')).getByTestId('team-panel-member-last').textContent).toBe('4 分前 完成：checks passed')
+  })
+
+  it('only this leader\'s journal.changed re-reads: another unit or another host asks nothing', async () => {
+    const UNIT = { kind: 'team' as const, id: 'tm1', label: 'T' }
+    setJournalHost(HOST, true)
+    seedUnit(HOST, 'L', UNIT)
+    seedUnit(HOST, 'other', { kind: 'solo', id: 'o1', label: 'o' })
+    seedUnit('h2', 'L', UNIT)
+    support(true)
+    mount()
+    await settle()
+    expect(getJournalMembers).toHaveBeenCalledTimes(1)
+    act(() => {
+      useJournalStore.getState().markStale(HOST, 'solo:o1', 'entries') // another unit of this host
+      useJournalStore.getState().markStale('h2', 'team:tm1', 'entries') // the same unit id on another host
+    })
+    await settle(MEMBER_REFRESH_DEBOUNCE_MS * 2)
+    expect(getJournalMembers).toHaveBeenCalledTimes(1)
+    act(() => useJournalStore.getState().markStale(HOST, 'team:tm1', 'entries'))
+    await settle(MEMBER_REFRESH_DEBOUNCE_MS)
+    expect(getJournalMembers).toHaveBeenCalledTimes(2)
   })
 })
