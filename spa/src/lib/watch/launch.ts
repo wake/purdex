@@ -126,8 +126,8 @@ function attemptOf(slot: Extract<LaunchSlot, { phase: 'busy' }>, byHost: Record<
   for (const id of ids) {
     const e = byHost[id]
     if (e?.kind !== 'ok') continue
-    if (e.status.starting === true) starting = true
-    const until = e.status.cooldown_until === undefined ? NaN : Date.parse(e.status.cooldown_until)
+    if (e.status.self.starting === true) starting = true
+    const until = e.status.self.cooldown_until === undefined ? NaN : Date.parse(e.status.self.cooldown_until)
     if (!Number.isNaN(until) && until > cooldownUntil) cooldownUntil = until
   }
   return { starting, cooldownUntil }

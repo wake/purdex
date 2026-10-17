@@ -11,7 +11,7 @@ import { useNexHostStore } from '../../stores/useNexHostStore'
 import { startWatchStatus, useWatchStatusStore, type WatchEntry } from './status-store'
 import { handleWatchEvent } from './watch-ws'
 import { isLaunchBusy, isLaunchLocked, requestLaunch, startTarget, startWatchLaunch, useWatchLaunchStore, WATCH_LAUNCH_TIMEOUT_MS } from './launch'
-import type { WatchStatus } from './status-types'
+import { parseWatchStatus, type WatchStatus } from './status-types'
 
 const status = (hostId: string, state: 'awake' | 'resting' | 'none'): WatchStatus =>
   ({ self: { host_id: hostId, state, since: '2026-10-16T01:00:00Z', session_id: state === 'none' ? undefined : 'conv-1' }, enabled: true, auto_wake: true, mode: 'patrol', targets: [] })
@@ -468,7 +468,17 @@ describe('W5e-3: starting and cooldown_until end the busy state', () => {
   const T0 = Date.parse('2026-10-17T10:00:00Z')
   beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] }); vi.setSystemTime(T0) })
   afterEach(() => { vi.useRealTimers() })
-  const withFields = (extra: Partial<WatchStatus>): WatchStatus => ({ ...status('d1', 'none'), ...extra })
+  // The daemon's own JSON of GET /api/watch/status (Go `Status`; a zero time.Time is written out, omitempty does not drop it),
+  // with starting / cooldown_until where the daemon puts them: under `self`. Parsed by the real parser.
+  const wire = (self: Record<string, unknown>): unknown => ({
+    self: { host_id: 'd1', state: 'none', since: '0001-01-01T00:00:00Z', last_turn: '0001-01-01T00:00:00Z', last_delivery: '0001-01-01T00:00:00Z', targets: ['d1'], ...self },
+    watcher: null, enabled: true, auto_wake: true, mode: 'patrol', targets: ['d1'],
+  })
+  const withFields = (extra: { starting?: boolean; cooldown_until?: string }): WatchStatus => {
+    const parsed = parseWatchStatus(wire(extra))
+    if (!parsed) throw new Error('fixture unreadable')
+    return parsed
+  }
   const goBusy = async (kind: 'start' | 'wake' = 'start') => {
     stops.push(startWatchLaunch())
     reply(202, { host: 'mlab', host_id: 'd1' })
@@ -558,9 +568,33 @@ describe('W5e-3: starting and cooldown_until end the busy state', () => {
     vi.advanceTimersByTime(600_000) // the old cooldown's deadline passes: nothing of it is left to act
     expect(slot()).toBeNull()
     const e =useWatchStatusStore.getState().byHost.h1
-    expect(e === undefined || (e.kind === 'ok' && e.status.cooldown_until === undefined)).toBe(true)
+    expect(e === undefined || (e.kind === 'ok' && e.status.self.cooldown_until === undefined)).toBe(true)
     reply(202, { host: 'mlab', host_id: 'd1' })
     await requestLaunch('start', 'h1')
     expect(slot()?.phase).toBe('busy')
+  })
+
+  it('whole path: 202 -> watch.changed read says starting -> watch.changed read says a cooldown (daemon JSON, real parser and reader)', async () => {
+    stops.push(startWatchStatus())
+    fetchWatchStatus.mockResolvedValue({ kind: 'ok', status: parseWatchStatus(wire({})) })
+    await goBusy()
+    fetchWatchStatus.mockResolvedValue({ kind: 'ok', status: parseWatchStatus(wire({ starting: true })) })
+    handleWatchEvent('h1', 'watch.changed')
+    await vi.waitFor(() => expect(slot()).toMatchObject({ phase: 'busy', sawStarting: true }))
+    fetchWatchStatus.mockResolvedValue({ kind: 'ok', status: parseWatchStatus(wire({ cooldown_until: until(300_000) })) })
+    handleWatchEvent('h1', 'watch.changed')
+    await vi.waitFor(() => expect(slot()).toMatchObject({ phase: 'cooldown', timed: true, until: T0 + 300_000 }))
+  })
+
+  it('whole path: 202 -> starting -> starting false (daemon JSON) ends with the "did not report" phase', async () => {
+    stops.push(startWatchStatus())
+    fetchWatchStatus.mockResolvedValue({ kind: 'ok', status: parseWatchStatus(wire({})) })
+    await goBusy()
+    fetchWatchStatus.mockResolvedValue({ kind: 'ok', status: parseWatchStatus(wire({ starting: true })) })
+    handleWatchEvent('h1', 'watch.changed')
+    await vi.waitFor(() => expect(slot()).toMatchObject({ phase: 'busy', sawStarting: true }))
+    fetchWatchStatus.mockResolvedValue({ kind: 'ok', status: parseWatchStatus(wire({})) })
+    handleWatchEvent('h1', 'watch.changed')
+    await vi.waitFor(() => expect(slot()).toMatchObject({ phase: 'timeout' }))
   })
 })
