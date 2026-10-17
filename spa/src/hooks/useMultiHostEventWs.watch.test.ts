@@ -71,14 +71,14 @@ describe('useMultiHostEventWs watch pushes (W5e)', () => {
   it('a watch.changed frame goes to the watch handler with the host id and the type', async () => {
     const view = await connect()
     act(() => { sockets[0].emit(frame('watch.changed')) })
-    expect(handleWatchEvent).toHaveBeenCalledWith(HOST, 'watch.changed')
+    expect(handleWatchEvent).toHaveBeenCalledWith(HOST, 'watch.changed', expect.any(String))
     view.unmount()
   })
 
   it('a watch.events frame goes to the watch handler with the host id and the type', async () => {
     const view = await connect()
     act(() => { sockets[0].emit(frame('watch.events')) })
-    expect(handleWatchEvent).toHaveBeenCalledWith(HOST, 'watch.events')
+    expect(handleWatchEvent).toHaveBeenCalledWith(HOST, 'watch.events', JSON.stringify({ host_id: 'd1', unhandled: 2, cause: 'recorded' }))
     view.unmount()
   })
 

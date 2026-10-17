@@ -63,7 +63,7 @@ export function getPaneLabel(
     case 'watch-guardian':
       return t('watch.pane.guardian')
     case 'watch-events': {
-      const n = pendingCount(useWatchEventsStore.getState().byHost)
+      const n = pendingCount(useWatchEventsStore.getState().unhandled)
       return n > 0 ? t('watch.pane.events_n', { n }) : t('watch.pane.events')
     }
     case 'watch-host':

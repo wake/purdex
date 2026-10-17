@@ -129,7 +129,7 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   // A watch-host tab is named by the fleet's alias: subscribe, so the label follows the snapshot (getPaneLabel reads it).
   useFleetStore((s) => (primaryContent.kind === 'watch-host' ? s.snapshot?.hosts[primaryContent.fleetHostId]?.alias : undefined))
   // The events tab carries the count of events waiting (「事件 n」): subscribe, so the label follows it.
-  useWatchEventsStore((s) => (primaryContent.kind === 'watch-events' ? pendingCount(s.byHost) : 0))
+  useWatchEventsStore((s) => (primaryContent.kind === 'watch-events' ? pendingCount(s.unhandled) : 0))
   const baseLabel = getPaneLabel(primaryContent, sessionLookup, workspaceLookup, t)
   const session = sessionCode ? sessionLookup.getByCode(sessionCode) : undefined
 

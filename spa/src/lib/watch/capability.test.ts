@@ -5,7 +5,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const fetchWatchStatus = vi.fn()
 const fetchWatchEvents = vi.fn()
-vi.mock('./api', () => ({ fetchWatchStatus: (...a: unknown[]) => fetchWatchStatus(...a), fetchWatchEvents: (...a: unknown[]) => fetchWatchEvents(...a) }))
+const fetchWatchUnhandled = vi.fn()
+vi.mock('./api', () => ({ fetchWatchStatus: (...a: unknown[]) => fetchWatchStatus(...a), fetchWatchEvents: (...a: unknown[]) => fetchWatchEvents(...a), fetchWatchUnhandled: (...a: unknown[]) => fetchWatchUnhandled(...a) }))
 import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useTabStore } from '../../stores/useTabStore'
@@ -21,7 +22,8 @@ const flush = () => new Promise((r) => setTimeout(r, 0))
 
 let stops: Array<() => void> = []
 beforeEach(() => {
-  fetchWatchStatus.mockReset(); fetchWatchEvents.mockReset()
+  fetchWatchStatus.mockReset(); fetchWatchEvents.mockReset(); fetchWatchUnhandled.mockReset()
+  fetchWatchUnhandled.mockResolvedValue({ kind: 'ok', count: 0 })
   fetchWatchStatus.mockResolvedValue({ kind: 'ok', status })
   fetchWatchEvents.mockResolvedValue({ kind: 'ok', events: [] })
   useWatchStatusStore.getState().reset(); useWatchEventsStore.getState().reset()

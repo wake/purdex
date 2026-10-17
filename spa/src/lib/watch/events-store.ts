@@ -6,8 +6,8 @@
 // connection, or an older answer arriving after a newer one, is dropped. Nothing here is persisted.
 import { create } from 'zustand'
 import { useHostStore } from '../../stores/useHostStore'
-import { fetchWatchEvents } from './api'
-import type { WatchEvent } from './events-types'
+import { fetchWatchEvents, fetchWatchUnhandled } from './api'
+import { isCount, type WatchEvent } from './events-types'
 import { useWatchStatusStore } from './status-store'
 
 export type EventsEntry =
@@ -20,6 +20,13 @@ interface WatchEventsState {
   /** App hosts that carried the watch module at some point since the App started (kept when they go offline: the tab says so). */
   known: string[]
   know: (hostId: string) => void
+  /**
+   * App host id → the number of events its daemon has not handled: `GET /api/watch/unhandled` on connect, and each
+   * `watch.events` payload. The daemon's own count, because a list holds at most 500 rows and counting them would
+   * undercount a longer backlog. A host that has not said counts none.
+   */
+  unhandled: Record<string, number>
+  setUnhandled: (hostId: string, n: number) => void
   set: (hostId: string, entry: EventsEntry) => void
   forget: (hostId: string) => void
   reset: () => void
@@ -28,22 +35,25 @@ interface WatchEventsState {
 export const useWatchEventsStore = create<WatchEventsState>((set) => ({
   byHost: {},
   known: [],
+  unhandled: {},
   know: (hostId) => set((s) => (s.known.includes(hostId) ? s : { known: [...s.known, hostId] })),
+  setUnhandled: (hostId, n) => set((s) => (s.unhandled[hostId] === n ? s : { unhandled: { ...s.unhandled, [hostId]: n } })),
   set: (hostId, entry) => set((s) => ({ byHost: { ...s.byHost, [hostId]: entry } })),
   forget: (hostId) => set((s) => {
-    if (!(hostId in s.byHost)) return s
+    if (!(hostId in s.byHost) && !(hostId in s.unhandled)) return s
     const { [hostId]: _gone, ...byHost } = s.byHost
-    return { byHost }
+    const { [hostId]: _count, ...unhandled } = s.unhandled
+    return { byHost, unhandled }
   }),
-  reset: () => set({ byHost: {}, known: [] }),
+  reset: () => set({ byHost: {}, known: [], unhandled: {} }),
 }))
 
 export const isPending = (e: WatchEvent): boolean => e.status === 'pending'
 
-/** How many events wait for the watcher on the hosts that answered. A host that did not answer counts none. */
-export function pendingCount(byHost: Record<string, EventsEntry>): number {
+/** How many events wait for the watcher, over all hosts: the sum of what each daemon says. */
+export function pendingCount(unhandled: Record<string, number>): number {
   let n = 0
-  for (const e of Object.values(byHost)) if (e.kind === 'ok') n += e.events.filter(isPending).length
+  for (const c of Object.values(unhandled)) n += c
   return n
 }
 
@@ -60,9 +70,23 @@ export function rereadWatchEvents(hostId: string): void {
   rereader?.(hostId)
 }
 
+/** The running reader's way to set a host's count from a push (null while `startWatchEvents` is not running). */
+let applier: ((hostId: string, n: number) => void) | null = null
+
+/**
+ * A `watch.events` payload's `unhandled`: that host's count, at once. Taken only for a connected host that carries the watch
+ * module, and only a whole number >= 0. A count read still in flight is older than the push and is dropped.
+ */
+export function applyWatchUnhandled(hostId: string, n: number): void {
+  applier?.(hostId, n)
+}
+
 /** Installed once from main.tsx. Returns how to stop it. */
 export function startWatchEvents(): () => void {
   const gens = new Map<string, number>()
+  // The count has its own generation: a push (newer than any read already asked) and a disconnect both move it.
+  const cgens = new Map<string, number>()
+  const cbump = (hostId: string): number => { const g = (cgens.get(hostId) ?? 0) + 1; cgens.set(hostId, g); return g }
   const bump = (hostId: string): number => { const g = (gens.get(hostId) ?? 0) + 1; gens.set(hostId, g); return g }
   const isConnected = (hostId: string): boolean => {
     const s = useHostStore.getState()
@@ -78,18 +102,31 @@ export function startWatchEvents(): () => void {
       else useWatchEventsStore.getState().set(hostId, r.kind === 'ok' ? { kind: 'ok', events: r.events, at: Date.now() } : { kind: 'error', at: Date.now() })
     })
   }
+  const readCount = (hostId: string): void => {
+    const gen = cbump(hostId)
+    void fetchWatchUnhandled(hostId).then((r) => {
+      if (cgens.get(hostId) !== gen || !isConnected(hostId)) return
+      if (r.kind === 'ok') useWatchEventsStore.getState().setUnhandled(hostId, r.count)
+    })
+  }
   rereader = (hostId) => { if (isConnected(hostId) && carriesWatch(hostId)) read(hostId) }
+  applier = (hostId, n) => {
+    if (!isCount(n) || !isConnected(hostId) || !carriesWatch(hostId)) return
+    cbump(hostId)
+    useWatchEventsStore.getState().setUnhandled(hostId, n)
+  }
+  const dropCount = (hostId: string): void => { cbump(hostId) }
 
   // A host whose first read is under way: the status store may change again before it lands.
   const reading = new Set<string>()
   const first = (): void => {
     for (const [id, e] of Object.entries(useWatchStatusStore.getState().byHost)) {
-      if (e.kind === 'ok' && isConnected(id) && !(id in useWatchEventsStore.getState().byHost) && !reading.has(id)) { reading.add(id); useWatchEventsStore.getState().know(id); read(id) }
+      if (e.kind === 'ok' && isConnected(id) && !(id in useWatchEventsStore.getState().byHost) && !reading.has(id)) { reading.add(id); useWatchEventsStore.getState().know(id); read(id); readCount(id) }
     }
   }
   const unsubStatus = useWatchStatusStore.subscribe((next, prev) => {
     for (const id of Object.keys(prev.byHost)) {
-      if (!(id in next.byHost) || next.byHost[id].kind !== 'ok') { bump(id); reading.delete(id); useWatchEventsStore.getState().forget(id) }
+      if (!(id in next.byHost) || next.byHost[id].kind !== 'ok') { bump(id); dropCount(id); reading.delete(id); useWatchEventsStore.getState().forget(id) }
     }
     first()
   })
@@ -98,11 +135,11 @@ export function startWatchEvents(): () => void {
   })
   const unsubHosts = useHostStore.subscribe((next, prev) => {
     for (const id of Object.keys(prev.hosts)) {
-      if (!next.hosts[id]) { bump(id); reading.delete(id); useWatchEventsStore.getState().forget(id) }
+      if (!next.hosts[id]) { bump(id); dropCount(id); reading.delete(id); useWatchEventsStore.getState().forget(id) }
     }
     for (const id of Object.keys(next.hosts)) {
       if (prev.runtime[id]?.status === 'connected' && next.runtime[id]?.status !== 'connected') {
-        bump(id); reading.delete(id); useWatchEventsStore.getState().forget(id)
+        bump(id); dropCount(id); reading.delete(id); useWatchEventsStore.getState().forget(id)
       }
     }
   })
@@ -111,5 +148,6 @@ export function startWatchEvents(): () => void {
   return () => {
     unsubStatus(); unsubStore(); unsubHosts()
     rereader = null
+    applier = null
   }
 }

@@ -339,7 +339,7 @@ export function useMultiHostEventWs() {
             // connection like the fleet frame above, so a re-pointed host's old daemon cannot make us read the new one.
             const now = useHostStore.getState().hosts[hostId]
             if (!now || connectionKey(now) !== configKey) return
-            handleWatchEvent(hostId, event.type)
+            handleWatchEvent(hostId, event.type, event.value)
             return
           }
           if (isJournalEvent(event.type)) {
