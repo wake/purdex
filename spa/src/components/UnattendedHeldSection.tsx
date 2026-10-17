@@ -16,9 +16,17 @@ export interface HeldRow {
   a: Approval
 }
 
-/** The line, with the lead's title (when it has one) after it. */
-function withNode(text: string, title: ReactNode) {
-  return title === null ? text : <>{text} {title}</>
+const SLOT = '\uE000'
+
+/** The translated line with `node` in the slot the lead's name was given (a placeholder in the template). */
+function withSlot(text: string, node: ReactNode) {
+  const at = text.indexOf(SLOT)
+  return at < 0 ? text : <>{text.slice(0, at)}{node}{text.slice(at + 1)}</>
+}
+
+/** A lead's name, with its title (when it has one) muted right after it (U15). */
+function LeadLabel({ name, title }: { name: string; title?: string }) {
+  return <>{clipForDisplay(name, 40)}{title !== undefined && <> <span data-testid="held-lead-title" className="text-text-muted">{clipForDisplay(title, 40)}</span></>}</>
 }
 
 export function UnattendedHeldSection({ rows }: { rows: readonly HeldRow[] }) {
@@ -39,12 +47,13 @@ export function UnattendedHeldSection({ rows }: { rows: readonly HeldRow[] }) {
               if (a.kind === 'member_relay') {
                 const n = memberRelayNames(a)
                 const lead = leadNameByTeam(rosters, n.payload.team_id, n.lead)
-                return withNode(t('unattended.held.row_member', { host, lead: clipForDisplay(lead?.name ?? n.lead, 40), member: clipForDisplay(n.member, 40), time }),
-                  lead?.title !== undefined ? <span data-testid="held-lead-title" className="text-text-muted">{clipForDisplay(lead.title, 40)}</span> : null)
+                return withSlot(t('unattended.held.row_member', { host, lead: SLOT, member: clipForDisplay(n.member, 40), time }),
+                  <LeadLabel name={lead?.name ?? n.lead} title={lead?.title} />)
               }
-              const lead = leadNameBySession(rosters, a.origin.session_id, approvalSessionLabel(a.origin))
-              return withNode(t('unattended.held.row', { host, session: lead?.name !== undefined ? clipForDisplay(lead.name, 40) : approvalSessionLabel(a.origin), time }),
-                lead?.title !== undefined ? <span data-testid="held-lead-title" className="text-text-muted">{clipForDisplay(lead.title, 40)}</span> : null)
+              const label = approvalSessionLabel(a.origin)
+              const lead = leadNameBySession(rosters, a.origin.session_id, label)
+              return withSlot(t('unattended.held.row', { host, session: SLOT, time }),
+                <LeadLabel name={lead?.name ?? label} title={lead?.title} />)
             })()}
           </li>
         ))}
