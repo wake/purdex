@@ -175,7 +175,7 @@ describe('setConfirm of an entry only the band holds (an older session / month)'
     // What CardStack keeps: the last copy seen, every item answered. It is the caller's last resort when the store no longer holds the entry.
     const kept = () => {
       const c = wireConfirm('c9', { at: T0, items: [{ text: 'a', done: true }] })
-      return parseJournalPage(wirePage({ entries: [], confirms: [c], open_confirms: 1 })).confirms![0]
+      return parseJournalPage(wirePage({ entries: [], confirms: [c], open_confirms: 1 }))!.confirms![0]
     }
     const uncheck = () => st().setConfirm('h1', 's1', 'c9', 0, false, kept())
     it('while the check is still being written: the uncheck is sent last and the screen and count follow it', async () => {
