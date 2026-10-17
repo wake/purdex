@@ -1,13 +1,14 @@
 // spa/src/components/journal/TasksCard.tsx — the body of the tasks card (J-2d, spec §11): a sub-title, then the unit's tasks, open first,
 // done next, dropped last and struck through. Each row: number (team `7bcf08-12`, solo `#12`), title, owner, state dot + word, refs.
 // The tasks are read the first time the card opens (`UnitState.tasks === null`); after that the loader keeps them fresh on
-// `journal.changed what=tasks`. Hovering a row is shared with the journal rows (the hover state is the stack's, not the view memo's).
-import { useEffect, useMemo } from 'react'
+// `journal.changed what=tasks`. Hovering a row is shared with the journal rows through useJournalHoverStore (momentary, not the view memo).
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { PersonMark } from './PersonMark'
 import { RefChips } from './RefChips'
 import type { JournalTarget } from './useJournalTarget'
 import { displayNumber, sortTasks, taskKeyOfTask, type TaskHover } from '../../lib/journal/tasks'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useJournalHoverStore } from '../../stores/useJournalHoverStore'
 import { useJournalStore, type UnitState } from '../../stores/useJournalStore'
 import type { JournalTask, TaskState } from '../../lib/journal/types'
 
@@ -20,11 +21,9 @@ const STATE_STYLE: Record<TaskState, { dot: string; text: string }> = {
 interface Props {
   target: JournalTarget
   unit: UnitState
-  hover: TaskHover | null
-  onHover: (h: TaskHover | null) => void
 }
 
-export function TasksCard({ target, unit, hover, onHover }: Props) {
+export function TasksCard({ target, unit }: Props) {
   const t = useI18nStore((s) => s.t)
   const readHost = target.read?.hostId
   const readSession = target.read?.sessionId
@@ -45,7 +44,7 @@ export function TasksCard({ target, unit, hover, onHover }: Props) {
       {sorted.length > 0 && (
         <ul className="px-3 pb-2 space-y-0.5">
           {sorted.map((task) => (
-            <TaskItem key={task.number} task={task} solo={solo} personName={unit.personName} remoteUrl={unit.project.remoteUrl} hover={hover} onHover={onHover} />
+            <TaskItem key={task.number} task={task} solo={solo} personName={unit.personName} remoteUrl={unit.project.remoteUrl} />
           ))}
         </ul>
       )}
@@ -53,11 +52,25 @@ export function TasksCard({ target, unit, hover, onHover }: Props) {
   )
 }
 
-function TaskItem({ task, solo, personName, remoteUrl, hover, onHover }: { task: JournalTask; solo: boolean; personName: string; remoteUrl: string; hover: TaskHover | null; onHover: (h: TaskHover | null) => void }) {
+function TaskItem({ task, solo, personName, remoteUrl }: { task: JournalTask; solo: boolean; personName: string; remoteUrl: string }) {
   const t = useI18nStore((s) => s.t)
   const key = taskKeyOfTask(task)
   // Lit while the pointer is on this task, or on one of its journal rows (a task_new / task_done).
-  const linked = hover !== null && hover.key === key
+  const linked = useJournalHoverStore((s) => s.hover !== null && s.hover.key === key)
+  // What this task said the pointer is on, so that if the task goes away under the pointer (no mouseleave ever fires) it takes it back.
+  const said = useRef<TaskHover | null>(null)
+  const onEnter = useCallback(() => {
+    said.current = { key, from: 'task' }
+    useJournalHoverStore.getState().setHover(said.current)
+  }, [key])
+  const onLeave = useCallback(() => {
+    said.current = null
+    useJournalHoverStore.getState().setHover(null)
+  }, [])
+  useEffect(() => () => {
+    const st = useJournalHoverStore.getState()
+    if (said.current !== null && st.hover === said.current) st.setHover(null)
+  }, [])
   const style = STATE_STYLE[task.state]
   const struck = task.state === 'dropped'
   return (
@@ -66,8 +79,8 @@ function TaskItem({ task, solo, personName, remoteUrl, hover, onHover }: { task:
       data-task-key={key}
       data-state={task.state}
       data-linked={linked || undefined}
-      onMouseEnter={() => onHover({ key, from: 'task' })}
-      onMouseLeave={() => onHover(null)}
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
       className={`flex gap-2 py-1.5 px-1 -mx-1 rounded border-b border-border-subtle/50 last:border-b-0 ${linked ? 'bg-accent-muted ring-1 ring-accent' : ''}`}
     >
       <span data-testid="journal-task-number" className="w-16 shrink-0 text-[10.5px] font-mono text-text-muted pt-0.5 break-all">{displayNumber(task, solo)}</span>

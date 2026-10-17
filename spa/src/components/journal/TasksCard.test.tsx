@@ -1,5 +1,6 @@
 // spa/src/components/journal/TasksCard.test.tsx — the tasks card wired to the real stores (J-2d): the first open reads the tasks, the
 // order and the row's parts, and the hover link between a task and its task_new / task_done journal rows, both ways.
+import { createElement } from 'react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 
@@ -15,6 +16,19 @@ vi.mock('../team/TeamSeatIcon', () => ({
   TeamSeatHostBadge: () => <span data-testid="seat-host" />,
 }))
 
+// A render counter per entry kind: every JournalRow render renders its KindChip once, so the count is the row's render count.
+const chipRenders = vi.hoisted(() => ({ byKind: {} as Record<string, number> }))
+vi.mock('./KindChip', async (orig) => {
+  const actual = await orig<typeof import('./KindChip')>()
+  return {
+    ...actual,
+    KindChip: (p: { kind: string }) => {
+      chipRenders.byKind[p.kind] = (chipRenders.byKind[p.kind] ?? 0) + 1
+      return createElement(actual.KindChip, p as { kind: never })
+    },
+  }
+})
+
 import { CardStack } from './CardStack'
 import { TeamDisplayProvider } from '../team/TeamDisplayProvider'
 import { HOST, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
@@ -24,6 +38,7 @@ import { clearModuleRegistry } from '../../lib/module-registry'
 import { useTabStore } from '../../stores/useTabStore'
 import { useJournalStore } from '../../stores/useJournalStore'
 import { useJournalUiStore } from '../../stores/useJournalUiStore'
+import { useJournalHoverStore } from '../../stores/useJournalHoverStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import type { JournalEntry, JournalTask } from '../../lib/journal/types'
@@ -48,6 +63,8 @@ beforeEach(() => {
   localStorage.clear()
   resetTeamStores()
   useJournalStore.getState().reset()
+  useJournalHoverStore.setState({ hover: null })
+  chipRenders.byKind = {}
   useJournalUiStore.setState({ lastWidths: {}, teamOpen: {} })
   clearViewMemos()
   clearModuleRegistry()
@@ -188,5 +205,70 @@ describe('the hover link between a task and its journal rows', () => {
     const before = { ...readViewMemo(HOST, key) }
     fireEvent.mouseEnter(taskRow('12'))
     expect(readViewMemo(HOST, key)).toEqual(before)
+  })
+})
+
+describe('the hover link: who re-renders (J-2d, review 2)', () => {
+  const ENTRIES = [
+    entry('ex', { kind: 'exec', text: 'an exec line' }),
+    entry('cm', { kind: 'comm', text: 'a comm line' }),
+    entry('tn', { kind: 'task_new', text: '#12 Ship it' }),
+    entry('td', { kind: 'task_done', text: '#13 Other', at: AT + 1000 }),
+  ]
+  const TASKS = [task('12', 'Ship it', 'open'), task('13', 'Other', 'open')]
+  const linked = (n: HTMLElement) => n.getAttribute('data-linked') === 'true'
+  const count = (kind: string) => chipRenders.byKind[kind] ?? 0
+
+  it('hovering a task re-renders only the rows of that task: a row of another kind or another task stays as it was', () => {
+    seedSolo(TASKS, ENTRIES); mount()
+    const before = { ...chipRenders.byKind }
+    fireEvent.mouseEnter(taskRow('12'))
+    expect(linked(journalRow('tn'))).toBe(true)
+    expect(count('task_new')).toBeGreaterThan(before.task_new) // the linked row did re-render (the counter works)
+    expect(count('exec')).toBe(before.exec)
+    expect(count('comm')).toBe(before.comm)
+    expect(count('task_done')).toBe(before.task_done) // #13: not this task's row
+    fireEvent.mouseLeave(taskRow('12'))
+    expect(count('exec')).toBe(before.exec)
+    expect(count('task_done')).toBe(before.task_done)
+  })
+  it('hovering a journal row re-renders only the rows that share its task, not the stream', () => {
+    seedSolo(TASKS, ENTRIES); mount()
+    const before = { ...chipRenders.byKind }
+    fireEvent.mouseEnter(journalRow('tn'))
+    fireEvent.mouseLeave(journalRow('tn'))
+    expect(count('exec')).toBe(before.exec)
+    expect(count('comm')).toBe(before.comm)
+    expect(count('task_done')).toBe(before.task_done)
+  })
+  it('a re-render of the card with the same entries does not re-render the rows (the row is memoised)', () => {
+    seedSolo(TASKS, ENTRIES); mount()
+    const before = { ...chipRenders.byKind }
+    act(() => { seedUnit(HOST, 'SA', SOLO, { tasks: TASKS, entries: ENTRIES }) }) // a new unit object, the same entry objects
+    expect(chipRenders.byKind).toEqual(before)
+  })
+
+  it('a hovered journal row that goes away takes its highlight with it', () => {
+    seedSolo(TASKS, ENTRIES); mount()
+    fireEvent.mouseEnter(journalRow('tn'))
+    expect(linked(taskRow('12'))).toBe(true)
+    act(() => { seedUnit(HOST, 'SA', SOLO, { tasks: TASKS, entries: ENTRIES.filter((e) => e.id !== 'tn') }) }) // no mouseleave ever fires
+    expect(linked(taskRow('12'))).toBe(false)
+    expect(useJournalHoverStore.getState().hover).toBeNull()
+  })
+  it('a hovered task that goes away takes its highlight with it', () => {
+    seedSolo(TASKS, ENTRIES); mount()
+    fireEvent.mouseEnter(taskRow('12'))
+    expect(linked(journalRow('tn'))).toBe(true)
+    act(() => { seedUnit(HOST, 'SA', SOLO, { tasks: TASKS.filter((x) => x.number !== '12'), entries: ENTRIES }) })
+    expect(linked(journalRow('tn'))).toBe(false)
+    expect(useJournalHoverStore.getState().hover).toBeNull()
+  })
+  it('a row going away that was not the hovered one leaves the hover alone', () => {
+    seedSolo(TASKS, ENTRIES); mount()
+    fireEvent.mouseEnter(taskRow('12'))
+    act(() => { seedUnit(HOST, 'SA', SOLO, { tasks: TASKS, entries: ENTRIES.filter((e) => e.id !== 'td') }) })
+    expect(linked(journalRow('tn'))).toBe(true)
+    expect(useJournalHoverStore.getState().hover).toEqual({ key: '12', from: 'task' })
   })
 })

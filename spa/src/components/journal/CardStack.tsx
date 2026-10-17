@@ -23,7 +23,6 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { cardWidth, useJournalUiStore, type CardKey } from '../../stores/useJournalUiStore'
 import { keepFocus } from '../../lib/keep-focus'
 import { patchUnitMemo, useViewMemo } from '../../lib/journal/use-view-memo'
-import type { TaskHover } from '../../lib/journal/tasks'
 import type { ViewMemo } from '../../lib/journal/view-memory'
 
 /**
@@ -75,8 +74,6 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
   const last = useJournalUiStore((s) => s.lastWidths)
   const rootRef = useRef<HTMLDivElement>(null)
   const available = useContentWidth(rootRef)
-  // The tasks tab's hover link (a task <-> its task_new / task_done rows): momentary, so the stack's own state, never the view memo.
-  const [hover, setHover] = useState<TaskHover | null>(null)
 
   // The open 待確認 detail takes the roadmap's place (a card to the journal's left): it counts as the roadmap for the narrow-window
   // drop, and `roadmapOpen` itself is never touched, so closing the detail brings the roadmap back as it was.
@@ -147,7 +144,7 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
           }
           onClose={() => patch({ journalOpen: false })}
         >
-          {unit && <JournalCard key={`${target.memoHost}\u0000${target.memoKey}`} target={target} unit={unit} hover={hover} onHover={setHover} />}
+          {unit && <JournalCard key={`${target.memoHost}\u0000${target.memoKey}`} target={target} unit={unit} />}
           {target.unreachableHost !== null && !target.unit && (
             <div data-testid="journal-unreachable" className="p-3 text-text-secondary">{t('journal.card.unreachable', { host: target.unreachableHost })}</div>
           )}
@@ -155,7 +152,7 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
       )}
       {shown.tasks && (
         <CardFrame testId="journal-tasks-card" width={widths.tasks} onCommitWidth={commit('tasks')} title={t('journal.card.tasks')} onClose={() => patch({ tasksOpen: false })}>
-          {unit && <TasksCard key={`${target.memoHost}\u0000${target.memoKey}`} target={target} unit={unit} hover={hover} onHover={setHover} />}
+          {unit && <TasksCard key={`${target.memoHost}\u0000${target.memoKey}`} target={target} unit={unit} />}
         </CardFrame>
       )}
     </div>
