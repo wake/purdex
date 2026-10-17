@@ -327,6 +327,39 @@ func TestServe_ATarReaderThatStallsIsDropped(t *testing.T) {
 	assert.Less(t, n, int64(len(big)))
 }
 
+// A reader that never stalls but never hurries either is dropped when the tar has taken too long.
+func TestServe_ATarThatTakesTooLongIsCut(t *testing.T) {
+	old := maxTar
+	maxTar = 500 * time.Millisecond
+	t.Cleanup(func() { maxTar = old })
+	repo, _, _ := origin(t)
+	big := make([]byte, 32<<20)
+	_, _ = rand.Read(big)
+	require.NoError(t, os.WriteFile(repo+"/big.bin", big, 0o644))
+	gitOut(t, repo, "add", "big.bin")
+	gitOut(t, repo, "commit", "-q", "-m", "big")
+	head := gitOut(t, repo, "rev-parse", "HEAD")
+	claim := wire.NewClaimID()
+	require.NoError(t, Pin(context.Background(), repo, "j_11", head))
+	srv := serve(t, &fakeSource{claimID: claim, ref: Ref{RepoDir: repo, Commit: head}})
+	resp, err := http.Get(srv.URL + "/v1/jobs/j_11/snapshot?claim_id=" + claim + "&format=tar")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	var n int64
+	buf := make([]byte, 4096)
+	for deadline := time.Now().Add(15 * time.Second); time.Now().Before(deadline); {
+		k, rerr := resp.Body.Read(buf)
+		n += int64(k)
+		if rerr != nil {
+			assert.NotEqual(t, io.EOF, rerr, "cut off, not finished")
+			assert.Less(t, n, int64(len(big)))
+			return
+		}
+		time.Sleep(20 * time.Millisecond) // steady, never stalled
+	}
+	t.Fatal("the tar was never cut off")
+}
+
 func TestPin_PinsKeepsAndUnpins(t *testing.T) {
 	repo, _, snap := origin(t)
 	ctx := context.Background()

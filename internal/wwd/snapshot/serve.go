@@ -129,7 +129,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // serveTar streams git archive. The first block is read before the answer is begun, so a git that fails at once is a 500; one that
 // fails later aborts the connection, which the worker's tar reader sees as a cut archive.
 func serveTar(w http.ResponseWriter, r *http.Request, ref Ref) {
-	cmd := execstat.CommandContext(r.Context(), "wwd.snapshot-archive", "git", "-C", ref.RepoDir, "archive", "--format=tar", ref.Commit)
+	ctx, cancel := context.WithTimeout(r.Context(), maxTar)
+	defer cancel()
+	cmd := execstat.CommandContext(ctx, "wwd.snapshot-archive", "git", "-C", ref.RepoDir, "archive", "--format=tar", ref.Commit)
 	cmd.Env = gitEnv()
 	var errb strings.Builder
 	cmd.Stderr = &errb
@@ -158,6 +160,10 @@ func serveTar(w http.ResponseWriter, r *http.Request, ref Ref) {
 		panic(http.ErrAbortHandler)
 	}
 }
+
+// maxTar is the most a tar may take from start to end, however steadily the reader reads: a slow reader holds a git process and a slot.
+// (A variable so that a test can lower it.)
+var maxTar = 10 * time.Minute
 
 // writeStall is how long one write to the client may take: a reader that takes nothing for that long is dropped, so that it cannot hold
 // a git archive process (and a slot) open for good. (A variable so that a test can lower it.)
