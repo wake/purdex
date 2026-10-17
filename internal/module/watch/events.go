@@ -146,6 +146,7 @@ func (m *Module) handleEvents(w http.ResponseWriter, r *http.Request) {
 type ackBody struct {
 	IDs         []string `json:"ids"`
 	All         bool     `json:"all"`
+	Host        string   `json:"host,omitempty"` // with all: the paired host whose pending events are meant (default: this one)
 	Note        string   `json:"note"`
 	OriginInbox string   `json:"origin_inbox,omitempty"` // the caller's own session, so the ack says who gave the order
 }
@@ -171,24 +172,94 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, "bad_note", err.Error())
 		return
 	}
-	if (len(req.IDs) == 0) == !req.All || len(req.IDs) > maxAckIDs {
-		m.writeErr(w, http.StatusBadRequest, "bad_request", "name 1 to 500 ids, or ask for all")
+	if why := validAck(req.IDs, req.All, req.Note); why != "" {
+		m.writeErr(w, http.StatusBadRequest, "bad_request", why)
 		return
 	}
-	for _, id := range req.IDs {
-		if !eventIDPattern.MatchString(id) {
-			m.writeErr(w, http.StatusBadRequest, "bad_request", "an id has characters it may not have")
-			return
-		}
+	if req.Host != "" && !req.All {
+		m.writeErr(w, http.StatusBadRequest, "bad_request", "host is for all: name the ids of that host's events instead")
+		return
 	}
 	by := m.whoIs(req.OriginInbox)
-	resp, status, err := m.ackLocal(req.IDs, req.All, watch.Ack{Note: req.Note, By: by})
-	if err != nil {
-		m.writeErr(w, status, "ack_failed", err.Error())
+	own := m.hostName()
+	ack := watch.Ack{Note: req.Note, By: by}
+	ctx := r.Context()
+
+	// all, on this host or on the paired host named
+	if req.All {
+		if req.Host == "" || m.isSelf(req.Host) {
+			resp, status, err := m.ackLocal(nil, true, ack)
+			if err != nil {
+				m.writeErr(w, status, "ack_failed", err.Error())
+				return
+			}
+			m.writeJSON(w, http.StatusOK, resp)
+			return
+		}
+		entry, _, ok := m.peerEntry(req.Host)
+		if !ok {
+			m.writeErr(w, http.StatusBadRequest, "bad_request", "no paired host "+req.Host)
+			return
+		}
+		res := m.forwardAck(ctx, entry, nil, true, req.Note, by)
+		m.writeJSON(w, http.StatusOK, ackResponse{Results: res, Handled: countHandled(res), Unhandled: m.unhandledOrZero()})
 		return
 	}
-	m.writeJSON(w, http.StatusOK, resp)
+
+	// ids: those of this host here, the others to the host that recorded them, the rest not found
+	byID := map[string]watch.AckResult{}
+	var local []string
+	foreign := map[string][]string{} // host name -> ids
+	for _, id := range req.IDs {
+		switch o := ownerOf(id); {
+		case o == own:
+			local = append(local, id)
+		default:
+			if _, ok := m.peerByHostName(o); ok {
+				foreign[o] = append(foreign[o], id)
+			} else {
+				byID[id] = watch.AckResult{ID: id, Outcome: watch.AckNotFound}
+			}
+		}
+	}
+	if len(local) > 0 {
+		resp, status, err := m.ackLocal(local, false, ack)
+		if err != nil {
+			m.writeErr(w, status, "ack_failed", err.Error())
+			return
+		}
+		for _, x := range resp.Results {
+			byID[x.ID] = x
+		}
+	}
+	for name, ids := range foreign {
+		entry, _ := m.peerByHostName(name)
+		for _, x := range m.forwardAck(ctx, entry, ids, false, req.Note, by) {
+			byID[x.ID] = x
+		}
+	}
+	res := make([]watch.AckResult, 0, len(req.IDs))
+	for _, id := range req.IDs {
+		x, ok := byID[id]
+		if !ok { // an id the other host's answer did not mention: reported, not assumed
+			x = watch.AckResult{ID: id, Outcome: watch.AckRefused}
+		}
+		res = append(res, x)
+	}
+	m.writeJSON(w, http.StatusOK, ackResponse{Results: res, Handled: countHandled(res), Unhandled: m.unhandledOrZero()})
 }
+
+func countHandled(res []watch.AckResult) int {
+	n := 0
+	for _, x := range res {
+		if x.Outcome == watch.AckHandled {
+			n++
+		}
+	}
+	return n
+}
+
+func (m *Module) unhandledOrZero() int { n, _ := m.unhandledCount(); return n }
 
 // ackLocal marks this host's events handled: the ids named (those that are not this host's events come back not_found), or every
 // pending one. watch.events goes out once when anything became handled.
@@ -214,11 +285,7 @@ func (m *Module) ackLocal(ids []string, all bool, a watch.Ack) (ackResponse, int
 		return ackResponse{}, http.StatusInternalServerError, err
 	}
 	handled := 0
-	for _, x := range res {
-		if x.Outcome == watch.AckHandled {
-			handled++
-		}
-	}
+	handled = countHandled(res)
 	if handled > 0 {
 		m.emitEvents(CauseAcked)
 	}

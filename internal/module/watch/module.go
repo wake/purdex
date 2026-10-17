@@ -229,6 +229,9 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/watch/unhandled", m.handleUnhandled)
 	mux.HandleFunc("GET /api/watch/events", m.handleEvents)
 	mux.HandleFunc("POST /api/watch/ack", m.handleAck)
+	mux.HandleFunc("POST /api/peers/watch/ack", m.handlePeerAck)
+	mux.HandleFunc("POST /api/peers/watch/log", m.handlePeerLog)
+	mux.HandleFunc("GET /api/watch/log", m.handleLog)
 }
 
 // HolderView is the answer about this host's holder: the wire form of both routes.

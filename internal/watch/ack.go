@@ -42,6 +42,10 @@ const (
 	AckHandled  AckOutcome = "handled"   // marked handled now
 	AckAlready  AckOutcome = "already"   // it was handled before: the first note stays
 	AckNotFound AckOutcome = "not_found" // no such event on this host
+	// The rest are for an ack that went to another host.
+	AckUnreachable AckOutcome = "unreachable" // that host could not be reached
+	AckUnsupported AckOutcome = "unsupported" // that host's daemon has no such route (an older one)
+	AckRefused     AckOutcome = "refused"     // that host answered no, or something that is not an answer
 )
 
 // AckResult is the outcome for one id.
