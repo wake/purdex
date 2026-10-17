@@ -244,21 +244,23 @@ func itoa(n int) string {
 	return string(b)
 }
 
-// The pinned band is every pinned entry of the unit, newest first by (at, id) descending.
-// Mutation gate: oldest first (red); only entries of the last page (red); an unpinned entry included (red).
-func TestPinned_NewestFirst(t *testing.T) {
+// confirms[] is every confirm entry with an unchecked item, newest first by (at, id) descending; a confirm whose items are all
+// checked, and any other kind, is not in it.
+// Mutation gate: oldest first (red); an all-checked confirm included (red); a non-confirm with items included (red).
+func TestConfirms_OpenOnesNewestFirst(t *testing.T) {
 	all := []Entry{
-		{ID: "a", Kind: KindConfirm, At: at(time.October, 1, 1), Pinned: true, Items: []Item{{Text: "q"}}},
-		{ID: "b", Kind: KindExec, At: at(time.October, 2, 1), Text: "not pinned"},
-		{ID: "c", Kind: KindConfirm, At: at(time.November, 1, 1), Pinned: true, Items: []Item{{Text: "q"}}},
-		{ID: "d", Kind: KindComm, At: at(time.November, 1, 1), Pinned: true, Text: "tie with c"},
+		{ID: "a", Kind: KindConfirm, At: at(time.October, 1, 1), Items: []Item{{Text: "q"}}},
+		{ID: "b", Kind: KindExec, At: at(time.October, 2, 1), Items: []Item{{Text: "not a question"}}},
+		{ID: "c", Kind: KindConfirm, At: at(time.November, 1, 1), Items: []Item{{Text: "q", Done: true}, {Text: "r"}}},
+		{ID: "d", Kind: KindConfirm, At: at(time.November, 1, 1), Items: []Item{{Text: "q", Done: true}}},
+		{ID: "e", Kind: KindConfirm, At: at(time.November, 1, 1), Items: []Item{{Text: "tie with c"}}},
 	}
-	got := Pinned(all)
-	if !slices.Equal(ids(got), []string{"d", "c", "a"}) {
-		t.Fatalf("pinned = %v, want [d c a]", ids(got))
+	got := Confirms(all)
+	if !slices.Equal(ids(got), []string{"e", "c", "a"}) {
+		t.Fatalf("confirms = %v, want [e c a]", ids(got))
 	}
-	if got := Pinned(nil); len(got) != 0 {
-		t.Fatalf("pinned of nothing = %v", got)
+	if got := Confirms(nil); len(got) != 0 {
+		t.Fatalf("confirms of nothing = %v", got)
 	}
 }
 

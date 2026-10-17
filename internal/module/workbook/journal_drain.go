@@ -332,7 +332,7 @@ func at(ms int64) time.Time {
 }
 
 // putNew writes an entry that is not in its month file yet. A replay (a crash after the write, before the row was marked
-// done) must not overwrite what happened to the entry since: a pin set or cleared by hand, an item ticked.
+// done) must not overwrite what happened to the entry since: an item checked by hand.
 func (h home) putNew(e journal.Entry) error {
 	file := journal.MonthFile(h.journalDir, e.At)
 	have, err := journal.Parse(file)
@@ -423,7 +423,6 @@ func (d *Drainer) writeJournal(h home, ent Entry, p journalPayload) error {
 				e.Person = d.person()
 			}
 		}
-		e.Pinned = e.Kind == journal.KindConfirm
 		if err := h.putNew(e); err != nil {
 			return err
 		}
@@ -446,8 +445,8 @@ func (d *Drainer) writeJournal(h home, ent Entry, p journalPayload) error {
 	return nil
 }
 
-// tick marks one confirm item answered, in whichever month file holds the entry; a confirm whose items are all
-// answered is unpinned. An entry or item that is not there (edited away by hand) is skipped: retrying cannot make it.
+// tick marks one confirm item answered, in whichever month file holds the entry; an item set by hand is left alone. An
+// entry or item that is not there (edited away by hand), or not a confirm, is skipped: retrying cannot make it.
 func (d *Drainer) tick(h home, t payloadTick) error {
 	files, err := filepath.Glob(filepath.Join(h.journalDir, "*.md"))
 	if err != nil {
@@ -462,20 +461,10 @@ func (d *Drainer) tick(h home, t payloadTick) error {
 			if e.ID != t.Entry {
 				continue
 			}
-			if t.Idx < 0 || t.Idx >= len(e.Items) {
-				d.logf("[workbook] journal tick: entry %s has no item %d", t.Entry, t.Idx)
+			_, err := journal.Tick(files[i], t.Entry, t.Idx)
+			if errors.Is(err, journal.ErrItemRange) || errors.Is(err, journal.ErrNotConfirm) {
+				d.logf("[workbook] journal tick: %v", err)
 				return nil
-			}
-			if _, err := journal.Tick(files[i], t.Entry, t.Idx); err != nil {
-				return err
-			}
-			e.Items[t.Idx].Done = true
-			all := true
-			for _, it := range e.Items {
-				all = all && it.Done
-			}
-			if all {
-				_, err = journal.SetPinned(files[i], t.Entry, false)
 			}
 			return err
 		}
