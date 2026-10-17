@@ -217,7 +217,10 @@ func TestOpenAcks_ADamagedLineKeepsTheFileAsBadAndTheRestGoesOn(t *testing.T) {
 		s, err := OpenAcks(dir, c.now)
 		require.Error(t, err, name)
 		require.True(t, s.Handled("mlab-1"), name)
-		raw, rerr := os.ReadFile(filepath.Join(dir, ackFile+".bad"))
+		kept, gerr := filepath.Glob(filepath.Join(dir, ackFile+".bad*"))
+		require.NoError(t, gerr, name)
+		require.Len(t, kept, 1, name)
+		raw, rerr := os.ReadFile(kept[0])
 		require.NoError(t, rerr, name)
 		require.Equal(t, body, string(raw), "the damaged file is kept as it was: "+name)
 
@@ -227,4 +230,25 @@ func TestOpenAcks_ADamagedLineKeepsTheFileAsBadAndTheRestGoesOn(t *testing.T) {
 		require.NoError(t, err, "the rewritten file is whole: "+name)
 		require.True(t, again.Handled("mlab-1") && again.Handled("mlab-9"), name)
 	}
+}
+
+// A second damage does not overwrite the evidence of the first: every damaged file is kept under a name of its own.
+func TestOpenAcks_EveryDamagedFileIsKeptUnderAUniqueName(t *testing.T) {
+	c := newOutboxClock()
+	dir := t.TempDir()
+	for i, body := range []string{"first damage\n", "second damage\n", "third damage\n"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ackFile), []byte(body), 0o600))
+		_, err := OpenAcks(dir, c.now) // the same clock: the names must not depend on it alone
+		require.Error(t, err, i)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, ackFile+".bad*"))
+	require.NoError(t, err)
+	require.Len(t, matches, 3)
+	var bodies []string
+	for _, m := range matches {
+		raw, err := os.ReadFile(m)
+		require.NoError(t, err)
+		bodies = append(bodies, string(raw))
+	}
+	require.ElementsMatch(t, []string{"first damage\n", "second damage\n", "third damage\n"}, bodies)
 }

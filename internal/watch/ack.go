@@ -85,7 +85,7 @@ func (s *AckStore) SetLogf(f func(format string, args ...any)) {
 }
 
 // OpenAcks reads the ack log in dir. A file that cannot be read is an error and the store is empty (every event reads as pending, the
-// safe side). A line that is not an ack is not dropped quietly: the file is kept as acks.jsonl.bad, the acks that could be read are
+// safe side). A line that is not an ack is not dropped quietly: the file is kept as acks.jsonl.bad-<time>, the acks that could be read are
 // written to a new file and go on, and the error says so; the next ack rewrites only that new file.
 func OpenAcks(dir string, now func() time.Time) (*AckStore, error) {
 	s := &AckStore{dir: dir, now: now, acks: map[string]Ack{}}
@@ -98,7 +98,8 @@ func OpenAcks(dir string, now func() time.Time) (*AckStore, error) {
 		return s, nil
 	}
 	path := filepath.Join(dir, ackFile)
-	if rerr := os.Rename(path, path+".bad"); rerr != nil {
+	bad := s.badName(path)
+	if rerr := os.Rename(path, bad); rerr != nil {
 		return s, fmt.Errorf("%s has %d line(s) that are not acks, and could not be set aside: %w", path, skipped, rerr)
 	}
 	list := make([]Ack, 0, len(acks))
@@ -106,9 +107,21 @@ func OpenAcks(dir string, now func() time.Time) (*AckStore, error) {
 		list = append(list, a)
 	}
 	if _, werr := s.writeAll(list); werr != nil {
-		return s, fmt.Errorf("%s kept as %s.bad (%d line(s) are not acks), but the new file could not be written: %w", path, path, skipped, werr)
+		return s, fmt.Errorf("%s kept as %s (%d line(s) are not acks), but the new file could not be written: %w", path, bad, skipped, werr)
 	}
-	return s, fmt.Errorf("%s had %d line(s) that are not acks: kept as %s.bad, the rest goes on", path, skipped, path)
+	return s, fmt.Errorf("%s had %d line(s) that are not acks: kept as %s, the rest goes on", path, skipped, bad)
+}
+
+// badName is a name for a damaged log that no earlier damaged log has: the file name, ".bad", the time, and a number when that is taken.
+func (s *AckStore) badName(path string) string {
+	base := path + ".bad-" + s.now().UTC().Format("20060102T150405Z")
+	name := base
+	for i := 1; ; i++ {
+		if _, err := os.Lstat(name); errors.Is(err, os.ErrNotExist) {
+			return name
+		}
+		name = fmt.Sprintf("%s-%d", base, i)
+	}
 }
 
 // ReadAcks reads the ack log in dir without a store (the CLI reads it with the daemon down). A missing file is no acks; a line that

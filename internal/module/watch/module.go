@@ -65,6 +65,10 @@ type Module struct {
 	acks *watch.AckStore
 	// evMu orders the counts and the sends of watch.events.
 	evMu sync.Mutex
+	// a count that failed is sent again after evRetryAfter (a test shortens it); evRetrying says one retry is waiting.
+	evRetryAfter time.Duration
+	evRetryMu    sync.Mutex
+	evRetrying   bool
 	// manualDelivery keeps Start from running the delivery loop: a test calls deliverPass itself.
 	manualDelivery bool
 	emit           func(core.HostEvent)

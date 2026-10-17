@@ -1,6 +1,7 @@
 package watchmod
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -75,7 +76,8 @@ func (m *Module) emitEvents(cause string) {
 	defer m.evMu.Unlock()
 	n, err := m.unhandledCount()
 	if err != nil {
-		m.logf("[watch] unhandled count for watch.events: %v", err)
+		m.logf("[watch] unhandled count for watch.events (tried again shortly): %v", err)
+		m.retryEvents(cause)
 		return
 	}
 	m.core.CfgMu.RLock()
@@ -248,3 +250,30 @@ func (m *Module) whoIs(inbox string) string {
 	}
 	return watch.Plain(o.Ref)
 }
+
+// retryEvents sends watch.events again a little later, once, for a count that could not be read: the state changed, so the clients
+// must hear of it. A retry that fails again asks for the next one.
+func (m *Module) retryEvents(cause string) {
+	m.evRetryMu.Lock()
+	if m.evRetrying {
+		m.evRetryMu.Unlock()
+		return
+	}
+	m.evRetrying = true
+	m.evRetryMu.Unlock()
+	after := m.evRetryAfter
+	if after <= 0 {
+		after = evRetryDefault
+	}
+	time.AfterFunc(after, func() {
+		m.evRetryMu.Lock()
+		m.evRetrying = false
+		m.evRetryMu.Unlock()
+		if _, done, ok := m.enter(context.Background()); ok {
+			defer done()
+			m.emitEvents(cause)
+		}
+	})
+}
+
+const evRetryDefault = 5 * time.Second

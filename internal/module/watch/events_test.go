@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -269,4 +270,27 @@ func TestWatchEvents_TheLastPushIsTheCurrentCount(t *testing.T) {
 	defer mu.Unlock()
 	require.NotEmpty(t, sent)
 	require.Equal(t, 1, sent[len(sent)-1].Unhandled, "the badge ends on the number that is true now: %+v", sent)
+}
+
+// A count that cannot be read when the event is recorded does not lose the push: it is sent again once the log can be read, with the
+// count as it is then.
+func TestWatchEvents_ACountThatFailedIsSentAgainWhenItCanBeRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("a directory cannot be made unreadable for root")
+	}
+	r := newEventsRig(t)
+	r.m.evRetryAfter = 10 * time.Millisecond
+	require.NoError(t, r.m.Start(context.Background()))
+	t.Cleanup(func() { _ = r.m.Stop(context.Background()) })
+	dir := r.m.dlv.logDir
+	require.NoError(t, os.Chmod(dir, 0o000)) // the log cannot be read
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+
+	r.m.Enqueue(watch.Record{ID: "mlab-new", Kind: watch.KindPressureHigh, Host: "mlab", At: r.m.now()})
+	require.Equal(t, 0, r.ev.n(), "nothing could be counted")
+
+	require.NoError(t, os.Chmod(dir, 0o700)) // readable again
+	require.Eventually(t, func() bool { return r.ev.n() >= 1 }, 3*time.Second, 5*time.Millisecond)
+	require.Equal(t, 3, payloadOf(t, r.ev).Unhandled, "the count of the log as it is")
+	require.Equal(t, CauseRecorded, payloadOf(t, r.ev).Cause)
 }
