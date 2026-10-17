@@ -41,9 +41,8 @@ const (
 // what the module falls back to when it cannot read or store its settings.
 const ModeMeasure = "measure"
 
-// Snapshot is one reading of the host. Mode is the host setting's mode. From
-// P1 the lease routes' GET also fills Leases, Waiters and Recent; they are
-// omitted when empty, so a host with no leases reads as in P0.
+// Snapshot is one reading of the host. Mode is the host setting's mode. (The lease lists it once carried - leases, waiters,
+// recent, positions, gap_until - went with the lease routes, WWD-0a.)
 type Snapshot struct {
 	SampledAt time.Time    `json:"sampled_at"`
 	Available bool         `json:"available"`
@@ -52,17 +51,6 @@ type Snapshot struct {
 	Host      HostUse      `json:"host"`
 	Sessions  []SessionUse `json:"sessions"`
 	Mode      string       `json:"mode"`
-	// Leases are the held leases, Waiters the queue (FIFO) and Recent the
-	// last ended leases, newest first.
-	Leases  []LeaseView  `json:"leases,omitempty"`
-	Waiters []WaiterView `json:"waiters,omitempty"`
-	Recent  []RecentView `json:"recent,omitempty"`
-	// Positions are the live positions of mode lease, oldest first (amendment
-	// A); Waiters keeps only the wait-mode rows that have no position.
-	Positions []PositionView `json:"positions,omitempty"`
-	// GapUntil is when the pause after the last grant ends, unix ms; absent
-	// when no gap is running (in advise it is the shadow's).
-	GapUntil int64 `json:"gap_until,omitempty"`
 	// Samples is the ring of the last 10 minutes, oldest first; only when
 	// asked for with ?samples=1.
 	Samples []TrendPoint `json:"samples,omitempty"`
@@ -89,19 +77,17 @@ type HostReader interface {
 }
 
 // HostDetailReader is what a reader that needs the situation behind the zone asks for (the spawn resource card, RT-5a): the
-// latest host reading with the held leases and the queue, as copies. The object registered under HostReaderKey offers it too, so
-// there is one key; a reader type-asserts for it and treats its absence as "unknown".
+// latest host reading with its sample time. The object registered under HostReaderKey offers it too, so there is one key; a
+// reader type-asserts for it and treats its absence as "unknown".
 type HostDetailReader interface {
 	LatestHostDetail() (HostDetail, bool)
 }
 
-// HostDetail is the host part of the latest snapshot and the lease lists that explain it.
+// HostDetail is the host part of the latest snapshot. (It carried the held leases and the queue until WWD-0a removed them.)
 type HostDetail struct {
 	Host HostUse `json:"host"`
 	// SampledAt is when the reading was taken, unix ms.
-	SampledAt int64        `json:"sampled_at"`
-	Leases    []LeaseView  `json:"leases,omitempty"`
-	Waiters   []WaiterView `json:"waiters,omitempty"`
+	SampledAt int64 `json:"sampled_at"`
 }
 
 // HostUse is the host-wide part of a Snapshot.
@@ -162,4 +148,19 @@ type SessionUse struct {
 	// Pcpu is the raw sum of pcpu; 100 is one core.
 	Pcpu  float64 `json:"pcpu"`
 	Procs int     `json:"procs"`
+}
+
+// EventType is the WS host event that carries the snapshot.
+const EventType = "resources.changed"
+
+// Error codes of the resources routes, in APIError.Error.
+const (
+	ErrBadRequest = "bad_request"
+	ErrNotReady   = "not_ready" // the daemon is stopping, or resources.db is not open
+)
+
+// APIError is the body of a refused request: {"error": code, "detail": text}.
+type APIError struct {
+	Error  string `json:"error"`
+	Detail string `json:"detail,omitempty"`
 }

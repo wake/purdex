@@ -121,9 +121,9 @@ func coreWithService(t *testing.T, dir, key string, svc any) *core.Core {
 }
 
 // seed writes rows into a database before a module opens it.
-func seed(t *testing.T, path string, fn func(s *leaseStore)) {
+func seed(t *testing.T, path string, fn func(s *resourcesStore)) {
 	t.Helper()
-	s, err := openLeaseStore(path)
+	s, err := openResourcesStore(path)
 	if err != nil {
 		t.Fatal(err)
 	}

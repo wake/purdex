@@ -13,7 +13,7 @@ import (
 const defaultReportSince = 24 * time.Hour
 
 // ReportMinutes reads the minute rows in [since, until), as the report reads them. Read only.
-func (s *leaseStore) ReportMinutes(since, until int64) ([]resources.ReportMinute, error) {
+func (s *resourcesStore) ReportMinutes(since, until int64) ([]resources.ReportMinute, error) {
 	// heavy_held is the retired lease's column (written 0 from L2 on, kept in the rows before); it is read apart from the gate's
 	// heavy_running, whose figures it must not be mixed into.
 	mrows, err := s.db.Query(`SELECT at, load1, mem, full_ticks, full_starts, full_longest_s, heavy_running,

@@ -112,14 +112,7 @@ func (m *Module) tick(ctx context.Context) (stop bool) {
 		SampleMS:  time.Since(began).Milliseconds(),
 	})
 	m.lastProcs.Store(&procs)
-	// After the publish, on this goroutine and never on a request or hook
-	// path: it reads the process table once more when a lease is held.
-	held, _ := m.measureLeases(ctx, procs, raw)
 	m.noteMinute(host, m.now())
-	m.admissionPass(ctx, "")
-	if m.store != nil && m.hasLeaseActivity(held) {
-		m.requestEvent() // while something is held or waits, the state is worth a push per window
-	}
 	return false
 }
 

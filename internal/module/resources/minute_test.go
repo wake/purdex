@@ -11,11 +11,11 @@ import (
 	"github.com/wake/purdex/internal/resources"
 )
 
-// minuteFix is a useFix whose clock starts on a minute boundary.
-type minuteFix struct{ *useFix }
+// minuteFix is a storeFix whose clock starts on a minute boundary.
+type minuteFix struct{ *storeFix }
 
 func newMinuteFix(t *testing.T) *minuteFix {
-	f := &minuteFix{newUseFix(t)}
+	f := &minuteFix{newStoreFix(t)}
 	f.clock.ms.Store(time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC).UnixMilli())
 	f.m.interval = resources.SampleInterval
 	return f
@@ -140,11 +140,6 @@ func TestMinutes_FullRunAcrossAMinute(t *testing.T) {
 // the lease table holds; the lease columns (held, heavy_held, sum_charge, waiting, unleased) are written 0.
 func TestMinutes_GateFiguresReplaceTheLeaseFigures(t *testing.T) {
 	f := newMinuteFix(t)
-	// two held leases and a waiting one: they are in no column any more
-	f.heldLease("big", resources.ScopeProcess, 100)
-	f.heldLease("small", resources.ScopeProcess, 101)
-	f.waiting("w", f.nowMS()+30000)
-	f.m.setLeaseUse(map[string]resources.LeaseUsage{"big": {CPU: 20, Use: 20}})
 	counts := [][3]int{{1, 0, 0}, {1, 2, 3}, {0, 3, 1}, {1, 1, 0}}
 	i := 0
 	f.m.gateCounts = func() (int, int, int, bool) {
@@ -188,7 +183,7 @@ func TestMinutes_WriteFailureLoggedOnceAndRecovers(t *testing.T) {
 	if f.logs.count("recovered") < 1 {
 		t.Error("recovery not logged")
 	}
-	m := newTestModule(idleSampler(), nil)
+	m := newTestModule(&fakeSampler{}, nil)
 	m.noteMinute(resources.HostUse{Full: true}, time.Now()) // store == nil
 }
 
@@ -252,7 +247,7 @@ func TestMigration_FromTheAlpha610Schema(t *testing.T) {
 	old.Close()
 
 	for pass := 0; pass < 2; pass++ { // the second open is a no-op
-		s, err := openLeaseStore(path)
+		s, err := openResourcesStore(path)
 		if err != nil {
 			t.Fatalf("pass %d: %v", pass, err)
 		}
@@ -273,9 +268,12 @@ func TestMigration_FromTheAlpha610Schema(t *testing.T) {
 		if n != 2 || recorded != 0 || path_ != "" || wouldR2 != 0 {
 			t.Errorf("pass %d: rows %d recorded %d path %q r2 %d", pass, n, recorded, path_, wouldR2)
 		}
-		r, ok, err := s.Get("old1")
-		if err != nil || !ok || r.WaitedMS != 1234 || !r.Overrun || r.EndReason != "released" {
-			t.Errorf("pass %d: old row = %+v %v %v", pass, r, ok, err)
+		var waited int64
+		var overrun int
+		var endReason string
+		if err := s.db.QueryRow(`SELECT waited_ms, overrun, end_reason FROM resource_leases WHERE id = 'old1'`).Scan(&waited, &overrun, &endReason); err != nil ||
+			waited != 1234 || overrun != 1 || endReason != "released" {
+			t.Errorf("pass %d: old row = %d %d %q %v", pass, waited, overrun, endReason, err)
 		}
 		if err := s.InsertMinute(minuteRow{At: 60000, NCPU: 4}); err != nil {
 			t.Errorf("pass %d: %v", pass, err)
@@ -356,15 +354,5 @@ func TestMinutes_OffAndOnInsideOneMinuteMerges(t *testing.T) {
 	r := f.minutes()[0]
 	if r.FullTicks != 4 || r.FullStarts != 2 || r.Load1 != 9 {
 		t.Errorf("row = %+v, want full_ticks 4, full_starts 2, load1 9", r)
-	}
-}
-
-// The lease rows measureLeases hands back carry the average it just stored.
-func TestMeasureLeases_ReturnsTheUpdatedRows(t *testing.T) {
-	f := newMinuteFix(t)
-	f.heldLease("a", resources.ScopeProcess, 100)
-	held, ok := f.m.measureLeases(context.Background(), []resources.Proc{cpuProc(100, 1, 40)}, goodRaw())
-	if !ok || len(held) != 1 || held[0].Samples != 1 || !approx(held[0].EWMA, 40) {
-		t.Fatalf("held = %+v ok=%v", held, ok)
 	}
 }
