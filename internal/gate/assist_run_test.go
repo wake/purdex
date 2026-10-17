@@ -3,9 +3,12 @@ package gate
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -173,6 +176,12 @@ echo "$PDX_GATE_TAG" > "$HOME/last-tag"
 exec "$@"
 `
 
+// fakeGit passes everything to the real git, except update-ref while the test has asked for it to fail.
+const fakeGit = `#!/bin/sh
+if [ -e "$HOME/git-update-ref-fails" ]; then for a in "$@"; do [ "$a" = update-ref ] && exit 1; done; fi
+exec "$REAL_GIT" "$@"
+`
+
 const fakePnpm = `#!/bin/sh
 echo x >> "$HOME/pnpm-count"
 sleep 1
@@ -188,6 +197,10 @@ func newAssistHost(t *testing.T, repo string) *assistHost {
 	writeFile(t, home+"/bin/ssh", fakeSSH, 0o755)
 	writeFile(t, home+"/bin/pdx", fakePdx, 0o755)
 	writeFile(t, home+"/bin/pnpm", fakePnpm, 0o755)
+	writeFile(t, home+"/bin/git", fakeGit, 0o755)
+	realGit, err := exec.LookPath("git")
+	require.NoError(t, err)
+	t.Setenv("REAL_GIT", realGit)
 	writeFile(t, home+"/Assist/assist.env", "", 0o644)
 	require.NoError(t, os.MkdirAll(home+"/Assist/repos.noindex/"+repo, 0o755))
 	gitIn(t, home+"/Assist/repos.noindex/"+repo, "init", "-q", "-b", "main")
@@ -437,4 +450,55 @@ func TestRunAssist_ACleanupThatFailsIsReported(t *testing.T) {
 	assert.Equal(t, 0, res.Code)
 	require.Error(t, res.CleanupErr)
 	assert.Contains(t, res.CleanupErr.Error(), res.Job)
+}
+
+// A cleanup step that fails inside the script (the ref cannot be removed) is reported although the ssh itself worked.
+func TestRunAssist_ACleanupStepThatFailsInsideTheScriptIsReported(t *testing.T) {
+	g, _ := testGate(t)
+	dir := workRepo(t)
+	h := newAssistHost(t, filepath.Base(dir))
+	writeFile(t, h.remote("git-update-ref-fails"), "", 0o644)
+	res, _, _ := runOn(t, g, h, dir, "true")
+	assert.True(t, res.Started)
+	require.Error(t, res.CleanupErr)
+}
+
+func depsSetDir(h *assistHost, lock string) string {
+	sum := sha256.Sum256([]byte(lock))
+	return h.remote("Assist/deps.noindex/" + h.repo + "/spa-" + hex.EncodeToString(sum[:])[:16])
+}
+
+// An install lock whose installer is gone is taken over; one whose installer is alive is waited for (never taken over because of its
+// age). Mutation gate: the liveness check removed → the live installer's lock is removed and a second install starts (red).
+func TestRunAssist_AnInstallLockIsTakenOverOnlyWhenItsInstallerIsGone(t *testing.T) {
+	g, _ := testGate(t)
+	dir := workRepo(t)
+	lock := "lock: locked\n"
+	writeFile(t, dir+"/spa/pnpm-lock.yaml", lock, 0o644)
+	h := newAssistHost(t, filepath.Base(dir))
+	set := depsSetDir(h, lock)
+
+	// a dead installer: its pid is of a process that has ended
+	dead := exec.Command("true")
+	require.NoError(t, dead.Run())
+	writeFile(t, set+".lock/pid", strconv.Itoa(dead.Process.Pid), 0o644)
+	res, out, _ := runOn(t, g, h, dir, "sh", "-c", "cat spa/node_modules/marker")
+	require.NoError(t, res.Err)
+	assert.Contains(t, out, "installed")
+	assert.Equal(t, 1, strings.Count(mustReadOr(h.remote("pnpm-count")), "x"), "the job installed it itself")
+
+	// a live installer (this test process): the job waits until the set appears, and does not install
+	set2lock := "lock: live\n"
+	writeFile(t, dir+"/spa/pnpm-lock.yaml", set2lock, 0o644)
+	set2 := depsSetDir(h, set2lock)
+	writeFile(t, set2+".lock/pid", strconv.Itoa(os.Getpid()), 0o644)
+	go func() {
+		time.Sleep(2500 * time.Millisecond)
+		writeFile(t, set2+"/node_modules/marker", "installed by the other\n", 0o644)
+		_ = os.RemoveAll(set2 + ".lock")
+	}()
+	res, out, _ = runOn(t, g, h, dir, "sh", "-c", "cat spa/node_modules/marker")
+	require.NoError(t, res.Err)
+	assert.Contains(t, out, "installed by the other")
+	assert.Equal(t, 1, strings.Count(mustReadOr(h.remote("pnpm-count")), "x"), "no second install for the live installer's set")
 }

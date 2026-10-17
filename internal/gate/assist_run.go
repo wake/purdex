@@ -92,16 +92,29 @@ for d in . spa; do
   D="$HOME/Assist/deps.noindex/$repo/$label-$h"
   if [ ! -d "$D/node_modules" ]; then
     if mkdir "$D.lock" 2>/dev/null; then
+      echo $$ > "$D.lock/pid"
       if (cd "$W/$d" && pnpm install --frozen-lockfile) >&2 && mkdir -p "$D" && mv "$W/$d/node_modules" "$D/node_modules"; then
-        rmdir "$D.lock"
+        rm -rf "$D.lock"
       else
-        rmdir "$D.lock"; echo "install of $d failed" >&2; exit 1
+        rm -rf "$D.lock"; echo "install of $d failed" >&2; exit 1
       fi
     else
-      # another job is installing this set: wait for it (a lock older than 15 minutes is a dead installer's)
-      [ -z "$(find "$D.lock" -maxdepth 0 -mmin +15 2>/dev/null)" ] || rmdir "$D.lock" 2>/dev/null || true
+      # another job is installing this set: wait for it. A lock is dead when its installer's process is gone (or, with no pid in it
+      # yet, when it is two minutes old); a long install by a live installer is waited for, never taken over.
       i=0
-      while [ ! -d "$D/node_modules" ] && [ -d "$D.lock" ] && [ "$i" -lt 600 ]; do sleep 1; i=$((i+1)); done
+      while [ ! -d "$D/node_modules" ] && [ -d "$D.lock" ] && [ "$i" -lt 1800 ]; do
+        ip=$(cat "$D.lock/pid" 2>/dev/null || true)
+        if [ -n "$ip" ]; then
+          kill -0 "$ip" 2>/dev/null || { rm -rf "$D.lock"; echo "took over the dead install lock of $d" >&2; break; }
+        elif [ -n "$(find "$D.lock" -maxdepth 0 -mmin +2 2>/dev/null)" ]; then
+          rm -rf "$D.lock"; break
+        fi
+        sleep 1; i=$((i+1))
+      done
+      if [ ! -d "$D/node_modules" ] && mkdir "$D.lock" 2>/dev/null; then # the dead installer's work, done here
+        echo $$ > "$D.lock/pid"
+        if (cd "$W/$d" && pnpm install --frozen-lockfile) >&2 && mkdir -p "$D" && mv "$W/$d/node_modules" "$D/node_modules"; then rmdir "$D.lock" 2>/dev/null || rm -rf "$D.lock"; else rm -rf "$D.lock"; echo "install of $d failed" >&2; exit 1; fi
+      fi
       [ -d "$D/node_modules" ] || { echo "the install of $d by another job did not finish" >&2; exit 1; }
     fi
   fi
@@ -117,11 +130,13 @@ done
 // remoteCleanup removes the job whatever happened (args: repo job) and says whether the host took the run back.
 const remoteCleanup = `repo=$1; job=$2
 R=$HOME/Assist/repos.noindex/$repo; W=$HOME/Assist/tmp.noindex/$job; J=$HOME/Assist/jobs.noindex/$job
+rc=0
 if [ -e "$J.reclaimed" ]; then echo reclaimed=1; fi
-git -C "$R" worktree remove --force "$W" >/dev/null 2>&1 || rm -rf "$W"
-git -C "$R" worktree prune >/dev/null 2>&1
-git -C "$R" update-ref -d "refs/assist/$job" >/dev/null 2>&1
-rm -f "$J.pid" "$J.reclaimed" "$J.cancel"
+git -C "$R" worktree remove --force "$W" >/dev/null 2>&1 || rm -rf "$W" || rc=1
+git -C "$R" worktree prune >/dev/null 2>&1 || rc=1
+git -C "$R" update-ref -d "refs/assist/$job" >/dev/null 2>&1 || rc=1
+rm -f "$J.pid" "$J.reclaimed" "$J.cancel" || rc=1
+exit $rc
 `
 
 // remoteKill ends the job's process group (args: job): TERM now, KILL ten seconds later.
