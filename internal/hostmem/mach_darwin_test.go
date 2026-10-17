@@ -119,6 +119,7 @@ func TestVMDisagreements_RangeOfWhatMachMovedPlus20000(t *testing.T) {
 	if got := vmDisagreements(wrong, wrong, vsAt(0, 200000, 20)); assert.Len(t, got, 1) {
 		assert.Contains(t, got[0], "less than its speculative part")
 	}
+	assert.Len(t, vmDisagreements(wrong, still, vsAt(250000, 200000, 50000)), 1, "the read before is the wrong one")
 }
 
 // One try that disagrees does not fail the test when a later one agrees; five that disagree do. Mutation gate: one try → the second
