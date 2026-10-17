@@ -11,5 +11,5 @@
   "owner": null,
   "exceptions": [],
   "derived": {"zone": "unknown", "headroom": {"heavy": 0, "light": 2}, "sessions_room": 5},
-  "worker": {"enabled": true, "slots": {"heavy": 1, "light": 1}, "running": {"heavy": 0, "light": 0}}
+  "worker": {"enabled": true, "slots": {"heavy": 1, "light": 1}, "running": {"heavy": 0, "light": 0}, "owner_rule": ""}
 }

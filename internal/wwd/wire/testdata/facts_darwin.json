@@ -18,5 +18,5 @@
   "exceptions": [{"name": "app-dev-package", "since": "2026-10-18T04:55:00+08:00", "until": "2026-10-18T05:30:00+08:00"},
                  {"name": "dev-server", "since": "2026-10-18T04:00:00+08:00", "until": null}],
   "derived": {"zone": "normal", "headroom": {"heavy": 1, "light": 2}, "sessions_room": 2},
-  "worker": {"enabled": true, "slots": {"heavy": 1, "light": 2}, "running": {"heavy": 0, "light": 1}}
+  "worker": {"enabled": true, "slots": {"heavy": 1, "light": 2}, "running": {"heavy": 0, "light": 1}, "owner_rule": "hid<5m"}
 }
