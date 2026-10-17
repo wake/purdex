@@ -18,8 +18,15 @@ import (
 // CPU and memory reads return the error and Sample reports it.
 func SystemSources() Sources {
 	mach, machErr := hostmem.NewMach()
+	var procs func(time.Time) (ProcSnapshot, ProcContext, error)
+	if pr, err := NewProcReader(DefaultSessionsDir()); err == nil {
+		procs = pr.Snapshot
+	} else {
+		procs = func(time.Time) (ProcSnapshot, ProcContext, error) { return ProcSnapshot{}, ProcContext{}, err }
+	}
 	return Sources{
-		Now: time.Now,
+		Procs: procs,
+		Now:   time.Now,
 		CPU: func() (RawCPU, error) {
 			if mach == nil {
 				return RawCPU{}, machErr

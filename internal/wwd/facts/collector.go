@@ -127,20 +127,32 @@ type Sources struct {
 	CPU   func() (RawCPU, error)
 	Mem   func() (RawMem, error)
 	Disks func() ([]RawDisk, error)
+	// Procs reads the process table (nil: this platform has none yet; procs and
+	// residents stay empty).
+	Procs func(now time.Time) (ProcSnapshot, ProcContext, error)
 }
+
+// Top-N sizes of the procs list (spec §3.1: the top 12 by memory and by CPU).
+const (
+	procsTopMem = 12
+	procsTopCPU = 12
+)
 
 // Reading is what one sample knows so far. A field whose read failed is its
 // zero value; Sample reports the failure.
 type Reading struct {
-	At   time.Time
-	CPU  wire.CPU
-	Mem  wire.Mem
-	Disk []wire.Disk
+	At        time.Time
+	CPU       wire.CPU
+	Mem       wire.Mem
+	Disk      []wire.Disk
+	Procs     []wire.Proc
+	Residents []wire.Resident
 }
 
 // Apply writes the reading into a facts record.
 func (r Reading) Apply(f *wire.Facts) {
 	f.At, f.CPU, f.Mem, f.Disk = r.At, r.CPU, r.Mem, r.Disk
+	f.Procs, f.Residents = r.Procs, r.Residents
 }
 
 // Collector takes Readings; one value belongs to one goroutine.
@@ -158,7 +170,7 @@ func NewCollector(src Sources) *Collector {
 // (Disk empty) and is joined into the error; the other fields still come back.
 func (c *Collector) Sample() (Reading, error) {
 	now := c.src.Now()
-	r := Reading{At: now, Disk: []wire.Disk{}}
+	r := Reading{At: now, Disk: []wire.Disk{}, Procs: []wire.Proc{}, Residents: []wire.Resident{}}
 	var errs []error
 	if cpu, err := c.src.CPU(); err != nil {
 		errs = append(errs, err)
@@ -175,6 +187,14 @@ func (c *Collector) Sample() (Reading, error) {
 		errs = append(errs, err)
 	} else {
 		r.Disk = BuildDisk(d)
+	}
+	if c.src.Procs != nil {
+		if snap, ctx, err := c.src.Procs(now); err != nil {
+			errs = append(errs, err)
+		} else {
+			r.Procs = BuildProcs(snap, ctx, procsTopMem, procsTopCPU)
+			r.Residents = BuildResidents(snap, ctx)
+		}
 	}
 	return r, errors.Join(errs...)
 }

@@ -113,14 +113,39 @@ func sessionAbove(p ProcRec, c ProcContext) (string, bool) {
 	return "", false
 }
 
+// jobAbove finds the wwd job a process belongs to: its own marker, or the
+// nearest ancestor's. The kernel hides the environment of system binaries
+// (/bin/sleep, /bin/sh), so a marker-less child of a job is still the job's.
+// The walk stops at a Claude Code session process.
+func jobAbove(p ProcRec, c ProcContext) (string, bool) {
+	if c.JobOf == nil {
+		return "", false
+	}
+	cur := p
+	for depth := 0; depth < 64; depth++ {
+		if id, ok := c.JobOf(cur.PID); ok {
+			return id, true
+		}
+		if c.SessionOf != nil {
+			if _, ok := c.SessionOf(cur.PID); ok {
+				return "", false
+			}
+		}
+		next, ok := c.Table[cur.PPID]
+		if !ok || cur.PPID <= 1 || next.PID == cur.PID {
+			return "", false
+		}
+		cur = next
+	}
+	return "", false
+}
+
 // Attribute says whose a process is: a wwd job's tree (the marker), a session's
 // own tree, a codex run dispatched by a session, a session's long-lived helper
 // (orphaned ones are "orphan"), or the system. nil when nobody can be named.
 func Attribute(p ProcRec, c ProcContext) *wire.ProcOwner {
-	if c.JobOf != nil {
-		if id, ok := c.JobOf(p.PID); ok {
-			return &wire.ProcOwner{Kind: wire.OwnerJob, ID: id}
-		}
+	if id, ok := jobAbove(p, c); ok {
+		return &wire.ProcOwner{Kind: wire.OwnerJob, ID: id}
 	}
 	var args []string
 	if c.ArgsOf != nil {

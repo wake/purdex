@@ -23,6 +23,7 @@ func fixtureSnapshot() (ProcSnapshot, ProcContext) {
 		{PID: 120, PPID: 110, UID: 501, Name: "codex-broker", FootprintBytes: mb(60)},
 		{PID: 300, PPID: 1, UID: 501, Name: "pnpm", FootprintBytes: mb(50), CPUPct: 10},
 		{PID: 301, PPID: 300, UID: 501, Name: "node", FootprintBytes: mb(1500), CPUPct: 88}, // inherits WWD_JOB
+		{PID: 302, PPID: 301, UID: 501, Name: "sleep", FootprintBytes: mb(1)},               // a system binary: the kernel hides its environment
 		{PID: 400, PPID: 1, UID: 501, Name: "node", FootprintBytes: mb(200), CPUPct: 0},     // orphan playwright
 		{PID: 500, PPID: 1, UID: 0, Name: "mds_stores", FootprintBytes: mb(400), CPUPct: 12},
 		{PID: 600, PPID: 1, UID: 501, Name: "Safari", FootprintBytes: mb(700), CPUPct: 3},
@@ -88,6 +89,7 @@ func TestAttributeOwners(t *testing.T) {
 	}{
 		{301, &wire.ProcOwner{Kind: wire.OwnerJob, ID: "j_01JC"}},
 		{300, &wire.ProcOwner{Kind: wire.OwnerJob, ID: "j_01JC"}},
+		{302, &wire.ProcOwner{Kind: wire.OwnerJob, ID: "j_01JC"}}, // no marker of its own: a job ancestor decides
 		{100, &wire.ProcOwner{Kind: wire.OwnerSession, Session: "_abc123"}},
 		{110, &wire.ProcOwner{Kind: wire.OwnerCodex, Session: "_abc123"}},
 		{120, &wire.ProcOwner{Kind: wire.OwnerResident, Session: "_abc123"}}, // the broker is a long-lived helper, not a run
