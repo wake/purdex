@@ -195,7 +195,7 @@ func TestTreeBusy(t *testing.T) {
 
 	// a holder whose command (not the gate) is below the root
 	l := g.pool(cfg, ClassLight)
-	ls, err := l.TakeLate()
+	ls, err := l.TakeLate(WaiterInfo{})
 	require.NoError(t, err)
 	require.NoError(t, ls.SetHolder(Holder{PID: 999, PGID: 101}))
 	assert.True(t, g.treeBusy(cfg, 100))
@@ -216,7 +216,7 @@ func TestPackaging_ACommandBelowALateHolderPassesAsNested(t *testing.T) {
 	occupied, rel := holdSlot(t, g, ClassHeavy, "occupant")
 	defer func() { rel(); <-occupied }() // the occupant polls a directory that goes away with the test: it must really have ended
 	// a packaging script (pid 1001) holds a late light slot
-	late, err := g.pool(g.Config(), ClassLight).TakeLate()
+	late, err := g.pool(g.Config(), ClassLight).TakeLate(WaiterInfo{})
 	require.NoError(t, err)
 	require.NoError(t, late.SetHolder(Holder{PID: os.Getpid(), PGID: 1001, Late: true, Argv: []string{"pnpm", "run", "package"}}))
 	defer late.Release(nil)
@@ -355,7 +355,7 @@ func TestPackaging_UnderAClaimItTakesNoLateSlot(t *testing.T) {
 	dir := t.TempDir()
 	fakeTool(t, dir, "")
 	// a real holder (pid 1001) whose claim this gate's process descends from
-	holder, err := g.pool(g.Config(), ClassHeavy).TakeLate()
+	holder, err := g.pool(g.Config(), ClassHeavy).TakeLate(WaiterInfo{})
 	require.NoError(t, err)
 	defer holder.Release(nil)
 	require.NoError(t, holder.SetHolder(Holder{PID: 1001, Token: "tok", Argv: []string{"x"}}))
@@ -394,7 +394,7 @@ func TestPackaging_AStaleClaimDoesNotSuppressTheLateSlot(t *testing.T) {
 func TestUnderLate_OnlyLateHoldersCoverTheirTree(t *testing.T) {
 	g, _ := testGate(t)
 	g.Holders = nil
-	s, err := g.pool(g.Config(), ClassLight).TakeLate()
+	s, err := g.pool(g.Config(), ClassLight).TakeLate(WaiterInfo{})
 	require.NoError(t, err)
 	defer s.Release(nil)
 	require.NoError(t, s.SetHolder(Holder{PID: os.Getpid(), PGID: 1001, Late: false, Argv: []string{"x"}}))

@@ -2,6 +2,8 @@ package teammod
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -98,4 +100,26 @@ func (s *Store) ChainRoots() (map[string]string, error) {
 		roots[p] = rootOf(p)
 	}
 	return roots, nil
+}
+
+// RefSuccessors implements team.AssistTeams: the sessions whose chain of earlier refs holds ref, newest first (the longer a
+// session's chain, the later in the relay it is; ties by id).
+func (s *Store) RefSuccessors(ref string) ([]string, error) {
+	prev, err := s.PreviousRefs()
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for sid, refs := range prev {
+		if slices.Contains(refs, ref) {
+			out = append(out, sid)
+		}
+	}
+	slices.SortFunc(out, func(a, b string) int {
+		if d := len(prev[b]) - len(prev[a]); d != 0 {
+			return d
+		}
+		return strings.Compare(a, b)
+	})
+	return out, nil
 }

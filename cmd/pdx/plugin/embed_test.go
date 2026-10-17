@@ -18,7 +18,7 @@ import (
 
 func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
 	f := Files()
-	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "hooks/events.js", "hooks/gate.js", "hooks/member.js", "hooks/prompts.js", "hooks/workbook.js", "skills/pdx-team/SKILL.md", "skills/pdx-gate/SKILL.md"} {
+	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "hooks/events.js", "hooks/gate.js", "hooks/member.js", "hooks/prompts.js", "hooks/workbook.js", "skills/pdx-team/SKILL.md", "skills/pdx-gate/SKILL.md", "skills/pdx-watch/SKILL.md"} {
 		if _, err := fs.Stat(f, rel); err != nil {
 			t.Errorf("%s: %v", rel, err)
 		}
@@ -646,6 +646,36 @@ func TestSkill_GateSaysWhatAnAgentNeeds(t *testing.T) {
 	}
 	if want := fmt.Sprintf("**%d**", gate.ExitRefused); !strings.Contains(s, want) {
 		t.Errorf("SKILL.md of pdx-gate does not name the gate's refusal code %s", want)
+	}
+}
+
+func TestSkillWatch_SaysWhatTheWatcherMustKnow(t *testing.T) {
+	b, err := fs.ReadFile(Files(), "skills/pdx-watch/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{
+		"name: pdx-watch",
+		"**不要自己設 timeout、迴圈或排程去巡檢。**", "巡檢節奏只有 daemon 一個來源", // the daemon is the only source of patrols
+		"`unmanaged_heavy`", "`pressure_high`", "`slot_orphaned`", "`slot_long`",
+		"`gate_gap`", "`unknown`", "`allowed`",
+		"git pull", "purdex-watch", "git push",
+		"pdx watch ack <事件 id>… --note", "pdx watch log --unhandled",
+		"pdx gate status --json", "pdx gate set --expect <舊值> slots.<heavy|light>=<n>", "整串指令包在 `ssh <alias> …` 裡", "別拿本機的值去驗證遠端", "目前範圍 1–64", "結束碼 3",
+		"pdx gate free <class>-<k>", "pdx msg send <地址>",
+		"結束一個**沒有佔名額**的行程", "自己改 `watch` 的門檻",
+		"該休息", "該退場", "/exit",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("SKILL.md of pdx-watch lacks %q", want)
+		}
+	}
+	// Every watch verb the skill names exists in the CLI's own usage text, so the skill cannot teach a command that is not there.
+	for _, verb := range []string{"pdx watch status", "pdx watch log", "pdx watch ack"} {
+		if !strings.Contains(s, verb) {
+			t.Errorf("SKILL.md of pdx-watch does not mention %q", verb)
+		}
 	}
 }
 

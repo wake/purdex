@@ -128,6 +128,11 @@ and writers, and its requeue lossy; contracts 7–11 below answer it.
     capability lives here, not in the gate config (spec §2 updated). A file whose `Version` is newer than the code knows
     is read but never written (edits refused, `assist_version`), so an older daemon cannot drop a newer field.
 
+12. **mlab reserved** (spec decision 11, user 10-17): `AssistFile.Reserved *{By, Reason string; At, Until time.Time}`
+    (added with X1a-2, before anything is deployed, so the schema stays whole); `POST /api/assist/reserve {on, reason,
+    for}` (admin only; `for` default 2 h, at most 12 h) and `pdx assist reserve on|off` (X1a-4); a reservation past
+    its `Until` reads as none. The release scripts call it at their start and clear it in their exit trap. X2b reads it.
+
 ## X1a — `assist.json`, switches, the allowed list, readiness, `pdx gate hosts` (one PR)
 
 1. `internal/gate/assist.go`: `AssistFile{Version, NextGen int; Hosts map[string]AssistHost; Allowed []AssistAllow}`;
@@ -256,7 +261,8 @@ X2b — the automatic walk (§3):
    asked through would-wait in contract 9); for mserv, a rule in mlab's `conflicts.json` with `host: mserv` against
    mlab's `assist-mserv-<k>` holders (GC's `Conflict` gains `Host`, empty = the gate's own host). Heavy: to the assist
    host unless mlab's estimate (its would-wait + run) is below 0.5× the host's (run + transfer). Light: out only when it
-   would wait on mlab. Then the one ssh of contracts 9–10; a host that fails it is held off and the walk goes on. A
+   would wait on mlab. While mlab is reserved (contract 12), both rules give way: any ticket with a candidate goes
+   to it. Then the one ssh of contracts 9–10; a host that fails it is held off and the walk goes on. A
    ticket that fits no free slot keeps its place; those behind it may take slots it cannot use.
 4. Status JSON: the pools (mlab heavy / light, each assist host's dispatch slots), each holder with its host, each waiter
    with its candidate hosts, out tickets with their host; the fleet's queue view (B line) reads it.
