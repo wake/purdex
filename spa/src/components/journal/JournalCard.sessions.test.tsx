@@ -296,6 +296,30 @@ describe('the first read failed (no unit yet): retry and the stand-in memo', () 
   })
 })
 
+describe('the first-read retry is one flight per target', () => {
+  it('a retry still in flight for tab A does not swallow the retry of tab B, and A finishing late changes nothing for B', async () => {
+    setSessionsSupport(HOST, true)
+    act(() => { useTabStore.setState((s) => ({ tabs: { ...s.tabs, b: ccTabOf('b', HOST, 'b-solo', 'SB') }, tabOrder: [...s.tabOrder, 'b'] })) })
+    for (const [sess, id] of [['SA', 'a'], ['SB', 'b']] as const) {
+      useJournalStore.setState((s) => ({ readFailed: { ...s.readFailed, [sessionKey(HOST, sess)]: true }, routes: { ...s.routes, [sessionKey(HOST, sess)]: { kind: 'direct' } } }))
+      patchViewMemo(HOST, `failed:${sess}`, { journalOpen: true })
+      void id
+    }
+    const pending: Record<string, (v: unknown) => void> = {}
+    getJournalPage.mockImplementation((_h: string, sess: string) => new Promise((r) => { pending[sess] = r }))
+    setActive('a')
+    mount()
+    click(screen.getByTestId('journal-page-retry'))
+    expect(getJournalPage).toHaveBeenCalledTimes(1)
+    setActive('b')
+    click(screen.getByTestId('journal-page-retry'))
+    expect(getJournalPage.mock.calls.map((c) => c[1])).toEqual(['SA', 'SB'])
+    await act(async () => { pending.SA({ kind: 'none' }) }) // A finishes late
+    click(screen.getByTestId('journal-page-retry')) // B is still in flight: this click is the second for B
+    expect(getJournalPage).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('the chain of sessions failed (the current page read fine)', () => {
   it('the rows show, the pager is unusable, the error says so, and its retry asks once', async () => {
     seedA({ sessions: null, sessionsFailed: true })
@@ -308,6 +332,18 @@ describe('the chain of sessions failed (the current page read fine)', () => {
     click(screen.getByTestId('journal-page-retry'))
     click(screen.getByTestId('journal-page-retry'))
     expect(getJournalSessions).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.queryByTestId('journal-sessions-error')).toBeNull())
+    expect(prev().disabled).toBe(false)
+  })
+  it('a chain that was held and then failed to re-read: the error shows and 上一頁 / 下一頁 are both disabled (no walking an out-of-date chain); a good retry brings them back', async () => {
+    seedA({ sessionsFailed: true })
+    mount()
+    expect(screen.getByTestId('journal-sessions-error')).toBeTruthy()
+    expect(ids()).toEqual(['c1', 'c2']) // the current page itself still shows
+    expect(prev().disabled).toBe(true)
+    expect(next().disabled).toBe(true)
+    getJournalSessions.mockResolvedValue({ kind: 'ok', value: parseSessions({ sessions: SESSIONS.map((x) => ({ session_id: x.sessionId, started_at: x.startedAt, ended_at: x.endedAt, via: x.via, current: x.current })) }) })
+    click(screen.getByTestId('journal-page-retry'))
     await waitFor(() => expect(screen.queryByTestId('journal-sessions-error')).toBeNull())
     expect(prev().disabled).toBe(false)
   })
