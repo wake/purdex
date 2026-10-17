@@ -58,7 +58,9 @@ type Decision struct {
 	Left      []string           `json:"left_running,omitempty"`
 	// Host is the assist host the command was sent to (absent for a run here); TransferS the seconds of snapshot, push and preparation,
 	// RunS the run there, and Reclaimed says the host took the run back (the command then waited here again).
-	Host      string  `json:"host,omitempty"`
+	Host string `json:"host,omitempty"`
+	// Tried is the assist host the command was offered to, whether or not it ran there (Host says where it ran).
+	Tried     string  `json:"tried,omitempty"`
 	TransferS float64 `json:"transfer_s,omitempty"`
 	RunS      float64 `json:"run_s,omitempty"`
 	Reclaimed bool    `json:"reclaimed,omitempty"`

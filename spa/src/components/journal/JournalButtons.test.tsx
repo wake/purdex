@@ -1,4 +1,4 @@
-// spa/src/components/journal/JournalButtons.test.tsx — the title bar's 團隊 / 日誌 buttons (J-2b T-2b.1).
+// spa/src/components/journal/JournalButtons.test.tsx — the title bar's 團隊 / 工作簿 buttons (J-2b T-2b.1; JV-2 Q1).
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { TitleBar } from '../TitleBar'
@@ -10,6 +10,7 @@ import { clearModuleRegistry } from '../../lib/module-registry'
 import { useTabStore } from '../../stores/useTabStore'
 import { useJournalStore } from '../../stores/useJournalStore'
 import { useJournalUiStore } from '../../stores/useJournalUiStore'
+import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useShownHostsStore } from '../../stores/useShownHostsStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useWorkbookStore } from '../../stores/useWorkbookStore'
@@ -32,7 +33,7 @@ beforeEach(() => {
   resetTeamStores()
   useJournalStore.getState().reset()
   useWorkbookStore.getState().reset()
-  useJournalUiStore.setState({ lastWidths: {}, teamOpen: {} })
+  useJournalUiStore.setState({ lastWidths: {} })
   clearViewMemos()
   clearModuleRegistry()
   useShownHostsStore.setState({ ids: [HOST] })
@@ -43,7 +44,7 @@ beforeEach(() => {
 })
 afterEach(() => cleanup())
 
-describe('the 團隊 / 日誌 buttons on a journal.v1 host', () => {
+describe('the 團隊 / 工作簿 buttons on a journal.v1 host', () => {
   it('a team tab has both buttons and no notebook button', () => {
     setJournalHost(HOST, true)
     seedUnit(HOST, 'SL', UNIT)
@@ -78,20 +79,47 @@ describe('the 團隊 / 日誌 buttons on a journal.v1 host', () => {
     act(() => { seedUnit(HOST, 'S1', { kind: 'solo', id: 'c1', label: 'solo' }, { openConfirms: 0 }) })
     expect(q('journal-journal-count')).toBeNull()
   })
-  it('日誌 toggles the unit memo; 團隊 toggles the team key', () => {
+  it('工作簿 toggles the unit memo and only the journal card; 團隊 moves the team panel (full -> title bar -> full)', () => {
     setJournalHost(HOST, true)
     const key = seedUnit(HOST, 'SL', UNIT)
     setActive('lead')
     mount()
     fireEvent.click(screen.getByTestId('journal-journal-button'))
-    expect(readViewMemo(HOST, key).journalOpen).toBe(true)
+    expect(readViewMemo(HOST, key)).toMatchObject({ journalOpen: true, roadmapOpen: false, tasksOpen: false })
     expect(screen.getByTestId('journal-journal-button').getAttribute('aria-pressed')).toBe('true')
     fireEvent.click(screen.getByTestId('journal-journal-button'))
     expect(readViewMemo(HOST, key).journalOpen).toBe(false)
+    const mode = () => useTeamUiStore.getState().panelMode[KEY] ?? 'full'
+    expect(mode()).toBe('full')
+    expect(screen.getByTestId('journal-team-button').getAttribute('aria-pressed')).toBe('false')
     fireEvent.click(screen.getByTestId('journal-team-button'))
-    expect(useJournalUiStore.getState().teamOpen[KEY]).toBe(true)
+    expect(mode()).toBe('titlebar')
+    expect(screen.getByTestId('journal-team-button').getAttribute('aria-pressed')).toBe('true')
     fireEvent.click(screen.getByTestId('journal-team-button'))
-    expect(useJournalUiStore.getState().teamOpen[KEY]).toBeUndefined()
+    expect(mode()).toBe('full')
+    expect(readViewMemo(HOST, key).journalOpen).toBe(false) // the team button never touches the journal card
+  })
+  it('團隊 from one line goes to the title bar, and back from the title bar goes to full (not to the line it left)', () => {
+    setJournalHost(HOST, true)
+    seedUnit(HOST, 'SL', UNIT)
+    setActive('lead')
+    mount()
+    const mode = () => useTeamUiStore.getState().panelMode[KEY] ?? 'full'
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+    fireEvent.click(screen.getByTestId('journal-team-button'))
+    expect(mode()).toBe('titlebar')
+    fireEvent.click(screen.getByTestId('journal-team-button'))
+    expect(mode()).toBe('full')
+  })
+  it('the buttons are named 團隊 and 工作簿 (the team one by what it does)', () => {
+    setJournalHost(HOST, true)
+    seedUnit(HOST, 'SL', UNIT)
+    setActive('lead')
+    mount()
+    expect(screen.getByTestId('journal-journal-button').getAttribute('aria-label')).toBe('Open the workbook')
+    expect(screen.getByTestId('journal-team-button').getAttribute('aria-label')).toBe('Move the panel into the title bar')
+    fireEvent.click(screen.getByTestId('journal-team-button'))
+    expect(screen.getByTestId('journal-team-button').getAttribute('aria-label')).toBe('Put the panel back in the pane')
   })
   it('日誌 waits (disabled) until the unit is loaded', () => {
     setJournalHost(HOST, true)

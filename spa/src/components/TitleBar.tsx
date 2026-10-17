@@ -113,10 +113,11 @@ export function TitleBar({ title }: Props) {
   // A tab of no team whose own conversation has a workbook uses the shared value (WA-2b-1b).
   const own = useOwnWorkbook()
   const sharedInBar = useTeamUiStore((s) => s.sharedPanelMode === 'titlebar')
-  // On a journal.v1 host the workbook view is off (J-2b): no strip, no notebook button — 團隊 / 日誌 take their place.
+  // On a journal.v1 host the workbook view is off (J-2b): no own-workbook strip, and 團隊 / 工作簿 take the notebook button's place
+  // (JV-2: the team's strip is back on every host, the 團隊 button moves the panel between the pane and the title bar).
   const jt = useJournalTarget()
   const ownStrip = !jt.journalHost && team === null && own !== null && sharedInBar
-  const stripShown = jt.journalHost ? false : team ? team.mode === 'titlebar' : ownStrip
+  const stripShown = team ? team.mode === 'titlebar' : ownStrip
   const { barRef, btnsRef, setStripW, layout } = useTitleBarLayout(stripShown)
   const current = useTabStore((s) => {
     const tab = s.activeTabId ? s.tabs[s.activeTabId] : undefined

@@ -107,15 +107,17 @@ func isExecCmd(e ast.Expr, names map[string]string) bool {
 // cliOnly are the files of the pdx binary that run only in the short-lived CLI process, never in the daemon: a counter in a
 // process that lives for one command says nothing (pdx hook sends its own count with the event, see the plan).
 var cliOnly = map[string]string{
-	"cmd/pdx/daemon.go":            "`pdx start`/`pdx stop`: starts the daemon and tails its log",
-	"cmd/pdx/hook.go":              "`pdx hook`: the Claude Code hook command",
-	"cmd/pdx/hook_pid_resolver.go": "`pdx hook`: finds the pid of the agent",
-	"cmd/pdx/ask.go":               "`pdx ask`",
-	"cmd/pdx/lease_run.go":         "`pdx lease run`: runs the command it leases for",
-	"cmd/pdx/reap_children.go":     "`pdx lease run`: reaps what its command left",
-	"cmd/pdx/statusline_proxy.go":  "`pdx statusline-proxy`",
-	"cmd/pdx/msg_selftest.go":      "`pdx msg selftest`",
-	"internal/gate/run.go":         "`pdx gate`: the wrapper process that runs the gated command (a process of its own, not the daemon)",
+	"cmd/pdx/daemon.go":                "`pdx start`/`pdx stop`: starts the daemon and tails its log",
+	"cmd/pdx/hook.go":                  "`pdx hook`: the Claude Code hook command",
+	"cmd/pdx/hook_pid_resolver.go":     "`pdx hook`: finds the pid of the agent",
+	"cmd/pdx/ask.go":                   "`pdx ask`",
+	"cmd/pdx/lease_run.go":             "`pdx lease run`: runs the command it leases for",
+	"cmd/pdx/reap_children.go":         "`pdx lease run`: reaps what its command left",
+	"cmd/pdx/statusline_proxy.go":      "`pdx statusline-proxy`",
+	"cmd/pdx/msg_selftest.go":          "`pdx msg selftest`",
+	"internal/gate/run.go":             "`pdx gate`: the wrapper process that runs the gated command (a process of its own, not the daemon)",
+	"internal/gate/assist_run.go":      "`pdx gate`: sends the command to an assist host over ssh (RunAssist is called only by the gate process)",
+	"internal/gate/assist_snapshot.go": "`pdx gate`: git for the snapshot sent to an assist host (SnapshotTree is called only by RunAssist)",
 }
 
 // pending are the daemon's files that still fork on their own. The list may only shrink: each batch of the plan (D0b, D0c)

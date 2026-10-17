@@ -1,13 +1,15 @@
-// spa/src/components/journal/JournalButtons.tsx — the title bar's 「團隊」 and 「日誌」 buttons on a journal.v1 host (J-2b T-2b.1,
-// spec §11). They replace the notebook buttons. 團隊 (team tabs only) opens / closes the team card; 日誌 (any tab with a `cc`
-// session) opens / closes the journal card of the tab's unit and carries the number of open 待確認 items (Q-B; nothing at 0).
+// spa/src/components/journal/JournalButtons.tsx — the title bar's 「團隊」 and 「工作簿」 buttons on a journal.v1 host (J-2b T-2b.1,
+// spec §11; JV-2 spec §5 Q1). They replace the notebook buttons. 團隊 (team tabs only) is a one-click minimise / restore of the
+// team panel: full or one line -> the title bar, the title bar -> full. 工作簿 (any tab with a `cc` session) opens / closes the
+// journal card of the tab's unit and carries the number of open 待確認 items (Q-B; nothing at 0).
 import { Notebook, UsersThree } from '@phosphor-icons/react'
 import { BUTTON, IDLE, PRESSED } from '../title-bar-styles'
 import { keepFocus } from '../../lib/keep-focus'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useJournalUiStore } from '../../stores/useJournalUiStore'
+import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { patchUnitMemo, useViewMemo } from '../../lib/journal/use-view-memo'
 import { useJournalTarget, type JournalTarget } from './useJournalTarget'
+import type { PanelMode } from '../../stores/useTeamUiStore'
 
 const NO_DRAG = { WebkitAppRegion: 'no-drag' } as React.CSSProperties
 
@@ -16,29 +18,30 @@ export function JournalButtons({ target }: { target?: JournalTarget }) {
   const t = target ?? own
   return (
     <>
-      {t.team && <TeamCardButton teamKey={t.team.teamKey} />}
+      {t.team && <TeamPanelButton teamKey={t.team.teamKey} mode={t.team.mode} />}
       {t.origin && <JournalCardButton target={t} />}
     </>
   )
 }
 
-function TeamCardButton({ teamKey }: { teamKey: string }) {
+/** Lit while the team panel is collapsed to the title bar. */
+function TeamPanelButton({ teamKey, mode }: { teamKey: string; mode: PanelMode }) {
   const tr = useI18nStore((s) => s.t)
-  const open = useJournalUiStore((s) => s.teamOpen[teamKey] === true)
-  const label = tr(open ? 'journal.team.close' : 'journal.team.open')
+  const inBar = mode === 'titlebar'
+  const label = tr(inBar ? 'team.titlebar.to_pane' : 'team.titlebar.to_titlebar')
   return (
     <div data-testid="journal-team-wrap" className="shrink-0 flex items-center mr-0.5" style={NO_DRAG}>
       <button
         type="button"
         data-testid="journal-team-button"
-        aria-pressed={open}
+        aria-pressed={inBar}
         aria-label={label}
         title={label}
-        className={`${BUTTON} ${open ? PRESSED : IDLE}`}
+        className={`${BUTTON} ${inBar ? PRESSED : IDLE}`}
         onMouseDown={keepFocus}
-        onClick={() => useJournalUiStore.getState().setTeamOpen(teamKey, !open)}
+        onClick={() => useTeamUiStore.getState().setPanelMode(teamKey, inBar ? 'full' : 'titlebar')}
       >
-        <UsersThree size={14} weight={open ? 'fill' : 'regular'} />
+        <UsersThree size={14} weight={inBar ? 'fill' : 'regular'} />
       </button>
     </div>
   )

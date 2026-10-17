@@ -1,12 +1,12 @@
 // spa/src/components/team/OwnWorkbookPanel.tsx — what the panel area draws for a tab's OWN conversation workbook in the pane
 // (WA-2b-1b, round 3): `line` is one line (the first sentence of the latest status; a click brings the area to full);
-// `full` / `max` is the workbook view with the header's two controls (the one move-to-title-bar ArrowLineUp, and enlarge).
+// `full` is the workbook view with the header's one control (the move-to-title-bar ArrowLineUp).
 // The title bar's one-line form is `OwnTitleStrip` (TeamTitleBar.tsx). Everything the person arranged is the store's.
 import { Notebook } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useOwnStatusLine } from './own-workbook'
 import { TeamSeatWorkbookView } from './TeamSeatWorkbookView'
-import { ExpandButton, ToTitleBarButton } from './TeamPanel'
+import { ToTitleBarButton } from './TeamPanel'
 import type { PaneMode, PanelMode } from '../../stores/useTeamUiStore'
 
 interface Props {
@@ -19,12 +19,7 @@ interface Props {
 export function OwnWorkbookPanel({ hostId, sessionId, mode, onSetMode }: Props) {
   const t = useI18nStore((s) => s.t)
   const line = useOwnStatusLine(hostId, sessionId)
-  const controls = (
-    <>
-      <ToTitleBarButton onClick={() => onSetMode('titlebar')} />
-      <ExpandButton expanded={mode === 'max'} onToggle={() => onSetMode(mode === 'max' ? 'full' : 'max')} />
-    </>
-  )
+  const controls = <ToTitleBarButton onClick={() => onSetMode('titlebar')} />
   if (mode === 'line') {
     const open = t('team.workbook.open')
     return (

@@ -26,7 +26,7 @@ const addTab = (tab: Tab) => act(() => {
   useTabStore.setState((s) => ({ tabs: { ...s.tabs, [tab.id]: tab }, tabOrder: [...s.tabOrder, tab.id] }))
 })
 const setActive = (id: string | null) => act(() => { useTabStore.setState({ activeTabId: id }) })
-const shared = (mode: 'titlebar' | 'line' | 'full' | 'max') => act(() => { useTeamUiStore.getState().setSharedPanelMode(mode) })
+const shared = (mode: 'titlebar' | 'line' | 'full') => act(() => { useTeamUiStore.getState().setSharedPanelMode(mode) })
 
 function scene() {
   seedScene({ members: [['A', 'a-tm']], tabs: [['lead', 'lead-tm'], ['ma', 'a-tm'], ['x', null]], workspaces: [{ id: 'w1', tabs: ['lead', 'ma', 'x'] }], activeTabId: 'x' })
@@ -57,27 +57,18 @@ describe('a tab of no team shows its own conversation workbook', () => {
     expect(useTeamUiStore.getState().sharedPanelMode).toBe('full')
     expect(screen.getByTestId('team-seat-workbook')).toBeTruthy()
   })
-  it('full: the workbook view, no back control, not enlarged', () => {
+  it('full: the workbook view, no back control', () => {
     scene(); setActive('cc1'); shared('full'); mount()
     expect(screen.getByTestId('team-seat-workbook-status').textContent).toBe(STATUS)
     expect(screen.getAllByTestId('team-seat-workbook-entry')).toHaveLength(2)
     expect(screen.queryByTestId('team-seat-workbook-back')).toBeNull()
-    expect(screen.getByTestId('team-panel-area').getAttribute('data-expanded')).toBe('false')
   })
-  it('max: the same view, enlarged', () => {
-    scene(); setActive('cc1'); shared('max'); mount()
-    expect(screen.getByTestId('team-seat-workbook')).toBeTruthy()
-    expect(screen.getByTestId('team-panel-area').getAttribute('data-expanded')).toBe('true')
-  })
-  it('the header controls: move-to-title-bar (ArrowLineUp) in line and full; expand toggles full / max', () => {
+  it('the header control: move-to-title-bar (ArrowLineUp) in line and full, and nothing to enlarge', () => {
     scene(); setActive('cc1'); shared('line'); mount()
     fireEvent.click(screen.getByTestId('team-panel-to-titlebar'))
     expect(useTeamUiStore.getState().sharedPanelMode).toBe('titlebar')
     shared('full')
-    fireEvent.click(screen.getByTestId('team-panel-expand'))
-    expect(useTeamUiStore.getState().sharedPanelMode).toBe('max')
-    fireEvent.click(screen.getByTestId('team-panel-expand'))
-    expect(useTeamUiStore.getState().sharedPanelMode).toBe('full')
+    expect(screen.queryByTestId('team-panel-expand')).toBeNull()
     fireEvent.click(screen.getByTestId('team-panel-to-titlebar'))
     expect(useTeamUiStore.getState().sharedPanelMode).toBe('titlebar')
   })
@@ -123,7 +114,7 @@ describe('a team tab is still the team view', () => {
     expect(screen.getByTestId('team-seat-workbook-back')).toBeTruthy() // the team's drill keeps its back control
   })
   it('the shared value and the team value do not touch each other', () => {
-    scene(); shared('max'); setActive('lead'); mount()
+    scene(); shared('line'); setActive('lead'); mount()
     expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe('full')
   })
 })
@@ -145,15 +136,15 @@ describe('tab switches (real TabContent)', () => {
         </TeamDisplayProvider>
       )
     }
-    scene(); setActive('cc1'); shared('max')
+    scene(); setActive('cc1'); shared('full')
     render(<Shell />)
-    expect(screen.getByTestId('team-panel-area').getAttribute('data-expanded')).toBe('true')
+    expect(screen.getByTestId('team-seat-workbook')).toBeTruthy()
     setActive('x')
     expect(screen.queryByTestId('team-panel-area')).toBeNull()
     setActive('lead')
     expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe('full')
     setActive('cc1')
-    expect(screen.getByTestId('team-panel-area').getAttribute('data-expanded')).toBe('true')
+    expect(screen.getByTestId('team-seat-workbook')).toBeTruthy()
     expect(screen.getByTestId('team-seat-workbook-status').textContent).toBe(STATUS)
     shared('line')
     setActive('x'); setActive('cc1')

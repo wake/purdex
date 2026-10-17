@@ -4,8 +4,8 @@
 // whose lead lives on another daemon) → `remote`; anything else that is not 2xx still throws an ApprovalApiError. A 200 that
 // is not the wire shape throws `bad_response`. All four endpoints share these outcomes (the caller follows `remote`).
 import { ApprovalApiError, send } from '../team/approval-api'
-import { parseJournalPage, parseRemoteLead, parseRoadmap, parseTasks } from './parse'
-import type { JournalPage, JournalTask, RemoteLead, RoadmapFeature } from './types'
+import { parseJournalMembers, parseJournalPage, parseRemoteLead, parseRoadmap, parseTasks } from './parse'
+import type { JournalMember, JournalPage, JournalTask, RemoteLead, RoadmapFeature } from './types'
 
 export type Outcome<T> = { kind: 'ok'; value: T } | { kind: 'none' } | ({ kind: 'remote' } & RemoteLead)
 
@@ -55,4 +55,9 @@ export function setConfirmItem(hostId: string, sessionId: string, entryId: strin
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: sessionId, entry_id: entryId, idx, done }),
   }, () => true as const, 'confirm answer')
+}
+
+/** `GET /api/journal/members?session_id=<the leader's session>` (needs `journal.members.v1`). */
+export function getJournalMembers(hostId: string, sessionId: string): Promise<Outcome<JournalMember[]>> {
+  return call(hostId, `/api/journal/members${qs({ session_id: sessionId })}`, { method: 'GET' }, parseJournalMembers, 'members')
 }

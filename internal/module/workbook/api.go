@@ -156,6 +156,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/workbook/conversations/{provider}/{session_id}/refresh", m.handleRefresh) // the Mac App's; not a device route
 	// the journal (capability journal.v1, announced once the journal is wired): a unit's entries, tasks, roadmap, and a hand check (journal.confirm.v1)
 	mux.HandleFunc("GET /api/journal", m.handleJournal)
+	mux.HandleFunc("GET /api/journal/sessions", m.handleJournalSessions) // capability journal.sessions.v1
 	mux.HandleFunc("GET /api/journal/tasks", m.handleJournalTasks)
 	mux.HandleFunc("GET /api/journal/roadmap", m.handleJournalRoadmap)
 	mux.HandleFunc("PUT /api/journal/confirm", m.handleJournalConfirm)

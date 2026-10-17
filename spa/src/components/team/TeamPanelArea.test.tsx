@@ -1,5 +1,5 @@
 // spa/src/components/team/TeamPanelArea.test.tsx — the panel area and its team view (plan TI-4 / WA-2a): who it shows for,
-// what a row carries, the two modes, resize (draft-then-commit, clamped), enlarge, and that all of it lives in the store
+// what a row carries, the two modes, resize (draft-then-commit, clamped), and that all of it lives in the store
 // (survives a tab switch through the real TabContent and a reload). Real stores and the real provider.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
@@ -649,7 +649,7 @@ describe('one-line mode', () => {
   })
 })
 
-describe('resize and enlarge', () => {
+describe('resize', () => {
   beforeEach(() => { useTeamUiStore.setState({ panel: { width: 500, followsMin: false } }) }) // above the minimum, so a drag to either side moves
   const drag = (from: number, to: number, commit = true) => {
     fireEvent.mouseDown(screen.getByTestId('resize-hit'), { clientX: from })
@@ -668,6 +668,26 @@ describe('resize and enlarge', () => {
     expect(area().style.width).toBe('580px')
   })
 
+  it('a drag never touches the persisted team store until mouseup, and then writes it once', () => {
+    scene()
+    mount()
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    const getItem = vi.spyOn(Storage.prototype, 'getItem')
+    const writes = () => setItem.mock.calls.filter(([k]) => k === STORAGE).length
+    const reads = () => getItem.mock.calls.filter(([k]) => k === STORAGE).length
+    fireEvent.mouseDown(screen.getByTestId('resize-hit'), { clientX: 500 })
+    for (const x of [490, 470, 450, 430, 420]) fireEvent.mouseMove(document, { clientX: x })
+    expect(area().style.width).toBe('580px') // the draft is on screen
+    // the persist middleware reads storage on every set (to skip an unchanged write), so no read = no set went through it
+    expect(reads()).toBe(0)
+    expect(writes()).toBe(0)
+    fireEvent.mouseUp(document)
+    expect(useTeamUiStore.getState().panel.width).toBe(580)
+    expect(writes()).toBe(1)
+    setItem.mockRestore()
+    getItem.mockRestore()
+  })
+
   it('a drag cut short by the panel going away leaves no draft and commits nothing later', () => {
     scene()
     const { unmount } = mount()
@@ -681,11 +701,11 @@ describe('resize and enlarge', () => {
     expect(area().style.width).toBe('500px')
   })
 
-  it('enlarging in the middle of a drag drops the draft: nothing commits and the width is unchanged', () => {
+  it('the panel going into the title bar in the middle of a drag: nothing commits and the width is unchanged', () => {
     scene()
     mount()
     drag(500, 420, false)
-    act(() => { useTeamUiStore.getState().setPanelMode(KEY, 'max') })
+    act(() => { useTeamUiStore.getState().setPanelMode(KEY, 'titlebar') })
     fireEvent.mouseMove(document, { clientX: 100 })
     fireEvent.mouseUp(document)
     act(() => { useTeamUiStore.getState().setPanelMode(KEY, 'full') })
@@ -721,65 +741,37 @@ describe('resize and enlarge', () => {
     expect(area().style.width).toBe('600px')
   })
 
-  it('enlarge toggles full <-> max and keeps the width apart', () => {
+  it('there is no max state and no enlarge control, in full or one line', () => {
     scene()
     act(() => useTeamUiStore.getState().setPanelWidth(500))
     mount()
-    expect(area().getAttribute('data-expanded')).toBe('false')
-    fireEvent.click(screen.getByTestId('team-panel-expand'))
-    expect(useTeamUiStore.getState().panelMode[KEY]).toBe('max')
-    expect(useTeamUiStore.getState().panel).toEqual({ width: 500, followsMin: false })
-    expect(area().getAttribute('data-expanded')).toBe('true')
-    expect(screen.queryByTestId('resize-hit')).toBeNull() // nothing to resize while it fills the area
-    fireEvent.click(screen.getByTestId('team-panel-expand'))
-    expect(KEY in useTeamUiStore.getState().panelMode).toBe(false) // back to full
+    expect(screen.queryByTestId('team-panel-expand')).toBeNull()
+    expect(area().hasAttribute('data-expanded')).toBe(false)
+    expect(screen.getByTestId('resize-hit')).toBeTruthy()
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+    expect(screen.queryByTestId('team-panel-expand')).toBeNull()
     expect(area().style.width).toBe('500px')
   })
 
-  it('enlarge from one-line mode goes to max (the full list, enlarged)', () => {
+  it('a saved max (an older build) draws as full', () => {
     scene()
-    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+    localStorage.setItem(STORAGE, JSON.stringify({ state: { panelMode: { [KEY]: 'max' }, panelLast: { [KEY]: 'max' }, panel: { width: 500, expanded: true } }, version: 0 }))
+    act(() => { void useTeamUiStore.persist.rehydrate() })
     mount()
-    fireEvent.click(screen.getByTestId('team-panel-expand'))
-    expect(useTeamUiStore.getState().panelMode[KEY]).toBe('max')
-    expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe('max')
-    expect(rows().length).toBeGreaterThan(0)
-  })
-
-  it('a header click leaves a max panel alone', () => {
-    scene()
-    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'max'))
-    mount()
-    fireEvent.click(screen.getByTestId('team-panel-count'))
-    expect(useTeamUiStore.getState().panelMode[KEY]).toBe('max')
-  })
-
-  it('an old store saved enlarged: the team showing at the first draw becomes max', () => {
-    scene()
-    act(() => useTeamUiStore.setState({ legacyMax: true }))
-    mount()
-    expect(useTeamUiStore.getState().panelMode[KEY]).toBe('max')
-    expect(useTeamUiStore.getState().legacyMax).toBe(false)
-  })
-
-  it('an old store saved enlarged with no team showing: dropped', () => {
-    scene({ activeTabId: 'x' })
-    act(() => useTeamUiStore.setState({ legacyMax: true }))
-    mount()
-    expect(useTeamUiStore.getState().legacyMax).toBe(false)
-    expect(useTeamUiStore.getState().panelMode).toEqual({})
+    expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe('full')
+    expect(area().style.width).toBe('500px')
   })
 })
 
 describe('the header\'s move-to-title-bar button (round 5)', () => {
   const btn = () => screen.getByTestId('team-panel-to-titlebar')
-  const setMode = (m: 'full' | 'line' | 'max') => act(() => { useTeamUiStore.getState().setPanelMode(KEY, m) })
+  const setMode = (m: 'full' | 'line') => act(() => { useTeamUiStore.getState().setPanelMode(KEY, m) })
 
-  it('line, full and max all draw the same icon (ArrowLineUp, not a caret) with the same tooltip, and none has the old expand-list control', () => {
+  it('line and full draw the same icon (ArrowLineUp, not a caret) with the same tooltip, and none has the old expand-list control', () => {
     scene()
     mount()
     const icons: string[] = []
-    for (const m of ['full', 'line', 'max'] as const) {
+    for (const m of ['full', 'line'] as const) {
       setMode(m)
       expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe(m)
       icons.push(btn().querySelector('svg')!.innerHTML)
@@ -802,7 +794,7 @@ describe('the header\'s move-to-title-bar button (round 5)', () => {
   it('in every state a click moves the area into the title bar and back to the state it left', () => {
     scene()
     mount()
-    for (const m of ['line', 'full', 'max'] as const) {
+    for (const m of ['line', 'full'] as const) {
       setMode(m)
       fireEvent.click(btn())
       expect(useTeamUiStore.getState().panelMode[KEY]).toBe('titlebar')
@@ -825,13 +817,13 @@ describe('the title bar state', () => {
   it('⌃ hands the area to the title bar: the pane draws nothing, and the way back is the state it left', () => {
     scene()
     mount()
-    fireEvent.click(screen.getByTestId('team-panel-expand')) // max
+    fireEvent.click(screen.getByTestId('team-panel-count')) // full -> line
     fireEvent.click(screen.getByTestId('team-panel-to-titlebar'))
     expect(useTeamUiStore.getState().panelMode[KEY]).toBe('titlebar')
     expect(screen.queryByTestId('team-panel-area')).toBeNull()
     act(() => useTeamUiStore.getState().toggleTitleBar(KEY))
-    expect(useTeamUiStore.getState().panelMode[KEY]).toBe('max')
-    expect(screen.getByTestId('team-panel-area').getAttribute('data-expanded')).toBe('true')
+    expect(useTeamUiStore.getState().panelMode[KEY]).toBe('line')
+    expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe('line')
   })
 })
 

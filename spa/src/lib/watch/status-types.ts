@@ -8,6 +8,10 @@ export interface WatchHolderView {
   session_id?: string
   /** RFC 3339. A Go zero time arrives as `0001-01-01T00:00:00Z`: `sinceMs` reads that as unknown. */
   since?: string
+  /** A start or wake of this host's watcher is going on (`self.starting`). Absent from a daemon that does not carry it: unknown, read as false. */
+  starting?: boolean
+  /** RFC 3339 (`self.cooldown_until`): when a failed start or wake lets the next be tried. Absent: no cooldown, or a daemon without it. */
+  cooldown_until?: string
 }
 
 /** `current` / `last`: where events go now, or went last (a remote or local holder, as this host last heard). */
@@ -64,7 +68,8 @@ export function parseWatchStatus(raw: unknown): WatchStatus | null {
   const state = raw.self.state
   if (host_id === undefined || typeof state !== 'string' || !STATES.includes(state)) return null
   return {
-    self: { host_id, state: state as HolderState, session_id: str(raw.self.session_id), since: str(raw.self.since) },
+    self: { host_id, state: state as HolderState, session_id: str(raw.self.session_id), since: str(raw.self.since),
+      starting: typeof raw.self.starting === 'boolean' ? raw.self.starting : undefined, cooldown_until: str(raw.self.cooldown_until) || undefined },
     current: parseWhere(raw.current),
     last: parseWhere(raw.last),
     watcher: parseWatcher(raw.watcher),
