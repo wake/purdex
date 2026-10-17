@@ -84,7 +84,7 @@ beforeEach(() => {
   localStorage.clear()
   resetTeamStores()
   useJournalStore.getState().reset()
-  useJournalUiStore.setState({ lastWidths: {}, teamOpen: {} })
+  useJournalUiStore.setState({ lastWidths: {} })
   clearViewMemos()
   clearModuleRegistry()
   getJournal.mockReset(); getJournalPage.mockReset(); getJournalSessions.mockReset()
