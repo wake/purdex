@@ -7,12 +7,16 @@ import { getUnattended } from './unattended-api'
 import { useRelayQuotaStore, quotaKey } from './relay-quota'
 import { refetchHost, resetWriter } from './relay-quota-writer'
 import { HOST_READ_TIMEOUT_MS, readFirstPage, refreshHost, resetReader, watchHost } from './unattended-reader'
+import { startUnattendedSupport } from './unattended-support'
 import { useHostStore } from '../../stores/useHostStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import type { SessionQuota, UnattendedView } from './types'
 
 vi.mock('./unattended-api', () => ({ getUnattended: vi.fn() }))
 const mockedGet = vi.mocked(getUnattended)
+vi.mock('../host-api', () => ({
+  fetchHostInfo: vi.fn(async () => ({ host_id: 'd', tmux_instance: '', purdex_version: '', tmux_version: '', os: '', arch: '', capabilities: ['relay.unattended.v1', 'team.relay_quota.v1'] })),
+}))
 
 const A = 'host-a'
 const B = 'host-b'
@@ -78,6 +82,32 @@ describe('single-flight', () => {
     expect(st().reads[A]).toEqual({ ok: true, quotas: [quota('new', { rev: 1 })] })
     expect(st().confirmed[quotaKey(A, 'root-old')]).toBeUndefined()
     expect(st().gets).toEqual({})
+  })
+
+  // JV-5b review: endpoint and token alone do not name a connection. A disconnect and a reconnect to the same daemon is a new
+  // connection generation (unattended-support.ts fences the store): the old connection's read joins nothing and writes nothing.
+  it('a reconnect (same endpoint and token): a new reader does not join the old read, whose late answer writes nothing', async () => {
+    const tick = () => new Promise((r) => setTimeout(r, 0))
+    useHostStore.setState({ runtime: { [A]: { status: 'connected' } } })
+    const stop = startUnattendedSupport()
+    try {
+      await tick() // the probe answered: team.relay_quota.v1
+      const calls = controlled()
+      const old = readFirstPage(A)
+      useHostStore.setState({ runtime: { [A]: { status: 'disconnected' } } })
+      useHostStore.setState({ runtime: { [A]: { status: 'connected' } } })
+      await tick()
+      const fresh = readFirstPage(A)
+      expect(calls).toHaveLength(2) // not joined to the old connection's read
+      calls[0].resolve(page({ quotas: [quota('old', { rev: 99 })] }))
+      await old
+      expect(st().reads[A]).toBeUndefined()
+      expect(st().confirmed[quotaKey(A, 'root-old')]).toBeUndefined()
+      calls[1].resolve(page({ quotas: [quota('new')] }))
+      await fresh
+      expect(st().reads[A]).toEqual({ ok: true, quotas: [quota('new')] })
+      expect(st().confirmed[quotaKey(A, 'root-new')]).toBeDefined()
+    } finally { stop() }
   })
 
   it('a removed host is not asked', async () => {

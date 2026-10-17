@@ -61,12 +61,12 @@ interface RelayQuotaState {
   /** Per host, the GETs in flight and the events buffered meanwhile (absent = none in flight). */
   gets: Record<string, GetState>
   /**
-   * Per host, a counter that moves every time the host is forgotten (removed or re-pointed). A GET carries the epoch it
-   * began in, so the late end of a GET made to the OLD daemon can neither apply its rows nor consume the depth of a GET
-   * made to the new one.
+   * Per host, a counter that moves every time the host is forgotten (removed or re-pointed) or its connection goes away or
+   * comes back (`fence`): the connection generation. A GET carries the epoch it began in, so the late end of a GET made to
+   * the OLD daemon, or over the old connection, can neither apply its rows nor consume the depth of a newer GET.
    */
   epochs: Record<string, number>
-  /** Per host, its last read (absent = none since the host was last forgotten). */
+  /** Per host, its last read (absent = none since the host was last forgotten or fenced). */
   reads: Record<string, QuotaRead>
 
   /** Starts a GET for the host; returns the epoch to hand back to `endGet`. */
@@ -80,6 +80,11 @@ interface RelayQuotaState {
   setWrite: (hostId: string, root: string, field: RelayQuotaField, write: FieldWrite) => void
   clearWrite: (hostId: string, root: string, field: RelayQuotaField) => void
   forgetHost: (hostId: string) => void
+  /**
+   * The host's connection went away or came back (same daemon): a new generation. Its last read and the GETs out are
+   * dropped (the events they buffered are real and are applied); the confirmed numbers and the pending writes stay.
+   */
+  fence: (hostId: string) => void
   reset: () => void
 }
 
@@ -145,6 +150,14 @@ export const useRelayQuotaStore = create<RelayQuotaState>()((set, get) => ({
     const { [hostId]: _gone, ...gets } = s.gets
     const { [hostId]: _read, ...reads } = s.reads
     return { confirmed: keep(s.confirmed), writes: keep(s.writes), gets, reads, epochs: { ...s.epochs, [hostId]: (s.epochs[hostId] ?? 0) + 1 } }
+  }),
+
+  fence: (hostId) => set((s) => {
+    let confirmed = s.confirmed
+    for (const e of s.gets[hostId]?.events ?? []) confirmed = withConfirmed(confirmed, hostId, e.root_session_id, { self_left: e.self_left, member_pool_left: e.member_pool_left, rev: e.rev })
+    const { [hostId]: _gone, ...gets } = s.gets
+    const { [hostId]: _read, ...reads } = s.reads
+    return { confirmed, gets, reads, epochs: { ...s.epochs, [hostId]: (s.epochs[hostId] ?? 0) + 1 } }
   }),
 
   reset: () => set({ confirmed: {}, writes: {}, gets: {}, epochs: {}, reads: {} }),
