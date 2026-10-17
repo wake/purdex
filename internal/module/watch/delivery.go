@@ -268,6 +268,7 @@ func (m *Module) receiveEvent(ctx context.Context, msg watch.Message) error {
 	if n == nil {
 		n = peerNotifier{m}
 	}
+	m.activity.Add(1) // before the watcher is told: a rest step that has not seen the delivery recorded still sees this
 	if err := n.Notify(ctx, own, text); err != nil {
 		if _, _, rerr := m.Reconcile(ctx); rerr != nil {
 			m.logf("[watch] reconcile after a failed delivery: %v", rerr)

@@ -1,6 +1,7 @@
 package watchmod
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"sync"
@@ -26,9 +27,12 @@ const (
 	restAnswerWait = 5 * time.Minute
 	restQuiet      = 90 * time.Second // the answer is over when the transcript has been still this long (the notice itself also writes it)
 	restExitWait   = 5 * time.Minute
-	noticeWrite    = 15 * time.Second // the notice reaches the transcript within this long
+	maxAnswerRead  = 4 << 20 // bytes of the transcript read after the notice
 	restKillWait   = 10 * time.Second
 )
+
+// restMarker is the start of the notice, which tells its record in the transcript from the answer.
+const restMarker = "[負載守門] 你已閒置"
 
 // restText is the notice; fixed text.
 const restText = "[負載守門] 你已閒置一段時間，該休息了。請把筆記寫好並推送（purdex-watch 分支），回報一聲，然後結束這個 session（/exit）。如果有新事件進來，我會取消休息。"
@@ -48,8 +52,11 @@ type restState struct {
 	frame string
 	phase restPhase
 	at    time.Time // when the phase was entered
-	// asked is when the notice went out and base the transcript time that counts as "not an answer yet" (the notice writes it too).
-	asked, base time.Time
+	// asked is when the notice went out, off the transcript's size then (what comes after it, past the notice's own line, is the
+	// answer), and gen the count of events delivered to the watcher then: a later count means an event came in.
+	asked time.Time
+	off   int64
+	gen   int64
 }
 
 // exiter sends /exit to the watcher's pane (watch.PaneControl.SendExit).
@@ -95,6 +102,39 @@ func latest(ts ...time.Time) time.Time {
 	return out
 }
 
+func (m *Module) transcriptSize(path string) int64 {
+	if path == "" {
+		return 0
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return fi.Size()
+}
+
+// answeredAfterNotice says whether the transcript holds, after the line of the notice itself (found by its fixed text), a line of the
+// assistant: the watcher's answer. The notice's own record does not count, however late it is written.
+func (m *Module) answeredAfterNotice(path string, off int64) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, maxAnswerRead)
+	n, _ := f.ReadAt(buf, off)
+	data := buf[:n]
+	i := bytes.Index(data, []byte(restMarker))
+	if i < 0 {
+		return false
+	}
+	j := bytes.IndexByte(data[i:], '\n')
+	if j < 0 {
+		return false
+	}
+	return bytes.Contains(data[i+j:], []byte(`"type":"assistant"`))
+}
+
 // restNext is how long the loop waits before the next step.
 func (m *Module) restNext() time.Duration {
 	m.rst.mu.Lock()
@@ -129,7 +169,7 @@ func (m *Module) restStep(ctx context.Context) {
 		m.rst.frame, m.rst.phase, m.rst.at = h.FrameID, restIdle, time.Time{}
 	}
 	mtime := m.transcriptMtime(h.TranscriptPath)
-	if m.rst.phase != restIdle && h.LastDelivery.After(m.rst.asked) { // an event came in after the notice: there is work, no rest
+	if m.rst.phase != restIdle && (h.LastDelivery.After(m.rst.asked) || m.activity.Load() != m.rst.gen) { // an event came in after the notice: there is work, no rest
 		m.rst.phase, m.rst.at = restIdle, time.Time{}
 		return
 	}
@@ -139,19 +179,22 @@ func (m *Module) restStep(ctx context.Context) {
 		if now.Sub(latest(h.Since, h.LastDelivery, h.LastTurn, mtime)) < idleFor {
 			return
 		}
+		off, gen := m.transcriptSize(h.TranscriptPath), m.activity.Load()
 		if err := m.notifyWatcher(ctx, h, restText); err != nil {
 			m.logf("[watch] rest: the notice to %s: %v", h.SessionID, err)
 			return
 		}
-		m.rst.phase, m.rst.at, m.rst.asked = restAsked, now, now
-		m.rst.base = latest(m.transcriptMtime(h.TranscriptPath), now.Add(noticeWrite))
+		m.rst.phase, m.rst.at, m.rst.asked, m.rst.off, m.rst.gen = restAsked, now, now, off, gen
 	case restAsked:
-		answered := mtime.After(m.rst.base) && now.Sub(mtime) >= restQuiet
+		answered := now.Sub(mtime) >= restQuiet && m.answeredAfterNotice(h.TranscriptPath, m.rst.off)
 		if !answered && now.Sub(m.rst.at) < restAnswerWait {
 			return
 		}
 		if m.exit == nil {
 			m.logf("[watch] rest: no way to send /exit")
+			return
+		}
+		if m.restBusy() { // checked again at the last moment
 			return
 		}
 		if err := m.exit.SendExit(ctx); err != nil {
@@ -161,6 +204,9 @@ func (m *Module) restStep(ctx context.Context) {
 		m.rst.phase, m.rst.at = restExited, now
 	case restExited:
 		if now.Sub(m.rst.at) < restExitWait {
+			return
+		}
+		if m.restBusy() {
 			return
 		}
 		switch m.signalIfSame(h, syscall.SIGTERM) {
@@ -173,11 +219,23 @@ func (m *Module) restStep(ctx context.Context) {
 		if now.Sub(m.rst.at) < restKillWait {
 			return
 		}
+		if m.restBusy() {
+			return
+		}
 		if m.signalIfSame(h, syscall.SIGKILL) == sigFailed {
 			return // tried again at the next step
 		}
 		m.rst.phase, m.rst.at = restIdle, time.Time{} // gone: the next reconcile turns the holder resting; still there: counted again
 	}
+}
+
+// restBusy says an event has begun to be delivered since the notice, and cancels the rest (rst.mu held).
+func (m *Module) restBusy() bool {
+	if m.activity.Load() == m.rst.gen {
+		return false
+	}
+	m.rst.phase, m.rst.at = restIdle, time.Time{}
+	return true
 }
 
 type sigResult int
