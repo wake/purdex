@@ -29,7 +29,7 @@ func SnapshotTree(ctx context.Context, git, dir string) (SnapshotInfo, error) {
 	}
 	runIn := func(env []string, stdin string, args ...string) (string, error) {
 		cmd := exec.CommandContext(ctx, git, append([]string{"-C", dir}, args...)...)
-		cmd.Env = append(os.Environ(), env...)
+		cmd.Env = append(gitEnvWithoutRepository(os.Environ()), env...)
 		if stdin != "" {
 			cmd.Stdin = strings.NewReader(stdin)
 		}
@@ -79,6 +79,29 @@ func SnapshotTree(ctx context.Context, git, dir string) (SnapshotInfo, error) {
 		}
 	}
 	return SnapshotInfo{SHA: sha, Root: root, Rel: rel}, nil
+}
+
+// gitRepositoryEnv are the variables that tell git which repository, work tree, index and object store to use. `git -C dir` does not
+// override them, and a process started by a git hook (a pre-commit that runs the tests through the gate) carries them: left in, the
+// snapshot would be of another repository, or would write its objects into one.
+var gitRepositoryEnv = []string{
+	"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+	"GIT_NAMESPACE", "GIT_PREFIX", "GIT_INTERNAL_SUPER_PREFIX", "GIT_QUARANTINE_PATH",
+}
+
+// gitEnvWithoutRepository is env without those variables.
+func gitEnvWithoutRepository(env []string) []string {
+	out := make([]string, 0, len(env))
+next:
+	for _, kv := range env {
+		for _, k := range gitRepositoryEnv {
+			if strings.HasPrefix(kv, k+"=") {
+				continue next
+			}
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // tempIndexConfig is what every git command on the temporary index runs with: the index is written whole (a split index would leave a

@@ -138,6 +138,52 @@ func TestSnapshot_APlainRepoGivesTheSameTreeAsBefore(t *testing.T) {
 	assert.Equal(t, wantTree, gitIn(t, dir, "rev-parse", info.SHA+"^{tree}"))
 }
 
+// A snapshot is of the repository that holds dir, whatever repository variables the process carries (a git hook that runs the gate has
+// GIT_DIR and GIT_INDEX_FILE): another repository is not read, written to, or made the parent of the commit.
+func TestSnapshot_InheritedGitRepositoryVariablesAreIgnored(t *testing.T) {
+	dir := ignoredRepo(t)
+	writeFile(t, dir+"/a.txt", "a changed here\n", 0o644)
+	other := ignoredRepo(t)
+	writeFile(t, other+"/a.txt", "a changed in the other repository\n", 0o644)
+	otherIndex, err := os.ReadFile(other + "/.git/index")
+	require.NoError(t, err)
+	otherObjects := gitIn(t, other, "count-objects", "-v")
+	otherHead := gitIn(t, other, "rev-parse", "HEAD")
+
+	set := map[string]string{
+		"GIT_DIR": other + "/.git", "GIT_WORK_TREE": other, "GIT_INDEX_FILE": filepath.Join(t.TempDir(), "bogus-index"),
+		"GIT_OBJECT_DIRECTORY": other + "/.git/objects", "GIT_COMMON_DIR": other + "/.git",
+	}
+	old := map[string]*string{}
+	for k, v := range set {
+		if cur, ok := os.LookupEnv(k); ok {
+			c := cur
+			old[k] = &c
+		} else {
+			old[k] = nil
+		}
+		require.NoError(t, os.Setenv(k, v))
+	}
+	info, err := SnapshotTree(context.Background(), "", dir)
+	for k, was := range old { // before anything below runs git: the helpers must see the real environment
+		if was == nil {
+			os.Unsetenv(k)
+		} else {
+			os.Setenv(k, *was)
+		}
+	}
+	require.NoError(t, err)
+
+	assert.Equal(t, dir, info.Root)
+	assert.Equal(t, "a changed here", gitIn(t, dir, "show", info.SHA+":a.txt"))
+	assert.Equal(t, gitIn(t, dir, "rev-parse", "HEAD"), gitIn(t, dir, "rev-parse", info.SHA+"^"), "its parent is this repository's HEAD")
+	assert.Equal(t, otherHead, gitIn(t, other, "rev-parse", "HEAD"))
+	assert.Equal(t, otherObjects, gitIn(t, other, "count-objects", "-v"), "nothing was written to the other repository")
+	afterIndex, err := os.ReadFile(other + "/.git/index")
+	require.NoError(t, err)
+	assert.Equal(t, otherIndex, afterIndex)
+}
+
 func gitInEnv(t *testing.T, dir string, env []string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
