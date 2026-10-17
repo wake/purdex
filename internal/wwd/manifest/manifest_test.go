@@ -1,7 +1,6 @@
 package manifest
 
 import (
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -144,85 +143,6 @@ func exists(set ...string) func(string) bool {
 	return func(p string) bool { return m[p] }
 }
 
-func TestRenderFiles(t *testing.T) {
-	m := mustParse(t, sample)
-	task := m.Tasks["spa-file"]
-	got, err := task.Render([]string{"src/a.test.ts", "src/b c.test.ts"}, RenderEnv{
-		Report: "/w/report.json", Workspace: "/w",
-		Exists: exists("spa/src/a.test.ts", "spa/src/b c.test.ts"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "pnpm vitest run --reporter=json --outputFile='/w/report.json' 'src/a.test.ts' 'src/b c.test.ts'"
-	if got != want {
-		t.Fatalf("got  %s\nwant %s", got, want)
-	}
-}
-
-func TestRenderFilesRejected(t *testing.T) {
-	task := mustParse(t, sample).Tasks["spa-file"]
-	env := RenderEnv{Report: "/w/r", Workspace: "/w", Exists: exists("spa/src/a.ts")}
-	for name, args := range map[string][]string{
-		"none":       nil,
-		"dotdot":     {"../go.mod"},
-		"inner dot2": {"src/../../go.mod"},
-		"absolute":   {"/etc/passwd"},
-		"missing":    {"src/nope.ts"},
-		"empty":      {""},
-		"flag":       {"--config=evil.js"},
-		"nul":        {"src/a.ts\x00"},
-	} {
-		if _, err := task.Render(args, env); err == nil {
-			t.Errorf("%s: Render succeeded, want error", name)
-		}
-	}
-}
-
-func TestRenderPackages(t *testing.T) {
-	m := mustParse(t, "[tasks.gp]\nrun = \"go test -json {packages}\"\nargs = \"packages\"\n")
-	got, err := m.Tasks["gp"].Render([]string{"./internal/wwd/...", "./cmd/pdx"}, RenderEnv{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "go test -json './internal/wwd/...' './cmd/pdx'" {
-		t.Fatalf("got %s", got)
-	}
-	for _, bad := range []string{"../x", "./a/../b", "-run=x", "a;b", "$(x)", "./a b", ""} {
-		if _, err := m.Tasks["gp"].Render([]string{bad}, RenderEnv{}); err == nil {
-			t.Errorf("package %q accepted", bad)
-		}
-	}
-}
-
-func TestRenderNoneAndPass(t *testing.T) {
-	m := mustParse(t, `
-[tasks.lint]
-run = "make lint"
-args = "none"
-[tasks.pass]
-run = "go vet"
-args = "pass"
-local = true
-`)
-	if got, err := m.Tasks["lint"].Render(nil, RenderEnv{}); err != nil || got != "make lint" {
-		t.Fatalf("lint = %q, %v", got, err)
-	}
-	if _, err := m.Tasks["lint"].Render([]string{"x"}, RenderEnv{}); err == nil {
-		t.Fatal("none task accepted arguments")
-	}
-	got, err := m.Tasks["pass"].Render([]string{"./a", "-x"}, RenderEnv{})
-	if err != nil || got != "go vet './a' '-x'" {
-		t.Fatalf("pass = %q, %v", got, err)
-	}
-}
-
-func TestQuoteSingleQuote(t *testing.T) {
-	if got := shellQuote("it's"); got != `'it'\''s'` {
-		t.Fatalf("got %s", got)
-	}
-}
-
 func TestDefinitionHash(t *testing.T) {
 	a := mustParse(t, sample).Tasks["spa-related"]
 	b := mustParse(t, sample).Tasks["spa-related"]
@@ -262,61 +182,6 @@ func TestDefinitionHashSummaryEnvOrderAndArgsKind(t *testing.T) {
 	s := mustParse(t, "[tasks.a]\nrun=\"x\"\nargs=\"none\"\nsummary=\"go-json\"\nenv=[\"A=1\",\"B\"]\n").Tasks["a"]
 	if x.DefinitionHash() == s.DefinitionHash() {
 		t.Error("summary must be part of the hash")
-	}
-}
-
-func TestParseRejectsQuotedOrGluedPlaceholders(t *testing.T) {
-	for name, run := range map[string]string{
-		"single quoted":   `tool '{files}'`,
-		"double quoted":   `tool "{files}"`,
-		"glued prefix":    `tool x{files}`,
-		"glued suffix":    `tool {files}x`,
-		"inside quote":    `sh -c 'run {files}'`,
-		"unterminated":    `tool 'abc {files}`,
-		"escaped quote":   `tool "x\" {files} y" z\"`,
-		"escaped then":    `tool "a\\" "b {files}"`,
-		"backslash brace": `tool "x\{files}"`,
-		"quoted after =":  `tool --opt="{files}"`,
-		"lone backslash":  `tool "a\b {files}"`,
-		"cmd subst":       `tool $(printf '%s' {files} )`,
-		"backtick subst":  "tool `echo {files} `",
-	} {
-		src := "[tasks.a]\nrun = " + strconv.Quote(run) + "\nargs = \"files\"\n"
-		if _, err := Parse([]byte(src)); err == nil {
-			t.Errorf("%s: Parse accepted %s", name, run)
-		}
-	}
-}
-
-func TestRenderQuotesShellMetacharacterFilenames(t *testing.T) {
-	task := mustParse(t, sample).Tasks["spa-file"]
-	got, err := task.Render([]string{"$(touch x).ts"}, RenderEnv{
-		Report: "/w/r.json", Workspace: "/w", Exists: exists("spa/$(touch x).ts"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.HasSuffix(got, " '$(touch x).ts'") {
-		t.Fatalf("got %s", got)
-	}
-}
-
-func TestRenderOutputPathContainment(t *testing.T) {
-	task := mustParse(t, sample).Tasks["spa-file"]
-	ex := exists("spa/src/a.ts")
-	for name, env := range map[string]RenderEnv{
-		"empty":         {Report: "", Workspace: "/w", Exists: ex},
-		"no workspace":  {Report: "/w/r.json", Exists: ex},
-		"outside":       {Report: "/etc/r.json", Workspace: "/w", Exists: ex},
-		"dotdot":        {Report: "/w/../etc/r.json", Workspace: "/w", Exists: ex},
-		"sibling":       {Report: "/w2/r.json", Workspace: "/w", Exists: ex},
-		"workspace dir": {Report: "/w", Workspace: "/w", Exists: ex},
-		"relative":      {Report: "r.json", Workspace: "/w", Exists: ex},
-		"nul":           {Report: "/w/r\x00.json", Workspace: "/w", Exists: ex},
-	} {
-		if _, err := task.Render([]string{"src/a.ts"}, env); err == nil {
-			t.Errorf("%s: Render accepted report path %q", name, env.Report)
-		}
 	}
 }
 

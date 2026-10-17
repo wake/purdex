@@ -104,6 +104,10 @@ type Task struct {
 	DB      string
 	Summary string
 	Qualify *Qualify
+
+	// argv is Run split into words at parse time; the command is never
+	// handed to a shell.
+	argv []word
 }
 
 type rawManifest struct {
@@ -238,6 +242,9 @@ func buildTask(name string, rt rawTask) (*Task, error) {
 	if t.DB != "" && t.DB != "per-job" {
 		return nil, fmt.Errorf("db %q is not per-job", t.DB)
 	}
+	if t.argv, err = parseArgv(t.Run); err != nil {
+		return nil, err
+	}
 	if err := checkPlaceholders(t); err != nil {
 		return nil, err
 	}
@@ -296,58 +303,7 @@ func parseLocal(v any) (LocalPolicy, error) {
 	return LocalPolicy{}, fmt.Errorf("local must be true, false, \"files<=N\" or \"packages<=N\"")
 }
 
-// checkPlaceholderContext rejects a placeholder that sits inside quotes or is
-// glued to other text: Render inserts single-quoted values, which are only
-// safe as a whole unquoted shell word (optionally after "--opt=").
-func checkPlaceholderContext(run string) error {
-	// Independent of the quote scan below: every placeholder, wherever it
-	// is, must be a whole word (so "x\{files}" fails here whatever the
-	// scanner thinks of the backslash).
-	for _, loc := range placeholderRe.FindAllStringIndex(run, -1) {
-		s, e := loc[0], loc[1]
-		if s > 0 && run[s-1] != ' ' && run[s-1] != '\t' && run[s-1] != '=' {
-			return fmt.Errorf("placeholder %s must be a separate word", run[s:e])
-		}
-		if e < len(run) && run[e] != ' ' && run[e] != '\t' {
-			return fmt.Errorf("placeholder %s must be a separate word", run[s:e])
-		}
-	}
-	// A command substitution would re-split a substituted value; a run that
-	// takes placeholders may not contain one.
-	if placeholderRe.MatchString(run) && (strings.Contains(run, "$(") || strings.Contains(run, "`")) {
-		return fmt.Errorf("run with placeholders must not use command substitution")
-	}
-	var quote byte
-	for i := 0; i < len(run); i++ {
-		c := run[i]
-		switch {
-		case quote == '"' && c == '\\':
-			// POSIX: inside double quotes a backslash escapes only these.
-			if i+1 < len(run) && strings.IndexByte("$`\"\\\n", run[i+1]) >= 0 {
-				i++
-			}
-		case quote != 0:
-			if c == quote {
-				quote = 0
-			} else if loc := placeholderRe.FindStringIndex(run[i:]); c == '{' && loc != nil && loc[0] == 0 {
-				return fmt.Errorf("placeholder %s is inside quotes", run[i:i+loc[1]])
-			}
-		case c == '\'' || c == '"':
-			quote = c
-		case c == '\\':
-			i++
-		}
-	}
-	if quote != 0 {
-		return fmt.Errorf("run has an unterminated quote")
-	}
-	return nil
-}
-
 func checkPlaceholders(t *Task) error {
-	if err := checkPlaceholderContext(t.Run); err != nil {
-		return err
-	}
 	seen := map[string]bool{}
 	for _, mm := range placeholderRe.FindAllStringSubmatch(t.Run, -1) {
 		seen[mm[1]] = true
@@ -407,82 +363,6 @@ func checkRelPath(p string) error {
 	return nil
 }
 
-// RenderEnv carries what Render needs from the workspace.
-type RenderEnv struct {
-	// Report and Junit are the output file paths for {report} and {junit}.
-	Report, Junit string
-	// Workspace is the job's workspace root; Report and Junit must be
-	// inside it (spec §6).
-	Workspace string
-	// Exists reports whether a repo-root-relative path exists in the
-	// snapshot. Required when the task takes files.
-	Exists func(repoRel string) bool
-}
-
-// Render validates args against the task's args kind and returns the shell
-// command with placeholders replaced. Every substituted value is
-// single-quoted.
-func (t *Task) Render(args []string, env RenderEnv) (string, error) {
-	var list string
-	switch t.Args {
-	case ArgsNone:
-		if len(args) > 0 {
-			return "", fmt.Errorf("task %s takes no arguments", t.Name)
-		}
-	case ArgsFiles:
-		if len(args) == 0 {
-			return "", fmt.Errorf("task %s needs at least one file", t.Name)
-		}
-		if env.Exists == nil {
-			return "", fmt.Errorf("task %s: no snapshot to check files against", t.Name)
-		}
-		for _, a := range args {
-			if err := checkRelPath(a); err != nil {
-				return "", fmt.Errorf("file %q: %w", a, err)
-			}
-			if !env.Exists(path.Join(t.Cwd, a)) {
-				return "", fmt.Errorf("file %q is not in the snapshot", a)
-			}
-		}
-		list = quoteAll(args)
-	case ArgsPackages:
-		if len(args) == 0 {
-			return "", fmt.Errorf("task %s needs at least one package", t.Name)
-		}
-		for _, a := range args {
-			if err := checkPackage(a); err != nil {
-				return "", err
-			}
-		}
-		list = quoteAll(args)
-	case ArgsPass:
-		list = quoteAll(args)
-	}
-	for ph, p := range map[string]string{"{report}": env.Report, "{junit}": env.Junit} {
-		if !strings.Contains(t.Run, ph) {
-			continue
-		}
-		if err := checkInside(env.Workspace, p); err != nil {
-			return "", fmt.Errorf("%s: %w", ph, err)
-		}
-	}
-	out := placeholderRe.ReplaceAllStringFunc(t.Run, func(ph string) string {
-		switch ph {
-		case "{files}", "{packages}":
-			return list
-		case "{report}":
-			return shellQuote(env.Report)
-		case "{junit}":
-			return shellQuote(env.Junit)
-		}
-		return ph
-	})
-	if t.Args == ArgsPass && list != "" {
-		out += " " + list
-	}
-	return out, nil
-}
-
 // checkInside requires p to be a non-empty absolute path strictly inside root.
 func checkInside(root, p string) error {
 	if root == "" || p == "" || strings.ContainsRune(p, 0) || !filepath.IsAbs(root) || !filepath.IsAbs(p) {
@@ -514,21 +394,6 @@ func checkPackage(p string) error {
 	return nil
 }
 
-func quoteAll(xs []string) string {
-	q := make([]string, len(xs))
-	for i, x := range xs {
-		q[i] = shellQuote(x)
-	}
-	return strings.Join(q, " ")
-}
-
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// DefinitionHash is the hex SHA-256 of the parts of the definition that
-// decide what a run means: run, cwd, env (order-independent), args kind and
-// summary (spec §4.5). Timeouts, class and labels are not part of it.
 func (t *Task) DefinitionHash() string {
 	env := append([]string(nil), t.Env...)
 	sort.Strings(env)
