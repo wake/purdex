@@ -199,3 +199,23 @@ func TestPaneSnapCache_SingleFlight(t *testing.T) {
 		t.Fatalf("8 concurrent reads forked %d times, want 1", b)
 	}
 }
+
+// A session whose only pane is linked into several sessions is found through the per-pane answer, not the listing.
+func TestProjectionForSession_AmbiguousOnlyPane(t *testing.T) {
+	m, tx := newScopeModule(t)
+	orig := pidAncestorIncludesFn
+	pidAncestorIncludesFn = func(pid, ancestor int) bool { return true }
+	t.Cleanup(func() { pidAncestorIncludesFn = orig })
+	tx.SetPaneSessionName("%linked", "slinked")
+	tx.SetActivePanePID("%linked", "9100")
+	tx.SetPaneAmbiguous("%linked", true)
+	seedIdentityFrame(t, m, "%linked", "cc", 500, "Sun Apr 20 01:30:00 2026", 7, "sid-l", "/w")
+	got, err := m.projectionForSession("slinked")
+	want, werr := m.projectionForSessionGlobal("slinked")
+	if err != nil || werr != nil || got == nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("scoped = %+v (%v), global = %+v (%v)", got, err, want, werr)
+	}
+	if other, _ := m.projectionForSession("other"); other != nil {
+		t.Fatalf("another session got the linked pane: %+v", other)
+	}
+}
