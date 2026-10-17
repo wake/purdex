@@ -20,6 +20,8 @@ const (
 	// moments before it writes the row, and the sweep must not take the pin from a job that is about to exist. The id carries its
 	// time (a ULID), so no row or clock of the pin is needed.
 	orphanGrace = 10 * time.Minute
+	// forgetAfter: a git directory with no job and no ref left is dropped from the list this long after it was last used.
+	forgetAfter = 24 * time.Hour
 )
 
 // terminalStates is the SQL list of the states from which a job does not move again.
@@ -130,53 +132,71 @@ func (q *Queue) settlePins(ctx context.Context) (unpinned, failed int) {
 	return unpinned, failed
 }
 
-// removeOrphanPins lists refs/wwd/ in every git directory the table knows and unpins the ones whose job is gone or has ended. Only
-// job ids come back from ListPins, and Unpin only ever removes refs/wwd/<id>, so nothing else in a user's repository is touched.
+// removeOrphanPins lists refs/wwd/ in every git directory that was ever submitted to and unpins the ones whose job is gone or has
+// ended. Only job ids come back from ListPins, and Unpin only ever removes refs/wwd/<id>, so nothing else in a user's repository is
+// touched. A directory that is gone, or that has held no job and no ref for a day, is forgotten.
 func (q *Queue) removeOrphanPins(ctx context.Context, now time.Time) (removed, failed int, err error) {
 	if q.pin == nil {
 		return 0, 0, nil
 	}
 	ctx = context.WithoutCancel(ctx)
-	rows, qerr := q.db.QueryContext(ctx, `SELECT DISTINCT git_dir FROM jobs WHERE git_dir != ''`)
+	rows, qerr := q.db.QueryContext(ctx, `SELECT dir, seen_at FROM git_dirs ORDER BY dir`)
 	if qerr != nil {
 		return 0, 0, qerr
 	}
-	var dirs []string
+	type known struct {
+		dir  string
+		seen int64
+	}
+	var dirs []known
 	for rows.Next() {
-		var d string
-		if rows.Scan(&d) == nil {
-			dirs = append(dirs, d)
+		var k known
+		if rows.Scan(&k.dir, &k.seen) == nil {
+			dirs = append(dirs, k)
 		}
 	}
 	rows.Close()
 
+	forget := func(dir string) { _, _ = q.db.ExecContext(ctx, `DELETE FROM git_dirs WHERE dir = ?`, dir) }
 	var errs []error
-	for _, dir := range dirs {
-		if _, serr := os.Stat(dir); errors.Is(serr, os.ErrNotExist) {
+	for _, k := range dirs {
+		if _, serr := os.Stat(k.dir); errors.Is(serr, os.ErrNotExist) {
+			forget(k.dir)
 			continue
 		}
-		ids, lerr := q.pin.ListPins(ctx, dir)
+		ids, lerr := q.pin.ListPins(ctx, k.dir)
 		if lerr != nil {
 			errs = append(errs, lerr)
 			continue
 		}
+		left := 0
 		for _, id := range ids {
 			if t, ok := idTime(id); ok && now.Sub(t) < orphanGrace {
+				left++
 				continue // may be a pin whose row is not written yet
 			}
 			var state string
 			switch serr := q.db.QueryRowContext(ctx, `SELECT state FROM jobs WHERE id = ?`, id).Scan(&state); {
 			case errors.Is(serr, sql.ErrNoRows):
 			case serr != nil:
+				left++
 				continue
 			case !strings.Contains(terminalStates, "'"+state+"'"):
+				left++
 				continue // a live job: its snapshot is needed
 			}
-			if uerr := q.pin.Unpin(ctx, dir, id); uerr != nil {
+			if uerr := q.pin.Unpin(ctx, k.dir, id); uerr != nil {
 				failed++
+				left++
 				continue
 			}
 			removed++
+		}
+		if left == 0 && now.Sub(time.UnixMilli(k.seen)) > forgetAfter {
+			var one int
+			if q.db.QueryRowContext(ctx, `SELECT 1 FROM jobs WHERE git_dir = ? LIMIT 1`, k.dir).Scan(&one) == sql.ErrNoRows {
+				forget(k.dir)
+			}
 		}
 	}
 	return removed, failed, errors.Join(errs...)

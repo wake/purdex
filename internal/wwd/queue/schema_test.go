@@ -24,7 +24,7 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	require.NoError(t, db.QueryRow(`SELECT version FROM queue_schema`).Scan(&v))
 	assert.Equal(t, schemaVersion, v)
 
-	for _, table := range []string{"jobs"} {
+	for _, table := range []string{"jobs", "git_dirs"} {
 		var name string
 		require.NoError(t, db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name), table)
 	}

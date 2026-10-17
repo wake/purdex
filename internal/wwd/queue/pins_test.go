@@ -213,6 +213,66 @@ func TestSweepRemovesOrphanRefsButNotLiveOrYoungOnes(t *testing.T) {
 	assert.Equal(t, 2, res.Orphans)
 }
 
+// The pin was made, the row could not be written and the pin could not be taken back (or the process died between the two): a ref is
+// left in a repository no job row names any more. The sweep still finds it, because the directory was written down before the pin was
+// made. Mutation gate: the directories read from the jobs table alone → this ref is never looked for.
+func TestSweepFindsARefLeftByASubmissionThatFailedAfterPinning(t *testing.T) {
+	f := newFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	f.q.afterTicket = func() { f.q.afterTicket = nil; cancel() } // the commit fails after the pin was made
+	f.pins.unErr = errors.New("git is busy")                     // and so does taking the pin back
+	_, err := f.q.Submit(ctx, sub(func(s *wire.JobSubmission) { s.GitDir = f.gitDir }))
+	require.Error(t, err)
+	var n int
+	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM jobs`).Scan(&n))
+	require.Zero(t, n, "no row names this repository")
+	ids, _ := f.pins.ListPins(context.Background(), f.gitDir)
+	require.Len(t, ids, 1, "but the ref is there")
+
+	f.pins.unErr = nil
+	f.clk.Advance(time.Hour)
+	res, err := f.q.Sweep(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Orphans)
+	ids, _ = f.pins.ListPins(context.Background(), f.gitDir)
+	assert.Empty(t, ids)
+}
+
+// The list of git directories does not grow for ever: one that is gone is forgotten, and one with no job and no ref left is forgotten
+// after a day; one that still holds a ref stays. Mutation gates: the missing-directory prune dropped; the day condition dropped.
+func TestSweepForgetsGitDirsThatAreGoneOrEmpty(t *testing.T) {
+	f := newFixture(t)
+	count := func() int {
+		var n int
+		require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM git_dirs`).Scan(&n))
+		return n
+	}
+	gone := t.TempDir()
+	empty := t.TempDir()
+	held := t.TempDir()
+	f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey, s.GitDir = "a", gone })
+	f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey, s.GitDir = "b", empty })
+	keep := f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey, s.GitDir = "c", held })
+	require.Equal(t, 3, count())
+	require.NoError(t, os.RemoveAll(gone))
+	// the jobs of these directories end and are released; "held" keeps a live job
+	_, err := f.db.Exec(`UPDATE jobs SET state = 'cancelled', pinned = 0, finished_at = ? WHERE git_dir IN (?, ?)`, ms(f.clk.Now()), gone, empty)
+	require.NoError(t, err)
+	f.pins.refs = map[string]map[string]string{}
+	f.pins.put(held, keep)
+
+	_, err = f.q.Sweep(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2, count(), "the gone directory is forgotten at once; the empty one is not yet (it was used moments ago)")
+
+	f.clk.Advance(25 * time.Hour)
+	_, err = f.db.Exec(`DELETE FROM jobs WHERE git_dir = ?`, empty)
+	require.NoError(t, err)
+	_, err = f.q.Sweep(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, count(), "after a day with no job and no ref it goes; the one with a live job stays")
+}
+
 // One git directory that cannot be listed does not stop the sweep of the others, and is reported.
 func TestSweepGoesOnWhenOneGitDirCannotBeListed(t *testing.T) {
 	f := newFixture(t)

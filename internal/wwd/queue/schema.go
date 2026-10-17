@@ -93,6 +93,12 @@ func createSchema(ctx context.Context, c *sql.Conn) error {
 			pinned           INTEGER NOT NULL DEFAULT 0,
 			updated_at       INTEGER NOT NULL
 		)`,
+		// git_dirs: every git directory a submission named, written down BEFORE its snapshot is pinned, so that a ref left behind (the
+		// row failed after the pin, or the process died between the two) is found by the sweep even when no job row names the repository.
+		`CREATE TABLE IF NOT EXISTS git_dirs (
+			dir     TEXT PRIMARY KEY,
+			seen_at INTEGER NOT NULL
+		)`,
 		`CREATE INDEX IF NOT EXISTS jobs_state_seq ON jobs (state, seq)`,
 		`CREATE INDEX IF NOT EXISTS jobs_supersede ON jobs (supersede_key) WHERE supersede_key != ''`,
 		`CREATE INDEX IF NOT EXISTS jobs_session ON jobs (sub_session, seq)`,

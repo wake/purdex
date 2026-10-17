@@ -23,6 +23,9 @@ func (q *Queue) Submit(ctx context.Context, s wire.JobSubmission) (wire.JobSubmi
 	// cannot be fetched must not be queued.
 	pinned := false
 	if q.pin != nil {
+		if err := q.registerGitDir(ctx, s.GitDir, now.UnixMilli()); err != nil {
+			return wire.JobSubmissionResponse{}, fmt.Errorf("queue: submit: %w", err)
+		}
 		if err := q.pin.Pin(ctx, s.GitDir, id, s.Snapshot.Commit); err != nil {
 			return wire.JobSubmissionResponse{}, fmt.Errorf("%w: %v", ErrSnapshotRefused, err)
 		}
@@ -47,6 +50,13 @@ func (q *Queue) Submit(ctx context.Context, s wire.JobSubmission) (wire.JobSubmi
 		return wire.JobSubmissionResponse{}, fmt.Errorf("queue: submit: %w", err)
 	}
 	return wire.JobSubmissionResponse{ID: id}, nil
+}
+
+// registerGitDir writes the directory down before anything is pinned in it (see the git_dirs table).
+func (q *Queue) registerGitDir(ctx context.Context, dir string, nowMS int64) error {
+	_, err := q.db.ExecContext(ctx, `INSERT INTO git_dirs (dir, seen_at) VALUES (?, ?)
+		ON CONFLICT(dir) DO UPDATE SET seen_at = excluded.seen_at`, dir, nowMS)
+	return err
 }
 
 // takeBackPin removes the pin a failed submission made, unless a job with that id exists (then the pin is that job's).
