@@ -291,6 +291,12 @@ describe('HostCell — the queue badge', () => {
     expect(room).toBeGreaterThan(reach)
     for (const el of [anchor, tile()]) expect(el.className.split(' ')).not.toContain('overflow-hidden')
   })
+  // The narrow column stacks the cells with no gap and the badge sits 5 px above its host badge, 1 px past the top of its own
+  // button: it must not take clicks, or the bottom pixel of the cell above opens this host (WA-1 review).
+  it('takes no clicks: the 1 px it reaches over the cell above stays that cell\'s', () => {
+    setup(view({ slow: slow(queue(2)) }), { variant: 'narrow' })
+    expect(badge()!.className.split(' ')).toContain('pointer-events-none')
+  })
 })
 
 // U9: the ring (or the bars) moves 2 px further right of the host badge, to give the queue badge room.
