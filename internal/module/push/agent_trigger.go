@@ -42,13 +42,14 @@ func (m *Module) onNotify(ev agent.NotifyEvent) {
 	}
 	content := push.AgentInput{SessionCode: ev.SessionCode, SessionID: ev.SessionID, SessionName: ev.SessionName, EventName: ev.Event.RawEventName, Detail: ev.Event.Detail,
 		EventCursor: reads.Cursor{Epoch: ev.Event.Epoch, Seq: ev.Event.Seq}}
-	// Team membership (badge spec §3.1) is read once for the event, before the device loop. A read error is "member,
-	// unknown": the gate applies the member rule (the quieter side) and the payload does not announce it.
+	// Team membership (badge spec §3.1) is read once for the event, before the device loop. A read error is "unknown"
+	// (member spec R4): the gate treats the session as not a member (rule 4a does not drop it) and the payload does not
+	// announce it either.
 	member, err := m.memberOf(ev.SessionID, ev.Event.Status)
 	if err != nil && !errors.Is(err, errMembershipBusy) { // a stall is logged once, by the read that started it
-		log.Printf("[push] could not read the team membership of %s: %v (gated as a member, not announced)", ev.SessionCode, err)
+		log.Printf("[push] could not read the team membership of %s: %v (treated as not a member)", ev.SessionCode, err)
 	}
-	in.Member = member || err != nil
+	in.Member = member && err == nil
 	content.Member = member && err == nil
 	// Rules 0-7 first, for every frame: freshness (rule 0) records a probe's or sweep's newer timestamp too, so an older
 	// frame that arrives late is not pushed behind it. Rule 9 (there is something to say) comes last, as in the spec.
@@ -120,7 +121,7 @@ func (m *Module) onNotify(ev agent.NotifyEvent) {
 // The read is a SQLite query with no deadline of its own (up to busy_timeout per statement), and this runs on the notify
 // hub's subscriber goroutine, which has a 64-event queue and drops past it. So it is bounded like the tmux session read:
 // at most one outstanding, and an event waits at most membershipBudget; a read that is late, or still outstanding from an
-// earlier event, is an error ("member, unknown": gated as a member, not announced).
+// earlier event, is an error ("unknown": treated as not a member, not announced; member spec R4).
 func (m *Module) memberOf(sessionID, status string) (bool, error) {
 	if sessionID == "" || (status != "waiting" && status != "idle" && status != "error") {
 		return false, nil

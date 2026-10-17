@@ -210,7 +210,7 @@ func TestMemberPush_NonMemberPushesWithoutATabAndLeavesTheFlagOut(t *testing.T) 
 func TestMemberPush_ReadErrorIsNotAMemberAndIsNotAnnounced(t *testing.T) {
 	e := newAgentEnv(t, 0)
 	withMembership(e, &fakeMembership{err: errors.New("db gone")})
-	e.device(tokA, "en", "mlab", tabsOf("c1"))
+	e.device(tokA, "en", "mlab", withoutTabNotify)
 	e.feed.emit(nev("c1", "PermissionRequest", "waiting", nil))
 	p := e.waitSends(t, 1)[0].Payload
 	if _, has := purdexOf(t, p)["member"]; has {
@@ -233,7 +233,7 @@ func TestMemberPush_ReadOncePerEvent(t *testing.T) {
 	withMembership(e, f)
 	e.device(tokA, "en", "mlab", tabsOf("c1"))
 	e.device(tokB, "en", "mlab", tabsOf("c1"))
-	e.feed.emit(nev("c1", "PdxStop", "idle", nil))
+	e.feed.emit(errEv()) // a member's error is what can still push
 	e.waitSends(t, 2)
 	if n := f.calls.Load(); n != 1 {
 		t.Fatalf("Membership called %d times for one event and two devices, want 1", n)
