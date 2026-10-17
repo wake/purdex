@@ -91,7 +91,14 @@ func exists(path string) bool { _, err := os.Stat(path); return err == nil }
 
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	eventuallyFor(t, 5*time.Second, what, cond)
+}
+
+// eventuallyFor waits up to d for cond: a test whose condition needs a process of another host to get going (a loaded machine takes
+// seconds for that) waits for the event, with a long limit that only a hang reaches.
+func eventuallyFor(t *testing.T, d time.Duration, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return
