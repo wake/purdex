@@ -3,7 +3,7 @@
 // The tab light is the highest-priority status of every agent pane of the layout (error > waiting > running > idle);
 // unread and "awaiting approval" (the hand) are OR over panes; the subagent dots come from the representative pane
 // (the highest-priority one; a tie goes to the primary pane, then the leaf order); the corner symbol is the highest
-// background across panes. The tab's icon and title stay the primary pane's (identity, not light) — callers read
+// background across panes (the queue hourglass above all). The tab's icon and title stay the primary pane's (identity, not light) — callers read
 // those from the primary pane themselves.
 import type { PaneLayout } from '../../types/tab'
 import type { AgentStatus, BackgroundKind, NormalizedEvent } from '../../stores/useAgentStore'
@@ -18,6 +18,8 @@ export interface TabAgentPane {
   hostId: string
   /** Set for an execution (worker) pane. */
   executionId?: string
+  /** The agent's session id from the pane's rebuild record (tmux pane): what the fleet queue's waiters name. */
+  sessionId?: string
 }
 
 /**
@@ -38,9 +40,10 @@ export function tabAgentPanes(layout: PaneLayout): TabAgentPane[] {
     const key = compositeKey(a.hostId, a.sessionCode)
     if (seen.has(key)) continue
     seen.add(key)
+    const sessionId = pane.content.kind === 'tmux-session' ? pane.content.rebuild?.agent?.sessionId : undefined
     out.push(pane.content.kind === 'execution'
       ? { key, hostId: a.hostId, executionId: pane.content.executionId }
-      : { key, hostId: a.hostId })
+      : { key, hostId: a.hostId, ...(sessionId ? { sessionId } : {}) })
   }
   return out
 }
@@ -61,7 +64,7 @@ export interface TabAgentAggregate {
   background: BackgroundKind | undefined
 }
 
-const BACKGROUND_RANK: Record<BackgroundKind, number> = { workflow: 3, monitor: 2, schedule: 1 }
+const BACKGROUND_RANK: Record<BackgroundKind, number> = { queued: 4, workflow: 3, monitor: 2, schedule: 1 }
 
 const NONE: TabAgentAggregate = {
   status: undefined, isUnread: false, isAwaitingApproval: false, repKey: undefined, background: undefined,
@@ -69,10 +72,14 @@ const NONE: TabAgentAggregate = {
 
 /**
  * The aggregate of `panes` (from `tabAgentPanes`). `awaiting` holds the keys of execution panes waiting on a
- * permission request (the hand): such a pane counts as `waiting` at least, whatever its stored status says.
+ * permission request (the hand): such a pane counts as `waiting` at least, whatever its stored status says. `members`
+ * holds the active team members' keys: their unread is hidden (the tab is unread when a NON-member pane is), their
+ * status is not touched (member spec R3). `queued` holds the keys of panes whose agent waits in a host's command
+ * queue: the hourglass, above every event kind.
  */
 export function aggregateTabAgents(
-  panes: TabAgentPane[], data: TabAgentData, awaiting: ReadonlySet<string> = new Set(),
+  panes: TabAgentPane[], data: TabAgentData, awaiting: ReadonlySet<string> = new Set(), members: ReadonlySet<string> = new Set(),
+  queued: ReadonlySet<string> = new Set(),
 ): TabAgentAggregate {
   if (panes.length === 0) return NONE
   let status: AgentStatus | undefined
@@ -85,8 +92,8 @@ export function aggregateTabAgents(
     if (awaiting.has(key) && statusRank(s) < statusRank('waiting')) s = 'waiting'
     const r = statusRank(s)
     if (r > rank) { rank = r; status = s; repKey = key }
-    if (data.unread[key]) isUnread = true
-    const b = backgroundOf(data.lastEvents[key])
+    if (data.unread[key] && !members.has(key)) isUnread = true
+    const b = queued.has(key) ? 'queued' : backgroundOf(data.lastEvents[key])
     if (b && (!background || BACKGROUND_RANK[b] > BACKGROUND_RANK[background])) background = b
   }
   if (repKey === undefined) {

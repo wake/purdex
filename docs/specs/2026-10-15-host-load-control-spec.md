@@ -263,6 +263,73 @@ about 120 min). The queue was arrival order only; the watcher and the person nee
 - **Not in this phase**: pausing a command that already runs (SIGSTOP) to let another through. Raised only if the queue
   order proves not enough.
 
+### 5.3 Conflicts: two kinds of command that do not run together (#3058)
+
+Measured 10-16 on mlab (#3058, the watcher's log): with `slots.heavy = 2`, every combination of two heavy commands ran
+without trouble from 21:24 to 23:39 **except** `tsc -b --force` beside `vitest related` (tsc's node 1.3–1.6 GB, related's
+node 0.9–1.0 GB plus workers, over an evening base of a dozen agents at 0.5–0.7 GB each): twice it thrashed (decompressions
+130,000/s at 22:34, pressure level 2 for a minute at 23:39) and the watcher had to drop the whole class to one slot, which
+left 10 commands waiting up to 21 min behind one pair. Slot counts cannot say "not these two together"; this section can.
+Lead decision 10-16 (the watcher's option 1 of 3): a pairwise rule, because it holds back only the pair that was measured
+to collide; a weight (tsc counts as two slots) would also keep tsc from running beside a `go vet`, and an estimate of each
+command's memory is the hardest to get right.
+
+- **A rule** belongs to one class (both `tsc -b` and `vitest related` are heavy since #3040) and is two patterns and a
+  reason: `{class, a, b, reason, by, at}`. A rule is decided inside that class's admit lock, the same lock that already
+  makes a take atomic (§5.2), so two gates of the class can never both pass it; rules across classes are not in this
+  phase (they would need one lock over both classes).
+- **A pattern** is the start of a command line, matched like `[[gate.intercept.rule]]`: the command's words (below) equal
+  the pattern's words, or begin with them followed by more words. `tsc -b` matches `tsc -b --force`, not `tsc --force -b`
+  (the watcher adds a second rule for another spelling it sees); `vitest related` matches `vitest related --run a.ts`. A
+  prefix never mistakes the value of an option for a word of the pattern. A rule may pair a pattern with itself (no two
+  `tsc -b` together).
+- **The command's words** are its argv after the runner words the classifier reads, each tool word by its base name:
+  `npx`, `pnpx`, `bunx`, `bun x` `<tool …>`; `pnpm|npm|yarn|bun exec|x` `<tool …>` (the runner's options before the
+  subcommand skipped, with their values for the options that take one — the classifier's `runnerValueOpts`, in both the
+  `--opt value` and `--opt=value` forms — and a `--` after `exec` skipped); `pnpm <tool …>` when the word is a tool the
+  classifier knows; `node_modules/.bin/<tool>` or any path to a tool as its base name, also after a runner. A package
+  script is not opened: `pnpm run typecheck` is `pnpm run typecheck` (a rule names the script when the script is the
+  thing that collides).
+- **Every holder carries its command from the take on.** The take writes the slot's record inside the admit lock, and
+  (with #3049's placeholder) that record now carries the taking command's argv — the argv the gate made its ticket with and
+  keeps in memory, not read back from the ticket file (whose write may fail and is only for the listing) — so the next
+  gate that takes the lock sees what holds the slot, never an empty record. A record that cannot be written fails the take
+  and lets the slot go, as today. A late claim (#2996) passes its command's argv to `TakeLate`, which writes it the same
+  way. A holder whose record cannot be read (a gate killed between removing its record and unlocking, §5) or carries no
+  argv matches no pattern; it is shown as `no_record`.
+- **Rules are read inside the lock.** The rules live in the gate directory (`conflicts.json`, written atomically), not in
+  `config.toml`; the walk below reads them while holding the class's admit lock, so a rule added before a take is honoured
+  by that take. A command already running is never touched.
+- **What a rule does to the queue.** Inside the serving order of §5.2 a waiting ticket is **blocked** when its command
+  matches one side of a rule of its class and a current holder of the class (late claims and over-size holders included)
+  **or a ticket ahead of it** (front and normal tickets ahead; a `hold` ticket is never ahead of anybody) matches the other
+  side. A blocked ticket keeps its place and takes no capacity: the next ticket that is not blocked may take a free slot.
+  Because a ticket that conflicts with any ticket ahead of it is itself blocked, nothing that conflicts with a blocked
+  ticket can pass it; when the holder it waits for ends, the blocked ticket is next among those that conflict with it (no
+  starvation by a stream of the other kind). Capacity is the pool's free slots as today (holders beyond the pool's size,
+  `overHeld`, already counted), taken by the tickets that are neither held nor blocked, in serving order. A late claim is
+  already running and ignores rules, as it ignores ranks; once its record is written it blocks others like any holder. So
+  the order of the admit lock decides a late claim against a conflicting take: the late claim first → the waiter is
+  blocked; the take first → both run (a rule keeps waiting commands apart; it never stops one that is already running).
+  Every reader (TryTake, status, queue, would-wait) gets this from the one snapshot of §5.2.
+- **would-wait** answers for a new `normal` ticket at the end of the normal group: it waits when a holder or a front or
+  normal ticket of the class conflicts with it, as well as when capacity is used up.
+- **Who and how**: `pdx gate conflict` (list, `--json`), `pdx gate conflict add --class heavy "<a>" "<b>" --reason
+  "<line>"` and `pdx gate conflict remove <n | --class heavy "<a>" "<b>">`, on the host whose gate it is (the watcher
+  reaches the other gated host over `ssh <alias> pdx gate conflict …`). The reason is required (one line, ≤ 200 bytes).
+  `by` is the Claude session that ran it, or `person`. **Default: no rules**: the watcher (or the person) adds them;
+  nothing is built in (user decision 10-16: full control, no guard the gate invents for them). Adding a rule that exists
+  (same class and the same two patterns, either order) changes nothing and says so; removing one that does not exist says
+  so. An edit takes `conflicts.lock`, re-reads the file, resolves an index against what it read, and replaces the file
+  atomically: no edit is lost; two edits of the same rule at the same moment end as the one that took the lock last
+  leaves it (add then remove → gone; remove then add → there), and each prints what it found and what it left.
+- **Seen everywhere it waits**: the waiting command's line says `waits for <slot or ticket>: <a> × <b> (<reason>)`;
+  `pdx gate status [--json]` lists the rules and, per waiter, `conflict_with` (the slot or ticket) and the rule; the
+  decision record gains `conflict` (the last rule that blocked it) and `conflict_s` (time spent blocked). The fleet's
+  queue view carries them from the status JSON (B line).
+- **Not in this phase**: rules across classes; rules that weigh memory or differ by time of day; opening a package script
+  to see the tools it runs.
+
 ## 6. Retiring the lease (D2)
 
 Remove:
@@ -453,9 +520,21 @@ daemon settings. Not Profile Sync: Profile Sync carries the App's own stores and
   one has to be started.
 - Delivery: at most one message per event kind per host per 10 min (later ones are folded into a count); E3 is never
   folded. A woken or new watcher first gets a summary of the unhandled events since the last delivery.
-- `pdx watch log [--since] [--host|--all]` reads the records; `pdx watch ack <id>… --note "<one line>"` marks events
-  handled with the watcher's note (required; the UI shows it); an event is `pending` or `handled`. There is no
-  "skip all" (user decision 10-16: the button is not wanted).
+- `pdx watch log [--since] [--host <alias>|--all]` reads the records; `pdx watch ack <id>… | --all [--host <alias>] --note "<one
+  line>"` marks events handled with the watcher's note (required, one line, at most 500 bytes; the UI shows it); an event is `pending` or
+  `handled`. There is no "skip all" (user decision 10-16: the button is not wanted).
+- **Acking events of another host (2026-10-17).** The watcher is on one host and the events it deals with are on several, and an event is
+  handled where it was recorded. The daemon asked to ack (`POST /api/watch/ack`, admin token only; a device token is refused) sends the
+  ids that belong to another paired host to that host's `POST /api/peers/watch/ack` (a host route, like holder, announce and event: host
+  principal, `HostLimiter`, body cap); `--all --host X` is sent to X the same way, with the note. The receiving host handles **only the
+  events it recorded** (any other id is `not_found`) and **never passes an ack on**, so no chain or loop of forwards can form. It records
+  who gave the order (the address of the session that ran `pdx watch ack`, as the first daemon resolved it) and from which host, with the
+  note, and the events API returns them (`handled_by`, `handled_from_host`). Acking again changes nothing (the first note stays; the answer
+  is `already`). `watch.events` (`cause: acked`) is sent by the host that owns the events, once per operation; the host that was asked
+  sends none for another host's events. The answer says, for each id, `handled`, `already`, `not_found`, `unreachable`, `unsupported` (an
+  older daemon) or `refused`; `pdx watch ack` exits non-zero when any id was not handled and lists those ids.
+- `pdx watch log --host|--all` reads another host's events through `POST /api/peers/watch/log` (a host route; that host answers with its own
+  events only) and puts the answers together, newest first; a host that cannot be read is named and the exit code is 1.
 
 ### 12.4 The watcher session (W3)
 

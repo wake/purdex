@@ -69,6 +69,16 @@ type Module struct {
 	evRetryAfter time.Duration
 	evRetryMu    sync.Mutex
 	evRetrying   bool
+	// typer types into the pdx-watch pane for a start or wake (nil until Start); sess is session.json; the durations and statFile are
+	// seams for the tests (zero: the real values).
+	typer          paneTyper
+	sess           *watch.SessionStore
+	startGrace     time.Duration
+	registerWithin time.Duration
+	pollEvery      time.Duration
+	statFile       func(string) bool
+	// cooldowns are the failed starts that paired hosts reported.
+	cooldowns cooldownBook
 	// manualDelivery keeps Start from running the delivery loop: a test calls deliverPass itself.
 	manualDelivery bool
 	emit           func(core.HostEvent)
@@ -132,6 +142,14 @@ func (m *Module) Init(c *core.Core) error {
 		dir = filepath.Join(c.Cfg.DataDir, "watch")
 	}
 	m.initDelivery(dir)
+	sessPath := ""
+	if dir != "" {
+		sessPath = filepath.Join(dir, "session.json")
+	}
+	var serr error
+	if m.sess, serr = watch.OpenSession(sessPath); serr != nil {
+		m.logf("[watch] %v", serr)
+	}
 	c.Registry.Register(watch.EventSinkKey, watch.EventSink(m))
 	m.runMu.Lock()
 	m.ready = true
@@ -146,6 +164,14 @@ func (m *Module) Init(c *core.Core) error {
 func (m *Module) Start(context.Context) error {
 	if m.panes == nil {
 		m.panes = watch.NewPaneControl("")
+	}
+	if m.typer == nil {
+		if pc, ok := m.panes.(*watch.PaneControl); ok {
+			m.typer = pc
+		}
+	}
+	if m.session == nil && m.typer != nil {
+		m.session = &sessionCtl{m: m}
 	}
 	if m.standDowner == nil {
 		m.standDowner = peerStandDowner{m}
@@ -229,6 +255,13 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/watch/unhandled", m.handleUnhandled)
 	mux.HandleFunc("GET /api/watch/events", m.handleEvents)
 	mux.HandleFunc("POST /api/watch/ack", m.handleAck)
+	mux.HandleFunc("POST /api/peers/watch/ack", m.handlePeerAck)
+	mux.HandleFunc("POST /api/watch/start", m.handleStart)
+	mux.HandleFunc("POST /api/watch/wake", m.handleWake)
+	mux.HandleFunc("POST /api/peers/watch/start", m.handlePeerStart)
+	mux.HandleFunc("POST /api/peers/watch/wake", m.handlePeerWake)
+	mux.HandleFunc("POST /api/peers/watch/log", m.handlePeerLog)
+	mux.HandleFunc("GET /api/watch/log", m.handleLog)
 }
 
 // HolderView is the answer about this host's holder: the wire form of both routes.
@@ -242,6 +275,9 @@ type HolderView struct {
 	// The tmux ids of the watcher this host holds (empty while it rests): what a client needs to attach to pdx-watch.
 	TmuxSessionID string `json:"tmux_session_id,omitempty"`
 	PaneID        string `json:"pane_id,omitempty"`
+	// Starting says a start or wake is in progress on this host; CooldownUntil is when a failed one lets the next be tried.
+	Starting      bool      `json:"starting,omitempty"`
+	CooldownUntil time.Time `json:"cooldown_until,omitempty"`
 	// Targets is this host's setting, so a peer can warn when the two differ (nil when the setting cannot be read).
 	Targets []string `json:"targets,omitempty"`
 }
@@ -253,6 +289,10 @@ func (m *Module) view() HolderView { return m.viewOf(m.holder.Get()) }
 func (m *Module) viewOf(h watch.Holder) HolderView {
 	v := HolderView{State: string(h.State), SessionID: h.SessionID, Since: h.Since, LastTurn: h.LastTurn, LastDelivery: h.LastDelivery,
 		TmuxSessionID: h.TmuxSessionID, PaneID: h.PaneID}
+	if m.sess != nil {
+		st := m.sess.Get()
+		v.Starting, v.CooldownUntil = st.InProgress != nil, st.CooldownUntil
+	}
 	if m.core != nil && m.core.Cfg != nil {
 		m.core.CfgMu.RLock()
 		v.HostID = m.core.Cfg.HostID

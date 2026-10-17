@@ -28,6 +28,9 @@ type HolderAnswer struct {
 	SessionID string
 	Since     time.Time // when it entered that state; zero when the host could not say (an older daemon)
 	Targets   []string  // that host's setting, nil when it could not say
+	// Starting says a start or wake is in progress on that host (it answered within its grace and goes on in the background): no
+	// other host starts one meanwhile.
+	Starting bool
 }
 
 // Earlier says whether the watcher of a wins over the watcher of b when both are awake (spec §12.3 "Two awake at once"): the one
@@ -377,6 +380,9 @@ func (l *Locator) try(ctx context.Context, alias string, act func(context.Contex
 		if res.State == HolderAwake && res.SessionID != "" {
 			return &Where{Alias: alias, HostID: res.HostID, SessionID: res.SessionID, State: HolderAwake, At: l.now(), Since: res.Since}, true
 		}
+		if res.Starting {
+			return nil, false // it is coming up there: not settled, and nothing is started elsewhere meanwhile
+		}
 		return nil, true
 	}
 	if errors.Is(err, ErrNoSession) {
@@ -390,6 +396,9 @@ func (l *Locator) try(ctx context.Context, alias string, act func(context.Contex
 	}
 	if a.State == HolderAwake && a.SessionID != "" {
 		return &Where{Alias: alias, HostID: a.HostID, SessionID: a.SessionID, State: HolderAwake, At: l.now(), Since: a.Since}, true
+	}
+	if a.Starting {
+		return nil, false // the call was cut off and the host says the start is going on there
 	}
 	return nil, true
 }
@@ -469,6 +478,16 @@ func (l *Locator) search(ctx context.Context, targets []string, autoWake bool) (
 		}
 	}
 	return Where{}, ErrNoWatcher
+}
+
+// Uncertain is the host whose start or wake has not been seen to end (the alias), and when that was noted.
+func (l *Locator) Uncertain() (alias string, at time.Time, ok bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if u := l.mem.Uncertain; u != nil {
+		return u.Alias, u.At, true
+	}
+	return "", time.Time{}, false
 }
 
 // blockedByUncertain says whether an earlier wake or start left a host whose outcome is still unknown. The host answering the

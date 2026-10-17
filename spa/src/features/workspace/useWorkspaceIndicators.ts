@@ -2,6 +2,7 @@ import { useCallback, useMemo } from 'react'
 import { useTabStore } from '../../stores/useTabStore'
 import { useAgentStore } from '../../stores/useAgentStore'
 import { useHostStore } from '../../stores/useHostStore'
+import { useActiveMemberKeys } from '../../hooks/useActiveMemberKeys'
 import type { AgentStatus } from '../../stores/useAgentStore'
 import { getWorkspaceTabKeys, aggregateStatus, type ActiveStatus } from './workspace-indicators'
 
@@ -22,11 +23,13 @@ export function useWorkspaceIndicators(tabIds: string[]): WorkspaceIndicators {
     [tabIds, tabs, firstHostId],
   )
 
+  // A team member's unread counts nowhere (member spec R2); the set follows the roster, so this number does too.
+  const members = useActiveMemberKeys()
   const unreadCount = useAgentStore(
     useCallback(
       (s: { unread: Record<string, boolean> }) =>
-        tabKeys.reduce((n, keys) => n + (keys.some((k) => s.unread[k]) ? 1 : 0), 0),
-      [tabKeys],
+        tabKeys.reduce((n, keys) => n + (keys.some((k) => s.unread[k] && !members.has(k)) ? 1 : 0), 0),
+      [tabKeys, members],
     ),
   )
 

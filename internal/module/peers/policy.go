@@ -53,7 +53,7 @@ func HostRoutePolicy(r *http.Request) bool {
 	if r.Method == http.MethodPost && r.URL.Path == "/api/peers/team/proxy" { // a remote member's report / task calls (X6)
 		return true
 	}
-	if r.Method == http.MethodPost && (r.URL.Path == "/api/peers/watch/holder" || r.URL.Path == "/api/peers/watch/announce" || r.URL.Path == "/api/peers/watch/event") { // where is the load watcher; a host registered one (host-load-control W2a, W3a)
+	if r.Method == http.MethodPost && (r.URL.Path == "/api/peers/watch/holder" || r.URL.Path == "/api/peers/watch/announce" || r.URL.Path == "/api/peers/watch/event" || r.URL.Path == "/api/peers/watch/ack" || r.URL.Path == "/api/peers/watch/log" || r.URL.Path == "/api/peers/watch/start" || r.URL.Path == "/api/peers/watch/wake") { // where is the load watcher; a host registered one (host-load-control W2a, W3a)
 		return true
 	}
 	if r.Method == http.MethodPost && (r.URL.Path == "/api/peers/fleet/role" || r.URL.Path == "/api/peers/fleet/announce") { // the fleet's primary / standby calls (fleet spec §4)

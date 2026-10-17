@@ -13,7 +13,9 @@ export function startRosterForget(): () => void {
   return useHostStore.subscribe((next, prev) => {
     if (next.hosts === prev.hosts) return
     const store = useTeamRosterStore.getState()
-    for (const hostId of Object.keys(store.byHost)) {
+    // Every host the store holds ANYTHING for (a roster, or only a session list's liveness) plus every host that was there.
+    const held = new Set([...Object.keys(store.byHost), ...Object.keys(store.liveSessionHosts), ...Object.keys(prev.hosts)])
+    for (const hostId of held) {
       const now = next.hosts[hostId]
       const before = prev.hosts[hostId]
       if (!now || (before !== undefined && connectionKey(before) !== connectionKey(now))) store.forgetHost(hostId)

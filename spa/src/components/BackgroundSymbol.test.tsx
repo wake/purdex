@@ -1,8 +1,9 @@
 // U1-3c-2: the corner symbol for background work (spec N6) on every tab surface.
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { render, screen, cleanup, act } from '@testing-library/react'
 import { Terminal } from '@phosphor-icons/react'
 import { BackgroundSymbol } from './BackgroundSymbol'
+import type { FleetWaiter } from '../lib/fleet/types'
 import { TabIcon } from './TabIcon'
 import { renderInlineTabIcon } from '../features/workspace/lib/renderInlineTabIcon'
 import type { BackgroundKind, SubagentRef } from '../stores/useAgentStore'
@@ -31,6 +32,44 @@ describe('BackgroundSymbol', () => {
     expect(el.getAttribute('title')).toBe(label)
   })
 
+  it('queued draws the hourglass; without waiters it names the kind', () => {
+    render(<BackgroundSymbol kind="queued" />)
+    expect(sym()!.getAttribute('data-kind')).toBe('queued')
+    expect(sym()!.getAttribute('title')).toBe('Queued')
+  })
+
+  describe('the queue tooltip', () => {
+    const waiter = (over: Partial<FleetWaiter> = {}): FleetWaiter =>
+      ({ class: 'heavy', place: 1, command: 'go test', project: 'p', session: 's', since: Date.now() - 125_000, ...over })
+    afterEach(() => { vi.useRealTimers() })
+
+    it('one waiter: place, minutes, command, class', () => {
+      render(<BackgroundSymbol kind="queued" waiters={[waiter({ place: 2 })]} />)
+      expect(sym()!.getAttribute('title')).toBe('Queued: #2 · waiting 2 min · go test (heavy command)')
+    })
+
+    it('three waiters: the longest wait and the count of the others', () => {
+      const now = Date.now()
+      render(<BackgroundSymbol kind="queued" waiters={[waiter({ command: 'new', since: now - 1000 }), waiter({ command: 'old', since: now - 600_000, place: 3 }), waiter({ command: 'mid', since: now - 5000 })]} />)
+      expect(sym()!.getAttribute('title')).toBe('Queued: #3 · waiting 10 min · old (heavy command) · 2 more')
+    })
+
+    it('the minutes advance with the clock', () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-10-17T10:00:30Z'))
+      render(<BackgroundSymbol kind="queued" waiters={[waiter({ since: Date.now() - 60_000 })]} />)
+      expect(sym()!.getAttribute('title')).toContain('waiting 1 min')
+      act(() => { vi.advanceTimersByTime(60_000) })
+      expect(sym()!.getAttribute('title')).toContain('waiting 2 min')
+    })
+
+    it('a symbol that is not queued holds no timer', () => {
+      vi.useFakeTimers()
+      render(<BackgroundSymbol kind="workflow" />)
+      expect(vi.getTimerCount()).toBe(0)
+    })
+  })
+
   it('names the kind in zh-TW', () => {
     act(() => { useI18nStore.getState().setLocale('zh-TW') })
     render(<BackgroundSymbol kind="monitor" />)
@@ -42,14 +81,14 @@ describe('BackgroundSymbol', () => {
     expect(container.innerHTML).not.toMatch(/animate-/)
   })
 
-  it('draws the three kinds with three different icons', () => {
-    const paths = (['workflow', 'monitor', 'schedule'] as const).map((k) => {
+  it('draws the kinds with different icons', () => {
+    const paths = (['queued', 'workflow', 'monitor', 'schedule'] as const).map((k) => {
       const { container, unmount } = render(<BackgroundSymbol kind={k} />)
       const d = container.querySelector('svg')!.innerHTML
       unmount()
       return d
     })
-    expect(new Set(paths).size).toBe(3)
+    expect(new Set(paths).size).toBe(4)
   })
 })
 
