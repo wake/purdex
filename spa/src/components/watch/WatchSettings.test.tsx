@@ -76,6 +76,10 @@ describe('WatchSettings — the 守門員 section', () => {
     expect(await screen.findByTestId('watch-set-x_cores')).toHaveValue('2')
     expect(screen.getByTestId('watch-set-source-x_cores')).toHaveTextContent(t('watch.set.source_set'))
     expect(screen.getByTestId('watch-set-source-mode')).toHaveTextContent(t('watch.set.source_default'))
+    // The source sits in the row's right-hand control cell, with the control (spec §6.2), not under the row.
+    const cell = screen.getByTestId('watch-set-cell-x_cores')
+    expect(cell).toContainElement(screen.getByTestId('watch-set-x_cores'))
+    expect(cell).toContainElement(screen.getByTestId('watch-set-source-x_cores'))
     expect(screen.getByTestId('watch-set-targets')).toHaveValue('air26, mlab')
     expect(screen.getByTestId('watch-set-agent_command')).toHaveValue('claude --dangerously-skip-permissions --model opus')
   })

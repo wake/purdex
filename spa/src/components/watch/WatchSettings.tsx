@@ -166,17 +166,19 @@ function GuardianSection({ hostConfigId, fleetHostId, offline, peerIds }: { host
         return (
           <div key={f.key} data-testid={`watch-set-row-${f.key}`}>
             <SettingItem label={label} disabled={locked} description={t(`watch.set.d.${f.key}`)}>
-              {f.kind === 'bool' ? (
-                <ToggleSwitch label={label} checked={v === true} testId={`watch-set-${f.key}`} onChange={(c) => void write(f.key, c)} />
-              ) : f.kind === 'mode' ? (
-                <SegmentControl options={[{ value: 'resident', label: t('watch.set.mode.resident') }, { value: 'patrol', label: t('watch.set.mode.patrol') }]}
-                  value={v === 'resident' ? 'resident' : 'patrol'} onChange={(m) => void write('mode', m)} />
-              ) : (
-                <TextControl k={f.key} kind={f.kind} label={label} stored={show(f.kind, v)} draftKey={watchDraftKey(hostConfigId, fleetHostId, f.key)} onCommit={commitText(f)} />
-              )}
+              <div data-testid={`watch-set-cell-${f.key}`} className="flex flex-col items-end gap-1">
+                {f.kind === 'bool' ? (
+                  <ToggleSwitch label={label} checked={v === true} testId={`watch-set-${f.key}`} onChange={(c) => void write(f.key, c)} />
+                ) : f.kind === 'mode' ? (
+                  <SegmentControl options={[{ value: 'resident', label: t('watch.set.mode.resident') }, { value: 'patrol', label: t('watch.set.mode.patrol') }]}
+                    value={v === 'resident' ? 'resident' : 'patrol'} onChange={(m) => void write('mode', m)} />
+                ) : (
+                  <TextControl k={f.key} kind={f.kind} label={label} stored={show(f.kind, v)} draftKey={watchDraftKey(hostConfigId, fleetHostId, f.key)} onCommit={commitText(f)} />
+                )}
+                <span className="text-[11px] text-text-muted" data-testid={`watch-set-source-${f.key}`}>{source}</span>
+                {err && <p data-testid={`watch-set-error-${f.key}`} role="alert" className="max-w-96 text-right text-xs text-status-error-text whitespace-pre-wrap">{err}</p>}
+              </div>
             </SettingItem>
-            <div className="-mt-2 mb-1 text-[11px] text-text-muted" data-testid={`watch-set-source-${f.key}`}>{source}</div>
-            {err && <p data-testid={`watch-set-error-${f.key}`} role="alert" className="mb-1 text-xs text-status-error-text whitespace-pre-wrap">{err}</p>}
             {f.key === 'targets' && differs && <p data-testid="watch-set-targets-differ" className="mb-1 text-xs text-status-warning-text">{t('watch.set.targets_differ')}</p>}
             {f.key === 'targets' && unreadablePeers.length > 0 && (
               <p data-testid="watch-set-compare-unreadable" className="mb-1 text-xs text-status-warning-text">{t('watch.set.compare_unreadable', { host: unreadablePeers.join(', ') })}</p>
