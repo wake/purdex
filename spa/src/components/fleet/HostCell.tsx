@@ -11,6 +11,7 @@
 //   queue  the count on the badge's top-right corner, `CountBadge` at its small size (9 px, 5 px out of the corner; journal v5 U9):
 //          daemon hosts only, only while someone waits, never offline. Neutral grey; status-warning from 2 min or 3 waiting;
 //          status-error while admission is held. More digits widen it to the left, so it reaches no closer to the indicator.
+//          It takes no clicks: in the narrow column (no gap) it reaches 1 px over the cell above, which keeps that pixel.
 //   then, by the 「主機格指示」 setting (`fleetCellIndicator`, the user 10-16), in the same square after the badge, 2 px further
 //   right than the cell's gap (`ml-0.5`, U9: room for the queue count; 6 px from the badge in the wide bar, 4 px in the narrow,
 //   whose 40 px cell still fits the narrow bar's 41 px):
@@ -142,7 +143,7 @@ export function HostCell({ view, look, variant, isActive, waitingPrimary, primar
         <span data-testid={`host-badge-dim-${view.id}`} className={`inline-flex ${off ? 'opacity-40' : ''}`}>
           <HostBadge colors={badge.colors} icon={badge.icon} iconWeight={badge.iconWeight} box={box} inset={inset} radius={radius} lineColor={lineColor} testId={`host-badge-${view.id}`} bright />
         </span>
-        {q && waiting > 0 && <CountBadge n={waiting} size="sm" className={queueTone(waiting, q.longest_wait_s * 1000, q.admission_held)} testId={`queue-badge-${view.id}`} />}
+        {q && waiting > 0 && <CountBadge n={waiting} size="sm" className={`pointer-events-none ${queueTone(waiting, q.longest_wait_s * 1000, q.admission_held)}`} testId={`queue-badge-${view.id}`} />}
       </span>
       {indicator === 'ring' ? (
         <span className="inline-flex shrink-0 ml-0.5" data-testid={`load-ring-${view.id}`} data-zone={zone}>
