@@ -328,3 +328,40 @@ func (m *Module) updateSession(fn func(*watch.SessionState)) error {
 	m.notifyChanged()
 	return err
 }
+
+// startingNow says a start or wake is going on: its mark is in session.json and young enough to still be waited for. A mark left by a run
+// of the daemon that ended is not "starting" for ever (recoverSession ends it).
+func (m *Module) startingNow(st watch.SessionState) bool {
+	return st.InProgress != nil && m.now().Sub(st.InProgress.Since) < m.registerWithinFor()+time.Minute
+}
+
+// recoverSession ends a mark that has no job behind it (the daemon that began the start ended): the watcher is registered → the start
+// worked; the mark is past the time a start has → it failed and the cooldown begins. A mark still within its time is left (it is
+// "starting" until then). It runs on the patrol's tick, so a restart needs no new start or wake to settle it.
+func (m *Module) recoverSession(ctx context.Context) {
+	c, ok := m.session.(*sessionCtl)
+	if !ok || m.sess == nil || c.current() != nil {
+		return
+	}
+	st := m.sess.Get()
+	if st.InProgress == nil {
+		return
+	}
+	if err := c.acquire(ctx); err != nil {
+		return
+	}
+	defer c.release()
+	st = m.sess.Get()
+	if st.InProgress == nil || c.current() != nil {
+		return
+	}
+	if h, _, err := m.Reconcile(ctx); err == nil && h.State == watch.HolderAwake {
+		_ = m.updateSession(func(x *watch.SessionState) { x.InProgress = nil })
+		return
+	}
+	if !m.startingNow(st) {
+		if err := m.failedStart(m.now()); err != nil {
+			m.logf("[watch] session.json: %v", err)
+		}
+	}
+}

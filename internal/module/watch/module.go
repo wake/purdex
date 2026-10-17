@@ -326,7 +326,7 @@ func (m *Module) viewOf(h watch.Holder) HolderView {
 		TmuxSessionID: h.TmuxSessionID, PaneID: h.PaneID}
 	if m.sess != nil {
 		st := m.sess.Get()
-		v.Starting = st.InProgress != nil
+		v.Starting = m.startingNow(st)
 		if !st.CooldownUntil.IsZero() {
 			until := st.CooldownUntil
 			v.CooldownUntil = &until

@@ -374,3 +374,36 @@ func TestStatus_ACooldownAndAnAttemptAreInTheSelfView(t *testing.T) {
 	require.True(t, st.Self.CooldownUntil.Equal(until))
 	require.Contains(t, rr.Body.String(), `"cooldown_until":"`+until.UTC().Format(time.RFC3339))
 }
+
+// A start mark left by a daemon that ended is not "starting" for ever: past its time it is a failed start (cooldown, and the notice
+// says so) without any new start or wake; a watcher that registered meanwhile makes it a success.
+func TestChanged_AMarkLeftByAnEarlierRunIsSettledByTheTick(t *testing.T) {
+	r := newSessionRig(t, "")
+	ev := &events{}
+	r.m.emit = ev.add
+	require.NoError(t, r.m.sess.Update(func(x *watch.SessionState) {
+		x.InProgress = &watch.InProgress{Kind: "start", Since: r.m.now().Add(-time.Hour)}
+	}))
+	require.False(t, r.m.view().Starting, "past its time: not starting")
+	r.m.patrolStep(context.Background())
+	require.Nil(t, r.m.sess.Get().InProgress)
+	require.False(t, r.m.sess.Get().CooldownUntil.IsZero(), "a failed start: the cooldown begins")
+	require.NotNil(t, ev.last().Holder.CooldownUntil, "and the notice says so")
+
+	r2 := newSessionRig(t, "")
+	r2.owners.set(watcherOwner("f1"), true, nil)
+	require.NoError(t, r2.m.sess.Update(func(x *watch.SessionState) {
+		x.InProgress = &watch.InProgress{Kind: "start", Since: r2.m.now().Add(-time.Hour)}
+	}))
+	r2.m.patrolStep(context.Background())
+	require.Nil(t, r2.m.sess.Get().InProgress)
+	require.True(t, r2.m.sess.Get().CooldownUntil.IsZero(), "the watcher is there: the start worked")
+
+	r3 := newSessionRig(t, "")
+	require.NoError(t, r3.m.sess.Update(func(x *watch.SessionState) {
+		x.InProgress = &watch.InProgress{Kind: "start", Since: r3.m.now().Add(-30 * time.Second)}
+	}))
+	require.True(t, r3.m.view().Starting, "within its time: still starting")
+	r3.m.patrolStep(context.Background())
+	require.NotNil(t, r3.m.sess.Get().InProgress, "and left alone")
+}

@@ -81,7 +81,7 @@ func (m *Module) payloadNow() ChangedPayload {
 	panes := HolderPanes{State: string(own.State), SessionID: own.SessionID, TmuxSessionID: own.TmuxSessionID, PaneID: own.PaneID}
 	if m.sess != nil {
 		st := m.sess.Get()
-		panes.Starting = st.InProgress != nil
+		panes.Starting = m.startingNow(st)
 		if !st.CooldownUntil.IsZero() {
 			until := st.CooldownUntil
 			panes.CooldownUntil = &until
