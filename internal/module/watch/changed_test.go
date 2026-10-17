@@ -355,3 +355,22 @@ func TestStatus_NoAttemptNoStartingAndNoCooldownField(t *testing.T) {
 	require.NotContains(t, rr.Body.String(), "cooldown_until")
 	require.NotContains(t, rr.Body.String(), "starting")
 }
+
+// The status names the cooldown (RFC 3339) while there is one, and the attempt in progress.
+func TestStatus_ACooldownAndAnAttemptAreInTheSelfView(t *testing.T) {
+	r := newSessionRig(t, "")
+	until := r.m.now().Add(20 * time.Minute)
+	require.NoError(t, r.m.sess.Update(func(x *watch.SessionState) {
+		x.CooldownUntil = until
+		x.InProgress = &watch.InProgress{Kind: "start", Since: r.m.now()}
+	}))
+	rr := httptest.NewRecorder()
+	r.mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/watch/status", nil).WithContext(adminCtx))
+	require.Equal(t, http.StatusOK, rr.Code)
+	var st Status
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &st))
+	require.True(t, st.Self.Starting)
+	require.NotNil(t, st.Self.CooldownUntil)
+	require.True(t, st.Self.CooldownUntil.Equal(until))
+	require.Contains(t, rr.Body.String(), `"cooldown_until":"`+until.UTC().Format(time.RFC3339))
+}
