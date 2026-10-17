@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -362,4 +363,40 @@ func TestMaterialize_ABundleThatNeverEndsIsCutOff(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	assert.Equal(t, []string{"bundle", "tar"}, formats)
+}
+
+// The origin runs a job of its own from a commit it already has: a worktree, no download.
+func TestCheckoutLocal_AWorktreeOfACommitInThisRepository(t *testing.T) {
+	repo, _, snap := origin(t)
+	dir := filepath.Join(t.TempDir(), "ws")
+	ws, err := CheckoutLocal(context.Background(), repo, snap, dir)
+	require.NoError(t, err)
+	checkTree(t, ws.Dir)
+	assert.Equal(t, snap, gitOut(t, ws.Dir, "rev-parse", "HEAD"))
+	require.NoError(t, ws.Cleanup())
+	_, serr := os.Stat(dir)
+	assert.True(t, os.IsNotExist(serr))
+	assert.NotContains(t, gitOut(t, repo, "worktree", "list"), "ws")
+
+	// the git directory itself works as well
+	ws, err = CheckoutLocal(context.Background(), repo+"/.git", snap, filepath.Join(t.TempDir(), "ws2"))
+	require.NoError(t, err)
+	checkTree(t, ws.Dir)
+	require.NoError(t, ws.Cleanup())
+}
+
+func TestCheckoutLocal_RefusesWhatIsNotARepositoryACommitOrAFreeDirectory(t *testing.T) {
+	repo, _, snap := origin(t)
+	ctx := context.Background()
+	free := func() string { return filepath.Join(t.TempDir(), "ws") }
+	sub := filepath.Join(repo, "sub")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	_, err := CheckoutLocal(ctx, sub, snap, free())
+	assert.Error(t, err, "a directory inside the repository is not the repository")
+	_, err = CheckoutLocal(ctx, repo, strings.Repeat("a", 40), free())
+	assert.Error(t, err, "a commit the repository does not have")
+	_, err = CheckoutLocal(ctx, repo, "HEAD", free())
+	assert.Error(t, err, "only a full commit id")
+	_, err = CheckoutLocal(ctx, repo, snap, t.TempDir())
+	assert.Error(t, err, "a directory that is there")
 }
