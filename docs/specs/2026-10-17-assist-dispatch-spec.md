@@ -49,6 +49,10 @@ scripts `assist-on` / `assist-off` / `assist-check` exist as a prototype (mlab r
     a light one goes out only when it would wait; the allowed list starts empty; one notice per change to the
     sessions of an allowed team; mserv's limits as its admin set them.
 
+11. **While mlab packages or releases, the other lines' tests go to assist** (user, 10-17 13:3x, through the watcher):
+    the release has mlab to itself. While the lead has declared mlab reserved (§3), every command that an assist host
+    can take goes there first, without the usual preference for mlab; it ends by itself when the reservation ends.
+
 ## 2. The pool
 
 | Host | Its slots are kept by | Runs | Limits |
@@ -75,6 +79,10 @@ scripts `assist-on` / `assist-off` / `assist-check` exist as a prototype (mlab r
   kind plus the transfer (§4), compared with "wait on mlab, then run on mlab". A ticket that fits no free slot keeps its
   place; tickets behind it may take slots it cannot use (as with conflicts), so a mserv-only slot never waits behind a
   macOS-only head.
+- **mlab reserved (decision 11).** `pdx assist reserve on --reason "<line>" [--for <dur>]` (default 2 h) / `off`,
+  recorded in `assist.json`; the lead's release scripts set it at their start and clear it at their end, and it lapses
+  at its `until` if a script is cut off. While it holds, a ticket with a usable assist candidate goes there whatever the
+  two rules below say; a ticket no assist host can take still runs on mlab (nothing is refused).
 - **Preference for mlab's quality (decision 5).** With an assist host free and the ticket able to run there, a heavy
   ticket goes to the assist host even when mlab has a free slot, unless mlab would finish it clearly sooner (estimate
   below 0.5× the assist host's). A light ticket goes out only when it would otherwise wait on mlab.
