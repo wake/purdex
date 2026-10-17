@@ -1,0 +1,122 @@
+// Package snapshot gets a job's snapshot commit from the origin to the host that claimed the job (WWD spec §4.3, §5):
+// the origin serves a bundle or a tar of it for a live claim, and the worker makes a workspace from it.
+package snapshot
+
+import (
+	"archive/tar"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+)
+
+// maxTarBytes and maxTarEntries bound what a tar may unpack to: the origin is a peer with the pool token, not a stranger, but a
+// worker's disk is not for a runaway archive either. A purdex snapshot is 70 MB in 5,500 files.
+const (
+	maxTarBytes   = 4 << 30
+	maxTarEntries = 500_000
+)
+
+// Untar unpacks the tar r (the output of `git archive`) into dst, which is made when it is not there. It writes nothing outside dst:
+// a name that is absolute or climbs out, a symlink whose target does, a hard link, a device or a fifo is an error, and the real path of
+// every parent directory is checked against dst before an entry is made (so a chain of symlinks the archive built cannot lead out).
+// The pax global header that git archive puts first is not a file: its comment is the commit id, which is returned ("" when the
+// archive has none) so that the caller can check it is the commit it asked for.
+func Untar(r io.Reader, dst string) (commit string, err error) {
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return "", err
+	}
+	realDst, err := filepath.EvalSymlinks(dst)
+	if err != nil {
+		return "", err
+	}
+	inside := func(p string) error {
+		rel, err := filepath.Rel(realDst, p)
+		if err != nil || !filepath.IsLocal(rel) && rel != "." {
+			return fmt.Errorf("snapshot tar: %q leads out of the workspace", p)
+		}
+		return nil
+	}
+	tr := tar.NewReader(r)
+	var total int64
+	for n := 0; ; n++ {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			return commit, nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("snapshot tar: %w", err)
+		}
+		if n >= maxTarEntries {
+			return "", errors.New("snapshot tar: too many entries")
+		}
+		if h.Typeflag == tar.TypeXGlobalHeader {
+			if c, ok := h.PAXRecords["comment"]; ok {
+				commit = c
+			}
+			continue
+		}
+		name := strings.TrimSuffix(h.Name, "/")
+		if name == "" || name == "." {
+			continue
+		}
+		if !filepath.IsLocal(name) {
+			return "", fmt.Errorf("snapshot tar: %q is not a path inside the workspace", h.Name)
+		}
+		target := filepath.Join(realDst, name) // cleaned: no ".." is left for the file system to resolve
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return "", err
+		}
+		parent, err := filepath.EvalSymlinks(filepath.Dir(target))
+		if err != nil {
+			return "", err
+		}
+		if err := inside(parent); err != nil {
+			return "", err
+		}
+		target = filepath.Join(parent, filepath.Base(target))
+		switch h.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return "", err
+			}
+		case tar.TypeReg:
+			total += h.Size
+			if total > maxTarBytes {
+				return "", errors.New("snapshot tar: too large")
+			}
+			f, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, os.FileMode(h.Mode&0o777)|0o200)
+			if err != nil {
+				return "", err
+			}
+			if _, err := io.CopyN(f, tr, h.Size); err != nil {
+				f.Close()
+				return "", fmt.Errorf("snapshot tar: %s: %w", h.Name, err)
+			}
+			if err := f.Close(); err != nil {
+				return "", err
+			}
+			if err := os.Chmod(target, os.FileMode(h.Mode&0o777)); err != nil { // the umask does not decide it, and no setuid bit comes along
+				return "", err
+			}
+		case tar.TypeSymlink:
+			if path.IsAbs(h.Linkname) || !filepath.IsLocal(filepath.Join(filepath.Dir(name), h.Linkname)) {
+				return "", fmt.Errorf("snapshot tar: symlink %q -> %q leads out of the workspace", h.Name, h.Linkname)
+			}
+			if err := os.Symlink(h.Linkname, target); err != nil {
+				return "", err
+			}
+			if real, err := filepath.EvalSymlinks(target); err == nil { // when the target is there already it must be inside too
+				if err := inside(real); err != nil {
+					_ = os.Remove(target)
+					return "", err
+				}
+			}
+		default:
+			return "", fmt.Errorf("snapshot tar: %q is of a kind a snapshot does not have (%c)", h.Name, h.Typeflag)
+		}
+	}
+}
