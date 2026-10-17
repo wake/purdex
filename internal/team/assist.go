@@ -9,6 +9,6 @@ const AssistTeamsKey = "team.assist-teams"
 // went on to be.
 type AssistTeams interface {
 	ListLiveTeams() ([]Team, error)
-	// RefSuccessors are the session ids whose relay chain holds ref (oldest first); the caller picks the live one.
+	// RefSuccessors are the session ids whose relay chain holds ref (newest first); the caller picks the first live one.
 	RefSuccessors(ref string) ([]string, error)
 }

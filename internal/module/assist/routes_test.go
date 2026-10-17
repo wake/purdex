@@ -363,7 +363,52 @@ func TestDenyByAnAmbiguousNameIsRefused(t *testing.T) {
 		t.Fatal("an ambiguous deny removed an entry")
 	}
 	r.m.teams = nil
-	if code, b := r.do("POST", "/api/assist/deny", map[string]any{"kind": "team", "id": "t1"}); code != 503 {
+	if code, b := r.do("POST", "/api/assist/deny", map[string]any{"kind": "team", "id": "some-name"}); code != 503 {
 		t.Fatalf("team module down: %d %v", code, b)
+	}
+	// the id it was stored with needs no team module
+	if code, b := r.do("POST", "/api/assist/deny", map[string]any{"kind": "team", "id": "t1"}); code != 200 || b["result"] != "removed" {
+		t.Fatalf("stored id with the team module down: %d %v", code, b)
+	}
+}
+
+func TestHostSetRefusedWhileASwitchRuns(t *testing.T) {
+	r := newRig(t)
+	r.addHost("air26")
+	r.edit(func(f *gate.AssistFile) {
+		h := f.Hosts["air26"]
+		h.Op = &gate.AssistOp{Kind: "on", ID: "x"}
+		f.Hosts["air26"] = h
+	})
+	if code, b := r.do("POST", "/api/assist/host", map[string]any{"alias": "air26", "ssh": "other"}); code != 409 || b["error"] != "busy" {
+		t.Fatalf("%d %v", code, b)
+	}
+	if h := r.file().Hosts["air26"]; h.SSH != "air26" {
+		t.Fatalf("%+v", h)
+	}
+}
+
+// An entry of an ended team is removed by the id it was stored with, even if a live team has since taken that id as its name.
+func TestDenyPrefersTheStoredIDOverALiveTeamsName(t *testing.T) {
+	r := newRig(t)
+	r.liveTeam("t9", "old-id", "", "l9")
+	r.edit(func(f *gate.AssistFile) { f.Allowed = []gate.AssistAllow{{Kind: "team", ID: "old-id"}} })
+	if code, b := r.do("POST", "/api/assist/deny", map[string]any{"kind": "team", "id": "old-id"}); code != 200 || b["result"] != "removed" {
+		t.Fatalf("%d %v", code, b)
+	}
+	if len(r.file().Allowed) != 0 {
+		t.Fatal("entry kept")
+	}
+}
+
+// With two live successors of a ref, the newest (the first RefSuccessors names) is the one that is matched.
+func TestResolveRefTakesTheFirstLiveSuccessor(t *testing.T) {
+	r := newRig(t)
+	r.live("sid-a", "_aaaaab", "mlab/x-a")
+	r.live("sid-z", "_aaaaac", "mlab/x-z")
+	r.teams.succ["_aaaaaa"] = []string{"sid-z", "sid-a"}
+	o, ok := r.m.resolveRef("_aaaaaa")
+	if !ok || o.SessionID != "sid-z" {
+		t.Fatalf("%+v %v", o, ok)
 	}
 }

@@ -196,6 +196,9 @@ func (m *Module) handleHostSet(w http.ResponseWriter, r *http.Request) {
 		if existed && reflect.DeepEqual(cur, next) {
 			return false, "unchanged", nil
 		}
+		if existed && cur.Op != nil {
+			return false, "", errBusy // a switch script is running against the settings as they were
+		}
 		next.Gen = f.TakeGen()
 		f.Hosts[b.Alias] = next
 		if existed {

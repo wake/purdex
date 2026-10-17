@@ -114,12 +114,7 @@ func (m *Module) resolveRef(ref string) (team.Origin, bool) {
 func (m *Module) resolveEntry(b allowBody, forDeny bool) (string, string, error) {
 	switch b.Kind {
 	case "team":
-		id, name, err := m.resolveTeam(b.ID)
-		var re *resolveErr
-		if forDeny && errors.As(err, &re) && re.code == "no_such_team" {
-			return b.ID, b.ID, nil // an ended team is removed by the id it was stored with; any other refusal stands
-		}
-		return id, name, err
+		return m.resolveTeam(b.ID)
 	case "session":
 		if !ipeers.IsRef(b.ID) {
 			return "", "", &resolveErr{http.StatusBadRequest, "bad_ref", "a session is named by its ref, _ and six letters or digits"}
@@ -152,9 +147,11 @@ func (m *Module) allowDeny(w http.ResponseWriter, r *http.Request, allow bool) {
 		m.writeErr(w, http.StatusBadRequest, "bad_reason", "a reason is required: one line, at most 200 bytes")
 		return
 	}
-	id, name, err := m.resolveEntry(b, !allow)
+	id, name, rerr := m.resolveEntry(b, !allow)
 	var re *resolveErr
-	if errors.As(err, &re) {
+	// An allow needs the entry resolved. A deny removes the entry stored under exactly the id given first (an ended team has
+	// no name to resolve, and a live team may since have taken that name); only when none is does the resolution decide.
+	if allow && errors.As(rerr, &re) {
 		m.writeErr(w, re.status, re.code, re.detail)
 		return
 	}
@@ -164,10 +161,23 @@ func (m *Module) allowDeny(w http.ResponseWriter, r *http.Request, allow bool) {
 				return false, "", errNoHost
 			}
 		}
-		at := -1
-		for i, a := range f.Allowed {
-			if a.Kind == b.Kind && a.ID == id && a.Host == b.Host {
-				at = i
+		find := func(id string) int {
+			for i, a := range f.Allowed {
+				if a.Kind == b.Kind && a.ID == id && a.Host == b.Host {
+					return i
+				}
+			}
+			return -1
+		}
+		at := find(id)
+		if !allow {
+			if at = find(b.ID); at < 0 {
+				if errors.As(rerr, &re) && re.code != "no_such_team" {
+					return false, "", rerr // ambiguous, or the team module is down
+				}
+				if rerr == nil {
+					at = find(id)
+				}
 			}
 		}
 		switch {
@@ -182,6 +192,10 @@ func (m *Module) allowDeny(w http.ResponseWriter, r *http.Request, allow bool) {
 		f.Allowed = append(f.Allowed[:at:at], f.Allowed[at+1:]...)
 		return true, "removed", nil
 	})
+	if errors.As(err, &re) {
+		m.writeErr(w, re.status, re.code, re.detail)
+		return
+	}
 	if err != nil {
 		m.writeEditErr(w, err)
 		return

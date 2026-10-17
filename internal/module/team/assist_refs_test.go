@@ -23,7 +23,7 @@ func TestRefSuccessors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got, []string{"sid-1", "sid-2"}) {
+	if !reflect.DeepEqual(got, []string{"sid-2", "sid-1"}) {
 		t.Fatalf("successors of _aaaaaa = %v", got)
 	}
 	if got, _ := s.RefSuccessors("_bbbbbb"); !reflect.DeepEqual(got, []string{"sid-2"}) {
