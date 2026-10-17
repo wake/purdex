@@ -55,6 +55,14 @@ func TestGoJSON(t *testing.T) {
 	}
 }
 
+func TestGoJSONTruncatedEventIsAnError(t *testing.T) {
+	stdout := `{"Action":"run","Package":"p","Test":"T"}` + "\n" + `{"Action":"fail","Package":"p","Te`
+	s, err := Parse("go-json", Input{Stdout: []byte(stdout)})
+	if err == nil || !strings.Contains(err.Error(), "malformed") {
+		t.Fatalf("err = %v, want a malformed-event error (summary %+v)", err, s)
+	}
+}
+
 func TestGoJSONNoEventsIsAnError(t *testing.T) {
 	s, err := Parse("go-json", Input{Stdout: []byte("not json\nanother line\n"), Log: []byte("boom\n")})
 	if err == nil {

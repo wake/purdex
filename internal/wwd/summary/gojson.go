@@ -32,13 +32,23 @@ func parseGoJSON(in Input) (wire.Summary, error) {
 	events := 0
 	sc := bufio.NewScanner(bytes.NewReader(in.Stdout))
 	sc.Buffer(make([]byte, 64<<10), 4<<20)
+	var malformed error
+	lineNo := 0
 	for sc.Scan() {
+		lineNo++
 		line := bytes.TrimSpace(sc.Bytes())
 		if len(line) == 0 || line[0] != '{' {
 			continue
 		}
 		var ev goEvent
-		if json.Unmarshal(line, &ev) != nil || ev.Action == "" {
+		if err := json.Unmarshal(line, &ev); err != nil {
+			// a line that looks like an event but is cut or corrupted: the counts cannot be trusted
+			if malformed == nil {
+				malformed = fmt.Errorf("go-json: malformed event at line %d: %v", lineNo, err)
+			}
+			continue
+		}
+		if ev.Action == "" {
 			continue
 		}
 		events++
@@ -92,7 +102,7 @@ func parseGoJSON(in Input) (wire.Summary, error) {
 		s.Failed++
 		addFailure(&s, wire.Failure{Name: pkg, Message: testMessage(output[key{pkg, ""}])})
 	}
-	return s, nil
+	return s, malformed
 }
 
 // testMessage is a test's output without the runner's own bookkeeping lines.
