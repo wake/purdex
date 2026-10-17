@@ -191,6 +191,9 @@ function withItem(u: UnitState, entry: JournalEntry, idx: number, value: boolean
   }
 }
 
+const hasSessionState = (u: UnitState): boolean => u.currentPage !== '' || u.truncated || u.sessions !== null || u.sessionsFailed || Object.keys(u.pages).length > 0
+const forgetSessionState = (u: UnitState): UnitState => ({ ...u, entries: [], more: false, currentPage: '', truncated: false, sessions: null, sessionsIncomplete: false, sessionsFailed: false, pages: {} })
+
 export const useJournalStore = create<JournalState>()((set, get) => {
   /** The unit a session names on a host, if its answer was loaded. */
   const unitOf = (hostId: string, sessionId: string): UnitState | undefined => {
@@ -240,7 +243,15 @@ export const useJournalStore = create<JournalState>()((set, get) => {
     support: {}, confirmSupport: {}, sessionsSupport: {}, readFailed: {}, sticky: {}, gens: {}, byHost: {}, routes: {}, epoch: {}, staleRev: 0,
 
     fence: (hostId) => set((s) => ({ support: drop(s.support, hostId), confirmSupport: drop(s.confirmSupport, hostId), sessionsSupport: drop(s.sessionsSupport, hostId), gens: { ...s.gens, [hostId]: (s.gens[hostId] ?? 0) + 1 } })),
-    setSupport: (hostId, yes, confirm = false, sessions = false) => set((s) => ({ support: { ...s.support, [hostId]: yes }, confirmSupport: { ...s.confirmSupport, [hostId]: yes && confirm }, sessionsSupport: { ...s.sessionsSupport, [hostId]: yes && sessions }, sticky: { ...s.sticky, [hostId]: yes } })),
+    setSupport: (hostId, yes, confirm = false, sessions = false) => set((s) => {
+      const next = { support: { ...s.support, [hostId]: yes }, confirmSupport: { ...s.confirmSupport, [hostId]: yes && confirm }, sessionsSupport: { ...s.sessionsSupport, [hostId]: yes && sessions }, sticky: { ...s.sticky, [hostId]: yes } }
+      if (yes && sessions) return next
+      // The same endpoint can come back as an older daemon (no `fence`-time forget: the host was not re-pointed): what session mode left
+      // on the host is not this daemon's. The session fields go, and so do the rows (the first legacy read must not merge into a session page).
+      const h = s.byHost[hostId]
+      const units = h && Object.fromEntries(Object.entries(h.units).map(([k, u]) => [k, hasSessionState(u) ? forgetSessionState(u) : u]))
+      return { ...next, readFailed: Object.fromEntries(Object.entries(s.readFailed).filter(([k]) => !k.startsWith(`${hostId}\u0000`))), ...(h ? { byHost: { ...s.byHost, [hostId]: { ...h, units: units! } } } : {}) }
+    }),
 
     loadJournal: async (hostId, sessionId, opts) => {
       const older = opts?.older === true
