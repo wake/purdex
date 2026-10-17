@@ -108,6 +108,11 @@ describe('HostCell — the cell', () => {
     rerender(<HostCell view={view()} look={{ colors: COLORS }} variant="wide" isActive waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
     expect(tile().className).toContain('bg-surface-active')
   })
+
+  it('draws no click / focus outline (user 10-17)', () => {
+    render(<HostCell view={view()} look={{ colors: COLORS }} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
+    expect(tile().className.split(' ')).toContain('outline-none')
+  })
 })
 
 describe('HostCell — the host badge (the App\'s HostBadge, as beside a member)', () => {
