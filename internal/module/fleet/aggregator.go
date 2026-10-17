@@ -11,6 +11,7 @@ import (
 	leaf "github.com/wake/purdex/internal/fleet"
 	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/module/hostconfig"
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 // This file is the aggregator: the newest reading of every host, kept in memory only (spec §2.5: nothing a sample says is
@@ -49,6 +50,9 @@ type Deps struct {
 	SelfHostID func() string
 	PeerHostID func(alias string) string // the daemon host id of a peer alias, "" when unknown
 	Events     Pusher
+	// Pool, when set, is the source of every host's readings (wwd's pool, spec §9): no LocalSource and no SSH session run, and
+	// the rows (order, ids, look) still come from the config. Nil = the readings are taken as they always were.
+	Pool func(ctx context.Context) (wire.Pool, error)
 	// Disk is the own host's disk figures, as of the fleet's mount; nil = leaf.LocalDisk (percentage only).
 	Disk func() (usedPct, freeGB float64, ok bool)
 	Logf func(format string, args ...any)
@@ -250,7 +254,9 @@ func (m *Measure) activateLocked() {
 	m.mu.Lock()
 	m.resetLocked()
 	m.mu.Unlock()
-	m.d.Local.Start()
+	if m.d.Pool == nil {
+		m.d.Local.Start()
+	}
 	m.reconcile(ctx, true)
 	m.wg.Add(1)
 	go func() {
@@ -282,7 +288,9 @@ func (m *Measure) deactivateLocked() {
 		go func(s *session) { defer sw.Done(); s.stop() }(ls.s)
 	}
 	sw.Wait()
-	m.d.Local.Stop()
+	if m.d.Pool == nil {
+		m.d.Local.Stop()
+	}
 	m.active = false
 	m.mu.Lock()
 	m.resetLocked()
@@ -394,6 +402,9 @@ func (m *Measure) reconcile(ctx context.Context, force bool) {
 		if h == nil {
 			h = &hostRow{key: w.key, status: leaf.StatusOffline}
 			m.hosts[w.key] = h
+		}
+		if m.d.Pool != nil {
+			w.ssh = "" // the pool is the source: no session is started for any host
 		}
 		h.kind, h.fleetAlias, h.staticID, h.sshAlias = w.kind, w.fleetAlias, w.staticID, w.ssh
 		h.name, h.icon, h.iconWeight, h.colors = w.name, w.icon, w.weight, w.colors
@@ -557,6 +568,10 @@ func (m *Measure) tick(ctx context.Context) {
 		return
 	}
 	m.reconcile(ctx, false)
-	m.readLocal(m.clock.Now())
+	if m.d.Pool != nil {
+		m.readPool(ctx, m.clock.Now())
+	} else {
+		m.readLocal(m.clock.Now())
+	}
 	m.push()
 }

@@ -112,7 +112,7 @@ func hostsOf(p wire.Pool) wire.PoolHostsResponse {
 	for _, peer := range p.Peers {
 		w := wire.WorkerSettings{Enabled: peer.Info.Worker.Enabled}
 		if peer.Facts != nil {
-			w.Enabled, w.Slots = peer.Facts.Worker.Enabled, peer.Facts.Worker.Slots
+			w.Enabled, w.Slots, w.OwnerRule = peer.Facts.Worker.Enabled, peer.Facts.Worker.Slots, peer.Facts.Worker.OwnerRule
 		}
 		labels := peer.Info.Labels
 		if labels == nil {
@@ -175,7 +175,13 @@ func (m *Module) serve(w http.ResponseWriter, r *http.Request, key string, fetch
 
 // lead is the leader's work: take a slot, call wwd (cut loose from the leader's request, so a leader that goes away does not
 // fail the readers waiting on its result), cache a success.
-func (m *Module) lead(r *http.Request, key string, fetch func(ctx context.Context) (any, *apiError)) ([]byte, *apiError) {
+func (m *Module) lead(r *http.Request, key string, fetch func(ctx context.Context) (any, *apiError)) (body []byte, aerr *apiError) {
+	defer func() {
+		// A panic in the fetch becomes a 500 here, so serve still frees the flight and closes done for the waiters.
+		if rec := recover(); rec != nil {
+			body, aerr = nil, &apiError{http.StatusInternalServerError, ErrWWDError, "reading the pool failed"}
+		}
+	}()
 	select {
 	case m.inflight <- struct{}{}:
 		defer func() { <-m.inflight }()

@@ -31,6 +31,14 @@ func TestModule_MountsTheMeasuringSide(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+// The switch: PDX_FLEET_SOURCE=pool gives the measuring side the pool as its source; anything else leaves it as it was.
+func TestModule_PoolSourceOnlyWhenTheSwitchSaysSo(t *testing.T) {
+	t.Setenv(SourceEnv, "ssh")
+	assert.Nil(t, newRig(t).m.measure.d.Pool, "the default keeps the SSH and local sources")
+	t.Setenv(SourceEnv, "pool")
+	assert.NotNil(t, newRig(t).m.measure.d.Pool)
+}
+
 // The newest age the engine reports is the measuring side's: once the aggregator has read anything, the role answer carries it.
 func TestModule_EngineReadsTheAggregatorsNewestAge(t *testing.T) {
 	r := newRig(t)

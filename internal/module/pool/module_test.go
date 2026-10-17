@@ -83,7 +83,7 @@ func poolOf(t *testing.T) []byte {
 	require.NoError(t, err)
 	facts, err := wire.Decode[wire.Facts](fixture(t, "facts_darwin.json"))
 	require.NoError(t, err)
-	facts.Worker = wire.FactsWorker{Enabled: true, Slots: wire.Slots{Heavy: 2, Light: 3}}
+	facts.Worker = wire.FactsWorker{Enabled: true, Slots: wire.Slots{Heavy: 2, Light: 3}, OwnerRule: "hid<5m"}
 	air19 := wire.Info{HostID: "h-air19", Alias: "air19", Version: "0.1.0", Proto: 1, Platform: "darwin", Arch: "amd64"}
 	b, err := json.Marshal(wire.Pool{Peers: []wire.Peer{
 		{Info: info, Facts: &facts, Reachable: true},
@@ -107,7 +107,7 @@ func TestHosts_MapsThePoolToTheAppShape(t *testing.T) {
 	assert.Equal(t, "mlab", mlab.Info.Alias)
 	assert.True(t, mlab.Reachable)
 	require.NotNil(t, mlab.Facts)
-	assert.Equal(t, wire.WorkerSettings{Enabled: true, Slots: wire.Slots{Heavy: 2, Light: 3}}, mlab.Worker, "the worker state comes from the facts")
+	assert.Equal(t, wire.WorkerSettings{Enabled: true, Slots: wire.Slots{Heavy: 2, Light: 3}, OwnerRule: "hid<5m"}, mlab.Worker, "the worker state comes from the facts")
 	assert.Equal(t, []string{"os:darwin", "arch:arm64", "repo:purdex"}, mlab.Labels)
 	assert.Equal(t, "air19", air.Info.Alias)
 	assert.False(t, air.Reachable)
@@ -335,6 +335,24 @@ func TestSingleFlight_ConcurrentReadsOfOneKeyCallWWDOnce(t *testing.T) {
 		assert.Equal(t, first, b, "every reader gets the leader's answer")
 	}
 	assert.EqualValues(t, 1, p.calls.Load(), "wwd was asked once")
+}
+
+// A fetch that panics must not strand the flight: the reader gets a 500, the key's flight is gone (the next read starts a new
+// one) and the waiters' done channel is closed.
+func TestSingleFlight_APanickingFetchAnswers500AndFreesTheFlight(t *testing.T) {
+	m := New()
+	m.now = func() time.Time { return time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC) }
+	rr := httptest.NewRecorder()
+	assert.NotPanics(t, func() {
+		m.serve(rr, httptest.NewRequest(http.MethodGet, "/x", nil), "k", func(context.Context) (any, *apiError) { panic("boom") })
+	})
+	assert.Equal(t, 500, rr.Code)
+	m.flightMu.Lock()
+	assert.Empty(t, m.flights, "the flight is released")
+	m.flightMu.Unlock()
+	rr = httptest.NewRecorder()
+	m.serve(rr, httptest.NewRequest(http.MethodGet, "/x", nil), "k", func(context.Context) (any, *apiError) { return map[string]int{"a": 1}, nil })
+	assert.Equal(t, 200, rr.Code, "a later read works")
 }
 
 // Different keys are different flights: each is asked once.
