@@ -11,8 +11,8 @@ export const LONG_WAIT_S = 60
 /** The page-fault count past which 換頁拖累 turns error. */
 export const HEAVY_FAULTS = 5000
 
-/** A command that never reached its process: the gate refused it, or it was interrupted while waiting. */
-const NEVER_STARTED = new Set(['refused', 'interrupted'])
+/** A command that never reached its process: the gate refused it, it was interrupted while waiting, or its parent vanished while it waited (orphaned). */
+const NEVER_STARTED = new Set(['refused', 'interrupted', 'orphaned'])
 
 export interface HistoryRow {
   key: string

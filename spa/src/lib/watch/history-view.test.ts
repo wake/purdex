@@ -36,8 +36,8 @@ describe('toRow', () => {
     expect(toRow(rec({ cpuS: 3, waitS: 70, durationS: 60 }), 0).runS).toBe(0)
   })
 
-  it('a refused or interrupted command only waited: no run, no failure, no usage', () => {
-    for (const outcome of ['refused', 'interrupted']) {
+  it('a refused, interrupted or orphaned command only waited: no run, no failure, no usage', () => {
+    for (const outcome of ['refused', 'interrupted', 'orphaned']) {
       const r = toRow(rec({ outcome, waitS: 40, durationS: 0, exit: 1, cpuS: 5, maxRssMb: 9, majorFaults: 2 }), 0)
       expect(r).toMatchObject({ started: false, runS: 0, failed: false, cores: null, maxRssMb: null, majorFaults: null })
     }
