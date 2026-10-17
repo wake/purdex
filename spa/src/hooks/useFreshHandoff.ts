@@ -45,8 +45,9 @@ export function useFreshHandoffOfCode(hostId: string, code: string): FreshHandof
 
 /**
  * A tab's handoff file. `leadOfTeam` is the team key when the tab is that team's LEAD row: the lead is then known by the roster
- * (which carries the daemon's own `fresh_handoff`), so its mark does not depend on the list entry carrying a `code`. The code
- * match stays as the fallback, and is the only source for every tab that is not a lead.
+ * (which carries the daemon's own `fresh_handoff`), so its mark does not depend on the list entry carrying a `code`; a roster
+ * lead without `fresh_handoff` has none, and the list is not asked. The (hostId, code) match is the only source for every tab
+ * that is not a roster lead (no `leadOfTeam`, or one that points at no lead in the roster).
  */
 export function useFreshHandoffOfTab(tab: Tab, leadOfTeam?: string): FreshHandoffView | null {
   const s = tabSessionOf(tab)
@@ -56,7 +57,9 @@ export function useFreshHandoffOfTab(tab: Tab, leadOfTeam?: string): FreshHandof
     const cut = leadOfTeam.indexOf('\u0000')
     return st.byHost[leadOfTeam.slice(0, cut)]?.find((t) => t.id === leadOfTeam.slice(cut + 1))?.lead
   })
-  return useFreshHandoffOfRosterSession(lead) ?? byCode
+  const fromRoster = useFreshHandoffOfRosterSession(lead)
+  // a roster lead is the whole answer, null included (the daemon gives every lead its own `fresh_handoff`, or none)
+  return lead ? fromRoster : byCode
 }
 
 export function useFreshHandoffOfRosterSession(session: RosterSession | undefined): FreshHandoffView | null {

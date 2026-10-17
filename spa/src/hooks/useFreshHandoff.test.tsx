@@ -80,6 +80,31 @@ describe('useFreshHandoffOfTab', () => {
     // without the team key the same tab asks the list only
     expect(renderHook(() => useFreshHandoffOfTab(leadTab)).result.current).toBeNull()
   })
+
+  it('a roster lead with no fresh_handoff has none: a list entry with the same code does not light its mark', () => {
+    seedScene({ tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }] })
+    const leadTab = tabOn('lead', 'lead-tm')
+    put([entry({ code: 'code-lead-tm' })])
+    // the roster has the lead and says nothing: the roster is the whole answer
+    expect(renderHook(() => useFreshHandoffOfTab(leadTab, KEY)).result.current).toBeNull()
+    // the same tab as a plain tab (no team key) is matched by (hostId, code)
+    expect(renderHook(() => useFreshHandoffOfTab(leadTab)).result.current).toEqual(view)
+  })
+
+  it('a roster lead with a fresh_handoff shows it, not the list entry', () => {
+    seedScene({ tabs: [['lead', 'lead-tm']], workspaces: [{ id: 'w1', tabs: ['lead'] }] })
+    const leadTab = tabOn('lead', 'lead-tm')
+    put([entry({ code: 'code-lead-tm' })])
+    const teams = useTeamRosterStore.getState().byHost[HOST]
+    act(() => useTeamRosterStore.getState().apply(HOST, [{ ...teams[0], lead: { ...teams[0].lead, fresh_handoff: { op_id: 'o', path: '/lead.md', written_at: 7 } } }]))
+    expect(renderHook(() => useFreshHandoffOfTab(leadTab, KEY)).result.current).toEqual({ path: '/lead.md', writtenAt: 7 })
+  })
+
+  it('a team key that points at no roster lead falls back to the (hostId, code) match', () => {
+    const plain = tabOn('p', 'x-tm')
+    put([entry()])
+    expect(renderHook(() => useFreshHandoffOfTab(plain, `${HOST}\u0000no-such-team`)).result.current).toEqual(view)
+  })
 })
 
 describe('the roster hooks', () => {
