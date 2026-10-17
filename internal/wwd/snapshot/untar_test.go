@@ -140,6 +140,24 @@ func TestUntar_ASymlinkChainThatLeavesTheWorkspaceCreatesNothingOutside(t *testi
 	assert.Equal(t, []string{"ws"}, names, "nothing was made next to the workspace")
 }
 
+// An archive that ends with the escaping symlink is refused too: nothing after it forces a check, and a consumer of the workspace that
+// does not go through a root would follow it. A symlink that is dangling inside the workspace is fine.
+func TestUntar_ATerminalSymlinkThatResolvesOutsideIsRefused(t *testing.T) {
+	for _, outsideExists := range []bool{true, false} {
+		base := t.TempDir()
+		if outsideExists {
+			require.NoError(t, os.Mkdir(filepath.Join(base, "newdir"), 0o755))
+		}
+		_, err := Untar(tarOf(t,
+			ent{name: "y", link: "."},
+			ent{name: "q", link: "y/y/../newdir"},
+		), filepath.Join(base, "ws"))
+		assert.Error(t, err, "outside exists=%v", outsideExists)
+	}
+	_, err := Untar(tarOf(t, ent{name: "dangling", link: "not/there/yet"}, ent{name: "ok.txt", body: "x\n"}), filepath.Join(t.TempDir(), "ws"))
+	assert.NoError(t, err, "a link that points at nothing yet, inside, is allowed")
+}
+
 // The same chain when the directory it points at outside is there: nothing is made in it.
 func TestUntar_ASymlinkChainIntoAnExistingDirectoryOutsideWritesNothingThere(t *testing.T) {
 	base := t.TempDir()

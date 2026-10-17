@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -37,9 +38,19 @@ func Untar(r io.Reader, dst string) (commit string, err error) {
 	defer root.Close()
 	tr := tar.NewReader(r)
 	var total int64
+	var links []string
 	for n := 0; ; n++ {
 		h, err := tr.Next()
 		if errors.Is(err, io.EOF) {
+			// Root never follows a symlink out, but it does not stop one from being made, and a consumer of the workspace that does not go
+			// through a root would follow it: every link is resolved through the root once more, now that the tree is complete (a link
+			// can lead out through a chain of the archive's own links, which only the whole tree shows). A link that points at nothing
+			// yet, inside, is fine; one that cannot be resolved inside is not.
+			for _, l := range links {
+				if _, err := root.Stat(l); err != nil && !errors.Is(err, fs.ErrNotExist) {
+					return "", fmt.Errorf("snapshot tar: symlink %q leads out of the workspace: %w", l, err)
+				}
+			}
 			return commit, nil
 		}
 		if err != nil {
@@ -98,6 +109,7 @@ func Untar(r io.Reader, dst string) (commit string, err error) {
 			if err := root.Symlink(h.Linkname, name); err != nil {
 				return "", err
 			}
+			links = append(links, name)
 		default:
 			return "", fmt.Errorf("snapshot tar: %q is of a kind a snapshot does not have (%c)", h.Name, h.Typeflag)
 		}
