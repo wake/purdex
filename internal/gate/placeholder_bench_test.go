@@ -14,7 +14,7 @@ func BenchmarkWritePlaceholder(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := p.writePlaceholder(1); err != nil {
+		if err := p.writePlaceholder(1, WaiterInfo{Argv: []string{"tsc", "-b"}}, false); err != nil {
 			b.Fatal(err)
 		}
 	}

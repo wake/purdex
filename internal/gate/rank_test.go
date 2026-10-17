@@ -179,7 +179,7 @@ func TestRank_BrokenFilesReadAsNormalWithAnError(t *testing.T) {
 // Mutation gate: the rank not read by TryTake → the front waiter does not pass (red).
 func TestRank_FrontPassesAndARankBetweenTwoTriesIsHonoured(t *testing.T) {
 	rp := newRankPool(t, 1)
-	holder, err := rp.TakeLate()
+	holder, err := rp.TakeLate(WaiterInfo{})
 	require.NoError(t, err)
 	require.NotNil(t, holder)
 	ts := rp.enqueue(t, 2) // ts[0] older, ts[1] behind it
@@ -208,7 +208,7 @@ func TestRank_ALateClaimIgnoresRanksAndTheFrontWaiterIsNext(t *testing.T) {
 	rp := newRankPool(t, 1)
 	ts := rp.enqueue(t, 1)
 	rp.set(t, ts[0], RankFront, time.Time{})
-	late, err := rp.TakeLate()
+	late, err := rp.TakeLate(WaiterInfo{})
 	require.NoError(t, err)
 	require.NotNil(t, late, "the late claim takes the free slot though a front waiter queues")
 	tk, err := rp.TryTakeRanked(ts[0])
