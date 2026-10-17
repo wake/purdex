@@ -24,14 +24,14 @@ type ackWire struct {
 }
 
 func watchAck(args []string, stdout, stderr io.Writer) int {
-	fs := flag.NewFlagSet("watch ack", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	note := fs.String("note", "", "what was done about it, one line of at most 500 bytes (required)")
-	all := fs.Bool("all", false, "every pending event of this host")
-	asJSON := fs.Bool("json", false, "print the daemon's answer")
-	cfgPath := fs.String("config", "", "config.toml (default ~/.config/pdx/config.toml)")
+	fs, af := newAckFlagSet(stderr)
+	note, all, host, asJSON, cfgPath := af.note, af.all, af.host, af.asJSON, af.cfgPath
 	ids, err := parseInterspersed(fs, args)
 	if err != nil {
+		return 2
+	}
+	if *host != "" && !*all {
+		fmt.Fprint(stderr, "pdx watch ack: --host is for --all (an event id already says which host it is on)\n"+watchUsage)
 		return 2
 	}
 	if (len(ids) == 0) == !*all {
@@ -47,7 +47,7 @@ func watchAck(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "pdx watch ack: %v\n", err)
 		return 1
 	}
-	body, _ := json.Marshal(map[string]any{"ids": ids, "all": *all, "note": *note, "origin_inbox": os.Getenv("CLAUDE_CODE_MESSAGING_SOCKET")})
+	body, _ := json.Marshal(map[string]any{"ids": ids, "all": *all, "host": *host, "note": *note, "origin_inbox": os.Getenv("CLAUDE_CODE_MESSAGING_SOCKET")})
 	res, err := doPeersRequest(http.MethodPost, watchBase(cfg)+"/api/watch/ack", body, cfg.Token, peersRequestTimeout)
 	if err != nil {
 		return reportPeersTransportErr(err, stderr)
@@ -77,6 +77,25 @@ func watchAck(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// ackFlags are the flags of `pdx watch ack`.
+type ackFlags struct {
+	note, host, cfgPath *string
+	all, asJSON         *bool
+}
+
+// newAckFlagSet is the flag set of `pdx watch ack`; the test that checks every command a message mentions exists reads the same one.
+func newAckFlagSet(w io.Writer) (*flag.FlagSet, *ackFlags) {
+	fs := flag.NewFlagSet("watch ack", flag.ContinueOnError)
+	fs.SetOutput(w)
+	return fs, &ackFlags{
+		note:    fs.String("note", "", "what was done about it, one line of at most 500 bytes (required)"),
+		all:     fs.Bool("all", false, "every pending event of this host (with --host: of that host)"),
+		host:    fs.String("host", "", "with --all: the paired host whose pending events are meant"),
+		asJSON:  fs.Bool("json", false, "print the daemon's answer"),
+		cfgPath: fs.String("config", "", "config.toml (default ~/.config/pdx/config.toml)"),
+	}
+}
+
 // ackFailures are the ids that were not handled and are not handled already.
 func ackFailures(a ackWire) []string {
 	var out []string
@@ -97,9 +116,21 @@ func renderAck(a ackWire) string {
 			fmt.Fprintf(b, "已處理  %s\n", r.ID)
 		case watch.AckAlready:
 			fmt.Fprintf(b, "先前已處理（備註不變）  %s\n", r.ID)
+		case watch.AckUnreachable:
+			fmt.Fprintf(b, "沒有處理到（那台主機連不上）  %s\n", r.ID)
+		case watch.AckUnsupported:
+			fmt.Fprintf(b, "沒有處理到（那台主機的 daemon 太舊，沒有這個路由）  %s\n", r.ID)
+		case watch.AckRefused:
+			fmt.Fprintf(b, "沒有處理到（那台主機拒絕了）  %s\n", r.ID)
+		case watch.AckAmbiguous:
+			fmt.Fprintf(b, "沒有處理到（有兩台主機同名，無法判斷這筆在哪一台）  %s\n", r.ID)
 		default:
 			fmt.Fprintf(b, "沒有處理到（%s）  %s\n", r.Outcome, r.ID)
 		}
+	}
+	if a.Unhandled < 0 { // the host that was asked did not say how many are left
+		fmt.Fprintf(b, "這次處理 %d 筆\n", a.Handled)
+		return b.String()
 	}
 	fmt.Fprintf(b, "這次處理 %d 筆，還有 %d 筆待處理\n", a.Handled, a.Unhandled)
 	return b.String()

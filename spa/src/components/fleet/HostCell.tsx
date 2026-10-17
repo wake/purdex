@@ -2,6 +2,7 @@
 // App's own pieces so it reads like the members beside it (the user's 10-16 call: the first look was too bright and too wide).
 //   cell   a member bead's box: h-6, rounded-md, gap-1, 3 px each side (a bead's wider left padding is room for the subagent
 //          dots, which a host has not); hover bg-surface-hover, selected bg-surface-active.
+//          No click / focus outline (the browser's default ring is off; the user 10-17) — the card still opens on focus.
 //   badge  the App's `HostBadge` as beside a member in the session list: the sidebar badge settings (size, inset, corner, line
 //          colour), the host's colours resolved as for an agent member (terminal, falling back to console) — the light
 //          layer behind, the icon in the middle layer (main on hover). Offline: the badge dimmed.
@@ -132,7 +133,7 @@ export function HostCell({ view, look, variant, isActive, waitingPrimary, primar
       onFocus={openCard}
       onBlur={closeCard}
       onClick={() => { closeCard(); onOpen() }}
-      className={`group relative flex items-center h-6 rounded-md cursor-pointer shrink-0 transition-colors ${narrow ? 'gap-0.5 px-0.5' : 'gap-1 px-[3px]'} ${isActive ? 'bg-surface-active' : 'hover:bg-surface-hover'}`}
+      className={`group relative flex items-center h-6 rounded-md cursor-pointer shrink-0 outline-none transition-colors ${narrow ? 'gap-0.5 px-0.5' : 'gap-1 px-[3px]'} ${isActive ? 'bg-surface-active' : 'hover:bg-surface-hover'}`}
     >
       <span className="relative inline-flex shrink-0">
         <span data-testid={`host-badge-dim-${view.id}`} className={`inline-flex ${off ? 'opacity-40' : ''}`}>
