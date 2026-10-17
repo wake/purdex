@@ -28,6 +28,8 @@ import { handleRelayQuotaEvent } from '../lib/team/relay-quota-ws'
 import { RELAY_QUOTA_EVENT_TYPE, UNATTENDED_EVENT_TYPE } from '../lib/team/types'
 import { handleRosterEvent } from '../lib/team/roster-ws'
 import { ROSTER_EVENT_TYPE } from '../lib/team/roster'
+import { handleRelayFreshEvent } from '../lib/relay/fresh-ws'
+import { RELAY_FRESH_EVENT_TYPE } from '../lib/relay/fresh'
 import { handleWorkbookEvent, isWorkbookEvent } from '../lib/workbook/workbook-ws'
 import { handleJournalEvent, isJournalEvent } from '../lib/journal/journal-ws'
 import { handleFleetEvent } from '../lib/fleet/fleet-ws'
@@ -310,6 +312,15 @@ export function useMultiHostEventWs() {
             const now = useHostStore.getState().hosts[hostId]
             if (!now || connectionKey(now) !== configKey) return
             handleRosterEvent(hostId, event.value)
+            return
+          }
+          if (event.type === RELAY_FRESH_EVENT_TYPE) {
+            // The sessions whose handoff file is written (relay v2 contract 5, `relay.half.v1`): snapshot on subscribe,
+            // changed after every change, each the whole list. Bound to the connection exactly like `team.roster` above, so
+            // the old daemon's list is never written back after a removal or a re-point (fresh-sync.ts forgot it).
+            const now = useHostStore.getState().hosts[hostId]
+            if (!now || connectionKey(now) !== configKey) return
+            handleRelayFreshEvent(hostId, event.value)
             return
           }
           if (isWorkbookEvent(event.type)) {
