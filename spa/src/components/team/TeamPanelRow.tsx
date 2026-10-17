@@ -1,4 +1,5 @@
 // spa/src/components/team/TeamPanelRow.tsx — one person's row in the full list (moved out of TeamPanel.tsx, #2418).
+import { useState } from 'react'
 import { Notebook } from '@phosphor-icons/react'
 import type { TeamSeatView } from './team-display'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
@@ -11,6 +12,8 @@ import { useMemberDrag } from './useMemberDrag'
 import { PauseReleaseButton } from '../PauseReleaseButton'
 import { pausedLightText } from '../../lib/team/paused-text'
 import { useIsJournalHost } from '../../lib/journal/use-journal-host'
+import type { JournalMember } from '../../lib/journal/types'
+import { memberLastLine, memberTaskLine } from './member-lines'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { keepFocus, useReturnFocus } from './panel-focus'
@@ -20,6 +23,8 @@ import { useFreshHandoffOfRosterSession } from '../../hooks/useFreshHandoff'
 interface RowProps {
   /** The journal stack's team card: never offers the workbook drill, whatever host the seat is on. */
   noDrill?: boolean
+  /** This seat's lines from the leader's journal (JV-2); undefined = no lines (no capability, or not a member). */
+  member?: JournalMember
   teamKey: string
   seat: TeamSeatView
   color: string
@@ -30,7 +35,7 @@ interface RowProps {
   dragging?: boolean
 }
 
-export function PanelRow({ noDrill, teamKey, seat, color, isActive, onOpen, drag, insert, dragging }: RowProps) {
+export function PanelRow({ noDrill, member, teamKey, seat, color, isActive, onOpen, drag, insert, dragging }: RowProps) {
   const t = useI18nStore((s) => s.t)
   const r = useSeatReading(teamKey, seat.sessionId)
   const modelText = r.model ? MODEL_LABEL[r.model] : r.modelRaw ?? '—'
@@ -43,6 +48,7 @@ export function PanelRow({ noDrill, teamKey, seat, color, isActive, onOpen, drag
   const wb = journalHost || noDrill ? { ...wb0, has: false, conv: undefined } : wb0
   const status = wb.conv?.status.trim() ?? ''
   const task = firstSentence(status)
+  const [now] = useState(() => Date.now()) // the age of the last report, as of when the row was drawn
   const { remember, restore } = useReturnFocus()
   const transition = transitionOf(seat)
   const away = notInApp(seat)
@@ -119,7 +125,19 @@ export function PanelRow({ noDrill, teamKey, seat, color, isActive, onOpen, drag
           {seat.hostId !== '' && <PauseReleaseButton hostId={seat.hostId} sessionId={seat.sessionId} causes={paused.causes} />}
         </div>
       )}
-      {/* Line 2: the task (only with a workbook that has a status); without one the row stays one line */}
+      {/* Lines 2 and 3 from the leader's journal (JV-2, U3): the member's current task and state; its last report to the leader.
+          A part the daemon left out is left out; with neither the row stays as it was. */}
+      {member?.task && (
+        <div data-testid="team-panel-member-task" title={member.task.title} className="pl-[26px] mt-1 text-[11px] leading-[16px] text-text-secondary truncate">
+          {memberTaskLine(t, member.task)}
+        </div>
+      )}
+      {member?.last && (
+        <div data-testid="team-panel-member-last" title={member.last.text} className="pl-[26px] mt-0.5 text-[11px] leading-[16px] text-text-muted truncate">
+          {memberLastLine(t, member.last, now)}
+        </div>
+      )}
+      {/* Line 2 (older hosts): the task (only with a workbook that has a status); without one the row stays one line */}
       {task !== '' && (
         <div data-testid="team-panel-task" aria-label={t('team.panel.task', { task })} title={status} className="pl-[26px] mt-1 text-[11px] leading-[16px] text-text-secondary truncate">
           {task}

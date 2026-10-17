@@ -17,6 +17,7 @@ import { useHeaderGestures, type HeaderHandlers } from './useHeaderGestures'
 import { keepFocus } from './panel-focus'
 import { EndedGroup } from './TeamEndedGroup'
 import { PanelRow } from './TeamPanelRow'
+import { useMemberFeed } from './member-lines'
 import { useIsJournalHost } from '../../lib/journal/use-journal-host'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamUiStore, type PanelMode } from '../../stores/useTeamUiStore'
@@ -101,6 +102,7 @@ export function ToTitleBarButton({ onClick }: { onClick: () => void }) {
 function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, noDrill, hdr }: Props & { noDrill: boolean; hdr: HeaderHandlers }) {
   const t = useI18nStore((s) => s.t)
   const { teamKey, color, lead, members } = team
+  const feed = useMemberFeed(lead.hostId, lead.sessionId)
   const order = members.map((m) => m.sessionId)
   const reorder = useCallback((ids: string[]) => onReorder(ids), [onReorder])
   const { propsFor, over, draggingId } = useMemberDrag(teamKey, order, reorder, 'y')
@@ -118,6 +120,7 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, noDrill, h
         {members.map((m) => (
           <PanelRow
             noDrill={noDrill}
+            member={feed?.get(m.sessionId)}
             key={m.sessionId}
             teamKey={teamKey}
             seat={m}
