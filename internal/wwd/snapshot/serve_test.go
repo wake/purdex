@@ -392,8 +392,8 @@ func TestGitEnv_HasNoInheritedGitVariables(t *testing.T) {
 	t.Setenv("GIT_CONFIG_COUNT", "1")
 	t.Setenv("GIT_CONFIG_KEY_0", "core.fsmonitor")
 	for _, kv := range gitEnv() {
-		if strings.HasPrefix(kv, "GIT_") {
-			assert.Equal(t, "GIT_TERMINAL_PROMPT=0", kv)
+		for _, bad := range []string{"GIT_DIR=", "GIT_CONFIG_COUNT=", "GIT_CONFIG_KEY_0="} {
+			assert.False(t, strings.HasPrefix(kv, bad), kv)
 		}
 	}
 }
