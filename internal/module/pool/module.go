@@ -112,7 +112,7 @@ func hostsOf(p wire.Pool) wire.PoolHostsResponse {
 	for _, peer := range p.Peers {
 		w := wire.WorkerSettings{Enabled: peer.Info.Worker.Enabled}
 		if peer.Facts != nil {
-			w.Enabled, w.Slots = peer.Facts.Worker.Enabled, peer.Facts.Worker.Slots
+			w.Enabled, w.Slots, w.OwnerRule = peer.Facts.Worker.Enabled, peer.Facts.Worker.Slots, peer.Facts.Worker.OwnerRule
 		}
 		labels := peer.Info.Labels
 		if labels == nil {

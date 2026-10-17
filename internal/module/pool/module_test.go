@@ -83,7 +83,7 @@ func poolOf(t *testing.T) []byte {
 	require.NoError(t, err)
 	facts, err := wire.Decode[wire.Facts](fixture(t, "facts_darwin.json"))
 	require.NoError(t, err)
-	facts.Worker = wire.FactsWorker{Enabled: true, Slots: wire.Slots{Heavy: 2, Light: 3}}
+	facts.Worker = wire.FactsWorker{Enabled: true, Slots: wire.Slots{Heavy: 2, Light: 3}, OwnerRule: "hid<5m"}
 	air19 := wire.Info{HostID: "h-air19", Alias: "air19", Version: "0.1.0", Proto: 1, Platform: "darwin", Arch: "amd64"}
 	b, err := json.Marshal(wire.Pool{Peers: []wire.Peer{
 		{Info: info, Facts: &facts, Reachable: true},
@@ -107,7 +107,7 @@ func TestHosts_MapsThePoolToTheAppShape(t *testing.T) {
 	assert.Equal(t, "mlab", mlab.Info.Alias)
 	assert.True(t, mlab.Reachable)
 	require.NotNil(t, mlab.Facts)
-	assert.Equal(t, wire.WorkerSettings{Enabled: true, Slots: wire.Slots{Heavy: 2, Light: 3}}, mlab.Worker, "the worker state comes from the facts")
+	assert.Equal(t, wire.WorkerSettings{Enabled: true, Slots: wire.Slots{Heavy: 2, Light: 3}, OwnerRule: "hid<5m"}, mlab.Worker, "the worker state comes from the facts")
 	assert.Equal(t, []string{"os:darwin", "arch:arm64", "repo:purdex"}, mlab.Labels)
 	assert.Equal(t, "air19", air.Info.Alias)
 	assert.False(t, air.Reachable)
