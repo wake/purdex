@@ -190,3 +190,14 @@ func TestAssistReadRaisesNextGenToTheHighestHostGen(t *testing.T) {
 		t.Fatalf("TakeGen = %d", g)
 	}
 }
+
+// The script prints its own ssh alias as the host; that is not the key of assist.json and must not have to match it.
+func TestUsableDoesNotRequireTheAnswerHostToEqualTheKey(t *testing.T) {
+	f, r, e := usableFixture()
+	v := r["air26"]
+	v.Answer.Host = "air26-lan"
+	r["air26"] = v
+	if ok, why := Usable(f, r, t0, "air26", e, "purdex"); !ok {
+		t.Fatal(why)
+	}
+}
