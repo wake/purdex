@@ -1,5 +1,6 @@
-// spa/src/components/team/TeamRootsEditor.tsx — a live team's roots (where its members may be started), shown under the lead's row in the
-// unattended panel next to the member cap, and edited there: add a path, remove a path (`PUT /api/team/roots`, lib/team/roots.ts).
+// spa/src/components/team/TeamRootsEditor.tsx — a live team's roots (where its members may be started), shown in the team settings'
+// 「資料夾」 (TeamSettingsPanel.tsx; moved out of the unattended panel, journal v5 §3.9) above the other hosts' grants, and edited there:
+// add a path, remove a path (`PUT /api/team/roots`, lib/team/roots.ts).
 // What the list shows is the roster's `roots` — nothing is assumed before the daemon answers. The path being typed is kept in the store.
 import { useState } from 'react'
 import { X } from '@phosphor-icons/react'
@@ -52,7 +53,7 @@ export function TeamRootsEditor({ hostId, team }: { hostId: string; team: TeamRo
   const boxError = err?.kind === 'bad_request' && (err.index === null || err.index >= roots.length) ? err.detail : null
 
   return (
-    <div data-testid="roots-editor" className="col-span-full mb-1 flex flex-col gap-1 pl-3">
+    <div data-testid="roots-editor" className="flex flex-col gap-1">
       <div className="text-text-muted">{t('unattended.roots.label')}</div>
       <ul className="flex flex-col gap-0.5">
         {roots.map((root, i) => (

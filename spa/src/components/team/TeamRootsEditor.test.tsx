@@ -1,8 +1,9 @@
-// The live team's roots in the unattended panel (c9d9c7-55, #2561): the real section over the real roster / roots stores; only the PUT is faked.
+// The live team's roots (c9d9c7-55, #2561), in the team settings' 「資料夾」 since journal v5 §3.9 (moved from the unattended panel,
+// with these tests): the real settings body over the real roster / roots stores; only the PUT is faked.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act } from 'react'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { UnattendedQuotaSection } from '../UnattendedQuotaSection'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { TeamSettingsBody } from './TeamSettingsPanel'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
@@ -12,15 +13,13 @@ import { useMaxMembersStore, teamKey } from '../../lib/team/max-members'
 import { ApprovalApiError } from '../../lib/team/approval-api'
 import { configureRoots, resetRoots, useRootsStore } from '../../lib/team/roots'
 import type { TeamRoster } from '../../lib/team/roster'
-import type { SessionQuota } from '../../lib/team/types'
 
 const H = 'host-a'
 const T = 't-L'
 const lead = { session_id: 'L', ref: '_lead00', address: 'mlab/lead-xx', live: true }
 const member = { session_id: 'M', ref: '_abc123', address: 'mlab/m-xx', live: true, name: 'worker-1', state: 'active', origin: 'spawned', joined_at: 1 }
 const team = (over: Partial<TeamRoster> = {}): TeamRoster => ({ id: T, host_id: 'd', created_at: 1, team_name: '', team_label: '', lead, members: [member], roots: ['/Users/wake/a', '/b'], roots_rev: 3, ...over })
-const row: SessionQuota = { session_id: 'L', root_session_id: 'root-L', title: 'T-L', address: 'mlab/lead-xx', is_lead: true, self_left: 0, member_pool_left: 0, rev: 1 }
-const show = () => render(<UnattendedQuotaSection hosts={[{ hostId: H, rows: [row] }]} headings={false} />)
+const show = () => render(<TeamSettingsBody hostId={H} teamId={T} name="Team L" />)
 const roster = () => useTeamRosterStore.getState().byHost[H][0]
 const err = (status: number, code: string, body: Record<string, unknown> = {}) => new ApprovalApiError(status, code, typeof body.detail === 'string' ? body.detail : '', null, { error: code, ...body })
 const type = (v: string) => fireEvent.change(screen.getByTestId('roots-input'), { target: { value: v } })
@@ -39,17 +38,20 @@ beforeEach(() => {
 })
 
 describe('the roots editor', () => {
-  it('lists the roster\'s roots under the lead\'s row, the full path in the tooltip', () => {
+  it('lists the roster\'s roots in the 「資料夾」 section, the full path in the tooltip', () => {
     show()
-    const paths = screen.getAllByTestId('roots-path')
+    const section = screen.getByTestId('team-settings-folders')
+    expect(section.firstElementChild).toHaveTextContent('資料夾')
+    const paths = within(section).getAllByTestId('roots-path')
     expect(paths.map((p) => p.textContent)).toEqual(['/Users/wake/a', '/b'])
     expect(paths[0]).toHaveAttribute('title', '/Users/wake/a')
   })
 
-  it('is not drawn for a daemon without roots, nor under a member', () => {
+  it('is not drawn for a daemon without roots (no 「資料夾」 section at all)', () => {
     useTeamRosterStore.getState().apply(H, [team({ roots: undefined, roots_rev: undefined })])
     show()
     expect(screen.queryByTestId('roots-editor')).toBeNull()
+    expect(screen.queryByTestId('team-settings-folders')).toBeNull()
   })
 
   it('add: sends the whole list (existing + new) with the roster\'s revision, then clears the box', async () => {

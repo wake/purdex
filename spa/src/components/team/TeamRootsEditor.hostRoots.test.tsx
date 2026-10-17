@@ -1,8 +1,9 @@
-// XR-3: folders on other paired hosts in the team roots editor — the real section over the real stores; only the transport is faked.
+// XR-3: folders on other paired hosts in the team roots editor — the real team settings body (journal v5 §3.9: the folders moved
+// there from the unattended panel, with these tests) over the real stores; only the transport is faked.
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest'
 import { act } from 'react'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
-import { UnattendedQuotaSection } from '../UnattendedQuotaSection'
+import { TeamSettingsBody } from './TeamSettingsPanel'
 import { useHostStore } from '../../stores/useHostStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
@@ -13,13 +14,13 @@ import { ApprovalApiError } from '../../lib/team/approval-api'
 import { configureRoots, resetRoots } from '../../lib/team/roots'
 import { configureHostRoots, resetHostRoots, type HostRootsDeps, type PairedHostRoots, type HostRootChange } from '../../lib/team/host-roots'
 import type { TeamRoster } from '../../lib/team/roster'
-import type { SessionQuota } from '../../lib/team/types'
 
 const H = 'host-a'
 const lead = (id: string) => ({ session_id: id, ref: `_${id}`, address: `mlab/${id}`, live: true })
 const team = (id: string, leadId: string): TeamRoster => ({ id, host_id: 'd', created_at: 1, team_name: '', team_label: '', lead: lead(leadId), members: [], roots: ['/Users/wake/a'], roots_rev: 3 })
-const row = (id: string): SessionQuota => ({ session_id: id, root_session_id: `root-${id}`, title: `T-${id}`, address: `mlab/${id}`, is_lead: true, self_left: 0, member_pool_left: 0, rev: 1 })
-const show = (ids: string[] = ['L']) => render(<UnattendedQuotaSection hosts={[{ hostId: H, rows: ids.map(row) }]} headings={false} />)
+/** The settings of the teams led by `ids` (team `t-<id>`), one body each. */
+const bodies = (ids: string[]) => <>{ids.map((id) => <TeamSettingsBody key={id} hostId={H} teamId={`t-${id}`} name={`T-${id}`} />)}</>
+const show = (ids: string[] = ['L']) => render(bodies(ids))
 const host = (over: Partial<PairedHostRoots> = {}): PairedHostRoots => ({ hostId: 'h-air', alias: 'air26', status: 'ok', roots: [], changes: [], ...over })
 const ch = (over: Partial<HostRootChange> = {}): HostRootChange => ({ id: 'c1', op: 'add', path: '/x', state: 'pending', code: '', detail: '', ...over })
 const type = (v: string) => fireEvent.change(screen.getByTestId('roots-input'), { target: { value: v } })
@@ -287,7 +288,7 @@ describe('two teams on one lead host', () => {
     hosts = [host({ changes: [ch()] })]
     const { rerender, unmount } = show(['L', 'M'])
     await flush()
-    rerender(<UnattendedQuotaSection hosts={[{ hostId: H, rows: [row('L')] }]} headings={false} />)
+    rerender(bodies(['L']))
     await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
     expect(fetch).toHaveBeenCalledTimes(2)
     unmount()
