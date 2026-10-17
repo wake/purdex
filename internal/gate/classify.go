@@ -262,7 +262,10 @@ func Classify(argv []string, e Env) Class {
 	case "pnpm", "pnpx", "npx", "yarn", "npm", "bunx", "bun":
 		return classifyRunner(filepath.Base(argv[0]), args, e)
 	case "make":
-		if len(args) == 1 && args[0] == "test" {
+		// The targets that run a whole-module go command: `make test` is go test ./..., `make lint` is gofmt and go vet ./... (#3089). Heavy from
+		// the outside, so the go vet it starts passes as a nested command; held light, the outer run kept the light slot while the inner
+		// one waited in the heavy queue, and every other light command waited behind it.
+		if len(args) == 1 && (args[0] == "test" || args[0] == "lint") {
 			return ClassHeavy
 		}
 	case "composer":
