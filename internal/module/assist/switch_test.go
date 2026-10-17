@@ -1,6 +1,7 @@
 package assistmod
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -255,4 +256,65 @@ func TestReconcileAskedOnButHostOffIsNotUsableAndRunsNothing(t *testing.T) {
 	if ok || why != "the host says off" {
 		t.Fatalf("%v %q", ok, why)
 	}
+}
+
+// Stop ends a script in flight (its process group) instead of waiting for the script's timeout.
+func TestStopEndsARunningCheck(t *testing.T) {
+	r := newRig(t)
+	r.addHost("air26")
+	r.m.timeouts.check = time.Minute
+	r.m.pollEvery = time.Hour
+	r.flag("assist-check", "block", true)
+	if err := r.m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	r.waitFor("the check to start", func() bool { return r.count("assist-check") == 1 })
+	done := make(chan struct{})
+	go func() { r.m.Stop(context.Background()); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Stop waited for the script")
+	}
+	r.flag("assist-check", "block", false)
+}
+
+// A script that says ok about the wrong state is a failure, not a switch.
+func TestSwitchAnswerForTheWrongStateFails(t *testing.T) {
+	r := newRig(t)
+	r.addHost("air26")
+	r.script("assist-on", `{"ok":true,"switch":"off","detail":"hm"}`, 0)
+	if code, _ := r.do("POST", "/api/assist/switch", sw("air26", true)); code != 502 {
+		t.Fatalf("%d", code)
+	}
+	if h := r.file().Hosts["air26"]; h.On || h.Op != nil {
+		t.Fatalf("%+v", h)
+	}
+}
+
+// A script that says no on exit 1 gives its reason in the JSON detail.
+func TestSwitchExit1DetailIsKept(t *testing.T) {
+	r := newRig(t)
+	r.addHost("air26")
+	r.script("assist-off", `{"ok":false,"switch":"on","detail":"still running jobs"}`, 1)
+	code, body := r.do("POST", "/api/assist/switch", sw("air26", false))
+	if code != 502 || !strings.Contains(body["detail"].(string), "still running jobs") {
+		t.Fatalf("%d %v", code, body)
+	}
+}
+
+// What a script leaves running in its process group is ended when the script is.
+func TestScriptLeftoversAreEnded(t *testing.T) {
+	r := newRig(t)
+	r.addHost("air26")
+	r.flag("assist-on", "pidfile", true) // the fake script starts a `sleep 1000 &` and exits
+	if code, _ := r.do("POST", "/api/assist/switch", sw("air26", true)); code != 200 {
+		t.Fatal(code)
+	}
+	b, err := os.ReadFile(filepath.Join(r.ctl, "assist-on.child"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	r.waitFor("the leftover to be ended", func() bool { return syscall.Kill(pid, 0) != nil })
 }

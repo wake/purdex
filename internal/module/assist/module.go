@@ -58,8 +58,11 @@ type Module struct {
 	passMu sync.Mutex
 	kick   chan struct{}
 
-	stop context.CancelFunc
-	wg   sync.WaitGroup
+	// ctxMu guards ctx, the parent of every script: Stop cancels it, so a script in flight does not hold the shutdown.
+	ctxMu sync.Mutex
+	ctx   context.Context
+	stop  context.CancelFunc
+	wg    sync.WaitGroup
 }
 
 // New returns the module with production defaults.
@@ -94,7 +97,9 @@ func (m *Module) Init(c *core.Core) error {
 // Start runs the reconciler and the checks at once and then every pollEvery (and right after a switch).
 func (m *Module) Start(context.Context) error {
 	ctx, cancel := context.WithCancel(context.Background())
-	m.stop = cancel
+	m.ctxMu.Lock()
+	m.ctx, m.stop = ctx, cancel
+	m.ctxMu.Unlock()
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
@@ -114,8 +119,11 @@ func (m *Module) Start(context.Context) error {
 }
 
 func (m *Module) Stop(context.Context) error {
-	if m.stop != nil {
-		m.stop()
+	m.ctxMu.Lock()
+	stop := m.stop
+	m.ctxMu.Unlock()
+	if stop != nil {
+		stop()
 	}
 	m.wg.Wait()
 	return nil
@@ -172,4 +180,14 @@ func (m *Module) readyCopy() map[string]gate.AssistReady {
 		out[k] = v
 	}
 	return out
+}
+
+// scriptCtx is the parent of a script's context: the module's, once started.
+func (m *Module) scriptCtx() context.Context {
+	m.ctxMu.Lock()
+	defer m.ctxMu.Unlock()
+	if m.ctx == nil {
+		return context.Background()
+	}
+	return m.ctx
 }

@@ -130,3 +130,21 @@ func TestNewerVersionRefusesSwitch(t *testing.T) {
 		t.Fatalf("%d %v", code, b)
 	}
 }
+
+// An answer for another host than the one asked is no check of this one.
+func TestCheckAnswerForAnotherHostIsRefused(t *testing.T) {
+	r := newRig(t)
+	r.addHost("air26")
+	r.edit(func(f *gate.AssistFile) {
+		h := f.Hosts["air26"]
+		h.On = true
+		f.Hosts["air26"] = h
+		f.Allowed = []gate.AssistAllow{{Kind: "team", ID: "t1"}}
+	})
+	r.script("assist-check", strings.Replace(checkOut("on", map[string]bool{"purdex": true}), `"air26"`, `"mserv"`, 1), 0)
+	r.m.pass()
+	ok, why := gate.Usable(r.file(), r.m.readyCopy(), r.clock.now(), "air26", []gate.AssistEntry{{Kind: "team", ID: "t1"}}, "purdex")
+	if ok || !strings.HasPrefix(why, "check failed:") {
+		t.Fatalf("%v %q", ok, why)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 
 	"github.com/wake/purdex/internal/gate"
 )
@@ -76,6 +77,10 @@ func (m *Module) finishOp(alias string, h gate.AssistHost, op gate.AssistOp) (st
 	if serr != nil {
 		if detail == "" {
 			detail = serr.Error()
+		}
+		if err != nil {
+			// the Op stays in the file and the reconciler will run the script again: say so
+			return detail, fmt.Errorf("%s; and the Op could not be cleared: %w", detail, err)
 		}
 		return detail, &scriptError{detail}
 	}

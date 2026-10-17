@@ -22,7 +22,7 @@ func (m *Module) runScript(h gate.AssistHost, name string, args []string, timeou
 	if h.Scripts == "" {
 		return nil, errors.New("no scripts directory set for this host")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(m.scriptCtx(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, filepath.Join(h.Scripts, name), args...)
 	cmd.Env = append(os.Environ(), "ASSIST_HOST="+h.SSH)
@@ -32,6 +32,9 @@ func (m *Module) runScript(h gate.AssistHost, name string, args []string, timeou
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) // whatever the script left running in its group goes with it
+	}
 	if s := strings.TrimSpace(stderr.String()); s != "" {
 		m.logf("[assist] %s (%s): %s", name, h.SSH, s)
 	}
@@ -83,6 +86,9 @@ func (m *Module) runSwitch(h gate.AssistHost, kind string) (string, error) {
 	}
 	if jerr != nil {
 		return "", fmt.Errorf("%s printed no JSON: %v", name, jerr)
+	}
+	if a.OK && a.Switch != "" && a.Switch != kind {
+		return "", fmt.Errorf("%s said ok but the host is %s", name, a.Switch)
 	}
 	if !a.OK {
 		if a.Detail == "" {

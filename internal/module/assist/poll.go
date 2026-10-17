@@ -38,6 +38,8 @@ func (m *Module) checkHost(alias string, h gate.AssistHost) {
 		var a gate.AssistAnswer
 		if jerr := json.Unmarshal(bytes.TrimSpace(out), &a); jerr != nil {
 			err = fmt.Errorf("bad JSON: %v", jerr)
+		} else if a.Host != "" && a.Host != h.SSH {
+			err = fmt.Errorf("the answer is for %q, not %q", a.Host, h.SSH)
 		} else {
 			rec.Answer = a
 		}
