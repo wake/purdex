@@ -50,4 +50,15 @@ describe('the shared member set', () => {
     expect(renders).toBe(rendersBefore)
     expect(currentMemberKeys()).toBe(first)
   })
+
+  it('MQ-2b: a session row whose tmux_instance changes recomputes the set', () => {
+    const r = rosterWith(['w'])
+    r.members[0].tmux_instance = '1:1'
+    act(() => useTeamRosterStore.getState().apply('h1', [r]))
+    expect(currentMemberKeys().size).toBe(0) // rows carry no instance yet
+    act(() => useSessionStore.setState({ sessions: { h1: [row('aaaaaa', 'lead'), { ...row('bbbbbb', 'w'), tmux_instance: '1:1' }] } }))
+    expect([...currentMemberKeys()]).toEqual(['h1:bbbbbb'])
+    act(() => useSessionStore.setState({ sessions: { h1: [row('aaaaaa', 'lead'), { ...row('bbbbbb', 'w'), tmux_instance: '2:2' }] } }))
+    expect(currentMemberKeys().size).toBe(0)
+  })
 })

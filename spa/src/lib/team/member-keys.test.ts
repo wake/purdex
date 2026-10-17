@@ -133,4 +133,20 @@ describe('activeMemberKeys', () => {
       expect(activeMemberKeys({ ...base, liveRosterHosts: new Set(), liveSessionHosts: new Set(['h1', 'h2']) }).size).toBe(0)
     })
   })
+
+  describe('tmux generation (MQ-2b, R4)', () => {
+    const run = (seatInst: string | undefined, rowInst: string | undefined) => [...activeMemberKeys({
+      liveRosterHosts: LIVE, liveSessionHosts: LIVE,
+      rosterByHost: { h1: [team(sess('L', 'lead'), [mem('M', 'worker', seatInst === undefined ? {} : { tmux_instance: seatInst })])] },
+      sessionsByHost: { h1: [{ code: 'bbbbbb', name: 'worker', ...(rowInst === undefined ? {} : { tmux_instance: rowInst }) }] },
+    })]
+    it('equal instances: a member', () => { expect(run('100:1', '100:1')).toEqual(['h1:bbbbbb']) })
+    it('tmux restarted (different instance): not a member', () => { expect(run('100:1', '200:2')).toEqual([]) })
+    it('session row instance "" never matches', () => { expect(run('100:1', '')).toEqual([]) })
+    it('session row without an instance never matches', () => { expect(run('100:1', undefined)).toEqual([]) })
+    it('seat without an instance: name mapping as before', () => {
+      expect(run(undefined, '200:2')).toEqual(['h1:bbbbbb'])
+      expect(run(undefined, undefined)).toEqual(['h1:bbbbbb'])
+    })
+  })
 })
