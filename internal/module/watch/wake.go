@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/wake/purdex/internal/config"
 	peersmod "github.com/wake/purdex/internal/module/peers"
@@ -33,11 +34,37 @@ func (m *Module) WakeWatcher(ctx context.Context, reason, detail string) error {
 	if err != nil {
 		return err
 	}
-	where, err := m.loc.Current(ctx, s.Targets, s.AutoWake)
-	if err != nil {
-		return err
-	}
 	text := watch.WakeText(reason, detail)
+	autoWake := s.AutoWake
+	waitUntil := m.now().Add(m.registerWithinFor() + m.startGraceFor() + 10*time.Second) // a start that never registers is not waited for longer
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		where, err := m.loc.Current(ctx, s.Targets, autoWake)
+		for errors.Is(err, watch.ErrNoWatcher) {
+			// a start or wake that is still going on (it outlasted its grace) is waited for: the note is for the watcher that comes up
+			if _, _, starting := m.loc.Uncertain(); !starting || m.now().After(waitUntil) {
+				return err
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(m.pollEveryFor()):
+			}
+			where, err = m.loc.Current(ctx, s.Targets, false) // nothing more is started meanwhile
+		}
+		if err != nil {
+			return err
+		}
+		if lastErr = m.tellWatcher(ctx, where, reason, detail, text); lastErr == nil {
+			return nil
+		}
+		m.loc.Failed(where) // the watcher is not where it was remembered: look again
+	}
+	return lastErr
+}
+
+// tellWatcher gives the note to the watcher at where, on this host or through the peer route.
+func (m *Module) tellWatcher(ctx context.Context, where watch.Where, reason, detail, text string) error {
 	if m.isSelf(where.Alias) {
 		own := m.hs().Get()
 		if own.State != watch.HolderAwake {

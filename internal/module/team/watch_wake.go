@@ -8,7 +8,7 @@ import (
 )
 
 // wakeWatcherBudget bounds one wake of the load watcher the team module asks for.
-const wakeWatcherBudget = 30 * time.Second
+const wakeWatcherBudget = 5 * time.Minute // a start may take 3 minutes to register
 
 // wakeWatcher tells the load watcher that something it should know changed (host-load-control plan W3b-5): the unattended switch, for
 // one. It goes through the watch module's service when that is registered, in the background (a wake can take a start's minutes, and

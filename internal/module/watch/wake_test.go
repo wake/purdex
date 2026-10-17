@@ -78,3 +78,39 @@ func TestWakeWatcher_TheModuleRegistersItsWaker(t *testing.T) {
 	_, isWaker := svc.(watch.Waker)
 	require.True(t, isWaker)
 }
+
+// A start that outlasts its grace is waited for: the note goes to the watcher that comes up, not nowhere.
+func TestWakeWatcher_AStartThatOutlastsItsGraceStillGetsTheNote(t *testing.T) {
+	r := newSessionRig(t, "")
+	fn := &fakeNotifier{}
+	r.m.dlv.notifier = fn
+	r.m.startGrace = 20 * time.Millisecond
+	r.typer.onType = func(string) {
+		go func() { time.Sleep(150 * time.Millisecond); r.owners.set(watcherOwner("f1"), true, nil) }()
+	}
+	require.NoError(t, r.m.WakeWatcher(context.Background(), "patrol", ""))
+	require.Equal(t, []string{"[負載守門] 叫醒：例行巡檢"}, fn.texts)
+	require.Len(t, r.typer.typed(), 1, "one start, not one per poll")
+}
+
+// A note that the remembered watcher's host did not take makes the locator look again, and the note goes to where the watcher is now.
+func TestWakeWatcher_AFailedNoteMakesTheLocatorLookAgain(t *testing.T) {
+	r, fc := askerRig(t)
+	fc.reply[pathHolder] = done(HolderView{HostID: peerID, State: "awake", SessionID: "s-26", Targets: []string{"air26", "mlab"}})
+	fc.reply[pathNote] = peersmod.CallResult{Class: peersmod.ClassTransient, Status: 502}
+	require.Error(t, r.m.WakeWatcher(context.Background(), "patrol", ""), "every try failed")
+	notes := 0
+	for _, c := range fc.calls {
+		if c == peerID+" "+pathNote {
+			notes++
+		}
+	}
+	require.Equal(t, 3, notes, "three tries, each after the locator forgot the watcher")
+	holders := 0
+	for _, c := range fc.calls {
+		if c == peerID+" "+pathHolder {
+			holders++
+		}
+	}
+	require.GreaterOrEqual(t, holders, 3, "and asked the host again each time")
+}
