@@ -326,3 +326,96 @@ func TestRefreshRemote_ALateAnswerAboutAnOlderWatcherIsDropped(t *testing.T) {
 		})
 	}
 }
+
+// The start attempt is in the notice: the App sees "starting" while a start goes on in the background and the cooldown the moment it
+// failed, so its busy state ends at once (#3131).
+func TestChanged_TheStartAttemptIsInTheNotice(t *testing.T) {
+	r := newSessionRig(t, "") // the typed command never makes a watcher appear
+	ev := &events{}
+	r.m.emit = ev.add
+	r.m.startGrace, r.m.registerWithin = 20*time.Millisecond, 120*time.Millisecond
+	ans, err := r.m.session.Start(context.Background())
+	require.NoError(t, err)
+	require.True(t, ans.Starting)
+	require.True(t, ev.last().Holder.Starting, "the notice says a start is under way")
+	require.Nil(t, ev.last().Holder.CooldownUntil)
+
+	require.Eventually(t, func() bool { return r.m.sess.Get().CooldownUntil.After(time.Time{}) }, 3*time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { p := ev.last(); return !p.Holder.Starting && p.Holder.CooldownUntil != nil }, 3*time.Second, 5*time.Millisecond,
+		"and that it failed, with the time the next may be tried")
+	require.True(t, ev.last().Holder.CooldownUntil.Equal(r.m.sess.Get().CooldownUntil))
+}
+
+// The status view leaves the attempt out while there is none (no zero time on the wire).
+func TestStatus_NoAttemptNoStartingAndNoCooldownField(t *testing.T) {
+	r := newRig(t)
+	rr := httptest.NewRecorder()
+	r.mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/watch/status", nil).WithContext(adminCtx))
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.NotContains(t, rr.Body.String(), "cooldown_until")
+	require.NotContains(t, rr.Body.String(), "starting")
+}
+
+// The status names the cooldown (RFC 3339) while there is one, and the attempt in progress.
+func TestStatus_ACooldownAndAnAttemptAreInTheSelfView(t *testing.T) {
+	r := newSessionRig(t, "")
+	until := r.m.now().Add(20 * time.Minute)
+	require.NoError(t, r.m.sess.Update(func(x *watch.SessionState) {
+		x.CooldownUntil = until
+		x.InProgress = &watch.InProgress{Kind: "start", Since: r.m.now()}
+	}))
+	rr := httptest.NewRecorder()
+	r.mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/watch/status", nil).WithContext(adminCtx))
+	require.Equal(t, http.StatusOK, rr.Code)
+	var st Status
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &st))
+	require.True(t, st.Self.Starting)
+	require.NotNil(t, st.Self.CooldownUntil)
+	require.True(t, st.Self.CooldownUntil.Equal(until))
+	require.Contains(t, rr.Body.String(), `"cooldown_until":"`+until.UTC().Format(time.RFC3339))
+}
+
+// A start mark left by a daemon that ended is not "starting" for ever: past its time it is a failed start (cooldown, and the notice
+// says so) without any new start or wake; a watcher that registered meanwhile makes it a success.
+func TestChanged_AMarkLeftByAnEarlierRunIsSettledByTheTick(t *testing.T) {
+	r := newSessionRig(t, "")
+	ev := &events{}
+	r.m.emit = ev.add
+	require.NoError(t, r.m.sess.Update(func(x *watch.SessionState) {
+		x.InProgress = &watch.InProgress{Kind: "start", Since: r.m.now().Add(-time.Hour)}
+	}))
+	require.False(t, r.m.view().Starting, "past its time: not starting")
+	r.m.patrolStep(context.Background())
+	require.Nil(t, r.m.sess.Get().InProgress)
+	require.False(t, r.m.sess.Get().CooldownUntil.IsZero(), "a failed start: the cooldown begins")
+	require.NotNil(t, ev.last().Holder.CooldownUntil, "and the notice says so")
+
+	r2 := newSessionRig(t, "")
+	r2.owners.set(watcherOwner("f1"), true, nil)
+	require.NoError(t, r2.m.sess.Update(func(x *watch.SessionState) {
+		x.InProgress = &watch.InProgress{Kind: "start", Since: r2.m.now().Add(-time.Hour)}
+	}))
+	r2.m.patrolStep(context.Background())
+	require.Nil(t, r2.m.sess.Get().InProgress)
+	require.True(t, r2.m.sess.Get().CooldownUntil.IsZero(), "the watcher is there: the start worked")
+
+	r3 := newSessionRig(t, "")
+	require.NoError(t, r3.m.sess.Update(func(x *watch.SessionState) {
+		x.InProgress = &watch.InProgress{Kind: "start", Since: r3.m.now().Add(-30 * time.Second)}
+	}))
+	require.True(t, r3.m.view().Starting, "within its time: still starting")
+	r3.m.patrolStep(context.Background())
+	require.NotNil(t, r3.m.sess.Get().InProgress, "and left alone")
+}
+
+// A mark stamped ahead of the clock is not young: it is settled as a failed start, not kept as "starting" until the clock catches up.
+func TestChanged_AMarkAheadOfTheClockIsSettledNotKept(t *testing.T) {
+	r := newSessionRig(t, "")
+	require.NoError(t, r.m.sess.Update(func(x *watch.SessionState) {
+		x.InProgress = &watch.InProgress{Kind: "start", Since: r.m.now().Add(3 * time.Hour)}
+	}))
+	require.False(t, r.m.view().Starting)
+	r.m.patrolStep(context.Background())
+	require.Nil(t, r.m.sess.Get().InProgress)
+	require.False(t, r.m.sess.Get().CooldownUntil.IsZero())
+}

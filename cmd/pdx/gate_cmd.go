@@ -56,6 +56,8 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 			return gateWouldWait(args[1:], stdout, stderr)
 		case "queue":
 			return gateQueue(args[1:], stdout, stderr)
+		case "conflict":
+			return gateConflict(args[1:], stdout, stderr)
 		case "set":
 			return gateSet(args[1:], stdout, stderr)
 		case "hosts":
@@ -288,6 +290,9 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 				waited = "等 " + time.Since(w.Since).Round(time.Second).String()
 			}
 			fmt.Fprintf(stdout, "  排隊 #%d  pid %d  %s  %s  %s\n", w.Place, w.PID, waited, strings.Join(w.Argv, " "), w.Cwd)
+			if w.ConflictWith != "" {
+				fmt.Fprintf(stdout, "    等 %s：%s（衝突規則：%s）\n", w.ConflictWith, w.ConflictRule, w.ConflictReason)
+			}
 			if w.Rank != "" && w.Rank != gate.RankNormal || w.RankError != "" {
 				fmt.Fprintf(stdout, "    順序：%s%s\n", w.Rank, rankNote(w)) // moved in the queue (pdx gate queue): who, why, until
 			}
@@ -295,6 +300,12 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	printPool("重", cfg.Slots.Heavy, st.Heavy, st.WaitHeavy, st.QueueHeavy)
 	printPool("輕", cfg.Slots.Light, st.Light, st.WaitLight, st.QueueLight)
+	if st.ConflictsError != "" {
+		fmt.Fprintf(stdout, "衝突規則：conflicts.json 不能用，目前沒有規則生效（%s）\n", st.ConflictsError)
+	}
+	for i, r := range st.Conflicts {
+		fmt.Fprintln(stdout, "衝突規則 "+gate.ConflictLine(i+1, r))
+	}
 	if st.Admission.Held {
 		fmt.Fprintf(stdout, "放行：被主機狀況擋住（%s）\n", st.Admission.Reason)
 	} else {

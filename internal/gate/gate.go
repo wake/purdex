@@ -505,7 +505,11 @@ type Status struct {
 	Admission AdmissionState
 	// PausedHeavy and PausedLight say a class has a slot count of 0: its new commands wait until the count is raised.
 	PausedHeavy bool `json:"PausedHeavy"`
-	PausedLight bool `json:"PausedLight"`
+	// Conflicts are the conflict rules of this gate directory (spec §5.3) and ConflictsError why the file cannot be used (then there
+	// are none). Each waiter says in ConflictWith / ConflictRule when a rule holds it.
+	Conflicts      []Conflict `json:"Conflicts"`
+	ConflictsError string     `json:"ConflictsError,omitempty"`
+	PausedLight    bool       `json:"PausedLight"`
 }
 
 // AdmissionState is whether the gate is holding new heavy work because of the host, and why.
@@ -565,8 +569,14 @@ func (g *Gate) StatusWith(mode HoldersMode) Status {
 	h, l := g.pool(cfg, ClassHeavy), g.pool(cfg, ClassLight)
 	heavy, light := h.Held(), l.Held()
 	g.fillLocked(h, heavy, l, light, mode)
+	rules, rulesErr := LoadConflicts(cfg.Dir)
+	if rules == nil {
+		rules = []Conflict{}
+	}
 	return Status{
-		Heavy: heavy, Light: light, WaitHeavy: h.Waiting(), WaitLight: l.Waiting(), QueueHeavy: h.Waiters(), QueueLight: l.Waiters(),
+		Conflicts: rules, ConflictsError: rulesErr,
+		Heavy: heavy, Light: light, WaitHeavy: h.Waiting(), WaitLight: l.Waiting(),
+		QueueHeavy: h.waitersWithConflicts(heavy, rules), QueueLight: l.waitersWithConflicts(light, rules),
 		Suspect: append(h.Suspect(), l.Suspect()...), Profile: cfg.Profile, Settings: cfg.Effective(), Admission: g.admission(cfg),
 		PausedHeavy: cfg.Enabled && cfg.Slots.Paused(ClassHeavy), PausedLight: cfg.Enabled && cfg.Slots.Paused(ClassLight),
 	}

@@ -75,9 +75,11 @@ func TestWatchStatus_NoRememberedWatcherAndRefusals(t *testing.T) {
 
 func TestWatchStatus_SaysAStartIsInProgressAndWhenACooldownEnds(t *testing.T) {
 	until := time.Now().Add(20 * time.Minute)
-	out := renderWatchStatus(watchmod.Status{Self: watchmod.HolderView{State: "none", Starting: true, CooldownUntil: until}})
+	out := renderWatchStatus(watchmod.Status{Self: watchmod.HolderView{State: "none", Starting: true, CooldownUntil: &until}})
 	require.Contains(t, out, "啟動／喚醒進行中")
 	require.Contains(t, out, "之前不再嘗試")
-	past := renderWatchStatus(watchmod.Status{Self: watchmod.HolderView{State: "none", CooldownUntil: time.Now().Add(-time.Minute)}})
+	past := renderWatchStatus(watchmod.Status{Self: watchmod.HolderView{State: "none", CooldownUntil: ptrTime(time.Now().Add(-time.Minute))}})
 	require.NotContains(t, past, "不再嘗試", "an ended cooldown is not shown")
 }
+
+func ptrTime(t time.Time) *time.Time { return &t }
