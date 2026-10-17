@@ -227,3 +227,21 @@ describe('the same endpoint comes back as an older daemon (fence, then sessions=
   })
 })
 
+describe('the chain answers 409 (the unit moved to another daemon)', () => {
+  it('is a failed chain and the remote answer reaches the loader, so it can re-route', async () => {
+    getJournalPage.mockResolvedValue(pageOf({ page: 'cur', entries: [wireEntry('a', { at: T0 })] }))
+    getJournalSessions.mockResolvedValue({ kind: 'remote', leadHostId: 'mini-lab:abc', leadSessionId: 'lead-sess' })
+    const res = await st().loadJournal('h1', 's1')
+    expect(res).toEqual({ kind: 'remote', leadHostId: 'mini-lab:abc', leadSessionId: 'lead-sess' })
+    expect(unit().sessionsFailed).toBe(true)
+    expect(ids()).toEqual(['a'])
+  })
+  it('loadSessions alone marks it failed too', async () => {
+    getJournalPage.mockResolvedValue(pageOf({ page: 'cur' }))
+    await st().loadJournal('h1', 's1')
+    getJournalSessions.mockResolvedValue({ kind: 'remote', leadHostId: 'x', leadSessionId: 'y' })
+    expect((await st().loadSessions('h1', 's1')).kind).toBe('remote')
+    expect(unit().sessionsFailed).toBe(true)
+  })
+})
+
