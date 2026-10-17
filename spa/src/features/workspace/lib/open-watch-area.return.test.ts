@@ -50,6 +50,7 @@ let t2: string
 let t3: string
 beforeEach(() => {
   ws().reset()
+  useWorkspaceStore.setState({ worldId: 'master', worldEpoch: 0 }) // the world tests below move the tag
   useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
   useFleetStore.getState().reset()
   __resetReturnWorkspaceForTest()
@@ -124,6 +125,38 @@ describe('leaveWatchArea', () => {
     expect(getWatchReturnTarget()).toBeNull()
     leaveWatchArea()
     expect(at()).toEqual({ ws: a, tab: t1 })
+  })
+
+  it('reset (a tear-off `replace`) clears the way back: a leave right after takes the fallback, not the old target', () => {
+    openWatchArea({ host: 'h1' })
+    expect(getWatchReturnTarget()).toEqual({ workspaceId: a, tabId: t1 })
+    const before = wsOf(a)
+    ws().reset()
+    expect(getWatchReturnTarget()).toBeNull()
+    // The world that comes in reuses the id (a tear-off / merge keeps `workspace.id`), with another active tab.
+    ws().importWorkspace({ ...before, activeTabId: t2 })
+    leaveWatchArea()
+    expect(at()).toEqual({ ws: a, tab: t2 })
+  })
+
+  it('another world (a profile switch writes its tag) clears the way back, also when the area stays shown', () => {
+    openWatchArea({ host: 'h1' })
+    // switch-active's `commitTabWorld`: the new world and its tag in one write; here it shows the area as well, and its
+    // ids collide with the old world's (`unsorted` is one fixed id in every world).
+    useWorkspaceStore.setState((s) => ({
+      worldId: 'p2',
+      worldEpoch: 7,
+      workspaces: s.workspaces.map((w) => (w.id === a ? { ...w, activeTabId: t2 } : w)),
+    }))
+    expect(ws().activeWorkspaceId).toBe(WATCH_WORKSPACE_ID)
+    expect(getWatchReturnTarget()).toBeNull()
+    leaveWatchArea()
+    expect(at()).toEqual({ ws: a, tab: t2 })
+  })
+
+  it('a world switch that lands on the area takes no way back from the old world', () => {
+    useWorkspaceStore.setState({ worldId: 'p2', worldEpoch: 7, activeWorkspaceId: WATCH_WORKSPACE_ID })
+    expect(getWatchReturnTarget()).toBeNull()
   })
 
   it('leaves the area\'s tabs as they are', () => {
