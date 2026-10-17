@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -102,12 +103,23 @@ func seedIndex(run func(env []string, args ...string) (string, error), runIn fun
 	if err != nil {
 		return err
 	}
-	b, err := os.ReadFile(src)
+	// One open file gives both the bytes and the file time: git replaces the index by renaming a new file over the path, and a stat
+	// of the path after the read could report the time of a newer index than the bytes that were copied.
+	f, err := os.Open(src)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("the index of the repository (%s): %w", src, err)
+	}
+	b, rerr := io.ReadAll(f)
+	st, serr := f.Stat()
+	f.Close()
+	if rerr != nil {
+		return fmt.Errorf("the index of the repository (%s): %w", src, rerr)
+	}
+	if serr != nil {
+		return fmt.Errorf("the index of the repository (%s): %w", src, serr)
 	}
 	if err := os.WriteFile(dst, b, 0o600); err != nil {
 		return err
@@ -115,10 +127,8 @@ func seedIndex(run func(env []string, args ...string) (string, error), runIn fun
 	// The copy keeps the original's file time. git calls an entry racily clean when its file time is not older than the index
 	// file's, and then reads the content instead of trusting size and time; a copy made now would be newer than every entry, and an
 	// edit of the same size in the second of the last index write would read as unchanged and be missing from the snapshot.
-	if st, err := os.Stat(src); err == nil {
-		if err := os.Chtimes(dst, st.ModTime(), st.ModTime()); err != nil {
-			return err
-		}
+	if err := os.Chtimes(dst, st.ModTime(), st.ModTime()); err != nil {
+		return err
 	}
 	list, err := run(idx, append(tempIndexConfig(), "ls-files", "-v", "-z")...)
 	if err != nil {
