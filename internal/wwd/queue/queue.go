@@ -65,23 +65,36 @@ func New(db *sql.DB, o Options) (*Queue, error) {
 // write runs fn in one immediate transaction on its own connection, then tells Publish about the jobs fn reported as changed (after
 // the commit, so no subscriber sees a state that was rolled back).
 func (q *Queue) write(ctx context.Context, fn func(c *sql.Conn, changed *[]string) error) error {
-	c, err := q.db.Conn(ctx)
+	changed, err := q.commit(ctx, fn)
 	if err != nil {
-		return err
-	}
-	defer c.Close()
-	var changed []string
-	if err := inImmediateTx(ctx, c, func() error { return fn(c, &changed) }); err != nil {
 		return err
 	}
 	q.publish(ctx, changed)
 	return nil
 }
 
+// commit is the transaction alone: it gives its connection back before it returns, so the event reads that follow can have a
+// connection even when the database was opened with one (SetMaxOpenConns(1)).
+func (q *Queue) commit(ctx context.Context, fn func(c *sql.Conn, changed *[]string) error) ([]string, error) {
+	c, err := q.db.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	var changed []string
+	if err := inImmediateTx(ctx, c, func() error { return fn(c, &changed) }); err != nil {
+		return nil, err
+	}
+	return changed, nil
+}
+
+// publish announces committed changes. The change is durable already, so the request's own cancellation (a client that hung up
+// after the commit) must not lose the event: the reads ignore the caller's context.
 func (q *Queue) publish(ctx context.Context, ids []string) {
 	if q.pub == nil {
 		return
 	}
+	ctx = context.WithoutCancel(ctx)
 	for _, id := range ids {
 		if j, err := q.Get(ctx, id); err == nil {
 			q.pub(wire.JobEvent{Host: q.opt.Origin, Job: j})
