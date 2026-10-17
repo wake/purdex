@@ -3,6 +3,7 @@ package gate
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -62,8 +63,9 @@ func TestStatus_AssistHostsHoldsAndCandidates(t *testing.T) {
 	assert.Equal(t, 2, byHost["mserv"].Size, "the default")
 	assert.False(t, byHost["cold"].On)
 	require.Len(t, byHost["air26"].Held, 1)
-	assert.Equal(t, 42, byHost["air26"].Held[0].PID)
+	assert.Equal(t, os.Getpid(), byHost["air26"].Held[0].PID, "the holder is the process that holds the slot")
 	assert.Equal(t, "assist:abc", byHost["air26"].Held[0].Tag)
+	assert.Equal(t, []string{"go", "test", "./..."}, byHost["air26"].Held[0].Argv)
 	assert.Empty(t, byHost["mserv"].Held)
 	require.Len(t, byHost["air26"].Holds, 1, "only the hold in force")
 	assert.Equal(t, "purdex", byHost["air26"].Holds[0].Repo)
