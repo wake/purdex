@@ -19,6 +19,7 @@ import { useApprovalStore } from '../stores/useApprovalStore'
 import { useHookCardStore } from '../stores/useHookCardStore'
 import { useUndoToast } from '../stores/useUndoToast'
 import { wireIdOfHost } from './profile/host-identity'
+import { forgetWatchHost } from './watch/draft-memory'
 import { reresolveRestoredHost, rewriteHostRefs, scheduleHostReresolve } from './host-reresolve'
 import { useRebuildStore, type OperationLockGrant } from '../stores/useRebuildStore'
 import type { Session } from './host-api'
@@ -218,6 +219,8 @@ function cascadeSteps(hostId: string, wireId: string): void {
   // The person's arrangement of this host's teams (order, collapse, panel mode, ghost workspace) is device-local state
   // about a host that is leaving: it goes with it (the only places that prune it are a roster frame and this).
   useTeamUiStore.getState().forgetHostTeams(hostId)
+  // Unsent text of the host's watcher settings (the watcher area's 設定 page) is memory about a host that is leaving too.
+  forgetWatchHost(hostId)
   useHostStore.getState().removeHost(hostId)
 }
 

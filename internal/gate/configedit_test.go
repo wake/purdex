@@ -64,7 +64,7 @@ func TestSet_RefusesWhatTheGateWouldNotAccept(t *testing.T) {
 	p := cfgFile(t, "[gate.slots]\nheavy = 1\n")
 	before := read(t, p)
 	for _, c := range []struct{ key, val, want string }{
-		{"slots.heavy", "0", "slots.heavy"},         // out of range
+		{"slots.heavy", "65", "slots.heavy"},        // out of range
 		{"slots.heavy", "many", "slots.heavy"},      // a string where a number is wanted
 		{"slots.nope", "1", "not a setting"},        // unknown key
 		{"nope.heavy", "1", "not a setting"},        // unknown module

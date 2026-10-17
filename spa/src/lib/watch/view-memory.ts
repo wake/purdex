@@ -12,4 +12,9 @@ export const readRange = (fleetHostId: string): HistoryRange => ranges.get(fleet
 export const writeRange = (fleetHostId: string, range: HistoryRange): void => { ranges.set(fleetHostId, range) }
 export const readQueueTab = (fleetHostId: string): QueueTab => queueTabs.get(fleetHostId) ?? 'now'
 export const writeQueueTab = (fleetHostId: string, tab: QueueTab): void => { queueTabs.set(fleetHostId, tab) }
-export const clearViewMemory = (): void => { ranges.clear(); queueTabs.clear() }
+/** The host tab's page: 狀態 (the readings) or 設定 (W5c1). */
+export type HostPage = 'status' | 'settings'
+const pages = new Map<string, HostPage>()
+export const readHostPage = (fleetHostId: string): HostPage => pages.get(fleetHostId) ?? 'status'
+export const writeHostPage = (fleetHostId: string, page: HostPage): void => { pages.set(fleetHostId, page) }
+export const clearViewMemory = (): void => { ranges.clear(); queueTabs.clear(); pages.clear() }

@@ -1,5 +1,15 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { readRange, writeRange, readQueueTab, writeQueueTab, clearViewMemory } from './view-memory'
+import { readRange, writeRange, readQueueTab, writeQueueTab, readHostPage, writeHostPage, clearViewMemory } from './view-memory'
+
+describe('watch view memory — 狀態｜設定', () => {
+  it('defaults to 狀態, is kept per host and cleared with the rest', () => {
+    expect(readHostPage('h1')).toBe('status')
+    writeHostPage('h1', 'settings')
+    expect([readHostPage('h1'), readHostPage('h2')]).toEqual(['settings', 'status'])
+    clearViewMemory()
+    expect(readHostPage('h1')).toBe('status')
+  })
+})
 
 beforeEach(() => clearViewMemory())
 
