@@ -57,8 +57,8 @@ export function JournalCard({ target, unit }: { target: JournalTarget; unit: Uni
   const shown = useMemo(() => pageEntries.filter((e) => matchesFilter(e, memo.filter)), [pageEntries, memo.filter])
   const sessions = sessionMode ? unit.sessions : null
   const at = sessions ? sessions.findIndex((x) => x.sessionId === viewPage) : -1
-  const prevLink = sessions && at > 0 ? sessions[at - 1] : null
-  const nextLink = sessions && at >= 0 && at < sessions.length - 1 ? sessions[at + 1] : null
+  const prevLink = sessions && !unit.sessionsFailed && at > 0 ? sessions[at - 1] : null
+  const nextLink = sessions && !unit.sessionsFailed && at >= 0 && at < sessions.length - 1 ? sessions[at + 1] : null
   const goTo = useCallback((link: SessionLink) => {
     if (host === null || key === null) return
     patchViewMemo(host, key, { page: link.sessionId === unit.currentPage ? null : link.sessionId })
@@ -101,7 +101,7 @@ export function JournalCard({ target, unit }: { target: JournalTarget; unit: Uni
     () => (!sessionMode && readHost !== undefined && readSession !== undefined ? useJournalStore.getState().loadJournal(readHost, readSession, { older: true }) : Promise.resolve()),
     [sessionMode, readHost, readSession],
   )
-  const retrySessions = useSingleFlight(useCallback(
+  const retrySessions = useSingleFlight(`${readHost}\u0000${readSession}\u0000sessions`, useCallback(
     () => (readHost !== undefined && readSession !== undefined ? useJournalStore.getState().loadSessions(readHost, readSession) : Promise.resolve()),
     [readHost, readSession],
   ))

@@ -149,7 +149,7 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
   // The first read failed and there is no unit yet: the retry asks that target again, once however many times it is clicked.
   const readHost = target.read?.hostId
   const readSession = target.read?.sessionId
-  const retryFirstRead = useSingleFlight(useCallback(
+  const retryFirstRead = useSingleFlight(`${readHost}\u0000${readSession}`, useCallback(
     () => (readHost !== undefined && readSession !== undefined ? useJournalStore.getState().loadJournal(readHost, readSession) : Promise.resolve()),
     [readHost, readSession],
   ))
