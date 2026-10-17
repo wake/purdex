@@ -11,13 +11,31 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/wake/purdex/internal/hostmem"
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 // SystemSources are the real reads of this macOS host: sysctl, Mach (through
 // hostmem, no cgo) and statfs. Nothing forks. When Mach cannot be loaded the
 // CPU and memory reads return the error and Sample reports it.
-func SystemSources() Sources {
+func SystemSources() Sources { return SystemSourcesWith(SourceOptions{}) }
+
+// SourceOptions switch on the parts that are not for every host.
+type SourceOptions struct {
+	// Owner turns the "owner is active" rule on (air26); nil leaves owner null.
+	Owner *OwnerConfig
+}
+
+// SystemSourcesWith is SystemSources with options. When the owner frameworks
+// cannot be loaded the owner stays null rather than failing the sample.
+func SystemSourcesWith(opt SourceOptions) Sources {
 	mach, machErr := hostmem.NewMach()
+	var owner func(ProcSnapshot, ProcContext) *wire.OwnerState
+	if opt.Owner != nil {
+		if osrc, err := DarwinOwnerSources(); err == nil {
+			cfg := *opt.Owner
+			owner = func(s ProcSnapshot, c ProcContext) *wire.OwnerState { return BuildOwner(cfg, osrc, s, c) }
+		}
+	}
 	var procs func(time.Time) (ProcSnapshot, ProcContext, error)
 	if pr, err := NewProcReader(DefaultSessionsDir()); err == nil {
 		procs = pr.Snapshot
@@ -26,6 +44,7 @@ func SystemSources() Sources {
 	}
 	return Sources{
 		Procs: procs,
+		Owner: owner,
 		Tools: systemTools(),
 		Now:   time.Now,
 		CPU: func() (RawCPU, error) {

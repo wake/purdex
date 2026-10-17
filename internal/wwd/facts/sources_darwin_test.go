@@ -7,6 +7,25 @@ import (
 	"time"
 )
 
+func TestOwnerIsNullUnlessEnabled(t *testing.T) {
+	c := NewCollector(SystemSources())
+	r, err := c.Sample()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Owner != nil {
+		t.Fatalf("owner without the option: %+v", r.Owner)
+	}
+	c = NewCollector(SystemSourcesWith(SourceOptions{Owner: &OwnerConfig{}}))
+	r, err = c.Sample()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Owner == nil || r.Owner.Reason == "" {
+		t.Fatalf("owner with the option: %+v", r.Owner)
+	}
+}
+
 func deref(p *string) string {
 	if p == nil {
 		return "<null>"

@@ -133,6 +133,9 @@ type Sources struct {
 	// Tools reads the toolchain versions (nil: tools stay all-null). It caches
 	// internally; calling it every sample is fine.
 	Tools func() wire.Tools
+	// Owner is the "owner is active" rule (air26 only; nil elsewhere: owner stays
+	// null). It sees the process table of the same sample.
+	Owner func(ProcSnapshot, ProcContext) *wire.OwnerState
 }
 
 // Top-N sizes of the procs list (spec §3.1: the top 12 by memory and by CPU).
@@ -151,12 +154,13 @@ type Reading struct {
 	Procs     []wire.Proc
 	Residents []wire.Resident
 	Tools     wire.Tools
+	Owner     *wire.OwnerState
 }
 
 // Apply writes the reading into a facts record.
 func (r Reading) Apply(f *wire.Facts) {
 	f.At, f.CPU, f.Mem, f.Disk = r.At, r.CPU, r.Mem, r.Disk
-	f.Procs, f.Residents, f.Tools = r.Procs, r.Residents, r.Tools
+	f.Procs, f.Residents, f.Tools, f.Owner = r.Procs, r.Residents, r.Tools, r.Owner
 }
 
 // Collector takes Readings; one value belongs to one goroutine.
@@ -199,8 +203,12 @@ func (c *Collector) Sample() (Reading, error) {
 		if snap, ctx, err := c.src.Procs(now); err != nil {
 			errs = append(errs, err)
 		} else {
+			ctx.ensureTable(snap) // once, shared by the three builders below
 			r.Procs = BuildProcs(snap, ctx, procsTopMem, procsTopCPU)
 			r.Residents = BuildResidents(snap, ctx)
+			if c.src.Owner != nil {
+				r.Owner = c.src.Owner(snap, ctx)
+			}
 		}
 	}
 	return r, errors.Join(errs...)
