@@ -172,3 +172,58 @@ describe('reading another session', () => {
     expect(unit().confirms.map((e) => e.id)).toContain('gone')
   })
 })
+
+describe('the chain of sessions fails on its own (the daemon\'s 503 on /sessions)', () => {
+  it('a current page that read fine but a chain that did not: the rows show, the chain is marked failed, and the error stays until a chain arrives', async () => {
+    getJournalPage.mockResolvedValue(pageOf({ page: 'cur', entries: [wireEntry('a', { at: T0 })] }))
+    getJournalSessions.mockRejectedValueOnce(Object.assign(new Error('unavailable'), { status: 503 }))
+    expect((await st().loadJournal('h1', 's1')).kind).toBe('ok')
+    expect(ids()).toEqual(['a'])
+    expect(unit().sessions).toBeNull()
+    expect(unit().sessionsFailed).toBe(true)
+    getJournalSessions.mockRejectedValueOnce(new Error('again'))
+    await st().loadJournal('h1', 's1')
+    expect(unit().sessionsFailed).toBe(true) // a good PAGE read does not end it
+    getJournalSessions.mockResolvedValueOnce(sessionsOf(['old', 'cur']))
+    await st().loadSessions('h1', 's1')
+    expect(unit().sessionsFailed).toBe(false)
+    expect(unit().sessions).toHaveLength(2)
+  })
+  it('a chain that failed after one was held keeps the old chain and still says it failed', async () => {
+    getJournalPage.mockResolvedValue(pageOf({ page: 'cur' }))
+    await st().loadJournal('h1', 's1')
+    getJournalSessions.mockRejectedValueOnce(new Error('503'))
+    await st().loadSessions('h1', 's1')
+    expect(unit().sessions).toHaveLength(2)
+    expect(unit().sessionsFailed).toBe(true)
+  })
+})
+
+describe('the same endpoint comes back as an older daemon (fence, then sessions=false)', () => {
+  it('drops the session state of the host and its failed flags, and the first legacy read does not merge with the session rows', async () => {
+    getJournalPage.mockResolvedValue(pageOf({ page: 'cur', truncated: true, entries: [wireEntry('sess-a', { at: T0 })] }))
+    await st().loadJournal('h1', 's1')
+    getJournalPage.mockResolvedValueOnce(pageOf({ page: 'old', entries: [wireEntry('sess-old', { at: T0 - 5 })] }))
+    await st().loadPage('h1', 's1', 'old')
+    getJournalPage.mockRejectedValueOnce(new Error('503'))
+    await st().loadJournal('h1', 's1')
+    expect(st().readFailed[sessionKey('h1', 's1')]).toBe(true)
+    st().fence('h1')
+    st().setSupport('h1', true, true, false)
+    expect(st().readFailed[sessionKey('h1', 's1')]).toBeUndefined()
+    expect(unit()).toMatchObject({ currentPage: '', truncated: false, sessions: null, sessionsIncomplete: false, sessionsFailed: false, pages: {} })
+    getJournal.mockResolvedValue(pageOf({ entries: [wireEntry('legacy-a', { at: T0 + 9 })], more: true }))
+    await st().loadJournal('h1', 's1')
+    expect(ids()).toEqual(['legacy-a'])
+    expect(unit().more).toBe(true)
+  })
+  it('a host that keeps the capability keeps its session state through a reconnect', async () => {
+    getJournalPage.mockResolvedValue(pageOf({ page: 'cur', entries: [wireEntry('a', { at: T0 })] }))
+    await st().loadJournal('h1', 's1')
+    st().fence('h1')
+    st().setSupport('h1', true, true, true)
+    expect(unit().currentPage).toBe('cur')
+    expect(ids()).toEqual(['a'])
+  })
+})
+

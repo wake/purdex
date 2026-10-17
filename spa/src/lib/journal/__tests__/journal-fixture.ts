@@ -30,7 +30,7 @@ export function seedUnit(hostId: string, sessionId: string, unit: JournalUnit, o
   const key = `${unit.kind}:${unit.id}`
   const u: UnitState = {
     unit, project: { name: 'purdex', remoteUrl: '' }, personName: 'Wake', entries: [], confirms: [], more: false, openConfirms: 0,
-    currentPage: '', truncated: false, sessions: null, sessionsIncomplete: false, pages: {},
+    currentPage: '', truncated: false, sessions: null, sessionsIncomplete: false, sessionsFailed: false, pages: {},
     tasks: null, roadmap: null, staleAt: { entries: 0, tasks: 0, roadmap: 0 }, readAt: { entries: 1, tasks: 1, roadmap: 1 }, touched: 1, ...over,
   }
   useJournalStore.setState((s) => {
