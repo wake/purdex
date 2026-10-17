@@ -1,0 +1,308 @@
+package gate
+
+// Running a command on an assist host (assist-dispatch plan X2a.3–7, spec §4): the working tree is committed (assist_snapshot.go),
+// pushed to the host's repo under refs/assist/<job>, checked out as a detached worktree with the dependencies linked from the host's
+// own cache, and the command is run there by the host's own `pdx gate`, its output streamed back. The job directory, the ref and
+// the pid file are removed whatever happened. A failure before the host's gate printed the admitted mark is a failure before the start
+// (nothing ran there); after it, the exit code is the command's.
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
+	"syscall"
+	"time"
+)
+
+// AssistRun describes one run sent to an assist host.
+type AssistRun struct {
+	Host string // the ssh alias
+	Job  string // names the ref, the worktree, the pid file and the tag on the host; "" makes one
+	Repo string // the repo's name on the host (~/Assist/repos.noindex/<Repo>); "" is the top level's basename
+	SSH  string // the ssh program ("" = ssh)
+	Git  string // the git program ("" = git)
+	// AdmitWait is how long the host's gate may take to admit the command (its --wait-max); 0 = 60 s.
+	AdmitWait time.Duration
+}
+
+// AssistResult is what a run on an assist host came to.
+type AssistResult struct {
+	Code    int  // the command's exit code when Started
+	Started bool // the host's gate admitted the command and started it; false is a failure before the start (Err says why)
+	// Reclaimed says the host took the run back while it ran (assist-off): its .reclaimed mark was there at the end.
+	Reclaimed bool
+	TransferS float64 // snapshot, push and preparation
+	RunS      float64 // the run itself
+	Job       string
+	Err       error // why it did not start (or, after the start, what went wrong around it)
+}
+
+func newJobID() string {
+	b := make([]byte, 6)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// shellQuote quotes one word for a POSIX shell.
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+func shellJoin(argv []string) string {
+	q := make([]string, len(argv))
+	for i, a := range argv {
+		q[i] = shellQuote(a)
+	}
+	return strings.Join(q, " ")
+}
+
+// validWord keeps a job or repo name to what is safe in a path and a remote command.
+func validWord(s string) bool {
+	if s == "" || len(s) > 80 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.') {
+			return false
+		}
+	}
+	return !strings.HasPrefix(s, ".")
+}
+
+// remotePrepare makes the job directory and links the dependencies (args: repo job sha). One ssh. The dependencies of each lockfile
+// directory (the root and spa/) are kept in ~/Assist/deps.noindex/<repo>/<dir>-<hash of the lockfile> and linked in; a missing set is
+// installed once and moved there; the two most recently used per directory are kept.
+const remotePrepare = `set -e
+. ~/Assist/assist.env 2>/dev/null || true
+repo=$1; job=$2; sha=$3
+R=$HOME/Assist/repos.noindex/$repo; W=$HOME/Assist/tmp.noindex/$job
+mkdir -p "$HOME/Assist/tmp.noindex" "$HOME/Assist/jobs.noindex" "$HOME/Assist/deps.noindex/$repo"
+git -C "$R" worktree add -q --detach "$W" "$sha"
+for d in . spa; do
+  [ -f "$W/$d/pnpm-lock.yaml" ] || continue
+  label=$(echo "$d" | tr -c 'a-zA-Z0-9\n' '_')
+  h=$(shasum -a 256 "$W/$d/pnpm-lock.yaml" | cut -c1-16)
+  D="$HOME/Assist/deps.noindex/$repo/$label-$h"
+  if [ ! -d "$D/node_modules" ]; then
+    (cd "$W/$d" && pnpm install --frozen-lockfile) >&2
+    mkdir -p "$D" && mv "$W/$d/node_modules" "$D/node_modules"
+  fi
+  touch "$D"
+  ln -s "$D/node_modules" "$W/$d/node_modules"
+  ls -dt "$HOME/Assist/deps.noindex/$repo/$label-"* 2>/dev/null | tail -n +3 | while read -r old; do rm -rf "$old"; done
+done
+`
+
+// remoteCleanup removes the job whatever happened (args: repo job) and says whether the host took the run back.
+const remoteCleanup = `repo=$1; job=$2
+R=$HOME/Assist/repos.noindex/$repo; W=$HOME/Assist/tmp.noindex/$job; J=$HOME/Assist/jobs.noindex/$job
+if [ -e "$J.reclaimed" ]; then echo reclaimed=1; fi
+git -C "$R" worktree remove --force "$W" >/dev/null 2>&1 || rm -rf "$W"
+git -C "$R" worktree prune >/dev/null 2>&1
+git -C "$R" update-ref -d "refs/assist/$job" >/dev/null 2>&1
+rm -f "$J.pid" "$J.reclaimed"
+`
+
+// remoteKill ends the job's process group (args: job): TERM now, KILL ten seconds later.
+const remoteKill = `J=$HOME/Assist/jobs.noindex/$1.pid
+[ -f "$J" ] || exit 0
+p=$(cat "$J"); [ -n "$p" ] || exit 0
+g=$(ps -o pgid= -p "$p" 2>/dev/null | tr -d ' ')
+[ -n "$g" ] && [ "$g" -gt 1 ] || exit 0
+kill -TERM -- "-$g" 2>/dev/null
+( sleep 10; kill -KILL -- "-$g" 2>/dev/null ) >/dev/null 2>&1 &
+`
+
+// ssh runs a remote script on the host with positional arguments: the script is the command's text, so nothing in the arguments is
+// ever parsed as shell.
+func (a AssistRun) sshCmd(ctx context.Context, script string, args ...string) *exec.Cmd {
+	prog := a.SSH
+	if prog == "" {
+		prog = "ssh"
+	}
+	remote := "sh -c " + shellQuote(script) + " assist " + shellJoin(args)
+	return exec.CommandContext(ctx, prog, "-o", "BatchMode=yes", "-T", a.Host, remote)
+}
+
+// RunAssist sends the command of o to the host and runs it there, streaming its output to o.Stdout and o.Stderr. It never runs the
+// command on this host.
+func (g *Gate) RunAssist(ctx context.Context, o Options, a AssistRun) AssistResult {
+	res := AssistResult{Job: a.Job}
+	if res.Job == "" {
+		res.Job = newJobID()
+	}
+	a.Job = res.Job
+	fail := func(err error) AssistResult { res.Err = err; return res }
+	if len(o.Argv) == 0 {
+		return fail(errors.New("no command"))
+	}
+	if !validWord(a.Host) || !validWord(a.Job) {
+		return fail(fmt.Errorf("bad host or job name %q / %q", a.Host, a.Job))
+	}
+	stderrW := outOr(o.Stderr, os.Stderr)
+	began := g.Now()
+	dir := g.cwdOf(o)
+	snap, err := SnapshotTree(ctx, a.Git, dir)
+	if err != nil {
+		return fail(fmt.Errorf("snapshot: %w", err))
+	}
+	repo := a.Repo
+	if repo == "" {
+		repo = strings.TrimSuffix(baseName(snap.Root), ".git")
+	}
+	if !validWord(repo) {
+		return fail(fmt.Errorf("bad repo name %q", repo))
+	}
+	// Everything below this line must be cleaned up, whatever happens.
+	cleanup := func() {
+		c, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		var out bytes.Buffer
+		cmd := a.sshCmd(c, remoteCleanup, repo, a.Job)
+		cmd.Stdout = &out
+		if err := cmd.Run(); err != nil {
+			g.say("assist cleanup on %s: %v", a.Host, err)
+		}
+		res.Reclaimed = strings.Contains(out.String(), "reclaimed=1")
+	}
+	defer cleanup()
+
+	// push the snapshot under refs/assist/<job>
+	gitProg := a.Git
+	if gitProg == "" {
+		gitProg = "git"
+	}
+	sshProg := a.SSH
+	if sshProg == "" {
+		sshProg = "ssh"
+	}
+	push := exec.CommandContext(ctx, gitProg, "-C", snap.Root, "push", "-q", "--force", a.Host+":Assist/repos.noindex/"+repo, snap.SHA+":refs/assist/"+a.Job)
+	push.Env = append(os.Environ(), "GIT_SSH_COMMAND="+shellQuote(sshProg)+" -o BatchMode=yes")
+	var perr bytes.Buffer
+	push.Stderr = &perr
+	if err := push.Run(); err != nil {
+		return fail(fmt.Errorf("push to %s: %w: %s", a.Host, err, strings.TrimSpace(perr.String())))
+	}
+	prep := a.sshCmd(ctx, remotePrepare, repo, a.Job, snap.SHA)
+	var prepErr bytes.Buffer
+	prep.Stderr = &prepErr
+	if err := prep.Run(); err != nil {
+		return fail(fmt.Errorf("prepare on %s: %w: %s", a.Host, err, lastLines(prepErr.String(), 3)))
+	}
+	res.TransferS = g.Now().Sub(began).Seconds()
+
+	// run it there: the host's own gate admits it
+	wait := a.AdmitWait
+	if wait <= 0 {
+		wait = 60 * time.Second
+	}
+	nonce := newJobID()
+	script := `. ~/Assist/assist.env 2>/dev/null || true
+repo=$1; job=$2; rel=$3; wait=$4; nonce=$5; shift 5
+cd "$HOME/Assist/tmp.noindex/$job/$rel" || exit 70
+echo $$ > "$HOME/Assist/jobs.noindex/$job.pid"
+PDX_GATE_ADMITTED_MARK=$nonce PDX_GATE_TAG="assist:$job" exec pdx gate --wait-max "$wait" -- "$@"
+`
+	args := append([]string{repo, a.Job, snap.Rel, fmt.Sprintf("%d", int(wait.Seconds())), nonce}, o.Argv...)
+	run := a.sshCmd(context.Background(), script, args...) // ended by the signal path below, not by the context
+	filter := newMarkFilter(stderrW, nonce)
+	run.Stdout = outOr(o.Stdout, os.Stdout)
+	run.Stderr = filter
+	run.Stdin = nil
+	run.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	g.say("running on %s (assist): %s", a.Host, strings.Join(truncateArgv(o.Argv), " "))
+	sigs, stop := g.signals()
+	defer stop()
+	if err := run.Start(); err != nil {
+		return fail(fmt.Errorf("ssh to %s: %w", a.Host, err))
+	}
+	runStart := g.Now()
+	done := make(chan error, 1)
+	go func() { done <- run.Wait() }()
+	var cancelled bool
+	var killAt <-chan time.Time
+loop:
+	for {
+		select {
+		case err := <-done:
+			filter.Flush()
+			res.RunS = g.Now().Sub(runStart).Seconds()
+			code := exitCode(err, run)
+			res.Started = filter.sawAdmit && !filter.sawNoStart
+			switch {
+			case res.Started:
+				res.Code = code
+			case cancelled:
+				res.Code = 130
+				res.Err = errors.New("cancelled")
+			default:
+				res.Err = failedBeforeStart(a.Host, code, filter)
+			}
+			break loop
+		case sig := <-sigs:
+			if !cancelled {
+				cancelled = true
+				g.endRemote(a, a.Job)
+				killAt = time.After(15 * time.Second)
+				_ = sig
+			}
+		case <-ctx.Done():
+			if !cancelled {
+				cancelled = true
+				g.endRemote(a, a.Job)
+				killAt = time.After(15 * time.Second)
+			}
+			ctx = context.Background()
+		case <-killAt:
+			killAt = nil
+			_ = syscall.Kill(-run.Process.Pid, syscall.SIGKILL) // the ssh itself
+		}
+	}
+	return res
+}
+
+// endRemote ends the job's process group on the host: TERM, and KILL ten seconds later.
+func (g *Gate) endRemote(a AssistRun, job string) {
+	c, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if err := a.sshCmd(c, remoteKill, job).Run(); err != nil {
+		g.say("ending the run on %s: %v", a.Host, err)
+	}
+}
+
+// failedBeforeStart says why a run ended without the host's gate admitting the command.
+func failedBeforeStart(host string, code int, f *markFilter) error {
+	switch {
+	case f.sawNoStart:
+		return fmt.Errorf("%s admitted the command but could not start it", host)
+	case code == ExitRefused:
+		return fmt.Errorf("%s did not admit the command in time", host)
+	case code == 255:
+		return fmt.Errorf("ssh to %s failed", host)
+	}
+	return fmt.Errorf("%s ended with %d before the command started", host, code)
+}
+
+func baseName(p string) string {
+	p = strings.TrimRight(p, "/")
+	if i := strings.LastIndex(p, "/"); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
+func lastLines(s string, n int) string {
+	s = strings.TrimSpace(s)
+	lines := strings.Split(s, "\n")
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, " | ")
+}
+
+var _ io.Writer = (*markFilter)(nil)
