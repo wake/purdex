@@ -407,3 +407,15 @@ func TestChanged_AMarkLeftByAnEarlierRunIsSettledByTheTick(t *testing.T) {
 	r3.m.patrolStep(context.Background())
 	require.NotNil(t, r3.m.sess.Get().InProgress, "and left alone")
 }
+
+// A mark stamped ahead of the clock is not young: it is settled as a failed start, not kept as "starting" until the clock catches up.
+func TestChanged_AMarkAheadOfTheClockIsSettledNotKept(t *testing.T) {
+	r := newSessionRig(t, "")
+	require.NoError(t, r.m.sess.Update(func(x *watch.SessionState) {
+		x.InProgress = &watch.InProgress{Kind: "start", Since: r.m.now().Add(3 * time.Hour)}
+	}))
+	require.False(t, r.m.view().Starting)
+	r.m.patrolStep(context.Background())
+	require.Nil(t, r.m.sess.Get().InProgress)
+	require.False(t, r.m.sess.Get().CooldownUntil.IsZero())
+}

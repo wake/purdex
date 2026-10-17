@@ -151,7 +151,7 @@ func (c *sessionCtl) run(ctx context.Context, kind, extra string) (watch.HolderA
 		}
 	}
 	if st.InProgress != nil {
-		if now.Sub(st.InProgress.Since) < m.registerWithinFor()+time.Minute { // a start of an earlier run of the daemon, still within its time
+		if m.youngMark(st.InProgress.Since) { // a start of an earlier run of the daemon, still within its time
 			c.release()
 			return m.answerStarting(), nil
 		}
@@ -332,7 +332,13 @@ func (m *Module) updateSession(fn func(*watch.SessionState)) error {
 // startingNow says a start or wake is going on: its mark is in session.json and young enough to still be waited for. A mark left by a run
 // of the daemon that ended is not "starting" for ever (recoverSession ends it).
 func (m *Module) startingNow(st watch.SessionState) bool {
-	return st.InProgress != nil && m.now().Sub(st.InProgress.Since) < m.registerWithinFor()+time.Minute
+	return st.InProgress != nil && m.youngMark(st.InProgress.Since)
+}
+
+// youngMark says a mark begun at since is still within the time a start has; one stamped ahead of the clock (it went back) is not young.
+func (m *Module) youngMark(since time.Time) bool {
+	age := m.now().Sub(since)
+	return age >= 0 && age < m.registerWithinFor()+time.Minute
 }
 
 // recoverSession ends a mark that has no job behind it (the daemon that began the start ended): the watcher is registered → the start
