@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -127,6 +126,10 @@ func fastLane(ctx context.Context, o Options, sub wire.Submitter) (code int, too
 	if o.Args.Detach {
 		return 0, false // a detached run is a job of the queue, not of this process
 	}
+	// the same class rule as the queue's, whether or not this run is recorded
+	if _, err := submit.ResolveClass(task.Class, o.Args.Class); err != nil {
+		return failPrepare(o, err), true
+	}
 	var body submit.Body
 	if o.Recorder != nil {
 		p, err := submit.Prepare(ctx, submit.Request{Dir: o.Dir, Task: o.Args.Task, Args: o.Args.TaskArgs, Class: o.Args.Class, Submitter: sub, Git: o.GitBin, Local: true})
@@ -138,11 +141,17 @@ func fastLane(ctx context.Context, o Options, sub wire.Submitter) (code int, too
 	// The run's files stay after the command: the log path is printed, and wwd's sweep removes old ones.
 	out := ""
 	if o.LogDir != "" {
-		out = filepath.Join(o.LogDir, fmt.Sprintf("%s-%s", time.Now().Format("20060102-150405"), o.Args.Task))
-		if err := os.MkdirAll(out, 0o700); err != nil {
+		// one directory per run, created atomically: two runs of one task in one second never share files
+		if err := os.MkdirAll(o.LogDir, 0o700); err != nil {
 			fmt.Fprintf(o.Stderr, "pdx test: %v\n", err)
 			return ExitFailed, true
 		}
+		d, err := os.MkdirTemp(o.LogDir, fmt.Sprintf("%s-%s-", time.Now().Format("20060102-150405"), o.Args.Task))
+		if err != nil {
+			fmt.Fprintf(o.Stderr, "pdx test: %v\n", err)
+			return ExitFailed, true
+		}
+		out = d
 	}
 	res, err := fastlane.Run(ctx, fastlane.Request{Root: root, Task: task, Args: o.Args.TaskArgs, Body: body, Gate: o.Gate, Recorder: o.Recorder, Env: o.Env, OutDir: out})
 	var argErr *fastlane.ArgError

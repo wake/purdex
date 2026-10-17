@@ -246,6 +246,10 @@ func taskNames(m *manifest.Manifest) []string {
 
 var classRank = map[wire.JobClass]int{wire.ClassDev: 0, wire.ClassMerge: 1, wire.ClassRelease: 2}
 
+// ResolveClass is the class a call runs at: the task's, or the lower one asked for; a higher one is a UsageError. The fast lane
+// checks it too, whether or not the run is recorded.
+func ResolveClass(max, asked wire.JobClass) (wire.JobClass, error) { return resolveClass(max, asked) }
+
 // resolveClass gives the manifest's class, or the lower one the caller asked for; a higher one is refused.
 func resolveClass(max, asked wire.JobClass) (wire.JobClass, error) {
 	if asked == "" {

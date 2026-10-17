@@ -399,6 +399,25 @@ func TestFastLaneRunsLocalTasksWithoutTheQueue(t *testing.T) {
 	}
 }
 
+func TestFastLaneRefusesAClassAboveTheTasksWithoutARecorder(t *testing.T) {
+	g := &fakeGate{}
+	code, _, errOut := run(t, Options{Args: args(t, "one-file", "a.test.ts", "--class", "release"), API: &fakeAPI{}, Gate: g, Env: os.Environ()})
+	if code != ExitUsage || g.calls != 0 || !strings.Contains(errOut, "above") {
+		t.Fatalf("code %d calls %d err %q", code, g.calls, errOut)
+	}
+}
+
+func TestTwoFastLaneRunsInOneSecondKeepApart(t *testing.T) {
+	logs := t.TempDir()
+	for i := 0; i < 3; i++ {
+		run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: &fakeAPI{}, Gate: &fakeGate{out: fmt.Sprint("run", i)}, LogDir: logs, Env: os.Environ()})
+	}
+	entries, _ := os.ReadDir(logs)
+	if len(entries) != 3 {
+		t.Fatalf("%d run directories, want 3 (runs shared a directory)", len(entries))
+	}
+}
+
 func TestFastLaneSuccessIsExit0(t *testing.T) {
 	code, _, _ := run(t, Options{Args: args(t, "one-file", "a.test.ts"), API: &fakeAPI{}, Gate: &fakeGate{}, Env: os.Environ()})
 	if code != 0 {
