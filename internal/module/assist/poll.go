@@ -28,6 +28,7 @@ func (m *Module) pass() {
 		}
 	}
 	m.dropGone(f)
+	m.notifyPass()
 }
 
 // checkHost runs assist-check --json for the generation h had when it was read and records the answer under that generation.

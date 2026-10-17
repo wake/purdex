@@ -30,7 +30,7 @@ func (m *Module) switchHost(alias string, on bool, by, reason string, guard func
 	}
 	var h gate.AssistHost
 	var op gate.AssistOp
-	var skipped bool
+	var skipped, was bool
 	_, err := gate.EditAssist(m.dir, func(f *gate.AssistFile) (bool, string, error) {
 		cur, ok := f.Hosts[alias]
 		if !ok {
@@ -43,6 +43,7 @@ func (m *Module) switchHost(alias string, on bool, by, reason string, guard func
 			skipped = true
 			return false, "", nil
 		}
+		was = cur.On
 		op = gate.AssistOp{Kind: kind, ID: newOpID(), At: m.now()}
 		cur.On, cur.Op, cur.Gen = on, &op, f.TakeGen()
 		cur.By, cur.Reason, cur.At = by, reason, op.At
@@ -53,7 +54,12 @@ func (m *Module) switchHost(alias string, on bool, by, reason string, guard func
 	if err != nil || skipped {
 		return "", err
 	}
-	return m.finishOp(alias, h, op)
+	detail, err := m.finishOp(alias, h, op)
+	if now := on && err == nil; now != was { // the host's state changed: tell the watcher (it prepares or confirms)
+		m.wakeWatcher("assist_changed", fmt.Sprintf("%s 輔測 %s→%s by %s：%s", alias, onOff(was), onOff(now), by, reason))
+	}
+	m.kickNotify()
+	return detail, err
 }
 
 // finishOp runs the script of op and clears the Op under the lock, if it is still the one in the file. The caller holds the

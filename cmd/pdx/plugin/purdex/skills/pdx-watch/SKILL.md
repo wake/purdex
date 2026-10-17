@@ -71,6 +71,17 @@ pdx watch ack --all [--host <alias>] --note "…"
 3. 寫完再讀一次確認。
 4. **告訴人**：哪台主機、哪個類別、舊值 → 新值、為什麼（暫停的話說明什麼被暫停）。寫入失敗或讀回來不一樣，就回報失敗。
 
+## 輔測（assist）：開關、允許名單與你的準備工作
+
+輔測是把測試送去 air26／mserv 跑。開關與允許名單由 daemon 管（`pdx assist …`），**環境是你準備**。叫醒你的提示會寫是哪一種：
+
+- **`assist_changed`**（提示形如「air26 輔測 關→開 by … ：理由」）
+  - **→ 開**：對該主機上**允許名單內每個隊伍或 session 的 repo**準備環境——在 `~/Assist/repos.noindex` clone 或 fetch、裝好工具；`assist-check` 說某個資料夾在 air26 上還沒被信任時，**請人去信任**，不要自己繞過。然後 `pdx assist status`，一直看到那個 repo 顯示「就緒」。
+  - **→ 關**：用 `assist-check`（該主機的腳本）確認資源真的還回去了（約 60 秒內），把結果**告訴人**。
+- **`assist_allowed`**（提示形如「team … 可用 air26 by … ：理由」）：準備**那個隊伍或 session**的 repo，做法同上；做完 `pdx assist status` 應顯示就緒。
+
+你**不**打開或關閉輔測、也不改允許名單——那是使用者與 lead 的事（`pdx assist on|off|allow|deny`）。你可以調的是各主機的負載門檻：`pdx assist host set <別名> --load-limit <每核負載> --idle-min <CPU 閒置 %> --hold-min <分鐘>`（先 `pdx assist status` 讀現值，改完讀回來，並告訴人為什麼）。能力表也由你依各主機的 README 寫：`--can "<指令字詞>"`、`--cannot "<指令字詞>"`（可重複；`--clear-can`／`--clear-cannot` 清空）。
+
 ## 休息與退場
 
 - **該休息**：收到「該休息了」時，把筆記寫好、`git commit` 並 `git push`（`purdex-watch` 分支），回報一聲，然後 `/exit`。daemon 看到你結束就把你記成休息中，下次叫醒時用同一個 session 接著做。若在你收到通知後又來了新事件，休息會取消——照常處理。
