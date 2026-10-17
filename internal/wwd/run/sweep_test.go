@@ -84,6 +84,47 @@ func TestSweepDoesNotKillAPidThatNoLongerCarriesTheMark(t *testing.T) {
 	}
 }
 
+func TestSweepReportsAnUnreadableTableOnTheSecondLookAndDoesNotKill(t *testing.T) {
+	pid, gone := victim(t)
+	var calls int32
+	s := spec(t, "true")
+	s.KillAfter = 300 * time.Millisecond
+	s.Procs = fakeSource(func(string) ([]int, error) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			return []int{pid}, nil
+		}
+		return nil, errors.New("sysctl failed")
+	})
+	r := Run(context.Background(), s)
+	if r.SweepErr == nil || len(r.Escaped) != 1 {
+		t.Fatalf("a table that cannot be read must be reported, not taken for clean: %+v", r)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if gone() {
+		t.Fatal("KILL was sent without a confirming look at the table")
+	}
+}
+
+func TestEscapedNoteIsWrittenEvenWhenTheLogHitsItsCap(t *testing.T) {
+	pid, gone := victim(t)
+	s := spec(t, "sh", "-c", "i=0; while [ $i -lt 500 ]; do echo line-$i; i=$((i+1)); done")
+	s.MaxLog = 200
+	s.KillAfter = 300 * time.Millisecond
+	s.Procs = fakeSource(func(string) ([]int, error) {
+		if gone() {
+			return nil, nil
+		}
+		return []int{pid}, nil
+	})
+	r := Run(context.Background(), s)
+	if !r.LogCut {
+		t.Fatalf("the log should have hit its cap: %+v", r)
+	}
+	if log := readFile(t, r.LogPath); !strings.Contains(log, "leaks processes") {
+		t.Fatalf("the leak line is missing from the log on disk: %q", log[max(0, len(log)-200):])
+	}
+}
+
 func TestSweepNothingFound(t *testing.T) {
 	s := spec(t, "true")
 	s.Procs = fakeSource(func(string) ([]int, error) { return nil, nil })

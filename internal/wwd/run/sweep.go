@@ -40,26 +40,41 @@ func sweep(src ProcSource, jobID string, killAfter time.Duration) (found []int, 
 	}
 	deadline := time.Now().Add(killAfter)
 	for time.Now().Before(deadline) {
-		if len(stillThere(src, jobID, pids)) == 0 {
+		left, err := stillThere(src, jobID, pids)
+		if err != nil {
+			return pids, err
+		}
+		if len(left) == 0 {
 			return pids, nil
 		}
 		time.Sleep(sweepPoll)
 	}
-	for _, p := range stillThere(src, jobID, pids) {
+	left, err := stillThere(src, jobID, pids)
+	if err != nil {
+		return pids, err // not confirmed: no KILL on a guess, the pid may belong to someone else by now
+	}
+	for _, p := range left {
 		_ = syscall.Kill(p, syscall.SIGKILL)
 	}
 	// give the kernel a moment to take them, so a caller that looks right after Run returns finds them gone
-	for end := time.Now().Add(time.Second); time.Now().Before(end) && len(stillThere(src, jobID, pids)) > 0; {
-		time.Sleep(sweepPoll)
+	for end := time.Now().Add(time.Second); time.Now().Before(end); time.Sleep(sweepPoll) {
+		left, err := stillThere(src, jobID, pids)
+		if err != nil {
+			return pids, err
+		}
+		if len(left) == 0 {
+			break
+		}
 	}
 	return pids, nil
 }
 
-// stillThere are the pids of before that the source still lists under the job's mark.
-func stillThere(src ProcSource, jobID string, before []int) []int {
+// stillThere are the pids of before that the source still lists under the job's mark; an unreadable table is an error, never
+// "nothing left".
+func stillThere(src ProcSource, jobID string, before []int) ([]int, error) {
 	now, err := src.JobProcesses(jobID)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	in := map[int]bool{}
 	for _, p := range now {
@@ -71,7 +86,7 @@ func stillThere(src ProcSource, jobID string, before []int) []int {
 			out = append(out, p)
 		}
 	}
-	return out
+	return out, nil
 }
 
 func without(pids []int, drop int) []int {
