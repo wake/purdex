@@ -253,7 +253,7 @@ func TestAssistAnAnswerThatIsNotJSONFails(t *testing.T) {
 }
 
 func TestAssistTextOutputCarriesNoControlCharacters(t *testing.T) {
-	esc := "\u001b]52;c;x\u0007"
+	esc := `\u001b]52;c;x\u0007` // JSON escapes: the daemon's answer decodes them to real control characters
 	answer := `{"file":{"Hosts":{"air26":{"SSH":"a` + esc + `","On":true,"Gen":1}},"Allowed":[{"Kind":"team","ID":"t` + esc + `","Name":"n` + esc + `"}]},
 	"ready":{"air26":{"gen":1,"at":"2026-10-17T12:00:00Z","answer":{"switch":"on` + esc + `","repos":{"r` + esc + `":{"ready":true}}}}},"now":"2026-10-17T12:00:10Z"}`
 	_, out, _, _ := callAssist(t, 200, answer, "status")
