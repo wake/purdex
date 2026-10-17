@@ -146,7 +146,7 @@ func heavyReason(argv []string, e Env) Reason {
 // infoTools are the tools whose own help or version a command can ask for.
 var infoTools = map[string]bool{
 	"go": true, "vitest": true, "tsc": true, "make": true, "composer": true, "phpunit": true, "pest": true, "claude": true,
-	"vite": true, "electron-vite": true, "electron-builder": true,
+	"vite": true, "electron-vite": true, "electron-builder": true, "swift": true, "swift-build": true, "swift-test": true,
 }
 
 // infoRunners are the package runners: their own help comes before the subcommand, and what follows a script's name is the script's.
@@ -274,6 +274,12 @@ func Classify(argv []string, e Env) Class {
 		return classifyPhpunit(args)
 	case "claude":
 		return classifyClaude(args)
+	case "xcodebuild":
+		return classifyXcodebuild(args)
+	case "swift":
+		return classifySwift(args)
+	case "swift-build", "swift-test":
+		return classifySwiftDriver(args)
 	}
 	return ClassNone
 }
