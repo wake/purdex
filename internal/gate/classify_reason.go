@@ -56,6 +56,8 @@ func noneReason(argv []string, e Env) Reason {
 		return ReasonUnknown // `vite optimize` and whatever comes next: not a word the table knows
 	case "electron-builder":
 		return ReasonPackaging
+	case "xcodebuild", "swift", "swift-build", "swift-test":
+		return ReasonKnownPassthrough // -list, -version, swift package, swift --version…: nothing is built; `swift run` is a program of its own
 	}
 	return ReasonUnknown
 }

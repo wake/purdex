@@ -108,6 +108,43 @@ func TestClassify_Table(t *testing.T) {
 		{"tsc -b -p spa", ClassHeavy}, // -b wins: it builds the references
 		{"tsc --build --project spa", ClassHeavy},
 		{"tsc -p spa --version", ClassNone},
+		// Apple toolchains (#3111): a build or a test run is heavy, whatever the action is called; what only prints is not gated
+		{"xcodebuild test -scheme App -destination 'platform=iOS Simulator,name=iPhone 16'", ClassHeavy},
+		{"xcodebuild build-for-testing -scheme App", ClassHeavy},
+		{"xcodebuild test-without-building -xctestrun x.xctestrun", ClassHeavy},
+		{"xcodebuild build -scheme App", ClassHeavy},
+		{"xcodebuild -scheme App", ClassHeavy}, // no action: the default is build
+		{"xcodebuild archive -scheme App -archivePath a.xcarchive", ClassHeavy},
+		{"/usr/bin/xcodebuild test -scheme App", ClassHeavy},
+		{"xcodebuild -list", ClassNone},
+		{"xcodebuild -list -project App.xcodeproj", ClassNone},
+		{"xcodebuild -version", ClassNone},
+		{"xcodebuild -showsdks", ClassNone},
+		{"xcodebuild -showBuildSettings -scheme App", ClassNone},
+		{"xcodebuild -exportArchive -archivePath a -exportPath b", ClassNone},
+		{"swift test", ClassHeavy},
+		{"swift test --filter FooTests", ClassHeavy},
+		{"swift build", ClassHeavy},
+		{"swift build -c release --product x", ClassHeavy},
+		{"swift -v build", ClassHeavy},
+		{"swift-build --package-path p -c release --product swift-openapi-generator", ClassHeavy}, // the driver a script may call by its own name
+		{"swift-test --parallel", ClassHeavy},
+		{"swift build --show-bin-path", ClassNone},
+		{"swift test --list-tests", ClassNone},
+		{"swift --version", ClassNone},
+		{"swift build --version", ClassNone},
+		{"swift build -Xswiftc --version", ClassHeavy}, // the value of -Xswiftc is the compiler's: this builds
+		{"swift build -Xcc --help", ClassHeavy},
+		{"swift build -Xlinker -h -c release", ClassHeavy},
+		{"swift test list", ClassNone},
+		{"swift test --filter list", ClassHeavy}, // the value of an option, not the subcommand list
+		{"swift build list", ClassHeavy},
+		{"swift-test list", ClassNone},
+		{"swift-build --version", ClassNone},
+		{"swift package resolve", ClassNone},
+		{"swift package describe", ClassNone},
+		{"swift run foo", ClassNone}, // a program of its own: the table cannot judge it
+		{"swift", ClassNone},
 		// a request for the tool's help or version runs nothing worth a slot (#3043)
 		{"claude plugin test --help", ClassNone},
 		{"claude plugin test -h", ClassNone},
