@@ -69,10 +69,11 @@ type Module struct {
 	wakeWG   sync.WaitGroup
 
 	// ctxMu guards ctx, the parent of every script: Stop cancels it, so a script in flight does not hold the shutdown.
-	ctxMu sync.Mutex
-	ctx   context.Context
-	stop  context.CancelFunc
-	wg    sync.WaitGroup
+	ctxMu   sync.Mutex
+	ctx     context.Context
+	stop    context.CancelFunc
+	stopped bool // Stop has begun: no new wake starts
+	wg      sync.WaitGroup
 }
 
 // New returns the module with production defaults.
@@ -103,7 +104,7 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	if m.notify == nil {
 		m.notify = func(sessionID, text string) error {
-			return peersmod.NotifySelf(context.Background(), c, m.logf, sessionID, text)
+			return peersmod.NotifySelf(m.scriptCtx(), c, m.logf, sessionID, text)
 		}
 	}
 	if m.waker == nil {
@@ -160,11 +161,12 @@ func (m *Module) Start(context.Context) error {
 
 func (m *Module) Stop(context.Context) error {
 	m.ctxMu.Lock()
+	m.stopped = true
 	stop := m.stop
-	m.ctxMu.Unlock()
 	if stop != nil {
 		stop()
 	}
+	m.ctxMu.Unlock()
 	m.wg.Wait()
 	m.wakeWG.Wait()
 	return nil

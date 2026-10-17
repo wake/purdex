@@ -263,16 +263,16 @@ func TestWatcherWokenOnSwitchAllowNotDenyNotCheck(t *testing.T) {
 func TestWakesThatComeFasterThanOneFinishesAreFoldedIntoTheLast(t *testing.T) {
 	r, _, wk := notifyRig(t)
 	wk.block, wk.entered = make(chan struct{}), make(chan struct{}, 8)
-	r.m.wakeWatcher("assist_changed", "a")
+	r.m.wakeWatcher("assist_changed", "air26 輔測 關→開 a")
 	<-wk.entered // the first wake is under way and blocked: the next ones fold
 	for _, d := range []string{"b", "c", "d"} {
-		r.m.wakeWatcher("assist_changed", d)
+		r.m.wakeWatcher("assist_changed", "air26 輔測 關→開 "+d)
 	}
 	close(wk.block)
 	r.waitFor("the folded wakes", func() bool { return len(wk.all()) >= 2 })
 	time.Sleep(50 * time.Millisecond)
 	got := wk.all()
-	if len(got) != 2 || got[0][1] != "a" || got[1][1] != "d" {
+	if len(got) != 2 || !strings.HasSuffix(got[0][1], " a") || !strings.HasSuffix(got[1][1], " d") {
 		t.Fatalf("%v: want the first, then only the last", got)
 	}
 }
@@ -298,5 +298,108 @@ func TestStopEndsAWakeInFlight(t *testing.T) {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		t.Fatal("Stop waited for the wake")
+	}
+}
+
+// Wakes about different subjects are all kept: two teams allowed in a row must both reach the watcher.
+func TestWakesAboutDifferentSubjectsAreNotFolded(t *testing.T) {
+	r, _, wk := notifyRig(t)
+	wk.block, wk.entered = make(chan struct{}), make(chan struct{}, 8)
+	r.m.wakeWatcher("assist_changed", "air26 輔測 關→開 x")
+	<-wk.entered
+	r.m.wakeWatcher("assist_allowed", "team A 可用 全部 by s：r")
+	r.m.wakeWatcher("assist_allowed", "team B 可用 全部 by s：r")
+	r.m.wakeWatcher("assist_changed", "mserv 輔測 關→開 y")
+	close(wk.block)
+	r.waitFor("all four", func() bool { return len(wk.all()) == 4 })
+	var got []string
+	for _, c := range wk.all() {
+		got = append(got, c[1])
+	}
+	if !strings.Contains(strings.Join(got, "|"), "team A") || !strings.Contains(strings.Join(got, "|"), "team B") || !strings.Contains(strings.Join(got, "|"), "mserv") {
+		t.Fatalf("%v", got)
+	}
+}
+
+// A wake that comes while Stop is closing the door is refused, never added behind Stop's Wait (checked under -race).
+func TestWakeAndStopRace(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		r, _, _ := notifyRig(t)
+		if err := r.m.Start(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); r.m.wakeWatcher("assist_changed", "air26 輔測 關→開 x") }()
+		go func() { defer wg.Done(); r.m.Stop(context.Background()) }()
+		wg.Wait()
+	}
+}
+
+// A notice that could not be delivered is tried again at the next pass; the other session's state is not touched.
+func TestFailedDeliveryIsTriedAgainAndOthersAreNotToldTwice(t *testing.T) {
+	r, snk, _ := notifyRig(t)
+	failing := true
+	r.m.notify = func(sid, text string) error {
+		if sid == "m1" && failing {
+			return context.DeadlineExceeded
+		}
+		return snk.send(sid, text)
+	}
+	r.m.notifyPass()
+	if got := snk.all(); len(got) != 1 || got[0].sid != "lead" {
+		t.Fatalf("first pass: %+v", got)
+	}
+	failing = false
+	r.m.notifyPass()
+	got := snk.all()
+	if len(got) != 2 || got[1].sid != "m1" {
+		t.Fatalf("second pass: %+v (the member once, the lead not again)", got)
+	}
+	r.m.notifyPass()
+	if len(snk.all()) != 2 {
+		t.Fatal("told again")
+	}
+}
+
+// A member who joins after the state was told gets the state as it is, and so does the session a relay moved the entry to.
+func TestANewRecipientIsToldTheCurrentState(t *testing.T) {
+	r, snk, _ := notifyRig(t)
+	r.m.notifyPass()
+	r.live("m2", "_memb02", "mlab/x-m2")
+	r.teams.sessions["t1"] = []string{"lead", "m1", "m2"}
+	r.m.notifyPass()
+	got := snk.all()
+	if len(got) != 3 || got[2].sid != "m2" || got[2].text != "[輔測] air26 可用（purdex）" {
+		t.Fatalf("%+v", got)
+	}
+	r.edit(func(f *gate.AssistFile) { f.Allowed = []gate.AssistAllow{{Kind: "session", ID: "_aaaaaa"}} })
+	r.live("s1", "_aaaaab", "mlab/x-s1")
+	r.teams.succ["_aaaaaa"] = []string{"s1"}
+	r.m.notifyPass()
+	last := snk.all()[len(snk.all())-1]
+	_ = last
+	var toS1 []sent
+	for _, s := range snk.all() {
+		if s.sid == "s1" {
+			toS1 = append(toS1, s)
+		}
+	}
+	if len(toS1) != 1 || toS1[0].text != "[輔測] air26 可用（purdex）" {
+		t.Fatalf("%+v", toS1)
+	}
+	// the relay: the entry now resolves to another session, which is told; nothing again for the one before
+	delete(r.origins.live, "s1")
+	r.live("s2", "_aaaaac", "mlab/x-s2")
+	r.teams.succ["_aaaaaa"] = []string{"s2"}
+	r.m.notifyPass()
+	var toS2 []sent
+	for _, s := range snk.all() {
+		if s.sid == "s2" {
+			toS2 = append(toS2, s)
+		}
+	}
+	if len(toS2) != 1 {
+		t.Fatalf("%+v", toS2)
 	}
 }
