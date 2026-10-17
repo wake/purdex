@@ -340,7 +340,7 @@ func (m *Module) LatestHostDetail() (resources.HostDetail, bool) {
 	cp := *snap
 	cp.Leases, cp.Waiters = nil, nil
 	m.addLeases(&cp)
-	return resources.HostDetail{Host: cp.Host, Leases: cp.Leases, Waiters: cp.Waiters}, true
+	return resources.HostDetail{Host: cp.Host, SampledAt: cp.SampledAt.UnixMilli(), Leases: cp.Leases, Waiters: cp.Waiters}, true
 }
 
 // openStore opens resources.db in the data dir. A failure is logged and

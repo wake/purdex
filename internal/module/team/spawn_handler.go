@@ -192,7 +192,7 @@ func (m *Module) acceptSpawn(w http.ResponseWriter, req team.SpawnRequest, origi
 	}
 	now := m.now()
 	// The host zone (spec §4.6): warning or danger asks the person first, or refuses an agent's spawn while unattended.
-	cardPayload := m.spawnResourcesPayload(req, cwd, person)
+	cardPayload := m.spawnResourcesPayload(req, cwd, person, t.ID, origin)
 	if cardPayload != nil && !person && m.unattendedOn() {
 		return fail(http.StatusConflict, team.ErrUnattendedRefused, team.UnattendedRefusedText)
 	}
@@ -232,7 +232,7 @@ func (m *Module) acceptSpawn(w http.ResponseWriter, req team.SpawnRequest, origi
 	m.logf("[team] spawn %s accepted: team %s, %s in %s", row.ID, t.ID, row.TmuxName, row.Cwd)
 	m.rosterChanged() // the accept is committed: a starting spawn takes a seat (in_use)
 	if cardPayload != nil {
-		m.logf("[team] spawn %s waits for the person: host zone %s (mem %.0f%%, pressure %d)", row.ID, cardPayload.Zone, cardPayload.MemPct, cardPayload.Pressure)
+		m.logf("[team] spawn %s waits for the person: host zone %s (mem %.0f%%, pressure %d)", row.ID, cardPayload.Host.Zone, cardPayload.Host.Mem, cardPayload.Host.Pressure)
 		m.broadcast("opened", &card)
 		return row, true // no runner until the card is approved
 	}

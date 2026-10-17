@@ -26,26 +26,53 @@ const (
 // SpawnResourcesDeadlineS is the life of a spawn_resources card: it closes before `pdx spawn`'s 9-minute wait gives up (S-5).
 const SpawnResourcesDeadlineS = 480
 
-// SpawnResourcesPayload is Approval.Payload for KindSpawnResources: what the person is asked to let through and the host as it
-// was when the spawn asked. The figures are the resources sample's; Leases and Queue are short labels of the heavy leases held
-// and waiting.
+// SpawnResourcesPayload is Approval.Payload for KindSpawnResources (App contract item 6, plan): what the person is asked to let
+// through, who asks, and the host as it was when the spawn asked.
 type SpawnResourcesPayload struct {
-	SpawnID   string   `json:"spawn_id"`
-	Zone      string   `json:"zone"` // warning | danger
-	Trend     string   `json:"trend,omitempty"`
-	ZoneSince int64    `json:"zone_since,omitempty"` // unix ms
-	MemPct    float64  `json:"mem_pct"`
-	Pressure  int      `json:"pressure"` // 1, 2 or 4; 0 unknown
-	Load1     float64  `json:"load1"`
-	NCPU      int      `json:"ncpu"`
-	Leases    []string `json:"leases,omitempty"`
-	Queue     []string `json:"queue,omitempty"`
-	Cwd       string   `json:"cwd"`
-	Title     string   `json:"title,omitempty"`
-	Model     string   `json:"model,omitempty"`
-	Effort    string   `json:"effort,omitempty"`
+	SpawnID     string `json:"spawn_id"`
+	TeamID      string `json:"team_id"`
+	LeadRef     string `json:"lead_ref"`
+	LeadTitle   string `json:"lead_title"`
+	Cwd         string `json:"cwd"`
+	Title       string `json:"title"`
+	Model       string `json:"model"`
+	Effort      string `json:"effort"`
+	TaskSubject string `json:"task_subject"`
 	// Person: the spawn was the person's own /team spawn (it is never refused by the unattended switch).
-	Person bool `json:"person,omitempty"`
+	Person bool                   `json:"person"`
+	Host   SpawnResourcesHost     `json:"host"`
+	Heavy  []SpawnResourcesHeavy  `json:"heavy"`
+	Queue  []SpawnResourcesQueued `json:"queue"`
+}
+
+// SpawnResourcesHost is the resources sample the card is judged on (zone warning | danger).
+type SpawnResourcesHost struct {
+	Zone      string  `json:"zone"`
+	Trend     string  `json:"trend"`
+	Mem       float64 `json:"mem"`      // percent in use
+	Pressure  int     `json:"pressure"` // 1, 2 or 4; 0 unknown
+	Load1     float64 `json:"load1"`
+	NCPU      int     `json:"ncpu"`
+	SampledAt int64   `json:"sampled_at"` // unix ms
+}
+
+// SpawnResourcesHeavy is a held heavy lease.
+type SpawnResourcesHeavy struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	SessionID string `json:"session_id"`
+	Ref       string `json:"ref"`
+	Title     string `json:"title"`
+	AgeS      int64  `json:"age_s"`
+	RSSBytes  int64  `json:"rss_bytes"`
+}
+
+// SpawnResourcesQueued is a request waiting for a lease.
+type SpawnResourcesQueued struct {
+	ID       string `json:"id"`
+	Kind     string `json:"kind"`
+	Position int    `json:"position"`
+	Reason   string `json:"reason"`
 }
 
 type State string

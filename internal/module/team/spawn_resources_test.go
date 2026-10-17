@@ -1,6 +1,7 @@
 package teammod
 
 import (
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -63,7 +64,7 @@ func TestSpawnResources_NormalAndUnknownRunAsToday(t *testing.T) {
 func TestSpawnResources_WarningWaitsWithACardAndSeat(t *testing.T) {
 	f, root := newSpawnFixture(t, 1)
 	op := warnedSpawn(t, f, root)
-	if op.Resources == nil || op.Resources.Zone != "warning" || op.Resources.MemPct != 86 || op.Resources.Pressure != 2 {
+	if op.Resources == nil || op.Resources.Host.Zone != "warning" || op.Resources.Host.Mem != 86 || op.Resources.Host.Pressure != 2 || op.Resources.TeamID != uid(1) {
 		t.Fatalf("resources = %+v", op.Resources)
 	}
 	a, ok, err := f.m.store.Get(spawnID(1))
@@ -243,5 +244,33 @@ func TestSpawnResources_TeamEndFailsAWaitingOp(t *testing.T) {
 	}
 	if op, _, _ := f.m.store.GetSpawnOp(spawnID(1)); op.State != team.SpawnFailed {
 		t.Fatalf("op = %+v; want failed with its team", op)
+	}
+}
+
+// The stored payload's JSON shape is the App contract (plan, App contract item 6): these keys, nested host, arrays never null.
+func TestSpawnResources_PayloadShapeIsTheAppContract(t *testing.T) {
+	f, root := newSpawnFixture(t, 1)
+	warnedSpawn(t, f, root)
+	a, _, _ := f.m.store.Get(spawnID(1))
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(a.Payload, &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"spawn_id", "team_id", "lead_ref", "lead_title", "cwd", "title", "model", "effort", "task_subject", "person", "host", "heavy", "queue"} {
+		if _, ok := got[k]; !ok {
+			t.Errorf("payload has no %q: %s", k, a.Payload)
+		}
+	}
+	if string(got["heavy"]) != "[]" || string(got["queue"]) != "[]" {
+		t.Errorf("heavy = %s queue = %s; want [] when there are none", got["heavy"], got["queue"])
+	}
+	var host map[string]json.RawMessage
+	if err := json.Unmarshal(got["host"], &host); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"zone", "trend", "mem", "pressure", "load1", "ncpu", "sampled_at"} {
+		if _, ok := host[k]; !ok {
+			t.Errorf("host has no %q: %s", k, got["host"])
+		}
 	}
 }

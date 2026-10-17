@@ -6,8 +6,8 @@ package teammod
 
 import (
 	"encoding/json"
-	"fmt"
 
+	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/resources"
 	"github.com/wake/purdex/internal/team"
 )
@@ -32,31 +32,32 @@ func (m *Module) hostDetail() (resources.HostDetail, bool) {
 }
 
 // spawnResourcesPayload is the card a spawn needs, or nil when the zone lets it through (normal, unknown, no reader, no sample).
-func (m *Module) spawnResourcesPayload(req team.SpawnRequest, cwd string, person bool) *team.SpawnResourcesPayload {
+func (m *Module) spawnResourcesPayload(req team.SpawnRequest, cwd string, person bool, teamID string, lead team.Origin) *team.SpawnResourcesPayload {
 	d, ok := m.hostDetail()
 	if !ok || (d.Host.Zone != "warning" && d.Host.Zone != "danger") {
 		return nil
 	}
 	p := &team.SpawnResourcesPayload{
-		SpawnID: req.ID, Zone: d.Host.Zone, Trend: d.Host.Trend, ZoneSince: d.Host.ZoneSince,
-		MemPct: d.Host.Mem, Pressure: d.Host.Pressure, Load1: d.Host.Load1, NCPU: d.Host.NCPU,
-		Cwd: cwd, Title: req.Title, Model: req.Model, Effort: req.Effort, Person: person,
+		SpawnID: req.ID, TeamID: teamID, LeadRef: lead.Ref, LeadTitle: lead.Title, Cwd: cwd,
+		Title: req.Title, Model: req.Model, Effort: req.Effort, TaskSubject: taskSubjectOf(req.Task), Person: person,
+		Host: team.SpawnResourcesHost{Zone: d.Host.Zone, Trend: d.Host.Trend, Mem: d.Host.Mem, Pressure: d.Host.Pressure,
+			Load1: d.Host.Load1, NCPU: d.Host.NCPU, SampledAt: d.SampledAt},
+		Heavy: []team.SpawnResourcesHeavy{}, Queue: []team.SpawnResourcesQueued{},
 	}
 	for _, l := range d.Leases {
-		p.Leases = append(p.Leases, leaseLabel(l.Kind, l.ID, l.AgeS))
+		h := team.SpawnResourcesHeavy{ID: l.ID, Kind: l.Kind, SessionID: l.SessionID, AgeS: l.AgeS}
+		if l.SessionID != "" {
+			h.Ref = ipeers.RefID(l.SessionID)
+			if o, found, err := m.origins.ResolveOriginBySession(l.SessionID); err == nil && found {
+				h.Title = o.Title
+			}
+		}
+		p.Heavy = append(p.Heavy, h)
 	}
 	for _, w := range d.Waiters {
-		p.Queue = append(p.Queue, leaseLabel(w.Kind, w.ID, w.WaitedS))
+		p.Queue = append(p.Queue, team.SpawnResourcesQueued{ID: w.ID, Kind: w.Kind, Position: w.Position, Reason: w.Reason})
 	}
 	return p
-}
-
-// leaseLabel is a lease or queued request for the card: "kind id (Ns)".
-func leaseLabel(kind, id string, secs int64) string {
-	if kind == "" {
-		kind = "lease"
-	}
-	return fmt.Sprintf("%s %s (%ds)", kind, id, secs)
 }
 
 // spawnCardRow is the approval row of a spawn's resource card: its id is the spawn's, so the spawn client, the card and the op

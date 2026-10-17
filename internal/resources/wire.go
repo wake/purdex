@@ -97,9 +97,11 @@ type HostDetailReader interface {
 
 // HostDetail is the host part of the latest snapshot and the lease lists that explain it.
 type HostDetail struct {
-	Host    HostUse      `json:"host"`
-	Leases  []LeaseView  `json:"leases,omitempty"`
-	Waiters []WaiterView `json:"waiters,omitempty"`
+	Host HostUse `json:"host"`
+	// SampledAt is when the reading was taken, unix ms.
+	SampledAt int64        `json:"sampled_at"`
+	Leases    []LeaseView  `json:"leases,omitempty"`
+	Waiters   []WaiterView `json:"waiters,omitempty"`
 }
 
 // HostUse is the host-wide part of a Snapshot.
