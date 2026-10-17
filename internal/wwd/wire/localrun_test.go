@@ -47,6 +47,20 @@ func TestLocalRunRequestAndResponse(t *testing.T) {
 	if _, err := Decode[LocalRunRequest]([]byte(strings.Replace(string(fixture(t, "local_run_request.json")), `"cacheable": false`, `"cacheable": true`, 1))); err == nil {
 		t.Error("a cacheable local run was accepted")
 	}
+	// it is a submission first: everything a submission must have, a local run must have
+	goodReq := string(fixture(t, "local_run_request.json"))
+	for name, raw := range map[string]string{
+		"bad class":    strings.Replace(goodReq, `"class": "dev"`, `"class": "urgent"`, 1),
+		"no task":      strings.Replace(goodReq, `"task": "spa-related"`, `"task": ""`, 1),
+		"relative dir": strings.Replace(goodReq, `"git_dir": "/Users/wake/Workspace/wake/purdex/.git"`, `"git_dir": "x/.git"`, 1),
+	} {
+		if raw == goodReq {
+			t.Fatalf("%s: replacement changed nothing", name)
+		}
+		if _, err := Decode[LocalRunRequest]([]byte(raw)); err == nil {
+			t.Errorf("a local run with %s was accepted", name)
+		}
+	}
 	resp := roundTrip[LocalRunResponse](t, "local_run_response.json")
 	if !ValidClaimID(resp.ClaimID) || resp.LeaseS <= 0 || resp.RenewS <= 0 || resp.ID == "" {
 		t.Fatalf("response lost fields: %+v", resp)
