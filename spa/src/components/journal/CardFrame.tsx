@@ -15,17 +15,19 @@ interface Props {
   title?: React.ReactNode
   actions?: React.ReactNode
   onClose?: () => void
+  /** Take the whole height of the stack (the journal and its detail), instead of the content's. */
+  fill?: boolean
   children?: React.ReactNode
 }
 
-export function CardFrame({ testId, width, onCommitWidth, title, actions, onClose, children }: Props) {
+export function CardFrame({ testId, width, onCommitWidth, title, actions, onClose, fill, children }: Props) {
   const t = useI18nStore((s) => s.t)
   const [draft, setDraft] = useState<number | null>(null)
   const draftRef = useRef<number | null>(null)
   return (
     <div
       data-testid={testId}
-      className="relative pointer-events-auto flex flex-col min-h-0 max-h-full overflow-hidden rounded-b-lg border border-t-0 border-border-default bg-surface-elevated shadow-xl font-sans text-xs text-text-primary shrink-0 transition-[width] duration-150"
+      className={`relative pointer-events-auto flex flex-col min-h-0 max-h-full overflow-hidden rounded-b-lg border border-t-0 border-border-default bg-surface-elevated shadow-xl font-sans text-xs text-text-primary shrink-0 transition-[width] duration-150${fill ? ' h-full' : ''}`}
       style={{ width: draft ?? width }}
     >
       {onCommitWidth && (
