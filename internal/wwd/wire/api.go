@@ -255,7 +255,7 @@ func (r JobsListResponse) Validate() error {
 // JobSubmissionResponse is POST /v1/jobs (local socket only): {id}, or
 // {id, result} at once on a cache hit; Result is omitted otherwise (spec §4.4).
 type JobSubmissionResponse struct {
-	ID     string  `json:"id"`
+	ID string `json:"id"`
 	// omitempty is the §4.4 exception to the "absent is null, never omitted" rule.
 	Result *Result `json:"result,omitempty"`
 }
