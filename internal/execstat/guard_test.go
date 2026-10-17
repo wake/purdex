@@ -111,7 +111,6 @@ var cliOnly = map[string]string{
 	"cmd/pdx/hook.go":                  "`pdx hook`: the Claude Code hook command",
 	"cmd/pdx/hook_pid_resolver.go":     "`pdx hook`: finds the pid of the agent",
 	"cmd/pdx/ask.go":                   "`pdx ask`",
-	"cmd/pdx/lease_run.go":             "`pdx lease run`: runs the command it leases for",
 	"cmd/pdx/reap_children.go":         "`pdx lease run`: reaps what its command left",
 	"cmd/pdx/statusline_proxy.go":      "`pdx statusline-proxy`",
 	"cmd/pdx/msg_selftest.go":          "`pdx msg selftest`",
