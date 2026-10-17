@@ -72,6 +72,9 @@ type QueueEntry struct {
 // the time they were moved, then normal, then back, each by ticket name; held ones last, never counted ahead).
 type Snapshot struct {
 	Queue []QueueEntry
+	// Out are the live tickets whose command runs on an assist host (out.go): they are not in Queue, so they are never ahead of
+	// anyone and never served.
+	Out []OutEntry
 }
 
 func (p *Pool) rankPath(ticket string) string {
@@ -193,7 +196,7 @@ func (p *Pool) scanQueue(clean bool) (Snapshot, error) {
 		}
 		return Snapshot{}, dirError(err) // a queue that cannot be read is not an empty one: the oldest waiter would be passed
 	}
-	var names, ranks []string
+	var names, ranks, outs []string
 	for _, e := range ents {
 		n := e.Name()
 		switch {
@@ -204,6 +207,8 @@ func (p *Pool) scanQueue(clean bool) (Snapshot, error) {
 		case e.IsDir():
 		case strings.HasSuffix(n, ".rank"):
 			ranks = append(ranks, strings.TrimSuffix(n, ".rank"))
+		case strings.HasSuffix(n, ".out"):
+			outs = append(outs, n)
 		case strings.Contains(n, "."):
 		default:
 			names = append(names, n)
@@ -212,6 +217,8 @@ func (p *Pool) scanQueue(clean bool) (Snapshot, error) {
 	sort.Strings(names)
 	live := map[string]bool{}
 	var entries []QueueEntry
+	var outEntries []OutEntry
+	isOut := outNames(outs)
 	now := p.Now()
 	for _, n := range names {
 		path := filepath.Join(p.queueDir(), n)
@@ -231,6 +238,11 @@ func (p *Pool) scanQueue(clean bool) (Snapshot, error) {
 		}
 		_ = f.Close() // held, or a lock that cannot be probed: counted as waiting, the safe side of fairness
 		live[n] = true
+		if isOut[n] {
+			o, _ := p.readOut(n)
+			outEntries = append(outEntries, OutEntry{Name: n, Out: o})
+			continue
+		}
 		var info WaiterInfo
 		if b, err := os.ReadFile(path); err == nil {
 			_ = json.Unmarshal(b, &info)
@@ -240,6 +252,11 @@ func (p *Pool) scanQueue(clean bool) (Snapshot, error) {
 	for _, n := range ranks {
 		if clean && !live[n] {
 			_ = os.Remove(p.rankPath(n)) // its ticket is gone: a rank never outlives it
+		}
+	}
+	for n := range isOut {
+		if clean && !live[n] {
+			_ = os.Remove(p.outPath(n)) // nor does the mark of a run that was out
 		}
 	}
 	sort.SliceStable(entries, func(i, j int) bool {
@@ -252,7 +269,7 @@ func (p *Pool) scanQueue(clean bool) (Snapshot, error) {
 		}
 		return a.Name < b.Name
 	})
-	return Snapshot{Queue: entries}, nil
+	return Snapshot{Queue: entries, Out: outEntries}, nil
 }
 
 // servingGroup orders the ranks: front, normal, back, then hold.
