@@ -350,3 +350,20 @@ func TestNewerVersionRefusesEdits(t *testing.T) {
 		t.Fatalf("%d %v", code, b)
 	}
 }
+
+func TestDenyByAnAmbiguousNameIsRefused(t *testing.T) {
+	r := newRig(t)
+	r.liveTeam("t1", "same", "", "l1")
+	r.liveTeam("t2", "same", "", "l2")
+	r.edit(func(f *gate.AssistFile) { f.Allowed = []gate.AssistAllow{{Kind: "team", ID: "t1"}} })
+	if code, b := r.do("POST", "/api/assist/deny", map[string]any{"kind": "team", "id": "same"}); code != 409 || b["error"] != "ambiguous" {
+		t.Fatalf("%d %v", code, b)
+	}
+	if len(r.file().Allowed) != 1 {
+		t.Fatal("an ambiguous deny removed an entry")
+	}
+	r.m.teams = nil
+	if code, b := r.do("POST", "/api/assist/deny", map[string]any{"kind": "team", "id": "t1"}); code != 503 {
+		t.Fatalf("team module down: %d %v", code, b)
+	}
+}

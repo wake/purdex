@@ -115,8 +115,9 @@ func (m *Module) resolveEntry(b allowBody, forDeny bool) (string, string, error)
 	switch b.Kind {
 	case "team":
 		id, name, err := m.resolveTeam(b.ID)
-		if err != nil && forDeny {
-			return b.ID, b.ID, nil // an ended team is removed by the id it was stored with
+		var re *resolveErr
+		if forDeny && errors.As(err, &re) && re.code == "no_such_team" {
+			return b.ID, b.ID, nil // an ended team is removed by the id it was stored with; any other refusal stands
 		}
 		return id, name, err
 	case "session":
