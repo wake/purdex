@@ -160,7 +160,7 @@ function keepChecks(hostId: string, unitKey: string, u: UnitState): UnitState {
   return out
 }
 /** An entry of the unit by id: in the current page, the band, or another session's page. */
-const findEntry = (u: UnitState, id: string): JournalEntry | undefined =>
+export const findEntry = (u: UnitState, id: string): JournalEntry | undefined =>
   u.entries.find((e) => e.id === id) ?? u.confirms.find((e) => e.id === id) ?? Object.values(u.pages).flatMap((p) => p.entries).find((e) => e.id === id)
 
 /**
