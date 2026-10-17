@@ -54,6 +54,11 @@ func normalizeWatch(raw json.RawMessage) (watchsettings.Settings, error) {
 		Targets          *[]string `json:"targets"`
 		Mode             *string   `json:"mode"`
 		PatrolIdleMin    *int      `json:"patrol_idle_min"`
+		PatrolPresentMin *int      `json:"patrol_present_min"`
+		PatrolBusyMin    *int      `json:"patrol_busy_min"`
+		PatrolCalmMin    *int      `json:"patrol_calm_min"`
+		PatrolRestMin    *int      `json:"patrol_rest_min"`
+		DiskLowGB        *int      `json:"disk_low_gb"`
 		AutoWake         *bool     `json:"auto_wake"`
 		Model            *string   `json:"model"` // the old spelling of agent_command (741–744)
 		AgentCommand     *string   `json:"agent_command"`
@@ -91,6 +96,16 @@ func normalizeWatch(raw json.RawMessage) (watchsettings.Settings, error) {
 	}
 	if in.PatrolIdleMin != nil {
 		s.PatrolIdleMin = *in.PatrolIdleMin
+	}
+	// the patrol numbers an older client does not send keep their defaults (it read-modify-writes the row it knew)
+	s.PatrolPresentMin, s.PatrolBusyMin, s.PatrolCalmMin, s.PatrolRestMin, s.DiskLowGB = def.PatrolPresentMin, def.PatrolBusyMin, def.PatrolCalmMin, def.PatrolRestMin, def.DiskLowGB
+	for _, f := range []struct {
+		in  *int
+		out *int
+	}{{in.PatrolPresentMin, &s.PatrolPresentMin}, {in.PatrolBusyMin, &s.PatrolBusyMin}, {in.PatrolCalmMin, &s.PatrolCalmMin}, {in.PatrolRestMin, &s.PatrolRestMin}, {in.DiskLowGB, &s.DiskLowGB}} {
+		if f.in != nil {
+			*f.out = *f.in
+		}
 	}
 	if in.AutoWake != nil {
 		s.AutoWake = *in.AutoWake
@@ -130,6 +145,11 @@ func normalizeWatch(raw json.RawMessage) (watchsettings.Settings, error) {
 		{"page_rate", s.PageRate, 1, 1e6},
 		{"page_t_s", float64(s.PageTSeconds), 10, 3600},
 		{"patrol_idle_min", float64(s.PatrolIdleMin), 1, 24 * 60},
+		{"patrol_present_min", float64(s.PatrolPresentMin), 1, 24 * 60},
+		{"patrol_busy_min", float64(s.PatrolBusyMin), 1, 24 * 60},
+		{"patrol_calm_min", float64(s.PatrolCalmMin), 1, 24 * 60},
+		{"patrol_rest_min", float64(s.PatrolRestMin), 1, 24 * 60},
+		{"disk_low_gb", float64(s.DiskLowGB), 1, 100000},
 	} {
 		if !(r.v >= r.lo && r.v <= r.hi) { // written so that NaN fails
 			return watchsettings.Settings{}, fmt.Errorf("%s must be between %g and %g", r.name, r.lo, r.hi)
