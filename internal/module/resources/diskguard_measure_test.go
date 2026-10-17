@@ -38,7 +38,7 @@ func TestMeasureTrimWalk(t *testing.T) {
 		}
 	}
 	t.Logf("created %d files in %v", n, time.Since(made).Round(time.Millisecond))
-	m := newTestModule(idleSampler(), nil)
+	m := newTestModule(&fakeSampler{}, nil)
 	start := time.Now()
 	if _, err := m.trimGoCache(context.Background(), dir, time.Now().Add(-2*time.Hour)); err != nil {
 		t.Fatal(err)

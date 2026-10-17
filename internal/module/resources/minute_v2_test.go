@@ -82,7 +82,7 @@ func TestMinutes_MigratesAPreV2Table(t *testing.T) {
 		INSERT INTO host_minutes VALUES (60000, 1, 4, 50, 40, 0, 0, 0, 0, 0, 0, 0, 2, 0);`)
 	require.NoError(t, err)
 	require.NoError(t, old.Close())
-	s, err := openLeaseStore(path)
+	s, err := openResourcesStore(path)
 	require.NoError(t, err)
 	defer s.Close()
 	var sampled, waiting int

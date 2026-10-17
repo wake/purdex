@@ -7,7 +7,6 @@ package teammod
 import (
 	"encoding/json"
 
-	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/resources"
 	"github.com/wake/purdex/internal/team"
 )
@@ -54,19 +53,8 @@ func (m *Module) spawnResourcesPayload(req team.SpawnRequest, cwd string, person
 			Load1: d.Host.Load1, NCPU: d.Host.NCPU, SampledAt: d.SampledAt},
 		Heavy: []team.SpawnResourcesHeavy{}, Queue: []team.SpawnResourcesQueued{},
 	}
-	for _, l := range d.Leases {
-		h := team.SpawnResourcesHeavy{ID: l.ID, Kind: l.Kind, SessionID: l.SessionID, AgeS: l.AgeS}
-		if l.SessionID != "" {
-			h.Ref = ipeers.RefID(l.SessionID)
-			if o, found, err := m.origins.ResolveOriginBySession(l.SessionID); err == nil && found {
-				h.Title = o.Title
-			}
-		}
-		p.Heavy = append(p.Heavy, h)
-	}
-	for _, w := range d.Waiters {
-		p.Queue = append(p.Queue, team.SpawnResourcesQueued{ID: w.ID, Kind: w.Kind, Position: w.Position, Reason: w.Reason})
-	}
+	// heavy and queue stay empty: the held leases and the queue they were read from are gone (WWD-0a); the gate's holders
+	// take their place when the wwd has them.
 	return p
 }
 

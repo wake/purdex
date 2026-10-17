@@ -41,7 +41,7 @@ func TestMinutes_MigratesTheDeployedTableAndAnOlderBinaryStillWritesIt(t *testin
 	require.NoError(t, old.Close())
 
 	for pass := 0; pass < 2; pass++ {
-		s, err := openLeaseStore(path)
+		s, err := openResourcesStore(path)
 		require.NoError(t, err, "pass %d", pass)
 		have, err := columnSet(s.db, "host_minutes")
 		require.NoError(t, err)

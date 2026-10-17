@@ -77,7 +77,7 @@ func fixtureMinutes() []minuteRow {
 	return out
 }
 
-func seedReportDay(t *testing.T, s *leaseStore) {
+func seedReportDay(t *testing.T, s *resourcesStore) {
 	t.Helper()
 	for _, m := range fixtureMinutes() {
 		if err := s.InsertMinute(m); err != nil {
@@ -146,10 +146,9 @@ func TestReport_CoverageAndMissingMinutes(t *testing.T) {
 	}
 }
 
-// The route: since is validated, the answer is the report of the minute rows in the period, and rows outside it are not in it. The
-// lease tables are not read: a lease row in the period changes nothing.
+// The route: since is validated, the answer is the report of the minute rows in the period, and rows outside it are not in it.
 func TestReport_Route(t *testing.T) {
-	f := newPassFix(t, resources.ModeLease)
+	f := newStoreFix(t)
 	mux := http.NewServeMux()
 	f.m.RegisterRoutes(mux)
 	get := func(q string) *httptest.ResponseRecorder {
@@ -166,9 +165,6 @@ func TestReport_Route(t *testing.T) {
 	if err := f.m.store.InsertMinute(minuteRow{At: f.nowMS() - 2*3600*1000, NCPU: 10, HeavyRunning: 1}); err != nil {
 		t.Fatal(err)
 	}
-	r := baseRow("old", "c-old")
-	r.CreatedAt = f.nowMS() - 30*60*1000
-	mustCreate(t, f.m.store, r)
 	minutes := func(q string) int {
 		rec := get(q)
 		var rep resources.Report
