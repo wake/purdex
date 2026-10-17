@@ -13,9 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeHost is the processes of a test: which are alive, which hold the lock, what dies from which signal, and the lock itself (a real
+// freeFakeHost is the processes of a test: which are alive, which hold the lock, what dies from which signal, and the lock itself (a real
 // flock on a real file, dropped when the last holder is gone).
-type fakeHost struct {
+type freeFakeHost struct {
 	mu      sync.Mutex
 	alive   map[int]bool
 	holds   map[int]bool
@@ -32,7 +32,7 @@ type sigAt struct {
 	at  time.Duration
 }
 
-func (h *fakeHost) env() FreeEnv {
+func (h *freeFakeHost) env() FreeEnv {
 	return FreeEnv{
 		Holders: func(string) []Straggler {
 			h.mu.Lock()
@@ -61,7 +61,7 @@ func (h *fakeHost) env() FreeEnv {
 	}
 }
 
-func (h *fakeHost) dropLockIfAllGone() {
+func (h *freeFakeHost) dropLockIfAllGone() {
 	for pid := range h.holds {
 		if h.alive[pid] {
 			return
@@ -74,7 +74,7 @@ func (h *fakeHost) dropLockIfAllGone() {
 }
 
 // heldSlot makes the slot class-k held (a real flock) with a record whose gate pid is gatePID.
-func heldSlot(t *testing.T, class Class, k, gatePID int, pids ...int) (Config, *fakeHost) {
+func heldSlot(t *testing.T, class Class, k, gatePID int, pids ...int) (Config, *freeFakeHost) {
 	t.Helper()
 	cfg := Defaults()
 	cfg.Dir = t.TempDir()
@@ -84,7 +84,7 @@ func heldSlot(t *testing.T, class Class, k, gatePID int, pids ...int) (Config, *
 	require.NoError(t, flockNBForTest(f))
 	rec, _ := json.Marshal(Holder{Class: class, Slot: k, PID: gatePID, Argv: []string{"go", "test", "./..."}, Cwd: "/work/x", Started: time.Now().Add(-time.Hour), Session: "s1"})
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.Dir, string(class)+"-"+itoa(k)+".json"), rec, 0o644))
-	h := &fakeHost{alive: map[int]bool{}, holds: map[int]bool{}, ignores: map[int]bool{}, lock: f}
+	h := &freeFakeHost{alive: map[int]bool{}, holds: map[int]bool{}, ignores: map[int]bool{}, lock: f}
 	for _, pid := range pids {
 		h.alive[pid], h.holds[pid] = true, true
 	}
