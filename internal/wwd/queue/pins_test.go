@@ -238,39 +238,71 @@ func TestSweepFindsARefLeftByASubmissionThatFailedAfterPinning(t *testing.T) {
 	assert.Empty(t, ids)
 }
 
-// The list of git directories does not grow for ever: one that is gone is forgotten, and one with no job and no ref left is forgotten
-// after a day; one that still holds a ref stays. Mutation gates: the missing-directory prune dropped; the day condition dropped.
+// The list of git directories does not grow for ever, and forgets nothing that matters. Each case is its own directory:
+//   - gone from the disk → forgotten at once;
+//   - no job, no ref, used moments ago → kept (it may be used again), and forgotten once a day has passed;
+//   - no job but a ref it could not remove (git refused), or a young ref → kept however old the entry is;
+//   - a live job → kept.
+//
+// Mutation gates: the missing-directory prune; the day condition; the "refs left" condition; the "job" condition.
 func TestSweepForgetsGitDirsThatAreGoneOrEmpty(t *testing.T) {
 	f := newFixture(t)
-	count := func() int {
+	has := func(dir string) bool {
 		var n int
-		require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM git_dirs`).Scan(&n))
-		return n
+		require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM git_dirs WHERE dir = ?`, dir).Scan(&n))
+		return n == 1
 	}
-	gone := t.TempDir()
-	empty := t.TempDir()
-	held := t.TempDir()
-	f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey, s.GitDir = "a", gone })
-	f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey, s.GitDir = "b", empty })
-	keep := f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey, s.GitDir = "c", held })
-	require.Equal(t, 3, count())
-	require.NoError(t, os.RemoveAll(gone))
-	// the jobs of these directories end and are released; "held" keeps a live job
-	_, err := f.db.Exec(`UPDATE jobs SET state = 'cancelled', pinned = 0, finished_at = ? WHERE git_dir IN (?, ?)`, ms(f.clk.Now()), gone, empty)
+	seen := func(dir string, at time.Time) {
+		_, err := f.db.Exec(`UPDATE git_dirs SET seen_at = ? WHERE dir = ?`, ms(at), dir)
+		require.NoError(t, err)
+	}
+	mk := func(key string) string {
+		dir := t.TempDir()
+		f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey, s.GitDir = key, dir })
+		return dir
+	}
+	gone, empty, stuckRef, youngRef, live := mk("g"), mk("e"), mk("s"), mk("y"), mk("l")
+	// every dir but "live" has only ended jobs, all released and deleted: nothing but the list names them
+	_, err := f.db.Exec(`DELETE FROM jobs WHERE git_dir != ?`, live)
 	require.NoError(t, err)
 	f.pins.refs = map[string]map[string]string{}
-	f.pins.put(held, keep)
+	require.NoError(t, os.RemoveAll(gone))
+
+	old := f.clk.Now().Add(-25 * time.Hour)
+	for _, d := range []string{stuckRef, youngRef, live} {
+		seen(d, old)
+	}
+	f.pins.put(stuckRef, newJobID(f.clk.Now().Add(-30*time.Minute))) // an orphan git refuses to remove
+	f.pins.unErr = errors.New("git is busy")
+	f.pins.put(youngRef, newJobID(f.clk.Now().Add(-1*time.Minute))) // a pin made a minute ago
 
 	_, err = f.q.Sweep(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, 2, count(), "the gone directory is forgotten at once; the empty one is not yet (it was used moments ago)")
+	assert.False(t, has(gone), "gone from the disk")
+	assert.True(t, has(empty), "no job, no ref, but used moments ago")
+	assert.True(t, has(stuckRef), "a ref it could not remove: it must be looked at again")
+	assert.True(t, has(youngRef), "a young ref")
+	assert.True(t, has(live), "a live job")
 
+	f.pins.unErr = nil
 	f.clk.Advance(25 * time.Hour)
-	_, err = f.db.Exec(`DELETE FROM jobs WHERE git_dir = ?`, empty)
-	require.NoError(t, err)
+	seen(stuckRef, f.clk.Now().Add(-25*time.Hour))
 	_, err = f.q.Sweep(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, 1, count(), "after a day with no job and no ref it goes; the one with a live job stays")
+	assert.False(t, has(empty), "a day without a job or a ref")
+	assert.False(t, has(stuckRef), "its ref is removed now, and the day has passed")
+	assert.True(t, has(live), "a live job keeps its directory")
+}
+
+// A directory used again is not forgotten for being old: its use is written down each time.
+func TestUsingAGitDirAgainRefreshesItsEntry(t *testing.T) {
+	f := newFixture(t)
+	f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "" })
+	f.clk.Advance(30 * time.Hour)
+	f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "" })
+	var seenAt int64
+	require.NoError(t, f.db.QueryRow(`SELECT seen_at FROM git_dirs WHERE dir = ?`, f.gitDir).Scan(&seenAt))
+	assert.Equal(t, ms(f.clk.Now()), seenAt)
 }
 
 // One git directory that cannot be listed does not stop the sweep of the others, and is reported.
