@@ -170,4 +170,48 @@ describe('setConfirm of an entry only the band holds (an older session / month)'
     expect(band()).toEqual([])
     expect(unit().openConfirms).toBe(0)
   })
+
+  describe('unchecking from the detail kept after the last item was answered', () => {
+    // What CardStack keeps: the last copy seen, every item answered. It is the caller's last resort when the store no longer holds the entry.
+    const kept = () => {
+      const c = wireConfirm('c9', { at: T0, items: [{ text: 'a', done: true }] })
+      return parseJournalPage(wirePage({ entries: [], confirms: [c], open_confirms: 1 })).confirms![0]
+    }
+    const uncheck = () => st().setConfirm('h1', 's1', 'c9', 0, false, kept())
+    it('while the check is still being written: the uncheck is sent last and the screen and count follow it', async () => {
+      await bandOnly([['a', false]])
+      let ack!: (v: unknown) => void
+      setConfirmItem.mockReturnValueOnce(new Promise((r) => { ack = r })).mockResolvedValueOnce({ kind: 'ok', value: true })
+      const p1 = st().setConfirm('h1', 's1', 'c9', 0, true, kept())
+      expect(band()).toEqual([])
+      const p2 = uncheck()
+      expect(band()).toEqual(['c9'])
+      expect(unit().confirms[0].items[0].done).toBe(false)
+      expect(unit().openConfirms).toBe(1)
+      ack({ kind: 'ok', value: true })
+      await Promise.all([p1, p2])
+      expect(setConfirmItem).toHaveBeenLastCalledWith('h1', 's1', 'c9', 0, false)
+      expect(band()).toEqual(['c9'])
+      expect(unit().openConfirms).toBe(1)
+    })
+    it('after the check was written: the entry returns to the band, the count goes up, the uncheck is sent', async () => {
+      await bandOnly([['a', false]])
+      setConfirmItem.mockResolvedValue({ kind: 'ok', value: true })
+      await st().setConfirm('h1', 's1', 'c9', 0, true, kept())
+      expect(band()).toEqual([])
+      await uncheck()
+      expect(setConfirmItem).toHaveBeenLastCalledWith('h1', 's1', 'c9', 0, false)
+      expect(band()).toEqual(['c9'])
+      expect(unit().confirms[0].items[0].done).toBe(false)
+      expect(unit().openConfirms).toBe(1)
+    })
+    it('a failed uncheck leaves it answered again, out of the band', async () => {
+      await bandOnly([['a', false]])
+      setConfirmItem.mockResolvedValueOnce({ kind: 'ok', value: true }).mockResolvedValueOnce({ kind: 'none' })
+      await st().setConfirm('h1', 's1', 'c9', 0, true, kept())
+      await uncheck()
+      expect(band()).toEqual([])
+      expect(unit().openConfirms).toBe(0)
+    })
+  })
 })
