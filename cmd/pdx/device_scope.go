@@ -67,11 +67,11 @@ var deviceAllowed = map[string]bool{
 	"GET /api/workbook/conversations/{provider}/{session_id}":       true,
 	"GET /api/workbook/entries":                                     true,
 	"GET /api/workbook/conversations/{provider}/{session_id}/todos": true,
-	// the workbook journal: a unit's entries, tasks and roadmap, and the pin (iOS later; the same trust as the workbook reads)
+	// the workbook journal: a unit's entries, tasks and roadmap, and the hand check of a 待確認 item (iOS later; the same trust as the workbook reads)
 	"GET /api/journal":         true,
 	"GET /api/journal/tasks":   true,
 	"GET /api/journal/roadmap": true,
-	"PUT /api/journal/pin":     true,
+	"PUT /api/journal/confirm": true,
 }
 
 // nexEnginePattern is the one pattern that mounts the whole embedded engine; for a device the scope looks past the pattern.

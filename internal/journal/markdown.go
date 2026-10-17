@@ -15,6 +15,12 @@ import (
 // ErrNotFound is returned when an entry id is not in the file.
 var ErrNotFound = errors.New("journal: entry not found")
 
+// ErrNotConfirm is returned when an item of an entry that is not a confirm is set.
+var ErrNotConfirm = errors.New("journal: entry is not a confirm")
+
+// ErrItemRange is returned when an item index is outside the entry's items.
+var ErrItemRange = errors.New("journal: item out of range")
+
 // ErrCorrupt is returned when the file holds a metadata comment naming the entry that cannot be read; writing would
 // duplicate or hide it, so the file is left alone.
 var ErrCorrupt = errors.New("journal: unreadable metadata for entry")
@@ -151,9 +157,6 @@ func render(e Entry) ([]string, error) {
 	head := "### " + e.At.Format("15:04") + " · " + oneLine(e.Label())
 	if a := oneLine(e.Actor); a != "" {
 		head += " · " + a
-	}
-	if e.Pinned {
-		head += " 📌"
 	}
 	lines := []string{head}
 	if e.Text != "" {
@@ -369,27 +372,45 @@ func update(file, id string, fn func(*Entry) (bool, error)) (bool, error) {
 	return true, writeLines(file, out)
 }
 
-// Tick sets item idx of a confirm entry done. It reports whether anything changed.
+// Tick is Haiku's tick: it sets item idx of a confirm entry done, unless the item was set by hand. It reports whether
+// anything changed.
 func Tick(file, id string, idx int) (bool, error) {
 	return update(file, id, func(e *Entry) (bool, error) {
-		if idx < 0 || idx >= len(e.Items) {
-			return false, fmt.Errorf("journal: entry %s has no item %d", id, idx)
+		if err := checkItem(e, idx); err != nil {
+			return false, err
 		}
-		if e.Items[idx].Done {
+		it := &e.Items[idx]
+		if it.Manual || it.Done {
 			return false, nil
 		}
-		e.Items[idx].Done = true
+		it.Done = true
 		return true, nil
 	})
 }
 
-// SetPinned pins or unpins an entry. It reports whether anything changed.
-func SetPinned(file, id string, pinned bool) (bool, error) {
+// checkItem reports why item idx of e cannot be set: e is not a confirm, or idx is out of range.
+func checkItem(e *Entry, idx int) error {
+	if e.Kind != KindConfirm {
+		return fmt.Errorf("%w: %s", ErrNotConfirm, e.ID)
+	}
+	if idx < 0 || idx >= len(e.Items) {
+		return fmt.Errorf("%w: entry %s has no item %d", ErrItemRange, e.ID, idx)
+	}
+	return nil
+}
+
+// SetItem is a person's check (done) or uncheck (!done) of item idx of a confirm entry. The item is marked manual, so Haiku
+// never changes it afterwards. It reports whether anything changed.
+func SetItem(file, id string, idx int, done bool) (bool, error) {
 	return update(file, id, func(e *Entry) (bool, error) {
-		if e.Pinned == pinned {
+		if err := checkItem(e, idx); err != nil {
+			return false, err
+		}
+		it := &e.Items[idx]
+		if it.Done == done && it.Manual {
 			return false, nil
 		}
-		e.Pinned = pinned
+		it.Done, it.Manual = done, true
 		return true, nil
 	})
 }

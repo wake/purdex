@@ -154,11 +154,11 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/workbook/entries", m.handleEntries)
 	mux.HandleFunc("GET /api/workbook/conversations/{provider}/{session_id}/todos", m.handleTodos)
 	mux.HandleFunc("POST /api/workbook/conversations/{provider}/{session_id}/refresh", m.handleRefresh) // the Mac App's; not a device route
-	// the journal (capability journal.v1, announced once the journal is wired): a unit's entries, tasks, roadmap, and the pin
+	// the journal (capability journal.v1, announced once the journal is wired): a unit's entries, tasks, roadmap, and a hand check (journal.confirm.v1)
 	mux.HandleFunc("GET /api/journal", m.handleJournal)
 	mux.HandleFunc("GET /api/journal/tasks", m.handleJournalTasks)
 	mux.HandleFunc("GET /api/journal/roadmap", m.handleJournalRoadmap)
-	mux.HandleFunc("PUT /api/journal/pin", m.handleJournalPin)
+	mux.HandleFunc("PUT /api/journal/confirm", m.handleJournalConfirm)
 }
 
 // handleRefresh: POST …/refresh → 202 {entry_id}; 409 not_live (no live session of the conversation whose mod announced

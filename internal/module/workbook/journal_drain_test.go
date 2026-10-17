@@ -338,10 +338,10 @@ func states(ts []journal.Task) string {
 	return strings.Join(out, " ")
 }
 
-// A confirm is written pinned; a journal result that ticks its items marks them, and the last tick unpins it. A tick
+// A journal result that ticks a confirm's items marks them (no pin is written or cleared). A tick
 // for an entry or item that is not there is skipped without blocking the row. Roadmap statuses are applied; a missing
 // roadmap file is not an error.
-// Mutation gate: pin never cleared -> red; unpin on the first tick -> red; fail on a missing entry -> the row stays
+// Mutation gate: fail on a missing entry -> the row stays
 // undone (red); fail on a missing roadmap file -> red.
 func TestDrain_ConfirmTicksAndRoadmap(t *testing.T) {
 	k := newDrainKit(t)
@@ -353,7 +353,7 @@ func TestDrain_ConfirmTicksAndRoadmap(t *testing.T) {
 	}
 	k.drain()
 	cid := "ev:" + itoa(a) + ":0"
-	if e, ok := k.byID("solo:c", cid); !ok || !e.Pinned || len(e.Items) != 2 || e.Items[0].Done || e.Detail != "細節" {
+	if e, ok := k.byID("solo:c", cid); !ok || len(e.Items) != 2 || e.Items[0].Done || e.Detail != "細節" {
 		t.Fatalf("confirm = %+v %v", e, ok)
 	}
 	b := mustInsert(t, k.st, func() Entry {
@@ -375,7 +375,7 @@ func TestDrain_ConfirmTicksAndRoadmap(t *testing.T) {
 	if n := k.drain(); n != 2 { // the skipped turn's turn row and its journal row
 		t.Fatalf("drained %d", n)
 	}
-	if e, _ := k.byID("solo:c", cid); !e.Items[0].Done || e.Items[1].Done || !e.Pinned {
+	if e, _ := k.byID("solo:c", cid); !e.Items[0].Done || e.Items[1].Done {
 		t.Fatalf("after one tick: %+v", e)
 	}
 	// second tick on a third entry
@@ -394,7 +394,7 @@ func TestDrain_ConfirmTicksAndRoadmap(t *testing.T) {
 		t.Fatal(err)
 	}
 	k.drain()
-	if e, _ := k.byID("solo:c", cid); !e.Items[1].Done || e.Pinned {
+	if e, _ := k.byID("solo:c", cid); !e.Items[1].Done {
 		t.Fatalf("after the last tick: %+v", e)
 	}
 	// a roadmap file that exists is changed in the one cell
@@ -538,9 +538,9 @@ func TestDrain_RefreshTodosAreMirrored(t *testing.T) {
 	}
 }
 
-// A replayed journal row does not undo what was done to its entries since: a confirm unpinned by hand and an item
-// ticked stay so when the row is written again (it was not marked done).
-// Mutation gate: write events with Upsert instead of putNew -> the confirm is pinned again (red).
+// A replayed journal row does not undo what was done to its entries since: an item
+// ticked stays so when the row is written again (it was not marked done).
+// Mutation gate: write events with Upsert instead of putNew -> the ticked item is open again (red).
 func TestDrain_ReplayKeepsWhatHappenedToAnEvent(t *testing.T) {
 	k := newDrainKit(t)
 	a := k.turn("c", "t1", team.SeatNone, TodoChanges{})
@@ -552,9 +552,6 @@ func TestDrain_ReplayKeepsWhatHappenedToAnEvent(t *testing.T) {
 	k.drain()
 	cid := "ev:" + itoa(a) + ":0"
 	file := journal.MonthFile(k.dir("solo:c"), at(1_700_000_000_000))
-	if _, err := journal.SetPinned(file, cid, false); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := journal.Tick(file, cid, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -562,27 +559,45 @@ func TestDrain_ReplayKeepsWhatHappenedToAnEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	k.drain()
-	if e, _ := k.byID("solo:c", cid); e.Pinned || !e.Items[0].Done {
+	if e, _ := k.byID("solo:c", cid); !e.Items[0].Done {
 		t.Fatalf("after the replay: %+v", e)
 	}
 }
 
-// A replayed turn row keeps a pin the user set on its exec entry.
-// Mutation gate: write turn entries with Upsert instead of putNew -> the pin is cleared (red).
-func TestDrain_TurnReplayKeepsAPinOnItsExecEntry(t *testing.T) {
+// A journal tick never changes an item a person set by hand: a hand uncheck stays open, a hand check stays as it is.
+// Mutation gate: drop the manual skip in journal.Tick -> the unchecked item is ticked (red).
+func TestDrain_TickLeavesAHandSetItemAlone(t *testing.T) {
 	k := newDrainKit(t)
 	a := k.turn("c", "t1", team.SeatNone, TodoChanges{})
-	k.okEntry(a, "做完了。", false)
+	k.okEntry(a, "。", false)
+	conf := JournalOutcome{EntryID: a, PromptVer: 1, Result: JournalResult{Events: []JournalEvent{{Kind: journal.KindConfirm, Text: "請確認", Items: []string{"甲?", "乙?"}}}}}
+	if err := k.st.RecordJournalResult(conf); err != nil {
+		t.Fatal(err)
+	}
 	k.drain()
+	cid := "ev:" + itoa(a) + ":0"
 	file := journal.MonthFile(k.dir("solo:c"), at(1_700_000_000_000))
-	if _, err := journal.SetPinned(file, "turn:"+itoa(a), true); err != nil {
+	if _, err := journal.SetItem(file, cid, 0, true); err != nil { // checked by hand
 		t.Fatal(err)
 	}
-	if _, err := k.st.db.Exec(`UPDATE wb_journal_outbox SET done_at = 0`); err != nil {
+	if _, err := journal.SetItem(file, cid, 0, false); err != nil { // unchecked by hand
+		t.Fatal(err)
+	}
+	b := mustInsert(t, k.st, func() Entry {
+		e := pending("c", "c-s", "t2", 1_700_000_002_000)
+		e.Role = team.SeatNone
+		e.TeamID = ""
+		return e
+	}())
+	if _, ok, err := k.st.FinishSkippedV2(b, ReasonModel, Usage{}, 0, TodoChanges{}, ClosedByModel); !ok || err != nil {
+		t.Fatal(ok, err)
+	}
+	if err := k.st.RecordJournalResult(JournalOutcome{EntryID: b, PromptVer: 1, Result: JournalResult{Ticks: []ConfirmTick{{EntryID: cid, ItemIndex: 0}, {EntryID: cid, ItemIndex: 1}}}}); err != nil {
 		t.Fatal(err)
 	}
 	k.drain()
-	if e, _ := k.byID("solo:c", "turn:"+itoa(a)); !e.Pinned {
-		t.Fatalf("after the replay: %+v", e)
+	e, _ := k.byID("solo:c", cid)
+	if e.Items[0].Done || !e.Items[0].Manual || !e.Items[1].Done {
+		t.Fatalf("items after the tick = %+v", e.Items)
 	}
 }

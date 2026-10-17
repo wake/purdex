@@ -22,7 +22,7 @@ func sample() []Entry {
 		{ID: "wb:1:4", Kind: KindComm, At: t0.Add(3 * time.Minute), Text: "<!-- j {"},
 		{ID: "wb:1:5", Kind: KindTaskNew, At: t0.Add(4 * time.Minute), Text: "#7 title"},
 		{ID: "wb:1:6", Kind: KindTaskDone, At: t0.Add(5 * time.Minute)},
-		{ID: "wb:1:7", Kind: KindConfirm, At: t0.Add(24 * time.Hour), Pinned: true,
+		{ID: "wb:1:7", Kind: KindConfirm, At: t0.Add(24 * time.Hour),
 			Items:  []Item{{Text: "要不要進 git --> ?"}, {Text: "第二題", Done: true}},
 			Detail: "原文\n### heading\n</details>\n<!-- j {\"id\":\"zz\"} -->\n```` fence ```` -->"},
 	}
@@ -105,7 +105,7 @@ func TestUpsertIdempotentAndInPlace(t *testing.T) {
 	}
 }
 
-func TestTickPinFillTouchOnlyTheirBlock(t *testing.T) {
+func TestTickSetItemFillTouchOnlyTheirBlock(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "j.md")
 	upsertAll(t, file, sample())
 	orig, _ := Parse(file)
@@ -115,13 +115,13 @@ func TestTickPinFillTouchOnlyTheirBlock(t *testing.T) {
 	if ok, _ := Tick(file, "wb:1:7", 0); ok {
 		t.Fatal("second tick reported a change")
 	}
-	if _, err := Tick(file, "wb:1:7", 5); err == nil {
-		t.Fatal("out of range tick accepted")
+	if _, err := Tick(file, "wb:1:7", 5); !errors.Is(err, ErrItemRange) {
+		t.Fatalf("out of range tick = %v, want ErrItemRange", err)
 	}
-	if ok, err := SetPinned(file, "wb:1:1", true); err != nil || !ok {
-		t.Fatal(ok, err)
+	if _, err := Tick(file, "wb:1:1", 0); !errors.Is(err, ErrNotConfirm) {
+		t.Fatalf("tick of a non-confirm = %v, want ErrNotConfirm", err)
 	}
-	if ok, err := SetPinned(file, "wb:1:7", false); err != nil || !ok {
+	if ok, err := SetItem(file, "wb:1:7", 1, false); err != nil || !ok {
 		t.Fatal(ok, err)
 	}
 	if ok, err := FillText(file, "wb:1:6", "merged"); err != nil || !ok {
@@ -130,20 +130,18 @@ func TestTickPinFillTouchOnlyTheirBlock(t *testing.T) {
 	if ok, _ := FillText(file, "wb:1:5", "other"); ok {
 		t.Fatal("FillText overwrote an existing text")
 	}
-	if _, err := SetPinned(file, "nope", true); err == nil {
+	if _, err := SetItem(file, "nope", 0, true); !errors.Is(err, ErrNotFound) {
 		t.Fatal("unknown id accepted")
 	}
 	got, _ := Parse(file)
 	want := append([]Entry(nil), orig...)
-	want[6].Items = []Item{{Text: want[6].Items[0].Text, Done: true}, {Text: "第二題", Done: true}}
-	want[6].Pinned = false
-	want[0].Pinned = true
+	want[6].Items = []Item{{Text: want[6].Items[0].Text, Done: true}, {Text: "第二題", Done: false, Manual: true}}
 	want[5].Text = "merged"
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v\nwant %+v", got, want)
 	}
 	b, _ := os.ReadFile(file)
-	if !strings.Contains(string(b), "📌") || !strings.Contains(string(b), "- [x] 要不要進 git") {
+	if strings.Contains(string(b), "📌") || !strings.Contains(string(b), "- [x] 要不要進 git") {
 		t.Errorf("rendering not refreshed:\n%s", b)
 	}
 }
@@ -224,5 +222,66 @@ func TestBadCommentSkipped(t *testing.T) {
 func TestMonthFile(t *testing.T) {
 	if got := MonthFile("/d", t0); got != filepath.Join("/d", "2026-10.md") {
 		t.Fatal(got)
+	}
+}
+
+// A hand check or uncheck marks the item manual and Tick (Haiku) leaves it alone; the same hand state again changes nothing;
+// a non-confirm and an index out of range are told apart; an old file with pinned=1 still parses.
+// Mutation gate: Tick ignores Manual (red); SetItem does not set Manual (red); checkItem returns one error for both (red).
+func TestSetItemManualAndTickSkips(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "j.md")
+	upsertAll(t, file, sample())
+	if ok, err := SetItem(file, "wb:1:7", 0, true); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if ok, _ := SetItem(file, "wb:1:7", 0, true); ok {
+		t.Fatal("the same hand check reported a change")
+	}
+	if ok, err := SetItem(file, "wb:1:7", 0, false); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if ok, _ := Tick(file, "wb:1:7", 0); ok {
+		t.Fatal("Tick changed a hand-set item")
+	}
+	got, _ := Parse(file)
+	if it := got[6].Items[0]; it.Done || !it.Manual {
+		t.Fatalf("item = %+v, want unchecked and manual", it)
+	}
+	if _, err := SetItem(file, "wb:1:1", 0, true); !errors.Is(err, ErrNotConfirm) {
+		t.Fatalf("non-confirm = %v", err)
+	}
+	if _, err := SetItem(file, "wb:1:7", -1, true); !errors.Is(err, ErrItemRange) {
+		t.Fatalf("negative index = %v", err)
+	}
+	if _, err := SetItem(file, "wb:1:7", 2, true); !errors.Is(err, ErrItemRange) {
+		t.Fatalf("index past the end = %v", err)
+	}
+}
+
+func TestOldPinnedMetaStillParses(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "j.md")
+	line := metaPrefix + `{"id":"old","kind":"confirm","at":"2026-10-01T10:00:00Z","items":[{"text":"q"}],"pinned":true} -->` + "\n"
+	if err := os.WriteFile(file, []byte("## 2026-10-01\n\n### 10:00 · 待確認 📌\n- [ ] q\n"+line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Parse(file)
+	if err != nil || len(got) != 1 || got[0].ID != "old" || len(got[0].Items) != 1 {
+		t.Fatalf("parse = %+v, %v", got, err)
+	}
+}
+
+func TestSetItemInFindsTheMonthFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := Upsert(filepath.Join(dir, "2026-09.md"), Entry{ID: "c", Kind: KindConfirm, At: time.Date(2026, 9, 3, 1, 0, 0, 0, time.UTC), Items: []Item{{Text: "q"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := Upsert(filepath.Join(dir, "2026-10.md"), Entry{ID: "x", Kind: KindExec, At: time.Date(2026, 10, 3, 1, 0, 0, 0, time.UTC)}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := SetItemIn(dir, "c", 0, true); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if _, err := SetItemIn(dir, "nobody", 0, true); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown = %v", err)
 	}
 }

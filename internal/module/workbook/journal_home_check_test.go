@@ -115,33 +115,33 @@ func TestJournalAPI_AFolderThatIsASymlinkIsNotFollowed(t *testing.T) {
 			t.Errorf("GET %s: code %d: %s", url, code, body)
 		}
 	}
-	if code, body := j.request(http.MethodPut, "/api/journal/pin", map[string]any{"session_id": "m1", "entry_id": "secret", "pinned": true}); code != http.StatusInternalServerError {
-		t.Errorf("pin: code %d: %s", code, body)
+	if code, body := j.request(http.MethodPut, "/api/journal/confirm", map[string]any{"session_id": "m1", "entry_id": "secret", "idx": 0, "done": true}); code != http.StatusInternalServerError {
+		t.Errorf("confirm: code %d: %s", code, body)
 	}
 	if after, _ := os.ReadFile(month); string(after) != string(before) {
 		t.Fatal("a file outside the worktree was written")
 	}
 	if evs := j.changed(); len(evs) != 0 {
-		t.Errorf("a refused pin announced %+v", evs)
+		t.Errorf("a refused confirm announced %+v", evs)
 	}
 }
 
-// A block that sits in a month file whose name is not its month is still shown, and pinning it works.
+// A block that sits in a month file whose name is not its month is still shown, and checking it works.
 // Mutation gate: derive the file from the entry's time again → 404 (red).
-func TestJournalAPI_AnEntryInTheWrongMonthFileCanBePinned(t *testing.T) {
+func TestJournalAPI_AnEntryInTheWrongMonthFileCanBeChecked(t *testing.T) {
 	j := newJournalAPI(t)
 	u := j.unit("team:t1", "日誌")
 	j.seats.seats["m1"] = teamSeat("t1")
 	if err := journal.Upsert(filepath.Join(unitHome(u).journalDir, "2026-09.md"),
-		journal.Entry{ID: "moved", Kind: journal.KindExec, At: tm(time.November, 5, 1), Actor: "A", Text: "filed under September"}); err != nil {
+		journal.Entry{ID: "moved", Kind: journal.KindConfirm, At: tm(time.November, 5, 1), Actor: "A", Text: "filed under September", Items: []journal.Item{{Text: "q"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if code, body := j.request(http.MethodPut, "/api/journal/pin", map[string]any{"session_id": "m1", "entry_id": "moved", "pinned": true}); code != http.StatusOK {
-		t.Fatalf("pin: code %d: %s", code, body)
+	if code, body := j.request(http.MethodPut, "/api/journal/confirm", map[string]any{"session_id": "m1", "entry_id": "moved", "idx": 0, "done": true}); code != http.StatusNoContent {
+		t.Fatalf("confirm: code %d: %s", code, body)
 	}
 	_, p, _ := j.page("/api/journal?session_id=m1")
-	if !slices.Equal(ids(p.Pinned), []string{"moved"}) {
-		t.Errorf("the pinned band = %v", ids(p.Pinned))
+	if len(p.Confirms) != 0 || p.OpenConfirms != 0 {
+		t.Errorf("confirms = %v, open_confirms = %d, want none", ids(p.Confirms), p.OpenConfirms)
 	}
 	if evs := j.changed(); len(evs) != 1 || evs[0].What != "entries" {
 		t.Errorf("events = %+v", evs)

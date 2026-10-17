@@ -14,7 +14,7 @@ import (
 	"github.com/wake/purdex/internal/team"
 )
 
-// The journal API (plan J-1e, capability journal.v1): a session asks for its unit's entries, tasks and roadmap, and pins an
+// The journal API (plan J-1e, capability journal.v1): a session asks for its unit's entries, tasks and roadmap, and checks an
 // entry. The daemon decides the unit from the session's seat, so the App only ever sends the session of the tab it shows.
 
 // journalChangedType is the host event sent after a write to a unit's files.
@@ -53,7 +53,6 @@ type journalEntryJSON struct {
 	Refs   []string          `json:"refs"`
 	Items  []journalItemJSON `json:"items"`
 	Detail string            `json:"detail,omitempty"`
-	Pinned bool              `json:"pinned"`
 }
 
 type journalPageJSON struct {
@@ -61,7 +60,7 @@ type journalPageJSON struct {
 	Project      journalProjectJSON `json:"project"`
 	PersonName   string             `json:"person_name"`
 	Entries      []journalEntryJSON `json:"entries"`
-	Pinned       []journalEntryJSON `json:"pinned"`
+	Confirms     []journalEntryJSON `json:"confirms"`
 	More         bool               `json:"more"`
 	OpenConfirms int                `json:"open_confirms"`
 }
@@ -98,7 +97,7 @@ type journalUnitRefJSON struct {
 
 func entryWireJournal(e journal.Entry) journalEntryJSON {
 	out := journalEntryJSON{ID: e.ID, Kind: string(e.Kind), By: string(e.By), At: e.At.UnixMilli(), Actor: e.Actor, Text: e.Text,
-		Refs: []string{}, Items: []journalItemJSON{}, Detail: e.Detail, Pinned: e.Pinned}
+		Refs: []string{}, Items: []journalItemJSON{}, Detail: e.Detail}
 	out.Refs = append(out.Refs, e.Refs...)
 	for _, it := range e.Items {
 		out.Items = append(out.Items, journalItemJSON{Text: it.Text, Done: it.Done})
@@ -241,7 +240,7 @@ func (m *Module) logSkipped(unitKey string, skipped []journal.Skipped) {
 }
 
 // handleJournal: GET /api/journal?session_id=&before=&limit= → the newest `limit` entries before the cursor (oldest first by
-// (at, id)), the pinned band, whether there are older entries, and the number of open questions of the whole unit.
+// (at, id)), the open 待確認 entries of the whole unit (confirms), whether there are older entries, and the number of open questions of the whole unit.
 func (m *Module) handleJournal(w http.ResponseWriter, r *http.Request) {
 	tgt, ok := m.resolveJournal(w, r.URL.Query().Get("session_id"))
 	if !ok {
@@ -274,7 +273,7 @@ func (m *Module) handleJournal(w http.ResponseWriter, r *http.Request) {
 		Project:      journalProjectJSON{Name: m.projectName(ctx, tgt.unit), RemoteURL: m.remoteURL(ctx, tgt.unit.WtPath)},
 		PersonName:   m.personName(),
 		Entries:      entriesWire(page.Entries),
-		Pinned:       entriesWire(journal.Pinned(all)),
+		Confirms:     entriesWire(journal.Confirms(all)),
 		More:         page.More,
 		OpenConfirms: journal.OpenConfirmItems(all),
 	})
@@ -344,17 +343,19 @@ func (m *Module) handleJournalRoadmap(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"features": out})
 }
 
-type journalPinBody struct {
+type journalConfirmBody struct {
 	SessionID string `json:"session_id"`
 	EntryID   string `json:"entry_id"`
-	Pinned    *bool  `json:"pinned"`
+	Idx       *int   `json:"idx"`
+	Done      *bool  `json:"done"`
 }
 
-// handleJournalPin: PUT /api/journal/pin {session_id, entry_id, pinned} → {entry_id, pinned}. The entry is found in whichever
-// month file holds it; journal.changed (entries) is sent only if the file changed.
-func (m *Module) handleJournalPin(w http.ResponseWriter, r *http.Request) {
-	var body journalPinBody
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil || body.EntryID == "" || body.Pinned == nil {
+// handleJournalConfirm: PUT /api/journal/confirm {session_id, entry_id, idx, done} → 204. A person checks or unchecks item idx
+// of a 待確認 entry; the item is marked manual so Haiku never changes it. The entry is found in whichever month file holds it;
+// journal.changed (entries) is sent only if the file changed. 404: no such entry or item; 400: the entry is not a confirm.
+func (m *Module) handleJournalConfirm(w http.ResponseWriter, r *http.Request) {
+	var body journalConfirmBody
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil || body.EntryID == "" || body.Idx == nil || body.Done == nil {
 		writeError(w, http.StatusBadRequest, "bad_request")
 		return
 	}
@@ -362,20 +363,23 @@ func (m *Module) handleJournalPin(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	changed, err := journal.SetPinnedIn(unitHome(tgt.unit).journalDir, body.EntryID, *body.Pinned)
-	if errors.Is(err, journal.ErrNotFound) {
+	changed, err := journal.SetItemIn(unitHome(tgt.unit).journalDir, body.EntryID, *body.Idx, *body.Done)
+	switch {
+	case errors.Is(err, journal.ErrNotFound), errors.Is(err, journal.ErrItemRange):
 		writeError(w, http.StatusNotFound, "not_found")
 		return
-	}
-	if err != nil {
-		log.Printf("[workbook] journal: pin %s in %s: %v", body.EntryID, tgt.unit.Key, err)
+	case errors.Is(err, journal.ErrNotConfirm):
+		writeError(w, http.StatusBadRequest, "bad_request")
+		return
+	case err != nil:
+		log.Printf("[workbook] journal: confirm %s in %s: %v", body.EntryID, tgt.unit.Key, err)
 		writeError(w, http.StatusInternalServerError, "internal")
 		return
 	}
 	if changed {
 		m.announceJournal(JournalChange{UnitKey: tgt.unit.Key, ProjectID: tgt.unit.ProjectID, What: "entries"})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"entry_id": body.EntryID, "pinned": *body.Pinned})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // announceJournal sends journal.changed for a write to a unit's files: the unit as {kind, id}, its project, and what changed.
