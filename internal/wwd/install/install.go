@@ -76,7 +76,28 @@ func (i *Installer) unitPath() string {
 	}
 	return systemUnitPath
 }
-func (i *Installer) unitStamp() string { return filepath.Join(i.DataDir(), "unit.sha256") }
+
+func (i *Installer) activeStamp() string { return filepath.Join(i.DataDir(), "active.sha256") }
+
+// generation names the binary and the service definition as they are on disk.
+func (i *Installer) generation() string {
+	def := i.PlistPath()
+	if i.GOOS == "linux" {
+		def = i.unitPath()
+	}
+	b, _ := fileHash(i.BinPath())
+	d, _ := fileHash(def)
+	return b + ":" + d
+}
+
+// activatedStamp is the generation last activated successfully ("" if none).
+func (i *Installer) activatedStamp() string {
+	b, err := os.ReadFile(i.activeStamp())
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
 
 func (i *Installer) domain() string { return "gui/" + strconv.Itoa(i.UID) }
 
@@ -145,7 +166,9 @@ func (i *Installer) Install(ctx context.Context) error {
 		}
 	}
 
-	if _, err := os.Stat(i.ConfigPath()); errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(i.ConfigPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("install: the config: %w", err)
+	} else if err != nil {
 		i.step("write the starting config %s for %s", i.ConfigPath(), i.Alias)
 		if !i.DryRun {
 			if err := writeAtomic(i.ConfigPath(), []byte(config), 0o600); err != nil {
@@ -155,7 +178,9 @@ func (i *Installer) Install(ctx context.Context) error {
 	}
 
 	tokenMissing := false
-	if _, err := os.Stat(i.TokenPath()); errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(i.TokenPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("install: the pool token: %w", err)
+	} else if err != nil {
 		if i.TokenFile != "" {
 			tok, err := os.ReadFile(i.TokenFile)
 			if err != nil {
@@ -186,6 +211,15 @@ func (i *Installer) Install(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// a previous run may have written the files and then failed to activate them:
+	// the stamp says which generation was last activated successfully
+	gen := i.generation()
+	if !i.DryRun && !i.NoRestart {
+		last := strings.SplitN(i.activatedStamp()+":", ":", 3)
+		cur := strings.SplitN(gen, ":", 2)
+		binChanged = binChanged || last[0] != cur[0]
+		defChanged = defChanged || last[1] != cur[1]
+	}
 	changed = binChanged || defChanged
 
 	if i.DryRun {
@@ -195,8 +229,13 @@ func (i *Installer) Install(ctx context.Context) error {
 		if changed {
 			i.say("installed; the running service was not touched (--no-restart). Restart it when it is safe: %s", i.restartHint())
 		}
-	} else if err := i.activate(ctx, binChanged, defChanged); err != nil {
-		return err
+	} else {
+		if err := i.activate(ctx, binChanged, defChanged); err != nil {
+			return err
+		}
+		if err := writeAtomic(i.activeStamp(), []byte(gen+"\n"), 0o644); err != nil {
+			return err
+		}
 	}
 	if tokenMissing {
 		i.say("note: %s does not exist yet. wwd makes a random token on its first start, but every host of the pool must hold the SAME token: copy one host's pool.token (0600) to the others, or run `wwd install --token-file <file>` before the first start.", i.TokenPath())
@@ -253,8 +292,7 @@ func (i *Installer) writeUnit(ctx context.Context) (changed bool, err error) {
 	if out, err := i.run()(ctx, "wwd.install.unit", "sudo", "install", "-m", "0644", tmp, i.unitPath()); err != nil {
 		return false, fmt.Errorf("install the unit: %w: %s", err, bytes.TrimSpace(out))
 	}
-	// the stamp says which unit text is installed; written only after sudo succeeded
-	return true, writeAtomic(i.unitStamp(), []byte(h+"\n"), 0o644)
+	return true, nil
 }
 
 // activate starts or restarts the service as far as the change needs it.
@@ -313,31 +351,36 @@ func (i *Installer) Uninstall(ctx context.Context, purge bool) error {
 	switch i.GOOS {
 	case "darwin":
 		target := i.domain() + "/" + Label
-		// only a loaded agent is booted out, so a bootout failure is a real one
-		if _, perr := run(ctx, "wwd.uninstall.print", "launchctl", "print", target); perr == nil {
-			if out, err := run(ctx, "wwd.uninstall.bootout", "launchctl", "bootout", target); err != nil {
+		// a failed look-up is a failure, not "not loaded": only the launchctl
+		// answer that says the service is not there lets the removal go on
+		if out, perr := run(ctx, "wwd.uninstall.print", "launchctl", "print", target); perr == nil {
+			if out, err := run(ctx, "wwd.uninstall.bootout", "launchctl", "bootout", target); err != nil && !notThere(out) {
 				return fmt.Errorf("launchctl bootout %s: %w: %s", target, err, bytes.TrimSpace(out))
 			}
+		} else if !notThere(out) {
+			return fmt.Errorf("launchctl print %s: %w: %s", target, perr, bytes.TrimSpace(out))
 		}
 		if err := os.Remove(i.PlistPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	case "linux":
-		if _, err := os.Stat(i.unitPath()); err == nil {
-			for _, c := range [][]string{
-				{"wwd.uninstall.disable", "sudo", "systemctl", "disable", "--now", UnitName},
-				{"wwd.uninstall.rm", "sudo", "rm", "-f", i.unitPath()},
-				{"wwd.uninstall.reload", "sudo", "systemctl", "daemon-reload"},
-			} {
-				if out, err := run(ctx, c[0], c[1], c[2:]...); err != nil {
-					return fmt.Errorf("%s: %w: %s", strings.Join(c[1:], " "), err, bytes.TrimSpace(out))
-				}
+		// stopping does not depend on the unit file being on disk: the unit may be
+		// gone while the service is still loaded or running
+		if out, err := run(ctx, "wwd.uninstall.disable", "sudo", "systemctl", "disable", "--now", UnitName); err != nil && !notThere(out) {
+			return fmt.Errorf("systemctl disable --now %s: %w: %s", UnitName, err, bytes.TrimSpace(out))
+		}
+		for _, c := range [][]string{
+			{"wwd.uninstall.rm", "sudo", "rm", "-f", i.unitPath()},
+			{"wwd.uninstall.reload", "sudo", "systemctl", "daemon-reload"},
+		} {
+			if out, err := run(ctx, c[0], c[1], c[2:]...); err != nil {
+				return fmt.Errorf("%s: %w: %s", strings.Join(c[1:], " "), err, bytes.TrimSpace(out))
 			}
 		}
-		_ = os.Remove(i.unitStamp())
 	default:
 		return fmt.Errorf("uninstall: no service support for %s", i.GOOS)
 	}
+	_ = os.Remove(i.activeStamp())
 	if err := os.RemoveAll(filepath.Dir(i.BinPath())); err != nil {
 		return err
 	}
@@ -349,4 +392,16 @@ func (i *Installer) Uninstall(ctx context.Context, purge bool) error {
 		}
 	}
 	return nil
+}
+
+// notThere reports whether a launchctl or systemctl answer says the service or
+// unit does not exist, which is what an uninstall wants to hear.
+func notThere(out []byte) bool {
+	o := strings.ToLower(string(out))
+	for _, m := range []string{"could not find", "not loaded", "does not exist", "no such", "not found"} {
+		if strings.Contains(o, m) {
+			return true
+		}
+	}
+	return false
 }

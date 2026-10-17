@@ -15,7 +15,8 @@ import (
 // fakeRun records every command and answers from a script.
 type fakeRun struct {
 	calls  []string
-	failOn map[string]bool // a command line prefix that exits non-zero
+	failOn map[string]bool   // a command line prefix that exits non-zero
+	says   map[string]string // what such a command prints before it fails
 }
 
 func (f *fakeRun) run(ctx context.Context, tag, name string, args ...string) ([]byte, error) {
@@ -23,7 +24,7 @@ func (f *fakeRun) run(ctx context.Context, tag, name string, args ...string) ([]
 	f.calls = append(f.calls, line)
 	for p, bad := range f.failOn {
 		if bad && strings.HasPrefix(line, p) {
-			return nil, os.ErrNotExist
+			return []byte(f.says[p]), os.ErrNotExist
 		}
 	}
 	// the two sudo commands that touch the unit file act on it, as the real ones do
@@ -35,7 +36,7 @@ func (f *fakeRun) run(ctx context.Context, tag, name string, args ...string) ([]
 		return nil, os.WriteFile(args[4], b, 0o644)
 	}
 	if name == "sudo" && len(args) == 3 && args[0] == "rm" {
-		return nil, os.Remove(args[2])
+		return nil, os.RemoveAll(args[2])
 	}
 	return nil, nil
 }
@@ -444,5 +445,100 @@ func TestUninstallReportsAFailedStop(t *testing.T) {
 		if _, err := os.Stat(in.BinPath()); err != nil {
 			t.Errorf("%s: the binary was deleted under a service that is still there", goos)
 		}
+	}
+}
+
+func TestInstallRerunActivatesAfterAFailedActivation(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux"} {
+		bin := writeBin(t, t.TempDir(), "x")
+		in, f, _ := newInstaller(t, goos, "mserv", bin)
+		ctx := context.Background()
+		f.failOn["sudo systemctl restart"] = true
+		f.failOn["launchctl bootstrap"] = true
+		if err := in.Install(ctx); err == nil {
+			t.Fatalf("%s: the failed activation was reported as success", goos)
+		}
+		delete(f.failOn, "sudo systemctl restart")
+		delete(f.failOn, "launchctl bootstrap")
+		f.calls = nil
+		if err := in.Install(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if !f.has("sudo systemctl restart") && !f.has("launchctl bootstrap") {
+			t.Errorf("%s: the rerun did not activate what the first run only wrote: %v", goos, f.calls)
+		}
+		// and now it is settled
+		f.calls = nil
+		if err := in.Install(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if f.has("sudo systemctl restart") || f.has("launchctl bootstrap") || f.has("launchctl bootout") {
+			t.Errorf("%s: a settled install touched the service: %v", goos, f.calls)
+		}
+	}
+}
+
+func TestUninstallStopsEvenWhenTheDefinitionIsGone(t *testing.T) {
+	bin := writeBin(t, t.TempDir(), "x")
+	in, f, _ := newInstaller(t, "linux", "mserv", bin)
+	ctx := context.Background()
+	if err := in.Install(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(in.UnitPath); err != nil {
+		t.Fatal(err)
+	}
+	f.calls = nil
+	f.failOn["sudo rm"] = false
+	if err := in.Uninstall(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if !f.has("sudo systemctl disable --now") {
+		t.Errorf("the service was not stopped because its unit file was gone: %v", f.calls)
+	}
+	// a unit systemd says it does not know is fine
+	f.failOn["sudo systemctl disable"] = true
+	f.says = map[string]string{"sudo systemctl disable": "Failed to disable unit: Unit file wwd.service does not exist."}
+	if err := in.Uninstall(ctx, false); err != nil {
+		t.Errorf("an unknown unit should not fail the uninstall: %v", err)
+	}
+}
+
+func TestUninstallDarwinTellsNotLoadedFromBrokenLookup(t *testing.T) {
+	bin := writeBin(t, t.TempDir(), "x")
+	in, f, _ := newInstaller(t, "darwin", "mlab", bin)
+	ctx := context.Background()
+	if err := in.Install(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.failOn["launchctl print"] = true
+	f.says = map[string]string{"launchctl print": "Could not find service \"gs.wake.wwd\" in domain"}
+	if err := in.Uninstall(ctx, false); err != nil {
+		t.Fatalf("not loaded should be fine: %v", err)
+	}
+	if err := in.Install(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.says = map[string]string{"launchctl print": "Operation not permitted"}
+	if err := in.Uninstall(ctx, false); err == nil {
+		t.Error("a look-up that failed for another reason was taken as not loaded")
+	}
+	if _, err := os.Stat(in.BinPath()); err != nil {
+		t.Error("the binary was deleted although the service state is unknown")
+	}
+}
+
+func TestInstallRefusesAnUnreadableConfigOrToken(t *testing.T) {
+	bin := writeBin(t, t.TempDir(), "x")
+	in, _, _ := newInstaller(t, "darwin", "mlab", bin)
+	// a file where the config directory should be: Stat answers ENOTDIR, not "does not exist"
+	if err := os.MkdirAll(filepath.Dir(in.ConfigDir()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(in.ConfigDir(), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.Install(context.Background()); err == nil {
+		t.Error("an unreadable config location was ignored")
 	}
 }

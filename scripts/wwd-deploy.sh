@@ -46,8 +46,6 @@ do_run() {
   if [ "$dry" -eq 1 ]; then echo "+ $*"; else "$@"; fi
 }
 
-remote_dir='~/.local/share/wwd/incoming'
-remote_bin="$remote_dir/wwd"
 install_args="install --alias $host$passthrough"
 
 if [ -z "$target" ]; then
@@ -58,7 +56,18 @@ if [ -z "$target" ]; then
   exit 0
 fi
 
-do_run ssh "$target" "mkdir -p $remote_dir && chmod 700 $remote_dir"
+# every run stages in its own 0700 directory on the host (mktemp -d), so two
+# deploys never share a file; it is removed when this script ends, however it ends
+if [ "$dry" -eq 1 ]; then
+  echo "+ ssh $target mktemp -d (a private 0700 staging directory)"
+  remote_dir='<staging>'
+else
+  remote_dir=$(ssh "$target" 'mkdir -p "$HOME/.local/share" && mktemp -d "$HOME/.local/share/wwd-incoming.XXXXXX"')
+  case "$remote_dir" in /*) ;; *) echo "no staging directory on $target" >&2; exit 1 ;; esac
+  trap 'ssh "$target" "rm -rf \"$remote_dir\"" >/dev/null 2>&1 || true' EXIT
+fi
+remote_bin="$remote_dir/wwd"
+
 do_run scp -q "$binary" "$target:$remote_bin"
 do_run ssh "$target" "chmod 755 $remote_bin"
 if [ -n "$token_file" ]; then

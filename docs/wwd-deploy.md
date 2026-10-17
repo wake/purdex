@@ -47,7 +47,7 @@ scripts/wwd-deploy.sh --token-file ~/.config/wwd-pool-token.new air19
 rm ~/.config/wwd-pool-token.new
 ```
 
-The script ships the right build to the host (`~/.local/share/wwd/incoming/wwd`) and runs
+The script ships the right build to the host (into a private `mktemp -d` staging directory under `~/.local/share/`, removed when the script ends) and runs
 `wwd install --alias <host>` there. On mlab and air26 `pdx setup --wwd --wwd-alias <host> [--wwd-binary <path>]`
 does the same through pdx; it takes the `wwd` beside the `pdx` binary unless `--wwd-binary` says otherwise.
 

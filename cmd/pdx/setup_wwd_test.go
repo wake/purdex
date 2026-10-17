@@ -71,7 +71,7 @@ func TestSetupWWDDrivesTheInstaller(t *testing.T) {
 		Run: func(ctx context.Context, tag, name string, args ...string) ([]byte, error) {
 			calls = append(calls, name+" "+strings.Join(args, " "))
 			if name == "launchctl" && len(args) > 0 && args[0] == "print" {
-				return nil, os.ErrNotExist // not loaded yet
+				return []byte(`Could not find service "gs.wake.wwd" in domain`), os.ErrNotExist // not loaded yet
 			}
 			return nil, nil
 		},
