@@ -1,7 +1,7 @@
 // W5c1: the 設定 page of a host tab — the 守門員 section writes the whole `watch` row with its revision, a 409 reloads, a 400 shows the
 // daemon's text and puts the field back, the two daemons' `targets` are compared, offline locks it; a probe host gets the note and F-2a2's editor.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, cleanup, act } from '@testing-library/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { clearWatchDrafts, readWatchDraft, watchDraftKey } from '../../lib/watch/draft-memory'
@@ -181,6 +181,42 @@ describe('WatchSettings — the 守門員 section', () => {
       await waitFor(() => expect(screen.getByTestId('watch-set-y_mb')).toHaveValue('999'))
       expect(readWatchDraft(key('y_mb'))).toBeUndefined()
       expect(screen.queryByTestId('watch-set-stale-y_mb')).toBeNull()
+    })
+
+    // A stale draft in a FOCUSED box, then the reader chooses 「改用主機上的值」: the box must not send its text on the way.
+    const staleFocused = async () => {
+      putReply = () => json(409, { items: { ...FULL, y_mb: 999, t_s: 77 }, revision: 4 })
+      daemonPage()
+      await screen.findByTestId('watch-set-y_mb')
+      fireEvent.change(screen.getByTestId('watch-set-y_mb'), { target: { value: '5000' } })
+      fireEvent.change(screen.getByTestId('watch-set-t_s'), { target: { value: '90' } })
+      fireEvent.blur(screen.getByTestId('watch-set-t_s'))
+      await screen.findByTestId('watch-set-stale-use-y_mb')
+      const box = screen.getByTestId('watch-set-y_mb')
+      act(() => box.focus())
+      expect(document.activeElement).toBe(box)
+      expect(puts()).toHaveLength(1)
+      return { box, use: screen.getByTestId('watch-set-stale-use-y_mb') }
+    }
+
+    it('the mouse: pressing the button does not take focus from the box, so nothing is sent, and the box shows the host\'s value', async () => {
+      const { box, use } = await staleFocused()
+      // A browser moves focus (and so blurs the box) on mousedown unless the press is cancelled.
+      if (fireEvent.mouseDown(use)) act(() => use.focus())
+      fireEvent.click(use)
+      await waitFor(() => expect(screen.getByTestId('watch-set-y_mb')).toHaveValue('999'))
+      expect(puts()).toHaveLength(1)
+      expect(readWatchDraft(key('y_mb'))).toBeUndefined()
+      expect(box).toBe(screen.getByTestId('watch-set-y_mb'))
+    })
+
+    it('the keyboard: Tab onto the button blurs the box towards it, and nothing is sent; Enter then takes the host\'s value', async () => {
+      const { use } = await staleFocused()
+      act(() => use.focus()) // Tab: the box blurs with the button as relatedTarget
+      fireEvent.click(use) // Enter / Space on a button
+      await waitFor(() => expect(screen.getByTestId('watch-set-y_mb')).toHaveValue('999'))
+      expect(puts()).toHaveLength(1)
+      expect(readWatchDraft(key('y_mb'))).toBeUndefined()
     })
 
     it('an untouched field follows the host\'s copy quietly', async () => {

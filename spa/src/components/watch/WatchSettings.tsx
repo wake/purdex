@@ -70,12 +70,19 @@ function TextControl({ k, kind, stored, onCommit, label, draftKey }: {
     const ok = await onCommit(draft)
     if (!ok) setDraftState(stored) // only the field that was written is put back
   }
+  // 「改用主機上的值」 must not send the text it is about to drop. A press on it does not take focus from the box (mousedown is
+  // cancelled), and a Tab onto it blurs the box towards the button (relatedTarget), which is not a "send" either.
+  const useBtn = useRef<HTMLButtonElement>(null)
+  const onBoxBlur = (e: React.FocusEvent) => {
+    if (useBtn.current !== null && e.relatedTarget === useBtn.current) return
+    void commit()
+  }
   const control = kind === 'textarea' ? (
     <textarea aria-label={label} data-testid={`watch-set-${k}`} rows={3} className={`${INPUT} w-96 font-mono`} value={draft}
-      onChange={(e) => setDraft(e.target.value)} onBlur={() => void commit()} />
+      onChange={(e) => setDraft(e.target.value)} onBlur={onBoxBlur} />
   ) : (
     <input aria-label={label} data-testid={`watch-set-${k}`} className={`${INPUT} ${kind === 'text' ? 'w-96 font-mono' : ''}`} value={draft}
-      onChange={(e) => setDraft(e.target.value)} onBlur={() => void commit()} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }} />
+      onChange={(e) => setDraft(e.target.value)} onBlur={onBoxBlur} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }} />
   )
   return (
     <>
@@ -83,7 +90,7 @@ function TextControl({ k, kind, stored, onCommit, label, draftKey }: {
       {stale && (
         <span data-testid={`watch-set-stale-${k}`} className="flex items-center gap-2 text-xs text-status-warning-text">
           {t('watch.set.stale')}
-          <button type="button" data-testid={`watch-set-stale-use-${k}`} onClick={() => { settle(stored); setStale(false) }}
+          <button type="button" ref={useBtn} data-testid={`watch-set-stale-use-${k}`} onMouseDown={(e) => e.preventDefault()} onClick={() => { settle(stored); setStale(false) }}
             className="px-2 py-0.5 rounded bg-surface-tertiary text-text-secondary cursor-pointer">{t('watch.set.stale_use')}</button>
         </span>
       )}
