@@ -158,7 +158,7 @@ func TestWatchAck_HostIsForAllAndIsSentWithTheNote(t *testing.T) {
 }
 
 func TestWatchAck_EveryFailureKindIsNamedAndIsNonzero(t *testing.T) {
-	for _, outcome := range []watch.AckOutcome{watch.AckNotFound, watch.AckUnreachable, watch.AckUnsupported, watch.AckRefused} {
+	for _, outcome := range []watch.AckOutcome{watch.AckNotFound, watch.AckUnreachable, watch.AckUnsupported, watch.AckRefused, watch.AckAmbiguous} {
 		srv := ackServer(t, ackWire{Results: []watch.AckResult{{ID: "a26-1", Outcome: outcome}, {ID: "mlab-1", Outcome: watch.AckHandled}}, Handled: 1}, 0, nil)
 		var out, errb bytes.Buffer
 		require.Equal(t, 1, watchMain([]string{"ack", "a26-1", "mlab-1", "--note", "n", "--config", watchCfgFile(t, srv, "tok")}, &out, &errb), string(outcome))

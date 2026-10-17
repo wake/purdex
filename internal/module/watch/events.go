@@ -212,15 +212,21 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 	var local []string
 	foreign := map[string][]string{} // host name -> ids
 	for _, id := range req.IDs {
-		switch o := ownerOf(id); {
+		o := ownerOf(id)
+		peers := m.peersByHostName(o)
+		candidates := len(peers)
+		if o == own {
+			candidates++
+		}
+		switch {
+		case candidates > 1: // two hosts go by that name: the id does not say which; neither is guessed at
+			byID[id] = watch.AckResult{ID: id, Outcome: watch.AckAmbiguous}
 		case o == own:
 			local = append(local, id)
+		case candidates == 1:
+			foreign[o] = append(foreign[o], id)
 		default:
-			if _, ok := m.peerByHostName(o); ok {
-				foreign[o] = append(foreign[o], id)
-			} else {
-				byID[id] = watch.AckResult{ID: id, Outcome: watch.AckNotFound}
-			}
+			byID[id] = watch.AckResult{ID: id, Outcome: watch.AckNotFound}
 		}
 	}
 	if len(local) > 0 {
@@ -234,7 +240,7 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for name, ids := range foreign {
-		entry, _ := m.peerByHostName(name)
+		entry := m.peersByHostName(name)[0]
 		for _, x := range m.forwardAck(ctx, entry, ids, false, req.Note, by) {
 			byID[x.ID] = x
 		}

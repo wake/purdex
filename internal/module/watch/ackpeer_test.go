@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/devices"
 	"github.com/wake/purdex/internal/middleware"
 	peersmod "github.com/wake/purdex/internal/module/peers"
@@ -237,4 +238,56 @@ func TestAck_AnIDNamedTwiceIsOneEventWithOneAnswer(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &out))
 	require.Equal(t, []watch.AckResult{{ID: ap.bIDs[1], Outcome: watch.AckHandled}}, out.Results)
 	require.Equal(t, 1, out.Handled)
+}
+
+// A peer's answer is taken only for the ids that were sent to it, each once, with an outcome that exists: it cannot say what became of
+// an id of this host or of another peer, and what it leaves out is reported as refused, not assumed.
+func TestForwardAck_TakesOnlyWhatWasAskedFromTheAnswer(t *testing.T) {
+	ap := newAckPair(t)
+	entry, _, _ := ap.a.m.peerEntry("a26")
+	fc := &fakeCaller{reply: map[string]peersmod.CallResult{}}
+	ap.a.m.caller = fc
+	asked := []string{"a26-1", "a26-2", "a26-3"}
+	answer := ackPeerResponse{HostID: idB, ackResponse: ackResponse{Results: []watch.AckResult{
+		{ID: "a26-1", Outcome: watch.AckHandled},
+		{ID: "a26-1", Outcome: watch.AckAlready},    // twice: the first stands
+		{ID: ap.aIDs[0], Outcome: watch.AckHandled}, // an id of this host that was not asked
+		{ID: "a26-2", Outcome: "great"},             // an outcome that does not exist
+		// a26-3 is not mentioned at all
+	}}}
+	raw, _ := json.Marshal(answer)
+	fc.reply[pathAck] = peersmod.CallResult{Class: peersmod.ClassDone, Status: 200, Body: raw}
+	got := ap.a.m.forwardAck(context.Background(), entry, asked, false, "n", "")
+	require.Equal(t, []watch.AckResult{
+		{ID: "a26-1", Outcome: watch.AckHandled},
+		{ID: "a26-2", Outcome: watch.AckRefused},
+		{ID: "a26-3", Outcome: watch.AckRefused},
+	}, got)
+
+	// for "all" the answer may name the events that host had, and only those
+	answer.Results = []watch.AckResult{{ID: "a26-9", Outcome: watch.AckHandled}, {ID: "mlab-1", Outcome: watch.AckHandled}, {ID: "a26-x y", Outcome: watch.AckHandled}}
+	raw, _ = json.Marshal(answer)
+	fc.reply[pathAck] = peersmod.CallResult{Class: peersmod.ClassDone, Status: 200, Body: raw}
+	got = ap.a.m.forwardAck(context.Background(), entry, nil, true, "n", "")
+	require.Equal(t, []watch.AckResult{{ID: "a26-9", Outcome: watch.AckHandled}}, got)
+}
+
+// Two hosts that go by the same host name cannot be told apart by the id of an event: the ack is not sent to either, and the answer says so.
+func TestAck_AnOwnerNameThatTwoHostsShareIsAmbiguousNotGuessed(t *testing.T) {
+	ap := newAckPair(t)
+	ap.a.m.core.CfgMu.Lock()
+	ap.a.m.core.Cfg.Peers.Hosts = append(ap.a.m.core.Cfg.Peers.Hosts, config.PeerHost{Alias: "a26-twin", HostID: "a26:cccccc", URL: "http://x", Token: "t", InboundToken: "i"})
+	ap.a.m.core.CfgMu.Unlock()
+	before := len(ap.a.loop().pathsNow())
+	_, resp := ap.ackOn(t, ap.a, map[string]any{"ids": []string{ap.bIDs[0], ap.aIDs[0]}, "note": "n"})
+	require.Equal(t, []watch.AckResult{{ID: ap.bIDs[0], Outcome: watch.AckAmbiguous}, {ID: ap.aIDs[0], Outcome: watch.AckHandled}}, resp.Results)
+	require.Equal(t, before, len(ap.a.loop().pathsNow()), "nothing was sent to either a26")
+	require.False(t, ap.b.m.acks.Handled(ap.bIDs[0]))
+
+	// a peer that goes by this host's own name: this host's events are not guessed at either
+	ap.a.m.core.CfgMu.Lock()
+	ap.a.m.core.Cfg.Peers.Hosts = append(ap.a.m.core.Cfg.Peers.Hosts, config.PeerHost{Alias: "mlab-twin", HostID: "mlab:dddddd", URL: "http://x", Token: "t", InboundToken: "i"})
+	ap.a.m.core.CfgMu.Unlock()
+	_, resp = ap.ackOn(t, ap.a, map[string]any{"ids": []string{ap.aIDs[1]}, "note": "n"})
+	require.Equal(t, []watch.AckResult{{ID: ap.aIDs[1], Outcome: watch.AckAmbiguous}}, resp.Results)
 }

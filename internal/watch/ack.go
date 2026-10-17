@@ -46,6 +46,7 @@ const (
 	AckUnreachable AckOutcome = "unreachable" // that host could not be reached
 	AckUnsupported AckOutcome = "unsupported" // that host's daemon has no such route (an older one)
 	AckRefused     AckOutcome = "refused"     // that host answered no, or something that is not an answer
+	AckAmbiguous   AckOutcome = "ambiguous"   // two hosts go by the host name in the id: the ack was not sent to either
 )
 
 // AckResult is the outcome for one id.

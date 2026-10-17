@@ -51,16 +51,17 @@ func ownerOf(id string) string {
 	return ""
 }
 
-// peerByHostName is the paired host whose events' ids start with name.
-func (m *Module) peerByHostName(name string) (config.PeerHost, bool) {
+// peersByHostName are the paired hosts whose events' ids start with name.
+func (m *Module) peersByHostName(name string) []config.PeerHost {
 	m.core.CfgMu.RLock()
 	defer m.core.CfgMu.RUnlock()
+	var out []config.PeerHost
 	for _, h := range m.core.Cfg.Peers.Hosts {
 		if hostPart(h.HostID) == name {
-			return h, true
+			out = append(out, h)
 		}
 	}
-	return config.PeerHost{}, false
+	return out
 }
 
 // forwardAck sends an ack to the host that recorded the events and returns what became of each id. A host that cannot be reached, has
@@ -86,13 +87,57 @@ func (m *Module) forwardAck(ctx context.Context, entry config.PeerHost, ids []st
 		if err := json.Unmarshal(res.Body, &out); err != nil {
 			return failed(watch.AckRefused)
 		}
-		return out.Results
+		return sanitizeAnswer(out.Results, ids, all, hostPart(entry.HostID))
 	case peersmod.ClassUnsupported:
 		return failed(watch.AckUnsupported)
 	case peersmod.ClassRefused:
 		return failed(watch.AckRefused)
 	}
 	return failed(watch.AckUnreachable)
+}
+
+// knownOutcome says whether o is something an ack can come to.
+func knownOutcome(o watch.AckOutcome) bool {
+	switch o {
+	case watch.AckHandled, watch.AckAlready, watch.AckNotFound:
+		return true
+	}
+	return false
+}
+
+const maxAllResults = 1000
+
+// sanitizeAnswer takes from a host's answer only what that host may say. For named ids: the outcome of each id that was sent, once (the
+// first stands), in the order they were sent; one that is missing or has an outcome that does not exist is refused, and an id that
+// was not sent is ignored. For "all": the events of that host (their ids start with its name), once each, with outcomes that exist.
+func sanitizeAnswer(got []watch.AckResult, asked []string, all bool, owner string) []watch.AckResult {
+	if all {
+		seen := map[string]bool{}
+		var out []watch.AckResult
+		for _, x := range got {
+			if seen[x.ID] || ownerOf(x.ID) != owner || !eventIDPattern.MatchString(x.ID) || !knownOutcome(x.Outcome) || len(out) >= maxAllResults {
+				continue
+			}
+			seen[x.ID] = true
+			out = append(out, x)
+		}
+		return out
+	}
+	first := map[string]watch.AckOutcome{}
+	for _, x := range got {
+		if _, dup := first[x.ID]; !dup {
+			first[x.ID] = x.Outcome
+		}
+	}
+	out := make([]watch.AckResult, len(asked))
+	for i, id := range asked {
+		o, ok := first[id]
+		if !ok || !knownOutcome(o) {
+			o = watch.AckRefused
+		}
+		out[i] = watch.AckResult{ID: id, Outcome: o}
+	}
+	return out
 }
 
 // handlePeerAck serves POST /api/peers/watch/ack: a paired host marks events of this host handled. The order is the other watch

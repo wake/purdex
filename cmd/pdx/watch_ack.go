@@ -122,6 +122,8 @@ func renderAck(a ackWire) string {
 			fmt.Fprintf(b, "沒有處理到（那台主機的 daemon 太舊，沒有這個路由）  %s\n", r.ID)
 		case watch.AckRefused:
 			fmt.Fprintf(b, "沒有處理到（那台主機拒絕了）  %s\n", r.ID)
+		case watch.AckAmbiguous:
+			fmt.Fprintf(b, "沒有處理到（有兩台主機同名，無法判斷這筆在哪一台）  %s\n", r.ID)
 		default:
 			fmt.Fprintf(b, "沒有處理到（%s）  %s\n", r.Outcome, r.ID)
 		}
