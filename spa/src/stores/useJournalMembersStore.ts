@@ -4,7 +4,7 @@
 //
 // Gate: `support[host]` is the live answer of `journal.members.v1` for the current connection; absent = unknown (disconnected, or
 // the probe has not answered) and nothing is read or shown. A read that lands after its host was forgotten (`epoch`) or the
-// connection ended (`fence`: each one starts a new generation, even when support is declared again right after) is dropped. One read per leader at a time (single-flight). A failed read keeps what is held.
+// connection ended (`fence`: each one starts a new generation, even when support is declared again right after) is dropped. One read per leader at a time (single-flight, by a token of its own: a finished read only removes ITS marker); a load asked for meanwhile becomes one re-read when it lands. A failed read keeps what is held.
 import { create } from 'zustand'
 import { getJournalMembers } from '../lib/journal/api'
 import type { JournalMember } from '../lib/journal/types'
@@ -28,7 +28,11 @@ interface MembersState {
   reset: () => void
 }
 
-const flights = new Set<string>()
+let flightSeq = 0
+/** The token of the read now out per leader. */
+const flights = new Map<string, number>()
+/** Leaders asked again while a read was out. */
+const again = new Set<string>()
 const drop = <T,>(m: Record<string, T>, hostId: string): Record<string, T> => { const { [hostId]: _g, ...rest } = m; return rest }
 
 export const useJournalMembersStore = create<MembersState>()((set, get) => ({
@@ -40,7 +44,8 @@ export const useJournalMembersStore = create<MembersState>()((set, get) => ({
   fence: (hostId) => set((s) => ({ support: drop(s.support, hostId), gens: { ...s.gens, [hostId]: (s.gens[hostId] ?? 0) + 1 } })),
   forgetHost: (hostId) => {
     const prefix = `${hostId}\u0000`
-    for (const k of [...flights]) if (k.startsWith(prefix)) flights.delete(k)
+    for (const k of [...flights.keys()]) if (k.startsWith(prefix)) flights.delete(k)
+    for (const k of [...again]) if (k.startsWith(prefix)) again.delete(k)
     set((s) => ({
       support: drop(s.support, hostId),
       byLead: Object.fromEntries(Object.entries(s.byLead).filter(([k]) => !k.startsWith(prefix))),
@@ -49,21 +54,26 @@ export const useJournalMembersStore = create<MembersState>()((set, get) => ({
   },
   load: async (hostId, leadSessionId) => {
     const key = membersKey(hostId, leadSessionId)
-    if (get().support[hostId] !== true || flights.has(key)) return
+    if (get().support[hostId] !== true) return
+    if (flights.has(key)) { again.add(key); return }
     const epoch = get().epoch[hostId] ?? 0
     const gen = get().gens[hostId] ?? 0
-    flights.add(key)
+    const token = ++flightSeq
+    flights.set(key, token)
     try {
       const res = await getJournalMembers(hostId, leadSessionId)
       const s = get()
-      if (!flights.has(key) || (s.epoch[hostId] ?? 0) !== epoch || (s.gens[hostId] ?? 0) !== gen || s.support[hostId] !== true) return
+      if (flights.get(key) !== token || (s.epoch[hostId] ?? 0) !== epoch || (s.gens[hostId] ?? 0) !== gen || s.support[hostId] !== true) return
       // 404 (no unit yet) or a member whose lead is elsewhere (409): nothing to show.
       set({ byLead: { ...s.byLead, [key]: res.kind === 'ok' ? res.value : [] } })
     } catch {
       // A failed read keeps what is held; the next trigger (a journal.changed, a remount) asks again.
     } finally {
-      flights.delete(key)
+      if (flights.get(key) === token) {
+        flights.delete(key)
+        if (again.delete(key)) void get().load(hostId, leadSessionId)
+      }
     }
   },
-  reset: () => { flights.clear(); set({ support: {}, byLead: {}, epoch: {}, gens: {} }) },
+  reset: () => { flights.clear(); again.clear(); set({ support: {}, byLead: {}, epoch: {}, gens: {} }) },
 }))
