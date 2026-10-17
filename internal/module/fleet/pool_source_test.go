@@ -107,7 +107,11 @@ func TestPoolSource_StaleFactsAndUnreachableWithOldFacts(t *testing.T) {
 	assert.Equal(t, "ok", r.host("mlab:abc123").Status)
 	assert.Equal(t, "offline", r.host("air26:def456").Status, "an unreachable peer's facts are not used")
 
-	r.fc.Advance(ownStaleAfter + time.Second) // the same facts (same At) come back: nothing new was read
+	r.fc.Advance(10 * time.Second) // wwd's 5 s sampling plus its 5 s peer poll: facts this old are healthy
+	r.tick()
+	assert.Equal(t, "ok", r.host("mlab:abc123").Status, "no flapping at the normal cadence")
+
+	r.fc.Advance(poolStaleAfter + time.Second) // the same facts (same At) come back: nothing new was read
 	r.tick()
 	assert.Equal(t, "offline", r.host("mlab:abc123").Status, "an old reading is not ok")
 }
@@ -128,7 +132,7 @@ func TestPoolSource_UnreachableAndWWDDown(t *testing.T) {
 	assert.Nil(t, p.Fast)
 
 	fp.set(wire.Pool{}, errors.New("wwd down"))
-	r.fc.Advance(ownStaleAfter + time.Second)
+	r.fc.Advance(poolStaleAfter + time.Second)
 	r.tick()
 	self := r.host("mlab:abc123")
 	assert.Equal(t, "offline", self.Status)

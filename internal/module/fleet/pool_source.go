@@ -10,6 +10,10 @@ import (
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
+// poolStaleAfter is how long a host's facts may stand still before its row reads offline. wwd samples every 5 s and polls its
+// peers every 5 s, so a healthy remote host's facts are up to ~10 s old plus jitter; the SSH sources' 5 s would flap them.
+const poolStaleAfter = 20 * time.Second
+
 // topProcs is how many processes a host's slow part lists in each ranking.
 const topProcs = 5
 
@@ -33,7 +37,7 @@ func (m *Measure) readPool(ctx context.Context, now time.Time) {
 			m.applyFactsLocked(h, peer.Facts, now)
 		}
 		// No new reading for a while: the row reads offline too (it keeps the last values), never ok on an old figure.
-		if !h.ownSeen.IsZero() && now.Sub(h.ownSeen) >= ownStaleAfter && h.status == leaf.StatusOK {
+		if !h.ownSeen.IsZero() && now.Sub(h.ownSeen) >= poolStaleAfter && h.status == leaf.StatusOK {
 			h.status, h.code = leaf.StatusOffline, leaf.CodeTimeout
 			h.zone.Reset()
 			if h.fast != nil {
