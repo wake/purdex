@@ -428,13 +428,12 @@ func (p *Pool) TryTakeRanked(t *Ticket) (Take, error) {
 	if err != nil {
 		return out, err
 	}
-	served, blocked := true, (*ConflictBlock)(nil)
-	if found {
-		res := walkQueue(p.Class, snap.Queue, p.Held(), rules, capacity, t.Name, t.info.Argv, nil)
-		served, blocked = res.Served[t.Name], res.Blocked[t.Name]
-	} else {
-		served = ahead < capacity // not listed: where its name puts it, as before
+	queue := snap.Queue
+	if !found {
+		queue = withMissing(queue, t.Name) // not listed: it stands where its name puts it, and the rules apply to it as to any
 	}
+	res := walkQueue(p.Class, queue, p.Held(), rules, capacity, t.Name, t.info.Argv, nil)
+	served, blocked := res.Served[t.Name], res.Blocked[t.Name]
 	out.Blocked = blocked
 	if !served {
 		return out, nil

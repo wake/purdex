@@ -195,6 +195,25 @@ func TestTake_AConflictingWaiterIsBlockedAndAFreeOneIsNot(t *testing.T) {
 	now.Slot.Release(nil)
 }
 
+// A ticket whose file was taken from under it still obeys the rules (by the argv it keeps in memory).
+// Mutation gate: the walk skipped for a ticket that is not listed → it takes a slot beside the conflicting holder (red).
+func TestTake_AMissingTicketStillObeysTheRules(t *testing.T) {
+	rp := conflictPool(t, 2, tscRule)
+	holder := ticketFor(t, rp, "vitest related a.ts")
+	got, err := rp.TryTakeRanked(holder)
+	require.NoError(t, err)
+	require.NotNil(t, got.Slot)
+	defer got.Slot.Release(nil)
+	holder.Drop()
+	w := ticketFor(t, rp, "tsc -b")
+	require.NoError(t, os.Remove(filepath.Join(rp.queueDir(), w.Name)))
+	b, err := rp.TryTakeRanked(w)
+	require.NoError(t, err)
+	assert.Nil(t, b.Slot)
+	require.NotNil(t, b.Blocked)
+	assert.Equal(t, "slot heavy-1", b.Blocked.With)
+}
+
 // A rule broken on disk is no rule: the waiter is served and the problem is carried.
 func TestTake_ABrokenRulesFileStrandsNoOne(t *testing.T) {
 	rp := conflictPool(t, 2)

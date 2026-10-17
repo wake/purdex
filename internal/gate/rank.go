@@ -404,3 +404,18 @@ func rankOfTicket(s Snapshot, name string) RankInfo {
 	}
 	return RankInfo{Rank: RankNormal}
 }
+
+// withMissing is the queue with a normal ticket of this name added where its name puts it: after the front tickets and the normal
+// ones with an older name, before the rest. For a ticket whose file was taken from under it.
+func withMissing(q []QueueEntry, name string) []QueueEntry {
+	at := len(q)
+	for i, e := range q {
+		if e.Rank.Rank == RankBack || e.Rank.Rank == RankHold || (e.Rank.Rank == RankNormal && e.Name > name) {
+			at = i
+			break
+		}
+	}
+	out := append([]QueueEntry(nil), q[:at]...)
+	out = append(out, QueueEntry{Name: name, Rank: RankInfo{Rank: RankNormal}})
+	return append(out, q[at:]...)
+}
