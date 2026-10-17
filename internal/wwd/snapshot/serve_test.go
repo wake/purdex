@@ -448,3 +448,53 @@ func TestListPins_ManyPinsWithLongNamesAreAllListed(t *testing.T) {
 	assert.Len(t, ids, n)
 	assert.Equal(t, want[0], ids[0])
 }
+
+// Only a ref that Pin could have made is listed: a direct ref to a commit. A symbolic ref or one to a blob or a tag is somebody else's.
+func TestListPins_OnlyDirectRefsToCommitsAreListed(t *testing.T) {
+	repo, _, snap := origin(t)
+	ctx := context.Background()
+	require.NoError(t, Pin(ctx, repo, "j_1", snap))
+	blob := gitOut(t, repo, "rev-parse", snap+":a.txt")
+	gitOut(t, repo, "update-ref", "refs/wwd/j_blob", blob)
+	gitOut(t, repo, "symbolic-ref", "refs/wwd/j_sym", "refs/wwd/j_1")
+	gitOut(t, repo, "pack-refs", "--all") // a packed ref is still a ref
+	ids, err := ListPins(ctx, repo)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"j_1"}, ids)
+}
+
+// A path that is not a repository but lies inside one is an error, for the three calls: git would walk up and use the parent, and the
+// queue would then remove a ref in a repository it did not mean.
+func TestRepoDir_ASubdirectoryOfARepositoryIsNotTheRepository(t *testing.T) {
+	repo, _, snap := origin(t)
+	ctx := context.Background()
+	require.NoError(t, Pin(ctx, repo, "j_1", snap))
+	sub := filepath.Join(repo, "sub")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	_, err := ListPins(ctx, sub)
+	assert.Error(t, err)
+	assert.Error(t, Unpin(ctx, sub, "j_1"))
+	assert.Error(t, Pin(ctx, sub, "j_2", snap))
+	assert.Equal(t, snap, gitOut(t, repo, "rev-parse", PinRef("j_1")), "the parent's pin is still there")
+	// the work tree root and the git directory itself are the repository
+	ids, err := ListPins(ctx, repo)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"j_1"}, ids)
+	ids, err = ListPins(ctx, repo+"/.git")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"j_1"}, ids)
+}
+
+// A bare repository is a repository too.
+func TestRepoDir_ABareRepositoryWorks(t *testing.T) {
+	repo, _, snap := origin(t)
+	bare := filepath.Join(t.TempDir(), "bare.git")
+	gitOut(t, repo, "clone", "-q", "--bare", ".", bare)
+	gitOut(t, repo, "push", "-q", bare, snap+":refs/heads/snap")
+	ctx := context.Background()
+	require.NoError(t, Pin(ctx, bare, "j_1", snap))
+	ids, err := ListPins(ctx, bare)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"j_1"}, ids)
+	require.NoError(t, Unpin(ctx, bare, "j_1"))
+}
