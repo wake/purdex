@@ -111,6 +111,9 @@ func (p *Pool) readRank(ticket string, now time.Time) RankInfo {
 	if !rf.Rank.Valid() {
 		return RankInfo{Rank: RankNormal, Error: fmt.Sprintf("rank file names an unknown rank %q", string(rf.Rank))}
 	}
+	if rf.At <= 0 {
+		return RankInfo{Rank: RankNormal, Error: "rank file has no time it was set at"} // it would sort before every real front ticket
+	}
 	info := RankInfo{Rank: rf.Rank, At: time.Unix(0, rf.At), By: rf.By, Reason: rf.Reason}
 	if rf.Until > 0 {
 		info.Until = time.Unix(0, rf.Until)

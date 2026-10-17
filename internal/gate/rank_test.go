@@ -145,6 +145,7 @@ func TestRank_BrokenFilesReadAsNormalWithAnError(t *testing.T) {
 		"not json":     "{nope",
 		"unknown rank": `{"rank":"sideways","at":1}`,
 		"empty":        "",
+		"no time":      `{"rank":"front"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			rp := newRankPool(t, 1)
