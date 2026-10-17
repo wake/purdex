@@ -28,7 +28,7 @@ beforeEach(() => {
   useUISettingsStore.setState({ keepAliveCount: 0 })
   useHostStore.setState({ hosts: { h1: { id: 'h1', name: 'mlab', ip: '1', port: 1, token: 't', order: 0 } }, hostOrder: ['h1'], activeHostId: 'h1', runtime: { h1: { status: 'connected' } } } as never)
   useWatchStatusStore.getState().reset()
-  useWatchEventsStore.setState({ byHost: { h1: { kind: 'ok', at: 1, events: [ev('a', 'pressure_high', 'pending'), ev('b', 'slot_long', 'handled')] } }, known: ['h1'] })
+  useWatchEventsStore.setState({ unhandled: { h1: 1 }, byHost: { h1: { kind: 'ok', at: 1, events: [ev('a', 'pressure_high', 'pending'), ev('b', 'slot_long', 'handled')] } }, known: ['h1'] })
 })
 afterEach(() => clearViewMemory())
 

@@ -108,6 +108,7 @@ export function WatchEventsPane(_props: PaneRendererProps) {
   const t = useI18nStore((s) => s.t)
   const byHost = useWatchEventsStore((s) => s.byHost)
   const known = useWatchEventsStore((s) => s.known)
+  const unhandled = useWatchEventsStore((s) => s.unhandled)
   const statusByHost = useWatchStatusStore((s) => s.byHost)
   const hosts = useHostStore((s) => s.hosts)
   const hostOrder = useHostStore((s) => s.hostOrder)
@@ -133,7 +134,7 @@ export function WatchEventsPane(_props: PaneRendererProps) {
   }, [holder])
   const model = holder && read?.host === holder ? read.model : undefined
 
-  const pending = pendingCount(byHost)
+  const pending = pendingCount(unhandled) // the daemons' own counts: a list holds at most 500 rows
   const hasGuardian = guardian.state === 'awake' || guardian.state === 'resting'
   const rows = useMemo(() => mergeRows(byHost, hostOrder), [byHost, hostOrder])
 

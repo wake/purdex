@@ -18,7 +18,9 @@ const NOW = new Date(2026, 9, 17, 12, 0).getTime()
 const at = (d: number, h: number, m = 0) => new Date(2026, 9, d, h, m).toISOString()
 const ev = (id: string, when: string, over: Partial<WatchEvent> = {}): WatchEvent => ({ id, host: 'mlab', kind: 'unmanaged_heavy', at: when, status: 'pending', ...over })
 const status = (state: 'awake' | 'resting' | 'none', mode = 'patrol'): WatchStatus => ({ self: { host_id: 'd1', state, since: '2026-10-16T01:00:00Z', session_id: 's' }, enabled: true, auto_wake: true, mode, targets: [] })
-const setEvents = (byHost: Record<string, WatchEvent[] | 'error'>, known?: string[]) => useWatchEventsStore.setState({
+/** `unhandled` defaults to what each listed host's pending rows add up to, as a daemon with a short backlog would say. */
+const setEvents = (byHost: Record<string, WatchEvent[] | 'error'>, known?: string[], unhandled?: Record<string, number>) => useWatchEventsStore.setState({
+  unhandled: unhandled ?? Object.fromEntries(Object.entries(byHost).flatMap(([id, v]) => (v === 'error' ? [] : [[id, v.filter((e) => e.status === 'pending').length]]))),
   byHost: Object.fromEntries(Object.entries(byHost).map(([id, v]) => [id, v === 'error' ? { kind: 'error' as const, at: 1 } : { kind: 'ok' as const, events: v, at: 1 }])),
   known: known ?? Object.keys(byHost),
 })
@@ -47,6 +49,12 @@ describe('WatchEventsPane — count and guardian lines', () => {
     const c = screen.getByTestId('events-count')
     expect(c).toHaveTextContent(t('watch.events.count_pending', { n: 2 }))
     expect(c.className).toContain('text-status-warning-text')
+  })
+  it("says the daemon's number when its list holds only 500 of them", () => {
+    asGuardian('awake')
+    setEvents({ h1: Array.from({ length: 500 }, (_, i) => ev(String(i), at(17, 9))) }, undefined, { h1: 620 })
+    mount()
+    expect(screen.getByTestId('events-count')).toHaveTextContent(t('watch.events.count_pending', { n: 620 }))
   })
   it('says nothing waits when nothing does', () => {
     asGuardian('awake')
