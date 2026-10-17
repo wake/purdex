@@ -20,7 +20,10 @@ type patrolRig struct {
 	failWake                  bool
 }
 
-func newPatrolRig(t *testing.T) *patrolRig {
+func newPatrolRig(t *testing.T) *patrolRig { return newPatrolRigWith(t, true) }
+
+// newPatrolRigWith is the rig with the watcher registered (awake) or this host holding none.
+func newPatrolRigWith(t *testing.T, registered bool) *patrolRig {
 	t.Helper()
 	pr := &patrolRig{recRig: newRecRig(t), freeGB: 100}
 	pr.m.psrc = &patrolSources{
@@ -38,8 +41,10 @@ func newPatrolRig(t *testing.T) *patrolRig {
 		}
 		return nil
 	}
-	pr.owners.set(watcherOwner("f1"), true, nil)
-	_, _, _ = pr.m.Reconcile(context.Background()) // the watcher registers at r.now
+	if registered {
+		pr.owners.set(watcherOwner("f1"), true, nil)
+		_, _, _ = pr.m.Reconcile(context.Background()) // the watcher registers at r.now
+	}
 	return pr
 }
 
@@ -116,8 +121,7 @@ func TestPatrol_ALowDiskIsToldAtOnceOncePerTimeItRunsLow(t *testing.T) {
 }
 
 func TestPatrol_ThisHostWithoutAWatcherOrWithDetectionOffDoesNothing(t *testing.T) {
-	r := newPatrolRig(t)
-	require.NoError(t, r.m.holder.Update(func(h *watch.Holder) { h.State = watch.HolderNone }))
+	r := newPatrolRigWith(t, false)
 	r.freeGB = 1
 	r.step(2 * time.Hour)
 	require.Empty(t, r.reasons())
