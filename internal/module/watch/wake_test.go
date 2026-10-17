@@ -69,3 +69,12 @@ func TestPeerNoteRoute_TheHostsWatcherIsToldAndTheRulesOfTheHolderRouteHold(t *t
 	r.now = r.now.Add(time.Minute) // the holder read is reconciled again after 30 s
 	require.Equal(t, http.StatusConflict, r.serve(hostCtx(), "/api/peers/watch/note", body).Code, "no watcher awake here")
 }
+
+// The service the other modules look up is there once the module is initialised (a real module, not a stand-in).
+func TestWakeWatcher_TheModuleRegistersItsWaker(t *testing.T) {
+	r := newRig(t)
+	svc, ok := r.m.core.Registry.Get(watch.WakerKey)
+	require.True(t, ok)
+	_, isWaker := svc.(watch.Waker)
+	require.True(t, isWaker)
+}
