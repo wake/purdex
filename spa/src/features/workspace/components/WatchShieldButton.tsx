@@ -19,7 +19,7 @@ export function WatchShieldButton() {
   const active = useWorkspaceStore((s) => s.activeWorkspaceId === WATCH_WORKSPACE_ID)
   const { state } = useMemo(() => deriveGuardian(byHost), [byHost])
   const present = state === 'awake' || state === 'resting'
-  const waiting = useWatchEventsStore((s) => pendingCount(s.byHost))
+  const waiting = useWatchEventsStore((s) => pendingCount(s.unhandled))
 
   const label = waiting > 0 ? `${t(`watch.shield.${state}`)} · ${t('watch.shield.events', { n: waiting })}` : t(`watch.shield.${state}`)
 

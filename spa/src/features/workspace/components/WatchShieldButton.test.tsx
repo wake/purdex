@@ -79,33 +79,44 @@ describe('WatchShieldButton', () => {
 
 describe('WatchShieldButton — the events count (W5e)', () => {
   const ev = (id: string, status: 'pending' | 'handled') => ({ id, host: 'm', kind: 'pressure_high', at: '2026-10-17T01:00:00Z', status })
-  const hasEvents = (...rows: ReturnType<typeof ev>[]) => useWatchEventsStore.setState({ byHost: { h1: { kind: 'ok', events: rows, at: 1 } } })
+  const title = (n: number) => `${t('watch.shield.awake')} · ${useI18nStore.getState().t('watch.shield.events', { n })}`
+  /** The daemon's own count per App host (GET /api/watch/unhandled, watch.events), and the rows its list returned. */
+  const counts = (unhandled: Record<string, number>, rows: ReturnType<typeof ev>[] = []) =>
+    useWatchEventsStore.setState({ unhandled, byHost: { h1: { kind: 'ok', events: rows, at: 1 } } })
 
   it('shows no badge while nothing waits, and a click goes to the guardian tab', () => {
     answer('awake')
-    hasEvents(ev('1', 'handled'))
+    counts({ h1: 0 }, [ev('1', 'handled')])
     render(<WatchShieldButton />)
     expect(screen.queryByTestId('watch-shield-count')).toBeNull()
     fireEvent.click(screen.getByTestId('watch-shield'))
     expect(openWatchArea).toHaveBeenCalledWith({ tab: 'guardian' })
   })
 
-  it('shows the number of pending events (handled ones are not counted) and a click opens 事件', () => {
+  it('shows the sum of the hosts\' unhandled counts and a click opens 事件', () => {
     answer('awake')
-    hasEvents(ev('1', 'pending'), ev('2', 'handled'), ev('3', 'pending'))
+    counts({ h1: 2, h2: 3 })
     render(<WatchShieldButton />)
-    expect(screen.getByTestId('watch-shield-count')).toHaveTextContent('2')
-    expect(screen.getByTestId('watch-shield')).toHaveAttribute('title', `${t('watch.shield.awake')} · ${useI18nStore.getState().t('watch.shield.events', { n: 2 })}`)
+    expect(screen.getByTestId('watch-shield-count')).toHaveTextContent('5')
+    expect(screen.getByTestId('watch-shield')).toHaveAttribute('title', title(5))
     fireEvent.click(screen.getByTestId('watch-shield'))
     expect(openWatchArea).toHaveBeenCalledWith({ tab: 'events' })
   })
 
-  it('follows the count when the events change', () => {
+  it('the list holds only 500 rows but the daemon says 620: the number is 620 (the badge caps its figures at 99+)', () => {
+    answer('awake')
+    counts({ h1: 620 }, Array.from({ length: 500 }, (_, i) => ev(String(i), 'pending')))
+    render(<WatchShieldButton />)
+    expect(screen.getByTestId('watch-shield')).toHaveAttribute('title', title(620))
+    expect(screen.getByTestId('watch-shield-count')).toHaveTextContent('99+')
+  })
+
+  it('follows the count when it changes', () => {
     answer('none')
-    hasEvents(ev('1', 'pending'))
+    counts({ h1: 1 })
     render(<WatchShieldButton />)
     expect(screen.getByTestId('watch-shield-count')).toHaveTextContent('1')
-    act(() => hasEvents(ev('1', 'handled')))
+    act(() => counts({ h1: 0 }))
     expect(screen.queryByTestId('watch-shield-count')).toBeNull()
   })
 })

@@ -1,10 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 const fetchWatchEvents = vi.fn()
-vi.mock('./api', () => ({ fetchWatchEvents: (...a: unknown[]) => fetchWatchEvents(...a), fetchWatchStatus: vi.fn() }))
+const fetchWatchUnhandled = vi.fn()
+vi.mock('./api', () => ({
+  fetchWatchEvents: (...a: unknown[]) => fetchWatchEvents(...a),
+  fetchWatchUnhandled: (...a: unknown[]) => fetchWatchUnhandled(...a),
+  fetchWatchStatus: vi.fn(),
+}))
 import { useHostStore } from '../../stores/useHostStore'
 import { useWatchStatusStore } from './status-store'
-import { startWatchEvents, rereadWatchEvents, useWatchEventsStore, pendingCount, anyHostDeclaresWatch, type EventsEntry } from './events-store'
+import { startWatchEvents, rereadWatchEvents, applyWatchUnhandled, useWatchEventsStore, pendingCount, anyHostDeclaresWatch } from './events-store'
 import type { WatchEvent } from './events-types'
 
 const ev = (id: string, status: 'pending' | 'handled' = 'pending'): WatchEvent => ({ id, host: 'm', kind: 'pressure_high', at: '2026-10-17T01:00:00Z', status })
@@ -17,13 +22,8 @@ const setHosts = (ids: string[], connected: string[]) => useHostStore.setState({
 } as never)
 
 describe('pendingCount / anyHostDeclaresWatch', () => {
-  it('counts the pending events of the hosts that answered, and none for an error', () => {
-    const by: Record<string, EventsEntry> = {
-      a: { kind: 'ok', at: 1, events: [ev('1'), ev('2', 'handled'), ev('3')] },
-      b: { kind: 'ok', at: 1, events: [ev('4')] },
-      c: { kind: 'error', at: 1 },
-    }
-    expect(pendingCount(by)).toBe(3)
+  it('adds up the daemons\' own unhandled counts; a host that has not said counts none', () => {
+    expect(pendingCount({ a: 3, b: 620 })).toBe(623)
     expect(pendingCount({})).toBe(0)
   })
   it('a watch host is one whose status answered ok', () => {
@@ -37,6 +37,8 @@ describe('startWatchEvents', () => {
   beforeEach(() => {
     fetchWatchEvents.mockReset()
     fetchWatchEvents.mockResolvedValue({ kind: 'ok', events: [ev('1')] })
+    fetchWatchUnhandled.mockReset()
+    fetchWatchUnhandled.mockResolvedValue({ kind: 'ok', count: 1 })
     useWatchStatusStore.getState().reset()
     useWatchEventsStore.getState().reset()
     setHosts(['h1'], ['h1'])
@@ -79,7 +81,6 @@ describe('startWatchEvents', () => {
     rereadWatchEvents('h1')
     await flush()
     expect(fetchWatchEvents).toHaveBeenCalledTimes(2)
-    expect(pendingCount(useWatchEventsStore.getState().byHost)).toBe(2)
     rereadWatchEvents('nobody')
     await flush()
     expect(fetchWatchEvents).toHaveBeenCalledTimes(2)
@@ -144,7 +145,67 @@ describe('startWatchEvents', () => {
     await flush()
     stop()
     rereadWatchEvents('h1')
+    applyWatchUnhandled('h1', 9)
     await flush()
     expect(fetchWatchEvents).toHaveBeenCalledTimes(1)
+    expect(useWatchEventsStore.getState().unhandled.h1).toBe(1)
+  })
+
+  describe('the count is the daemon\'s own unhandled number', () => {
+    it('reads GET /api/watch/unhandled with the first read: 500 rows listed, 620 unhandled → 620', async () => {
+      fetchWatchEvents.mockResolvedValue({ kind: 'ok', events: Array.from({ length: 500 }, (_, i) => ev(String(i))) })
+      fetchWatchUnhandled.mockResolvedValue({ kind: 'ok', count: 620 })
+      stop = startWatchEvents()
+      useWatchStatusStore.getState().set('h1', okStatus)
+      await flush()
+      expect(fetchWatchUnhandled).toHaveBeenCalledWith('h1')
+      expect(pendingCount(useWatchEventsStore.getState().unhandled)).toBe(620)
+    })
+
+    it('a watch.events payload sets the host\'s count at once; the list is read again as before', async () => {
+      stop = startWatchEvents()
+      useWatchStatusStore.getState().set('h1', okStatus)
+      await flush()
+      fetchWatchEvents.mockResolvedValue({ kind: 'ok', events: [ev('1'), ev('2')] })
+      applyWatchUnhandled('h1', 7)
+      expect(useWatchEventsStore.getState().unhandled.h1).toBe(7)
+      rereadWatchEvents('h1')
+      await flush()
+      expect(useWatchEventsStore.getState().unhandled.h1).toBe(7) // two pending rows listed, still the daemon's 7
+    })
+
+    it('the first count read, answering after a newer payload, does not overwrite it', async () => {
+      let late!: (v: unknown) => void
+      fetchWatchUnhandled.mockReturnValueOnce(new Promise((r) => { late = r }))
+      stop = startWatchEvents()
+      useWatchStatusStore.getState().set('h1', okStatus)
+      await flush()
+      applyWatchUnhandled('h1', 5)
+      late({ kind: 'ok', count: 99 })
+      await flush()
+      expect(useWatchEventsStore.getState().unhandled.h1).toBe(5)
+    })
+
+    it('a payload for a host that is not a watch host, or a bad number, changes nothing', async () => {
+      stop = startWatchEvents()
+      useWatchStatusStore.getState().set('h1', okStatus)
+      await flush()
+      applyWatchUnhandled('nobody', 4)
+      applyWatchUnhandled('h1', -1)
+      applyWatchUnhandled('h1', 1.5)
+      applyWatchUnhandled('h1', Number.NaN)
+      expect(useWatchEventsStore.getState().unhandled).toEqual({ h1: 1 })
+    })
+
+    it('an unreadable count leaves the host uncounted; the count goes with the host on disconnect', async () => {
+      fetchWatchUnhandled.mockResolvedValue({ kind: 'error' })
+      stop = startWatchEvents()
+      useWatchStatusStore.getState().set('h1', okStatus)
+      await flush()
+      expect(useWatchEventsStore.getState().unhandled).toEqual({})
+      applyWatchUnhandled('h1', 3)
+      setHosts(['h1'], [])
+      expect(useWatchEventsStore.getState().unhandled).toEqual({})
+    })
   })
 })

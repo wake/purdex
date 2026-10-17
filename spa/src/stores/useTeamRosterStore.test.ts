@@ -1,5 +1,6 @@
 // spa/src/stores/useTeamRosterStore.test.ts — plan PL-2b′: replace, forget, never persisted.
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import * as hostApi from '../lib/host-api'
 import storeSource from './useTeamRosterStore.ts?raw'
 import { useTeamRosterStore } from './useTeamRosterStore'
 import type { TeamRoster } from '../lib/team/roster'
@@ -49,5 +50,69 @@ describe('useTeamRosterStore', () => {
   it('is not persisted: the store source has no persist middleware', () => {
     expect(storeSource).not.toMatch(/persist\s*\(/)
     expect(storeSource).not.toMatch(/zustand\/middleware/)
+  })
+
+  it('apply marks the host as having a roster from THIS connection; dropConnection clears the mark but keeps the roster', () => {
+    const s = useTeamRosterStore.getState()
+    s.apply('h1', [team('a')])
+    expect(useTeamRosterStore.getState().liveHosts).toEqual({ h1: true })
+    s.dropConnection('h1')
+    expect(useTeamRosterStore.getState().liveHosts).toEqual({})
+    expect(useTeamRosterStore.getState().byHost.h1).toEqual([team('a')])
+    s.apply('h1', [team('a')])
+    s.forgetHost('h1')
+    expect(useTeamRosterStore.getState().liveHosts).toEqual({})
+  })
+
+  it('session-list liveness is marked by markSessionsLive and cleared with the connection (R4)', () => {
+    const s = useTeamRosterStore.getState()
+    s.markSessionsLive('h1')
+    expect(useTeamRosterStore.getState().liveSessionHosts).toEqual({ h1: true })
+    s.dropConnection('h1')
+    expect(useTeamRosterStore.getState().liveSessionHosts).toEqual({})
+  })
+
+  it('a session list landing through the session store marks its host live (R4)', async () => {
+    const { useSessionStore } = await import('./useSessionStore')
+    useSessionStore.getState().replaceHost('h9', [])
+    expect(useTeamRosterStore.getState().liveSessionHosts).toEqual({ h9: true })
+  })
+
+  it('forgetHost clears session liveness even when no roster ever arrived (R4)', () => {
+    useTeamRosterStore.getState().markSessionsLive('h7')
+    useTeamRosterStore.getState().forgetHost('h7')
+    expect(useTeamRosterStore.getState().liveSessionHosts).toEqual({})
+  })
+
+  it('a session fetch in flight when the connection drops is discarded, not marked live (R4)', async () => {
+    let resolve!: (v: never[]) => void
+    vi.spyOn(hostApi, 'listSessions').mockReturnValue(new Promise((r) => { resolve = r as typeof resolve }))
+    const { useSessionStore } = await import('./useSessionStore')
+    const p = useSessionStore.getState().fetchHost('h8')
+    useTeamRosterStore.getState().dropConnection('h8')
+    resolve([])
+    await p
+    expect(useTeamRosterStore.getState().liveSessionHosts).toEqual({})
+    expect(useSessionStore.getState().sessions.h8).toBeUndefined()
+  })
+
+  // Every path that retires a connection must discard a session fetch still in flight (member spec R4).
+  const inFlight = async (host: string, retire: () => void) => {
+    let resolve!: (v: never[]) => void
+    vi.spyOn(hostApi, 'listSessions').mockReturnValue(new Promise((r) => { resolve = r as typeof resolve }))
+    const { useSessionStore } = await import('./useSessionStore')
+    useSessionStore.setState({ sessions: {} })
+    const p = useSessionStore.getState().fetchHost(host)
+    retire()
+    resolve([])
+    await p
+    expect(useTeamRosterStore.getState().liveSessionHosts).toEqual({})
+    expect(useSessionStore.getState().sessions[host]).toBeUndefined()
+  }
+  it('a fetch in flight when the host is forgotten (removed / re-pointed) is discarded', async () => {
+    await inFlight('h5', () => useTeamRosterStore.getState().forgetHost('h5'))
+  })
+  it('a fetch in flight when the store is reset is discarded', async () => {
+    await inFlight('h6', () => useTeamRosterStore.getState().reset())
   })
 })

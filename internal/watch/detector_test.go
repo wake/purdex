@@ -30,21 +30,23 @@ type rig struct {
 	argv    map[int][]string
 	gates   map[int]bool // the pids the caller verified as a genuine pdx gate
 	cwd     map[int]string
+	started map[int]time.Time // when each pid started; absent = unknown
 	lockPID []int
 	locks   int
 }
 
 func newRig(t *testing.T) *rig {
 	mem := NewMemoryStore()
-	return &rig{t: t, d: New(mem), mem: mem, now: t0, set: DefaultSettings(), argv: map[int][]string{}, gates: map[int]bool{}, cwd: map[int]string{}}
+	return &rig{t: t, d: New(mem), mem: mem, now: t0, set: DefaultSettings(), argv: map[int][]string{}, gates: map[int]bool{}, cwd: map[int]string{}, started: map[int]time.Time{}}
 }
 
 // pass runs one pass at the current time and moves the clock on by a tick.
 func (r *rig) pass() []Event {
 	in := Input{Now: r.now, Procs: r.procs, Raw: r.raw, Holders: r.holders, Roots: r.roots, Set: r.set,
-		Argv:   func(pid int) []string { return r.argv[pid] },
-		IsGate: func(pid int) bool { return r.gates[pid] },
-		Cwd:    func(pid int) string { return r.cwd[pid] },
+		Argv:    func(pid int) []string { return r.argv[pid] },
+		IsGate:  func(pid int) bool { return r.gates[pid] },
+		Cwd:     func(pid int) string { return r.cwd[pid] },
+		Started: func(pid int) time.Time { return r.started[pid] },
 		LockPIDs: func(gate.Holder) []int {
 			r.locks++
 			return r.lockPID
