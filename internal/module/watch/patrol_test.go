@@ -8,6 +8,10 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/wake/purdex/internal/module/hostconfig"
+	"github.com/wake/purdex/internal/push"
+	"github.com/wake/purdex/internal/resources"
+	"github.com/wake/purdex/internal/team"
 	"github.com/wake/purdex/internal/watch"
 )
 
@@ -157,3 +161,34 @@ func TestPatrol_ANoteFromAnotherSourceRestartsTheCount(t *testing.T) {
 	r.m.patrolStep(context.Background())
 	require.Equal(t, []string{"patrol"}, reasons)
 }
+
+// The real sources are the registry's services (what the modules publish), read at each tick.
+func TestPatrol_TheSourcesAreTheRegistrysServices(t *testing.T) {
+	r := newRig(t)
+	require.False(t, r.m.atComputer())
+	require.False(t, r.m.unattendedOn())
+	require.False(t, r.m.hostBusy())
+	reg := r.m.core.Registry
+	reg.Register(push.AtComputerKey, atComputerFake(true))
+	reg.Register(hostconfig.UnattendedKey, unattendedFake{team.UnattendedState{On: true}})
+	reg.Register(resources.HostReaderKey, hostFake{resources.HostUse{Zone: "warning"}})
+	require.True(t, r.m.atComputer())
+	require.True(t, r.m.unattendedOn())
+	require.True(t, r.m.hostBusy())
+	reg.Register(resources.HostReaderKey, hostFake{resources.HostUse{Zone: "normal"}})
+	require.False(t, r.m.hostBusy())
+	_, ok := r.m.diskFreeGB()
+	require.True(t, ok, "the data dir's free space is read")
+}
+
+type atComputerFake bool
+
+func (a atComputerFake) AtComputer() bool { return bool(a) }
+
+type unattendedFake struct{ st team.UnattendedState }
+
+func (u unattendedFake) Unattended() (team.UnattendedState, error) { return u.st, nil }
+
+type hostFake struct{ h resources.HostUse }
+
+func (h hostFake) LatestHost() (resources.HostUse, bool) { return h.h, true }
