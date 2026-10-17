@@ -33,6 +33,8 @@ export function BackgroundSymbol({ waiters, ...rest }: Props) {
 function QueuedSymbol({ waiters, ...rest }: Props & { waiters: FleetWaiter[] }) {
   const t = useI18nStore((s) => s.t)
   useCoarseNow() // re-render each minute; the minutes themselves are read from the clock below
+  // Date.now(), not the coarse minute: the minute value would understate a wait by up to a minute. The tick above re-renders.
+  // eslint-disable-next-line react-hooks/purity
   return <Symbol {...rest} title={queuedTooltip(waiters, Date.now(), t)} />
 }
 
