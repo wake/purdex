@@ -5,10 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/wake/purdex/internal/execstat"
 )
 
 // The assist hosts (assist-dispatch plan X1a): assist.json in the gate directory says which hosts take work, whether each is
@@ -275,12 +276,12 @@ func RepoOfDir(cwd string) string {
 	if cwd == "" {
 		return ""
 	}
-	if out, err := exec.Command("git", "-C", cwd, "config", "--get", "remote.origin.url").Output(); err == nil {
+	if out, err := execstat.Command("assist.repo-url", "git", "-C", cwd, "config", "--get", "remote.origin.url").Output(); err == nil {
 		if n := RepoFromURL(string(out)); n != "" {
 			return n
 		}
 	}
-	if out, err := exec.Command("git", "-C", cwd, "rev-parse", "--show-toplevel").Output(); err == nil {
+	if out, err := execstat.Command("assist.repo-top", "git", "-C", cwd, "rev-parse", "--show-toplevel").Output(); err == nil {
 		return filepath.Base(strings.TrimSpace(string(out)))
 	}
 	return ""

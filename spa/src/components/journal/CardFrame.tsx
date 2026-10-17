@@ -20,17 +20,19 @@ interface Props {
   onToggleFixed?: () => void
   /** Take the whole height of the stack (the journal and its detail), instead of the content's. */
   fill?: boolean
+  /** One of the floating cards (journal, roadmap, tasks, the 待確認 detail): a pointer-down inside it is not "outside" for the outside-click close. Any other frame (the team panel's) is outside. */
+  floating?: boolean
   children?: React.ReactNode
 }
 
-export function CardFrame({ testId, width, onCommitWidth, title, actions, onClose, fixed, onToggleFixed, fill, children }: Props) {
+export function CardFrame({ testId, width, onCommitWidth, title, actions, onClose, fixed, onToggleFixed, fill, floating, children }: Props) {
   const t = useI18nStore((s) => s.t)
   const [draft, setDraft] = useState<number | null>(null)
   const draftRef = useRef<number | null>(null)
   return (
     <div
       data-testid={testId}
-      data-journal-card=""
+      {...(floating ? { 'data-journal-card': '' } : {})}
       className={`relative pointer-events-auto flex flex-col min-h-0 max-h-full overflow-hidden rounded-b-lg border border-t-0 border-border-default bg-surface-elevated shadow-xl font-sans text-xs text-text-primary shrink-0 transition-[width] duration-150${fill ? ' h-full' : ''}`}
       style={{ width: draft ?? width }}
     >

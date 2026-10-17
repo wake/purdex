@@ -45,6 +45,7 @@ func (g *Gate) tryAssist(ctx context.Context, cfg Config, class Class, o Options
 		}
 		return 0, false
 	}
+	d.Tried = a.Host
 	res := g.RunAssist(ctx, o, AssistRun{Host: a.Host, Job: job, Repo: repo, SSH: a.SSH, Git: a.Git})
 	d.TransferS, d.RunS, d.Reclaimed = res.TransferS, res.RunS, res.Reclaimed
 	// Every way out lets the dispatch slot go: a return to the queue lets it go first (Ticket.Return), the others here.

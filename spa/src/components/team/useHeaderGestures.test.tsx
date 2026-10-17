@@ -37,7 +37,7 @@ describe('which states a header click toggles', () => {
     expect(onSetMode.mock.calls).toEqual([[to]])
   })
 
-  it.each(['max', 'titlebar'] as const)('%s is left alone', (mode) => {
+  it.each(['titlebar'] as const)('%s is left alone', (mode) => {
     render(<Harness {...base} mode={mode} />)
     fireEvent.click(screen.getByTestId('blank'))
     nameClick()

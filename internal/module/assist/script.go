@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wake/purdex/internal/execstat"
 	"github.com/wake/purdex/internal/gate"
 )
 
@@ -24,7 +25,7 @@ func (m *Module) runScript(h gate.AssistHost, name string, args []string, timeou
 	}
 	ctx, cancel := context.WithTimeout(m.scriptCtx(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, filepath.Join(h.Scripts, name), args...)
+	cmd := execstat.CommandContext(ctx, "assist.script", filepath.Join(h.Scripts, name), args...)
 	cmd.Env = append(os.Environ(), "ASSIST_HOST="+h.SSH)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }

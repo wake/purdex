@@ -353,7 +353,7 @@ func (d *Drainer) writeTurn(h home, ent Entry, p turnPayload) error {
 	actor := d.actor(ent.SessionID)
 	if h.solo {
 		for _, t := range p.Todos {
-			e := journal.Entry{ID: fmt.Sprintf("todo:%d:new", t.ID), Kind: journal.KindTaskNew, At: when, Actor: actor, Text: fmt.Sprintf("#%d %s", t.Seq, t.Title)}
+			e := journal.Entry{ID: fmt.Sprintf("todo:%d:new", t.ID), Kind: journal.KindTaskNew, At: when, Actor: actor, SID: ent.SessionID, Text: fmt.Sprintf("#%d %s", t.Seq, t.Title)}
 			switch t.State {
 			case TodoOpen:
 			case TodoDone:
@@ -374,7 +374,7 @@ func (d *Drainer) writeTurn(h home, ent Entry, p turnPayload) error {
 		if ent.ThingDone {
 			kind = journal.KindExecDone
 		}
-		if err := h.putNew(journal.Entry{ID: fmt.Sprintf("turn:%d", ent.ID), Kind: kind, At: when, Actor: actor, Text: strings.TrimSpace(ent.Entry)}); err != nil {
+		if err := h.putNew(journal.Entry{ID: fmt.Sprintf("turn:%d", ent.ID), Kind: kind, At: when, Actor: actor, SID: ent.SessionID, Text: strings.TrimSpace(ent.Entry)}); err != nil {
 			return err
 		}
 	}
@@ -413,7 +413,7 @@ func (d *Drainer) writeTasks(h home) error {
 func (d *Drainer) writeJournal(h home, ent Entry, p journalPayload) error {
 	when := at(ent.TurnAt)
 	for i, ev := range p.Events {
-		e := journal.Entry{ID: fmt.Sprintf("ev:%d:%d", ent.ID, i), Kind: journal.Kind(ev.Kind), By: journal.By(ev.By), At: when, Actor: ev.Actor, Text: ev.Text, Detail: ev.Detail}
+		e := journal.Entry{ID: fmt.Sprintf("ev:%d:%d", ent.ID, i), Kind: journal.Kind(ev.Kind), By: journal.By(ev.By), At: when, Actor: ev.Actor, SID: ent.SessionID, Text: ev.Text, Detail: ev.Detail}
 		for _, it := range ev.Items {
 			e.Items = append(e.Items, journal.Item{Text: it})
 		}

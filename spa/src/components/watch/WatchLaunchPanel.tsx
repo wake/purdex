@@ -8,7 +8,7 @@ import { useI18nStore } from '../../stores/useI18nStore'
 import { useHostLook, useHostLookResolver } from '../../lib/host-look'
 import { useHostStore } from '../../stores/useHostStore'
 import { formatHandoffTime } from '../../lib/relay/handoff-time'
-import { isLaunchBusy, requestLaunch, startTarget, useWatchLaunchStore, type LaunchSlot } from '../../lib/watch/launch'
+import { isLaunchBusy, isLaunchLocked, requestLaunch, startTarget, useWatchLaunchStore, type LaunchSlot } from '../../lib/watch/launch'
 import { useWatchStatusStore, deriveGuardian } from '../../lib/watch/status-store'
 import { readWatchRow, type WatchRow } from '../../lib/watch/watch-row'
 
@@ -98,7 +98,7 @@ export function WatchLaunchPanel({ title, hint }: Props) {
           <button
             type="button"
             data-testid={kind === 'start' ? 'watch-launch-start' : 'watch-launch-wake'}
-            disabled={busy}
+            disabled={isLaunchLocked(slot)}
             onClick={() => void requestLaunch(kind, target)}
             className={btn}
           >

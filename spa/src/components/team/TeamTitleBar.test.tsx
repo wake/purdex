@@ -88,10 +88,10 @@ describe('the Notebook button', () => {
     expect(button()!.className).toContain('text-accent-base')
   })
 
-  it('moves the area between the title bar and the pane state it left (line, full or max)', () => {
+  it('moves the area between the title bar and the pane state it left (line or full)', () => {
     scene()
     mountBar()
-    for (const left of ['full', 'line', 'max'] as const) {
+    for (const left of ['full', 'line'] as const) {
       act(() => useTeamUiStore.getState().setPanelMode(KEY, left))
       press()
       expect(mode()).toBe('titlebar')
@@ -153,11 +153,11 @@ describe('the strip', () => {
   it('the team name brings the area back to the pane state it left', () => {
     scene()
     mountBar()
-    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'max'))
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
     press()
     fireEvent.click(screen.getByTestId('team-strip-name'))
-    expect(mode()).toBe('max')
-    expect(screen.getByTestId('team-panel-area').getAttribute('data-expanded')).toBe('true')
+    expect(mode()).toBe('line')
+    expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe('line')
   })
 
   it('a cell opens its seat (R3 + R10) and leaves the area where it is', () => {
@@ -372,8 +372,8 @@ describe('the state lives in the store (tab-hosted rule)', () => {
   it('survives a reload', () => {
     scene('lead')
     const first = render(<Shell />)
-    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'max'))
-    press() // -> title bar, remembering max
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+    press() // -> title bar, remembering line
     first.unmount()
     const saved = localStorage.getItem('purdex-team-ui')!
     act(() => useTeamUiStore.setState({ panelMode: {}, panelLast: {} }))
@@ -382,7 +382,7 @@ describe('the state lives in the store (tab-hosted rule)', () => {
     render(<Shell />)
     expect(strip()).not.toBeNull()
     press()
-    expect(screen.getByTestId('team-panel-area').getAttribute('data-expanded')).toBe('true')
+    expect(screen.getByTestId('team-panel').getAttribute('data-mode')).toBe('line')
   })
 })
 

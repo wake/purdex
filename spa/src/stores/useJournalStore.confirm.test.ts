@@ -106,3 +106,68 @@ describe('setConfirm', () => {
     await click
   })
 })
+
+describe('setConfirm of an entry only the band holds (an older session / month)', () => {
+  const bandOnly = async (items: [string, boolean][]) => {
+    st().reset()
+    const c = wireConfirm('c9', { at: T0, items: items.map(([text, d]) => ({ text, done: d })) })
+    getJournal.mockResolvedValue({ kind: 'ok', value: parseJournalPage(wirePage({ entries: [], confirms: [c], open_confirms: 1 })) })
+    st().setSupport('h1', true, true)
+    await st().loadJournal('h1', 's1')
+  }
+  const band = () => unit().confirms.map((e) => e.id)
+  it('a failed write on the last item puts the entry back in the band, restores the count and lets it be checked again', async () => {
+    await bandOnly([['a', false]])
+    expect(unit().entries).toEqual([])
+    setConfirmItem.mockResolvedValue({ kind: 'none' })
+    await st().setConfirm('h1', 's1', 'c9', 0, true)
+    expect(band()).toEqual(['c9'])
+    expect(unit().confirms[0].items[0].done).toBe(false)
+    expect(unit().openConfirms).toBe(1)
+    setConfirmItem.mockResolvedValue({ kind: 'ok', value: true })
+    await st().setConfirm('h1', 's1', 'c9', 0, true)
+    expect(band()).toEqual([])
+    expect(unit().openConfirms).toBe(0)
+  })
+  it('a successful write leaves the band for good', async () => {
+    await bandOnly([['a', false]])
+    setConfirmItem.mockResolvedValue({ kind: 'ok', value: true })
+    await st().setConfirm('h1', 's1', 'c9', 0, true)
+    expect(band()).toEqual([])
+    expect(unit().openConfirms).toBe(0)
+  })
+  it('two items of one entry, one write ok and one failed: the failed one comes back, the ok one stays checked', async () => {
+    await bandOnly([['a', false], ['b', false]])
+    setConfirmItem.mockResolvedValueOnce({ kind: 'ok', value: true }).mockResolvedValueOnce({ kind: 'none' })
+    await st().setConfirm('h1', 's1', 'c9', 0, true)
+    await st().setConfirm('h1', 's1', 'c9', 1, true)
+    expect(band()).toEqual(['c9'])
+    expect(unit().confirms[0].items.map((i) => i.done)).toEqual([true, false])
+    expect(unit().openConfirms).toBe(1)
+  })
+  it('the first item fails after the second succeeded: the restored entry keeps the second checked', async () => {
+    await bandOnly([['a', false], ['b', false]])
+    let failA!: () => void
+    setConfirmItem.mockReturnValueOnce(new Promise((r) => { failA = () => r({ kind: 'none' }) })).mockResolvedValueOnce({ kind: 'ok', value: true })
+    const pa = st().setConfirm('h1', 's1', 'c9', 0, true)
+    await st().setConfirm('h1', 's1', 'c9', 1, true)
+    expect(band()).toEqual([])
+    failA()
+    await pa
+    expect(band()).toEqual(['c9'])
+    expect(unit().confirms[0].items.map((i) => i.done)).toEqual([false, true])
+    expect(unit().openConfirms).toBe(1)
+  })
+  it('a journal.changed re-read during the write has the last word over the rollback', async () => {
+    await bandOnly([['a', false]])
+    let fail!: () => void
+    setConfirmItem.mockReturnValue(new Promise((r) => { fail = () => r({ kind: 'none' }) }))
+    const p = st().setConfirm('h1', 's1', 'c9', 0, true)
+    getJournal.mockResolvedValue({ kind: 'ok', value: parseJournalPage(wirePage({ entries: [], confirms: [], open_confirms: 0 })) })
+    await st().loadJournal('h1', 's1')
+    fail()
+    await p
+    expect(band()).toEqual([])
+    expect(unit().openConfirms).toBe(0)
+  })
+})

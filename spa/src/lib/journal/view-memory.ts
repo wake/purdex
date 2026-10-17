@@ -4,6 +4,8 @@
 // Memory only: a reload starts every unit closed, at the bottom. Bounded: the MAX_VIEW_MEMOS most recently used units are
 // kept, and a host the journal store forgets takes its memos with it (`useJournalStore.forgetHost`).
 
+import type { JournalEntry } from './types'
+
 export type JournalFilter = 'all' | 'exec' | 'task' | 'comm' | 'confirm'
 
 export interface ViewMemo {
@@ -25,6 +27,8 @@ export interface ViewMemo {
   page: string | null
   /** Where the stream was on each session page (by leader session id): one value per PAGE, not per unit. */
   pageScroll: Record<string, ScrollMemo>
+  /** The last copy of the open detail's entry that the unit held: kept once the entry leaves the band and the stream (every item answered). */
+  lastDetail: JournalEntry | null
 }
 
 /** Where a stream was left: `scroll` is scrollTop, `pinnedToBottom` that it was at its end (it opens there and follows new entries). */
@@ -48,7 +52,7 @@ const keyOf = (hostId: string, unitKey: string): string => `${hostId}${SEP}${uni
 
 export const initialViewMemo = (): ViewMemo => ({
   journalOpen: false, roadmapOpen: false, tasksOpen: false, fixed: { journal: false, roadmap: false, tasks: false }, widths: { journal: null, roadmap: null, tasks: null },
-  filter: 'all', scroll: 0, pinnedToBottom: true, detailId: null, page: null, pageScroll: {},
+  filter: 'all', scroll: 0, pinnedToBottom: true, detailId: null, lastDetail: null, page: null, pageScroll: {},
 })
 
 export function readViewMemo(hostId: string, unitKey: string): ViewMemo {

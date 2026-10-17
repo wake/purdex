@@ -142,6 +142,13 @@ let checkGen = 0
 /** PUTs out per item (`overlapped`: more than one was out at the same time, so the server may hold them in a different order). */
 const flights = new Map<string, { n: number; overlapped: boolean }>()
 const checkKey = (hostId: string, unitKey: string, entryId: string, idx: number): string => `${hostId}\u0000${unitKey}\u0000${entryId}\u0000${idx}`
+/**
+ * The newest copy of an entry only the band holds (an older session / month: not in `entries`), kept while it has pending checks.
+ * Checking its last item takes it out of `confirms[]`, so a failed write would find it nowhere to roll back into: the rollback
+ * restores it from here. Dropped with the pending checks of the entry (a server read, forgetHost, reset).
+ */
+const orphans = new Map<string, JournalEntry>()
+const entryKey = (hostId: string, unitKey: string, entryId: string): string => `${hostId}\u0000${unitKey}\u0000${entryId}`
 /** A read that started at `startedAt` ends the pending checks it speaks for (those clicked before it started, and of an entry named by `only` when given). */
 const dropChecks = (hostId: string, unitKey: string, startedAt: number, only?: ReadonlySet<string>): void => {
   const prefix = `${hostId}\u0000${unitKey}\u0000`
@@ -368,8 +375,13 @@ export const useJournalStore = create<JournalState>()((set, get) => {
         const h = s.byHost[hostId]
         const cur = h?.units[unitKey]
         // The entry as the store holds it NOW (a read may have changed its other fields since the click), not the object clicked.
-        const now = cur ? findEntry(cur, entryId) : undefined
-        return h && cur && now ? { byHost: { ...s.byHost, [hostId]: { ...h, units: { ...h.units, [unitKey]: withItem(cur, now, idx, value) } } } } : {}
+        const ek = entryKey(hostId, unitKey, entryId)
+        const now = (cur ? findEntry(cur, entryId) : undefined) ?? orphans.get(ek)
+        if (!h || !cur || !now) return {}
+        const nextUnit = withItem(cur, now, idx, value)
+        // An entry the stream does not hold lives only in the band: remember its newest copy for a rollback after it left.
+        if (!cur.entries.some((e) => e.id === entryId) && !Object.values(cur.pages).some((p) => p.entries.some((e) => e.id === entryId))) orphans.set(ek, nextUnit.confirms.find((e) => e.id === entryId) ?? { ...now, items: now.items.map((it, i) => (i === idx ? { ...it, done: value } : it)) })
+        return { byHost: { ...s.byHost, [hostId]: { ...h, units: { ...h.units, [unitKey]: nextUnit } } } }
       })
       apply(done)
       const epoch = get().epoch[hostId] ?? 0
@@ -395,6 +407,8 @@ export const useJournalStore = create<JournalState>()((set, get) => {
         apply(rec.base)
         useUndoToast.getState().show(useI18nStore.getState().t('journal.confirm.failed'))
       } finally {
+        const ek = entryKey(hostId, unitKey, entryId)
+        if (![...checks.keys()].some((c) => c.startsWith(`${ek}\u0000`))) orphans.delete(ek) // nothing pending on the entry: no rollback needs its copy
         if (reread && (get().epoch[hostId] ?? 0) === epoch) await get().loadJournal(hostId, sessionId)
       }
     },
@@ -424,6 +438,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
       forgetViewMemosOfHost(hostId)
       for (const k of [...checks.keys()]) if (k.startsWith(`${hostId}\u0000`)) checks.delete(k)
       for (const k of [...flights.keys()]) if (k.startsWith(`${hostId}\u0000`)) flights.delete(k)
+      for (const k of [...orphans.keys()]) if (k.startsWith(`${hostId}\u0000`)) orphans.delete(k)
       set((s) => ({
         readFailed: Object.fromEntries(Object.entries(s.readFailed).filter(([k]) => !k.startsWith(`${hostId}\u0000`))),
         support: drop(s.support, hostId), confirmSupport: drop(s.confirmSupport, hostId), sessionsSupport: drop(s.sessionsSupport, hostId), sticky: drop(s.sticky, hostId), gens: drop(s.gens, hostId), byHost: drop(s.byHost, hostId),
@@ -432,7 +447,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
       }))
     },
 
-    reset: () => { clock = 0; latest.clear(); checks.clear(); flights.clear(); set({ support: {}, confirmSupport: {}, sessionsSupport: {}, readFailed: {}, sticky: {}, gens: {}, byHost: {}, routes: {}, epoch: {}, staleRev: 0 }) },
+    reset: () => { clock = 0; latest.clear(); checks.clear(); flights.clear(); orphans.clear(); set({ support: {}, confirmSupport: {}, sessionsSupport: {}, readFailed: {}, sticky: {}, gens: {}, byHost: {}, routes: {}, epoch: {}, staleRev: 0 }) },
   }
 })
 
