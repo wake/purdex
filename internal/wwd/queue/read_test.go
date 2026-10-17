@@ -87,6 +87,30 @@ func TestListForPeersNeverShowsAdHocJobs(t *testing.T) {
 	assert.Equal(t, []string{normal}, ids(peers))
 }
 
+// A fast-lane job (local: it runs in the submitter's own working tree and never leaves the host) is not listed to peers either, and a
+// peer asking for it by id finds nothing, exactly like an ad-hoc job. The columns exist from the first deploy (the 3b-3 recorder fills
+// local); here a row is marked by hand. Mutation gate: the local condition dropped from either read → the peer sees the job.
+func TestPeersNeverSeeALocalJob(t *testing.T) {
+	f := newFixture(t)
+	normal := f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "" })
+	local := f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "" })
+	_, err := f.db.Exec(`UPDATE jobs SET local = 1 WHERE id = ?`, local)
+	require.NoError(t, err)
+	ctx := context.Background()
+
+	all, err := f.q.List(ctx, Filter{})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{normal, local}, ids(all), "the local view lists it")
+
+	peers, err := f.q.List(ctx, Filter{ForPeers: true})
+	require.NoError(t, err)
+	assert.Equal(t, []string{normal}, ids(peers))
+	_, err = f.q.GetForPeers(ctx, local)
+	assert.ErrorIs(t, err, ErrNotFound)
+	_, err = f.q.GetForPeers(ctx, normal)
+	assert.NoError(t, err)
+}
+
 // A claim is shown while someone holds it (claimed, running), not after the job ended or went back to the queue: the columns stay for
 // the result's idempotence, but the job no longer says it is claimed. Mutation gate: the state condition dropped → this fails.
 func TestClaimIsShownOnlyWhileHeld(t *testing.T) {

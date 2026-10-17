@@ -15,7 +15,7 @@ import (
 type Filter struct {
 	States           []wire.JobState // any of these states; empty = all
 	SubmitterSession string          // only this session's jobs
-	// ForPeers is a listing for another host: ad-hoc jobs are left out whole (spec 4.4, 8.3, 11), not just their args.
+	// ForPeers is a listing for another host: ad-hoc and fast-lane (local) jobs are left out whole (spec 4.4, 8.3, 11), not just their args.
 	ForPeers bool
 	Limit    int // the oldest Limit jobs; 0 = all
 }
@@ -42,7 +42,7 @@ type rowQuerier interface {
 func getOn(ctx context.Context, rq rowQuerier, id string, forPeers bool) (wire.Job, error) {
 	query := `SELECT ` + jobColumns + ` FROM jobs WHERE id = ?`
 	if forPeers {
-		query += ` AND adhoc = 0`
+		query += ` AND adhoc = 0 AND local = 0`
 	}
 	j, err := scanJob(rq.QueryRowContext(ctx, query, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -68,7 +68,7 @@ func (q *Queue) List(ctx context.Context, f Filter) ([]wire.Job, error) {
 		args = append(args, f.SubmitterSession)
 	}
 	if f.ForPeers {
-		where = append(where, "adhoc = 0")
+		where = append(where, "adhoc = 0", "local = 0")
 	}
 	query := `SELECT ` + jobColumns + ` FROM jobs`
 	if len(where) > 0 {

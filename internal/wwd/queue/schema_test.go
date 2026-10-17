@@ -48,7 +48,7 @@ func TestJobsTableHasEveryColumnOfTheStateMachine(t *testing.T) {
 		"id", "origin", "repo_name", "snap_commit", "task", "args", "class", "labels", "locks", "cacheable", "timeout_s",
 		"supersede_key", "interruptible", "queue_timeout_s", "adhoc", "sub_session", "created_at", "state", "attempts",
 		"claim_worker", "claim_id", "claim_since", "lease_deadline", "lease_s", "cancel_requested", "superseded_by",
-		"result", "result_claim_id", "finished_at", "log_size", "log_at", "git_dir", "pinned", "updated_at",
+		"result", "result_claim_id", "finished_at", "log_size", "log_at", "local", "git_dir", "pinned", "updated_at",
 	} {
 		assert.True(t, have[c], "jobs has no column %s", c)
 	}
