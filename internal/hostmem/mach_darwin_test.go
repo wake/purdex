@@ -20,8 +20,7 @@ import (
 func TestMach_VMAgreesWithVMStat(t *testing.T) {
 	m, err := NewMach()
 	require.NoError(t, err)
-	var last []string
-	for try := 0; try < 5; try++ {
+	bad := vmAgreeWithin(5, func() (VMCounters, VMCounters, VMStat) {
 		before, err := m.VM()
 		require.NoError(t, err)
 		out, err := Run(context.Background())
@@ -34,15 +33,23 @@ func TestMach_VMAgreesWithVMStat(t *testing.T) {
 		// not a matter of timing: the counter only grows, and vm_stat read it between the two Mach reads
 		require.GreaterOrEqual(t, vs.Pageouts, before.Pageouts, "vm_stat's pageouts are read after the first Mach read")
 		require.LessOrEqual(t, vs.Pageouts, after.Pageouts)
-
-		last = vmDisagreements(before, after, vs)
-		if len(last) == 0 {
-			return
-		}
-	}
-	for _, msg := range last {
+		return before, after, vs
+	})
+	for _, msg := range bad {
 		t.Error(msg)
 	}
+}
+
+// vmAgreeWithin reads up to tries times and answers nothing as soon as one try agrees, else the disagreements of the last.
+func vmAgreeWithin(tries int, read func() (before, after VMCounters, vs VMStat)) []string {
+	var last []string
+	for i := 0; i < tries; i++ {
+		before, after, vs := read()
+		if last = vmDisagreements(before, after, vs); len(last) == 0 {
+			return nil
+		}
+	}
+	return last
 }
 
 // vmDisagreements names the page counts where Mach (after) and vm_stat differ by more than 20000 pages plus the Mach counters' own
@@ -74,7 +81,9 @@ func vmDisagreements(before, after VMCounters, vs VMStat) []string {
 // red; the 20000 raised or dropped → a row goes red; one metric not checked → its row goes red.
 func TestVMDisagreements_AllowsWhatMachMovedAndNoMore(t *testing.T) {
 	still := VMCounters{Free: 300000, Speculative: 50000, Inactive: 200000}
-	vsAt := func(free, inactive, spec uint64) VMStat { return VMStat{Free: free, Inactive: inactive, Speculative: spec} }
+	vsAt := func(free, inactive, spec uint64) VMStat {
+		return VMStat{Free: free, Inactive: inactive, Speculative: spec}
+	}
 
 	assert.Empty(t, vmDisagreements(still, still, vsAt(250000, 200000, 50000)), "exact")
 	assert.Empty(t, vmDisagreements(still, still, vsAt(250000+20000, 200000-20000, 50000+20000)), "at the 20000 allowance")
@@ -85,10 +94,34 @@ func TestVMDisagreements_AllowsWhatMachMovedAndNoMore(t *testing.T) {
 	assert.Len(t, vmDisagreements(still, still, vsAt(250000, 200000+20001, 50000)), 1, "inactive")
 	assert.Len(t, vmDisagreements(still, still, vsAt(250000, 200000, 50000+20001)), 1, "speculative")
 
-	// the same 27887 pages (the gap of #3168) pass when the Mach counters moved 8000 across the reads, and not when they moved 7000
+	// the 27887 pages of #3168: within 20000 + 8000 when Mach moved 8000 across the reads, over 20000 + 7000 when it moved 7000. The
+	// vm_stat figure is placed against the counter AFTER the reads (258000 / 257000 free pages there), not the one before.
 	moved := func(by uint64) VMCounters { c := still; c.Free += by; return c }
-	assert.Empty(t, vmDisagreements(still, moved(8000), vsAt(250000+8000+27887-8000, 200000, 50000)), "free moved 8000 so 27887 is within 20000+8000")
-	assert.Len(t, vmDisagreements(still, moved(7000), vsAt(250000+7000+27887, 200000, 50000)), 1, "moved 7000: 27887 > 27000")
+	assert.Empty(t, vmDisagreements(still, moved(8000), vsAt(258000-27887, 200000, 50000)), "moved 8000: 27887 is within 28000")
+	assert.Len(t, vmDisagreements(still, moved(7000), vsAt(257000-27887, 200000, 50000)), 1, "moved 7000: 27887 is over 27000")
+}
+
+// One try that disagrees does not fail the test when a later one agrees; five that disagree do. Mutation gate: one try → the second
+// case goes red.
+func TestVMAgreeWithin_RetriesAndAnswersTheLastDisagreement(t *testing.T) {
+	still := VMCounters{Free: 300000, Speculative: 50000, Inactive: 200000}
+	off := VMStat{Free: 250000 + 90000, Inactive: 200000, Speculative: 50000}
+	right := VMStat{Free: 250000, Inactive: 200000, Speculative: 50000}
+
+	n := 0
+	assert.Empty(t, vmAgreeWithin(5, func() (VMCounters, VMCounters, VMStat) {
+		n++
+		if n < 3 {
+			return still, still, off
+		}
+		return still, still, right
+	}), "the third try agrees")
+	assert.Equal(t, 3, n, "it stops at the first try that agrees")
+
+	n = 0
+	bad := vmAgreeWithin(5, func() (VMCounters, VMCounters, VMStat) { n++; return still, still, off })
+	assert.Len(t, bad, 1)
+	assert.Equal(t, 5, n, "every try is used before it gives up")
 }
 
 // CPU ticks only grow, busy never exceeds total, and a burn of CPU shows in the busy share.
