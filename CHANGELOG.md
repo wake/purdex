@@ -1,5 +1,53 @@
 # Changelog
 
+## [1.0.0-alpha.748] - 2026-10-17
+
+> daemon、`pdx` CLI、SPA 與 **mod** 有改（RT-4a，mod 協定 9），**兩台都要重跑 `pdx setup`**；Electron 沒有改。mlab 與 air26 要同版（member 安靜規則與 roster 欄位兩邊一起看）。
+> 資料庫：team.db 的 `mod_hello` 多一欄 `idle_intercept`（預設 0）。退回 747 不需要還原資料庫：747 寫這張表時列出欄位名，不碰新欄位。
+
+### Added：守門員
+
+- **啟動與叫醒守門員（W3b-1，PR #3100）**：`POST /api/watch/start`、`/api/watch/wake`（只收 admin token）與 `pdx watch start|wake`；沒有醒著的守門員時，叫醒上一位或在第一台可用的主機上開新的，失敗後冷卻 30 分鐘；同一台一次只開一個，重啟中途不會開兩次。
+- **巡檢模式的守門員閒置後會休息（W3b-2，PR #3107）**：閒置到設定時間就先通知「該休息了」，等它回答（或 5 分鐘）再送 `/exit`，必要時才 SIGTERM、SIGKILL；通知之後有新事件就取消休息。常駐模式不休息。
+- **事件可以標成已處理（W2b-2a／2b，PR #3077、#3085）**：`pdx watch ack <id>… | --all --note "<一行>"`、`pdx watch log [--host|--all]`；守門員在一台、事件記在別台時，ack 會轉給記錄的那台處理（不再往下轉）。
+- **主機分頁的重指令排隊區（W5b1，PR #3061）**：排隊的車道、閘門狀態列、等候中的卡片與表格；agent 圖示在指令排隊時顯示沙漏，滑過可看位置、等了幾分鐘與指令（W5b2，PR #3097）。
+- **守門員專區的「狀態｜設定」與觀察主機編輯器（W5c1，PR #3096）**；zh-TW 的「只探查」改名為「觀察主機」。
+- 主機的高耗用行程改用實體記憶體（footprint，含壓縮頁）排序與顯示，讀不到時標 RSS（#3057，PR #3081、#3082）。
+
+### Added：閘門
+
+- **名額設成 0 就暫停這一類（W3c，PR #3106）**：新的同類指令排隊、原因顯示 paused，已在跑的不受影響；停用中的閘門不顯示暫停。
+- 佇列順序（front／back／hold）的資料層與排序（GQ-a，PR #3112）：這一版還沒有可以設定順序的入口，行為不變。
+
+### Added：團隊與接力
+
+- **member 閒置時的自動壓縮改由 lead 決定（RT-4a，PR #3067）**：mod 擋下 member 閒置期間的 auto compaction，daemon 依權威角色每個閒置期通知 lead 一次。
+- **member 安靜規則（MQ-1／MQ-2／MQ-2b，PR #3088、#3086、#3104）**：team member 的等待與閒置不推播、未讀不顯示也不計數；判定 member 時核對 tmux 世代，tmux 重開後同名的新 session 不會被當成 member。
+- roster 帶 `tmux_instance`、`relay/fresh` 帶 session code、半成品接力卡以 `half` 收卡（PR #3095）。
+
+### Added：日誌
+
+- **標題列的「團隊／日誌」按鈕與卡片疊（J-2b，PR #2980）**；日誌卡的篩選、人名標示、ref 連結、釘選（J-2c，PR #3054、#3059、#3064）；任務與路線圖分頁（J-2d，PR #3066）。
+
+### Changed
+
+- 主機格：主機圖示一律亮態，滑過顯示該主機讀數的資訊卡（PR #3065，使用者 10-17）；點擊不再畫外框（PR #3093）。
+- 閘門：`make lint` 算 heavy，外層不再佔輕名額等內層的 `go vet`（#3089，PR #3105）；go 旗標值補齊、最多 2 個套件的 `go test`／`go vet` 算 light、`tsc -p` 與裸 `tsc` 算 heavy（#3073，PR #3083）。
+- 重構：tmux 的檢查並輸入 helper 搬到 `internal/tmuxpane`（RT-7a，PR #3094，純搬移）。
+
+### Fixed
+
+- 可用記憶體重複加了 speculative 頁，air26 約高估 530 MB（#3074，PR #3084）。
+- `/Applications` 底下的常駐 app（如 Herd）只有記憶體超標時不再報 unmanaged_heavy，CPU 超標照報（#2965，PR #3098）。
+
+### 文件
+
+- 閘門互斥規則（#3058，spec §5.3、plan GC，PR #3060）；輔測主機派工器 spec 與 plan（PR #3109）。
+
+### 發版測試
+
+TBD
+
 ## [1.0.0-alpha.747] - 2026-10-17
 
 > daemon、`pdx` CLI 與 SPA 有改，mod、Electron 沒有改，**不需要重跑 `pdx setup`**。資料庫沒有變，退回 746 不需要還原資料庫。
