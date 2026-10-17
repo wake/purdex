@@ -84,18 +84,22 @@ describe('useMultiHostEventWs watch pushes (W5e)', () => {
 
   it('a frame from a connection the host has since left is dropped, for both types', async () => {
     const view = await connect()
-    // the host is re-pointed at another daemon: this socket's connection key no longer matches
-    act(() => { useHostStore.setState({ hosts: { [HOST]: { id: HOST, name: 'Host', ip: '9.9.9.9', port: 7860, order: 0 } } }) })
-    act(() => { sockets[0].emit(frame('watch.changed')); sockets[0].emit(frame('watch.events')) })
+    // The host is re-pointed at another daemon. The old socket is still open in the moment before the hook has torn it down
+    // (the store is written outside act, so React has not committed yet); a frame that arrives then is the guard's case.
+    useHostStore.setState({ hosts: { [HOST]: { id: HOST, name: 'Host', ip: '9.9.9.9', port: 7860, order: 0 } } })
+    sockets[0].emit(frame('watch.changed'))
+    sockets[0].emit(frame('watch.events'))
     expect(handleWatchEvent).not.toHaveBeenCalled()
+    await act(async () => {})
     view.unmount()
   })
 
   it('a frame of a host that was removed is dropped', async () => {
     const view = await connect()
-    act(() => { useHostStore.setState({ hosts: {}, hostOrder: [] }) })
-    act(() => { sockets[0].emit(frame('watch.events')) })
+    useHostStore.setState({ hosts: {}, hostOrder: [] })
+    sockets[0].emit(frame('watch.events'))
     expect(handleWatchEvent).not.toHaveBeenCalled()
+    await act(async () => {})
     view.unmount()
   })
 })
