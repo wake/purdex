@@ -26,6 +26,8 @@ interface Props {
   onHover?: (tabId: string | null) => void
   /** This tab's place in a lead/member team group (normal zone only); undefined outside one. */
   group?: TeamTabMark
+  /** The watcher area's row: no lock icon, no close, no context menu, no middle click, no rename. Dragging stays. */
+  fixed?: boolean
 }
 
 // Composite bg colors (canvas-verified for opaque X button bg)
@@ -33,7 +35,7 @@ interface Props {
 const TAB_BG_INACTIVE = 'var(--surface-secondary)'
 const TAB_BG_ACTIVE = 'var(--surface-active)'
 
-export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddleClick, onContextMenu, onRename, onHover, group }: Props) {
+export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddleClick, onContextMenu, onRename, onHover, group, fixed }: Props) {
   // `attributes` is deliberately not spread: sensors are pointer-only, so its aria-roledescription / aria-describedby
   // ("press space to pick up") would be false (#2531). Pinned is a native <button>; the unpinned div sets role=tab + tabIndex=0 itself.
   // A group's lead drags the whole group (TG-1): its own draggable is off, the frame's listeners stand in, and the frame
@@ -86,13 +88,13 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const handleMouseEnter = () => onHover?.(tab.id)
   const handleMouseLeave = () => onHover?.(null)
   const handleMouseUp = (e: React.MouseEvent) => {
-    if (e.button === 1) { e.preventDefault(); onMiddleClick(tab.id) }
+    if (e.button === 1 && !fixed) { e.preventDefault(); onMiddleClick(tab.id) }
   }
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault()
-    onContextMenu(e, tab.id)
+    if (!fixed) onContextMenu(e, tab.id)
   }
-  const handleDoubleClick = () => onRename?.(tab.id)
+  const handleDoubleClick = () => { if (!fixed) onRename?.(tab.id) }
 
   const tabBg = isActive ? TAB_BG_ACTIVE : TAB_BG_INACTIVE
   const showTooltip = tabNameTooltipMode === 'top' || tabNameTooltipMode === 'both'
@@ -119,7 +121,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
         }`}
       >
         <TabIcon IconComponent={IconComponent} agentStatus={agentStatus} tabIndicatorStyle={tabIndicatorStyle} isActive={isActive} iconSize={14} subagentRefs={subagentRefs} isUnread={isUnread} awaitingApproval={isAwaitingApproval} background={background} />
-        {tab.locked && <Lock size={10} className="absolute bottom-0.5 right-0.5" />}
+        {tab.locked && !fixed && <Lock size={10} className="absolute bottom-0.5 right-0.5" />}
         {!isActive && isUnread && shouldShowGlobalUnreadPip(tabIndicatorStyle, agentStatus) && (
           <span className="absolute -top-[4px] -right-[4px] w-2 h-2 rounded-full z-20"
             style={{ backgroundColor: '#ef4444' }} />
@@ -130,7 +132,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
     )
   }
 
-  const showClose = !tab.locked
+  const showClose = !tab.locked && !fixed
 
   // A remote member that is still joining / being released / killed: the state goes in the tooltip and the aria name only.
   const seatState = group?.role === 'member' && ['joining', 'releasing', 'killing'].includes(group.seatState) ? group.seatState : null
@@ -184,7 +186,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       <span className="overflow-hidden flex-1 min-w-0 text-left">{label}</span>
       {showTooltip && <HoverTooltip placement="top">{tipText}</HoverTooltip>}
       {isHostOffline && <WifiSlash size={12} className="text-red-400 flex-shrink-0" />}
-      {tab.locked && <Lock size={10} className="ml-0.5 flex-shrink-0" />}
+      {tab.locked && !fixed && <Lock size={10} className="ml-0.5 flex-shrink-0" />}
       {!isActive && isUnread && shouldShowGlobalUnreadPip(tabIndicatorStyle, agentStatus) && (
         <span className="absolute -top-[4px] -right-[4px] w-2 h-2 rounded-full z-20"
           style={{ backgroundColor: '#b91c1c' }} />

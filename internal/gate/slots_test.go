@@ -367,8 +367,8 @@ func TestPool_AHalfMadeTicketOfADeadGateIsReaped(t *testing.T) {
 	assert.True(t, exists(odd), "a name that is not a ticket's is left alone")
 }
 
-// A record kept for a child that still held the lock is stale once a new gate has the lock: the new gate removes it at
-// once, so a command that still carries the old token cannot pass the nesting check against the new lock before the new
+// A record kept for a child that still held the lock is stale once a new gate has the lock: the new gate replaces it at
+// once (by one with no token that names the new holder), so a command that still carries the old token cannot pass the nesting check against the new lock before the new
 // record is written. (M: leave the old record until SetHolder.)
 func TestPool_TheOldRecordGoesWhenANewGateTakesTheSlot(t *testing.T) {
 	p := testPool(t, ClassHeavy, 1)
@@ -380,11 +380,13 @@ func TestPool_TheOldRecordGoesWhenANewGateTakesTheSlot(t *testing.T) {
 	s, _, err := p.TryTake(tk) // the earlier holder's last descriptor is gone: the lock is free
 	require.NoError(t, err)
 	require.NotNil(t, s)
-	_, locked, ok := p.Record(1)
-	assert.False(t, ok, "the old record is gone before the new holder has written its own")
-	assert.False(t, locked && ok)
-	h, _, _ := p.Record(1)
+	h, locked, ok := p.Record(1)
+	require.True(t, ok, "a record that names the new holder stands in before the holder has written its own (#3049)")
+	assert.True(t, locked)
 	assert.Empty(t, h.Token, "so the old token proves nothing")
+	assert.Equal(t, os.Getpid(), h.PID, "the old record's pid is gone: it names who took the slot")
+	assert.Empty(t, h.Argv, "and the old command with it")
+	assert.False(t, h.Started.IsZero())
 }
 
 // When the old record cannot be removed (a non-empty directory sits where it goes), no slot is handed out and the lock is let

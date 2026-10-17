@@ -7,9 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/wake/purdex/internal/gate"
 )
 
 // gateEnv points the gate at a temp directory with a small config, and keeps the host's claim out.
@@ -47,6 +50,29 @@ func TestGate_StatusShowsAPausedClass(t *testing.T) {
 	require.NoError(t, json.Unmarshal(out.Bytes(), &st))
 	assert.Equal(t, false, st["PausedHeavy"])
 	assert.Equal(t, true, st["PausedLight"])
+}
+
+// A slot that is locked while its record is gone (a child that inherited the lock outlived the gate) is listed and says so, not as a
+// holder with no pid (#3049). The JSON carries the flag.
+func TestGate_StatusShowsASlotWithNoRecord(t *testing.T) {
+	cfg, dir := gateEnv(t, "[gate.admission]\ndisk_min_gb = 0\n")
+	pool := &gate.Pool{Dir: filepath.Join(dir, "gate"), Class: gate.ClassLight, Size: 3, Now: time.Now}
+	tk, err := pool.Enqueue()
+	require.NoError(t, err)
+	s, _, err := pool.TryTake(tk)
+	require.NoError(t, err)
+	require.NotNil(t, s)
+	tk.Drop()
+	defer s.Release(nil)
+	require.NoError(t, os.Remove(filepath.Join(dir, "gate", "light-1.json")))
+
+	var out, errb bytes.Buffer
+	require.Equal(t, 0, gateMain([]string{"status", "--config", cfg}, &out, &errb))
+	assert.Contains(t, out.String(), "輕 1/3 使用中")
+	assert.Contains(t, out.String(), "沒有紀錄")
+	out.Reset()
+	require.Equal(t, 0, gateMain([]string{"status", "--json", "--config", cfg}, &out, &errb))
+	assert.Contains(t, out.String(), `"no_record": true`)
 }
 
 func TestGate_RunsTheCommandAndReturnsItsExitCode(t *testing.T) {

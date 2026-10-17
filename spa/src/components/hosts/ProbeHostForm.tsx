@@ -10,11 +10,11 @@ import { HostColorPicker } from './HostColorPicker'
 import { HostIconPicker } from './HostIconPicker'
 
 /**
- * Edit one probe-only host (fleet spec §8.2): name, icon and colour on a draft (the lifted pickers), and the SSH alias PER
+ * The fields of one probe host (fleet spec §8.2; shown inline on its own page, 「樣式與連線」): name, icon and colour on a draft (the lifted pickers), and the SSH alias PER
  * DAEMON — each picked from that daemon's own `GET /api/fleet/ssh-aliases`, because each daemon reaches the host through its
  * own SSH config. The 400 text of a failed save is shown here.
  */
-export function ProbeHostDialog({ draft, hostIds, isNew, busy, blocked, error, children, onChange, onSave, onCancel }: {
+export function ProbeHostForm({ draft, hostIds, isNew, busy, blocked, error, children, onChange, onSave, onCancel }: {
   /** The draft lives outside this component (`useFleetDraftStore`): it survives a tab switch. */
   draft: ProbeEntry
   /** The daemon hosts the entry is written to. */
@@ -50,13 +50,11 @@ export function ProbeHostDialog({ draft, hostIds, isNew, busy, blocked, error, c
   const input = 'mt-1 w-full bg-surface-primary border border-border-default rounded px-2 py-1.5 text-sm text-text-primary'
 
   return (
-    <form role="dialog" aria-modal="true" data-testid="probe-dialog" aria-label={title} noValidate
-      className="p-4 bg-surface-secondary border border-border-default rounded-lg mb-4"
-      onSubmit={(e) => { e.preventDefault(); submit() }}
-      onKeyDown={(e) => { if (e.key === 'Escape' && !busy) onCancel() }}>
-      <h3 className="text-sm font-semibold mb-3">{title}</h3>
+    <form data-testid="probe-form" aria-label={title} noValidate
+      className="p-4 bg-surface-secondary border border-border-default rounded-lg"
+      onSubmit={(e) => { e.preventDefault(); submit() }}>
       <label className="block text-xs text-text-secondary mb-2">{t('fleet_hosts.probe.name')}
-        <input data-testid="probe-field-name" autoFocus className={input} value={draft.name}
+        <input data-testid="probe-field-name" className={input} value={draft.name}
           onChange={(e) => { const name = e.target.value; setDraft((d) => ({ ...d, name })) }} />
       </label>
       {hostIds.map((id) => {
@@ -91,9 +89,9 @@ export function ProbeHostDialog({ draft, hostIds, isNew, busy, blocked, error, c
           const next = withColorLayer({ colors: d.colors }, m, 'main', null)
           return next ? { ...d, colors: next.colors } : d
         })} />
-      {invalid && <p data-testid="probe-dialog-invalid" className="mt-2 text-xs text-red-400">{t(invalid)}</p>}
-      {blocked && <p data-testid="probe-dialog-blocked" className="mt-2 text-xs text-status-warning-text whitespace-pre-wrap">{blocked}</p>}
-      {error && <p data-testid="probe-dialog-error" className="mt-2 text-xs text-red-400 whitespace-pre-wrap">{error}</p>}
+      {invalid && <p data-testid="probe-form-invalid" className="mt-2 text-xs text-red-400">{t(invalid)}</p>}
+      {blocked && <p data-testid="probe-form-blocked" className="mt-2 text-xs text-status-warning-text whitespace-pre-wrap">{blocked}</p>}
+      {error && <p data-testid="probe-form-error" className="mt-2 text-xs text-red-400 whitespace-pre-wrap">{error}</p>}
       <div className="flex gap-2 mt-3">
         <button type="submit" data-testid="probe-save" disabled={busy || !!blocked}
           className="px-3 py-1.5 rounded text-xs bg-accent text-white cursor-pointer disabled:opacity-50">{t('common.save')}</button>

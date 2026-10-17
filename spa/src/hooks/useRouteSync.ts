@@ -8,6 +8,7 @@ import { getPrimaryPane } from '../lib/pane-tree'
 import { useWorkspaceStore } from '../features/workspace'
 import { resolveExecutionHostId } from '../lib/nex/resolve-host'
 import { landOnHostsPageIfHidden } from '../lib/shown-hosts'
+import { isWatchTabId } from '../lib/watch/ids'
 
 type TabStoreState = ReturnType<typeof useTabStore.getState>
 
@@ -128,6 +129,8 @@ export function useRouteSync() {
   useEffect(() => {
     if (!hydrated) return
     if (!activeTabId) return
+    // The watcher area's tabs are not history: a record of one could be reopened as an ordinary tab outside the area.
+    if (isWatchTabId(activeTabId)) return
     if (activeTabId !== useTabStore.getState().activeTabId) return
     const tab = tabs[activeTabId]
     if (!tab) return

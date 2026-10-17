@@ -1,6 +1,7 @@
 import type { PaneContent } from '../types/tab'
 import { fileIconForPath } from './file-icon'
 import { oneLine } from './nex/worker-tab-title'
+import { useFleetStore } from './fleet/store'
 
 export type TFunction = (key: string, params?: Record<string, string | number>) => string
 
@@ -58,6 +59,12 @@ export function getPaneLabel(
       return content.filePath.split('/').pop() ?? content.filePath
     case 'execution':
       return t('page.pane.execution')
+    case 'watch-guardian':
+      return t('watch.pane.guardian')
+    case 'watch-events':
+      return t('watch.pane.events')
+    case 'watch-host':
+      return useFleetStore.getState().snapshot?.hosts[content.fleetHostId]?.alias || content.fleetHostId
   }
 }
 
@@ -94,5 +101,11 @@ export function getPaneIcon(content: PaneContent): string {
       return 'FilePdf'
     case 'execution':
       return 'Robot'
+    case 'watch-guardian':
+      return 'ShieldCheck'
+    case 'watch-events':
+      return 'ListBullets'
+    case 'watch-host':
+      return 'Desktop'
   }
 }

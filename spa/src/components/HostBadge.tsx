@@ -19,6 +19,11 @@ export interface HostBadgeProps {
   radius: number
   lineColor: 'host' | 'neutral'
   testId?: string
+  /**
+   * Always show the hover / active look (the sidebar's host cells): the icon is `--hb-main` of a coloured host, `text-secondary`
+   * (the brighter neutral) of a plain one. Off (default): `--hb-middle` when idle, `--hb-main` only on hover / active.
+   */
+  bright?: boolean
 }
 
 /**
@@ -30,7 +35,7 @@ export interface HostBadgeProps {
  * rule in `index.css` sets `--hb-icon: var(--hb-main)` on a hovered `.group` row or
  * a `[data-active="true"]` row. Background is always the `light` layer.
  */
-export function HostBadge({ colors, icon, iconWeight, box, inset, radius, lineColor, testId }: HostBadgeProps) {
+export function HostBadge({ colors, icon, iconWeight, box, inset, radius, lineColor, testId, bright = false }: HostBadgeProps) {
   const hostColored = colors !== null && lineColor === 'host'
 
   const style: CSSProperties & Record<`--hb-${string}`, string> = {
@@ -41,7 +46,7 @@ export function HostBadge({ colors, icon, iconWeight, box, inset, radius, lineCo
     width: `${box}px`,
     height: `${box}px`,
     borderRadius: `${radius}px`,
-    color: hostColored ? 'var(--hb-icon, var(--hb-middle))' : 'var(--text-muted)',
+    color: hostColored ? (bright ? 'var(--hb-main)' : 'var(--hb-icon, var(--hb-middle))') : bright ? 'var(--text-secondary)' : 'var(--text-muted)',
   }
   if (colors !== null) style.background = colors.light
   if (hostColored) {

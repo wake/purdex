@@ -78,6 +78,9 @@ type Input struct {
 	// Cwd is the working directory of a process, asked once for the root of a tree at the moment its event is made (one lookup
 	// per episode, never per tick); nil, or "", falls back to the session's cwd.
 	Cwd func(pid int) string
+	// Started is when a process started, asked once for the root of a tree that crossed a threshold with a parent of pid 1 (a resident
+	// app, #2965); nil, or the zero time, is "unknown" and the tree is judged as any other.
+	Started func(pid int) time.Time
 	// LockPIDs are the processes that hold a slot's lock file (lsof), for E3; called at most once per pass.
 	LockPIDs func(h gate.Holder) []int
 	Set      Settings

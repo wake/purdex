@@ -27,6 +27,10 @@ import (
 // that is over, or a light slot claimed for a heavy command takes no one past the gate.
 const HeldEnv = "PDX_GATE_HELD"
 
+// LateRootEnv marks the gate pid of a packaging command that may take a late slot for its whole tree: a packaging gate below
+// it (its pid is an ancestor of the inner gate) does not take one of its own.
+const LateRootEnv = "PDX_GATE_LATE_ROOT"
+
 // ExitRefused is the exit code of a command the gate did not run: the disk is below the floor, or the gate directory is
 // broken (sysexits EX_TEMPFAIL).
 const ExitRefused = 75
@@ -361,6 +365,26 @@ func (g *Gate) run(ctx context.Context, o Options, d *Decision) (int, error) {
 	return g.start(ctx, cfg, o, argv, env, slot, sigs, nil, d)
 }
 
+// underLateRoot says whether a packaging gate above this process has the late slot for the tree this process is in: the mark in
+// its environment names a gate pid that is an ancestor of this one. A mark left by another tree (its pid is not above this
+// process) says nothing.
+func (g *Gate) underLateRoot(env []string) bool {
+	root, err := strconv.Atoi(envValue(env, LateRootEnv))
+	if err != nil || root <= 1 {
+		return false
+	}
+	tab, err := g.Procs()
+	if err != nil {
+		return false
+	}
+	for _, a := range ancestors(tab, g.PID()) {
+		if a == root {
+			return true
+		}
+	}
+	return false
+}
+
 // runWatched runs a command that takes no slot as this process's child, so that it can be timed and, for a packaging script, put
 // under a slot when it has run long (#2996). A script that already runs below a held slot (the claim in its environment, or a
 // late holder above it) is only written down: its work is counted already.
@@ -370,7 +394,7 @@ func (g *Gate) runWatched(ctx context.Context, cfg Config, o Options, env []stri
 	d.Outcome = "none"
 	if kind == watchPackaging {
 		d.Outcome = "packaging"
-		if cfg.Packaging.LateSlotAfter > 0 && !g.nested(cfg, env, ClassLight) && !g.underLate(cfg) {
+		if cfg.Packaging.LateSlotAfter > 0 && !g.nested(cfg, env, ClassLight) && !g.underLate(cfg) && !g.underLateRoot(env) {
 			lw = &lateWatch{after: cfg.Packaging.LateSlotAfter, class: cfg.Packaging.LateSlotClass}
 		}
 	}

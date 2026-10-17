@@ -54,7 +54,7 @@ func lastDecision(t *testing.T, g *Gate) map[string]any {
 // A packaging script starts at once with no slot, is put under a light slot when it has run for the delay, holds it until it
 // ends, and leaves one line saying so.
 func TestPackaging_StartsAtOnceThenTakesALateSlot(t *testing.T) {
-	g := packagingGate(t, 250*time.Millisecond)
+	g := packagingGate(t, 600*time.Millisecond)
 	dir := t.TempDir()
 	fakeTool(t, dir, "")
 	done := runPackaging(g, dir)
@@ -76,7 +76,7 @@ func TestPackaging_StartsAtOnceThenTakesALateSlot(t *testing.T) {
 	rec := lastDecision(t, g)
 	assert.Equal(t, "packaging", rec["outcome"])
 	assert.Equal(t, true, rec["late_slot"])
-	assert.InDelta(t, 0.25, rec["late_after_s"], 0.2)
+	assert.InDelta(t, 0.6, rec["late_after_s"], 0.4)
 	assert.NotNil(t, rec["duration_s"])
 }
 
@@ -247,7 +247,7 @@ func TestPackaging_ACommandBelowALateHolderPassesAsNested(t *testing.T) {
 // An unknown `run` script is only timed: no slot, ever, and a line only when it ran at least record_unknown_s.
 func TestUnknownScript_OnlyTimedAndOnlyWhenLongEnough(t *testing.T) {
 	g := packagingGate(t, 100*time.Millisecond)
-	g.SetConfig(func(c *Config) { c.Packaging.RecordUnknown = 300 * time.Millisecond })
+	g.SetConfig(func(c *Config) { c.Packaging.RecordUnknown = 1500 * time.Millisecond })
 	dir := t.TempDir()
 	fakeTool(t, dir, "")
 	run := func() int {
@@ -265,7 +265,7 @@ func TestUnknownScript_OnlyTimedAndOnlyWhenLongEnough(t *testing.T) {
 	_ = os.Remove(dir + "/started")
 	res := runAsync(g, context.Background(), Options{Argv: []string{"pnpm", "run", "e2e"}, Real: filepath.Join(dir, "fakepnpm")})
 	eventually(t, "start", func() bool { return exists(dir + "/started") })
-	time.Sleep(600 * time.Millisecond)
+	time.Sleep(1800 * time.Millisecond)
 	assert.Empty(t, lightHeld(g), "never put under a slot, however long it runs")
 	assert.Empty(t, g.pool(g.Config(), ClassHeavy).Held())
 	require.NoError(t, os.WriteFile(dir+"/go", nil, 0o644))
@@ -415,6 +415,10 @@ func TestWatchKind_RunScriptsAreWatchedNpxToolsAreNot(t *testing.T) {
 	assert.Equal(t, watchPackaging, cfg.watchKind([]string{"pnpm", "run", "build"}, e))
 	assert.Empty(t, cfg.watchKind([]string{"npx", "e2e"}, e))
 	assert.Empty(t, cfg.watchKind([]string{"npx", "run", "e2e"}, e))
+	// a script that gets --help still runs: it is watched like any build (R2 of #3043)
+	assert.Equal(t, watchPackaging, cfg.watchKind([]string{"pnpm", "--prefix", "spa", "run", "build", "--help"}, e))
+	assert.Equal(t, watchPackaging, cfg.watchKind([]string{"pnpm", "run", "electron:build", "--help"}, e))
+	assert.Empty(t, cfg.watchKind([]string{"pnpm", "run", "--help"}, e), "the runner's own help is no run")
 	for _, sub := range []string{"exec", "x", "dlx"} {
 		assert.Empty(t, cfg.watchKind([]string{"pnpm", sub, "some-tool"}, e), sub)
 		assert.Empty(t, cfg.watchKind([]string{"npm", sub, "some-tool"}, e), sub)

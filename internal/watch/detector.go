@@ -2,8 +2,10 @@ package watch
 
 import (
 	"fmt"
+	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/wake/purdex/internal/gate"
@@ -61,7 +63,9 @@ type treeState struct {
 	window  time.Duration // the t_s these samples were collected for
 	since   time.Time     // where the unbroken run of samples starts
 	samples []sample      // those of the last TS, and the one before them (the left edge's value)
-	ep      episode
+	// resident: the tree was found to be a resident app (residentAndQuiet); from then on only its cores can make it an event
+	resident bool
+	ep       episode
 }
 
 // Detector holds what the passes share: the windows of the trees, the episodes of E2, and which holders have been reported.
@@ -71,6 +75,10 @@ type Detector struct {
 
 	orphanMiss map[string]int // consecutive passes a once-orphaned holder was not orphaned
 	started    bool
+
+	// Diag, when set, is told what the detector cannot use of what it read: the source and the problem ("" = fine again). It is called
+	// every pass; the receiver keeps it to the changes.
+	Diag func(source, problem string)
 
 	pressure, pages episode
 	havePages       bool
@@ -213,8 +221,17 @@ func (d *Detector) unmanagedTrees(in Input) []Event {
 			cut++
 		}
 		st.samples = st.samples[cut:]
-		over := d.overThreshold(st, in.Now, set)
+		tset := set
+		if st.resident {
+			tset.YMB = 0
+		}
+		over := d.overThreshold(st, in.Now, tset)
 		if st.ep.step(in.Now, over, 0, set.TS) {
+			if !st.resident && d.residentAndQuiet(in, tab, root, st, set) {
+				st.resident = true // a long-lived app of /Applications whose memory is all that is over: no event (#2965); its cores still count
+				st.ep = episode{}  // the episode that fired on memory is over: cores that are over right after start one of their own
+				continue
+			}
 			events = append(events, d.treeEvent(in, tab, root, st))
 		}
 	}
@@ -261,6 +278,47 @@ func (d *Detector) overThreshold(st *treeState, now time.Time, set Settings) boo
 	}
 	mean := weighted / total
 	return (set.XCores > 0 && mean >= set.XCores) || (set.YMB > 0 && minRSS >= uint64(set.YMB)*mib)
+}
+
+// residentMinAge is how long a launchd child must have run, in windows, to count as resident: its memory is then what the app
+// holds, not what a command grew.
+const residentMinAge = 10
+
+// residentAndQuiet says that the tree that crossed a threshold is a resident app and only its memory is over: its root is a child of
+// launchd (pid 1), runs a program of /Applications, started more than residentMinAge windows ago, and its mean cores alone would not
+// have crossed x_cores. Herd's php-fpm workers (1.0–1.3 GB of summed RSS, 0.2 cores, up for days) and a browser at rest are such
+// trees (#2965; the spec says a long-lived low-usage process is not heavy). A resident app that burns CPU still raises its event.
+// The Diag line is the record; nothing is learned about a tree whose start or command line cannot be read.
+func (d *Detector) residentAndQuiet(in Input, tab *table, root int, st *treeState, set Settings) bool {
+	if in.Started == nil || in.Argv == nil || tab.byPID[root].PPID != 1 {
+		return false
+	}
+	argv := in.Argv(root)
+	if len(argv) == 0 || !strings.HasPrefix(argv[0], "/Applications/") {
+		return false
+	}
+	started := in.Started(root)
+	if started.IsZero() || in.Now.Sub(started) < residentMinAge*set.TS {
+		return false
+	}
+	cpuOnly := set
+	cpuOnly.YMB = 0
+	if d.overThreshold(st, in.Now, cpuOnly) {
+		return false
+	}
+	if d.Diag != nil {
+		d.Diag("resident app", fmt.Sprintf("%s (pid %d) holds %d MB, up %s: a resident app is not a heavy command, no event",
+			filepath.Base(argv[0]), root, peakMB(st), in.Now.Sub(started).Round(time.Minute)))
+	}
+	return true
+}
+
+func peakMB(st *treeState) uint64 {
+	var mb uint64
+	for _, s := range st.samples {
+		mb = max(mb, s.rss/mib)
+	}
+	return mb
 }
 
 func (d *Detector) treeEvent(in Input, tab *table, root int, st *treeState) Event {
@@ -367,9 +425,16 @@ func (d *Detector) slotEvents(in Input) []Event {
 	present := map[string]bool{}
 	orphaned := map[string]bool{}
 	lockLookups := 0
+	var unmeasured []string
 	for _, h := range holders {
 		key := holderKey(h)
 		present[key] = true
+		// A slot held with no record, or one whose record has no start or no pid, has nothing to measure: Now minus a zero time is 292 years
+		// (#3049). It is no event; the diagnostic below says it is there.
+		if h.NoRecord || h.Started.IsZero() || h.PID <= 0 {
+			unmeasured = append(unmeasured, fmt.Sprintf("%s-%d", h.Class, h.Slot))
+			continue
+		}
 		base := Event{At: in.Now, Slot: fmt.Sprintf("%s-%d", h.Class, h.Slot), HolderPID: h.PID, Argv: h.Argv, Cwd: h.Cwd,
 			Session: h.Session, Duration: in.Now.Sub(h.Started)}
 		if h.Orphaned {
@@ -393,6 +458,13 @@ func (d *Detector) slotEvents(in Input) []Event {
 			ev.Kind = KindSlotLong
 			events = append(events, ev)
 		}
+	}
+	if d.Diag != nil {
+		problem := ""
+		if len(unmeasured) > 0 {
+			problem = "held with no readable start or pid, not measured: " + strings.Join(unmeasured, ", ")
+		}
+		d.Diag("slot records", problem)
 	}
 	// A holder that is not orphaned in one pass keeps its first-seen time for orphanGrace passes (the reading may flicker); one
 	// that is gone altogether, or that stays not orphaned, is forgotten, also one remembered from before a restart.

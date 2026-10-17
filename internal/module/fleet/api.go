@@ -23,6 +23,8 @@ type FleetAnswer struct {
 func (m *Measure) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/fleet", m.handleFleet)
 	mux.HandleFunc("GET /api/fleet/ssh-aliases", m.handleAliases)
+	// Admin only like the alias list: in neither the device allow-list nor the peer policy.
+	mux.HandleFunc("POST /api/fleet/probe-check", m.handleProbeCheck)
 }
 
 // Answer is the body of GET /api/fleet for the role as it is now.
@@ -49,13 +51,18 @@ func (m *Measure) hostList() []HostJSON {
 	out := make([]HostJSON, 0, len(m.order))
 	for _, key := range m.order {
 		h := m.hosts[key]
-		status, code, lastOK := viewOK(h)
-		out = append(out, HostJSON{
-			ID: m.idOf(h), Kind: h.kind, Alias: h.fleetAlias, Name: h.name, Icon: h.icon, Colors: h.colors,
-			IconWeight: h.iconWeight, OS: h.os, Status: status, Error: code, LastOKAt: lastOK, Fast: h.fast, Slow: h.slow,
-		})
+		out = append(out, m.hostJSONLocked(h))
 	}
 	return out
+}
+
+// hostJSONLocked is one host's row as GET /api/fleet answers it (m.mu held).
+func (m *Measure) hostJSONLocked(h *hostRow) HostJSON {
+	status, code, lastOK := viewOK(h)
+	return HostJSON{
+		ID: m.idOf(h), Kind: h.kind, Alias: h.fleetAlias, Name: h.name, Icon: h.icon, Colors: h.colors,
+		IconWeight: h.iconWeight, OS: h.os, Status: status, Error: code, LastOKAt: lastOK, Fast: h.fast, Slow: h.slow,
+	}
 }
 
 func (m *Measure) handleFleet(w http.ResponseWriter, r *http.Request) {

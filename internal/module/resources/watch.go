@@ -33,6 +33,8 @@ type watchEnv struct {
 	isGate func(ctx context.Context, pid int) bool
 	argv   func(ctx context.Context, pid int) []string
 	cwd    func(ctx context.Context, pid int) string
+	// started is when pid started (the zero time: unknown).
+	started func(ctx context.Context, pid int) time.Time
 }
 
 func defaultWatchEnv() watchEnv {
@@ -58,6 +60,17 @@ func defaultWatchEnv() watchEnv {
 			return info.Argv
 		},
 		cwd: lsofCwd,
+		started: func(ctx context.Context, pid int) time.Time {
+			snap, err := iagent.SharedProcessSnapshot(ctx)
+			if err != nil {
+				return time.Time{}
+			}
+			info, err := snap.ReadFresh(pid)
+			if err != nil {
+				return time.Time{}
+			}
+			return info.StartTime
+		},
 	}
 }
 
@@ -169,8 +182,24 @@ func (m *Module) watchRuntimeFor() *watchRuntime {
 	if host == "" {
 		host, _ = os.Hostname()
 	}
-	m.watch.rt = &watchRuntime{det: watch.New(st), rec: watch.NewRecorder(dir, host), state: st}
+	det := watch.New(st)
+	det.Diag = m.watchNote
+	m.watch.rt = &watchRuntime{det: det, rec: watch.NewRecorder(dir, host), state: st}
 	return m.watch.rt
+}
+
+// eventSink is the watch module's delivery queue, looked up at each pass (the modules start in no fixed order); nil when it is not
+// registered (the events are then only recorded).
+func (m *Module) eventSink() watch.EventSink {
+	if m.core == nil || m.core.Registry == nil {
+		return nil
+	}
+	svc, ok := m.core.Registry.Get(watch.EventSinkKey)
+	if !ok {
+		return nil
+	}
+	sink, _ := svc.(watch.EventSink)
+	return sink
 }
 
 // watchPass is one detector pass over a good sample. It never fails the tick: a gate config, record or state problem is logged
@@ -194,10 +223,16 @@ func (m *Module) watchPass(ctx context.Context, raw resources.HostRaw, procs []r
 	heavy, light := env.held(gcfg)
 	in := watch.Input{
 		Now: m.now(), Procs: procs, Raw: raw, Roots: roots, Interval: m.interval,
-		Holders:  append(heavy, light...),
-		IsGate:   func(pid int) bool { return env.isGate(ctx, pid) },
-		Argv:     func(pid int) []string { return env.argv(ctx, pid) },
-		Cwd:      func(pid int) string { return env.cwd(ctx, pid) },
+		Holders: append(heavy, light...),
+		IsGate:  func(pid int) bool { return env.isGate(ctx, pid) },
+		Argv:    func(pid int) []string { return env.argv(ctx, pid) },
+		Cwd:     func(pid int) string { return env.cwd(ctx, pid) },
+		Started: func(pid int) time.Time {
+			if env.started == nil {
+				return time.Time{}
+			}
+			return env.started(ctx, pid)
+		},
 		LockPIDs: func(h gate.Holder) []int { return env.lockPIDs(gcfg, h) },
 		Set: watch.Settings{
 			XCores: ws.XCores, YMB: ws.YMB, TS: watchsettings.Seconds(ws.TSeconds),
@@ -208,9 +243,17 @@ func (m *Module) watchPass(ctx context.Context, raw resources.HostRaw, procs []r
 	}
 	events := rt.det.Pass(in)
 	recErr := ""
+	sink := m.eventSink()
 	for _, ev := range events {
-		if _, err := rt.rec.Record(ev); err != nil && recErr == "" {
-			recErr = err.Error()
+		rec, err := rt.rec.RecordFull(ev)
+		if err != nil {
+			if recErr == "" {
+				recErr = err.Error()
+			}
+			continue
+		}
+		if sink != nil {
+			sink.Enqueue(rec) // delivery to the watcher is the watch module's (a record is on disk first, so a lost queue is still in the backlog)
 		}
 	}
 	m.watchNote("record", recErr)

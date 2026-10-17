@@ -25,13 +25,15 @@ interface Props {
   onRenameTab?: (tabId: string) => void
   /** When embedded in Electron title bar — no border, no fixed height */
   embedded?: boolean
+  /** The watcher area's row: no "+", no lock icon, no menu, no middle click, no close. Drag-reorder stays. */
+  fixed?: boolean
 }
 
 function TabSeparator({ show }: { show: boolean }) {
   return <div data-testid="tab-separator" className={`w-px h-3.5 flex-shrink-0 transition-opacity duration-150 ease-out ${show ? 'bg-border-default' : 'bg-transparent'}`} />
 }
 
-export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu, onRenameTab, embedded }: Props) {
+export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu, onRenameTab, embedded, fixed }: Props) {
   const t = useI18nStore((s) => s.t)
   const pinnedTabs = useMemo(() => tabs.filter((t) => t.pinned), [tabs])
   const normalTabs = useMemo(() => tabs.filter((t) => !t.pinned), [tabs])
@@ -179,6 +181,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
       onContextMenu={onContextMenu}
       onRename={onRenameTab}
       onHover={setHoveredTabId}
+      fixed={fixed}
     />
   )
 
@@ -203,6 +206,7 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                       onContextMenu={onContextMenu}
                       onRename={onRenameTab}
                       onHover={setHoveredTabId}
+                      fixed={fixed}
                     />
                   </Fragment>
                 ))}
@@ -256,14 +260,14 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
               if (last.kind === 'team') return false
               return last.tab.id !== activeTabId && last.tab.id !== hoveredTabId
             })()} />}
-            <button
+            {!fixed && <button
               onClick={onAddTab}
               className="flex items-center justify-center w-7 h-7 rounded-md text-text-secondary hover:text-text-primary hover:bg-white/10 cursor-pointer flex-shrink-0"
               title={t('nav.new_tab')}
               style={{ marginTop: 2 }}
             >
               <Plus size={14} />
-            </button>
+            </button>}
           </div>
           {canScrollRight && (
             <div data-testid="tab-scroll-right-fade" className="absolute right-0 top-0 bottom-0 z-10 w-16 flex justify-end pointer-events-none">

@@ -13,9 +13,10 @@ Related: host resource lease v2 (lease v2, #2759) provides the host zones used i
 | U-1 | **使用者親手打的指令一律直接生效**，不詢問、不扣額度，無人值守開關都一樣（`/relay`、team 指令）。 |
 | U-2 | 指令收在 `/team` 底下（使用者提議前綴，1f 設計細節，見 §4.1）。`/relay finish` 不需要：`/relay` 本身就會接上已寫好的接力檔。 |
 | U-3 | member 啟動要過資源檢查：一般模式資源緊時跳**警示卡（附當下資源狀況）**由使用者決定；使用者用指令強起也一樣檢查並跳警示。 |
-| U-4 | 接力門檻維持：一輪結束時 ≥ 70 %；或閒置 40 分鐘且 ≥ 40 %。**40 % 以下讓 Claude Code 自己壓縮**（閒置壓縮不關）。 |
+| U-4 | 接力門檻維持：一輪結束時 ≥ 70 %；或閒置 40 分鐘且 ≥ 40 %。~~40 % 以下讓 Claude Code 自己壓縮（閒置壓縮不關）~~ → 由 U-4.3 取代（使用者 10-16）。 |
 | U-4.1 | 閒置接力和用量接力連續發生時要去重：已寫好的接力檔沒有過期，就不重寫。 |
 | U-4.2 | 閒置時寫好接力檔後，使用者回來直接繼續打字：照常進行，不另外處理。 |
+| U-4.3 | （10-16）Claude Code 的**閒置壓縮一律擋下**，不論 context 多少。單一 session 與 lead：**無人值守**時擋下＋直接做閒置接力的前半套（寫好接力檔，已有新鮮的就不重寫）、不出卡；**有人**時擋下＋出卡問：接力／讓它壓縮／不處理，不回答＝不處理（保持原樣、不壓縮）。member 照 U-7。context 滿時在回合裡的壓縮、使用者自己打的 `/compact` 照舊。 |
 | U-5.1 | 使用者核准的 session（單一 session、lead）閒置申請**逾時後自動做前半套**（寫好接力檔），畫面明確說明這是快取將過期的接力；之後 `/relay` 完成，或直接關掉 session。 |
 | U-5.2 | member 閒置由 lead 判斷：內容重要且之後沒任務 → 交接後關閉（交接內容交給 lead 納管，不必由 member 自己改記憶與文件）；內容不重要且沒任務 → 直接關閉；內容重要且跟下個任務連貫 → 接力。 |
 | U-6.1 | member 的 70 % 申請由 lead 判斷。 |
@@ -118,7 +119,30 @@ Lead-only CLI (agents):
   - `pdx kill --handoff`.
 
   Any new turn makes it stale; the next relay writes a new one. A person who comes back and just types carries on in the old context (U-4.2).
-- **Below 40 %**: no idle ask; Claude Code's idle compaction happens as before (U-4).
+- **Below 40 %**: no idle ask at 40 min; Claude Code's idle compaction is intercepted instead (§4.3a, U-4.3).
+
+### 4.3a Idle compaction intercept: solo sessions and leads (U-4.3, user 10-16)
+
+- **Recognising it**: the same signal as §4.4 (trigger `auto`, no main turn running, below the context-full point;
+  Gate M-1 passed, #2870). The mod's `session.compact` hook answers `{skip}` for any session whose mod runs, member or
+  not; a member goes the §4.4 way, a solo session or a lead this way.
+- **Unattended**: the first half (§4.3) at once if the session has no fresh handoff; no card. It spends no quota.
+- **Attended**: one card per idle period (a period ends when a new turn starts), unless this idle period already has an
+  idle ask open or answered, or a fresh `half` handoff — then the skip is silent. The card is the self-relay ask with
+  `reason: idle_intercept` and three answers:
+  - **接力** → the relay as `/relay` would run it (a fresh handoff is reused, §4.3);
+  - **讓它壓縮** → the next idle compaction of this idle period is let through (and if the mod can start a compaction
+    itself, it does so at once);
+  - **不處理**, or no answer within the card's life (5 min, as the idle ask) → nothing: the session stays as it is,
+    not compacted; a person who comes back and types carries on (the cache is cold, so that turn rewrites it).
+  Claude Code tries again about every 54 min while the session stays idle; within one idle period those tries are
+  skipped silently after the card.
+- **App**: the card's third answer is new (`compact`); an App without it shows the card's two usual answers, where
+  "no" is 不處理. The App part is the B line's (88).
+- **Who decides**: the mod only skips and reports the idle period; the daemon decides with the session's
+  authoritative role (member or not), keeps one decision per idle period (so a mod reload or Claude Code's retry
+  54 min later never brings a second card), and never cancels an open idle card for an intercept. A daemon too old
+  to decide for this session → the mod does not skip and the compaction happens as before.
 
 ### 4.4 Members: idle and the lead's decision (U-5.2, U-7)
 
@@ -128,7 +152,7 @@ Lead-only CLI (agents):
   Recognising an idle compaction: trigger `auto`, no main turn running, context below the context-full point. **Gate M-1** (§6) must confirm this first.
 - If the lead does nothing, the member stays as it is: not compacted, cache cold.
 - This replaces, for members, the 40-min idle notice (notice_idle.go) and the 70 %-idle notice (notice_usage.go). A member's lead hears about it at most twice: its 70 % / 80 % / 90 % asks and this intercept (RR §10.12).
-- Members never get the idle first half on their own (§4.3 is for solo sessions and leads).
+- Members never get the idle first half on their own (§4.3 and §4.3a are for solo sessions and leads).
 
 ### 4.5 Unattended mode (U-0, U-7.1, U-7.2, U-7.3)
 
@@ -171,6 +195,37 @@ An agent's own `pdx lead request` and `pdx adopt` open a card as today; the pers
 - Pause causes: `relay_unanswered` (new, with its text) next to `quota` and `lead`.
 - The session row shows 「已寫好接力檔」 while a fresh half handoff exists: `GET /api/relay/fresh` and the host event `relay.fresh` for every session (solo included), and the roster for team rows.
 - iOS: a `member_relay` card where one still exists (G-1). Badge per U-8.3 (88 has taken it).
+
+### 4.9 Changing a member's model (user 10-16)
+
+User request (via 88, 10-16): 「有辦法作一個指令，讓 lead 可以改變 member 使用的 model 嗎？」→ 「排進去」.
+
+- **Command**: `pdx member model <ref> <model> [--effort <e>]`, by the lead, for its own members only (`not_your_member`
+  otherwise). A spawned member on this host. An adopted member, or one on another host, is refused
+  (`model_change_unsupported`): the daemon did not launch it and does not know its command.
+- **What happens**: the member is restarted **in the same conversation**: the daemon waits for it to be between turns
+  (never interrupts a running turn; while it waits, `pdx team` shows the change as pending), ends Claude Code there
+  (`/exit`, then by pid and start time after a grace, as the watcher's rest does), and runs the member's own launch line
+  again in the same pane — the host's `member_command`, the Purdex plugin dir, the new model and effort — with
+  `--resume <its session id>`. Session id, ref, address, title, task and team stay the same; the conversation is kept
+  whole (the new model reads it again on its first turn).
+- **Never through `/model`**: Claude Code's `/model` also writes this host's global default
+  (`~/.claude/settings.json`'s `model`), which every later session on the host would start with.
+- **High context**: the command does not relay. A lead that wants both runs `pdx relay <ref>` first, then the model
+  change on the new session.
+- **It is a relay op** (mode `model_change`): one open op per session, so a relay, an idle intercept (§4.3a/§4.4) and a
+  model change never overlap; the member's own mod finds the turn boundary and holds prompts meanwhile, as for a
+  lead's relay. `--effort` left out keeps the member's current effort. A member whose mod is too old to take the
+  change is refused (`mod_too_old`). Release, kill or the team's end cancel a change that has not started the restart,
+  and wait for (are refused during) one that has.
+- **Done** when the member's SessionStart (verified, the same session id) arrives with the new model: `pdx team`'s
+  MODEL / EFFORT show it. **Fails** without a half state: refused before anything is done when the member is
+  mid-relay (`relay_open`); after the exit, a pane that is not at a shell is reported and nothing is typed; a restart
+  that does not register within 3 min is rolled back — the same launch with the **old** model and effort — and if
+  that does not register either, the member is reported down with the exact command to start it by hand. The lead is
+  told in every case.
+- **Unattended mode**: allowed (it is the lead's own team; no quota is spent).
+- **App** (B line, later): a "change model" item on a member row, on the same API.
 
 ## 5. Phases (A line unless noted; one PR each ≤ 800 lines / 20 files)
 

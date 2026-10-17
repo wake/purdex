@@ -297,7 +297,11 @@ func (m *Module) checkClearedTarget(opID, newSessionID string) (code int, detail
 // is already cancelled — ReportRelay answers ReportNoop for the same state,
 // so the report's reason (compacted) stands and nothing is logged.
 func (m *Module) closeRequestOfReportedOp(op team.RelayOp) {
-	_, won, err := m.closeAs(op.RequestID, Close{State: team.StateCancelled, DecidedAt: m.now()})
+	c := Close{State: team.StateCancelled, DecidedAt: m.now()}
+	if op.Reason == team.RelayReasonHalf {
+		c.Reason = team.RelayReasonHalf // the card shows why it was cancelled: the idle half was written (close_reason "half")
+	}
+	_, won, err := m.closeAs(op.RequestID, c)
 	if err != nil && !errors.Is(err, ErrNoSuchApproval) {
 		m.logf("[team] relay op %s %s: close request %s: %v", op.ID, op.State, op.RequestID, err)
 		return

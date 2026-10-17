@@ -8,6 +8,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -20,7 +22,8 @@ import (
 
 const watchUsage = `usage: pdx watch status [--json] [--config <path>]
        pdx watch config [get [key] | set key=value…] [--json] [--config <path>]
-       pdx watch log [--since <24h|7d|2026-10-14>] [--kind unmanaged_heavy|pressure_high|slot_orphaned|slot_long] [--json] [--config <path>]
+       pdx watch log [--host <alias> | --all] [--since <24h|7d|2026-10-14>] [--kind unmanaged_heavy|pressure_high|slot_orphaned|slot_long] [--unhandled] [--json] [--config <path>]
+       pdx watch ack <id>… | --all [--host <alias>]  --note "<one line>" [--json] [--config <path>]
 `
 
 func runWatch(args []string) {
@@ -35,22 +38,24 @@ func watchMain(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "config" {
 		return watchConfig(args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "ack" {
+		return watchAck(args[1:], stdout, stderr)
+	}
 	if len(args) == 0 || args[0] != "log" {
 		fmt.Fprint(stderr, watchUsage)
 		return 2
 	}
-	fs := flag.NewFlagSet("watch log", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	since := fs.String("since", "", "only events from this long ago (24h, 7d) or this date (2026-10-14)")
-	kind := fs.String("kind", "", "only this kind of event")
-	asJSON := fs.Bool("json", false, "one JSON record per line")
-	dir := fs.String("dir", "", "the watcher's directory (default: <data_dir>/watch of the config)")
-	cfgPath := fs.String("config", "", "config.toml (default ~/.config/pdx/config.toml): its data_dir says where the daemon keeps the log")
+	fs, lf := newLogFlagSet(stderr)
+	since, kind, unhandled, asJSON, dir, cfgPath := lf.since, lf.kind, lf.unhandled, lf.asJSON, lf.dir, lf.cfgPath
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
 	if fs.NArg() > 0 { // flag stops at the first positional word: what follows would be ignored silently
 		fmt.Fprintf(stderr, "多餘的參數 %q\n%s", fs.Args(), watchUsage)
+		return 2
+	}
+	if *lf.all && *lf.host != "" {
+		fmt.Fprintf(stderr, "--all 與 --host 只能擇一\n%s", watchUsage)
 		return 2
 	}
 	var from time.Time
@@ -68,6 +73,9 @@ func watchMain(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "未知的 --kind %q\n", *kind)
 		return 2
 	}
+	if *lf.all || *lf.host != "" {
+		return watchLogViaDaemon(lf, from, stdout, stderr)
+	}
 	d := *dir
 	if d == "" {
 		d = watchDirFor(*cfgPath)
@@ -76,6 +84,19 @@ func watchMain(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	acks, aerr := watch.ReadAcks(d)
+	if aerr != nil {
+		fmt.Fprintf(stderr, "注意：讀不到處理紀錄（%v），事件都當作待處理\n", aerr)
+	}
+	if *unhandled {
+		kept := recs[:0]
+		for _, r := range recs {
+			if _, done := acks[r.ID]; !done {
+				kept = append(kept, r)
+			}
+		}
+		recs = kept
 	}
 	if skipped > 0 {
 		fmt.Fprintf(stderr, "注意：略過 %d 行無法解析的紀錄（當機留下的半行，或檔案損毀）\n", skipped)
@@ -86,11 +107,19 @@ func watchMain(args []string, stdout, stderr io.Writer) int {
 	}
 	for _, r := range recs {
 		if *asJSON {
-			b, _ := json.Marshal(r)
+			var ack *watch.Ack
+			if a, done := acks[r.ID]; done {
+				ack = &a
+			}
+			b, _ := json.Marshal(watch.HandledRecord(r, ack))
 			fmt.Fprintln(stdout, string(b))
 			continue
 		}
-		fmt.Fprintln(stdout, plainText(watchLine(r)))
+		line := plainText(watchLine(r))
+		if a, done := acks[r.ID]; done {
+			line += "  ✓ " + plainText(a.Note)
+		}
+		fmt.Fprintln(stdout, line)
 	}
 	return 0
 }
@@ -156,4 +185,119 @@ func plainText(s string) string {
 		}
 		return r
 	}, s)
+}
+
+// logFlags are the flags of `pdx watch log`.
+type logFlags struct {
+	since, kind, host, dir, cfgPath *string
+	unhandled, asJSON, all          *bool
+}
+
+// newLogFlagSet is the flag set of `pdx watch log`; the test that checks every command a message mentions exists reads the same one.
+func newLogFlagSet(w io.Writer) (*flag.FlagSet, *logFlags) {
+	fs := flag.NewFlagSet("watch log", flag.ContinueOnError)
+	fs.SetOutput(w)
+	return fs, &logFlags{
+		since:     fs.String("since", "", "only events from this long ago (24h, 7d) or this date (2026-10-14)"),
+		kind:      fs.String("kind", "", "only this kind of event"),
+		host:      fs.String("host", "", "read the events of this paired host (through the daemon)"),
+		all:       fs.Bool("all", false, "read the events of every host, this one included (through the daemon)"),
+		unhandled: fs.Bool("unhandled", false, "only the events no one has marked handled"),
+		asJSON:    fs.Bool("json", false, "one JSON record per line"),
+		dir:       fs.String("dir", "", "the watcher's directory (default: <data_dir>/watch of the config)"),
+		cfgPath:   fs.String("config", "", "config.toml (default ~/.config/pdx/config.toml): its data_dir says where the daemon keeps the log"),
+	}
+}
+
+// hostLogWire is the daemon's answer to GET /api/watch/log.
+type hostLogWire struct {
+	Events []watch.EventView `json:"events"`
+	Hosts  []struct {
+		Host  string `json:"host"`
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
+	} `json:"hosts"`
+}
+
+// watchLogViaDaemon reads the events of another host, or of all, through the daemon of this host (which asks the paired hosts). A host
+// that could not be read is named and makes the exit code 1; the events of the others are printed all the same.
+func watchLogViaDaemon(lf *logFlags, from time.Time, stdout, stderr io.Writer) int {
+	cfg, err := config.Load(*lf.cfgPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "pdx watch log: %v\n", err)
+		return 1
+	}
+	q := url.Values{}
+	if *lf.all {
+		q.Set("host", "all")
+	} else {
+		q.Set("host", *lf.host)
+	}
+	if !from.IsZero() {
+		q.Set("since", from.UTC().Format(time.RFC3339))
+	}
+	if *lf.kind != "" {
+		q.Set("kind", *lf.kind)
+	}
+	if *lf.unhandled {
+		q.Set("unhandled", "1")
+	}
+	res, err := doPeersRequest(http.MethodGet, watchBase(cfg)+"/api/watch/log?"+q.Encode(), nil, cfg.Token, peersRequestTimeout)
+	if err != nil {
+		return reportPeersTransportErr(err, stderr)
+	}
+	switch {
+	case res.status == http.StatusNotFound:
+		fmt.Fprintln(stderr, "pdx watch log: this daemon has no host log route (older version?)")
+		return 1
+	case res.status != http.StatusOK:
+		fmt.Fprintf(stderr, "pdx watch log: %s\n", sanitizeCell(extractPeersErrorMessage(res.body)))
+		return 1
+	}
+	var out hostLogWire
+	if err := json.Unmarshal(res.body, &out); err != nil {
+		fmt.Fprintf(stderr, "pdx watch log: unreadable answer: %v\n", err)
+		return 1
+	}
+	code := 0
+	for _, h := range out.Hosts {
+		if !h.OK {
+			fmt.Fprintf(stderr, "注意：%s 的事件讀不到：%s\n", plainText(h.Host), plainText(h.Error))
+			code = 1
+		}
+	}
+	if len(out.Events) == 0 && !*lf.asJSON {
+		fmt.Fprintln(stdout, "沒有符合的事件")
+		return code
+	}
+	for _, e := range out.Events {
+		if *lf.asJSON {
+			b, _ := json.Marshal(e)
+			fmt.Fprintln(stdout, string(b))
+			continue
+		}
+		fmt.Fprintln(stdout, plainText(eventViewLine(e)))
+	}
+	return code
+}
+
+// eventViewLine is one event of the daemon's view as a line of text: time, host, kind, what it was about, and the note when handled.
+func eventViewLine(e watch.EventView) string {
+	b := &strings.Builder{}
+	fmt.Fprintf(b, "%s  %-6s %-15s", e.At.Local().Format("01-02 15:04:05"), e.Host, e.Kind)
+	switch e.Kind {
+	case watch.KindUnmanagedHeavy:
+		fmt.Fprintf(b, "  %s  %s  %.1f 核 %d MB %s", e.Label, e.Command, e.PeakCores, e.PeakMB, time.Duration(e.DurationS*float64(time.Second)).Round(time.Second))
+	case watch.KindPressureHigh:
+		b.WriteString("  " + e.Detail)
+	default:
+		fmt.Fprintf(b, "  %s  gate %d", e.Slot, e.HolderPID)
+	}
+	if e.Status == watch.StatusHandled {
+		b.WriteString("  ✓ " + e.Note)
+		if e.HandledFromHost != "" {
+			b.WriteString("（" + e.HandledFromHost + "）")
+		}
+	}
+	return b.String()
 }

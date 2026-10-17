@@ -330,9 +330,77 @@ Expected files: `hooks/register.js`, `hooks/relay.test.ts`, `W/wire_relay_member
 - `noticeIdle` and `noticeUsage` skip members whose mod protocol ≥ 9 (`MinIdleInterceptModVersion = 9`) (M: an old member still gets them).
 - Tests: intercept → one notice per idle period (M); a context-full compaction in a member runs and is reported as today; a member with mod 8 gets both old notices; mod side: skip only in a member with no turn running.
 
-**T43 Skill text**: the intercept notice and the three answers.
+**T42b Solo and lead intercept** (spec §4.3a, U-4.3, user 10-16). Two PRs: **RT-4a** = T42 rebased on main with the
+routing change below (member path) and the protocol bump; **RT-4b** = the solo/lead path, the card and its answers.
+Expected files add `W/wire_relay.go`, `W/wire.go`, `T/relay_begin.go`, `T/relay_decide.go`, `T/unattended.go`,
+`cmd/pdx/relay.go`.
+- **The daemon decides, the mod only skips and reports** (replaces T42's mod-side branch on the cached role). On an idle
+  compaction (T42's recognition) the mod answers `{skip}` and posts `pdx relay compacted --intercepted --period <p>`;
+  `p` is the idle period's identity: the end time of the last main turn (a new turn starts a new period; it survives a
+  mod reload because it comes from the transcript's last turn, not from mod memory). The daemon, under the session's
+  relay lock, reads the **authoritative** role and answers one of: `member` (T42's notice to the lead), `silent`,
+  `ask` (attended: it has created the `idle_intercept` ask), `half` (unattended: it has started the first half), `pass`
+  (the person answered `compact` for this period: the mod lets the next compaction through). So a release or an adopt
+  between two intercepts is routed by the daemon's role, never the mod's cache.
+- **One decision per period, kept by the daemon**: a row per session (`relay_intercepts`: session, period, state,
+  at) with the states `asked` (card open), `left` (answered `deny`, or timed out), `half` (first half started),
+  `pass_pending` (answered `compact`, not yet used) and `pass_spent`. The answer to an intercept report: `pass` when
+  the row is `pass_pending`; `silent` when the row is `asked`, `left`, `half` or `pass_spent`, or when, in this
+  period, an idle ask is open, answered or its first half is beginning or done, or a fresh `half` handoff exists;
+  else `ask` / `half` (and the row is written). Creating the ask or starting the half and writing the row happen in
+  one transaction with the session's one-open-op rule, so the 40-min idle timer, a `halfLater` begin and the
+  intercept cannot both act.
+- **The hook decides at once; the daemon is told after.** `session.compact` must answer in the hook, so the mod never
+  waits for the daemon there: the hook lets the compaction through only when the mod holds an **armed pass** for the
+  current period (and disarms it in the same step); otherwise it answers `{skip}`. The report to the daemon is sent
+  from a timer as today: `--intercepted` after a skip, `--pass-used` after a pass, on which the daemon moves the row
+  `pass_pending` → `pass_spent` (only from `pass_pending`; a second `--pass-used` is a no-op). The mod arms the pass
+  when it learns `compact` — from the card's settle, or from the daemon's `pass` answer to an intercept report (a mod
+  reloaded after the answer has lost the armed flag: its next intercept is skipped, the daemon answers `pass`, the
+  mod re-arms, and the try after that goes through or the mod starts one itself if its API can). **A pass is bound to
+  the context it was given for**: `pass_pending` stores the session's context tokens when `compact` was answered, and
+  the hook honours an armed pass only while the current usage is at least 90 % of that. A compaction cuts the context
+  far below, so a pass re-armed after a crash between the compaction and `--pass-used` is never honoured again (and
+  Claude Code does not idle-compact a context under its minimum anyway); the daemon also turns `pass_pending` into
+  `pass_spent` when a report for the period shows the context under that bound.
+- **An open idle card is never cancelled by an intercept** (today a non-member in `awaiting` goes `toIdle` +
+  `cancelled{compacted}` and then compacts): the intercept is `silent`, the card stays open and its timeout still runs
+  the first half (§4.3).
+- **The ask**: `reason: idle_intercept` (new wire constant; CLI and `relay_begin` validation accept it). Attended:
+  timeout → **nothing** (unlike the idle ask, whose timeout runs the first half); `deny` → nothing; `approve` → the
+  relay as `/relay` (a fresh handoff reused); `compact` (new `Decision` value; the op closes `cancelled` with reason
+  `compact`; the CLI's JSON and exit code say `compact`, exit 0) → the row becomes `pass_pending` and the mod's settle
+  branch arms the pass (above); if the mod API can start a compaction it does so at once (record the finding in the
+  PR). Unattended at creation: the first half (no card, no quota); no first half if a fresh handoff exists
+  (→ `silent`).
+- **Switching unattended on with an `idle_intercept` card open**: the sweep closes it `cancelled` with the reason
+  `unattended_half` (distinct from a timeout) and writes the row `half`; the CLI reports that reason in its JSON (exit
+  12, cancelled) and the mod's settle branch runs the first half on it (no quota, no clear) unless a fresh handoff
+  exists. A plain timeout stays exit 11 → nothing. Never the general `autoApprove`.
+- **Versions**: mod protocol `VERSION` → **'10'** for this path ('9' = member intercept only). The daemon's hello
+  answer carries `idle_intercept: 1` (members) or `2` (all sessions); the mod skips an idle compaction only when the
+  daemon's level covers the session (a daemon that does not say → no skip: the compaction happens as before). A
+  daemon seeing a mod < 10 for a non-member never answers `ask`/`half` (that mod cannot settle `compact`) — it answers
+  `silent` only if the mod skipped, and logs. App: capability `team.idle_intercept.v1` for the third button (B line).
+- **Gate**: M-1 passed on Claude Code 2.1.299 (#2870). RT-4b re-runs M-1's two checks (skip honoured; no immediate
+  retry) on the Claude Code version installed at the time and records it in the PR; if either fails, RT-4b is
+  blocked and the lead is told (no fallback for solo sessions: their compaction then happens as before).
+- Tests (mod): any session's idle compaction is skipped only when the daemon's level covers it (M); a context-full one
+  in a turn runs; the period id comes from the last turn and survives a reload. Daemon: routing by the authoritative
+  role, incl. a release and an adopt between two intercepts; one decision per period across a mod reload and a
+  retry 54 min later (M); idle card open → `silent` and the card's timeout still runs the half; races under `-race`:
+  idle-timer begin in flight × intercept, `halfLater` begin in flight × intercept, a fresh half written while the
+  intercept is decided; attended `idle_intercept` timeout → nothing, `deny` → nothing, `compact` → `pass_pending` → one
+  compaction let through → `pass_spent`, a second report a no-op, a reload between answer and use re-arms from the
+  daemon (M); a crash between the let-through compaction and `--pass-used` → the re-armed pass is not honoured
+  (usage under 90 % of the bound) and the row ends `pass_spent`; a switch-on close (`unattended_half`) runs the half, a plain timeout does not;
+  unattended at creation → half, with a fresh handoff → `silent`; switching unattended on with the card open → half,
+  no quota, not `autoApprove`; mixed versions: new mod × daemon without the level → no skip; mod 9 × new daemon
+  for a solo session → no `ask`.
 
-`VERSION` → '9'.
+**T43 Skill text**: the intercept notice and the three answers; §4.3a's card and answers.
+
+`VERSION` → '9' in RT-4a, '10' in RT-4b (T42b).
 
 ## RT-5a — spawn resource check: seam, check, card (after lease v2 P1b; #2765 merged as d3a6e69f; daemon)
 
@@ -362,9 +430,86 @@ Expected files: `W/wire_unattended.go`, `T/unattended_preview.go`, `T/unattended
 
 **T48 `GET /api/team/unattended/preview`** — read-only; every list computed by the **same helper** the switch-on sweep uses, so the preview cannot drift (the sweep's rules: T4, T22, T29). Shape in the App contract. Tests: one fixture host with each case (rule on/off; quota 0 and 2; threshold / idle from mod 7 and 8 / reask / member_relay / old manual-member cards; an open member ask; a lead and an adopt card; a spawn card; a paused session) → the expected lists (M: change the sweep's rule for one case and the preview test fails). Capability `team.unattended_preview.v1`.
 
+## RT-7 — change a member's model (user 10-16; spec §4.9)
+
+Expected files: `W/wire_relay.go`, `W/wire_relay_member.go`, `T/relay_member.go`, `T/relay_store.go` (+ migration),
+`T/model_change.go` (new), `T/team_store.go`, `T/roster.go`, `T/launch.go`, `T/relay_boot.go`, `internal/tmuxpane/`
+(new: the check-and-type and pane helpers moved out of `internal/watch/pane.go`, which then uses them), `hooks/register.js`
++ `hooks/relay.test.ts`, `cmd/pdx/member_cmd.go` (new), `skills/pdx-team/SKILL.md` + tests. Two PRs: **RT-7a** the
+pane package move (pure move, byte-level listing, no behaviour change) and **RT-7b** the change itself.
+
+**T49 The op is a relay op** (so it shares the relay's one-open-op-per-session rule, lock, lead check and boot
+reconciliation): `relay_ops.mode = 'model_change'` with new columns `to_model`, `to_effort`, `from_model`,
+`from_effort`, `old_pid`, `old_proc_start`, `attempt` (`forward` | `rollback`), `launch_sent_at`, `deadline_at`,
+`notified_state` (migration adds them with defaults; a test opens an old schema that already has rows).
+- **Request** `pdx member model <ref> <model> [--effort e]` → the same wire and identity as `pdx relay <ref>`
+  (`origin_inbox` names the caller; the lead check of `relay_member.go`): refused `not_your_member`, `relay_open` (any
+  open op of the session: a relay, an idle intercept of RT-4, another change), `model_change_unsupported` (the member's
+  origin is adopted — by the member row's origin, not by whether a spawn op exists — or it is remote), `mod_too_old`
+  (its mod protocol < 11), invalid model/effort. `--effort` omitted → the member's current effort (from its row), so
+  the launch never falls back to the host's default by accident. The op is created in the session's relay transaction.
+- **The turn boundary comes from the member's mod** (mod protocol **'11'**): the mod takes the control message as it
+  takes a lead's relay (`requested → seen`), waits for its running turn to end, then holds prompts (the relay lock, as
+  `writing` does) and reports `ready`; the daemon only acts from `ready`. While held, a prompt that arrives is answered
+  "暫停：正在換 model" like the relay's hold.
+- **exiting** (from `ready`): the daemon records `old_pid` / `old_proc_start` from the member row, types `/exit` (the
+  `tmuxpane` check-and-type, in the member's own pane by its `%N`), and after 60 s re-checks the same process
+  (pid + start time; a missing start time or an unreadable table = do not signal, retry next pass) before SIGTERM, and
+  again before SIGKILL 10 s later; ESRCH = gone. Done when the old process is gone and the pane is at a shell.
+- **launching**: `launchLine(member_command, plugin dir, to_model, to_effort)` + `--resume <session id>`, typed with
+  the check-and-type helper; `launch_sent_at` and `deadline_at` (+3 min) written **before** the keys are sent (a
+  restart after that never sends the line twice: it only waits). Done when a verified SessionStart of the same session
+  id arrives **after `launch_sent_at`**, in that pane, from a process whose pid + start time differ from `old_*` and
+  whose argv carries `--model <to_model>` (and `--effort` when set). The argv comes from a new process-args reader
+  (one `ps -o args= -p <pid>` through `execstat`, tag `team.proc-args`, behind a seam for tests); a read that fails is
+  retried on the next pass and never counts as a match — no completion without a positive argv match. Whatever its
+  model, the first verified SessionStart of the session after `launch_sent_at` records that process as
+  `fwd_pid` / `fwd_proc_start` (new columns), so a rollback can end exactly it. Then, in one transaction: op `done`, the member row (`team_members`: pid, proc_start, model, effort)
+  and the spawn op's model/effort. Session id, ref, address, title, task and team are untouched (tested).
+- **Rollback**: `deadline_at` passed with no completion → `attempt = rollback`: if `fwd_pid` / `fwd_proc_start` are
+  recorded, that process (and only it: pid + start re-checked before each step) is ended as in `exiting`; a process
+  in the pane that is not the recorded one is never signalled (→ `failed`, `pane_busy`). Then the launch line with
+  `from_model` / `from_effort`, under the same write-before-send and completion rules; its completion → the op ends
+  `done` with outcome `rolled_back`; none by its deadline → `failed` (`member_down`, the exact hand command). **No new
+  terminal state**: the op ends `done` (outcome `changed` or `rolled_back`), `failed` or `cancelled`, the states the
+  relay's `Terminal()` and the one-open-op index already know.
+- **pane_busy**: after the exit the pane is not at a shell → nothing typed; op `failed` (`pane_busy`); the notice says
+  what runs in the pane and the hand command.
+- **Release, kill, team end**: in `requested` / `seen` / `ready` they cancel the op first. The mod learns it two ways:
+  a `relay_cancel` control message on the same channel as the request, and its own check of the op's state every
+  30 s while it holds (`pdx relay status`), so a lost message never leaves prompts held; on `cancelled` it drops the
+  hold and says so in the session. In
+  `exiting` / `launching` they are refused with `model_change_open` and the CLI says to wait or retry. Boot
+  reconciliation re-checks that the member still belongs to the lead before any step, and abandons an op whose member
+  does not (no launch).
+- **RT-4**: an idle intercept for a session with an open model-change op is `silent` (one open op rule).
+- **Notices** (started, done old → new, rolled back with why, failed with why and the hand command): sent from the op's
+  state by the relay notifier loop; `notified_state` is updated in the same transaction as the state change that
+  needs a notice and cleared when the notice is handed to the peer outbox, so a restart re-sends at most once per state.
+**T50 CLI, roster and skill** — `pdx member model … [--wait 9m]` prints state changes like `pdx relay --wait`; exit 0
+done, 10 refused, 11 still going at `--wait`, 14 rolled back or failed. `pdx team`'s MODEL shows `sonnet→opus …`
+while an op is open. The pdx-team skill (lead section) gains the command and "never type /model into a member". The
+skill and `register.js` change → `pdx setup`; the plugin-content test covers the new skill text.
+Tests: identity (another lead's member, M); each refusal incl. adopted by origin, remote, `relay_open` both ways (a
+relay asked during a pending change, a change asked during a relay) and `mod_too_old`; `--effort` explicit / omitted /
+member without one; the mod holds only from its turn end (a turn in progress delays `ready`, M; a prompt during hold
+gets the notice); exiting: signals only to the same pid + start, none when the start time is unreadable, ESRCH;
+launching: a stale SessionStart (before `launch_sent_at`), another pane, the old pid, another session id, the old
+model in argv, or an argv read that fails are not completion (M); a wrong-model process is recorded as `fwd_*`, ended
+on rollback, and the old model comes back; a foreign process in the pane is never signalled; after `rolled_back` (and
+after `failed`, `cancelled`) a new relay or model change can be created and release/kill are not blocked; cancel at
+`ready` by the message and, with the message lost, by the 30 s check; done updates `team_members` and the spawn op in one transaction and keeps id,
+ref, address, title, task; the next relay and kill use the new pid; rollback on deadline (M) → `rolled_back`;
+rollback fails → `failed`/`member_down`; `pane_busy`; restart cut points: after `ready`, after `/exit` typed, after a
+signal, after `launch_sent_at`, after the rollback's line — each resumes without a second line or a wrong kill;
+release/kill/team end in each state; RT-4 intercept with an open change → silent; notices once per state across a
+restart; old-schema migration with rows; tmux under `-L` with `unset TMUX`.
+Order: after RT-4b (both change the relay op and the mod protocol: RT-4b takes '10', RT-7 '11'); owner: the A-line
+member after W2b.
+
 ## Order and owners
 
-RT-1a → RT-1b → RT-1c (deploy) → RT-2a1 → RT-2a2 → RT-2b → RT-2c (deploy) → RT-3a1 → RT-3a2 → RT-3b → RT-3c (deploy) → RT-4 → RT-5a (after lease v2 P1b; #2765 is merged, d3a6e69f, so the seam is there) → RT-5b → RT-6.
+RT-1a → RT-1b → RT-1c (deploy) → RT-2a1 → RT-2a2 → RT-2b → RT-2c (deploy) → RT-3a1 → RT-3a2 → RT-3b → RT-3c (deploy) → RT-4a → RT-4b → RT-7a → RT-7b → RT-5a (after lease v2 P1b; #2765 is merged, d3a6e69f, so the seam is there) → RT-5b → RT-6.
 - Gate M-1 (T41) can run any time before RT-4, by anyone with a throwaway session.
 - RT-6 needs RT-3a1 (the idle split) and RT-2b (asks); it may run beside RT-3b.
 - One Sonnet member implements in order. The lead reviews each PR, releases it, and bumps and deploys at the three marks.

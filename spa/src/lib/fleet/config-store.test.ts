@@ -115,12 +115,6 @@ describe('mergedProbeEntries and the focus request', () => {
     expect(list.map((e) => e.id)).toEqual(['aaaaaaaa', 'bbbbbbbb', 'cccccccc'])
     expect(list[1].aliases).toEqual({ [A]: 'a2', [B]: 'b2' })
   })
-  it('requestProbeFocus sets and clearProbeFocus clears', () => {
-    useFleetConfigStore.getState().requestProbeFocus('aaaaaaaa')
-    expect(useFleetConfigStore.getState().focusProbe).toBe('aaaaaaaa')
-    useFleetConfigStore.getState().clearProbeFocus()
-    expect(useFleetConfigStore.getState().focusProbe).toBeNull()
-  })
 })
 
 const named = (id: string, name: string, alias: string, over: Partial<ProbeRow> = {}): ProbeRow => ({ id, name, ssh_alias: alias, icon: 'Desktop', icon_weight: 'bold', ...over })

@@ -171,6 +171,10 @@ type RelayHelloRequest struct {
 	SessionID  string `json:"session_id"`
 	ModVersion string `json:"mod_version,omitempty"` // the mod ↔ daemon PROTOCOL version as a decimal string ("1"; P5b-1's VERSION), not a pdx release; P6 compares it for relay_unsupported
 	Agent      string `json:"agent,omitempty"`       // "cc"
+	// IdleIntercept is the level of idle_intercept the mod has already heard from a hello answer (0 = none yet). The daemon drops a
+	// member's older idle notices only once it has seen a mod say it knows: an answer that was lost on the way can then never leave
+	// a member that nobody intercepts and nobody is told about (RT-4a).
+	IdleIntercept int `json:"idle_intercept,omitempty"`
 }
 
 // RelayHelloResponse answers hello: the session's role and effective self-relay state.
@@ -194,6 +198,8 @@ type RelayHelloResponse struct {
 	// Waiting is this session's unanswered final card (RT-2a1): a mod that reloaded and holds no request adopts it again.
 	// Absent for an ordinary open card and from a daemon older than this field.
 	Waiting *RelayWaiting `json:"waiting,omitempty"`
+	// IdleIntercept is the level of Claude Code idle compactions this daemon decides for (RT-4): 1 = members. Absent from an older daemon.
+	IdleIntercept int `json:"idle_intercept,omitempty"`
 }
 
 // RelayBeginRequest is POST /api/relay/begin. It carries no model or
@@ -320,6 +326,20 @@ const (
 	MinHandoffModVersion = 8
 )
 
+// A member's idle compaction that its mod intercepted (RT-4 T42): the first mod protocol that does it (the daemon then drops the two
+// older idle notices for that member), and the one notice the lead gets, once per idle period. Args: address, title, the context ("55%" or "未知"), ref ×3.
+const (
+	// InterceptRouteMember / InterceptRouteSilent: the daemon's answers to an intercept report (RelayCompactedResponse.Route).
+	InterceptRouteMember = "member"
+	InterceptRouteSilent = "silent"
+	// IdleInterceptMembers is the hello answer's idle_intercept level for a daemon that decides intercepts for members only; a mod skips an
+	// idle compaction only when the level covers its session (absent or 0 = a daemon that does not decide: the compaction happens as before).
+	IdleInterceptMembers = 1
+
+	MinIdleInterceptModVersion = 9
+	IdleInterceptNoticeFmt     = "[pdx team] member %s「%s」閒置，快取快過期，context %s。請決定：接力（pdx relay _%s）、交接後關閉（pdx kill _%s --handoff）、直接關閉（pdx kill _%s）。"
+)
+
 // The lead's texts about a handoff kill (RT-3c T38), word for word.
 const (
 	// HandoffClosedFmt: %s the member's address, %s its title, %s the handoff file.
@@ -343,6 +363,9 @@ type RelayFreshSession struct {
 	OpID      string `json:"op_id"`
 	Path      string `json:"path"`
 	WrittenAt int64  `json:"written_at"`
+	// Code is the session code of the tmux session the CC session runs in, the same as SessionInfo.Code in /api/sessions; absent
+	// when it is not in tmux (or tmux does not answer).
+	Code string `json:"code,omitempty"`
 }
 
 // RelayFreshView is the answer of GET /api/relay/fresh, oldest first.

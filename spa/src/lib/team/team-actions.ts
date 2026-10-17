@@ -3,7 +3,8 @@
 //   toggleTeamCollapse — collapse / expand, collapsing from a member switches to the lead (R9);
 //   visibleTabIds      — the tab list left / right stepping and ⌘1–8 work on: members of a collapsed team are skipped (R8).
 // Closing the lead is NOT here: it must hold for every close path, so it is TI-1c's subscriber.
-import { useWorkspaceStore } from '../../features/workspace/store'
+import { useWorkspaceStore, getReturnWorkspaceId } from '../../features/workspace/store'
+import { WATCH_WORKSPACE_ID } from '../watch/ids'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useHostLookStore } from '../../stores/useHostLookStore'
 import { useHostStore } from '../../stores/useHostStore'
@@ -31,6 +32,9 @@ export interface OpenSeatResult {
   outcome: OpenSeatOutcome
   tabId: string | null
 }
+
+/** Team tabs never go to the watcher area: while it is shown they open where the user came from. */
+const notWatch = (wsId: string | null): string | null => (wsId === WATCH_WORKSPACE_ID ? getReturnWorkspaceId() : wsId)
 
 const seatOf = (view: TeamView, sessionId: string): Seat | undefined =>
   view.lead.session.session_id === sessionId ? view.lead : view.members.find((m) => m.session.session_id === sessionId)
@@ -133,7 +137,7 @@ export function openTeamSeat(teamKey: string, sessionId: string, opts?: { quiet?
       return { outcome: 'unlisted', tabId: null }
     }
     const ghostWs = ui.ghostWorkspace[teamKey]
-    const wsId = ghostWs !== undefined && workspaces.workspaces.some((w) => w.id === ghostWs) ? ghostWs : workspaces.activeWorkspaceId
+    const wsId = notWatch(ghostWs !== undefined && workspaces.workspaces.some((w) => w.id === ghostWs) ? ghostWs : workspaces.activeWorkspaceId)
     const leadTab = openSessionTabAt(view.hostId, leadSession, wsId === null ? undefined : { workspaceId: wsId })
     if (leadTab === null) {
       hostHidden(teamKey, sessionId, [view.hostId, seat.hostId], opts?.quiet)
@@ -154,7 +158,7 @@ export function openTeamSeat(teamKey: string, sessionId: string, opts?: { quiet?
   let place: { workspaceId: string; afterTabId?: string } | undefined
   if (seat.role === 'lead') {
     const ghostWs = ui.ghostWorkspace[teamKey]
-    const wsId = ghostWs !== undefined && workspaces.workspaces.some((w) => w.id === ghostWs) ? ghostWs : workspaces.activeWorkspaceId
+    const wsId = notWatch(ghostWs !== undefined && workspaces.workspaces.some((w) => w.id === ghostWs) ? ghostWs : workspaces.activeWorkspaceId)
     if (wsId !== null) place = { workspaceId: wsId }
   } else if (fresh.lead.tabId !== null) {
     const ws = useWorkspaceStore.getState().findWorkspaceByTab(fresh.lead.tabId)

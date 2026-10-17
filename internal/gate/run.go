@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -295,6 +296,11 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 	watching := lw != nil && lw.after > 0
 	tracked := slot != nil || watching
 	grouped := tracked && !tty
+	if watching {
+		// A gate below this command must not take a late slot of its own for the same tree (#3031): this one will, for all of it.
+		// The mark is given now, not when the slot is taken, because what the command starts before that must already see it.
+		cmd.Env = withEnv(env, LateRootEnv, strconv.Itoa(g.PID()))
+	}
 	if grouped {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}

@@ -338,6 +338,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (mod hello): %w", err)
 	}
+	if err := ensureColumn(db, "mod_hello", "idle_intercept", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (mod hello idle_intercept): %w", err)
+	}
 	if _, err := db.Exec(hostRootsSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (host roots): %w", err)
@@ -568,7 +572,8 @@ type Close struct {
 	// sweeper's timeout or abandonment, in the same statement. A click
 	// leaves it 0 and runs today's SQL.
 	UnexpiredAt int64
-	// Reason is the code an adopt request cancelled at approve carries (close_reason); empty for every other close.
+	// Reason is the code a request cancelled with a reason carries (close_reason): an adopt request cancelled at approve (ErrAdopt*), and
+	// the member-relay card an idle half closed ("half", closeRequestOfReportedOp); empty for every other close.
 	Reason string
 	// Forward, set by approveMemberRelay for a remote member's op, queues the `relay` command in the approve's transaction.
 	Forward func(tx *sql.Tx, op team.RelayOp, at int64) error

@@ -3,6 +3,7 @@ import { CaretDown } from '@phosphor-icons/react'
 import { useProfileSwitcherTrigger } from '../../../stores/useProfileSwitcherStore'
 import { ProfileIcon, ProfileSwitcher } from './ProfileSwitcher'
 import { ProfileConflictButton } from './ProfileConflict'
+import { WatchShieldButton } from './WatchShieldButton'
 
 interface Props {
   isActive: boolean
@@ -47,6 +48,7 @@ export function HomeRow({ isActive, onSelectHome }: Props) {
       </button>
       {/* Beside the trigger, not in it: a click on the icon opens its popover only (ProfileConflict.tsx). */}
       <ProfileConflictButton />
+      <WatchShieldButton />
       {switcher.enabled && <ProfileSwitcher trigger={buttonRef} placement="bottom-start" />}
     </div>
   )

@@ -253,6 +253,8 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 			}
 			mark := ""
 			switch {
+			case h.NoRecord:
+				mark = "  （沒有紀錄：鎖被還沒結束的子行程占著）"
 			case h.Late && h.Over:
 				mark = "  （晚占、超額）"
 			case h.Late:

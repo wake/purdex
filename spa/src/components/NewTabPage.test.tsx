@@ -511,6 +511,19 @@ describe('NewTabPage — bring in an open tab (PR-B B2)', () => {
     expect(screen.queryByText(BRING_IN_TITLE)).toBeNull()
   })
 
+  it('never offers a tab of the watcher area', () => {
+    const { tab: current, paneId } = seedSplitCurrentTab('Alpha')
+    // An unlocked, movable tab that sits in the area (a rehydrate put it there): the area's tabs are not for relocating.
+    const stray = createTab(editorContent('/proj/stray.md'))
+    useTabStore.getState().addTab(stray)
+    useWorkspaceStore.getState().ensureWatchWorkspace()
+    useWorkspaceStore.getState().addTabToWorkspace('watch', stray.id)
+
+    render(<NewTabPage onSelect={() => {}} currentTabId={current.id} currentPaneId={paneId} />)
+
+    expect(screen.queryByText(BRING_IN_TITLE)).toBeNull()
+  })
+
   it('caps the section at half the pane height and scrolls the list internally', () => {
     // Regression: with many open tabs the section grew unbounded and pushed the
     // provider grid (sessions / files / …) out of view in a split pane.

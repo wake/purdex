@@ -84,6 +84,7 @@ const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n
 
 /** The one normalised used share: rounded, clamped to 0-100. Ring, tone, tooltip and remaining all derive from it. */
 export function usedPct(used: number): number {
+  if (!Number.isFinite(used)) return 0 // NaN / ±Infinity: no usable reading, drawn as 0 rather than a NaN height
   return clamp(Math.round(used), 0, 100)
 }
 

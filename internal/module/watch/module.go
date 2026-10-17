@@ -56,6 +56,24 @@ type Module struct {
 	// two is the state of the two-awake rule; standDowner delivers the notice to this host's own watcher (nil: logged, not sent).
 	two         twoAwake
 	standDowner StandDowner
+	// chg is the last watch.changed payload; emit is a test seam (nil: the event stream of core).
+	chg    changeState
+	remote remoteState
+	// dlv is the delivery of events to the watcher (delivery.go).
+	dlv deliveryState
+	// acks is this host's ack log (events.go).
+	acks *watch.AckStore
+	// evMu orders the counts and the sends of watch.events.
+	evMu sync.Mutex
+	// a count that failed is sent again after evRetryAfter (a test shortens it); evRetrying says one retry is waiting.
+	evRetryAfter time.Duration
+	evRetryMu    sync.Mutex
+	evRetrying   bool
+	// manualDelivery keeps Start from running the delivery loop: a test calls deliverPass itself.
+	manualDelivery bool
+	emit           func(core.HostEvent)
+	// beforeChgLock is a test seam at the point a notifier is about to wait for the notice lock.
+	beforeChgLock func()
 	// tickEvery is the period of the safety-net ticker (a test shortens it); unsubscribe and stop undo Start.
 	tickEvery   time.Duration
 	unsubscribe func()
@@ -65,6 +83,7 @@ type Module struct {
 	// (the SessionStart subscription may call back after unsubscribe returns).
 	runMu   sync.Mutex
 	running bool
+	ready   bool // Init succeeded and Stop has not run: watch.v1 is announced
 	runCtx  context.Context
 }
 
@@ -106,6 +125,17 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	m.loc = watch.NewLocator(remembered, asker{m}, m.logf)
 	m.rec.registered = m.onRegistered
+	m.baseline() // what the module starts with is not a change
+	m.loc.SetOnChange(func() { m.notifyChanged(); m.wakeDelivery() })
+	dir := ""
+	if c.Cfg != nil && c.Cfg.DataDir != "" {
+		dir = filepath.Join(c.Cfg.DataDir, "watch")
+	}
+	m.initDelivery(dir)
+	c.Registry.Register(watch.EventSinkKey, watch.EventSink(m))
+	m.runMu.Lock()
+	m.ready = true
+	m.runMu.Unlock()
 	c.Registry.Register(LocatorKey, m.loc)
 	return nil
 }
@@ -137,6 +167,13 @@ func (m *Module) Start(context.Context) error {
 	m.running, m.runCtx = true, ctx
 	m.runMu.Unlock()
 	m.reconcileBackground("start")
+	if !m.manualDelivery {
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			m.deliveryLoop(ctx)
+		}()
+	}
 	every := m.tickEvery
 	if every <= 0 {
 		every = safetyNet
@@ -152,15 +189,25 @@ func (m *Module) Start(context.Context) error {
 				return
 			case <-t.C:
 				m.reconcileBackground("ticker")
+				m.refreshRemoteBackground()
 			}
 		}
 	}()
 	return nil
 }
 
+// Status is what /api/info reads to announce watch.v1: ready from a successful Init until Stop (the routes are there whether or not
+// detection is switched on).
+func (m *Module) Status() map[string]any {
+	m.runMu.Lock()
+	defer m.runMu.Unlock()
+	return map[string]any{"ready": m.ready}
+}
+
 func (m *Module) Stop(context.Context) error {
 	m.runMu.Lock()
 	m.running = false
+	m.ready = false
 	m.runMu.Unlock()
 	if m.unsubscribe != nil {
 		m.unsubscribe()
@@ -176,8 +223,15 @@ func (m *Module) Stop(context.Context) error {
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/peers/watch/holder", m.handlePeerHolder)
 	mux.HandleFunc("POST /api/peers/watch/announce", m.handlePeerAnnounce)
+	mux.HandleFunc("POST /api/peers/watch/event", m.handlePeerEvent)
 	mux.HandleFunc("GET /api/watch/holder", m.handleLocalHolder)
 	mux.HandleFunc("GET /api/watch/status", m.handleStatus)
+	mux.HandleFunc("GET /api/watch/unhandled", m.handleUnhandled)
+	mux.HandleFunc("GET /api/watch/events", m.handleEvents)
+	mux.HandleFunc("POST /api/watch/ack", m.handleAck)
+	mux.HandleFunc("POST /api/peers/watch/ack", m.handlePeerAck)
+	mux.HandleFunc("POST /api/peers/watch/log", m.handlePeerLog)
+	mux.HandleFunc("GET /api/watch/log", m.handleLog)
 }
 
 // HolderView is the answer about this host's holder: the wire form of both routes.
@@ -188,6 +242,9 @@ type HolderView struct {
 	Since        time.Time `json:"since,omitempty"`
 	LastTurn     time.Time `json:"last_turn,omitempty"`
 	LastDelivery time.Time `json:"last_delivery,omitempty"`
+	// The tmux ids of the watcher this host holds (empty while it rests): what a client needs to attach to pdx-watch.
+	TmuxSessionID string `json:"tmux_session_id,omitempty"`
+	PaneID        string `json:"pane_id,omitempty"`
 	// Targets is this host's setting, so a peer can warn when the two differ (nil when the setting cannot be read).
 	Targets []string `json:"targets,omitempty"`
 }
@@ -197,7 +254,8 @@ func (m *Module) view() HolderView { return m.viewOf(m.holder.Get()) }
 
 // viewOf is the holder h as the routes answer it (this host's id and targets added).
 func (m *Module) viewOf(h watch.Holder) HolderView {
-	v := HolderView{State: string(h.State), SessionID: h.SessionID, Since: h.Since, LastTurn: h.LastTurn, LastDelivery: h.LastDelivery}
+	v := HolderView{State: string(h.State), SessionID: h.SessionID, Since: h.Since, LastTurn: h.LastTurn, LastDelivery: h.LastDelivery,
+		TmuxSessionID: h.TmuxSessionID, PaneID: h.PaneID}
 	if m.core != nil && m.core.Cfg != nil {
 		m.core.CfgMu.RLock()
 		v.HostID = m.core.Cfg.HostID
@@ -298,8 +356,11 @@ var errNoSettings = errors.New("the watch setting reader is not available")
 type Status struct {
 	Self HolderView `json:"self"`
 	// Current is the watcher events go to now; Last the last one there was (a forgotten Current leaves it for a wake).
-	Current  *watch.Where `json:"current,omitempty"`
-	Last     *watch.Where `json:"last,omitempty"`
+	Current *watch.Where `json:"current,omitempty"`
+	Last    *watch.Where `json:"last,omitempty"`
+	// Watcher is the watcher events go to (nil: none): this host's own or another's, awake or resting (spec §12.6); the same
+	// fields watch.changed carries.
+	Watcher  *WatcherView `json:"watcher"`
 	Enabled  bool         `json:"enabled"`
 	AutoWake bool         `json:"auto_wake"`
 	Mode     string       `json:"mode"`
@@ -310,6 +371,7 @@ func (m *Module) handleStatus(w http.ResponseWriter, r *http.Request) {
 	m.fresh(r.Context())
 	st := Status{Self: m.view()}
 	st.Current, st.Last = m.loc.Remembered()
+	st.Watcher = m.watcherNow()
 	if s, err := m.readSettings(); err == nil {
 		st.Enabled, st.AutoWake, st.Mode, st.Targets = s.Enabled, s.AutoWake, s.Mode, s.Targets
 	}

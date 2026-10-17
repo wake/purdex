@@ -57,6 +57,9 @@ export const STORAGE_KEYS = {
   /** 團隊介面的排列（useTeamUiStore）：每個 team key（`<hostId>\0<teamId>`）的成員順序、收合、面板模式、ghost lead 所在的工作區；
    *  device-local，**永遠不進 SOT**（不得列入 lib/profile/projections.ts）、不走 syncManager；只被 roster frame 與刪除主機清掉 */
   TEAM_UI: 'purdex-team-ui',
+  /** 工作簿日誌卡片的排列（useJournalUiStore，J-2b）：最後用的卡片寬度（新 unit 的預設）與每個 team key 的團隊卡開關；
+   *  device-local，**永遠不進 SOT**、不走 syncManager。每個 unit 自己的開關／寬度／篩選在 lib/journal/view-memory.ts（只存記憶體） */
+  JOURNAL_UI: 'purdex-journal-ui',
   /** 遠端 adopt 核准後的等待（lib/team/adoption-wait.ts）：`{ entries: { [key]: { hostId, approvalId, alias, target, startedAt, state, code, dismissed } } }`，
    *  reload 後依原 deadline（startedAt＋11 分鐘）恢復輪詢；終態被看過或 toast 過就清掉。device-local，**永遠不進 SOT**、不走 syncManager */
   ADOPTION_WAITS: 'purdex-adoption-waits',

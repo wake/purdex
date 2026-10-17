@@ -41,10 +41,11 @@ that are probed but have no daemon, with name, icon and colour; Mac App first, i
    Words: 正常 / 偏高 / 過載 / 離線.
 7. **The sidebar shows the fleet as one row of host cells at the bottom of the sidebar** (replaces rev 1's rows and compact
    strip; the 10-14 decisions 1 and 3 on the expanded / collapsed looks are withdrawn, the user's 10-15 call): per host a
-   cell = the host's icon box (its colour) with the heavy-queue count as a badge at its top-right corner (daemon hosts only,
-   only while someone waits, its colour by how bad the queue is), and a ring beside it = the **composite load**; the
-   BottomNav buttons above keep their own expanded / collapsed looks. A click opens the watcher area on that host's tab.
-   Offline: the box keeps a faint host colour under a hatch.
+   cell = the host's badge (the App's host badge, as beside a member) with the heavy-queue count at its top-right corner
+   (daemon hosts only, only while someone waits, its colour by how bad the queue is), and a ring beside it = the
+   **composite load** (the App's member status ring); the BottomNav buttons above keep their own expanded / collapsed
+   looks. A click opens the watcher area on that host's tab. Offline: the badge dimmed, the ring's track only (§8.1, the
+   10-16 restyle).
 
 ## 3. Facts this rests on
 
@@ -141,7 +142,7 @@ that are probed but have no daemon, with name, icon and colour; Mac App first, i
   with backoff to 60 s, reset by a good frame; every wait is cut short by a stop.
 - **Composite load** (the ring), 0–100 = the largest of: CPU %; memory %; the level (1 → 30, 2 → 75, 4 → 100); page rate
   (pages/s, capped at 100); disk % only when ≥ 85. The **ring's colour is the zone** (§2.6), not the score: a host at CPU
-  95 % with no memory pressure shows a long neutral ring ("busy, fine").
+  95 % with no memory pressure shows a long green ring ("busy, fine").
 - **Zone latch** (memory part, so the ring does not flicker): warning entered at level ≥ 2 or page rate ≥ 50, left after
   10 s with level 1 and rate < 40; danger entered at level 4, left after 10 s below 4; one level at a time; plus rev 1's
   disk latch; the worse of the two.
@@ -174,6 +175,14 @@ that are probed but have no daemon, with name, icon and colour; Mac App first, i
   and the `fleet` row; `PUT /api/hostconfig/probe-hosts` and `PUT /api/hostconfig/fleet` as rev 1 (whole list, `baseRevision`,
   409 with the current copy, 400 with a plain-text reason; an alias not in the SSH config → `unknown_ssh_alias: <alias>`);
   admin only. `GET /api/fleet/ssh-aliases` lists the eligible aliases (admin only).
+- **`POST /api/fleet/probe-check`** `{ssh_alias}` (admin only; device 403; not a peer route; F-2c): this daemon probes the
+  alias once with the one-shot `fleet.Runner` (`internal/fleet/run.go`: the fixed argv, `BatchMode`, strict host key, its
+  own timeout) after `ValidAlias`, and answers `{ssh: "ok"|"failed"|"unknown", measure: "ok"|"failed"|"unknown", error:
+  <Code>|null, reading: {cpu, mem, level, disk}|null}` (`level` is null: the one-shot probe does not read the pressure
+  level, `internal/fleet/parse.go:15`). `ok` → both ok with the reading; `auth`, `host_key`, `alias_gone`
+  → ssh failed, measure unknown; `timeout`, `unreachable` → both unknown (the host could not be reached); `remote_exit`, `parse` → ssh ok,
+  measure failed. Never the stderr. One check per alias at a time (a second one while the first runs gets the first's
+  answer).
 - Device tokens may read `GET /api/fleet` and receive `fleet.changed` (iOS later).
 
 ## 7. The local source (interface with the A line)
@@ -219,33 +228,71 @@ The fleet module's role is read by the measuring side through `fleet.RoleView` (
 
 ### 8.1 The sidebar host cells (decision 7)
 
-- One row at the very bottom of the wide sidebar, under the BottomNav (whose own expanded / collapsed looks are unchanged),
-  the four hosts in the fleet order (daemon hosts in the App's host order, then the probe hosts in their stored order).
-  It fits one row at the default sidebar width (each daemon host's cell ≈ 46 × 24 px).
-- A cell, sized like a `TeamCell` (`h-6`, `rounded-md`, hover `bg-surface-hover`, selected `bg-surface-active`, `CellSep`
-  between cells):
-  - **The host box**, 18 × 18, `rounded-[4px]`, the host's colours (`resolveHostColors`), the icon white (90 %, 100 % when
-    hovered or selected). Offline: the host colour at 35 % under a fine hatch, the icon at 35 %.
-  - **The queue badge** (daemon hosts, only while someone waits; not while offline) on the box's top-right corner, ≈ 11 px,
-    the count in 8 px semibold tabular figures, a 1 px ring in the sidebar's background colour. Colour: neutral grey while
-    the longest wait is under 2 min; `status-warning` from 2 min or 3 waiters; `status-error` while admission is held.
-  - **The composite load ring**, 16 px, the `ContextRing` geometry (2.5 stroke, `--border-default` track, round cap, from
-    12 o'clock counter-clockwise): length = the composite score, colour = the zone (neutral / warning / error); offline =
-    a dashed track, no arc.
+- One block at the very bottom of the wide sidebar, under the BottomNav (whose own expanded / collapsed looks are unchanged),
+  the hosts in the fleet order (daemon hosts in the App's host order, then the probe hosts in their stored order). Laid out
+  like the session list's member beads (`flex flex-wrap items-center content-start gap-0.5`, no separators): it wraps with
+  the sidebar's width, and five cells fit one line at the default width (each cell 42 × 24 px with the default badge size).
+- The 10-16 restyle (the user: the first look, a box filled with the host colour and a thin grey / yellow ring, was too
+  bright and too wide): every piece is the App's own, so a cell reads like the members beside it.
+- A cell, a member bead's box (`h-6`, `rounded-md`, `gap-1`, 3 px each side; hover `bg-surface-hover`, selected
+  `bg-surface-active`):
+  - **The host badge**: the App's `HostBadge` as beside a member in the session list — the sidebar badge settings (size,
+    inset, corner, line colour), the host's colours resolved as for an agent member (`terminal`, falling back to
+    `console`): the light layer behind, the icon in the middle layer, the main layer on hover. A probe host's look comes
+    from the wire. Offline: the badge at 40 % opacity.
+  - **The queue badge** (daemon hosts, only while someone waits; not while offline) on the host badge's top-right corner,
+    12 px, the count in 8 px semibold tabular figures, a 1 px ring in the sidebar's background colour. Colour: neutral
+    grey while the longest wait is under 2 min; `status-warning` from 2 min or 3 waiters; `status-error` while admission is
+    held.
+  - **The indicator**, in the badge-sized square after the badge, picked by the setting 「主機格指示」 (Settings → Terminal,
+    under the sidebar host badge; `useUISettingsStore.fleetCellIndicator`, synced with the profile like the badge
+    settings; the user's 10-16 call). One of:
+    - **環** (default) — the composite load ring: the App's `ContextRing` (the member status ring) at the badge's size —
+      2.5 stroke, `--border-default` track, round cap, from 12 o'clock counter-clockwise: length = the composite score,
+      tone = the zone (normal → ok green / warning → warn / danger → danger), nothing in the middle (a host has no model).
+      Offline or no reading: the track only.
+    - **雙柱：CPU＋記憶體壓力** — two 4 px bars on the ring's track colour, each a reading as its fill height in its own
+      band (the ring's status tokens): left = CPU % (70 warn / 90 danger); right = the memory pressure level (1 / 2 / 4 →
+      a third ok / two thirds warn / full danger), falling back to memory used % (70 / 90) when the level is 0 (a Linux
+      host without PSI). Pressure, not used %, because a Mac's used % sits at 70–90 % most of the time (file cache).
+    - **雙柱：CPU＋記憶體使用率** — the same two bars with memory used % (70 / 90) on the right.
+    Offline or no reading, either bar variant: the grey tracks only.
 - Tooltip: name, the zone word, the five values, the queue summary (daemon hosts), and 「等待主方」 when stale.
 - Click: opens the watcher area on that host's tab (watcher area spec).
-- **Narrow activity bar**: the four cells stacked vertically (box + ring only), same click and tooltip.
-- The badge is one component (`CountBadge`, ≈ 11 px, 8 px figures, ring in the background colour); the watcher shield in
+- **Narrow activity bar**: the cells stacked vertically (badge + ring, 2 px apart), same click and tooltip.
+- The badge is one component (`CountBadge`, 12 px — an even height, so the 6 px figures sit in the middle — 8 px figures,
+  ring in the background colour); the watcher shield in
   the HomeRow reuses it (watcher area spec, not this one).
 - **Click, until the watcher area lands**: a daemon host's cell opens that host on the Hosts page; a probe host's opens the
   Hosts page's probe-host section with that row highlighted once.
 
+**Restyle (user, 10-16: 「太刺眼」; F-2b2)**, replacing the box and ring above:
+- the host icon is the App's host badge (`HostBadge` with the user's badge settings, the same small badge as beside a
+  member in the session list: dark background, the icon in the host's colour), the same size;
+- the ring is `ContextRing` itself (the title bar's member ring, same thickness and colours; the middle empty — its shape is an agent's model, which a host has not; user 10-16): length =
+  the composite score, tone from the zone (normal = the ok green, warning, danger); offline = the track only;
+- the cells are laid out like the session list's member beads (`TeamMemberBeads`: `gap-0.5`, no separators, wrapping
+  with the sidebar's width): up to five on one line at the default width.
+
 ### 8.2 The Hosts page
 
-Rev 1's 「只探查的主機」 section stays, with two changes: the section lists the probe hosts once (not under each daemon), and
-saving writes the list to **both** daemons (each daemon's row carries its own `ssh_alias`; the dialog asks for the alias per
-daemon, each picked from that daemon's `GET /api/fleet/ssh-aliases`). A 409 from either reloads both and says the list
-changed elsewhere. The `fleet` row (order, the alias for the other daemon host) is edited on each daemon host's page.
+The probe hosts are edited once and written to **both** daemons (each daemon's row carries its own `ssh_alias`, picked from
+that daemon's `GET /api/fleet/ssh-aliases`); a 409 from either reloads both and says the list changed elsewhere. The `fleet`
+row (order, the alias for the other daemon host) is edited on each daemon host's page.
+
+**Probe hosts have their own entries (user, 10-16; F-2d)**, replacing the editing dialog in the overview:
+- The Hosts page's sidebar lists them under a heading 「觀察主機」, after the paired hosts: the badge, the name and a status
+  dot from the fleet (ok / offline / error); a `+` on the heading adds one. A probe host has one page, no sub-pages.
+- The page: a header (badge, name, the zone word or 離線, 「量測：{primary}（主）」, the last good reading's time when offline);
+  **樣式與連線** inline — name, icon, colour (the existing pickers) and the SSH alias per daemon host; 儲存 writes both
+  daemons as before; 刪除 with a confirmation.
+- **連線檢查**: one line per daemon host (each reaches the host through its own alias): 「SSH 金鑰」 and 「量測讀數」, each
+  ✓, ✗ with the reason (金鑰被拒／主機金鑰不符／SSH 設定裡沒有這個別名；連不到主機；讀不到量測), or — while unknown, from
+  that daemon's `POST /api/fleet/probe-check`. It runs when the page opens, after a save that changed an alias, and on
+  「重新檢查」. A daemon host that is offline shows 「{host} 離線，無法檢查」.
+- The overview's section becomes a short list of the probe hosts (badge, name, status) whose rows open their entries, with
+  「新增觀察主機」; it no longer edits.
+- No pairing: a probe host is reached by SSH only.
 
 ## 9. Out of scope
 
@@ -266,3 +313,6 @@ primary cannot reach.
 | F-2a1 | SPA | types / parse, `useFleetStore` (primary choice, re-read on stale, 「等待主方」), the in-memory history, `fleet.v1` probe, the `fleet=v1` event opt-in and branch (reworks #2879) |
 | F-2a2 | SPA | the Hosts page probe-host section writing both daemons, the `fleet` row editor (reworks #2881; #2880, the editor extraction, stands) |
 | F-2b | SPA | `CountBadge`, the sidebar host cells, the narrow column, interim click targets; i18n; tests |
+| F-2b2 | SPA | the cells' restyle (§8.1, user 10-16) |
+| F-2c | daemon | `POST /api/fleet/probe-check` (§6) |
+| F-2d | SPA | probe hosts' own entries on the Hosts page, the connection check, the overview list (§8.2) |

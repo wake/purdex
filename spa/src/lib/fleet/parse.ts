@@ -3,7 +3,7 @@
 import {
   ERROR_CODES, HOST_KINDS, HOST_STATUSES, ZONES,
   type FleetAnswer, type FleetErrorCode, type FleetFast, type FleetHost, type FleetHostStatus, type FleetProc, type FleetPush,
-  type FleetPushHost, type FleetQueue, type FleetSlow, type FleetWaiter,
+  type FleetHolder, type FleetPushHost, type FleetQueue, type FleetSlow, type FleetWaiter,
 } from './types'
 
 type Rec = Record<string, unknown>
@@ -16,6 +16,9 @@ const time = (v: unknown): number | null => {
   const t = Date.parse(v)
   return Number.isFinite(t) ? t : null
 }
+/** A queue entry's start / join time: a zero Go time.Time arrives as 0001-01-01 and reads as a huge negative; anything before 2000 means "unknown". */
+const MIN_SINCE = Date.UTC(2000, 0, 1)
+const sinceOf = (t: number): number | null => (t >= MIN_SINCE ? t : null)
 const oneOf = <T extends string>(list: readonly T[], v: unknown): v is T => str(v) && (list as readonly string[]).includes(v)
 
 export function parseFast(v: unknown): FleetFast | null {
@@ -29,11 +32,19 @@ export function parseFast(v: unknown): FleetFast | null {
   return { at, cpu, mem, level, page_rate, disk, disk_free_gb: opt(v.disk_free_gb), load1: opt(v.load1), ncpu: opt(v.ncpu), zone, load }
 }
 
+const MEM_KINDS = ['footprint', 'rss'] as const
+
 function parseProcs(v: unknown): FleetProc[] {
   if (!Array.isArray(v)) return []
   const out: FleetProc[] = []
   for (const p of v) {
-    if (isRec(p) && num(p.pid) && str(p.name) && num(p.cpu) && num(p.rss_mb)) out.push({ pid: p.pid, name: p.name, cpu: p.cpu, rss_mb: p.rss_mb })
+    if (isRec(p) && num(p.pid) && str(p.name) && num(p.cpu) && num(p.rss_mb)) {
+      out.push({
+        pid: p.pid, name: p.name, cpu: p.cpu, rss_mb: p.rss_mb,
+        ...(num(p.mem_mb) ? { mem_mb: p.mem_mb } : {}),
+        ...(oneOf(MEM_KINDS, p.mem_kind) ? { mem_kind: p.mem_kind } : {}),
+      })
+    }
   }
   return out
 }
@@ -43,10 +54,33 @@ export function parseQueue(v: unknown): FleetQueue | undefined {
   if (!num(v.heavy_used) || !num(v.heavy_total) || !num(v.light_used) || !num(v.light_total) || !Array.isArray(v.waiters)) return undefined
   const waiters: FleetWaiter[] = []
   for (const w of v.waiters) {
-    const since = isRec(w) ? time(w.since) : null
-    if (isRec(w) && since !== null && num(w.place) && str(w.command) && str(w.project)) waiters.push({ class: str(w.class) ? w.class : '', place: w.place, command: w.command, project: w.project, since })
+    const at = isRec(w) ? time(w.since) : null
+    if (isRec(w) && at !== null && num(w.place) && str(w.command) && str(w.project)) {
+      waiters.push({ class: str(w.class) ? w.class : '', place: w.place, command: w.command, project: w.project, session: str(w.session) ? w.session : '', since: sinceOf(at) })
+    }
   }
-  return { heavy_used: v.heavy_used, heavy_total: v.heavy_total, light_used: v.light_used, light_total: v.light_total, waiters, longest_wait_s: num(v.longest_wait_s) ? v.longest_wait_s : 0, admission_held: v.admission_held === true }
+  return {
+    heavy_used: v.heavy_used, heavy_total: v.heavy_total, light_used: v.light_used, light_total: v.light_total,
+    holders: parseHolders(v.holders), waiters, longest_wait_s: num(v.longest_wait_s) ? v.longest_wait_s : 0,
+    admission_held: v.admission_held === true, admission_reason: str(v.admission_reason) ? v.admission_reason : '',
+    heavy_paused: v.heavy_paused === true, light_paused: v.light_paused === true,
+  }
+}
+
+/** Lenient: a daemon older than W5b sends no holders (→ []), and a holder that does not read is left out, never the whole queue. */
+function parseHolders(v: unknown): FleetHolder[] {
+  if (!Array.isArray(v)) return []
+  const out: FleetHolder[] = []
+  for (const h of v) {
+    const at = isRec(h) ? time(h.since) : null
+    if (isRec(h) && at !== null && num(h.slot) && str(h.command)) {
+      out.push({
+        class: str(h.class) ? h.class : '', slot: h.slot, command: h.command, project: str(h.project) ? h.project : '',
+        session: str(h.session) ? h.session : '', since: sinceOf(at), pid: num(h.pid) ? h.pid : 0,
+      })
+    }
+  }
+  return out
 }
 
 export function parseSlow(v: unknown): FleetSlow | null {

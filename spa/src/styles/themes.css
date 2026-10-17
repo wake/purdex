@@ -23,9 +23,20 @@
   --color-terminal-fg: var(--terminal-fg);
   --color-terminal-cursor: var(--terminal-cursor);
   --color-status-error: var(--status-error);
+  --color-status-error-text: var(--status-error-text, var(--status-error));
   --color-status-warning: var(--status-warning);
   --color-status-warning-text: var(--status-warning-text, var(--status-warning));
   --color-status-success: var(--status-success);
+  /* The journal's kind chips (J-2c): six hues, themes.css only. A custom theme lacks them and falls back to a token it has. */
+  --color-journal-kind-exec: var(--journal-kind-exec, var(--accent));
+  --color-journal-kind-exec-done: var(--journal-kind-exec-done, var(--status-success-text, var(--status-success)));
+  --color-journal-kind-task-new: var(--journal-kind-task-new, var(--accent));
+  --color-journal-kind-task-done: var(--journal-kind-task-done, var(--status-success-text, var(--status-success)));
+  --color-journal-kind-comm: var(--journal-kind-comm, var(--text-secondary));
+  --color-journal-kind-request: var(--journal-kind-request, var(--accent));
+  /* The journal's warning text (待確認 chip, highlighted names): themes.css only; Nord lightens it, every other theme falls back to status-warning-text. */
+  --color-journal-warning-text: var(--journal-warning-text, var(--status-warning-text, var(--status-warning)));
+  --color-status-success-text: var(--status-success-text, var(--status-success));
 }
 
 /* === Dark (default, matches current hardcoded values) === */
@@ -61,6 +72,13 @@
      (`text-status-success`), so the fill value had no user. 7.95:1 here,
      against 7.81:1 for warning and 5.01:1 for error. */
   --status-success: #7ec699;
+  /* The approved prototype's colours (docs/prototypes/workbook-journal-v4), as they are. */
+  --journal-kind-exec: #5b8def;
+  --journal-kind-exec-done: #2f9e6b;
+  --journal-kind-task-new: #f08a4b;
+  --journal-kind-task-done: #b5e07a;
+  --journal-kind-comm: #bb9af7;
+  --journal-kind-request: #f2647f;
 }
 
 /* === Light === */
@@ -91,6 +109,16 @@
   --status-warning: #fef3cd;
   --status-warning-text: #8a6d00;
   --status-success: #d4edda;
+  /* The prototype's hues darkened until the chip text reads at 4.5:1 on the chip (the card surface plus 15% of its own colour). */
+  --journal-kind-exec: #385794;
+  --journal-kind-exec-done: #1e6544;
+  --journal-kind-task-new: #824b28;
+  --journal-kind-task-done: #4c5e33;
+  --journal-kind-comm: #615080;
+  --journal-kind-request: #913c4c;
+  /* The three above are background tints in this theme; these are their text-strength siblings (watch area), >= 4.5:1 on #f5f5f5. */
+  --status-success-text: #1e7b34;
+  --status-error-text: #b42318;
 }
 
 /* === Nord === */
@@ -121,6 +149,15 @@
   --status-warning: #ebcb8b;
   --status-warning-text: #ebcb8b;
   --status-success: #a3be8c;
+  /* The journal's own warning text, lightened from the fill: on the card (#434c5e) under the 待確認 chip (15%) and the highlighted name (20%) the fill itself reads at 4.10 / 3.71. */
+  --journal-warning-text: #f5e5c5;
+  /* This surface is a mid grey: the prototype's hues lightened until the chip text reads at 4.5:1 on the chip. */
+  --journal-kind-exec: #d4e1fb;
+  --journal-kind-exec-done: #cde8db;
+  --journal-kind-task-new: #fadac5;
+  --journal-kind-task-done: #cbe9a2;
+  --journal-kind-comm: #e7dbfc;
+  --journal-kind-request: #fcd7de;
 }
 
 /* === Dracula === */
@@ -151,4 +188,11 @@
   --status-warning: #f1fa8c;
   --status-warning-text: #f1fa8c;
   --status-success: #50fa7b;
+  /* This surface is a mid grey: the prototype's hues lightened until the chip text reads at 4.5:1 on the chip. */
+  --journal-kind-exec: #cbdbfa;
+  --journal-kind-exec-done: #c1e2d3;
+  --journal-kind-task-new: #f9d0b7;
+  --journal-kind-task-done: #bfe48d;
+  --journal-kind-comm: #e1d3fb;
+  --journal-kind-request: #fbcdd6;
 }

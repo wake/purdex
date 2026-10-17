@@ -1,11 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, screen, fireEvent, within } from '@testing-library/react'
+import { render, screen, fireEvent, within, act } from '@testing-library/react'
 import { FleetCells } from './FleetCells'
+import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { useFleetConfigStore } from '../../lib/fleet/config-store'
+import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
 import { useFleetStore } from '../../lib/fleet/store'
 import { fleetHistory } from '../../lib/fleet/history'
 import { useHostStore } from '../../stores/useHostStore'
 import { fast, host, primaryAnswer, standbyAnswer } from '../../lib/fleet/__fixtures__/builders'
+
+vi.mock('../../features/workspace/lib/open-watch-area', () => ({ openWatchArea: vi.fn() }))
 
 const A = 'cfg-a'
 const B = 'cfg-b'
@@ -20,42 +24,70 @@ function answer(hostId: string, a: ReturnType<typeof primaryAnswer> | ReturnType
 
 const FOUR = [
   host('d-a', { name: 'air26', fast: fast({ load: 30 }) }),
-  host('d-b', { name: 'mlab', fast: fast({ load: 92, zone: 'danger' }), slow: { at: 1, top_cpu: [], top_mem: [], queue: { heavy_used: 2, heavy_total: 2, light_used: 0, light_total: 4, waiters: [{ class: 'heavy', place: 1, command: 'make', project: 'p', since: 0 }], longest_wait_s: 1, admission_held: false } } }),
+  host('d-b', { name: 'mlab', fast: fast({ load: 92, zone: 'danger' }), slow: { at: 1, top_cpu: [], top_mem: [], queue: { heavy_used: 2, heavy_total: 2, light_used: 0, light_total: 4, holders: [], waiters: [{ class: 'heavy', place: 1, command: 'make', project: 'p', session: '', since: 0 }], longest_wait_s: 1, admission_held: false, admission_reason: '', heavy_paused: false, light_paused: false } } }),
   host('p1', { kind: 'probe', name: 'air19', status: 'offline', fast: null }),
   host('p2', { kind: 'probe', name: 'mserv', fast: fast({ load: 10 }) }),
 ]
 
 beforeEach(() => {
+  useUISettingsStore.setState(useUISettingsStore.getInitialState())
   st().reset()
   useFleetConfigStore.getState().reset()
   fleetHistory.clear()
   useHostStore.setState({ hosts: { [A]: hostCfg(A, 'd-a'), [B]: hostCfg(B, 'd-b') }, hostOrder: [A, B], activeHostId: A, runtime: {} } as never)
 })
 
-const props = () => ({ onOpenHost: vi.fn(), onOpenHosts: vi.fn() })
+const props = () => ({})
 
 describe('FleetCells — the four states (storybook-style)', () => {
   it('normal, overloaded, offline and queued, side by side', () => {
     answer(A, primaryAnswer(1, FOUR))
     render(<FleetCells variant="wide" {...props()} />)
     expect(screen.getByTestId('load-ring-d-a').dataset.zone).toBe('normal')
+    expect(within(screen.getByTestId('load-ring-d-a')).getByTestId('context-ring-arc').dataset.tone).toBe('ok')
     expect(screen.getByTestId('load-ring-d-b').dataset.zone).toBe('danger')
+    expect(within(screen.getByTestId('load-ring-d-b')).getByTestId('context-ring-arc').dataset.tone).toBe('danger')
     expect(screen.getByTestId('load-ring-p1').dataset.zone).toBe('offline')
+    expect(within(screen.getByTestId('load-ring-p1')).queryByTestId('context-ring-arc')).toBeNull()
     expect(screen.getByTestId('queue-badge-d-b')).toHaveTextContent('1')
     expect(screen.queryByTestId('queue-badge-d-a')).toBeNull()
   })
 })
 
+describe('FleetCells — the indicator setting (主機格指示)', () => {
+  it('switching it redraws every cell, wide and narrow, with no remount needed', () => {
+    answer(A, primaryAnswer(1, FOUR))
+    const { rerender } = render(<FleetCells variant="wide" />)
+    expect(screen.getAllByTestId(/^load-ring-/)).toHaveLength(4)
+    act(() => useUISettingsStore.getState().setFleetCellIndicator('bars-pressure'))
+    expect(screen.queryAllByTestId(/^load-ring-/)).toHaveLength(0)
+    expect(screen.getAllByTestId(/^load-bars-/)).toHaveLength(4)
+    rerender(<FleetCells variant="narrow" />)
+    expect(screen.getAllByTestId(/^load-bars-/)).toHaveLength(4)
+    act(() => useUISettingsStore.getState().setFleetCellIndicator('ring'))
+    expect(screen.getAllByTestId(/^load-ring-/)).toHaveLength(4)
+  })
+})
+
 describe('FleetCells — the row', () => {
-  it('is four cells in ONE row (no wrapping) with a separator between each, at the daemon hosts first then the probes', () => {
+  it('is laid out like the member beads: wraps with the sidebar width, gap-0.5, no separators, daemon hosts first then the probes', () => {
     answer(A, primaryAnswer(1, FOUR))
     render(<FleetCells variant="wide" {...props()} />)
     const row = screen.getByTestId('fleet-cells')
-    expect(row.className).toContain('flex-nowrap')
-    expect(row.className).not.toContain('flex-wrap ')
-    expect(row.className).not.toContain('flex-col')
+    const cls = row.className.split(' ')
+    for (const c of ['flex', 'flex-wrap', 'items-center', 'content-start', 'gap-0.5']) expect(cls).toContain(c)
+    expect(cls).not.toContain('flex-nowrap')
+    expect(cls).not.toContain('flex-col')
     expect(within(row).getAllByRole('button').map((b) => b.getAttribute('aria-label')?.split(', ')[0])).toEqual(['air26', 'mlab', 'air19', 'mserv'])
-    expect(within(row).getAllByTestId('cell-sep')).toHaveLength(3)
+    expect(within(row).queryAllByTestId('cell-sep')).toHaveLength(0)
+  })
+  it('a daemon host\'s badge wears the App\'s host colours; a probe host\'s, the look it sent', () => {
+    const probe = host('p3', { kind: 'probe', name: 'mserv', icon: 'Cpu', colors: { console: { main: { color: '#22c55e', alpha: 100 } } }, fast: fast({ load: 10 }) })
+    answer(A, primaryAnswer(1, [...FOUR, probe]))
+    render(<FleetCells variant="wide" {...props()} />)
+    expect(screen.getByTestId('host-badge-d-a').style.getPropertyValue('--hb-main')).toBe('rgba(51, 102, 153, 1)')
+    expect(screen.getByTestId('host-badge-p3').style.getPropertyValue('--hb-main')).toBe('rgba(34, 197, 94, 1)')
+    expect(screen.getByTestId('host-badge-p1').dataset.hasColor).toBe('false')
   })
   it('the narrow variant stacks them in a column without separators', () => {
     answer(A, primaryAnswer(1, FOUR))
@@ -72,30 +104,19 @@ describe('FleetCells — the row', () => {
 })
 
 describe('FleetCells — clicks', () => {
-  it('a daemon host opens that host on the Hosts page', () => {
+  beforeEach(() => vi.mocked(openWatchArea).mockClear())
+
+  it('a daemon host opens its tab in the watcher area, by the fleet host id', () => {
     answer(A, primaryAnswer(1, FOUR))
-    const p = props()
-    render(<FleetCells variant="wide" {...p} />)
+    render(<FleetCells variant="wide" {...props()} />)
     fireEvent.click(screen.getByTestId('host-tile-d-b'))
-    expect(p.onOpenHost).toHaveBeenCalledWith(B)
-    expect(p.onOpenHosts).not.toHaveBeenCalled()
+    expect(openWatchArea).toHaveBeenCalledWith({ host: 'd-b' })
   })
-  it('the probe click opens the primary\'s overview: with B as the primary it is onOpenHost(B)', () => {
-    answer(B, primaryAnswer(1, FOUR))
-    const p = props()
-    render(<FleetCells variant="wide" {...p} />)
-    fireEvent.click(screen.getByTestId('host-tile-p1'))
-    expect(p.onOpenHost).toHaveBeenCalledWith(B)
-    expect(useFleetConfigStore.getState().focusProbe).toBe('p1')
-  })
-  it('a probe host opens the Hosts page on the primary\'s overview and asks the probe section to highlight its row', () => {
+  it('a probe host opens its tab too, and no longer asks the probe section to highlight a row', () => {
     answer(A, primaryAnswer(1, FOUR))
-    const p = props()
-    render(<FleetCells variant="wide" {...p} />)
+    render(<FleetCells variant="wide" {...props()} />)
     fireEvent.click(screen.getByTestId('host-tile-p2'))
-    expect(p.onOpenHost).toHaveBeenCalledWith(A)
-    expect(useFleetConfigStore.getState().focusProbe).toBe('p2')
-    expect(p.onOpenHosts).not.toHaveBeenCalled()
+    expect(openWatchArea).toHaveBeenCalledWith({ host: 'p2' })
   })
 })
 
@@ -104,13 +125,14 @@ describe('FleetCells — the two waiting tooltips', () => {
     answer(A, primaryAnswer(1, FOUR))
     st().checkStale(Date.now() + 60_000)
     render(<FleetCells variant="wide" {...props()} />)
-    expect(screen.getByTestId('host-tile-d-a').getAttribute('title')).toContain('Waiting for the primary')
+    fireEvent.mouseEnter(screen.getByTestId('host-tile-d-a'))
+    expect(screen.getByTestId('host-card').textContent).toContain('Waiting for the primary')
   })
   it('only a standby answered: the App hosts show without values and say the primary is not on this App', () => {
     answer(A, standbyAnswer(1, 'air26'))
     render(<FleetCells variant="wide" {...props()} />)
-    const tip = screen.getByTestId('host-tile-cfg-a').getAttribute('title')!
-    expect(tip).toContain('The primary is not on this App')
+    fireEvent.mouseEnter(screen.getByTestId('host-tile-cfg-a'))
+    expect(screen.getByTestId('host-card').textContent).toContain('The primary is not on this App')
     expect(screen.getByTestId('load-ring-cfg-a').dataset.zone).toBe('nodata')
     expect(within(screen.getByTestId('fleet-cells')).getAllByRole('button')).toHaveLength(2)
   })

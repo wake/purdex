@@ -1,4 +1,4 @@
-import { useUISettingsStore, type TerminalRenderer, type TabIndicatorStyle, type CcIconVariant, type CodexIconVariant, type TabNameTooltipMode, KEEPALIVE_MAX_WEBGL, KEEPALIVE_MAX_DOM } from '../../stores/useUISettingsStore'
+import { useUISettingsStore, type TerminalRenderer, type TabIndicatorStyle, type CcIconVariant, type CodexIconVariant, type TabNameTooltipMode, type FleetCellIndicator, KEEPALIVE_MAX_WEBGL, KEEPALIVE_MAX_DOM } from '../../stores/useUISettingsStore'
 import { HostBadgeSetting } from './HostBadgeSetting'
 import { CC_ICON_VARIANTS, CODEX_ICON_VARIANTS } from '../../lib/agent-icons'
 import { SettingItem } from './SettingItem'
@@ -55,6 +55,8 @@ export function TerminalSection() {
   const setHostBadgeTabBarInset = useUISettingsStore((s) => s.setHostBadgeTabBarInset)
   const hostBadgeTabBarRadius = useUISettingsStore((s) => s.hostBadgeTabBarRadius)
   const setHostBadgeTabBarRadius = useUISettingsStore((s) => s.setHostBadgeTabBarRadius)
+  const fleetCellIndicator = useUISettingsStore((s) => s.fleetCellIndicator)
+  const setFleetCellIndicator = useUISettingsStore((s) => s.setFleetCellIndicator)
   const showAgentTitleInStatusBar = useUISettingsStore((s) => s.showAgentTitleInStatusBar)
   const setShowAgentTitleInStatusBar = useUISettingsStore((s) => s.setShowAgentTitleInStatusBar)
 
@@ -70,6 +72,12 @@ export function TerminalSection() {
     { value: 'dot', label: t('settings.terminal.tab_indicator.dot') },
     { value: 'iconDot', label: t('settings.terminal.tab_indicator.icon_dot') },
     { value: 'badge', label: t('settings.terminal.tab_indicator.badge') },
+  ]
+
+  const FLEET_INDICATOR_OPTIONS: { value: FleetCellIndicator; label: string }[] = [
+    { value: 'ring', label: t('settings.terminal.fleet_indicator.ring') },
+    { value: 'bars-pressure', label: t('settings.terminal.fleet_indicator.bars_pressure') },
+    { value: 'bars-memory', label: t('settings.terminal.fleet_indicator.bars_memory') },
   ]
 
   const CC_ICON_OPTIONS: { value: CcIconVariant; label: string }[] = [
@@ -166,6 +174,11 @@ export function TerminalSection() {
         onRadiusChange={setHostBadgeSidebarRadius}
         testIdPrefix="host-badge-sidebar"
       />
+      <SettingItem label={t('settings.terminal.fleet_indicator.label')} description={t('settings.terminal.fleet_indicator.desc')}>
+        <div data-testid="fleet-cell-indicator">
+          <SegmentControl options={FLEET_INDICATOR_OPTIONS} value={fleetCellIndicator} onChange={setFleetCellIndicator} />
+        </div>
+      </SettingItem>
       <HostBadgeSetting
         label={t('settings.terminal.host_badge.tab_bar.label')}
         description={t('settings.terminal.host_badge.tab_bar.desc')}

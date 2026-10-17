@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from 'react'
 import { RegionResize } from '../RegionResize'
 import { useTabStore } from '../../stores/useTabStore'
 import { PANEL_MAX_WIDTH, currentPanelMin, useTeamUiStore } from '../../stores/useTeamUiStore'
+import { useJournalTarget } from '../journal/useJournalTarget'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamDisplay } from './team-display'
 import { panelView } from './panel-view'
@@ -28,7 +29,10 @@ export function TeamPanelArea() {
   const { width } = useTeamUiStore((s) => s.panel)
   const own = useOwnWorkbook()
   const sharedMode = useTeamUiStore((s) => s.sharedPanelMode)
-  const view0 = panelView({ panelTeam: display ? display.panelTeam(activeTabId) : null, teamDrill, own })
+  const panelTeam = display ? display.panelTeam(activeTabId) : null
+  // The shell mounts the card stack instead on a journal.v1 host (PanelAreas); if it is ever drawn there, the workbook branches stay off.
+  const journalHost = useJournalTarget().journalHost
+  const view0 = panelView({ panelTeam, teamDrill, own, journalHost })
   // The team the area draws a frame for: the team view, or the team's drilled-in seat workbook (same frame, same mode).
   const shownTeam = view0 !== null && 'team' in view0 ? view0.team : null
   // A tab of no team shows its own workbook in the one value all such tabs share.

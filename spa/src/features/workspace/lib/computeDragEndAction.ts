@@ -1,5 +1,6 @@
 import type { DragEndEvent } from '@dnd-kit/core'
 import { arrayMove } from '@dnd-kit/sortable'
+import { WATCH_WORKSPACE_ID, isWatchTabId } from '../../../lib/watch/ids'
 
 export type WorkspaceDragData = { type: 'workspace'; wsId: string }
 export type TabDragData = {
@@ -63,6 +64,14 @@ export function computeDragEndAction(
       overData.type === 'tab' && overData.sourceWsId === activeData.sourceWsId
     if (!isSameWsTabDrop) return NOOP
   }
+
+  // The watcher area keeps its own tabs and none other: an area tab never leaves it (it may only be reordered inside it,
+  // below), and no other tab is dropped into it.
+  const crossesIntoOrOutOfArea = (targetWsId: string | null): boolean =>
+    (isWatchTabId(activeData.tabId) && targetWsId !== activeData.sourceWsId)
+    || (targetWsId === WATCH_WORKSPACE_ID && !isWatchTabId(activeData.tabId))
+  if (overData.type === 'tab' && crossesIntoOrOutOfArea(overData.sourceWsId)) return NOOP
+  if (overData.type === 'workspace-header' && crossesIntoOrOutOfArea(overData.wsId)) return NOOP
 
   // Same-zone tab reorder
   if (overData.type === 'tab' && overData.sourceWsId === activeData.sourceWsId) {

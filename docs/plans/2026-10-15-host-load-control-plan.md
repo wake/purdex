@@ -233,21 +233,36 @@ succeed; an old peer; mismatched targets warn.
 
 ### W2b — delivery, backlog, handled
 
-1. Delivery: each host sends its events to the watcher with `peers.Sender` (the `/api/peers/send` path `pdx msg`
-   uses; across hosts by the peer address), `[負載守門] …` text with the event id. Folding per (host, kind) per 10
-   min, later events counted into the next message; E3 never folded; a failed send triggers discovery (W2a) and is
-   retried from a persisted pending queue, without counting twice.
+1. Delivery: the resources module hands each recorded event to the watch module's queue (`watch.EventSink`, found in the
+   registry). A message is `[負載守門] …` text with the event id. It is sent to the watcher with the daemon-to-daemon route
+   `POST /api/peers/watch/event` (`HostCaller`, in `HostRoutePolicy`, `HostLimiter` and a body cap like the other watch
+   routes), not with `peers.Sender`: `/api/peers/send` needs a live session on this host as the origin, and a daemon has
+   none. The daemon of the watcher's host notifies its own watcher with `SendSelfNotice` from the watcher's own inbox (the
+   stand-down notice's path); a watcher on the sending host takes the same local function. Folding per (host, kind) per 10
+   min, later events counted into one message when the window ends; E3 never folded. The queue is a file
+   (`outbox.json`): a message is frozen when made, a retry sends the same text (30 s, doubling, up to 5 min) and nothing is
+   counted twice; the sender removes it only on a clear success. The receiver keeps the delivered event ids
+   (`delivered.json`, the latest 2000), so a retry or a lost reply never gives the watcher an event twice. A failed send
+   makes the locator look again (W2a); a failed notify on the receiving host reconciles its holder (W3a-2b).
 2. Backlog: when a watcher is woken or started, each host sends one summary of its unhandled events since its last
    delivered id (counts by kind and label, the newest five, and `pdx watch log --all --unhandled`).
-3. Handled: `pdx watch ack <id>… | --all [--host] --note "<one line>"` (note required, one line, ≤ 500 bytes) marks
-   events handled (a small ack log beside the records: id, status, note, at); `GET /api/watch/unhandled` → `{count}`
-   for this host (W5's badge).
-4. `GET /api/peers/watch/log` (policy entry) and `pdx watch log --host <alias> | --all`.
+3. Handled: `pdx watch ack <id>… | --all [--host <alias>] --note "<one line>"` (note required, one line, ≤ 500 bytes) marks events
+   handled in the ack log beside the records (`acks.jsonl`: id, note, time, who gave the order, from which host; the first ack of an
+   event stands, a batch is written whole or not at all, a damaged file is kept as `acks.jsonl.bad-<time>`); `GET /api/watch/unhandled`
+   → `{count}` for this host (W5's badge). Split in two PRs: **W2b-2a** this host's part, **W2b-2b** the rest.
+4. Other hosts (W2b-2b; spec §12.3 "Acking events of another host"): `POST /api/watch/ack` sends the ids of another paired host to that
+   host's `POST /api/peers/watch/ack` and `--all --host X` to X (host route in `HostRoutePolicy`, host principal, `HostLimiter`, body
+   cap; it handles only the events it recorded, never passes an ack on, records who/from-host with the note, sends `watch.events` for its
+   own events once per operation; the answer says what became of every id and the CLI exits non-zero for any that was not handled).
+   `GET /api/peers/watch/log` was written as a GET and is a `POST /api/peers/watch/log` (`HostCaller` only POSTs); the daemon answers
+   `GET /api/watch/log?host=<alias>|all` by asking the paired hosts, and `pdx watch log --host <alias> | --all` uses it. The messages
+   to the watcher name only commands and flags that exist (#3071; a test reads the messages and the CLI's own flags).
 5. For the watcher area (B line spec `docs/specs/2026-10-16-watcher-area-spec.md` §8 A3; admin token; the writes 403
    to device tokens and not in `HostRoutePolicy`): `GET /api/watch/events?since=&limit=` → `{events}` newest first
-   with the fields that spec lists (the record's fields plus `status` `pending|handled`, `note`, `handled_at`); the
-   `watch.events` push (spec §12.6: `{host_id, unhandled, cause}`, one per record / ack operation). No skip route
-   (user decision 10-16: no "skip all" button).
+   with the fields that spec lists (the record's fields plus `status` `pending|handled`, `note`, `handled_at`, `handled_by`,
+   `handled_from_host`); the `watch.events` push (spec §12.6: `{host_id, unhandled, cause}`, one per record / ack operation, the count
+   read and sent under one lock); `watch.v1` announced by `/api/info` while the module is ready. No skip route (user decision 10-16: no
+   "skip all" button). The local write route stays admin only and is not a host route; the peer ack route is one (2026-10-17, lead).
 Tests: folding isolation per host and kind; E3 not folded; retry without double counting; restart with a pending
 queue; backlog on wake/start (and none twice); ack without a note refused, ack and the count, the note in
 `/api/watch/events`; one `watch.events` per operation (ack of three
@@ -387,6 +402,52 @@ Tests: 0 accepted by parse, set and a profile; a heavy command at `slots.heavy=0
 `set slots.heavy=1`; light unaffected while heavy is paused; a running command is not touched by the change to 0;
 status text and JSON; no late claim while paused; mutation on the 0 comparison.
 
+### GQ — queue order: front, back, hold (#3034; lease member, one PR)
+
+Spec §5.2. The queue is `internal/gate/slots.go`: tickets `queue/<class>/<unix-ns>-<pid>-<n>` held by flock, served in
+name order by `TryTake` → `liveBefore` under `<class>.admit`; `Waiters()` lists them.
+1. One lock for every queue change. Under the class's admit lock (`<class>.admit`, as `TryTake` holds it): `SetRank`
+   (open the ticket, check its flock is still held, write `<ticket>.rank.new` and rename it; after the rename check the
+   ticket again and, if it is gone, remove the rank and answer "no longer waiting"), `ClearRank`, `Ticket.Drop` (now
+   takes the admit lock briefly to remove the ticket and its rank together), and the scans' clean-up of a dead gate's
+   ticket and of a rank file whose ticket is gone. So a rank never outlives its ticket unseen, and the CLI never reports
+   success for a ticket that is no longer waiting.
+2. One snapshot for every reader. `Pool.Snapshot()` under the admit lock: the holders (incl. late and over-size ones),
+   the free capacity, and the live tickets with their ranks in serving order (spec §5.2: front by `at`, then by ticket
+   name on a tie; normal and back by name; hold ones listed after, never counted ahead; an expired `until` reads as
+   normal; a rank file that cannot be read, is malformed, or names an unknown rank reads as **normal** with a
+   `rank_error` shown — arrival order, today's behaviour, so a broken file never strands a waiter). `TryTake`,
+   `pdx gate status`, `pdx gate queue` and would-wait all read from it, so counts, places and ranks always agree.
+3. `TryTake(t)` returns `Take{Slot, Ahead, AheadFront, Rank}` (the waiter's own rank, by, reason, until): no slot when
+   the ticket is held (reason `held`) or when the tickets ahead in serving order use up the free capacity. Late claims
+   keep their place (spec §5.2): `TakeLate` takes capacity without a ticket and ignores ranks, because the command is
+   already running (D9); its holder counts against the pool as today.
+4. The wait loop reads its own rank on every poll, also on a poll where the admission check (pressure) keeps it from
+   calling `TryTake` (a `Snapshot` read then), and keeps `held_s` as the sum of the polls' intervals spent in `hold`
+   (several holds, a hold during a pressure wait, an expiry, a release and a new hold all add up correctly); the
+   decision record gains `rank` (the last one) and `held_s`. The wait line names a hold (`held by <by>: <reason>`,
+   with `until`) or the front tickets ahead (`behind N moved to the front`).
+5. would-wait answers for a hypothetical new `normal` ticket at the end of the normal group: ahead = live front +
+   normal tickets (back and hold excluded), against the holders and free capacity of the same snapshot.
+6. CLI `pdx gate queue [--class heavy|light] [--json]` (the snapshot) and `pdx gate queue front|back|hold|normal
+   <pid|ticket>… --reason "<line>" [--until <dur|RFC 3339>]`: a pid names that gate's ticket in either class; reason
+   required (one line, ≤ 200 bytes, no control characters); `--until` only with `hold`; a ticket no longer waiting is
+   reported for that ticket, the others go on; prints old → new per ticket. `by` = the session id the gate reads from
+   the environment, else `person`. `Waiter` / status JSON gain `rank`, `rank_reason`, `rank_by`, `held_until`,
+   `rank_error`.
+7. The watcher's skill (W3b.4) gets the procedure: read the queue, move with a reason, tell the person; it never asks
+   anyone to cut their command down (spec §5.2).
+Tests: order table (front before normal before back; two fronts by `at`, a tie by ticket name; a hold skipped and not
+counted ahead; an expired hold is normal; malformed JSON, unknown rank, unreadable file and a bad `until` read as normal
+with `rank_error`); a held waiter is not served while a slot is free, and is served after `normal`; others pass a hold;
+races under `-race`: `SetRank` against `Drop` (no orphan rank, "no longer waiting" reported), a rank written between two
+`TryTake`s is honoured by the second, `Snapshot` during rank writes and drops (no duplicate place, order matches ranks);
+`TakeLate` while a front waiter queues → the late claim takes the slot and the front waiter is next once it ends; a pool
+shrunk with an over-size holder; `held_s` across two holds, a hold during a pressure wait and an expiry; would-wait:
+back and hold tickets do not make a new command wait, a front one does; CLI: missing reason refused, `--until` without
+`hold` refused, unknown pid reported, old → new printed; status JSON fields; mutation on the order comparison, the
+hold check and the would-wait count.
+
 ### W4 — `pdx gate free <class>-<k>`
 
 Lists the holders (`lsof` on the slot lock: pid, command via `redact.Argv`, cwd, start, session), refuses a slot
@@ -404,7 +465,7 @@ and the `watch.events` push (W2b.5); the `watch` settings API incl. `agent_comma
 plan (`docs/specs/2026-10-16-watcher-area-spec.md`), and owns its tests: the tab follows a failover, "resting" and
 "none" shown apart.
 
-Order: W1a → W1b → W2a → W2b → W3a → W3c → W3b → W4 (W4 only needs W1a's `redact.Argv` and may go earlier; W3c is
+Order: W1a → W1b → W2a → W2b → W3a → GQ → W3c → W3b → W4 (W4 only needs W1a's `redact.Argv` and may go earlier; W3c is
 the lease member's, independent of W3a, and only has to land before W3b's skill lets the watcher set 0). W3a can be
 deployed alone (it registers the manual watcher; W2 delivers to it); start, wake and rest arrive with W3b. The set
 goes live as a whole when W1b–W4 are merged and deployed; W5 follows.
