@@ -14,7 +14,7 @@ import (
 func fakeReader(rows []tableRow, startNow map[int]ident, footprint uint64) *ProcReader {
 	return &ProcReader{
 		numer: 1, denom: 1,
-		prev: map[int]cpuPrev{}, args: map[argKey]procArgs{}, idents: map[int]ident{},
+		prev: map[int]cpuPrev{}, args: map[argKey]procArgs{}, kinds: map[argKey]string{}, idents: map[int]ident{},
 		table: func() ([]tableRow, error) { return rows, nil },
 		startOf: func(pid int) (ident, bool) {
 			id, ok := startNow[pid]
@@ -50,6 +50,9 @@ func TestSnapshotDropsReadsOfAReusedPid(t *testing.T) {
 	for _, p := range snap.Procs {
 		byPID[p.PID] = p
 	}
+	if _, listed := byPID[10]; listed {
+		t.Errorf("pid 10 is another process now: its row must not be reported")
+	}
 	if byPID[10].FootprintBytes != 0 {
 		t.Errorf("pid 10 took the footprint of the process that reused it: %d", byPID[10].FootprintBytes)
 	}
@@ -67,6 +70,41 @@ func TestSnapshotDropsReadsOfAReusedPid(t *testing.T) {
 	}
 	if id, ok := ctx.JobOf(11); !ok || id != "j_old" {
 		t.Errorf("pid 11 job %q %v", id, ok)
+	}
+}
+
+// More failing candidates than any fixed number of rounds: every row left in the
+// lists must still have been checked (R2 re-review).
+func TestEveryReportedRowIsCheckedHoweverManyPidsChangedHands(t *testing.T) {
+	var rows []tableRow
+	startNow := map[int]ident{}
+	for pid := 100; pid < 140; pid++ { // 40 rows, the 30 biggest were reused
+		id := ident{sec: int64(pid), usec: 1}
+		rows = append(rows, tableRow{ProcRec: ProcRec{PID: pid, PPID: 1, Name: "p"}, id: id})
+		startNow[pid] = id
+		if pid < 130 {
+			startNow[pid] = ident{sec: int64(pid), usec: 2}
+		}
+	}
+	checked := map[int]int{}
+	r := fakeReader(rows, startNow, 1<<20)
+	r.rusage = func(pid int32, flavor int32, b unsafe.Pointer) int32 {
+		binary.LittleEndian.PutUint64(unsafe.Slice((*byte)(b), 512)[rusageOffFoot:], uint64(1000-pid)<<20) // low pids are the biggest
+		return 0
+	}
+	inner := r.startOf
+	r.startOf = func(pid int) (ident, bool) { checked[pid]++; return inner(pid) }
+	snap, _, err := r.Snapshot(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Procs) != 10 {
+		t.Fatalf("%d rows left, want the 10 that were not reused", len(snap.Procs))
+	}
+	for _, p := range SelectTop(snap.Procs, procsTopMem, procsTopCPU) {
+		if checked[p.PID] == 0 {
+			t.Errorf("pid %d is reported but was never checked", p.PID)
+		}
 	}
 }
 

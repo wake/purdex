@@ -37,6 +37,7 @@ type ProcReader struct {
 	buf          [512]byte
 	prev         map[int]cpuPrev
 	args         map[argKey]procArgs
+	kinds        map[argKey]string
 	sessDir      string
 	sessions     map[int]sessionFile
 	sessAt       time.Time
@@ -89,7 +90,7 @@ func NewProcReader(sessionsDir string) (r *ProcReader, err error) {
 		return nil, fmt.Errorf("facts: dlopen libSystem: %w", err)
 	}
 	r = &ProcReader{
-		prev: map[int]cpuPrev{}, args: map[argKey]procArgs{}, sessDir: sessionsDir, idents: map[int]ident{},
+		prev: map[int]cpuPrev{}, args: map[argKey]procArgs{}, kinds: map[argKey]string{}, sessDir: sessionsDir, idents: map[int]ident{},
 		table: readTable, startOf: kernStartOf,
 		procArgs: func(pid int) ([]byte, error) { return unix.SysctlRaw("kern.procargs2", pid) },
 	}
@@ -187,8 +188,7 @@ func (r *ProcReader) Snapshot(now time.Time) (ProcSnapshot, ProcContext, error) 
 	for _, row := range rows {
 		p := row.ProcRec
 		r.idents[p.PID] = row.id
-		// footprint and CPU are kept only when the pid still names this row's process
-		if foot, ns, ok := r.usage(p.PID); ok && r.stillSame(p.PID, row.id) {
+		if foot, ns, ok := r.usage(p.PID); ok {
 			p.FootprintBytes = foot
 			cur[p.PID] = cpuPrev{id: row.id, ns: ns, at: now}
 			if old, ok := r.prev[p.PID]; ok && old.id == row.id && now.After(old.at) && ns >= old.ns {
@@ -197,9 +197,56 @@ func (r *ProcReader) Snapshot(now time.Time) (ProcSnapshot, ProcContext, error) 
 		}
 		snap.Procs = append(snap.Procs, p)
 	}
+	// A pid that changed hands between the table and its rusage read would put
+	// another process's figures on this row. The re-check costs a syscall, so it
+	// is made for the rows that will be reported (the top lists); for the others
+	// the worst case is one wrong figure in one ranking, and the CPU memory is
+	// keyed by the full start time, so it cannot carry into the next sample.
+	// A row whose pid changed hands is dropped, and the lists are chosen again
+	// from the rest, until every row in them has been checked. Each round removes
+	// at least one row or ends the loop, so it is bounded by the table size.
+	for {
+		gone := map[int]bool{}
+		for _, p := range SelectTop(snap.Procs, procsTopMem, procsTopCPU) {
+			if !r.stillSame(p.PID, r.idents[p.PID]) {
+				gone[p.PID] = true
+				delete(cur, p.PID)
+			}
+		}
+		if len(gone) == 0 {
+			break
+		}
+		kept := snap.Procs[:0]
+		for _, p := range snap.Procs {
+			if !gone[p.PID] {
+				kept = append(kept, p)
+			}
+		}
+		snap.Procs = kept
+	}
 	r.prev = cur
 	r.dropStaleArgs()
-	return snap, ProcContext{JobOf: r.jobOf, SessionOf: r.sessionOf, ArgsOf: r.argsOf}, nil
+	return snap, ProcContext{JobOf: r.jobOf, SessionOf: r.sessionOf, ArgsOf: r.argsOf, KindOf: r.kindOf}, nil
+}
+
+// kindOf is the resident kind of a process, computed once per process (by pid
+// and full start time) from its argv. A kind is cached only when the argv read
+// was the process's own.
+func (r *ProcReader) kindOf(p ProcRec) string {
+	id, known := r.idents[p.PID]
+	if !known {
+		return ""
+	}
+	key := argKey{p.PID, id}
+	if k, ok := r.kinds[key]; ok {
+		return k
+	}
+	a := r.loadArgs(p.PID)
+	k := residentKind(p, a.argv)
+	if _, cached := r.args[key]; cached {
+		r.kinds[key] = k
+	}
+	return k
 }
 
 // usage is the footprint and the CPU time (user + system, nanoseconds) of pid.
@@ -277,6 +324,7 @@ func (r *ProcReader) dropStaleArgs() {
 	for k := range r.args {
 		if id, ok := r.idents[k.pid]; !ok || id != k.id {
 			delete(r.args, k)
+			delete(r.kinds, k)
 		}
 	}
 }

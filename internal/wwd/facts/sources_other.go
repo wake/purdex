@@ -20,3 +20,6 @@ func SystemSources() Sources {
 		Disks: func() ([]RawDisk, error) { return nil, errUnsupported },
 	}
 }
+
+// SystemSourcesWith is SystemSources; the options are for macOS.
+func SystemSourcesWith(SourceOptions) Sources { return SystemSources() }

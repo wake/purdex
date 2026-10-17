@@ -23,6 +23,7 @@ type Options struct {
 	HostID, Alias, Version string
 	Token                  string
 	WorkerEnabled          bool
+	Sampler                *Sampler // nil: the facts routes are not registered
 }
 
 // Daemon holds the state both HTTP surfaces serve.
@@ -35,6 +36,7 @@ func New(o Options) *Daemon { return &Daemon{opts: o} }
 // routes registers the routes available on both surfaces.
 func (d *Daemon) routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/info", d.handleInfo)
+	d.factsRoutes(mux)
 }
 
 // TCPHandler serves the tailnet/loopback listeners: every request, including
