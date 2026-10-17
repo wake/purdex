@@ -20,6 +20,7 @@ func (m *Module) markGoneRemoteMembers() {
 		m.logf("[team] sweep remote members: %v", err)
 		return
 	}
+	m.presenceRound()
 	for _, r := range members {
 		if m.leadPresence(r.MemberSessionID, r.PID, r.ProcStart) != peersmod.PresenceGone {
 			continue

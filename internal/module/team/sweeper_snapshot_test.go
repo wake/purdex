@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	peersmod "github.com/wake/purdex/internal/module/peers"
+	"github.com/wake/purdex/internal/team"
 )
 
 // snapOrigins is a resolver that can hand out a per-pass presence reader, as the peers OriginResolver does.
@@ -55,6 +56,30 @@ func TestTick_LivenessPassTakesOnePresenceSnapshot(t *testing.T) {
 		t.Fatalf("only %d questions were answered from the snapshot, want at least the 12 members", got)
 	}
 }
+
+// A stuck kill claim is given back on "still there": that answer is never taken from the pass's earlier registry read,
+// or a process that died after the read would be given back as active.
+func TestSettleStuckKilling_IgnoresThePassSnapshot(t *testing.T) {
+	f := newFixture(t)
+	key := f.adoptedMember(t)
+	sid := memberBySpawn(t, f.m.store, key).SessionID
+	if _, err := f.m.store.db.Exec(`UPDATE team_members SET state = 'killing', updated_at = ? WHERE spawn_op = ?`, f.m.now()-killClaimStuckAfter.Milliseconds()-1, key); err != nil {
+		t.Fatal(err)
+	}
+	f.m.bootAt = f.m.now() - (team.BootGraceS+1)*1000
+	so := &snapOrigins{fakeOrigins: f.origins}
+	f.m.origins = so
+	f.m.passPresence.Store(&presencePass{liveReader{}}) // the snapshot read it live, before it died
+	f.origins.markDead(sid)
+	f.m.settleStuckKillingMembers()
+	if got := f.killRowState(key); got != team.MemberGone {
+		t.Fatalf("a claim whose process died after the pass's read = %s, want gone", got)
+	}
+}
+
+type liveReader struct{}
+
+func (liveReader) LeadPresence(string, int, string) peersmod.Presence { return peersmod.PresenceLive }
 
 // Between passes (and for a resolver with no snapshot) a question goes to the resolver itself.
 func TestLeadPresence_WithoutAPassAsksTheResolver(t *testing.T) {

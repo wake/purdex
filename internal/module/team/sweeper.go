@@ -229,6 +229,7 @@ func (m *Module) endGoneTeams() {
 		m.logf("[team] sweep teams: %v", err)
 		return
 	}
+	m.presenceRound()
 	for _, t := range teams {
 		// The request row commits with the team (CloseLeadApproved) and is
 		// never deleted; without it the lead's process is unknown: skip.
@@ -321,6 +322,7 @@ func (m *Module) markGoneMembers() {
 		m.logf("[team] sweep members: %v", err)
 		return
 	}
+	m.presenceRound()
 	for _, mr := range members {
 		if m.leadPresence(mr.SessionID, mr.PID, mr.ProcStart) != peersmod.PresenceGone {
 			continue

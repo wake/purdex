@@ -64,7 +64,7 @@ func (m *Module) settleStuckKillingMembers() {
 		return
 	}
 	for _, mr := range rows {
-		switch m.leadPresence(mr.SessionID, mr.PID, mr.ProcStart) {
+		switch m.origins.LeadPresence(mr.SessionID, mr.PID, mr.ProcStart) {
 		case peersmod.PresenceGone:
 			if ok, err := m.store.MarkMemberGone(mr.SpawnOp, mr.SessionID, m.now()); err != nil {
 				m.logf("[team] sweep killing member %s: mark gone: %v", mr.SpawnOp, err)

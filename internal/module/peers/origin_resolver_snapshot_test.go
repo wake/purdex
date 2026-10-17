@@ -96,6 +96,27 @@ func TestPresenceSnapshot_RelayedAfterTheReadIsNotGone(t *testing.T) {
 	}
 }
 
+// N gone members cost one confirmation read, not N; a new round confirms from a new read.
+func TestPresenceSnapshot_GonesShareOneConfirmationReadPerRound(t *testing.T) {
+	r, _ := resolverFixture(t, allLiveLiveness(fixture76973ProcStart))
+	r.m.liveness.PidAlive = func(pid int) bool { return false }
+	reads := countRegistryReads(t)
+	snap := r.PresenceSnapshot()
+	for i := 0; i < 10; i++ {
+		if got := snap.LeadPresence("sid-dead", 30+i, targetProcStart); got != PresenceGone {
+			t.Fatalf("question %d: %v, want gone", i, got)
+		}
+	}
+	if got := reads.Load(); got != 2 {
+		t.Fatalf("10 gone questions read the registry %d times, want 2 (snapshot + one confirmation)", got)
+	}
+	snap.(interface{ Round() }).Round()
+	snap.LeadPresence("sid-dead", 31, targetProcStart)
+	if got := reads.Load(); got != 3 {
+		t.Fatalf("after a new round the registry was read %d times in all, want 3", got)
+	}
+}
+
 func TestPresenceSnapshot_ConcurrentAsks(t *testing.T) {
 	r, _ := resolverFixture(t, allLiveLiveness(fixture76973ProcStart))
 	reads := countRegistryReads(t)
