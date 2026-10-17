@@ -8,8 +8,9 @@
 //   - a host without the flag (or one whose flag is lost) has its list dropped, a removed or re-pointed host forgets it
 //     (what the old daemon said is not the new one's, as roster-forget.ts);
 //   - a re-point does not wait on which of this and the Nexen cache's own host-store watcher runs first: the cache entry
-//     vanishing (`clearHost`) on a connected host is itself the cue to ask `/api/info` again, so the new daemon's flag is
-//     always read, and a flag the old daemon had is never trusted for the new one.
+//     vanishing (`clearHost`) on a connected host is itself the cue to ask `/api/info` again (a microtask later, and only if the
+//     host is still configured: deleting a host drops the same entry), so the new daemon's flag is always read, and a flag the
+//     old daemon had is never trusted for the new one.
 // A failed GET is silent: the list held stays, the next reconnect or event brings the truth.
 import { useHostStore } from '../../stores/useHostStore'
 import { selectRelayHalfV1, useNexHostStore } from '../../stores/useNexHostStore'
@@ -62,15 +63,27 @@ export function startRelayFresh(): () => void {
     }
   })
 
+  let stopped = false
+  /** After the synchronous run that dropped the entry: ask `/api/info` only if the host is still configured and connected and
+   *  nobody has made a new entry meanwhile (a deleted host is gone by then; a rolled-back deletion has its entry back). */
+  const askAgainIfStillHere = (hostId: string) => {
+    queueMicrotask(() => {
+      if (stopped) return
+      const { hosts, runtime } = useHostStore.getState()
+      if (!hosts[hostId] || runtime[hostId]?.status !== 'connected') return
+      if (useNexHostStore.getState().byHost[hostId]) return
+      void useNexHostStore.getState().ensure(hostId)
+    })
+  }
+
   const unsubNex = useNexHostStore.subscribe((next, prev) => {
     if (next.byHost === prev.byHost) return
     for (const hostId of new Set([...Object.keys(next.byHost), ...Object.keys(prev.byHost)])) {
       // The entry dropped on a connected host (`clearHost` on a re-point): ask again for the new daemon. Only a drop is a cue
-      // (`ensure` itself never drops one, so this cannot loop) and only a configured, connected host has anything to ask.
-      const { hosts, runtime } = useHostStore.getState()
-      if (prev.byHost[hostId] && !next.byHost[hostId] && hosts[hostId] && runtime[hostId]?.status === 'connected') {
-        void next.ensure(hostId)
-      }
+      // (`ensure` itself never drops one, so this cannot loop). The question waits a microtask, because a drop is also the
+      // first step of deleting a host (`deleteHostCascade` clears the entry, then removes the host, in one synchronous run):
+      // asked at once, the answer of a host about to go would be written as an orphan entry.
+      if (prev.byHost[hostId] && !next.byHost[hostId]) askAgainIfStillHere(hostId)
       const was = selectRelayHalfV1(hostId)(prev)
       const now = selectRelayHalfV1(hostId)(next)
       if (was === now) continue
@@ -86,6 +99,7 @@ export function startRelayFresh(): () => void {
   }
 
   return () => {
+    stopped = true
     unsubHosts()
     unsubNex()
   }

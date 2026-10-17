@@ -5,6 +5,7 @@ package teammod
 // roster also refreshes this list, and the 10 s liveness tick catches the rest; a list equal to the last one sent is not sent again.
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -38,10 +39,20 @@ func (m *Module) buildFresh() ([]team.RelayFreshSession, error) {
 	if err != nil {
 		return nil, err
 	}
+	var origins map[string]team.Origin
+	if len(order) > 0 && m.origins != nil {
+		if origins, err = m.origins.ResolveOriginsBySession(order); err != nil {
+			m.logf("[team] fresh list codes: %v", err) // a list without codes is still a list
+			origins = nil
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), originProbeTimeout) // one budget for every code of the list
+	defer cancel()
 	out := make([]team.RelayFreshSession, 0, len(order))
 	for _, sid := range order {
 		h := halves[sid]
-		out = append(out, team.RelayFreshSession{SessionID: sid, Ref: ipeers.RefID(sid), OpID: h.OpID, Path: h.Path, WrittenAt: h.WrittenAt})
+		out = append(out, team.RelayFreshSession{SessionID: sid, Ref: ipeers.RefID(sid), OpID: h.OpID, Path: h.Path, WrittenAt: h.WrittenAt,
+			Code: m.sessionCodeOf(ctx, origins[sid])})
 	}
 	return out, nil
 }
