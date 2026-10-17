@@ -1,7 +1,9 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -46,19 +48,32 @@ func (d *Daemon) forwardTarget(r *http.Request) (peer PeerAddr, local bool, stat
 	return p, false, 0
 }
 
-// forwardGET sends the socket request to the peer over TCP with the pool token
-// (without `host`) and returns the peer's answer as it is: status, content type
-// and body. A peer that cannot be reached is 502 {host, reason}.
+// forwardGET forwards a body-less GET (see forward).
 func (d *Daemon) forwardGET(w http.ResponseWriter, r *http.Request, peer PeerAddr) {
+	d.forward(w, r, peer, nil)
+}
+
+// forward sends the socket request (same method, path and body) to the peer over
+// TCP with the pool token, without `host`, and returns the peer's answer as it
+// is: status, content type and body. A peer that cannot be reached is 502
+// {host, reason}.
+func (d *Daemon) forward(w http.ResponseWriter, r *http.Request, peer PeerAddr, body []byte) {
 	q := r.URL.Query()
 	q.Del("host")
-	u := url.URL{Scheme: "http", Host: peer.HostPort, Path: r.URL.Path, RawQuery: q.Encode()}
+	u := url.URL{Scheme: "http", Host: peer.HostPort, Path: r.URL.Path, RawPath: r.URL.RawPath, RawQuery: q.Encode()}
 	ctx, cancel := context.WithTimeout(r.Context(), forwardTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	var rd io.Reader
+	if body != nil {
+		rd = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, r.Method, u.String(), rd)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"host": peer.Alias, "reason": err.Error()})
 		return
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Authorization", "Bearer "+d.opts.Token)
 	resp, err := d.client().Do(req)
@@ -67,7 +82,7 @@ func (d *Daemon) forwardGET(w http.ResponseWriter, r *http.Request, peer PeerAdd
 		return
 	}
 	defer resp.Body.Close()
-	body, err := readCapped(resp.Body)
+	answer, err := readCapped(resp.Body)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"host": peer.Alias, "reason": err.Error()})
 		return
@@ -76,7 +91,7 @@ func (d *Daemon) forwardGET(w http.ResponseWriter, r *http.Request, peer PeerAdd
 		w.Header().Set("Content-Type", ct)
 	}
 	w.WriteHeader(resp.StatusCode)
-	_, _ = w.Write(body)
+	_, _ = w.Write(answer)
 }
 
 func (d *Daemon) client() *http.Client { return d.fwd }

@@ -82,6 +82,9 @@ func (c Config) validateWorker() error {
 	if c.Worker.Light != nil && *c.Worker.Light < 0 {
 		return fmt.Errorf("worker.light is %d, slots cannot be negative", *c.Worker.Light)
 	}
+	if m := c.Owner.IdleMinutes; m < 0 || m > 9999 {
+		return fmt.Errorf("owner.idle_minutes is %d, it must be 0 (the default) or 1-9999", m)
+	}
 	return nil
 }
 
