@@ -103,7 +103,7 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, noDrill, h
   const t = useI18nStore((s) => s.t)
   const { teamKey, color, lead, members } = team
   const rosterKey = members.map((m) => m.sessionId).sort().join('\u0000') // the member set: a join, a leave or a relay to a new session
-  const feed = useMemberFeed(lead.hostId, lead.sessionId, rosterKey)
+  const feed = useMemberFeed(lead.hostId, lead.sessionId, rosterKey, `team:${teamKey.split('\u0000')[1] ?? ''}`) // the team's journal unit key
   const order = members.map((m) => m.sessionId)
   const reorder = useCallback((ids: string[]) => onReorder(ids), [onReorder])
   const { propsFor, over, draggingId } = useMemberDrag(teamKey, order, reorder, 'y')

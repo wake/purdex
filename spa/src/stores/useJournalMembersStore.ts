@@ -9,6 +9,7 @@ import { create } from 'zustand'
 import { getJournalMembers } from '../lib/journal/api'
 import type { JournalMember } from '../lib/journal/types'
 
+export const staleKey = (hostId: string, unitKey: string): string => `${hostId}\u0000${unitKey}`
 export const membersKey = (hostId: string, leadSessionId: string): string => `${hostId}\u0000${leadSessionId}`
 
 interface MembersState {
@@ -17,8 +18,13 @@ interface MembersState {
   epoch: Record<string, number>
   /** Connection generation per host: bumped by every `fence`. */
   gens: Record<string, number>
+  /** Per `<host>\0<unit key>`: how many journal.changed events named that unit. Kept here, not read off the journal store, which holds only the
+   *  units the loader loaded (the active tab's): a background team's unit is not there and its events would never be seen. */
+  stale: Record<string, number>
   /** The probe's answer for the current connection. */
   setSupport: (hostId: string, yes: boolean) => void
+  /** A `journal.changed` named this unit of this host. */
+  noteChanged: (hostId: string, unitKey: string) => void
   /** The connection is gone or a new probe starts: support is unknown again (what is held stays, but is not shown). */
   fence: (hostId: string) => void
   /** A removed or re-pointed host: what the old daemon said is not the new one's. */
@@ -40,7 +46,12 @@ export const useJournalMembersStore = create<MembersState>()((set, get) => ({
   byLead: {},
   epoch: {},
   gens: {},
+  stale: {},
   setSupport: (hostId, yes) => set((s) => ({ support: { ...s.support, [hostId]: yes } })),
+  noteChanged: (hostId, unitKey) => set((s) => {
+    const k = staleKey(hostId, unitKey)
+    return { stale: { ...s.stale, [k]: (s.stale[k] ?? 0) + 1 } }
+  }),
   fence: (hostId) => set((s) => ({ support: drop(s.support, hostId), gens: { ...s.gens, [hostId]: (s.gens[hostId] ?? 0) + 1 } })),
   forgetHost: (hostId) => {
     const prefix = `${hostId}\u0000`
@@ -49,6 +60,7 @@ export const useJournalMembersStore = create<MembersState>()((set, get) => ({
     set((s) => ({
       support: drop(s.support, hostId),
       byLead: Object.fromEntries(Object.entries(s.byLead).filter(([k]) => !k.startsWith(prefix))),
+      stale: Object.fromEntries(Object.entries(s.stale).filter(([k]) => !k.startsWith(prefix))),
       epoch: { ...s.epoch, [hostId]: (s.epoch[hostId] ?? 0) + 1 },
     }))
   },
@@ -75,5 +87,5 @@ export const useJournalMembersStore = create<MembersState>()((set, get) => ({
       }
     }
   },
-  reset: () => { flights.clear(); again.clear(); set({ support: {}, byLead: {}, epoch: {}, gens: {} }) },
+  reset: () => { flights.clear(); again.clear(); set({ support: {}, byLead: {}, epoch: {}, gens: {}, stale: {} }) },
 }))

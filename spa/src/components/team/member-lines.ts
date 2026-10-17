@@ -5,8 +5,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { taskKeyOfTask } from '../../lib/journal/tasks'
 import type { JournalMember } from '../../lib/journal/types'
-import { membersKey, useJournalMembersStore } from '../../stores/useJournalMembersStore'
-import { selectUnit, useJournalStore } from '../../stores/useJournalStore'
+import { membersKey, staleKey, useJournalMembersStore } from '../../stores/useJournalMembersStore'
 
 type T = (key: string, params?: Record<string, string | number>) => string
 
@@ -17,14 +16,12 @@ export const MEMBER_REFRESH_DEBOUNCE_MS = 300
  * Reads once when the panel shows; again when the team's member set changes (`rosterKey`: a join, a leave or a relay to a new session
  * makes no journal.changed), and again (debounced) when THIS leader's unit is marked stale by a journal.changed.
  */
-export function useMemberFeed(leadHostId: string, leadSessionId: string, rosterKey: string): ReadonlyMap<string, JournalMember> | null {
+export function useMemberFeed(leadHostId: string, leadSessionId: string, rosterKey: string, unitKey: string): ReadonlyMap<string, JournalMember> | null {
   const supported = useJournalMembersStore((s) => s.support[leadHostId] === true)
   const list = useJournalMembersStore((s) => s.byLead[membersKey(leadHostId, leadSessionId)])
-  // Moves only when a journal.changed named this leader's unit (on this host): another host or unit never changes it.
-  const staleToken = useJournalStore((s) => {
-    const u = selectUnit(s, leadHostId, leadSessionId)
-    return u ? u.staleAt.entries + u.staleAt.tasks : 0
-  })
+  // Moves only when a journal.changed named this leader's unit (on this host): another host or unit never changes it. It counts the
+  // events itself, so a team whose unit the journal loader never loaded (not the active tab's) is still seen.
+  const staleToken = useJournalMembersStore((s) => s.stale[staleKey(leadHostId, unitKey)] ?? 0)
   const last = useRef<{ key: string; token: number } | null>(null)
   useEffect(() => {
     if (!supported) return
