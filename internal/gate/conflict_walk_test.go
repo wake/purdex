@@ -271,6 +271,9 @@ func TestTake_TwoConflictingGatesAtOnceServeExactlyOne(t *testing.T) {
 				defer wg.Done()
 				got, err := rp.TryTakeRanked(tk)
 				assert.NoError(t, err)
+				if got.Slot != nil {
+					tk.Drop() // the gate leaves the queue once it holds the slot: the other must then see the record, not the ticket
+				}
 				slots[j] = got.Slot
 			}()
 		}
