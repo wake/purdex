@@ -121,9 +121,9 @@ func newAssistFlags(name string, stderr io.Writer, withJSON bool) assistCommon {
 	return c
 }
 
-// parseMixed parses flags that may stand before or after the positional words (Go's flag stops at the first one) and returns
+// parseAssistArgs parses flags that may stand before or after the positional words (Go's flag stops at the first one) and returns
 // the positional words in order.
-func parseMixed(fs *flag.FlagSet, args []string) ([]string, error) {
+func parseAssistArgs(fs *flag.FlagSet, args []string) ([]string, error) {
 	var pos []string
 	for {
 		if err := fs.Parse(args); err != nil {
@@ -147,7 +147,7 @@ func firstWord(pos []string) (string, []string) {
 
 func assistStatus(args []string, stdout, stderr io.Writer) int {
 	c := newAssistFlags("assist status", stderr, true)
-	pos, err := parseMixed(c.fs, args)
+	pos, err := parseAssistArgs(c.fs, args)
 	if err != nil {
 		return 2
 	}
@@ -297,7 +297,7 @@ func assistHost(args []string, stdout, stderr io.Writer) int {
 	c.fs.Var(&cannot, "cannot", "command words the host cannot run (repeatable)")
 	clearCan := c.fs.Bool("clear-can", false, "empty the can list")
 	clearCannot := c.fs.Bool("clear-cannot", false, "empty the cannot list")
-	pos, err := parseMixed(c.fs, rest)
+	pos, err := parseAssistArgs(c.fs, rest)
 	if err != nil {
 		return 2
 	}
@@ -355,7 +355,7 @@ func assistSwitch(on bool, args []string, stdout, stderr io.Writer) int {
 	rest := args
 	c := newAssistFlags("assist switch", stderr, false)
 	reason := c.fs.String("reason", "", "why (one line, required)")
-	pos, err := parseMixed(c.fs, rest)
+	pos, err := parseAssistArgs(c.fs, rest)
 	if err != nil {
 		return 2
 	}
@@ -388,7 +388,7 @@ func assistAllow(allow bool, args []string, stdout, stderr io.Writer) int {
 	sess := c.fs.String("session", "", "a session: its ref")
 	host := c.fs.String("host", "", "only for this host (default every host)")
 	reason := c.fs.String("reason", "", "why (one line)")
-	pos, err := parseMixed(c.fs, args)
+	pos, err := parseAssistArgs(c.fs, args)
 	if err != nil {
 		return 2
 	}
@@ -429,7 +429,7 @@ func assistAllow(allow bool, args []string, stdout, stderr io.Writer) int {
 func gateHosts(args []string, stdout, stderr io.Writer) int {
 	c := newAssistFlags("gate hosts", stderr, true)
 	session := c.fs.String("session", "", "session id (default: the one of the environment)")
-	pos, err := parseMixed(c.fs, args)
+	pos, err := parseAssistArgs(c.fs, args)
 	if err != nil {
 		return 2
 	}
@@ -491,7 +491,7 @@ func assistReserve(args []string, stdout, stderr io.Writer) int {
 	c := newAssistFlags("assist reserve", stderr, false)
 	forDur := c.fs.String("for", "", "how long, such as 2h (default 2h, at most 12h)")
 	reason := c.fs.String("reason", "", "why (one line, required for on)")
-	pos, err := parseMixed(c.fs, rest)
+	pos, err := parseAssistArgs(c.fs, rest)
 	if err != nil {
 		return 2
 	}
