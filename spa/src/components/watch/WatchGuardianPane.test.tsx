@@ -34,12 +34,13 @@ beforeEach(() => {
 })
 
 describe('WatchGuardianPane headings', () => {
-  it('none: says there is no guardian and what starting one does (no button yet)', () => {
+  it('none: says there is no guardian and what starting one does, and offers 啟動守門員', () => {
     answer('h1', status('d1', 'none'))
     render(<WatchGuardianPane pane={pane} isActive />)
     expect(screen.getByTestId('watch-launch-title')).toHaveTextContent(t('watch.launch.none_title'))
     expect(screen.getByTestId('watch-launch-hint')).toHaveTextContent(t('watch.launch.none_hint'))
-    expect(screen.queryAllByRole('button')).toHaveLength(0)
+    expect(screen.getAllByRole('button')).toHaveLength(1)
+    expect(screen.getByTestId('watch-launch-start')).toHaveTextContent(t('watch.launch.start'))
   })
 
   it('unknown: says the status cannot be read', () => {
@@ -85,7 +86,7 @@ describe('the host name comes through the look', () => {
 })
 
 describe('the watcher\'s launch panel', () => {
-  it('lists host, pdx-watch, workdir, agent_command and the conversation it resumes; no button', async () => {
+  it('lists host, pdx-watch, workdir, agent_command and the conversation it resumes, and offers 叫醒守門員', async () => {
     answer('h1', status('d1', 'resting'))
     render(<WatchLaunchPanel title={t('watch.launch.not_running')} />)
     const p = screen.getByTestId('watch-launch-panel')
@@ -95,7 +96,8 @@ describe('the watcher\'s launch panel', () => {
     expect(within(p).getByTestId('watch-launch-command')).toHaveTextContent('claude --model opus')
     expect(within(p).getByTestId('watch-launch-conversation')).toHaveTextContent('conv-1234')
     expect(readWatchRow).toHaveBeenCalledWith('h1')
-    expect(screen.queryAllByRole('button')).toHaveLength(0)
+    expect(screen.getAllByRole('button')).toHaveLength(1)
+    expect(within(p).getByTestId('watch-launch-wake')).toHaveTextContent(t('watch.launch.wake'))
   })
 
   it('shows the conversation only while resting (an awake watcher is not being resumed)', () => {
