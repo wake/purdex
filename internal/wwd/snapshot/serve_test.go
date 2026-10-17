@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -396,4 +397,104 @@ func TestGitEnv_HasNoInheritedGitVariables(t *testing.T) {
 			assert.False(t, strings.HasPrefix(kv, bad), kv)
 		}
 	}
+}
+
+func TestListPins_ListsTheJobsThatArePinnedAndOnlyThose(t *testing.T) {
+	repo, _, snap := origin(t)
+	ctx := context.Background()
+	ids, err := ListPins(ctx, repo)
+	require.NoError(t, err)
+	assert.Equal(t, []string{}, ids, "no refs/wwd/ is an empty list, not an error")
+
+	require.NoError(t, Pin(ctx, repo, "j_2", snap))
+	require.NoError(t, Pin(ctx, repo, "j_1", snap))
+	gitOut(t, repo, "update-ref", "refs/wwd/nested/x", snap) // not a job id: the sweep must not see it
+	gitOut(t, repo, "update-ref", "refs/wwd/-dash", snap)
+	gitOut(t, repo, "update-ref", "refs/heads/j_3", snap) // not under refs/wwd/
+	ids, err = ListPins(ctx, repo)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"j_1", "j_2"}, ids)
+
+	require.NoError(t, Unpin(ctx, repo, "j_1"))
+	ids, err = ListPins(ctx, repo)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"j_2"}, ids)
+}
+
+func TestListPins_ARepositoryGitCannotReadIsAnError(t *testing.T) {
+	_, err := ListPins(context.Background(), filepath.Join(t.TempDir(), "nope"))
+	assert.Error(t, err)
+	_, err = ListPins(context.Background(), t.TempDir()) // exists, is not a repository
+	assert.Error(t, err)
+}
+
+// Thousands of pins with long names are more than a short answer: the list is not cut at the limit of the small git commands.
+func TestListPins_ManyPinsWithLongNamesAreAllListed(t *testing.T) {
+	repo, _, snap := origin(t)
+	const n = 7500 // x ~145 bytes is over 1 MiB
+	var in strings.Builder
+	want := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("j%0127d", i) // 128 characters, the longest a job id may be
+		want = append(want, id)
+		in.WriteString("create refs/wwd/" + id + " " + snap + "\n")
+	}
+	cmd := exec.Command("git", "-C", repo, "update-ref", "--stdin")
+	cmd.Stdin = strings.NewReader(in.String())
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
+	ids, err := ListPins(context.Background(), repo)
+	require.NoError(t, err)
+	assert.Len(t, ids, n)
+	assert.Equal(t, want[0], ids[0])
+}
+
+// Only a ref that Pin could have made is listed: a direct ref to a commit. A symbolic ref or one to a blob or a tag is somebody else's.
+func TestListPins_OnlyDirectRefsToCommitsAreListed(t *testing.T) {
+	repo, _, snap := origin(t)
+	ctx := context.Background()
+	require.NoError(t, Pin(ctx, repo, "j_1", snap))
+	blob := gitOut(t, repo, "rev-parse", snap+":a.txt")
+	gitOut(t, repo, "update-ref", "refs/wwd/j_blob", blob)
+	gitOut(t, repo, "symbolic-ref", "refs/wwd/j_sym", "refs/wwd/j_1")
+	gitOut(t, repo, "pack-refs", "--all") // a packed ref is still a ref
+	ids, err := ListPins(ctx, repo)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"j_1"}, ids)
+}
+
+// A path that is not a repository but lies inside one is an error, for the three calls: git would walk up and use the parent, and the
+// queue would then remove a ref in a repository it did not mean.
+func TestRepoDir_ASubdirectoryOfARepositoryIsNotTheRepository(t *testing.T) {
+	repo, _, snap := origin(t)
+	ctx := context.Background()
+	require.NoError(t, Pin(ctx, repo, "j_1", snap))
+	sub := filepath.Join(repo, "sub")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	_, err := ListPins(ctx, sub)
+	assert.Error(t, err)
+	assert.Error(t, Unpin(ctx, sub, "j_1"))
+	assert.Error(t, Pin(ctx, sub, "j_2", snap))
+	assert.Equal(t, snap, gitOut(t, repo, "rev-parse", PinRef("j_1")), "the parent's pin is still there")
+	// the work tree root and the git directory itself are the repository
+	ids, err := ListPins(ctx, repo)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"j_1"}, ids)
+	ids, err = ListPins(ctx, repo+"/.git")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"j_1"}, ids)
+}
+
+// A bare repository is a repository too.
+func TestRepoDir_ABareRepositoryWorks(t *testing.T) {
+	repo, _, snap := origin(t)
+	bare := filepath.Join(t.TempDir(), "bare.git")
+	gitOut(t, repo, "clone", "-q", "--bare", ".", bare)
+	gitOut(t, repo, "push", "-q", bare, snap+":refs/heads/snap")
+	ctx := context.Background()
+	require.NoError(t, Pin(ctx, bare, "j_1", snap))
+	ids, err := ListPins(ctx, bare)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"j_1"}, ids)
+	require.NoError(t, Unpin(ctx, bare, "j_1"))
 }
