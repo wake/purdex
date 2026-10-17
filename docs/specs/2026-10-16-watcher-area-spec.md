@@ -13,7 +13,7 @@
 | U2 | Entry: a shield at the right end of the sidebar's top row (`HomeRow`, the profile-name row the user calls "Main Station"), and the host cells under the BottomNav (fleet spec §8.1): a click opens the area on that host's tab. |
 | U3 | Events are **not marked handled by a person**. The watcher acknowledges an event with a one-line note; the count is "waiting for the watcher". |
 | U4 | Each host tab embeds **狀態｜設定**. 狀態: the five readings with a line chart each (5 分／1 時／6 時／24 時; the history lives in the App's memory only), the top processes, and for the daemon hosts the queue as **當下｜歷史**. |
-| U5 | The queue history shows four new columns: 平均核心數, 記憶體峰值, 換頁拖累, 磁碟讀寫 (owed by the A line, §7). |
+| U5 | The queue history shows four new columns: 平均核心數, 記憶體峰值, 換頁拖累, 磁碟讀寫 (owed by the A line, §7). (10-17: 磁碟讀寫 is not had — macOS gives no exact byte count for a waited process tree, A1's PR note — so the history shipped with the other three, §6.1, §8 A1.) |
 | U6 | Settings live on each daemon (the `watch` row in host config; the gate's `[gate]` through a daemon API), not Profile Sync; each daemon host has its own 資源管制 switch (`gate.enabled`). |
 | U7 | Words: 正常／偏高／過載／離線 for a host's zone; the shield badge is the host cells' `CountBadge` (≈ 11 px), the shield is green. |
 | U8 | Design and prototypes are done with Opus; the style follows the real App (the prototype imports the App's own `TabBar`, `Section`, `SettingItem`, `SegmentControl`, `ToggleSwitch`, `HostBadge`). |
@@ -161,9 +161,9 @@ switch (狀態 only) and the 狀態｜設定 `SegmentControl`.
     frame.
   - **歷史**: 「最近 3 小時的{重｜輕}指令（n 個）」 and a 重指令｜輕指令 switch; one row per command, newest first: 排入 ·
     類別 · 指令 · session · a stacked bar on one shared scale (striped = waited, solid = ran, red = failed; 「滿格 n 分」)
-    with 「等 … · 跑 …」 · 平均核心數 · 記憶體峰值 · 換頁拖累 · 磁碟讀寫 · 結束碼. Hover: a card with the full command,
-    project · session, 排入／開始／結束, 等候原因, and 套用參數與來源. The four new columns show 「—」 until the
-    A line's records carry them (A1). Read on open and on every 30 s while shown (no push).
+    with 「等 … · 跑 …」 · 平均核心數 · 記憶體峰值 · 換頁拖累 · 結束碼 (no 磁碟讀寫: U5, §8 A1). Hover: a card with the full
+    command, project · session, 排入／開始／結束, 等候原因, and 套用參數與來源. The three new columns show 「—」 for a
+    record older than A1. Read on open and on every 30 s while shown (no push).
 
 ### 6.2 設定, daemon hosts (mlab, a26)
 
@@ -213,11 +213,15 @@ writes use `pdx gate set`'s validation.
 
 - **A1 `GET /api/gate/decisions?class=heavy|light&since=<time>&limit=<n>`** → `{records: [...]}` newest first, from
   `decisions.jsonl` (+ `.1`), each a `Decision` as written today (`time`, `argv`, `cwd`, `session`, `class`, `outcome`,
-  `slot`, `wait_s`, `wait_reasons`, `applied`, `exit`, `duration_s`) **plus** the start time if `time` is the end, and
-  the four rusage fields of the command tree: `cpu_s` (user + system; the UI shows `cpu_s / duration_s` as 平均核心數),
-  `max_rss_mb` (largest single process, 記憶體峰值), `major_faults` (pages read back from swap, 換頁拖累), `disk_read_mb`
-  and `disk_write_mb` (磁碟讀寫). Absent fields = an older record (UI shows 「—」). Records written before 743 carry
-  `session: null` (#2959 deploys with 743): the session column shows 「—」 for them.
+  `slot`, `wait_s`, `wait_reasons`, `applied`, `exit`, `duration_s`) **plus** the three rusage fields of the command
+  tree: `cpu_s` (user + system), `max_rss_mb` (largest single process, 記憶體峰值), `major_faults` (pages read back
+  from swap, 換頁拖累). The times (`internal/gate/gate.go` `Run`): `time` is when the command **reached the gate**,
+  before any wait (排入); `duration_s` runs from there to the end, the wait included, so it ended at `time + duration_s`
+  (結束), it started at `time + wait_s` (開始), it ran `duration_s − wait_s` (跑), and 平均核心數 = `cpu_s ÷ (duration_s
+  − wait_s)`. No disk read / write fields (10-17, A1's PR note): macOS gives no exact byte count for a waited process
+  tree (`Inblock` / `Oublock` count block operations, not bytes), so the history has no 磁碟讀寫 column (U5). Absent
+  fields = an older record (UI shows 「—」). Records written before 743 carry `session: null` (#2959 deploys with 743):
+  the session column shows 「—」 for them.
 - **A2 gate config**: `GET /api/gate/config` → `{enabled, profile, profiles: [names], settings: [{key, value, source}]}`
   (the same list `pdx gate status` prints, sources `default|config|profile|auto`); `PUT /api/gate/config` with
   `{key, value}` (one value, written the way `pdx gate set` writes it; 400 with the reason for an unknown key or a bad
@@ -240,8 +244,10 @@ writes use `pdx gate set`'s validation.
     once per operation (an ack of three ids sends one). Both plain `Broadcast` (agreed with the A line, #3010).
   - The A line's plan (10-16): `GET /api/watch/events` and `pdx watch ack <id>… --note` (required, one line ≤ 500
     bytes) in W2b; `POST /api/watch/start` follows
-    §12.3 — 200 when one is already awake, else 202 `{host}` (the chosen host's alias and id) or 409
-    `{cooldown_until}`; `POST /api/watch/wake {prompt}` resumes with `wake_prompt` + a space + the prompt (≤ 4 KB in
+    §12.3 — 200 when one is already awake, else 202 `{host}` (the chosen host's alias and id) or 409 `{error:
+    "cooldown", detail}`, the time it may start again in `detail` (RFC 3339; the daemon's usual error body,
+    `internal/module/watch/routes_session.go`), not a `cooldown_until` field — `cooldown_until` is on
+    the holder in `GET /api/watch/status` and `watch.changed` (#3131); `POST /api/watch/wake {prompt}` resumes with `wake_prompt` + a space + the prompt (≤ 4 KB in
     all, no control characters, else 400), in W3b.
   - The A line's watcher identification (the fixed tmux session `pdx-watch`) comes as its spec §12.4／§12.6 and plan
     W3 update after 743; A3 is aligned with it then.

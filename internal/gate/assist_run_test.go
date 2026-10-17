@@ -139,6 +139,7 @@ i = 0
 while i < len(args) and args[i].startswith('-'):
     i += 2 if args[i] == '-o' else 1
 host = args[i]
+open(os.environ['FAKE_HOME'] + '/ssh-hosts', 'a').write(host + '\n')
 cmd = ' '.join(args[i + 1:])
 if os.environ.get('FAKE_SSH_FAIL'):
     sys.exit(255)
@@ -155,7 +156,12 @@ if pid == 0:
     os.setsid()  # as sshd gives each remote command a session of its own
     os.execvp('sh', ['sh', '-c', cmd])
 if os.path.exists(home + '/ssh-drop') and 'pdx gate' in cmd:
-    time.sleep(1.0)
+    # the connection goes once the remote command has done what the test waits for (the file named in ssh-drop), not after a
+    # fixed time: a loaded host starts the command late
+    want = open(home + '/ssh-drop').read().strip()
+    t0 = time.time()
+    while want and not os.path.exists(want) and time.time() - t0 < 60:
+        time.sleep(0.05)
     sys.exit(255)  # the connection goes while the remote command goes on
 _, st = os.waitpid(pid, 0)
 sys.exit(os.waitstatus_to_exitcode(st) % 256 if os.waitstatus_to_exitcode(st) >= 0 else 128 - os.waitstatus_to_exitcode(st))
@@ -164,11 +170,13 @@ sys.exit(os.waitstatus_to_exitcode(st) % 256 if os.waitstatus_to_exitcode(st) >=
 const fakePdx = `#!/bin/sh
 mode=$(cat "$HOME/fake-pdx-mode" 2>/dev/null)
 [ "$1" = gate ] || exit 2
+if [ "$2" = would-wait ]; then [ -e "$HOME/fake-wouldwait-sleep" ] && sleep 20; cat "$HOME/fake-wouldwait"; exit 0; fi
 shift
 while [ "$1" != -- ]; do shift; done
 shift
 case "$mode" in
   wait75) echo "pdx gate: not admitted within 60s: the command was not run" >&2; exit 75;;
+  slowmark) sleep 3;;
   nostart) printf '\036pdx-gate-admitted:%s\n' "$PDX_GATE_ADMITTED_MARK" >&2; printf '\036pdx-gate-not-started:%s\n' "$PDX_GATE_ADMITTED_MARK" >&2; exit 126;;
 esac
 printf '\036pdx-gate-admitted:%s\n' "$PDX_GATE_ADMITTED_MARK" >&2
@@ -178,6 +186,7 @@ exec "$@"
 
 // fakeGit passes everything to the real git, except update-ref while the test has asked for it to fail.
 const fakeGit = `#!/bin/sh
+if [ -e "$HOME/git-add-slow" ]; then for a in "$@"; do [ "$a" = add ] && { touch "$HOME/prepare-started"; sleep 6; }; done; fi
 if [ -e "$HOME/git-update-ref-fails" ]; then for a in "$@"; do [ "$a" = update-ref ] && exit 1; done; fi
 exec "$REAL_GIT" "$@"
 `
@@ -198,6 +207,13 @@ func newAssistHost(t *testing.T, repo string) *assistHost {
 	writeFile(t, home+"/bin/pdx", fakePdx, 0o755)
 	writeFile(t, home+"/bin/pnpm", fakePnpm, 0o755)
 	writeFile(t, home+"/bin/git", fakeGit, 0o755)
+	// what the probe reads (X2b): a macOS host that is idle, its gate free
+	writeFile(t, home+"/bin/uname", "#!/bin/sh\necho Darwin\n", 0o755)
+	writeFile(t, home+"/bin/sysctl", "#!/bin/sh\ncase \"$2\" in vm.loadavg) cat \"$HOME/fake-loadavg\";; hw.ncpu) echo 10;; esac\n", 0o755)
+	writeFile(t, home+"/bin/top", "#!/bin/sh\necho \"CPU usage: 3.0% user, 4.0% sys, $(cat \"$HOME/fake-idle\")% idle\"\n", 0o755)
+	writeFile(t, home+"/fake-wouldwait", `{"would_wait":false,"class":"heavy","ahead":0}`, 0o644)
+	writeFile(t, home+"/fake-loadavg", "{ 0.50 0.50 0.50 }", 0o644)
+	writeFile(t, home+"/fake-idle", "90.0", 0o644)
 	realGit, err := exec.LookPath("git")
 	require.NoError(t, err)
 	t.Setenv("REAL_GIT", realGit)
@@ -387,15 +403,22 @@ func TestRunAssist_ALostConnectionEndsTheRemoteRun(t *testing.T) {
 	g, _ := testGate(t)
 	dir := workRepo(t)
 	h := newAssistHost(t, filepath.Base(dir))
-	writeFile(t, h.remote("ssh-drop"), "", 0o644)
-	pidFile := h.remote("sleeper.pid")
-	res, _, _ := runOn(t, g, h, dir, "sh", "-c", `sleep 300 & echo $! > `+pidFile+`; wait`)
+	p1, p2, pgidFile := h.remote("sleeper1.pid"), h.remote("sleeper2.pid"), h.remote("group.id")
+	writeFile(t, h.remote("ssh-drop"), pgidFile, 0o644) // dropped once the sleepers and the group are written down (the last file)
+	res, _, _ := runOn(t, g, h, dir, "sh", "-c",
+		`sleep 300 & echo $! > `+p1+`; sleep 301 & echo $! > `+p2+`; ps -o pgid= -p $$ > `+pgidFile+`.tmp; mv `+pgidFile+`.tmp `+pgidFile+`; wait`)
 	assert.True(t, res.Started)
 	assert.Equal(t, 255, res.Code)
 	require.Error(t, res.Err)
 	assert.Contains(t, res.Err.Error(), "connection")
-	pid := strings.TrimSpace(mustReadOr(pidFile))
-	eventually(t, "the remote sleep to be gone", func() bool { return exec.Command("kill", "-0", pid).Run() != nil })
+	pgid := strings.TrimSpace(mustReadOr(pgidFile))
+	require.NotEmpty(t, pgid, "the group was written down before the connection went")
+	for _, f := range []string{p1, p2} {
+		pid := strings.TrimSpace(mustReadOr(f))
+		require.NotEmpty(t, pid, "both sleepers were started before the connection went")
+		eventuallyFor(t, 60*time.Second, "a remote sleeper to be gone", func() bool { return exec.Command("kill", "-0", pid).Run() != nil })
+	}
+	eventuallyFor(t, 60*time.Second, "the remote group to be gone", func() bool { return exec.Command("kill", "-0", "--", "-"+pgid).Run() != nil })
 	assert.Empty(t, h.listDir(t, "Assist/tmp.noindex"))
 }
 
@@ -426,7 +449,7 @@ func TestRunAssist_DependenciesAreSharedAndKeptWhileInUse(t *testing.T) {
 		res, _, _ := runOn(t, g, h, dir, "sh", "-c", "touch "+h.remote("a-started")+`; while [ ! -e `+hold+` ]; do sleep 0.1; done; cat spa/node_modules/marker`)
 		done <- res
 	}()
-	eventually(t, "job A", func() bool { return exists(h.remote("a-started")) })
+	eventuallyFor(t, 60*time.Second, "job A", func() bool { return exists(h.remote("a-started")) })
 	for _, lock := range []string{"lock: b\n", "lock: c\n"} {
 		writeFile(t, dir+"/spa/pnpm-lock.yaml", lock, 0o644)
 		time.Sleep(1100 * time.Millisecond)

@@ -1,9 +1,9 @@
-// spa/src/components/journal/JournalRow.tsx — one entry of the stream or of the pinned band (J-2c, spec §11): time, kind chip,
-// actor (`A → B`), text, refs; the person's name highlighted in actor and text. A 待確認 row shows its checklist read-only (Haiku
-// ticks it; an answered item is struck through and checked), has NO coloured left edge (the yellow is the chip and the boxes only)
-// and opens its detail through a button covering the row. The pin button is always in the DOM but only visible on hover (or while pinned).
+// spa/src/components/journal/JournalRow.tsx — one entry of the stream or of the 待確認 band (J-2c, spec §11): time, kind chip,
+// actor (`A → B`), text, refs; the person's name highlighted in actor and text. A 待確認 row shows its checklist (Haiku ticks it; an
+// answered item is struck through and checked; in the band the boxes are also clickable with journal.confirm.v1, JV-3), has NO coloured
+// left edge (the yellow is the chip and the boxes only) and opens its detail through a button covering the row.
 import { memo, useCallback, useEffect, useRef } from 'react'
-import { CheckSquare, PushPin, Square } from '@phosphor-icons/react'
+import { ItemCheck } from './ItemCheck'
 import { KindChip } from './KindChip'
 import { PersonMark } from './PersonMark'
 import { RefChips } from './RefChips'
@@ -12,7 +12,6 @@ import { timeOf } from '../../lib/journal/stream'
 import { taskKeyOfEntry, type TaskHover } from '../../lib/journal/tasks'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useJournalHoverStore } from '../../stores/useJournalHoverStore'
-import { keepFocus } from '../../lib/keep-focus'
 import type { JournalEntry } from '../../lib/journal/types'
 
 /** How much of the row's text the open-details button's label carries. */
@@ -24,7 +23,8 @@ export interface RowContext {
   /** The 待確認 whose detail is open. */
   selectedId: string | null
   onToggleDetail: (entryId: string) => void
-  onTogglePin: (entry: JournalEntry) => void
+  /** Check / uncheck item `idx` of a 待確認 by hand (the band's rows); undefined = read-only (no journal.confirm.v1). */
+  onToggleItem?: (entry: JournalEntry, idx: number, done: boolean) => void
 }
 
 // Memoised: a month of rows is a thousand of them, and a parent render (a new unit object, a filter) must not redraw rows whose entry
@@ -34,7 +34,6 @@ export const JournalRow = memo(function JournalRow({ entry, compact, ctx }: { en
   const confirm = entry.kind === 'confirm'
   const { done, total } = answered(entry)
   const resolved = confirm && total > 0 && done === total
-  const label = t(entry.pinned ? 'journal.pin.unpin' : 'journal.pin.pin')
   const open = () => ctx.onToggleDetail(entry.id)
   const taskKey = taskKeyOfEntry(entry)
   // Lit while the pointer is on its task (not while it is on this row: the row has its own hover look). The selector returns a boolean, so
@@ -70,7 +69,7 @@ export const JournalRow = memo(function JournalRow({ entry, compact, ctx }: { en
     >
       {confirm && (
         // The row is a plain container; this button covers it (under the content, which lets clicks through except on its own
-        // links and the pin button), so a button never sits inside another button.
+        // links and the checkboxes), so a button never sits inside another button.
         <button
           type="button"
           data-testid="journal-row-open"
@@ -81,7 +80,7 @@ export const JournalRow = memo(function JournalRow({ entry, compact, ctx }: { en
         />
       )}
       <span className={`relative w-9 shrink-0 tabular-nums text-[10.5px] text-text-muted pt-0.5 ${confirm ? 'pointer-events-none' : ''}`}>{timeOf(entry.at)}</span>
-      <div className={`relative min-w-0 flex-1 pr-5 ${confirm ? 'pointer-events-none' : ''}`}>
+      <div className={`relative min-w-0 flex-1 pr-1 ${confirm ? 'pointer-events-none' : ''}`}>
         <div className="flex items-center gap-1.5 flex-wrap">
           <KindChip kind={entry.kind} />
           <span className="text-[10.5px] text-text-secondary break-words min-w-0"><PersonMark text={entry.actor} name={ctx.personName} /></span>
@@ -93,13 +92,12 @@ export const JournalRow = memo(function JournalRow({ entry, compact, ctx }: { en
         {confirm && compact && total > 0 && (
           <div data-testid="journal-answered" className="mt-0.5 text-[11px] text-journal-warning-text">{t('journal.band.answered', { done, total })}</div>
         )}
-        {confirm && !compact && total > 0 && (
+        {confirm && total > 0 && (
+          // The band's rows (compact) are where the person ticks; a stream row's list is for reading. The boxes take clicks (pointer-events-auto) over the row's open-detail button.
           <ul data-testid="journal-checklist" className="mt-1 space-y-0.5">
             {entry.items.map((it, i) => (
               <li key={i} data-done={it.done || undefined} className="flex items-start gap-1.5 leading-[16px]">
-                {it.done
-                  ? <CheckSquare size={13} weight="fill" className="shrink-0 mt-px text-status-success-text" />
-                  : <Square size={13} className="shrink-0 mt-px text-journal-warning-text" />}
+                <ItemCheck done={it.done} size={13} onToggle={compact && ctx.onToggleItem ? (d) => ctx.onToggleItem?.(entry, i, d) : undefined} />
                 <span className={it.done ? 'text-text-muted line-through' : 'text-text-primary'}>{it.text}</span>
               </li>
             ))}
@@ -107,18 +105,6 @@ export const JournalRow = memo(function JournalRow({ entry, compact, ctx }: { en
         )}
         {!compact && <div className="pointer-events-auto"><RefChips refs={entry.refs} remoteUrl={ctx.remoteUrl} /></div>}
       </div>
-      <button
-        type="button"
-        data-testid="journal-pin-toggle"
-        aria-label={label}
-        aria-pressed={entry.pinned}
-        title={label}
-        onMouseDown={keepFocus}
-        onClick={() => ctx.onTogglePin(entry)}
-        className={`absolute top-1 right-0.5 p-0.5 rounded cursor-pointer hover:bg-surface-hover focus:opacity-100 ${entry.pinned ? 'text-text-primary' : 'text-text-muted opacity-0 group-hover:opacity-100'}`}
-      >
-        <PushPin size={12} weight={entry.pinned ? 'fill' : 'regular'} />
-      </button>
     </div>
   )
 })

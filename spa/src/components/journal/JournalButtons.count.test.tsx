@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
 
 const getJournal = vi.fn()
-vi.mock('../../lib/journal/api', () => ({ getJournal: (...a: unknown[]) => getJournal(...a), getTasks: vi.fn(), getRoadmap: vi.fn(), setPinned: vi.fn() }))
+vi.mock('../../lib/journal/api', () => ({ getJournal: (...a: unknown[]) => getJournal(...a), getTasks: vi.fn(), getRoadmap: vi.fn(), setConfirmItem: vi.fn() }))
 vi.mock('../team/TeamSeatIcon', () => ({
   TeamSeatIcon: () => <span data-testid="seat-icon" />,
   TeamSeatHostBadge: () => <span data-testid="seat-host" />,
@@ -38,7 +38,7 @@ beforeEach(() => {
   localStorage.clear()
   resetTeamStores()
   useJournalStore.getState().reset()
-  useJournalUiStore.setState({ lastWidths: {}, teamOpen: {} })
+  useJournalUiStore.setState({ lastWidths: {} })
   clearViewMemos()
   clearModuleRegistry()
   getJournal.mockReset()

@@ -86,18 +86,14 @@ describe('a click on the header', () => {
     expect(mode()).toBe('full')
   })
 
-  it('the switch, enlarge and the cells do not toggle on their own', () => {
+  it('the switch and the cells do not toggle on their own', () => {
     scene()
     mount()
     fireEvent.click(screen.getByTestId('team-panel-count')) // a header click: full -> line
     expect(mode()).toBe('line')
     fireEvent.click(screen.getAllByTestId('team-panel-cell')[1])
     expect(mode()).toBe('line') // a cell opens a seat, it does not toggle
-    fireEvent.click(screen.getByTestId('team-panel-expand')) // enlarge is its own move: line -> max
-    expect(mode()).toBe('max')
-    expect(screen.getByTestId('team-panel-area').getAttribute('data-expanded')).toBe('true')
-    fireEvent.click(screen.getByTestId('team-panel-expand'))
-    expect(mode()).toBe('full')
+    expect(screen.queryByTestId('team-panel-expand')).toBeNull() // there is no enlarge control (no max state)
     fireEvent.click(screen.getByTestId('team-panel-to-titlebar')) // the switch is its own move too: to the title bar, once
     expect(useTeamUiStore.getState().panelMode[KEY]).toBe('titlebar')
   })
@@ -216,12 +212,12 @@ describe('the form follows its header', () => {
     expect((popover() as HTMLElement).style.width).toBe('260px') // the form's width does not follow the panel's
   })
 
-  it('moves when the panel is enlarged or its mode changes (the header is another element then)', () => {
+  it('moves when its mode changes (the header is another element then)', () => {
     box = rectOf(40, 60)
-    fireEvent.click(screen.getByTestId('team-panel-expand'))
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
     expect(pos()).toEqual(['40px', '64px'])
     box = rectOf(50, 70)
-    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'line'))
+    act(() => useTeamUiStore.getState().setPanelMode(KEY, 'full'))
     expect(popover()).not.toBeNull()
     expect(pos()).toEqual(['50px', '74px'])
   })

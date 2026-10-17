@@ -13,8 +13,8 @@ export function mergeEntries(held: readonly JournalEntry[], incoming: readonly J
   return [...byId.values()].sort(compareEntries)
 }
 
-/** The pinned band: newest first by `at`, equal times by `id` descending (the exact reverse of the stream order). */
-export function sortPinned(pinned: readonly JournalEntry[]): JournalEntry[] {
+/** The 待確認 band: newest first by `at`, equal times by `id` descending (the exact reverse of the stream order). */
+export function sortBand(pinned: readonly JournalEntry[]): JournalEntry[] {
   const byId = new Map<string, JournalEntry>()
   for (const e of pinned) byId.set(e.id, e)
   return [...byId.values()].sort((a, b) => compareEntries(b, a))

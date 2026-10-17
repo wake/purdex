@@ -2,6 +2,10 @@
 // matching the real J-1e answer later means editing this file and parse.ts only. J-1e is not built yet: every shape below is
 // the contract as the plans state it (assumptions are marked ASSUMED), and the fixtures in the tests are written from it.
 export const JOURNAL_CAPABILITY = 'journal.v1'
+/** Hand checks (`PUT /api/journal/confirm`) and the page's `confirms[]` band (JV-1a). */
+export const JOURNAL_CONFIRM_CAPABILITY = 'journal.confirm.v1'
+/** `GET /api/journal/members` (JV-1c; journal-v5 spec §4.3): what the team panel's member rows show on their 2nd and 3rd line. */
+export const JOURNAL_MEMBERS_CAPABILITY = 'journal.members.v1'
 
 export const ENTRY_KINDS = ['request', 'task_new', 'task_done', 'exec', 'exec_done', 'comm', 'confirm'] as const
 export type EntryKind = (typeof ENTRY_KINDS)[number]
@@ -37,7 +41,6 @@ export interface JournalEntry {
   items: ConfirmItem[]
   /** 待確認 only: the original question text. */
   detail: string
-  pinned: boolean
 }
 
 export interface JournalPage {
@@ -46,7 +49,9 @@ export interface JournalPage {
   personName: string
   /** Oldest first (the daemon sorts by (at, id); the store sorts again). */
   entries: JournalEntry[]
-  /** Newest first. */
+  /** The open 待確認 of the whole unit, newest first (`confirms[]`); null = the daemon sent none (it predates journal.confirm.v1). */
+  confirms: JournalEntry[] | null
+  /** Newest first. The pre-confirm.v1 band: the band's source ONLY when the host does not declare journal.confirm.v1; otherwise ignored. */
   pinned: JournalEntry[]
   /** There are older months before the oldest entry of this page. */
   more: boolean
@@ -68,6 +73,22 @@ export interface RoadmapFeature { name: string; stages: RoadmapStage[] }
 
 /** A `journal.changed` frame. ASSUMED: `unit` is `{kind, id}`; `project` is not needed to decide what to mark. */
 export interface ChangedEvent { unitKind: 'team' | 'solo'; unitId: string; what: ChangedWhat }
+
+/** The daemon's `currentTaskOf` states: in progress before pending. */
+export const MEMBER_TASK_STATES = ['in_progress', 'pending'] as const
+export type MemberTaskState = (typeof MEMBER_TASK_STATES)[number]
+
+/** One current member of the leader's team, as the leader's journal sees it (spec §4.3). Members run no journal of their own. */
+export interface JournalMember {
+  ref: string
+  /** The member's session: what a panel row is matched on. */
+  sessionId: string
+  title: string
+  /** The member's current task (`currentTaskOf`); null = none. */
+  task: { number: string; title: string; state: MemberTaskState } | null
+  /** The member's newest report to the leader; `at` is epoch ms (ASSUMED, like the journal entries'), `text` its first line. null = none. */
+  last: { at: number; kind: string; text: string } | null
+}
 
 /** `409 {lead_host_id, lead_session_id}`: this session is a member whose lead lives on another daemon. */
 export interface RemoteLead { leadHostId: string; leadSessionId: string }

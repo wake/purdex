@@ -285,6 +285,53 @@ func (s *Store) NewestTurn(sessionID string) (turnID string, turnAt int64, ok bo
 	return turnID, turnAt, true, nil
 }
 
+// EntrySessions is the session of each workbook entry in ids (an id that is not there is left out). It attributes the old
+// journal entries `turn:<id>` and `ev:<id>:<n>` to the leader session that produced them.
+func (s *Store) EntrySessions(ids []int64) (map[int64]string, error) {
+	out := make(map[int64]string, len(ids))
+	const chunk = 400
+	for start := 0; start < len(ids); start += chunk {
+		part := ids[start:min(start+chunk, len(ids))]
+		args := make([]any, len(part))
+		marks := make([]byte, 0, 2*len(part))
+		for i, id := range part {
+			args[i] = id
+			if i > 0 {
+				marks = append(marks, ',')
+			}
+			marks = append(marks, '?')
+		}
+		rows, err := s.db.Query(`SELECT id, session_id FROM wb_entries WHERE id IN (`+string(marks)+`)`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("read workbook entry sessions: %w", err)
+		}
+		for rows.Next() {
+			var id int64
+			var sid string
+			if err := rows.Scan(&id, &sid); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("read workbook entry sessions: %w", err)
+			}
+			out[id] = sid
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read workbook entry sessions: %w", err)
+		}
+	}
+	return out, nil
+}
+
+// FirstTurnAt is the time of the session's first recorded entry; ok is false when it has none.
+func (s *Store) FirstTurnAt(sessionID string) (at int64, ok bool, err error) {
+	var v sql.NullInt64
+	if err := s.db.QueryRow(`SELECT MIN(turn_at) FROM wb_entries WHERE session_id = ?`, sessionID).Scan(&v); err != nil {
+		return 0, false, fmt.Errorf("read first workbook turn: %w", err)
+	}
+	return v.Int64, v.Valid, nil
+}
+
 // ClosestTurn is the session's entry whose turn_at is nearest to `at` within [at-before, at+after] (the push hold's match: a
 // Stop's own entry carries the event's time); ok is false when there is none. Two Stops a moment apart each find their own.
 func (s *Store) ClosestTurn(sessionID string, at, before, after int64) (Entry, bool, error) {

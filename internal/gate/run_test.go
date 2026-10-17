@@ -48,6 +48,9 @@ func (s *safeBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(
 // testGate is a gate over a temp directory with two heavy slots, no QoS wrapper, no pressure and quick polling.
 func testGate(t *testing.T) (*Gate, *safeBuf) {
 	t.Helper()
+	// the assist host's assist.env exports PDX_GATE_RANK=back (local work goes first there): a test of the default rank must not meet it
+	t.Setenv(RankEnv, "")
+	t.Setenv(RankReasonEnv, "")
 	cfg := Defaults()
 	cfg.Dir = t.TempDir()
 	cfg.Slots.Heavy, cfg.Slots.Light = 2, 1
@@ -72,7 +75,7 @@ func testGate(t *testing.T) (*Gate, *safeBuf) {
 func cleanEnv(extra ...string) []string {
 	var env []string
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, HeldEnv+"=") || strings.HasPrefix(kv, "GOFLAGS=") {
+		if strings.HasPrefix(kv, HeldEnv+"=") || strings.HasPrefix(kv, "GOFLAGS=") || strings.HasPrefix(kv, RankEnv+"=") || strings.HasPrefix(kv, RankReasonEnv+"=") {
 			continue
 		}
 		env = append(env, kv)
@@ -91,7 +94,14 @@ func exists(path string) bool { _, err := os.Stat(path); return err == nil }
 
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
+	eventuallyFor(t, 5*time.Second, what, cond)
+}
+
+// eventuallyFor waits up to d for cond: a test whose condition needs a process of another host to get going (a loaded machine takes
+// seconds for that) waits for the event, with a long limit that only a hang reaches.
+func eventuallyFor(t *testing.T, d time.Duration, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(d)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return

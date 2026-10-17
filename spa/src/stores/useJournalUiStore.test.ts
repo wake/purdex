@@ -5,7 +5,7 @@ import { CARD_DEFAULT, CARD_MAX, CARD_MIN, cardWidth, useJournalUiStore } from '
 import { useViewMemo, patchUnitMemo } from '../lib/journal/use-view-memo'
 import { clearViewMemos } from '../lib/journal/view-memory'
 
-beforeEach(() => { localStorage.clear(); useJournalUiStore.setState({ lastWidths: {}, teamOpen: {} }); clearViewMemos() })
+beforeEach(() => { localStorage.clear(); useJournalUiStore.setState({ lastWidths: {} }); clearViewMemos() })
 
 describe('useJournalUiStore', () => {
   it('clamps a width and ignores a non-finite one', () => {
@@ -16,11 +16,11 @@ describe('useJournalUiStore', () => {
     useJournalUiStore.getState().setLastWidth('journal', NaN)
     expect(useJournalUiStore.getState().lastWidths.journal).toBe(CARD_MAX)
   })
-  it('opens the team card per team key and drops the key on close', () => {
-    useJournalUiStore.getState().setTeamOpen('h\u0000t1', true)
-    expect(useJournalUiStore.getState().teamOpen).toEqual({ 'h\u0000t1': true })
-    useJournalUiStore.getState().setTeamOpen('h\u0000t1', false)
-    expect(useJournalUiStore.getState().teamOpen).toEqual({})
+  it('an old save\'s team card state is dropped on load (the team card is gone, JV-2)', () => {
+    localStorage.setItem('purdex-journal-ui', JSON.stringify({ state: { lastWidths: { journal: 500, team: 400 }, teamOpen: { 'h\u0000t1': true } }, version: 1 }))
+    void useJournalUiStore.persist.rehydrate()
+    expect(useJournalUiStore.getState().lastWidths).toEqual({ journal: 500 })
+    expect('teamOpen' in useJournalUiStore.getState()).toBe(false)
   })
   it('a card width is the unit own, else the last used, else the default', () => {
     expect(cardWidth('tasks', 500, { tasks: 400 })).toBe(500)

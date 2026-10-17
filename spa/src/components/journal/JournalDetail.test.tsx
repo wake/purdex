@@ -25,14 +25,14 @@ vi.mock('../team/TeamSeatIcon', () => ({
 const UNIT = { kind: 'solo' as const, id: 'a', label: 'Solo A' }
 const AT = new Date(2026, 9, 14, 14, 5).getTime()
 const entry = (id: string, over: Partial<JournalEntry> = {}): JournalEntry => ({
-  id, kind: 'exec', by: '', at: AT, actor: 'Adam', text: `text ${id}`, refs: [], items: [], detail: '', pinned: false, ...over,
+  id, kind: 'exec', by: '', at: AT, actor: 'Adam', text: `text ${id}`, refs: [], items: [], detail: '', ...over,
 })
 const confirm = (id: string, over: Partial<JournalEntry> = {}) => entry(id, {
-  kind: 'confirm', actor: 'Kenji → Wake', pinned: true, detail: `original question of ${id}\nsecond line`,
+  kind: 'confirm', actor: 'Kenji → Wake', detail: `original question of ${id}\nsecond line`,
   items: [{ text: `${id} one`, done: true }, { text: `${id} two`, done: false }], ...over,
 })
 const C1 = confirm('c1', { at: AT + 1000 })
-const C2 = confirm('c2', { at: AT + 2000, pinned: false })
+const C2 = confirm('c2', { at: AT + 2000 })
 
 const observers = new Set<(w: number) => void>()
 class FakeRO {
@@ -44,14 +44,14 @@ class FakeRO {
 }
 const setWidth = (w: number) => act(() => { Object.defineProperty(window, 'innerWidth', { configurable: true, value: w }); window.dispatchEvent(new Event('resize')); observers.forEach((f) => f(w)) })
 const q = (id: string) => screen.queryByTestId(id)
-const rowOf = (id: string, area: 'journal-stream' | 'journal-pinned-band' = 'journal-stream') =>
+const rowOf = (id: string, area: 'journal-stream' | 'journal-confirm-band' = 'journal-stream') =>
   within(screen.getByTestId(area)).getAllByTestId('journal-entry').find((n) => n.getAttribute('data-entry-id') === id)!
 /** A 待確認 row opens its detail through its own labelled button (the row itself is a plain container). */
-const openOf = (id: string, area: 'journal-stream' | 'journal-pinned-band' = 'journal-stream') => within(rowOf(id, area)).getByTestId('journal-row-open')
+const openOf = (id: string, area: 'journal-stream' | 'journal-confirm-band' = 'journal-stream') => within(rowOf(id, area)).getByTestId('journal-row-open')
 
 let key = ''
 const mount = (over: { roadmapOpen?: boolean } = {}) => {
-  key = seedUnit(HOST, 'SA', UNIT, { entries: [entry('e1'), C1, C2], pinned: [C1], openConfirms: 3 })
+  key = seedUnit(HOST, 'SA', UNIT, { entries: [entry('e1'), C1, C2], confirms: [C1], openConfirms: 3 })
   patchViewMemo(HOST, key, { journalOpen: true, ...over })
   act(() => { useTabStore.setState({ activeTabId: 'a' }) })
   return render(<TeamDisplayProvider><CardStack /></TeamDisplayProvider>)
@@ -64,7 +64,7 @@ beforeEach(() => {
   localStorage.clear()
   resetTeamStores()
   useJournalStore.getState().reset()
-  useJournalUiStore.setState({ lastWidths: {}, teamOpen: {} })
+  useJournalUiStore.setState({ lastWidths: {} })
   clearViewMemos()
   clearModuleRegistry()
   useShownHostsStore.setState({ ids: [HOST] })
@@ -82,8 +82,8 @@ describe('the 待確認 detail', () => {
     expect(q('journal-detail-card')).toBeNull()
     fireEvent.click(openOf('c1'))
     const stack = screen.getByTestId('journal-card-stack')
-    expect([...stack.children].map((c) => (c as HTMLElement).dataset.testid)).toEqual(['journal-team-column', 'journal-card'])
-    expect(within(screen.getByTestId('journal-team-column')).getByTestId('journal-detail-card')).toBeTruthy()
+    expect([...stack.children].map((c) => (c as HTMLElement).dataset.testid)).toEqual(['journal-side-column', 'journal-card'])
+    expect(within(screen.getByTestId('journal-side-column')).getByTestId('journal-detail-card')).toBeTruthy()
     expect(screen.getByTestId('journal-detail-text').textContent).toBe('original question of c1\nsecond line')
     expect(within(screen.getByTestId('journal-detail-items')).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['c1 one', 'c1 two'])
     expect(screen.queryAllByRole('checkbox')).toEqual([])
@@ -178,9 +178,9 @@ describe('the 待確認 detail', () => {
     expect(screen.getByTestId('journal-detail-text').textContent).toContain('original question of c2')
     expect(readViewMemo(HOST, key).detailId).toBe('c2')
   })
-  it('a row of the pinned band opens it too', () => {
+  it('a row of the 待確認 band opens it too', () => {
     mount()
-    fireEvent.click(openOf('c1', 'journal-pinned-band'))
+    fireEvent.click(openOf('c1', 'journal-confirm-band'))
     expect(screen.getByTestId('journal-detail-text').textContent).toContain('original question of c1')
   })
   it('it takes the roadmap place; the roadmap memory is untouched and the roadmap is back once it closes (M: closing the roadmap)', () => {
@@ -248,7 +248,7 @@ describe('the 待確認 detail', () => {
 
 describe('ConfirmDetail alone', () => {
   const at = new Date(2026, 9, 14, 14, 5).getTime()
-  const base: JournalEntry = { id: 'c', kind: 'confirm', by: '', at, actor: 'Kenji → Wake', text: 'decide', refs: [], items: [{ text: 'one', done: false }, { text: 'two', done: true }], detail: 'q', pinned: false }
+  const base: JournalEntry = { id: 'c', kind: 'confirm', by: '', at, actor: 'Kenji → Wake', text: 'decide', refs: [], items: [{ text: 'one', done: false }, { text: 'two', done: true }], detail: 'q' }
   const stateText = () => screen.getByTestId('journal-detail-state').textContent
   beforeEach(() => { cleanup(); useI18nStore.getState().setLocale('en') })
   it('a closed detail no longer answers Esc (M: the listener is not removed on unmount)', () => {
@@ -260,13 +260,21 @@ describe('ConfirmDetail alone', () => {
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(onClose).toHaveBeenCalledTimes(1)
   })
-  it('says waiting, waiting (pinned) or resolved from the entry\'s state', () => {
+  it('says waiting or resolved from the entry\'s state', () => {
     const { rerender } = render(<ConfirmDetail entry={base} personName="Wake" onClose={() => {}} />)
     const waiting = stateText()
-    rerender(<ConfirmDetail entry={{ ...base, pinned: true }} personName="Wake" onClose={() => {}} />)
-    const waitingPinned = stateText()
-    rerender(<ConfirmDetail entry={{ ...base, pinned: true, items: base.items.map((i) => ({ ...i, done: true })) }} personName="Wake" onClose={() => {}} />)
+    rerender(<ConfirmDetail entry={{ ...base, items: base.items.map((i) => ({ ...i, done: true })) }} personName="Wake" onClose={() => {}} />)
     const resolved = stateText()
-    expect([waiting, waitingPinned, resolved]).toEqual(['Waiting for your reply', 'Waiting for your reply, pinned', 'All answered'])
+    expect([waiting, resolved]).toEqual(['Waiting for your reply', 'All answered'])
+  })
+  it('boxes call back with the item index and the new state; without the callback they are read-only', () => {
+    const onToggleItem = vi.fn()
+    const { rerender } = render(<ConfirmDetail entry={base} personName="Wake" onClose={() => {}} onToggleItem={onToggleItem} />)
+    const boxes = screen.getAllByTestId('journal-item-check')
+    fireEvent.click(boxes[0])
+    fireEvent.click(boxes[1])
+    expect(onToggleItem.mock.calls).toEqual([[0, true], [1, false]])
+    rerender(<ConfirmDetail entry={base} personName="Wake" onClose={() => {}} />)
+    expect(screen.queryAllByTestId('journal-item-check')).toEqual([])
   })
 })

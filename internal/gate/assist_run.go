@@ -17,6 +17,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -28,9 +30,15 @@ type AssistRun struct {
 	Repo string // the repo's name on the host (~/Assist/repos.noindex/<Repo>); "" is the top level's basename
 	SSH  string // the ssh program ("" = ssh)
 	Git  string // the git program ("" = git)
+	// Sigs are the interrupts to act on, when the caller already listens for them (a waiting gate does): then a signal that came while
+	// the snapshot, the push or the preparation ran is not lost, and nothing is started after it. nil: RunAssist listens itself.
+	Sigs <-chan os.Signal
 	// AdmitWait is how long the host's gate may take to admit the command (its --wait-max); 0 = 60 s.
 	AdmitWait time.Duration
 }
+
+// assistAfterPrepare is a seam for tests: it runs when the preparation on the host is done, before the command is started there.
+var assistAfterPrepare func()
 
 // AssistResult is what a run on an assist host came to.
 type AssistResult struct {
@@ -42,6 +50,13 @@ type AssistResult struct {
 	RunS      float64 // the run itself
 	Job       string
 	Err       error // why it did not start (or, after the start, what went wrong around it)
+	// Cancelled says a signal or the caller's context ended the run before it started (nothing to fall back to: the caller was cancelled).
+	Cancelled bool
+	// NotAdmitted says the host's gate did not admit the command within its wait (exit 75), which holds the host off for less.
+	NotAdmitted bool
+	// Uncertain says the connection went before the host's gate was seen to admit the command: it may have started there, so the
+	// command must not be run again somewhere else.
+	Uncertain bool
 	// CleanupErr is set when the job could not be removed from the host (it is left for the sweep of assist-check).
 	CleanupErr error
 }
@@ -179,8 +194,45 @@ func (g *Gate) RunAssist(ctx context.Context, o Options, a AssistRun) (res Assis
 	stderrW := outOr(o.Stderr, os.Stderr)
 	began := g.Now()
 	dir := g.cwdOf(o)
-	snap, err := SnapshotTree(ctx, a.Git, dir)
+	sigs := a.Sigs
+	if sigs == nil {
+		var stop func()
+		sigs, stop = g.signals()
+		defer stop()
+	}
+	// Until the command is started there, a signal ends the snapshot, the push or the preparation at once and nothing is started
+	// after it; from the start on, the loop below acts on it.
+	pre, cancelPre := context.WithCancel(ctx)
+	defer cancelPre()
+	var (
+		preSig    atomic.Value // the os.Signal that came before the start
+		preQuit   = make(chan struct{})
+		preExited = make(chan struct{})
+	)
+	go func() {
+		defer close(preExited)
+		select {
+		case s := <-sigs:
+			preSig.Store(s)
+			cancelPre()
+		case <-preQuit:
+		}
+	}()
+	var stopOnce sync.Once
+	// idempotent, and deferred at once: every way out of RunAssist stops the watcher, or it would take the next signal of the caller
+	stopWatching := func() { stopOnce.Do(func() { close(preQuit); <-preExited }) }
+	defer stopWatching()
+	signalled := func() (os.Signal, bool) { s, ok := preSig.Load().(os.Signal); return s, ok }
+	cancelledNow := func(s os.Signal) AssistResult {
+		res.Cancelled, res.Code, res.Err = true, 128+signalNumber(s), errors.New("cancelled")
+		return res
+	}
+	snap, err := SnapshotTree(pre, a.Git, dir)
 	if err != nil {
+		stopWatching()
+		if s, ok := signalled(); ok {
+			return cancelledNow(s)
+		}
 		return fail(fmt.Errorf("snapshot: %w", err))
 	}
 	repo := a.Repo
@@ -214,18 +266,40 @@ func (g *Gate) RunAssist(ctx context.Context, o Options, a AssistRun) (res Assis
 	if sshProg == "" {
 		sshProg = "ssh"
 	}
-	push := exec.CommandContext(ctx, gitProg, "-C", snap.Root, "push", "-q", "--force", a.Host+":Assist/repos.noindex/"+repo, snap.SHA+":refs/assist/"+a.Job)
+	push := exec.CommandContext(pre, gitProg, "-C", snap.Root, "push", "-q", "--force", a.Host+":Assist/repos.noindex/"+repo, snap.SHA+":refs/assist/"+a.Job)
 	push.Env = append(os.Environ(), "GIT_SSH_COMMAND="+shellQuote(sshProg)+" -o BatchMode=yes")
 	var perr bytes.Buffer
 	push.Stderr = &perr
+	push.WaitDelay = 2 * time.Second // a signal ends it: what it left behind must not hold this run
 	if err := push.Run(); err != nil {
+		stopWatching()
+		if s, ok := signalled(); ok {
+			return cancelledNow(s)
+		}
 		return fail(fmt.Errorf("push to %s: %w: %s", a.Host, err, strings.TrimSpace(perr.String())))
 	}
-	prep := a.sshCmd(ctx, remotePrepare, repo, a.Job, snap.SHA)
+	prep := a.sshCmd(pre, remotePrepare, repo, a.Job, snap.SHA)
 	var prepErr bytes.Buffer
 	prep.Stderr = &prepErr
+	prep.WaitDelay = 2 * time.Second
 	if err := prep.Run(); err != nil {
+		stopWatching()
+		if s, ok := signalled(); ok {
+			return cancelledNow(s)
+		}
 		return fail(fmt.Errorf("prepare on %s: %w: %s", a.Host, err, lastLines(prepErr.String(), 3)))
+	}
+	if assistAfterPrepare != nil {
+		assistAfterPrepare()
+	}
+	stopWatching()
+	if s, ok := signalled(); ok { // it came as the preparation ended: the command is not started
+		return cancelledNow(s)
+	}
+	select { // one that the watcher had not taken yet is still in the channel
+	case s := <-sigs:
+		return cancelledNow(s)
+	default:
 	}
 	res.TransferS = g.Now().Sub(began).Seconds()
 
@@ -251,8 +325,6 @@ PDX_GATE_ADMITTED_MARK=$nonce PDX_GATE_TAG="assist:$job" exec pdx gate --wait-ma
 	run.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	run.WaitDelay = 2 * time.Second // what the ssh left behind must not hold the output pipes, and this run, open for ever
 	g.say("running on %s (assist): %s", a.Host, strings.Join(truncateArgv(o.Argv), " "))
-	sigs, stop := g.signals()
-	defer stop()
 	if err := run.Start(); err != nil {
 		return fail(fmt.Errorf("ssh to %s: %w", a.Host, err))
 	}
@@ -284,8 +356,11 @@ loop:
 				res.Code = code
 			case cancelled:
 				res.Code = 130
+				res.Cancelled = true
 				res.Err = errors.New("cancelled")
 			default:
+				res.NotAdmitted = code == ExitRefused && !filter.sawNoStart
+				res.Uncertain = code == 255
 				res.Err = failedBeforeStart(a.Host, code, filter)
 			}
 			break loop

@@ -42,7 +42,7 @@ export function useHeaderGestures({ teamKey, mode, onSetMode, canEdit }: Input) 
   }, [])
   useEffect(() => clearTimer, [clearTimer]) // unmount
   useEffect(() => { clearTimer() }, [teamKey, mode, clearTimer]) // another team, or the mode changed under it
-  // line <-> full only: an enlarged (max) panel is left by its own control, not by a stray click on the header.
+  // line <-> full (there is no other pane state).
   const toggle = () => {
     const { mode: now, onSetMode: set } = latest.current
     if (now === 'full') set('line')

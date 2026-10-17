@@ -4,12 +4,16 @@
 // Memory only: a reload starts every unit closed, at the bottom. Bounded: the MAX_VIEW_MEMOS most recently used units are
 // kept, and a host the journal store forgets takes its memos with it (`useJournalStore.forgetHost`).
 
+import type { JournalEntry } from './types'
+
 export type JournalFilter = 'all' | 'exec' | 'task' | 'comm' | 'confirm'
 
 export interface ViewMemo {
   journalOpen: boolean
   roadmapOpen: boolean
   tasksOpen: boolean
+  /** 固定: a fixed card is not closed by a click outside it (U4); per card, default off. */
+  fixed: { journal: boolean; roadmap: boolean; tasks: boolean }
   /** Card widths in px; null = not set yet (the UI initialises it from the last used width). */
   widths: { journal: number | null; roadmap: number | null; tasks: number | null }
   filter: JournalFilter
@@ -19,6 +23,8 @@ export interface ViewMemo {
   pinnedToBottom: boolean
   /** The 待確認 entry whose detail is open (an entry id), if any. */
   detailId: string | null
+  /** The last copy of the open detail's entry that the unit held: kept once the entry leaves the band and the stream (every item answered). */
+  lastDetail: JournalEntry | null
 }
 
 export const MAX_VIEW_MEMOS = 200
@@ -36,8 +42,8 @@ const SEP = '\u0000'
 const keyOf = (hostId: string, unitKey: string): string => `${hostId}${SEP}${unitKey}`
 
 export const initialViewMemo = (): ViewMemo => ({
-  journalOpen: false, roadmapOpen: false, tasksOpen: false, widths: { journal: null, roadmap: null, tasks: null },
-  filter: 'all', scroll: 0, pinnedToBottom: true, detailId: null,
+  journalOpen: false, roadmapOpen: false, tasksOpen: false, fixed: { journal: false, roadmap: false, tasks: false }, widths: { journal: null, roadmap: null, tasks: null },
+  filter: 'all', scroll: 0, pinnedToBottom: true, detailId: null, lastDetail: null,
 })
 
 export function readViewMemo(hostId: string, unitKey: string): ViewMemo {

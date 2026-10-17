@@ -18,18 +18,18 @@ import { purdexStorage, STORAGE_KEYS } from '../lib/storage'
 import { panelMinWidth } from '../components/team/panel-layout'
 import { useUISettingsStore } from './useUISettingsStore'
 
-/** Where the panel area sits (team spec §4.4 Round 3): in the title bar, or in the pane as one line, the full list, or enlarged. */
-export type PanelMode = 'titlebar' | 'line' | 'full' | 'max'
+/** Where the panel area sits (team spec §4.4 Round 3): in the title bar, or in the pane as one line or the full list (no enlarged state: the user removed it, 2026-10-17). */
+export type PanelMode = 'titlebar' | 'line' | 'full'
 /** The states in the pane: what the area goes back to when it leaves the title bar. */
 export type PaneMode = Exclude<PanelMode, 'titlebar'>
-const isPaneMode = (v: unknown): v is PaneMode => v === 'line' || v === 'full' || v === 'max'
+const isPaneMode = (v: unknown): v is PaneMode => v === 'line' || v === 'full'
 const isPanelMode = (v: unknown): v is PanelMode => v === 'titlebar' || isPaneMode(v)
 
 interface Slices {
   /** Per team key, the member session ids in the order the person arranged (the lead is never in it). */
   memberOrder: Record<string, string[]>
   collapsed: Record<string, boolean>
-  /** Per team key, the four-state value; absent = `full` (R17). */
+  /** Per team key, the three-state value; absent = `full` (R17). */
   panelMode: Record<string, PanelMode>
   /** Per team key, the pane state the area left when it went to the title bar; absent = `full`. */
   panelLast: Record<string, PaneMode>
@@ -45,7 +45,7 @@ export interface DrillSeat { hostId: string; sessionId: string }
 export interface EndedSeat extends DrillSeat { title: string; endedAt: number }
 export const ENDED_SEATS_MAX = 20
 
-/** The panel area: its width in px, one value for the whole area (enlarging is the per-team `max` state). */
+/** The panel area: its width in px, one value for the whole area. */
 export interface PanelArea {
   width: number
   /**
@@ -72,15 +72,12 @@ const clampWidth = (w: number): number => Math.max(currentPanelMin(), Math.min(P
 interface TeamUiState extends Slices {
   panel: PanelArea
   setPanelWidth: (width: number) => void
-  /** The four-state value of tabs that belong to no team (WA-2b-1 reads it); starts in the title bar. */
+  /** The three-state value of tabs that belong to no team (WA-2b-1 reads it); starts in the title bar. */
   sharedPanelMode: PanelMode
   sharedPanelLast: PaneMode
   setSharedPanelMode: (mode: PanelMode) => void
   /** Title bar <-> the pane state last left, for the shared value (the title-bar button of a tab of no team). */
   toggleSharedTitleBar: () => void
-  /** An old store held `panel.expanded: true`: the team showing when the area first draws becomes `max` (TeamPanelArea). Not persisted. */
-  legacyMax: boolean
-  takeLegacyMax: (teamKey: string | null) => void
   setTeamDrill: (teamKey: string, seat: DrillSeat | null) => void
   /** Add seats that just left the team (first = newest); a seat already listed is not recorded again. Cap ENDED_SEATS_MAX. */
   recordEndedSeats: (teamKey: string, seats: readonly EndedSeat[]) => void
@@ -163,18 +160,18 @@ function healEnded(v: unknown): EndedSeat[] {
 }
 
 /** Persisted data is untrusted: keep only well-formed entries of each slice. */
-function heal(persisted: unknown): Slices & { panel: PanelArea; sharedPanelMode: PanelMode; sharedPanelLast: PaneMode; legacyMax: boolean } {
+function heal(persisted: unknown): Slices & { panel: PanelArea; sharedPanelMode: PanelMode; sharedPanelLast: PaneMode } {
   const p = isRecord(persisted) ? persisted : {}
   const entries = (v: unknown) => (isRecord(v) ? Object.entries(v).filter(([k]) => !DANGEROUS.has(k)) : [])
   return {
     memberOrder: Object.fromEntries(entries(p.memberOrder).filter(([, v]) => Array.isArray(v) && v.every((x) => typeof x === 'string'))) as Slices['memberOrder'],
     collapsed: Object.fromEntries(entries(p.collapsed).filter(([, v]) => v === true)) as Slices['collapsed'],
-    // An old store kept only `line` here (`full` was the absence); `full` stays the absence in the four-state value too.
+    // An old store kept only `line` here (`full` was the absence); `full` stays the absence in the three-state value too.
     panelMode: Object.fromEntries(entries(p.panelMode).filter(([, v]) => isPanelMode(v) && v !== 'full')) as Slices['panelMode'],
     panelLast: Object.fromEntries(entries(p.panelLast).filter(([, v]) => isPaneMode(v) && v !== 'full')) as Slices['panelLast'],
-    sharedPanelMode: isPanelMode(p.sharedPanelMode) ? p.sharedPanelMode : 'titlebar',
-    sharedPanelLast: isPaneMode(p.sharedPanelLast) ? p.sharedPanelLast : 'full',
-    legacyMax: isRecord(p.panel) && p.panel.expanded === true,
+    // The removed `max` reads as `full` here as well (like each team's), not as the fallback.
+    sharedPanelMode: p.sharedPanelMode === 'max' ? 'full' : isPanelMode(p.sharedPanelMode) ? p.sharedPanelMode : 'titlebar',
+    sharedPanelLast: p.sharedPanelLast === 'max' ? 'full' : isPaneMode(p.sharedPanelLast) ? p.sharedPanelLast : 'full',
     ghostWorkspace: Object.fromEntries(entries(p.ghostWorkspace).filter(([, v]) => typeof v === 'string' && v !== '')) as Slices['ghostWorkspace'],
     teamDrill: Object.fromEntries(entries(p.teamDrill).filter(([key, v]) => isRecord(v) && typeof v.hostId === 'string' && v.hostId !== ''
       && keyHost(key) !== null && typeof v.sessionId === 'string' && v.sessionId !== '').map(([k, v]) => [k, { hostId: (v as DrillSeat).hostId, sessionId: (v as DrillSeat).sessionId }])),
@@ -204,12 +201,6 @@ export const useTeamUiStore = create<TeamUiState>()(
       toggleSharedTitleBar: () => {
         const s = get()
         s.setSharedPanelMode(s.sharedPanelMode === 'titlebar' ? s.sharedPanelLast : 'titlebar')
-      },
-      legacyMax: false,
-      takeLegacyMax: (teamKey) => {
-        if (!get().legacyMax) return
-        set({ legacyMax: false })
-        if (teamKey !== null) get().setPanelMode(teamKey, 'max')
       },
       setTeamDrill: (teamKey, seat) => set((s) => {
         if (seat === null) return teamKey in s.teamDrill ? { teamDrill: without(s.teamDrill, (k) => k === teamKey) } : s

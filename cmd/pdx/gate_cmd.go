@@ -36,6 +36,7 @@ const gateUsage = `usage: pdx gate [--class heavy|light] [--auto] [--tool <name>
   --tool   a shim's call: the command is <name> followed by the words after --; the real binary is looked up on PATH
            without the shim directory, at this run; a command that is not heavy or light is run at once, unqueued
   PDX_GATE_RANK=back  in the environment: this command's ticket is queued at rank back (served after every normal one); PDX_GATE_RANK_REASON=<one line> says why. Other values are ignored
+  history  the commands that were offered to an assist host: where they ran, how long, why a send failed (pdx gate history --help)
   hosts    the assist hosts for this session and the repo of this directory: which are on, ready and allowed, and why not (see pdx assist)
   would-wait  would a command of that class (or, with --auto, this command by its words) wait for a slot right now? (fast: no daemon, no process started, takes nothing;
            for a hook that decides whether to run a call in the background). Prints the reason and a line for an agent to read
@@ -71,6 +72,8 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 			return gateSet(args[1:], stdout, stderr)
 		case "hosts":
 			return gateHosts(args[1:], stdout, stderr)
+		case "history":
+			return gateHistory(args[1:], stdout, stderr)
 		case "profile":
 			return gateProfile(args[1:], stdout, stderr)
 		}
@@ -162,15 +165,15 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 	g := gate.New(cfg)
 	g.Stderr = stderr
 	g.Load = gateReloader(*cfgPath, cfg)
-	if *assistHost != "" {
-		res := g.RunAssist(context.Background(), gate.Options{Argv: command, Stdout: stdout, Stderr: stderr}, gate.AssistRun{Host: *assistHost, SSH: *assistSSH})
-		if !res.Started {
-			fmt.Fprintf(stderr, "pdx gate: %v: the command was not run on %s\n", res.Err, *assistHost)
-			return gate.ExitRefused
-		}
-		return res.Code
+	var target *gate.AssistTarget
+	if *assistHost != "" { // a failure there puts the command back in the queue here
+		target = &gate.AssistTarget{Host: *assistHost, SSH: *assistSSH}
 	}
-	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Real: realBin, Class: c, ClassSource: *classSource, Foreground: *fg, WaitMax: time.Duration(*waitMax * float64(time.Second)), Stdout: stdout, Stderr: stderr})
+	var walk *gate.AssistWalk
+	if target == nil && *waitMax <= 0 { // a run sent here from another host (--wait-max) is not sent on
+		walk = gateAssistWalk(*cfgPath, cfg.Dir)
+	}
+	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Real: realBin, Class: c, ClassSource: *classSource, Foreground: *fg, WaitMax: time.Duration(*waitMax * float64(time.Second)), Stdout: stdout, Stderr: stderr, Assist: target, Walk: walk})
 	return code
 }
 
