@@ -490,6 +490,7 @@ func TestUninstallStopsEvenWhenTheDefinitionIsGone(t *testing.T) {
 	}
 	f.calls = nil
 	f.failOn["systemctl is-active"] = true // inactive once stopped
+	f.says = map[string]string{"systemctl is-active": "inactive"}
 	if err := in.Uninstall(ctx, false); err != nil {
 		t.Fatal(err)
 	}
@@ -498,8 +499,7 @@ func TestUninstallStopsEvenWhenTheDefinitionIsGone(t *testing.T) {
 	}
 	// a unit systemd says it does not know is fine
 	f.failOn["sudo systemctl disable"] = true
-	f.says = map[string]string{"sudo systemctl disable": "Failed to disable unit: Unit file wwd.service does not exist."}
-	f.failOn["systemctl is-active"] = true // inactive
+	f.says["sudo systemctl disable"] = "Failed to disable unit: Unit file wwd.service does not exist."
 	if err := in.Uninstall(ctx, false); err != nil {
 		t.Errorf("an unknown unit should not fail the uninstall: %v", err)
 	}
@@ -515,6 +515,13 @@ func TestUninstallStopsEvenWhenTheDefinitionIsGone(t *testing.T) {
 	}
 	if _, err := os.Stat(in.BinPath()); err != nil {
 		t.Error("the binary was deleted under a running service")
+	}
+	// a state query that itself fails (no systemd, no D-Bus) proves nothing either
+	delete(f.failOn, "sudo systemctl stop")
+	f.failOn["systemctl is-active"] = true
+	f.says["systemctl is-active"] = "Failed to connect to bus"
+	if err := in.Uninstall(ctx, false); err == nil {
+		t.Error("an unreadable service state was taken as stopped")
 	}
 }
 
