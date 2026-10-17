@@ -109,8 +109,8 @@ func TestJournalFeed_CurrentTaskAgreesWithTheTeamView(t *testing.T) {
 	}
 }
 
-// LastReports: one row per member_key, the newest; created_at ties go to the greater rowid (insertion order), not the
-// greater id; another team's reports are not mixed in; a team with none answers an empty list; a store error is an error.
+// LastReports: one row per member_key, the newest; created_at ties go to the greater rowid (later stored), not the
+// greater report id (a UUID, no order); another team's reports are not mixed in; a team with none answers an empty list; a store error is an error.
 // Mutation: drop `rowid DESC` from the ORDER BY → the tie case reads the wrong report and goes red.
 func TestJournalFeed_LastReports(t *testing.T) {
 	s := openTestStore(t)
@@ -121,7 +121,7 @@ func TestJournalFeed_LastReports(t *testing.T) {
 	seedMember(t, s, "op-b", tTeamB, "sess-b", 4)
 	mustCreateTask(t, s, newTask(tTeamA, "op-1", "t", 5))
 	mustCreateTask(t, s, newTask(tTeamB, "op-b", "t", 5))
-	// op-1: three reports, the newest inserted in the middle; op-2: a tie on created_at where the greater id went in last (the primary key order would pick the smaller)
+	// op-1: three reports, the newest inserted in the middle; op-2: a tie on created_at where the greater id is the later stored one (greater rowid) (the primary key order would pick the smaller)
 	mustInsertReport(t, s, newReport(tTeamA, 1, "op-1", team.ReportProgress, 1, 100))
 	mustInsertReport(t, s, newReport(tTeamA, 1, "op-1", team.ReportReady, 2, 300))
 	mustInsertReport(t, s, newReport(tTeamA, 1, "op-1", team.ReportProgress, 3, 200))
