@@ -165,6 +165,23 @@ describe('the 團隊 and 工作簿 buttons (journal host)', () => {
     expect(stack().style.right).toBe('12px')
   })
 
+  it('while the panel edge is being dragged the cards already follow (before mouseup); the store is written on mouseup only', () => {
+    patchViewMemo(HOST, `team:${UNIT.id}`, { journalOpen: true })
+    useTeamUiStore.setState({ panel: { width: 400, followsMin: false } })
+    render(<Shell />)
+    const stack = () => screen.getByTestId('journal-card-stack')
+    const hit = within(screen.getByTestId('team-panel-area')).getByTestId('resize-hit')
+    expect(stack().style.right).toBe('424px')
+    fireEvent.mouseDown(hit, { clientX: 500 })
+    fireEvent.mouseMove(document, { clientX: 450 }) // the left edge moves 50 left: 400 -> 450
+    expect(screen.getByTestId('team-panel-area').style.width).toBe('450px')
+    expect(stack().style.right).toBe('474px')
+    expect(useTeamUiStore.getState().panel.width).toBe(400)
+    fireEvent.mouseUp(document)
+    expect(useTeamUiStore.getState().panel.width).toBe(450)
+    expect(stack().style.right).toBe('474px')
+  })
+
   it('a tab of no team has no panel and no 團隊 button, and the cards use the whole width', () => {
     addTab(ccTabOf('solo', HOST, 'solo-tm', 'S9'))
     seedUnit(HOST, 'S9', { kind: 'solo', id: 'c9', label: 'solo' })
