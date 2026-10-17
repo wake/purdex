@@ -31,6 +31,10 @@ func originPane(origin string) string {
 	return ""
 }
 
+// The pane id alone names the pane, not the session name in the Origin: the registry keeps the name the agent started under, and a
+// renamed tmux session is still the same pane (TestBuild_SessionRowTracksLiveTmuxRename). A pane id a restarted tmux hands out again
+// cannot reach a LIVE entry: the agent process died with the old server.
+//
 // paneIdentityOf reads the pane an Origin.Tmux names; false when it is not in tmux, tmux is not wired, or tmux does not answer.
 func (m *Module) paneIdentityOf(ctx context.Context, origin string) (tmux.PaneIdentity, bool) {
 	pane := originPane(origin)
