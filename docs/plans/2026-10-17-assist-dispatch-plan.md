@@ -65,8 +65,9 @@ and writers, and its requeue lossy; contracts 7–11 below answer it.
    own process group, with a timeout (on 120 s, off 90 s, check 30 s; at the timeout the group is ended); stdout is one
    JSON object, stderr free text (written to the daemon log).
    - `assist-on` and `assist-off` take a **host-side switch lock** for their whole run (`mkdir ~/Assist/.switch.lock`
-     with the pid inside; a lock whose pid is gone is taken over), so two runs on one host — also one left by a daemon
-     that died and the one its restart starts — never interleave. Both are idempotent.
+     with the pid and the time inside; a lock whose pid is gone, or that is older than 3 min — longer than either
+     script's timeout, so a pid reused after a reboot cannot keep it — is taken over), so two runs on one host — also one
+     left by a daemon that died and the one its restart starts — never interleave. Both are idempotent.
    - `assist-on --json` → `{"ok":bool,"switch":"on","detail":"<line>"}`; removes `~/Assist/.closing`, writes
      `~/Assist/.on`.
    - `assist-off --apply --json` → writes `~/Assist/.closing` first, then for every `~/Assist/jobs.noindex/<job>.pid`
@@ -93,9 +94,13 @@ and writers, and its requeue lossy; contracts 7–11 below answer it.
    (409 `busy` — also across a restart, until the reconciler ends it), else write `On` = asked, `Op`, a new `Gen`; run the
    script; under the lock clear `Op` (on that failed → `On=false`, reason kept). Off is therefore recorded before its
    script runs (nothing is sent from that moment), and on counts only after a check of the new generation says on.
-   **The reconciler** runs at daemon start and at every poll: an `Op` left by a daemon that died is run again once (on:
-   `assist-on`, then concluded by its answer; off: `assist-off --apply`); asked off but the last check says on or
-   closing → off again (contract 5).
+   **One runner per host in the daemon.** Every switch script — a route's and the reconciler's — runs through the
+   module's per-host runner: a mutex held from claiming the `Op` to clearing it, and a set of the `Op.ID`s running in
+   this process. **The reconciler** runs at daemon start and at every poll: an `Op` whose id is not running here (left
+   by a daemon that died) is run again once — after taking the runner and re-reading `assist.json` under the lock to
+   confirm the same `Op.ID` is still there (on: `assist-on`, then concluded by its answer; off: `assist-off --apply`);
+   asked off with no `Op` but the last check says on or closing → a new off `Op` (contract 5). A route never waits on
+   the runner: an `Op` present answers 409 `busy`.
 8. **One writer per file.** `assist.json`: the daemon's assist module only (the CLI and the panel go through its API),
    under `assist.lock`. `assist-ready.json` (`{host: {gen, at, answer}}`): the poller only. `assist-notified.json` (X1b):
    the notifier only. `assist-hold/<host>[.<repo>].json` (`{until, why}`, X2): written by gates (many processes) under
@@ -103,7 +108,8 @@ and writers, and its requeue lossy; contracts 7–11 below answer it.
    `Gen` (a readiness whose `gen` differs from the host's `Gen` counts as no check), so no read order can pair a new
    switch with an old check.
 9. **The dispatch slot and the host's own gate.** A host is a candidate only when, read in one ssh right before the send,
-   its gate would start the command now (`pdx gate would-wait --class <c> --json` on air26; mserv has no gate) and its
+   its gate would start this command now (`pdx gate would-wait --auto --json -- <argv>` on air26, the command's own argv
+   so its class and air26's conflict rules apply; mserv has no gate) and its
    load is within its limits (contract 10). The mlab gate holds the `assist-<host>-<k>` slot (an ordinary slot lock,
    so the OS lets it go if the gate dies) from the send until the run ends, and lets it go **before** its ticket returns
    to the queue. The remote `pdx gate` runs with a new option `--wait-max 60` (X2a): admitted within 60 s, else it exits
@@ -164,7 +170,10 @@ allow and deny of one entry at once end as the lock order leaves them and both p
 the script ok / failing / timing out (the group ended); off is on disk before its script runs (a fake script that blocks,
 the file read meanwhile); a second switch of the same host → 409, of another host → runs; **restart**: a file with an
 `Op` on (and with one off) left behind → the reconciler runs that script once and concludes; while it runs a new switch
-is 409; asked off with the last check on or closing → off runs again; asked on with the host off → not usable, nothing
+is 409; a route's switch still running when a poll comes → the reconciler runs nothing (its id is running here), and a
+poll between the route's clearing of `Op` and a new opposite switch runs nothing either; a host lock left by a dead pid,
+and one older than 3 min with a live unrelated pid, are taken over; asked off with the last check on or closing → off
+runs again; asked on with the host off → not usable, nothing
 run. Generation: a check of an older gen does not count (switch on, then the old check still in the ready file → not
 usable until the new check); a host removed and added again does not meet its old check; changing ssh or scripts takes a
 new gen. Admin only (device token 403). Allow by team id, by a unique name, by an ambiguous name (refused, both listed),
