@@ -1091,6 +1091,7 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 	} else {
 		// New frame: insert via Upsert. No existing subagents to clobber;
 		// start the row with an empty list.
+		m.bumpTmuxGen() // a new frame may sit in a pane the shared listing has not seen
 		stored, err = m.frames.Upsert(store.Frame{
 			PaneID:           req.TmuxPaneID,
 			AgentType:        req.AgentType,
@@ -1518,7 +1519,104 @@ func isSubagentToolUse(req EventRequest, result agentpkg.DeriveResult) bool {
 	return id != ""
 }
 
+// projectionForSession reads sessionName's projection. With a tmux it reads only that session's panes' frames, from the
+// shared pane listing (#3092 A); the result equals projectionForSessionGlobal's by construction (every step after the read is
+// per pane and the global path discards other sessions' panes).
 func (m *Module) projectionForSession(sessionName string) (*SessionProjection, error) {
+	if m.frames == nil {
+		return nil, nil
+	}
+	if m.listFramesFn != nil || m.tmux == nil {
+		return m.projectionForSessionGlobal(sessionName)
+	}
+	snap, fromCache, err := m.cachedPaneSnapshot(false)
+	if err != nil {
+		return nil, err
+	}
+	if snap == nil {
+		return m.projectionForSessionGlobal(sessionName)
+	}
+	if snap.fallback {
+		return m.projectionForSessionFallback(sessionName, snap)
+	}
+	ids := snap.sessionPaneCandidates(sessionName)
+	if len(ids) == 0 && fromCache {
+		// A session the cached listing does not know may be brand new: list once more before concluding it is absent.
+		if snap, _, err = m.cachedPaneSnapshot(true); err != nil {
+			return nil, err
+		}
+		if snap == nil {
+			return m.projectionForSessionGlobal(sessionName)
+		}
+		if snap.fallback {
+			return m.projectionForSessionFallback(sessionName, snap)
+		}
+		ids = snap.sessionPaneCandidates(sessionName)
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	frames, err := m.frames.ListByPanes(ids)
+	if err != nil {
+		return nil, err
+	}
+	if len(frames) == 0 {
+		return nil, nil
+	}
+	// An Ambiguous pane belongs to sessionName only if tmux says so for that pane alone.
+	names := make(map[string]string)
+	nameOf := func(paneID string) string {
+		if n, ok := names[paneID]; ok {
+			return n
+		}
+		n := snap.sessionName(paneID)
+		names[paneID] = n
+		return n
+	}
+	kept := frames[:0]
+	for _, f := range frames {
+		if nameOf(f.PaneID) == sessionName {
+			kept = append(kept, f)
+		}
+	}
+	frames = m.filterProjectionFrames(kept, snap)
+	if snap.expired() {
+		return nil, errExpired()
+	}
+	projections := BuildSessionProjections(frames)
+	m.applyModOverlay(projections)
+	sel := m.selectSessionProjectionBy(sessionName, projections, nameOf)
+	if snap.expired() {
+		return nil, errExpired() // a name that timed out is unreadable, not "no session here" (#717)
+	}
+	return sel, nil
+}
+
+// projectionForSessionFallback is the global read over a snapshot already taken (the batch call failed without timing out,
+// so panes can only be asked one by one and the session's panes cannot be listed).
+func (m *Module) projectionForSessionFallback(sessionName string, snap *paneSnapshot) (*SessionProjection, error) {
+	frames, err := m.frames.ListAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(frames) == 0 {
+		return nil, nil
+	}
+	projections, snap, err := m.projectionsFromFrames(frames, snap)
+	if err != nil {
+		return nil, err
+	}
+	sel := m.selectSessionProjectionBy(sessionName, projections, m.paneNameFunc(snap))
+	if snap.expired() {
+		return nil, errExpired()
+	}
+	return sel, nil
+}
+
+// projectionForSessionGlobal is the full-table read projectionForSession is equivalent to: every frame of every session,
+// filtered, then the session's own pane picked. Kept for the no-tmux / batch-failed / test-seam cases and as the reference
+// the scoped read is tested against.
+func (m *Module) projectionForSessionGlobal(sessionName string) (*SessionProjection, error) {
 	projections, snap, err := m.liveFrameProjectionsWithSnapshot()
 	if err != nil {
 		return nil, err

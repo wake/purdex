@@ -62,5 +62,6 @@ func (m *Module) claimFrameEnd(frame store.Frame, requireSessionID string, exit 
 	// reported (before the callers project and emit the new state).
 	m.forgetHookBackground(frame.FrameID)
 	m.forgetHookEdge(frame.FrameID)
+	m.bumpTmuxGen()
 	return exit, true, nil
 }

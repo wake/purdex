@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync/atomic"
 
@@ -390,6 +391,56 @@ func (s *FramesStore) ListAll() ([]Frame, error) {
 	}
 	defer rows.Close()
 	return collectFrames(rows)
+}
+
+// framesByPanesChunk keeps one query under SQLite's host-parameter limit.
+const framesByPanesChunk = 500
+
+// ListByPanes is ListAll restricted to the given panes: the same rows, decoded
+// the same way, in the same (pane_id, started_at) order. Duplicate and unknown
+// pane ids are fine; an empty list reads nothing.
+func (s *FramesStore) ListByPanes(paneIDs []string) ([]Frame, error) {
+	if len(paneIDs) == 0 {
+		return nil, nil
+	}
+	ids := append([]string(nil), paneIDs...)
+	sort.Strings(ids)
+	uniq := ids[:0]
+	for i, id := range ids {
+		if i == 0 || id != ids[i-1] {
+			uniq = append(uniq, id)
+		}
+	}
+	var out []Frame
+	for start := 0; start < len(uniq); start += framesByPanesChunk {
+		end := start + framesByPanesChunk
+		if end > len(uniq) {
+			end = len(uniq)
+		}
+		chunk := uniq[start:end]
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+		rows, err := s.db.Query(`
+		SELECT frame_id, pane_id, agent_type, pid, ppid, process_start_time,
+		       parent_frame_id, subagents_json, status, started_at, last_seen_at, verified,
+		       session_id, cwd, transcript_path
+		FROM agent_frames
+		WHERE pane_id IN (?`+strings.Repeat(",?", len(chunk)-1)+`)
+		ORDER BY pane_id ASC, started_at ASC
+	`, args...)
+		if err != nil {
+			return nil, err
+		}
+		frames, err := collectFrames(rows)
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, frames...)
+	}
+	return out, nil
 }
 
 func (s *FramesStore) Delete(frameID string) error {
