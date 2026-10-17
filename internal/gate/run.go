@@ -95,6 +95,9 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 			}
 			if tk.Slot != nil {
 				ticket.Drop()
+				if prevHold && !pollAt.IsZero() {
+					heldFor += g.Now().Sub(pollAt) // the last stretch: held at the previous poll, served now
+				}
 				d.Rank, d.HeldS = rankName(tk.Rank), heldFor.Seconds()
 				if !waitStart.IsZero() {
 					d.WaitS = g.Now().Sub(waitStart).Seconds()

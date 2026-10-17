@@ -105,6 +105,28 @@ func TestRankRun_AHoldWithAnUntilEndsByItself(t *testing.T) {
 	assert.Equal(t, 0, (<-w).code, "after the until it is served")
 }
 
+// The stretch between the last poll that found the ticket held and the poll that serves it is held time too: a hold set back right
+// away still adds up to about one poll. Mutation gate: the last stretch dropped → held_s is 0 (red).
+func TestRankRun_HeldSecondsIncludeTheStretchUpToTheGrant(t *testing.T) {
+	g, errs := testGate(t)
+	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1 })
+	g.Poll = func() time.Duration { return 300 * time.Millisecond }
+	release, holder := holderOf(t, g)
+	dir := t.TempDir()
+	w := runAsync(g, context.Background(), Options{Argv: sh(": heldlast; touch " + dir + "/ran"), Class: ClassHeavy})
+	ws := queuedTickets(t, g, 1)
+	_, err := g.MoveTicket(ClassHeavy, ws[0].Ticket, RankHold, "sess-w", "briefly", time.Time{})
+	require.NoError(t, err)
+	eventually(t, "the hold line", func() bool { return strings.Contains(errs.String(), "on hold") }) // a poll has found it held
+	release()
+	<-holder
+	_, err = g.MoveTicket(ClassHeavy, ws[0].Ticket, RankNormal, "sess-w", "", time.Time{})
+	require.NoError(t, err)
+	assert.Equal(t, 0, (<-w).code)
+	rec := lastDecisionOf(t, g, ": heldlast")
+	assert.Greater(t, rec["held_s"], 0.1, "the stretch up to the grant counts")
+}
+
 // The would-wait hint: back and held tickets do not make a new command wait; a front or normal one does. Tickets made by hand in a
 // pool nobody serves keep the state still. Mutation gate: every ticket counted (the old PeekWaiting) → red.
 func TestRankRun_WouldWaitPassesBackAndHeldTickets(t *testing.T) {
