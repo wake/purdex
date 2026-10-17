@@ -34,6 +34,7 @@
 - **daemon CPU 突增（#3092）**：驗證 hook 時不再 fork `ps`（每次 48.5 ms → 0.18 ms，PR #3136）；team sweeper 每輪只讀一次 peers registry（PR #3150）；hook 只讀該 session 的 frames 並共用 pane 列表（每次 1.8 ms → 0.2 ms，`tmux list-panes` 從每次一次降到約每 2 秒一次，PR #3161）。
 - **模擬器的記憶體被重複加總**：樹超過門檻時改用 footprint，`launchd_sim` 樹只看 CPU（#3072，PR #3134）。
 - 測試：`main.test.tsx` 的啟動測試不再在負載下逾時（#3027，PR #3165）。
+- 輔測派工的子行程改經 `execstat` 計數（PR #3170）。
 
 ### 文件
 
@@ -41,7 +42,11 @@
 
 ### 發版測試
 
-TBD
+- 切點 eba48d594（之後 merge 的歸 750）；部署的執行檔建在這個切點的 bump commit 上。全部在 air26 輔測跑。
+- vitest 全套 1066 檔／19631 項全過（`--maxWorkers=3`）、`tsc -b --force` 綠、`make lint` 綠；`go test -p 3 ./...` 在 39248b1d9 上只有兩紅：
+  - `internal/execstat` 的 fork 守門測試：輔測派工的 4 個檔直接用 `exec.Command`（各張 PR 都沒跑這個掃描整個 repo 的守門測試）→ #3170 修正（daemon 側改走 `execstat`，CLI 側登記 `cliOnly`），切點改到它之後，重跑 `execstat`、`gate`、`module/assist`、`make lint` 全綠。
+  - `internal/hostmem` 的 `TestMach_VMAgreesWithVMStat`：兩次讀取之間空閒頁數差 27887（容許 20000），主機滿載所致；單獨跑 3 次全綠、749 沒改 hostmem → 開 #3168。
+- mod 的 hook 測試沿用 748（hooks 未改）。Electron 未改。
 
 ## [1.0.0-alpha.748] - 2026-10-17
 
