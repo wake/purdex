@@ -11,7 +11,7 @@ import { useSessionStore } from '../../stores/useSessionStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
-import { currentMemberKeys } from '../team/member-set'
+import { currentMemberKeys, useMemberSetStore } from '../team/member-set'
 import { teamHostMap } from '../team/team-state'
 import { badgeReport, knownSessionIdsOf, type BadgeReport } from './badge-report'
 
@@ -59,6 +59,9 @@ export function startBadgeReporter(): () => void {
     useSessionStore.subscribe((s, p) => { if (s.sessions !== p.sessions) schedule() }),
     // Joining or leaving a team changes who counts (member spec R2), with no unread or tab change to say so.
     useTeamRosterStore.subscribe((s, p) => { if (s.byHost !== p.byHost) schedule() }),
+    // The shared member set itself: a connection closing or a session list landing changes membership with no roster
+    // frame (member spec R4). Same Set instance while membership is unchanged, so this never schedules for nothing.
+    useMemberSetStore.subscribe((s, p) => { if (s.keys !== p.keys) schedule() }),
     // A remote member's host comes from the verified daemon-id map: compare its text, `runtime` changes with every latency sample.
     useHostStore.subscribe((s, p) => { if (JSON.stringify(teamHostMap(s)) !== JSON.stringify(teamHostMap(p))) schedule() }),
   ]

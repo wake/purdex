@@ -32,6 +32,7 @@ beforeEach(() => {
   useHookCardStore.getState().reset()
   useTeamRosterStore.getState().reset()
   useSessionStore.setState({ sessions: { h1: [{ code: 'aaaaaa', name: 'work', cwd: '/', mode: 'terminal' }] } })
+  useTeamRosterStore.getState().markSessionsLive('h1')
   useTabStore.setState({ tabs: { [tab.id]: tab }, tabOrder: [tab.id], activeTabId: null })
   Object.defineProperty(window, 'electronAPI', { value: { badge: { set } }, writable: true, configurable: true })
 })
@@ -61,6 +62,7 @@ describe('startBadgeReporter — team members (R2)', () => {
 
   it('R4: before the host\'s session list arrives the seat maps to nothing, so the unread still counts', () => {
     useSessionStore.setState({ sessions: {} })
+    useTeamRosterStore.getState().dropConnection('h1')
     stop = startBadgeReporter()
     useTeamRosterStore.getState().apply('h1', [roster(['work'])])
     vi.advanceTimersByTime(BADGE_DEBOUNCE_MS)
@@ -68,7 +70,22 @@ describe('startBadgeReporter — team members (R2)', () => {
     expect(set).toHaveBeenLastCalledWith({ sessions: ['h1:aaaaaa'], cards: [] })
 
     useSessionStore.setState({ sessions: { h1: [{ code: 'aaaaaa', name: 'work', cwd: '/', mode: 'terminal' }] } })
+    useTeamRosterStore.getState().markSessionsLive('h1')
     vi.advanceTimersByTime(BADGE_DEBOUNCE_MS)
     expect(set).toHaveBeenLastCalledWith({ sessions: [], cards: [] })
+  })
+
+  it('R4: a connection drop alone (no roster / session / unread change) re-sends the report with the unread counted again', () => {
+    useTeamRosterStore.getState().apply('h1', [roster(['work'])])
+    useTeamRosterStore.getState().markSessionsLive('h1')
+    stop = startBadgeReporter()
+    vi.advanceTimersByTime(BADGE_DEBOUNCE_MS)
+    expect(set).toHaveBeenLastCalledWith({ sessions: [], cards: [] })
+    const calls = set.mock.calls.length
+
+    useTeamRosterStore.getState().dropConnection('h1')
+    vi.advanceTimersByTime(BADGE_DEBOUNCE_MS)
+    expect(set).toHaveBeenCalledTimes(calls + 1)
+    expect(set).toHaveBeenLastCalledWith({ sessions: ['h1:aaaaaa'], cards: [] })
   })
 })
