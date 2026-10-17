@@ -2,6 +2,7 @@ package watch
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -171,4 +172,59 @@ func TestHandledRecord_CarriesTheAckInTheLogJSON(t *testing.T) {
 	require.Contains(t, string(raw), `"handled":true`)
 	require.Contains(t, string(raw), `"note":"ok"`)
 	require.Contains(t, string(raw), `"id":"`+r.ID+`"`, "the record's own fields are still there, flat")
+}
+
+// A rename that went through and a directory sync that failed after it is a committed ack: the file has it, so memory has it too, and a
+// later ack does not rewrite the file without it.
+func TestAckStore_ARenameThatWentThroughIsCommittedEvenIfTheDirectorySyncFailed(t *testing.T) {
+	c := newOutboxClock()
+	s, dir := openAcks(t, c)
+	known := func(string) bool { return true }
+	old := syncDir
+	syncDir = func(string) error { return errors.New("sync failed") }
+	t.Cleanup(func() { syncDir = old })
+
+	res, err := s.Ack([]string{"mlab-1"}, known, Ack{Note: "first"})
+	require.NoError(t, err, "the ack is on disk: not a failure")
+	require.Equal(t, []AckResult{{ID: "mlab-1", Outcome: AckHandled}}, res)
+	require.True(t, s.Handled("mlab-1"))
+
+	syncDir = old
+	_, err = s.Ack([]string{"mlab-1", "mlab-2"}, known, Ack{Note: "second"})
+	require.NoError(t, err)
+	again, err := OpenAcks(dir, c.now)
+	require.NoError(t, err)
+	a, ok := again.Get("mlab-1")
+	require.True(t, ok, "the first ack is still in the file")
+	require.Equal(t, "first", a.Note, "and its note is the first")
+	require.True(t, again.Handled("mlab-2"))
+}
+
+// A line of the file that is not an ack is not dropped quietly: the file is kept as acks.jsonl.bad, the acks that could be read go
+// on, and the open says so.
+func TestOpenAcks_ADamagedLineKeepsTheFileAsBadAndTheRestGoesOn(t *testing.T) {
+	c := newOutboxClock()
+	dir := t.TempDir()
+	good := `{"id":"mlab-1","note":"a","at":"` + c.t.Format(time.RFC3339) + `"}`
+	good2 := `{"id":"mlab-2","note":"b","at":"` + c.t.Format(time.RFC3339) + `"}`
+	for name, body := range map[string]string{
+		"a torn last line":    good + "\n" + `{"id":"mlab-2","no`,
+		"a bad line in front": "not json\n" + good + "\n" + good2 + "\n",
+	} {
+		require.NoError(t, os.RemoveAll(dir))
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ackFile), []byte(body), 0o600))
+		s, err := OpenAcks(dir, c.now)
+		require.Error(t, err, name)
+		require.True(t, s.Handled("mlab-1"), name)
+		raw, rerr := os.ReadFile(filepath.Join(dir, ackFile+".bad"))
+		require.NoError(t, rerr, name)
+		require.Equal(t, body, string(raw), "the damaged file is kept as it was: "+name)
+
+		_, err = s.Ack([]string{"mlab-9"}, func(string) bool { return true }, Ack{Note: "n"})
+		require.NoError(t, err, name)
+		again, err := OpenAcks(dir, c.now)
+		require.NoError(t, err, "the rewritten file is whole: "+name)
+		require.True(t, again.Handled("mlab-1") && again.Handled("mlab-9"), name)
+	}
 }

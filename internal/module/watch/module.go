@@ -63,6 +63,8 @@ type Module struct {
 	dlv deliveryState
 	// acks is this host's ack log (events.go).
 	acks *watch.AckStore
+	// evMu orders the counts and the sends of watch.events.
+	evMu sync.Mutex
 	// manualDelivery keeps Start from running the delivery loop: a test calls deliverPass itself.
 	manualDelivery bool
 	emit           func(core.HostEvent)

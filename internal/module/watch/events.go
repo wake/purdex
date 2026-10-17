@@ -67,7 +67,12 @@ func (m *Module) broadcast(ev core.HostEvent) {
 }
 
 // emitEvents sends watch.events with the count as it is now.
+//
+// The count and the send are under one lock: a count read before a newer one is sent would be sent after it, and the badge would
+// settle on the older number.
 func (m *Module) emitEvents(cause string) {
+	m.evMu.Lock()
+	defer m.evMu.Unlock()
 	n, err := m.unhandledCount()
 	if err != nil {
 		m.logf("[watch] unhandled count for watch.events: %v", err)

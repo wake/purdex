@@ -78,6 +78,7 @@ func (m *Module) initDelivery(dir string) {
 	if m.acks, err = watch.OpenAcks(dir, func() time.Time { return m.now() }); err != nil {
 		m.logf("[watch] ack log: %v", err)
 	}
+	m.acks.SetLogf(func(f string, a ...any) { m.logf(f, a...) })
 	m.acks.Prune()
 	defer func() { m.dlv.outbox.SetLogf(func(f string, a ...any) { m.logf(f, a...) }) }()
 	if m.dlv.outbox, err = watch.OpenOutbox(outPath, func() time.Time { return m.now() }); err != nil {

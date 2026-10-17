@@ -6,11 +6,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/devices"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/team"
@@ -222,4 +224,49 @@ func TestInfo_AnnouncesWatchV1ForTheRealModule(t *testing.T) {
 	require.Contains(t, caps(), "watch.v1", "and running")
 	require.NoError(t, r.m.Stop(context.Background()))
 	require.NotContains(t, caps(), "watch.v1", "a stopped module announces nothing")
+}
+
+// The last watch.events a client gets is the count as it is now, whichever way a record and an ack interleave: a count taken before a
+// newer one is not sent after it.
+func TestWatchEvents_TheLastPushIsTheCurrentCount(t *testing.T) {
+	r := newEventsRig(t)
+	var mu sync.Mutex
+	var sent []EventsPayload
+	firstIn := make(chan struct{})
+	release := make(chan struct{})
+	first := true
+	r.m.emit = func(ev core.HostEvent) {
+		var p EventsPayload
+		_ = json.Unmarshal([]byte(ev.Value), &p)
+		mu.Lock()
+		isFirst := first
+		first = false
+		mu.Unlock()
+		if isFirst {
+			close(firstIn)
+			<-release // the first push is held on its way out
+		}
+		mu.Lock()
+		sent = append(sent, p)
+		mu.Unlock()
+	}
+	done := make(chan struct{})
+	go func() { // an ack: 3 pending -> 0
+		defer close(done)
+		r.ack(t, adminCtx, map[string]any{"ids": r.ids, "note": "n"})
+	}()
+	<-firstIn
+	rc := watch.NewRecorder(r.m.dlv.logDir, "mlab")
+	rec, err := rc.RecordFull(watch.Event{Kind: watch.KindPressureHigh, At: r.m.now(), Pressure: 2, Detail: "new"})
+	require.NoError(t, err)
+	second := make(chan struct{})
+	go func() { defer close(second); r.m.Enqueue(rec) }() // a new event: the count is 1 now
+	time.Sleep(50 * time.Millisecond)                     // let it reach the lock (or, without the lock, send ahead)
+	close(release)
+	<-done
+	<-second
+	mu.Lock()
+	defer mu.Unlock()
+	require.NotEmpty(t, sent)
+	require.Equal(t, 1, sent[len(sent)-1].Unhandled, "the badge ends on the number that is true now: %+v", sent)
 }

@@ -74,32 +74,61 @@ type AckStore struct {
 	dir  string
 	now  func() time.Time
 	acks map[string]Ack
+	logf func(format string, args ...any)
 }
 
-// OpenAcks reads the ack log in dir. A line that is not an ack is skipped; a file that cannot be read is an error and the store is
-// empty (the daemon goes on: every event reads as pending, which is the safe side).
+// SetLogf sets where a directory sync that failed after a successful rename is reported.
+func (s *AckStore) SetLogf(f func(format string, args ...any)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.logf = f
+}
+
+// OpenAcks reads the ack log in dir. A file that cannot be read is an error and the store is empty (every event reads as pending, the
+// safe side). A line that is not an ack is not dropped quietly: the file is kept as acks.jsonl.bad, the acks that could be read are
+// written to a new file and go on, and the error says so; the next ack rewrites only that new file.
 func OpenAcks(dir string, now func() time.Time) (*AckStore, error) {
 	s := &AckStore{dir: dir, now: now, acks: map[string]Ack{}}
-	acks, err := ReadAcks(dir)
+	acks, skipped, err := readAcks(dir)
 	if err != nil {
 		return s, err
 	}
 	s.acks = acks
-	return s, nil
+	if skipped == 0 {
+		return s, nil
+	}
+	path := filepath.Join(dir, ackFile)
+	if rerr := os.Rename(path, path+".bad"); rerr != nil {
+		return s, fmt.Errorf("%s has %d line(s) that are not acks, and could not be set aside: %w", path, skipped, rerr)
+	}
+	list := make([]Ack, 0, len(acks))
+	for _, a := range acks {
+		list = append(list, a)
+	}
+	if _, werr := s.writeAll(list); werr != nil {
+		return s, fmt.Errorf("%s kept as %s.bad (%d line(s) are not acks), but the new file could not be written: %w", path, path, skipped, werr)
+	}
+	return s, fmt.Errorf("%s had %d line(s) that are not acks: kept as %s.bad, the rest goes on", path, skipped, path)
 }
 
-// ReadAcks reads the ack log in dir without a store (the CLI reads it with the daemon down). A missing file is no acks.
+// ReadAcks reads the ack log in dir without a store (the CLI reads it with the daemon down). A missing file is no acks; a line that
+// is not an ack is skipped.
 func ReadAcks(dir string) (map[string]Ack, error) {
-	out := map[string]Ack{}
+	acks, _, err := readAcks(dir)
+	return acks, err
+}
+
+func readAcks(dir string) (out map[string]Ack, skipped int, err error) {
+	out = map[string]Ack{}
 	if dir == "" {
-		return out, nil
+		return out, 0, nil
 	}
 	f, err := os.Open(filepath.Join(dir, ackFile))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return out, nil
+			return out, 0, nil
 		}
-		return out, err
+		return out, 0, err
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
@@ -107,13 +136,14 @@ func ReadAcks(dir string) (map[string]Ack, error) {
 	for sc.Scan() {
 		var a Ack
 		if json.Unmarshal(sc.Bytes(), &a) != nil || a.ID == "" {
+			skipped++
 			continue
 		}
 		if _, dup := out[a.ID]; !dup { // the first ack of an event stands
 			out[a.ID] = a
 		}
 	}
-	return out, sc.Err()
+	return out, skipped, sc.Err()
 }
 
 // Get is the ack of an event.
@@ -178,8 +208,12 @@ func (s *AckStore) Ack(ids []string, known func(id string) bool, a Ack) ([]AckRe
 		all = append(all, n)
 	}
 	all = append(all, fresh...)
-	if err := s.writeAll(all); err != nil {
+	renamed, err := s.writeAll(all)
+	if err != nil && !renamed {
 		return nil, err
+	}
+	if err != nil && s.logf != nil {
+		s.logf("[watch] the ack log is written, but its directory could not be synced: %v", err)
 	}
 	for _, n := range fresh {
 		s.acks[n.ID] = n
@@ -188,7 +222,8 @@ func (s *AckStore) Ack(ids []string, known func(id string) bool, a Ack) ([]AckRe
 }
 
 // writeAll puts acks in the file, oldest first.
-func (s *AckStore) writeAll(acks []Ack) error {
+// renamed says the new file is in place whatever the error (a failed directory sync comes after the rename).
+func (s *AckStore) writeAll(acks []Ack) (renamed bool, err error) {
 	sort.SliceStable(acks, func(i, j int) bool {
 		if acks[i].At.Equal(acks[j].At) {
 			return acks[i].ID < acks[j].ID
@@ -197,15 +232,14 @@ func (s *AckStore) writeAll(acks []Ack) error {
 	})
 	var b strings.Builder
 	for _, a := range acks {
-		line, err := json.Marshal(a)
-		if err != nil {
-			return err
+		line, merr := json.Marshal(a)
+		if merr != nil {
+			return false, merr
 		}
 		b.Write(line)
 		b.WriteByte('\n')
 	}
-	_, err := writeAtomic(filepath.Join(s.dir, ackFile), []byte(b.String()))
-	return err
+	return writeAtomic(filepath.Join(s.dir, ackFile), []byte(b.String()))
 }
 
 // Prune forgets the acks older than ackKeep (the events they were about are out of the log) and rewrites the file.
@@ -224,7 +258,7 @@ func (s *AckStore) Prune() {
 	if len(kept) == len(s.acks) || s.dir == "" {
 		return
 	}
-	if err := s.writeAll(list); err != nil {
+	if renamed, err := s.writeAll(list); err != nil && !renamed {
 		return // the old file stays whole; the next start tries again
 	}
 	s.acks = kept
