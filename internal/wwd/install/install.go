@@ -39,6 +39,7 @@ type Installer struct {
 	Binary string // the wwd binary to install (the running one for `wwd install`)
 
 	TokenFile string // a file whose content becomes pool.token, when none exists
+	UnitPath  string // the systemd unit file; empty: /etc/systemd/system/wwd.service
 	NoRestart bool   // install the files but leave the running service alone
 	DryRun    bool   // say what would change, change nothing
 
@@ -68,6 +69,12 @@ func (i *Installer) ConfigPath() string { return filepath.Join(i.ConfigDir(), "c
 func (i *Installer) TokenPath() string  { return filepath.Join(i.ConfigDir(), "pool.token") }
 func (i *Installer) PlistPath() string {
 	return filepath.Join(i.Home, "Library", "LaunchAgents", Label+".plist")
+}
+func (i *Installer) unitPath() string {
+	if i.UnitPath != "" {
+		return i.UnitPath
+	}
+	return systemUnitPath
 }
 func (i *Installer) unitStamp() string { return filepath.Join(i.DataDir(), "unit.sha256") }
 
@@ -230,10 +237,11 @@ func (i *Installer) writePlist() (changed bool, err error) {
 func (i *Installer) writeUnit(ctx context.Context) (changed bool, err error) {
 	unit := Unit(UnitOpts{User: i.User, Binary: i.BinPath(), Config: i.ConfigPath(), Path: i.toolPath()})
 	h := hashBytes([]byte(unit))
-	if b, err := os.ReadFile(i.unitStamp()); err == nil && strings.TrimSpace(string(b)) == h {
+	// the stamp alone is not proof: the unit may have been edited or removed since
+	if b, err := os.ReadFile(i.unitPath()); err == nil && hashBytes(b) == h {
 		return false, nil
 	}
-	i.step("install the systemd unit %s (sudo)", systemUnitPath)
+	i.step("install the systemd unit %s (sudo)", i.unitPath())
 	if i.DryRun {
 		return true, nil
 	}
@@ -242,7 +250,7 @@ func (i *Installer) writeUnit(ctx context.Context) (changed bool, err error) {
 		return false, err
 	}
 	defer os.Remove(tmp)
-	if out, err := i.run()(ctx, "wwd.install.unit", "sudo", "install", "-m", "0644", tmp, systemUnitPath); err != nil {
+	if out, err := i.run()(ctx, "wwd.install.unit", "sudo", "install", "-m", "0644", tmp, i.unitPath()); err != nil {
 		return false, fmt.Errorf("install the unit: %w: %s", err, bytes.TrimSpace(out))
 	}
 	// the stamp says which unit text is installed; written only after sudo succeeded
@@ -304,14 +312,28 @@ func (i *Installer) Uninstall(ctx context.Context, purge bool) error {
 	run := i.run()
 	switch i.GOOS {
 	case "darwin":
-		_, _ = run(ctx, "wwd.uninstall.bootout", "launchctl", "bootout", i.domain()+"/"+Label)
+		target := i.domain() + "/" + Label
+		// only a loaded agent is booted out, so a bootout failure is a real one
+		if _, perr := run(ctx, "wwd.uninstall.print", "launchctl", "print", target); perr == nil {
+			if out, err := run(ctx, "wwd.uninstall.bootout", "launchctl", "bootout", target); err != nil {
+				return fmt.Errorf("launchctl bootout %s: %w: %s", target, err, bytes.TrimSpace(out))
+			}
+		}
 		if err := os.Remove(i.PlistPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	case "linux":
-		_, _ = run(ctx, "wwd.uninstall.disable", "sudo", "systemctl", "disable", "--now", UnitName)
-		_, _ = run(ctx, "wwd.uninstall.rm", "sudo", "rm", "-f", systemUnitPath)
-		_, _ = run(ctx, "wwd.uninstall.reload", "sudo", "systemctl", "daemon-reload")
+		if _, err := os.Stat(i.unitPath()); err == nil {
+			for _, c := range [][]string{
+				{"wwd.uninstall.disable", "sudo", "systemctl", "disable", "--now", UnitName},
+				{"wwd.uninstall.rm", "sudo", "rm", "-f", i.unitPath()},
+				{"wwd.uninstall.reload", "sudo", "systemctl", "daemon-reload"},
+			} {
+				if out, err := run(ctx, c[0], c[1], c[2:]...); err != nil {
+					return fmt.Errorf("%s: %w: %s", strings.Join(c[1:], " "), err, bytes.TrimSpace(out))
+				}
+			}
+		}
 		_ = os.Remove(i.unitStamp())
 	default:
 		return fmt.Errorf("uninstall: no service support for %s", i.GOOS)

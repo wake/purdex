@@ -26,6 +26,17 @@ func (f *fakeRun) run(ctx context.Context, tag, name string, args ...string) ([]
 			return nil, os.ErrNotExist
 		}
 	}
+	// the two sudo commands that touch the unit file act on it, as the real ones do
+	if name == "sudo" && len(args) == 5 && args[0] == "install" {
+		b, err := os.ReadFile(args[3])
+		if err != nil {
+			return nil, err
+		}
+		return nil, os.WriteFile(args[4], b, 0o644)
+	}
+	if name == "sudo" && len(args) == 3 && args[0] == "rm" {
+		return nil, os.Remove(args[2])
+	}
 	return nil, nil
 }
 
@@ -52,7 +63,7 @@ func newInstaller(t *testing.T, goos, alias, bin string) (*Installer, *fakeRun, 
 	home := t.TempDir()
 	f := &fakeRun{failOn: map[string]bool{}}
 	out := &bytes.Buffer{}
-	return &Installer{Home: home, GOOS: goos, UID: 501, User: "wake", Alias: alias, Binary: bin, Run: f.run, Out: out}, f, out
+	return &Installer{Home: home, GOOS: goos, UID: 501, User: "wake", UnitPath: filepath.Join(home, "wwd.service"), Alias: alias, Binary: bin, Run: f.run, Out: out}, f, out
 }
 
 func TestEveryProfileIsAValidConfig(t *testing.T) {
@@ -390,5 +401,48 @@ func TestMservNeedsNoTailscaleInterfaceTricks(t *testing.T) {
 	text, _ := ConfigFor("mserv")
 	if !strings.Contains(text, "100.64.0.6") || !strings.Contains(text, "tailnet_addr") {
 		t.Errorf("%s", text)
+	}
+}
+
+func TestInstallRepairsAnEditedOrMissingUnit(t *testing.T) {
+	bin := writeBin(t, t.TempDir(), "x")
+	in, f, _ := newInstaller(t, "linux", "mserv", bin)
+	ctx := context.Background()
+	if err := in.Install(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for name, damage := range map[string]func() error{
+		"edited":  func() error { return os.WriteFile(in.UnitPath, []byte("[Unit]\n"), 0o644) },
+		"removed": func() error { return os.Remove(in.UnitPath) },
+	} {
+		if err := damage(); err != nil {
+			t.Fatal(err)
+		}
+		f.calls = nil
+		if err := in.Install(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if !f.has("sudo install") || !f.has("sudo systemctl daemon-reload") {
+			t.Errorf("%s unit was not repaired: %v", name, f.calls)
+		}
+	}
+}
+
+func TestUninstallReportsAFailedStop(t *testing.T) {
+	bin := writeBin(t, t.TempDir(), "x")
+	for _, goos := range []string{"darwin", "linux"} {
+		in, f, _ := newInstaller(t, goos, "mserv", bin)
+		ctx := context.Background()
+		if err := in.Install(ctx); err != nil {
+			t.Fatal(err)
+		}
+		f.failOn["launchctl bootout"] = true
+		f.failOn["sudo systemctl disable"] = true
+		if err := in.Uninstall(ctx, false); err == nil {
+			t.Errorf("%s: a failed stop was reported as success", goos)
+		}
+		if _, err := os.Stat(in.BinPath()); err != nil {
+			t.Errorf("%s: the binary was deleted under a service that is still there", goos)
+		}
 	}
 }
