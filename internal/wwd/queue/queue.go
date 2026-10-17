@@ -16,6 +16,22 @@ import (
 // ErrNotFound: no job has that id.
 var ErrNotFound = errors.New("queue: no such job")
 
+// ErrSnapshotRefused: the submission's snapshot cannot be pinned (the git directory is not one, or does not hold the commit). A job whose
+// snapshot cannot be fetched must not be queued, so the submission is refused; the client reports it (pdx test exit 4).
+var ErrSnapshotRefused = errors.New("queue: the snapshot cannot be pinned")
+
+// Pinner keeps a job's snapshot reachable: the temporary-index commit a snapshot makes has no ref, so gc would drop it. The ref is
+// refs/wwd/<job id> in the repo's common git directory (spec 4.1). The implementation runs git on this host, through the clean
+// git environment (snapshot.Pin, Unpin and ListPins satisfy it).
+type Pinner interface {
+	// Pin points refs/wwd/<jobID> at commit; idempotent for the same commit.
+	Pin(ctx context.Context, gitDir, jobID, commit string) error
+	// Unpin removes that ref; a ref that is not there is not an error.
+	Unpin(ctx context.Context, gitDir, jobID string) error
+	// ListPins returns the job ids of every ref under refs/wwd/ (and nothing else).
+	ListPins(ctx context.Context, gitDir string) ([]string, error)
+}
+
 // ConflictError is a refused transition: the job is in a state that does not allow it (the wire's 409 {state}).
 type ConflictError struct{ State wire.JobState }
 
@@ -33,6 +49,8 @@ type Options struct {
 	LogDir string
 	// NewID makes a job id (default: a ULID from Now). Tests set it.
 	NewID func() string
+	// Pinner pins the snapshots (see Pinner). Nil: nothing is pinned, which is for tests and for a host with no git.
+	Pinner Pinner
 }
 
 // Queue is the job queue of one origin.
@@ -43,6 +61,7 @@ type Queue struct {
 	pub  func(wire.JobEvent)
 	newI func() string
 	seq  *sequencer
+	pin  Pinner
 
 	// afterCommit is a test hook: it runs between a transaction's commit and the publishing of its events.
 	afterCommit func()
@@ -58,7 +77,7 @@ func New(db *sql.DB, o Options) (*Queue, error) {
 	if o.Origin == "" {
 		return nil, errors.New("queue: Options.Origin is required")
 	}
-	q := &Queue{db: db, opt: o, now: o.Now, pub: o.Publish, newI: o.NewID, seq: newSequencer()}
+	q := &Queue{db: db, opt: o, now: o.Now, pub: o.Publish, newI: o.NewID, seq: newSequencer(), pin: o.Pinner}
 	if q.now == nil {
 		q.now = time.Now
 	}
@@ -73,6 +92,16 @@ func New(db *sql.DB, o Options) (*Queue, error) {
 // transaction, so a later transaction that changes the same job cannot turn this event into its own; and events leave in commit
 // order, one transaction's after the previous one's (see sequencer).
 func (q *Queue) write(ctx context.Context, fn func(c *sql.Conn, changed *[]string) error) error {
+	if err := q.writeOnly(ctx, fn); err != nil {
+		return err
+	}
+	// the snapshots of jobs this change ended are released after the events went out, so git never holds up the next writer's turn
+	q.settlePins(ctx)
+	return nil
+}
+
+// writeOnly is write without the release of snapshots: the sweep does that itself, to count it.
+func (q *Queue) writeOnly(ctx context.Context, fn func(c *sql.Conn, changed *[]string) error) error {
 	events, ticket, err := q.commit(ctx, fn)
 	if err != nil {
 		return err
@@ -80,10 +109,15 @@ func (q *Queue) write(ctx context.Context, fn func(c *sql.Conn, changed *[]strin
 	if q.afterCommit != nil {
 		q.afterCommit()
 	}
+	q.announce(events, ticket)
+	return nil
+}
+
+// announce publishes events in commit order and passes the turn on, whatever the subscriber does.
+func (q *Queue) announce(events []wire.JobEvent, ticket uint64) {
 	q.seq.await(ticket)
 	defer q.seq.done(ticket)
 	q.publish(events)
-	return nil
 }
 
 // commit is the transaction alone: it gives its connection back before it returns, so whatever a subscriber does next can have a

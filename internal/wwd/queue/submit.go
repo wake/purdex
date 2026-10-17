@@ -19,8 +19,17 @@ func (q *Queue) Submit(ctx context.Context, s wire.JobSubmission) (wire.JobSubmi
 	}
 	id := q.newI()
 	now := q.now()
+	// The snapshot is pinned before the job exists, and outside the database's write lock (git takes its time): a job whose snapshot
+	// cannot be fetched must not be queued.
+	pinned := false
+	if q.pin != nil {
+		if err := q.pin.Pin(ctx, s.GitDir, id, s.Snapshot.Commit); err != nil {
+			return wire.JobSubmissionResponse{}, fmt.Errorf("%w: %v", ErrSnapshotRefused, err)
+		}
+		pinned = true
+	}
 	err := q.write(ctx, func(c *sql.Conn, changed *[]string) error {
-		if err := insertJob(ctx, c, id, q.opt.Origin, s, now.UnixMilli()); err != nil {
+		if err := insertJob(ctx, c, id, q.opt.Origin, s, now.UnixMilli(), pinned); err != nil {
 			return err
 		}
 		*changed = append(*changed, id)
@@ -32,12 +41,25 @@ func (q *Queue) Submit(ctx context.Context, s wire.JobSubmission) (wire.JobSubmi
 		return err
 	})
 	if err != nil {
+		if pinned {
+			q.takeBackPin(ctx, s.GitDir, id)
+		}
 		return wire.JobSubmissionResponse{}, fmt.Errorf("queue: submit: %w", err)
 	}
 	return wire.JobSubmissionResponse{ID: id}, nil
 }
 
-func insertJob(ctx context.Context, c *sql.Conn, id, origin string, s wire.JobSubmission, nowMS int64) error {
+// takeBackPin removes the pin a failed submission made, unless a job with that id exists (then the pin is that job's).
+func (q *Queue) takeBackPin(ctx context.Context, gitDir, id string) {
+	ctx = context.WithoutCancel(ctx)
+	var one int
+	if err := q.db.QueryRowContext(ctx, `SELECT 1 FROM jobs WHERE id = ?`, id).Scan(&one); err == nil {
+		return
+	}
+	_ = q.pin.Unpin(ctx, gitDir, id)
+}
+
+func insertJob(ctx context.Context, c *sql.Conn, id, origin string, s wire.JobSubmission, nowMS int64, pinned bool) error {
 	list := func(v []string) string {
 		if v == nil {
 			v = []string{}
@@ -48,12 +70,12 @@ func insertJob(ctx context.Context, c *sql.Conn, id, origin string, s wire.JobSu
 	_, err := c.ExecContext(ctx, `INSERT INTO jobs (
 			id, origin, repo_name, repo_root, repo_remote, snap_commit, snap_tree, snap_base, snap_rel_cwd,
 			task, args, class, labels, locks, cacheable, timeout_s, supersede_key, interruptible, queue_timeout_s, adhoc,
-			sub_session, sub_ref, sub_team, sub_host, created_at, state, updated_at, git_dir)
-		VALUES (?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?)`,
+			sub_session, sub_ref, sub_team, sub_host, created_at, state, updated_at, git_dir, pinned)
+		VALUES (?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?,?,?, ?,?,?,?,?,?,?,?,?)`,
 		id, origin, s.Repo.Name, s.Repo.Root, s.Repo.Remote, s.Snapshot.Commit, s.Snapshot.Tree, s.Snapshot.Base, s.Snapshot.RelCwd,
 		s.Task, list(s.Args), string(s.Class), list(s.Labels), list(s.Locks), b2i(s.Cacheable), s.TimeoutS, s.SupersedeKey,
 		b2i(s.Interruptible), s.QueueTimeoutS, b2i(s.AdHoc),
-		s.Submitter.Session, s.Submitter.Ref, s.Submitter.Team, s.Submitter.Host, nowMS, string(wire.StateQueued), nowMS, s.GitDir)
+		s.Submitter.Session, s.Submitter.Ref, s.Submitter.Team, s.Submitter.Host, nowMS, string(wire.StateQueued), nowMS, s.GitDir, b2i(pinned))
 	return err
 }
 
