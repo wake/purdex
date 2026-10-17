@@ -134,7 +134,10 @@ func (d *Daemon) Listen(ctx context.Context, spec ListenSpec) (*Running, error) 
 		closeAll()
 		return nil, err
 	}
-	_ = os.Remove(spec.SocketPath) // stale socket from a previous run
+	if err := clearStaleSocket(spec.SocketPath); err != nil {
+		closeAll()
+		return nil, err
+	}
 	uln, err := net.Listen("unix", spec.SocketPath)
 	if err != nil {
 		closeAll()
@@ -160,6 +163,26 @@ func (d *Daemon) Listen(ctx context.Context, spec ListenSpec) (*Running, error) 
 	serve(uln, d.SocketHandler())
 	go func() { <-ctx.Done(); r.Close() }()
 	return r, nil
+}
+
+// clearStaleSocket removes path only when it is a Unix socket nobody listens
+// on. A regular file or a live socket (another wwd) is an error, never deleted.
+func clearStaleSocket(path string) error {
+	fi, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if fi.Mode().Type()&os.ModeSocket == 0 {
+		return fmt.Errorf("socket path %s exists and is not a socket", path)
+	}
+	if c, err := net.DialTimeout("unix", path, time.Second); err == nil {
+		c.Close()
+		return fmt.Errorf("socket %s is in use (another wwd running?)", path)
+	}
+	return os.Remove(path)
 }
 
 func dirOf(p string) string {

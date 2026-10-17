@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -123,6 +124,47 @@ func TestListenBindsOnlyAllowedAddrs(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil || resp.StatusCode != 200 {
 		t.Fatalf("socket info: %d %v", resp.StatusCode, err)
 	}
+}
+
+func TestListenDoesNotDeleteRegularFile(t *testing.T) {
+	d := newTestDaemon(t)
+	p := filepath.Join(t.TempDir(), "precious")
+	if err := os.WriteFile(p, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Listen(context.Background(), ListenSpec{Addrs: []string{"127.0.0.1"}, SocketPath: p}); err == nil {
+		t.Fatal("must refuse a non-socket path")
+	}
+	if b, err := os.ReadFile(p); err != nil || string(b) != "data" {
+		t.Fatalf("file damaged: %q %v", b, err)
+	}
+}
+
+func TestListenRefusesLiveSocketAndReplacesStale(t *testing.T) {
+	d := newTestDaemon(t)
+	dir, err := os.MkdirTemp("", "w") // short path: unix socket names are limited to ~104 bytes
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "w.sock")
+	r1, err := d.Listen(context.Background(), ListenSpec{Addrs: []string{"127.0.0.1"}, SocketPath: sock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Listen(context.Background(), ListenSpec{Addrs: []string{"127.0.0.1"}, SocketPath: sock}); err == nil {
+		t.Fatal("second instance on a live socket must fail")
+	}
+	r1.Close()
+	// a stale socket file (nobody listening) is replaced
+	ln, _ := net.Listen("unix", sock)
+	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	ln.Close()
+	r2, err := d.Listen(context.Background(), ListenSpec{Addrs: []string{"127.0.0.1"}, SocketPath: sock})
+	if err != nil {
+		t.Fatalf("stale socket must be replaced: %v", err)
+	}
+	r2.Close()
 }
 
 func TestListenRefusesBadAddr(t *testing.T) {
