@@ -101,4 +101,16 @@ describe('team names (U15)', () => {
     render(<UnattendedHeldSection rows={[{ hostId: H, a: memberRelay('m1', 1_000) }]} />)
     expect(screen.getByTestId('held-row').textContent).toMatch(/Payments\s*iface-lead\s*要幫 member/)
   })
+
+  it('a custom locale that uses the lead placeholder twice shows the name at both places, never the slot character', () => {
+    useTeamRosterStore.getState().apply(H, [roster('Payments')])
+    const tpl = '{{lead}} / {{lead}} wants {{member}}'
+    useI18nStore.setState({ t: (key: string, params?: Record<string, string | number>) => (key === 'unattended.held.row_member'
+      ? tpl.replace(/\{\{(\w+)\}\}/g, (_m, k: string) => String(params?.[k] ?? ''))
+      : key) })
+    render(<UnattendedHeldSection rows={[{ hostId: H, a: memberRelay('m1', 1_000) }]} />)
+    const text = screen.getByTestId('held-row').textContent ?? ''
+    expect(text).not.toContain('\uE000')
+    expect(text.match(/Payments/g)).toHaveLength(2)
+  })
 })
