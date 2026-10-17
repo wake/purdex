@@ -140,6 +140,15 @@ describe('QueueHistory — the hover card', () => {
     expect(screen.queryByTestId('hist-tip')).toBeNull()
   })
 
+  it('long parameter keys and values wrap inside a card that is capped to the container', async () => {
+    fetchGateDecisions.mockResolvedValue(ok([rec({ applied: { ['k'.repeat(120)]: { value: 'v'.repeat(300), source: 'config' } } })]))
+    renderH(); await flush()
+    fireEvent.mouseEnter(screen.getByTestId('hist-row'))
+    const line = screen.getByTestId('hist-tip-params').querySelector('.font-mono') as HTMLElement
+    expect(line.className).toContain('break-all')
+    expect(screen.getByTestId('hist-tip').className).toContain('max-w-[calc(100%-6rem)]')
+  })
+
   it('leaves out a line whose field is absent (no reason, no parameters, no session, no end for a command that never ran)', async () => {
     fetchGateDecisions.mockResolvedValue(ok([rec({ session: undefined, cwd: undefined, outcome: 'orphaned', durationS: 0 })]))
     renderH(); await flush()

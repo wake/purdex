@@ -63,7 +63,7 @@ function Tip({ row, top, t }: { row: HistoryRow; top: number; t: T }) {
   const src = (s: string) => { const k = `watch.history.source.${s}`; const v = t(k); return v === k ? s : v }
   const where = [row.project, row.session].filter((x) => x !== '').join(' · ')
   return (
-    <div data-testid="hist-tip" className="absolute z-30 left-24 mt-1 w-[360px] rounded-lg border border-border-default bg-surface-elevated shadow-xl px-3 py-2 text-xs pointer-events-none" style={{ top }}>
+    <div data-testid="hist-tip" className="absolute z-30 left-24 mt-1 w-[360px] max-w-[calc(100%-6rem)] rounded-lg border border-border-default bg-surface-elevated shadow-xl px-3 py-2 text-xs pointer-events-none" style={{ top }}>
       <div data-testid="hist-tip-command" className="font-mono text-text-primary break-all">{row.command}</div>
       {where !== '' && <div data-testid="hist-tip-where" className="mt-0.5 text-text-secondary break-all">{where}</div>}
       <div data-testid="hist-tip-times" className="mt-1 text-text-muted tabular-nums">
@@ -75,7 +75,7 @@ function Tip({ row, top, t }: { row: HistoryRow; top: number; t: T }) {
         <div data-testid="hist-tip-params" className="mt-1.5 pt-1.5 border-t border-border-subtle">
           <div className="text-text-muted">{t('watch.history.tip.params')}</div>
           {params.map(([k, p]) => (
-            <div key={k} className="font-mono text-text-secondary">{k} = {p.value}{p.source !== '' && <span className="font-sans text-text-muted"> ({src(p.source)})</span>}</div>
+            <div key={k} className="font-mono text-text-secondary break-all">{k} = {p.value}{p.source !== '' && <span className="font-sans text-text-muted"> ({src(p.source)})</span>}</div>
           ))}
         </div>
       )}
