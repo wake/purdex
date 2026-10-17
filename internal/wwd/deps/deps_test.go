@@ -424,3 +424,75 @@ func TestPrune_AFailedRemovalLeavesNoEntryShapedDirectory(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, r3.Hit)
 }
+
+// The path is checked, then used: a directory of the workspace turned into a link in between (an install leaves a process behind that
+// can do it) must not let the read or the removal reach outside. The use goes through a root on the workspace.
+func TestPrepare_AParentSwappedForALinkAfterTheCheckReachesNothingOutside(t *testing.T) {
+	outside := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(outside, "node_modules/keep"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "pnpm-lock.yaml"), []byte("outside\n"), 0o644))
+
+	swap := func(ws string) { // spa/ becomes a link to the directory outside
+		require.NoError(t, os.RemoveAll(filepath.Join(ws, "spa")))
+		require.NoError(t, os.Symlink(outside, filepath.Join(ws, "spa")))
+	}
+	mk := func() string {
+		ws := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(ws, "spa/node_modules/x"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(ws, "spa/pnpm-lock.yaml"), []byte("outside\n"), 0o644))
+		return ws
+	}
+	sp := Spec{Lockfiles: []string{"spa/pnpm-lock.yaml"}, Fingerprint: fp, Install: (&installer{}).install}
+	t.Cleanup(func() { testHook = nil })
+
+	// the lockfile is read through the root: after the swap the read does not reach the file outside
+	c := newCache(t, 2)
+	testHook = func(stage string) {
+		if stage == "plan-read" {
+			swap(wsOf)
+			testHook = nil
+		}
+	}
+	wsOf = mk()
+	_, err := c.Prepare(context.Background(), wsOf, sp)
+	assert.Error(t, err, "the read does not follow the link out")
+
+	// a hit removes the destination first: through the root it cannot remove outside
+	wsA := workspace(t, "outside\n")
+	cc := newCache(t, 2)
+	_, err = cc.Prepare(context.Background(), wsA, Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Fingerprint: fp, Install: (&installer{}).install})
+	require.NoError(t, err)
+	wsB := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(wsB, "pnpm-lock.yaml"), []byte("outside\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(wsB, "node_modules"), 0o755))
+	testHook = func(stage string) {
+		if stage == "clone-out" {
+			require.NoError(t, os.RemoveAll(filepath.Join(wsB, "node_modules")))
+			require.NoError(t, os.Symlink(outside, filepath.Join(wsB, "node_modules")))
+			testHook = nil
+		}
+	}
+	_, _ = cc.Prepare(context.Background(), wsB, Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Fingerprint: fp})
+	_, serr := os.Stat(filepath.Join(outside, "node_modules/keep"))
+	assert.NoError(t, serr, "nothing outside was removed")
+}
+
+var wsOf string
+
+// A temporary directory whose key is locked (an install or a clone in progress) is not swept, however old; once the lock is free it is.
+func TestSweep_LeavesWhatALockedKeyIsUsing(t *testing.T) {
+	c := newCache(t, 2)
+	old := time.Now().Add(-2 * tmpMaxAge)
+	tmp := filepath.Join(c.Dir, "kkkk.tmp-1")
+	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "node_modules/x"), 0o755))
+	require.NoError(t, os.Chtimes(tmp, old, old))
+	held, err := c.lock(context.Background(), "kkkk", syscall.LOCK_EX)
+	require.NoError(t, err)
+	c.sweep()
+	_, serr := os.Stat(tmp)
+	assert.NoError(t, serr, "its key is locked: a live install")
+	held.Close()
+	c.sweep()
+	_, serr = os.Stat(tmp)
+	assert.True(t, os.IsNotExist(serr))
+}

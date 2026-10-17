@@ -65,6 +65,9 @@ func NewCache(dir string, keep int) (*Cache, error) {
 	return c, nil
 }
 
+// testHook, when a test sets it, is called between a check and the use that follows it, with the name of the place.
+var testHook func(stage string)
+
 // plan reads the lockfiles of the workspace and returns the key and the directories (relative to the workspace) that go with them.
 func plan(ws string, spec Spec) (key string, dirs []string, err error) {
 	if len(spec.Lockfiles) == 0 {
@@ -75,6 +78,11 @@ func plan(ws string, spec Spec) (key string, dirs []string, err error) {
 	}
 	files := append([]string(nil), spec.Lockfiles...)
 	sort.Strings(files)
+	root, err := os.OpenRoot(ws)
+	if err != nil {
+		return "", nil, fmt.Errorf("deps: %w", err)
+	}
+	defer root.Close()
 	h := sha256.New()
 	fmt.Fprintf(h, "%s/%s\n", runtime.GOOS, runtime.GOARCH) // an install made on one platform is not for another
 	fmt.Fprintf(h, "fingerprint\x00%d\x00%s\x00", len(spec.Fingerprint), spec.Fingerprint)
@@ -87,7 +95,10 @@ func plan(ws string, spec Spec) (key string, dirs []string, err error) {
 		if err := plainPath(ws, f); err != nil {
 			return "", nil, err
 		}
-		b, err := os.ReadFile(filepath.Join(ws, f))
+		if testHook != nil {
+			testHook("plan-read")
+		}
+		b, err := root.ReadFile(f) // through the root: a directory turned into a link after the check does not lead out
 		if err != nil {
 			return "", nil, fmt.Errorf("deps: %w", err)
 		}
@@ -151,6 +162,9 @@ func (c *Cache) Prepare(ctx context.Context, ws string, spec Spec) (Result, erro
 		if err := clone(ctx, filepath.Join(ws, d), filepath.Join(tmp, d)); err != nil {
 			return Result{}, err
 		}
+		if err := plainPath(ws, d); err != nil { // the path was swapped for a link while cp ran: what was copied may be from outside
+			return Result{}, err
+		}
 	}
 	if err := os.Rename(tmp, entry); err != nil { // the entry appears whole or not at all
 		return Result{}, err
@@ -173,16 +187,30 @@ func (c *Cache) cloneOut(ctx context.Context, key, entry, ws string, dirs []stri
 	if !entryWhole(entry, dirs) { // pruned between the check and the lock, or not whole
 		return false, nil
 	}
+	root, err := os.OpenRoot(ws)
+	if err != nil {
+		return false, err
+	}
+	defer root.Close()
+	if testHook != nil {
+		testHook("clone-out")
+	}
 	for _, d := range dirs {
-		dst := filepath.Join(ws, d)
-		if err := os.RemoveAll(dst); err != nil {
+		// the removal and the making of the parent go through the root, which does not follow a link out of the workspace
+		if err := root.RemoveAll(d); err != nil {
 			return false, err
 		}
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		if dir := path.Dir(d); dir != "." {
+			if err := root.MkdirAll(dir, 0o755); err != nil {
+				return false, err
+			}
+		}
+		if err := clone(ctx, filepath.Join(entry, d), filepath.Join(ws, d)); err != nil {
+			_ = root.RemoveAll(d)
 			return false, err
 		}
-		if err := clone(ctx, filepath.Join(entry, d), dst); err != nil {
-			_ = os.RemoveAll(dst)
+		if err := plainPath(ws, d); err != nil { // cp cannot be given a root: a path swapped for a link while it ran is found out here
+			_ = root.RemoveAll(d)
 			return false, err
 		}
 	}
@@ -213,6 +241,19 @@ func (c *Cache) lock(ctx context.Context, key string, how int) (*os.File, error)
 		case <-time.After(c.pollLock):
 		}
 	}
+}
+
+// tryLock takes the exclusive lock of a key if it is free right now.
+func (c *Cache) tryLock(key string) (*os.File, bool) {
+	f, err := os.OpenFile(filepath.Join(c.Dir, key+".lock"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, false
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		return nil, false
+	}
+	return f, true
 }
 
 // prune removes the entries past the newest Keep, except keep (the one just made); an entry a clone is reading from is waited for.
@@ -291,9 +332,18 @@ func (c *Cache) sweep() {
 		if !de.IsDir() || !(strings.Contains(n, ".tmp-") || strings.Contains(n, ".gone-")) {
 			continue
 		}
-		if info, err := de.Info(); err == nil && time.Since(info.ModTime()) > tmpMaxAge {
-			_ = removeAll(filepath.Join(c.Dir, n))
+		info, err := de.Info()
+		if err != nil || time.Since(info.ModTime()) <= tmpMaxAge {
+			continue
 		}
+		// a live install or clone holds its key's lock the whole time, whatever the directory's time says: only a free key is swept
+		key, _, _ := strings.Cut(n, ".")
+		lock, ok := c.tryLock(key)
+		if !ok {
+			continue
+		}
+		_ = removeAll(filepath.Join(c.Dir, n))
+		lock.Close()
 	}
 }
 
