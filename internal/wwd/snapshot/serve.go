@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/wake/purdex/internal/execstat"
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -42,10 +43,19 @@ type Source interface {
 var maxBundle = 256 << 20
 
 // Handler serves the snapshot route. It does not check the pool token — the layer that mounts it does — only the claim.
-type Handler struct{ src Source }
+type Handler struct {
+	src   Source
+	slots chan struct{}
+}
+
+// maxConcurrent is how many snapshots may be made at once: each is a git process, and a bundle holds up to maxBundle in memory.
+// (A variable so that a test can lower it.)
+var maxConcurrent = 4
 
 // NewHandler mounts as mux.Handle("GET /v1/jobs/{id}/snapshot", h): the job id is the path value "id".
-func NewHandler(src Source) *Handler { return &Handler{src: src} }
+func NewHandler(src Source) *Handler {
+	return &Handler{src: src, slots: make(chan struct{}, maxConcurrent)}
+}
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id, q := r.PathValue("id"), r.URL.Query()
@@ -62,6 +72,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case format == "bundle" && !commitRe.MatchString(have):
 		http.Error(w, "a bundle needs have=<commit>", http.StatusBadRequest)
+		return
+	}
+	// git is started for every request below, so the number of them at once is bounded, and a request that does not fit is turned away
+	// at once (the worker waits and asks again) rather than queued holding a connection.
+	select {
+	case h.slots <- struct{}{}:
+		defer func() { <-h.slots }()
+	default:
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, "snapshot: too many snapshots are being made", http.StatusServiceUnavailable)
 		return
 	}
 	ref, err := h.src.Claimed(r.Context(), id, claimID)
@@ -129,7 +149,7 @@ func serveTar(w http.ResponseWriter, r *http.Request, ref Ref) {
 	}
 	w.Header().Set("Content-Type", "application/x-tar")
 	w.Header().Set("Cache-Control", "no-store")
-	if _, cerr := io.Copy(w, br); cerr != nil {
+	if _, cerr := io.Copy(&deadlineWriter{w: w, rc: http.NewResponseController(w)}, br); cerr != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		return // the client went
@@ -137,6 +157,21 @@ func serveTar(w http.ResponseWriter, r *http.Request, ref Ref) {
 	if werr := cmd.Wait(); werr != nil {
 		panic(http.ErrAbortHandler)
 	}
+}
+
+// writeStall is how long one write to the client may take: a reader that takes nothing for that long is dropped, so that it cannot hold
+// a git archive process (and a slot) open for good. (A variable so that a test can lower it.)
+var writeStall = 60 * time.Second
+
+// deadlineWriter pushes the write deadline forward before each write.
+type deadlineWriter struct {
+	w  io.Writer
+	rc *http.ResponseController
+}
+
+func (d *deadlineWriter) Write(p []byte) (int, error) {
+	_ = d.rc.SetWriteDeadline(time.Now().Add(writeStall)) // a server without deadlines (a test recorder) just does not have one
+	return d.w.Write(p)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

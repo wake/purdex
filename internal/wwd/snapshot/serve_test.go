@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -235,6 +237,94 @@ func TestServe_ABundleOverTheLimitIs413AndGitIsStopped(t *testing.T) {
 	code, body := get(t, srv, "j_7", "claim_id="+claim+"&format=bundle&have="+first)
 	assert.Equal(t, 413, code, string(body))
 	assert.Contains(t, string(body), "ask for a tar")
+}
+
+// The bundle is far bigger than a pipe holds (64 KB) and the limit is far under it: git must be stopped by the cut, not left blocked on a
+// full pipe until the request ends.
+func TestServe_ABundleMuchBiggerThanAPipeIs413AtOnce(t *testing.T) {
+	old := maxBundle
+	maxBundle = 1000
+	t.Cleanup(func() { maxBundle = old })
+	repo, _, _ := origin(t)
+	first := gitOut(t, repo, "rev-list", "--max-parents=0", "HEAD")
+	big := make([]byte, 3<<20)
+	_, _ = rand.Read(big) // does not compress
+	require.NoError(t, os.WriteFile(repo+"/big.bin", big, 0o644))
+	gitOut(t, repo, "add", "big.bin")
+	gitOut(t, repo, "commit", "-q", "-m", "big")
+	head := gitOut(t, repo, "rev-parse", "HEAD")
+	claim := wire.NewClaimID()
+	require.NoError(t, Pin(context.Background(), repo, "j_8", head))
+	srv := serve(t, &fakeSource{claimID: claim, ref: Ref{RepoDir: repo, Commit: head}})
+	client := &http.Client{Timeout: 20 * time.Second}
+	start := time.Now()
+	resp, err := client.Get(srv.URL + "/v1/jobs/j_8/snapshot?claim_id=" + claim + "&format=bundle&have=" + first)
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, 413, resp.StatusCode)
+	assert.Less(t, time.Since(start), 10*time.Second)
+}
+
+// blockingSource holds a request inside Claimed until released, so that a second one arrives while the first holds the only slot.
+type blockingSource struct {
+	in, release chan struct{}
+	fakeSource
+}
+
+func (b *blockingSource) Claimed(ctx context.Context, jobID, claimID string) (Ref, error) {
+	b.in <- struct{}{}
+	<-b.release
+	return b.fakeSource.Claimed(ctx, jobID, claimID)
+}
+
+// More snapshots at once than there are slots: the extra one is turned away at once with 503 and Retry-After, and the slot comes back.
+func TestServe_PastTheSlotsIs503AndTheSlotComesBack(t *testing.T) {
+	old := maxConcurrent
+	maxConcurrent = 1
+	t.Cleanup(func() { maxConcurrent = old })
+	repo, base, snap := origin(t)
+	claim := wire.NewClaimID()
+	require.NoError(t, Pin(context.Background(), repo, "j_9", snap))
+	src := &blockingSource{in: make(chan struct{}, 2), release: make(chan struct{}),
+		fakeSource: fakeSource{claimID: claim, ref: Ref{RepoDir: repo, Commit: snap, Base: base}}}
+	srv := serve(t, src)
+	q := "claim_id=" + claim + "&format=tar"
+	first := make(chan int, 1)
+	go func() { code, _ := get(t, srv, "j_9", q); first <- code }()
+	<-src.in // the first holds the slot
+	resp, err := http.Get(srv.URL + "/v1/jobs/j_9/snapshot?" + q)
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, 503, resp.StatusCode)
+	assert.NotEmpty(t, resp.Header.Get("Retry-After"))
+	close(src.release)
+	assert.Equal(t, 200, <-first)
+	code, _ := get(t, srv, "j_9", q)
+	assert.Equal(t, 200, code, "the slot is back")
+}
+
+// A reader that takes nothing is dropped, and git archive with it.
+func TestServe_ATarReaderThatStallsIsDropped(t *testing.T) {
+	old := writeStall
+	writeStall = 300 * time.Millisecond
+	t.Cleanup(func() { writeStall = old })
+	repo, _, _ := origin(t)
+	big := make([]byte, 32<<20)
+	_, _ = rand.Read(big)
+	require.NoError(t, os.WriteFile(repo+"/big.bin", big, 0o644))
+	gitOut(t, repo, "add", "big.bin")
+	gitOut(t, repo, "commit", "-q", "-m", "big")
+	head := gitOut(t, repo, "rev-parse", "HEAD")
+	claim := wire.NewClaimID()
+	require.NoError(t, Pin(context.Background(), repo, "j_10", head))
+	srv := serve(t, &fakeSource{claimID: claim, ref: Ref{RepoDir: repo, Commit: head}})
+	resp, err := http.Get(srv.URL + "/v1/jobs/j_10/snapshot?claim_id=" + claim + "&format=tar")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	time.Sleep(2 * time.Second) // read nothing
+	n, err := io.Copy(io.Discard, resp.Body)
+	assert.Error(t, err, "the answer was cut off (read %d bytes)", n)
+	assert.Less(t, n, int64(len(big)))
 }
 
 func TestPin_PinsKeepsAndUnpins(t *testing.T) {
