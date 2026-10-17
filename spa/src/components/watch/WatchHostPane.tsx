@@ -18,10 +18,11 @@ import { SegmentControl } from '../settings/SegmentControl'
 import { fleetHistory, type HistoryRange } from '../../lib/fleet/history'
 import { METRICS } from '../../lib/watch/metrics'
 import { RANGES, stepMs } from '../../lib/watch/series'
-import { readRange, writeRange } from '../../lib/watch/view-memory'
+import { readHostPage, readRange, writeHostPage, writeRange, type HostPage } from '../../lib/watch/view-memory'
 import { Gauge } from './Gauge'
 import { MetricRow, TimeAxis } from './MetricChart'
 import { QueueSection } from './QueueSection'
+import { WatchSettings } from './WatchSettings'
 
 const RANGE_OPTS = (t: (k: string) => string) => RANGES.map((r) => ({ value: r, label: t(`watch.host.range.${r}`) }))
 
@@ -110,11 +111,13 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
   // The range outlives this component (the pane unmounts on a tab switch): the memory is the source, the state only re-renders.
   const [range, setRangeState] = useState<HistoryRange>(() => readRange(fleetHostId))
   const setRange = (r: HistoryRange) => { writeRange(fleetHostId, r); setRangeState(r) }
+  const [page, setPageState] = useState<HostPage>(() => readHostPage(fleetHostId))
+  const setPage = (p: HostPage) => { writeHostPage(fleetHostId, p); setPageState(p) }
 
-  const view = useMemo(
-    () => (snapshot ? fleetHostsView(snapshot, { hosts, hostOrder }).find((v) => v.id === fleetHostId) : undefined),
-    [snapshot, hosts, hostOrder, fleetHostId],
-  )
+  const all = useMemo(() => (snapshot ? fleetHostsView(snapshot, { hosts, hostOrder }) : []), [snapshot, hosts, hostOrder])
+  const view = useMemo(() => all.find((v) => v.id === fleetHostId), [all, fleetHostId])
+  // The other daemon hosts: 設定 reads their `watch` rows to compare `targets`.
+  const peers = useMemo(() => all.filter((v) => v.kind === 'daemon'), [all])
 
   // The charts end at "now": it moves with the snapshot, whose 1 s pushes redraw the pane (the history has no subscription).
   // A 5 s tick (one interval per pane, cleared on unmount) keeps the axis and 「累積中」 moving while no snapshot arrives (a stale fleet).
@@ -158,10 +161,19 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
             {t('watch.host.measured', { alias: primaryAlias })}{lastOk !== null && t('watch.host.last_ok', { time: lastOk })}
           </span>
           <span className="flex-1" />
-          <span data-testid="range-switch" role="group" aria-label={t('watch.host.range_label')}>
-            <SegmentControl options={RANGE_OPTS(t)} value={range} onChange={setRange} />
+          {page === 'status' && (
+            <span data-testid="range-switch" role="group" aria-label={t('watch.host.range_label')}>
+              <SegmentControl options={RANGE_OPTS(t)} value={range} onChange={setRange} />
+            </span>
+          )}
+          <span data-testid="page-switch" role="group" aria-label={t('watch.host.page_label')}>
+            <SegmentControl options={[{ value: 'status', label: t('watch.host.page.status') }, { value: 'settings', label: t('watch.host.page.settings') }]} value={page} onChange={setPage} />
           </span>
         </div>
+        {page === 'settings' ? (
+          <WatchSettings kind={view.kind === 'probe' ? 'probe' : 'daemon'} fleetHostId={view.id} hostConfigId={view.hostConfigId} offline={offline}
+            peerIds={peers.filter((v) => v.id !== view.id).flatMap((v) => (v.hostConfigId ? [v.hostConfigId] : []))} />
+        ) : (<>
         <Section title={t('watch.host.resources', { range: t(`watch.host.range.${range}`) })}>
           <Resources view={view} range={range} now={now} />
         </Section>
@@ -172,6 +184,7 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
             <ProcTable testId="procs-mem" title={t('watch.host.top_mem')} rows={view.slow?.top_mem ?? []} unit="mem" offline={offline} />
           </div>
         </Section>
+        </>)}
       </div>
     </div>
   )
