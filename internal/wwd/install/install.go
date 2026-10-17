@@ -366,8 +366,16 @@ func (i *Installer) Uninstall(ctx context.Context, purge bool) error {
 	case "linux":
 		// stopping does not depend on the unit file being on disk: the unit may be
 		// gone while the service is still loaded or running
-		if out, err := run(ctx, "wwd.uninstall.disable", "sudo", "systemctl", "disable", "--now", UnitName); err != nil && !notThere(out) {
-			return fmt.Errorf("systemctl disable --now %s: %w: %s", UnitName, err, bytes.TrimSpace(out))
+		if out, err := run(ctx, "wwd.uninstall.stop", "sudo", "systemctl", "stop", UnitName); err != nil && !notThere(out) {
+			return fmt.Errorf("systemctl stop %s: %w: %s", UnitName, err, bytes.TrimSpace(out))
+		}
+		// "not found" from stop or disable proves nothing about a running process:
+		// only an inactive answer lets the binary go
+		if _, err := run(ctx, "wwd.uninstall.active", "systemctl", "is-active", "--quiet", UnitName); err == nil {
+			return fmt.Errorf("systemctl: %s is still active after stop, nothing was removed", UnitName)
+		}
+		if out, err := run(ctx, "wwd.uninstall.disable", "sudo", "systemctl", "disable", UnitName); err != nil && !notThere(out) {
+			return fmt.Errorf("systemctl disable %s: %w: %s", UnitName, err, bytes.TrimSpace(out))
 		}
 		for _, c := range [][]string{
 			{"wwd.uninstall.rm", "sudo", "rm", "-f", i.unitPath()},

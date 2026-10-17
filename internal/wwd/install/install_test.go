@@ -489,18 +489,32 @@ func TestUninstallStopsEvenWhenTheDefinitionIsGone(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.calls = nil
-	f.failOn["sudo rm"] = false
+	f.failOn["systemctl is-active"] = true // inactive once stopped
 	if err := in.Uninstall(ctx, false); err != nil {
 		t.Fatal(err)
 	}
-	if !f.has("sudo systemctl disable --now") {
+	if !f.has("sudo systemctl stop") {
 		t.Errorf("the service was not stopped because its unit file was gone: %v", f.calls)
 	}
 	// a unit systemd says it does not know is fine
 	f.failOn["sudo systemctl disable"] = true
 	f.says = map[string]string{"sudo systemctl disable": "Failed to disable unit: Unit file wwd.service does not exist."}
+	f.failOn["systemctl is-active"] = true // inactive
 	if err := in.Uninstall(ctx, false); err != nil {
 		t.Errorf("an unknown unit should not fail the uninstall: %v", err)
+	}
+	// a stop that says "not loaded" while the process still answers active must not delete anything
+	if err := in.Install(ctx); err != nil {
+		t.Fatal(err)
+	}
+	delete(f.failOn, "systemctl is-active")
+	f.failOn["sudo systemctl stop"] = true
+	f.says["sudo systemctl stop"] = "Unit wwd.service not loaded."
+	if err := in.Uninstall(ctx, false); err == nil {
+		t.Error("a service that is still active was uninstalled")
+	}
+	if _, err := os.Stat(in.BinPath()); err != nil {
+		t.Error("the binary was deleted under a running service")
 	}
 }
 
