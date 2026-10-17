@@ -52,6 +52,9 @@ func TestConfigPeers(t *testing.T) {
 		"[[peers]]\nalias = \"x\"\naddr = \"192.168.1.5\"\n",
 		"[[peers]]\nalias = \"x\"\naddr = \"example.com\"\n",
 		"[[peers]]\nalias = \"x\"\naddr = \"0.0.0.0:7871\"\n",
+		"[[peers]]\nalias = \"x\"\naddr = \"100.64.0.4:abc\"\n",
+		"[[peers]]\nalias = \"x\"\naddr = \"100.64.0.4:99999\"\n",
+		"[[peers]]\nalias = \"x\"\naddr = \"100.64.0.4:0\"\n",
 		"[[peers]]\nalias = \"\"\naddr = \"100.64.0.4\"\n",
 		"[[peers]]\nalias = \"a\"\naddr = \"100.64.0.4\"\n[[peers]]\nalias = \"a\"\naddr = \"100.64.0.5\"\n",
 	} {

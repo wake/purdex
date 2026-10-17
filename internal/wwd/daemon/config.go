@@ -82,9 +82,12 @@ func (c Config) validatePeers() error {
 			return fmt.Errorf("peers: alias %q is empty or repeated", p.Alias)
 		}
 		seen[p.Alias] = true
-		host, _, err := net.SplitHostPort(p.HostPort())
+		host, port, err := net.SplitHostPort(p.HostPort())
 		if err != nil {
 			return fmt.Errorf("peers: %s: %w", p.Alias, err)
+		}
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("peers: %s: invalid port %q", p.Alias, port)
 		}
 		// the pool token is sent to this address: only loopback and tailnet IPs
 		if err := ValidateBindAddr(host); err != nil {
