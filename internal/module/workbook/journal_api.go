@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -355,7 +356,9 @@ type journalConfirmBody struct {
 // journal.changed (entries) is sent only if the file changed. 404: no such entry or item; 400: the entry is not a confirm.
 func (m *Module) handleJournalConfirm(w http.ResponseWriter, r *http.Request) {
 	var body journalConfirmBody
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil || body.EntryID == "" || body.Idx == nil || body.Done == nil {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16))
+	// Exactly one object: a second Decode must find the end (trailing tokens, garbage or a tail past the limit are a 400).
+	if err := dec.Decode(&body); err != nil || dec.Decode(&struct{}{}) != io.EOF || body.EntryID == "" || body.Idx == nil || body.Done == nil {
 		writeError(w, http.StatusBadRequest, "bad_request")
 		return
 	}
