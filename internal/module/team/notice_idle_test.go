@@ -3,7 +3,6 @@ package teammod
 import (
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/wake/purdex/internal/team"
 )
@@ -32,7 +31,7 @@ func idleSetup(t *testing.T) *fixture {
 func (f *fixture) idleCheck() {
 	f.t.Helper()
 	f.m.noticeIdle()
-	time.Sleep(60 * time.Millisecond)
+	f.m.sweepWG.Wait() // the notices the check started (goTracked) have been sent
 }
 
 func (f *fixture) advance(ms int64) { f.clock.Add(ms) }

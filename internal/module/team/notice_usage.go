@@ -84,7 +84,7 @@ func (m *Module) noticeUsage() {
 		}
 		pct := *u.UsedPercentage
 		if m.asksForItself(mr.SessionID) {
-			continue // its mod asks the lead at a turn boundary (member relay ask, D11); this notice is the fallback for older mods
+			continue // its mod asks the lead at a turn boundary (member relay ask, D11); this notice is the fallback for older mods (a mod of protocol 9 asks, so the intercept notice, not this one, covers it: RT-4)
 		}
 		if pct < threshold {
 			if _, err := m.store.ArmNotice(mr.SpawnOp, mr.SessionID); err != nil {

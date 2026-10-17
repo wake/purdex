@@ -56,7 +56,7 @@ import { registerGate } from './gate.js'
 import { CONSUMED, CONSUMED_REASK, claimOp, controlOp, controlReask, leadLine, parseTeamArgs, rosterLines } from './member.js'
 import { DEFAULT_BODIES, FIXED } from './prompts.js'
 
-const VERSION = '8' // the mod ↔ daemon protocol version `pdx relay hello --version` reports (5: the paused latch and the reask control; 6: person tokens, /team and the direct /relay; 7: the ask ladder - lastAskPct only on an answer, no ask past 90 %, an unanswered final card; 8: the idle half - an idle card's timeout writes the handoff file without clearing, and a later relay reuses it)
+const VERSION = '9' // the mod ↔ daemon protocol version `pdx relay hello --version` reports (5: the paused latch and the reask control; 6: person tokens, /team and the direct /relay; 7: the ask ladder - lastAskPct only on an answer, no ask past 90 %, an unanswered final card; 8: the idle half - an idle card's timeout writes the handoff file without clearing, and a later relay reuses it; 9: a member's idle compaction is intercepted and its lead told)
 const DEFAULT_THRESHOLD = 70
 const DEFAULT_MIN_GROWTH = 20000
 const REASK_POINTS = 10
@@ -99,6 +99,7 @@ const RELAY_PAUSED = '這個 session 已用 /relay off 暫停自我接力；要�
 const RELAY_NO_USAGE = '目前讀不到 context 用量，稍後再試'
 const RELAY_NOT_STARTED = '接力沒有開始（這個 session 剛換過或被清除）'
 const RELAY_MEMBER = 'member 的接力由 lead 安排'
+const SKIP_MEMBER_IDLE = 'member 閒置：已通知 lead 決定'
 const STATUS_HALF = '已寫好接力檔'
 const toastHalf = (path) => '快取即將過期，已先寫好接力檔（' + path + '）。要接力請打 /relay 或 /relay now，會直接接上後半：清空並由新對話接手，不用重寫接力檔；不需要就直接關掉這個 session，或照常繼續。'
 const TOAST_GAVE_UP = '接力檔不完整，已放棄接力；對話照常繼續'
@@ -116,6 +117,8 @@ const fresh = () => ({
   helloOK: false, // this session's hello answered (exit 0, JSON): only then is the threshold the daemon's
   helloSeq: 0, // the newest hello sent; an older one's answer is dropped
   helloBusy: false, // the newest hello has not answered yet
+  helloRetryMs: 0, // the pause before the next timed hello retry (0 = none yet; doubles to five minutes; cleared by an answer)
+  helloRetryPending: false, // a timed hello retry is waiting
   gen: 0, // bumped at every return to idle and every session change: a begin answers only for its own
   state: 'idle', // idle | beginning | awaiting | approved | clearing | seeding
   begun: undefined, // while beginning: a deferred resolving to the request begin opened and adopted, or undefined
@@ -129,6 +132,7 @@ const fresh = () => ({
   reaskSeen: [], // the ids of reask controls already taken, oldest first (MAX_REASKS_SEEN)
   reaskPending: '', // a reask that arrived while a turn ran or a relay was in progress: begun at the next turn end
   idleMinutes: 0, // idle relay (D9): hello's idle_minutes, or the env's; 0 = off (an older daemon, or no hello yet)
+  idleIntercept: 0, // hello's idle_intercept: whose idle compactions the daemon decides (1 = members); 0 = an older daemon: nothing is skipped (RT-4)
   idleThreshold: 0,
   envIdleMinutes: 0, // PDX_RELAY_IDLE_MINUTES, honoured only when hello advertised the feature
   envIdleThreshold: 0, // PDX_RELAY_IDLE_THRESHOLD
@@ -137,6 +141,7 @@ const fresh = () => ({
   idleAsk: false, // an idle ask is out (beginning / awaiting): it holds no prompt, a prompt withdraws it (D6)
   idleWithdraw: false, // a prompt arrived while the idle begin was out: the op it opens is withdrawn at once
   askEpoch: 0, // bumped by everything that makes an ask in the air stale (a /clear, a session reset, a compaction); never reset, like gen
+  lastTurnDoneAt: 0, // when the last main turn ended (the engine's clock, ms): names an idle stretch for the daemon (RT-4)
   half: undefined, // { op, path, at, sid }: the fresh half this session wrote (idle half, RT-3b): the next relay may reuse its file until the conversation moves
   halfBeginning: false, // a half begin is out: it holds no prompt
   halfStatus: false, // the status line says 「已寫好接力檔」 and nothing else has replaced it
@@ -233,20 +238,30 @@ async function hello($, seq) {
   try {
     const sid = await $.session.id()
     const turns = s.mainTurns
-    const r = await pdx($, ['relay', 'hello', '--session', sid, '--version', VERSION, '--agent', 'cc'], CALL_TIMEOUT_MS)
+    // The level of idle_intercept this mod already knows goes with the hello (once an answer has brought it): the daemon drops a member's
+    // older idle notices only after it has seen a mod say so, so an answer lost on the way never leaves an idle member unwatched.
+    const known = s.idleIntercept
+    const argv = ['relay', 'hello', '--session', sid, '--version', VERSION, '--agent', 'cc']
+    if (known > 0) argv.push('--idle-intercept', String(known))
+    const r = await pdx($, argv, CALL_TIMEOUT_MS)
     if (seq !== s.helloSeq) return // a newer hello answers for the session now
     const h = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
     if (!h || typeof h !== 'object') {
       s.roleCheckedAt = undefined // an unanswered re-check is not a check: the next turn at the threshold may try again
-      return // any other exit: not answered; said again at the next turn end
+      retryHelloLater($) // not answered: said again at the next turn end, and from a timer (an idle session has no turn end to wait for)
+      return
     }
     s.helloOK = true
+    s.helloRetryMs = 0
     if (h.role) {
       // A member that is none now (released, or its team ended) asks afresh: the +10 guard of an ask the daemon
       // refused as member must not hold it back (a refusal at 95% would otherwise mean never again).
       if (s.role === 'member' && h.role !== 'member') s.lastAskPct = undefined
       s.role = h.role
     }
+    s.idleIntercept = Number(h.idle_intercept) > 0 ? Number(h.idle_intercept) : 0
+    // The answer brought a level this hello did not carry: say hello once more with it (the acknowledgement the daemon waits for).
+    if (s.idleIntercept > known) helloLater($)
     if (!s.envThreshold && h.threshold > 0) s.threshold = h.threshold
     if (h.min_growth > 0) s.minGrowth = h.min_growth
     // Idle relay (D9): the daemon's numbers switch the feature on; without them it is off whatever the env says.
@@ -278,7 +293,24 @@ async function hello($, seq) {
 function helloLater($) {
   const seq = ++s.helloSeq
   s.helloBusy = true
-  $.clock.after(0, () => { void hello($, seq).catch(() => {}) })
+  $.clock.after(0, () => { void hello($, seq).catch(() => retryHelloLater($)) })
+}
+
+const HELLO_RETRY_FIRST_MS = 30_000
+const HELLO_RETRY_MAX_MS = 300_000
+
+// retryHelloLater says hello again after a pause while no hello has been answered (the daemon was down, or its answer was lost): the
+// mod learns what the daemon decides for idle compactions (hello's idle_intercept) only from an answer, and an idle session has no turn
+// end to retry at. One timer at a time; the pause doubles up to five minutes; a /clear (a new generation) drops it.
+function retryHelloLater($) {
+  if (!s.interactive || s.helloOK || s.helloRetryPending) return
+  const gen = s.gen
+  s.helloRetryMs = Math.min(s.helloRetryMs > 0 ? s.helloRetryMs * 2 : HELLO_RETRY_FIRST_MS, HELLO_RETRY_MAX_MS)
+  s.helloRetryPending = true
+  $.clock.after(s.helloRetryMs, () => {
+    s.helloRetryPending = false
+    if (s.gen === gen && s.interactive && !s.helloOK && !s.helloBusy) helloLater($)
+  })
 }
 
 // transientReport: a report that did not reach the daemon — 20 unreachable
@@ -1584,6 +1616,25 @@ function dropHalf($, stale) {
   })
 }
 
+// interceptedLater tells the daemon, from a timer, that the member's idle compaction was stopped (RT-4 T42).
+function interceptedLater($) {
+  const since = s.lastTurnDoneAt
+  const gen = s.gen
+  later($, 0, async () => {
+    const sid = await $.session.id()
+    const argv = ['relay', 'compacted', '--session', sid, '--trigger', 'idle', '--intercepted']
+    if (since > 0) argv.push('--period', String(since)) // names this idle period for the daemon: one decision per period
+    const r = await pdx($, argv, CALL_TIMEOUT_MS)
+    // The daemon decides by its own, authoritative role. `silent`: it does not know this session as a member (released, or the role is
+    // stale): this idle compaction was stopped for nothing, so the role is dropped and hello says what it is now; the next one runs.
+    const body = r.exitCode === 0 ? parseJSON(r.stdout) : undefined
+    if (body && body.route === 'silent' && s.gen === gen && s.role === 'member') {
+      s.role = 'none'
+      helloLater($)
+    }
+  })
+}
+
 function compactedLater($, trigger) {
   if (trigger !== 'auto' && trigger !== 'manual' && trigger !== 'idle') return
   later($, 0, async () => {
@@ -1909,6 +1960,7 @@ export function register(on) {
       r = await next(e)
     } finally {
       if (s.interactive && !e.agentId) s.turnRunning = false // a hook beneath that throws must not leave the turn running for good
+      if (s.interactive && !e.agentId) { try { s.lastTurnDoneAt = await $.clock.now() } catch {} }
     }
     if (!s.interactive || e.agentId) return r
     if (s.leadAsk && s.leadAsk.turnId !== undefined && e.turnId === s.leadAsk.turnId) s.leadAsk = undefined // the /lead turn has ended: it may be asked again
@@ -2077,6 +2129,13 @@ export function register(on) {
     // Claude Code's idle compaction runs between turns; a context-full auto compaction runs inside one (spec §4.5). Only
     // told apart once hello advertised the feature (an older daemon does not know `idle`).
     const trigger = e.trigger === 'auto' && !s.turnRunning && s.idleMinutes > 0 ? 'idle' : e.trigger
+    // A member's idle compaction (RT-4 T42, Gate M-1): an auto compaction with no main turn running. It is stopped, and the daemon tells
+    // the lead to decide (relay, hand over and close, close). A context-full compaction runs inside a turn; a relay under way keeps its rule below.
+    // Only when the daemon says it decides these (hello's idle_intercept covers members): an older daemon leaves the compaction as before.
+    if (s.helloOK && s.idleIntercept >= 1 && s.role === 'member' && e.trigger === 'auto' && !s.turnRunning && s.state === 'idle') {
+      interceptedLater($)
+      return { skip: SKIP_MEMBER_IDLE }
+    }
     if (s.state === 'approved') {
       if (e.trigger === 'auto') return { skip: SKIP_COMPACT }
       return compactedAfter($, e, await next(e), trigger)
