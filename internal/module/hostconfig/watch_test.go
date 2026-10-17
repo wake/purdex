@@ -106,6 +106,11 @@ func TestWatch_TheDeliveryFieldsAreValidated(t *testing.T) {
 		"a bad mode":        `,"mode":"always"`,
 		"patrol idle zero":  `,"patrol_idle_min":0`,
 		"patrol idle huge":  `,"patrol_idle_min":1441`,
+		"patrol present 0":  `,"patrol_present_min":0`,
+		"patrol busy huge":  `,"patrol_busy_min":1441`,
+		"patrol calm 0":     `,"patrol_calm_min":0`,
+		"patrol rest 0":     `,"patrol_rest_min":0`,
+		"disk low 0":        `,"disk_low_gb":0`,
 		"a bad model":       `,"model":"bad model"`,
 		"an empty model":    `,"model":""`,
 		"a multi-line cmd":  `,"agent_command":"claude\nrm -rf x"`,
@@ -149,6 +154,7 @@ func TestWatch_TheDefaultsAreTheSpecs(t *testing.T) {
 	assert.Equal(t, "~/Workspace/wake/mlab-purdex-watch", d.Workdir)
 	assert.Equal(t, watchsettings.ModePatrol, d.Mode)
 	assert.Equal(t, 120, d.PatrolIdleMin)
+	assert.Equal(t, []int{30, 10, 15, 10, 14}, []int{d.PatrolPresentMin, d.PatrolBusyMin, d.PatrolCalmMin, d.PatrolRestMin, d.DiskLowGB}, "present / busy / calm / rest minutes, disk GB (plan W3b-5)")
 	assert.True(t, d.AutoWake)
 	assert.Equal(t, "claude --dangerously-skip-permissions --model opus", d.AgentCommand)
 }
@@ -225,4 +231,33 @@ func TestWatch_InvalidUTF8IsRefusedNotRewritten(t *testing.T) {
 	e, err := m.store.Get(KeyWatch)
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), e.Revision, "nothing stored")
+}
+
+// The patrol numbers round-trip, and a client that does not send them (an older App) keeps the defaults rather than failing.
+func TestWatch_ThePatrolNumbersRoundTripAndDefaultWhenLeftOut(t *testing.T) {
+	m := newTestModule(t)
+	rr := serve(m, http.MethodPut, "/api/hostconfig/watch", `{"items":`+strings.TrimSuffix(watchOK, "}")+`,"patrol_present_min":45,"patrol_busy_min":5,"patrol_calm_min":20,"patrol_rest_min":30,"disk_low_gb":20},"baseRevision":0}`)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	s, err := m.WatchSettings()
+	require.NoError(t, err)
+	assert.Equal(t, []int{45, 5, 20, 30, 20}, []int{s.PatrolPresentMin, s.PatrolBusyMin, s.PatrolCalmMin, s.PatrolRestMin, s.DiskLowGB})
+
+	m2 := newTestModule(t)
+	rr = serve(m2, http.MethodPut, "/api/hostconfig/watch", `{"items":`+watchOK+`,"baseRevision":0}`)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	s, err = m2.WatchSettings()
+	require.NoError(t, err)
+	assert.Equal(t, []int{30, 10, 15, 10, 14}, []int{s.PatrolPresentMin, s.PatrolBusyMin, s.PatrolCalmMin, s.PatrolRestMin, s.DiskLowGB}, "never set and left out: the defaults")
+}
+
+// An older client's write (it does not send the patrol numbers) keeps the numbers a newer client set.
+func TestWatch_AnOlderClientsWriteKeepsTheStoredPatrolNumbers(t *testing.T) {
+	m := newTestModule(t)
+	rr := serve(m, http.MethodPut, "/api/hostconfig/watch", `{"items":`+strings.TrimSuffix(watchOK, "}")+`,"patrol_present_min":45,"patrol_busy_min":5,"patrol_calm_min":20,"patrol_rest_min":30,"disk_low_gb":20},"baseRevision":0}`)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	rr = serve(m, http.MethodPut, "/api/hostconfig/watch", `{"items":`+watchOK+`,"baseRevision":1}`)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	s, err := m.WatchSettings()
+	require.NoError(t, err)
+	assert.Equal(t, []int{45, 5, 20, 30, 20}, []int{s.PatrolPresentMin, s.PatrolBusyMin, s.PatrolCalmMin, s.PatrolRestMin, s.DiskLowGB}, "left out: what is stored")
 }

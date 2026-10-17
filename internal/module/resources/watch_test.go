@@ -388,3 +388,22 @@ func TestWatch_WithoutASinkTheEventIsOnlyRecorded(t *testing.T) {
 		t.Fatalf("records = %+v", r.records())
 	}
 }
+
+// #3072: the footprint the environment reads reaches the detector. A tree of 1.5 GB of RSS and 0.1 core is no event when its
+// footprint is small, and is one when the environment has none.
+func TestWatch_TheFootprintIsWhatTheDetectorCountsBy(t *testing.T) {
+	big := []resources.Proc{proc(1, 0, "launchd", 0, 10), proc(10, 1, "zsh", 0, 5), proc(100, 10, "node", 10, 1500)}
+	r := newWatchRig(t, resources.ModeMeasure)
+	r.m.watch.env.footprint = func(int) (uint64, bool) { return 50 << 20, true }
+	r.setProcs(big)
+	r.ticks(30)
+	if n := len(r.records()); n != 0 {
+		t.Fatalf("records = %d, want none: the footprint is small", n)
+	}
+	r2 := newWatchRig(t, resources.ModeMeasure)
+	r2.setProcs(big)
+	r2.ticks(30)
+	if n := len(r2.records()); n != 1 {
+		t.Fatalf("records = %d, want 1 without a footprint", n)
+	}
+}
