@@ -278,4 +278,3 @@ describe('ConfirmDetail alone', () => {
     expect(screen.queryAllByTestId('journal-item-check')).toEqual([])
   })
 })
-})
