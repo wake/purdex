@@ -6,7 +6,8 @@
 //
 // - `sessions`: every `hostId:code` with `unread[k] === true` that some live pane of ANY tab in this window shows
 //   (every workspace, every split pane, worker `exec-` panes too; a pane whose session ended is not live), plus the key
-//   each card resolved to. A card counts whether or not its session has a tab; an unread event only when it has one.
+//   each card resolved to. A card counts whether or not its session has a tab; an unread event only when it has one,
+//   and never when the session is an active team member (member spec R2; its cards still count).
 // - `cards`: every open card, `id` = `hostId NUL approvalId` (the same in every window), `session` = the key this
 //   window resolved it to (absent when it could not), `fallback` = what main counts when no window resolved it.
 //
@@ -41,6 +42,8 @@ export interface BadgeReportInput {
   sessions: Record<string, ReadonlyArray<{ code: string; name: string }>>
   /** The Claude Code session ids this window has on record for a key (see `knownSessionIdsOf`). */
   knownSessionIds: (key: string) => readonly string[]
+  /** The active team members' keys (`activeMemberKeys`): their unread counts nowhere, their cards still do (member spec R2). */
+  members?: ReadonlySet<string>
 }
 
 /**
@@ -95,7 +98,9 @@ export function badgeReport(input: BadgeReportInput): BadgeReport {
   }
 
   const sessions = new Set<string>()
-  for (const [key, unread] of Object.entries(input.unread)) if (unread === true && shown.has(key)) sessions.add(key)
+  for (const [key, unread] of Object.entries(input.unread)) {
+    if (unread === true && shown.has(key) && !input.members?.has(key)) sessions.add(key)
+  }
 
   const cards: BadgeCard[] = []
   for (const { hostId, approval: a } of input.cards) {

@@ -6,6 +6,7 @@ package teammod
 // team.roster host event. This file only materializes it.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -121,11 +122,14 @@ func (m *Module) buildRoster() (team.Roster, error) {
 		m.logf("[team] roster team colours: %v", cerr) // the panel falls back to its automatic colour
 	}
 	alias, _ := m.selfHost()
+	genCtx, genCancel := context.WithTimeout(context.Background(), originProbeTimeout)
+	defer genCancel()
+	gen := &generationMemo{m: m, ctx: genCtx}
 	out := team.Roster{Teams: make([]team.TeamRoster, 0, len(teams))}
 	for i, t := range teams {
 		tr := team.TeamRoster{ID: t.ID, HostID: t.HostID, TeamName: t.TeamName, TeamLabel: t.TeamLabel, CreatedAt: t.CreatedAt,
 			MaxMembers: t.Grant.MaxMembers, InUse: inUse[t.ID], Roots: append([]string{}, t.Grant.Roots...), RootsRev: t.Grant.RootsRev,
-			Lead: m.rosterLead(t.Team, origins, alias, t.leadUsage), Members: []team.RosterMember{}}
+			Lead: m.rosterLead(t.Team, origins, alias, t.leadUsage, gen), Members: []team.RosterMember{}}
 		if c, ok := colors[t.ID]; ok {
 			tr.TeamColor = &c
 		}
@@ -139,8 +143,11 @@ func (m *Module) buildRoster() (team.Roster, error) {
 			}
 			s := rosterSession(origins, mr.SessionID, func() team.RosterSession {
 				return team.RosterSession{SessionID: mr.SessionID, Ref: mr.Ref, Address: alias + "/" + mr.Ref,
-					Title: mr.Title, TmuxSession: mr.TmuxSession}
+					Title: mr.Title, TmuxSession: mr.TmuxSession, TmuxInstance: storedInstance(mr.TmuxSession, mr.TmuxInstance)}
 			}, mr.Ref, alias)
+			if s.Live {
+				s.TmuxInstance = gen.of(origins[mr.SessionID])
+			}
 			s.Model, s.Effort = mr.Model, mr.Effort // what it was spawned with
 			s.Context = m.sessionContext(mr.SessionID, mr.Usage)
 			s.RelayQuota = quotas[mr.SessionID]
@@ -157,6 +164,14 @@ func (m *Module) buildRoster() (team.Roster, error) {
 		out.Teams = append(out.Teams, tr)
 	}
 	return out, nil
+}
+
+// storedInstance is the generation team.db recorded for a seat, shown only for a seat that has a tmux session name.
+func storedInstance(tmuxSession, instance string) string {
+	if tmuxSession == "" {
+		return ""
+	}
+	return instance
 }
 
 // freshOf is a session's fresh half for the roster, nil when it has none.
@@ -181,8 +196,11 @@ func pausedOf(pauses map[string]team.RosterPause, sessionID string) *team.Roster
 // the lead's ref is still the one it was recorded with (a relay's cleared
 // moves the lead to a new ref); otherwise it is <self alias>/<lead_ref>.
 // persisted is the lead reading the sweeper stored on the team row.
-func (m *Module) rosterLead(t team.Team, origins map[string]team.Origin, alias string, persisted *team.MemberContext) team.RosterSession {
+func (m *Module) rosterLead(t team.Team, origins map[string]team.Origin, alias string, persisted *team.MemberContext, gen *generationMemo) team.RosterSession {
 	s := rosterSession(origins, t.LeadSessionID, func() team.RosterSession { return m.leadStoredSession(t, alias) }, t.LeadRef, alias)
+	if s.Live {
+		s.TmuxInstance = gen.of(origins[t.LeadSessionID])
+	}
 	s.Context = m.sessionContext(t.LeadSessionID, persisted) // a lead has no spawn model / effort
 	return s
 }

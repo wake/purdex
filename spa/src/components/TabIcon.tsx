@@ -3,6 +3,7 @@ import type { AgentStatus, BackgroundKind, SubagentRef } from '../stores/useAgen
 import type { TabIndicatorStyle } from '../stores/useUISettingsStore'
 import { TabStatusIndicator } from './TabStatusIndicator'
 import { SubagentDots } from './SubagentDots'
+import type { FleetWaiter } from '../lib/fleet/types'
 import { BackgroundSymbol } from './BackgroundSymbol'
 
 function UnreadPip({ size = 5 }: { size?: number }) {
@@ -36,6 +37,8 @@ interface Props {
   awaitingApproval?: boolean
   /** The tab's highest background-work kind (N6): a small symbol at the top-left of the agent icon (of the dot in `dot`). */
   background?: BackgroundKind
+  /** The waiters behind the queue hourglass (its tooltip). */
+  backgroundWaiters?: FleetWaiter[]
 }
 
 export function TabIcon({
@@ -48,6 +51,7 @@ export function TabIcon({
   isUnread,
   awaitingApproval = false,
   background,
+  backgroundWaiters,
 }: Props) {
   const iconBox = (
     <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-[1.5px] lowdpi:ml-px">
@@ -75,7 +79,7 @@ export function TabIcon({
         <TabStatusIndicator status={status} mode="replace" isActive={isActive} awaitingApproval={awaitingApproval} />
         {showDotUnreadPip && <UnreadPip />}
         {subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} />}
-        {background && <BackgroundSymbol kind={background} top={0} left={0} />}
+        {background && <BackgroundSymbol kind={background} waiters={backgroundWaiters} top={0} left={0} />}
       </span>
     )
   }
@@ -91,7 +95,7 @@ export function TabIcon({
         {IconComponent && (background ? (
           <span className="relative inline-flex">
             <IconComponent size={iconSize} className="flex-shrink-0" />
-            <BackgroundSymbol kind={background} />
+            <BackgroundSymbol kind={background} waiters={backgroundWaiters} />
           </span>
         ) : (
           <IconComponent size={iconSize} className="flex-shrink-0" />
@@ -118,7 +122,7 @@ export function TabIcon({
         awaitingApproval={awaitingApproval}
       />
       {!lightsOff && subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} left={-4} />}
-      {!lightsOff && background && <BackgroundSymbol kind={background} />}
+      {!lightsOff && background && <BackgroundSymbol kind={background} waiters={backgroundWaiters} />}
     </span>
   )
 }

@@ -33,6 +33,8 @@ type watchEnv struct {
 	isGate func(ctx context.Context, pid int) bool
 	argv   func(ctx context.Context, pid int) []string
 	cwd    func(ctx context.Context, pid int) string
+	// started is when pid started (the zero time: unknown).
+	started func(ctx context.Context, pid int) time.Time
 }
 
 func defaultWatchEnv() watchEnv {
@@ -58,6 +60,17 @@ func defaultWatchEnv() watchEnv {
 			return info.Argv
 		},
 		cwd: lsofCwd,
+		started: func(ctx context.Context, pid int) time.Time {
+			snap, err := iagent.SharedProcessSnapshot(ctx)
+			if err != nil {
+				return time.Time{}
+			}
+			info, err := snap.ReadFresh(pid)
+			if err != nil {
+				return time.Time{}
+			}
+			return info.StartTime
+		},
 	}
 }
 
@@ -210,10 +223,16 @@ func (m *Module) watchPass(ctx context.Context, raw resources.HostRaw, procs []r
 	heavy, light := env.held(gcfg)
 	in := watch.Input{
 		Now: m.now(), Procs: procs, Raw: raw, Roots: roots, Interval: m.interval,
-		Holders:  append(heavy, light...),
-		IsGate:   func(pid int) bool { return env.isGate(ctx, pid) },
-		Argv:     func(pid int) []string { return env.argv(ctx, pid) },
-		Cwd:      func(pid int) string { return env.cwd(ctx, pid) },
+		Holders: append(heavy, light...),
+		IsGate:  func(pid int) bool { return env.isGate(ctx, pid) },
+		Argv:    func(pid int) []string { return env.argv(ctx, pid) },
+		Cwd:     func(pid int) string { return env.cwd(ctx, pid) },
+		Started: func(pid int) time.Time {
+			if env.started == nil {
+				return time.Time{}
+			}
+			return env.started(ctx, pid)
+		},
 		LockPIDs: func(h gate.Holder) []int { return env.lockPIDs(gcfg, h) },
 		Set: watch.Settings{
 			XCores: ws.XCores, YMB: ws.YMB, TS: watchsettings.Seconds(ws.TSeconds),
