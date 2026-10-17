@@ -216,6 +216,7 @@ func (m *Module) handleHostSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m.kickPoll()
+	m.kickNotify()
 	m.writeJSON(w, http.StatusOK, map[string]string{"result": line})
 }
 
@@ -245,6 +246,7 @@ func (m *Module) handleHostRemove(w http.ResponseWriter, r *http.Request) {
 		m.writeEditErr(w, err)
 		return
 	}
+	m.kickNotify()
 	m.writeJSON(w, http.StatusOK, map[string]string{"result": "removed"})
 }
 

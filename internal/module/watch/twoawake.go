@@ -11,7 +11,6 @@ import (
 	"github.com/wake/purdex/internal/config"
 	"github.com/wake/purdex/internal/module/peers"
 	ipeers "github.com/wake/purdex/internal/peers"
-	"github.com/wake/purdex/internal/team"
 	"github.com/wake/purdex/internal/watch"
 )
 
@@ -262,13 +261,6 @@ func standDownText(winner watch.HolderAnswer) string {
 	return "[負載守門] 另一台主機（" + winner.HostID + "）的守門員比你醒得久，之後事件都送給那一位。請把你的筆記寫好並推送，然後結束這個 session（/exit）。"
 }
 
-// originSource is the part of the peers module's OriginResolver the notice needs: the watcher's inbox, and its address by the
-// ref of its conversation (which names that session and no other, unlike the tmux session name that the next watcher reuses).
-type originSource interface {
-	InboxOf(sessionID string) (inbox string, ok bool, err error)
-	ResolveOriginBySession(sessionID string) (team.Origin, bool, error)
-}
-
 // peerStandDowner delivers the notice through the peers module: from the watcher's own inbox (a notice about itself, so the
 // self-notice sender, which alone skips the self_target refusal), to its own address by ref. A watcher that restarted since has
 // another session and another ref, so the notice for the old one cannot reach the new one.
@@ -287,47 +279,5 @@ type WatcherNotifier interface {
 type peerNotifier struct{ m *Module }
 
 func (s peerNotifier) Notify(ctx context.Context, own watch.Holder, text string) error {
-	reg := s.m.core.Registry
-	osvc, ok := reg.Get(peers.OriginResolverKey)
-	if !ok {
-		return errors.New("the peers origin resolver is not available")
-	}
-	origins, ok := osvc.(originSource)
-	if !ok {
-		return errors.New("the peers origin resolver cannot name an inbox")
-	}
-	ssvc, ok := reg.Get(peers.SelfNoticeSenderKey)
-	if !ok {
-		return errors.New("the peers self-notice sender is not available")
-	}
-	sender, ok := ssvc.(peers.SelfNoticeSender)
-	if !ok {
-		return errors.New("the peers self-notice sender is not a sender")
-	}
-	inbox, found, err := origins.InboxOf(own.SessionID)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return errors.New("the watcher has no live inbox")
-	}
-	origin, found, err := origins.ResolveOriginBySession(own.SessionID)
-	if err != nil {
-		return err
-	}
-	if !found || origin.Ref == "" {
-		return errors.New("the watcher has no live address")
-	}
-	s.m.core.CfgMu.RLock()
-	alias := s.m.core.Cfg.PeerAlias()
-	s.m.core.CfgMu.RUnlock()
-	to := alias + "/" + origin.Ref
-	resp, err := sender.SendSelfNotice(ctx, ipeers.SendRequest{To: to, Text: text, OriginInbox: inbox})
-	if err != nil {
-		return err
-	}
-	if resp.Result == ipeers.ResultDeliveryUncertain {
-		s.m.logf("[watch] notice to %s: delivery uncertain; not resent", to)
-	}
-	return nil
+	return peers.NotifySelf(ctx, s.m.core, s.m.logf, own.SessionID, text)
 }

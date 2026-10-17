@@ -123,3 +123,27 @@ func (s *Store) RefSuccessors(ref string) ([]string, error) {
 	})
 	return out, nil
 }
+
+// LocalLiveSessionsOfTeam implements team.AssistTeams: the sessions of a live team on THIS host that are worth a notice: its lead when
+// the lead is here, and its active members here (a remote member, one that is going or gone, and an ended team's are not).
+func (s *Store) LocalLiveSessionsOfTeam(teamID string) ([]string, error) {
+	t, ok, err := s.TeamByID(teamID)
+	if err != nil || !ok || t.EndedAt != 0 {
+		return nil, err
+	}
+	var out []string
+	if s.localHostID == "" || t.HostID == s.localHostID {
+		out = append(out, t.LeadSessionID)
+	}
+	loc, locArgs := s.local("m.host_id")
+	rows, err := s.queryMembers("local live sessions of a team", `SELECT `+qualify("m", memberCols+", "+memberUsageCols)+`
+		FROM team_members m WHERE m.team_id = ? AND m.state = 'active' AND `+loc+` ORDER BY m.created_at, m.spawn_op`,
+		append([]any{teamID}, locArgs...)...)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out = append(out, r.SessionID)
+	}
+	return out, nil
+}

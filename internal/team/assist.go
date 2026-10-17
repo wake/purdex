@@ -11,4 +11,7 @@ type AssistTeams interface {
 	ListLiveTeams() ([]Team, error)
 	// RefSuccessors are the session ids whose relay chain holds ref (newest first); the caller picks the first live one.
 	RefSuccessors(ref string) ([]string, error)
+	// LocalLiveSessionsOfTeam are the sessions of a live team on this host: its lead when the lead is here, and its active members
+	// here. An ended or unknown team has none.
+	LocalLiveSessionsOfTeam(teamID string) ([]string, error)
 }
