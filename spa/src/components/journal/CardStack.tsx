@@ -25,7 +25,6 @@ import { cardWidth, useJournalUiStore, type CardKey } from '../../stores/useJour
 import { keepFocus } from '../../lib/keep-focus'
 import { patchUnitMemo, useViewMemo } from '../../lib/journal/use-view-memo'
 import { patchViewMemo, readViewMemo, type ViewMemo } from '../../lib/journal/view-memory'
-import type { JournalEntry } from '../../lib/journal/types'
 
 /**
  * The width of the content box the stack floats in (its offset parent: the side bar and the activity bar already took theirs),
@@ -108,8 +107,11 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
   const found = memo.journalOpen && unit && memo.detailId !== null ? (unit.entries.find((e) => e.id === memo.detailId) ?? unit.confirms.find((e) => e.id === memo.detailId)) : undefined
   // Checking the last item takes the entry out of the band; an entry of an older month is not in the stream either, so the detail
   // keeps the last copy it saw (every item answered) instead of vanishing under the pointer.
-  const [lastDetail, setLastDetail] = useState<JournalEntry | undefined>(undefined)
-  if (found && found !== lastDetail) setLastDetail(found) // state adjusted during render: React re-renders at once
+  // The copy lives in the unit's view memo, outside this component: it survives a remount and is never shared between units.
+  const lastDetail = memo.lastDetail
+  useEffect(() => {
+    if (found && found !== lastDetail) patchUnitMemo(memoHost, memoKey, { lastDetail: found })
+  }, [found, lastDetail, memoHost, memoKey])
   const kept = !found && memo.journalOpen && memo.detailId !== null && lastDetail?.id === memo.detailId
     ? { ...lastDetail, items: lastDetail.items.map((it) => ({ ...it, done: true })) }
     : undefined
