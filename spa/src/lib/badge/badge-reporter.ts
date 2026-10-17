@@ -1,5 +1,6 @@
 // spa/src/lib/badge/badge-reporter.ts — sends this window's Dock-badge report to Electron main (app-badge spec §3.2,
-// §4.1). It watches every input of `badgeReport` (unread, tabs, open cards, hook cards, the host session lists) and,
+// §4.1). It watches every input of `badgeReport` (unread, tabs, open cards, hook cards, the host session lists, and the
+// team rosters that say who is a member — member spec R2) and,
 // 300 ms after the last change, sends the report when it differs from the one last sent. The first report goes out
 // even when empty: main drops a window's report on reload, so a fresh page always says where it stands.
 // Outside Electron — or in an app build without `electronAPI.badge` — nothing is subscribed and nothing is sent.
@@ -8,6 +9,10 @@ import { useApprovalStore } from '../../stores/useApprovalStore'
 import { useHookCardStore } from '../../stores/useHookCardStore'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useTabStore } from '../../stores/useTabStore'
+import { useHostStore } from '../../stores/useHostStore'
+import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
+import { currentMemberKeys } from '../team/member-keys'
+import { teamHostMap } from '../team/team-state'
 import { badgeReport, knownSessionIdsOf, type BadgeReport } from './badge-report'
 
 export const BADGE_DEBOUNCE_MS = 300
@@ -21,6 +26,7 @@ export function currentBadgeReport(): BadgeReport {
     cards: [...Object.values(useApprovalStore.getState().entries), ...Object.values(useHookCardStore.getState().entries)],
     sessions: useSessionStore.getState().sessions,
     knownSessionIds: knownSessionIdsOf(tabs),
+    members: currentMemberKeys(),
   })
 }
 
@@ -51,6 +57,10 @@ export function startBadgeReporter(): () => void {
     useApprovalStore.subscribe((s, p) => { if (s.entries !== p.entries) schedule() }),
     useHookCardStore.subscribe((s, p) => { if (s.entries !== p.entries) schedule() }),
     useSessionStore.subscribe((s, p) => { if (s.sessions !== p.sessions) schedule() }),
+    // Joining or leaving a team changes who counts (member spec R2), with no unread or tab change to say so.
+    useTeamRosterStore.subscribe((s, p) => { if (s.byHost !== p.byHost) schedule() }),
+    // A remote member's host comes from the verified daemon-id map: compare its text, `runtime` changes with every latency sample.
+    useHostStore.subscribe((s, p) => { if (JSON.stringify(teamHostMap(s)) !== JSON.stringify(teamHostMap(p))) schedule() }),
   ]
   schedule()
 
