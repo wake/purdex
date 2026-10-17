@@ -1,6 +1,8 @@
 package workbook
 
 import (
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"slices"
@@ -111,18 +113,27 @@ func (m *Module) sessionChain(current string) []chainLink {
 	return rev
 }
 
-// leaderSession is the leader session whose chain the reader asks for: a team's current lead, else the reader itself.
-func (m *Module) leaderSession(tgt journalTarget, reader string) string {
-	if tgt.kind == UnitTeam {
-		if feed := m.teamFeed(); feed != nil {
-			if info, found, err := feed.TeamInfo(tgt.id); err != nil {
-				log.Printf("[workbook] journal: team %s: %v", tgt.id, err)
-			} else if found && info.LeadSessionID != "" {
-				return info.LeadSessionID
-			}
-		}
+// leaderSession is the leader session whose chain the reader asks for: a team's current lead, else the reader itself. A
+// team's lead comes from the team feed; when the feed cannot say (no feed, an error, an unknown team, a blank lead) only a
+// reader that is itself the lead may stand in for it. A member never does: its own chain is not the leader's.
+func (m *Module) leaderSession(tgt journalTarget, reader string) (string, error) {
+	if tgt.kind != UnitTeam {
+		return reader, nil
 	}
-	return reader
+	var why error
+	if feed := m.teamFeed(); feed == nil {
+		why = errors.New("no team feed")
+	} else if info, found, err := feed.TeamInfo(tgt.id); err != nil {
+		why = fmt.Errorf("team %s: %w", tgt.id, err)
+	} else if !found || info.LeadSessionID == "" {
+		why = fmt.Errorf("team %s has no known lead", tgt.id)
+	} else {
+		return info.LeadSessionID, nil
+	}
+	if tgt.role == team.SeatLead {
+		return reader, nil
+	}
+	return "", why
 }
 
 // sessionIndex attributes entries to the sessions of a chain.
@@ -214,7 +225,13 @@ func (m *Module) handleJournalSessions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "unavailable")
 		return
 	}
-	chain := m.sessionChain(m.leaderSession(tgt, reader))
+	leader, err := m.leaderSession(tgt, reader)
+	if err != nil {
+		log.Printf("[workbook] journal: leader of %s: %v", tgt.unit.Key, err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "unavailable", "detail": err.Error()})
+		return
+	}
+	chain := m.sessionChain(leader)
 	out := make([]journalSessionJSON, 0, len(chain))
 	for i, c := range chain {
 		js := journalSessionJSON{SessionID: c.sid, StartedAt: c.startAt, Via: c.via, Current: i == len(chain)-1}

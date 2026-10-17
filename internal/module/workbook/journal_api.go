@@ -137,6 +137,7 @@ func confirmsWire(es []journal.Entry) []journalEntryJSON {
 type journalTarget struct {
 	unit     UnitRow
 	kind, id string
+	role     string // the reader's seat role
 }
 
 // seatOf is the session's seat; a daemon without the team module has everyone in no team.
@@ -210,7 +211,7 @@ func (m *Module) resolveJournal(w http.ResponseWriter, sessionID string) (journa
 		return journalTarget{}, false
 	}
 	kind, id, _ := strings.Cut(key, ":")
-	return journalTarget{unit: unit, kind: kind, id: id}, true
+	return journalTarget{unit: unit, kind: kind, id: id, role: seat.Role}, true
 }
 
 // projectName is the project's name for the header: its repository's folder, else the unit's label.
@@ -332,7 +333,13 @@ func (m *Module) writeSessionPage(w http.ResponseWriter, r *http.Request, tgt jo
 		return
 	}
 	reader := r.URL.Query().Get("session_id")
-	idx := newSessionIndex(m.sessionChain(m.leaderSession(tgt, reader)))
+	leader, err := m.leaderSession(tgt, reader)
+	if err != nil {
+		log.Printf("[workbook] journal: leader of %s: %v", tgt.unit.Key, err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "unavailable", "detail": err.Error()})
+		return
+	}
+	idx := newSessionIndex(m.sessionChain(leader))
 	want := len(idx.chain) - 1
 	if page := r.URL.Query().Get("page"); page != "" {
 		p, found := idx.pos[page]
