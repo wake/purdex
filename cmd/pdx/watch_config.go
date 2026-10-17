@@ -19,7 +19,7 @@ import (
 
 // watchConfigKeys are the keys of the setting, in the order they are shown.
 var watchConfigKeys = []string{"enabled", "x_cores", "y_mb", "t_s", "pressure_level", "pressure_t_s", "page_rate", "page_t_s",
-	"targets", "mode", "patrol_idle_min", "auto_wake", "agent_command", "workdir", "start_prompt", "wake_prompt"}
+	"targets", "mode", "patrol_idle_min", "patrol_present_min", "patrol_busy_min", "patrol_calm_min", "patrol_rest_min", "disk_low_gb", "auto_wake", "agent_command", "workdir", "start_prompt", "wake_prompt"}
 
 func watchConfig(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("watch config", flag.ContinueOnError)

@@ -77,9 +77,12 @@ func (f *fakeOrigins) ListLiveOrigins() ([]team.Origin, error) {
 }
 
 type fakeTeams struct {
-	teams []team.Team
-	succ  map[string][]string
+	teams    []team.Team
+	succ     map[string][]string
+	sessions map[string][]string // team id → the sessions of it on this host
 }
+
+func (f *fakeTeams) LocalLiveSessionsOfTeam(id string) ([]string, error) { return f.sessions[id], nil }
 
 func (f *fakeTeams) ListLiveTeams() ([]team.Team, error)        { return f.teams, nil }
 func (f *fakeTeams) RefSuccessors(ref string) ([]string, error) { return f.succ[ref], nil }
@@ -96,7 +99,7 @@ func (f *fakeSeats) SeatOf(id string) (team.Seat, error) {
 func newRig(t *testing.T) *rig {
 	t.Helper()
 	r := &rig{t: t, dir: t.TempDir(), ctl: t.TempDir(), scripts: t.TempDir(),
-		origins: &fakeOrigins{live: map[string]team.Origin{}}, teams: &fakeTeams{succ: map[string][]string{}},
+		origins: &fakeOrigins{live: map[string]team.Origin{}}, teams: &fakeTeams{succ: map[string][]string{}, sessions: map[string][]string{}},
 		seats: &fakeSeats{m: map[string]team.Seat{}}, clock: &fakeClock{t: time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)}}
 	r.m = New()
 	r.m.dir = r.dir

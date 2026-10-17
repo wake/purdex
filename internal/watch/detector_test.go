@@ -33,6 +33,9 @@ type rig struct {
 	started map[int]time.Time // when each pid started; absent = unknown
 	lockPID []int
 	locks   int
+	// fp, when non-nil, backs the Footprint callback: a pid absent from it is "not ok"; fpCalls counts the asks.
+	fp      map[int]uint64
+	fpCalls int
 }
 
 func newRig(t *testing.T) *rig {
@@ -51,6 +54,13 @@ func (r *rig) pass() []Event {
 			r.locks++
 			return r.lockPID
 		},
+	}
+	if r.fp != nil {
+		in.Footprint = func(pid int) (uint64, bool) {
+			r.fpCalls++
+			v, ok := r.fp[pid]
+			return v, ok
+		}
 	}
 	ev := r.d.Pass(in)
 	r.now = r.now.Add(tick)

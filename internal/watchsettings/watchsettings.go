@@ -30,6 +30,14 @@ type Settings struct {
 	// Mode is ModePatrol or ModeResident; PatrolIdleMin is the rest countdown of patrol mode.
 	Mode          string `json:"mode"`
 	PatrolIdleMin int    `json:"patrol_idle_min"`
+	// The daemon's patrol of the watcher (plan W3b-5b), in minutes between notes: while the person is at the computer, while the host
+	// is in unattended mode under pressure (busy) and not (calm), and while the watcher rests; DiskLowGB is the free disk space under
+	// which the watcher is told at once.
+	PatrolPresentMin int `json:"patrol_present_min"`
+	PatrolBusyMin    int `json:"patrol_busy_min"`
+	PatrolCalmMin    int `json:"patrol_calm_min"`
+	PatrolRestMin    int `json:"patrol_rest_min"`
+	DiskLowGB        int `json:"disk_low_gb"`
 	// AutoWake: whether an event wakes or starts a watcher.
 	AutoWake bool `json:"auto_wake"`
 	// AgentCommand is the command run in the pdx-watch tmux session to start or resume the watcher (spec §12.2; it replaced
@@ -44,7 +52,7 @@ type Settings struct {
 // Default is what a never-written setting answers: on (spec §12.2), with the first thresholds.
 func Default() Settings {
 	return Settings{Enabled: true, XCores: 1.5, YMB: 1024, TSeconds: 60, PressureLevel: 2, PressureTSeconds: 120, PageRate: 50, PageTSeconds: 60,
-		Targets: []string{"air26", "mlab"}, Mode: ModePatrol, PatrolIdleMin: 120, AutoWake: true, AgentCommand: LegacyModelCommand("opus"),
+		Targets: []string{"air26", "mlab"}, Mode: ModePatrol, PatrolIdleMin: 120, PatrolPresentMin: 30, PatrolBusyMin: 10, PatrolCalmMin: 15, PatrolRestMin: 10, DiskLowGB: 14, AutoWake: true, AgentCommand: LegacyModelCommand("opus"),
 		Workdir: "~/Workspace/wake/mlab-purdex-watch"}
 }
 

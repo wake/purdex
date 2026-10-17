@@ -58,7 +58,7 @@ func (f *fakeHostconfig) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func newFakeHostconfig() *fakeHostconfig {
 	return &fakeHostconfig{token: "tok", items: map[string]any{
 		"enabled": true, "x_cores": 1.5, "y_mb": float64(1024), "t_s": float64(60), "pressure_level": float64(2), "pressure_t_s": float64(120),
-		"page_rate": float64(50), "page_t_s": float64(60), "targets": []any{"air26", "mlab"}, "mode": "patrol", "patrol_idle_min": float64(120),
+		"page_rate": float64(50), "page_t_s": float64(60), "targets": []any{"air26", "mlab"}, "mode": "patrol", "patrol_idle_min": float64(120), "patrol_present_min": float64(30), "patrol_busy_min": float64(10), "patrol_calm_min": float64(15), "patrol_rest_min": float64(10), "disk_low_gb": float64(14),
 		"auto_wake": true, "agent_command": "claude --dangerously-skip-permissions --model opus", "workdir": "~/Workspace/wake/mlab-purdex-watch", "start_prompt": "", "wake_prompt": "",
 	}}
 }

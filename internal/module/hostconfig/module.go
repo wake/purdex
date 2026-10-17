@@ -74,7 +74,15 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/hostconfig/team", m.putHandler(KeyTeam, func(raw []byte, _ Entry) (any, error) { return normalizeTeam(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/relay_quota", m.putHandler(KeyRelayQuota, func(raw []byte, _ Entry) (any, error) { return normalizeRelayQuota(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/workbook", m.putHandler(KeyWorkbook, func(raw []byte, _ Entry) (any, error) { return normalizeWorkbook(raw) }))
-	mux.HandleFunc("PUT /api/hostconfig/watch", m.putHandler(KeyWatch, func(raw []byte, _ Entry) (any, error) { return normalizeWatch(raw) }))
+	mux.HandleFunc("PUT /api/hostconfig/watch", m.putHandler(KeyWatch, func(raw []byte, cur Entry) (any, error) {
+		stored := watchsettings.Default()
+		if len(cur.Value) > 0 {
+			if s, err := normalizeWatch(cur.Value); err == nil {
+				stored = s
+			}
+		}
+		return normalizeWatchOver(raw, stored)
+	}))
 	mux.HandleFunc("PUT /api/hostconfig/probe-hosts", m.putHandler(KeyProbeHosts, func(raw []byte, cur Entry) (any, error) { return normalizeProbeHosts(raw, cur) }))
 	mux.HandleFunc("PUT /api/hostconfig/fleet", m.putHandler(KeyFleet, func(raw []byte, _ Entry) (any, error) { return normalizeFleet(raw) }))
 	mux.HandleFunc("PUT /api/hostconfig/resources", m.putHandler(KeyResources, func(raw []byte, _ Entry) (any, error) { return normalizeResources(raw) }))
