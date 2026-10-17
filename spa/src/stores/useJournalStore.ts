@@ -313,7 +313,9 @@ export const useJournalStore = create<JournalState>()((set, get) => {
         if (res.kind === 'failed') set((s) => ({ readFailed: { ...s.readFailed, [k]: true } }))
         else if (res.kind === 'ok') {
           set((s) => (s.readFailed[k] ? { readFailed: drop(s.readFailed, k) } : {}))
-          await get().loadSessions(hostId, sessionId) // its own failure leaves the page as read
+          // Its own failure leaves the page as read (and marks the chain failed); a 409 on the chain goes to the caller like one on the page: the loader re-routes.
+          const chain = await get().loadSessions(hostId, sessionId)
+          if (chain.kind === 'remote') return chain
         }
       }
       return res
@@ -330,7 +332,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
         return { byHost: { ...s.byHost, [hostId]: { ...h, units: { ...h.units, [key]: { ...held, sessions: chain.sessions, sessionsIncomplete: chain.incomplete, sessionsFailed: false } } } } }
       }))
       // A chain that could not be read is an error to show (the pager is unusable), not "no earlier sessions"; the rows of the current page stay.
-      if (res.kind === 'failed' || res.kind === 'none') {
+      if (res.kind === 'failed' || res.kind === 'none' || res.kind === 'remote') {
         set((s) => {
           const h = s.byHost[hostId]
           const held = startedKey === undefined ? undefined : h?.units[startedKey]
