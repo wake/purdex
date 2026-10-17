@@ -25,12 +25,12 @@ export type LaunchKind = 'start' | 'wake'
 
 export type LaunchSlot =
   | { phase: 'sending'; kind: LaunchKind; hostId: string; seq: number }
-  | { phase: 'busy'; kind: LaunchKind; hostId: string; seq: number; startingOn?: { alias: string; daemonId: string } }
+  | { phase: 'busy'; kind: LaunchKind; hostId: string; seq: number; startingOn?: { alias: string; daemonId: string }; sawStarting?: boolean }
   /** Busy for `WATCH_LAUNCH_TIMEOUT_MS` and the watcher never registered: not busy any more, with a line saying so. */
   | { phase: 'timeout'; kind: LaunchKind; hostId: string; seq: number }
   | { phase: 'awake_already'; kind: LaunchKind; hostId: string; seq: number }
   /** `until` is the epoch ms the daemon said (NaN: it did not give a readable time); `at` is when it said so (the "today" of the time shown). */
-  | { phase: 'cooldown'; kind: LaunchKind; hostId: string; seq: number; until: number; at: number }
+  | { phase: 'cooldown'; kind: LaunchKind; hostId: string; seq: number; until: number; at: number; timed?: boolean }
   /** `detail` is the daemon's own text; `network` is a request that never got an answer. */
   | { phase: 'error'; kind: LaunchKind; hostId: string; seq: number; detail?: string; status?: number; network?: boolean }
 
@@ -61,6 +61,21 @@ const armTimeout = (seq: number): void => {
   }, WATCH_LAUNCH_TIMEOUT_MS)
   timeoutTimer = { seq, handle }
 }
+// The cooldown timer exists only while a `timed` cooldown is the slot: it clears the slot when the cooldown ends.
+let cooldownTimer: { seq: number; handle: ReturnType<typeof setTimeout> } | null = null
+const disarmCooldown = (): void => {
+  if (cooldownTimer) clearTimeout(cooldownTimer.handle)
+  cooldownTimer = null
+}
+const armCooldown = (seq: number, until: number): void => {
+  disarmCooldown()
+  const handle = setTimeout(() => {
+    cooldownTimer = null
+    const s = useWatchLaunchStore.getState().slot
+    if (s && s.phase === 'cooldown' && s.seq === seq) useWatchLaunchStore.setState({ slot: null })
+  }, Math.max(0, until - Date.now()))
+  cooldownTimer = { seq, handle }
+}
 useWatchLaunchStore.subscribe((state) => {
   const s = state.slot
   if (s?.phase === 'busy') {
@@ -68,9 +83,16 @@ useWatchLaunchStore.subscribe((state) => {
   } else {
     disarmTimeout()
   }
+  if (s?.phase === 'cooldown' && s.timed) {
+    if (cooldownTimer?.seq !== s.seq) armCooldown(s.seq, s.until)
+  } else {
+    disarmCooldown()
+  }
 })
 
 export const isLaunchBusy =(slot: LaunchSlot | null): boolean => slot?.phase === 'sending' || slot?.phase === 'busy'
+/** Not pressable: busy, or inside a cooldown the daemon's status named (a 409 cooldown leaves the button free). */
+export const isLaunchLocked = (slot: LaunchSlot | null): boolean => isLaunchBusy(slot) || (slot?.phase === 'cooldown' && slot.timed === true)
 
 const PATHS: Record<LaunchKind, string> = { start: '/api/watch/start', wake: '/api/watch/wake' }
 
@@ -89,6 +111,46 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' && v !== 
 const registered = (kind: LaunchKind, byHost: Record<string, WatchEntry>): boolean => {
   const state = deriveGuardian(byHost).state
   return state === 'awake' || (kind === 'start' && state === 'resting')
+}
+
+/**
+ * What the daemons that run this request say about it: the hosts are the one asked and, for a start, the one it was started on.
+ * Fields a daemon does not carry read as "not starting, no cooldown".
+ */
+function attemptOf(slot: Extract<LaunchSlot, { phase: 'busy' }>, byHost: Record<string, WatchEntry>): { starting: boolean; cooldownUntil: number } {
+  const ids = new Set([slot.hostId])
+  const dId = slot.startingOn?.daemonId
+  if (dId) for (const h of Object.values(useHostStore.getState().hosts)) if (h.daemonId === dId) ids.add(h.id)
+  let starting = false
+  let cooldownUntil = 0
+  for (const id of ids) {
+    const e = byHost[id]
+    if (e?.kind !== 'ok') continue
+    if (e.status.starting === true) starting = true
+    const until = e.status.cooldown_until === undefined ? NaN : Date.parse(e.status.cooldown_until)
+    if (!Number.isNaN(until) && until > cooldownUntil) cooldownUntil = until
+  }
+  return { starting, cooldownUntil }
+}
+
+/**
+ * A busy slot against the status: a cooldown in the future ends it (cooldown line, button locked until then); `starting` is
+ * remembered, and a start that was seen going and is no longer, with no watcher and no cooldown, ends as a timeout line.
+ */
+function reconcileBusy(byHost: Record<string, WatchEntry>): void {
+  const slot = useWatchLaunchStore.getState().slot
+  if (!slot || slot.phase !== 'busy') return
+  if (registered(slot.kind, byHost)) return useWatchLaunchStore.setState({ slot: null })
+  const { starting, cooldownUntil } = attemptOf(slot, byHost)
+  const now = Date.now()
+  if (cooldownUntil > now) {
+    return useWatchLaunchStore.setState({ slot: { phase: 'cooldown', kind: slot.kind, hostId: slot.hostId, seq: slot.seq, until: cooldownUntil, at: now, timed: true } })
+  }
+  if (starting) {
+    if (!slot.sawStarting) useWatchLaunchStore.setState({ slot: { ...slot, sawStarting: true } })
+  } else if (slot.sawStarting) {
+    useWatchLaunchStore.setState({ slot: { phase: 'timeout', kind: slot.kind, hostId: slot.hostId, seq: slot.seq } })
+  }
 }
 
 /** Where a start goes when no watcher is registered: any reachable watch host (the daemon picks the host that starts it). */
@@ -136,7 +198,9 @@ export async function requestLaunch(kind: LaunchKind, hostId: string): Promise<v
     const alias = isObj(body) ? str(body.host) : undefined
     const daemonId = isObj(body) ? str(body.host_id) : undefined
     const startingOn = kind === 'start' && alias !== undefined ? { alias, daemonId: daemonId ?? '' } : undefined
-    return settle({ phase: 'busy', kind, hostId, seq, startingOn })
+    settle({ phase: 'busy', kind, hostId, seq, startingOn })
+    if (current()) reconcileBusy(useWatchStatusStore.getState().byHost) // the status may already say starting or cooldown
+    return
   }
   const code = isObj(body) ? str(body.error) : undefined
   const detail = isObj(body) ? str(body.detail) : undefined
@@ -157,6 +221,7 @@ export function startWatchLaunch(): () => void {
     if (next.byHost === prev.byHost) return
     const slot = useWatchLaunchStore.getState().slot
     if (slot && registered(slot.kind, next.byHost)) useWatchLaunchStore.setState({ slot: null })
+    else reconcileBusy(next.byHost)
   })
   const unsubHosts = useHostStore.subscribe((next, prev) => {
     const slot = useWatchLaunchStore.getState().slot

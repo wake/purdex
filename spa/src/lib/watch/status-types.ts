@@ -37,6 +37,10 @@ export interface WatchStatus {
   auto_wake: boolean
   mode: string
   targets: string[]
+  /** A start or wake of this host's watcher is going on. Absent from a daemon that does not carry it (unknown, read as false). */
+  starting?: boolean
+  /** RFC 3339: when a failed start or wake lets the next be tried. Absent: no cooldown, or a daemon that does not carry it. */
+  cooldown_until?: string
 }
 
 const STATES: readonly string[] = ['awake', 'resting', 'none']
@@ -72,5 +76,7 @@ export function parseWatchStatus(raw: unknown): WatchStatus | null {
     auto_wake: raw.auto_wake === true,
     mode: str(raw.mode) ?? '',
     targets: Array.isArray(raw.targets) ? raw.targets.filter((x): x is string => typeof x === 'string') : [],
+    starting: typeof raw.starting === 'boolean' ? raw.starting : undefined,
+    cooldown_until: str(raw.cooldown_until) || undefined,
   }
 }

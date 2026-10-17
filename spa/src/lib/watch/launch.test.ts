@@ -10,7 +10,7 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { startWatchStatus, useWatchStatusStore, type WatchEntry } from './status-store'
 import { handleWatchEvent } from './watch-ws'
-import { isLaunchBusy, requestLaunch, startTarget, startWatchLaunch, useWatchLaunchStore, WATCH_LAUNCH_TIMEOUT_MS } from './launch'
+import { isLaunchBusy, isLaunchLocked, requestLaunch, startTarget, startWatchLaunch, useWatchLaunchStore, WATCH_LAUNCH_TIMEOUT_MS } from './launch'
 import type { WatchStatus } from './status-types'
 
 const status = (hostId: string, state: 'awake' | 'resting' | 'none'): WatchStatus =>
@@ -461,5 +461,105 @@ describe('startTarget', () => {
     expect(startTarget({ a: { kind: 'error' }, b: ok }, ['a', 'b'])).toBe('b')
     expect(startTarget({ x: ok }, ['a'])).toBe('x')
     expect(startTarget({ a: { kind: 'unsupported' } }, ['a'])).toBeUndefined()
+  })
+})
+
+describe('W5e-3: starting and cooldown_until end the busy state', () => {
+  const T0 = Date.parse('2026-10-17T10:00:00Z')
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] }); vi.setSystemTime(T0) })
+  afterEach(() => { vi.useRealTimers() })
+  const withFields = (extra: Partial<WatchStatus>): WatchStatus => ({ ...status('d1', 'none'), ...extra })
+  const goBusy = async (kind: 'start' | 'wake' = 'start') => {
+    stops.push(startWatchLaunch())
+    reply(202, { host: 'mlab', host_id: 'd1' })
+    await requestLaunch(kind, 'h1')
+  }
+  const until = (ms: number) => new Date(T0 + ms).toISOString()
+
+  it('a cooldown_until in the future releases busy at once, with the time; the button stays locked', async () => {
+    await goBusy()
+    expect(slot()?.phase).toBe('busy')
+    answer('h1', withFields({ cooldown_until: until(600_000) }))
+    expect(slot()).toMatchObject({ phase: 'cooldown', kind: 'start', until: T0 + 600_000, timed: true })
+    expect(isLaunchBusy(slot())).toBe(false)
+    expect(isLaunchLocked(slot())).toBe(true)
+  })
+
+  it('a cooldown already in the status when the 202 comes releases busy too', async () => {
+    answer('h1', withFields({ cooldown_until: until(60_000) }))
+    await goBusy()
+    expect(slot()).toMatchObject({ phase: 'cooldown', timed: true })
+  })
+
+  it('a cooldown_until in the past changes nothing', async () => {
+    await goBusy()
+    answer('h1', withFields({ cooldown_until: until(-1000) }))
+    expect(slot()?.phase).toBe('busy')
+  })
+
+  it('the cooldown ends by itself at its time: the slot clears and the button is free', async () => {
+    await goBusy()
+    answer('h1', withFields({ cooldown_until: until(600_000) }))
+    vi.advanceTimersByTime(599_999)
+    expect(isLaunchLocked(slot())).toBe(true)
+    vi.advanceTimersByTime(1)
+    expect(slot()).toBeNull()
+  })
+
+  it('no cooldown timer is hung without a cooldown, and a 409 cooldown hangs none', async () => {
+    await goBusy()
+    expect(vi.getTimerCount()).toBe(1) // the 120 s timeout only
+    useWatchLaunchStore.setState({ slot: null })
+    reply(409, { error: 'cooldown', detail: until(600_000) })
+    await requestLaunch('start', 'h1')
+    expect(slot()).toMatchObject({ phase: 'cooldown' })
+    expect(isLaunchLocked(slot())).toBe(false)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('starting true keeps it busy', async () => {
+    await goBusy()
+    answer('h1', withFields({ starting: true }))
+    expect(slot()).toMatchObject({ phase: 'busy', sawStarting: true })
+  })
+
+  it('starting true then false with no watcher and no cooldown releases with the "did not report" line', async () => {
+    await goBusy()
+    answer('h1', withFields({ starting: true }))
+    answer('h1', withFields({ starting: false }))
+    expect(slot()).toMatchObject({ phase: 'timeout', kind: 'start' })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('starting true then a registration just ends busy (no timeout line)', async () => {
+    await goBusy()
+    answer('h1', withFields({ starting: true }))
+    answer('h1', status('d1', 'awake'))
+    expect(slot()).toBeNull()
+  })
+
+  it('a daemon without the two fields behaves as before: busy until registered or the 120 s', async () => {
+    await goBusy()
+    answer('h1', status('d1', 'none'))
+    answer('h1', status('d1', 'none'))
+    expect(slot()?.phase).toBe('busy')
+    vi.advanceTimersByTime(WATCH_LAUNCH_TIMEOUT_MS)
+    expect(slot()?.phase).toBe('timeout')
+  })
+
+  it('a re-point drops the cooldown and its timer: the old cooldown does not reach the new host', async () => {
+    stops.push(startWatchStatus())
+    fetchWatchStatus.mockResolvedValue({ kind: 'ok', status: status('d1', 'none') })
+    await goBusy()
+    answer('h1', withFields({ cooldown_until: until(600_000) }))
+    expect(slot()?.phase).toBe('cooldown')
+    at('2.2.2.2')
+    expect(slot()).toBeNull()
+    expect(vi.getTimerCount()).toBe(0)
+    const e = useWatchStatusStore.getState().byHost.h1
+    expect(e === undefined || (e.kind === 'ok' && e.status.cooldown_until === undefined)).toBe(true)
+    reply(202, { host: 'mlab', host_id: 'd1' })
+    await requestLaunch('start', 'h1')
+    expect(slot()?.phase).toBe('busy')
   })
 })
