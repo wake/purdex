@@ -7,9 +7,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/BurntSushi/toml"
 
@@ -76,7 +78,7 @@ func LoadConfig(path, home string) (Config, error) {
 // EnsureToken returns the pool token, creating a random one (0600) when the
 // file does not exist. A token file readable by others, or empty, is refused.
 func EnsureToken(path string) (string, error) {
-	b, err := os.ReadFile(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			return "", err
@@ -99,12 +101,21 @@ func EnsureToken(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	st, err := os.Stat(path)
+	defer f.Close()
+	// One descriptor for the checks and the read: no second pathname lookup.
+	st, err := f.Stat()
 	if err != nil {
 		return "", err
 	}
+	if !st.Mode().IsRegular() {
+		return "", fmt.Errorf("token file %s is not a regular file", path)
+	}
 	if st.Mode().Perm()&0o077 != 0 {
 		return "", fmt.Errorf("token file %s: mode %v is readable by others; chmod 600", path, st.Mode().Perm())
+	}
+	b, err := io.ReadAll(io.LimitReader(f, 4096))
+	if err != nil {
+		return "", err
 	}
 	tok := strings.TrimSpace(string(b))
 	if tok == "" {

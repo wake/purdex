@@ -167,6 +167,29 @@ func TestListenRefusesLiveSocketAndReplacesStale(t *testing.T) {
 	r2.Close()
 }
 
+func TestListenFailsClosedOnAmbiguousDialError(t *testing.T) {
+	d := newTestDaemon(t)
+	dir, err := os.MkdirTemp("", "w")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "w.sock")
+	ln, _ := net.Listen("unix", sock)
+	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	ln.Close()
+	// Dial now fails with EACCES, not ECONNREFUSED: not provably stale.
+	if err := os.Chmod(sock, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Listen(context.Background(), ListenSpec{Addrs: []string{"127.0.0.1"}, SocketPath: sock}); err == nil {
+		t.Fatal("must fail closed when liveness is unknown")
+	}
+	if _, err := os.Lstat(sock); err != nil {
+		t.Fatalf("socket was removed: %v", err)
+	}
+}
+
 func TestListenRefusesBadAddr(t *testing.T) {
 	d := newTestDaemon(t)
 	_, err := d.Listen(context.Background(), ListenSpec{Addrs: []string{"0.0.0.0"}, Port: 0, SocketPath: filepath.Join(t.TempDir(), "s")})

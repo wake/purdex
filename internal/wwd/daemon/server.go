@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -178,11 +179,18 @@ func clearStaleSocket(path string) error {
 	if fi.Mode().Type()&os.ModeSocket == 0 {
 		return fmt.Errorf("socket path %s exists and is not a socket", path)
 	}
-	if c, err := net.DialTimeout("unix", path, time.Second); err == nil {
+	c, err := net.DialTimeout("unix", path, time.Second)
+	switch {
+	case err == nil:
 		c.Close()
 		return fmt.Errorf("socket %s is in use (another wwd running?)", path)
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return os.Remove(path) // nobody listens: provably stale
+	case errors.Is(err, syscall.ENOENT):
+		return nil
+	default: // timeout, EACCES, EMFILE…: liveness unknown, fail closed
+		return fmt.Errorf("socket %s: cannot tell whether it is in use: %w", path, err)
 	}
-	return os.Remove(path)
 }
 
 func dirOf(p string) string {

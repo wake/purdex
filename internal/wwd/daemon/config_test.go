@@ -56,6 +56,13 @@ func TestEnsureTokenCreatesAndReuses(t *testing.T) {
 	if _, err := EnsureToken(p); err == nil {
 		t.Fatal("0644 token must be refused")
 	}
+	// a symlink is refused even when its target is a good token file
+	os.Chmod(p, 0o600)
+	link := filepath.Join(filepath.Dir(p), "link.token")
+	os.Symlink(p, link)
+	if _, err := EnsureToken(link); err == nil {
+		t.Fatal("symlinked token must be refused")
+	}
 	// empty file is refused
 	os.Chmod(p, 0o600)
 	os.WriteFile(p, nil, 0o600)
