@@ -1,10 +1,10 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { WarningCircle } from '@phosphor-icons/react'
 import { probeBaseOf, type ProbeEdit, type ProbeEntry } from '../../lib/fleet/config-store'
 import { useFleetDraftStore } from '../../lib/fleet/config-draft'
 import { ProbeHostForm } from './ProbeHostForm'
 import { ProbeCheck } from './ProbeCheck'
-import { labelOf, labels, useProbeEditor } from './useProbeEditor'
+import { labelOf, labels, leaveProbeDraft, useProbeEditor } from './useProbeEditor'
 
 /**
  * One probe host's editing part (fleet spec §8.2): the warnings, 「樣式與連線」 (the form, written to BOTH daemons) and 「連線檢查」.
@@ -12,7 +12,7 @@ import { labelOf, labels, useProbeEditor } from './useProbeEditor'
  * The draft and the confirmations live in `useFleetDraftStore`, so a tab switch keeps them. A new probe host (the sidebar's `+`)
  * starts as a blank draft here.
  */
-export function ProbeHostEditor({ probeId }: { probeId: string }) {
+export function ProbeHostEditor({ probeId, onGotoProbe }: { probeId: string; /** Where another host's refused draft can be finished (the watcher area passes its host tab). */ onGotoProbe?: (probeId: string) => void }) {
   const { t, hostIds, byHost, entries, ready, unreachable, writable, halfRows, loadError, blocked, run } = useProbeEditor()
   const sel = useFleetDraftStore((s) => s.selectedProbe)
   const session = useFleetDraftStore((s) => s.probe)
@@ -23,13 +23,21 @@ export function ProbeHostEditor({ probeId }: { probeId: string }) {
   const mine = session && session.initial.id === probeId ? session : null
   const isNewHere = sel?.id === probeId && sel.isNew
 
-  // Start the draft once the daemons are read: from the stored entry, or blank for a new probe host.
+  // Another probe host's unsaved draft the reader refused to drop (the store holds one probe draft at a time).
+  const [held, setHeld] = useState<{ id: string; name: string } | null>(null)
+  const other = session && session.initial.id !== probeId ? session.initial : null
+  const heldHere = held !== null && other !== null && held.id === other.id
+
+  // Start the draft once the daemons are read: from the stored entry, or blank for a new probe host. Replacing another probe host's
+  // draft goes through the same question as every other way out of it on the Hosts page (`leaveProbeDraft`).
   useEffect(() => {
     if (mine || !ready) return
+    if (heldHere) return
+    if (!leaveProbeDraft(probeId)) { if (other) setHeld({ id: other.id, name: other.name }); return }
     if (entry) drafts().beginProbe(entry, false, probeBaseOf(hostIds, byHost, entry.id))
     else if (isNewHere) drafts().beginProbe({ id: probeId, name: '', icon: '', icon_weight: '', aliases: {} }, true, probeBaseOf(hostIds, byHost, null))
     // eslint-disable-next-line react-hooks/exhaustive-deps -- begin when the inputs below change; `drafts` is a getter
-  }, [mine, ready, entry, isNewHere, probeId])
+  }, [mine, ready, entry, isNewHere, probeId, heldHere])
 
   const finish = (edit: ProbeEdit, ok: boolean) => { if (ok && edit.kind === 'remove') drafts().selectProbe(null) }
   const save = async (e: ProbeEntry, confirmChanged = false) => {
@@ -88,6 +96,14 @@ export function ProbeHostEditor({ probeId }: { probeId: string }) {
 
       {notFound ? (
         <p data-testid="probe-page-missing" className="text-sm text-text-muted">{t('fleet_hosts.entry.not_found')}</p>
+      ) : heldHere && held ? (
+        <p data-testid="probe-held" className="flex items-center gap-2 text-xs text-status-warning-text">
+          {t('watch.set.held', { name: held.name })}
+          {onGotoProbe && (
+            <button type="button" data-testid="probe-held-goto" onClick={() => onGotoProbe(held.id)}
+              className="px-2 py-0.5 rounded bg-surface-tertiary text-text-secondary cursor-pointer">{t('watch.set.held_goto', { name: held.name })}</button>
+          )}
+        </p>
       ) : !mine ? (
         <p data-testid="probe-state" className="text-sm text-text-muted">{t('fleet_hosts.probe.loading')}</p>
       ) : (

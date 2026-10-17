@@ -23,6 +23,7 @@ import { Gauge } from './Gauge'
 import { MetricRow, TimeAxis } from './MetricChart'
 import { QueueSection } from './QueueSection'
 import { WatchSettings } from './WatchSettings'
+import { openWatchArea } from '../../features/workspace/lib/open-watch-area'
 
 const RANGE_OPTS = (t: (k: string) => string) => RANGES.map((r) => ({ value: r, label: t(`watch.host.range.${r}`) }))
 
@@ -171,7 +172,7 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
           </span>
         </div>
         {page === 'settings' ? (
-          <WatchSettings kind={view.kind === 'probe' ? 'probe' : 'daemon'} fleetHostId={view.id} hostConfigId={view.hostConfigId} offline={offline}
+          <WatchSettings kind={view.kind === 'probe' ? 'probe' : 'daemon'} fleetHostId={view.id} hostConfigId={view.hostConfigId} offline={offline} onGotoProbe={(id) => openWatchArea({ host: id })}
             peerIds={peers.filter((v) => v.id !== view.id).flatMap((v) => (v.hostConfigId ? [v.hostConfigId] : []))} />
         ) : (<>
         <Section title={t('watch.host.resources', { range: t(`watch.host.range.${range}`) })}>

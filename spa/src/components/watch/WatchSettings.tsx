@@ -181,15 +181,17 @@ function GuardianSection({ hostConfigId, fleetHostId, offline, peerIds }: { host
 }
 
 /** The 設定 page of one fleet host. `hostConfigId`: the App's id for a daemon host (absent for one the App has no config for). */
-export function WatchSettings({ kind, fleetHostId, hostConfigId, offline, peerIds }: {
+export function WatchSettings({ kind, fleetHostId, hostConfigId, offline, peerIds, onGotoProbe }: {
   kind: 'daemon' | 'probe'; fleetHostId: string; hostConfigId?: string; offline: boolean; peerIds: string[]
+  /** Opens another probe host's tab (where its refused, unsaved draft can be finished). */
+  onGotoProbe?: (probeId: string) => void
 }) {
   const t = useI18nStore((s) => s.t)
   if (kind === 'probe') {
     return (
       <div data-testid="watch-set-probe">
         <p className="mb-4 text-xs text-text-secondary">{t('watch.set.probe_note')}</p>
-        <ProbeHostEditor key={fleetHostId} probeId={fleetHostId} />
+        <ProbeHostEditor key={fleetHostId} probeId={fleetHostId} onGotoProbe={onGotoProbe} />
       </div>
     )
   }

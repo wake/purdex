@@ -203,4 +203,48 @@ describe('WatchSettings — a probe host', () => {
     await waitFor(() => expect(putProbeHosts).toHaveBeenCalledTimes(2))
     expect(putProbeHosts.mock.calls.map((c) => [c[0], c[1][0].name]).sort()).toEqual([['A', 'nas2'], ['B', 'nas2']])
   })
+
+  describe('another probe host\'s unsaved draft (the Hosts page holds one draft at a time)', () => {
+    const OTHER = 'bbbbbbbb'
+    const row2 = (alias: string): ProbeRow => ({ id: OTHER, name: 'other', ssh_alias: alias, icon: '', icon_weight: '' })
+    beforeEach(() => {
+      for (const f of [fetchFleetConfig, fetchSshAliases, putProbeHosts, putFleetRow]) f.mockReset()
+      const two = (alias: string, rev: number): FleetConfigRead => ({ ...cfg(alias, rev), probe: { items: [nas(alias), row2(alias)], revision: rev, dropped: null, invalid: false } })
+      const copies: Record<string, FleetConfigRead> = { A: two('nas-a', 3), B: two('nas-b', 8) }
+      fetchFleetConfig.mockImplementation(async (id: string) => copies[id])
+      fetchSshAliases.mockResolvedValue(['nas-a', 'nas-b'])
+      useFleetConfigStore.getState().reset()
+      useFleetDraftStore.getState().reset()
+      useHostStore.setState({ runtime: { A: { status: 'connected' }, B: { status: 'connected' } } as never })
+      useFleetStore.getState().reset()
+      useFleetStore.setState({ byHost: { A: { gen: 1, support: 'yes', term: 0 }, B: { gen: 1, support: 'yes', term: 0 } } as never })
+      // The reader has typed into probe host `nas` on the Hosts page and not saved.
+      const entry = { id: ID, name: 'nas', icon: '', icon_weight: '', aliases: { A: 'nas-a', B: 'nas-b' } }
+      useFleetDraftStore.getState().beginProbe(entry, false, { revisions: { A: 3, B: 8 }, rows: { A: nas('nas-a'), B: nas('nas-b') } })
+      useFleetDraftStore.getState().setProbeDraft((d) => ({ ...d, name: 'typed, not saved' }))
+    })
+    afterEach(() => { vi.restoreAllMocks(); useFleetDraftStore.getState().reset() })
+
+    it('asks first; refused → the draft stays, no editor, a line says whose it is, with a way there', async () => {
+      const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+      const onGoto = vi.fn()
+      render(<WatchSettings kind="probe" fleetHostId={OTHER} offline={false} peerIds={[]} onGotoProbe={onGoto} />)
+      const held = await screen.findByTestId('probe-held')
+      expect(confirm).toHaveBeenCalledTimes(1)
+      expect(held).toHaveTextContent(t('watch.set.held', { name: 'nas' }))
+      expect(useFleetDraftStore.getState().probe?.draft.name).toBe('typed, not saved')
+      expect(useFleetDraftStore.getState().probe?.initial.id).toBe(ID)
+      expect(screen.queryByTestId('probe-field-name')).toBeNull()
+      fireEvent.click(screen.getByTestId('probe-held-goto'))
+      expect(onGoto).toHaveBeenCalledWith(ID)
+    })
+
+    it('agreed → the other draft is dropped and this host\'s editor opens', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true)
+      render(<WatchSettings kind="probe" fleetHostId={OTHER} offline={false} peerIds={[]} />)
+      expect(await screen.findByTestId('probe-field-name')).toHaveValue('other')
+      expect(useFleetDraftStore.getState().probe?.initial.id).toBe(OTHER)
+      expect(screen.queryByTestId('probe-held')).toBeNull()
+    })
+  })
 })
