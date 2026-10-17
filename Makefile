@@ -1,5 +1,5 @@
 # Makefile
-.PHONY: build test lint clean check-goenv test-goenv
+.PHONY: build build-wwd test lint clean check-goenv test-goenv
 .DEFAULT_GOAL := build
 
 BIN := bin/pdx
@@ -14,6 +14,16 @@ test-goenv:
 
 build: check-goenv
 	go build -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/pdx
+
+WWD_TARGETS := darwin/arm64 darwin/amd64 linux/amd64
+
+# wwd cross builds: bin/wwd-<os>-<arch> (spec §2). Pure Go, no cgo.
+build-wwd:
+	@for t in $(WWD_TARGETS); do \
+		os=$${t%/*}; arch=$${t#*/}; \
+		echo "wwd $$os/$$arch"; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -ldflags "$(LDFLAGS)" -o bin/wwd-$$os-$$arch ./cmd/wwd || exit 1; \
+	done
 
 test:
 	go test -race -count=1 ./...
