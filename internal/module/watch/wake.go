@@ -2,7 +2,6 @@ package watchmod
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -55,31 +54,41 @@ func (m *Module) WakeWatcher(ctx context.Context, reason, detail string) error {
 		if err != nil {
 			return err
 		}
-		if lastErr = m.tellWatcher(ctx, where, reason, detail, text); lastErr == nil {
+		var definite bool
+		if lastErr, definite = m.tellWatcher(ctx, where, reason, detail, text); lastErr == nil {
 			return nil
 		}
-		m.loc.Failed(where) // the watcher is not where it was remembered: look again
+		if !definite {
+			return lastErr // the note may have arrived: not sent again, and the watcher is not forgotten
+		}
+		m.loc.Failed(where) // the host said the watcher is not there: look again
 	}
 	return lastErr
 }
 
-// tellWatcher gives the note to the watcher at where, on this host or through the peer route.
-func (m *Module) tellWatcher(ctx context.Context, where watch.Where, reason, detail, text string) error {
+// tellWatcher gives the note to the watcher at where, on this host or through the peer route. definite says a failure is a refusal (the
+// watcher is not there); anything else (a lost answer, a timeout) leaves it open whether the note arrived.
+func (m *Module) tellWatcher(ctx context.Context, where watch.Where, reason, detail, text string) (err error, definite bool) {
 	if m.isSelf(where.Alias) {
 		own := m.hs().Get()
 		if own.State != watch.HolderAwake {
-			return errNoWatcherHere
+			return errNoWatcherHere, true
 		}
-		return m.notifyWatcher(ctx, own, text)
+		return m.notifyWatcher(ctx, own, text), false
 	}
 	if m.caller == nil {
-		return errors.New("no host caller")
+		return errors.New("no host caller"), false
 	}
 	res := m.caller.Call(ctx, where.HostID, pathNote, noteBody{ToHostID: where.HostID, Reason: reason, Detail: detail})
-	if res.Class != peersmod.ClassDone {
-		return fmt.Errorf("%s: %s %s %s", where.Alias, res.Class, res.Code, res.Detail)
+	if res.Class == peersmod.ClassDone {
+		return nil, false
 	}
-	return nil
+	err = fmt.Errorf("%s: %s %s %s", where.Alias, res.Class, res.Code, res.Detail)
+	switch res.Class {
+	case peersmod.ClassRefused, peersmod.ClassUnsupported, peersmod.ClassWrongHost, peersmod.ClassUnpaired:
+		return err, true
+	}
+	return err, false
 }
 
 // handlePeerNote serves POST /api/peers/watch/note: a paired host tells this host's watcher a wake note. The order is the holder
@@ -129,5 +138,5 @@ func (m *Module) handlePeerNote(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadGateway, "not_delivered", "the watcher could not be told")
 		return
 	}
-	m.writeJSON(w, http.StatusOK, json.RawMessage(`{"told":true}`))
+	m.writeJSON(w, http.StatusOK, map[string]any{"host_id": ours, "told": true}) // HostCaller wants the answering host id in every 2xx
 }

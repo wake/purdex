@@ -58,7 +58,9 @@ func TestPeerNoteRoute_TheHostsWatcherIsToldAndTheRulesOfTheHolderRouteHold(t *t
 	fn := &fakeNotifier{}
 	r.m.dlv.notifier = fn
 	body := `{"to_host_id":"` + ourID + `","reason":"patrol","detail":"d"}`
-	require.Equal(t, http.StatusOK, r.serve(hostCtx(), "/api/peers/watch/note", body).Code)
+	rr := r.serve(hostCtx(), "/api/peers/watch/note", body)
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Contains(t, rr.Body.String(), `"host_id":"`+ourID+`"`, "HostCaller wants this host's id in every 2xx")
 	require.Equal(t, []string{"[負載守門] 叫醒：例行巡檢｜d"}, fn.texts)
 	require.Equal(t, http.StatusForbidden, r.serve(adminCtx, "/api/peers/watch/note", body).Code, "not a host principal")
 	require.Equal(t, http.StatusConflict, r.serve(hostCtx(), "/api/peers/watch/note", strings.Replace(body, ourID, "other", 1)).Code, "another host")
@@ -93,24 +95,30 @@ func TestWakeWatcher_AStartThatOutlastsItsGraceStillGetsTheNote(t *testing.T) {
 	require.Len(t, r.typer.typed(), 1, "one start, not one per poll")
 }
 
-// A note that the remembered watcher's host did not take makes the locator look again, and the note goes to where the watcher is now.
-func TestWakeWatcher_AFailedNoteMakesTheLocatorLookAgain(t *testing.T) {
+// A host that says "no watcher here" makes the locator look again; a lost answer does not (the note may have arrived: not sent twice,
+// the watcher not forgotten, no second one started).
+func TestWakeWatcher_ARefusalMakesTheLocatorLookAgainAndALostAnswerDoesNot(t *testing.T) {
+	count := func(fc *fakeCaller, path string) int {
+		n := 0
+		for _, c := range fc.calls {
+			if c == peerID+" "+path {
+				n++
+			}
+		}
+		return n
+	}
 	r, fc := askerRig(t)
 	fc.reply[pathHolder] = done(HolderView{HostID: peerID, State: "awake", SessionID: "s-26", Targets: []string{"air26", "mlab"}})
-	fc.reply[pathNote] = peersmod.CallResult{Class: peersmod.ClassTransient, Status: 502}
-	require.Error(t, r.m.WakeWatcher(context.Background(), "patrol", ""), "every try failed")
-	notes := 0
-	for _, c := range fc.calls {
-		if c == peerID+" "+pathNote {
-			notes++
-		}
-	}
-	require.Equal(t, 3, notes, "three tries, each after the locator forgot the watcher")
-	holders := 0
-	for _, c := range fc.calls {
-		if c == peerID+" "+pathHolder {
-			holders++
-		}
-	}
-	require.GreaterOrEqual(t, holders, 3, "and asked the host again each time")
+	fc.reply[pathNote] = peersmod.CallResult{Class: peersmod.ClassRefused, Status: 409, Code: "no_watcher"}
+	require.Error(t, r.m.WakeWatcher(context.Background(), "patrol", ""))
+	require.Equal(t, 3, count(fc, pathNote), "three tries, each after the locator forgot the watcher")
+	require.GreaterOrEqual(t, count(fc, pathHolder), 3, "and asked the host again each time")
+
+	r2, fc2 := askerRig(t)
+	fc2.reply[pathHolder] = done(HolderView{HostID: peerID, State: "awake", SessionID: "s-26", Targets: []string{"air26", "mlab"}})
+	fc2.reply[pathNote] = peersmod.CallResult{Class: peersmod.ClassTransient, Status: 502}
+	require.Error(t, r2.m.WakeWatcher(context.Background(), "patrol", ""))
+	require.Equal(t, 1, count(fc2, pathNote), "the answer was lost: the note is not sent again")
+	cur, _ := r2.m.loc.Remembered()
+	require.NotNil(t, cur, "and the watcher is still the remembered one")
 }
