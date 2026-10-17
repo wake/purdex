@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -27,7 +28,9 @@ func TestWakeWatcher_ARestingWatcherIsWokenFirstThenToldWhy(t *testing.T) {
 	r := newSessionRig(t, "f1")
 	fn := &fakeNotifier{}
 	r.m.dlv.notifier = fn
-	require.NoError(t, r.m.holder.Update(func(h *watch.Holder) { h.State, h.SessionID = watch.HolderResting, "11111111-2222-3333-4444-555555555555" }))
+	require.NoError(t, r.m.holder.Update(func(h *watch.Holder) {
+		h.State, h.SessionID = watch.HolderResting, "11111111-2222-3333-4444-555555555555"
+	}))
 	require.NoError(t, r.m.WakeWatcher(context.Background(), "patrol", ""))
 	require.Len(t, r.typer.typed(), 1, "the wake was typed")
 	require.Equal(t, []string{"[負載守門] 叫醒：例行巡檢"}, fn.texts)
@@ -63,5 +66,6 @@ func TestPeerNoteRoute_TheHostsWatcherIsToldAndTheRulesOfTheHolderRouteHold(t *t
 	require.Len(t, fn.texts, 1)
 
 	r.owners.set(watcherOwner("f1"), false, nil)
+	r.now = r.now.Add(time.Minute) // the holder read is reconciled again after 30 s
 	require.Equal(t, http.StatusConflict, r.serve(hostCtx(), "/api/peers/watch/note", body).Code, "no watcher awake here")
 }
