@@ -21,8 +21,20 @@ type Proc struct {
 	PID   int     `json:"pid"`
 	Name  string  `json:"name"`
 	CPU   float64 `json:"cpu"`    // this process's CPU %, may exceed 100
-	RSSMB float64 `json:"rss_mb"` // resident memory in MB
+	RSSMB float64 `json:"rss_mb"` // resident memory in MB (the resident set: what macOS leaves out of it when it compresses a process is not in it)
+	// MemMB is the memory figure the top-memory list is ranked and shown by: the physical footprint on macOS (what Activity Monitor and top
+	// call a process's memory, compressed pages included), else the resident size. MemKind says which, per process: "footprint" or "rss"
+	// (a process whose footprint could not be read, e.g. another user's, falls back to its resident size and says so). Both are absent
+	// from a daemon older than #3057.
+	MemMB   float64 `json:"mem_mb,omitempty"`
+	MemKind string  `json:"mem_kind,omitempty"`
 }
+
+// The kinds of Proc.MemKind.
+const (
+	MemKindFootprint = "footprint"
+	MemKindRSS       = "rss"
+)
 
 type LocalFast struct {
 	At       time.Time
@@ -40,7 +52,7 @@ type LocalFast struct {
 type LocalSlow struct {
 	At     time.Time
 	TopCPU []Proc       // 5, by CPU
-	TopMem []Proc       // 5, by RSS
+	TopMem []Proc       // 5, by memory (MemMB: the physical footprint, the resident size where that is not to be had)
 	Gate   *gate.Status // the local gate summary (watch pass HeldSlots); nil when no gate is installed
 }
 

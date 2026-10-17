@@ -2,6 +2,7 @@ package resourcesmod
 
 import (
 	"context"
+	"math"
 	"os"
 	"sort"
 	"sync"
@@ -28,6 +29,9 @@ type localSource struct {
 	m      *Module
 	reader func() *hostmem.FastReader // made on Start, so a daemon that is never primary never loads libSystem
 	logf   func(format string, args ...any)
+	// footprints reads the physical footprint of each pid that has one (#3057); a seam for tests. The real one loads libSystem at its
+	// first use and answers nothing where there is no footprint to read, so every process falls back to its resident size.
+	footprints func(pids []int) map[int]uint64
 
 	mu      sync.Mutex
 	cancel  context.CancelFunc
@@ -42,9 +46,20 @@ type localSource struct {
 }
 
 func newLocalSource(m *Module) *localSource {
+	var once sync.Once
+	var fp *hostmem.Footprinter
 	return &localSource{
 		m: m, logf: m.logf, changed: make(chan struct{}, 1),
 		reader: func() *hostmem.FastReader { return hostmem.NewFastReader(hostmem.SystemSources()) },
+		footprints: func(pids []int) map[int]uint64 {
+			once.Do(func() {
+				var err error
+				if fp, err = hostmem.NewFootprinter(); err != nil {
+					m.logf("[resources] fleet local source: no physical footprint (%v): the top memory list uses the resident size", err)
+				}
+			})
+			return hostmem.Footprints(fp, pids)
+		},
 	}
 }
 
@@ -140,7 +155,15 @@ func (s *localSource) Slow() (fleet.LocalSlow, bool) {
 	if s.haveS && s.slowKey.Equal(snap.SampledAt) {
 		return s.slow, true
 	}
-	s.slow = fleet.LocalSlow{At: snap.SampledAt, TopCPU: topProcs(*procs, byCPU), TopMem: topProcs(*procs, byRSS), Gate: s.m.gateSummary()}
+	var foot map[int]uint64
+	if s.footprints != nil {
+		pids := make([]int, 0, len(*procs))
+		for _, p := range *procs {
+			pids = append(pids, p.PID)
+		}
+		foot = s.footprints(pids)
+	}
+	s.slow = fleet.LocalSlow{At: snap.SampledAt, TopCPU: topProcs(*procs, byCPU, foot), TopMem: topProcs(*procs, byMem, foot), Gate: s.m.gateSummary()}
 	s.slowKey, s.haveS = snap.SampledAt, true
 	return s.slow, true
 }
@@ -170,17 +193,31 @@ type procOrder int
 
 const (
 	byCPU procOrder = iota
-	byRSS
+	byMem
 )
 
-// topProcs are the topN processes by the order, biggest first, a lower pid first on a tie.
-func topProcs(procs []resources.Proc, by procOrder) []fleet.Proc {
+// roundMB rounds a size in MB to one decimal, as the app shows it.
+func roundMB(v float64) float64 { return math.Round(v*10) / 10 }
+
+// memOf is a process's memory in bytes and which figure it is: the physical footprint where foot has one, else the resident size.
+func memOf(p resources.Proc, foot map[int]uint64) (uint64, string) {
+	if v, ok := foot[p.PID]; ok {
+		return v, fleet.MemKindFootprint
+	}
+	return p.RSSBytes, fleet.MemKindRSS
+}
+
+// topProcs are the topN processes by the order, biggest first, a lower pid first on a tie. By memory a process is measured by its
+// physical footprint when it has one (what is compressed counts: under pressure the biggest processes have a small resident size), else
+// by its resident size, and each entry says which (#3057).
+func topProcs(procs []resources.Proc, by procOrder, foot map[int]uint64) []fleet.Proc {
 	sorted := append([]resources.Proc(nil), procs...)
 	key := func(p resources.Proc) float64 {
 		if by == byCPU {
 			return p.Pcpu
 		}
-		return float64(p.RSSBytes)
+		v, _ := memOf(p, foot)
+		return float64(v)
 	}
 	sort.Slice(sorted, func(i, j int) bool {
 		if key(sorted[i]) != key(sorted[j]) {
@@ -190,7 +227,8 @@ func topProcs(procs []resources.Proc, by procOrder) []fleet.Proc {
 	})
 	out := make([]fleet.Proc, 0, topN)
 	for _, p := range sorted[:min(len(sorted), topN)] {
-		out = append(out, fleet.Proc{PID: p.PID, Name: p.Comm, CPU: p.Pcpu, RSSMB: float64(p.RSSBytes) / (1 << 20)})
+		mem, kind := memOf(p, foot)
+		out = append(out, fleet.Proc{PID: p.PID, Name: p.Comm, CPU: p.Pcpu, RSSMB: float64(p.RSSBytes) / (1 << 20), MemMB: roundMB(float64(mem) / (1 << 20)), MemKind: kind})
 	}
 	return out
 }
