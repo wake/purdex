@@ -173,6 +173,7 @@ describe('JV-2d codex R5', () => {
 
   it('the age moves on by itself: a minute later the text says one minute more', async () => {
     support(true)
+    getJournalMembers.mockResolvedValue({ kind: 'ok', value: [member()] }) // the panel's own read brings the same list
     hold([member()])
     mount()
     expect(within(row('A')).getByTestId('team-panel-member-last').textContent).toBe('3 分前 完成：checks passed')
