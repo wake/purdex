@@ -98,6 +98,10 @@ func assistCall(cfgPath, method, path string, body any, stderr io.Writer) ([]byt
 		}
 		return nil, 1
 	}
+	if !json.Valid(res.body) {
+		fmt.Fprintln(stderr, "pdx assist: the daemon's answer is not JSON (version mismatch or a cut-off answer)")
+		return nil, 1
+	}
 	return res.body, 0
 }
 
@@ -117,20 +121,37 @@ func newAssistFlags(name string, stderr io.Writer, withJSON bool) assistCommon {
 	return c
 }
 
-// leadingWord splits a command's first word off when it is not a flag (`host add air26 --ssh x`: the alias comes first).
-func leadingWord(args []string) (string, []string) {
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		return args[0], args[1:]
+// parseMixed parses flags that may stand before or after the positional words (Go's flag stops at the first one) and returns
+// the positional words in order.
+func parseMixed(fs *flag.FlagSet, args []string) ([]string, error) {
+	var pos []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		if fs.NArg() == 0 {
+			return pos, nil
+		}
+		pos = append(pos, fs.Arg(0))
+		args = fs.Args()[1:]
 	}
-	return "", args
+}
+
+// firstWord splits the first positional word off.
+func firstWord(pos []string) (string, []string) {
+	if len(pos) == 0 {
+		return "", nil
+	}
+	return pos[0], pos[1:]
 }
 
 func assistStatus(args []string, stdout, stderr io.Writer) int {
 	c := newAssistFlags("assist status", stderr, true)
-	if err := c.fs.Parse(args); err != nil {
+	pos, err := parseMixed(c.fs, args)
+	if err != nil {
 		return 2
 	}
-	if c.fs.NArg() > 0 {
+	if len(pos) > 0 {
 		fmt.Fprint(stderr, assistUsage)
 		return 2
 	}
@@ -205,17 +226,17 @@ func renderAssistStatus(body []byte) string {
 		if h.On {
 			sw = "開"
 		}
-		fmt.Fprintf(&b, "%s  要求：%s", a, sw)
+		fmt.Fprintf(&b, "%s  要求：%s", sanitizeCell(a), sw)
 		if h.Op != nil {
-			fmt.Fprintf(&b, "（%s 進行中）", h.Op.Kind)
+			fmt.Fprintf(&b, "（%s 進行中）", sanitizeCell(h.Op.Kind))
 		}
-		fmt.Fprintf(&b, "  ssh=%s  scripts=%s\n", h.SSH, h.Scripts)
+		fmt.Fprintf(&b, "  ssh=%s  scripts=%s\n", sanitizeCell(h.SSH), sanitizeCell(h.Scripts))
 		if r, ok := d.Ready[a]; ok && r.Gen == h.Gen {
 			age := d.Now.Sub(r.At).Round(time.Second)
 			if r.Err != "" {
 				fmt.Fprintf(&b, "  檢查（%s 前）：%s\n", age, sanitizeCell(r.Err))
 			} else {
-				fmt.Fprintf(&b, "  檢查（%s 前）：主機說 %s\n", age, r.Answer.Switch)
+				fmt.Fprintf(&b, "  檢查（%s 前）：主機說 %s\n", age, sanitizeCell(r.Answer.Switch))
 				names := make([]string, 0, len(r.Answer.Repos))
 				for n := range r.Answer.Repos {
 					names = append(names, n)
@@ -223,9 +244,9 @@ func renderAssistStatus(body []byte) string {
 				sort.Strings(names)
 				for _, n := range names {
 					if rp := r.Answer.Repos[n]; rp.Ready {
-						fmt.Fprintf(&b, "    %s 就緒\n", n)
+						fmt.Fprintf(&b, "    %s 就緒\n", sanitizeCell(n))
 					} else {
-						fmt.Fprintf(&b, "    %s 未就緒：%s\n", n, sanitizeCell(rp.Why))
+						fmt.Fprintf(&b, "    %s 未就緒：%s\n", sanitizeCell(n), sanitizeCell(rp.Why))
 					}
 				}
 			}
@@ -233,7 +254,7 @@ func renderAssistStatus(body []byte) string {
 			b.WriteString("  檢查：尚無（這一代的設定還沒檢查過）\n")
 		}
 		if len(h.Can) > 0 || len(h.Cannot) > 0 {
-			fmt.Fprintf(&b, "  can=%q cannot=%q\n", h.Can, h.Cannot)
+			fmt.Fprintf(&b, "  can=%s cannot=%s\n", sanitizeCell(fmt.Sprintf("%q", h.Can)), sanitizeCell(fmt.Sprintf("%q", h.Cannot)))
 		}
 	}
 	if rv := d.File.Reserved; rv != nil && rv.Until.After(d.Now) {
@@ -248,7 +269,7 @@ func renderAssistStatus(body []byte) string {
 			if host == "" {
 				host = "全部主機"
 			}
-			fmt.Fprintf(&b, "  %s %s（%s）%s — %s\n", a.Kind, a.ID, a.Name, host, sanitizeCell(a.Reason))
+			fmt.Fprintf(&b, "  %s %s（%s）%s — %s\n", sanitizeCell(a.Kind), sanitizeCell(a.ID), sanitizeCell(a.Name), sanitizeCell(host), sanitizeCell(a.Reason))
 		}
 	}
 	return b.String()
@@ -264,7 +285,6 @@ func assistHost(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "pdx assist host: unknown command %q\n%s", verb, assistUsage)
 		return 2
 	}
-	alias, rest := leadingWord(rest)
 	c := newAssistFlags("assist host "+verb, stderr, false)
 	ssh := c.fs.String("ssh", "", "ssh alias the scripts run against")
 	scripts := c.fs.String("scripts", "", "directory of assist-on / assist-off / assist-check")
@@ -277,10 +297,12 @@ func assistHost(args []string, stdout, stderr io.Writer) int {
 	c.fs.Var(&cannot, "cannot", "command words the host cannot run (repeatable)")
 	clearCan := c.fs.Bool("clear-can", false, "empty the can list")
 	clearCannot := c.fs.Bool("clear-cannot", false, "empty the cannot list")
-	if err := c.fs.Parse(rest); err != nil {
+	pos, err := parseMixed(c.fs, rest)
+	if err != nil {
 		return 2
 	}
-	if alias == "" || c.fs.NArg() > 0 {
+	alias, pos := firstWord(pos)
+	if alias == "" || len(pos) > 0 {
 		fmt.Fprint(stderr, assistUsage)
 		return 2
 	}
@@ -325,18 +347,20 @@ func assistHost(args []string, stdout, stderr io.Writer) int {
 	}
 	var r struct{ Result string }
 	_ = json.Unmarshal(body, &r)
-	fmt.Fprintf(stdout, "%s：%s\n", alias, map[string]string{"added": "已新增", "changed": "已更新", "unchanged": "沒有變動"}[r.Result])
+	fmt.Fprintf(stdout, "%s：%s\n", sanitizeCell(alias), map[string]string{"added": "已新增", "changed": "已更新", "unchanged": "沒有變動"}[r.Result])
 	return 0
 }
 
 func assistSwitch(on bool, args []string, stdout, stderr io.Writer) int {
-	host, rest := leadingWord(args)
+	rest := args
 	c := newAssistFlags("assist switch", stderr, false)
 	reason := c.fs.String("reason", "", "why (one line, required)")
-	if err := c.fs.Parse(rest); err != nil {
+	pos, err := parseMixed(c.fs, rest)
+	if err != nil {
 		return 2
 	}
-	if host == "" || c.fs.NArg() > 0 {
+	host, pos := firstWord(pos)
+	if host == "" || len(pos) > 0 {
 		fmt.Fprint(stderr, assistUsage)
 		return 2
 	}
@@ -354,7 +378,7 @@ func assistSwitch(on bool, args []string, stdout, stderr io.Writer) int {
 	if on {
 		state = "開"
 	}
-	fmt.Fprintf(stdout, "%s 輔測已%s：%s\n", host, state, sanitizeCell(r.Detail))
+	fmt.Fprintf(stdout, "%s 輔測已%s：%s\n", sanitizeCell(host), state, sanitizeCell(r.Detail))
 	return 0
 }
 
@@ -364,10 +388,11 @@ func assistAllow(allow bool, args []string, stdout, stderr io.Writer) int {
 	sess := c.fs.String("session", "", "a session: its ref")
 	host := c.fs.String("host", "", "only for this host (default every host)")
 	reason := c.fs.String("reason", "", "why (one line)")
-	if err := c.fs.Parse(args); err != nil {
+	pos, err := parseMixed(c.fs, args)
+	if err != nil {
 		return 2
 	}
-	if (*teamArg == "") == (*sess == "") || c.fs.NArg() > 0 {
+	if (*teamArg == "") == (*sess == "") || len(pos) > 0 {
 		fmt.Fprintf(stderr, "pdx assist: name exactly one of --team and --session\n%s", assistUsage)
 		return 2
 	}
@@ -391,11 +416,11 @@ func assistAllow(allow bool, args []string, stdout, stderr io.Writer) int {
 	_ = json.Unmarshal(body, &r)
 	switch r.Result {
 	case "already":
-		fmt.Fprintf(stdout, "%s %s（%s）已在名單上\n", kind, r.ID, r.Name)
+		fmt.Fprintf(stdout, "%s %s（%s）已在名單上\n", kind, sanitizeCell(r.ID), sanitizeCell(r.Name))
 	case "allowed":
-		fmt.Fprintf(stdout, "已允許 %s %s（%s）\n", kind, r.ID, r.Name)
+		fmt.Fprintf(stdout, "已允許 %s %s（%s）\n", kind, sanitizeCell(r.ID), sanitizeCell(r.Name))
 	default:
-		fmt.Fprintf(stdout, "已從名單移除 %s %s\n", kind, r.ID)
+		fmt.Fprintf(stdout, "已從名單移除 %s %s\n", kind, sanitizeCell(r.ID))
 	}
 	return 0
 }
@@ -404,10 +429,11 @@ func assistAllow(allow bool, args []string, stdout, stderr io.Writer) int {
 func gateHosts(args []string, stdout, stderr io.Writer) int {
 	c := newAssistFlags("gate hosts", stderr, true)
 	session := c.fs.String("session", "", "session id (default: the one of the environment)")
-	if err := c.fs.Parse(args); err != nil {
+	pos, err := parseMixed(c.fs, args)
+	if err != nil {
 		return 2
 	}
-	if c.fs.NArg() > 0 {
+	if len(pos) > 0 {
 		fmt.Fprint(stderr, assistUsage)
 		return 2
 	}
@@ -444,7 +470,7 @@ func gateHosts(args []string, stdout, stderr io.Writer) int {
 	if repo == "" {
 		repo = "（不在 git 倉庫內）"
 	}
-	fmt.Fprintf(stdout, "倉庫：%s\nmlab        可用（本機）\n", repo)
+	fmt.Fprintf(stdout, "倉庫：%s\nmlab        可用（本機）\n", sanitizeCell(repo))
 	if len(d.Hosts) == 0 {
 		fmt.Fprintln(stdout, "no assist hosts on this host")
 		return 0
@@ -452,23 +478,25 @@ func gateHosts(args []string, stdout, stderr io.Writer) int {
 	for _, h := range d.Hosts {
 		switch {
 		case h.Usable:
-			fmt.Fprintf(stdout, "%-11s 可用\n", h.Host)
+			fmt.Fprintf(stdout, "%-11s 可用\n", sanitizeCell(h.Host))
 		default:
-			fmt.Fprintf(stdout, "%-11s 不可用：%s\n", h.Host, sanitizeCell(h.Why))
+			fmt.Fprintf(stdout, "%-11s 不可用：%s\n", sanitizeCell(h.Host), sanitizeCell(h.Why))
 		}
 	}
 	return 0
 }
 
 func assistReserve(args []string, stdout, stderr io.Writer) int {
-	word, rest := leadingWord(args)
+	rest := args
 	c := newAssistFlags("assist reserve", stderr, false)
 	forDur := c.fs.String("for", "", "how long, such as 2h (default 2h, at most 12h)")
 	reason := c.fs.String("reason", "", "why (one line, required for on)")
-	if err := c.fs.Parse(rest); err != nil {
+	pos, err := parseMixed(c.fs, rest)
+	if err != nil {
 		return 2
 	}
-	if (word != "on" && word != "off") || c.fs.NArg() > 0 {
+	word, pos := firstWord(pos)
+	if (word != "on" && word != "off") || len(pos) > 0 {
 		fmt.Fprint(stderr, assistUsage)
 		return 2
 	}

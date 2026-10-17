@@ -222,3 +222,49 @@ func TestAssistStatusShowsAReservation(t *testing.T) {
 	_, out, _, _ = callAssist(t, 200, expired, "status")
 	require.NotContains(t, out, "保留中")
 }
+
+func TestAssistFlagsMayStandBeforeThePositionalWord(t *testing.T) {
+	for _, args := range [][]string{
+		{"host", "set", "--slots", "4", "air26"},
+		{"host", "set", "air26", "--slots", "4"},
+	} {
+		rc, _, errb, got := callAssist(t, 200, `{"result":"changed"}`, args...)
+		require.Equal(t, 0, rc, errb)
+		require.Equal(t, map[string]any{"alias": "air26", "slots": float64(4)}, got[0].Body)
+	}
+	rc, _, errb, got := callAssist(t, 200, `{"host":"air26","on":true,"detail":"d"}`, "on", "--reason", "r", "air26")
+	require.Equal(t, 0, rc, errb)
+	require.Equal(t, "air26", got[0].Body["host"])
+	rc, _, errb, got = callAssist(t, 200, `{"on":false}`, "reserve", "--reason", "r", "off")
+	require.Equal(t, 0, rc, errb)
+	require.Equal(t, false, got[0].Body["on"])
+	rc, _, _, got = callAssist(t, 200, `{}`, "host", "set", "a", "b", "--slots", "1")
+	require.Equal(t, 2, rc)
+	require.Empty(t, got)
+}
+
+func TestAssistAnAnswerThatIsNotJSONFails(t *testing.T) {
+	for _, args := range [][]string{{"status"}, {"status", "--json"}, {"on", "air26", "--reason", "r"}} {
+		rc, out, errb, _ := callAssist(t, 200, `{broken`, args...)
+		require.Equal(t, 1, rc, args)
+		require.Empty(t, out)
+		require.Contains(t, errb, "not JSON")
+	}
+}
+
+func TestAssistTextOutputCarriesNoControlCharacters(t *testing.T) {
+	esc := "\u001b]52;c;x\u0007"
+	answer := `{"file":{"Hosts":{"air26":{"SSH":"a` + esc + `","On":true,"Gen":1}},"Allowed":[{"Kind":"team","ID":"t` + esc + `","Name":"n` + esc + `"}]},
+	"ready":{"air26":{"gen":1,"at":"2026-10-17T12:00:00Z","answer":{"switch":"on` + esc + `","repos":{"r` + esc + `":{"ready":true}}}}},"now":"2026-10-17T12:00:10Z"}`
+	_, out, _, _ := callAssist(t, 200, answer, "status")
+	require.NotContains(t, out, "\x1b")
+	require.NotContains(t, out, "\x07")
+	hosts := `{"repo":"p` + esc + `","hosts":[{"host":"h` + esc + `","usable":true}]}`
+	var got []assistReq
+	srv := assistServer(t, 200, hosts, &got)
+	defer srv.Close()
+	var o, e bytes.Buffer
+	require.Equal(t, 0, gateMain([]string{"hosts", "--config", watchCfgFile(t, srv, "tok")}, &o, &e))
+	require.NotContains(t, o.String(), "\x1b")
+	require.NotContains(t, o.String(), "\x07")
+}
