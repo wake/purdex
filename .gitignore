@@ -6,6 +6,7 @@ bin/
 node_modules/
 spa/node_modules/
 spa/dist/
+spa/.tsbuild/
 .playwright-mcp/
 out/
 dist/
