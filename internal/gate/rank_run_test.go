@@ -127,6 +127,28 @@ func TestRankRun_HeldSecondsIncludeTheStretchUpToTheGrant(t *testing.T) {
 	assert.Greater(t, rec["held_s"], 0.1, "the stretch up to the grant counts")
 }
 
+// A hold that falls while the class is paused (slots = 0) is still recorded as `held`, beside `paused`, and held_s is summed for it.
+// Mutation gate: held recorded only when not paused → the record has held_s but no `held` (red).
+func TestRankRun_AHoldDuringAPauseIsRecordedAsHeld(t *testing.T) {
+	g, _ := testGate(t)
+	g.SetConfig(func(c *Config) { c.Slots.Heavy = 0 })
+	dir := t.TempDir()
+	w := runAsync(g, context.Background(), Options{Argv: sh(": heldpaused; touch " + dir + "/ran"), Class: ClassHeavy})
+	var ws []Waiter
+	eventually(t, "the waiter", func() bool { ws, _ = g.Queue(); return len(ws) == 1 })
+	_, err := g.MoveTicket(ClassHeavy, ws[0].Ticket, RankHold, "sess-w", "during the pause", time.Time{})
+	require.NoError(t, err)
+	time.Sleep(200 * time.Millisecond)
+	_, err = g.MoveTicket(ClassHeavy, ws[0].Ticket, RankNormal, "sess-w", "", time.Time{})
+	require.NoError(t, err)
+	g.SetConfig(func(c *Config) { c.Slots.Heavy = 1 })
+	assert.Equal(t, 0, (<-w).code)
+	rec := lastDecisionOf(t, g, ": heldpaused")
+	assert.Contains(t, rec["wait_reasons"], "paused")
+	assert.Contains(t, rec["wait_reasons"], "held")
+	assert.Greater(t, rec["held_s"], 0.1)
+}
+
 // The would-wait hint: back and held tickets do not make a new command wait; a front or normal one does. Tickets made by hand in a
 // pool nobody serves keep the state still. Mutation gate: every ticket counted (the old PeekWaiting) → red.
 func TestRankRun_WouldWaitPassesBackAndHeldTickets(t *testing.T) {

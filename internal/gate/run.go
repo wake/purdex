@@ -117,11 +117,13 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		}
 		pollAt, prevHold = now, rank.Rank == RankHold
 		d.Rank, d.HeldS = rankName(rank), heldFor.Seconds()
+		if rank.Rank == RankHold {
+			d.why("held") // recorded whatever else keeps it waiting too: held_s is summed for it
+		}
 		switch {
 		case paused:
 			d.why("paused")
 		case rank.Rank == RankHold:
-			d.why("held")
 		case ok:
 			d.why("queue")
 		case good == nil:
