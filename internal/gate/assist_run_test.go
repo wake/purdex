@@ -121,9 +121,9 @@ func TestMarkFilter_AMarkInTheMiddleOfALineIsNotOne(t *testing.T) {
 
 // ---- the run ----
 
-// fakeHost is a home directory standing in for the assist host, a fake ssh that runs the remote command there (as the login shell of a
+// assistHost is a home directory standing in for the assist host, a fake ssh that runs the remote command there (as the login shell of a
 // new session, like sshd), a fake `pdx gate` and a fake `pnpm`.
-type fakeHost struct {
+type assistHost struct {
 	home string
 	ssh  string
 	repo string
@@ -168,7 +168,7 @@ echo x >> "$HOME/pnpm-count"
 mkdir -p node_modules && echo installed > node_modules/marker
 `
 
-func newFakeHost(t *testing.T, repo string) *fakeHost {
+func newAssistHost(t *testing.T, repo string) *assistHost {
 	t.Helper()
 	home := t.TempDir()
 	if r, err := filepath.EvalSymlinks(home); err == nil {
@@ -182,12 +182,12 @@ func newFakeHost(t *testing.T, repo string) *fakeHost {
 	gitIn(t, home+"/Assist/repos.noindex/"+repo, "init", "-q", "-b", "main")
 	t.Setenv("FAKE_HOME", home)
 	t.Setenv("FAKE_SSH_FAIL", "")
-	return &fakeHost{home: home, ssh: home + "/bin/ssh", repo: repo}
+	return &assistHost{home: home, ssh: home + "/bin/ssh", repo: repo}
 }
 
-func (h *fakeHost) remote(rel string) string { return filepath.Join(h.home, rel) }
+func (h *assistHost) remote(rel string) string { return filepath.Join(h.home, rel) }
 
-func (h *fakeHost) listDir(t *testing.T, rel string) []string {
+func (h *assistHost) listDir(t *testing.T, rel string) []string {
 	ents, _ := os.ReadDir(h.remote(rel))
 	var out []string
 	for _, e := range ents {
@@ -197,7 +197,7 @@ func (h *fakeHost) listDir(t *testing.T, rel string) []string {
 }
 
 // runOn runs argv in dir on the fake host and returns the result with what was written.
-func runOn(t *testing.T, g *Gate, h *fakeHost, dir string, argv ...string) (AssistResult, string, string) {
+func runOn(t *testing.T, g *Gate, h *assistHost, dir string, argv ...string) (AssistResult, string, string) {
 	t.Helper()
 	var out, errb bytes.Buffer
 	res := g.RunAssist(context.Background(), Options{Argv: argv, Dir: dir, Stdout: &out, Stderr: &errb},
@@ -210,7 +210,7 @@ func runOn(t *testing.T, g *Gate, h *fakeHost, dir string, argv ...string) (Assi
 func TestRunAssist_RunsTheSnapshotThereAndCleansUp(t *testing.T) {
 	g, errs := testGate(t)
 	dir := workRepo(t)
-	h := newFakeHost(t, filepath.Base(dir))
+	h := newAssistHost(t, filepath.Base(dir))
 	res, out, errb := runOn(t, g, h, dir+"/sub", "sh", "-c", "cat b.txt ../new.txt ../a.txt; pwd; echo oops >&2; touch ranhere; exit 3")
 	require.NoError(t, res.Err)
 	assert.True(t, res.Started)
@@ -241,7 +241,7 @@ func TestRunAssist_FailuresBeforeTheStart(t *testing.T) {
 	for _, tc := range []struct{ mode, want string }{{"wait75", "did not admit"}, {"nostart", "could not start"}} {
 		g, _ := testGate(t)
 		dir := workRepo(t)
-		h := newFakeHost(t, filepath.Base(dir))
+		h := newAssistHost(t, filepath.Base(dir))
 		writeFile(t, h.remote("fake-pdx-mode"), tc.mode, 0o644)
 		res, _, _ := runOn(t, g, h, dir, "sh", "-c", "touch ran")
 		assert.False(t, res.Started, tc.mode)
@@ -256,7 +256,7 @@ func TestRunAssist_FailuresBeforeTheStart(t *testing.T) {
 func TestRunAssist_SSHAndPushFailures(t *testing.T) {
 	g, _ := testGate(t)
 	dir := workRepo(t)
-	h := newFakeHost(t, filepath.Base(dir))
+	h := newAssistHost(t, filepath.Base(dir))
 	t.Setenv("FAKE_SSH_FAIL", "1")
 	res, _, _ := runOn(t, g, h, dir, "true")
 	assert.False(t, res.Started)
@@ -264,7 +264,7 @@ func TestRunAssist_SSHAndPushFailures(t *testing.T) {
 	assert.Contains(t, res.Err.Error(), "push to air26")
 
 	t.Setenv("FAKE_SSH_FAIL", "")
-	h2 := newFakeHost(t, "no-such-repo")
+	h2 := newAssistHost(t, "no-such-repo")
 	require.NoError(t, os.RemoveAll(h2.remote("Assist/repos.noindex/no-such-repo")))
 	res, _, _ = runOn(t, g, h2, dir, "true")
 	assert.False(t, res.Started)
@@ -276,7 +276,7 @@ func TestRunAssist_DependenciesAreKeyedByTheLockfile(t *testing.T) {
 	g, _ := testGate(t)
 	dir := workRepo(t)
 	writeFile(t, dir+"/spa/pnpm-lock.yaml", "lock: 1\n", 0o644)
-	h := newFakeHost(t, filepath.Base(dir))
+	h := newAssistHost(t, filepath.Base(dir))
 	count := func() int { return strings.Count(mustReadOr(h.remote("pnpm-count")), "x") }
 	for i := 0; i < 2; i++ {
 		res, out, _ := runOn(t, g, h, dir, "sh", "-c", "cat spa/node_modules/marker")
@@ -303,7 +303,7 @@ func mustReadOr(p string) string {
 func TestRunAssist_ReclaimedIsReported(t *testing.T) {
 	g, _ := testGate(t)
 	dir := workRepo(t)
-	h := newFakeHost(t, filepath.Base(dir))
+	h := newAssistHost(t, filepath.Base(dir))
 	res, _, _ := runOn(t, g, h, dir, "sh", "-c", `touch "$HOME/Assist/jobs.noindex/${PDX_GATE_TAG#assist:}.reclaimed"; exit 143`)
 	assert.True(t, res.Started)
 	assert.True(t, res.Reclaimed)
@@ -317,7 +317,7 @@ func TestRunAssist_AnInterruptEndsTheRemoteGroup(t *testing.T) {
 	sigs := make(chan os.Signal, 1)
 	g.Signals = sigs
 	dir := workRepo(t)
-	h := newFakeHost(t, filepath.Base(dir))
+	h := newAssistHost(t, filepath.Base(dir))
 	pidFile := h.remote("sleeper.pid")
 	done := make(chan AssistResult, 1)
 	go func() {
