@@ -121,12 +121,12 @@ func TestJournalFeed_LastReports(t *testing.T) {
 	seedMember(t, s, "op-b", tTeamB, "sess-b", 4)
 	mustCreateTask(t, s, newTask(tTeamA, "op-1", "t", 5))
 	mustCreateTask(t, s, newTask(tTeamB, "op-b", "t", 5))
-	// op-1: three reports, the newest inserted in the middle; op-2: a tie on created_at where the greater id went in first
+	// op-1: three reports, the newest inserted in the middle; op-2: a tie on created_at where the greater id went in last (the primary key order would pick the smaller)
 	mustInsertReport(t, s, newReport(tTeamA, 1, "op-1", team.ReportProgress, 1, 100))
 	mustInsertReport(t, s, newReport(tTeamA, 1, "op-1", team.ReportReady, 2, 300))
 	mustInsertReport(t, s, newReport(tTeamA, 1, "op-1", team.ReportProgress, 3, 200))
-	mustInsertReport(t, s, newReport(tTeamA, 1, "op-2", team.ReportProgress, 9, 500))
-	mustInsertReport(t, s, newReport(tTeamA, 1, "op-2", team.ReportBlocked, 4, 500))
+	mustInsertReport(t, s, newReport(tTeamA, 1, "op-2", team.ReportProgress, 4, 500))
+	mustInsertReport(t, s, newReport(tTeamA, 1, "op-2", team.ReportBlocked, 9, 500))
 	mustInsertReport(t, s, newReport(tTeamB, 1, "op-b", team.ReportDone, 5, 900))
 	got, err := s.LastReports(tTeamA)
 	if err != nil {
@@ -139,7 +139,7 @@ func TestJournalFeed_LastReports(t *testing.T) {
 	if len(got) != 2 || by["op-1"].ID != reportID(2) || by["op-1"].Kind != "ready" || by["op-1"].CreatedAt != 300 {
 		t.Fatalf("last reports = %+v, want op-1's newest and op-2's", got)
 	}
-	if r := by["op-2"]; r.ID != reportID(4) || r.Kind != "blocked" || r.RowID == 0 || r.MemberRef != "_memop-2" || r.TeamID != tTeamA {
+	if r := by["op-2"]; r.ID != reportID(9) || r.Kind != "blocked" || r.RowID == 0 || r.MemberRef != "_memop-2" || r.TeamID != tTeamA {
 		t.Errorf("op-2 tie = %+v, want the later-inserted report (greater rowid)", r)
 	}
 	// a member that is no longer active still has its row; the caller filters
