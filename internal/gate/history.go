@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 )
 
@@ -20,14 +21,22 @@ type HistoryFilter struct {
 // SentOut says whether a record is of a command that was offered to an assist host.
 func (d Decision) SentOut() bool { return d.Tried != "" || d.Host != "" }
 
-// History reads decisions.jsonl.1 and decisions.jsonl and returns the matching records, newest first. A line that does not parse
-// is skipped. No gate lock is taken: a record is appended whole, one line each.
+// History reads decisions.jsonl and decisions.jsonl.1 and returns the matching records, newest first by their time (a record is
+// written when its command ends, so the file order is the order of the ends, not of the starts). A line that does not parse is
+// skipped. No gate lock is taken: a record is appended whole, one line each. The current file is opened first, then the older one:
+// a rotation between the two opens makes the older name point at the file already open as the current one (told by os.SameFile and
+// read once), where the other order would lose the file that was just rotated.
 func History(dir string, f HistoryFilter) ([]Decision, error) {
 	if f.Limit <= 0 {
 		f.Limit = 50
 	}
-	var all []Decision
-	for _, name := range []string{decisionsFile + ".1", decisionsFile} {
+	var files []*os.File
+	defer func() {
+		for _, fh := range files {
+			fh.Close()
+		}
+	}()
+	for _, name := range []string{decisionsFile, decisionsFile + ".1"} {
 		fh, err := os.Open(filepath.Join(dir, name))
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -35,6 +44,18 @@ func History(dir string, f HistoryFilter) ([]Decision, error) {
 		if err != nil {
 			return nil, err
 		}
+		if len(files) > 0 {
+			a, errA := files[0].Stat()
+			b, errB := fh.Stat()
+			if errA == nil && errB == nil && os.SameFile(a, b) {
+				fh.Close()
+				continue
+			}
+		}
+		files = append(files, fh)
+	}
+	var all []Decision
+	for _, fh := range files {
 		sc := bufio.NewScanner(fh)
 		sc.Buffer(make([]byte, 64<<10), 1<<20)
 		for sc.Scan() {
@@ -50,15 +71,13 @@ func History(dir string, f HistoryFilter) ([]Decision, error) {
 			}
 			all = append(all, d)
 		}
-		err = sc.Err()
-		fh.Close()
-		if err != nil {
+		if err := sc.Err(); err != nil {
 			return nil, err
 		}
 	}
-	out := make([]Decision, 0, min(len(all), f.Limit))
-	for i := len(all) - 1; i >= 0 && len(out) < f.Limit; i-- {
-		out = append(out, all[i])
+	sort.SliceStable(all, func(i, j int) bool { return all[i].Time.After(all[j].Time) })
+	if len(all) > f.Limit {
+		all = all[:f.Limit]
 	}
-	return out, nil
+	return all, nil
 }

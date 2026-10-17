@@ -52,6 +52,29 @@ func TestHistory_OnlyWhatWasOfferedToAHostNewestFirst(t *testing.T) {
 	assert.Equal(t, "on-mserv", one[0].Argv[0])
 }
 
+// A long command that ends after a newer short one is written after it: the order is by time, and --limit keeps the newest.
+func TestHistory_IsOrderedByTimeNotByTheOrderOfTheEnds(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	writeDecisions(t, dir, decisionsFile,
+		Decision{Time: now.Add(-time.Minute), Argv: []string{"newer-short"}, Host: "air26"},
+		Decision{Time: now.Add(-time.Hour), Argv: []string{"older-long"}, Host: "air26"})
+	recs, err := History(dir, HistoryFilter{Limit: 1})
+	require.NoError(t, err)
+	require.Len(t, recs, 1)
+	assert.Equal(t, "newer-short", recs[0].Argv[0])
+}
+
+// A rotation between the two opens leaves the older name pointing at the file already open as the current one: it is read once.
+func TestHistory_AFileSeenUnderBothNamesIsReadOnce(t *testing.T) {
+	dir := t.TempDir()
+	writeDecisions(t, dir, decisionsFile, Decision{Time: time.Now(), Argv: []string{"x"}, Host: "air26"})
+	require.NoError(t, os.Link(filepath.Join(dir, decisionsFile), filepath.Join(dir, decisionsFile+".1")))
+	recs, err := History(dir, HistoryFilter{})
+	require.NoError(t, err)
+	assert.Len(t, recs, 1)
+}
+
 func TestHistory_NoFileIsNoHistory(t *testing.T) {
 	recs, err := History(t.TempDir(), HistoryFilter{})
 	require.NoError(t, err)
