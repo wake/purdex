@@ -320,12 +320,15 @@ func BenchmarkEmitSlotRead(b *testing.B) {
 			m, tx := newScopeModuleB(b)
 			orig := pidAncestorIncludesFn
 			pidAncestorIncludesFn = func(pid, ancestor int) bool { return true }
-			defer func() { pidAncestorIncludesFn = orig }()
+			origAlive, origStart := isPidAliveFn, processStartTimeFn
+			isPidAliveFn = func(int) bool { return true }
+			processStartTimeFn = func(int) (string, error) { return "Sun Apr 20 01:30:00 2026", nil }
+			defer func() { pidAncestorIncludesFn, isPidAliveFn, processStartTimeFn = orig, origAlive, origStart }()
 			for i := 0; i < 200; i++ {
 				pane := "%" + strconv.Itoa(i)
 				tx.SetPaneSessionName(pane, "s"+strconv.Itoa(i%18))
 				tx.SetActivePanePID(pane, strconv.Itoa(9000+i))
-				if _, err := m.frames.Upsert(store.Frame{PaneID: pane, AgentType: "cc", PID: 1000 + i, PPID: 1, ProcessStartTime: "t" + strconv.Itoa(i),
+				if _, err := m.frames.Upsert(store.Frame{PaneID: pane, AgentType: "cc", PID: 1000 + i, PPID: 1, ProcessStartTime: "Sun Apr 20 01:30:00 2026",
 					Status: agentpkg.StatusIdle, StartedAt: int64(10 + i), LastSeenAt: int64(10 + i), Verified: true, SessionID: "sid-" + strconv.Itoa(i), Cwd: "/w"}); err != nil {
 					b.Fatal(err)
 				}
