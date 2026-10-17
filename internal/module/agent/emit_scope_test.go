@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"reflect"
@@ -237,5 +238,48 @@ func TestPaneSnapCache_FallbackKeepsTheReadDeadline(t *testing.T) {
 	}
 	if got := before.Add(paneSnapshotTimeout - 10*time.Millisecond); !snap.deadline.Before(got.Add(60 * time.Millisecond)) {
 		t.Fatalf("deadline %v was reset after the batch call", snap.deadline)
+	}
+}
+
+// lateTmux answers the listing first and only then parks, so the answer predates whatever the test changes meanwhile.
+type lateTmux struct {
+	*batchCountingTmux
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (l *lateTmux) ListPanePlacements(ctx context.Context) (map[string]tmux.PanePlacement, error) {
+	out, err := l.batchCountingTmux.ListPanePlacements(ctx)
+	l.once.Do(func() { close(l.entered); <-l.release })
+	return out, err
+}
+
+// A reader that joins a listing already in flight must not accept it if the layout changed after the fork began.
+func TestPaneSnapCache_WaiterRejectsFlightOlderThanGenBump(t *testing.T) {
+	f := cachedFixture(t, time.Hour)
+	l := &lateTmux{batchCountingTmux: f.tx, entered: make(chan struct{}), release: make(chan struct{})}
+	f.m.tmux = l
+
+	var first sync.WaitGroup
+	first.Add(1)
+	go func() { defer first.Done(); f.m.cachedPaneSnapshot(false) }()
+	<-l.entered // flight 1 has its answer and is parked
+
+	f.tx.SetPaneSessionName("%late", "slate")
+	f.tx.SetActivePanePID("%late", "2998")
+	f.m.bumpTmuxGen()
+
+	got := make(chan *paneSnapshot, 1)
+	go func() { s, _, _ := f.m.cachedPaneSnapshot(false); got <- s }()
+	time.Sleep(50 * time.Millisecond) // the waiter is parked on flight 1
+	close(l.release)
+	first.Wait()
+	s := <-got
+	if s == nil || s.panes == nil {
+		t.Fatalf("waiter got %+v", s)
+	}
+	if _, ok := s.panes["%late"]; !ok {
+		t.Fatalf("waiter accepted a listing from before the gen bump (no %%late pane)")
 	}
 }

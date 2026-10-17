@@ -30,6 +30,7 @@ type paneSnapCache struct {
 // snapFlight is one in-progress fork other readers may wait on.
 type snapFlight struct {
 	started time.Time
+	gen     uint64 // m.tmuxGen when the fork started
 	done    chan struct{}
 	snap    *paneSnapshot // result of takePaneSnapshot (panes and fallback only are shared)
 	err     error
@@ -83,6 +84,10 @@ func (m *Module) cachedPaneSnapshot(force bool) (*paneSnapshot, bool, error) {
 			if force && f.started.Before(callStart) {
 				continue
 			}
+			// The layout changed (a frame was created or ended) after this listing began: it may predate the pane the caller needs.
+			if f.gen != m.tmuxGen.Load() {
+				continue
+			}
 			if f.err != nil {
 				return nil, false, f.err
 			}
@@ -91,9 +96,9 @@ func (m *Module) cachedPaneSnapshot(force bool) (*paneSnapshot, bool, error) {
 			}
 			return m.flightView(f), false, nil
 		}
-		f := &snapFlight{started: time.Now(), done: make(chan struct{})}
-		c.flight = f
 		gen := m.tmuxGen.Load()
+		f := &snapFlight{started: time.Now(), gen: gen, done: make(chan struct{})}
+		c.flight = f
 		c.mu.Unlock()
 
 		f.snap, f.err = m.takePaneSnapshot() // the fork, outside every lock
