@@ -3,11 +3,13 @@ package poolmod
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -231,48 +233,6 @@ func TestHistory_NullRecordsBecomeAnEmptyArray(t *testing.T) {
 	assert.Contains(t, rr.Body.String(), `"records":[]`)
 }
 
-// A runaway reader is turned away with 429 once maxInFlight calls are under way, and gets in again when one ends.
-func TestInFlight_ExcessReadsAreTurnedAway(t *testing.T) {
-	hold := make(chan struct{})
-	entered := make(chan struct{}, maxInFlight+2)
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v1/pool", func(w http.ResponseWriter, r *http.Request) {
-		entered <- struct{}{}
-		select {
-		case <-hold:
-		case <-r.Context().Done():
-		}
-		w.Write(poolOf(t))
-	})
-	cl := fakeWWD(t, mux)
-	cl.Timeout = 10 * time.Second
-	m := New()
-	m.cl = cl
-	srv := http.NewServeMux()
-	m.RegisterRoutes(srv)
-	done := make(chan int, maxInFlight)
-	for i := 0; i < maxInFlight; i++ {
-		go func() {
-			rr := httptest.NewRecorder()
-			srv.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/pool/hosts", nil))
-			done <- rr.Code
-		}()
-	}
-	for i := 0; i < maxInFlight; i++ {
-		<-entered
-	}
-	rr := call(srv, "/api/pool/hosts")
-	assert.Equal(t, 429, rr.Code)
-	assert.Equal(t, ErrBusy, errCode(rr))
-	rr = call(srv, "/api/pool/facts/history")
-	assert.Equal(t, 429, rr.Code)
-	close(hold)
-	for i := 0; i < maxInFlight; i++ {
-		assert.Equal(t, 200, <-done)
-	}
-	assert.Equal(t, 200, call(srv, "/api/pool/hosts").Code, "a slot is free again")
-}
-
 // However many readers there are, wwd is asked once per key per TTL: the second read inside the TTL is the first's answer, one
 // after it asks again, and an error is never kept.
 func TestCache_OneWWDCallPerKeyPerTTL(t *testing.T) {
@@ -308,4 +268,122 @@ func TestCache_OneWWDCallPerKeyPerTTL(t *testing.T) {
 	assert.Equal(t, 502, call(srv, "/api/pool/hosts").Code)
 	assert.Equal(t, 502, call(srv, "/api/pool/hosts").Code)
 	assert.Equal(t, 4, calls, "an error is not cached")
+}
+
+// parkedWWD is a fake wwd whose history/pool answers wait for release, counting the calls that arrived.
+type parkedWWD struct {
+	calls   atomic.Int32
+	entered chan struct{}
+	release chan struct{}
+}
+
+func newParkedWWD(t *testing.T) (*parkedWWD, *client.Client) {
+	p := &parkedWWD{entered: make(chan struct{}, 64), release: make(chan struct{})}
+	mux := http.NewServeMux()
+	wait := func(w http.ResponseWriter, r *http.Request, body []byte) {
+		p.calls.Add(1)
+		p.entered <- struct{}{}
+		select {
+		case <-p.release:
+		case <-r.Context().Done():
+		}
+		w.Write(body)
+	}
+	mux.HandleFunc("GET /v1/pool", func(w http.ResponseWriter, r *http.Request) { wait(w, r, poolOf(t)) })
+	mux.HandleFunc("GET /v1/facts/history", func(w http.ResponseWriter, r *http.Request) {
+		wait(w, r, []byte(`{"step":"5s","records":[]}`))
+	})
+	cl := fakeWWD(t, mux)
+	cl.Timeout = 10 * time.Second
+	return p, cl
+}
+
+func fixedModule(cl *client.Client) (*Module, *http.ServeMux) {
+	m := New()
+	m.cl = cl
+	m.now = func() time.Time { return time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC) }
+	srv := http.NewServeMux()
+	m.RegisterRoutes(srv)
+	return m, srv
+}
+
+// Single flight: with the cache empty and wwd parked, N concurrent reads of one key are ONE wwd call, and every reader gets
+// the same answer. Readers that wait for the flight hold no in-flight slot.
+func TestSingleFlight_ConcurrentReadsOfOneKeyCallWWDOnce(t *testing.T) {
+	p, cl := newParkedWWD(t)
+	_, srv := fixedModule(cl)
+	const n = 3 * maxInFlight // more readers than slots: the waiters must not need one
+	bodies := make(chan string, n)
+	codes := make(chan int, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			rr := call(srv, "/api/pool/hosts")
+			codes <- rr.Code
+			bodies <- rr.Body.String()
+		}()
+	}
+	<-p.entered // the leader is in wwd
+	time.Sleep(100 * time.Millisecond)
+	close(p.release)
+	var first string
+	for i := 0; i < n; i++ {
+		assert.Equal(t, 200, <-codes)
+		b := <-bodies
+		if i == 0 {
+			first = b
+		}
+		assert.Equal(t, first, b, "every reader gets the leader's answer")
+	}
+	assert.EqualValues(t, 1, p.calls.Load(), "wwd was asked once")
+}
+
+// Different keys are different flights: each is asked once.
+func TestSingleFlight_DifferentKeysAreSeparateFlights(t *testing.T) {
+	p, cl := newParkedWWD(t)
+	_, srv := fixedModule(cl)
+	paths := []string{
+		"/api/pool/facts/history?since=2026-10-18T01:00:00Z", "/api/pool/facts/history?since=2026-10-18T02:00:00Z",
+		"/api/pool/facts/history?since=2026-10-18T01:00:00Z&step=1m",
+	}
+	done := make(chan int, 6)
+	for _, path := range paths {
+		for i := 0; i < 2; i++ {
+			go func() { done <- call(srv, path).Code }()
+		}
+	}
+	for range paths {
+		<-p.entered
+	}
+	time.Sleep(100 * time.Millisecond)
+	close(p.release)
+	for i := 0; i < 6; i++ {
+		assert.Equal(t, 200, <-done)
+	}
+	assert.EqualValues(t, 3, p.calls.Load(), "three keys, three wwd calls")
+}
+
+// A runaway client asking maxInFlight different things is turned away with 429 at the next different thing, which holds
+// no slot and reaches no wwd; the reader of an existing key still shares its flight; a slot is free again when one ends.
+func TestInFlight_ExcessDistinctReadsAreTurnedAway(t *testing.T) {
+	p, cl := newParkedWWD(t)
+	_, srv := fixedModule(cl)
+	path := func(i int) string { return fmt.Sprintf("/api/pool/facts/history?since=2026-10-18T%02d:00:00Z", i) }
+	done := make(chan int, maxInFlight+1)
+	for i := 0; i < maxInFlight; i++ {
+		go func() { done <- call(srv, path(i)).Code }()
+	}
+	for i := 0; i < maxInFlight; i++ {
+		<-p.entered
+	}
+	rr := call(srv, path(maxInFlight))
+	assert.Equal(t, 429, rr.Code)
+	assert.Equal(t, ErrBusy, errCode(rr))
+	go func() { done <- call(srv, path(0)).Code }() // a waiter on an existing flight: no slot needed
+	time.Sleep(50 * time.Millisecond)
+	assert.EqualValues(t, maxInFlight, p.calls.Load(), "the 429 and the waiter reached no wwd")
+	close(p.release)
+	for i := 0; i < maxInFlight+1; i++ {
+		assert.Equal(t, 200, <-done)
+	}
+	assert.Equal(t, 200, call(srv, path(maxInFlight)).Code, "a slot is free again")
 }

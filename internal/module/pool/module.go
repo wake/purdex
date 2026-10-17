@@ -54,12 +54,14 @@ type Module struct {
 	cl       *client.Client
 	now      func() time.Time
 	inflight chan struct{} // a semaphore of maxInFlight
-	cacheMu  sync.Mutex
+	// flightMu guards cache and flights (see serve).
+	flightMu sync.Mutex
 	cache    map[string]cachedAnswer
+	flights  map[string]*flight
 }
 
 func New() *Module {
-	return &Module{now: time.Now, inflight: make(chan struct{}, maxInFlight), cache: map[string]cachedAnswer{}}
+	return &Module{now: time.Now, inflight: make(chan struct{}, maxInFlight), cache: map[string]cachedAnswer{}, flights: map[string]*flight{}}
 }
 
 func (m *Module) Name() string           { return "pool" }
@@ -121,62 +123,112 @@ func hostsOf(p wire.Pool) wire.PoolHostsResponse {
 	return out
 }
 
-// enter takes an in-flight slot or answers 429; the caller defers the returned release when ok.
-func (m *Module) enter(w http.ResponseWriter) (release func(), ok bool) {
+// apiError is a refused read: the status, code and detail the App is answered with. Every waiter on one flight gets the same.
+type apiError struct {
+	status       int
+	code, detail string
+}
+
+// flight is one wwd call under way for a key. Readers that miss the cache while it runs wait on done and share its result
+// instead of calling wwd themselves; only the leader (the reader that started it) writes the cache.
+type flight struct {
+	done chan struct{}
+	body []byte
+	err  *apiError
+}
+
+// serve answers the read named by key: a fresh cached answer if there is one; else the result of the flight already under way
+// for key; else it leads a new one, taking an in-flight slot first (429 when all maxInFlight are taken - waiters do not hold
+// a slot). Because a key has at most one flight and only its leader writes the cache, a slow old call can never overwrite a
+// newer answer, and wwd is asked once per key however many readers there are.
+func (m *Module) serve(w http.ResponseWriter, r *http.Request, key string, fetch func(ctx context.Context) (any, *apiError)) {
+	if body, ok := m.cached(key); ok {
+		writeBody(w, body)
+		return
+	}
+	m.flightMu.Lock()
+	if body, ok := m.cachedLocked(key); ok { // filled between the first look and the lock
+		m.flightMu.Unlock()
+		writeBody(w, body)
+		return
+	}
+	if f, ok := m.flights[key]; ok {
+		m.flightMu.Unlock()
+		select {
+		case <-f.done:
+			writeFlight(w, f)
+		case <-r.Context().Done():
+		}
+		return
+	}
+	f := &flight{done: make(chan struct{})}
+	m.flights[key] = f
+	m.flightMu.Unlock()
+
+	f.body, f.err = m.lead(r, key, fetch)
+	m.flightMu.Lock()
+	delete(m.flights, key)
+	m.flightMu.Unlock()
+	close(f.done)
+	writeFlight(w, f)
+}
+
+// lead is the leader's work: take a slot, call wwd (cut loose from the leader's request, so a leader that goes away does not
+// fail the readers waiting on its result), cache a success.
+func (m *Module) lead(r *http.Request, key string, fetch func(ctx context.Context) (any, *apiError)) ([]byte, *apiError) {
 	select {
 	case m.inflight <- struct{}{}:
-		return func() { <-m.inflight }, true
+		defer func() { <-m.inflight }()
 	default:
-		writeErr(w, http.StatusTooManyRequests, ErrBusy, "too many pool reads in flight; retry")
-		return nil, false
+		return nil, &apiError{http.StatusTooManyRequests, ErrBusy, "too many pool reads in flight; retry"}
 	}
-}
-
-func (m *Module) handleHosts(w http.ResponseWriter, r *http.Request) {
-	release, ok := m.enter(w)
-	if !ok {
-		return
+	v, aerr := fetch(context.WithoutCancel(r.Context()))
+	if aerr != nil {
+		return nil, aerr // an error is never cached
 	}
-	defer release()
-	if m.writeCached(w, "hosts") {
-		return
-	}
-	p, err := m.client().Pool(r.Context())
-	if err != nil {
-		writeWWDErr(w, err)
-		return
-	}
-	m.writeAndCache(w, "hosts", hostsOf(p))
-}
-
-// writeCached answers from the cache when key has a fresh answer.
-func (m *Module) writeCached(w http.ResponseWriter, key string) bool {
-	m.cacheMu.Lock()
-	a, ok := m.cache[key]
-	m.cacheMu.Unlock()
-	if !ok || m.now().Sub(a.at) >= answerTTL {
-		return false
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(a.body)
-	return true
-}
-
-// writeAndCache writes a 200 answer and keeps it for answerTTL. Errors are never cached.
-func (m *Module) writeAndCache(w http.ResponseWriter, key string, v any) {
 	body, err := json.Marshal(v)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, ErrWWDError, "encoding the answer failed")
-		return
+		return nil, &apiError{http.StatusInternalServerError, ErrWWDError, "encoding the answer failed"}
 	}
 	body = append(body, '\n')
-	m.cacheMu.Lock()
-	if m.cache == nil { // a test module without a cache
-		m.cacheMu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(body)
+	m.store(key, body)
+	return body, nil
+}
+
+func writeFlight(w http.ResponseWriter, f *flight) {
+	if f.err != nil {
+		writeErr(w, f.err.status, f.err.code, f.err.detail)
+		return
+	}
+	writeBody(w, f.body)
+}
+
+func writeBody(w http.ResponseWriter, body []byte) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+}
+
+// cached returns a fresh cached answer for key.
+func (m *Module) cached(key string) ([]byte, bool) {
+	m.flightMu.Lock()
+	defer m.flightMu.Unlock()
+	return m.cachedLocked(key)
+}
+
+func (m *Module) cachedLocked(key string) ([]byte, bool) {
+	a, ok := m.cache[key]
+	if !ok || m.now().Sub(a.at) >= answerTTL {
+		return nil, false
+	}
+	return a.body, true
+}
+
+// store keeps a success for answerTTL. A module built without a cache map (a test's) keeps nothing.
+func (m *Module) store(key string, body []byte) {
+	m.flightMu.Lock()
+	defer m.flightMu.Unlock()
+	if m.cache == nil {
 		return
 	}
 	if len(m.cache) >= maxCached {
@@ -191,20 +243,21 @@ func (m *Module) writeAndCache(w http.ResponseWriter, key string, v any) {
 		}
 	}
 	m.cache[key] = cachedAnswer{at: m.now(), body: body}
-	m.cacheMu.Unlock()
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
+}
+
+func (m *Module) handleHosts(w http.ResponseWriter, r *http.Request) {
+	m.serve(w, r, "hosts", func(ctx context.Context) (any, *apiError) {
+		p, err := m.client().Pool(ctx)
+		if err != nil {
+			return nil, wwdError(err)
+		}
+		return hostsOf(p), nil
+	})
 }
 
 func (m *Module) handleHistory(w http.ResponseWriter, r *http.Request) {
-	release, ok := m.enter(w)
-	if !ok {
-		return
-	}
-	defer release()
 	q := r.URL.Query()
-	// the default since is cut to the minute so that readers asking in the same minute share one cache key
+	// the default since is cut to the minute so that readers asking in the same minute share one key
 	hq := wire.FactsHistoryQuery{Since: m.now().Add(-historyDefaultSince).UTC().Truncate(time.Minute), Step: q.Get("step")}
 	if s := q.Get("since"); s != "" {
 		t, err := time.Parse(time.RFC3339, s)
@@ -221,46 +274,42 @@ func (m *Module) handleHistory(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, ErrBadRequest, "step must be 1m or 5s")
 		return
 	}
-	key := "history|" + q.Get("host") + "|" + hq.Since.Format(time.RFC3339) + "|" + hq.Step
-	if m.writeCached(w, key) {
-		return
-	}
-	cl := m.client()
-	if host := q.Get("host"); host != "" {
-		info, err := cl.Info(r.Context())
+	host := q.Get("host")
+	key := "history|" + host + "|" + hq.Since.Format(time.RFC3339) + "|" + hq.Step
+	m.serve(w, r, key, func(ctx context.Context) (any, *apiError) {
+		cl := m.client()
+		if host != "" {
+			info, err := cl.Info(ctx)
+			if err != nil {
+				return nil, wwdError(err)
+			}
+			if host != info.Alias && host != info.HostID {
+				return nil, &apiError{http.StatusNotImplemented, ErrHostNotLocal, "this daemon serves the history of its own host only (" + info.Alias + ")"}
+			}
+		}
+		h, err := cl.FactsHistory(ctx, hq)
 		if err != nil {
-			writeWWDErr(w, err)
-			return
+			return nil, wwdError(err)
 		}
-		if host != info.Alias && host != info.HostID {
-			writeErr(w, http.StatusNotImplemented, ErrHostNotLocal, "this daemon serves the history of its own host only ("+info.Alias+")")
-			return
+		if h.Records == nil {
+			h.Records = []wire.Facts{}
 		}
-	}
-	h, err := cl.FactsHistory(r.Context(), hq)
-	if err != nil {
-		writeWWDErr(w, err)
-		return
-	}
-	if h.Records == nil {
-		h.Records = []wire.Facts{}
-	}
-	m.writeAndCache(w, key, h)
+		return h, nil
+	})
 }
 
-// writeWWDErr maps a client error to the status the App reads.
-func writeWWDErr(w http.ResponseWriter, err error) {
+// wwdError maps a client error to the status the App reads.
+func wwdError(err error) *apiError {
 	var se *client.StatusError
 	switch {
 	case errors.Is(err, client.ErrUnavailable):
-		writeErr(w, http.StatusServiceUnavailable, ErrWWDUnavailable, "wwd is not running or did not answer")
+		return &apiError{http.StatusServiceUnavailable, ErrWWDUnavailable, "wwd is not running or did not answer"}
 	case errors.Is(err, client.ErrBadResponse):
-		writeErr(w, http.StatusBadGateway, ErrWWDBadResponse, "wwd answered outside the contract")
+		return &apiError{http.StatusBadGateway, ErrWWDBadResponse, "wwd answered outside the contract"}
 	case errors.As(err, &se):
-		writeErr(w, http.StatusBadGateway, ErrWWDError, "wwd answered "+http.StatusText(se.Code))
-	default:
-		writeErr(w, http.StatusBadGateway, ErrWWDError, "wwd call failed")
+		return &apiError{http.StatusBadGateway, ErrWWDError, "wwd answered " + http.StatusText(se.Code)}
 	}
+	return &apiError{http.StatusBadGateway, ErrWWDError, "wwd call failed"}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
