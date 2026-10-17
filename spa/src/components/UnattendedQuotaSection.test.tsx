@@ -8,12 +8,18 @@ import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useTeamRosterStore } from '../stores/useTeamRosterStore'
 import { useRelayQuotaStore } from '../lib/team/relay-quota'
+import { leadNameBySession } from '../lib/team/lead-name'
 import { setQuota } from '../lib/team/relay-quota-writer'
 import { setMaxMembers, teamKey, useMaxMembersStore } from '../lib/team/max-members'
 import { useUnattendedStore } from '../stores/useUnattendedStore'
 import type { RosterSession, TeamRoster } from '../lib/team/roster'
 import type { SessionQuota } from '../lib/team/types'
 
+vi.mock('../lib/team/lead-name', async (orig) => {
+  const actual = await orig<typeof import('../lib/team/lead-name')>()
+  return { ...actual, leadNameBySession: vi.fn(actual.leadNameBySession) }
+})
+const mockedLeadName = vi.mocked(leadNameBySession)
 vi.mock('../lib/team/relay-quota-writer', () => ({ setQuota: vi.fn() }))
 const mockedSet = vi.mocked(setQuota)
 vi.mock('../lib/team/max-members', async (orig) => ({ ...(await orig<typeof import('../lib/team/max-members')>()), setMaxMembers: vi.fn() }))
@@ -374,5 +380,13 @@ describe('team names (U15)', () => {
     useTeamRosterStore.getState().apply(A, [named('a', 'Zulu'), named('b', 'Alpha')])
     show([{ hostId: A, rows: [q('a', { is_lead: true, title: 'A first' }), q('b', { is_lead: true, title: 'Z last' })] }])
     expect(screen.getAllByTestId('quota-row').map((r) => r.getAttribute('data-session'))).toEqual(['b', 'a'])
+  })
+
+  it('each lead row looks its team up once per render, not once per comparison or child', () => {
+    const ids = ['a', 'b', 'c', 'd', 'e']
+    useTeamRosterStore.getState().apply(A, ids.map((id) => named(id, `Team ${id}`)))
+    mockedLeadName.mockClear()
+    show([{ hostId: A, rows: ids.map((id) => q(id, { is_lead: true, title: `t-${id}` })) }])
+    expect(mockedLeadName).toHaveBeenCalledTimes(ids.length)
   })
 })
