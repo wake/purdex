@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/wake/purdex/internal/devices"
 	"github.com/wake/purdex/internal/gate"
@@ -248,6 +249,94 @@ func (m *Module) handleHostRemove(w http.ResponseWriter, r *http.Request) {
 }
 
 var errSwitchOn = errors.New("switch_on")
+
+type switchBody struct {
+	Host   string `json:"host"`
+	On     bool   `json:"on"`
+	Reason string `json:"reason"`
+	By     string `json:"by"`
+}
+
+func (m *Module) handleSwitch(w http.ResponseWriter, r *http.Request) {
+	if !m.requireAdmin(w, r) {
+		return
+	}
+	var b switchBody
+	if !m.decode(w, r, &b) {
+		return
+	}
+	if !validLine(b.Reason, 200) {
+		m.writeErr(w, http.StatusBadRequest, "bad_reason", "a reason is required: one line, at most 200 bytes")
+		return
+	}
+	detail, err := m.switchHost(b.Host, b.On, byOf(b.By), b.Reason, nil)
+	var se *scriptError
+	switch {
+	case errors.As(err, &se):
+		m.writeErr(w, http.StatusBadGateway, "switch_failed", se.detail)
+	case err != nil:
+		m.writeEditErr(w, err)
+	default:
+		f, _ := gate.ReadAssist(m.dir)
+		m.writeJSON(w, http.StatusOK, map[string]any{"host": b.Host, "on": b.On, "detail": detail, "gen": f.Hosts[b.Host].Gen})
+	}
+}
+
+// A reservation keeps mlab for one job: two hours unless the caller says otherwise, at most twelve.
+const (
+	defaultReserve = 2 * time.Hour
+	maxReserve     = 12 * time.Hour
+)
+
+type reserveBody struct {
+	On     bool   `json:"on"`
+	Reason string `json:"reason"`
+	For    string `json:"for"`
+	By     string `json:"by"`
+}
+
+func (m *Module) handleReserve(w http.ResponseWriter, r *http.Request) {
+	if !m.requireAdmin(w, r) {
+		return
+	}
+	var b reserveBody
+	if !m.decode(w, r, &b) {
+		return
+	}
+	dur := defaultReserve
+	if b.On {
+		if !validLine(b.Reason, 200) {
+			m.writeErr(w, http.StatusBadRequest, "bad_reason", "a reason is required: one line, at most 200 bytes")
+			return
+		}
+		if b.For != "" {
+			d, err := time.ParseDuration(b.For)
+			if err != nil || d <= 0 || d > maxReserve {
+				m.writeErr(w, http.StatusBadRequest, "bad_for", "for is a duration above 0 and at most 12h, such as 2h or 90m")
+				return
+			}
+			dur = d
+		}
+	}
+	now := m.now()
+	_, err := gate.EditAssist(m.dir, func(f *gate.AssistFile) (bool, string, error) {
+		if !b.On {
+			f.Reserved = nil
+			return true, "cleared", nil
+		}
+		f.Reserved = &gate.AssistReserved{By: byOf(b.By), Reason: b.Reason, At: now, Until: now.Add(dur)}
+		return true, "reserved", nil
+	})
+	if err != nil {
+		m.writeEditErr(w, err)
+		return
+	}
+	out := map[string]any{"on": b.On}
+	if b.On {
+		out["until"] = now.Add(dur)
+	}
+	m.writeJSON(w, http.StatusOK, out)
+}
 
 // sortedHosts are the aliases of f in order.
 func sortedHosts(f gate.AssistFile) []string {
