@@ -7,7 +7,11 @@
 //   sending → the request is on its way (busy)
 //   busy    → the daemon took it (200 / 202 of a wake, 202 of a start); busy until the watcher registers, i.e. the status store
 //             says awake (a `watch.changed` read). Nothing else releases it but a host change: no `watch.changed` = still busy.
+//   timeout → not busy: the daemon took the request but no watcher registered within `WATCH_LAUNCH_TIMEOUT_MS`. The button can be
+//             pressed again; a registration (awake) or a host change clears the line.
 //   notice  → not busy: already awake (start 200), a cooldown (409) or an error. The button can be pressed again.
+// The timeout timer lives here too (not in the panel), follows the slot (one subscription below arms it when a slot becomes busy
+// and disarms it whenever the slot is anything else), and only ever acts on the request it was armed for (seq).
 // A request is applied only while it is still the current one on the host connection it was sent on (seq + `connectionKey`): a
 // host re-pointed at another daemon must not receive the old daemon's answer as its own state.
 import { create } from 'zustand'
@@ -21,6 +25,8 @@ export type LaunchKind = 'start' | 'wake'
 export type LaunchSlot =
   | { phase: 'sending'; kind: LaunchKind; hostId: string; seq: number }
   | { phase: 'busy'; kind: LaunchKind; hostId: string; seq: number; startingOn?: { alias: string; daemonId: string } }
+  /** Busy for `WATCH_LAUNCH_TIMEOUT_MS` and the watcher never registered: not busy any more, with a line saying so. */
+  | { phase: 'timeout'; kind: LaunchKind; hostId: string; seq: number }
   | { phase: 'awake_already'; kind: LaunchKind; hostId: string; seq: number }
   /** `until` is the epoch ms the daemon said (NaN: it did not give a readable time); `at` is when it said so (the "today" of the time shown). */
   | { phase: 'cooldown'; kind: LaunchKind; hostId: string; seq: number; until: number; at: number }
@@ -34,7 +40,36 @@ interface LaunchState {
 
 export const useWatchLaunchStore = create<LaunchState>(() => ({ slot: null, seq: 0 }))
 
-export const isLaunchBusy = (slot: LaunchSlot | null): boolean => slot?.phase === 'sending' || slot?.phase === 'busy'
+/** How long a taken request may stay busy while no watcher registers. */
+export const WATCH_LAUNCH_TIMEOUT_MS = 120_000
+
+let timeoutTimer: { seq: number; handle: ReturnType<typeof setTimeout> } | null = null
+const disarmTimeout = (): void => {
+  if (timeoutTimer) clearTimeout(timeoutTimer.handle)
+  timeoutTimer = null
+}
+const armTimeout = (seq: number): void => {
+  disarmTimeout()
+  const handle = setTimeout(() => {
+    timeoutTimer = null
+    const s = useWatchLaunchStore.getState().slot
+    // Only the request this timer was armed for: a newer request (another seq) is not its to release.
+    if (s && s.phase === 'busy' && s.seq === seq) {
+      useWatchLaunchStore.setState({ slot: { phase: 'timeout', kind: s.kind, hostId: s.hostId, seq } })
+    }
+  }, WATCH_LAUNCH_TIMEOUT_MS)
+  timeoutTimer = { seq, handle }
+}
+useWatchLaunchStore.subscribe((state) => {
+  const s = state.slot
+  if (s?.phase === 'busy') {
+    if (timeoutTimer?.seq !== s.seq) armTimeout(s.seq)
+  } else {
+    disarmTimeout()
+  }
+})
+
+export const isLaunchBusy =(slot: LaunchSlot | null): boolean => slot?.phase === 'sending' || slot?.phase === 'busy'
 
 const PATHS: Record<LaunchKind, string> = { start: '/api/watch/start', wake: '/api/watch/wake' }
 

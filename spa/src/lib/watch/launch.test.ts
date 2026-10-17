@@ -10,7 +10,7 @@ import { useHostStore } from '../../stores/useHostStore'
 import { useNexHostStore } from '../../stores/useNexHostStore'
 import { startWatchStatus, useWatchStatusStore, type WatchEntry } from './status-store'
 import { handleWatchEvent } from './watch-ws'
-import { isLaunchBusy, requestLaunch, startTarget, startWatchLaunch, useWatchLaunchStore } from './launch'
+import { isLaunchBusy, requestLaunch, startTarget, startWatchLaunch, useWatchLaunchStore, WATCH_LAUNCH_TIMEOUT_MS } from './launch'
 import type { WatchStatus } from './status-types'
 
 const status = (hostId: string, state: 'awake' | 'resting' | 'none'): WatchStatus =>
@@ -255,6 +255,134 @@ describe('re-point with the runtime still connected', () => {
     next.resolve(new Response(JSON.stringify({ error: 'cooldown', detail: '2026-10-17T06:30:00Z' }), { status: 409 }))
     await q
     expect(slot()?.phase).toBe('cooldown')
+  })
+})
+
+describe('busy times out after 120 s without a registration', () => {
+  // Only the timer pair is faked: the mocked requests and `res.json()` keep running on the real event loop.
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
+  afterEach(() => { vi.useRealTimers() })
+  const goBusy = async (kind: 'start' | 'wake' = 'start') => {
+    reply(202, { host: 'mlab', host_id: 'd1' })
+    await requestLaunch(kind, 'h1')
+    expect(slot()?.phase).toBe('busy')
+  }
+
+  it('still busy at 119_999 ms; at 120_000 ms it is released with a timeout phase, and the button can be pressed again', async () => {
+    expect(WATCH_LAUNCH_TIMEOUT_MS).toBe(120_000)
+    await goBusy()
+    vi.advanceTimersByTime(119_999)
+    expect(isLaunchBusy(slot())).toBe(true)
+    vi.advanceTimersByTime(1)
+    expect(slot()).toMatchObject({ phase: 'timeout', kind: 'start', hostId: 'h1' })
+    expect(isLaunchBusy(slot())).toBe(false)
+    reply(202, { host: 'mlab', host_id: 'd1' })
+    await requestLaunch('start', 'h1')
+    expect(hostFetch).toHaveBeenCalledTimes(2)
+    expect(slot()).toMatchObject({ phase: 'busy', seq: 2 })
+  })
+
+  it('a wake times out the same way', async () => {
+    await goBusy('wake')
+    vi.advanceTimersByTime(120_000)
+    expect(slot()).toMatchObject({ phase: 'timeout', kind: 'wake' })
+  })
+
+  it('the watcher registering within the 120 s ends busy, and the timer is gone: nothing is left to appear at the deadline', async () => {
+    stops.push(startWatchLaunch())
+    await goBusy()
+    vi.advanceTimersByTime(60_000)
+    answer('h1', status('d1', 'awake'))
+    expect(slot()).toBeNull()
+    expect(vi.getTimerCount()).toBe(0)
+    vi.advanceTimersByTime(120_000)
+    expect(slot()).toBeNull()
+  })
+
+  it('the watcher registering clears the timeout line too', async () => {
+    stops.push(startWatchLaunch())
+    await goBusy()
+    vi.advanceTimersByTime(120_000)
+    expect(slot()?.phase).toBe('timeout')
+    answer('h1', status('d1', 'awake'))
+    expect(slot()).toBeNull()
+  })
+
+  it('pressing again after the timeout replaces the line, and its own 120 s start from that press', async () => {
+    await goBusy()
+    vi.advanceTimersByTime(120_000)
+    expect(slot()?.phase).toBe('timeout')
+    reply(202, { host: 'mlab', host_id: 'd1' })
+    await requestLaunch('start', 'h1')
+    expect(slot()).toMatchObject({ phase: 'busy', seq: 2 })
+    vi.advanceTimersByTime(119_999)
+    expect(slot()).toMatchObject({ phase: 'busy', seq: 2 })
+    vi.advanceTimersByTime(1)
+    expect(slot()).toMatchObject({ phase: 'timeout', seq: 2 })
+  })
+
+  it('an older request\'s timer does not release a newer request', async () => {
+    await goBusy() // seq 1, armed at 0 s
+    vi.advanceTimersByTime(50_000)
+    useWatchLaunchStore.setState({ slot: null }) // freed (as a host change would), then pressed again
+    expect(vi.getTimerCount()).toBe(0)
+    await goBusy() // seq 2, armed at 50 s
+    expect(vi.getTimerCount()).toBe(1)
+    vi.advanceTimersByTime(70_000) // 120 s after the first request
+    expect(slot()).toMatchObject({ phase: 'busy', seq: 2 })
+    vi.advanceTimersByTime(49_999)
+    expect(slot()).toMatchObject({ phase: 'busy', seq: 2 })
+    vi.advanceTimersByTime(1)
+    expect(slot()).toMatchObject({ phase: 'timeout', seq: 2 })
+  })
+
+  it('a busy slot of another request (no non-busy slot in between) takes the timer over: the old deadline does not carry over', async () => {
+    await goBusy() // seq 1, armed at 0 s
+    vi.advanceTimersByTime(50_000)
+    useWatchLaunchStore.setState({ seq: 2, slot: { phase: 'busy', kind: 'start', hostId: 'h1', seq: 2 } }) // armed at 50 s
+    expect(vi.getTimerCount()).toBe(1)
+    vi.advanceTimersByTime(70_000)
+    expect(slot()).toMatchObject({ phase: 'busy', seq: 2 })
+    vi.advanceTimersByTime(50_000)
+    expect(slot()).toMatchObject({ phase: 'timeout', seq: 2 })
+  })
+
+  it('a re-point of the host drops the busy state and its timer: the deadline changes nothing', async () => {
+    stops.push(startWatchLaunch())
+    await goBusy()
+    at('2.2.2.2')
+    expect(slot()).toBeNull()
+    expect(vi.getTimerCount()).toBe(0)
+    vi.advanceTimersByTime(120_000)
+    expect(slot()).toBeNull()
+  })
+
+  it('a host that is removed or disconnected does the same', async () => {
+    stops.push(startWatchLaunch())
+    await goBusy()
+    useHostStore.setState({ runtime: { h1: { status: 'disconnected' } } } as never)
+    expect(vi.getTimerCount()).toBe(0)
+    at('1.1.1.1')
+    await goBusy()
+    useHostStore.setState({ hosts: {}, hostOrder: [] } as never)
+    expect(vi.getTimerCount()).toBe(0)
+    vi.advanceTimersByTime(120_000)
+    expect(slot()).toBeNull()
+  })
+
+  it('a store reset drops the timer', async () => {
+    await goBusy()
+    useWatchLaunchStore.setState({ slot: null, seq: 0 })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('cooldown and error answers arm nothing', async () => {
+    reply(409, { error: 'cooldown', detail: '2026-10-17T06:30:00Z' })
+    await requestLaunch('start', 'h1')
+    expect(vi.getTimerCount()).toBe(0)
+    reply(403, { error: 'forbidden', detail: 'no' })
+    await requestLaunch('start', 'h1')
+    expect(vi.getTimerCount()).toBe(0)
   })
 })
 

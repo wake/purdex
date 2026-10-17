@@ -239,6 +239,89 @@ describe('叫醒守門員', () => {
   })
 })
 
+describe('busy times out after 120 s', () => {
+  // Only the timer pair is faked, and `waitFor` (which polls on those timers) is not used: the clock is moved by hand.
+  const fake = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  const turn = (ms = 0) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+  const untilDisabled = async (id: string) => {
+    for (let i = 0; i < 50 && !(screen.getByTestId(id) as HTMLButtonElement).disabled; i += 1) await turn()
+    expect(screen.getByTestId(id)).toBeDisabled()
+  }
+  const noTimeoutLine = () => expect(screen.queryByText(t('watch.launch.timeout'))).toBeNull() // (a busy start has its own "Starting on" line)
+  const pressed = async (state: 'none' | 'resting') => {
+    answer('h1', status('d1', state))
+    fake()
+    reply(202, { host: 'mlab', host_id: 'd1' })
+    render(<WatchLaunchPanel title="x" />)
+    const id = state === 'none' ? 'watch-launch-start' : 'watch-launch-wake'
+    fireEvent.click(screen.getByTestId(id))
+    await untilDisabled(id)
+    return id
+  }
+
+  it.each(['none', 'resting'] as const)('%s: busy at 119_999 ms; at 120_000 ms the line appears and the button is pressable again', async (state) => {
+    const id = await pressed(state)
+    await turn(119_999)
+    expect(screen.getByTestId(id)).toBeDisabled()
+    noTimeoutLine()
+    await turn(1)
+    expect(note()).toHaveTextContent(t('watch.launch.timeout'))
+    expect(screen.getByTestId(id)).toBeEnabled()
+    expect(screen.getByTestId(id)).toHaveTextContent(t(state === 'none' ? 'watch.launch.start' : 'watch.launch.wake'))
+    // …and pressing it asks again
+    reply(202, { host: 'mlab', host_id: 'd1' })
+    fireEvent.click(screen.getByTestId(id))
+    expect(hostFetch).toHaveBeenCalledTimes(2)
+    await untilDisabled(id)
+    noTimeoutLine()
+  })
+
+  it('the watcher registering within the 120 s releases it, and the deadline then shows nothing', async () => {
+    const id = await pressed('none')
+    await turn(60_000)
+    act(() => answer('h1', status('d1', 'awake')))
+    expect(vi.getTimerCount()).toBe(0)
+    act(() => answer('h1', status('d1', 'none')))
+    expect(screen.getByTestId(id)).toBeEnabled()
+    await turn(120_000)
+    noTimeoutLine()
+    expect(screen.getByTestId(id)).toBeEnabled()
+  })
+
+  it('the watcher registering clears the timeout line', async () => {
+    await pressed('none')
+    await turn(120_000)
+    expect(note()).toHaveTextContent(t('watch.launch.timeout'))
+    act(() => answer('h1', status('d1', 'awake')))
+    act(() => answer('h1', status('d1', 'none')))
+    noTimeoutLine()
+  })
+
+  it('a host re-pointed while busy drops the timer: the deadline shows nothing', async () => {
+    const id = await pressed('none')
+    await turn(10_000)
+    act(() => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h1: { ...useHostStore.getState().hosts.h1, ip: '9.9.9.9' } } } as never))
+    expect(vi.getTimerCount()).toBe(0)
+    await turn(120_000)
+    noTimeoutLine()
+    expect(screen.getByTestId(id)).toBeEnabled()
+  })
+
+  it('an older request\'s deadline does not release a newer one', async () => {
+    const id = await pressed('none') // seq 1 at 0 s
+    await turn(50_000)
+    act(() => useWatchLaunchStore.setState({ slot: null })) // freed, e.g. by a host change, then pressed again
+    reply(202, { host: 'mlab', host_id: 'd1' })
+    fireEvent.click(screen.getByTestId(id))
+    await untilDisabled(id) // seq 2 at 50 s
+    await turn(70_000) // 120 s after the first press
+    expect(screen.getByTestId(id)).toBeDisabled()
+    noTimeoutLine()
+    await turn(50_000)
+    expect(note()).toHaveTextContent(t('watch.launch.timeout'))
+  })
+})
+
 describe('re-point', () => {
   it('an answer of the old endpoint, arriving after the host was re-pointed, does not make the panel busy', async () => {
     answer('h1', status('d1', 'none'))

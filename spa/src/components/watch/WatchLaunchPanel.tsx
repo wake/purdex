@@ -65,6 +65,7 @@ export function WatchLaunchPanel({ title, hint }: Props) {
         const app = on.daemonId === '' ? undefined : Object.values(hosts).find((h) => h.daemonId === on.daemonId)
         return { text: t('watch.launch.starting_on', { host: (app && resolveLook(app.id).name) ?? on.alias }), alert: false }
       }
+      case 'timeout': return { text: t('watch.launch.timeout'), alert: true }
       case 'awake_already': return { text: t('watch.launch.awake_already'), alert: false }
       case 'cooldown': {
         const time = Number.isNaN(s.until) ? '' : formatHandoffTime(s.until, s.at)

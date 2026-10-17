@@ -595,6 +595,7 @@
   "watch.launch.starting": "啟動中…",
   "watch.launch.waking": "叫醒中…",
   "watch.launch.starting_on": "正在 {{host}} 啟動",
+  "watch.launch.timeout": "守門員沒有回報，可以再試一次，或到 pdx-watch 看看",
   "watch.launch.awake_already": "守門員已經醒著",
   "watch.launch.cooldown_start": "{{time}} 後才能再啟動",
   "watch.launch.cooldown_wake": "{{time}} 後才能再叫醒",

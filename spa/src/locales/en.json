@@ -595,6 +595,7 @@
   "watch.launch.starting": "Starting…",
   "watch.launch.waking": "Waking…",
   "watch.launch.starting_on": "Starting on {{host}}",
+  "watch.launch.timeout": "The guardian did not report back. Try again, or take a look in pdx-watch",
   "watch.launch.awake_already": "The guardian is already awake",
   "watch.launch.cooldown_start": "Can start again after {{time}}",
   "watch.launch.cooldown_wake": "Can wake again after {{time}}",

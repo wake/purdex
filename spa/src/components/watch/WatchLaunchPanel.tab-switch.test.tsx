@@ -74,4 +74,38 @@ describe('the launch panel across tab switches', () => {
     act(() => answer(status(state)))
     expect(await screen.findByTestId(button)).toBeEnabled()
   }, 30_000) // the first TabContent render pulls in its lazy modules, which is slow on a loaded host
+
+  it('the 120 s deadline runs through a tab switch: remounted, it still times out on schedule', async () => {
+    answer(status('none'))
+    hostFetch.mockResolvedValueOnce(new Response(JSON.stringify({ host: 'mlab', host_id: 'd1' }), { status: 202 }))
+    const { rerender } = render(<TabContent activeTab={guardianTab} allTabs={all} />)
+    // Everything lazy is loaded on real timers; only then is the clock taken over, before the press that arms the deadline.
+    const first = await screen.findByTestId('watch-launch-start')
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      fireEvent.click(first)
+      for (let i = 0; i < 50 && !(screen.getByTestId('watch-launch-start') as HTMLButtonElement).disabled; i += 1) {
+        await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      }
+      expect(screen.getByTestId('watch-launch-start')).toBeDisabled()
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(40_000) })
+      rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+      expect(screen.queryByTestId('watch-launch-start')).toBeNull() // really unmounted, not hidden
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000) }) // the deadline runs while the panel is not there
+      rerender(<TabContent activeTab={guardianTab} allTabs={all} />)
+      for (let i = 0; i < 50 && screen.queryByTestId('watch-launch-start') === null; i += 1) {
+        await act(async () => { await vi.advanceTimersByTimeAsync(0) })
+      }
+      expect(screen.getByTestId('watch-launch-start')).toBeDisabled() // 70 s in: still busy
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(49_999) })
+      expect(screen.getByTestId('watch-launch-start')).toBeDisabled() // 119_999 ms
+      await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+      expect(screen.getByTestId('watch-launch-note')).toHaveTextContent(t('watch.launch.timeout'))
+      expect(screen.getByTestId('watch-launch-start')).toBeEnabled()
+    } finally {
+      vi.useRealTimers()
+    }
+  }, 30_000)
 })
