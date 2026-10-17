@@ -138,14 +138,16 @@ func Free(cfg Config, env FreeEnv, class Class, k int, t FreeTarget) (FreeResult
 		got, err := env.StartTime(pid)
 		return err == nil && got == want
 	}
-	listed := map[int]bool{}
+	listed := map[int]string{} // pid → the command name it had at the plan
 	for _, s := range t.Locked {
-		listed[s.PID] = true
+		listed[s.PID] = s.Cmd
 	}
 	holdingNow := func() map[int]bool {
 		out := map[int]bool{}
 		for _, s := range env.Holders(path) {
-			if listed[s.PID] && s.PID > 1 && s.PID != env.Self {
+			// the same command as at the plan, and not one that serves more than the command (a process that exec'd into a shell or
+			// tmux while the question was asked keeps its pid and start time, not its name)
+			if cmd, ok := listed[s.PID]; ok && s.Cmd == cmd && !protectedCmd(s.Cmd) && s.PID > 1 && s.PID != env.Self {
 				out[s.PID] = true
 			}
 		}

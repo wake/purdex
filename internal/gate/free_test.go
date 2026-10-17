@@ -259,3 +259,18 @@ func TestFree_ASlotThatChangedHandsAfterThePlanIsRefused(t *testing.T) {
 	assert.ErrorIs(t, err, ErrSlotChanged)
 	assert.Empty(t, h.sent, "nothing was signalled")
 }
+
+// A process that became a shell/tmux (exec: same pid, same start time) while the question was asked is no longer signalled.
+func TestFree_AProcessThatExecdIntoAProtectedCommandIsNotSignalled(t *testing.T) {
+	cfg, h := heldSlot(t, ClassHeavy, 1, 0, 100, 101)
+	tg, err := PlanFree(cfg, h.env(), ClassHeavy, 1)
+	require.NoError(t, err)
+	h.mu.Lock()
+	h.cmds[100] = "tmux"  // 100 exec'd into tmux
+	h.cmds[101] = "other" // 101 into another command
+	h.mu.Unlock()
+	res, err := Free(cfg, h.env(), ClassHeavy, 1, tg)
+	require.NoError(t, err)
+	assert.Empty(t, res.Termed)
+	assert.Empty(t, h.sent)
+}

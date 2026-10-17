@@ -74,7 +74,7 @@ func gateFree(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "  gate  pid %d 已不在\n", h.PID)
 	}
 	for _, s := range tg.Locked {
-		fmt.Fprintf(stdout, "  握鎖的行程  pid %d  %s\n", s.PID, sanitizeCell(s.Cmd))
+		fmt.Fprintf(stdout, "  開著鎖檔的行程  pid %d  %s\n", s.PID, sanitizeCell(s.Cmd))
 	}
 	for _, s := range tg.Skipped {
 		fmt.Fprintf(stdout, "  不會結束  pid %d  %s（只是繼承了鎖檔；結束它會連帶結束別的東西）\n", s.PID, sanitizeCell(s.Cmd))
@@ -88,6 +88,7 @@ func gateFree(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if !*yes {
+		fmt.Fprintln(stdout, "（lsof 只看得出哪些行程開著鎖檔，分不出誰真的握著鎖；請確認上面都是該結束的）")
 		fmt.Fprint(stdout, "結束上面這些行程？(y/N) ")
 		line, _ := bufio.NewReader(gateStdin).ReadString('\n')
 		if strings.TrimSpace(line) != "y" {
