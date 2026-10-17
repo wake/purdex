@@ -65,6 +65,7 @@ type treeState struct {
 	samples []sample      // those of the last TS, and the one before them (the left edge's value)
 	// resident: the tree was found to be a resident app (residentAndQuiet); from then on only its cores can make it an event
 	resident bool
+	simNoted bool // the "simulator" Diag was recorded for the memory that is over now
 	ep       episode
 }
 
@@ -209,6 +210,22 @@ func (d *Detector) unmanagedTrees(in Input) []Event {
 		}
 		st.window = set.TS
 		u := uses[root]
+		sim := tab.byPID[root].Comm == simulatorComm
+		if in.Footprint != nil && !sim && set.YMB > 0 && u.rss >= uint64(set.YMB)*mib {
+			// over by RSS, which counts shared pages once per process: the tree's memory is what its processes really hold
+			var sum uint64
+			for _, p := range tab.byPID {
+				if tab.rootOf(p.PID) != root {
+					continue
+				}
+				if fp, ok := in.Footprint(p.PID); ok {
+					sum += fp
+				} else {
+					sum += p.RSSBytes
+				}
+			}
+			u.rss = sum
+		}
 		maxGap := interval*5/2 + time.Second
 		if n := len(st.samples); n > 0 && in.Now.Sub(st.samples[n-1].at) > maxGap {
 			// a pass was missed (a failed sample): what was not observed is not part of a window, so it starts again
@@ -222,8 +239,23 @@ func (d *Detector) unmanagedTrees(in Input) []Event {
 		}
 		st.samples = st.samples[cut:]
 		tset := set
-		if st.resident {
+		if st.resident || sim {
 			tset.YMB = 0
+		}
+		if sim {
+			// the simulator's memory alone is never an event (#3072); say so once per stretch of memory over y_mb
+			if set.YMB > 0 && u.rss >= uint64(set.YMB)*mib {
+				if !st.simNoted && d.Diag != nil {
+					d.Diag(fmt.Sprintf("simulator %d", root), fmt.Sprintf("launchd_sim (pid %d) sums %d MB of RSS across its daemons, shared pages counted once per process: memory alone is not an event, its cores still count", root, u.rss/mib))
+				}
+				st.simNoted = true
+			} else if st.simNoted {
+				st.simNoted = false
+				if d.Diag != nil {
+					// fine again; one source per tree (several devices run at once), so one tree's recovery clears only its own line
+					d.Diag(fmt.Sprintf("simulator %d", root), "")
+				}
+			}
 		}
 		over := d.overThreshold(st, in.Now, tset)
 		if st.ep.step(in.Now, over, 0, set.TS) {
@@ -283,6 +315,10 @@ func (d *Detector) overThreshold(st *treeState, now time.Time, set Settings) boo
 // residentMinAge is how long a launchd child must have run, in windows, to count as resident: its memory is then what the app
 // holds, not what a command grew.
 const residentMinAge = 10
+
+// simulatorComm is the root of an iOS simulator's process tree. CoreSimulator starts it (not launchd, not from /Applications), and
+// its ~100 daemons share the dyld cache and runtime images, so the tree's memory is not a sum of anything: only its cores count.
+const simulatorComm = "launchd_sim"
 
 // residentAndQuiet says that the tree that crossed a threshold is a resident app and only its memory is over: its root is a child of
 // launchd (pid 1), runs a program of /Applications, started more than residentMinAge windows ago, and its mean cores alone would not
