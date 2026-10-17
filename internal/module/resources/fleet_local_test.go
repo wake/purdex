@@ -51,6 +51,7 @@ func newTestLocal(t *testing.T) (*localSource, *logBuf) {
 	lb := &logBuf{}
 	s.logf = lb.f
 	s.reader = fakeFastReader(true)
+	s.footprints = func([]int) map[int]uint64 { return nil } // the pids of a test are other processes': no real footprint
 	t.Cleanup(s.Stop)
 	return s, lb
 }
@@ -180,6 +181,77 @@ func TestLocalSource_SlowTopProcesses(t *testing.T) {
 	s.m.publish(&resources.Snapshot{SampledAt: at.Add(10 * time.Second), Available: false}) // an unavailable host has no reading
 	_, ok = s.Slow()
 	assert.False(t, ok)
+}
+
+// #3057: the memory list is ranked and shown by the physical footprint where a process has one (what is compressed counts: under
+// pressure the biggest processes have a small resident size), by the resident size where it has not, and each entry says which.
+// Mutation gates: ranked by RSS again -> the compressed big process is missing (red); the fallback not marked -> red.
+func TestLocalSource_TopMemoryByFootprintWithTheResidentSizeAsFallback(t *testing.T) {
+	s, _ := newTestLocal(t)
+	procs := []resources.Proc{
+		{PID: 10, Comm: "SpringBoard", RSSBytes: 512 << 20},
+		{PID: 11, Comm: "Brave Helper", RSSBytes: 40 << 20},  // compressed: a small resident size, the biggest footprint
+		{PID: 12, Comm: "avconferenced", RSSBytes: 20 << 20}, // compressed too
+		{PID: 13, Comm: "rootd", RSSBytes: 700 << 20},        // another user's: no footprint, falls back to the resident size
+		{PID: 14, Comm: "small", RSSBytes: 5 << 20},
+		{PID: 15, Comm: "small2", RSSBytes: 6 << 20},
+		{PID: 16, Comm: "small3", RSSBytes: 7 << 20},
+	}
+	s.footprints = func(pids []int) map[int]uint64 {
+		return map[int]uint64{10: 300 << 20, 11: 3500 << 20, 12: 1600 << 20, 14: 4 << 20, 15: 5 << 20, 16: 6 << 20}
+	}
+	s.m.lastProcs.Store(&procs)
+	s.m.publish(&resources.Snapshot{SampledAt: time.Unix(7000, 0), Available: true})
+	sl, ok := s.Slow()
+	require.True(t, ok)
+	var order []int
+	for _, p := range sl.TopMem {
+		order = append(order, p.PID)
+	}
+	assert.Equal(t, []int{11, 12, 13, 10, 16}, order, "by footprint; rootd (no footprint) by its resident size")
+	assert.Equal(t, 3500.0, sl.TopMem[0].MemMB)
+	assert.Equal(t, fleet.MemKindFootprint, sl.TopMem[0].MemKind)
+	assert.InDelta(t, 40.0, sl.TopMem[0].RSSMB, 0.001, "rss_mb keeps its meaning")
+	assert.Equal(t, 700.0, sl.TopMem[2].MemMB)
+	assert.Equal(t, fleet.MemKindRSS, sl.TopMem[2].MemKind, "the fallback says so")
+	assert.Equal(t, 300.0, sl.TopMem[3].MemMB)
+
+	// the CPU list carries the same figures
+	assert.NotEmpty(t, sl.TopCPU[0].MemKind)
+}
+
+// mem_mb is rounded to one decimal in the daemon (the app shows one and the golden files must not carry binary noise). Mutation gate: not
+// rounded -> 100.04980469 (red).
+func TestLocalSource_MemMBIsRoundedToOneDecimal(t *testing.T) {
+	s, _ := newTestLocal(t)
+	procs := []resources.Proc{{PID: 1, Comm: "a", RSSBytes: 1 << 20}}
+	s.footprints = func([]int) map[int]uint64 { return map[int]uint64{1: 104_900_000} } // 100.0499... MiB
+	s.m.lastProcs.Store(&procs)
+	s.m.publish(&resources.Snapshot{SampledAt: time.Unix(7200, 0), Available: true})
+	sl, ok := s.Slow()
+	require.True(t, ok)
+	assert.Equal(t, 100.0, sl.TopMem[0].MemMB)
+	s.footprints = func([]int) map[int]uint64 { return map[int]uint64{1: 105_000_000} } // 100.1358... MiB
+	s.m.publish(&resources.Snapshot{SampledAt: time.Unix(7205, 0), Available: true})
+	sl, _ = s.Slow()
+	assert.Equal(t, 100.1, sl.TopMem[0].MemMB)
+}
+
+// With no footprint to be had at all (not macOS, libSystem missing) every entry is the resident size and says so: the list does not
+// disappear.
+func TestLocalSource_TopMemoryWithNoFootprintsIsTheResidentSize(t *testing.T) {
+	s, _ := newTestLocal(t)
+	procs := []resources.Proc{{PID: 1, Comm: "a", RSSBytes: 1 << 20}, {PID: 2, Comm: "b", RSSBytes: 9 << 20}}
+	s.m.lastProcs.Store(&procs)
+	s.m.publish(&resources.Snapshot{SampledAt: time.Unix(7100, 0), Available: true})
+	sl, ok := s.Slow()
+	require.True(t, ok)
+	require.Len(t, sl.TopMem, 2)
+	assert.Equal(t, 2, sl.TopMem[0].PID)
+	for _, p := range sl.TopMem {
+		assert.Equal(t, fleet.MemKindRSS, p.MemKind)
+		assert.Equal(t, p.RSSMB, p.MemMB)
+	}
 }
 
 // The module offers the source under the key the fleet module resolves.

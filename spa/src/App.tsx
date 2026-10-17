@@ -18,7 +18,7 @@ import { useMultiHostEventWs } from './hooks/useMultiHostEventWs'
 import { useRouteSync } from './hooks/useRouteSync'
 import { useShortcuts } from './hooks/useShortcuts'
 import { TeamDisplayProvider } from './components/team/TeamDisplayProvider'
-import { TeamPanelArea } from './components/team/TeamPanelArea'
+import { PanelAreas } from './components/journal/CardStack'
 import { startTeamTabLifecycle } from './lib/team/team-tab-lifecycle'
 import './lib/browser-shortcuts'
 import { useNotificationDispatcher } from './hooks/useNotificationDispatcher'
@@ -257,7 +257,7 @@ export default function App() {
                   allTabs={tabOrder.map((id) => tabs[id]).filter(Boolean)}
                 />
               )}
-              <TeamPanelArea />
+              <PanelAreas />
             </div>
             <StatusBar
               activeTab={activeTab ?? null}

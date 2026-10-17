@@ -23,6 +23,13 @@ export interface ViewMemo {
 
 export const MAX_VIEW_MEMOS = 200
 
+/** A change counter + listeners, so a component can follow a unit's memo (`useViewMemo`) while the memo itself stays outside React. */
+let rev = 0
+const listeners = new Set<() => void>()
+const bump = (): void => { rev++; for (const l of [...listeners]) l() }
+export function subscribeViewMemos(l: () => void): () => void { listeners.add(l); return () => { listeners.delete(l) } }
+export const viewMemoRev = (): number => rev
+
 /** Insertion order is recency order (a use re-inserts), so the first key is the least recently used. */
 const memos = new Map<string, ViewMemo>()
 const SEP = '\u0000'
@@ -48,15 +55,31 @@ export function patchViewMemo(hostId: string, unitKey: string, patch: Partial<Vi
   memos.delete(k)
   memos.set(k, next)
   while (memos.size > MAX_VIEW_MEMOS) memos.delete(memos.keys().next().value as string)
+  bump()
+}
+
+/** Move a memo to another key in one step (the unreachable stand-in -> the resolved unit). Nothing to move, or the target already
+ *  holds state: no-op (the source is then left alone). Returns whether it moved. */
+export function migrateViewMemo(fromHost: string, fromKey: string, toHost: string, toKey: string): boolean {
+  const from = keyOf(fromHost, fromKey)
+  const to = keyOf(toHost, toKey)
+  const m = memos.get(from)
+  if (from === to || !m || memos.has(to)) return false
+  memos.delete(from)
+  memos.set(to, m)
+  bump()
+  return true
 }
 
 export function forgetViewMemo(hostId: string, unitKey: string): void {
   memos.delete(keyOf(hostId, unitKey))
+  bump()
 }
 
 /** The host was forgotten (removed / re-pointed): its units are not coming back under these keys. */
 export function forgetViewMemosOfHost(hostId: string): void {
   for (const k of [...memos.keys()]) if (k.startsWith(`${hostId}${SEP}`)) memos.delete(k)
+  bump()
 }
 
 export function viewMemoCount(): number {
@@ -65,4 +88,5 @@ export function viewMemoCount(): number {
 
 export function clearViewMemos(): void {
   memos.clear()
+  bump()
 }

@@ -61,9 +61,12 @@ func goldenRig(t *testing.T) *mrig {
 
 	// this daemon (mlab): from the local source
 	r.local.SetFast(leaf.LocalFast{At: now, CPU: 12.5, Mem: 61, Level: 1, PageRate: 0, Load1: 2.4, NCPU: 10})
+	// the top memory list is by physical footprint (#3057): mem_mb/mem_kind say which figure each row is; a row whose footprint could not
+	// be read is the resident size and says "rss"
 	r.local.SetSlow(leaf.LocalSlow{At: now,
-		TopCPU: []leaf.Proc{{PID: 4242, Name: "node", CPU: 41.5, RSSMB: 812.5}},
-		TopMem: []leaf.Proc{{PID: 4242, Name: "node", CPU: 41.5, RSSMB: 812.5}}})
+		TopCPU: []leaf.Proc{{PID: 4242, Name: "node", CPU: 41.5, RSSMB: 812.5, MemMB: 1024.3, MemKind: leaf.MemKindFootprint}},
+		TopMem: []leaf.Proc{{PID: 4242, Name: "node", CPU: 41.5, RSSMB: 812.5, MemMB: 1024.3, MemKind: leaf.MemKindFootprint},
+			{PID: 77, Name: "rootd", CPU: 0.2, RSSMB: 300, MemMB: 300, MemKind: leaf.MemKindRSS}}})
 	r.tick()
 
 	// the other daemon host: over ssh, with its heavy-command queue
