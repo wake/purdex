@@ -68,7 +68,7 @@ func PlanFree(cfg Config, env FreeEnv, class Class, k int) (FreeTarget, error) {
 		if h.Slot != k {
 			continue
 		}
-		t := FreeTarget{Holder: h, GateAlive: h.PID > 0 && !h.Orphaned && env.Alive(h.PID)}
+		t := FreeTarget{Holder: h, GateAlive: h.PID > 0 && env.Alive(h.PID)}
 		for _, s := range env.Holders(p.slotPath(k)) {
 			if s.PID > 1 && s.PID != env.Self {
 				t.Locked = append(t.Locked, s)
