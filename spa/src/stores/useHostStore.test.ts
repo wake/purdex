@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { TransferChange } from '../lib/host-transfer-plan'
+import { clearWatchDrafts, readWatchDraft, watchDraftKey, writeWatchDraft } from '../lib/watch/draft-memory'
 import {
   useHostStore,
   selectDevHostId,
@@ -821,6 +822,16 @@ describe('daemonId (spec 2026-09-23 D1–D3)', () => {
     const update = useHostStore.getState().updateHost as (id: string, u: Record<string, unknown>) => void
     update(hostId, { ip: '10.0.0.7', daemonId: ID })
     expect('daemonId' in useHostStore.getState().hosts[hostId]).toBe(false)
+  })
+
+  it('a re-point forgets the host\'s unsent watcher-settings drafts; an edit that keeps the endpoint does not', () => {
+    seed(ID)
+    writeWatchDraft(watchDraftKey(hostId, ID, 'y_mb'), '20')
+    useHostStore.getState().updateHost(hostId, { name: 'renamed' })
+    expect(readWatchDraft(watchDraftKey(hostId, ID, 'y_mb'))).toBe('20')
+    useHostStore.getState().updateHost(hostId, { ip: '10.0.0.7' })
+    expect(readWatchDraft(watchDraftKey(hostId, ID, 'y_mb'))).toBeUndefined()
+    clearWatchDrafts()
   })
 
   it('different observed value → no write, mismatch flag, one warn per (host, observed)', () => {
