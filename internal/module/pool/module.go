@@ -34,6 +34,18 @@ const (
 // call holds a socket and up to the client's body cap in memory, so a runaway client is turned away instead of queued.
 const maxInFlight = 8
 
+// answerTTL is how long a pool answer is reused. wwd's facts change at most once per 5 s, so a reader polling faster than this
+// gets the same answer; however many readers there are, wwd is asked at most once per key per TTL. maxCached bounds the keys.
+const (
+	answerTTL = time.Second
+	maxCached = 16
+)
+
+type cachedAnswer struct {
+	at   time.Time
+	body []byte
+}
+
 // Module is the pool module.
 type Module struct {
 	mu    sync.Mutex
@@ -42,9 +54,13 @@ type Module struct {
 	cl       *client.Client
 	now      func() time.Time
 	inflight chan struct{} // a semaphore of maxInFlight
+	cacheMu  sync.Mutex
+	cache    map[string]cachedAnswer
 }
 
-func New() *Module { return &Module{now: time.Now, inflight: make(chan struct{}, maxInFlight)} }
+func New() *Module {
+	return &Module{now: time.Now, inflight: make(chan struct{}, maxInFlight), cache: map[string]cachedAnswer{}}
+}
 
 func (m *Module) Name() string           { return "pool" }
 func (m *Module) Dependencies() []string { return nil }
@@ -122,12 +138,63 @@ func (m *Module) handleHosts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
+	if m.writeCached(w, "hosts") {
+		return
+	}
 	p, err := m.client().Pool(r.Context())
 	if err != nil {
 		writeWWDErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, hostsOf(p))
+	m.writeAndCache(w, "hosts", hostsOf(p))
+}
+
+// writeCached answers from the cache when key has a fresh answer.
+func (m *Module) writeCached(w http.ResponseWriter, key string) bool {
+	m.cacheMu.Lock()
+	a, ok := m.cache[key]
+	m.cacheMu.Unlock()
+	if !ok || m.now().Sub(a.at) >= answerTTL {
+		return false
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(a.body)
+	return true
+}
+
+// writeAndCache writes a 200 answer and keeps it for answerTTL. Errors are never cached.
+func (m *Module) writeAndCache(w http.ResponseWriter, key string, v any) {
+	body, err := json.Marshal(v)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, ErrWWDError, "encoding the answer failed")
+		return
+	}
+	body = append(body, '\n')
+	m.cacheMu.Lock()
+	if m.cache == nil { // a test module without a cache
+		m.cacheMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+		return
+	}
+	if len(m.cache) >= maxCached {
+		now := m.now()
+		for k, a := range m.cache { // drop what is stale; if all is fresh, start over rather than grow
+			if now.Sub(a.at) >= answerTTL {
+				delete(m.cache, k)
+			}
+		}
+		if len(m.cache) >= maxCached {
+			m.cache = map[string]cachedAnswer{}
+		}
+	}
+	m.cache[key] = cachedAnswer{at: m.now(), body: body}
+	m.cacheMu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 }
 
 func (m *Module) handleHistory(w http.ResponseWriter, r *http.Request) {
@@ -137,7 +204,8 @@ func (m *Module) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 	q := r.URL.Query()
-	hq := wire.FactsHistoryQuery{Since: m.now().Add(-historyDefaultSince).UTC(), Step: q.Get("step")}
+	// the default since is cut to the minute so that readers asking in the same minute share one cache key
+	hq := wire.FactsHistoryQuery{Since: m.now().Add(-historyDefaultSince).UTC().Truncate(time.Minute), Step: q.Get("step")}
 	if s := q.Get("since"); s != "" {
 		t, err := time.Parse(time.RFC3339, s)
 		if err != nil {
@@ -151,6 +219,10 @@ func (m *Module) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	if hq.Step != wire.Step1m && hq.Step != wire.Step5s {
 		writeErr(w, http.StatusBadRequest, ErrBadRequest, "step must be 1m or 5s")
+		return
+	}
+	key := "history|" + q.Get("host") + "|" + hq.Since.Format(time.RFC3339) + "|" + hq.Step
+	if m.writeCached(w, key) {
 		return
 	}
 	cl := m.client()
@@ -173,7 +245,7 @@ func (m *Module) handleHistory(w http.ResponseWriter, r *http.Request) {
 	if h.Records == nil {
 		h.Records = []wire.Facts{}
 	}
-	writeJSON(w, http.StatusOK, h)
+	m.writeAndCache(w, key, h)
 }
 
 // writeWWDErr maps a client error to the status the App reads.

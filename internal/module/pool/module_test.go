@@ -54,6 +54,7 @@ func newModule(t *testing.T, cl *client.Client) *http.ServeMux {
 	m := New()
 	m.cl = cl
 	m.now = func() time.Time { return time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC) }
+	m.cache = nil // most tests ask the same route twice with different fakes behind it; the cache has its own test
 	mux := http.NewServeMux()
 	m.RegisterRoutes(mux)
 	return mux
@@ -270,4 +271,41 @@ func TestInFlight_ExcessReadsAreTurnedAway(t *testing.T) {
 		assert.Equal(t, 200, <-done)
 	}
 	assert.Equal(t, 200, call(srv, "/api/pool/hosts").Code, "a slot is free again")
+}
+
+// However many readers there are, wwd is asked once per key per TTL: the second read inside the TTL is the first's answer, one
+// after it asks again, and an error is never kept.
+func TestCache_OneWWDCallPerKeyPerTTL(t *testing.T) {
+	var calls int
+	var fail bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/pool", func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if fail {
+			http.Error(w, "x", 500)
+			return
+		}
+		w.Write(poolOf(t))
+	})
+	m := New()
+	m.cl = fakeWWD(t, mux)
+	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	m.now = func() time.Time { return now }
+	srv := http.NewServeMux()
+	m.RegisterRoutes(srv)
+
+	first := call(srv, "/api/pool/hosts")
+	second := call(srv, "/api/pool/hosts")
+	assert.Equal(t, 1, calls, "two reads inside the TTL are one wwd call")
+	assert.Equal(t, first.Body.String(), second.Body.String())
+
+	now = now.Add(answerTTL)
+	call(srv, "/api/pool/hosts")
+	assert.Equal(t, 2, calls, "after the TTL wwd is asked again")
+
+	now = now.Add(answerTTL)
+	fail = true
+	assert.Equal(t, 502, call(srv, "/api/pool/hosts").Code)
+	assert.Equal(t, 502, call(srv, "/api/pool/hosts").Code)
+	assert.Equal(t, 4, calls, "an error is not cached")
 }
