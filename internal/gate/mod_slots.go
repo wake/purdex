@@ -10,11 +10,14 @@ type SlotsConfig struct {
 
 func parseSlots(r raw) SlotsConfig {
 	return SlotsConfig{
-		Heavy: r.Int("heavy", 1, 1, 64),
-		Light: r.Int("light", 3, 1, 64),
+		Heavy: r.Int("heavy", 1, 0, 64), // 0 pauses the class: new commands of it wait until the count is raised
+		Light: r.Int("light", 3, 0, 64),
 		Order: r.Enum("order", "fifo", "fifo"),
 	}
 }
+
+// Paused says whether a class has no slot at all: a new command of it waits, never fails, and starts once the count is raised.
+func (s SlotsConfig) Paused(c Class) bool { return s.Size(c) == 0 }
 
 // Size is the number of slots of a class.
 func (s SlotsConfig) Size(c Class) int {

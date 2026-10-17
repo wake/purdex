@@ -503,6 +503,9 @@ func (p *Pool) overHeld() int {
 // (overSlots late holders at once). It holds the same admit lock as TryTake, so the two never take the same slot or count a
 // slot twice.
 func (p *Pool) TakeLate() (*Slot, error) {
+	if p.Size == 0 {
+		return nil, nil // a paused class takes no claim, late or over
+	}
 	if err := os.MkdirAll(p.Dir, 0o755); err != nil {
 		return nil, dirError(err)
 	}
