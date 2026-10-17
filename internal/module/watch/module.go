@@ -311,8 +311,8 @@ type HolderView struct {
 	TmuxSessionID string `json:"tmux_session_id,omitempty"`
 	PaneID        string `json:"pane_id,omitempty"`
 	// Starting says a start or wake is in progress on this host; CooldownUntil is when a failed one lets the next be tried.
-	Starting      bool      `json:"starting,omitempty"`
-	CooldownUntil time.Time `json:"cooldown_until,omitempty"`
+	Starting      bool       `json:"starting,omitempty"`
+	CooldownUntil *time.Time `json:"cooldown_until,omitempty"`
 	// Targets is this host's setting, so a peer can warn when the two differ (nil when the setting cannot be read).
 	Targets []string `json:"targets,omitempty"`
 }
@@ -326,7 +326,11 @@ func (m *Module) viewOf(h watch.Holder) HolderView {
 		TmuxSessionID: h.TmuxSessionID, PaneID: h.PaneID}
 	if m.sess != nil {
 		st := m.sess.Get()
-		v.Starting, v.CooldownUntil = st.InProgress != nil, st.CooldownUntil
+		v.Starting = m.startingNow(st)
+		if !st.CooldownUntil.IsZero() {
+			until := st.CooldownUntil
+			v.CooldownUntil = &until
+		}
 	}
 	if m.core != nil && m.core.Cfg != nil {
 		m.core.CfgMu.RLock()

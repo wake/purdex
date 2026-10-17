@@ -50,6 +50,7 @@ type Holder struct {
 	Cwd     string    `json:"cwd"`
 	Started time.Time `json:"started"`
 	Session string    `json:"session,omitempty"`
+	Tag     string    `json:"tag,omitempty"` // PDX_GATE_TAG: an assist run sent here shows as assist:<job>
 	// Late says the slot was taken after the command had been running for a while (a packaging script put under a slot, #2996),
 	// not before it started; Over (set when read, never stored) says it is beyond the size of the pool.
 	Late bool `json:"late,omitempty"`
@@ -193,6 +194,7 @@ func (t *Ticket) Drop() {
 			defer unlock()
 		}
 		_ = os.Remove(t.p.rankPath(t.Name))
+		_ = os.Remove(t.p.outPath(t.Name))
 	}
 	_ = os.Remove(t.path)
 	_ = t.f.Close()
@@ -206,6 +208,8 @@ type WaiterInfo struct {
 	Argv    []string `json:"argv"`
 	Cwd     string   `json:"cwd"`
 	Session string   `json:"session,omitempty"`
+	// Tag says what the command is for when its own gate is a run that was sent here (assist:<job>), from PDX_GATE_TAG.
+	Tag string `json:"tag,omitempty"`
 }
 
 // Enqueue takes a ticket that says nothing about its waiter.
@@ -366,11 +370,15 @@ func (p *Pool) waiting(clean bool) int {
 			if clean {
 				_ = os.Remove(path)
 				_ = os.Remove(path + ".rank") // a rank never outlives its ticket
+				_ = os.Remove(path + ".out")
 			}
 			_ = f.Close()
 			continue
 		}
 		_ = f.Close()
+		if _, out := p.readOut(e.Name()); out {
+			continue // its command runs on an assist host: not waiting for a slot here
+		}
 		n++
 	}
 	return n
@@ -392,6 +400,8 @@ type Take struct {
 	AheadFront int
 	Rank       RankInfo
 	Held       bool
+	// Out says the ticket is out on an assist host (out.go): no slot is taken for it.
+	Out bool
 	// Blocked is set when a conflict rule keeps the ticket from taking a slot though there is room: what it waits for and the rule.
 	// ConflictsProblem is the reason the rules file could not be used (then there are no rules).
 	Blocked          *ConflictBlock
@@ -409,6 +419,11 @@ func (p *Pool) TryTakeRanked(t *Ticket) (Take, error) {
 	snap, err := p.snapshotLocked()
 	if err != nil {
 		return Take{}, err
+	}
+	for _, o := range snap.Out {
+		if o.Name == t.Name {
+			return Take{Out: true}, nil // out on an assist host: it is not served here until it is back
+		}
 	}
 	ahead, aheadFront, rank, found := snap.Ahead(t.Name)
 	if !found {
@@ -512,7 +527,7 @@ func (p *Pool) writePlaceholder(k int, info WaiterInfo, late bool) error {
 	if p.Now != nil {
 		now = p.Now()
 	}
-	b, err := json.Marshal(Holder{Class: p.Class, Slot: k, PID: os.Getpid(), Started: now, Argv: info.Argv, Cwd: info.Cwd, Session: info.Session, Late: late})
+	b, err := json.Marshal(Holder{Class: p.Class, Slot: k, PID: os.Getpid(), Started: now, Argv: info.Argv, Cwd: info.Cwd, Session: info.Session, Tag: info.Tag, Late: late})
 	if err != nil {
 		return err
 	}
@@ -705,6 +720,7 @@ type Waiter struct {
 	Argv    []string  `json:"argv,omitempty"`
 	Cwd     string    `json:"cwd,omitempty"`
 	Session string    `json:"session,omitempty"`
+	Tag     string    `json:"tag,omitempty"`
 	// Rank is front | normal | back | hold (queue order, spec §5.2); the rest says who moved it, why and, for a hold, until when.
 	// RankError is set when its rank file could not be used and the ticket is served as normal.
 	Rank       Rank      `json:"rank"`
@@ -744,7 +760,7 @@ func (p *Pool) Waiters() []Waiter {
 			if info.PID > 0 {
 				w.PID = info.PID
 			}
-			w.Argv, w.Cwd, w.Session = info.Argv, info.Cwd, info.Session
+			w.Argv, w.Cwd, w.Session, w.Tag = info.Argv, info.Cwd, info.Session, info.Tag
 		}
 		out = append(out, w)
 	}
