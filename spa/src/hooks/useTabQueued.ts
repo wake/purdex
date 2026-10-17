@@ -21,7 +21,8 @@ const NONE: TabQueued = { keys: new Set(), waiters: [] }
 export function useTabQueued(panes: TabAgentPane[]): TabQueued {
   const sig = useFleetStore((s) => {
     const withSession = panes.filter((p) => p.sessionId)
-    if (withSession.length === 0 || !s.snapshot) return ''
+    // Spec 2.3: no fleet (off, no primary, or the primary silent) → no hourglass; the store keeps the last snapshot.
+    if (withSession.length === 0 || !s.snapshot || s.primaryHostId === null || s.stale || s.waitingPrimary) return ''
     const bySession = queuedBySession(s.snapshot)
     if (bySession.size === 0) return ''
     const hits = withSession.flatMap((p) => {

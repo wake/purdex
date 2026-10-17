@@ -3,12 +3,17 @@
 import type { FleetWaiter } from '../fleet/types'
 import type { FleetSnapshot } from '../fleet/store'
 
-/** Every waiter of every host in the snapshot, by lowercase session id (empty ids dropped). */
+/**
+ * Every waiter of every daemon host that is answering (a probe host has no queue; an offline daemon's last `slow` is
+ * stale), by lowercase session id (empty ids dropped).
+ */
 export function queuedBySession(snapshot: FleetSnapshot | null): Map<string, FleetWaiter[]> {
   const out = new Map<string, FleetWaiter[]>()
   if (!snapshot) return out
   for (const id of snapshot.order) {
-    for (const w of snapshot.hosts[id]?.slow?.queue?.waiters ?? []) {
+    const h = snapshot.hosts[id]
+    if (!h || h.kind !== 'daemon' || h.status !== 'ok') continue
+    for (const w of h.slow?.queue?.waiters ?? []) {
       if (!w.session) continue
       const k = w.session.toLowerCase()
       const list = out.get(k)

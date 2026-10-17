@@ -134,12 +134,13 @@ describe('useTabDisplay — the queue hourglass (W5b2)', () => {
     id: 'd1', kind: 'daemon', alias: 'd1', name: 'd1', icon: '', os: '', status: 'ok', error: null, last_ok_at: 0, fast: null,
     slow: { at: 0, top_cpu: [], top_mem: [], queue: { heavy_used: 1, heavy_total: 1, light_used: 0, light_total: 1, holders: [], waiters, longest_wait_s: 0,
       admission_held: false, admission_reason: '', heavy_paused: false, light_paused: false } } } } })
-  const withFleet = (waiters: FleetWaiter[] | null) => useFleetStore.setState({ snapshot: waiters ? snapshot(waiters) : null })
+  const live = { primaryHostId: 'h', stale: false, waitingPrimary: false }
+  const withFleet = (waiters: FleetWaiter[] | null) => useFleetStore.setState({ snapshot: waiters ? snapshot(waiters) : null, ...live })
   const e = (b: NormalizedEvent['background']): NormalizedEvent => ({ agent_type: 'cc', status: 'idle', raw_event_name: 'x', broadcast_ts: 1, background: b })
   const echoT = (k: string, p?: Record<string, string | number>) => (p ? `${k}${JSON.stringify(p)}` : k)
 
   beforeEach(() => {
-    useFleetStore.setState({ snapshot: null })
+    useFleetStore.setState({ snapshot: null, primaryHostId: null, stale: false, waitingPrimary: false })
     useI18nStore.setState({ t: echoT })
   })
 
@@ -156,6 +157,26 @@ describe('useTabDisplay — the queue hourglass (W5b2)', () => {
     const { result } = renderHook(() => useTabDisplay(tab(agentTmux('SID-1'))))
     expect(result.current.background).toBe('queued')
     expect(result.current.backgroundTitle).toMatch(/^tab\.queued\.tooltip\{"place":2,"m":2,"command":"go test"/)
+  })
+
+  it('no primary, a stale or waiting primary, an offline daemon: no hourglass; it comes back with the connection', () => {
+    withFleet([waiter()])
+    useAgentStore.setState({ statuses: { 'h1:a': 'idle' } })
+    const { result } = renderHook(() => useTabDisplay(tab(agentTmux('sid-1'))))
+    expect(result.current.background).toBe('queued')
+    act(() => { useFleetStore.setState({ primaryHostId: null }) })
+    expect(result.current.background).toBeUndefined()
+    act(() => { useFleetStore.setState({ ...live, stale: true, waitingPrimary: true }) })
+    expect(result.current.background).toBeUndefined()
+    act(() => { useFleetStore.setState({ ...live, waitingPrimary: true }) })
+    expect(result.current.background).toBeUndefined()
+    act(() => {
+      const snap = useFleetStore.getState().snapshot!
+      useFleetStore.setState({ ...live, snapshot: { ...snap, hosts: { d1: { ...snap.hosts.d1, status: 'offline' } } } })
+    })
+    expect(result.current.background).toBeUndefined()
+    act(() => { withFleet([waiter()]) })
+    expect(result.current.background).toBe('queued')
   })
 
   it('goes when the waiter goes', () => {

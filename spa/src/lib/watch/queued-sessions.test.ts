@@ -25,6 +25,15 @@ describe('queuedBySession', () => {
   })
 })
 
+describe('queuedBySession — which hosts count', () => {
+  it('skips a probe host and a daemon that is not ok (its last queue is stale)', () => {
+    const off = host('off', [w({ session: 'off-1' })]); off.status = 'offline'
+    const err = host('err', [w({ session: 'err-1' })]); err.status = 'error'
+    const m = queuedBySession(snap(host('probe', [w({ session: 'probe-1' })], 'probe'), off, err, host('ok', [w({ session: 'ok-1' })])))
+    expect([...m.keys()]).toEqual(['ok-1'])
+  })
+})
+
 describe('queuedTooltip', () => {
   it('one waiter: place, whole minutes, command and class', () => {
     expect(queuedTooltip([w({ place: 2, since: 1000 })], 1000 + 125_000, t))
