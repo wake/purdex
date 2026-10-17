@@ -1,0 +1,153 @@
+// spa/src/lib/team/unattended-reader.ts — the one reader of a host's first unattended page (`GET /api/team/unattended`),
+// shared by the unattended panel and the team settings (journal v5 spec §3.9). Opening either reads the host; while a read
+// of that daemon is out, another one JOINS it instead of asking again (single-flight per host), so two quick opens, or the
+// two panels opened together, make one request.
+//
+// A read: when the host lists `team.relay_quota.v1` the quota store is told a GET is out (beginGet) and gets the rows at
+// the end (endGet), so `team.relay_quota` events that arrive meanwhile apply after them; either way the page's quota part
+// (or the failure) becomes the host's last read in the same store (`reads`), which both panels draw their rows from.
+// It is bounded: a host that has not answered in HOST_READ_TIMEOUT_MS fails as `timeout` and its request is aborted.
+//
+// Who waits: each caller may pass a signal. Aborting it lets that caller go (its promise rejects `aborted`); the request
+// itself is aborted only when every caller has let go, and a given-up read is nobody's failure (nothing is kept). A caller
+// without a signal (the team settings: closing it does not cancel the read that fills the store) holds the read to its end.
+//
+// Re-reads: after a quota write lands on a provisional root (`pending_lineage`) the writer asks for the host again
+// (relay-quota-writer.ts `registerRefetch`). While any panel watches the host (`watchHost`), that re-read is a fresh read
+// here, whose answer reaches every panel through the store.
+import { ApprovalApiError } from './approval-api'
+import { getUnattended } from './unattended-api'
+import { hostIdentityNow } from './quota-host'
+import { useRelayQuotaStore } from './relay-quota'
+import { registerRefetch } from './relay-quota-writer'
+import { useUnattendedStore } from '../../stores/useUnattendedStore'
+import type { UnattendedView } from './types'
+
+/** How long one host may take to answer before it is named as failed (`timeout`) instead of holding a panel. */
+export const HOST_READ_TIMEOUT_MS = 10_000
+
+interface Flight {
+  /** The daemon (endpoint + token) asked. */
+  identity: string
+  promise: Promise<UnattendedView>
+  /** Callers still waiting; at 0 the request is given up. */
+  holders: number
+  settled: boolean
+  giveUp: () => void
+}
+
+const flights = new Map<string, Flight>()
+const watchers = new Map<string, { count: number; dispose: () => void }>()
+
+const codeOf = (e: unknown): string => (e instanceof ApprovalApiError ? e.code : 'error')
+const aborted = () => new ApprovalApiError(0, 'aborted')
+
+function start(hostId: string, identity: string): Flight {
+  const store = useRelayQuotaStore.getState()
+  const quotas = useUnattendedStore.getState().byHost[hostId]?.quotaSupport === 'yes'
+  const epoch = quotas ? store.beginGet(hostId) : (store.epochs[hostId] ?? 0)
+  const ctl = new AbortController()
+  const flight = { identity, holders: 0, settled: false, giveUp: () => {} } as Flight
+  flight.promise = new Promise<UnattendedView>((resolve, reject) => {
+    const timer = setTimeout(() => { finish(null, new ApprovalApiError(0, 'timeout'), true); ctl.abort() }, HOST_READ_TIMEOUT_MS)
+    /** The one end of the read; `keep` = a real outcome of the host (not a given-up read) that becomes its last read. */
+    const finish = (v: UnattendedView | null, e: unknown, keep: boolean) => {
+      if (flight.settled) return
+      flight.settled = true
+      clearTimeout(timer)
+      if (flights.get(hostId) === flight) flights.delete(hostId)
+      const s = useRelayQuotaStore.getState()
+      if (keep) s.setRead(hostId, v !== null ? { ok: true, ...quotaPart(v) } : { ok: false, code: codeOf(e) }, epoch)
+      if (quotas) s.endGet(hostId, v?.quotas ?? null, epoch)
+      if (v !== null) resolve(v)
+      else reject(e)
+    }
+    flight.giveUp = () => { finish(null, aborted(), false); ctl.abort() }
+    try {
+      getUnattended(hostId, undefined, ctl.signal).then(
+        // `list_failed` is the PUT's flag (the daemon's GET never sets it): if it ever comes, `approved` says nothing.
+        (v) => { if (v.list_failed === true) finish(null, new ApprovalApiError(200, 'list_failed'), true); else finish(v, null, true) },
+        (e: unknown) => finish(null, e, true),
+      )
+    } catch (e) {
+      finish(null, e, true) // a transport that throws before it returns a promise still ends the read (and its GET bracket)
+    }
+  })
+  flight.promise.catch(() => {}) // a read whose callers all let go (or a re-read nobody awaits) is not an unhandled rejection
+  return flight
+}
+
+function quotaPart(v: UnattendedView) {
+  return {
+    ...(v.quotas !== undefined ? { quotas: v.quotas } : {}),
+    ...(v.quotasFailed ? { quotasFailed: true } : {}),
+    ...(v.held !== undefined ? { held: v.held } : {}),
+  }
+}
+
+/** The host's read now: the one out to the same daemon, else a new one. Null when the host is not configured. */
+function current(hostId: string, fresh: boolean): Flight | null {
+  const identity = hostIdentityNow(hostId)
+  if (identity === null) return null
+  const cur = flights.get(hostId)
+  if (!fresh && cur !== undefined && !cur.settled && cur.identity === identity) return cur
+  const next = start(hostId, identity)
+  flights.set(hostId, next) // a re-pointed host's old read goes on for its own callers, but nobody joins it any more
+  return next
+}
+
+function join(flight: Flight, signal?: AbortSignal): Promise<UnattendedView> {
+  flight.holders += 1
+  if (signal === undefined) return flight.promise // held to its end
+  return new Promise<UnattendedView>((resolve, reject) => {
+    const leave = () => {
+      reject(aborted())
+      flight.holders -= 1
+      if (flight.holders === 0 && !flight.settled) flight.giveUp()
+    }
+    signal.addEventListener('abort', leave, { once: true })
+    flight.promise.then(
+      (v) => { signal.removeEventListener('abort', leave); resolve(v) },
+      (e: unknown) => { signal.removeEventListener('abort', leave); reject(e) },
+    )
+  })
+}
+
+/** The host's first unattended page: joins the read already out to this daemon, else starts one. */
+export function readFirstPage(hostId: string, signal?: AbortSignal): Promise<UnattendedView> {
+  if (signal?.aborted) return Promise.reject(aborted())
+  const flight = current(hostId, false)
+  if (flight === null) return Promise.reject(new ApprovalApiError(0, 'no_host'))
+  return join(flight, signal)
+}
+
+/** A fresh read even while one is out (the writer's re-read): later reads join it. Held to its end. */
+export function refreshHost(hostId: string): Promise<UnattendedView> {
+  const flight = current(hostId, true)
+  if (flight === null) return Promise.reject(new ApprovalApiError(0, 'no_host'))
+  return join(flight)
+}
+
+/** A panel shows this host's quotas: while any does, the writer's re-read of the host is a fresh read. Returns the disposer. */
+export function watchHost(hostId: string): () => void {
+  const w = watchers.get(hostId)
+  if (w !== undefined) w.count += 1
+  else watchers.set(hostId, { count: 1, dispose: registerRefetch(hostId, () => { refreshHost(hostId).catch(() => {}) }) })
+  let done = false
+  return () => {
+    if (done) return
+    done = true
+    const cur = watchers.get(hostId)
+    if (cur === undefined) return
+    cur.count -= 1
+    if (cur.count === 0) { cur.dispose(); watchers.delete(hostId) }
+  }
+}
+
+/** Test seam: give up every read and forget every watcher. */
+export function resetReader(): void {
+  for (const f of flights.values()) f.giveUp()
+  flights.clear()
+  for (const w of watchers.values()) w.dispose()
+  watchers.clear()
+}

@@ -13,8 +13,12 @@
 // A stepper shows the desired value while there is one, else the in-flight one, else the confirmed one - so an answer or
 // an event about the other field (both carry the whole pair) never changes what this stepper shows. The writer
 // (relay-quota-writer.ts) drives these; this module only holds and merges.
+//
+// Reads (journal v5 §3.9): per host, the quota part of its last first unattended page, read through the one shared reader
+// (unattended-reader.ts). The unattended panel and the team settings both take their rows from here, so a re-read made
+// for either shows in both; the NUMBERS still come from `confirmed` / `writes` above, never from these rows.
 import { create } from 'zustand'
-import type { RelayQuotaEvent, RelayQuotaField, RelayQuotaPair, SessionQuota } from './types'
+import type { Approval, RelayQuotaEvent, RelayQuotaField, RelayQuotaPair, SessionQuota } from './types'
 
 export interface ConfirmedQuota extends RelayQuotaPair {
   rev: number
@@ -36,6 +40,14 @@ function merge(cur: ConfirmedQuota | undefined, next: ConfirmedQuota): Confirmed
   return cur === undefined || next.rev >= cur.rev ? next : cur
 }
 
+/**
+ * A host's last first-page read: the page's quota part (`quotas` absent = an older daemon; `quotasFailed` = its array was
+ * null or malformed; `held` = the requests held for quota), or the code of a read that failed.
+ */
+export type QuotaRead =
+  | { ok: true; quotas?: readonly SessionQuota[]; quotasFailed?: boolean; held?: readonly Approval[] }
+  | { ok: false; code: string }
+
 interface GetState {
   depth: number
   events: RelayQuotaEvent[]
@@ -54,11 +66,15 @@ interface RelayQuotaState {
    * made to the new one.
    */
   epochs: Record<string, number>
+  /** Per host, its last read (absent = none since the host was last forgotten). */
+  reads: Record<string, QuotaRead>
 
   /** Starts a GET for the host; returns the epoch to hand back to `endGet`. */
   beginGet: (hostId: string) => number
   /** The GET ended: its rows (null = it failed) are applied, then the events buffered while it was out. A stale epoch is ignored. */
   endGet: (hostId: string, rows: readonly SessionQuota[] | null, epoch: number) => void
+  /** A read ended: it replaces the host's last one. Read in an epoch the host has since been forgotten out of: ignored. */
+  setRead: (hostId: string, read: QuotaRead, epoch: number) => void
   applyEvent: (hostId: string, ev: RelayQuotaEvent) => void
   applyAnswer: (hostId: string, root: string, pair: RelayQuotaPair, rev: number) => void
   setWrite: (hostId: string, root: string, field: RelayQuotaField, write: FieldWrite) => void
@@ -78,6 +94,7 @@ export const useRelayQuotaStore = create<RelayQuotaState>()((set, get) => ({
   writes: {},
   gets: {},
   epochs: {},
+  reads: {},
 
   beginGet: (hostId) => {
     const epoch = get().epochs[hostId] ?? 0
@@ -98,6 +115,8 @@ export const useRelayQuotaStore = create<RelayQuotaState>()((set, get) => ({
     const { [hostId]: _done, ...gets } = s.gets
     return { confirmed, gets }
   }),
+
+  setRead: (hostId, read, epoch) => set((s) => ((s.epochs[hostId] ?? 0) !== epoch ? s : { reads: { ...s.reads, [hostId]: read } })),
 
   applyEvent: (hostId, ev) => set((s) => {
     const get = s.gets[hostId]
@@ -124,15 +143,16 @@ export const useRelayQuotaStore = create<RelayQuotaState>()((set, get) => ({
     const prefix = `${hostId}${SEP}`
     const keep = <T,>(rec: Record<string, T>): Record<string, T> => Object.fromEntries(Object.entries(rec).filter(([k]) => !k.startsWith(prefix)))
     const { [hostId]: _gone, ...gets } = s.gets
-    return { confirmed: keep(s.confirmed), writes: keep(s.writes), gets, epochs: { ...s.epochs, [hostId]: (s.epochs[hostId] ?? 0) + 1 } }
+    const { [hostId]: _read, ...reads } = s.reads
+    return { confirmed: keep(s.confirmed), writes: keep(s.writes), gets, reads, epochs: { ...s.epochs, [hostId]: (s.epochs[hostId] ?? 0) + 1 } }
   }),
 
-  reset: () => set({ confirmed: {}, writes: {}, gets: {}, epochs: {} }),
+  reset: () => set({ confirmed: {}, writes: {}, gets: {}, epochs: {}, reads: {} }),
 }))
 
-/** Every host the store holds something for: a confirmed row, a write, or a GET in flight. */
-export function quotaHostIds(s: Pick<RelayQuotaState, 'confirmed' | 'writes' | 'gets'>): Set<string> {
-  const ids = new Set<string>(Object.keys(s.gets))
+/** Every host the store holds something for: a confirmed row, a write, a GET in flight, or a read. */
+export function quotaHostIds(s: Pick<RelayQuotaState, 'confirmed' | 'writes' | 'gets' | 'reads'>): Set<string> {
+  const ids = new Set<string>([...Object.keys(s.gets), ...Object.keys(s.reads)])
   for (const k of [...Object.keys(s.confirmed), ...Object.keys(s.writes)]) ids.add(k.split(SEP)[0])
   return ids
 }
