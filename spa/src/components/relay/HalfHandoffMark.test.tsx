@@ -42,6 +42,19 @@ describe('HalfHandoffMark', () => {
     expect(screen.getByTestId('half-handoff-mark')).toHaveAttribute('title', '接力檔：/w/h.md（2026-10-15 23:40 寫好）')
   })
 
+  it('a written time that is not a time leaves the time out: the tooltip is the path alone', () => {
+    for (const bad of [1e20, NaN]) {
+      const { unmount } = render(<HalfHandoffMark handoff={{ path: '/w/h.md', writtenAt: bad }} variant="chip" />)
+      const title = screen.getByTestId('half-handoff-mark').getAttribute('title')
+      expect(title).toBe('接力檔：/w/h.md')
+      expect(title).not.toMatch(/NaN|Invalid/)
+      unmount()
+    }
+    useI18nStore.getState().setLocale('en')
+    render(<HalfHandoffMark handoff={{ path: '/w/h.md', writtenAt: NaN }} variant="icon" />)
+    expect(screen.getByTestId('half-handoff-mark')).toHaveAttribute('title', 'Handoff file: /w/h.md')
+  })
+
   it('English wording', () => {
     useI18nStore.getState().setLocale('en')
     render(<HalfHandoffMark handoff={{ path: '/w/h.md', writtenAt: at(9, 5) }} variant="chip" />)

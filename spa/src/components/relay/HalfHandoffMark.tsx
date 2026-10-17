@@ -21,7 +21,8 @@ export function HalfHandoffMark({ handoff, variant, size = 12 }: Props) {
   const now = useCoarseNow()
   if (!handoff) return null
   const label = t('relay.half.label')
-  const tip = t('relay.half.tooltip', { path: handoff.path, time: formatHandoffTime(handoff.writtenAt, now) })
+  const time = formatHandoffTime(handoff.writtenAt, now)
+  const tip = time ? t('relay.half.tooltip', { path: handoff.path, time }) : t('relay.half.tooltip_path', { path: handoff.path })
   if (variant === 'chip') {
     return (
       <span data-testid="half-handoff-mark" data-variant="chip" title={tip} className="text-[9.5px] px-1 rounded bg-surface-hover text-text-secondary flex-shrink-0 whitespace-nowrap">

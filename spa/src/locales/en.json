@@ -2782,5 +2782,6 @@
   "relay.half.label": "Handoff file written",
   "relay.half.label_not_cleared": "Handoff file written (not cleared)",
   "relay.half.tooltip": "Handoff file: {{path}} (written {{time}})",
+  "relay.half.tooltip_path": "Handoff file: {{path}}",
   "relay.half.toast": "{{host}}: {{session}}: handoff file written (not cleared)"
 }

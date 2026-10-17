@@ -33,4 +33,10 @@ describe('formatHandoffTime', () => {
     // the host\'s clock is ahead and the write is already tomorrow: the date is printed
     expect(formatHandoffTime(at(2026, 10, 18, 0, 1), now)).toBe('2026-10-18 00:01')
   })
+
+  it('a time Date cannot hold prints nothing, and never throws', () => {
+    expect(formatHandoffTime(1e20, now)).toBe('')
+    expect(formatHandoffTime(NaN, now)).toBe('')
+    expect(formatHandoffTime(Infinity, now)).toBe('')
+  })
 })
