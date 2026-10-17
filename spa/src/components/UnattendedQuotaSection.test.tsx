@@ -337,3 +337,42 @@ describe('the team cap stepper', () => {
     expect(screen.queryByTestId('cap-stepper')).toBeNull()
   })
 })
+
+describe('team names (U15)', () => {
+  const named = (lead: string, name: string, id = `t-${lead}`): TeamRoster => ({ ...team(lead, []), id, team_name: name })
+
+  it('a lead row shows the team name, the lead title muted after it, and no address', () => {
+    useTeamRosterStore.getState().apply(A, [named('L1', 'Payments')])
+    show([{ hostId: A, rows: [q('L1', { is_lead: true, title: 'iface-lead' })] }])
+    expect(rowFor('L1').textContent).toContain('Payments')
+    expect(within(rowFor('L1')).getByTestId('quota-lead-title')).toHaveTextContent('iface-lead')
+    expect(rowFor('L1').textContent).not.toContain('mlab/')
+  })
+
+  it('a title equal to the team name is not repeated', () => {
+    useTeamRosterStore.getState().apply(A, [named('L1', 'Same')])
+    show([{ hostId: A, rows: [q('L1', { is_lead: true, title: 'Same' })] }])
+    expect(within(rowFor('L1')).queryByTestId('quota-lead-title')).toBeNull()
+  })
+
+  it('a daemon without names (team_name empty) shows the lead title', () => {
+    useTeamRosterStore.getState().apply(A, [named('L1', '')])
+    show([{ hostId: A, rows: [q('L1', { is_lead: true, title: 'iface-lead' })] }])
+    expect(rowFor('L1').textContent).toContain('iface-lead')
+    expect(within(rowFor('L1')).queryByTestId('quota-lead-title')).toBeNull()
+  })
+
+  it('a solo row keeps its title; a lead of a team on another host is found in that host\'s roster', () => {
+    useTeamRosterStore.getState().apply(A, [])
+    useTeamRosterStore.getState().apply(B, [named('L2', 'Remote team')])
+    show([{ hostId: A, rows: [q('P1', { title: 'solo-one' }), q('L2', { is_lead: true, title: 'x' })] }])
+    expect(rowFor('P1').textContent).toContain('solo-one')
+    expect(rowFor('L2').textContent).toContain('Remote team')
+  })
+
+  it('leads sort by the shown team name', () => {
+    useTeamRosterStore.getState().apply(A, [named('a', 'Zulu'), named('b', 'Alpha')])
+    show([{ hostId: A, rows: [q('a', { is_lead: true, title: 'A first' }), q('b', { is_lead: true, title: 'Z last' })] }])
+    expect(screen.getAllByTestId('quota-row').map((r) => r.getAttribute('data-session'))).toEqual(['b', 'a'])
+  })
+})

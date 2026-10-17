@@ -3,6 +3,8 @@ import { render, screen, within } from '@testing-library/react'
 import { UnattendedHeldSection } from './UnattendedHeldSection'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
+import { useTeamRosterStore } from '../stores/useTeamRosterStore'
+import type { TeamRoster } from '../lib/team/roster'
 import type { Approval } from '../lib/team/types'
 
 // 「額度用完，等你核准」: the open requests the daemon holds. A self relay, and (RQ-2) a member relay.
@@ -20,6 +22,7 @@ const memberRelay = (id: string, at: number, over: Record<string, unknown> = {})
 }) as Approval
 
 beforeEach(() => {
+  useTeamRosterStore.getState().reset()
   useI18nStore.getState().setLocale('zh-TW')
   useHostStore.setState({ hosts: { [H]: { id: H, name: 'mlab', ip: '1', port: 1, token: 't', order: 0 } }, hostOrder: [H], activeHostId: H, runtime: {} })
 })
@@ -62,5 +65,31 @@ describe('UnattendedHeldSection', () => {
   it('an over-long title is clipped', () => {
     render(<UnattendedHeldSection rows={[{ hostId: H, a: memberRelay('m1', 1_000, { member_title: 'M'.repeat(300) }) }]} />)
     expect((screen.getByTestId('held-row').textContent ?? '').length).toBeLessThan(200)
+  })
+})
+
+describe('team names (U15)', () => {
+  const lead = { session_id: 'S1', ref: '_aaaaaa', address: 'mlab/lead-name', live: true }
+  const roster = (name: string): TeamRoster => ({ id: 't', host_id: 'd', created_at: 1, team_name: name, team_label: '', lead, members: [] })
+
+  it('a self relay of a lead shows the team name, the title muted after it', () => {
+    useTeamRosterStore.getState().apply('other', [roster('Payments')]) // another host's roster still names it
+    render(<UnattendedHeldSection rows={[{ hostId: H, a: selfRelay('a1', 1_000) }]} />)
+    const row = screen.getByTestId('held-row')
+    expect(row.textContent).toContain('mlab：Payments · 接力申請')
+    expect(within(row).getByTestId('held-lead-title')).toHaveTextContent('iface-lead')
+  })
+
+  it('a member relay names the lead by its team', () => {
+    useTeamRosterStore.getState().apply(H, [roster('Payments')])
+    render(<UnattendedHeldSection rows={[{ hostId: H, a: memberRelay('m1', 1_000) }]} />)
+    expect(screen.getByTestId('held-row').textContent).toContain('mlab：Payments 要幫 member iface-solo 接力')
+  })
+
+  it('a daemon without names keeps the lead title', () => {
+    useTeamRosterStore.getState().apply(H, [roster('')])
+    render(<UnattendedHeldSection rows={[{ hostId: H, a: selfRelay('a1', 1_000) }]} />)
+    expect(screen.getByTestId('held-row').textContent).toContain('mlab：iface-lead · 接力申請')
+    expect(screen.queryByTestId('held-lead-title')).toBeNull()
   })
 })

@@ -20,6 +20,7 @@ import { setQuota } from '../lib/team/relay-quota-writer'
 import { setMaxMembers, teamKey, useMaxMembersStore } from '../lib/team/max-members'
 import { MAX_MEMBERS_MAX, MAX_MEMBERS_MIN, type RelayQuotaField, type SessionQuota } from '../lib/team/types'
 import type { TeamRoster } from '../lib/team/roster'
+import { leadNameBySession, type LeadName } from '../lib/team/lead-name'
 import { TeamRootsEditor } from './team/TeamRootsEditor'
 import { NumberField } from './team/NumberField'
 
@@ -40,16 +41,24 @@ export interface UnattendedQuotaSectionProps {
 
 const MAX = 99
 
-/** The name a row shows: its title, else the name part of its address (`<alias>/<name>`). */
-function nameOf(r: SessionQuota): string {
+/** The name a solo row shows: its title, else the name part of its address (`<alias>/<name>`). */
+function plainName(r: SessionQuota): string {
   if (r.title !== undefined && r.title !== '') return r.title
   const slash = r.address.indexOf('/')
   return slash >= 0 ? r.address.slice(slash + 1) : r.address
 }
 
-function order(a: SessionQuota, b: SessionQuota): number {
-  if (a.is_lead !== b.is_lead) return a.is_lead ? -1 : 1
-  return nameOf(a).localeCompare(nameOf(b)) || a.address.localeCompare(b.address)
+/** What a row is called: a lead by its team's name (U15, the lead's title after it), anyone else by `plainName`. */
+function lookOf(rosters: Record<string, TeamRoster[]>, r: SessionQuota): LeadName & { team: boolean } {
+  const lead = r.is_lead ? leadNameBySession(rosters, r.session_id, r.title) : undefined
+  return lead !== undefined ? { ...lead, team: true } : { name: plainName(r), team: false }
+}
+
+function order(rosters: Record<string, TeamRoster[]>) {
+  return (a: SessionQuota, b: SessionQuota): number => {
+    if (a.is_lead !== b.is_lead) return a.is_lead ? -1 : 1
+    return lookOf(rosters, a).name.localeCompare(lookOf(rosters, b).name) || a.address.localeCompare(b.address)
+  }
 }
 
 const STEP_BTN = 'w-5 h-5 inline-flex items-center justify-center rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer disabled:opacity-30 disabled:pointer-events-none'
@@ -63,10 +72,10 @@ function StepButton({ sign, label, disabled, reason, onClick }: { sign: string; 
   )
 }
 
-function Stepper({ hostId, row, field, label }: { hostId: string; row: SessionQuota; field: RelayQuotaField; label: string }) {
+function Stepper({ hostId, row, field, label, rosters }: { rosters: Record<string, TeamRoster[]>; hostId: string; row: SessionQuota; field: RelayQuotaField; label: string }) {
   const t = useI18nStore((s) => s.t)
   const value = useRelayQuotaStore((s) => shownValue(s, hostId, row.root_session_id, field, row[field]))
-  const write = (next: number) => setQuota({ hostId, sessionId: row.session_id, root: row.root_session_id, label: nameOf(row) }, field, next)
+  const write = (next: number) => setQuota({ hostId, sessionId: row.session_id, root: row.root_session_id, label: lookOf(rosters, row).name }, field, next)
   return (
     <span className="inline-flex items-center gap-1" data-testid="quota-stepper" data-field={field}>
       <span className="text-text-muted">{label}</span>
@@ -134,7 +143,7 @@ export function UnattendedQuotaSection({ hosts, headings }: UnattendedQuotaSecti
         } else if (rosters[h.hostId] === undefined) {
           body = <div data-testid="quota-loading-team" className="text-text-muted">{t('unattended.quota.loading_team')}</div>
         } else {
-          const rows = h.rows.filter((r) => !members.has(r.session_id)).sort(order)
+          const rows = h.rows.filter((r) => !members.has(r.session_id)).sort(order(rosters))
           const capOn = support[h.hostId]?.maxMembersSupport === 'yes'
           const caps = new Map(rows.map((r) => [r.session_id, capTeam(rosters, capOn, h.hostId, r)] as const))
           const withCap = [...caps.values()].some((x) => x !== undefined) // a fourth column only where some row has one
@@ -142,17 +151,19 @@ export function UnattendedQuotaSection({ hosts, headings }: UnattendedQuotaSecti
             ? <div data-testid="quota-none" className="text-text-muted">{t('unattended.quota.none')}</div>
             : (
               <ul className={`grid ${withCap ? 'grid-cols-[minmax(0,1fr)_auto_auto_auto]' : 'grid-cols-[minmax(0,1fr)_auto_auto]'} items-center gap-x-3 gap-y-1`}>
-                {rows.map((r) => (
+                {rows.map((r) => { const look = lookOf(rosters, r); return (
                   <li key={`${r.session_id}`} data-testid="quota-row" data-session={r.session_id} className="contents">
-                    <span className="block min-w-0 truncate text-text-primary" title={`${nameOf(r)}\n${r.address}`}>{nameOf(r)}</span>
-                    <Stepper hostId={h.hostId} row={r} field="self_left" label={t('unattended.quota.self')} />
+                    <span className="block min-w-0 truncate text-text-primary" title={look.team ? `${look.name}${look.title !== undefined ? `\n${look.title}` : ''}` : `${look.name}\n${r.address}`}>
+                      {look.name}{look.title !== undefined && <span data-testid="quota-lead-title" className="text-text-muted"> {look.title}</span>}
+                    </span>
+                    <Stepper rosters={rosters} hostId={h.hostId} row={r} field="self_left" label={t('unattended.quota.self')} />
                     {r.is_lead
-                      ? <Stepper hostId={h.hostId} row={r} field="member_pool_left" label={t('unattended.quota.pool')} />
+                      ? <Stepper rosters={rosters} hostId={h.hostId} row={r} field="member_pool_left" label={t('unattended.quota.pool')} />
                       : <span data-testid="quota-pool-cell-empty" />}
                     {withCap && (() => {
                       const team = caps.get(r.session_id)
                       return team !== undefined
-                        ? <CapStepper hostId={h.hostId} team={team} label={nameOf(r)} />
+                        ? <CapStepper hostId={h.hostId} team={team} label={lookOf(rosters, r).name} />
                         : <span data-testid="cap-cell-empty" />
                     })()}
                     {(() => {
@@ -161,7 +172,7 @@ export function UnattendedQuotaSection({ hosts, headings }: UnattendedQuotaSecti
                       return team?.roots !== undefined && team.roots_rev !== undefined ? <TeamRootsEditor hostId={h.hostId} team={team} /> : null
                     })()}
                   </li>
-                ))}
+                )})}
               </ul>
             )
         }
