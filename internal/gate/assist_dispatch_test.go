@@ -106,6 +106,7 @@ func TestDispatch_AFailureBeforeTheStartRunsItHereAndHoldsTheHost(t *testing.T) 
 	d := r.lastDecision(t)
 	assert.Equal(t, "slot", d.Outcome)
 	assert.Empty(t, d.Host, "nothing ran on the host")
+	assert.Equal(t, "air26", d.Tried, "but it was offered to it")
 	assert.NotEmpty(t, d.AssistWhy, "the reason is in the record")
 }
 
