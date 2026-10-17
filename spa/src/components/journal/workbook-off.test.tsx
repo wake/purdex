@@ -40,7 +40,7 @@ beforeEach(() => {
   resetTeamStores()
   useJournalStore.getState().reset()
   useWorkbookStore.getState().reset()
-  useJournalUiStore.setState({ lastWidths: {}, teamOpen: {} })
+  useJournalUiStore.setState({ lastWidths: {} })
   clearViewMemos()
   clearModuleRegistry()
   useShownHostsStore.setState({ ids: [HOST] })
@@ -53,9 +53,8 @@ beforeEach(() => {
 })
 afterEach(() => cleanup())
 
-/** Open the team card (journal host) — the older host's area is already in the pane (`full`). */
+/** Seed the lead's unit (journal host); the team panel itself is in the pane (`full`) on every host. */
 const openTeamCard = () => {
-  useJournalUiStore.getState().setTeamOpen(KEY, true)
   patchViewMemo(HOST, seedUnit(HOST, 'L', { kind: 'team', id: 'tm1', label: 'T' }), { journalOpen: false })
 }
 
@@ -120,10 +119,10 @@ describe('the team panel', () => {
   })
 })
 
-describe('the team card (card mode)', () => {
+describe('the team panel with the tab\'s journal.v1 host deciding (noDrill)', () => {
   const Card = ({ card }: { card: boolean }) => {
     const team = useTeamDisplay()?.panelTeam('lead')
-    return team ? <TeamPanel card={card} team={{ ...team, mode: 'full' }} activeTabId="lead" onSetMode={() => {}} onOpen={() => {}} onReorder={() => {}} /> : null
+    return team ? <TeamPanel noDrill={card} team={{ ...team, mode: 'full' }} activeTabId="lead" onSetMode={() => {}} onOpen={() => {}} onReorder={() => {}} /> : null
   }
   const mountCard = (card: boolean) => render(<TeamDisplayProvider><Card card={card} /></TeamDisplayProvider>)
   const seedOld = () => {
@@ -139,7 +138,7 @@ describe('the team card (card mode)', () => {
     expect(q('team-panel-workbook')).toBeNull()
     expect(q('team-panel-ended')).toBeNull()
   })
-  it('without card mode the same setup drills (the gate is the card flag)', () => {
+  it('without the flag the same setup drills (the gate is the flag)', () => {
     seedOld()
     mountCard(false)
     expect(q('team-seat-workbook')).toBeTruthy()
@@ -147,12 +146,12 @@ describe('the team card (card mode)', () => {
 })
 
 describe('the title bar', () => {
-  it('journal host: no team strip even when the team sits in the title bar, no own strip, no notebook button', () => {
+  it('journal host: the team strip is back when the team sits in the title bar; no own strip, no notebook button', () => {
     setJournalHost(HOST, true)
     seedUnit(HOST, 'L', { kind: 'team', id: 'tm1', label: 'T' })
     useTeamUiStore.setState({ panelMode: { [KEY]: 'titlebar' }, sharedPanelMode: 'titlebar' })
     mount()
-    expect(q('team-title-strip')).toBeNull()
+    expect(q('team-title-strip')).toBeTruthy()
     expect(q('own-title-strip')).toBeNull()
     expect(q('team-notebook-button')).toBeNull()
   })

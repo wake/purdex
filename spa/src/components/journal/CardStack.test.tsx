@@ -1,4 +1,4 @@
-// spa/src/components/journal/CardStack.test.tsx — the card stack: order, push, the narrow-window drop, resize, and that what the
+// spa/src/components/journal/CardStack.test.tsx — the card stack (the three journal cards; the team panel is its own area, JV-2): order, push, the narrow-window drop, resize, and that what the
 // person arranged lives outside the component (J-2b T-2b.2 / T-2b.3). Real stores; the pane kinds are not registered (TabContent
 // draws the empty fallback), which is all the tab-switch tests need: they are about the stack, not the panes.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -7,7 +7,7 @@ import { CardStack, PanelAreas } from './CardStack'
 import { visibleCards } from './card-layout'
 import { TabContent } from '../TabContent'
 import { TeamDisplayProvider } from '../team/TeamDisplayProvider'
-import { HOST, KEY, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
+import { HOST, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
 import { ccTabOf, seedUnit, setJournalHost } from '../../lib/journal/__tests__/journal-fixture'
 import { clearViewMemos, patchViewMemo, readViewMemo } from '../../lib/journal/view-memory'
 import { clearModuleRegistry } from '../../lib/module-registry'
@@ -50,7 +50,7 @@ beforeEach(() => {
   localStorage.clear()
   resetTeamStores()
   useJournalStore.getState().reset()
-  useJournalUiStore.setState({ lastWidths: {}, teamOpen: {} })
+  useJournalUiStore.setState({ lastWidths: {} })
   clearViewMemos()
   clearModuleRegistry()
   useShownHostsStore.setState({ ids: [HOST] })
@@ -68,39 +68,39 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); Object.defineProperty(window
 const mountShell = () => render(<TeamDisplayProvider><CardStack /></TeamDisplayProvider>)
 
 describe('card-layout visibleCards', () => {
-  const W = { team: 360, roadmap: 360, journal: 420, tasks: 340 }
-  const all = { team: true, roadmap: true, journal: true, tasks: true }
-  it('drops tasks, then roadmap, then the team card; the journal stays', () => {
+  const W = { roadmap: 360, journal: 420, tasks: 340 }
+  const all = { roadmap: true, journal: true, tasks: true }
+  it('drops tasks, then roadmap; the journal stays', () => {
     expect(visibleCards({ open: all, widths: W, available: 1500 })).toEqual(all)
-    expect(visibleCards({ open: all, widths: W, available: 1300 })).toEqual({ ...all, tasks: false })
-    expect(visibleCards({ open: all, widths: W, available: 1000 })).toEqual({ team: false, roadmap: false, journal: true, tasks: false })
+    expect(visibleCards({ open: all, widths: W, available: 1200 })).toEqual({ ...all, tasks: false })
+    expect(visibleCards({ open: all, widths: W, available: 1000 })).toEqual({ roadmap: false, journal: true, tasks: false })
     expect(visibleCards({ open: all, widths: W, available: 300 }).journal).toBe(true)
   })
-  it('drops roadmap before the team card when the roadmap is what makes the column wide', () => {
-    const wide = { ...W, roadmap: 600 }
-    // team 360 + journal 420 + gap + margin = 804 fits 1150; the 600-wide roadmap column does not.
-    expect(visibleCards({ open: { team: true, roadmap: true, journal: true, tasks: false }, widths: wide, available: 1150 })).toEqual({ team: true, roadmap: false, journal: true, tasks: false })
+  it('the docked team panel takes its footprint from the room (cards drop sooner)', () => {
+    expect(visibleCards({ open: all, widths: W, available: 1500, reserved: 0 })).toEqual(all)
+    expect(visibleCards({ open: all, widths: W, available: 1500, reserved: 300 })).toEqual({ ...all, tasks: false })
+    expect(visibleCards({ open: all, widths: W, available: 1500, reserved: 700 })).toEqual({ roadmap: false, journal: true, tasks: false })
   })
 })
 
 describe('the stack on a journal.v1 host', () => {
-  it('lays the columns out team column (team card, roadmap under it) · journal · tasks', () => {
+  it('lays the columns out roadmap column · journal · tasks (no team card in the stack)', () => {
     const key = seedUnit(HOST, 'SL', TEAM_UNIT)
     openAll(key)
-    useJournalUiStore.getState().setTeamOpen(KEY, true)
     setActive('lead')
+    setWidth(2000) // room for the three cards beside the docked team panel
     mountShell()
     const stack = screen.getByTestId('journal-card-stack')
-    expect([...stack.children].map((c) => (c as HTMLElement).dataset.testid)).toEqual(['journal-team-column', 'journal-card', 'journal-tasks-card'])
-    expect([...screen.getByTestId('journal-team-column').children].map((c) => (c as HTMLElement).dataset.testid)).toEqual(['journal-team-card', 'journal-roadmap-card'])
+    expect([...stack.children].map((c) => (c as HTMLElement).dataset.testid)).toEqual(['journal-side-column', 'journal-card', 'journal-tasks-card'])
+    expect([...screen.getByTestId('journal-side-column').children].map((c) => (c as HTMLElement).dataset.testid)).toEqual(['journal-roadmap-card'])
+    expect(q('journal-team-card')).toBeNull()
   })
   it('the roadmap stands alone on the left without a team', () => {
     const key = seedUnit(HOST, 'SA', SOLO_A)
     openAll(key)
     setActive('a')
     mountShell()
-    expect([...screen.getByTestId('journal-card-stack').children].map((c) => (c as HTMLElement).dataset.testid)).toEqual(['journal-team-column', 'journal-card', 'journal-tasks-card'])
-    expect(q('journal-team-card')).toBeNull()
+    expect([...screen.getByTestId('journal-card-stack').children].map((c) => (c as HTMLElement).dataset.testid)).toEqual(['journal-side-column', 'journal-card', 'journal-tasks-card'])
     expect(q('journal-roadmap-card')).toBeTruthy()
   })
   it('opening a card keeps the others and adds its own column to the right-aligned row', () => {
@@ -126,47 +126,32 @@ describe('the stack on a journal.v1 host', () => {
     expect(pressed.className).toContain('text-accent')
     expect(pressed.className).not.toContain('accent-base')
   })
-  it('the team card has no title-bar or enlarge control: it is open or closed and nothing else', () => {
-    const key = seedUnit(HOST, 'SL', TEAM_UNIT)
-    patchViewMemo(HOST, key, { journalOpen: true })
-    useJournalUiStore.getState().setTeamOpen(KEY, true)
-    setActive('lead')
-    mountShell()
-    const card = screen.getByTestId('journal-team-card')
-    expect(within(card).getByTestId('team-panel')).toBeTruthy()
-    expect(within(card).queryByTestId('team-panel-to-titlebar')).toBeNull()
-    expect(within(card).queryByTestId('team-panel-expand')).toBeNull()
-  })
-  it('hides tasks, then roadmap, then the team card as the window narrows; the journal stays', () => {
-    const key = seedUnit(HOST, 'SL', TEAM_UNIT)
+  it('hides tasks, then roadmap as the window narrows; the journal stays', () => {
+    const key = seedUnit(HOST, 'SA', SOLO_A)
     openAll(key)
-    useJournalUiStore.getState().setTeamOpen(KEY, true)
-    setActive('lead')
+    setActive('a')
     mountShell()
-    const present = () => ['journal-team-card', 'journal-roadmap-card', 'journal-card', 'journal-tasks-card'].filter((id) => q(id))
-    expect(present()).toEqual(['journal-team-card', 'journal-roadmap-card', 'journal-card', 'journal-tasks-card'])
-    setWidth(1300)
-    expect(present()).toEqual(['journal-team-card', 'journal-roadmap-card', 'journal-card'])
+    const present = () => ['journal-roadmap-card', 'journal-card', 'journal-tasks-card'].filter((id) => q(id))
+    expect(present()).toEqual(['journal-roadmap-card', 'journal-card', 'journal-tasks-card'])
+    setWidth(1200)
+    expect(present()).toEqual(['journal-roadmap-card', 'journal-card'])
     setWidth(1000)
     expect(present()).toEqual(['journal-card'])
     setWidth(300)
     expect(present()).toEqual(['journal-card'])
   })
   it('narrow then wide again restores the hidden cards and writes nothing back', () => {
-    const key = seedUnit(HOST, 'SL', TEAM_UNIT)
+    const key = seedUnit(HOST, 'SA', SOLO_A)
     openAll(key)
-    useJournalUiStore.getState().setTeamOpen(KEY, true)
-    setActive('lead')
+    setActive('a')
     mountShell()
-    const before = { memo: { ...readViewMemo(HOST, key) }, team: { ...useJournalUiStore.getState().teamOpen } }
+    const before = { ...readViewMemo(HOST, key) }
     setWidth(900)
     expect(q('journal-tasks-card')).toBeNull()
-    expect(q('journal-team-card')).toBeNull()
-    expect(readViewMemo(HOST, key)).toEqual(before.memo)
-    expect(useJournalUiStore.getState().teamOpen).toEqual(before.team)
+    expect(q('journal-roadmap-card')).toBeNull()
+    expect(readViewMemo(HOST, key)).toEqual(before)
     setWidth(1500)
     expect(q('journal-tasks-card')).toBeTruthy()
-    expect(q('journal-team-card')).toBeTruthy()
     expect(q('journal-roadmap-card')).toBeTruthy()
   })
   it('a resize is a draft until mouseup, then the unit width and the last used width are written', () => {
@@ -209,22 +194,21 @@ describe('the stack on a journal.v1 host', () => {
 })
 
 describe('the available width is the content box, not the window', () => {
-  it('hides tasks, then roadmap, then the team card by the container width (the window stays wide)', () => {
-    const key = seedUnit(HOST, 'SL', TEAM_UNIT)
+  it('hides tasks, then roadmap by the container width (the window stays wide)', () => {
+    const key = seedUnit(HOST, 'SA', SOLO_A)
     openAll(key)
-    useJournalUiStore.getState().setTeamOpen(KEY, true)
-    setActive('lead')
+    setActive('a')
     setWidth(2000)
     render(<div><TeamDisplayProvider><CardStack /></TeamDisplayProvider></div>)
-    const present = () => ['journal-team-card', 'journal-roadmap-card', 'journal-card', 'journal-tasks-card'].filter((id) => q(id))
+    const present = () => ['journal-roadmap-card', 'journal-card', 'journal-tasks-card'].filter((id) => q(id))
     act(() => fireContent(1500))
-    expect(present()).toEqual(['journal-team-card', 'journal-roadmap-card', 'journal-card', 'journal-tasks-card'])
-    act(() => fireContent(1300))
-    expect(present()).toEqual(['journal-team-card', 'journal-roadmap-card', 'journal-card'])
+    expect(present()).toEqual(['journal-roadmap-card', 'journal-card', 'journal-tasks-card'])
+    act(() => fireContent(1200))
+    expect(present()).toEqual(['journal-roadmap-card', 'journal-card'])
     act(() => fireContent(1000))
     expect(present()).toEqual(['journal-card'])
     act(() => fireContent(1500))
-    expect(present().length).toBe(4)
+    expect(present().length).toBe(3)
   })
 })
 
