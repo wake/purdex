@@ -11,7 +11,7 @@ import (
 func TestSet_ABadValueIsNotHiddenByTheActiveProfile(t *testing.T) {
 	p := cfgFile(t, "[gate]\nprofile = \"night\"\n[gate.profiles.night.slots]\nheavy = 3\n")
 	before := read(t, p)
-	_, err := Set(p, "", "slots.heavy", "0")
+	_, err := Set(p, "", "slots.heavy", "65")
 	require.Error(t, err)
 	assert.Equal(t, before, read(t, p))
 	res, err := Set(p, "", "slots.heavy", "2")

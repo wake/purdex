@@ -239,6 +239,9 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "閘門 %s（%s）\n", map[bool]string{true: "啟用", false: "停用"}[cfg.Enabled], g.DirOf())
 	printPool := func(name string, size int, held []gate.Holder, waiting int, queue []gate.Waiter) {
 		fmt.Fprintf(stdout, "%s %d/%d 使用中，%d 個在排隊\n", name, len(held), size, waiting)
+		if size == 0 && cfg.Enabled { // a disabled gate lets everything through, so nothing waits
+			fmt.Fprintln(stdout, "  已暫停（名額 0）：新的指令排隊等候，原因 paused；名額調回後自動開始，已在跑的不受影響")
+		}
 		for _, h := range held {
 			age := ""
 			if !h.Started.IsZero() {
