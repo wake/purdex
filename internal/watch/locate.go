@@ -397,6 +397,9 @@ func (l *Locator) try(ctx context.Context, alias string, act func(context.Contex
 	if a.State == HolderAwake && a.SessionID != "" {
 		return &Where{Alias: alias, HostID: a.HostID, SessionID: a.SessionID, State: HolderAwake, At: l.now(), Since: a.Since}, true
 	}
+	if a.Starting {
+		return nil, false // the call was cut off and the host says the start is going on there
+	}
 	return nil, true
 }
 

@@ -118,6 +118,14 @@ func (c *sessionCtl) run(ctx context.Context, kind, extra string) (watch.HolderA
 	now := m.now()
 	st := m.sess.Get()
 	if st.InProgress != nil {
+		// a mark with no job behind it is from a run of the daemon that ended: if the watcher registered meanwhile, that start worked
+		if h, _, err := m.Reconcile(ctx); err == nil && h.State == watch.HolderAwake {
+			_ = m.sess.Update(func(x *watch.SessionState) { x.InProgress = nil })
+			c.mu.Unlock()
+			return answerOf(m.view()), nil
+		}
+	}
+	if st.InProgress != nil {
 		if now.Sub(st.InProgress.Since) < m.registerWithinFor()+time.Minute { // a start of an earlier run of the daemon, still within its time
 			c.mu.Unlock()
 			return m.answerStarting(), nil

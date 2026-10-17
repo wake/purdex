@@ -324,3 +324,22 @@ func TestStartAndWake_WithoutAPaneAreRefusedAsNoSession(t *testing.T) {
 	_, err = c.Wake(context.Background(), "")
 	require.ErrorIs(t, err, watch.ErrNoSession)
 }
+
+func TestStart_AMarkLeftByARestartIsClearedWhenTheWatcherIsAwakeAndNoCooldownFollows(t *testing.T) {
+	for name, since := range map[string]time.Duration{"within its time": 30 * time.Second, "past its time": time.Hour} {
+		t.Run(name, func(t *testing.T) {
+			r := newSessionRig(t, "")
+			r.owners.set(watcherOwner("f1"), true, nil)
+			require.NoError(t, r.m.sess.Update(func(st *watch.SessionState) {
+				st.InProgress = &watch.InProgress{Kind: "start", Since: r.now.Add(-since)}
+			}))
+			ans, err := r.m.session.Start(context.Background())
+			require.NoError(t, err)
+			require.Equal(t, watch.HolderAwake, ans.State)
+			require.False(t, ans.Starting)
+			require.Nil(t, r.m.sess.Get().InProgress)
+			require.True(t, r.m.sess.Get().CooldownUntil.IsZero())
+			require.Empty(t, r.typer.typed())
+		})
+	}
+}
