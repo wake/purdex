@@ -14,7 +14,7 @@ import (
 func TestE1_FootprintReplacesRSSWhenTheTreeIsOverTheRSSThreshold(t *testing.T) {
 	r := newRig(t)
 	r.procs = goTest(0.1, 4000) // 4000 MB of RSS, nothing on the cores
-	r.fp = map[int]uint64{10: 5 * mib, 100: 100 * mib}
+	r.fp = map[int]uint64{100: 100 * mib, 101: 100 * mib}
 	assert.Empty(t, r.run(3*time.Minute))
 	assert.Positive(t, r.fpCalls)
 }
@@ -23,7 +23,7 @@ func TestE1_FootprintReplacesRSSWhenTheTreeIsOverTheRSSThreshold(t *testing.T) {
 func TestE1_PeakMBIsTheFootprintSum(t *testing.T) {
 	r := newRig(t)
 	r.procs = goTest(0.1, 4000)
-	r.fp = map[int]uint64{1: 0, 10: 500 * mib, 100: 1500 * mib}
+	r.fp = map[int]uint64{100: 500 * mib, 101: 1500 * mib}
 	evs := r.run(3 * time.Minute)
 	require.Len(t, evs, 1)
 	assert.EqualValues(t, 2000, evs[0].PeakMB)
@@ -33,7 +33,7 @@ func TestE1_PeakMBIsTheFootprintSum(t *testing.T) {
 func TestE1_AProcessWithoutAFootprintCountsByItsRSS(t *testing.T) {
 	r := newRig(t)
 	r.procs = goTest(0.1, 4000) // the go child holds 2000 MB of RSS
-	r.fp = map[int]uint64{10: 1 * mib}
+	r.fp = map[int]uint64{100: 1 * mib}
 	evs := r.run(3 * time.Minute)
 	require.Len(t, evs, 1)
 	assert.EqualValues(t, 2000+1, evs[0].PeakMB)
