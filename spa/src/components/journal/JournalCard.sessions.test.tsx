@@ -259,7 +259,7 @@ describe('errors are shown, not read as an empty page', () => {
 
 describe('without journal.sessions.v1', () => {
   it('there is no pager or header, and 載入更早 reads the older month as today', async () => {
-    const key = seedA({ more: true, currentPage: '', sessions: null, pages: {} })
+    const key = seedA({ more: true }) // the unit still holds session pages from an earlier connection; the host no longer declares them
     setSessionsSupport(HOST, false)
     getJournal.mockResolvedValue({ kind: 'ok', value: parseJournalPage(wirePage({ entries: [wireEntry('old1', { at: D1 })], more: false })) })
     mount()
