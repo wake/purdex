@@ -151,12 +151,22 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 				g.say("%s", pressureLine(lastPressure(good), cfg.Admission, good != nil))
 			}
 		}
+		sleep := g.Poll()
+		if o.WaitMax > 0 {
+			left := o.WaitMax - now.Sub(waitStart)
+			if left <= 0 {
+				g.say("not admitted within %s: the command was not run", o.WaitMax)
+				d.Outcome = "wait-max"
+				return nil, ExitRefused, true
+			}
+			sleep = min(sleep, left)
+		}
 		select {
 		case sig := <-sigs:
 			return nil, 128 + signalNumber(sig), true
 		case <-ctx.Done():
 			return nil, 130, true
-		case <-time.After(g.Poll()):
+		case <-time.After(sleep):
 		}
 	}
 }

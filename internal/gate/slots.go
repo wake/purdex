@@ -370,11 +370,15 @@ func (p *Pool) waiting(clean bool) int {
 			if clean {
 				_ = os.Remove(path)
 				_ = os.Remove(path + ".rank") // a rank never outlives its ticket
+				_ = os.Remove(path + ".out")
 			}
 			_ = f.Close()
 			continue
 		}
 		_ = f.Close()
+		if _, out := p.readOut(e.Name()); out {
+			continue // its command runs on an assist host: not waiting for a slot here
+		}
 		n++
 	}
 	return n
