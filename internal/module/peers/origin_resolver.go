@@ -518,8 +518,8 @@ func (r *OriginResolver) processRoots(view rootView) ([]resources.Root, error) {
 //
 // The answers are LeadPresence's with one safeguard: Live and Unknown come from the snapshot (a session that is live
 // in it was live moments ago and the next pass says otherwise), but a Gone answer, which cannot be undone by the
-// caller, is confirmed from a fresh read (one per Round), so a member whose session id moved (a relay) after the snapshot was taken
-// is never ended on a registry that predates the move. Gone is the rare answer, and the confirmation read is shared by all of a round's Gones.
+// caller, is asked again from a fresh read (never shared between questions: a relay can land between two of them), so a member whose session id moved (a relay) after the snapshot was taken
+// is never ended on a registry that predates the move. Gone is the rare answer, and a pass that finds N gone costs N extra reads, never more than the N+M the per-question reads did.
 func (r *OriginResolver) PresenceSnapshot() PresenceReader { return &PresenceSnapshot{r: r} }
 
 // PresenceReader is the one question a pass asks of a registry read.
@@ -532,28 +532,6 @@ type PresenceSnapshot struct {
 	r    *OriginResolver
 	once sync.Once
 	le   leadEntries
-
-	mu    sync.Mutex
-	fresh *leadEntries // the registry as read to confirm a Gone, shared until the next Round
-}
-
-// Round says the caller has just loaded a new set of rows to ask about: a registry read taken to confirm a Gone
-// before this point may predate a change to those rows (a relay), so the next Gone is confirmed from a new read.
-// Within a round all the Gone confirmations share one read, so N gone members cost one extra read, not N.
-func (s *PresenceSnapshot) Round() {
-	s.mu.Lock()
-	s.fresh = nil
-	s.mu.Unlock()
-}
-
-func (s *PresenceSnapshot) confirmed() leadEntries {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.fresh == nil {
-		le := s.r.readLeadEntries()
-		s.fresh = &le
-	}
-	return *s.fresh
 }
 
 // LeadPresence is OriginResolver.LeadPresence answered from the snapshot.
@@ -561,7 +539,7 @@ func (s *PresenceSnapshot) LeadPresence(sessionID string, pid int, procStart str
 	s.once.Do(func() { s.le = s.r.readLeadEntries() })
 	p := s.r.leadPresenceIn(s.le, sessionID, pid, procStart)
 	if p == PresenceGone {
-		return s.r.leadPresenceIn(s.confirmed(), sessionID, pid, procStart)
+		return s.r.LeadPresence(sessionID, pid, procStart)
 	}
 	return p
 }

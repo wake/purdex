@@ -903,15 +903,6 @@ type presenceSnapshotter interface {
 // presencePass boxes a pass's presence reader for the atomic pointer.
 type presencePass struct{ peersmod.PresenceReader }
 
-// presenceRound tells the pass's snapshot, if it has rounds, that rows were just loaded (see PresenceSnapshot.Round).
-func (m *Module) presenceRound() {
-	if p := m.passPresence.Load(); p != nil {
-		if r, ok := p.PresenceReader.(interface{ Round() }); ok {
-			r.Round()
-		}
-	}
-}
-
 // leadPresence is origins.LeadPresence, answered from the liveness pass's registry read while one is in progress.
 func (m *Module) leadPresence(sessionID string, pid int, procStart string) peersmod.Presence {
 	if s := m.passPresence.Load(); s != nil {

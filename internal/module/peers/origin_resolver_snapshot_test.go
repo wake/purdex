@@ -96,24 +96,27 @@ func TestPresenceSnapshot_RelayedAfterTheReadIsNotGone(t *testing.T) {
 	}
 }
 
-// N gone members cost one confirmation read, not N; a new round confirms from a new read.
-func TestPresenceSnapshot_GonesShareOneConfirmationReadPerRound(t *testing.T) {
-	r, _ := resolverFixture(t, allLiveLiveness(fixture76973ProcStart))
-	r.m.liveness.PidAlive = func(pid int) bool { return false }
-	reads := countRegistryReads(t)
+// Every Gone is confirmed from its own fresh read: a relay can land between two questions, and a confirmation read
+// shared with an earlier one would predate it.
+func TestPresenceSnapshot_EachGoneIsConfirmedFromItsOwnRead(t *testing.T) {
+	r, dir := resolverFixture(t, allLiveLiveness(fixture76973ProcStart))
+	r.m.liveness.PidAlive = func(pid int) bool { return pid == 10 || pid == 20 }
 	snap := r.PresenceSnapshot()
-	for i := 0; i < 10; i++ {
-		if got := snap.LeadPresence("sid-dead", 30+i, targetProcStart); got != PresenceGone {
-			t.Fatalf("question %d: %v, want gone", i, got)
-		}
+	// A is gone, which takes its confirmation read.
+	if got := snap.LeadPresence("sid-dead", 30, targetProcStart); got != PresenceGone {
+		t.Fatalf("A: %v, want gone", got)
 	}
-	if got := reads.Load(); got != 2 {
-		t.Fatalf("10 gone questions read the registry %d times, want 2 (snapshot + one confirmation)", got)
+	// Then B (pid 10) is relayed: its session id moves after that confirmation, before B is asked about.
+	writeRegistryFixture(t, dir, "10.json", `{"pid":10,"sessionId":"sid-1-relayed","cwd":"/w","procStart":"`+targetProcStart+`","version":"2.1.270","tmux":"mt0:@1.%1","messagingSocketPath":"`+dir+`/10.sock","name":"n10","status":"idle"}`)
+	if got := snap.LeadPresence("sid-1-relayed", 10, targetProcStart); got == PresenceGone {
+		t.Fatal("a member relayed after another member's confirmation read as gone")
 	}
-	snap.(interface{ Round() }).Round()
-	snap.LeadPresence("sid-dead", 31, targetProcStart)
+	reads := countRegistryReads(t)
+	for i := 0; i < 3; i++ {
+		snap.LeadPresence("sid-dead", 30+i, targetProcStart)
+	}
 	if got := reads.Load(); got != 3 {
-		t.Fatalf("after a new round the registry was read %d times in all, want 3", got)
+		t.Fatalf("3 gone questions read the registry %d times, want 3 (one confirmation each, no shared read)", got)
 	}
 }
 
