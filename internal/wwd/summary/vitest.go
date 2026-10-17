@@ -33,6 +33,7 @@ func parseVitest(in Input) (wire.Summary, error) {
 	if err := json.Unmarshal(in.Report, &r); err != nil {
 		return s, fmt.Errorf("vitest-json: %w", err)
 	}
+	var unknown error
 	for _, suite := range r.TestResults {
 		file := rel(in.Root, suite.Name)
 		suiteFailed := false
@@ -48,8 +49,13 @@ func parseVitest(in Input) (wire.Summary, error) {
 					name = a.Title
 				}
 				addFailure(&s, wire.Failure{Name: name, File: file, Message: strings.Join(a.FailureMessages, "\n")})
-			default: // pending, skipped, todo, disabled
+			case "pending", "skipped", "todo", "disabled":
 				s.Skipped++
+			default:
+				// schema drift or a damaged report: counting it as skipped would look trustworthy and be wrong
+				if unknown == nil {
+					unknown = fmt.Errorf("vitest-json: unknown test status %q in %s", a.Status, file)
+				}
 			}
 		}
 		if !suiteFailed && suite.Status == "failed" {
@@ -57,5 +63,5 @@ func parseVitest(in Input) (wire.Summary, error) {
 			addFailure(&s, wire.Failure{Name: file, File: file, Message: suite.Message})
 		}
 	}
-	return s, nil
+	return s, unknown
 }

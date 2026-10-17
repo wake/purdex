@@ -18,6 +18,9 @@ type goEvent struct {
 	Output  string
 }
 
+// maxTestOutput is how much of one test's output is kept while the stream is read.
+const maxTestOutput = 8 << 10
+
 var goFileRe = regexp.MustCompile(`([\w./-]+\.go):\d+`)
 
 // parseGoJSON reads `go test -json` (test2json) output. Each test that ended counts once, subtests included; a package that
@@ -60,14 +63,20 @@ func parseGoJSON(in Input) (wire.Summary, error) {
 				b = &strings.Builder{}
 				output[k] = b
 			}
-			if b.Len() < 4*maxMessageBytes {
-				b.WriteString(ev.Output)
+			if room := maxTestOutput - b.Len(); room > 0 {
+				o := ev.Output
+				if len(o) > room {
+					o = o[:room]
+				}
+				b.WriteString(o)
 			}
 		case "pass":
+			delete(output, k) // a test that passed needs no output kept
 			if ev.Test != "" {
 				s.Passed++
 			}
 		case "skip":
+			delete(output, k)
 			if ev.Test != "" {
 				s.Skipped++
 			}
@@ -75,9 +84,18 @@ func parseGoJSON(in Input) (wire.Summary, error) {
 			if ev.Test != "" {
 				s.Failed++
 				failedTests[ev.Package] = true
-				failedOrder = append(failedOrder, k)
-			} else {
-				pkgFailed = append(pkgFailed, ev.Package)
+				if len(failedOrder) < maxFailures {
+					failedOrder = append(failedOrder, k)
+				} else {
+					delete(output, k)
+				}
+			} else if !failedTests[ev.Package] { // its tests already told; a package that failed alone is a build or setup failure
+				s.Failed++
+				if len(pkgFailed) < maxFailures {
+					pkgFailed = append(pkgFailed, ev.Package)
+				} else {
+					delete(output, k)
+				}
 			}
 		}
 	}
@@ -96,10 +114,6 @@ func parseGoJSON(in Input) (wire.Summary, error) {
 		addFailure(&s, f)
 	}
 	for _, pkg := range pkgFailed {
-		if failedTests[pkg] {
-			continue // already told by its tests
-		}
-		s.Failed++
 		addFailure(&s, wire.Failure{Name: pkg, Message: testMessage(output[key{pkg, ""}])})
 	}
 	return s, malformed

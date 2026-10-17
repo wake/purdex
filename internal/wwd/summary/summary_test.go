@@ -127,12 +127,12 @@ func TestJunit(t *testing.T) {
 	if s.Passed != 1 || s.Failed != 2 || s.Skipped != 1 {
 		t.Fatalf("counts = %d/%d/%d", s.Passed, s.Failed, s.Skipped)
 	}
-	f := s.Failures[1]
+	f := s.Failures[0]
 	if f.Name != `Tests\FooTest::testB` || f.File != "tests/FooTest.php" || f.Message != "expected true\ntrace line" {
 		t.Fatalf("failure = %+v", f)
 	}
-	if s.Failures[0].File != `Tests\BarTest` { // no file attribute: the class stands in
-		t.Fatalf("failure 0 = %+v", s.Failures[0])
+	if s.Failures[1].File != `Tests\BarTest` { // no file attribute: the class stands in
+		t.Fatalf("failure 1 = %+v", s.Failures[1])
 	}
 }
 
@@ -174,6 +174,101 @@ func TestLongLinesAndManyFailuresAreBounded(t *testing.T) {
 	g, _ := Parse("go-json", Input{Stdout: []byte(ev.String())})
 	if g.Failed != 80 || len(g.Failures) != maxFailures {
 		t.Fatalf("failed %d, listed %d", g.Failed, len(g.Failures))
+	}
+}
+
+func TestPathsOutsideTheWorkspaceAreNotRepeated(t *testing.T) {
+	report := `{"testResults":[{"name":"/home/secret/proj/x.test.ts","status":"failed","assertionResults":[{"fullName":"x","status":"failed","failureMessages":["m"]}]},
+	 {"name":"../../etc/y.test.ts","status":"failed","assertionResults":[{"fullName":"y","status":"failed"}]}]}`
+	s, err := Parse("vitest-json", Input{Report: []byte(report), Root: "/ws"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Failures[0].File != "<outside-workspace>/x.test.ts" || s.Failures[1].File != "<outside-workspace>/y.test.ts" {
+		t.Fatalf("files = %q, %q", s.Failures[0].File, s.Failures[1].File)
+	}
+	if got := rel("/ws", "/ws/a/b.ts"); got != "a/b.ts" {
+		t.Fatalf("inside path = %q", got)
+	}
+	if got := rel("/ws", "/ws2/a.ts"); got != "<outside-workspace>/a.ts" {
+		t.Fatalf("sibling dir = %q", got)
+	}
+}
+
+func TestVitestUnknownStatusIsAnError(t *testing.T) {
+	report := `{"testResults":[{"name":"a","status":"passed","assertionResults":[{"fullName":"x","status":"passd"},{"fullName":"y","status":"passed"}]}]}`
+	s, err := Parse("vitest-json", Input{Report: []byte(report)})
+	if err == nil || !strings.Contains(err.Error(), "passd") {
+		t.Fatalf("err = %v", err)
+	}
+	if s.Passed != 1 || s.Skipped != 0 {
+		t.Fatalf("an unknown status must not count as skipped: %+v", s)
+	}
+}
+
+func TestJunitDeepNestingIsRefusedWithoutRecursion(t *testing.T) {
+	deep := strings.Repeat("<testsuite>", 200000) + `<testcase name="a"/>` + strings.Repeat("</testsuite>", 200000)
+	if _, err := Parse("junit", Input{Junit: []byte(deep)}); err == nil || !strings.Contains(err.Error(), "nest") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestJunitMalformedIsAnError(t *testing.T) {
+	if _, err := Parse("junit", Input{Junit: []byte(`<testsuite><testcase name="a">`)}); err == nil {
+		t.Fatal("want an error for an unterminated document")
+	}
+}
+
+func TestOversizedReportIsRefused(t *testing.T) {
+	big := make([]byte, maxInput+1)
+	for _, kind := range []string{"go-json", "vitest-json", "junit"} {
+		in := Input{Stdout: big, Report: big, Junit: big, Log: []byte("tail\n")}
+		s, err := Parse(kind, in)
+		if err == nil || len(s.Tail) != 1 {
+			t.Errorf("%s: err %v summary %+v", kind, err, s)
+		}
+	}
+}
+
+func TestGoJSONKeepsOnlyABoundedMessageAndNothingForPassedTests(t *testing.T) {
+	var b strings.Builder
+	huge := strings.Repeat("x", 1<<20)
+	fmt.Fprintf(&b, `{"Action":"output","Package":"p","Test":"TestPass","Output":%q}`+"\n", huge)
+	b.WriteString(`{"Action":"pass","Package":"p","Test":"TestPass"}` + "\n")
+	fmt.Fprintf(&b, `{"Action":"output","Package":"p","Test":"TestBad","Output":%q}`+"\n", huge)
+	b.WriteString(`{"Action":"fail","Package":"p","Test":"TestBad"}` + "\n")
+	s, err := Parse("go-json", Input{Stdout: []byte(b.String())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Passed != 1 || s.Failed != 1 || len(s.Failures[0].Message) > maxMessageBytes+4 {
+		t.Fatalf("summary = passed %d failed %d, message %d bytes", s.Passed, s.Failed, len(s.Failures[0].Message))
+	}
+}
+
+func TestGoJSONPackageFailureWithFailedTestsIsNotCountedTwice(t *testing.T) {
+	stdout := `{"Action":"fail","Package":"p","Test":"T"}` + "\n" + `{"Action":"fail","Package":"p"}` + "\n"
+	s, err := Parse("go-json", Input{Stdout: []byte(stdout)})
+	if err != nil || s.Failed != 1 || len(s.Failures) != 1 {
+		t.Fatalf("%+v %v", s, err)
+	}
+}
+
+func TestLastLinesEdges(t *testing.T) {
+	cases := map[string][]string{
+		"":              {},
+		"one":           {"one"},
+		"a\nb\nc\n":     {"a", "b", "c"},
+		"\nlead\nb\n":   {"lead", "b"},
+		"a\r\nb\r\n":    {"a", "b"},
+		"1\n2\n3\n4\n5": {"3", "4", "5"},
+	}
+	for in, want := range cases {
+		n := 3
+		got := lastLines([]byte(in), n)
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Errorf("lastLines(%q, %d) = %q, want %q", in, n, got, want)
+		}
 	}
 }
 
