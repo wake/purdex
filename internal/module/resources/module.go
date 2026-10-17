@@ -96,6 +96,11 @@ type Module struct {
 	noteMu          sync.Mutex
 	settingsFailing bool // a run of settings read failures is under way and has been logged
 
+	// pool and fleetSrc: while the fleet row says source = "pool", LatestHost / LatestHostDetail answer from wwd's facts of this
+	// host (poolhost.go) and fall back to the sample below when wwd gives none. Both nil (a test module) keeps the own sample.
+	pool     *poolHost
+	fleetSrc *fleetSource
+
 	// lastSettings is the settings the last tick read: the snapshot route
 	// uses them instead of reading the settings store per request.
 	lastSettings atomic.Pointer[resources.Settings]
@@ -151,6 +156,7 @@ func (m *Module) Init(c *core.Core) error {
 	m.core = c
 	c.Registry.Register(resources.HostReaderKey, resources.HostReader(m))
 	c.Registry.Register(fleet.LocalSourceKey, fleet.LocalSource(newLocalSource(m)))
+	m.findPoolHost(c)
 	if m.sampler == nil {
 		m.sampler = resources.NewSampler()
 		m.enableDiskGuard() // production wiring (a module with an injected sampler is a test's: its guard stays off)
@@ -183,6 +189,9 @@ func (m *Module) Init(c *core.Core) error {
 
 // LatestHost is the host part of the last published snapshot (resources.HostReader); ok is false before a usable one.
 func (m *Module) LatestHost() (resources.HostUse, bool) {
+	if hd, ok := m.poolDetail(); ok {
+		return hd.Host, true
+	}
 	snap := m.latest.Load()
 	if snap == nil || !snap.Available {
 		return resources.HostUse{}, false
@@ -193,6 +202,9 @@ func (m *Module) LatestHost() (resources.HostUse, bool) {
 // LatestHostDetail is LatestHost with the sample time (resources.HostDetailReader). ok is false before a usable sample, as
 // LatestHost.
 func (m *Module) LatestHostDetail() (resources.HostDetail, bool) {
+	if hd, ok := m.poolDetail(); ok {
+		return hd, true
+	}
 	snap := m.latest.Load()
 	if snap == nil || !snap.Available {
 		return resources.HostDetail{}, false
