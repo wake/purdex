@@ -86,6 +86,29 @@ func waitingLine(class Class, ahead int, holders []Holder, now time.Time) string
 	return fmt.Sprintf("waiting for a %s slot — %d ahead; %s. %s", class, ahead, held, normalQueue)
 }
 
+// heldLine is the line for a command whose ticket was put on hold (queue order, spec §5.2): who did it, why, until when, and that
+// nothing is cancelled.
+func heldLine(class Class, r RankInfo, now time.Time) string {
+	by := r.By
+	if by == "" {
+		by = "someone"
+	}
+	until := "until it is moved again"
+	if !r.Until.IsZero() {
+		until = "for " + fmtDur(r.Until.Sub(now))
+	}
+	return fmt.Sprintf("this command is on hold in the %s queue (held by %s: %s; %s): it waits and starts by itself afterwards, nothing is cancelled. %s",
+		class, by, r.Reason, until, normalQueue)
+}
+
+// withFrontNote adds to a waiting line how many of the commands in front were moved there.
+func withFrontNote(line string, aheadFront int) string {
+	if aheadFront <= 0 {
+		return line
+	}
+	return strings.Replace(line, " ahead;", fmt.Sprintf(" ahead, behind %d moved to the front;", aheadFront), 1)
+}
+
 // pausedLine is the line for a command of a class whose slot count is 0.
 func pausedLine(class Class) string {
 	return fmt.Sprintf("the %s class is paused (slots.%s = 0): this command waits and starts by itself once the count is raised. %s", class, class, normalQueue)

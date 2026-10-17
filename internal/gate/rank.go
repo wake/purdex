@@ -172,7 +172,17 @@ func (p *Pool) Snapshot() (Snapshot, error) {
 
 // snapshotLocked is Snapshot for a caller that holds the admit lock. It removes the tickets of dead gates, the rank files whose
 // ticket is gone, and reaps abandoned staging files.
-func (p *Pool) snapshotLocked() (Snapshot, error) {
+func (p *Pool) snapshotLocked() (Snapshot, error) { return p.scanQueue(true) }
+
+// peekSnapshot is the queue as it can be read without the lock and without removing anything (a dead gate's ticket is just not
+// listed): for the readers that must stay cheap and read-only (the status, the would-wait hint). A queue that cannot be read is empty.
+func (p *Pool) peekSnapshot() Snapshot {
+	s, _ := p.scanQueue(false)
+	return s
+}
+
+// scanQueue builds the Snapshot; clean says it holds the admit lock and may remove what it finds dead.
+func (p *Pool) scanQueue(clean bool) (Snapshot, error) {
 	ents, err := os.ReadDir(p.queueDir())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -185,7 +195,9 @@ func (p *Pool) snapshotLocked() (Snapshot, error) {
 		n := e.Name()
 		switch {
 		case strings.HasSuffix(n, ".new"):
-			p.reapStaging(e)
+			if clean {
+				p.reapStaging(e)
+			}
 		case e.IsDir():
 		case strings.HasSuffix(n, ".rank"):
 			ranks = append(ranks, strings.TrimSuffix(n, ".rank"))
@@ -208,7 +220,9 @@ func (p *Pool) snapshotLocked() (Snapshot, error) {
 			return Snapshot{}, dirError(err)
 		}
 		if st, _ := flockNB(f); st == lockGot {
-			_ = os.Remove(path) // nobody holds it: its gate is gone
+			if clean {
+				_ = os.Remove(path) // nobody holds it: its gate is gone
+			}
 			_ = f.Close()
 			continue
 		}
@@ -217,7 +231,7 @@ func (p *Pool) snapshotLocked() (Snapshot, error) {
 		entries = append(entries, QueueEntry{Name: n, Rank: p.readRank(n, now)})
 	}
 	for _, n := range ranks {
-		if !live[n] {
+		if clean && !live[n] {
 			_ = os.Remove(p.rankPath(n)) // its ticket is gone: a rank never outlives it
 		}
 	}
@@ -364,4 +378,22 @@ func (p *Pool) ticketWaiting(ticket string) bool {
 	defer f.Close()
 	st, _ := flockNB(f)
 	return st != lockGot
+}
+
+// rankName is the rank's name for the decision record: empty for a plain normal ticket (nothing to say).
+func rankName(r RankInfo) string {
+	if r.Rank == RankNormal {
+		return ""
+	}
+	return string(r.Rank)
+}
+
+// rankOfTicket finds the ticket's rank in a snapshot; normal when it is not listed.
+func rankOfTicket(s Snapshot, name string) RankInfo {
+	for _, e := range s.Queue {
+		if e.Name == name {
+			return e.Rank
+		}
+	}
+	return RankInfo{Rank: RankNormal}
 }
