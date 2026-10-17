@@ -5,12 +5,15 @@
 import type { TeamDisplay, TeamGhostLead } from './team-display'
 import { TeamSidebarBlock } from './TeamSidebarBlock'
 import { TeamSeatHostBadge, TeamSeatIcon } from './TeamSeatIcon'
+import { HalfHandoffMark } from '../relay/HalfHandoffMark'
+import { useFreshHandoffOfSeat } from '../../hooks/useFreshHandoff'
 import { useI18nStore } from '../../stores/useI18nStore'
 
 export function TeamGhostLeadRow({ ghost, team, activeTabId }: { ghost: TeamGhostLead; team: TeamDisplay; activeTabId: string | null }) {
   const t = useI18nStore((s) => s.t)
   const { lead, teamKey, members, collapsed } = ghost
   const open = () => team.onOpenSeat(teamKey, lead.sessionId)
+  const freshHandoff = useFreshHandoffOfSeat(teamKey, lead.sessionId)
   return (
     <TeamSidebarBlock team={team} teamKey={teamKey} collapsed={collapsed} members={members} activeTabId={activeTabId} ghost>
       <div
@@ -26,6 +29,7 @@ export function TeamGhostLeadRow({ ghost, team, activeTabId }: { ghost: TeamGhos
           <TeamSeatHostBadge hostId={lead.hostId} sessionCode={lead.sessionCode} />
         </span>
         <span className="flex-1 truncate italic">{lead.title}</span>
+        <HalfHandoffMark handoff={freshHandoff} variant="icon" />
         <span className="text-[10px] flex-shrink-0">{t('team.sidebar.ghost_badge')}</span>
       </div>
     </TeamSidebarBlock>
