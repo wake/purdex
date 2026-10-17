@@ -1,5 +1,53 @@
 # Changelog
 
+## [1.0.0-alpha.749] - 2026-10-17
+
+> daemon、`pdx` CLI、SPA 有改；mod 只改了守門員的 skill（`skills/pdx-watch/SKILL.md`），閘門多了 `xcodebuild`／`swift` 的 shim，**兩台都要重跑 `pdx setup`**（寫入新 skill 與新 shim）。Electron 沒有改。資料庫沒有變，退回 748 不需要還原資料庫；新檔案只有閘門目錄的 `assist*.json` 與守門員的 `session.json`。
+
+### Added：守門員
+
+- **啟動與叫醒的按鈕（W5e-2，PR #3128）**、**事件分頁與推送**（W5e A／B，PR #3101、#3103）、**主機分頁的排隊「歷史」**（W5d，PR #3132；需要 daemon 宣告 `gate.decisions.v1`）：歷史列出每條指令的類別、等候與執行時間、平均核心數、記憶體峰值、換頁拖累。
+- **守門員的 skill**（W3b-3，PR #3110）、**daemon 主導的巡檢節奏**（W3b-5b，PR #3130：在場 30 分、無人值守吃緊 10／平穩 15、休息中每 10 分叫醒、磁碟 < 14 GB 立即）、**`WakeWatcher`**：無人值守開關切換時叫醒守門員（W3b-5a，PR #3126）。
+- 守門員的 status 與 `watch.changed` 帶 `starting` 與 `cooldown_until`（#3131，PR #3137）；`pdx watch ack` 的剩餘數涵蓋每台主機（#3143，PR #3159）。
+- 守門員專區：分頁標籤固定「守門員」、返回鈕、⌘W 回到進入前的工作區（WA-2，PR #3147）。
+
+### Added：閘門
+
+- **佇列順序**：`pdx gate queue front|back|hold|normal`（GQ-b，PR #3118）；`PDX_GATE_RANK=back` 讓一條指令一進佇列就排在後面（PR #3158，air26 的輔測用它讓位本機開發）。
+- **互斥規則**：`pdx gate conflict add|remove|list`，兩種指令不同時跑（GC-a／b／c，PR #3124、#3129、#3135，#3058）。
+- `pdx gate set --expect`（W3b-4，PR #3114）、`pdx gate free <class>-<k>`（W4，PR #3148）。
+- **指令歷史 API** `GET /api/gate/decisions`，紀錄多了 `cpu_s`、`max_rss_mb`、`major_faults`（A1，PR #3123）。
+- **`xcodebuild`、`swift build`／`swift test` 進閘門算重指令**（#3111，PR #3149；絕對路徑呼叫仍會繞過）。
+
+### Added：輔測主機派工（X1、X2a）
+
+- `pdx assist`：主機、開關、允許名單、mlab 保留（發版期間），`pdx gate hosts` 看這個 session 能用哪些輔測主機；開關與允許時通知 session、叫醒守門員（X1a-1…4、X1b，PR #3115、#3119、#3122、#3125、#3133）。
+- 送到輔測主機執行的機制：送出中的 ticket、派送名額、`--wait-max`、遠端執行與串流、失敗與收回退回原位（X2a-1…3，PR #3141、#3146、#3162；自動選機在 X2b，還沒做）。
+
+### Added：日誌與團隊
+
+- 日誌：手動勾選待確認、拿掉釘選（JV-1a，PR #3144）；成員狀態 API（JV-1c，PR #3145）；無人值守面板用團隊名稱稱呼 lead（JV-5a，PR #3140）。
+- 「已寫好接力檔」的清單、小標與 half 結束提示（RA-3，PR #3090、#3091）。
+
+### Fixed／效能
+
+- **daemon CPU 突增（#3092）**：驗證 hook 時不再 fork `ps`（每次 48.5 ms → 0.18 ms，PR #3136）；team sweeper 每輪只讀一次 peers registry（PR #3150）；hook 只讀該 session 的 frames 並共用 pane 列表（每次 1.8 ms → 0.2 ms，`tmux list-panes` 從每次一次降到約每 2 秒一次，PR #3161）。
+- **模擬器的記憶體被重複加總**：樹超過門檻時改用 footprint，`launchd_sim` 樹只看 CPU（#3072，PR #3134）。
+- 測試：`main.test.tsx` 的啟動測試不再在負載下逾時（#3027，PR #3165）。
+- 輔測派工的子行程改經 `execstat` 計數（PR #3170）。
+
+### 文件
+
+- 輔測派工器 spec 補「mlab 發版中」保留；A1 plan（PR #3121）；journal v5 spec＋plan（PR #3138）；fleet spec（PR #3139）。
+
+### 發版測試
+
+- 切點 eba48d594（之後 merge 的歸 750）；部署的執行檔建在這個切點的 bump commit 上。全部在 air26 輔測跑。
+- vitest 全套 1066 檔／19631 項全過（`--maxWorkers=3`）、`tsc -b --force` 綠、`make lint` 綠；`go test -p 3 ./...` 在 39248b1d9 上只有兩紅：
+  - `internal/execstat` 的 fork 守門測試：輔測派工的 4 個檔直接用 `exec.Command`（各張 PR 都沒跑這個掃描整個 repo 的守門測試）→ #3170 修正（daemon 側改走 `execstat`，CLI 側登記 `cliOnly`），切點改到它之後，重跑 `execstat`、`gate`、`module/assist`、`make lint` 全綠。
+  - `internal/hostmem` 的 `TestMach_VMAgreesWithVMStat`：兩次讀取之間空閒頁數差 27887（容許 20000），主機滿載所致；單獨跑 3 次全綠、749 沒改 hostmem → 開 #3168。
+- mod 的 hook 測試沿用 748（hooks 未改）。Electron 未改。
+
 ## [1.0.0-alpha.748] - 2026-10-17
 
 > daemon、`pdx` CLI、SPA 與 **mod** 有改（RT-4a，mod 協定 9），**兩台都要重跑 `pdx setup`**；Electron 沒有改。mlab 與 air26 要同版（member 安靜規則與 roster 欄位兩邊一起看）。

@@ -308,6 +308,7 @@ func TestJournalAPI_PagingFollowsTheOrderNotTheIDs(t *testing.T) {
 // is looked up by the session instead of the team -> a relayed lead finds none (red).
 func TestJournalAPI_TheSeatDecidesTheUnit(t *testing.T) {
 	j := newJournalAPI(t)
+	withLead(j, "t1", "lead-new")
 	team1 := j.unit("team:t1", "日誌")
 	j.write(team1, journal.Entry{ID: "team-entry", Kind: journal.KindExec, At: tm(time.November, 1, 1), Actor: "A", Text: "t"})
 	solo := j.unit("solo:old-lead", "專案 A")
