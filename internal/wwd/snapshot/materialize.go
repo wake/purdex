@@ -57,9 +57,15 @@ func fromClone(ctx context.Context, in MaterializeIn) (Workspace, error) {
 		return Workspace{}, errUseTar
 	}
 	ref := PinRef(in.JobID)
-	if !hasCommit(ctx, in.Clone, in.Commit) {
+	{
+		// The origin is asked even when the clone already holds the commit (an earlier try fetched it): the question is also the check
+		// that the claim is live, and with the commit itself as `have` the answer is nothing_to_send, no download.
+		haves := haveCandidates(ctx, in.Clone, in.Base)
+		if hasCommit(ctx, in.Clone, in.Commit) {
+			haves = []string{in.Commit}
+		}
 		fetched := false
-		for _, have := range haveCandidates(ctx, in.Clone, in.Base) {
+		for _, have := range haves {
 			body, err := in.Client.Bundle(ctx, in.JobID, in.ClaimID, have)
 			switch {
 			case errors.Is(err, ErrHaveUnknown):

@@ -261,3 +261,25 @@ func TestClient_A503IsRetriedThenErrBusy(t *testing.T) {
 	assert.ErrorIs(t, err, ErrBusy)
 	assert.Equal(t, 4, len(always.seen()), "the first try and three retries")
 }
+
+// A clone that already holds the commit (an earlier try fetched it) still has its claim checked by the origin: a stale claim does not
+// get a workspace, a live one needs no download.
+func TestMaterialize_ACommitTheCloneHoldsStillNeedsALiveClaim(t *testing.T) {
+	m := newMaterializeCase(t, "j_11")
+	gitOut(t, m.clone, "fetch", "-q", m.repo, PinRef("j_11")+":refs/held/j_11") // the commit is in the clone now
+	require.True(t, hasCommit(context.Background(), m.clone, m.snap))
+	rec := &recorder{}
+	c := serveRecorded(t, m.src, rec)
+
+	stale := m.in(c, "j_11", filepath.Join(t.TempDir(), "ws"))
+	stale.ClaimID = wire.NewClaimID()
+	_, err := Materialize(context.Background(), stale)
+	assert.ErrorIs(t, err, ErrStaleClaim)
+	_, serr := os.Stat(stale.Dir)
+	assert.True(t, os.IsNotExist(serr))
+
+	ws, err := Materialize(context.Background(), m.in(c, "j_11", filepath.Join(t.TempDir(), "ws")))
+	require.NoError(t, err)
+	checkTree(t, ws.Dir)
+	assert.Equal(t, []string{"bundle", "bundle"}, rec.seen(), "one question each, no download")
+}
