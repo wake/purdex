@@ -184,7 +184,7 @@ describe('setConfirm of an entry only the band holds (an older session / month)'
       setConfirmItem.mockReturnValueOnce(new Promise((r) => { ack = r })).mockResolvedValueOnce({ kind: 'ok', value: true })
       const p1 = st().setConfirm('h1', 's1', 'c9', 0, true, kept())
       expect(band()).toEqual([])
-      const p2 = uncheck()
+      const p2 = st().setConfirm('h1', 's1', 'c9', 0, false) // no caller copy needed: the store still holds it while the write is out
       expect(band()).toEqual(['c9'])
       expect(unit().confirms[0].items[0].done).toBe(false)
       expect(unit().openConfirms).toBe(1)
