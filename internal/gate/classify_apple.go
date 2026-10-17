@@ -1,7 +1,5 @@
 package gate
 
-import "strings"
-
 // Apple toolchains (#3111): xcodebuild and swift. A test run starts a simulator and about eight cores for every run, a package build
 // compiles with several swift-frontend processes of 300 MB each, and none of it went through the gate (air26 reached load 235 with
 // one mutation run that started an `xcodebuild test` per mutant). Heavy: xcodebuild unless it only prints something, `swift build`,
@@ -18,8 +16,7 @@ var xcodebuildInfo = map[string]bool{
 // classifyXcodebuild: whatever xcodebuild is asked to do it builds (the default action is build), unless the line only asks it to print.
 func classifyXcodebuild(args []string) Class {
 	for _, a := range args {
-		name, _, _ := strings.Cut(a, "=")
-		if xcodebuildInfo[name] {
+		if xcodebuildInfo[a] {
 			return ClassNone
 		}
 	}

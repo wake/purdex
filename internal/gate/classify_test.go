@@ -132,6 +132,7 @@ func TestClassify_Table(t *testing.T) {
 		{"swift build --show-bin-path", ClassNone},
 		{"swift test --list-tests", ClassNone},
 		{"swift --version", ClassNone},
+		{"swift build --version", ClassNone},
 		{"swift-build --version", ClassNone},
 		{"swift package resolve", ClassNone},
 		{"swift package describe", ClassNone},
