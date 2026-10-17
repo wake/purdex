@@ -712,6 +712,12 @@ type Waiter struct {
 	RankReason string    `json:"rank_reason,omitempty"`
 	HeldUntil  time.Time `json:"held_until,omitzero"`
 	RankError  string    `json:"rank_error,omitempty"`
+	// ConflictWith and ConflictRule say what a conflict rule keeps the ticket waiting for though there is room ("slot heavy-1" or
+	// "ticket <name>") and which rule ("<a> × <b>"); absent when no rule holds it (spec §5.3).
+	ConflictWith string `json:"conflict_with,omitempty"`
+	ConflictRule string `json:"conflict_rule,omitempty"`
+	// ConflictReason is that rule's reason: why the rule exists, so a person can judge whether it should go.
+	ConflictReason string `json:"conflict_reason,omitempty"`
 }
 
 // Waiters lists the live tickets in serving order (front, normal, back, then the held ones); it removes nothing (a ticket whose

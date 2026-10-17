@@ -37,6 +37,9 @@ func LoadConflicts(dir string) (rules []Conflict, problem string) {
 		if (r.Class != ClassHeavy && r.Class != ClassLight) || len(patternWords(r.A)) == 0 || len(patternWords(r.B)) == 0 {
 			return nil, fmt.Sprintf("conflicts.json: rule %d is not a rule (class %q, patterns %q and %q)", i+1, string(r.Class), r.A, r.B)
 		}
+		if err := validateReason(r.Reason); err != nil {
+			return nil, fmt.Sprintf("conflicts.json: rule %d has a bad reason: %v", i+1, err)
+		}
 		ok = append(ok, r)
 	}
 	return ok, ""
@@ -150,4 +153,20 @@ func walkQueue(class Class, q []QueueEntry, holders []Holder, rules []Conflict, 
 		step("", extra)
 	}
 	return res
+}
+
+// waitersWithConflicts is Waiters with the conflict each waiter is held by, found by the same walk a take makes (capacity: the free
+// slots, less the holders). Read-only, like the rest of the status.
+func (p *Pool) waitersWithConflicts(holders []Holder, rules []Conflict) []Waiter {
+	ws := p.Waiters()
+	if len(rules) == 0 || len(ws) == 0 {
+		return ws
+	}
+	res := walkQueue(p.Class, p.peekSnapshot().Queue, holders, rules, max(p.Size-len(holders), 0), "", nil, nil)
+	for i := range ws {
+		if b := res.Blocked[ws[i].Ticket]; b != nil {
+			ws[i].ConflictWith, ws[i].ConflictRule, ws[i].ConflictReason = b.With, b.Rule.A+" × "+b.Rule.B, b.Rule.Reason
+		}
+	}
+	return ws
 }
