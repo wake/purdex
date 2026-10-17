@@ -307,22 +307,20 @@ func TestRun_TheCommandDoesNotSeeTheNonce(t *testing.T) {
 	assert.Equal(t, "[]\n", out.String())
 }
 
-// A slot that is only obtained after the deadline (the look itself waited) is let go and the command is not run.
+// A slot that is only obtained after the deadline (the look itself waited for the admit lock) is let go and the command is not run.
 func TestRun_WaitMaxCountsFromTheStartOfTheWait(t *testing.T) {
 	g, _ := testGate(t)
-	t0 := time.Now()
-	var calls int
-	g.Now = func() time.Time { // the first look finds the clock a minute on: the slot comes after the deadline
-		calls++
-		if calls > 2 {
-			return t0.Add(time.Minute)
-		}
-		return t0
-	}
+	unlock, err := g.pool(g.Config(), ClassHeavy).lockAdmit() // the first look will wait here, longer than the deadline
+	require.NoError(t, err)
 	dir := t.TempDir()
-	code, _ := g.Run(context.Background(), Options{Argv: sh("touch " + dir + "/ran"), Class: ClassHeavy, Env: cleanEnv(), WaitMax: 5 * time.Second, Stdout: &bytes.Buffer{}})
-	assert.Equal(t, ExitRefused, code)
+	done := make(chan int, 1)
+	go func() {
+		code, _ := g.Run(context.Background(), Options{Argv: sh("touch " + dir + "/ran"), Class: ClassHeavy, Env: cleanEnv(), WaitMax: 200 * time.Millisecond, Stdout: &bytes.Buffer{}})
+		done <- code
+	}()
+	time.Sleep(500 * time.Millisecond)
+	unlock() // a slot is free, but it is past the deadline
+	assert.Equal(t, ExitRefused, <-done)
 	assert.False(t, exists(dir+"/ran"))
-	held := g.pool(g.Config(), ClassHeavy).Held()
-	assert.Empty(t, held, "the slot that came late was let go")
+	assert.Empty(t, g.pool(g.Config(), ClassHeavy).Held(), "the slot that came late was let go")
 }
