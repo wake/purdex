@@ -2,11 +2,11 @@
 // §3.1 U3): the member's current task and state; its last report to the leader. Both come from the LEADER's journal host
 // (`GET /api/journal/members`, gated by `journal.members.v1`), so this reads the lead seat's host. Without the capability the hook
 // answers null and a row stays as it was. A part the daemon sent as null is left out.
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { taskKeyOfTask } from '../../lib/journal/tasks'
 import type { JournalMember } from '../../lib/journal/types'
 import { membersKey, useJournalMembersStore } from '../../stores/useJournalMembersStore'
-import { useJournalStore } from '../../stores/useJournalStore'
+import { selectUnit, useJournalStore } from '../../stores/useJournalStore'
 
 type T = (key: string, params?: Record<string, string | number>) => string
 
@@ -14,17 +14,27 @@ export const MEMBER_REFRESH_DEBOUNCE_MS = 300
 
 /**
  * The leader's member lines keyed by member session id, or null where the leader's host does not declare `journal.members.v1`.
- * Reads once when the panel shows, and again (debounced) after the host says its journal changed.
+ * Reads once when the panel shows; again when the team's member set changes (`rosterKey`: a join, a leave or a relay to a new session
+ * makes no journal.changed), and again (debounced) when THIS leader's unit is marked stale by a journal.changed.
  */
-export function useMemberFeed(leadHostId: string, leadSessionId: string): ReadonlyMap<string, JournalMember> | null {
+export function useMemberFeed(leadHostId: string, leadSessionId: string, rosterKey: string): ReadonlyMap<string, JournalMember> | null {
   const supported = useJournalMembersStore((s) => s.support[leadHostId] === true)
   const list = useJournalMembersStore((s) => s.byLead[membersKey(leadHostId, leadSessionId)])
-  const staleRev = useJournalStore((s) => s.staleRev)
+  // Moves only when a journal.changed named this leader's unit (on this host): another host or unit never changes it.
+  const staleToken = useJournalStore((s) => {
+    const u = selectUnit(s, leadHostId, leadSessionId)
+    return u ? u.staleAt.entries + u.staleAt.tasks : 0
+  })
+  const last = useRef<{ key: string; token: number } | null>(null)
   useEffect(() => {
     if (!supported) return
-    const timer = setTimeout(() => { void useJournalMembersStore.getState().load(leadHostId, leadSessionId) }, staleRev === 0 ? 0 : MEMBER_REFRESH_DEBOUNCE_MS)
+    const key = `${leadHostId}\u0000${leadSessionId}\u0000${rosterKey}`
+    // Only a moved stale token waits out the debounce; showing the panel or a changed member set reads at once.
+    const debounce = last.current !== null && last.current.key === key && last.current.token !== staleToken
+    last.current = { key, token: staleToken }
+    const timer = setTimeout(() => { void useJournalMembersStore.getState().load(leadHostId, leadSessionId) }, debounce ? MEMBER_REFRESH_DEBOUNCE_MS : 0)
     return () => clearTimeout(timer)
-  }, [supported, leadHostId, leadSessionId, staleRev])
+  }, [supported, leadHostId, leadSessionId, rosterKey, staleToken])
   return useMemo(() => (supported ? new Map((list ?? []).map((m) => [m.sessionId, m])) : null), [supported, list])
 }
 
