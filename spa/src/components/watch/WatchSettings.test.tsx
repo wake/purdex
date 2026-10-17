@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useHostStore } from '../../stores/useHostStore'
+import { clearWatchDrafts, readWatchDraft, watchDraftKey } from '../../lib/watch/draft-memory'
 
 const hostFetch = vi.fn()
 vi.mock('../../lib/host-api', async (orig) => ({ ...(await orig<typeof import('../../lib/host-api')>()), hostFetch: (...a: unknown[]) => hostFetch(...a) }))
@@ -139,6 +140,59 @@ describe('WatchSettings — the 守門員 section', () => {
     edit('y_mb', '2048')
     expect(await screen.findByTestId('watch-set-error-y_mb')).toBeInTheDocument()
     expect(screen.getByTestId('watch-set-y_mb')).toHaveValue('1024')
+  })
+
+  describe('unsent text', () => {
+    const key = (field: string) => watchDraftKey('A', 'd-a', field)
+    beforeEach(() => clearWatchDrafts())
+
+    it('a 400 and a 409 both end the written field\'s draft', async () => {
+      putReply = () => new Response('y_mb must be between 64 and 1048576', { status: 400 })
+      daemonPage()
+      await screen.findByTestId('watch-set-y_mb')
+      fireEvent.change(screen.getByTestId('watch-set-y_mb'), { target: { value: '5' } })
+      expect(readWatchDraft(key('y_mb'))).toBe('5')
+      fireEvent.blur(screen.getByTestId('watch-set-y_mb'))
+      await screen.findByTestId('watch-set-error-y_mb')
+      expect(readWatchDraft(key('y_mb'))).toBeUndefined()
+
+      putReply = () => json(409, { items: { ...FULL }, revision: 4 })
+      fireEvent.change(screen.getByTestId('watch-set-t_s'), { target: { value: '90' } })
+      fireEvent.blur(screen.getByTestId('watch-set-t_s'))
+      await screen.findByTestId('watch-set-conflict')
+      expect(readWatchDraft(key('t_s'))).toBeUndefined()
+      expect(screen.getByTestId('watch-set-t_s')).toHaveValue('60')
+    })
+
+    it('a 409 restores only the field that was written; another field\'s draft stays, marked as updated on the host', async () => {
+      putReply = () => json(409, { items: { ...FULL, y_mb: 999, t_s: 77 }, revision: 4 })
+      daemonPage()
+      await screen.findByTestId('watch-set-y_mb')
+      fireEvent.change(screen.getByTestId('watch-set-y_mb'), { target: { value: '5000' } }) // typed, not sent
+      fireEvent.change(screen.getByTestId('watch-set-t_s'), { target: { value: '90' } })
+      fireEvent.blur(screen.getByTestId('watch-set-t_s'))
+      await screen.findByTestId('watch-set-conflict')
+      expect(screen.getByTestId('watch-set-t_s')).toHaveValue('77') // the written field shows the host's copy
+      expect(screen.getByTestId('watch-set-y_mb')).toHaveValue('5000') // the other keeps what the reader typed
+      expect(readWatchDraft(key('y_mb'))).toBe('5000')
+      expect(screen.getByTestId('watch-set-stale-y_mb')).toHaveTextContent(t('watch.set.stale'))
+      // The reader decides: take the host's value.
+      fireEvent.click(screen.getByTestId('watch-set-stale-use-y_mb'))
+      expect(screen.getByTestId('watch-set-y_mb')).toHaveValue('999')
+      expect(readWatchDraft(key('y_mb'))).toBeUndefined()
+      expect(screen.queryByTestId('watch-set-stale-y_mb')).toBeNull()
+    })
+
+    it('an untouched field follows the host\'s copy quietly', async () => {
+      putReply = () => json(409, { items: { ...FULL, y_mb: 999 }, revision: 4 })
+      daemonPage()
+      await screen.findByTestId('watch-set-y_mb')
+      fireEvent.change(screen.getByTestId('watch-set-t_s'), { target: { value: '90' } })
+      fireEvent.blur(screen.getByTestId('watch-set-t_s'))
+      await screen.findByTestId('watch-set-conflict')
+      expect(screen.getByTestId('watch-set-y_mb')).toHaveValue('999')
+      expect(screen.queryByTestId('watch-set-stale-y_mb')).toBeNull()
+    })
   })
 
   it('a value that is not a number is refused here, nothing is sent', async () => {

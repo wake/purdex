@@ -47,24 +47,48 @@ function TextControl({ k, kind, stored, onCommit, label, draftKey }: {
   const [draft, setDraftState] = useState(() => readWatchDraft(draftKey) ?? stored)
   const setDraft = (text: string) => { writeWatchDraft(draftKey, text); setDraftState(text) }
   const settle = (text: string) => { forgetWatchDraft(draftKey); setDraftState(text) }
-  // A stored value that changed under the box (a write landed, a 409 reloaded) replaces whatever was typed.
+  const t = useI18nStore((s) => s.t)
+  const [stale, setStale] = useState(false)
+  // The row is written whole, so a write by ANOTHER field can bring this field a new stored value (a 409's copy). With text of the
+  // reader's own in the box that text stays, marked; the reader chooses to send it or to take the host's value. A box with no draft
+  // just follows the stored value.
   const seen = useRef(stored)
   useEffect(() => {
-    if (seen.current !== stored) { seen.current = stored; settle(stored) }
+    if (seen.current === stored) return
+    seen.current = stored
+    const typed = readWatchDraft(draftKey)
+    if (typed !== undefined && typed !== stored) { setStale(true); return }
+    settle(stored)
+    setStale(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- settle only closes over the key
   }, [stored])
   const commit = async () => {
     if (draft === stored) { forgetWatchDraft(draftKey); return }
+    // The text is on its way: from here it is the write's, not a draft. Sent, refused (400) or reloaded (409), the draft has ended.
+    forgetWatchDraft(draftKey)
+    setStale(false)
     const ok = await onCommit(draft)
-    forgetWatchDraft(draftKey) // sent, refused (400) or reloaded (409): the draft has ended either way
-    if (!ok) setDraftState(stored)
+    if (!ok) setDraftState(stored) // only the field that was written is put back
   }
-  if (kind === 'textarea') {
-    return <textarea aria-label={label} data-testid={`watch-set-${k}`} rows={3} className={`${INPUT} w-96 font-mono`} value={draft}
+  const control = kind === 'textarea' ? (
+    <textarea aria-label={label} data-testid={`watch-set-${k}`} rows={3} className={`${INPUT} w-96 font-mono`} value={draft}
       onChange={(e) => setDraft(e.target.value)} onBlur={() => void commit()} />
-  }
-  return <input aria-label={label} data-testid={`watch-set-${k}`} className={`${INPUT} ${kind === 'text' ? 'w-96 font-mono' : ''}`} value={draft}
-    onChange={(e) => setDraft(e.target.value)} onBlur={() => void commit()} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }} />
+  ) : (
+    <input aria-label={label} data-testid={`watch-set-${k}`} className={`${INPUT} ${kind === 'text' ? 'w-96 font-mono' : ''}`} value={draft}
+      onChange={(e) => setDraft(e.target.value)} onBlur={() => void commit()} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }} />
+  )
+  return (
+    <>
+      {control}
+      {stale && (
+        <span data-testid={`watch-set-stale-${k}`} className="flex items-center gap-2 text-xs text-status-warning-text">
+          {t('watch.set.stale')}
+          <button type="button" data-testid={`watch-set-stale-use-${k}`} onClick={() => { settle(stored); setStale(false) }}
+            className="px-2 py-0.5 rounded bg-surface-tertiary text-text-secondary cursor-pointer">{t('watch.set.stale_use')}</button>
+        </span>
+      )}
+    </>
+  )
 }
 
 /** 守門員: one daemon host's `watch` row. `peerIds` are the other daemon hosts, read only to compare `targets`. */
