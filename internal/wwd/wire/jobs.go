@@ -52,6 +52,7 @@ type Summary struct {
 
 // Result is a job's stored outcome (spec §4.1). Exit is null when no command
 // outcome exists (cancelled, expired); SupersededBy is null unless superseded.
+// Reason is a free string, not an enumeration: lost, oom, timeout, infra, queue_timeout… (WWD-0 M-L classes).
 type Result struct {
 	Exit         *int       `json:"exit"`
 	Summary      *Summary   `json:"summary"`
@@ -66,23 +67,58 @@ type Result struct {
 
 // Job is the queue record (spec §4.1). It never carries a claim_id.
 type Job struct {
-	ID           string    `json:"id"`
-	Origin       string    `json:"origin"`
-	Repo         Repo      `json:"repo"`
-	Snapshot     Snapshot  `json:"snapshot"`
-	Task         string    `json:"task"`
-	Args         []string  `json:"args"`
-	Class        JobClass  `json:"class"`
-	Labels       []string  `json:"labels"`
-	Locks        []string  `json:"locks"`
-	Cacheable    bool      `json:"cacheable"`
-	TimeoutS     int       `json:"timeout_s"`
-	SupersedeKey string    `json:"supersede_key"`
-	Submitter    Submitter `json:"submitter"`
-	CreatedAt    time.Time `json:"created_at"`
-	State        JobState  `json:"state"`
-	Claim        *Claim    `json:"claim"`
-	Result       *Result   `json:"result"`
+	ID           string   `json:"id"`
+	Origin       string   `json:"origin"`
+	Repo         Repo     `json:"repo"`
+	Snapshot     Snapshot `json:"snapshot"`
+	Task         string   `json:"task"`
+	Args         []string `json:"args"`
+	Class        JobClass `json:"class"`
+	Labels       []string `json:"labels"`
+	Locks        []string `json:"locks"`
+	Cacheable    bool     `json:"cacheable"`
+	TimeoutS     int      `json:"timeout_s"`
+	SupersedeKey string   `json:"supersede_key"`
+	// Interruptible, QueueTimeoutS and AdHoc are properties of the task that the submitter copies from the manifest at submit time
+	// (the origin never rereads a manifest). Interruptible: a newer job with the same supersede_key may stop this one while it runs.
+	// QueueTimeoutS: 0 means the default (2 h). AdHoc: an undeclared command (spec §8.3); it is never listed to peers.
+	Interruptible bool      `json:"interruptible"`
+	QueueTimeoutS int       `json:"queue_timeout_s"`
+	AdHoc         bool      `json:"adhoc"`
+	Submitter     Submitter `json:"submitter"`
+	CreatedAt     time.Time `json:"created_at"`
+	State         JobState  `json:"state"`
+	Claim         *Claim    `json:"claim"`
+	Result        *Result   `json:"result"`
+}
+
+// JobSubmission is the body of POST /v1/jobs (local socket only, spec §4.4): what the submitter fixes. The origin assigns the
+// id, state, created_at, claim and result, so a submission carrying any of them is rejected.
+type JobSubmission struct {
+	Repo          Repo      `json:"repo"`
+	Snapshot      Snapshot  `json:"snapshot"`
+	Task          string    `json:"task"`
+	Args          []string  `json:"args"`
+	Class         JobClass  `json:"class"`
+	Labels        []string  `json:"labels"`
+	Locks         []string  `json:"locks"`
+	Cacheable     bool      `json:"cacheable"`
+	TimeoutS      int       `json:"timeout_s"`
+	SupersedeKey  string    `json:"supersede_key"`
+	Interruptible bool      `json:"interruptible"`
+	QueueTimeoutS int       `json:"queue_timeout_s"`
+	AdHoc         bool      `json:"adhoc"`
+	Submitter     Submitter `json:"submitter"`
+}
+
+func (s JobSubmission) Validate() error {
+	if !s.Class.Valid() {
+		return fmt.Errorf("submission: invalid class %q", s.Class)
+	}
+	if err := validatePayload(s.Task, s.Repo, s.Snapshot, s.TimeoutS, s.QueueTimeoutS); err != nil {
+		return fmt.Errorf("submission: %w", err)
+	}
+	return nil
 }
 
 func (j Job) Validate() error {
@@ -91,6 +127,26 @@ func (j Job) Validate() error {
 	}
 	if !j.State.Valid() {
 		return fmt.Errorf("job: invalid state %q", j.State)
+	}
+	if j.ID == "" || j.Origin == "" {
+		return fmt.Errorf("job: missing id or origin")
+	}
+	// the same payload checks as a submission: a job that cannot be indexed, fetched or run is refused at the boundary
+	return validatePayload(j.Task, j.Repo, j.Snapshot, j.TimeoutS, j.QueueTimeoutS)
+}
+
+func validatePayload(task string, repo Repo, snap Snapshot, timeoutS, queueTimeoutS int) error {
+	switch {
+	case task == "":
+		return fmt.Errorf("missing task")
+	case repo.Name == "":
+		return fmt.Errorf("missing repo name")
+	case snap.Commit == "":
+		return fmt.Errorf("missing snapshot commit")
+	case timeoutS < 0:
+		return fmt.Errorf("negative timeout_s")
+	case queueTimeoutS < 0:
+		return fmt.Errorf("negative queue_timeout_s")
 	}
 	return nil
 }

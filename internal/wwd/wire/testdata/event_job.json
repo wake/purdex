@@ -28,6 +28,7 @@
    "locks": [],
    "cacheable": true,
    "timeout_s": 1800,
+  "interruptible": false, "queue_timeout_s": 0, "adhoc": false,
    "supersede_key": "deadbeef:spa-related",
    "submitter": {
     "session": "s1",
