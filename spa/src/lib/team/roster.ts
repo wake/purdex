@@ -25,6 +25,8 @@ export interface RosterSession {
   name?: string
   /** The tmux session NAME; absent when the session is not in tmux. */
   tmux_session?: string
+  /** The tmux server generation this seat was bound to; absent from an older daemon (or a non-string value). */
+  tmux_instance?: string
   live: boolean
   model?: string
   effort?: string
@@ -165,7 +167,7 @@ const HOST_ID_MAX = 128
  *  and free of control / formatting characters (the alias also non-blank). Anything else is dropped (the field is absent),
  *  never a reason to drop the frame. */
 function cleanHost<T extends RosterSession>(s: T): T {
-  const { host_id, host_alias, host_untrusted: _wire, context_unavailable, paused: wirePaused, fresh_handoff: wireFresh, ...rest } = s
+  const { host_id, host_alias, host_untrusted: _wire, context_unavailable, paused: wirePaused, fresh_handoff: wireFresh, tmux_instance, ...rest } = s
   void _wire // computed here, never taken from the wire
   const idOk = isStr(host_id) && host_id.length <= HOST_ID_MAX && !UNPRINTABLE.test(host_id)
   // A host_id that was sent (not absent, not "") but failed the check says "another host, whom we cannot name": dropping it
@@ -179,6 +181,7 @@ function cleanHost<T extends RosterSession>(s: T): T {
     ...(idOk ? { host_id } : {}),
     ...(untrusted ? { host_untrusted: true } : {}),
     ...(aliasOk ? { host_alias } : {}),
+    ...(isStr(tmux_instance) && tmux_instance !== '' ? { tmux_instance } : {}), // a non-string reads as absent
     ...(context_unavailable === true ? { context_unavailable: true } : {}),
     ...(paused !== null ? { paused } : {}),
     ...(freshHandoff !== null ? { fresh_handoff: freshHandoff } : {}),
