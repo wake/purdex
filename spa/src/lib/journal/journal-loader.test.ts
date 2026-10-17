@@ -266,6 +266,22 @@ describe('journal.changed', () => {
     expect(getJournal).not.toHaveBeenCalled()
   })
 
+  it('what: roadmap re-reads the roadmap only, and only once the roadmap was loaded', async () => {
+    getRoadmap.mockResolvedValue({ kind: 'ok', value: [] })
+    stop = startJournalLoader()
+    await flush()
+    getJournal.mockClear()
+    changed('h1', 'unit-sA', 'roadmap') // the roadmap never opened: the flag waits, nothing is read
+    await vi.advanceTimersByTimeAsync(STALE_DEBOUNCE_MS * 2)
+    expect(getRoadmap).not.toHaveBeenCalled()
+    await store().loadRoadmap('h1', 'sA')
+    getRoadmap.mockClear()
+    changed('h1', 'unit-sA', 'roadmap')
+    await vi.advanceTimersByTimeAsync(STALE_DEBOUNCE_MS)
+    expect(getRoadmap).toHaveBeenCalledTimes(1)
+    expect(getJournal).not.toHaveBeenCalled()
+  })
+
   it('a hidden unit\'s event fetches nothing; when its tab becomes active it is read once', async () => {
     stop = startJournalLoader()
     await flush()
