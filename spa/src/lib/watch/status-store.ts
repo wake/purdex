@@ -105,6 +105,9 @@ export function deriveGuardian(byHost: Record<string, WatchEntry>): Guardian {
   return { state: anyOk ? 'none' : 'unknown', tmuxSession: PDX_WATCH_SESSION, reachable: true }
 }
 
+/** When a host whose /api/info could not be read is asked again: 5 s, 15 s, 60 s after the failures, then it stops. */
+export const INFO_RETRY_MS = [5_000, 15_000, 60_000] as const
+
 /** The running reader's re-read of one host (null while `startWatchStatus` is not running). */
 let rereader: ((hostId: string) => void) | null = null
 
@@ -121,6 +124,7 @@ export function startWatchStatus(): () => void {
     const s = useHostStore.getState()
     return !!s.hosts[hostId] && s.runtime[hostId]?.status === 'connected'
   }
+  const timers = new Set<ReturnType<typeof setTimeout>>()
 
   // The connection a read was sent on (ip, port, token). A re-point leaves the runtime `connected`, so the generation and the
   // connected check alone would let the old endpoint's answer in; the identity is compared at write-back as well.
@@ -135,13 +139,31 @@ export function startWatchStatus(): () => void {
     // A watch host is one whose /api/info lists `watch.v1`, read through the nex host store (it holds every host's capabilities:
     // no second /api/info). Its status route is not asked otherwise: the route exists whenever the module is registered,
     // ready or not.
-    const asked = useNexHostStore.getState().ensure(hostId)
-      .then(() => (selectWatchV1(hostId)(useNexHostStore.getState()) ? fetchWatchStatus(hostId) : { kind: 'unsupported' as const }))
-      .catch(() => ({ kind: 'error' as const }))
-    void asked.then((r) => {
-      if (gens.get(hostId) !== gen || !isConnected(hostId) || identityOf(hostId) !== identity) return
-      useWatchStatusStore.getState().set(hostId, r.kind === 'ok' ? { kind: 'ok', status: r.status, at: Date.now() } : { kind: r.kind, at: Date.now() })
-    })
+    //
+    // "/api/info could not be read" is not "not a watch host": only an /api/info that WAS read (the entry carries its capabilities,
+    // even an empty list) and lacks `watch.v1` settles as unsupported. A read that failed leaves the host unsettled and is asked
+    // again at 5, 15 and 60 s; if the last one fails too the host settles as an error. A timer rather than a subscription to
+    // the nex entry: the nex store's own entry is shared, refetched on its TTL and by whoever else asks, and a bounded retry
+    // here does not depend on any of that happening.
+    const current = (): boolean => gens.get(hostId) === gen && isConnected(hostId) && identityOf(hostId) === identity
+    const settle = (e: WatchEntry): void => { if (current()) useWatchStatusStore.getState().set(hostId, e) }
+    const attempt = (n: number): void => {
+      void useNexHostStore.getState().ensure(hostId).catch(() => {}).then(async () => {
+        if (!current()) return
+        const nex = useNexHostStore.getState()
+        if (nex.byHost[hostId]?.daemonCapabilities === undefined) {
+          if (n < INFO_RETRY_MS.length) {
+            const t = setTimeout(() => { timers.delete(t); if (current()) attempt(n + 1) }, INFO_RETRY_MS[n])
+            timers.add(t)
+          } else settle({ kind: 'error', at: Date.now() })
+          return
+        }
+        if (!selectWatchV1(hostId)(nex)) return settle({ kind: 'unsupported', at: Date.now() })
+        const r = await fetchWatchStatus(hostId).catch(() => ({ kind: 'error' as const }))
+        settle(r.kind === 'ok' ? { kind: 'ok', status: r.status, at: Date.now() } : { kind: r.kind, at: Date.now() })
+      })
+    }
+    attempt(0)
   }
   // A push starts a new read under a new generation, so an older answer still in flight cannot land after it.
   rereader = (hostId) => { if (isConnected(hostId)) { bump(hostId); read(hostId) } }
@@ -165,6 +187,8 @@ export function startWatchStatus(): () => void {
 
   return () => {
     unsub()
+    for (const t of timers) clearTimeout(t)
+    timers.clear()
     rereader = null
   }
 }

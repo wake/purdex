@@ -132,6 +132,7 @@ describe('startWatchStatus', () => {
     let first!: (v: unknown) => void
     fetchWatchStatus.mockReturnValueOnce(new Promise((r) => { first = r }))
     stop = startWatchStatus()
+    await vi.advanceTimersByTimeAsync(0) // the first read has reached the status request (it waits for /api/info first)
     fetchWatchStatus.mockResolvedValueOnce({ kind: 'ok', status: st('da', 'resting', '2026-10-16T03:00:00Z') })
     rereadWatchStatus('h1')
     await vi.advanceTimersByTimeAsync(0)
@@ -194,12 +195,60 @@ describe('startWatchStatus', () => {
     expect(useWatchStatusStore.getState().byHost.h1.kind).toBe('ok')
   })
 
-  it('an /api/info that could not be read is not a watch host either', async () => {
-    useNexHostStore.setState({ byHost: {}, ensure: async () => {} } as never)
+  // `/api/info` not read (the nex host store's entry has no capabilities) is "not known yet", not "not a watch host".
+  const flaky = (okFrom: number) => {
+    let calls = 0
+    useNexHostStore.setState({ byHost: {}, ensure: async () => { calls++; if (calls >= okFrom) useNexHostStore.setState({ byHost: { h1: infoOf('watch.v1') } } as never) } } as never)
+    return () => calls
+  }
+
+  it('an /api/info that could not be read is not written as unsupported: it is asked again, and the status follows', async () => {
+    const calls = flaky(2)
     setHosts(['h1'], ['h1'])
     stop = startWatchStatus()
     await vi.advanceTimersByTimeAsync(0)
     expect(fetchWatchStatus).not.toHaveBeenCalled()
+    expect(useWatchStatusStore.getState().byHost.h1).toBeUndefined() // not settled, so nothing downstream decides on it
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(calls()).toBe(2)
+    expect(fetchWatchStatus).toHaveBeenCalledTimes(1)
+    expect(useWatchStatusStore.getState().byHost.h1.kind).toBe('ok')
+  })
+
+  it('asks again after 5 s, 15 s and 60 s, then settles on an error (not unsupported)', async () => {
+    const calls = flaky(99)
+    setHosts(['h1'], ['h1'])
+    stop = startWatchStatus()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls()).toBe(1)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(calls()).toBe(2)
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(calls()).toBe(3)
+    expect(useWatchStatusStore.getState().byHost.h1).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(calls()).toBe(4)
+    expect(useWatchStatusStore.getState().byHost.h1.kind).toBe('error')
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
+    expect(calls()).toBe(4) // bounded: it stops
+    expect(fetchWatchStatus).not.toHaveBeenCalled()
+  })
+
+  it('a retry of a host that has since disconnected or been re-pointed does nothing', async () => {
+    const calls = flaky(99)
+    setHosts(['h1'], ['h1'])
+    stop = startWatchStatus()
+    await vi.advanceTimersByTimeAsync(0)
+    setHosts(['h1'], [])
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(calls()).toBe(1)
+  })
+
+  it('a /api/info that was read and does not list watch.v1 is unsupported at once, with no retry', async () => {
+    useNexHostStore.setState({ byHost: { h1: infoOf('fleet.v1') }, ensure: async () => {} } as never)
+    setHosts(['h1'], ['h1'])
+    stop = startWatchStatus()
+    await vi.advanceTimersByTimeAsync(0)
     expect(useWatchStatusStore.getState().byHost.h1.kind).toBe('unsupported')
   })
 })

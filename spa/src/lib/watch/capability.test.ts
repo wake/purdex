@@ -55,3 +55,23 @@ describe('the events tab and the events read follow /api/info', () => {
     expect(useWorkspaceStore.getState().workspaces.find((w) => w.id === 'watch')!.tabs).toContain(WATCH_EVENTS_TAB_ID)
   })
 })
+
+describe('an /api/info that fails once and then recovers, with no reconnect and no push', () => {
+  it('the status becomes ok and the events are read', async () => {
+    vi.useFakeTimers()
+    try {
+      let calls = 0
+      useNexHostStore.setState({ byHost: {}, ensure: async () => { calls++; if (calls >= 2) useNexHostStore.setState({ byHost: { h1: infoOf('watch.v1') } } as never) } } as never)
+      stops.push(startWatchStatus(), startWatchEvents())
+      await vi.advanceTimersByTimeAsync(0)
+      expect(fetchWatchEvents).not.toHaveBeenCalled()
+      expect(useWatchStatusStore.getState().byHost.h1).toBeUndefined()
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(useWatchStatusStore.getState().byHost.h1.kind).toBe('ok')
+      expect(fetchWatchEvents).toHaveBeenCalledTimes(1)
+      expect(useWatchEventsStore.getState().byHost.h1.kind).toBe('ok')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
