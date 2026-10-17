@@ -18,4 +18,9 @@ export const readQueueTab = (fleetHostId: string): QueueTab => queueTabs.get(fle
 export const writeQueueTab = (fleetHostId: string, tab: QueueTab): void => { queueTabs.set(fleetHostId, tab) }
 export const readEventFilters = (): EventFilters => eventFilters
 export const writeEventFilters = (f: EventFilters): void => { eventFilters = f }
-export const clearViewMemory = (): void => { ranges.clear(); queueTabs.clear(); eventFilters = DEFAULT_FILTERS }
+/** The host tab's page: 狀態 (the readings) or 設定 (W5c1). */
+export type HostPage = 'status' | 'settings'
+const pages = new Map<string, HostPage>()
+export const readHostPage = (fleetHostId: string): HostPage => pages.get(fleetHostId) ?? 'status'
+export const writeHostPage = (fleetHostId: string, page: HostPage): void => { pages.set(fleetHostId, page) }
+export const clearViewMemory = (): void => { ranges.clear(); queueTabs.clear(); pages.clear(); eventFilters = DEFAULT_FILTERS }

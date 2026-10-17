@@ -23,6 +23,11 @@ type fakeHosts struct {
 	start  []string
 	// startOK / wakeOK: whether those succeed on that host
 	startFail, wakeFail map[string]bool
+	// startingOn: hosts whose start or wake is in progress, so they answer "starting" instead of awake.
+	startingOn   map[string]bool
+	wakeStarting map[string]bool
+	// startLost: hosts whose start call fails with a transport error (the call may have worked there).
+	startLost map[string]bool
 }
 
 func (f *fakeHosts) Holder(_ context.Context, a string) (HolderAnswer, error) {
@@ -46,6 +51,11 @@ func (f *fakeHosts) Wake(_ context.Context, a string) (HolderAnswer, error) {
 	if f.wakeFail[a] {
 		return HolderAnswer{}, ErrNoSession
 	}
+	if f.wakeStarting[a] {
+		h := f.hold[a]
+		h.Starting = true
+		return h, nil
+	}
 	h := f.hold[a]
 	h.State = HolderAwake
 	f.hold[a] = h
@@ -56,8 +66,16 @@ func (f *fakeHosts) Start(_ context.Context, a string) (HolderAnswer, error) {
 	f.fmu.Lock()
 	defer f.fmu.Unlock()
 	f.start = append(f.start, a)
+	if f.startLost[a] {
+		return HolderAnswer{}, errors.New("timeout")
+	}
 	if f.startFail[a] {
 		return HolderAnswer{}, ErrNoSession
+	}
+	if f.startingOn[a] {
+		h := f.hold[a]
+		h.Starting = true
+		return h, nil
 	}
 	h := f.hold[a]
 	h.State, h.SessionID = HolderAwake, "new-on-"+a
@@ -580,4 +598,53 @@ func TestLocate_AnUncertainHostThatAnswersNoneEndsTheBlockAndTheNormalStepsGoOn(
 	w, err := l.Current(context.Background(), targets, true)
 	require.NoError(t, err)
 	require.Equal(t, "air26", w.Alias, "started on the first target again, now with an answer")
+}
+
+// A host that answers a start with "in progress" is not passed over: nothing is started on the next target, and that host is the one
+// the locator waits for.
+func TestLocate_AStartThatIsInProgressBlocksAStartElsewhere(t *testing.T) {
+	f := &fakeHosts{hold: map[string]HolderAnswer{
+		"air26": hostAns("a:1", HolderNone, "", "air26", "mlab"),
+		"mlab":  hostAns("m:1", HolderNone, "", "air26", "mlab"),
+	}, startingOn: map[string]bool{"air26": true}}
+	l, _ := newLoc(t, f)
+	_, err := l.Current(context.Background(), targets, true)
+	require.ErrorIs(t, err, ErrNoWatcher)
+	require.Equal(t, []string{"air26"}, f.start, "mlab was not asked to start one")
+	alias, _, ok := l.Uncertain()
+	require.True(t, ok)
+	require.Equal(t, "air26", alias)
+}
+
+func TestLocate_AWakeThatIsInProgressBlocksAStartElsewhere(t *testing.T) {
+	f := &fakeHosts{hold: map[string]HolderAnswer{
+		"air26": hostAns("a:1", HolderNone, "", "air26", "mlab"),
+		"mlab":  hostAns("m:1", HolderResting, "s-rest", "air26", "mlab"),
+	}, startingOn: map[string]bool{"mlab": true}}
+	l, _ := newLoc(t, f)
+	l.mem.Last = &Where{Alias: "mlab", HostID: "m:1", SessionID: "s-rest", State: HolderResting}
+	f.startingOn = nil
+	f.wakeStarting = map[string]bool{"mlab": true}
+	_, err := l.Current(context.Background(), targets, true)
+	require.ErrorIs(t, err, ErrNoWatcher)
+	require.Empty(t, f.start, "nothing was started on air26")
+}
+
+// The start call was cut off, and the holder question that follows says the start is going on there: that is not "settled", so nothing
+// is started on the next target.
+func TestLocate_AStartCutOffWhoseHostSaysItIsStartingBlocksAStartElsewhere(t *testing.T) {
+	starting := hostAns("a:1", HolderNone, "", "air26", "mlab")
+	starting.Starting = true
+	f := &fakeHosts{hold: map[string]HolderAnswer{
+		"air26": hostAns("a:1", HolderNone, "", "air26", "mlab"),
+		"mlab":  hostAns("m:1", HolderNone, "", "air26", "mlab"),
+	}, startLost: map[string]bool{"air26": true}}
+	l, _ := newLoc(t, f)
+	f.hold["air26"] = starting // what the host says once the call is lost; the first probe already ran with it
+	_, err := l.Current(context.Background(), targets, true)
+	require.ErrorIs(t, err, ErrNoWatcher)
+	require.Equal(t, []string{"air26"}, f.start)
+	alias, _, ok := l.Uncertain()
+	require.True(t, ok)
+	require.Equal(t, "air26", alias)
 }

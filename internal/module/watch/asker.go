@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/watch"
@@ -27,7 +28,8 @@ type hostCaller interface {
 // SessionControl is what the session part (W3) gives this module so the host it runs on can wake or start the watcher itself; it
 // answers the holder state after. Nil until W3: the host then cannot start or wake one.
 type SessionControl interface {
-	Wake(ctx context.Context) (watch.HolderAnswer, error)
+	// Wake resumes the resting watcher with the wake prompt followed by prompt (what woke it; "" is none).
+	Wake(ctx context.Context, prompt string) (watch.HolderAnswer, error)
 	Start(ctx context.Context) (watch.HolderAnswer, error)
 }
 
@@ -41,7 +43,7 @@ func (m *Module) isSelf(alias string) bool {
 }
 
 func answerOf(v HolderView) watch.HolderAnswer {
-	return watch.HolderAnswer{HostID: v.HostID, State: watch.HolderState(v.State), SessionID: v.SessionID, Since: v.Since, Targets: v.Targets}
+	return watch.HolderAnswer{HostID: v.HostID, State: watch.HolderState(v.State), SessionID: v.SessionID, Since: v.Since, Targets: v.Targets, Starting: v.Starting}
 }
 
 func (a asker) Holder(ctx context.Context, alias string) (watch.HolderAnswer, error) {
@@ -57,7 +59,7 @@ func (a asker) Wake(ctx context.Context, alias string) (watch.HolderAnswer, erro
 		if a.m.session == nil {
 			return watch.HolderAnswer{}, watch.ErrNoSession
 		}
-		return a.m.session.Wake(ctx)
+		return a.m.session.Wake(ctx, "")
 	}
 	return a.call(ctx, alias, pathWake)
 }
@@ -97,6 +99,11 @@ func (a asker) call(ctx context.Context, alias, path string) (watch.HolderAnswer
 		return watch.HolderAnswer{}, watch.ErrNoSession // wake / start are not there on that host
 	case peersmod.ClassRefused:
 		if path != pathHolder {
+			if res.Code == "cooldown" { // a failed start there: when the next may be tried
+				if until, err := time.Parse(time.RFC3339, res.Detail); err == nil {
+					a.m.cooldowns.note(alias, until)
+				}
+			}
 			return watch.HolderAnswer{}, watch.ErrNoSession // the host said no (no consent, nothing to wake)
 		}
 	}

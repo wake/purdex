@@ -19,7 +19,7 @@ export interface MemberKeysInput {
   liveRosterHosts: ReadonlySet<string>
   /** Hosts whose session list arrived on THEIR CURRENT connection (R4): a seat is mapped only through such a list. */
   liveSessionHosts: ReadonlySet<string>
-  sessionsByHost: Record<string, ReadonlyArray<Pick<Session, 'code' | 'name'>>>
+  sessionsByHost: Record<string, ReadonlyArray<Pick<Session, 'code' | 'name' | 'tmux_instance'>>>
   /** Wire (daemon) id → SPA host id, for members of a cross-host team (see `teamHostMap`). Absent = none. */
   hostIdByDaemonId?: Record<string, string>
 }
@@ -27,12 +27,12 @@ export interface MemberKeysInput {
 export function activeMemberKeys(input: MemberKeysInput): Set<string> {
   const keys = new Set<string>()
   // One name → code index per host (the first row of a name wins, as a linear find would), built on first use.
-  const index = new Map<string, Map<string, string>>()
-  const codeByName = (hostId: string): Map<string, string> => {
+  const index = new Map<string, Map<string, { code: string; instance: string }>>()
+  const codeByName = (hostId: string): Map<string, { code: string; instance: string }> => {
     let m = index.get(hostId)
     if (!m) {
       m = new Map()
-      for (const s of input.sessionsByHost[hostId] ?? []) if (!m.has(s.name)) m.set(s.name, s.code)
+      for (const s of input.sessionsByHost[hostId] ?? []) if (!m.has(s.name)) m.set(s.name, { code: s.code, instance: s.tmux_instance ?? '' })
       index.set(hostId, m)
     }
     return m
@@ -44,8 +44,12 @@ export function activeMemberKeys(input: MemberKeysInput): Set<string> {
         if (transitionOf(m) !== null || !m.tmux_session) continue // not joining / releasing / killing; an unknown state is active (roster.ts)
         const { hostId } = seatHostOf(team, m, leadHostId, input.hostIdByDaemonId)
         if (hostId === null || !input.liveSessionHosts.has(hostId)) continue // the seat host's list must be this connection's too (R4)
-        const code = codeByName(hostId).get(m.tmux_session)
-        if (code !== undefined) keys.add(compositeKey(hostId, code))
+        const hit = codeByName(hostId).get(m.tmux_session)
+        if (hit === undefined) continue
+        // The tmux generation (R4): a seat that carries one counts only against a row with the SAME non-empty one ("" = unknown,
+        // never a match), so a seat from before a tmux restart cannot claim a new session that reuses the name.
+        if (m.tmux_instance && (hit.instance === '' || hit.instance !== m.tmux_instance)) continue
+        keys.add(compositeKey(hostId, hit.code))
       }
     }
   }
