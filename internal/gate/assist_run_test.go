@@ -151,7 +151,7 @@ pid = os.fork()
 if pid == 0:
     os.setsid()  # as sshd gives each remote command a session of its own
     os.execvp('sh', ['sh', '-c', cmd])
-if os.path.exists(home + '/ssh-drop'):
+if os.path.exists(home + '/ssh-drop') and 'pdx gate' in cmd:
     time.sleep(1.0)
     sys.exit(255)  # the connection goes while the remote command goes on
 _, st = os.waitpid(pid, 0)
