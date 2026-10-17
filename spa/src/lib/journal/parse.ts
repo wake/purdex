@@ -3,7 +3,7 @@
 // (the caller turns it into a bad_response). Nothing here is lenient: a field of the wrong type is a malformed row.
 import {
   CHANGED_WHAT, ENTRY_KINDS, ROADMAP_STATUSES, TASK_STATES,
-  type ChangedEvent, type ChangedWhat, type ConfirmItem, type EntryKind, type JournalEntry, type JournalPage, type JournalProject, type JournalTask,
+  type ChangedEvent, type ChangedWhat, type ConfirmItem, type EntryKind, type JournalEntry, type JournalPage, type JournalSessions, type SessionLink, type JournalProject, type JournalTask,
   type JournalUnit, type RemoteLead, type RoadmapFeature, type RoadmapStage, type RoadmapStatus, type TaskState,
 } from './types'
 
@@ -93,7 +93,25 @@ export function parseJournalPage(v: unknown): JournalPage | null {
   const pinned = parseEntryList(v.pinned === undefined ? [] : v.pinned)
   const confirms = v.confirms === undefined || v.confirms === null ? null : parseEntryList(v.confirms)
   if (!entries || !pinned || (v.confirms !== undefined && v.confirms !== null && !confirms)) return null
-  return { unit, project, personName: (v.person_name as string | undefined) ?? '', entries, confirms, pinned, more: v.more, openConfirms: v.open_confirms }
+  // `page` and `truncated` are omitempty: absent is '' / false, never an error and never a hint about the daemon's age.
+  return {
+    unit, project, personName: (v.person_name as string | undefined) ?? '', entries, confirms, pinned, more: v.more, openConfirms: v.open_confirms,
+    page: isStr(v.page) ? v.page : '', truncated: v.truncated === true,
+  }
+}
+
+const VIAS = ['root', 'relay', 'clear'] as const
+
+/** `GET /api/journal/sessions` → the chain oldest first; null when the envelope is not the wire shape. */
+export function parseSessions(v: unknown): JournalSessions | null {
+  if (!isRec(v) || !Array.isArray(v.sessions)) return null
+  const sessions: SessionLink[] = []
+  for (const raw of v.sessions) {
+    if (!isRec(raw) || !isNonEmpty(raw.session_id) || !isMs(raw.started_at) || !isMs(raw.ended_at) || typeof raw.current !== 'boolean'
+      || !isStr(raw.via) || !(VIAS as readonly string[]).includes(raw.via)) { warnOnce('dropping a session: not {session_id, started_at, ended_at, via, current}'); continue }
+    sessions.push({ sessionId: raw.session_id, startedAt: raw.started_at, endedAt: raw.ended_at, via: raw.via as SessionLink['via'], current: raw.current })
+  }
+  return { sessions, incomplete: v.incomplete === true }
 }
 
 function parseTask(v: unknown): JournalTask | string {

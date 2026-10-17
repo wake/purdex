@@ -4,6 +4,8 @@
 export const JOURNAL_CAPABILITY = 'journal.v1'
 /** Hand checks (`PUT /api/journal/confirm`) and the page's `confirms[]` band (JV-1a). */
 export const JOURNAL_CONFIRM_CAPABILITY = 'journal.confirm.v1'
+/** Session pages (`GET /api/journal/sessions`, `?page=`): the journal is read one leader session at a time (JV-1b). */
+export const JOURNAL_SESSIONS_CAPABILITY = 'journal.sessions.v1'
 
 export const ENTRY_KINDS = ['request', 'task_new', 'task_done', 'exec', 'exec_done', 'comm', 'confirm'] as const
 export type EntryKind = (typeof ENTRY_KINDS)[number]
@@ -54,6 +56,19 @@ export interface JournalPage {
   /** There are older months before the oldest entry of this page. */
   more: boolean
   openConfirms: number
+  /** Session pages only: the leader session the entries belong to; '' = the daemon sent none (omitempty). */
+  page: string
+  /** Session pages only: the page held more than the daemon's cap and the newest are kept (omitempty, absent = false). */
+  truncated: boolean
+}
+
+/** One leader session of the unit's chain (`GET /api/journal/sessions`); times are epoch ms, `endedAt` 0 on the current one. */
+export interface SessionLink { sessionId: string; startedAt: number; endedAt: number; via: 'root' | 'relay' | 'clear'; current: boolean }
+export interface JournalSessions {
+  /** Oldest first. */
+  sessions: SessionLink[]
+  /** A predecessor reader is not registered: sessions older than the first listed may be missing. */
+  incomplete: boolean
 }
 
 export interface JournalTask {
