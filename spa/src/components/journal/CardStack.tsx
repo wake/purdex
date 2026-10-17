@@ -12,6 +12,7 @@ import { ListChecks, MapTrifold } from '@phosphor-icons/react'
 import { CardFrame } from './CardFrame'
 import { ConfirmDetail } from './ConfirmDetail'
 import { JournalCard, JournalTitle } from './JournalCard'
+import { PageError } from './JournalPages'
 import { TasksCard } from './TasksCard'
 import { RoadmapCard } from './RoadmapCard'
 import { CARD_GAP, STACK_MARGIN, visibleCards } from './card-layout'
@@ -20,7 +21,7 @@ import { TeamPanelArea } from '../team/TeamPanelArea'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { usePanelDraftStore } from '../../stores/usePanelDraftStore'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useJournalStore } from '../../stores/useJournalStore'
+import { findEntry, useJournalStore } from '../../stores/useJournalStore'
 import { cardWidth, useJournalUiStore, type CardKey } from '../../stores/useJournalUiStore'
 import { keepFocus } from '../../lib/keep-focus'
 import { patchUnitMemo, useViewMemo } from '../../lib/journal/use-view-memo'
@@ -109,7 +110,7 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
   // The open 待確認 detail takes the roadmap's place (a card to the journal's left): it counts as the roadmap for the narrow-window
   // drop, and `roadmapOpen` itself is never touched, so closing the detail brings the roadmap back as it was.
   const unit = target.unit
-  const found = memo.journalOpen && unit && memo.detailId !== null ? (unit.entries.find((e) => e.id === memo.detailId) ?? unit.confirms.find((e) => e.id === memo.detailId)) : undefined
+  const found = memo.journalOpen && unit && memo.detailId !== null ? findEntry(unit, memo.detailId) : undefined
   // Checking the last item takes the entry out of the band; an entry of an older month is not in the stream either, so the detail
   // keeps the last copy it saw (every item answered) instead of vanishing under the pointer.
   // The copy lives in the unit's view memo, outside this component: it survives a remount and is never shared between units.
@@ -182,6 +183,7 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
           {...fix('journal')}
         >
           {unit && <JournalCard key={`${target.memoHost}\u0000${target.memoKey}`} target={target} unit={unit} />}
+          {target.loadFailed && !target.unit && <PageError onRetry={null} testId="journal-card-error" />}
           {target.unreachableHost !== null && !target.unit && (
             <div data-testid="journal-unreachable" className="p-3 text-text-secondary">{t('journal.card.unreachable', { host: target.unreachableHost })}</div>
           )}
