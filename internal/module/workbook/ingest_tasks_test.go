@@ -20,6 +20,18 @@ type fakeFeed struct {
 	tasks   []team.TaskChange
 	reports []team.ReportRow
 	teams   map[string]team.TeamInfo
+	members map[string][]team.MemberInfo   // by team id
+	current map[string]team.MemberTaskInfo // by team id + "/" + member key
+	err     error                          // answered by Members, CurrentTask and ReportsAfter when set
+}
+
+func (f *fakeFeed) Members(teamID string) ([]team.MemberInfo, error) {
+	return f.members[teamID], f.err
+}
+
+func (f *fakeFeed) CurrentTask(teamID, memberKey string) (team.MemberTaskInfo, bool, error) {
+	c, ok := f.current[teamID+"/"+memberKey]
+	return c, ok, f.err
 }
 
 func (f *fakeFeed) TasksChangedAfter(c team.TaskCursor, limit int) ([]team.TaskChange, error) {
@@ -40,6 +52,9 @@ func (f *fakeFeed) TasksChangedAfter(c team.TaskCursor, limit int) ([]team.TaskC
 }
 
 func (f *fakeFeed) ReportsAfter(afterRowID, sinceMS int64, limit int) ([]team.ReportRow, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
 	var out []team.ReportRow
 	for _, r := range f.reports {
 		if r.RowID > afterRowID && r.CreatedAt >= sinceMS {

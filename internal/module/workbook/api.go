@@ -159,6 +159,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/journal/tasks", m.handleJournalTasks)
 	mux.HandleFunc("GET /api/journal/roadmap", m.handleJournalRoadmap)
 	mux.HandleFunc("PUT /api/journal/pin", m.handleJournalPin)
+	mux.HandleFunc("GET /api/journal/members", m.handleJournalMembers) // capability journal.members.v1
 }
 
 // handleRefresh: POST …/refresh → 202 {entry_id}; 409 not_live (no live session of the conversation whose mod announced

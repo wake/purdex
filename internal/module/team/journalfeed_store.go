@@ -111,3 +111,42 @@ func (s *Store) TeamInfo(teamID string) (team.TeamInfo, bool, error) {
 	}
 	return info, true, nil
 }
+
+// Members implements team.JournalFeed: the team's active members, oldest first. Active only: released, killed and gone
+// rows (and a remote member's in-flight states) are not current members.
+func (s *Store) Members(teamID string) ([]team.MemberInfo, error) {
+	rows, err := s.db.Query(`SELECT spawn_op, ref, session_id, title, state FROM team_members
+		WHERE team_id = ? AND state = 'active' ORDER BY created_at, spawn_op`, teamID)
+	if err != nil {
+		return nil, fmt.Errorf("journal feed: read members of %s: %w", teamID, err)
+	}
+	defer rows.Close()
+	var out []team.MemberInfo
+	for rows.Next() {
+		var m team.MemberInfo
+		if err := rows.Scan(&m.MemberKey, &m.Ref, &m.SessionID, &m.Title, &m.State); err != nil {
+			return nil, fmt.Errorf("journal feed: read members of %s: %w", teamID, err)
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("journal feed: read members of %s: %w", teamID, err)
+	}
+	return out, nil
+}
+
+// CurrentTask implements team.JournalFeed with currentTaskOf, the rule /api/team and the roster use.
+func (s *Store) CurrentTask(teamID, memberKey string) (team.MemberTaskInfo, bool, error) {
+	if memberKey == "" {
+		return team.MemberTaskInfo{}, false, nil
+	}
+	open, err := s.ListTasks(teamID, memberKey, false)
+	if err != nil {
+		return team.MemberTaskInfo{}, false, fmt.Errorf("journal feed: current task of %s/%s: %w", teamID, memberKey, err)
+	}
+	cur, ok := currentTaskOf(open)
+	if !ok {
+		return team.MemberTaskInfo{}, false, nil
+	}
+	return team.MemberTaskInfo{Seq: cur.Seq, Subject: cur.Subject, Status: cur.Status}, true, nil
+}

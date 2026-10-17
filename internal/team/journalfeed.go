@@ -46,6 +46,20 @@ type TeamInfo struct {
 	EndedAt                      int64
 }
 
+// MemberInfo is one current member of a team: its key (team_members.spawn_op, which a relay does not change) and the
+// session, ref and title it has now.
+type MemberInfo struct {
+	MemberKey, Ref, SessionID, Title string
+	State                            MemberState
+}
+
+// MemberTaskInfo is a member's current task: Seq is the team-local number, Status pending|in_progress.
+type MemberTaskInfo struct {
+	Seq     int
+	Subject string
+	Status  TaskStatus
+}
+
 // JournalFeed is the read-only view of tasks, reports and teams the journal ingests from. A store error is an error,
 // never an empty answer.
 type JournalFeed interface {
@@ -61,4 +75,10 @@ type JournalFeed interface {
 	ReportsAfter(afterRowID, sinceMS int64, limit int) ([]ReportRow, error)
 	// TeamInfo answers one team's lead (the current session) and label; false when the id is unknown.
 	TeamInfo(teamID string) (TeamInfo, bool, error)
+	// Members answers the team's current members (state active; released, killed and gone ones are not listed), oldest
+	// first. An unknown team answers none.
+	Members(teamID string) ([]MemberInfo, error)
+	// CurrentTask answers the task the member shows as its current one: the team module's own rule (in progress before
+	// pending, the newest of each), the same one /api/team shows. false when it has none.
+	CurrentTask(teamID, memberKey string) (MemberTaskInfo, bool, error)
 }

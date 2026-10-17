@@ -120,6 +120,9 @@ func (c *Core) capabilityList() []string {
 		if c.moduleFlag("workbook", "journal") {
 			out = append(out, "journal.v1") // GET /api/journal, /api/journal/tasks, /api/journal/roadmap, PUT /api/journal/pin, journal.changed events; only while the journal runs ([journal] enabled, and wired)
 		}
+		if c.moduleFlag("workbook", "journal_members") {
+			out = append(out, "journal.members.v1") // GET /api/journal/members: the team's current members with their task and last report; only while the journal runs with a team feed
+		}
 	}
 	if c.moduleReady("fleet") {
 		out = append(out, "fleet.v1") // GET /api/fleet, GET /api/fleet/ssh-aliases, the opt-in fleet.changed push (?fleet=v1)

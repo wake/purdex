@@ -93,11 +93,12 @@ func (m *Module) Init(c *core.Core) error {
 }
 
 // Status is what the daemon reports for the module (the capability follows `ready`; journal.v1 follows `journal`, true
-// while the journal's loops are running).
+// while the journal's loops are running; journal.members.v1 follows `journal_members`, true while they run with a team feed).
 func (m *Module) Status() map[string]any {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return map[string]any{"ready": m.ready, "init_error": m.initErr, "journal": m.ready && m.journalRun != nil}
+	return map[string]any{"ready": m.ready, "init_error": m.initErr, "journal": m.ready && m.journalRun != nil,
+		"journal_members": m.ready && m.journalRun != nil && m.journalRun.feed != nil}
 }
 
 // journalDisabled says the journal is switched off in the config.
