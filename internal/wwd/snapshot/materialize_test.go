@@ -178,16 +178,24 @@ func TestMaterialize_AnUnknownHaveIsFollowedByTheBase(t *testing.T) {
 // A claim that is not live is ErrStaleClaim on both ways, and nothing is left behind.
 func TestMaterialize_AStaleClaimIsErrStaleClaim(t *testing.T) {
 	m := newMaterializeCase(t, "j_6")
-	c := serveRecorded(t, m.src, &recorder{})
+	rec := &recorder{}
+	c := serveRecorded(t, m.src, rec)
 	for _, clone := range []string{m.clone, ""} {
 		in := m.in(c, "j_6", filepath.Join(t.TempDir(), "ws"))
 		in.Clone = clone
 		in.ClaimID = wire.NewClaimID()
 		_, err := Materialize(context.Background(), in)
 		assert.ErrorIs(t, err, ErrStaleClaim, "clone=%q", clone)
+		want := "bundle"
+		if clone == "" {
+			want = "tar"
+		}
+		got := rec.seen()
+		assert.Equal(t, want, got[len(got)-1], "clone=%q: the answer ended the try, no other way was asked", clone)
 		_, serr := os.Stat(in.Dir)
 		assert.True(t, os.IsNotExist(serr), "no directory is left")
 	}
+	assert.Equal(t, []string{"bundle", "tar"}, rec.seen(), "one request each: a stale claim is not retried as a tar")
 	assert.Empty(t, gitOut(t, m.clone, "for-each-ref", "refs/wwd/"))
 }
 
