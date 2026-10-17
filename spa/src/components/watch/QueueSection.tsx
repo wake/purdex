@@ -1,5 +1,5 @@
 // spa/src/components/watch/QueueSection.tsx — the host tab's 重指令排隊 section (watcher area spec §6.1), daemon hosts only. A
-// 當下｜歷史 switch (歷史 stays disabled until W5d, its choice is kept in view memory), 「排隊 n · 最久 m:ss」, then QueueNow.
+// 當下｜歷史 switch (歷史 needs the host's `gate.decisions.v1`, else it is disabled with the reason; the choice is kept in view memory), 「排隊 n · 最久 m:ss」, then QueueNow.
 // Offline: the one sentence. One interval counts every elapsed / wait time locally from `since` and is cleared on unmount.
 import { useEffect, useState } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -7,8 +7,10 @@ import { Section } from '../hosts/form-fields'
 import { SegmentControl } from '../settings/SegmentControl'
 import type { FleetQueue } from '../../lib/fleet/types'
 import { mss, secondsSince } from '../../lib/watch/queue-time'
+import { selectGateDecisionsV1, useNexHostStore } from '../../stores/useNexHostStore'
 import { readQueueTab, writeQueueTab, type QueueTab } from '../../lib/watch/view-memory'
 import { QueueNow } from './QueueNow'
+import { QueueHistory } from './QueueHistory'
 
 // One interval, only while `active` (the 當下 body is shown); cleared on unmount or when it stops being active.
 function useNowEverySecond(active: boolean): number {
@@ -21,12 +23,16 @@ function useNowEverySecond(active: boolean): number {
   return now
 }
 
-function QueueBody({ fleetHostId, queue }: { fleetHostId: string; queue: FleetQueue }) {
+function QueueBody({ fleetHostId, hostConfigId, queue }: { fleetHostId: string; hostConfigId: string | undefined; queue: FleetQueue }) {
   const t = useI18nStore((s) => s.t)
   // The tab outlives this component (the pane unmounts on a tab switch): the memory is the source, the state only re-renders.
   const [tab, setTabState] = useState<QueueTab>(() => readQueueTab(fleetHostId))
   const setTab = (v: QueueTab) => { writeQueueTab(fleetHostId, v); setTabState(v) }
-  const now = useNowEverySecond(tab === 'now')
+  // The daemon announces `gate.decisions.v1` (read through the nex host store: no second /api/info). Without it 歷史 cannot be picked,
+  // and a remembered 歷史 shows 當下.
+  const historyOk = useNexHostStore(hostConfigId ? selectGateDecisionsV1(hostConfigId) : () => false)
+  const shown: QueueTab = tab === 'history' && !historyOk ? 'now' : tab
+  const now = useNowEverySecond(shown === 'now')
   // When this frame arrived: with no `since` to count from, the daemon's figure keeps ticking from here.
   // (Stamped with the section's own clock, at most a second old, so render stays pure.)
   const [arrived, setArrived] = useState({ queue, at: now })
@@ -44,8 +50,8 @@ function QueueBody({ fleetHostId, queue }: { fleetHostId: string; queue: FleetQu
       <div className="flex items-center gap-3 mb-2 text-xs">
         <span data-testid="queue-tabs" role="group" aria-label={t('watch.queue.tabs_label')}>
           <SegmentControl
-            options={[{ value: 'now', label: t('watch.queue.tab.now') }, { value: 'history', label: t('watch.queue.tab.history'), disabled: true }]}
-            value={tab} onChange={setTab}
+            options={[{ value: 'now', label: t('watch.queue.tab.now') }, { value: 'history', label: t('watch.queue.tab.history'), disabled: !historyOk, title: historyOk ? undefined : t('watch.queue.tab.history_unsupported') }]}
+            value={shown} onChange={setTab}
           />
         </span>
         <span data-testid="queue-count" className="text-xs text-text-secondary tabular-nums">
@@ -53,19 +59,18 @@ function QueueBody({ fleetHostId, queue }: { fleetHostId: string; queue: FleetQu
           {n > 0 && <span className={num}>{t('watch.queue.longest', { t: mss(now - longest * 1000, now) })}</span>}
         </span>
       </div>
-      {/* 歷史 is W5d's; until then it cannot be picked, and a remembered one shows no body. */}
-      {tab === 'now' && <QueueNow queue={queue} now={now} />}
+      {shown === 'now' ? <QueueNow queue={queue} now={now} /> : <QueueHistory fleetHostId={fleetHostId} hostConfigId={hostConfigId} />}
     </div>
   )
 }
 
-export function QueueSection({ fleetHostId, queue, offline }: { fleetHostId: string; queue: FleetQueue | undefined; offline: boolean }) {
+export function QueueSection({ fleetHostId, hostConfigId, queue, offline }: { fleetHostId: string; hostConfigId?: string; queue: FleetQueue | undefined; offline: boolean }) {
   const t = useI18nStore((s) => s.t)
   return (
     <Section title={t('watch.queue.title')}>
       {offline || !queue
         ? <p className="text-xs text-text-muted">{t('watch.queue.offline')}</p>
-        : <QueueBody fleetHostId={fleetHostId} queue={queue} />}
+        : <QueueBody fleetHostId={fleetHostId} hostConfigId={hostConfigId} queue={queue} />}
     </Section>
   )
 }

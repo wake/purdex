@@ -178,7 +178,7 @@ export function WatchHostPane({ pane }: PaneRendererProps) {
         <Section title={t('watch.host.resources', { range: t(`watch.host.range.${range}`) })}>
           <Resources view={view} range={range} now={now} />
         </Section>
-        {view.kind === 'daemon' && (offline || view.slow?.queue) && <QueueSection fleetHostId={view.id} queue={view.slow?.queue} offline={offline} />}
+        {view.kind === 'daemon' && (offline || view.slow?.queue) && <QueueSection fleetHostId={view.id} hostConfigId={view.hostConfigId} queue={view.slow?.queue} offline={offline} />}
         <Section title={t('watch.host.procs')}>
           <div className="grid grid-cols-2 gap-8">
             <ProcTable testId="procs-cpu" title={t('watch.host.top_cpu')} rows={view.slow?.top_cpu ?? []} unit="cpu" offline={offline} />
