@@ -279,6 +279,9 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 				waited = "等 " + time.Since(w.Since).Round(time.Second).String()
 			}
 			fmt.Fprintf(stdout, "  排隊 #%d  pid %d  %s  %s  %s\n", w.Place, w.PID, waited, strings.Join(w.Argv, " "), w.Cwd)
+			if w.Rank != "" && w.Rank != gate.RankNormal || w.RankError != "" {
+				fmt.Fprintf(stdout, "    順序：%s%s\n", w.Rank, rankNote(w)) // moved in the queue (pdx gate queue): who, why, until
+			}
 		}
 	}
 	printPool("重", cfg.Slots.Heavy, st.Heavy, st.WaitHeavy, st.QueueHeavy)
