@@ -52,14 +52,26 @@ func ExitCode(r Report) int {
 		if r.Reason == "timeout" {
 			return ExitTimeout
 		}
-		if r.Exit != nil && *r.Exit > 0 && *r.Exit < ExitTimeout {
+		// The command's own number, unless it is one of ours: 3 to 6 and 124 and up mean something else to the caller (wwd
+		// unreachable, usage, no host, expired, timeout, cancelled), so a failed command that exits with one of them is a plain
+		// 1. The report keeps the command's real number in `exit`. A command that was killed has no number of its own either.
+		if r.Exit != nil && *r.Exit > 0 && !reservedExit(*r.Exit) {
 			return *r.Exit
 		}
-		// 124 and up are ours (timeout, cancelled), and a command that was killed has no number of its own: never let the
-		// command's status be read as one of those
 		return ExitFailed
 	}
 	return ExitFailed
+}
+
+// reservedExit reports whether an exit number belongs to `pdx test` itself (spec §8.1).
+func reservedExit(n int) bool {
+	switch {
+	case n >= ExitTimeout: // 124 timeout, 130 cancelled, and the killed-by-signal range 128+
+		return true
+	case n >= ExitNoWWD && n <= ExitExpired: // 3 wwd unreachable, 4 usage, 5 no host, 6 expired
+		return true
+	}
+	return false
 }
 
 const maxListedFailures = 10
@@ -89,6 +101,9 @@ func Print(w io.Writer, r Report, asJSON bool) {
 	}
 	if r.CacheHit {
 		extra = append(extra, "result reused")
+	}
+	if r.State == wire.StateFailed && r.Exit != nil {
+		extra = append(extra, fmt.Sprintf("exit %d", *r.Exit)) // the command's own number, whatever pdx exits with
 	}
 	if r.Reason != "" {
 		extra = append(extra, r.Reason)

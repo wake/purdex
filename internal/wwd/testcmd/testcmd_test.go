@@ -223,6 +223,14 @@ func TestExitCode(t *testing.T) {
 		{Report{State: wire.StateSucceeded, Exit: ip(0)}, 0},
 		{Report{State: wire.StateFailed, Exit: ip(2)}, 2},
 		{Report{State: wire.StateFailed, Exit: ip(1)}, 1},
+		{Report{State: wire.StateFailed, Exit: ip(7)}, 7},
+		{Report{State: wire.StateFailed, Exit: ip(100)}, 100},
+		{Report{State: wire.StateFailed, Exit: ip(123)}, 123},
+		{Report{State: wire.StateFailed, Exit: ip(3)}, 1}, // the numbers pdx test uses itself are never a command's
+		{Report{State: wire.StateFailed, Exit: ip(4)}, 1},
+		{Report{State: wire.StateFailed, Exit: ip(5)}, 1},
+		{Report{State: wire.StateFailed, Exit: ip(6)}, 1},
+		{Report{State: wire.StateFailed, Exit: ip(137)}, 1},
 		{Report{State: wire.StateFailed}, 1},
 		{Report{State: wire.StateFailed, Reason: "lost"}, 1},
 		{Report{State: wire.StateFailed, Reason: "oom"}, 1},
@@ -272,7 +280,8 @@ func TestEveryTerminalStateHasItsExitCode(t *testing.T) {
 		want int
 	}{
 		"succeeded": {doneJob(wire.StateSucceeded, ip(0), "", nil), 0},
-		"failed 3":  {doneJob(wire.StateFailed, ip(3), "", nil), 3},
+		"failed 3":  {doneJob(wire.StateFailed, ip(3), "", nil), 1}, // 3 is ours (wwd unreachable): a test that exits 3 is a plain 1
+		"failed 7":  {doneJob(wire.StateFailed, ip(7), "", nil), 7},
 		"timeout":   {doneJob(wire.StateFailed, ip(143), "timeout", nil), 124},
 		"cancelled": {doneJob(wire.StateCancelled, nil, "", nil), 130},
 		"expired":   {doneJob(wire.StateExpired, nil, "queue_timeout", nil), 6},
@@ -416,6 +425,56 @@ func TestTwoFastLaneRunsInOneSecondKeepApart(t *testing.T) {
 	if len(entries) != 3 {
 		t.Fatalf("%d run directories, want 3 (runs shared a directory)", len(entries))
 	}
+}
+
+func TestACommandThatExitsWithOneOfOurNumbersIsAPlain1ButItsNumberIsShown(t *testing.T) {
+	for _, n := range []int{3, 4, 5, 6} {
+		api := &fakeAPI{job: doneJob(wire.StateFailed, ip(n), "", nil)}
+		code, out, _ := run(t, Options{Args: args(t, "lint"), API: api})
+		if code != 1 || !strings.Contains(out, fmt.Sprintf("exit %d", n)) {
+			t.Errorf("queue, exit %d: code %d\n%s", n, code, out)
+		}
+		code, out, _ = run(t, Options{Args: args(t, "one-file", "a.test.ts", "--json"), API: &fakeAPI{}, Gate: &fakeGate{code: n}, Env: os.Environ()})
+		var r Report
+		if err := json.Unmarshal([]byte(out), &r); err != nil || code != 1 || r.Exit == nil || *r.Exit != n {
+			t.Errorf("fast lane, exit %d: code %d report %+v (%v)", n, code, r, err)
+		}
+	}
+}
+
+// The fast lane runs in the caller's own process: an interrupt of the caller stops the local command (the job-outlives-its-
+// caller rule, D5, is the queue's); the exit is 130 and the message says the run was stopped, not that it keeps running.
+func TestInterruptingAFastLaneRunStopsItAndSaysSo(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	g := &blockingGate{started: make(chan struct{})}
+	var so, se bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		done <- Run(ctx, Options{Args: args(t, "one-file", "a.test.ts"), API: &fakeAPI{}, Gate: g, Dir: sharedRepo, Env: os.Environ(), Stdout: &so, Stderr: &se})
+	}()
+	<-g.started
+	cancel()
+	select {
+	case code := <-done:
+		if code != ExitCancelled || !strings.Contains(so.String(), "cancelled") || strings.Contains(se.String()+so.String(), "keeps running") {
+			t.Fatalf("code %d out %q err %q", code, so.String(), se.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the run did not stop")
+	}
+}
+
+type blockingGate struct{ started chan struct{} }
+
+func (g *blockingGate) Run(ctx context.Context, o gate.Options) (int, error) {
+	for _, kv := range o.Env {
+		if nonce, ok := strings.CutPrefix(kv, gate.AdmittedMarkEnv+"="); ok {
+			o.Stderr.Write([]byte(gate.AdmittedMark(nonce)))
+		}
+	}
+	close(g.started)
+	<-ctx.Done()
+	return 130, nil
 }
 
 func TestFastLaneSuccessIsExit0(t *testing.T) {

@@ -26,6 +26,8 @@ const Usage = `usage: pdx test <task> [args…] [--class dev|merge|release] [--d
        pdx test --list [--json]
   runs a task declared in .wwd/tasks.toml of this repo and prints its summary; the exit code is the job's own exit code.
   124 timeout · 130 cancelled · 3 wwd unreachable · 4 manifest or argument error · 5 no host can take it · 6 expired in the queue
+  A command that itself exits with 3–6 or 124+ is reported as 1 (the report's "exit" keeps its real number).
+  Ctrl-C ends the wait for a queued job (the job keeps running); it stops a local fast-lane run, which has no life of its own.
   --class   lower the priority (never above the task's own)   --detach   submit and print the job id, do not wait
   --json    print the report as one JSON object              --list     the tasks of this repo
   A task's arguments are checked against the manifest (files must exist, packages must be package patterns); put -- before an
