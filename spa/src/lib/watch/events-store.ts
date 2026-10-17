@@ -6,6 +6,7 @@
 // connection, or an older answer arriving after a newer one, is dropped. Nothing here is persisted.
 import { create } from 'zustand'
 import { useHostStore } from '../../stores/useHostStore'
+import { connectionKey } from '../host-connection-key'
 import { fetchWatchEvents, fetchWatchUnhandled } from './api'
 import { isCount, type WatchEvent } from './events-types'
 import { useWatchStatusStore } from './status-store'
@@ -92,20 +93,27 @@ export function startWatchEvents(): () => void {
     const s = useHostStore.getState()
     return !!s.hosts[hostId] && s.runtime[hostId]?.status === 'connected'
   }
+  // The connection a read was sent on: a re-point leaves the runtime `connected`, so write-back also compares the identity.
+  const identityOf = (hostId: string): string | null => {
+    const h = useHostStore.getState().hosts[hostId]
+    return h ? connectionKey(h) : null
+  }
   const carriesWatch = (hostId: string): boolean => useWatchStatusStore.getState().byHost[hostId]?.kind === 'ok'
 
   const read = (hostId: string): void => {
     const gen = bump(hostId)
+    const identity = identityOf(hostId)
     void fetchWatchEvents(hostId).then((r) => {
-      if (gens.get(hostId) !== gen || !isConnected(hostId)) return
+      if (gens.get(hostId) !== gen || !isConnected(hostId) || identityOf(hostId) !== identity) return
       if (r.kind === 'unsupported') useWatchEventsStore.getState().forget(hostId)
       else useWatchEventsStore.getState().set(hostId, r.kind === 'ok' ? { kind: 'ok', events: r.events, at: Date.now() } : { kind: 'error', at: Date.now() })
     })
   }
   const readCount = (hostId: string): void => {
     const gen = cbump(hostId)
+    const identity = identityOf(hostId)
     void fetchWatchUnhandled(hostId).then((r) => {
-      if (cgens.get(hostId) !== gen || !isConnected(hostId)) return
+      if (cgens.get(hostId) !== gen || !isConnected(hostId) || identityOf(hostId) !== identity) return
       if (r.kind === 'ok') useWatchEventsStore.getState().setUnhandled(hostId, r.count)
     })
   }
@@ -138,7 +146,9 @@ export function startWatchEvents(): () => void {
       if (!next.hosts[id]) { bump(id); dropCount(id); reading.delete(id); useWatchEventsStore.getState().forget(id) }
     }
     for (const id of Object.keys(next.hosts)) {
-      if (prev.runtime[id]?.status === 'connected' && next.runtime[id]?.status !== 'connected') {
+      const gone = prev.runtime[id]?.status === 'connected' && next.runtime[id]?.status !== 'connected'
+      const repointed = !gone && !!prev.hosts[id] && connectionKey(prev.hosts[id]) !== connectionKey(next.hosts[id])
+      if (gone || repointed) {
         bump(id); dropCount(id); reading.delete(id); useWatchEventsStore.getState().forget(id)
       }
     }

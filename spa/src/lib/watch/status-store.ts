@@ -7,6 +7,7 @@
 import { create } from 'zustand'
 import { useHostStore } from '../../stores/useHostStore'
 import { selectWatchV1, useNexHostStore } from '../../stores/useNexHostStore'
+import { connectionKey } from '../host-connection-key'
 import { fetchWatchStatus } from './api'
 import type { WatchStatus } from './status-types'
 
@@ -121,8 +122,16 @@ export function startWatchStatus(): () => void {
     return !!s.hosts[hostId] && s.runtime[hostId]?.status === 'connected'
   }
 
+  // The connection a read was sent on (ip, port, token). A re-point leaves the runtime `connected`, so the generation and the
+  // connected check alone would let the old endpoint's answer in; the identity is compared at write-back as well.
+  const identityOf = (hostId: string): string | null => {
+    const h = useHostStore.getState().hosts[hostId]
+    return h ? connectionKey(h) : null
+  }
+
   const read = (hostId: string): void => {
     const gen = gens.get(hostId) ?? bump(hostId)
+    const identity = identityOf(hostId)
     // A watch host is one whose /api/info lists `watch.v1`, read through the nex host store (it holds every host's capabilities:
     // no second /api/info). Its status route is not asked otherwise: the route exists whenever the module is registered,
     // ready or not.
@@ -130,7 +139,7 @@ export function startWatchStatus(): () => void {
       .then(() => (selectWatchV1(hostId)(useNexHostStore.getState()) ? fetchWatchStatus(hostId) : { kind: 'unsupported' as const }))
       .catch(() => ({ kind: 'error' as const }))
     void asked.then((r) => {
-      if (gens.get(hostId) !== gen || !isConnected(hostId)) return
+      if (gens.get(hostId) !== gen || !isConnected(hostId) || identityOf(hostId) !== identity) return
       useWatchStatusStore.getState().set(hostId, r.kind === 'ok' ? { kind: 'ok', status: r.status, at: Date.now() } : { kind: r.kind, at: Date.now() })
     })
   }
@@ -146,7 +155,10 @@ export function startWatchStatus(): () => void {
     for (const id of Object.keys(next.hosts)) {
       const now = next.runtime[id]?.status === 'connected'
       const was = prev.runtime[id]?.status === 'connected' && !!prev.hosts[id]
-      if (now && !was) { bump(id); read(id) }
+      // Re-pointed while connected: what the old daemon said is not the new one's. Forget it, and ask the new one.
+      const repointed = was && now && connectionKey(prev.hosts[id]) !== connectionKey(next.hosts[id])
+      if (repointed) { bump(id); useWatchStatusStore.getState().forget(id); read(id) }
+      else if (now && !was) { bump(id); read(id) }
       else if (!now && was) { bump(id); useWatchStatusStore.getState().forget(id) }
     }
   })
