@@ -327,7 +327,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
         const key = h?.unitOfSession[sessionId]
         const held = key === undefined ? undefined : h?.units[key]
         if (!h || key === undefined || key !== startedKey || !held) return {}
-        return { byHost: { ...s.byHost, [hostId]: { ...h, units: { ...h.units, [key]: { ...held, sessions: chain.sessions, sessionsIncomplete: chain.incomplete, sessionsFailed: false } } } }
+        return { byHost: { ...s.byHost, [hostId]: { ...h, units: { ...h.units, [key]: { ...held, sessions: chain.sessions, sessionsIncomplete: chain.incomplete, sessionsFailed: false } } } } }
       }))
       // A chain that could not be read is an error to show (the pager is unusable), not "no earlier sessions"; the rows of the current page stay.
       if (res.kind === 'failed' || res.kind === 'none') {
