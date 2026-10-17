@@ -268,15 +268,19 @@ func (s Snapshot) Ahead(name string) (ahead, aheadFront int, rank RankInfo, ok b
 	return 0, 0, RankInfo{}, false
 }
 
-// OlderThan is how many served tickets (not held ones) have a name before name: the place of a ticket that is not in the queue.
-func (s Snapshot) OlderThan(name string) int {
-	n := 0
+// PlaceOfMissing is where a normal ticket named name would stand if it were in the queue (a ticket whose file was taken from under
+// it): behind every front ticket and the normal ones with an older name; back and held ones do not count. aheadFront is how many of
+// those are front tickets.
+func (s Snapshot) PlaceOfMissing(name string) (ahead, aheadFront int) {
 	for _, e := range s.Queue {
-		if e.Rank.Rank != RankHold && e.Name < name {
-			n++
+		switch {
+		case e.Rank.Rank == RankFront:
+			ahead, aheadFront = ahead+1, aheadFront+1
+		case e.Rank.Rank == RankNormal && e.Name < name:
+			ahead++
 		}
 	}
-	return n
+	return ahead, aheadFront
 }
 
 // AheadOfNew is how many tickets a new normal ticket would wait behind: the live front and normal ones (back and held are

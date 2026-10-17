@@ -409,7 +409,7 @@ func (p *Pool) TryTakeRanked(t *Ticket) (Take, error) {
 		// Not listed (its file was removed from under it): it stands where its name puts it, behind the live tickets older than it,
 		// as before ranks - never at the head of the line.
 		rank = RankInfo{Rank: RankNormal}
-		ahead, aheadFront = snap.OlderThan(t.Name), 0
+		ahead, aheadFront = snap.PlaceOfMissing(t.Name)
 	}
 	out := Take{Ahead: ahead, AheadFront: aheadFront, Rank: rank}
 	if rank.Rank == RankHold {

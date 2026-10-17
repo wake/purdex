@@ -265,6 +265,22 @@ func TestRank_ATicketThatIsNotListedStaysBehindTheOlderOnes(t *testing.T) {
 	assert.Equal(t, 1, tk.Ahead)
 }
 
+// ...and an OLDER missing ticket stands behind a newer front ticket: a front ticket precedes every normal one. Back and held tickets do not count.
+// Mutation gate: only older names counted → the older missing ticket takes the slot ahead of the front one (red).
+func TestRank_AnOlderMissingTicketStaysBehindAFrontOne(t *testing.T) {
+	rp := newRankPool(t, 1)
+	ts := rp.enqueue(t, 4) // ts[0] will go missing; ts[1] front, ts[2] back, ts[3] hold
+	rp.set(t, ts[1], RankFront, time.Time{})
+	rp.set(t, ts[2], RankBack, time.Time{})
+	rp.set(t, ts[3], RankHold, time.Time{})
+	require.NoError(t, os.Remove(filepath.Join(rp.queueDir(), ts[0].Name)))
+	tk, err := rp.TryTakeRanked(ts[0])
+	require.NoError(t, err)
+	assert.Nil(t, tk.Slot, "the front ticket goes first")
+	assert.Equal(t, 1, tk.Ahead, "only the front ticket: back and held ones are passed")
+	assert.Equal(t, 1, tk.AheadFront)
+}
+
 // A negative until is a nonsense value: the ticket reads as normal with an error, not as a hold that never ends.
 func TestRank_ANegativeUntilReadsAsNormal(t *testing.T) {
 	rp := newRankPool(t, 1)
