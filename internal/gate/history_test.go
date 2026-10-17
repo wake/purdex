@@ -75,6 +75,24 @@ func TestHistory_AFileSeenUnderBothNamesIsReadOnce(t *testing.T) {
 	assert.Len(t, recs, 1)
 }
 
+// The rotation comes exactly between the two opens, and the new current file already holds a record: both files are read.
+func TestHistory_ARotationBetweenTheOpensLosesNothing(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	writeDecisions(t, dir, decisionsFile, Decision{Time: now.Add(-time.Hour), Argv: []string{"before-rotation"}, Host: "air26"})
+	historyAfterFirstOpen = func() {
+		historyAfterFirstOpen = nil
+		require.NoError(t, os.Rename(filepath.Join(dir, decisionsFile), filepath.Join(dir, decisionsFile+".1")))
+		writeDecisions(t, dir, decisionsFile, Decision{Time: now, Argv: []string{"after-rotation"}, Host: "air26"})
+	}
+	t.Cleanup(func() { historyAfterFirstOpen = nil })
+	recs, err := History(dir, HistoryFilter{})
+	require.NoError(t, err)
+	require.Len(t, recs, 2)
+	assert.Equal(t, "after-rotation", recs[0].Argv[0])
+	assert.Equal(t, "before-rotation", recs[1].Argv[0])
+}
+
 func TestHistory_NoFileIsNoHistory(t *testing.T) {
 	recs, err := History(t.TempDir(), HistoryFilter{})
 	require.NoError(t, err)

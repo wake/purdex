@@ -18,6 +18,9 @@ type HistoryFilter struct {
 	Limit int
 }
 
+// historyAfterFirstOpen is a seam for tests: it runs between the opening of the current file and of the older one.
+var historyAfterFirstOpen func()
+
 // SentOut says whether a record is of a command that was offered to an assist host.
 func (d Decision) SentOut() bool { return d.Tried != "" || d.Host != "" }
 
@@ -36,23 +39,47 @@ func History(dir string, f HistoryFilter) ([]Decision, error) {
 			fh.Close()
 		}
 	}()
-	for _, name := range []string{decisionsFile, decisionsFile + ".1"} {
+	open := func(name string) (*os.File, error) {
 		fh, err := os.Open(filepath.Join(dir, name))
 		if errors.Is(err, os.ErrNotExist) {
-			continue
+			return nil, nil
 		}
-		if err != nil {
+		return fh, err
+	}
+	same := func(a, b *os.File) bool {
+		sa, errA := a.Stat()
+		sb, errB := b.Stat()
+		return errA == nil && errB == nil && os.SameFile(sa, sb)
+	}
+	cur, err := open(decisionsFile)
+	if err != nil {
+		return nil, err
+	}
+	if cur != nil {
+		files = append(files, cur)
+	}
+	if historyAfterFirstOpen != nil {
+		historyAfterFirstOpen()
+	}
+	old, err := open(decisionsFile + ".1")
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case old == nil:
+	case cur != nil && same(cur, old):
+		// A rotation came between the two opens: the file open as the current one is now the older, and the new current file (made
+		// since) is looked for by its name again.
+		old.Close()
+		if again, err := open(decisionsFile); err != nil {
 			return nil, err
+		} else if again != nil && !same(cur, again) {
+			files = append(files, again)
+		} else if again != nil {
+			again.Close()
 		}
-		if len(files) > 0 {
-			a, errA := files[0].Stat()
-			b, errB := fh.Stat()
-			if errA == nil && errB == nil && os.SameFile(a, b) {
-				fh.Close()
-				continue
-			}
-		}
-		files = append(files, fh)
+	default:
+		files = append(files, old)
 	}
 	var all []Decision
 	for _, fh := range files {

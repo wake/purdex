@@ -393,16 +393,22 @@ func TestRunAssist_ALostConnectionEndsTheRemoteRun(t *testing.T) {
 	g, _ := testGate(t)
 	dir := workRepo(t)
 	h := newAssistHost(t, filepath.Base(dir))
-	pidFile := h.remote("sleeper.pid")
-	writeFile(t, h.remote("ssh-drop"), pidFile, 0o644) // dropped once the sleeper is there
-	res, _, _ := runOn(t, g, h, dir, "sh", "-c", `sleep 300 & echo $! > `+pidFile+`; wait`)
+	p1, p2, pgidFile := h.remote("sleeper1.pid"), h.remote("sleeper2.pid"), h.remote("group.id")
+	writeFile(t, h.remote("ssh-drop"), pgidFile, 0o644) // dropped once the sleepers and the group are written down (the last file)
+	res, _, _ := runOn(t, g, h, dir, "sh", "-c",
+		`sleep 300 & echo $! > `+p1+`; sleep 301 & echo $! > `+p2+`; ps -o pgid= -p $$ > `+pgidFile+`.tmp; mv `+pgidFile+`.tmp `+pgidFile+`; wait`)
 	assert.True(t, res.Started)
 	assert.Equal(t, 255, res.Code)
 	require.Error(t, res.Err)
 	assert.Contains(t, res.Err.Error(), "connection")
-	pid := strings.TrimSpace(mustReadOr(pidFile))
-	require.NotEmpty(t, pid, "the sleeper was started before the connection went")
-	eventuallyFor(t, 60*time.Second, "the remote sleep to be gone", func() bool { return exec.Command("kill", "-0", pid).Run() != nil })
+	pgid := strings.TrimSpace(mustReadOr(pgidFile))
+	require.NotEmpty(t, pgid, "the group was written down before the connection went")
+	for _, f := range []string{p1, p2} {
+		pid := strings.TrimSpace(mustReadOr(f))
+		require.NotEmpty(t, pid, "both sleepers were started before the connection went")
+		eventuallyFor(t, 60*time.Second, "a remote sleeper to be gone", func() bool { return exec.Command("kill", "-0", pid).Run() != nil })
+	}
+	eventuallyFor(t, 60*time.Second, "the remote group to be gone", func() bool { return exec.Command("kill", "-0", "--", "-"+pgid).Run() != nil })
 	assert.Empty(t, h.listDir(t, "Assist/tmp.noindex"))
 }
 
