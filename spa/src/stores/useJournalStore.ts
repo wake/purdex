@@ -114,7 +114,7 @@ interface JournalState {
   loadTasks: (hostId: string, sessionId: string) => Promise<LoadResult>
   loadRoadmap: (hostId: string, sessionId: string) => Promise<LoadResult>
   /** Check / uncheck item `idx` of a 待確認 of the unit this session names: the screen follows at once, the PUT follows; see `checks` below for how a failure or a later read settles it. */
-  setConfirm: (hostId: string, sessionId: string, entryId: string, idx: number, done: boolean) => Promise<void>
+  setConfirm: (hostId: string, sessionId: string, entryId: string, idx: number, done: boolean, fallback?: JournalEntry) => Promise<void>
   /** `journal.changed`: raise the flag of the named resource of that unit (`roadmap`: every unit of the host). A unit not held is ignored. */
   markStale: (hostId: string, unitKey: string, what: ChangedWhat) => void
   setRoute: (hostId: string, sessionId: string, route: JournalRoute) => void
@@ -358,12 +358,18 @@ export const useJournalStore = create<JournalState>()((set, get) => {
       }))
     },
 
-    setConfirm: async (hostId, sessionId, entryId, idx, done) => {
+    setConfirm: async (hostId, sessionId, entryId, idx, done, fallback) => {
       if (get().confirmSupport[hostId] !== true) return
       const u = unitOf(hostId, sessionId)
-      const entry = u ? findEntry(u, entryId) : undefined
-      if (!u || !entry || entry.kind !== 'confirm') return
+      if (!u) return
       const unitKey = unitKeyOf(u.unit)
+      // Last resorts when neither the stream nor the band holds the entry (every item answered, it left the band): the copy kept for a
+      // rollback, then the caller's own (the detail keeps showing the last copy it saw).
+      // Held = the current page, the band or another session's page (a detail opened on an older page): found there, never an orphan.
+      const held = findEntry(u, entryId)
+      const entry = held ?? orphans.get(entryKey(hostId, unitKey, entryId)) ?? fallback
+      if (!entry || entry.kind !== 'confirm' || entry.id !== entryId) return
+      if (!held) orphans.set(entryKey(hostId, unitKey, entryId), entry)
       const k = checkKey(hostId, unitKey, entryId, idx)
       const shown = entry.items[idx]?.done
       if (shown === undefined) return

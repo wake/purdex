@@ -125,7 +125,7 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
   const detail = detailEntry?.kind === 'confirm' ? detailEntry : undefined
   const canCheck = useJournalStore((s) => target.read !== null && s.confirmSupport[target.read.hostId] === true)
   const onToggleItem = (idx: number, done: boolean) => {
-    if (target.read && detail) void useJournalStore.getState().setConfirm(target.read.hostId, target.read.sessionId, detail.id, idx, done)
+    if (target.read && detail) void useJournalStore.getState().setConfirm(target.read.hostId, target.read.sessionId, detail.id, idx, done, detail)
   }
 
   const widths = {
