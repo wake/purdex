@@ -89,7 +89,7 @@ func TestRest_ExitGoesAfterTheAnswerOrAfterFiveMinutes(t *testing.T) {
 		r := newRestRig(t)
 		r.advance(121 * time.Minute)
 		require.Len(t, r.texts(), 1)
-		r.mtime = r.now.Add(10 * time.Second) // it is answering
+		r.mtime = r.now.Add(20 * time.Second) // it is answering
 		r.advance(60 * time.Second)
 		require.Zero(t, r.exit.count(), "the turn is still going on")
 		r.advance(60 * time.Second)
@@ -191,4 +191,23 @@ func TestRest_AFailedSIGKILLIsTriedAgainAtTheNextStepNotRestartedAsANewRest(t *t
 	require.Equal(t, syscall.SIGKILL, r.sigs[len(r.sigs)-1].sig)
 	require.Len(t, r.texts(), 1, "no second notice: the rest went on")
 	require.Len(t, r.sigs, 3)
+}
+
+func TestRest_TheNoticesOwnWriteToTheTranscriptIsNotAnAnswer(t *testing.T) {
+	r := newRestRig(t)
+	r.advance(121 * time.Minute)
+	r.mtime = r.now.Add(5 * time.Second) // the notice was written to the transcript
+	r.advance(3 * time.Minute)
+	require.Zero(t, r.exit.count(), "90 s of quiet after the notice's own write is not an answer")
+	r.advance(2*time.Minute + time.Second)
+	require.Equal(t, 1, r.exit.count(), "the five minutes are the limit")
+}
+
+func TestRest_AnEventAfterTheExitStillCancelsTheSignals(t *testing.T) {
+	r := newRestRig(t)
+	r.advance(121 * time.Minute)
+	r.advance(5*time.Minute + time.Second) // exit sent
+	require.NoError(t, r.m.holder.Update(func(h *watch.Holder) { h.LastDelivery = r.now.Add(time.Second) }))
+	r.advance(6 * time.Minute)
+	require.Empty(t, r.sigs, "it is working on an event: no signal")
 }

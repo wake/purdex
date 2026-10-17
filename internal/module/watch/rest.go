@@ -26,6 +26,7 @@ const (
 	restAnswerWait = 5 * time.Minute
 	restQuiet      = 90 * time.Second // the answer is over when the transcript has been still this long (the notice itself also writes it)
 	restExitWait   = 5 * time.Minute
+	noticeWrite    = 15 * time.Second // the notice reaches the transcript within this long
 	restKillWait   = 10 * time.Second
 )
 
@@ -47,6 +48,8 @@ type restState struct {
 	frame string
 	phase restPhase
 	at    time.Time // when the phase was entered
+	// asked is when the notice went out and base the transcript time that counts as "not an answer yet" (the notice writes it too).
+	asked, base time.Time
 }
 
 // exiter sends /exit to the watcher's pane (watch.PaneControl.SendExit).
@@ -126,6 +129,10 @@ func (m *Module) restStep(ctx context.Context) {
 		m.rst.frame, m.rst.phase, m.rst.at = h.FrameID, restIdle, time.Time{}
 	}
 	mtime := m.transcriptMtime(h.TranscriptPath)
+	if m.rst.phase != restIdle && h.LastDelivery.After(m.rst.asked) { // an event came in after the notice: there is work, no rest
+		m.rst.phase, m.rst.at = restIdle, time.Time{}
+		return
+	}
 	switch m.rst.phase {
 	case restIdle:
 		idleFor := time.Duration(s.PatrolIdleMin) * time.Minute
@@ -136,13 +143,10 @@ func (m *Module) restStep(ctx context.Context) {
 			m.logf("[watch] rest: the notice to %s: %v", h.SessionID, err)
 			return
 		}
-		m.rst.phase, m.rst.at = restAsked, now
+		m.rst.phase, m.rst.at, m.rst.asked = restAsked, now, now
+		m.rst.base = latest(m.transcriptMtime(h.TranscriptPath), now.Add(noticeWrite))
 	case restAsked:
-		if h.LastDelivery.After(m.rst.at) { // an event came in: there is work, no rest
-			m.rst.phase, m.rst.at = restIdle, time.Time{}
-			return
-		}
-		answered := mtime.After(m.rst.at) && now.Sub(mtime) >= restQuiet
+		answered := mtime.After(m.rst.base) && now.Sub(mtime) >= restQuiet
 		if !answered && now.Sub(m.rst.at) < restAnswerWait {
 			return
 		}
