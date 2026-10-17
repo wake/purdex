@@ -347,6 +347,14 @@ describe('the chain of sessions failed (the current page read fine)', () => {
     await waitFor(() => expect(screen.queryByTestId('journal-sessions-error')).toBeNull())
     expect(prev().disabled).toBe(false)
   })
+  it('on a middle page a failed chain disables 下一頁 as well', () => {
+    const key = seedA({ sessionsFailed: true })
+    patchViewMemo(HOST, key, { page: 's-2' })
+    mount()
+    expect(ids()).toEqual(['p2a', 'p2b'])
+    expect(prev().disabled).toBe(true)
+    expect(next().disabled).toBe(true)
+  })
   it('no error when the chain is fine', () => {
     seedA()
     mount()
