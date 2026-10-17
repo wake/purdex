@@ -466,6 +466,34 @@ used slots, a paused lane, the gate words, waiting warning at 2 min, the pairing
   and the hover card. Read on open and every 30 s while shown. Tests: bar scale, absent fields, failed records, the
   hover card.
 
+## 10a. A1 — `GET /api/gate/decisions` (A line, a new Sonnet member; lead 1f 10-17, moved ahead: the user uses the 歷史 tab)
+
+Spec §8 A1. One PR. Facts (main 95c0f50fd): there is no `/api/gate/*` route yet; a gate record is written by
+`(*Gate).record` (`internal/gate/decision.go:97`) into `<gate dir>/decisions.jsonl`, rotated to `.1` past 4 MB; its
+`time` is when the gate **started** (`internal/gate/gate.go:258`), so the command started at `time + wait_s` and ended at
+`time + wait_s + duration_s` (no extra start field is needed).
+1. **The record gains the command tree's usage** from the wait of the command (`cmd.ProcessState.SysUsage()`, a
+   `*syscall.Rusage`: the child and the descendants it waited for): `cpu_s` = user + system; `max_rss_mb` = `Maxrss`
+   (bytes on darwin, KiB on linux: convert by `runtime.GOOS`); `major_faults` = `Majflt`. `disk_read_mb` /
+   `disk_write_mb`: first **measure** on mlab whether a usable byte count exists for a waited child (darwin
+   `proc_pid_rusage` of the not-yet-reaped child, `ri_diskio_bytesread/written`; `Inblock`/`Oublock` are counts of block
+   operations, not bytes): write the numbers in the PR; if no exact byte count is had, leave both fields out (the UI shows
+   「—」 for an absent field, spec §8). A command that never started (refused, off, interrupted while waiting) has none of
+   these fields. Each is `omitempty`, so older records read the same.
+2. **A daemon module `internal/module/gate`** (the home of A2 later), registered on every host: `GET
+   /api/gate/decisions?class=heavy|light&since=<RFC 3339>&limit=<n>` → `{records: [...]}` newest first, from
+   `decisions.jsonl` then `.1` (a record whose line does not parse is skipped and counted in `skipped`), `limit` default
+   200, at most 1000; `class` empty = both; admin token only (the two `devices` checks of the watch module's
+   `requireAdmin`), device token 403, not in `HostRoutePolicy`. The gate directory is `gate.DefaultDir()` (tests set
+   `PDX_GATE_DIR`). Reading takes no gate lock (records are appended whole, one line each; a line cut by a rotation
+   mid-read is the one skipped).
+3. A capability `gate.decisions.v1` in `/api/info`, with the real-module test (the module registered into core →
+   `/api/info` declares it).
+Tests: the rusage fields from a real child (a short busy loop: `cpu_s` > 0, `max_rss_mb` > 0) and absent for a refused
+command; Maxrss units per OS (table); the route's order across the rotation (`.1` older), `class`, `since`, `limit` and
+its cap, a malformed line skipped and counted, admin only (device 403), the capability. Mutation: the newest-first
+order across the two files, the KiB/bytes conversion, the admin check.
+
 ## 11. W5e — after A3
 
 - **Pushes**: `watch.changed` and `watch.events` join the host event stream (`hooks/useMultiHostEventWs.ts:324`,
