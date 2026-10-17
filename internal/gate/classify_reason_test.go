@@ -150,7 +150,8 @@ func TestClassifyReason_Table(t *testing.T) {
 		{"vite optimize", Env{}, ClassNone, ReasonUnknown},
 		{"electron-vite something-new", Env{}, ClassNone, ReasonUnknown},
 		{"make", Env{}, ClassNone, ReasonUnknown},
-		{"make lint", Env{}, ClassNone, ReasonUnknown},
+		{"make lint", Env{}, ClassHeavy, ReasonHeavy}, // go vet ./... (#3089)
+		{"make lint extra", Env{}, ClassNone, ReasonUnknown},
 		{"make integration", Env{}, ClassNone, ReasonUnknown},
 		{"composer deploy", Env{}, ClassNone, ReasonUnknown}, // a script of the project's, called by its bare name
 		{"composer analyse", Env{}, ClassNone, ReasonUnknown},

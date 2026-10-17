@@ -65,3 +65,25 @@ func TestRun_ALightOuterLetsTscFilesThrough(t *testing.T) {
 	}
 	assert.Equal(t, 1, nested, "the inner command is recorded as nested")
 }
+
+// #3089: `make lint` is gofmt and go vet ./..., held as the heavy command it is. Its own go vet ./... then passes as a nested command,
+// and the light slot stays free for others; held light, the outer run kept the only light slot while its go vet waited in the heavy queue.
+// Mutation gate: make lint left unclassified or light → the class checks are red.
+func TestRun_MakeLintIsHeavyAndItsGoVetPassesWhileLightStaysFree(t *testing.T) {
+	require.Equal(t, ClassHeavy, Classify(words("make lint"), Env{}))
+	require.Equal(t, ClassHeavy, Classify(words("go vet ./..."), Env{}))
+	g, _ := testGate(t)
+	g.SetConfig(func(c *Config) { c.Slots.Heavy, c.Slots.Light = 1, 1 })
+	lint := startOuter(t, g, Classify(words("make lint"), Env{}), 1001)
+	defer func() { lint.release(); <-lint.done }()
+
+	// the go vet ./... below it needs no heavy slot of its own, though the only one is held
+	code, ran := lint.inner(t, Classify(words("go vet ./..."), Env{}), 2002, descendantProcs(2002, 1001), lint.env)
+	assert.True(t, ran, "the nested go vet runs")
+	assert.Equal(t, 0, code)
+
+	// and the light slot was never taken: a light command of someone else starts at once
+	assert.Empty(t, g.Status().Light, "make lint holds no light slot")
+	other := startOuter(t, g, ClassLight, 3003)
+	defer func() { other.release(); <-other.done }()
+}
