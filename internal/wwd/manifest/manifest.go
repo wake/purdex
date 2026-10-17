@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -295,7 +296,48 @@ func parseLocal(v any) (LocalPolicy, error) {
 	return LocalPolicy{}, fmt.Errorf("local must be true, false, \"files<=N\" or \"packages<=N\"")
 }
 
+// checkPlaceholderContext rejects a placeholder that sits inside quotes or is
+// glued to other text: Render inserts single-quoted values, which are only
+// safe as a whole unquoted shell word (optionally after "--opt=").
+func checkPlaceholderContext(run string) error {
+	var quote byte
+	for i := 0; i < len(run); i++ {
+		c := run[i]
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			} else if loc := placeholderRe.FindStringIndex(run[i:]); c == '{' && loc != nil && loc[0] == 0 {
+				return fmt.Errorf("placeholder %s is inside quotes", run[i:i+loc[1]])
+			}
+		case c == '\'' || c == '"':
+			quote = c
+		case c == '\\':
+			i++
+		case c == '{':
+			loc := placeholderRe.FindStringIndex(run[i:])
+			if loc == nil || loc[0] != 0 {
+				continue
+			}
+			end := i + loc[1]
+			if i > 0 && run[i-1] != ' ' && run[i-1] != '\t' && run[i-1] != '=' {
+				return fmt.Errorf("placeholder %s must be a separate word", run[i:end])
+			}
+			if end < len(run) && run[end] != ' ' && run[end] != '\t' {
+				return fmt.Errorf("placeholder %s must be a separate word", run[i:end])
+			}
+		}
+	}
+	if quote != 0 {
+		return fmt.Errorf("run has an unterminated quote")
+	}
+	return nil
+}
+
 func checkPlaceholders(t *Task) error {
+	if err := checkPlaceholderContext(t.Run); err != nil {
+		return err
+	}
 	seen := map[string]bool{}
 	for _, mm := range placeholderRe.FindAllStringSubmatch(t.Run, -1) {
 		seen[mm[1]] = true
@@ -359,6 +401,9 @@ func checkRelPath(p string) error {
 type RenderEnv struct {
 	// Report and Junit are the output file paths for {report} and {junit}.
 	Report, Junit string
+	// Workspace is the job's workspace root; Report and Junit must be
+	// inside it (spec §6).
+	Workspace string
 	// Exists reports whether a repo-root-relative path exists in the
 	// snapshot. Required when the task takes files.
 	Exists func(repoRel string) bool
@@ -403,6 +448,14 @@ func (t *Task) Render(args []string, env RenderEnv) (string, error) {
 	case ArgsPass:
 		list = quoteAll(args)
 	}
+	for ph, p := range map[string]string{"{report}": env.Report, "{junit}": env.Junit} {
+		if !strings.Contains(t.Run, ph) {
+			continue
+		}
+		if err := checkInside(env.Workspace, p); err != nil {
+			return "", fmt.Errorf("%s: %w", ph, err)
+		}
+	}
 	out := placeholderRe.ReplaceAllStringFunc(t.Run, func(ph string) string {
 		switch ph {
 		case "{files}", "{packages}":
@@ -418,6 +471,18 @@ func (t *Task) Render(args []string, env RenderEnv) (string, error) {
 		out += " " + list
 	}
 	return out, nil
+}
+
+// checkInside requires p to be a non-empty absolute path strictly inside root.
+func checkInside(root, p string) error {
+	if root == "" || p == "" || strings.ContainsRune(p, 0) || !filepath.IsAbs(root) || !filepath.IsAbs(p) {
+		return fmt.Errorf("output path %q needs an absolute path and a workspace root", p)
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(p))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+		return fmt.Errorf("output path %q is outside the workspace", p)
+	}
+	return nil
 }
 
 func checkPackage(p string) error {

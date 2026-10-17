@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -147,7 +148,7 @@ func TestRenderFiles(t *testing.T) {
 	m := mustParse(t, sample)
 	task := m.Tasks["spa-file"]
 	got, err := task.Render([]string{"src/a.test.ts", "src/b c.test.ts"}, RenderEnv{
-		Report: "/w/report.json",
+		Report: "/w/report.json", Workspace: "/w",
 		Exists: exists("spa/src/a.test.ts", "spa/src/b c.test.ts"),
 	})
 	if err != nil {
@@ -161,7 +162,7 @@ func TestRenderFiles(t *testing.T) {
 
 func TestRenderFilesRejected(t *testing.T) {
 	task := mustParse(t, sample).Tasks["spa-file"]
-	env := RenderEnv{Report: "/r", Exists: exists("spa/src/a.ts")}
+	env := RenderEnv{Report: "/w/r", Workspace: "/w", Exists: exists("spa/src/a.ts")}
 	for name, args := range map[string][]string{
 		"none":       nil,
 		"dotdot":     {"../go.mod"},
@@ -261,6 +262,41 @@ func TestDefinitionHashSummaryEnvOrderAndArgsKind(t *testing.T) {
 	s := mustParse(t, "[tasks.a]\nrun=\"x\"\nargs=\"none\"\nsummary=\"go-json\"\nenv=[\"A=1\",\"B\"]\n").Tasks["a"]
 	if x.DefinitionHash() == s.DefinitionHash() {
 		t.Error("summary must be part of the hash")
+	}
+}
+
+func TestParseRejectsQuotedOrGluedPlaceholders(t *testing.T) {
+	for name, run := range map[string]string{
+		"single quoted": `tool '{files}'`,
+		"double quoted": `tool "{files}"`,
+		"glued prefix":  `tool x{files}`,
+		"glued suffix":  `tool {files}x`,
+		"inside quote":  `sh -c 'run {files}'`,
+		"unterminated":  `tool 'abc {files}`,
+	} {
+		src := "[tasks.a]\nrun = " + strconv.Quote(run) + "\nargs = \"files\"\n"
+		if _, err := Parse([]byte(src)); err == nil {
+			t.Errorf("%s: Parse accepted %s", name, run)
+		}
+	}
+}
+
+func TestRenderOutputPathContainment(t *testing.T) {
+	task := mustParse(t, sample).Tasks["spa-file"]
+	ex := exists("spa/src/a.ts")
+	for name, env := range map[string]RenderEnv{
+		"empty":         {Report: "", Workspace: "/w", Exists: ex},
+		"no workspace":  {Report: "/w/r.json", Exists: ex},
+		"outside":       {Report: "/etc/r.json", Workspace: "/w", Exists: ex},
+		"dotdot":        {Report: "/w/../etc/r.json", Workspace: "/w", Exists: ex},
+		"sibling":       {Report: "/w2/r.json", Workspace: "/w", Exists: ex},
+		"workspace dir": {Report: "/w", Workspace: "/w", Exists: ex},
+		"relative":      {Report: "r.json", Workspace: "/w", Exists: ex},
+		"nul":           {Report: "/w/r\x00.json", Workspace: "/w", Exists: ex},
+	} {
+		if _, err := task.Render([]string{"src/a.ts"}, env); err == nil {
+			t.Errorf("%s: Render accepted report path %q", name, env.Report)
+		}
 	}
 }
 
