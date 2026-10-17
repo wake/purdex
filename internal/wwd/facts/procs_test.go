@@ -73,7 +73,7 @@ func TestSelectTopIsUnionOfMemAndCPU(t *testing.T) {
 		t.Errorf("union has %d entries, want 3 (301 is in both lists once)", len(got))
 	}
 	// default sizes are 12 and 12
-	if got := SelectTop(snap.Procs, 12, 12); len(got) != len(snap.Procs) {
+	if got := SelectTop(snap.Procs[:10], 12, 12); len(got) != 10 {
 		t.Errorf("fewer procs than the limit keeps them all, got %d", len(got))
 	}
 }
