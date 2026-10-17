@@ -153,7 +153,7 @@ func ReadOpenItems(dir string, logf func(string, ...any)) []OpenItem {
 			}
 			counted := false
 			for i, it := range e.Items {
-				if it.Done {
+				if it.Done || it.Manual { // a hand-set item is the person's, Haiku never sees it
 					continue
 				}
 				if !counted {

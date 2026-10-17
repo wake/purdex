@@ -221,11 +221,11 @@ func TestWire_OffMakesEveryJournalRouteUnavailable(t *testing.T) {
 		{"GET", "/api/journal?session_id=s1"},
 		{"GET", "/api/journal/tasks?session_id=s1"},
 		{"GET", "/api/journal/roadmap?session_id=s1"},
-		{"PUT", "/api/journal/pin"},
+		{"PUT", "/api/journal/confirm"},
 	} {
 		var body any
 		if r.method == "PUT" {
-			body = map[string]any{"session_id": "s1", "entry_id": "x", "pinned": true}
+			body = map[string]any{"session_id": "s1", "entry_id": "x", "idx": 0, "done": true}
 		}
 		code, out := e.request(r.method, r.url, body)
 		if code != http.StatusServiceUnavailable || !strings.Contains(string(out), "unavailable") {

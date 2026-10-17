@@ -90,10 +90,10 @@ func TestJournalAPI_TasksAreTheUnitsTasksFile(t *testing.T) {
 
 func teamSeat(id string) team.Seat { return team.Seat{TeamID: id, Role: team.SeatMember} }
 
-// rawPut sends a body to the pin route as it is and answers the status code.
+// rawPut sends a body to the confirm route as it is and answers the status code.
 func (j *journalEnv) rawPut(body string) int {
 	w := httptest.NewRecorder()
-	j.mux.ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/api/journal/pin", strings.NewReader(body)))
+	j.mux.ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/api/journal/confirm", strings.NewReader(body)))
 	return w.Code
 }
 
@@ -204,69 +204,95 @@ func (j *journalEnv) changed() []changedEvent {
 	return out
 }
 
-// Pinning sets the entry's pin in its month file (whichever month it is in), answers JSON, and announces journal.changed
-// (entries) only when something changed; a member pins in its team's journal; an entry that is not there is a 404 and a body
-// the App did not mean is a 400.
-// Mutation gate: always announce -> a no-op pin sends an event (red); never announce (red); look in the newest month only ->
-// an older entry is not found (red); the unit's id missing from the event (red).
-func TestJournalAPI_PinSetsAndClearsAndAnnounces(t *testing.T) {
+// A hand check sets item idx in the entry's month file (whichever month it is in) and answers 204; journal.changed (entries)
+// is sent only when something changed; a member checks in its team's journal; an entry or item that is not there is a 404,
+// an entry that is not a confirm a 400, and a body the App did not mean a 400. All items checked -> the entry leaves confirms[]
+// and open_confirms drops.
+// Mutation gate: map every error to 500 (red); always announce -> a no-op check sends an event (red); never announce (red);
+// look in the newest month only -> an older entry is not found (red); drop Manual from the write (red).
+func TestJournalAPI_ConfirmChecksAndUnchecksAndAnnounces(t *testing.T) {
 	j := newJournalAPI(t)
 	u := j.unit("team:t1", "日誌")
 	j.write(u,
-		journal.Entry{ID: "old", Kind: journal.KindExec, At: tm(time.October, 5, 1), Actor: "A", Text: "in an older month"},
+		journal.Entry{ID: "old", Kind: journal.KindConfirm, At: tm(time.October, 5, 1), Actor: "A", Text: "in an older month", Items: []journal.Item{{Text: "甲?"}, {Text: "乙?"}}},
 		journal.Entry{ID: "new", Kind: journal.KindExec, At: tm(time.November, 5, 1), Actor: "A", Text: "in the newest month"},
 	)
 	j.seats.seats["m1"] = teamSeat("t1")
-	pin := func(entry string, pinned bool) (int, string) {
-		code, body := j.request(http.MethodPut, "/api/journal/pin", map[string]any{"session_id": "m1", "entry_id": entry, "pinned": pinned})
+	put := func(entry string, idx int, done bool) (int, string) {
+		code, body := j.request(http.MethodPut, "/api/journal/confirm", map[string]any{"session_id": "m1", "entry_id": entry, "idx": idx, "done": done})
 		return code, string(body)
 	}
-	if code, body := pin("old", true); code != http.StatusOK || !strings.Contains(body, `"entry_id":"old"`) || !strings.Contains(body, `"pinned":true`) {
-		t.Fatalf("pin old: code %d body %s", code, body)
+	if code, body := put("old", 0, true); code != http.StatusNoContent || body != "" {
+		t.Fatalf("check: code %d body %q", code, body)
 	}
 	evs := j.changed()
 	if len(evs) != 1 || evs[0].Unit.Kind != "team" || evs[0].Unit.ID != "t1" || evs[0].What != "entries" || evs[0].Project != "p1" {
-		t.Fatalf("events after a pin = %+v", evs)
+		t.Fatalf("events after a check = %+v", evs)
 	}
 	es, _, err := journal.ReadUnit(unitHome(u).journalDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range es {
-		if (e.ID == "old") != e.Pinned {
-			t.Errorf("entry %s pinned = %v", e.ID, e.Pinned)
+		if e.ID == "old" && (!e.Items[0].Done || !e.Items[0].Manual || e.Items[1].Done || e.Items[1].Manual) {
+			t.Errorf("items = %+v", e.Items)
 		}
 	}
 	_, p, _ := j.page("/api/journal?session_id=m1")
-	if !slices.Equal(ids(p.Pinned), []string{"old"}) {
-		t.Errorf("the pinned band = %v", ids(p.Pinned))
+	if !slices.Equal(ids(p.Confirms), []string{"old"}) || p.OpenConfirms != 1 {
+		t.Errorf("confirms = %v, open_confirms = %d", ids(p.Confirms), p.OpenConfirms)
 	}
-	if code, _ := pin("old", true); code != http.StatusOK {
-		t.Errorf("pinning twice: code %d", code)
+	if code, _ := put("old", 0, true); code != http.StatusNoContent {
+		t.Errorf("checking twice: code %d", code)
 	}
 	if evs := j.changed(); len(evs) != 0 {
-		t.Errorf("a pin that changed nothing announced %+v", evs)
+		t.Errorf("a check that changed nothing announced %+v", evs)
 	}
-	if code, _ := pin("old", false); code != http.StatusOK {
-		t.Fatalf("unpin: code %d", code)
+	if code, _ := put("old", 1, true); code != http.StatusNoContent {
+		t.Fatalf("check the last: code %d", code)
+	}
+	_, p, _ = j.page("/api/journal?session_id=m1")
+	if len(p.Confirms) != 0 || p.OpenConfirms != 0 {
+		t.Errorf("all checked: confirms = %v, open_confirms = %d", ids(p.Confirms), p.OpenConfirms)
+	}
+	j.changed()
+	if code, _ := put("old", 1, false); code != http.StatusNoContent {
+		t.Fatalf("uncheck: code %d", code)
 	}
 	if evs := j.changed(); len(evs) != 1 {
-		t.Errorf("events after an unpin = %+v", evs)
+		t.Errorf("events after an uncheck = %+v", evs)
 	}
-	if code, body := pin("nobody", true); code != http.StatusNotFound || !strings.Contains(body, `"not_found"`) {
-		t.Errorf("unknown entry: code %d body %s", code, body)
+	_, p, _ = j.page("/api/journal?session_id=m1")
+	if !slices.Equal(ids(p.Confirms), []string{"old"}) || p.OpenConfirms != 1 {
+		t.Errorf("after the uncheck: confirms = %v, open_confirms = %d", ids(p.Confirms), p.OpenConfirms)
+	}
+	j.changed()
+	for name, c := range map[string]struct {
+		entry string
+		idx   int
+		want  int
+	}{
+		"unknown entry":  {"nobody", 0, http.StatusNotFound},
+		"index past end": {"old", 2, http.StatusNotFound},
+		"negative index": {"old", -1, http.StatusNotFound},
+		"not a confirm":  {"new", 0, http.StatusBadRequest},
+	} {
+		if code, body := put(c.entry, c.idx, true); code != c.want {
+			t.Errorf("%s: code %d body %s, want %d", name, code, body, c.want)
+		}
 	}
 	if evs := j.changed(); len(evs) != 0 {
-		t.Errorf("a pin of nothing announced %+v", evs)
+		t.Errorf("a refused check announced %+v", evs)
 	}
 	for name, body := range map[string]any{
-		"no pinned":    map[string]any{"session_id": "m1", "entry_id": "old"},
-		"no entry":     map[string]any{"session_id": "m1", "pinned": true},
-		"no session":   map[string]any{"entry_id": "old", "pinned": true},
-		"wrong type":   map[string]any{"session_id": "m1", "entry_id": "old", "pinned": "yes"},
-		"unknown unit": map[string]any{"session_id": "ghost", "entry_id": "old", "pinned": true},
+		"no idx":       map[string]any{"session_id": "m1", "entry_id": "old", "done": true},
+		"no done":      map[string]any{"session_id": "m1", "entry_id": "old", "idx": 0},
+		"no entry":     map[string]any{"session_id": "m1", "idx": 0, "done": true},
+		"no session":   map[string]any{"entry_id": "old", "idx": 0, "done": true},
+		"wrong type":   map[string]any{"session_id": "m1", "entry_id": "old", "idx": 0, "done": "yes"},
+		"unknown unit": map[string]any{"session_id": "ghost", "entry_id": "old", "idx": 0, "done": true},
 	} {
-		code, out := j.request(http.MethodPut, "/api/journal/pin", body)
+		code, out := j.request(http.MethodPut, "/api/journal/confirm", body)
 		want := http.StatusBadRequest
 		if name == "unknown unit" {
 			want = http.StatusNotFound
@@ -275,8 +301,10 @@ func TestJournalAPI_PinSetsAndClearsAndAnnounces(t *testing.T) {
 			t.Errorf("%s: code %d body %s, want %d", name, code, out, want)
 		}
 	}
-	w := j.rawPut("{not json")
-	if w != http.StatusBadRequest {
-		t.Errorf("a body that is not JSON: code %d", w)
+	if code := j.rawPut("{not json"); code != http.StatusBadRequest {
+		t.Errorf("a body that is not JSON: code %d", code)
+	}
+	if code, _ := j.request(http.MethodPut, "/api/journal/pin", map[string]any{"session_id": "m1", "entry_id": "old", "pinned": true}); code == http.StatusOK || code == http.StatusNoContent {
+		t.Errorf("the pin route still answers: code %d", code)
 	}
 }

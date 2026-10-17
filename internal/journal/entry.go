@@ -42,6 +42,8 @@ var byLabels = map[By]string{ByUser: "使用者", ByLeader: "領導者", ByMembe
 type Item struct {
 	Text string `json:"text"`
 	Done bool   `json:"done,omitempty"`
+	// Manual: a person set Done by hand (checked or unchecked). Haiku never changes a manual item.
+	Manual bool `json:"manual,omitempty"`
 }
 
 // Entry is one journal line. Its JSON form is the file's source of truth (the visible markdown is a rendering of it).
@@ -56,7 +58,7 @@ type Entry struct {
 	Refs   []string  `json:"refs,omitempty"`
 	Items  []Item    `json:"items,omitempty"`
 	Detail string    `json:"detail,omitempty"`
-	Pinned bool      `json:"pinned,omitempty"`
+	// Files written before pinning was removed carry "pinned" in their metadata; the decoder ignores unknown fields.
 }
 
 // Label is the Chinese label of the kind; a request is 「<by>請求」.

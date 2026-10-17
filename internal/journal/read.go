@@ -91,7 +91,7 @@ func ReadUnit(dir string) ([]Entry, []Skipped, error) {
 type takenMonth struct{ name, text string }
 
 // keptMonths picks the month files of dir that make the unit and reads them: newest first, each through the guard of
-// readMonth, the newest taking the unit's byte budget first. What it leaves out is reported. ReadUnit and SetPinnedIn both
+// readMonth, the newest taking the unit's byte budget first. What it leaves out is reported. ReadUnit and SetItemIn both
 // use it, so the file that changes is always one the reader shows. A folder that is not there is no files.
 func keptMonths(dir string) (kept []takenMonth, skipped []Skipped, err error) {
 	names, err := os.ReadDir(dir)
@@ -199,11 +199,11 @@ func parseCursor(c string) (string, error) {
 	return id, nil
 }
 
-// Pinned is every pinned entry of all, newest first by (at, id).
-func Pinned(all []Entry) []Entry {
+// Confirms is every confirm entry of all with an unchecked item, newest first by (at, id).
+func Confirms(all []Entry) []Entry {
 	var out []Entry
 	for _, e := range all {
-		if e.Pinned {
+		if e.Kind == KindConfirm && slices.ContainsFunc(e.Items, func(it Item) bool { return !it.Done }) {
 			out = append(out, e)
 		}
 	}
