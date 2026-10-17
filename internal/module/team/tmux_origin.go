@@ -34,9 +34,6 @@ func originPane(origin string) string {
 	return ""
 }
 
-// startSlackS: both times are whole seconds, read at different moments.
-const startSlackS = 1
-
 // startedUnderServer says whether the agent of o started under the tmux server of the generation instance ("<pid>:<start_time>"): a
 // process cannot be in a pane of a server that did not exist yet, so an entry that started BEFORE the server did belongs to an older
 // one, and a pane id the restarted server hands out again is not its pane. The registry records the agent's start time when it
@@ -55,7 +52,9 @@ func startedUnderServer(o team.Origin, instance string) bool {
 	if err != nil {
 		return false
 	}
-	return agentStart.Unix() >= serverStart-startSlackS
+	// Both are creation times cut to the whole second, so an agent that started under the server is never earlier than it; no slack,
+	// or an agent that died a second before a quick restart would pass for the new server's.
+	return agentStart.Unix() >= serverStart
 }
 
 // paneIdentityOf reads the pane an Origin names and checks that the entry belongs to the server that answered (startedUnderServer);

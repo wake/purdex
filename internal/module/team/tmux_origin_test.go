@@ -62,7 +62,7 @@ func TestStartedUnderServer(t *testing.T) {
 	}{
 		{"after the server", at(1700000100), "100:1700000000", true},
 		{"the same second", at(1700000000), "100:1700000000", true},
-		{"a second of slack", at(1699999999), "100:1700000000", true},
+		{"a second before the server", at(1699999999), "100:1700000000", false},
 		{"before the server", at(1699999990), "100:1700000000", false},
 		{"no start time", team.Origin{}, "100:1700000000", false},
 		{"unreadable start time", team.Origin{ProcStart: "yesterday"}, "100:1700000000", false},
