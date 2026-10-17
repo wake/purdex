@@ -429,12 +429,14 @@ registerFencedStore(STORAGE_KEYS.WORKSPACES, useWorkspaceStore)
 // Remember the last workspace the user was in that is not the watcher area (see `returnWorkspaceId`), and take the way
 // back on entering the area (see `watchReturnTarget`). Every window runs this on its own store, so a window that a
 // synced write takes into the area keeps the workspace it showed itself, and the tab active in it just before.
-// Another world — a profile switch writes its tag (`worldId` / `worldEpoch`) with it — keeps no way back of the old one,
-// whether it lands on the area or the area stays shown: workspace ids can recur across worlds (`unsorted`).
+// Another world — a profile switch (`commitTabWorld`) writes new workspaces with a new tag (`worldId` / `worldEpoch`) —
+// keeps no way back of the old one, whether it lands on the area or the area stays shown: workspace ids can recur across
+// worlds (`unsorted`). A promote (`restampWorld`) moves the tag alone over the same workspaces: the same world, kept.
 useWorkspaceStore.subscribe((state, prev) => {
   const id = state.activeWorkspaceId
   if (id !== null && id !== WATCH_WORKSPACE_ID) returnWorkspaceId = id
-  if (state.worldId !== prev.worldId || state.worldEpoch !== prev.worldEpoch) watchReturnTarget = null
+  const retagged = state.worldId !== prev.worldId || state.worldEpoch !== prev.worldEpoch
+  if (retagged && state.workspaces !== prev.workspaces) watchReturnTarget = null
   else if (id === WATCH_WORKSPACE_ID && prev.activeWorkspaceId !== WATCH_WORKSPACE_ID) {
     const from = prev.workspaces.find((ws) => ws.id === prev.activeWorkspaceId)
     watchReturnTarget = from ? { workspaceId: from.id, tabId: from.activeTabId } : null
