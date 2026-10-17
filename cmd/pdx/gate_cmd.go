@@ -451,6 +451,7 @@ const wouldWaitUsage = "usage: pdx gate would-wait [--class heavy|light] [--json
 func wouldWaitBatch(g *gate.Gate, cfg gate.Config, argvs [][]string, asJSON bool, stdout io.Writer) int {
 	env := gate.EnvOf(os.Environ(), false) // the same view of the environment as a shim's: no terminal, the caller's variables
 	byClass := map[gate.Class]gate.WouldWait{}
+	views := map[gate.Class]gate.ConflictView{} // the rules, queue and holders of a class, read once like its WouldWait
 	answers := make([]gate.WouldWait, 0, len(argvs))
 	for _, argv := range argvs {
 		cl := cfg.Intercept.Classify(argv, env)
@@ -458,8 +459,9 @@ func wouldWaitBatch(g *gate.Gate, cfg gate.Config, argvs [][]string, asJSON bool
 		if !ok {
 			w = g.WouldWait(cl)
 			byClass[cl] = w
+			views[cl] = g.ConflictView(cl)
 		}
-		answers = append(answers, w)
+		answers = append(answers, views[cl].Apply(w, argv)) // the class's one reading, and this command's rules
 	}
 	if asJSON {
 		b, _ := json.Marshal(answers)
@@ -519,7 +521,7 @@ func gateWouldWait(args []string, stdout, stderr io.Writer) int {
 		// the same view of the environment as a shim's: no terminal, the caller's variables
 		cl = cfg.Intercept.Classify(command, gate.EnvOf(os.Environ(), false))
 	}
-	w := g.WouldWait(cl)
+	w := g.WouldWaitFor(cl, command)
 	if *asJSON {
 		b, _ := json.Marshal(w)
 		fmt.Fprintln(stdout, string(b))

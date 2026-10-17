@@ -281,6 +281,18 @@ func TestRank_AnOlderMissingTicketStaysBehindAFrontOne(t *testing.T) {
 	assert.Equal(t, 1, tk.AheadFront)
 }
 
+// ...and with room for it a ticket that is not listed is still served (its place is only behind the older ones).
+// Mutation gate: a ticket that is not listed is never served → red.
+func TestRank_AMissingTicketIsServedWhenThereIsRoom(t *testing.T) {
+	rp := newRankPool(t, 2)
+	ts := rp.enqueue(t, 2)
+	require.NoError(t, os.Remove(filepath.Join(rp.queueDir(), ts[1].Name)))
+	tk, err := rp.TryTakeRanked(ts[1])
+	require.NoError(t, err)
+	require.NotNil(t, tk.Slot, "one older waiter, two slots: there is room")
+	tk.Slot.Release(nil)
+}
+
 // A negative until is a nonsense value: the ticket reads as normal with an error, not as a hold that never ends.
 func TestRank_ANegativeUntilReadsAsNormal(t *testing.T) {
 	rp := newRankPool(t, 1)
