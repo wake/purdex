@@ -15,7 +15,7 @@ import { TeamPanelArea } from './TeamPanelArea'
 import { TeamDisplayProvider } from './TeamDisplayProvider'
 import { MEMBER_REFRESH_DEBOUNCE_MS, ageText, memberLastLine, memberTaskLine } from './member-lines'
 import { HOST, member as rosterMember, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
-import { seedUnit, setJournalHost } from '../../lib/journal/__tests__/journal-fixture'
+import { handleJournalEvent } from '../../lib/journal/journal-ws'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import type { JournalMember } from '../../lib/journal/types'
 import { membersKey, useJournalMembersStore } from '../../stores/useJournalMembersStore'
@@ -33,6 +33,7 @@ const member = (over: Partial<JournalMember> = {}): JournalMember => ({
 const hold = (members: JournalMember[]) => act(() => { useJournalMembersStore.setState({ byLead: { [membersKey(HOST, 'L')]: members } }) })
 const support = (yes: boolean) => act(() => { useJournalMembersStore.getState().setSupport(HOST, yes) })
 const row = (sessionId: string) => screen.getAllByTestId('team-panel-row').find((r) => r.getAttribute('data-session-id') === sessionId)!
+const changed = (hostId: string, kind: string, id: string) => handleJournalEvent(hostId, 'journal.changed', { unit: { kind, id }, project: 'p', what: 'entries' })
 const mount = () => render(<TeamDisplayProvider><TeamPanelArea /></TeamDisplayProvider>)
 
 beforeEach(() => {
@@ -96,13 +97,15 @@ describe('member lines in the full panel', () => {
   })
 
   it('reads the LEADER\'s host once the panel shows, and again after the host says the journal changed', async () => {
-    seedUnit(HOST, 'L', { kind: 'team', id: 'tm1', label: 'T' })
     support(true)
     mount()
     await act(async () => { await vi.advanceTimersByTimeAsync(0) })
     expect(getJournalMembers).toHaveBeenCalledTimes(1)
     expect(getJournalMembers).toHaveBeenCalledWith(HOST, 'L')
-    act(() => useJournalStore.getState().markStale(HOST, 'team:tm1', 'entries'))
+    act(() => changed(HOST, 'team', 'tm1-not-this-team'))
+    await act(async () => { await vi.advanceTimersByTimeAsync(MEMBER_REFRESH_DEBOUNCE_MS * 2) })
+    expect(getJournalMembers).toHaveBeenCalledTimes(1)
+    act(() => changed(HOST, 'team', 't1')) // this team's unit is `team:t1` (the fixture's team id)
     await act(async () => { await vi.advanceTimersByTimeAsync(MEMBER_REFRESH_DEBOUNCE_MS - 1) })
     expect(getJournalMembers).toHaveBeenCalledTimes(1)
     await act(async () => { await vi.advanceTimersByTimeAsync(1) })
@@ -182,22 +185,19 @@ describe('JV-2d codex R5', () => {
   })
 
   it('only this leader\'s journal.changed re-reads: another unit or another host asks nothing', async () => {
-    const UNIT = { kind: 'team' as const, id: 'tm1', label: 'T' }
-    setJournalHost(HOST, true)
-    seedUnit(HOST, 'L', UNIT)
-    seedUnit(HOST, 'other', { kind: 'solo', id: 'o1', label: 'o' })
-    seedUnit('h2', 'L', UNIT)
+    // Nothing is seeded in the journal store: a background team's unit is not held there (the loader only loads the active tab's).
     support(true)
     mount()
     await settle()
     expect(getJournalMembers).toHaveBeenCalledTimes(1)
     act(() => {
-      useJournalStore.getState().markStale(HOST, 'solo:o1', 'entries') // another unit of this host
-      useJournalStore.getState().markStale('h2', 'team:tm1', 'entries') // the same unit id on another host
+      changed(HOST, 'solo', 'o1') // another unit of this host
+      changed(HOST, 'team', 'other-team') // another team of this host
+      changed('h2', 'team', 't1') // the same unit id on another host
     })
     await settle(MEMBER_REFRESH_DEBOUNCE_MS * 2)
     expect(getJournalMembers).toHaveBeenCalledTimes(1)
-    act(() => useJournalStore.getState().markStale(HOST, 'team:tm1', 'entries'))
+    act(() => changed(HOST, 'team', 't1'))
     await settle(MEMBER_REFRESH_DEBOUNCE_MS)
     expect(getJournalMembers).toHaveBeenCalledTimes(2)
   })
