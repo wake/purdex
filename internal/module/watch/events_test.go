@@ -149,9 +149,9 @@ func TestAck_RefusesWhatItShouldAndChangesNothing(t *testing.T) {
 
 func TestAck_AnUnknownOrForeignIDIsNotFoundAndTheRestStillGo(t *testing.T) {
 	r := newEventsRig(t)
-	rr, resp := r.ack(t, adminCtx, map[string]any{"ids": []string{r.ids[0], "a26-0001", "mlab-nope"}, "note": "n"})
+	rr, resp := r.ack(t, adminCtx, map[string]any{"ids": []string{r.ids[0], "other-0001", "mlab-nope"}, "note": "n"})
 	require.Equal(t, http.StatusOK, rr.Code)
-	require.Equal(t, []watch.AckResult{{ID: r.ids[0], Outcome: watch.AckHandled}, {ID: "a26-0001", Outcome: watch.AckNotFound}, {ID: "mlab-nope", Outcome: watch.AckNotFound}}, resp.Results)
+	require.Equal(t, []watch.AckResult{{ID: r.ids[0], Outcome: watch.AckHandled}, {ID: "other-0001", Outcome: watch.AckNotFound}, {ID: "mlab-nope", Outcome: watch.AckNotFound}}, resp.Results)
 	require.Equal(t, 1, resp.Handled)
 }
 
