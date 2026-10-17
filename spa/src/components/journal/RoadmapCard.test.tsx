@@ -117,11 +117,15 @@ describe('the roadmap card: tables', () => {
     expect([status('J-3').textContent, status('J-2').textContent, status('J-4').textContent, status('J-1').textContent, status('J-5').textContent])
       .toEqual(['Not started', 'In progress', 'In review', 'Done', 'Paused'])
     expect(status('J-3').className).toContain('text-text-muted')
-    expect(status('J-2').className).toContain('text-accent')
-    expect(status('J-4').className).toContain('text-text-secondary')
+    expect(status('J-2').className).toContain('text-journal-kind-exec')
+    expect(status('J-4').className).toContain('text-journal-kind-comm')
     expect(status('J-1').className).toContain('text-status-success-text')
-    expect(status('J-5').className).toContain('text-status-warning-text')
+    expect(status('J-5').className).toContain('text-journal-kind-task-new')
     expect(status('J-5').className).not.toContain('text-status-success-text')
+    // The dot shares the word's colour; 暫停 must not use the pale bg-status-warning (near invisible on light themes).
+    expect(status('J-5').innerHTML).toContain('bg-journal-kind-task-new')
+    expect(status('J-5').innerHTML).not.toContain('bg-status-warning')
+    expect(status('J-4').innerHTML).toContain('bg-journal-kind-comm')
   })
   it('the words come in zh-TW too', () => {
     useI18nStore.getState().setLocale('zh-TW')
