@@ -168,6 +168,7 @@ type journalRun struct {
 	drainer *Drainer
 	mirror  *TaskMirror // nil: the daemon has no team feed
 	git     *journal.Git
+	feed    team.JournalFeed // nil: the daemon has no team feed (no members API)
 }
 
 func (r *journalRun) start() {
@@ -236,7 +237,7 @@ func (m *Module) prepareJournal(st *Store, d *Deps) *journalRun {
 	dr := NewDrainer(st, projects, log.Printf)
 	dr.SetNames(func(sid string) string { return addressOf(origins, sid) }, m.personName)
 	dr.SetNotify(m.announceJournal)
-	run := &journalRun{cancel: cancel, runCtx: ctx, drainer: dr, git: g}
+	run := &journalRun{cancel: cancel, runCtx: ctx, drainer: dr, git: g, feed: feed}
 	if feed != nil {
 		run.mirror = NewTaskMirror(st, feed, newLiveSessions(origins).has, dr.Kick, log.Printf)
 	} else {

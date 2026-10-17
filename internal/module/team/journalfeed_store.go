@@ -111,3 +111,80 @@ func (s *Store) TeamInfo(teamID string) (team.TeamInfo, bool, error) {
 	}
 	return info, true, nil
 }
+
+// LastReports implements team.JournalFeed: one statement over the reports key prefix (team_id, member_key, id); the newest
+// report of each member_key, a tie on created_at to the greater rowid. Members of any state are answered.
+func (s *Store) LastReports(teamID string) ([]team.ReportRow, error) {
+	rows, err := s.db.Query(`
+		SELECT r.rowid, r.team_id, r.member_key, r.id, r.kind, r.summary, r.body, r.task_seq, r.fields_json,
+		       COALESCE(m.session_id, ''), COALESCE(m.ref, ''), COALESCE(m.title, ''), r.created_at
+		FROM (SELECT rowid AS rid, ROW_NUMBER() OVER (PARTITION BY member_key ORDER BY created_at DESC, rowid DESC) AS rn
+		      FROM reports WHERE team_id = ?) k
+		JOIN reports r ON r.rowid = k.rid
+		LEFT JOIN team_members m ON m.spawn_op = r.member_key
+		WHERE k.rn = 1
+		ORDER BY r.member_key`, teamID)
+	if err != nil {
+		return nil, fmt.Errorf("journal feed: read last reports of %s: %w", teamID, err)
+	}
+	defer rows.Close()
+	var out []team.ReportRow
+	for rows.Next() {
+		var r team.ReportRow
+		var fieldsJSON string
+		if err := rows.Scan(&r.RowID, &r.TeamID, &r.MemberKey, &r.ID, &r.Kind, &r.Summary, &r.Body, &r.TaskSeq, &fieldsJSON,
+			&r.MemberSessionID, &r.MemberRef, &r.MemberTitle, &r.CreatedAt); err != nil {
+			return nil, fmt.Errorf("journal feed: read last reports of %s: %w", teamID, err)
+		}
+		var f reportFields
+		if err := json.Unmarshal([]byte(fieldsJSON), &f); err != nil {
+			log.Printf("[team] journal feed: fields_json of report %s is unreadable (%v); its needs and pr read as none", r.ID, err)
+			f = reportFields{}
+		}
+		r.Needs, r.PR = f.Needs, f.PR
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("journal feed: read last reports of %s: %w", teamID, err)
+	}
+	return out, nil
+}
+
+// Members implements team.JournalFeed: the team's active members, oldest first. Active only: released, killed and gone
+// rows (and a remote member's in-flight states) are not current members.
+func (s *Store) Members(teamID string) ([]team.MemberInfo, error) {
+	rows, err := s.db.Query(`SELECT spawn_op, ref, session_id, title, state FROM team_members
+		WHERE team_id = ? AND state = 'active' ORDER BY created_at, spawn_op`, teamID)
+	if err != nil {
+		return nil, fmt.Errorf("journal feed: read members of %s: %w", teamID, err)
+	}
+	defer rows.Close()
+	var out []team.MemberInfo
+	for rows.Next() {
+		var m team.MemberInfo
+		if err := rows.Scan(&m.MemberKey, &m.Ref, &m.SessionID, &m.Title, &m.State); err != nil {
+			return nil, fmt.Errorf("journal feed: read members of %s: %w", teamID, err)
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("journal feed: read members of %s: %w", teamID, err)
+	}
+	return out, nil
+}
+
+// CurrentTask implements team.JournalFeed with currentTaskOf, the rule /api/team and the roster use.
+func (s *Store) CurrentTask(teamID, memberKey string) (team.MemberTaskInfo, bool, error) {
+	if memberKey == "" {
+		return team.MemberTaskInfo{}, false, nil
+	}
+	open, err := s.ListTasks(teamID, memberKey, false)
+	if err != nil {
+		return team.MemberTaskInfo{}, false, fmt.Errorf("journal feed: current task of %s/%s: %w", teamID, memberKey, err)
+	}
+	cur, ok := currentTaskOf(open)
+	if !ok {
+		return team.MemberTaskInfo{}, false, nil
+	}
+	return team.MemberTaskInfo{Seq: cur.Seq, Subject: cur.Subject, Status: cur.Status}, true, nil
+}
