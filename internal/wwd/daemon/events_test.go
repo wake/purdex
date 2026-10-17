@@ -145,6 +145,28 @@ func TestSubscribeStartsWithTheLatestFactsExactlyOnce(t *testing.T) {
 	none(t, ch2)
 }
 
+// The event streams are bounded: a token holder cannot open them without limit (R2).
+func TestEventStreamsAreCapped(t *testing.T) {
+	d := New(Options{HostID: "h1", Alias: "mlab", Token: testToken})
+	var cancels []func()
+	for i := 0; i < maxSubscribers; i++ {
+		_, c, ok := d.Events().TrySubscribe(true)
+		if !ok {
+			t.Fatalf("subscription %d refused below the cap", i)
+		}
+		cancels = append(cancels, c)
+	}
+	if w := do(d.TCPHandler(), "GET", "/v1/events", "Bearer "+testToken); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("over the cap: %d", w.Code)
+	}
+	cancels[0]()
+	if _, c, ok := d.Events().TrySubscribe(true); !ok {
+		t.Fatal("a freed slot was not reusable")
+	} else {
+		c()
+	}
+}
+
 func TestPollerTimeoutIsShorterThanTheInterval(t *testing.T) {
 	d := New(Options{HostID: "h", Alias: "a", Token: testToken})
 	if d.pool.client.Timeout <= 0 || d.pool.client.Timeout >= PoolInterval {

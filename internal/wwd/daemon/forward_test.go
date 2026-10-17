@@ -82,6 +82,24 @@ func TestHistoryForwardingFailureModes(t *testing.T) {
 	}
 }
 
+// An answer bigger than the cap is a 502, not a truncated 200 (R2).
+func TestForwardingRefusesAnOversizedAnswer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(make([]byte, maxPeerBytes+10))
+	}))
+	defer srv.Close()
+	d := newLocal(t, PeerAddr{"air26", addr(srv)})
+	w := do(d.SocketHandler(), "GET", historyPath("air26"), "")
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("oversized answer: %d", w.Code)
+	}
+	var e struct{ Host, Reason string }
+	if err := json.Unmarshal(w.Body.Bytes(), &e); err != nil || e.Host != "air26" || e.Reason == "" {
+		t.Fatalf("body %s", w.Body)
+	}
+}
+
 // Only the socket forwards. A TCP request carrying host is refused whatever it
 // names, so a token holder cannot relay through this wwd (no multi-hop).
 func TestTCPRefusesTheHostParameter(t *testing.T) {

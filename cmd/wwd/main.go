@@ -80,7 +80,10 @@ func run(cfgPath string) error {
 	})
 	peers := make([]daemon.PeerAddr, len(cfg.Peers))
 	for i, p := range cfg.Peers {
-		peers[i] = daemon.PeerAddr{Alias: p.Alias, HostPort: p.HostPort()}
+		if p.Alias == alias {
+			return fmt.Errorf("config: peer %q has this host's own alias", p.Alias)
+		}
+		peers[i] =daemon.PeerAddr{Alias: p.Alias, HostPort: p.HostPort()}
 	}
 	d := daemon.New(daemon.Options{
 		HostID: hostID, Alias: alias, Version: buildinfo.Version,

@@ -64,6 +64,56 @@ func TestPoolPollsPeersAndKeepsLastKnownWhenOneGoesAway(t *testing.T) {
 	}
 }
 
+// The configured alias is the identity the pool is keyed by: a peer that answers
+// as somebody else (wrong address, wrong daemon, a hijacked peer) is unreachable,
+// never merged into the view (R2).
+func TestPoolRefusesAPeerThatAnswersAsSomeoneElse(t *testing.T) {
+	_, other := peerDaemon(t, "air26", testToken) // really air26
+	p := NewPoolPoller([]PeerAddr{{"mserv", addr(other)}}, testToken, nil)
+	p.PollOnce(context.Background())
+	got := p.Peers()[0]
+	if got.Reachable || got.Facts != nil || got.Info.Alias != "mserv" || got.Info.HostID != "" {
+		t.Errorf("an air26 answering for mserv was taken: %+v", got)
+	}
+
+	// facts that disagree with the info of the same answer are not stored either
+	var factsAlias atomic.Value
+	factsAlias.Store("mserv")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/info":
+			writeJSON(w, 200, wire.Info{HostID: "id-mserv", Alias: "mserv", Version: "v", Proto: wire.Proto, Platform: "linux", Arch: "amd64", Labels: []string{}})
+		case "/v1/facts":
+			f := wire.Facts{V: wire.Proto, HostID: "id-mserv", Alias: factsAlias.Load().(string), Derived: wire.Derived{Zone: wire.ZoneNormal}, At: s0}
+			writeJSON(w, 200, f)
+		}
+	}))
+	defer srv.Close()
+	p = NewPoolPoller([]PeerAddr{{"mserv", addr(srv)}}, testToken, nil)
+	p.PollOnce(context.Background())
+	if g := p.Peers()[0]; !g.Reachable || g.Facts == nil {
+		t.Fatalf("consistent answer refused: %+v", g)
+	}
+	factsAlias.Store("air26")
+	p.PollOnce(context.Background())
+	if g := p.Peers()[0]; g.Reachable || g.Facts == nil || g.Facts.Alias != "mserv" {
+		t.Errorf("inconsistent facts must mark unreachable and keep the last verified ones: %+v", g)
+	}
+}
+
+func TestPoolRefusesAnOversizedAnswer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(append([]byte(`{"host_id":"x","pad":"`), make([]byte, maxPeerBytes+10)...))
+	}))
+	defer srv.Close()
+	p := NewPoolPoller([]PeerAddr{{"big", addr(srv)}}, testToken, nil)
+	p.PollOnce(context.Background())
+	if p.Peers()[0].Reachable {
+		t.Error("an oversized answer must not make a peer reachable")
+	}
+}
+
 func TestPoolSendsTheTokenAndRejectedTokenIsUnreachable(t *testing.T) {
 	var seen atomic.Value
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

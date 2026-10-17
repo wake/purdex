@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -68,7 +67,7 @@ func (d *Daemon) forwardGET(w http.ResponseWriter, r *http.Request, peer PeerAdd
 		return
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPeerBytes))
+	body, err := readCapped(resp.Body)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"host": peer.Alias, "reason": err.Error()})
 		return

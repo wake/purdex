@@ -79,7 +79,9 @@ func (p *PoolPoller) PollOnce(ctx context.Context) {
 
 func (p *PoolPoller) pollPeer(ctx context.Context, i int) {
 	info, err := get[wire.Info](ctx, p.client, p.peers[i], p.token, "/v1/info")
-	if err != nil {
+	if err != nil || info.Alias != p.peers[i].Alias {
+		// the configured alias is the identity: an answer under another name (wrong
+		// address, wrong daemon) is not this peer
 		p.mu.Lock()
 		p.state[i].Reachable = false
 		p.mu.Unlock()
@@ -89,10 +91,29 @@ func (p *PoolPoller) pollPeer(ctx context.Context, i int) {
 	facts, ferr := get[wire.Facts](ctx, p.client, p.peers[i], p.token, "/v1/facts")
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if ferr == nil && (facts.HostID != info.HostID || facts.Alias != info.Alias) {
+		p.state[i].Reachable = false // facts of another host: keep the last verified view
+		return
+	}
 	p.state[i].Info, p.state[i].Reachable = info, true
 	if ferr == nil {
 		p.state[i].Facts = &facts
 	}
+}
+
+var errTooLarge = fmt.Errorf("peer answer is larger than %d bytes", maxPeerBytes)
+
+// readCapped reads a whole body up to maxPeerBytes; a longer one is an error, not
+// a silently shortened answer.
+func readCapped(r io.Reader) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, maxPeerBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > maxPeerBytes {
+		return nil, errTooLarge
+	}
+	return b, nil
 }
 
 func get[T any](ctx context.Context, c *http.Client, a PeerAddr, token, path string) (T, error) {
@@ -107,7 +128,7 @@ func get[T any](ctx context.Context, c *http.Client, a PeerAddr, token, path str
 		return zero, err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPeerBytes))
+	body, err := readCapped(resp.Body)
 	if err != nil {
 		return zero, err
 	}

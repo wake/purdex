@@ -14,6 +14,11 @@ import (
 // dropped; Publish never waits for anyone.
 const subscriberBuffer = 64
 
+// maxSubscribers bounds the open event streams (local readers and peers
+// together); one more is refused with 503. A host has a handful of readers: the
+// Purdex daemon, the CLI, the other wwd's.
+const maxSubscribers = 64
+
 // keepAliveEvery is the SSE comment interval that keeps idle connections open.
 const keepAliveEvery = 15 * time.Second
 
@@ -38,14 +43,29 @@ func NewBroker() *Broker { return &Broker{subs: map[*subscriber]struct{}{}} }
 // lock that registers the subscriber, so a record published meanwhile arrives
 // once: either as that first event or after it, never both.
 func (b *Broker) Subscribe(peer bool) (<-chan wire.Event, func()) {
+	ch, cancel, _ := b.subscribe(peer, false)
+	return ch, cancel
+}
+
+// TrySubscribe is Subscribe with the cap of maxSubscribers streams: ok is false
+// (and nothing is registered) when it is reached.
+func (b *Broker) TrySubscribe(peer bool) (<-chan wire.Event, func(), bool) {
+	return b.subscribe(peer, true)
+}
+
+func (b *Broker) subscribe(peer, capped bool) (<-chan wire.Event, func(), bool) {
 	s := &subscriber{ch: make(chan wire.Event, subscriberBuffer), peer: peer}
 	b.mu.Lock()
+	if capped && len(b.subs) >= maxSubscribers {
+		b.mu.Unlock()
+		return nil, nil, false
+	}
 	if b.latest != nil {
 		s.ch <- *b.latest
 	}
 	b.subs[s] = struct{}{}
 	b.mu.Unlock()
-	return s.ch, func() { b.drop(s) }
+	return s.ch, func() { b.drop(s) }, true
 }
 
 func (b *Broker) drop(s *subscriber) {
@@ -136,7 +156,11 @@ func (d *Daemon) handleEvents(peer bool) http.HandlerFunc {
 			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 			return
 		}
-		ch, cancel := d.broker.Subscribe(peer)
+		ch, cancel, ok := d.broker.TrySubscribe(peer)
+		if !ok {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "too many event streams"})
+			return
+		}
 		defer cancel()
 		h := w.Header()
 		h.Set("Content-Type", "text/event-stream")
