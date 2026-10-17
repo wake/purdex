@@ -118,6 +118,11 @@ func ReadAssist(dir string) (AssistFile, error) {
 	if f.Hosts == nil {
 		f.Hosts = map[string]AssistHost{}
 	}
+	for _, h := range f.Hosts {
+		if h.Gen > f.NextGen { // a hand-edited or older file: never hand out a generation a host already has
+			f.NextGen = h.Gen
+		}
+	}
 	return f, nil
 }
 
@@ -207,11 +212,14 @@ func Usable(f AssistFile, ready map[string]AssistReady, now time.Time, host stri
 	if !ok || r.Gen != h.Gen {
 		return false, "no check of this host yet"
 	}
-	if now.Sub(r.At) > AssistFreshness {
-		return false, "the last check is too old"
+	if age := now.Sub(r.At); age > AssistFreshness || age < 0 {
+		return false, "the last check is too old" // a time in the future is no check either
 	}
 	if r.Err != "" {
 		return false, r.Err
+	}
+	if !r.Answer.Assist {
+		return false, "assist is not installed on the host"
 	}
 	switch r.Answer.Switch {
 	case "on":

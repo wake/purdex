@@ -129,6 +129,8 @@ func TestUsable(t *testing.T) {
 		{"repo unknown", func(x fx) {}, "zzz", "not prepared"},
 		{"not allowed", func(x fx) { *x.e = []AssistEntry{{Kind: "team", ID: "t2"}} }, "purdex", "not allowed"},
 		{"allowed for another host", func(x fx) { x.f.Allowed[0].Host = "mserv" }, "purdex", "not allowed"},
+		{"future check", func(x fx) { setReady(x, func(v *AssistReady) { v.At = t0.Add(time.Hour) }) }, "purdex", "too old"},
+		{"assist missing", func(x fx) { setReady(x, func(v *AssistReady) { v.Answer.Assist = false }) }, "purdex", "not installed"},
 		{"check failed", func(x fx) { setReady(x, func(v *AssistReady) { v.Err = "check failed: boom" }) }, "purdex", "check failed: boom"},
 	}
 	for _, c := range cases {
@@ -174,5 +176,17 @@ func TestRepoFromURL(t *testing.T) {
 		if got := RepoFromURL(in); got != want {
 			t.Errorf("%q → %q want %q", in, got, want)
 		}
+	}
+}
+
+func TestAssistReadRaisesNextGenToTheHighestHostGen(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "assist.json"), []byte(`{"Version":1,"Hosts":{"a":{"Gen":5}}}`), 0o644)
+	f, err := ReadAssist(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := f.TakeGen(); g != 6 {
+		t.Fatalf("TakeGen = %d", g)
 	}
 }
