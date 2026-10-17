@@ -30,6 +30,22 @@ type AssistFile struct {
 	NextGen int // only grows: a removed and re-added host never meets its old readiness
 	Hosts   map[string]AssistHost
 	Allowed []AssistAllow
+	// Reserved is mlab kept free for a job that needs it (the release scripts, contract 12); past Until it reads as none.
+	Reserved *AssistReserved `json:",omitempty"`
+}
+
+// AssistReserved says who has reserved mlab, why, and until when.
+type AssistReserved struct {
+	By, Reason string
+	At, Until  time.Time
+}
+
+// ReservedNow is the reservation if it has not run out at now.
+func (f AssistFile) ReservedNow(now time.Time) *AssistReserved {
+	if f.Reserved == nil || !now.Before(f.Reserved.Until) {
+		return nil
+	}
+	return f.Reserved
 }
 
 // AssistHost carries every field X2 and X3 read, empty or default until they are used (contract 11).

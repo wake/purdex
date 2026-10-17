@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/team"
@@ -16,7 +17,7 @@ func TestAdminOnly(t *testing.T) {
 	r := newRig(t)
 	r.addHost("air26")
 	for _, c := range []struct{ method, path string }{
-		{"GET", "/api/assist"}, {"POST", "/api/assist/host"}, {"DELETE", "/api/assist/host/air26"},
+		{"GET", "/api/assist"}, {"POST", "/api/assist/host"}, {"DELETE", "/api/assist/host/air26"}, {"POST", "/api/assist/switch"}, {"POST", "/api/assist/reserve"},
 		{"POST", "/api/assist/allow"}, {"POST", "/api/assist/deny"}, {"GET", "/api/assist/hosts"},
 	} {
 		if code, _ := r.doAs(c.method, c.path, map[string]any{}, true); code != 403 {
@@ -412,5 +413,61 @@ func TestResolveRefRefusesTwoLiveSuccessors(t *testing.T) {
 	r.live("sid-z", "_aaaaac", "mlab/x-z")
 	if o, ok := r.m.resolveRef("_aaaaaa"); ok {
 		t.Fatalf("two live successors resolved to %+v", o)
+	}
+}
+
+func TestReserveOnOffAndTheCap(t *testing.T) {
+	r := newRig(t)
+	if code, b := r.do("POST", "/api/assist/reserve", map[string]any{"on": true, "reason": "release gate", "by": "s1"}); code != 200 {
+		t.Fatalf("%d %v", code, b)
+	}
+	res := r.file().ReservedNow(r.clock.now())
+	if res == nil || res.By != "s1" || res.Reason != "release gate" || res.Until.Sub(res.At) != 2*time.Hour {
+		t.Fatalf("default for: %+v", res)
+	}
+	r.do("POST", "/api/assist/reserve", map[string]any{"on": true, "reason": "x", "for": "12h"})
+	if res := r.file().ReservedNow(r.clock.now()); res == nil || res.Until.Sub(res.At) != 12*time.Hour {
+		t.Fatalf("12h: %+v", res)
+	}
+	for _, bad := range []string{"12h1s", "0s", "-1h", "abc"} {
+		if code, b := r.do("POST", "/api/assist/reserve", map[string]any{"on": true, "reason": "x", "for": bad}); code != 400 || b["error"] != "bad_for" {
+			t.Errorf("for %q: %d %v", bad, code, b)
+		}
+	}
+	if res := r.file().ReservedNow(r.clock.now()); res == nil || res.Until.Sub(res.At) != 12*time.Hour {
+		t.Fatalf("a refused request changed the reservation: %+v", res)
+	}
+	if code, _ := r.do("POST", "/api/assist/reserve", map[string]any{"on": false}); code != 200 {
+		t.Fatal(code)
+	}
+	if r.file().Reserved != nil {
+		t.Fatal("not cleared")
+	}
+}
+
+func TestReserveReasonRule(t *testing.T) {
+	r := newRig(t)
+	for _, reason := range []string{"", "a\nb", strings.Repeat("x", 201)} {
+		if code, _ := r.do("POST", "/api/assist/reserve", map[string]any{"on": true, "reason": reason}); code != 400 {
+			t.Errorf("reason %q: %d", reason, code)
+		}
+	}
+	if r.file().Reserved != nil {
+		t.Fatal("a refused reserve was stored")
+	}
+}
+
+func TestReserveExpiredReadsAsNone(t *testing.T) {
+	r := newRig(t)
+	r.do("POST", "/api/assist/reserve", map[string]any{"on": true, "reason": "x", "for": "1h"})
+	f := r.file()
+	if f.ReservedNow(r.clock.now().Add(59*time.Minute)) == nil {
+		t.Fatal("reserved within its time")
+	}
+	if f.ReservedNow(r.clock.now().Add(time.Hour)) != nil || f.ReservedNow(r.clock.now().Add(2*time.Hour)) != nil {
+		t.Fatal("a reservation past Until counts")
+	}
+	if (gate.AssistFile{}).ReservedNow(r.clock.now()) != nil {
+		t.Fatal("none reads as reserved")
 	}
 }

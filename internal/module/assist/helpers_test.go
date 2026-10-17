@@ -238,7 +238,7 @@ func checkOut(sw string, repos map[string]bool) string {
 		}
 		rs[n] = v
 	}
-	b, _ := json.Marshal(map[string]any{"host": "x", "assist": true, "switch": sw, "repos": rs, "residue": 0})
+	b, _ := json.Marshal(map[string]any{"host": "air26", "assist": true, "switch": sw, "repos": rs, "residue": 0})
 	return string(b)
 }
 
