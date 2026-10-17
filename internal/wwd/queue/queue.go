@@ -46,6 +46,8 @@ type Queue struct {
 
 	// afterCommit is a test hook: it runs between a transaction's commit and the publishing of its events.
 	afterCommit func()
+	// afterTicket is a test hook: it runs inside the transaction right after the ticket was taken, before COMMIT.
+	afterTicket func()
 }
 
 // New returns the queue over db, whose tables Migrate has created.
@@ -107,6 +109,9 @@ func (q *Queue) commit(ctx context.Context, fn func(c *sql.Conn, changed *[]stri
 			events = append(events, wire.JobEvent{Host: q.opt.Origin, Job: j})
 		}
 		ticket, taken = q.seq.ticket(), true
+		if q.afterTicket != nil {
+			q.afterTicket()
+		}
 		return nil
 	})
 	if err != nil {

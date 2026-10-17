@@ -138,6 +138,32 @@ func TestSequencerServesTicketsInTheOrderTheyWereTaken(t *testing.T) {
 	assert.Equal(t, []uint64{0, 1, 2}, order)
 }
 
+// A COMMIT that fails after the ticket was taken (here: the request's context ended in between) hands the ticket back and stores
+// nothing, so the writes after it still publish. Mutation gate: the ticket of a failed commit never passed on → the next Submit hangs.
+func TestACommitThatFailsAfterTheTicketPassesTheTurnOn(t *testing.T) {
+	f := newFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	f.q.afterTicket = func() { f.q.afterTicket = nil; cancel() }
+	_, err := f.q.Submit(ctx, sub(func(s *wire.JobSubmission) { s.SupersedeKey = "" }))
+	require.Error(t, err)
+	var n int
+	require.NoError(t, f.db.QueryRow(`SELECT count(*) FROM jobs`).Scan(&n))
+	assert.Zero(t, n, "the failed commit stored nothing")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.q.Submit(context.Background(), sub(func(s *wire.JobSubmission) { s.SupersedeKey = "" }))
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the Submit after a failed commit never returned: its ticket was not passed on")
+	}
+	assert.Len(t, f.ev.all(), 1)
+}
+
 // A write that fails (here: an id that exists already) takes no ticket or hands it back, so the writes after it still publish. Mutation
 // gate: the ticket of a failed commit never passed on → the Submit after it hangs.
 func TestAFailedWriteDoesNotStopTheEventsAfterIt(t *testing.T) {
