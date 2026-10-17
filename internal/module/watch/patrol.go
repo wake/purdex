@@ -120,6 +120,7 @@ type patrolSettings struct{ present, busy, calm, rest, diskGB int }
 
 // patrolStep is one look: the disk first, then the interval.
 func (m *Module) patrolStep(ctx context.Context) {
+	m.recoverSession(ctx) // a start mark left by an earlier run of the daemon is settled here, whoever holds the watcher
 	s, err := m.readSettings()
 	if err != nil || !s.Enabled {
 		return
