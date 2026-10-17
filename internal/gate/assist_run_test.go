@@ -169,6 +169,7 @@ sys.exit(os.waitstatus_to_exitcode(st) % 256 if os.waitstatus_to_exitcode(st) >=
 const fakePdx = `#!/bin/sh
 mode=$(cat "$HOME/fake-pdx-mode" 2>/dev/null)
 [ "$1" = gate ] || exit 2
+if [ "$2" = would-wait ]; then cat "$HOME/fake-wouldwait"; exit 0; fi
 shift
 while [ "$1" != -- ]; do shift; done
 shift
@@ -204,6 +205,13 @@ func newAssistHost(t *testing.T, repo string) *assistHost {
 	writeFile(t, home+"/bin/pdx", fakePdx, 0o755)
 	writeFile(t, home+"/bin/pnpm", fakePnpm, 0o755)
 	writeFile(t, home+"/bin/git", fakeGit, 0o755)
+	// what the probe reads (X2b): a macOS host that is idle, its gate free
+	writeFile(t, home+"/bin/uname", "#!/bin/sh\necho Darwin\n", 0o755)
+	writeFile(t, home+"/bin/sysctl", "#!/bin/sh\ncase \"$2\" in vm.loadavg) cat \"$HOME/fake-loadavg\";; hw.ncpu) echo 10;; esac\n", 0o755)
+	writeFile(t, home+"/bin/top", "#!/bin/sh\necho \"CPU usage: 3.0% user, 4.0% sys, $(cat \"$HOME/fake-idle\")% idle\"\n", 0o755)
+	writeFile(t, home+"/fake-wouldwait", `{"would_wait":false,"class":"heavy","ahead":0}`, 0o644)
+	writeFile(t, home+"/fake-loadavg", "{ 0.50 0.50 0.50 }", 0o644)
+	writeFile(t, home+"/fake-idle", "90.0", 0o644)
 	realGit, err := exec.LookPath("git")
 	require.NoError(t, err)
 	t.Setenv("REAL_GIT", realGit)
