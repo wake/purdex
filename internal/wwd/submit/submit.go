@@ -41,12 +41,9 @@ func IsUsage(err error) bool {
 	return errors.As(err, &u)
 }
 
-// Body is the POST /v1/jobs body: the wire submission plus the repo's common git directory, which the origin uses to check
-// and pin the snapshot (spec §4.1) and never repeats to a peer.
-type Body struct {
-	wire.JobSubmission
-	GitDir string `json:"git_dir"`
-}
+// Body is the POST /v1/jobs body. The repo's common git directory, which the origin uses to check and pin the snapshot (spec §4.1)
+// and never repeats to a peer, is part of the wire submission itself (WWD-3b-1b).
+type Body = wire.JobSubmission
 
 // Request is one `pdx test` call.
 type Request struct {
@@ -169,11 +166,12 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 		Interruptible: task.Interruptible,
 		QueueTimeoutS: int(task.QueueTimeout.Seconds()),
 		Submitter:     req.Submitter,
+		GitDir:        gitDir,
 	}
 	if err := sub.Validate(); err != nil {
 		return nil, err
 	}
-	return &Prepared{Body: Body{JobSubmission: sub, GitDir: gitDir}, Task: task, Manifest: m, Root: root}, nil
+	return &Prepared{Body: sub, Task: task, Manifest: m, Root: root}, nil
 }
 
 // relCwd is the directory the command runs in, relative to the repo root: the task's cwd (the caller's own directory does

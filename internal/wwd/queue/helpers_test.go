@@ -100,6 +100,7 @@ func sub(edit ...func(*wire.JobSubmission)) wire.JobSubmission {
 		TimeoutS:     1800,
 		SupersedeKey: "wt1:spa-related",
 		Submitter:    wire.Submitter{Session: "s1", Ref: "_abc123", Team: "wwd", Host: "mlab"},
+		GitDir:       "/repos/purdex/.git",
 	}
 	for _, e := range edit {
 		e(&s)

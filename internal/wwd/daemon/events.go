@@ -119,7 +119,8 @@ func (b *Broker) PublishFacts(f wire.Facts) {
 // back into the queue (the queue calls it while it holds its own locks).
 func (b *Broker) PublishJob(ev wire.JobEvent) {
 	if e, ok := envelope(wire.EventJob, ev); ok {
-		b.publish(e, ev.Job.AdHoc)
+		// an ad-hoc job and a fast-lane (local) job never leave this host: their events go to local subscribers only
+		b.publish(e, ev.Job.AdHoc || ev.Job.Local)
 	}
 }
 

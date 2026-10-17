@@ -49,6 +49,33 @@ func TestSubmitStoresTheJobAndPublishesOneEvent(t *testing.T) {
 	assert.Equal(t, id, evs[0].Job.ID)
 }
 
+// The git dir is kept for the queue's own use (pinning, the snapshot route) and goes nowhere else: not in the Job, a listing or an
+// event. A submission without an absolute one is refused. Mutation gate: the column not written → the stored value is empty.
+func TestTheGitDirIsStoredAndNeverShown(t *testing.T) {
+	f := newFixture(t)
+	id := f.submit(t, func(s *wire.JobSubmission) { s.GitDir = "/repos/secret-place/.git" })
+	var dir string
+	require.NoError(t, f.db.QueryRow(`SELECT git_dir FROM jobs WHERE id = ?`, id).Scan(&dir))
+	assert.Equal(t, "/repos/secret-place/.git", dir)
+
+	b, err := json.Marshal(f.get(t, id))
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), "secret-place")
+	list, err := f.q.List(context.Background(), Filter{})
+	require.NoError(t, err)
+	b, err = json.Marshal(list)
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), "secret-place")
+	for _, e := range f.ev.all() {
+		b, err := json.Marshal(e)
+		require.NoError(t, err)
+		assert.NotContains(t, string(b), "secret-place")
+	}
+
+	_, err = f.q.Submit(context.Background(), sub(func(s *wire.JobSubmission) { s.GitDir = "relative/.git" }))
+	assert.Error(t, err)
+}
+
 // Empty lists come back as [], never null (the wire's "absent is null" rule is for values, a list is always a list).
 func TestSubmitKeepsEmptyListsAsLists(t *testing.T) {
 	f := newFixture(t)

@@ -85,7 +85,7 @@ func TestPrepareFillsTheSubmission(t *testing.T) {
 	}
 	b := p.Body
 	if b.Task != "go-changed" || b.Class != wire.ClassMerge || !b.Cacheable || !b.Interruptible || b.TimeoutS != 600 || b.QueueTimeoutS != 3600 {
-		t.Fatalf("manifest values not copied: %+v", b.JobSubmission)
+		t.Fatalf("manifest values not copied: %+v", b)
 	}
 	if len(b.Labels) != 1 || b.Labels[0] != "os:darwin" || len(b.Locks) != 1 || b.Locks[0] != "db" {
 		t.Fatalf("labels/locks = %v %v", b.Labels, b.Locks)
@@ -102,7 +102,7 @@ func TestPrepareFillsTheSubmission(t *testing.T) {
 	if !strings.HasSuffix(b.SupersedeKey, ":go-changed") || b.Submitter.Ref != "_abc123" {
 		t.Fatalf("key/submitter = %q %+v", b.SupersedeKey, b.Submitter)
 	}
-	if err := b.JobSubmission.Validate(); err != nil {
+	if err := b.Validate(); err != nil {
 		t.Fatal(err)
 	}
 }

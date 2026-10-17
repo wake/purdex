@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"time"
 )
@@ -82,14 +83,17 @@ type Job struct {
 	// Interruptible, QueueTimeoutS and AdHoc are properties of the task that the submitter copies from the manifest at submit time
 	// (the origin never rereads a manifest). Interruptible: a newer job with the same supersede_key may stop this one while it runs.
 	// QueueTimeoutS: 0 means the default (2 h). AdHoc: an undeclared command (spec §8.3); it is never listed to peers.
-	Interruptible bool      `json:"interruptible"`
-	QueueTimeoutS int       `json:"queue_timeout_s"`
-	AdHoc         bool      `json:"adhoc"`
-	Submitter     Submitter `json:"submitter"`
-	CreatedAt     time.Time `json:"created_at"`
-	State         JobState  `json:"state"`
-	Claim         *Claim    `json:"claim"`
-	Result        *Result   `json:"result"`
+	Interruptible bool `json:"interruptible"`
+	QueueTimeoutS int  `json:"queue_timeout_s"`
+	AdHoc         bool `json:"adhoc"`
+	// Local marks a fast-lane job (spec 5.2): it runs in the submitter's own working tree on this host, takes no snapshot, never
+	// leaves the host, is never listed to peers and never read from or written to the result cache.
+	Local     bool      `json:"local"`
+	Submitter Submitter `json:"submitter"`
+	CreatedAt time.Time `json:"created_at"`
+	State     JobState  `json:"state"`
+	Claim     *Claim    `json:"claim"`
+	Result    *Result   `json:"result"`
 }
 
 // JobSubmission is the body of POST /v1/jobs (local socket only, spec §4.4): what the submitter fixes. The origin assigns the
@@ -109,6 +113,10 @@ type JobSubmission struct {
 	QueueTimeoutS int       `json:"queue_timeout_s"`
 	AdHoc         bool      `json:"adhoc"`
 	Submitter     Submitter `json:"submitter"`
+	// GitDir is the repo's common git directory as an absolute path (git rev-parse --path-format=absolute --git-common-dir), not the
+	// working tree: a member's worktree may be removed before the job runs, and the snapshot's objects live in the common directory
+	// (spec 4.1). It is queue-private: a Job has no such field, so it can never reach a listing, an event or a peer.
+	GitDir string `json:"git_dir"`
 }
 
 func (s JobSubmission) Validate() error {
@@ -117,6 +125,66 @@ func (s JobSubmission) Validate() error {
 	}
 	if err := validatePayload(s.Task, s.Repo, s.Snapshot, s.TimeoutS, s.QueueTimeoutS); err != nil {
 		return fmt.Errorf("submission: %w", err)
+	}
+	if !filepath.IsAbs(s.GitDir) {
+		return fmt.Errorf("submission: git_dir must be an absolute path, got %q", s.GitDir)
+	}
+	return nil
+}
+
+// LocalRunRequest registers a fast-lane run (spec 5.2): POST /v1/local-runs, local socket only. It is a submission whose snapshot is
+// the working tree's HEAD (only a reference: the tree may hold uncommitted changes, so it is never used for reuse or transfer). A
+// local run is never cacheable.
+type LocalRunRequest struct {
+	JobSubmission
+}
+
+func (r LocalRunRequest) Validate() error {
+	if err := r.JobSubmission.Validate(); err != nil {
+		return err
+	}
+	if r.Cacheable {
+		return fmt.Errorf("local run: a fast-lane run is never cacheable")
+	}
+	return nil
+}
+
+// LocalRunResponse is the registered run's claim: the runner heartbeats, posts its result and uploads its log with it, like any worker.
+type LocalRunResponse struct {
+	ID      string `json:"id"`
+	ClaimID string `json:"claim_id"`
+	LeaseS  int    `json:"lease_s"`
+	RenewS  int    `json:"renew_s"`
+}
+
+func (r LocalRunResponse) Validate() error {
+	switch {
+	case r.ID == "":
+		return fmt.Errorf("local run: missing id")
+	case checkClaimID(r.ClaimID) != nil:
+		return fmt.Errorf("local run: invalid claim_id")
+	case r.LeaseS <= 0 || r.RenewS <= 0:
+		return fmt.Errorf("local run: lease_s and renew_s must be positive")
+	}
+	return nil
+}
+
+// LocksBusy is the 409 body of a local-run registration whose lock keys are held on this host: the run is then queued the ordinary
+// way, not failed.
+type LocksBusy struct {
+	Reason string   `json:"reason"`
+	Keys   []string `json:"keys"`
+}
+
+// LocksBusyReason is the only reason a LocksBusy carries.
+const LocksBusyReason = "locks_busy"
+
+func (b LocksBusy) Validate() error {
+	if b.Reason != LocksBusyReason {
+		return fmt.Errorf("locks busy: unexpected reason %q", b.Reason)
+	}
+	if len(b.Keys) == 0 {
+		return fmt.Errorf("locks busy: no keys")
 	}
 	return nil
 }
@@ -130,6 +198,9 @@ func (j Job) Validate() error {
 	}
 	if j.ID == "" || j.Origin == "" {
 		return fmt.Errorf("job: missing id or origin")
+	}
+	if j.Local && j.Cacheable {
+		return fmt.Errorf("job: a local job is never cacheable")
 	}
 	// the same payload checks as a submission: a job that cannot be indexed, fetched or run is refused at the boundary
 	return validatePayload(j.Task, j.Repo, j.Snapshot, j.TimeoutS, j.QueueTimeoutS)
