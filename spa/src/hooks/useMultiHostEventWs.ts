@@ -26,6 +26,7 @@ import { handleReadsEvent } from '../lib/read-sync/ws'
 import { handleUnattendedEvent } from '../lib/team/unattended-ws'
 import { handleRelayQuotaEvent } from '../lib/team/relay-quota-ws'
 import { RELAY_QUOTA_EVENT_TYPE, UNATTENDED_EVENT_TYPE } from '../lib/team/types'
+import { useTeamRosterStore } from '../stores/useTeamRosterStore'
 import { handleRosterEvent } from '../lib/team/roster-ws'
 import { ROSTER_EVENT_TYPE } from '../lib/team/roster'
 import { handleWorkbookEvent, isWorkbookEvent } from '../lib/workbook/workbook-ws'
@@ -101,6 +102,7 @@ export function useMultiHostEventWs() {
         entry.conn.close()
         entry.sm.stop()
         forgetHost(hostId)
+        useTeamRosterStore.getState().dropConnection(hostId) // closed without `onClose`: retire the connection here (member spec R4)
         cancelSessionRefresh(hostId)
         entries.delete(hostId)
       }
@@ -122,6 +124,7 @@ export function useMultiHostEventWs() {
       if (existing) {
         existing.conn.close()
         existing.sm.stop()
+        useTeamRosterStore.getState().dropConnection(hostId) // closed without `onClose` (member spec R4)
         forgetHost(hostId) // another endpoint may be another daemon (or a token another identity): nothing held carries over
         cancelSessionRefresh(hostId)
       }
@@ -155,6 +158,7 @@ export function useMultiHostEventWs() {
         resyncing = true
         hookCursor = null
         connectionClosed(hostId)
+        useTeamRosterStore.getState().dropConnection(hostId) // its roster is no longer from the live connection (member spec R4)
         closeAttachGate(hostId)
         useHostStore.getState().setRuntime(hostId, { status: 'reconnecting', attachReady: false })
         connRef.current.reconnect()
@@ -192,6 +196,7 @@ export function useMultiHostEventWs() {
             // The old socket is retired without an `onClose`: move `conn`
             // first, then close the gate (#1255 SPA spec §3.3).
             connectionClosed(hostId)
+            useTeamRosterStore.getState().dropConnection(hostId) // its roster is no longer from the live connection (member spec R4)
             closeAttachGate(hostId)
             if (result.ticket) {
               connRef.current.reconnectWithTicket(result.ticket)
@@ -371,6 +376,7 @@ export function useMultiHostEventWs() {
           // callback (#1255 SPA spec §3.3, codex #5): whoever sees the gate
           // closed also sees a connection generation no fetch was sent on.
           connectionClosed(hostId)
+          useTeamRosterStore.getState().dropConnection(hostId) // its roster is no longer from the live connection (member spec R4)
           // Immediately, not on the next open: from here on nothing confirms
           // the panes' bindings (spec §4.6).
           useHostStore.getState().setRuntime(hostId, { status: 'reconnecting', attachReady: false })
@@ -381,6 +387,7 @@ export function useMultiHostEventWs() {
           hookCursor = null
           resyncing = false
           connectionOpened(hostId)
+          useTeamRosterStore.getState().dropConnection(hostId) // its roster is no longer from the live connection (member spec R4)
           useHostStore.getState().setRuntime(hostId, {
             status: 'connected',
             daemonState: 'connected',
@@ -414,6 +421,7 @@ export function useMultiHostEventWs() {
         entry.conn.close()
         entry.sm.stop()
         forgetHost(hostId)
+        useTeamRosterStore.getState().dropConnection(hostId) // closed without `onClose`: retire the connection here (member spec R4)
         cancelSessionRefresh(hostId)
       })
       entries.clear()

@@ -2,6 +2,7 @@ package watch
 
 import (
 	"fmt"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -62,7 +63,9 @@ type treeState struct {
 	window  time.Duration // the t_s these samples were collected for
 	since   time.Time     // where the unbroken run of samples starts
 	samples []sample      // those of the last TS, and the one before them (the left edge's value)
-	ep      episode
+	// resident: the tree was found to be a resident app (residentAndQuiet); from then on only its cores can make it an event
+	resident bool
+	ep       episode
 }
 
 // Detector holds what the passes share: the windows of the trees, the episodes of E2, and which holders have been reported.
@@ -218,8 +221,17 @@ func (d *Detector) unmanagedTrees(in Input) []Event {
 			cut++
 		}
 		st.samples = st.samples[cut:]
-		over := d.overThreshold(st, in.Now, set)
+		tset := set
+		if st.resident {
+			tset.YMB = 0
+		}
+		over := d.overThreshold(st, in.Now, tset)
 		if st.ep.step(in.Now, over, 0, set.TS) {
+			if !st.resident && d.residentAndQuiet(in, tab, root, st, set) {
+				st.resident = true // a long-lived app of /Applications whose memory is all that is over: no event (#2965); its cores still count
+				st.ep = episode{}  // the episode that fired on memory is over: cores that are over right after start one of their own
+				continue
+			}
 			events = append(events, d.treeEvent(in, tab, root, st))
 		}
 	}
@@ -266,6 +278,47 @@ func (d *Detector) overThreshold(st *treeState, now time.Time, set Settings) boo
 	}
 	mean := weighted / total
 	return (set.XCores > 0 && mean >= set.XCores) || (set.YMB > 0 && minRSS >= uint64(set.YMB)*mib)
+}
+
+// residentMinAge is how long a launchd child must have run, in windows, to count as resident: its memory is then what the app
+// holds, not what a command grew.
+const residentMinAge = 10
+
+// residentAndQuiet says that the tree that crossed a threshold is a resident app and only its memory is over: its root is a child of
+// launchd (pid 1), runs a program of /Applications, started more than residentMinAge windows ago, and its mean cores alone would not
+// have crossed x_cores. Herd's php-fpm workers (1.0–1.3 GB of summed RSS, 0.2 cores, up for days) and a browser at rest are such
+// trees (#2965; the spec says a long-lived low-usage process is not heavy). A resident app that burns CPU still raises its event.
+// The Diag line is the record; nothing is learned about a tree whose start or command line cannot be read.
+func (d *Detector) residentAndQuiet(in Input, tab *table, root int, st *treeState, set Settings) bool {
+	if in.Started == nil || in.Argv == nil || tab.byPID[root].PPID != 1 {
+		return false
+	}
+	argv := in.Argv(root)
+	if len(argv) == 0 || !strings.HasPrefix(argv[0], "/Applications/") {
+		return false
+	}
+	started := in.Started(root)
+	if started.IsZero() || in.Now.Sub(started) < residentMinAge*set.TS {
+		return false
+	}
+	cpuOnly := set
+	cpuOnly.YMB = 0
+	if d.overThreshold(st, in.Now, cpuOnly) {
+		return false
+	}
+	if d.Diag != nil {
+		d.Diag("resident app", fmt.Sprintf("%s (pid %d) holds %d MB, up %s: a resident app is not a heavy command, no event",
+			filepath.Base(argv[0]), root, peakMB(st), in.Now.Sub(started).Round(time.Minute)))
+	}
+	return true
+}
+
+func peakMB(st *treeState) uint64 {
+	var mb uint64
+	for _, s := range st.samples {
+		mb = max(mb, s.rss/mib)
+	}
+	return mb
 }
 
 func (d *Detector) treeEvent(in Input, tab *table, root int, st *treeState) Event {

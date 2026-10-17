@@ -363,6 +363,9 @@ type RelayFreshSession struct {
 	OpID      string `json:"op_id"`
 	Path      string `json:"path"`
 	WrittenAt int64  `json:"written_at"`
+	// Code is the session code of the tmux session the CC session runs in, the same as SessionInfo.Code in /api/sessions; absent
+	// when it is not in tmux (or tmux does not answer).
+	Code string `json:"code,omitempty"`
 }
 
 // RelayFreshView is the answer of GET /api/relay/fresh, oldest first.
