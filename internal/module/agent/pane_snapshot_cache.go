@@ -45,6 +45,15 @@ func (m *Module) snapshotView(panes map[string]tmux.PanePlacement, fallback bool
 	return &paneSnapshot{m: m, panes: panes, fallback: fallback, deadline: time.Now().Add(paneSnapshotTimeout)}
 }
 
+// flightView is the snapshot a caller gets from a finished flight. A fallback keeps the flight's own deadline (the batch call
+// already spent part of it, and a waiter's wait counts too): the per-pane lookups that stand in for the batch share ONE budget.
+func (m *Module) flightView(f *snapFlight) *paneSnapshot {
+	if f.snap.fallback {
+		return &paneSnapshot{m: m, fallback: true, deadline: f.snap.deadline}
+	}
+	return m.snapshotView(f.snap.panes, false)
+}
+
 // cachedPaneSnapshot is takePaneSnapshot behind the shared listing. fromCache says
 // the answer was not freshly listed for this call. force skips the TTL and the
 // generation check (a caller whose pane or session is not in the listing).
@@ -80,7 +89,7 @@ func (m *Module) cachedPaneSnapshot(force bool) (*paneSnapshot, bool, error) {
 			if f.snap == nil {
 				return nil, false, nil
 			}
-			return m.snapshotView(f.snap.panes, f.snap.fallback), false, nil
+			return m.flightView(f), false, nil
 		}
 		f := &snapFlight{started: time.Now(), done: make(chan struct{})}
 		c.flight = f
@@ -102,7 +111,7 @@ func (m *Module) cachedPaneSnapshot(force bool) (*paneSnapshot, bool, error) {
 		if f.snap == nil {
 			return nil, false, nil
 		}
-		return m.snapshotView(f.snap.panes, f.snap.fallback), false, nil
+		return m.flightView(f), false, nil
 	}
 }
 

@@ -219,3 +219,23 @@ func TestProjectionForSession_AmbiguousOnlyPane(t *testing.T) {
 		t.Fatalf("another session got the linked pane: %+v", other)
 	}
 }
+
+// A batch that fails after most of its budget leaves the per-pane fallback only what is left, cached path included.
+func TestPaneSnapCache_FallbackKeepsTheReadDeadline(t *testing.T) {
+	f := cachedFixture(t, time.Hour)
+	f.tx.SetListPanePlacementsError(fmt.Errorf("tmux hiccup"))
+	f.tx.mu.Lock()
+	f.tx.onCall = func() { time.Sleep(50 * time.Millisecond) }
+	f.tx.mu.Unlock()
+	before := time.Now()
+	snap, _, err := f.m.cachedPaneSnapshot(false)
+	if err != nil || snap == nil || !snap.fallback {
+		t.Fatalf("snapshot = %+v, %v", snap, err)
+	}
+	if limit := before.Add(paneSnapshotTimeout + 20*time.Millisecond); snap.deadline.After(limit) {
+		t.Fatalf("fallback deadline %v is later than the read's own budget %v", snap.deadline, limit)
+	}
+	if got := before.Add(paneSnapshotTimeout - 10*time.Millisecond); !snap.deadline.Before(got.Add(60 * time.Millisecond)) {
+		t.Fatalf("deadline %v was reset after the batch call", snap.deadline)
+	}
+}
