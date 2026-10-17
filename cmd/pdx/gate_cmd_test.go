@@ -154,3 +154,14 @@ func TestGate_ABrokenConfigIsReportedAndTheDefaultsRun(t *testing.T) {
 	assert.Equal(t, 0, code)
 	assert.Contains(t, errb.String(), "using the defaults")
 }
+
+// --assist-host sends the command away: it is never run here, and when it cannot be sent the exit code is 75 with the reason.
+func TestGate_AssistHostNeverRunsTheCommandHere(t *testing.T) {
+	cfg, dir := gateEnv(t, "[admission]\ndisk_min_gb = 0\n[priority]\nmode = \"none\"\n")
+	var out, errb bytes.Buffer
+	code := gateMain([]string{"--config", cfg, "--assist-host", "air26", "--assist-ssh", "/nonexistent/ssh", "--", "sh", "-c", "touch " + dir + "/ran"}, &out, &errb)
+	assert.Equal(t, 75, code)
+	assert.Contains(t, errb.String(), "the command was not run on air26")
+	_, err := os.Stat(dir + "/ran")
+	assert.True(t, os.IsNotExist(err))
+}
