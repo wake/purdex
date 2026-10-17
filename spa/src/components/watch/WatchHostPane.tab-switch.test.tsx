@@ -8,6 +8,7 @@ import { registerModule, clearModuleRegistry } from '../../lib/module-registry'
 import { useFleetStore } from '../../lib/fleet/store'
 import { clearViewMemory } from '../../lib/watch/view-memory'
 import { useHostStore } from '../../stores/useHostStore'
+import { useNexHostStore } from '../../stores/useNexHostStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { createTab } from '../../types/tab'
 import type { Tab } from '../../types/tab'
@@ -59,7 +60,8 @@ describe('the host tab across tab switches', () => {
     const gen = st.begin('cfg-a')
     st.setSupport('cfg-a', gen, 'yes')
     st.applyFetched('cfg-a', gen, primaryAnswer(2, [host('d-a', { alias: 'air26', slow: { at: 1, top_cpu: [], top_mem: [], queue: q } })]))
-    // 歷史 is disabled until W5d, so the remembered choice is set the way W5d's switch will: through view memory.
+    // 歷史 needs the host's `gate.decisions.v1`; with it, the remembered choice is the one the switch would have written.
+    useNexHostStore.setState({ byHost: { 'cfg-a': { daemonCapabilities: ['gate.decisions.v1'] } } } as never)
     writeQueueTab('d-a', 'history')
     const { rerender } = render(<TabContent activeTab={hostTab} allTabs={all} />)
     expect(readQueueTab('d-a')).toBe('history')

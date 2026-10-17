@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -53,6 +54,10 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		lastRank Rank      = RankNormal // the rank the last line was printed for
 		prevHold bool                   // the previous poll found the ticket on hold: the time since then is held time
 		heldFor  time.Duration
+		// the same for a conflict rule that kept it waiting (spec §5.3)
+		prevBlocked bool
+		blockedFor  time.Duration
+		lastBlock   string // the rule and holder the last line was printed for
 	)
 	for {
 		if !keepOrphan && parent > 1 && g.parentPID() != parent {
@@ -87,6 +92,7 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		}
 		ahead, aheadFront := 0, 0
 		var rank RankInfo
+		var blocked *ConflictBlock
 		pool := g.pool(cfg, class)
 		if ok {
 			tk, err := pool.TryTakeRanked(ticket)
@@ -98,14 +104,17 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 				if prevHold && !pollAt.IsZero() {
 					heldFor += g.Now().Sub(pollAt) // the last stretch: held at the previous poll, served now
 				}
-				d.Rank, d.HeldS = rankName(tk.Rank), heldFor.Seconds()
+				if prevBlocked && !pollAt.IsZero() {
+					blockedFor += g.Now().Sub(pollAt)
+				}
+				d.Rank, d.HeldS, d.ConflictS = rankName(tk.Rank), heldFor.Seconds(), blockedFor.Seconds()
 				if !waitStart.IsZero() {
 					d.WaitS = g.Now().Sub(waitStart).Seconds()
 					g.say("%s", grantedLine(class, g.Now().Sub(waitStart)))
 				}
 				return tk.Slot, 0, false
 			}
-			ahead, aheadFront, rank = tk.Ahead, tk.AheadFront, tk.Rank
+			ahead, aheadFront, rank, blocked = tk.Ahead, tk.AheadFront, tk.Rank, tk.Blocked
 		} else {
 			rank = rankOfTicket(pool.peekSnapshot(), ticket.Name) // a poll the pressure check keeps from asking still reads its rank
 		}
@@ -115,8 +124,17 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		if prevHold && !pollAt.IsZero() {
 			heldFor += now.Sub(pollAt)
 		}
-		pollAt, prevHold = now, rank.Rank == RankHold
-		d.Rank, d.HeldS = rankName(rank), heldFor.Seconds()
+		if prevBlocked && !pollAt.IsZero() {
+			blockedFor += now.Sub(pollAt)
+		}
+		pollAt, prevHold, prevBlocked = now, rank.Rank == RankHold, blocked != nil
+		d.Rank, d.HeldS, d.ConflictS = rankName(rank), heldFor.Seconds(), blockedFor.Seconds()
+		blockKey := ""
+		if blocked != nil {
+			blockKey = strings.Join([]string{blocked.With, string(blocked.Rule.Class), blocked.Rule.A, blocked.Rule.B, blocked.Rule.Reason}, "|")
+			d.Conflict = blocked.Rule.A + " × " + blocked.Rule.B
+			d.why("conflict") // recorded beside whatever else keeps it waiting too
+		}
 		if rank.Rank == RankHold {
 			d.why("held") // recorded whatever else keeps it waiting too: held_s is summed for it
 		}
@@ -134,8 +152,8 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		if waitStart.IsZero() {
 			waitStart = now
 		}
-		if rank.Rank != lastRank { // moved in the queue (held, set back, to the front): say so now, not at the next minute
-			lastRank, lastPlace = rank.Rank, time.Time{}
+		if rank.Rank != lastRank || blockKey != lastBlock { // moved in the queue, or a rule now holds it (or lets go): say so now
+			lastRank, lastBlock, lastPlace = rank.Rank, blockKey, time.Time{}
 		}
 		if lastPlace.IsZero() || now.Sub(lastPlace) >= time.Minute {
 			lastPlace = now
@@ -144,6 +162,8 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 				g.say("%s", pausedLine(class))
 			case rank.Rank == RankHold:
 				g.say("%s", heldLine(class, rank, now))
+			case blocked != nil:
+				g.say("%s", conflictLine(blocked))
 			case ok:
 				holders := pool.Held()
 				g.say("%s", withFrontNote(waitingLine(class, ahead+len(holders), holders, now), aheadFront)) // everything in front of it: the running and the queued
