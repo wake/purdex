@@ -401,14 +401,16 @@ func TestDenyPrefersTheStoredIDOverALiveTeamsName(t *testing.T) {
 	}
 }
 
-// With two live successors of a ref, the newest (the first RefSuccessors names) is the one that is matched.
-func TestResolveRefTakesTheFirstLiveSuccessor(t *testing.T) {
+// A ref whose lineage forked into two live sessions names neither: no guess is made.
+func TestResolveRefRefusesTwoLiveSuccessors(t *testing.T) {
 	r := newRig(t)
 	r.live("sid-a", "_aaaaab", "mlab/x-a")
-	r.live("sid-z", "_aaaaac", "mlab/x-z")
 	r.teams.succ["_aaaaaa"] = []string{"sid-z", "sid-a"}
-	o, ok := r.m.resolveRef("_aaaaaa")
-	if !ok || o.SessionID != "sid-z" {
-		t.Fatalf("%+v %v", o, ok)
+	if o, ok := r.m.resolveRef("_aaaaaa"); !ok || o.SessionID != "sid-a" {
+		t.Fatalf("one live successor: %+v %v", o, ok)
+	}
+	r.live("sid-z", "_aaaaac", "mlab/x-z")
+	if o, ok := r.m.resolveRef("_aaaaaa"); ok {
+		t.Fatalf("two live successors resolved to %+v", o)
 	}
 }

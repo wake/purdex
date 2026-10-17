@@ -102,11 +102,16 @@ func (m *Module) resolveRef(ref string) (team.Origin, bool) {
 	if err != nil {
 		return team.Origin{}, false
 	}
+	var live []team.Origin
 	for _, sid := range sids {
 		if o, ok, err := m.origins.ResolveOriginBySession(sid); err == nil && ok {
-			return o, true
+			live = append(live, o)
 		}
 	}
+	if len(live) == 1 {
+		return live[0], true
+	}
+	// none, or a lineage that forked and has two live branches: no guess is made about who inherits the permission
 	return team.Origin{}, false
 }
 
