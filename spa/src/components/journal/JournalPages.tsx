@@ -1,7 +1,6 @@
 // spa/src/components/journal/JournalPages.tsx — the pieces of a session page (JV-4, spec §3.3): the header line naming the session's
 // span, the notices (cut at the cap, earlier sessions possibly missing), the error block, and 上一頁 / 下一頁. Pure presentation: the card
 // owns which page is shown (the unit's view memo) and what is read.
-import { useCallback, useRef } from 'react'
 import { CaretLeft, CaretRight } from '@phosphor-icons/react'
 import { dayKey, timeOf } from '../../lib/journal/stream'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -31,16 +30,6 @@ export function PageHeader({ link, current, incomplete, truncated }: HeaderProps
       {truncated && <div data-testid="journal-page-truncated">{t('journal.page.truncated')}</div>}
     </div>
   )
-}
-
-/** `fn` as a click handler that is ignored while the call it started has not settled (a double click sends one request). */
-export function useSingleFlight(fn: () => Promise<unknown>): () => void {
-  const busy = useRef(false)
-  return useCallback(() => {
-    if (busy.current) return
-    busy.current = true
-    void fn().finally(() => { busy.current = false })
-  }, [fn])
 }
 
 export function PageError({ onRetry, testId = 'journal-page-error', messageKey = 'journal.page.error' }: { onRetry: (() => void) | null; testId?: string; messageKey?: string }) {

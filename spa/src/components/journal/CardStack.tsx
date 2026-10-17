@@ -12,7 +12,8 @@ import { ListChecks, MapTrifold } from '@phosphor-icons/react'
 import { CardFrame } from './CardFrame'
 import { ConfirmDetail } from './ConfirmDetail'
 import { JournalCard, JournalTitle } from './JournalCard'
-import { PageError, useSingleFlight } from './JournalPages'
+import { PageError } from './JournalPages'
+import { useSingleFlight } from './useSingleFlight'
 import { TasksCard } from './TasksCard'
 import { RoadmapCard } from './RoadmapCard'
 import { CARD_GAP, STACK_MARGIN, visibleCards } from './card-layout'
@@ -146,10 +147,11 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
     useJournalUiStore.getState().setLastWidth(card, w)
   }
   // The first read failed and there is no unit yet: the retry asks that target again, once however many times it is clicked.
-  const readTarget = target.read
+  const readHost = target.read?.hostId
+  const readSession = target.read?.sessionId
   const retryFirstRead = useSingleFlight(useCallback(
-    () => (readTarget ? useJournalStore.getState().loadJournal(readTarget.hostId, readTarget.sessionId) : Promise.resolve()),
-    [readTarget?.hostId, readTarget?.sessionId], // eslint-disable-line react-hooks/exhaustive-deps
+    () => (readHost !== undefined && readSession !== undefined ? useJournalStore.getState().loadJournal(readHost, readSession) : Promise.resolve()),
+    [readHost, readSession],
   ))
   const closeDetail = useCallback(() => patchUnitMemo(memoHost, memoKey, { detailId: null }), [memoHost, memoKey])
   const fix = (card: Exclude<CardKey, 'team'>) => ({ fixed: memo.fixed[card], onToggleFixed: () => patch({ fixed: { ...memo.fixed, [card]: !memo.fixed[card] } }) })

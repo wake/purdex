@@ -287,7 +287,7 @@ describe('the first read failed (no unit yet): retry and the stand-in memo', () 
   it('a retry that fails again leaves the error card and can be tried once more', async () => {
     failFirst()
     mount()
-    getJournalPage.mockRejectedValueOnce(new Error('503'))
+    getJournalPage.mockRejectedValue(new Error('503'))
     click(screen.getByTestId('journal-page-retry'))
     await waitFor(() => expect(getJournalPage).toHaveBeenCalledTimes(1))
     await act(async () => { await Promise.resolve() })
