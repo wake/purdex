@@ -101,6 +101,39 @@ func TestPoolRefusesAPeerThatAnswersAsSomeoneElse(t *testing.T) {
 	}
 }
 
+// The daemon behind an alias was replaced (new host_id) and has no sample yet:
+// the old host's facts must not stay on the new host's entry.
+func TestPoolDropsFactsOfAReplacedHost(t *testing.T) {
+	var id atomic.Value
+	id.Store("old")
+	var noFacts atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/info":
+			writeJSON(w, 200, wire.Info{HostID: id.Load().(string), Alias: "mserv", Version: "v", Proto: wire.Proto, Platform: "linux", Arch: "amd64", Labels: []string{}})
+		case "/v1/facts":
+			if noFacts.Load() {
+				http.Error(w, "no sample yet", http.StatusServiceUnavailable)
+				return
+			}
+			writeJSON(w, 200, wire.Facts{V: wire.Proto, HostID: id.Load().(string), Alias: "mserv", Derived: wire.Derived{Zone: wire.ZoneNormal}, At: s0})
+		}
+	}))
+	defer srv.Close()
+	p := NewPoolPoller([]PeerAddr{{"mserv", addr(srv)}}, testToken, nil)
+	p.PollOnce(context.Background())
+	if g := p.Peers()[0]; g.Facts == nil || g.Facts.HostID != "old" {
+		t.Fatalf("setup: %+v", g)
+	}
+	id.Store("new")
+	noFacts.Store(true)
+	p.PollOnce(context.Background())
+	g := p.Peers()[0]
+	if !g.Reachable || g.Info.HostID != "new" || g.Facts != nil {
+		t.Errorf("the old host's facts stayed on the new host: %+v", g)
+	}
+}
+
 func TestPoolRefusesAnOversizedAnswer(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

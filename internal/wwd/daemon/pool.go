@@ -98,8 +98,11 @@ func (p *PoolPoller) pollPeer(ctx context.Context, i int) {
 		return
 	}
 	p.state[i].Info, p.state[i].Reachable = info, true
-	if ferr == nil {
+	switch {
+	case ferr == nil:
 		p.state[i].Facts = &facts
+	case p.state[i].Facts != nil && p.state[i].Facts.HostID != info.HostID:
+		p.state[i].Facts = nil // another host now answers under this alias: its predecessor's facts are not its
 	}
 }
 
