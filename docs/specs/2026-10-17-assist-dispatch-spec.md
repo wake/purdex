@@ -1,0 +1,160 @@
+# Assist hosts: one pool, one queue, dispatched to mlab, air26 and mserv (spec)
+
+Status: draft (lead 1f, 2026-10-17). Builds on the host load control spec
+(`docs/specs/2026-10-15-host-load-control-spec.md`: the gate §5, queue order §5.2, conflicts §5.3, the watcher §12).
+
+## 0. Why
+
+On 10-16/17 every heavy command of every line queued on mlab: `vitest related` took 55–90 min, the release suite about
+60 min, and the heavy queue reached 13 commands with waits up to 2 h, while air26 and mserv sat idle (the host cells showed
+the whole queue on mlab). The watcher's member measured the same commit on the other hosts:
+
+| Command | mlab (loaded, 10-16 night) | air26 (M5, 24 GB) | mserv (N150 4 cores, Linux) |
+|---|---|---|---|
+| spa `vitest run` (983 files) | ~50 min in the release gate | 308 s | 858 s |
+| spa `tsc -b --force` | minutes, 1.2 GB node | 10 s | 36 s |
+| `go test ./...` | ~10 min (`-p 3`) | 129 s | Linux: 15 packages do not build (#3076) |
+| `go test ./internal/module/team/` | 666 s (`-race` subset 962 s) | 78 s (`-race` 88 s) | — |
+
+Assist environments (`~/Assist` on air26 and on mserv: own toolchains, caches and deny rules, nothing outside it) and the
+scripts `assist-on` / `assist-off` / `assist-check` exist as a prototype (mlab repo, `purdex-watch` branch,
+`watch/assist/`). Turning air26's assist off gave its resources back in 7.2–8.4 s (measured).
+
+## 1. User decisions (2026-10-17, do not reopen)
+
+1. **Assist is for test runs only.** No development session is ever started in an Assist directory; work is sent there
+   to be run and comes back.
+2. **One pool, one queue.** The gate's slots of mlab, air26 and mserv are one pool and the gate's queue is one queue,
+   seen together; work is dispatched by capability, load and the on/off switches. Assist is part of the gate's admission,
+   not a separate system.
+3. **Dynamic.** Work waits in the one queue and is taken by whichever host can start it and finish it soonest — mserv is
+   slow, but when mlab is congested it still finishes sooner than waiting on mlab.
+4. **Automatic.** When the conditions hold the gate sends the command by itself; the caller writes the command as always,
+   and the output says where it ran.
+5. **mlab serves the quality of the development sessions first**; light commands that clog it may be sent too, when assist
+   is on.
+6. **Each assist host has its own switch** (air26 and mserv). Turning one off gives its resources back within 60 s.
+7. **Who may use assist**: a team or a session that is allowed. Until the App panel exists the **watcher assigns** it with
+   a command; the panel later reads and writes the same list. A team may use a host when (a) that host's assist is on,
+   (b) the team or session is allowed, and (c) the watcher has prepared the repo's environment on that host (including the
+   folder trust on air26). The watcher prepares the environment **proactively**: when assist turns on, or when a team is
+   allowed.
+8. **Every team or session can see which test hosts are available** (`mlab` / `air26 assist` / `mserv assist`), by a
+   command, and is **notified when that changes**.
+9. **The watcher is woken** when an assist switch turns on or off, and when unattended mode turns on or off. While nobody
+   is present the watcher works on shorter intervals (§7).
+
+## 2. The pool
+
+| Host | Its slots are kept by | Runs | Limits |
+|---|---|---|---|
+| mlab | mlab's gate (today) | everything the gate runs | the gate's admission (§5 of the load spec) |
+| air26 | **air26's own gate** (`pdx gate` in `~/Assist`, which also protects the person's own use of air26) | purdex and aigora-v2 test runs: SPA vitest / tsc, Go tests, lint, aigora `pnpm check` | air26's gate slots and admission |
+| mserv | **mlab's gate** (mserv has no pdx; its slots are held on mlab, `mserv-<k>` lock files in mlab's gate directory) | platform-independent work: SPA install / tsc / vitest, the Go packages that build on Linux, PHP versions (7.4, 8.0 cli, 8.5), MySQL dev on `100.64.0.6:3307` | 2 parallel; each run wrapped in `sudo systemd-run --scope --uid=wake -p CPUQuota=200% -p MemoryMax=4G nice -n 10 ionice -c3` (mserv admin 9e-f0); admitted only while PSI memory `some10` < 1 and MemAvailable > 4 GB (read over ssh right before the start) |
+
+- **Capability** is a table per host of the command kinds it can run (by tool and words, like the intercept rules), kept
+  in mlab's gate config and written from the assist READMEs: e.g. mserv cannot run `go vet ./...`, `go test ./...`,
+  `go build ./cmd/pdx` (#3076), cgo or node-gyp builds, browser tests, swift, macOS-only tests. A command no host but mlab
+  can run stays on mlab. **#3076 is not needed for this spec**: nothing runs pdx on mserv.
+- **Readiness** per (host, repo) comes from that host's `assist-check --json` (run by the dispatcher over ssh, cached for
+  60 s): Assist present, the switch on, not `.closing`, the repo cloned and its toolchain ready, and on air26 the folder
+  trust accepted for the repo.
+
+## 3. Dispatch
+
+- **The queue** is mlab's gate queue as today: arrival order with the ranks of §5.2 (front / normal / back / hold) and the
+  conflict rules of §5.3 (a rule now also names the host it applies to; default: the host the rule was measured on).
+- **When a slot frees anywhere** (or a waiting gate polls), the dispatcher walks the serving order from the head and gives
+  each free slot the first ticket that (a) may run on that host (allowed team or session, host ready for its repo, kind
+  in the host's capability, no conflict there) and (b) **finishes soonest there**: the host's estimated run time for that
+  kind plus the transfer (§4), compared with "wait on mlab, then run on mlab". A ticket that fits no free slot keeps its
+  place; tickets behind it may take slots it cannot use (as with conflicts), so a mserv-only slot never waits behind a
+  macOS-only head.
+- **Preference for mlab's quality (decision 5).** With an assist host free and the ticket able to run there, a heavy
+  ticket goes to the assist host even when mlab has a free slot, unless mlab would finish it clearly sooner (estimate
+  below 0.5× the assist host's). A light ticket goes out only when it would otherwise wait on mlab.
+- **Estimates** are per (kind, host): the moving average of the decision records' run times (the gate already writes
+  one per job), seeded from the table in §0; the transfer is measured per host the same way. A kind is the command's
+  words after the runner words (§5.3's `commandWords`), with paths and file lists dropped (`vitest related <files>` is one
+  kind; its time grows with the file count, so the record keeps the count and the estimate scales by it).
+- **The caller** sees one line when its command leaves: `pdx gate: running on air26 (assist): <command>` (or mserv), then
+  the command's own output, then its exit code. Nothing else changes for it: the same `pdx gate` process waits, streams
+  and exits.
+
+## 4. Running on an assist host
+
+1. **Snapshot without touching the caller's tree.** A temporary index: `git add -A` into it, `write-tree`,
+   `commit-tree -p HEAD` → a commit with the working tree as it is (uncommitted and untracked files included; ignored
+   files such as `node_modules` left out).
+2. **Send it.** air26: `git push air26:~/Assist/repos.noindex/<repo> <sha>:refs/assist/<job>`, then on air26
+   `git worktree add --detach ~/Assist/tmp.noindex/<job> <sha>`. mserv (no git credentials there, by its admin's rule):
+   `git archive <sha> | ssh mserv 'tar -x -C ~/Assist/tmp.noindex/<job>'`.
+3. **Dependencies from the host's own caches.** SPA: `pnpm install --frozen-lockfile` from the Assist store when the
+   lockfile differs from the last install for that repo (a per-repo `node_modules` keyed by the lockfile hash, linked
+   into the job directory; mserv adds `--ignore-scripts` where its README says so). Go: the Assist module cache (mserv's
+   private modules copied from air26 by the watcher's preparation).
+4. **Run.** air26: `ssh air26 'source ~/Assist/assist.env && cd <job>/<rel cwd> && exec pdx gate -- <command>'` — air26's
+   own gate admits it. mserv: mlab holds a `mserv-<k>` slot, checks PSI and MemAvailable, then `ssh mserv 'source
+   ~/Assist/assist.env && cd <job>/<rel cwd> && exec sudo systemd-run --scope … <command>'`. The relative cwd is the
+   caller's cwd under its repo root.
+5. **Stream and exit.** stdout and stderr come back over ssh as they are written; the exit code is the command's. SIGINT,
+   SIGTERM and SIGHUP to the mlab gate end the remote process group (the job's pid file on the host), then the ssh.
+6. **Clean up always** (success, failure, cancel, reclaim): remove the job worktree or directory and the `refs/assist/<job>`
+   ref; a sweep at each `assist-check` removes leftovers older than 1 h.
+7. **Failures before the command starts** (ssh, push, archive, install, readiness changed) put the ticket back at its
+   place in the queue and mark that host unusable for that repo for 5 min, with the reason in the decision record and on
+   stderr. **A failure of the command itself is its result**: a red test on air26 is red; the gate never reruns it
+   elsewhere to get another answer.
+
+## 5. Turning a host off (≤ 60 s)
+
+`assist-off` on a host (by the switch, §6) marks it `.closing`: the dispatcher stops sending at once (readiness is
+re-read before every send). The host's assist jobs are ended (`assist-off` ends the process groups it owns; measured
+7–8 s). The mlab gate of each such job sees the run end with the reclaim marker, prints `pdx gate: air26 was taken back;
+waiting again on mlab`, and **puts its ticket back at its original place** (same ticket name and arrival time) — the
+command runs again wherever the pool can take it. A command's partial output from the reclaimed run is left as printed.
+
+## 6. Switches, the allowed list, and who sees what
+
+- `pdx assist on|off <host>` (on mlab) runs that host's `assist-on` / `assist-off --apply` over ssh and records the switch
+  in mlab's gate directory (`assist.json`: per host, on/off, by, at, reason). The App panel (phase X4) calls the same.
+- `pdx assist allow|deny <team|session> [--host <host>] --reason "<line>"` edits the allowed list in `assist.json` (under
+  a lock, re-read, atomic replace). Per decision 7 the watcher runs these until the panel exists; the panel then edits the
+  same list. Default: empty (nobody), so turning a switch on sends nothing until a team is allowed.
+- `pdx gate hosts [--json]` answers, for the caller's session (or `--session`): each host, whether it is on, ready for
+  this repo, and allowed for this session, and why not when it is not.
+- **Notices.** When a host becomes usable or unusable for an allowed team (switch, readiness, allowed list), each live
+  session of that team gets one notice (`[輔測] air26 可用（purdex）` / `…不可用：<reason>`), at most one per change.
+- **One pool in view.** `pdx gate status [--json]` lists the pools (mlab heavy/light, air26 through its gate, mserv
+  `mserv-<k>`), every holder with its host, and the one queue with each waiter's candidate hosts; the fleet's queue view
+  (B line) takes it from the status JSON, so the host cells show mlab's queue draining into air26 and mserv.
+
+## 7. The watcher
+
+- **Woken** (daemon notice, §12.3 delivery) when an assist switch turns on or off and when unattended mode turns on or off,
+  with what changed. On assist on it prepares the environments of the allowed teams (decision 7); on off it confirms the
+  resources came back.
+- **Unattended mode shortens its intervals** (the watcher's numbers, 10-17; the person can change them in the watch
+  settings): its own patrol timer while awake 10 min when the host is tight, 15 min when steady (30 min when the person is
+  present); while resting, a timed wake every 10 min (today a resting watcher wakes only on an event). Disk below 14 GB
+  wakes it at once, whatever the interval. Reacting to pressure stays with the 30 s sampler (it does not wait for a
+  patrol).
+
+## 8. Phases (one PR each, ≤ 800 lines / 20 files)
+
+| Phase | Content | Depends on |
+|---|---|---|
+| X1 | `assist.json` (switches, allowed list), `pdx assist on|off|allow|deny`, readiness from `assist-check --json`, `pdx gate hosts`, the notices; waking the watcher on assist and unattended switches; the unattended intervals | — |
+| X2 | The dispatcher in mlab's gate with air26: capability table, estimates, the walk, snapshot / push / remote run / stream / cancel / cleanup, failure and reclaim requeue, status JSON with pools | GQ (serving order, snapshot), GC (conflicts) |
+| X3 | mserv: mlab-held `mserv-<k>` slots, PSI / MemAvailable admission over ssh, `git archive` transfer, `systemd-run` limits, mserv's capability table (incl. PHP, MySQL dev) | X2 |
+| X4 | The App panel (B line, lead 88): switches, the allowed list, the pool view, "what was taken back" | X1 (API) |
+
+The watcher's scripts (`assist-on/off/check`) gain `--json` and the folder-trust check in X1; they stay the watcher's.
+
+## 9. Open questions (for the plan)
+
+- Where `assist.json` lives when mlab is not the gated host of a caller (air26's own sessions): phase 1 dispatches only
+  mlab's queue (decision: "mlab's items to air26 / mserv"); air26's own queue stays local.
+- The per-repo `node_modules` keyed by lockfile on the assist host: disk budget and eviction (the watcher watches disk).
+- How a remote run's resources show in air26's own gate status for a person looking at air26 (it is a normal gate holder
+  there, tagged `assist` with the mlab job id).
