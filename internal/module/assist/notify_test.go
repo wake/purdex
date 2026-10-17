@@ -2,6 +2,7 @@ package assistmod
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -402,4 +403,17 @@ func TestANewRecipientIsToldTheCurrentState(t *testing.T) {
 	if len(toS2) != 1 {
 		t.Fatalf("%+v", toS2)
 	}
+}
+
+// No wake about a different subject is ever dropped, however many wait behind a slow one.
+func TestNoWakeIsDroppedBehindASlowOne(t *testing.T) {
+	r, _, wk := notifyRig(t)
+	wk.block, wk.entered = make(chan struct{}), make(chan struct{}, 256)
+	r.m.wakeWatcher("assist_changed", "air26 輔測 關→開 x")
+	<-wk.entered
+	for i := 0; i < 150; i++ {
+		r.m.wakeWatcher("assist_allowed", fmt.Sprintf("team T%d 可用 全部 by s：r", i))
+	}
+	close(wk.block)
+	r.waitFor("all of them", func() bool { return len(wk.all()) == 151 })
 }

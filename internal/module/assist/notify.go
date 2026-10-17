@@ -283,9 +283,6 @@ func wakeKey(w wakeItem) string {
 	return w.reason + "|" + w.detail
 }
 
-// maxWakeQueue bounds the waiting wakes; past it the oldest goes (a flood of allows is not worth a queue that grows).
-const maxWakeQueue = 64
-
 type wakeState struct {
 	mu      sync.Mutex
 	pending []wakeItem
@@ -319,10 +316,7 @@ func (m *Module) wakeWatcher(reason, detail string) {
 		}
 	}
 	if !replaced {
-		m.wake.pending = append(m.wake.pending, item)
-		if len(m.wake.pending) > maxWakeQueue {
-			m.wake.pending = m.wake.pending[1:]
-		}
+		m.wake.pending = append(m.wake.pending, item) // not bounded: an allow is an admin's act, and every one must reach the watcher
 	}
 	if m.wake.running {
 		m.wake.mu.Unlock()
