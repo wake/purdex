@@ -31,6 +31,14 @@ describe('BackgroundSymbol', () => {
     expect(el.getAttribute('title')).toBe(label)
   })
 
+  it('queued draws the hourglass and a given title replaces the kind label', () => {
+    render(<BackgroundSymbol kind="queued" title="Queued: #1" />)
+    const el = sym()!
+    expect(el.getAttribute('data-kind')).toBe('queued')
+    expect(el.getAttribute('title')).toBe('Queued: #1')
+    expect(el.getAttribute('aria-label')).toBe('Queued: #1')
+  })
+
   it('names the kind in zh-TW', () => {
     act(() => { useI18nStore.getState().setLocale('zh-TW') })
     render(<BackgroundSymbol kind="monitor" />)
@@ -42,14 +50,14 @@ describe('BackgroundSymbol', () => {
     expect(container.innerHTML).not.toMatch(/animate-/)
   })
 
-  it('draws the three kinds with three different icons', () => {
-    const paths = (['workflow', 'monitor', 'schedule'] as const).map((k) => {
+  it('draws the kinds with different icons', () => {
+    const paths = (['queued', 'workflow', 'monitor', 'schedule'] as const).map((k) => {
       const { container, unmount } = render(<BackgroundSymbol kind={k} />)
       const d = container.querySelector('svg')!.innerHTML
       unmount()
       return d
     })
-    expect(new Set(paths).size).toBe(3)
+    expect(new Set(paths).size).toBe(4)
   })
 })
 

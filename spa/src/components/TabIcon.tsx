@@ -36,6 +36,8 @@ interface Props {
   awaitingApproval?: boolean
   /** The tab's highest background-work kind (N6): a small symbol at the top-left of the agent icon (of the dot in `dot`). */
   background?: BackgroundKind
+  /** Tooltip of the background symbol (the queue hourglass). */
+  backgroundTitle?: string
 }
 
 export function TabIcon({
@@ -48,6 +50,7 @@ export function TabIcon({
   isUnread,
   awaitingApproval = false,
   background,
+  backgroundTitle,
 }: Props) {
   const iconBox = (
     <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-[1.5px] lowdpi:ml-px">
@@ -75,7 +78,7 @@ export function TabIcon({
         <TabStatusIndicator status={status} mode="replace" isActive={isActive} awaitingApproval={awaitingApproval} />
         {showDotUnreadPip && <UnreadPip />}
         {subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} />}
-        {background && <BackgroundSymbol kind={background} top={0} left={0} />}
+        {background && <BackgroundSymbol kind={background} title={backgroundTitle} top={0} left={0} />}
       </span>
     )
   }
@@ -91,7 +94,7 @@ export function TabIcon({
         {IconComponent && (background ? (
           <span className="relative inline-flex">
             <IconComponent size={iconSize} className="flex-shrink-0" />
-            <BackgroundSymbol kind={background} />
+            <BackgroundSymbol kind={background} title={backgroundTitle} />
           </span>
         ) : (
           <IconComponent size={iconSize} className="flex-shrink-0" />
@@ -118,7 +121,7 @@ export function TabIcon({
         awaitingApproval={awaitingApproval}
       />
       {!lightsOff && subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} left={-4} />}
-      {!lightsOff && background && <BackgroundSymbol kind={background} />}
+      {!lightsOff && background && <BackgroundSymbol kind={background} title={backgroundTitle} />}
     </span>
   )
 }

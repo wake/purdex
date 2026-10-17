@@ -21,6 +21,11 @@ describe('tabAgentPanes', () => {
     const layout = split([tmux('p1', 'a'), tmux('p2', 'b'), tmux('p3', 'a'), exec('p4', 'e1'), blank('p5')])
     expect(tabAgentPanes(layout).map((p) => p.key)).toEqual(['h1:a', 'h1:b', 'h1:exec-e1'])
   })
+  it('carries the agent session id of a tmux pane from its rebuild record', () => {
+    const l: PaneLayout = { type: 'leaf', pane: { id: 'p1', content: { kind: 'tmux-session', hostId: 'h1', sessionCode: 'a', mode: 'terminal', cachedName: '', tmuxInstance: '',
+      rebuild: { sessionName: 'a', tmuxInstance: '', agent: { type: 'cc', sessionId: 'sid-1', updatedAt: 1 }, capturedAt: 1 } } } }
+    expect(tabAgentPanes(l)).toEqual([{ key: 'h1:a', hostId: 'h1', sessionId: 'sid-1' }])
+  })
   it('keeps the execution id of a worker pane and skips an ended tmux pane', () => {
     const ended: PaneLayout = { type: 'leaf', pane: { id: 'p9', content: { kind: 'tmux-session', hostId: 'h1', sessionCode: 'dead', mode: 'terminal', cachedName: '', tmuxInstance: '', terminated: 'session-closed' } } }
     const got = tabAgentPanes(split([exec('p1', 'e1'), ended]))
@@ -54,6 +59,11 @@ describe('aggregateTabAgents', () => {
     expect(a.isAwaitingApproval).toBe(true)
     expect(a.status).toBe('waiting')
     expect(a.repKey).toBe('h1:exec-e1')
+  })
+  it('a queued pane ranks above workflow; no queued key means no hourglass', () => {
+    const lastEvents = { 'h1:a': ev('idle', 'workflow'), 'h1:b': ev('idle') }
+    expect(aggregateTabAgents(panes('h1:a', 'h1:b'), data({ lastEvents }), new Set(), new Set(['h1:b'])).background).toBe('queued')
+    expect(aggregateTabAgents(panes('h1:a', 'h1:b'), data({ lastEvents }), new Set(), new Set()).background).toBe('workflow')
   })
   it('background is the highest across panes (workflow > monitor > schedule)', () => {
     const lastEvents = { 'h1:a': ev('idle', 'schedule'), 'h1:b': ev('idle', 'monitor'), 'h1:c': ev('idle') }

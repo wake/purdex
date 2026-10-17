@@ -58,6 +58,7 @@ export function InlineTab({
     isHostOffline,
     isAwaitingApproval,
     background,
+    backgroundTitle,
   } = useTabDisplay(tab)
 
   // Vertical-only drag — x locked to 0 so the row never slides horizontally
@@ -139,6 +140,7 @@ export function InlineTab({
         isUnread,
         awaitingApproval: isAwaitingApproval,
         background,
+        backgroundTitle,
       })}
       {badgeEnabled && hasHostBadge(hostBadge) && (
         <HostBadge

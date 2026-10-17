@@ -2,6 +2,7 @@
 import { useMemo } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useAgentStore } from '../stores/useAgentStore'
+import { useTabQueued } from './useTabQueued'
 import { useExecutionStore } from '../stores/useExecutionStore'
 import { useExecutionListStore } from '../stores/useExecutionListStore'
 import { aggregateTabAgents, type TabAgentAggregate, type TabAgentPane } from '../lib/agent-lights/tab-aggregate'
@@ -43,5 +44,6 @@ export function useTabAgentAggregate(panes: TabAgentPane[]): TabAgentAggregate {
   const liveFlags = useExecutionStore((s) => (listFlags.includes('L') ? liveAwaitingFlags(s.executions, execPanes) : ''))
   const awaitingId = awaitingKeys(execPanes, listFlags, liveFlags).join('\n')
   const awaiting = useMemo(() => new Set(awaitingId ? awaitingId.split('\n') : []), [awaitingId])
-  return useAgentStore(useShallow((s) => aggregateTabAgents(panes, s, awaiting)))
+  const { keys: queued } = useTabQueued(panes)
+  return useAgentStore(useShallow((s) => aggregateTabAgents(panes, s, awaiting, queued)))
 }
