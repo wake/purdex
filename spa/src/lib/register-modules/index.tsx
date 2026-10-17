@@ -21,7 +21,7 @@ import { BrowserNewTabSection } from '../../components/BrowserNewTabSection'
 import { MemoryMonitorPage } from '../../components/MemoryMonitorPage'
 import { HostPage } from '../../components/HostPage'
 import { WatchHostPane } from '../../components/watch/WatchHostPane'
-import { WatchStubPane } from '../../components/watch/WatchStubPane'
+import { WatchEventsPane } from '../../components/watch/WatchEventsPane'
 import { WatchGuardianPane } from '../../components/watch/WatchGuardianPane'
 import WorkerDeckPane from '../../components/execution/WorkerDeckPane'
 import { resolveExecutionHostId } from '../nex/resolve-host'
@@ -262,7 +262,7 @@ export function registerBuiltinModules(): void {
     name: 'Watcher Area',
     panes: [
       { kind: 'watch-guardian', component: WatchGuardianPane },
-      { kind: 'watch-events', component: WatchStubPane },
+      { kind: 'watch-events', component: WatchEventsPane },
       { kind: 'watch-host', component: WatchHostPane },
     ],
   })

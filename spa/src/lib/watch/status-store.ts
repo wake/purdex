@@ -1,15 +1,16 @@
 // spa/src/lib/watch/status-store.ts — what each connected host's daemon says about the watcher (plan T-a3.1).
 //
-// There is no push yet (`watch.changed` / `watch.v1` come with W5e), so the App reads `GET /api/watch/status` of every
-// connected host when it connects and every 30 s while the window is visible. W5e replaces the timer with the pushes.
+// The App reads `GET /api/watch/status` of every connected host when it connects, and again whenever that host's daemon
+// pushes `watch.changed` (`rereadWatchStatus`, called from the host event socket); there is no timer.
 // A reply is written only under the generation it began in: a disconnect, a re-connect or a removal moves it, so an
 // answer of the old connection is dropped. Nothing here is persisted.
 import { create } from 'zustand'
 import { useHostStore } from '../../stores/useHostStore'
+import { selectWatchV1, useNexHostStore } from '../../stores/useNexHostStore'
+import { connectionKey } from '../host-connection-key'
 import { fetchWatchStatus } from './api'
 import type { WatchStatus } from './status-types'
 
-export const STATUS_POLL_MS = 30_000
 /** The tmux session of the watcher until the status carries its own `tmux_session` (plan §13, A3). */
 export const PDX_WATCH_SESSION = 'pdx-watch'
 
@@ -104,7 +105,16 @@ export function deriveGuardian(byHost: Record<string, WatchEntry>): Guardian {
   return { state: anyOk ? 'none' : 'unknown', tmuxSession: PDX_WATCH_SESSION, reachable: true }
 }
 
-const visible = (): boolean => typeof document === 'undefined' || document.visibilityState !== 'hidden'
+/** When a host whose /api/info could not be read is asked again: 5 s, 15 s, 60 s after the failures, then it stops. */
+export const INFO_RETRY_MS = [5_000, 15_000, 60_000] as const
+
+/** The running reader's re-read of one host (null while `startWatchStatus` is not running). */
+let rereader: ((hostId: string) => void) | null = null
+
+/** A `watch.changed` push: read that host's status again, if it is connected. A late answer of an old connection is dropped. */
+export function rereadWatchStatus(hostId: string): void {
+  rereader?.(hostId)
+}
 
 /** Installed once from main.tsx. Returns how to stop it. */
 export function startWatchStatus(): () => void {
@@ -114,17 +124,49 @@ export function startWatchStatus(): () => void {
     const s = useHostStore.getState()
     return !!s.hosts[hostId] && s.runtime[hostId]?.status === 'connected'
   }
+  const timers = new Set<ReturnType<typeof setTimeout>>()
+
+  // The connection a read was sent on (ip, port, token). A re-point leaves the runtime `connected`, so the generation and the
+  // connected check alone would let the old endpoint's answer in; the identity is compared at write-back as well.
+  const identityOf = (hostId: string): string | null => {
+    const h = useHostStore.getState().hosts[hostId]
+    return h ? connectionKey(h) : null
+  }
 
   const read = (hostId: string): void => {
     const gen = gens.get(hostId) ?? bump(hostId)
-    void fetchWatchStatus(hostId).then((r) => {
-      if (gens.get(hostId) !== gen || !isConnected(hostId)) return
-      useWatchStatusStore.getState().set(hostId, r.kind === 'ok' ? { kind: 'ok', status: r.status, at: Date.now() } : { kind: r.kind, at: Date.now() })
-    })
+    const identity = identityOf(hostId)
+    // A watch host is one whose /api/info lists `watch.v1`, read through the nex host store (it holds every host's capabilities:
+    // no second /api/info). Its status route is not asked otherwise: the route exists whenever the module is registered,
+    // ready or not.
+    //
+    // "/api/info could not be read" is not "not a watch host": only an /api/info that WAS read (the entry carries its capabilities,
+    // even an empty list) and lacks `watch.v1` settles as unsupported. A read that failed leaves the host unsettled and is asked
+    // again at 5, 15 and 60 s; if the last one fails too the host settles as an error. A timer rather than a subscription to
+    // the nex entry: the nex store's own entry is shared, refetched on its TTL and by whoever else asks, and a bounded retry
+    // here does not depend on any of that happening.
+    const current = (): boolean => gens.get(hostId) === gen && isConnected(hostId) && identityOf(hostId) === identity
+    const settle = (e: WatchEntry): void => { if (current()) useWatchStatusStore.getState().set(hostId, e) }
+    const attempt = (n: number): void => {
+      void useNexHostStore.getState().ensure(hostId).catch(() => {}).then(async () => {
+        if (!current()) return
+        const nex = useNexHostStore.getState()
+        if (nex.byHost[hostId]?.daemonCapabilities === undefined) {
+          if (n < INFO_RETRY_MS.length) {
+            const t = setTimeout(() => { timers.delete(t); if (current()) attempt(n + 1) }, INFO_RETRY_MS[n])
+            timers.add(t)
+          } else settle({ kind: 'error', at: Date.now() })
+          return
+        }
+        if (!selectWatchV1(hostId)(nex)) return settle({ kind: 'unsupported', at: Date.now() })
+        const r = await fetchWatchStatus(hostId).catch(() => ({ kind: 'error' as const }))
+        settle(r.kind === 'ok' ? { kind: 'ok', status: r.status, at: Date.now() } : { kind: r.kind, at: Date.now() })
+      })
+    }
+    attempt(0)
   }
-  const readAll = (): void => {
-    for (const id of Object.keys(useHostStore.getState().hosts)) if (isConnected(id)) read(id)
-  }
+  // A push starts a new read under a new generation, so an older answer still in flight cannot land after it.
+  rereader = (hostId) => { if (isConnected(hostId)) { bump(hostId); read(hostId) } }
 
   for (const id of Object.keys(useHostStore.getState().hosts)) if (isConnected(id)) { bump(id); read(id) }
 
@@ -135,18 +177,18 @@ export function startWatchStatus(): () => void {
     for (const id of Object.keys(next.hosts)) {
       const now = next.runtime[id]?.status === 'connected'
       const was = prev.runtime[id]?.status === 'connected' && !!prev.hosts[id]
-      if (now && !was) { bump(id); read(id) }
+      // Re-pointed while connected: what the old daemon said is not the new one's. Forget it, and ask the new one.
+      const repointed = was && now && connectionKey(prev.hosts[id]) !== connectionKey(next.hosts[id])
+      if (repointed) { bump(id); useWatchStatusStore.getState().forget(id); read(id) }
+      else if (now && !was) { bump(id); read(id) }
       else if (!now && was) { bump(id); useWatchStatusStore.getState().forget(id) }
     }
   })
 
-  const timer = setInterval(() => { if (visible()) readAll() }, STATUS_POLL_MS)
-  const onVisible = (): void => { if (visible()) readAll() }
-  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible)
-
   return () => {
     unsub()
-    clearInterval(timer)
-    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible)
+    for (const t of timers) clearTimeout(t)
+    timers.clear()
+    rereader = null
   }
 }
