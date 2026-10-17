@@ -162,6 +162,9 @@ func (c *Cache) Prepare(ctx context.Context, ws string, spec Spec) (Result, erro
 		if err := clone(ctx, filepath.Join(ws, d), filepath.Join(tmp, d)); err != nil {
 			return Result{}, err
 		}
+		if testHook != nil {
+			testHook("copied-in")
+		}
 		if err := plainPath(ws, d); err != nil { // the path was swapped for a link while cp ran: what was copied may be from outside
 			return Result{}, err
 		}
@@ -208,6 +211,9 @@ func (c *Cache) cloneOut(ctx context.Context, key, entry, ws string, dirs []stri
 		if err := clone(ctx, filepath.Join(entry, d), filepath.Join(ws, d)); err != nil {
 			_ = root.RemoveAll(d)
 			return false, err
+		}
+		if testHook != nil {
+			testHook("copied-out")
 		}
 		if err := plainPath(ws, d); err != nil { // cp cannot be given a root: a path swapped for a link while it ran is found out here
 			_ = root.RemoveAll(d)

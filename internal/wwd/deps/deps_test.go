@@ -425,59 +425,105 @@ func TestPrune_AFailedRemovalLeavesNoEntryShapedDirectory(t *testing.T) {
 	assert.False(t, r3.Hit)
 }
 
-// The path is checked, then used: a directory of the workspace turned into a link in between (an install leaves a process behind that
-// can do it) must not let the read or the removal reach outside. The use goes through a root on the workspace.
-func TestPrepare_AParentSwappedForALinkAfterTheCheckReachesNothingOutside(t *testing.T) {
-	outside := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(outside, "node_modules/keep"), 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(outside, "pnpm-lock.yaml"), []byte("outside\n"), 0o644))
-
-	swap := func(ws string) { // spa/ becomes a link to the directory outside
-		require.NoError(t, os.RemoveAll(filepath.Join(ws, "spa")))
-		require.NoError(t, os.Symlink(outside, filepath.Join(ws, "spa")))
-	}
-	mk := func() string {
-		ws := t.TempDir()
-		require.NoError(t, os.MkdirAll(filepath.Join(ws, "spa/node_modules/x"), 0o755))
-		require.NoError(t, os.WriteFile(filepath.Join(ws, "spa/pnpm-lock.yaml"), []byte("outside\n"), 0o644))
-		return ws
-	}
-	sp := Spec{Lockfiles: []string{"spa/pnpm-lock.yaml"}, Fingerprint: fp, Install: (&installer{}).install}
-	t.Cleanup(func() { testHook = nil })
-
-	// the lockfile is read through the root: after the swap the read does not reach the file outside
-	c := newCache(t, 2)
-	testHook = func(stage string) {
-		if stage == "plan-read" {
-			swap(wsOf)
-			testHook = nil
-		}
-	}
-	wsOf = mk()
-	_, err := c.Prepare(context.Background(), wsOf, sp)
-	assert.Error(t, err, "the read does not follow the link out")
-
-	// a hit removes the destination first: through the root it cannot remove outside
-	wsA := workspace(t, "outside\n")
-	cc := newCache(t, 2)
-	_, err = cc.Prepare(context.Background(), wsA, Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Fingerprint: fp, Install: (&installer{}).install})
-	require.NoError(t, err)
-	wsB := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(wsB, "pnpm-lock.yaml"), []byte("outside\n"), 0o644))
-	require.NoError(t, os.MkdirAll(filepath.Join(wsB, "node_modules"), 0o755))
-	testHook = func(stage string) {
-		if stage == "clone-out" {
-			require.NoError(t, os.RemoveAll(filepath.Join(wsB, "node_modules")))
-			require.NoError(t, os.Symlink(outside, filepath.Join(wsB, "node_modules")))
-			testHook = nil
-		}
-	}
-	_, _ = cc.Prepare(context.Background(), wsB, Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Fingerprint: fp})
-	_, serr := os.Stat(filepath.Join(outside, "node_modules/keep"))
-	assert.NoError(t, serr, "nothing outside was removed")
+// A workspace with spa/pnpm-lock.yaml, and an installer that makes spa/node_modules.
+func spaWorkspace(t *testing.T) string {
+	t.Helper()
+	ws := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(ws, "spa"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(ws, "spa/pnpm-lock.yaml"), []byte("spa lock\n"), 0o644))
+	return ws
 }
 
-var wsOf string
+func spaInstall(_ context.Context, ws string) error {
+	if err := os.MkdirAll(filepath.Join(ws, "spa/node_modules/x"), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(ws, "spa/node_modules/x/index.js"), []byte("x"), 0o644)
+}
+
+var spaSpec = Spec{Lockfiles: []string{"spa/pnpm-lock.yaml"}, Fingerprint: fp, Install: spaInstall}
+
+// swapSpa turns spa/ of the workspace into a link to outside (what a process an install left behind could do between a check and a use).
+func swapSpa(t *testing.T, ws, outside string) {
+	t.Helper()
+	require.NoError(t, os.RemoveAll(filepath.Join(ws, "spa")))
+	require.NoError(t, os.Symlink(outside, filepath.Join(ws, "spa")))
+}
+
+// The workspace's own directory is turned into a link after the check: each use of the path that follows must not reach outside.
+func TestPrepare_AParentSwappedForALinkAfterTheCheckReachesNothingOutside(t *testing.T) {
+	t.Cleanup(func() { testHook = nil })
+	mkOutside := func() string {
+		o := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(o, "node_modules/keep"), 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(o, "pnpm-lock.yaml"), []byte("spa lock\n"), 0o644)) // the same bytes: a read that follows the link succeeds
+		return o
+	}
+	kept := func(o string) bool { _, err := os.Stat(filepath.Join(o, "node_modules/keep")); return err == nil }
+
+	t.Run("the lockfile is read through the root", func(t *testing.T) {
+		c, outside, ws := newCache(t, 2), mkOutside(), spaWorkspace(t)
+		testHook = func(stage string) {
+			if stage == "plan-read" {
+				swapSpa(t, ws, outside)
+				testHook = nil
+			}
+		}
+		_, err := c.Prepare(context.Background(), ws, spaSpec)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "escapes", "stopped at the read, not later for another reason")
+	})
+
+	t.Run("a hit removes through the root", func(t *testing.T) {
+		c, outside := newCache(t, 2), mkOutside()
+		_, err := c.Prepare(context.Background(), spaWorkspace(t), spaSpec) // the entry
+		require.NoError(t, err)
+		ws := spaWorkspace(t)
+		require.NoError(t, os.MkdirAll(filepath.Join(ws, "spa/node_modules"), 0o755))
+		testHook = func(stage string) {
+			if stage == "clone-out" {
+				swapSpa(t, ws, outside)
+				testHook = nil
+			}
+		}
+		_, err = c.Prepare(context.Background(), ws, spaSpec)
+		assert.Error(t, err)
+		assert.True(t, kept(outside), "spa/node_modules outside was not removed")
+	})
+
+	t.Run("a clone out that was redirected is found out", func(t *testing.T) {
+		c, outside := newCache(t, 2), mkOutside()
+		_, err := c.Prepare(context.Background(), spaWorkspace(t), spaSpec)
+		require.NoError(t, err)
+		ws := spaWorkspace(t)
+		testHook = func(stage string) {
+			if stage == "copied-out" {
+				swapSpa(t, ws, outside)
+				testHook = nil
+			}
+		}
+		_, err = c.Prepare(context.Background(), ws, spaSpec)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "symlink")
+	})
+
+	t.Run("a copy into the cache that was redirected is not kept", func(t *testing.T) {
+		c, outside, ws := newCache(t, 2), mkOutside(), spaWorkspace(t)
+		testHook = func(stage string) {
+			if stage == "copied-in" {
+				swapSpa(t, ws, outside)
+				testHook = nil
+			}
+		}
+		_, err := c.Prepare(context.Background(), ws, spaSpec)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "symlink")
+		des, _ := os.ReadDir(c.Dir)
+		for _, de := range des {
+			assert.Equal(t, ".lock", filepath.Ext(de.Name()), "no entry was made: %s", de.Name())
+		}
+	})
+}
 
 // A temporary directory whose key is locked (an install or a clone in progress) is not swept, however old; once the lock is free it is.
 func TestSweep_LeavesWhatALockedKeyIsUsing(t *testing.T) {
