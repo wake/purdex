@@ -7,9 +7,9 @@
 // states: titlebar | line | full), so a tab switch that unmounts the pane and a reload both come back to the same
 // area. In the `titlebar` state the pane draws nothing: the strip in the title bar (TeamTitleStrip) is the area.
 //
-// Resize: the LEFT edge, draft-then-commit (the ActivityBarWide pattern): a drag only moves a local draft width and the
-// store is written once on mouseup. The area never calls focus(): the terminal keeps the keyboard.
-import { useEffect, useRef, useState } from 'react'
+// Resize: the LEFT edge, draft-then-commit (the ActivityBarWide pattern): a drag only moves the (unpersisted) draft width, which the
+// journal cards read too so they follow the edge live, and the persisted width is written once on mouseup. The area never calls focus(): the terminal keeps the keyboard.
+import { useEffect, useRef } from 'react'
 import { RegionResize } from '../RegionResize'
 import { useTabStore } from '../../stores/useTabStore'
 import { PANEL_MAX_WIDTH, currentPanelMin, useTeamUiStore } from '../../stores/useTeamUiStore'
@@ -43,19 +43,15 @@ export function TeamPanelArea() {
   const shownTeam = view0 !== null && 'team' in view0 ? view0.team : null
   // A tab of no team shows its own workbook in the one value all such tabs share.
   const mode = shownTeam ? shownTeam.mode : view0 !== null ? sharedMode : null
-  const [draft, setDraft] = useState<number | null>(null)
+  const draft = useTeamUiStore((s) => s.panelDraft)
   const draftRef = useRef<number | null>(null)
   // In the title bar the area is the strip's (TeamTitleStrip), not the pane's.
   const hidden = view0 === null || mode === null || mode === 'titlebar'
   // The handle unmounts when the area goes away: a half-done drag is abandoned, so drop its draft.
-  const [wasHidden, setWasHidden] = useState(hidden)
-  if (hidden !== wasHidden) { // adjust state during render (no effect round trip)
-    setWasHidden(hidden)
-    if (hidden) setDraft(null)
-  }
   useEffect(() => {
-    if (hidden) draftRef.current = null
+    if (hidden) { draftRef.current = null; useTeamUiStore.getState().setPanelDraft(null) }
   }, [hidden])
+  useEffect(() => () => { draftRef.current = null; useTeamUiStore.getState().setPanelDraft(null) }, [])
   if (hidden) return null
   const paneMode = mode
 
@@ -73,13 +69,13 @@ export function TeamPanelArea() {
             const base = draftRef.current ?? useTeamUiStore.getState().panel.width
             const next = Math.max(currentPanelMin(), Math.min(PANEL_MAX_WIDTH, base + delta))
             draftRef.current = next
-            setDraft(next)
+            useTeamUiStore.getState().setPanelDraft(next)
           }}
           onResizeEnd={() => {
             if (draftRef.current !== null) {
               useTeamUiStore.getState().setPanelWidth(draftRef.current)
               draftRef.current = null
-              setDraft(null)
+              useTeamUiStore.getState().setPanelDraft(null)
             }
           }}
         />

@@ -72,6 +72,9 @@ const clampWidth = (w: number): number => Math.max(currentPanelMin(), Math.min(P
 interface TeamUiState extends Slices {
   panel: PanelArea
   setPanelWidth: (width: number) => void
+  /** The width while the edge is being dragged (not persisted): the panel and the journal cards beside it both follow it live. */
+  panelDraft: number | null
+  setPanelDraft: (width: number | null) => void
   /** The three-state value of tabs that belong to no team (WA-2b-1 reads it); starts in the title bar. */
   sharedPanelMode: PanelMode
   sharedPanelLast: PaneMode
@@ -192,6 +195,8 @@ export const useTeamUiStore = create<TeamUiState>()(
         // This is the person's drag: the width is theirs from now on (the follow in the settings subscription uses setState).
         return next === s.panel.width && s.panel.followsMin === false ? s : { panel: { width: next, followsMin: false } }
       }),
+      panelDraft: null,
+      setPanelDraft: (width) => set((s) => (s.panelDraft === width ? s : { panelDraft: width })),
       sharedPanelMode: 'titlebar',
       sharedPanelLast: 'full',
       setSharedPanelMode: (mode) => set((s) => {
