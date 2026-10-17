@@ -29,11 +29,15 @@ export const HOST_READ_TIMEOUT_MS = 10_000
 interface Flight {
   /** The daemon (endpoint + token) asked. */
   identity: string
+  /** The connection generation it was asked in (the quota store's epoch, which a disconnect or reconnect moves). */
+  epoch: number
   promise: Promise<UnattendedView>
   /** Callers still waiting; at 0 the request is given up. */
   holders: number
   settled: boolean
   giveUp: () => void
+  /** A newer read of the host took its place: its GET bracket closes now, and whenever it answers it writes nothing. */
+  replaced: () => void
 }
 
 const flights = new Map<string, Flight>()
@@ -47,7 +51,16 @@ function start(hostId: string, identity: string): Flight {
   const quotas = useUnattendedStore.getState().byHost[hostId]?.quotaSupport === 'yes'
   const epoch = quotas ? store.beginGet(hostId) : (store.epochs[hostId] ?? 0)
   const ctl = new AbortController()
-  const flight = { identity, holders: 0, settled: false, giveUp: () => {} } as Flight
+  // Only the host's newest read writes (the last read and the rows it confirms): a read that was replaced while out
+  // (refreshHost) may still answer after its replacement, and must never overwrite it, success or failure.
+  let counts = true
+  let bracket = quotas
+  const closeBracket = (rows: UnattendedView['quotas'] | null) => {
+    if (!bracket) return
+    bracket = false
+    useRelayQuotaStore.getState().endGet(hostId, rows ?? null, epoch)
+  }
+  const flight = { identity, epoch, holders: 0, settled: false, giveUp: () => {}, replaced: () => { counts = false; closeBracket(null) } } as Flight
   flight.promise = new Promise<UnattendedView>((resolve, reject) => {
     const timer = setTimeout(() => { finish(null, new ApprovalApiError(0, 'timeout'), true); ctl.abort() }, HOST_READ_TIMEOUT_MS)
     /** The one end of the read; `keep` = a real outcome of the host (not a given-up read) that becomes its last read. */
@@ -56,9 +69,8 @@ function start(hostId: string, identity: string): Flight {
       flight.settled = true
       clearTimeout(timer)
       if (flights.get(hostId) === flight) flights.delete(hostId)
-      const s = useRelayQuotaStore.getState()
-      if (keep) s.setRead(hostId, v !== null ? { ok: true, ...quotaPart(v) } : { ok: false, code: codeOf(e) }, epoch)
-      if (quotas) s.endGet(hostId, v?.quotas ?? null, epoch)
+      if (keep && counts) useRelayQuotaStore.getState().setRead(hostId, v !== null ? { ok: true, ...quotaPart(v) } : { ok: false, code: codeOf(e) }, epoch)
+      closeBracket(counts ? (v?.quotas ?? null) : null)
       if (v !== null) resolve(v)
       else reject(e)
     }
@@ -85,14 +97,22 @@ function quotaPart(v: UnattendedView) {
   }
 }
 
-/** The host's read now: the one out to the same daemon, else a new one. Null when the host is not configured. */
+/**
+ * The host's read now: the one out to the same daemon over the same connection, else a new one. Null when the host is not
+ * configured. A new read REPLACES the one out (a re-point, a new connection generation, or `fresh`): the old one goes on
+ * for its own callers, but nobody joins it any more and it writes nothing (the spec's single-flight, with the 10-17
+ * ruling: a forced re-read may replace a read in flight, the replaced one never writes). Endpoint and token alone do not
+ * name a connection: a reconnect to the same daemon moves the store's epoch (unattended-support.ts `fence`).
+ */
 function current(hostId: string, fresh: boolean): Flight | null {
   const identity = hostIdentityNow(hostId)
   if (identity === null) return null
   const cur = flights.get(hostId)
-  if (!fresh && cur !== undefined && !cur.settled && cur.identity === identity) return cur
+  const epoch = useRelayQuotaStore.getState().epochs[hostId] ?? 0
+  if (!fresh && cur !== undefined && !cur.settled && cur.identity === identity && cur.epoch === epoch) return cur
+  cur?.replaced()
   const next = start(hostId, identity)
-  flights.set(hostId, next) // a re-pointed host's old read goes on for its own callers, but nobody joins it any more
+  flights.set(hostId, next)
   return next
 }
 

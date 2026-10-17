@@ -150,10 +150,11 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
       let drop: (() => void) | undefined
       const load = () => {
         const mine = ++gen
-        drop?.()
+        // The previous read is let go only after this one has joined: two loads in a row share one read.
+        const previous = drop
         drop = undefined
         const identity = hostIdentityNow(hostId)
-        if (identity === null) { setPages((cur) => { const { [hostId]: _gone, ...rest } = cur; return rest }); return }
+        if (identity === null) { previous?.(); setPages((cur) => { const { [hostId]: _gone, ...rest } = cur; return rest }); return }
         const join = life.join()
         drop = join.drop
         const current = () => !life.cancelled && mine === gen && hostIdentityNow(hostId) === identity
@@ -161,6 +162,7 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
           firstPage,
           (e: unknown): HostPages => ({ rows: [], since: 0, failed: codeOf(e) }),
         ).then((p) => { if (current()) setPages((cur) => ({ ...cur, [hostId]: p })) })
+        previous?.()
       }
       load()
       let seen = hostIdentityNow(hostId)
@@ -171,6 +173,17 @@ export function UnattendedPanel({ hostIds, unreachableIds = [], anchorRef, onClo
         lifetimes.current[hostId] = (lifetimes.current[hostId] ?? 0) + 1
         useRelayQuotaStore.getState().forgetHost(hostId)
         load()
+      }))
+      // A new connection generation of the same daemon (a disconnect or a reconnect fences the quota store): the host's last
+      // read is gone and a read still out writes nothing, so the host is read again — unless it is known to be down.
+      let epoch = useRelayQuotaStore.getState().epochs[hostId] ?? 0
+      disposers.push(useRelayQuotaStore.subscribe((s) => {
+        const now = s.epochs[hostId] ?? 0
+        if (now === epoch) return
+        epoch = now
+        if (hostIdentityNow(hostId) !== seen) return // a re-point: the subscription above reads it
+        const status = useHostStore.getState().runtime[hostId]?.status
+        if (status === undefined || status === 'connected') load()
       }))
       // After a write that went to a provisional root (`pending_lineage`) the writer asks for this host's view again: a fresh
       // read through the reader, whose answer reaches this panel (and the team settings) through the store's `reads`.

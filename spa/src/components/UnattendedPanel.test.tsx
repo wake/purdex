@@ -605,6 +605,26 @@ describe('UnattendedPanel relay quota', () => {
     expect(screen.getAllByTestId('quota-row').map((r) => r.getAttribute('data-session'))).toEqual(['p2'])
   })
 
+  it('a new connection generation (a reconnect) reads the open panel\'s host again; a host known to be down is not asked', async () => {
+    useUnattendedStore.getState().setQuotaSupport(A, 'yes')
+    useTeamRosterStore.getState().apply(A, [])
+    mockedGet.mockResolvedValueOnce(page([], { quotas: [quota('p1')] }))
+    open([A])
+    expect(await screen.findByTestId('quota-row')).toHaveTextContent('T-p1')
+    const generation = (status: 'connected' | 'disconnected') => act(() => {
+      useHostStore.setState((s) => ({ runtime: { ...s.runtime, [A]: { status } } }))
+      useRelayQuotaStore.getState().fence(A) // what unattended-support.ts does on the same change
+    })
+    generation('disconnected')
+    await flush()
+    expect(mockedGet).toHaveBeenCalledTimes(1)
+    mockedGet.mockResolvedValueOnce(page([], { quotas: [quota('p2')] }))
+    generation('connected')
+    await flush()
+    expect(mockedGet).toHaveBeenCalledTimes(2)
+    expect(screen.getAllByTestId('quota-row').map((r) => r.getAttribute('data-session'))).toEqual(['p2'])
+  })
+
   it('closing the panel unregisters the re-read', async () => {
     useUnattendedStore.getState().setQuotaSupport(A, 'yes')
     useTeamRosterStore.getState().apply(A, [])

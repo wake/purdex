@@ -189,6 +189,23 @@ describe('the last read of a host', () => {
     expect(st().reads[H]).toEqual({ ok: true, quotas: [row({ session_id: 'new' })] })
   })
 
+  it('fence (the connection went away or came back): a new generation — reads and GETs out are dropped, the numbers kept', () => {
+    st().applyEvent(H, ev({ rev: 2, self_left: 1 }))
+    st().setWrite(H, 'r1', 'self_left', { desired: 4 })
+    st().setRead(H, { ok: true, quotas: [row()] }, 0)
+    const epoch = st().beginGet(H)
+    st().applyEvent(H, ev({ rev: 3, self_left: 2 })) // buffered behind the GET
+    st().fence(H)
+    expect(st().reads[H]).toBeUndefined()
+    expect(st().gets).toEqual({})
+    expect(confirmed()).toEqual({ self_left: 2, member_pool_left: 2, rev: 3 }) // the buffered event was a real one: applied
+    expect(shown('self_left')).toBe(4) // a pending write is still the person's intent
+    st().endGet(H, [row({ self_left: 9, rev: 50 })], epoch) // the old connection's GET ends late
+    st().setRead(H, { ok: true, quotas: [] }, epoch)
+    expect(confirmed().self_left).toBe(2)
+    expect(st().reads[H]).toBeUndefined()
+  })
+
   it('forgetHost drops that host\'s read only; reset drops every read', () => {
     st().setRead(H, { ok: true, quotas: [] }, 0)
     st().setRead('h2', { ok: false, code: 'x' }, 0)
