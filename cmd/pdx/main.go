@@ -38,6 +38,7 @@ import (
 	"github.com/wake/purdex/internal/module/monitor"
 	"github.com/wake/purdex/internal/module/nex"
 	peersmod "github.com/wake/purdex/internal/module/peers"
+	poolmod "github.com/wake/purdex/internal/module/pool"
 	profilesmod "github.com/wake/purdex/internal/module/profiles"
 	pushmod "github.com/wake/purdex/internal/module/push"
 	readsmod "github.com/wake/purdex/internal/module/reads"
@@ -467,6 +468,7 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	c.AddModule(resourcesmod.New())
 	c.AddModule(watchmod.New())
 	c.AddModule(gatemod.New()) // the gate's decision history (A1)
+	c.AddModule(poolmod.New()) // the resource pool, read from the local wwd (WWD-2a)
 	c.AddModule(assistmod.New())
 	c.AddModule(fleetmod.New()) // the fleet status: primary / standby roles (F-1b2)
 	c.AddModule(fsmod.New())
