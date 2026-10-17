@@ -27,8 +27,10 @@ describe('formatHandoffTime', () => {
     expect(formatHandoffTime(at(2025, 10, 17, 14, 5), now)).toBe('2025-10-17 14:05')
   })
 
-  it('a time a little ahead of now (clock skew) prints as a time of day', () => {
+  it('a time a little ahead of now (clock skew) is judged by the calendar day alone', () => {
+    // later today: a time of day
     expect(formatHandoffTime(at(2026, 10, 17, 14, 7), now)).toBe('14:07')
-    expect(formatHandoffTime(at(2026, 10, 18, 0, 1), now)).toBe('00:01')
+    // the host\'s clock is ahead and the write is already tomorrow: the date is printed
+    expect(formatHandoffTime(at(2026, 10, 18, 0, 1), now)).toBe('2026-10-18 00:01')
   })
 })
