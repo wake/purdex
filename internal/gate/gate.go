@@ -43,17 +43,19 @@ const ExitOrphaned = 129
 // waiting ticket carry it, so `pdx gate status` shows the run as an assist holder.
 const TagEnv = "PDX_GATE_TAG"
 
-// AdmittedMarkEnv set to 1 makes the gate print AdmittedMark on the command's stderr right before it starts the command: whoever
-// reads the output (a gate on another host that sent the run) knows that nothing ran before this line, and that the command did after.
+// AdmittedMarkEnv, when set, makes the gate print the admitted mark on the command's stderr right before it starts the command:
+// whoever reads the output (a gate on another host that sent the run) knows that nothing ran before this line, and that the command
+// did after. Its value is a nonce the sender chose ("1" for none): it is in the mark lines, and the gate takes the variable out of the
+// command's environment, so a command cannot print a mark of its own that the sender would believe.
 const AdmittedMarkEnv = "PDX_GATE_ADMITTED_MARK"
 
-// AdmittedMark is the line the gate prints for AdmittedMarkEnv: a record separator (0x1e), so it is not a line a command prints by
-// accident.
-const AdmittedMark = "\x1epdx-gate-admitted\n"
+// AdmittedMark is the line the gate prints for AdmittedMarkEnv=nonce: a record separator (0x1e), so it is not a line a command prints by
+// accident, and the nonce.
+func AdmittedMark(nonce string) string { return "\x1epdx-gate-admitted:" + nonce + "\n" }
 
 // NotStartedMark follows AdmittedMark when the command could not be started after all (a binary that cannot be executed): the run was
 // admitted but nothing ran, which is a failure before the start for whoever sent it.
-const NotStartedMark = "\x1epdx-gate-not-started\n"
+func NotStartedMark(nonce string) string { return "\x1epdx-gate-not-started:" + nonce + "\n" }
 
 // KeepOrphanEnv set to anything but "" and "0" lets a command that waits go on waiting when its caller is gone (a detached job
 // on purpose: `nohup pdx gate … &` that outlives the terminal).
@@ -202,6 +204,17 @@ func envValue(env []string, name string) string {
 		}
 	}
 	return ""
+}
+
+// withoutEnv is env without name.
+func withoutEnv(env []string, name string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, name+"=") {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 func withEnv(env []string, name, value string) []string {

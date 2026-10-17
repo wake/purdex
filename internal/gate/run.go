@@ -48,6 +48,7 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 	fails := 0
 	warned := false
 	lastPlace := time.Time{}
+	began := g.Now()         // when the wait began: WaitMax counts from here, whatever the first look took
 	waitStart := time.Time{} // set at the first look that did not get a slot
 	var (
 		pollAt   time.Time              // when the previous poll looked
@@ -98,6 +99,13 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 			tk, err := pool.TryTakeRanked(ticket)
 			if err != nil {
 				return broken(err)
+			}
+			if tk.Slot != nil && o.WaitMax > 0 && g.Now().Sub(began) > o.WaitMax {
+				tk.Slot.Release(nil) // got after the deadline (the look itself waited for the admit lock): it is not run
+				ticket.Drop()
+				g.say("not admitted within %s: the command was not run", o.WaitMax)
+				d.Outcome = "wait-max"
+				return nil, ExitRefused, true
 			}
 			if tk.Slot != nil {
 				ticket.Drop()
@@ -173,7 +181,7 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		}
 		sleep := g.Poll()
 		if o.WaitMax > 0 {
-			left := o.WaitMax - now.Sub(waitStart)
+			left := o.WaitMax - now.Sub(began)
 			if left <= 0 {
 				g.say("not admitted within %s: the command was not run", o.WaitMax)
 				d.Outcome = "wait-max"
@@ -367,13 +375,14 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 	if slot != nil {
 		cmd.ExtraFiles = []*os.File{slot.File()}
 	}
-	marked := envValue(env, AdmittedMarkEnv) == "1"
-	if marked {
-		_, _ = io.WriteString(cmd.Stderr, AdmittedMark) // before the start: nothing the command prints can come first
+	nonce := envValue(env, AdmittedMarkEnv)
+	if nonce != "" {
+		cmd.Env = withoutEnv(cmd.Env, AdmittedMarkEnv)         // the command must not learn the nonce
+		_, _ = io.WriteString(cmd.Stderr, AdmittedMark(nonce)) // before the start: nothing the command prints can come first
 	}
 	if err := cmd.Start(); err != nil {
-		if marked {
-			_, _ = io.WriteString(cmd.Stderr, NotStartedMark)
+		if nonce != "" {
+			_, _ = io.WriteString(cmd.Stderr, NotStartedMark(nonce))
 		}
 		g.say("%v", err)
 		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {

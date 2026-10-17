@@ -156,7 +156,14 @@ func (t *Ticket) Return(slot *Slot, find func(path string) []Straggler) error {
 		return ErrNotWaiting
 	}
 	slot.Release(find)
-	return t.p.ClearOut(t.Name)
+	var err error
+	for try := 0; try < 3; try++ { // a transient error must not leave the ticket out for good
+		if err = t.p.ClearOut(t.Name); err == nil || errors.Is(err, ErrNotWaiting) {
+			return err
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return err
 }
 
 // outNames lists the tickets that have an .out file, from a directory listing.

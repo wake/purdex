@@ -243,12 +243,12 @@ func TestRun_AdmittedMarkComesBeforeTheCommandsOutput(t *testing.T) {
 	for _, tc := range []struct {
 		env  []string
 		want bool
-	}{{append(cleanEnv(), AdmittedMarkEnv+"=1"), true}, {cleanEnv(), false}} {
+	}{{append(cleanEnv(), AdmittedMarkEnv+"=n0nce"), true}, {cleanEnv(), false}} {
 		var out, errb bytes.Buffer
 		code, _ := g.Run(context.Background(), Options{Argv: sh("echo from-command >&2"), Class: ClassHeavy, Env: tc.env, Stdout: &out, Stderr: &errb})
 		require.Equal(t, 0, code)
 		if tc.want {
-			assert.Equal(t, AdmittedMark+"from-command\n", errb.String())
+			assert.Equal(t, AdmittedMark("n0nce")+"from-command\n", errb.String())
 		} else {
 			assert.Equal(t, "from-command\n", errb.String())
 		}
@@ -262,7 +262,7 @@ func TestRun_NoMarkWhenNothingStarted(t *testing.T) {
 	release, holder := holderOf(t, g)
 	defer func() { release(); <-holder }()
 	var errb bytes.Buffer
-	code, _ := g.Run(context.Background(), Options{Argv: sh("true"), Class: ClassHeavy, Env: append(cleanEnv(), AdmittedMarkEnv+"=1"), WaitMax: 200 * time.Millisecond, Stdout: &bytes.Buffer{}, Stderr: &errb})
+	code, _ := g.Run(context.Background(), Options{Argv: sh("true"), Class: ClassHeavy, Env: append(cleanEnv(), AdmittedMarkEnv+"=n0nce"), WaitMax: 200 * time.Millisecond, Stdout: &bytes.Buffer{}, Stderr: &errb})
 	assert.Equal(t, ExitRefused, code)
 	assert.NotContains(t, errb.String(), "pdx-gate-admitted")
 }
@@ -292,8 +292,37 @@ func TestRun_AFailedStartTakesTheMarkBack(t *testing.T) {
 	bin := t.TempDir() + "/notexec"
 	require.NoError(t, os.WriteFile(bin, []byte("x"), 0o644))
 	var errb bytes.Buffer
-	code, _ := g.Run(context.Background(), Options{Argv: []string{"notexec"}, Real: bin, Class: ClassHeavy, Env: append(cleanEnv(), AdmittedMarkEnv+"=1"), Stdout: &bytes.Buffer{}, Stderr: &errb})
+	code, _ := g.Run(context.Background(), Options{Argv: []string{"notexec"}, Real: bin, Class: ClassHeavy, Env: append(cleanEnv(), AdmittedMarkEnv+"=n0nce"), Stdout: &bytes.Buffer{}, Stderr: &errb})
 	assert.Equal(t, 126, code)
-	assert.Contains(t, errb.String(), NotStartedMark)
-	assert.True(t, strings.HasPrefix(errb.String(), AdmittedMark))
+	assert.Contains(t, errb.String(), NotStartedMark("n0nce"))
+	assert.True(t, strings.HasPrefix(errb.String(), AdmittedMark("n0nce")))
+}
+
+// The command cannot learn the nonce, so it cannot print a mark the sender would believe.
+func TestRun_TheCommandDoesNotSeeTheNonce(t *testing.T) {
+	g, _ := testGate(t)
+	var out bytes.Buffer
+	code, _ := g.Run(context.Background(), Options{Argv: sh("echo \"[$PDX_GATE_ADMITTED_MARK]\""), Class: ClassHeavy, Env: append(cleanEnv(), AdmittedMarkEnv+"=secret"), Stdout: &out, Stderr: &bytes.Buffer{}})
+	require.Equal(t, 0, code)
+	assert.Equal(t, "[]\n", out.String())
+}
+
+// A slot that is only obtained after the deadline (the look itself waited) is let go and the command is not run.
+func TestRun_WaitMaxCountsFromTheStartOfTheWait(t *testing.T) {
+	g, _ := testGate(t)
+	t0 := time.Now()
+	var calls int
+	g.Now = func() time.Time { // the first look finds the clock a minute on: the slot comes after the deadline
+		calls++
+		if calls > 2 {
+			return t0.Add(time.Minute)
+		}
+		return t0
+	}
+	dir := t.TempDir()
+	code, _ := g.Run(context.Background(), Options{Argv: sh("touch " + dir + "/ran"), Class: ClassHeavy, Env: cleanEnv(), WaitMax: 5 * time.Second, Stdout: &bytes.Buffer{}})
+	assert.Equal(t, ExitRefused, code)
+	assert.False(t, exists(dir+"/ran"))
+	held := g.pool(g.Config(), ClassHeavy).Held()
+	assert.Empty(t, held, "the slot that came late was let go")
 }
