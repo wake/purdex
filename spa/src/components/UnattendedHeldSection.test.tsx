@@ -92,4 +92,13 @@ describe('team names (U15)', () => {
     expect(screen.getByTestId('held-row').textContent).toContain('mlab：iface-lead · 接力申請')
     expect(screen.queryByTestId('held-lead-title')).toBeNull()
   })
+
+  it('the lead title sits right after the team name, before the rest of the line (self relay and member relay)', () => {
+    useTeamRosterStore.getState().apply(H, [roster('Payments')])
+    const { unmount } = render(<UnattendedHeldSection rows={[{ hostId: H, a: selfRelay('a1', 1_000) }]} />)
+    expect(screen.getByTestId('held-row').textContent).toMatch(/Payments\s*iface-lead\s*·\s*接力申請/)
+    unmount()
+    render(<UnattendedHeldSection rows={[{ hostId: H, a: memberRelay('m1', 1_000) }]} />)
+    expect(screen.getByTestId('held-row').textContent).toMatch(/Payments\s*iface-lead\s*要幫 member/)
+  })
 })
