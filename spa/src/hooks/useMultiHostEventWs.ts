@@ -101,6 +101,7 @@ export function useMultiHostEventWs() {
         entry.conn.close()
         entry.sm.stop()
         forgetHost(hostId)
+        useTeamRosterStore.getState().dropConnection(hostId) // closed without `onClose`: retire the connection here (member spec R4)
         cancelSessionRefresh(hostId)
         entries.delete(hostId)
       }
@@ -122,6 +123,7 @@ export function useMultiHostEventWs() {
       if (existing) {
         existing.conn.close()
         existing.sm.stop()
+        useTeamRosterStore.getState().dropConnection(hostId) // closed without `onClose` (member spec R4)
         forgetHost(hostId) // another endpoint may be another daemon (or a token another identity): nothing held carries over
         cancelSessionRefresh(hostId)
       }
@@ -410,6 +412,7 @@ export function useMultiHostEventWs() {
         entry.conn.close()
         entry.sm.stop()
         forgetHost(hostId)
+        useTeamRosterStore.getState().dropConnection(hostId) // closed without `onClose`: retire the connection here (member spec R4)
         cancelSessionRefresh(hostId)
       })
       entries.clear()

@@ -31,8 +31,12 @@ interface TeamRosterState {
 // Per host, how many times its connection has been dropped. Not state: nothing renders from it. An async session fetch
 // remembers the value it started under and is discarded if it moved (member spec R4: a reply from a retired connection
 // must not be marked live).
+// Retired by: dropConnection (socket close / reconnect / resync), forgetHost (host removed or re-pointed — its socket is
+// closed without `onClose`), reset (every host at once: `resetEpoch`).
 const connectionGenerations = new Map<string, number>()
-export function connectionGeneration(hostId: string): number { return connectionGenerations.get(hostId) ?? 0 }
+let resetEpoch = 0
+export function connectionGeneration(hostId: string): string { return `${resetEpoch}:${connectionGenerations.get(hostId) ?? 0}` }
+const retire = (hostId: string): void => { connectionGenerations.set(hostId, (connectionGenerations.get(hostId) ?? 0) + 1) }
 
 export const useTeamRosterStore = create<TeamRosterState>()((set) => ({
   byHost: {},
@@ -41,7 +45,7 @@ export const useTeamRosterStore = create<TeamRosterState>()((set) => ({
   markSessionsLive: (hostId) => set((s) => (Object.hasOwn(s.liveSessionHosts, hostId) ? s : { liveSessionHosts: { ...s.liveSessionHosts, [hostId]: true } })),
   apply: (hostId, teams) => set((s) => ({ byHost: { ...s.byHost, [hostId]: teams }, liveHosts: { ...s.liveHosts, [hostId]: true } })),
   dropConnection: (hostId) => set((s) => {
-    connectionGenerations.set(hostId, connectionGeneration(hostId) + 1)
+    retire(hostId)
     const rosterLive = Object.hasOwn(s.liveHosts, hostId)
     const sessionsLive = Object.hasOwn(s.liveSessionHosts, hostId)
     if (!rosterLive && !sessionsLive) return s
@@ -50,11 +54,12 @@ export const useTeamRosterStore = create<TeamRosterState>()((set) => ({
     return { liveHosts: rosterLive ? rest : s.liveHosts, liveSessionHosts: sessionsLive ? sessRest : s.liveSessionHosts }
   }),
   forgetHost: (hostId) => set((s) => {
+    retire(hostId)
     if (!Object.hasOwn(s.byHost, hostId) && !Object.hasOwn(s.liveHosts, hostId) && !Object.hasOwn(s.liveSessionHosts, hostId)) return s
     const { [hostId]: _gone, ...rest } = s.byHost
     const { [hostId]: _live, ...liveRest } = s.liveHosts
     const { [hostId]: _sess, ...sessRest } = s.liveSessionHosts
     return { byHost: rest, liveHosts: liveRest, liveSessionHosts: sessRest }
   }),
-  reset: () => set({ byHost: {}, liveHosts: {}, liveSessionHosts: {} }),
+  reset: () => { resetEpoch++; set({ byHost: {}, liveHosts: {}, liveSessionHosts: {} }) },
 }))

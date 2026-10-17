@@ -95,4 +95,24 @@ describe('useTeamRosterStore', () => {
     expect(useTeamRosterStore.getState().liveSessionHosts).toEqual({})
     expect(useSessionStore.getState().sessions.h8).toBeUndefined()
   })
+
+  // Every path that retires a connection must discard a session fetch still in flight (member spec R4).
+  const inFlight = async (host: string, retire: () => void) => {
+    let resolve!: (v: never[]) => void
+    vi.spyOn(hostApi, 'listSessions').mockReturnValue(new Promise((r) => { resolve = r as typeof resolve }))
+    const { useSessionStore } = await import('./useSessionStore')
+    useSessionStore.setState({ sessions: {} })
+    const p = useSessionStore.getState().fetchHost(host)
+    retire()
+    resolve([])
+    await p
+    expect(useTeamRosterStore.getState().liveSessionHosts).toEqual({})
+    expect(useSessionStore.getState().sessions[host]).toBeUndefined()
+  }
+  it('a fetch in flight when the host is forgotten (removed / re-pointed) is discarded', async () => {
+    await inFlight('h5', () => useTeamRosterStore.getState().forgetHost('h5'))
+  })
+  it('a fetch in flight when the store is reset is discarded', async () => {
+    await inFlight('h6', () => useTeamRosterStore.getState().reset())
+  })
 })
