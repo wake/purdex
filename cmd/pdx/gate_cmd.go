@@ -328,22 +328,33 @@ func gateSet(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	profile := fs.String("profile", "", "write into this profile")
 	cfgPath := fs.String("config", "", "config.toml")
+	expect := fs.String("expect", "", "write only if the value now is this one (the value you read); refused with exit 3 otherwise")
 	words, err := parseMixed(fs, args)
 	if err != nil {
 		return 2
 	}
+	var want *string
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "expect" {
+			want = expect
+		}
+	})
 	key, value, ok := strings.Cut(strings.Join(words, " "), "=")
 	if !ok || len(words) == 0 {
-		fmt.Fprint(stderr, "usage: pdx gate set [--profile <name>] <module>.<key>=<value>\n")
+		fmt.Fprint(stderr, "usage: pdx gate set [--profile <name>] [--expect <value now>] <module>.<key>=<value>\n")
 		return 2
 	}
 	path := *cfgPath
 	if path == "" {
 		path = gate.DefaultConfigPath()
 	}
-	res, err := gate.Set(path, *profile, strings.TrimSpace(key), value)
+	res, err := gate.SetExpect(path, *profile, strings.TrimSpace(key), value, want)
 	if err != nil {
 		fmt.Fprintf(stderr, "pdx gate set: %v\n", err)
+		var ee *gate.ExpectError
+		if errors.As(err, &ee) {
+			return gateExitExpect
+		}
 		return 1
 	}
 	where := "[gate]"
@@ -351,8 +362,14 @@ func gateSet(args []string, stdout, stderr io.Writer) int {
 		where = "profile " + res.Profile
 	}
 	fmt.Fprintf(stdout, "%s（%s）：%s → %s（%s）\n", res.Key, where, orDash(res.Old), res.New, res.NewSrc)
+	if res.ReadBack != "" {
+		fmt.Fprintf(stdout, "讀回：%s = %s\n", res.Key, res.ReadBack)
+	}
 	return 0
 }
+
+// gateExitExpect is the exit code of a write that --expect refused.
+const gateExitExpect = 3
 
 func gateProfile(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("gate profile", flag.ContinueOnError)
