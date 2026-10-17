@@ -54,11 +54,11 @@ scripts `assist-on` / `assist-off` / `assist-check` exist as a prototype (mlab r
 | Host | Its slots are kept by | Runs | Limits |
 |---|---|---|---|
 | mlab | mlab's gate (today) | everything the gate runs | the gate's admission (§5 of the load spec) |
-| air26 | **air26's own gate** (`pdx gate` in `~/Assist`, which also protects the person's own use of air26), and mlab's dispatch slots `assist-air26-<k>` (how many runs mlab has out there; plan contract 6) | purdex and aigora-v2 test runs: SPA vitest / tsc, Go tests, lint, aigora `pnpm check` | air26's gate slots and admission |
-| mserv | **mlab's gate** (mserv has no pdx; its slots are held on mlab, `assist-mserv-<k>` lock files in mlab's gate directory) | platform-independent work: SPA install / tsc / vitest, the Go packages that build on Linux, PHP versions (7.4, 8.0 cli, 8.5), MySQL dev on `100.64.0.6:3307` | only while mserv's assist switch is on; 2 parallel; each run wrapped in `sudo systemd-run --scope --uid=wake -p CPUQuota=200% -p MemoryMax=4G nice -n 10 ionice -c3` (mserv admin 9e-f0); admitted only while PSI memory `some10` < 1 and MemAvailable > 4 GB (read over ssh right before the start) |
+| air26 | **air26's own gate** (`pdx gate` in `~/Assist`, which also protects the person's own use of air26), and mlab's dispatch slots `assist-air26-<k>` (how many runs mlab has out there; plan contract 6) | purdex and aigora-v2 test runs: SPA vitest / tsc, Go tests, lint, aigora `pnpm check` | air26's gate slots and admission; sent only while its gate would start the command at once and its load is within the host's limits (load1 and load5 per core, CPU idle of a 2 s sample; plan contracts 9–10) |
+| mserv | **mlab's gate** (mserv has no pdx; its slots are held on mlab, `assist-mserv-<k>` lock files in mlab's gate directory) | platform-independent work: SPA install / tsc / vitest, the Go packages that build on Linux, PHP versions (7.4, 8.0 cli, 8.5), MySQL dev on `100.64.0.6:3307` | only while mserv's assist switch is on; 2 parallel; each run wrapped in `sudo systemd-run --scope --uid=wake -p CPUQuota=200% -p MemoryMax=4G nice -n 10 ionice -c3` (mserv admin 9e-f0); admitted only while PSI memory `some10` < 1, MemAvailable > 4 GB and the load limits hold (read over ssh right before the start) |
 
 - **Capability** is a table per host of the command kinds it can run (by tool and words, like the intercept rules), kept
-  in mlab's gate config and written from the assist READMEs: e.g. mserv cannot run `go vet ./...`, `go test ./...`,
+  in `assist.json` beside the host (plan contract 11) and written by the watcher from the assist READMEs: e.g. mserv cannot run `go vet ./...`, `go test ./...`,
   `go build ./cmd/pdx` (#3076), cgo or node-gyp builds, browser tests, swift, macOS-only tests. A command no host but mlab
   can run stays on mlab. **#3076 is not needed for this spec**: nothing runs pdx on mserv.
 - **Readiness** per (host, repo) comes from that host's `assist-check --json` (run by the dispatcher over ssh, cached for
@@ -68,7 +68,7 @@ scripts `assist-on` / `assist-off` / `assist-check` exist as a prototype (mlab r
 ## 3. Dispatch
 
 - **The queue** is mlab's gate queue as today: arrival order with the ranks of §5.2 (front / normal / back / hold) and the
-  conflict rules of §5.3 (a rule now also names the host it applies to; default: the host the rule was measured on).
+  conflict rules of §5.3 (air26's rules are its own gate's; a rule for mserv lives in mlab's file and names `host: mserv`).
 - **When a slot frees anywhere** (or a waiting gate polls), the dispatcher walks the serving order from the head and gives
   each free slot the first ticket that (a) may run on that host (allowed team or session, host ready for its repo, kind
   in the host's capability, no conflict there) and (b) **finishes soonest there**: the host's estimated run time for that

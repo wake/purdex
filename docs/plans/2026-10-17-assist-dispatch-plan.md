@@ -109,7 +109,7 @@ and writers, and its requeue lossy; contracts 7–11 below answer it.
    to the queue. The remote `pdx gate` runs with a new option `--wait-max 60` (X2a): admitted within 60 s, else it exits
    before running with code 75; it prints `\036pdx-gate-admitted` on stderr right before it starts the command
    (`PDX_GATE_ADMITTED_MARK=1`). Before that mark nothing ran: an exit there (75 or any failure) is a failure before the
-   start (contract 9 path of spec §4.7; after a 75 the host is held off for 2 min, not 5).
+   start (spec §4.7; after a 75 the host is held off for 2 min, not 5).
 10. **Load limits** (watcher, 10-17): per host in `assist.json` `LoadLimit` (per core; default 1.0), `IdleMin` (CPU idle
     %; default 30), `HoldMin` (default 5). In the same ssh as contract 9: load1 / cores and load5 / cores both at or
     under `LoadLimit` (load1 alone misses periodic work: between simulator boots load1 fell while load5 stayed high),
