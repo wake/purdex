@@ -80,8 +80,10 @@ func (p *PoolPoller) PollOnce(ctx context.Context) {
 func (p *PoolPoller) pollPeer(ctx context.Context, i int) {
 	info, err := get[wire.Info](ctx, p.client, p.peers[i], p.token, "/v1/info")
 	if err != nil || info.Alias != p.peers[i].Alias {
-		// the configured alias is the identity: an answer under another name (wrong
-		// address, wrong daemon) is not this peer
+		// The configured address and alias are the trust boundary: this catches a
+		// wrong address or a wrong daemon (an answer under another name). It does not
+		// defend against a compromised peer, which holds the shared pool token anyway
+		// and is outside the threat model (spec §11).
 		p.mu.Lock()
 		p.state[i].Reachable = false
 		p.mu.Unlock()
