@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,6 +85,66 @@ func TestStatus_AssistHostsHoldsAndCandidates(t *testing.T) {
 	require.Len(t, st.QueueHeavy, 1)
 	assert.Equal(t, []string{"air26"}, st.QueueHeavy[0].Candidates,
 		"on, checked on, a free slot and able to take go test; not mserv (php only), cold (off), new (never checked), full (no free slot)")
+}
+
+// A hold's reason is one short line, when it is written and when an old file is read.
+func TestHold_TheReasonIsShortAndOneLine(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	long := strings.Repeat("x", 5000) + "\nsecond line\x1b[31m"
+	require.NoError(t, HoldHost(dir, "air26", "purdex", time.Minute, long, now))
+	h, held := HeldHost(dir, "air26", "purdex", now)
+	require.True(t, held)
+	assert.LessOrEqual(t, len([]rune(h.Why)), maxWhy+1)
+	assert.NotContains(t, h.Why, "\n")
+	assert.NotContains(t, h.Why, "\x1b")
+	// a file written by something else, with a long reason, is cut at the read
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "assist-hold", "mserv@purdex.json"),
+		[]byte(`{"until":"`+now.Add(time.Hour).Format(time.RFC3339)+`","why":"`+strings.Repeat("y", 9000)+`"}`), 0o644))
+	got := ListHolds(dir, now)
+	require.Len(t, got, 2)
+	for _, e := range got {
+		assert.LessOrEqual(t, len([]rune(e.Why)), maxWhy+1, e.Host)
+	}
+}
+
+// The queue and the out tickets of one answer are of one look: a ticket is in one of them, never both and never neither.
+func TestStatus_TheQueueAndTheOutTicketsAreOfOneLook(t *testing.T) {
+	g, _ := testGate(t)
+	cfg := g.Config()
+	pool := g.pool(cfg, ClassHeavy)
+	tk, err := pool.EnqueueFor(WaiterInfo{PID: 5, Argv: []string{"go", "test"}})
+	require.NoError(t, err)
+	t.Cleanup(tk.Drop)
+	dispatch := DispatchPool(cfg.Dir, "air26", 2, g.Now)
+	stop := make(chan struct{})
+	flipped := make(chan struct{})
+	go func() { // the ticket goes out and comes back as fast as it can while status is read
+		defer close(flipped)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			slot, err := pool.ServeOut(tk.Name, dispatch, WaiterInfo{PID: 5}, OutInfo{Host: "air26", Job: "j", At: g.Now()})
+			if err != nil || slot == nil {
+				continue
+			}
+			_ = tk.Return(slot, nil)
+		}
+	}()
+	for i := 0; i < 300; i++ {
+		st := g.Status()
+		n := len(st.QueueHeavy) + len(st.OutHeavy)
+		if n != 1 {
+			close(stop)
+			<-flipped
+			t.Fatalf("look %d: the ticket is listed %d times (queue %d, out %d)", i, n, len(st.QueueHeavy), len(st.OutHeavy))
+		}
+	}
+	close(stop)
+	<-flipped
 }
 
 // A command that is out stays listed when assist.json cannot be read or has no host any more.

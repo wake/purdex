@@ -764,8 +764,10 @@ type Waiter struct {
 
 // Waiters lists the live tickets in serving order (front, normal, back, then the held ones); it removes nothing (a ticket whose
 // gate is gone is just not listed).
-func (p *Pool) Waiters() []Waiter {
-	snap := p.peekSnapshot()
+func (p *Pool) Waiters() []Waiter { return p.waitersFrom(p.peekSnapshot()) }
+
+// waitersFrom is Waiters over a snapshot the caller already has, so that the queue and the out tickets of one answer are of one look.
+func (p *Pool) waitersFrom(snap Snapshot) []Waiter {
 	var out []Waiter
 	for _, e := range snap.Queue {
 		b, _ := os.ReadFile(filepath.Join(p.queueDir(), e.Name))

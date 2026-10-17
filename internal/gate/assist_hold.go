@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -35,7 +36,7 @@ func HoldHost(dir, host, repo string, d time.Duration, why string, now time.Time
 		return err
 	}
 	defer unlock()
-	h := AssistHold{Until: now.Add(d), Why: why}
+	h := AssistHold{Until: now.Add(d), Why: cleanWhy(why)}
 	if old, ok := readHold(dir, host, repo); ok && old.Until.After(h.Until) {
 		return nil
 	}
@@ -60,7 +61,25 @@ func readHold(dir, host, repo string) (AssistHold, bool) {
 	if json.Unmarshal(b, &h) != nil {
 		return AssistHold{}, false
 	}
+	h.Why = cleanWhy(h.Why) // a file that was written by something else, or damaged, is cut when it is read too
 	return h, true
+}
+
+// maxWhy is the longest reason a hold keeps (runes): it is shown on every status look.
+const maxWhy = 200
+
+// cleanWhy is a reason as one short printable line.
+func cleanWhy(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, s)
+	if r := []rune(s); len(r) > maxWhy {
+		s = string(r[:maxWhy]) + "…"
+	}
+	return s
 }
 
 // HeldHost says whether host is held off for repo at now, and why.

@@ -587,10 +587,12 @@ func (g *Gate) StatusWith(mode HoldersMode) Status {
 	if rules == nil {
 		rules = []Conflict{}
 	}
+	hsnap, lsnap := h.peekSnapshot(), l.peekSnapshot() // one look at each class for its queue and its out tickets
 	st := Status{
 		Conflicts: rules, ConflictsError: rulesErr,
 		Heavy: heavy, Light: light, WaitHeavy: h.Waiting(), WaitLight: l.Waiting(),
-		QueueHeavy: h.waitersWithConflicts(heavy, rules), QueueLight: l.waitersWithConflicts(light, rules),
+		QueueHeavy: h.waitersWithConflictsFrom(hsnap, heavy, rules), QueueLight: l.waitersWithConflictsFrom(lsnap, light, rules),
+		OutHeavy: h.outWaitersFrom(hsnap), OutLight: l.outWaitersFrom(lsnap),
 		Suspect: append(h.Suspect(), l.Suspect()...), Profile: cfg.Profile, Settings: cfg.Effective(), Admission: g.admission(cfg),
 		PausedHeavy: cfg.Enabled && cfg.Slots.Paused(ClassHeavy), PausedLight: cfg.Enabled && cfg.Slots.Paused(ClassLight),
 	}

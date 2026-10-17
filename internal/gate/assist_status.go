@@ -44,9 +44,12 @@ type OutWaiter struct {
 }
 
 // OutWaiters lists the tickets of the pool that are out, oldest first.
-func (p *Pool) OutWaiters() []OutWaiter {
+func (p *Pool) OutWaiters() []OutWaiter { return p.outWaitersFrom(p.peekSnapshot()) }
+
+// outWaitersFrom is OutWaiters over a snapshot the caller already has (the queue of the same answer is of the same look).
+func (p *Pool) outWaitersFrom(snap Snapshot) []OutWaiter {
 	var out []OutWaiter
-	for _, e := range p.peekSnapshot().Out {
+	for _, e := range snap.Out {
 		w := OutWaiter{Class: p.Class, Ticket: e.Name, Host: e.Out.Host, Job: e.Out.Job, Since: e.Out.At}
 		if b, err := os.ReadFile(filepath.Join(p.queueDir(), e.Name)); err == nil {
 			var info WaiterInfo
@@ -88,10 +91,8 @@ func ListHolds(dir string, now time.Time) []HoldEntry {
 
 // assistStatus fills the assist parts of a status; with no assist.json host there is nothing to add.
 func (g *Gate) assistStatus(cfg Config, st *Status) {
-	// The commands that are out are in the queue directory, not in assist.json: they are listed whatever the host records say (the file
-	// may be unreadable for a moment, or the last host removed while a run is still out there).
-	st.OutHeavy = g.pool(cfg, ClassHeavy).OutWaiters()
-	st.OutLight = g.pool(cfg, ClassLight).OutWaiters()
+	// (The commands that are out, OutHeavy and OutLight, are in the queue directory, not in assist.json: StatusWith lists them whatever
+	// the host records say, from the same look as the queue.)
 	f, err := ReadAssist(cfg.Dir)
 	if err != nil || len(f.Hosts) == 0 {
 		return
