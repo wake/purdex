@@ -4,11 +4,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const getJournal = vi.fn()
 const getJournalPage = vi.fn()
 const getJournalSessions = vi.fn()
+const setConfirmItem = vi.fn()
 vi.mock('../lib/journal/api', () => ({
   getJournal: (...a: unknown[]) => getJournal(...a),
   getJournalPage: (...a: unknown[]) => getJournalPage(...a),
   getJournalSessions: (...a: unknown[]) => getJournalSessions(...a),
-  getTasks: vi.fn(), getRoadmap: vi.fn(), setConfirmItem: vi.fn().mockResolvedValue({ kind: 'ok', value: true }),
+  getTasks: vi.fn(), getRoadmap: vi.fn(), setConfirmItem: (...a: unknown[]) => setConfirmItem(...a),
 }))
 
 import { selectUnit, sessionKey, useJournalStore } from './useJournalStore'
@@ -30,6 +31,7 @@ beforeEach(() => {
   st().reset()
   clearViewMemos()
   getJournal.mockReset(); getJournalPage.mockReset(); getJournalSessions.mockReset()
+  setConfirmItem.mockReset(); setConfirmItem.mockResolvedValue({ kind: 'ok', value: true })
   getJournalSessions.mockResolvedValue(sessionsOf(['old', 'cur']))
   st().setSupport('h1', true, true, true)
 })
@@ -149,5 +151,24 @@ describe('reading another session', () => {
     await st().loadPage('h1', 's1', 'old')
     await st().setConfirm('h1', 's1', 'old-c', 0, true)
     expect(unit().pages.old.entries[0].items[0].done).toBe(true)
+  })
+  it('an answered entry only an older page holds is found there (not an orphan); unchecking it joins the band and a failed write rolls back into the page', async () => {
+    getJournalPage.mockResolvedValue(pageOf({ page: 'old', entries: [wireConfirm('old-d', { items: [{ text: 'q', done: true }] })] }))
+    await st().loadPage('h1', 's1', 'old')
+    setConfirmItem.mockRejectedValueOnce(new Error('500'))
+    const p = st().setConfirm('h1', 's1', 'old-d', 0, false)
+    expect(unit().confirms.map((e) => e.id)).toContain('old-d')
+    expect(unit().openConfirms).toBe(2)
+    expect(unit().pages.old.entries[0].items[0].done).toBe(false)
+    await p
+    expect(unit().confirms.map((e) => e.id)).not.toContain('old-d')
+    expect(unit().openConfirms).toBe(1)
+    expect(unit().pages.old.entries[0].items[0].done).toBe(true)
+  })
+  it('the caller\'s fallback still works for an entry no page holds', async () => {
+    const gone = parseJournalPage(wirePage({ entries: [wireConfirm('gone', { items: [{ text: 'q', done: true }] })] }))!.entries[0]
+    await st().setConfirm('h1', 's1', 'gone', 0, false, gone)
+    expect(setConfirmItem).toHaveBeenCalledWith('h1', 's1', 'gone', 0, false)
+    expect(unit().confirms.map((e) => e.id)).toContain('gone')
   })
 })
