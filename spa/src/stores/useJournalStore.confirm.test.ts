@@ -210,6 +210,7 @@ describe('setConfirm of an entry only the band holds (an older session / month)'
       setConfirmItem.mockResolvedValueOnce({ kind: 'ok', value: true }).mockResolvedValueOnce({ kind: 'none' })
       await st().setConfirm('h1', 's1', 'c9', 0, true, kept())
       await uncheck()
+      expect(setConfirmItem).toHaveBeenCalledTimes(2)
       expect(band()).toEqual([])
       expect(unit().openConfirms).toBe(0)
     })
