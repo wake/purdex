@@ -322,6 +322,7 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	printPool("重", cfg.Slots.Heavy, st.Heavy, st.WaitHeavy, st.QueueHeavy)
 	printPool("輕", cfg.Slots.Light, st.Light, st.WaitLight, st.QueueLight)
+	printAssistStatus(stdout, st)
 	if st.ConflictsError != "" {
 		fmt.Fprintf(stdout, "衝突規則：conflicts.json 不能用，目前沒有規則生效（%s）\n", st.ConflictsError)
 	}

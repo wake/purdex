@@ -519,6 +519,11 @@ type Status struct {
 	Conflicts      []Conflict `json:"Conflicts"`
 	ConflictsError string     `json:"ConflictsError,omitempty"`
 	PausedLight    bool       `json:"PausedLight"`
+	// Assist are the assist hosts of assist.json with the runs mlab has out on each and the holds in force; OutHeavy and OutLight are the
+	// commands whose ticket is out (assist_status.go). Absent on a host with no assist host.
+	Assist   []AssistHostStatus `json:"Assist,omitempty"`
+	OutHeavy []OutWaiter        `json:"OutHeavy,omitempty"`
+	OutLight []OutWaiter        `json:"OutLight,omitempty"`
 }
 
 // AdmissionState is whether the gate is holding new heavy work because of the host, and why.
@@ -582,13 +587,15 @@ func (g *Gate) StatusWith(mode HoldersMode) Status {
 	if rules == nil {
 		rules = []Conflict{}
 	}
-	return Status{
+	st := Status{
 		Conflicts: rules, ConflictsError: rulesErr,
 		Heavy: heavy, Light: light, WaitHeavy: h.Waiting(), WaitLight: l.Waiting(),
 		QueueHeavy: h.waitersWithConflicts(heavy, rules), QueueLight: l.waitersWithConflicts(light, rules),
 		Suspect: append(h.Suspect(), l.Suspect()...), Profile: cfg.Profile, Settings: cfg.Effective(), Admission: g.admission(cfg),
 		PausedHeavy: cfg.Enabled && cfg.Slots.Paused(ClassHeavy), PausedLight: cfg.Enabled && cfg.Slots.Paused(ClassLight),
 	}
+	g.assistStatus(cfg, &st)
+	return st
 }
 
 // statusLookupBudget is how long `pdx gate status` spends in total on asking who holds the locks.
