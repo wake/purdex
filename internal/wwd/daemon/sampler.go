@@ -25,6 +25,7 @@ type SamplerOptions struct {
 	Sources                  facts.Sources
 	Slots                    wire.Slots
 	WorkerEnabled            bool
+	OwnerRule                string // free text shown in facts.worker.owner_rule ("" without an owner rule)
 	// OnFacts, when set, is called with every new record (outside the sampler's
 	// lock). It must not block.
 	OnFacts func(wire.Facts)
@@ -76,7 +77,7 @@ func (s *Sampler) Tick(now time.Time) {
 	f.Platform, f.Arch = runtime.GOOS, runtime.GOARCH
 	reading.Apply(&f)
 	f.Exception = []wire.FactExc{} // exceptions arrive with WWD-1f
-	f.Worker = wire.FactsWorker{Enabled: s.opts.WorkerEnabled, Slots: s.opts.Slots}
+	f.Worker = wire.FactsWorker{Enabled: s.opts.WorkerEnabled, Slots: s.opts.Slots, OwnerRule: s.opts.OwnerRule}
 
 	s.mu.Lock()
 	in := derived.Input{
@@ -110,9 +111,20 @@ func (s *Sampler) Tick(now time.Time) {
 	if changed && msg != "" {
 		log.Printf("wwd: sampling: %s", msg)
 	}
-	if s.opts.OnFacts != nil {
-		s.opts.OnFacts(facts.Clone(f))
+	s.mu.RLock()
+	on := s.opts.OnFacts
+	s.mu.RUnlock()
+	if on != nil {
+		on(facts.Clone(f))
 	}
+}
+
+// SetOnFacts sets the function called with every new record (the daemon's event
+// broker). It must not block.
+func (s *Sampler) SetOnFacts(fn func(wire.Facts)) {
+	s.mu.Lock()
+	s.opts.OnFacts = fn
+	s.mu.Unlock()
 }
 
 // addToMinute collects records of one wall-clock minute and turns a finished

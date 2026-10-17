@@ -1,0 +1,148 @@
+package daemon
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/wake/purdex/internal/wwd/wire"
+)
+
+// PoolInterval is how often peers are polled (spec §3.3).
+const PoolInterval = 5 * time.Second
+
+const (
+	peerTimeout  = 3 * time.Second
+	maxPeerBytes = 8 << 20
+)
+
+// PeerAddr is another wwd of the pool: its alias and host:port (from config).
+type PeerAddr struct{ Alias, HostPort string }
+
+// PoolPoller keeps this wwd's view of the peers: their info, their latest facts
+// and whether they answer. A peer that stops answering keeps its last info and
+// facts, marked unreachable; one never reached has a stub info and null facts.
+type PoolPoller struct {
+	peers  []PeerAddr
+	token  string
+	client *http.Client
+
+	mu    sync.RWMutex
+	state []wire.Peer // in config order
+}
+
+// NewPoolPoller polls peers with the pool token. client may be nil.
+func NewPoolPoller(peers []PeerAddr, token string, client *http.Client) *PoolPoller {
+	if client == nil {
+		client = &http.Client{Timeout: peerTimeout}
+	}
+	p := &PoolPoller{peers: peers, token: token, client: client, state: make([]wire.Peer, len(peers))}
+	for i, a := range peers {
+		p.state[i] = wire.Peer{Info: wire.Info{Alias: a.Alias, Proto: wire.Proto, Labels: []string{}}}
+	}
+	return p
+}
+
+// Run polls now and then every PoolInterval until ctx ends.
+func (p *PoolPoller) Run(ctx context.Context) {
+	t := time.NewTicker(PoolInterval)
+	defer t.Stop()
+	p.PollOnce(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			p.PollOnce(ctx)
+		}
+	}
+}
+
+// PollOnce asks every peer once, in parallel.
+func (p *PoolPoller) PollOnce(ctx context.Context) {
+	var wg sync.WaitGroup
+	for i := range p.peers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.pollPeer(ctx, i)
+		}()
+	}
+	wg.Wait()
+}
+
+func (p *PoolPoller) pollPeer(ctx context.Context, i int) {
+	info, err := get[wire.Info](ctx, p.client, p.peers[i], p.token, "/v1/info")
+	if err != nil {
+		p.mu.Lock()
+		p.state[i].Reachable = false
+		p.mu.Unlock()
+		return
+	}
+	// facts may not exist yet (503 before the peer's first sample): keep what we had
+	facts, ferr := get[wire.Facts](ctx, p.client, p.peers[i], p.token, "/v1/facts")
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.state[i].Info, p.state[i].Reachable = info, true
+	if ferr == nil {
+		p.state[i].Facts = &facts
+	}
+}
+
+func get[T any](ctx context.Context, c *http.Client, a PeerAddr, token, path string) (T, error) {
+	var zero T
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+a.HostPort+path, nil)
+	if err != nil {
+		return zero, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := c.Do(req)
+	if err != nil {
+		return zero, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPeerBytes))
+	if err != nil {
+		return zero, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return zero, fmt.Errorf("%s: status %d", path, resp.StatusCode)
+	}
+	return wire.Decode[T](body)
+}
+
+// Peers is a copy of the current view of the peers.
+func (p *PoolPoller) Peers() []wire.Peer {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	out := make([]wire.Peer, len(p.state))
+	for i, s := range p.state {
+		out[i] = s
+		if s.Facts != nil {
+			f := *s.Facts // the stored record is replaced, never edited, so a shallow copy is enough
+			out[i].Facts = &f
+		}
+	}
+	return out
+}
+
+// Pool is this daemon's poller.
+func (d *Daemon) Pool() *PoolPoller { return d.pool }
+
+// poolRoutes registers GET /v1/pool: this host first, then the peers. It is a
+// socket route (the local Purdex daemon reads the pool here); a peer has no
+// business asking another wwd for its view.
+func (d *Daemon) poolRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /v1/pool", func(w http.ResponseWriter, r *http.Request) {
+		self := wire.Peer{Info: d.info(), Reachable: true}
+		if d.opts.Sampler != nil {
+			if f, ok := d.opts.Sampler.Latest(); ok {
+				self.Facts = &f
+			}
+		}
+		writeJSON(w, http.StatusOK, wire.Pool{Peers: append([]wire.Peer{self}, d.pool.Peers()...)})
+	})
+}

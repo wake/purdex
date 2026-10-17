@@ -64,20 +64,33 @@ func run(cfgPath string) error {
 		return err
 	}
 	var srcOpt facts.SourceOptions
+	ownerRule := ""
 	if cfg.Owner.Enabled {
 		srcOpt.Owner = &facts.OwnerConfig{IdleMinutes: cfg.Owner.IdleMinutes}
+		mins := cfg.Owner.IdleMinutes
+		if mins <= 0 {
+			mins = 5 // the rule's default (facts.OwnerConfig)
+		}
+		ownerRule = fmt.Sprintf("hid<%dm", mins)
 	}
 	sampler := daemon.NewSampler(daemon.SamplerOptions{
 		HostID: hostID, Alias: alias, OSVersion: facts.OSVersion(),
 		Sources: facts.SystemSourcesWith(srcOpt), Slots: cfg.Worker.Slots(), WorkerEnabled: cfg.Worker.Enabled,
+		OwnerRule: ownerRule,
 	})
+	peers := make([]daemon.PeerAddr, len(cfg.Peers))
+	for i, p := range cfg.Peers {
+		peers[i] = daemon.PeerAddr{Alias: p.Alias, HostPort: p.HostPort()}
+	}
 	d := daemon.New(daemon.Options{
 		HostID: hostID, Alias: alias, Version: buildinfo.Version,
-		Token: tok, WorkerEnabled: cfg.Worker.Enabled, Sampler: sampler,
+		Token: tok, WorkerEnabled: cfg.Worker.Enabled, Sampler: sampler, Peers: peers,
 	})
+	sampler.SetOnFacts(d.Events().PublishFacts)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go sampler.Run(ctx)
+	go d.Pool().Run(ctx)
 	run, err := d.Listen(ctx, daemon.ListenSpec{Addrs: addrs, Port: cfg.Port, SocketPath: cfg.SocketPath})
 	if err != nil {
 		return err

@@ -1,0 +1,107 @@
+package daemon
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/wake/purdex/internal/wwd/wire"
+)
+
+// peerDaemon is another wwd (alias, token, a sampler with a few records) behind a
+// real TCP listener.
+func peerDaemon(t *testing.T, alias, token string) (*Daemon, *httptest.Server) {
+	t.Helper()
+	level := 1
+	s := NewSampler(SamplerOptions{HostID: "id-" + alias, Alias: alias, OSVersion: "1", Sources: fakeSources(&level, nil), Slots: wire.Slots{Heavy: 1, Light: 2}})
+	for i := 0; i < 3; i++ {
+		s.Tick(s0.Add(time.Duration(i) * 5 * time.Second))
+	}
+	d := New(Options{HostID: "id-" + alias, Alias: alias, Version: "v0", Token: token, Sampler: s})
+	srv := httptest.NewServer(d.TCPHandler())
+	t.Cleanup(srv.Close)
+	return d, srv
+}
+
+func addr(srv *httptest.Server) string { return srv.Listener.Addr().String() }
+
+func TestPoolPollsPeersAndKeepsLastKnownWhenOneGoesAway(t *testing.T) {
+	_, up := peerDaemon(t, "air26", testToken)
+	_, flaky := peerDaemon(t, "mserv", testToken)
+	dead := httptest.NewServer(http.NotFoundHandler())
+	deadAddr := addr(dead)
+	dead.Close() // nobody listens here
+
+	p := NewPoolPoller([]PeerAddr{{"air26", addr(up)}, {"mserv", addr(flaky)}, {"air19", deadAddr}}, testToken, nil)
+	p.PollOnce(context.Background())
+	got := p.Peers()
+	if len(got) != 3 {
+		t.Fatalf("%d peers", len(got))
+	}
+	byAlias := map[string]wire.Peer{}
+	for _, x := range got {
+		byAlias[x.Info.Alias] = x
+	}
+	if a := byAlias["air26"]; !a.Reachable || a.Facts == nil || a.Facts.Alias != "air26" {
+		t.Errorf("air26: %+v", a)
+	}
+	if a := byAlias["air19"]; a.Reachable || a.Facts != nil || a.Info.Proto != wire.Proto || a.Info.Labels == nil {
+		t.Errorf("a peer never reached: reachable=false, facts null, a valid info stub: %+v", a)
+	}
+	if err := (wire.Pool{Peers: got}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+
+	// a reachable peer that goes away keeps its last info and facts, marked unreachable
+	flaky.Close()
+	p.PollOnce(context.Background())
+	m := p.Peers()[1]
+	if m.Reachable || m.Facts == nil || m.Info.HostID != "id-mserv" {
+		t.Errorf("after it went away: %+v", m)
+	}
+}
+
+func TestPoolSendsTheTokenAndRejectedTokenIsUnreachable(t *testing.T) {
+	var seen atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.Store(r.Header.Get("Authorization"))
+		http.Error(w, "unauthorized", 401)
+	}))
+	defer srv.Close()
+	p := NewPoolPoller([]PeerAddr{{"x", addr(srv)}}, "pool-token", nil)
+	p.PollOnce(context.Background())
+	if seen.Load() != "Bearer pool-token" {
+		t.Errorf("authorization %v", seen.Load())
+	}
+	if got := p.Peers()[0]; got.Reachable {
+		t.Errorf("a peer that answers 401 is not usable: %+v", got)
+	}
+}
+
+func TestPoolRouteIsSocketOnlyAndListsSelfFirst(t *testing.T) {
+	_, srv := peerDaemon(t, "air26", testToken)
+	level := 1
+	self := NewSampler(SamplerOptions{HostID: "id-mlab", Alias: "mlab", Sources: fakeSources(&level, nil), Slots: wire.Slots{Heavy: 1, Light: 2}, WorkerEnabled: true})
+	self.Tick(s0)
+	d := New(Options{HostID: "id-mlab", Alias: "mlab", Version: "v0", Token: testToken, Sampler: self, Peers: []PeerAddr{{"air26", addr(srv)}}})
+	d.Pool().PollOnce(context.Background())
+
+	w := do(d.SocketHandler(), "GET", "/v1/pool", "")
+	if w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	pool, err := wire.Decode[wire.Pool](w.Body.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pool.Peers) != 2 || pool.Peers[0].Info.Alias != "mlab" || !pool.Peers[0].Reachable || pool.Peers[0].Facts == nil || pool.Peers[1].Info.Alias != "air26" {
+		t.Fatalf("%+v", pool.Peers)
+	}
+	// the pool view is for the local Purdex daemon: a peer cannot ask for it over TCP
+	if w := do(d.TCPHandler(), "GET", "/v1/pool", "Bearer "+testToken); w.Code != http.StatusNotFound {
+		t.Fatalf("TCP /v1/pool: %d, want 404", w.Code)
+	}
+}
