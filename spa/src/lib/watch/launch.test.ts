@@ -347,17 +347,19 @@ describe('busy times out after 120 s without a registration', () => {
     expect(slot()).toMatchObject({ phase: 'timeout', seq: 2 })
   })
 
-  // A host change may leave a timer of its own behind (not ours), so "ours is gone" is the count a bare host change leaves.
-  const bare = (change: () => void): number => { change(); const n = vi.getTimerCount(); at('1.1.1.1'); return n }
+  // A host change may leave a timer of its own behind (not ours): `added` is how many a bare host change leaves, so that
+  // "ours is gone" reads as: before + added - 1.
+  const added = (change: () => void): number => { const n = vi.getTimerCount(); change(); const d = vi.getTimerCount() - n; at('1.1.1.1'); return d }
 
   it('a re-point of the host drops the busy state and its timer: the deadline changes nothing', async () => {
     stops.push(startWatchLaunch())
-    const base = bare(() => at('2.2.2.2'))
+    const repoint = () => at('2.2.2.2')
+    const k = added(repoint)
     await goBusy()
-    expect(vi.getTimerCount()).toBe(base + 1)
-    at('2.2.2.2')
+    const before = vi.getTimerCount()
+    repoint()
     expect(slot()).toBeNull()
-    expect(vi.getTimerCount()).toBe(base)
+    expect(vi.getTimerCount()).toBe(before + k - 1)
     vi.advanceTimersByTime(120_000)
     expect(slot()).toBeNull()
   })
@@ -366,17 +368,19 @@ describe('busy times out after 120 s without a registration', () => {
     stops.push(startWatchLaunch())
     const disconnect = () => useHostStore.setState({ runtime: { h1: { status: 'disconnected' } } } as never)
     const remove = () => useHostStore.setState({ hosts: {}, hostOrder: [] } as never)
-    const baseDisconnect = bare(disconnect)
-    const baseRemove = bare(remove)
+    const kDisconnect = added(disconnect)
+    const kRemove = added(remove)
     await goBusy()
+    let before = vi.getTimerCount()
     disconnect()
     expect(slot()).toBeNull()
-    expect(vi.getTimerCount()).toBe(baseDisconnect)
+    expect(vi.getTimerCount()).toBe(before + kDisconnect - 1)
     at('1.1.1.1')
     await goBusy()
+    before = vi.getTimerCount()
     remove()
     expect(slot()).toBeNull()
-    expect(vi.getTimerCount()).toBe(baseRemove)
+    expect(vi.getTimerCount()).toBe(before + kRemove - 1)
     vi.advanceTimersByTime(120_000)
     expect(slot()).toBeNull()
   })
