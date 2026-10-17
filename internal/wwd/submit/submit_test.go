@@ -158,6 +158,18 @@ func TestPrepareUsageErrors(t *testing.T) {
 	}
 }
 
+func TestPrepareRefusesAShallowClone(t *testing.T) {
+	dir := newRepo(t)
+	write(t, filepath.Join(dir, "more.txt"), "m\n")
+	gitT(t, dir, "add", "-A")
+	gitT(t, dir, "commit", "-q", "-m", "second")
+	clone := filepath.Join(t.TempDir(), "shallow")
+	gitT(t, t.TempDir(), "clone", "-q", "--depth", "1", "file://"+dir, clone)
+	if _, err := Prepare(context.Background(), Request{Dir: clone, Task: "lint"}); err == nil || !IsUsage(err) {
+		t.Fatalf("err = %v, want a usage error for a shallow clone", err)
+	}
+}
+
 func TestPrepareNoManifestIsUsage(t *testing.T) {
 	dir := newRepo(t)
 	if err := os.Remove(filepath.Join(dir, ".wwd/tasks.toml")); err != nil {

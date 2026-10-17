@@ -214,6 +214,10 @@ func (g *gitRunner) exists(ctx context.Context, commit, path string) bool {
 
 // repo names the repository: the first commit identifies it across clones and worktrees, the remote's last element names it.
 func (g *gitRunner) repo(ctx context.Context, gitDir string) (wire.Repo, error) {
+	if shallow, _ := g.run(ctx, "rev-parse", "--is-shallow-repository"); shallow == "true" {
+		// a shallow boundary would read as the first commit and give the same repo another identity per clone depth
+		return wire.Repo{}, usagef("a shallow clone cannot be identified by its first commit; run git fetch --unshallow")
+	}
 	roots, err := g.run(ctx, "rev-list", "--max-parents=0", "HEAD")
 	if err != nil || roots == "" {
 		return wire.Repo{}, usagef("the repository has no commit to identify it by")
