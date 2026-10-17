@@ -81,7 +81,14 @@ func contains(s []string, v string) bool {
 
 // isShimDir is a pdx shim directory (~/.config/pdx/shims): its go, pnpm, … route
 // through the gate and are not the real tools.
-func isShimDir(d string) bool { return strings.Contains(filepath.ToSlash(d), "/pdx/shims") }
+func isShimDir(d string) bool {
+	if strings.Contains(filepath.ToSlash(d), "/pdx/shims") {
+		return true
+	}
+	// a link to the shim directory, or to a shim, is a shim as well
+	real, err := filepath.EvalSymlinks(d)
+	return err == nil && strings.Contains(filepath.ToSlash(real), "/pdx/shims")
+}
 
 func newestNvmBin(home string) string {
 	ents, err := os.ReadDir(filepath.Join(home, ".nvm", "versions", "node"))
@@ -154,7 +161,7 @@ func lookIn(dirs []string, name string) string {
 		if isShimDir(d) {
 			continue
 		}
-		if p := filepath.Join(d, name); isExec(p) {
+		if p := filepath.Join(d, name); isExec(p) && !isShimDir(p) {
 			return p
 		}
 	}
@@ -210,7 +217,7 @@ func (r *ToolsReader) phpVersions(ctx context.Context) []string {
 		}
 		for _, e := range ents {
 			p := filepath.Join(d, e.Name())
-			if rePHPName.MatchString(e.Name()) && !seenBin[p] && isExec(p) {
+			if rePHPName.MatchString(e.Name()) && !seenBin[p] && isExec(p) && !isShimDir(p) {
 				seenBin[p] = true
 				bins = append(bins, p)
 			}

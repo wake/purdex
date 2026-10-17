@@ -33,6 +33,9 @@ func SystemSourcesWith(opt SourceOptions) Sources {
 	if opt.Owner != nil {
 		if osrc, err := DarwinOwnerSources(); err == nil {
 			cfg := *opt.Owner
+			if cfg.UID == 0 {
+				cfg.UID = os.Getuid() // wwd runs as the owner
+			}
 			owner = func(s ProcSnapshot, c ProcContext) *wire.OwnerState { return BuildOwner(cfg, osrc, s, c) }
 		}
 	}

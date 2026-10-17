@@ -69,6 +69,26 @@ func TestBuildOwner(t *testing.T) {
 	}
 }
 
+// Only the owner's own processes count: another account's xcodebuild, or a
+// root service, is not the person at the keyboard (R2).
+func TestBuildOwnerOnlyCountsTheOwnersProcesses(t *testing.T) {
+	src := OwnerSources{
+		IdleSeconds: func() (float64, error) { return 1000, nil },
+		Locked:      func() (bool, error) { return false, nil },
+	}
+	other := ProcRec{PID: 810, PPID: 1, UID: 502, Name: "xcodebuild"}
+	root := ProcRec{PID: 811, PPID: 1, UID: 0, Name: "SimLaunchHost.arm64"}
+	mine := ProcRec{PID: 812, PPID: 1, UID: 501, Name: "xcodebuild"}
+	snap, ctx := ownerSnap(other, root)
+	if got := BuildOwner(OwnerConfig{UID: 501}, src, snap, ctx); got.Active {
+		t.Errorf("another user's work counted: %+v", got)
+	}
+	snap, ctx = ownerSnap(other, root, mine)
+	if got := BuildOwner(OwnerConfig{UID: 501}, src, snap, ctx); !got.Active || got.Reason != "build" {
+		t.Errorf("own work missed: %+v", got)
+	}
+}
+
 func TestBuildOwnerAsksLockOnlyWhenNeeded(t *testing.T) {
 	asked := 0
 	src := OwnerSources{

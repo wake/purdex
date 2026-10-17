@@ -9,6 +9,9 @@ import (
 // OwnerConfig is the owner rule's setting (worker settings, spec §3.1).
 type OwnerConfig struct {
 	IdleMinutes int // HID idle below this means the owner is using the machine; 0: 5
+	// UID restricts the build and simulator rule to this user's processes (wwd
+	// runs as the owner, so the caller passes its own uid). 0 accepts any user.
+	UID int
 }
 
 func (c OwnerConfig) idleLimit() float64 {
@@ -40,7 +43,9 @@ var ownerBuildProcs = map[string]bool{
 // Processes of wwd's own jobs are excluded by the shared job check. The front
 // app, the load average and pmset's UserIsActive are not used (M-S2 measured
 // them unusable). The lock state is read only when a candidate process exists.
-// An unreadable idle time is "unknown" (not active) unless rule 2 decides.
+// An unreadable idle time is "unknown" (not active) unless rule 2 decides. An
+// unreadable lock state counts as unlocked on purpose: the failure then makes
+// the worker yield to the owner instead of competing with their build.
 func BuildOwner(cfg OwnerConfig, src OwnerSources, snap ProcSnapshot, ctx ProcContext) *wire.OwnerState {
 	out := &wire.OwnerState{}
 	idle, err := src.IdleSeconds()
@@ -52,7 +57,7 @@ func BuildOwner(cfg OwnerConfig, src OwnerSources, snap ProcSnapshot, ctx ProcCo
 			return out
 		}
 	}
-	if reason := ownerWorkReason(snap, ctx); reason != "" {
+	if reason := ownerWorkReason(cfg, snap, ctx); reason != "" {
 		locked := false
 		if src.Locked != nil {
 			if l, err := src.Locked(); err == nil {
@@ -74,9 +79,12 @@ func BuildOwner(cfg OwnerConfig, src OwnerSources, snap ProcSnapshot, ctx ProcCo
 
 // ownerWorkReason is "build" or "simulator" when the owner has such work
 // running, "" otherwise. A build wins over a simulator.
-func ownerWorkReason(snap ProcSnapshot, ctx ProcContext) string {
+func ownerWorkReason(cfg OwnerConfig, snap ProcSnapshot, ctx ProcContext) string {
 	reason := ""
 	for _, p := range snap.Procs {
+		if cfg.UID != 0 && p.UID != cfg.UID {
+			continue
+		}
 		var r string
 		switch {
 		case ownerBuildProcs[p.Name]:
