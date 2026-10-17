@@ -12,13 +12,13 @@ import (
 
 func TestUsableHosts_KeepsTheRecordsOfTheHostsTheDaemonCallsUsable(t *testing.T) {
 	f := gate.AssistFile{Hosts: map[string]gate.AssistHost{
-		"air26": {SSH: "air26-lan", Can: []string{"go test"}},
-		"mserv": {Can: []string{"phpunit"}},
-		"old":   {},
+		"air26": {SSH: "air26-lan", Can: []string{"go test"}, Gen: 4},
+		"mserv": {Can: []string{"phpunit"}, Gen: 2},
+		"old":   {Gen: 8}, // the record changed after the daemon answered
 	}}
-	body := []byte(`{"repo":"purdex","hosts":[{"host":"air26","usable":true},{"host":"mserv","usable":false,"why":"not allowed"},{"host":"gone","usable":true}]}`)
+	body := []byte(`{"repo":"purdex","hosts":[{"host":"air26","usable":true,"gen":4},{"host":"mserv","usable":false,"why":"not allowed","gen":2},{"host":"gone","usable":true,"gen":1},{"host":"old","usable":true,"gen":7}]}`)
 	got := usableHosts(body, f)
-	require.Len(t, got, 1, "mserv is not usable, gone has no record")
+	require.Len(t, got, 1, "mserv is not usable, gone has no record, old is of another generation")
 	assert.Equal(t, "air26-lan", got["air26"].SSH)
 	assert.Equal(t, []string{"go test"}, got["air26"].Can)
 	assert.Nil(t, usableHosts([]byte(`not json`), f))

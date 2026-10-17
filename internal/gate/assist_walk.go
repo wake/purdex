@@ -2,6 +2,7 @@ package gate
 
 import (
 	"context"
+	"os"
 	"time"
 )
 
@@ -10,7 +11,8 @@ import (
 // host (every host that is not mlab has none).
 type AssistWalk struct {
 	// Usable are the assist hosts that are on, ready for this command's repo and allowed for its session, by alias (the daemon's
-	// answer, with the host records of assist.json). Empty when there are none or the daemon cannot be asked.
+	// answer, with the host records of assist.json). Empty when there are none or the daemon cannot be asked. It must not wait long:
+	// it is called from the wait loop.
 	Usable func() map[string]AssistHost
 	// Reserved says mlab is reserved at now (assist.json's reservation).
 	Reserved func(now time.Time) bool
@@ -20,11 +22,38 @@ type AssistWalk struct {
 // assistWalkEvery is how often a ticket that is still waiting offers itself again: each look costs one ssh.
 const assistWalkEvery = 30 * time.Second
 
+// walkEligible says whether a ticket may be offered to an assist host now. The queue's own rules still hold for it: a class with no
+// slot waits for the count to be raised whatever a host could do; a ticket on hold is not served anywhere; and a ticket at rank back
+// is served after every other waiting one, so it goes out only when it is alone. (The conflict rules of mlab are about what runs on
+// mlab, and the host's own gate applies its own at the probe.)
+func (g *Gate) walkEligible(cfg Config, class Class, ticket *Ticket) bool {
+	if cfg.Slots.Paused(class) {
+		return false
+	}
+	snap := g.pool(cfg, class).peekSnapshot()
+	rank := rankOfTicket(snap, ticket.Name).Rank
+	switch rank {
+	case RankHold:
+		return false
+	case RankBack:
+		for _, e := range snap.Queue {
+			if e.Name != ticket.Name && e.Rank.Rank != RankBack && e.Rank.Rank != RankHold {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // walkAssist offers the ticket to the hosts PickAssist names, in order. handled is true when the command's run is over (its result
-// is code). Otherwise the ticket is where it was, and the caller waits for a slot here. A host that is not fit now (its gate would
-// wait, it is over its limits, or the ssh failed) is held off as ProbeAssist says, and the walk goes on to the next.
-func (g *Gate) walkAssist(ctx context.Context, cfg Config, class Class, o Options, ticket *Ticket, d *Decision, wouldWait bool) (code int, handled bool) {
+// is code). Otherwise the ticket is where it was, and the caller waits for a slot here. A host that is not fit now (no free dispatch
+// slot, its gate would wait, it is over its limits, or the ssh failed) is left out or held off as ProbeAssist says, and the walk goes
+// on to the next. A signal while the host is being asked ends the command (nothing was sent).
+func (g *Gate) walkAssist(ctx context.Context, cfg Config, class Class, o Options, ticket *Ticket, d *Decision, wouldWait bool, sigs <-chan os.Signal) (code int, handled bool) {
 	w := o.Walk
+	if !g.walkEligible(cfg, class, ticket) {
+		return 0, false
+	}
 	hosts := w.Usable()
 	if len(hosts) == 0 {
 		return 0, false
@@ -38,7 +67,10 @@ func (g *Gate) walkAssist(ctx context.Context, cfg Config, class Class, o Option
 		if free, err := DispatchPool(cfg.Dir, name, dispatchSize(h.Slots), g.Now).freeCapacity(); err == nil && free <= 0 {
 			continue
 		}
-		p := g.ProbeAssist(ctx, AssistRun{Host: name, SSH: w.SSH}, h, o.Argv)
+		p, sig := g.probeUntilSignal(ctx, AssistRun{Host: name, SSH: w.SSH}, h, o.Argv, sigs)
+		if sig != 0 {
+			return sig, true
+		}
 		if !p.OK {
 			g.say("%s", p.Why)
 			if p.Hold > 0 {
@@ -54,4 +86,25 @@ func (g *Gate) walkAssist(ctx context.Context, cfg Config, class Class, o Option
 		}
 	}
 	return 0, false
+}
+
+// probeUntilSignal runs ProbeAssist, but ends it at once when a signal comes (or the caller's context ends): the second result is then
+// the exit code of the interrupted command (128+n, 130 for the context), and 0 when the probe answered.
+func (g *Gate) probeUntilSignal(ctx context.Context, a AssistRun, h AssistHost, argv []string, sigs <-chan os.Signal) (AssistProbe, int) {
+	pctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	res := make(chan AssistProbe, 1)
+	go func() { res <- g.ProbeAssist(pctx, a, h, argv) }()
+	select {
+	case p := <-res:
+		return p, 0
+	case sig := <-sigs:
+		cancel()
+		<-res
+		return AssistProbe{}, 128 + signalNumber(sig)
+	case <-ctx.Done():
+		cancel()
+		<-res
+		return AssistProbe{}, 130
+	}
 }

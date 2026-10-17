@@ -3,7 +3,9 @@ package gate
 import (
 	"bytes"
 	"context"
+	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -45,6 +47,64 @@ func TestWalk_AHeavyTicketGoesToTheHostEvenWithAFreeSlotHere(t *testing.T) {
 	assert.Equal(t, "assist", d.Outcome)
 	assert.Equal(t, "air26", d.Host)
 	r.nothingLeft(t)
+}
+
+// The queue's rules hold for the walk: a ticket on hold, a class with no slot, and a back ticket with others waiting are not offered.
+func TestWalk_EligibilityFollowsTheQueuesRules(t *testing.T) {
+	g, _ := testGate(t)
+	cfg := g.Config()
+	pool := g.pool(cfg, ClassHeavy)
+	a, err := pool.Enqueue()
+	require.NoError(t, err)
+	defer a.Drop()
+	b, err := pool.Enqueue()
+	require.NoError(t, err)
+	defer b.Drop()
+	assert.True(t, g.walkEligible(cfg, ClassHeavy, a), "a normal ticket")
+
+	_, err = pool.SetRank(a.Name, RankHold, "t", "test", time.Time{})
+	require.NoError(t, err)
+	assert.False(t, g.walkEligible(cfg, ClassHeavy, a), "on hold: not served anywhere")
+	assert.True(t, g.walkEligible(cfg, ClassHeavy, b))
+
+	_, err = pool.SetRank(a.Name, RankNormal, "t", "test", time.Time{})
+	require.NoError(t, err)
+	_, err = pool.SetRank(b.Name, RankBack, "t", "test", time.Time{})
+	require.NoError(t, err)
+	assert.False(t, g.walkEligible(cfg, ClassHeavy, b), "back with a normal ticket waiting")
+	a.Drop()
+	assert.True(t, g.walkEligible(cfg, ClassHeavy, b), "back and alone")
+
+	cfg.Slots.Heavy = 0
+	assert.False(t, g.walkEligible(cfg, ClassHeavy, b), "a class with no slot waits for the count to be raised")
+}
+
+// A signal while the host is being asked ends the command: nothing is sent, nothing is left, the exit code is 128+n.
+func TestWalk_ASignalDuringTheProbeEndsTheCommand(t *testing.T) {
+	g, errs := testGate(t)
+	sigs := make(chan os.Signal, 1)
+	g.Signals = sigs
+	work := workRepo(t)
+	h := newAssistHost(t, filepath.Base(work))
+	writeFile(t, h.remote("fake-wouldwait-sleep"), "", 0o644) // the host's answer takes 20 s
+	marker := filepath.Join(t.TempDir(), "ran-here")
+	var out bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		code, _ := g.Run(context.Background(), Options{Argv: sh(`touch ` + marker), Class: ClassHeavy, Dir: work, Env: cleanEnv(), Stdout: &out, Stderr: errs,
+			Walk: &AssistWalk{Usable: func() map[string]AssistHost { return map[string]AssistHost{"air26": {Can: []string{"sh"}}} }, SSH: h.ssh}})
+		done <- code
+	}()
+	eventuallyFor(t, 60*time.Second, "the probe to reach the host", func() bool { return exists(h.remote("ssh-hosts")) })
+	sigs <- syscall.SIGINT
+	select {
+	case code := <-done:
+		assert.Equal(t, 130, code, "128 + SIGINT")
+	case <-time.After(30 * time.Second):
+		t.Fatal("the signal did not end the wait for the host")
+	}
+	assert.NoFileExists(t, marker, "never run")
+	dispatchRun{g: g, dir: g.Config().Dir}.nothingLeft(t)
 }
 
 // A host whose dispatch slots are all taken is not asked: no ssh is made, the command runs here.
