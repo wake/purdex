@@ -10,16 +10,18 @@ import { createTab } from '../../../types/tab'
 
 async function openWindow() {
   vi.resetModules()
-  const [store, tabs, area] = await Promise.all([
+  const [store, tabs, area, world] = await Promise.all([
     import('../store'),
     import('../../../stores/useTabStore'),
     import('./open-watch-area'),
+    import('../../../lib/profile/master-world'),
   ])
   const ws = () => store.useWorkspaceStore.getState()
   return {
     store,
     tabs,
     area,
+    world,
     ws,
     /** A new tab in `wsId`, made in this window. */
     tabIn(wsId: string): string {
@@ -92,6 +94,20 @@ describe('two windows: the way back is each window\'s own', () => {
 
     A.area.openWatchArea({ tab: 'guardian' })
     await syncInto(B)
+    expect(B.store.getWatchReturnTarget()).toEqual({ workspaceId: y, tabId: y2 })
+    B.area.leaveWatchArea()
+    expect(B.at()).toEqual({ ws: y, tab: y2 })
+  })
+
+  it('a promote in A (`restampWorld`: the tag moves, the content stays) synced into B keeps B\'s way back', async () => {
+    B.select(y, y2)
+    A.area.openWatchArea({ tab: 'guardian' })
+    await syncInto(B)
+    expect(B.store.getWatchReturnTarget()).toEqual({ workspaceId: y, tabId: y2 })
+
+    A.world.restampWorld({ worldId: 'p2', worldEpoch: 7 })
+    await syncInto(B) // B's rehydrate builds new workspace objects: the same ids, the same world
+    expect(B.ws().worldId).toBe('p2')
     expect(B.store.getWatchReturnTarget()).toEqual({ workspaceId: y, tabId: y2 })
     B.area.leaveWatchArea()
     expect(B.at()).toEqual({ ws: y, tab: y2 })

@@ -34,8 +34,9 @@ export function openWatchArea(target: WatchTarget): void {
 
 /**
  * Leaves the area for the workspace and the tab it was entered from (the back button and ⌘W). That tab gone from that
- * workspace (closed, or moved away) → the workspace's own active tab. That workspace gone, or no way back taken (a
- * restart with the area shown) → the return workspace (`getReturnWorkspaceId`) and its active tab. The area's tabs stay.
+ * workspace (closed, or moved away) → the workspace's own active tab. That workspace not among the workspaces now
+ * (removed, or another world, whose ids are its own), or no way back taken (a restart with the area shown) → the return
+ * workspace (`getReturnWorkspaceId`) and its active tab. The area's tabs stay.
  */
 export function leaveWatchArea(): void {
   const target = getWatchReturnTarget()

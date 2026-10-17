@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { useWorkspaceStore, WATCH_WORKSPACE_ID, __resetReturnWorkspaceForTest, getWatchReturnTarget } from '../store'
 import { useTabStore } from '../../../stores/useTabStore'
 import { useFleetStore, type FleetSnapshot } from '../../../lib/fleet/store'
-import { createTab } from '../../../types/tab'
+import { createTab, createWorkspace } from '../../../types/tab'
 import { WATCH_GUARDIAN_TAB_ID as G, watchHostTabId } from '../../../lib/watch/ids'
 import { commitTabWorld, restampWorld } from '../../../lib/profile/master-world'
 import { openWatchArea, leaveWatchArea } from './open-watch-area'
@@ -140,41 +140,43 @@ describe('leaveWatchArea', () => {
     expect(at()).toEqual({ ws: a, tab: t2 })
   })
 
-  it('another world (a profile switch: `commitTabWorld` with a new tag) clears the way back, also when the area stays shown', () => {
-    openWatchArea({ host: 'h1' })
-    // The world that comes in shows the area as well, and its ids collide with the old world's (`unsorted` is one fixed
-    // id in every world).
+  // Another world (a profile switch: `commitTabWorld` with a new tag) has workspaces of its own ids: the way back names
+  // none of them, so a leave takes the fallback — checked on leaving, not by clearing on the switch.
+  function anotherWorld(): { c1: string; u1: string } {
+    const u1 = createTab({ kind: 'new-tab' })
+    const c1 = { ...createWorkspace('C1'), tabs: [u1.id], activeTabId: u1.id }
+    const area = ws().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID) ?? { ...createWorkspace('watch'), id: WATCH_WORKSPACE_ID }
+    const all = useTabStore.getState().tabs
+    const areaTabs = Object.fromEntries(area.tabs.map((id) => [id, all[id]]))
     commitTabWorld({
-      tabs: useTabStore.getState().tabs,
-      workspaces: ws().workspaces.map((w) => (w.id === a ? { ...w, activeTabId: t2 } : w)),
+      tabs: { ...areaTabs, [u1.id]: u1 },
+      workspaces: [c1, area],
       activeWorkspaceId: WATCH_WORKSPACE_ID,
-      activeTabId: G,
+      activeTabId: area.tabs[0] ?? null,
     }, undefined, { worldId: 'p2', worldEpoch: 7 })
     expect(ws().worldId).toBe('p2')
     expect(ws().activeWorkspaceId).toBe(WATCH_WORKSPACE_ID)
-    expect(getWatchReturnTarget()).toBeNull()
+    return { c1: c1.id, u1: u1.id }
+  }
+
+  it('another world while the area is shown: a leave takes the fallback, the new world\'s first workspace', () => {
+    openWatchArea({ host: 'h1' })
+    const { c1, u1 } = anotherWorld()
     leaveWatchArea()
-    expect(at()).toEqual({ ws: a, tab: t2 })
+    expect(at()).toEqual({ ws: c1, tab: u1 })
   })
 
-  it('a world switch that lands on the area takes no way back from the old world', () => {
-    ws().ensureWatchWorkspace()
-    commitTabWorld({
-      tabs: useTabStore.getState().tabs,
-      workspaces: [...ws().workspaces],
-      activeWorkspaceId: WATCH_WORKSPACE_ID,
-    }, undefined, { worldId: 'p2', worldEpoch: 7 })
-    expect(ws().activeWorkspaceId).toBe(WATCH_WORKSPACE_ID)
-    expect(getWatchReturnTarget()).toBeNull()
+  it('another world that lands on the area: a leave takes the fallback, not a workspace of the old world', () => {
+    const { c1, u1 } = anotherWorld()
+    leaveWatchArea()
+    expect(at()).toEqual({ ws: c1, tab: u1 })
   })
 
   it('a restamp (a promote: `restampWorld` moves the tag, the content stays) keeps the way back', () => {
     openWatchArea({ host: 'h1' })
     ws().setWorkspaceActiveTab(a, t2) // A's own active tab moved meanwhile (a sync): only the way back still says t1
-    const workspaces = ws().workspaces
     restampWorld({ worldId: 'p2', worldEpoch: 7 })
     expect(ws().worldId).toBe('p2')
-    expect(ws().workspaces).toBe(workspaces)
     expect(getWatchReturnTarget()).toEqual({ workspaceId: a, tabId: t1 })
     leaveWatchArea()
     expect(at()).toEqual({ ws: a, tab: t1 })
