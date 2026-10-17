@@ -52,6 +52,8 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 			return gateStatus(args[1:], stdout, stderr)
 		case "would-wait":
 			return gateWouldWait(args[1:], stdout, stderr)
+		case "queue":
+			return gateQueue(args[1:], stdout, stderr)
 		case "set":
 			return gateSet(args[1:], stdout, stderr)
 		case "profile":

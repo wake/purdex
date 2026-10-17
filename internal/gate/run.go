@@ -49,8 +49,9 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 	lastPlace := time.Time{}
 	waitStart := time.Time{} // set at the first look that did not get a slot
 	var (
-		pollAt   time.Time // when the previous poll looked
-		prevHold bool      // the previous poll found the ticket on hold: the time since then is held time
+		pollAt   time.Time              // when the previous poll looked
+		lastRank Rank      = RankNormal // the rank the last line was printed for
+		prevHold bool                   // the previous poll found the ticket on hold: the time since then is held time
 		heldFor  time.Duration
 	)
 	for {
@@ -127,6 +128,9 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		}
 		if waitStart.IsZero() {
 			waitStart = now
+		}
+		if rank.Rank != lastRank { // moved in the queue (held, set back, to the front): say so now, not at the next minute
+			lastRank, lastPlace = rank.Rank, time.Time{}
 		}
 		if lastPlace.IsZero() || now.Sub(lastPlace) >= time.Minute {
 			lastPlace = now
