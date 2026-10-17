@@ -4,7 +4,7 @@
 //
 // Gate: `support[host]` is the live answer of `journal.members.v1` for the current connection; absent = unknown (disconnected, or
 // the probe has not answered) and nothing is read or shown. A read that lands after its host was forgotten (`epoch`) or the
-// connection ended (`fence`) is dropped. One read per leader at a time (single-flight). A failed read keeps what is held.
+// connection ended (`fence`: each one starts a new generation, even when support is declared again right after) is dropped. One read per leader at a time (single-flight). A failed read keeps what is held.
 import { create } from 'zustand'
 import { getJournalMembers } from '../lib/journal/api'
 import type { JournalMember } from '../lib/journal/types'
@@ -15,6 +15,8 @@ interface MembersState {
   support: Record<string, boolean>
   byLead: Record<string, JournalMember[]>
   epoch: Record<string, number>
+  /** Connection generation per host: bumped by every `fence`. */
+  gens: Record<string, number>
   /** The probe's answer for the current connection. */
   setSupport: (hostId: string, yes: boolean) => void
   /** The connection is gone or a new probe starts: support is unknown again (what is held stays, but is not shown). */
@@ -33,8 +35,9 @@ export const useJournalMembersStore = create<MembersState>()((set, get) => ({
   support: {},
   byLead: {},
   epoch: {},
+  gens: {},
   setSupport: (hostId, yes) => set((s) => ({ support: { ...s.support, [hostId]: yes } })),
-  fence: (hostId) => set((s) => (hostId in s.support ? { support: drop(s.support, hostId) } : s)),
+  fence: (hostId) => set((s) => ({ support: drop(s.support, hostId), gens: { ...s.gens, [hostId]: (s.gens[hostId] ?? 0) + 1 } })),
   forgetHost: (hostId) => {
     const prefix = `${hostId}\u0000`
     for (const k of [...flights]) if (k.startsWith(prefix)) flights.delete(k)
@@ -48,11 +51,12 @@ export const useJournalMembersStore = create<MembersState>()((set, get) => ({
     const key = membersKey(hostId, leadSessionId)
     if (get().support[hostId] !== true || flights.has(key)) return
     const epoch = get().epoch[hostId] ?? 0
+    const gen = get().gens[hostId] ?? 0
     flights.add(key)
     try {
       const res = await getJournalMembers(hostId, leadSessionId)
       const s = get()
-      if (!flights.has(key) || (s.epoch[hostId] ?? 0) !== epoch || s.support[hostId] !== true) return
+      if (!flights.has(key) || (s.epoch[hostId] ?? 0) !== epoch || (s.gens[hostId] ?? 0) !== gen || s.support[hostId] !== true) return
       // 404 (no unit yet) or a member whose lead is elsewhere (409): nothing to show.
       set({ byLead: { ...s.byLead, [key]: res.kind === 'ok' ? res.value : [] } })
     } catch {
@@ -61,5 +65,5 @@ export const useJournalMembersStore = create<MembersState>()((set, get) => ({
       flights.delete(key)
     }
   },
-  reset: () => { flights.clear(); set({ support: {}, byLead: {}, epoch: {} }) },
+  reset: () => { flights.clear(); set({ support: {}, byLead: {}, epoch: {}, gens: {} }) },
 }))
