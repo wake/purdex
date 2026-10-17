@@ -3,7 +3,7 @@
 // note and F-2a2's probe-host editor. The gate settings (設定組, 資源管制, slots) are W5c2.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
-import { useHostStore } from '../../stores/useHostStore'
+import { useHostLookResolver } from '../../lib/host-look'
 import { HostConfigApiError, HostConfigConflictError } from '../../lib/host-config-api'
 import { forgetWatchDraft, readWatchDraft, watchDraftKey, writeWatchDraft } from '../../lib/watch/draft-memory'
 import { parseWatchRow, readWatchRow, type WatchRow } from '../../lib/watch/watch-row'
@@ -99,7 +99,7 @@ function GuardianSection({ hostConfigId, fleetHostId, offline, peerIds }: { host
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [peers, setPeers] = useState<{ id: string; targets: string[] | null }[]>([])
-  const hostNames = useHostStore((s) => s.hosts)
+  const lookOf = useHostLookResolver() // the host's name goes through the look resolver (host-look guard)
   const rowRef = useRef<WatchRow | null>(null)
   const peerKey = peerIds.join('\n')
 
@@ -160,7 +160,7 @@ function GuardianSection({ hostConfigId, fleetHostId, offline, peerIds }: { host
   const w = state.w
   const mine = targetsOf(w)
   const differs = peers.some((p) => p.targets !== null && p.targets.join('\n') !== mine.join('\n'))
-  const unreadablePeers = peers.filter((p) => p.targets === null).map((p) => hostNames[p.id]?.name ?? p.id)
+  const unreadablePeers = peers.filter((p) => p.targets === null).map((p) => lookOf(p.id).name || p.id)
   const locked = offline || busy
 
   const commitText = (f: { key: WatchKey; kind: Kind }) => async (raw: string): Promise<boolean> => {

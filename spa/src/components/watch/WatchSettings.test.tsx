@@ -161,7 +161,7 @@ describe('WatchSettings — the 守門員 section', () => {
       fireEvent.blur(screen.getByTestId('watch-set-t_s'))
       await screen.findByTestId('watch-set-conflict')
       expect(readWatchDraft(key('t_s'))).toBeUndefined()
-      expect(screen.getByTestId('watch-set-t_s')).toHaveValue('60')
+      await waitFor(() => expect(screen.getByTestId('watch-set-t_s')).toHaveValue('60'))
     })
 
     it('a 409 restores only the field that was written; another field\'s draft stays, marked as updated on the host', async () => {
@@ -172,13 +172,13 @@ describe('WatchSettings — the 守門員 section', () => {
       fireEvent.change(screen.getByTestId('watch-set-t_s'), { target: { value: '90' } })
       fireEvent.blur(screen.getByTestId('watch-set-t_s'))
       await screen.findByTestId('watch-set-conflict')
-      expect(screen.getByTestId('watch-set-t_s')).toHaveValue('77') // the written field shows the host's copy
+      await waitFor(() => expect(screen.getByTestId('watch-set-t_s')).toHaveValue('77')) // the written field shows the host's copy
       expect(screen.getByTestId('watch-set-y_mb')).toHaveValue('5000') // the other keeps what the reader typed
       expect(readWatchDraft(key('y_mb'))).toBe('5000')
-      expect(screen.getByTestId('watch-set-stale-y_mb')).toHaveTextContent(t('watch.set.stale'))
+      expect(await screen.findByTestId('watch-set-stale-y_mb')).toHaveTextContent(t('watch.set.stale'))
       // The reader decides: take the host's value.
       fireEvent.click(screen.getByTestId('watch-set-stale-use-y_mb'))
-      expect(screen.getByTestId('watch-set-y_mb')).toHaveValue('999')
+      await waitFor(() => expect(screen.getByTestId('watch-set-y_mb')).toHaveValue('999'))
       expect(readWatchDraft(key('y_mb'))).toBeUndefined()
       expect(screen.queryByTestId('watch-set-stale-y_mb')).toBeNull()
     })
@@ -190,7 +190,7 @@ describe('WatchSettings — the 守門員 section', () => {
       fireEvent.change(screen.getByTestId('watch-set-t_s'), { target: { value: '90' } })
       fireEvent.blur(screen.getByTestId('watch-set-t_s'))
       await screen.findByTestId('watch-set-conflict')
-      expect(screen.getByTestId('watch-set-y_mb')).toHaveValue('999')
+      await waitFor(() => expect(screen.getByTestId('watch-set-y_mb')).toHaveValue('999'))
       expect(screen.queryByTestId('watch-set-stale-y_mb')).toBeNull()
     })
   })
