@@ -4,6 +4,7 @@
   "snapshot": {"commit": "c0ffee", "tree": "7ee", "base": "ba5e", "rel_cwd": "spa"},
   "task": "spa-related", "args": [], "class": "dev",
   "labels": [], "locks": ["db"], "cacheable": false, "timeout_s": 600,
+  "interruptible": false, "queue_timeout_s": 0, "adhoc": false,
   "supersede_key": "k",
   "submitter": {"session": "s1", "ref": "_abc123", "team": "", "host": "mlab"},
   "created_at": "2026-10-18T05:00:00+08:00", "state": "superseded",
