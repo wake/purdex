@@ -17,6 +17,7 @@ import (
 
 	"github.com/wake/purdex/internal/buildinfo"
 	"github.com/wake/purdex/internal/wwd/daemon"
+	"github.com/wake/purdex/internal/wwd/facts"
 )
 
 func main() {
@@ -62,12 +63,21 @@ func run(cfgPath string) error {
 	if err != nil {
 		return err
 	}
+	var srcOpt facts.SourceOptions
+	if cfg.Owner.Enabled {
+		srcOpt.Owner = &facts.OwnerConfig{IdleMinutes: cfg.Owner.IdleMinutes}
+	}
+	sampler := daemon.NewSampler(daemon.SamplerOptions{
+		HostID: hostID, Alias: alias, OSVersion: facts.OSVersion(),
+		Sources: facts.SystemSourcesWith(srcOpt), Slots: cfg.Worker.Slots(), WorkerEnabled: cfg.Worker.Enabled,
+	})
 	d := daemon.New(daemon.Options{
 		HostID: hostID, Alias: alias, Version: buildinfo.Version,
-		Token: tok, WorkerEnabled: cfg.Worker.Enabled,
+		Token: tok, WorkerEnabled: cfg.Worker.Enabled, Sampler: sampler,
 	})
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	go sampler.Run(ctx)
 	run, err := d.Listen(ctx, daemon.ListenSpec{Addrs: addrs, Port: cfg.Port, SocketPath: cfg.SocketPath})
 	if err != nil {
 		return err

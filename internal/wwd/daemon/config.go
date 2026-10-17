@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -28,10 +30,68 @@ type Config struct {
 	TokenPath   string       `toml:"token_file"`
 	WorkRoot    string       `toml:"work_root"`
 	Worker      WorkerConfig `toml:"worker"`
+	Owner       OwnerRule    `toml:"owner"`
+	Peers       []PeerConfig `toml:"peers"`
 }
 
+// WorkerConfig is the worker's starting settings. Heavy and Light are slots; an
+// unset value is the default (heavy 1, light 2), an explicit 0 is kept (mserv).
 type WorkerConfig struct {
 	Enabled bool `toml:"enabled"`
+	Heavy   *int `toml:"heavy"`
+	Light   *int `toml:"light"`
+}
+
+// Slots is the configured slot pair with the defaults filled in.
+func (w WorkerConfig) Slots() wire.Slots {
+	s := wire.Slots{Heavy: 1, Light: 2}
+	if w.Heavy != nil {
+		s.Heavy = max(*w.Heavy, 0)
+	}
+	if w.Light != nil {
+		s.Light = max(*w.Light, 0)
+	}
+	return s
+}
+
+// OwnerRule turns the "owner is active" rule on (air26 only).
+type OwnerRule struct {
+	Enabled     bool `toml:"enabled"`
+	IdleMinutes int  `toml:"idle_minutes"`
+}
+
+// PeerConfig is another wwd of the pool: its alias and tailnet address
+// (host or host:port; the port defaults to 7871).
+type PeerConfig struct {
+	Alias string `toml:"alias"`
+	Addr  string `toml:"addr"`
+}
+
+// HostPort is the address with the default port filled in.
+func (p PeerConfig) HostPort() string {
+	if _, _, err := net.SplitHostPort(p.Addr); err == nil {
+		return p.Addr
+	}
+	return net.JoinHostPort(p.Addr, strconv.Itoa(wire.Port))
+}
+
+func (c Config) validatePeers() error {
+	seen := map[string]bool{}
+	for _, p := range c.Peers {
+		if p.Alias == "" || seen[p.Alias] {
+			return fmt.Errorf("peers: alias %q is empty or repeated", p.Alias)
+		}
+		seen[p.Alias] = true
+		host, _, err := net.SplitHostPort(p.HostPort())
+		if err != nil {
+			return fmt.Errorf("peers: %s: %w", p.Alias, err)
+		}
+		// the pool token is sent to this address: only loopback and tailnet IPs
+		if err := ValidateBindAddr(host); err != nil {
+			return fmt.Errorf("peers: %s: %w", p.Alias, err)
+		}
+	}
+	return nil
 }
 
 // DefaultConfigPath is ~/.config/wwd/config.toml.
@@ -56,6 +116,9 @@ func LoadConfig(path, home string) (Config, error) {
 	case errors.Is(err, os.ErrNotExist):
 	default:
 		return c, err
+	}
+	if err := c.validatePeers(); err != nil {
+		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	if c.Port == 0 {
 		c.Port = wire.Port
