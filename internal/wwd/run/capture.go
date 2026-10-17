@@ -141,3 +141,26 @@ func (c *capture) close() (tail []byte, logCut bool, err error) {
 	}
 	return append([]byte(nil), t...), c.logCut, c.lastError
 }
+
+// Capture is the capture of a command's output for runners outside this package (the local fast lane): log and stdout
+// files under a cap, and an in-memory tail.
+type Capture struct{ c *capture }
+
+// OpenCapture creates the two files; max <= 0 is DefaultMaxLog.
+func OpenCapture(logPath, stdoutPath string, max int64) (*Capture, error) {
+	c, err := newCapture(logPath, stdoutPath, max)
+	if err != nil {
+		return nil, err
+	}
+	return &Capture{c: c}, nil
+}
+
+// Stdout and Stderr are the writers to give the command; they never fail and never stall it.
+func (x *Capture) Stdout() io.Writer { return x.c.Stdout() }
+func (x *Capture) Stderr() io.Writer { return x.c.Stderr() }
+
+// Note adds a line of the runner's own to the log.
+func (x *Capture) Note(s string) { x.c.note(s) }
+
+// Close ends the capture and returns the tail, whether the cap was reached, and the first write error.
+func (x *Capture) Close() (tail []byte, logCut bool, err error) { return x.c.close() }
