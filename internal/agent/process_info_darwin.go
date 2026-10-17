@@ -6,7 +6,39 @@ import (
 	"strings"
 )
 
+// readProcessInfoPlatform reads pid with no ps fork on the common path (#3092): the parent and start second come from one
+// kern.proc.pid sysctl, comm / args from kern.procargs2. Each piece falls back to ps itself exactly where it cannot
+// reproduce ps's text (readCommArgs for exotic argv, ProcessStartText when the kernel's start time does not format to
+// what ps prints in this zone / locale), so the answer is the one readProcessInfoPS gives.
 func readProcessInfoPlatform(pid int) (ProcessInfo, error) {
+	ppid, err := ProcessPPID(pid)
+	if err != nil {
+		return ProcessInfo{}, err
+	}
+	exePath, argv, err := readCommArgs(pid)
+	if err != nil {
+		return ProcessInfo{}, err
+	}
+	startText, err := ProcessStartText(pid)
+	if err != nil {
+		return ProcessInfo{}, err
+	}
+	startTime, err := parseLstart(pid, startText)
+	if err != nil {
+		return ProcessInfo{}, err
+	}
+	return ProcessInfo{
+		PID:       pid,
+		PPID:      ppid,
+		ExePath:   exePath,
+		Argv:      argv,
+		StartTime: startTime,
+	}, nil
+}
+
+// readProcessInfoPS is the four-fork reader this file used before #3092, kept as the reference the fork-free path is
+// tested against.
+func readProcessInfoPS(pid int) (ProcessInfo, error) {
 	ppid, err := readProcessPPID(pid)
 	if err != nil {
 		return ProcessInfo{}, err
