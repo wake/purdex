@@ -67,7 +67,7 @@ export function WatchLaunchPanel({ title, hint }: Props) {
       }
       case 'awake_already': return { text: t('watch.launch.awake_already'), alert: false }
       case 'cooldown': {
-        const time = Number.isNaN(s.until) ? '' : formatHandoffTime(s.until, Date.now())
+        const time = Number.isNaN(s.until) ? '' : formatHandoffTime(s.until, s.at)
         const key = s.kind === 'start' ? 'watch.launch.cooldown_start' : 'watch.launch.cooldown_wake'
         return { text: time === '' ? t('watch.launch.cooldown_unknown') : t(key, { time }), alert: true }
       }

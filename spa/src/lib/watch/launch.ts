@@ -22,8 +22,8 @@ export type LaunchSlot =
   | { phase: 'sending'; kind: LaunchKind; hostId: string; seq: number }
   | { phase: 'busy'; kind: LaunchKind; hostId: string; seq: number; startingOn?: { alias: string; daemonId: string } }
   | { phase: 'awake_already'; kind: LaunchKind; hostId: string; seq: number }
-  /** `until` is the epoch ms the daemon said (NaN: it did not give a readable time). */
-  | { phase: 'cooldown'; kind: LaunchKind; hostId: string; seq: number; until: number }
+  /** `until` is the epoch ms the daemon said (NaN: it did not give a readable time); `at` is when it said so (the "today" of the time shown). */
+  | { phase: 'cooldown'; kind: LaunchKind; hostId: string; seq: number; until: number; at: number }
   /** `detail` is the daemon's own text; `network` is a request that never got an answer. */
   | { phase: 'error'; kind: LaunchKind; hostId: string; seq: number; detail?: string; status?: number; network?: boolean }
 
@@ -98,7 +98,7 @@ export async function requestLaunch(kind: LaunchKind, hostId: string): Promise<v
   const code = isObj(body) ? str(body.error) : undefined
   const detail = isObj(body) ? str(body.detail) : undefined
   if (res.status === 409 && code === 'cooldown') {
-    return settle({ phase: 'cooldown', kind, hostId, seq, until: detail === undefined ? NaN : Date.parse(detail) })
+    return settle({ phase: 'cooldown', kind, hostId, seq, until: detail === undefined ? NaN : Date.parse(detail), at: Date.now() })
   }
   return settle({ phase: 'error', kind, hostId, seq, detail, status: res.status })
 }
