@@ -34,7 +34,6 @@ func (d *Decision) setUsage(cmd *exec.Cmd) {
 		return
 	}
 	cpu := float64(ru.Utime.Sec) + float64(ru.Utime.Usec)/1e6 + float64(ru.Stime.Sec) + float64(ru.Stime.Usec)/1e6
-	d.CPUS = roundTo(cpu, 3)
-	d.MaxRSSMB = roundTo(maxRSSMB(int64(ru.Maxrss), runtime.GOOS), 1)
-	d.MajorFaults = int64(ru.Majflt)
+	cpuS, rss, faults := roundTo(cpu, 3), roundTo(maxRSSMB(int64(ru.Maxrss), runtime.GOOS), 1), int64(ru.Majflt)
+	d.CPUS, d.MaxRSSMB, d.MajorFaults = &cpuS, &rss, &faults
 }

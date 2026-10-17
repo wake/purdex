@@ -66,7 +66,8 @@ func TestDecisions_NewestFirstAcrossTheRotation(t *testing.T) {
 	for i, rec := range r.Records {
 		assert.True(t, rec.Time.Equal(t0.Add(time.Duration(3-i)*time.Minute)), "record %d at %s", i, rec.Time)
 	}
-	assert.Equal(t, 2.5, r.Records[0].CPUS)
+	require.NotNil(t, r.Records[0].CPUS)
+	assert.Equal(t, 2.5, *r.Records[0].CPUS)
 }
 
 func TestDecisions_ClassSinceLimit(t *testing.T) {

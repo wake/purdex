@@ -3,6 +3,7 @@ package gatemod
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"os"
@@ -57,26 +58,46 @@ func (m *Module) handleDecisions(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = min(n, maxLimit)
 	}
-	recs, skipped := readDecisions(m.gateDir(), class, since, limit)
+	recs, skipped, err := readDecisions(m.gateDir(), class, since, limit)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "read_failed", err.Error())
+		return
+	}
 	writeJSON(w, http.StatusOK, DecisionsReply{Records: recs, Skipped: skipped})
 }
 
-// readDecisions reads decisions.jsonl.1 (the older) and decisions.jsonl and returns up to limit records, newest first, that are of
+// readDecisions reads decisions.jsonl and decisions.jsonl.1 (the older) and returns up to limit records, newest first, that are of
 // class (empty: both) and not before since (zero: all), with the number of lines that did not parse. No gate lock is taken: a
-// record is appended whole, one line each. The older file is opened first: a rotation between the two opens leaves the renamed file
-// open as the current one's content and the dropped one is simply not read, whereas the other order would read the same file twice.
-func readDecisions(dir string, class gate.Class, since time.Time, limit int) ([]gate.Decision, int) {
-	var files []*os.File // the newest last
-	for _, name := range []string{"decisions.jsonl.1", "decisions.jsonl"} {
-		if f, err := os.Open(filepath.Join(dir, name)); err == nil {
-			files = append(files, f)
-			defer f.Close()
+// record is appended whole, one line each. The current file is opened first, then the older one: a rotation between the two opens
+// makes the older name point at the file already open as the current one (told by os.SameFile and read once), where the other order
+// would lose the file that was just rotated. A file that exists and cannot be read is an error, not an empty history.
+func readDecisions(dir string, class gate.Class, since time.Time, limit int) ([]gate.Decision, int, error) {
+	var files []*os.File // the newest first
+	for _, name := range []string{"decisions.jsonl", "decisions.jsonl.1"} {
+		f, err := os.Open(filepath.Join(dir, name))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
 		}
+		if err != nil {
+			return nil, 0, err
+		}
+		defer f.Close()
+		if len(files) > 0 {
+			a, errA := files[0].Stat()
+			b, errB := f.Stat()
+			if errA == nil && errB == nil && os.SameFile(a, b) {
+				continue
+			}
+		}
+		files = append(files, f)
 	}
 	out := make([]gate.Decision, 0, min(limit, 64))
 	skipped := 0
-	for i := len(files) - 1; i >= 0 && len(out) < limit; i-- {
-		lines, bad := readLines(files[i])
+	for i := 0; i < len(files) && len(out) < limit; i++ {
+		lines, bad, err := readLines(files[i])
+		if err != nil {
+			return nil, 0, err
+		}
 		skipped += bad
 		for j := len(lines) - 1; j >= 0 && len(out) < limit; j-- {
 			var d gate.Decision
@@ -93,11 +114,11 @@ func readDecisions(dir string, class gate.Class, since time.Time, limit int) ([]
 			out = append(out, d)
 		}
 	}
-	return out, skipped
+	return out, skipped, nil
 }
 
 // readLines is the non-empty lines of f in file order; bad counts the lines too long to hold.
-func readLines(f *os.File) (lines [][]byte, bad int) {
+func readLines(f *os.File) (lines [][]byte, bad int, err error) {
 	br := bufio.NewReaderSize(f, 64<<10)
 	for {
 		line, err := br.ReadSlice('\n')
@@ -110,8 +131,11 @@ func readLines(f *os.File) (lines [][]byte, bad int) {
 		case len(line) > 1 || (len(line) == 1 && line[0] != '\n'):
 			lines = append(lines, append([]byte(nil), line...))
 		}
-		if err == io.EOF || (err != nil && err != bufio.ErrBufferFull) {
-			return lines, bad
+		if err == io.EOF {
+			return lines, bad, nil
+		}
+		if err != nil && err != bufio.ErrBufferFull {
+			return nil, 0, err
 		}
 	}
 }
