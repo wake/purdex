@@ -260,8 +260,11 @@ func (c *Cache) discard(entry string) {
 	if err := os.Rename(entry, gone); err != nil {
 		return
 	}
-	_ = os.RemoveAll(gone)
+	_ = removeAll(gone)
 }
+
+// removeAll is os.RemoveAll; a variable so that a test can make a removal fail (a process killed midway is a removal that stops).
+var removeAll = os.RemoveAll
 
 // entryWhole says that the entry has every directory a use of it needs.
 func entryWhole(entry string, dirs []string) bool {
@@ -289,7 +292,7 @@ func (c *Cache) sweep() {
 			continue
 		}
 		if info, err := de.Info(); err == nil && time.Since(info.ModTime()) > tmpMaxAge {
-			_ = os.RemoveAll(filepath.Join(c.Dir, n))
+			_ = removeAll(filepath.Join(c.Dir, n))
 		}
 	}
 }

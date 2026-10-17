@@ -386,3 +386,41 @@ func TestSweep_RemovesOldTemporaryAndTombstoneDirectories(t *testing.T) {
 	_, err := os.Stat(filepath.Join(c.Dir, "cccc.tmp-789"))
 	assert.NoError(t, err, "a young one stays")
 }
+
+// Two inputs whose bytes would be the same without the lengths (the first fingerprint plus a lockfile's entry is the second fingerprint)
+// are two keys.
+func TestPlan_AFingerprintCannotSwallowALockfileEntry(t *testing.T) {
+	ws1 := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(ws1, "spa"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(ws1, "pnpm-lock.yaml"), []byte("AAA"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(ws1, "spa/pnpm-lock.yaml"), []byte("BB"), 0o644))
+	ws2 := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(ws2, "spa"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(ws2, "spa/pnpm-lock.yaml"), []byte("BB"), 0o644))
+	k1, _, err := plan(ws1, Spec{Lockfiles: []string{"pnpm-lock.yaml", "spa/pnpm-lock.yaml"}, Fingerprint: "q"})
+	require.NoError(t, err)
+	k2, _, err := plan(ws2, Spec{Lockfiles: []string{"spa/pnpm-lock.yaml"}, Fingerprint: "qpnpm-lock.yaml\x003\x00AAA"})
+	require.NoError(t, err)
+	assert.NotEqual(t, k1, k2)
+}
+
+// A removal that fails or stops midway leaves a tombstone, never a directory with the entry's name.
+func TestPrune_AFailedRemovalLeavesNoEntryShapedDirectory(t *testing.T) {
+	old := removeAll
+	removeAll = func(string) error { return errors.New("killed") }
+	t.Cleanup(func() { removeAll = old })
+	c, in := newCache(t, 1), &installer{}
+	r1, err := c.Prepare(context.Background(), workspace(t, "k1\n"), spec(in))
+	require.NoError(t, err)
+	time.Sleep(20 * time.Millisecond)
+	_, err = c.Prepare(context.Background(), workspace(t, "k2\n"), spec(in))
+	require.NoError(t, err)
+	_, serr := os.Stat(filepath.Join(c.Dir, r1.Key))
+	assert.True(t, os.IsNotExist(serr), "no directory with the evicted key's name")
+	matches, _ := filepath.Glob(filepath.Join(c.Dir, r1.Key+".gone-*"))
+	assert.Len(t, matches, 1, "a tombstone is what is left")
+	// and the key is a miss again, installed fresh
+	r3, err := c.Prepare(context.Background(), workspace(t, "k1\n"), spec(in))
+	require.NoError(t, err)
+	assert.False(t, r3.Hit)
+}
