@@ -14,17 +14,18 @@ interface MemberSetState { keys: ReadonlySet<string> }
 export const useMemberSetStore = create<MemberSetState>()(() => ({ keys: new Set<string>() }))
 
 let lastKey = ''
-let last: { roster: object; live: object; sessions: object; hostMap: string } | null = null
+let last: { roster: object; live: object; liveSessions: object; sessions: object; hostMap: string } | null = null
 
 function recompute(): void {
   const roster = useTeamRosterStore.getState()
   const sessions = useSessionStore.getState().sessions
   const hostMap = JSON.stringify(teamHostMap(useHostStore.getState()))
-  if (last && last.roster === roster.byHost && last.live === roster.liveHosts && last.sessions === sessions && last.hostMap === hostMap) return
-  last = { roster: roster.byHost, live: roster.liveHosts, sessions, hostMap }
+  if (last && last.roster === roster.byHost && last.live === roster.liveHosts && last.liveSessions === roster.liveSessionHosts && last.sessions === sessions && last.hostMap === hostMap) return
+  last = { roster: roster.byHost, live: roster.liveHosts, liveSessions: roster.liveSessionHosts, sessions, hostMap }
   const next = activeMemberKeys({
     rosterByHost: roster.byHost,
     liveRosterHosts: new Set(Object.keys(roster.liveHosts)),
+    liveSessionHosts: new Set(Object.keys(roster.liveSessionHosts)),
     sessionsByHost: sessions,
     hostIdByDaemonId: JSON.parse(hostMap),
   })

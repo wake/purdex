@@ -19,6 +19,7 @@ const roster = (members: string[]): TeamRoster => ({
 beforeEach(() => {
   useTeamRosterStore.getState().reset()
   useSessionStore.setState({ sessions: { h1: [{ code: 's1', name: 'worker', cwd: '/', mode: 'terminal' }] } })
+  useTeamRosterStore.getState().markSessionsLive('h1')
   useAgentStore.setState({ statuses: { 'h1:s1': 'waiting' }, agentTypes: {}, subagents: {}, unread: { 'h1:s1': true } })
 })
 

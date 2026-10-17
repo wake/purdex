@@ -62,4 +62,18 @@ describe('useTeamRosterStore', () => {
     s.forgetHost('h1')
     expect(useTeamRosterStore.getState().liveHosts).toEqual({})
   })
+
+  it('session-list liveness is marked by markSessionsLive and cleared with the connection (R4)', () => {
+    const s = useTeamRosterStore.getState()
+    s.markSessionsLive('h1')
+    expect(useTeamRosterStore.getState().liveSessionHosts).toEqual({ h1: true })
+    s.dropConnection('h1')
+    expect(useTeamRosterStore.getState().liveSessionHosts).toEqual({})
+  })
+
+  it('a session list landing through the session store marks its host live (R4)', async () => {
+    const { useSessionStore } = await import('./useSessionStore')
+    useSessionStore.getState().replaceHost('h9', [])
+    expect(useTeamRosterStore.getState().liveSessionHosts).toEqual({ h9: true })
+  })
 })

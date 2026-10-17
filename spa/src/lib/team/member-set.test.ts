@@ -26,6 +26,7 @@ const row = (code: string, name: string) => ({ code, name, cwd: '/', mode: 'term
 beforeEach(() => {
   useTeamRosterStore.getState().reset()
   useSessionStore.setState({ sessions: { h1: [row('aaaaaa', 'lead'), row('bbbbbb', 'w')] } })
+  useTeamRosterStore.getState().markSessionsLive('h1')
 })
 
 describe('the shared member set', () => {

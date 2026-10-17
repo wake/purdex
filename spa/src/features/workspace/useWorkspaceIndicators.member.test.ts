@@ -37,6 +37,7 @@ const SESSIONS = { h1: [
 beforeEach(() => {
   useTeamRosterStore.getState().reset()
   useSessionStore.setState({ sessions: SESSIONS })
+  useTeamRosterStore.getState().markSessionsLive('h1')
   useTabStore.setState({ tabs: { t1: tabOf('t1', 'aaaaaa'), t2: tabOf('t2', 'bbbbbb') } })
   useAgentStore.setState({ unread: { 'h1:aaaaaa': true, 'h1:bbbbbb': true }, statuses: {} })
 })

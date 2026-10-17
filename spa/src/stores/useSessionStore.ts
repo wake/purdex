@@ -2,6 +2,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { type Session, listSessions } from '../lib/host-api'
+import { useTeamRosterStore } from './useTeamRosterStore'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 
 interface SessionState {
@@ -25,11 +26,14 @@ export const useSessionStore = create<SessionState>()(
         set((state) => ({
           sessions: { ...state.sessions, [hostId]: list },
         }))
+        useTeamRosterStore.getState().markSessionsLive(hostId) // after the list is in: member sets read both (R4)
       },
-      replaceHost: (hostId, sessions) =>
+      replaceHost: (hostId, sessions) => {
         set((state) => ({
           sessions: { ...state.sessions, [hostId]: sessions },
-        })),
+        }))
+        useTeamRosterStore.getState().markSessionsLive(hostId)
+      },
       removeHost: (hostId) =>
         set((state) => {
            

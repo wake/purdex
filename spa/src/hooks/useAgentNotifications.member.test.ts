@@ -46,6 +46,7 @@ describe('useAgentNotifications — a member is quiet (R1), read at the event', 
     useNotificationSettingsStore.getState().setNotifyWithoutTab('cc', true)
     useSessionStore.setState({ sessions: { [H]: [{ code: CODE, name: 'worker', cwd: '/', mode: 'terminal' }] }, activeHostId: null, activeCode: null })
     useTeamRosterStore.getState().reset()
+    useTeamRosterStore.getState().markSessionsLive(H)
     showNotification = vi.fn()
     Object.defineProperty(window, 'electronAPI', { value: { showNotification }, writable: true, configurable: true })
   })

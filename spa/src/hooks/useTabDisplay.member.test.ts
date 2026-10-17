@@ -35,6 +35,7 @@ beforeEach(() => {
     sessions: { h1: [{ code: 'a', name: 'wa', cwd: '/', mode: 'terminal' }, { code: 'b', name: 'wb', cwd: '/', mode: 'terminal' }] },
     activeHostId: null, activeCode: null,
   })
+  useTeamRosterStore.getState().markSessionsLive('h1')
   useWorkspaceStore.setState({ workspaces: [], activeWorkspaceId: null })
   useHostStore.setState({ runtime: {}, hostOrder: ['h1'] })
   useAgentStore.setState({ unread: { 'h1:a': true }, statuses: { 'h1:a': 'waiting' }, subagents: {}, agentTypes: {}, oscTitles: {}, lastEvents: {} })

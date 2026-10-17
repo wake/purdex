@@ -19,6 +19,7 @@ const sessions = { h1: [{ code: 'aaaaaa', name: 'lead', cwd: '/', mode: 'termina
 beforeEach(() => {
   useTeamRosterStore.getState().reset()
   useSessionStore.setState({ sessions })
+  useTeamRosterStore.getState().markSessionsLive('h1')
 })
 
 describe('useActiveMemberKeys', () => {
@@ -33,10 +34,11 @@ describe('useActiveMemberKeys', () => {
 
   it('follows the session list (a seat appears once its session is listed)', () => {
     useSessionStore.setState({ sessions: {} })
+    useTeamRosterStore.getState().dropConnection('h1')
     useTeamRosterStore.getState().apply('h1', [rosterWith(['w'])])
     const { result } = renderHook(() => useActiveMemberKeys())
     expect(result.current.size).toBe(0)
-    act(() => useSessionStore.setState({ sessions }))
+    act(() => { useSessionStore.setState({ sessions }); useTeamRosterStore.getState().markSessionsLive('h1') })
     expect([...result.current]).toEqual(['h1:bbbbbb'])
   })
 
@@ -57,7 +59,7 @@ describe('useActiveMemberKeys', () => {
     expect(useTeamRosterStore.getState().byHost.h1).toHaveLength(1) // beads / quotas still read it
     expect(result.current.size).toBe(0)
     // reopen: the session list is fetched first (a new session may have reused the name), the roster snapshot not yet
-    act(() => useSessionStore.setState({ sessions: { h1: [...sessions.h1] } }))
+    act(() => { useSessionStore.setState({ sessions: { h1: [...sessions.h1] } }); useTeamRosterStore.getState().markSessionsLive('h1') })
     expect(result.current.size).toBe(0)
     act(() => useTeamRosterStore.getState().apply('h1', [rosterWith(['w'])])) // this connection's snapshot
     expect([...result.current]).toEqual(['h1:bbbbbb'])
