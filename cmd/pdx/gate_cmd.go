@@ -161,15 +161,11 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 	g := gate.New(cfg)
 	g.Stderr = stderr
 	g.Load = gateReloader(*cfgPath, cfg)
-	if *assistHost != "" {
-		res := g.RunAssist(context.Background(), gate.Options{Argv: command, Stdout: stdout, Stderr: stderr}, gate.AssistRun{Host: *assistHost, SSH: *assistSSH})
-		if !res.Started {
-			fmt.Fprintf(stderr, "pdx gate: %v: the command was not run on %s\n", res.Err, *assistHost)
-			return gate.ExitRefused
-		}
-		return res.Code
+	var target *gate.AssistTarget
+	if *assistHost != "" { // a failure there puts the command back in the queue here
+		target = &gate.AssistTarget{Host: *assistHost, SSH: *assistSSH}
 	}
-	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Real: realBin, Class: c, ClassSource: *classSource, Foreground: *fg, WaitMax: time.Duration(*waitMax * float64(time.Second)), Stdout: stdout, Stderr: stderr})
+	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Real: realBin, Class: c, ClassSource: *classSource, Foreground: *fg, WaitMax: time.Duration(*waitMax * float64(time.Second)), Stdout: stdout, Stderr: stderr, Assist: target})
 	return code
 }
 
