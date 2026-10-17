@@ -107,6 +107,12 @@ func (g *Gate) RemoveConflictAt(n int) (msg string, removed bool, err error) {
 
 // RemoveConflictPair removes the rule with this class and these two patterns (either order).
 func (g *Gate) RemoveConflictPair(class Class, a, b string) (msg string, removed bool, err error) {
+	if class != ClassHeavy && class != ClassLight {
+		return "", false, fmt.Errorf("the class must be heavy or light, not %q", string(class))
+	}
+	if len(patternWords(a)) == 0 || len(patternWords(b)) == 0 {
+		return "", false, errors.New("a pattern must have at least a tool word")
+	}
 	msg, err = g.editConflicts(func(rules []Conflict) ([]Conflict, bool, string) {
 		for i, r := range rules {
 			if samePair(r, class, a, b) {

@@ -98,17 +98,19 @@ func TestGateConflict_Refusals(t *testing.T) {
 		args []string
 		want string
 	}{
-		"no reason":      {[]string{"add", "--class", "heavy", "a b", "c d"}, "usage"},
-		"empty reason":   {[]string{"add", "--class", "heavy", "a b", "c d", "--reason", " "}, "reason is required"},
-		"two lines":      {[]string{"add", "--class", "heavy", "a b", "c d", "--reason", "x\ny"}, "one line"},
-		"too long":       {[]string{"add", "--class", "heavy", "a b", "c d", "--reason", strings.Repeat("x", 201)}, "one line"},
-		"empty pattern":  {[]string{"add", "--class", "heavy", " ", "c d", "--reason", "r"}, "tool word"},
-		"bad class":      {[]string{"add", "--class", "huge", "a b", "c d", "--reason", "r"}, "heavy or light"},
-		"no class":       {[]string{"add", "a b", "c d", "--reason", "r"}, "usage"},
-		"one pattern":    {[]string{"add", "--class", "heavy", "a b", "--reason", "r"}, "usage"},
-		"remove nothing": {[]string{"remove"}, "usage"},
-		"remove word":    {[]string{"remove", "soon"}, "usage"},
-		"stray words":    {[]string{"a b"}, "usage"},
+		"no reason":            {[]string{"add", "--class", "heavy", "a b", "c d"}, "usage"},
+		"empty reason":         {[]string{"add", "--class", "heavy", "a b", "c d", "--reason", " "}, "reason is required"},
+		"two lines":            {[]string{"add", "--class", "heavy", "a b", "c d", "--reason", "x\ny"}, "one line"},
+		"too long":             {[]string{"add", "--class", "heavy", "a b", "c d", "--reason", strings.Repeat("x", 201)}, "one line"},
+		"empty pattern":        {[]string{"add", "--class", "heavy", " ", "c d", "--reason", "r"}, "tool word"},
+		"bad class":            {[]string{"add", "--class", "huge", "a b", "c d", "--reason", "r"}, "heavy or light"},
+		"no class":             {[]string{"add", "a b", "c d", "--reason", "r"}, "usage"},
+		"one pattern":          {[]string{"add", "--class", "heavy", "a b", "--reason", "r"}, "usage"},
+		"remove bad class":     {[]string{"remove", "--class", "huge", "a b", "c d"}, "heavy or light"},
+		"remove empty pattern": {[]string{"remove", "--class", "heavy", " ", "c d"}, "tool word"},
+		"remove nothing":       {[]string{"remove"}, "usage"},
+		"remove word":          {[]string{"remove", "soon"}, "usage"},
+		"stray words":          {[]string{"a b"}, "usage"},
 	} {
 		code, out, errb := conflictCmd(t, cfg, c.args...)
 		assert.Equal(t, 2, code, name)
