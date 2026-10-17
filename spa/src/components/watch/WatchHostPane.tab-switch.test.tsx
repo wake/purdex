@@ -1,6 +1,6 @@
 // Regression (CLAUDE.md tab-hosted checklist): the range picked on a host tab survives switching to another tab and back. The pane really
 // unmounts (keepAliveCount 0; watch-host is not a "light" kind), so this mounts the real TabContent, not WatchHostPane alone.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
 import { TabContent } from '../TabContent'
 import { WatchHostPane } from './WatchHostPane'
@@ -15,6 +15,9 @@ import { host, primaryAnswer } from '../../lib/fleet/__fixtures__/builders'
 import { readQueueTab, writeQueueTab } from '../../lib/watch/view-memory'
 import { useI18nStore } from '../../stores/useI18nStore'
 const t = (k: string, p?: Record<string, string | number>) => useI18nStore.getState().t(k, p)
+
+// 設定 reads the host's `watch` row; this file is about the choice surviving, so that read just never answers.
+vi.mock('../../lib/host-api', async (orig) => ({ ...(await orig<typeof import('../../lib/host-api')>()), hostFetch: () => new Promise(() => {}) }))
 
 const Other = () => <div data-testid="other-tab" />
 const hostTab: Tab = { ...createTab({ kind: 'watch-host', fleetHostId: 'd-a' }), id: 'watch-host-d-a' }
@@ -65,5 +68,19 @@ describe('the host tab across tab switches', () => {
     expect(screen.queryByTestId('queue-tabs')).toBeNull()
     rerender(<TabContent activeTab={hostTab} allTabs={all} />)
     expect(within(screen.getByTestId('queue-tabs')).getByRole('button', { name: t('watch.queue.tab.history') })).toHaveAttribute('aria-pressed', 'true')
+  }, 30_000)
+
+  it('keeps 設定 (read back from view memory) across the switch, and the range switch shows on 狀態 only', () => {
+    const { rerender } = render(<TabContent activeTab={hostTab} allTabs={all} />)
+    expect(screen.getByTestId('range-switch')).toBeInTheDocument()
+    fireEvent.click(within(screen.getByTestId('page-switch')).getByRole('button', { name: t('watch.host.page.settings') }))
+    expect(screen.queryByTestId('range-switch')).toBeNull()
+    expect(screen.getByTestId('watch-set-loading')).toBeInTheDocument()
+    rerender(<TabContent activeTab={dashTab} allTabs={all} />)
+    expect(screen.queryByTestId('page-switch')).toBeNull()
+    rerender(<TabContent activeTab={hostTab} allTabs={all} />)
+    expect(within(screen.getByTestId('page-switch')).getByRole('button', { name: t('watch.host.page.settings') })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByTestId('watch-set-loading')).toBeInTheDocument()
+    expect(screen.queryByTestId('range-switch')).toBeNull()
   }, 30_000)
 })

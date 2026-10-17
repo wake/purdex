@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware'
 import { generateId } from '../lib/id'
 import { revPatch } from '../lib/presence/host-projection'
 import { isValidDaemonId } from '../lib/daemon-id'
+import { forgetWatchHost } from '../lib/watch/draft-memory'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 import { syncIdOfSync, wireIdOfHost } from '../lib/profile/host-identity'
 import { useHostLookStore, type HostLookEntry } from './useHostLookStore'
@@ -625,6 +626,8 @@ export const useHostStore = create<HostState>()(
           const repoint = hostEndpoint(next) !== hostEndpoint(host)
           // A re-point is learned afresh for the new endpoint (spec D3).
           if (repoint) delete next.daemonId
+          // The id stays but the daemon behind it is another one: text typed for the old daemon's watcher settings must not reappear.
+          if (repoint) forgetWatchHost(hostId)
           const hosts = { ...state.hosts, [hostId]: next }
           return {
             hosts,

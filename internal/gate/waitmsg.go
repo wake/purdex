@@ -86,6 +86,11 @@ func waitingLine(class Class, ahead int, holders []Holder, now time.Time) string
 	return fmt.Sprintf("waiting for a %s slot — %d ahead; %s. %s", class, ahead, held, normalQueue)
 }
 
+// pausedLine is the line for a command of a class whose slot count is 0.
+func pausedLine(class Class) string {
+	return fmt.Sprintf("the %s class is paused (slots.%s = 0): this command waits and starts by itself once the count is raised. %s", class, class, normalQueue)
+}
+
 // pressureLine is the line for a command held back by the memory pressure, with the numbers.
 func pressureLine(p Pressure, a AdmissionConfig, haveReading bool) string {
 	if !haveReading {

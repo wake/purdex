@@ -149,7 +149,7 @@ func TestLoad_ABadValueKeepsTheDefaultAndIsListed(t *testing.T) {
 [gate]
 enabled = "yes"
 [gate.slots]
-heavy = 0
+heavy = 65
 light = 1000
 order = "lifo"
 [gate.admission]

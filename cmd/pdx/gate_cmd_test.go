@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +24,47 @@ func gateEnv(t *testing.T, gateSection string) (cfgPath, dir string) {
 	cfgPath = filepath.Join(dir, "config.toml")
 	require.NoError(t, os.WriteFile(cfgPath, []byte("[gate]\n"+gateSection), 0o600))
 	return cfgPath, dir
+}
+
+// A disabled gate lets everything through, so a class at 0 is not shown as paused (R2: status and Run would otherwise disagree).
+// Mutation gate: the Enabled check dropped → paused is shown (red).
+func TestGate_StatusDoesNotShowPausedWhenTheGateIsDisabled(t *testing.T) {
+	cfg, _ := gateEnv(t, "enabled = false\n[gate.slots]\nheavy = 0\n[gate.admission]\ndisk_min_gb = 0\n")
+	var out, errb bytes.Buffer
+	require.Equal(t, 0, gateMain([]string{"status", "--config", cfg}, &out, &errb))
+	assert.Contains(t, out.String(), "停用")
+	assert.NotContains(t, out.String(), "已暫停")
+	out.Reset()
+	require.Equal(t, 0, gateMain([]string{"status", "--json", "--config", cfg}, &out, &errb))
+	var st map[string]any
+	require.NoError(t, json.Unmarshal(out.Bytes(), &st))
+	assert.Equal(t, false, st["PausedHeavy"])
+}
+
+// A class at slots=0 is shown as paused in the text and in the JSON (W3c); slots.<class> keeps its 0 in the settings (the fleet
+// reads that one).
+func TestGate_StatusShowsAPausedClass(t *testing.T) {
+	cfg, _ := gateEnv(t, "[gate.slots]\nheavy = 0\n[gate.admission]\ndisk_min_gb = 0\n")
+	var out, errb bytes.Buffer
+	require.Equal(t, 0, gateMain([]string{"status", "--config", cfg}, &out, &errb))
+	assert.Contains(t, out.String(), "重 0/0 使用中")
+	assert.Contains(t, out.String(), "已暫停（名額 0）")
+	assert.Equal(t, 1, strings.Count(out.String(), "已暫停"), "only the heavy class")
+	assert.Regexp(t, `slots\.heavy\s+0\s+config`, out.String())
+	out.Reset()
+	require.Equal(t, 0, gateMain([]string{"status", "--json", "--config", cfg}, &out, &errb))
+	var st map[string]any
+	require.NoError(t, json.Unmarshal(out.Bytes(), &st))
+	assert.Equal(t, true, st["PausedHeavy"])
+	assert.Equal(t, false, st["PausedLight"])
+
+	cfg, _ = gateEnv(t, "[gate.slots]\nlight = 0\n[gate.admission]\ndisk_min_gb = 0\n")
+	out.Reset()
+	require.Equal(t, 0, gateMain([]string{"status", "--json", "--config", cfg}, &out, &errb))
+	st = nil
+	require.NoError(t, json.Unmarshal(out.Bytes(), &st))
+	assert.Equal(t, false, st["PausedHeavy"])
+	assert.Equal(t, true, st["PausedLight"])
 }
 
 // A slot that is locked while its record is gone (a child that inherited the lock outlived the gate) is listed and says so, not as a
