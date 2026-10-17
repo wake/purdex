@@ -23,6 +23,9 @@ type origins interface {
 	ListLiveOrigins() ([]team.Origin, error)
 }
 
+// The peers module's resolver is what Init looks up.
+var _ origins = (*peersmod.OriginResolver)(nil)
+
 // timeouts are how long each script may run (plan contract 4); at the timeout its process group is ended.
 type timeouts struct{ on, off, check time.Duration }
 

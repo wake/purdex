@@ -42,6 +42,7 @@ import (
 	resourcesmod "github.com/wake/purdex/internal/module/resources"
 	"github.com/wake/purdex/internal/module/session"
 	teammod "github.com/wake/purdex/internal/module/team"
+	assistmod "github.com/wake/purdex/internal/module/assist"
 	watchmod "github.com/wake/purdex/internal/module/watch"
 	workbookmod "github.com/wake/purdex/internal/module/workbook"
 	"github.com/wake/purdex/internal/store"
@@ -462,6 +463,7 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	// roots from the peers origin resolver, so it comes after peers.
 	c.AddModule(resourcesmod.New())
 	c.AddModule(watchmod.New())
+	c.AddModule(assistmod.New())
 	c.AddModule(fleetmod.New()) // the fleet status: primary / standby roles (F-1b2)
 	c.AddModule(fsmod.New())
 	c.AddModule(logs.New())
