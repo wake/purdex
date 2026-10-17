@@ -237,3 +237,22 @@ func TestGateConflict_StatusShowsTheRulesAndTheWaiterTheyHold(t *testing.T) {
 	assert.Equal(t, 0, <-done)
 	assert.Equal(t, 0, <-done)
 }
+
+// A rule whose reason is blank, too long or has a control character makes the file unusable, like a bad class: nothing is in force,
+// the list says so, and an edit leaves the bytes alone. Mutation gate: LoadConflicts skips the reason check → red.
+func TestGateConflict_ABadReasonInTheFile(t *testing.T) {
+	for name, reason := range map[string]string{"blank": " ", "long": strings.Repeat("x", 201), "control": `a\u001b[31mb`} {
+		cfg, _ := gateEnv(t, "[gate.admission]\ndisk_min_gb = 0\n")
+		require.NoError(t, os.MkdirAll(filepath.Dir(conflictFile(t, cfg)), 0o755))
+		doc := `{"rules":[{"class":"heavy","a":"tsc -b","b":"vitest related","reason":"` + reason + `"}]}`
+		require.NoError(t, os.WriteFile(conflictFile(t, cfg), []byte(doc), 0o644))
+		code, out, _ := conflictCmd(t, cfg)
+		assert.Equal(t, 1, code, name)
+		assert.Contains(t, out, "bad reason", name)
+		code, _, errb := conflictCmd(t, cfg, "add", "--class", "heavy", "a b", "c d", "--reason", "r")
+		assert.Equal(t, 1, code, name)
+		assert.Contains(t, errb, "cannot be read", name)
+		b, _ := os.ReadFile(conflictFile(t, cfg))
+		assert.Equal(t, doc, string(b), name+": the file was not written over")
+	}
+}

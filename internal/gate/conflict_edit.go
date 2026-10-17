@@ -63,6 +63,13 @@ func ValidateConflict(class Class, a, b, reason string) error {
 		return fmt.Errorf("the class must be heavy or light, not %q", string(class))
 	case len(patternWords(a)) == 0 || len(patternWords(b)) == 0:
 		return errors.New("a pattern must have at least a tool word")
+	}
+	return validateReason(reason)
+}
+
+// validateReason: a reason is required and is one short line, whether a person typed it or the file holds it.
+func validateReason(reason string) error {
+	switch {
 	case strings.TrimSpace(reason) == "":
 		return errors.New("the reason is required (one line: what was measured)")
 	case len(reason) > maxConflictReason || strings.ContainsFunc(reason, func(r rune) bool { return r < 0x20 || r == 0x7f }):

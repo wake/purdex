@@ -37,6 +37,9 @@ func LoadConflicts(dir string) (rules []Conflict, problem string) {
 		if (r.Class != ClassHeavy && r.Class != ClassLight) || len(patternWords(r.A)) == 0 || len(patternWords(r.B)) == 0 {
 			return nil, fmt.Sprintf("conflicts.json: rule %d is not a rule (class %q, patterns %q and %q)", i+1, string(r.Class), r.A, r.B)
 		}
+		if err := validateReason(r.Reason); err != nil {
+			return nil, fmt.Sprintf("conflicts.json: rule %d has a bad reason: %v", i+1, err)
+		}
 		ok = append(ok, r)
 	}
 	return ok, ""
