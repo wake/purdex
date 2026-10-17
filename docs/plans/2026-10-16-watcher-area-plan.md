@@ -470,15 +470,16 @@ used slots, a paused lane, the gate words, waiting warning at 2 min, the pairing
 
 Spec §8 A1. One PR. Facts (main 95c0f50fd): there is no `/api/gate/*` route yet; a gate record is written by
 `(*Gate).record` (`internal/gate/decision.go:97`) into `<gate dir>/decisions.jsonl`, rotated to `.1` past 4 MB; its
-`time` is when the gate **started** (`internal/gate/gate.go:258`), so the command started at `time + wait_s` and ended at
-`time + wait_s + duration_s` (no extra start field is needed).
+`time` is when the gate **started** (`internal/gate/gate.go:258`), before any wait, and `duration_s` runs from there to
+the end with the wait included, so the command started at `time + wait_s`, ended at `time + duration_s` and ran
+`duration_s − wait_s`; 平均核心數 = `cpu_s ÷ (duration_s − wait_s)` (no extra start field is needed). (Corrected 10-17:
+this paragraph first said it ended at `time + wait_s + duration_s`.)
 1. **The record gains the command tree's usage** from the wait of the command (`cmd.ProcessState.SysUsage()`, a
    `*syscall.Rusage`: the child and the descendants it waited for): `cpu_s` = user + system; `max_rss_mb` = `Maxrss`
-   (bytes on darwin, KiB on linux: convert by `runtime.GOOS`); `major_faults` = `Majflt`. `disk_read_mb` /
-   `disk_write_mb`: first **measure** on mlab whether a usable byte count exists for a waited child (darwin
-   `proc_pid_rusage` of the not-yet-reaped child, `ri_diskio_bytesread/written`; `Inblock`/`Oublock` are counts of block
-   operations, not bytes): write the numbers in the PR; if no exact byte count is had, leave both fields out (the UI shows
-   「—」 for an absent field, spec §8). A command that never started (refused, off, interrupted while waiting) has none of
+   (bytes on darwin, KiB on linux: convert by `runtime.GOOS`); `major_faults` = `Majflt`. No disk read / write fields
+   (measured in the PR, 10-17: no exact byte count is had for a waited tree on macOS — `Inblock`/`Oublock` are counts of
+   block operations, not bytes — so both were left out, and the history has no 磁碟讀寫 column; spec §8 A1, U5). A
+   command that never started (refused, off, interrupted while waiting) has none of
    these fields. Each is `omitempty`, so older records read the same.
 2. **A daemon module `internal/module/gate`** (the home of A2 later), registered on every host: `GET
    /api/gate/decisions?class=heavy|light&since=<RFC 3339>&limit=<n>` → `{records: [...]}` newest first, from
@@ -508,9 +509,10 @@ order across the two files, the KiB/bytes conversion, the admin check.
   - the rows with the A line's fields;
   - the offline note per host.
 - **The count**: the shield's `CountBadge` and the tab label 事件 n. The shield opens 事件 while n > 0.
-- **啟動守門員**: `POST /api/watch/start`, answered 200, 202 `{host}` or 409 `{cooldown_until}`.
-- **The launch panel's button** (§1): 啟動守門員 → `POST /api/watch/start` (200 already awake, 202 `{host}`, 409
-  `{cooldown_until}` shown as the time it may start again); 叫醒守門員 → `POST /api/watch/wake` with an empty prompt
+- **啟動守門員**: `POST /api/watch/start`, answered 200, 202 `{host}` or 409 `{error: "cooldown", detail}` with the time
+  it may start again in `detail` (RFC 3339; spec §8 A3).
+- **The launch panel's button** (§1): 啟動守門員 → `POST /api/watch/start` (200 already awake, 202 `{host}`, 409 whose
+  `detail` is shown as the time it may start again); 叫醒守門員 → `POST /api/watch/wake` with an empty prompt
   (the wake prompt alone). Busy until the watcher registers (`watch.changed`), then the tab shows its session. Pressed,
   not run on opening (user, 10-16).
 - **No 全部略過** (user, 10-16, #3017): nothing in the area changes an event.
