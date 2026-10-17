@@ -106,7 +106,7 @@ describe('WatchEventsPane — rows', () => {
     useHostStore.setState((s) => ({ hosts: { ...s.hosts, h1: { ...s.hosts.h1, name: '工作站' } } }))
     mount()
     expect(screen.getAllByTestId('event-host').map((n) => n.textContent)).toEqual(['工作站', '工作站'])
-    expect(screen.getAllByTestId('event-command')[1]).toHaveTextContent(t('watch.events.pressure_line', { host: '工作站' }))
+    expect(screen.getByTestId('event-command')).toHaveTextContent(t('watch.events.pressure_line', { host: '工作站' }))
     act(() => { useHostStore.setState((s) => ({ hosts: { ...s.hosts, h1: { ...s.hosts.h1, name: '書房' } } })) })
     expect(screen.getAllByTestId('event-host').map((n) => n.textContent)).toEqual(['書房', '書房'])
   })
