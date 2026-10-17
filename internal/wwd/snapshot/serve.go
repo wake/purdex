@@ -36,9 +36,10 @@ type Source interface {
 	Claimed(ctx context.Context, jobID, claimID string) (Ref, error)
 }
 
-// maxBundle bounds a bundle held in memory before it is sent. A purdex snapshot against a stale base is a few MB (M-S1: 2.3 KB per
-// commit the base is behind).
-const maxBundle = 256 << 20
+// maxBundle is the most a bundle may be: git is stopped when its output goes over it. A purdex snapshot against a stale base is a few
+// MB (M-S1: 2.3 KB per commit the base is behind); a bigger one means an old or unrelated `have`, and the worker is better off with a
+// tar. (A variable so that a test can lower it.)
+var maxBundle = 256 << 20
 
 // Handler serves the snapshot route. It does not check the pool token — the layer that mounts it does — only the claim.
 type Handler struct{ src Source }
@@ -76,9 +77,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "snapshot: cannot look up the claim", http.StatusInternalServerError)
 		return
 	}
-	// the commit must stay reachable, and a bundle needs a ref name: the queue pins at submit, this makes good a pin that is gone
-	if err := Pin(r.Context(), ref.RepoDir, id, ref.Commit); err != nil {
-		http.Error(w, "snapshot: "+err.Error(), http.StatusInternalServerError)
+	// The queue pinned the commit when the job was submitted (the commit must stay reachable, and a bundle needs a ref name). This only
+	// checks: a Pin here could bring back a ref the queue has just removed for a claim that ended between the lookup and now.
+	if pinned(r.Context(), ref.RepoDir, id) != ref.Commit {
+		http.Error(w, "snapshot: the commit of this job is not pinned", http.StatusInternalServerError)
 		return
 	}
 	if format == "tar" {
@@ -89,14 +91,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "have_unknown"}) // the worker asks again with an older base, or for a tar
 		return
 	}
-	out, err := git(r.Context(), "wwd.snapshot-bundle", ref.RepoDir, "bundle", "create", "-", PinRef(id), "^"+have)
+	out, err := gitLimited(r.Context(), "wwd.snapshot-bundle", ref.RepoDir, maxBundle, "bundle", "create", "-", PinRef(id), "^"+have)
 	switch {
+	case errors.Is(err, errTooLarge):
+		http.Error(w, "snapshot: the bundle is too large; ask for a tar", http.StatusRequestEntityTooLarge)
 	case err != nil && strings.Contains(err.Error(), "empty bundle"):
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "nothing_to_send"})
 	case err != nil:
 		http.Error(w, "snapshot: "+err.Error(), http.StatusInternalServerError)
-	case len(out) > maxBundle:
-		http.Error(w, "snapshot: the bundle is too large; ask for a tar", http.StatusRequestEntityTooLarge)
 	default:
 		w.Header().Set("Content-Type", "application/x-git-bundle")
 		w.Header().Set("Cache-Control", "no-store")

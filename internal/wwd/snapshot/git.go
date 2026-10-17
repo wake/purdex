@@ -3,6 +3,7 @@ package snapshot
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -50,16 +51,47 @@ next:
 	return append(out, "GIT_TERMINAL_PROMPT=0")
 }
 
-// git runs git in repoDir and returns its standard output; tag names the fork for the counters.
+// errTooLarge is what a command whose output went over its limit is: it was stopped, not waited for.
+var errTooLarge = errors.New("snapshot: output over the limit")
+
+// limitedBuffer holds what is written to it up to max bytes; the write that goes over fails, which closes the pipe the command writes
+// to, so the command is stopped by its next write instead of running to its end.
+type limitedBuffer struct {
+	buf      bytes.Buffer
+	max      int
+	exceeded bool
+}
+
+func (l *limitedBuffer) Write(p []byte) (int, error) {
+	if l.buf.Len()+len(p) > l.max {
+		l.exceeded = true
+		return 0, errTooLarge
+	}
+	return l.buf.Write(p)
+}
+
+// smallOutput bounds the output of the git commands whose answer is a line or two.
+const smallOutput = 1 << 20
+
+// git runs git in repoDir and returns its standard output (at most smallOutput bytes); tag names the fork for the counters.
 func git(ctx context.Context, tag, repoDir string, args ...string) ([]byte, error) {
+	return gitLimited(ctx, tag, repoDir, smallOutput, args...)
+}
+
+// gitLimited is git with its own limit on the output: over it, git is stopped and the error is errTooLarge.
+func gitLimited(ctx context.Context, tag, repoDir string, max int, args ...string) ([]byte, error) {
 	cmd := execstat.CommandContext(ctx, tag, "git", append([]string{"-C", repoDir}, args...)...)
 	cmd.Env = gitEnv()
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
+	out := &limitedBuffer{max: max}
+	var errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = out, &errb
 	if err := cmd.Run(); err != nil {
+		if out.exceeded {
+			return nil, errTooLarge
+		}
 		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(errb.String()))
 	}
-	return out.Bytes(), nil
+	return out.buf.Bytes(), nil
 }
 
 // hasCommit says whether repoDir holds the commit.

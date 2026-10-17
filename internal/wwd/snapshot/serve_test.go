@@ -103,6 +103,7 @@ func get(t *testing.T, srv *httptest.Server, id, query string) (int, []byte) {
 func TestServe_ABundleOfTheSnapshotForALiveClaim(t *testing.T) {
 	repo, base, snap := origin(t)
 	claim := wire.NewClaimID()
+	require.NoError(t, Pin(context.Background(), repo, "j_1", snap)) // what the queue does when the job is submitted
 	srv := serve(t, &fakeSource{claimID: claim, ref: Ref{RepoDir: repo, Commit: snap, Base: base}})
 	code, body := get(t, srv, "j_1", "claim_id="+claim+"&format=bundle&have="+base)
 	require.Equal(t, 200, code, string(body))
@@ -125,6 +126,7 @@ func TestServe_ABundleOfTheSnapshotForALiveClaim(t *testing.T) {
 func TestServe_ATarOfTheSnapshot(t *testing.T) {
 	repo, _, snap := origin(t)
 	claim := wire.NewClaimID()
+	require.NoError(t, Pin(context.Background(), repo, "j_2", snap))
 	srv := serve(t, &fakeSource{claimID: claim, ref: Ref{RepoDir: repo, Commit: snap}})
 	code, body := get(t, srv, "j_2", "claim_id="+claim+"&format=tar")
 	require.Equal(t, 200, code)
@@ -191,6 +193,7 @@ func TestServe_MalformedRequestsAre400(t *testing.T) {
 func TestServe_AHaveTheOriginDoesNotKnowIs422(t *testing.T) {
 	repo, base, snap := origin(t)
 	claim := wire.NewClaimID()
+	require.NoError(t, Pin(context.Background(), repo, "j_5", snap))
 	srv := serve(t, &fakeSource{claimID: claim, ref: Ref{RepoDir: repo, Commit: snap, Base: base}})
 	code, body := get(t, srv, "j_5", "claim_id="+claim+"&format=bundle&have="+strings.Repeat("ab", 20))
 	assert.Equal(t, 422, code)
@@ -198,6 +201,40 @@ func TestServe_AHaveTheOriginDoesNotKnowIs422(t *testing.T) {
 	code, body = get(t, srv, "j_5", "claim_id="+claim+"&format=bundle&have="+snap)
 	assert.Equal(t, 422, code)
 	assert.Contains(t, string(body), "nothing_to_send")
+}
+
+// The handler only checks the pin, it does not make one: a claim that ended between the lookup and the pin would otherwise bring back a
+// ref the queue has just removed. A live claim whose commit is not pinned is the queue's fault, and says so (500), for both formats.
+func TestServe_ALiveClaimWhoseCommitIsNotPinnedIs500AndNothingIsPinned(t *testing.T) {
+	repo, base, snap := origin(t)
+	claim := wire.NewClaimID()
+	srv := serve(t, &fakeSource{claimID: claim, ref: Ref{RepoDir: repo, Commit: snap, Base: base}})
+	for _, q := range []string{"format=tar", "format=bundle&have=" + base} {
+		code, body := get(t, srv, "j_6", "claim_id="+claim+"&"+q)
+		assert.Equal(t, 500, code, q)
+		assert.Contains(t, string(body), "not pinned")
+	}
+	assert.Empty(t, gitOut(t, repo, "for-each-ref", "refs/wwd"), "and the handler pinned nothing")
+	// pinned to another commit is the same thing
+	require.NoError(t, Pin(context.Background(), repo, "j_6", gitOut(t, repo, "rev-parse", "HEAD")))
+	code, _ := get(t, srv, "j_6", "claim_id="+claim+"&format=tar")
+	assert.Equal(t, 500, code)
+}
+
+// A bundle is cut off at a hard size, not after it is all in memory: a `have` that is old or unrelated would make a huge one.
+func TestServe_ABundleOverTheLimitIs413AndGitIsStopped(t *testing.T) {
+	old := maxBundle
+	maxBundle = 100 // less than the header of any bundle
+	t.Cleanup(func() { maxBundle = old })
+	repo, base, snap := origin(t)
+	claim := wire.NewClaimID()
+	require.NoError(t, Pin(context.Background(), repo, "j_7", snap))
+	srv := serve(t, &fakeSource{claimID: claim, ref: Ref{RepoDir: repo, Commit: snap, Base: base}})
+	// the oldest commit as `have`: the bundle carries everything after it
+	first := gitOut(t, repo, "rev-list", "--max-parents=0", "HEAD")
+	code, body := get(t, srv, "j_7", "claim_id="+claim+"&format=bundle&have="+first)
+	assert.Equal(t, 413, code, string(body))
+	assert.Contains(t, string(body), "ask for a tar")
 }
 
 func TestPin_PinsKeepsAndUnpins(t *testing.T) {
