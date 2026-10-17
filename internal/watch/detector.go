@@ -209,6 +209,21 @@ func (d *Detector) unmanagedTrees(in Input) []Event {
 		}
 		st.window = set.TS
 		u := uses[root]
+		if in.Footprint != nil && set.YMB > 0 && u.rss >= uint64(set.YMB)*mib {
+			// over by RSS, which counts shared pages once per process: the tree's memory is what its processes really hold
+			var sum uint64
+			for _, p := range tab.byPID {
+				if tab.rootOf(p.PID) != root {
+					continue
+				}
+				if fp, ok := in.Footprint(p.PID); ok {
+					sum += fp
+				} else {
+					sum += p.RSSBytes
+				}
+			}
+			u.rss = sum
+		}
 		maxGap := interval*5/2 + time.Second
 		if n := len(st.samples); n > 0 && in.Now.Sub(st.samples[n-1].at) > maxGap {
 			// a pass was missed (a failed sample): what was not observed is not part of a window, so it starts again

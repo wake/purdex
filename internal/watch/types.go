@@ -81,6 +81,10 @@ type Input struct {
 	// Started is when a process started, asked once for the root of a tree that crossed a threshold with a parent of pid 1 (a resident
 	// app, #2965); nil, or the zero time, is "unknown" and the tree is judged as any other.
 	Started func(pid int) time.Time
+	// Footprint is the physical footprint of a process (bytes; ok=false: not to be had). Asked only for the processes of a tree whose
+	// summed RSS is at or above y_mb, whose memory is then the sum of the footprints (a process without one counts by its RSS): RSS
+	// counts shared pages (the dyld cache of ~100 simulator daemons) once per process (#3072). nil: RSS is used as it is.
+	Footprint func(pid int) (bytes uint64, ok bool)
 	// LockPIDs are the processes that hold a slot's lock file (lsof), for E3; called at most once per pass.
 	LockPIDs func(h gate.Holder) []int
 	Set      Settings
