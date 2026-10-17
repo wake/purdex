@@ -125,6 +125,22 @@ func TestEscapedNoteIsWrittenEvenWhenTheLogHitsItsCap(t *testing.T) {
 	}
 }
 
+func TestSweepIsBoundedInTime(t *testing.T) {
+	old := sweepSlack
+	sweepSlack = 200 * time.Millisecond
+	defer func() { sweepSlack = old }()
+	block := make(chan struct{})
+	defer close(block)
+	start := time.Now()
+	pids, err := sweepBounded(fakeSource(func(string) ([]int, error) { <-block; return nil, nil }), "j_test1", 100*time.Millisecond)
+	if err == nil || pids != nil {
+		t.Fatalf("a table that never answers must give an error: %v %v", pids, err)
+	}
+	if d := time.Since(start); d > 100*time.Millisecond+sweepSlack+time.Second {
+		t.Fatalf("took %v", d)
+	}
+}
+
 func TestSweepNothingFound(t *testing.T) {
 	s := spec(t, "true")
 	s.Procs = fakeSource(func(string) ([]int, error) { return nil, nil })

@@ -18,6 +18,31 @@ type ProcSource interface {
 // sweepPoll is how often a sweep looks again while it waits for processes to leave.
 const sweepPoll = 50 * time.Millisecond
 
+// sweepSlack is added to killAfter for the whole sweep's time budget: scans of a big process table take their time.
+var sweepSlack = 5 * time.Second
+
+// sweepBounded is sweep under one overall deadline, so a process table that cannot be read (a hung sysctl) never holds Run:
+// past the budget it returns an error and the scan goroutine is left to finish by itself.
+func sweepBounded(src ProcSource, jobID string, killAfter time.Duration) ([]int, error) {
+	type out struct {
+		pids []int
+		err  error
+	}
+	done := make(chan out, 1)
+	go func() {
+		pids, err := sweep(src, jobID, killAfter)
+		done <- out{pids, err}
+	}()
+	t := time.NewTimer(killAfter + sweepSlack)
+	defer t.Stop()
+	select {
+	case o := <-done:
+		return o.pids, o.err
+	case <-t.C:
+		return nil, fmt.Errorf("sweep: the process table was not read within %v", killAfter+sweepSlack)
+	}
+}
+
 // sweep ends the processes that carry the job's mark and are still there after the process group was ended: a tmux server,
 // vite or playwright that a test started and that daemonized out of the group. It is cleanup, not a security boundary — a
 // process that removes the mark from its environment is not found (a known limit, see the tests). TERM first, KILL after

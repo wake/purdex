@@ -151,7 +151,7 @@ func Run(ctx context.Context, spec Spec) Result {
 	if src == nil {
 		src = DefaultProcSource()
 	}
-	res.Escaped, res.SweepErr = sweep(src, spec.JobID, killAfter)
+	res.Escaped, res.SweepErr = sweepBounded(src, spec.JobID, killAfter)
 	if len(res.Escaped) > 0 {
 		cp.note(escapedNote(res.Escaped))
 	}
