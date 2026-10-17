@@ -728,11 +728,15 @@ func TestParseKinfoProcs_AgreesWithXSys(t *testing.T) {
 }
 
 func TestProcessSnapshot_ForkCount_PerPIDReaderIsCounted(t *testing.T) {
+	useEnglishLocale(t)
+	if !startTextFast() { // the calibration forks once, outside the count
+		t.Fatal("calibration should accept the kernel text under en_US.UTF-8")
+	}
 	forks := countPSForks(t)
 	if _, err := ReadProcessInfo(os.Getpid()); err != nil {
 		t.Fatalf("ReadProcessInfo(self): %v", err)
 	}
-	if got := forks.Load(); got != 4 {
-		t.Fatalf("ReadProcessInfo(self) forked ps %d times, want 4 (comm, args, lstart, ppid)", got)
+	if got := forks.Load(); got != 0 {
+		t.Fatalf("ReadProcessInfo(self) forked ps %d times, want 0 (sysctl ppid / procargs2 / sysctl start; was 4 before #3092)", got)
 	}
 }

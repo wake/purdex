@@ -24,7 +24,7 @@ func TestDefaults_EveryModule(t *testing.T) {
 	assert.True(t, d.Enabled)
 	assert.Equal(t, "default", d.Profile)
 
-	assert.Equal(t, []string{"go", "pnpm", "npx", "vitest", "tsc", "composer", "phpunit", "pest", "claude"}, d.Intercept.Tools)
+	assert.Equal(t, []string{"go", "pnpm", "npx", "vitest", "tsc", "composer", "phpunit", "pest", "claude", "xcodebuild", "swift", "swift-build", "swift-test"}, d.Intercept.Tools)
 	assert.True(t, d.Intercept.ModRewrite)
 	assert.Empty(t, d.Intercept.Rules)
 

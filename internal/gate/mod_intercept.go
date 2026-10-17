@@ -22,7 +22,7 @@ type Rule struct {
 
 // claude is here for `claude plugin test` only (the classifier answers none for every other claude command); no shim is made for it,
 // the mod puts the gate in front of the call.
-var defaultTools = []string{"go", "pnpm", "npx", "vitest", "tsc", "composer", "phpunit", "pest", "claude"}
+var defaultTools = []string{"go", "pnpm", "npx", "vitest", "tsc", "composer", "phpunit", "pest", "claude", "xcodebuild", "swift", "swift-build", "swift-test"}
 
 func parseIntercept(r raw) InterceptConfig {
 	c := InterceptConfig{

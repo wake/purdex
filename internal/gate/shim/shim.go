@@ -13,7 +13,7 @@ import (
 
 // Tools are the commands that get a shim. phpunit and pest are not here: they live in a project's vendor/bin, not on PATH
 // (the mod prefixes those calls with `pdx gate --auto --`).
-var Tools = []string{"go", "pnpm", "npx", "vitest", "tsc", "composer"}
+var Tools = []string{"go", "pnpm", "npx", "vitest", "tsc", "composer", "xcodebuild", "swift", "swift-build", "swift-test"}
 
 // DirIn is the shim directory under home.
 func DirIn(home string) string { return filepath.Join(home, ".config", "pdx", "shims") }
