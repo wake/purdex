@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { FleetHost, FleetWaiter } from '../fleet/types'
 import type { FleetSnapshot } from '../fleet/store'
+import { useI18nStore } from '../../stores/useI18nStore'
 import { queuedBySession, queuedTooltip } from './queued-sessions'
 
 const w = (over: Partial<FleetWaiter> = {}): FleetWaiter =>
@@ -40,5 +41,19 @@ describe('queuedTooltip', () => {
   })
   it('an unknown start counts as the shortest wait', () => {
     expect(queuedTooltip([w({ command: 'x', since: null }), w({ command: 'y', since: 5 })], 10, t)).toContain('"command":"y"')
+  })
+})
+
+describe('queuedTooltip with the real translator', () => {
+  it('fills every placeholder (en)', () => {
+    useI18nStore.getState().setLocale('en')
+    const out = queuedTooltip([w({ place: 2, since: 0 }), w({ place: 3, since: 5000 })], 125_000, useI18nStore.getState().t)
+    expect(out).toBe('Queued: #2 · waiting 2 min · go test ./... (heavy command) · 1 more')
+  })
+  it('fills every placeholder (zh-TW)', () => {
+    useI18nStore.getState().setLocale('zh-TW')
+    const out = queuedTooltip([w({ class: 'light', place: 1, since: 0 })], 61_000, useI18nStore.getState().t)
+    useI18nStore.getState().setLocale('en')
+    expect(out).toBe('排隊中：第 1 位・已等 1 分鐘・go test ./...（輕指令）')
   })
 })
