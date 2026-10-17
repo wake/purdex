@@ -80,6 +80,10 @@ func TestRank_ServingOrder(t *testing.T) {
 	rp.set(t, ts[3], RankFront, time.Time{}) // moved later: behind ts[4], though it arrived before
 	rp.set(t, ts[1], RankBack, time.Time{})
 	rp.set(t, ts[5], RankHold, time.Time{})
+	old, err := rp.SetRank(ts[1].Name, RankBack, "sess-2", "again", time.Time{})
+	require.NoError(t, err)
+	assert.Equal(t, RankBack, old.Rank, "SetRank answers the rank the ticket had")
+	assert.Equal(t, "sess-1", old.By)
 	assert.Equal(t, nameOf(ts, 4, 3, 0, 2, 1, 5), rp.order(t), "front by the time moved, normal, back, the hold last")
 
 	// two fronts moved at the same instant go by ticket name
@@ -101,6 +105,7 @@ func TestRank_AHoldIsPassedAndNotServed(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, tk.Held)
 	assert.Nil(t, tk.Slot, "a held ticket takes no slot though two are free")
+	assert.Equal(t, 0, tk.Ahead, "nothing is served before a held ticket: it is not in the line")
 	assert.Equal(t, RankHold, tk.Rank.Rank)
 	assert.Equal(t, "sess-1", tk.Rank.By)
 	assert.Equal(t, "because", tk.Rank.Reason)
