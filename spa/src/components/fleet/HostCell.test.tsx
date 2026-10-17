@@ -111,14 +111,14 @@ describe('HostCell — the cell', () => {
 })
 
 describe('HostCell — the host badge (the App\'s HostBadge, as beside a member)', () => {
-  it('is a HostBadge: the host colour\'s light layer behind, the icon in its middle layer (main on hover)', () => {
+  it('is a HostBadge: the host colour\'s light layer behind, the icon always in its main layer', () => {
     setup(view())
     const b = hostBadge()
     expect(b.hasAttribute('data-host-badge')).toBe(true)
     expect(b.style.background).toBe('rgba(51, 102, 153, 0.22)')
     expect(b.style.getPropertyValue('--hb-main')).toBe('rgba(51, 102, 153, 1)')
     expect(b.style.getPropertyValue('--hb-middle')).toBe('rgba(51, 102, 153, 0.6)')
-    expect(b.style.color).toBe('var(--hb-icon, var(--hb-middle))')
+    expect(b.style.color).toBe('var(--hb-main)')
   })
   it('takes the sidebar badge settings (size 16, corner 4 by default)', () => {
     setup(view())
@@ -135,7 +135,7 @@ describe('HostCell — the host badge (the App\'s HostBadge, as beside a member)
   it('a neutral line colour setting greys the icon, like the member badges', () => {
     useUISettingsStore.setState({ hostBadgeSidebarLineColor: 'neutral' } as never)
     setup(view())
-    expect(hostBadge().style.color).toBe('var(--text-muted)')
+    expect(hostBadge().style.color).toBe('var(--text-secondary)')
   })
   it('resolves the colours as the badge beside an agent member does (terminal, falling back to console)', () => {
     setup(view(), { look: { colors: { ...COLORS, terminal: { main: { color: '#22c55e', alpha: 100 } } } } })
@@ -276,38 +276,99 @@ describe('HostCell — the tooltip and the click', () => {
     render(<HostCell view={view({ fast: null })} look={{}} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
     expect(screen.getByRole('button', { name: 'mlab, No data' })).toBeTruthy()
   })
-  it('names the host, the zone word, the five values and the queue', () => {
-    setup(view({ name: 'mlab', fast: fast({ cpu: 12, mem: 61, level: 2, page_rate: 3, disk: 44, zone: 'warning', load: 66 }), slow: { at: 1, top_cpu: [], top_mem: [], queue: queue(2, { longest_wait_s: 45 }) } }))
-    const tip = tile().getAttribute('title')!
-    expect(tip).toContain('mlab')
-    expect(tip).toContain('High')
-    expect(tip).toContain('CPU 12%')
-    expect(tip).toContain('Memory 61%')
-    expect(tip).toContain('level 2')
-    expect(tip).toContain('3 pages/s')
-    expect(tip).toContain('44%')
-    expect(tip).toContain('2 waiting')
-    expect(tip).toContain('45 s')
-  })
-  it('says Offline for an offline host and shows no values', () => {
-    setup(view({ status: 'offline', fast: null }))
-    const tip = tile().getAttribute('title')!
-    expect(tip).toContain('Offline')
-    expect(tip).not.toContain('CPU')
-  })
-  it('says "Waiting for the primary" when the primary is waited for', () => {
-    setup(view(), { waitingPrimary: true })
-    expect(tile().getAttribute('title')).toContain('Waiting for the primary')
-  })
-  it('says "The primary is not on this App" when only a standby answered', () => {
-    setup(view({ fast: null }), { primaryElsewhere: true })
-    const tip = tile().getAttribute('title')!
-    expect(tip).toContain('The primary is not on this App')
-    expect(tip).not.toContain('Waiting for the primary')
-  })
-  it('a healthy cell mentions neither', () => {
+  it('has no native title (the hover card is the only tooltip), keeps the aria-label', () => {
     setup(view())
-    expect(tile().getAttribute('title')).not.toContain('primary')
+    expect(tile().hasAttribute('title')).toBe(false)
+    expect(tile().getAttribute('aria-label')).toBe('mlab, Normal')
+  })
+  it('no card until the pointer enters; enter shows it, leave hides it', () => {
+    setup(view())
+    expect(screen.queryByTestId('host-card')).toBeNull()
+    fireEvent.mouseEnter(tile())
+    expect(screen.getByTestId('host-card')).toBeTruthy()
+    fireEvent.mouseLeave(tile())
+    expect(screen.queryByTestId('host-card')).toBeNull()
+  })
+  it('closes the card on a scroll of any ancestor, and on a window resize', () => {
+    setup(view())
+    fireEvent.mouseEnter(tile())
+    expect(screen.getByTestId('host-card')).toBeTruthy()
+    fireEvent.scroll(document.body)
+    expect(screen.queryByTestId('host-card')).toBeNull()
+    fireEvent.mouseEnter(tile())
+    expect(screen.getByTestId('host-card')).toBeTruthy()
+    fireEvent(window, new Event('resize'))
+    expect(screen.queryByTestId('host-card')).toBeNull()
+  })
+  it('scroll / resize listeners are gone once the card is closed', () => {
+    const add = vi.spyOn(window, 'addEventListener')
+    const rm = vi.spyOn(window, 'removeEventListener')
+    setup(view())
+    fireEvent.mouseEnter(tile())
+    expect(add.mock.calls.some((c) => c[0] === 'scroll')).toBe(true)
+    fireEvent.mouseLeave(tile())
+    expect(rm.mock.calls.some((c) => c[0] === 'scroll')).toBe(true)
+    expect(rm.mock.calls.some((c) => c[0] === 'resize')).toBe(true)
+    add.mockRestore(); rm.mockRestore()
+  })
+  it('one card at a time: focus on cell A then hover on cell B shows only B\'s card', () => {
+    const mk = (id: string) => ({ ...host(id, { name: id, fast: fast({ load: 40 }) }) }) as FleetHostView
+    render(<>
+      {[mk('a'), mk('b')].map((v) => (
+        <HostCell key={v.id} view={v} look={{ colors: COLORS, icon: 'Desktop' }} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={vi.fn()} />
+      ))}
+    </>)
+    fireEvent.focus(screen.getByTestId('host-tile-a'))
+    expect(screen.getAllByTestId('host-card')).toHaveLength(1)
+    fireEvent.mouseEnter(screen.getByTestId('host-tile-b'))
+    const cards = screen.getAllByTestId('host-card')
+    expect(cards).toHaveLength(1)
+    expect(within(cards[0]).getByText('b')).toBeTruthy()
+  })
+  it('keyboard focus shows the card, blur hides it', () => {
+    setup(view())
+    fireEvent.focus(tile())
+    expect(screen.getByTestId('host-card')).toBeTruthy()
+    fireEvent.blur(tile())
+    expect(screen.queryByTestId('host-card')).toBeNull()
+  })
+  it('a click hides the card and opens', () => {
+    const p = setup(view())
+    fireEvent.mouseEnter(tile())
+    fireEvent.click(tile())
+    expect(screen.queryByTestId('host-card')).toBeNull()
+    expect(p.onOpen).toHaveBeenCalledTimes(1)
+  })
+  it('the card carries this cell\'s host, readings and the waiting-primary notice', () => {
+    setup(view({ name: 'mlab', fast: fast({ cpu: 12, zone: 'warning' }), slow: { at: 1, top_cpu: [], top_mem: [], queue: queue(2, { longest_wait_s: 45 }) } }), { waitingPrimary: true })
+    fireEvent.mouseEnter(tile())
+    const c = screen.getByTestId('host-card')
+    expect(c.textContent).toContain('mlab')
+    expect(c.textContent).toContain('12%')
+    expect(c.textContent).toContain('Waiting for the primary')
+    expect(c.textContent).toContain('Queue 2')
+  })
+  it('wide: the card sits above the strip; narrow: to the right of the cell', () => {
+    const { unmount } = render(<HostCell view={view()} look={{}} variant="wide" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
+    fireEvent.mouseEnter(tile())
+    expect(screen.getByTestId('host-card').getAttribute('data-placement')).toBe('above')
+    unmount()
+    render(<HostCell view={view()} look={{}} variant="narrow" isActive={false} waitingPrimary={false} primaryElsewhere={false} onOpen={() => {}} />)
+    fireEvent.mouseEnter(tile())
+    expect(screen.getByTestId('host-card').getAttribute('data-placement')).toBe('right')
+  })
+  it('the icon is always bright: a coloured host uses its main layer, a plain one text-secondary; offline keeps the dimming', () => {
+    setup(view())
+    expect(hostBadge().style.color).toBe('var(--hb-main)')
+  })
+  it('a plain (uncoloured) host: the brighter neutral, not muted', () => {
+    setup(view(), { look: {} })
+    expect(hostBadge().style.color).toBe('var(--text-secondary)')
+  })
+  it('an offline host stays dimmed on top of the bright icon', () => {
+    setup(view({ status: 'offline', fast: null }))
+    expect(screen.getByTestId('host-badge-dim-mlab').className).toContain('opacity-40')
+    expect(hostBadge().style.color).toBe('var(--hb-main)')
   })
   it('click calls onOpen', () => {
     const p = setup(view())
