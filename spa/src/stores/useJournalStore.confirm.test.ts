@@ -92,14 +92,17 @@ describe('setConfirm', () => {
     expect(unit().confirms).toEqual([])
   })
   it('a read sent before the click keeps the click on screen', async () => {
-    setConfirmItem.mockResolvedValue({ kind: 'ok', value: true })
+    let ack!: (v: unknown) => void
+    setConfirmItem.mockReturnValue(new Promise((r) => { ack = r }))
     let land!: (v: unknown) => void
     getJournal.mockReturnValueOnce(new Promise((r) => { land = r }))
     const read = st().loadJournal('h1', 's1')
-    await st().setConfirm('h1', 's1', 'c1', 1, true)
-    land(wirePageOf(ITEMS)) // carries the old state
+    const click = st().setConfirm('h1', 's1', 'c1', 1, true)
+    land(wirePageOf(ITEMS)) // sent before the click, so it carries the old state
     await read
     expect(done(1)).toBe(true)
     expect(unit().confirms).toEqual([])
+    ack({ kind: 'ok', value: true })
+    await click
   })
 })

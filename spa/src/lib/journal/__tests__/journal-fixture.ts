@@ -6,7 +6,7 @@ import type { Tab } from '../../../types/tab'
 
 /** A tab whose first pane is a tmux session with a recorded Claude Code conversation `sessionId` (and the code the roster knows it by). */
 export const ccTabOf = (id: string, hostId: string, tmuxName: string, sessionId: string): Tab => ({
-  id, locked: false, createdAt: 0,
+  id, pinned: false, locked: false, createdAt: 0,
   layout: { type: 'leaf', pane: { id: `p-${id}`, content: {
     kind: 'tmux-session', hostId, sessionCode: `code-${tmuxName}`, mode: 'terminal', cachedName: tmuxName, tmuxInstance: 'i',
     rebuild: { sessionName: tmuxName, tmuxInstance: 'i', agent: { type: 'cc', sessionId, updatedAt: 1 }, capturedAt: 1 },
