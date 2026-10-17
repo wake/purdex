@@ -2,8 +2,8 @@
 // dropped whole, never half-read, with one warning per kind of malformation per page load; a malformed envelope is `null`
 // (the caller turns it into a bad_response). Nothing here is lenient: a field of the wrong type is a malformed row.
 import {
-  CHANGED_WHAT, ENTRY_KINDS, ROADMAP_STATUSES, TASK_STATES,
-  type ChangedEvent, type ChangedWhat, type ConfirmItem, type EntryKind, type JournalEntry, type JournalPage, type JournalProject, type JournalTask,
+  CHANGED_WHAT, ENTRY_KINDS, MEMBER_TASK_STATES, ROADMAP_STATUSES, TASK_STATES,
+  type ChangedEvent, type ChangedWhat, type ConfirmItem, type EntryKind, type JournalEntry, type JournalPage, type JournalMember, type JournalProject, type JournalTask, type MemberTaskState,
   type JournalUnit, type RemoteLead, type RoadmapFeature, type RoadmapStage, type RoadmapStatus, type TaskState,
 } from './types'
 
@@ -163,4 +163,37 @@ export function parseChangedEvent(value: unknown): ChangedEvent | string {
 export function parseRemoteLead(body: unknown): RemoteLead | null {
   if (!isRec(body) || !isNonEmpty(body.lead_host_id) || !isNonEmpty(body.lead_session_id)) return null
   return { leadHostId: body.lead_host_id, leadSessionId: body.lead_session_id }
+}
+
+function parseMember(v: unknown): JournalMember | string {
+  if (!isRec(v)) return 'member is not an object'
+  if (!isNonEmpty(v.session_id)) return 'member.session_id is not a non-empty string'
+  for (const k of ['ref', 'title']) if (v[k] !== undefined && v[k] !== null && !isStr(v[k])) return `member.${k} is not a string`
+  let task: JournalMember['task'] = null
+  if (v.task !== undefined && v.task !== null) {
+    const t = v.task
+    const number = isRec(t) && typeof t.number === 'number' && Number.isSafeInteger(t.number) ? String(t.number) : isRec(t) ? t.number : undefined
+    if (!isRec(t) || !isNonEmpty(number) || !isStr(t.title)) return 'member.task is not {number, title, state}'
+    if (!isStr(t.state) || !(MEMBER_TASK_STATES as readonly string[]).includes(t.state)) return 'member.task.state is not in_progress / pending'
+    task = { number, title: t.title, state: t.state as MemberTaskState }
+  }
+  let last: JournalMember['last'] = null
+  if (v.last !== undefined && v.last !== null) {
+    const l = v.last
+    if (!isRec(l) || !isMs(l.at) || !isStr(l.text) || (l.kind !== undefined && l.kind !== null && !isStr(l.kind))) return 'member.last is not {at, kind, text}'
+    last = { at: l.at, kind: (l.kind as string | undefined) ?? '', text: l.text }
+  }
+  return { ref: (v.ref as string | undefined) ?? '', sessionId: v.session_id, title: (v.title as string | undefined) ?? '', task, last }
+}
+
+/** `GET /api/journal/members` -> `{members: [...]}`; null when the envelope is not the wire shape. A malformed row is dropped whole. */
+export function parseJournalMembers(v: unknown): JournalMember[] | null {
+  if (!isRec(v) || !Array.isArray(v.members)) return null
+  const out: JournalMember[] = []
+  for (const raw of v.members) {
+    const m = parseMember(raw)
+    if (typeof m === 'string') { warnOnce(`dropping a member: ${m}`); continue }
+    out.push(m)
+  }
+  return out
 }

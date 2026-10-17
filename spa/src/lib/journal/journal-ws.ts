@@ -2,6 +2,7 @@
 // every drained write. Called from useMultiHostEventWs with the per-host closure's hostId, after its connection-key guard.
 // The event ONLY marks the named resource of that unit stale (the store); it never causes a request — the journal loader
 // re-reads the active unit, and a hidden unit is read when it becomes active. A malformed frame is dropped with one warning.
+import { useJournalMembersStore } from '../../stores/useJournalMembersStore'
 import { useJournalStore } from '../../stores/useJournalStore'
 import { parseChangedEvent, warnOnce } from './parse'
 import { unitKeyOf } from './types'
@@ -14,5 +15,9 @@ export const isJournalEvent = (type: string): type is JournalEventType => (JOURN
 export function handleJournalEvent(hostId: string, _type: JournalEventType, value: unknown): void {
   const ev = parseChangedEvent(value)
   if (typeof ev === 'string') return warnOnce(`ignoring frame: ${ev}`)
-  useJournalStore.getState().markStale(hostId, unitKeyOf({ kind: ev.unitKind, id: ev.unitId }), ev.what)
+  const unitKey = unitKeyOf({ kind: ev.unitKind, id: ev.unitId })
+  useJournalStore.getState().markStale(hostId, unitKey, ev.what)
+  // The team panel's member lines read the same event for ANY team of the host, held in the journal store or not. They show tasks
+  // and the leader's reports (entries); a roadmap change is not theirs.
+  if (ev.what === 'entries' || ev.what === 'tasks') useJournalMembersStore.getState().noteChanged(hostId, unitKey)
 }
