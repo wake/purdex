@@ -9,6 +9,7 @@
 import { useHostStore } from '../../stores/useHostStore'
 import { useSessionStore } from '../../stores/useSessionStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
+import { transitionOf } from '../../components/team/seat-flags'
 import { compositeKey } from '../composite-key'
 import type { Session } from '../host-api'
 import type { TeamRoster } from './roster'
@@ -30,7 +31,7 @@ export function activeMemberKeys(input: MemberKeysInput): Set<string> {
     if (!input.liveRosterHosts.has(leadHostId)) continue
     for (const team of teams) {
       for (const m of team.members) {
-        if (m.state !== 'active' || !m.tmux_session) continue
+        if (transitionOf(m) !== null || !m.tmux_session) continue // not joining / releasing / killing; an unknown state is active (roster.ts)
         const { hostId } = seatHostOf(team, m, leadHostId, input.hostIdByDaemonId)
         if (hostId === null) continue
         const hit = input.sessionsByHost[hostId]?.find((s) => s.name === m.tmux_session)

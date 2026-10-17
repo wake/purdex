@@ -34,15 +34,15 @@ describe('activeMemberKeys', () => {
     expect(keys.size).toBe(0)
   })
 
-  it('counts only state "active" (joining / releasing / killing are not members)', () => {
+  it('joining / releasing / killing are not members; active is, and so is a state a newer daemon may add', () => {
     const keys = activeMemberKeys({
       liveRosterHosts: LIVE,
       rosterByHost: { h1: [team(sess('L', 'lead'), [
-        mem('A', 'a'), mem('B', 'b', { state: 'releasing' }), mem('C', 'c', { state: 'joining' }), mem('D', 'd', { state: 'killing' }),
+        mem('A', 'a'), mem('B', 'b', { state: 'releasing' }), mem('C', 'c', { state: 'joining' }), mem('D', 'd', { state: 'killing' }), mem('E', 'e', { state: 'future' }),
       ])] },
-      sessionsByHost: { h1: [row('aaaaaa', 'a'), row('bbbbbb', 'b'), row('cccccc', 'c'), row('dddddd', 'd')] },
+      sessionsByHost: { h1: [row('aaaaaa', 'a'), row('bbbbbb', 'b'), row('cccccc', 'c'), row('dddddd', 'd'), row('eeeeee', 'e')] },
     })
-    expect([...keys]).toEqual(['h1:aaaaaa'])
+    expect([...keys].sort()).toEqual(['h1:aaaaaa', 'h1:eeeeee'])
   })
 
   it('maps by the session NAME, not by the code', () => {
