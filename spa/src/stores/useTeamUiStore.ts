@@ -169,8 +169,9 @@ function heal(persisted: unknown): Slices & { panel: PanelArea; sharedPanelMode:
     // An old store kept only `line` here (`full` was the absence); `full` stays the absence in the three-state value too.
     panelMode: Object.fromEntries(entries(p.panelMode).filter(([, v]) => isPanelMode(v) && v !== 'full')) as Slices['panelMode'],
     panelLast: Object.fromEntries(entries(p.panelLast).filter(([, v]) => isPaneMode(v) && v !== 'full')) as Slices['panelLast'],
-    sharedPanelMode: isPanelMode(p.sharedPanelMode) ? p.sharedPanelMode : 'titlebar',
-    sharedPanelLast: isPaneMode(p.sharedPanelLast) ? p.sharedPanelLast : 'full',
+    // The removed `max` reads as `full` here as well (like each team's), not as the fallback.
+    sharedPanelMode: p.sharedPanelMode === 'max' ? 'full' : isPanelMode(p.sharedPanelMode) ? p.sharedPanelMode : 'titlebar',
+    sharedPanelLast: p.sharedPanelLast === 'max' ? 'full' : isPaneMode(p.sharedPanelLast) ? p.sharedPanelLast : 'full',
     ghostWorkspace: Object.fromEntries(entries(p.ghostWorkspace).filter(([, v]) => typeof v === 'string' && v !== '')) as Slices['ghostWorkspace'],
     teamDrill: Object.fromEntries(entries(p.teamDrill).filter(([key, v]) => isRecord(v) && typeof v.hostId === 'string' && v.hostId !== ''
       && keyHost(key) !== null && typeof v.sessionId === 'string' && v.sessionId !== '').map(([k, v]) => [k, { hostId: (v as DrillSeat).hostId, sessionId: (v as DrillSeat).sessionId }])),
