@@ -24,13 +24,14 @@ type RawCPU struct {
 
 // RawMem is one reading of memory. Free and Inactive are page counts;
 // Pageouts and Swapouts are cumulative pages. The pointer fields are nil where
-// the platform has no such counter; NoPaging marks Pageouts/Swapouts unreadable.
+// the platform has no such counter; NoPageouts / NoSwapouts mark one counter unreadable.
 type RawMem struct {
 	TotalBytes, PageSize uint64
 	Free, Inactive       uint64
 	Level                int // kernel pressure level: 1 normal, 2 warning, 4 critical; 0 unknown
 	Pageouts, Swapouts   uint64
-	NoPaging             bool
+	NoPageouts           bool // Pageouts could not be read: page_out_rate is null
+	NoSwapouts           bool // Swapouts could not be read: swap_out_rate is null
 	SwapUsedBytes        *uint64
 	CompressorBytes      *uint64
 }
@@ -81,10 +82,13 @@ func (b *MemBuilder) Build(now time.Time, raw RawMem) wire.Mem {
 		v := int(*raw.CompressorBytes / mib)
 		m.CompressorMB = &v
 	}
-	if !raw.NoPaging {
+	if !raw.NoPageouts {
 		po := b.rate(&b.pageouts, now, raw.Pageouts)
+		m.PageOutRate = &po
+	}
+	if !raw.NoSwapouts {
 		so := b.rate(&b.swapouts, now, raw.Swapouts)
-		m.PageOutRate, m.SwapOutRate = &po, &so
+		m.SwapOutRate = &so
 	}
 	return m
 }

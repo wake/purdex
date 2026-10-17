@@ -18,7 +18,7 @@ type Ring struct {
 func NewRing(capacity int) *Ring { return &Ring{buf: make([]wire.Facts, capacity)} }
 
 func (r *Ring) Add(f wire.Facts) {
-	r.buf[r.next] = f
+	r.buf[r.next] = Clone(f)
 	r.next = (r.next + 1) % len(r.buf)
 	if r.n < len(r.buf) {
 		r.n++
@@ -32,7 +32,7 @@ func (r *Ring) Since(t time.Time) []wire.Facts {
 	for i := 0; i < r.n; i++ {
 		f := r.buf[(start+i)%len(r.buf)]
 		if !f.At.Before(t) {
-			out = append(out, f)
+			out = append(out, Clone(f))
 		}
 	}
 	return out
@@ -43,7 +43,7 @@ func (r *Ring) Last() (wire.Facts, bool) {
 	if r.n == 0 {
 		return wire.Facts{}, false
 	}
-	return r.buf[(r.next-1+len(r.buf))%len(r.buf)], true
+	return Clone(r.buf[(r.next-1+len(r.buf))%len(r.buf)]), true
 }
 
 func zoneRank(z wire.Zone) int {
@@ -66,7 +66,7 @@ func Rollup(recs []wire.Facts) wire.Facts {
 	if len(recs) == 0 {
 		return wire.Facts{}
 	}
-	out := recs[len(recs)-1]
+	out := Clone(recs[len(recs)-1])
 	out.At = recs[0].At.Truncate(time.Minute)
 	var l1, l5, idle float64
 	out.Mem.AvailableMB = recs[0].Mem.AvailableMB

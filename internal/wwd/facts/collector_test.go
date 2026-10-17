@@ -94,10 +94,34 @@ func TestBuildMemMissingCounters(t *testing.T) {
 	c := NewMemBuilder()
 	raw := fixtureMem(0, 0)
 	raw.SwapUsedBytes, raw.CompressorBytes = nil, nil
-	raw.NoPaging = true
+	raw.NoPageouts, raw.NoSwapouts = true, true
 	m := c.Build(t0, raw)
 	if m.SwapUsedMB != nil || m.CompressorMB != nil || m.PageOutRate != nil || m.SwapOutRate != nil {
 		t.Fatalf("unreadable counters must be null: %+v", m)
+	}
+}
+
+// One counter failing must not hide the other (R2: a swapouts sysctl error
+// used to null the still-valid pageout rate).
+func TestBuildMemCountersAreIndependent(t *testing.T) {
+	c := NewMemBuilder()
+	raw := fixtureMem(1000, 0)
+	raw.NoSwapouts = true
+	c.Build(t0, raw)
+	raw = fixtureMem(1100, 0)
+	raw.NoSwapouts = true
+	m := c.Build(t0.Add(5*time.Second), raw)
+	if m.SwapOutRate != nil {
+		t.Errorf("swap_out_rate must be null: %v", *m.SwapOutRate)
+	}
+	if m.PageOutRate == nil || *m.PageOutRate != 20 {
+		t.Errorf("page_out_rate lost: %v", m.PageOutRate)
+	}
+	raw = fixtureMem(0, 700)
+	raw.NoPageouts = true
+	m = c.Build(t0.Add(10*time.Second), raw)
+	if m.PageOutRate != nil || m.SwapOutRate == nil {
+		t.Errorf("mirror case: %v %v", m.PageOutRate, m.SwapOutRate)
 	}
 }
 

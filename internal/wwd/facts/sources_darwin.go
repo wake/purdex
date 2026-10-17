@@ -61,7 +61,7 @@ func SystemSources() Sources {
 			if so, err := unix.SysctlUint64("vm.compressor.swapper.swapouts_total"); err == nil {
 				m.Swapouts = so
 			} else {
-				m.NoPaging = true
+				m.NoSwapouts = true // the Mach pageouts are still good
 			}
 			if b, err := swapUsedBytes(); err == nil {
 				m.SwapUsedBytes = &b
