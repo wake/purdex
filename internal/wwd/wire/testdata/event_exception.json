@@ -1,0 +1,16 @@
+{
+ "type": "exception",
+ "data": {
+  "host": "mlab",
+  "name": "x",
+  "active": true,
+  "exception": {
+   "name": "x",
+   "until": null,
+   "pid": 42,
+   "holds": [
+    "heavy"
+   ]
+  }
+ }
+}

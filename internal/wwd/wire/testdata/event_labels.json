@@ -1,0 +1,9 @@
+{
+ "type": "labels",
+ "data": {
+  "host": "mlab",
+  "labels": [
+   "os:darwin"
+  ]
+ }
+}
