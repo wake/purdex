@@ -24,7 +24,7 @@ export function JournalFilters({ host, unitKey, openCount }: Props) {
           >
             {t(`journal.filter.${id}`)}
             {id === 'confirm' && openCount > 0 && (
-              <span data-testid="journal-filter-confirm-count" className="ml-1 px-1 rounded-full text-[10px] font-medium bg-status-warning/20 text-status-warning-text tabular-nums">{openCount}</span>
+              <span data-testid="journal-filter-confirm-count" className="ml-1 px-1 rounded-full text-[10px] font-medium bg-status-warning/20 text-journal-warning-text tabular-nums">{openCount}</span>
             )}
           </button>
         )
