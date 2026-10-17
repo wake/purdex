@@ -24,8 +24,8 @@ import { CardStack } from './CardStack'
 import { TeamDisplayProvider } from '../team/TeamDisplayProvider'
 import { HOST, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
 import { ccTabOf, seedUnit, setJournalHost, setSessionsSupport } from '../../lib/journal/__tests__/journal-fixture'
-import { clearViewMemos, patchViewMemo, readViewMemo } from '../../lib/journal/view-memory'
-import { parseJournalPage } from '../../lib/journal/parse'
+import { clearViewMemos, hasViewMemo, patchViewMemo, readViewMemo } from '../../lib/journal/view-memory'
+import { parseJournalPage, parseSessions } from '../../lib/journal/parse'
 import { wireEntry, wirePage } from '../../lib/journal/fixtures'
 import { clearModuleRegistry } from '../../lib/module-registry'
 import { useTabStore } from '../../stores/useTabStore'
@@ -254,6 +254,67 @@ describe('errors are shown, not read as an empty page', () => {
     mount()
     expect(selectUnit(useJournalStore.getState(), HOST, 'SA')).toBeUndefined()
     expect(screen.getByTestId('journal-card-error')).toBeTruthy()
+  })
+})
+
+describe('the first read failed (no unit yet): retry and the stand-in memo', () => {
+  const failFirst = () => {
+    setSessionsSupport(HOST, true)
+    useJournalStore.setState({ readFailed: { [sessionKey(HOST, 'SA')]: true }, routes: { [sessionKey(HOST, 'SA')]: { kind: 'direct' } } })
+    patchViewMemo(HOST, 'failed:SA', { journalOpen: true, filter: 'task', widths: { journal: 480, roadmap: null, tasks: null }, fixed: { journal: true, roadmap: false, tasks: false } })
+    setActive('a')
+  }
+  it('the error card has a retry that asks once however many times it is clicked, and on success the card stays open with its state and the stand-in is gone', async () => {
+    failFirst()
+    mount()
+    let release!: (v: unknown) => void
+    getJournalPage.mockReturnValue(new Promise((r) => { release = r }))
+    getJournalSessions.mockResolvedValue({ kind: 'ok', value: parseSessions({ sessions: [{ session_id: 's-3', started_at: D2, ended_at: 0, via: 'root', current: true }] }) })
+    click(screen.getByTestId('journal-page-retry'))
+    click(screen.getByTestId('journal-page-retry'))
+    expect(getJournalPage).toHaveBeenCalledTimes(1)
+    expect(getJournalPage.mock.calls[0]).toHaveLength(2)
+    await act(async () => {
+      release({ kind: 'ok', value: parseJournalPage(wirePage({ unit: { kind: 'solo', id: 'a', label: 'Solo A' }, page: 's-3', entries: [wireEntry('n1', { at: D2, kind: 'task_new' })] })) })
+    })
+    await waitFor(() => expect(screen.getByTestId('journal-stream')).toBeTruthy())
+    expect(screen.queryByTestId('journal-card-error')).toBeNull()
+    expect(screen.getByTestId('journal-card').style.width).toBe('480px')
+    expect(screen.getByTestId('journal-filter-task').getAttribute('aria-pressed')).toBe('true')
+    expect(readViewMemo(HOST, 'solo:a')).toMatchObject({ journalOpen: true, filter: 'task', fixed: { journal: true } })
+    expect(hasViewMemo(HOST, 'failed:SA')).toBe(false)
+  })
+  it('a retry that fails again leaves the error card and can be tried once more', async () => {
+    failFirst()
+    mount()
+    getJournalPage.mockRejectedValueOnce(new Error('503'))
+    click(screen.getByTestId('journal-page-retry'))
+    await waitFor(() => expect(getJournalPage).toHaveBeenCalledTimes(1))
+    await act(async () => { await Promise.resolve() })
+    click(screen.getByTestId('journal-page-retry'))
+    await waitFor(() => expect(getJournalPage).toHaveBeenCalledTimes(2))
+  })
+})
+
+describe('the chain of sessions failed (the current page read fine)', () => {
+  it('the rows show, the pager is unusable, the error says so, and its retry asks once', async () => {
+    seedA({ sessions: null, sessionsFailed: true })
+    mount()
+    expect(ids()).toEqual(['c1', 'c2'])
+    expect(screen.getByTestId('journal-sessions-error')).toBeTruthy()
+    expect(prev().disabled).toBe(true)
+    expect(next().disabled).toBe(true)
+    getJournalSessions.mockResolvedValue({ kind: 'ok', value: parseSessions({ sessions: SESSIONS.map((x) => ({ session_id: x.sessionId, started_at: x.startedAt, ended_at: x.endedAt, via: x.via, current: x.current })) }) })
+    click(screen.getByTestId('journal-page-retry'))
+    click(screen.getByTestId('journal-page-retry'))
+    expect(getJournalSessions).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(screen.queryByTestId('journal-sessions-error')).toBeNull())
+    expect(prev().disabled).toBe(false)
+  })
+  it('no error when the chain is fine', () => {
+    seedA()
+    mount()
+    expect(screen.queryByTestId('journal-sessions-error')).toBeNull()
   })
 })
 
