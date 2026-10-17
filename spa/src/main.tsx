@@ -13,6 +13,7 @@ import { startUnattendedSupport } from './lib/team/unattended-support'
 import { startFleetSupport } from './lib/fleet/fleet-support'
 import { startPausedRefresh } from './lib/team/paused-refresh'
 import { startRosterForget } from './lib/team/roster-forget'
+import { startRelayFresh } from './lib/relay/fresh-sync'
 import { startWorkbookLoader } from './lib/workbook/workbook-loader'
 import { startJournalLoader } from './lib/journal/journal-loader'
 import { startHostReresolve } from './lib/host-reresolve'
@@ -57,6 +58,8 @@ startFleetSupport()
 startPausedRefresh()
 // Team roster (plan PL-2b′): a removed or re-pointed host forgets the teams its old daemon reported.
 startRosterForget()
+// Handoff files written (relay v2 contract 5, `relay.half.v1`): read on connect / flag, forgotten with a removed or re-pointed host.
+startRelayFresh()
 // Session workbook (plan WA-1.3): each team seat is loaded once per connection generation, on a workbook.v1 host.
 startWorkbookLoader()
 // Workbook journal (J-2a): the active tab's unit is loaded once per connection generation, on a journal.v1 host.

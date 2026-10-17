@@ -332,6 +332,16 @@ describe('approval-ws: a person\'s command and the unattended refusal', () => {
     expect(useUndoToast.getState().toast?.message).toBe('mlab：purdex-7c 的 lead 申請 已由無人值守模式拒絕')
   })
 
+  it('a relay card that ended half (cancelled + half) closes the dialog and toasts the written handoff file, not a cancel', () => {
+    useApprovalStore.getState().applyOpened(H, approval({ kind: 'self_relay', payload: { used_percentage: 72, window: 200_000 } }))
+    handleApprovalEvent(H, closedEv({ kind: 'self_relay', state: 'cancelled', close_reason: 'half' }))
+    expect(useApprovalStore.getState().entries).toEqual({})
+    const text = useUndoToast.getState().toast?.message ?? ''
+    expect(text).toBe('mlab：purdex-7c：已寫好接力檔（未清空）')
+    expect(text).not.toContain('已取消')
+    expect(useUndoToast.getState().notice).toBeNull() // not a persistent failure notice
+  })
+
   it('the frame is valid wire: a person decider and the cancelled close are not rejected', () => {
     const a = approval({ state: 'cancelled', close_reason: 'unattended_refused' })
     expect(parseApprovalEvent(JSON.stringify({ op: 'closed', approval: a }))).toEqual({ op: 'closed', approval: a })

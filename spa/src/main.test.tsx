@@ -18,6 +18,7 @@ vi.mock('./lib/pending-revocation-retry', () => ({ startPendingRevocationRetry: 
 vi.mock('./features/workspace/lib/adopt-standalone', () => ({ startStandaloneAdoption: vi.fn() }))
 vi.mock('./lib/legacy-residue-cleanup', () => ({ scheduleLegacyResidueCleanup: vi.fn() }))
 vi.mock('./lib/journal/journal-loader', () => ({ startJournalLoader: vi.fn() }))
+vi.mock('./lib/relay/fresh-sync', () => ({ startRelayFresh: vi.fn() }))
 vi.mock('./stores/useDeviceNameStore', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./stores/useDeviceNameStore')>()),
   ensureDefaultDeviceName: vi.fn(() => Promise.resolve()),
@@ -58,6 +59,13 @@ describe('boot', () => {
     const { startJournalLoader } = await import('./lib/journal/journal-loader')
     await import('./main')
     expect(startJournalLoader).toHaveBeenCalledTimes(1)
+  })
+
+  // RA-3 (relay v2 contract 5): the per-host list of written handoff files is kept current for the app's lifetime — once.
+  it('starts the relay fresh sync once', async () => {
+    const { startRelayFresh } = await import('./lib/relay/fresh-sync')
+    await import('./main')
+    expect(startRelayFresh).toHaveBeenCalledTimes(1)
   })
 
   // H2c-2 (plan §0.16): the host-look migration runs after BOTH the host store and the look store hydrated, and

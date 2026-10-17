@@ -49,6 +49,10 @@ export function memberRelayNames(a: Approval): { lead: string; member: string; p
 /** `close_reason` of a lead / adopt card unattended mode refused (`team.person.v1`). */
 export const UNATTENDED_REFUSED = 'unattended_refused'
 
+/** `close_reason` of a relay card whose op ended `cancelled` / `half` (`relay.half.v1`): the handoff file is written and the session
+ *  was not cleared. A normal end, not a failure and not a cancel. */
+export const RELAY_HALF = 'half'
+
 /**
  * The toast for a request closed by someone else (spec §6.3 / §6.5): `<主機>：<session> 的 <kind> 已由 <client> 核准／拒絕`;
  * a timeout, cancel or abandonment names the state instead.
@@ -64,6 +68,9 @@ export function closedToastText(t: T, host: string, a: Approval): string {
   }
   // Unattended mode refuses lead and adopt cards (`team.person.v1`): not a failure, the mode did what it says.
   if (a.state === 'cancelled' && a.close_reason === UNATTENDED_REFUSED) return t('approval.toast.unattended_refused', { host, session, kind })
+  // A relay that wrote its handoff file and left the session as it was (`relay.half.v1`): the file is the result. Only the two
+  // relay kinds end this way; a stray `half` on any other kind is the plain ended wording.
+  if (a.state === 'cancelled' && a.close_reason === RELAY_HALF && (a.kind === 'self_relay' || a.kind === 'member_relay')) return t('relay.half.toast', { host, session })
   return t('approval.toast.ended', { host, session, kind, state: t(`approval.state.${a.state}`) })
 }
 
