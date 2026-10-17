@@ -128,6 +128,10 @@ func renderAck(a ackWire) string {
 			fmt.Fprintf(b, "沒有處理到（%s）  %s\n", r.Outcome, r.ID)
 		}
 	}
+	if a.Unhandled < 0 { // the host that was asked did not say how many are left
+		fmt.Fprintf(b, "這次處理 %d 筆\n", a.Handled)
+		return b.String()
+	}
 	fmt.Fprintf(b, "這次處理 %d 筆，還有 %d 筆待處理\n", a.Handled, a.Unhandled)
 	return b.String()
 }

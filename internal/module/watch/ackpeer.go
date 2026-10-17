@@ -66,16 +66,18 @@ func (m *Module) peersByHostName(name string) []config.PeerHost {
 
 // forwardAck sends an ack to the host that recorded the events and returns what became of each id. A host that cannot be reached, has
 // no such route or refuses is reported for each id (or once for an "all"), never hidden.
-func (m *Module) forwardAck(ctx context.Context, entry config.PeerHost, ids []string, all bool, note, by string) []watch.AckResult {
-	failed := func(outcome watch.AckOutcome) []watch.AckResult {
+//
+// unhandled is the count that host reported after the ack (what is left on it), or -1 when it did not report one.
+func (m *Module) forwardAck(ctx context.Context, entry config.PeerHost, ids []string, all bool, note, by string) (results []watch.AckResult, unhandled int) {
+	failed := func(outcome watch.AckOutcome) ([]watch.AckResult, int) {
 		if all {
-			return []watch.AckResult{{ID: "*@" + entry.Alias, Outcome: outcome}}
+			return []watch.AckResult{{ID: "*@" + entry.Alias, Outcome: outcome}}, -1
 		}
 		out := make([]watch.AckResult, len(ids))
 		for i, id := range ids {
 			out[i] = watch.AckResult{ID: id, Outcome: outcome}
 		}
-		return out
+		return out, -1
 	}
 	if m.caller == nil || entry.HostID == "" {
 		return failed(watch.AckUnreachable)
@@ -87,7 +89,10 @@ func (m *Module) forwardAck(ctx context.Context, entry config.PeerHost, ids []st
 		if err := json.Unmarshal(res.Body, &out); err != nil {
 			return failed(watch.AckRefused)
 		}
-		return sanitizeAnswer(out.Results, ids, all, hostPart(entry.HostID))
+		if out.Unhandled < 0 {
+			out.Unhandled = -1
+		}
+		return sanitizeAnswer(out.Results, ids, all, hostPart(entry.HostID)), out.Unhandled
 	case peersmod.ClassUnsupported:
 		return failed(watch.AckUnsupported)
 	case peersmod.ClassRefused:

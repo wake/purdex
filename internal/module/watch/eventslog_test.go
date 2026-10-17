@@ -6,10 +6,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/wake/purdex/internal/middleware"
+	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/watch"
 )
 
@@ -118,4 +120,48 @@ func TestPeerLog_AnswersWithThisHostsEventsAndRefusesWhatItShould(t *testing.T) 
 	require.Equal(t, http.StatusBadRequest, postPeerLog(ap.b, hostA, `{"to_host_id":"`+idB+`","kind":"x"}`).Code)
 	require.Equal(t, http.StatusBadRequest, postPeerLog(ap.b, hostA, `{nope`).Code)
 	require.True(t, policyAllows("/api/peers/watch/log"))
+}
+
+// What a host answers about its events is taken only as that host's: events of other hosts, ones that do not match the question and
+// duplicates are left out, and an answer that names another host is not taken.
+func TestLog_AHostsAnswerIsTakenOnlyForWhatItMayAnswer(t *testing.T) {
+	ap := newAckPair(t)
+	entry, _, _ := ap.a.m.peerEntry("a26")
+	fc := &fakeCaller{reply: map[string]peersmod.CallResult{}}
+	ap.a.m.caller = fc
+	now := ap.a.getNow()
+	good := watch.EventView{ID: "a26-1", Host: "a26", Kind: watch.KindPressureHigh, At: now, Status: "pending"}
+	answer := peerLogResponse{HostID: idB, Events: []watch.EventView{
+		good,
+		good, // twice
+		{ID: "mlab-9", Host: "mlab", Kind: watch.KindPressureHigh, At: now, Status: "pending"},                    // another host's
+		{ID: "a26-2", Host: "mlab", Kind: watch.KindPressureHigh, At: now, Status: "pending"},                     // an id that is a26's, claiming to be mlab's
+		{ID: "a26-3", Host: "a26", Kind: watch.KindSlotLong, At: now, Status: "pending"},                          // not the kind asked
+		{ID: "a26-4", Host: "a26", Kind: watch.KindPressureHigh, At: now, Status: "handled", Note: "n"},           // not unhandled
+		{ID: "a26-5", Host: "a26", Kind: watch.KindPressureHigh, At: now.Add(-48 * time.Hour), Status: "pending"}, // before since
+		{ID: "a26-6", Host: "a26", Kind: "free_text", At: now, Status: "pending"},                                 // not a kind
+	}}
+	raw, _ := json.Marshal(answer)
+	fc.reply[pathLog] = peersmod.CallResult{Class: peersmod.ClassDone, Status: 200, Body: raw}
+	req := httptest.NewRequest(http.MethodGet, "/api/watch/log", nil)
+	q := logQuery{Kind: watch.KindPressureHigh, Unhandled: true, Since: now.Add(-time.Hour), Limit: 10}
+	got, why := ap.a.m.askLog(req, entry, q)
+	require.Empty(t, why)
+	require.Equal(t, []string{"a26-1"}, ids(got))
+
+	answer.HostID = "c5n:eeeeee" // names another host
+	raw, _ = json.Marshal(answer)
+	fc.reply[pathLog] = peersmod.CallResult{Class: peersmod.ClassDone, Status: 200, Body: raw}
+	_, why = ap.a.m.askLog(req, entry, q)
+	require.Contains(t, why, "refused")
+
+	answer.HostID = idB
+	answer.Events = nil
+	for i := 0; i < 20; i++ { // more than asked for
+		answer.Events = append(answer.Events, watch.EventView{ID: "a26-" + string(rune('a'+i)), Host: "a26", Kind: watch.KindPressureHigh, At: now, Status: "pending"})
+	}
+	raw, _ = json.Marshal(answer)
+	fc.reply[pathLog] = peersmod.CallResult{Class: peersmod.ClassDone, Status: 200, Body: raw}
+	got, _ = ap.a.m.askLog(req, entry, q)
+	require.Len(t, got, 10, "no more than the limit asked")
 }

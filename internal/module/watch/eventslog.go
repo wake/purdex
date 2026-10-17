@@ -148,7 +148,10 @@ func (m *Module) askLog(r *http.Request, entry config.PeerHost, q logQuery) ([]w
 		if err := json.Unmarshal(res.Body, &out); err != nil {
 			return nil, "refused: an answer that cannot be read"
 		}
-		return out.Events, ""
+		if out.HostID != entry.HostID {
+			return nil, "refused: the answer names another host"
+		}
+		return sanitizeEvents(out.Events, entry, q), ""
 	case peersmod.ClassUnsupported:
 		return nil, "an older daemon: it has no event log route"
 	case peersmod.ClassRefused:
@@ -237,4 +240,30 @@ func (m *Module) handleLog(w http.ResponseWriter, r *http.Request) {
 		events = []watch.EventView{}
 	}
 	m.writeJSON(w, http.StatusOK, map[string]any{"events": events, "hosts": hosts})
+}
+
+// sanitizeEvents takes from a host's answer only the events that host may have and that match what was asked: its own (the id starts
+// with its host name, and so does the Host field), once each, of a kind that exists and the kind asked for, pending when only pending
+// was asked, not before since, and no more than the limit. The rest is left out.
+func sanitizeEvents(evs []watch.EventView, entry config.PeerHost, q logQuery) []watch.EventView {
+	owner := hostPart(entry.HostID)
+	limit := q.Limit
+	if limit <= 0 || limit > eventsMaxLimit {
+		limit = eventsMaxLimit
+	}
+	seen := map[string]bool{}
+	out := make([]watch.EventView, 0, min(limit, len(evs)))
+	for _, e := range evs {
+		switch {
+		case len(out) >= limit, seen[e.ID], !eventIDPattern.MatchString(e.ID):
+		case ownerOf(e.ID) != owner, e.Host != owner, !watch.KnownKind(e.Kind):
+		case q.Kind != "" && e.Kind != q.Kind:
+		case q.Unhandled && e.Status != watch.StatusPending:
+		case !q.Since.IsZero() && e.At.Before(q.Since):
+		default:
+			seen[e.ID] = true
+			out = append(out, e)
+		}
+	}
+	return out
 }

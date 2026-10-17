@@ -202,8 +202,8 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 			m.writeErr(w, http.StatusBadRequest, "bad_request", "no paired host "+req.Host)
 			return
 		}
-		res := m.forwardAck(ctx, entry, nil, true, req.Note, by)
-		m.writeJSON(w, http.StatusOK, ackResponse{Results: res, Handled: countHandled(res), Unhandled: m.unhandledOrZero()})
+		res, left := m.forwardAck(ctx, entry, nil, true, req.Note, by)
+		m.writeJSON(w, http.StatusOK, ackResponse{Results: res, Handled: countHandled(res), Unhandled: left}) // what is left on that host
 		return
 	}
 
@@ -241,7 +241,8 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 	}
 	for name, ids := range foreign {
 		entry := m.peersByHostName(name)[0]
-		for _, x := range m.forwardAck(ctx, entry, ids, false, req.Note, by) {
+		res, _ := m.forwardAck(ctx, entry, ids, false, req.Note, by)
+		for _, x := range res {
 			byID[x.ID] = x
 		}
 	}

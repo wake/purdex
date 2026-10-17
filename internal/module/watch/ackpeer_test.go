@@ -257,7 +257,7 @@ func TestForwardAck_TakesOnlyWhatWasAskedFromTheAnswer(t *testing.T) {
 	}}}
 	raw, _ := json.Marshal(answer)
 	fc.reply[pathAck] = peersmod.CallResult{Class: peersmod.ClassDone, Status: 200, Body: raw}
-	got := ap.a.m.forwardAck(context.Background(), entry, asked, false, "n", "")
+	got, _ := ap.a.m.forwardAck(context.Background(), entry, asked, false, "n", "")
 	require.Equal(t, []watch.AckResult{
 		{ID: "a26-1", Outcome: watch.AckHandled},
 		{ID: "a26-2", Outcome: watch.AckRefused},
@@ -268,7 +268,7 @@ func TestForwardAck_TakesOnlyWhatWasAskedFromTheAnswer(t *testing.T) {
 	answer.Results = []watch.AckResult{{ID: "a26-9", Outcome: watch.AckHandled}, {ID: "mlab-1", Outcome: watch.AckHandled}, {ID: "a26-x y", Outcome: watch.AckHandled}}
 	raw, _ = json.Marshal(answer)
 	fc.reply[pathAck] = peersmod.CallResult{Class: peersmod.ClassDone, Status: 200, Body: raw}
-	got = ap.a.m.forwardAck(context.Background(), entry, nil, true, "n", "")
+	got, _ = ap.a.m.forwardAck(context.Background(), entry, nil, true, "n", "")
 	require.Equal(t, []watch.AckResult{{ID: "a26-9", Outcome: watch.AckHandled}}, got)
 }
 
@@ -290,4 +290,14 @@ func TestAck_AnOwnerNameThatTwoHostsShareIsAmbiguousNotGuessed(t *testing.T) {
 	ap.a.m.core.CfgMu.Unlock()
 	_, resp = ap.ackOn(t, ap.a, map[string]any{"ids": []string{ap.aIDs[1]}, "note": "n"})
 	require.Equal(t, []watch.AckResult{{ID: ap.aIDs[1], Outcome: watch.AckAmbiguous}}, resp.Results)
+}
+
+// `--all --host X` says how many are left on X, not on the host that was asked.
+func TestAck_AllOnAnotherHostReportsThatHostsCount(t *testing.T) {
+	ap := newAckPair(t)
+	ap.ackOn(t, ap.a, map[string]any{"all": true, "host": "a26", "note": "n"}) // a26 has nothing pending now
+	_, resp := ap.ackOn(t, ap.a, map[string]any{"all": true, "host": "a26", "note": "again"})
+	require.Equal(t, 0, resp.Handled)
+	require.Equal(t, 0, resp.Unhandled, "a26 has none left, whatever a has")
+	require.Equal(t, 2, ap.unhandledOn(t, ap.a), "a still has its own")
 }
