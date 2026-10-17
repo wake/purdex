@@ -44,11 +44,17 @@ func (m *Measure) readPool(ctx context.Context, now time.Time) {
 			m.releaseLocked(h)
 			continue
 		}
+		if _, probing := m.sessions[key]; probing {
+			continue // syncSessions stops the session right after this; the facts are taken on the next tick, so a last reading of the session cannot overwrite them
+		}
 		h.poolOwned = true
 		if err == nil {
 			if peer := peerOfAlias(pool, h.fleetAlias); peer != nil && peer.Reachable && peer.Facts != nil {
 				m.applyFactsLocked(h, peer.Facts, now)
 			}
+		}
+		if h.poolSeen.IsZero() && h.status == leaf.StatusOK {
+			m.offlineLocked(h) // the pool lists the host but has nothing to read from it: never keep an old source's ok
 		}
 		// No new reading for a while: the row reads offline too (it keeps the last values), never ok on an old figure.
 		if !h.poolSeen.IsZero() && now.Sub(h.poolSeen) >= poolStaleAfter && h.status == leaf.StatusOK {

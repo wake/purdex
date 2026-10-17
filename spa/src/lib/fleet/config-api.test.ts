@@ -29,6 +29,13 @@ describe('parseFleetConfig', () => {
     expect(r.fleet.items).toEqual({ order: ['air26', 'mlab'], peer_ssh_alias: 'mlab', enabled: false })
     expect(r.fleet.dropped).toBeNull()
   })
+  it('keeps a valid fleet source and drops an unknown one', () => {
+    const row = (source: unknown) => parseFleetConfig({ fleet: { items: { order: ['mlab'], peer_ssh_alias: '', enabled: true, source }, revision: 1 } }).fleet.items
+    expect(row('pool')).toEqual({ order: ['mlab'], peer_ssh_alias: '', enabled: true, source: 'pool' })
+    expect(row('ssh')).toMatchObject({ source: 'ssh' })
+    expect(row('wwd')).not.toHaveProperty('source')
+    expect(row(undefined)).not.toHaveProperty('source')
+  })
   it('a daemon without the rows reads as empty, revision 0', () => {
     expect(parseFleetConfig({}).probe).toMatchObject({ items: [], revision: 0, dropped: null, invalid: false })
   })

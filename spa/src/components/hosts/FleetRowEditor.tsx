@@ -57,7 +57,7 @@ export function FleetRowEditor({ hostId }: { hostId: string }) {
     setBusy(true)
     setMessage(null)
     try {
-      const r = await useFleetConfigStore.getState().saveFleetRow(hostId, { order: splitOrder(order), peer_ssh_alias: peer, enabled }, { confirmDropped })
+      const r = await useFleetConfigStore.getState().saveFleetRow(hostId, { order: splitOrder(order), peer_ssh_alias: peer, enabled, ...(items?.source ? { source: items.source } : {}) }, { confirmDropped })
       if (r.kind === 'confirm') useFleetDraftStore.getState().setFleetConfirm(hostId, r.notices)
       else {
         useFleetDraftStore.getState().setFleetConfirm(hostId, null)

@@ -206,6 +206,8 @@ func TestPoolSource_HostNotInThePoolFallsBackToSSHAndBack(t *testing.T) {
 	fp.set(wire.Pool{Peers: []wire.Peer{peerOK("mlab", now, 50, 1, wire.ZoneNormal), peerOK("air26", now, 90, 1, wire.ZoneNormal)}}, nil)
 	r.tick()
 	assert.False(t, r.hasSession("peer"), "air26 is in the pool now: the session is stopped")
+	assert.False(t, r.m.hosts["peer"].poolOwned, "the facts are taken only once the session is gone, so its last reading cannot overwrite them")
+	r.tick()
 	p := r.host("air26:def456")
 	require.NotNil(t, p.Fast)
 	assert.Equal(t, "ok", p.Status)
@@ -231,6 +233,7 @@ func TestPoolSource_ProbeHostFollowsThePool(t *testing.T) {
 		peerOK("mserv", now, 20, 1, wire.ZoneNormal)}}, nil)
 	r.tick()
 	assert.False(t, r.hasSession("probe:dd1b70b2"))
+	r.tick() // the facts are taken once the session is gone
 	h := r.host("dd1b70b2")
 	require.NotNil(t, h)
 	assert.Equal(t, KindProbe, h.Kind)
@@ -285,4 +288,19 @@ func TestPoolSource_TheRowFlipsTheSourceWithoutARestart(t *testing.T) {
 	assert.True(t, r.hasSession("peer"), "back to ssh")
 	assert.False(t, r.m.hosts["peer"].poolOwned, "the pool no longer owns the row")
 	assert.NotEqual(t, "ok", r.host("air26:def456").Status, "and it does not keep the pool's figures as ok")
+}
+
+// A host that was read by another source and is now listed by the pool without usable facts (unreachable) must not keep the old
+// source's ok.
+func TestPoolSource_ListedWithoutFactsIsOfflineNotTheOldOk(t *testing.T) {
+	r, fp := newPoolRig(t)
+	fp.set(wire.Pool{}, nil) // the pool lists nobody: the own host is the local source's
+	r.start()
+	r.setLocal(10, 1)
+	r.tick()
+	require.Equal(t, "ok", r.host("mlab:abc123").Status)
+
+	fp.set(wire.Pool{Peers: []wire.Peer{{Info: wire.Info{HostID: "mlab-id", Alias: "mlab"}, Facts: nil, Reachable: false}}}, nil)
+	r.tick()
+	assert.Equal(t, "offline", r.host("mlab:abc123").Status)
 }
