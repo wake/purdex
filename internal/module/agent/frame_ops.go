@@ -864,7 +864,7 @@ func (m *Module) applyFrameEvent(req EventRequest, result agentpkg.DeriveResult,
 		}
 	}
 
-	info, err := readProcessInfoFn(req.SenderPID)
+	info, err := m.senderProcessInfo(req)
 	if err != nil {
 		return nil, FrameTraceMeta{}, err
 	}
