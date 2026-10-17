@@ -31,6 +31,12 @@ var watchDefaultJSON = func() string {
 // misspelt or missing threshold field is refused, so a save never means "left out = default". The delivery fields (W2a) may
 // be left out and then read as their defaults, so a row stored before they existed still reads.
 func normalizeWatch(raw json.RawMessage) (watchsettings.Settings, error) {
+	return normalizeWatchOver(raw, watchsettings.Default())
+}
+
+// normalizeWatchOver is normalizeWatch where the patrol numbers a body leaves out keep the values of stored (the row now), so a
+// client that predates them and writes the row back does not reset what a newer client set.
+func normalizeWatchOver(raw json.RawMessage, stored watchsettings.Settings) (watchsettings.Settings, error) {
 	if err := rejectDuplicateKeys(raw); err != nil {
 		return watchsettings.Settings{}, err
 	}
@@ -98,7 +104,7 @@ func normalizeWatch(raw json.RawMessage) (watchsettings.Settings, error) {
 		s.PatrolIdleMin = *in.PatrolIdleMin
 	}
 	// the patrol numbers an older client does not send keep their defaults (it read-modify-writes the row it knew)
-	s.PatrolPresentMin, s.PatrolBusyMin, s.PatrolCalmMin, s.PatrolRestMin, s.DiskLowGB = def.PatrolPresentMin, def.PatrolBusyMin, def.PatrolCalmMin, def.PatrolRestMin, def.DiskLowGB
+	s.PatrolPresentMin, s.PatrolBusyMin, s.PatrolCalmMin, s.PatrolRestMin, s.DiskLowGB = stored.PatrolPresentMin, stored.PatrolBusyMin, stored.PatrolCalmMin, stored.PatrolRestMin, stored.DiskLowGB
 	for _, f := range []struct {
 		in  *int
 		out *int

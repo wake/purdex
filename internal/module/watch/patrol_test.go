@@ -257,3 +257,14 @@ func TestPatrol_ARestedHolderHereStaysQuietWhileAnotherHostsWatcherIsTheRemember
 	r.m.patrolStep(context.Background())
 	require.Empty(t, reasons, "not the disk alarm either: the watcher is elsewhere")
 }
+
+// The daemon's own start ahead of the clock (it went back while running) is brought to now once, not every tick.
+func TestPatrol_AStartStampAheadOfTheClockIsBroughtToNowOnce(t *testing.T) {
+	r := newPatrolRig(t)
+	r.m.patrol.started = r.now.Add(2 * time.Hour)
+	r.step(time.Minute)
+	r.step(29 * time.Minute)
+	require.Empty(t, r.reasons())
+	r.step(2 * time.Minute)
+	require.Equal(t, []string{"patrol"}, r.reasons(), "one interval after the first look, not when the clock catches up")
+}

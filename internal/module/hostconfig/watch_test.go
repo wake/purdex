@@ -242,9 +242,22 @@ func TestWatch_ThePatrolNumbersRoundTripAndDefaultWhenLeftOut(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []int{45, 5, 20, 30, 20}, []int{s.PatrolPresentMin, s.PatrolBusyMin, s.PatrolCalmMin, s.PatrolRestMin, s.DiskLowGB})
 
+	m2 := newTestModule(t)
+	rr = serve(m2, http.MethodPut, "/api/hostconfig/watch", `{"items":`+watchOK+`,"baseRevision":0}`)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	s, err = m2.WatchSettings()
+	require.NoError(t, err)
+	assert.Equal(t, []int{30, 10, 15, 10, 14}, []int{s.PatrolPresentMin, s.PatrolBusyMin, s.PatrolCalmMin, s.PatrolRestMin, s.DiskLowGB}, "never set and left out: the defaults")
+}
+
+// An older client's write (it does not send the patrol numbers) keeps the numbers a newer client set.
+func TestWatch_AnOlderClientsWriteKeepsTheStoredPatrolNumbers(t *testing.T) {
+	m := newTestModule(t)
+	rr := serve(m, http.MethodPut, "/api/hostconfig/watch", `{"items":`+strings.TrimSuffix(watchOK, "}")+`,"patrol_present_min":45,"patrol_busy_min":5,"patrol_calm_min":20,"patrol_rest_min":30,"disk_low_gb":20},"baseRevision":0}`)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 	rr = serve(m, http.MethodPut, "/api/hostconfig/watch", `{"items":`+watchOK+`,"baseRevision":1}`)
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
-	s, err = m.WatchSettings()
+	s, err := m.WatchSettings()
 	require.NoError(t, err)
-	assert.Equal(t, []int{30, 10, 15, 10, 14}, []int{s.PatrolPresentMin, s.PatrolBusyMin, s.PatrolCalmMin, s.PatrolRestMin, s.DiskLowGB}, "left out: the defaults")
+	assert.Equal(t, []int{45, 5, 20, 30, 20}, []int{s.PatrolPresentMin, s.PatrolBusyMin, s.PatrolCalmMin, s.PatrolRestMin, s.DiskLowGB}, "left out: what is stored")
 }

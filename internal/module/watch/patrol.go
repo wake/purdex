@@ -163,17 +163,15 @@ func (m *Module) patrolStep(ctx context.Context) {
 	// base is the latest of the last note, the watcher's registration and the daemon's start; a stamp that is ahead of the clock (it went
 	// back) is replaced by now, kept as the last note, so the count goes on from here instead of waiting for the clock to catch up
 	m.patrol.mu.Lock()
-	base, clamped := time.Time{}, false
-	for _, t := range []time.Time{m.patrol.last, h.Since, m.patrol.started} {
-		if t.After(now) {
-			t, clamped = now, true
-		}
-		if t.After(base) {
-			base = t
-		}
-	}
-	if clamped {
+	if m.patrol.last.After(now) { // a clock that went back: our own stamps are brought to now and kept
 		m.patrol.last = now
+	}
+	if m.patrol.started.After(now) {
+		m.patrol.started = now
+	}
+	base := latest(m.patrol.last, m.patrol.started)
+	if !h.Since.After(now) { // the holder's own stamp is not ours to change: one ahead of the clock is left out
+		base = latest(base, h.Since)
 	}
 	m.patrol.mu.Unlock()
 	if now.Sub(base) < every {
