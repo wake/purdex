@@ -37,7 +37,7 @@ func membersEnv(t *testing.T, feed *fakeFeed) *journalEnv {
 	t.Helper()
 	j := newJournalAPI(t)
 	j.m.mu.Lock()
-	j.m.journalRun = &journalRun{feed: feed}
+	j.m.journalRun = &journalRun{feed: feed, cancel: func() {}}
 	j.m.mu.Unlock()
 	j.seats.seats["lead-s"] = team.Seat{Role: team.SeatLead, TeamID: "t1"}
 	j.seats.seats["mem-s"] = team.Seat{Role: team.SeatMember, TeamID: "t1"}
@@ -124,7 +124,7 @@ func TestJournalMembers_Errors(t *testing.T) {
 	}
 	// no team feed: unavailable
 	j.m.mu.Lock()
-	j.m.journalRun = &journalRun{}
+	j.m.journalRun = &journalRun{cancel: func() {}}
 	j.m.mu.Unlock()
 	if w := j.get("/api/journal/members?session_id=lead-s"); w.Code != http.StatusServiceUnavailable {
 		t.Errorf("no feed: %d", w.Code)
