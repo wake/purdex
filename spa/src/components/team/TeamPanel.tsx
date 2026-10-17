@@ -6,8 +6,10 @@
 // second row when the team is big. Both take the width of the area they sit in; the area (TeamPanelArea) owns the frame.
 // Row look follows the sidebar: the seat being looked at has the highlight + bright text, no side line.
 // Live readings (model, effort, context) are selected per seat (team-readings.ts), not passed down from the structure.
-import { Fragment, useCallback, useRef } from 'react'
-import { ArrowLineUp } from '@phosphor-icons/react'
+// The team's settings (journal v5 §3.9, U14) open from a gear at the right of the header, on the lead's tab only and only
+// when the lead's host has something to set (team-settings.ts); the title-bar strip has no gear.
+import { Fragment, useCallback, useRef, useState, type ReactNode, type Ref } from 'react'
+import { ArrowLineUp, GearSix } from '@phosphor-icons/react'
 import type { TeamPanelTeam, TeamSeatView } from './team-display'
 import { CellSep, NameCapsule, TeamCell } from './TeamCell'
 import { useMemberDrag } from './useMemberDrag'
@@ -26,6 +28,8 @@ import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { CELL_GAP, CAPSULE_MAX_W, HEADER_GAP, HEADER_H, HEADER_PX, firstRowCapacity } from './panel-layout'
+import { offersAny, useTeamSettingsOffer } from './team-settings'
+import { TeamSettingsPanel } from './TeamSettingsPanel'
 
 interface Props {
   team: TeamPanelTeam
@@ -48,6 +52,15 @@ export function TeamPanel(props: Props) {
   const roster = useTeamRosterStore((s) => s.byHost[hostId]?.find((r) => r.id === teamId))
   const canEdit = editable && roster !== undefined
   const { rootRef, hdr, editOpen, close, anchor } = useHeaderGestures({ teamKey: team.teamKey, mode: team.mode, onSetMode: props.onSetMode, canEdit })
+  // The settings gear: on the lead's own tab (leads only), when the host offers a section. The panel is open for the team
+  // it was opened for: another team, or the gear going away, closes it (adjusted during render).
+  const offer = useTeamSettingsOffer(hostId, teamId)
+  const gearOn = offersAny(offer) && team.lead.tabId !== null && team.lead.tabId === props.activeTabId
+  const [settingsFor, setSettingsFor] = useState<string | null>(null)
+  if (settingsFor !== null && (settingsFor !== team.teamKey || !gearOn)) setSettingsFor(null)
+  const settingsOpen = settingsFor === team.teamKey
+  const gearRef = useRef<HTMLButtonElement>(null)
+  const gear = gearOn ? <TeamSettingsButton ref={gearRef} open={settingsOpen} onClick={() => setSettingsFor(settingsOpen ? null : team.teamKey)} /> : null
   // A drilled-in seat takes the place of the list (the drill is the store's, so it outlives this component).
   // On a journal.v1 host the workbook view is off (J-2b): a persisted drill is ignored here, not erased, so an older host still finds it.
   const journalHost = useIsJournalHost(hostId) || props.noDrill === true
@@ -60,7 +73,7 @@ export function TeamPanel(props: Props) {
     <div ref={rootRef} data-testid="team-panel" data-mode={team.mode} className={`text-xs text-text-primary${drill ? ' flex flex-col flex-1 min-h-0' : ''}`}>
       {drill ? (
         <TeamSeatWorkbookView teamKey={team.teamKey} hostId={drill.hostId} sessionId={drill.sessionId} title={drillTitle} />
-      ) : team.mode === 'line' ? <LinePanel {...props} hdr={hdr} /> : <FullPanel {...props} noDrill={journalHost} hdr={hdr} />}
+      ) : team.mode === 'line' ? <LinePanel {...props} hdr={hdr} gear={gear} /> : <FullPanel {...props} noDrill={journalHost} hdr={hdr} gear={gear} />}
       {editOpen && canEdit && (
         <TeamEditPopover
           target={{ hostId, teamId, name: roster.team_name, label: roster.team_label, color: roster.team_color ?? null }}
@@ -68,7 +81,32 @@ export function TeamPanel(props: Props) {
           onClose={close}
         />
       )}
+      {settingsOpen && gearOn && !drill && (
+        <TeamSettingsPanel target={{ hostId, teamId, name: team.name }} anchorRef={gearRef} onClose={() => setSettingsFor(null)} />
+      )}
     </div>
+  )
+}
+
+/** The header's team settings gear (journal v5 §3.9): opens and closes the team's settings panel under it. */
+function TeamSettingsButton({ ref, open, onClick }: { ref: Ref<HTMLButtonElement>; open: boolean; onClick: () => void }) {
+  const t = useI18nStore((s) => s.t)
+  const label = t('team.settings.open')
+  return (
+    <button
+      ref={ref}
+      type="button"
+      data-testid="team-settings-gear"
+      onMouseDown={keepFocus}
+      onClick={onClick}
+      aria-haspopup="dialog"
+      aria-expanded={open}
+      className={`px-1 py-0.5 rounded cursor-pointer hover:text-text-primary hover:bg-surface-hover ${open ? 'text-text-primary bg-surface-hover' : 'text-text-secondary'}`}
+      title={label}
+      aria-label={label}
+    >
+      <GearSix size={11} />
+    </button>
   )
 }
 
@@ -99,7 +137,8 @@ export function ToTitleBarButton({ onClick }: { onClick: () => void }) {
 }
 
 /** `noDrill`: the lead lives on a journal.v1 host (J-2b), where no row offers the workbook drill, whatever host the seat is on. */
-function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, noDrill, hdr }: Props & { noDrill: boolean; hdr: HeaderHandlers }) {
+/** `gear`: the team settings button, or null when this tab gets none. */
+function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, noDrill, hdr, gear }: Props & { noDrill: boolean; hdr: HeaderHandlers; gear: ReactNode }) {
   const t = useI18nStore((s) => s.t)
   const { teamKey, color, lead, members } = team
   const rosterKey = members.map((m) => m.sessionId).sort().join('\u0000') // the member set: a join, a leave or a relay to a new session
@@ -113,6 +152,7 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, noDrill, h
         <NameCapsule team={team} />
         <span data-testid="team-panel-count" className="text-text-muted whitespace-nowrap">· {t('team.panel.members', { count: members.length })}</span>
         <span className="ml-auto flex items-center gap-0.5">
+          {gear}
           <ToTitleBarButton onClick={() => onSetMode('titlebar')} />
         </span>
       </div>
@@ -139,7 +179,7 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, noDrill, h
   )
 }
 
-function LinePanel({ team, activeTabId, width, onSetMode, onOpen, hdr }: Props & { hdr: HeaderHandlers }) {
+function LinePanel({ team, activeTabId, width, onSetMode, onOpen, hdr, gear }: Props & { hdr: HeaderHandlers; gear: ReactNode }) {
   const seats = [team.lead, ...team.members]
   // The header row holds as many cells as it really has room for; the rest wrap into a region UNDER it, so the first row
   // (capsule, cells, buttons) never changes height. The room is measured (useCellCapacity); where nothing can be measured
@@ -166,6 +206,7 @@ function LinePanel({ team, activeTabId, width, onSetMode, onOpen, hdr }: Props &
         ))}
       </div>
       <span className="flex items-center gap-0.5 flex-shrink-0">
+        {gear}
         <ToTitleBarButton onClick={() => onSetMode('titlebar')} />
       </span>
     </div>

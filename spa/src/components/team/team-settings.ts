@@ -1,5 +1,5 @@
 // spa/src/components/team/team-settings.ts — what a team's settings (TeamSettingsPanel.tsx, journal v5 §3.9) can offer on the
-// lead's host: each section is there only when the host and the roster can serve it.
+// lead's host: each section is there only when the host and the roster can serve it, and the gear only when at least one is.
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { useUnattendedStore } from '../../stores/useUnattendedStore'
 import type { TeamRoster } from '../../lib/team/roster'
@@ -21,10 +21,16 @@ export interface TeamSettingsOffer {
   cap: boolean
   /** 「資料夾」: the roster carries the roots. */
   folders: boolean
+  /** 「接力額度」: the host lists `team.relay_quota.v1`. */
+  quota: boolean
 }
 
 export function useTeamSettingsOffer(hostId: string, teamId: string): TeamSettingsOffer {
   const team = useTeamRosterStore((s) => s.byHost[hostId]?.find((r) => r.id === teamId))
   const capOn = useUnattendedStore((s) => s.byHost[hostId]?.maxMembersSupport === 'yes')
-  return { team, cap: team !== undefined && capOn && hasCap(team), folders: team !== undefined && hasRoots(team) }
+  const quota = useUnattendedStore((s) => s.byHost[hostId]?.quotaSupport === 'yes')
+  return { team, cap: team !== undefined && capOn && hasCap(team), folders: team !== undefined && hasRoots(team), quota: team !== undefined && quota }
 }
+
+/** Something to set: the gear shows only then. */
+export const offersAny = (o: TeamSettingsOffer): boolean => o.cap || o.folders || o.quota

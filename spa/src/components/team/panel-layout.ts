@@ -14,11 +14,14 @@ export const HEADER_GAP = 4
 export const NAME_CLICK_DELAY_MS = 280
 /** The name capsule's cap in one-line mode. */
 export const CAPSULE_MAX_W = 84
-/** Mode toggle (11px caret + px-1) and enlarge (12px icon + px-1) buttons, and the gap-0.5 between them. */
+/**
+ * The header's buttons: to-title-bar (11px icon + px-1) and, on a lead's tab, the team settings gear (11px icon + px-1;
+ * journal v5 §3.9) in the slot the removed enlarge button had, and the gap-0.5 between them.
+ */
 export const TOGGLE_BTN_W = 19
-export const EXPAND_BTN_W = 20
+export const GEAR_BTN_W = 20
 export const BTN_GAP = 2
-export const BUTTONS_W = TOGGLE_BTN_W + BTN_GAP + EXPAND_BTN_W
+export const BUTTONS_W = TOGGLE_BTN_W + BTN_GAP + GEAR_BTN_W
 
 /**
  * One one-line cell (round 4, user 2026-10-10): the sidebar bead's box (`h-6 pl-1.5 pr-[3px]`) holding the bot icon exactly as
