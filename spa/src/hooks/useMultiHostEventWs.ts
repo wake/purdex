@@ -32,6 +32,7 @@ import { handleWorkbookEvent, isWorkbookEvent } from '../lib/workbook/workbook-w
 import { handleJournalEvent, isJournalEvent } from '../lib/journal/journal-ws'
 import { handleFleetEvent } from '../lib/fleet/fleet-ws'
 import { FLEET_EVENT_TYPE } from '../lib/fleet/types'
+import { handleWatchEvent, isWatchEvent } from '../lib/watch/watch-ws'
 import { connectionKey } from '../lib/host-connection-key'
 import { decideHookFrame, parseAgentSnapshot, type HookCursor } from '../lib/agent-lights/hook-cursor'
 
@@ -326,6 +327,14 @@ export function useMultiHostEventWs() {
             const now = useHostStore.getState().hosts[hostId]
             if (!now || connectionKey(now) !== configKey) return
             handleFleetEvent(hostId, event.value)
+            return
+          }
+          if (isWatchEvent(event.type)) {
+            // The watcher (W5e): `watch.changed` reads the host's status again, `watch.events` its events. Bound to the
+            // connection like the fleet frame above, so a re-pointed host's old daemon cannot make us read the new one.
+            const now = useHostStore.getState().hosts[hostId]
+            if (!now || connectionKey(now) !== configKey) return
+            handleWatchEvent(hostId, event.type)
             return
           }
           if (isJournalEvent(event.type)) {

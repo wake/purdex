@@ -2,6 +2,7 @@ import type { PaneContent } from '../types/tab'
 import { fileIconForPath } from './file-icon'
 import { oneLine } from './nex/worker-tab-title'
 import { useFleetStore } from './fleet/store'
+import { useWatchEventsStore, pendingCount } from './watch/events-store'
 
 export type TFunction = (key: string, params?: Record<string, string | number>) => string
 
@@ -61,8 +62,10 @@ export function getPaneLabel(
       return t('page.pane.execution')
     case 'watch-guardian':
       return t('watch.pane.guardian')
-    case 'watch-events':
-      return t('watch.pane.events')
+    case 'watch-events': {
+      const n = pendingCount(useWatchEventsStore.getState().byHost)
+      return n > 0 ? t('watch.pane.events_n', { n }) : t('watch.pane.events')
+    }
     case 'watch-host':
       return useFleetStore.getState().snapshot?.hosts[content.fleetHostId]?.alias || content.fleetHostId
   }

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 const fetchWatchStatus = vi.fn()
 vi.mock('./api', () => ({ fetchWatchStatus: (...a: unknown[]) => fetchWatchStatus(...a) }))
 import { useHostStore } from '../../stores/useHostStore'
-import { deriveGuardian, startWatchStatus, useWatchStatusStore, STATUS_POLL_MS, type WatchEntry } from './status-store'
+import { deriveGuardian, startWatchStatus, rereadWatchStatus, useWatchStatusStore, type WatchEntry } from './status-store'
 import type { WatchStatus } from './status-types'
 
 const st = (host_id: string, state: 'awake' | 'resting' | 'none', since?: string, extra: Partial<WatchStatus> = {}): WatchStatus => ({
@@ -92,28 +92,54 @@ describe('startWatchStatus', () => {
     expect(useWatchStatusStore.getState().byHost.h1.kind).toBe('ok')
   })
 
-  it('reads again every 30 s while visible', async () => {
+  it('has no timer: nothing is read again by the passing of time or by the window showing', async () => {
     setHosts(['h1'], ['h1'])
     stop = startWatchStatus()
     await vi.advanceTimersByTimeAsync(0)
     expect(fetchWatchStatus).toHaveBeenCalledTimes(1)
-    await vi.advanceTimersByTimeAsync(STATUS_POLL_MS)
-    expect(fetchWatchStatus).toHaveBeenCalledTimes(2)
-    await vi.advanceTimersByTimeAsync(STATUS_POLL_MS)
-    expect(fetchWatchStatus).toHaveBeenCalledTimes(3)
-  })
-
-  it('does not read while the window is hidden, and reads at once when it shows again', async () => {
-    setHosts(['h1'], ['h1'])
-    stop = startWatchStatus()
-    await vi.advanceTimersByTimeAsync(0)
-    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true })
-    await vi.advanceTimersByTimeAsync(STATUS_POLL_MS * 3)
-    expect(fetchWatchStatus).toHaveBeenCalledTimes(1)
-    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+    await vi.advanceTimersByTimeAsync(10 * 60_000)
     document.dispatchEvent(new Event('visibilitychange'))
     await vi.advanceTimersByTimeAsync(0)
+    expect(fetchWatchStatus).toHaveBeenCalledTimes(1)
+  })
+
+  it('a watch.changed push reads that host again, and only a connected one', async () => {
+    setHosts(['h1', 'h2'], ['h1'])
+    stop = startWatchStatus()
+    await vi.advanceTimersByTimeAsync(0)
+    fetchWatchStatus.mockResolvedValue({ kind: 'ok', status: st('da', 'resting', '2026-10-16T03:00:00Z') })
+    rereadWatchStatus('h1')
+    await vi.advanceTimersByTimeAsync(0)
     expect(fetchWatchStatus).toHaveBeenCalledTimes(2)
+    const e = useWatchStatusStore.getState().byHost.h1
+    expect(e.kind === 'ok' && e.status.self.state).toBe('resting')
+    rereadWatchStatus('h2')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetchWatchStatus).toHaveBeenCalledTimes(2)
+  })
+
+  it('of two reads in flight the newer one wins, whichever answers last', async () => {
+    setHosts(['h1'], ['h1'])
+    let first!: (v: unknown) => void
+    fetchWatchStatus.mockReturnValueOnce(new Promise((r) => { first = r }))
+    stop = startWatchStatus()
+    fetchWatchStatus.mockResolvedValueOnce({ kind: 'ok', status: st('da', 'resting', '2026-10-16T03:00:00Z') })
+    rereadWatchStatus('h1')
+    await vi.advanceTimersByTimeAsync(0)
+    first({ kind: 'ok', status: st('da', 'awake', '2026-10-16T01:00:00Z') })
+    await vi.advanceTimersByTimeAsync(0)
+    const e = useWatchStatusStore.getState().byHost.h1
+    expect(e.kind === 'ok' && e.status.self.state).toBe('resting')
+  })
+
+  it('a push after stop does nothing', async () => {
+    setHosts(['h1'], ['h1'])
+    stop = startWatchStatus()
+    await vi.advanceTimersByTimeAsync(0)
+    stop()
+    rereadWatchStatus('h1')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetchWatchStatus).toHaveBeenCalledTimes(1)
   })
 
   it('forgets a host that leaves, and drops an answer that lands after it left', async () => {

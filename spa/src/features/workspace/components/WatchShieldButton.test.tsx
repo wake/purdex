@@ -5,6 +5,7 @@ const openWatchArea = vi.fn()
 vi.mock('../lib/open-watch-area', () => ({ openWatchArea: (...a: unknown[]) => openWatchArea(...a) }))
 import { WatchShieldButton } from './WatchShieldButton'
 import { useWatchStatusStore } from '../../../lib/watch/status-store'
+import { useWatchEventsStore } from '../../../lib/watch/events-store'
 import type { WatchStatus } from '../../../lib/watch/status-types'
 import { useWorkspaceStore, WATCH_WORKSPACE_ID } from '../store'
 import zh from '../../../locales/zh-TW.json'
@@ -18,6 +19,7 @@ beforeEach(() => {
   cleanup()
   openWatchArea.mockReset()
   useWatchStatusStore.getState().reset()
+  useWatchEventsStore.getState().reset()
   useWorkspaceStore.getState().reset()
 })
 
@@ -72,5 +74,38 @@ describe('WatchShieldButton', () => {
     expect(screen.getByTestId('watch-shield')).toHaveAttribute('data-look', 'outline')
     act(() => answer('awake'))
     expect(screen.getByTestId('watch-shield')).toHaveAttribute('data-look', 'filled')
+  })
+})
+
+describe('WatchShieldButton — the events count (W5e)', () => {
+  const ev = (id: string, status: 'pending' | 'handled') => ({ id, host: 'm', kind: 'pressure_high', at: '2026-10-17T01:00:00Z', status })
+  const hasEvents = (...rows: ReturnType<typeof ev>[]) => useWatchEventsStore.setState({ byHost: { h1: { kind: 'ok', events: rows, at: 1 } } })
+
+  it('shows no badge while nothing waits, and a click goes to the guardian tab', () => {
+    answer('awake')
+    hasEvents(ev('1', 'handled'))
+    render(<WatchShieldButton />)
+    expect(screen.queryByTestId('watch-shield-count')).toBeNull()
+    fireEvent.click(screen.getByTestId('watch-shield'))
+    expect(openWatchArea).toHaveBeenCalledWith({ tab: 'guardian' })
+  })
+
+  it('shows the number of pending events (handled ones are not counted) and a click opens 事件', () => {
+    answer('awake')
+    hasEvents(ev('1', 'pending'), ev('2', 'handled'), ev('3', 'pending'))
+    render(<WatchShieldButton />)
+    expect(screen.getByTestId('watch-shield-count')).toHaveTextContent('2')
+    expect(screen.getByTestId('watch-shield')).toHaveAttribute('title', `${t('watch.shield.awake')} · ${useI18nStore.getState().t('watch.shield.events', { n: 2 })}`)
+    fireEvent.click(screen.getByTestId('watch-shield'))
+    expect(openWatchArea).toHaveBeenCalledWith({ tab: 'events' })
+  })
+
+  it('follows the count when the events change', () => {
+    answer('none')
+    hasEvents(ev('1', 'pending'))
+    render(<WatchShieldButton />)
+    expect(screen.getByTestId('watch-shield-count')).toHaveTextContent('1')
+    act(() => hasEvents(ev('1', 'handled')))
+    expect(screen.queryByTestId('watch-shield-count')).toBeNull()
   })
 })

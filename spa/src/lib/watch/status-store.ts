@@ -1,7 +1,7 @@
 // spa/src/lib/watch/status-store.ts — what each connected host's daemon says about the watcher (plan T-a3.1).
 //
-// There is no push yet (`watch.changed` / `watch.v1` come with W5e), so the App reads `GET /api/watch/status` of every
-// connected host when it connects and every 30 s while the window is visible. W5e replaces the timer with the pushes.
+// The App reads `GET /api/watch/status` of every connected host when it connects, and again whenever that host's daemon
+// pushes `watch.changed` (`rereadWatchStatus`, called from the host event socket); there is no timer.
 // A reply is written only under the generation it began in: a disconnect, a re-connect or a removal moves it, so an
 // answer of the old connection is dropped. Nothing here is persisted.
 import { create } from 'zustand'
@@ -9,7 +9,6 @@ import { useHostStore } from '../../stores/useHostStore'
 import { fetchWatchStatus } from './api'
 import type { WatchStatus } from './status-types'
 
-export const STATUS_POLL_MS = 30_000
 /** The tmux session of the watcher until the status carries its own `tmux_session` (plan §13, A3). */
 export const PDX_WATCH_SESSION = 'pdx-watch'
 
@@ -104,7 +103,13 @@ export function deriveGuardian(byHost: Record<string, WatchEntry>): Guardian {
   return { state: anyOk ? 'none' : 'unknown', tmuxSession: PDX_WATCH_SESSION, reachable: true }
 }
 
-const visible = (): boolean => typeof document === 'undefined' || document.visibilityState !== 'hidden'
+/** The running reader's re-read of one host (null while `startWatchStatus` is not running). */
+let rereader: ((hostId: string) => void) | null = null
+
+/** A `watch.changed` push: read that host's status again, if it is connected. A late answer of an old connection is dropped. */
+export function rereadWatchStatus(hostId: string): void {
+  rereader?.(hostId)
+}
 
 /** Installed once from main.tsx. Returns how to stop it. */
 export function startWatchStatus(): () => void {
@@ -122,9 +127,8 @@ export function startWatchStatus(): () => void {
       useWatchStatusStore.getState().set(hostId, r.kind === 'ok' ? { kind: 'ok', status: r.status, at: Date.now() } : { kind: r.kind, at: Date.now() })
     })
   }
-  const readAll = (): void => {
-    for (const id of Object.keys(useHostStore.getState().hosts)) if (isConnected(id)) read(id)
-  }
+  // A push starts a new read under a new generation, so an older answer still in flight cannot land after it.
+  rereader = (hostId) => { if (isConnected(hostId)) { bump(hostId); read(hostId) } }
 
   for (const id of Object.keys(useHostStore.getState().hosts)) if (isConnected(id)) { bump(id); read(id) }
 
@@ -140,13 +144,8 @@ export function startWatchStatus(): () => void {
     }
   })
 
-  const timer = setInterval(() => { if (visible()) readAll() }, STATUS_POLL_MS)
-  const onVisible = (): void => { if (visible()) readAll() }
-  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible)
-
   return () => {
     unsub()
-    clearInterval(timer)
-    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible)
+    rereader = null
   }
 }
