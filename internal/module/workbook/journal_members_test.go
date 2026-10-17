@@ -93,7 +93,7 @@ func TestJournalMembers_WireShape(t *testing.T) {
 		t.Errorf("m1 last = %+v, want the newest report, first line", m1.Last)
 	}
 	if m2.Last == nil || m2.Last.Kind != "blocked" || m2.Last.Text != "tie b" || m2.Task != nil {
-		t.Errorf("m2 = %+v, want the greater id on a tie and no task", m2)
+		t.Errorf("m2 = %+v, want the greater rowid on a tie and no task", m2)
 	}
 	if m3.Task != nil || m3.Last != nil {
 		t.Errorf("m3 = %+v, want nulls", m3)

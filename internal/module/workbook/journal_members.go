@@ -33,8 +33,6 @@ type journalMemberJSON struct {
 	Last      *journalMemberLastJSON `json:"last"`
 }
 
-const reportPage = 500
-
 // teamFeed is the journal's team feed, nil while the journal is off or the daemon has none.
 func (m *Module) teamFeed() team.JournalFeed {
 	m.mu.Lock()
@@ -45,28 +43,18 @@ func (m *Module) teamFeed() team.JournalFeed {
 	return m.journalRun.feed
 }
 
-// lastReports is the newest report of each member of the team: the later created_at wins, a tie goes to the greater id.
+// lastReports is the newest report of each member of the team, by member key (the store picks it: the greatest created_at,
+// a tie to the greatest rowid). It holds members of any state; only the ones Members lists are shown.
 func lastReports(feed team.JournalFeed, teamID string) (map[string]team.ReportRow, error) {
-	out := map[string]team.ReportRow{}
-	var after int64
-	for {
-		page, err := feed.ReportsAfter(after, 0, reportPage)
-		if err != nil {
-			return nil, err
-		}
-		if len(page) == 0 {
-			return out, nil
-		}
-		for _, r := range page {
-			if r.TeamID != teamID {
-				continue
-			}
-			if cur, ok := out[r.MemberKey]; !ok || r.CreatedAt > cur.CreatedAt || (r.CreatedAt == cur.CreatedAt && r.ID > cur.ID) {
-				out[r.MemberKey] = r
-			}
-		}
-		after = page[len(page)-1].RowID
+	rows, err := feed.LastReports(teamID)
+	if err != nil {
+		return nil, err
 	}
+	out := make(map[string]team.ReportRow, len(rows))
+	for _, r := range rows {
+		out[r.MemberKey] = r
+	}
+	return out, nil
 }
 
 func firstLine(s string) string {
