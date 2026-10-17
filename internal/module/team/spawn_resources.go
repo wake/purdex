@@ -31,6 +31,16 @@ func (m *Module) hostDetail() (resources.HostDetail, bool) {
 	return resources.HostDetail{Host: h}, ok
 }
 
+// spawnResourceCheckOn is the host switch relay.spawn_resource_check (RT-5a): off by default, and off whenever it cannot be read,
+// so a spawn then goes ahead exactly as it did before the card existed.
+func (m *Module) spawnResourceCheckOn() bool {
+	if m.switches == nil {
+		return false
+	}
+	sw, err := m.switches.RelaySwitches()
+	return err == nil && sw.SpawnResourceCheck
+}
+
 // spawnResourcesPayload is the card a spawn needs, or nil when the zone lets it through (normal, unknown, no reader, no sample).
 func (m *Module) spawnResourcesPayload(req team.SpawnRequest, cwd string, person bool, teamID string, lead team.Origin) *team.SpawnResourcesPayload {
 	d, ok := m.hostDetail()

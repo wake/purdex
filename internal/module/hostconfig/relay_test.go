@@ -197,3 +197,27 @@ func TestPutRelay_RestoreDefaultClearsTheKey(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, team.RelayPromptBodies{}, p)
 }
+
+// RT-5a: relay.spawn_resource_check is off by default and left out of the row while off (so the GET of an untouched host is
+// unchanged); a PUT turns it on and the reader the team module uses sees it; it must be a boolean.
+func TestRelaySwitches_SpawnResourceCheck(t *testing.T) {
+	m := newTestModule(t)
+	sw, err := m.RelaySwitches()
+	require.NoError(t, err)
+	assert.False(t, sw.SpawnResourceCheck)
+
+	rr := serve(m, http.MethodPut, "/api/hostconfig/relay", `{"items":{"spawn_resource_check":true},"baseRevision":0}`)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	assert.JSONEq(t, `{"items":{"self_solo":true,"self_lead":true,"spawn_resource_check":true},"revision":1}`, rr.Body.String())
+	sw, err = m.RelaySwitches()
+	require.NoError(t, err)
+	assert.True(t, sw.SpawnResourceCheck)
+
+	for _, body := range []string{`{"items":{"spawn_resource_check":"yes"},"baseRevision":1}`, `{"items":{"spawn_resource_check":null},"baseRevision":1}`} {
+		assert.Equal(t, http.StatusBadRequest, serve(m, http.MethodPut, "/api/hostconfig/relay", body).Code, body)
+	}
+
+	rr = serve(m, http.MethodPut, "/api/hostconfig/relay", `{"items":{"self_solo":true},"baseRevision":1}`)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	assert.JSONEq(t, `{"items":{"self_solo":true,"self_lead":true},"revision":2}`, rr.Body.String(), "a PUT that leaves it out turns it off, as every switch left out")
+}

@@ -192,7 +192,10 @@ func (m *Module) acceptSpawn(w http.ResponseWriter, req team.SpawnRequest, origi
 	}
 	now := m.now()
 	// The host zone (spec §4.6): warning or danger asks the person first, or refuses an agent's spawn while unattended.
-	cardPayload := m.spawnResourcesPayload(req, cwd, person, t.ID, origin)
+	var cardPayload *team.SpawnResourcesPayload
+	if m.spawnResourceCheckOn() { // off by default: a spawn is then judged by nothing but its grant, as before
+		cardPayload = m.spawnResourcesPayload(req, cwd, person, t.ID, origin)
+	}
 	if cardPayload != nil && !person && m.unattendedOn() {
 		return fail(http.StatusConflict, team.ErrUnattendedRefused, team.UnattendedRefusedText)
 	}

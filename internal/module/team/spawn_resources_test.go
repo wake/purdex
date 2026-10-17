@@ -2,6 +2,7 @@ package teammod
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ func zoneReader(zone string) fakeHostReader {
 // warnedSpawn posts spawn 1 under a warning zone and returns the waiting op.
 func warnedSpawn(t *testing.T, f *fixture, root string) team.SpawnOp {
 	t.Helper()
+	f.checkOn()
 	f.m.hostReader = zoneReader("warning")
 	f.m.spawnWait = 10 * time.Millisecond // the POST answers while the op waits
 	code, op, e := f.spawn(1, root, nil)
@@ -26,6 +28,13 @@ func warnedSpawn(t *testing.T, f *fixture, root string) team.SpawnOp {
 		t.Fatalf("spawn = %d %+v %+v; want 200 awaiting_resources", code, op, e)
 	}
 	return op
+}
+
+// checkOn turns relay.spawn_resource_check on (it is off by default).
+func (f *fixture) checkOn() {
+	f.switches.mu.Lock()
+	f.switches.sw.SpawnResourceCheck = true
+	f.switches.mu.Unlock()
 }
 
 func (f *fixture) seatsOf(teamID string) int {
@@ -48,6 +57,7 @@ func TestSpawnResources_NormalAndUnknownRunAsToday(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f, root := newSpawnFixture(t, 2)
 			f.register("%0", "sid-m1")
+			f.checkOn()
 			f.m.hostReader = reader
 			code, op, e := f.spawn(1, root, nil)
 			if code != http.StatusOK || op.State != team.SpawnDone {
@@ -145,6 +155,7 @@ func TestSpawnResources_AbandonedWhenTheCLIStopsPolling(t *testing.T) {
 // (M) unattended: an agent's spawn under warning is refused and nothing is written; the person's spawn gets the card.
 func TestSpawnResources_UnattendedRefusesAgentSpawnNotPersons(t *testing.T) {
 	f, root := newSpawnFixture(t, 2)
+	f.checkOn()
 	f.m.hostReader = zoneReader("danger")
 	f.unatt.set(true)
 	code, _, e := f.spawn(1, root, nil)
@@ -165,7 +176,7 @@ func TestSpawnResources_UnattendedRefusesAgentSpawnNotPersons(t *testing.T) {
 // A card is never auto-approved, even while unattended is on; the switch-on sweep refuses an agent's open card and leaves a person's.
 func TestSpawnResources_SwitchOnRefusesAgentCardKeepsPersons(t *testing.T) {
 	f, root := newSpawnFixture(t, 2)
-	warnedSpawn(t, f, root) // an agent's
+	warnedSpawn(t, f, root) // an agent's (it turns the check on)
 	f.m.hostReader = zoneReader("warning")
 	tok := f.mintPerson("sid-1", team.PersonCmdSpawn).Token
 	if code, op, e := f.spawn(2, root, func(r *team.SpawnRequest) { r.PersonToken = tok }); code != http.StatusOK || op.State != team.SpawnAwaitingResources {
@@ -272,5 +283,34 @@ func TestSpawnResources_PayloadShapeIsTheAppContract(t *testing.T) {
 		if _, ok := host[k]; !ok {
 			t.Errorf("host has no %q: %s", k, got["host"])
 		}
+	}
+}
+
+// (M) The switch is off by default and while it cannot be read: a spawn in the danger zone runs as it always did - no card, no
+// zone read, not even with the unattended switch on.
+func TestSpawnResources_SwitchOffMeansNoCard(t *testing.T) {
+	for name, set := range map[string]func(f *fixture){
+		"default off": func(f *fixture) {},
+		"unreadable": func(f *fixture) {
+			f.checkOn()
+			f.switches.mu.Lock()
+			f.switches.err = errors.New("db")
+			f.switches.mu.Unlock()
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, root := newSpawnFixture(t, 2)
+			f.register("%0", "sid-m1")
+			f.m.hostReader = zoneReader("danger")
+			f.unatt.set(true)
+			set(f)
+			code, op, e := f.spawn(1, root, nil)
+			if code != http.StatusOK || op.State != team.SpawnDone {
+				t.Fatalf("spawn = %d %+v %+v; want it to run as before", code, op, e)
+			}
+			if _, ok, _ := f.m.store.Get(spawnID(1)); ok {
+				t.Fatal("a card was written with the switch off")
+			}
+		})
 	}
 }
