@@ -90,7 +90,7 @@ func (m *Module) runSwitch(h gate.AssistHost, kind string) (string, error) {
 	if jerr != nil {
 		return "", fmt.Errorf("%s printed no JSON: %v", name, jerr)
 	}
-	if a.OK && a.Switch != "" && a.Switch != kind {
+	if a.OK && a.Switch != kind { // the answer names the state it left the host in
 		return "", fmt.Errorf("%s said ok but the host is %s", name, a.Switch)
 	}
 	if !a.OK {

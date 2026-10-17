@@ -148,3 +148,14 @@ func TestCheckAnswerForAnotherHostIsRefused(t *testing.T) {
 		t.Fatalf("%v %q", ok, why)
 	}
 }
+
+func TestCheckAnswerWithoutAHostIsRefused(t *testing.T) {
+	r := newRig(t)
+	r.addHost("air26")
+	r.edit(func(f *gate.AssistFile) { h := f.Hosts["air26"]; h.On = true; f.Hosts["air26"] = h })
+	r.script("assist-check", `{"assist":true,"switch":"on","repos":{"purdex":{"ready":true}}}`, 0)
+	r.m.pass()
+	if ready := r.m.readyCopy()["air26"]; !strings.HasPrefix(ready.Err, "check failed:") {
+		t.Fatalf("%+v", ready)
+	}
+}

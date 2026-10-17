@@ -318,3 +318,14 @@ func TestScriptLeftoversAreEnded(t *testing.T) {
 	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
 	r.waitFor("the leftover to be ended", func() bool { return syscall.Kill(pid, 0) != nil })
 }
+
+func TestSwitchOkWithoutAStateFails(t *testing.T) {
+	for _, out := range []string{`{"ok":true}`, `{"ok":true,"switch":""}`} {
+		r := newRig(t)
+		r.addHost("air26")
+		r.script("assist-on", out, 0)
+		if code, _ := r.do("POST", "/api/assist/switch", sw("air26", true)); code != 502 {
+			t.Fatalf("%s: %d", out, code)
+		}
+	}
+}
