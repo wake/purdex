@@ -182,6 +182,15 @@ func TestPoolSource_UnreachableAndWWDDown(t *testing.T) {
 	assert.Equal(t, "ok", r.host("mlab:abc123").Status)
 }
 
+// Activating in pool mode starts no session of its own: the first tick, which has asked the pool, starts the ones that are needed.
+func TestPoolSource_ActivationStartsNoSessionBeforeThePoolIsAsked(t *testing.T) {
+	r, fp := newPoolRig(t)
+	now := r.fc.Now()
+	fp.set(wire.Pool{Peers: []wire.Peer{peerOK("mlab", now, 50, 1, wire.ZoneNormal), peerOK("air26", now, 50, 1, wire.ZoneNormal)}}, nil)
+	r.start()
+	assert.False(t, r.hasSession("peer"), "nothing is probed before the pool has been read")
+}
+
 // A host the pool does not list (yet) is read over SSH as before; the moment the pool lists it the session goes and the pool's
 // facts are the source; if the pool drops it again the session comes back.
 func TestPoolSource_HostNotInThePoolFallsBackToSSHAndBack(t *testing.T) {
