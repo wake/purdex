@@ -50,6 +50,30 @@ func TestReadProcessInfoPlatform_EqualsPSReader(t *testing.T) {
 	}
 }
 
+// A process started with an argv[0] that is not its executable ("exec -a"): ps prints the two apart, so must the
+// fork-free reader (providers identify by ExePath, never by argv[0]).
+func TestReadProcessInfoPlatform_CustomArgv0EqualsPSReader(t *testing.T) {
+	requireFastStartText(t)
+	cmd := exec.Command("/bin/sleep", "30")
+	cmd.Args = []string{"worker", "30"}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	got, err := readProcessInfoPlatform(cmd.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := readProcessInfoPS(cmd.Process.Pid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("fork-free %+v / ps %+v", got, want)
+	if got.ExePath != want.ExePath || !reflect.DeepEqual(got.Argv, want.Argv) {
+		t.Fatalf("got ExePath=%q Argv=%q, ps reader ExePath=%q Argv=%q", got.ExePath, got.Argv, want.ExePath, want.Argv)
+	}
+}
+
 func TestReadProcessInfoPlatform_NoForks(t *testing.T) {
 	requireFastStartText(t)
 	pid := startSleeper(t)
