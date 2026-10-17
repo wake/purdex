@@ -212,6 +212,7 @@ func (j *journalEnv) changed() []changedEvent {
 // look in the newest month only -> an older entry is not found (red); drop Manual from the write (red).
 func TestJournalAPI_ConfirmChecksAndUnchecksAndAnnounces(t *testing.T) {
 	j := newJournalAPI(t)
+	withLead(j, "t1", "lead-1")
 	u := j.unit("team:t1", "日誌")
 	j.write(u,
 		journal.Entry{ID: "old", Kind: journal.KindConfirm, At: tm(time.October, 5, 1), Actor: "A", Text: "in an older month", Items: []journal.Item{{Text: "甲?"}, {Text: "乙?"}}},

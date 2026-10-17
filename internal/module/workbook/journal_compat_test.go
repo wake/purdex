@@ -17,6 +17,7 @@ import (
 // Mutation gate: drop pinned[] from the page -> red; flag every entry pinned=false -> red; the pin route answers 404 -> red.
 func TestJournalAPI_PinnedMirrorsConfirmsAndPinRouteIsGone(t *testing.T) {
 	j := newJournalAPI(t)
+	withLead(j, "t1", "lead-1")
 	u := j.unit("team:t1", "日誌")
 	j.write(u,
 		journal.Entry{ID: "ask", Kind: journal.KindConfirm, At: tm(time.October, 5, 1), Actor: "A", Items: []journal.Item{{Text: "甲?"}}},

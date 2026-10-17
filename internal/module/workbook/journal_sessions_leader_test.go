@@ -8,6 +8,13 @@ import (
 	"github.com/wake/purdex/internal/team"
 )
 
+// withLead wires a team feed that names lead as the team's current lead, for the tests where a member reads a page.
+func withLead(j *journalEnv, teamID, lead string) {
+	j.m.mu.Lock()
+	j.m.journalRun = &journalRun{feed: &fakeFeed{teams: map[string]team.TeamInfo{teamID: {TeamID: teamID, LeadSessionID: lead}}}, cancel: func() {}}
+	j.m.mu.Unlock()
+}
+
 // errInfoFeed is a feed whose TeamInfo can fail.
 type errInfoFeed struct {
 	*fakeFeed
