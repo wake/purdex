@@ -14,7 +14,7 @@ import (
 func fakeReader(rows []tableRow, startNow map[int]ident, footprint uint64) *ProcReader {
 	return &ProcReader{
 		numer: 1, denom: 1,
-		prev: map[int]cpuPrev{}, args: map[argKey]procArgs{}, idents: map[int]ident{},
+		prev: map[int]cpuPrev{}, args: map[argKey]procArgs{}, kinds: map[argKey]string{}, idents: map[int]ident{},
 		table: func() ([]tableRow, error) { return rows, nil },
 		startOf: func(pid int) (ident, bool) {
 			id, ok := startNow[pid]

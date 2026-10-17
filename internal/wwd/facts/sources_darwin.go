@@ -19,12 +19,6 @@ import (
 // CPU and memory reads return the error and Sample reports it.
 func SystemSources() Sources { return SystemSourcesWith(SourceOptions{}) }
 
-// SourceOptions switch on the parts that are not for every host.
-type SourceOptions struct {
-	// Owner turns the "owner is active" rule on (air26); nil leaves owner null.
-	Owner *OwnerConfig
-}
-
 // SystemSourcesWith is SystemSources with options. When the owner frameworks
 // cannot be loaded the owner stays null rather than failing the sample.
 func SystemSourcesWith(opt SourceOptions) Sources {

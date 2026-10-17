@@ -50,6 +50,21 @@ type ProcContext struct {
 	JobOf     func(pid int) (string, bool)
 	SessionOf func(pid int) (string, bool) // pid is a Claude Code session process: its ref
 	ArgsOf    func(pid int) []string
+	// KindOf is the resident kind of a process, cached by the reader (a process's
+	// kind does not change). Optional: when nil it is computed from ArgsOf.
+	KindOf func(p ProcRec) string
+}
+
+// kindOf is the resident kind of p ("" when it is not a long-lived helper).
+func kindOf(p ProcRec, c ProcContext) string {
+	if c.KindOf != nil {
+		return c.KindOf(p)
+	}
+	var args []string
+	if c.ArgsOf != nil {
+		args = c.ArgsOf(p.PID)
+	}
+	return residentKind(p, args)
 }
 
 // SelectTop is the union of the top nMem processes by footprint and the top
@@ -152,17 +167,13 @@ func Attribute(p ProcRec, c ProcContext) *wire.ProcOwner {
 	if id, ok := jobAbove(p, c); ok {
 		return &wire.ProcOwner{Kind: wire.OwnerJob, ID: id}
 	}
-	var args []string
-	if c.ArgsOf != nil {
-		args = c.ArgsOf(p.PID)
-	}
 	session, hasSession := sessionAbove(p, c)
 	if c.SessionOf != nil {
 		if ref, ok := c.SessionOf(p.PID); ok {
 			return &wire.ProcOwner{Kind: wire.OwnerSession, Session: ref}
 		}
 	}
-	if residentKind(p, args) != "" {
+	if kindOf(p, c) != "" {
 		if !hasSession {
 			session = "orphan"
 		}
@@ -204,18 +215,15 @@ func BuildProcs(s ProcSnapshot, c ProcContext, nMem, nCPU int) []wire.Proc {
 	return out
 }
 
-// BuildResidents groups the long-lived helpers by session and kind. It reads
-// the argv of every process, so ArgsOf should cache.
+// BuildResidents groups the long-lived helpers by session and kind. It asks the
+// kind of every process, so KindOf (or ArgsOf) must cache: the reader reads a
+// process's argv once.
 func BuildResidents(s ProcSnapshot, c ProcContext) []wire.Resident {
 	c.ensureTable(s)
 	type key struct{ session, kind string }
 	agg := map[key]*wire.Resident{}
 	for _, p := range s.Procs {
-		var args []string
-		if c.ArgsOf != nil {
-			args = c.ArgsOf(p.PID)
-		}
-		kind := residentKind(p, args)
+		kind := kindOf(p, c)
 		if kind == "" {
 			continue
 		}
