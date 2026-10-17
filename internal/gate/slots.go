@@ -392,6 +392,10 @@ type Take struct {
 	AheadFront int
 	Rank       RankInfo
 	Held       bool
+	// Blocked is set when a conflict rule keeps the ticket from taking a slot though there is room: what it waits for and the rule.
+	// ConflictsProblem is the reason the rules file could not be used (then there are no rules).
+	Blocked          *ConflictBlock
+	ConflictsProblem string
 }
 
 // TryTakeRanked is TryTake that also says where the ticket stands in the serving order (rank.go).
@@ -418,14 +422,51 @@ func (p *Pool) TryTakeRanked(t *Ticket) (Take, error) {
 		out.Held = true
 		return out, nil // held: not served while a slot is free either
 	}
-	slot, err := p.takeLocked(ahead, t.info)
+	rules, problem := LoadConflicts(p.Dir) // read inside the lock: a rule added before this take is honoured by it
+	out.ConflictsProblem = problem
+	capacity, err := p.freeCapacity()
+	if err != nil {
+		return out, err
+	}
+	served, blocked := true, (*ConflictBlock)(nil)
+	if found {
+		res := walkQueue(p.Class, snap.Queue, p.Held(), rules, capacity, t.Name, t.info.Argv, nil)
+		served, blocked = res.Served[t.Name], res.Blocked[t.Name]
+	} else {
+		served = ahead < capacity // not listed: where its name puts it, as before
+	}
+	out.Blocked = blocked
+	if !served {
+		return out, nil
+	}
+	slot, err := p.takeLocked(t.info)
 	out.Slot = slot
 	return out, err
 }
 
-// takeLocked is the slot part of TryTake, with the admit lock held and the ahead tickets counted: a slot when the free ones outnumber
-// them.
-func (p *Pool) takeLocked(ahead int, info WaiterInfo) (*Slot, error) {
+// freeCapacity is how many more tickets the pool can serve now: its free slots less the late holders beyond its size (they use up
+// free ones: the pool is full while they are held).
+func (p *Pool) freeCapacity() (int, error) {
+	free := 0
+	for k := 1; k <= p.Size; k++ {
+		f, err := os.OpenFile(p.slotPath(k), os.O_CREATE|os.O_RDWR, 0o644)
+		if err != nil {
+			return 0, dirError(err)
+		}
+		st, lerr := lockProbe(f)
+		_ = f.Close() // a probe that got the lock gives it back here
+		if st == lockBroken {
+			return 0, dirError(lerr)
+		}
+		if st != lockHeld {
+			free++
+		}
+	}
+	return max(free-p.overHeld(), 0), nil
+}
+
+// takeLocked is the slot part of TryTake, with the admit lock held and the walk having served the ticket: the lowest free slot.
+func (p *Pool) takeLocked(info WaiterInfo) (*Slot, error) {
 	var free []*os.File
 	var freeK []int
 	for k := 1; k <= p.Size; k++ {
@@ -448,7 +489,7 @@ func (p *Pool) takeLocked(ahead int, info WaiterInfo) (*Slot, error) {
 		freeK = append(freeK, k)
 	}
 	// A slot held beyond the size of the pool (a late holder) uses up a free one: the pool is full while it is held.
-	if ahead >= len(free)-p.overHeld() {
+	if len(free)-p.overHeld() <= 0 {
 		closeAll(free)
 		return nil, nil
 	}

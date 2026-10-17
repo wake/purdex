@@ -55,6 +55,34 @@ func (r *HostReader) Peek() (Pressure, bool) {
 	return p, have
 }
 
+// WouldWaitFor is WouldWait for a command whose words are known: besides the capacity and the pressure, it waits when a holder of the
+// class, or a front or normal ticket in the queue, runs a command a conflict rule keeps apart from this one (spec §5.3). Back and held
+// tickets never make it wait. The rules and the queue are read as the other readers read them, without the lock and without removing
+// anything: a hint, as WouldWait is.
+func (g *Gate) WouldWaitFor(class Class, argv []string) WouldWait {
+	return g.WithConflict(g.WouldWait(class), argv)
+}
+
+// WithConflict adds the conflict rules to an answer of WouldWait for the class: a command that would not wait for capacity or
+// pressure waits when a rule holds it back (reason "conflict"). For several commands of one class answered from one reading.
+func (g *Gate) WithConflict(w WouldWait, argv []string) WouldWait {
+	class, cfg := w.Class, g.Config()
+	if w.Wait || len(argv) == 0 || !cfg.Enabled || !class.Valid() {
+		return w
+	}
+	pool := g.pool(cfg, class)
+	rules, _ := LoadConflicts(pool.Dir)
+	if len(rules) == 0 {
+		return w
+	}
+	res := walkQueue(class, pool.peekSnapshot().Queue, pool.Held(), rules, 1<<20, "", nil, argv)
+	if b := res.Blocked[""]; b != nil {
+		w.Wait, w.Reason = true, "conflict"
+		w.Note = conflictLine(b)
+	}
+	return w
+}
+
 // WouldWait looks at the class now.
 func (g *Gate) WouldWait(class Class) WouldWait {
 	cfg := g.Config()

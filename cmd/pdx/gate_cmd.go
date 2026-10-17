@@ -456,7 +456,7 @@ func wouldWaitBatch(g *gate.Gate, cfg gate.Config, argvs [][]string, asJSON bool
 			w = g.WouldWait(cl)
 			byClass[cl] = w
 		}
-		answers = append(answers, w)
+		answers = append(answers, g.WithConflict(w, argv)) // the class's one reading, and this command's rules
 	}
 	if asJSON {
 		b, _ := json.Marshal(answers)
@@ -516,7 +516,7 @@ func gateWouldWait(args []string, stdout, stderr io.Writer) int {
 		// the same view of the environment as a shim's: no terminal, the caller's variables
 		cl = cfg.Intercept.Classify(command, gate.EnvOf(os.Environ(), false))
 	}
-	w := g.WouldWait(cl)
+	w := g.WouldWaitFor(cl, command)
 	if *asJSON {
 		b, _ := json.Marshal(w)
 		fmt.Fprintln(stdout, string(b))

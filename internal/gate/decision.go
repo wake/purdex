@@ -47,14 +47,18 @@ type Decision struct {
 	WaitWhy     []string `json:"wait_reasons,omitempty"` // queue | memory-pressure | pressure-unreadable | paused | held
 	// Rank is the ticket's last rank while it waited (front | back | hold; absent for a plain normal ticket) and HeldS the seconds it
 	// spent on hold (spec §5.2).
-	Rank     string             `json:"rank,omitempty"`
-	HeldS    float64            `json:"held_s,omitempty"`
-	Applied  map[string]Applied `json:"applied,omitempty"`
-	Added    []string           `json:"limits_added,omitempty"`
-	Left     []string           `json:"left_running,omitempty"`
-	Exit     int                `json:"exit"`
-	Duration float64            `json:"duration_s"`
-	dir      string
+	Rank  string  `json:"rank,omitempty"`
+	HeldS float64 `json:"held_s,omitempty"`
+	// Conflict is the last conflict rule that kept the command waiting ("<a> × <b>") and ConflictS the seconds it spent blocked by one
+	// (spec §5.3); both absent for a command no rule held back.
+	Conflict  string             `json:"conflict,omitempty"`
+	ConflictS float64            `json:"conflict_s,omitempty"`
+	Applied   map[string]Applied `json:"applied,omitempty"`
+	Added     []string           `json:"limits_added,omitempty"`
+	Left      []string           `json:"left_running,omitempty"`
+	Exit      int                `json:"exit"`
+	Duration  float64            `json:"duration_s"`
+	dir       string
 }
 
 func (d *Decision) why(reason string) {
