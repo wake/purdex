@@ -146,7 +146,7 @@ func (m *Module) buildRoster() (team.Roster, error) {
 					Title: mr.Title, TmuxSession: mr.TmuxSession, TmuxInstance: storedInstance(mr.TmuxSession, mr.TmuxInstance)}
 			}, mr.Ref, alias)
 			if s.Live {
-				s.TmuxInstance = gen.of(origins[mr.SessionID].Tmux)
+				s.TmuxInstance = gen.of(origins[mr.SessionID])
 			}
 			s.Model, s.Effort = mr.Model, mr.Effort // what it was spawned with
 			s.Context = m.sessionContext(mr.SessionID, mr.Usage)
@@ -199,7 +199,7 @@ func pausedOf(pauses map[string]team.RosterPause, sessionID string) *team.Roster
 func (m *Module) rosterLead(t team.Team, origins map[string]team.Origin, alias string, persisted *team.MemberContext, gen *generationMemo) team.RosterSession {
 	s := rosterSession(origins, t.LeadSessionID, func() team.RosterSession { return m.leadStoredSession(t, alias) }, t.LeadRef, alias)
 	if s.Live {
-		s.TmuxInstance = gen.of(origins[t.LeadSessionID].Tmux)
+		s.TmuxInstance = gen.of(origins[t.LeadSessionID])
 	}
 	s.Context = m.sessionContext(t.LeadSessionID, persisted) // a lead has no spawn model / effort
 	return s

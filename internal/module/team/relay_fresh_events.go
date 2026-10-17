@@ -52,7 +52,7 @@ func (m *Module) buildFresh() ([]team.RelayFreshSession, error) {
 	for _, sid := range order {
 		h := halves[sid]
 		out = append(out, team.RelayFreshSession{SessionID: sid, Ref: ipeers.RefID(sid), OpID: h.OpID, Path: h.Path, WrittenAt: h.WrittenAt,
-			Code: m.sessionCodeOf(ctx, origins[sid].Tmux)})
+			Code: m.sessionCodeOf(ctx, origins[sid])})
 	}
 	return out, nil
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wake/purdex/internal/module/session"
+	ipeers "github.com/wake/purdex/internal/peers"
 	"github.com/wake/purdex/internal/team"
 	"github.com/wake/purdex/internal/tmux"
 )
@@ -36,8 +37,68 @@ func codeOf(t *testing.T, id string) string {
 	return c
 }
 
+// agentStart is when these tests' agents started: after the fake tmux server of "100:1700000000" (and of the fixture's 4242:1700000000).
+const agentStart = 1700000100
+
 func (f *fixture) showIn(sid, ref, tmuxOrigin string) {
-	f.origins.show(team.Origin{SessionID: sid, Ref: ref, Name: "reg-" + sid, Address: "self/" + ref, Tmux: tmuxOrigin, PID: 42})
+	f.showStarted(sid, ref, tmuxOrigin, agentStart)
+}
+
+// showStarted lists sid as an agent that started at unix second start (the registry's proc_start).
+func (f *fixture) showStarted(sid, ref, tmuxOrigin string, start int64) {
+	f.origins.show(team.Origin{SessionID: sid, Ref: ref, Name: "reg-" + sid, Address: "self/" + ref, Tmux: tmuxOrigin, PID: 42,
+		ProcStart: time.Unix(start, 0).UTC().Format(ipeers.ProcStartLayout)})
+}
+
+func TestStartedUnderServer(t *testing.T) {
+	at := func(s int64) team.Origin {
+		return team.Origin{ProcStart: time.Unix(s, 0).UTC().Format(ipeers.ProcStartLayout)}
+	}
+	for _, c := range []struct {
+		name     string
+		o        team.Origin
+		instance string
+		want     bool
+	}{
+		{"after the server", at(1700000100), "100:1700000000", true},
+		{"the same second", at(1700000000), "100:1700000000", true},
+		{"a second of slack", at(1699999999), "100:1700000000", true},
+		{"before the server", at(1699999990), "100:1700000000", false},
+		{"no start time", team.Origin{}, "100:1700000000", false},
+		{"unreadable start time", team.Origin{ProcStart: "yesterday"}, "100:1700000000", false},
+		{"no generation", at(1700000100), "", false},
+		{"a generation without a start", at(1700000100), "100", false},
+		{"a generation with a bad start", at(1700000100), "100:soon", false},
+	} {
+		if got := startedUnderServer(c.o, c.instance); got != c.want {
+			t.Errorf("%s: startedUnderServer = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// A tmux restart hands pane ids out again: an entry that started before the new server carries no code and no generation, however
+// the pane id matches an unrelated session now. A session renamed since the agent started (its Origin.Tmux holds the old name) still
+// carries both. Mutation gates: no start check → the first half is red; a name check → the second half is red.
+func TestFreshSurface_ReusedPaneIdOfARestartedTmuxCarriesNothing(t *testing.T) {
+	f := newFixture(t)
+	f.tmux.AddSession("sess-a", "/") // $0, pane %0
+	f.tmux.SetInstance("200:1700000999")
+	f.showStarted("sid-1", "_abc123", "sess-a:@1.%0", 1700000100)    // started under the server before the restart
+	f.showStarted("sid-m1", "_mem001", "old-name:@1.%0", 1700001500) // started after the restart, the session was renamed since
+	f.freshHalfWithFile("sid-1")
+	f.freshHalfWithFile("sid-m1")
+	for _, s := range f.getFresh().Sessions {
+		switch s.SessionID {
+		case "sid-1":
+			if s.Code != "" {
+				t.Fatalf("an entry older than the server got a code: %+v", s)
+			}
+		case "sid-m1":
+			if s.Code != codeOf(t, "$0") {
+				t.Fatalf("a renamed session's entry: %+v, want code %s", s, codeOf(t, "$0"))
+			}
+		}
+	}
 }
 
 // A fresh half carries the code of the tmux session its CC session runs in; none outside tmux; a session that moved to another tmux
@@ -106,10 +167,17 @@ func TestRoster_TmuxInstanceOfASeat(t *testing.T) {
 		t.Fatalf("member tmux_instance = %q", got)
 	}
 
-	f.tmux.SetInstance("200:1700000999") // tmux restarted: a same-named session is of another generation
+	// tmux restarted: the entries that started under the old server carry nothing (they are not in the new one); an agent that started
+	// after the restart carries the new generation
+	f.tmux.SetInstance("200:1700000999")
+	r = f.getRoster()
+	if got := r.Teams[0].Members[0].TmuxInstance; got != "" {
+		t.Fatalf("after the restart the old entry's tmux_instance = %q, want none", got)
+	}
+	f.showStarted("sid-m1", "_mem001", "sess-b:@1.%1", 1700001500)
 	r = f.getRoster()
 	if got := r.Teams[0].Members[0].TmuxInstance; got != "200:1700000999" {
-		t.Fatalf("after the restart member tmux_instance = %q, want the new generation", got)
+		t.Fatalf("after the restart a new agent's tmux_instance = %q, want the new generation", got)
 	}
 
 	f.showIn("sid-m1", "_mem001", "") // not in tmux

@@ -55,35 +55,45 @@ func TestOpEndedOtherwise_ClosesItsCardWithoutAReason(t *testing.T) {
 	}
 }
 
-// The deadline of an idle card is 300 s. The two closes race at it, and whichever comes first stands (the second's compare-and-set loses):
-//   - the half is written before the sweeper's tick: the card is cancelled / half and the sweeper finds nothing to time out;
-//   - the sweeper ticks first: the card is timeout, and a half written after it leaves it so (a half written late is not recorded on a
-//     card that already ended as timeout).
-//
-// Mutation gates: the sweeper closes an already closed card again → red; the half's close overwrites a timeout → red.
-func TestIdleCardDeadline_HalfWrittenBeforeTheSweepWins(t *testing.T) {
+// The deadline of an idle card is 300 s, and a card never outlives into a half: a half op is born approved (beginHalf closes its row at
+// begin, no card), so no half is ever being written under an OPEN card, and the sweeper cannot time out a half's card under it. What
+// follows the timeout is a NEW op: the card's op ends cancelled{timeout}, the mod begins a half (a new op, a new approved row), writes
+// it, and the session is on the fresh list. This pins that order end to end, with the sweeper first:
+// card open → past 300 s → sweeper: card timeout, op cancelled{timeout} → half begins, writing, written → op cancelled{half}, and
+// GET /api/relay/fresh lists the session, so the App learns of the file.
+// Mutation gates: the fresh row not written for a half that follows a timed-out card → red; the timed-out op left claimed/open
+// (a second op refused with relay_op_open) → red.
+func TestIdleCardDeadline_TimeoutThenAHalfReachesTheFreshList(t *testing.T) {
 	f := newFixture(t)
-	op, card := f.openIdleCardWithHalfOp("sid-1")
-	f.report(op.ID, team.RelayReportRequest{State: team.RelayWriting})
-	f.advance(team.SelfRelayIdleDeadlineS*1000 + 1) // past the deadline, the sweeper has not run yet
-	f.report(op.ID, team.RelayReportRequest{State: team.RelayWritten})
-	f.m.tick()
-	if row := f.row(card); row.State != team.StateCancelled || row.CloseReason != team.RelayReasonHalf {
-		t.Fatalf("card = %s / %q, want cancelled / half (the half was written first)", row.State, row.CloseReason)
+	_, card, _ := f.beginRaw2(halfBeginReq("sid-1", false))
+	if f.row(card.RequestID).State != team.StateOpen {
+		t.Fatal("no open idle card")
 	}
-}
-
-func TestIdleCardDeadline_SweepBeforeTheHalfLeavesTimeout(t *testing.T) {
-	f := newFixture(t)
-	op, card := f.openIdleCardWithHalfOp("sid-1")
-	f.report(op.ID, team.RelayReportRequest{State: team.RelayWriting})
 	f.advance(team.SelfRelayIdleDeadlineS*1000 + 1)
 	f.m.tick()
-	if row := f.row(card); row.State != team.StateTimeout {
+	if row := f.row(card.RequestID); row.State != team.StateTimeout {
 		t.Fatalf("card = %s after the sweep, want timeout", row.State)
 	}
-	f.report(op.ID, team.RelayReportRequest{State: team.RelayWritten})
-	if row := f.row(card); row.State != team.StateTimeout || row.CloseReason != "" {
-		t.Fatalf("card = %s / %q after the half, want it still timeout: a half written late does not rewrite how the card ended", row.State, row.CloseReason)
+	cardOp, _, _ := f.m.store.GetRelayOp(card.Op.ID)
+	if cardOp.State != team.RelayCancelled || cardOp.Reason != team.RelayReasonTimeout {
+		t.Fatalf("the card's op = %s / %q, want cancelled / timeout", cardOp.State, cardOp.Reason)
+	}
+	if v := f.getFresh(); len(v.Sessions) != 0 {
+		t.Fatalf("fresh before the half: %+v", v.Sessions)
+	}
+
+	half := f.halfOp("sid-1") // begin --half (a new op, born approved), then writing
+	if half.ID == card.Op.ID {
+		t.Fatal("the half reused the timed-out card's op")
+	}
+	if code, got, ae := f.report(half.ID, team.RelayReportRequest{State: team.RelayWritten}); code != http.StatusOK || got.State != team.RelayCancelled || got.Reason != team.RelayReasonHalf {
+		t.Fatalf("written: %d %+v %+v", code, got, ae)
+	}
+	v := f.getFresh()
+	if len(v.Sessions) != 1 || v.Sessions[0].SessionID != "sid-1" || v.Sessions[0].OpID != half.ID {
+		t.Fatalf("fresh = %+v, want sid-1 with the half's op %s", v.Sessions, half.ID)
+	}
+	if row := f.row(card.RequestID); row.State != team.StateTimeout {
+		t.Fatalf("the timed-out card changed to %s", row.State)
 	}
 }

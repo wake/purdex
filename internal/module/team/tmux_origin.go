@@ -6,10 +6,13 @@ package teammod
 import (
 	"context"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/wake/purdex/internal/module/session"
+	ipeers "github.com/wake/purdex/internal/peers"
+	"github.com/wake/purdex/internal/team"
 	"github.com/wake/purdex/internal/tmux"
 )
 
@@ -31,26 +34,47 @@ func originPane(origin string) string {
 	return ""
 }
 
-// The pane id alone names the pane, not the session name in the Origin: the registry keeps the name the agent started under, and a
-// renamed tmux session is still the same pane (TestBuild_SessionRowTracksLiveTmuxRename). A pane id a restarted tmux hands out again
-// cannot reach a LIVE entry: the agent process died with the old server.
-//
-// paneIdentityOf reads the pane an Origin.Tmux names; false when it is not in tmux, tmux is not wired, or tmux does not answer.
-func (m *Module) paneIdentityOf(ctx context.Context, origin string) (tmux.PaneIdentity, bool) {
-	pane := originPane(origin)
+// startSlackS: both times are whole seconds, read at different moments.
+const startSlackS = 1
+
+// startedUnderServer says whether the agent of o started under the tmux server of the generation instance ("<pid>:<start_time>"): a
+// process cannot be in a pane of a server that did not exist yet, so an entry that started BEFORE the server did belongs to an older
+// one, and a pane id the restarted server hands out again is not its pane. The registry records the agent's start time when it
+// registers (Origin.ProcStart), which survives a tmux session rename, unlike the session name in Origin.Tmux. Either time unreadable
+// is "cannot tell" (false): the entry then carries nothing rather than something wrong.
+func startedUnderServer(o team.Origin, instance string) bool {
+	_, startText, ok := strings.Cut(instance, ":")
+	if !ok {
+		return false
+	}
+	serverStart, err := strconv.ParseInt(startText, 10, 64)
+	if err != nil || serverStart <= 0 {
+		return false
+	}
+	agentStart, err := ipeers.ParseProcStart(o.ProcStart)
+	if err != nil {
+		return false
+	}
+	return agentStart.Unix() >= serverStart-startSlackS
+}
+
+// paneIdentityOf reads the pane an Origin names and checks that the entry belongs to the server that answered (startedUnderServer);
+// false when it is not in tmux, tmux is not wired or does not answer, or the entry is older than the server.
+func (m *Module) paneIdentityOf(ctx context.Context, o team.Origin) (tmux.PaneIdentity, bool) {
+	pane := originPane(o.Tmux)
 	if pane == "" || m.tmux == nil {
 		return tmux.PaneIdentity{}, false
 	}
 	id, err := m.tmux.PaneIdentity(ctx, pane, spawnTagOption)
-	if err != nil {
+	if err != nil || !startedUnderServer(o, id.Instance) {
 		return tmux.PaneIdentity{}, false
 	}
 	return id, true
 }
 
-// sessionCodeOf is the session code of the tmux session an Origin.Tmux runs in ("" when unknown).
-func (m *Module) sessionCodeOf(ctx context.Context, origin string) string {
-	id, ok := m.paneIdentityOf(ctx, origin)
+// sessionCodeOf is the session code of the tmux session an Origin runs in ("" when unknown).
+func (m *Module) sessionCodeOf(ctx context.Context, o team.Origin) string {
+	id, ok := m.paneIdentityOf(ctx, o)
 	if !ok {
 		return ""
 	}
@@ -61,8 +85,9 @@ func (m *Module) sessionCodeOf(ctx context.Context, origin string) string {
 	return code
 }
 
-// generationMemo reads the tmux generation once for a roster build: the server has one, so the first pane that answers settles it.
-// A pane that does not answer is tried again with the next session, at most maxGenerationMisses times.
+// generationMemo reads the tmux generation once for a roster build: the server has one, so the first pane that answers settles it
+// (a pane that does not answer is tried again with the next session, at most maxGenerationMisses times). Each entry is then
+// checked against it on its own (startedUnderServer).
 type generationMemo struct {
 	m      *Module
 	ctx    context.Context // one budget for the build (originProbeTimeout)
@@ -72,17 +97,20 @@ type generationMemo struct {
 
 const maxGenerationMisses = 3
 
-func (g *generationMemo) of(origin string) string {
-	if originPane(origin) == "" {
+func (g *generationMemo) of(o team.Origin) string {
+	pane := originPane(o.Tmux)
+	if pane == "" {
 		return "" // not in tmux: no generation, whatever another session said
 	}
-	if g.val != "" || g.misses >= maxGenerationMisses {
-		return g.val
+	if g.val == "" && g.misses < maxGenerationMisses && g.m.tmux != nil {
+		if id, err := g.m.tmux.PaneIdentity(g.ctx, pane, spawnTagOption); err == nil {
+			g.val = id.Instance
+		} else {
+			g.misses++
+		}
 	}
-	if id, ok := g.m.paneIdentityOf(g.ctx, origin); ok {
-		g.val = id.Instance
-	} else {
-		g.misses++
+	if g.val == "" || !startedUnderServer(o, g.val) {
+		return ""
 	}
 	return g.val
 }
