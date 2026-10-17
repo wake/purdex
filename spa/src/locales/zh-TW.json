@@ -534,6 +534,7 @@
   "page.pane.hosts": "主機管理",
   "page.pane.execution": "執行",
   "watch.area.name": "守門員專區",
+  "watch.area.leave": "離開守門員專區",
   "watch.pane.guardian": "守門員",
   "watch.pane.events": "事件",
   "watch.pane.events_n": "事件 {{n}}",

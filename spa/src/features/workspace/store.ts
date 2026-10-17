@@ -42,7 +42,19 @@ export function getReturnWorkspaceId(): string | null {
 export const visibleWorkspaces = (workspaces: readonly Workspace[]): Workspace[] =>
   workspaces.filter((ws) => ws.id !== WATCH_WORKSPACE_ID)
 
-export const __resetReturnWorkspaceForTest = (): void => { returnWorkspaceId = null }
+/** Where the watcher area's back button and ⌘W lead (journal v5 §3.7): a workspace and the tab that was on screen in it. */
+export interface WatchReturnTarget { workspaceId: string; tabId: string | null }
+
+/**
+ * Taken by `openWatchArea` when the area is entered from outside it; moving inside the area, or opening it again from
+ * there, keeps it. In memory only, like `returnWorkspaceId`: after a restart with the area shown there is none.
+ */
+let watchReturnTarget: WatchReturnTarget | null = null
+
+export const getWatchReturnTarget = (): WatchReturnTarget | null => watchReturnTarget
+export const setWatchReturnTarget = (target: WatchReturnTarget | null): void => { watchReturnTarget = target }
+
+export const __resetReturnWorkspaceForTest = (): void => { returnWorkspaceId = null; watchReturnTarget = null }
 
 interface WorkspaceState {
   workspaces: Workspace[]

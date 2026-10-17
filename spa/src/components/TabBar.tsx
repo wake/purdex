@@ -1,7 +1,7 @@
 import { Fragment, useRef, useState, useCallback, useMemo } from 'react'
 import { DndContext, closestCenter, PointerSensor, useSensor, useSensors, type CollisionDetection, type DragEndEvent, type Modifier } from '@dnd-kit/core'
 import { SortableContext, horizontalListSortingStrategy } from '@dnd-kit/sortable'
-import { Plus, CaretLeft, CaretRight } from '@phosphor-icons/react'
+import { Plus, CaretLeft, CaretRight, ArrowLeft } from '@phosphor-icons/react'
 import { SortableTab } from './SortableTab'
 import { useScrollOverflow } from '../hooks/useScrollOverflow'
 import type { Tab } from '../types/tab'
@@ -25,15 +25,17 @@ interface Props {
   onRenameTab?: (tabId: string) => void
   /** When embedded in Electron title bar — no border, no fixed height */
   embedded?: boolean
-  /** The watcher area's row: no "+", no lock icon, no menu, no middle click, no close. Drag-reorder stays. */
+  /** The watcher area's row: no "+", no lock icon, no menu, no middle click, no close, no team group. Drag-reorder stays. */
   fixed?: boolean
+  /** The watcher area's way back (journal v5 §3.7): given, a back button leads the row. */
+  onLeave?: () => void
 }
 
 function TabSeparator({ show }: { show: boolean }) {
   return <div data-testid="tab-separator" className={`w-px h-3.5 flex-shrink-0 transition-opacity duration-150 ease-out ${show ? 'bg-border-default' : 'bg-transparent'}`} />
 }
 
-export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu, onRenameTab, embedded, fixed }: Props) {
+export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, onReorderTabs, onMiddleClick, onContextMenu, onRenameTab, embedded, fixed, onLeave }: Props) {
   const t = useI18nStore((s) => s.t)
   const pinnedTabs = useMemo(() => tabs.filter((t) => t.pinned), [tabs])
   const normalTabs = useMemo(() => tabs.filter((t) => !t.pinned), [tabs])
@@ -41,9 +43,12 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
   const normalIds = useMemo(() => normalTabs.map((t) => t.id), [normalTabs])
   // Team runs (spec §4.2): the unpinned tabs split into plain tabs and label + lead + visible members. Only the tabs
   // that are drawn are sortable items; the members a collapse hides are still in `normalIds` for the reorder below.
+  // The watcher area's row has no team look (journal v5 §3.7): its guardian tab may show a lead's session, yet every
+  // tab there is drawn, and dragged, as a plain tab.
   const team = useTeamDisplay()
   const collapsed = useTeamUiStore((s) => s.collapsed)
-  const segments = useMemo(() => groupSegments(normalTabs, (id) => team?.tabMark(id) ?? null, collapsed), [normalTabs, team, collapsed])
+  const markOf = useCallback((id: string): TeamTabMark | null => (fixed ? null : team?.tabMark(id) ?? null), [fixed, team])
+  const segments = useMemo(() => groupSegments(normalTabs, markOf, collapsed), [normalTabs, markOf, collapsed])
   /** Tab id → the run it is drawn in (grouped tabs only). */
   const runOf = useMemo(() => {
     const m = new Map<string, { teamKey: string; role: 'lead' | 'member'; leadTabId: string }>()
@@ -155,11 +160,11 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
     // The lead (the whole run, hidden members included), or a plain tab: a unit moves to where the target unit is; a drop on
     // any tab of a group lands before or after the whole group.
     const next = dragReorder(normalIds, activeId, overId, (id) => {
-      const m = team?.tabMark(id)
+      const m = markOf(id)
       return m ? { key: m.teamKey, role: m.role } : null
     })
     if (next) onReorderTabs([...pinnedIds, ...next])
-  }, [pinnedIds, normalIds, onReorderTabs, runOf, leadOfFrame, team])
+  }, [pinnedIds, normalIds, onReorderTabs, runOf, leadOfFrame, team, markOf])
 
   // Separator visibility: hide near active or hovered tab
   const shouldShowSeparator = (leftTab: Tab | undefined, rightTab: Tab | undefined) => {
@@ -187,6 +192,23 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
 
   return (
     <div className={`flex items-center px-1 ${embedded ? 'h-full flex-1 min-w-0' : 'flex-shrink-0 bg-surface-secondary border-b border-border-subtle'}`} style={embedded ? undefined : { height: 41 }}>
+      {/* The way out of the watcher area, ahead of every tab; the box and colours of the "+" button, hover in a token. */}
+      {onLeave && (
+        <>
+          <button
+            type="button"
+            data-testid="watch-area-back"
+            onClick={onLeave}
+            className="flex items-center justify-center w-7 h-7 rounded-md text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer flex-shrink-0 focus:outline-none focus-visible:ring-1 focus-visible:ring-border-active"
+            title={t('watch.area.leave')}
+            aria-label={t('watch.area.leave')}
+            style={{ marginTop: 2 }}
+          >
+            <ArrowLeft size={14} />
+          </button>
+          <div className="w-px h-4 bg-border-default mx-1 flex-shrink-0" />
+        </>
+      )}
       <DndContext sensors={sensors} collisionDetection={collisionDetection} modifiers={[restrictToTabZone]} onDragEnd={handleDragEnd}>
         {/* Pinned zone */}
         {pinnedTabs.length > 0 && (
@@ -244,9 +266,9 @@ export function TabBar({ tabs, activeTabId, onSelectTab, onCloseTab, onAddTab, o
                     <Fragment key={`g-${seg.mark.teamKey}`}>
                       {sep}
                       <TeamTabGroupFrame mark={seg.mark}>
-                        {renderTab(seg.tabs[0], team?.tabMark(seg.tabs[0].id) ?? undefined)}
+                        {renderTab(seg.tabs[0], markOf(seg.tabs[0].id) ?? undefined)}
                         <SortableContext items={seg.tabs.slice(1).map((t) => t.id)} strategy={horizontalListSortingStrategy}>
-                          {seg.tabs.slice(1).map((tab) => renderTab(tab, team?.tabMark(tab.id) ?? undefined))}
+                          {seg.tabs.slice(1).map((tab) => renderTab(tab, markOf(tab.id) ?? undefined))}
                         </SortableContext>
                       </TeamTabGroupFrame>
                     </Fragment>

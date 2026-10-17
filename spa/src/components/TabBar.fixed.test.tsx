@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import type { DragEndEvent } from '@dnd-kit/core'
 import { TabBar } from './TabBar'
@@ -75,5 +75,44 @@ describe('TabBar fixed (the watcher area row)', () => {
     render(<TabBar tabs={tabs} activeTabId="watch-host-a" fixed {...h} />)
     dnd.onDragEnd!({ active: { id: 'watch-host-b' }, over: { id: 'watch-host-a' } } as unknown as DragEndEvent)
     expect(h.onReorderTabs).toHaveBeenCalledWith(['watch-host-b', 'watch-host-a'])
+  })
+})
+
+describe('TabBar — the watcher area back button (journal v5 §3.7, U11)', () => {
+  afterEach(() => useI18nStore.getState().setLocale('en'))
+
+  it('is the first item of the row, ahead of the pinned and the normal tabs; a click calls onLeave and selects no tab', () => {
+    useI18nStore.getState().setLocale('zh-TW')
+    const pinned = { ...watchTab('watch-pinned', { kind: 'watch-host', fleetHostId: 'p' }), pinned: true }
+    const h = handlers()
+    const onLeave = vi.fn()
+    const { container } = render(<TabBar tabs={[pinned, ...tabs]} activeTabId="watch-host-a" fixed onLeave={onLeave} {...h} />)
+    const back = screen.getByRole('button', { name: '離開守門員專區' })
+    expect(back).toHaveAttribute('title', '離開守門員專區')
+    expect(back.querySelector('svg')).not.toBeNull()
+    expect(container.firstElementChild!.firstElementChild).toBe(back)
+    for (const el of container.querySelectorAll('[data-tab-id]')) {
+      expect(back.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    }
+    fireEvent.click(back)
+    expect(onLeave).toHaveBeenCalledTimes(1)
+    expect(h.onSelectTab).not.toHaveBeenCalled()
+  })
+
+  it('looks like the row\'s other controls, in theme tokens only', () => {
+    const h = handlers()
+    render(<TabBar tabs={tabs} activeTabId="watch-host-a" fixed onLeave={vi.fn()} {...h} />)
+    const back = screen.getByTestId('watch-area-back')
+    // the size and the resting colour of the "+" button; its hover in a token that has a light and a dark value
+    for (const cls of ['w-7', 'h-7', 'rounded-md', 'text-text-secondary', 'hover:text-text-primary', 'hover:bg-surface-hover']) {
+      expect(back.className.split(' ')).toContain(cls)
+    }
+    expect(back.className).not.toMatch(/#[0-9a-f]{3,8}\b|white|black|\[/i)
+  })
+
+  it('no back button without onLeave', () => {
+    const h = handlers()
+    render(<TabBar tabs={tabs} activeTabId="watch-host-a" fixed {...h} />)
+    expect(screen.queryByTestId('watch-area-back')).toBeNull()
   })
 })

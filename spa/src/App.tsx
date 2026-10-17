@@ -11,6 +11,7 @@ import { useConfigStore } from './stores/useConfigStore'
 import { useTabStore } from './stores/useTabStore'
 import { useWorkspaceStore } from './stores/useWorkspaceStore'
 import { visibleWorkspaces, WATCH_WORKSPACE_ID } from './features/workspace/store'
+import { leaveWatchArea } from './features/workspace/lib/open-watch-area'
 import { useI18nStore } from './stores/useI18nStore'
 import { useHostStore } from './stores/useHostStore'
 import { useLayoutStore } from './stores/useLayoutStore'
@@ -237,6 +238,7 @@ export default function App() {
             {(tabPosition !== 'left' || activeWorkspaceId === WATCH_WORKSPACE_ID) && (
               <TabBar
                 fixed={activeWorkspaceId === WATCH_WORKSPACE_ID}
+                onLeave={activeWorkspaceId === WATCH_WORKSPACE_ID ? leaveWatchArea : undefined}
                 tabs={displayTabs}
                 activeTabId={activeTabId}
                 onSelectTab={handleSelectTab}

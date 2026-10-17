@@ -10,6 +10,9 @@ import { renderHook } from '@testing-library/react'
 import { useTabStore } from '../stores/useTabStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { WATCH_WORKSPACE_ID, __resetReturnWorkspaceForTest } from '../features/workspace/store'
+import { openWatchArea } from '../features/workspace/lib/open-watch-area'
+import { WATCH_GUARDIAN_TAB_ID } from '../lib/watch/ids'
+import { createTab } from '../types/tab'
 import { useShortcuts } from './useShortcuts'
 
 function mockElectronAPI() {
@@ -78,5 +81,55 @@ describe('workspace shortcuts with the watcher area', () => {
     fire('switch-workspace-home')
     expect(ws().activeWorkspaceId).toBe(a)
     expect(b).toBeTruthy()
+  })
+})
+
+describe('⌘W with the watcher area (journal v5 §3.7, U11)', () => {
+  let a: string
+  let t1: string
+  let t2: string
+  beforeEach(() => {
+    useTabStore.setState({ tabs: {}, tabOrder: [], activeTabId: null, visitHistory: [] })
+    ws().reset()
+    __resetReturnWorkspaceForTest()
+    a = ws().addWorkspace('A').id
+    for (const name of ['t1', 't2'] as const) {
+      const tab = createTab({ kind: 'new-tab' })
+      useTabStore.getState().addTab(tab)
+      ws().insertTab(tab.id, a)
+      if (name === 't1') t1 = tab.id
+      else t2 = tab.id
+    }
+    useTabStore.getState().setActiveTab(t1)
+    ws().setActiveWorkspace(a)
+    ws().setWorkspaceActiveTab(a, t1)
+  })
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).electronAPI
+  })
+
+  it('in the area it leaves the area for the workspace and tab it was entered from, and closes no tab', () => {
+    const fire = mockElectronAPI()
+    renderHook(() => useShortcuts())
+    openWatchArea({ tab: 'guardian' })
+    expect(useTabStore.getState().activeTabId).toBe(WATCH_GUARDIAN_TAB_ID)
+    ws().setWorkspaceActiveTab(a, t2) // A's own active tab moved meanwhile (a sync): the way back is still t1
+    const tabsBefore = Object.keys(useTabStore.getState().tabs).sort()
+    const areaBefore = [...ws().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!.tabs]
+    fire('close-tab')
+    expect(ws().activeWorkspaceId).toBe(a)
+    expect(useTabStore.getState().activeTabId).toBe(t1)
+    expect(Object.keys(useTabStore.getState().tabs).sort()).toEqual(tabsBefore)
+    expect(ws().workspaces.find((w) => w.id === WATCH_WORKSPACE_ID)!.tabs).toEqual(areaBefore)
+  })
+
+  it('outside the area it closes the active tab as before, the area present or not', () => {
+    const fire = mockElectronAPI()
+    renderHook(() => useShortcuts())
+    openWatchArea({ tab: 'guardian' })
+    fire('close-tab') // leaves the area
+    fire('close-tab') // now an ordinary ⌘W
+    expect(useTabStore.getState().tabs[t1]).toBeUndefined()
+    expect(ws().activeWorkspaceId).toBe(a)
   })
 })
