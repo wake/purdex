@@ -33,6 +33,7 @@ const gateUsage = `usage: pdx gate [--class heavy|light] [--auto] [--tool <name>
   --real   the binary to run in place of the command's first word (a shim passes the real one)
   --tool   a shim's call: the command is <name> followed by the words after --; the real binary is looked up on PATH
            without the shim directory, at this run; a command that is not heavy or light is run at once, unqueued
+  hosts    the assist hosts for this session and the repo of this directory: which are on, ready and allowed, and why not (see pdx assist)
   would-wait  would a command of that class (or, with --auto, this command by its words) wait for a slot right now? (fast: no daemon, no process started, takes nothing;
            for a hook that decides whether to run a call in the background). Prints the reason and a line for an agent to read
   set      write one setting into [gate] of config.toml (or into [gate.profiles.<name>] with --profile); the gate reads it
@@ -54,6 +55,8 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 			return gateWouldWait(args[1:], stdout, stderr)
 		case "set":
 			return gateSet(args[1:], stdout, stderr)
+		case "hosts":
+			return gateHosts(args[1:], stdout, stderr)
 		case "profile":
 			return gateProfile(args[1:], stdout, stderr)
 		}

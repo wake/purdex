@@ -23,6 +23,7 @@ import (
 	"github.com/wake/purdex/internal/execstat"
 	"github.com/wake/purdex/internal/locale"
 	"github.com/wake/purdex/internal/module/agent"
+	assistmod "github.com/wake/purdex/internal/module/assist"
 	backupmod "github.com/wake/purdex/internal/module/backup"
 	conversationmod "github.com/wake/purdex/internal/module/conversation"
 	"github.com/wake/purdex/internal/module/dev"
@@ -42,7 +43,6 @@ import (
 	resourcesmod "github.com/wake/purdex/internal/module/resources"
 	"github.com/wake/purdex/internal/module/session"
 	teammod "github.com/wake/purdex/internal/module/team"
-	assistmod "github.com/wake/purdex/internal/module/assist"
 	watchmod "github.com/wake/purdex/internal/module/watch"
 	workbookmod "github.com/wake/purdex/internal/module/workbook"
 	"github.com/wake/purdex/internal/store"
@@ -102,6 +102,8 @@ func main() {
 		runGate(os.Args[2:])
 	case "watch":
 		runWatch(os.Args[2:])
+	case "assist":
+		runAssist(os.Args[2:])
 	case "team":
 		runTeam(os.Args[2:])
 	case "task":
