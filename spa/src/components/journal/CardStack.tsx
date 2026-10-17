@@ -108,10 +108,10 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
   const found = memo.journalOpen && unit && memo.detailId !== null ? (unit.entries.find((e) => e.id === memo.detailId) ?? unit.confirms.find((e) => e.id === memo.detailId)) : undefined
   // Checking the last item takes the entry out of the band; an entry of an older month is not in the stream either, so the detail
   // keeps the last copy it saw (every item answered) instead of vanishing under the pointer.
-  const lastDetail = useRef<JournalEntry | undefined>(undefined)
-  if (found) lastDetail.current = found
-  const kept = !found && memo.journalOpen && memo.detailId !== null && lastDetail.current?.id === memo.detailId
-    ? { ...lastDetail.current, items: lastDetail.current.items.map((it) => ({ ...it, done: true })) }
+  const [lastDetail, setLastDetail] = useState<JournalEntry | undefined>(undefined)
+  if (found && found !== lastDetail) setLastDetail(found) // state adjusted during render: React re-renders at once
+  const kept = !found && memo.journalOpen && memo.detailId !== null && lastDetail?.id === memo.detailId
+    ? { ...lastDetail, items: lastDetail.items.map((it) => ({ ...it, done: true })) }
     : undefined
   const detailEntry = found ?? kept
   const detail = detailEntry?.kind === 'confirm' ? detailEntry : undefined
