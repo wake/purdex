@@ -46,9 +46,30 @@ type job struct {
 
 // sessionCtl is the module's SessionControl.
 type sessionCtl struct {
-	m   *Module
-	mu  sync.Mutex
-	cur *job
+	m *Module
+	// gate serializes the decision of a start or wake (it is held across Reconcile); a caller waiting for it leaves when its ctx ends.
+	gate     chan struct{}
+	gateOnce sync.Once
+	mu       sync.Mutex // guards cur
+	cur      *job
+}
+
+func (c *sessionCtl) acquire(ctx context.Context) error {
+	c.gateOnce.Do(func() { c.gate = make(chan struct{}, 1) })
+	select {
+	case c.gate <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (c *sessionCtl) release() { <-c.gate }
+
+func (c *sessionCtl) current() *job {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.cur
 }
 
 func (m *Module) startGraceFor() time.Duration {
@@ -109,10 +130,14 @@ func (c *sessionCtl) run(ctx context.Context, kind, extra string) (watch.HolderA
 			return watch.HolderAnswer{}, err
 		}
 	}
-	c.mu.Lock()
-	if c.cur != nil { // one at a time: this is the one that is running
-		j := c.cur
-		c.mu.Unlock()
+	if j := c.current(); j != nil { // one at a time: this is the one that is running
+		return c.await(ctx, j)
+	}
+	if err := c.acquire(ctx); err != nil {
+		return watch.HolderAnswer{}, err
+	}
+	if j := c.current(); j != nil { // another call made it while this one waited for the gate
+		c.release()
 		return c.await(ctx, j)
 	}
 	now := m.now()
@@ -121,13 +146,13 @@ func (c *sessionCtl) run(ctx context.Context, kind, extra string) (watch.HolderA
 		// a mark with no job behind it is from a run of the daemon that ended: if the watcher registered meanwhile, that start worked
 		if h, _, err := m.Reconcile(ctx); err == nil && h.State == watch.HolderAwake {
 			_ = m.sess.Update(func(x *watch.SessionState) { x.InProgress = nil })
-			c.mu.Unlock()
+			c.release()
 			return answerOf(m.view()), nil
 		}
 	}
 	if st.InProgress != nil {
 		if now.Sub(st.InProgress.Since) < m.registerWithinFor()+time.Minute { // a start of an earlier run of the daemon, still within its time
-			c.mu.Unlock()
+			c.release()
 			return m.answerStarting(), nil
 		}
 		// it never ended: that start failed
@@ -137,24 +162,26 @@ func (c *sessionCtl) run(ctx context.Context, kind, extra string) (watch.HolderA
 		st = m.sess.Get()
 	}
 	if until := st.CooldownUntil; now.Before(until) {
-		c.mu.Unlock()
+		c.release()
 		return watch.HolderAnswer{}, &watch.CooldownError{Until: until}
 	}
 	h, _, err := m.Reconcile(ctx)
 	if err != nil {
-		c.mu.Unlock()
+		c.release()
 		return watch.HolderAnswer{}, err
 	}
 	if h.State == watch.HolderAwake { // a watcher is there: nothing to type
 		if st.InProgress != nil {
 			_ = m.sess.Update(func(x *watch.SessionState) { x.InProgress = nil })
 		}
-		c.mu.Unlock()
+		c.release()
 		return answerOf(m.view()), nil
 	}
 	j := &job{done: make(chan struct{})}
+	c.mu.Lock()
 	c.cur = j
 	c.mu.Unlock()
+	c.release()
 	go c.work(j, kind, extra, h, s)
 	return c.await(ctx, j)
 }

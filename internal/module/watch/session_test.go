@@ -343,3 +343,19 @@ func TestStart_AMarkLeftByARestartIsClearedWhenTheWatcherIsAwakeAndNoCooldownFol
 		})
 	}
 }
+
+func TestStart_ACallWaitingForTheGateLeavesWhenItsContextEnds(t *testing.T) {
+	r := newSessionRig(t, "f1")
+	c := r.m.session.(*sessionCtl)
+	require.NoError(t, c.acquire(context.Background())) // a decision that is slow in Reconcile
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	began := time.Now()
+	_, err := c.Start(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(began), time.Second)
+	require.Empty(t, r.typer.typed())
+	c.release()
+	_, err = c.Start(context.Background())
+	require.NoError(t, err, "the gate is free again")
+}
