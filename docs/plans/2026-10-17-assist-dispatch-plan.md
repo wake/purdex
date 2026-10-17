@@ -103,7 +103,8 @@ and writers, and its requeue lossy; contracts 7–11 below answer it.
    the runner: an `Op` present answers 409 `busy`.
 8. **One writer per file.** `assist.json`: the daemon's assist module only (the CLI and the panel go through its API),
    under `assist.lock`. `assist-ready.json` (`{host: {gen, at, answer}}`): the poller only. `assist-notified.json` (X1b):
-   the notifier only. `assist-hold/<host>[.<repo>].json` (`{until, why}`, X2): written by gates (many processes) under
+   the notifier only. `assist-hold/<host>@<repo>.json` and `assist-hold/<host>.json` (`{until, why}`, X2; `@` cannot be
+   in a host or repo name, so a pair never shares a file with another pair or with a host's own hold): written by gates (many processes) under
    `assist-hold.lock`, keeping the later `until`. Readers take each file as one atomic read and combine them only through
    `Gen` (a readiness whose `gen` differs from the host's `Gen` counts as no check), so no read order can pair a new
    switch with an old check.
@@ -240,7 +241,7 @@ manual checks, not a user-facing choice):
 5. Stream and exit (§4.5): stdout / stderr as they come, the mark taken out; the exit code is the command's. SIGINT /
    SIGTERM / SIGHUP → `ssh air26 kill -TERM -<pgid>` (KILL 10 s later), then the ssh ends.
 6. Failures (§4.7, contract 9): before the admitted mark (ssh, push, worktree, install, exit 75) → the dispatch slot let
-   go, the ticket back at its place, `assist-hold/<host>.<repo>.json` for 5 min (2 min after a 75), the reason in the
+   go, the ticket back at its place, `assist-hold/<host>@<repo>.json` for 5 min (2 min after a 75), the reason in the
    record and on stderr; after it → the command's result. A run ended with `<job>.reclaimed` present → `pdx gate: <host>
    was taken back; waiting again on mlab`, the slot let go, back at its place (§5).
 7. Clean up always (§4.6): `git worktree remove --force`, `git update-ref -d refs/assist/<job>`, the pid and reclaim
@@ -248,22 +249,29 @@ manual checks, not a user-facing choice):
 8. The record (§6 history): `host`, `transfer_s`, `run_s`, `exit`, `reclaimed`; `pdx gate history [--host] [--since]
    [--json]`.
 
-X2b — the automatic walk (§3):
+X2b — the automatic walk (§3, with spec decision 12's host order):
 1. Capability per host from `assist.json` (`Can` / `Cannot`: command-word prefixes with GC's `matchesPrefix`), written by
-   the watcher from the assist READMEs (`pdx assist host set`); a command no assist host can run stays on mlab.
-2. Estimates (§3): kind = GC's `commandWords` with the arguments that name files dropped (their count kept); per (kind,
-   host) a moving average (α 0.3) of `run_s` and of `transfer_s`, seeded from spec §0, in `<gate dir>/assist-est.json`
-   (written under its own lock by the gate that finished, keeping the other kinds), updated with each record; a
-   `vitest related` estimate scales by its file count.
+   the watcher from the assist READMEs (`pdx assist host set`); a command no assist host can run stays on mlab. Under
+   decision 12 the watcher writes air26's table as the test kinds it runs (vitest, tsc, go test / vet, lint, `pnpm
+   check`) and mserv's as the PHP kinds only, empty until its check against mlab — so a non-PHP test never has mserv as
+   a candidate, and the code needs no host-specific rule for it.
+2. ~~Estimates~~ — **not built** (lead 1f, 10-17): decision 12 chooses by host order, not by expected finish, so nothing
+   reads an estimate. The record already keeps `run_s` and `transfer_s` (X2a.8); an estimate can be built from the
+   history later if a choice ever needs one.
 3. The walk in `Snapshot`, after GQ's order and GC's conflicts: each ticket's candidates = mlab ∪ the assist hosts
    `Usable` for its session and repo, whose capability takes its kind, with a free `assist-<host>-<k>` slot, no
-   `assist-hold` for it, and no conflict there. Conflicts on air26 are air26's own gate's rules (its `conflicts.json`,
-   asked through would-wait in contract 9); for mserv, a rule in mlab's `conflicts.json` with `host: mserv` against
-   mlab's `assist-mserv-<k>` holders (GC's `Conflict` gains `Host`, empty = the gate's own host). Heavy: to the assist
-   host unless mlab's estimate (its would-wait + run) is below 0.5× the host's (run + transfer). Light: out only when it
-   would wait on mlab. While mlab is reserved (contract 12), both rules give way: any ticket with a candidate goes
-   to it. Then the one ssh of contracts 9–10; a host that fails it is held off and the walk goes on. A
-   ticket that fits no free slot keeps its place; those behind it may take slots it cannot use.
+   `assist-hold` for it (the pair's or the host's own), and no conflict there. Conflicts on air26 are air26's own gate's
+   rules (its `conflicts.json`, asked through would-wait in contract 9); for mserv, a rule in mlab's `conflicts.json`
+   with `host: mserv` against mlab's `assist-mserv-<k>` holders (GC's `Conflict` gains `Host`, empty = the gate's own
+   host). **The choice (decision 12)**: a heavy ticket with an assist candidate goes to it — air26 before mserv — even
+   when mlab has a free slot; no estimate comparison. A light ticket goes out only when it would wait on mlab, as
+   X2b-1 (#3173) built it; decision 12's light point (single-file tests go out too) waits for the user's confirmation,
+   and is a one-line change in `PickAssist` once confirmed. Then the one ssh
+   of contracts 9–10; a host that fails it (would wait, over its limits, unreachable) is held off and the walk goes on,
+   so the ticket takes mlab's free slot or keeps its place until a slot frees on either. While mlab is reserved
+   (contract 12) the choice is the same; the reservation only matters for a kind an assist host lists outside decision
+   12 (spec §3's rule, kept for those). A ticket that fits no free slot keeps its place; those behind it may take slots
+   it cannot use.
 4. Status JSON: the pools (mlab heavy / light, each assist host's dispatch slots), each holder with its host, each waiter
    with its candidate hosts, out tickets with their host; the fleet's queue view (B line) reads it.
 Tests (X2a): out → back keeps the name and a front / back rank (and `SetRank` while out applies on return); `Snapshot`,
@@ -272,10 +280,11 @@ staged, unstaged and untracked changes equals the working tree, and the caller's
 past 60 s → exit 75, slot let go, back at its place, host held 2 min; failure before the mark → back, held 5 min; after
 it → the exit code; reclaim (also while queued on air26) → back with the message; every path lets the dispatch slot go
 (success, failure, 75, reclaim, cancel, the gate killed); signal → remote group ended; cleanup on every path. (X2b): the
-walk's choice table (heavy prefers a free assist host; mlab clearly faster keeps it; light only when it would wait; no
-capability → mlab; a not-usable or held host is never a candidate; a head that fits nothing lets later tickets take
-slots); load limits (load1 under but load5 over → held; idle under `IdleMin` → held; all under → sent); estimates update
-and scale. A fake ssh (a script on PATH that runs the remote command locally in a temp `~/Assist`) keeps the tests off
+walk's choice table (heavy goes to a free air26 even when mlab has a free slot; light only when it would wait on mlab,
+until decision 12's light point is confirmed; air26 before mserv; no
+capability → mlab, and a non-PHP test never goes to mserv; a not-usable host, or one held for the pair or as a host, is
+never a candidate; a head that fits nothing lets later tickets take slots); load limits (load1 under but load5 over →
+held; idle under `IdleMin` → held; all under → sent). A fake ssh (a script on PATH that runs the remote command locally in a temp `~/Assist`) keeps the tests off
 the network.
 
 ## X3 — mserv (one PR, after X2)
@@ -286,7 +295,8 @@ ticket stays). Transfer `git archive <sha> | ssh mserv 'mkdir -p … && tar -x -
 --unit=assist-<job> --uid=wake -p CPUQuota=200% -p MemoryMax=4G nice -n 10 ionice -c3 <argv>` after `source
 ~/Assist/assist.env`, printing the admitted mark itself (mserv has no gate). Dependencies `pnpm install
 --frozen-lockfile` (`--ignore-scripts` where mserv's README says). Capability from mserv's README (no `go vet ./...`,
-`go test ./...`, `go build ./cmd/pdx`, cgo or node-gyp builds, browser tests, swift, macOS-only tests). Clean up `rm -rf`
+`go test ./...`, `go build ./cmd/pdx`, cgo or node-gyp builds, browser tests, swift, macOS-only tests), and under spec
+decision 12 the watcher writes only the PHP kinds, after its check against mlab. Clean up `rm -rf`
 the job directory.
 Tests: the admission numbers (just under / over each), the scope command line, archive transfer with a fake ssh, the
 capability table, a `host: mserv` conflict rule.
