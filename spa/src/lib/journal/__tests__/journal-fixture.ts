@@ -6,7 +6,7 @@ import type { Tab } from '../../../types/tab'
 
 /** A tab whose first pane is a tmux session with a recorded Claude Code conversation `sessionId` (and the code the roster knows it by). */
 export const ccTabOf = (id: string, hostId: string, tmuxName: string, sessionId: string): Tab => ({
-  id, pinned: false, locked: false, createdAt: 0,
+  id, locked: false, createdAt: 0,
   layout: { type: 'leaf', pane: { id: `p-${id}`, content: {
     kind: 'tmux-session', hostId, sessionCode: `code-${tmuxName}`, mode: 'terminal', cachedName: tmuxName, tmuxInstance: 'i',
     rebuild: { sessionName: tmuxName, tmuxInstance: 'i', agent: { type: 'cc', sessionId, updatedAt: 1 }, capturedAt: 1 },
@@ -24,7 +24,7 @@ export const setJournalHost = (hostId: string, yes: boolean | null): void => {
 export function seedUnit(hostId: string, sessionId: string, unit: JournalUnit, over: Partial<UnitState> = {}): string {
   const key = `${unit.kind}:${unit.id}`
   const u: UnitState = {
-    unit, project: { name: 'purdex', remoteUrl: '' }, personName: 'Wake', entries: [], pinned: [], more: false, openConfirms: 0,
+    unit, project: { name: 'purdex', remoteUrl: '' }, personName: 'Wake', entries: [], confirms: [], more: false, openConfirms: 0,
     tasks: null, roadmap: null, staleAt: { entries: 0, tasks: 0, roadmap: 0 }, readAt: { entries: 1, tasks: 1, roadmap: 1 }, touched: 1, ...over,
   }
   useJournalStore.setState((s) => {

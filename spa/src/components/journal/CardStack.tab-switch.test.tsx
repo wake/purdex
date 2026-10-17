@@ -36,10 +36,10 @@ const heightOf = (el: Element) => el.querySelectorAll('[data-testid="journal-ent
 const maxTop = (el: Element) => Math.max(0, heightOf(el) - VIEW)
 
 const AT = new Date(2026, 9, 14, 9, 0).getTime()
-const taskEntry = (n: number): JournalEntry => ({ id: `t${String(n).padStart(3, '0')}`, kind: 'task_new', by: '', at: AT + n * 60_000, actor: 'Adam', text: `#${n} task ${n}`, refs: [], items: [], detail: '', pinned: false })
+const taskEntry = (n: number): JournalEntry => ({ id: `t${String(n).padStart(3, '0')}`, kind: 'task_new', by: '', at: AT + n * 60_000, actor: 'Adam', text: `#${n} task ${n}`, refs: [], items: [], detail: '' })
 const TASKS = Array.from({ length: 12 }, (_, i) => taskEntry(i + 1))
 const CONFIRM: JournalEntry = {
-  id: 'c1', kind: 'confirm', by: '', at: AT + 99 * 60_000, actor: 'Kenji → Wake', text: 'decide', refs: [], pinned: true,
+  id: 'c1', kind: 'confirm', by: '', at: AT + 99 * 60_000, actor: 'Kenji → Wake', text: 'decide', refs: [],
   items: [{ text: 'q1', done: false }], detail: 'the original question',
 }
 const SOLO_A = { kind: 'solo' as const, id: 'a', label: 'Solo A' }
@@ -105,8 +105,8 @@ beforeEach(() => {
     }))
   })
   setJournalHost(HOST, true)
-  seedUnit(HOST, 'SA', SOLO_A, { entries: TASKS, pinned: [CONFIRM], openConfirms: 1, tasks: [], roadmap: [] })
-  seedUnit(HOST, 'SB', SOLO_B, { entries: TASKS, pinned: [], tasks: [], roadmap: [] })
+  seedUnit(HOST, 'SA', SOLO_A, { entries: TASKS, confirms: [CONFIRM], openConfirms: 1, tasks: [], roadmap: [] })
+  seedUnit(HOST, 'SB', SOLO_B, { entries: TASKS, confirms: [], tasks: [], roadmap: [] })
   patchViewMemo(HOST, 'solo:a', { journalOpen: true, widths: { journal: 480, roadmap: 380, tasks: 400 } })
   setActive('a')
 })
@@ -123,7 +123,7 @@ function arrange() {
   fireEvent.click(screen.getByTestId('journal-filter-task'))
   stream().scrollTop = 40
   fireEvent.scroll(stream())
-  fireEvent.click(within(screen.getByTestId('journal-pinned-band')).getByTestId('journal-row-open'))
+  fireEvent.click(within(screen.getByTestId('journal-confirm-band')).getByTestId('journal-row-open'))
 }
 
 /** Everything `arrange` made, as the screen shows it. */
@@ -176,6 +176,21 @@ describe('the card stack across tab switches', () => {
     expectArranged()
     setActive('b')
     expect(screen.getByTestId('journal-filter-comm').getAttribute('aria-pressed')).toBe('true')
+  })
+})
+
+describe('固定 across tab switches and a remount', () => {
+  it('a fixed card is still fixed after switching away and back (an outside click then keeps it), and the stack remounting keeps it too', () => {
+    const r = render(<Shell />)
+    fireEvent.click(screen.getByTestId('journal-card-fix'))
+    awayAndBack()
+    expect(screen.getByTestId('journal-card-fix').getAttribute('aria-pressed')).toBe('true')
+    r.rerender(<Shell stack={false} />)
+    r.rerender(<Shell stack />)
+    expect(screen.getByTestId('journal-card-fix').getAttribute('aria-pressed')).toBe('true')
+    fireEvent.pointerDown(document.body)
+    expect(q('journal-card')).toBeTruthy()
+    expect(readViewMemo(HOST, 'solo:b').fixed.journal).toBe(false)
   })
 })
 

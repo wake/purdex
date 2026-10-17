@@ -5,7 +5,7 @@ import { FILTER_IDS, answered, matchesFilter, nextFilter } from './filters'
 import { ENTRY_KINDS, type EntryKind, type JournalEntry } from './types'
 
 const entry = (kind: EntryKind, over: Partial<JournalEntry> = {}): JournalEntry => ({
-  id: kind, kind, by: '', at: 0, actor: 'A', text: '', refs: [], items: [], detail: '', pinned: false, ...over,
+  id: kind, kind, by: '', at: 0, actor: 'A', text: '', refs: [], items: [], detail: '', ...over,
 })
 const kindsOf = (f: Parameters<typeof matchesFilter>[1]) => ENTRY_KINDS.filter((k) => matchesFilter(entry(k), f))
 

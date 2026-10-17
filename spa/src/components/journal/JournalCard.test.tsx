@@ -1,16 +1,16 @@
 // spa/src/components/journal/JournalCard.test.tsx — the journal card wired to the real stores (J-2c): the filters narrow the stream, the
-// person's name comes from the unit's host, refs link only with the project's remote URL, a pin click is optimistic, the band and
+// person's name comes from the unit's host, refs link only with the project's remote URL, a hand check is optimistic, the band and
 // the older-month button reach the store. The pieces are tested alone in their own files; this is the wiring.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 
 const getJournal = vi.fn()
-const setPinned = vi.fn()
+const setConfirmItem = vi.fn()
 vi.mock('../../lib/journal/api', () => ({
   getJournal: (...a: unknown[]) => getJournal(...a),
   getTasks: vi.fn(),
   getRoadmap: vi.fn(),
-  setPinned: (...a: unknown[]) => setPinned(...a),
+  setConfirmItem: (...a: unknown[]) => setConfirmItem(...a),
 }))
 // The stream is the real one; the spy only records the `entries` array each render hands it.
 const seenEntries = vi.hoisted(() => [] as unknown[])
@@ -38,11 +38,11 @@ import type { JournalEntry } from '../../lib/journal/types'
 
 const AT = new Date(2026, 9, 14, 14, 5).getTime()
 const entry = (id: string, over: Partial<JournalEntry> = {}): JournalEntry => ({
-  id, kind: 'exec', by: '', at: AT, actor: 'Adam', text: `text ${id}`, refs: [], items: [], detail: '', pinned: false, ...over,
+  id, kind: 'exec', by: '', at: AT, actor: 'Adam', text: `text ${id}`, refs: [], items: [], detail: '', ...over,
 })
 const E_EXEC = entry('e1', { at: AT, actor: 'Adam → Wake', text: 'Wake please look', refs: ['#2829', '7bcf08-12'] })
 const E_TASK = entry('t1', { kind: 'task_new', at: AT + 1000, text: '#17 a task' })
-const E_CONF = entry('c1', { kind: 'confirm', at: AT + 2000, actor: 'Kenji → Wake', pinned: true, items: [{ text: 'q1', done: false }], text: 'decide' })
+const E_CONF = entry('c1', { kind: 'confirm', at: AT + 2000, actor: 'Kenji → Wake', items: [{ text: 'q1', done: false }], text: 'decide' })
 
 const setActive = (id: string) => act(() => { useTabStore.setState({ activeTabId: id }) })
 const mount = () => render(<TeamDisplayProvider><CardStack /></TeamDisplayProvider>)
@@ -58,8 +58,8 @@ beforeEach(() => {
   useJournalUiStore.setState({ lastWidths: {}, teamOpen: {} })
   clearViewMemos()
   clearModuleRegistry()
-  getJournal.mockReset(); setPinned.mockReset()
-  setPinned.mockResolvedValue({ kind: 'ok', value: true })
+  getJournal.mockReset(); setConfirmItem.mockReset()
+  setConfirmItem.mockResolvedValue({ kind: 'ok', value: true })
   useShownHostsStore.setState({ ids: [HOST] })
   useI18nStore.getState().setLocale('en')
   seedScene({ members: [['A', 'a-tm']], tabs: [['x', null]], workspaces: [{ id: 'w1', tabs: ['x'] }], activeTabId: 'x' })
@@ -74,7 +74,7 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 const seedA = (over: Parameters<typeof seedUnit>[3] = {}) => {
-  const key = seedUnit(HOST, 'SA', { kind: 'solo', id: 'a', label: 'Solo A' }, { entries: [E_EXEC, E_TASK, E_CONF], pinned: [E_CONF], openConfirms: 1, ...over })
+  const key = seedUnit(HOST, 'SA', { kind: 'solo', id: 'a', label: 'Solo A' }, { entries: [E_EXEC, E_TASK, E_CONF], confirms: [E_CONF], openConfirms: 1, ...over })
   patchViewMemo(HOST, key, { journalOpen: true })
   setActive('a')
   return key
@@ -85,7 +85,7 @@ describe('the journal card', () => {
     seedA()
     mount()
     expect(streamIds()).toEqual(['e1', 't1', 'c1'])
-    expect(within(screen.getByTestId('journal-pinned-band')).getAllByTestId('journal-entry').map((n) => n.getAttribute('data-entry-id'))).toEqual(['c1'])
+    expect(within(screen.getByTestId('journal-confirm-band')).getAllByTestId('journal-entry').map((n) => n.getAttribute('data-entry-id'))).toEqual(['c1'])
     expect(screen.getByTestId('journal-filter-confirm-count').textContent).toBe('1')
   })
   it('a filter narrows the stream and clicking it again shows everything (the band stays)', () => {
@@ -94,7 +94,7 @@ describe('the journal card', () => {
     fireEvent.click(screen.getByTestId('journal-filter-task'))
     expect(streamIds()).toEqual(['t1'])
     expect(readViewMemo(HOST, key).filter).toBe('task')
-    expect(screen.getByTestId('journal-pinned-band')).toBeTruthy()
+    expect(screen.getByTestId('journal-confirm-band')).toBeTruthy()
     fireEvent.click(screen.getByTestId('journal-filter-task'))
     expect(streamIds()).toEqual(['e1', 't1', 'c1'])
     fireEvent.click(screen.getByTestId('journal-filter-confirm'))
@@ -132,24 +132,23 @@ describe('the journal card', () => {
     mount()
     expect(stream().queryAllByRole('link')).toEqual([])
   })
-  it('a pin click shows at once, asks the unit\'s host, and the band follows', () => {
+  it('a box click shows at once, asks the unit\'s host, and the entry leaves the band when its last item is checked', () => {
     seedA()
+    useJournalStore.setState((s) => ({ confirmSupport: { ...s.confirmSupport, [HOST]: true } }))
     mount()
-    const row = stream().getAllByTestId('journal-entry').find((n) => n.getAttribute('data-entry-id') === 'e1')!
-    fireEvent.click(within(row).getByTestId('journal-pin-toggle'))
-    expect(setPinned).toHaveBeenCalledWith(HOST, 'SA', 'e1', true)
-    expect(unitOf('SA').pinned.map((e) => e.id)).toEqual(['c1', 'e1'])
-    expect(within(screen.getByTestId('journal-pinned-band')).getAllByTestId('journal-entry').map((n) => n.getAttribute('data-entry-id'))).toEqual(['c1', 'e1'])
-  })
-  it('a 待確認 can be unpinned by hand; its items stay as they were', () => {
-    seedA()
-    mount()
-    const band = within(screen.getByTestId('journal-pinned-band'))
-    fireEvent.click(band.getByTestId('journal-pin-toggle'))
-    expect(setPinned).toHaveBeenCalledWith(HOST, 'SA', 'c1', false)
-    expect(screen.queryByTestId('journal-pinned-band')).toBeNull()
-    expect(unitOf('SA').entries.find((e) => e.id === 'c1')!.items).toEqual([{ text: 'q1', done: false }])
+    const band = within(screen.getByTestId('journal-confirm-band'))
+    fireEvent.click(band.getByTestId('journal-item-check'))
+    expect(setConfirmItem).toHaveBeenCalledWith(HOST, 'SA', 'c1', 0, true)
+    expect(unitOf('SA').confirms).toEqual([])
+    expect(unitOf('SA').openConfirms).toBe(0)
+    expect(screen.queryByTestId('journal-confirm-band')).toBeNull()
+    expect(unitOf('SA').entries.find((e) => e.id === 'c1')!.items).toEqual([{ text: 'q1', done: true }])
     expect(streamIds()).toContain('c1')
+  })
+  it('without journal.confirm.v1 the band boxes are read-only', () => {
+    seedA()
+    mount()
+    expect(within(screen.getByTestId('journal-confirm-band')).queryAllByTestId('journal-item-check')).toEqual([])
   })
   it('the older-month button asks the unit\'s host for the page before the oldest entry', () => {
     seedA({ more: true })

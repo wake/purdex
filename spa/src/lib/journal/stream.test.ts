@@ -5,7 +5,7 @@ import { dayKey, timeOf, withDays } from './stream'
 import type { JournalEntry } from './types'
 
 const at = (y: number, mo: number, d: number, h: number, mi: number) => new Date(y, mo - 1, d, h, mi).getTime()
-const e = (id: string, t: number): JournalEntry => ({ id, kind: 'exec', by: '', at: t, actor: 'A', text: '', refs: [], items: [], detail: '', pinned: false })
+const e = (id: string, t: number): JournalEntry => ({ id, kind: 'exec', by: '', at: t, actor: 'A', text: '', refs: [], items: [], detail: '' })
 
 describe('stream labels', () => {
   it('local date and time, zero padded', () => {

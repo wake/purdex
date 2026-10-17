@@ -9,10 +9,10 @@ beforeEach(() => { resetWarned(); vi.restoreAllMocks() })
 describe('parseEntry', () => {
   it.each(ENTRY_KINDS)('reads a %s entry', (kind) => {
     const e = parseEntry(wireEntry('wb:1:1', { kind, by: 'leader', refs: ['#1', 'PR #2'] }))
-    expect(e).toMatchObject({ id: 'wb:1:1', kind, by: 'leader', at: T0, actor: 'Adam', refs: ['#1', 'PR #2'], pinned: false, items: [], detail: '' })
+    expect(e).toMatchObject({ id: 'wb:1:1', kind, by: 'leader', at: T0, actor: 'Adam', refs: ['#1', 'PR #2'], items: [], detail: '' })
   })
   it('reads a confirm with its items and detail', () => {
-    expect(parseEntry(wireConfirm('wb:2:1'))).toMatchObject({ kind: 'confirm', pinned: true, detail: 'the original question', items: [{ text: 'git?', done: true }, { text: 'tasks?', done: false }] })
+    expect(parseEntry(wireConfirm('wb:2:1'))).toMatchObject({ kind: 'confirm', detail: 'the original question', items: [{ text: 'git?', done: true }, { text: 'tasks?', done: false }] })
   })
   it.each([
     ['not an object', 'x'],
@@ -23,7 +23,6 @@ describe('parseEntry', () => {
     ['negative at', wireEntry('a', { at: -1 })],
     ['text missing', (() => { const { text: _t, ...rest } = wireEntry('a'); return rest })()],
     ['refs not strings', wireEntry('a', { refs: [4] })],
-    ['pinned as a string', wireEntry('a', { pinned: 'yes' })],
     ['an item without done', wireEntry('a', { items: [{ text: 'q' }] })],
     ['detail as a number', wireEntry('a', { detail: 5 })],
   ])('rejects a row with %s', (_n, row) => {
@@ -37,6 +36,15 @@ describe('parseJournalPage', () => {
     expect(p).toMatchObject({ unit: { kind: 'team', id: 'tm1' }, project: { remoteUrl: 'https://github.com/wake/purdex' }, personName: 'Wake', more: true, openConfirms: 2 })
     expect(p?.entries).toHaveLength(2)
     expect(p?.pinned).toHaveLength(1)
+    expect(p?.confirms).toBeNull() // an older daemon sends none
+  })
+  it('reads confirms[] when sent, and ignores a per-entry pinned flag', () => {
+    const p = parseJournalPage(wirePage({ confirms: [wireConfirm('wb:4:1')], pinned: [wireConfirm('wb:4:1')] }))
+    expect(p?.confirms).toHaveLength(1)
+    expect(p?.confirms?.[0]).not.toHaveProperty('pinned')
+  })
+  it('a confirms[] that is not a list rejects the page', () => {
+    expect(parseJournalPage(wirePage({ confirms: 'x' }))).toBeNull()
   })
   it('person_name and remote_url are optional', () => {
     const p = parseJournalPage(wirePage({ person_name: undefined, project: { name: 'x' } }))

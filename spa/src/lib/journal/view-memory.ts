@@ -10,6 +10,8 @@ export interface ViewMemo {
   journalOpen: boolean
   roadmapOpen: boolean
   tasksOpen: boolean
+  /** 固定: a fixed card is not closed by a click outside it (U4); per card, default off. */
+  fixed: { journal: boolean; roadmap: boolean; tasks: boolean }
   /** Card widths in px; null = not set yet (the UI initialises it from the last used width). */
   widths: { journal: number | null; roadmap: number | null; tasks: number | null }
   filter: JournalFilter
@@ -36,7 +38,7 @@ const SEP = '\u0000'
 const keyOf = (hostId: string, unitKey: string): string => `${hostId}${SEP}${unitKey}`
 
 export const initialViewMemo = (): ViewMemo => ({
-  journalOpen: false, roadmapOpen: false, tasksOpen: false, widths: { journal: null, roadmap: null, tasks: null },
+  journalOpen: false, roadmapOpen: false, tasksOpen: false, fixed: { journal: false, roadmap: false, tasks: false }, widths: { journal: null, roadmap: null, tasks: null },
   filter: 'all', scroll: 0, pinnedToBottom: true, detailId: null,
 })
 

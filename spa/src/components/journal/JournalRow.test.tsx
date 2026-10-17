@@ -1,4 +1,4 @@
-// spa/src/components/journal/JournalRow.test.tsx — a stream row and the pinned band (J-2c, spec §11): kind chip, actor, text, refs,
+// spa/src/components/journal/JournalRow.test.tsx — a stream row and the 待確認 band (J-2c, spec §11): kind chip, actor, text, refs,
 // the person's name, the read-only checklist of a 待確認 (no coloured left edge), the hover pin button.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
@@ -8,13 +8,13 @@ import type { JournalEntry } from '../../lib/journal/types'
 
 const at = new Date(2026, 9, 14, 14, 5).getTime()
 const entry = (over: Partial<JournalEntry> = {}): JournalEntry => ({
-  id: 'e1', kind: 'exec', by: '', at, actor: 'Adam', text: 'did the thing', refs: [], items: [], detail: '', pinned: false, ...over,
+  id: 'e1', kind: 'exec', by: '', at, actor: 'Adam', text: 'did the thing', refs: [], items: [], detail: '', ...over,
 })
 const confirm = (over: Partial<JournalEntry> = {}) => entry({
-  id: 'c1', kind: 'confirm', actor: 'Kenji → Wake', text: 'Wake, four things need a decision', pinned: true, detail: 'the question',
+  id: 'c1', kind: 'confirm', actor: 'Kenji → Wake', text: 'Wake, four things need a decision', detail: 'the question',
   items: [{ text: 'git?', done: true }, { text: 'tasks?', done: false }], ...over,
 })
-const ctxOf = (over: Partial<RowContext> = {}): RowContext => ({ personName: 'Wake', remoteUrl: 'https://github.com/wake/purdex', selectedId: null, onToggleDetail: vi.fn(), onTogglePin: vi.fn(), ...over })
+const ctxOf = (over: Partial<RowContext> = {}): RowContext => ({ personName: 'Wake', remoteUrl: 'https://github.com/wake/purdex', selectedId: null, onToggleDetail: vi.fn(), ...over })
 
 beforeEach(() => { cleanup(); useI18nStore.getState().setLocale('en') })
 afterEach(() => cleanup())
@@ -103,22 +103,31 @@ describe('JournalRow', () => {
     expect(labels[0]).not.toBe(labels[1])
     expect(screen.getAllByTestId('journal-row-open')[1].getAttribute('title')).toBe(labels[1])
   })
-  it('the pin button toggles the pin and does not open the detail', () => {
-    const c = ctxOf()
+  it('a band row (compact) has clickable boxes that report entry, index and the new state, and do not open the detail', () => {
+    const onToggleItem = vi.fn()
+    const c = ctxOf({ onToggleItem })
     const e = confirm()
-    render(<JournalRow entry={e} ctx={c} />)
-    const btn = screen.getByTestId('journal-pin-toggle')
-    expect(btn.getAttribute('aria-label')).toBe('Unpin')
-    fireEvent.click(btn)
-    expect(c.onTogglePin).toHaveBeenCalledWith(e)
+    render(<JournalRow entry={e} compact ctx={c} />)
+    const boxes = screen.getAllByTestId('journal-item-check')
+    expect(boxes.map((b) => b.getAttribute('aria-checked'))).toEqual(['true', 'false'])
+    fireEvent.click(boxes[1])
+    expect(onToggleItem).toHaveBeenCalledWith(e, 1, true)
+    fireEvent.click(boxes[0])
+    expect(onToggleItem).toHaveBeenCalledWith(e, 0, false)
     expect(c.onToggleDetail).not.toHaveBeenCalled()
   })
-  it('an unpinned row offers Pin, hidden until hover', () => {
-    render(<JournalRow entry={entry()} ctx={ctxOf()} />)
-    const btn = screen.getByTestId('journal-pin-toggle')
-    expect(btn.getAttribute('aria-label')).toBe('Pin')
-    expect(btn.className).toContain('opacity-0')
-    expect(btn.className).toContain('group-hover:opacity-100')
+  it('without onToggleItem (no journal.confirm.v1) the boxes are read-only: no buttons', () => {
+    render(<JournalRow entry={confirm()} compact ctx={ctxOf()} />)
+    expect(screen.queryAllByTestId('journal-item-check')).toEqual([])
+    expect(screen.getByTestId('journal-checklist').querySelectorAll('li')).toHaveLength(2)
+  })
+  it('a stream row (not compact) keeps its list read-only even when the host can check', () => {
+    render(<JournalRow entry={confirm()} ctx={ctxOf({ onToggleItem: vi.fn() })} />)
+    expect(screen.queryAllByTestId('journal-item-check')).toEqual([])
+  })
+  it('has no pin control any more', () => {
+    render(<JournalRow entry={confirm()} ctx={ctxOf()} />)
+    expect(screen.queryByTestId('journal-pin-toggle')).toBeNull()
   })
   it('uses theme tokens only: no inline colours', () => {
     const { container } = render(<JournalRow entry={confirm()} ctx={ctxOf()} />)

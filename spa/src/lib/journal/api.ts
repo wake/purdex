@@ -48,11 +48,11 @@ export function getRoadmap(hostId: string, sessionId: string): Promise<Outcome<R
   return call(hostId, `/api/journal/roadmap${qs({ session_id: sessionId })}`, { method: 'GET' }, parseRoadmap, 'roadmap')
 }
 
-/** `PUT /api/journal/pin` — the answer's body is not read (ASSUMED: any 2xx means done). */
-export function setPinned(hostId: string, sessionId: string, entryId: string, pinned: boolean): Promise<Outcome<true>> {
-  return call(hostId, '/api/journal/pin', {
+/** `PUT /api/journal/confirm` — check (`done`) or uncheck item `idx` of a 待確認 by hand (journal.confirm.v1). The answer's body is not read (204). */
+export function setConfirmItem(hostId: string, sessionId: string, entryId: string, idx: number, done: boolean): Promise<Outcome<true>> {
+  return call(hostId, '/api/journal/confirm', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, entry_id: entryId, pinned }),
-  }, () => true as const, 'pin answer')
+    body: JSON.stringify({ session_id: sessionId, entry_id: entryId, idx, done }),
+  }, () => true as const, 'confirm answer')
 }
