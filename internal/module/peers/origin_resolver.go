@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	iagent "github.com/wake/purdex/internal/agent"
@@ -302,16 +303,32 @@ const (
 // A relay's own /clear also leaves the pid in another conversation;
 // EndTeam's relay guard and P4-3's cleared transaction cover that.
 func (r *OriginResolver) LeadPresence(sessionID string, pid int, procStart string) Presence {
+	return r.leadPresenceIn(r.readLeadEntries(), sessionID, pid, procStart)
+}
+
+// readRegistryFn is the one registry read of the presence answers; a var so tests count the reads.
+var readRegistryFn = ipeers.ReadRegistry
+
+// leadEntries is the registry as LeadPresence consults it: the entries and the proxy pids of one read.
+type leadEntries struct {
+	entries []ipeers.Entry
+	proxies map[int]bool
+}
+
+func (r *OriginResolver) readLeadEntries() leadEntries {
 	// A missing dir reads as empty and an error leaves entries nil: either
 	// way no entry, so only step 2 can say gone.
-	entries, _, readErr := ipeers.ReadRegistry(r.m.registryDir, r.m.liveness)
+	entries, _, readErr := readRegistryFn(r.m.registryDir, r.m.liveness)
 	if readErr != nil {
 		r.m.logf("peers: origin resolver: read registry: %v", readErr)
 	}
-	proxies := r.m.proxyPIDs()
+	return leadEntries{entries: entries, proxies: r.m.proxyPIDs()}
+}
+
+func (r *OriginResolver) leadPresenceIn(le leadEntries, sessionID string, pid int, procStart string) Presence {
 	ownEntry := false // pid's own verified entry, under another session id
-	for _, e := range entries {
-		if e.IsProxy || proxies[e.PID] {
+	for _, e := range le.entries {
+		if e.IsProxy || le.proxies[e.PID] {
 			continue
 		}
 		if sessionID != "" && e.SessionID == sessionID {
@@ -492,4 +509,37 @@ func (r *OriginResolver) processRoots(view rootView) ([]resources.Root, error) {
 		roots = append(roots, root)
 	}
 	return roots, nil
+}
+
+// PresenceSnapshot reads the registry once, when its first answer is asked for, and answers LeadPresence for any number
+// of sessions from that read: the team sweeper's liveness pass asks about every member and lead of the host, and one
+// read per question re-listed and re-parsed every session file each time (#3092). The snapshot belongs to one pass and
+// is dropped after it.
+//
+// The answers are LeadPresence's with one safeguard: Live and Unknown come from the snapshot (a session that is live
+// in it was live moments ago and the next pass says otherwise), but a Gone answer, which cannot be undone by the
+// caller, is asked again from a fresh read, so a member whose session id moved (a relay) after the snapshot was taken
+// is never ended on a registry that predates the move. Gone is the rare answer, so the second read is not a cost.
+func (r *OriginResolver) PresenceSnapshot() PresenceReader { return &PresenceSnapshot{r: r} }
+
+// PresenceReader is the one question a pass asks of a registry read.
+type PresenceReader interface {
+	LeadPresence(sessionID string, pid int, procStart string) Presence
+}
+
+// PresenceSnapshot is one pass's registry read, see OriginResolver.PresenceSnapshot.
+type PresenceSnapshot struct {
+	r    *OriginResolver
+	once sync.Once
+	le   leadEntries
+}
+
+// LeadPresence is OriginResolver.LeadPresence answered from the snapshot.
+func (s *PresenceSnapshot) LeadPresence(sessionID string, pid int, procStart string) Presence {
+	s.once.Do(func() { s.le = s.r.readLeadEntries() })
+	p := s.r.leadPresenceIn(s.le, sessionID, pid, procStart)
+	if p == PresenceGone {
+		return s.r.LeadPresence(sessionID, pid, procStart)
+	}
+	return p
 }
