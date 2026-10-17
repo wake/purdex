@@ -74,11 +74,17 @@ func plan(ws string, spec Spec) (key string, dirs []string, err error) {
 		if !ok || !filepath.IsLocal(f) || path.IsAbs(f) || strings.Contains(f, `\`) {
 			return "", nil, fmt.Errorf("deps: %q is not a lockfile this cache knows", f)
 		}
+		if err := plainPath(ws, f); err != nil {
+			return "", nil, err
+		}
 		b, err := os.ReadFile(filepath.Join(ws, f))
 		if err != nil {
 			return "", nil, fmt.Errorf("deps: %w", err)
 		}
 		dir := path.Join(path.Dir(f), d)
+		if err := plainPath(ws, dir); err != nil {
+			return "", nil, err
+		}
 		if !seen[dir] {
 			seen[dir] = true
 			dirs = append(dirs, dir)
@@ -228,8 +234,7 @@ func (c *Cache) prune(keep string) {
 			continue
 		}
 		_ = os.RemoveAll(filepath.Join(c.Dir, e.key))
-		lock.Close()
-		_ = os.Remove(filepath.Join(c.Dir, e.key+".lock"))
+		lock.Close() // the lock file stays: one process may have it open and the next opens it by name, and they must find the same file
 	}
 }
 
@@ -245,6 +250,27 @@ func clone(ctx context.Context, src, dst string) error {
 	cmd := execstat.CommandContext(ctx, "wwd.deps-clone", "cp", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("deps: cp %s: %w: %s", src, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// plainPath says that no part of rel (a path in the workspace ws) is a symlink: the manifest is the submitter's, and a lockfile or a
+// dependency directory reached through a link could read, copy into, or (a hit removes the destination first) delete what is outside the
+// workspace. A part that is not there yet is fine.
+func plainPath(ws, rel string) error {
+	cur := ws
+	for _, part := range strings.Split(rel, "/") {
+		cur = filepath.Join(cur, part)
+		st, err := os.Lstat(cur)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("deps: %w", err)
+		}
+		if st.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("deps: %q goes through a symlink", rel)
+		}
 	}
 	return nil
 }

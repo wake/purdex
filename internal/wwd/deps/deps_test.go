@@ -265,4 +265,33 @@ func TestPrune_WaitsForAnEntryThatIsBeingRead(t *testing.T) {
 	<-done
 	_, err = os.Stat(filepath.Join(c.Dir, r1.Key))
 	assert.True(t, os.IsNotExist(err), "gone once the reader is done")
+	_, err = os.Stat(filepath.Join(c.Dir, r1.Key+".lock"))
+	assert.NoError(t, err, "the lock file stays: a process that has it open and one that opens it next must lock the same file")
+}
+
+// A lockfile path that goes through a symlink out of the workspace is refused, and nothing outside is read, copied or removed.
+func TestPrepare_ASymlinkOutOfTheWorkspaceInThePathIsRefused(t *testing.T) {
+	c, in := newCache(t, 2), &installer{}
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "pnpm-lock.yaml"), []byte("outside\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(outside, "node_modules/keep"), 0o755))
+	ws := t.TempDir()
+	require.NoError(t, os.Symlink(outside, filepath.Join(ws, "link")))
+	_, err := c.Prepare(context.Background(), ws, Spec{Lockfiles: []string{"link/pnpm-lock.yaml"}, Install: in.install})
+	require.Error(t, err)
+	assert.EqualValues(t, 0, in.calls.Load(), "nothing was installed")
+	_, serr := os.Stat(filepath.Join(outside, "node_modules/keep"))
+	assert.NoError(t, serr, "nothing outside was removed")
+
+	// the same when the entry exists (a hit would clone out and remove the destination first)
+	wsOK := workspace(t, "outside\n")
+	_, err = c.Prepare(context.Background(), wsOK, spec(in))
+	require.NoError(t, err)
+	ws2 := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(ws2, "pnpm-lock.yaml"), []byte("outside\n"), 0o644))
+	require.NoError(t, os.Symlink(outside, filepath.Join(ws2, "node_modules"))) // the dependency directory itself is a link out
+	_, err = c.Prepare(context.Background(), ws2, spec(in))
+	assert.Error(t, err)
+	_, serr = os.Stat(filepath.Join(outside, "node_modules/keep"))
+	assert.NoError(t, serr, "nothing outside was removed by a hit")
 }
