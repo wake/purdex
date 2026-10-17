@@ -203,8 +203,9 @@ func (r *ProcReader) Snapshot(now time.Time) (ProcSnapshot, ProcContext, error) 
 	// the worst case is one wrong figure in one ranking, and the CPU memory is
 	// keyed by the full start time, so it cannot carry into the next sample.
 	// A row whose pid changed hands is dropped, and the lists are chosen again
-	// from the rest (a few rounds at most: each round only removes rows).
-	for round := 0; round < 3; round++ {
+	// from the rest, until every row in them has been checked. Each round removes
+	// at least one row or ends the loop, so it is bounded by the table size.
+	for {
 		gone := map[int]bool{}
 		for _, p := range SelectTop(snap.Procs, procsTopMem, procsTopCPU) {
 			if !r.stillSame(p.PID, r.idents[p.PID]) {
