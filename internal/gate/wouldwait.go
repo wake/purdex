@@ -64,7 +64,7 @@ func (g *Gate) WouldWait(class Class) WouldWait {
 	}
 	pool := g.pool(cfg, class)
 	held := pool.Held()
-	queued := pool.PeekWaiting() // counts the live tickets and removes nothing
+	queued := pool.peekSnapshot().AheadOfNew() // the live front and normal tickets: back and held ones are passed by a new command (spec 5.2); removes nothing
 	w.Ahead = len(held) + queued
 	now := g.Now()
 	if len(held) > 0 {
