@@ -123,6 +123,13 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The answers above came from req.Dir after the snapshot: if the path was pointed at another repository meanwhile, refuse.
+	if again, err := g.run(ctx, "rev-parse", "--show-toplevel"); err != nil || !sameDir(again, root) {
+		return nil, fmt.Errorf("the repository changed while the submission was prepared")
+	}
+	if again, err := g.run(ctx, "rev-parse", "--path-format=absolute", "--git-common-dir"); err != nil || again != gitDir {
+		return nil, fmt.Errorf("the git directory changed while the submission was prepared")
+	}
 	sub := wire.JobSubmission{
 		Repo:          repo,
 		Snapshot:      wire.Snapshot{Commit: snap.SHA, Tree: tree, Base: g.base(ctx, snap.SHA), RelCwd: relCwd(snap.Rel, task.Cwd)},
