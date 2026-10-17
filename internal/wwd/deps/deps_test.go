@@ -70,8 +70,10 @@ func checkInstalled(t *testing.T, ws string) {
 	assert.Equal(t, os.FileMode(0o755), st.Mode().Perm(), "the mode is kept")
 }
 
+const fp = "pnpm 10.23 / node 24.14 / install --frozen-lockfile"
+
 func spec(i *installer) Spec {
-	return Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Install: i.install}
+	return Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Fingerprint: fp, Install: i.install}
 }
 
 // The first workspace installs; the second one with the same lockfile gets a clone and installs nothing.
@@ -195,7 +197,7 @@ func TestPrepare_RefusesALockfileItDoesNotKnow(t *testing.T) {
 	c := newCache(t, 2)
 	ws := workspace(t, "z\n")
 	for _, f := range []string{"", "../pnpm-lock.yaml", "/etc/passwd", "go.sum", "sub\\pnpm-lock.yaml"} {
-		_, err := c.Prepare(context.Background(), ws, Spec{Lockfiles: []string{f}, Install: (&installer{}).install})
+		_, err := c.Prepare(context.Background(), ws, Spec{Lockfiles: []string{f}, Fingerprint: fp, Install: (&installer{}).install})
 		assert.Error(t, err, "%q", f)
 	}
 	_, err := c.Prepare(context.Background(), ws, Spec{})
@@ -214,12 +216,12 @@ func TestPrepare_ALockfileInASubdirectory(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Join(w, "spa/node_modules/a"), 0o755))
 		return os.WriteFile(filepath.Join(w, "spa/node_modules/a/x"), []byte("x"), 0o644)
 	}
-	_, err := c.Prepare(context.Background(), ws, Spec{Lockfiles: []string{"spa/pnpm-lock.yaml"}, Install: in})
+	_, err := c.Prepare(context.Background(), ws, Spec{Lockfiles: []string{"spa/pnpm-lock.yaml"}, Fingerprint: fp, Install: in})
 	require.NoError(t, err)
 	ws2 := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(ws2, "spa"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(ws2, "spa/pnpm-lock.yaml"), []byte("l\n"), 0o644))
-	r, err := c.Prepare(context.Background(), ws2, Spec{Lockfiles: []string{"spa/pnpm-lock.yaml"}})
+	r, err := c.Prepare(context.Background(), ws2, Spec{Lockfiles: []string{"spa/pnpm-lock.yaml"}, Fingerprint: fp})
 	require.NoError(t, err)
 	assert.True(t, r.Hit, "a hit needs no way to install")
 	_, err = os.Stat(filepath.Join(ws2, "spa/node_modules/a/x"))
@@ -277,7 +279,7 @@ func TestPrepare_ASymlinkOutOfTheWorkspaceInThePathIsRefused(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(outside, "node_modules/keep"), 0o755))
 	ws := t.TempDir()
 	require.NoError(t, os.Symlink(outside, filepath.Join(ws, "link")))
-	_, err := c.Prepare(context.Background(), ws, Spec{Lockfiles: []string{"link/pnpm-lock.yaml"}, Install: in.install})
+	_, err := c.Prepare(context.Background(), ws, Spec{Lockfiles: []string{"link/pnpm-lock.yaml"}, Fingerprint: fp, Install: in.install})
 	require.Error(t, err)
 	assert.EqualValues(t, 0, in.calls.Load(), "nothing was installed")
 	_, serr := os.Stat(filepath.Join(outside, "node_modules/keep"))
@@ -300,4 +302,87 @@ func TestPrepare_ASymlinkOutOfTheWorkspaceInThePathIsRefused(t *testing.T) {
 	assert.Error(t, err)
 	_, serr = os.Stat(filepath.Join(outside, "node_modules/keep"))
 	assert.NoError(t, serr, "nothing outside was removed by a hit")
+}
+
+// The same lockfile installed by another recipe (another package manager version, Node ABI, flags) is another entry.
+func TestPrepare_AnotherInstallerFingerprintIsAnotherKey(t *testing.T) {
+	c, in := newCache(t, 2), &installer{}
+	r1, err := c.Prepare(context.Background(), workspace(t, "same\n"), spec(in))
+	require.NoError(t, err)
+	s2 := spec(in)
+	s2.Fingerprint = "pnpm 10.23 / node 25.0 / install --frozen-lockfile"
+	r2, err := c.Prepare(context.Background(), workspace(t, "same\n"), s2)
+	require.NoError(t, err)
+	assert.NotEqual(t, r1.Key, r2.Key)
+	assert.False(t, r2.Hit)
+	assert.EqualValues(t, 2, in.calls.Load())
+
+	// the fingerprint is required: a cache that cannot tell installs apart would serve the wrong one
+	s3 := spec(in)
+	s3.Fingerprint = ""
+	_, err = c.Prepare(context.Background(), workspace(t, "same\n"), s3)
+	assert.Error(t, err)
+}
+
+// The boundary between fields is part of the key: a lockfile name and content, or a fingerprint, cannot be shifted into each other.
+func TestPlan_FieldsAreDelimited(t *testing.T) {
+	ws1 := workspace(t, "ab")
+	ws2 := workspace(t, "b")
+	k1, _, err := plan(ws1, Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Fingerprint: "x"})
+	require.NoError(t, err)
+	k2, _, err := plan(ws2, Spec{Lockfiles: []string{"pnpm-lock.yaml"}, Fingerprint: "ax"})
+	require.NoError(t, err)
+	assert.NotEqual(t, k1, k2)
+}
+
+// An entry that was only half removed (a prune killed midway) is not a hit: it is thrown away and installed again.
+func TestPrepare_AHalfRemovedEntryIsNotAHit(t *testing.T) {
+	c, in := newCache(t, 2), &installer{}
+	r1, err := c.Prepare(context.Background(), workspace(t, "half\n"), spec(in))
+	require.NoError(t, err)
+	require.NoError(t, os.RemoveAll(filepath.Join(c.Dir, r1.Key, "node_modules"))) // what a killed RemoveAll of the old kind leaves: the entry root, a directory gone
+	ws := workspace(t, "half\n")
+	r2, err := c.Prepare(context.Background(), ws, spec(in))
+	require.NoError(t, err)
+	assert.False(t, r2.Hit, "installed again")
+	assert.EqualValues(t, 2, in.calls.Load())
+	checkInstalled(t, ws)
+	r3, err := c.Prepare(context.Background(), workspace(t, "half\n"), spec(in))
+	require.NoError(t, err)
+	assert.True(t, r3.Hit, "and the new entry is whole")
+}
+
+// An eviction renames the entry away first, so a kill during the removal never leaves something that looks like an entry.
+func TestPrune_LeavesNoEntryShapedRemnants(t *testing.T) {
+	c, in := newCache(t, 1), &installer{}
+	r1, err := c.Prepare(context.Background(), workspace(t, "e1\n"), spec(in))
+	require.NoError(t, err)
+	time.Sleep(20 * time.Millisecond)
+	_, err = c.Prepare(context.Background(), workspace(t, "e2\n"), spec(in))
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(c.Dir, r1.Key))
+	assert.True(t, os.IsNotExist(err))
+	des, _ := os.ReadDir(c.Dir)
+	for _, de := range des {
+		assert.NotContains(t, de.Name(), ".gone-", "the removed entry's remnants are cleaned: %s", de.Name())
+	}
+}
+
+// What a crash leaves behind (a temporary directory of an install, a tombstone of an eviction) is removed once it is old; a young one,
+// which another process may be using, is left.
+func TestSweep_RemovesOldTemporaryAndTombstoneDirectories(t *testing.T) {
+	c := newCache(t, 2)
+	old := time.Now().Add(-2 * tmpMaxAge)
+	for _, n := range []string{"aaaa.tmp-123", "bbbb.gone-456"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(c.Dir, n, "node_modules/x"), 0o755))
+		require.NoError(t, os.Chtimes(filepath.Join(c.Dir, n), old, old))
+	}
+	require.NoError(t, os.MkdirAll(filepath.Join(c.Dir, "cccc.tmp-789/node_modules"), 0o755)) // young
+	c.sweep()
+	for _, n := range []string{"aaaa.tmp-123", "bbbb.gone-456"} {
+		_, err := os.Stat(filepath.Join(c.Dir, n))
+		assert.True(t, os.IsNotExist(err), n)
+	}
+	_, err := os.Stat(filepath.Join(c.Dir, "cccc.tmp-789"))
+	assert.NoError(t, err, "a young one stays")
 }

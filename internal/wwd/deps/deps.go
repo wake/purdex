@@ -33,7 +33,11 @@ var dirOf = map[string]string{
 // no entry for them. Install runs in the workspace (its directory is the argument) and is the caller's: it knows the package manager.
 type Spec struct {
 	Lockfiles []string
-	Install   func(ctx context.Context, ws string) error
+	// Fingerprint says how the dependencies are made: the install command and flags, the package manager's version, the Node (or PHP)
+	// version whose ABI native modules are built for. It is part of the key, so the same lockfile installed another way is another
+	// entry, and it is required: a cache that cannot tell installs apart would serve the wrong one.
+	Fingerprint string
+	Install     func(ctx context.Context, ws string) error
 }
 
 // Result says what Prepare did.
@@ -56,7 +60,9 @@ func NewCache(dir string, keep int) (*Cache, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	return &Cache{Dir: dir, Keep: keep, pollLock: 100 * time.Millisecond}, nil
+	c := &Cache{Dir: dir, Keep: keep, pollLock: 100 * time.Millisecond}
+	c.sweep()
+	return c, nil
 }
 
 // plan reads the lockfiles of the workspace and returns the key and the directories (relative to the workspace) that go with them.
@@ -64,10 +70,14 @@ func plan(ws string, spec Spec) (key string, dirs []string, err error) {
 	if len(spec.Lockfiles) == 0 {
 		return "", nil, errors.New("deps: no lockfile")
 	}
+	if spec.Fingerprint == "" {
+		return "", nil, errors.New("deps: no fingerprint of the install")
+	}
 	files := append([]string(nil), spec.Lockfiles...)
 	sort.Strings(files)
 	h := sha256.New()
 	fmt.Fprintf(h, "%s/%s\n", runtime.GOOS, runtime.GOARCH) // an install made on one platform is not for another
+	fmt.Fprintf(h, "fingerprint\x00%d\x00%s\x00", len(spec.Fingerprint), spec.Fingerprint)
 	seen := map[string]bool{}
 	for _, f := range files {
 		d, ok := dirOf[path.Base(f)]
@@ -115,13 +125,16 @@ func (c *Cache) Prepare(ctx context.Context, ws string, spec Spec) (Result, erro
 		return Result{}, err
 	}
 	defer lock.Close()
-	if _, err := os.Stat(entry); err == nil { // another worker made it while this one waited
-		lock.Close()
-		hit, err := c.cloneOut(ctx, key, entry, ws, dirs)
-		if err == nil && !hit {
-			err = errors.New("deps: the entry went away")
+	if _, err := os.Stat(entry); err == nil {
+		if entryWhole(entry, dirs) { // another worker made it while this one waited
+			lock.Close()
+			hit, err := c.cloneOut(ctx, key, entry, ws, dirs)
+			if err == nil && !hit {
+				err = errors.New("deps: the entry went away")
+			}
+			return Result{Key: key, Hit: hit}, err
 		}
-		return Result{Key: key, Hit: hit}, err
+		c.discard(entry) // something that looks like an entry and is not whole (a removal that was killed midway): installed again
 	}
 	if err := spec.Install(ctx, ws); err != nil {
 		return Result{}, fmt.Errorf("deps: install: %w", err)
@@ -143,6 +156,7 @@ func (c *Cache) Prepare(ctx context.Context, ws string, spec Spec) (Result, erro
 		return Result{}, err
 	}
 	c.prune(key)
+	c.sweep()
 	return Result{Key: key}, nil
 }
 
@@ -156,7 +170,7 @@ func (c *Cache) cloneOut(ctx context.Context, key, entry, ws string, dirs []stri
 		return false, err
 	}
 	defer lock.Close()
-	if _, err := os.Stat(entry); err != nil { // pruned between the check and the lock
+	if !entryWhole(entry, dirs) { // pruned between the check and the lock, or not whole
 		return false, nil
 	}
 	for _, d := range dirs {
@@ -233,8 +247,50 @@ func (c *Cache) prune(keep string) {
 		if err != nil {
 			continue
 		}
-		_ = os.RemoveAll(filepath.Join(c.Dir, e.key))
+		c.discard(filepath.Join(c.Dir, e.key))
 		lock.Close() // the lock file stays: one process may have it open and the next opens it by name, and they must find the same file
+	}
+}
+
+// discard takes an entry out of the cache: it is renamed to a name that is not an entry's first (a rename is whole or not at all), and
+// then removed; a removal that fails or is killed leaves a tombstone, which sweep removes later, never something that looks like an entry.
+// The caller holds the entry's lock exclusively.
+func (c *Cache) discard(entry string) {
+	gone := fmt.Sprintf("%s.gone-%d", entry, time.Now().UnixNano())
+	if err := os.Rename(entry, gone); err != nil {
+		return
+	}
+	_ = os.RemoveAll(gone)
+}
+
+// entryWhole says that the entry has every directory a use of it needs.
+func entryWhole(entry string, dirs []string) bool {
+	for _, d := range dirs {
+		if st, err := os.Lstat(filepath.Join(entry, d)); err != nil || !st.IsDir() {
+			return false
+		}
+	}
+	return true
+}
+
+// tmpMaxAge is how old a temporary directory of an install or a tombstone of an eviction must be before sweep removes it: a live
+// install in another process has a young one. (A variable so that a test can use it.)
+var tmpMaxAge = 6 * time.Hour
+
+// sweep removes what a crash left: temporary directories (<key>.tmp-*) and tombstones (<key>.gone-*) older than tmpMaxAge.
+func (c *Cache) sweep() {
+	des, err := os.ReadDir(c.Dir)
+	if err != nil {
+		return
+	}
+	for _, de := range des {
+		n := de.Name()
+		if !de.IsDir() || !(strings.Contains(n, ".tmp-") || strings.Contains(n, ".gone-")) {
+			continue
+		}
+		if info, err := de.Info(); err == nil && time.Since(info.ModTime()) > tmpMaxAge {
+			_ = os.RemoveAll(filepath.Join(c.Dir, n))
+		}
 	}
 }
 
