@@ -278,10 +278,19 @@ func TestAck_AnOwnerNameThatTwoHostsShareIsAmbiguousNotGuessed(t *testing.T) {
 	ap.a.m.core.CfgMu.Lock()
 	ap.a.m.core.Cfg.Peers.Hosts = append(ap.a.m.core.Cfg.Peers.Hosts, config.PeerHost{Alias: "a26-twin", HostID: "a26:cccccc", URL: "http://x", Token: "t", InboundToken: "i"})
 	ap.a.m.core.CfgMu.Unlock()
-	before := len(ap.a.loop().pathsNow())
+	acksSent := func() int { // the ack route calls (the count question to the targets goes to the same route)
+		n := 0
+		for _, p := range ap.a.loop().pathsNow() {
+			if strings.HasSuffix(p, pathAck) {
+				n++
+			}
+		}
+		return n
+	}
+	before := acksSent()
 	_, resp := ap.ackOn(t, ap.a, map[string]any{"ids": []string{ap.bIDs[0], ap.aIDs[0]}, "note": "n"})
 	require.Equal(t, []watch.AckResult{{ID: ap.bIDs[0], Outcome: watch.AckAmbiguous}, {ID: ap.aIDs[0], Outcome: watch.AckHandled}}, resp.Results)
-	require.Equal(t, before, len(ap.a.loop().pathsNow()), "nothing was sent to either a26")
+	require.LessOrEqual(t, acksSent()-before, 1, "no ack was sent to either a26 (the one call is the count question to the target)")
 	require.False(t, ap.b.m.acks.Handled(ap.bIDs[0]))
 
 	// a peer that goes by this host's own name: this host's events are not guessed at either
@@ -298,6 +307,57 @@ func TestAck_AllOnAnotherHostReportsThatHostsCount(t *testing.T) {
 	ap.ackOn(t, ap.a, map[string]any{"all": true, "host": "a26", "note": "n"}) // a26 has nothing pending now
 	_, resp := ap.ackOn(t, ap.a, map[string]any{"all": true, "host": "a26", "note": "again"})
 	require.Equal(t, 0, resp.Handled)
-	require.Equal(t, 0, resp.Unhandled, "a26 has none left, whatever a has")
+	require.Equal(t, []HostLeft{{Host: "mlab", Unhandled: 2}, {Host: "a26", Unhandled: 0}}, resp.Hosts, "a26 has none left, a still has its own")
+	require.Equal(t, 0, resp.Unhandled, "unhandled keeps its meaning: what is left on the host named")
 	require.Equal(t, 2, ap.unhandledOn(t, ap.a), "a still has its own")
+}
+
+// The count after an ack is of every target host, not of this one only: acking an event of one host must not read as "all done" while
+// another host still has some (#3143).
+func TestAck_TheRemainingCountListsEveryTargetHost(t *testing.T) {
+	ap := newAckPair(t)
+	code, resp := ap.ackOn(t, ap.a, map[string]any{"ids": []string{ap.aIDs[0]}, "note": "n"})
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, []HostLeft{{Host: "mlab", Unhandled: 1}, {Host: "a26", Unhandled: 2}}, resp.Hosts, "a has one left, b still has both")
+	require.Equal(t, 3, *resp.Remaining, "the sum")
+	require.Equal(t, 1, resp.Unhandled, "and unhandled keeps its meaning: what is left on the host asked (a CLI that predates hosts reads it so)")
+
+	// the ids of the other host: its own answer is used, a is asked for nothing it has already said
+	code, resp = ap.ackOn(t, ap.a, map[string]any{"ids": []string{ap.bIDs[0]}, "note": "n"})
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, []HostLeft{{Host: "mlab", Unhandled: 1}, {Host: "a26", Unhandled: 1}}, resp.Hosts)
+
+	// all, on this host
+	code, resp = ap.ackOn(t, ap.a, map[string]any{"all": true, "note": "n"})
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, []HostLeft{{Host: "mlab", Unhandled: 0}, {Host: "a26", Unhandled: 1}}, resp.Hosts)
+	require.Equal(t, 1, *resp.Remaining)
+}
+
+// A host that cannot be asked is "?" (-1) and makes the sum unknown; it is never counted as 0.
+func TestAck_AHostThatCannotBeAskedIsUnknownNotZero(t *testing.T) {
+	ap := newAckPair(t)
+	ap.a.loop().setDown(idB, true)
+	code, resp := ap.ackOn(t, ap.a, map[string]any{"ids": []string{ap.aIDs[0]}, "note": "n"})
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, []HostLeft{{Host: "mlab", Unhandled: 1}, {Host: "a26", Unhandled: -1}}, resp.Hosts)
+	require.Equal(t, -1, *resp.Remaining)
+	require.Equal(t, 1, resp.Unhandled, "this host's own count is still unhandled")
+}
+
+// The peer route answers a count-only question without needing ids or a note.
+func TestAckPeer_CountOnlyAnswersTheCount(t *testing.T) {
+	ap := newAckPair(t)
+	n := ap.a.m.askLeft(context.Background(), "a26")
+	require.Equal(t, 2, n)
+}
+
+// An ack that already took most of the caller's patience asks no further question: the other hosts' counts are unknown, the ack's own
+// answer still goes out.
+func TestAck_NoCountQuestionsWhenTheAckItselfTookTheTime(t *testing.T) {
+	ap := newAckPair(t)
+	began := time.Now().Add(-ackDeadline - time.Second)
+	hosts, total := ap.a.m.leftEverywhere(context.Background(), began, 1, nil)
+	require.Equal(t, []HostLeft{{Host: "mlab", Unhandled: 1}, {Host: "a26", Unhandled: -1}}, hosts)
+	require.Equal(t, -1, total)
 }
