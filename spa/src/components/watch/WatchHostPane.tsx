@@ -79,7 +79,18 @@ function ProcTable({ testId, title, rows, unit, offline }: { testId: string; tit
               <td className="py-1 pr-3 border-b border-border-subtle/50 tabular-nums text-text-muted">{p.pid}</td>
               <td className="py-1 pr-3 border-b border-border-subtle/50 font-mono text-text-primary truncate">{p.name}</td>
               <td className="py-1 border-b border-border-subtle/50 tabular-nums text-text-secondary text-right">
-                {unit === 'cpu' ? `${p.cpu}%` : `${p.rss_mb.toLocaleString()} MB`}
+                {unit === 'cpu' ? `${p.cpu}%` : (
+                  <>
+                    {p.mem_kind === 'rss' && (
+                      <span
+                        className="mr-1.5 text-[10px] text-text-muted/70 uppercase tracking-wide cursor-help"
+                        title={t('watch.host.mem_rss_hint')}
+                        aria-label={t('watch.host.mem_rss_hint')}
+                      >RSS</span>
+                    )}
+                    {`${(p.mem_mb ?? p.rss_mb).toLocaleString(undefined, { maximumFractionDigits: 1 })} MB`}
+                  </>
+                )}
               </td>
             </tr>
           ))}

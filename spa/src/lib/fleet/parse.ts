@@ -32,11 +32,19 @@ export function parseFast(v: unknown): FleetFast | null {
   return { at, cpu, mem, level, page_rate, disk, disk_free_gb: opt(v.disk_free_gb), load1: opt(v.load1), ncpu: opt(v.ncpu), zone, load }
 }
 
+const MEM_KINDS = ['footprint', 'rss'] as const
+
 function parseProcs(v: unknown): FleetProc[] {
   if (!Array.isArray(v)) return []
   const out: FleetProc[] = []
   for (const p of v) {
-    if (isRec(p) && num(p.pid) && str(p.name) && num(p.cpu) && num(p.rss_mb)) out.push({ pid: p.pid, name: p.name, cpu: p.cpu, rss_mb: p.rss_mb })
+    if (isRec(p) && num(p.pid) && str(p.name) && num(p.cpu) && num(p.rss_mb)) {
+      out.push({
+        pid: p.pid, name: p.name, cpu: p.cpu, rss_mb: p.rss_mb,
+        ...(num(p.mem_mb) ? { mem_mb: p.mem_mb } : {}),
+        ...(oneOf(MEM_KINDS, p.mem_kind) ? { mem_kind: p.mem_kind } : {}),
+      })
+    }
   }
   return out
 }

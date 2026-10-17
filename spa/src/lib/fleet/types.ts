@@ -35,7 +35,8 @@ export interface FleetFast {
   load: number // the composite score, 0–100
 }
 
-export interface FleetProc { pid: number; name: string; cpu: number; rss_mb: number }
+// mem_mb / mem_kind (#3057): the number the daemon sorts and shows (macOS footprint, or RSS as a fallback); absent on an old daemon.
+export interface FleetProc { pid: number; name: string; cpu: number; rss_mb: number; mem_mb?: number; mem_kind?: 'footprint' | 'rss' }
 
 /** Times are RFC3339 strings on the wire (UTC); parse.ts turns them into ms since epoch, which is all the App holds. */
 export interface FleetWaiter { class: string; place: number; command: string; project: string; session: string; since: number | null }
