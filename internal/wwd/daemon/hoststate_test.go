@@ -36,7 +36,7 @@ func (r *stateRig) reopen(t *testing.T) {
 	}
 	t.Cleanup(func() { s.Close() })
 	r.st, err = NewHostState(HostStateOptions{
-		Store: s, Host: "mlab", Initial: wire.WorkerSettings{Enabled: true, Slots: wire.Slots{Heavy: 1, Light: 2}},
+		Store: s, Host: "mlab", OwnerRuleSupported: true, Initial: wire.WorkerSettings{Enabled: true, Slots: wire.Slots{Heavy: 1, Light: 2}},
 		Now: func() time.Time { return r.now }, PidAlive: func(p int) bool { return r.alive[p] }, Events: r.b,
 	})
 	if err != nil {
@@ -55,7 +55,7 @@ func TestWorkerSettingsStartFromConfigThenFromTheDatabase(t *testing.T) {
 	if got := r.st.Worker(); !got.Enabled || got.Slots != (wire.Slots{Heavy: 1, Light: 2}) {
 		t.Fatalf("config start: %+v", got)
 	}
-	want := wire.WorkerSettings{Enabled: false, Slots: wire.Slots{Heavy: 0, Light: 1}, OwnerRule: "x"}
+	want := wire.WorkerSettings{Enabled: false, Slots: wire.Slots{Heavy: 0, Light: 1}, OwnerRule: "hid<3m"}
 	changed, err := r.st.SetWorker(want)
 	if err != nil || !changed {
 		t.Fatalf("%v %v", changed, err)

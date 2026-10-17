@@ -66,10 +66,8 @@ func run(cfgPath string) error {
 	if err != nil {
 		return err
 	}
-	var srcOpt facts.SourceOptions
 	ownerRule := ""
 	if cfg.Owner.Enabled {
-		srcOpt.Owner = &facts.OwnerConfig{IdleMinutes: cfg.Owner.IdleMinutes}
 		mins := cfg.Owner.IdleMinutes
 		if mins <= 0 {
 			mins = 5 // the rule's default (facts.OwnerConfig)
@@ -93,11 +91,20 @@ func run(cfgPath string) error {
 	}
 	broker := daemon.NewBroker()
 	state, err := daemon.NewHostState(daemon.HostStateOptions{
-		Store: st, Host: alias, Events: broker,
+		Store: st, Host: alias, Events: broker, OwnerRuleSupported: cfg.Owner.Enabled,
 		Initial: wire.WorkerSettings{Enabled: cfg.Worker.Enabled, Slots: cfg.Worker.Slots(), OwnerRule: ownerRule},
 	})
 	if err != nil {
 		return err
+	}
+	// the owner rule follows the worker settings: PUT /v1/worker changes the idle limit at run time
+	var srcOpt facts.SourceOptions
+	if cfg.Owner.Enabled {
+		srcOpt.Owner = &facts.OwnerConfig{}
+		srcOpt.OwnerMinutes = func() int {
+			m, _ := daemon.ParseOwnerRule(state.Worker().OwnerRule)
+			return m
+		}
 	}
 	sampler := daemon.NewSampler(daemon.SamplerOptions{
 		HostID: hostID, Alias: alias, OSVersion: facts.OSVersion(),

@@ -83,10 +83,11 @@ func (s *Sampler) Tick(now time.Time) {
 	f.Worker = wire.FactsWorker{Enabled: s.opts.WorkerEnabled, Slots: s.opts.Slots, OwnerRule: s.opts.OwnerRule}
 	var holds []derived.Hold
 	if st := s.opts.State; st != nil {
-		st.Prune(now) // an exception that ended is announced before this record shows it gone
-		ws := st.Worker()
-		f.Worker = wire.FactsWorker{Enabled: ws.Enabled, Slots: ws.Slots, OwnerRule: ws.OwnerRule}
-		f.Exception, holds = st.Active(), st.Holds()
+		// one view: an exception that ended is announced before this record shows it
+		// gone, and the exceptions and the holds they cause come from the same moment
+		snap := st.Snapshot(now)
+		f.Worker = wire.FactsWorker{Enabled: snap.Worker.Enabled, Slots: snap.Worker.Slots, OwnerRule: snap.Worker.OwnerRule}
+		f.Exception, holds = snap.Exceptions, snap.Holds
 	}
 
 	s.mu.Lock()

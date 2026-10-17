@@ -30,7 +30,13 @@ func SystemSourcesWith(opt SourceOptions) Sources {
 			if cfg.UID == 0 {
 				cfg.UID = os.Getuid() // wwd runs as the owner
 			}
-			owner = func(s ProcSnapshot, c ProcContext) *wire.OwnerState { return BuildOwner(cfg, osrc, s, c) }
+			owner = func(s ProcSnapshot, c ProcContext) *wire.OwnerState {
+				cur := cfg
+				if opt.OwnerMinutes != nil {
+					cur.IdleMinutes = opt.OwnerMinutes()
+				}
+				return BuildOwner(cur, osrc, s, c)
+			}
 		}
 	}
 	var procs func(time.Time) (ProcSnapshot, ProcContext, error)

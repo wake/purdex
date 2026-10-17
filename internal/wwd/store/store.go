@@ -65,7 +65,7 @@ func (s *Store) migrate(ctx context.Context) error {
 				owner_rule TEXT NOT NULL)`,
 			`CREATE TABLE IF NOT EXISTS exceptions (
 				name TEXT PRIMARY KEY,
-				until_ms INTEGER, pid INTEGER,
+				until_ms INTEGER, pid INTEGER, pid_ident TEXT NOT NULL DEFAULT '',
 				holds TEXT NOT NULL, since_ms INTEGER NOT NULL)`,
 		} {
 			if _, err := tx.ExecContext(ctx, stmt); err != nil {
@@ -118,6 +118,9 @@ func (s *Store) SaveWorker(ws wire.WorkerSettings) error {
 type Stored struct {
 	Exception wire.Exception
 	Since     time.Time
+	// PIDIdent identifies the process of a pid-bound exception (its start time), so
+	// a later process that reuses the pid is not taken for it. "" when unknown.
+	PIDIdent string
 }
 
 // SaveException inserts the exception or replaces the one of the same name.
@@ -133,9 +136,10 @@ func (s *Store) SaveException(e Stored) error {
 	if e.Exception.PID != nil {
 		pid = *e.Exception.PID
 	}
-	_, err = s.db.Exec(`INSERT INTO exceptions (name, until_ms, pid, holds, since_ms) VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(name) DO UPDATE SET until_ms = excluded.until_ms, pid = excluded.pid, holds = excluded.holds, since_ms = excluded.since_ms`,
-		e.Exception.Name, until, pid, string(holds), e.Since.UnixMilli())
+	_, err = s.db.Exec(`INSERT INTO exceptions (name, until_ms, pid, pid_ident, holds, since_ms) VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(name) DO UPDATE SET until_ms = excluded.until_ms, pid = excluded.pid, pid_ident = excluded.pid_ident,
+			holds = excluded.holds, since_ms = excluded.since_ms`,
+		e.Exception.Name, until, pid, e.PIDIdent, string(holds), e.Since.UnixMilli())
 	return err
 }
 
@@ -147,7 +151,7 @@ func (s *Store) DeleteException(name string) error {
 
 // LoadExceptions returns every saved exception, oldest first.
 func (s *Store) LoadExceptions() ([]Stored, error) {
-	rows, err := s.db.Query(`SELECT name, until_ms, pid, holds, since_ms FROM exceptions ORDER BY since_ms, name`)
+	rows, err := s.db.Query(`SELECT name, until_ms, pid, pid_ident, holds, since_ms FROM exceptions ORDER BY since_ms, name`)
 	if err != nil {
 		return nil, err
 	}
@@ -155,14 +159,14 @@ func (s *Store) LoadExceptions() ([]Stored, error) {
 	var out []Stored
 	for rows.Next() {
 		var (
-			name, holds string
-			until, pid  sql.NullInt64
-			since       int64
+			name, holds, ident string
+			until, pid         sql.NullInt64
+			since              int64
 		)
-		if err := rows.Scan(&name, &until, &pid, &holds, &since); err != nil {
+		if err := rows.Scan(&name, &until, &pid, &ident, &holds, &since); err != nil {
 			return nil, err
 		}
-		e := Stored{Exception: wire.Exception{Name: name}, Since: time.UnixMilli(since).UTC()}
+		e := Stored{Exception: wire.Exception{Name: name}, Since: time.UnixMilli(since).UTC(), PIDIdent: ident}
 		if err := json.Unmarshal([]byte(holds), &e.Exception.Holds); err != nil {
 			return nil, fmt.Errorf("store: exception %q holds: %w", name, err)
 		}

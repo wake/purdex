@@ -54,7 +54,7 @@ func TestExceptionsPersistAndDelete(t *testing.T) {
 	until := t0.Add(time.Hour)
 	pid := 4242
 	a := Stored{Exception: wire.Exception{Name: "app-dev-package", Until: &until, Holds: []wire.Hold{wire.HoldHeavy, wire.HoldLight}}, Since: t0}
-	b := Stored{Exception: wire.Exception{Name: "dev-server", PID: &pid, Holds: []wire.Hold{}}, Since: t0.Add(time.Minute)}
+	b := Stored{Exception: wire.Exception{Name: "dev-server", PID: &pid, Holds: []wire.Hold{}}, Since: t0.Add(time.Minute), PIDIdent: "9.000001"}
 	for _, e := range []Stored{a, b} {
 		if err := s.SaveException(e); err != nil {
 			t.Fatal(err)
@@ -80,7 +80,7 @@ func TestExceptionsPersistAndDelete(t *testing.T) {
 		got[0].Exception.Until == nil || !got[0].Exception.Until.Equal(until) || !got[0].Since.Equal(t0) || got[0].Exception.PID != nil {
 		t.Errorf("first: %+v", got[0])
 	}
-	if got[1].Exception.PID == nil || *got[1].Exception.PID != 4242 || got[1].Exception.Until != nil || got[1].Exception.Holds == nil {
+	if got[1].Exception.PID == nil || *got[1].Exception.PID != 4242 || got[1].Exception.Until != nil || got[1].Exception.Holds == nil || got[1].PIDIdent != "9.000001" || got[0].PIDIdent != "" {
 		t.Errorf("second: %+v", got[1])
 	}
 	if err := s2.DeleteException("dev-server"); err != nil {

@@ -19,7 +19,7 @@ func stateDaemon(t *testing.T, alias string, level *int, peers ...PeerAddr) (*Da
 	b := NewBroker()
 	r := &rig{now: s0, alive: map[int]bool{}}
 	st, err := NewHostState(HostStateOptions{
-		Host: alias, Initial: wire.WorkerSettings{Enabled: true, Slots: wire.Slots{Heavy: 1, Light: 2}},
+		Host: alias, OwnerRuleSupported: true, Initial: wire.WorkerSettings{Enabled: true, Slots: wire.Slots{Heavy: 1, Light: 2}},
 		Now: func() time.Time { return r.now }, PidAlive: func(p int) bool { return r.alive[p] }, Events: b,
 	})
 	if err != nil {

@@ -7,11 +7,13 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/derived"
+	"github.com/wake/purdex/internal/wwd/facts"
 	"github.com/wake/purdex/internal/wwd/store"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
@@ -34,11 +36,16 @@ func invalid(format string, a ...any) error {
 // HostStateOptions configures a HostState. Store may be nil (memory only).
 type HostStateOptions struct {
 	Store    *store.Store
-	Host     string              // this host's alias, on the events
-	Initial  wire.WorkerSettings // the config's starting settings, used until the first PUT
-	Now      func() time.Time    // default time.Now
-	PidAlive func(pid int) bool  // default: kill(pid, 0)
-	Events   *Broker             // may be nil
+	Host     string                       // this host's alias, on the events
+	Initial  wire.WorkerSettings          // the config's starting settings, used until the first PUT
+	Now      func() time.Time             // default time.Now
+	PidAlive func(pid int) bool           // default: kill(pid, 0)
+	PidIdent func(pid int) (string, bool) // the process behind a pid (its start time); default facts.ProcIdent
+	Events   *Broker                      // may be nil
+	// OwnerRuleSupported is true on a host that has the owner rule (air26): its
+	// owner_rule setting is then a real setting ("" or hid<N>m) that drives the
+	// rule. Elsewhere any non-empty owner_rule is refused instead of saved.
+	OwnerRuleSupported bool
 }
 
 // HostState is the host's settings the facts and routes agree on: the worker
@@ -61,6 +68,9 @@ func NewHostState(o HostStateOptions) (*HostState, error) {
 	}
 	if o.PidAlive == nil {
 		o.PidAlive = pidAlive
+	}
+	if o.PidIdent == nil {
+		o.PidIdent = facts.ProcIdent
 	}
 	s := &HostState{opts: o, store: o.Store, worker: o.Initial, excs: map[string]store.Stored{}}
 	if s.store == nil {
@@ -93,11 +103,41 @@ func pidAlive(pid int) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
+// ended says whether an exception is over: its time has come, or the process it
+// was made for is gone (a different process holding the same pid is not it).
 func (s *HostState) ended(e store.Stored, now time.Time) bool {
 	if e.Exception.Until != nil {
 		return !now.Before(*e.Exception.Until)
 	}
-	return e.Exception.PID != nil && !s.opts.PidAlive(*e.Exception.PID)
+	if e.Exception.PID == nil {
+		return false
+	}
+	pid := *e.Exception.PID
+	if !s.opts.PidAlive(pid) {
+		return true
+	}
+	if e.PIDIdent != "" {
+		cur, ok := s.opts.PidIdent(pid)
+		return !ok || cur != e.PIDIdent
+	}
+	return false
+}
+
+var reOwnerRule = regexp.MustCompile(`^hid<([1-9][0-9]{0,3})m$`)
+
+// ParseOwnerRule reads an owner_rule setting: "" is the rule's default (0 here,
+// meaning 5 minutes), "hid<Nm" is N minutes of HID idle time (1-9999). ok is
+// false for anything else.
+func ParseOwnerRule(text string) (minutes int, ok bool) {
+	if text == "" {
+		return 0, true
+	}
+	m := reOwnerRule.FindStringSubmatch(text)
+	if m == nil {
+		return 0, false
+	}
+	n, _ := strconv.Atoi(m[1])
+	return n, true
 }
 
 // Worker is the current worker settings.
@@ -115,6 +155,14 @@ func (s *HostState) SetWorker(ws wire.WorkerSettings) (changed bool, err error) 
 	}
 	if len(ws.OwnerRule) > maxOwnerRuleLen {
 		return false, invalid("owner_rule is longer than %d bytes", maxOwnerRuleLen)
+	}
+	if ws.OwnerRule != "" {
+		if !s.opts.OwnerRuleSupported {
+			return false, invalid("this host has no owner rule")
+		}
+		if _, ok := ParseOwnerRule(ws.OwnerRule); !ok {
+			return false, invalid("owner_rule must be empty or hid<N>m (N = 1-9999)")
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -161,6 +209,9 @@ func (s *HostState) AddException(e wire.Exception) (changed bool, err error) {
 		return false, invalid("at most %d exceptions at a time", maxExceptions)
 	}
 	st := store.Stored{Exception: e, Since: now}
+	if e.PID != nil {
+		st.PIDIdent, _ = s.opts.PidIdent(*e.PID)
+	}
 	if s.store != nil {
 		if err := s.store.SaveException(st); err != nil {
 			return false, err
@@ -204,6 +255,10 @@ func (s *HostState) dropLocked(name string) {
 func (s *HostState) Prune(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.pruneLocked(now)
+}
+
+func (s *HostState) pruneLocked(now time.Time) {
 	var names []string
 	for name, e := range s.excs {
 		if s.ended(e, now) {
@@ -223,10 +278,32 @@ func (s *HostState) Prune(now time.Time) {
 	}
 }
 
+// StateSnapshot is the worker settings, the exceptions and the holds they cause,
+// all from one moment.
+type StateSnapshot struct {
+	Worker     wire.WorkerSettings
+	Exceptions []wire.FactExc
+	Holds      []derived.Hold
+}
+
+// Snapshot ends the exceptions whose time has come (announcing them) and returns
+// everything facts needs under one lock, so a record never shows an exception
+// without the headroom it causes or the other way round.
+func (s *HostState) Snapshot(now time.Time) StateSnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneLocked(now)
+	return StateSnapshot{Worker: s.worker, Exceptions: s.activeLocked(), Holds: s.holdsLocked()}
+}
+
 // Active is the exceptions in force, as facts shows them (oldest first).
 func (s *HostState) Active() []wire.FactExc {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.activeLocked()
+}
+
+func (s *HostState) activeLocked() []wire.FactExc {
 	out := make([]wire.FactExc, 0, len(s.excs))
 	for _, e := range s.sorted() {
 		fe := wire.FactExc{Name: e.Exception.Name, Since: e.Since}
@@ -244,6 +321,10 @@ func (s *HostState) Active() []wire.FactExc {
 func (s *HostState) Holds() []derived.Hold {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.holdsLocked()
+}
+
+func (s *HostState) holdsLocked() []derived.Hold {
 	out := make([]derived.Hold, 0, len(s.excs))
 	for _, e := range s.sorted() {
 		h := derived.Hold{Name: e.Exception.Name}
