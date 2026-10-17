@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -45,11 +46,15 @@ type AssistProbe struct {
 func (g *Gate) ProbeAssist(ctx context.Context, a AssistRun, h AssistHost, argv []string) AssistProbe {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
+	logical := a.Host // the name the host is known by; the ssh alias is the record's SSH (the scripts use it as ASSIST_HOST)
+	if h.SSH != "" {
+		a.Host = h.SSH
+	}
 	var out, errb bytes.Buffer
 	cmd := a.sshCmd(ctx, remoteProbe, argv...)
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
-		return AssistProbe{Why: fmt.Sprintf("ssh to %s failed: %v", a.Host, err), Hold: holdAfterFailure}
+		return AssistProbe{Why: fmt.Sprintf("ssh to %s failed: %v", logical, err), Hold: holdAfterFailure}
 	}
 	fields := map[string]string{}
 	for _, line := range strings.Split(out.String(), "\n") {
@@ -57,25 +62,26 @@ func (g *Gate) ProbeAssist(ctx context.Context, a AssistRun, h AssistHost, argv 
 		fields[k] = strings.TrimSpace(v)
 	}
 	if _, other := fields["OTHER"]; other {
-		return AssistProbe{Why: a.Host + " has no load probe for its system yet", Hold: holdAfterFailure}
+		return AssistProbe{Why: logical + " has no load probe for its system yet", Hold: holdAfterFailure}
 	}
 	var ww WouldWait
 	if json.Unmarshal([]byte(fields["WW"]), &ww) != nil {
-		return AssistProbe{Why: a.Host + " did not answer would-wait", Hold: holdAfterFailure}
+		return AssistProbe{Why: logical + " did not answer would-wait", Hold: holdAfterFailure}
 	}
 	if ww.Wait {
-		return AssistProbe{Why: fmt.Sprintf("%s would make the command wait (%s)", a.Host, ww.Reason)}
+		return AssistProbe{Why: fmt.Sprintf("%s would make the command wait (%s)", logical, ww.Reason)}
 	}
 	load := strings.Fields(fields["LOAD"])
 	idle, errIdle := strconv.ParseFloat(fields["IDLE"], 64)
 	if len(load) < 4 || errIdle != nil {
-		return AssistProbe{Why: a.Host + " did not answer its load", Hold: holdAfterFailure}
+		return AssistProbe{Why: logical + " did not answer its load", Hold: holdAfterFailure}
 	}
 	l1, e1 := strconv.ParseFloat(load[0], 64)
 	l5, e5 := strconv.ParseFloat(load[1], 64)
 	cores, e3 := strconv.ParseFloat(load[3], 64)
-	if e1 != nil || e5 != nil || e3 != nil || cores < 1 {
-		return AssistProbe{Why: a.Host + " did not answer its load", Hold: holdAfterFailure}
+	// a number that is not a number (NaN), infinite, negative or out of range is no answer: it must not pass every limit
+	if e1 != nil || e5 != nil || e3 != nil || !finite(l1, l5, cores, idle) || l1 < 0 || l5 < 0 || cores < 1 || idle < 0 || idle > 100 {
+		return AssistProbe{Why: logical + " did not answer its load", Hold: holdAfterFailure}
 	}
 	limit, idleMin, hold := h.LoadLimit, float64(h.IdleMin), time.Duration(h.HoldMin)*time.Minute
 	if limit <= 0 {
@@ -89,9 +95,18 @@ func (g *Gate) ProbeAssist(ctx context.Context, a AssistRun, h AssistHost, argv 
 	}
 	switch {
 	case l1/cores > limit || l5/cores > limit:
-		return AssistProbe{Why: fmt.Sprintf("%s is busy (load %.2f / %.2f per %d cores, limit %.2f)", a.Host, l1, l5, int(cores), limit), Hold: hold}
+		return AssistProbe{Why: fmt.Sprintf("%s is busy (load %.2f / %.2f per %d cores, limit %.2f)", logical, l1, l5, int(cores), limit), Hold: hold}
 	case idle < idleMin:
-		return AssistProbe{Why: fmt.Sprintf("%s is busy (CPU idle %.0f%%, at least %.0f%% wanted)", a.Host, idle, idleMin), Hold: hold}
+		return AssistProbe{Why: fmt.Sprintf("%s is busy (CPU idle %.0f%%, at least %.0f%% wanted)", logical, idle, idleMin), Hold: hold}
 	}
 	return AssistProbe{OK: true}
+}
+
+func finite(xs ...float64) bool {
+	for _, x := range xs {
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			return false
+		}
+	}
+	return true
 }

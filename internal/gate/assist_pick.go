@@ -39,8 +39,9 @@ type PickInput struct {
 }
 
 // PickAssist is the order in which to try the assist hosts for a ticket, best first; empty keeps the ticket on mlab. A host is a
-// candidate when its capability takes the command and it is not held off for the repo. The order is by alias (air26 before mserv:
-// the main tests go to air26, and a command only mserv can take has no other candidate). A heavy ticket goes out whenever there
+// candidate when its capability takes the command and it is not held off for the repo. The capability (written by the watcher) is what
+// sends the main tests to air26 and the PHP tests to mserv; the order, by alias, only settles which of two hosts that both take a
+// command is tried first. A heavy ticket goes out whenever there
 // is a candidate (an assist host is the preferred place, decision 5); a light one only when it would otherwise wait on mlab; while
 // mlab is reserved both go. The estimate comparison of the first design is not in the rule (user 10-17: air26, then mlab).
 func PickAssist(dir string, in PickInput) []string {

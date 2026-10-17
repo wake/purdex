@@ -139,6 +139,7 @@ i = 0
 while i < len(args) and args[i].startswith('-'):
     i += 2 if args[i] == '-o' else 1
 host = args[i]
+open(os.environ['FAKE_HOME'] + '/ssh-hosts', 'a').write(host + '\n')
 cmd = ' '.join(args[i + 1:])
 if os.environ.get('FAKE_SSH_FAIL'):
     sys.exit(255)

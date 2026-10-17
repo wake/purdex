@@ -108,6 +108,39 @@ func TestProbeAssist_TheLimitsHoldTheHost(t *testing.T) {
 	assert.True(t, probeOn(t, h, AssistHost{}).OK)
 }
 
+// The ssh goes to the record's alias (the logical name may differ: air26 → air26-lan), the logical name stays in the words.
+func TestProbeAssist_ConnectsToTheRecordsSshAlias(t *testing.T) {
+	h := newAssistHost(t, "purdex")
+	p := probeOn(t, h, AssistHost{SSH: "air26-lan"})
+	assert.True(t, p.OK, p.Why)
+	assert.Equal(t, "air26-lan\n", mustRead(t, h.remote("ssh-hosts")))
+	h2 := newAssistHost(t, "purdex")
+	probeOn(t, h2, AssistHost{})
+	assert.Equal(t, "air26\n", mustRead(t, h2.remote("ssh-hosts")), "no alias in the record: the name itself")
+}
+
+// A number that is not one (NaN, infinite, negative, a percentage out of range) is no answer: the host is held, not sent to.
+func TestProbeAssist_NumbersThatAreNotNumbersPassNoLimit(t *testing.T) {
+	cases := map[string][2]string{
+		"NaN load":     {"{ NaN 1.0 1.0 }", "90.0"},
+		"Inf load5":    {"{ 1.0 +Inf 1.0 }", "90.0"},
+		"negative":     {"{ -1.0 1.0 1.0 }", "90.0"},
+		"NaN idle":     {"{ 1.0 1.0 1.0 }", "NaN"},
+		"idle over":    {"{ 1.0 1.0 1.0 }", "250.0"},
+		"idle negativ": {"{ 1.0 1.0 1.0 }", "-5.0"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newAssistHost(t, "purdex")
+			writeFile(t, h.remote("fake-loadavg"), c[0], 0o644)
+			writeFile(t, h.remote("fake-idle"), c[1], 0o644)
+			p := probeOn(t, h, AssistHost{})
+			assert.False(t, p.OK, "must not be sent to")
+			assert.Equal(t, holdAfterFailure, p.Hold)
+		})
+	}
+}
+
 func TestProbeAssist_ASshFailureHoldsTheHostForTheUsualTime(t *testing.T) {
 	h := newAssistHost(t, "purdex")
 	t.Setenv("FAKE_SSH_FAIL", "1")
