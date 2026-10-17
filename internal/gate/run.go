@@ -441,6 +441,7 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 			}
 		case err := <-done:
 			code := exitCode(err, cmd)
+			d.setUsage(cmd)
 			if cfg.Reap.Enabled && (slot != nil || lateSlot != nil) {
 				if grouped {
 					g.reap(pid, grace)
