@@ -60,7 +60,6 @@ describe('JournalRow', () => {
   it('a compact 待確認 row says how many items are answered, in words and not as a raw key', () => {
     render(<JournalRow entry={confirm()} compact ctx={ctxOf()} />)
     expect(screen.getByTestId('journal-answered').textContent).toBe('1/2 answered')
-    expect(screen.queryByTestId('journal-checklist')).toBeNull()
     cleanup()
     useI18nStore.getState().setLocale('zh-TW')
     render(<JournalRow entry={confirm()} compact ctx={ctxOf()} />)
@@ -80,14 +79,14 @@ describe('JournalRow', () => {
     fireEvent.click(screen.getByTestId('journal-entry'))
     expect(c2.onToggleDetail).not.toHaveBeenCalled()
   })
-  it('the row itself is a plain container, and no button sits inside another button (M: a role="button" row holding the pin button)', () => {
+  it('the row itself is a plain container, and no button sits inside another button (M: a role="button" row holding the checkboxes)', () => {
     const { container } = render(<JournalRow entry={confirm({ refs: ['#2829'] })} ctx={ctxOf()} />)
     const row = screen.getByTestId('journal-entry')
     expect(row.getAttribute('role')).toBeNull()
     expect(row.getAttribute('tabindex')).toBeNull()
     expect(container.querySelectorAll('[role="button"]')).toHaveLength(0)
     expect(container.querySelectorAll('button button, button a, [role="button"] button, [role="button"] a')).toHaveLength(0)
-    expect(container.querySelectorAll('button')).toHaveLength(2) // open details, pin
+    expect(container.querySelectorAll('button')).toHaveLength(1) // open details only: a stream row's boxes are not buttons
   })
   it('the open-details button names itself in Chinese too', () => {
     useI18nStore.getState().setLocale('zh-TW')

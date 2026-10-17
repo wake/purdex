@@ -79,13 +79,3 @@ describe('tasks, roadmap, pin', () => {
     expect((await setConfirmItem('h1', 's', 'e', 0, false)).kind).toBe('remote')
   })
 })
-    const [, path, init] = pinned.mock.calls[0]
-    expect(path).toBe('/api/journal/pin')
-    expect(init?.method).toBe('PUT')
-    expect(JSON.parse(String(init?.body))).toEqual({ session_id: 's', entry_id: 'wb:1:1', pinned: true })
-  })
-  it('the pin goes to a remote lead as a result too', async () => {
-    pinned.mockResolvedValue(json(LEAD, 409))
-    expect((await setPinned('h1', 's', 'e', false)).kind).toBe('remote')
-  })
-})
