@@ -71,8 +71,14 @@ func SetExpect(path, profile, key, value string, expect *string) (SetResult, err
 	if err != nil {
 		return res, err
 	}
+	// One lock per file, however it is named: the directory is resolved even when the file is not there yet, then the file itself.
+	if dir, derr := filepath.EvalSymlinks(filepath.Dir(path)); derr == nil {
+		path = filepath.Join(dir, filepath.Base(path))
+	}
 	if real, rerr := filepath.EvalSymlinks(path); rerr == nil {
-		path = real // one lock per file, however it is named
+		path = real
+	} else if fi, lerr := os.Lstat(path); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return res, fmt.Errorf("%s is a symlink to nothing: refusing to replace it", path)
 	}
 	unlock, err := lockFile(path + ".lock")
 	if err != nil {
@@ -124,12 +130,17 @@ func SetExpect(path, profile, key, value string, expect *string) (SetResult, err
 	if err := writeAtomic(path, []byte(edited)); err != nil {
 		return res, err
 	}
-	if expect != nil && profile == "" { // read it back from the file, under the same lock, as the next gate run will
-		back, lerr := Load(path)
-		if lerr != nil || back.Values[key] != res.New {
-			return res, fmt.Errorf("written, but read back %q (wanted %q): the file was changed by hand meanwhile", back.Values[key], res.New)
+	if expect != nil { // read it back from the file, under the same lock, as the next gate run will
+		raw, rerr := os.ReadFile(path)
+		var back map[string]any
+		if _, derr := toml.Decode(string(raw), &back); rerr != nil || derr != nil {
+			return res, fmt.Errorf("written, but the file could not be read back")
 		}
-		res.ReadBack = back.Values[key]
+		got := configFor(back, profile).Values[key]
+		if got != res.New {
+			return res, fmt.Errorf("written, but read back %q (wanted %q): the file was changed by hand meanwhile", got, res.New)
+		}
+		res.ReadBack = got
 	}
 	return res, nil
 }

@@ -82,3 +82,31 @@ func TestSetExpect_TheReadBackIsTakenUnderTheLock(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, res.ReadBack, "only an --expect write reads back")
 }
+
+func TestSetExpect_AProfileWriteIsReadBackToo(t *testing.T) {
+	p := cfgFile(t, "[gate.profiles.night.slots]\nheavy = 2\n")
+	res, err := SetExpect(p, "night", "slots.heavy", "3", ptr("2"))
+	require.NoError(t, err)
+	assert.Equal(t, "3", res.ReadBack)
+}
+
+// Two names for a config that is not there yet (a symlinked parent) share one lock; a dangling symlink is not replaced.
+func TestSetExpect_ASymlinkedParentOfANewConfigSharesTheRealLock(t *testing.T) {
+	realDir := t.TempDir()
+	linkDir := filepath.Join(t.TempDir(), "d")
+	require.NoError(t, os.Symlink(realDir, linkDir))
+	_, err := SetExpect(filepath.Join(linkDir, "config.toml"), "", "slots.heavy", "3", nil)
+	require.NoError(t, err)
+	_, err = os.Stat(filepath.Join(realDir, "config.toml.lock"))
+	assert.NoError(t, err, "the lock is in the real directory")
+	_, err = os.Stat(filepath.Join(realDir, "config.toml"))
+	assert.NoError(t, err)
+
+	dang := filepath.Join(t.TempDir(), "dangling.toml")
+	require.NoError(t, os.Symlink(filepath.Join(t.TempDir(), "nowhere.toml"), dang))
+	_, err = SetExpect(dang, "", "slots.heavy", "3", nil)
+	require.Error(t, err)
+	fi, lerr := os.Lstat(dang)
+	require.NoError(t, lerr)
+	assert.NotZero(t, fi.Mode()&os.ModeSymlink, "the symlink is still a symlink")
+}
