@@ -58,6 +58,9 @@ type Entry struct {
 	Refs   []string  `json:"refs,omitempty"`
 	Items  []Item    `json:"items,omitempty"`
 	Detail string    `json:"detail,omitempty"`
+	// SID is the leader's session id when the entry was written (journal v5 session pages). Older entries have none and are
+	// attributed to a session at read time.
+	SID string `json:"sid,omitempty"`
 	// Files written before pinning was removed carry "pinned" in their metadata; the decoder ignores unknown fields.
 }
 

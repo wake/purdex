@@ -70,6 +70,10 @@ type journalPageJSON struct {
 	Pinned       []journalEntryJSON `json:"pinned"`
 	More         bool               `json:"more"`
 	OpenConfirms int                `json:"open_confirms"`
+	// Page and Truncated are set on a session page only (journal.sessions.v1): the leader session the entries belong to, and
+	// whether the page held more than the cap (the newest are kept).
+	Page      string `json:"page,omitempty"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
 
 type journalTaskJSON struct {
@@ -262,6 +266,10 @@ func (m *Module) handleJournal(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	q := r.URL.Query()
+	// A session page (journal.sessions.v1): `page` names the leader session; a request with neither `page` nor the older
+	// Apps' `before` / `limit` is the current session. The older paging below stays for the Apps that send them.
+	sessionPage := q.Has("page") || (!q.Has("before") && !q.Has("limit"))
 	limit, ok := intQuery(w, r, "limit", journal.DefaultPageLimit, 1, journal.MaxPageLimit)
 	if !ok {
 		return
@@ -273,6 +281,10 @@ func (m *Module) handleJournal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	m.logSkipped(tgt.unit.Key, skipped)
+	if sessionPage {
+		m.writeSessionPage(w, r, tgt, all)
+		return
+	}
 	page, err := journal.PageBefore(all, r.URL.Query().Get("before"), int(limit))
 	if errors.Is(err, journal.ErrBadCursor) {
 		writeError(w, http.StatusBadRequest, "bad_request")
@@ -283,26 +295,72 @@ func (m *Module) handleJournal(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal")
 		return
 	}
+	writeJSON(w, http.StatusOK, m.pageJSON(r, tgt, all, page.Entries, page.More))
+}
+
+// pageJSON is the answer for a window of the unit's entries: the window, and the whole unit's confirms and open_confirms.
+func (m *Module) pageJSON(r *http.Request, tgt journalTarget, all, window []journal.Entry, more bool) journalPageJSON {
 	ctx := r.Context()
 	confirms := confirmsWire(journal.Confirms(all))
 	inBand := map[string]bool{}
 	for _, c := range confirms {
 		inBand[c.ID] = true
 	}
-	pageEntries := entriesWire(page.Entries)
+	pageEntries := entriesWire(window)
 	for i := range pageEntries {
 		pageEntries[i].Pinned = inBand[pageEntries[i].ID]
 	}
-	writeJSON(w, http.StatusOK, journalPageJSON{
+	return journalPageJSON{
 		Unit:         journalUnitJSON{Kind: tgt.kind, ID: tgt.id, Label: tgt.unit.Label},
 		Project:      journalProjectJSON{Name: m.projectName(ctx, tgt.unit), RemoteURL: m.remoteURL(ctx, tgt.unit.WtPath)},
 		PersonName:   m.personName(),
 		Entries:      pageEntries,
 		Confirms:     confirms,
 		Pinned:       confirms,
-		More:         page.More,
+		More:         more,
 		OpenConfirms: journal.OpenConfirmItems(all),
-	})
+	}
+}
+
+// writeSessionPage answers GET /api/journal?session_id=&page=<leader session>: that session's entries oldest first (at most
+// pageEntryCap, the newest kept, with truncated), and the whole unit's confirms. No page: the leader's current session; a
+// page that is not in the leader's chain is 404.
+func (m *Module) writeSessionPage(w http.ResponseWriter, r *http.Request, tgt journalTarget, all []journal.Entry) {
+	st := m.live()
+	if st == nil {
+		writeError(w, http.StatusServiceUnavailable, "unavailable")
+		return
+	}
+	reader := r.URL.Query().Get("session_id")
+	idx := newSessionIndex(m.sessionChain(m.leaderSession(tgt, reader)))
+	want := len(idx.chain) - 1
+	if page := r.URL.Query().Get("page"); page != "" {
+		p, found := idx.pos[page]
+		if !found {
+			writeError(w, http.StatusNotFound, "not_found")
+			return
+		}
+		want = p
+	}
+	owner, err := attribute(st, idx, all)
+	if err != nil {
+		log.Printf("[workbook] journal: attribute %s: %v", tgt.unit.Key, err)
+		writeError(w, http.StatusInternalServerError, "internal")
+		return
+	}
+	var window []journal.Entry
+	for i, e := range all {
+		if owner[i] == want {
+			window = append(window, e)
+		}
+	}
+	truncated := len(window) > pageEntryCap
+	if truncated {
+		window = window[len(window)-pageEntryCap:]
+	}
+	out := m.pageJSON(r, tgt, all, window, false)
+	out.Page, out.Truncated = idx.chain[want].sid, truncated
+	writeJSON(w, http.StatusOK, out)
 }
 
 // sideFile reads tasks.md or roadmap.md of a unit with the guard of a month file; a file that is not there, or that the guard
