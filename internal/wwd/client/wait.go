@@ -24,13 +24,17 @@ const maxFrame = 4 << 20
 // (ErrStreamEnded). ready, when not nil, is closed once the stream is open, so a caller that must not miss an event can read
 // state after it. Keep-alive comments are skipped; a frame that is not a valid event is an ErrBadResponse.
 func (c *Client) Watch(ctx context.Context, ready chan<- struct{}, fn func(wire.Event) (done bool)) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://wwd/v1/events", nil)
+	sctx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
+	req, err := http.NewRequestWithContext(sctx, http.MethodGet, "http://wwd/v1/events", nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "text/event-stream")
 	// no call timeout: the stream is long-lived and the context ends it
+	t := time.AfterFunc(c.timeout(), cancelStream) // connecting and the answer's headers are bounded; the body is the context's
 	resp, err := c.http.Do(req)
+	t.Stop()
 	if err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -48,6 +52,7 @@ func (c *Client) Watch(ctx context.Context, ready chan<- struct{}, fn func(wire.
 	sc := bufio.NewScanner(resp.Body)
 	sc.Buffer(make([]byte, 64<<10), maxFrame)
 	var data []string
+	size := 0
 	for sc.Scan() {
 		line := sc.Text()
 		switch {
@@ -56,6 +61,7 @@ func (c *Client) Watch(ctx context.Context, ready chan<- struct{}, fn func(wire.
 				continue
 			}
 			ev, err := wire.Decode[wire.Event]([]byte(strings.Join(data, "\n")))
+			size = 0
 			data = data[:0]
 			if err != nil {
 				return fmt.Errorf("%w: %v", ErrBadResponse, err)
@@ -65,7 +71,11 @@ func (c *Client) Watch(ctx context.Context, ready chan<- struct{}, fn func(wire.
 			}
 		case strings.HasPrefix(line, ":"): // a comment: the keep-alive
 		case strings.HasPrefix(line, "data:"):
-			data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
+			part := strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")
+			if size += len(part) + 1; size > maxFrame {
+				return fmt.Errorf("%w: an event frame is over %d bytes", ErrBadResponse, maxFrame)
+			}
+			data = append(data, part)
 		default: // event:, id:, retry: carry nothing the envelope does not
 		}
 	}

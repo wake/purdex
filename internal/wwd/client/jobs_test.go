@@ -271,6 +271,51 @@ func TestWatch_AnEndedStreamAndABadFrame(t *testing.T) {
 	}
 }
 
+func TestWatch_AnEndpointThatNeverAnswersEndsInBoundedTime(t *testing.T) {
+	block := make(chan struct{})
+	defer close(block)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/events", func(w http.ResponseWriter, r *http.Request) { <-block }) // accepts, sends no headers
+	c := New(fakeWWD(t, mux))
+	c.Timeout = 200 * time.Millisecond
+	start := time.Now()
+	err := c.Watch(context.Background(), nil, func(wire.Event) bool { return false })
+	if !errors.Is(err, ErrUnavailable) || time.Since(start) > 3*time.Second {
+		t.Fatalf("err %v after %v", err, time.Since(start))
+	}
+}
+
+func TestWaitJob_ADeafEventEndpointDoesNotStopTheJobBeingRead(t *testing.T) {
+	block := make(chan struct{})
+	defer close(block)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/events", func(w http.ResponseWriter, r *http.Request) { <-block })
+	mux.HandleFunc("GET /v1/jobs/{id}", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, jobIn(t, "j_1", wire.StateSucceeded)) })
+	c := New(fakeWWD(t, mux))
+	c.Timeout = 200 * time.Millisecond
+	j, err := c.WaitJob(context.Background(), "j_1", nil)
+	if err != nil || j.State != wire.StateSucceeded {
+		t.Fatalf("job %+v err %v", j, err)
+	}
+}
+
+func TestWatch_AFrameOfManyDataLinesIsBoundedAsAWhole(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/events", func(w http.ResponseWriter, r *http.Request) {
+		openStream(w)
+		line := "data: " + strings.Repeat("x", 1<<20) + "\n"
+		for i := 0; i < 6; i++ { // each line is under the line limit; together they are over the frame limit
+			io.WriteString(w, line)
+		}
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	})
+	err := New(fakeWWD(t, mux)).Watch(context.Background(), nil, func(wire.Event) bool { return false })
+	if !errors.Is(err, ErrBadResponse) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestWaitJob_AnEventEndsTheWait(t *testing.T) {
 	var state atomic.Value
 	state.Store(wire.StateQueued)
