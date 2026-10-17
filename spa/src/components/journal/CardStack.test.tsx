@@ -116,6 +116,16 @@ describe('the stack on a journal.v1 host', () => {
     fireEvent.click(screen.getByTestId('journal-tasks-card-close'))
     expect(q('journal-tasks-card')).toBeNull()
   })
+  it('a pressed header toggle is styled with the theme\'s accent token (themes.css has `accent`, not `accent-base`)', () => {
+    const key = seedUnit(HOST, 'SA', SOLO_A)
+    patchViewMemo(HOST, key, { journalOpen: true, tasksOpen: true })
+    setActive('a')
+    mountShell()
+    const pressed = screen.getByTestId('journal-toggle-tasks')
+    expect(pressed.getAttribute('aria-pressed')).toBe('true')
+    expect(pressed.className).toContain('text-accent')
+    expect(pressed.className).not.toContain('accent-base')
+  })
   it('the team card has no title-bar or enlarge control: it is open or closed and nothing else', () => {
     const key = seedUnit(HOST, 'SL', TEAM_UNIT)
     patchViewMemo(HOST, key, { journalOpen: true })

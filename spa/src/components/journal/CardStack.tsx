@@ -145,7 +145,7 @@ function HeaderToggle({ testId, pressed, label, onClick, children }: { testId: s
       aria-pressed={pressed}
       aria-label={label}
       title={label}
-      className={`p-0.5 rounded cursor-pointer ${pressed ? 'text-accent-base bg-accent-base/10' : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'}`}
+      className={`p-0.5 rounded cursor-pointer ${pressed ? 'text-accent bg-accent-muted' : 'text-text-secondary hover:text-text-primary hover:bg-surface-hover'}`}
       onMouseDown={keepFocus}
       onClick={onClick}
     >
