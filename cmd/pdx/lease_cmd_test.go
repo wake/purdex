@@ -1,7 +1,8 @@
 package main
 
 import (
-	"encoding/json"
+	"context"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -75,96 +76,37 @@ func fakeSnapshot() resources.Snapshot {
 
 func fieldsOf(line string) string { return strings.Join(strings.Fields(line), " ") }
 
-// `pdx lease ls` needs no inbox: this env has none and the command works.
-func TestLeaseLs_Table(t *testing.T) {
+// WWD-0a: the removed verbs say so and exit 2 without touching the daemon; so does anything unknown. `report` still points at
+// pdx host report.
+func TestLeaseCmd_RemovedVerbsAndUsageExit2(t *testing.T) {
 	d := &fakeResourcesDaemon{res: answer{body: fakeSnapshot()}}
-	code, stdout, stderr := driveTeamCmdWith(t, runLeaseCmd, d, fakeGetenv(nil), nil, "ls")
-	if code != ExitOK || stderr != "" {
-		t.Fatalf("code=%d stderr=%q", code, stderr)
-	}
-	lines := strings.Split(strings.TrimRight(stdout, "\n"), "\n")
-	if len(lines) != 4 {
-		t.Fatalf("stdout = %q, want the host line, a header and two rows", stdout)
-	}
-	if got, want := fieldsOf(lines[0]), "host 76/100 load 17.59/10 mem 75% pressure warn FULL"; got != want {
-		t.Errorf("host line = %q, want %q", got, want)
-	}
-	if got, want := fieldsOf(lines[1]), "SESSION PID CPU MEM RSS PROCS TMUX"; got != want {
-		t.Errorf("header = %q, want %q", got, want)
-	}
-	if got, want := fieldsOf(lines[2]), "cc-sid-m 4242 12.5% 3.5% 572M 6 mt1:@2.%3"; got != want {
-		t.Errorf("row 1 = %q, want %q", got, want)
-	}
-	if got, want := fieldsOf(lines[3]), "01234567 77 0.4% 1.2% 3.0G 1 -"; got != want {
-		t.Errorf("row 2 = %q, want %q", got, want)
-	}
-}
-
-func TestLeaseLs_HostLineVariants(t *testing.T) {
-	idle := fakeSnapshot()
-	idle.Host = resources.HostUse{Measured: 12, CPU: 10, Mem: 11.6, Load1: 1, NCPU: 10, Pressure: 1}
-	idle.Sessions = nil
-	d := &fakeResourcesDaemon{res: answer{body: idle}}
-	_, stdout, _ := driveTeamCmdWith(t, runLeaseCmd, d, fakeGetenv(nil), nil, "ls")
-	if got, want := fieldsOf(strings.SplitN(stdout, "\n", 2)[0]), "host 12/100 load 1.00/10 mem 12% pressure normal"; got != want {
-		t.Errorf("host line = %q, want %q", got, want)
-	}
-
-	unknown := idle
-	unknown.Host.Pressure = 0
-	d = &fakeResourcesDaemon{res: answer{body: unknown}}
-	_, stdout, _ = driveTeamCmdWith(t, runLeaseCmd, d, fakeGetenv(nil), nil, "ls")
-	if !strings.Contains(strings.SplitN(stdout, "\n", 2)[0], "pressure -") {
-		t.Errorf("host line = %q, want pressure -", stdout)
-	}
-
-	// Not available: one line with the reason, exit 0 (it is an answer).
-	d = &fakeResourcesDaemon{res: answer{body: resources.Snapshot{Reason: resources.ReasonWarmingUp, Capacity: 100}}}
-	code, stdout, stderr := driveTeamCmdWith(t, runLeaseCmd, d, fakeGetenv(nil), nil, "ls")
-	if code != ExitOK || stderr != "" || fieldsOf(stdout) != "host unavailable (warming_up)" {
-		t.Errorf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
-	}
-}
-
-// An older daemon has no route: one stderr line ending in the code, exit 1.
-func TestLeaseLs_OldDaemon404(t *testing.T) {
-	d := &fakeResourcesDaemon{} // plain 404 for everything
-	code, stdout, stderr := driveTeamCmdWith(t, runLeaseCmd, d, fakeGetenv(nil), []daemonclient.Option{leadClockOpt()}, "ls")
-	if code != ExitError || stdout != "" || lastToken(stderr) != "unsupported" ||
-		!strings.Contains(stderr, "/api/resources") || strings.Count(stderr, "\n") != 1 {
-		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
-	}
-}
-
-func TestLeaseLs_JSON(t *testing.T) {
-	want := fakeSnapshot()
-	d := &fakeResourcesDaemon{res: answer{body: want}}
-	code, stdout, stderr := driveTeamCmdWith(t, runLeaseCmd, d, fakeGetenv(nil), nil, "ls", "--json")
-	if code != ExitOK || stderr != "" || strings.Count(stdout, "\n") != 1 {
-		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
-	}
-	var got resources.Snapshot
-	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
-		t.Fatalf("stdout is not a snapshot: %v", err)
-	}
-	if got.Host.Measured != 76 || len(got.Sessions) != 2 || got.Sessions[0].SessionID != "cc-sid-member-1" {
-		t.Errorf("snapshot = %+v", got)
-	}
-	if strings.Contains(stdout, "\n ") || strings.Contains(strings.TrimRight(stdout, "\n"), "\n") {
-		t.Errorf("--json must be compact: %q", stdout)
-	}
-}
-
-func TestLeaseCmd_UsageErrorsExit2(t *testing.T) {
-	d := &fakeResourcesDaemon{res: answer{body: fakeSnapshot()}}
-	for _, args := range [][]string{nil, {"bogus"}, {"ls", "extra"}, {"ls", "--bogus"}, {"--json"}} {
+	for _, args := range [][]string{nil, {"bogus"}, {"--json"}, {"ls"}, {"ls", "--json"}, {"acquire", "--kind", "build"}, {"release", "x"}, {"confirm", "x"}, {"cancel", "x"}, {"done"}} {
 		code, stdout, stderr := driveTeamCmdWith(t, runLeaseCmd, d, fakeGetenv(nil), nil, args...)
-		if code != ExitUsage || stdout != "" || !strings.HasPrefix(stderr, "pdx lease: ") || !strings.Contains(stderr, "usage: pdx lease ls") {
+		if code != ExitUsage || stdout != "" || !strings.HasPrefix(stderr, "pdx lease: ") {
 			t.Errorf("%q: code=%d stdout=%q stderr=%q", args, code, stdout, stderr)
+		}
+		if len(args) > 0 && args[0] != "bogus" && args[0] != "--json" && !strings.Contains(stderr, "已移除") {
+			t.Errorf("%q: stderr does not say the verb was removed: %q", args, stderr)
 		}
 	}
 	if d.hits() != 0 {
-		t.Errorf("usage errors reached the daemon %d time(s)", d.hits())
+		t.Errorf("removed verbs reached the daemon %d time(s)", d.hits())
+	}
+}
+
+// `run` is what is left: it reaches the alias (seam), with the arguments after it.
+func TestLeaseCmd_RunStillDispatchesToTheAlias(t *testing.T) {
+	var got []string
+	defer func(old func(context.Context, []string, func(string) string, io.Writer, io.Writer, []daemonclient.Option) int) {
+		leaseRun = old
+	}(leaseRun)
+	leaseRun = func(_ context.Context, args []string, _ func(string) string, _, _ io.Writer, _ []daemonclient.Option) int {
+		got = args
+		return 7
+	}
+	code, _, _ := driveTeamCmdWith(t, runLeaseCmd, &fakeResourcesDaemon{}, fakeGetenv(nil), nil, "run", "--kind", "build", "--", "true")
+	if code != 7 || !strings.HasPrefix(strings.Join(got, " "), "--kind build -- true") {
+		t.Fatalf("code=%d args=%q", code, got)
 	}
 }
 
