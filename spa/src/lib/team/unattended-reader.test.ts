@@ -207,6 +207,33 @@ describe('re-reads (after pending_lineage)', () => {
     expect((await joined).quotas?.[0].root_session_id).toBe('real-root')
     calls[0].resolve(page({ quotas: [quota('prov')] }))
     await first
+    // the replaced read answered last, but never writes: the last read and the numbers stay the re-read's (JV-5b review)
+    expect(st().reads[A]).toEqual({ ok: true, quotas: [quota('real', { root_session_id: 'real-root' })] })
+    expect(st().confirmed[quotaKey(A, 'root-prov')]).toBeUndefined()
+    expect(st().confirmed[quotaKey(A, 'real-root')]).toBeDefined()
+    expect(st().gets).toEqual({})
+  })
+
+  it('a replaced read that fails after the re-read does not write its failure either', async () => {
+    const calls = controlled()
+    void codeOf(readFirstPage(A))
+    const again = refreshHost(A)
+    calls[1].resolve(page({ quotas: [quota('real')] }))
+    await again
+    calls[0].reject(new ApprovalApiError(503, 'not_ready'))
+    await flush()
+    expect(st().reads[A]).toEqual({ ok: true, quotas: [quota('real')] })
+  })
+
+  it('a replaced read closes its GET bracket at once: 讀取中 lasts exactly as long as the read that counts', async () => {
+    const calls = controlled()
+    void codeOf(readFirstPage(A))
+    expect(st().gets[A]?.depth).toBe(1)
+    const again = refreshHost(A)
+    expect(st().gets[A]?.depth).toBe(1) // the replaced one no longer counts
+    calls[1].resolve(page({ quotas: [] }))
+    await again
+    expect(st().gets).toEqual({}) // not held open by the replaced read still on the wire
   })
 
   it('while a host is watched the writer\'s re-read asks it again; two watchers, one re-read; none left, none', async () => {
