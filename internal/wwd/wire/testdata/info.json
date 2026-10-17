@@ -1,0 +1,2 @@
+{"host_id": "h-mlab", "alias": "mlab", "version": "0.1.0", "proto": 1, "platform": "darwin", "arch": "arm64",
+ "worker": {"enabled": true}, "labels": ["os:darwin", "arch:arm64", "repo:purdex"]}

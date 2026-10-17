@@ -1,0 +1,14 @@
+{
+ "type": "worker",
+ "data": {
+  "host": "mlab",
+  "worker": {
+   "enabled": true,
+   "slots": {
+    "heavy": 1,
+    "light": 2
+   },
+   "owner_rule": "yield"
+  }
+ }
+}
