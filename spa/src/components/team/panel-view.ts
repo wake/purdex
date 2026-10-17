@@ -20,9 +20,12 @@ export interface PanelViewInput {
   teamDrill: Readonly<Record<string, { hostId: string; sessionId: string }>>
   /** The active tab's own conversation, only when it HAS a workbook on a `workbook.v1` host (`useOwnWorkbook`). */
   own: OwnWorkbookTarget | null
+  /** The tab's host is journal.v1 (J-2b): the workbook view is off — a persisted drill is ignored (not erased) and there is no own workbook. */
+  journalHost?: boolean
 }
 
-export function panelView({ panelTeam, teamDrill, own }: PanelViewInput): PanelView | null {
+export function panelView({ panelTeam, teamDrill, own, journalHost = false }: PanelViewInput): PanelView | null {
+  if (journalHost) return panelTeam !== null ? { kind: 'team', team: panelTeam } : null
   if (panelTeam !== null) return teamDrill[panelTeam.teamKey] ? { kind: 'workbook', from: 'team', team: panelTeam } : { kind: 'team', team: panelTeam }
   return own === null ? null : { kind: 'workbook', from: 'own', hostId: own.hostId, sessionId: own.sessionId }
 }

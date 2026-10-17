@@ -15,6 +15,8 @@ import { LayoutClosingList, LayoutKeepPicker } from './LayoutKeepPicker'
 import { UnattendedButton } from './UnattendedButton'
 import { OwnNotebookButton, OwnTitleStrip, TeamNotebookButton, TeamTitleStrip } from './team/TeamTitleBar'
 import { useOwnWorkbook } from './team/own-workbook'
+import { JournalButtons } from './journal/JournalButtons'
+import { useJournalTarget } from './journal/useJournalTarget'
 import { useTeamUiStore } from '../stores/useTeamUiStore'
 import { useTitleBarLayout } from './team/title-bar-layout'
 import { useTitleBarTeam } from './team/useTitleBarTeam'
@@ -111,8 +113,10 @@ export function TitleBar({ title }: Props) {
   // A tab of no team whose own conversation has a workbook uses the shared value (WA-2b-1b).
   const own = useOwnWorkbook()
   const sharedInBar = useTeamUiStore((s) => s.sharedPanelMode === 'titlebar')
-  const ownStrip = team === null && own !== null && sharedInBar
-  const stripShown = team ? team.mode === 'titlebar' : ownStrip
+  // On a journal.v1 host the workbook view is off (J-2b): no strip, no notebook button — 團隊 / 日誌 take their place.
+  const jt = useJournalTarget()
+  const ownStrip = !jt.journalHost && team === null && own !== null && sharedInBar
+  const stripShown = jt.journalHost ? false : team ? team.mode === 'titlebar' : ownStrip
   const { barRef, btnsRef, setStripW, layout } = useTitleBarLayout(stripShown)
   const current = useTabStore((s) => {
     const tab = s.activeTabId ? s.tabs[s.activeTabId] : undefined
@@ -195,7 +199,7 @@ export function TitleBar({ title }: Props) {
         {ownStrip && own && <OwnTitleStrip target={own} room={layout ? layout.room : null} onContentWidth={setStripW} />}
         <div ref={btnsRef} data-testid="title-bar-right" className="shrink-0 flex items-center">
         {/* Notebook (WA-2a′, WA-2b-1b): moves the panel area between the title bar and the pane; a team tab, or a tab whose own cc conversation has a workbook. */}
-        {team ? <TeamNotebookButton team={team} /> : own && <OwnNotebookButton />}
+        {jt.journalHost ? <JournalButtons target={jt} /> : team ? <TeamNotebookButton team={team} /> : own && <OwnNotebookButton />}
         {/* 無人值守模式 (U23): left of the layout buttons, in its own no-drag wrapper. */}
         <UnattendedButton />
         <div
