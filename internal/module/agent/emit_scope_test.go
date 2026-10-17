@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	agentpkg "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/session"
+	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/tmux"
 )
 
@@ -307,4 +309,67 @@ func TestPaneSnapCache_OwnerRelistsAfterGenBump(t *testing.T) {
 			}
 		})
 	}
+}
+
+// BenchmarkEmitSlotRead is what a hook pays inside the emit slot to read its session's projection: 200 frames over 18
+// sessions. "global" is the full-table read before #3092 A, "scoped" the session-scoped read with the 2 s shared listing.
+// tmux-lists/op counts the `list-panes` forks (the fake costs nothing; a real one is ~27 ms).
+func BenchmarkEmitSlotRead(b *testing.B) {
+	for _, mode := range []string{"global", "scoped"} {
+		b.Run(mode, func(b *testing.B) {
+			m, tx := newScopeModuleB(b)
+			orig := pidAncestorIncludesFn
+			pidAncestorIncludesFn = func(pid, ancestor int) bool { return true }
+			defer func() { pidAncestorIncludesFn = orig }()
+			for i := 0; i < 200; i++ {
+				pane := "%" + strconv.Itoa(i)
+				tx.SetPaneSessionName(pane, "s"+strconv.Itoa(i%18))
+				tx.SetActivePanePID(pane, strconv.Itoa(9000+i))
+				if _, err := m.frames.Upsert(store.Frame{PaneID: pane, AgentType: "cc", PID: 1000 + i, PPID: 1, ProcessStartTime: "t" + strconv.Itoa(i),
+					Status: agentpkg.StatusIdle, StartedAt: int64(10 + i), LastSeenAt: int64(10 + i), Verified: true, SessionID: "sid-" + strconv.Itoa(i), Cwd: "/w"}); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if mode == "scoped" {
+				m.paneSnapTTL = defaultPaneSnapTTL
+			}
+			tx.reset()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				name := "s" + strconv.Itoa(i%18)
+				var p *SessionProjection
+				var err error
+				if mode == "global" {
+					p, err = m.projectionForSessionGlobal(name)
+				} else {
+					p, err = m.projectionForSession(name)
+				}
+				if err != nil || p == nil {
+					b.Fatalf("%s: %+v, %v", name, p, err)
+				}
+			}
+			batch, _, _ := tx.counts()
+			b.ReportMetric(float64(batch)/float64(b.N), "tmux-lists/op")
+		})
+	}
+}
+
+func newScopeModuleB(b *testing.B) (*Module, *batchCountingTmux) {
+	events, err := store.OpenAgentEvent(":memory:")
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(func() { events.Close() })
+	m, err := New(events)
+	if err != nil {
+		b.Fatal(err)
+	}
+	m.registry = agentpkg.NewRegistry()
+	fake := tmux.NewFakeExecutor()
+	tx := &batchCountingTmux{FakeExecutor: fake}
+	m.tmux = tx
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "c0", Name: "s0"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fake}
+	return m, tx
 }
