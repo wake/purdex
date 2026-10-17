@@ -30,6 +30,7 @@ const gateUsage = `usage: pdx gate [--class heavy|light] [--auto] [--tool <name>
        pdx gate set [--profile <name>] [--config <path>] <module>.<key>=<value>
        pdx gate profile use <name> | list [--config <path>]
   --class  the pool to take a slot from (default heavy); --auto classifies the command by its words instead
+  --wait-max  seconds the command may wait for its slot; past them nothing is run and the exit code is 75 (PDX_GATE_ADMITTED_MARK=1 prints a marker on stderr right before the command starts)
   --fg     keep normal priority (no background QoS), for a release gate on an idle host
   --real   the binary to run in place of the command's first word (a shim passes the real one)
   --tool   a shim's call: the command is <name> followed by the words after --; the real binary is looked up on PATH
@@ -80,8 +81,13 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 	real := fs.String("real", "", "binary to run in place of the first word")
 	tool := fs.String("tool", "", "the shim that called: find the real binary behind it")
 	cfgPath := fs.String("config", "", "config.toml (default ~/.config/pdx/config.toml)")
+	waitMax := fs.Float64("wait-max", 0, "seconds the command may wait for its slot; past them it is not run and the exit code is 75")
 	classSource := fs.String("class-source", "", "where --class came from, for the decision record (classifier or kind)")
 	if err := fs.Parse(flags); err != nil {
+		return 2
+	}
+	if *waitMax < 0 {
+		fmt.Fprintf(stderr, "pdx gate: --wait-max must not be negative, got %v\n", *waitMax)
 		return 2
 	}
 	if *classSource != "" && *classSource != classByClassifier && *classSource != classByKind {
@@ -150,7 +156,7 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 	g := gate.New(cfg)
 	g.Stderr = stderr
 	g.Load = gateReloader(*cfgPath, cfg)
-	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Real: realBin, Class: c, ClassSource: *classSource, Foreground: *fg, Stdout: stdout, Stderr: stderr})
+	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Real: realBin, Class: c, ClassSource: *classSource, Foreground: *fg, WaitMax: time.Duration(*waitMax * float64(time.Second)), Stdout: stdout, Stderr: stderr})
 	return code
 }
 
