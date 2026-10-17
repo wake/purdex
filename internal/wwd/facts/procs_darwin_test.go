@@ -5,6 +5,7 @@ package facts
 import (
 	"os"
 	"os/exec"
+	"syscall"
 	"testing"
 	"time"
 
@@ -79,16 +80,28 @@ func TestHelperSleep(t *testing.T) {
 }
 
 func TestProcReaderCPUShare(t *testing.T) {
+	// The share is checked against the process's own getrusage over the same window,
+	// not against an absolute figure: on a loaded host the busy loop may get only a
+	// fraction of a core, and both numbers see exactly that fraction.
 	r, err := NewProcReader("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := r.Snapshot(time.Now()); err != nil {
+	cpuTime := func() time.Duration {
+		var ru syscall.Rusage
+		if err := syscall.Getrusage(syscall.RUSAGE_SELF, &ru); err != nil {
+			t.Fatal(err)
+		}
+		return time.Duration(ru.Utime.Nano() + ru.Stime.Nano())
+	}
+	t0 := time.Now()
+	if _, _, err := r.Snapshot(t0); err != nil {
 		t.Fatal(err)
 	}
+	c0 := cpuTime()
 	stop := make(chan struct{})
 	t.Cleanup(func() { close(stop) })
-	go func() { // burn about one core
+	go func() { // keep one core asking for CPU
 		for {
 			select {
 			case <-stop:
@@ -98,14 +111,23 @@ func TestProcReaderCPUShare(t *testing.T) {
 		}
 	}()
 	time.Sleep(1500 * time.Millisecond)
-	snap, _, err := r.Snapshot(time.Now())
+	t1 := time.Now()
+	snap, _, err := r.Snapshot(t1)
 	if err != nil {
 		t.Fatal(err)
 	}
+	c1 := cpuTime()
+	used := c1 - c0
+	if used < 100*time.Millisecond {
+		t.Skipf("this process got only %v of CPU in 1.5 s (host saturated): nothing to compare", used)
+	}
+	want := 100 * float64(used) / float64(t1.Sub(t0))
 	for _, p := range snap.Procs {
 		if p.PID == os.Getpid() {
-			if p.CPUPct < 50 || p.CPUPct > 1200 {
-				t.Fatalf("cpu share %v for a process burning a core", p.CPUPct)
+			// the two windows are a few milliseconds apart and getrusage counts the Go
+			// runtime's other threads too: a generous band, never an absolute figure
+			if p.CPUPct < want*0.5 || p.CPUPct > want*1.5+20 {
+				t.Fatalf("cpu share %.1f%%, the process's own getrusage says %.1f%% (used %v)", p.CPUPct, want, used)
 			}
 			return
 		}
