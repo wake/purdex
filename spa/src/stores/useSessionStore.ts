@@ -2,7 +2,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { type Session, listSessions } from '../lib/host-api'
-import { useTeamRosterStore } from './useTeamRosterStore'
+import { connectionGeneration, useTeamRosterStore } from './useTeamRosterStore'
 import { purdexStorage, STORAGE_KEYS, syncManager } from '../lib/storage'
 
 interface SessionState {
@@ -22,7 +22,11 @@ export const useSessionStore = create<SessionState>()(
       activeHostId: null,
       activeCode: null,
       fetchHost: async (hostId: string) => {
+        const gen = connectionGeneration(hostId)
         const list = await listSessions(hostId)
+        // The connection it was asked on was dropped meanwhile: the reply may predate a daemon / tmux restart, so it is
+        // neither written nor marked live (the new connection fetches its own list).
+        if (gen !== connectionGeneration(hostId)) return
         set((state) => ({
           sessions: { ...state.sessions, [hostId]: list },
         }))

@@ -1,5 +1,6 @@
 // spa/src/stores/useTeamRosterStore.test.ts — plan PL-2b′: replace, forget, never persisted.
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import * as hostApi from '../lib/host-api'
 import storeSource from './useTeamRosterStore.ts?raw'
 import { useTeamRosterStore } from './useTeamRosterStore'
 import type { TeamRoster } from '../lib/team/roster'
@@ -81,5 +82,17 @@ describe('useTeamRosterStore', () => {
     useTeamRosterStore.getState().markSessionsLive('h7')
     useTeamRosterStore.getState().forgetHost('h7')
     expect(useTeamRosterStore.getState().liveSessionHosts).toEqual({})
+  })
+
+  it('a session fetch in flight when the connection drops is discarded, not marked live (R4)', async () => {
+    let resolve!: (v: never[]) => void
+    vi.spyOn(hostApi, 'listSessions').mockReturnValue(new Promise((r) => { resolve = r as typeof resolve }))
+    const { useSessionStore } = await import('./useSessionStore')
+    const p = useSessionStore.getState().fetchHost('h8')
+    useTeamRosterStore.getState().dropConnection('h8')
+    resolve([])
+    await p
+    expect(useTeamRosterStore.getState().liveSessionHosts).toEqual({})
+    expect(useSessionStore.getState().sessions.h8).toBeUndefined()
   })
 })

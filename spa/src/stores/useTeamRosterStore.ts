@@ -28,6 +28,12 @@ interface TeamRosterState {
   reset: () => void
 }
 
+// Per host, how many times its connection has been dropped. Not state: nothing renders from it. An async session fetch
+// remembers the value it started under and is discarded if it moved (member spec R4: a reply from a retired connection
+// must not be marked live).
+const connectionGenerations = new Map<string, number>()
+export function connectionGeneration(hostId: string): number { return connectionGenerations.get(hostId) ?? 0 }
+
 export const useTeamRosterStore = create<TeamRosterState>()((set) => ({
   byHost: {},
   liveHosts: {},
@@ -35,6 +41,7 @@ export const useTeamRosterStore = create<TeamRosterState>()((set) => ({
   markSessionsLive: (hostId) => set((s) => (Object.hasOwn(s.liveSessionHosts, hostId) ? s : { liveSessionHosts: { ...s.liveSessionHosts, [hostId]: true } })),
   apply: (hostId, teams) => set((s) => ({ byHost: { ...s.byHost, [hostId]: teams }, liveHosts: { ...s.liveHosts, [hostId]: true } })),
   dropConnection: (hostId) => set((s) => {
+    connectionGenerations.set(hostId, connectionGeneration(hostId) + 1)
     const rosterLive = Object.hasOwn(s.liveHosts, hostId)
     const sessionsLive = Object.hasOwn(s.liveSessionHosts, hostId)
     if (!rosterLive && !sessionsLive) return s
