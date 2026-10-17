@@ -408,7 +408,7 @@ describe('the four states (WA-2a′)', () => {
     reload({ panelMode: { a: 'max', b: 'line' }, panelLast: { a: 'max', b: 'line' }, sharedPanelMode: 'max', sharedPanelLast: 'max' })
     expect(st().panelMode).toEqual({ b: 'line' })
     expect(st().panelLast).toEqual({ b: 'line' })
-    expect(st().sharedPanelMode).toBe('titlebar')
+    expect(st().sharedPanelMode).toBe('full') // the shared (non-team) value too, like each team's max
     expect(st().sharedPanelLast).toBe('full')
   })
 
