@@ -141,6 +141,26 @@ func TestSweepIsBoundedInTime(t *testing.T) {
 	}
 }
 
+func TestAbandonedSweepSignalsNobodyWhenTheScanReturnsLate(t *testing.T) {
+	pid, gone := victim(t)
+	old := sweepSlack
+	sweepSlack = 100 * time.Millisecond
+	defer func() { sweepSlack = old }()
+	release := make(chan struct{})
+	_, err := sweepBounded(fakeSource(func(string) ([]int, error) { <-release; return []int{pid}, nil }), "j_test1", 100*time.Millisecond)
+	if err == nil {
+		t.Fatal("want a time budget error")
+	}
+	close(release) // the scan answers after Run gave up
+	time.Sleep(500 * time.Millisecond)
+	if gone() {
+		t.Fatal("the abandoned sweep still ended a process")
+	}
+	if syscall.Kill(pid, 0) != nil {
+		t.Fatal("the process is gone")
+	}
+}
+
 func TestSweepNothingFound(t *testing.T) {
 	s := spec(t, "true")
 	s.Procs = fakeSource(func(string) ([]int, error) { return nil, nil })

@@ -1,10 +1,12 @@
 package run
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -21,6 +23,8 @@ const sweepPoll = 50 * time.Millisecond
 // sweepSlack is added to killAfter for the whole sweep's time budget: scans of a big process table take their time.
 var sweepSlack = 5 * time.Second
 
+var errAbandoned = errors.New("sweep: abandoned after its time budget")
+
 // sweepBounded is sweep under one overall deadline, so a process table that cannot be read (a hung sysctl) never holds Run:
 // past the budget it returns an error and the scan goroutine is left to finish by itself.
 func sweepBounded(src ProcSource, jobID string, killAfter time.Duration) ([]int, error) {
@@ -28,9 +32,10 @@ func sweepBounded(src ProcSource, jobID string, killAfter time.Duration) ([]int,
 		pids []int
 		err  error
 	}
+	var abandoned atomic.Bool
 	done := make(chan out, 1)
 	go func() {
-		pids, err := sweep(src, jobID, killAfter)
+		pids, err := sweep(src, jobID, killAfter, &abandoned)
 		done <- out{pids, err}
 	}()
 	t := time.NewTimer(killAfter + sweepSlack)
@@ -39,6 +44,7 @@ func sweepBounded(src ProcSource, jobID string, killAfter time.Duration) ([]int,
 	case o := <-done:
 		return o.pids, o.err
 	case <-t.C:
+		abandoned.Store(true) // a scan that returns later signals nobody: Run is already over
 		return nil, fmt.Errorf("sweep: the process table was not read within %v", killAfter+sweepSlack)
 	}
 }
@@ -47,7 +53,7 @@ func sweepBounded(src ProcSource, jobID string, killAfter time.Duration) ([]int,
 // vite or playwright that a test started and that daemonized out of the group. It is cleanup, not a security boundary — a
 // process that removes the mark from its environment is not found (a known limit, see the tests). TERM first, KILL after
 // killAfter for those still marked on a second look (so a recycled pid is not killed), and it returns the pids it found.
-func sweep(src ProcSource, jobID string, killAfter time.Duration) (found []int, err error) {
+func sweep(src ProcSource, jobID string, killAfter time.Duration, abandoned *atomic.Bool) (found []int, err error) {
 	if src == nil {
 		return nil, nil
 	}
@@ -61,6 +67,9 @@ func sweep(src ProcSource, jobID string, killAfter time.Duration) (found []int, 
 	}
 	sort.Ints(pids)
 	for _, p := range pids {
+		if abandoned.Load() {
+			return pids, errAbandoned
+		}
 		_ = syscall.Kill(p, syscall.SIGTERM)
 	}
 	deadline := time.Now().Add(killAfter)
@@ -79,6 +88,9 @@ func sweep(src ProcSource, jobID string, killAfter time.Duration) (found []int, 
 		return pids, err // not confirmed: no KILL on a guess, the pid may belong to someone else by now
 	}
 	for _, p := range left {
+		if abandoned.Load() {
+			return pids, errAbandoned
+		}
 		_ = syscall.Kill(p, syscall.SIGKILL)
 	}
 	// give the kernel a moment to take them, so a caller that looks right after Run returns finds them gone
