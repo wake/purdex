@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -162,6 +163,41 @@ func TestWalk_ASignalDuringThePreparationStartsNothing(t *testing.T) {
 	assert.NoFileExists(t, marker, "never run, here or there")
 	assert.Empty(t, h.listDir(t, "Assist/jobs.noindex"), "no job was started")
 	dispatchRun{g: g, dir: g.Config().Dir}.nothingLeft(t)
+}
+
+// A send that fails before the command is started (here: a repo name the host cannot take) leaves no listener behind: the caller's next
+// signal still reaches its wait loop.
+func TestWalk_AFailedSendDoesNotSwallowTheNextSignal(t *testing.T) {
+	g, errs := testGate(t)
+	sigs := make(chan os.Signal, 1)
+	g.Signals = sigs
+	work := workRepo(t)
+	h := newAssistHost(t, filepath.Base(work))
+	// both heavy slots here are taken, so the ticket that comes back from the failed send has to wait
+	pool := g.pool(g.Config(), ClassHeavy)
+	for i := 0; i < 2; i++ {
+		s, err := pool.TakeDispatch(WaiterInfo{PID: 1})
+		require.NoError(t, err)
+		require.NotNil(t, s)
+		t.Cleanup(func() { s.Release(nil) })
+	}
+	var out bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		code, _ := g.Run(context.Background(), Options{Argv: sh(`echo never`), Class: ClassHeavy, Dir: work, Env: cleanEnv(), Stdout: &out, Stderr: errs,
+			Assist: &AssistTarget{Host: "air26", SSH: h.ssh, Repo: "bad name"}})
+		done <- code
+	}()
+	eventuallyFor(t, 60*time.Second, "the failed send to come back to the queue", func() bool {
+		return strings.Contains(errs.String(), "waiting on this host")
+	})
+	sigs <- syscall.SIGINT
+	select {
+	case code := <-done:
+		assert.Equal(t, 130, code, "the wait loop got the signal")
+	case <-time.After(15 * time.Second):
+		t.Fatal("the signal was taken by a listener the failed send left behind")
+	}
 }
 
 // A signal that comes as the preparation ends, before the command is started: the command is not started.

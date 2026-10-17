@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -217,7 +218,10 @@ func (g *Gate) RunAssist(ctx context.Context, o Options, a AssistRun) (res Assis
 		case <-preQuit:
 		}
 	}()
-	stopWatching := func() { close(preQuit); <-preExited }
+	var stopOnce sync.Once
+	// idempotent, and deferred at once: every way out of RunAssist stops the watcher, or it would take the next signal of the caller
+	stopWatching := func() { stopOnce.Do(func() { close(preQuit); <-preExited }) }
+	defer stopWatching()
 	signalled := func() (os.Signal, bool) { s, ok := preSig.Load().(os.Signal); return s, ok }
 	cancelledNow := func(s os.Signal) AssistResult {
 		res.Cancelled, res.Code, res.Err = true, 128+signalNumber(s), errors.New("cancelled")
