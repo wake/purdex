@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wake/purdex/internal/module/agent"
 	"github.com/wake/purdex/internal/push"
 	"github.com/wake/purdex/internal/team"
 )
@@ -134,21 +135,60 @@ func withoutTabNotify(r *push.DeviceRequest) {
 	r.Prefs = push.Prefs{Agents: map[string]push.AgentPrefs{"cc": {NotifyWithoutTab: true}}}
 }
 
-// A member's agent push carries purdex.member: true and reaches only a device that has its tab.
-// Mutation gate: drop the member flag / drop the member gate → red.
-func TestMemberPush_CarriesTheFlagAndNeedsATab(t *testing.T) {
+func errEv() agent.NotifyEvent {
+	return nev("c1", "PdxStopFailure", "error", map[string]any{"error": "boom"})
+}
+
+// Member spec R1: a member's waiting and idle are never pushed, tab or not; its error pushes like any session's and carries
+// purdex.member: true. Mutation gate: drop rule 4a → red; drop the member flag → red; keep a member tab clause → red.
+func TestMemberPush_WaitingAndIdleAreNeverPushedAnErrorIsAndCarriesTheFlag(t *testing.T) {
 	e := newAgentEnv(t, time.Hour)
 	withMembership(e, &fakeMembership{members: map[string]bool{"sid-1": true}})
-	e.device(tokA, "en", "mlab", withoutTabNotify) // notify_without_tab on, no tab
-	e.feed.emit(nev("c1", "PdxStop", "idle", nil))
-	e.noSends(t)
 	e.device(tokA, "en", "mlab", func(r *push.DeviceRequest) {
 		r.Prefs = push.Prefs{Tabs: []string{"c1"}, Agents: map[string]push.AgentPrefs{"cc": {NotifyWithoutTab: true}}}
 	})
 	e.feed.emit(nev("c1", "PdxStop", "idle", nil))
+	e.feed.emit(nev("c1", "PermissionRequest", "waiting", nil))
+	e.noSends(t)                                   // a tab and notify_without_tab on: still quiet
+	e.device(tokA, "en", "mlab", withoutTabNotify) // no tab
+	e.feed.emit(errEv())
 	p := e.waitSends(t, 1)[0].Payload
 	if got := purdexOf(t, p)["member"]; got != true {
 		t.Fatalf("purdex.member = %v: %s", got, p)
+	}
+}
+
+// A member's error with the type switched off and no tab is not pushed (the normal rules).
+func TestMemberPush_ErrorWithTheTypeOffIsNotPushed(t *testing.T) {
+	e := newAgentEnv(t, time.Hour)
+	withMembership(e, &fakeMembership{members: map[string]bool{"sid-1": true}})
+	e.device(tokA, "en", "mlab", func(r *push.DeviceRequest) {
+		r.Prefs = push.Prefs{Agents: map[string]push.AgentPrefs{"cc": {Enabled: bptr(false)}}}
+	})
+	e.feed.emit(errEv())
+	e.noSends(t)
+}
+
+// A lead is not a member: it pushes like any session.
+func TestMemberPush_ALeadPushesLikeAnySession(t *testing.T) {
+	e := newAgentEnv(t, time.Hour)
+	withMembership(e, &fakeMembership{members: map[string]bool{"sid-other": true}})
+	e.device(tokA, "en", "mlab", tabsOf("c1"))
+	e.feed.emit(nev("c1", "PdxStop", "idle", nil))
+	p := e.waitSends(t, 1)[0].Payload
+	if _, has := purdexOf(t, p)["member"]; has {
+		t.Fatalf("member present on a lead: %s", p)
+	}
+}
+
+// A member's card (approval path) is still pushed: the member rule never touched it.
+func TestMemberPush_AMembersCardStillPushes(t *testing.T) {
+	e := newAgentEnv(t, time.Hour)
+	withMembership(e, &fakeMembership{members: map[string]bool{"sid-1": true}})
+	e.device(tokA, "en", "mlab", nil)
+	e.events.emit("opened", leadApproval("ap1"))
+	if sends := e.waitSends(t, 1); !strings.Contains(sends[0].Payload, `"kind":"lead"`) {
+		t.Fatalf("the card did not push: %s", sends[0].Payload)
 	}
 }
 
@@ -164,16 +204,14 @@ func TestMemberPush_NonMemberPushesWithoutATabAndLeavesTheFlagOut(t *testing.T) 
 	}
 }
 
-// A read error is treated as "member, unknown": the gate applies the member rule (the quieter side), the payload leaves the
-// flag out so the phone counts the event. Mutation gate: error → not a member → red; error → member:true in payload → red.
-func TestMemberPush_ReadErrorGatesAsMemberButDoesNotAnnounceIt(t *testing.T) {
-	e := newAgentEnv(t, time.Hour)
+// A read error is "unknown" (member spec R4): the gate treats the session as not a member, so a waiting event is pushed, and
+// the payload leaves the flag out so the phone counts it. Mutation gate: unknown → member (gate) → red; error → member:true in
+// the payload → red.
+func TestMemberPush_ReadErrorIsNotAMemberAndIsNotAnnounced(t *testing.T) {
+	e := newAgentEnv(t, 0)
 	withMembership(e, &fakeMembership{err: errors.New("db gone")})
-	e.device(tokA, "en", "mlab", withoutTabNotify)
-	e.feed.emit(nev("c1", "PdxStop", "idle", nil))
-	e.noSends(t) // no tab: the member rule keeps it quiet
 	e.device(tokA, "en", "mlab", tabsOf("c1"))
-	e.feed.emit(nev("c1", "PdxStop", "idle", nil))
+	e.feed.emit(nev("c1", "PermissionRequest", "waiting", nil))
 	p := e.waitSends(t, 1)[0].Payload
 	if _, has := purdexOf(t, p)["member"]; has {
 		t.Fatalf("an unknown must not be announced as a member: %s", p)
@@ -215,41 +253,43 @@ func TestMemberPush_NoSessionIDIsNotAMember(t *testing.T) {
 }
 
 // A membership read that hangs (a contended team.db) must not hold the notify subscriber: the hub gives it a 64-event queue
-// and drops past it (R1 / critic F1). The read is bounded by a budget and single-flight; a read that is late or still
-// outstanding is "member, unknown" (gated as a member, not announced), and a later event reads again once it has returned.
-// Mutation gate: a synchronous read → the emit blocks past the budget → red.
-func TestMemberPush_AHungReadDoesNotHoldTheSubscriber(t *testing.T) {
-	e := newAgentEnv(t, time.Hour)
+// and drops past it. The read is bounded by a budget and single-flight; a read that is late or still outstanding is
+// "unknown" (member spec R4: not a member, pushed, not announced), and a later event reads again once it has returned.
+// Mutation gate: a synchronous read → the emit blocks past the budget → red; late → member → red.
+func TestMemberPush_AHungReadDoesNotHoldTheSubscriberAndCountsAsNotAMember(t *testing.T) {
+	e := newAgentEnv(t, 0)
 	release := make(chan struct{})
 	var calls atomic.Int32
 	e.mod.membership = func(string) (bool, error) {
 		if calls.Add(1) == 1 {
 			<-release // the first read hangs
 		}
-		return false, nil
+		return true, nil // once it returns, the session is a member
 	}
 	e.mod.memBudget = 30 * time.Millisecond
-	e.device(tokA, "en", "mlab", withoutTabNotify)
+	e.device(tokA, "en", "mlab", tabsOf("c1"))
 	for i := 0; i < 5; i++ { // the first waits one budget; the next four find the read still outstanding and do not wait at all
 		start := time.Now()
-		e.feed.emit(nev("c1", "PdxStop", "idle", nil))
+		e.feed.emit(nev("c1", "PermissionRequest", "waiting", nil))
 		if d := time.Since(start); d > time.Second {
 			t.Fatalf("event %d held the subscriber for %v", i, d)
 		}
 	}
-	e.noSends(t) // unknown = gated as a member: no tab, no push
+	sends := e.waitSends(t, 5) // unknown = not a member: all five waiting events pushed, none announced
+	for _, s := range sends {
+		if _, has := purdexOf(t, s.Payload)["member"]; has {
+			t.Fatalf("a late read must not be announced as a member: %s", s.Payload)
+		}
+	}
 	if n := calls.Load(); n != 1 {
 		t.Fatalf("reads = %d while the first was outstanding, want 1", n)
 	}
 	close(release)
-	deadline := time.Now().Add(2 * time.Second)
-	for sent := 0; sent == 0; {
-		if time.Now().After(deadline) {
-			t.Fatal("no push after the read came back")
-		}
-		e.feed.emit(nev("c1", "PdxStop", "idle", nil))
-		time.Sleep(20 * time.Millisecond)
-		sent = e.apns.count()
+	time.Sleep(50 * time.Millisecond)
+	e.feed.emit(nev("c1", "PermissionRequest", "waiting", nil)) // the read has returned: a member now, waiting is quiet
+	time.Sleep(100 * time.Millisecond)
+	if got := e.apns.count(); got != 5 {
+		t.Fatalf("a member's waiting event was pushed after the read returned (%d sends)", got)
 	}
 }
 
