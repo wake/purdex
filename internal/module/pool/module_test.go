@@ -337,6 +337,24 @@ func TestSingleFlight_ConcurrentReadsOfOneKeyCallWWDOnce(t *testing.T) {
 	assert.EqualValues(t, 1, p.calls.Load(), "wwd was asked once")
 }
 
+// A fetch that panics must not strand the flight: the reader gets a 500, the key's flight is gone (the next read starts a new
+// one) and the waiters' done channel is closed.
+func TestSingleFlight_APanickingFetchAnswers500AndFreesTheFlight(t *testing.T) {
+	m := New()
+	m.now = func() time.Time { return time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC) }
+	rr := httptest.NewRecorder()
+	assert.NotPanics(t, func() {
+		m.serve(rr, httptest.NewRequest(http.MethodGet, "/x", nil), "k", func(context.Context) (any, *apiError) { panic("boom") })
+	})
+	assert.Equal(t, 500, rr.Code)
+	m.flightMu.Lock()
+	assert.Empty(t, m.flights, "the flight is released")
+	m.flightMu.Unlock()
+	rr = httptest.NewRecorder()
+	m.serve(rr, httptest.NewRequest(http.MethodGet, "/x", nil), "k", func(context.Context) (any, *apiError) { return map[string]int{"a": 1}, nil })
+	assert.Equal(t, 200, rr.Code, "a later read works")
+}
+
 // Different keys are different flights: each is asked once.
 func TestSingleFlight_DifferentKeysAreSeparateFlights(t *testing.T) {
 	p, cl := newParkedWWD(t)
