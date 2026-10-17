@@ -3,13 +3,15 @@ package gate
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 )
 
 // AssistTarget asks a command to be sent to an assist host instead of waiting for a slot here (the hidden --assist-host; the
 // automatic walk of X2b fills it too).
 type AssistTarget struct {
-	Host  string
+	Host  string // the name of the host: its dispatch slots, its holds, the record
+	Dest  string // the ssh alias to connect to ("" = Host)
 	SSH   string // the ssh program ("" = ssh)
 	Git   string // the git program ("" = git)
 	Repo  string // the repo's name on the host ("" = the top level's basename)
@@ -18,10 +20,18 @@ type AssistTarget struct {
 
 const defaultDispatchSlots = 2
 
+// dispatchSize is how many runs mlab keeps out on a host at once (0 in the record = the default).
+func dispatchSize(n int) int {
+	if n <= 0 {
+		return defaultDispatchSlots
+	}
+	return n
+}
+
 // tryAssist sends the ticket's command to the assist host. handled is true when the run is over (the command's result, or the caller
 // was cancelled) and code is the exit code. When it is false nothing ran for good: the ticket is back at its place, the dispatch
 // slot is let go, and the caller waits on this host as it always did.
-func (g *Gate) tryAssist(ctx context.Context, cfg Config, class Class, o Options, ticket *Ticket, d *Decision) (code int, handled bool) {
+func (g *Gate) tryAssist(ctx context.Context, cfg Config, class Class, o Options, ticket *Ticket, d *Decision, sigs <-chan os.Signal) (code int, handled bool) {
 	a := o.Assist
 	repo := a.Repo
 	if repo == "" {
@@ -31,10 +41,7 @@ func (g *Gate) tryAssist(ctx context.Context, cfg Config, class Class, o Options
 		g.say("%s is held off until %s (%s); waiting on this host", a.Host, h.Until.Format("15:04:05"), h.Why)
 		return 0, false
 	}
-	size := a.Slots
-	if size <= 0 {
-		size = defaultDispatchSlots
-	}
+	size := dispatchSize(a.Slots)
 	job := newJobID()
 	slot, err := g.pool(cfg, class).ServeOut(ticket.Name, DispatchPool(cfg.Dir, a.Host, size, g.Now), g.waiterInfo(o), OutInfo{Host: a.Host, Job: job, At: g.Now()})
 	if err != nil || slot == nil {
@@ -46,7 +53,11 @@ func (g *Gate) tryAssist(ctx context.Context, cfg Config, class Class, o Options
 		return 0, false
 	}
 	d.Tried = a.Host
-	res := g.RunAssist(ctx, o, AssistRun{Host: a.Host, Job: job, Repo: repo, SSH: a.SSH, Git: a.Git})
+	dest := a.Dest
+	if dest == "" {
+		dest = a.Host
+	}
+	res := g.RunAssist(ctx, o, AssistRun{Sigs: sigs, Host: dest, Job: job, Repo: repo, SSH: a.SSH, Git: a.Git})
 	d.TransferS, d.RunS, d.Reclaimed = res.TransferS, res.RunS, res.Reclaimed
 	// Every way out lets the dispatch slot go: a return to the queue lets it go first (Ticket.Return), the others here.
 	// A ticket that cannot be put back is not left out for ever (nothing would serve it): the command is refused.

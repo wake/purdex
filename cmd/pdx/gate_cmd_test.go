@@ -21,6 +21,8 @@ func gateEnv(t *testing.T, gateSection string) (cfgPath, dir string) {
 	dir = t.TempDir()
 	t.Setenv("PDX_GATE_DIR", filepath.Join(dir, "gate"))
 	t.Setenv("PDX_GATE_HELD", "")
+	t.Setenv(gate.RankEnv, "") // the assist host's assist.env exports PDX_GATE_RANK=back: the tests are of the default rank
+	t.Setenv(gate.RankReasonEnv, "")
 	cfgPath = filepath.Join(dir, "config.toml")
 	require.NoError(t, os.WriteFile(cfgPath, []byte("[gate]\n"+gateSection), 0o600))
 	return cfgPath, dir

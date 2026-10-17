@@ -68,6 +68,11 @@ func assistMain(args []string, stdout, stderr io.Writer) int {
 
 // assistCall sends one request to the daemon and returns the body of a 2xx answer; otherwise it has printed why.
 func assistCall(cfgPath, method, path string, body any, stderr io.Writer) ([]byte, int) {
+	return assistCallWithin(assistTimeout, cfgPath, method, path, body, stderr)
+}
+
+// assistCallWithin is assistCall with its own limit on the wait for the answer.
+func assistCallWithin(timeout time.Duration, cfgPath, method, path string, body any, stderr io.Writer) ([]byte, int) {
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "pdx assist: %v\n", err)
@@ -77,7 +82,7 @@ func assistCall(cfgPath, method, path string, body any, stderr io.Writer) ([]byt
 	if body != nil {
 		payload, _ = json.Marshal(body)
 	}
-	res, err := doPeersRequest(method, watchBase(cfg)+path, payload, cfg.Token, assistTimeout)
+	res, err := doPeersRequest(method, watchBase(cfg)+path, payload, cfg.Token, timeout)
 	if err != nil {
 		return nil, reportPeersTransportErr(err, stderr)
 	}

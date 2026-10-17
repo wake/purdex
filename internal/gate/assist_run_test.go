@@ -170,7 +170,7 @@ sys.exit(os.waitstatus_to_exitcode(st) % 256 if os.waitstatus_to_exitcode(st) >=
 const fakePdx = `#!/bin/sh
 mode=$(cat "$HOME/fake-pdx-mode" 2>/dev/null)
 [ "$1" = gate ] || exit 2
-if [ "$2" = would-wait ]; then cat "$HOME/fake-wouldwait"; exit 0; fi
+if [ "$2" = would-wait ]; then [ -e "$HOME/fake-wouldwait-sleep" ] && sleep 20; cat "$HOME/fake-wouldwait"; exit 0; fi
 shift
 while [ "$1" != -- ]; do shift; done
 shift
@@ -186,6 +186,7 @@ exec "$@"
 
 // fakeGit passes everything to the real git, except update-ref while the test has asked for it to fail.
 const fakeGit = `#!/bin/sh
+if [ -e "$HOME/git-add-slow" ]; then for a in "$@"; do [ "$a" = add ] && { touch "$HOME/prepare-started"; sleep 6; }; done; fi
 if [ -e "$HOME/git-update-ref-fails" ]; then for a in "$@"; do [ "$a" = update-ref ] && exit 1; done; fi
 exec "$REAL_GIT" "$@"
 `
