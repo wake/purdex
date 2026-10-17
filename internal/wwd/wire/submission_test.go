@@ -103,3 +103,38 @@ func TestReceivedJobRejectsNegativeDurations(t *testing.T) {
 		}
 	}
 }
+
+// What a submission must have (task, repo name, snapshot commit) a received Job must have too, plus the id and origin the origin
+// assigned; a job that cannot be indexed, fetched or run is refused at the boundary, whichever response or event carries it.
+func TestReceivedJobNeedsItsIdentityAndExecutionFields(t *testing.T) {
+	good := string(fixture(t, "job_queued.json"))
+	for name, edit := range map[string][2]string{
+		"id":              {`"id": "j_01JC"`, `"id": ""`},
+		"origin":          {`"origin": "mlab"`, `"origin": ""`},
+		"task":            {`"task": "spa-related"`, `"task": ""`},
+		"repo name":       {`"name": "purdex"`, `"name": ""`},
+		"snapshot commit": {`"commit": "c0ffee"`, `"commit": ""`},
+	} {
+		raw := strings.Replace(good, edit[0], edit[1], 1)
+		if raw == good {
+			t.Fatalf("%s: replacement changed nothing", name)
+		}
+		if _, err := Decode[Job]([]byte(raw)); err == nil {
+			t.Errorf("a job with an empty %s was accepted", name)
+		}
+		for wrapper, body := range map[string]string{
+			"list":  `{"jobs":[` + raw + `]}`,
+			"event": `{"host":"mlab","job":` + raw + `}`,
+		} {
+			var err error
+			if wrapper == "list" {
+				_, err = Decode[JobsListResponse]([]byte(body))
+			} else {
+				_, err = Decode[JobEvent]([]byte(body))
+			}
+			if err == nil {
+				t.Errorf("a %s carrying a job with an empty %s was accepted", wrapper, name)
+			}
+		}
+	}
+}

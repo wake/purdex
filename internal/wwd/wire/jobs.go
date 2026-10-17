@@ -112,19 +112,11 @@ type JobSubmission struct {
 }
 
 func (s JobSubmission) Validate() error {
-	switch {
-	case !s.Class.Valid():
+	if !s.Class.Valid() {
 		return fmt.Errorf("submission: invalid class %q", s.Class)
-	case s.Task == "":
-		return fmt.Errorf("submission: missing task")
-	case s.Repo.Name == "":
-		return fmt.Errorf("submission: missing repo name")
-	case s.Snapshot.Commit == "":
-		return fmt.Errorf("submission: missing snapshot commit")
-	case s.TimeoutS < 0:
-		return fmt.Errorf("submission: negative timeout_s")
-	case s.QueueTimeoutS < 0:
-		return fmt.Errorf("submission: negative queue_timeout_s")
+	}
+	if err := validatePayload(s.Task, s.Repo, s.Snapshot, s.TimeoutS, s.QueueTimeoutS); err != nil {
+		return fmt.Errorf("submission: %w", err)
 	}
 	return nil
 }
@@ -136,8 +128,25 @@ func (j Job) Validate() error {
 	if !j.State.Valid() {
 		return fmt.Errorf("job: invalid state %q", j.State)
 	}
-	if j.TimeoutS < 0 || j.QueueTimeoutS < 0 {
-		return fmt.Errorf("job: negative duration (timeout_s %d, queue_timeout_s %d)", j.TimeoutS, j.QueueTimeoutS)
+	if j.ID == "" || j.Origin == "" {
+		return fmt.Errorf("job: missing id or origin")
+	}
+	// the same payload checks as a submission: a job that cannot be indexed, fetched or run is refused at the boundary
+	return validatePayload(j.Task, j.Repo, j.Snapshot, j.TimeoutS, j.QueueTimeoutS)
+}
+
+func validatePayload(task string, repo Repo, snap Snapshot, timeoutS, queueTimeoutS int) error {
+	switch {
+	case task == "":
+		return fmt.Errorf("missing task")
+	case repo.Name == "":
+		return fmt.Errorf("missing repo name")
+	case snap.Commit == "":
+		return fmt.Errorf("missing snapshot commit")
+	case timeoutS < 0:
+		return fmt.Errorf("negative timeout_s")
+	case queueTimeoutS < 0:
+		return fmt.Errorf("negative queue_timeout_s")
 	}
 	return nil
 }
