@@ -91,4 +91,18 @@ describe('journal.v1 support', () => {
     expect(liveSupport('h1')).toBeUndefined()
     expect(stickySupport('h1')).toBeUndefined()
   })
+
+  it('journal.sessions.v1 is its own flag, read from the same probe', async () => {
+    fetchHostInfo.mockResolvedValue(info(['journal.v1', 'journal.sessions.v1']))
+    setStatus('connected')
+    stop = startUnattendedSupport()
+    await flush()
+    expect(useJournalStore.getState().sessionsSupport.h1).toBe(true)
+    stop()
+    useJournalStore.getState().reset()
+    fetchHostInfo.mockResolvedValue(info(['journal.v1']))
+    stop = startUnattendedSupport()
+    await flush()
+    expect(useJournalStore.getState().sessionsSupport.h1).toBe(false)
+  })
 })

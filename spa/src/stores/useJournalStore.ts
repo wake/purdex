@@ -15,19 +15,24 @@
 // compare store-clock stamps), so an event landing during a read keeps the unit stale.
 // A read that lands after its host was forgotten (`epoch`) or its connection ended (`gens`) is dropped.
 import { create } from 'zustand'
-import { getJournal, getRoadmap, getTasks, setConfirmItem, type Outcome } from '../lib/journal/api'
+import { getJournal, getJournalPage, getJournalSessions, getRoadmap, getTasks, setConfirmItem, type Outcome } from '../lib/journal/api'
 import { useI18nStore } from './useI18nStore'
 import { useUndoToast } from './useUndoToast'
 import { cursorOf, mergeEntries, sortBand } from '../lib/journal/merge'
 import { forgetViewMemosOfHost } from '../lib/journal/view-memory'
-import { unitKeyOf, type ChangedWhat, type JournalEntry, type JournalProject, type JournalTask, type JournalUnit, type RemoteLead, type RoadmapFeature } from '../lib/journal/types'
+import { unitKeyOf, type ChangedWhat, type JournalEntry, type JournalProject, type JournalTask, type JournalUnit, type RemoteLead, type RoadmapFeature, type SessionLink } from '../lib/journal/types'
 
 /** Units kept per host: the least recently touched past this are dropped (events can name any unit, the store must not grow with them). */
 export const MAX_UNITS = 30
 export const MAX_ROUTES = 200
+/** Other sessions' pages kept per unit (session pages, JV-4): the least recently read past this are dropped, a page is read again when shown. */
+export const MAX_PAGES = 10
 
 type Stamps = Record<ChangedWhat, number>
 const zero = (): Stamps => ({ entries: 0, tasks: 0, roadmap: 0 })
+
+/** A session page that is not the current one (journal.sessions.v1): its rows, whether the daemon cut it, and when its read STARTED (store clock). */
+export interface PageState { entries: JournalEntry[]; truncated: boolean; readAt: number }
 
 export interface UnitState {
   unit: JournalUnit
@@ -40,6 +45,16 @@ export interface UnitState {
   /** The oldest loaded entry is not the unit's first: an older month can be loaded. */
   more: boolean
   openConfirms: number
+  /** Session pages (journal.sessions.v1). `entries` above is the CURRENT session's page; '' = the host does not declare it / not read yet. */
+  currentPage: string
+  /** The current page held more than the daemon's cap and the newest are kept. */
+  truncated: boolean
+  /** The leader's chain, oldest first; null = not read yet. */
+  sessions: SessionLink[] | null
+  /** A predecessor reader is not registered: sessions older than the first listed may be missing. */
+  sessionsIncomplete: boolean
+  /** The other sessions' pages that were read, by leader session id (least recently read first). */
+  pages: Record<string, PageState>
   /** null = never loaded (loaded when the tasks / roadmap tab opens, then kept fresh). */
   tasks: JournalTask[] | null
   roadmap: RoadmapFeature[] | null
@@ -72,6 +87,10 @@ interface JournalState {
   sticky: Record<string, boolean>
   /** Live journal.confirm.v1 of the current connection (cleared by `fence`): hand checks can be written and the band reads `confirms[]`. */
   confirmSupport: Record<string, boolean>
+  /** Live journal.sessions.v1 of the current connection (cleared by `fence`): the stream reads one leader session at a time. */
+  sessionsSupport: Record<string, boolean>
+  /** `sessionKey` → the newest session-page read of that session failed (the daemon's 503: no lead, a chain error): show it, not an empty page. */
+  readFailed: Record<string, boolean>
   /** Connection generation per host: bumped by `fence`. */
   gens: Record<string, number>
   byHost: Record<string, HostJournal>
@@ -85,9 +104,13 @@ interface JournalState {
   /** The connection is gone or a new probe starts: support is unknown, the sticky answer stays. */
   fence: (hostId: string) => void
   /** The probe's answer for the current generation. */
-  setSupport: (hostId: string, yes: boolean, confirm?: boolean) => void
+  setSupport: (hostId: string, yes: boolean, confirm?: boolean, sessions?: boolean) => void
   /** The latest page (no `older`) or the next older page of the unit this session names. */
   loadJournal: (hostId: string, sessionId: string, opts?: { older?: boolean }) => Promise<LoadResult>
+  /** The leader's chain of sessions (journal.sessions.v1). */
+  loadSessions: (hostId: string, sessionId: string) => Promise<LoadResult>
+  /** One OTHER session's page: it lands in `pages` only and leaves the current page, the band and the open count alone. */
+  loadPage: (hostId: string, sessionId: string, page: string) => Promise<LoadResult>
   loadTasks: (hostId: string, sessionId: string) => Promise<LoadResult>
   loadRoadmap: (hostId: string, sessionId: string) => Promise<LoadResult>
   /** Check / uncheck item `idx` of a 待確認 of the unit this session names: the screen follows at once, the PUT follows; see `checks` below for how a failure or a later read settles it. */
@@ -131,11 +154,15 @@ function keepChecks(hostId: string, unitKey: string, u: UnitState): UnitState {
   for (const [k, rec] of checks) {
     if (!k.startsWith(prefix)) continue
     const [entryId, idx] = k.slice(prefix.length).split('\u0000')
-    const entry = out.entries.find((e) => e.id === entryId) ?? out.confirms.find((e) => e.id === entryId)
+    const entry = findEntry(out, entryId)
     if (entry) out = withItem(out, entry, Number(idx), rec.value)
   }
   return out
 }
+/** An entry of the unit by id: in the current page, the band, or another session's page. */
+const findEntry = (u: UnitState, id: string): JournalEntry | undefined =>
+  u.entries.find((e) => e.id === id) ?? u.confirms.find((e) => e.id === id) ?? Object.values(u.pages).flatMap((p) => p.entries).find((e) => e.id === id)
+
 /**
  * `entry` with item `idx` set to `value`, in the stream and in the band. An entry with an unchecked item is in the band (newest first),
  * one with every item checked leaves it; the open count moves by the one item. No-op when the item is not there or already has the value.
@@ -145,8 +172,10 @@ function withItem(u: UnitState, entry: JournalEntry, idx: number, value: boolean
   if (!cur || cur.done === value) return u
   const next = { ...entry, items: entry.items.map((it, i) => (i === idx ? { ...it, done: value } : it)) }
   const rest = u.confirms.filter((e) => e.id !== entry.id)
+  const pages = Object.fromEntries(Object.entries(u.pages).map(([k, p]) => [k, p.entries.some((e) => e.id === entry.id) ? { ...p, entries: p.entries.map((e) => (e.id === entry.id ? next : e)) } : p]))
   return {
     ...u,
+    pages,
     entries: u.entries.map((e) => (e.id === entry.id ? next : e)),
     confirms: next.items.some((it) => !it.done) ? sortBand([...rest, next]) : rest,
     openConfirms: Math.max(0, u.openConfirms + (value ? -1 : 1)),
@@ -199,13 +228,16 @@ export const useJournalStore = create<JournalState>()((set, get) => {
   }
 
   return {
-    support: {}, confirmSupport: {}, sticky: {}, gens: {}, byHost: {}, routes: {}, epoch: {}, staleRev: 0,
+    support: {}, confirmSupport: {}, sessionsSupport: {}, readFailed: {}, sticky: {}, gens: {}, byHost: {}, routes: {}, epoch: {}, staleRev: 0,
 
-    fence: (hostId) => set((s) => ({ support: drop(s.support, hostId), confirmSupport: drop(s.confirmSupport, hostId), gens: { ...s.gens, [hostId]: (s.gens[hostId] ?? 0) + 1 } })),
-    setSupport: (hostId, yes, confirm = false) => set((s) => ({ support: { ...s.support, [hostId]: yes }, confirmSupport: { ...s.confirmSupport, [hostId]: yes && confirm }, sticky: { ...s.sticky, [hostId]: yes } })),
+    fence: (hostId) => set((s) => ({ support: drop(s.support, hostId), confirmSupport: drop(s.confirmSupport, hostId), sessionsSupport: drop(s.sessionsSupport, hostId), gens: { ...s.gens, [hostId]: (s.gens[hostId] ?? 0) + 1 } })),
+    setSupport: (hostId, yes, confirm = false, sessions = false) => set((s) => ({ support: { ...s.support, [hostId]: yes }, confirmSupport: { ...s.confirmSupport, [hostId]: yes && confirm }, sessionsSupport: { ...s.sessionsSupport, [hostId]: yes && sessions }, sticky: { ...s.sticky, [hostId]: yes } })),
 
     loadJournal: async (hostId, sessionId, opts) => {
       const older = opts?.older === true
+      // journal.sessions.v1: the stream shows one leader session; there are no older months to load, and the newest read is a session page.
+      const sessionMode = get().sessionsSupport[hostId] === true
+      if (older && sessionMode) return { kind: 'ok' }
       let before: string | undefined
       if (older) {
         const u = unitOf(hostId, sessionId)
@@ -214,7 +246,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
         if (!u.more) return { kind: 'ok' }
         before = cursorOf(oldest)
       }
-      return read(hostId, slotOf(hostId, sessionId, older ? 'older' : 'newest'), () => getJournal(hostId, sessionId, before), (page, startedAt) => set((s) => {
+      const res = await read(hostId, slotOf(hostId, sessionId, older ? 'older' : 'newest'), () => (sessionMode ? getJournalPage(hostId, sessionId) : getJournal(hostId, sessionId, before)), (page, startedAt) => set((s) => {
         const key = unitKeyOf(page.unit)
         const h = s.byHost[hostId] ?? { units: {}, unitOfSession: {} }
         const held = h.units[key]
@@ -222,7 +254,10 @@ export const useJournalStore = create<JournalState>()((set, get) => {
         dropChecks(hostId, key, startedAt, older ? new Set(page.entries.map((e) => e.id)) : undefined)
         // The band is `confirms[]` where the host declares journal.confirm.v1 (and sent it), else the old `pinned[]`.
         const confirmBand = s.confirmSupport[hostId] === true && page.confirms !== null
-        let entries = mergeEntries(held?.entries ?? [], page.entries)
+        // A session page of ANOTHER leader session than the held current one (a relay or /clear happened) is a different list, not new rows.
+        const paged = sessionMode && page.page !== ''
+        const sameSession = !paged || held?.currentPage === page.page
+        let entries = mergeEntries(sameSession ? (held?.entries ?? []) : [], page.entries)
         if (!older && confirmBand) {
           // Held rows the page does not carry (older months) follow the band the server just sent: an open one takes its items, one missing from it is answered.
           const band = new Map(page.confirms!.map((e) => [e.id, e]))
@@ -242,12 +277,53 @@ export const useJournalStore = create<JournalState>()((set, get) => {
           confirms: older ? (held?.confirms ?? []) : sortBand(confirmBand ? page.confirms! : page.pinned),
           openConfirms: older ? (held?.openConfirms ?? 0) : page.openConfirms,
           // `more` describes the OLDEST loaded entry: an older page sets it; a newest-page re-read keeps it once older months are held.
-          more: older || !held || held.entries.length === 0 ? page.more : held.more,
+          more: paged ? false : older || !held || held.entries.length === 0 ? page.more : held.more,
+          currentPage: paged ? page.page : (held?.currentPage ?? ''),
+          truncated: paged ? page.truncated : (held?.truncated ?? false),
+          sessions: held?.sessions ?? null, sessionsIncomplete: held?.sessionsIncomplete ?? false, pages: held?.pages ?? {},
           tasks: held?.tasks ?? null, roadmap: held?.roadmap ?? null,
           staleAt: held?.staleAt ?? zero(), readAt, touched: nextStamp(),
         }
         const units = { ...h.units, [key]: keepChecks(hostId, key, next) }
         return { byHost: { ...s.byHost, [hostId]: trim(units, { ...h.unitOfSession, [sessionId]: key }) } }
+      }))
+      if (sessionMode && !older) {
+        // A 503 (no lead, a chain error) is an error to show, not an empty page; a good read ends it.
+        const k = sessionKey(hostId, sessionId)
+        if (res.kind === 'failed') set((s) => ({ readFailed: { ...s.readFailed, [k]: true } }))
+        else if (res.kind === 'ok') {
+          set((s) => (s.readFailed[k] ? { readFailed: drop(s.readFailed, k) } : {}))
+          await get().loadSessions(hostId, sessionId) // its own failure leaves the page as read
+        }
+      }
+      return res
+    },
+
+    loadSessions: async (hostId, sessionId) => {
+      if (!unitOf(hostId, sessionId)) return { kind: 'no_unit' }
+      const startedKey = get().byHost[hostId]?.unitOfSession[sessionId]
+      return read(hostId, slotOf(hostId, sessionId, 'sessions'), () => getJournalSessions(hostId, sessionId), (chain) => set((s) => {
+        const h = s.byHost[hostId]
+        const key = h?.unitOfSession[sessionId]
+        const held = key === undefined ? undefined : h?.units[key]
+        if (!h || key === undefined || key !== startedKey || !held) return {}
+        return { byHost: { ...s.byHost, [hostId]: { ...h, units: { ...h.units, [key]: { ...held, sessions: chain.sessions, sessionsIncomplete: chain.incomplete } } } } }
+      }))
+    },
+
+    loadPage: async (hostId, sessionId, pageId) => {
+      if (!unitOf(hostId, sessionId)) return { kind: 'no_unit' }
+      const startedKey = get().byHost[hostId]?.unitOfSession[sessionId]
+      return read(hostId, slotOf(hostId, sessionId, `page:${pageId}`), () => getJournalPage(hostId, sessionId, pageId), (page, startedAt) => set((s) => {
+        const h = s.byHost[hostId]
+        const key = h?.unitOfSession[sessionId]
+        const held = key === undefined ? undefined : h?.units[key]
+        if (!h || key === undefined || key !== startedKey || !held) return {}
+        // Only the rows: the band and the open count are the whole unit's and come with the newest read of the current page.
+        const { [pageId]: _old, ...others } = held.pages
+        const pages = { ...others, [pageId]: { entries: mergeEntries([], page.entries), truncated: page.truncated, readAt: startedAt } }
+        for (const old of Object.keys(pages).slice(0, Math.max(0, Object.keys(pages).length - MAX_PAGES))) delete pages[old]
+        return { byHost: { ...s.byHost, [hostId]: { ...h, units: { ...h.units, [key]: keepChecks(hostId, key, { ...held, pages, touched: nextStamp() }) } } } }
       }))
     },
 
@@ -278,7 +354,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
     setConfirm: async (hostId, sessionId, entryId, idx, done) => {
       if (get().confirmSupport[hostId] !== true) return
       const u = unitOf(hostId, sessionId)
-      const entry = u?.entries.find((e) => e.id === entryId) ?? u?.confirms.find((e) => e.id === entryId)
+      const entry = u ? findEntry(u, entryId) : undefined
       if (!u || !entry || entry.kind !== 'confirm') return
       const unitKey = unitKeyOf(u.unit)
       const k = checkKey(hostId, unitKey, entryId, idx)
@@ -292,7 +368,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
         const h = s.byHost[hostId]
         const cur = h?.units[unitKey]
         // The entry as the store holds it NOW (a read may have changed its other fields since the click), not the object clicked.
-        const now = cur?.entries.find((e) => e.id === entryId) ?? cur?.confirms.find((e) => e.id === entryId)
+        const now = cur ? findEntry(cur, entryId) : undefined
         return h && cur && now ? { byHost: { ...s.byHost, [hostId]: { ...h, units: { ...h.units, [unitKey]: withItem(cur, now, idx, value) } } } } : {}
       })
       apply(done)
@@ -349,13 +425,14 @@ export const useJournalStore = create<JournalState>()((set, get) => {
       for (const k of [...checks.keys()]) if (k.startsWith(`${hostId}\u0000`)) checks.delete(k)
       for (const k of [...flights.keys()]) if (k.startsWith(`${hostId}\u0000`)) flights.delete(k)
       set((s) => ({
-        support: drop(s.support, hostId), confirmSupport: drop(s.confirmSupport, hostId), sticky: drop(s.sticky, hostId), gens: drop(s.gens, hostId), byHost: drop(s.byHost, hostId),
+        readFailed: Object.fromEntries(Object.entries(s.readFailed).filter(([k]) => !k.startsWith(`${hostId}\u0000`))),
+        support: drop(s.support, hostId), confirmSupport: drop(s.confirmSupport, hostId), sessionsSupport: drop(s.sessionsSupport, hostId), sticky: drop(s.sticky, hostId), gens: drop(s.gens, hostId), byHost: drop(s.byHost, hostId),
         routes: Object.fromEntries(Object.entries(s.routes).filter(([k, r]) => !k.startsWith(`${hostId}\u0000`) && !(r.kind === 'follow' && r.hostId === hostId))),
         epoch: { ...s.epoch, [hostId]: (s.epoch[hostId] ?? 0) + 1 },
       }))
     },
 
-    reset: () => { clock = 0; latest.clear(); checks.clear(); flights.clear(); set({ support: {}, confirmSupport: {}, sticky: {}, gens: {}, byHost: {}, routes: {}, epoch: {}, staleRev: 0 }) },
+    reset: () => { clock = 0; latest.clear(); checks.clear(); flights.clear(); set({ support: {}, confirmSupport: {}, sessionsSupport: {}, readFailed: {}, sticky: {}, gens: {}, byHost: {}, routes: {}, epoch: {}, staleRev: 0 }) },
   }
 })
 

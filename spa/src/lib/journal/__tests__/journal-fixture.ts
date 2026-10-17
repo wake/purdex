@@ -20,11 +20,17 @@ export const setJournalHost = (hostId: string, yes: boolean | null): void => {
   }))
 }
 
+/** The host declares journal.sessions.v1 (the stream reads one leader session at a time). */
+export const setSessionsSupport = (hostId: string, yes: boolean): void => {
+  useJournalStore.setState((s) => ({ sessionsSupport: { ...s.sessionsSupport, [hostId]: yes } }))
+}
+
 /** The unit `sessionId` of `hostId` names, as if its first page had been read. */
 export function seedUnit(hostId: string, sessionId: string, unit: JournalUnit, over: Partial<UnitState> = {}): string {
   const key = `${unit.kind}:${unit.id}`
   const u: UnitState = {
     unit, project: { name: 'purdex', remoteUrl: '' }, personName: 'Wake', entries: [], confirms: [], more: false, openConfirms: 0,
+    currentPage: '', truncated: false, sessions: null, sessionsIncomplete: false, pages: {},
     tasks: null, roadmap: null, staleAt: { entries: 0, tasks: 0, roadmap: 0 }, readAt: { entries: 1, tasks: 1, roadmap: 1 }, touched: 1, ...over,
   }
   useJournalStore.setState((s) => {
