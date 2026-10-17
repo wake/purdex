@@ -9,7 +9,12 @@ spec (`docs/specs/2026-10-09-push-spec.md` §5.2 rule 6 and its membership parag
 **Team member** (unchanged definition): a session that is an **active member** of a team — on the daemon,
 `team.MembershipReader.Membership(sessionID)` (badge spec §3.1: a local member row in state `active` of a team whose
 `ended_at = 0`, or an active remote member row running on this host; a lead is never a member); in the Apps, a member
-whose roster row has `state === "active"` on any host's roster. A lead is not a member and keeps today's behaviour.
+on any host's roster whose `state` is **not** one of the known transitional states `joining` / `releasing` / `killing`
+(an unknown value from a newer daemon counts as active, as the roster contract draws it: `spa/src/lib/team/roster.ts:69-70`,
+`seat-flags.ts:5-10`; this matches the daemon, whose known states make only `active` a member). The same rule on the Mac
+and the iPhone (iOS `BadgeMembers.buckets` gains it, so its badge follows too). A lead is not a member and keeps today's
+behaviour. *(Amended after the MQ-2 review, 2026-10-17: "`state === "active"`" broke the roster's forward-compatible
+contract.)*
 
 - **R1 Push.** A member's **waiting** and **idle** events are never pushed — not as a Mac desktop notification, not
   as an iPhone push — whether or not the session has a tab. A member still gets:
@@ -30,7 +35,18 @@ whose roster row has `state === "active"` on any host's roster. A lead is not a 
   - the daemon: a failed or late membership read (the payload leaves `member` out, so the phone counts it, as today);
   - the Mac: until **both** the roster and that host's session list have arrived, and for a roster seat whose session
     is not (yet) in the session list (the seat cannot be mapped to a `hostId:code`);
-  - the iPhone: until that host's roster has arrived, and after it is forgotten (host removed or repointed).
+  - the iPhone: until that host's roster has arrived, and after it is forgotten (host removed or repointed);
+  - **both Apps, across a reconnect**: when a host's connection closes or reopens, its roster is treated as **not
+    arrived** until the new connection's roster snapshot (and, on the Mac, its session list) has arrived. How: each App
+    keeps, per connection, the set of hosts whose `team.roster` arrived on **this** connection (removed when the
+    connection closes, added when the snapshot arrives — like iOS `personVerified`, `Fleet.swift:396-398`); the member
+    set uses only those hosts. The roster itself is **not** cleared, so the screens that read it (beads, quotas) do not
+    flicker on a disconnect. The roster is
+    kept across a disconnect today while the session list is re-fetched first (`useMultiHostEventWs.ts:358-380`,
+    `roster-ws.ts:43-51`), and a member is matched by tmux session **name** only, so a stale seat would otherwise claim a
+    new session that reuses the name after a tmux restart and silence it (MQ-2 review A-1). A roster seat carries no
+    tmux generation yet; the long-term fix is a `tmux_instance` on `RosterSession` that the Apps compare with the session
+    row's (`host-api.ts:17-21`) — a daemon change tracked separately.
   When membership becomes known the mark hides at once (the unread state is kept); when it is lost again the mark
   shows again. In practice the unknown window is the first moments of a connection.
 
@@ -82,7 +98,10 @@ whose roster row has `state === "active"` on any host's roster. A lead is not a 
   member's `tmux_session` for the code). The roster's lead is not in `members`, so it is never in the set. A seat whose
   session is not in the session list (not loaded yet, or gone) maps to nothing. `useActiveMemberKeys()` subscribes to
   `useTeamRosterStore` and `useSessionStore`. No session-id mapping is used (the SPA has none for a pane without a
-  SessionStart record).
+  SessionStart record). The set is computed **once** for the whole App (one derived store that subscribes to the roster,
+  session and host stores and indexes each host's sessions by name), and every consumer — rows, beads, tab aggregates,
+  the workspace numbers, the Dock reporter, the notification path — reads that one snapshot; consumers must not each
+  re-run the join (MQ-2 review A-2: consumers × members × sessions per update).
 - **R1**: `lib/notification-gate.ts` `shouldNotify` takes `isMember`; `isMember && derived ∈ {waiting, idle}` →
   false, before the tab / settings checks; errors unchanged (same debounce). The caller
   (`hooks/useAgentNotifications.ts:62`) computes `isMember` **at the moment of the event** from the stores'
