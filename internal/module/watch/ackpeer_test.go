@@ -348,3 +348,13 @@ func TestAckPeer_CountOnlyAnswersTheCount(t *testing.T) {
 	n := ap.a.m.askLeft(context.Background(), "a26")
 	require.Equal(t, 2, n)
 }
+
+// An ack that already took most of the caller's patience asks no further question: the other hosts' counts are unknown, the ack's own
+// answer still goes out.
+func TestAck_NoCountQuestionsWhenTheAckItselfTookTheTime(t *testing.T) {
+	ap := newAckPair(t)
+	began := time.Now().Add(-ackDeadline - time.Second)
+	hosts, total := ap.a.m.leftEverywhere(context.Background(), began, 1, nil)
+	require.Equal(t, []HostLeft{{Host: "mlab", Unhandled: 1}, {Host: "a26", Unhandled: -1}}, hosts)
+	require.Equal(t, -1, total)
+}

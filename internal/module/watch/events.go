@@ -167,28 +167,38 @@ type HostLeft struct {
 	Unhandled int    `json:"unhandled"`
 }
 
-// countBudget bounds the question about one host's pending count.
-const countBudget = 4 * time.Second
+// countBudget bounds the questions about the other hosts' pending counts together, and ackDeadline is how long after the request began
+// they may still be asked: the CLI waits 10 s, and an ack that went through must not be reported as failed because the extra count
+// was slow, so a count that cannot be had in time is "unknown".
+const (
+	countBudget = 2 * time.Second
+	ackDeadline = 7 * time.Second
+)
 
 // leftEverywhere is the pending count of this host and of every other target: the ones learned from the ack itself (known, by alias) and
 // the others asked side by side. A host that cannot be asked is -1, never 0.
-func (m *Module) leftEverywhere(ctx context.Context, own int, known map[string]int) ([]HostLeft, int) {
+func (m *Module) leftEverywhere(ctx context.Context, began time.Time, own int, known map[string]int) ([]HostLeft, int) {
 	m.core.CfgMu.RLock()
 	ownAlias := m.core.Cfg.PeerAlias()
 	m.core.CfgMu.RUnlock()
 	hosts := []HostLeft{{Host: ownAlias, Unhandled: own}}
 	others := m.otherTargets()
 	counts := make([]int, len(others))
+	budget := min(countBudget, ackDeadline-time.Since(began))
 	var wg sync.WaitGroup
 	for i, alias := range others {
 		if n, ok := known[alias]; ok {
 			counts[i] = n
 			continue
 		}
+		if budget <= 0 { // the ack itself took the time: no more questions
+			counts[i] = -1
+			continue
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			cctx, cancel := context.WithTimeout(ctx, countBudget)
+			cctx, cancel := context.WithTimeout(ctx, budget)
 			defer cancel()
 			counts[i] = m.askLeft(cctx, alias)
 		}()
@@ -207,6 +217,7 @@ func (m *Module) leftEverywhere(ctx context.Context, own int, known map[string]i
 }
 
 func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
+	began := time.Now()
 	if _, isDevice := devices.PrincipalFrom(r.Context()); isDevice || !devices.IsAdmin(r.Context()) {
 		m.writeErr(w, http.StatusForbidden, "forbidden", "only the admin token marks events handled")
 		return
@@ -242,7 +253,7 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 				m.writeErr(w, status, "ack_failed", err.Error())
 				return
 			}
-			resp.Hosts, resp.Unhandled = m.leftEverywhere(ctx, resp.Unhandled, nil)
+			resp.Hosts, resp.Unhandled = m.leftEverywhere(ctx, began, resp.Unhandled, nil)
 			m.writeJSON(w, http.StatusOK, resp)
 			return
 		}
@@ -252,7 +263,7 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		res, left := m.forwardAck(ctx, entry, nil, true, req.Note, by)
-		hosts, total := m.leftEverywhere(ctx, m.unhandledOrMinus(), map[string]int{entry.Alias: left})
+		hosts, total := m.leftEverywhere(ctx, began, m.unhandledOrMinus(), map[string]int{entry.Alias: left})
 		m.writeJSON(w, http.StatusOK, ackResponse{Results: res, Handled: countHandled(res), Unhandled: total, Hosts: hosts})
 		return
 	}
@@ -306,7 +317,7 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 		}
 		res = append(res, x)
 	}
-	hosts, total := m.leftEverywhere(ctx, m.unhandledOrMinus(), known)
+	hosts, total := m.leftEverywhere(ctx, began, m.unhandledOrMinus(), known)
 	m.writeJSON(w, http.StatusOK, ackResponse{Results: res, Handled: countHandled(res), Unhandled: total, Hosts: hosts})
 }
 
