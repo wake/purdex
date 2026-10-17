@@ -37,10 +37,20 @@ func TestStatus_AssistHostsHoldsAndCandidates(t *testing.T) {
 	g, _ := testGate(t)
 	dir := g.Config().Dir
 	writeAssistFile(t, dir, map[string]AssistHost{
-		"air26": {SSH: "air26", On: true, Slots: 3, Can: []string{"go test", "vitest"}},
-		"mserv": {SSH: "mserv", On: true, Can: []string{"phpunit"}},
-		"cold":  {SSH: "cold", On: false, Can: []string{"go test"}},
+		"air26": {SSH: "air26", On: true, Slots: 3, Can: []string{"go test", "vitest"}, Gen: 1},
+		"mserv": {SSH: "mserv", On: true, Can: []string{"phpunit"}, Gen: 1},
+		"cold":  {SSH: "cold", On: false, Can: []string{"go test"}, Gen: 1},
+		"new":   {SSH: "new", On: true, Can: []string{"go test"}, Gen: 1}, // on, but no check of it yet
+		"full":  {SSH: "full", On: true, Slots: 1, Can: []string{"go test"}, Gen: 1},
 	})
+	fresh := func(sw string) AssistReady {
+		return AssistReady{Gen: 1, At: g.Now(), Answer: AssistAnswer{Assist: true, Switch: sw}}
+	}
+	require.NoError(t, WriteReady(dir, map[string]AssistReady{"air26": fresh("on"), "mserv": fresh("on"), "cold": fresh("on"), "full": fresh("on")}))
+	fullSlot, err := DispatchPool(dir, "full", 1, g.Now).TakeDispatch(WaiterInfo{})
+	require.NoError(t, err)
+	require.NotNil(t, fullSlot)
+	t.Cleanup(func() { fullSlot.Release(nil) })
 	require.NoError(t, HoldHost(dir, "air26", "purdex", 5*time.Minute, "busy", g.Now()))
 	require.NoError(t, HoldHost(dir, "air26", "old", -time.Minute, "gone", g.Now())) // expired: not listed
 
@@ -54,7 +64,7 @@ func TestStatus_AssistHostsHoldsAndCandidates(t *testing.T) {
 	t.Cleanup(tk.Drop)
 
 	st := g.Status()
-	require.Len(t, st.Assist, 3)
+	require.Len(t, st.Assist, 5)
 	byHost := map[string]AssistHostStatus{}
 	for _, h := range st.Assist {
 		byHost[h.Host] = h
@@ -72,7 +82,26 @@ func TestStatus_AssistHostsHoldsAndCandidates(t *testing.T) {
 	assert.Equal(t, "busy", byHost["air26"].Holds[0].Why)
 
 	require.Len(t, st.QueueHeavy, 1)
-	assert.Equal(t, []string{"air26"}, st.QueueHeavy[0].Candidates, "on and able to take go test; not mserv (php only), not cold (off)")
+	assert.Equal(t, []string{"air26"}, st.QueueHeavy[0].Candidates,
+		"on, checked on, a free slot and able to take go test; not mserv (php only), cold (off), new (never checked), full (no free slot)")
+}
+
+// A command that is out stays listed when assist.json cannot be read or has no host any more.
+func TestStatus_AnOutCommandIsListedWithoutAnyHostRecord(t *testing.T) {
+	g, _ := testGate(t)
+	dir := g.Config().Dir
+	pool := g.pool(g.Config(), ClassHeavy)
+	tk, err := pool.EnqueueFor(WaiterInfo{PID: 9, Argv: []string{"go", "test"}})
+	require.NoError(t, err)
+	t.Cleanup(tk.Drop)
+	slot, err := pool.ServeOut(tk.Name, DispatchPool(dir, "gone", 2, g.Now), WaiterInfo{PID: 9}, OutInfo{Host: "gone", Job: "j1", At: g.Now()})
+	require.NoError(t, err)
+	require.NotNil(t, slot)
+	t.Cleanup(func() { slot.Release(nil) })
+	st := g.Status() // no assist.json at all
+	require.Len(t, st.OutHeavy, 1)
+	assert.Equal(t, "gone", st.OutHeavy[0].Host)
+	assert.Empty(t, st.Assist)
 }
 
 // A command that is out shows up with its host and job, and not in the queue.

@@ -757,8 +757,8 @@ type Waiter struct {
 	ConflictRule string `json:"conflict_rule,omitempty"`
 	// ConflictReason is that rule's reason: why the rule exists, so a person can judge whether it should go.
 	ConflictReason string `json:"conflict_reason,omitempty"`
-	// Candidates are the assist hosts asked on whose capability takes the command (status only; the daemon decides which are ready and
-	// allowed for the session).
+	// Candidates are the assist hosts that may take the command: on, freshly checked on, with a free dispatch slot, and a capability that
+	// takes it (status only; the repo being ready there and the session being allowed are the daemon's to say, pdx gate hosts).
 	Candidates []string `json:"candidates,omitempty"`
 }
 

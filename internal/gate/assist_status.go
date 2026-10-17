@@ -88,11 +88,16 @@ func ListHolds(dir string, now time.Time) []HoldEntry {
 
 // assistStatus fills the assist parts of a status; with no assist.json host there is nothing to add.
 func (g *Gate) assistStatus(cfg Config, st *Status) {
+	// The commands that are out are in the queue directory, not in assist.json: they are listed whatever the host records say (the file
+	// may be unreadable for a moment, or the last host removed while a run is still out there).
+	st.OutHeavy = g.pool(cfg, ClassHeavy).OutWaiters()
+	st.OutLight = g.pool(cfg, ClassLight).OutWaiters()
 	f, err := ReadAssist(cfg.Dir)
 	if err != nil || len(f.Hosts) == 0 {
 		return
 	}
 	now := g.Now()
+	ready, _ := ReadReady(cfg.Dir)
 	holds := ListHolds(cfg.Dir, now)
 	names := make([]string, 0, len(f.Hosts))
 	for name := range f.Hosts {
@@ -113,14 +118,22 @@ func (g *Gate) assistStatus(cfg Config, st *Status) {
 		}
 		st.Assist = append(st.Assist, hs)
 	}
-	st.OutHeavy = g.pool(cfg, ClassHeavy).OutWaiters()
-	st.OutLight = g.pool(cfg, ClassLight).OutWaiters()
-	// The hosts that could take a waiter by what they are asked to do and can do (capability); that a host is ready for the repo and
-	// allowed for the session is the daemon's to say (pdx gate hosts), and the repo's holds are not looked up here (a git per waiter).
+	// The hosts that could take a waiter: asked on with no switch running, a check of the current generation that is fresh and says on,
+	// a free dispatch slot, and a capability that takes the command. What depends on the waiter's repo and session — the repo ready on
+	// the host, the session allowed, a hold for that repo — is the daemon's and the dispatcher's to say (pdx gate hosts): status has
+	// neither (a git per waiter would be too much for a polled view), so a candidate here is a host that may take it, not a promise.
+	open := map[string]bool{}
+	for _, name := range names {
+		h := f.Hosts[name]
+		r, checked := ready[name]
+		fresh := checked && r.Gen == h.Gen && r.Err == "" && r.Answer.Assist && r.Answer.Switch == "on" && now.Sub(r.At) >= 0 && now.Sub(r.At) <= AssistFreshness
+		free, ferr := DispatchPool(cfg.Dir, name, dispatchSize(h.Slots), g.Now).freeCapacity()
+		open[name] = h.On && h.Op == nil && fresh && ferr == nil && free > 0
+	}
 	for _, q := range [][]Waiter{st.QueueHeavy, st.QueueLight} {
 		for i := range q {
 			for _, name := range names {
-				if h := f.Hosts[name]; h.On && h.Takes(q[i].Argv) {
+				if open[name] && f.Hosts[name].Takes(q[i].Argv) {
 					q[i].Candidates = append(q[i].Candidates, name)
 				}
 			}
