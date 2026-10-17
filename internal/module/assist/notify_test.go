@@ -32,12 +32,16 @@ func (s *sink) all() []sent {
 }
 
 type wakes struct {
-	mu    sync.Mutex
-	calls [][2]string
-	block chan struct{} // when set, a wake waits on it
+	mu      sync.Mutex
+	calls   [][2]string
+	block   chan struct{} // when set, a wake waits on it
+	entered chan struct{} // when set, a wake says it has started
 }
 
 func (w *wakes) wake(ctx context.Context, reason, detail string) error {
+	if w.entered != nil {
+		w.entered <- struct{}{}
+	}
 	if w.block != nil {
 		select {
 		case <-w.block:
@@ -258,8 +262,10 @@ func TestWatcherWokenOnSwitchAllowNotDenyNotCheck(t *testing.T) {
 
 func TestWakesThatComeFasterThanOneFinishesAreFoldedIntoTheLast(t *testing.T) {
 	r, _, wk := notifyRig(t)
-	wk.block = make(chan struct{})
-	for _, d := range []string{"a", "b", "c", "d"} {
+	wk.block, wk.entered = make(chan struct{}), make(chan struct{}, 8)
+	r.m.wakeWatcher("assist_changed", "a")
+	<-wk.entered // the first wake is under way and blocked: the next ones fold
+	for _, d := range []string{"b", "c", "d"} {
 		r.m.wakeWatcher("assist_changed", d)
 	}
 	close(wk.block)
