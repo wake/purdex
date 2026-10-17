@@ -23,26 +23,28 @@ type AssistWalk struct {
 const assistWalkEvery = 30 * time.Second
 
 // walkEligible says whether a ticket may be offered to an assist host now. The queue's own rules still hold for it: a class with no
-// slot waits for the count to be raised whatever a host could do; a ticket on hold is not served anywhere; and a ticket at rank back
-// is served after every other waiting one, so it goes out only when it is alone. (The conflict rules of mlab are about what runs on
-// mlab, and the host's own gate applies its own at the probe.)
+// slot waits for the count to be raised whatever a host could do, and a ticket on hold is not served anywhere. (The conflict rules of
+// mlab are about what runs on mlab, and the host's own gate applies its own at the probe. The serving order is walkAhead's.)
 func (g *Gate) walkEligible(cfg Config, class Class, ticket *Ticket) bool {
 	if cfg.Slots.Paused(class) {
 		return false
 	}
-	snap := g.pool(cfg, class).peekSnapshot()
-	rank := rankOfTicket(snap, ticket.Name).Rank
-	switch rank {
-	case RankHold:
-		return false
-	case RankBack:
-		for _, e := range snap.Queue {
-			if e.Name != ticket.Name && e.Rank.Rank != RankBack && e.Rank.Rank != RankHold {
-				return false
-			}
+	return rankOfTicket(g.pool(cfg, class).peekSnapshot(), ticket.Name).Rank != RankHold
+}
+
+// walkAhead says whether a ticket in front of this one in the serving order (front, then normal, then back, each by arrival) is for a
+// command the host takes: then that one has the first claim on the host's slot and this one waits. A ticket in front whose command the
+// host does not take cannot use the slot, so it holds nobody back ("those behind it may take slots it cannot use").
+func walkAhead(snap Snapshot, ticket string, h AssistHost) bool {
+	for _, e := range snap.Queue {
+		if e.Name == ticket {
+			return false
+		}
+		if e.Rank.Rank != RankHold && h.Takes(e.Argv) {
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 // walkAssist offers the ticket to the hosts PickAssist names, in order. handled is true when the command's run is over (its result
@@ -63,6 +65,9 @@ func (g *Gate) walkAssist(ctx context.Context, cfg Config, class Class, o Option
 	reserved := w.Reserved != nil && w.Reserved(now)
 	for _, name := range PickAssist(cfg.Dir, PickInput{Hosts: hosts, Argv: o.Argv, Class: class, Repo: repo, WouldWait: wouldWait, Reserved: reserved, Now: now}) {
 		h := hosts[name]
+		if walkAhead(g.pool(cfg, class).peekSnapshot(), ticket.Name, h) {
+			continue // someone in front of this ticket has the first claim on this host
+		}
 		// A host with no free dispatch slot is not a candidate (plan X2b item 3): this costs no ssh, and ServeOut decides for good.
 		if free, err := DispatchPool(cfg.Dir, name, dispatchSize(h.Slots), g.Now).freeCapacity(); err == nil && free <= 0 {
 			continue
@@ -81,7 +86,7 @@ func (g *Gate) walkAssist(ctx context.Context, cfg Config, class Class, o Option
 			continue
 		}
 		o.Assist = &AssistTarget{Host: name, Dest: h.SSH, SSH: w.SSH, Git: w.Git, Repo: repo, Slots: h.Slots}
-		if code, handled := g.tryAssist(ctx, cfg, class, o, ticket, d); handled {
+		if code, handled := g.tryAssist(ctx, cfg, class, o, ticket, d, sigs); handled {
 			return code, true
 		}
 	}

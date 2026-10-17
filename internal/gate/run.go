@@ -39,7 +39,7 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 	}
 	defer ticket.Drop()
 	if o.Assist != nil {
-		if code, handled := g.tryAssist(ctx, cfg, class, o, ticket, d); handled {
+		if code, handled := g.tryAssist(ctx, cfg, class, o, ticket, d, sigs); handled {
 			return nil, code, true
 		}
 	}

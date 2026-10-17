@@ -186,6 +186,7 @@ exec "$@"
 
 // fakeGit passes everything to the real git, except update-ref while the test has asked for it to fail.
 const fakeGit = `#!/bin/sh
+if [ -e "$HOME/git-add-slow" ]; then for a in "$@"; do [ "$a" = add ] && { touch "$HOME/prepare-started"; sleep 6; }; done; fi
 if [ -e "$HOME/git-update-ref-fails" ]; then for a in "$@"; do [ "$a" = update-ref ] && exit 1; done; fi
 exec "$REAL_GIT" "$@"
 `

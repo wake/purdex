@@ -49,7 +49,7 @@ func TestWalk_AHeavyTicketGoesToTheHostEvenWithAFreeSlotHere(t *testing.T) {
 	r.nothingLeft(t)
 }
 
-// The queue's rules hold for the walk: a ticket on hold, a class with no slot, and a back ticket with others waiting are not offered.
+// The queue's rules hold for the walk: a ticket on hold and a class with no slot are not offered.
 func TestWalk_EligibilityFollowsTheQueuesRules(t *testing.T) {
 	g, _ := testGate(t)
 	cfg := g.Config()
@@ -57,26 +57,50 @@ func TestWalk_EligibilityFollowsTheQueuesRules(t *testing.T) {
 	a, err := pool.Enqueue()
 	require.NoError(t, err)
 	defer a.Drop()
-	b, err := pool.Enqueue()
-	require.NoError(t, err)
-	defer b.Drop()
 	assert.True(t, g.walkEligible(cfg, ClassHeavy, a), "a normal ticket")
 
 	_, err = pool.SetRank(a.Name, RankHold, "t", "test", time.Time{})
 	require.NoError(t, err)
 	assert.False(t, g.walkEligible(cfg, ClassHeavy, a), "on hold: not served anywhere")
-	assert.True(t, g.walkEligible(cfg, ClassHeavy, b))
 
 	_, err = pool.SetRank(a.Name, RankNormal, "t", "test", time.Time{})
 	require.NoError(t, err)
-	_, err = pool.SetRank(b.Name, RankBack, "t", "test", time.Time{})
-	require.NoError(t, err)
-	assert.False(t, g.walkEligible(cfg, ClassHeavy, b), "back with a normal ticket waiting")
-	a.Drop()
-	assert.True(t, g.walkEligible(cfg, ClassHeavy, b), "back and alone")
-
 	cfg.Slots.Heavy = 0
-	assert.False(t, g.walkEligible(cfg, ClassHeavy, b), "a class with no slot waits for the count to be raised")
+	assert.False(t, g.walkEligible(cfg, ClassHeavy, a), "a class with no slot waits for the count to be raised")
+}
+
+// The serving order holds for the walk, per host: a ticket in front for a command the host takes has the first claim on it; one the
+// host does not take holds nobody back; a back ticket is behind the normal ones; front is before normal.
+func TestWalk_TheServingOrderIsPerHost(t *testing.T) {
+	g, _ := testGate(t)
+	cfg := g.Config()
+	pool := g.pool(cfg, ClassHeavy)
+	enq := func(argv ...string) *Ticket {
+		tk, err := pool.EnqueueFor(WaiterInfo{PID: 1, Argv: argv})
+		require.NoError(t, err)
+		t.Cleanup(tk.Drop)
+		return tk
+	}
+	goTest1 := enq("go", "test", "./a/")
+	vitest := enq("vitest", "run")
+	goTest2 := enq("go", "test", "./b/")
+	snap := pool.peekSnapshot()
+	goHost := AssistHost{Can: []string{"go test"}}
+	jsHost := AssistHost{Can: []string{"vitest"}}
+
+	assert.False(t, walkAhead(snap, goTest1.Name, goHost), "the first has nobody in front")
+	assert.True(t, walkAhead(snap, goTest2.Name, goHost), "a go test in front of it takes the go host's slot first")
+	assert.False(t, walkAhead(snap, goTest2.Name, AssistHost{Can: []string{"phpunit"}}), "a host that takes neither is not contested")
+	assert.True(t, walkAhead(snap, goTest2.Name, jsHost), "the vitest ticket in front")
+	assert.True(t, walkAhead(snap, vitest.Name, goHost), "the first go test is in front of the vitest one")
+	assert.False(t, walkAhead(snap, vitest.Name, jsHost), "nothing else for the js host in front of vitest")
+
+	_, err := pool.SetRank(goTest2.Name, RankFront, "t", "test", time.Time{})
+	require.NoError(t, err)
+	assert.False(t, walkAhead(pool.peekSnapshot(), goTest2.Name, goHost), "front goes before the normal ones")
+	_, err = pool.SetRank(goTest1.Name, RankBack, "t", "test", time.Time{})
+	require.NoError(t, err)
+	assert.True(t, walkAhead(pool.peekSnapshot(), goTest1.Name, goHost), "back is after the others")
 }
 
 // A signal while the host is being asked ends the command: nothing is sent, nothing is left, the exit code is 128+n.
@@ -104,6 +128,37 @@ func TestWalk_ASignalDuringTheProbeEndsTheCommand(t *testing.T) {
 		t.Fatal("the signal did not end the wait for the host")
 	}
 	assert.NoFileExists(t, marker, "never run")
+	dispatchRun{g: g, dir: g.Config().Dir}.nothingLeft(t)
+}
+
+// A signal while the snapshot is being prepared on the host (before the command is started there) ends it: the command is not started,
+// and the ticket and the dispatch slot are let go.
+func TestWalk_ASignalDuringThePreparationStartsNothing(t *testing.T) {
+	g, errs := testGate(t)
+	sigs := make(chan os.Signal, 1)
+	g.Signals = sigs
+	work := workRepo(t)
+	h := newAssistHost(t, filepath.Base(work))
+	writeFile(t, h.remote("git-add-slow"), "", 0o644) // the worktree is made after 6 s
+	marker := filepath.Join(t.TempDir(), "ran-anywhere")
+	var out bytes.Buffer
+	done := make(chan int, 1)
+	go func() {
+		code, _ := g.Run(context.Background(), Options{Argv: sh(`touch ` + marker), Class: ClassHeavy, Dir: work, Env: cleanEnv(), Stdout: &out, Stderr: errs,
+			Walk: &AssistWalk{Usable: func() map[string]AssistHost { return map[string]AssistHost{"air26": {Can: []string{"sh"}}} }, SSH: h.ssh}})
+		done <- code
+	}()
+	eventuallyFor(t, 60*time.Second, "the preparation to start", func() bool { return exists(h.remote("prepare-started")) })
+	sigs <- syscall.SIGINT
+	select {
+	case code := <-done:
+		assert.Equal(t, 130, code, "128 + SIGINT")
+	case <-time.After(30 * time.Second):
+		t.Fatal("the signal did not end the preparation")
+	}
+	time.Sleep(8 * time.Second) // longer than the slow step: nothing may start after it
+	assert.NoFileExists(t, marker, "never run, here or there")
+	assert.Empty(t, h.listDir(t, "Assist/jobs.noindex"), "no job was started")
 	dispatchRun{g: g, dir: g.Config().Dir}.nothingLeft(t)
 }
 

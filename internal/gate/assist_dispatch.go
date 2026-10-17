@@ -3,6 +3,7 @@ package gate
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 )
 
@@ -30,7 +31,7 @@ func dispatchSize(n int) int {
 // tryAssist sends the ticket's command to the assist host. handled is true when the run is over (the command's result, or the caller
 // was cancelled) and code is the exit code. When it is false nothing ran for good: the ticket is back at its place, the dispatch
 // slot is let go, and the caller waits on this host as it always did.
-func (g *Gate) tryAssist(ctx context.Context, cfg Config, class Class, o Options, ticket *Ticket, d *Decision) (code int, handled bool) {
+func (g *Gate) tryAssist(ctx context.Context, cfg Config, class Class, o Options, ticket *Ticket, d *Decision, sigs <-chan os.Signal) (code int, handled bool) {
 	a := o.Assist
 	repo := a.Repo
 	if repo == "" {
@@ -56,7 +57,7 @@ func (g *Gate) tryAssist(ctx context.Context, cfg Config, class Class, o Options
 	if dest == "" {
 		dest = a.Host
 	}
-	res := g.RunAssist(ctx, o, AssistRun{Host: dest, Job: job, Repo: repo, SSH: a.SSH, Git: a.Git})
+	res := g.RunAssist(ctx, o, AssistRun{Sigs: sigs, Host: dest, Job: job, Repo: repo, SSH: a.SSH, Git: a.Git})
 	d.TransferS, d.RunS, d.Reclaimed = res.TransferS, res.RunS, res.Reclaimed
 	// Every way out lets the dispatch slot go: a return to the queue lets it go first (Ticket.Return), the others here.
 	// A ticket that cannot be put back is not left out for ever (nothing would serve it): the command is refused.
