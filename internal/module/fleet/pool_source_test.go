@@ -109,6 +109,7 @@ func TestPoolSource_RowsFromFacts(t *testing.T) {
 	require.NotNil(t, peer.Fast)
 	assert.Equal(t, 10.0, peer.Fast.CPU)
 	assert.Empty(t, r.m.sessions, "no ssh session in pool mode")
+	assert.Zero(t, startsOf(r.sshDir), "and none was started and stopped again on the way (a host the pool lists is never probed)")
 }
 
 // Facts that stop moving go stale even though wwd keeps answering; facts of a peer wwd says is unreachable are not believed.
@@ -273,4 +274,6 @@ func TestPoolSource_TheRowFlipsTheSourceWithoutARestart(t *testing.T) {
 	r.setSource(hostconfig.FleetSourceSSH)
 	r.tick()
 	assert.True(t, r.hasSession("peer"), "back to ssh")
+	assert.False(t, r.m.hosts["peer"].poolOwned, "the pool no longer owns the row")
+	assert.NotEqual(t, "ok", r.host("air26:def456").Status, "and it does not keep the pool's figures as ok")
 }
