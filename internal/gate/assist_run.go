@@ -234,6 +234,7 @@ PDX_GATE_ADMITTED_MARK=$nonce PDX_GATE_TAG="assist:$job" exec pdx gate --wait-ma
 	run.Stderr = filter
 	run.Stdin = nil
 	run.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	run.WaitDelay = 2 * time.Second // what the ssh left behind must not hold the output pipes, and this run, open for ever
 	g.say("running on %s (assist): %s", a.Host, strings.Join(truncateArgv(o.Argv), " "))
 	sigs, stop := g.signals()
 	defer stop()
