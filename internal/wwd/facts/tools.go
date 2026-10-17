@@ -38,6 +38,7 @@ type ToolsReader struct {
 
 	last time.Time
 	val  wire.Tools
+	php  map[string]string // phpNN binary -> its last good version
 }
 
 // NewToolsReader is a reader over this host's usual places.
@@ -169,7 +170,7 @@ func (r *ToolsReader) Get() wire.Tools {
 		return cloneTools(r.val)
 	}
 	r.last = now
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	one := func(tool string, prev *string, args ...string) *string {
 		bin := lookIn(r.PathDirs, tool)
@@ -187,13 +188,18 @@ func (r *ToolsReader) Get() wire.Tools {
 	r.val.Go = one("go", r.val.Go, "version")
 	r.val.Node = one("node", r.val.Node, "-v")
 	r.val.Pnpm = one("pnpm", r.val.Pnpm, "-v")
-	r.val.PHP = r.phpVersions(ctx, r.val.PHP)
+	r.val.PHP = r.phpVersions(ctx)
 	r.val.Xcode = r.xcode(r.val.Xcode)
 	return cloneTools(r.val)
 }
 
-func (r *ToolsReader) phpVersions(ctx context.Context, prev []string) []string {
+// phpVersions probes every phpNN binary once (the same file listed in both
+// search lists is one binary) and reports the distinct versions. Each binary
+// keeps its own last good answer, so one transient failure does not drop a
+// version; a binary that is gone takes its version with it.
+func (r *ToolsReader) phpVersions(ctx context.Context) []string {
 	var bins []string
+	seenBin := map[string]bool{}
 	for _, d := range append(append([]string{}, r.PHPDirs...), r.PathDirs...) {
 		if isShimDir(d) {
 			continue
@@ -203,30 +209,32 @@ func (r *ToolsReader) phpVersions(ctx context.Context, prev []string) []string {
 			continue
 		}
 		for _, e := range ents {
-			if rePHPName.MatchString(e.Name()) && isExec(filepath.Join(d, e.Name())) {
-				bins = append(bins, filepath.Join(d, e.Name()))
+			p := filepath.Join(d, e.Name())
+			if rePHPName.MatchString(e.Name()) && !seenBin[p] && isExec(p) {
+				seenBin[p] = true
+				bins = append(bins, p)
 			}
 		}
 	}
-	seen := map[string]bool{}
-	out := []string{}
-	failed := false
+	known := make(map[string]string, len(bins))
 	for _, b := range bins {
 		cctx, c := context.WithTimeout(ctx, 5*time.Second)
 		o, err := r.Run(cctx, "wwd.tool.php", b, "-r", "echo PHP_VERSION;")
 		c()
-		v := parseToolVersion("php", string(o))
-		if err != nil || v == "" {
-			failed = true
-			continue
+		if v := parseToolVersion("php", string(o)); err == nil && v != "" {
+			known[b] = v
+		} else if old, ok := r.php[b]; ok {
+			known[b] = old
 		}
+	}
+	r.php = known
+	seen := map[string]bool{}
+	out := []string{}
+	for _, v := range known {
 		if !seen[v] {
 			seen[v] = true
 			out = append(out, v)
 		}
-	}
-	if failed && len(out) == 0 && len(prev) > 0 {
-		return prev
 	}
 	sort.Slice(out, func(i, j int) bool { return semverLess(out[i], out[j]) })
 	return out
