@@ -33,16 +33,20 @@ import (
 // Module is the agent hook event module.
 type Module struct {
 	// lightGen is LightGeneration's counter (G3c)
-	lightGen  atomic.Uint64
-	core      *core.Core
-	events    *store.AgentEventStore
-	frames    *store.FramesStore
-	traces    *store.TraceStore
-	snaps     *store.StatusSnapshotStore // persisted UI statusLine snapshots; nil without an events DB
-	usage     *store.ContextUsageStore   // persisted statusline readings (#2406); nil without an events DB
-	sessions  session.SessionProvider
-	registry  *agentpkg.Registry
-	uploadDir string
+	lightGen atomic.Uint64
+	// tmuxGen / snapCache / paneSnapTTL: the shared pane listing (pane_snapshot_cache.go, #3092 A)
+	tmuxGen     atomic.Uint64
+	snapCache   paneSnapCache
+	paneSnapTTL time.Duration
+	core        *core.Core
+	events      *store.AgentEventStore
+	frames      *store.FramesStore
+	traces      *store.TraceStore
+	snaps       *store.StatusSnapshotStore // persisted UI statusLine snapshots; nil without an events DB
+	usage       *store.ContextUsageStore   // persisted statusline readings (#2406); nil without an events DB
+	sessions    session.SessionProvider
+	registry    *agentpkg.Registry
+	uploadDir   string
 	// uploadSlots caps concurrent uploads per paired device (#2466); the zero value is ready.
 	uploadSlots uploadLimiter
 	// followedRevokes: the revoke feed is subscribed once (#2493).
@@ -300,6 +304,7 @@ func (m *Module) Dependencies() []string { return []string{"session", modeventsm
 // and registers CC and Codex providers.
 func (m *Module) Init(c *core.Core) error {
 	m.core = c
+	m.paneSnapTTL = defaultPaneSnapTTL
 	m.pendingDir = statuspending.DirFor(c.Cfg) // the one directory the statusline proxy writes (#2545), from the one config
 	m.initModLights(c)
 	svc, ok := c.Registry.Get(session.RegistryKey)
@@ -976,6 +981,11 @@ func (m *Module) liveFrameProjectionsWithSnapshot() ([]SessionProjection, *paneS
 	if err != nil {
 		return nil, nil, err
 	}
+	return m.projectionsFromFrames(frames, snap)
+}
+
+// projectionsFromFrames is the rest of a read once the frames and the snapshot are in hand.
+func (m *Module) projectionsFromFrames(frames []store.Frame, snap *paneSnapshot) ([]SessionProjection, *paneSnapshot, error) {
 	frames = m.filterProjectionFrames(frames, snap)
 	if snap.expired() {
 		return nil, nil, errExpired() // the pid lookups ran out of time: the frames were not filtered, so nothing here is a verdict

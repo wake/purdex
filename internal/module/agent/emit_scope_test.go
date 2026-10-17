@@ -1,0 +1,201 @@
+package agent
+
+import (
+	"fmt"
+	"math/rand"
+	"reflect"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/wake/purdex/internal/core"
+	"github.com/wake/purdex/internal/module/session"
+	"github.com/wake/purdex/internal/tmux"
+)
+
+// #3092 A: the session-scoped read must equal the full-table read for every session name.
+
+func newScopeModule(t *testing.T) (*Module, *batchCountingTmux) {
+	t.Helper()
+	m := newTestModule(t)
+	fake := tmux.NewFakeExecutor()
+	tx := &batchCountingTmux{FakeExecutor: fake}
+	m.tmux = tx
+	m.sessions = &fakeSessionProvider{sessions: []session.SessionInfo{{Code: "c0", Name: "s0"}}}
+	m.core = &core.Core{Events: core.NewEventsBroadcaster(), Tmux: fake}
+	return m, tx
+}
+
+func TestProjectionForSession_ScopedEqualsGlobal(t *testing.T) {
+	const start = "Sun Apr 20 01:30:00 2026"
+	for seed := int64(1); seed <= 25; seed++ {
+		rng := rand.New(rand.NewSource(seed))
+		m, tx := newScopeModule(t)
+		dead := map[int]bool{}
+		orig := pidAncestorIncludesFn
+		pidAncestorIncludesFn = func(pid, ancestor int) bool { return !dead[pid] }
+		t.Cleanup(func() { pidAncestorIncludesFn = orig })
+
+		nPanes := 3 + rng.Intn(10)
+		pid := 100
+		for i := 0; i < nPanes; i++ {
+			pane := "%" + strconv.Itoa(i)
+			sess := "s" + strconv.Itoa(rng.Intn(4))
+			switch rng.Intn(6) {
+			case 0: // tmux no longer lists the pane
+			case 1: // linked into several sessions: the listing cannot tell, the per-pane answer can
+				tx.SetPaneSessionName(pane, sess)
+				tx.SetActivePanePID(pane, strconv.Itoa(9000+i))
+				tx.SetPaneAmbiguous(pane, true)
+			default:
+				tx.SetPaneSessionName(pane, sess)
+				tx.SetActivePanePID(pane, strconv.Itoa(9000+i))
+			}
+			for k := rng.Intn(4); k > 0; k-- { // 0..3 frames in one pane
+				pid++
+				if rng.Intn(4) == 0 {
+					dead[pid] = true // not the pane process's descendant: filtered out
+				}
+				seedIdentityFrame(t, m, pane, "cc", pid, start+" "+strconv.Itoa(pid), int64(10+pid), "sid-"+strconv.Itoa(pid), "/w")
+			}
+		}
+		// a different tmux session whose name collides with nothing here, and a session with no pane at all
+		for i := 0; i < 5; i++ {
+			name := "s" + strconv.Itoa(i)
+			got, gerr := m.projectionForSession(name)
+			want, werr := m.projectionForSessionGlobal(name)
+			if (gerr == nil) != (werr == nil) || !reflect.DeepEqual(got, want) {
+				t.Fatalf("seed %d session %s: scoped = %+v (%v), global = %+v (%v)", seed, name, got, gerr, want, werr)
+			}
+		}
+	}
+}
+
+func TestProjectionForSession_ScopedEqualsGlobal_FrameDeletedBetween(t *testing.T) {
+	f := newProjFixture(t, 8, true)
+	for _, name := range []string{"s0", "s1", "s2", "s3"} {
+		before, _ := f.m.projectionForSessionGlobal(name)
+		if before != nil && before.TopFrame != nil {
+			if err := f.m.frames.Delete(before.TopFrame.FrameID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, gerr := f.m.projectionForSession(name)
+		want, werr := f.m.projectionForSessionGlobal(name)
+		if gerr != nil || werr != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s after delete: scoped %+v (%v) global %+v (%v)", name, got, gerr, want, werr)
+		}
+	}
+}
+
+func TestProjectionForSession_ScopedReadsOnlyTheSessionsFrames(t *testing.T) {
+	f := newProjFixture(t, 12, false)
+	f.m.listFramesFn = nil
+	got, err := f.m.projectionForSession("s0")
+	if err != nil || got == nil {
+		t.Fatalf("s0 = %+v, %v", got, err)
+	}
+	// 12 panes over s0..s3: s0 owns %0,%4,%8. Unknown session: no rows read, no projection.
+	none, err := f.m.projectionForSession("nosuch")
+	if err != nil || none != nil {
+		t.Fatalf("nosuch = %+v, %v", none, err)
+	}
+}
+
+func cachedFixture(t *testing.T, ttl time.Duration) *projFixture {
+	f := newProjFixture(t, 4, false)
+	f.m.paneSnapTTL = ttl
+	return f
+}
+
+func TestPaneSnapCache_SharedWithinTTL(t *testing.T) {
+	f := cachedFixture(t, time.Hour)
+	f.tx.reset()
+	for i := 0; i < 5; i++ {
+		if p, err := f.m.projectionForSession("s0"); err != nil || p == nil {
+			t.Fatalf("read %d: %+v, %v", i, p, err)
+		}
+	}
+	if b, _, _ := f.tx.counts(); b != 1 {
+		t.Fatalf("5 reads inside the TTL listed %d times, want 1", b)
+	}
+}
+
+func TestPaneSnapCache_RefreshesAfterTTL(t *testing.T) {
+	f := cachedFixture(t, 20*time.Millisecond)
+	f.tx.reset()
+	f.m.projectionForSession("s0")
+	time.Sleep(40 * time.Millisecond)
+	f.m.projectionForSession("s0")
+	if b, _, _ := f.tx.counts(); b != 2 {
+		t.Fatalf("listings = %d, want 2 (TTL expired)", b)
+	}
+}
+
+func TestPaneSnapCache_RefreshesWhenGenBumps(t *testing.T) {
+	f := cachedFixture(t, time.Hour)
+	f.tx.reset()
+	f.m.projectionForSession("s0")
+	f.m.bumpTmuxGen()
+	f.m.projectionForSession("s0")
+	if b, _, _ := f.tx.counts(); b != 2 {
+		t.Fatalf("listings = %d, want 2 (gen bumped)", b)
+	}
+}
+
+func TestPaneSnapCache_UnknownSessionForcesOneRefresh(t *testing.T) {
+	f := cachedFixture(t, time.Hour)
+	f.m.projectionForSession("s0") // fills the cache
+	f.tx.SetPaneSessionName("%new", "snew")
+	f.tx.SetActivePanePID("%new", "2999")
+	seedIdentityFrame(t, f.m, "%new", "cc", 1999, "Sun Apr 20 01:30:00 2026", 99, "sid-new", "/w")
+	f.tx.reset()
+	p, err := f.m.projectionForSession("snew")
+	if err != nil || p == nil {
+		t.Fatalf("new session read as absent: %+v, %v", p, err)
+	}
+	if b, _, _ := f.tx.counts(); b != 1 {
+		t.Fatalf("listings = %d, want exactly 1 forced refresh", b)
+	}
+}
+
+func TestPaneSnapCache_FailureNotCached(t *testing.T) {
+	f := cachedFixture(t, time.Hour)
+	f.tx.SetListPanePlacementsError(fmt.Errorf("tmux hiccup"))
+	f.tx.reset()
+	f.m.projectionForSession("s0")
+	f.m.projectionForSession("s0")
+	if b, _, _ := f.tx.counts(); b != 2 {
+		t.Fatalf("failed listings = %d, want 2 (not cached)", b)
+	}
+	f.tx.SetListPanePlacementsError(nil)
+	f.tx.reset()
+	f.m.projectionForSession("s0")
+	f.m.projectionForSession("s0")
+	if b, _, _ := f.tx.counts(); b != 1 {
+		t.Fatalf("after recovery listings = %d, want 1", b)
+	}
+}
+
+func TestPaneSnapCache_SingleFlight(t *testing.T) {
+	f := cachedFixture(t, time.Hour)
+	f.tx.mu.Lock()
+	f.tx.onCall = func() { time.Sleep(60 * time.Millisecond) }
+	f.tx.mu.Unlock()
+	f.tx.reset()
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if p, err := f.m.projectionForSession("s0"); err != nil || p == nil {
+				t.Errorf("read: %+v, %v", p, err)
+			}
+		}()
+	}
+	wg.Wait()
+	if b, _, _ := f.tx.counts(); b != 1 {
+		t.Fatalf("8 concurrent reads forked %d times, want 1", b)
+	}
+}
