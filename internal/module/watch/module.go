@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -80,6 +81,8 @@ type Module struct {
 	statFile       func(string) bool
 	// rst is the rest of the watcher (rest.go); exit sends /exit to its pane; the others are seams for the tests (nil: the real ones).
 	rst       restState
+	admit     sync.RWMutex // an event is admitted (read side) or the rest acts on its check (write side)
+	activity  atomic.Int64 // events being delivered to the watcher: a rest step compares it
 	exit      exiter
 	mtimeOf   func(string) time.Time
 	procStart func(int) (string, error)

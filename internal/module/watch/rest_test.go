@@ -2,6 +2,8 @@ package watchmod
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"testing"
@@ -36,13 +38,54 @@ type restRig struct {
 	sigs  []sigRec
 	mode  string
 	idle  int
+	file  string // the watcher's transcript
+	// lateNotice: the notice's record is not written by the notifier; the test writes it when it means to.
+	lateNotice bool
 }
+
+// hookNotifier writes the notice's record into the transcript, as the agent does, when the notice is sent.
+type hookNotifier struct {
+	*fakeNotifier
+	hook func(text string)
+}
+
+func (h hookNotifier) Notify(ctx context.Context, own watch.Holder, text string) error {
+	if err := h.fakeNotifier.Notify(ctx, own, text); err != nil {
+		return err
+	}
+	h.hook(text)
+	return nil
+}
+
+// append adds a line to the transcript and makes it the last write, at time at.
+func (r *restRig) append(line string, at time.Time) {
+	f, err := os.OpenFile(r.file, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
+	if err != nil {
+		panic(err)
+	}
+	_, _ = f.WriteString(line + "\n")
+	_ = f.Close()
+	r.mtime = at
+}
+
+func noticeRecord(text string) string {
+	return `{"type":"user","message":{"role":"user","content":"` + text + `"}}`
+}
+
+const answerRecord = `{"type":"assistant","message":{"role":"assistant","content":"notes pushed"}}`
 
 func newRestRig(t *testing.T) *restRig {
 	t.Helper()
 	rr := &restRig{recRig: newRecRig(t), note: &fakeNotifier{}, exit: &fakeExit{}, start: "Fri Oct 16 12:00:00 2026", mode: watchsettings.ModePatrol, idle: 120}
 	m := rr.m
-	m.dlv.notifier, m.exit = rr.note, rr.exit
+	rr.file = filepath.Join(t.TempDir(), "f1.jsonl")
+	require.NoError(t, os.WriteFile(rr.file, []byte(`{"type":"user","message":{"content":"earlier"}}`+"\n"), 0o600))
+	m.dlv.notifier = hookNotifier{rr.note, func(text string) {
+		if !rr.lateNotice {
+			rr.append(noticeRecord(text), rr.now)
+		}
+	}}
+	m.exit = rr.exit
 	m.mtimeOf = func(string) time.Time { return rr.mtime }
 	m.procStart = func(int) (string, error) { return rr.start, nil }
 	m.signalFn = func(pid int, sig syscall.Signal) error { rr.sigs = append(rr.sigs, sigRec{pid, sig}); return nil }
@@ -51,7 +94,9 @@ func newRestRig(t *testing.T) *restRig {
 		s.Mode, s.PatrolIdleMin = rr.mode, rr.idle
 		return s, nil
 	}
-	rr.owners.set(watcherOwner("f1"), true, nil)
+	owner := watcherOwner("f1")
+	owner.TranscriptPath = rr.file
+	rr.owners.set(owner, true, nil)
 	rr.step() // registers the frame at r.now
 	return rr
 }
@@ -89,7 +134,7 @@ func TestRest_ExitGoesAfterTheAnswerOrAfterFiveMinutes(t *testing.T) {
 		r := newRestRig(t)
 		r.advance(121 * time.Minute)
 		require.Len(t, r.texts(), 1)
-		r.mtime = r.now.Add(20 * time.Second) // it is answering
+		r.append(answerRecord, r.now.Add(20*time.Second)) // it is answering
 		r.advance(60 * time.Second)
 		require.Zero(t, r.exit.count(), "the turn is still going on")
 		r.advance(60 * time.Second)
@@ -193,14 +238,51 @@ func TestRest_AFailedSIGKILLIsTriedAgainAtTheNextStepNotRestartedAsANewRest(t *t
 	require.Len(t, r.sigs, 3)
 }
 
-func TestRest_TheNoticesOwnWriteToTheTranscriptIsNotAnAnswer(t *testing.T) {
+func TestRest_TheNoticesOwnRecordIsNotAnAnswerHoweverLateItIsWritten(t *testing.T) {
 	r := newRestRig(t)
+	r.lateNotice = true
 	r.advance(121 * time.Minute)
-	r.mtime = r.now.Add(5 * time.Second) // the notice was written to the transcript
+	require.Len(t, r.texts(), 1)
+	r.append(noticeRecord(r.texts()[0]), r.now.Add(16*time.Second)) // the notice reaches the transcript after 16 s
 	r.advance(3 * time.Minute)
-	require.Zero(t, r.exit.count(), "90 s of quiet after the notice's own write is not an answer")
+	require.Zero(t, r.exit.count(), "90 s of quiet after the notice's own record is not an answer")
 	r.advance(2*time.Minute + time.Second)
 	require.Equal(t, 1, r.exit.count(), "the five minutes are the limit")
+}
+
+func TestRest_AnAnswerAfterALateNoticeRecordIsAnAnswer(t *testing.T) {
+	r := newRestRig(t)
+	r.lateNotice = true
+	r.advance(121 * time.Minute)
+	r.append(noticeRecord(r.texts()[0]), r.now.Add(16*time.Second))
+	r.append(answerRecord, r.now.Add(40*time.Second))
+	r.advance(3 * time.Minute)
+	require.Equal(t, 1, r.exit.count())
+}
+
+// An event whose delivery has begun (the watcher is being told) but is not on the holder yet still stops the /exit.
+func TestRest_AnEventBeingDeliveredStopsTheExitBeforeLastDeliveryIsWritten(t *testing.T) {
+	r := newRestRig(t)
+	r.advance(121 * time.Minute)
+	inNotify, release := make(chan struct{}), make(chan struct{})
+	r.m.dlv.notifier = blockingNotifier{in: inNotify, release: release}
+	done := make(chan error, 1)
+	go func() {
+		done <- r.m.receiveEvent(context.Background(), eventMessage(evRecord(watch.KindPressureHigh, "mlab")))
+	}()
+	<-inNotify // between "the watcher is being told" and "LastDelivery is written"
+	r.advance(6 * time.Minute)
+	require.Zero(t, r.exit.count(), "no /exit while an event is on its way to the watcher")
+	close(release)
+	require.NoError(t, <-done)
+}
+
+type blockingNotifier struct{ in, release chan struct{} }
+
+func (b blockingNotifier) Notify(context.Context, watch.Holder, string) error {
+	close(b.in)
+	<-b.release
+	return nil
 }
 
 func TestRest_AnEventAfterTheExitStillCancelsTheSignals(t *testing.T) {
@@ -210,4 +292,16 @@ func TestRest_AnEventAfterTheExitStillCancelsTheSignals(t *testing.T) {
 	require.NoError(t, r.m.holder.Update(func(h *watch.Holder) { h.LastDelivery = r.now.Add(time.Second) }))
 	r.advance(6 * time.Minute)
 	require.Empty(t, r.sigs, "it is working on an event: no signal")
+}
+
+// What the agent wrote just before the notice (a turn that was ending) is not the answer to it.
+func TestRest_RecordsOfTheAssistantBeforeTheNoticeAreNotItsAnswer(t *testing.T) {
+	r := newRestRig(t)
+	r.lateNotice = true
+	r.advance(121 * time.Minute)
+	r.append(answerRecord, r.now.Add(2*time.Second))
+	r.append(answerRecord, r.now.Add(4*time.Second))
+	r.append(noticeRecord(r.texts()[0]), r.now.Add(6*time.Second))
+	r.advance(3 * time.Minute)
+	require.Zero(t, r.exit.count())
 }

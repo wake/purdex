@@ -26,7 +26,7 @@ func TestGate_SetProfileAndStatusShowTheSourceOfEverySetting(t *testing.T) {
 	assert.Regexp(t, `admission\.disk_min_gb\s+0\s+config`, out.String())
 
 	errb.Reset()
-	assert.Equal(t, 1, gateMain([]string{"set", "--config", cfg, "slots.heavy=0"}, &out, &errb))
+	assert.Equal(t, 1, gateMain([]string{"set", "--config", cfg, "slots.heavy=65"}, &out, &errb))
 	assert.Contains(t, errb.String(), "slots.heavy")
 	assert.Equal(t, 2, gateMain([]string{"set", "--config", cfg, "nonsense"}, &out, &errb))
 }
