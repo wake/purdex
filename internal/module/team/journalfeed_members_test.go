@@ -108,3 +108,54 @@ func TestJournalFeed_CurrentTaskAgreesWithTheTeamView(t *testing.T) {
 		t.Fatalf("only %d members had a task to compare", checked)
 	}
 }
+
+// LastReports: one row per member_key, the newest; created_at ties go to the greater rowid (insertion order), not the
+// greater id; another team's reports are not mixed in; a team with none answers an empty list; a store error is an error.
+// Mutation: drop `rowid DESC` from the ORDER BY → the tie case reads the wrong report and goes red.
+func TestJournalFeed_LastReports(t *testing.T) {
+	s := openTestStore(t)
+	seedTeam(t, s, tTeamA, "lead-a", 1)
+	seedTeam(t, s, tTeamB, "lead-b", 1)
+	seedMember(t, s, "op-1", tTeamA, "sess-1", 2)
+	seedMember(t, s, "op-2", tTeamA, "sess-2", 3)
+	seedMember(t, s, "op-b", tTeamB, "sess-b", 4)
+	mustCreateTask(t, s, newTask(tTeamA, "op-1", "t", 5))
+	mustCreateTask(t, s, newTask(tTeamB, "op-b", "t", 5))
+	// op-1: three reports, the newest inserted in the middle; op-2: a tie on created_at where the greater id went in first
+	mustInsertReport(t, s, newReport(tTeamA, 1, "op-1", team.ReportProgress, 1, 100))
+	mustInsertReport(t, s, newReport(tTeamA, 1, "op-1", team.ReportReady, 2, 300))
+	mustInsertReport(t, s, newReport(tTeamA, 1, "op-1", team.ReportProgress, 3, 200))
+	mustInsertReport(t, s, newReport(tTeamA, 1, "op-2", team.ReportProgress, 9, 500))
+	mustInsertReport(t, s, newReport(tTeamA, 1, "op-2", team.ReportBlocked, 4, 500))
+	mustInsertReport(t, s, newReport(tTeamB, 1, "op-b", team.ReportDone, 5, 900))
+	got, err := s.LastReports(tTeamA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]team.ReportRow{}
+	for _, r := range got {
+		by[r.MemberKey] = r
+	}
+	if len(got) != 2 || by["op-1"].ID != reportID(2) || by["op-1"].Kind != "ready" || by["op-1"].CreatedAt != 300 {
+		t.Fatalf("last reports = %+v, want op-1's newest and op-2's", got)
+	}
+	if r := by["op-2"]; r.ID != reportID(4) || r.Kind != "blocked" || r.RowID == 0 || r.MemberRef != "_memop-2" || r.TeamID != tTeamA {
+		t.Errorf("op-2 tie = %+v, want the later-inserted report (greater rowid)", r)
+	}
+	// a member that is no longer active still has its row; the caller filters
+	if err := s.SetMemberState("op-2", team.MemberReleased, 99); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.LastReports(tTeamA); len(got) != 2 {
+		t.Errorf("after a release: %d rows, want 2", len(got))
+	}
+	if none, err := s.LastReports("no-such-team"); err != nil || len(none) != 0 {
+		t.Errorf("unknown team = %+v err=%v", none, err)
+	}
+	if err := s.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.LastReports(tTeamA); err == nil {
+		t.Error("LastReports on a closed store answered without an error")
+	}
+}

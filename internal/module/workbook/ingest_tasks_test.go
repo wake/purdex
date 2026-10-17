@@ -25,6 +25,24 @@ type fakeFeed struct {
 	err     error                          // answered by Members, CurrentTask and ReportsAfter when set
 }
 
+// LastReports is the newest report of each member_key of the team: greatest created_at, a tie to the greatest rowid.
+func (f *fakeFeed) LastReports(teamID string) ([]team.ReportRow, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	best := map[string]team.ReportRow{}
+	for _, r := range f.reports {
+		if cur, ok := best[r.MemberKey]; r.TeamID == teamID && (!ok || r.CreatedAt > cur.CreatedAt || (r.CreatedAt == cur.CreatedAt && r.RowID > cur.RowID)) {
+			best[r.MemberKey] = r
+		}
+	}
+	var out []team.ReportRow
+	for _, r := range best {
+		out = append(out, r)
+	}
+	return out, nil
+}
+
 func (f *fakeFeed) Members(teamID string) ([]team.MemberInfo, error) {
 	return f.members[teamID], f.err
 }

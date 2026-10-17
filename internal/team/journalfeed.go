@@ -75,6 +75,9 @@ type JournalFeed interface {
 	ReportsAfter(afterRowID, sinceMS int64, limit int) ([]ReportRow, error)
 	// TeamInfo answers one team's lead (the current session) and label; false when the id is unknown.
 	TeamInfo(teamID string) (TeamInfo, bool, error)
+	// LastReports answers, for every member_key that has reported in the team (whatever its state now), its newest report:
+	// the greatest created_at, a tie to the greatest rowid (ReportsAfter's order). No reports answers none.
+	LastReports(teamID string) ([]ReportRow, error)
 	// Members answers the team's current members (state active; released, killed and gone ones are not listed), oldest
 	// first. An unknown team answers none.
 	Members(teamID string) ([]MemberInfo, error)

@@ -112,6 +112,9 @@ func (s *Store) TeamInfo(teamID string) (team.TeamInfo, bool, error) {
 	return info, true, nil
 }
 
+// LastReports implements team.JournalFeed (STUB, red step).
+func (s *Store) LastReports(teamID string) ([]team.ReportRow, error) { return nil, nil }
+
 // Members implements team.JournalFeed: the team's active members, oldest first. Active only: released, killed and gone
 // rows (and a remote member's in-flight states) are not current members.
 func (s *Store) Members(teamID string) ([]team.MemberInfo, error) {
