@@ -71,7 +71,7 @@ func (m *Module) tick() {
 		}
 		m.endGoneTeams()
 		m.settleAwaitingSpawns(true) // a card closed whose op did not follow (a store error between the two writes, RT-5a)
-		m.closeOrphanSpawnCards() // a resource card whose team ended under its waiting spawn (RT-5a)
+		m.closeOrphanSpawnCards()    // a resource card whose team ended under its waiting spawn (RT-5a)
 		m.markGoneMembers()
 		m.sweepFreshHalves()          // a fresh half of a session that is gone (RT-3a1)
 		m.settleStuckKillingMembers() // a kill that claimed its member and never ended (#2152)

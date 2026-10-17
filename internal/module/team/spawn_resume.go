@@ -29,7 +29,7 @@ func (m *Module) resumeSpawns() {
 	if m.tmux == nil {
 		return
 	}
-	m.settleAwaitingSpawns(false)                     // first: an op whose card was approved is running now and is in the list below
+	m.settleAwaitingSpawns(false)                    // first: an op whose card was approved is running now and is in the list below
 	ops, err := m.store.ListRunningSpawnOps(m.now()) // also fails a corrupt running row, so it comes first
 	if err != nil {
 		m.logf("[team] boot: spawn ops: %v", err)
