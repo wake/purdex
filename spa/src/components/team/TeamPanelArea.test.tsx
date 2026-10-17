@@ -668,6 +668,26 @@ describe('resize', () => {
     expect(area().style.width).toBe('580px')
   })
 
+  it('a drag never touches the persisted team store until mouseup, and then writes it once', () => {
+    scene()
+    mount()
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    const getItem = vi.spyOn(Storage.prototype, 'getItem')
+    const writes = () => setItem.mock.calls.filter(([k]) => k === STORAGE).length
+    const reads = () => getItem.mock.calls.filter(([k]) => k === STORAGE).length
+    fireEvent.mouseDown(screen.getByTestId('resize-hit'), { clientX: 500 })
+    for (const x of [490, 470, 450, 430, 420]) fireEvent.mouseMove(document, { clientX: x })
+    expect(area().style.width).toBe('580px') // the draft is on screen
+    // the persist middleware reads storage on every set (to skip an unchanged write), so no read = no set went through it
+    expect(reads()).toBe(0)
+    expect(writes()).toBe(0)
+    fireEvent.mouseUp(document)
+    expect(useTeamUiStore.getState().panel.width).toBe(580)
+    expect(writes()).toBe(1)
+    setItem.mockRestore()
+    getItem.mockRestore()
+  })
+
   it('a drag cut short by the panel going away leaves no draft and commits nothing later', () => {
     scene()
     const { unmount } = mount()
