@@ -16,6 +16,14 @@ describe('parseRosterEvent', () => {
     expect(parseRosterEvent(v({ op: 'changed', teams: [] }))).toEqual({ op: 'changed', teams: [] })
   })
 
+  it('tmux_instance is kept only as a non-empty string (MQ-2b)', () => {
+    const t = { ...team, members: [{ ...member, tmux_instance: '1:2' }, { ...member, session_id: 's-m2', tmux_instance: 7 }] }
+    const r = parseRosterEvent(v({ op: 'snapshot', teams: [t] }))
+    if (typeof r === 'string') throw new Error(r)
+    expect(r.teams[0].members[0].tmux_instance).toBe('1:2')
+    expect('tmux_instance' in r.teams[0].members[1]).toBe(false)
+  })
+
   it('host_alias and host_id are parsed only when strings', () => {
     const good = { ...member, host_id: 'dm-b', host_alias: 'b26' }
     const bad = { ...member, session_id: 's-m2', host_id: 7, host_alias: { x: 1 } }

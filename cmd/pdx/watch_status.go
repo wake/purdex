@@ -70,6 +70,12 @@ func renderWatchStatus(st watchmod.Status) string {
 		fmt.Fprintf(b, "（session %s）", st.Self.SessionID)
 	}
 	b.WriteString("\n")
+	if st.Self.Starting {
+		b.WriteString("　啟動／喚醒進行中\n")
+	}
+	if until := st.Self.CooldownUntil; until.After(time.Now()) {
+		fmt.Fprintf(b, "　先前的啟動沒有成功，%s 之前不再嘗試\n", until.Local().Format("01-02 15:04"))
+	}
 	for _, t := range []struct {
 		label string
 		at    time.Time
