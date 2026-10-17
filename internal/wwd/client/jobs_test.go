@@ -296,6 +296,31 @@ func TestWaitJob_AnEventEndsTheWait(t *testing.T) {
 	}
 }
 
+func TestTracker_ATerminalStateIsFinalAndEachChangeIsReportedOnce(t *testing.T) {
+	var got []wire.JobState
+	tr := &tracker{onUpdate: func(j wire.Job) { got = append(got, j.State) }}
+	steps := []struct {
+		st   wire.JobState
+		term bool
+	}{
+		{wire.StateQueued, false}, {wire.StateQueued, false}, {wire.StateRunning, false},
+		{wire.StateSucceeded, true},
+		{wire.StateRunning, true}, // a snapshot read that was in flight: older than what the event told
+		{wire.StateQueued, true},
+	}
+	for i, s := range steps {
+		if term := tr.seen(jobIn(t, "j_1", s.st)); term != s.term {
+			t.Fatalf("step %d: terminal = %v, want %v", i, term, s.term)
+		}
+	}
+	if fmt.Sprint(got) != "[queued running succeeded]" {
+		t.Fatalf("updates = %v: a stale read went backwards after the terminal state", got)
+	}
+	if tr.final.State != wire.StateSucceeded {
+		t.Fatalf("final = %s: the wait must return the first terminal job, not a later stale read", tr.final.State)
+	}
+}
+
 func TestWaitJob_AJobAlreadyDoneReturnsAtOnce(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/jobs/{id}", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, jobIn(t, "j_1", wire.StateFailed)) })

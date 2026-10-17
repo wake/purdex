@@ -89,21 +89,8 @@ var reconnectAfter = 500 * time.Millisecond
 // breaks, polling meanwhile. onUpdate, when not nil, sees every state change seen (not every event). A cancelled context ends the
 // wait with its error; an unreachable wwd with ErrUnavailable once it has failed three reads in a row.
 func (c *Client) WaitJob(ctx context.Context, id string, onUpdate func(wire.Job)) (wire.Job, error) {
-	var (
-		mu   sync.Mutex // seen runs on the event goroutine and on this one
-		last wire.JobState
-	)
-	seen := func(j wire.Job) bool {
-		mu.Lock()
-		defer mu.Unlock()
-		if j.State != last {
-			last = j.State
-			if onUpdate != nil {
-				onUpdate(j)
-			}
-		}
-		return j.State.Terminal()
-	}
+	tr := &tracker{onUpdate: onUpdate}
+	seen := tr.seen
 	failures := 0
 	for {
 		if err := ctx.Err(); err != nil {
@@ -142,7 +129,7 @@ func (c *Client) WaitJob(ctx context.Context, id string, onUpdate func(wire.Job)
 			if err2 := ctx.Err(); err2 != nil {
 				return wire.Job{}, err2
 			}
-			if j, ok, rerr := c.readOnce(ctx, id, seen, &failures); ok {
+			if j, ok, rerr := c.readOnce(ctx, id, tr, &failures); ok {
 				return j, nil
 			} else if rerr != nil {
 				return wire.Job{}, rerr
@@ -153,7 +140,7 @@ func (c *Client) WaitJob(ctx context.Context, id string, onUpdate func(wire.Job)
 			}
 			continue
 		}
-		if j, ok, rerr := c.readOnce(ctx, id, seen, &failures); ok {
+		if j, ok, rerr := c.readOnce(ctx, id, tr, &failures); ok {
 			stop()
 			<-watchErr
 			return j, nil
@@ -177,8 +164,37 @@ func (c *Client) WaitJob(ctx context.Context, id string, onUpdate func(wire.Job)
 	}
 }
 
+// tracker reports state changes to onUpdate once each, from the event goroutine and the reading goroutine alike. A terminal
+// state is final: a snapshot read that was in flight when the terminal event arrived must not report an older state after it.
+type tracker struct {
+	mu       sync.Mutex
+	last     wire.JobState
+	done     bool
+	final    wire.Job // the first terminal job seen; valid once done (read after seen returned true)
+	onUpdate func(wire.Job)
+}
+
+// seen records j and says whether the job is terminal.
+func (t *tracker) seen(j wire.Job) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.done {
+		return true
+	}
+	if j.State != t.last {
+		t.last = j.State
+		if t.onUpdate != nil {
+			t.onUpdate(j)
+		}
+	}
+	if j.State.Terminal() {
+		t.done, t.final = true, j
+	}
+	return t.done
+}
+
 // readOnce reads the job; ok is true when it is terminal. Three failed reads in a row end the wait with the error.
-func (c *Client) readOnce(ctx context.Context, id string, seen func(wire.Job) bool, failures *int) (wire.Job, bool, error) {
+func (c *Client) readOnce(ctx context.Context, id string, tr *tracker, failures *int) (wire.Job, bool, error) {
 	j, err := c.Job(ctx, id)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -194,7 +210,10 @@ func (c *Client) readOnce(ctx context.Context, id string, seen func(wire.Job) bo
 		return wire.Job{}, false, nil
 	}
 	*failures = 0
-	return j, seen(j), nil
+	if tr.seen(j) {
+		return tr.final, true, nil // the first terminal job seen, not an older snapshot that was in flight
+	}
+	return j, false, nil
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) bool {
