@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { CardStack } from './CardStack'
 import { JournalButtons } from './JournalButtons'
+import { CardFrame } from './CardFrame'
 import { TeamDisplayProvider } from '../team/TeamDisplayProvider'
 import { HOST, resetTeamStores, seedScene } from '../../lib/team/__tests__/team-fixture'
 import { ccTabOf, seedUnit, setJournalHost } from '../../lib/journal/__tests__/journal-fixture'
@@ -66,6 +67,17 @@ beforeEach(() => {
 afterEach(() => { cleanup(); Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 }) })
 
 describe('floating cards', () => {
+  it('a pointer-down on a panel that is not one of the floating cards (the team panel\'s frame) closes the unfixed ones', () => {
+    render(<><Shell /><CardFrame testId="team-frame" width={300} onCommitWidth={null}><button data-testid="team-seat">seat</button></CardFrame></>)
+    expect(screen.getByTestId('team-frame').hasAttribute('data-journal-card')).toBe(false)
+    fireEvent.pointerDown(screen.getByTestId('team-seat'))
+    for (const id of CARDS) expect(q(id)).toBeNull()
+  })
+  it('only the journal, roadmap, tasks and detail cards carry the marker', () => {
+    act(() => patchViewMemo(HOST, 'solo:a', { detailId: 'c1' }))
+    render(<Shell />)
+    for (const id of [...CARDS.filter((c) => c !== 'journal-roadmap-card'), 'journal-detail-card']) expect(screen.getByTestId(id).hasAttribute('data-journal-card')).toBe(true)
+  })
   it('start unfixed, and a click outside closes all three', () => {
     render(<Shell />)
     expect(readViewMemo(HOST, 'solo:a').fixed).toEqual({ journal: false, roadmap: false, tasks: false })
