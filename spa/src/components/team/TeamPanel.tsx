@@ -7,7 +7,7 @@
 // Row look follows the sidebar: the seat being looked at has the highlight + bright text, no side line.
 // Live readings (model, effort, context) are selected per seat (team-readings.ts), not passed down from the structure.
 import { Fragment, useCallback, useRef } from 'react'
-import { ArrowsInSimple, ArrowsOutSimple, ArrowLineUp } from '@phosphor-icons/react'
+import { ArrowLineUp } from '@phosphor-icons/react'
 import type { TeamPanelTeam, TeamSeatView } from './team-display'
 import { CellSep, NameCapsule, TeamCell } from './TeamCell'
 import { useMemberDrag } from './useMemberDrag'
@@ -29,9 +29,9 @@ import { CELL_GAP, CAPSULE_MAX_W, HEADER_GAP, HEADER_H, HEADER_PX, firstRowCapac
 interface Props {
   team: TeamPanelTeam
   activeTabId: string | null
-  /** The area's width while it floats (draft included); undefined when enlarged (everything fits in the header row). */
+  /** The area's width while it floats (draft included). */
   width?: number
-  /** Move the area: ⌃ -> titlebar, the header click line <-> full, the enlarge control full <-> max. */
+  /** Move the area: ⌃ -> titlebar, the header click line <-> full. */
   onSetMode: (mode: PanelMode) => void
   onOpen: (sessionId: string) => void
   onReorder: (sessionIds: string[]) => void
@@ -76,7 +76,7 @@ const HEADER_CLASS = 'flex items-center cursor-pointer select-none'
 const headerStyle = { height: HEADER_H, paddingInline: HEADER_PX, columnGap: HEADER_GAP } as const
 
 /**
- * The header's one move-to-title-bar control (round 5): the same icon and the same action in line, full and max. Going
+ * The header's one move-to-title-bar control (round 5): the same icon and the same action in line and full. Going
  * line <-> full is the header click's job, not this button's.
  */
 export function ToTitleBarButton({ onClick }: { onClick: () => void }) {
@@ -97,28 +97,8 @@ export function ToTitleBarButton({ onClick }: { onClick: () => void }) {
   )
 }
 
-export function ExpandButton({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
-  const t = useI18nStore((s) => s.t)
-  const label = t(expanded ? 'team.panel.restore' : 'team.panel.enlarge')
-  return (
-    <button
-      type="button"
-      data-testid="team-panel-expand"
-      aria-pressed={expanded}
-      onMouseDown={keepFocus}
-      onClick={onToggle}
-      title={label}
-      aria-label={label}
-      className="px-1 py-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-hover cursor-pointer flex-shrink-0"
-    >
-      {expanded ? <ArrowsInSimple size={12} /> : <ArrowsOutSimple size={12} />}
-    </button>
-  )
-}
-
 function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, card, hdr }: Props & { hdr: HeaderHandlers }) {
   const t = useI18nStore((s) => s.t)
-  const expanded = team.mode === 'max'
   const { teamKey, color, lead, members } = team
   const order = members.map((m) => m.sessionId)
   const reorder = useCallback((ids: string[]) => onReorder(ids), [onReorder])
@@ -131,7 +111,6 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, card, hdr 
         {!card && (
           <span className="ml-auto flex items-center gap-0.5">
             <ToTitleBarButton onClick={() => onSetMode('titlebar')} />
-            <ExpandButton expanded={expanded} onToggle={() => onSetMode(expanded ? 'full' : 'max')} />
           </span>
         )}
       </div>
@@ -185,7 +164,6 @@ function LinePanel({ team, activeTabId, width, onSetMode, onOpen, hdr }: Props &
       </div>
       <span className="flex items-center gap-0.5 flex-shrink-0">
         <ToTitleBarButton onClick={() => onSetMode('titlebar')} />
-        <ExpandButton expanded={false} onToggle={() => onSetMode('max')} />
       </span>
     </div>
     {more.length > 0 && (

@@ -343,8 +343,6 @@
   "team.sidebar.ghost_badge": "closed",
   "team.panel.members": "{{count}} members",
   "team.panel.to_titlebar": "Move to title bar",
-  "team.panel.enlarge": "Enlarge the panel",
-  "team.panel.restore": "Restore the panel size",
   "team.titlebar.to_pane": "Put the panel back in the pane",
   "team.titlebar.to_titlebar": "Move the panel into the title bar",
   "team.titlebar.more": "{{count}} more — open the panel",
