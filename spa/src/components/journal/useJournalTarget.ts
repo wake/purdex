@@ -3,7 +3,7 @@
 // Same origin as the loader (journal-loader.ts): the tab's own `cc` session; a team tab with no `cc` leaf falls back to the
 // lead's host for the support check only (no unit is loaded for it).
 import { useLayoutEffect, useMemo } from 'react'
-import { migrateViewMemo } from '../../lib/journal/view-memory'
+import { forgetViewMemo, hasViewMemo, migrateViewMemo } from '../../lib/journal/view-memory'
 import { ownSessionOf } from '../team/own-workbook'
 import { useTitleBarTeam } from '../team/useTitleBarTeam'
 import type { TeamPanelTeam } from '../team/team-display'
@@ -56,5 +56,12 @@ export function useJournalTarget(): JournalTarget {
   useLayoutEffect(() => {
     if (standIn !== null && origin && read && unitKey !== null) migrateViewMemo(origin.hostId, standIn, read.hostId, unitKey)
   }, [standIn, origin, read?.hostId, unitKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Same for the stand-in of a first read that failed (`failed:<session>`): once the unit exists the card stays open with its state, and the
+  // stand-in goes (a target that already holds state keeps it; the source is dropped either way).
+  const failedStandIn = read ? `failed:${read.sessionId}` : null
+  useLayoutEffect(() => {
+    if (failedStandIn === null || !read || unitKey === null || !hasViewMemo(read.hostId, failedStandIn)) return
+    if (!migrateViewMemo(read.hostId, failedStandIn, read.hostId, unitKey)) forgetViewMemo(read.hostId, failedStandIn)
+  }, [failedStandIn, read?.hostId, unitKey]) // eslint-disable-line react-hooks/exhaustive-deps
   return { hostId, journalHost, team, origin, read, unit, unitKey, unreachableHost, loadFailed, memoHost: read?.hostId ?? origin?.hostId ?? null, memoKey }
 }

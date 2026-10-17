@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { JournalFilters } from './JournalFilters'
 import { ConfirmBand } from './ConfirmBand'
 import { JournalStream } from './JournalStream'
-import { PageError, PageHeader, PagePager } from './JournalPages'
+import { PageError, PageHeader, PagePager, useSingleFlight } from './JournalPages'
 import type { RowContext } from './JournalRow'
 import type { JournalTarget } from './useJournalTarget'
 import { matchesFilter } from '../../lib/journal/filters'
@@ -100,6 +100,10 @@ export function JournalCard({ target, unit }: { target: JournalTarget; unit: Uni
     () => (!sessionMode && readHost !== undefined && readSession !== undefined ? useJournalStore.getState().loadJournal(readHost, readSession, { older: true }) : Promise.resolve()),
     [sessionMode, readHost, readSession],
   )
+  const retrySessions = useSingleFlight(useCallback(
+    () => (readHost !== undefined && readSession !== undefined ? useJournalStore.getState().loadSessions(readHost, readSession) : Promise.resolve()),
+    [readHost, readSession],
+  ))
   const ctx: RowContext = useMemo(
     () => ({ personName: unit.personName, remoteUrl: unit.project.remoteUrl, selectedId: memo.detailId, onToggleDetail, onToggleItem: canCheck ? onToggleItem : undefined }),
     [unit.personName, unit.project.remoteUrl, memo.detailId, onToggleDetail, onToggleItem, canCheck],
@@ -123,6 +127,7 @@ export function JournalCard({ target, unit }: { target: JournalTarget; unit: Uni
       {!loading && !(errored && pageEntries.length === 0)
         && <JournalStream host={host} unitKey={key} page={sessionMode ? viewPage : undefined} streamKey={sessionMode ? `${host}\0${key}\0${viewPage}` : undefined} entries={shown} filter={memo.filter} more={sessionMode ? false : unit.more} onLoadOlder={onLoadOlder} ctx={ctx} />}
       {errored && pageEntries.length === 0 && <div className="flex-1" />}
+      {sessionMode && unit.sessionsFailed && <PageError onRetry={retrySessions} testId="journal-sessions-error" messageKey="journal.page.sessionsError" />}
       {sessionMode && <PagePager prev={prevLink} next={nextLink} onGo={goTo} />}
     </div>
   )

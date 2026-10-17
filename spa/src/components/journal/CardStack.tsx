@@ -12,7 +12,7 @@ import { ListChecks, MapTrifold } from '@phosphor-icons/react'
 import { CardFrame } from './CardFrame'
 import { ConfirmDetail } from './ConfirmDetail'
 import { JournalCard, JournalTitle } from './JournalCard'
-import { PageError } from './JournalPages'
+import { PageError, useSingleFlight } from './JournalPages'
 import { TasksCard } from './TasksCard'
 import { RoadmapCard } from './RoadmapCard'
 import { CARD_GAP, STACK_MARGIN, visibleCards } from './card-layout'
@@ -145,6 +145,12 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
     patch({ widths: { ...memo.widths, [card]: w } })
     useJournalUiStore.getState().setLastWidth(card, w)
   }
+  // The first read failed and there is no unit yet: the retry asks that target again, once however many times it is clicked.
+  const readTarget = target.read
+  const retryFirstRead = useSingleFlight(useCallback(
+    () => (readTarget ? useJournalStore.getState().loadJournal(readTarget.hostId, readTarget.sessionId) : Promise.resolve()),
+    [readTarget?.hostId, readTarget?.sessionId], // eslint-disable-line react-hooks/exhaustive-deps
+  ))
   const closeDetail = useCallback(() => patchUnitMemo(memoHost, memoKey, { detailId: null }), [memoHost, memoKey])
   const fix = (card: Exclude<CardKey, 'team'>) => ({ fixed: memo.fixed[card], onToggleFixed: () => patch({ fixed: { ...memo.fixed, [card]: !memo.fixed[card] } }) })
   useOutsideClose(memoHost, memoKey)
@@ -183,7 +189,7 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
           {...fix('journal')}
         >
           {unit && <JournalCard key={`${target.memoHost}\u0000${target.memoKey}`} target={target} unit={unit} />}
-          {target.loadFailed && !target.unit && <PageError onRetry={null} testId="journal-card-error" />}
+          {target.loadFailed && !target.unit && <PageError onRetry={retryFirstRead} testId="journal-card-error" />}
           {target.unreachableHost !== null && !target.unit && (
             <div data-testid="journal-unreachable" className="p-3 text-text-secondary">{t('journal.card.unreachable', { host: target.unreachableHost })}</div>
           )}

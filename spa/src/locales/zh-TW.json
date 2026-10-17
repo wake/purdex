@@ -406,6 +406,7 @@
   "journal.page.incomplete": "更早的 session 可能不完整",
   "journal.page.truncated": "這一頁只顯示最新的 1000 筆",
   "journal.page.error": "讀取這一頁失敗",
+  "journal.page.sessionsError": "讀取更早 session 的清單失敗",
   "journal.page.retry": "重試",
   "journal.page.loading": "載入中…",
   "journal.stream.older": "載入更早的事件",

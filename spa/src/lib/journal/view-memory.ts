@@ -101,6 +101,10 @@ export function migrateViewMemo(fromHost: string, fromKey: string, toHost: strin
   return true
 }
 
+export function hasViewMemo(hostId: string, unitKey: string): boolean {
+  return memos.has(keyOf(hostId, unitKey))
+}
+
 export function forgetViewMemo(hostId: string, unitKey: string): void {
   memos.delete(keyOf(hostId, unitKey))
   bump()

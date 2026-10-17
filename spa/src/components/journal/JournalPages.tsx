@@ -1,6 +1,7 @@
 // spa/src/components/journal/JournalPages.tsx — the pieces of a session page (JV-4, spec §3.3): the header line naming the session's
 // span, the notices (cut at the cap, earlier sessions possibly missing), the error block, and 上一頁 / 下一頁. Pure presentation: the card
 // owns which page is shown (the unit's view memo) and what is read.
+import { useCallback, useRef } from 'react'
 import { CaretLeft, CaretRight } from '@phosphor-icons/react'
 import { dayKey, timeOf } from '../../lib/journal/stream'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -32,11 +33,21 @@ export function PageHeader({ link, current, incomplete, truncated }: HeaderProps
   )
 }
 
-export function PageError({ onRetry, testId = 'journal-page-error' }: { onRetry: (() => void) | null; testId?: string }) {
+/** `fn` as a click handler that is ignored while the call it started has not settled (a double click sends one request). */
+export function useSingleFlight(fn: () => Promise<unknown>): () => void {
+  const busy = useRef(false)
+  return useCallback(() => {
+    if (busy.current) return
+    busy.current = true
+    void fn().finally(() => { busy.current = false })
+  }, [fn])
+}
+
+export function PageError({ onRetry, testId = 'journal-page-error', messageKey = 'journal.page.error' }: { onRetry: (() => void) | null; testId?: string; messageKey?: string }) {
   const t = useI18nStore((s) => s.t)
   return (
     <div data-testid={testId} role="alert" className="shrink-0 flex items-center gap-2 px-3 py-2 text-[11.5px] text-status-error-text">
-      <span className="flex-1">{t('journal.page.error')}</span>
+      <span className="flex-1">{t(messageKey)}</span>
       {onRetry && <button type="button" data-testid="journal-page-retry" onClick={onRetry} className={BTN}>{t('journal.page.retry')}</button>}
     </div>
   )

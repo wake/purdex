@@ -406,6 +406,7 @@
   "journal.page.incomplete": "Earlier sessions may be missing",
   "journal.page.truncated": "This page shows only the latest 1000 entries",
   "journal.page.error": "Could not read this page",
+  "journal.page.sessionsError": "Could not read the list of earlier sessions",
   "journal.page.retry": "Retry",
   "journal.page.loading": "Loading…",
   "journal.stream.older": "Load earlier events",
