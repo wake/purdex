@@ -26,6 +26,7 @@ import { bootHostLooks } from './lib/host-look-migration'
 import { startStandaloneAdoption } from './features/workspace/lib/adopt-standalone'
 import { startWatchArea } from './features/workspace/lib/watch-area'
 import { startWatchStatus } from './lib/watch/status-store'
+import { startWatchEvents } from './lib/watch/events-store'
 import { startHostReshowRecovery } from './lib/rebuild/host-reshow'
 import { scheduleLegacyResidueCleanup } from './lib/legacy-residue-cleanup'
 import { startActiveTabMarkRead } from './lib/active-tab-mark-read'
@@ -86,9 +87,10 @@ void bootHostLooks().then(() => startProfileSync())
 // the first — a moment after the tab world last changed, start included (app lifetime). Not Profile Sync's: it
 // runs with no master, too.
 startStandaloneAdoption()
-// Where the watcher is: each connected host's `GET /api/watch/status`, on connect and every 30 s while visible (app lifetime;
-// W5e replaces the timer with the pushes).
+// Where the watcher is: each connected host's `GET /api/watch/status`, on connect and on its `watch.changed` push (app lifetime).
 startWatchStatus()
+// The watcher's events: each watch host's `GET /api/watch/events`, on its first status answer and on its `watch.events` push.
+startWatchEvents()
 // The watcher area's host tabs follow the fleet's host list, while the area's workspace exists (app lifetime).
 startWatchArea()
 // Shown hosts (host ownership H2d-4): showing a host again — by its switch or a synced apply — recovers its sessions

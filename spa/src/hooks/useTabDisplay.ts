@@ -8,6 +8,7 @@ import { useHostStore } from '../stores/useHostStore'
 import { useSessionStore } from '../stores/useSessionStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useFleetStore } from '../lib/fleet/store'
+import { useWatchEventsStore, pendingCount } from '../lib/watch/events-store'
 import { useI18nStore } from '../stores/useI18nStore'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { getPaneIcon, getPaneLabel } from '../lib/pane-labels'
@@ -132,6 +133,8 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const workspaceLookup = { getById: (id: string) => workspaces.find((w) => w.id === id) }
   // A watch-host tab is named by the fleet's alias: subscribe, so the label follows the snapshot (getPaneLabel reads it).
   useFleetStore((s) => (primaryContent.kind === 'watch-host' ? s.snapshot?.hosts[primaryContent.fleetHostId]?.alias : undefined))
+  // The events tab carries the count of events waiting (「事件 n」): subscribe, so the label follows it.
+  useWatchEventsStore((s) => (primaryContent.kind === 'watch-events' ? pendingCount(s.unhandled) : 0))
   const baseLabel = getPaneLabel(primaryContent, sessionLookup, workspaceLookup, t)
   const session = sessionCode ? sessionLookup.getByCode(sessionCode) : undefined
 
