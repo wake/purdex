@@ -36,6 +36,19 @@ describe('parseRelayFreshEvent', () => {
     expect(warn).toHaveBeenCalledTimes(1)
   })
 
+  it('drops an entry whose written_at is outside the range a Date can hold, and keeps the edges', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const r = parseRelayFreshEvent(value({ op: 'changed', sessions: [
+      entry({ session_id: 'big', written_at: 1e20 }), entry({ session_id: 'small', written_at: -1e20 }),
+      entry({ session_id: 'over', written_at: 8.64e15 + 2000 }), entry({ session_id: 'edge', written_at: 8.64e15 }),
+      entry({ session_id: 'edge-', written_at: -8.64e15 }), entry({ session_id: 'normal' }),
+    ] }))
+    if (typeof r === 'string') throw new Error(r)
+    expect(r.sessions.map((s) => s.session_id)).toEqual(['edge', 'edge-', 'normal'])
+    expect(r.sessions.every((s) => !Number.isNaN(new Date(s.written_at).getTime()))).toBe(true)
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
   it.each([
     ['not JSON', '{nope'],
     ['a JSON string of a non-object', '"x"'],

@@ -49,6 +49,9 @@ export interface RosterSession {
   fresh_handoff?: FreshHandoff
 }
 
+/** The largest |ms| a `Date` can hold; a `written_at` beyond it would render as an Invalid Date (same constant in lib/relay/fresh.ts and lib/team/roster.ts). */
+const MAX_DATE_MS = 8.64e15
+
 /** The handoff file a session has written: the relay op, the path, and when (unix ms). */
 export interface FreshHandoff { op_id: string; path: string; written_at: number }
 
@@ -57,7 +60,7 @@ export function parseFreshHandoff(v: unknown): FreshHandoff | null {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return null
   const { op_id, path, written_at } = v as Record<string, unknown>
   if (typeof op_id !== 'string' || typeof path !== 'string' || path === '') return null
-  if (typeof written_at !== 'number' || !Number.isFinite(written_at)) return null
+  if (typeof written_at !== 'number' || !Number.isFinite(written_at) || Math.abs(written_at) > MAX_DATE_MS) return null
   return { op_id, path, written_at }
 }
 
