@@ -94,6 +94,39 @@ func (p *Pool) lockAdmit() (func(), error) {
 	}, nil
 }
 
+// dropLockWait is how long Ticket.Drop waits for the admit lock before it removes its ticket without it: the lock is held for a
+// directory scan, so a longer wait means a directory in trouble, and giving up a place must not wait on that.
+var dropLockWait = 2 * time.Second // a var so a test need not wait it out
+
+// lockAdmitWithin is lockAdmit that gives up after d (the error then says the lock is busy).
+func (p *Pool) lockAdmitWithin(d time.Duration) (func(), error) {
+	if err := os.MkdirAll(p.Dir, 0o755); err != nil {
+		return nil, dirError(err)
+	}
+	mu, err := os.OpenFile(filepath.Join(p.Dir, string(p.Class)+".admit"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return nil, dirError(err)
+	}
+	deadline := time.Now().Add(d)
+	for {
+		st, lerr := flockNB(mu)
+		if st == lockGot {
+			return func() {
+				_ = syscall.Flock(int(mu.Fd()), syscall.LOCK_UN)
+				_ = mu.Close()
+			}, nil
+		}
+		if st == lockBroken || !time.Now().Before(deadline) {
+			_ = mu.Close()
+			if lerr == nil {
+				lerr = errors.New("the admit lock is busy")
+			}
+			return nil, dirError(lerr)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // readRank reads a ticket's rank file; a missing one is normal, an unusable one is normal with Error set. now decides whether a
 // hold has run out.
 func (p *Pool) readRank(ticket string, now time.Time) RankInfo {
@@ -115,6 +148,9 @@ func (p *Pool) readRank(ticket string, now time.Time) RankInfo {
 		return RankInfo{Rank: RankNormal, Error: "rank file has no time it was set at"} // it would sort before every real front ticket
 	}
 	info := RankInfo{Rank: rf.Rank, At: time.Unix(0, rf.At), By: rf.By, Reason: rf.Reason}
+	if rf.Until < 0 {
+		return RankInfo{Rank: RankNormal, Error: "rank file has a negative until"} // read as "forever" it would strand the waiter
+	}
 	if rf.Until > 0 {
 		info.Until = time.Unix(0, rf.Until)
 	}
@@ -230,6 +266,17 @@ func (s Snapshot) Ahead(name string) (ahead, aheadFront int, rank RankInfo, ok b
 		return ahead, aheadFront, e.Rank, true
 	}
 	return 0, 0, RankInfo{}, false
+}
+
+// OlderThan is how many served tickets (not held ones) have a name before name: the place of a ticket that is not in the queue.
+func (s Snapshot) OlderThan(name string) int {
+	n := 0
+	for _, e := range s.Queue {
+		if e.Rank.Rank != RankHold && e.Name < name {
+			n++
+		}
+	}
+	return n
 }
 
 // AheadOfNew is how many tickets a new normal ticket would wait behind: the live front and normal ones (back and held are

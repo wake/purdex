@@ -188,7 +188,7 @@ func (t *Ticket) Drop() {
 	// answers "no longer waiting" instead of leaving a rank behind. A lock that cannot be taken still removes the ticket: giving up
 	// must not wait on a directory that is in trouble.
 	if t.p != nil {
-		if unlock, err := t.p.lockAdmit(); err == nil {
+		if unlock, err := t.p.lockAdmitWithin(dropLockWait); err == nil {
 			defer unlock()
 		}
 		_ = os.Remove(t.p.rankPath(t.Name))
@@ -363,6 +363,7 @@ func (p *Pool) waiting(clean bool) int {
 		if st, _ := flockNB(f); st == lockGot {
 			if clean {
 				_ = os.Remove(path)
+				_ = os.Remove(path + ".rank") // a rank never outlives its ticket
 			}
 			_ = f.Close()
 			continue
@@ -405,7 +406,10 @@ func (p *Pool) TryTakeRanked(t *Ticket) (Take, error) {
 	}
 	ahead, aheadFront, rank, found := snap.Ahead(t.Name)
 	if !found {
-		rank = RankInfo{Rank: RankNormal} // not listed (its file was removed): served as the first, as before
+		// Not listed (its file was removed from under it): it stands where its name puts it, behind the live tickets older than it,
+		// as before ranks - never at the head of the line.
+		rank = RankInfo{Rank: RankNormal}
+		ahead, aheadFront = snap.OlderThan(t.Name), 0
 	}
 	out := Take{Ahead: ahead, AheadFront: aheadFront, Rank: rank}
 	if rank.Rank == RankHold {

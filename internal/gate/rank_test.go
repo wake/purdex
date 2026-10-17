@@ -253,6 +253,70 @@ func TestRank_NeverOutlivesItsTicket(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// A ticket whose file was taken from under it stands where its name puts it, behind the older live tickets: never at the head of the line.
+// Mutation gate: ahead 0 for a ticket that is not listed → the newer ticket takes the slot (red).
+func TestRank_ATicketThatIsNotListedStaysBehindTheOlderOnes(t *testing.T) {
+	rp := newRankPool(t, 1)
+	ts := rp.enqueue(t, 2)
+	require.NoError(t, os.Remove(filepath.Join(rp.queueDir(), ts[1].Name))) // the newer ticket's file is gone
+	tk, err := rp.TryTakeRanked(ts[1])
+	require.NoError(t, err)
+	assert.Nil(t, tk.Slot, "it does not pass the older waiter")
+	assert.Equal(t, 1, tk.Ahead)
+}
+
+// A negative until is a nonsense value: the ticket reads as normal with an error, not as a hold that never ends.
+func TestRank_ANegativeUntilReadsAsNormal(t *testing.T) {
+	rp := newRankPool(t, 1)
+	ts := rp.enqueue(t, 1)
+	require.NoError(t, os.WriteFile(rp.rankPath(ts[0].Name), []byte(`{"rank":"hold","at":1,"until":-1}`), 0o644))
+	snap, err := rp.Snapshot()
+	require.NoError(t, err)
+	assert.Equal(t, RankNormal, snap.Queue[0].Rank.Rank)
+	assert.NotEmpty(t, snap.Queue[0].Rank.Error)
+	tk, err := rp.TryTakeRanked(ts[0])
+	require.NoError(t, err)
+	require.NotNil(t, tk.Slot)
+	tk.Slot.Release(nil)
+}
+
+// Giving up a place does not wait forever for the admit lock: after the bound the ticket and its rank are removed anyway.
+// Mutation gate: an unbounded wait → the Drop never returns (red by timeout).
+func TestRank_DropIsBoundedByAnAdmitLockThatIsHeld(t *testing.T) {
+	old := dropLockWait
+	dropLockWait = 50 * time.Millisecond
+	defer func() { dropLockWait = old }()
+	rp := newRankPool(t, 1)
+	ts := rp.enqueue(t, 1)
+	rp.set(t, ts[0], RankFront, time.Time{})
+	unlock, err := rp.lockAdmit() // somebody holds the lock and does not let go
+	require.NoError(t, err)
+	defer unlock()
+	done := make(chan struct{})
+	go func() { ts[0].Drop(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Drop is waiting for the admit lock without end")
+	}
+	_, err = os.Stat(filepath.Join(rp.queueDir(), ts[0].Name))
+	assert.True(t, os.IsNotExist(err))
+	_, err = os.Stat(rp.rankPath(ts[0].Name))
+	assert.True(t, os.IsNotExist(err), "the rank goes with the ticket")
+}
+
+// The status's count removes a dead gate's ticket together with its rank.
+func TestRank_WaitingCleansTheRankOfADeadTicket(t *testing.T) {
+	rp := newRankPool(t, 1)
+	name := "00000000000000000001-1-000001"
+	require.NoError(t, os.MkdirAll(rp.queueDir(), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(rp.queueDir(), name), nil, 0o644)) // nobody holds its lock: a dead gate's
+	require.NoError(t, os.WriteFile(rp.rankPath(name), []byte(`{"rank":"front","at":1}`), 0o644))
+	assert.Equal(t, 0, rp.Waiting())
+	_, err := os.Stat(rp.rankPath(name))
+	assert.True(t, os.IsNotExist(err))
+}
+
 // Would-wait: a new normal command waits behind the front and normal tickets only; back and hold never make it wait.
 // Mutation gate: back or hold counted → red; front not counted → red.
 func TestRank_AheadOfANewTicketCountsFrontAndNormalOnly(t *testing.T) {
