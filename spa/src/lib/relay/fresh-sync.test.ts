@@ -187,20 +187,23 @@ describe('startRelayFresh: the connect-time GET', () => {
     expect(useRelayFreshStore.getState().byHost).toEqual({})
   })
 
-  it('an answer for a host that was re-pointed while it was out is dropped', async () => {
+  it('an answer for a host that was re-pointed while it was out is dropped; the new daemon\'s flag is asked, not the old one\'s trusted', async () => {
     setCaps(A, ['relay.half.v1'])
     const d = deferred<RelayFresh[]>()
     vi.mocked(fetchRelayFresh).mockReturnValueOnce(d.promise).mockResolvedValue([fresh('new-daemon')])
     stop = startRelayFresh()
     setStatus(A, 'connected')
     await flush()
+    ensure.mockClear()
     useHostStore.setState((s) => ({ hosts: { ...s.hosts, [A]: cfg(A, { ip: '9.9.9.9' }) } }) as never)
     await flush()
     d.resolve([fresh('old-daemon')])
     await flush()
-    // the new daemon is asked on its own, and the old daemon's late answer lands nowhere
-    expect(fetchRelayFresh).toHaveBeenCalledTimes(2)
-    expect(ids(A)).toEqual(['new-daemon'])
+    // the cached flag may be the old daemon's: nothing is read on it, the new daemon's /api/info is asked (re-point.test.ts
+    // follows the answer), and the old daemon's late answer lands nowhere
+    expect(ensure).toHaveBeenCalledWith(A)
+    expect(fetchRelayFresh).toHaveBeenCalledTimes(1)
+    expect(useRelayFreshStore.getState().byHost).toEqual({})
   })
 })
 
