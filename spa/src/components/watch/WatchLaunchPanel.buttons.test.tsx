@@ -241,7 +241,7 @@ describe('叫醒守門員', () => {
 
 describe('busy times out after 120 s', () => {
   // Only the timer pair is faked, and `waitFor` (which polls on those timers) is not used: the clock is moved by hand.
-  const fake = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) })
   const turn = (ms = 0) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
   const untilDisabled = async (id: string) => {
     for (let i = 0; i < 50 && !(screen.getByTestId(id) as HTMLButtonElement).disabled; i += 1) await turn()
@@ -250,7 +250,6 @@ describe('busy times out after 120 s', () => {
   const noTimeoutLine = () => expect(screen.queryByText(t('watch.launch.timeout'))).toBeNull() // (a busy start has its own "Starting on" line)
   const pressed = async (state: 'none' | 'resting') => {
     answer('h1', status('d1', state))
-    fake()
     reply(202, { host: 'mlab', host_id: 'd1' })
     render(<WatchLaunchPanel title="x" />)
     const id = state === 'none' ? 'watch-launch-start' : 'watch-launch-wake'
@@ -298,10 +297,13 @@ describe('busy times out after 120 s', () => {
   })
 
   it('a host re-pointed while busy drops the timer: the deadline shows nothing', async () => {
+    const repoint = (ip: string) => act(() => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h1: { ...useHostStore.getState().hosts.h1, ip } } } as never))
+    repoint('9.9.9.9'); const bare = vi.getTimerCount(); repoint('1') // a host change may leave a timer of its own: that is the count without ours
     const id = await pressed('none')
+    expect(vi.getTimerCount()).toBe(bare + 1)
     await turn(10_000)
-    act(() => useHostStore.setState({ hosts: { ...useHostStore.getState().hosts, h1: { ...useHostStore.getState().hosts.h1, ip: '9.9.9.9' } } } as never))
-    expect(vi.getTimerCount()).toBe(0)
+    repoint('9.9.9.9')
+    expect(vi.getTimerCount()).toBe(bare)
     await turn(120_000)
     noTimeoutLine()
     expect(screen.getByTestId(id)).toBeEnabled()

@@ -347,25 +347,36 @@ describe('busy times out after 120 s without a registration', () => {
     expect(slot()).toMatchObject({ phase: 'timeout', seq: 2 })
   })
 
+  // A host change may leave a timer of its own behind (not ours), so "ours is gone" is the count a bare host change leaves.
+  const bare = (change: () => void): number => { change(); const n = vi.getTimerCount(); at('1.1.1.1'); return n }
+
   it('a re-point of the host drops the busy state and its timer: the deadline changes nothing', async () => {
     stops.push(startWatchLaunch())
+    const base = bare(() => at('2.2.2.2'))
     await goBusy()
+    expect(vi.getTimerCount()).toBe(base + 1)
     at('2.2.2.2')
     expect(slot()).toBeNull()
-    expect(vi.getTimerCount()).toBe(0)
+    expect(vi.getTimerCount()).toBe(base)
     vi.advanceTimersByTime(120_000)
     expect(slot()).toBeNull()
   })
 
   it('a host that is removed or disconnected does the same', async () => {
     stops.push(startWatchLaunch())
+    const disconnect = () => useHostStore.setState({ runtime: { h1: { status: 'disconnected' } } } as never)
+    const remove = () => useHostStore.setState({ hosts: {}, hostOrder: [] } as never)
+    const baseDisconnect = bare(disconnect)
+    const baseRemove = bare(remove)
     await goBusy()
-    useHostStore.setState({ runtime: { h1: { status: 'disconnected' } } } as never)
-    expect(vi.getTimerCount()).toBe(0)
+    disconnect()
+    expect(slot()).toBeNull()
+    expect(vi.getTimerCount()).toBe(baseDisconnect)
     at('1.1.1.1')
     await goBusy()
-    useHostStore.setState({ hosts: {}, hostOrder: [] } as never)
-    expect(vi.getTimerCount()).toBe(0)
+    remove()
+    expect(slot()).toBeNull()
+    expect(vi.getTimerCount()).toBe(baseRemove)
     vi.advanceTimersByTime(120_000)
     expect(slot()).toBeNull()
   })
