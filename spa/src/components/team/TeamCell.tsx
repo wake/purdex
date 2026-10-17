@@ -16,6 +16,7 @@ import type { TeamPanelTeam, TeamSeatView } from './team-display'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useUISettingsStore } from '../../stores/useUISettingsStore'
 import { keepFocus } from '../../lib/keep-focus'
+import { useFreshHandoffOfSeat } from '../../hooks/useFreshHandoff'
 
 export function NameCapsule({ team, className = '', style }: { team: TeamPanelTeam; className?: string; style?: React.CSSProperties }) {
   return (
@@ -35,6 +36,8 @@ export function TeamCell({ teamKey, seat, isActive, onOpen }: { teamKey: string;
   const r = useSeatReading(teamKey, seat.sessionId)
   const ringBox = useUISettingsStore((s) => s.hostBadgeSidebarBox)
   const hostMain = useSeatHostMain(seat.hostId, seat.sessionCode)
+  // The cell has no room for a mark (the strip's capacity is counted in cells): the handoff file rides in the tooltip.
+  const freshHandoff = useFreshHandoffOfSeat(teamKey, seat.sessionId)
   const model = r.unavailable ? '—' : r.model ? MODEL_LABEL[r.model] : r.modelRaw ?? '?'
   const transition = transitionOf(seat)
   const away = notInApp(seat)
@@ -44,6 +47,7 @@ export function TeamCell({ teamKey, seat, isActive, onOpen }: { teamKey: string;
     transition ? t(`team.seat_state.${transition}`) : null,
     r.unavailable ? t('team.panel.context_unavailable') : null,
     away ? t('team.seat_not_in_app') : null,
+    freshHandoff ? t('relay.half.label') : null,
   ].filter((x): x is string => x !== null)
   return (
     <button

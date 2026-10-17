@@ -48,6 +48,7 @@ export function InlineTabList({
     <SortableContext items={validIds} strategy={verticalListSortingStrategy}>
       <div className="flex flex-col gap-0.5 py-0.5">
         {validIds.map((id) => {
+          const beads = team?.sidebarBeads(id)
           const row = (
             <InlineTab
               key={id}
@@ -59,9 +60,9 @@ export function InlineTabList({
               onMiddleClick={onMiddleClick}
               onContextMenu={onContextMenu}
               onRename={onRename}
+              leadOfTeam={beads?.teamKey}
             />
           )
-          const beads = team?.sidebarBeads(id)
           if (!team || !beads) return row
           return (
             <TeamSidebarBlock
