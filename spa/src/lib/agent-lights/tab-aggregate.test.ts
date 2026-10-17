@@ -62,8 +62,8 @@ describe('aggregateTabAgents', () => {
   })
   it('a queued pane ranks above workflow; no queued key means no hourglass', () => {
     const lastEvents = { 'h1:a': ev('idle', 'workflow'), 'h1:b': ev('idle') }
-    expect(aggregateTabAgents(panes('h1:a', 'h1:b'), data({ lastEvents }), new Set(), new Set(['h1:b'])).background).toBe('queued')
-    expect(aggregateTabAgents(panes('h1:a', 'h1:b'), data({ lastEvents }), new Set(), new Set()).background).toBe('workflow')
+    expect(aggregateTabAgents(panes('h1:a', 'h1:b'), data({ lastEvents }), new Set(), new Set(), new Set(['h1:b'])).background).toBe('queued')
+    expect(aggregateTabAgents(panes('h1:a', 'h1:b'), data({ lastEvents }), new Set(), new Set(), new Set()).background).toBe('workflow')
   })
   it('background is the highest across panes (workflow > monitor > schedule)', () => {
     const lastEvents = { 'h1:a': ev('idle', 'schedule'), 'h1:b': ev('idle', 'monitor'), 'h1:c': ev('idle') }

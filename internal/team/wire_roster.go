@@ -22,6 +22,11 @@ type RosterSession struct {
 	Name        string `json:"name,omitempty"`         // the registry name
 	TmuxSession string `json:"tmux_session,omitempty"` // the tmux session NAME; "" when not in tmux
 	Live        bool   `json:"live"`
+	// TmuxInstance is the tmux server generation ("<pid>:<start_time>") the session's seat belongs to, the same value /api/sessions and
+	// the agent provenance carry as tmux_instance: a live session's is the running server's, a stored one's is what team.db recorded
+	// when it joined. An App compares it with the generation of the tmux session of that NAME, so a same-named session of a
+	// restarted tmux is not taken for the member. Absent when the session is not in tmux or its generation is not known.
+	TmuxInstance string `json:"tmux_instance,omitempty"`
 	// Model and Effort are what a member was spawned with (the row's values);
 	// empty for a lead, which was not spawned by the team. Context is the
 	// session's last statusline reading, live else persisted, the same value

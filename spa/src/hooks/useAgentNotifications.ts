@@ -15,6 +15,7 @@ import { readWorkerSummary, workerTitleOf } from '../lib/nex/worker-summary'
 import { selectSessionTitleSupported, useNexHostStore } from '../stores/useNexHostStore'
 import { clearSeenTs, requestBroadcastTs, requestIdOf, shouldDispatch, shouldDispatchRequest } from '../lib/notification-dedup'
 import { shouldNotify } from '../lib/notification-gate'
+import { currentMemberKeys } from '../lib/team/member-set'
 
 export function useAgentNotifications(): void {
   useEffect(() => {
@@ -69,6 +70,8 @@ export function useAgentNotifications(): void {
           notificationSilent: event.detail?.notification_silent === true,
           fromProxy: isProxyStop(event),
           errorString,
+          // Read from the stores NOW: this subscription is created once, so a set captured at mount would freeze membership.
+          isMember: currentMemberKeys().has(compositeKeyStr),
         })) continue
 
         const sessionName = notificationName(hostId, sessionCode)
