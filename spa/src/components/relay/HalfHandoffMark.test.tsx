@@ -1,6 +1,6 @@
 // spa/src/components/relay/HalfHandoffMark.test.tsx — the quiet 「已寫好接力檔」 mark: two forms, a tooltip with the path and the time.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import { HalfHandoffMark } from './HalfHandoffMark'
 import { useI18nStore } from '../../stores/useI18nStore'
 
@@ -17,6 +17,24 @@ describe('HalfHandoffMark', () => {
   it('renders nothing without a handoff', () => {
     const { container } = render(<HalfHandoffMark handoff={null} variant="chip" />)
     expect(container).toBeEmptyDOMElement()
+  })
+
+  it('an empty mark does not subscribe to the clock: no timer runs, nothing re-renders each minute', () => {
+    const { container } = render(<HalfHandoffMark handoff={null} variant="icon" />)
+    expect(vi.getTimerCount()).toBe(0)
+    act(() => { vi.advanceTimersByTime(5 * 60_000) })
+    expect(container).toBeEmptyDOMElement()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('a mark with a handoff follows the clock: the tooltip gains its date once the day turns', () => {
+    vi.setSystemTime(new Date(2026, 9, 17, 23, 59, 30))
+    render(<HalfHandoffMark handoff={{ path: '/w/h.md', writtenAt: at(23, 50) }} variant="chip" />)
+    const mark = screen.getByTestId('half-handoff-mark')
+    expect(mark).toHaveAttribute('title', '接力檔：/w/h.md（23:50 寫好）')
+    expect(vi.getTimerCount()).toBe(1)
+    act(() => { vi.advanceTimersByTime(60_000) })
+    expect(mark).toHaveAttribute('title', '接力檔：/w/h.md（2026-10-17 23:50 寫好）')
   })
 
   it('chip: the words, with the path and the time of day in the tooltip', () => {

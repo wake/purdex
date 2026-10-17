@@ -16,10 +16,15 @@ interface Props {
   size?: number
 }
 
+/** Nothing without a handoff, and then no clock subscription: only a drawn mark follows the minute (its tooltip names the day). */
 export function HalfHandoffMark({ handoff, variant, size = 12 }: Props) {
+  if (!handoff) return null
+  return <Mark handoff={handoff} variant={variant} size={size} />
+}
+
+function Mark({ handoff, variant, size }: { handoff: FreshHandoffView; variant: 'chip' | 'icon'; size: number }) {
   const t = useI18nStore((s) => s.t)
   const now = useCoarseNow()
-  if (!handoff) return null
   const label = t('relay.half.label')
   const time = formatHandoffTime(handoff.writtenAt, now)
   const tip = time ? t('relay.half.tooltip', { path: handoff.path, time }) : t('relay.half.tooltip_path', { path: handoff.path })
