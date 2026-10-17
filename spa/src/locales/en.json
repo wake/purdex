@@ -2880,6 +2880,7 @@
   "watch.queue.pid": "pid {{pid}}",
   "watch.queue.tab.history_unsupported": "This host's daemon is too old to support history.",
   "watch.history.title": "{{kind}} from the last 3 hours ({{n}})",
+  "watch.history.truncated": " (may be incomplete: only the newest {{n}} were read)",
   "watch.history.kind.heavy": "Heavy commands",
   "watch.history.kind.light": "Light commands",
   "watch.history.class_label": "Command class",

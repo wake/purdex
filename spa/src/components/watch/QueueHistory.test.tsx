@@ -250,6 +250,17 @@ describe('QueueHistory — errors', () => {
     expect(screen.queryByTestId('history-skipped')).toBeNull()
   })
 
+  it('a reply of exactly the 1000-record limit says it may be incomplete; 999 does not', async () => {
+    const many = (n: number) => Array.from({ length: n }, (_, i) => rec({ time: new Date(NOW - 60_000 - i * 1000).toISOString() }))
+    fetchGateDecisions.mockResolvedValue(ok(many(1000)))
+    renderH(); await flush()
+    expect(screen.getByTestId('history-truncated')).toHaveTextContent(t('watch.history.truncated', { n: 1000 }).trim())
+    cleanup()
+    fetchGateDecisions.mockResolvedValue(ok(many(999)))
+    renderH(); await flush()
+    expect(screen.queryByTestId('history-truncated')).toBeNull()
+  })
+
   it('no records: one sentence', async () => {
     renderH(); await flush()
     expect(screen.getByTestId('history-empty')).toHaveTextContent(t('watch.history.empty'))

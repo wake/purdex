@@ -2,6 +2,7 @@
 import { hostFetch } from '../host-api'
 import { parseWatchStatus, type WatchStatus } from './status-types'
 import { isCount, parseWatchEvents, type WatchEvent } from './events-types'
+import { HISTORY_LIMIT } from './history-view'
 import { parseGateDecisions, type GateDecision } from './decisions-types'
 
 export type GateDecisionsResult =
@@ -13,7 +14,7 @@ export type GateDecisionsResult =
 /** `GET /api/gate/decisions` (newest first; 1000 is the daemon's largest page) for one class since `sinceIso`. */
 export async function fetchGateDecisions(hostId: string, cls: 'heavy' | 'light', sinceIso: string): Promise<GateDecisionsResult> {
   try {
-    const res = await hostFetch(hostId, `/api/gate/decisions?class=${cls}&since=${encodeURIComponent(sinceIso)}&limit=1000`)
+    const res = await hostFetch(hostId, `/api/gate/decisions?class=${cls}&since=${encodeURIComponent(sinceIso)}&limit=${HISTORY_LIMIT}`)
     if (res.status === 403) return { kind: 'forbidden' }
     if (!res.ok) return { kind: 'server' }
     const body = parseGateDecisions(await res.json())

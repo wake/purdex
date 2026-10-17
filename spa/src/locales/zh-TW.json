@@ -2880,6 +2880,7 @@
   "watch.queue.pid": "pid {{pid}}",
   "watch.queue.tab.history_unsupported": "這台的 daemon 版本太舊，還不支援歷史。",
   "watch.history.title": "最近 3 小時的{{kind}}（{{n}} 個）",
+  "watch.history.truncated": "（可能不完整：只讀到最新 {{n}} 筆）",
   "watch.history.kind.heavy": "重指令",
   "watch.history.kind.light": "輕指令",
   "watch.history.class_label": "指令類別",

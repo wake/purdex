@@ -5,7 +5,7 @@ import { useRef, useState } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { SegmentControl } from '../settings/SegmentControl'
 import { useGateHistory } from '../../lib/watch/history-read'
-import { barParts, HEAVY_FAULTS, LONG_WAIT_S, NO_WAIT_S, scaleMinutes, toRows, type HistoryRow } from '../../lib/watch/history-view'
+import { barParts, HEAVY_FAULTS, HISTORY_LIMIT, LONG_WAIT_S, NO_WAIT_S, scaleMinutes, toRows, type HistoryRow } from '../../lib/watch/history-view'
 import { readHistoryClass, writeHistoryClass, type HistoryClass } from '../../lib/watch/view-memory'
 
 const TH = 'font-normal py-1 pr-3 border-b border-border-subtle text-left whitespace-nowrap align-bottom'
@@ -101,7 +101,10 @@ export function QueueHistory({ fleetHostId, hostConfigId }: { fleetHostId: strin
   return (
     <div data-testid="queue-history" ref={wrap} className="relative">
       <div className="flex items-center gap-3 mb-2 text-xs">
-        <span data-testid="history-title" className="text-text-secondary">{t('watch.history.title', { kind, n: rows.length })}</span>
+        <span data-testid="history-title" className="text-text-secondary">{t('watch.history.title', { kind, n: rows.length })}
+          {/* The daemon sends no truncated flag: a reply of exactly the limit may have been cut. */}
+          {state.kind === 'ok' && state.records.length >= HISTORY_LIMIT && <span data-testid="history-truncated" className="text-status-warning-text">{t('watch.history.truncated', { n: HISTORY_LIMIT })}</span>}
+        </span>
         <span className="flex-1" />
         <span data-testid="history-class" role="group" aria-label={t('watch.history.class_label')}>
           <SegmentControl options={[{ value: 'heavy', label: t('watch.history.kind.heavy') }, { value: 'light', label: t('watch.history.kind.light') }]} value={cls} onChange={setCls} />

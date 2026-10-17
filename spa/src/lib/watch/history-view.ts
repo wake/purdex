@@ -4,6 +4,8 @@ import type { GateDecision } from './decisions-types'
 
 /** The window the 歷史 body reads: the last 3 hours. */
 export const HISTORY_WINDOW_MS = 3 * 3600_000
+/** The most records one read asks for (the daemon's cap); a reply of exactly this many may have been cut. */
+export const HISTORY_LIMIT = 1000
 /** A wait shorter than this reads 「未等」 and has no hatched part. */
 export const NO_WAIT_S = 3
 /** A wait past this turns warning. */
