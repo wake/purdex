@@ -17,6 +17,9 @@ import (
 // Init; zero (tests, no Init) means every read takes a fresh listing.
 const defaultPaneSnapTTL = 2 * time.Second
 
+// maxSnapRelists bounds how often one read re-lists because the layout kept changing under it.
+const maxSnapRelists = 3
+
 // paneSnapCache is the shared listing. mu is a leaf lock: it is never held while
 // tmux is forked, and nothing under it calls back into the module.
 type paneSnapCache struct {
@@ -70,7 +73,7 @@ func (m *Module) cachedPaneSnapshot(force bool) (*paneSnapshot, bool, error) {
 	}
 	c := &m.snapCache
 	callStart := time.Now()
-	for {
+	for attempt := 0; ; attempt++ {
 		c.mu.Lock()
 		if !force && c.panes != nil && time.Since(c.taken) <= ttl && c.gen == m.tmuxGen.Load() {
 			panes := c.panes
@@ -110,6 +113,10 @@ func (m *Module) cachedPaneSnapshot(force bool) (*paneSnapshot, bool, error) {
 		c.flight = nil
 		c.mu.Unlock()
 		close(f.done)
+		// The layout changed while we were forking: the answer may predate the pane the caller needs. List again (a few times at most).
+		if f.err == nil && gen != m.tmuxGen.Load() && attempt < maxSnapRelists {
+			continue
+		}
 		if f.err != nil {
 			return nil, false, f.err
 		}

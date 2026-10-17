@@ -283,3 +283,28 @@ func TestPaneSnapCache_WaiterRejectsFlightOlderThanGenBump(t *testing.T) {
 		t.Fatalf("waiter accepted a listing from before the gen bump (no %%late pane)")
 	}
 }
+
+// The owner of a listing re-lists if the layout changed while it was forking (plain and forced).
+func TestPaneSnapCache_OwnerRelistsAfterGenBump(t *testing.T) {
+	for _, force := range []bool{false, true} {
+		t.Run(fmt.Sprintf("force=%v", force), func(t *testing.T) {
+			f := cachedFixture(t, time.Hour)
+			l := &lateTmux{batchCountingTmux: f.tx, entered: make(chan struct{}), release: make(chan struct{})}
+			f.m.tmux = l
+			got := make(chan *paneSnapshot, 1)
+			go func() { s, _, _ := f.m.cachedPaneSnapshot(force); got <- s }()
+			<-l.entered
+			f.tx.SetPaneSessionName("%late", "slate")
+			f.tx.SetActivePanePID("%late", "2998")
+			f.m.bumpTmuxGen()
+			close(l.release)
+			s := <-got
+			if s == nil || s.panes == nil {
+				t.Fatalf("owner got %+v", s)
+			}
+			if _, ok := s.panes["%late"]; !ok {
+				t.Fatalf("owner returned a listing from before the gen bump")
+			}
+		})
+	}
+}
