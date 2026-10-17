@@ -11,7 +11,7 @@ import { useSessionStore } from '../../stores/useSessionStore'
 import { useTabStore } from '../../stores/useTabStore'
 import { useHostStore } from '../../stores/useHostStore'
 import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
-import { currentMemberKeys } from '../team/member-keys'
+import { currentMemberKeys } from '../team/member-set'
 import { teamHostMap } from '../team/team-state'
 import { badgeReport, knownSessionIdsOf, type BadgeReport } from './badge-report'
 

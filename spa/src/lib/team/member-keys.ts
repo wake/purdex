@@ -6,14 +6,10 @@
 // has no `tmux_session`, its host is not configured, or that host's session list lacks the name (not arrived, or gone).
 // The lead is not in `members`, so it is never in the set. A roster counts only while its host's connection is the one
 // it arrived on (`liveRosterHosts`, R4): across a reconnect a stale seat must not claim a new session that reuses the name.
-import { useHostStore } from '../../stores/useHostStore'
-import { useSessionStore } from '../../stores/useSessionStore'
-import { useTeamRosterStore } from '../../stores/useTeamRosterStore'
 import { transitionOf } from '../../components/team/seat-flags'
 import { compositeKey } from '../composite-key'
 import type { Session } from '../host-api'
 import type { TeamRoster } from './roster'
-import { teamHostMap } from './team-state'
 import { seatHostOf } from './team-views'
 
 export interface MemberKeysInput {
@@ -27,6 +23,17 @@ export interface MemberKeysInput {
 
 export function activeMemberKeys(input: MemberKeysInput): Set<string> {
   const keys = new Set<string>()
+  // One name → code index per host (the first row of a name wins, as a linear find would), built on first use.
+  const index = new Map<string, Map<string, string>>()
+  const codeByName = (hostId: string): Map<string, string> => {
+    let m = index.get(hostId)
+    if (!m) {
+      m = new Map()
+      for (const s of input.sessionsByHost[hostId] ?? []) if (!m.has(s.name)) m.set(s.name, s.code)
+      index.set(hostId, m)
+    }
+    return m
+  }
   for (const [leadHostId, teams] of Object.entries(input.rosterByHost)) {
     if (!input.liveRosterHosts.has(leadHostId)) continue
     for (const team of teams) {
@@ -34,20 +41,10 @@ export function activeMemberKeys(input: MemberKeysInput): Set<string> {
         if (transitionOf(m) !== null || !m.tmux_session) continue // not joining / releasing / killing; an unknown state is active (roster.ts)
         const { hostId } = seatHostOf(team, m, leadHostId, input.hostIdByDaemonId)
         if (hostId === null) continue
-        const hit = input.sessionsByHost[hostId]?.find((s) => s.name === m.tmux_session)
-        if (hit) keys.add(compositeKey(hostId, hit.code))
+        const code = codeByName(hostId).get(m.tmux_session)
+        if (code !== undefined) keys.add(compositeKey(hostId, code))
       }
     }
   }
   return keys
-}
-
-/** The member set over the stores' CURRENT state, for code that runs at an event rather than in a render. */
-export function currentMemberKeys(): Set<string> {
-  return activeMemberKeys({
-    rosterByHost: useTeamRosterStore.getState().byHost,
-    liveRosterHosts: new Set(Object.keys(useTeamRosterStore.getState().liveHosts)),
-    sessionsByHost: useSessionStore.getState().sessions,
-    hostIdByDaemonId: teamHostMap(useHostStore.getState()),
-  })
 }
