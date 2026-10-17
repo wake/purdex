@@ -120,6 +120,7 @@ type Module struct {
 	idleThreshold int
 	idleMu        sync.Mutex
 	memberIdle    map[string]*idlePeriod
+	interceptTold map[string]interceptToldRec // session -> the last intercepted idle compaction told to its lead: membership and time (under idleMu)
 	idleGenSeq    uint64
 	newID         func() string
 	relayDir      string

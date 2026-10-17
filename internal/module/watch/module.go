@@ -61,6 +61,14 @@ type Module struct {
 	remote remoteState
 	// dlv is the delivery of events to the watcher (delivery.go).
 	dlv deliveryState
+	// acks is this host's ack log (events.go).
+	acks *watch.AckStore
+	// evMu orders the counts and the sends of watch.events.
+	evMu sync.Mutex
+	// a count that failed is sent again after evRetryAfter (a test shortens it); evRetrying says one retry is waiting.
+	evRetryAfter time.Duration
+	evRetryMu    sync.Mutex
+	evRetrying   bool
 	// manualDelivery keeps Start from running the delivery loop: a test calls deliverPass itself.
 	manualDelivery bool
 	emit           func(core.HostEvent)
@@ -75,6 +83,7 @@ type Module struct {
 	// (the SessionStart subscription may call back after unsubscribe returns).
 	runMu   sync.Mutex
 	running bool
+	ready   bool // Init succeeded and Stop has not run: watch.v1 is announced
 	runCtx  context.Context
 }
 
@@ -124,6 +133,9 @@ func (m *Module) Init(c *core.Core) error {
 	}
 	m.initDelivery(dir)
 	c.Registry.Register(watch.EventSinkKey, watch.EventSink(m))
+	m.runMu.Lock()
+	m.ready = true
+	m.runMu.Unlock()
 	c.Registry.Register(LocatorKey, m.loc)
 	return nil
 }
@@ -184,9 +196,18 @@ func (m *Module) Start(context.Context) error {
 	return nil
 }
 
+// Status is what /api/info reads to announce watch.v1: ready from a successful Init until Stop (the routes are there whether or not
+// detection is switched on).
+func (m *Module) Status() map[string]any {
+	m.runMu.Lock()
+	defer m.runMu.Unlock()
+	return map[string]any{"ready": m.ready}
+}
+
 func (m *Module) Stop(context.Context) error {
 	m.runMu.Lock()
 	m.running = false
+	m.ready = false
 	m.runMu.Unlock()
 	if m.unsubscribe != nil {
 		m.unsubscribe()
@@ -205,6 +226,9 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/peers/watch/event", m.handlePeerEvent)
 	mux.HandleFunc("GET /api/watch/holder", m.handleLocalHolder)
 	mux.HandleFunc("GET /api/watch/status", m.handleStatus)
+	mux.HandleFunc("GET /api/watch/unhandled", m.handleUnhandled)
+	mux.HandleFunc("GET /api/watch/events", m.handleEvents)
+	mux.HandleFunc("POST /api/watch/ack", m.handleAck)
 }
 
 // HolderView is the answer about this host's holder: the wire form of both routes.
