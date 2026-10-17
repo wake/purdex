@@ -173,6 +173,7 @@ func TestTake_AConflictingWaiterIsBlockedAndAFreeOneIsNot(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got.Slot)
 	defer got.Slot.Release(nil)
+	hold.Drop() // as the gate does once it has the slot
 
 	tsc := ticketFor(t, rp, "tsc -b --force")
 	vet := ticketFor(t, rp, "go vet ./...")
@@ -214,6 +215,7 @@ func TestTakeLate_IgnoresRulesAndThenBlocksAConflictingWaiter(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got.Slot)
 	defer got.Slot.Release(nil)
+	first.Drop() // as the gate does once it has the slot
 	late, err := rp.TakeLate(WaiterInfo{PID: 2, Argv: strings.Fields("tsc -b")})
 	require.NoError(t, err)
 	require.NotNil(t, late, "a running command is not stopped by a rule, though its twin is held")
