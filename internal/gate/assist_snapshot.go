@@ -3,6 +3,7 @@ package gate
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -26,9 +27,12 @@ func SnapshotTree(ctx context.Context, git, dir string) (SnapshotInfo, error) {
 	if git == "" {
 		git = "git"
 	}
-	run := func(env []string, args ...string) (string, error) {
+	runIn := func(env []string, stdin string, args ...string) (string, error) {
 		cmd := exec.CommandContext(ctx, git, append([]string{"-C", dir}, args...)...)
-		cmd.Env = append(os.Environ(), env...)
+		cmd.Env = append(gitEnvWithoutRepository(os.Environ()), env...)
+		if stdin != "" {
+			cmd.Stdin = strings.NewReader(stdin)
+		}
 		var out, errb bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &out, &errb
 		if err := cmd.Run(); err != nil {
@@ -36,6 +40,7 @@ func SnapshotTree(ctx context.Context, git, dir string) (SnapshotInfo, error) {
 		}
 		return strings.TrimSpace(out.String()), nil
 	}
+	run := func(env []string, args ...string) (string, error) { return runIn(env, "", args...) }
 	root, err := run(nil, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return SnapshotInfo{}, err
@@ -45,11 +50,15 @@ func SnapshotTree(ctx context.Context, git, dir string) (SnapshotInfo, error) {
 		return SnapshotInfo{}, err
 	}
 	defer os.RemoveAll(tmp)
-	idx := []string{"GIT_INDEX_FILE=" + filepath.Join(tmp, "index")} // not created: git starts an empty index there
-	if _, err := run(idx, "add", "-A", "--", root); err != nil {
+	idxPath := filepath.Join(tmp, "index")
+	idx := []string{"GIT_INDEX_FILE=" + idxPath}
+	if err := seedIndex(run, runIn, idx, idxPath); err != nil {
 		return SnapshotInfo{}, err
 	}
-	tree, err := run(idx, "write-tree")
+	if _, err := run(idx, append(tempIndexConfig(), "add", "-A", "--", root)...); err != nil {
+		return SnapshotInfo{}, err
+	}
+	tree, err := run(idx, append(tempIndexConfig(), "write-tree")...) // it writes the tree cache back into the index
 	if err != nil {
 		return SnapshotInfo{}, err
 	}
@@ -70,6 +79,80 @@ func SnapshotTree(ctx context.Context, git, dir string) (SnapshotInfo, error) {
 		}
 	}
 	return SnapshotInfo{SHA: sha, Root: root, Rel: rel}, nil
+}
+
+// gitRepositoryEnv are the variables that tell git which repository, work tree, index and object store to use. `git -C dir` does not
+// override them, and a process started by a git hook (a pre-commit that runs the tests through the gate) carries them: left in, the
+// snapshot would be of another repository, or would write its objects into one.
+var gitRepositoryEnv = []string{
+	"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+	"GIT_NAMESPACE", "GIT_PREFIX", "GIT_INTERNAL_SUPER_PREFIX", "GIT_QUARANTINE_PATH",
+}
+
+// gitEnvWithoutRepository is env without those variables.
+func gitEnvWithoutRepository(env []string) []string {
+	out := make([]string, 0, len(env))
+next:
+	for _, kv := range env {
+		for _, k := range gitRepositoryEnv {
+			if strings.HasPrefix(kv, k+"=") {
+				continue next
+			}
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
+// tempIndexConfig is what every git command on the temporary index runs with: the index is written whole (a split index would leave a
+// shared index in the caller's git directory) and no file system monitor is asked about a repository the caller is working in.
+func tempIndexConfig() []string {
+	return []string{"-c", "core.splitIndex=false", "-c", "core.fsmonitor=false"}
+}
+
+// seedIndex makes the temporary index a copy of the caller's, so that what git tracks stays in the snapshot (a tracked file that the
+// ignore rules match is not lost, as it was from an empty index) and git need not read every file again (the stat information of the
+// entries comes along: M-S1 measured 1.5 s down to 0.25 s for 5,457 files). The copy is of the index file alone: a split index keeps its
+// shared part in the git directory, which git reads from there. A repository with no index yet starts empty.
+//
+// The flags that make `add -A` pass an entry by are cleared on the copy: skip-worktree and assume-unchanged both say "do not look at the
+// file", and the snapshot is the tree as it is now. (A file a sparse checkout left out is then absent from the snapshot, as it is from
+// the tree.) The caller's own index keeps its flags. git update-index takes one of the two options per call.
+func seedIndex(run func(env []string, args ...string) (string, error), runIn func(env []string, stdin string, args ...string) (string, error), idx []string, dst string) error {
+	src, err := run(nil, "rev-parse", "--path-format=absolute", "--git-path", "index")
+	if err != nil {
+		return err
+	}
+	b, err := os.ReadFile(src)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("the index of the repository (%s): %w", src, err)
+	}
+	if err := os.WriteFile(dst, b, 0o600); err != nil {
+		return err
+	}
+	list, err := run(idx, append(tempIndexConfig(), "ls-files", "-v", "-z")...)
+	if err != nil {
+		return fmt.Errorf("reading the copy of the index: %w", err)
+	}
+	var flagged []string
+	for _, e := range strings.Split(list, "\x00") {
+		if len(e) > 2 && (e[0] == 'S' || (e[0] >= 'a' && e[0] <= 'z')) {
+			flagged = append(flagged, e[2:]) // "<tag> <path>"
+		}
+	}
+	if len(flagged) == 0 {
+		return nil
+	}
+	paths := strings.Join(flagged, "\x00") + "\x00"
+	for _, opt := range []string{"--no-skip-worktree", "--no-assume-unchanged"} {
+		if _, err := runIn(idx, paths, append(tempIndexConfig(), "update-index", opt, "-z", "--stdin")...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // markFilter passes the remote command's stderr through and takes out the gate's own mark lines, saying which it saw. A mark is a line
