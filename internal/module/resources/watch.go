@@ -14,6 +14,7 @@ import (
 
 	iagent "github.com/wake/purdex/internal/agent"
 	"github.com/wake/purdex/internal/gate"
+	"github.com/wake/purdex/internal/hostmem"
 	"github.com/wake/purdex/internal/resources"
 	"github.com/wake/purdex/internal/watch"
 	"github.com/wake/purdex/internal/watchsettings"
@@ -35,10 +36,20 @@ type watchEnv struct {
 	cwd    func(ctx context.Context, pid int) string
 	// started is when pid started (the zero time: unknown).
 	started func(ctx context.Context, pid int) time.Time
+	// footprint is the physical footprint of pid (ok=false: not to be had); nil: the detector counts by RSS (#3072).
+	footprint func(pid int) (uint64, bool)
 }
 
 func defaultWatchEnv() watchEnv {
+	var footprint func(pid int) (uint64, bool)
+	if fp, err := hostmem.NewFootprinter(); err == nil { // one Footprinter for the run; the watcher asks from the sampler goroutine only
+		footprint = func(pid int) (uint64, bool) {
+			v, err := fp.Of(pid)
+			return v, err == nil
+		}
+	}
 	return watchEnv{
+		footprint: footprint,
 		loadGate: func(path string) (gate.Config, error) {
 			if path == "" {
 				path = gate.DefaultConfigPath()
@@ -233,7 +244,8 @@ func (m *Module) watchPass(ctx context.Context, raw resources.HostRaw, procs []r
 			}
 			return env.started(ctx, pid)
 		},
-		LockPIDs: func(h gate.Holder) []int { return env.lockPIDs(gcfg, h) },
+		Footprint: env.footprint,
+		LockPIDs:  func(h gate.Holder) []int { return env.lockPIDs(gcfg, h) },
 		Set: watch.Settings{
 			XCores: ws.XCores, YMB: ws.YMB, TS: watchsettings.Seconds(ws.TSeconds),
 			PressureLevel: ws.PressureLevel, PressureTS: watchsettings.Seconds(ws.PressureTSeconds),

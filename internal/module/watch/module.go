@@ -166,6 +166,7 @@ func (m *Module) Init(c *core.Core) error {
 	m.ready = true
 	m.runMu.Unlock()
 	c.Registry.Register(LocatorKey, m.loc)
+	c.Registry.Register(watch.WakerKey, watch.Waker(m))
 	return nil
 }
 
@@ -279,6 +280,7 @@ func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/watch/events", m.handleEvents)
 	mux.HandleFunc("POST /api/watch/ack", m.handleAck)
 	mux.HandleFunc("POST /api/peers/watch/ack", m.handlePeerAck)
+	mux.HandleFunc("POST /api/peers/watch/note", m.handlePeerNote)
 	mux.HandleFunc("POST /api/watch/start", m.handleStart)
 	mux.HandleFunc("POST /api/watch/wake", m.handleWake)
 	mux.HandleFunc("POST /api/peers/watch/start", m.handlePeerStart)
