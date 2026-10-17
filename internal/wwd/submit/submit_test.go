@@ -212,6 +212,84 @@ func TestPrepareRefusesWhenTheDirectoryIsSwappedBeforeTheBaseQuery(t *testing.T)
 	}
 }
 
+func TestPrepareLocalTakesNoSnapshotAndNamesHead(t *testing.T) {
+	dir := newRepo(t)
+	write(t, filepath.Join(dir, "spa/src/new.test.ts"), "untracked\n")
+	before := gitT(t, dir, "count-objects", "-v")
+	p, err := Prepare(context.Background(), Request{Dir: dir, Task: "spa-file", Args: []string{"src/new.test.ts"}, Local: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := gitT(t, dir, "rev-parse", "HEAD")
+	if p.Body.Snapshot.Commit != head || p.Body.Snapshot.Tree != gitT(t, dir, "rev-parse", "HEAD^{tree}") {
+		t.Fatalf("snapshot = %+v, want HEAD %s", p.Body.Snapshot, head)
+	}
+	if gitT(t, dir, "count-objects", "-v") != before {
+		t.Fatal("a local preparation wrote objects: it took a snapshot")
+	}
+	if p.Body.GitDir != filepath.Join(dir, ".git") {
+		t.Fatalf("git_dir = %q", p.Body.GitDir)
+	}
+}
+
+func TestPrepareLocalReadsTheManifestFromTheWorkingTreeAndNeverCaches(t *testing.T) {
+	dir := newRepo(t)
+	// an edit that is not committed, and a task the committed manifest does not have
+	write(t, filepath.Join(dir, ".wwd/tasks.toml"), testManifest+"\n[tasks.vet]\nrun = \"go vet\"\nargs = \"pass\"\nlocal = true\ncacheable = true\n")
+	p, err := Prepare(context.Background(), Request{Dir: dir, Task: "vet", Args: []string{"./a", "-x"}, Local: true})
+	if err != nil {
+		t.Fatalf("a local-only pass task must be preparable locally: %v", err)
+	}
+	if p.Body.Cacheable {
+		t.Fatal("a local run has no snapshot tree to key a result by: it must not be cacheable")
+	}
+	if _, err := Prepare(context.Background(), Request{Dir: dir, Task: "vet", Args: []string{"./a"}}); err == nil || !IsUsage(err) {
+		t.Fatalf("the same pass task must still be refused for the queue: %v", err)
+	}
+}
+
+func TestPrepareLocalChecksFilesInTheWorkingTree(t *testing.T) {
+	dir := newRepo(t)
+	if _, err := Prepare(context.Background(), Request{Dir: dir, Task: "spa-file", Args: []string{"src/gone.test.ts"}, Local: true}); err == nil || !IsUsage(err) {
+		t.Fatalf("err = %v", err)
+	}
+	// a tracked file deleted from the working tree is not there to run
+	if err := os.Remove(filepath.Join(dir, "spa/src/a.test.ts")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Prepare(context.Background(), Request{Dir: dir, Task: "spa-file", Args: []string{"src/a.test.ts"}, Local: true}); err == nil || !IsUsage(err) {
+		t.Fatalf("a file deleted in the tree was accepted: %v", err)
+	}
+}
+
+func TestTreeFileExistsDoesNotFollowLinksOutOfTheTree(t *testing.T) {
+	root := newRepo(t)
+	outside := t.TempDir()
+	write(t, filepath.Join(outside, "secret.ts"), "x")
+	if err := os.Symlink(filepath.Join(outside, "secret.ts"), filepath.Join(root, "file-link.ts")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "dir-link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("spa/src/a.test.ts", filepath.Join(root, "inside-link.ts")); err != nil {
+		t.Fatal(err)
+	}
+	for rel, want := range map[string]bool{
+		"spa/src/a.test.ts":            true,
+		"inside-link.ts":               true, // a link that stays inside the tree is fine
+		"file-link.ts":                 false,
+		"dir-link/secret.ts":           false,
+		"spa":                          false, // a directory is not a file
+		"spa/src/missing.ts":           false,
+		"../" + filepath.Base(outside): false,
+	} {
+		if got := TreeFileExists(root, rel); got != want {
+			t.Errorf("TreeFileExists(%q) = %v, want %v", rel, got, want)
+		}
+	}
+}
+
 func TestPrepareNoManifestIsUsage(t *testing.T) {
 	dir := newRepo(t)
 	if err := os.Remove(filepath.Join(dir, ".wwd/tasks.toml")); err != nil {
