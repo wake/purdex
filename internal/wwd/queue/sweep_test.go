@@ -43,7 +43,13 @@ func TestSweepExpiresQueuedJobsPastTheirQueueTimeout(t *testing.T) {
 	assert.Equal(t, short, evs[0].Job.ID)
 	assert.Equal(t, wire.StateExpired, evs[0].Job.State)
 
-	f.clk.Advance(2 * time.Hour)
+	f.clk.Advance(59 * time.Minute) // the default job has now waited 1 h 0 min 1 s
+	res, err = f.q.Sweep(ctx)
+	require.NoError(t, err)
+	assert.Zero(t, res.Expired, "the default is 2 hours, not 1")
+	assert.Equal(t, wire.StateQueued, f.get(t, dflt).State)
+
+	f.clk.Advance(time.Hour)
 	res, err = f.q.Sweep(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Expired)
@@ -82,7 +88,7 @@ func TestSweepDeletesEndedJobsAfterSevenDays(t *testing.T) {
 	young := ended(7*24*time.Hour - time.Minute)
 	old := ended(7*24*time.Hour + time.Minute)
 	live := f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "" })
-	f.seed(t, live, wire.StateRunning, "created_at = ?", ms(f.clk.Now().Add(-30*24*time.Hour)))
+	f.seed(t, live, wire.StateRunning, "created_at = ?, updated_at = ?, pinned = 0", ms(f.clk.Now().Add(-30*24*time.Hour)), ms(f.clk.Now().Add(-30*24*time.Hour)))
 	stuck := f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "" })
 	f.seed(t, stuck, wire.StateFailed, "finished_at = ?", ms(f.clk.Now().Add(-30*24*time.Hour)))
 	f.pins.unErr = assert.AnError

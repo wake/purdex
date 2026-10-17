@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"sync"
 	"testing"
@@ -58,6 +59,9 @@ func (p *fakePinner) ListPins(_ context.Context, dir string) ([]string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if err := p.listErr[dir]; err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(dir); err != nil { // like the real one: a directory that is not there cannot be listed
 		return nil, err
 	}
 	var ids []string
@@ -178,6 +182,10 @@ func TestAMissingGitDirIsTreatedAsUnpinned(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, f.pinned(t, id))
 	assert.NotContains(t, f.pins.calls, "unpin "+id, "git was not asked about a directory that is gone")
+
+	// and the sweep does not try to list it: a directory that is gone is not an error every time the sweep runs
+	_, err = f.q.Sweep(context.Background())
+	assert.NoError(t, err)
 }
 
 // Orphan refs: a ref under refs/wwd/ whose job is gone or has ended is removed; a live job's is kept; a young id (the pin made

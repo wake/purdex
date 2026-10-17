@@ -51,6 +51,7 @@ func TestCancelOfAHeldJobAsksTheWorkerToStop(t *testing.T) {
 		_, err = f.q.Cancel(context.Background(), id)
 		require.NoError(t, err, "a second request is not an error")
 		assert.True(t, f.cancelRequested(t, id))
+		assert.Len(t, f.ev.all(), 1, "and announces nothing more")
 	}
 }
 
