@@ -43,7 +43,7 @@ export const useTeamRosterStore = create<TeamRosterState>()((set) => ({
     return { liveHosts: rosterLive ? rest : s.liveHosts, liveSessionHosts: sessionsLive ? sessRest : s.liveSessionHosts }
   }),
   forgetHost: (hostId) => set((s) => {
-    if (!Object.hasOwn(s.byHost, hostId) && !Object.hasOwn(s.liveHosts, hostId)) return s
+    if (!Object.hasOwn(s.byHost, hostId) && !Object.hasOwn(s.liveHosts, hostId) && !Object.hasOwn(s.liveSessionHosts, hostId)) return s
     const { [hostId]: _gone, ...rest } = s.byHost
     const { [hostId]: _live, ...liveRest } = s.liveHosts
     const { [hostId]: _sess, ...sessRest } = s.liveSessionHosts

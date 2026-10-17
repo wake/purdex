@@ -76,4 +76,10 @@ describe('useTeamRosterStore', () => {
     useSessionStore.getState().replaceHost('h9', [])
     expect(useTeamRosterStore.getState().liveSessionHosts).toEqual({ h9: true })
   })
+
+  it('forgetHost clears session liveness even when no roster ever arrived (R4)', () => {
+    useTeamRosterStore.getState().markSessionsLive('h7')
+    useTeamRosterStore.getState().forgetHost('h7')
+    expect(useTeamRosterStore.getState().liveSessionHosts).toEqual({})
+  })
 })
