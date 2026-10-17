@@ -128,4 +128,23 @@ describe('HostBadge', () => {
     expect(screen.getByTestId('inline-tab-host-badge')).toBeTruthy()
     expect(screen.queryByTestId('host-badge')).toBeNull()
   })
+
+  describe('bright (the host cells: always the hover / active look)', () => {
+    it('idle (default): the icon reads --hb-icon and falls back to --hb-middle', () => {
+      render(<HostBadge {...base} />)
+      expect(screen.getByTestId('host-badge').style.color).toBe('var(--hb-icon, var(--hb-middle))')
+    })
+    it('bright: a coloured host uses --hb-main', () => {
+      render(<HostBadge {...base} bright />)
+      expect(screen.getByTestId('host-badge').style.color).toBe('var(--hb-main)')
+    })
+    it('bright: an uncoloured host uses text-secondary instead of text-muted', () => {
+      render(<HostBadge {...base} colors={null} bright />)
+      expect(screen.getByTestId('host-badge').style.color).toBe('var(--text-secondary)')
+    })
+    it('not bright: an uncoloured host stays text-muted', () => {
+      render(<HostBadge {...base} colors={null} />)
+      expect(screen.getByTestId('host-badge').style.color).toBe('var(--text-muted)')
+    })
+  })
 })

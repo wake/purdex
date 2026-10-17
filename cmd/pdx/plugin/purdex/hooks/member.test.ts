@@ -12,7 +12,7 @@ const OP = { id: OPID, kind: 'member_relay', host_id: 'h', session_id: 'sid-old'
 const LEAD = { address: 'mlab/purdex-1f-vq', ref: '_h9movr', team_id: 'team-1' }
 const CLAIM = JSON.stringify({ op: OP, lead: LEAD })
 const GOOD_FILE = '# HANDOFF\n' + ['## 1. a', '## 2. b', '## 3. c', '## 4. d', '## 5. e', '## 6. f', '## 7. g', '## 8. h'].map((h) => h + '\n' + 'x'.repeat(40)).join('\n')
-const HELLO = (role: string) => JSON.stringify({ ok: true, role, self_relay: 'on', threshold: 70, min_growth: 20000 })
+const HELLO = (role: string, level = 1) => JSON.stringify({ ok: true, role, self_relay: 'on', threshold: 70, min_growth: 20000, ...(level > 0 ? { idle_intercept: level } : {}) })
 const sub = (a: string[]) => a.slice(1).join(' ')
 
 type R = { exitCode: number; stdout?: string; stderr?: string }
@@ -363,7 +363,8 @@ test('a turn that starts while the lock call is out is unlocked and the write wa
 const MSGS = [{ role: 'user' as const, text: 'hi', toolUses: [] }]
 const compactOf = ($: any, trigger: string) => $.session.compact({ trigger, messages: MSGS })
 
-for (const role of ['none', 'member', 'lead']) {
+// (a member's is intercepted since RT-4 T42: see below)
+for (const role of ['none', 'lead']) {
   test(`an auto compaction in idle reports once from a timer, whatever the role (${role})`, async ($, on) => {
     const f = memberWorld(on, role)
     await start($, f)
@@ -387,7 +388,7 @@ test('a manual compaction is reported too (the daemon decides); a precompute is 
 test('the compaction never waits for the report', async ($, on) => {
   let release: (r: R) => void = () => {}
   const gate = new Promise<R>((r) => { release = r })
-  const f = memberWorld(on, 'member', (argv) => (argv[1] === 'compacted' ? (gate as any) : undefined))
+  const f = memberWorld(on, 'none', (argv) => (argv[1] === 'compacted' ? (gate as any) : undefined))
   await start($, f)
   let done = false
   const p = compactOf($, 'auto').then((r: any) => { done = true; return r })
@@ -401,7 +402,7 @@ test('the compaction never waits for the report', async ($, on) => {
 // R2 (codex attack): a compaction that a hook beneath skipped did not happen: nothing is reported.
 // Mutation gate: report before next(e) → red.
 test('a compaction skipped beneath the mod is not reported', async ($, on) => {
-  const f = memberWorld(on, 'member')
+  const f = memberWorld(on, 'none')
   await start($, f)
   f.skipCompact = true
   await compactOf($, 'auto')
@@ -704,10 +705,10 @@ test('an op control still reaches the member path; a reask is not claimed or see
   expect(calls(f, 'seen').length).toBe(1)
 })
 
-test('hello reports protocol 8 (5 was the one the daemon sends reask to, 6 the person tokens, 7 the ask ladder)', async ($, on) => {
+test('hello reports protocol 9 (5 was the one the daemon sends reask to, 6 the person tokens, 7 the ask ladder, 8 the idle half, 9 the member idle intercept)', async ($, on) => {
   const f = soloWorld(on)
   await start($, f)
-  expect(calls(f, 'hello')[0]).toContain('--version 8')
+  expect(calls(f, 'hello')[0]).toContain('--version 9')
 })
 
 // An old daemon (no paused_no_quota anywhere) is unchanged: a begin that opens a request waits for it as always.
@@ -810,4 +811,160 @@ test('RT-3c T39: a member op without the handoff mode still clears', async ($, o
   await complete($, 'tw')
   await f.clock.advance(100)
   expect(f.commands).toEqual(['clear'])
+})
+
+// ---- RT-4 T42: a member's idle compaction is intercepted ----
+
+const compactEvent = (trigger: string, extra: any = {}) => ({ trigger, messages: [{ role: 'user', text: 'hi', toolUses: [] }], ...extra })
+const compactCalls = (f: World) => f.argvs.map(sub).filter((c) => c.startsWith('relay compacted'))
+
+// In a member, an auto compaction with no main turn running is Claude Code's idle compaction: the hook answers {skip} and the daemon is told,
+// intercepted, from a timer. Mutation gates: no skip → the compaction runs (red); the report without --intercepted → red; not from a member → red.
+test('RT-4 T42: a member’s idle compaction is skipped and reported as intercepted', async ($, on) => {
+  const f = memberWorld(on, 'member', memberPdx())
+  await start($, f)
+  const r = await $.session.compact(compactEvent('auto'))
+  expect(r).toEqual({ skip: expect.stringContaining('閒置') })
+  await f.clock.advance(100)
+  expect(compactCalls(f)).toEqual(['relay compacted --session sid-old --trigger idle --intercepted'])  // no turn ended yet: no stretch name
+})
+
+test('RT-4 T42: a context-full auto compaction (a turn is running) in a member runs and is reported as today', async ($, on) => {
+  const f = memberWorld(on, 'member', memberPdx())
+  await start($, f)
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  const r = await $.session.compact(compactEvent('auto'))
+  expect(r.skip).toBeUndefined()
+  await f.clock.advance(100)
+  expect(compactCalls(f)).toEqual(['relay compacted --session sid-old --trigger auto'])
+})
+
+test('RT-4 T42: a manual compaction in a member runs and is reported as manual', async ($, on) => {
+  const f = memberWorld(on, 'member', memberPdx())
+  await start($, f)
+  const r = await $.session.compact(compactEvent('manual'))
+  expect(r.skip).toBeUndefined()
+  await f.clock.advance(100)
+  expect(compactCalls(f)).toEqual(['relay compacted --session sid-old --trigger manual'])
+})
+
+test('RT-4 T42: a session that is not a member is not intercepted', async ($, on) => {
+  const f = memberWorld(on, 'none', memberPdx())
+  await start($, f)
+  const r = await $.session.compact(compactEvent('auto'))
+  expect(r.skip).toBeUndefined()
+  await f.clock.advance(100)
+  expect(compactCalls(f)).toEqual(['relay compacted --session sid-old --trigger auto'])
+})
+
+// A member in the middle of a relay keeps the rule it had (an approved relay skips an auto compaction, saying why; nothing is intercepted).
+test('RT-4 T42: a member whose relay is under way is not intercepted (the relay’s own skip stays)', async ($, on) => {
+  const f = memberWorld(on, 'member', memberPdx())
+  await start($, f)
+  await receive($, ENVELOPE(CONTROL))
+  await f.clock.advance(200) // claimed: the write prompt is out (state approved)
+  const r = await $.session.compact(compactEvent('auto'))
+  expect(r).toEqual({ skip: expect.stringContaining('接力') })
+  await f.clock.advance(100)
+  expect(compactCalls(f)).toEqual([])
+})
+
+// The report names the idle stretch by when the last main turn ended; the guard needs hello answered; a daemon that routes the intercept silent makes
+// the mod drop its role and say hello again. Mutation gates: no --period → red; no helloOK in the guard → red; the role kept → red.
+test('RT-4 T42: the interception names the idle stretch by the end of the last turn', async ($, on) => {
+  const f = memberWorld(on, 'member', memberPdx())
+  await start($, f)
+  await f.clock.advance(1000) // the mock clock starts at 0, which is "no turn seen": a real clock never reads 0
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  await complete($, 't1')
+  await f.clock.advance(5000)
+  expect(await $.session.compact(compactEvent('auto'))).toEqual({ skip: expect.any(String) })
+  await f.clock.advance(100)
+  expect(compactCalls(f)).toEqual([expect.stringMatching(/^relay compacted --session sid-old --trigger idle --intercepted --period [1-9][0-9]*$/)])
+})
+
+test('RT-4 T42: before hello has answered nothing is intercepted (the role is not the daemon’s yet)', async ($, on) => {
+  const f = memberWorld(on, 'member', (argv) => (argv[1] === 'hello' ? { exitCode: 20, stderr: 'unreachable' } : undefined))
+  await start($, f)
+  const r = await $.session.compact(compactEvent('auto'))
+  expect(r.skip).toBeUndefined()
+})
+
+// A daemon that does not say it decides idle compactions (an older one, or level 0) leaves the compaction as before: nothing is skipped.
+// Mutation gate: the level not read (skip on the role alone) → red.
+test('RT-4 T42: a member of a daemon without idle_intercept is not intercepted', async ($, on) => {
+  const f = memberWorld(on, 'member', (argv) => (argv[1] === 'hello' ? { exitCode: 0, stdout: HELLO('member', 0) } : undefined))
+  await start($, f)
+  const r = await $.session.compact(compactEvent('auto'))
+  expect(r.skip).toBeUndefined()
+  await f.clock.advance(100)
+  expect(compactCalls(f).filter((c: string) => c.includes('--intercepted'))).toEqual([]) // the compaction runs and is reported as an ordinary one
+})
+
+// R2 of RT-4a: a hello whose answer is lost is said again from a timer (an idle session has no turn end to retry at), with a pause that
+// doubles; the answer arms the intercept. Mutation gates: no timer → no second hello (red); the pause not doubled → the third hello comes at
+// 60 s (red); a timer per failure (more than one hello per pause) → red.
+test('RT-4 R2: an unanswered hello is retried from a timer, doubling the pause, and the answer arms the intercept', async ($, on) => {
+  let failures = 2
+  const f = memberWorld(on, 'member', (argv) => {
+    if (argv[1] === 'hello' && failures-- > 0) return { exitCode: 20, stderr: 'unreachable' }
+    return undefined
+  })
+  await start($, f)
+  await f.clock.advance(100)
+  expect(calls(f, 'hello').length).toBe(1) // the first one failed
+  expect((await $.session.compact(compactEvent('auto'))).skip).toBeUndefined() // no answer yet: no level, nothing skipped
+  await f.clock.advance(29_000)
+  expect(calls(f, 'hello').length).toBe(1)
+  await f.clock.advance(2_000) // 30 s after the failure
+  expect(calls(f, 'hello').length).toBe(2) // retried; failed again
+  await f.clock.advance(57_000)
+  expect(calls(f, 'hello').length).toBe(2) // the pause doubled: not yet at 60 s
+  await f.clock.advance(2_000)
+  expect(calls(f, 'hello').length).toBe(4) // the third was answered; the fourth is the acknowledgement that carries the level it brought
+  await f.clock.advance(300_000)
+  expect(calls(f, 'hello').length).toBe(4) // and no more retries or acknowledgements
+  expect(calls(f, 'hello').slice(0, 3).every((c: string) => !c.includes('--idle-intercept'))).toBe(true) // before an answer the mod knows nothing
+  expect(calls(f, 'hello')[3]).toContain('--idle-intercept 1')
+  expect(await $.session.compact(compactEvent('auto'))).toEqual({ skip: expect.any(String) })
+})
+
+// One timer at a time: the hello that a turn end sends, and fails, does not add a second timer to the one that is waiting.
+// Mutation gate: no pending guard → a hello at 65 s that this test says is not there (red).
+test('RT-4 R2: a failed turn-end hello does not add a second retry timer', async ($, on) => {
+  const f = memberWorld(on, 'member', (argv) => (argv[1] === 'hello' ? { exitCode: 20, stderr: 'unreachable' } : undefined))
+  await start($, f)
+  await f.clock.advance(5_000)
+  await $.turn.start({ text: 'work', turnId: 't1' })
+  await complete($, 't1') // the turn end says hello again: it fails too
+  await f.clock.advance(100)
+  expect(calls(f, 'hello').length).toBe(2)
+  await f.clock.advance(70_000) // 70 s: the timer of the first failure fired at 30 s; its next waits for 60 s more
+  expect(calls(f, 'hello').length).toBe(3)
+})
+
+// A reload loses the mod's clock: the report then carries no --period (the daemon's own period stands in), and still reaches the daemon.
+test('RT-4 T42: with no turn seen since the mod started the report has no period', async ($, on) => {
+  const f = memberWorld(on, 'member', memberPdx())
+  await start($, f)
+  expect(await $.session.compact(compactEvent('auto'))).toEqual({ skip: expect.any(String) })
+  await f.clock.advance(100)
+  expect(compactCalls(f)).toEqual(['relay compacted --session sid-old --trigger idle --intercepted'])
+})
+
+test('RT-4 T42: a daemon that routes the intercept silent makes the mod drop the role: hello again, and the next idle compaction runs', async ($, on) => {
+  let role = 'member'
+  const f = memberWorld(on, 'member', (argv) => {
+    if (argv[1] === 'compacted') return { exitCode: 0, stdout: '{"noticed":false,"route":"silent"}' }
+    if (argv[1] === 'hello') return { exitCode: 0, stdout: HELLO(role) }
+    return undefined
+  })
+  await start($, f)
+  expect(await $.session.compact(compactEvent('auto'))).toEqual({ skip: expect.any(String) })
+  const before = calls(f, 'hello').length
+  role = 'none' // the daemon's answer to the hello that follows
+  await f.clock.advance(300)
+  expect(calls(f, 'hello').length).toBe(before + 1)
+  const r2 = await $.session.compact(compactEvent('auto'))
+  expect(r2.skip).toBeUndefined()
 })

@@ -338,6 +338,10 @@ func OpenStore(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (mod hello): %w", err)
 	}
+	if err := ensureColumn(db, "mod_hello", "idle_intercept", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate team db (mod hello idle_intercept): %w", err)
+	}
 	if _, err := db.Exec(hostRootsSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate team db (host roots): %w", err)

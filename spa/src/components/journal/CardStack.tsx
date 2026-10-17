@@ -5,12 +5,14 @@
 // scroll live OUTSIDE this component (lib/journal/view-memory.ts per unit, useJournalUiStore per team / last widths) — the stack
 // is a sibling of TabContent, so a tab switch does not unmount it, but a support toggle or a hide / show does (CLAUDE.md,
 // Tab-hosted checklist). The narrow-window drop is visibility only (card-layout.ts): nothing is written back.
-// The cards' bodies are J-2c (journal) and J-2d (tasks, roadmap); here they are frames with their header controls.
+// The cards' bodies: JournalCard (J-2c), TasksCard and RoadmapCard (J-2d).
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ListChecks, MapTrifold } from '@phosphor-icons/react'
 import { CardFrame } from './CardFrame'
 import { ConfirmDetail } from './ConfirmDetail'
 import { JournalCard, JournalTitle } from './JournalCard'
+import { TasksCard } from './TasksCard'
+import { RoadmapCard } from './RoadmapCard'
 import { visibleCards, teamColumnWidth } from './card-layout'
 import { useJournalTarget } from './useJournalTarget'
 import { TeamPanel } from '../team/TeamPanel'
@@ -121,7 +123,9 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
             </CardFrame>
           )}
           {shown.roadmap && !detail && (
-            <CardFrame testId="journal-roadmap-card" width={widths.roadmap} onCommitWidth={commit('roadmap')} title={t('journal.card.roadmap')} onClose={() => patch({ roadmapOpen: false })} />
+            <CardFrame testId="journal-roadmap-card" width={widths.roadmap} onCommitWidth={commit('roadmap')} title={t('journal.card.roadmap')} onClose={() => patch({ roadmapOpen: false })}>
+              {unit && <RoadmapCard key={`${target.memoHost}\u0000${target.memoKey}`} target={target} unit={unit} />}
+            </CardFrame>
           )}
         </div>
       )}
@@ -147,7 +151,9 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
         </CardFrame>
       )}
       {shown.tasks && (
-        <CardFrame testId="journal-tasks-card" width={widths.tasks} onCommitWidth={commit('tasks')} title={t('journal.card.tasks')} onClose={() => patch({ tasksOpen: false })} />
+        <CardFrame testId="journal-tasks-card" width={widths.tasks} onCommitWidth={commit('tasks')} title={t('journal.card.tasks')} onClose={() => patch({ tasksOpen: false })}>
+          {unit && <TasksCard key={`${target.memoHost}\u0000${target.memoKey}`} target={target} unit={unit} />}
+        </CardFrame>
       )}
     </div>
   )

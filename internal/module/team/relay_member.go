@@ -41,6 +41,20 @@ func (m *Module) modProtocolAtLeast(sessionID string, min int) bool {
 	return err == nil && v >= min
 }
 
+// modInterceptAcked says the session's mod has heard that the daemon decides idle compactions (hello said so): only then does it
+// intercept them, so only then are the older idle notices dropped for its member (RT-4a). A hello answer that was lost leaves this false,
+// and the member keeps the older notice.
+func (m *Module) modInterceptAcked(sessionID string) bool {
+	m.mu.Lock()
+	h, ok := m.modSeen[sessionID]
+	m.mu.Unlock()
+	if !ok || h.IdleIntercept < team.IdleInterceptMembers {
+		return false
+	}
+	v, err := strconv.Atoi(h.ModVersion)
+	return err == nil && v >= team.MinIdleInterceptModVersion
+}
+
 func (m *Module) handleRelayCreate(w http.ResponseWriter, r *http.Request) {
 	var req team.RelayCreateRequest
 	if !m.decodeBody(w, r, &req) {
