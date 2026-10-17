@@ -68,22 +68,44 @@ func normalize(keys []string) ([]string, error) {
 	return out, nil
 }
 
+// Hold is one successful Acquire. Releasing it ends exactly that acquisition: a late Release from an older attempt of the same
+// owner (same job id, claimed again later) cannot free the keys of a newer one.
+type Hold struct {
+	t     *Table
+	owner string
+	gen   uint64
+}
+
+// Release frees the keys of this acquisition, if it is still the owner's current one. It may be called more than once.
+func (h *Hold) Release() {
+	if h == nil {
+		return
+	}
+	h.t.mu.Lock()
+	defer h.t.mu.Unlock()
+	if cur, ok := h.t.byHold[h.owner]; ok && cur.gen == h.gen {
+		h.t.releaseLocked(h.owner)
+	}
+}
+
 // Acquire registers owner as the holder of keys, all or none. When a key is held by another owner nothing is registered and a
 // *BusyError names every conflict. If record is not nil it runs after the keys are registered and before Acquire returns, and
 // without the table locked: the keys are already reserved, so no other start can slip in while the job is being recorded (for
-// example in the queue), and a record that fails releases them again. An owner with no keys is registered as holding nothing.
-func (t *Table) Acquire(owner string, keys []string, record func() error) error {
+// example in the queue). A record that fails — or panics — releases exactly this acquisition again, and one whose keys were
+// released meanwhile by ReleaseOwner (a cancel) returns ErrReleased: the job must not start, the keys may be somebody else's.
+// An owner with no keys is registered as holding nothing.
+func (t *Table) Acquire(owner string, keys []string, record func() error) (*Hold, error) {
 	if owner == "" {
-		return errors.New("locks: empty owner")
+		return nil, errors.New("locks: empty owner")
 	}
 	sorted, err := normalize(keys)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	t.mu.Lock()
 	if _, held := t.byHold[owner]; held {
 		t.mu.Unlock()
-		return ErrAlreadyHeld
+		return nil, ErrAlreadyHeld
 	}
 	var busy []Conflict
 	for _, k := range sorted {
@@ -93,41 +115,49 @@ func (t *Table) Acquire(owner string, keys []string, record func() error) error 
 	}
 	if len(busy) > 0 {
 		t.mu.Unlock()
-		return &BusyError{Conflicts: busy}
+		return nil, &BusyError{Conflicts: busy}
 	}
 	for _, k := range sorted {
 		t.byKey[k] = owner
 	}
 	t.gen++
-	mine := t.gen
-	t.byHold[owner] = hold{keys: sorted, gen: mine}
+	h := &Hold{t: t, owner: owner, gen: t.gen}
+	t.byHold[owner] = hold{keys: sorted, gen: h.gen}
 	t.mu.Unlock()
 
 	if record == nil {
-		return nil
+		return h, nil
 	}
+	finished := false
+	defer func() {
+		if !finished { // record panicked: do not leave the keys reserved forever
+			h.Release()
+		}
+	}()
 	err = record()
+	finished = true
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	if cur, ok := t.byHold[owner]; !ok || cur.gen != mine {
-		// Released while it was being recorded (a cancel, a cleanup): the keys may be somebody else's by now, so the job must
-		// not start, and nothing of a newer acquisition by the same owner is touched.
+	cur, ok := t.byHold[owner]
+	t.mu.Unlock()
+	if !ok || cur.gen != h.gen {
 		if err == nil {
 			err = ErrReleased
 		}
-		return err
+		return nil, err
 	}
 	if err != nil {
-		t.releaseLocked(owner)
+		h.Release()
+		return nil, err
 	}
-	return err
+	return h, nil
 }
 
 // ErrReleased: the owner's keys were released while its Acquire was still recording the job. The caller must not start it.
 var ErrReleased = errors.New("locks: released before the job was recorded")
 
-// Release removes every key owner holds. Releasing an owner that holds nothing is not an error.
-func (t *Table) Release(owner string) {
+// ReleaseOwner frees whatever owner currently holds (a cancel that arrives from outside the code that holds the Hold). A
+// release of an owner that holds nothing is not an error. The code that did the Acquire uses its Hold instead.
+func (t *Table) ReleaseOwner(owner string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.releaseLocked(owner)

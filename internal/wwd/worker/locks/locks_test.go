@@ -10,15 +10,22 @@ import (
 	"time"
 )
 
+func mustAcquire(t *testing.T, tb *Table, owner string, keys ...string) *Hold {
+	t.Helper()
+	h, err := tb.Acquire(owner, keys, nil)
+	if err != nil {
+		t.Fatalf("Acquire(%s, %v): %v", owner, keys, err)
+	}
+	return h
+}
+
 func TestAcquireAndRelease(t *testing.T) {
 	tb := New()
-	if err := tb.Acquire("j_1", []string{"db", "redis"}, nil); err != nil {
-		t.Fatal(err)
-	}
+	h1 := mustAcquire(t, tb, "j_1", "db", "redis")
 	if h, ok := tb.Holder("db"); !ok || h != "j_1" {
 		t.Fatalf("holder = %q %v", h, ok)
 	}
-	err := tb.Acquire("j_2", []string{"redis", "other", "db"}, nil)
+	_, err := tb.Acquire("j_2", []string{"redis", "other", "db"}, nil)
 	var busy *BusyError
 	if !errors.As(err, &busy) || len(busy.Conflicts) != 2 || busy.Conflicts[0].Key != "db" || busy.Conflicts[1].Key != "redis" || busy.Conflicts[0].Holder != "j_1" {
 		t.Fatalf("err = %v", err)
@@ -29,15 +36,15 @@ func TestAcquireAndRelease(t *testing.T) {
 	if tb.Owners() != 1 {
 		t.Fatalf("owners = %d", tb.Owners())
 	}
-	tb.Release("j_1")
-	if err := tb.Acquire("j_2", []string{"redis", "other", "db"}, nil); err != nil {
-		t.Fatalf("after the release: %v", err)
-	}
-	tb.Release("j_2")
-	tb.Release("j_2") // twice is fine
+	h1.Release()
+	h2 := mustAcquire(t, tb, "j_2", "redis", "other", "db")
+	h2.Release()
+	h2.Release() // twice is fine
 	if len(tb.Held()) != 0 || tb.Owners() != 0 {
 		t.Fatalf("table not empty: %v %d", tb.Held(), tb.Owners())
 	}
+	var nilHold *Hold
+	nilHold.Release() // a nil hold is a no-op
 }
 
 func TestAcquireValidation(t *testing.T) {
@@ -52,33 +59,27 @@ func TestAcquireValidation(t *testing.T) {
 		"newline key":  {"j", []string{"a\nb"}},
 		"repeated key": {"j", []string{"a", "a"}},
 	} {
-		if err := tb.Acquire(tc.owner, tc.keys, nil); err == nil {
+		if h, err := tb.Acquire(tc.owner, tc.keys, nil); err == nil || h != nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}
 	if tb.Owners() != 0 {
 		t.Fatal("a rejected acquire left an owner behind")
 	}
-	if err := tb.Acquire("j", []string{"a"}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := tb.Acquire("j", []string{"b"}, nil); !errors.Is(err, ErrAlreadyHeld) {
+	mustAcquire(t, tb, "j", "a")
+	if _, err := tb.Acquire("j", []string{"b"}, nil); !errors.Is(err, ErrAlreadyHeld) {
 		t.Fatalf("second acquire by the same owner: %v", err)
 	}
 }
 
 func TestOwnerWithNoKeysHoldsNothing(t *testing.T) {
 	tb := New()
-	if err := tb.Acquire("j_1", nil, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := tb.Acquire("j_2", []string{"a"}, nil); err != nil {
-		t.Fatal(err)
-	}
+	h1 := mustAcquire(t, tb, "j_1")
+	mustAcquire(t, tb, "j_2", "a")
 	if tb.Owners() != 2 || len(tb.Held()) != 1 {
 		t.Fatalf("owners %d held %v", tb.Owners(), tb.Held())
 	}
-	tb.Release("j_1")
+	h1.Release()
 	if tb.Owners() != 1 {
 		t.Fatalf("owners = %d", tb.Owners())
 	}
@@ -87,29 +88,43 @@ func TestOwnerWithNoKeysHoldsNothing(t *testing.T) {
 func TestFailedRecordReleasesTheKeys(t *testing.T) {
 	tb := New()
 	boom := errors.New("queue unreachable")
-	if err := tb.Acquire("j_1", []string{"db"}, func() error { return boom }); !errors.Is(err, boom) {
+	if _, err := tb.Acquire("j_1", []string{"db"}, func() error { return boom }); !errors.Is(err, boom) {
 		t.Fatalf("err = %v", err)
 	}
 	if len(tb.Held()) != 0 || tb.Owners() != 0 {
 		t.Fatalf("a failed record left the keys held: %v", tb.Held())
 	}
-	if err := tb.Acquire("j_2", []string{"db"}, nil); err != nil {
-		t.Fatalf("keys should be free again: %v", err)
+	mustAcquire(t, tb, "j_2", "db")
+}
+
+func TestPanickingRecordReleasesTheKeys(t *testing.T) {
+	tb := New()
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("the panic was swallowed")
+			}
+		}()
+		tb.Acquire("j_1", []string{"db"}, func() error { panic("boom") })
+	}()
+	if len(tb.Held()) != 0 || tb.Owners() != 0 {
+		t.Fatalf("a panicking record left the keys reserved forever: %v", tb.Held())
 	}
+	mustAcquire(t, tb, "j_2", "db")
 }
 
 func TestKeysAreReservedWhileTheJobIsBeingRecorded(t *testing.T) {
 	tb := New()
-	recording := make(chan struct{})
-	finish := make(chan struct{})
+	recording, finish := make(chan struct{}), make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		done <- tb.Acquire("j_1", []string{"db"}, func() error { close(recording); <-finish; return nil })
+		_, err := tb.Acquire("j_1", []string{"db"}, func() error { close(recording); <-finish; return nil })
+		done <- err
 	}()
 	<-recording
 	// the record is in progress (a call to the queue, say): the key is already taken, and the table is not locked
 	var busy *BusyError
-	if err := tb.Acquire("j_2", []string{"db"}, nil); !errors.As(err, &busy) {
+	if _, err := tb.Acquire("j_2", []string{"db"}, nil); !errors.As(err, &busy) {
 		t.Fatalf("a start slipped in while the job was being recorded: %v", err)
 	}
 	if h, _ := tb.Holder("db"); h != "j_1" {
@@ -121,18 +136,17 @@ func TestKeysAreReservedWhileTheJobIsBeingRecorded(t *testing.T) {
 	}
 }
 
-func TestReleaseDuringRecordMeansTheJobMustNotStart(t *testing.T) {
+func TestReleaseOwnerDuringRecordMeansTheJobMustNotStart(t *testing.T) {
 	tb := New()
 	recording, finish := make(chan struct{}), make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		done <- tb.Acquire("j_1", []string{"db"}, func() error { close(recording); <-finish; return nil })
+		_, err := tb.Acquire("j_1", []string{"db"}, func() error { close(recording); <-finish; return nil })
+		done <- err
 	}()
 	<-recording
-	tb.Release("j_1") // a cancel arrives while the job is being recorded
-	if err := tb.Acquire("j_2", []string{"db"}, nil); err != nil {
-		t.Fatalf("the key should be free after the release: %v", err)
-	}
+	tb.ReleaseOwner("j_1") // a cancel arrives while the job is being recorded
+	mustAcquire(t, tb, "j_2", "db")
 	close(finish)
 	if err := <-done; !errors.Is(err, ErrReleased) {
 		t.Fatalf("a record that finished after its release must not count as acquired: %v", err)
@@ -147,13 +161,12 @@ func TestLateFailureOfAnOlderAcquireDoesNotReleaseANewerOne(t *testing.T) {
 	recording, finish := make(chan struct{}), make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		done <- tb.Acquire("j_1", []string{"db"}, func() error { close(recording); <-finish; return errors.New("queue failed") })
+		_, err := tb.Acquire("j_1", []string{"db"}, func() error { close(recording); <-finish; return errors.New("queue failed") })
+		done <- err
 	}()
 	<-recording
-	tb.Release("j_1")
-	if err := tb.Acquire("j_1", []string{"db"}, nil); err != nil { // the same owner again
-		t.Fatal(err)
-	}
+	tb.ReleaseOwner("j_1")
+	mustAcquire(t, tb, "j_1", "db") // the same owner again
 	close(finish)
 	if err := <-done; err == nil {
 		t.Fatal("want the record's error")
@@ -163,9 +176,24 @@ func TestLateFailureOfAnOlderAcquireDoesNotReleaseANewerOne(t *testing.T) {
 	}
 }
 
+func TestLateReleaseOfAnOlderHoldDoesNotFreeANewerOne(t *testing.T) {
+	tb := New()
+	old := mustAcquire(t, tb, "j_1", "db") // attempt 1
+	old.Release()
+	mustAcquire(t, tb, "j_1", "db") // attempt 2 of the same job id
+	old.Release()                   // the first attempt's cleanup arrives late
+	if h, ok := tb.Holder("db"); !ok || h != "j_1" {
+		t.Fatalf("a stale Release freed the newer hold: %q %v", h, ok)
+	}
+	var busy *BusyError
+	if _, err := tb.Acquire("j_2", []string{"db"}, nil); !errors.As(err, &busy) {
+		t.Fatalf("another owner got the key held by the newer attempt: %v", err)
+	}
+}
+
 func TestConflictsDoesNotRegister(t *testing.T) {
 	tb := New()
-	_ = tb.Acquire("j_1", []string{"b"}, nil)
+	mustAcquire(t, tb, "j_1", "b")
 	got := tb.Conflicts([]string{"c", "b", "a"})
 	if len(got) != 1 || got[0].Key != "b" || got[0].Holder != "j_1" {
 		t.Fatalf("conflicts = %v", got)
@@ -200,8 +228,8 @@ func TestConcurrentStartsNeverShareAKey(t *testing.T) {
 				for j, k := range set {
 					names[j] = fmt.Sprint("key", k)
 				}
-				owner := fmt.Sprintf("j_%d_%d", g, i)
-				if err := tb.Acquire(owner, names, nil); err != nil {
+				h, err := tb.Acquire(fmt.Sprintf("j_%d_%d", g, i), names, nil)
+				if err != nil {
 					continue
 				}
 				wins.Add(1)
@@ -214,7 +242,7 @@ func TestConcurrentStartsNeverShareAKey(t *testing.T) {
 				for _, k := range set {
 					inside[k].Add(-1)
 				}
-				tb.Release(owner)
+				h.Release()
 			}
 		}(g)
 	}
