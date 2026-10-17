@@ -536,7 +536,7 @@ func (g *Gate) StatusWith(mode HoldersMode) Status {
 	return Status{
 		Heavy: heavy, Light: light, WaitHeavy: h.Waiting(), WaitLight: l.Waiting(), QueueHeavy: h.Waiters(), QueueLight: l.Waiters(),
 		Suspect: append(h.Suspect(), l.Suspect()...), Profile: cfg.Profile, Settings: cfg.Effective(), Admission: g.admission(cfg),
-		PausedHeavy: cfg.Slots.Paused(ClassHeavy), PausedLight: cfg.Slots.Paused(ClassLight),
+		PausedHeavy: cfg.Enabled && cfg.Slots.Paused(ClassHeavy), PausedLight: cfg.Enabled && cfg.Slots.Paused(ClassLight),
 	}
 }
 

@@ -26,6 +26,21 @@ func gateEnv(t *testing.T, gateSection string) (cfgPath, dir string) {
 	return cfgPath, dir
 }
 
+// A disabled gate lets everything through, so a class at 0 is not shown as paused (R2: status and Run would otherwise disagree).
+// Mutation gate: the Enabled check dropped → paused is shown (red).
+func TestGate_StatusDoesNotShowPausedWhenTheGateIsDisabled(t *testing.T) {
+	cfg, _ := gateEnv(t, "enabled = false\n[gate.slots]\nheavy = 0\n[gate.admission]\ndisk_min_gb = 0\n")
+	var out, errb bytes.Buffer
+	require.Equal(t, 0, gateMain([]string{"status", "--config", cfg}, &out, &errb))
+	assert.Contains(t, out.String(), "停用")
+	assert.NotContains(t, out.String(), "已暫停")
+	out.Reset()
+	require.Equal(t, 0, gateMain([]string{"status", "--json", "--config", cfg}, &out, &errb))
+	var st map[string]any
+	require.NoError(t, json.Unmarshal(out.Bytes(), &st))
+	assert.Equal(t, false, st["PausedHeavy"])
+}
+
 // A class at slots=0 is shown as paused in the text and in the JSON (W3c); slots.<class> keeps its 0 in the settings (the fleet
 // reads that one).
 func TestGate_StatusShowsAPausedClass(t *testing.T) {
