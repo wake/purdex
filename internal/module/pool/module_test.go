@@ -220,3 +220,12 @@ func TestInfo_AnnouncesPoolV1ForTheRealModule(t *testing.T) {
 	require.NoError(t, m.Stop(context.Background()))
 	require.NotContains(t, caps(), "pool.v1")
 }
+
+// A wwd that answers records as null still gives the App an array.
+func TestHistory_NullRecordsBecomeAnEmptyArray(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/facts/history", serve([]byte(`{"step":"5s","records":null}`)))
+	rr := call(newModule(t, fakeWWD(t, mux)), "/api/pool/facts/history")
+	require.Equal(t, 200, rr.Code, rr.Body.String())
+	assert.Contains(t, rr.Body.String(), `"records":[]`)
+}
