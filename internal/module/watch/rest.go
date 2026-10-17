@@ -194,6 +194,8 @@ func (m *Module) restStep(ctx context.Context) {
 			m.logf("[watch] rest: no way to send /exit")
 			return
 		}
+		m.admit.Lock() // the check and the /exit are one step against an event being admitted
+		defer m.admit.Unlock()
 		if m.restBusy() { // checked again at the last moment
 			return
 		}
@@ -206,6 +208,8 @@ func (m *Module) restStep(ctx context.Context) {
 		if now.Sub(m.rst.at) < restExitWait {
 			return
 		}
+		m.admit.Lock()
+		defer m.admit.Unlock()
 		if m.restBusy() {
 			return
 		}
@@ -219,6 +223,8 @@ func (m *Module) restStep(ctx context.Context) {
 		if now.Sub(m.rst.at) < restKillWait {
 			return
 		}
+		m.admit.Lock()
+		defer m.admit.Unlock()
 		if m.restBusy() {
 			return
 		}
