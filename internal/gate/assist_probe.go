@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -80,7 +79,7 @@ func (g *Gate) ProbeAssist(ctx context.Context, a AssistRun, h AssistHost, argv 
 	l5, e5 := strconv.ParseFloat(load[1], 64)
 	cores, e3 := strconv.ParseFloat(load[3], 64)
 	// a number that is not a number (NaN), infinite, negative or out of range is no answer: it must not pass every limit
-	if e1 != nil || e5 != nil || e3 != nil || !finite(l1, l5, cores, idle) || l1 < 0 || l5 < 0 || cores < 1 || idle < 0 || idle > 100 {
+	if e1 != nil || e5 != nil || e3 != nil || !finite(l1) || !finite(l5) || !finite(cores) || !finite(idle) || l1 < 0 || l5 < 0 || cores < 1 || idle < 0 || idle > 100 {
 		return AssistProbe{Why: logical + " did not answer its load", Hold: holdAfterFailure}
 	}
 	limit, idleMin, hold := h.LoadLimit, float64(h.IdleMin), time.Duration(h.HoldMin)*time.Minute
@@ -100,13 +99,4 @@ func (g *Gate) ProbeAssist(ctx context.Context, a AssistRun, h AssistHost, argv 
 		return AssistProbe{Why: fmt.Sprintf("%s is busy (CPU idle %.0f%%, at least %.0f%% wanted)", logical, idle, idleMin), Hold: hold}
 	}
 	return AssistProbe{OK: true}
-}
-
-func finite(xs ...float64) bool {
-	for _, x := range xs {
-		if math.IsNaN(x) || math.IsInf(x, 0) {
-			return false
-		}
-	}
-	return true
 }
