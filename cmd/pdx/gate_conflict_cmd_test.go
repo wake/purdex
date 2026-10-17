@@ -186,7 +186,7 @@ func TestGateConflict_StatusShowsTheRulesAndTheWaiterTheyHold(t *testing.T) {
 	a, b := script("tool-a"), script("tool-b")
 	t.Cleanup(func() { _ = os.WriteFile(dir+"/go", nil, 0o644) })
 	done := make(chan int, 2)
-	for _, p := range []string{a, b} {
+	for i, p := range []string{a, b} {
 		go func() {
 			var o, e bytes.Buffer
 			done <- gateMain([]string{"--config", cfg, "--class", "heavy", "--fg", "--", p}, &o, &e)
@@ -194,6 +194,10 @@ func TestGateConflict_StatusShowsTheRulesAndTheWaiterTheyHold(t *testing.T) {
 		eventuallyOutput(t, func() bool {
 			var o, e bytes.Buffer
 			gateMain([]string{"status", "--config", cfg}, &o, &e)
+			if i == 0 {
+				// tool-a must hold its slot (not merely be queued) before tool-b arrives, or b waits on a's ticket.
+				return strings.Contains(o.String(), "重 1/2 使用中") && strings.Contains(o.String(), filepath.Base(p))
+			}
 			return strings.Contains(o.String(), filepath.Base(p))
 		})
 	}
