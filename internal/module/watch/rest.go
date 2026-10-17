@@ -24,7 +24,7 @@ const (
 	restPoll       = time.Minute
 	restBusyPoll   = 10 * time.Second
 	restAnswerWait = 5 * time.Minute
-	restQuiet      = 30 * time.Second // the answer is over when the transcript has been still this long
+	restQuiet      = 90 * time.Second // the answer is over when the transcript has been still this long (the notice itself also writes it)
 	restExitWait   = 5 * time.Minute
 	restKillWait   = 10 * time.Second
 )
@@ -159,35 +159,51 @@ func (m *Module) restStep(ctx context.Context) {
 		if now.Sub(m.rst.at) < restExitWait {
 			return
 		}
-		if !m.signalIfSame(h, syscall.SIGTERM) {
-			return
+		switch m.signalIfSame(h, syscall.SIGTERM) {
+		case sigSent:
+			m.rst.phase, m.rst.at = restTermed, now
+		case sigGone:
+			m.rst.phase, m.rst.at = restIdle, time.Time{}
 		}
-		m.rst.phase, m.rst.at = restTermed, now
 	case restTermed:
 		if now.Sub(m.rst.at) < restKillWait {
 			return
 		}
-		m.signalIfSame(h, syscall.SIGKILL)
+		if m.signalIfSame(h, syscall.SIGKILL) == sigFailed {
+			return // tried again at the next step
+		}
 		m.rst.phase, m.rst.at = restIdle, time.Time{} // gone: the next reconcile turns the holder resting; still there: counted again
 	}
 }
 
+type sigResult int
+
+const (
+	sigSent   sigResult = iota
+	sigGone             // the pid is not the watcher any more (reused, or gone): nothing to signal
+	sigFailed           // the check or the signal failed: try again
+)
+
 // signalIfSame signals the watcher's process after its start time is read again and is the one the holder recorded (a pid that was
-// reused is another process). It says whether the signal was sent.
-func (m *Module) signalIfSame(h watch.Holder, sig syscall.Signal) bool {
+// reused is another process).
+func (m *Module) signalIfSame(h watch.Holder, sig syscall.Signal) sigResult {
 	if h.PID <= 1 || h.ProcessStartTime == "" {
-		return false
+		return sigGone
 	}
 	got, err := m.procStartOf(h.PID)
-	if err != nil || got != h.ProcessStartTime {
+	if err != nil {
+		m.logf("[watch] rest: start time of %d: %v", h.PID, err)
+		return sigFailed
+	}
+	if got != h.ProcessStartTime {
 		m.logf("[watch] rest: pid %d is not the watcher any more (start time %q, want %q): no %s", h.PID, got, h.ProcessStartTime, sig)
-		return false
+		return sigGone
 	}
 	if err := m.signalPID(h.PID, sig); err != nil {
 		m.logf("[watch] rest: %s to %d: %v", sig, h.PID, err)
-		return false
+		return sigFailed
 	}
-	return true
+	return sigSent
 }
 
 func (m *Module) restReset(frame string) {

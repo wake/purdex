@@ -90,10 +90,10 @@ func TestRest_ExitGoesAfterTheAnswerOrAfterFiveMinutes(t *testing.T) {
 		r.advance(121 * time.Minute)
 		require.Len(t, r.texts(), 1)
 		r.mtime = r.now.Add(10 * time.Second) // it is answering
-		r.advance(20 * time.Second)
+		r.advance(60 * time.Second)
 		require.Zero(t, r.exit.count(), "the turn is still going on")
-		r.advance(40 * time.Second)
-		require.Equal(t, 1, r.exit.count(), "the transcript has been still for 30 s")
+		r.advance(60 * time.Second)
+		require.Equal(t, 1, r.exit.count(), "the transcript has been still for 90 s")
 	})
 	t.Run("no answer", func(t *testing.T) {
 		r := newRestRig(t)
@@ -170,4 +170,25 @@ func TestRest_AFrameThatReplacesTheOneAskedIsNotExitedOnTheOldOnesClock(t *testi
 	r.owners.set(watcherOwner("f2"), true, nil)
 	r.advance(6 * time.Minute)
 	require.Zero(t, r.exit.count(), "/exit goes to the frame that was asked, not to a new one")
+}
+
+func TestRest_AFailedSIGKILLIsTriedAgainAtTheNextStepNotRestartedAsANewRest(t *testing.T) {
+	r := newRestRig(t)
+	r.advance(121 * time.Minute)
+	r.advance(5*time.Minute + time.Second)
+	r.advance(5*time.Minute + time.Second) // SIGTERM
+	fail := true
+	r.m.signalFn = func(pid int, sig syscall.Signal) error {
+		r.sigs = append(r.sigs, sigRec{pid, sig})
+		if sig == syscall.SIGKILL && fail {
+			return syscall.EPERM
+		}
+		return nil
+	}
+	r.advance(11 * time.Second) // SIGKILL fails
+	fail = false
+	r.advance(10 * time.Second)
+	require.Equal(t, syscall.SIGKILL, r.sigs[len(r.sigs)-1].sig)
+	require.Len(t, r.texts(), 1, "no second notice: the rest went on")
+	require.Len(t, r.sigs, 3)
 }
