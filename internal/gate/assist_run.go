@@ -36,6 +36,9 @@ type AssistRun struct {
 	AdmitWait time.Duration
 }
 
+// assistAfterPrepare is a seam for tests: it runs when the preparation on the host is done, before the command is started there.
+var assistAfterPrepare func()
+
 // AssistResult is what a run on an assist host came to.
 type AssistResult struct {
 	Code    int  // the command's exit code when Started
@@ -282,9 +285,17 @@ func (g *Gate) RunAssist(ctx context.Context, o Options, a AssistRun) (res Assis
 		}
 		return fail(fmt.Errorf("prepare on %s: %w: %s", a.Host, err, lastLines(prepErr.String(), 3)))
 	}
+	if assistAfterPrepare != nil {
+		assistAfterPrepare()
+	}
 	stopWatching()
 	if s, ok := signalled(); ok { // it came as the preparation ended: the command is not started
 		return cancelledNow(s)
+	}
+	select { // one that the watcher had not taken yet is still in the channel
+	case s := <-sigs:
+		return cancelledNow(s)
+	default:
 	}
 	res.TransferS = g.Now().Sub(began).Seconds()
 

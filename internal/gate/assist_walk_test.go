@@ -149,14 +149,36 @@ func TestWalk_ASignalDuringThePreparationStartsNothing(t *testing.T) {
 		done <- code
 	}()
 	eventuallyFor(t, 60*time.Second, "the preparation to start", func() bool { return exists(h.remote("prepare-started")) })
+	began := time.Now()
 	sigs <- syscall.SIGINT
 	select {
 	case code := <-done:
 		assert.Equal(t, 130, code, "128 + SIGINT")
+		assert.Less(t, time.Since(began), 5*time.Second, "at once, not when the 6 s step ended")
 	case <-time.After(30 * time.Second):
 		t.Fatal("the signal did not end the preparation")
 	}
 	time.Sleep(8 * time.Second) // longer than the slow step: nothing may start after it
+	assert.NoFileExists(t, marker, "never run, here or there")
+	assert.Empty(t, h.listDir(t, "Assist/jobs.noindex"), "no job was started")
+	dispatchRun{g: g, dir: g.Config().Dir}.nothingLeft(t)
+}
+
+// A signal that comes as the preparation ends, before the command is started: the command is not started.
+func TestWalk_ASignalAsThePreparationEndsStartsNothing(t *testing.T) {
+	g, errs := testGate(t)
+	sigs := make(chan os.Signal, 1)
+	g.Signals = sigs
+	work := workRepo(t)
+	h := newAssistHost(t, filepath.Base(work))
+	marker := filepath.Join(t.TempDir(), "ran-anywhere")
+	assistAfterPrepare = func() { assistAfterPrepare = nil; sigs <- syscall.SIGTERM }
+	t.Cleanup(func() { assistAfterPrepare = nil })
+	var out bytes.Buffer
+	code, err := g.Run(context.Background(), Options{Argv: sh(`touch ` + marker), Class: ClassHeavy, Dir: work, Env: cleanEnv(), Stdout: &out, Stderr: errs,
+		Walk: &AssistWalk{Usable: func() map[string]AssistHost { return map[string]AssistHost{"air26": {Can: []string{"sh"}}} }, SSH: h.ssh}})
+	require.NoError(t, err)
+	assert.Equal(t, 143, code, "128 + SIGTERM")
 	assert.NoFileExists(t, marker, "never run, here or there")
 	assert.Empty(t, h.listDir(t, "Assist/jobs.noindex"), "no job was started")
 	dispatchRun{g: g, dir: g.Config().Dir}.nothingLeft(t)
