@@ -116,6 +116,27 @@ func TestPoolSource_StaleFactsAndUnreachableWithOldFacts(t *testing.T) {
 	assert.Equal(t, "offline", r.host("mlab:abc123").Status, "an old reading is not ok")
 }
 
+// A host whose clock jumped into the future for one sample and then came back must not be locked out: the next facts, stamped
+// earlier than the future one, are still new readings.
+func TestPoolSource_AFutureStampDoesNotLockTheRow(t *testing.T) {
+	r, fp := newPoolRig(t)
+	now := r.fc.Now()
+	fp.set(wire.Pool{Peers: []wire.Peer{peerOK("mlab", now.Add(24*time.Hour), 50, 1, wire.ZoneNormal)}}, nil)
+	r.start()
+	r.tick()
+	assert.Equal(t, "ok", r.host("mlab:abc123").Status)
+
+	r.fc.Advance(5 * time.Second)
+	fp.set(wire.Pool{Peers: []wire.Peer{peerOK("mlab", r.fc.Now(), 10, 1, wire.ZoneNormal)}}, nil)
+	r.tick()
+	assert.Equal(t, 90.0, r.host("mlab:abc123").Fast.CPU, "the corrected clock's sample is taken")
+
+	r.fc.Advance(poolStaleAfter - time.Second)
+	fp.set(wire.Pool{Peers: []wire.Peer{peerOK("mlab", r.fc.Now(), 10, 1, wire.ZoneNormal)}}, nil)
+	r.tick()
+	assert.Equal(t, "ok", r.host("mlab:abc123").Status, "and it stays ok")
+}
+
 // A peer wwd cannot reach, a missing peer and a failing wwd all read offline; a returning wwd brings the row back.
 func TestPoolSource_UnreachableAndWWDDown(t *testing.T) {
 	r, fp := newPoolRig(t)

@@ -59,7 +59,7 @@ func peerOfAlias(p wire.Pool, alias string) *wire.Peer {
 // applyFactsLocked turns one host's facts into its fast and slow parts when they are newer than the last seen (m.mu held).
 // now is the receive time, the same clock every other source stamps its readings with.
 func (m *Measure) applyFactsLocked(h *hostRow, f *wire.Facts, now time.Time) {
-	if !f.At.After(h.ownAt) {
+	if f.At.Equal(h.ownAt) { // the same sample again; any other stamp, an earlier one too, is a new reading (a clock that stepped back must not lock the row)
 		return
 	}
 	h.ownAt, h.ownSeen = f.At, now
