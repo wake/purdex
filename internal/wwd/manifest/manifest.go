@@ -240,11 +240,16 @@ func buildTask(name string, rt rawTask) (*Task, error) {
 	if err := checkPlaceholders(t); err != nil {
 		return nil, err
 	}
+	envSeen := map[string]bool{}
 	for _, e := range t.Env {
 		k, _, _ := strings.Cut(e, "=")
 		if !envNameRe.MatchString(k) {
 			return nil, fmt.Errorf("env entry %q has an invalid name", e)
 		}
+		if envSeen[k] {
+			return nil, fmt.Errorf("env name %q appears more than once", k)
+		}
+		envSeen[k] = true
 	}
 	if err := checkUnique("locks", t.Locks); err != nil {
 		return nil, err

@@ -105,6 +105,7 @@ func TestParseRejects(t *testing.T) {
 		"bad db":                 "[tasks.a]\nrun = \"x\"\nargs = \"none\"\ndb = \"shared\"\n",
 		"bad env":                "[tasks.a]\nrun = \"x\"\nargs = \"none\"\nenv = [\"1BAD=x\"]\n",
 		"bad task name":          "[tasks.\"a b\"]\nrun = \"x\"\nargs = \"none\"\n",
+		"duplicate env name":     "[tasks.a]\nrun = \"x\"\nargs = \"none\"\nenv = [\"MODE=fast\", \"MODE=slow\"]\n",
 		"duplicate lock":         "[tasks.a]\nrun = \"x\"\nargs = \"none\"\nlocks = [\"db\", \"db\"]\n",
 	}
 	for name, src := range cases {
