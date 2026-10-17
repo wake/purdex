@@ -4,6 +4,7 @@ import { PauseReleaseButton } from './PauseReleaseButton'
 import { UnattendedPausedSection } from './UnattendedPausedSection'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
+import { useTeamRosterStore } from '../stores/useTeamRosterStore'
 import { usePausedStore } from '../stores/usePausedStore'
 import { postPauseRelease, type PausedSession, type ReleaseResult } from '../lib/team/paused-api'
 import { refreshPaused } from '../lib/team/paused-refresh'
@@ -21,6 +22,7 @@ beforeEach(() => {
   refresh.mockClear()
   useI18nStore.getState().setLocale('zh-TW')
   usePausedStore.getState().reset()
+  useTeamRosterStore.getState().reset()
   useHostStore.setState({
     hosts: { a: { id: 'a', name: 'alpha', ip: '1', port: 1, token: 't', order: 0 }, b: { id: 'b', name: 'beta', ip: '2', port: 1, token: 't', order: 1 } } as never,
     hostOrder: ['a', 'b'], runtime: {},
@@ -141,5 +143,28 @@ describe('UnattendedPausedSection', () => {
     usePausedStore.getState().set('b', [sess('2')], 1)
     const { container } = render(<UnattendedPausedSection hostIds={['a']} />)
     expect(container).toBeEmptyDOMElement()
+  })
+})
+
+describe('UnattendedPausedSection team names (U15)', () => {
+  const roster = (lead: string, name: string) => ({ id: `t-${lead}`, host_id: 'd', created_at: 1, team_name: name, team_label: '', lead: { session_id: lead, ref: `_${lead}`, address: `m/${lead}`, live: true }, members: [] })
+
+  it('a paused lead shows its team name (found on another host\'s roster), the title muted after it', () => {
+    useTeamRosterStore.getState().apply('b', [roster('1', 'Payments')])
+    usePausedStore.getState().set('a', [sess('1', { title: 'iface-lead', role: 'lead', causes: ['lead'] })], 1)
+    render(<UnattendedPausedSection hostIds={['a']} />)
+    const row = screen.getByTestId('paused-row')
+    expect(row.textContent).toContain('alpha：Payments')
+    expect(screen.getByTestId('paused-lead-title')).toHaveTextContent('iface-lead')
+  })
+
+  it('an empty team name shows the lead title; a solo row keeps title else ref', () => {
+    useTeamRosterStore.getState().apply('a', [roster('1', '')])
+    usePausedStore.getState().set('a', [sess('1', { title: 'iface-lead', role: 'lead' }), sess('2', { title: '' })], 1)
+    render(<UnattendedPausedSection hostIds={['a']} />)
+    const text = screen.getAllByTestId('paused-row').map((r) => r.textContent).join('|')
+    expect(text).toContain('alpha：iface-lead')
+    expect(text).toContain('alpha：_2')
+    expect(screen.queryByTestId('paused-lead-title')).toBeNull()
   })
 })

@@ -8,12 +8,18 @@ import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useTeamRosterStore } from '../stores/useTeamRosterStore'
 import { useRelayQuotaStore } from '../lib/team/relay-quota'
+import { leadNameBySession } from '../lib/team/lead-name'
 import { setQuota } from '../lib/team/relay-quota-writer'
 import { setMaxMembers, teamKey, useMaxMembersStore } from '../lib/team/max-members'
 import { useUnattendedStore } from '../stores/useUnattendedStore'
 import type { RosterSession, TeamRoster } from '../lib/team/roster'
 import type { SessionQuota } from '../lib/team/types'
 
+vi.mock('../lib/team/lead-name', async (orig) => {
+  const actual = await orig<typeof import('../lib/team/lead-name')>()
+  return { ...actual, leadNameBySession: vi.fn(actual.leadNameBySession) }
+})
+const mockedLeadName = vi.mocked(leadNameBySession)
 vi.mock('../lib/team/relay-quota-writer', () => ({ setQuota: vi.fn() }))
 const mockedSet = vi.mocked(setQuota)
 vi.mock('../lib/team/max-members', async (orig) => ({ ...(await orig<typeof import('../lib/team/max-members')>()), setMaxMembers: vi.fn() }))
@@ -335,5 +341,52 @@ describe('the team cap stepper', () => {
     useTeamRosterStore.getState().apply(A, [capTeam('l1')])
     show([{ hostId: A, rows: [q('l1', { is_lead: true })] }])
     expect(screen.queryByTestId('cap-stepper')).toBeNull()
+  })
+})
+
+describe('team names (U15)', () => {
+  const named = (lead: string, name: string, id = `t-${lead}`): TeamRoster => ({ ...team(lead, []), id, team_name: name })
+
+  it('a lead row shows the team name, the lead title muted after it, and no address', () => {
+    useTeamRosterStore.getState().apply(A, [named('L1', 'Payments')])
+    show([{ hostId: A, rows: [q('L1', { is_lead: true, title: 'iface-lead' })] }])
+    expect(rowFor('L1').textContent).toContain('Payments')
+    expect(within(rowFor('L1')).getByTestId('quota-lead-title')).toHaveTextContent('iface-lead')
+    expect(rowFor('L1').textContent).not.toContain('mlab/')
+  })
+
+  it('a title equal to the team name is not repeated', () => {
+    useTeamRosterStore.getState().apply(A, [named('L1', 'Same')])
+    show([{ hostId: A, rows: [q('L1', { is_lead: true, title: 'Same' })] }])
+    expect(within(rowFor('L1')).queryByTestId('quota-lead-title')).toBeNull()
+  })
+
+  it('a daemon without names (team_name empty) shows the lead title', () => {
+    useTeamRosterStore.getState().apply(A, [named('L1', '')])
+    show([{ hostId: A, rows: [q('L1', { is_lead: true, title: 'iface-lead' })] }])
+    expect(rowFor('L1').textContent).toContain('iface-lead')
+    expect(within(rowFor('L1')).queryByTestId('quota-lead-title')).toBeNull()
+  })
+
+  it('a solo row keeps its title; a lead of a team on another host is found in that host\'s roster', () => {
+    useTeamRosterStore.getState().apply(A, [])
+    useTeamRosterStore.getState().apply(B, [named('L2', 'Remote team')])
+    show([{ hostId: A, rows: [q('P1', { title: 'solo-one' }), q('L2', { is_lead: true, title: 'x' })] }])
+    expect(rowFor('P1').textContent).toContain('solo-one')
+    expect(rowFor('L2').textContent).toContain('Remote team')
+  })
+
+  it('leads sort by the shown team name', () => {
+    useTeamRosterStore.getState().apply(A, [named('a', 'Zulu'), named('b', 'Alpha')])
+    show([{ hostId: A, rows: [q('a', { is_lead: true, title: 'A first' }), q('b', { is_lead: true, title: 'Z last' })] }])
+    expect(screen.getAllByTestId('quota-row').map((r) => r.getAttribute('data-session'))).toEqual(['b', 'a'])
+  })
+
+  it('each lead row looks its team up once per render, not once per comparison or child', () => {
+    const ids = ['a', 'b', 'c', 'd', 'e']
+    useTeamRosterStore.getState().apply(A, ids.map((id) => named(id, `Team ${id}`)))
+    mockedLeadName.mockClear()
+    show([{ hostId: A, rows: ids.map((id) => q(id, { is_lead: true, title: `t-${id}` })) }])
+    expect(mockedLeadName).toHaveBeenCalledTimes(ids.length)
   })
 })
