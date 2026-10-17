@@ -63,6 +63,9 @@ type RankInfo struct {
 type QueueEntry struct {
 	Name string
 	Rank RankInfo // Rank is the EFFECTIVE rank: normal for a broken file or an expired hold
+	// Argv is the command the ticket was made for, as its file says (the file is for listing: it may be empty or damaged, then the
+	// ticket matches no conflict rule). A gate's own ticket is judged by the argv it keeps in memory instead.
+	Argv []string
 }
 
 // Snapshot is the queue of one pool at one moment under the admit lock: the live tickets in the order they are served (front by
@@ -240,7 +243,11 @@ func (p *Pool) scanQueue(clean bool) (Snapshot, error) {
 			outEntries = append(outEntries, OutEntry{Name: n, Out: o})
 			continue
 		}
-		entries = append(entries, QueueEntry{Name: n, Rank: p.readRank(n, now)})
+		var info WaiterInfo
+		if b, err := os.ReadFile(path); err == nil {
+			_ = json.Unmarshal(b, &info)
+		}
+		entries = append(entries, QueueEntry{Name: n, Rank: p.readRank(n, now), Argv: info.Argv})
 	}
 	for _, n := range ranks {
 		if clean && !live[n] {
@@ -413,4 +420,19 @@ func rankOfTicket(s Snapshot, name string) RankInfo {
 		}
 	}
 	return RankInfo{Rank: RankNormal}
+}
+
+// withMissing is the queue with a normal ticket of this name added where its name puts it: after the front tickets and the normal
+// ones with an older name, before the rest. For a ticket whose file was taken from under it.
+func withMissing(q []QueueEntry, name string) []QueueEntry {
+	at := len(q)
+	for i, e := range q {
+		if e.Rank.Rank == RankBack || e.Rank.Rank == RankHold || (e.Rank.Rank == RankNormal && e.Name > name) {
+			at = i
+			break
+		}
+	}
+	out := append([]QueueEntry(nil), q[:at]...)
+	out = append(out, QueueEntry{Name: name, Rank: RankInfo{Rank: RankNormal}})
+	return append(out, q[at:]...)
 }

@@ -109,6 +109,11 @@ func withFrontNote(line string, aheadFront int) string {
 	return strings.Replace(line, " ahead;", fmt.Sprintf(" ahead, behind %d moved to the front;", aheadFront), 1)
 }
 
+// conflictLine is the line for a command a conflict rule keeps waiting though there is room: what it waits for, the rule and why.
+func conflictLine(b *ConflictBlock) string {
+	return fmt.Sprintf("waits for %s: %s × %s (%s). %s", b.With, b.Rule.A, b.Rule.B, b.Rule.Reason, normalQueue)
+}
+
 // pausedLine is the line for a command of a class whose slot count is 0.
 func pausedLine(class Class) string {
 	return fmt.Sprintf("the %s class is paused (slots.%s = 0): this command waits and starts by itself once the count is raised. %s", class, class, normalQueue)

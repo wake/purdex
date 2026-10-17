@@ -51,6 +51,10 @@ const AdmittedMarkEnv = "PDX_GATE_ADMITTED_MARK"
 // accident.
 const AdmittedMark = "\x1epdx-gate-admitted\n"
 
+// NotStartedMark follows AdmittedMark when the command could not be started after all (a binary that cannot be executed): the run was
+// admitted but nothing ran, which is a failure before the start for whoever sent it.
+const NotStartedMark = "\x1epdx-gate-not-started\n"
+
 // KeepOrphanEnv set to anything but "" and "0" lets a command that waits go on waiting when its caller is gone (a detached job
 // on purpose: `nohup pdx gate … &` that outlives the terminal).
 const KeepOrphanEnv = "PDX_GATE_KEEP_ORPHAN"

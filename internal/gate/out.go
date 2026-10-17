@@ -123,7 +123,7 @@ func (p *Pool) TakeDispatch(info WaiterInfo) (*Slot, error) {
 		return nil, err
 	}
 	defer unlock()
-	return p.takeLocked(0, info)
+	return p.takeLocked(info)
 }
 
 // ServeOut sends a waiting ticket of p out to an assist host: under p's admit lock it takes a dispatch slot from dispatch and marks the

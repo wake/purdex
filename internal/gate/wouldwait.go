@@ -55,6 +55,53 @@ func (r *HostReader) Peek() (Pressure, bool) {
 	return p, have
 }
 
+// WouldWaitFor is WouldWait for a command whose words are known: besides the capacity and the pressure, it waits when a holder of the
+// class, or a front or normal ticket in the queue, runs a command a conflict rule keeps apart from this one (spec §5.3). Back and held
+// tickets never make it wait. The rules and the queue are read as the other readers read them, without the lock and without removing
+// anything: a hint, as WouldWait is.
+func (g *Gate) WouldWaitFor(class Class, argv []string) WouldWait {
+	return g.ConflictView(class).Apply(g.WouldWait(class), argv)
+}
+
+// ConflictView is one reading of what the conflict rules of a class need: the rules, the queue and the holders. Several commands of
+// one class are answered from one view, so they cannot disagree with each other about the state they were looked at in.
+type ConflictView struct {
+	class   Class
+	enabled bool
+	rules   []Conflict
+	queue   []QueueEntry
+	holders []Holder
+}
+
+// ConflictView reads the rules, the queue and the holders of the class once (read-only, no lock, nothing removed).
+func (g *Gate) ConflictView(class Class) ConflictView {
+	cfg := g.Config()
+	v := ConflictView{class: class, enabled: cfg.Enabled && class.Valid()}
+	if !v.enabled {
+		return v
+	}
+	pool := g.pool(cfg, class)
+	if v.rules, _ = LoadConflicts(pool.Dir); len(v.rules) == 0 {
+		return v // no rules: nothing else is read
+	}
+	v.queue, v.holders = pool.peekSnapshot().Queue, pool.Held()
+	return v
+}
+
+// Apply adds the rules to an answer of WouldWait for the view's class: a command that would not wait for capacity or pressure waits
+// when a rule holds it back (reason "conflict"), as a new normal ticket at the end of the normal group.
+func (v ConflictView) Apply(w WouldWait, argv []string) WouldWait {
+	if w.Wait || len(argv) == 0 || !v.enabled || len(v.rules) == 0 {
+		return w
+	}
+	res := walkQueue(v.class, v.queue, v.holders, v.rules, 1<<20, "", nil, argv)
+	if b := res.Blocked[""]; b != nil {
+		w.Wait, w.Reason = true, "conflict"
+		w.Note = conflictLine(b)
+	}
+	return w
+}
+
 // WouldWait looks at the class now.
 func (g *Gate) WouldWait(class Class) WouldWait {
 	cfg := g.Config()

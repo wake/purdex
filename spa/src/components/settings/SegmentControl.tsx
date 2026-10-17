@@ -2,6 +2,8 @@ interface Option<T extends string> {
   value: T
   label: string
   disabled?: boolean
+  /** Native tooltip; mostly to say why a disabled option is disabled. */
+  title?: string
 }
 
 interface Props<T extends string> {
@@ -23,6 +25,7 @@ export function SegmentControl<T extends string>({ options, value, onChange }: P
             type="button"
             aria-pressed={isActive}
             disabled={opt.disabled}
+            title={opt.title}
             onClick={() => { if (!isActive) onChange(opt.value) }}
             className={`px-4 py-1.5 text-xs border transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
               isActive

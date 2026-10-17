@@ -56,6 +56,7 @@ func (m *Module) WakeWatcher(ctx context.Context, reason, detail string) error {
 		}
 		var definite bool
 		if lastErr, definite = m.tellWatcher(ctx, where, reason, detail, text); lastErr == nil {
+			m.patrol.told(m.now()) // any note counts as the watcher having been looked after
 			return nil
 		}
 		if !definite {
@@ -138,5 +139,6 @@ func (m *Module) handlePeerNote(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadGateway, "not_delivered", "the watcher could not be told")
 		return
 	}
+	m.patrol.told(m.now())                                                       // the note restarts the count on the host that holds the watcher
 	m.writeJSON(w, http.StatusOK, map[string]any{"host_id": ours, "told": true}) // HostCaller wants the answering host id in every 2xx
 }

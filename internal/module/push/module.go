@@ -252,7 +252,8 @@ func (m *Module) Start(ctx context.Context) error {
 	snd.Start(ctx)
 	snd.openState = m.openState
 	m.sender.Store(snd)
-	m.core.Registry.Register(team.PauseNotifyKey, m.pauseNotifier()) // the team module's pause outbox asks for a phone push through it
+	m.core.Registry.Register(push.AtComputerKey, push.AtComputerReader(m.presence)) // the load watcher's patrol asks whether the person is at a computer
+	m.core.Registry.Register(team.PauseNotifyKey, m.pauseNotifier())                // the team module's pause outbox asks for a phone push through it
 	m.holds.reset()
 	m.ap.start()
 	m.wbHolds.reset()

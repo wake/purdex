@@ -285,3 +285,15 @@ func TestRun_TagIsOnTheTicketAndTheHolder(t *testing.T) {
 	<-holderDone
 	<-waiter
 }
+
+// A start that fails after the mark says so with the second mark, so the sender knows nothing ran.
+func TestRun_AFailedStartTakesTheMarkBack(t *testing.T) {
+	g, _ := testGate(t)
+	bin := t.TempDir() + "/notexec"
+	require.NoError(t, os.WriteFile(bin, []byte("x"), 0o644))
+	var errb bytes.Buffer
+	code, _ := g.Run(context.Background(), Options{Argv: []string{"notexec"}, Real: bin, Class: ClassHeavy, Env: append(cleanEnv(), AdmittedMarkEnv+"=1"), Stdout: &bytes.Buffer{}, Stderr: &errb})
+	assert.Equal(t, 126, code)
+	assert.Contains(t, errb.String(), NotStartedMark)
+	assert.True(t, strings.HasPrefix(errb.String(), AdmittedMark))
+}
