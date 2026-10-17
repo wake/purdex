@@ -39,11 +39,19 @@ describe('roster fresh_handoff', () => {
     ['no written_at', { op_id: 'o', path: '/p' }],
     ['a string written_at', { ...good, written_at: '1700' }],
     ['an infinite written_at', { ...good, written_at: Infinity }],
+    ['a written_at too big for a Date', { ...good, written_at: 1e20 }],
+    ['a written_at too small for a Date', { ...good, written_at: -1e20 }],
+    ['a written_at just past the Date range', { ...good, written_at: 8.64e15 + 2000 }],
   ])('a malformed value (%s) reads as none and keeps the session and the frame', (_name, bad) => {
     const t = parsed({ ...team, lead: { ...lead, fresh_handoff: bad }, members: [{ ...member, fresh_handoff: good }] })
     expect('fresh_handoff' in t.lead).toBe(false)
     expect(t.lead.session_id).toBe('s-lead')
     expect(t.members[0].fresh_handoff).toEqual(good) // the other seat is untouched
+  })
+
+  it('the edges of the Date range are kept', () => {
+    expect(parseFreshHandoff({ ...good, written_at: 8.64e15 })).toEqual({ ...good, written_at: 8.64e15 })
+    expect(parseFreshHandoff({ ...good, written_at: -8.64e15 })).toEqual({ ...good, written_at: -8.64e15 })
   })
 
   it('parseFreshHandoff drops unknown extra fields', () => {

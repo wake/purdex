@@ -26,6 +26,9 @@ export interface RelayFreshEvent {
   sessions: RelayFresh[]
 }
 
+/** The largest |ms| a `Date` can hold; a `written_at` beyond it would render as an Invalid Date (same constant in lib/relay/fresh.ts and lib/team/roster.ts). */
+const MAX_DATE_MS = 8.64e15
+
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 /** One wire entry as a `RelayFresh`, or null when a field is missing or ill-typed. `code` is optional: kept only as a non-empty string. */
@@ -35,7 +38,7 @@ export function parseRelayFreshEntry(v: unknown): RelayFresh | null {
   if (typeof session_id !== 'string' || session_id === '') return null
   if (typeof ref !== 'string' || typeof op_id !== 'string') return null
   if (typeof path !== 'string' || path === '') return null
-  if (typeof written_at !== 'number' || !Number.isFinite(written_at)) return null
+  if (typeof written_at !== 'number' || !Number.isFinite(written_at) || Math.abs(written_at) > MAX_DATE_MS) return null
   return { session_id, ref, op_id, path, written_at, ...(typeof code === 'string' && code !== '' ? { code } : {}) }
 }
 
