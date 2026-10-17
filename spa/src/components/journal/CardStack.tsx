@@ -18,6 +18,7 @@ import { CARD_GAP, STACK_MARGIN, visibleCards } from './card-layout'
 import { useJournalTarget } from './useJournalTarget'
 import { TeamPanelArea } from '../team/TeamPanelArea'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
+import { usePanelDraftStore } from '../../stores/usePanelDraftStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { cardWidth, useJournalUiStore, type CardKey } from '../../stores/useJournalUiStore'
 import { keepFocus } from '../../lib/keep-focus'
@@ -71,7 +72,8 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
   const { team, memoHost, memoKey } = target
   const memo = useViewMemo(memoHost, memoKey)
   // The docked team panel sits at the right edge while it is in the pane (not in the title bar): the cards float left of it.
-  const panelWidth = useTeamUiStore((s) => s.panelDraft ?? s.panel.width) // follows the edge while it is dragged
+  const persistedWidth = useTeamUiStore((s) => s.panel.width)
+  const panelWidth = usePanelDraftStore((s) => s.draft) ?? persistedWidth // follows the edge while it is dragged
   const panelInPane = team !== null && team.mode !== 'titlebar'
   const reserved = panelInPane ? panelWidth + CARD_GAP : 0
   const last = useJournalUiStore((s) => s.lastWidths)
