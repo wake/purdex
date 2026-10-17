@@ -14,6 +14,7 @@ import { RegionResize } from '../RegionResize'
 import { useTabStore } from '../../stores/useTabStore'
 import { PANEL_MAX_WIDTH, currentPanelMin, useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useJournalTarget } from '../journal/useJournalTarget'
+import { useIsJournalHost } from '../../lib/journal/use-journal-host'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamDisplay } from './team-display'
 import { panelView } from './panel-view'
@@ -30,9 +31,14 @@ export function TeamPanelArea() {
   const own = useOwnWorkbook()
   const sharedMode = useTeamUiStore((s) => s.sharedPanelMode)
   const panelTeam = display ? display.panelTeam(activeTabId) : null
-  // On a journal.v1 host (J-2b) the workbook branches stay off: the team view only.
-  const journalHost = useJournalTarget().journalHost
-  const view0 = panelView({ panelTeam, teamDrill, own, journalHost })
+  // On a journal.v1 host (J-2b) the workbook branches stay off: the team view only. Either host decides: the tab's own host (its cc
+  // session) or the team's lead host. `useJournalTarget().journalHost` is the host the unit is READ from, which a follow route moves to
+  // the lead's, so it cannot stand for the tab's own.
+  const originHost = useJournalTarget().origin?.hostId ?? ''
+  const tabJournal = useIsJournalHost(originHost)
+  const leadJournal = useIsJournalHost(panelTeam?.lead.hostId ?? '')
+  const noDrill = tabJournal || leadJournal
+  const view0 = panelView({ panelTeam, teamDrill, own, journalHost: noDrill })
   // The team the area draws a frame for: the team view, or the team's drilled-in seat workbook (same frame, same mode).
   const shownTeam = view0 !== null && 'team' in view0 ? view0.team : null
   // A tab of no team shows its own workbook in the one value all such tabs share.
@@ -84,7 +90,7 @@ export function TeamPanelArea() {
             team={shownTeam}
             activeTabId={activeTabId}
             width={draft ?? width}
-            noDrill={journalHost}
+            noDrill={noDrill}
             onSetMode={(m) => useTeamUiStore.getState().setPanelMode(shownTeam.teamKey, m)}
             onOpen={(sessionId) => display.onOpenSeat(shownTeam.teamKey, sessionId)}
             onReorder={(ids) => display.onReorderMembers(shownTeam.teamKey, ids)}
