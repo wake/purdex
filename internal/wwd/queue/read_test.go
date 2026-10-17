@@ -87,6 +87,23 @@ func TestListForPeersNeverShowsAdHocJobs(t *testing.T) {
 	assert.Equal(t, []string{normal}, ids(peers))
 }
 
+// A claim is shown while someone holds it (claimed, running), not after the job ended or went back to the queue: the columns stay for
+// the result's idempotence, but the job no longer says it is claimed. Mutation gate: the state condition dropped → this fails.
+func TestClaimIsShownOnlyWhileHeld(t *testing.T) {
+	f := newFixture(t)
+	for _, c := range []struct {
+		state wire.JobState
+		shown bool
+	}{
+		{wire.StateClaimed, true}, {wire.StateRunning, true},
+		{wire.StateQueued, false}, {wire.StateSucceeded, false}, {wire.StateFailed, false}, {wire.StateCancelled, false},
+	} {
+		id := f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "" })
+		f.seed(t, id, c.state, "claim_worker = 'air26', claim_since = ?", ms(f.clk.Now()))
+		assert.Equal(t, c.shown, f.get(t, id).Claim != nil, string(c.state))
+	}
+}
+
 // The claim_id is a capability: no read path ever carries it (spec 4.2). Mutation gate: a Job built with the claim_id → this fails.
 func TestNoReadCarriesTheClaimID(t *testing.T) {
 	f := newFixture(t)

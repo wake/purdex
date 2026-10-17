@@ -88,7 +88,7 @@ func createSchema(ctx context.Context, c *sql.Conn) error {
 			finished_at      INTEGER,
 			log_size         INTEGER,
 			log_at           INTEGER,
-			repo_dir         TEXT NOT NULL DEFAULT '',
+			git_dir          TEXT NOT NULL DEFAULT '',
 			pinned           INTEGER NOT NULL DEFAULT 0,
 			updated_at       INTEGER NOT NULL
 		)`,

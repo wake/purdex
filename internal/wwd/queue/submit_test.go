@@ -99,6 +99,27 @@ func TestSubmitIDsAreUniqueAndSortByTime(t *testing.T) {
 	}
 }
 
+// The id is a ULID: only Crockford characters, and its first ten carry the origin's clock in milliseconds, so ids sort by age and
+// say when a job was submitted. Mutation gate: the time part shortened → the decoded time is wrong.
+func TestJobIDIsAULIDOfTheOriginsClock(t *testing.T) {
+	const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+	now := time.Date(2026, 10, 18, 5, 0, 0, 123_000_000, time.UTC)
+	id := newJobID(now)
+	require.True(t, strings.HasPrefix(id, "j_"))
+	body := id[2:]
+	require.Len(t, body, 26)
+	var decoded int64
+	for i, ch := range body {
+		pos := strings.IndexRune(alphabet, ch)
+		require.GreaterOrEqual(t, pos, 0, "char %d (%q) is not Crockford", i, ch)
+		if i < 10 {
+			decoded = decoded<<5 | int64(pos)
+		}
+	}
+	assert.Equal(t, now.UnixMilli(), decoded)
+	assert.NotEqual(t, newJobID(now), newJobID(now), "the random part differs")
+}
+
 // A newer job with the same supersede_key supersedes a queued older one at once; another key is left alone; a job with no key never
 // supersedes or is superseded.
 func TestSupersedeOfQueuedJobs(t *testing.T) {
