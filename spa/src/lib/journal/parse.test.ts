@@ -1,6 +1,6 @@
 // spa/src/lib/journal/parse.test.ts — the strict parse of the journal wire (J-2a T-2a.2).
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { parseChangedEvent, parseEntry, parseJournalPage, parseRemoteLead, parseRoadmap, parseTasks, resetWarned } from './parse'
+import { parseChangedEvent, parseEntry, parseJournalPage, parseRemoteLead, parseSessions, parseRoadmap, parseTasks, resetWarned } from './parse'
 import { ENTRY_KINDS } from './types'
 import { T0, wireConfirm, wireEntry, wirePage, wireRoadmap, wireTasks } from './fixtures'
 
@@ -96,5 +96,38 @@ describe('tasks, roadmap, events', () => {
     expect(parseRemoteLead({ lead_host_id: 'h' })).toBeNull()
     expect(parseRemoteLead({ lead_host_id: '', lead_session_id: 's' })).toBeNull()
     expect(parseRemoteLead(null)).toBeNull()
+  })
+})
+
+describe('session page fields', () => {
+  it('a page without page / truncated (both omitempty) reads as an empty page id and not truncated', () => {
+    const p = parseJournalPage(wirePage())
+    expect(p?.page).toBe('')
+    expect(p?.truncated).toBe(false)
+  })
+  it('reads page and truncated when sent', () => {
+    const p = parseJournalPage(wirePage({ page: 'sess-1', truncated: true }))
+    expect(p?.page).toBe('sess-1')
+    expect(p?.truncated).toBe(true)
+  })
+})
+
+describe('parseSessions', () => {
+  const s = (id: string, over: Record<string, unknown> = {}) => ({ session_id: id, started_at: 10, ended_at: 0, via: 'root', current: false, ...over })
+  it('reads sessions oldest first, incomplete defaults to false', () => {
+    const r = parseSessions({ sessions: [s('a', { ended_at: 20 }), s('b', { via: 'clear', current: true })] })
+    expect(r?.incomplete).toBe(false)
+    expect(r?.sessions).toEqual([
+      { sessionId: 'a', startedAt: 10, endedAt: 20, via: 'root', current: false },
+      { sessionId: 'b', startedAt: 10, endedAt: 0, via: 'clear', current: true },
+    ])
+  })
+  it('reads incomplete', () => {
+    expect(parseSessions({ sessions: [], incomplete: true })?.incomplete).toBe(true)
+  })
+  it('drops a malformed row, and a malformed envelope is null', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(parseSessions({ sessions: [s(''), s('a', { via: 'weird' }), s('ok')] })?.sessions.map((x) => x.sessionId)).toEqual(['ok'])
+    expect(parseSessions({ nope: 1 })).toBeNull()
   })
 })
