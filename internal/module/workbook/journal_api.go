@@ -54,14 +54,20 @@ type journalEntryJSON struct {
 	Refs   []string          `json:"refs"`
 	Items  []journalItemJSON `json:"items"`
 	Detail string            `json:"detail,omitempty"`
+	// Pinned: TRANSITION ONLY. True for the entries of confirms[], false for the rest, for the SPA that still reads the
+	// pinned band. Removed by a PR of its own once the SPA's JV-3 is out.
+	Pinned bool `json:"pinned"`
 }
 
 type journalPageJSON struct {
-	Unit         journalUnitJSON    `json:"unit"`
-	Project      journalProjectJSON `json:"project"`
-	PersonName   string             `json:"person_name"`
-	Entries      []journalEntryJSON `json:"entries"`
-	Confirms     []journalEntryJSON `json:"confirms"`
+	Unit       journalUnitJSON    `json:"unit"`
+	Project    journalProjectJSON `json:"project"`
+	PersonName string             `json:"person_name"`
+	Entries    []journalEntryJSON `json:"entries"`
+	Confirms   []journalEntryJSON `json:"confirms"`
+	// Pinned: TRANSITION ONLY, the same entries as Confirms, for the SPA before JV-3 (it reads pinned[] as its 待確認 band).
+	// Removed by a PR of its own once JV-3 is out.
+	Pinned       []journalEntryJSON `json:"pinned"`
 	More         bool               `json:"more"`
 	OpenConfirms int                `json:"open_confirms"`
 }
@@ -110,6 +116,15 @@ func entriesWire(es []journal.Entry) []journalEntryJSON {
 	out := make([]journalEntryJSON, 0, len(es))
 	for _, e := range es {
 		out = append(out, entryWireJournal(e))
+	}
+	return out
+}
+
+// confirmsWire is the entries of confirms[] (and, in the transition, pinned[]): every one flagged pinned.
+func confirmsWire(es []journal.Entry) []journalEntryJSON {
+	out := entriesWire(es)
+	for i := range out {
+		out[i].Pinned = true
 	}
 	return out
 }
@@ -269,12 +284,22 @@ func (m *Module) handleJournal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	confirms := confirmsWire(journal.Confirms(all))
+	inBand := map[string]bool{}
+	for _, c := range confirms {
+		inBand[c.ID] = true
+	}
+	pageEntries := entriesWire(page.Entries)
+	for i := range pageEntries {
+		pageEntries[i].Pinned = inBand[pageEntries[i].ID]
+	}
 	writeJSON(w, http.StatusOK, journalPageJSON{
 		Unit:         journalUnitJSON{Kind: tgt.kind, ID: tgt.id, Label: tgt.unit.Label},
 		Project:      journalProjectJSON{Name: m.projectName(ctx, tgt.unit), RemoteURL: m.remoteURL(ctx, tgt.unit.WtPath)},
 		PersonName:   m.personName(),
-		Entries:      entriesWire(page.Entries),
-		Confirms:     entriesWire(journal.Confirms(all)),
+		Entries:      pageEntries,
+		Confirms:     confirms,
+		Pinned:       confirms,
 		More:         page.More,
 		OpenConfirms: journal.OpenConfirmItems(all),
 	})
@@ -383,6 +408,12 @@ func (m *Module) handleJournalConfirm(w http.ResponseWriter, r *http.Request) {
 		m.announceJournal(JournalChange{UnitKey: tgt.unit.Key, ProjectID: tgt.unit.ProjectID, What: "entries"})
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleJournalPinGone: PUT /api/journal/pin -> 410. Pinning was removed (journal v5); the text is what an App from before
+// that shows, instead of a 404. TRANSITION ONLY: removed with pinned[] once the SPA's JV-3 is out.
+func (m *Module) handleJournalPinGone(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusGone, map[string]string{"error": "pin_removed", "detail": "釘選已移除，待確認會自動列在最上面"})
 }
 
 // announceJournal sends journal.changed for a write to a unit's files: the unit as {kind, id}, its project, and what changed.

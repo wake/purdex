@@ -224,6 +224,9 @@ into core → `/api/info` declares it), and updates that comment.
 ### 4.4 Pin removal
 - Remove `PUT /api/journal/pin`, `SetPinned`, `pin_in.go`, auto-pin in `journal_drain.go`; keep parsing old `pinned`
   meta. `info_handler.go` capability text updated.
+- Transition (JV-1a review): until the SPA's JV-3 is out, pages still carry `pinned[]` (the same entries as `confirms[]`)
+  and every entry a `pinned` flag (true for the `confirms[]` ones), and `PUT /api/journal/pin` answers 410
+  `{"error":"pin_removed","detail":"釘選已移除，待確認會自動列在最上面"}`; a PR of its own removes both after JV-3.
 
 ## 5. Settled with the user (2026-10-17)
 - **Q1** The 「團隊」 button, now that the panel cannot be closed: it switches between **full** and **collapsed to the
