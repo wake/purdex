@@ -52,7 +52,7 @@ func (r dispatchRun) nothingLeft(t *testing.T) {
 	t.Helper()
 	snap, err := (&Pool{Dir: r.dir, Class: ClassHeavy, Size: 2, Now: r.g.Now}).Snapshot()
 	require.NoError(t, err)
-	assert.Empty(t, snap.Waiting, "the ticket is gone")
+	assert.Empty(t, snap.Queue, "the ticket is gone")
 	assert.Empty(t, snap.Out, "and no longer out")
 	assert.Empty(t, DispatchPool(r.dir, "air26", 2, r.g.Now).Held(), "the dispatch slot is let go")
 }
