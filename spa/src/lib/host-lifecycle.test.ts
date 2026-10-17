@@ -17,6 +17,7 @@ import { createTab } from '../types/tab'
 import { getPrimaryPane, scanPaneTree } from './pane-tree'
 import { HOST_DELETE_LOCK_OWNER, HostDeleteRollbackIncompleteError, deleteHostCascade, deleteHostWithUndoToast, startPeerCacheInvalidation } from './host-lifecycle'
 import { emptyPeerHostEntry, usePeerStore } from '../stores/usePeerStore'
+import { clearWatchDrafts, readWatchDraft, watchDraftKey, writeWatchDraft } from './watch/draft-memory'
 import { useSessionCwdStore } from '../stores/useSessionCwdStore'
 import { useTeamUiStore } from '../stores/useTeamUiStore'
 import { teamKeyOf } from './team/team-views'
@@ -81,6 +82,15 @@ function resetAllStores() {
 
 describe('host delete cascade — this device only (host ownership spec §3.4)', () => {
   beforeEach(resetAllStores)
+
+  it('forgets the host\'s unsent watcher-settings drafts (and only that host\'s)', () => {
+    writeWatchDraft(watchDraftKey(HOST_A, DAEMON_A, 'y_mb'), '20')
+    writeWatchDraft(watchDraftKey(HOST_B, 'd-b', 'y_mb'), '30')
+    deleteHostCascade(HOST_A)
+    expect(readWatchDraft(watchDraftKey(HOST_A, DAEMON_A, 'y_mb'))).toBeUndefined()
+    expect(readWatchDraft(watchDraftKey(HOST_B, 'd-b', 'y_mb'))).toBe('30')
+    clearWatchDrafts()
+  })
 
   const contentOf = (tabId: string) => getPrimaryPane(useTabStore.getState().tabs[tabId].layout).content
 

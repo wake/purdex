@@ -67,7 +67,7 @@ function TextControl({ k, kind, stored, onCommit, label, draftKey }: {
 }
 
 /** 守門員: one daemon host's `watch` row. `peerIds` are the other daemon hosts, read only to compare `targets`. */
-function GuardianSection({ hostConfigId, offline, peerIds }: { hostConfigId: string; offline: boolean; peerIds: string[] }) {
+function GuardianSection({ hostConfigId, fleetHostId, offline, peerIds }: { hostConfigId: string; fleetHostId: string; offline: boolean; peerIds: string[] }) {
   const t = useI18nStore((s) => s.t)
   const [state, setState] = useState<{ status: 'loading' } | { status: 'error' } | { status: 'ready'; w: WatchRow }>({ status: 'loading' })
   const [errors, setErrors] = useState<Partial<Record<WatchKey, string>>>({})
@@ -167,7 +167,7 @@ function GuardianSection({ hostConfigId, offline, peerIds }: { hostConfigId: str
                 <SegmentControl options={[{ value: 'resident', label: t('watch.set.mode.resident') }, { value: 'patrol', label: t('watch.set.mode.patrol') }]}
                   value={v === 'resident' ? 'resident' : 'patrol'} onChange={(m) => void write('mode', m)} />
               ) : (
-                <TextControl k={f.key} kind={f.kind} label={label} stored={show(f.kind, v)} draftKey={watchDraftKey(hostConfigId, f.key)} onCommit={commitText(f)} />
+                <TextControl k={f.key} kind={f.kind} label={label} stored={show(f.kind, v)} draftKey={watchDraftKey(hostConfigId, fleetHostId, f.key)} onCommit={commitText(f)} />
               )}
             </SettingItem>
             <div className="-mt-2 mb-1 text-[11px] text-text-muted" data-testid={`watch-set-source-${f.key}`}>{source}</div>
@@ -196,7 +196,7 @@ export function WatchSettings({ kind, fleetHostId, hostConfigId, offline, peerId
   return (
     <Section title={t('watch.set.guardian')}>
       {hostConfigId
-        ? <GuardianSection hostConfigId={hostConfigId} offline={offline} peerIds={peerIds} />
+        ? <GuardianSection hostConfigId={hostConfigId} fleetHostId={fleetHostId} offline={offline} peerIds={peerIds} />
         : <p data-testid="watch-set-unmapped" className="text-sm text-text-muted">{t('watch.set.unmapped')}</p>}
     </Section>
   )
