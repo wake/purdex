@@ -2,7 +2,7 @@
 // Task 6): the open self_relay requests the daemon holds because the session's quota ran out. Display only here: an open
 // request already raises the approval dialog by itself, and opening one specific request from the panel needs a "show
 // this request" action the approval store does not have (a follow-up).
-import type { ReactNode } from 'react'
+import { Fragment, type ReactNode } from 'react'
 import { useI18nStore } from '../stores/useI18nStore'
 import { hostLabel, hostLookOf } from '../lib/host-look'
 import { approvalSessionLabel, memberRelayNames } from '../lib/team/approval-format'
@@ -18,10 +18,10 @@ export interface HeldRow {
 
 const SLOT = '\uE000'
 
-/** The translated line with `node` in the slot the lead's name was given (a placeholder in the template). */
+/** The translated line with `node` in every slot the lead's name was given (a placeholder in the template). */
 function withSlot(text: string, node: ReactNode) {
-  const at = text.indexOf(SLOT)
-  return at < 0 ? text : <>{text.slice(0, at)}{node}{text.slice(at + 1)}</>
+  const parts = text.split(SLOT) // a translation may use the placeholder more than once
+  return <>{parts.map((part, i) => <Fragment key={i}>{i > 0 && node}{part}</Fragment>)}</>
 }
 
 /** A lead's name, with its title (when it has one) muted right after it (U15). */
