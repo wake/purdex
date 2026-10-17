@@ -30,6 +30,7 @@ import (
 	devicesmod "github.com/wake/purdex/internal/module/devices"
 	fleetmod "github.com/wake/purdex/internal/module/fleet"
 	fsmod "github.com/wake/purdex/internal/module/fs"
+	gatemod "github.com/wake/purdex/internal/module/gate"
 	hostconfigmod "github.com/wake/purdex/internal/module/hostconfig"
 	hosttransfermod "github.com/wake/purdex/internal/module/hosttransfer"
 	"github.com/wake/purdex/internal/module/logs"
@@ -463,6 +464,7 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	// roots from the peers origin resolver, so it comes after peers.
 	c.AddModule(resourcesmod.New())
 	c.AddModule(watchmod.New())
+	c.AddModule(gatemod.New()) // the gate's decision history (A1)
 	c.AddModule(assistmod.New())
 	c.AddModule(fleetmod.New()) // the fleet status: primary / standby roles (F-1b2)
 	c.AddModule(fsmod.New())

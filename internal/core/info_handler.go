@@ -127,6 +127,9 @@ func (c *Core) capabilityList() []string {
 	if c.moduleReady("watch") {
 		out = append(out, "watch.v1") // GET /api/watch/status, /events, /unhandled, POST /api/watch/ack, the watch.changed and watch.events pushes
 	}
+	if c.moduleReady("gate") {
+		out = append(out, "gate.decisions.v1") // GET /api/gate/decisions (admin token): the gate's records, newest first
+	}
 	return out
 }
 
