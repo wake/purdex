@@ -34,6 +34,9 @@ var (
 
 // dirError sorts an error of the gate directory into ErrUnavailable or ErrBroken.
 func dirError(err error) error {
+	if errors.Is(err, ErrUnavailable) || errors.Is(err, ErrBroken) {
+		return err // already sorted: a helper that sorted it and a caller that sorts again must agree
+	}
 	if errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EROFS) {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
