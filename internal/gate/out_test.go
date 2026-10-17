@@ -192,8 +192,12 @@ func TestDispatch_ServeOutAndReturn(t *testing.T) {
 	_, err = rp.ServeOut(ts[0].Name, dp, WaiterInfo{}, OutInfo{})
 	assert.ErrorIs(t, err, ErrNotWaiting, "a ticket that is out is not sent again")
 
-	var slotFreeWhenBack bool
-	require.NoError(t, ts[0].Return(s1, nil))
+	var slotFreeWhenBack, outWhenReleased bool
+	require.NoError(t, ts[0].Return(s1, func(string) []Straggler { // called while the slot is let go
+		outWhenReleased = rp.IsOut(ts[0].Name)
+		return nil
+	}))
+	assert.True(t, outWhenReleased, "the dispatch slot is let go while the ticket is still out")
 	if free, err := dp.TakeDispatch(WaiterInfo{}); err == nil && free != nil {
 		slotFreeWhenBack = true
 		free.Release(nil)
