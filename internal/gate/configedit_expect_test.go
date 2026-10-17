@@ -60,3 +60,25 @@ func TestSetExpect_ASymlinkedConfigIsLockedByItsRealPath(t *testing.T) {
 	_, err = os.Stat(link + ".lock")
 	assert.True(t, os.IsNotExist(err), "and not beside the link")
 }
+
+// An active profile that sets the key makes a [gate] write pointless, and an --expect write would compare the wrong layer: refused.
+func TestSetExpect_AnActiveProfilesValueIsNotTheLayerBeingWritten(t *testing.T) {
+	p := cfgFile(t, "[gate]\nprofile = \"night\"\n[gate.slots]\nheavy = 4\n[gate.profiles.night.slots]\nheavy = 2\n")
+	before := read(t, p)
+	_, err := SetExpect(p, "", "slots.heavy", "3", ptr("2"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "active profile")
+	assert.Equal(t, before, read(t, p))
+	_, err = SetExpect(p, "night", "slots.heavy", "3", ptr("2"))
+	require.NoError(t, err, "the profile written to is the layer compared")
+}
+
+func TestSetExpect_TheReadBackIsTakenUnderTheLock(t *testing.T) {
+	p := cfgFile(t, "[gate.slots]\nheavy = 2\n")
+	res, err := SetExpect(p, "", "slots.heavy", "5", ptr("2"))
+	require.NoError(t, err)
+	assert.Equal(t, "5", res.ReadBack)
+	res, err = SetExpect(p, "", "slots.heavy", "6", nil)
+	require.NoError(t, err)
+	assert.Empty(t, res.ReadBack, "only an --expect write reads back")
+}

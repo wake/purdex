@@ -32,6 +32,8 @@ type SetResult struct {
 	Key      string
 	Profile  string // the profile table written to, "" for [gate] itself
 	Old, New string // effective value before and after (of the active profile)
+	// ReadBack is the value read from the file again, under the lock, after an --expect write (the profile written to is the active one).
+	ReadBack string
 	NewSrc   Source
 }
 
@@ -83,6 +85,12 @@ func SetExpect(path, profile, key, value string, expect *string) (SetResult, err
 		return res, err
 	}
 	res.Old = effectiveOf(string(old), profile, key)
+	if expect != nil && profile == "" {
+		var cur map[string]any
+		if _, err := toml.Decode(string(old), &cur); err == nil && configFor(cur, "").Sources[key] == SrcProfile {
+			return res, fmt.Errorf("refused: %s is set by the active profile, so a write to [gate] would not change it (and the value you read is not the one written): use --profile <name>", key)
+		}
+	}
 	if expect != nil && res.Old != strings.TrimSpace(*expect) {
 		return res, &ExpectError{Key: key, Have: res.Old, Want: strings.TrimSpace(*expect)}
 	}
@@ -115,6 +123,13 @@ func SetExpect(path, profile, key, value string, expect *string) (SetResult, err
 	res.New, res.NewSrc = active.Values[key], active.Sources[key]
 	if err := writeAtomic(path, []byte(edited)); err != nil {
 		return res, err
+	}
+	if expect != nil && profile == "" { // read it back from the file, under the same lock, as the next gate run will
+		back, lerr := Load(path)
+		if lerr != nil || back.Values[key] != res.New {
+			return res, fmt.Errorf("written, but read back %q (wanted %q): the file was changed by hand meanwhile", back.Values[key], res.New)
+		}
+		res.ReadBack = back.Values[key]
 	}
 	return res, nil
 }

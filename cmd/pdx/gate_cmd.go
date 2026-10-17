@@ -362,28 +362,14 @@ func gateSet(args []string, stdout, stderr io.Writer) int {
 		where = "profile " + res.Profile
 	}
 	fmt.Fprintf(stdout, "%s（%s）：%s → %s（%s）\n", res.Key, where, orDash(res.Old), res.New, res.NewSrc)
-	if want != nil && *profile == "" { // read it back from the file, as the next gate run will
-		if back, ok := readBack(path, strings.TrimSpace(key)); !ok || back != res.New {
-			fmt.Fprintf(stderr, "pdx gate set: 寫入後讀回 %q，預期 %q\n", back, res.New)
-			return 1
-		}
-		fmt.Fprintf(stdout, "讀回：%s = %s\n", res.Key, res.New)
+	if res.ReadBack != "" {
+		fmt.Fprintf(stdout, "讀回：%s = %s\n", res.Key, res.ReadBack)
 	}
 	return 0
 }
 
 // gateExitExpect is the exit code of a write that --expect refused.
 const gateExitExpect = 3
-
-// readBack is the effective value of key in the file now.
-func readBack(path, key string) (string, bool) {
-	cfg, err := gate.Load(path)
-	if err != nil {
-		return "", false
-	}
-	v, ok := cfg.Values[key]
-	return v, ok
-}
 
 func gateProfile(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("gate profile", flag.ContinueOnError)
