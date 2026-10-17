@@ -84,11 +84,11 @@ func (m *Module) cachedPaneSnapshot(force bool) (*paneSnapshot, bool, error) {
 			c.mu.Unlock()
 			<-f.done
 			// A forced caller needs a listing taken after it asked; one started earlier may predate the change.
-			if force && f.started.Before(callStart) {
+			if force && f.started.Before(callStart) && attempt < maxSnapRelists {
 				continue
 			}
 			// The layout changed (a frame was created or ended) after this listing began: it may predate the pane the caller needs.
-			if f.gen != m.tmuxGen.Load() {
+			if f.gen != m.tmuxGen.Load() && attempt < maxSnapRelists {
 				continue
 			}
 			if f.err != nil {
