@@ -1,0 +1,185 @@
+package watchmod
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/wake/purdex/internal/module/hostconfig"
+	"github.com/wake/purdex/internal/push"
+	"github.com/wake/purdex/internal/resources"
+	"github.com/wake/purdex/internal/team"
+	"github.com/wake/purdex/internal/watch"
+)
+
+// Patrol (host-load-control plan W3b-5b): the daemon is the only source of "go and look". The host that holds the watcher (awake or
+// resting) counts the time since the watcher was last told anything and, when the interval for the situation has passed, wakes it with
+// the reason patrol. The intervals are settings: the person at the computer → patrol_present_min; away and in unattended mode under
+// pressure (zone warning or danger) → patrol_busy_min, otherwise patrol_calm_min; away and not in unattended mode → patrol_present_min;
+// a resting watcher → patrol_rest_min (so it is woken). Free disk space under disk_low_gb wakes it at once, once per time the disk runs
+// low. The watcher's skill tells it not to set patrols of its own.
+
+const patrolTick = time.Minute
+
+// patrolState is what the patrol keeps between ticks.
+type patrolState struct {
+	mu          sync.Mutex
+	last        time.Time // when the watcher was last told anything
+	diskAlerted bool      // the disk is low and the watcher was told
+}
+
+func (p *patrolState) told(at time.Time) {
+	p.mu.Lock()
+	p.last = at
+	p.mu.Unlock()
+}
+
+// patrolSources are the facts the interval depends on (nil fields: the registry's services).
+type patrolSources struct {
+	atComputer func() bool
+	unattended func() bool
+	busy       func() bool // the host's zone is warning or danger
+	diskFreeGB func() (float64, bool)
+}
+
+func (m *Module) atComputer() bool {
+	if m.psrc != nil && m.psrc.atComputer != nil {
+		return m.psrc.atComputer()
+	}
+	if svc, ok := m.core.Registry.Get(push.AtComputerKey); ok {
+		if r, ok := svc.(push.AtComputerReader); ok {
+			return r.AtComputer()
+		}
+	}
+	return false
+}
+
+func (m *Module) unattendedOn() bool {
+	if m.psrc != nil && m.psrc.unattended != nil {
+		return m.psrc.unattended()
+	}
+	if svc, ok := m.core.Registry.Get(hostconfig.UnattendedKey); ok {
+		if r, ok := svc.(interface {
+			Unattended() (team.UnattendedState, error)
+		}); ok {
+			st, err := r.Unattended()
+			return err == nil && st.On
+		}
+	}
+	return false
+}
+
+func (m *Module) hostBusy() bool {
+	if m.psrc != nil && m.psrc.busy != nil {
+		return m.psrc.busy()
+	}
+	if svc, ok := m.core.Registry.Get(resources.HostReaderKey); ok {
+		if r, ok := svc.(resources.HostReader); ok {
+			if h, ok := r.LatestHost(); ok {
+				return h.Zone == resources.ZoneWarning.String() || h.Zone == resources.ZoneDanger.String()
+			}
+		}
+	}
+	return false
+}
+
+func (m *Module) diskFreeGB() (float64, bool) {
+	if m.psrc != nil && m.psrc.diskFreeGB != nil {
+		return m.psrc.diskFreeGB()
+	}
+	dir := "/"
+	if m.core != nil && m.core.Cfg != nil && m.core.Cfg.DataDir != "" {
+		dir = m.core.Cfg.DataDir
+	}
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		return 0, false
+	}
+	return float64(st.Bavail) * float64(st.Bsize) / (1 << 30), true
+}
+
+// patrolInterval is the wait for the situation, and a word for the note.
+func (m *Module) patrolInterval(s patrolSettings, resting bool) (time.Duration, string) {
+	switch {
+	case resting:
+		return time.Duration(s.rest) * time.Minute, "休息中"
+	case m.atComputer():
+		return time.Duration(s.present) * time.Minute, "人在電腦前"
+	case m.unattendedOn() && m.hostBusy():
+		return time.Duration(s.busy) * time.Minute, "無人值守且主機吃緊"
+	case m.unattendedOn():
+		return time.Duration(s.calm) * time.Minute, "無人值守且主機平穩"
+	}
+	return time.Duration(s.present) * time.Minute, "不在電腦前"
+}
+
+type patrolSettings struct{ present, busy, calm, rest, diskGB int }
+
+// patrolStep is one look: the disk first, then the interval.
+func (m *Module) patrolStep(ctx context.Context) {
+	s, err := m.readSettings()
+	if err != nil || !s.Enabled {
+		return
+	}
+	h := m.hs().Get()
+	if h.State != watch.HolderAwake && h.State != watch.HolderResting {
+		return // this host holds no watcher: another host's daemon patrols
+	}
+	now := m.now()
+	wake := m.wake
+	if wake == nil {
+		wake = m.WakeWatcher
+	}
+	if free, ok := m.diskFreeGB(); ok {
+		m.patrol.mu.Lock()
+		low := free < float64(s.DiskLowGB)
+		tell := low && !m.patrol.diskAlerted
+		m.patrol.diskAlerted = low
+		m.patrol.mu.Unlock()
+		if tell {
+			m.patrol.told(now)
+			if err := wake(ctx, "disk_low", fmt.Sprintf("剩 %.1f GB（低於 %d GB）", free, s.DiskLowGB)); err != nil {
+				m.logf("[watch] patrol: disk low: %v", err)
+			}
+			return
+		}
+	}
+	every, why := m.patrolInterval(patrolSettings{s.PatrolPresentMin, s.PatrolBusyMin, s.PatrolCalmMin, s.PatrolRestMin, s.DiskLowGB}, h.State == watch.HolderResting)
+	m.patrol.mu.Lock()
+	base := m.patrol.last
+	m.patrol.mu.Unlock()
+	if h.Since.After(base) {
+		base = h.Since
+	}
+	if now.Sub(base) < every {
+		return
+	}
+	m.patrol.told(now) // also when it fails: the next try is an interval away, not the next tick
+	if err := wake(ctx, "patrol", fmt.Sprintf("距上次通知 %d 分｜%s", int(now.Sub(base)/time.Minute), why)); err != nil {
+		m.logf("[watch] patrol: %v", err)
+	}
+}
+
+// patrolLoop runs patrolStep every tick.
+func (m *Module) patrolLoop(ctx context.Context) {
+	every := patrolTick
+	if m.patrolEvery > 0 {
+		every = m.patrolEvery
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			step, done, ok := m.enterFor(ctx, 6*time.Minute) // a wake can wait for a start
+			if ok {
+				m.patrolStep(step)
+				done()
+			}
+		}
+	}
+}

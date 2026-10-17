@@ -56,6 +56,7 @@ func (m *Module) WakeWatcher(ctx context.Context, reason, detail string) error {
 		}
 		var definite bool
 		if lastErr, definite = m.tellWatcher(ctx, where, reason, detail, text); lastErr == nil {
+			m.patrol.told(m.now()) // any note counts as the watcher having been looked after
 			return nil
 		}
 		if !definite {
