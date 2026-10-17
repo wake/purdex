@@ -43,6 +43,20 @@ type Pool struct {
 	Peers []Peer `json:"peers"`
 }
 
+func (p Pool) Validate() error {
+	for i, peer := range p.Peers {
+		if err := peer.Info.Validate(); err != nil {
+			return fmt.Errorf("pool: peers[%d]: %w", i, err)
+		}
+		if peer.Facts != nil {
+			if err := peer.Facts.Validate(); err != nil {
+				return fmt.Errorf("pool: peers[%d]: %w", i, err)
+			}
+		}
+	}
+	return nil
+}
+
 // History steps.
 const (
 	Step1m = "1m"
@@ -85,6 +99,11 @@ type FactsHistoryResponse struct {
 func (r FactsHistoryResponse) Validate() error {
 	if r.Step != Step1m && r.Step != Step5s {
 		return fmt.Errorf("history: invalid step %q", r.Step)
+	}
+	for i, f := range r.Records {
+		if err := f.Validate(); err != nil {
+			return fmt.Errorf("history: records[%d]: %w", i, err)
+		}
 	}
 	return nil
 }
@@ -177,6 +196,12 @@ func (e Exception) Validate() error {
 	if e.Name == "" {
 		return fmt.Errorf("exception: missing name")
 	}
+	if (e.Until == nil) == (e.PID == nil) {
+		return fmt.Errorf("exception: exactly one of until and pid is required")
+	}
+	if e.PID != nil && *e.PID <= 0 {
+		return fmt.Errorf("exception: invalid pid %d", *e.PID)
+	}
 	for _, h := range e.Holds {
 		if !h.Valid() {
 			return fmt.Errorf("exception: invalid hold %q", h)
@@ -200,8 +225,45 @@ type PoolHostsResponse struct {
 	Hosts []PoolHost `json:"hosts"`
 }
 
+func (r PoolHostsResponse) Validate() error {
+	for i, h := range r.Hosts {
+		if err := h.Info.Validate(); err != nil {
+			return fmt.Errorf("hosts[%d]: %w", i, err)
+		}
+		if h.Facts != nil {
+			if err := h.Facts.Validate(); err != nil {
+				return fmt.Errorf("hosts[%d]: %w", i, err)
+			}
+		}
+	}
+	return nil
+}
+
 type JobsListResponse struct {
 	Jobs []Job `json:"jobs"`
+}
+
+func (r JobsListResponse) Validate() error {
+	for i, j := range r.Jobs {
+		if err := j.Validate(); err != nil {
+			return fmt.Errorf("jobs[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// JobSubmissionResponse is POST /v1/jobs (local socket only): {id}, or
+// {id, result} at once on a cache hit; Result is null otherwise (spec §4.4).
+type JobSubmissionResponse struct {
+	ID     string  `json:"id"`
+	Result *Result `json:"result"`
+}
+
+func (r JobSubmissionResponse) Validate() error {
+	if r.ID == "" {
+		return fmt.Errorf("submission: missing id")
+	}
+	return nil
 }
 
 // JobDetail is GET /api/pool/jobs/{id}; Log is null until the log is stored.

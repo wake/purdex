@@ -124,6 +124,13 @@ type ClaimRequest struct {
 	Fingerprint map[string]string `json:"fingerprint"`
 }
 
+func (r ClaimRequest) Validate() error {
+	if r.Worker == "" {
+		return fmt.Errorf("claim: missing worker")
+	}
+	return nil
+}
+
 type ClaimResponse struct {
 	Job     Job    `json:"job"`
 	ClaimID string `json:"claim_id"`
