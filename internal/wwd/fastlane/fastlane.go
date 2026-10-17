@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -79,7 +80,6 @@ type Request struct {
 	Env      []string // the caller's environment; the command keeps it (warm caches are the point of the lane)
 	// OutDir holds the log and report files; a temporary directory when empty (removed by the caller via Result.Cleanup).
 	OutDir string
-	Stdin  *os.File
 }
 
 // Result is how the run ended.
@@ -127,7 +127,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 		return fail(err)
 	}
 
-	env := req.Env
+	env := withTaskEnv(req.Env, task.Env)
 	var handle Handle
 	if req.Recorder != nil {
 		h, err := req.Recorder.Register(ctx, req.Body)
@@ -161,7 +161,7 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	started := time.Now()
 	code, gateErr := req.Gate.Run(runCtx, gate.Options{
 		Argv: argv, Class: gate.ClassLight, ClassSource: "kind", Env: env,
-		Dir: filepath.Join(req.Root, filepath.FromSlash(task.Cwd)), Stdin: nil,
+		Dir:    filepath.Join(req.Root, filepath.FromSlash(task.Cwd)),
 		Stdout: cp.Stdout(), Stderr: cp.Stderr(),
 	})
 	finished := time.Now()
@@ -252,6 +252,28 @@ func finishFailed(h Handle, reason string, at time.Time) {
 	if h != nil {
 		_ = h.Finish(context.Background(), Outcome{State: wire.StateFailed, Reason: reason, StartedAt: at, FinishedAt: time.Now()})
 	}
+}
+
+// withTaskEnv is the caller's environment with the task's fixed values (NAME=value entries of its env list) set over it. The
+// fast lane runs in the caller's own tree and environment — warm caches and tool setup are the point of the lane — so the allow
+// list of a worker's clean environment does not apply here; only values the task fixes do. Names the runner reserves
+// (WWD_*, PDX_*) are never taken from a manifest.
+func withTaskEnv(env, taskEnv []string) []string {
+	out := append([]string(nil), env...)
+	for _, e := range taskEnv {
+		name, value, fixed := strings.Cut(e, "=")
+		if !fixed || strings.HasPrefix(name, "WWD_") || strings.HasPrefix(name, "PDX_") {
+			continue
+		}
+		kept := out[:0]
+		for _, kv := range out {
+			if !strings.HasPrefix(kv, name+"=") {
+				kept = append(kept, kv)
+			}
+		}
+		out = append(kept, name+"="+value)
+	}
+	return out
 }
 
 func withMark(env []string, id string) []string {

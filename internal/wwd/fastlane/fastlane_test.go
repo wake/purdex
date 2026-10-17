@@ -234,6 +234,29 @@ func TestBusyLocksSendTheCallToTheQueue(t *testing.T) {
 	}
 }
 
+func TestTaskFixedEnvIsSetOverTheCallersAndTheRestOfItStays(t *testing.T) {
+	tk := task(t, "one-file")
+	tk.Env = []string{"CI=1", "KEEP", "WWD_JOB=other", "PDX_GATE_DIR=/x", "FIXED=a=b"}
+	g := &fakeGate{}
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: tk, Args: []string{"a.test.ts"}, Gate: g,
+		Env: []string{"PATH=/bin", "CI=0", "KEEP=yes", "SECRET=s"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Cleanup()
+	got := strings.Join(g.calls[0].Env, "\n")
+	for _, want := range []string{"CI=1", "KEEP=yes", "SECRET=s", "PATH=/bin", "FIXED=a=b"} {
+		if !strings.Contains("\n"+got+"\n", "\n"+want+"\n") {
+			t.Errorf("env lacks %q:\n%s", want, got)
+		}
+	}
+	for _, bad := range []string{"CI=0", "WWD_JOB=other", "PDX_GATE_DIR=/x"} {
+		if strings.Contains("\n"+got+"\n", "\n"+bad+"\n") {
+			t.Errorf("env has %q:\n%s", bad, got)
+		}
+	}
+}
+
 func TestWithoutARecorderTheRunIsNotRecorded(t *testing.T) {
 	g := &fakeGate{}
 	res, err := Run(context.Background(), Request{Root: tree(t), Task: task(t, "one-file"), Args: []string{"a.test.ts"}, Gate: g, Env: []string{"PATH=/bin"}})
