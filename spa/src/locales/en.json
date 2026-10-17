@@ -2778,5 +2778,9 @@
   "watch.queue.place": "#{{n}}",
   "watch.queue.ran": "ran {{t}}",
   "watch.queue.waited": "waited {{t}}",
-  "watch.queue.pid": "pid {{pid}}"
+  "watch.queue.pid": "pid {{pid}}",
+  "relay.half.label": "Handoff file written",
+  "relay.half.label_not_cleared": "Handoff file written (not cleared)",
+  "relay.half.tooltip": "Handoff file: {{path}} (written {{time}})",
+  "relay.half.toast": "{{host}}: {{session}}: handoff file written (not cleared)"
 }

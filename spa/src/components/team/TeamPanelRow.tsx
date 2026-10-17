@@ -14,6 +14,8 @@ import { useIsJournalHost } from '../../lib/journal/use-journal-host'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { keepFocus, useReturnFocus } from './panel-focus'
+import { HalfHandoffMark } from '../relay/HalfHandoffMark'
+import { useFreshHandoffOfRosterSession } from '../../hooks/useFreshHandoff'
 
 interface RowProps {
   /** The journal stack's team card: never offers the workbook drill, whatever host the seat is on. */
@@ -32,7 +34,9 @@ export function PanelRow({ noDrill, teamKey, seat, color, isActive, onOpen, drag
   const t = useI18nStore((s) => s.t)
   const r = useSeatReading(teamKey, seat.sessionId)
   const modelText = r.model ? MODEL_LABEL[r.model] : r.modelRaw ?? '—'
-  const paused = useRosterSession(teamKey, seat.sessionId)?.paused
+  const rosterSession = useRosterSession(teamKey, seat.sessionId)
+  const paused = rosterSession?.paused
+  const freshHandoff = useFreshHandoffOfRosterSession(rosterSession)
   const wb0 = useSeatWorkbook(seat.hostId, seat.sessionId)
   // On a journal.v1 host the workbook view is off (J-2b): no drill button, no 目前狀況 line.
   const journalHost = useIsJournalHost(seat.hostId)
@@ -80,6 +84,7 @@ export function PanelRow({ noDrill, teamKey, seat, color, isActive, onOpen, drag
           </span>
         )}
         <span className="truncate min-w-0 flex-1">{seat.title}</span>
+        <HalfHandoffMark handoff={freshHandoff} variant="chip" />
         {transition && <span data-testid="team-panel-state" className="text-[9.5px] text-text-muted flex-shrink-0">{t(`team.seat_state.${transition}`)}</span>}
         {seat.role === 'lead' && (
           <span className="text-[9.5px] px-1 rounded border flex-shrink-0 text-text-primary" style={{ borderColor: color }}>{t('team.panel.lead')}</span>

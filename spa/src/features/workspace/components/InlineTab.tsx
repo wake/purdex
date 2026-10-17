@@ -11,6 +11,8 @@ import { HostBadge } from '../../../components/HostBadge'
 import { useTabHostBadge } from '../../../hooks/useTabHostBadge'
 import { hasHostBadge } from '../../../lib/host-color'
 import { INLINE_TAB_ROW_CLASSES } from '../lib/inline-tab-row-classes'
+import { HalfHandoffMark } from '../../../components/relay/HalfHandoffMark'
+import { useFreshHandoffOfTab } from '../../../hooks/useFreshHandoff'
 
 interface Props {
   tab: Tab
@@ -21,6 +23,8 @@ interface Props {
   onMiddleClick: (tabId: string) => void
   onContextMenu: (e: React.MouseEvent, tabId: string) => void
   onRename?: (tabId: string) => void
+  /** The team key when this row is a team's lead row (the handoff mark then reads the roster). */
+  leadOfTeam?: string
 }
 
 export function InlineTab({
@@ -32,6 +36,7 @@ export function InlineTab({
   onMiddleClick,
   onContextMenu,
   onRename,
+  leadOfTeam,
 }: Props) {
   const t = useI18nStore((s) => s.t)
   const tabNameTooltipMode = useUISettingsStore((s) => s.tabNameTooltipMode)
@@ -41,6 +46,7 @@ export function InlineTab({
   const badgeInset = useUISettingsStore((s) => s.hostBadgeSidebarInset)
   const badgeRadius = useUISettingsStore((s) => s.hostBadgeSidebarRadius)
   const hostBadge = useTabHostBadge(tab)
+  const freshHandoff = useFreshHandoffOfTab(tab, leadOfTeam)
   // `attributes` is deliberately not spread: sensors are pointer-only, so its aria-roledescription / aria-describedby
   // ("press space to pick up") would be false. The row sets its own role=button + tabIndex=0 below (#2531).
   const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -164,6 +170,7 @@ export function InlineTab({
           {displayTitle}
         </HoverTooltip>
       )}
+      <HalfHandoffMark handoff={freshHandoff} variant="icon" />
       {isHostOffline && (
         <WifiSlash
           size={12}

@@ -13,6 +13,8 @@ import { hasHostBadge } from '../lib/host-color'
 import type { TeamTabMark } from './team/team-display'
 import { TeamTabShadow } from './team/TeamTabGroup'
 import { useGroupDragHandle } from './team/group-drag'
+import { HalfHandoffMark } from './relay/HalfHandoffMark'
+import { useFreshHandoffOfTab } from '../hooks/useFreshHandoff'
 
 interface Props {
   tab: Tab
@@ -63,6 +65,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
   const badgeInset = useUISettingsStore((s) => s.hostBadgeTabBarInset)
   const badgeRadius = useUISettingsStore((s) => s.hostBadgeTabBarRadius)
   const hostBadge = useTabHostBadge(tab)
+  const freshHandoff = useFreshHandoffOfTab(tab, group?.role === 'lead' ? group.teamKey : undefined)
   const {
     displayTitle: label,
     IconComponent,
@@ -185,6 +188,7 @@ export function SortableTab({ tab, isActive, pinned, onSelect, onClose, onMiddle
       )}
       <span className="overflow-hidden flex-1 min-w-0 text-left">{label}</span>
       {showTooltip && <HoverTooltip placement="top">{tipText}</HoverTooltip>}
+      <HalfHandoffMark handoff={freshHandoff} variant="icon" />
       {isHostOffline && <WifiSlash size={12} className="text-red-400 flex-shrink-0" />}
       {tab.locked && !fixed && <Lock size={10} className="ml-0.5 flex-shrink-0" />}
       {!isActive && isUnread && shouldShowGlobalUnreadPip(tabIndicatorStyle, agentStatus) && (
