@@ -180,6 +180,7 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, "bad_request", "host is for all: name the ids of that host's events instead")
 		return
 	}
+	req.IDs = dedupeIDs(req.IDs)
 	by := m.whoIs(req.OriginInbox)
 	own := m.hostName()
 	ack := watch.Ack{Note: req.Note, By: by}

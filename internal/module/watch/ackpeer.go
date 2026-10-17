@@ -137,12 +137,25 @@ func (m *Module) handlePeerAck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// who the order came from: the host this call was verified to come from, whatever the body says
-	resp, status, err := m.ackLocal(req.IDs, req.All, watch.Ack{Note: req.Note, By: req.By, FromHost: hostPart(entry.HostID)})
+	resp, status, err := m.ackLocal(dedupeIDs(req.IDs), req.All, watch.Ack{Note: req.Note, By: req.By, FromHost: hostPart(entry.HostID)})
 	if err != nil {
 		m.writeErr(w, status, "ack_failed", err.Error())
 		return
 	}
 	m.writeJSON(w, http.StatusOK, ackPeerResponse{ackResponse: resp, HostID: ours})
+}
+
+// dedupeIDs is ids with each id once, in the order it first appears: an id named twice is one event, and one answer.
+func dedupeIDs(ids []string) []string {
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // validAck checks the part of an ack both routes share: the note, and either ids or all.

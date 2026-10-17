@@ -223,3 +223,18 @@ func TestAck_WhoGaveTheOrderTravelsWithIt(t *testing.T) {
 func policyAllows(path string) bool {
 	return peersmod.HostRoutePolicy(httptest.NewRequest(http.MethodPost, path, nil))
 }
+
+// An id named twice is one event with one answer: the second mention does not hide that the first one was handled.
+func TestAck_AnIDNamedTwiceIsOneEventWithOneAnswer(t *testing.T) {
+	ap := newAckPair(t)
+	_, resp := ap.ackOn(t, ap.a, map[string]any{"ids": []string{ap.aIDs[0], ap.bIDs[0], ap.aIDs[0], ap.bIDs[0]}, "note": "n"})
+	require.Equal(t, []watch.AckResult{{ID: ap.aIDs[0], Outcome: watch.AckHandled}, {ID: ap.bIDs[0], Outcome: watch.AckHandled}}, resp.Results)
+	require.Equal(t, 2, resp.Handled)
+
+	hostA := &middleware.Principal{Kind: middleware.PrincipalHost, Alias: "mlab", HostID: idA}
+	rr := postPeerAck(ap.b, hostA, `{"to_host_id":"`+idB+`","note":"n","ids":["`+ap.bIDs[1]+`","`+ap.bIDs[1]+`"]}`)
+	var out ackPeerResponse
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &out))
+	require.Equal(t, []watch.AckResult{{ID: ap.bIDs[1], Outcome: watch.AckHandled}}, out.Results)
+	require.Equal(t, 1, out.Handled)
+}
