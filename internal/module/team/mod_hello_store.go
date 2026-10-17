@@ -19,9 +19,10 @@ func (s *Store) UpsertModHello(sessionID string, h helloInfo, keep int) error {
 		return fmt.Errorf("mod hello %s: %w", sessionID, err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT INTO mod_hello (session_id, mod_version, agent, at) VALUES (?, ?, ?, ?)
-		ON CONFLICT(session_id) DO UPDATE SET mod_version = excluded.mod_version, agent = excluded.agent, at = excluded.at`,
-		sessionID, h.ModVersion, h.Agent, h.At); err != nil {
+	if _, err := tx.Exec(`INSERT INTO mod_hello (session_id, mod_version, agent, at, idle_intercept) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(session_id) DO UPDATE SET mod_version = excluded.mod_version, agent = excluded.agent, at = excluded.at,
+			idle_intercept = excluded.idle_intercept`,
+		sessionID, h.ModVersion, h.Agent, h.At, h.IdleIntercept); err != nil {
 		return fmt.Errorf("mod hello %s: %w", sessionID, err)
 	}
 	if _, err := tx.Exec(`DELETE FROM mod_hello WHERE session_id IN
@@ -33,7 +34,7 @@ func (s *Store) UpsertModHello(sessionID string, h helloInfo, keep int) error {
 
 // LoadModHello returns the newest limit hellos by session id.
 func (s *Store) LoadModHello(limit int) (map[string]helloInfo, error) {
-	rows, err := s.db.Query(`SELECT session_id, mod_version, agent, at FROM mod_hello ORDER BY at DESC, session_id LIMIT ?`, limit)
+	rows, err := s.db.Query(`SELECT session_id, mod_version, agent, at, idle_intercept FROM mod_hello ORDER BY at DESC, session_id LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("load mod hello: %w", err)
 	}
@@ -42,7 +43,7 @@ func (s *Store) LoadModHello(limit int) (map[string]helloInfo, error) {
 	for rows.Next() {
 		var sid string
 		var h helloInfo
-		if err := rows.Scan(&sid, &h.ModVersion, &h.Agent, &h.At); err != nil {
+		if err := rows.Scan(&sid, &h.ModVersion, &h.Agent, &h.At, &h.IdleIntercept); err != nil {
 			return nil, fmt.Errorf("load mod hello: %w", err)
 		}
 		out[sid] = h

@@ -28,7 +28,7 @@ func TestMach_VMAgreesWithVMStat(t *testing.T) {
 	assert.GreaterOrEqual(t, vs.Pageouts, before.Pageouts, "vm_stat's pageouts are read after the first Mach read")
 	assert.LessOrEqual(t, vs.Pageouts, after.Pageouts)
 	for name, c := range map[string]struct{ mach, vm uint64 }{
-		"free":        {after.Free, vs.Free},
+		"free":        {after.Free - after.Speculative, vs.Free}, // Mach's free_count holds the speculative pages; vm_stat's "Pages free" does not (#3074)
 		"inactive":    {after.Inactive, vs.Inactive},
 		"speculative": {after.Speculative, vs.Speculative},
 	} {
