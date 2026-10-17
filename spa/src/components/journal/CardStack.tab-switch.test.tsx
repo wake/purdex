@@ -75,7 +75,7 @@ beforeEach(() => {
   localStorage.clear()
   resetTeamStores()
   useJournalStore.getState().reset()
-  useJournalUiStore.setState({ lastWidths: {}, teamOpen: {} })
+  useJournalUiStore.setState({ lastWidths: {} })
   clearViewMemos()
   clearModuleRegistry()
   registerModule({ id: 'probe', name: 'probe', panes: [{ kind: 'tmux-session', component: Probe }] })

@@ -65,7 +65,7 @@ beforeEach(() => {
   useJournalStore.getState().reset()
   useJournalHoverStore.setState({ hover: null })
   chipRenders.byKind = {}
-  useJournalUiStore.setState({ lastWidths: {}, teamOpen: {} })
+  useJournalUiStore.setState({ lastWidths: {} })
   clearViewMemos()
   clearModuleRegistry()
   getTasks.mockReset()
