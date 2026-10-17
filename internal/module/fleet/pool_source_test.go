@@ -290,6 +290,27 @@ func TestPoolSource_TheRowFlipsTheSourceWithoutARestart(t *testing.T) {
 	assert.NotEqual(t, "ok", r.host("air26:def456").Status, "and it does not keep the pool's figures as ok")
 }
 
+// The old source's error (an ssh host-key refusal, say) does not outlive its session: a listed host the pool has nothing for
+// reads offline, not "error".
+func TestPoolSource_ListedWithoutFactsDropsAnOldSSHError(t *testing.T) {
+	r, fp := newPoolRig(t)
+	fp.set(wire.Pool{Peers: []wire.Peer{peerOK("mlab", r.fc.Now(), 50, 1, wire.ZoneNormal)}}, nil) // air26 not listed: ssh
+	r.start()
+	r.tick()
+	require.True(t, r.hasSession("peer"))
+	r.m.mu.Lock()
+	r.m.hosts["peer"].status, r.m.hosts["peer"].code = leaf.StatusError, leaf.CodeHostKey
+	r.m.mu.Unlock()
+
+	fp.set(wire.Pool{Peers: []wire.Peer{peerOK("mlab", r.fc.Now(), 50, 1, wire.ZoneNormal),
+		{Info: wire.Info{HostID: "air26-id", Alias: "air26"}, Facts: nil, Reachable: false}}}, nil)
+	r.tick() // the session is stopped
+	r.tick() // the pool owns the row
+	h := r.host("air26:def456")
+	assert.Equal(t, "offline", h.Status)
+	assert.Equal(t, "timeout", h.Error)
+}
+
 // A host that was read by another source and is now listed by the pool without usable facts (unreachable) must not keep the old
 // source's ok.
 func TestPoolSource_ListedWithoutFactsIsOfflineNotTheOldOk(t *testing.T) {

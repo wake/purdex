@@ -53,8 +53,8 @@ func (m *Measure) readPool(ctx context.Context, now time.Time) {
 				m.applyFactsLocked(h, peer.Facts, now)
 			}
 		}
-		if h.poolSeen.IsZero() && h.status == leaf.StatusOK {
-			m.offlineLocked(h) // the pool lists the host but has nothing to read from it: never keep an old source's ok
+		if h.poolSeen.IsZero() {
+			m.offlineLocked(h) // the pool lists the host but has nothing to read from it: never keep an old source's ok or error
 		}
 		// No new reading for a while: the row reads offline too (it keeps the last values), never ok on an old figure.
 		if !h.poolSeen.IsZero() && now.Sub(h.poolSeen) >= poolStaleAfter && h.status == leaf.StatusOK {
