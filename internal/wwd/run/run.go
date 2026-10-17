@@ -44,6 +44,8 @@ type Spec struct {
 	KillAfter time.Duration // TERM to KILL; DefaultKillAfter when zero
 	OutDir    string        // where log and stdout files are written (created if missing)
 	MaxLog    int64         // per-file capture cap; DefaultMaxLog when zero
+	// Procs finds processes by job mark for the sweep after the run; DefaultProcSource() when nil.
+	Procs ProcSource
 }
 
 // Result is what the run left behind.
@@ -61,6 +63,10 @@ type Result struct {
 	// CaptureErr is a failure to write the log or stdout file (disk full, quota). The command's own result stands, but the
 	// files and the summary built from them are incomplete: the worker treats it as an infrastructure failure (spec §5.1).
 	CaptureErr error
+	// Escaped are the processes found outside the process group by the job mark and ended after it: a task that has any
+	// leaks processes, and the log says so. SweepErr is why the scan could not run (the job's result is unaffected).
+	Escaped  []int
+	SweepErr error
 }
 
 // Run starts the command, waits for it, and ends its whole process group on timeout or cancel (TERM, then KILL after
@@ -140,6 +146,15 @@ func Run(ctx context.Context, spec Spec) Result {
 	}
 	// The leader is gone; anything it left behind in the group goes too.
 	_ = syscall.Kill(-pgid, syscall.SIGKILL)
+	// Then whatever left the group (a daemonized tmux server, vite, playwright) but kept the job mark.
+	src := spec.Procs
+	if src == nil {
+		src = DefaultProcSource()
+	}
+	res.Escaped, res.SweepErr = sweepBounded(src, spec.JobID, killAfter)
+	if len(res.Escaped) > 0 {
+		cp.note(escapedNote(res.Escaped))
+	}
 	res.FinishedAt = time.Now()
 	res.Tail, res.LogCut, res.CaptureErr = cp.close()
 

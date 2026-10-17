@@ -115,6 +115,20 @@ func (c *capture) write(p []byte, stdout bool) (int, error) {
 	return len(p), nil
 }
 
+// note adds a line of the runner's own to the log and the tail.
+func (c *capture) note(s string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
+	// the runner's own line is not the command's output: it is written whatever the capture cap says
+	if _, err := c.log.WriteString(s); err != nil {
+		c.lastError = err
+	}
+	c.tail = append(c.tail, s...)
+}
+
 func (c *capture) close() (tail []byte, logCut bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
