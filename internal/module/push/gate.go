@@ -41,9 +41,9 @@ type AgentEvent struct {
 	BroadcastTs int64
 	Silent      bool   // detail.notification_silent == true
 	ErrorString string // detail.error
-	// Member: the gate applies the member rule (the session pushes only to a device that has its tab). Set for a session
-	// that is a team member, and also when the membership read failed: the quieter side. Whether the payload says `member`
-	// is separate (push.AgentInput.Member), so an unknown is not announced as a member.
+	// Member: the session is a team member, so its waiting and idle are never pushed (rule 4a, member spec R1). Set only
+	// when membership is known: a failed or late read leaves it false (unknown counts as not a member, R4). Whether the
+	// payload says `member` is separate (push.AgentInput.Member).
 	Member bool
 }
 
@@ -97,7 +97,7 @@ func (g *Gate) Decide(ev AgentEvent, devices []push.Device, shows func(code stri
 	return recipients
 }
 
-// EventStage is rules 0-4, once per event. ev.EventName must be normalised.
+// EventStage is rules 0-4a, once per event. ev.EventName must be normalised.
 func (g *Gate) EventStage(ev AgentEvent, shows func(code string) bool) bool {
 	if !g.fresh(ev.SessionCode, ev.BroadcastTs) { // 0
 		return false
@@ -114,12 +114,14 @@ func (g *Gate) EventStage(ev AgentEvent, shows func(code string) bool) bool {
 	if shows != nil && shows(ev.SessionCode) { // 4: a present Mac shows it
 		return false
 	}
+	if ev.Member && (ev.Status == "waiting" || ev.Status == "idle") { // 4a: a team member's waiting and idle are never pushed
+		return false
+	}
 	return true
 }
 
-// DeviceWants is rules 5-6 plus the badge spec's two (§3.1), per device. ev.EventName must be normalised. A member pushes
-// only to a device that has its tab, whatever notify_without_tab says; a session the device muted gets no agent push
-// (approval pushes do not come through here).
+// DeviceWants is rules 5-6a, per device. ev.EventName must be normalised. A session the device muted gets no agent push
+// (approval pushes do not come through here). A member's error is judged like any session's.
 func DeviceWants(d push.Device, ev AgentEvent) bool {
 	p := d.Prefs.Agents[ev.AgentType]    // an agent the phone never mentioned has the Mac's defaults: on, no events off, tabs only
 	if p.Enabled != nil && !*p.Enabled { // 5
@@ -133,7 +135,7 @@ func DeviceWants(d push.Device, ev AgentEvent) bool {
 			return false
 		}
 	}
-	if !p.NotifyWithoutTab || ev.Member { // 6, and the member rule
+	if !p.NotifyWithoutTab { // 6
 		for _, code := range d.Prefs.Tabs {
 			if code == ev.SessionCode {
 				return true
