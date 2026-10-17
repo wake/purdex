@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -228,4 +229,27 @@ func TestHoldHost_KeepsTheLaterUntilAndExpires(t *testing.T) {
 	assert.False(t, held)
 	_, held = HeldHost(dir, "air26", "other", now)
 	assert.False(t, held, "per repo")
+}
+
+// A look at the dispatch slots (a status poll tries their locks for an instant) must not make a free slot read as taken.
+func TestDispatch_AnInstantProbeOfTheSlotDoesNotRefuseTheSend(t *testing.T) {
+	g, _ := testGate(t)
+	cfg := g.Config()
+	pool := g.pool(cfg, ClassHeavy)
+	tk, err := pool.EnqueueFor(WaiterInfo{PID: 5, Argv: []string{"go", "test"}})
+	require.NoError(t, err)
+	t.Cleanup(tk.Drop)
+	dispatch := DispatchPool(cfg.Dir, "air26", 1, g.Now)
+	// something holds the only slot's lock for a moment, as a status look does, then lets it go
+	probe, err := os.OpenFile(dispatch.slotPath(1), os.O_CREATE|os.O_RDWR, 0o644)
+	require.NoError(t, err)
+	require.NoError(t, syscall.Flock(int(probe.Fd()), syscall.LOCK_EX))
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		probe.Close()
+	}()
+	slot, err := g.serveOutRetrying(cfg, ClassHeavy, tk.Name, dispatch, WaiterInfo{PID: 5}, OutInfo{Host: "air26", Job: "j", At: g.Now()})
+	require.NoError(t, err)
+	require.NotNil(t, slot, "the send was tried again after the instant")
+	slot.Release(nil)
 }

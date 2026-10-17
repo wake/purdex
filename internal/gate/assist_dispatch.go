@@ -28,6 +28,18 @@ func dispatchSize(n int) int {
 	return n
 }
 
+// serveOutRetrying is ServeOut, tried again a few times when it finds the pool full: a status look tries a slot's lock for an instant
+// (as it has always done for the pools of this host), and that instant must not make a free dispatch slot read as taken.
+func (g *Gate) serveOutRetrying(cfg Config, class Class, ticket string, dispatch *Pool, info WaiterInfo, out OutInfo) (*Slot, error) {
+	for try := 0; ; try++ {
+		slot, err := g.pool(cfg, class).ServeOut(ticket, dispatch, info, out)
+		if err != nil || slot != nil || try >= 3 {
+			return slot, err
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+}
+
 // tryAssist sends the ticket's command to the assist host. handled is true when the run is over (the command's result, or the caller
 // was cancelled) and code is the exit code. When it is false nothing ran for good: the ticket is back at its place, the dispatch
 // slot is let go, and the caller waits on this host as it always did.
@@ -43,7 +55,7 @@ func (g *Gate) tryAssist(ctx context.Context, cfg Config, class Class, o Options
 	}
 	size := dispatchSize(a.Slots)
 	job := newJobID()
-	slot, err := g.pool(cfg, class).ServeOut(ticket.Name, DispatchPool(cfg.Dir, a.Host, size, g.Now), g.waiterInfo(o), OutInfo{Host: a.Host, Job: job, At: g.Now()})
+	slot, err := g.serveOutRetrying(cfg, class, ticket.Name, DispatchPool(cfg.Dir, a.Host, size, g.Now), g.waiterInfo(o), OutInfo{Host: a.Host, Job: job, At: g.Now()})
 	if err != nil || slot == nil {
 		if err != nil {
 			g.say("%s: no dispatch slot (%v); waiting on this host", a.Host, err)

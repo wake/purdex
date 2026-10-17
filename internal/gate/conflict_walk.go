@@ -158,11 +158,16 @@ func walkQueue(class Class, q []QueueEntry, holders []Holder, rules []Conflict, 
 // waitersWithConflicts is Waiters with the conflict each waiter is held by, found by the same walk a take makes (capacity: the free
 // slots, less the holders). Read-only, like the rest of the status.
 func (p *Pool) waitersWithConflicts(holders []Holder, rules []Conflict) []Waiter {
-	ws := p.Waiters()
+	return p.waitersWithConflictsFrom(p.peekSnapshot(), holders, rules)
+}
+
+// waitersWithConflictsFrom is waitersWithConflicts over a snapshot the caller already has.
+func (p *Pool) waitersWithConflictsFrom(snap Snapshot, holders []Holder, rules []Conflict) []Waiter {
+	ws := p.waitersFrom(snap)
 	if len(rules) == 0 || len(ws) == 0 {
 		return ws
 	}
-	res := walkQueue(p.Class, p.peekSnapshot().Queue, holders, rules, max(p.Size-len(holders), 0), "", nil, nil)
+	res := walkQueue(p.Class, snap.Queue, holders, rules, max(p.Size-len(holders), 0), "", nil, nil)
 	for i := range ws {
 		if b := res.Blocked[ws[i].Ticket]; b != nil {
 			ws[i].ConflictWith, ws[i].ConflictRule, ws[i].ConflictReason = b.With, b.Rule.A+" × "+b.Rule.B, b.Rule.Reason

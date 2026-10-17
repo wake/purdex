@@ -757,12 +757,17 @@ type Waiter struct {
 	ConflictRule string `json:"conflict_rule,omitempty"`
 	// ConflictReason is that rule's reason: why the rule exists, so a person can judge whether it should go.
 	ConflictReason string `json:"conflict_reason,omitempty"`
+	// Candidates are the assist hosts that may take the command: on, freshly checked on, with a free dispatch slot, and a capability that
+	// takes it (status only; the repo being ready there and the session being allowed are the daemon's to say, pdx gate hosts).
+	Candidates []string `json:"candidates,omitempty"`
 }
 
 // Waiters lists the live tickets in serving order (front, normal, back, then the held ones); it removes nothing (a ticket whose
 // gate is gone is just not listed).
-func (p *Pool) Waiters() []Waiter {
-	snap := p.peekSnapshot()
+func (p *Pool) Waiters() []Waiter { return p.waitersFrom(p.peekSnapshot()) }
+
+// waitersFrom is Waiters over a snapshot the caller already has, so that the queue and the out tickets of one answer are of one look.
+func (p *Pool) waitersFrom(snap Snapshot) []Waiter {
 	var out []Waiter
 	for _, e := range snap.Queue {
 		b, _ := os.ReadFile(filepath.Join(p.queueDir(), e.Name))
