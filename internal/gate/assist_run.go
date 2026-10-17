@@ -42,6 +42,10 @@ type AssistResult struct {
 	RunS      float64 // the run itself
 	Job       string
 	Err       error // why it did not start (or, after the start, what went wrong around it)
+	// Cancelled says a signal or the caller's context ended the run before it started (nothing to fall back to: the caller was cancelled).
+	Cancelled bool
+	// NotAdmitted says the host's gate did not admit the command within its wait (exit 75), which holds the host off for less.
+	NotAdmitted bool
 	// CleanupErr is set when the job could not be removed from the host (it is left for the sweep of assist-check).
 	CleanupErr error
 }
@@ -284,8 +288,10 @@ loop:
 				res.Code = code
 			case cancelled:
 				res.Code = 130
+				res.Cancelled = true
 				res.Err = errors.New("cancelled")
 			default:
+				res.NotAdmitted = code == ExitRefused && !filter.sawNoStart
 				res.Err = failedBeforeStart(a.Host, code, filter)
 			}
 			break loop

@@ -38,6 +38,11 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		return broken(err)
 	}
 	defer ticket.Drop()
+	if o.Assist != nil {
+		if code, handled := g.tryAssist(ctx, cfg, class, o, ticket, d); handled {
+			return nil, code, true
+		}
+	}
 	// Whoever called this command is the one who waits for its output. When that process is gone (this one is handed to init
 	// or to another reaper) nobody will read what it prints, and a slot taken then would run a whole suite for no one, so the
 	// ticket is given up. A command that was started with no parent to lose (its parent was init already), or that was told

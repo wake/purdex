@@ -75,9 +75,11 @@ type Options struct {
 	// WaitMax, when above 0, is how long the command may wait for its slot: past it the gate ends the wait, runs nothing and exits with
 	// ExitRefused (a run sent from another host uses it to know that nothing started there).
 	WaitMax time.Duration
-	Stdin   io.Reader
-	Stdout  io.Writer
-	Stderr  io.Writer
+	// Assist, when set, sends the command to that assist host once it has a ticket; a failure there brings the ticket back to its place.
+	Assist *AssistTarget
+	Stdin  io.Reader
+	Stdout io.Writer
+	Stderr io.Writer
 }
 
 // state is what copies of a Gate share: the config as last read.
@@ -343,7 +345,7 @@ func (g *Gate) run(ctx context.Context, o Options, d *Decision) (int, error) {
 
 	slot, code, done := g.wait(ctx, cfg, class, o, sigs, d)
 	if done {
-		if code == ExitRefused && d.Outcome != "wait-max" {
+		if code == ExitRefused && d.Outcome != "wait-max" && d.Outcome != "assist" {
 			d.Outcome = "refused"
 		}
 		return code, nil
