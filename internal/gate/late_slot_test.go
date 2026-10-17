@@ -17,7 +17,7 @@ func lateTestPool(t *testing.T, size int) *Pool {
 // A late holder takes the lowest free slot of the pool; when the pool is full it takes one beyond its size, and the slot says so.
 func TestTakeLate_UsesAFreeSlotElseGoesOver(t *testing.T) {
 	p := lateTestPool(t, 2)
-	a, err := p.TakeLate()
+	a, err := p.TakeLate(WaiterInfo{})
 	require.NoError(t, err)
 	require.NotNil(t, a)
 	assert.Equal(t, 1, a.K, "a free slot of the pool first")
@@ -31,7 +31,7 @@ func TestTakeLate_UsesAFreeSlotElseGoesOver(t *testing.T) {
 	tk.Drop()
 	assert.Equal(t, 2, b.K)
 
-	c, err := p.TakeLate()
+	c, err := p.TakeLate(WaiterInfo{})
 	require.NoError(t, err)
 	require.NotNil(t, c)
 	assert.Equal(t, 3, c.K, "the pool is full: the late holder is over its size")
@@ -55,12 +55,12 @@ func TestTakeLate_RunsOutOfOverSlots(t *testing.T) {
 	p := lateTestPool(t, 1)
 	var got []*Slot
 	for i := 0; i < 1+8; i++ { // eight beyond the pool: a number the spec states, not the constant itself
-		s, err := p.TakeLate()
+		s, err := p.TakeLate(WaiterInfo{})
 		require.NoError(t, err)
 		require.NotNil(t, s, "late holder %d", i)
 		got = append(got, s)
 	}
-	s, err := p.TakeLate()
+	s, err := p.TakeLate(WaiterInfo{})
 	require.NoError(t, err)
 	assert.Nil(t, s)
 	for _, s := range got {
@@ -82,7 +82,7 @@ func TestTryTake_AnOverSlotTakesAPlaceFromTheFreeOnes(t *testing.T) {
 	a, b := take(), take()
 	require.NotNil(t, a)
 	require.NotNil(t, b)
-	late, err := p.TakeLate()
+	late, err := p.TakeLate(WaiterInfo{})
 	require.NoError(t, err)
 	require.True(t, late.Over(p.Size))
 
@@ -103,7 +103,7 @@ func TestWouldWait_CountsAnOverSlot(t *testing.T) {
 	g.Holders = nil
 	g.SetConfig(func(c *Config) { c.Slots.Light = 1 })
 	pool := g.pool(g.Config(), ClassLight)
-	s, err := pool.TakeLate()
+	s, err := pool.TakeLate(WaiterInfo{})
 	require.NoError(t, err)
 	require.NotNil(t, s)
 	require.NoError(t, s.SetHolder(Holder{PID: os.Getpid(), Started: time.Now(), Late: true}))

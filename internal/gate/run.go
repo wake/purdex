@@ -32,7 +32,7 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 	}
 	// The ticket lives in one directory; a setting that changes gate.dir while this command waits is for the next command.
 	dir := cfg.Dir
-	ticket, err := g.pool(cfg, class).EnqueueFor(WaiterInfo{PID: g.PID(), Argv: truncateArgv(o.Argv), Cwd: g.cwdOf(o), Session: g.Session})
+	ticket, err := g.pool(cfg, class).EnqueueFor(g.waiterInfo(o))
 	if err != nil {
 		return broken(err)
 	}
@@ -419,7 +419,7 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 			}
 			// the settings as they are now: a class set to 0 (or raised from it) since the command started decides this claim, not the
 			// ones the command was started under (W3c)
-			s, err := g.pool(g.refresh(), lw.class).TakeLate()
+			s, err := g.pool(g.refresh(), lw.class).TakeLate(g.waiterInfo(o))
 			switch {
 			case err != nil:
 				g.say("late slot: %v (the command goes on without one)", err)
@@ -525,4 +525,10 @@ func freeBytes(path string) (int64, error) {
 		return 0, err
 	}
 	return int64(st.Bavail) * int64(st.Bsize), nil
+}
+
+// waiterInfo is what the gate says about the command it runs, for its ticket and for the record of the slot it takes (a late claim
+// too): the same argv in both, so whoever takes the admit lock next sees what holds the slot.
+func (g *Gate) waiterInfo(o Options) WaiterInfo {
+	return WaiterInfo{PID: g.PID(), Argv: truncateArgv(o.Argv), Cwd: g.cwdOf(o), Session: g.Session}
 }
