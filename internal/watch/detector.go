@@ -246,13 +246,14 @@ func (d *Detector) unmanagedTrees(in Input) []Event {
 			// the simulator's memory alone is never an event (#3072); say so once per stretch of memory over y_mb
 			if set.YMB > 0 && u.rss >= uint64(set.YMB)*mib {
 				if !st.simNoted && d.Diag != nil {
-					d.Diag("simulator", fmt.Sprintf("launchd_sim (pid %d) sums %d MB of RSS across its daemons, shared pages counted once per process: memory alone is not an event, its cores still count", root, u.rss/mib))
+					d.Diag(fmt.Sprintf("simulator %d", root), fmt.Sprintf("launchd_sim (pid %d) sums %d MB of RSS across its daemons, shared pages counted once per process: memory alone is not an event, its cores still count", root, u.rss/mib))
 				}
 				st.simNoted = true
 			} else if st.simNoted {
 				st.simNoted = false
 				if d.Diag != nil {
-					d.Diag("simulator", "") // fine again: the receiver keeps what it was told, so a second stretch is told anew
+					// fine again; one source per tree (several devices run at once), so one tree's recovery clears only its own line
+					d.Diag(fmt.Sprintf("simulator %d", root), "")
 				}
 			}
 		}

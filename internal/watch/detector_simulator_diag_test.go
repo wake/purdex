@@ -13,7 +13,7 @@ func TestE1_ASimulatorDiagIsClearedWhenItsMemoryIsBackUnderTheThreshold(t *testi
 	r := newRig(t)
 	var calls []string
 	r.d.Diag = func(source, problem string) {
-		if source == "simulator" {
+		if source == "simulator 200" { // one source per tree, so a second device's recovery cannot clear this one's line
 			calls = append(calls, problem)
 		}
 	}
