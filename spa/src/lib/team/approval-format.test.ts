@@ -139,6 +139,14 @@ describe('closedToastText: a relay that ended half', () => {
     expect(closedToastText(t, 'mlab', { ...base, state: 'cancelled' })).toContain('approval.state.cancelled')
   })
 
+  it('half on a card of a kind that is not a relay (lead, adopt, a hook) keeps the plain ended wording', () => {
+    for (const kind of ['lead', 'adopt', 'hook_ask', 'hook_permission'] as const) {
+      const text = closedToastText(t, 'mlab', { ...base, kind, state: 'cancelled', close_reason: 'half' })
+      expect(text).toContain('approval.toast.ended')
+      expect(text).not.toContain('relay.half.toast')
+    }
+  })
+
   it('half on a card that is not cancelled is not that wording (a stray field never rewrites a state)', () => {
     expect(closedToastText(t, 'mlab', { ...base, state: 'timeout', close_reason: 'half' })).toContain('approval.toast.ended')
     expect(closedToastText(t, 'mlab', { ...base, state: 'abandoned', close_reason: 'half' })).toContain('approval.state.abandoned')

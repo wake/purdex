@@ -68,8 +68,9 @@ export function closedToastText(t: T, host: string, a: Approval): string {
   }
   // Unattended mode refuses lead and adopt cards (`team.person.v1`): not a failure, the mode did what it says.
   if (a.state === 'cancelled' && a.close_reason === UNATTENDED_REFUSED) return t('approval.toast.unattended_refused', { host, session, kind })
-  // A relay that wrote its handoff file and left the session as it was (`relay.half.v1`): the file is the result.
-  if (a.state === 'cancelled' && a.close_reason === RELAY_HALF) return t('relay.half.toast', { host, session })
+  // A relay that wrote its handoff file and left the session as it was (`relay.half.v1`): the file is the result. Only the two
+  // relay kinds end this way; a stray `half` on any other kind is the plain ended wording.
+  if (a.state === 'cancelled' && a.close_reason === RELAY_HALF && (a.kind === 'self_relay' || a.kind === 'member_relay')) return t('relay.half.toast', { host, session })
   return t('approval.toast.ended', { host, session, kind, state: t(`approval.state.${a.state}`) })
 }
 
