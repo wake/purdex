@@ -54,7 +54,11 @@ type Decision struct {
 	Left     []string           `json:"left_running,omitempty"`
 	Exit     int                `json:"exit"`
 	Duration float64            `json:"duration_s"`
-	dir      string
+	// The usage of the command tree (setUsage): absent for a command that never started, and for a record of an older gate.
+	CPUS        float64 `json:"cpu_s,omitempty"`        // user + system seconds
+	MaxRSSMB    float64 `json:"max_rss_mb,omitempty"`   // the largest single process
+	MajorFaults int64   `json:"major_faults,omitempty"` // pages read back from disk / swap
+	dir         string
 }
 
 func (d *Decision) why(reason string) {
