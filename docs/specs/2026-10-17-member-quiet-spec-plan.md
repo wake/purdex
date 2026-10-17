@@ -44,9 +44,17 @@ contract.)*
     flicker on a disconnect. The roster is
     kept across a disconnect today while the session list is re-fetched first (`useMultiHostEventWs.ts:358-380`,
     `roster-ws.ts:43-51`), and a member is matched by tmux session **name** only, so a stale seat would otherwise claim a
-    new session that reuses the name after a tmux restart and silence it (MQ-2 review A-1). A roster seat carries no
-    tmux generation yet; the long-term fix is a `tmux_instance` on `RosterSession` that the Apps compare with the session
-    row's (`host-api.ts:17-21`) — a daemon change tracked separately.
+    new session that reuses the name after a tmux restart and silence it (MQ-2 review A-1).
+    - The Mac also takes a host's session list only from its current connection: a fetch started under an older
+      connection (closed, the host removed or repointed, the store reset) is dropped when it answers, and a seat counts
+      only when **its own** host's session list arrived on that host's current connection (a seat on another host than
+      the lead's included) (MQ-2 incremental reviews).
+  - **the tmux generation** (daemon #3095, 748; lead 88's rule for both Apps): `RosterSession.tmux_instance`
+    (`"<server pid>:<start_time>"`; a live seat carries the running server's, a stored one what team.db recorded, absent
+    when not in tmux or not verifiable). A seat **with** `tmux_instance` is a member only when the matched session row's
+    `tmux_instance` (`host-api.ts:17-21`) is non-empty and equal — a different or empty one is unknown, so not a member.
+    A seat **without** it is matched by name as before (older daemons). Mac: a follow-up PR after MQ-2; iPhone: with its
+    `memberSources` gap.
   When membership becomes known the mark hides at once (the unread state is kept); when it is lost again the mark
   shows again. In practice the unknown window is the first moments of a connection.
 
