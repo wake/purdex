@@ -39,6 +39,18 @@ const ExitRefused = 75
 // read its output, so it was not run (129, as for a hangup).
 const ExitOrphaned = 129
 
+// TagEnv names what the run is for: an assist run sent here by another host's gate sets assist:<job>, and the slot's record and the
+// waiting ticket carry it, so `pdx gate status` shows the run as an assist holder.
+const TagEnv = "PDX_GATE_TAG"
+
+// AdmittedMarkEnv set to 1 makes the gate print AdmittedMark on the command's stderr right before it starts the command: whoever
+// reads the output (a gate on another host that sent the run) knows that nothing ran before this line, and that the command did after.
+const AdmittedMarkEnv = "PDX_GATE_ADMITTED_MARK"
+
+// AdmittedMark is the line the gate prints for AdmittedMarkEnv: a record separator (0x1e), so it is not a line a command prints by
+// accident.
+const AdmittedMark = "\x1epdx-gate-admitted\n"
+
 // KeepOrphanEnv set to anything but "" and "0" lets a command that waits go on waiting when its caller is gone (a detached job
 // on purpose: `nohup pdx gate … &` that outlives the terminal).
 const KeepOrphanEnv = "PDX_GATE_KEEP_ORPHAN"
@@ -54,9 +66,12 @@ type Options struct {
 	Foreground bool
 	Env        []string
 	Dir        string
-	Stdin      io.Reader
-	Stdout     io.Writer
-	Stderr     io.Writer
+	// WaitMax, when above 0, is how long the command may wait for its slot: past it the gate ends the wait, runs nothing and exits with
+	// ExitRefused (a run sent from another host uses it to know that nothing started there).
+	WaitMax time.Duration
+	Stdin   io.Reader
+	Stdout  io.Writer
+	Stderr  io.Writer
 }
 
 // state is what copies of a Gate share: the config as last read.
@@ -311,7 +326,7 @@ func (g *Gate) run(ctx context.Context, o Options, d *Decision) (int, error) {
 
 	slot, code, done := g.wait(ctx, cfg, class, o, sigs, d)
 	if done {
-		if code == ExitRefused {
+		if code == ExitRefused && d.Outcome != "wait-max" {
 			d.Outcome = "refused"
 		}
 		return code, nil
@@ -439,7 +454,7 @@ func (g *Gate) signals() (<-chan os.Signal, func()) {
 }
 
 func (g *Gate) holder(o Options, token string) Holder {
-	return Holder{PID: g.PID(), Argv: truncateArgv(o.Argv), Cwd: g.cwdOf(o), Started: g.Now(), Session: g.Session, Token: token}
+	return Holder{PID: g.PID(), Argv: truncateArgv(o.Argv), Cwd: g.cwdOf(o), Started: g.Now(), Session: g.Session, Token: token, Tag: tagOf(o)}
 }
 
 // cwdOf is the directory the command runs in.
@@ -589,3 +604,26 @@ func (g *Gate) fillLocked(hp *Pool, heavy []Holder, lp *Pool, light []Holder, mo
 
 // DirOf is the directory the gate keeps its state in.
 func (g *Gate) DirOf() string { return filepath.Clean(g.Config().Dir) }
+
+// tagOf is the run's tag: PDX_GATE_TAG of its environment (the process's own when the options carry none).
+func tagOf(o Options) string {
+	env := o.Env
+	if env == nil {
+		env = os.Environ()
+	}
+	return truncateTag(envValue(env, TagEnv))
+}
+
+// truncateTag keeps a tag to one short printable line.
+func truncateTag(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
+	if len(s) > 80 {
+		s = s[:80]
+	}
+	return s
+}

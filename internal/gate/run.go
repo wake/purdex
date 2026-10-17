@@ -337,6 +337,9 @@ func (g *Gate) start(ctx context.Context, cfg Config, o Options, argv, env []str
 	if slot != nil {
 		cmd.ExtraFiles = []*os.File{slot.File()}
 	}
+	if envValue(env, AdmittedMarkEnv) == "1" {
+		_, _ = io.WriteString(cmd.Stderr, AdmittedMark) // before the start: nothing the command prints can come first
+	}
 	if err := cmd.Start(); err != nil {
 		g.say("%v", err)
 		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
@@ -531,5 +534,5 @@ func freeBytes(path string) (int64, error) {
 // waiterInfo is what the gate says about the command it runs, for its ticket and for the record of the slot it takes (a late claim
 // too): the same argv in both, so whoever takes the admit lock next sees what holds the slot.
 func (g *Gate) waiterInfo(o Options) WaiterInfo {
-	return WaiterInfo{PID: g.PID(), Argv: truncateArgv(o.Argv), Cwd: g.cwdOf(o), Session: g.Session}
+	return WaiterInfo{PID: g.PID(), Argv: truncateArgv(o.Argv), Cwd: g.cwdOf(o), Session: g.Session, Tag: tagOf(o)}
 }
