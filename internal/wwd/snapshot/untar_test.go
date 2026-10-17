@@ -119,3 +119,86 @@ func TestUntar_ADuplicateOfADifferentKindIsRefused(t *testing.T) {
 	_, err := Untar(tarOf(t, ent{name: "x", body: "file"}, ent{name: "x/", mode: 0o755}), dst)
 	assert.Error(t, err)
 }
+
+// A symlink whose target is local as a string (y/newdir) but resolves above the workspace through another symlink (y -> .) must not
+// let a later entry create anything outside: no file, no directory.
+func TestUntar_ASymlinkChainThatLeavesTheWorkspaceCreatesNothingOutside(t *testing.T) {
+	base := t.TempDir()
+	dst := filepath.Join(base, "ws")
+	_, err := Untar(tarOf(t,
+		ent{name: "y", link: "."},
+		ent{name: "q", link: "y/y/../newdir"}, // as a string y/newdir; on disk y is the workspace, so ../newdir is next to it
+		ent{name: "q/sub/file", body: "x\n"},
+	), dst)
+	require.Error(t, err)
+	entries, rerr := os.ReadDir(base)
+	require.NoError(t, rerr)
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	assert.Equal(t, []string{"ws"}, names, "nothing was made next to the workspace")
+}
+
+// An archive that ends with the escaping symlink is refused too: nothing after it forces a check, and a consumer of the workspace that
+// does not go through a root would follow it. A symlink that is dangling inside the workspace is fine.
+func TestUntar_ATerminalSymlinkThatResolvesOutsideIsRefused(t *testing.T) {
+	for _, outsideExists := range []bool{true, false} {
+		base := t.TempDir()
+		if outsideExists {
+			require.NoError(t, os.Mkdir(filepath.Join(base, "newdir"), 0o755))
+		}
+		_, err := Untar(tarOf(t,
+			ent{name: "y", link: "."},
+			ent{name: "q", link: "y/y/../newdir"},
+		), filepath.Join(base, "ws"))
+		assert.Error(t, err, "outside exists=%v", outsideExists)
+	}
+	_, err := Untar(tarOf(t, ent{name: "dangling", link: "not/there/yet"}, ent{name: "ok.txt", body: "x\n"}), filepath.Join(t.TempDir(), "ws"))
+	assert.NoError(t, err, "a link that points at nothing yet, inside, is allowed")
+}
+
+// A missing component before the '..' that leaves does not hide the escape: whoever makes `missing` later gets a link that leads out.
+// Links that stay inside, however they climb, are fine.
+func TestUntar_AMissingComponentDoesNotHideAnEscapingSymlink(t *testing.T) {
+	_, err := Untar(tarOf(t,
+		ent{name: "y", link: "."},
+		ent{name: "q", link: "y/y/missing/../../newdir"},
+	), filepath.Join(t.TempDir(), "ws"))
+	assert.Error(t, err)
+
+	_, err = Untar(tarOf(t, // a link inside a directory that is itself reached through a link
+		ent{name: "d/", mode: 0o755},
+		ent{name: "dl", link: "d"},
+		ent{name: "dl/up", link: "../../x"},
+	), filepath.Join(t.TempDir(), "ws"))
+	assert.Error(t, err, "dl/up is d/up: ../../x leaves")
+
+	_, err = Untar(tarOf(t, ent{name: "loop1", link: "loop2"}, ent{name: "loop2", link: "loop1"}), filepath.Join(t.TempDir(), "ws"))
+	assert.Error(t, err, "a loop is refused")
+
+	_, err = Untar(tarOf(t,
+		ent{name: "a/", mode: 0o755},
+		ent{name: "a/b/", mode: 0o755},
+		ent{name: "x.txt", body: "x\n"},
+		ent{name: "a/b/up", link: "../../x.txt"},
+		ent{name: "a/b/same", link: "../b/../b"},
+		ent{name: "a/later", link: "not/made/yet/../../ok"},
+	), filepath.Join(t.TempDir(), "ws"))
+	assert.NoError(t, err, "links that climb and stay inside")
+}
+
+// The same chain when the directory it points at outside is there: nothing is made in it.
+func TestUntar_ASymlinkChainIntoAnExistingDirectoryOutsideWritesNothingThere(t *testing.T) {
+	base := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(base, "newdir"), 0o755))
+	_, err := Untar(tarOf(t,
+		ent{name: "y", link: "."},
+		ent{name: "q", link: "y/y/../newdir"},
+		ent{name: "q/sub/file", body: "x\n"},
+	), filepath.Join(base, "ws"))
+	require.Error(t, err)
+	entries, rerr := os.ReadDir(filepath.Join(base, "newdir"))
+	require.NoError(t, rerr)
+	assert.Empty(t, entries, "the directory outside is untouched")
+}
