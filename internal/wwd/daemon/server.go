@@ -26,6 +26,8 @@ type Options struct {
 	Sampler                *Sampler // nil: the facts routes are not registered
 	Peers                  []PeerAddr
 	HTTPClient             *http.Client // for forwarding and polling; nil: a client with timeouts that follows no redirect
+	State                  *HostState   // worker settings and exceptions; nil: the worker/exception routes are not registered
+	Broker                 *Broker      // the event broker (shared with State); nil: a new one
 }
 
 // Daemon holds the state both HTTP surfaces serve.
@@ -46,7 +48,11 @@ func New(o Options) *Daemon {
 	if poll == nil {
 		poll = &http.Client{Timeout: peerTimeout, CheckRedirect: noRedirect}
 	}
-	return &Daemon{opts: o, broker: NewBroker(), pool: NewPoolPoller(o.Peers, o.Token, poll), fwd: fwd}
+	b := o.Broker
+	if b == nil {
+		b = NewBroker()
+	}
+	return &Daemon{opts: o, broker: b, pool: NewPoolPoller(o.Peers, o.Token, poll), fwd: fwd}
 }
 
 // Events is the broker the SSE streams read; the sampler and the queue publish to it.
@@ -61,6 +67,7 @@ func (d *Daemon) routes(mux *http.ServeMux, peer bool) {
 	mux.HandleFunc("GET /v1/info", d.handleInfo)
 	mux.HandleFunc("GET /v1/events", d.handleEvents(peer))
 	d.factsRoutes(mux, peer)
+	d.workerRoutes(mux, peer)
 }
 
 // TCPHandler serves the tailnet/loopback listeners: every request, including
@@ -98,10 +105,14 @@ func (d *Daemon) requireToken(next http.Handler) http.Handler {
 }
 
 func (d *Daemon) info() wire.Info {
+	enabled := d.opts.WorkerEnabled
+	if d.opts.State != nil {
+		enabled = d.opts.State.Worker().Enabled // the switch can be flipped at run time
+	}
 	return wire.Info{
 		HostID: d.opts.HostID, Alias: d.opts.Alias, Version: d.opts.Version,
 		Proto: wire.Proto, Platform: runtime.GOOS, Arch: runtime.GOARCH,
-		Worker: wire.InfoWorker{Enabled: d.opts.WorkerEnabled},
+		Worker: wire.InfoWorker{Enabled: enabled},
 		Labels: []string{"os:" + runtime.GOOS, "arch:" + runtime.GOARCH},
 	}
 }

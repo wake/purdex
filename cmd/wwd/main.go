@@ -18,6 +18,9 @@ import (
 	"github.com/wake/purdex/internal/buildinfo"
 	"github.com/wake/purdex/internal/wwd/daemon"
 	"github.com/wake/purdex/internal/wwd/facts"
+	"github.com/wake/purdex/internal/wwd/queue"
+	"github.com/wake/purdex/internal/wwd/store"
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 func main() {
@@ -63,20 +66,50 @@ func run(cfgPath string) error {
 	if err != nil {
 		return err
 	}
-	var srcOpt facts.SourceOptions
 	ownerRule := ""
 	if cfg.Owner.Enabled {
-		srcOpt.Owner = &facts.OwnerConfig{IdleMinutes: cfg.Owner.IdleMinutes}
 		mins := cfg.Owner.IdleMinutes
 		if mins <= 0 {
 			mins = 5 // the rule's default (facts.OwnerConfig)
 		}
 		ownerRule = fmt.Sprintf("hid<%dm", mins)
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	// wwd.db: the host state here, the queue's tables beside it (queue.Migrate is
+	// idempotent and runs on every start)
+	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+		return err
+	}
+	st, err := store.Open(filepath.Join(cfg.DataDir, "wwd.db"))
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	if err := queue.Migrate(ctx, st.DB()); err != nil {
+		return err
+	}
+	broker := daemon.NewBroker()
+	state, err := daemon.NewHostState(daemon.HostStateOptions{
+		Store: st, Host: alias, Events: broker, OwnerRuleSupported: cfg.Owner.Enabled,
+		Initial: wire.WorkerSettings{Enabled: cfg.Worker.Enabled, Slots: cfg.Worker.Slots(), OwnerRule: ownerRule},
+	})
+	if err != nil {
+		return err
+	}
+	// the owner rule follows the worker settings: PUT /v1/worker changes the idle limit at run time
+	var srcOpt facts.SourceOptions
+	if cfg.Owner.Enabled {
+		srcOpt.Owner = &facts.OwnerConfig{}
+		srcOpt.OwnerMinutes = func() int {
+			m, _ := daemon.ParseOwnerRule(state.Worker().OwnerRule)
+			return m
+		}
+	}
 	sampler := daemon.NewSampler(daemon.SamplerOptions{
 		HostID: hostID, Alias: alias, OSVersion: facts.OSVersion(),
 		Sources: facts.SystemSourcesWith(srcOpt), Slots: cfg.Worker.Slots(), WorkerEnabled: cfg.Worker.Enabled,
-		OwnerRule: ownerRule,
+		OwnerRule: ownerRule, State: state,
 	})
 	peers := make([]daemon.PeerAddr, len(cfg.Peers))
 	for i, p := range cfg.Peers {
@@ -88,10 +121,9 @@ func run(cfgPath string) error {
 	d := daemon.New(daemon.Options{
 		HostID: hostID, Alias: alias, Version: buildinfo.Version,
 		Token: tok, WorkerEnabled: cfg.Worker.Enabled, Sampler: sampler, Peers: peers,
+		State: state, Broker: broker,
 	})
 	sampler.SetOnFacts(d.Events().PublishFacts)
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	go sampler.Run(ctx)
 	go d.Pool().Run(ctx)
 	run, err := d.Listen(ctx, daemon.ListenSpec{Addrs: addrs, Port: cfg.Port, SocketPath: cfg.SocketPath})
