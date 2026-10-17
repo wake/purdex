@@ -285,6 +285,21 @@ func TestWatch_AnEndpointThatNeverAnswersEndsInBoundedTime(t *testing.T) {
 	}
 }
 
+func TestConnectGuard_TheTimerCannotCancelAStreamThatIsConnected(t *testing.T) {
+	var cancelled atomic.Bool
+	g := &connectGuard{cancel: func() { cancelled.Store(true) }}
+	g.connected()
+	g.expire() // the timer fired at the very boundary, after the headers arrived
+	if cancelled.Load() {
+		t.Fatal("the connect timeout cancelled an open stream")
+	}
+	late := &connectGuard{cancel: func() { cancelled.Store(true) }}
+	late.expire()
+	if !cancelled.Load() {
+		t.Fatal("the connect timeout did not cancel a connection that never answered")
+	}
+}
+
 func TestWaitJob_ADeafEventEndpointDoesNotStopTheJobBeingRead(t *testing.T) {
 	block := make(chan struct{})
 	defer close(block)

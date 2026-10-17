@@ -32,8 +32,10 @@ func (c *Client) Watch(ctx context.Context, ready chan<- struct{}, fn func(wire.
 	}
 	req.Header.Set("Accept", "text/event-stream")
 	// no call timeout: the stream is long-lived and the context ends it
-	t := time.AfterFunc(c.timeout(), cancelStream) // connecting and the answer's headers are bounded; the body is the context's
+	g := &connectGuard{cancel: cancelStream}
+	t := time.AfterFunc(c.timeout(), g.expire) // connecting and the answer's headers are bounded; the body is the context's
 	resp, err := c.http.Do(req)
+	g.connected()
 	t.Stop()
 	if err != nil {
 		if ctx.Err() != nil {
@@ -86,6 +88,28 @@ func (c *Client) Watch(ctx context.Context, ready chan<- struct{}, fn func(wire.
 		return fmt.Errorf("%w: %v", ErrStreamEnded, err)
 	}
 	return ErrStreamEnded
+}
+
+// connectGuard hands the stream over from the connect timeout to the caller's context: once connected has been called, the
+// timer's callback can no longer cancel anything, whatever the timing of the two.
+type connectGuard struct {
+	mu     sync.Mutex
+	done   bool
+	cancel context.CancelFunc
+}
+
+func (g *connectGuard) connected() {
+	g.mu.Lock()
+	g.done = true
+	g.mu.Unlock()
+}
+
+func (g *connectGuard) expire() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if !g.done {
+		g.cancel()
+	}
 }
 
 // pollEvery is how often WaitJob asks for the job while it has no event stream.
