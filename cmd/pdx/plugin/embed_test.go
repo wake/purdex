@@ -662,7 +662,7 @@ func TestSkillWatch_SaysWhatTheWatcherMustKnow(t *testing.T) {
 		"`gate_gap`", "`unknown`", "`allowed`",
 		"git pull", "purdex-watch", "git push",
 		"pdx watch ack <事件 id>… --note", "pdx watch log --unhandled",
-		"pdx gate status --json", "pdx gate set --expect <舊值> slots.<heavy|light>=<n>", "整串指令包在 `ssh <alias> …` 裡", "別拿本機的值去驗證遠端", "範圍 0–64",
+		"pdx gate status --json", "pdx gate set --expect <舊值> slots.<heavy|light>=<n>", "整串指令包在 `ssh <alias> …` 裡", "別拿本機的值去驗證遠端", "目前範圍 1–64", "結束碼 3",
 		"pdx gate free <class>-<k>", "pdx msg send <地址>",
 		"結束一個**沒有佔名額**的行程", "自己改 `watch` 的門檻",
 		"該休息", "該退場", "/exit",
