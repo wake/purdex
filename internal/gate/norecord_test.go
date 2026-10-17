@@ -44,7 +44,7 @@ func TestHeld_ASlotJustTakenIsNeverWithoutARecord(t *testing.T) {
 // The same for a late slot, between TakeLate and SetHolder.
 func TestHeld_ALateSlotJustTakenIsNeverWithoutARecord(t *testing.T) {
 	p := lateTestPool(t, 2)
-	s, err := p.TakeLate()
+	s, err := p.TakeLate(WaiterInfo{})
 	require.NoError(t, err)
 	require.NotNil(t, s)
 	held := p.Held()

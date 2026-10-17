@@ -137,12 +137,12 @@ func TestPaused_ARunningCommandIsNotTouchedByTheChangeToZero(t *testing.T) {
 // A paused class takes no claim at all: no late one, no over one.
 func TestPaused_NoLateClaimWhilePaused(t *testing.T) {
 	p := lateTestPool(t, 0)
-	s, err := p.TakeLate()
+	s, err := p.TakeLate(WaiterInfo{})
 	require.NoError(t, err)
 	assert.Nil(t, s)
 	assert.Empty(t, p.Held())
 	p.Size = 1
-	s, err = p.TakeLate()
+	s, err = p.TakeLate(WaiterInfo{})
 	require.NoError(t, err)
 	require.NotNil(t, s, "and it takes one as soon as the count is raised")
 	s.Release(nil)

@@ -57,13 +57,13 @@ func TestTakeLate_TheLimitCountsLateHoldersAboveALoweredSize(t *testing.T) {
 	p := lateTestPool(t, 2)
 	var got []*Slot
 	for i := 0; i < 2+overSlots; i++ { // fills the pool and every over slot
-		s, err := p.TakeLate()
+		s, err := p.TakeLate(WaiterInfo{})
 		require.NoError(t, err)
 		require.NotNil(t, s)
 		got = append(got, s)
 	}
 	small := &Pool{Dir: p.Dir, Class: ClassLight, Size: 1, Now: time.Now}
-	s, err := small.TakeLate()
+	s, err := small.TakeLate(WaiterInfo{})
 	require.NoError(t, err)
 	assert.Nil(t, s, "the slots above the lowered size are still held: no room for another late holder")
 	for _, s := range got {
