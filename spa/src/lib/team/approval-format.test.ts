@@ -118,3 +118,29 @@ describe('closedToastText: a person\'s command and the unattended refusal', () =
     expect(closedToastText(t, 'mlab', { ...base, state: 'timeout', close_reason: 'unattended_refused' })).toContain('approval.toast.ended')
   })
 })
+
+// Relay v2 App contract 5 (`relay.half.v1`): a relay op may end `cancelled` / `half` — the handoff file is written and the session was
+// not cleared. The card closes `cancelled` with `close_reason: "half"`; that is the result, not a failure.
+describe('closedToastText: a relay that ended half', () => {
+  const t = (k: string, vars?: Record<string, unknown>) => (vars ? `${k} ${JSON.stringify(vars)}` : k)
+  const base = { id: 'r', kind: 'self_relay', host_id: 'd', origin: origin(), payload: {}, created_at: 1, deadline_at: 2, lease_until: 3 } as const
+
+  it('cancelled + half says the handoff file is written, in its own words, and never the cancelled / ended wording', () => {
+    for (const kind of ['self_relay', 'member_relay'] as const) {
+      const text = closedToastText(t, 'mlab', { ...base, kind, state: 'cancelled', close_reason: 'half' })
+      expect(text).toContain('relay.half.toast')
+      expect(text).not.toContain('approval.toast.ended')
+      expect(text).not.toContain('approval.state.cancelled')
+    }
+  })
+
+  it('cancelled with any other reason, or none, keeps the plain ended wording', () => {
+    expect(closedToastText(t, 'mlab', { ...base, state: 'cancelled', close_reason: 'something_else' })).toContain('approval.toast.ended')
+    expect(closedToastText(t, 'mlab', { ...base, state: 'cancelled' })).toContain('approval.state.cancelled')
+  })
+
+  it('half on a card that is not cancelled is not that wording (a stray field never rewrites a state)', () => {
+    expect(closedToastText(t, 'mlab', { ...base, state: 'timeout', close_reason: 'half' })).toContain('approval.toast.ended')
+    expect(closedToastText(t, 'mlab', { ...base, state: 'abandoned', close_reason: 'half' })).toContain('approval.state.abandoned')
+  })
+})
