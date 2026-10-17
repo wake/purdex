@@ -343,8 +343,6 @@
   "team.sidebar.ghost_badge": "已關",
   "team.panel.members": "{{count}} 位成員",
   "team.panel.to_titlebar": "收進標題列",
-  "team.panel.enlarge": "放大面板",
-  "team.panel.restore": "還原面板大小",
   "team.titlebar.to_pane": "把面板放回窗格",
   "team.titlebar.to_titlebar": "把面板收進標題列",
   "team.titlebar.more": "還有 {{count}} 位，點開面板",
