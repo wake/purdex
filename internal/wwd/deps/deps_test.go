@@ -283,6 +283,12 @@ func TestPrepare_ASymlinkOutOfTheWorkspaceInThePathIsRefused(t *testing.T) {
 	_, serr := os.Stat(filepath.Join(outside, "node_modules/keep"))
 	assert.NoError(t, serr, "nothing outside was removed")
 
+	// the lockfile itself a link to a file outside: its content would be read into the key
+	ws3 := t.TempDir()
+	require.NoError(t, os.Symlink(filepath.Join(outside, "pnpm-lock.yaml"), filepath.Join(ws3, "pnpm-lock.yaml")))
+	_, err = c.Prepare(context.Background(), ws3, spec(in))
+	assert.Error(t, err, "a lockfile that is a symlink")
+
 	// the same when the entry exists (a hit would clone out and remove the destination first)
 	wsOK := workspace(t, "outside\n")
 	_, err = c.Prepare(context.Background(), wsOK, spec(in))
