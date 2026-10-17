@@ -1,0 +1,238 @@
+package run
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+)
+
+func spec(t *testing.T, argv ...string) Spec {
+	t.Helper()
+	ws, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Spec{
+		JobID: "j_test1", Argv: argv, Dir: ws, Workspace: ws,
+		ParentEnv: []string{"PATH=/usr/bin:/bin", "SECRET=hunter2", "KEEP=yes"},
+		OutDir:    filepath.Join(ws, ".out"), KillAfter: 300 * time.Millisecond,
+	}
+}
+
+func readFile(t *testing.T, p string) string {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func alive(pid int) bool { return syscall.Kill(pid, 0) == nil }
+
+func TestRunExitCodeAndOutput(t *testing.T) {
+	s := spec(t, "sh", "-c", "echo out; echo err >&2; exit 3")
+	r := Run(context.Background(), s)
+	if r.Outcome != Exited || r.ExitCode != 3 {
+		t.Fatalf("result = %+v", r)
+	}
+	if got := readFile(t, r.StdoutPath); got != "out\n" {
+		t.Fatalf("stdout = %q", got)
+	}
+	log := readFile(t, r.LogPath)
+	if !strings.Contains(log, "out\n") || !strings.Contains(log, "err\n") {
+		t.Fatalf("log = %q", log)
+	}
+	if string(r.Tail) != log {
+		t.Fatalf("tail = %q", r.Tail)
+	}
+}
+
+func TestRunSuccess(t *testing.T) {
+	r := Run(context.Background(), spec(t, "true"))
+	if r.Outcome != Exited || r.ExitCode != 0 || r.Signal != "" {
+		t.Fatalf("result = %+v", r)
+	}
+}
+
+func TestEnvironmentIsClean(t *testing.T) {
+	s := spec(t, "env")
+	s.TaskEnv = []string{"KEEP", "FIXED=1", "ABSENT"}
+	r := Run(context.Background(), s)
+	out := readFile(t, r.StdoutPath)
+	for _, want := range []string{"WWD_JOB=j_test1", "KEEP=yes", "FIXED=1", "PATH=/usr/bin:/bin", "TERM=dumb",
+		"HOME=" + s.Workspace + "/.home", "TMPDIR=" + s.Workspace + "/.tmp", "XDG_CACHE_HOME=" + s.Workspace + "/.cache"} {
+		if !strings.Contains(out, want+"\n") {
+			t.Errorf("env lacks %q:\n%s", want, out)
+		}
+	}
+	for _, bad := range []string{"SECRET", "hunter2", "ABSENT"} {
+		if strings.Contains(out, bad) {
+			t.Errorf("env leaks %q:\n%s", bad, out)
+		}
+	}
+	for _, d := range []string{".home", ".tmp", ".config", ".cache"} {
+		if st, err := os.Stat(filepath.Join(s.Workspace, d)); err != nil || !st.IsDir() {
+			t.Errorf("%s was not created", d)
+		}
+	}
+}
+
+func TestTaskEnvCannotOverrideTheFixedNames(t *testing.T) {
+	for _, e := range []string{"HOME", "HOME=/root", "TMPDIR=/x", "WWD_JOB=other", "WWD_X=1", "XDG_CONFIG_HOME"} {
+		s := spec(t, "true")
+		s.TaskEnv = []string{e}
+		if r := Run(context.Background(), s); r.Outcome != StartFailed {
+			t.Errorf("%s: outcome = %s, want start_failed", e, r.Outcome)
+		}
+	}
+}
+
+func TestEveryProcessOfTheTreeCarriesTheJobMark(t *testing.T) {
+	s := spec(t, "sh", "-c", "sh -c 'env' | grep WWD_JOB")
+	// a pipeline is shell syntax, which is fine here: the test's own command, not a task's run
+	r := Run(context.Background(), s)
+	if got := readFile(t, r.StdoutPath); got != "WWD_JOB=j_test1\n" {
+		t.Fatalf("grandchild env = %q (result %+v)", got, r)
+	}
+}
+
+func TestProgramIsFoundInTheCommandsPathNotTheRunnersPath(t *testing.T) {
+	bin := t.TempDir()
+	tool := filepath.Join(bin, "mytool")
+	if err := os.WriteFile(tool, []byte("#!/bin/sh\necho found\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s := spec(t, "mytool")
+	r := Run(context.Background(), s)
+	if r.Outcome != StartFailed {
+		t.Fatalf("found a tool that is not on the command's PATH: %+v", r)
+	}
+	s.ParentEnv = []string{"PATH=" + bin + ":/usr/bin:/bin"}
+	r = Run(context.Background(), s)
+	if r.Outcome != Exited || readFile(t, r.StdoutPath) != "found\n" {
+		t.Fatalf("result = %+v", r)
+	}
+}
+
+func TestStartFailures(t *testing.T) {
+	for name, s := range map[string]Spec{
+		"not found": spec(t, "no-such-program-xyz"),
+		"empty":     spec(t),
+	} {
+		if r := Run(context.Background(), s); r.Outcome != StartFailed || r.Err == nil {
+			t.Errorf("%s: %+v", name, r)
+		}
+	}
+	rel := spec(t, "true")
+	rel.Dir = "relative/dir"
+	if r := Run(context.Background(), rel); r.Outcome != StartFailed {
+		t.Errorf("relative dir: %+v", r)
+	}
+}
+
+func TestTimeoutEndsTheWholeGroup(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	s := spec(t, "sh", "-c", "sleep 30 & echo $! > "+pidFile+"; wait")
+	s.Timeout = 300 * time.Millisecond
+	start := time.Now()
+	r := Run(context.Background(), s)
+	if r.Outcome != TimedOut {
+		t.Fatalf("result = %+v", r)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("took %v", d)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(readFile(t, pidFile)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if alive(pid) {
+		syscall.Kill(pid, syscall.SIGKILL)
+		t.Fatal("the grandchild survived the timeout")
+	}
+}
+
+func TestTermIgnoredThenKilled(t *testing.T) {
+	s := spec(t, "sh", "-c", "trap '' TERM; sleep 30; sleep 30")
+	s.Timeout = 200 * time.Millisecond
+	s.KillAfter = 300 * time.Millisecond
+	start := time.Now()
+	r := Run(context.Background(), s)
+	if r.Outcome != TimedOut {
+		t.Fatalf("result = %+v", r)
+	}
+	if d := time.Since(start); d < 400*time.Millisecond || d > 5*time.Second {
+		t.Fatalf("TERM-ignoring command ended after %v, want just over timeout+killAfter", d)
+	}
+}
+
+func TestCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(200 * time.Millisecond); cancel() }()
+	r := Run(ctx, spec(t, "sleep", "30"))
+	if r.Outcome != Cancelled {
+		t.Fatalf("result = %+v", r)
+	}
+}
+
+func TestSignalDeathIsReported(t *testing.T) {
+	r := Run(context.Background(), spec(t, "sh", "-c", "kill -KILL $$"))
+	if r.Outcome != Exited || r.Signal != "killed" || r.ExitCode != -1 {
+		t.Fatalf("result = %+v", r)
+	}
+}
+
+func TestStrayHoldingThePipeDoesNotHoldTheJob(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	s := spec(t, "sh", "-c", "sleep 30 & echo $! > "+pidFile+"; exit 0")
+	start := time.Now()
+	r := Run(context.Background(), s)
+	if r.Outcome != Exited || r.ExitCode != 0 {
+		t.Fatalf("result = %+v", r)
+	}
+	if d := time.Since(start); d > 8*time.Second {
+		t.Fatalf("took %v", d)
+	}
+	pid, _ := strconv.Atoi(strings.TrimSpace(readFile(t, pidFile)))
+	time.Sleep(100 * time.Millisecond)
+	if pid > 0 && alive(pid) {
+		syscall.Kill(pid, syscall.SIGKILL)
+		t.Fatal("the stray child survived the job")
+	}
+}
+
+func TestLogIsCappedAndTheTailKept(t *testing.T) {
+	s := spec(t, "sh", "-c", "i=0; while [ $i -lt 2000 ]; do echo line-$i; i=$((i+1)); done")
+	s.MaxLog = 1000
+	r := Run(context.Background(), s)
+	if r.Outcome != Exited || r.ExitCode != 0 || !r.LogCut {
+		t.Fatalf("result = %+v", r)
+	}
+	log := readFile(t, r.LogPath)
+	if len(log) > 1000+len(truncatedNote) || !strings.HasSuffix(log, truncatedNote) {
+		t.Fatalf("log is %d bytes, tail %q", len(log), log[max(0, len(log)-80):])
+	}
+	if !strings.HasSuffix(strings.TrimSpace(string(r.Tail)), "line-1999") {
+		t.Fatalf("the in-memory tail lost the end: %q", string(r.Tail[max(0, len(r.Tail)-40):]))
+	}
+}
+
+func TestRunsInTheGivenDirectory(t *testing.T) {
+	s := spec(t, "pwd")
+	sub := filepath.Join(s.Workspace, "spa")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s.Dir = sub
+	r := Run(context.Background(), s)
+	if got := strings.TrimSpace(readFile(t, r.StdoutPath)); got != sub {
+		t.Fatalf("pwd = %q, want %q", got, sub)
+	}
+}
