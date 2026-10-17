@@ -135,14 +135,21 @@ func (m *Module) patrolStep(ctx context.Context) {
 	if free, ok := m.diskFreeGB(); ok {
 		m.patrol.mu.Lock()
 		low := free < float64(s.DiskLowGB)
-		tell := low && !m.patrol.diskAlerted
-		m.patrol.diskAlerted = low
+		alerted := m.patrol.diskAlerted
+		if !low {
+			m.patrol.diskAlerted = false
+		}
 		m.patrol.mu.Unlock()
-		if tell {
-			m.patrol.told(now)
+		if low && !alerted {
+			// marked only once the watcher was told: a failed attempt is made again at the next tick
 			if err := wake(ctx, "disk_low", fmt.Sprintf("剩 %.1f GB（低於 %d GB）", free, s.DiskLowGB)); err != nil {
 				m.logf("[watch] patrol: disk low: %v", err)
+				return
 			}
+			m.patrol.mu.Lock()
+			m.patrol.diskAlerted = true
+			m.patrol.mu.Unlock()
+			m.patrol.told(now)
 			return
 		}
 	}

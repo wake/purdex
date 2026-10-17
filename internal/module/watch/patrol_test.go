@@ -192,3 +192,32 @@ func (u unattendedFake) Unattended() (team.UnattendedState, error) { return u.st
 type hostFake struct{ h resources.HostUse }
 
 func (h hostFake) LatestHost() (resources.HostUse, bool) { return h.h, true }
+
+// A low-disk note that could not be delivered is made again at the next tick, not forgotten until the disk recovers and runs low again.
+func TestPatrol_AFailedLowDiskNoteIsRetriedAtTheNextTick(t *testing.T) {
+	r := newPatrolRig(t)
+	r.freeGB = 5
+	r.failWake = true
+	r.step(time.Minute)
+	r.step(time.Minute)
+	require.Equal(t, []string{"disk_low", "disk_low"}, r.reasons(), "tried at each tick while it fails")
+	r.failWake = false
+	r.step(time.Minute)
+	r.step(time.Minute)
+	require.Equal(t, []string{"disk_low", "disk_low", "disk_low"}, r.reasons(), "and once it went through, not again")
+}
+
+// A note given by another host restarts the count on the host that holds the watcher (the receiving side of the peer route).
+func TestPatrol_ANoteReceivedFromAnotherHostRestartsTheCount(t *testing.T) {
+	r := newSessionRig(t, "")
+	r.owners.set(watcherOwner("f1"), true, nil)
+	_, _, _ = r.m.Reconcile(context.Background())
+	r.m.dlv.notifier = &fakeNotifier{}
+	r.now = r.now.Add(29 * time.Minute)
+	body := `{"to_host_id":"` + ourID + `","reason":"assist_changed","detail":"d"}`
+	require.Equal(t, 200, r.serve(hostCtx(), "/api/peers/watch/note", body).Code)
+	r.m.patrol.mu.Lock()
+	last := r.m.patrol.last
+	r.m.patrol.mu.Unlock()
+	require.True(t, last.Equal(r.now), "the count restarts when the note was told")
+}

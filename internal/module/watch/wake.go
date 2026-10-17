@@ -139,5 +139,6 @@ func (m *Module) handlePeerNote(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadGateway, "not_delivered", "the watcher could not be told")
 		return
 	}
+	m.patrol.told(m.now())                                                       // the note restarts the count on the host that holds the watcher
 	m.writeJSON(w, http.StatusOK, map[string]any{"host_id": ours, "told": true}) // HostCaller wants the answering host id in every 2xx
 }
