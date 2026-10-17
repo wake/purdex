@@ -28,6 +28,7 @@ type patrolState struct {
 	mu          sync.Mutex
 	last        time.Time // when the watcher was last told anything
 	diskAlerted bool      // the disk is low and the watcher was told
+	started     time.Time // when this run of the daemon began to patrol
 }
 
 func (p *patrolState) told(at time.Time) {
@@ -127,6 +128,11 @@ func (m *Module) patrolStep(ctx context.Context) {
 	if h.State != watch.HolderAwake && h.State != watch.HolderResting {
 		return // this host holds no watcher: another host's daemon patrols
 	}
+	if h.State == watch.HolderResting { // a rested holder is not the watcher when another host's is awake
+		if cur, _ := m.loc.Remembered(); cur != nil && !m.isSelf(cur.Alias) {
+			return
+		}
+	}
 	now := m.now()
 	wake := m.wake
 	if wake == nil {
@@ -160,6 +166,12 @@ func (m *Module) patrolStep(ctx context.Context) {
 	if h.Since.After(base) {
 		base = h.Since
 	}
+	if m.patrol.started.After(base) { // after a restart of the daemon the count starts again from there (the last note is not on disk)
+		base = m.patrol.started
+	}
+	if base.After(now) { // the clock went back: count from now, not from a time that has not come
+		base = now
+	}
 	if now.Sub(base) < every {
 		return
 	}
@@ -175,6 +187,9 @@ func (m *Module) patrolLoop(ctx context.Context) {
 	if m.patrolEvery > 0 {
 		every = m.patrolEvery
 	}
+	m.patrol.mu.Lock()
+	m.patrol.started = m.now()
+	m.patrol.mu.Unlock()
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {

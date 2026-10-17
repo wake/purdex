@@ -221,3 +221,37 @@ func TestPatrol_ANoteReceivedFromAnotherHostRestartsTheCount(t *testing.T) {
 	r.m.patrol.mu.Unlock()
 	require.True(t, last.Equal(r.now), "the count restarts when the note was told")
 }
+
+// After a restart the count starts again from the start of the daemon, not from when the watcher registered long ago.
+func TestPatrol_AfterARestartTheCountStartsFromTheDaemonsStart(t *testing.T) {
+	r := newPatrolRig(t)
+	r.now = r.now.Add(5 * time.Hour) // the watcher has been there long
+	r.m.patrol.started = r.now
+	r.step(10 * time.Minute)
+	require.Empty(t, r.reasons(), "ten minutes after the daemon began: not yet")
+	r.step(21 * time.Minute)
+	require.Equal(t, []string{"patrol"}, r.reasons())
+}
+
+func TestPatrol_AClockThatWentBackCountsFromNowNotFromTheFuture(t *testing.T) {
+	r := newPatrolRig(t)
+	r.m.patrol.last = r.now.Add(3 * time.Hour) // a note stamped by a clock that was ahead
+	r.step(29 * time.Minute)
+	require.Empty(t, r.reasons())
+	r.step(2 * time.Minute)
+	require.Equal(t, []string{"patrol"}, r.reasons(), "one interval from the first look, not three hours")
+}
+
+// A rested holder here does not patrol while another host's watcher is the remembered one.
+func TestPatrol_ARestedHolderHereStaysQuietWhileAnotherHostsWatcherIsTheRememberedOne(t *testing.T) {
+	r, fc := askerRig(t)
+	fc.reply[pathHolder] = done(HolderView{HostID: peerID, State: "awake", SessionID: "s-26", Targets: []string{"air26", "mlab"}})
+	_, err := r.m.loc.Current(context.Background(), []string{"air26", "mlab"}, false) // remembers the awake one on air26
+	require.NoError(t, err)
+	require.NoError(t, r.m.holder.Update(func(h *watch.Holder) { h.State, h.SessionID = watch.HolderResting, "old" }))
+	var reasons []string
+	r.m.wake = func(_ context.Context, reason, _ string) error { reasons = append(reasons, reason); return nil }
+	r.m.psrc = &patrolSources{diskFreeGB: func() (float64, bool) { return 1, true }}
+	r.m.patrolStep(context.Background())
+	require.Empty(t, reasons, "not the disk alarm either: the watcher is elsewhere")
+}
