@@ -197,7 +197,7 @@ func TestSpawnResources_BootSettlesFromTheClosedCard(t *testing.T) {
 	if op, _, _ := f.m.store.GetSpawnOp(spawnID(1)); op.State != team.SpawnAwaitingResources {
 		t.Fatalf("op = %+v, want it still waiting (the follow-up did not run)", op)
 	}
-	f.m.bootSettleAwaitingSpawns()
+	f.m.resumeSpawns() // boot: settles the waiting op from its closed card before it resumes the running ones
 	if op, _, _ := f.m.store.GetSpawnOp(spawnID(1)); op.State != team.SpawnFailed || op.Reason != team.SpawnReasonDenied {
 		t.Fatalf("op = %+v; want failed spawn_denied", op)
 	}
@@ -210,7 +210,9 @@ func TestSpawnResources_TeamEndCancelsTheCard(t *testing.T) {
 	if won, err := f.m.store.EndTeam(uid(1), "sid-1", "test", f.clock.Load()); err != nil || !won {
 		t.Fatalf("EndTeam: won=%v err=%v", won, err)
 	}
-	f.m.closeOrphanSpawnCards()
+	for i := 0; i < livenessEvery; i++ { // the sweeper's liveness tick runs it
+		f.m.tick()
+	}
 	a, _, _ := f.m.store.Get(spawnID(1))
 	if a.State != team.StateCancelled {
 		t.Fatalf("card = %+v; want cancelled once its spawn failed with the team", a)
