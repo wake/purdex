@@ -301,3 +301,41 @@ func TestAck_AllOnAnotherHostReportsThatHostsCount(t *testing.T) {
 	require.Equal(t, 0, resp.Unhandled, "a26 has none left, whatever a has")
 	require.Equal(t, 2, ap.unhandledOn(t, ap.a), "a still has its own")
 }
+
+// The count after an ack is of every target host, not of this one only: acking an event of one host must not read as "all done" while
+// another host still has some (#3143).
+func TestAck_TheRemainingCountListsEveryTargetHost(t *testing.T) {
+	ap := newAckPair(t)
+	code, resp := ap.ackOn(t, ap.a, map[string]any{"ids": []string{ap.aIDs[0]}, "note": "n"})
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, []HostLeft{{Host: "mlab", Unhandled: 1}, {Host: "a26", Unhandled: 2}}, resp.Hosts, "a has one left, b still has both")
+	require.Equal(t, 3, resp.Unhandled, "the sum, not a's count")
+
+	// the ids of the other host: its own answer is used, a is asked for nothing it has already said
+	code, resp = ap.ackOn(t, ap.a, map[string]any{"ids": []string{ap.bIDs[0]}, "note": "n"})
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, []HostLeft{{Host: "mlab", Unhandled: 1}, {Host: "a26", Unhandled: 1}}, resp.Hosts)
+
+	// all, on this host
+	code, resp = ap.ackOn(t, ap.a, map[string]any{"all": true, "note": "n"})
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, []HostLeft{{Host: "mlab", Unhandled: 0}, {Host: "a26", Unhandled: 1}}, resp.Hosts)
+	require.Equal(t, 1, resp.Unhandled)
+}
+
+// A host that cannot be asked is "?" (-1) and makes the sum unknown; it is never counted as 0.
+func TestAck_AHostThatCannotBeAskedIsUnknownNotZero(t *testing.T) {
+	ap := newAckPair(t)
+	ap.a.loop().setDown(idB, true)
+	code, resp := ap.ackOn(t, ap.a, map[string]any{"ids": []string{ap.aIDs[0]}, "note": "n"})
+	require.Equal(t, http.StatusOK, code)
+	require.Equal(t, []HostLeft{{Host: "mlab", Unhandled: 1}, {Host: "a26", Unhandled: -1}}, resp.Hosts)
+	require.Equal(t, -1, resp.Unhandled)
+}
+
+// The peer route answers a count-only question without needing ids or a note.
+func TestAckPeer_CountOnlyAnswersTheCount(t *testing.T) {
+	ap := newAckPair(t)
+	n := ap.a.m.askLeft(context.Background(), "a26")
+	require.Equal(t, 2, n)
+}

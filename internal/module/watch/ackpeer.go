@@ -27,6 +27,8 @@ type ackPeerBody struct {
 	All      bool     `json:"all,omitempty"`
 	Note     string   `json:"note"`
 	By       string   `json:"by,omitempty"`
+	// CountOnly asks for the host's pending count and nothing else (no ids, no note): the ack's answer lists every target's count.
+	CountOnly bool `json:"count_only,omitempty"`
 }
 
 // ackPeerResponse is the answer: the ack's, with the host that answered named (the caller checks it).
@@ -178,6 +180,10 @@ func (m *Module) handlePeerAck(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusConflict, "wrong_host", "this request is addressed to another host")
 		return
 	}
+	if req.CountOnly {
+		m.writeJSON(w, http.StatusOK, ackPeerResponse{ackResponse: ackResponse{Unhandled: m.unhandledOrMinus()}, HostID: ours})
+		return
+	}
 	if why := validAck(req.IDs, req.All, req.Note); why != "" {
 		m.writeErr(w, http.StatusBadRequest, ipeers.ErrBadRequest, why)
 		return
@@ -222,4 +228,22 @@ func validAck(ids []string, all bool, note string) string {
 		}
 	}
 	return ""
+}
+
+// askLeft is how many events are pending on the paired host named alias (-1: it did not say: unreachable, an older daemon that does not
+// know count_only, or an answer that does not read).
+func (m *Module) askLeft(ctx context.Context, alias string) int {
+	entry, _, ok := m.peerEntry(alias)
+	if !ok || m.caller == nil || entry.HostID == "" {
+		return -1
+	}
+	res := m.caller.Call(ctx, entry.HostID, pathAck, ackPeerBody{ToHostID: entry.HostID, CountOnly: true})
+	if res.Class != peersmod.ClassDone {
+		return -1
+	}
+	var out ackPeerResponse
+	if json.Unmarshal(res.Body, &out) != nil || out.Unhandled < 0 {
+		return -1
+	}
+	return out.Unhandled
 }

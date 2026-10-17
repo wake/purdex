@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wake/purdex/internal/core"
@@ -151,11 +152,58 @@ type ackBody struct {
 	OriginInbox string   `json:"origin_inbox,omitempty"` // the caller's own session, so the ack says who gave the order
 }
 
-// ackResponse is the answer: what became of each id, and the count after.
+// ackResponse is the answer: what became of each id, and the count after. Unhandled is what is left on the hosts listed in Hosts (this
+// host and the other targets) added up, or -1 when one of them did not say; a peer's answer carries only its own count and no Hosts.
 type ackResponse struct {
 	Results   []watch.AckResult `json:"results"`
 	Handled   int               `json:"handled"`
 	Unhandled int               `json:"unhandled"`
+	Hosts     []HostLeft        `json:"hosts,omitempty"`
+}
+
+// HostLeft is how many events are still pending on a host (-1: the host did not say).
+type HostLeft struct {
+	Host      string `json:"host"`
+	Unhandled int    `json:"unhandled"`
+}
+
+// countBudget bounds the question about one host's pending count.
+const countBudget = 4 * time.Second
+
+// leftEverywhere is the pending count of this host and of every other target: the ones learned from the ack itself (known, by alias) and
+// the others asked side by side. A host that cannot be asked is -1, never 0.
+func (m *Module) leftEverywhere(ctx context.Context, own int, known map[string]int) ([]HostLeft, int) {
+	m.core.CfgMu.RLock()
+	ownAlias := m.core.Cfg.PeerAlias()
+	m.core.CfgMu.RUnlock()
+	hosts := []HostLeft{{Host: ownAlias, Unhandled: own}}
+	others := m.otherTargets()
+	counts := make([]int, len(others))
+	var wg sync.WaitGroup
+	for i, alias := range others {
+		if n, ok := known[alias]; ok {
+			counts[i] = n
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			cctx, cancel := context.WithTimeout(ctx, countBudget)
+			defer cancel()
+			counts[i] = m.askLeft(cctx, alias)
+		}()
+	}
+	wg.Wait()
+	total := own
+	for i, alias := range others {
+		hosts = append(hosts, HostLeft{Host: alias, Unhandled: counts[i]})
+		if counts[i] < 0 || total < 0 {
+			total = -1
+		} else {
+			total += counts[i]
+		}
+	}
+	return hosts, total
 }
 
 func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
@@ -194,6 +242,7 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 				m.writeErr(w, status, "ack_failed", err.Error())
 				return
 			}
+			resp.Hosts, resp.Unhandled = m.leftEverywhere(ctx, resp.Unhandled, nil)
 			m.writeJSON(w, http.StatusOK, resp)
 			return
 		}
@@ -203,13 +252,15 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		res, left := m.forwardAck(ctx, entry, nil, true, req.Note, by)
-		m.writeJSON(w, http.StatusOK, ackResponse{Results: res, Handled: countHandled(res), Unhandled: left}) // what is left on that host
+		hosts, total := m.leftEverywhere(ctx, m.unhandledOrMinus(), map[string]int{entry.Alias: left})
+		m.writeJSON(w, http.StatusOK, ackResponse{Results: res, Handled: countHandled(res), Unhandled: total, Hosts: hosts})
 		return
 	}
 
 	// ids: those of this host here, the others to the host that recorded them, the rest not found
 	byID := map[string]watch.AckResult{}
 	var local []string
+	known := map[string]int{}        // alias -> what is left there, as the ack's own answer said
 	foreign := map[string][]string{} // host name -> ids
 	for _, id := range req.IDs {
 		o := ownerOf(id)
@@ -241,7 +292,8 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 	}
 	for name, ids := range foreign {
 		entry := m.peersByHostName(name)[0]
-		res, _ := m.forwardAck(ctx, entry, ids, false, req.Note, by)
+		res, left := m.forwardAck(ctx, entry, ids, false, req.Note, by)
+		known[entry.Alias] = left
 		for _, x := range res {
 			byID[x.ID] = x
 		}
@@ -254,7 +306,8 @@ func (m *Module) handleAck(w http.ResponseWriter, r *http.Request) {
 		}
 		res = append(res, x)
 	}
-	m.writeJSON(w, http.StatusOK, ackResponse{Results: res, Handled: countHandled(res), Unhandled: m.unhandledOrZero()})
+	hosts, total := m.leftEverywhere(ctx, m.unhandledOrMinus(), known)
+	m.writeJSON(w, http.StatusOK, ackResponse{Results: res, Handled: countHandled(res), Unhandled: total, Hosts: hosts})
 }
 
 func countHandled(res []watch.AckResult) int {
@@ -268,6 +321,15 @@ func countHandled(res []watch.AckResult) int {
 }
 
 func (m *Module) unhandledOrZero() int { n, _ := m.unhandledCount(); return n }
+
+// unhandledOrMinus is this host's pending count, -1 when it cannot be read.
+func (m *Module) unhandledOrMinus() int {
+	n, err := m.unhandledCount()
+	if err != nil {
+		return -1
+	}
+	return n
+}
 
 // ackLocal marks this host's events handled: the ids named (those that are not this host's events come back not_found), or every
 // pending one. watch.events goes out once when anything became handled.

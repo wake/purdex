@@ -21,6 +21,14 @@ type ackWire struct {
 	Results   []watch.AckResult `json:"results"`
 	Handled   int               `json:"handled"`
 	Unhandled int               `json:"unhandled"`
+	// Hosts is what is left on each target host (this one first); Unhandled is their sum, -1 when one did not say.
+	Hosts []ackHostLeft `json:"hosts,omitempty"`
+}
+
+// ackHostLeft is the pending count of one host (-1: it did not say).
+type ackHostLeft struct {
+	Host      string `json:"host"`
+	Unhandled int    `json:"unhandled"`
 }
 
 func watchAck(args []string, stdout, stderr io.Writer) int {
@@ -127,6 +135,24 @@ func renderAck(a ackWire) string {
 		default:
 			fmt.Fprintf(b, "沒有處理到（%s）  %s\n", r.Outcome, r.ID)
 		}
+	}
+	if len(a.Hosts) > 0 { // per host, so a count of one host is never read as "everything is done"
+		parts := make([]string, len(a.Hosts))
+		known := 0
+		for i, h := range a.Hosts {
+			if h.Unhandled < 0 {
+				parts[i] = sanitizeCell(h.Host) + " ?"
+				continue
+			}
+			known += h.Unhandled
+			parts[i] = fmt.Sprintf("%s %d", sanitizeCell(h.Host), h.Unhandled)
+		}
+		if a.Unhandled < 0 {
+			fmt.Fprintf(b, "這次處理 %d 筆；待處理數不完整（%s），問不到的主機用 pdx watch log --all --unhandled 看\n", a.Handled, strings.Join(parts, "、"))
+			return b.String()
+		}
+		fmt.Fprintf(b, "這次處理 %d 筆，各主機還有 %d 筆待處理（%s）\n", a.Handled, known, strings.Join(parts, "、"))
+		return b.String()
 	}
 	if a.Unhandled < 0 { // the host that was asked did not say how many are left
 		fmt.Fprintf(b, "這次處理 %d 筆\n", a.Handled)
