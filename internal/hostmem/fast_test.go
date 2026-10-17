@@ -105,9 +105,10 @@ func TestFastReader_CPUIsTheShareSinceThePreviousReading(t *testing.T) {
 	assert.Contains(t, f.Missing, "cpu")
 }
 
-// Mem is the sampler's own arithmetic: (memory size - (free + inactive + speculative) pages x page size) / memory size.
+// Mem is the sampler's own arithmetic: (memory size - (free + inactive + speculative) pages x page size) / memory size, where the
+// sampler's free is vm_stat's (without the speculative pages) and Mach's Free holds them already: Free + Inactive, no second Speculative.
 func TestFastReader_MemIsTheSamplersArithmetic(t *testing.T) {
-	m := &fakeMach{vm: VMCounters{Free: 100_000, Inactive: 200_000, Speculative: 24_288, Pageouts: 0}} // 324288 pages x 16 KiB ~ 4.95 GiB
+	m := &fakeMach{vm: VMCounters{Free: 124_288, Inactive: 200_000, Speculative: 24_288, Pageouts: 0}} // 324288 pages x 16 KiB ~ 4.95 GiB
 	src := fakeSources()
 	src.Mach = m
 	f, err := NewFastReader(src).Read(time.Unix(1, 0))
