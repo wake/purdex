@@ -39,6 +39,22 @@ type SetResult struct {
 // empty. The key is "module.key" (or "enabled", "profile"); value is TOML ("2", "true", "\"nice\"", "[\"go\"]"), and a
 // bare word such as auto or nice is taken as a string.
 func Set(path, profile, key, value string) (SetResult, error) {
+	return SetExpect(path, profile, key, value, nil)
+}
+
+// ExpectError: the write was refused because the value now in the file is not the one the caller read (two writers must not undo each
+// other unseen).
+type ExpectError struct {
+	Key, Have, Want string
+}
+
+func (e *ExpectError) Error() string {
+	return fmt.Sprintf("%s is %q now, not the %q that was expected: read it again", e.Key, e.Have, e.Want)
+}
+
+// SetExpect is Set that, when expect is not nil, writes only if the effective value before the write (the text Old holds) is *expect.
+// The comparison and the write are done under the file's lock, so no other writer can come in between.
+func SetExpect(path, profile, key, value string, expect *string) (SetResult, error) {
 	res := SetResult{Key: key, Profile: profile}
 	if path == "" {
 		return res, errors.New("no config path")
@@ -64,6 +80,9 @@ func Set(path, profile, key, value string) (SetResult, error) {
 		return res, err
 	}
 	res.Old = effectiveOf(string(old), profile, key)
+	if expect != nil && res.Old != strings.TrimSpace(*expect) {
+		return res, &ExpectError{Key: key, Have: res.Old, Want: strings.TrimSpace(*expect)}
+	}
 	edited := editor(string(old), headerFor(profile, key), leafOf(key), lit)
 	var top map[string]any
 	if _, err := toml.Decode(edited, &top); err != nil {
