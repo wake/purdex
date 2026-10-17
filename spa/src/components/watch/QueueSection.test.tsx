@@ -174,7 +174,7 @@ describe('QueueSection — the clock', () => {
 })
 
 describe('QueueSection — switch and states', () => {
-  it('当下｜歷史: 歷史 is disabled until W5d, the choice goes to view memory', () => {
+  it('当下｜歷史: 歷史 is disabled without gate.decisions.v1, the choice goes to view memory', () => {
     renderQ(queue())
     const sw = within(screen.getByTestId('queue-tabs'))
     expect(sw.getByRole('button', { name: t('watch.queue.tab.now') })).toHaveAttribute('aria-pressed', 'true')
