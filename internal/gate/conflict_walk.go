@@ -162,7 +162,7 @@ func (p *Pool) waitersWithConflicts(holders []Holder, rules []Conflict) []Waiter
 	res := walkQueue(p.Class, p.peekSnapshot().Queue, holders, rules, max(p.Size-len(holders), 0), "", nil, nil)
 	for i := range ws {
 		if b := res.Blocked[ws[i].Ticket]; b != nil {
-			ws[i].ConflictWith, ws[i].ConflictRule = b.With, b.Rule.A+" × "+b.Rule.B
+			ws[i].ConflictWith, ws[i].ConflictRule, ws[i].ConflictReason = b.With, b.Rule.A+" × "+b.Rule.B, b.Rule.Reason
 		}
 	}
 	return ws

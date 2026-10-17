@@ -216,14 +216,15 @@ func TestGateConflict_StatusShowsTheRulesAndTheWaiterTheyHold(t *testing.T) {
 	var out, errb2 bytes.Buffer
 	require.Equal(t, 0, gateMain([]string{"status", "--config", cfg}, &out, &errb2))
 	assert.Contains(t, out.String(), "衝突規則 #1 heavy: tool-a × tool-b (they thrash)")
-	assert.Contains(t, out.String(), "等 slot heavy-1：tool-a × tool-b")
+	assert.Contains(t, out.String(), "等 slot heavy-1：tool-a × tool-b（衝突規則：they thrash）")
 	out.Reset()
 	require.Equal(t, 0, gateMain([]string{"status", "--json", "--config", cfg}, &out, &errb2))
 	var st struct {
 		Conflicts  []map[string]any
 		QueueHeavy []struct {
-			ConflictWith string `json:"conflict_with"`
-			ConflictRule string `json:"conflict_rule"`
+			ConflictWith   string `json:"conflict_with"`
+			ConflictRule   string `json:"conflict_rule"`
+			ConflictReason string `json:"conflict_reason"`
 		}
 	}
 	require.NoError(t, json.Unmarshal(out.Bytes(), &st))
@@ -231,6 +232,7 @@ func TestGateConflict_StatusShowsTheRulesAndTheWaiterTheyHold(t *testing.T) {
 	require.Len(t, st.QueueHeavy, 1)
 	assert.Equal(t, "slot heavy-1", st.QueueHeavy[0].ConflictWith)
 	assert.Equal(t, "tool-a × tool-b", st.QueueHeavy[0].ConflictRule)
+	assert.Equal(t, "they thrash", st.QueueHeavy[0].ConflictReason)
 	require.NoError(t, os.WriteFile(dir+"/go", nil, 0o644))
 	assert.Equal(t, 0, <-done)
 	assert.Equal(t, 0, <-done)

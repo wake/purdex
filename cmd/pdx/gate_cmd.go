@@ -282,7 +282,7 @@ func gateStatus(args []string, stdout, stderr io.Writer) int {
 			}
 			fmt.Fprintf(stdout, "  排隊 #%d  pid %d  %s  %s  %s\n", w.Place, w.PID, waited, strings.Join(w.Argv, " "), w.Cwd)
 			if w.ConflictWith != "" {
-				fmt.Fprintf(stdout, "    等 %s：%s（衝突規則）\n", w.ConflictWith, w.ConflictRule)
+				fmt.Fprintf(stdout, "    等 %s：%s（衝突規則：%s）\n", w.ConflictWith, w.ConflictRule, w.ConflictReason)
 			}
 			if w.Rank != "" && w.Rank != gate.RankNormal || w.RankError != "" {
 				fmt.Fprintf(stdout, "    順序：%s%s\n", w.Rank, rankNote(w)) // moved in the queue (pdx gate queue): who, why, until
