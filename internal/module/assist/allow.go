@@ -209,6 +209,14 @@ func (m *Module) allowDeny(w http.ResponseWriter, r *http.Request, allow bool) {
 		m.writeJSON(w, http.StatusNotFound, ipeers.APIError{Error: "no_such", Detail: "that entry is not on the allowed list"})
 		return
 	}
+	if res == "allowed" { // an allow asks the watcher to prepare that entry's repos; a deny and an "already" change nothing for it
+		host := b.Host
+		if host == "" {
+			host = "全部"
+		}
+		m.wakeWatcher("assist_allowed", fmt.Sprintf("%s %s 可用 %s by %s：%s", b.Kind, name, host, byOf(b.By), b.Reason))
+	}
+	m.kickNotify()
 	m.writeJSON(w, http.StatusOK, map[string]string{"result": res, "id": id, "name": name})
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/wake/purdex/internal/gate"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/team"
+	"github.com/wake/purdex/internal/watch"
 )
 
 // origins is the part of the peers module's resolver this module reads.
@@ -58,6 +59,15 @@ type Module struct {
 	passMu sync.Mutex
 	kick   chan struct{}
 
+	// notify sends a notice to a session on this host (nil: no notices); waker wakes the load watcher (nil: no wakes). nkick asks the
+	// notifier goroutine for a pass; notifyMu serialises passes; wake folds the wakes; wakeWG joins them at Stop.
+	notify   func(sessionID, text string) error
+	waker    func(ctx context.Context, reason, detail string) error
+	nkick    chan struct{}
+	notifyMu sync.Mutex
+	wake     wakeState
+	wakeWG   sync.WaitGroup
+
 	// ctxMu guards ctx, the parent of every script: Stop cancels it, so a script in flight does not hold the shutdown.
 	ctxMu sync.Mutex
 	ctx   context.Context
@@ -69,7 +79,7 @@ type Module struct {
 func New() *Module {
 	return &Module{logf: log.Printf, now: time.Now, dir: gate.DefaultDir(), pollEvery: 60 * time.Second,
 		timeouts: timeouts{on: 120 * time.Second, off: 90 * time.Second, check: 30 * time.Second},
-		runners:  map[string]*sync.Mutex{}, ready: map[string]gate.AssistReady{}, kick: make(chan struct{}, 1)}
+		runners:  map[string]*sync.Mutex{}, ready: map[string]gate.AssistReady{}, kick: make(chan struct{}, 1), nkick: make(chan struct{}, 1)}
 }
 
 func (m *Module) Name() string           { return "assist" }
@@ -91,6 +101,24 @@ func (m *Module) Init(c *core.Core) error {
 	if r, err := gate.ReadReady(m.dir); err == nil {
 		m.ready = r
 	}
+	if m.notify == nil {
+		m.notify = func(sessionID, text string) error {
+			return peersmod.NotifySelf(context.Background(), c, m.logf, sessionID, text)
+		}
+	}
+	if m.waker == nil {
+		m.waker = func(ctx context.Context, reason, detail string) error {
+			svc, ok := c.Registry.Get(watch.WakerKey)
+			if !ok {
+				return nil // no watch module: nobody to wake
+			}
+			w, ok := svc.(watch.Waker)
+			if !ok {
+				return nil
+			}
+			return w.WakeWatcher(ctx, reason, detail)
+		}
+	}
 	return nil
 }
 
@@ -100,6 +128,18 @@ func (m *Module) Start(context.Context) error {
 	m.ctxMu.Lock()
 	m.ctx, m.stop = ctx, cancel
 	m.ctxMu.Unlock()
+	m.wg.Add(1)
+	go func() { // the notifier: one pass per ask, however many asks came while it ran
+		defer m.wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-m.nkick:
+				m.notifyPass()
+			}
+		}
+	}()
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
@@ -126,6 +166,7 @@ func (m *Module) Stop(context.Context) error {
 		stop()
 	}
 	m.wg.Wait()
+	m.wakeWG.Wait()
 	return nil
 }
 
