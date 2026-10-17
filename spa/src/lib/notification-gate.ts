@@ -108,16 +108,20 @@ interface ShouldNotifyParams {
   fromProxy?: boolean
   /** Caller extracts from event.detail?.error before passing in (spec §4, option A). */
   errorString?: string
+  /** The session is an active team member (member spec R1): its waiting / idle never notify; its error is as any other's. */
+  isMember?: boolean
 }
 
 export function shouldNotify(params: ShouldNotifyParams): boolean {
-  const { derived, eventName: rawEventName, compositeKey: ck, visibleInActiveTab, hasTab, settings, notificationSilent = false, fromProxy = false, errorString } = params
+  const { derived, eventName: rawEventName, compositeKey: ck, visibleInActiveTab, hasTab, settings, notificationSilent = false, fromProxy = false, errorString, isMember = false } = params
   // W2 transition: cc broadcasts PdxXxx; legacy literal keys live in shouldNotify
   // suppression checks and NotificationSettings.events. Normalize once at entry.
   const eventName = normalizeEventName(rawEventName)
   if (derived !== 'waiting' && derived !== 'idle' && derived !== 'error') return false
   if (notificationSilent) return false
   if (fromProxy) return false
+  // A team member's waiting / idle is the lead's business, not the user's (member spec R1); its error is still pushed.
+  if (isMember && derived !== 'error') return false
   // Informational Notification subtypes (idle_prompt, auth_success) derive to 'idle'
   // but should not trigger desktop notifications — consistent with unread marking logic.
   if (derived === 'idle' && eventName === 'Notification') return false
