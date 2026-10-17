@@ -112,6 +112,14 @@ func seedIndex(run func(env []string, args ...string) (string, error), runIn fun
 	if err := os.WriteFile(dst, b, 0o600); err != nil {
 		return err
 	}
+	// The copy keeps the original's file time. git calls an entry racily clean when its file time is not older than the index
+	// file's, and then reads the content instead of trusting size and time; a copy made now would be newer than every entry, and an
+	// edit of the same size in the second of the last index write would read as unchanged and be missing from the snapshot.
+	if st, err := os.Stat(src); err == nil {
+		if err := os.Chtimes(dst, st.ModTime(), st.ModTime()); err != nil {
+			return err
+		}
+	}
 	list, err := run(idx, append(tempIndexConfig(), "ls-files", "-v", "-z")...)
 	if err != nil {
 		return fmt.Errorf("reading the copy of the index: %w", err)
