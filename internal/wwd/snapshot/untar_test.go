@@ -119,3 +119,38 @@ func TestUntar_ADuplicateOfADifferentKindIsRefused(t *testing.T) {
 	_, err := Untar(tarOf(t, ent{name: "x", body: "file"}, ent{name: "x/", mode: 0o755}), dst)
 	assert.Error(t, err)
 }
+
+// A symlink whose target is local as a string (y/newdir) but resolves above the workspace through another symlink (y -> .) must not
+// let a later entry create anything outside: no file, no directory.
+func TestUntar_ASymlinkChainThatLeavesTheWorkspaceCreatesNothingOutside(t *testing.T) {
+	base := t.TempDir()
+	dst := filepath.Join(base, "ws")
+	_, err := Untar(tarOf(t,
+		ent{name: "y", link: "."},
+		ent{name: "q", link: "y/y/../newdir"}, // as a string y/newdir; on disk y is the workspace, so ../newdir is next to it
+		ent{name: "q/sub/file", body: "x\n"},
+	), dst)
+	require.Error(t, err)
+	entries, rerr := os.ReadDir(base)
+	require.NoError(t, rerr)
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	assert.Equal(t, []string{"ws"}, names, "nothing was made next to the workspace")
+}
+
+// The same chain when the directory it points at outside is there: nothing is made in it.
+func TestUntar_ASymlinkChainIntoAnExistingDirectoryOutsideWritesNothingThere(t *testing.T) {
+	base := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(base, "newdir"), 0o755))
+	_, err := Untar(tarOf(t,
+		ent{name: "y", link: "."},
+		ent{name: "q", link: "y/y/../newdir"},
+		ent{name: "q/sub/file", body: "x\n"},
+	), filepath.Join(base, "ws"))
+	require.Error(t, err)
+	entries, rerr := os.ReadDir(filepath.Join(base, "newdir"))
+	require.NoError(t, rerr)
+	assert.Empty(t, entries, "the directory outside is untouched")
+}
