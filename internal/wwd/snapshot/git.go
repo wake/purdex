@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/wake/purdex/internal/execstat"
+	"github.com/wake/purdex/internal/gitenv"
 )
 
 // Pin and Unpin keep a job's snapshot commit reachable in the origin's repository (WWD spec §4.1, §4.3). The commit SnapshotTree makes
@@ -33,23 +34,9 @@ func validJobID(id string) error {
 	return nil
 }
 
-// gitEnv is the environment of every git command here: the repository is the one in repoDir, whatever repository variables the
-// process carries (the same reasoning as the gate's snapshot), and no prompt can stop it.
-func gitEnv() []string {
-	drop := []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-		"GIT_NAMESPACE", "GIT_PREFIX", "GIT_INTERNAL_SUPER_PREFIX", "GIT_QUARANTINE_PATH"}
-	var out []string
-next:
-	for _, kv := range os.Environ() {
-		for _, k := range drop {
-			if strings.HasPrefix(kv, k+"=") {
-				continue next
-			}
-		}
-		out = append(out, kv)
-	}
-	return append(out, "GIT_TERMINAL_PROMPT=0")
-}
+// gitEnv is the environment of every git command here: the repository is the one in repoDir, whatever repository or configuration
+// variables the process carries, and no prompt can stop it.
+func gitEnv() []string { return gitenv.Clean(os.Environ()) }
 
 // errTooLarge is what a command whose output went over its limit is: it was stopped, not waited for.
 var errTooLarge = errors.New("snapshot: output over the limit")

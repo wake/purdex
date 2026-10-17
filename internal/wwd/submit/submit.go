@@ -18,6 +18,7 @@ import (
 
 	"github.com/wake/purdex/internal/execstat"
 	"github.com/wake/purdex/internal/gate"
+	"github.com/wake/purdex/internal/gitenv"
 	"github.com/wake/purdex/internal/wwd/manifest"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
@@ -219,7 +220,7 @@ func (g *gitRunner) run(ctx context.Context, args ...string) (string, error) {
 		beforeGit(args)
 	}
 	cmd := execstat.CommandContext(ctx, "wwd.submit.git", g.bin, append([]string{"-C", g.dir}, args...)...)
-	cmd.Env = gate.CleanGitEnv(os.Environ())
+	cmd.Env = gitenv.Clean(os.Environ())
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {

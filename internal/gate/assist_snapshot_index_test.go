@@ -184,6 +184,24 @@ func TestSnapshot_InheritedGitRepositoryVariablesAreIgnored(t *testing.T) {
 	assert.Equal(t, otherIndex, afterIndex)
 }
 
+// Configuration that arrives in the environment (GIT_CONFIG_COUNT / KEY_n / VALUE_n, GIT_CONFIG_PARAMETERS) is ignored too: here it would
+// make git leave a new file out of the snapshot (core.excludesFile), and the same way it could name a command to run.
+func TestSnapshot_InheritedGitConfigVariablesAreIgnored(t *testing.T) {
+	dir := ignoredRepo(t)
+	writeFile(t, dir+"/u.txt", "untracked\n", 0o644)
+	excludes := filepath.Join(t.TempDir(), "excludes")
+	writeFile(t, excludes, "u.txt\n", 0o644)
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "core.excludesFile")
+	t.Setenv("GIT_CONFIG_VALUE_0", excludes)
+	t.Setenv("GIT_CONFIG_PARAMETERS", "'core.excludesFile="+excludes+"'")
+	info, err := SnapshotTree(context.Background(), "", dir)
+	require.NoError(t, err)
+	t.Setenv("GIT_CONFIG_COUNT", "") // the helper below must see an ordinary git
+	t.Setenv("GIT_CONFIG_PARAMETERS", "")
+	assert.Equal(t, "untracked", gitIn(t, dir, "show", info.SHA+":u.txt"), "the injected exclude file did not apply")
+}
+
 func gitInEnv(t *testing.T, dir string, env []string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)

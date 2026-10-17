@@ -385,3 +385,15 @@ func TestPin_PinsKeepsAndUnpins(t *testing.T) {
 	assert.Error(t, exec.Command("git", "-C", repo, "cat-file", "-e", snap+"^{commit}").Run(), "unpinned: the unreferenced snapshot is collected")
 	assert.Error(t, Unpin(ctx, filepath.Join(t.TempDir(), "no-repo"), "j_pin"), "a repository that cannot be read is an error, so the caller tries again")
 }
+
+// The git commands here run in the repository they are given, with no configuration from the process's environment.
+func TestGitEnv_HasNoInheritedGitVariables(t *testing.T) {
+	t.Setenv("GIT_DIR", "/other/.git")
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "core.fsmonitor")
+	for _, kv := range gitEnv() {
+		for _, bad := range []string{"GIT_DIR=", "GIT_CONFIG_COUNT=", "GIT_CONFIG_KEY_0="} {
+			assert.False(t, strings.HasPrefix(kv, bad), kv)
+		}
+	}
+}
