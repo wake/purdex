@@ -67,7 +67,8 @@ Host cells and the watcher area
   max state and `ExpandButton` are removed everywhere. The title-bar strip (`TeamTitleBar` / `TeamTitleStrip`) shows the
   team name plus each seat's light / model icon / context, as before J-2b.
 - State memory per team on this device, as team-interface R17 (titlebar / line / full).
-- 「團隊」 toolbar button: see §5 Q1. 「工作簿」 opens the journal card as today.
+- 「團隊」 toolbar button (§5 Q1): full or line → title bar; title bar → full. 「工作簿」 opens the journal card as
+  today.
 - Member rows: line 2 = current task (number, title, state 進行中 / 待辦); line 3 = last exchange (relative time + one
   line, e.g. 「3 分前 回報：#3088 檢查跑完」). A missing part is left out; with neither the row is one line. Source:
   `GET /api/journal/members` (§4.3); without `journal.members.v1` both lines are left out.
@@ -146,9 +147,12 @@ Host cells and the watcher area
 - Remove `PUT /api/journal/pin`, `SetPinned`, `pin_in.go`, auto-pin in `journal_drain.go`; keep parsing old `pinned`
   meta. `info_handler.go` capability text updated.
 
-## 5. Open questions for the user
-- **Q1** The 「團隊」 button, now that the panel cannot be closed: proposal — it switches between **full** and
-  **collapsed to the title bar** (a one-click minimise / restore); the header click still switches full ⇄ one line.
+## 5. Settled with the user (2026-10-17)
+- **Q1** The 「團隊」 button, now that the panel cannot be closed: it switches between **full** and **collapsed to the
+  title bar** (a one-click minimise / restore); the header click still switches full ⇄ one line. From line, the
+  button goes to the title bar; from the title bar, back to full.
+- **§2** The original → new rows above are confirmed as written, including the withdrawal of journal plan :23.
+- **U13** The running holder look of §3.8 (tint + outline + breathing dot, all three) is confirmed.
 
 ## 6. Plan (one task = one PR; TDD; full flow: this doc → codex once; PR → codex R1 + R2)
 
