@@ -87,12 +87,13 @@ type sessionFile struct {
 
 // matchesStart reports whether the session file was written by the process
 // that started at startSec (a recycled pid is not the session). procStart is
-// ps's lstart text, so day padding and spacing are normalised before comparing.
+// a UTC ctime (internal/peers ProcStartLayout), so the start is formatted in UTC
+// and spacing is normalised before comparing.
 func (s sessionFile) matchesStart(startSec int64) bool {
 	if s.procStart == "" {
 		return false
 	}
-	want := strings.Join(strings.Fields(time.Unix(startSec, 0).Format("Mon Jan _2 15:04:05 2006")), " ")
+	want := strings.Join(strings.Fields(time.Unix(startSec, 0).UTC().Format("Mon Jan _2 15:04:05 2006")), " ")
 	return strings.Join(strings.Fields(s.procStart), " ") == want
 }
 

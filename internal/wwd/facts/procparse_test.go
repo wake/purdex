@@ -79,14 +79,18 @@ func TestSessionDirScan(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 	// procStart must equal the process's start time (a recycled pid is not the session)
-	at := time.Date(2026, 10, 17, 4, 34, 23, 0, time.Local)
+	// procStart is UTC (Claude Code's registry format) whatever the host zone is (R1)
+	old := time.Local
+	time.Local = time.FixedZone("UTC+8", 8*3600)
+	t.Cleanup(func() { time.Local = old })
+	at := time.Date(2026, 10, 17, 4, 34, 23, 0, time.UTC)
 	if !got[100].matchesStart(at.Unix()) {
 		t.Error("same start refused")
 	}
 	if got[100].matchesStart(at.Unix() + 60) {
 		t.Error("different start accepted")
 	}
-	at3 := time.Date(2026, 10, 3, 1, 2, 3, 0, time.Local) // single-digit day is space padded
+	at3 := time.Date(2026, 10, 3, 1, 2, 3, 0, time.UTC) // single-digit day is space padded
 	if !got[101].matchesStart(at3.Unix()) {
 		t.Error("space-padded day refused")
 	}

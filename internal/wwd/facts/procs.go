@@ -214,6 +214,9 @@ func BuildResidents(s ProcSnapshot, c ProcContext) []wire.Resident {
 		if kind == "" {
 			continue
 		}
+		if _, isJob := jobAbove(p, c); isJob {
+			continue // residents are the non-job helpers (spec §3.1)
+		}
 		session, ok := sessionAbove(p, c)
 		if !ok {
 			session = "orphan"
