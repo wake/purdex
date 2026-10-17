@@ -1,6 +1,6 @@
 // spa/src/main.test.tsx — what the app does at boot, for the parts a test can see. Every starter and the render
 // are stubbed; the module is imported once, exactly as the browser does.
-import { describe, it, expect, vi } from 'vitest'
+import { beforeAll, describe, it, expect, vi } from 'vitest'
 
 vi.mock('react-dom/client', () => ({ createRoot: vi.fn(() => ({ render: vi.fn() })) }))
 vi.mock('./App.tsx', () => ({ default: () => null }))
@@ -25,6 +25,15 @@ vi.mock('./stores/useDeviceNameStore', async (importOriginal) => ({
 }))
 
 describe('boot', () => {
+  // The first `import('./main')` loads the whole SPA start-up chain (several seconds under host load) and used to be
+  // charged to whichever test ran first, against its 5 s budget (#3027). Do it once here, in the hook's own budget
+  // (30 s: measured 5-9 s cold on a loaded host, so the 10 s default leaves no margin);
+  // the tests' `import('./main')` then resolve from the module cache, exactly as before, and each test still asserts
+  // that this one boot called its starter exactly once.
+  beforeAll(async () => {
+    await import('./main')
+  }, 30_000)
+
   // The default device name used to be resolved by the device-state uploader as a side effect. Settings › Profile's
   // name field and the profile wizard read the store, so without this they show the "Browser" fallback.
   it('resolves the default device name', async () => {
