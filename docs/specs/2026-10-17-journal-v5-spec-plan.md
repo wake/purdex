@@ -218,7 +218,7 @@ into core → `/api/info` declares it), and updates that comment.
   before pending, newest of each: `task_store.go:360-385`) so the journal and `/api/team` agree. Interface in
   `internal/team`, implementation in `internal/module/team` → reviewed by 1f.
 - `task`: `CurrentTask`'s answer. `last`: the member's newest **report** to the leader (`reports` by `member_key`,
-  `report_store.go:47-59`), ties broken by report id; `kind` = the report kind, `text` = its first line. Journal
+  `report_store.go:47-59`), ties broken by insertion order (rowid), as ReportsAfter; report ids are UUIDs and carry no order (A line 1f, 10-17); `kind` = the report kind, `text` = its first line. Journal
   request / comm entries carry no member identity (`internal/journal/entry.go:47-60`), so they are **not** a source.
 
 ### 4.4 Pin removal
@@ -266,7 +266,7 @@ Tests (each with a mutation that turns it red):
   `truncated`; an older page still carries the whole unit's `confirms[]` / `open_confirms`; `before` still answered; the
   capability with the real module.
 - JV-1c: `Members` lists current members only (a released / killed member not listed); `CurrentTask` matches
-  `currentTaskOf` (in progress before pending); `last` = newest report, ties by id; a member with neither → nulls; the
+  `currentTaskOf` (in progress before pending); `last` = newest report, ties by rowid; a member with neither → nulls; the
   capability with the real module.
 - JV-2: three states and the strip content on a journal host **and** a non-journal host (M: keep the CardStack team
   card); no max; the header click (full ⇄ line); the 「團隊」 button: full → title bar, line → title bar, title bar → full

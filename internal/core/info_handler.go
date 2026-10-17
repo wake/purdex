@@ -121,6 +121,9 @@ func (c *Core) capabilityList() []string {
 			out = append(out, "journal.v1")         // GET /api/journal, /api/journal/tasks, /api/journal/roadmap, journal.changed events (entries carry no pin; pages carry confirms[]); only while the journal runs ([journal] enabled, and wired)
 			out = append(out, "journal.confirm.v1") // PUT /api/journal/confirm {session_id, entry_id, idx, done}: a person checks / unchecks a 待確認 item (manual, Haiku leaves it); same condition as journal.v1
 		}
+		if c.moduleFlag("workbook", "journal_members") {
+			out = append(out, "journal.members.v1") // GET /api/journal/members: the team's current members with their task and last report; only while the journal runs with a team feed
+		}
 	}
 	if c.moduleReady("fleet") {
 		out = append(out, "fleet.v1") // GET /api/fleet, GET /api/fleet/ssh-aliases, the opt-in fleet.changed push (?fleet=v1)

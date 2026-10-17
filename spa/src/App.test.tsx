@@ -10,6 +10,7 @@ import { useWorkspaceStore } from './stores/useWorkspaceStore'
 import { useI18nStore } from './stores/useI18nStore'
 import { useLayoutStore } from './stores/useLayoutStore'
 import { WATCH_WORKSPACE_ID } from './features/workspace/store'
+import { leaveWatchArea } from './features/workspace/lib/open-watch-area'
 
 const activityBarProps = vi.hoisted(() => vi.fn())
 const tabBarProps = vi.hoisted(() => vi.fn())
@@ -152,5 +153,15 @@ describe('App — the fixed tab row of the watcher area', () => {
     useLayoutStore.setState({ tabPosition: 'top' })
     render(<App />)
     expect((tabBarProps.mock.calls.at(-1)![0] as { fixed?: boolean }).fixed).toBe(false)
+  })
+
+  it('the area row gets the way back (the back button, journal v5 §3.7); an ordinary row does not', () => {
+    useLayoutStore.setState({ tabPosition: 'top' })
+    const { unmount } = render(<App />)
+    expect((tabBarProps.mock.calls.at(-1)![0] as { onLeave?: unknown }).onLeave).toBeUndefined()
+    unmount()
+    useWorkspaceStore.getState().setActiveWorkspace(WATCH_WORKSPACE_ID)
+    render(<App />)
+    expect((tabBarProps.mock.calls.at(-1)![0] as { onLeave?: unknown }).onLeave).toBe(leaveWatchArea)
   })
 })

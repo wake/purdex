@@ -9,6 +9,7 @@ import { useSessionStore } from '../stores/useSessionStore'
 import { useWorkspaceStore } from '../stores/useWorkspaceStore'
 import { useFleetStore } from '../lib/fleet/store'
 import { useWatchEventsStore, pendingCount } from '../lib/watch/events-store'
+import { WATCH_GUARDIAN_TAB_ID } from '../lib/watch/ids'
 import { useI18nStore } from '../stores/useI18nStore'
 import { getPrimaryPane } from '../lib/pane-tree'
 import { getPaneIcon, getPaneLabel } from '../lib/pane-labels'
@@ -142,7 +143,11 @@ export function useTabDisplay(tab: Tab): TabDisplayData {
   const paneTitle = rawPaneTitle && stripMarker ? stripAgentTitleMarker(rawPaneTitle, agentType) : rawPaneTitle
   // Shared with the notification dispatcher's worker title (worker-summary.ts).
   const workerTitle = exec ? workerTitleOf(exec, titleSummary, titleSupported) ?? baseLabel : ''
-  const displayTitle = exec ? workerTitle : paneTitle ? `${paneTitle} - ${baseLabel}` : baseLabel
+  // The guardian tab is 守門員 whatever it holds (journal v5 §3.7): while the watcher lives its pane is the watcher's
+  // ordinary tmux session, whose name and title would otherwise be the label. By the tab's id, not the pane content.
+  const displayTitle = tab.id === WATCH_GUARDIAN_TAB_ID
+    ? t('watch.pane.guardian')
+    : exec ? workerTitle : paneTitle ? `${paneTitle} - ${baseLabel}` : baseLabel
   // Permission channel PC2 (spec §5.4, user decision 2026-10-08): 「等待核准」 on a tab is the hand on its light
   // (TabStatusIndicator), never label text. Lifecycle-aware: an ended worker or an old daemon never sets it.
   // Over every execution pane of the tab (useTabAgentAggregate), not only the primary one.

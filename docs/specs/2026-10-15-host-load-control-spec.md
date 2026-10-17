@@ -257,6 +257,13 @@ about 120 min). The queue was arrival order only; the watcher and the person nee
   `ssh <alias> pdx gate queue …`). The reason is required. It prints each ticket's old → new rank. `by` is the Claude
   session that ran it (from the environment the gate already reads), or `person` from a plain terminal. Anyone who can
   run `pdx` on the host may do it: no other limit (user decision 10-16, full control for the watcher and the person).
+- **Born at back (`PDX_GATE_RANK=back`)**: a gate started with it in its environment makes its ticket `back` from the moment
+  the ticket is visible (an assist run sent from another host sets it, so the person's own work on this host is served
+  first). The rank file is written and the ticket renamed into view under one hold of the class's admit lock, so no serve
+  or scan can see it as `normal`. `by` is the session id the gate reads (or `env`); the reason is `PDX_GATE_RANK=back`, or
+  `PDX_GATE_RANK_REASON` when it is one line of at most 200 bytes with no control characters. Only `back` is taken from the
+  environment (`front`, `hold`, anything else: ignored with one stderr line, rank `normal`), because a variable anyone can set
+  must not jump or stall the queue.
 - **Seen everywhere it waits**: `pdx gate status [--json]` lists each waiter's rank, reason and `until`; the waiting
   command's own line says why it waits (`held by <by>: <reason>` / `behind N moved to the front`); its decision record
   gains `rank` (the last one) and `held_s`. The fleet's queue view carries the rank (B line, from the status JSON).

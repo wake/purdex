@@ -534,6 +534,7 @@
   "page.pane.hosts": "Hosts",
   "page.pane.execution": "Execution",
   "watch.area.name": "Watcher area",
+  "watch.area.leave": "Leave the watcher area",
   "watch.pane.guardian": "Guardian",
   "watch.pane.events": "Events",
   "watch.pane.events_n": "Events {{n}}",

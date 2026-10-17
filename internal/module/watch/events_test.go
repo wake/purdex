@@ -101,7 +101,7 @@ func TestAck_MarksHandledWithTheNoteAndWhoAndTheCountGoesDown(t *testing.T) {
 	rr, resp := r.ack(t, adminCtx, map[string]any{"ids": []string{r.ids[0], r.ids[1]}, "note": "已查，是 vitest", "origin_inbox": "/tmp/x.sock"})
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 	require.Equal(t, 2, resp.Handled)
-	require.Equal(t, 1, resp.Unhandled)
+	require.Equal(t, 1, resp.Hosts[0].Unhandled, "this host's count; the other target cannot be asked in this rig")
 	require.Equal(t, 1, r.unhandled(t))
 	got := r.list(t, "")
 	var h watch.EventView
@@ -177,7 +177,7 @@ func TestAck_AllAcksEveryPendingEventOfThisHost(t *testing.T) {
 	rr, resp := r.ack(t, adminCtx, map[string]any{"all": true, "note": "all done"})
 	require.Equal(t, http.StatusOK, rr.Code)
 	require.Equal(t, 2, resp.Handled)
-	require.Equal(t, 0, resp.Unhandled)
+	require.Equal(t, 0, resp.Hosts[0].Unhandled)
 }
 
 func payloadOf(t *testing.T, e *events) EventsPayload {

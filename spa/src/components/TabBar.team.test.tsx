@@ -387,3 +387,38 @@ describe('TabBar — team group (TI-2)', () => {
     })
   })
 })
+
+describe('TabBar — the watcher area row never draws a team group (journal v5 §3.7, U10)', () => {
+  // The guardian tab shows the watcher's own tmux session, which can be a team's lead.
+  const areaTabs = () => [mk('watch-guardian', 'lead-tm'), mk('ma', 'a-tm'), mk('p2', 'p2')]
+  function fixedBar(tabs: Tab[]) {
+    const h = handlers()
+    const utils = render(
+      <TeamDisplayProvider>
+        <TabBar tabs={tabs} activeTabId={null} fixed {...h} />
+      </TeamDisplayProvider>,
+    )
+    return { ...utils, h }
+  }
+
+  it('no group frame and no team shadow on any tab; the same tabs on an ordinary row are a group', () => {
+    const tabs = areaTabs()
+    seed([roster()], tabs)
+    const { container, unmount } = fixedBar(tabs)
+    expect(container.querySelector('[data-testid="team-tab-group"]')).toBeNull()
+    expect(container.querySelector('[data-testid="team-tab-shadow"]')).toBeNull()
+    expect(idsInOrder(container)).toEqual(['watch-guardian', 'ma', 'p2'])
+    unmount()
+    // the control: without `fixed` the lead and its member are grouped
+    const ordinary = bar(tabs)
+    expect(ordinary.container.querySelector('[data-testid="team-tab-group"]')).not.toBeNull()
+  })
+
+  it('a drag moves the one tab, never a run', () => {
+    const tabs = areaTabs()
+    seed([roster()], tabs)
+    const { h } = fixedBar(tabs)
+    drag('watch-guardian', 'p2')
+    expect(h.onReorderTabs).toHaveBeenLastCalledWith(['ma', 'p2', 'watch-guardian'])
+  })
+})
