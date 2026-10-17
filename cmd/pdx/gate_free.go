@@ -76,12 +76,15 @@ func gateFree(args []string, stdout, stderr io.Writer) int {
 	for _, s := range tg.Locked {
 		fmt.Fprintf(stdout, "  握鎖的行程  pid %d  %s\n", s.PID, sanitizeCell(s.Cmd))
 	}
+	for _, s := range tg.Skipped {
+		fmt.Fprintf(stdout, "  不會結束  pid %d  %s（只是繼承了鎖檔；結束它會連帶結束別的東西）\n", s.PID, sanitizeCell(s.Cmd))
+	}
 	if tg.GateAlive && !*force {
 		fmt.Fprintf(stderr, "pdx gate free: 這個名額的 gate（pid %d）還活著，那條指令正在正常執行；請中斷那條指令，真的要結束它加 --force\n", h.PID)
 		return 1
 	}
 	if len(tg.Locked) == 0 {
-		fmt.Fprintln(stderr, "pdx gate free: 找不到握著鎖的行程可以結束（鎖也許剛好放開了，用 pdx gate status 再看一次）")
+		fmt.Fprintln(stderr, "pdx gate free: 找不到可以結束的行程（鎖也許剛好放開了，或握著的只有 shell／tmux 這類不會被結束的行程；用 pdx gate status 再看一次）")
 		return 1
 	}
 	if !*yes {
@@ -92,7 +95,11 @@ func gateFree(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	}
-	res := gate.Free(cfg, env, class, k, tg)
+	res, err := gate.Free(cfg, env, class, k, tg)
+	if err != nil {
+		fmt.Fprintf(stderr, "pdx gate free: %v；沒有結束任何行程，請再看一次（pdx gate status）\n", err)
+		return 1
+	}
 	if len(res.Termed) > 0 {
 		fmt.Fprintf(stdout, "已送 SIGTERM：%v\n", res.Termed)
 	}

@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	agentpkg "github.com/wake/purdex/internal/agent"
 )
 
 // pdx gate free <class>-<k> (host-load-control spec §12.5, plan W4): end the processes that hold a slot's lock, for a slot that stays
@@ -23,18 +25,22 @@ type FreeEnv struct {
 	Signal  func(pid int, sig syscall.Signal) error
 	Alive   func(pid int) bool
 	Wait    func(d time.Duration)
-	Self    int // never signalled
+	// StartTime is the text that tells a process from a later one with the same pid (nil: not checked).
+	StartTime func(pid int) (string, error)
+	Self      int // never signalled
 }
 
 // DefaultFreeEnv is the real host.
 func DefaultFreeEnv() FreeEnv {
 	return FreeEnv{Holders: lsofHolders, Signal: func(pid int, sig syscall.Signal) error { return syscall.Kill(pid, sig) },
-		Alive: pidAlive, Wait: time.Sleep, Self: os.Getpid()}
+		Alive: pidAlive, Wait: time.Sleep, StartTime: agentpkg.ProcessStartText, Self: os.Getpid()}
 }
 
 var (
 	// ErrSlotFree: nothing holds that slot.
 	ErrSlotFree = errors.New("that slot is not held")
+	// ErrSlotChanged: the slot is held by another command than the one that was shown.
+	ErrSlotChanged = errors.New("the slot changed while it was being looked at")
 	// ErrGateAlive: the gate that took the slot is alive, so the command is running as it should; interrupt it instead (or force).
 	ErrGateAlive = errors.New("its gate is alive")
 )
@@ -59,6 +65,21 @@ type FreeTarget struct {
 	Holder    Holder
 	GateAlive bool
 	Locked    []Straggler
+	// Skipped are the processes that only hold the lock because they inherited the file (a tmux server, a shell, the daemon): they are
+	// shown and never ended, since ending one ends far more than the command.
+	Skipped []Straggler
+	// starts are the start times of the Locked processes when listed.
+	starts map[int]string
+}
+
+// protectedCmd says a process name is one that serves more than the command that held the slot: ending it would end the person's
+// terminals or sessions. Such a process can hold the lock only by inheriting the file.
+func protectedCmd(cmd string) bool {
+	switch cmd {
+	case "tmux", "tmux: server", "tmux: client", "zsh", "bash", "sh", "fish", "dash", "ksh", "login", "sshd", "launchd", "init", "systemd", "pdx":
+		return true
+	}
+	return false
 }
 
 // PlanFree looks at the slot class-k.
@@ -69,9 +90,19 @@ func PlanFree(cfg Config, env FreeEnv, class Class, k int) (FreeTarget, error) {
 			continue
 		}
 		t := FreeTarget{Holder: h, GateAlive: h.PID > 0 && env.Alive(h.PID)}
+		t.starts = map[int]string{}
 		for _, s := range env.Holders(p.slotPath(k)) {
-			if s.PID > 1 && s.PID != env.Self {
+			switch {
+			case s.PID <= 1 || s.PID == env.Self:
+			case protectedCmd(s.Cmd):
+				t.Skipped = append(t.Skipped, s)
+			default:
 				t.Locked = append(t.Locked, s)
+				if env.StartTime != nil {
+					if st, err := env.StartTime(s.PID); err == nil {
+						t.starts[s.PID] = st
+					}
+				}
 			}
 		}
 		return t, nil
@@ -89,9 +120,24 @@ type FreeResult struct {
 
 // Free ends the processes of t. Only the processes that were listed in t and still hold the lock are signalled; a pid that holds the
 // lock now but was not listed is not touched.
-func Free(cfg Config, env FreeEnv, class Class, k int, t FreeTarget) FreeResult {
+func Free(cfg Config, env FreeEnv, class Class, k int, t FreeTarget) (FreeResult, error) {
 	p := &Pool{Dir: cfg.Dir, Class: class, Size: cfg.Slots.Size(class)}
 	path := p.slotPath(k)
+	// the slot must still be the one that was shown: another command may have taken it while the question was asked
+	if now, err := PlanFree(cfg, env, class, k); err != nil || now.Holder.PID != t.Holder.PID || !now.Holder.Started.Equal(t.Holder.Started) {
+		return FreeResult{}, ErrSlotChanged
+	}
+	sameProcess := func(pid int) bool { // the pid is still the process that was listed (not a later one that got the number)
+		if env.StartTime == nil {
+			return true
+		}
+		want, ok := t.starts[pid]
+		if !ok {
+			return false // its start time was not known at the plan: not signalled
+		}
+		got, err := env.StartTime(pid)
+		return err == nil && got == want
+	}
 	listed := map[int]bool{}
 	for _, s := range t.Locked {
 		listed[s.PID] = true
@@ -107,6 +153,9 @@ func Free(cfg Config, env FreeEnv, class Class, k int, t FreeTarget) FreeResult 
 	}
 	var res FreeResult
 	for pid := range holdingNow() {
+		if !sameProcess(pid) {
+			continue
+		}
 		if env.Signal(pid, syscall.SIGTERM) == nil {
 			res.Termed = append(res.Termed, pid)
 		}
@@ -126,7 +175,7 @@ func Free(cfg Config, env FreeEnv, class Class, k int, t FreeTarget) FreeResult 
 	// SIGKILL only for those still alive that still hold the lock (a pid that ended, and was reused, is not on the list now)
 	still := holdingNow()
 	for _, pid := range res.Termed {
-		if still[pid] && env.Alive(pid) {
+		if still[pid] && env.Alive(pid) && sameProcess(pid) {
 			if env.Signal(pid, syscall.SIGKILL) == nil {
 				res.Killed = append(res.Killed, pid)
 			}
@@ -137,10 +186,10 @@ func Free(cfg Config, env FreeEnv, class Class, k int, t FreeTarget) FreeResult 
 	}
 	if !slotLocked(p, k) {
 		res.Free = true
-		return res
+		return res, nil
 	}
 	res.Left = env.Holders(path)
-	return res
+	return res, nil
 }
 
 // slotLocked says the slot's lock is held by somebody (probing it takes and drops it).

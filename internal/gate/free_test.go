@@ -23,7 +23,9 @@ type freeFakeHost struct {
 	sent    []sigAt
 	lock    *os.File
 	waited  time.Duration
-	extra   []Straggler // processes that appear in the lock holders after the plan
+	extra   []Straggler    // processes that appear in the lock holders after the plan
+	starts  map[int]string // start times that differ from the default
+	cmds    map[int]string // command names that differ from the default
 }
 
 type sigAt struct {
@@ -40,7 +42,11 @@ func (h *freeFakeHost) env() FreeEnv {
 			var out []Straggler
 			for pid := range h.holds {
 				if h.alive[pid] {
-					out = append(out, Straggler{PID: pid, Cmd: "cmd"})
+					cmd := "cmd"
+					if c, ok := h.cmds[pid]; ok {
+						cmd = c
+					}
+					out = append(out, Straggler{PID: pid, Cmd: cmd})
 				}
 			}
 			return append(out, h.extra...)
@@ -57,7 +63,15 @@ func (h *freeFakeHost) env() FreeEnv {
 		},
 		Alive: func(pid int) bool { h.mu.Lock(); defer h.mu.Unlock(); return h.alive[pid] },
 		Wait:  func(d time.Duration) { h.mu.Lock(); h.waited += d; h.mu.Unlock() },
-		Self:  1,
+		StartTime: func(pid int) (string, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if st, ok := h.starts[pid]; ok {
+				return st, nil
+			}
+			return "t0", nil
+		},
+		Self: 1,
 	}
 }
 
@@ -84,7 +98,7 @@ func heldSlot(t *testing.T, class Class, k, gatePID int, pids ...int) (Config, *
 	require.NoError(t, flockNBForTest(f))
 	rec, _ := json.Marshal(Holder{Class: class, Slot: k, PID: gatePID, Argv: []string{"go", "test", "./..."}, Cwd: "/work/x", Started: time.Now().Add(-time.Hour), Session: "s1"})
 	require.NoError(t, os.WriteFile(filepath.Join(cfg.Dir, string(class)+"-"+itoa(k)+".json"), rec, 0o644))
-	h := &freeFakeHost{alive: map[int]bool{}, holds: map[int]bool{}, ignores: map[int]bool{}, lock: f}
+	h := &freeFakeHost{alive: map[int]bool{}, holds: map[int]bool{}, ignores: map[int]bool{}, starts: map[int]string{}, cmds: map[int]string{}, lock: f}
 	for _, pid := range pids {
 		h.alive[pid], h.holds[pid] = true, true
 	}
@@ -142,7 +156,8 @@ func TestFree_SIGTERMThatIsEnoughSendsNoSIGKILLAndTheSlotIsFree(t *testing.T) {
 	cfg, h := heldSlot(t, ClassHeavy, 1, 0, 100, 101)
 	tg, err := PlanFree(cfg, h.env(), ClassHeavy, 1)
 	require.NoError(t, err)
-	res := Free(cfg, h.env(), ClassHeavy, 1, tg)
+	res, err := Free(cfg, h.env(), ClassHeavy, 1, tg)
+	require.NoError(t, err)
 	assert.True(t, res.Free)
 	assert.ElementsMatch(t, []int{100, 101}, res.Termed)
 	assert.Empty(t, res.Killed)
@@ -155,7 +170,8 @@ func TestFree_SIGKILLOnlyForThoseStillAliveAfterTheGraceAndNotBefore(t *testing.
 	cfg, h := heldSlot(t, ClassHeavy, 1, 0, 100, 101)
 	h.ignores[101] = true // ignores SIGTERM
 	tg, _ := PlanFree(cfg, h.env(), ClassHeavy, 1)
-	res := Free(cfg, h.env(), ClassHeavy, 1, tg)
+	res, err := Free(cfg, h.env(), ClassHeavy, 1, tg)
+	require.NoError(t, err)
 	assert.True(t, res.Free)
 	assert.Equal(t, []int{101}, res.Killed, "100 ended with SIGTERM and is not killed")
 	var kill *sigAt
@@ -175,7 +191,8 @@ func TestFree_AProcessThatHoldsTheLockNowButWasNotListedIsNotTouched(t *testing.
 	h.mu.Lock()
 	h.alive[777], h.holds[777] = true, true // appeared after the plan (a new holder)
 	h.mu.Unlock()
-	res := Free(cfg, h.env(), ClassHeavy, 1, tg)
+	res, err := Free(cfg, h.env(), ClassHeavy, 1, tg)
+	require.NoError(t, err)
 	assert.False(t, res.Free, "the new holder still has the lock")
 	for _, s := range h.sent {
 		assert.NotEqual(t, 777, s.pid)
@@ -191,8 +208,54 @@ func TestFree_NeverSignalsItselfOrPid1(t *testing.T) {
 	for _, s := range tg.Locked {
 		assert.NotEqual(t, 1, s.PID)
 	}
-	Free(cfg, h.env(), ClassHeavy, 1, tg)
+	_, err = Free(cfg, h.env(), ClassHeavy, 1, tg)
+	require.NoError(t, err)
 	for _, s := range h.sent {
 		assert.NotEqual(t, 1, s.pid)
 	}
+}
+
+// A pid that got a new process (it ended and the number was reused) between the plan and the signal is not signalled.
+func TestFree_AReusedPidIsNotSignalled(t *testing.T) {
+	cfg, h := heldSlot(t, ClassHeavy, 1, 0, 100, 101)
+	tg, err := PlanFree(cfg, h.env(), ClassHeavy, 1)
+	require.NoError(t, err)
+	h.mu.Lock()
+	h.starts[100] = "a later process" // 100 is another process now
+	h.mu.Unlock()
+	res, err := Free(cfg, h.env(), ClassHeavy, 1, tg)
+	require.NoError(t, err)
+	assert.Equal(t, []int{101}, res.Termed)
+	for _, s := range h.sent {
+		assert.NotEqual(t, 100, s.pid)
+	}
+}
+
+// A tmux server, a shell or the daemon that holds the lock only by inheriting the file is shown and never ended.
+func TestFree_ProcessesThatOnlyInheritedTheFileAreSkipped(t *testing.T) {
+	cfg, h := heldSlot(t, ClassHeavy, 1, 0, 100, 101, 102)
+	h.cmds[101], h.cmds[102] = "tmux: server", "zsh"
+	tg, err := PlanFree(cfg, h.env(), ClassHeavy, 1)
+	require.NoError(t, err)
+	assert.Len(t, tg.Locked, 1)
+	assert.Len(t, tg.Skipped, 2)
+	res, err := Free(cfg, h.env(), ClassHeavy, 1, tg)
+	require.NoError(t, err)
+	assert.Equal(t, []int{100}, res.Termed)
+	assert.False(t, res.Free, "the slot stays held by the skipped ones: the report says so")
+	for _, s := range h.sent {
+		assert.NotContains(t, []int{101, 102}, s.pid)
+	}
+}
+
+// The slot taken by another command while the question was asked is not freed.
+func TestFree_ASlotThatChangedHandsAfterThePlanIsRefused(t *testing.T) {
+	cfg, h := heldSlot(t, ClassHeavy, 1, 77, 100)
+	tg, err := PlanFree(cfg, h.env(), ClassHeavy, 1)
+	require.NoError(t, err)
+	rec, _ := json.Marshal(Holder{Class: ClassHeavy, Slot: 1, PID: 88, Argv: []string{"another"}, Started: time.Now()})
+	require.NoError(t, os.WriteFile(filepath.Join(cfg.Dir, "heavy-1.json"), rec, 0o644))
+	_, err = Free(cfg, h.env(), ClassHeavy, 1, tg)
+	assert.ErrorIs(t, err, ErrSlotChanged)
+	assert.Empty(t, h.sent, "nothing was signalled")
 }
