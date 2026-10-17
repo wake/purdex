@@ -34,16 +34,19 @@ export function awaitingKeys(execPanes: TabAgentPane[], listFlags: string, liveF
   return execPanes.filter((_, i) => listFlags[i] === '1' || (listFlags[i] === 'L' && liveFlags[i] === '1')).map((p) => p.key)
 }
 
+const NO_KEYS: ReadonlySet<string> = new Set()
+
 /**
  * The tab's light over every agent pane of `panes` (from `tabAgentPanes`). One subscription per store; the results
- * are primitives or shallow-compared, so a frame for an unrelated session does not re-render the tab.
+ * are primitives or shallow-compared, so a frame for an unrelated session does not re-render the tab. `queued` holds
+ * the keys of panes whose agent waits in a host queue (useTabQueued, which the caller runs once per tab).
  */
-export function useTabAgentAggregate(panes: TabAgentPane[]): TabAgentAggregate {
+export function useTabAgentAggregate(panes: TabAgentPane[], queued: ReadonlySet<string> = NO_KEYS): TabAgentAggregate {
   const execPanes = useMemo(() => panes.filter((p) => p.executionId !== undefined), [panes])
   const listFlags = useExecutionListStore((s) => listAwaitingFlags(s.byHost, execPanes))
   const liveFlags = useExecutionStore((s) => (listFlags.includes('L') ? liveAwaitingFlags(s.executions, execPanes) : ''))
   const awaitingId = awaitingKeys(execPanes, listFlags, liveFlags).join('\n')
   const awaiting = useMemo(() => new Set(awaitingId ? awaitingId.split('\n') : []), [awaitingId])
   const members = useActiveMemberKeys() // a roster change re-draws a mounted tab's unread mark (member spec R3)
-  return useAgentStore(useShallow((s) => aggregateTabAgents(panes, s, awaiting, members)))
+  return useAgentStore(useShallow((s) => aggregateTabAgents(panes, s, awaiting, members, queued)))
 }
