@@ -168,6 +168,7 @@ type Module struct {
 	beforeKillSignal func()
 	stopCancel       context.CancelFunc
 	sweepWG          sync.WaitGroup
+	watchWake        watchWake // the folded wake of the load watcher (watch_wake.go)
 	// noticeMu orders a late sweepWG.Add (handoverNoticeAsync) against Stop's cancel: the Add happens only while it is
 	// held and stopping() is false, and Stop passes through it right after the cancel (a barrier), so no Add can follow the Wait.
 	noticeMu sync.Mutex
