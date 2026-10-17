@@ -21,7 +21,7 @@ func (m *Module) markGoneRemoteMembers() {
 		return
 	}
 	for _, r := range members {
-		if m.origins.LeadPresence(r.MemberSessionID, r.PID, r.ProcStart) != peersmod.PresenceGone {
+		if m.leadPresence(r.MemberSessionID, r.PID, r.ProcStart) != peersmod.PresenceGone {
 			continue
 		}
 		gone, err := m.store.MarkRemoteMemberGone(r.MK, r.MemberSessionID, m.newID(), m.now())

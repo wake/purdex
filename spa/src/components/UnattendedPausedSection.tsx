@@ -6,11 +6,14 @@ import { hostLabel, hostLookOf } from '../lib/host-look'
 import { clipForDisplay } from '../lib/team/types'
 import { sinceText } from '../lib/team/time-text'
 import { pausedLightText } from '../lib/team/paused-text'
+import { useTeamRosterStore } from '../stores/useTeamRosterStore'
+import { leadNameBySession } from '../lib/team/lead-name'
 import { PauseReleaseButton } from './PauseReleaseButton'
 
 export function UnattendedPausedSection({ hostIds }: { hostIds: readonly string[] }) {
   const t = useI18nStore((s) => s.t)
   const byHost = usePausedStore((s) => s.byHost)
+  const rosters = useTeamRosterStore((s) => s.byHost)
   const rows = hostIds.flatMap((hostId) => (byHost[hostId]?.sessions ?? []).map((p) => ({ hostId, p })))
   if (rows.length === 0) return null
   rows.sort((x, y) => y.p.since - x.p.since)
@@ -22,7 +25,17 @@ export function UnattendedPausedSection({ hostIds }: { hostIds: readonly string[
           <li key={`${hostId}:${p.session_id}`} data-testid="paused-row" className="flex flex-col gap-0.5 text-text-primary">
             <div className="flex items-center gap-2">
               <span className="min-w-0 flex-1 truncate">
-                {t('unattended.paused.row', { host: hostLabel(hostId, hostLookOf(hostId)), session: clipForDisplay(p.title.trim() !== '' ? p.title : p.ref, 40) })}
+                {(() => {
+                  // a lead is named by its team (U15); anyone else by title, else ref
+                  const lead = leadNameBySession(rosters, p.session_id, p.title)
+                  const name = lead?.name ?? (p.title.trim() !== '' ? p.title : p.ref)
+                  return (
+                    <>
+                      {t('unattended.paused.row', { host: hostLabel(hostId, hostLookOf(hostId)), session: clipForDisplay(name, 40) })}
+                      {lead?.title !== undefined && <span data-testid="paused-lead-title" className="text-text-muted"> {clipForDisplay(lead.title, 40)}</span>}
+                    </>
+                  )
+                })()}
               </span>
               <PauseReleaseButton hostId={hostId} sessionId={p.session_id} causes={p.causes} />
             </div>
