@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 const fetchWatchStatus = vi.fn()
 vi.mock('./api', () => ({ fetchWatchStatus: (...a: unknown[]) => fetchWatchStatus(...a) }))
 import { useHostStore } from '../../stores/useHostStore'
+import { useNexHostStore } from '../../stores/useNexHostStore'
 import { deriveGuardian, startWatchStatus, rereadWatchStatus, useWatchStatusStore, type WatchEntry } from './status-store'
 import type { WatchStatus } from './status-types'
 
@@ -70,9 +71,17 @@ const setHosts = (ids: string[], connected: string[]) => useHostStore.setState({
   runtime: Object.fromEntries(connected.map((id) => [id, { status: 'connected' }])),
 } as never)
 
+/** What the nex host store holds for a host whose `/api/info` answered with these capabilities (the ensure itself is stubbed). */
+const infoOf = (...caps: string[]) => ({ info: null, capabilities: null, phase: 'unavailable', error: null, fetchedAt: 1, generation: 1, fingerprint: 'f', daemonCapabilities: caps })
+const declare = (...ids: string[]) => useNexHostStore.setState({
+  byHost: Object.fromEntries(ids.map((id) => [id, infoOf('watch.v1')])),
+  ensure: async () => {},
+} as never)
+
 describe('startWatchStatus', () => {
   let stop: () => void
   beforeEach(() => {
+    declare('h1', 'h2')
     vi.useFakeTimers()
     fetchWatchStatus.mockReset()
     fetchWatchStatus.mockResolvedValue({ kind: 'ok', status: st('da', 'awake', '2026-10-16T01:00:00Z') })
@@ -160,5 +169,37 @@ describe('startWatchStatus', () => {
     expect(useWatchStatusStore.getState().byHost.h1).toBeDefined()
     setHosts(['h1'], [])
     expect(useWatchStatusStore.getState().byHost.h1).toBeUndefined()
+  })
+
+  it('a host whose /api/info does not list watch.v1 is unsupported, and its status is never read', async () => {
+    useNexHostStore.setState({ byHost: { h1: infoOf('fleet.v1') }, ensure: async () => {} } as never)
+    setHosts(['h1'], ['h1'])
+    stop = startWatchStatus()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetchWatchStatus).not.toHaveBeenCalled()
+    expect(useWatchStatusStore.getState().byHost.h1.kind).toBe('unsupported')
+  })
+
+  it('reads /api/info through the nex host store first, and only reads the status when it lists watch.v1', async () => {
+    let release!: () => void
+    useNexHostStore.setState({ byHost: {}, ensure: () => new Promise<void>((r) => { release = () => { useNexHostStore.setState({ byHost: { h1: infoOf('watch.v1') } } as never); r() } }) } as never)
+    setHosts(['h1'], ['h1'])
+    stop = startWatchStatus()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetchWatchStatus).not.toHaveBeenCalled()
+    expect(useWatchStatusStore.getState().byHost.h1).toBeUndefined()
+    release()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetchWatchStatus).toHaveBeenCalledTimes(1)
+    expect(useWatchStatusStore.getState().byHost.h1.kind).toBe('ok')
+  })
+
+  it('an /api/info that could not be read is not a watch host either', async () => {
+    useNexHostStore.setState({ byHost: {}, ensure: async () => {} } as never)
+    setHosts(['h1'], ['h1'])
+    stop = startWatchStatus()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetchWatchStatus).not.toHaveBeenCalled()
+    expect(useWatchStatusStore.getState().byHost.h1.kind).toBe('unsupported')
   })
 })

@@ -6,6 +6,7 @@
 // answer of the old connection is dropped. Nothing here is persisted.
 import { create } from 'zustand'
 import { useHostStore } from '../../stores/useHostStore'
+import { selectWatchV1, useNexHostStore } from '../../stores/useNexHostStore'
 import { fetchWatchStatus } from './api'
 import type { WatchStatus } from './status-types'
 
@@ -122,7 +123,13 @@ export function startWatchStatus(): () => void {
 
   const read = (hostId: string): void => {
     const gen = gens.get(hostId) ?? bump(hostId)
-    void fetchWatchStatus(hostId).then((r) => {
+    // A watch host is one whose /api/info lists `watch.v1`, read through the nex host store (it holds every host's capabilities:
+    // no second /api/info). Its status route is not asked otherwise: the route exists whenever the module is registered,
+    // ready or not.
+    const asked = useNexHostStore.getState().ensure(hostId)
+      .then(() => (selectWatchV1(hostId)(useNexHostStore.getState()) ? fetchWatchStatus(hostId) : { kind: 'unsupported' as const }))
+      .catch(() => ({ kind: 'error' as const }))
+    void asked.then((r) => {
       if (gens.get(hostId) !== gen || !isConnected(hostId)) return
       useWatchStatusStore.getState().set(hostId, r.kind === 'ok' ? { kind: 'ok', status: r.status, at: Date.now() } : { kind: r.kind, at: Date.now() })
     })
