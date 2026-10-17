@@ -47,6 +47,20 @@ func TestWalk_AHeavyTicketGoesToTheHostEvenWithAFreeSlotHere(t *testing.T) {
 	r.nothingLeft(t)
 }
 
+// A host whose dispatch slots are all taken is not asked: no ssh is made, the command runs here.
+func TestWalk_AHostWithNoFreeDispatchSlotIsNotProbed(t *testing.T) {
+	r := walkRun(t, ClassHeavy, AssistHost{Slots: 1}, `echo ran-here`, func(h *assistHost, g *Gate) {
+		s, err := DispatchPool(g.Config().Dir, "air26", 1, g.Now).TakeDispatch(WaiterInfo{})
+		require.NoError(t, err)
+		require.NotNil(t, s)
+		t.Cleanup(func() { s.Release(nil) })
+	})
+	assert.Contains(t, r.out, "ran-here")
+	assert.NoFileExists(t, r.h.remote("ssh-hosts"), "no probe, no send")
+	_, held := HeldHost(r.dir, "air26", r.repo, r.g.Now())
+	assert.False(t, held, "a full host is not held, it is only full")
+}
+
 // The send goes to the record's ssh alias; the pool, the holds and the record keep the name.
 func TestWalk_TheSendGoesToTheRecordsSshAlias(t *testing.T) {
 	r := walkRun(t, ClassHeavy, AssistHost{SSH: "air26-lan"}, `echo there`, nil)

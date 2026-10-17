@@ -19,6 +19,14 @@ type AssistTarget struct {
 
 const defaultDispatchSlots = 2
 
+// dispatchSize is how many runs mlab keeps out on a host at once (0 in the record = the default).
+func dispatchSize(n int) int {
+	if n <= 0 {
+		return defaultDispatchSlots
+	}
+	return n
+}
+
 // tryAssist sends the ticket's command to the assist host. handled is true when the run is over (the command's result, or the caller
 // was cancelled) and code is the exit code. When it is false nothing ran for good: the ticket is back at its place, the dispatch
 // slot is let go, and the caller waits on this host as it always did.
@@ -32,10 +40,7 @@ func (g *Gate) tryAssist(ctx context.Context, cfg Config, class Class, o Options
 		g.say("%s is held off until %s (%s); waiting on this host", a.Host, h.Until.Format("15:04:05"), h.Why)
 		return 0, false
 	}
-	size := a.Slots
-	if size <= 0 {
-		size = defaultDispatchSlots
-	}
+	size := dispatchSize(a.Slots)
 	job := newJobID()
 	slot, err := g.pool(cfg, class).ServeOut(ticket.Name, DispatchPool(cfg.Dir, a.Host, size, g.Now), g.waiterInfo(o), OutInfo{Host: a.Host, Job: job, At: g.Now()})
 	if err != nil || slot == nil {
