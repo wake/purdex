@@ -19,14 +19,30 @@ func (c Class) Valid() bool { return c == ClassLight || c == ClassHeavy }
 
 // goValueFlags are the go flags whose value is the next word; the ones that are not here are switches, so the word
 // after them counts as a package.
+//
+// The list is `go help testflag` and `go help build` read to the end (#3073: -benchtime was missing, so its value counted as a second
+// package). A flag may also be written with the test binary's prefix, -test.benchtime: goFlagName strips it.
 var goValueFlags = map[string]bool{
-	"-run": true, "-bench": true, "-count": true, "-timeout": true, "-tags": true, "-p": true, "-parallel": true,
-	"-cpu": true, "-coverprofile": true, "-o": true, "-vet": true, "-covermode": true, "-coverpkg": true,
-	"-skip": true, "-fuzz": true, "-exec": true, "-ldflags": true, "-gcflags": true, "-mod": true, "-modfile": true,
-	"-overlay": true, "-pkgdir": true, "-blockprofile": true, "-cpuprofile": true, "-memprofile": true, "-trace": true,
-	"-outputdir": true, "-shuffle": true, "-fuzztime": true, "-test.run": true, "-asmflags": true,
-	"-C": true, "-list": true, "-vettool": true, "-toolexec": true, "-buildmode": true, "-compiler": true,
-	"-installsuffix": true,
+	// go build / go vet / go test (go help build)
+	"-C": true, "-p": true, "-asmflags": true, "-buildmode": true, "-compiler": true, "-gccgoflags": true, "-gcflags": true,
+	"-installsuffix": true, "-ldflags": true, "-mod": true, "-modfile": true, "-overlay": true, "-pgo": true, "-pkgdir": true,
+	"-tags": true, "-toolexec": true, "-o": true, "-covermode": true, "-coverpkg": true, "-exec": true, "-vettool": true,
+	// go test (go help testflag, and the flags the go command passes on to the test binary)
+	"-bench": true, "-benchtime": true, "-blockprofile": true, "-blockprofilerate": true, "-count": true, "-coverprofile": true,
+	"-cpu": true, "-cpuprofile": true, "-fuzz": true, "-fuzzcachedir": true, "-fuzzminimizetime": true, "-fuzztime": true,
+	"-list": true, "-memprofile": true, "-memprofilerate": true, "-mutexprofile": true, "-mutexprofilefraction": true,
+	"-outputdir": true, "-parallel": true, "-run": true, "-shuffle": true, "-skip": true, "-testlogfile": true, "-timeout": true,
+	"-trace": true, "-vet": true,
+}
+
+// goFlagName is the name of a go flag word with one leading dash and without the test binary's prefix: "--benchtime=1x" and
+// "-test.benchtime" are both "-benchtime".
+func goFlagName(a string) string {
+	name := "-" + strings.TrimLeft(a, "-")
+	if eq := strings.IndexByte(name, '='); eq >= 0 {
+		name = name[:eq]
+	}
+	return "-" + strings.TrimPrefix(strings.TrimPrefix(name, "-"), "test.")
 }
 
 // vitestValueFlags are the vitest flags whose value is the next word.
@@ -286,10 +302,8 @@ func goPackages(args []string) (pkgs []string, compileOnly bool) {
 			break
 		}
 		if strings.HasPrefix(a, "-") {
-			name := "-" + strings.TrimLeft(a, "-")
-			if eq := strings.IndexByte(name, '='); eq >= 0 {
-				name = name[:eq]
-			} else if goValueFlags[name] {
+			name := goFlagName(a)
+			if !strings.Contains(a, "=") && goValueFlags[name] {
 				i++
 			}
 			if name == "-c" {
@@ -312,10 +326,8 @@ func goOutputFlag(args []string) bool {
 		if !strings.HasPrefix(a, "-") {
 			continue
 		}
-		name := "-" + strings.TrimLeft(a, "-")
-		if eq := strings.IndexByte(name, '='); eq >= 0 {
-			name = name[:eq]
-		} else if goValueFlags[name] {
+		name := goFlagName(a)
+		if !strings.Contains(a, "=") && goValueFlags[name] {
 			if name == "-o" {
 				return true
 			}
@@ -329,10 +341,13 @@ func goOutputFlag(args []string) bool {
 	return false
 }
 
-func wide(pkgs []string) bool {
-	if len(pkgs) > 1 {
-		return true
-	}
+// maxLightPackages is how many packages a go test or go vet may name and still be a light run. Measured by the watcher (10-16, #3073):
+// a run of up to two packages, alone or beside a vitest related, shows no more pressure than the related alone; one more package, or a
+// pattern that ends in "...", is a whole-module run.
+const maxLightPackages = 2
+
+// ellipsis says whether a package word is a pattern over a whole tree ("...", "./...", "pkg/...").
+func ellipsis(pkgs []string) bool {
 	for _, p := range pkgs {
 		if p == "..." || strings.HasSuffix(p, "/...") {
 			return true
@@ -340,6 +355,9 @@ func wide(pkgs []string) bool {
 	}
 	return false
 }
+
+// wide says a go test or go vet names more than it runs light: a tree pattern or more than maxLightPackages packages.
+func wide(pkgs []string) bool { return len(pkgs) > maxLightPackages || ellipsis(pkgs) }
 
 func classifyGo(args []string) Class {
 	// `go -C dir test …` and `go -C=dir test …`: skip the directory flag to find the subcommand.
@@ -362,7 +380,7 @@ func classifyGo(args []string) Class {
 	case "build":
 		// Packaging is never held back: a build that writes its output (-o) and a build of one target are none. Only a build
 		// of several packages or of the whole module (./...), the compile check that writes nothing, takes a slot.
-		if goOutputFlag(rest) || (len(pkgs) <= 1 && !wide(pkgs)) {
+		if goOutputFlag(rest) || (len(pkgs) <= 1 && !ellipsis(pkgs)) {
 			return ClassNone
 		}
 		return ClassHeavy
@@ -501,13 +519,11 @@ func classifyTsc(args []string) Class {
 	if tscWatches(args) {
 		return ClassNone // watches and never ends: a slot would be held for good (#2989)
 	}
-	build, project, files := false, false, false
+	build, files := false, false
 	for _, a := range args {
 		switch {
 		case a == "-b" || a == "--build":
 			build = true
-		case a == "-p" || a == "--project" || strings.HasPrefix(a, "--project="):
-			project = true
 		case a == "--version" || a == "-v" || a == "--help" || a == "-h" || a == "--init" || a == "--showConfig":
 			return ClassNone
 		case !strings.HasPrefix(a, "-") && (strings.HasSuffix(a, ".ts") || strings.HasSuffix(a, ".tsx")):
@@ -517,10 +533,13 @@ func classifyTsc(args []string) Class {
 	switch {
 	case build:
 		return ClassHeavy // -b builds the project references: every project of the graph
-	case project, files:
-		return ClassLight // -p names one project's tsconfig (its own files only), or the files are named
+	case files:
+		return ClassLight // the files are named
 	}
-	return ClassHeavy // a bare tsc compiles the whole project
+	// A bare tsc and `tsc -p <project>` compile a whole project, and from the words alone its size is not to be told: the SPA's
+	// tsconfig.app.json is 1.24 GB of node, as much as tsc -b (the watcher, 10-17), so it is heavy. A project that is small is said to be
+	// by a [[gate.intercept.rule]] (`tsc --noEmit -p tsconfig.node.json` -> light). (#3073; #2985 had made -p light.)
+	return ClassHeavy
 }
 
 // classifyRunner reads `pnpm`, `npx`, `yarn`, `npm`: a script by a whole-project name is heavy, a recursive run is
