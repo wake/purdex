@@ -80,6 +80,7 @@ type Input struct {
 	OwnerActive   bool
 	Exceptions    []Hold
 	AvailableMB   int
+	CompressorMB  int // memory held by the compressor (0 where there is none)
 }
 
 // Compute is the derived block of a facts record. l keeps the zone between
@@ -99,7 +100,11 @@ func Compute(l *ZoneLatch, in Input) wire.Derived {
 		d.Headroom.Light = free(in.Slots.Light, in.Running.Light)
 	}
 	if zone == wire.ZoneNormal {
-		d.SessionsRoom = min(max((in.AvailableMB-sessionReserveMB)/sessionMB, 0), sessionsCap)
+		// Initial formula (spec §16, tuned by observation): available memory, less the
+		// reserve and a quarter of what the compressor already holds (squeezed
+		// memory comes back as pressure when sessions grow), over 512 MB a session.
+		usable := in.AvailableMB - sessionReserveMB - in.CompressorMB/4
+		d.SessionsRoom = min(max(usable/sessionMB, 0), sessionsCap)
 	}
 	return d
 }

@@ -109,6 +109,8 @@ func TestSessionsRoom(t *testing.T) {
 		{"below the reserve", func(i *Input) { i.AvailableMB = 300 }, 0},
 		{"warning means none", func(i *Input) { i.AvailableMB = 8000; i.Pressure = 2 }, 0},
 		{"unknown pressure means none", func(i *Input) { i.AvailableMB = 8000; i.PressureKnown = false }, 0},
+		{"compressed memory counts against the room", func(i *Input) { i.AvailableMB = 4096; i.CompressorMB = 4096 }, 4}, // (4096-1024-1024)/512
+		{"a big compressor can empty the room", func(i *Input) { i.AvailableMB = 2000; i.CompressorMB = 8000 }, 0},
 		{"each session is 512 MB", func(i *Input) { i.AvailableMB = 1024 + 512*3 + 100 }, 3},
 	}
 	for _, c := range cases {

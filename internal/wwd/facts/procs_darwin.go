@@ -202,15 +202,26 @@ func (r *ProcReader) Snapshot(now time.Time) (ProcSnapshot, ProcContext, error) 
 	// is made for the rows that will be reported (the top lists); for the others
 	// the worst case is one wrong figure in one ranking, and the CPU memory is
 	// keyed by the full start time, so it cannot carry into the next sample.
-	byPID := make(map[int]int, len(snap.Procs))
-	for i, p := range snap.Procs {
-		byPID[p.PID] = i
-	}
-	for _, p := range SelectTop(snap.Procs, procsTopMem, procsTopCPU) {
-		if !r.stillSame(p.PID, r.idents[p.PID]) {
-			snap.Procs[byPID[p.PID]].FootprintBytes, snap.Procs[byPID[p.PID]].CPUPct = 0, 0
-			delete(cur, p.PID)
+	// A row whose pid changed hands is dropped, and the lists are chosen again
+	// from the rest (a few rounds at most: each round only removes rows).
+	for round := 0; round < 3; round++ {
+		gone := map[int]bool{}
+		for _, p := range SelectTop(snap.Procs, procsTopMem, procsTopCPU) {
+			if !r.stillSame(p.PID, r.idents[p.PID]) {
+				gone[p.PID] = true
+				delete(cur, p.PID)
+			}
 		}
+		if len(gone) == 0 {
+			break
+		}
+		kept := snap.Procs[:0]
+		for _, p := range snap.Procs {
+			if !gone[p.PID] {
+				kept = append(kept, p)
+			}
+		}
+		snap.Procs = kept
 	}
 	r.prev = cur
 	r.dropStaleArgs()

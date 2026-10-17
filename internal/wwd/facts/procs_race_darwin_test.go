@@ -50,6 +50,9 @@ func TestSnapshotDropsReadsOfAReusedPid(t *testing.T) {
 	for _, p := range snap.Procs {
 		byPID[p.PID] = p
 	}
+	if _, listed := byPID[10]; listed {
+		t.Errorf("pid 10 is another process now: its row must not be reported")
+	}
 	if byPID[10].FootprintBytes != 0 {
 		t.Errorf("pid 10 took the footprint of the process that reused it: %d", byPID[10].FootprintBytes)
 	}

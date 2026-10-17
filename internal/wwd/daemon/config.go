@@ -75,6 +75,16 @@ func (p PeerConfig) HostPort() string {
 	return net.JoinHostPort(p.Addr, strconv.Itoa(wire.Port))
 }
 
+func (c Config) validateWorker() error {
+	if c.Worker.Heavy != nil && *c.Worker.Heavy < 0 {
+		return fmt.Errorf("worker.heavy is %d, slots cannot be negative", *c.Worker.Heavy)
+	}
+	if c.Worker.Light != nil && *c.Worker.Light < 0 {
+		return fmt.Errorf("worker.light is %d, slots cannot be negative", *c.Worker.Light)
+	}
+	return nil
+}
+
 func (c Config) validatePeers() error {
 	seen := map[string]bool{}
 	for _, p := range c.Peers {
@@ -119,6 +129,9 @@ func LoadConfig(path, home string) (Config, error) {
 	case errors.Is(err, os.ErrNotExist):
 	default:
 		return c, err
+	}
+	if err := c.validateWorker(); err != nil {
+		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	if err := c.validatePeers(); err != nil {
 		return c, fmt.Errorf("config %s: %w", path, err)

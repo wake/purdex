@@ -84,6 +84,9 @@ func (s *Sampler) Tick(now time.Time) {
 		Slots: f.Worker.Slots, Running: f.Worker.Running,
 		OwnerActive: f.Owner != nil && f.Owner.Active, AvailableMB: f.Mem.AvailableMB,
 	}
+	if f.Mem.CompressorMB != nil {
+		in.CompressorMB = *f.Mem.CompressorMB
+	}
 	if runtime.GOOS == "darwin" {
 		in.RateLimit = derived.PageRateLimit
 		if f.Mem.PageOutRate != nil {
@@ -115,9 +118,16 @@ func (s *Sampler) Tick(now time.Time) {
 // addToMinute collects records of one wall-clock minute and turns a finished
 // minute into a rollup. The caller holds the lock.
 func (s *Sampler) addToMinute(f wire.Facts) {
-	if n := len(s.minute); n > 0 && !s.minute[0].At.Truncate(time.Minute).Equal(f.At.Truncate(time.Minute)) {
-		s.rollups.Add(facts.Rollup(s.minute))
-		s.minute = s.minute[:0]
+	m := f.At.Truncate(time.Minute)
+	if len(s.minute) > 0 {
+		open := s.minute[0].At.Truncate(time.Minute)
+		if m.Before(open) {
+			return // the clock was set back: a minute already summed is not summed twice
+		}
+		if !m.Equal(open) {
+			s.rollups.Add(facts.Rollup(s.minute))
+			s.minute = s.minute[:0]
+		}
 	}
 	s.minute = append(s.minute, facts.Clone(f))
 }
