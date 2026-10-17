@@ -33,7 +33,7 @@ const member = (over: Partial<JournalMember> = {}): JournalMember => ({
 const hold = (members: JournalMember[]) => act(() => { useJournalMembersStore.setState({ byLead: { [membersKey(HOST, 'L')]: members } }) })
 const support = (yes: boolean) => act(() => { useJournalMembersStore.getState().setSupport(HOST, yes) })
 const row = (sessionId: string) => screen.getAllByTestId('team-panel-row').find((r) => r.getAttribute('data-session-id') === sessionId)!
-const changed = (hostId: string, kind: string, id: string) => handleJournalEvent(hostId, 'journal.changed', { unit: { kind, id }, project: 'p', what: 'entries' })
+const changed = (hostId: string, kind: string, id: string, what = 'entries') => handleJournalEvent(hostId, 'journal.changed', { unit: { kind, id }, project: 'p', what })
 const mount = () => render(<TeamDisplayProvider><TeamPanelArea /></TeamDisplayProvider>)
 
 beforeEach(() => {
@@ -146,6 +146,22 @@ describe('JV-2d codex R5', () => {
     const roster = structuredClone(useTeamRosterStore.getState().byHost[HOST])
     f(roster[0].members as ReturnType<typeof rosterMember>[])
     useTeamRosterStore.setState({ byHost: { [HOST]: roster } })
+  })
+
+  it('only entries and tasks changes re-read: a roadmap change does not', async () => {
+    support(true)
+    mount()
+    await settle()
+    expect(getJournalMembers).toHaveBeenCalledTimes(1)
+    act(() => changed(HOST, 'team', 't1', 'roadmap'))
+    await settle(MEMBER_REFRESH_DEBOUNCE_MS * 2)
+    expect(getJournalMembers).toHaveBeenCalledTimes(1)
+    act(() => changed(HOST, 'team', 't1', 'entries'))
+    await settle(MEMBER_REFRESH_DEBOUNCE_MS)
+    expect(getJournalMembers).toHaveBeenCalledTimes(2)
+    act(() => changed(HOST, 'team', 't1', 'tasks'))
+    await settle(MEMBER_REFRESH_DEBOUNCE_MS)
+    expect(getJournalMembers).toHaveBeenCalledTimes(3)
   })
 
   it('a member joining re-reads, and the new member shows its lines', async () => {
