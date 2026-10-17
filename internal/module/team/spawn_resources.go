@@ -76,7 +76,7 @@ func (m *Module) spawnCardRow(id string, origin team.Origin, p *team.SpawnResour
 // afterSpawnCard follows the close of a spawn_resources card: the op leaves awaiting_resources with it. Approved → running and
 // its runner starts; denied → failed spawn_denied; timeout → spawn_timeout; closed unattended_refused → that; any other end
 // (cancelled, abandoned: the CLI stopped polling, or the lead went) → spawn_abandoned. The seat is free on every failure. Like
-// afterClose's relay follow-up it is a second write: a failure is logged and bootSettleAwaitingSpawns re-derives it.
+// afterClose's relay follow-up it is a second write: a failure is logged and settleAwaitingSpawns re-derives it (at boot, and on the sweeper's liveness tick for a daemon that stays up).
 func (m *Module) afterSpawnCard(a team.Approval) { m.settleSpawnCard(a, true) }
 
 // settleSpawnCard is afterSpawnCard; start says whether an approved op's runner starts here (boot leaves that to the resume).
@@ -132,9 +132,9 @@ func (m *Module) closeOrphanSpawnCards() {
 	}
 }
 
-// bootSettleAwaitingSpawns settles ops whose card closed without the follow-up (a crash between the two writes), and fails an op
+// settleAwaitingSpawns settles ops whose card closed without the follow-up (a crash, or a store error between the two writes), and fails an op
 // that has no open card at all. An op whose card is still open keeps waiting; the sweeper owns its deadline.
-func (m *Module) bootSettleAwaitingSpawns() {
+func (m *Module) settleAwaitingSpawns(start bool) {
 	ops, err := m.store.AwaitingSpawnOps()
 	if err != nil {
 		m.logf("[team] boot: awaiting spawn ops: %v", err)
@@ -146,9 +146,9 @@ func (m *Module) bootSettleAwaitingSpawns() {
 		case err != nil:
 			m.logf("[team] boot: spawn %s card: %v", op.ID, err)
 		case !ok:
-			m.settleSpawnCard(team.Approval{ID: op.ID, State: team.StateAbandoned}, false)
+			m.settleSpawnCard(team.Approval{ID: op.ID, State: team.StateAbandoned}, start)
 		case a.State != team.StateOpen:
-			m.settleSpawnCard(a, false)
+			m.settleSpawnCard(a, start)
 		}
 	}
 }

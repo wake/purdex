@@ -203,6 +203,21 @@ func TestSpawnResources_BootSettlesFromTheClosedCard(t *testing.T) {
 	}
 }
 
+// A store error between the card's close and the op's follow-up heals while the daemon stays up, not only at the next boot.
+func TestSpawnResources_SweeperHealsAClosedCardWithAWaitingOp(t *testing.T) {
+	f, root := newSpawnFixture(t, 1)
+	warnedSpawn(t, f, root)
+	if _, won, err := f.m.store.CloseIfOpen(spawnID(1), Close{State: team.StateDenied, DecidedAt: f.clock.Load()}); err != nil || !won {
+		t.Fatalf("close the card without the follow-up: won=%v err=%v", won, err)
+	}
+	for i := 0; i < livenessEvery; i++ {
+		f.m.tick()
+	}
+	if op, _, _ := f.m.store.GetSpawnOp(spawnID(1)); op.State != team.SpawnFailed || op.Reason != team.SpawnReasonDenied {
+		t.Fatalf("op = %+v; want failed spawn_denied from the sweeper", op)
+	}
+}
+
 // Ending the team leaves no card to approve: the sweep cancels it once the op has failed.
 func TestSpawnResources_TeamEndCancelsTheCard(t *testing.T) {
 	f, root := newSpawnFixture(t, 1)
