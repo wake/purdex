@@ -19,6 +19,9 @@ const (
 	maxPeerBytes = 8 << 20
 )
 
+// noRedirect keeps the pool token from following a redirect anywhere.
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
 // PeerAddr is another wwd of the pool: its alias and host:port (from config).
 type PeerAddr struct{ Alias, HostPort string }
 
@@ -37,7 +40,7 @@ type PoolPoller struct {
 // NewPoolPoller polls peers with the pool token. client may be nil.
 func NewPoolPoller(peers []PeerAddr, token string, client *http.Client) *PoolPoller {
 	if client == nil {
-		client = &http.Client{Timeout: peerTimeout}
+		client = &http.Client{Timeout: peerTimeout, CheckRedirect: noRedirect}
 	}
 	p := &PoolPoller{peers: peers, token: token, client: client, state: make([]wire.Peer, len(peers))}
 	for i, a := range peers {

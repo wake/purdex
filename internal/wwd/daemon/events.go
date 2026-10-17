@@ -26,16 +26,23 @@ type subscriber struct {
 // subscriber that has fallen subscriberBuffer events behind is closed (it
 // reconnects and starts from the current facts).
 type Broker struct {
-	mu   sync.Mutex
-	subs map[*subscriber]struct{}
+	mu     sync.Mutex
+	subs   map[*subscriber]struct{}
+	latest *wire.Event // the last facts event: a new subscriber starts with it
 }
 
 func NewBroker() *Broker { return &Broker{subs: map[*subscriber]struct{}{}} }
 
 // Subscribe returns the event channel and its cancel. peer marks a TCP reader.
+// The channel starts with the latest facts event (if any), taken under the same
+// lock that registers the subscriber, so a record published meanwhile arrives
+// once: either as that first event or after it, never both.
 func (b *Broker) Subscribe(peer bool) (<-chan wire.Event, func()) {
 	s := &subscriber{ch: make(chan wire.Event, subscriberBuffer), peer: peer}
 	b.mu.Lock()
+	if b.latest != nil {
+		s.ch <- *b.latest
+	}
 	b.subs[s] = struct{}{}
 	b.mu.Unlock()
 	return s.ch, func() { b.drop(s) }
@@ -53,6 +60,10 @@ func (b *Broker) drop(s *subscriber) {
 func (b *Broker) publish(e wire.Event, adHoc bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.fanOutLocked(e, adHoc)
+}
+
+func (b *Broker) fanOutLocked(e wire.Event, adHoc bool) {
 	for s := range b.subs {
 		if adHoc && s.peer {
 			continue // spec §4.4, §8.3, §11: an ad-hoc job is local only, its event too
@@ -77,7 +88,10 @@ func envelope(t wire.EventType, v any) (wire.Event, bool) {
 // PublishFacts announces a new facts record.
 func (b *Broker) PublishFacts(f wire.Facts) {
 	if e, ok := envelope(wire.EventFacts, f); ok {
-		b.publish(e, false)
+		b.mu.Lock() // remembering it and fanning it out are one step, or a subscriber could get it twice
+		defer b.mu.Unlock()
+		b.latest = &e
+		b.fanOutLocked(e, false)
 	}
 }
 
@@ -112,8 +126,9 @@ func writeFrame(w http.ResponseWriter, e wire.Event) error {
 	return err
 }
 
-// handleEvents serves GET /v1/events. The first frame is the current facts so a
-// new reader does not wait for the next sample.
+// handleEvents serves GET /v1/events. The first frame is the latest facts (the
+// broker puts it in the new subscription) so a reader does not wait for the next
+// sample.
 func (d *Daemon) handleEvents(peer bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		fl, ok := w.(http.Flusher)
@@ -128,13 +143,6 @@ func (d *Daemon) handleEvents(peer bool) http.HandlerFunc {
 		h.Set("Cache-Control", "no-cache")
 		h.Set("X-Accel-Buffering", "no")
 		w.WriteHeader(http.StatusOK)
-		if d.opts.Sampler != nil {
-			if f, ok := d.opts.Sampler.Latest(); ok {
-				if e, ok := envelope(wire.EventFacts, f); ok {
-					_ = writeFrame(w, e)
-				}
-			}
-		}
 		fl.Flush()
 		tick := time.NewTicker(keepAliveEvery)
 		defer tick.Stop()

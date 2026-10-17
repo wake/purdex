@@ -37,12 +37,16 @@ type Daemon struct {
 }
 
 func New(o Options) *Daemon {
-	c := o.HTTPClient
-	if c == nil {
-		// the pool token goes with these requests: never follow a redirect with it
-		c = &http.Client{Timeout: forwardTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	// forwarding may wait for a slow answer; polling must finish inside one interval.
+	// Both carry the pool token, so neither follows a redirect.
+	fwd, poll := o.HTTPClient, o.HTTPClient
+	if fwd == nil {
+		fwd = &http.Client{Timeout: forwardTimeout, CheckRedirect: noRedirect}
 	}
-	return &Daemon{opts: o, broker: NewBroker(), pool: NewPoolPoller(o.Peers, o.Token, c), fwd: c}
+	if poll == nil {
+		poll = &http.Client{Timeout: peerTimeout, CheckRedirect: noRedirect}
+	}
+	return &Daemon{opts: o, broker: NewBroker(), pool: NewPoolPoller(o.Peers, o.Token, poll), fwd: fwd}
 }
 
 // Events is the broker the SSE streams read; the sampler and the queue publish to it.

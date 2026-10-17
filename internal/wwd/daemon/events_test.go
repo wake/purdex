@@ -114,6 +114,47 @@ func TestBrokerNeverBlocksOnASlowSubscriber(t *testing.T) {
 	recv(t, other)
 }
 
+// A new subscriber gets the latest facts first, taken under the same lock that
+// registers it: a record published at that moment arrives once, not twice (R1).
+func TestSubscribeStartsWithTheLatestFactsExactlyOnce(t *testing.T) {
+	b := NewBroker()
+	f1 := wire.Facts{V: wire.Proto, At: s0, Derived: wire.Derived{Zone: wire.ZoneNormal}}
+	b.PublishFacts(f1)
+	ch, cancel := b.Subscribe(false)
+	defer cancel()
+	e := recv(t, ch)
+	got, err := wire.Decode[wire.Facts](e.Data)
+	if err != nil || !got.At.Equal(s0) {
+		t.Fatalf("first event %+v %v", got, err)
+	}
+	none(t, ch) // and nothing else until the next record
+
+	f2 := f1
+	f2.At = s0.Add(5 * time.Second)
+	b.PublishFacts(f2)
+	e = recv(t, ch)
+	if got, _ := wire.Decode[wire.Facts](e.Data); !got.At.Equal(f2.At) {
+		t.Fatalf("second event at %v", got.At)
+	}
+	none(t, ch)
+
+	// a broker that has seen no facts starts the stream empty
+	fresh := NewBroker()
+	ch2, cancel2 := fresh.Subscribe(false)
+	defer cancel2()
+	none(t, ch2)
+}
+
+func TestPollerTimeoutIsShorterThanTheInterval(t *testing.T) {
+	d := New(Options{HostID: "h", Alias: "a", Token: testToken})
+	if d.pool.client.Timeout <= 0 || d.pool.client.Timeout >= PoolInterval {
+		t.Fatalf("peer polling timeout %v must be under the %v interval", d.pool.client.Timeout, PoolInterval)
+	}
+	if d.pool.client.CheckRedirect == nil {
+		t.Fatal("the pool token must not follow redirects")
+	}
+}
+
 func TestCancelStopsDelivery(t *testing.T) {
 	b := NewBroker()
 	ch, cancel := b.Subscribe(false)
@@ -130,6 +171,7 @@ func TestCancelStopsDelivery(t *testing.T) {
 func TestEventsStream(t *testing.T) {
 	level := 1
 	d := New(Options{HostID: "h1", Alias: "mlab", Version: "v0", Token: testToken, Sampler: newSampler(&level, nil)})
+	d.opts.Sampler.SetOnFacts(d.Events().PublishFacts)
 	d.opts.Sampler.Tick(s0)
 	srv := httptest.NewServer(d.TCPHandler())
 	defer srv.Close()
