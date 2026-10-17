@@ -17,6 +17,7 @@ export function handleJournalEvent(hostId: string, _type: JournalEventType, valu
   if (typeof ev === 'string') return warnOnce(`ignoring frame: ${ev}`)
   const unitKey = unitKeyOf({ kind: ev.unitKind, id: ev.unitId })
   useJournalStore.getState().markStale(hostId, unitKey, ev.what)
-  // The team panel's member lines read the same event for ANY team of the host, held in the journal store or not.
-  useJournalMembersStore.getState().noteChanged(hostId, unitKey)
+  // The team panel's member lines read the same event for ANY team of the host, held in the journal store or not. They show tasks
+  // and the leader's reports (entries); a roadmap change is not theirs.
+  if (ev.what === 'entries' || ev.what === 'tasks') useJournalMembersStore.getState().noteChanged(hostId, unitKey)
 }
