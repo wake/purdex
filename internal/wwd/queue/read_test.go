@@ -101,6 +101,11 @@ func TestPeersNeverSeeALocalJob(t *testing.T) {
 	all, err := f.q.List(ctx, Filter{})
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{normal, local}, ids(all), "the local view lists it")
+	assert.True(t, f.get(t, local).Local, "and says it is a fast-lane job")
+	assert.False(t, f.get(t, normal).Local)
+	for _, j := range all {
+		assert.Equal(t, j.ID == local, j.Local, "List says the same")
+	}
 
 	peers, err := f.q.List(ctx, Filter{ForPeers: true})
 	require.NoError(t, err)
