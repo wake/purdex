@@ -68,6 +68,9 @@ func (m *Module) noticeIdle() {
 			continue
 		}
 		since := m.idleStart(mr.SessionID, now)
+		if m.modInterceptAcked(mr.SessionID) {
+			continue // its mod stops the idle compaction and the daemon tells the lead then (RT-4): the period is kept, nothing is said here
+		}
 		if now-since < after {
 			continue
 		}
@@ -192,6 +195,139 @@ func (m *Module) pruneIdle(live map[string]struct{}) {
 	for sid := range m.memberIdle {
 		if _, ok := live[sid]; !ok {
 			delete(m.memberIdle, sid)
+		}
+	}
+	for sid := range m.interceptTold {
+		if _, ok := live[sid]; !ok {
+			delete(m.interceptTold, sid)
+		}
+	}
+}
+
+// interceptedIdle tells the lead that the member's mod stopped Claude Code's idle compaction (RT-4 T42): once per idle stretch, with the
+// three answers. The stretch is named by period, when the member's last turn ended by the mod's clock: a short turn between two
+// interceptions that the liveness tick never saw is still a new stretch (a mod that cannot say, 0, falls back to the tick's period). Not
+// told when the member is running by now (the mod's report was queued behind a turn): that is no idle member. noticed says a notice
+// went; member says the session is an active local member of a live team at all.
+func (m *Module) interceptedIdle(sessionID string, period int64) (noticed, member bool) {
+	mr, t, ok, err := m.store.ActiveMemberInLiveTeam(sessionID)
+	if err != nil {
+		m.logf("[team] idle intercept %s: %v", sessionID, err)
+		return false, true // not known to be released: the mod keeps its role
+	}
+	if !ok {
+		return false, false
+	}
+	if m.sender == nil || m.stopping() {
+		return false, true
+	}
+	if m.status != nil {
+		if st, known := m.status.AgentStatus(mr.TmuxSession); known && st != agentIdle {
+			return false, true // running or waiting on a person: not idle
+		}
+	}
+	// The whole decision is one step under idleMu: the claim is the membership's (a member released and adopted again is a new member
+	// whose lead has heard nothing), a period names a stretch, and a report with no period is judged by the daemon's own.
+	membership := mr.TeamID + "|" + strconv.FormatInt(mr.CreatedAt, 10)
+	claim, ok := m.claimIntercept(sessionID, membership, period, m.now())
+	if !ok {
+		return false, true
+	}
+	// The membership is read again before the notice is scheduled: a release and an adopt between the first read and the claim would
+	// otherwise send it to the lead of the old one.
+	if cur, _, still, err := m.store.ActiveMemberInLiveTeam(sessionID); err != nil || !still || cur.TeamID != mr.TeamID || cur.CreatedAt != mr.CreatedAt {
+		m.restoreIntercept(sessionID, claim)
+		return false, err != nil || still
+	}
+	ctx := "未知"
+	if m.usage != nil {
+		if u, ok := m.usage.ContextUsage(sessionID); ok && u.UsedPercentage != nil {
+			ctx = fmt.Sprintf("%d%%", int(*u.UsedPercentage))
+		}
+	}
+	address, title := m.memberNoticeName(mr)
+	ref := strings.TrimPrefix(mr.Ref, "_")
+	text := fmt.Sprintf(team.IdleInterceptNoticeFmt, address, title, ctx, ref, ref, ref)
+	if !m.goTracked(func() { m.noticeToLead(mr, t, text, "idle intercept notice") }) {
+		m.restoreIntercept(sessionID, claim)
+		return false, true
+	}
+	return true, true
+}
+
+// interceptToldRec is the last notice of a session's intercepts: the membership it was told for and the period it named (0 = none:
+// told by the daemon's own period).
+type interceptToldRec struct {
+	member string
+	period int64
+}
+
+// interceptClaim is what claimIntercept took, to give back if the notice does not go.
+type interceptClaim struct {
+	prev   interceptToldRec
+	next   interceptToldRec
+	gen    uint64 // the daemon's idle period that this claim marked told; 0 when it was marked already
+	didSet bool
+}
+
+// claimIntercept decides one report of an intercepted idle compaction: true when the lead is to be told. All of it happens in one
+// critical section, so two reports of one session (one with a period, one without) cannot both pass. A report that names a period is a
+// new stretch unless that period was the last one told for the membership; one that does not is a new stretch unless the daemon's own
+// idle period has been told. Either way the daemon's own period is marked told as well: a mod that reloads in the stretch has lost its
+// clock, and its next report (no period) is judged by it. The window left: the old runtime's report, still on the way when the mod
+// reloads, can arrive after its successor's and tell the same stretch a second time.
+func (m *Module) claimIntercept(sessionID, membership string, period, now int64) (interceptClaim, bool) {
+	m.idleMu.Lock()
+	defer m.idleMu.Unlock()
+	if m.interceptTold == nil {
+		m.interceptTold = map[string]interceptToldRec{}
+	}
+	if m.memberIdle == nil {
+		m.memberIdle = map[string]*idlePeriod{}
+	}
+	prev := m.interceptTold[sessionID]
+	if prev.member != membership {
+		delete(m.memberIdle, sessionID) // the daemon's own period was another membership's
+		prev = interceptToldRec{}
+	}
+	p, ok := m.memberIdle[sessionID]
+	if !ok {
+		m.idleGenSeq++
+		p = &idlePeriod{since: now, gen: m.idleGenSeq}
+		m.memberIdle[sessionID] = p
+	}
+	switch {
+	case period > 0 && prev.member == membership && prev.period == period:
+		return interceptClaim{}, false
+	case period == 0 && p.told:
+		return interceptClaim{}, false
+	}
+	c := interceptClaim{prev: m.interceptTold[sessionID], next: interceptToldRec{member: membership, period: period}, didSet: true}
+	m.interceptTold[sessionID] = c.next
+	if !p.told {
+		p.told = true
+		c.gen = p.gen
+	}
+	return c, true
+}
+
+// restoreIntercept gives a claim back (the notice did not go for a reason that is not the lead's): only what the claim wrote is undone.
+func (m *Module) restoreIntercept(sessionID string, c interceptClaim) {
+	if !c.didSet {
+		return
+	}
+	m.idleMu.Lock()
+	defer m.idleMu.Unlock()
+	if cur, ok := m.interceptTold[sessionID]; ok && cur == c.next {
+		if c.prev == (interceptToldRec{}) {
+			delete(m.interceptTold, sessionID)
+		} else {
+			m.interceptTold[sessionID] = c.prev
+		}
+	}
+	if c.gen != 0 {
+		if p, ok := m.memberIdle[sessionID]; ok && p.gen == c.gen {
+			p.told = false
 		}
 	}
 }

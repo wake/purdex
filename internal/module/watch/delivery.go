@@ -75,6 +75,11 @@ func (m *Module) initDelivery(dir string) {
 		m.dlv.logDir = dir
 	}
 	var err error
+	if m.acks, err = watch.OpenAcks(dir, func() time.Time { return m.now() }); err != nil {
+		m.logf("[watch] ack log: %v", err)
+	}
+	m.acks.SetLogf(func(f string, a ...any) { m.logf(f, a...) })
+	m.acks.Prune()
 	defer func() { m.dlv.outbox.SetLogf(func(f string, a ...any) { m.logf(f, a...) }) }()
 	if m.dlv.outbox, err = watch.OpenOutbox(outPath, func() time.Time { return m.now() }); err != nil {
 		m.logf("[watch] %v", err)
@@ -88,6 +93,7 @@ func (m *Module) initDelivery(dir string) {
 func (m *Module) Enqueue(rec watch.Record) {
 	m.dlv.outbox.Add(rec)
 	m.wakeDelivery()
+	m.emitEvents(CauseRecorded) // the badge and the list: once per recorded event
 }
 
 func (m *Module) wakeDelivery() {

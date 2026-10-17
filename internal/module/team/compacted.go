@@ -37,6 +37,20 @@ func (m *Module) handleRelayCompacted(w http.ResponseWriter, r *http.Request) {
 		m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, `trigger must be "auto", "manual" or "idle"`, nil)
 		return
 	}
+	if req.Intercepted {
+		// the mod answered {skip}: nothing was compacted, so none of a compaction's bookkeeping runs (RT-4 T42)
+		if req.Trigger == "manual" {
+			m.writeErr(w, http.StatusBadRequest, team.ErrBadRequest, "a manual compaction is never intercepted", nil)
+			return
+		}
+		noticed, member := m.interceptedIdle(req.SessionID, req.Period)
+		route := team.InterceptRouteMember
+		if !member {
+			route = team.InterceptRouteSilent
+		}
+		m.writeJSON(w, http.StatusOK, team.RelayCompactedResponse{Noticed: noticed, Route: route})
+		return
+	}
 	// whatever the trigger, the context the idle half summarised is gone: its file is stale (RT-3a1 T31)
 	if err := m.store.DeleteFreshHalf(req.SessionID, "", m.now()); err != nil {
 		m.logf("[team] compacted %s: drop the fresh half: %v", req.SessionID, err)

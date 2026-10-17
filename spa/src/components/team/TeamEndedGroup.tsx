@@ -3,18 +3,22 @@ import { useState } from 'react'
 import { CaretRight } from '@phosphor-icons/react'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { useWorkbookStore } from '../../stores/useWorkbookStore'
+import { useJournalStore } from '../../stores/useJournalStore'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { keepFocus } from './panel-focus'
 
 /** Seats that left the team: a collapsed 「已結束 (N)」 group at the bottom of the full list (absent with none); a click on one
  *  drills into its workbook, which the daemon keeps after the session is gone. */
-export function EndedGroup({ teamKey }: { teamKey: string }) {
+export function EndedGroup({ teamKey, noDrill = false }: { teamKey: string; noDrill?: boolean }) {
   const t = useI18nStore((s) => s.t)
   const all = useTeamUiStore((s) => s.endedSeats[teamKey])
   const support = useWorkbookStore((s) => s.support)
+  const journal = useJournalStore((s) => s.sticky)
   const [open, setOpen] = useState(false)
-  // Only a seat on a host that lists `workbook.v1` has a workbook to open (openWorkbook does nothing elsewhere).
-  const ended = (all ?? []).filter((e) => support[e.hostId]?.v1 === true)
+  if (noDrill) return null
+  // Only a seat on a host that lists `workbook.v1` has a workbook to open (openWorkbook does nothing elsewhere); on a journal.v1
+  // host the workbook view is off (J-2b), so its ended seats have nothing to drill into.
+  const ended = (all ?? []).filter((e) => support[e.hostId]?.v1 === true && journal[e.hostId] !== true)
   if (ended.length === 0) return null
   const label = t('team.panel.ended', { count: ended.length })
   return (

@@ -73,7 +73,16 @@ func TestIntercept_Classify(t *testing.T) {
 	c.Rules = []Rule{{Match: "pnpm run e2e", Class: ClassHeavy}, {Match: "go test ./...", Class: ClassNone}}
 	assert.Equal(t, ClassHeavy, c.Classify(words("pnpm run e2e --headed"), Env{}), "a rule comes first, even for a tool not listed")
 	assert.Equal(t, ClassNone, c.Classify(words("go test ./..."), Env{}), "and over the built-in table")
-	assert.Equal(t, ClassHeavy, c.Classify(words("go test ./a ./b"), Env{}), "a rule matches whole words")
+	assert.Equal(t, ClassHeavy, c.Classify(words("go test ./a ./b ./c"), Env{}), "a rule matches whole words")
 	assert.Equal(t, ClassNone, c.Classify(nil, Env{}))
-	assert.Equal(t, ClassHeavy, c.Classify(words("/opt/homebrew/bin/go test ./a ./b"), Env{}), "by the name of the binary")
+	assert.Equal(t, ClassHeavy, c.Classify(words("/opt/homebrew/bin/go test ./a ./b ./c"), Env{}), "by the name of the binary")
+}
+
+// #3073: `tsc -p <project>` is heavy; a project known to be small is made light by a rule.
+func TestIntercept_RuleMakesASmallTscProjectLight(t *testing.T) {
+	c := Defaults().Intercept
+	assert.Equal(t, ClassHeavy, c.Classify(words("tsc --noEmit -p tsconfig.node.json"), Env{}))
+	c.Rules = []Rule{{Match: "tsc --noEmit -p tsconfig.node.json", Class: ClassLight}}
+	assert.Equal(t, ClassLight, c.Classify(words("tsc --noEmit -p tsconfig.node.json"), Env{}))
+	assert.Equal(t, ClassHeavy, c.Classify(words("tsc --noEmit -p tsconfig.app.json"), Env{}), "another project stays heavy")
 }

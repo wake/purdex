@@ -20,6 +20,8 @@ type TitleMover interface {
 type helloInfo struct {
 	ModVersion, Agent string
 	At                int64
+	// IdleIntercept is the level of idle_intercept the mod said it has heard (RT-4a); 0 for a mod that has not, or an older one.
+	IdleIntercept int
 }
 
 // modSeenCap bounds the modSeen map; sessions come and go and nothing else prunes it.
@@ -101,7 +103,7 @@ func (m *Module) handleRelayHello(w http.ResponseWriter, r *http.Request) {
 	}
 	m.helloMu.Lock() // memory and the row are written in one order: the last hello to take the lock wins in both
 	m.mu.Lock()
-	h := helloInfo{ModVersion: req.ModVersion, Agent: req.Agent, At: m.now()}
+	h := helloInfo{ModVersion: req.ModVersion, Agent: req.Agent, At: m.now(), IdleIntercept: req.IdleIntercept}
 	m.modSeen[req.SessionID] = h
 	if len(m.modSeen) > modSeenCap { // the same victim the table picks: the oldest At, the greatest session id among ties
 		victim, v := "", helloInfo{}
@@ -121,6 +123,7 @@ func (m *Module) handleRelayHello(w http.ResponseWriter, r *http.Request) {
 		OK: true, Role: role, SelfRelay: state,
 		Threshold: team.RelayThresholdPct, MinGrowth: team.RelayMinGrowth,
 		IdleMinutes: team.RelayIdleMinutes, IdleThreshold: team.RelayIdleThresholdPct,
+		IdleIntercept: team.IdleInterceptMembers,
 	}
 	if h, ok, err := m.store.FreshHalfOf(req.SessionID); err != nil {
 		m.logf("[team] relay hello %s: fresh half: %v", req.SessionID, err)

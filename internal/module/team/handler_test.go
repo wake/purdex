@@ -419,6 +419,9 @@ type fakeUsage struct {
 	mu     sync.Mutex
 	by     map[string]agent.ContextUsage
 	status map[string]string // tmux session -> AgentStatus (P7-1)
+	// onStatus, when set, runs once inside the next AgentStatus (after the daemon's first read of the member, before its claim): a test
+	// changes the world at that moment (RT-4a).
+	onStatus func()
 }
 
 // setPct stores a reading of used percent pct for sid (P7-1).
@@ -444,6 +447,13 @@ func (f *fakeUsage) setStatus(tmux, st string) {
 }
 
 func (f *fakeUsage) AgentStatus(tmux string) (string, bool) {
+	f.mu.Lock()
+	hook := f.onStatus
+	f.onStatus = nil
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	st, ok := f.status[tmux]
