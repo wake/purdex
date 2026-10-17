@@ -24,10 +24,15 @@ whose roster row has `state === "active"` on any host's roster. A lead is not a 
   light's own status colour (running / waiting / idle / error) is unchanged. The unread **state is kept**, only not
   shown. When the session **leaves the team** (released / killed / gone / the team ends — it is no longer an active
   member on any roster), its mark shows again and it counts again, with whatever unread it has by then.
-- **R4 Unknown membership** (lead 88's call, see §2 last row). The daemon treats a failed or late membership read as
-  **not a member** for R1 (the event is pushed as for any session; the payload leaves `member` out, so the phone counts
-  it, as today). An App whose roster for a host has not arrived yet treats that host's sessions as non-members (shown
-  and counted) until it does.
+- **R4 Unknown membership** (lead 88's call, user confirmed 2026-10-17; see §2 last row). Whenever membership cannot be
+  established, the session is treated as **not a member** — pushed, shown and counted (an extra notification beats a
+  silent miss):
+  - the daemon: a failed or late membership read (the payload leaves `member` out, so the phone counts it, as today);
+  - the Mac: until **both** the roster and that host's session list have arrived, and for a roster seat whose session
+    is not (yet) in the session list (the seat cannot be mapped to a `hostId:code`);
+  - the iPhone: until that host's roster has arrived, and after it is forgotten (host removed or repointed).
+  When membership becomes known the mark hides at once (the unread state is kept); when it is lost again the mark
+  shows again. In practice the unknown window is the first moments of a connection.
 
 ## 2. Original text → new text
 
@@ -43,6 +48,8 @@ whose roster row has `state === "active"` on any host's roster. A lead is not a 
 | badge spec §3.1 gate (L70) | "a member session pushes only when its code is in the device's `prefs.tabs` (whatever `notify_without_tab` says)" | "a member session's waiting / idle event is not pushed; its error follows rules 5-6 like any session (member spec R1)" |
 | badge spec §3.1 (L66-67) | "the gate applies the member rule (tabs only — the quieter side)" | "the gate treats it as not a member (member spec R4)" |
 | team interface spec (L96) | "Beads … unread overlays as today" | "… unread overlays as today, except that a member's unread is hidden (member spec R3)" |
+| badge spec §2 (L35-40, the 10-13 inventory) | "it knows nothing of team membership" | unchanged (it is the inventory of 10-13, before BG-1a); a note says the gate has known membership since BG-1a and follows this spec since MQ-1 |
+| Go comments and tests (MQ-1) | `gate.go:44` (`AgentEvent.Member`: a read error counts as member), `gate.go:120-122` (`DeviceWants`: a member needs the tab), `agent_trigger.go:45-52` and `:120` (unknown → member), `internal/team/membership.go:7` ("a member pushes only with a tab"); `gate_member_test.go`, `badge_v2_test.go:137`, `:167` assert the old rule | rewritten to R1 / R4 in MQ-1 (the tests change their expectations; nothing of the old gate stays to keep them green) |
 | new | — | R3: a member's unread mark is hidden on Mac and iPhone; state kept; shows again when it leaves the team |
 | changed by 88 (R4) | read error = "member, unknown" = quieter side (tabs only) | read error = not a member for R1. Reason: under R1 the quieter side drops **every** waiting push of the event, and a waiting event is an agent waiting for the user; a silent miss is worse than an extra push. Read errors are rare (250 ms budget, single-flight). |
 
@@ -58,8 +65,14 @@ whose roster row has `state === "active"` on any host's roster. A lead is not a 
   for the events that can push (waiting, idle, error), single-flight, 250 ms.
 - Errors keep the 60 s debounce (`gate.go` `SendStage`) unchanged; a member's error passes the event stage and is
   judged per device by rules 5-6a like any session's.
+- The comments and tests that state the old rule (§2, "Go comments and tests") are rewritten in the same PR.
 - Approval pushes, badge pushes, read sync: untouched. No wire change, no capability: the payload is the same, an App
-  sees fewer pushes. A daemon without MQ-1 still pushes a tabbed member's waiting / idle (both hosts upgrade together).
+  sees fewer pushes. A capability would not help: an App cannot take back a push its host's daemon already sent (iOS
+  can only drop a delivered notification with the filtering entitlement, which the App does not have). So R1 on the
+  iPhone holds only once **every** daemon that runs members has MQ-1: **MQ-1 ships to mlab and air26 in the same
+  release** (as every daemon release does), and the release's acceptance includes one member waiting event on each
+  host with no iPhone push and no Mac notification. Until then a daemon without MQ-1 still pushes a tabbed member's
+  waiting / idle.
 
 ### 3.2 Mac SPA
 
@@ -72,15 +85,23 @@ whose roster row has `state === "active"` on any host's roster. A lead is not a 
   SessionStart record).
 - **R1**: `lib/notification-gate.ts` `shouldNotify` takes `isMember`; `isMember && derived ∈ {waiting, idle}` →
   false, before the tab / settings checks; errors unchanged (same debounce). The caller
-  (`hooks/useAgentNotifications.ts:62`) passes `activeMemberKeys.has(compositeKey(hostId, code))`.
-- **R2**: `lib/badge/badge-report.ts` (L97-98) skips a member key's unread when it fills `sessions`; a resolved card
-  still adds its key. `features/workspace/useWorkspaceIndicators.ts` (L25-31) skips member keys when it counts tabs
-  with unread.
+  (`hooks/useAgentNotifications.ts:62`) computes `isMember` **at the moment of the event** from the stores'
+  current state (`activeMemberKeysOf(useTeamRosterStore.getState(), useSessionStore.getState(), …)`), never from a
+  set captured when the hook mounted: its subscription is created once (`useEffect(…, [])`, L19-21), so a captured set
+  would freeze membership at mount.
+- **R2**: `lib/badge/badge-report.ts` (L85, L97-98) takes the member set and skips a member key's unread when it fills
+  `sessions`; a resolved card still adds its key. `lib/badge/badge-reporter.ts` (L16-25, L48) passes the member set
+  to `currentBadgeReport()` and **also subscribes to `useTeamRosterStore`** (it listens to unread, tabs, cards and
+  sessions today), so joining or leaving a team re-sends the Dock report by itself.
+  `features/workspace/useWorkspaceIndicators.ts` (L25-31) skips member keys when it counts tabs with unread, and
+  subscribes to the member set so the number follows a roster change.
 - **R3**: the two producers of `isUnread` return false for a member key — `hooks/useSessionAgentIndicator.ts` (L35;
-  sidebar rows and team beads through `TeamSeatIcon`) and `lib/agent-lights/tab-aggregate.ts` (L88; a tab is unread
-  when any **non-member** pane is unread). Every mark drawn from them (`TabIcon`, `renderInlineTabIcon`,
-  `TabStatusIndicator` tint, the global pip in `SortableTab` / `InlineTab`) follows without change. `status` is
-  untouched.
+  sidebar rows and team beads through `TeamSeatIcon`) and `lib/agent-lights/tab-aggregate.ts` (L74, L88; a tab is
+  unread when any **non-member** pane is unread). `aggregateTabAgents` is pure: it gains a member-set argument, and its
+  caller `hooks/useTabAgentAggregate.ts` (L40; used by `useTabDisplay.ts:84`) subscribes to the member set and passes
+  it, so a **mounted** tab's mark changes when the roster changes. Every mark drawn from them (`TabIcon`,
+  `renderInlineTabIcon`, `TabStatusIndicator` tint, the global pip in `SortableTab` / `InlineTab`) follows without
+  change. `status` is untouched.
 - `stores/useAgentStore.ts` (L347-387, unread set / clear) is **not** changed: the state is kept (R3).
 
 ### 3.3 iPhone (purdex-ios)
@@ -99,8 +120,11 @@ whose roster row has `state === "active"` on any host's roster. A lead is not a 
 | Task | Where | What | Depends on |
 |---|---|---|---|
 | MQ-1 | daemon `internal/module/push` (`gate.go`, `agent_trigger.go`), push spec + badge spec text | rule 4a; drop the member tab clause; unknown → not a member; spec edits of §2 | — |
-| MQ-2 | SPA (`lib/team` member set, `notification-gate.ts`, `useAgentNotifications.ts`, `badge-report.ts`, `useWorkspaceIndicators.ts`, `useSessionAgentIndicator.ts`, `tab-aggregate.ts`) | §3.2 | — (independent of MQ-1: the Mac's notifications are its own) |
+| MQ-2 | SPA (`lib/team` member set, `notification-gate.ts`, `useAgentNotifications.ts`, `badge-report.ts`, `badge-reporter.ts`, `useWorkspaceIndicators.ts`, `useSessionAgentIndicator.ts`, `tab-aggregate.ts`, `useTabAgentAggregate.ts`) | §3.2 | — (independent of MQ-1: the Mac's notifications are its own) |
 | MQ-3 | purdex-ios (`Models.swift` callers, `WorkbenchStore.aggregate`, page counts) | §3.3 | — |
+
+Release gate: MQ-1 reaches the iPhone only when both daemons that run members (mlab, air26) have it — one release,
+both hosts (§3.1). MQ-2 and MQ-3 can ship before or after; each is correct on its own platform.
 
 Tests (each with a mutation that turns it red):
 - MQ-1: member waiting → no device gets it, tab or not (M: drop rule 4a); member idle → same; member error with
@@ -109,14 +133,24 @@ Tests (each with a mutation that turns it red):
   `member` in the payload (M: unknown → member); late read (past 250 ms) → same; lead → like any session; a card of a
   member → pushed (approval path untouched); the error debounce still applies to a member's error.
 - MQ-2: `activeMemberKeys` — active local member, active remote member (seat on another host, `seatHostOf`), a
-  `releasing` / `joining` member excluded, the lead excluded, a seat without a session excluded, two hosts
-  (M: drop the state filter; M: map by code instead of name); `shouldNotify` member waiting / idle → false, member
-  error → as non-member (M: drop the member check; M: apply it to error too); Dock report — member unread not in
-  `sessions`, member card still in it (M: skip cards too); workspace number skips a member tab; `isUnread` false for a
-  member in the sidebar row, the bead and the tab aggregate, `status` unchanged (M: hide status too); a session that
-  leaves the roster shows its kept unread again and counts again (M: clear unread when a member is set).
+  `releasing` / `joining` member excluded, the lead excluded, a seat without a session excluded (R4), no roster or no
+  session list for a host → none of its sessions (R4), two hosts (M: drop the state filter; M: map by code instead of
+  name); `shouldNotify` member waiting / idle → false, member error → as non-member (M: drop the member check; M: apply
+  it to error too); Dock report — member unread not in `sessions`, member card still in it (M: skip cards too);
+  workspace number skips a member tab; `isUnread` false for a member in the sidebar row, the bead and the tab
+  aggregate, `status` unchanged (M: hide status too); a session that leaves the roster shows its kept unread again and
+  counts again (M: clear unread when a member is set).
+  **Transition tests on live wiring** (pure-function tests alone stay green when the wiring is missing): with the
+  reporter running, a roster update that makes a tabbed unread session a member re-sends the Dock report without it,
+  and a roster update that removes it re-sends it with it (M: drop the reporter's roster subscription); a **mounted**
+  tab, sidebar row and workspace number flip when the roster changes, both ways (M: compute the set once); with
+  `useAgentNotifications` mounted, a session that becomes a member after mount gets no waiting notification, and one
+  that leaves the team after mount gets it again (M: capture the set at mount).
 - MQ-3: the row light of a member with unread shows its status colour, not the unread tint; the page number skips a
   member's unread but counts its open card; leaving the team shows and counts again (M: the same three, reversed).
+  Transitions (R4): a host whose roster has not arrived → its sessions shown and counted; the roster arrives → a
+  member's mark hides at once, its unread kept; the host is forgotten or repointed → shown and counted again
+  (M: keep the last member bucket after the host is forgotten; M: treat "no roster yet" as "all members").
 
 Test tiers (CLAUDE.md, 2026-10-15): while developing, only the changed tests; before merge, Go — the changed packages
 (`-race` only if locks or goroutines change) + `make lint`; SPA — `npx vitest related --run <changed files>` **plus every
