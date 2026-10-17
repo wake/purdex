@@ -27,18 +27,24 @@ const (
 	ErrWWDError       = "wwd_error"        // 502: wwd answered with an error status
 	ErrBadRequest     = "bad_request"      // 400
 	ErrHostNotLocal   = "host_not_local"   // 501: history of another host is not served by this daemon yet
+	ErrBusy           = "busy"             // 429: too many wwd calls in flight
 )
+
+// maxInFlight bounds the wwd calls the pool routes have under way at once: a paired phone may read these routes, and each
+// call holds a socket and up to the client's body cap in memory, so a runaway client is turned away instead of queued.
+const maxInFlight = 8
 
 // Module is the pool module.
 type Module struct {
 	mu    sync.Mutex
 	ready bool // Init ran and Stop has not: pool.v1 is announced
 	// cl is the local wwd's client; nil makes one for client.DefaultSocket() at Init.
-	cl  *client.Client
-	now func() time.Time
+	cl       *client.Client
+	now      func() time.Time
+	inflight chan struct{} // a semaphore of maxInFlight
 }
 
-func New() *Module { return &Module{now: time.Now} }
+func New() *Module { return &Module{now: time.Now, inflight: make(chan struct{}, maxInFlight)} }
 
 func (m *Module) Name() string           { return "pool" }
 func (m *Module) Dependencies() []string { return nil }
@@ -99,7 +105,23 @@ func hostsOf(p wire.Pool) wire.PoolHostsResponse {
 	return out
 }
 
+// enter takes an in-flight slot or answers 429; the caller defers the returned release when ok.
+func (m *Module) enter(w http.ResponseWriter) (release func(), ok bool) {
+	select {
+	case m.inflight <- struct{}{}:
+		return func() { <-m.inflight }, true
+	default:
+		writeErr(w, http.StatusTooManyRequests, ErrBusy, "too many pool reads in flight; retry")
+		return nil, false
+	}
+}
+
 func (m *Module) handleHosts(w http.ResponseWriter, r *http.Request) {
+	release, ok := m.enter(w)
+	if !ok {
+		return
+	}
+	defer release()
 	p, err := m.client().Pool(r.Context())
 	if err != nil {
 		writeWWDErr(w, err)
@@ -109,6 +131,11 @@ func (m *Module) handleHosts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Module) handleHistory(w http.ResponseWriter, r *http.Request) {
+	release, ok := m.enter(w)
+	if !ok {
+		return
+	}
+	defer release()
 	q := r.URL.Query()
 	hq := wire.FactsHistoryQuery{Since: m.now().Add(-historyDefaultSince).UTC(), Step: q.Get("step")}
 	if s := q.Get("since"); s != "" {

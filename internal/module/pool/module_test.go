@@ -229,3 +229,45 @@ func TestHistory_NullRecordsBecomeAnEmptyArray(t *testing.T) {
 	require.Equal(t, 200, rr.Code, rr.Body.String())
 	assert.Contains(t, rr.Body.String(), `"records":[]`)
 }
+
+// A runaway reader is turned away with 429 once maxInFlight calls are under way, and gets in again when one ends.
+func TestInFlight_ExcessReadsAreTurnedAway(t *testing.T) {
+	hold := make(chan struct{})
+	entered := make(chan struct{}, maxInFlight+2)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/pool", func(w http.ResponseWriter, r *http.Request) {
+		entered <- struct{}{}
+		select {
+		case <-hold:
+		case <-r.Context().Done():
+		}
+		w.Write(poolOf(t))
+	})
+	cl := fakeWWD(t, mux)
+	cl.Timeout = 10 * time.Second
+	m := New()
+	m.cl = cl
+	srv := http.NewServeMux()
+	m.RegisterRoutes(srv)
+	done := make(chan int, maxInFlight)
+	for i := 0; i < maxInFlight; i++ {
+		go func() {
+			rr := httptest.NewRecorder()
+			srv.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/pool/hosts", nil))
+			done <- rr.Code
+		}()
+	}
+	for i := 0; i < maxInFlight; i++ {
+		<-entered
+	}
+	rr := call(srv, "/api/pool/hosts")
+	assert.Equal(t, 429, rr.Code)
+	assert.Equal(t, ErrBusy, errCode(rr))
+	rr = call(srv, "/api/pool/facts/history")
+	assert.Equal(t, 429, rr.Code)
+	close(hold)
+	for i := 0; i < maxInFlight; i++ {
+		assert.Equal(t, 200, <-done)
+	}
+	assert.Equal(t, 200, call(srv, "/api/pool/hosts").Code, "a slot is free again")
+}
