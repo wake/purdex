@@ -6,9 +6,11 @@
 // is a sibling of TabContent, so a tab switch does not unmount it, but a support toggle or a hide / show does (CLAUDE.md,
 // Tab-hosted checklist). The narrow-window drop is visibility only (card-layout.ts): nothing is written back.
 // The cards' bodies are J-2c (journal) and J-2d (tasks, roadmap); here they are frames with their header controls.
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ListChecks, MapTrifold } from '@phosphor-icons/react'
 import { CardFrame } from './CardFrame'
+import { ConfirmDetail } from './ConfirmDetail'
+import { JournalCard, JournalTitle } from './JournalCard'
 import { visibleCards, teamColumnWidth } from './card-layout'
 import { useJournalTarget } from './useJournalTarget'
 import { TeamPanel } from '../team/TeamPanel'
@@ -71,6 +73,12 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const available = useContentWidth(rootRef)
 
+  // The open 待確認 detail takes the roadmap's place (a card to the journal's left): it counts as the roadmap for the narrow-window
+  // drop, and `roadmapOpen` itself is never touched, so closing the detail brings the roadmap back as it was.
+  const unit = target.unit
+  const detailEntry = memo.journalOpen && unit && memo.detailId !== null ? (unit.entries.find((e) => e.id === memo.detailId) ?? unit.pinned.find((e) => e.id === memo.detailId)) : undefined
+  const detail = detailEntry?.kind === 'confirm' ? detailEntry : undefined
+
   const widths = {
     team: cardWidth('team', null, last),
     roadmap: cardWidth('roadmap', memo.widths.roadmap, last),
@@ -78,7 +86,7 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
     tasks: cardWidth('tasks', memo.widths.tasks, last),
   }
   const shown = visibleCards({
-    open: { team: teamOpen, roadmap: memo.roadmapOpen, journal: memo.journalOpen, tasks: memo.tasksOpen },
+    open: { team: teamOpen, roadmap: memo.roadmapOpen || detail !== undefined, journal: memo.journalOpen, tasks: memo.tasksOpen },
     widths,
     available,
   })
@@ -88,6 +96,7 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
     patch({ widths: { ...memo.widths, [card]: w } })
     useJournalUiStore.getState().setLastWidth(card, w)
   }
+  const closeDetail = useCallback(() => patchUnitMemo(memoHost, memoKey, { detailId: null }), [memoHost, memoKey])
   const teamColumn = shown.team || shown.roadmap
 
   return (
@@ -106,7 +115,12 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
               />
             </CardFrame>
           )}
-          {shown.roadmap && (
+          {shown.roadmap && detail && unit && (
+            <CardFrame testId="journal-detail-card" width={widths.roadmap} onCommitWidth={commit('roadmap')} title={t('journal.detail.title')} onClose={closeDetail}>
+              <ConfirmDetail entry={detail} personName={unit.personName} onClose={closeDetail} />
+            </CardFrame>
+          )}
+          {shown.roadmap && !detail && (
             <CardFrame testId="journal-roadmap-card" width={widths.roadmap} onCommitWidth={commit('roadmap')} title={t('journal.card.roadmap')} onClose={() => patch({ roadmapOpen: false })} />
           )}
         </div>
@@ -116,15 +130,17 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
           testId="journal-card"
           width={widths.journal}
           onCommitWidth={commit('journal')}
-          title={target.unit?.unit.label ?? ''}
+          title={<JournalTitle target={target} />}
+          fill
           actions={
             <>
-              <HeaderToggle testId="journal-toggle-roadmap" pressed={memo.roadmapOpen} label={t('journal.card.roadmap')} onClick={() => patch({ roadmapOpen: !memo.roadmapOpen })}><MapTrifold size={13} /></HeaderToggle>
+              <HeaderToggle testId="journal-toggle-roadmap" pressed={memo.roadmapOpen} label={t('journal.card.roadmap')} onClick={() => patch(detail ? { detailId: null, roadmapOpen: !memo.roadmapOpen } : { roadmapOpen: !memo.roadmapOpen })}><MapTrifold size={13} /></HeaderToggle>
               <HeaderToggle testId="journal-toggle-tasks" pressed={memo.tasksOpen} label={t('journal.card.tasks')} onClick={() => patch({ tasksOpen: !memo.tasksOpen })}><ListChecks size={13} /></HeaderToggle>
             </>
           }
           onClose={() => patch({ journalOpen: false })}
         >
+          {unit && <JournalCard key={`${target.memoHost}\u0000${target.memoKey}`} target={target} unit={unit} />}
           {target.unreachableHost !== null && !target.unit && (
             <div data-testid="journal-unreachable" className="p-3 text-text-secondary">{t('journal.card.unreachable', { host: target.unreachableHost })}</div>
           )}
