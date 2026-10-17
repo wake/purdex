@@ -246,15 +246,23 @@ succeed; an old peer; mismatched targets warn.
    makes the locator look again (W2a); a failed notify on the receiving host reconciles its holder (W3a-2b).
 2. Backlog: when a watcher is woken or started, each host sends one summary of its unhandled events since its last
    delivered id (counts by kind and label, the newest five, and `pdx watch log --all --unhandled`).
-3. Handled: `pdx watch ack <id>… | --all [--host] --note "<one line>"` (note required, one line, ≤ 500 bytes) marks
-   events handled (a small ack log beside the records: id, status, note, at); `GET /api/watch/unhandled` → `{count}`
-   for this host (W5's badge).
-4. `GET /api/peers/watch/log` (policy entry) and `pdx watch log --host <alias> | --all`.
+3. Handled: `pdx watch ack <id>… | --all [--host <alias>] --note "<one line>"` (note required, one line, ≤ 500 bytes) marks events
+   handled in the ack log beside the records (`acks.jsonl`: id, note, time, who gave the order, from which host; the first ack of an
+   event stands, a batch is written whole or not at all, a damaged file is kept as `acks.jsonl.bad-<time>`); `GET /api/watch/unhandled`
+   → `{count}` for this host (W5's badge). Split in two PRs: **W2b-2a** this host's part, **W2b-2b** the rest.
+4. Other hosts (W2b-2b; spec §12.3 "Acking events of another host"): `POST /api/watch/ack` sends the ids of another paired host to that
+   host's `POST /api/peers/watch/ack` and `--all --host X` to X (host route in `HostRoutePolicy`, host principal, `HostLimiter`, body
+   cap; it handles only the events it recorded, never passes an ack on, records who/from-host with the note, sends `watch.events` for its
+   own events once per operation; the answer says what became of every id and the CLI exits non-zero for any that was not handled).
+   `GET /api/peers/watch/log` was written as a GET and is a `POST /api/peers/watch/log` (`HostCaller` only POSTs); the daemon answers
+   `GET /api/watch/log?host=<alias>|all` by asking the paired hosts, and `pdx watch log --host <alias> | --all` uses it. The messages
+   to the watcher name only commands and flags that exist (#3071; a test reads the messages and the CLI's own flags).
 5. For the watcher area (B line spec `docs/specs/2026-10-16-watcher-area-spec.md` §8 A3; admin token; the writes 403
    to device tokens and not in `HostRoutePolicy`): `GET /api/watch/events?since=&limit=` → `{events}` newest first
-   with the fields that spec lists (the record's fields plus `status` `pending|handled`, `note`, `handled_at`); the
-   `watch.events` push (spec §12.6: `{host_id, unhandled, cause}`, one per record / ack operation). No skip route
-   (user decision 10-16: no "skip all" button).
+   with the fields that spec lists (the record's fields plus `status` `pending|handled`, `note`, `handled_at`, `handled_by`,
+   `handled_from_host`); the `watch.events` push (spec §12.6: `{host_id, unhandled, cause}`, one per record / ack operation, the count
+   read and sent under one lock); `watch.v1` announced by `/api/info` while the module is ready. No skip route (user decision 10-16: no
+   "skip all" button). The local write route stays admin only and is not a host route; the peer ack route is one (2026-10-17, lead).
 Tests: folding isolation per host and kind; E3 not folded; retry without double counting; restart with a pending
 queue; backlog on wake/start (and none twice); ack without a note refused, ack and the count, the note in
 `/api/watch/events`; one `watch.events` per operation (ack of three

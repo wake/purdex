@@ -453,9 +453,21 @@ daemon settings. Not Profile Sync: Profile Sync carries the App's own stores and
   one has to be started.
 - Delivery: at most one message per event kind per host per 10 min (later ones are folded into a count); E3 is never
   folded. A woken or new watcher first gets a summary of the unhandled events since the last delivery.
-- `pdx watch log [--since] [--host|--all]` reads the records; `pdx watch ack <id>… --note "<one line>"` marks events
-  handled with the watcher's note (required; the UI shows it); an event is `pending` or `handled`. There is no
-  "skip all" (user decision 10-16: the button is not wanted).
+- `pdx watch log [--since] [--host <alias>|--all]` reads the records; `pdx watch ack <id>… | --all [--host <alias>] --note "<one
+  line>"` marks events handled with the watcher's note (required, one line, at most 500 bytes; the UI shows it); an event is `pending` or
+  `handled`. There is no "skip all" (user decision 10-16: the button is not wanted).
+- **Acking events of another host (2026-10-17).** The watcher is on one host and the events it deals with are on several, and an event is
+  handled where it was recorded. The daemon asked to ack (`POST /api/watch/ack`, admin token only; a device token is refused) sends the
+  ids that belong to another paired host to that host's `POST /api/peers/watch/ack` (a host route, like holder, announce and event: host
+  principal, `HostLimiter`, body cap); `--all --host X` is sent to X the same way, with the note. The receiving host handles **only the
+  events it recorded** (any other id is `not_found`) and **never passes an ack on**, so no chain or loop of forwards can form. It records
+  who gave the order (the address of the session that ran `pdx watch ack`, as the first daemon resolved it) and from which host, with the
+  note, and the events API returns them (`handled_by`, `handled_from_host`). Acking again changes nothing (the first note stays; the answer
+  is `already`). `watch.events` (`cause: acked`) is sent by the host that owns the events, once per operation; the host that was asked
+  sends none for another host's events. The answer says, for each id, `handled`, `already`, `not_found`, `unreachable`, `unsupported` (an
+  older daemon) or `refused`; `pdx watch ack` exits non-zero when any id was not handled and lists those ids.
+- `pdx watch log --host|--all` reads another host's events through `POST /api/peers/watch/log` (a host route; that host answers with its own
+  events only) and puts the answers together, newest first; a host that cannot be read is named and the exit code is 1.
 
 ### 12.4 The watcher session (W3)
 
