@@ -53,17 +53,35 @@ scripts `assist-on` / `assist-off` / `assist-check` exist as a prototype (mlab r
     the release has mlab to itself. While the lead has declared mlab reserved (§3), every command that an assist host
     can take goes there first, without the usual preference for mlab; it ends by itself when the reservation ends.
 
+12. **Which host runs a test** (user, 10-17 13:4x through the watcher; replaces the 13:41 order air26 → mserv → mlab,
+    and for these tests the estimate comparison of decisions 3 and 5):
+    - **Compatible tests: air26, then mlab.** While air26's assist switch is on, every heavy test air26 can run goes to
+      air26 whenever it can start it, even when mlab has a free slot and would be faster. Compatible = the repo is in
+      air26's `~/Assist/repos.noindex` (purdex, aigora-v2) and the kind is one air26 runs (vitest, tsc, go test / vet,
+      lint, `pnpm check`). When air26 cannot start it now the ticket runs on mlab, or keeps its place until a slot frees
+      on either; a test air26 cannot run stays on mlab and is **never sent to mserv**.
+    - **Light tests (single-file tests during development): pending the user's confirmation.** The 13:4x wording
+      includes them ("開發中途的單檔測試也包括在內"), which would replace decision 10's "a light one goes out only when
+      it would wait"; until the user confirms that change, decision 10 holds for light tickets.
+    - **mserv: PHP tests only, and only after the watcher has checked mserv's PHP results against mlab's**; until then
+      nothing is sent to mserv. For PHP the order is mserv, then mlab. at-inwin's jest runs on mlab.
+    - **air26's own development comes first** (lead 1f, from §2: air26's gate "also protects the person's own use of
+      air26"): air26's `~/Assist/assist.env` sets `PDX_GATE_RANK=back` (#3158), so a run sent there waits behind
+      air26's own commands in air26's gate. While air26 is busy (iOS work at full CPU) the watcher may lower its slots
+      or take them back (§5); the tests then run on mlab.
+
 ## 2. The pool
 
 | Host | Its slots are kept by | Runs | Limits |
 |---|---|---|---|
 | mlab | mlab's gate (today) | everything the gate runs | the gate's admission (§5 of the load spec) |
 | air26 | **air26's own gate** (`pdx gate` in `~/Assist`, which also protects the person's own use of air26), and mlab's dispatch slots `assist-air26-<k>` (how many runs mlab has out there; plan contract 6) | purdex and aigora-v2 test runs: SPA vitest / tsc, Go tests, lint, aigora `pnpm check` | air26's gate slots and admission; sent only while its gate would start the command at once and its load is within the host's limits (load1 and load5 per core, CPU idle of a 2 s sample; plan contracts 9–10) |
-| mserv | **mlab's gate** (mserv has no pdx; its slots are held on mlab, `assist-mserv-<k>` lock files in mlab's gate directory) | platform-independent work: SPA install / tsc / vitest, the Go packages that build on Linux, PHP versions (7.4, 8.0 cli, 8.5), MySQL dev on `100.64.0.6:3307` | only while mserv's assist switch is on; 2 parallel; each run wrapped in `sudo systemd-run --scope --uid=wake -p CPUQuota=200% -p MemoryMax=4G nice -n 10 ionice -c3` (mserv admin 9e-f0); admitted only while PSI memory `some10` < 1, MemAvailable > 4 GB and the load limits hold (read over ssh right before the start) |
+| mserv | **mlab's gate** (mserv has no pdx; its slots are held on mlab, `assist-mserv-<k>` lock files in mlab's gate directory) | **PHP tests only** (decision 12): PHP versions (7.4, 8.0 cli, 8.5), MySQL dev on `100.64.0.6:3307`, and only after the watcher has checked mserv's PHP results against mlab's. (It could also run platform-independent work — SPA install / tsc / vitest, the Go packages that build on Linux — but decision 12 keeps those on air26 and mlab.) | only while mserv's assist switch is on; 2 parallel; each run wrapped in `sudo systemd-run --scope --uid=wake -p CPUQuota=200% -p MemoryMax=4G nice -n 10 ionice -c3` (mserv admin 9e-f0); admitted only while PSI memory `some10` < 1, MemAvailable > 4 GB and the load limits hold (read over ssh right before the start) |
 
 - **Capability** is a table per host of the command kinds it can run (by tool and words, like the intercept rules), kept
   in `assist.json` beside the host (plan contract 11) and written by the watcher from the assist READMEs: e.g. mserv cannot run `go vet ./...`, `go test ./...`,
-  `go build ./cmd/pdx` (#3076), cgo or node-gyp builds, browser tests, swift, macOS-only tests. A command no host but mlab
+  `go build ./cmd/pdx` (#3076), cgo or node-gyp builds, browser tests, swift, macOS-only tests. Under decision 12 the
+  watcher writes mserv's table as the PHP kinds only, and leaves it empty until its check against mlab. A command no host but mlab
   can run stays on mlab. **#3076 is not needed for this spec**: nothing runs pdx on mserv.
 - **Readiness** per (host, repo) comes from that host's `assist-check --json` (run by the dispatcher over ssh, cached for
   60 s): Assist present, the switch on, not `.closing`, the repo cloned and its toolchain ready, and on air26 the folder
@@ -85,7 +103,10 @@ scripts `assist-on` / `assist-off` / `assist-check` exist as a prototype (mlab r
   two rules below say; a ticket no assist host can take still runs on mlab (nothing is refused).
 - **Preference for mlab's quality (decision 5).** With an assist host free and the ticket able to run there, a heavy
   ticket goes to the assist host even when mlab has a free slot, unless mlab would finish it clearly sooner (estimate
-  below 0.5× the assist host's). A light ticket goes out only when it would otherwise wait on mlab.
+  below 0.5× the assist host's). A light ticket goes out only when it would otherwise wait on mlab. **Decision 12
+  replaces the heavy half for tests**: a heavy test air26 can start goes there with no estimate comparison; a PHP test
+  goes to mserv the same way once mserv is open for it. The light half stays until the user confirms decision 12's
+  light point. The rule stays whole for any other kind an assist host's table may list later.
 - **Estimates** are per (kind, host): the moving average of the decision records' run times (the gate already writes
   one per job), seeded from the table in §0; the transfer is measured per host the same way. A kind is the command's
   words after the runner words (§5.3's `commandWords`), with paths and file lists dropped (`vitest related <files>` is one
@@ -172,7 +193,7 @@ command runs again wherever the pool can take it. A command's partial output fro
 | X1b | The notices; waking the watcher on assist switches and allows (`WakeWatcher`) | X1a, W3b-5 |
 | X2a | Running on air26: snapshot / push / remote run / stream / cancel / cleanup, failure and reclaim requeue, the history record | GQ (serving order, snapshot), GC (conflicts) |
 | X2b | The automatic walk: capability table, estimates, dispatch slots, status JSON with pools | X2a |
-| X3 | mserv: mlab-held `assist-mserv-<k>` slots, PSI / MemAvailable admission over ssh, `git archive` transfer, `systemd-run` limits, mserv's capability table (incl. PHP, MySQL dev) | X2b |
+| X3 | mserv: mlab-held `assist-mserv-<k>` slots, PSI / MemAvailable admission over ssh, `git archive` transfer, `systemd-run` limits, mserv's capability table (PHP only, decision 12; MySQL dev) | X2b |
 | X4 | The App panel (B line, lead 88): switches, the allowed list, the pool view, "what was taken back" | X1a (API), X2b (pool, history) |
 
 The watcher's scripts (`assist-on/off/check`) gain `--json` and the folder-trust check in X1, and **mserv gets its own
