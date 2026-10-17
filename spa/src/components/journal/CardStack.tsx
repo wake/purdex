@@ -1,6 +1,7 @@
 // spa/src/components/journal/CardStack.tsx — the floating cards of a journal.v1 host (J-2b T-2b.2, spec §11), mounted by the
-// shell INSTEAD of TeamPanelArea for the active tab's host (App.tsx). Columns right-aligned under the title bar:
-//   [team card, the roadmap under it] [journal card] [tasks card]
+// shell BESIDE TeamPanelArea (JV-2: the team panel is the docked area on every host again, the team card is gone). Columns
+// right-aligned under the title bar, left of the team panel while it is in the pane:
+//   [roadmap / 待確認 detail] [journal card] [tasks card]
 // Opening a card pushes the others left (the row is right-aligned; widths animate). What is open, the widths, the filter and the
 // scroll live OUTSIDE this component (lib/journal/view-memory.ts per unit, useJournalUiStore per team / last widths) — the stack
 // is a sibling of TabContent, so a tab switch does not unmount it, but a support toggle or a hide / show does (CLAUDE.md,
@@ -13,12 +14,10 @@ import { ConfirmDetail } from './ConfirmDetail'
 import { JournalCard, JournalTitle } from './JournalCard'
 import { TasksCard } from './TasksCard'
 import { RoadmapCard } from './RoadmapCard'
-import { visibleCards, teamColumnWidth } from './card-layout'
+import { CARD_GAP, STACK_MARGIN, visibleCards } from './card-layout'
 import { useJournalTarget } from './useJournalTarget'
-import { TeamPanel } from '../team/TeamPanel'
 import { TeamPanelArea } from '../team/TeamPanelArea'
-import { useTeamDisplay } from '../team/team-display'
-import { useTabStore } from '../../stores/useTabStore'
+import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { useI18nStore } from '../../stores/useI18nStore'
 import { cardWidth, useJournalUiStore, type CardKey } from '../../stores/useJournalUiStore'
 import { keepFocus } from '../../lib/keep-focus'
@@ -57,20 +56,24 @@ export function CardStack() {
   return <Stack target={target} />
 }
 
-/** What the shell mounts beside the tab content: the card stack on a journal.v1 host, else today's one panel area. */
+/** What the shell mounts beside the tab content: the team panel area on every host, and the journal cards on a journal.v1 host. */
 export function PanelAreas() {
-  const journalHost = useJournalTarget().journalHost
-  return journalHost ? <CardStack /> : <TeamPanelArea />
+  return (
+    <>
+      <TeamPanelArea />
+      <CardStack />
+    </>
+  )
 }
 
 function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
   const t = useI18nStore((s) => s.t)
-  const display = useTeamDisplay()
-  const activeTabId = useTabStore((s) => s.activeTabId)
   const { team, memoHost, memoKey } = target
   const memo = useViewMemo(memoHost, memoKey)
-  const teamKey = team?.teamKey ?? null
-  const teamOpen = useJournalUiStore((s) => teamKey !== null && s.teamOpen[teamKey] === true)
+  // The docked team panel sits at the right edge while it is in the pane (not in the title bar): the cards float left of it.
+  const panelWidth = useTeamUiStore((s) => s.panel.width)
+  const panelInPane = team !== null && team.mode !== 'titlebar'
+  const reserved = panelInPane ? panelWidth + CARD_GAP : 0
   const last = useJournalUiStore((s) => s.lastWidths)
   const rootRef = useRef<HTMLDivElement>(null)
   const available = useContentWidth(rootRef)
@@ -82,41 +85,28 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
   const detail = detailEntry?.kind === 'confirm' ? detailEntry : undefined
 
   const widths = {
-    team: cardWidth('team', null, last),
     roadmap: cardWidth('roadmap', memo.widths.roadmap, last),
     journal: cardWidth('journal', memo.widths.journal, last),
     tasks: cardWidth('tasks', memo.widths.tasks, last),
   }
   const shown = visibleCards({
-    open: { team: teamOpen, roadmap: memo.roadmapOpen || detail !== undefined, journal: memo.journalOpen, tasks: memo.tasksOpen },
+    open: { roadmap: memo.roadmapOpen || detail !== undefined, journal: memo.journalOpen, tasks: memo.tasksOpen },
     widths,
     available,
+    reserved,
   })
 
   const patch = (p: Partial<ViewMemo>) => patchUnitMemo(memoHost, memoKey, p)
-  const commit = (card: Exclude<CardKey, 'team'>) => (w: number) => {
+  const commit = (card: CardKey) => (w: number) => {
     patch({ widths: { ...memo.widths, [card]: w } })
     useJournalUiStore.getState().setLastWidth(card, w)
   }
   const closeDetail = useCallback(() => patchUnitMemo(memoHost, memoKey, { detailId: null }), [memoHost, memoKey])
-  const teamColumn = shown.team || shown.roadmap
 
   return (
-    <div ref={rootRef} data-testid="journal-card-stack" className="absolute z-20 top-0 right-3 bottom-0 flex items-start justify-end gap-3 pointer-events-none">
-      {teamColumn && (
-        <div data-testid="journal-team-column" className="flex flex-col gap-3 items-end min-h-0 max-h-full" style={{ width: teamColumnWidth(shown, widths) }}>
-          {shown.team && team && display && (
-            <CardFrame testId="journal-team-card" width={widths.team} onCommitWidth={null}>
-              <TeamPanel
-                card
-                team={{ ...team, mode: 'full' }}
-                activeTabId={activeTabId}
-                onSetMode={() => {}}
-                onOpen={(sessionId) => display.onOpenSeat(team.teamKey, sessionId)}
-                onReorder={(ids) => display.onReorderMembers(team.teamKey, ids)}
-              />
-            </CardFrame>
-          )}
+    <div ref={rootRef} data-testid="journal-card-stack" className="absolute z-20 top-0 bottom-0 flex items-start justify-end gap-3 pointer-events-none" style={{ right: STACK_MARGIN + reserved }}>
+      {shown.roadmap && (
+        <div data-testid="journal-side-column" className="flex flex-col gap-3 items-end min-h-0 max-h-full" style={{ width: widths.roadmap }}>
           {shown.roadmap && detail && unit && (
             <CardFrame testId="journal-detail-card" width={widths.roadmap} onCommitWidth={commit('roadmap')} title={t('journal.detail.title')} onClose={closeDetail}>
               <ConfirmDetail entry={detail} personName={unit.personName} onClose={closeDetail} />

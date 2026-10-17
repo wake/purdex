@@ -35,8 +35,8 @@ interface Props {
   onSetMode: (mode: PanelMode) => void
   onOpen: (sessionId: string) => void
   onReorder: (sessionIds: string[]) => void
-  /** Drawn as the journal stack's team card (J-2b): open or closed and nothing else, so no title-bar / enlarge controls. */
-  card?: boolean
+  /** The tab's journal.v1 host decides the workbook view is off (J-2b R2 A-1): no drill, whatever host the lead is on. The lead's own host also turns it off. */
+  noDrill?: boolean
 }
 
 export function TeamPanel(props: Props) {
@@ -49,8 +49,8 @@ export function TeamPanel(props: Props) {
   const { rootRef, hdr, editOpen, close, anchor } = useHeaderGestures({ teamKey: team.teamKey, mode: team.mode, onSetMode: props.onSetMode, canEdit })
   // A drilled-in seat takes the place of the list (the drill is the store's, so it outlives this component).
   // On a journal.v1 host the workbook view is off (J-2b): a persisted drill is ignored here, not erased, so an older host still finds it.
-  const journalHost = useIsJournalHost(hostId)
-  const drill = useTeamUiStore((s) => (journalHost || props.card ? undefined : s.teamDrill[team.teamKey]))
+  const journalHost = useIsJournalHost(hostId) || props.noDrill === true
+  const drill = useTeamUiStore((s) => (journalHost ? undefined : s.teamDrill[team.teamKey]))
   const endedTitle = useTeamUiStore((s) => drill ? s.endedSeats[team.teamKey]?.find((e) => e.hostId === drill.hostId && e.sessionId === drill.sessionId)?.title : undefined)
   const drillTitle = drill
     ? [team.lead, ...team.members].find((m) => m.sessionId === drill.sessionId && m.hostId === drill.hostId)?.title ?? endedTitle ?? drill.sessionId
@@ -59,7 +59,7 @@ export function TeamPanel(props: Props) {
     <div ref={rootRef} data-testid="team-panel" data-mode={team.mode} className={`text-xs text-text-primary${drill ? ' flex flex-col flex-1 min-h-0' : ''}`}>
       {drill ? (
         <TeamSeatWorkbookView teamKey={team.teamKey} hostId={drill.hostId} sessionId={drill.sessionId} title={drillTitle} />
-      ) : team.mode === 'line' ? <LinePanel {...props} hdr={hdr} /> : <FullPanel {...props} hdr={hdr} />}
+      ) : team.mode === 'line' ? <LinePanel {...props} hdr={hdr} /> : <FullPanel {...props} noDrill={journalHost} hdr={hdr} />}
       {editOpen && canEdit && (
         <TeamEditPopover
           target={{ hostId, teamId, name: roster.team_name, label: roster.team_label, color: roster.team_color ?? null }}
@@ -97,7 +97,8 @@ export function ToTitleBarButton({ onClick }: { onClick: () => void }) {
   )
 }
 
-function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, card, hdr }: Props & { hdr: HeaderHandlers }) {
+/** `noDrill`: the lead lives on a journal.v1 host (J-2b), where no row offers the workbook drill, whatever host the seat is on. */
+function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, noDrill, hdr }: Props & { noDrill: boolean; hdr: HeaderHandlers }) {
   const t = useI18nStore((s) => s.t)
   const { teamKey, color, lead, members } = team
   const order = members.map((m) => m.sessionId)
@@ -108,17 +109,15 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, card, hdr 
       <div data-testid="team-panel-header" className={HEADER_CLASS} style={headerStyle} {...hdr}>
         <NameCapsule team={team} />
         <span data-testid="team-panel-count" className="text-text-muted whitespace-nowrap">· {t('team.panel.members', { count: members.length })}</span>
-        {!card && (
-          <span className="ml-auto flex items-center gap-0.5">
-            <ToTitleBarButton onClick={() => onSetMode('titlebar')} />
-          </span>
-        )}
+        <span className="ml-auto flex items-center gap-0.5">
+          <ToTitleBarButton onClick={() => onSetMode('titlebar')} />
+        </span>
       </div>
       <div className="border-t border-border-subtle py-1.5 flex flex-col gap-1">
-        <PanelRow noDrill={card} teamKey={teamKey} seat={lead} color={color} isActive={lead.tabId !== null && lead.tabId === activeTabId} onOpen={onOpen} />
+        <PanelRow noDrill={noDrill} teamKey={teamKey} seat={lead} color={color} isActive={lead.tabId !== null && lead.tabId === activeTabId} onOpen={onOpen} />
         {members.map((m) => (
           <PanelRow
-            noDrill={card}
+            noDrill={noDrill}
             key={m.sessionId}
             teamKey={teamKey}
             seat={m}
@@ -131,7 +130,7 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, card, hdr 
           />
         ))}
       </div>
-      <EndedGroup teamKey={teamKey} noDrill={card} />
+      <EndedGroup teamKey={teamKey} noDrill={noDrill} />
     </>
   )
 }

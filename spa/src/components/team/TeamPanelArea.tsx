@@ -84,6 +84,7 @@ export function TeamPanelArea() {
             team={shownTeam}
             activeTabId={activeTabId}
             width={draft ?? width}
+            noDrill={journalHost}
             onSetMode={(m) => useTeamUiStore.getState().setPanelMode(shownTeam.teamKey, m)}
             onOpen={(sessionId) => display.onOpenSeat(shownTeam.teamKey, sessionId)}
             onReorder={(ids) => display.onReorderMembers(shownTeam.teamKey, ids)}
