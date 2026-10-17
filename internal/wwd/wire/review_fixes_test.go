@@ -1,6 +1,9 @@
 package wire
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestSubmissionResponse(t *testing.T) {
 	roundTrip[JobSubmissionResponse](t, "submission_response.json")
@@ -72,5 +75,26 @@ func TestExceptionExactlyOneBound(t *testing.T) {
 func TestClaimRequestNeedsWorker(t *testing.T) {
 	if _, err := Decode[ClaimRequest]([]byte(`{}`)); err == nil {
 		t.Fatal("empty claim request accepted")
+	}
+}
+
+func TestSubmissionResponseOmitsResultUnlessCacheHit(t *testing.T) {
+	keys := func(v JobSubmissionResponse) map[string]json.RawMessage {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := map[string]json.RawMessage{}
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	if _, ok := keys(JobSubmissionResponse{ID: "j_1"})["result"]; ok {
+		t.Fatal("non-cache-hit submission must not carry a result key")
+	}
+	hit := roundTrip[JobSubmissionResponse](t, "submission_response_cache_hit.json")
+	if _, ok := keys(hit)["result"]; !ok {
+		t.Fatal("cache-hit submission must carry result")
 	}
 }
