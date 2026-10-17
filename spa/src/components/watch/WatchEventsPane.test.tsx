@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, within, act } from '@testing-library/react'
 
 const readWatchRow = vi.fn()
 vi.mock('../../lib/watch/watch-row', async (orig) => ({ ...(await orig<typeof import('../../lib/watch/watch-row')>()), readWatchRow: (...a: unknown[]) => readWatchRow(...a) }))
@@ -100,11 +100,21 @@ describe('WatchEventsPane — rows', () => {
     expect(within(row).getByTestId('event-command').className).toContain('font-mono')
     expect(within(row).getByTestId('event-facts')).toHaveTextContent(['/w/p', 'sess', t('watch.events.peak_cores', { n: '6.3' }), t('watch.events.peak_mb', { n: 900 }), t('watch.events.duration', { t: '3m05s' })].join('・'))
   })
-  it('an E2 row has the machine-wide sentence instead of a command', () => {
+  it('the host on a row is the host-look name of the App host, whatever the payload\'s host says, and follows a rename', () => {
+    asGuardian('awake')
+    setEvents({ h1: [ev('1', at(17, 9), { host: 'mlab' }), ev('2', at(17, 8), { host: 'mlab', kind: 'pressure_high' })] })
+    useHostStore.setState((s) => ({ hosts: { ...s.hosts, h1: { ...s.hosts.h1, name: '工作站' } } }))
+    mount()
+    expect(screen.getAllByTestId('event-host').map((n) => n.textContent)).toEqual(['工作站', '工作站'])
+    expect(screen.getAllByTestId('event-command')[1]).toHaveTextContent(t('watch.events.pressure_line', { host: '工作站' }))
+    act(() => { useHostStore.setState((s) => ({ hosts: { ...s.hosts, h1: { ...s.hosts.h1, name: '書房' } } })) })
+    expect(screen.getAllByTestId('event-host').map((n) => n.textContent)).toEqual(['書房', '書房'])
+  })
+  it('an E2 row has the machine-wide sentence, with the App host name, instead of a command', () => {
     asGuardian('awake')
     setEvents({ h1: [ev('1', at(17, 9), { kind: 'pressure_high', host: 'a19', pressure: 2, detail: 'swap 3 GB' })] })
     mount()
-    expect(screen.getByTestId('event-command')).toHaveTextContent(t('watch.events.pressure_line', { host: 'a19' }))
+    expect(screen.getByTestId('event-command')).toHaveTextContent(t('watch.events.pressure_line', { host: 'mlab' }))
     expect(screen.getByTestId('event-facts')).toHaveTextContent('swap 3 GB')
     expect(screen.getByTestId('event-kind').className).toContain('text-status-error-text')
   })
