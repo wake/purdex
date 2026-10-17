@@ -86,11 +86,13 @@ func (r *FastReader) Read(now time.Time) (Fast, error) {
 	if r.src.Mach != nil {
 		if vm, err := r.src.Mach.VM(); err == nil {
 			pageouts, havePageouts = vm.Pageouts, true
-			// the same arithmetic as the sampler's Mem: (memory size - (free + inactive + speculative) pages) / memory size
+			// the sampler's Mem: (memory size - (free + inactive + speculative) pages) / memory size. Mach's free_count already holds the
+			// speculative pages (vm_stat prints free_count - speculative_count as "Pages free"), so adding Speculative again counts them
+			// twice (#3074).
 			ps, perr := r.src.PageSize()
 			total, terr := r.src.MemBytes()
 			if perr == nil && terr == nil && ps > 0 && total > 0 {
-				avail := float64(vm.Free+vm.Inactive+vm.Speculative) * float64(ps)
+				avail := float64(vm.Free+vm.Inactive) * float64(ps)
 				f.Mem, haveMem = min(max(100*(1-avail/float64(total)), 0), 100), true
 			}
 		}
