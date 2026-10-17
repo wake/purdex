@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -146,6 +147,13 @@ var texts = map[string]map[string]string{
 		"self_relay_idle_half": "趁快取還在時接力最省；不核准的話，5 分鐘後會先寫好接力檔（不清空）",
 		"member_relay":         "%s：%s 要幫 member %s 接力（context %d%%）",
 		"member_relay_by":      "member 額度用完，要核准嗎？",
+		"spawn_resources":      "%s：%s 要開 member，主機資源%s",
+		"spawn_resources_body": "記憶體 %d%%、壓力 %s、load %.1f。放行或不放行？",
+		"zone_warning":         "警戒",
+		"zone_danger":          "危險",
+		"pressure_1":           "正常",
+		"pressure_2":           "警告",
+		"pressure_4":           "嚴重",
 		"hook_ask":             "%s：%s 在等你回答",
 	},
 	"en": {
@@ -157,6 +165,13 @@ var texts = map[string]map[string]string{
 		"self_relay_idle_half": "Relaying while the cache is warm is cheapest; otherwise a handoff file is written in 5 minutes (nothing is cleared)",
 		"member_relay":         "%s: %s wants to relay member %s (context %d%%)",
 		"member_relay_by":      "The member quota is used up. Approve?",
+		"spawn_resources":      "%s: %s wants to open a member, host resources %s",
+		"spawn_resources_body": "Memory %d%%, pressure %s, load %.1f. Let it through?",
+		"zone_warning":         "tight",
+		"zone_danger":          "critical",
+		"pressure_1":           "normal",
+		"pressure_2":           "warning",
+		"pressure_4":           "critical",
 		"hook_ask":             "%s: %s is waiting for your answer",
 	},
 }
@@ -184,13 +199,14 @@ func CountsForBadge(kind string) bool {
 const ApprovalCategory = "PDX_APPROVAL"
 
 // ApprovalContent is the push for a newly opened approval, or false when this approval is not pushed: only lead,
-// self_relay, member_relay and an answerable hook_ask (not terminal_only) are (spec §5.1).
+// self_relay, member_relay, spawn_resources and an answerable hook_ask (not terminal_only) are (spec §5.1; the module sends a
+// spawn_resources card only when relay.push_spawn_cards is on).
 func ApprovalContent(a Approval, hostLabel, locale string) (Content, bool) {
 	t := table(locale)
 	who := originLabel(a.Origin)
 	c := Content{Kind: a.Kind, ApprovalID: a.ID, CollapseID: a.ID}
 	switch a.Kind {
-	case "lead", "self_relay", "member_relay":
+	case "lead", "self_relay", "member_relay", "spawn_resources":
 		c.Category = ApprovalCategory
 	}
 	switch a.Kind {
@@ -243,6 +259,37 @@ func ApprovalContent(a Approval, hostLabel, locale string) (Content, bool) {
 		}
 		c.Title = fmt.Sprintf(t["member_relay"], hostLabel, lead, member, int(math.Round(p.Used)))
 		c.Body = t["member_relay_by"]
+	case "spawn_resources":
+		// A spawn that waits for the person because the host is in the warning or danger zone (RT-5b). The lead's title is
+		// written by a session, so it is normalised and cut like the member relay's.
+		var p struct {
+			LeadTitle string `json:"lead_title"`
+			LeadRef   string `json:"lead_ref"`
+			Host      struct {
+				Zone     string  `json:"zone"`
+				Mem      float64 `json:"mem"`
+				Pressure int     `json:"pressure"`
+				Load1    float64 `json:"load1"`
+			} `json:"host"`
+		}
+		_ = json.Unmarshal(a.Payload, &p)
+		lead := Normalise(p.LeadTitle, maxNamedRunes)
+		if lead == "" {
+			lead = Normalise(p.LeadRef, maxNamedRunes)
+		}
+		if lead == "" {
+			lead = Normalise(who, maxNamedRunes)
+		}
+		zone := t["zone_danger"]
+		if p.Host.Zone == "warning" {
+			zone = t["zone_warning"]
+		}
+		pressure := t["pressure_"+strconv.Itoa(p.Host.Pressure)]
+		if pressure == "" {
+			pressure = "?"
+		}
+		c.Title = fmt.Sprintf(t["spawn_resources"], hostLabel, lead, zone)
+		c.Body = fmt.Sprintf(t["spawn_resources_body"], int(math.Round(p.Host.Mem)), pressure, p.Host.Load1)
 	case "hook_ask":
 		var p struct {
 			TerminalOnly bool            `json:"terminal_only"`

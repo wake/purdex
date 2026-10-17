@@ -33,6 +33,7 @@ import (
 	"github.com/wake/purdex/internal/devices"
 	"github.com/wake/purdex/internal/module/agent"
 	devicesmod "github.com/wake/purdex/internal/module/devices"
+	"github.com/wake/purdex/internal/module/hostconfig"
 	"github.com/wake/purdex/internal/module/session"
 	"github.com/wake/purdex/internal/push"
 	"github.com/wake/purdex/internal/push/apns"
@@ -66,6 +67,8 @@ type Module struct {
 	presence presenceChecker        // what the gates ask; nil = pres
 	pres     *Presence              // what PUT /api/push/presence feeds
 	sender   atomic.Pointer[sender] // read by the approval callback, which Stop does not wait for
+	// switches reads relay.push_spawn_cards (RT-5b); nil = from the registry, looked up at use (hostconfig may Init after this module).
+	switches hostconfig.RelaySwitchReader
 	unsub    func()
 
 	// The agent-event side (agent_trigger.go).
@@ -396,6 +399,10 @@ func (m *Module) onApproval(op string, a team.Approval) {
 		logApproval(a, "not pushed: kind")
 		return
 	}
+	if a.Kind == team.KindSpawnResources && !m.pushSpawnCardsOn() {
+		logApproval(a, "not pushed: relay.push_spawn_cards is off")
+		return
+	}
 	m.openedApproval(a, pa)
 }
 
@@ -598,4 +605,20 @@ func (m *Module) Close() error {
 		return m.store.Close()
 	}
 	return nil
+}
+
+// pushSpawnCardsOn is the host switch relay.push_spawn_cards (RT-5b): off by default, and off whenever it cannot be read. 88
+// turns it on once the iOS App knows the spawn_resources kind.
+func (m *Module) pushSpawnCardsOn() bool {
+	r := m.switches
+	if r == nil && m.core != nil && m.core.Registry != nil {
+		if svc, ok := m.core.Registry.Get(hostconfig.RelaySwitchesKey); ok {
+			r, _ = svc.(hostconfig.RelaySwitchReader)
+		}
+	}
+	if r == nil {
+		return false
+	}
+	sw, err := r.RelaySwitches()
+	return err == nil && sw.PushSpawnCards
 }

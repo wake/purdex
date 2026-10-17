@@ -303,6 +303,44 @@ func TestSpawnCmd_PostsAgainWhileAwaitingResources(t *testing.T) {
 	}
 }
 
+func spawnAwaitingWith(zone string, mem float64, pressure int) func(team.SpawnRequest) answer {
+	return func(req team.SpawnRequest) answer {
+		a := spawnAwaiting(req)
+		op := a.body.(team.SpawnOp)
+		op.Resources = &team.SpawnResourcesPayload{Host: team.SpawnResourcesHost{Zone: zone, Mem: mem, Pressure: pressure}}
+		return answer{body: op}
+	}
+}
+
+// RT-5b T46: the line is printed once however long the wait; the exit codes are the plan's.
+func TestSpawnCmd_ResourceCardLineAndExitCodes(t *testing.T) {
+	d := &fakeTeamCmdDaemon{spawns: []func(team.SpawnRequest) answer{spawnAwaitingWith("warning", 83.4, 2), spawnAwaitingWith("warning", 83.4, 2), spawnDone}}
+	code, _, stderr := driveTeamCmd(t, runSpawnCmd, d, "--model", "sonnet")
+	if code != ExitOK || strings.Count(stderr, "主機資源緊") != 1 || !strings.Contains(stderr, "主機資源緊（警戒：記憶體 83%、壓力 警告），等使用者放行…") {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	d = &fakeTeamCmdDaemon{spawns: []func(team.SpawnRequest) answer{spawnAwaitingWith("danger", 95, 4), spawnAwaitingWith("danger", 95, 4), spawnDone}}
+	if _, _, stderr = driveTeamCmd(t, runSpawnCmd, d, "--model", "sonnet"); !strings.Contains(stderr, "主機資源緊（危險：記憶體 95%、壓力 嚴重）") {
+		t.Fatalf("danger stderr=%q", stderr)
+	}
+	for _, c := range []struct {
+		reason string
+		want   int
+		text   string
+	}{
+		{team.SpawnReasonDenied, ExitDenied, "使用者不放行"},
+		{team.SpawnReasonTimeout, ExitTimeout, "沒有人放行"},
+		{team.SpawnReasonCLIGone, ExitCancelled, "放行卡已作廢"},
+		{team.ErrUnattendedRefused, ExitRefused, team.UnattendedRefusedText},
+	} {
+		d := &fakeTeamCmdDaemon{spawns: []func(team.SpawnRequest) answer{spawnAwaiting, spawnFailed(c.reason)}}
+		code, stdout, stderr := driveTeamCmd(t, runSpawnCmd, d, "--model", "sonnet")
+		if code != c.want || stdout != "" || !strings.Contains(stderr, c.text) || lastToken(stderr) != c.reason {
+			t.Errorf("%s: code=%d (want %d) stdout=%q stderr=%q", c.reason, code, c.want, stdout, stderr)
+		}
+	}
+}
+
 // While the op runs the CLI posts the same body again (the daemon joins);
 // three consecutive attempts with no answer at all are exit 20.
 func TestSpawnCmd_PostsAgainWhileRunning(t *testing.T) {

@@ -34,10 +34,13 @@ type RelaySwitches struct {
 	SelfLead bool `json:"self_lead"` // a lead
 	// SpawnResourceCheck: a spawn in the warning or danger zone opens a spawn_resources card (RT-5a). Off by default (and left
 	// out of the stored row while off): the Mac App has to show the card first; the lead turns it on.
-	SpawnResourceCheck bool   `json:"spawn_resource_check,omitempty"`
-	PromptWrite        string `json:"prompt_write,omitempty"`
-	PromptFix          string `json:"prompt_fix,omitempty"`
-	PromptSeed         string `json:"prompt_seed,omitempty"`
+	SpawnResourceCheck bool `json:"spawn_resource_check,omitempty"`
+	// PushSpawnCards: a spawn_resources card is pushed to the phones (RT-5b). Off by default, left out of the row while off: 88
+	// turns it on once the iOS App knows the kind.
+	PushSpawnCards bool   `json:"push_spawn_cards,omitempty"`
+	PromptWrite    string `json:"prompt_write,omitempty"`
+	PromptFix      string `json:"prompt_fix,omitempty"`
+	PromptSeed     string `json:"prompt_seed,omitempty"`
 }
 
 // DefaultRelaySwitches is what a host that never wrote the row reads as.
@@ -68,9 +71,9 @@ func relayFields(raw json.RawMessage) (map[string]json.RawMessage, error) {
 	}
 	for k := range fields {
 		switch k {
-		case "self_solo", "self_lead", "spawn_resource_check", "prompt_write", "prompt_fix", "prompt_seed":
+		case "self_solo", "self_lead", "spawn_resource_check", "push_spawn_cards", "prompt_write", "prompt_fix", "prompt_seed":
 		default:
-			return nil, errors.New("unknown relay field " + k + "; only self_solo, self_lead, spawn_resource_check, prompt_write, prompt_fix and prompt_seed")
+			return nil, errors.New("unknown relay field " + k + "; only self_solo, self_lead, spawn_resource_check, push_spawn_cards, prompt_write, prompt_fix and prompt_seed")
 		}
 	}
 	return fields, nil
@@ -85,14 +88,14 @@ func relaySwitchesOf(fields map[string]json.RawMessage) (RelaySwitches, error) {
 	for _, f := range []struct {
 		key string
 		dst *bool
-	}{{"self_solo", &out.SelfSolo}, {"self_lead", &out.SelfLead}, {"spawn_resource_check", &out.SpawnResourceCheck}} {
+	}{{"self_solo", &out.SelfSolo}, {"self_lead", &out.SelfLead}, {"spawn_resource_check", &out.SpawnResourceCheck}, {"push_spawn_cards", &out.PushSpawnCards}} {
 		v, present := fields[f.key]
 		if !present {
 			continue
 		}
 		var b bool
 		if bytes.Equal(bytes.TrimSpace(v), []byte("null")) || json.Unmarshal(v, &b) != nil {
-			return RelaySwitches{}, errors.New("self_solo, self_lead and spawn_resource_check must be booleans")
+			return RelaySwitches{}, errors.New("self_solo, self_lead, spawn_resource_check and push_spawn_cards must be booleans")
 		}
 		*f.dst = b
 	}

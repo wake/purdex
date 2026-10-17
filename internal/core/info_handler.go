@@ -67,6 +67,7 @@ var capabilities = []string{
 	"team.person.v1",          // person-typed commands: person tokens, direct /relay, decided_by.kind person, unattended_refused, PUT unattended refused (RT-1)
 	"relay.unanswered.v1",     // pause cause relay_unanswered, approval unanswered_at, a person's release = deny, the bounce text by cause (RT-2a)
 	"relay.half.v1",           // an idle card of 300 s whose timeout writes a half (relay_ops.mode, begin --half / --reuse, POST /api/relay/fresh), GET /api/relay/fresh, relay.fresh events, fresh_handoff on RosterSession, fresh_half on hello (RT-3a)
+	"team.spawn_resources.v1", // card kind spawn_resources (payload per the App contract), SpawnOp.state awaiting_resources / .resources, failed reasons spawn_denied / spawn_timeout / spawn_abandoned, host config relay.spawn_resource_check and relay.push_spawn_cards (RT-5)
 }
 
 // pushReady reports whether the push module is mounted AND has its key (its Status says ready). A mounted module whose

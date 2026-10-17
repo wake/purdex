@@ -98,7 +98,7 @@ func TestNormalizeRelay_PromptFields(t *testing.T) {
 	}
 	_, err = normalizeRelay(json.RawMessage(`{"prompt_writ":"x"}`))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "self_solo, self_lead, spawn_resource_check, prompt_write, prompt_fix and prompt_seed")
+	assert.Contains(t, err.Error(), "self_solo, self_lead, spawn_resource_check, push_spawn_cards, prompt_write, prompt_fix and prompt_seed")
 
 	m := newTestModule(t)
 	for _, items := range []string{`{"prompt_fix":"[pdx-relay"}`, `{"prompt_seed":"a\u007fb"}`, `{"prompt_write":null}`,
@@ -220,4 +220,24 @@ func TestRelaySwitches_SpawnResourceCheck(t *testing.T) {
 	rr = serve(m, http.MethodPut, "/api/hostconfig/relay", `{"items":{"self_solo":true},"baseRevision":1}`)
 	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
 	assert.JSONEq(t, `{"items":{"self_solo":true,"self_lead":true},"revision":2}`, rr.Body.String(), "a PUT that leaves it out turns it off, as every switch left out")
+}
+
+// RT-5b: relay.push_spawn_cards is off by default and left out of the row while off; a PUT turns it on; it must be a boolean.
+func TestRelaySwitches_PushSpawnCards(t *testing.T) {
+	m := newTestModule(t)
+	sw, err := m.RelaySwitches()
+	require.NoError(t, err)
+	assert.False(t, sw.PushSpawnCards)
+
+	rr := serve(m, http.MethodPut, "/api/hostconfig/relay", `{"items":{"push_spawn_cards":true},"baseRevision":0}`)
+	require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	assert.JSONEq(t, `{"items":{"self_solo":true,"self_lead":true,"push_spawn_cards":true},"revision":1}`, rr.Body.String())
+	sw, err = m.RelaySwitches()
+	require.NoError(t, err)
+	assert.True(t, sw.PushSpawnCards)
+	assert.False(t, sw.SpawnResourceCheck, "the two switches are independent")
+
+	for _, body := range []string{`{"items":{"push_spawn_cards":"yes"},"baseRevision":1}`, `{"items":{"push_spawn_cards":null},"baseRevision":1}`} {
+		assert.Equal(t, http.StatusBadRequest, serve(m, http.MethodPut, "/api/hostconfig/relay", body).Code, body)
+	}
 }

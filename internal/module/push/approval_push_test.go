@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wake/purdex/internal/module/hostconfig"
 	"github.com/wake/purdex/internal/push"
 	"github.com/wake/purdex/internal/push/apns"
 	"github.com/wake/purdex/internal/team"
@@ -607,5 +608,46 @@ func TestLate_ARepeatedOpenedDoesNotTakeAPushingCard(t *testing.T) {
 	te.events.emit("opened", a)
 	if te.stateOf("ap1") != apPushing || te.timers.pending() != 0 {
 		t.Fatalf("state = %v, timers = %d", te.stateOf("ap1"), te.timers.pending())
+	}
+}
+
+type fakeSwitchReader struct {
+	sw  hostconfig.RelaySwitches
+	err error
+}
+
+func (f fakeSwitchReader) RelaySwitches() (hostconfig.RelaySwitches, error) { return f.sw, f.err }
+
+func spawnCardApproval(id string) team.Approval {
+	a := leadApproval(id)
+	a.Kind = team.KindSpawnResources
+	a.Payload = json.RawMessage(`{"lead_title":"iface-lead","lead_ref":"_abc123","host":{"zone":"warning","mem":83.4,"pressure":2,"load1":12.34}}`)
+	return a
+}
+
+// RT-5b T47: a spawn_resources card is pushed only when relay.push_spawn_cards is on; off by default and when the switch cannot be
+// read. Mutation gate: drop the check in onApproval -> the off cases push -> red.
+func TestSpawnResourcesCard_PushedOnlyWhenTheSwitchIsOn(t *testing.T) {
+	for name, c := range map[string]struct {
+		sw     fakeSwitchReader
+		pushed bool
+	}{
+		"off by default": {fakeSwitchReader{}, false},
+		"unreadable":     {fakeSwitchReader{sw: hostconfig.RelaySwitches{PushSpawnCards: true}, err: errors.New("db")}, false},
+		"on":             {fakeSwitchReader{sw: hostconfig.RelaySwitches{PushSpawnCards: true}}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			te, _ := lateEnv(t, false)
+			te.mod.switches = c.sw
+			te.events.emit("opened", spawnCardApproval("sp1"))
+			if !c.pushed {
+				te.noApprovalSends(t)
+				return
+			}
+			calls := te.settled(t)
+			if len(calls) != 1 || !strings.Contains(calls[0].Payload, `"category":"PDX_APPROVAL"`) || !strings.Contains(calls[0].Payload, "wants to open a member") {
+				t.Fatalf("sends = %+v", calls)
+			}
+		})
 	}
 }

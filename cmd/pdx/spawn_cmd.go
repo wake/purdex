@@ -205,6 +205,10 @@ func runSpawnCmd(ctx context.Context, args []string, getenv func(string) string,
 		}
 		fmt.Fprintf(stderr, "pdx spawn: %s %s\n", detail, team.SpawnReasonStartTimeout)
 		return ExitMemberFailed
+	case op.State == team.SpawnFailed && spawnCardReasonExit[op.Reason] != 0:
+		// the person's answer to the resource card, or the unattended switch (RT-5b)
+		fmt.Fprintf(stderr, "pdx spawn: %s %s\n", spawnCardReasonText(op), sanitizeCell(op.Reason))
+		return spawnCardReasonExit[op.Reason]
 	case op.State == team.SpawnFailed && remoteSpawnReasonExit[op.Reason] != 0:
 		// what the member host (or the 10 minute void, or an unpairing) said, for a spawn --host
 		fmt.Fprintf(stderr, "pdx spawn: spawn %s 失敗 %s\n", sanitizeCell(op.ID), sanitizeCell(op.Reason))
@@ -247,6 +251,7 @@ func spawnSettle(ctx context.Context, client *daemonclient.Client, req team.Spaw
 	defer cancel()
 	defer time.AfterFunc(spawnSettleBound, cancel).Stop()
 	hung := 0
+	said := false // the "waiting for the person" line is printed once
 	for {
 		var op team.SpawnOp
 		_, err := client.Do(bounded, http.MethodPost, "/api/team/spawns", req, &op, daemonclient.Idempotent())
@@ -257,6 +262,9 @@ func spawnSettle(ctx context.Context, client *daemonclient.Client, req team.Spaw
 			fmt.Fprintf(stderr, "pdx spawn: spawn %s 在期限內沒有結束，daemon 上可能仍在進行；先用 pdx team 確認，不要直接重開 %s\n",
 				req.ID, spawnWaitTimeout)
 			return op, ExitError
+		case err == nil && op.State == team.SpawnAwaitingResources && !said:
+			said = true
+			fmt.Fprintln(stderr, spawnResourcesLine(op.Resources))
 		case err == nil: // running, or waiting for the person's resource card (RT-5a): the same body again joins the op and keeps the card alive
 			hung = 0
 		case ctx.Err() == nil && (errors.Is(err, daemonclient.ErrNoAnswer) || errors.Is(err, context.DeadlineExceeded)):
@@ -326,4 +334,45 @@ func briefErr(err error) (detail, code string) {
 	default:
 		return err.Error(), daemonclient.ErrUnavailable.Error()
 	}
+}
+
+// spawnCardReasonExit maps the reasons a spawn_resources card gives a failed op to their exit codes (spec §4.6, plan T46): the
+// person said no 10, 480 s without an answer 11, the card was abandoned 12, unattended mode refused it 13.
+var spawnCardReasonExit = map[string]int{
+	team.SpawnReasonDenied:    ExitDenied,
+	team.SpawnReasonTimeout:   ExitTimeout,
+	team.SpawnReasonCLIGone:   ExitCancelled,
+	team.ErrUnattendedRefused: ExitRefused,
+}
+
+// spawnCardReasonText says why a spawn did not start, in the words the person and the lead's agent read.
+func spawnCardReasonText(op team.SpawnOp) string {
+	switch op.Reason {
+	case team.SpawnReasonDenied:
+		return "使用者不放行，member 沒有開"
+	case team.SpawnReasonTimeout:
+		return "主機資源緊，等了 8 分鐘沒有人放行，member 沒有開"
+	case team.SpawnReasonCLIGone:
+		return "放行卡已作廢，member 沒有開"
+	}
+	if op.Detail != "" {
+		return sanitizeCell(op.Detail)
+	}
+	return team.UnattendedRefusedText
+}
+
+// spawnResourcesLine is what the CLI prints once while a spawn waits for the person's answer on the resource card.
+func spawnResourcesLine(r *team.SpawnResourcesPayload) string {
+	if r == nil { // an older daemon's op without the figures
+		return "pdx spawn: 主機資源緊，等使用者放行…"
+	}
+	zone := "危險"
+	if r.Host.Zone == "warning" {
+		zone = "警戒"
+	}
+	pressure := map[int]string{1: "正常", 2: "警告", 4: "嚴重"}[r.Host.Pressure]
+	if pressure == "" {
+		pressure = "未知"
+	}
+	return fmt.Sprintf("pdx spawn: 主機資源緊（%s：記憶體 %.0f%%、壓力 %s），等使用者放行…", zone, r.Host.Mem, pressure)
 }

@@ -276,3 +276,32 @@ func TestApprovalContent_SelfRelayIdleNeedsSaneMinutes(t *testing.T) {
 		t.Fatalf("unknown locale falls back to zh-TW: %q", c.Title)
 	}
 }
+
+// RT-5b T47: the spawn_resources push, texts as the plan words them.
+func TestApprovalContent_SpawnResourcesInBothLocales(t *testing.T) {
+	a := approvalOpened("spawn_resources", map[string]any{
+		"lead_title": "iface-lead", "lead_ref": "_abc123",
+		"host": map[string]any{"zone": "warning", "mem": 83.4, "pressure": 2, "load1": 12.34},
+	}, "origin-title", "origin-name")
+	c, ok := ApprovalContent(a, "mlab", "zh-TW")
+	if !ok || c.Title != "mlab：iface-lead 要開 member，主機資源警戒" || c.Body != "記憶體 83%、壓力 警告、load 12.3。放行或不放行？" ||
+		c.Kind != "spawn_resources" || c.Category != ApprovalCategory || c.CollapseID != "ap1" {
+		t.Fatalf("zh-TW = %+v ok %v", c, ok)
+	}
+	a2 := approvalOpened("spawn_resources", map[string]any{"lead_title": "", "lead_ref": "_abc123",
+		"host": map[string]any{"zone": "danger", "mem": 95, "pressure": 4, "load1": 20}}, "", "")
+	if c, _ := ApprovalContent(a2, "mlab", "zh-TW"); c.Title != "mlab：_abc123 要開 member，主機資源危險" || !strings.Contains(c.Body, "壓力 嚴重") {
+		t.Fatalf("danger / fallback = %+v", c)
+	}
+	if c, _ := ApprovalContent(a, "mlab", "en"); c.Title != "mlab: iface-lead wants to open a member, host resources tight" || c.Body != "Memory 83%, pressure warning, load 12.3. Let it through?" {
+		t.Fatalf("en = %+v", c)
+	}
+	// A payload that is not the wire shape still gives a card, not a panic; the badge does not count the kind yet.
+	bad := Approval{ID: "ap2", Kind: "spawn_resources", Payload: json.RawMessage(`"x"`), Origin: ApprovalOrigin{Name: "n"}}
+	if c, ok := ApprovalContent(bad, "mlab", "en"); !ok || !strings.Contains(c.Title, "wants to open a member") {
+		t.Fatalf("bad payload = %+v ok %v", c, ok)
+	}
+	if CountsForBadge("spawn_resources") {
+		t.Fatal("the badge counts a card the iOS App cannot show yet")
+	}
+}
