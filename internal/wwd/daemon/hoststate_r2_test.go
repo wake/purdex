@@ -62,6 +62,59 @@ func TestOwnerRuleIsValidatedAgainstTheHost(t *testing.T) {
 	}
 }
 
+// The same rules hold for what wwd starts with: a config value or a row saved by an
+// earlier wwd that no longer fits is not carried into the running state (R2).
+func TestStartupSettingsAreValidatedToo(t *testing.T) {
+	bad := wire.WorkerSettings{Enabled: true, Slots: wire.Slots{Heavy: 1, Light: 1}, OwnerRule: "hid<10000m"}
+	st, err := NewHostState(HostStateOptions{Host: "h", OwnerRuleSupported: true, Initial: bad})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Worker(); got.OwnerRule != "" || !got.Enabled || got.Slots.Heavy != 1 {
+		t.Errorf("an unparsable starting rule must be cleared, the rest kept: %+v", got)
+	}
+	st, _ = NewHostState(HostStateOptions{Host: "h", OwnerRuleSupported: false, Initial: wire.WorkerSettings{Enabled: true, OwnerRule: "hid<5m"}})
+	if st.Worker().OwnerRule != "" {
+		t.Error("a host without the owner rule started with one")
+	}
+
+	path := filepath.Join(t.TempDir(), "wwd.db")
+	s, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.SaveWorker(wire.WorkerSettings{Enabled: true, Slots: wire.Slots{Heavy: 2, Light: 2}, OwnerRule: "free text"}); err != nil {
+		t.Fatal(err)
+	}
+	st, err = NewHostState(HostStateOptions{Store: s, Host: "h", OwnerRuleSupported: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Worker(); got.OwnerRule != "" || got.Slots.Heavy != 2 {
+		t.Errorf("a saved free-text rule must be cleared, the slots kept: %+v", got)
+	}
+}
+
+// An exception for a process that cannot be identified is refused: it could not
+// be told apart from a later process with the same pid (R2).
+func TestPIDExceptionNeedsAnIdentity(t *testing.T) {
+	st, err := NewHostState(HostStateOptions{
+		Host: "h", Initial: wire.WorkerSettings{Enabled: true},
+		PidAlive: func(int) bool { return true }, PidIdent: func(int) (string, bool) { return "", false },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid := 1234
+	if _, err := st.AddException(wire.Exception{Name: "x", PID: &pid, Holds: []wire.Hold{}}); err == nil {
+		t.Fatal("an exception was bound to a pid with no identity")
+	}
+	if len(st.Active()) != 0 {
+		t.Fatal("it is active anyway")
+	}
+}
+
 // A pid exception is tied to the process it was made for: the same pid held by
 // another process is not that process (R2).
 func TestPIDExceptionDoesNotSurvivePidReuse(t *testing.T) {

@@ -38,6 +38,7 @@ func (r *stateRig) reopen(t *testing.T) {
 	r.st, err = NewHostState(HostStateOptions{
 		Store: s, Host: "mlab", OwnerRuleSupported: true, Initial: wire.WorkerSettings{Enabled: true, Slots: wire.Slots{Heavy: 1, Light: 2}},
 		Now: func() time.Time { return r.now }, PidAlive: func(p int) bool { return r.alive[p] }, Events: r.b,
+		PidIdent: func(p int) (string, bool) { return "id", r.alive[p] },
 	})
 	if err != nil {
 		t.Fatal(err)

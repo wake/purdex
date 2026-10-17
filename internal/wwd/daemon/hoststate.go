@@ -72,14 +72,15 @@ func NewHostState(o HostStateOptions) (*HostState, error) {
 	if o.PidIdent == nil {
 		o.PidIdent = facts.ProcIdent
 	}
-	s := &HostState{opts: o, store: o.Store, worker: o.Initial, excs: map[string]store.Stored{}}
+	s := &HostState{opts: o, store: o.Store, excs: map[string]store.Stored{}}
+	s.worker = s.sane(o.Initial, "config")
 	if s.store == nil {
 		return s, nil
 	}
 	if ws, ok, err := s.store.LoadWorker(); err != nil {
 		return nil, err
 	} else if ok {
-		s.worker = ws
+		s.worker = s.sane(ws, "wwd.db")
 	}
 	saved, err := s.store.LoadExceptions()
 	if err != nil {
@@ -147,22 +148,43 @@ func (s *HostState) Worker() wire.WorkerSettings {
 	return s.worker
 }
 
-// SetWorker replaces the worker settings. changed is false (and nothing is saved
-// or announced) when they are the same as before.
-func (s *HostState) SetWorker(ws wire.WorkerSettings) (changed bool, err error) {
+// checkWorker is the one rule for worker settings, for a PUT and for what wwd
+// starts with alike.
+func (s *HostState) checkWorker(ws wire.WorkerSettings) error {
 	if ws.Slots.Heavy < 0 || ws.Slots.Light < 0 {
-		return false, invalid("slots cannot be negative")
+		return invalid("slots cannot be negative")
 	}
 	if len(ws.OwnerRule) > maxOwnerRuleLen {
-		return false, invalid("owner_rule is longer than %d bytes", maxOwnerRuleLen)
+		return invalid("owner_rule is longer than %d bytes", maxOwnerRuleLen)
 	}
 	if ws.OwnerRule != "" {
 		if !s.opts.OwnerRuleSupported {
-			return false, invalid("this host has no owner rule")
+			return invalid("this host has no owner rule")
 		}
 		if _, ok := ParseOwnerRule(ws.OwnerRule); !ok {
-			return false, invalid("owner_rule must be empty or hid<N>m (N = 1-9999)")
+			return invalid("owner_rule must be empty or hid<N>m (N = 1-9999)")
 		}
+	}
+	return nil
+}
+
+// sane takes settings wwd starts with (from the config or from wwd.db): an
+// owner_rule that does not pass checkWorker is cleared and logged, the rest is
+// kept, so the shown rule is always the one in force.
+func (s *HostState) sane(ws wire.WorkerSettings, from string) wire.WorkerSettings {
+	if err := s.checkWorker(ws); err != nil {
+		log.Printf("wwd: worker settings from %s: %v; owner_rule cleared", from, err)
+		ws.OwnerRule = ""
+		ws.Slots.Heavy, ws.Slots.Light = max(ws.Slots.Heavy, 0), max(ws.Slots.Light, 0)
+	}
+	return ws
+}
+
+// SetWorker replaces the worker settings. changed is false (and nothing is saved
+// or announced) when they are the same as before.
+func (s *HostState) SetWorker(ws wire.WorkerSettings) (changed bool, err error) {
+	if err := s.checkWorker(ws); err != nil {
+		return false, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -194,8 +216,18 @@ func (s *HostState) AddException(e wire.Exception) (changed bool, err error) {
 	if e.Until != nil && !e.Until.After(now) {
 		return false, invalid("until is already past")
 	}
-	if e.PID != nil && !s.opts.PidAlive(*e.PID) {
-		return false, invalid("pid %d is not running", *e.PID)
+	var ident string
+	if e.PID != nil {
+		if !s.opts.PidAlive(*e.PID) {
+			return false, invalid("pid %d is not running", *e.PID)
+		}
+		// the identity is what tells this process from a later one with the same pid;
+		// without it the exception could outlive its process
+		id, ok := s.opts.PidIdent(*e.PID)
+		if !ok || id == "" {
+			return false, invalid("cannot identify the process of pid %d", *e.PID)
+		}
+		ident = id
 	}
 	if e.Holds == nil {
 		e.Holds = []wire.Hold{}
@@ -208,10 +240,7 @@ func (s *HostState) AddException(e wire.Exception) (changed bool, err error) {
 	if _, ok := s.excs[e.Name]; !ok && len(s.excs) >= maxExceptions {
 		return false, invalid("at most %d exceptions at a time", maxExceptions)
 	}
-	st := store.Stored{Exception: e, Since: now}
-	if e.PID != nil {
-		st.PIDIdent, _ = s.opts.PidIdent(*e.PID)
-	}
+	st := store.Stored{Exception: e, Since: now, PIDIdent: ident}
 	if s.store != nil {
 		if err := s.store.SaveException(st); err != nil {
 			return false, err
