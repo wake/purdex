@@ -6,7 +6,8 @@
 // a watcher that is coming up must still read as busy when the tab comes back. There is one slot, because there is one watcher:
 //   sending → the request is on its way (busy)
 //   busy    → the daemon took it (200 / 202 of a wake, 202 of a start); busy until the watcher registers, i.e. the status store
-//             says awake (a `watch.changed` read). Nothing else releases it but a host change: no `watch.changed` = still busy.
+//             says awake (a `watch.changed` read) — or, for a start, resting (registered, with a session). A wake starts from
+//             resting, so for it only awake counts. Nothing else releases it but a host change: no `watch.changed` = still busy.
 //   timeout → not busy: the daemon took the request but no watcher registered within `WATCH_LAUNCH_TIMEOUT_MS`. The button can be
 //             pressed again; a registration (awake) or a host change clears the line.
 //   notice  → not busy: already awake (start 200), a cooldown (409) or an error. The button can be pressed again.
@@ -81,7 +82,14 @@ const identityOf = (hostId: string): string | null => {
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v !== '' ? v : undefined)
 
-const awakeNow = (): boolean => deriveGuardian(useWatchStatusStore.getState().byHost).state === 'awake'
+/**
+ * Has the watcher registered, for a request of this kind? A wake starts from resting, so only awake counts; a start starts from
+ * none, so resting counts too (the watcher is registered and has its session by then, and its tab shows it).
+ */
+const registered = (kind: LaunchKind, byHost: Record<string, WatchEntry>): boolean => {
+  const state = deriveGuardian(byHost).state
+  return state === 'awake' || (kind === 'start' && state === 'resting')
+}
 
 /** Where a start goes when no watcher is registered: any reachable watch host (the daemon picks the host that starts it). */
 export function startTarget(byHost: Record<string, WatchEntry>, hostOrder: readonly string[]): string | undefined {
@@ -119,7 +127,7 @@ export async function requestLaunch(kind: LaunchKind, hostId: string): Promise<v
 
   if (res.status === 200 || res.status === 202) {
     // The watcher registered while the request was on its way: nothing to wait for.
-    if (awakeNow()) return settle(null)
+    if (registered(kind, useWatchStatusStore.getState().byHost)) return settle(null)
     if (kind === 'start' && res.status === 200) {
       settle({ phase: 'awake_already', kind, hostId, seq })
       rereadWatchStatus(hostId) // this App's status was stale (it showed no watcher): read it again
@@ -140,13 +148,15 @@ export async function requestLaunch(kind: LaunchKind, hostId: string): Promise<v
 
 /**
  * Installed once from main.tsx. Returns how to stop it.
- *  - The watcher registering (the status store says awake, after a `watch.changed` read) ends whatever the slot holds.
+ *  - The watcher registering (the status store says awake, after a `watch.changed` read; for a start, resting too) ends whatever
+ *    the slot holds.
  *  - A host that is gone, not connected or re-pointed at another daemon takes its slot with it.
  */
 export function startWatchLaunch(): () => void {
   const unsubStatus = useWatchStatusStore.subscribe((next, prev) => {
     if (next.byHost === prev.byHost) return
-    if (useWatchLaunchStore.getState().slot && deriveGuardian(next.byHost).state === 'awake') useWatchLaunchStore.setState({ slot: null })
+    const slot = useWatchLaunchStore.getState().slot
+    if (slot && registered(slot.kind, next.byHost)) useWatchLaunchStore.setState({ slot: null })
   })
   const unsubHosts = useHostStore.subscribe((next, prev) => {
     const slot = useWatchLaunchStore.getState().slot

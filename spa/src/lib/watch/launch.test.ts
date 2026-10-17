@@ -171,9 +171,50 @@ describe('busy', () => {
     reply(202, { host: 'mlab', host_id: 'd1' })
     await requestLaunch('start', 'h1')
     answer('h1', status('d1', 'none'))
-    answer('h1', status('d1', 'resting'))
     await flush()
     expect(isLaunchBusy(slot())).toBe(true)
+  })
+
+  it('a start ends when the watcher registers resting too (it has a session by then)', async () => {
+    stops.push(startWatchLaunch())
+    answer('h1', status('d1', 'none'))
+    reply(202, { host: 'mlab', host_id: 'd1' })
+    await requestLaunch('start', 'h1')
+    expect(isLaunchBusy(slot())).toBe(true)
+    answer('h1', status('d1', 'resting'))
+    expect(slot()).toBeNull()
+  })
+
+  it('a start that was answered after the watcher registered resting leaves nothing to wait for', async () => {
+    answer('h1', status('d1', 'none'))
+    const wait = deferred<Response>()
+    hostFetch.mockReturnValueOnce(wait.promise)
+    const p = requestLaunch('start', 'h1')
+    answer('h1', status('d1', 'resting'))
+    wait.resolve(new Response(JSON.stringify({ host: 'mlab', host_id: 'd1' }), { status: 202 }))
+    await p
+    expect(slot()).toBeNull()
+  })
+
+  it('a start still ends when the watcher registers awake', async () => {
+    stops.push(startWatchLaunch())
+    answer('h1', status('d1', 'none'))
+    reply(202, { host: 'mlab', host_id: 'd1' })
+    await requestLaunch('start', 'h1')
+    answer('h1', status('d1', 'awake'))
+    expect(slot()).toBeNull()
+  })
+
+  it('a wake starts from resting: still resting is still busy, awake ends it', async () => {
+    stops.push(startWatchLaunch())
+    answer('h1', status('d1', 'resting'))
+    reply(202, { starting: true })
+    await requestLaunch('wake', 'h1')
+    expect(isLaunchBusy(slot())).toBe(true)
+    answer('h1', status('d1', 'resting')) // another read that still says resting
+    expect(isLaunchBusy(slot())).toBe(true)
+    answer('h1', status('d1', 'awake'))
+    expect(slot()).toBeNull()
   })
 
   it('ends when the watcher registers: a `watch.changed` read that says awake', async () => {
@@ -293,6 +334,18 @@ describe('busy times out after 120 s without a registration', () => {
     await goBusy()
     vi.advanceTimersByTime(60_000)
     answer('h1', status('d1', 'awake'))
+    expect(slot()).toBeNull()
+    expect(vi.getTimerCount()).toBe(0)
+    vi.advanceTimersByTime(120_000)
+    expect(slot()).toBeNull()
+  })
+
+  it('a start whose watcher registers resting ends busy, and the timer is gone: no timeout line at the deadline', async () => {
+    stops.push(startWatchLaunch())
+    answer('h1', status('d1', 'none'))
+    await goBusy()
+    vi.advanceTimersByTime(60_000)
+    answer('h1', status('d1', 'resting'))
     expect(slot()).toBeNull()
     expect(vi.getTimerCount()).toBe(0)
     vi.advanceTimersByTime(120_000)

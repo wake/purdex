@@ -181,6 +181,17 @@ describe('啟動守門員', () => {
     act(() => answer('h1', status('d1', 'none'))) // later, the watcher is gone again: the button is not stuck busy
     expect(start()).toBeEnabled()
   })
+
+  it('the watcher registering resting (it has a session) releases the busy state too', async () => {
+    reply(202, { host: 'mlab', host_id: 'd1' })
+    render(<WatchLaunchPanel title="x" />)
+    fireEvent.click(start())
+    await waitFor(() => expect(start()).toBeDisabled())
+    act(() => answer('h1', status('d1', 'resting')))
+    expect(useWatchLaunchStore.getState().slot).toBeNull()
+    expect(wake()).toBeEnabled() // the none panel became the resting one: not stuck busy
+    expect(screen.queryByTestId('watch-launch-note')).toBeNull()
+  })
 })
 
 describe('叫醒守門員', () => {
@@ -226,6 +237,16 @@ describe('叫醒守門員', () => {
     fireEvent.click(wake())
     await waitFor(() => expect(note()).toHaveTextContent(t('watch.launch.err_network')))
     expect(wake()).toBeEnabled()
+  })
+
+  it('a read that still says resting keeps it busy', async () => {
+    reply(200, { starting: false })
+    render(<WatchLaunchPanel title="x" />)
+    fireEvent.click(wake())
+    await waitFor(() => expect(wake()).toBeDisabled())
+    act(() => answer('h1', status('d1', 'resting')))
+    expect(wake()).toBeDisabled()
+    expect(useWatchLaunchStore.getState().slot).toMatchObject({ phase: 'busy', kind: 'wake' })
   })
 
   it('awake releases the busy state', async () => {
