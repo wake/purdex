@@ -157,6 +157,16 @@ describe('WatchSettings — the 守門員 section', () => {
     expect(screen.queryByTestId('watch-set-targets-differ')).toBeNull()
   })
 
+  it('a peer that cannot be read is said so, and is not taken for the same order', async () => {
+    daemons.B = { items: { ...FULL }, revision: 5 } // would match, but cannot be read
+    const inner = hostFetch.getMockImplementation()!
+    hostFetch.mockImplementation(async (id: string, path: string, init?: RequestInit) => (id === 'B' ? new Response('nope', { status: 500 }) : inner(id, path, init)))
+    daemonPage({ peerIds: ['B'] })
+    const line = await screen.findByTestId('watch-set-compare-unreadable')
+    expect(line).toHaveTextContent(t('watch.set.compare_unreadable', { host: 'B' }))
+    expect(screen.queryByTestId('watch-set-targets-differ')).toBeNull()
+  })
+
   it('offline: nothing is read, nothing can be edited', async () => {
     daemonPage({ offline: true })
     expect(await screen.findByTestId('watch-set-offline')).toHaveTextContent(t('watch.set.offline'))

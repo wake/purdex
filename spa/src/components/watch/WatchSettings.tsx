@@ -3,6 +3,7 @@
 // note and F-2a2's probe-host editor. The gate settings (設定組, 資源管制, slots) are W5c2.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useHostStore } from '../../stores/useHostStore'
 import { HostConfigApiError, HostConfigConflictError } from '../../lib/host-config-api'
 import { forgetWatchDraft, readWatchDraft, watchDraftKey, writeWatchDraft } from '../../lib/watch/draft-memory'
 import { parseWatchRow, readWatchRow, type WatchRow } from '../../lib/watch/watch-row'
@@ -73,7 +74,8 @@ function GuardianSection({ hostConfigId, fleetHostId, offline, peerIds }: { host
   const [errors, setErrors] = useState<Partial<Record<WatchKey, string>>>({})
   const [notice, setNotice] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [peerTargets, setPeerTargets] = useState<string[][]>([])
+  const [peers, setPeers] = useState<{ id: string; targets: string[] | null }[]>([])
+  const hostNames = useHostStore((s) => s.hosts)
   const rowRef = useRef<WatchRow | null>(null)
   const peerKey = peerIds.join('\n')
 
@@ -89,11 +91,13 @@ function GuardianSection({ hostConfigId, fleetHostId, offline, peerIds }: { host
   }, [hostConfigId, offline])
 
   useEffect(() => {
-    if (offline || !peerKey) { setPeerTargets([]); return }
+    if (offline || !peerKey) { setPeers([]); return }
     let live = true
-    void Promise.all(peerKey.split('\n').map(readWatchRow)).then((rows) => {
-      if (live) setPeerTargets(rows.filter((r): r is WatchRow => r !== null).map(targetsOf))
-    })
+    // Each peer is remembered with whether it could be read: one that cannot is "cannot compare", never "the same".
+    void Promise.all(peerKey.split('\n').map(async (id) => {
+      const r = await readWatchRow(id)
+      return { id, targets: r ? targetsOf(r) : null }
+    })).then((rows) => { if (live) setPeers(rows) })
     return () => { live = false }
   }, [peerKey, offline])
 
@@ -131,7 +135,8 @@ function GuardianSection({ hostConfigId, fleetHostId, offline, peerIds }: { host
 
   const w = state.w
   const mine = targetsOf(w)
-  const differs = peerTargets.some((p) => p.join('\n') !== mine.join('\n'))
+  const differs = peers.some((p) => p.targets !== null && p.targets.join('\n') !== mine.join('\n'))
+  const unreadablePeers = peers.filter((p) => p.targets === null).map((p) => hostNames[p.id]?.name ?? p.id)
   const locked = offline || busy
 
   const commitText = (f: { key: WatchKey; kind: Kind }) => async (raw: string): Promise<boolean> => {
@@ -173,6 +178,9 @@ function GuardianSection({ hostConfigId, fleetHostId, offline, peerIds }: { host
             <div className="-mt-2 mb-1 text-[11px] text-text-muted" data-testid={`watch-set-source-${f.key}`}>{source}</div>
             {err && <p data-testid={`watch-set-error-${f.key}`} role="alert" className="mb-1 text-xs text-status-error-text whitespace-pre-wrap">{err}</p>}
             {f.key === 'targets' && differs && <p data-testid="watch-set-targets-differ" className="mb-1 text-xs text-status-warning-text">{t('watch.set.targets_differ')}</p>}
+            {f.key === 'targets' && unreadablePeers.length > 0 && (
+              <p data-testid="watch-set-compare-unreadable" className="mb-1 text-xs text-status-warning-text">{t('watch.set.compare_unreadable', { host: unreadablePeers.join(', ') })}</p>
+            )}
           </div>
         )
       })}
