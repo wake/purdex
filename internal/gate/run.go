@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -130,7 +131,7 @@ func (g *Gate) wait(ctx context.Context, cfg Config, class Class, o Options, sig
 		d.Rank, d.HeldS, d.ConflictS = rankName(rank), heldFor.Seconds(), blockedFor.Seconds()
 		blockKey := ""
 		if blocked != nil {
-			blockKey = blocked.With + "|" + blocked.Rule.A + "|" + blocked.Rule.B
+			blockKey = strings.Join([]string{blocked.With, string(blocked.Rule.Class), blocked.Rule.A, blocked.Rule.B, blocked.Rule.Reason}, "|")
 			d.Conflict = blocked.Rule.A + " × " + blocked.Rule.B
 			d.why("conflict") // recorded beside whatever else keeps it waiting too
 		}
