@@ -160,18 +160,22 @@ func (m *Module) patrolStep(ctx context.Context) {
 		}
 	}
 	every, why := m.patrolInterval(patrolSettings{s.PatrolPresentMin, s.PatrolBusyMin, s.PatrolCalmMin, s.PatrolRestMin, s.DiskLowGB}, h.State == watch.HolderResting)
+	// base is the latest of the last note, the watcher's registration and the daemon's start; a stamp that is ahead of the clock (it went
+	// back) is replaced by now, kept as the last note, so the count goes on from here instead of waiting for the clock to catch up
 	m.patrol.mu.Lock()
-	base := m.patrol.last
+	base, clamped := time.Time{}, false
+	for _, t := range []time.Time{m.patrol.last, h.Since, m.patrol.started} {
+		if t.After(now) {
+			t, clamped = now, true
+		}
+		if t.After(base) {
+			base = t
+		}
+	}
+	if clamped {
+		m.patrol.last = now
+	}
 	m.patrol.mu.Unlock()
-	if h.Since.After(base) {
-		base = h.Since
-	}
-	if m.patrol.started.After(base) { // after a restart of the daemon the count starts again from there (the last note is not on disk)
-		base = m.patrol.started
-	}
-	if base.After(now) { // the clock went back: count from now, not from a time that has not come
-		base = now
-	}
 	if now.Sub(base) < every {
 		return
 	}
