@@ -156,6 +156,13 @@ and amended by the user 10-17)
   - 「資料夾」: `TeamRootsEditor` and the other hosts' roots (`HostRootsSection`), moved;
   - 「接力額度」: the lead's own 自動接力 and the member pool, the same steppers as the unattended panel, writing through
     the same `relay-quota-writer` (one value per chain root, so both places show the same number at once).
+  - Reading: today the quota rows (`SessionQuota`: `session_id`, `root_session_id`, the values) reach the store only
+    when the unattended panel reads `GET /api/team/unattended` (`UnattendedPanel.tsx:158-183`); the roster carries none
+    (`lib/team/roster.ts:78-99`). Opening the team settings therefore reads that same route for the lead's host and
+    fills the same store (one reader, shared by both panels, single-flight per host); while it loads the section shows
+    「讀取中…」; on an error the section shows the error line and no steppers; a host without `team.relay_quota.v1`
+    shows no 接力額度 section. The cap and folders read as they do today (the roster's `max_members` / `in_use`, the roots
+    store).
 - **Unattended panel**: the cap column and the folders leave it; the relay-quota section keeps both steppers (own; pool
   on a lead). The paused list and the auto-approved list are unchanged.
 - **Team names (U15)**: wherever the unattended panel names a lead's row (the quota rows, the held rows, the paused
@@ -274,7 +281,9 @@ Tests (each with a mutation that turns it red):
 - JV-5b: the gear on a lead's team panel only; the cap stepper and folders in the team settings and gone from the
   unattended panel (M: leave the cap in the unattended panel); a quota change in the team settings shows in the
   unattended panel at once and the reverse (one store; M: a second copy of the value); the rules of the moved cap
-  stepper (min = members in use, max 8) unchanged.
+  stepper (min = members in use, max 8) unchanged; a cold start (the unattended panel never opened) → opening the team
+  settings reads the quotas and shows them (M: rely on the unattended panel's read); loading, error and a host without
+  `team.relay_quota.v1`; two quick opens make one request (single-flight).
 - WA-1: the badge size / offset classes, the indicator's left margin and the gap between cells (class assertions, each
   with a mutation); the guardian shield's badge unchanged; screenshots before / after (light, dark).
 - WA-2: label 「守門員」 while the session runs (M: label by pane content); no group look in the area (M: group the fixed
