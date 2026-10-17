@@ -49,6 +49,10 @@ func Materialize(ctx context.Context, in MaterializeIn) (Workspace, error) {
 	return fromTar(ctx, in)
 }
 
+// maxBundleDownload is the most of a bundle the worker writes to disk, whatever the origin sends: a little over the origin's own limit.
+// (A variable so that a test can lower it.)
+var maxBundleDownload = 288 << 20
+
 // errUseTar says that the bundle way did not work out for a reason a tar fixes.
 var errUseTar = errors.New("snapshot: use a tar")
 
@@ -79,6 +83,9 @@ func fromClone(ctx context.Context, in MaterializeIn) (Workspace, error) {
 			default:
 				err = fetchBundle(ctx, in.Clone, ref, body)
 				body.Close()
+				if errors.Is(err, ErrBundleTooLarge) {
+					return Workspace{}, errUseTar
+				}
 				if err != nil {
 					return Workspace{}, err
 				}
@@ -94,18 +101,22 @@ func fromClone(ctx context.Context, in MaterializeIn) (Workspace, error) {
 			return Workspace{}, fmt.Errorf("snapshot: the bundle holds %s, not the snapshot commit %s", got, in.Commit)
 		}
 	}
-	if _, err := git(ctx, "wwd.snapshot-worktree", in.Clone, "worktree", "add", "--detach", "--force", in.Dir, in.Commit); err != nil {
-		_, _ = git(ctx, "wwd.snapshot-unref", in.Clone, "update-ref", "-d", ref)
-		return Workspace{}, err
-	}
 	clone, dir := in.Clone, in.Dir
-	return Workspace{Dir: dir, Cleanup: func() error {
+	cleanup := func() error {
 		// the worktree first, then the ref (its commit is then free for the clone's gc), then whatever is left of the directory
 		_, err1 := git(context.Background(), "wwd.snapshot-wtrm", clone, "worktree", "remove", "--force", dir)
 		_, err2 := git(context.Background(), "wwd.snapshot-unref", clone, "update-ref", "-d", ref)
-		err3 := os.RemoveAll(dir)
-		return errors.Join(err1, err2, err3)
-	}}, nil
+		_, err3 := git(context.Background(), "wwd.snapshot-prune", clone, "worktree", "prune")
+		err4 := os.RemoveAll(dir)
+		return errors.Join(err1, err2, err3, err4)
+	}
+	// core.hooksPath: the clone's post-checkout hook is the host's, not the job's, and would run before `start` and outside the job's
+	// environment. (A filter driver the host configured is the host's too: it runs only for a path the snapshot's .gitattributes names.)
+	if _, err := git(ctx, "wwd.snapshot-worktree", clone, "-c", "core.hooksPath="+os.DevNull, "worktree", "add", "--detach", "--force", dir, in.Commit); err != nil {
+		_ = cleanup() // git removes what it made when the checkout fails; this makes sure, and drops the ref
+		return Workspace{}, err
+	}
+	return Workspace{Dir: dir, Cleanup: cleanup}, nil
 }
 
 // haveCandidates are the commits to offer as `have`, newest first: the tip of the clone's default branch when it contains the base (the
@@ -130,12 +141,15 @@ func fetchBundle(ctx context.Context, clone, ref string, body io.Reader) error {
 		return err
 	}
 	defer os.Remove(f.Name())
-	_, err = io.Copy(f, body)
+	n, err := io.Copy(f, io.LimitReader(body, int64(maxBundleDownload)+1))
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
 		return fmt.Errorf("snapshot: reading the bundle: %w", err)
+	}
+	if n > int64(maxBundleDownload) {
+		return ErrBundleTooLarge // the temporary file goes with the defer
 	}
 	// the ref is forced: an earlier try of this job on this host may have left it
 	_, err = git(ctx, "wwd.snapshot-fetch", clone, "fetch", "-q", "--no-tags", f.Name(), "+"+ref+":"+ref)

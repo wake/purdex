@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -282,4 +283,83 @@ func TestMaterialize_ACommitTheCloneHoldsStillNeedsALiveClaim(t *testing.T) {
 	require.NoError(t, err)
 	checkTree(t, ws.Dir)
 	assert.Equal(t, []string{"bundle", "bundle"}, rec.seen(), "one question each, no download")
+}
+
+// The clone's post-checkout hook is not run by the checkout of a snapshot: it would run outside the job's environment, before `start`.
+func TestMaterialize_TheClonesCheckoutHookDoesNotRun(t *testing.T) {
+	m := newMaterializeCase(t, "j_12")
+	marker := filepath.Join(t.TempDir(), "hook-ran")
+	hook := m.clone + "/.git/hooks/post-checkout"
+	writeFile(t, hook, "#!/bin/sh\ntouch "+marker+"\n")
+	require.NoError(t, os.Chmod(hook, 0o755))
+	ws, err := Materialize(context.Background(), m.in(serveRecorded(t, m.src, &recorder{}), "j_12", filepath.Join(t.TempDir(), "ws")))
+	require.NoError(t, err)
+	checkTree(t, ws.Dir)
+	_, serr := os.Stat(marker)
+	assert.True(t, os.IsNotExist(serr), "the hook ran")
+}
+
+// A checkout that fails after git made the worktree (here a required filter that fails) leaves nothing: no directory, no entry in the
+// clone, no ref.
+func TestMaterialize_AFailedCheckoutLeavesNothing(t *testing.T) {
+	repo, base, _ := origin(t)
+	writeFile(t, repo+"/.gitattributes", "a.txt filter=wwdfail\n")
+	info, err := gate.SnapshotTree(context.Background(), "", repo)
+	require.NoError(t, err)
+	snap := info.SHA
+	require.NoError(t, Pin(context.Background(), repo, "j_13", snap))
+	clone := filepath.Join(t.TempDir(), "clone")
+	gitOut(t, repo, "clone", "-q", "--no-local", ".", clone)
+	gitOut(t, clone, "config", "filter.wwdfail.smudge", "false")
+	gitOut(t, clone, "config", "filter.wwdfail.required", "true")
+	claim := wire.NewClaimID()
+	src := &fakeSource{claimID: claim, ref: Ref{RepoDir: repo, Commit: snap, Base: base}}
+	c := serveRecorded(t, src, &recorder{})
+	dir := filepath.Join(t.TempDir(), "ws")
+	_, err = Materialize(context.Background(), MaterializeIn{Client: c, JobID: "j_13", ClaimID: claim, Commit: snap, Base: base, Clone: clone, Dir: dir})
+	require.Error(t, err)
+	_, serr := os.Stat(dir)
+	assert.True(t, os.IsNotExist(serr), "no directory")
+	assert.NotContains(t, gitOut(t, clone, "worktree", "list"), "ws", "no worktree entry")
+	assert.Empty(t, gitOut(t, clone, "for-each-ref", "refs/wwd/"), "no ref")
+}
+
+// A bundle that never ends is cut off at the worker's own limit and the tar is asked for.
+func TestMaterialize_ABundleThatNeverEndsIsCutOff(t *testing.T) {
+	old := maxBundleDownload
+	maxBundleDownload = 64 << 10
+	t.Cleanup(func() { maxBundleDownload = old })
+	m := newMaterializeCase(t, "j_14")
+	var mu sync.Mutex
+	var formats []string
+	h := NewHandler(m.src)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/jobs/{id}/snapshot", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		formats = append(formats, r.URL.Query().Get("format"))
+		mu.Unlock()
+		if r.URL.Query().Get("format") == "bundle" {
+			w.Header().Set("Content-Type", "application/x-git-bundle")
+			chunk := make([]byte, 32<<10)
+			for r.Context().Err() == nil {
+				if _, err := w.Write(chunk); err != nil {
+					return
+				}
+			}
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	c := NewClient(srv.URL, "pool-token")
+	t.Cleanup(c.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	ws, err := Materialize(ctx, m.in(c, "j_14", filepath.Join(t.TempDir(), "ws")))
+	require.NoError(t, err)
+	checkTree(t, ws.Dir)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []string{"bundle", "tar"}, formats)
 }
