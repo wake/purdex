@@ -592,6 +592,13 @@ func TestTamperedMarkerIsIgnoredNotObeyed(t *testing.T) {
 	if got := s2.Held(); len(got) != 1 {
 		t.Fatalf("Held = %+v, want only the genuine marker", got)
 	}
+	// the genuine marker gone: the copy under another name must not stand in for it
+	if err := os.Remove(filepath.Join(r.markers, name)); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.open().Held(); len(got) != 0 {
+		t.Fatalf("a marker under the wrong file name was obeyed: %+v", got)
+	}
 	if !exists(filepath.Join(r.markers, "garbage.json")) || !exists(filepath.Join(r.markers, "deadbeef.json")) {
 		t.Fatal("unreadable markers must be left for a human, not deleted")
 	}
