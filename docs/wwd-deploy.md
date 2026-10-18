@@ -183,3 +183,9 @@ rm -f ~/.local/share/wwd/fault/owner-active                                     
 
 While H3 is on at mlab, `pdx wwd pool` and `/v1/facts` show a `zone_override` for it; nothing else on mlab changes (the gate
 keeps reading the real zone). While H2 is on at air26, `free` shows 0/0 for it, which is what a real active owner shows.
+
+**Which hooks work today.** H0, H1 and H2 work as soon as this is deployed. H3 and H4 only *declare* themselves in
+`/v1/info` until the worker side exists: H3's `zone_override` is read by the worker's pick (`Derived.PickZone()`, in the
+worker loop of WWD-4a-4b), and H4's delay is applied by the `snapshot.Client` the worker builds (WWD-4a-4c fills
+`Client.Delay` with `hooks.SnapshotDelay`). Until those merge, cases 8 and 5a cannot be run even with the keys set; check
+that both are in the deployed build before reading a pass or a fail from them.
