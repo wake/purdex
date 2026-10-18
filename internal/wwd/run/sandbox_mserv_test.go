@@ -170,18 +170,30 @@ func TestMServ(t *testing.T) {
 		}
 	})
 	t.Run("G_protectsystem_strict", func(t *testing.T) {
-		opt := os.Getenv("WWD_E2E_OPT_DIR") // a directory under /opt that this user owns
-		script := "for p in /var/tmp/4d3-x " + opt + "/4d3-x /usr/local/4d3-x; do if touch $p 2>/dev/null; then echo WROTE:$p; rm -f $p; else echo DENIED:$p; fi; done; " +
-			"php -v | head -1; composer --version 2>&1 | head -1"
+		// paths outside the home directory that this user can write on mserv (found with find -writable): /var/crash and
+		// /var/log/installer by group, /var/tmp by the sticky bit (PrivateTmp covers /var/tmp too: a write there is private, not
+		// denied). /opt and /usr/local hold nothing this user owns, and /srv/backups is real data: neither is probed.
+		script := "for p in /var/tmp/4d3-x /var/crash/4d3-x /var/log/installer/4d3-x; do if touch $p 2>/dev/null; then echo WROTE:$p; rm -f $p; else echo DENIED:$p; fi; done; php -v | head -1"
 		for _, extra := range [][]string{nil, {"ProtectSystem=strict"}} {
 			name := "G-" + map[bool]string{false: "without", true: "with"}[extra != nil]
 			r := runSB(t, name, Sandbox{ExtraProperties: extra}, 120*time.Second, bg, "sh", "-c", script)
 			t.Logf("%s: %s", name, r.out)
 		}
 		// a small composer project: install time and a passing test, without and with the property
-		proj := "mkdir -p p && cd p && printf '{\"require-dev\":{\"phpunit/phpunit\":\"^9\"}}' > composer.json && " +
-			"mkdir -p tests && printf '<?php class T extends PHPUnit\\\\Framework\\\\TestCase { public function testA(){ $this->assertTrue(true); } }' > tests/T.php && " +
-			"composer install --no-interaction --no-progress 2>&1 | tail -2 && vendor/bin/phpunit tests 2>&1 | tail -4"
+		// composer is not installed on mserv: its phar is fetched into the workspace (the cache then starts empty, as it will for a job)
+		proj := `s=$(date +%s)
+curl -sS --max-time 60 -o composer.phar https://getcomposer.org/download/latest-stable/composer.phar &&
+mkdir -p p/tests && cd p &&
+cat > composer.json <<'EOF'
+{"require-dev":{"phpunit/phpunit":"^11"}}
+EOF
+cat > tests/T.php <<'EOF'
+<?php
+class T extends PHPUnit\Framework\TestCase { public function testA(): void { $this->assertTrue(true); } }
+EOF
+php ../composer.phar install --no-interaction --no-progress 2>&1 | tail -2
+echo INSTALL_SECONDS=$(( $(date +%s) - s ))
+vendor/bin/phpunit tests 2>&1 | tail -4`
 		for _, extra := range [][]string{nil, {"ProtectSystem=strict"}} {
 			name := "Gc-" + map[bool]string{false: "without", true: "with"}[extra != nil]
 			r := runSB(t, name, Sandbox{ExtraProperties: extra}, 300*time.Second, bg, "sh", "-c", proj)
