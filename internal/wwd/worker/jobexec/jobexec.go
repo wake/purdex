@@ -12,8 +12,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
 	"time"
 
+	"github.com/wake/purdex/internal/wwd/manifest"
 	"github.com/wake/purdex/internal/wwd/run"
 	"github.com/wake/purdex/internal/wwd/snapshot"
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -28,6 +32,17 @@ type Fetcher interface {
 	Fetch(ctx context.Context, job wire.Job, claimID, clone, dir string) (snapshot.Workspace, error)
 }
 
+// PerJobDB makes and removes the database of a job whose task asks for one (db = "per-job"). Create returns the connection settings under
+// every name a task may read (DB_* and WP_TESTS_DB_*); the task's db_env says which set it gets. Drop is idempotent. Sweep (the loop's
+// Sweeper) removes the databases of jobs this worker no longer holds.
+type PerJobDB interface {
+	Create(ctx context.Context, jobID string) (map[string]string, error)
+	Drop(ctx context.Context, jobID string) error
+}
+
+// dropTimeout bounds the removal of a job's database when its workspace is cleaned up.
+const dropTimeout = 30 * time.Second
+
 // Config is what Exec needs from the worker.
 type Config struct {
 	// WorkRoot holds one directory per job.
@@ -40,6 +55,8 @@ type Config struct {
 	BackgroundDev bool
 	// Sandbox runs commands as transient systemd services (Linux hosts); nil: a process group.
 	Sandbox *run.Sandbox
+	// DB is the per-job database; nil: this host has none, and a task that asks for one is rejected.
+	DB PerJobDB
 	// ParentEnv is what allowed environment names are read from (os.Environ()).
 	ParentEnv []string
 	// Procs and KillAfter are passed to run.Run (the marker sweep's process source and the TERM→KILL grace); zero values are its defaults.
@@ -48,7 +65,11 @@ type Config struct {
 }
 
 // Exec implements runner.Exec.
-type Exec struct{ cfg Config }
+type Exec struct {
+	cfg Config
+	// dbJobs: the job directories whose job has a database (made in Prepare, dropped with the workspace)
+	dbJobs sync.Map
+}
 
 func New(cfg Config) *Exec { return &Exec{cfg: cfg} }
 
@@ -95,6 +116,7 @@ func (e *Exec) Materialize(ctx context.Context, job wire.Job, claimID string) (s
 		return snapshot.Workspace{}, err
 	}
 	inner := ws.Cleanup
+	jobID := job.ID
 	if filepath.Clean(ws.Dir) != wsDir(base) {
 		// Prepare and Run take the directory above the tree as the job's own (HOME, the run's files, a sandbox's writable path): a
 		// workspace anywhere else would widen that to whatever contains it
@@ -110,13 +132,19 @@ func (e *Exec) Materialize(ctx context.Context, job wire.Job, claimID string) (s
 		if inner != nil {
 			err = inner() // the worktree entry and the ref in the clone first
 		}
-		return errors.Join(err, os.RemoveAll(base))
+		var dberr error
+		if _, had := e.dbJobs.LoadAndDelete(base); had && e.cfg.DB != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), dropTimeout)
+			dberr = e.cfg.DB.Drop(ctx, jobID)
+			cancel()
+		}
+		return errors.Join(err, dberr, os.RemoveAll(base))
 	}}, nil
 }
 
 // Prepare checks the job against the snapshot's manifest and works out the command (package remotejob). A job that does not fit is a
 // *runner.Rejected; anything else is the worker's own trouble.
-func (e *Exec) Prepare(_ context.Context, job wire.Job, ws snapshot.Workspace) (runner.Plan, error) {
+func (e *Exec) Prepare(ctx context.Context, job wire.Job, ws snapshot.Workspace) (runner.Plan, error) {
 	out := outDir(filepath.Dir(ws.Dir))
 	if err := os.MkdirAll(out, 0o700); err != nil {
 		return runner.Plan{}, err
@@ -129,7 +157,41 @@ func (e *Exec) Prepare(_ context.Context, job wire.Job, ws snapshot.Workspace) (
 		}
 		return runner.Plan{}, err
 	}
-	return runner.Plan{Argv: p.Argv, Dir: p.Dir, Timeout: p.Timeout, TaskEnv: p.Env, Summary: p.Task.Summary, OutDir: out}, nil
+	env := p.Env
+	if p.Task.DB == "per-job" {
+		dbenv, err := e.makeDB(ctx, job, filepath.Dir(ws.Dir), p.Task.DBEnv)
+		if err != nil {
+			return runner.Plan{}, err
+		}
+		env = append(append([]string(nil), env...), dbenv...)
+	}
+	return runner.Plan{Argv: p.Argv, Dir: p.Dir, Timeout: p.Timeout, TaskEnv: env, Summary: p.Task.Summary, OutDir: out}, nil
+}
+
+// makeDB creates the job's database and returns the entries ("NAME=value", fixed values the task's env list cannot override) of the set
+// the task reads. Nothing is made for a job that did not pass the manifest's checks (this runs after them). A host with no per-job
+// database rejects the job: it is not something that would work on retry here.
+func (e *Exec) makeDB(ctx context.Context, job wire.Job, base, dbEnv string) ([]string, error) {
+	if e.cfg.DB == nil {
+		return nil, &runner.Rejected{Reason: "db_unavailable: this host has no per-job database"}
+	}
+	all, err := e.cfg.DB.Create(ctx, job.ID)
+	if err != nil {
+		return nil, fmt.Errorf("per-job database: %w", err)
+	}
+	e.dbJobs.Store(base, true)
+	prefix := "DB_"
+	if dbEnv == manifest.DBEnvWPTests {
+		prefix = "WP_"
+	}
+	var out []string
+	for k, v := range all {
+		if strings.HasPrefix(k, prefix) {
+			out = append(out, k+"="+v)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // Run runs the plan: dev jobs under background QoS where the host asks for it, as a systemd service where there is a Sandbox.

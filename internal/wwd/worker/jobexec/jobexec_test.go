@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 	"github.com/wake/purdex/internal/wwd/worker/runner"
 )
 
-const manifest = `
+const testManifest = `
 [tasks.hello]
 run     = "echo hello-from-the-job"
 args    = "none"
@@ -28,6 +29,19 @@ args    = "none"
 summary = "plain"
 env     = ["FOO=fixed-by-the-task"]
 timeout = "3m"
+
+[tasks.dbtask]
+run     = "env"
+args    = "none"
+summary = "plain"
+db      = "per-job"
+
+[tasks.wptask]
+run     = "env"
+args    = "none"
+summary = "plain"
+db      = "per-job"
+db_env  = "wptests"
 
 [tasks.sub]
 run     = "pwd"
@@ -51,7 +65,7 @@ func repo(t *testing.T) (dir, commit string) {
 			t.Fatal(err)
 		}
 	}
-	write(".wwd/tasks.toml", manifest)
+	write(".wwd/tasks.toml", testManifest)
 	write("sub/keep", "x")
 	for _, args := range [][]string{{"init", "-q"}, {"add", "-A"}, {"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "m"}} {
 		cmd := exec.Command("git", args...)
@@ -402,5 +416,142 @@ func TestAWorkspaceInTheWrongPlaceIsRefusedAndCleanedUp(t *testing.T) {
 		if _, err := os.Stat(e.JobDir(job("hello"), claimID)); !os.IsNotExist(err) {
 			t.Errorf("%s: the job directory stays: %v", name, err)
 		}
+	}
+}
+
+type fakeDB struct {
+	mu        sync.Mutex
+	created   []string
+	dropped   []string
+	createErr error
+}
+
+func (f *fakeDB) Create(_ context.Context, id string) (map[string]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.createErr != nil {
+		return nil, f.createErr
+	}
+	f.created = append(f.created, id)
+	return map[string]string{
+		"DB_HOST": "127.0.0.1", "DB_DATABASE": "wwd_x", "DB_PASSWORD": "pw",
+		"WP_TESTS_DB_NAME": "wwd_x", "WP_PHPUNIT__TABLE_PREFIX": "wptests_",
+	}, nil
+}
+
+func (f *fakeDB) Drop(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dropped = append(f.dropped, id)
+	return nil
+}
+
+func dbExec(t *testing.T, db PerJobDB) (*Exec, string, string) {
+	t.Helper()
+	r, commit := repo(t)
+	return New(Config{
+		WorkRoot: t.TempDir(), Fetchers: func(string) Fetcher { return &localFetcher{repo: r, commit: commit} },
+		ParentEnv: os.Environ(), DB: db,
+	}), r, commit
+}
+
+func TestATaskThatAsksForADatabaseGetsOneOfItsOwnAndOnlyTheNamesItReads(t *testing.T) {
+	db := &fakeDB{}
+	e, _, _ := dbExec(t, db)
+	ctx := context.Background()
+	for task, want := range map[string]struct{ has, hasNot string }{
+		"dbtask": {"DB_HOST=127.0.0.1", "WP_TESTS_DB_NAME"}, "wptask": {"WP_TESTS_DB_NAME=wwd_x", "DB_HOST"},
+	} {
+		j := job(task)
+		ws, err := e.Materialize(ctx, j, claimID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, err := e.Prepare(ctx, j, ws)
+		if err != nil {
+			t.Fatal(err)
+		}
+		joined := strings.Join(plan.TaskEnv, "\n")
+		if !strings.Contains(joined, want.has) || strings.Contains(joined, want.hasNot) {
+			t.Errorf("%s: env %v, want %q and not %q", task, plan.TaskEnv, want.has, want.hasNot)
+		}
+		if err := ws.Cleanup(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if len(db.created) != 2 || len(db.dropped) != 2 || db.dropped[0] != "j_a1" {
+		t.Fatalf("created %v dropped %v: the database goes with the workspace", db.created, db.dropped)
+	}
+}
+
+func TestATaskWithNoDatabaseCreatesNoneAndDropsNone(t *testing.T) {
+	db := &fakeDB{}
+	e, _, _ := dbExec(t, db)
+	ctx := context.Background()
+	ws, err := e.Materialize(ctx, job("hello"), claimID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Prepare(ctx, job("hello"), ws); err != nil {
+		t.Fatal(err)
+	}
+	_ = ws.Cleanup()
+	if len(db.created) != 0 || len(db.dropped) != 0 {
+		t.Fatalf("created %v dropped %v", db.created, db.dropped)
+	}
+}
+
+func TestAHostWithoutADatabaseRejectsTheTask(t *testing.T) {
+	e, _, _ := dbExec(t, nil)
+	ctx := context.Background()
+	ws, err := e.Materialize(ctx, job("dbtask"), claimID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Cleanup()
+	_, err = e.Prepare(ctx, job("dbtask"), ws)
+	var rej *runner.Rejected
+	if !errors.As(err, &rej) || !strings.Contains(rej.Reason, "db_unavailable") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestADatabaseThatCannotBeMadeIsTheHostsTroubleNotTheJobs(t *testing.T) {
+	db := &fakeDB{createErr: errors.New("mysql down")}
+	e, _, _ := dbExec(t, db)
+	ctx := context.Background()
+	ws, err := e.Materialize(ctx, job("dbtask"), claimID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.Prepare(ctx, job("dbtask"), ws)
+	var rej *runner.Rejected
+	if err == nil || errors.As(err, &rej) {
+		t.Fatalf("err = %v: a database that could not be made is an infrastructure failure, not a rejection", err)
+	}
+	_ = ws.Cleanup()
+	if len(db.dropped) != 0 {
+		t.Fatalf("dropped %v: nothing was made", db.dropped)
+	}
+}
+
+func TestAQuarantinedWorkspaceKeepsItsDatabase(t *testing.T) {
+	// the runner does not call Cleanup for a run it could not prove stopped, so nothing drops the database; the loop's sweep keeps it
+	// (the job is in Held()) until the quarantine is cleared
+	db := &fakeDB{}
+	e, _, _ := dbExec(t, db)
+	ctx := context.Background()
+	ws, err := e.Materialize(ctx, job("dbtask"), claimID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Prepare(ctx, job("dbtask"), ws); err != nil {
+		t.Fatal(err)
+	}
+	// (no Cleanup)
+	if len(db.dropped) != 0 {
+		t.Fatalf("dropped %v", db.dropped)
 	}
 }
