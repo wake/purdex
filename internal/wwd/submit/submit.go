@@ -61,6 +61,9 @@ type Request struct {
 	// Local prepares a fast-lane record (spec §5.2): no snapshot, HEAD named in its place, the manifest read from the working
 	// tree, local-only (pass) tasks allowed, never cacheable.
 	Local bool
+	// AdHoc, when not nil, is an undeclared command (spec §8.3): its words are the whole argv, there is no manifest task, and the
+	// record is local (Local is implied), marked adhoc, with no locks, labels, cache or supersede key.
+	AdHoc []string
 }
 
 // Prepared is a submission ready to send, with what the caller needs to decide how to run it.
@@ -94,6 +97,9 @@ func WorkingManifest(ctx context.Context, dir, gitBin string) (*manifest.Manifes
 
 // Prepare reads the manifest, validates the request and takes the snapshot.
 func Prepare(ctx context.Context, req Request) (*Prepared, error) {
+	if req.AdHoc != nil {
+		req.Local, req.Task, req.Args = true, manifest.AdHocName, req.AdHoc
+	}
 	g := &gitRunner{bin: req.Git, dir: req.Dir}
 	if g.bin == "" {
 		g.bin = "git"
@@ -117,8 +123,10 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 			return nil, fmt.Errorf("cannot resolve HEAD: %v", err)
 		}
 		snap = gate.SnapshotInfo{SHA: head, Root: root, Rel: "."}
-		if src, err = os.ReadFile(filepath.Join(root, ManifestPath)); err != nil {
-			return nil, usagef("%s has no %s", root, ManifestPath)
+		if req.AdHoc == nil { // an undeclared command needs no manifest
+			if src, err = os.ReadFile(filepath.Join(root, ManifestPath)); err != nil {
+				return nil, usagef("%s has no %s", root, ManifestPath)
+			}
 		}
 	} else {
 		var err error
@@ -135,13 +143,18 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 		}
 		src = []byte(out)
 	}
-	m, err := manifest.Parse(src)
-	if err != nil {
-		return nil, usagef("%v", err)
-	}
-	task := m.Tasks[req.Task]
-	if task == nil {
-		return nil, usagef("task %q is not in %s (have: %s)", req.Task, ManifestPath, strings.Join(taskNames(m), ", "))
+	var m *manifest.Manifest
+	var task *manifest.Task
+	if req.AdHoc != nil {
+		task = manifest.AdHocTask()
+	} else {
+		var perr error
+		if m, perr = manifest.Parse(src); perr != nil {
+			return nil, usagef("%v", perr)
+		}
+		if task = m.Tasks[req.Task]; task == nil {
+			return nil, usagef("task %q is not in %s (have: %s)", req.Task, ManifestPath, strings.Join(taskNames(m), ", "))
+		}
 	}
 	if task.Args == manifest.ArgsPass && !req.Local {
 		return nil, usagef("task %q is local-only (args = \"pass\") and is never queued", req.Task)
@@ -192,7 +205,8 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 		Locks:         nonNil(task.Locks),
 		Cacheable:     task.Cacheable && !req.Local, // a local run has no snapshot tree to key a result by
 		TimeoutS:      int(task.Timeout.Seconds()),
-		SupersedeKey:  supersedeKey(root, task.Name),
+		SupersedeKey:  adHocFree(req.AdHoc, supersedeKey(root, task.Name)),
+		AdHoc:         req.AdHoc != nil,
 		Interruptible: task.Interruptible,
 		QueueTimeoutS: int(task.QueueTimeout.Seconds()),
 		Submitter:     req.Submitter,
@@ -202,6 +216,14 @@ func Prepare(ctx context.Context, req Request) (*Prepared, error) {
 		return nil, err
 	}
 	return &Prepared{Body: sub, Task: task, Manifest: m, Root: root}, nil
+}
+
+// adHocFree drops a supersede key for an undeclared command: nothing is known about what a newer one would replace.
+func adHocFree(adhoc []string, key string) string {
+	if adhoc != nil {
+		return ""
+	}
+	return key
 }
 
 // relCwd is the directory the command runs in, relative to the repo root: the task's cwd (the caller's own directory does
