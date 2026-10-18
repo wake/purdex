@@ -6,6 +6,7 @@
 import { useMemo } from 'react'
 import { Desktop, Robot } from '@phosphor-icons/react'
 import { TabIcon } from '../TabIcon'
+import { SubagentDots } from '../SubagentDots'
 import { HostBadge } from '../HostBadge'
 import { useSessionAgentIndicator } from '../../hooks/useSessionAgentIndicator'
 import { useHostLook } from '../../lib/host-look'
@@ -32,15 +33,25 @@ function DefaultBot({ size, className }: { size: number; className?: string }) {
 
 export function TeamSeatIcon({ hostId, sessionCode, isActive = false, size = 14, subagents = false, light = true }: IconProps) {
   const { agentIcon, agentStatus, isUnread, tabIndicatorStyle, subagentRefs } = useSessionAgentIndicator(hostId, sessionCode)
+  if (!light) {
+    // The icon alone (the light is the avatar's corner badge); the subagent dots, when asked for, still float to its left. Lights off hides them, as everywhere.
+    const Icon = agentIcon ?? DefaultBot
+    return (
+      <span className="relative inline-flex items-center justify-center w-4 h-4 flex-shrink-0 ml-[1.5px] lowdpi:ml-px">
+        <Icon size={size} className="flex-shrink-0" />
+        {subagents && tabIndicatorStyle !== 'icon' && subagentRefs.length > 0 && <SubagentDots refs={subagentRefs} />}
+      </span>
+    )
+  }
   return (
     <TabIcon
       IconComponent={agentIcon ?? DefaultBot}
-      agentStatus={light ? agentStatus : undefined}
+      agentStatus={agentStatus}
       tabIndicatorStyle={tabIndicatorStyle}
       isActive={isActive}
       iconSize={size}
-      subagentRefs={subagents && light ? subagentRefs : []}
-      isUnread={isUnread && light}
+      subagentRefs={subagents ? subagentRefs : []}
+      isUnread={isUnread}
     />
   )
 }

@@ -102,7 +102,7 @@ export function PanelRow({ noDrill, member, teamKey, seat, color, isActive, onOp
       {/* Line 1: agent icon (muted, no light) -> host badge -> host chip -> name -> title -> lead / unopened -> ring -> workbook */}
       <div className="flex items-center gap-1.5">
         <span className={`inline-flex items-center gap-1.5 text-text-muted ${transition !== null ? 'opacity-40' : ''}`}>
-          <TeamSeatIcon hostId={seat.hostId} sessionCode={seat.sessionCode} isActive={isActive} light={false} />
+          <TeamSeatIcon hostId={seat.hostId} sessionCode={seat.sessionCode} isActive={isActive} subagents light={false} />
           <TeamSeatHostBadge hostId={seat.hostId} sessionCode={seat.sessionCode} />
         </span>
         {seat.remote && (
