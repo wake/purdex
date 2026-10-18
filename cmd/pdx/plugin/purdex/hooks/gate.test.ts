@@ -535,6 +535,12 @@ test('the same command in the same directory is asked once, and its answer holds
   expect(r.ran[0].command).toBe("'pdx' test go-all && echo x && 'pdx' test go-all")
 })
 
+test('the same command in two directories is two questions', async ($, on) => {
+  const r = rig(on, entryAnswer({}), () => BASH_OK, ENTRY_ON)
+  await bash($, 'cd a && go test ./... && cd ../b && go test ./...')
+  expect(entryCalls(r).map((c) => c[5])).toEqual(['a', 'a/../b'])
+})
+
 test('a deny holds for the repeats too, and an advise note is said once', async ($, on) => {
   const r = rig(on, entryAnswer({ 'go test ./...': { action: 'advise', hint: 'go-pkg' } }), () => BASH_OK, ENTRY_ON)
   const out = await bash($, 'go test ./... ; go test ./...')
