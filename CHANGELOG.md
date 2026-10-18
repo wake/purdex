@@ -1,5 +1,87 @@
 # Changelog
 
+## [1.0.0-alpha.753] - 2026-10-19
+
+> daemon、`pdx` CLI、`wwd` 與 **mod**（`cmd/pdx/plugin/` 的 `gate.js`）有改，**兩台都要重跑 `pdx setup`**（`pdx.json` 的 `entry` 開關保留，預設關）。SPA 與 Electron 與 752 相同。Purdex 的 `jobnotify.db` 多一張表（`cursor_epoch`，`CREATE IF NOT EXISTS`，舊版可以忽略它），退回 752 不需要還原。**`wwd.db` 再往前遷移**（佇列 schema 4 → 6：變更游標的 epoch、手動插隊欄位；主機 store schema 3 → 4：工作用量表），752 的 wwd 會拒絕開啟；部署腳本在升級 wwd 前會在每台留一份 `~/.local/share/wwd/wwd.db.pre-753`。wwd 與 Purdex 的 client 必須同版（回應多了必有的欄位，嚴格解碼的舊 client 會失敗）。
+>
+> **這一版 `wwd` 第一次真的跑 worker 主迴圈**（認領、執行、回報、讓位、隔離區都接上了）。部署時四台的 worker 一律先關，由 C2 矩陣逐台打開驗證；`[fault]` 區塊與 `[jobdb]` 區塊都不要預先加（`[jobdb]` 只在 mserv、要在新 binary 就位之後才加，舊 binary 認不得它）。沙箱主機沒有 guard 時 worker 不啟動；隔離區無法還原 hold 時 wwd 起不來（log 會寫原因）。
+
+### Added：wwd 的 worker（零件、主迴圈與 `cmd/wwd` 接線）
+
+- **認領與評分**：`worker/pick` 依 spec §4.6 計分（`1000·class + 等待分鐘 + origin 加分 + 暖機加分 − 大小罰分 − 同 session 罰分`），篩 labels、locks、停權、hold；手動位置先於評分；peer 走 TCP＋Bearer 讀 queued 工作（嚴格解碼、10 秒逾時、32 MiB 上限）（#3319）。
+- **認領與續租控制器**（`worker/runner`）：`Controller.Work` 一個 job 從被挑中到命令結束，期限從請求送出前起算、回應不亂序、heartbeat 回 cancel 時只停命令（#3326）；跑完卻無法證明行程樹已停時，保留 workspace 與 lock keys（`Ended.Quarantined`，fail closed）（#3329）。
+- **回報**（`worker/report`）：result、log、release；`Result.Err` 在沙箱下一律當 infra 上報；OOM 只信單元的 `Result`；infra 讓該 (origin, repo) 停權 5 分鐘；`Reclaim` 接 `yield.ReclaimAll`（#3325、#3328）。
+- **兩種 origin**：本機 queue 與 peer（TCP＋Bearer，不跟隨轉址，409／404 嚴格判定）；claim 回應的 locks 與候選不同就放棄該 claim（#3333）。
+- **遠端工作驗證**（`worker/remotejob`）：只信快照內的 manifest；`not_remote`、`local_only`、`class_above_task`、`args_invalid`、`cwd_outside` 等固定的拒絕碼（#3320）。
+- **真的 `Exec`**（`worker/jobexec`）：每個 job 一個以 sha256 命名的目錄，工作目錄、HOME、TMPDIR 都在裡面；先做 workspace、用快照自己的 manifest 算出要跑什麼、再執行；已存在的目錄不被接管（#3340）。
+- **隔離區**（`worker/quarantine`）：沙箱沒證明單元已停的工作寫 marker（原子寫入、0600），重啟後 `Restore` 補回 lock hold（marker 解除前拒絕同 key），`Sweep` 只在單元被證明已停時才刪目錄、marker 與 hold；目錄必須是 WorkRoot 的直接子目錄且非符號連結，沒設 WorkRoot 就一律不刪；`Restore` 遇到 key 衝突回 error，接線端要把它當成不能開始接 job 的條件（#3342）。
+- **`Start`／`Running` 與 owner 讓位**：claim 之後把 job 放到背景跑；`Running.Stop` 取消命令但續租、等 Finish 結束，在 Finish 內以 `reclaim` 歸還（不計 attempts、不加 lapses），單元沒證明已停時改以 `infra` 歸還（#3348）。
+- **worker 主迴圈**（`worker/loop`）：每 2 秒一輪，owner 回來時全部停手歸還，再依名額、headroom、facts 新鮮度（30 秒）與 settle（上次 claim 後 10 秒）決定要不要 claim；每輪最多一個；peer 的 zone 取自 pool 的 facts；關機時優雅收尾（#3360）。
+- **隔離區接進迴圈**（#3367）：`Run` 先 `Restore`，失敗就一輪都不跑；marker 寫成功前不歸還 job。**marker 改在命令啟動前寫**（`Begin`／`Discard`／`Settle`、`runner.Guard`），wwd 在沙箱單元執行中被殺，重啟後也能補回 hold；entry 的狀態機與每次轉移的 generation 寫進 spec §5（#3371）。
+- **只記錄 origin 收下結果的 run**（`Reporter.Delivery`）：result 已被收下但回覆隨租約遺失時，在獨立 ctx 內確認一次（#3369）。
+- **jobexec 的 per-job 資料庫 hook**：manifest 檢查通過後才 `Create`，只取 `DB_*` 或 `WP_TESTS_DB_*` 其中一組並排在 task 自己的 env 之後；沒有 DB 的主機收到 `db = "per-job"` 回 `db_unavailable`；`Cleanup` 最多等 `DropTimeout`（#3375）；jobdb 的鎖在呼叫端 ctx 結束時放棄等待（#3372，#3376）。
+- **`cmd/wwd` 接上 worker**：一張 `locks.Table` 由快車道、隔離區與 worker 共用；啟動順序是隔離區 `Restore` → queue／快車道／sampler → worker；本機 queue 在前、各 peer 在後；`[worker]` 多了 `background_dev`、`speed_factor`、`sandbox_user`（只在 Linux）；沙箱主機沒有 guard 時 worker 不啟動；`localruns.Service.Ready()` 之後 worker 才建 loop；關機先停 worker 再停用量記錄器再關 store（#3378）。
+- **接線補漏**（e2e 在 main 上找到的兩處）：queue 沒接 `Pinner`，peer 的 worker 領不到快照；`LogDir` 沒人建，log 上傳 500，重試迴圈靜默。現在 `queue.New` 建 `LogDir`（0700，拒絕符號連結），`report` 的重試每次失敗都記 log（#3380，補 #3378）。
+
+### Added：Linux 沙箱（mserv）
+
+- **systemd 沙箱 runner**：工作以暫存 service `wwd-<job id>` 在 `wwd.slice` 內執行（`CPUQuota`、`MemoryMax`、`MemorySwapMax=0`、`RuntimeMaxSec`、`PrivateTmp`、`ProtectHome=read-only`、`NoNewPrivileges`、封鎖 docker.sock），結果取自 `systemctl show` 而不是 `systemd-run` 的結束碼；逾時與取消用 `systemctl stop`；`reset-failed` 在讀完結果後（#3321）。
+- **在 mserv 實測**：情境 A–I 全過；實測抓到兩個假 `sudo`／`systemctl` 看不出的錯（沒載入過的單元 `reset-failed` 會失敗；成功結束的單元立刻被卸載、讀不到 `Result`），並新增 `Sandbox.ExtraProperties`（只收「只會收回權限」的屬性白名單）（#3332）。
+- **`ProtectSystem=strict` 成為沙箱的基本屬性**：整個檔案系統唯讀，只有工作目錄與私有的 `/tmp`、`/var/tmp` 可寫（先前 `wake` 在 mserv 寫得進 `/srv/backups`、`/srv/stacks`、`/var/crash`）（#3334）。
+- **每個 job 一個 MySQL 資料庫**（`task.db = "per-job"`）：`wwd_<hash>` 資料庫與只握有該庫權限的 `wwdu_<hash>` 使用者，隨機密碼，結束後清掉，啟動時掃除沒有主人的殘留（#3324）；manifest 新增 `db_env`（`db` → `DB_*`；`wptests` → `WP_TESTS_DB_*`＋table prefix），`db` 與 `db_env` 納入任務定義雜湊（#3341）。
+- **MySQL 管理帳號走預存程序**（`wwd_admin`@`localhost`，不握任何全域權限，只有 `wwdctl` 資料庫的 `EXECUTE`）：七個預存程序以 `root` 身分執行，先對每個參數做錨定、區分大小寫的形狀檢查；`scripts/wwd-mysql-setup.sh install|remove|status` 與 35 項檢查的 `scripts/wwd-mysql-probe.sh`；已在 mserv 的開發實例安裝並檢查通過（#3343）；`jobdb` 改成只呼叫這七個預存程序，不送原始 SQL，所以受限帳號 `wwd_admin` 就夠用（4d-5b，#3346）。
+- **`jobdb.PerJob` 與 `[jobdb]` 設定**（`enabled`、`host`、`port`、`user_hosts`、`defaults_file`；預設關，開了才檢查 defaults 檔存在、是一般檔、權限 600）；關閉時完全不建 Manager、不碰 MySQL（#3352）。
+- `Sandbox.Gone`：判斷單元是否已停（不存在、`inactive`、`failed` 才算；讀不到是錯誤，不是「已停」），給隔離區使用（#3342）。
+
+### Added：Purdex 讀 wwd 的工作
+
+- **`jobs` 模組與 `jobs.v1`**：`GET /api/pool/jobs`（`state`、`session`、`host`、`after`、`limit`）、`/{id}`、`/{id}/log`；別台主機用 `?host=<alias>`；`?after=` 超過 wwd 的 head 回 409 `CursorAhead`；wwd 沒開回 503（#3315）。手機的 device token 也能讀這三條，唯讀（#3315 的 attack 修正）。
+- **`jobs.changed` 主機事件**：每個工作事件轉成 `{host, job_id, state}`，App 收到只是重讀資源；斷線每 5 秒重連（#3318）。
+- **完成通知改用 wwd 的游標**：`jobnotify` 依儲存的游標分頁 catch-up（1000 筆一頁），worker 時鐘落後不再漏通知（#3302，關 #3251）；wwd.db 被重建（epoch 變了或收到 `cursor_ahead`）時從頭來過，新資料庫的新工作會通知、舊歷史不會（#3311，關 #3303）。
+
+### Added：wwd 的佇列與資料庫
+
+- **資料庫 epoch 與超前游標**（佇列 schema 5）：`GET /v1/jobs` 回 `{jobs, cursor, epoch}`；`?after=` 大於 head 回 409 `{reason:"cursor_ahead", head, epoch}`。**還原備份的 `wwd.db` 時，要在 wwd 停止時輪替 epoch**（`UPDATE db_epoch SET id = lower(hex(randomblob(16)));`），否則 client 會把舊游標當成還有效（#3309，關 #3303）。
+- **手動插隊**（佇列 schema 6）：`jobs.manual`（`front`／`back`／`hold`）與 `manual_seq`，`POST /v1/jobs/{id}/position`（只在本機 socket；TCP 沒有這條路由，`?host=` 回 400）與 `pdx jobs move <id> front|back|hold|normal`；hold 的工作不能被 claim，手動位置優先於評分（#3317）。
+- **工作用量**（主機 store schema 4）：`wire.JobUsage`、`job_usage` 表（保留 30 天）、`GET /v1/usage`（只在本機 socket）與 `pdx wwd usage`（#3336、#3337）。只記錄，不影響任何放行判斷。
+  - **取樣**：facts 的每工作累加器沿用 sampler 已有的 5 秒取樣，不增加頻率也不 fork（#3344）；快車道的工作結束時由 `UsageRecorder` 寫列（#3350）。
+  - **精確值**：`run.Result.Usage` 回報 CPU 秒數，Linux 沙箱單元另回報記憶體峰值（取自單元自己的 cgroup，由 wrapper 寫進狀態檔）（#3358）；worker 跑完的工作由 `RecordRun` 寫列，只寫「origin 收下結果」的那一次（#3365）。
+  - **`lower_bound`**：命令返回後仍有行程留著（tmux、vite、playwright 之類）時，數字只是下限，列上標記，`pdx wwd usage` 的 NOTE 欄顯示（#3363，關 #3359）。
+  - **`slot_charged`**：記的是主機放行時實際被扣的名額，不是工作的屬性（#3356）。schema 4 還沒部署到任何一台，以上欄位都是原地加，版本維持 4。
+
+### Added：mod 與觀察紀錄
+
+- **`gate.js`：mode rewrite 沒比對到 task 時改寫成 `pdx test --adhoc -- <argv>`**（#3276 的 ad-hoc 入口）；指令含 shell 展開字元（`$`、反引號、`* ? [ ] { } ~ !`、`\`）或權限判定會變時照舊 advise；開關關閉時行為與 752 相同（#3310）。
+- **觀察紀錄的讀取與接線**：`GET /v1/observations`、`GET /v1/observations/undeclared`（socket 與 TCP 都有；socket 上 `?host=` 轉送）、`[observe] min_cpu_seconds／min_mem_mb`（預設 60 秒、1024 MB）、sampler 把行程表交給 Observer（#3304、#3308）。
+- **指令簽章**：已知工具（docker、kubectl、helm、git、pnpm、npm、yarn）的全域旗標連值一起跳過；暫存目錄底下腳本名稱的尾端計數去掉（#3314，關 #3297）。
+
+### Added：C2 矩陣的故障掛鉤（預設關）
+
+- `[fault] enabled = true` 加上各掛鉤自己的鍵才生效，沒有路由、旗標或環境變數可以打開；有鍵沒 `enabled` 讓 wwd 起不來；`/v1/info` 的 `fault` 宣告開了哪些（沒開時 JSON 不變）。H1 `log_upload_fail`、H2 `owner_active_file`、H3 `zone`（只設 `zone_override`，真實 `zone` 不變）、H4 `snapshot_delay_s`（H3、H4 的消費端在 4a-4b2／4a-4c 才接）（#3338）。
+
+### Changed：daemon 固定耗用（#3316、#3322、#3323）
+
+- **session 清單一次 `list-sessions`**：一次讀出 session、active pane 的標題與 window 名、pane id 與 tmux instance，建一次清單從 `1 + N + 1` 個 fork 降成 1 個（私有 daemon 量到 17 → 1）；沒有 UTF-8 locale 時 tmux 會把 TAB 與非 ASCII 字元都換成 `_`，所以改用可印的分隔符 `|~|` 加 `tmux -u`，解析結果不可信時整份退回舊讀法。hook 的 PathHint 只在事件沒帶 cwd 時才讀 tmux（#3327）。
+- **`projectPane` 用共享 pane 快取；peers 盤點的「前」instance 取自同一次 list**：預期每個 Pre／PostToolUse 再少 1～3 個 `tmux.read`；`verifyEvent` 保持即時讀（#3331）。
+- **`agent.ps` 的 fork 改記在 `agent.ps.<做什麼>@<誰呼叫>`**：只加觀測，不改行為，`GET /api/debug/execstat` 看得出 76 次／分是誰呼叫的（#3339）。
+- **輕量狀態不再每次查表**（#3322 第 1 項）：`LightStatus` 與 `BackgroundWork` 讀 session 的 roots 改用 1 秒內的複本，寫入 `agent_frames` 的 12 個方法都會使複本作廢；其他呼叫端仍即時讀（#3357）。60 秒 profile 裡 `ListRootsBySessionID` 原本占 0.23 s／分。
+- **團隊的 commands／facts 泵保險輪詢 1 秒 → 5 秒**（#3322 第 2 項）：每分鐘查詢 120 → 24 次。輪詢拉長後會浮現的三個缺口與一個競態一起補了（泵啟動時先跑一次 pass；`spawn_resume` 把損壞的 op 標成失敗後補 kick；`afterMemberRelayApproved` 讀不到 op 時仍 kick；已在跑的 drain 不會吞掉 drain 結束邊緣的 kick），各有測試；最壞的可見延遲是 5 秒（原本 1 秒），退避到期的重試最多晚一個 tick；remote notice 泵不動（#3362）。
+- **`pdx hook` 每個事件的 fork 3 → 2**（darwin，#3323）：找 sender 的 ppid 與 args 改用 sysctl（`kern.proc.pid`、`kern.procargs2`），只回答本來就能不 fork 答對的情形，讀完再核對一次 ppid 與啟動時間，其餘一律退回 `ps`；與 `ps` 逐位元相同有測試（#3351）。
+- 測試：`TestRealExecutorActivePaneMetadata_RealTmuxForgedTitle` 改用私有 tmux server，並用 `new-session -n` 關掉 window 自動改名造成的間歇失敗（#3335，關 #3330）；`ask.test.ts` 改斷言 mod 的等待上限而不量牆鐘，另留一條寬鬆的牆鐘後備（#3347，關 #3307）；`relay.test.ts` 的 51 筆報告佇列測試給 15 秒（#3355，關 #3353）。
+
+### 文件
+
+- **C2 矩陣對照 main 核對過**：案例 2 改用凍結讓租約過期（bootout／stop 是優雅結束，以 `reclaim` 歸還，不計 attempts）、佇列檢查改讀 `.jobs`、案例 9 的狀態是 `cancelled`、案例 5a 的 attempts 是 0、案例 12 與 13 的等待與判斷方式（#3382）；案例 13 的沙箱探測加了對照組（寫工作目錄）、以可連線與否判斷 docker.sock、十個工作目錄外的位置、主機 `/tmp` 的哨兵檔，在 mserv 實測且沒有沙箱時會紅（#3364）。
+- **e2e**（`cmd/wwd/e2e_*_test.go`，build tag `e2e`，一般 `go test` 不編進去）：起真的 wwd 行程，驗證兩個 daemon 互見、peer 的 worker 領到 job 並跑完、取消、worker 被殺後租約過期由另一個接手、owner 返回後的回收；harness 在下次啟動時收掉被殺的 run 留下的行程與目錄，只殺命令列能證明是自己的 pid。跑法 `go test -tags e2e -timeout 25m -run TestE2E ./cmd/wwd/`，約 2 分鐘（#3381）。
+- C2 真機矩陣的跑法與每個案例的預期（#3299）；spec 補 epoch／`cursor_ahead`、工作路由的介面細節、還原 `wwd.db` 要輪替 epoch（#3313）；mserv 沙箱實測紀錄 `docs/wwd-4d3-mserv.md`（#3332）；`docs/wwd-deploy.md` 新增 §6（mserv 的 MySQL 與預存程序）與故障掛鉤的開關步驟。
+
+### 發版測試
+
+- 切點 `6f4e150da`，air26：`go test -p 3 ./...` 全過、`make lint` 通過；e2e（`go test -tags e2e -run TestE2E ./cmd/wwd/`，7 個 TestE2E）全過。
+- mlab，mod 的 hook 測試：全部檔案分段跑，0 失敗；`scripts/` 的三支 shell 測試（`wwd-mysql-setup_test.sh`、`wwd-c2-matrix_test.sh`、`wwd-c2-matrix_stub_test.sh`）全過。
+- mserv（Linux x86_64）：13 個 wwd 套件交叉編譯後帶 `testdata` 執行，10 個過、3 個紅，原因都已知：`jobdb` 與 `quarantine` 各有一條守門測試要讀 repo 原始碼，遠端只有測試執行檔，這兩條在 air26 的全套已跑過；`run` 有一條 Linux zombie 的偶發失敗，追蹤在 #3383。
+- SPA 與 Electron 自 752 起沒有變，沿用 752 的結果。
+
 ## [1.0.0-alpha.752] - 2026-10-18
 
 > daemon、`pdx` CLI、`wwd` 與 **mod**（`cmd/pdx/plugin/` 的 `gate.js`）有改，**兩台都要重跑 `pdx setup`**（寫入新的 mod；`pdx.json` 的 `entry` 開關會保留，預設關）。SPA 與 Electron 與 750 相同。Purdex 的資料庫沒有變，退回 751 不需要還原。**`wwd.db` 再往前遷移**（佇列 schema v4 加變更游標、觀察紀錄表），750／751 的 wwd 會拒絕開啟；部署腳本在升級 wwd 前已在每台留一份 `~/.local/share/wwd/wwd.db.pre-752`。
