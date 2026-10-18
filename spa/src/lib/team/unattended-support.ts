@@ -21,6 +21,7 @@ import { useJournalStore } from '../../stores/useJournalStore'
 import { useJournalMembersStore } from '../../stores/useJournalMembersStore'
 import { JOURNAL_CAPABILITY, JOURNAL_CONFIRM_CAPABILITY, JOURNAL_MEMBERS_CAPABILITY, JOURNAL_SESSIONS_CAPABILITY } from '../journal/types'
 import { WORKBOOK_V1_CAPABILITY, WORKBOOK_V2_CAPABILITY } from '../workbook/types'
+import { STAGES_CAPABILITY } from '../conversations/types'
 import { PERSON_CAPABILITY, RELAY_QUOTA_CAPABILITY, TEAM_EDIT_CAPABILITY, TEAM_MAX_MEMBERS_CAPABILITY, TEAM_PAUSE_CAPABILITY, UNANSWERED_CAPABILITY, UNATTENDED_CAPABILITY } from './types'
 
 const identity = (h: HostConfig): string => `${hostEndpoint(h)}:${h.token ?? ''}`
@@ -52,6 +53,7 @@ export function startUnattendedSupport(): () => void {
         useUnattendedStore.getState().setPauseSupport(hostId, listed.includes(TEAM_PAUSE_CAPABILITY) ? 'yes' : 'no')
         useUnattendedStore.getState().setUnansweredSupport(hostId, listed.includes(UNANSWERED_CAPABILITY) ? 'yes' : 'no')
         useUnattendedStore.getState().setPersonSupport(hostId, listed.includes(PERSON_CAPABILITY) ? 'yes' : 'no')
+        useUnattendedStore.getState().setStagesSupport(hostId, listed.includes(STAGES_CAPABILITY) ? 'yes' : 'no')
         // The workbook flags share this guard; each answer is a new connection generation for the workbook store
         // (a seat is loaded once per generation, workbook-loader.ts).
         useWorkbookStore.getState().setSupport(hostId, { v1: listed.includes(WORKBOOK_V1_CAPABILITY), v2: listed.includes(WORKBOOK_V2_CAPABILITY) })

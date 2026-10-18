@@ -74,6 +74,17 @@ func (m *Module) handleSessionSubmit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// From here the message is followed (stage received); the handler's answer decides its last stage. A replay answered under
+	// the locks (a concurrent request recorded the id meanwhile) writes nothing.
+	tok := m.stages.begin(owner.SessionID, in.ClientMsgID, text, tune.now())
+	sw := &stageWriter{ResponseWriter: w}
+	w = sw
+	replayed := false
+	defer func() {
+		if !replayed {
+			m.recordAnswer(owner.SessionID, in.ClientMsgID, tok, sw, tune.now())
+		}
+	}()
 	release, ok := m.lockPaneAndSession(r.Context(), owner.TmuxPaneID, owner.SessionID, tune.lockWait)
 	if !ok {
 		refuse(w, http.StatusTooManyRequests, "busy")
@@ -84,6 +95,7 @@ func (m *Module) handleSessionSubmit(w http.ResponseWriter, r *http.Request) {
 	// Under the locks: the ledgers again (a concurrent request may have recorded the id), the owner again (it may have moved
 	// while we waited) and the pane's identity.
 	if m.answerKnown(w, td, in.ClientMsgID, tune) {
+		replayed = true
 		return
 	}
 	again, ok := m.resolveClaudeOwner(w, r, td, scode)
@@ -94,6 +106,9 @@ func (m *Module) handleSessionSubmit(w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusConflict, "owner_changed")
 		return
 	}
+	// This request is the one that sends: it owns the id's stages from here (an earlier request of the same id that gave up
+	// waiting for the locks, or is still waiting, can no longer overwrite them).
+	tok = m.stages.claim(owner.SessionID, in.ClientMsgID, text, tune.now())
 	if !m.paneIsUnique(w, r, td, again) {
 		return
 	}
@@ -102,7 +117,7 @@ func (m *Module) handleSessionSubmit(w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusConflict, "waiting")
 		return
 	}
-	c := &typedCtx{td: td, id: in.ClientMsgID, text: text, expected: in.ExpectedTmuxInstance, tmuxID: info.TmuxID, owner: again}
+	c := &typedCtx{stageTok: tok, td: td, id: in.ClientMsgID, text: text, expected: in.ExpectedTmuxInstance, tmuxID: info.TmuxID, owner: again}
 	if td.q.HasOwner(again.SessionID) {
 		m.fillSubmit(w, r, c, tune)
 		return
