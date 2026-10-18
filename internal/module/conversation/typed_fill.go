@@ -34,6 +34,11 @@ func (m *Module) fillSubmit(w http.ResponseWriter, r *http.Request, c *typedCtx,
 	}
 	switch res.Status {
 	case promptq.Accepted:
+		filledAt := tune.now()
+		if res.FilledAt > 0 {
+			filledAt = time.UnixMilli(res.FilledAt)
+		}
+		m.stages.set(c.owner.SessionID, c.id, stageFilled, "", "fill", filledAt)
 		// Once the fill is accepted the Enter goes out even if the client disconnected meanwhile: sending beats leaving text
 		// behind in the composer (spec §5).
 		m.enter(w, c, res, tune)

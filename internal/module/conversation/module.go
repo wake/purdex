@@ -81,6 +81,7 @@ type Module struct {
 	paneLocks  sidLocks     // by tmux pane id, the typed route only (taken before the session lock)
 	keysSeen   keysLedger   // ids typed blind (no mod)
 	recalls    recallLedger // answers of recall requests that pressed Up (K-1b)
+	stages     stageLedger  // where each sent client_msg_id is on its way to the transcript
 	finMu      sync.Mutex
 	finalising map[string]struct{} // ids with a finaliser running
 

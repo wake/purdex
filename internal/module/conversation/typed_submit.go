@@ -74,6 +74,17 @@ func (m *Module) handleSessionSubmit(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// From here the message is followed (stage received); the handler's answer decides its last stage. A replay answered under
+	// the locks (a concurrent request recorded the id meanwhile) writes nothing.
+	m.stages.begin(owner.SessionID, in.ClientMsgID, text, tune.now())
+	sw := &stageWriter{ResponseWriter: w}
+	w = sw
+	replayed := false
+	defer func() {
+		if !replayed {
+			m.recordAnswer(owner.SessionID, in.ClientMsgID, sw, tune.now())
+		}
+	}()
 	release, ok := m.lockPaneAndSession(r.Context(), owner.TmuxPaneID, owner.SessionID, tune.lockWait)
 	if !ok {
 		refuse(w, http.StatusTooManyRequests, "busy")
@@ -84,6 +95,7 @@ func (m *Module) handleSessionSubmit(w http.ResponseWriter, r *http.Request) {
 	// Under the locks: the ledgers again (a concurrent request may have recorded the id), the owner again (it may have moved
 	// while we waited) and the pane's identity.
 	if m.answerKnown(w, td, in.ClientMsgID, tune) {
+		replayed = true
 		return
 	}
 	again, ok := m.resolveClaudeOwner(w, r, td, scode)

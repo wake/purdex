@@ -131,6 +131,9 @@ func (m *Module) handleSessionRecall(w http.ResponseWriter, r *http.Request) {
 	// From here Up has been pressed: whatever happens, a repeat of this id gets the same answer and never presses it again.
 	done := func(status int, a typedAnswer) {
 		m.recalls.put(key, status, a, tune.now())
+		if status == http.StatusOK && a.Outcome == "" && a.Text != "" { // the text came back: Claude Code's whole queue is gone
+			m.stages.recallAll(again.SessionID, tune.now())
+		}
 		writeTyped(w, status, a)
 	}
 	unknown := func(reason string) { done(http.StatusOK, typedAnswer{Outcome: "unknown", Reason: reason}) }
