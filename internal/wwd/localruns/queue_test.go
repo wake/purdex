@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/wwd/queue"
 	"github.com/wake/purdex/internal/wwd/store"
@@ -16,6 +17,12 @@ import (
 // go to the service.
 func realService(t *testing.T, dir string) (*Service, *queue.Queue, *locks.Table) {
 	t.Helper()
+	return realServiceAt(t, dir, nil)
+}
+
+// realServiceAt is realService with the origin's clock set (nil: the real one).
+func realServiceAt(t *testing.T, dir string, now func() time.Time) (*Service, *queue.Queue, *locks.Table) {
+	t.Helper()
 	st, err := store.Open(filepath.Join(dir, "wwd.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -25,7 +32,7 @@ func realService(t *testing.T, dir string) (*Service, *queue.Queue, *locks.Table
 		t.Fatal(err)
 	}
 	var svc *Service
-	q, err := queue.New(st.DB(), queue.Options{Origin: "testhost", Publish: func(ev wire.JobEvent) { svc.OnJobEvent(ev) }})
+	q, err := queue.New(st.DB(), queue.Options{Origin: "testhost", Now: now, Publish: func(ev wire.JobEvent) { svc.OnJobEvent(ev) }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,5 +89,25 @@ func TestARealQueueRunningJobKeepsItsKeysAcrossARestart(t *testing.T) {
 	}
 	if rec := post(s2, request(t, "db")); rec.Code != http.StatusConflict {
 		t.Fatalf("after the restart: %d, want 409", rec.Code)
+	}
+}
+
+func TestARunWhoseLeaseLapsesIsSweptAsLostAndItsKeysAreReleased(t *testing.T) {
+	clock := time.Now()
+	s, q, tb := realServiceAt(t, t.TempDir(), func() time.Time { return clock })
+	rec := post(s, request(t, "db"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("register: %d %s", rec.Code, rec.Body)
+	}
+	resp, _ := wire.Decode[wire.LocalRunResponse](rec.Body.Bytes())
+	clock = clock.Add(time.Duration(resp.LeaseS+1) * time.Second) // the caller died: no heartbeat
+	if _, err := q.Sweep(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if j, _ := q.Get(context.Background(), resp.ID); j.State != wire.StateFailed {
+		t.Fatalf("the job is %s, want failed (lost)", j.State)
+	}
+	if _, ok := tb.Holder("db"); ok {
+		t.Fatal("the run was swept as lost and its key is still held")
 	}
 }

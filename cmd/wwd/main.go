@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/wake/purdex/internal/buildinfo"
 	"github.com/wake/purdex/internal/wwd/clones"
@@ -152,6 +153,7 @@ func run(cfgPath string) error {
 	sampler.SetOnFacts(d.OnFacts)
 	go sampler.Run(ctx)
 	go d.Pool().Run(ctx)
+	go sweepQueue(ctx, q) // lapsed leases, queue timeouts, retention
 	go fastLane.Run(ctx) // rebuilds the locks of the runs that were going on, then compares with the queue every 30 s
 	run, err := d.Listen(ctx, daemon.ListenSpec{Addrs: addrs, Port: cfg.Port, SocketPath: cfg.SocketPath})
 	if err != nil {
@@ -163,6 +165,25 @@ func run(cfgPath string) error {
 		return nil
 	case err := <-run.Err():
 		return err
+	}
+}
+
+// sweepEvery is how often the queue's housekeeping runs (queue.Sweep is built for a few seconds).
+const sweepEvery = 5 * time.Second
+
+// sweepQueue runs the queue's periodic housekeeping until ctx ends; without it a run whose caller died would stay running.
+func sweepQueue(ctx context.Context, q *queue.Queue) {
+	t := time.NewTicker(sweepEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if _, err := q.Sweep(ctx); err != nil && ctx.Err() == nil {
+				log.Printf("wwd: queue sweep: %v", err)
+			}
+		}
 	}
 }
 
