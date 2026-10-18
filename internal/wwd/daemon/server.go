@@ -342,15 +342,22 @@ func (r *Running) TCPAddrs() []string { return r.tcp }
 // Err reports a serve failure.
 func (r *Running) Err() <-chan error { return r.errCh }
 
+// closeGrace is how long Close lets the requests in flight finish.
+var closeGrace = 3 * time.Second
+
 // Close stops both surfaces and removes the socket file. It does this once: a second call (the shutdown that follows the context, and
 // the one main makes to be sure the servers are quiet) waits for the first to finish and does nothing more, so it cannot remove the
 // socket a new process has made since.
 func (r *Running) Close() error {
 	r.once.Do(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), closeGrace)
 		defer cancel()
 		for _, s := range r.srvs {
-			_ = s.Shutdown(ctx)
+			if err := s.Shutdown(ctx); err != nil {
+				// the requests in flight did not finish in time: their connections are closed, which ends the contexts they run under (a handler
+				// that does not look at its context can still go on for a while; there is no bound on that)
+				_ = s.Close()
+			}
 		}
 		_ = os.Remove(r.sock)
 	})

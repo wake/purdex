@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/wake/purdex/internal/wwd/wire"
 )
@@ -150,6 +151,38 @@ func TestRunningCloseRemovesTheSocketOnlyOnce(t *testing.T) {
 	run.Close() // must not touch what is there now
 	if _, err := os.Lstat(sock); err != nil {
 		t.Fatalf("the second Close removed the new process's socket: %v", err)
+	}
+}
+
+// A request that is not done when the grace ends has its connection closed, which ends the context it runs under; Close returns
+// then, and not before the grace (the request is given its time).
+func TestRunningCloseEndsTheContextOfARequestThatOutlastsTheGrace(t *testing.T) {
+	old := closeGrace
+	closeGrace = 200 * time.Millisecond
+	defer func() { closeGrace = old }()
+	started, ended := make(chan struct{}), make(chan struct{})
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done() // a handler that stops when its connection goes
+		close(ended)
+	})}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Serve(ln)
+	go http.Get("http://" + ln.Addr().String() + "/")
+	<-started
+	run := &Running{srvs: []*http.Server{srv}, sock: filepath.Join(t.TempDir(), "none")}
+	t0 := time.Now()
+	run.Close()
+	if took := time.Since(t0); took < 150*time.Millisecond {
+		t.Fatalf("Close did not give the request its grace: %s", took)
+	}
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the request's context was not ended by Close")
 	}
 }
 
