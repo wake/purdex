@@ -89,8 +89,8 @@ type Config struct {
 	// (an entry then names its unit, which is what proves the command gone).
 	Quarantine Quarantine
 	Sandboxed  bool
-	// SweepEvery is the pause between two sweeps (a minute).
-	SweepEvery time.Duration
+	// SweepEvery is the pause between two sweeps (a minute). MarkerRetry is the pause between two tries to write a quarantine marker (5 s).
+	SweepEvery, MarkerRetry time.Duration
 
 	// FactsMaxAge is how old this host's facts may be for the worker to go on taking jobs (30 s: six samples); a sampler that has stopped
 	// must not leave the worker claiming against a headroom nobody has measured for a while.
@@ -130,6 +130,9 @@ func New(cfg Config) *Loop {
 	}
 	if cfg.Settle <= 0 {
 		cfg.Settle = 2 * time.Duration(wire.SampleIntervalS) * time.Second
+	}
+	if cfg.MarkerRetry <= 0 {
+		cfg.MarkerRetry = 5 * time.Second
 	}
 	if cfg.SweepEvery <= 0 {
 		cfg.SweepEvery = time.Minute
@@ -335,7 +338,11 @@ func (l *Loop) finish(byHost map[string]Origin) runner.Finish {
 		})
 	}
 	return func(ctx context.Context, e runner.Ended) {
-		l.quarantine(e) // the marker first: it must exist before anything slow (a release that is retried for minutes) happens
+		// The marker first: it must exist before anything slow (a release that is retried for minutes) happens, and without it the job is
+		// not given back at all (see quarantine).
+		if !l.quarantine(ctx, e) {
+			return
+		}
 		deliver(ctx, e)
 		l.record(e)
 	}
@@ -433,11 +440,14 @@ func (l *Loop) abandon(endJobs context.CancelFunc) {
 // killWait is how long a worker that is ending waits for the commands it ended to be gone (TERM, then KILL after 10 s).
 const killWait = 15 * time.Second
 
-// quarantine writes the marker of a job that ended quarantined. If it cannot be written the hold still stands in memory, but a restart would
-// lose it: that is logged loudly, nothing else can be done here.
-func (l *Loop) quarantine(e runner.Ended) {
+// quarantine writes the marker of a job that ended quarantined and says whether the job may now be given back. The marker is what keeps
+// the job's lock keys and workspace across a restart; the delivery of a quarantined job is a release, which lets another worker run the
+// job while its unit may still be going. So a marker that cannot be written (disk full, read-only) is retried, every MarkerRetry, while
+// the lease is kept alive, and the job is not released until it is written: if ctx ends first (the lease was lost, or the worker ends),
+// nothing is delivered and the origin gets the job back only when the lease lapses, with the hold still standing in memory.
+func (l *Loop) quarantine(ctx context.Context, e runner.Ended) bool {
 	if !e.Quarantined || l.cfg.Quarantine == nil {
-		return
+		return true
 	}
 	ent := quarantine.Entry{
 		Owner: e.Source + "/" + e.Job.ID, JobID: e.Job.ID, Origin: e.Job.Origin, ClaimID: e.ClaimID,
@@ -446,7 +456,16 @@ func (l *Loop) quarantine(e runner.Ended) {
 	if l.cfg.Sandboxed {
 		ent.Unit = "wwd-" + e.Job.ID
 	}
-	if err := l.cfg.Quarantine.Add(ent); err != nil {
-		l.cfg.Logf("worker: QUARANTINE MARKER NOT WRITTEN for %s (a restart would forget its hold and workspace): %v", ent.Owner, err)
+	for {
+		err := l.cfg.Quarantine.Add(ent)
+		if err == nil {
+			return true
+		}
+		l.cfg.Logf("worker: QUARANTINE MARKER NOT WRITTEN for %s, the job is not given back until it is: %v", ent.Owner, err)
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(l.cfg.MarkerRetry):
+		}
 	}
 }

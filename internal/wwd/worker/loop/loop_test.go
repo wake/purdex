@@ -1012,3 +1012,55 @@ func TestRunSweepsTheQuarantineByItselfEvenWithNoOtherSweeper(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// flakyQuarantine fails Add a number of times, then works.
+type flakyQuarantine struct {
+	Quarantine
+	mu    sync.Mutex
+	fails int
+	tries int
+}
+
+func (f *flakyQuarantine) Add(e quarantine.Entry) error {
+	f.mu.Lock()
+	f.tries++
+	n := f.tries
+	f.mu.Unlock()
+	if n <= f.fails {
+		return errors.New("disk full")
+	}
+	return f.Quarantine.Add(e)
+}
+
+func TestAJobIsNotGivenBackUntilItsMarkerIsWritten(t *testing.T) {
+	c := newConn("mlab", qjob("stuck", wire.ClassDev, 0))
+	q := newQRig(t, c)
+	q.loop.cfg.MarkerRetry = unit
+	f := &flakyQuarantine{Quarantine: q.store, fails: 3}
+	q.loop.cfg.Quarantine = f
+	q.ex.run = notProven
+	q.round()
+	waitFor(t, "a run", func() bool { return q.ex.ran.Load() == 1 })
+	q.loop.stopAll(context.Background(), "test")
+	waitFor(t, "the release", func() bool { _, rel, _ := c.seen(); return len(rel) == 1 })
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.tries != 4 || len(q.store.Held()) != 1 {
+		t.Fatalf("tries %d held %d: the marker is retried until it is written, and only then is the job released", f.tries, len(q.store.Held()))
+	}
+}
+
+func TestAJobWhoseMarkerCannotBeWrittenIsNeverReleased(t *testing.T) {
+	c := newConn("mlab", qjob("stuck", wire.ClassDev, 0))
+	q := newQRig(t, c)
+	q.loop.cfg.MarkerRetry = unit
+	q.loop.cfg.Quarantine = &flakyQuarantine{Quarantine: q.store, fails: 1 << 30}
+	q.ex.run = notProven
+	q.round()
+	waitFor(t, "a run", func() bool { return q.ex.ran.Load() == 1 })
+	go q.loop.stopAll(context.Background(), "test")
+	time.Sleep(20 * unit)
+	if _, rel, res := c.seen(); len(rel) != 0 || res != 0 {
+		t.Fatalf("releases %v results %d: another worker could run it next to a unit that may still be going", rel, res)
+	}
+}
