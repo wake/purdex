@@ -94,6 +94,9 @@ func (s *Service) Handler() http.HandlerFunc {
 func (s *Service) Register(ctx context.Context, req wire.LocalRunRequest) (wire.LocalRunResponse, int, error) {
 	// The keys are reserved before the queue names the job and are renamed to its id after: no other start can take them while the
 	// run is being recorded, and a cancel that names the job finds the keys.
+	if err := locks.ValidateKeys(req.Locks); err != nil {
+		return wire.LocalRunResponse{}, http.StatusBadRequest, err // the request is malformed; the queue is not the problem
+	}
 	owner := fmt.Sprintf("local:%d", s.seq.Add(1))
 	var resp wire.LocalRunResponse
 	hold, err := s.Locks.Acquire(owner, req.Locks, func() error {

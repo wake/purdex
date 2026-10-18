@@ -194,6 +194,24 @@ func TestABadBodyIsA400AndTouchesNothing(t *testing.T) {
 	}
 }
 
+func TestMalformedLockKeysAreA400NotAnOutage(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb := newService(q)
+	for name, keys := range map[string][]string{"empty": {""}, "newline": {"a\nb"}, "repeated": {"k", "k"}} {
+		b := request(t)
+		var m map[string]any
+		_ = json.Unmarshal(b, &m)
+		m["locks"] = keys
+		b, _ = json.Marshal(m)
+		if rec := post(s, b); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d: %s", name, rec.Code, rec.Body)
+		}
+	}
+	if len(q.calls) != 0 || len(tb.Held()) != 0 {
+		t.Fatal("a malformed request recorded or held something")
+	}
+}
+
 func TestATerminalLocalEventReleasesTheKeysAndOthersDoNot(t *testing.T) {
 	q := &fakeQueue{}
 	s, tb := newService(q)

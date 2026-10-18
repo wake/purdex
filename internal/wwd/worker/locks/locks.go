@@ -68,6 +68,13 @@ func normalize(keys []string) ([]string, error) {
 	return out, nil
 }
 
+// ValidateKeys says whether keys could be acquired as they are (each non-empty without NUL or newline, none repeated), so a caller
+// can tell a malformed request from a refusal.
+func ValidateKeys(keys []string) error {
+	_, err := normalize(keys)
+	return err
+}
+
 // Hold is one successful Acquire. Releasing it ends exactly that acquisition: a late Release from an older attempt of the same
 // owner (same job id, claimed again later) cannot free the keys of a newer one.
 type Hold struct {
