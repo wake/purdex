@@ -299,18 +299,23 @@ func (m *Module) handleEvent(w http.ResponseWriter, r *http.Request) {
 		// otherwise leak the kill+recreate rename race onto path hints —
 		// stale code → wrong SPA session receives the path hint.
 		if code, _ := m.resolveSessionCodeFromHook(req); code != "" {
-			cwdFallback := ""
-			if m.sessions != nil {
+			// The cached cwd of the session is only the fallback for an event with no cwd of its own, and reading it costs a tmux
+			// listing, so it is read when the extractor asks for it, not for every tool call.
+			cwdFallback := func() string {
+				if m.sessions == nil {
+					return ""
+				}
 				// Its own bounded budget, not r.Context() — see handleEvent's
 				// doc: a hook event is processed to completion.
 				readCtx, cancelRead := context.WithTimeout(context.Background(), session.ListReadTimeout)
 				info, err := session.GetSessionWithin(readCtx, m.sessions, code)
 				cancelRead()
 				if err == nil && info != nil {
-					cwdFallback = info.Cwd
+					return info.Cwd
 				}
+				return ""
 			}
-			EmitPathHint(m.core.Events, m.pathHintDedup, m.pathHintBuffer,
+			EmitPathHintLazy(m.core.Events, m.pathHintDedup, m.pathHintBuffer,
 				req.RawEvent, req.PurdexName, "cc", code, cwdFallback, time.Now())
 		}
 	}
