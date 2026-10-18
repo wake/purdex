@@ -133,7 +133,31 @@ describe('on a host that reports stages, before its first stage', () => {
     const q = sendQueueFor(KEY, () => port)
     q.enqueue('hi')
     render(tail(q))
-    expect(screen.getByTestId('stage-mark')).toHaveTextContent('You · queued')
+    expect(screen.getByTestId('queued-caption')).toHaveTextContent('You · queued')
+  })
+})
+
+describe('where the stage sits (D1: bottom-right of the bubble)', () => {
+  const before = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+  it('the caption on top keeps who and when; the text; then the stage, pushed to the right', async () => {
+    const { q, id } = await handed()
+    act(() => q.setStages({ [id]: st(id, 'queued') }))
+    render(tail(q))
+    const cap = screen.getByTestId('queued-caption')
+    const mark = screen.getByTestId('stage-mark')
+    expect(cap.textContent).not.toMatch(/Queued/)
+    expect(cap.textContent).toMatch(/^You · \d/)
+    expect(before(cap, screen.getByText('hi'))).toBe(true)
+    expect(before(screen.getByText('hi'), mark)).toBe(true)
+    expect(mark.className).toMatch(/ml-auto/)
+    expect(mark.className).toMatch(/text-right/)
+  })
+  it('without stages the caption carries the state, as before, and there is no stage mark', () => {
+    const q = sendQueueFor(KEY, () => port)
+    q.enqueue('hi')
+    render(tail(q))
+    expect(screen.getByTestId('queued-caption')).toHaveTextContent('You · queued')
+    expect(screen.queryByTestId('stage-mark')).toBeNull()
   })
 })
 
