@@ -16,12 +16,9 @@ const (
 	defaultQueueTimeout = 2 * time.Hour
 	// retention: ended jobs and their results are kept this long (spec 4.2).
 	retention = 7 * 24 * time.Hour
-	// orphanGrace: a ref whose job id was made less than this long ago is never called an orphan, because Submit pins the snapshot
-	// moments before it writes the row, and the sweep must not take the pin from a job that is about to exist. The id carries its
-	// time (a ULID), so no row or clock of the pin is needed.
+	// orphanGrace: a pin recorded less than this long ago is never called an orphan, because Submit records the pin moments before it
+	// writes the row, and the sweep must not take the pin from a job that is about to exist.
 	orphanGrace = 10 * time.Minute
-	// forgetAfter: a git directory with no job and no ref left is dropped from the list this long after it was last used.
-	forgetAfter = 24 * time.Hour
 )
 
 // terminalStates is the SQL list of the states from which a job does not move again.
@@ -128,93 +125,61 @@ func (q *Queue) settlePins(ctx context.Context) (unpinned, failed int) {
 		if _, err := q.db.ExecContext(ctx, `UPDATE jobs SET pinned = 0 WHERE id = ?`, h.id); err == nil {
 			unpinned++
 		}
+		_, _ = q.db.ExecContext(ctx, `DELETE FROM git_pins WHERE id = ?`, h.id)
 	}
 	return unpinned, failed
 }
 
-// removeOrphanPins lists refs/wwd/ in every git directory that was ever submitted to and unpins the ones whose job is gone or has
-// ended. Only job ids come back from ListPins, and Unpin only ever removes refs/wwd/<id>, so nothing else in a user's repository is
-// touched. A directory that is gone, or that has held no job and no ref for a day, is forgotten.
+// removeOrphanPins releases the pins this queue recorded for which no live job exists: no row (a submission that failed after pinning,
+// or died between the two), or an ended job whose release had not gone through. Only ids in git_pins are considered, so a ref that
+// some other wwd, or a person, keeps under refs/wwd/ in a shared repository is never touched. A record younger than the grace is left
+// alone (its row may not be written yet); one whose git directory is gone is dropped without asking git.
 func (q *Queue) removeOrphanPins(ctx context.Context, now time.Time) (removed, failed int, err error) {
 	if q.pin == nil {
 		return 0, 0, nil
 	}
 	ctx = context.WithoutCancel(ctx)
-	rows, qerr := q.db.QueryContext(ctx, `SELECT dir, seen_at FROM git_dirs ORDER BY dir`)
+	rows, qerr := q.db.QueryContext(ctx, `SELECT id, git_dir, at FROM git_pins ORDER BY at`)
 	if qerr != nil {
 		return 0, 0, qerr
 	}
-	type known struct {
-		dir  string
-		seen int64
+	type rec struct {
+		id, dir string
+		at      int64
 	}
-	var dirs []known
+	var recs []rec
 	for rows.Next() {
-		var k known
-		if rows.Scan(&k.dir, &k.seen) == nil {
-			dirs = append(dirs, k)
+		var r rec
+		if rows.Scan(&r.id, &r.dir, &r.at) == nil {
+			recs = append(recs, r)
 		}
 	}
 	rows.Close()
 
-	forget := func(dir string) { _, _ = q.db.ExecContext(ctx, `DELETE FROM git_dirs WHERE dir = ?`, dir) }
-	var errs []error
-	for _, k := range dirs {
-		if _, serr := os.Stat(k.dir); errors.Is(serr, os.ErrNotExist) {
-			forget(k.dir)
+	forget := func(id string) { _, _ = q.db.ExecContext(ctx, `DELETE FROM git_pins WHERE id = ?`, id) }
+	for _, r := range recs {
+		if now.Sub(time.UnixMilli(r.at)) < orphanGrace {
 			continue
 		}
-		ids, lerr := q.pin.ListPins(ctx, k.dir)
-		if lerr != nil {
-			errs = append(errs, lerr)
+		var state string
+		switch serr := q.db.QueryRowContext(ctx, `SELECT state FROM jobs WHERE id = ?`, r.id).Scan(&state); {
+		case errors.Is(serr, sql.ErrNoRows):
+			// no job: the pin is an orphan
+		case serr != nil:
+			continue
+		case !strings.Contains(terminalStates, "'"+state+"'"):
+			continue // a live job: its snapshot is needed
+		}
+		if _, serr := os.Stat(r.dir); errors.Is(serr, os.ErrNotExist) {
+			forget(r.id)
 			continue
 		}
-		left := 0
-		for _, id := range ids {
-			if t, ok := idTime(id); ok && now.Sub(t) < orphanGrace {
-				left++
-				continue // may be a pin whose row is not written yet
-			}
-			var state string
-			switch serr := q.db.QueryRowContext(ctx, `SELECT state FROM jobs WHERE id = ?`, id).Scan(&state); {
-			case errors.Is(serr, sql.ErrNoRows):
-			case serr != nil:
-				left++
-				continue
-			case !strings.Contains(terminalStates, "'"+state+"'"):
-				left++
-				continue // a live job: its snapshot is needed
-			}
-			if uerr := q.pin.Unpin(ctx, k.dir, id); uerr != nil {
-				failed++
-				left++
-				continue
-			}
-			removed++
+		if uerr := q.pin.Unpin(ctx, r.dir, r.id); uerr != nil {
+			failed++
+			continue
 		}
-		if left == 0 && now.Sub(time.UnixMilli(k.seen)) > forgetAfter {
-			var one int
-			if q.db.QueryRowContext(ctx, `SELECT 1 FROM jobs WHERE git_dir = ? LIMIT 1`, k.dir).Scan(&one) == sql.ErrNoRows {
-				forget(k.dir)
-			}
-		}
+		forget(r.id)
+		removed++
 	}
-	return removed, failed, errors.Join(errs...)
-}
-
-// idTime is the time inside a job id (the first ten characters after "j_" are the origin's clock in milliseconds), or false for an id
-// that is not shaped like one.
-func idTime(id string) (time.Time, bool) {
-	if !strings.HasPrefix(id, "j_") || len(id) != 2+26 {
-		return time.Time{}, false
-	}
-	var ms int64
-	for _, ch := range id[2:12] {
-		pos := strings.IndexRune(crockford, ch)
-		if pos < 0 {
-			return time.Time{}, false
-		}
-		ms = ms<<5 | int64(pos)
-	}
-	return time.UnixMilli(ms), true
+	return removed, failed, nil
 }

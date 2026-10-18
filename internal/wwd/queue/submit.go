@@ -23,10 +23,11 @@ func (q *Queue) Submit(ctx context.Context, s wire.JobSubmission) (wire.JobSubmi
 	// cannot be fetched must not be queued.
 	pinned := false
 	if q.pin != nil {
-		if err := q.registerGitDir(ctx, s.GitDir, now.UnixMilli()); err != nil {
+		if err := q.recordPin(ctx, id, s.GitDir, now.UnixMilli()); err != nil {
 			return wire.JobSubmissionResponse{}, fmt.Errorf("queue: submit: %w", err)
 		}
 		if err := q.pin.Pin(ctx, s.GitDir, id, s.Snapshot.Commit); err != nil {
+			q.takeBackPin(ctx, s.GitDir, id) // a pin that failed half way, or none: either way the record of it must not be left
 			return wire.JobSubmissionResponse{}, fmt.Errorf("%w: %v", ErrSnapshotRefused, err)
 		}
 		pinned = true
@@ -52,10 +53,9 @@ func (q *Queue) Submit(ctx context.Context, s wire.JobSubmission) (wire.JobSubmi
 	return wire.JobSubmissionResponse{ID: id}, nil
 }
 
-// registerGitDir writes the directory down before anything is pinned in it (see the git_dirs table).
-func (q *Queue) registerGitDir(ctx context.Context, dir string, nowMS int64) error {
-	_, err := q.db.ExecContext(ctx, `INSERT INTO git_dirs (dir, seen_at) VALUES (?, ?)
-		ON CONFLICT(dir) DO UPDATE SET seen_at = excluded.seen_at`, dir, nowMS)
+// recordPin writes the pin down before it is made (see the git_pins table).
+func (q *Queue) recordPin(ctx context.Context, id, gitDir string, nowMS int64) error {
+	_, err := q.db.ExecContext(ctx, `INSERT OR IGNORE INTO git_pins (id, git_dir, at) VALUES (?, ?, ?)`, id, gitDir, nowMS)
 	return err
 }
 
@@ -66,7 +66,9 @@ func (q *Queue) takeBackPin(ctx context.Context, gitDir, id string) {
 	if err := q.db.QueryRowContext(ctx, `SELECT 1 FROM jobs WHERE id = ?`, id).Scan(&one); err == nil {
 		return
 	}
-	_ = q.pin.Unpin(ctx, gitDir, id)
+	if err := q.pin.Unpin(ctx, gitDir, id); err == nil {
+		_, _ = q.db.ExecContext(ctx, `DELETE FROM git_pins WHERE id = ?`, id)
+	} // else the record stays, and the sweep takes the pin back once the grace has passed
 }
 
 func insertJob(ctx context.Context, c *sql.Conn, id, origin string, s wire.JobSubmission, nowMS int64, pinned bool) error {

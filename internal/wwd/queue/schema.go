@@ -10,7 +10,7 @@ import (
 // schemaVersion is the version of the queue's tables inside wwd.db. They have their own version table (queue_schema) beside the ones
 // the host-state tables keep, so neither side migrates the other's. Once wwd is deployed the tables exist, so a change from here on
 // is a migration (a case in migrate), never an edit of createSchema.
-const schemaVersion = 1
+const schemaVersion = 2
 
 // Migrate creates the queue's tables in db, or checks them. It is idempotent (wwd calls it on every start), and refuses a database a
 // newer wwd wrote: the older code would misread it.
@@ -38,12 +38,37 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		if have > schemaVersion {
 			return fmt.Errorf("queue: wwd.db has queue schema %d, this wwd knows %d: a newer wwd wrote it", have, schemaVersion)
 		}
-		// have < schemaVersion: the cases of the migrations go here, one per version step
-		return nil
+		if have < 2 {
+			if err := migrateV1ToV2(ctx, c); err != nil {
+				return err
+			}
+		}
+		_, err := c.ExecContext(ctx, `UPDATE queue_schema SET version = ?`, schemaVersion)
+		return err
 	})
 }
 
-// createSchema is version 1. Every column of the whole state machine is here (claim, lease, result, log), so the claim and
+// gitPinsTable (version 2) is the queue's own record of the snapshots it pinned: one row per pin, written BEFORE the pin is made, so that
+// a pin left behind (the row failed after the pin, or the process died between the two) is still known and is released by the sweep. The
+// sweep only ever releases ids in this table, so it cannot touch a ref some other wwd, or a person, keeps under refs/wwd/ in a shared
+// repository. A row goes when its pin is released.
+const gitPinsTable = `CREATE TABLE IF NOT EXISTS git_pins (
+	id      TEXT PRIMARY KEY,
+	git_dir TEXT NOT NULL,
+	at      INTEGER NOT NULL
+)`
+
+// migrateV1ToV2 adds git_pins and fills it from the jobs that hold a pin, so their pins are still released when they end.
+func migrateV1ToV2(ctx context.Context, c *sql.Conn) error {
+	if _, err := c.ExecContext(ctx, gitPinsTable); err != nil {
+		return err
+	}
+	_, err := c.ExecContext(ctx, `INSERT OR IGNORE INTO git_pins (id, git_dir, at)
+		SELECT id, git_dir, created_at FROM jobs WHERE pinned = 1 AND git_dir != ''`)
+	return err
+}
+
+// createSchema is version 1 (git_pins, version 2, is created beside it for a new database). Every column of the whole state machine is here (claim, lease, result, log), so the claim and
 // result transitions need no migration when they land. Times are unix milliseconds on the origin's clock.
 func createSchema(ctx context.Context, c *sql.Conn) error {
 	for _, stmt := range []string{
@@ -93,12 +118,7 @@ func createSchema(ctx context.Context, c *sql.Conn) error {
 			pinned           INTEGER NOT NULL DEFAULT 0,
 			updated_at       INTEGER NOT NULL
 		)`,
-		// git_dirs: every git directory a submission named, written down BEFORE its snapshot is pinned, so that a ref left behind (the
-		// row failed after the pin, or the process died between the two) is found by the sweep even when no job row names the repository.
-		`CREATE TABLE IF NOT EXISTS git_dirs (
-			dir     TEXT PRIMARY KEY,
-			seen_at INTEGER NOT NULL
-		)`,
+		gitPinsTable,
 		`CREATE INDEX IF NOT EXISTS jobs_state_seq ON jobs (state, seq)`,
 		`CREATE INDEX IF NOT EXISTS jobs_supersede ON jobs (supersede_key) WHERE supersede_key != ''`,
 		`CREATE INDEX IF NOT EXISTS jobs_session ON jobs (sub_session, seq)`,

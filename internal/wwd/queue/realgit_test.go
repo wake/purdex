@@ -76,16 +76,22 @@ func TestWithARealRepositoryThePinLivesAndDiesWithTheJob(t *testing.T) {
 	out := exec.Command("git", "-C", repo, "rev-parse", "-q", "--verify", "refs/wwd/"+a)
 	assert.Error(t, out.Run(), "the ref is gone after the job ended")
 
-	// a stray ref of an old job that is not in the table is removed by the sweep; the ref of a live job and any other ref are not
+	// A pin the queue recorded for a job whose row never came (a crash between the pin and the row) is released by the sweep; the pin of a
+	// live job, a ref somebody else keeps under refs/wwd/ in the same repository, and every other ref are not touched.
 	live := mk("")
 	f.clk.Advance(time.Hour)
-	stray := newJobID(f.clk.Now().Add(-30 * time.Minute))
-	git(t, repo, "update-ref", "refs/wwd/"+stray, commit)
+	leaked := newJobID(f.clk.Now().Add(-30 * time.Minute))
+	git(t, repo, "update-ref", "refs/wwd/"+leaked, commit)
+	_, err = f.db.Exec(`INSERT INTO git_pins (id, git_dir, at) VALUES (?, ?, ?)`, leaked, gitDir, ms(f.clk.Now().Add(-30*time.Minute)))
+	require.NoError(t, err)
+	foreign := newJobID(f.clk.Now().Add(-30 * time.Minute))
+	git(t, repo, "update-ref", "refs/wwd/"+foreign, commit)
 	git(t, repo, "update-ref", "refs/heads/keep-me", commit)
 	res, err := q.Sweep(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Orphans)
-	assert.Error(t, exec.Command("git", "-C", repo, "rev-parse", "-q", "--verify", "refs/wwd/"+stray).Run(), "the stray ref is gone")
+	assert.Error(t, exec.Command("git", "-C", repo, "rev-parse", "-q", "--verify", "refs/wwd/"+leaked).Run(), "the queue's own leaked pin is gone")
+	assert.Equal(t, commit, git(t, repo, "rev-parse", "refs/wwd/"+foreign), "a ref the queue never recorded is not touched")
 	assert.Equal(t, commit, git(t, repo, "rev-parse", "refs/wwd/"+live), "a live job's pin stays")
 	assert.Equal(t, commit, git(t, repo, "rev-parse", "refs/heads/keep-me"), "no other ref is touched")
 }
