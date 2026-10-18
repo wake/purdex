@@ -74,7 +74,7 @@ describe('decideArrow', () => {
     const ask = vi.fn(() => true)
     decideArrow(facts({ dir: 'down', canTakeBackAll: ask }))
     decideArrow(facts({ recall: false, canTakeBackAll: ask }))
-    decideArrow(facts({ emptyBox: false, canTakeBackAll: ask }))
+    decideArrow(facts({ emptyBox: false, atEdge: false, canTakeBackAll: ask }))
     expect(ask).not.toHaveBeenCalled()
     decideArrow(facts({ canTakeBackAll: ask }))
     expect(ask).toHaveBeenCalledTimes(1)
@@ -84,16 +84,25 @@ describe('decideArrow', () => {
     expect(decideArrow(facts({ dir: 'down' }))).toBe('caret')
   })
 
-  it('a draft that is not a walk: Up / Down are the caret\'s, whatever the caret edge', () => {
+  it('a draft that is not a walk: Up / Down are the caret\'s, whatever the caret edge — unless Up on the first line has a queue to take back (MS2-4, L5)', () => {
     for (const dir of ['up', 'down'] as const) {
-      for (const atEdge of [true, false]) expect(decideArrow(facts({ dir, emptyBox: false, walking: false, atEdge }))).toBe('caret')
+      for (const atEdge of [true, false]) expect(decideArrow(facts({ dir, emptyBox: false, walking: false, atEdge, canTakeBackAll: () => false }))).toBe('caret')
     }
+    expect(decideArrow(facts({ dir: 'down', emptyBox: false, walking: false, atEdge: true }))).toBe('caret')
+    expect(decideArrow(facts({ dir: 'up', emptyBox: false, walking: false, atEdge: false }))).toBe('caret') // not on the first line
+  })
+
+  it('Up on the first line of a box with text takes the queue back first, before the history; with nothing to take back it is as before (MS2-4, L5)', () => {
+    expect(decideArrow(facts({ emptyBox: false, walking: false, atEdge: true }))).toBe('take_back_all')
+    expect(decideArrow(facts({ emptyBox: false, walking: true, atEdge: true }))).toBe('take_back_all')
+    expect(decideArrow(facts({ emptyBox: false, walking: true, atEdge: true, canTakeBackAll: () => false }))).toBe('history')
+    expect(decideArrow(facts({ emptyBox: false, walking: false, atEdge: true, recall: false }))).toBe('caret')
   })
 
   it('a walk in progress: a step only at the matching edge', () => {
     for (const dir of ['up', 'down'] as const) {
-      expect(decideArrow(facts({ dir, emptyBox: false, walking: true, atEdge: true }))).toBe('history')
-      expect(decideArrow(facts({ dir, emptyBox: false, walking: true, atEdge: false }))).toBe('caret')
+      expect(decideArrow(facts({ dir, emptyBox: false, walking: true, atEdge: true, canTakeBackAll: () => false }))).toBe('history')
+      expect(decideArrow(facts({ dir, emptyBox: false, walking: true, atEdge: false, canTakeBackAll: () => false }))).toBe('caret')
     }
   })
 })
