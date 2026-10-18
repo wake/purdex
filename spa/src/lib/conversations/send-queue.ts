@@ -306,6 +306,13 @@ export class SendQueue {
   setStagesMode(on: boolean): void {
     if (this.stagesMode === on) return
     this.stagesMode = on
+    if (!on) {
+      // The host no longer reports stages (a downgraded daemon): what the entries held from the old one is not true any more, and today's matching takes over.
+      for (const e of this.list) e.stage = undefined
+      for (const t of this.readTimers.values()) clearTimeout(t)
+      this.readTimers.clear()
+      this.spent = []
+    }
     this.emit()
   }
 

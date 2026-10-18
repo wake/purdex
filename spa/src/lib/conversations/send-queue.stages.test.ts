@@ -178,3 +178,22 @@ describe('a host that reports stages: confirmed by id or by read, never by text'
     expect(q.entries()[0].stage?.stage).toBe('queued')
   })
 })
+
+describe('a host that stops reporting stages (a downgraded daemon)', () => {
+  it('turning the mode off lets go of the stages the entries held, their covered rows and their read timers', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.setStagesMode(true)
+    const id = await handedOne(q, calls)
+    q.setStages(byId(st(id, 'queued')))
+    q.setHeaderQueue([{ text: 'hi', at: 1_002_000 }])
+    q.setStages(byId(st(id, 'read')))
+    expect(q.coveredRows()).toHaveLength(1)
+    q.setStagesMode(false)
+    expect(q.entries()[0].stage).toBeUndefined()
+    expect(q.entries()[0].stagesHost).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(READ_GRACE_MS) // the read timer is gone: the entry is left to today's matching
+    expect(q.entries()).toHaveLength(1)
+    expect(q.coveredRows()).toEqual([])
+  })
+})
