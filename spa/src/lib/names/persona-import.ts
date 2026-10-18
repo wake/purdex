@@ -30,22 +30,28 @@ function str(v: unknown): string { return typeof v === 'string' ? v : '' }
 function obj(v: unknown): Raw { return typeof v === 'object' && v !== null ? (v as Raw) : {} }
 function text(v: unknown): { zh: string; en: string } { const o = obj(v); return { zh: str(o.zh), en: str(o.en) } }
 
-/** A file entry as a Persona; the stored avatar and the retired mark are the existing persona's, when there is one. */
+/**
+ * A file entry as a Persona. A key the entry leaves out keeps the existing persona's value, so a partial or older file
+ * never blanks what is already there; the stored avatar and the retired mark are always the existing ones.
+ */
 function fromRaw(r: Raw, existing: Persona | undefined, now: number): Persona {
+  const has = (k: string) => k in r
   const sex = str(r.sex)
   const nat = obj(r.nationality)
   const tpl = obj(r.template)
   return {
     code: str(r.id) || str(r.code),
-    name: str(r.name).trim(),
-    sex: sex === 'male' || sex === 'female' ? sex : '',
-    lead: r.lead === true,
+    name: has('name') ? str(r.name).trim() : existing?.name ?? '',
+    sex: has('sex') ? (sex === 'male' || sex === 'female' ? sex : '') : existing?.sex ?? '',
+    lead: has('lead') ? r.lead === true : existing?.lead ?? false,
     retired: existing?.retired ?? r.retired === true,
-    nationality: { code: str(nat.code), zh: str(nat.zh), en: str(nat.en) },
-    template: { name: str(tpl.name), name_zh: str(tpl.name_zh), field_zh: str(tpl.field_zh), field_en: str(tpl.field_en) },
-    personality: text(r.personality),
-    method: text(r.method),
-    interests: text(r.interests),
+    nationality: has('nationality') ? { code: str(nat.code), zh: str(nat.zh), en: str(nat.en) } : existing?.nationality ?? { code: '', zh: '', en: '' },
+    template: has('template')
+      ? { name: str(tpl.name), name_zh: str(tpl.name_zh), field_zh: str(tpl.field_zh), field_en: str(tpl.field_en) }
+      : existing?.template ?? { name: '', name_zh: '', field_zh: '', field_en: '' },
+    personality: has('personality') ? text(r.personality) : existing?.personality ?? { zh: '', en: '' },
+    method: has('method') ? text(r.method) : existing?.method ?? { zh: '', en: '' },
+    interests: has('interests') ? text(r.interests) : existing?.interests ?? { zh: '', en: '' },
     avatar: existing?.avatar ?? (typeof r.avatar === 'object' && r.avatar !== null ? (r.avatar as Persona['avatar']) : { source: '' }),
     avatar_data: existing?.avatar_data ?? '',
     updated_at: now,

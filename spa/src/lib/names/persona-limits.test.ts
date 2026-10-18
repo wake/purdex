@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest'
 import { countUnits, validatePersona, PERSONA_LIMITS } from './persona-limits'
 import { makePersona } from './__fixtures__/personas'
 
+const PNG = 'data:image/png;base64,iVBORw0KGgo='
+const JPEG = 'data:image/jpeg;base64,/9j/4AAQSkZJRg=='
+
 describe('countUnits', () => {
   it('counts runes for zh and words for en', () => {
     expect(countUnits('冷靜的人', 'zh')).toBe(4)
@@ -42,7 +45,11 @@ describe('validatePersona', () => {
   it('checks the stored avatar: type, and 32 KB as a string', () => {
     expect(fields(makePersona('hiro', { avatar_data: 'http://x/y.png' }))).toContain('avatar_data')
     expect(fields(makePersona('hiro', { avatar_data: 'data:image/webp;base64,' + 'A'.repeat(PERSONA_LIMITS.avatarData) }))).toContain('avatar_data')
-    expect(fields(makePersona('hiro', { avatar_data: 'data:image/png;base64,AA==' }))).not.toContain('avatar_data')
+    expect(fields(makePersona('hiro', { avatar_data: PNG }))).not.toContain('avatar_data')
+    expect(fields(makePersona('hiro', { avatar_data: 'data:image/png;base64,garbage!' }))).toContain('avatar_data')
+    expect(fields(makePersona('hiro', { avatar_data: 'data:image/png;base64,AAAAAAAAAAAA' }))).toContain('avatar_data') // not a PNG
+    expect(fields(makePersona('hiro', { avatar_data: JPEG.replace('jpeg', 'png') }))).toContain('avatar_data') // type and bytes disagree
+    expect(fields(makePersona('hiro', { avatar_data: JPEG }))).not.toContain('avatar_data')
   })
 
   it('checks the avatar recipe against 2 KB', () => {

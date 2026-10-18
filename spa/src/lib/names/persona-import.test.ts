@@ -36,9 +36,18 @@ describe('planImport', () => {
   })
 
   it('keeps the stored avatar and retired mark of a persona it changes', () => {
-    const existing = [makePersona('hiro', { retired: true, avatar_data: 'data:image/png;base64,AA==', avatar: { source: 'micah', seed: 'x' } })]
+    const existing = [makePersona('hiro', { retired: true, avatar_data: 'data:image/png;base64,iVBORw0KGgo=', avatar: { source: 'micah', seed: 'x' } })]
     const plan = planImport(existing, [raw('hiro', { name: 'Hiro Two' })])
-    expect(plan.result[0]).toMatchObject({ name: 'Hiro Two', retired: true, avatar_data: 'data:image/png;base64,AA==', avatar: { source: 'micah' } })
+    expect(plan.result[0]).toMatchObject({ name: 'Hiro Two', retired: true, avatar_data: 'data:image/png;base64,iVBORw0KGgo=', avatar: { source: 'micah' } })
+  })
+
+  it('keeps the existing value of a field the file entry leaves out', () => {
+    const existing = [makePersona('hiro', { lead: true, sex: 'male', nationality: { code: 'JP', zh: '日本', en: 'Japan' } })]
+    const plan = planImport(existing, [{ id: 'hiro', name: 'Hiro Two' }])
+    expect(plan.result[0]).toMatchObject({
+      name: 'Hiro Two', lead: true, sex: 'male', nationality: { code: 'JP' },
+      personality: { en: 'calm' }, template: { name: 'Tester' },
+    })
   })
 
   it('skips what would pass 64 personas, with a reason', () => {

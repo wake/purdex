@@ -27,21 +27,45 @@ function collectionIssues(items: Persona[]): PersonaIssue[] {
   return out
 }
 
+/** What the form was opened on: the host that held the shown collection, with its revision and stamp. */
+export interface EditBase { hostId: string; revision: number; stamp: PersonaCollection['stamp'] }
+
+/** The page takes this when it opens a form; `null` when no host has a collection yet. */
+export function editBase(): EditBase | null {
+  const src = currentSource(usePersonaStore.getState().byHost)
+  return src && { hostId: src.hostId, revision: src.collection.revision, stamp: src.collection.stamp }
+}
+
+/** The collection the form was built on is no longer the shown one: another host's newer copy, or a newer revision. */
+export class PersonaStaleError extends Error {
+  constructor() {
+    super('personas changed since the form was opened')
+    this.name = 'PersonaStaleError'
+  }
+}
+
+function sameBase(a: EditBase | null, b: EditBase | null): boolean {
+  if (a === null || b === null) return a === b
+  return a.hostId === b.hostId && a.revision === b.revision && a.stamp.at === b.stamp.at && a.stamp.host === b.stamp.host
+}
+
 /**
- * `fallbackHostId` is where a first collection goes when no host has one yet. A conflict (the host's copy moved) is
- * rethrown after the store re-read that host, so the page shows the newer copy and the user decides again.
+ * `base` is `editBase()` as it was when the form opened. If the shown collection is not that one any more, the items
+ * were built on something that has been replaced: a write under the new revision would pass the CAS and silently drop
+ * the newer edits, so nothing is sent. `fallbackHostId` is where a first collection goes when no host has one yet.
+ * A conflict (the host's copy moved) is rethrown after the store re-read that host.
  */
-export async function savePersonas(items: Persona[], fallbackHostId: string): Promise<{ hostId: string }> {
+export async function savePersonas(items: Persona[], base: EditBase | null, fallbackHostId: string): Promise<{ hostId: string }> {
   const issues = collectionIssues(items)
   if (issues.length > 0) throw new PersonaValidationError(issues)
-  const source: { hostId: string; collection: PersonaCollection | null } =
-    currentSource(usePersonaStore.getState().byHost) ?? { hostId: fallbackHostId, collection: null }
+  if (!sameBase(base, editBase())) throw new PersonaStaleError()
+  const hostId = base?.hostId ?? fallbackHostId
   try {
-    await putPersonas(source.hostId, items, source.collection?.revision ?? 0)
+    await putPersonas(hostId, items, base?.revision ?? 0)
   } catch (e) {
-    if (e instanceof PersonaConflictError) await usePersonaStore.getState().load(source.hostId)
+    if (e instanceof PersonaConflictError) await usePersonaStore.getState().load(hostId)
     throw e
   }
-  await usePersonaStore.getState().load(source.hostId)
-  return { hostId: source.hostId }
+  await usePersonaStore.getState().load(hostId)
+  return { hostId }
 }

@@ -16,7 +16,22 @@ export const PERSONA_LIMITS = {
 } as const
 
 export const CODE_RULE = /^[a-z]{3,12}$/
-const AVATAR_DATA = /^data:image\/(webp|png|jpeg);base64,/
+const AVATAR_DATA = /^data:image\/(webp|png|jpeg);base64,([A-Za-z0-9+/]+={0,2})$/
+
+/** The first bytes the declared type must start with (the daemon checks the magic bytes, spec §4.1). */
+function magicMatches(type: string, base64: string): boolean {
+  let head: string
+  try { head = atob(base64.slice(0, 16)) } catch { return false }
+  if (type === 'png') return head.startsWith('\x89PNG')
+  if (type === 'jpeg') return head.startsWith('\xff\xd8\xff')
+  return head.startsWith('RIFF') && head.slice(8, 12) === 'WEBP'
+}
+
+function avatarDataOk(data: string): boolean {
+  if (data.length > PERSONA_LIMITS.avatarData) return false
+  const m = AVATAR_DATA.exec(data)
+  return m !== null && magicMatches(m[1], m[2])
+}
 
 export interface PersonaIssue { field: string; message: string }
 
@@ -46,7 +61,7 @@ export function validatePersona(p: Persona): PersonaIssue[] {
       }
     }
   }
-  if (p.avatar_data !== '' && (!AVATAR_DATA.test(p.avatar_data) || p.avatar_data.length > PERSONA_LIMITS.avatarData)) {
+  if (p.avatar_data !== '' && !avatarDataOk(p.avatar_data)) {
     out.push({ field: 'avatar_data', message: 'avatar image must be a webp/png/jpeg data URL of at most 32 KB' })
   }
   if (new TextEncoder().encode(JSON.stringify(p.avatar)).length > PERSONA_LIMITS.recipe) {
