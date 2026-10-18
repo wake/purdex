@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 )
 
 // schemaVersion is the version of the queue's tables inside wwd.db. They have their own version table (queue_schema) beside the ones
@@ -121,8 +120,9 @@ var revStatements = []string{
 	revUpdTrigger(revColumns),
 }
 
-// revColumns are the columns whose change moves jobs.rev (version 6 added the manual place); revColumnsV4 are the ones version 4 made the
-// trigger with, which a migration from before the manual place creates it with because the new columns do not exist yet.
+// revColumns are the columns whose change moves jobs.rev; revColumnsV4 are the ones before version 6 added the manual place (a database
+// brought forward from version 3 gets the trigger with the full list at step 4, which SQLite accepts before the columns exist, and
+// step 6 replaces it all the same).
 const (
 	revColumnsV4 = `state, result, cancel_requested, superseded_by, log_size, claim_id`
 	revColumns   = revColumnsV4 + `, manual, manual_seq`
@@ -211,9 +211,6 @@ func migrateV3ToV4(ctx context.Context, c *sql.Conn) error {
 		return err
 	}
 	for _, stmt := range revStatements[2:] {
-		if strings.Contains(stmt, "jobs_rev_upd") {
-			stmt = revUpdTrigger(revColumnsV4) // the manual columns come in version 6
-		}
 		if _, err := c.ExecContext(ctx, stmt); err != nil {
 			return err
 		}

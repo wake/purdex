@@ -49,6 +49,23 @@ func TestPositionFrontBackNormal(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, j.ManualSeq, lastBack, "a later back goes behind the earlier one")
 
+	// asking for the front again puts a front job that is not the first ahead of the first; likewise the back
+	d := f.distinct(t)
+	_, err = f.q.SetPosition(bg, d, wire.PositionFront)
+	require.NoError(t, err)
+	e := f.get(t, b)
+	require.Greater(t, e.ManualSeq, f.get(t, d).ManualSeq, "d is in front of b now")
+	j, err = f.q.SetPosition(bg, b, wire.PositionFront)
+	require.NoError(t, err)
+	assert.Less(t, j.ManualSeq, f.get(t, d).ManualSeq, "b asked for the front again and is in front of d")
+	c2 := f.distinct(t)
+	_, err = f.q.SetPosition(bg, c2, wire.PositionBack)
+	require.NoError(t, err)
+	require.Greater(t, f.get(t, c2).ManualSeq, f.get(t, c).ManualSeq)
+	j, err = f.q.SetPosition(bg, c, wire.PositionBack)
+	require.NoError(t, err)
+	assert.Greater(t, j.ManualSeq, f.get(t, c2).ManualSeq, "c asked for the back again and is behind c2")
+
 	f.ev.reset()
 	j, err = f.q.SetPosition(bg, a, wire.PositionNormal)
 	require.NoError(t, err)

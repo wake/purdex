@@ -38,13 +38,14 @@ func (q *Queue) SetPosition(ctx context.Context, id string, p wire.Position) (wi
 		case wire.PositionNormal:
 			newManual = ""
 		case wire.PositionFront, wire.PositionBack:
-			// the extreme among the other jobs that hold the same kind of place; a job that already is the extreme stays where it is
+			// the extreme among the other jobs that hold the same kind of place (any state: a job that goes back to the queue keeps its number,
+			// and two jobs never share one); a job that already is the extreme stays where it is
 			agg, step := "min", int64(-1)
 			if p == wire.PositionBack {
 				agg, step = "max", 1
 			}
 			var other sql.NullInt64
-			if err := c.QueryRowContext(ctx, `SELECT `+agg+`(manual_seq) FROM jobs WHERE manual = ? AND id != ? AND state = 'queued'`, newManual, id).Scan(&other); err != nil {
+			if err := c.QueryRowContext(ctx, `SELECT `+agg+`(manual_seq) FROM jobs WHERE manual = ? AND id != ?`, newManual, id).Scan(&other); err != nil {
 				return err
 			}
 			if manual == newManual && (!other.Valid || (p == wire.PositionFront && seq < other.Int64) || (p == wire.PositionBack && seq > other.Int64)) {

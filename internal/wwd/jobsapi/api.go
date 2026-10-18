@@ -213,10 +213,7 @@ func (a *API) Position() http.HandlerFunc {
 			badRequest(w, "request body too large or unreadable")
 			return
 		}
-		req, err := wire.Decode[wire.PositionRequest](body)
-		if err == nil {
-			err = req.Validate()
-		}
+		req, err := wire.Decode[wire.PositionRequest](body) // strict, and it validates
 		if err != nil {
 			badRequest(w, err.Error())
 			return
