@@ -89,15 +89,31 @@ func collectHostMetrics(ctx context.Context, state *HostMetricsState) HostMetric
 		}
 	}
 
+	// One snapshot has one source: a collector that can choose per call (the pool-backed one) is pinned to its choice for all three.
+	col := state.collector
+	if p, ok := col.(interface{ pinned() HostCollector }); ok {
+		col = p.pinned()
+	}
 	return HostMetrics{
-		CPU:    collectHostCPU(ctx, state),
-		Memory: collectHostMemory(ctx, state.collector),
-		Disk:   collectHostDisk(ctx, state.collector),
+		CPU:    collectHostCPUFrom(ctx, state, col),
+		Memory: collectHostMemory(ctx, col),
+		Disk:   collectHostDisk(ctx, col),
 	}
 }
 
 func collectHostCPU(ctx context.Context, state *HostMetricsState) *HostCPUMetrics {
-	if src, ok := state.collector.(hostCPUPercentSource); ok {
+	return collectHostCPUFrom(ctx, state, state.collector)
+}
+
+// collectHostCPUFrom reads the CPU from col, which is the state's collector or the view of it pinned for one snapshot.
+func collectHostCPUFrom(ctx context.Context, state *HostMetricsState, col HostCollector) *HostCPUMetrics {
+	if pc, ok := col.(interface{ poolCPU() (float64, bool) }); ok { // wwd's reading, when the pool is the source
+		if percent, ok := pc.poolCPU(); ok {
+			state.previous = nil // the delta baseline of the own collector is old by the time it is needed again: start it afresh
+			return &HostCPUMetrics{Percent: &percent}
+		}
+	}
+	if src, ok := col.(hostCPUPercentSource); ok {
 		interval := time.Duration(state.cpuInterval.Load())
 		if interval <= 0 {
 			interval = DefaultRefreshIntervalMS * time.Millisecond
@@ -111,7 +127,7 @@ func collectHostCPU(ctx context.Context, state *HostMetricsState) *HostCPUMetric
 		}
 		return &HostCPUMetrics{Percent: &percent}
 	}
-	sample, err := state.collector.CollectCPU(ctx)
+	sample, err := col.CollectCPU(ctx)
 	if err != nil {
 		return &HostCPUMetrics{UnavailableReason: reasonPtr(hostCPUUnavailableReason)}
 	}

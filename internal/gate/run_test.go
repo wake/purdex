@@ -48,6 +48,9 @@ func (s *safeBuf) String() string              { s.mu.Lock(); defer s.mu.Unlock(
 // testGate is a gate over a temp directory with two heavy slots, no QoS wrapper, no pressure and quick polling.
 func testGate(t *testing.T) (*Gate, *safeBuf) {
 	t.Helper()
+	// the assist host's assist.env exports PDX_GATE_RANK=back (local work goes first there): a test of the default rank must not meet it
+	t.Setenv(RankEnv, "")
+	t.Setenv(RankReasonEnv, "")
 	cfg := Defaults()
 	cfg.Dir = t.TempDir()
 	cfg.Slots.Heavy, cfg.Slots.Light = 2, 1
@@ -72,7 +75,7 @@ func testGate(t *testing.T) (*Gate, *safeBuf) {
 func cleanEnv(extra ...string) []string {
 	var env []string
 	for _, kv := range os.Environ() {
-		if strings.HasPrefix(kv, HeldEnv+"=") || strings.HasPrefix(kv, "GOFLAGS=") {
+		if strings.HasPrefix(kv, HeldEnv+"=") || strings.HasPrefix(kv, "GOFLAGS=") || strings.HasPrefix(kv, RankEnv+"=") || strings.HasPrefix(kv, RankReasonEnv+"=") {
 			continue
 		}
 		env = append(env, kv)

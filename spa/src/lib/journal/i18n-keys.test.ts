@@ -61,7 +61,7 @@ describe('journal i18n keys', () => {
     expect(names).toContain('journal.band.answered')
     expect(names).toContain('journal.kind.confirm')
     expect(names).toContain('journal.stream.newEvents')
-    expect(names).toContain('journal.pin.failed')
+    expect(names).toContain('journal.confirm.failed')
   })
   it.each([['en', en], ['zh-TW', zh]] as const)('%s has every key the journal sources use', (_name, locale) => {
     const dict = locale as Record<string, string>

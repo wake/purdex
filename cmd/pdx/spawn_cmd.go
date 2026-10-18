@@ -235,7 +235,7 @@ func runSpawnCmd(ctx context.Context, args []string, getenv func(string) string,
 	return sendBrief(ctx, client, inbox, op, a.brief, stderr)
 }
 
-// spawnSettle POSTs req until its op leaves running: the same id each time,
+// spawnSettle POSTs req until its op leaves running (or awaiting_resources): the same id each time,
 // so the daemon joins the op, across a daemon restart too (Idempotent).
 // Three consecutive attempts with no answer at all are exit 20 (spec §9.1).
 // Past spawnSettleBound it stops waiting: exit 1, spawn_wait_timeout, the op
@@ -251,13 +251,13 @@ func spawnSettle(ctx context.Context, client *daemonclient.Client, req team.Spaw
 		var op team.SpawnOp
 		_, err := client.Do(bounded, http.MethodPost, "/api/team/spawns", req, &op, daemonclient.Idempotent())
 		switch {
-		case err == nil && op.State != team.SpawnRunning:
+		case err == nil && op.State != team.SpawnRunning && op.State != team.SpawnAwaitingResources:
 			return op, ExitOK
 		case ctx.Err() == nil && bounded.Err() != nil:
 			fmt.Fprintf(stderr, "pdx spawn: spawn %s 在期限內沒有結束，daemon 上可能仍在進行；先用 pdx team 確認，不要直接重開 %s\n",
 				req.ID, spawnWaitTimeout)
 			return op, ExitError
-		case err == nil: // running: the same body again joins the op
+		case err == nil: // running, or waiting for the person's resource card (RT-5a): the same body again joins the op and keeps the card alive
 			hung = 0
 		case ctx.Err() == nil && (errors.Is(err, daemonclient.ErrNoAnswer) || errors.Is(err, context.DeadlineExceeded)):
 			if hung++; hung >= teamMaxHungPolls {

@@ -30,7 +30,7 @@ func conflictFile(t *testing.T, cfg string) string {
 // Add, list, remove by index and by pair; an existing pair (either order) changes nothing and says so; a missing one says so.
 // Mutation gates: no dedupe → two rules (red); the pair order respected → "already there" missing (red); the index off by one → red.
 func TestGateConflict_AddListRemove(t *testing.T) {
-	cfg, _ := gateEnv(t, "[gate.admission]\ndisk_min_gb = 0\n")
+	cfg, _ := gateEnv(t, noAdmission)
 	t.Setenv("PDX_SESSION_ID", "")
 	code, out, _ := conflictCmd(t, cfg)
 	assert.Equal(t, 0, code)
@@ -93,7 +93,7 @@ func TestGateConflict_AddListRemove(t *testing.T) {
 
 // The refusals: missing reason, empty pattern, a bad class, a reason that is not one short line, wrong shapes.
 func TestGateConflict_Refusals(t *testing.T) {
-	cfg, _ := gateEnv(t, "[gate.admission]\ndisk_min_gb = 0\n")
+	cfg, _ := gateEnv(t, noAdmission)
 	for name, c := range map[string]struct {
 		args []string
 		want string
@@ -123,7 +123,7 @@ func TestGateConflict_Refusals(t *testing.T) {
 
 // A broken conflicts.json: the list says so and no rule is in force; an edit refuses to write over it.
 func TestGateConflict_ABrokenFile(t *testing.T) {
-	cfg, _ := gateEnv(t, "[gate.admission]\ndisk_min_gb = 0\n")
+	cfg, _ := gateEnv(t, noAdmission)
 	require.NoError(t, os.MkdirAll(filepath.Dir(conflictFile(t, cfg)), 0o755))
 	require.NoError(t, os.WriteFile(conflictFile(t, cfg), []byte("{nope"), 0o644))
 	code, out, _ := conflictCmd(t, cfg)
@@ -143,7 +143,7 @@ func TestGateConflict_ABrokenFile(t *testing.T) {
 // Two adds at once both land; an add and a remove of the same pair at once end in the order the lock was taken, and each prints what
 // it found. Mutation gate: no lock → one add is lost (red, repeated).
 func TestGateConflict_TwoEditsAtOnceLoseNothing(t *testing.T) {
-	cfg, _ := gateEnv(t, "[gate.admission]\ndisk_min_gb = 0\n")
+	cfg, _ := gateEnv(t, noAdmission)
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
@@ -186,7 +186,7 @@ func TestGateConflict_TwoEditsAtOnceLoseNothing(t *testing.T) {
 
 // status: the rules, and per waiter what holds it (conflict_with / conflict_rule), in the text and in the JSON.
 func TestGateConflict_StatusShowsTheRulesAndTheWaiterTheyHold(t *testing.T) {
-	cfg, _ := gateEnv(t, "[gate.slots]\nheavy = 2\n[gate.admission]\ndisk_min_gb = 0\n")
+	cfg, _ := gateEnv(t, "[gate.slots]\nheavy = 2\n"+noAdmission)
 	code, _, errb := conflictCmd(t, cfg, "add", "--class", "heavy", "tool-a", "tool-b", "--reason", "they thrash")
 	require.Equal(t, 0, code, errb)
 	dir := t.TempDir()
@@ -242,7 +242,7 @@ func TestGateConflict_StatusShowsTheRulesAndTheWaiterTheyHold(t *testing.T) {
 // the list says so, and an edit leaves the bytes alone. Mutation gate: LoadConflicts skips the reason check → red.
 func TestGateConflict_ABadReasonInTheFile(t *testing.T) {
 	for name, reason := range map[string]string{"blank": " ", "long": strings.Repeat("x", 201), "control": `a\u001b[31mb`} {
-		cfg, _ := gateEnv(t, "[gate.admission]\ndisk_min_gb = 0\n")
+		cfg, _ := gateEnv(t, noAdmission)
 		require.NoError(t, os.MkdirAll(filepath.Dir(conflictFile(t, cfg)), 0o755))
 		doc := `{"rules":[{"class":"heavy","a":"tsc -b","b":"vitest related","reason":"` + reason + `"}]}`
 		require.NoError(t, os.WriteFile(conflictFile(t, cfg), []byte(doc), 0o644))

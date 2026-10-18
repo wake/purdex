@@ -49,14 +49,13 @@ export function parseEntry(v: unknown): JournalEntry | string {
   if (!isStr(v.actor)) return 'entry.actor is not a string'
   if (!isStr(v.text)) return 'entry.text is not a string'
   for (const k of ['by', 'detail']) if (v[k] !== undefined && v[k] !== null && !isStr(v[k])) return `entry.${k} is not a string`
-  if (v.pinned !== undefined && typeof v.pinned !== 'boolean') return 'entry.pinned is not a boolean'
   const refs = strList(v.refs)
   if (!refs) return 'entry.refs is not a list of strings'
   const items = parseItems(v.items)
   if (!items) return 'entry.items is not a list of {text, done}'
   return {
     id: v.id, kind: v.kind as EntryKind, by: (v.by as string | undefined) ?? '', at: v.at, actor: v.actor, text: v.text, refs, items,
-    detail: (v.detail as string | undefined) ?? '', pinned: v.pinned === true,
+    detail: (v.detail as string | undefined) ?? '',
   }
 }
 
@@ -92,8 +91,9 @@ export function parseJournalPage(v: unknown): JournalPage | null {
   if (typeof v.more !== 'boolean' || !isCount(v.open_confirms)) return null
   const entries = parseEntryList(v.entries)
   const pinned = parseEntryList(v.pinned === undefined ? [] : v.pinned)
-  if (!entries || !pinned) return null
-  return { unit, project, personName: (v.person_name as string | undefined) ?? '', entries, pinned, more: v.more, openConfirms: v.open_confirms }
+  const confirms = v.confirms === undefined || v.confirms === null ? null : parseEntryList(v.confirms)
+  if (!entries || !pinned || (v.confirms !== undefined && v.confirms !== null && !confirms)) return null
+  return { unit, project, personName: (v.person_name as string | undefined) ?? '', entries, confirms, pinned, more: v.more, openConfirms: v.open_confirms }
 }
 
 function parseTask(v: unknown): JournalTask | string {

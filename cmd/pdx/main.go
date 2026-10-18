@@ -33,11 +33,14 @@ import (
 	gatemod "github.com/wake/purdex/internal/module/gate"
 	hostconfigmod "github.com/wake/purdex/internal/module/hostconfig"
 	hosttransfermod "github.com/wake/purdex/internal/module/hosttransfer"
+	jobnotifymod "github.com/wake/purdex/internal/module/jobnotify"
+	jobsmod "github.com/wake/purdex/internal/module/jobs"
 	"github.com/wake/purdex/internal/module/logs"
 	modeventsmod "github.com/wake/purdex/internal/module/modevents"
 	"github.com/wake/purdex/internal/module/monitor"
 	"github.com/wake/purdex/internal/module/nex"
 	peersmod "github.com/wake/purdex/internal/module/peers"
+	poolmod "github.com/wake/purdex/internal/module/pool"
 	profilesmod "github.com/wake/purdex/internal/module/profiles"
 	pushmod "github.com/wake/purdex/internal/module/push"
 	readsmod "github.com/wake/purdex/internal/module/reads"
@@ -54,7 +57,7 @@ import (
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: pdx <command> [flags]\n")
-		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, hook, setup, token, peers, msg, lead, adopt, release, spawn, kill, team, task, report, lease, host, gate, watch, relay, ask, nex, path, journal, version\n")
+		fmt.Fprintf(os.Stderr, "Commands: serve, start, stop, status, statusline-proxy, hook, setup, token, peers, msg, lead, adopt, release, spawn, kill, team, task, report, lease, host, gate, test, jobs, wwd, watch, relay, ask, nex, path, journal, version\n")
 		os.Exit(1)
 	}
 
@@ -101,6 +104,14 @@ func main() {
 		runHost(os.Args[2:])
 	case "gate":
 		runGate(os.Args[2:])
+	case "test":
+		runTest(os.Args[2:])
+	case "entry":
+		runEntry(os.Args[2:])
+	case "jobs":
+		runJobs(os.Args[2:])
+	case "wwd":
+		runWWD(os.Args[2:])
 	case "watch":
 		runWatch(os.Args[2:])
 	case "assist":
@@ -467,8 +478,11 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	c.AddModule(resourcesmod.New())
 	c.AddModule(watchmod.New())
 	c.AddModule(gatemod.New()) // the gate's decision history (A1)
+	c.AddModule(poolmod.New()) // the resource pool, read from the local wwd (WWD-2a)
+	c.AddModule(jobsmod.New()) // the pool's jobs, read from the local wwd (WWD-2e)
 	c.AddModule(assistmod.New())
-	c.AddModule(fleetmod.New()) // the fleet status: primary / standby roles (F-1b2)
+	c.AddModule(jobnotifymod.New()) // tells a job's submitter when it ends (WWD-3f)
+	c.AddModule(fleetmod.New())     // the fleet status: primary / standby roles (F-1b2)
 	c.AddModule(fsmod.New())
 	c.AddModule(logs.New())
 	// conversation serves GET /api/conversations/{provider}/{session_id}; its resolver consults the conversation

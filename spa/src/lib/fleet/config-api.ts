@@ -6,7 +6,7 @@ import { HostConfigApiError, HostConfigConflictError } from '../host-config-api'
 import type { HostConfig } from '../../stores/useHostStore'
 
 export interface ProbeRow { id: string; name: string; ssh_alias: string; icon: string; icon_weight: string; colors?: HostConfig['colors'] }
-export interface FleetRow { order: string[]; peer_ssh_alias: string; enabled: boolean }
+export interface FleetRow { order: string[]; peer_ssh_alias: string; enabled: boolean; source?: 'ssh' | 'pool' }
 /** `dropped`: rows the daemon left out of its answer; `invalid`: the stored value is not this row at all. */
 export interface Marked { dropped: { count: number; reasons: string[] } | null; invalid: boolean }
 export interface Versioned<T> extends Marked { items: T; revision: number }
@@ -46,6 +46,7 @@ export function parseFleetConfig(body: unknown): FleetConfigRead {
         order: Array.isArray(fi.order) ? fi.order.filter((a): a is string => typeof a === 'string') : [],
         peer_ssh_alias: str(fi.peer_ssh_alias),
         enabled: fi.enabled !== false,
+        ...(fi.source === 'ssh' || fi.source === 'pool' ? { source: fi.source } : {}),
       },
       revision: typeof f.revision === 'number' ? f.revision : 0,
       ...marks(f),

@@ -17,6 +17,14 @@ var deviceAllowed = map[string]bool{
 	"POST /api/ws-ticket": true,
 	"GET /api/hostconfig": true,
 	"GET /api/fleet":      true, // the fleet status (fleet spec §6): the primary / standby answer; the alias list next to it is the admin's
+	// the resource pool (wwd spec §10), read-only: the hosts with their facts, and a host's facts history
+	"GET /api/pool/hosts":         true,
+	"GET /api/pool/facts/history": true,
+	// the pool's jobs (wwd spec §10), read-only like the hosts: the list, one job, its log. A phone sees the same job fields (task, args,
+	// summary, log) as the Mac App; both are the user's own devices (spec §11).
+	"GET /api/pool/jobs":          true,
+	"GET /api/pool/jobs/{id}":     true,
+	"GET /api/pool/jobs/{id}/log": true,
 	// WebSockets: host events, terminal (and ?mirror=1), conversations
 	"/ws/host-events":                               true,
 	"/ws/terminal/{code}":                           true,

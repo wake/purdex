@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"github.com/wake/purdex/internal/gate"
+	"github.com/wake/purdex/internal/module/hostconfig"
 	"github.com/wake/purdex/internal/resources"
 	"github.com/wake/purdex/internal/watch"
 	"github.com/wake/purdex/internal/watchsettings"
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 type fakeWatchSettings struct {
@@ -405,5 +407,36 @@ func TestWatch_TheFootprintIsWhatTheDetectorCountsBy(t *testing.T) {
 	r2.ticks(30)
 	if n := len(r2.records()); n != 1 {
 		t.Fatalf("records = %d, want 1 without a footprint", n)
+	}
+}
+
+// While the fleet row says pool, E2 reads wwd's memory pressure, not the sampler's: wwd at level 2 for the default window is a
+// pressure_high event though the own sample says normal; with the source on ssh the same facts change nothing.
+func TestWatch_PressureComesFromWWDWhileTheSourceIsPool(t *testing.T) {
+	for _, tc := range []struct {
+		source string
+		want   int
+	}{{hostconfig.FleetSourcePool, 1}, {hostconfig.FleetSourceSSH, 0}} {
+		t.Run(tc.source, func(t *testing.T) {
+			r := newWatchRig(t, resources.ModeMeasure)
+			row := &fakeFleetRow{cfg: hostconfig.FleetConfig{Source: tc.source}, rev: 1}
+			r.m.fleetSrc = &fleetSource{cfg: row.FleetConfig, rev: row.FleetRevision}
+			r.m.pool = &poolHost{now: func() time.Time { return r.now }, pool: func(context.Context) (wire.Pool, error) {
+				return poolOf(factsAt(r.now)), nil // level 2, the rig's own sample says normal
+			}}
+			r.ticks(40) // 13 minutes of 20 s ticks: the window is past
+			n := 0
+			for _, rec := range r.records() {
+				if rec.Kind == watch.KindPressureHigh {
+					n++
+					if rec.Pressure != 2 {
+						t.Errorf("pressure = %d, want wwd's 2", rec.Pressure)
+					}
+				}
+			}
+			if n != tc.want {
+				t.Fatalf("pressure_high records = %d, want %d", n, tc.want)
+			}
+		})
 	}
 }

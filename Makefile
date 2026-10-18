@@ -1,5 +1,5 @@
 # Makefile
-.PHONY: build test lint clean check-goenv test-goenv
+.PHONY: build build-wwd test lint clean check-goenv test-goenv
 .DEFAULT_GOAL := build
 
 BIN := bin/pdx
@@ -15,6 +15,16 @@ test-goenv:
 build: check-goenv
 	go build -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/pdx
 
+WWD_TARGETS := darwin/arm64 darwin/amd64 linux/amd64
+
+# wwd cross builds: bin/wwd-<os>-<arch> (spec §2). Pure Go, no cgo.
+build-wwd:
+	@for t in $(WWD_TARGETS); do \
+		os=$${t%/*}; arch=$${t#*/}; \
+		echo "wwd $$os/$$arch"; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -ldflags "$(LDFLAGS)" -o bin/wwd-$$os-$$arch ./cmd/wwd || exit 1; \
+	done
+
 test:
 	go test -race -count=1 ./...
 
@@ -22,6 +32,8 @@ lint:
 	@unformatted=$$(gofmt -l cmd internal); \
 	if [ -n "$$unformatted" ]; then echo "gofmt needed (run gofmt -w):"; echo "$$unformatted"; exit 1; fi
 	go vet ./...
+	# wwd also runs on mserv (Linux): the *_linux.go files are not seen by the vet above
+	GOOS=linux GOARCH=amd64 go vet ./internal/wwd/... ./cmd/wwd/
 
 clean:
 	rm -rf bin/

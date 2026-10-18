@@ -224,3 +224,20 @@ describe('each team keeps its own state across journal and older hosts (real Tab
     expect(mode(KEY2)).toBe('line')
   })
 })
+
+describe('the team panel counts as outside the floating cards (JV-3 A-2)', () => {
+  it('a pointer-down on the docked team panel closes every unfixed floating card; a fixed one stays', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 2200 }) // wide enough for both cards beside the panel
+    setJournalHost(HOST, true)
+    seedUnit(HOST, 'SL', UNIT)
+    patchViewMemo(HOST, `team:${UNIT.id}`, { journalOpen: true, tasksOpen: true, fixed: { journal: true, roadmap: false, tasks: false } })
+    render(<Shell />)
+    expect(q('journal-card')).toBeTruthy()
+    expect(q('journal-tasks-card')).toBeTruthy()
+    expect(screen.getByTestId('team-panel-area').closest('[data-journal-card]')).toBeNull()
+    fireEvent.pointerDown(within(screen.getByTestId('team-panel-area')).getAllByTestId('team-panel-row')[0])
+    expect(q('journal-tasks-card')).toBeNull()
+    expect(q('journal-card')).toBeTruthy() // fixed
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 })
+  })
+})

@@ -1,16 +1,13 @@
 package resourcesmod
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
-	"sort"
 	"strings"
 
-	"github.com/wake/purdex/internal/resources"
 	_ "modernc.org/sqlite"
 )
 
@@ -31,79 +28,15 @@ func restrictDBFiles(path string) error {
 	return nil
 }
 
-// leaseRow is one row of resource_leases. Times are unix milliseconds; a
-// zero GrantedAt, EndedAt or WaitedMS stands for NULL (not yet).
-type leaseRow struct {
-	ID          string
-	ClientID    string
-	State       string // waiting | held | ended
-	Kind        string // empty for an explicit weight
-	Weight      int
-	SessionID   string
-	HolderPID   int
-	HolderStart string
-	Scope       string // process | session-new
-	ToolUseID   string
-
-	CreatedAt  int64
-	DeadlineAt int64 // granted anyway from here on (spec R6)
-	LeaseUntil int64 // a waiting row not renewed by then is abandoned
-	GrantedAt  int64
-	EndedAt    int64
-
-	Overrun   bool
-	WouldWait bool // mode advise: granted at once, but mode lease would have queued it
-	EndReason string
-	WaitedMS  int64
-
-	PeakUse      float64
-	MeanUse      float64
-	EWMA         float64
-	Samples      int
-	EmptySamples int
-	// Baseline is a JSON array of {pid, start_unix_ms}: the processes a
-	// session-new lease does not own. NULL (empty) until P1-2b records it.
-	Baseline string
-	// Parks is how often the row was parked; ParkedUntil is when the current
-	// park ends (0: not parked). While parked the row keeps its place but is
-	// never granted (lease v2 spec D-4′).
-	Parks       int
-	ParkedUntil int64
-	// Parkable: the creating client reads "queued" and "replaced".
-	Parkable bool
-
-	// Amendment A. PositionID is the position the row belongs to ("" for a
-	// wait-mode row). Mode is queue | ask | wait ("" reads as wait). Command
-	// and Cwd are what the queue shows (env is never stored). QueuedReason is
-	// queue | own_running. OfferedAt is when the row was named in a notice;
-	// ConfirmedAt when an ask row was confirmed; Notice is the final notice
-	// its release carried.
-	PositionID   string
-	Mode         string
-	Command      string
-	Cwd          string
-	QueuedReason string
-	OfferedAt    int64
-	ConfirmedAt  int64
-	Notice       string
-	// DecPath is how the grant was decided (immediate, waited, offer, ...);
-	// empty until granted.
-	DecPath string
-}
-
-// leaseStore is the SQLite persistence of resource_leases (resources.db).
-// Every state change is a compare-and-set on the row's state, so of any
-// number of concurrent writers exactly one wins.
-type leaseStore struct {
+// resourcesStore is resources.db: the host_minutes timeline, and the retired lease tables (resource_leases,
+// resource_positions), which are still created and migrated so an existing database is left as it is; WWD-9 drops them.
+type resourcesStore struct {
 	db *sql.DB
-	// afterFirstStmt is a test seam: a combined operation calls it between its
-	// statements, and an error from it aborts (and rolls back) the operation.
-	afterFirstStmt func() error
 }
 
-// openLeaseStore opens (or creates) resources.db at path. ":memory:" is for
+// openResourcesStore opens (or creates) resources.db at path. ":memory:" is for
 // tests.
-func openLeaseStore(path string) (*leaseStore, error) {
+func openResourcesStore(path string) (*resourcesStore, error) {
 	dsn := path
 	if path != ":memory:" {
 		// Created private before SQLite sees it: it gives its WAL sidecars the
@@ -172,387 +105,49 @@ func openLeaseStore(path string) (*leaseStore, error) {
 			return nil, err
 		}
 	}
-	return &leaseStore{db: db}, nil
+	return &resourcesStore{db: db}, nil
 }
 
 // Close closes the database.
-func (s *leaseStore) Close() error { return s.db.Close() }
+func (s *resourcesStore) Close() error { return s.db.Close() }
 
-const leaseCols = `id, client_id, state, kind, weight, session_id, holder_pid, holder_start, scope, tool_use_id,
-	created_at, deadline_at, lease_until, COALESCE(granted_at,0), COALESCE(ended_at,0),
-	overrun, would_wait, COALESCE(end_reason,''), COALESCE(waited_ms,0),
-	COALESCE(peak_use,0), COALESCE(mean_use,0), COALESCE(ewma,0), samples, empty_samples, COALESCE(baseline,''),
-	parks, parked_until, parkable,
-	position_id, mode, command, cwd, queued_reason, offered_at, confirmed_at, notice, dec_path`
-
-type rowScanner interface{ Scan(dest ...any) error }
-
-func scanLease(sc rowScanner) (leaseRow, error) {
-	var r leaseRow
-	var overrun, wouldWait, parkable int
-	err := sc.Scan(&r.ID, &r.ClientID, &r.State, &r.Kind, &r.Weight, &r.SessionID, &r.HolderPID, &r.HolderStart,
-		&r.Scope, &r.ToolUseID, &r.CreatedAt, &r.DeadlineAt, &r.LeaseUntil, &r.GrantedAt, &r.EndedAt,
-		&overrun, &wouldWait, &r.EndReason, &r.WaitedMS,
-		&r.PeakUse, &r.MeanUse, &r.EWMA, &r.Samples, &r.EmptySamples, &r.Baseline, &r.Parks, &r.ParkedUntil, &parkable,
-		&r.PositionID, &r.Mode, &r.Command, &r.Cwd, &r.QueuedReason, &r.OfferedAt, &r.ConfirmedAt, &r.Notice, &r.DecPath)
-	r.Overrun, r.WouldWait, r.Parkable = overrun != 0, wouldWait != 0, parkable != 0
-	return r, err
-}
-
-func nullable(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
-}
-
-// queueRowSQL selects the rows of a queue-mode request that belong to a
-// position (R1): nobody polls them, so their lease_until never runs out.
-const queueRowSQL = `(mode = 'queue' AND position_id != '')`
-
-// Create inserts a waiting row, idempotent on ClientID: a second create with
-// the same client id inserts nothing and returns the existing row with
-// created false, whatever state it has reached.
-func (s *leaseStore) Create(r leaseRow) (leaseRow, bool, error) {
-	created, err := insertLeaseRow(s.db, r)
-	if err != nil {
-		return leaseRow{}, false, err
-	}
-	row, ok, err := s.GetByClientID(r.ClientID)
-	if err != nil {
-		return leaseRow{}, false, err
-	}
-	if !ok {
-		return leaseRow{}, false, errors.New("create lease: row vanished after insert")
-	}
-	return row, created, nil
-}
-
-// insertLeaseRow inserts a waiting row, idempotent on the client id, on a
-// database or a transaction; it reports whether it inserted.
-func insertLeaseRow(x dbx, r leaseRow) (bool, error) {
-	res, err := x.Exec(`
-		INSERT INTO resource_leases (id, client_id, state, kind, weight, session_id, holder_pid, holder_start,
-			scope, tool_use_id, created_at, deadline_at, lease_until, baseline, parkable,
-			position_id, mode, command, cwd, queued_reason)
-		VALUES (?, ?, 'waiting', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (client_id) DO NOTHING`,
-		r.ID, r.ClientID, r.Kind, r.Weight, r.SessionID, r.HolderPID, r.HolderStart,
-		r.Scope, r.ToolUseID, r.CreatedAt, r.DeadlineAt, r.LeaseUntil, nullable(r.Baseline), b2i(r.Parkable),
-		r.PositionID, r.Mode, r.Command, r.Cwd, r.QueuedReason)
-	if err != nil {
-		return false, fmt.Errorf("create lease: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("create lease rows affected: %w", err)
-	}
-	return n == 1, nil
-}
-
-// Get returns the row of id; ok is false for an unknown id.
-func (s *leaseStore) Get(id string) (leaseRow, bool, error) {
-	return s.one(`SELECT `+leaseCols+` FROM resource_leases WHERE id = ?`, id)
-}
-
-// GetByClientID returns the row the client id created.
-func (s *leaseStore) GetByClientID(clientID string) (leaseRow, bool, error) {
-	return s.one(`SELECT `+leaseCols+` FROM resource_leases WHERE client_id = ?`, clientID)
-}
-
-func (s *leaseStore) one(query string, arg any) (leaseRow, bool, error) {
-	r, err := scanLease(s.db.QueryRow(query, arg))
-	if errors.Is(err, sql.ErrNoRows) {
-		return leaseRow{}, false, nil
-	}
-	if err != nil {
-		return leaseRow{}, false, fmt.Errorf("read lease: %w", err)
-	}
-	return r, true, nil
-}
-
-// RenewLease moves a waiting row's lease forward to until (never back). A
-// held, ended or unknown row is left alone and is not an error.
-func (s *leaseStore) RenewLease(id string, until int64) error {
-	if _, err := s.db.Exec(`
-		UPDATE resource_leases SET lease_until = MAX(lease_until, ?)
-		WHERE id = ? AND state = 'waiting' AND NOT `+queueRowSQL, until, id); err != nil {
-		return fmt.Errorf("renew lease %s: %w", id, err)
-	}
-	return nil
-}
-
-// Grant moves a waiting row to held at now (compare-and-set on state). It
-// reports whether this call did it: a row that was ended, or granted by
-// someone else, answers false.
-func (s *leaseStore) Grant(id string, now int64, overrun, wouldWait bool) (bool, error) {
-	return s.changed(`
-		UPDATE resource_leases
-		SET state = 'held', granted_at = ?, overrun = ?, would_wait = ?, waited_ms = ? - created_at
-		WHERE id = ? AND state = 'waiting'`, now, b2i(overrun), b2i(wouldWait), now, id)
-}
-
-// GrantDecided is Grant with the D-8.1 snapshot of the decision (the capacity
-// bookkeeping d and the v2 zone, trend, running and gap), the wait_reasons
-// totals and, for a session-new lease, its baseline, written by the same
-// single-row UPDATE: the row is never held without them. baseline "" leaves
-// the column as it is. overrun is never set: v2 has no overrun grant.
-func (s *leaseStore) GrantDecided(id string, now int64, wouldWait bool, d resources.Decision, v2 resources.V2Record, waitReasons, baseline string) (bool, error) {
-	return grantDecidedOn(s.db, id, now, wouldWait, d, v2, waitReasons, baseline)
-}
-
-// grantDecidedOn is GrantDecided on a database or a transaction.
-func grantDecidedOn(x dbx, id string, now int64, wouldWait bool, d resources.Decision, v2 resources.V2Record, waitReasons, baseline string) (bool, error) {
-	res, err := x.Exec(`
-		UPDATE resource_leases
-		SET state = 'held', granted_at = ?, overrun = 0, would_wait = ?, waited_ms = ? - created_at,
-			dec_recorded = 1, dec_load1 = ?, dec_ncpu = ?, dec_mem = ?, dec_measured = ?, dec_full = ?,
-			dec_sum_charge = ?, dec_unleased = ?, dec_weight = ?, dec_path = ?, would_wait_r2 = ?,
-			dec_zone = ?, dec_trend = ?, dec_running = ?, dec_gap_ms = ?,
-			wait_reasons = COALESCE(NULLIF(?, ''), wait_reasons),
-			baseline = COALESCE(?, baseline)
-		WHERE id = ? AND state = 'waiting'`,
-		now, b2i(wouldWait), now,
-		d.Load1, d.NCPU, d.Mem, d.Measured, b2i(d.Full), d.SumCharge, d.Unleased, d.Weight, d.Path, b2i(d.WouldWaitR2),
-		v2.Zone, v2.Trend, b2i(v2.Running), v2.GapMS,
-		waitReasons, nullable(baseline), id)
-	if err != nil {
-		return false, fmt.Errorf("update lease: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("update lease rows affected: %w", err)
-	}
-	return n == 1, nil
-}
-
-// End moves a waiting or held row to ended with the reason (compare-and-set
-// on state != ended). A row that never waited long enough to record it gets
-// its waited_ms here.
-func (s *leaseStore) End(id, reason string, now int64) (bool, error) {
-	return s.changed(`
-		UPDATE resource_leases
-		SET state = 'ended', ended_at = ?, end_reason = ?, waited_ms = COALESCE(waited_ms, ? - created_at)
-		WHERE id = ? AND state != 'ended'`, now, reason, now, id)
-}
-
-// EndWaiting is End for a row that is still waiting (compare-and-set on
-// state = 'waiting'), with the wait_reasons totals in the same UPDATE.
-func (s *leaseStore) EndWaiting(id, reason string, now int64, waitReasons string) (bool, error) {
-	return s.changed(`
-		UPDATE resource_leases
-		SET state = 'ended', ended_at = ?, end_reason = ?, waited_ms = COALESCE(waited_ms, ? - created_at),
-			wait_reasons = COALESCE(NULLIF(?, ''), wait_reasons)
-		WHERE id = ? AND state = 'waiting'`, now, reason, now, waitReasons, id)
-}
-
-// EndVanished ends a held session-new row as vanished only if its tracked tree
-// is still counted empty for minEmpty samples in the same statement: a sample
-// that found the command running since the sweeper read the row resets the
-// count, and that sample wins.
-func (s *leaseStore) EndVanished(id string, minEmpty int, now int64) (bool, error) {
-	return s.changed(`
-		UPDATE resource_leases
-		SET state = 'ended', ended_at = ?, end_reason = 'vanished', waited_ms = COALESCE(waited_ms, ? - created_at)
-		WHERE id = ? AND state = 'held' AND scope = 'session-new' AND empty_samples >= ?`, now, now, id, minEmpty)
-}
-
-// CloseIfExpired is the sweeper's close of a waiting row nobody polls any
-// more: End(abandoned) whose UPDATE also requires lease_until <= now, in the
-// same statement, so a poll that renewed the lease between the sweeper's read
-// and this close wins.
-func (s *leaseStore) CloseIfExpired(id string, now int64, waitReasons string) (bool, error) {
-	return s.changed(`
-		UPDATE resource_leases
-		SET state = 'ended', ended_at = ?, end_reason = 'abandoned', waited_ms = COALESCE(waited_ms, ? - created_at),
-			wait_reasons = COALESCE(NULLIF(?, ''), wait_reasons)
-		WHERE id = ? AND state = 'waiting' AND lease_until <= ? AND NOT `+queueRowSQL, now, now, waitReasons, id, now)
-}
-
-// SetShadow records the advise shadow's verdict on a row, once: the wait v2
-// would have imposed (open: a lower bound, the row ended first) and the
-// shadow's reasons. A row that already has one is left alone.
-func (s *leaseStore) SetShadow(id string, waitMS int64, open bool, waitReasons string) error {
-	if _, err := s.db.Exec(`
-		UPDATE resource_leases
-		SET v2_wait_ms = ?, v2_wait_open = ?, wait_reasons = COALESCE(NULLIF(?, ''), wait_reasons)
-		WHERE id = ? AND v2_wait_ms = -1`, waitMS, b2i(open), waitReasons, id); err != nil {
-		return fmt.Errorf("record shadow wait %s: %w", id, err)
-	}
-	return nil
-}
-
-// MaxGrantedAt is the newest granted_at of any row, held or ended (0 when
-// nothing was ever granted): where the gap between two grants is counted from
-// after a restart. A grant on the offer path is left out: the offer started
-// the gap (see MaxOfferedAt) and using the reservation does not start another.
-func (s *leaseStore) MaxGrantedAt() (int64, error) {
-	var n int64
-	if err := s.db.QueryRow(`SELECT COALESCE(MAX(granted_at), 0) FROM resource_leases WHERE dec_path != 'offer'`).Scan(&n); err != nil {
-		return 0, fmt.Errorf("max granted_at: %w", err)
-	}
-	return n, nil
-}
-
-// ExtendWaiting is the boot grace: every waiting row's lease becomes
-// max(lease_until, until). A parked row is left alone: its lease is its park,
-// which ends when it ends whatever the daemon did meanwhile. It returns how many
-// rows changed.
-func (s *leaseStore) ExtendWaiting(until int64) (int64, error) {
-	res, err := s.db.Exec(`
-		UPDATE resource_leases SET lease_until = ?
-		WHERE state = 'waiting' AND parked_until = 0 AND lease_until < ? AND NOT `+queueRowSQL, until, until)
-	if err != nil {
-		return 0, fmt.Errorf("extend waiting leases: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("extend waiting leases rows affected: %w", err)
-	}
-	return n, nil
-}
-
-// UpdateUse stores a held row's running measurements, so that a restart
-// resumes the charge instead of warming up again.
-func (s *leaseStore) UpdateUse(id string, ewma, peak, mean float64, samples, emptySamples int) error {
-	if _, err := s.db.Exec(`
-		UPDATE resource_leases SET ewma = ?, peak_use = ?, mean_use = ?, samples = ?, empty_samples = ?
-		WHERE id = ? AND state = 'held'`, ewma, peak, mean, samples, emptySamples, id); err != nil {
-		return fmt.Errorf("update lease use %s: %w", id, err)
-	}
-	return nil
-}
-
-// Active returns the held rows, oldest grant first.
-func (s *leaseStore) Active() ([]leaseRow, error) {
-	return s.many(`SELECT ` + leaseCols + ` FROM resource_leases WHERE state = 'held' ORDER BY granted_at, id`)
-}
-
-// Waiting returns the waiting rows in queue order (created_at, id).
-func (s *leaseStore) Waiting() ([]leaseRow, error) {
-	return s.many(`SELECT ` + leaseCols + ` FROM resource_leases WHERE state = 'waiting' ORDER BY created_at, id`)
-}
-
-// Recent returns up to n rows that ended at or after since, newest first.
-func (s *leaseStore) Recent(n int, since int64) ([]leaseRow, error) {
-	return s.many(`SELECT `+leaseCols+` FROM resource_leases
-		WHERE state = 'ended' AND ended_at >= ? ORDER BY ended_at DESC, id LIMIT ?`, since, n)
-}
-
-// Listing returns the held rows (by grant time), the queue (in queue order)
-// and up to n rows that ended at or after since (newest first) as one view:
-// a single statement reads one snapshot, so a row that moves between the
-// lists is in exactly one of them and none is lost or shown twice. Separate
-// queries would not give that (codex attack on P1-2a-2).
-func (s *leaseStore) Listing(n int, since int64) (active, waiting, recent []leaseRow, err error) {
-	return listingOn(s.db, n, since)
-}
-
-// listingOn is Listing on a database or on a transaction.
-func listingOn(x dbx, n int, since int64) (active, waiting, recent []leaseRow, err error) {
-	rows, err := manyOn(x, `SELECT `+leaseCols+` FROM resource_leases WHERE state IN ('held','waiting')
-		UNION ALL
-		SELECT * FROM (SELECT `+leaseCols+` FROM resource_leases
-			WHERE state = 'ended' AND ended_at >= ? ORDER BY ended_at DESC, id LIMIT ?)`, since, n)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	active, waiting, recent = []leaseRow{}, []leaseRow{}, []leaseRow{}
-	for _, r := range rows {
-		switch r.State {
-		case resources.StateHeld:
-			active = append(active, r)
-		case resources.StateWaiting:
-			waiting = append(waiting, r)
-		default:
-			recent = append(recent, r)
-		}
-	}
-	sort.SliceStable(active, func(i, j int) bool {
-		if active[i].GrantedAt != active[j].GrantedAt {
-			return active[i].GrantedAt < active[j].GrantedAt
-		}
-		return active[i].ID < active[j].ID
-	})
-	sort.SliceStable(waiting, func(i, j int) bool {
-		if waiting[i].CreatedAt != waiting[j].CreatedAt {
-			return waiting[i].CreatedAt < waiting[j].CreatedAt
-		}
-		return waiting[i].ID < waiting[j].ID
-	})
-	sort.SliceStable(recent, func(i, j int) bool {
-		if recent[i].EndedAt != recent[j].EndedAt {
-			return recent[i].EndedAt > recent[j].EndedAt
-		}
-		return recent[i].ID < recent[j].ID
-	})
-	return active, waiting, recent, nil
-}
-
-// Prune deletes ended rows and ended positions that ended before the cutoff,
-// in one transaction, and returns how many rows it deleted.
-func (s *leaseStore) Prune(before int64) (int64, error) {
-	var n int64
-	_, err := s.tx(func(x *sql.Tx) error {
-		res, err := x.Exec(`DELETE FROM resource_leases WHERE state = 'ended' AND ended_at < ?`, before)
-		if err != nil {
-			return fmt.Errorf("prune leases: %w", err)
-		}
-		if n, err = res.RowsAffected(); err != nil {
-			return err
-		}
-		if _, err := x.Exec(`DELETE FROM resource_positions WHERE state = 'ended' AND ended_at < ?`, before); err != nil {
-			return fmt.Errorf("prune positions: %w", err)
-		}
-		return nil
-	})
-	return n, err
-}
-
-func (s *leaseStore) many(query string, args ...any) ([]leaseRow, error) {
-	return manyOn(s.db, query, args...)
-}
-
-// manyOn is many on a database or on a transaction.
-func manyOn(x dbx, query string, args ...any) ([]leaseRow, error) {
-	rows, err := x.Query(query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("list leases: %w", err)
-	}
-	defer rows.Close()
-	out := []leaseRow{}
-	for rows.Next() {
-		r, err := scanLease(rows)
-		if err != nil {
-			return nil, fmt.Errorf("list leases: %w", err)
-		}
-		out = append(out, r)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("list leases: %w", err)
-	}
-	return out, nil
-}
-
-// changed runs one guarded UPDATE and reports whether it changed a row.
-func (s *leaseStore) changed(query string, args ...any) (bool, error) {
-	res, err := s.db.Exec(query, args...)
-	if err != nil {
-		return false, fmt.Errorf("update lease: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("update lease rows affected: %w", err)
-	}
-	return n == 1, nil
-}
-
-func b2i(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
-}
+// positionsSchema is the amendment A table. One live position per session is
+// enforced by the unique partial index (V15), not by code.
+const positionsSchema = `
+	CREATE TABLE IF NOT EXISTS resource_positions (
+		id               TEXT PRIMARY KEY,
+		session_id       TEXT    NOT NULL,
+		agent_pid        INTEGER NOT NULL DEFAULT 0,
+		agent_start      TEXT    NOT NULL DEFAULT '',
+		state            TEXT    NOT NULL CHECK (state IN ('queued','offered','running','idle','ended')),
+		created_at       INTEGER NOT NULL,
+		requeued_from    TEXT    NOT NULL DEFAULT '',
+		offered_at       INTEGER NOT NULL DEFAULT 0,
+		delivered_at     INTEGER NOT NULL DEFAULT 0,
+		passed_at        INTEGER NOT NULL DEFAULT 0,
+		offer_passes     INTEGER NOT NULL DEFAULT 0,
+		first_started_at INTEGER NOT NULL DEFAULT 0,
+		window_until     INTEGER NOT NULL DEFAULT 0,
+		commands_started INTEGER NOT NULL DEFAULT 0,
+		commands_ended   INTEGER NOT NULL DEFAULT 0,
+		warned           INTEGER NOT NULL DEFAULT 0,
+		extensions       INTEGER NOT NULL DEFAULT 0,
+		done_requested   INTEGER NOT NULL DEFAULT 0,
+		notice_kind      TEXT    NOT NULL DEFAULT '',
+		notice_due_at    INTEGER NOT NULL DEFAULT 0,
+		notice_sent_at   INTEGER NOT NULL DEFAULT 0,
+		notice_tries     INTEGER NOT NULL DEFAULT 0,
+		notice_result    TEXT    NOT NULL DEFAULT '',
+		offer_wait_ms    INTEGER NOT NULL DEFAULT 0,
+		idle_wait_ms     INTEGER NOT NULL DEFAULT 0,
+		offer_zone       TEXT    NOT NULL DEFAULT '',
+		offer_trend      TEXT    NOT NULL DEFAULT '',
+		wait_reasons     TEXT    NOT NULL DEFAULT '',
+		end_reason       TEXT    NOT NULL DEFAULT '',
+		ended_at         INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE UNIQUE INDEX IF NOT EXISTS resource_positions_live ON resource_positions (session_id) WHERE state != 'ended';
+	CREATE INDEX IF NOT EXISTS resource_positions_state ON resource_positions (state);`
 
 // decisionColumns are the D-8.1 columns of resource_leases, added to a
 // database that alpha.610 already created (resources.db is live: every schema
@@ -738,7 +333,7 @@ type minuteRow struct {
 // replaced: peaks take the larger, the full counters add up, ncpu is the
 // newer. So a sampler that went off and on inside a minute, a restart in the
 // minute, or a clock that stepped back can only add to what was written.
-func (s *leaseStore) InsertMinute(r minuteRow) error {
+func (s *resourcesStore) InsertMinute(r minuteRow) error {
 	full := 0
 	if r.Full {
 		full = 1
@@ -768,20 +363,10 @@ func (s *leaseStore) InsertMinute(r minuteRow) error {
 }
 
 // PruneMinutes deletes the minute rows before the cutoff (unix ms).
-func (s *leaseStore) PruneMinutes(before int64) (int64, error) {
+func (s *resourcesStore) PruneMinutes(before int64) (int64, error) {
 	res, err := s.db.Exec(`DELETE FROM host_minutes WHERE at < ?`, before)
 	if err != nil {
 		return 0, fmt.Errorf("prune host minutes: %w", err)
 	}
 	return res.RowsAffected()
-}
-
-// CountWaiting is how many requests are queued; ctx bounds the wait for a
-// busy database.
-func (s *leaseStore) CountWaiting(ctx context.Context) (int, error) {
-	var n int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM resource_leases WHERE state = 'waiting'`).Scan(&n); err != nil {
-		return 0, fmt.Errorf("count waiting leases: %w", err)
-	}
-	return n, nil
 }

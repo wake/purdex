@@ -99,6 +99,7 @@ func migrateLastRunTable(db *sql.DB) error {
 // sample). An empty instance is written as empty: a frame whose generation is unknown must not keep an older one.
 // Returns sql.ErrNoRows if the frame does not exist.
 func (s *FramesStore) SetTmuxInstance(frameID, instance string) error {
+	defer s.touch() // the cached roots read (ListRootsBySessionIDCached) must not outlive this write
 	res, err := s.db.Exec(`UPDATE agent_frames SET tmux_instance = ? WHERE frame_id = ?`, instance, frameID)
 	if err != nil {
 		return err
@@ -136,6 +137,7 @@ func (s *FramesStore) RootInfo(frameID string) (tmuxInstance string, isRoot, fou
 // A failure to record rolls the delete back: the frame stays and the caller's retry ends it (the sweep, which carries
 // no run, may get there first when the process is already dead — then that run is simply not recorded).
 func (s *FramesStore) ClaimEnd(frameID, sessionID string, end *RunEnd) (bool, error) {
+	defer s.touch() // the cached roots read (ListRootsBySessionIDCached) must not outlive this write
 	tx, err := s.db.Begin()
 	if err != nil {
 		return false, err

@@ -20,10 +20,11 @@ import { TeamPanelArea } from '../team/TeamPanelArea'
 import { useTeamUiStore } from '../../stores/useTeamUiStore'
 import { usePanelDraftStore } from '../../stores/usePanelDraftStore'
 import { useI18nStore } from '../../stores/useI18nStore'
+import { useJournalStore } from '../../stores/useJournalStore'
 import { cardWidth, useJournalUiStore, type CardKey } from '../../stores/useJournalUiStore'
 import { keepFocus } from '../../lib/keep-focus'
 import { patchUnitMemo, useViewMemo } from '../../lib/journal/use-view-memo'
-import type { ViewMemo } from '../../lib/journal/view-memory'
+import { patchViewMemo, readViewMemo, type ViewMemo } from '../../lib/journal/view-memory'
 
 /**
  * The width of the content box the stack floats in (its offset parent: the side bar and the activity bar already took theirs),
@@ -67,6 +68,31 @@ export function PanelAreas() {
   )
 }
 
+/**
+ * U4: the journal, roadmap and tasks cards float. A pointer-down outside every card closes the unfixed ones; the 工作簿 button
+ * (`data-journal-keep`) and every card of the stack, the 待確認 detail among them (`data-journal-card`), are not "outside". A fixed card
+ * stays until its X or the 工作簿 button. The 待確認 detail is the journal's companion: it stays while the journal is fixed.
+ * Reads the unit's memo at event time (no stale closure), writes it back through the same view memo.
+ */
+function useOutsideClose(host: string | null, key: string | null) {
+  useEffect(() => {
+    if (host === null || key === null) return
+    const onDown = (e: PointerEvent | MouseEvent) => {
+      const el = e.target instanceof Element ? e.target : null
+      if (el?.closest('[data-journal-card], [data-journal-keep]')) return
+      const m = readViewMemo(host, key)
+      const patch: Partial<ViewMemo> = {}
+      if (m.journalOpen && !m.fixed.journal) { patch.journalOpen = false; patch.detailId = null }
+      if (m.roadmapOpen && !m.fixed.roadmap) patch.roadmapOpen = false
+      if (m.tasksOpen && !m.fixed.tasks) patch.tasksOpen = false
+      if (m.detailId !== null && !m.fixed.journal) patch.detailId = null
+      if (Object.keys(patch).length > 0) patchViewMemo(host, key, patch)
+    }
+    document.addEventListener('pointerdown', onDown, true)
+    return () => document.removeEventListener('pointerdown', onDown, true)
+  }, [host, key])
+}
+
 function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
   const t = useI18nStore((s) => s.t)
   const { team, memoHost, memoKey } = target
@@ -83,8 +109,23 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
   // The open 待確認 detail takes the roadmap's place (a card to the journal's left): it counts as the roadmap for the narrow-window
   // drop, and `roadmapOpen` itself is never touched, so closing the detail brings the roadmap back as it was.
   const unit = target.unit
-  const detailEntry = memo.journalOpen && unit && memo.detailId !== null ? (unit.entries.find((e) => e.id === memo.detailId) ?? unit.pinned.find((e) => e.id === memo.detailId)) : undefined
+  const found = memo.journalOpen && unit && memo.detailId !== null ? (unit.entries.find((e) => e.id === memo.detailId) ?? unit.confirms.find((e) => e.id === memo.detailId)) : undefined
+  // Checking the last item takes the entry out of the band; an entry of an older month is not in the stream either, so the detail
+  // keeps the last copy it saw (every item answered) instead of vanishing under the pointer.
+  // The copy lives in the unit's view memo, outside this component: it survives a remount and is never shared between units.
+  const lastDetail = memo.lastDetail
+  useEffect(() => {
+    if (found && found !== lastDetail) patchUnitMemo(memoHost, memoKey, { lastDetail: found })
+  }, [found, lastDetail, memoHost, memoKey])
+  const kept = !found && memo.journalOpen && memo.detailId !== null && lastDetail?.id === memo.detailId
+    ? { ...lastDetail, items: lastDetail.items.map((it) => ({ ...it, done: true })) }
+    : undefined
+  const detailEntry = found ?? kept
   const detail = detailEntry?.kind === 'confirm' ? detailEntry : undefined
+  const canCheck = useJournalStore((s) => target.read !== null && s.confirmSupport[target.read.hostId] === true)
+  const onToggleItem = (idx: number, done: boolean) => {
+    if (target.read && detail) void useJournalStore.getState().setConfirm(target.read.hostId, target.read.sessionId, detail.id, idx, done, detail)
+  }
 
   const widths = {
     roadmap: cardWidth('roadmap', memo.widths.roadmap, last),
@@ -104,18 +145,20 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
     useJournalUiStore.getState().setLastWidth(card, w)
   }
   const closeDetail = useCallback(() => patchUnitMemo(memoHost, memoKey, { detailId: null }), [memoHost, memoKey])
+  const fix = (card: Exclude<CardKey, 'team'>) => ({ fixed: memo.fixed[card], onToggleFixed: () => patch({ fixed: { ...memo.fixed, [card]: !memo.fixed[card] } }) })
+  useOutsideClose(memoHost, memoKey)
 
   return (
     <div ref={rootRef} data-testid="journal-card-stack" className="absolute z-20 top-0 bottom-0 flex items-start justify-end gap-3 pointer-events-none" style={{ right: STACK_MARGIN + reserved }}>
       {shown.roadmap && (
         <div data-testid="journal-side-column" className="flex flex-col gap-3 items-end min-h-0 max-h-full" style={{ width: widths.roadmap }}>
           {shown.roadmap && detail && unit && (
-            <CardFrame testId="journal-detail-card" width={widths.roadmap} onCommitWidth={commit('roadmap')} title={t('journal.detail.title')} onClose={closeDetail}>
-              <ConfirmDetail entry={detail} personName={unit.personName} onClose={closeDetail} />
+            <CardFrame testId="journal-detail-card" floating width={widths.roadmap} onCommitWidth={commit('roadmap')} title={t('journal.detail.title')} onClose={closeDetail}>
+              <ConfirmDetail entry={detail} personName={unit.personName} onClose={closeDetail} onToggleItem={canCheck ? onToggleItem : undefined} />
             </CardFrame>
           )}
           {shown.roadmap && !detail && (
-            <CardFrame testId="journal-roadmap-card" width={widths.roadmap} onCommitWidth={commit('roadmap')} title={t('journal.card.roadmap')} onClose={() => patch({ roadmapOpen: false })}>
+            <CardFrame testId="journal-roadmap-card" floating width={widths.roadmap} onCommitWidth={commit('roadmap')} title={t('journal.card.roadmap')} onClose={() => patch({ roadmapOpen: false })} {...fix('roadmap')}>
               {unit && <RoadmapCard key={`${target.memoHost}\u0000${target.memoKey}`} target={target} unit={unit} />}
             </CardFrame>
           )}
@@ -124,6 +167,7 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
       {shown.journal && (
         <CardFrame
           testId="journal-card"
+          floating
           width={widths.journal}
           onCommitWidth={commit('journal')}
           title={<JournalTitle target={target} />}
@@ -135,6 +179,7 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
             </>
           }
           onClose={() => patch({ journalOpen: false })}
+          {...fix('journal')}
         >
           {unit && <JournalCard key={`${target.memoHost}\u0000${target.memoKey}`} target={target} unit={unit} />}
           {target.unreachableHost !== null && !target.unit && (
@@ -143,7 +188,7 @@ function Stack({ target }: { target: ReturnType<typeof useJournalTarget> }) {
         </CardFrame>
       )}
       {shown.tasks && (
-        <CardFrame testId="journal-tasks-card" width={widths.tasks} onCommitWidth={commit('tasks')} title={t('journal.card.tasks')} onClose={() => patch({ tasksOpen: false })}>
+        <CardFrame testId="journal-tasks-card" floating width={widths.tasks} onCommitWidth={commit('tasks')} title={t('journal.card.tasks')} onClose={() => patch({ tasksOpen: false })} {...fix('tasks')}>
           {unit && <TasksCard key={`${target.memoHost}\u0000${target.memoKey}`} target={target} unit={unit} />}
         </CardFrame>
       )}

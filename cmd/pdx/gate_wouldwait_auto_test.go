@@ -23,7 +23,7 @@ func wouldWaitAuto(t *testing.T, cfg string, argv ...string) map[string]any {
 
 // --auto classifies the command by its words, as a shim would, and answers for that class.
 func TestGate_WouldWaitAutoClassifiesTheCommand(t *testing.T) {
-	cfg, _ := gateEnv(t, "")
+	cfg, _ := gateEnv(t, noAdmission)
 	assert.Equal(t, "none", wouldWaitAuto(t, cfg, "ls", "-la")["class"])
 	assert.Equal(t, "heavy", wouldWaitAuto(t, cfg, "go", "test", "./...")["class"])
 	assert.Equal(t, "heavy", wouldWaitAuto(t, cfg, "./node_modules/.bin/tsc", "-b")["class"], "argv[0] may be a path")
@@ -45,7 +45,7 @@ func TestGate_WouldWaitAutoClassifiesTheCommand(t *testing.T) {
 }
 
 func TestGate_WouldWaitAutoNeedsACommand(t *testing.T) {
-	cfg, _ := gateEnv(t, "")
+	cfg, _ := gateEnv(t, noAdmission)
 	var out, errb bytes.Buffer
 	assert.Equal(t, 2, gateMain([]string{"would-wait", "--auto", "--config", cfg}, &out, &errb))
 	assert.Equal(t, 2, gateMain([]string{"would-wait", "--config", cfg, "--", "go", "test"}, &out, &errb))

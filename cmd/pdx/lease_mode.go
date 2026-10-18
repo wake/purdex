@@ -1,18 +1,12 @@
 package main
 
-// How `pdx lease run` and `acquire` choose what to do on a busy host (lease v2
-// amendment A, Task 16): --queue, --ask or --wait, else PDX_LEASE_CALLER.
+// The mode flags `pdx lease run` still accepts (lease v2 amendment A, Task 16): --queue, --ask and --wait. The alias reads them
+// and ignores them.
 
 import (
 	"flag"
 	"time"
-	"unicode/utf8"
-
-	"github.com/wake/purdex/internal/resources"
 )
-
-// leaseCommandMax is how many bytes of the command the queue shows.
-const leaseCommandMax = 200
 
 // waitFlag is --wait. It is a bare switch (--wait), and it still takes the old
 // duration (--wait=2m, --wait 2m) so scripts and the old skill text keep
@@ -70,43 +64,17 @@ func (m *modeFlags) register(fs *flag.FlagSet) {
 	fs.Var(&m.wait, "wait", "")
 }
 
-// mode is the chosen mode: a flag wins over PDX_LEASE_CALLER (fg → queue,
-// bg → ask); with neither the daemon decides (auto: queue for a caller under an
-// interactive session, wait for any other). Two flags that disagree are a usage
-// error.
-func (m *modeFlags) mode(getenv func(string) string) (mode, msg string) {
+// check says whether the mode flags are usable: at most one of --queue, --ask and --wait. They choose nothing any more (the
+// alias runs the gate); a call that gives two is still a usage error, as it always was.
+func (m *modeFlags) check() string {
 	n := 0
 	for _, b := range []bool{m.queue, m.ask, m.wait.set} {
 		if b {
 			n++
 		}
 	}
-	switch {
-	case n > 1:
-		return "", "give at most one of --queue, --ask and --wait"
-	case m.queue:
-		return resources.CallQueue, ""
-	case m.ask:
-		return resources.CallAsk, ""
-	case m.wait.set:
-		return resources.CallWait, ""
+	if n > 1 {
+		return "give at most one of --queue, --ask and --wait"
 	}
-	switch getenv("PDX_LEASE_CALLER") {
-	case "fg":
-		return resources.CallQueue, ""
-	case "bg":
-		return resources.CallAsk, ""
-	}
-	return resources.CallAuto, ""
-}
-
-// cutBytes cuts s to at most n bytes without splitting a character.
-func cutBytes(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	for n > 0 && !utf8.RuneStart(s[n]) {
-		n--
-	}
-	return s[:n]
+	return ""
 }

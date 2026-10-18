@@ -1,7 +1,7 @@
 // Package resourcesmod measures the host's load and each agent session's
 // share of it, and serves the latest reading on GET /api/resources
-// (host-resource-lease spec §3.1, §4 D-1; plan P0-2). It keeps the lease
-// queue in resources.db and follows the host setting `resources` (plan P1).
+// (host-resource-lease spec §3.1, §4 D-1; plan P0-2). It keeps the host_minutes timeline in resources.db and follows the host
+// setting `resources`. (The lease queue it once kept is gone: the gate replaced it, WWD-0a.)
 //
 // Sampling forks, so it runs on this module's own ticker in one goroutine
 // and never on a request or hook path: the handler only reads the last
@@ -23,10 +23,8 @@ import (
 	"github.com/wake/purdex/internal/fleet"
 	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/hostmem"
-	"github.com/wake/purdex/internal/modevents"
 	peersmod "github.com/wake/purdex/internal/module/peers"
 	"github.com/wake/purdex/internal/resources"
-	"github.com/wake/purdex/internal/team"
 	"github.com/wake/purdex/internal/watchsettings"
 )
 
@@ -41,10 +39,6 @@ const sampleBudget = 3 * time.Second
 // Module owns the sampler loop and the latest Snapshot.
 type Module struct {
 	core *core.Core
-	// interactive answers sessionInteractive in a test; nil reads the mod event registry.
-	interactive func(sid string) bool
-	// modStreams lists the mod streams of a session for the log line of a notice that found no mod; nil reads the registry.
-	modStreams func(sid string) []modevents.StreamInfo
 
 	sampler  resources.Sampler
 	roots    resources.RootSource // nil: no sessions are attributed
@@ -54,9 +48,6 @@ type Module struct {
 	// procSnapshot reads the process table once per tick, for the roots'
 	// liveness; a seam so tests fork nothing.
 	procSnapshot func(ctx context.Context) (*iagent.ProcessSnapshot, error)
-	// ancestryOf turns the process snapshot into the parent/start lookup of
-	// session_attr.go; nil uses the snapshot itself (a seam for tests).
-	ancestryOf func(*iagent.ProcessSnapshot) ancestry
 
 	// watch is the load watcher's state (watch.go).
 	watch watchState
@@ -89,6 +80,13 @@ type Module struct {
 	zoneSince time.Time
 	// gateConfig reads the gate's config; gateCounts the slot records (see gate_input.go). nil: a module that is not wired to the
 	// host (Init wires both).
+	// pageFrac is the part of a page the facts' rate added since the last whole one (sampler goroutine only; see cachePressureFromFacts).
+	pageFrac float64
+	// procsFailing says the process table read failed on the last pool tick (logged once per run).
+	procsFailing bool
+	// fromPool is whether the last tick's host figures were wwd's (sampler goroutine only).
+	fromPool bool
+
 	gateConfig func() gate.Config
 	gateCounts func() (heavy, light, waiting int, ok bool)
 	// minute is the host timeline's open minute (D-8.2).
@@ -100,89 +98,21 @@ type Module struct {
 	// store is resources.db; nil when it could not be opened (or there is no
 	// data dir), and the module then runs measure-only. settingsSrc is the
 	// hostconfig module's reader; nil reads as mode measure.
-	store           *leaseStore
+	store           *resourcesStore
 	settingsSrc     resources.SettingsReader
 	noteMu          sync.Mutex
 	settingsFailing bool // a run of settings read failures is under way and has been logged
-	listFailing     bool // the lease listing is failing and has been logged
 
-	// stateMu is the one serialization boundary of the lease rows: every
-	// read-decide-write on them (the sweeper's ends today; the admission pass,
-	// create, delete and the per-tick use update later) holds it from the read
-	// to the last write, so no transition lands between the rows a decision was
-	// made on and the writes that follow (plan Task 1.5, review #4). The writes
-	// under it are single statements, and a long poll never holds it while it
-	// waits.
-	stateMu sync.Mutex
-	// lastGrantMS is the newest granted_at of any row, held or ended (0: none),
-	// where the gap after a grant is counted from. Set by the pass and read from
-	// the table at boot; guarded by stateMu. reasons is the account of why each
-	// waiting row is held back (reasons.go); its own lock nests inside stateMu.
-	lastGrantMS int64
-	// lastOfferMS is the newest offer of a position (0: none): an offer is a
-	// grant decision and starts the gap, the first command that uses it does
-	// not start another (amendment A §2.5).
-	lastOfferMS int64
-	// lastGrantAtMS and shadowLastAtMS mirror the real and the shadow's newest
-	// grant time for the snapshot, which is built without stateMu.
-	lastGrantAtMS, shadowLastAtMS atomic.Int64
-	reasons                       waitReasons
-	// shadow is the advise shadow queue (shadow.go): in memory, guarded by
-	// stateMu, with its own reasons account. shadowLen is its size, readable
-	// without the lock (the sweeper decides from it whether a pass is due).
-	shadow        shadowQueue
-	shadowReasons waitReasons
-	shadowLen     atomic.Int32
-	// shadowUnwritten counts verdicts worked out and not yet written; shadowSet
-	// replaces the write (a seam for tests).
-	shadowGen       uint64 // bumped by dropShadow; guarded by stateMu
-	shadowUnwritten atomic.Int32
-	shadowSet       func(id string, waitMS int64, open bool, reasons string) error
-	// gen is the generation channel: wake closes it and installs a fresh one on
-	// every state transition, so a poller that took genChan before it read the
-	// rows is woken by any change after that read. genMu guards the swap only.
-	genMu sync.Mutex
-	gen   chan struct{}
+	// pool and fleetSrc: while the fleet row says source = "pool", LatestHost / LatestHostDetail answer from wwd's facts of this
+	// host (poolhost.go) and fall back to the sample below when wwd gives none. Both nil (a test module) keeps the own sample.
+	pool     *poolHost
+	fleetSrc *fleetSource
 
-	// Sweeper state (sweeper.go), touched by the sweeper goroutine or a test
-	// calling sweepOnce, under stateMu. sweepView replaces the process table
-	// the holders are judged against (a seam: a populated ProcessSnapshot
-	// cannot be built outside package agent; nil reads procSnapshot);
-	// sweepHook runs before each end the sweeper attempts, for tests to race a
-	// writer in.
-	sweepEvery time.Duration
-	sweepView  func(ctx context.Context) (procView, error)
-	sweepHook  func(r leaseRow)
-	// passHook runs inside the admission pass, after the rows were read and
-	// before the first grant: a seam for tests to race a writer in.
-	passHook func()
-	// beforeLockHook runs between the unlocked baseline work and the locked
-	// part of a round: a seam for a request that arrives in between.
-	beforeLockHook func()
-	// baselineFailing: the "no baseline" problem has been logged (the unlocked part
-	// of the pass runs on the sampler and the sweeper goroutine).
-	baselineFailing atomic.Bool
-	// addrMu guards addrCache: the addresses shown in the snapshot's positions.
-	addrMu    sync.Mutex
-	addrCache map[string]cachedAddress
-	// routeHook runs in the cancel and done routes after the caller and the target
-	// were read and before stateMu is taken, for tests to let a pass start the
-	// target in that window.
-	routeHook func()
-	// pollHook runs in a long poll after it read the row and released stateMu,
-	// before it waits: a seam for tests to land a transition in that window.
-	pollHook func()
 	// lastSettings is the settings the last tick read: the snapshot route
-	// uses them (for the leases' charge) instead of reading the settings store
-	// per request.
+	// uses them instead of reading the settings store per request.
 	lastSettings atomic.Pointer[resources.Settings]
-	// evSig carries requestEvent's signal to the publisher goroutine
-	// (events.go); capacity 1, so any number of requests are one.
-	evSig chan struct{}
-	// measuredThisBoot: a lease measurement has completed since this process
-	// started. The empty_samples a row carries from before a restart say nothing
-	// about the command now, so the vanished rule waits for a fresh one.
-	measuredThisBoot atomic.Bool
+	// lastProcs is the process list of the last good sample, shared read-only (the fleet's local source reads it).
+	lastProcs atomic.Pointer[[]resources.Proc]
 	// The disk guard (diskguard.go, #2470). diskFree reads the free bytes of the volume of a path and goCacheDir says where
 	// the Go build cache is; both nil (a test module) leaves the guard off, Init installs the real ones. trimHook runs at
 	// the start of a trim's walk: a seam for tests.
@@ -190,32 +120,7 @@ type Module struct {
 	goCacheDir func() string
 	trimHook   func()
 	disk       diskGuard
-	// Amendment A, guarded by stateMu: the positions whose agent the sweeper
-	// found gone this tick, the snapshots in which an agent pid was listed under
-	// another session, and the window cost not yet written.
-	goneAgents map[string]bool
-	swaps      map[string]*sessionSwap
-	costs      map[string]*windowCost
-	// pendingCosts are window costs settled but not yet written (a write that
-	// failed is kept and tried again, never repeated once it won).
-	pendingCosts []pendingCost
-	// deliverable says whether the session can take a notice now (its main turn is
-	// not running); nil asks the agent module (canDeliver).
-	deliverable func(sessionID string) bool
-	// skipPass makes admissionPass a no-op (a test seam).
-	skipPass    bool
-	lastPrune   time.Time
-	viewFailing bool
-
-	// Per-lease use (leaseuse.go). leaseUse is the latest raw measured use of
-	// each held lease in host percent, guarded by useMu; useAt, measureNote
-	// and lastProcs' writer are the sampler goroutine's own. lastProcs is the
-	// process list of the last good sample, shared read-only.
-	useMu       sync.Mutex
-	leaseUse    map[string]resources.LeaseUsage
-	useAt       map[string]time.Time
-	measureNote string
-	lastProcs   atomic.Pointer[[]resources.Proc]
+	lastPrune  time.Time
 	// newGate makes the gate the fleet summary reads (a test seam: nil is gate.New).
 	newGate func(gate.Config) *gate.Gate
 
@@ -228,13 +133,6 @@ type Module struct {
 	started   bool
 	stopped   bool // Stop was called: the module cannot be started again
 	closeOnce sync.Once
-
-	// The notice outbox (notices.go). noticeQ is a test seam: nil reads the prompt queue from the registry.
-	noticeQ    noticeSender
-	leadNotice team.LeadNoticer     // a test seam: nil reads the team module's from the registry (notices_fallback.go)
-	alertOut   func(core.HostEvent) // a test seam: nil broadcasts on core.Events
-	noticeWake chan struct{}
-	notices    noticeState
 }
 
 // New returns the module with production defaults; Init installs the platform
@@ -248,32 +146,8 @@ func New() *Module {
 		procSnapshot: iagent.SnapshotProcesses,
 		runCtx:       runCtx,
 		stopRun:      stopRun,
-		gen:          make(chan struct{}),
-		evSig:        make(chan struct{}, 1),
-		noticeWake:   make(chan struct{}, 1),
-		sweepEvery:   sweepInterval,
 		watch:        watchState{env: defaultWatchEnv()},
 	}
-}
-
-// wake tells every poller holding the current generation channel that a lease
-// row changed state: it closes the channel and installs a fresh one. A writer
-// calls it after the write, normally still under stateMu.
-func (m *Module) wake() {
-	m.genMu.Lock()
-	defer m.genMu.Unlock()
-	close(m.gen)
-	m.gen = make(chan struct{})
-	m.requestEvent() // a grant or an end is worth an event
-	m.kickNotices()  // and a transition may have armed a notice slot
-}
-
-// genChan is the channel the next wake closes. A poller takes it before it
-// reads the rows, so a change after that read cannot be missed.
-func (m *Module) genChan() <-chan struct{} {
-	m.genMu.Lock()
-	defer m.genMu.Unlock()
-	return m.gen
 }
 
 func (m *Module) Name() string           { return "resources" }
@@ -289,6 +163,8 @@ func (m *Module) Init(c *core.Core) error {
 	m.core = c
 	c.Registry.Register(resources.HostReaderKey, resources.HostReader(m))
 	c.Registry.Register(fleet.LocalSourceKey, fleet.LocalSource(newLocalSource(m)))
+	m.findPoolHost(c)
+	c.Registry.Register(resources.LocalFactsKey, resources.LocalFactsReader(m))
 	if m.sampler == nil {
 		m.sampler = resources.NewSampler()
 		m.enableDiskGuard() // production wiring (a module with an injected sampler is a test's: its guard stays off)
@@ -321,11 +197,27 @@ func (m *Module) Init(c *core.Core) error {
 
 // LatestHost is the host part of the last published snapshot (resources.HostReader); ok is false before a usable one.
 func (m *Module) LatestHost() (resources.HostUse, bool) {
+	if hd, ok := m.poolDetail(); ok {
+		return hd.Host, true
+	}
 	snap := m.latest.Load()
 	if snap == nil || !snap.Available {
 		return resources.HostUse{}, false
 	}
 	return snap.Host, true
+}
+
+// LatestHostDetail is LatestHost with the sample time (resources.HostDetailReader). ok is false before a usable sample, as
+// LatestHost.
+func (m *Module) LatestHostDetail() (resources.HostDetail, bool) {
+	if hd, ok := m.poolDetail(); ok {
+		return hd, true
+	}
+	snap := m.latest.Load()
+	if snap == nil || !snap.Available {
+		return resources.HostDetail{}, false
+	}
+	return resources.HostDetail{Host: snap.Host, SampledAt: snap.SampledAt.UnixMilli()}, true
 }
 
 // openStore opens resources.db in the data dir. A failure is logged and
@@ -338,7 +230,7 @@ func (m *Module) openStore(c *core.Core) {
 		m.logf("[resources] no data dir: resources.db is not opened, measuring only")
 		return
 	}
-	st, err := openLeaseStore(filepath.Join(c.Cfg.DataDir, "resources.db"))
+	st, err := openResourcesStore(filepath.Join(c.Cfg.DataDir, "resources.db"))
 	if err != nil {
 		m.logf("[resources] resources.db: %v: measuring only", err)
 		return
@@ -367,18 +259,10 @@ func (m *Module) findSettings(c *core.Core) {
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/resources", m.handleGet)
 	mux.HandleFunc("GET /api/resources/report", m.handleReport)
-	mux.HandleFunc("POST /api/resources/leases", m.handleLeaseCreate)
-	mux.HandleFunc("DELETE /api/resources/leases", m.handleLeaseDeleteByClient)
-	mux.HandleFunc("GET /api/resources/leases/{id}", m.handleLeaseGet)
-	mux.HandleFunc("DELETE /api/resources/leases/{id}", m.handleLeaseDelete)
-	mux.HandleFunc("POST /api/resources/leases/{id}/confirm", m.handleLeaseConfirm)
-	mux.HandleFunc("POST /api/resources/leases/{id}/cancel", m.handleLeaseCancel)
-	mux.HandleFunc("POST /api/resources/positions/{id}/cancel", m.handlePositionCancel)
-	mux.HandleFunc("POST /api/resources/positions/done", m.handlePositionDone)
 }
 
 // Start runs the boot reconcile, then launches the sampler goroutine (one
-// tick at once, then one per interval) and the lease sweeper, until Stop.
+// tick at once, then one per interval) until Stop.
 func (m *Module) Start(context.Context) error {
 	m.startMu.Lock()
 	defer m.startMu.Unlock()
@@ -389,19 +273,9 @@ func (m *Module) Start(context.Context) error {
 		return nil
 	}
 	m.started = true
-	m.boot() // before the sampler: its first tick sees the reconciled rows
+	m.boot() // before the sampler
 	m.wg.Add(1)
 	go m.run(m.runCtx)
-	if m.store != nil {
-		m.wg.Add(1)
-		go m.runSweeper(m.runCtx) // after the boot reconcile and the sampler
-	}
-	m.wg.Add(1)
-	go m.runEvents(m.runCtx)
-	if m.store != nil {
-		m.wg.Add(1)
-		go m.runNotices(m.runCtx) // after the boot reconcile: the slots that were armed before a restart are sent again
-	}
 	return nil
 }
 

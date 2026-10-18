@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 const pinned = vi.fn<(hostId: string, path: string, init?: RequestInit) => Promise<Response>>()
 vi.mock('../host-api', () => ({ pinnedHostFetch: (h: string, p: string, i?: RequestInit) => pinned(h, p, i) }))
 
-import { getJournal, getRoadmap, getTasks, setPinned } from './api'
+import { getJournal, getRoadmap, getTasks, setConfirmItem } from './api'
 import { useHostStore } from '../../stores/useHostStore'
 import { wirePage, wireRoadmap, wireTasks } from './fixtures'
 
@@ -66,16 +66,16 @@ describe('tasks, roadmap, pin', () => {
     pinned.mockResolvedValueOnce(json(LEAD, 409))
     expect((await getRoadmap('h1', 's')).kind).toBe('remote')
   })
-  it('PUTs the pin with the session id, the entry id and the flag', async () => {
+  it('PUTs a hand check with the session id, the entry id, the item index and the flag', async () => {
     pinned.mockResolvedValue(json({}))
-    expect(await setPinned('h1', 's', 'wb:1:1', true)).toEqual({ kind: 'ok', value: true })
+    expect(await setConfirmItem('h1', 's', 'wb:1:1', 2, true)).toEqual({ kind: 'ok', value: true })
     const [, path, init] = pinned.mock.calls[0]
-    expect(path).toBe('/api/journal/pin')
+    expect(path).toBe('/api/journal/confirm')
     expect(init?.method).toBe('PUT')
-    expect(JSON.parse(String(init?.body))).toEqual({ session_id: 's', entry_id: 'wb:1:1', pinned: true })
+    expect(JSON.parse(String(init?.body))).toEqual({ session_id: 's', entry_id: 'wb:1:1', idx: 2, done: true })
   })
-  it('the pin goes to a remote lead as a result too', async () => {
+  it('a hand check goes to a remote lead as a result too', async () => {
     pinned.mockResolvedValue(json(LEAD, 409))
-    expect((await setPinned('h1', 's', 'e', false)).kind).toBe('remote')
+    expect((await setConfirmItem('h1', 's', 'e', 0, false)).kind).toBe('remote')
   })
 })
