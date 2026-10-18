@@ -70,10 +70,12 @@ func (e *events) reset() {
 }
 
 type fixture struct {
-	q   *Queue
-	db  *sql.DB
-	clk *fakeClock
-	ev  *events
+	q      *Queue
+	db     *sql.DB
+	clk    *fakeClock
+	ev     *events
+	pins   *fakePinner
+	gitDir string // a directory that exists: the queue does not ask git about one that is gone
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -81,9 +83,10 @@ func newFixture(t *testing.T) *fixture {
 	db := openDB(t)
 	clk, ev := newClock(), &events{}
 	require.NoError(t, Migrate(context.Background(), db))
-	q, err := New(db, Options{Origin: "mlab", Now: clk.Now, Publish: ev.publish, LogDir: t.TempDir()})
+	pins := newFakePinner()
+	q, err := New(db, Options{Origin: "mlab", Now: clk.Now, Publish: ev.publish, LogDir: t.TempDir(), Pinner: pins})
 	require.NoError(t, err)
-	return &fixture{q: q, db: db, clk: clk, ev: ev}
+	return &fixture{q: q, db: db, clk: clk, ev: ev, pins: pins, gitDir: t.TempDir()}
 }
 
 // sub is a valid submission; edit changes it.
@@ -110,6 +113,7 @@ func sub(edit ...func(*wire.JobSubmission)) wire.JobSubmission {
 
 func (f *fixture) submit(t *testing.T, edit ...func(*wire.JobSubmission)) string {
 	t.Helper()
+	edit = append([]func(*wire.JobSubmission){func(s *wire.JobSubmission) { s.GitDir = f.gitDir }}, edit...)
 	r, err := f.q.Submit(context.Background(), sub(edit...))
 	require.NoError(t, err)
 	return r.ID

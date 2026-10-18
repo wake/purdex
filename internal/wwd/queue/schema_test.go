@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 // Migrate creates the queue's tables, and running it again changes nothing: wwd.db is opened by wwd on every start, so it runs on every
@@ -24,7 +26,7 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	require.NoError(t, db.QueryRow(`SELECT version FROM queue_schema`).Scan(&v))
 	assert.Equal(t, schemaVersion, v)
 
-	for _, table := range []string{"jobs"} {
+	for _, table := range []string{"jobs", "git_pins"} {
 		var name string
 		require.NoError(t, db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name), table)
 	}
@@ -52,6 +54,35 @@ func TestJobsTableHasEveryColumnOfTheStateMachine(t *testing.T) {
 	} {
 		assert.True(t, have[c], "jobs has no column %s", c)
 	}
+}
+
+// A database that version 1 created (3b-2a, on main) is upgraded in place: git_pins appears, the pins its jobs already hold get a
+// record (so they are still released when those jobs end), the version moves to 2, and a submission works on it afterwards. Mutation
+// gates: no migration step → git_pins is missing and Submit fails; no backfill → the old job's pin is never released.
+func TestAVersionOneDatabaseIsUpgraded(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	old := f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "" })
+	// what version 1 left: no git_pins table, version 1; the job holds a pin
+	_, err := f.db.Exec(`DROP TABLE git_pins`)
+	require.NoError(t, err)
+	_, err = f.db.Exec(`UPDATE queue_schema SET version = 1`)
+	require.NoError(t, err)
+
+	require.NoError(t, Migrate(ctx, f.db))
+
+	var v int
+	require.NoError(t, f.db.QueryRow(`SELECT version FROM queue_schema`).Scan(&v))
+	assert.Equal(t, 2, v)
+	var dir string
+	require.NoError(t, f.db.QueryRow(`SELECT git_dir FROM git_pins WHERE id = ?`, old).Scan(&dir))
+	assert.Equal(t, f.gitDir, dir, "the pin the old job holds is recorded")
+
+	id := f.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "other" })
+	assert.NotEmpty(t, id, "a submission works on the upgraded database")
+	_, err = f.q.Cancel(ctx, old)
+	require.NoError(t, err)
+	assert.False(t, f.pins.has(f.gitDir, old), "and the old job's pin is released when it ends")
 }
 
 // A database written by a newer wwd is not opened by an older one: the older code would misread it.
