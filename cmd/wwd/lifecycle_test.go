@@ -38,7 +38,7 @@ func TestTheUsageRecorderStillWritesWhatTheWorkerQueuesWhileItEnds(t *testing.T)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	svc := startServices(ctx, usageRun, workerRun)
-	svc.Stop(cancel)
+	svc.Stop(cancel, nil)
 	if n := written.Load(); n != 1 {
 		t.Fatalf("%d rows written, want the 1 the worker queued while it ended", n)
 	}
@@ -56,7 +56,7 @@ func TestStopWaitsForTheWorkerBeforeItEndsTheUsageRecorder(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	svc := startServices(ctx, usageRun, workerRun)
-	go func() { svc.Stop(cancel); close(done) }()
+	go func() { svc.Stop(cancel, nil); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
@@ -79,14 +79,57 @@ func TestAWorkerThatCannotStartIsReportedAndOneThatEndsWithTheContextIsNot(t *te
 	case <-time.After(5 * time.Second):
 		t.Fatal("the worker's failure did not arrive")
 	}
-	svc.Stop(cancel)
+	svc.Stop(cancel, nil)
 
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	svc2 := startServices(ctx2, func(context.Context) {}, func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() })
-	svc2.Stop(cancel2)
+	svc2.Stop(cancel2, nil)
 	select {
 	case err := <-svc2.Err():
 		t.Fatalf("a worker that ended with the context is not a failure: %v", err)
 	default:
+	}
+}
+
+// The HTTP servers, the sweeper and the fast lane can still make a job's final event after the worker is done (a request in flight,
+// a lease that lapses). Stop waits for them before it ends the recorder, so their rows are written; and it does not close the recorder
+// while one of them is still going.
+func TestStopWaitsForTheOtherProducersBeforeItEndsTheUsageRecorder(t *testing.T) {
+	rows := make(chan int, 4)
+	var written atomic.Int32
+	var recorderEnded atomic.Bool
+	usageRun := func(ctx context.Context) {
+		for {
+			select {
+			case <-rows:
+				written.Add(1)
+			case <-ctx.Done():
+				for {
+					select {
+					case <-rows:
+						written.Add(1)
+					default:
+						recorderEnded.Store(true)
+						return
+					}
+				}
+			}
+		}
+	}
+	workerRun := func(ctx context.Context) error { <-ctx.Done(); return nil }
+	var quiesced atomic.Bool
+	quiesce := func() {
+		if recorderEnded.Load() {
+			t.Error("the recorder ended before the other producers were quiet")
+		}
+		time.Sleep(100 * time.Millisecond) // a request in flight answers, and its job's final event is published
+		rows <- 1
+		quiesced.Store(true)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	svc := startServices(ctx, usageRun, workerRun)
+	svc.Stop(cancel, quiesce)
+	if !quiesced.Load() || written.Load() != 1 {
+		t.Fatalf("quiesced %v, %d rows written, want the 1 made while the producers wound down", quiesced.Load(), written.Load())
 	}
 }
