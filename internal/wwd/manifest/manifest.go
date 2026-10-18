@@ -425,7 +425,10 @@ func (t *Task) DefinitionHash() string {
 		Env     []string `json:"env"`
 		Args    ArgsKind `json:"args"`
 		Summary string   `json:"summary"`
-	}{t.Run, t.Cwd, env, t.Args, t.Summary})
+		// omitempty: a task without a database hashes as it did before these two existed
+		DB    string `json:"db,omitempty"`
+		DBEnv string `json:"db_env,omitempty"`
+	}{t.Run, t.Cwd, env, t.Args, t.Summary, t.DB, t.DBEnv})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }

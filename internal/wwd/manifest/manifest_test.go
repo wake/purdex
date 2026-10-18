@@ -269,3 +269,32 @@ db_env = "db"
 		}
 	}
 }
+
+func TestDefinitionHashSeesTheDatabase(t *testing.T) {
+	m := mustParse(t, `
+[tasks.none]
+run = "x"
+args = "none"
+[tasks.plain]
+run = "x"
+args = "none"
+db = "per-job"
+[tasks.wp]
+run = "x"
+args = "none"
+db = "per-job"
+db_env = "wptests"
+[tasks.named]
+run = "x"
+args = "none"
+db = "per-job"
+db_env = "db"
+`)
+	h := func(n string) string { return m.Tasks[n].DefinitionHash() }
+	if h("none") == h("plain") || h("plain") == h("wp") {
+		t.Fatal("a database, or the variable set it is given as, does not change the hash")
+	}
+	if h("plain") != h("named") {
+		t.Fatal("the default db_env and an explicit db hash differently")
+	}
+}
