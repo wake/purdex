@@ -40,6 +40,11 @@ type SamplerOptions struct {
 	// Minutes, when set, keeps the finished one-minute rollups (wwd.db) and
 	// answers the 1m history from them; without it they live in memory only.
 	Minutes MinuteStore
+	// SignalsOpen says whether the proto 2 fields may be written (spec §13.1, phase 2): wire.PoolAtLeast over the pool's peers.
+	// nil is a shut gate. While shut a record is the v1 shape; while open it is v 2 and carries decompress_rate and queue.
+	SignalsOpen func() bool
+	// Queued is this host's queued jobs, for facts.queue (spec §13.2); nil: the record has no queue.
+	Queued func() int
 }
 
 // MinuteStore persists the per-minute rollups (store.Store).
@@ -100,6 +105,16 @@ func (s *Sampler) Tick(now time.Time) {
 	f.V, f.HostID, f.Alias, f.OSVersion = wire.WriteProto, s.opts.HostID, s.opts.Alias, s.opts.OSVersion
 	f.Platform, f.Arch = runtime.GOOS, runtime.GOARCH
 	reading.Apply(&f)
+	// The proto 2 fields: written only while every pool host reads them (the gate), else the record is the v1 shape and the
+	// readings are dropped here, before the record reaches the ring, the minute rollups, the store or the event stream.
+	if s.opts.SignalsOpen != nil && s.opts.SignalsOpen() {
+		f.V = wire.Proto
+		if s.opts.Queued != nil {
+			f.Queue = &wire.Queue{Queued: max(s.opts.Queued(), 0)}
+		}
+	} else {
+		f.Mem.DecompressRate, f.Queue = nil, nil
+	}
 	f.Exception = []wire.FactExc{}
 	f.Worker = wire.FactsWorker{Enabled: s.opts.WorkerEnabled, Slots: s.opts.Slots, OwnerRule: s.opts.OwnerRule}
 	var holds []derived.Hold
