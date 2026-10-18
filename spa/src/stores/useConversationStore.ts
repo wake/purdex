@@ -16,7 +16,7 @@ import {
   type SubagentAnswer,
 } from '../lib/conversations/api'
 import {
-  applyApprovalOp, applyApprovals, applyAround, applyCapabilities, applyChanges, applyHeader, applyOlderPage, applySnapshot,
+  applyApprovalOp, applyApprovals, applyAround, applyCapabilities, applyChanges, applyHeader, applyOlderPage, applySnapshot, applyStages,
   emptyDoc, firstIndex, type ConversationDoc,
 } from '../lib/conversations/model'
 import { openConversationSocket, type ConversationSocket } from '../lib/conversations/ws'
@@ -144,6 +144,9 @@ export const useConversationStore = create<ConversationState>()((set, get) => {
       }
       case 'conversation.capabilities':
         patchDoc(key, (d) => applyCapabilities(d, (frame as Extract<Frame, { type: 'conversation.capabilities' }>).value.capabilities))
+        break
+      case 'conversation.stages':
+        patchDoc(key, (d) => applyStages(d, (frame as Extract<Frame, { type: 'conversation.stages' }>).value.stages ?? []))
         break
       case 'approvals.snapshot':
         patchDoc(key, (d) => applyApprovals(d, (frame as Extract<Frame, { type: 'approvals.snapshot' }>).value.approvals ?? []))
