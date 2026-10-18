@@ -57,8 +57,8 @@ func (c *poolHostCollector) CollectMemory(ctx context.Context) (HostMemorySample
 	return c.fallback.CollectMemory(ctx)
 }
 
-// CollectDisk reads the root mount's disk from the facts. They carry the free space and the used share, not the size, so the
-// size is worked out from the two; a disk that does not add up is left to the fallback.
+// CollectDisk reads the root mount's disk from the facts; a disk the facts cannot give (a wwd that does not send the sizes yet) is
+// left to the fallback.
 func (c *poolHostCollector) CollectDisk(ctx context.Context) (HostDiskSample, error) {
 	if f, ok := c.facts(); ok {
 		if s, ok := diskSampleOf(f.Disk); ok {
@@ -68,6 +68,8 @@ func (c *poolHostCollector) CollectDisk(ctx context.Context) (HostDiskSample, er
 	return c.fallback.CollectDisk(ctx)
 }
 
+// diskSampleOf is the root mount's disk (else the first), the statfs figures the facts carry: total is Blocks x Bsize and avail
+// is Bavail x Bsize, so used is total less avail, the same arithmetic as the monitor's own collector.
 func diskSampleOf(ds []wire.Disk) (HostDiskSample, bool) {
 	if len(ds) == 0 {
 		return HostDiskSample{}, false
@@ -79,15 +81,10 @@ func diskSampleOf(ds []wire.Disk) (HostDiskSample, bool) {
 			break
 		}
 	}
-	if d.UsedPct < 0 || d.UsedPct >= 100 || d.FreeGB < 0 {
+	if d.TotalBytes == 0 || d.AvailBytes > d.TotalBytes {
 		return HostDiskSample{}, false
 	}
-	free := d.FreeGB * (1 << 30)
-	total := free / (1 - d.UsedPct/100)
-	if total <= 0 {
-		return HostDiskSample{}, false
-	}
-	return HostDiskSample{TotalBytes: uint64(total), UsedBytes: uint64(total - free)}, true
+	return HostDiskSample{TotalBytes: d.TotalBytes, UsedBytes: d.TotalBytes - d.AvailBytes}, true
 }
 
 // Close ends what the fallback keeps running (the darwin CPU sampler).

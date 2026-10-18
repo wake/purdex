@@ -42,7 +42,7 @@ func factsOK() (wire.Facts, bool) {
 	return wire.Facts{
 		CPU:  wire.CPU{NCPU: 10, IdlePct: 70},
 		Mem:  wire.Mem{TotalMB: 16000, AvailableMB: 4000},
-		Disk: []wire.Disk{{Mount: "/data", FreeGB: 1, UsedPct: 10}, {Mount: "/", FreeGB: 100, UsedPct: 50}},
+		Disk: []wire.Disk{{Mount: "/data", TotalBytes: 1 << 30, AvailBytes: 1 << 29}, {Mount: "/", TotalBytes: 200 << 30, AvailBytes: 100 << 30}},
 	}, true
 }
 
@@ -58,8 +58,8 @@ func TestPoolHostCollector_ReadsTheFacts(t *testing.T) {
 	assert.Equal(t, uint64(16000)<<20, *m.Memory.TotalBytes)
 	assert.Equal(t, uint64(12000)<<20, *m.Memory.UsedBytes)
 	require.NotNil(t, m.Disk.TotalBytes)
-	assert.InDelta(t, 200.0*(1<<30), float64(*m.Disk.TotalBytes), 1<<20, "free 100 GB at 50 % used = 200 GB")
-	assert.InDelta(t, 100.0*(1<<30), float64(*m.Disk.UsedBytes), 1<<20)
+	assert.Equal(t, uint64(200)<<30, *m.Disk.TotalBytes, "statfs's total, exactly")
+	assert.Equal(t, uint64(100)<<30, *m.Disk.UsedBytes, "total less what a user can still take")
 	assert.InDelta(t, 50.0, *m.Disk.UsedPercent, 0.01)
 }
 
@@ -109,24 +109,25 @@ func TestPoolHostCollector_CloseReachesTheFallback(t *testing.T) {
 }
 
 func TestDiskSampleOf(t *testing.T) {
+	// A facts record from a wwd that does not send the sizes yet (older than the sizes), no disk at all, and a size that does not
+	// add up are left to the monitor's own collector.
 	for name, ds := range map[string][]wire.Disk{
-		"none":       nil,
-		"nothing":    {{Mount: "/", FreeGB: 0, UsedPct: 0}},
-		"negative %": {{Mount: "/", FreeGB: 10, UsedPct: -1}},
-		"full":       {{Mount: "/", FreeGB: 0, UsedPct: 100}},
-		"negative":   {{Mount: "/", FreeGB: -1, UsedPct: 10}},
-		"over 100 %": {{Mount: "/", FreeGB: 1, UsedPct: 120}},
+		"none":              nil,
+		"no sizes yet":      {{Mount: "/", FreeGB: 10, UsedPct: 5}},
+		"avail over total":  {{Mount: "/", TotalBytes: 100, AvailBytes: 101}},
+		"zero total, avail": {{Mount: "/", TotalBytes: 0, AvailBytes: 5}},
 	} {
 		_, ok := diskSampleOf(ds)
 		assert.False(t, ok, name)
 	}
-	s, ok := diskSampleOf([]wire.Disk{{Mount: "/", FreeGB: 10, UsedPct: 0}})
-	require.True(t, ok, "an empty disk is a valid reading")
-	assert.Equal(t, uint64(10)<<30, s.TotalBytes)
-	assert.Zero(t, s.UsedBytes)
-	s, ok = diskSampleOf([]wire.Disk{{Mount: "/a", FreeGB: 1, UsedPct: 50}})
+	// statfs as it was: total is Blocks x Bsize, used is total less what a user can still take (Bavail), so reserved blocks count
+	// as used exactly as the monitor's own collector counts them.
+	s, ok := diskSampleOf([]wire.Disk{{Mount: "/a", TotalBytes: 1000, AvailBytes: 200}, {Mount: "/", TotalBytes: 500, AvailBytes: 100}})
 	require.True(t, ok)
-	assert.InDelta(t, 2.0*(1<<30), float64(s.TotalBytes), 1<<10, "no root mount: the first")
+	assert.Equal(t, HostDiskSample{TotalBytes: 500, UsedBytes: 400}, s, "the root mount")
+	s, ok = diskSampleOf([]wire.Disk{{Mount: "/a", TotalBytes: 1000, AvailBytes: 1000}})
+	require.True(t, ok, "an empty disk is a valid reading")
+	assert.Equal(t, HostDiskSample{TotalBytes: 1000, UsedBytes: 0}, s, "no root mount: the first")
 }
 
 type fakeLocalFacts struct{}
@@ -192,6 +193,6 @@ func TestPoolHostCollector_ASnapshotHasOneSource(t *testing.T) {
 	m := collectHostMetrics(context.Background(), NewHostMetricsState(c))
 	require.NotNil(t, m.CPU.Percent, "wwd's CPU")
 	assert.Equal(t, uint64(16000)<<20, *m.Memory.TotalBytes, "and wwd's memory, not the own collector's")
-	assert.InDelta(t, 200.0*(1<<30), float64(*m.Disk.TotalBytes), 1<<20, "and wwd's disk")
+	assert.Equal(t, uint64(200)<<30, *m.Disk.TotalBytes, "and wwd's disk")
 	assert.Equal(t, 1, asked, "decided once")
 }
