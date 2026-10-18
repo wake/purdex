@@ -18,6 +18,16 @@ const never = () => new Promise<never>(() => {})
 const PDX_JSON_CONFIG = '{"pdx":"/opt/pdx/bin/pdx","data_dir":"/tmp/pdx","config":"/tmp/pdx b/config.toml"}'
 
 type Call = string[]
+// The mod's settle cap (ask.js SETTLE_MS) as the engine sees it: the `ms` of every clock.sleep the mod asked for. The "never holds the
+// terminal answer" tests assert two things. (1) The cap itself: `sleeps` is exactly the waits the mod owes, each SETTLE_MS: that does
+// not move with the host's load (#3307: a 5 s wall-clock bound read 5038 and 5266 ms on a loaded host). (2) The whole call is back
+// within BACK_MS of the wall clock: a backstop for a wait added after the cap, which `sleeps` cannot see. It is far above SETTLE_MS (a
+// loaded host stretched 3 s to 5.3 s), below the tests' 15 s timeoutMs, and an unbounded wait (30 s grace) is red either way.
+// What this cannot see: an extra wait of a few seconds that does not go through clock.sleep. On a loaded host that is
+// indistinguishable from the load itself, so the contract these tests hold is "the cap is applied exactly" plus "not held past BACK_MS".
+const SETTLE_MS = 3000
+const BACK_MS = 8000
+let sleeps: number[] = []
 type Resolver = ((v: unknown) => void) | null
 // session stands in for the engine: the id, the surfaces, pdx.json (absent by default, as
 // under `claude plugin test` on a dev machine), a real-time clock.sleep and ui.log. `fail`
@@ -27,7 +37,8 @@ function session(on: any, surfaces: string[] = ['terminal'], pdxJSON?: string, f
   on('session.id', fail === 'session.id' ? refuse : () => ({ value: 'sess-test' }))
   on('session.surfaces', fail === 'session.surfaces' ? refuse : () => ({ value: surfaces }))
   on('fs.read', (_$: any, e: any) => (pdxJSON !== undefined && e.path.endsWith('/pdx.json') ? { value: pdxJSON } : { deny: 'ENOENT' }))
-  on('clock.sleep', async (_$: any, e: any) => { await new Promise((r) => setTimeout(r, e.ms)); return { value: undefined } })
+  sleeps = []
+  on('clock.sleep', async (_$: any, e: any) => { sleeps.push(e.ms); await new Promise((r) => setTimeout(r, e.ms)); return { value: undefined } })
   const logs: { text: string; to: string }[] = []
   on('ui.log', (_$: any, e: any) => { logs.push({ text: e.text, to: e.to }); return { value: undefined } })
   return logs
@@ -536,7 +547,7 @@ test('a row closed another way (abandoned) ⇒ the native dialog runs on alone, 
 // `pdx ask begin` against a daemon that is down answers exit 20 only after the client's 30 s
 // grace; here it never answers inside the test. The native answer comes back within the mod's
 // settle cap (3 s), measured in real time. Mutation gate: wait for begin without the cap → red.
-test('a daemon that does not answer begin (down: exit 20 only after its 30 s grace) never holds the terminal answer: back within 5 s', { timeoutMs: 15000 }, async ($, on) => {
+test('a daemon that does not answer begin (down: exit 20 only after its 30 s grace) never holds the terminal answer: back at the settle cap (3 s)', { timeoutMs: 15000 }, async ($, on) => {
   session(on)
   const calls: Call[] = []
   let answerNative: Resolver = null
@@ -550,7 +561,8 @@ test('a daemon that does not answer begin (down: exit 20 only after its 30 s gra
   const r = await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
   const ms = Date.now() - t0
   expect(r).toEqual(expect.objectContaining({ result: NATIVE_RED.result, isReadOnly: true, ref: 1 }))
-  expect(ms).toBeLessThan(5000)
+  expect(sleeps).toEqual([SETTLE_MS]) // begin was waited for under the cap, and for nothing else
+  expect(ms).toBeLessThan(BACK_MS)
   // begin never replied: the row it may still open is reported by the tool use, detached (#1848)
   expect(calls.map(sub)).toEqual(['begin', 'report'])
   expect(calls[1]).toContain('--detach')
@@ -559,12 +571,12 @@ test('a daemon that does not answer begin (down: exit 20 only after its 30 s gra
 
 // The same bound for the report: the row is open, the person answers, and the daemon then stops
 // answering. The report is sent (its call is out before the answer goes back), but the answer is
-// back within 5 s. Mutation gate: wait for the report without the cap (an unbounded wait) → red.
+// back at the settle cap. Mutation gate: wait for the report without the cap (an unbounded wait) → red.
 // A report still out after SETTLE_MS is handed to `pdx ask report --detach` (a process of
 // its own that lands it after the hook returned — P8a-2 R2: a report lost after a remote
 // CAS would leave the cards on the remote answer). Mutation gate: drop the detach → the
 // `detached` assertions are red.
-test('a daemon that does not answer the report never holds the terminal answer: back within 5 s, the report detached', { timeoutMs: 15000 }, async ($, on) => {
+test('a daemon that does not answer the report never holds the terminal answer: back at the settle cap, the report detached', { timeoutMs: 15000 }, async ($, on) => {
   session(on)
   let answerNative: Resolver = null
   let report: Call | null = null
@@ -582,7 +594,8 @@ test('a daemon that does not answer the report never holds the terminal answer: 
   const r = await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
   const ms = Date.now() - t0
   expect(r).toEqual(expect.objectContaining({ result: NATIVE_RED.result, isReadOnly: true, ref: 1 }))
-  expect(ms).toBeLessThan(5000)
+  expect(sleeps).toEqual([SETTLE_MS]) // the report was waited for under the cap
+  expect(ms).toBeLessThan(BACK_MS)
   expect(report).not.toBeNull()
   expect(report!.slice(2, 5)).toEqual(['report', 'r6', 'answered_local'])
   expect(detached).not.toBeNull()
@@ -591,7 +604,7 @@ test('a daemon that does not answer the report never holds the terminal answer: 
   expect(JSON.parse(detached![detached!.indexOf('--hook') + 1])).toEqual({ answers: { '紅還是藍？': '紅' } })
 })
 
-test('answered before begin returned, then a report that hangs ⇒ back within 5 s and the report detached', { timeoutMs: 15000 }, async ($, on) => {
+test('answered before begin returned, then a report that hangs ⇒ back at the settle cap and the report detached', { timeoutMs: 15000 }, async ($, on) => {
   session(on)
   let detached: Call | null = null
   on('process.run', (_$: any, e: any) => {
@@ -604,7 +617,9 @@ test('answered before begin returned, then a report that hangs ⇒ back within 5
   on('tool.call', { tool: 'AskUserQuestion' }, () => Promise.resolve(NATIVE_RED)) // answered at once
   const t0 = Date.now()
   const r = await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
-  expect(Date.now() - t0).toBeLessThan(5000)
+  const ms = Date.now() - t0
+  expect(sleeps).toEqual([SETTLE_MS]) // the hanging report was waited for under the cap (begin had answered by then)
+  expect(ms).toBeLessThan(BACK_MS)
   expect(r).toEqual(expect.objectContaining({ result: NATIVE_RED.result, ref: 1 }))
   expect(detached).not.toBeNull()
   expect(detached!.slice(2, 5)).toEqual(['report', 'r7', 'answered_local'])
@@ -631,7 +646,7 @@ test('a healthy report is not detached', async ($, on) => {
 // answer it first: the report goes out by the tool use, detached, with the time taken BEFORE begin was called (`--since`), so it
 // lands on the begin's row whenever that appears. Mutation gates: no by-tool-use report → `byToolUse` stays null (red); `--since`
 // taken after begin → the value differs (red).
-test('answered in the terminal while begin has not replied ⇒ back within 5 s, the report goes detached by the tool use with --since', { timeoutMs: 15000 }, async ($, on) => {
+test('answered in the terminal while begin has not replied ⇒ back at the settle cap, the report goes detached by the tool use with --since', { timeoutMs: 15000 }, async ($, on) => {
   session(on)
   // The engine's clock is another clock domain and can be far from the wall clock: --since is the REAL time (the daemon's
   // created_at is), taken just before begin is called. Mutation gate: read the engine clock (or take it after begin) → red.
@@ -646,9 +661,10 @@ test('answered in the terminal while begin has not replied ⇒ back within 5 s, 
     return ok('')
   })
   on('tool.call', { tool: 'AskUserQuestion' }, () => new Promise((res) => setTimeout(() => res(NATIVE_RED), 50)))
-  const t0 = Date.now()
+  const t0 = Date.now() // also the lower bound of --since below
   const r = await $.tool.call({ tool: 'AskUserQuestion', questions: Q })
-  expect(Date.now() - t0).toBeLessThan(5000)
+  expect(Date.now() - t0).toBeLessThan(BACK_MS)
+  expect(sleeps).toEqual([SETTLE_MS])
   expect(r).toEqual(expect.objectContaining({ result: NATIVE_RED.result, ref: 1 }))
   expect(byToolUse).not.toBeNull()
   const a = byToolUse!
