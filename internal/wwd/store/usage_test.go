@@ -107,6 +107,21 @@ func TestUsageRetentionFollowsTheClock(t *testing.T) {
 	}
 }
 
+// A write that is itself too old still clears what has aged out: pruning does not wait for a fresh row.
+func TestUsageStaleWriteStillPrunes(t *testing.T) {
+	s, _ := open(t)
+	if err := s.SaveUsageAt(usageEnding("j_old", t0), t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	later := t0.Add(40 * 24 * time.Hour)
+	if err := s.SaveUsageAt(usageEnding("j_stale", t0.Add(24*time.Hour)), later); err != nil { // too old to store
+		t.Fatal(err)
+	}
+	if got, _, _ := s.LoadUsage(t0.Add(-time.Hour), 10); len(got) != 0 {
+		t.Fatalf("the aged-out row is still there: %+v", got)
+	}
+}
+
 func TestSaveUsageRefusesAnInvalidRow(t *testing.T) {
 	s, _ := open(t)
 	u := usageEnding("j_x", t0)

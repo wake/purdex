@@ -94,8 +94,8 @@ func finiteNonNegative(name string, v float64) error {
 }
 
 func (u JobUsage) Validate() error {
-	if u.JobID == "" || u.Host == "" {
-		return fmt.Errorf("usage: missing job_id or host")
+	if u.JobID == "" || u.Host == "" || u.Repo == "" || u.Task == "" { // a job always has a repo and a task (Job.Validate)
+		return fmt.Errorf("usage: missing job_id, host, repo or task")
 	}
 	if u.Slot != SlotHeavy && u.Slot != SlotLight {
 		return fmt.Errorf("usage: invalid slot %q", u.Slot)
@@ -137,6 +137,9 @@ func (u JobUsage) Validate() error {
 	}
 	if (u.OwnerAtStart == nil) != (u.OwnerSeen == nil) {
 		return fmt.Errorf("usage: owner_at_start and owner_seen are both null or both set")
+	}
+	if u.OwnerAtStart != nil && *u.OwnerAtStart && !*u.OwnerSeen {
+		return fmt.Errorf("usage: an owner there at the start was seen during the run")
 	}
 	return nil
 }

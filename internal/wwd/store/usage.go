@@ -30,9 +30,6 @@ func (s *Store) SaveUsageAt(u wire.JobUsage, now time.Time) error {
 	}
 	cutoff := now.Add(-UsageRetention).UnixMilli()
 	ended := u.EndedAt.UnixMilli()
-	if ended < cutoff {
-		return nil // already past the retention
-	}
 	b, err := json.Marshal(u)
 	if err != nil {
 		return err
@@ -42,8 +39,10 @@ func (s *Store) SaveUsageAt(u wire.JobUsage, now time.Time) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`INSERT INTO job_usage (job_id, ended_ms, rec) VALUES (?, ?, ?) ON CONFLICT(job_id) DO NOTHING`, u.JobID, ended, string(b)); err != nil {
-		return err
+	if ended >= cutoff { // a row already past the retention is not stored, but the pruning below still runs
+		if _, err := tx.Exec(`INSERT INTO job_usage (job_id, ended_ms, rec) VALUES (?, ?, ?) ON CONFLICT(job_id) DO NOTHING`, u.JobID, ended, string(b)); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(`DELETE FROM job_usage WHERE ended_ms < ?`, cutoff); err != nil {
 		return err

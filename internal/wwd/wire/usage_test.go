@@ -39,8 +39,14 @@ func TestJobUsageRefusesWhatCannotBeRight(t *testing.T) {
 	yes := true
 	nan := math.NaN()
 	for name, mut := range map[string]func(*JobUsage){
-		"no job id":                   func(u *JobUsage) { u.JobID = "" },
-		"no host":                     func(u *JobUsage) { u.Host = "" },
+		"no job id": func(u *JobUsage) { u.JobID = "" },
+		"no host":   func(u *JobUsage) { u.Host = "" },
+		"no repo":   func(u *JobUsage) { u.Repo = "" },
+		"no task":   func(u *JobUsage) { u.Task = "" },
+		"owner there at the start but never seen": func(u *JobUsage) {
+			yes, no := true, false
+			u.OwnerAtStart, u.OwnerSeen = &yes, &no
+		},
 		"an unknown slot":             func(u *JobUsage) { u.Slot = "medium" },
 		"an unknown class":            func(u *JobUsage) { u.Class = "urgent" },
 		"an unknown source":           func(u *JobUsage) { u.Source = "cron" },
