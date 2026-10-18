@@ -62,7 +62,7 @@ From the B-line page, rounds 1–4 and the follow-ups, 2026-10-18 22:2x to 2026-
 
 | # | Decision | Why |
 |---|---|---|
-| L1 | Personas are stored by the **daemon**, in hostconfig key `personas`, and **converge across daemons** (§4.3). **[待確認]**: they sync automatically to every host. | one pool across hosts needs one persona set (v1 rule "no duplicates across hosts") |
+| L1 | Personas are stored by **each daemon**, in hostconfig key `personas`. **One host is the source and the App copies it to the others** (§4.3); daemons do not sync among themselves. **User 2026-10-19**, interim until the sync review. | one pool across hosts needs one persona set (v1 rule "no duplicates across hosts") |
 | L2 | A persona has a **code** (`^[a-z]{3,12}$`, unique, fixed once created) and a **display name** (free text, can be changed). The address uses the code. **[待確認]** | addresses must not change when a label is edited |
 | L3 | An avatar is stored as a **128 px raster data URI** (WebP, PNG fallback), made in the App when the persona is saved. The recipe (style, seed, options, or photo source) is kept beside it so the image can be redrawn. **[待確認]** | U7 "cached on save"; no network fetch to show a face; no SVG (script surface) |
 | L4 | **No personas → the built-in 30 names** of v1. They are unchanged, `kenji` included. Personas present → the pool is exactly the active personas. Pool used up → `<base>-<xx>`, as today. | a fresh install keeps working; the built-in list is only a fallback now, so the Kenji → Hiro rename is moot |
@@ -129,36 +129,34 @@ From the B-line page, rounds 1–4 and the follow-ups, 2026-10-18 22:2x to 2026-
 - `PUT /api/hostconfig/personas` takes `{items, baseRevision}`, like every collection.
 - The capability is `personas.v1`.
 
-### 4.3 Convergence across daemons (L1)
+### 4.3 One source, copied by the App (L1, user 2026-10-19)
 
-- The peers envelope (`internal/peers/envelope.go:23`) gets an optional field
-  `names: {personas: {at, host, hash, count}, familiar: [codes]}`. It is absent on an older daemon. `hash` is a SHA-256
-  of the canonical items JSON.
-- The 30-second refresher (`internal/module/peers/namepool_snapshot.go:181`) records each host's `names` along with its
-  pool names.
-- **Rule: last writer wins on the stamp.** A remote stamp is newer when its `at` is greater, or when `at` is equal and its
-  `host` sorts higher.
-- **Clock skew (codex #7).** A local save stamps `at = max(now, highest at seen from any host + 1)`. "Seen" means
-  stored locally or read from an envelope. A host whose clock runs slow therefore still wins with its next edit,
-  instead of being overwritten until its clock catches up.
-  - When a remote stamp is newer and the hash differs, the daemon fetches that host's collection through a new peer
-    route, `POST /api/peers/personas` (peer-token auth, `HostCaller`, `internal/peers/hostcaller.go:68`).
-  - It stores the collection **with the remote's stamp**. The local revision is bumped for the App's CAS, and a
-    hostconfig change event goes out. Equal stamps and hashes afterwards mean that nothing happens.
-- Two edits on two hosts within one refresh window: the later stamp wins as a whole, and the other edit is lost. This
-  is acceptable for one user editing in one place. The persona page says "saved on <host>, syncs to other hosts within
-  30 s".
-- **Codes are never lost (decided 10-19 for NP-2).** A code is never deleted (L5), so a newer collection that lacks a
-  code the local one has simply never learned of it. For example, a persona created on host A that has not synced yet
-  when host B saves an edit.
-  - The daemon applying the newer collection keeps each local-only persona **unchanged** (not retired: the user may
-    have just created it). It stores the merged result under a **new local stamp**, so that the merge propagates back.
-  - The other host then fetches the merged set, finds nothing missing, and stores it with that stamp. Both converge in
-    at most two refreshes.
-  - For a code both collections have, the newer collection's content wins, retired state included.
-  - The App still reads one whole collection, the highest stamp (§9.2). This union happens only in the daemon, and only
-    for codes, which can never be deleted.
-- The peer route answers only paired hosts. A host that has not answered for 5 minutes is skipped, as in v1.
+The user decided this on 10-19 as the interim model. It replaces the daemon-to-daemon sync of rev 2, which was dropped
+before any of it merged. Purdex's sync and centralisation mechanisms as a whole are to be reviewed and consolidated
+separately, and this section may change with that review.
+
+- **Each daemon keeps its own copy** in hostconfig key `personas` (§4.2). A daemon names its sessions from its own copy,
+  with or without the App running.
+- **One host is the persona source**, by default the App's main host (mlab). It is a per-device App setting, shown on the
+  persona page as 「正本主機」. The App edits only the source's copy.
+- **Saving.** The App writes the source first (`PUT /api/hostconfig/personas`, CAS as usual). It then writes the same
+  items to every other host it is connected to, each with that host's own `baseRevision`.
+- **Catching up.** When the App connects or reconnects to a host, it compares that host's copy with the source's, by a
+  hash of the canonical items. When they differ, it writes the source's items there.
+  - A host that was offline during a save is therefore caught up the next time the App reaches it.
+  - A host the App never reaches keeps its last copy, and keeps naming from it.
+- **The App reads the source's copy** for the page, the avatars and `seatOf` (§9.2). When the source is unreachable, it
+  reads the copy of any connected host, and the page is read-only with a line saying the source is offline.
+- **Daemons do not talk to each other about personas.** There is no envelope field, no peer route, and no stamp
+  comparison.
+  - The stamp (§4.2) only records who wrote last and when.
+  - The familiar sets of §6.1 still travel in the envelope, because they belong to naming, not to personas.
+- **Codes are never lost.** A daemon refuses a PUT that drops a stored code (L5; the 400 with index −1, NP-1a). So a copy
+  that has a code the source lacks blocks the mirror write. This can happen when an older App or another device saved
+  there.
+  - The App then adds that code's persona to the source unchanged, and mirrors again.
+  - The persona page lists such adoptions in its next save notice.
+- Without the capability `personas.v1` on a host, the App neither reads nor writes that host's copy.
 
 ### 4.4 The pool in the daemon
 
@@ -291,7 +289,7 @@ CREATE TABLE IF NOT EXISTS name_pairs (lead_code TEXT NOT NULL, member_code TEXT
   - Each failure is only logged.
 - A relay writes nothing: the successor inherits the name.
 - **Familiar** = every `name_leads.code` ∪ every `name_pairs.member_code`. Each daemon publishes its familiar set in
-  the envelope (§4.3), capped at 64 codes, most recent first, and unions the other hosts' sets.
+  the peers envelope (`names.familiar`, added by NP-3), capped at 64 codes, most recent first, and unions the other hosts' sets.
 
 ### 6.2 Picking rules
 
@@ -415,9 +413,8 @@ Free = pickable (§4.4) − held (local live, remote snapshot, live reservations
 
 - `seatOf(address | virtual name)` → `{code, name, avatar}`. It takes the suffix after the last `-` of the name after
   the last `/`, and looks it up in the persona store.
-- **The App uses one persona collection: the one with the highest stamp** among the hosts it reads. Equal stamps are
-  broken by host, as the daemons do (§4.3). It never unions collections by code (codex #6): a union would show, and on
-  the next save revive, what last-writer-wins dropped.
+- **The App uses one persona collection: the source host's** (§4.3); when the source is unreachable, any connected
+  host's copy, read-only. It never unions collections by code (codex #6).
 - It is the only parser. The four inline slicers become callers:
   - `team-views.ts:120`;
   - `UnattendedQuotaSection.tsx:47`;
@@ -487,8 +484,8 @@ Each phase is one PR, ≤ 800 lines or ≤ 20 files.
 | Phase | Content | Review | Needs |
 |---|---|---|---|
 | **NP-1** | personas key and routes, validation, 4 MiB route cap, pool registry (`PoolNameOf`, display names), picker uses personas, `journal.DisplayName`, capability `personas.v1` | codex | — |
-| **NP-2** | envelope `names`, snapshot records stamps and familiar sets, peer fetch route, last-writer-wins apply | codex | NP-1 |
-| **NP-3** | history tables, rules 1–3, aliases and routing, bracket check, backfill of old conversations, familiar sets in the envelope, `CLAUDE.md` text | codex | NP-1; NP-2 for the familiar part |
+| ~~NP-2~~ | **Dropped 10-19** (user): no daemon-to-daemon persona sync; the App copies from the source (NA-1d) | — | — |
+| **NP-3** | history tables, rules 1–3, aliases and routing, bracket check, backfill of old conversations, familiar sets in the envelope (`names.familiar`), `CLAUDE.md` text | codex | NP-1 |
 | **NP-4** | spawn reservation (local and remote), lead name at approval, `/team` parse and card path, adopt pair, cap 9, capabilities `team.lead_name.v1`, `team.max_members.v2` | codex + **1f** | NP-3 |
 | **NP-5** | task groups key and capability | codex | — |
 | **NP-6** | decision log, `unattended_events` migration, `log` on the unattended route, capability `team.decision_log.v1` | codex + **1f** | — |
@@ -516,12 +513,12 @@ Each phase is one PR, ≤ 800 lines or ≤ 20 files.
   - A retired code is still recognised by `PoolNameOf` (M: drop retired → a live holder loses its name on the next
     pass).
   - `GET /api/hostconfig` has no `personas` (M: include it).
-- **NP-2**
-  - A newer remote stamp with a different hash is fetched and stored with the remote stamp (M: store with now → the
-    hosts ping-pong forever).
-  - With a remote clock 5 minutes ahead, a local save after a sync still wins (M: stamp with `now` alone).
-  - Equal stamps → no fetch.
-  - An older daemon (no `names`) → nothing.
+- **NA-1d** (App copy)
+  - A save writes the source, then every other connected host with `personas.v1` (M: write the source only).
+  - A reconnect to a host whose copy differs from the source's is caught up (M: compare stamps instead of hashes).
+  - A mirror refused for a dropped code adds that persona to the source and mirrors again (M: give up → the copies
+    stay different).
+  - Source offline → the page is read-only with the offline line.
 - **NP-3**
   - Rule order for each rule with seeded history (M: swap the first two tiers).
   - A rename leaves a routable alias (M: no alias → `peer_not_found`).
@@ -562,7 +559,7 @@ Each phase is one PR, ≤ 800 lines or ≤ 20 files.
 
 These are the defaults this spec uses. Each can be changed later without reworking the phases.
 
-1. Personas sync to every host automatically; within the same half minute, the later edit wins (L1).
+1. ~~Personas sync to every host automatically~~ → decided 10-19: one source host (default mlab), the App copies it to the others (§4.3).
 2. Code and display name are separate; the code is fixed once created (L2).
 3. `/team <name>` takes the first word as the name when it matches a persona; without a name, a card appears (L8).
 4. A manual task group holds sessions of one host only (L9).
