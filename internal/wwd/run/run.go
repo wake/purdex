@@ -162,6 +162,7 @@ func Run(ctx context.Context, spec Spec) Result {
 		waitErr = endGroup(pgid, killAfter, done)
 	}
 	// The leader is gone; anything it left behind in the group goes too.
+	strays := syscall.Kill(-pgid, 0) == nil // someone is still in the group: what it used from here on is in no figure
 	_ = syscall.Kill(-pgid, syscall.SIGKILL)
 	// Then whatever left the group (a daemonized tmux server, vite, playwright) but kept the job mark.
 	src := spec.Procs
@@ -175,6 +176,7 @@ func Run(ctx context.Context, spec Spec) Result {
 	res.FinishedAt = time.Now()
 	res.Tail, res.LogCut, res.CaptureErr = cp.close()
 	res.Usage = rusageUsage(cmd.ProcessState) // set once Wait returned, which every branch above waited for
+	res.Usage.Leaked = strays || len(res.Escaped) > 0
 
 	if res.Outcome == Exited {
 		var ee *exec.ExitError
