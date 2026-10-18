@@ -268,6 +268,43 @@ func TestSweepDoesNotRemoveALogUploadedWhileItWasForgetting(t *testing.T) {
 	assert.Equal(t, id+"/log", f.get(t, id).Result.Log)
 }
 
+// The lock itself: while the sweep has decided which files to remove and not yet removed them, an upload cannot be put in place and
+// recorded; it waits, and when the sweep is done its file is the one that stays (3b-3b re-review). Without the lock on either side the
+// upload goes through during the sweep's window and the sweep then removes its file.
+func TestAnUploadWaitsForTheSweepsFileRemoval(t *testing.T) {
+	f := newFixture(t)
+	id, c := f.running(t)
+	require.NoError(t, f.putLog(t, id, c.ClaimID, "old\n"))
+	_, err := f.q.Result(bg, id, wire.ResultRequest{ClaimID: c.ClaimID, State: wire.StateSucceeded, Exit: ptr(0)})
+	require.NoError(t, err)
+	f.clk.Advance(3*24*time.Hour + time.Minute)
+
+	done := make(chan struct{})
+	var perr error
+	f.q.inLogRemoval = func() {
+		go func() {
+			perr = f.putLog(t, id, c.ClaimID, "new\n")
+			close(done)
+		}()
+		select {
+		case <-done:
+			t.Error("the upload got in while the sweep held its lock")
+		case <-time.After(300 * time.Millisecond):
+		}
+	}
+	_, err = f.q.Sweep(bg)
+	require.NoError(t, err)
+	f.q.inLogRemoval = nil
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the upload never finished")
+	}
+	require.NoError(t, perr)
+	assert.Equal(t, "new\n", f.readLog(t, id))
+	assert.Equal(t, id+"/log", f.get(t, id).Result.Log)
+}
+
 type spyReader struct{ read bool }
 
 func (r *spyReader) Read([]byte) (int, error) { r.read = true; return 0, io.EOF }

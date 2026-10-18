@@ -220,6 +220,7 @@ func (q *Queue) deleteRetainedJobs(ctx context.Context, cutoffMS int64) (int, er
 // that will not open, and a file nothing points at is found again by the job's deletion. It also clears the leftovers of uploads a crash
 // cut short.
 func (q *Queue) sweepLogs(ctx context.Context, now time.Time) (int, error) {
+	q.removeUploadLeftovers(now)
 	var ids []string
 	err := q.writeOnly(ctx, func(c *sql.Conn, changed *[]string) error {
 		ids = nil
@@ -264,15 +265,23 @@ func (q *Queue) sweepLogs(ctx context.Context, now time.Time) (int, error) {
 			gone = append(gone, id)
 		}
 	}
+	if q.inLogRemoval != nil {
+		q.inLogRemoval()
+	}
 	q.removeLogFiles(gone)
 	q.logMu.Unlock()
-	if q.opt.LogDir != "" {
-		left, _ := filepath.Glob(filepath.Join(q.opt.LogDir, ".upload-*"))
-		for _, p := range left {
-			if st, err := os.Stat(p); err == nil && now.Sub(st.ModTime()) > uploadLeftover {
-				_ = os.Remove(p)
-			}
+	return len(ids), nil
+}
+
+// removeUploadLeftovers clears the temporary files and backups that uploads a crash cut short left in the log directory.
+func (q *Queue) removeUploadLeftovers(now time.Time) {
+	if q.opt.LogDir == "" {
+		return
+	}
+	left, _ := filepath.Glob(filepath.Join(q.opt.LogDir, ".upload-*"))
+	for _, p := range left {
+		if st, err := os.Stat(p); err == nil && now.Sub(st.ModTime()) > uploadLeftover {
+			_ = os.Remove(p)
 		}
 	}
-	return len(ids), nil
 }

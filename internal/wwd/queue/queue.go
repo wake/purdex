@@ -77,6 +77,8 @@ type Queue struct {
 	beforeLogCommit func()
 	// afterLogForget is a test hook: it runs after the sweep has committed the forgetting of old logs and before it removes their files.
 	afterLogForget func()
+	// inLogRemoval is a test hook: it runs while the sweep holds logMu, after it has decided which files to remove and before it removes them.
+	inLogRemoval func()
 	// afterTicket is a test hook: it runs inside the transaction right after the ticket was taken, before COMMIT.
 	afterTicket func()
 }
