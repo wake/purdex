@@ -27,6 +27,7 @@ const terminalStates = `'succeeded','failed','cancelled','superseded','expired'`
 // SweepResult counts what one Sweep did.
 type SweepResult struct {
 	Lapsed      int // held jobs whose lease ran out: requeued, or failed as lost
+	LogsRemoved int // logs kept past their 3 days, deleted
 	Expired     int // queued jobs that waited past their queue timeout
 	Unpinned    int // snapshots released for jobs that had ended
 	UnpinFailed int // unpins git refused: the mark stays and the next sweep tries again
@@ -81,15 +82,17 @@ func (q *Queue) Sweep(ctx context.Context) (SweepResult, error) {
 		errs = append(errs, err)
 	}
 
-	res.Unpinned, res.UnpinFailed = q.settlePins(ctx)
-
-	// retention: only ended jobs whose snapshot is released; one still marked waits for its unpin
-	r, err := q.db.ExecContext(ctx, `DELETE FROM jobs WHERE state IN (`+terminalStates+`) AND pinned = 0
-		AND coalesce(finished_at, updated_at) < ?`, now.Add(-retention).UnixMilli())
+	res.LogsRemoved, err = q.sweepLogs(ctx, now)
 	if err != nil {
 		errs = append(errs, err)
-	} else if n, _ := r.RowsAffected(); n > 0 {
-		res.Deleted = int(n)
+	}
+
+	res.Unpinned, res.UnpinFailed = q.settlePins(ctx)
+
+	// retention: only ended jobs whose snapshot is released; one still marked waits for its unpin. Their log files go with them.
+	res.Deleted, err = q.deleteRetainedJobs(ctx, now.Add(-retention).UnixMilli())
+	if err != nil {
+		errs = append(errs, err)
 	}
 
 	orphans, failed, err := q.removeOrphanPins(ctx, now)
