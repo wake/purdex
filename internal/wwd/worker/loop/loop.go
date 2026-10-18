@@ -218,7 +218,8 @@ func (l *Loop) Round(ctx, jobCtx context.Context) {
 	}
 	// The headroom is only true for a sample that has seen the jobs already claimed: the sample must have been taken Settle after the last
 	// claim, and it must not be old (a sampler that has stopped leaves the last "there is room" standing).
-	if facts.At.Sub(last) < l.cfg.Settle || l.cfg.Now().Sub(facts.At) > l.cfg.FactsMaxAge {
+	// A sample "from the future" (the clock was set back after it was taken) is as little to be trusted as an old one.
+	if age := l.cfg.Now().Sub(facts.At); age < 0 || age > l.cfg.FactsMaxAge || facts.At.Sub(last) < l.cfg.Settle {
 		return
 	}
 	l.claimOne(ctx, jobCtx)

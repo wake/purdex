@@ -773,3 +773,19 @@ func TestAWorkerThatEndsStopsRetryingReleasesThatDoNotAnswer(t *testing.T) {
 		t.Fatal("Run waited for a release that never answers: the jobs' contexts must be ended after the grace")
 	}
 }
+
+func TestFactsFromTheFutureAreNotTrusted(t *testing.T) {
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0))
+	r := newRig(t, c)
+	r.freezeAt = time.Now().Add(time.Hour) // the clock was set back after the sample
+	r.round()
+	if claims, _, _ := c.seen(); len(claims) != 0 {
+		t.Fatalf("claims %v: a sample dated in the future is not a fresh one", claims)
+	}
+	r.freezeAt = time.Time{}
+	r.round()
+	if claims, _, _ := c.seen(); len(claims) != 1 {
+		t.Fatalf("claims %v: the first claim with a fresh sample goes through", claims)
+	}
+	r.loop.stopAll(context.Background(), "test")
+}
