@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -217,11 +216,12 @@ func (m *Module) patrolLoop(ctx context.Context) {
 }
 
 // diskFreeFromFacts is the free space of the data directory's volume from wwd's facts of this host, ok false when there are none
-// (the source is not the pool, or wwd has none fresh), when the data directory is not under the home directory, or when the facts
-// list no disk. Facts list the root volume and the volume of the home directory, and the mount names they give are not comparable
-// with a path (macOS reports /System/Volumes/Data for /Users, a symlinked home is reported by its target), so which of them holds
-// the data directory is not worked out from the names: the lowest free space of the listed volumes is taken. The home volume is
-// always one of them, so a data disk that runs low is never missed; where the two share their space (macOS) they say the same.
+// (the source is not the pool, or wwd has none fresh), when the facts list no disk, or when the data directory is not on a volume
+// they list. Facts list the root volume and the volume of the home directory; their mount names are not comparable with a path
+// (macOS reports /System/Volumes/Data for /Users, a symlinked home by its target), so which of them holds the data directory is not
+// worked out from the names: the directory is on a listed volume when it has the device of home or of the root (a stat, no
+// sampling), and then the lowest free space of the listed volumes is taken (where the two share their space, as on macOS, they say
+// the same). A data directory on any other device, a separate mount or a link out, keeps the own statfs.
 func (m *Module) diskFreeFromFacts() (float64, bool) {
 	if m.core == nil || m.core.Registry == nil {
 		return 0, false
@@ -242,7 +242,8 @@ func (m *Module) diskFreeFromFacts() (float64, bool) {
 	if m.core.Cfg != nil && m.core.Cfg.DataDir != "" {
 		dir = m.core.Cfg.DataDir
 	}
-	if home, err := os.UserHomeDir(); err != nil || !underPath(dir, home) {
+	home, err := os.UserHomeDir()
+	if err != nil || !(sameDevice(dir, home) || sameDevice(dir, "/")) {
 		return 0, false
 	}
 	low := f.Disk[0].FreeGB
@@ -252,11 +253,11 @@ func (m *Module) diskFreeFromFacts() (float64, bool) {
 	return low, true
 }
 
-// underPath says dir is root or lies below it.
-func underPath(dir, root string) bool {
-	if root == "" {
+// sameDevice says both paths exist and are on the same device. stat follows links, so a link out to another volume is on that one.
+func sameDevice(a, b string) bool {
+	var sa, sb syscall.Stat_t
+	if syscall.Stat(a, &sa) != nil || syscall.Stat(b, &sb) != nil {
 		return false
 	}
-	root = strings.TrimRight(root, "/")
-	return dir == root || strings.HasPrefix(dir, root+"/") || root == ""
+	return sa.Dev == sb.Dev
 }

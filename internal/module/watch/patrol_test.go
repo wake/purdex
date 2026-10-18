@@ -3,6 +3,7 @@ package watchmod
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -226,20 +227,19 @@ func TestPatrolDiskFreeFromFacts(t *testing.T) {
 	require.True(t, ok)
 	require.NotContains(t, []float64{42.5, 7.5}, gb, "no disk listed: statfs")
 
-	r.m.core.Cfg.DataDir = t.TempDir() // not under home: facts do not list its volume
+	r.m.core.Cfg.DataDir = "/dev" // another device than home and the root: facts do not list its volume
 	reg.Register(resources.LocalFactsKey, localFactsFake{two, true})
 	gb, ok = r.m.diskFreeGB()
 	require.True(t, ok)
 	require.NotContains(t, []float64{42.5, 7.5}, gb, "a data directory outside home is statfs'd")
 }
 
-func TestUnderPath(t *testing.T) {
-	require.True(t, underPath("/a/b", "/a"))
-	require.True(t, underPath("/a", "/a"))
-	require.True(t, underPath("/a/b", "/"))
-	require.False(t, underPath("/ab", "/a"), "a path boundary, not a string prefix")
-	require.False(t, underPath("/a", "/a/b"))
-	require.False(t, underPath("/a", ""))
+func TestSameDevice(t *testing.T) {
+	dir := t.TempDir()
+	require.True(t, sameDevice(dir, dir))
+	require.True(t, sameDevice(dir, filepath.Join(dir, ".")))
+	require.False(t, sameDevice(dir, filepath.Join(dir, "missing")), "a path that is not there is on no device")
+	require.False(t, sameDevice(dir, "/dev"), "devfs is its own device")
 }
 
 type atComputerFake bool
