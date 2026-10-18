@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,6 +16,7 @@ import (
 	"github.com/wake/purdex/internal/wwd/wire"
 	"github.com/wake/purdex/internal/wwd/worker/locks"
 	"github.com/wake/purdex/internal/wwd/worker/pick"
+	"github.com/wake/purdex/internal/wwd/worker/quarantine"
 	"github.com/wake/purdex/internal/wwd/worker/report"
 	"github.com/wake/purdex/internal/wwd/worker/runner"
 )
@@ -34,8 +37,10 @@ type fakeConn struct {
 	jobs     map[string]wire.Job
 	claimErr map[string]error
 	readErr  error
-	// releaseHangs makes a release wait for its context
+	// releaseHangs makes a release wait for its context; onRelease is called when one arrives
 	releaseHangs bool
+	onRelease    func()
+	releaseTries int
 	claims       []string
 	starts       int
 	results      []wire.ResultRequest
@@ -98,6 +103,12 @@ func (c *fakeConn) Result(_ context.Context, _ string, req wire.ResultRequest) e
 func (c *fakeConn) PutLog(context.Context, string, string, io.Reader) error { return nil }
 
 func (c *fakeConn) Release(ctx context.Context, _ string, req wire.ReleaseRequest) error {
+	c.mu.Lock()
+	c.releaseTries++
+	c.mu.Unlock()
+	if c.onRelease != nil {
+		c.onRelease()
+	}
 	if c.releaseHangs {
 		<-ctx.Done() // an origin that does not answer: only the context ends the call
 	}
@@ -117,6 +128,8 @@ func (c *fakeConn) seen() (claims []string, releases []wire.ReleaseRequest, resu
 }
 
 type fakeExec struct {
+	// workRoot, when set, makes Materialize create <workRoot>/<job id>/ws as a real directory (what a quarantine marker names)
+	workRoot    string
 	run         func(ctx context.Context, job wire.Job) run.Result
 	materialize func(job wire.Job) error
 	ran         atomic.Int32
@@ -129,6 +142,13 @@ func (e *fakeExec) Materialize(_ context.Context, job wire.Job, _ string) (snaps
 		if err := e.materialize(job); err != nil {
 			return snapshot.Workspace{}, err
 		}
+	}
+	if e.workRoot != "" {
+		dir := filepath.Join(e.workRoot, job.ID, "ws")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return snapshot.Workspace{}, err
+		}
+		return snapshot.Workspace{Dir: dir, Cleanup: func() error { return os.RemoveAll(filepath.Dir(dir)) }}, nil
 	}
 	return snapshot.Workspace{Dir: "/ws"}, nil
 }
@@ -788,4 +808,291 @@ func TestFactsFromTheFutureAreNotTrusted(t *testing.T) {
 		t.Fatalf("claims %v: the first claim with a fresh sample goes through", claims)
 	}
 	r.loop.stopAll(context.Background(), "test")
+}
+
+type unitChecker struct {
+	mu   sync.Mutex
+	gone map[string]bool
+	seen []string
+}
+
+func (u *unitChecker) Gone(_ context.Context, unit string) (bool, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.seen = append(u.seen, unit)
+	return u.gone[unit], nil
+}
+
+// qrig is a rig whose jobs make real workspaces under a real work root and whose loop has a real quarantine store.
+type qrig struct {
+	*rig
+	root  string
+	mdir  string
+	store *quarantine.Store
+	units *unitChecker
+}
+
+func newQRig(t *testing.T, conns ...*fakeConn) *qrig {
+	t.Helper()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := newRig(t, conns...)
+	r.ex.workRoot = root
+	q := &qrig{rig: r, root: root, mdir: t.TempDir(), units: &unitChecker{gone: map[string]bool{}}}
+	q.store, err = quarantine.Open(q.mdir, r.tbl, q.units, time.Now, quarantine.WithWorkRoot(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.loop.cfg.Quarantine = q.store
+	r.loop.cfg.Sandboxed = true
+	return q
+}
+
+func notProven(ctx context.Context, _ wire.Job) run.Result {
+	<-ctx.Done()
+	return run.Result{Outcome: run.Cancelled, ExitCode: -1, Err: errors.New("could not confirm the unit stopped")}
+}
+
+func TestAJobThatCannotBeProvenStoppedIsQuarantinedBeforeItIsDelivered(t *testing.T) {
+	c := newConn("mlab", qjob("stuck", wire.ClassDev, 0, "mysql"))
+	q := newQRig(t, c)
+	q.ex.run = notProven
+	q.round()
+	waitFor(t, "a run", func() bool { return q.ex.ran.Load() == 1 })
+	q.loop.stopAll(context.Background(), "test")
+	waitFor(t, "the delivery", func() bool { _, rel, _ := c.seen(); return len(rel) == 1 })
+	held := q.store.Held()
+	if len(held) != 1 || held[0].JobID != "stuck" || held[0].Owner != "mlab/stuck" || held[0].Unit != "wwd-stuck" || len(held[0].Keys) != 1 {
+		t.Fatalf("held %+v", held)
+	}
+	if want := filepath.Join(q.root, "stuck"); held[0].Dir != want {
+		t.Fatalf("dir %q, want the job directory %q", held[0].Dir, want)
+	}
+	if _, err := os.Stat(held[0].Dir); err != nil {
+		t.Fatalf("the workspace must stay: %v", err)
+	}
+	if _, ok := q.tbl.Holder("mysql"); !ok {
+		t.Fatal("the lock keys must stay held")
+	}
+	if _, rel, _ := c.seen(); rel[0].Reason != wire.ReleaseInfra {
+		t.Fatalf("release %+v", rel[0])
+	}
+}
+
+func TestTheMarkerExistsWhenTheDeliveryStarts(t *testing.T) {
+	c := newConn("mlab", qjob("stuck", wire.ClassDev, 0))
+	q := newQRig(t, c)
+	q.ex.run = notProven
+	var heldAtRelease atomic.Int32
+	c.onRelease = func() { heldAtRelease.Store(int32(len(q.store.Held()))) }
+	q.round()
+	waitFor(t, "a run", func() bool { return q.ex.ran.Load() == 1 })
+	q.loop.stopAll(context.Background(), "test")
+	waitFor(t, "the release", func() bool { _, rel, _ := c.seen(); return len(rel) == 1 })
+	if heldAtRelease.Load() != 1 {
+		t.Fatal("the marker is written before the (retried) delivery, not after it")
+	}
+}
+
+func TestRunDoesNotStartWhenTheHoldsCannotBePutBack(t *testing.T) {
+	c := newConn("mlab", qjob("a", wire.ClassDev, 0))
+	q := newQRig(t, c)
+	if err := q.store.Add(quarantine.Entry{Owner: "mlab/old", JobID: "old", Origin: "mlab", Dir: filepath.Join(q.root, "old"), Keys: []string{"mysql"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.tbl.Acquire("someone-else", []string{"mysql"}, nil); err != nil { // a key the old entry needs is taken
+		t.Fatal(err)
+	}
+	err := q.loop.Run(context.Background())
+	if err == nil {
+		t.Fatal("Run must say why it did not start")
+	}
+	if claims, _, _ := c.seen(); len(claims) != 0 {
+		t.Fatalf("claims %v: nothing may be taken while a quarantined job's keys are not protected", claims)
+	}
+}
+
+func TestRestartPutsTheQuarantinedHoldsBackBeforeAnyClaim(t *testing.T) {
+	c := newConn("mlab", qjob("needs-mysql", wire.ClassDev, 0, "mysql"), qjob("free", wire.ClassDev, time.Minute))
+	q := newQRig(t, c)
+	if err := q.store.Add(quarantine.Entry{Owner: "mlab/old", JobID: "old", Origin: "mlab", Dir: filepath.Join(q.root, "old"), Keys: []string{"mysql"}, Unit: "wwd-old"}); err != nil {
+		t.Fatal(err)
+	}
+	// a new process: an empty lock table and a store opened over the same markers
+	q.tbl = locks.New()
+	var err error
+	if q.store, err = quarantine.Open(q.mdir, q.tbl, q.units, time.Now, quarantine.WithWorkRoot(q.root)); err != nil {
+		t.Fatal(err)
+	}
+	ctl := runner.New(runner.Config{Worker: "mlab", Locks: q.tbl, Exec: q.ex, Unit: unit})
+	q.loop.cfg.Locks, q.loop.cfg.Ctl, q.loop.cfg.Quarantine = q.tbl, ctl, q.store
+	q.ex.run = blockUntilDone
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- q.loop.Run(ctx) }()
+	waitFor(t, "a run", func() bool { return q.ex.ran.Load() >= 1 })
+	if owner, ok := q.tbl.Holder("mysql"); !ok || owner != "mlab/old" {
+		t.Fatalf("holder of mysql = %q %v: the quarantined job's key is held again", owner, ok)
+	}
+	if got := q.ex.ranOrder(); len(got) != 1 || got[0] != "free" {
+		t.Fatalf("ran %v: the job that needs the quarantined key waits", got)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSweepClearsAQuarantinedJobOnceItsUnitIsGoneAndOtherSweepersSeeItAsHeldUntilThen(t *testing.T) {
+	c := newConn("mlab", qjob("stuck", wire.ClassDev, 0, "mysql"))
+	q := newQRig(t, c)
+	q.ex.run = notProven
+	sw := &fakeSweeper{}
+	q.loop.cfg.Sweepers = []Sweeper{sw}
+	q.round()
+	waitFor(t, "a run", func() bool { return q.ex.ran.Load() == 1 })
+	q.loop.stopAll(context.Background(), "test")
+	waitFor(t, "the quarantine", func() bool { return len(q.store.Held()) == 1 })
+
+	q.loop.Sweep(context.Background())
+	sw.mu.Lock()
+	first := sw.calls[0]
+	sw.mu.Unlock()
+	if len(first) != 1 || first[0] != "stuck" {
+		t.Fatalf("live %v: a quarantined job's leftovers (its database) must be kept", first)
+	}
+	if _, ok := q.tbl.Holder("mysql"); !ok {
+		t.Fatal("the unit is not proven gone: the hold stays")
+	}
+
+	q.units.mu.Lock()
+	q.units.gone["wwd-stuck"] = true
+	q.units.mu.Unlock()
+	q.loop.Sweep(context.Background())
+	if _, ok := q.tbl.Holder("mysql"); ok || len(q.store.Held()) != 0 {
+		t.Fatalf("held %v: proven gone, the hold and the entry go", q.store.Held())
+	}
+	if _, err := os.Stat(filepath.Join(q.root, "stuck")); !os.IsNotExist(err) {
+		t.Fatalf("the workspace is removed once the unit is gone: %v", err)
+	}
+	sw.mu.Lock()
+	last := sw.calls[len(sw.calls)-1]
+	sw.mu.Unlock()
+	if len(last) != 0 {
+		t.Fatalf("live %v after the clear", last)
+	}
+}
+
+func TestANonQuarantinedJobWritesNoMarker(t *testing.T) {
+	c := newConn("mlab", qjob("fine", wire.ClassDev, 0))
+	q := newQRig(t, c)
+	q.round()
+	waitFor(t, "the result", func() bool { _, _, n := c.seen(); return n == 1 })
+	if held := q.store.Held(); len(held) != 0 {
+		t.Fatalf("held %+v", held)
+	}
+}
+
+func TestRunSweepsTheQuarantineByItselfEvenWithNoOtherSweeper(t *testing.T) {
+	c := newConn("mlab", qjob("stuck", wire.ClassDev, 0, "mysql"))
+	q := newQRig(t, c)
+	q.ex.run = notProven
+	q.loop.cfg.SweepEvery = unit
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- q.loop.Run(ctx) }()
+	waitFor(t, "a run", func() bool { return q.ex.ran.Load() == 1 })
+	// the owner's reclaim is not needed: stop the job the way a shutdown would not, by asking it to end through its Running
+	q.loop.stopAll(context.Background(), "test")
+	waitFor(t, "the quarantine", func() bool { return len(q.store.Held()) == 1 })
+	q.units.mu.Lock()
+	q.units.gone["wwd-stuck"] = true
+	q.units.mu.Unlock()
+	waitFor(t, "the clear", func() bool { return len(q.store.Held()) == 0 })
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// flakyQuarantine fails Add a number of times, then works.
+type flakyQuarantine struct {
+	Quarantine
+	mu    sync.Mutex
+	fails int
+	tries int
+}
+
+func (f *flakyQuarantine) Add(e quarantine.Entry) error {
+	f.mu.Lock()
+	f.tries++
+	n := f.tries
+	f.mu.Unlock()
+	if n <= f.fails {
+		return errors.New("disk full")
+	}
+	return f.Quarantine.Add(e)
+}
+
+func TestAJobIsNotGivenBackUntilItsMarkerIsWritten(t *testing.T) {
+	c := newConn("mlab", qjob("stuck", wire.ClassDev, 0))
+	q := newQRig(t, c)
+	q.loop.cfg.MarkerRetry = unit
+	f := &flakyQuarantine{Quarantine: q.store, fails: 3}
+	q.loop.cfg.Quarantine = f
+	q.ex.run = notProven
+	start := time.Now()
+	q.round()
+	waitFor(t, "a run", func() bool { return q.ex.ran.Load() == 1 })
+	q.loop.stopAll(context.Background(), "test")
+	waitFor(t, "the release", func() bool { _, rel, _ := c.seen(); return len(rel) == 1 })
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if time.Since(start) < 3*unit {
+		t.Fatalf("%v: the retries are paced", time.Since(start))
+	}
+	if f.tries != 4 || len(q.store.Held()) != 1 {
+		t.Fatalf("tries %d held %d: the marker is retried until it is written, and only then is the job released", f.tries, len(q.store.Held()))
+	}
+}
+
+func TestAJobWhoseMarkerCannotBeWrittenIsNeverReleased(t *testing.T) {
+	c := newConn("mlab", qjob("stuck", wire.ClassDev, 0))
+	q := newQRig(t, c)
+	q.loop.cfg.MarkerRetry = unit
+	q.loop.cfg.Quarantine = &flakyQuarantine{Quarantine: q.store, fails: 1 << 30}
+	q.ex.run = notProven
+	q.round()
+	waitFor(t, "a run", func() bool { return q.ex.ran.Load() == 1 })
+	go q.loop.stopAll(context.Background(), "test")
+	time.Sleep(20 * unit)
+	if _, rel, res := c.seen(); len(rel) != 0 || res != 0 {
+		t.Fatalf("releases %v results %d: another worker could run it next to a unit that may still be going", rel, res)
+	}
+}
+
+func TestAWorkerThatEndsWhileAMarkerCannotBeWrittenDoesNotTryToReleaseEither(t *testing.T) {
+	c := newConn("mlab", qjob("stuck", wire.ClassDev, 0))
+	q := newQRig(t, c)
+	q.loop.cfg.MarkerRetry = unit
+	q.loop.cfg.ShutdownGrace = 3 * unit
+	q.loop.cfg.Quarantine = &flakyQuarantine{Quarantine: q.store, fails: 1 << 30}
+	q.ex.run = notProven
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- q.loop.Run(ctx) }()
+	waitFor(t, "a run", func() bool { return q.ex.ran.Load() == 1 })
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.releaseTries != 0 {
+		t.Fatalf("%d release attempts: a quarantined job with no marker is never given back, not even when the worker ends", c.releaseTries)
+	}
 }
