@@ -43,6 +43,9 @@ func alive(pid int) bool {
 	}
 	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 	if errors.Is(err, os.ErrNotExist) {
+		if _, perr := os.Stat("/proc/self/stat"); perr != nil {
+			return true // no /proc here (macOS): the kill test stands
+		}
 		return false // kill(pid, 0) saw a zombie, and init collected it before this read: gone
 	}
 	if err != nil {
@@ -55,6 +58,26 @@ func alive(pid int) bool {
 		return true
 	}
 	return s[i+2] != 'Z'
+}
+
+// On every platform: a running process is alive, a waited-for one is not.
+func TestAliveSeesARunningProcessEverywhere(t *testing.T) {
+	if !alive(os.Getpid()) {
+		t.Fatal("this process is alive")
+	}
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	pid := cmd.Process.Pid
+	if !alive(pid) {
+		t.Fatal("a running child must count as alive")
+	}
+	cmd.Process.Kill()
+	cmd.Wait()
+	if alive(pid) {
+		t.Fatal("a killed and waited-for child must not count as alive")
+	}
 }
 
 func TestAliveCountsAZombieAsGone(t *testing.T) {
