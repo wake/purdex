@@ -45,7 +45,10 @@ type Env struct {
 	// comes from the origin's tar (spec 5 Workspace), so a clone only earns warm_bonus.
 	Warm      func(wire.Job) bool
 	Suspended func(repo string) bool
-	Pinned    func(wire.Job) (Pin, bool)
+	// Pinned reads a job's manual position. It takes the Candidate, not the bare job, so the origin is visible: a job id is only unique
+	// per origin. It is an interface until wire.Job carries manual and manual_seq (the queue-side manual order, purdex-a-line); then Rank
+	// reads those two fields itself and this goes away.
+	Pinned func(Candidate) (Pin, bool)
 }
 
 // Scored is a claimable job with its score.
@@ -136,7 +139,7 @@ func Rank(cands []Candidate, env Env) []Scored {
 		}
 		var e entry
 		if env.Pinned != nil {
-			e.pin, e.pinned = env.Pinned(j)
+			e.pin, e.pinned = env.Pinned(c)
 		}
 		if e.pinned && e.pin.Mode == PinHold {
 			continue
