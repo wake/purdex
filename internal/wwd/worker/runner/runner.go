@@ -238,7 +238,7 @@ func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, 
 	}
 	// A run that could not prove its process tree (a sandbox unit) gone may still be writing the workspace: the workspace stays and so do
 	// the lock keys, so no next job reuses either. (A start that failed never ran anything and is no such case.)
-	quarantined = started && res.Err != nil && res.Outcome != run.StartFailed
+	quarantined = res.Err != nil && res.Outcome != run.StartFailed
 	if !quarantined {
 		hold.Release() // the command is gone: its lock keys are free again while the result is delivered
 	}
