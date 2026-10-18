@@ -33,6 +33,19 @@ func TestConfigReposTableAndHomeExpansion(t *testing.T) {
 	}
 }
 
+// A peer alias is held to the one rule the pool routes also apply (wire.ValidAlias): what the config accepts, the pool can name.
+func TestConfigPeerAliasUsesTheSharedRule(t *testing.T) {
+	peer := func(a string) string { return "[[peers]]\nalias = \"" + a + "\"\naddr = \"127.0.0.1\"\n" }
+	if _, err := loadCfg(t, peer(strings.Repeat("a", 128))); err != nil {
+		t.Errorf("128 bytes is allowed: %v", err)
+	}
+	for name, a := range map[string]string{"too long": strings.Repeat("a", 129), "control": `a\nb`} {
+		if _, err := loadCfg(t, peer(a)); err == nil || !strings.Contains(err.Error(), "peers") {
+			t.Errorf("%s: want a peers error, got %v", name, err)
+		}
+	}
+}
+
 func TestConfigReposRejectsBadNamesAndPaths(t *testing.T) {
 	for _, body := range []string{
 		"[repos]\n\"a b\" = \"/x\"\n",        // a name that cannot be a label

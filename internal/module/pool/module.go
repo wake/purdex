@@ -97,6 +97,7 @@ func (m *Module) Status() map[string]any {
 func (m *Module) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/pool/hosts", m.handleHosts)
 	mux.HandleFunc("GET /api/pool/facts/history", m.handleHistory)
+	m.registerControl(mux)
 }
 
 func (m *Module) client() *client.Client {
