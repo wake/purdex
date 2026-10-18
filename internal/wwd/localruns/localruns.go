@@ -77,6 +77,14 @@ func New(t *locks.Table, q Queue, worker string) *Service {
 	return &Service{Locks: t, Queue: q, Worker: worker, Logf: log.Printf, holds: map[string]*locks.Hold{}, early: map[string]struct{}{}, abandoning: map[string]struct{}{}}
 }
 
+// Ready says the table has been rebuilt from the queue (Recover finished) and not been closed again by a repeat of it: the lane is open.
+// Whoever else takes keys from the same table (the worker) waits for it, so that it is not given a key a run that was going on still holds.
+func (s *Service) Ready() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ready
+}
+
 // Handler is POST /v1/local-runs. Register it on the socket mux only: a peer never records a run here.
 func (s *Service) Handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

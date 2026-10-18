@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -51,6 +52,13 @@ type WorkerConfig struct {
 	Enabled bool `toml:"enabled"`
 	Heavy   *int `toml:"heavy"`
 	Light   *int `toml:"light"`
+	// BackgroundDev runs dev jobs under macOS background QoS (mlab; spec §5 Platform limits).
+	BackgroundDev bool `toml:"background_dev"`
+	// SpeedFactor is this host's speed against the reference host for size_penalty (spec §4.6); 0 means none.
+	SpeedFactor float64 `toml:"speed_factor"`
+	// SandboxUser is the account job commands run as, in a transient systemd unit (Linux hosts such as mserv, spec §5). Empty: no
+	// sandbox, the command runs as a process group of the daemon's own account.
+	SandboxUser string `toml:"sandbox_user"`
 }
 
 // Slots is the configured slot pair with the defaults filled in.
@@ -103,12 +111,25 @@ func (p PeerConfig) HostPort() string {
 	return net.JoinHostPort(p.Addr, strconv.Itoa(wire.Port))
 }
 
+var reSandboxUser = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+
 func (c Config) validateWorker() error {
 	if c.Worker.Heavy != nil && *c.Worker.Heavy < 0 {
 		return fmt.Errorf("worker.heavy is %d, slots cannot be negative", *c.Worker.Heavy)
 	}
 	if c.Worker.Light != nil && *c.Worker.Light < 0 {
 		return fmt.Errorf("worker.light is %d, slots cannot be negative", *c.Worker.Light)
+	}
+	if v := c.Worker.SpeedFactor; v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return fmt.Errorf("worker.speed_factor is %g, it must be 0 (none) or a finite number above it", v)
+	}
+	if u := c.Worker.SandboxUser; u != "" {
+		if runtime.GOOS != "linux" {
+			return fmt.Errorf("worker.sandbox_user is for Linux hosts (systemd units); this host is %s", runtime.GOOS)
+		}
+		if !reSandboxUser.MatchString(u) || u == "root" {
+			return fmt.Errorf("worker.sandbox_user %q is not a plain non-root account name", u)
+		}
 	}
 	if m := c.Owner.IdleMinutes; m < 0 || m > 9999 {
 		return fmt.Errorf("owner.idle_minutes is %d, it must be 0 (the default) or 1-9999", m)
