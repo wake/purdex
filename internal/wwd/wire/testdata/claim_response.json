@@ -4,7 +4,7 @@
   "snapshot": {"commit": "c0ffee", "tree": "7ee", "base": "ba5e", "rel_cwd": "spa"},
   "task": "spa-related", "args": [], "class": "merge",
   "labels": [], "locks": [], "cacheable": true, "timeout_s": 1800,
-  "interruptible": false, "queue_timeout_s": 0, "adhoc": false, "local": false, "supersede_key": "k",
+  "interruptible": false, "queue_timeout_s": 0, "adhoc": false, "local": false, "manual": "", "manual_seq": 0, "supersede_key": "k",
   "submitter": {"session": "s1", "ref": "_abc123", "team": "", "host": "mlab"},
   "created_at": "2026-10-18T05:00:00+08:00", "state": "claimed",
   "claim": {"worker": "air26", "attempt": 1, "since": "2026-10-18T05:00:10+08:00"}, "result": null},

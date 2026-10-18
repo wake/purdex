@@ -48,7 +48,7 @@ func TestAVersionFourDatabaseGainsAnEpoch(t *testing.T) {
 	require.NoError(t, Migrate(ctx, f.db))
 	var v int
 	require.NoError(t, f.db.QueryRow(`SELECT version FROM queue_schema`).Scan(&v))
-	assert.Equal(t, 5, v)
+	assert.Equal(t, schemaVersion, v)
 	var epoch string
 	require.NoError(t, f.db.QueryRow(`SELECT id FROM db_epoch`).Scan(&epoch))
 	assert.True(t, wire.ValidEpoch(epoch), epoch)

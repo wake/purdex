@@ -135,7 +135,8 @@ minus the first is the CPU spent; measured on mlab: about 0.5 % and 18–22 MB).
   restored queue's counter has caught up with it, and then miss the changes below it. A new epoch makes every client
   start again from `0`. (A backup older than schema 5 has no `db_epoch`; upgrading it again makes a new one.)
 * Queue schema steps (`queue_schema`; each only forward): 2 `git_pins` (3b-2b), 3 `jobs.lapses` (3b-3a), 4 the origin cursor
-  `jobs.rev`/`job_rev` and its triggers (3b-4a), 5 `db_epoch` (3b-4d). The wire grows with them: `GET /v1/jobs` answers
+  `jobs.rev`/`job_rev` and its triggers (3b-4a), 5 `db_epoch` (3b-4d), 6 `jobs.manual`/`jobs.manual_seq` (manual order; the rev trigger is
+  replaced to watch them). The wire grows with them: `GET /v1/jobs` answers
   `{jobs, cursor, epoch}`, and a client that decodes strictly and does not know a field fails on it, so wwd and Purdex are
   always deployed together (a short skew between wwd hosts, while the four are being upgraded one after the other,
   only costs the peers' polling a few failed rounds).

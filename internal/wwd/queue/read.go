@@ -22,7 +22,7 @@ type Filter struct {
 
 const jobColumns = `id, origin, repo_name, repo_root, repo_remote, snap_commit, snap_tree, snap_base, snap_rel_cwd,
 	task, args, class, labels, locks, cacheable, timeout_s, supersede_key, interruptible, queue_timeout_s, adhoc,
-	sub_session, sub_ref, sub_team, sub_host, created_at, state, attempts, claim_worker, claim_since, result, local`
+	sub_session, sub_ref, sub_team, sub_host, created_at, state, attempts, claim_worker, claim_since, result, local, manual, manual_seq`
 
 // Get returns one job (the local view: ad-hoc jobs included). The claim_id is never part of it.
 func (q *Queue) Get(ctx context.Context, id string) (wire.Job, error) {
@@ -138,14 +138,15 @@ func scanJob(r scanner) (wire.Job, error) {
 		created, claimSince                    sql.NullInt64
 		attempts                               int
 		claimWorker, result                    sql.NullString
+		manual                                 string
 	)
 	if err := r.Scan(&j.ID, &j.Origin, &j.Repo.Name, &j.Repo.Root, &j.Repo.Remote,
 		&j.Snapshot.Commit, &j.Snapshot.Tree, &j.Snapshot.Base, &j.Snapshot.RelCwd,
 		&j.Task, &args, &class, &labels, &locks, &cacheable, &j.TimeoutS, &j.SupersedeKey, &interruptible, &j.QueueTimeoutS, &adhoc,
-		&j.Submitter.Session, &j.Submitter.Ref, &j.Submitter.Team, &j.Submitter.Host, &created, &state, &attempts, &claimWorker, &claimSince, &result, &local); err != nil {
+		&j.Submitter.Session, &j.Submitter.Ref, &j.Submitter.Team, &j.Submitter.Host, &created, &state, &attempts, &claimWorker, &claimSince, &result, &local, &manual, &j.ManualSeq); err != nil {
 		return wire.Job{}, err
 	}
-	j.Class, j.State = wire.JobClass(class), wire.JobState(state)
+	j.Class, j.State, j.Manual = wire.JobClass(class), wire.JobState(state), wire.Position(manual)
 	j.Cacheable, j.Interruptible, j.AdHoc, j.Local = cacheable == 1, interruptible == 1, adhoc == 1, local == 1
 	j.CreatedAt = time64(created.Int64)
 	for dst, src := range map[*[]string]string{&j.Args: args, &j.Labels: labels, &j.Locks: locks} {

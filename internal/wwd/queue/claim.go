@@ -42,8 +42,8 @@ func (q *Queue) claim(ctx context.Context, id string, req wire.ClaimRequest, for
 		if err != nil {
 			return err
 		}
-		if h.state != wire.StateQueued {
-			return &ConflictError{State: h.state}
+		if h.state != wire.StateQueued || h.manual == wire.PositionHold {
+			return &ConflictError{State: h.state} // a held job is queued and stays so: the worker moves on to the next
 		}
 		now := q.now().UnixMilli()
 		if _, err := c.ExecContext(ctx, `UPDATE jobs SET state = 'claimed', claim_worker = ?, claim_id = ?, claim_since = ?,
@@ -246,6 +246,7 @@ type held struct {
 	cancelRequested bool
 	local           bool
 	hasLog          bool
+	manual          wire.Position
 	supersededBy    sql.NullString
 }
 
@@ -255,11 +256,12 @@ func loadHeld(ctx context.Context, c *sql.Conn, id string, forPeers bool) (held,
 	var worker sql.NullString
 	var cancel, local int
 	var logSize sql.NullInt64
-	query := `SELECT state, claim_id, result_claim_id, claim_worker, attempts, lapses, cancel_requested, local, superseded_by, log_size FROM jobs WHERE id = ?`
+	var manual string
+	query := `SELECT state, claim_id, result_claim_id, claim_worker, attempts, lapses, cancel_requested, local, superseded_by, log_size, manual FROM jobs WHERE id = ?`
 	if forPeers {
 		query += ` AND adhoc = 0 AND local = 0`
 	}
-	switch err := c.QueryRowContext(ctx, query, id).Scan(&state, &h.claimID, &h.resultClaimID, &worker, &h.attempts, &h.lapses, &cancel, &local, &h.supersededBy, &logSize); {
+	switch err := c.QueryRowContext(ctx, query, id).Scan(&state, &h.claimID, &h.resultClaimID, &worker, &h.attempts, &h.lapses, &cancel, &local, &h.supersededBy, &logSize, &manual); {
 	case errors.Is(err, sql.ErrNoRows):
 		return held{}, ErrNotFound
 	case err != nil:
@@ -267,6 +269,7 @@ func loadHeld(ctx context.Context, c *sql.Conn, id string, forPeers bool) (held,
 	}
 	h.state, h.worker, h.cancelRequested, h.local = wire.JobState(state), worker.String, cancel == 1, local == 1
 	h.hasLog = logSize.Valid
+	h.manual = wire.Position(manual)
 	return h, nil
 }
 
