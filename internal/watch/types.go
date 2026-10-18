@@ -123,6 +123,8 @@ type HostSignals struct {
 	Pressure      int
 	PageRate      float64
 	PageRateKnown bool // wwd's facts carry no paging rate on every platform
+	// At is when wwd took the facts. A pass over facts it has already seen is not a new observation.
+	At time.Time
 }
 
 // Memory is what the detector keeps across passes and, in the persistent implementation, across restarts.

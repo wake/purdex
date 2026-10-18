@@ -406,35 +406,135 @@ func TestE2_PageRateAboveTheRateForAWhile(t *testing.T) {
 
 // E2 from wwd: the pressure level and the paging rate come from Input.Host and Raw's are not read.
 func TestE2_FromWWDSignals(t *testing.T) {
+	observing := func(r *rig, h HostSignals, d time.Duration) []Event { // a new fact every pass
+		var all []Event
+		for end := r.now.Add(d); r.now.Before(end); {
+			all = append(all, r.observe(h)...)
+		}
+		return all
+	}
 	r := newRig(t) // wwd says level 2 (the default limit) while Raw says normal
 	r.raw = resources.HostRaw{Pressure: 1}
-	r.host = &HostSignals{Pressure: 2}
-	events := r.run(10 * time.Minute)
+	events := observing(r, HostSignals{Pressure: 2}, 10*time.Minute)
 	require.Len(t, events, 1)
 	assert.Equal(t, KindPressureHigh, events[0].Kind)
 	assert.Equal(t, 2, events[0].Pressure)
 
 	r2 := newRig(t) // Raw says level 4, wwd says normal: wwd wins
 	r2.raw = resources.HostRaw{Pressure: 4}
-	r2.host = &HostSignals{Pressure: 1}
-	assert.Empty(t, r2.run(10*time.Minute))
+	assert.Empty(t, observing(r2, HostSignals{Pressure: 1}, 10*time.Minute))
 
 	r3 := newRig(t) // the rate is wwd's own: above the limit fires, exactly the limit does not
-	r3.host = &HostSignals{PageRate: 51, PageRateKnown: true}
-	events = r3.run(3 * time.Minute)
+	events = observing(r3, HostSignals{Pressure: 1, PageRate: 51, PageRateKnown: true}, 3*time.Minute)
 	require.Len(t, events, 1)
 	assert.InDelta(t, 51, events[0].PageRate, 0.001)
 	assert.Contains(t, events[0].Detail, "page rate 51/s")
 	r4 := newRig(t)
-	r4.host = &HostSignals{PageRate: 50, PageRateKnown: true}
-	assert.Empty(t, r4.run(5*time.Minute))
+	assert.Empty(t, observing(r4, HostSignals{Pressure: 1, PageRate: 50, PageRateKnown: true}, 5*time.Minute))
 
 	r5 := newRig(t) // a platform whose facts carry no rate: Raw's counters are not used instead
 	r5.raw = resources.HostRaw{PageCounters: true}
-	r5.host = &HostSignals{PageRate: 1000} // an unknown rate is not read, whatever the field holds
 	for i := 0; i < 60; i++ {
 		r5.raw.Pageouts += 1_000_000
-		assert.Empty(t, r5.pass())
+		assert.Empty(t, r5.observe(HostSignals{Pressure: 1, PageRate: 1000}), "an unknown rate is not read, whatever the field holds")
+	}
+}
+
+// observe makes one pass with a new wwd observation (stamped now), the way a fresh fact arrives.
+func (r *rig) observe(h HostSignals) []Event {
+	h.At = r.now
+	r.host = &h
+	return r.pass()
+}
+
+// A fact that is only seen again is not a new observation: a stopped wwd (or a pool answer repeated within its 20 s) does not make
+// one high sample last for the whole window.
+func TestE2_ARepeatedFactIsNotANewObservation(t *testing.T) {
+	r := newRig(t)
+	r.host = &HostSignals{Pressure: 2, At: t0}
+	var events []Event
+	for i := 0; i < 60; i++ { // five minutes of passes over the one fact
+		events = append(events, r.pass()...)
+	}
+	assert.Empty(t, events)
+
+	r2 := newRig(t) // the same level, a new fact each pass: an event
+	var events2 []Event
+	for i := 0; i < 60; i++ {
+		events2 = append(events2, r2.observe(HostSignals{Pressure: 2})...)
+	}
+	assert.Len(t, events2, 1)
+}
+
+// Unknown is not low: it breaks a run that has not been confirmed, and it does not count towards re-arming a fired one.
+func TestE2_UnknownBreaksARunAndDoesNotRearm(t *testing.T) {
+	r := newRig(t) // 100 s of level 2, one unknown, then 100 s more: no run of 120 s, so no event
+	for i := 0; i < 20; i++ {
+		assert.Empty(t, r.observe(HostSignals{Pressure: 2}))
+	}
+	assert.Empty(t, r.observe(HostSignals{Pressure: 0}))
+	for i := 0; i < 20; i++ {
+		assert.Empty(t, r.observe(HostSignals{Pressure: 2}))
+	}
+
+	r2 := newRig(t) // fired, then a long unknown, then high again: no second event (it never saw the pressure go down)
+	var fired []Event
+	for i := 0; i < 30; i++ {
+		fired = append(fired, r2.observe(HostSignals{Pressure: 2})...)
+	}
+	require.Len(t, fired, 1)
+	for i := 0; i < 120; i++ {
+		assert.Empty(t, r2.observe(HostSignals{Pressure: 0}))
+	}
+	for i := 0; i < 60; i++ {
+		assert.Empty(t, r2.observe(HostSignals{Pressure: 2}), "no event for a pressure that was never seen to end")
+	}
+
+	r3 := newRig(t) // the same with a real low spell in between: a second event
+	for i := 0; i < 30; i++ {
+		r3.observe(HostSignals{Pressure: 2})
+	}
+	for i := 0; i < 120; i++ {
+		r3.observe(HostSignals{Pressure: 1})
+	}
+	var again []Event
+	for i := 0; i < 60; i++ {
+		again = append(again, r3.observe(HostSignals{Pressure: 2})...)
+	}
+	assert.Len(t, again, 1)
+
+	r4 := newRig(t) // the page rate is the same: an unknown rate breaks the run
+	r4.set.PageTS = time.Minute
+	for i := 0; i < 8; i++ {
+		assert.Empty(t, r4.observe(HostSignals{PageRate: 99, PageRateKnown: true}))
+	}
+	assert.Empty(t, r4.observe(HostSignals{}))
+	for i := 0; i < 8; i++ {
+		assert.Empty(t, r4.observe(HostSignals{PageRate: 99, PageRateKnown: true}))
+	}
+}
+
+// A run is one source's: a source flip breaks a run that has not fired, so no window is made of two sources; a run that has fired
+// stays fired (no second event for the same pressure).
+func TestE2_ASourceFlipBreaksAPendingRunButKeepsAFiredOne(t *testing.T) {
+	r := newRig(t) // 100 s of Raw level 2, then wwd level 2 for 100 s: neither source has a full 120 s
+	r.raw = resources.HostRaw{Pressure: 2}
+	for i := 0; i < 20; i++ {
+		assert.Empty(t, r.pass())
+	}
+	for i := 0; i < 20; i++ {
+		assert.Empty(t, r.observe(HostSignals{Pressure: 2}))
+	}
+
+	r2 := newRig(t) // fired on Raw, then the source flips while it is still high: no second event
+	r2.raw = resources.HostRaw{Pressure: 2}
+	var fired []Event
+	for i := 0; i < 30; i++ {
+		fired = append(fired, r2.pass()...)
+	}
+	require.Len(t, fired, 1)
+	for i := 0; i < 60; i++ {
+		assert.Empty(t, r2.observe(HostSignals{Pressure: 2}))
 	}
 }
 

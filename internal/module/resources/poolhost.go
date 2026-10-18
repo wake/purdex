@@ -173,7 +173,7 @@ func (m *Module) watchHostSignals() *watch.HostSignals {
 	if !ok {
 		return nil
 	}
-	h := &watch.HostSignals{Pressure: f.Mem.Pressure}
+	h := &watch.HostSignals{Pressure: f.Mem.Pressure, At: f.At}
 	if f.Mem.PageOutRate != nil || f.Mem.SwapOutRate != nil {
 		h.PageRateKnown = true
 		if f.Mem.PageOutRate != nil {

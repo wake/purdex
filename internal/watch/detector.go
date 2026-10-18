@@ -24,6 +24,11 @@ type episode struct {
 	over              bool
 }
 
+// breakRun ends a run that has not been confirmed: the condition must hold for the whole fireAfter again, and a fired episode must
+// see the condition go away again from the start. It leaves "fired" as it is. Used where nothing was observed (unknown) or the
+// observer changed.
+func (e *episode) breakRun() { e.since, e.underSince = time.Time{}, time.Time{} }
+
 func (e *episode) step(now time.Time, cond bool, fireAfter, rearmAfter time.Duration) (fire bool) {
 	if cond {
 		e.underSince = time.Time{}
@@ -83,6 +88,8 @@ type Detector struct {
 
 	pressure, pages episode
 	havePages       bool
+	e2Seen, e2Host  bool      // E2 has been run, and on wwd's signals (not Raw) the last time
+	lastHostAt      time.Time // the stamp of the wwd facts E2 last took
 	lastPass        time.Time
 	lastPages       uint64
 	lastPagesAt     time.Time
@@ -421,23 +428,44 @@ func labelOf(argv []string, inSession bool) Label {
 func (d *Detector) pressureEvents(in Input) []Event {
 	set := in.Set
 	var events []Event
+	// A run belongs to one source: when the signals change hands, a run not yet confirmed starts over (a window is never made of two
+	// observers), and the Raw counters' baseline with it. A run that has fired stays fired.
+	if fromHost := in.Host != nil; d.e2Seen && d.e2Host != fromHost {
+		d.pressure.breakRun()
+		d.pages.breakRun()
+		d.havePages = false
+	}
+	d.e2Seen, d.e2Host = true, in.Host != nil
+	if in.Host != nil {
+		if in.Host.At.Equal(d.lastHostAt) {
+			return nil // the facts seen before: nothing new was observed
+		}
+		d.lastHostAt = in.Host.At
+	}
 	level := in.Raw.Pressure
 	if in.Host != nil {
 		level = in.Host.Pressure
 	}
-	if d.pressure.step(in.Now, set.PressureLevel > 0 && level >= set.PressureLevel, set.PressureTS, set.PressureTS) {
-		events = append(events, Event{Kind: KindPressureHigh, At: in.Now, Pressure: level,
-			Detail: fmt.Sprintf("pressure level %d for %s", level, set.PressureTS)})
+	switch {
+	case in.Host != nil && level == 0: // wwd does not know the level: not a low one
+		d.pressure.breakRun()
+	default:
+		if d.pressure.step(in.Now, set.PressureLevel > 0 && level >= set.PressureLevel, set.PressureTS, set.PressureTS) {
+			events = append(events, Event{Kind: KindPressureHigh, At: in.Now, Pressure: level,
+				Detail: fmt.Sprintf("pressure level %d for %s", level, set.PressureTS)})
+		}
 	}
 
 	rate, over := 0.0, false
 	switch {
 	case in.Host != nil: // wwd's rate: no counters to take a difference of, and the running baseline starts over when Raw is read again
 		d.havePages = false
-		if in.Host.PageRateKnown {
-			rate = in.Host.PageRate
-			over = set.PageRate > 0 && rate > set.PageRate
+		if !in.Host.PageRateKnown {
+			d.pages.breakRun() // not known is not low
+			return events
 		}
+		rate = in.Host.PageRate
+		over = set.PageRate > 0 && rate > set.PageRate
 	case in.Raw.PageCounters:
 		total := in.Raw.Pageouts + in.Raw.Swapouts
 		if d.havePages && in.Now.After(d.lastPagesAt) && total >= d.lastPages {
