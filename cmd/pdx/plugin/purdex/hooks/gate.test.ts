@@ -608,7 +608,14 @@ test('adhoc: a plain command becomes pdx test --adhoc -- argv, in the background
   const out = await bash($, 'go vet ./...')
   expect(r.ran[0].command).toBe("'pdx' test --adhoc -- go vet ./...")
   expect(r.ran[0].bg).toBe(true)
-  expect(out.context.join('\n')).toContain('--adhoc')
+  expect(out.context.join('\n')).toContain('[entry].mode = rewrite')
+})
+
+test('adhoc: a redirection among the words of the command is advised and not rewritten (the text is not just the command)', async ($, on) => {
+  const r = rig(on, (a: string[]) => (isEntry(a) ? ok(JSON.stringify(ADHOC)) : ok(FREE)), () => BASH_OK, ENTRY_ON)
+  const out = await bash($, 'go vet >/dev/null ./...')
+  expect(r.ran[0].command).toBe('go vet >/dev/null ./...')
+  expect(out.context.join('\n')).toContain('pdx test go-pkg')
 })
 
 test('adhoc: the words are quoted as they were typed, the environment words and a cd stay where they are', async ($, on) => {
@@ -618,7 +625,7 @@ test('adhoc: the words are quoted as they were typed, the environment words and 
   expect(entryCalls(r)[0].slice(4, 6)).toEqual(['--cwd', 'sub'])
 })
 
-for (const cmd of ['go vet $PKG', 'go vet ./internal/*', 'go vet `pwd`', 'go vet ~/x', 'go vet ./{a,b}', 'go vet ./a\\ b', "go vet './a*'"]) {
+for (const cmd of ['go vet $PKG', 'go vet ./internal/*', 'go vet `pwd`', 'go vet ~/x', 'go vet ./{a,b}', 'go vet ./a?', 'go vet ./[ab]', 'go vet ./a\\ b', "go vet './a*'"]) {
   test(`adhoc: ${cmd} has words the shell would expand: it is advised and not rewritten`, async ($, on) => {
     const r = rig(on, (a: string[]) => (isEntry(a) ? ok(JSON.stringify(ADHOC)) : ok(FREE)), () => BASH_OK, ENTRY_ON)
     const out = await bash($, cmd)
@@ -642,8 +649,9 @@ test('adhoc: the permission verdict would change → the call goes the old way',
 
 test('adhoc: a task match and an ad-hoc one in one call are both rewritten', async ($, on) => {
   const r = rig(on, entryAnswer({ 'go vet ./...': ADHOC, 'go test ./...': { action: 'rewrite', task: 'go-pkg', args: ['./...'], queued: true } }), () => BASH_OK, ENTRY_ON)
-  await bash($, 'go vet ./... && go test ./...')
+  const out = await bash($, 'go vet ./... && go test ./...')
   expect(r.ran[0].command).toBe("'pdx' test --adhoc -- go vet ./... && 'pdx' test go-pkg ./...")
+  expect(out.context.join('\n')).not.toContain('[entry].mode = rewrite') // a task was part of it: the plain wording
 })
 
 // A cd carries to the commands after it only along `&&`: after `;`, `||`, a pipe or a newline the command runs wherever the shell
