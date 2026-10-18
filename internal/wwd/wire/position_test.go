@@ -19,6 +19,8 @@ func TestJobManualPlaceIsValidated(t *testing.T) {
 	bad := map[string]string{
 		"normal is a request, not a place": `"manual": "normal", "manual_seq": 0`,
 		"unknown":                          `"manual": "sideways", "manual_seq": 0`,
+		"unknown with a number":            `"manual": "sideways", "manual_seq": -1`,
+		"normal with a number":             `"manual": "normal", "manual_seq": 2`,
 		"hold with a number":               `"manual": "hold", "manual_seq": 1`,
 		"none with a number":               `"manual": "", "manual_seq": 1`,
 		"front with zero":                  `"manual": "front", "manual_seq": 0`,
