@@ -246,6 +246,7 @@ func (m *Module) Start(ctx context.Context) error {
 // Stop ends the current lifetime: its sweeper and its WebSockets, and waits for both (or for ctx). The module counts as
 // running until the sweeper has returned, so a concurrent Start does not start a second one.
 func (m *Module) Stop(ctx context.Context) error {
+	m.ready.Store(false) // the capabilities that follow Status stop being announced as the module stops
 	m.mu.Lock()
 	g := m.cur
 	if g != nil {

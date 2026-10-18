@@ -174,3 +174,13 @@ func TestWSStages_AReconnectSeesWhereTheMessagesAre(t *testing.T) {
 		noFrameWithin(t, c, 100*time.Millisecond)
 	}
 }
+
+// Status is what announces conversations.stages.v1 (core.moduleReady): ready from Init, and not any more once Stop begins.
+func TestModule_StatusReadyEndsWithStop(t *testing.T) {
+	m := New()
+	assert.Equal(t, false, m.Status()["ready"])
+	m.ready.Store(true) // what a successful Init does
+	assert.Equal(t, true, m.Status()["ready"])
+	require.NoError(t, m.Stop(t.Context()))
+	assert.Equal(t, false, m.Status()["ready"])
+}
