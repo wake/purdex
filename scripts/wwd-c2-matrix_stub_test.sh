@@ -150,6 +150,13 @@ HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=running C2_
 [ "$(grep -c '^bootout' "$stub/launchctl.log")" -eq 1 ] || fail "bootout should have been called once: $(cat "$stub/launchctl.log")"
 [ "$(grep -c '^bootstrap' "$stub/launchctl.log")" -eq 2 ] || fail "the clean-up must bootstrap the service again: $(cat "$stub/launchctl.log")"
 
+# the same case when every service comes up: two down, two up, and the clean-up brings nothing up again
+rm -f "$stub"/*.log; : > "$stub/bootstrap-failed-once"      # the stub's launchctl never fails now
+rc=0
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=running C2_TIMEOUT_SCALE=0 sh "$matrix" --case 2 > "$tmp/out" 2>&1 || rc=$?
+[ "$(grep -c '^bootout' "$stub/launchctl.log")" -eq 2 ] || fail "case 2 takes the service down twice: $(cat "$stub/launchctl.log")"
+[ "$(grep -c '^bootstrap' "$stub/launchctl.log")" -eq 2 ] || fail "the clean-up must not bring up a service that is up: $(cat "$stub/launchctl.log")"
+
 # ---- a case that fails -----------------------------------------------------------------------------------------------------
 rc=0
 HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=failed C2_TIMEOUT_SCALE=0 sh "$matrix" --case 10 > "$tmp/out" 2>&1 || rc=$?
