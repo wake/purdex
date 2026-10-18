@@ -133,7 +133,7 @@ func runSandboxed(ctx context.Context, spec Spec, env []string, prog string, cp 
 			default:
 				stop = stopCancel
 				if runErr == nil {
-					runErr = fmt.Errorf("run: unit %s ended and left no exit status: it was stopped from outside, or the status file could not be written", unit)
+					runErr = fmt.Errorf("run: unit %s ended and left no exit status: it was stopped from outside", unit)
 				}
 			}
 		case show["InvocationID"] == "" || show["InvocationID"] == before["InvocationID"]:
