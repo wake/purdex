@@ -87,6 +87,14 @@ describe('entries order', () => {
     await st().loadJournal('h1', 's1')
     expect(unit().confirms).toEqual([])
   })
+
+  it('an answer without confirms[] counts no open 待確認 either (the badge and the band agree)', async () => {
+    getJournal.mockResolvedValue(page({ open_confirms: 2 }))
+    st().setSupport('h1', true, true)
+    await st().loadJournal('h1', 's1')
+    expect(unit().confirms).toEqual([])
+    expect(unit().openConfirms).toBe(0)
+  })
 })
 
 describe('unit data', () => {

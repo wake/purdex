@@ -295,7 +295,7 @@ export const useJournalStore = create<JournalState>()((set, get) => {
           unit: page.unit, project: page.project, personName: page.personName, entries,
           // The band and the open count are the unit's live state: only the newest page carries them.
           confirms: older ? (held?.confirms ?? []) : sortBand(page.confirms ?? []),
-          openConfirms: older ? (held?.openConfirms ?? 0) : page.openConfirms,
+          openConfirms: older ? (held?.openConfirms ?? 0) : page.confirms === null ? 0 : page.openConfirms, // no confirms[] = no band = nothing open (the badge agrees)
           // `more` describes the OLDEST loaded entry: an older page sets it; a newest-page re-read keeps it once older months are held.
           more: paged ? false : older || !held || held.entries.length === 0 ? page.more : held.more,
           currentPage: paged ? page.page : (held?.currentPage ?? ''),
