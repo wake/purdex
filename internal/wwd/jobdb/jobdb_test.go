@@ -16,6 +16,7 @@ import (
 type fakeExec struct {
 	mu        sync.Mutex
 	sessions  []string      // ids answered to the processlist query
+	stubborn  bool          // KILL leaves the sessions listed
 	hold      chan struct{} // when set, the database listing waits for it to be closed (a Sweep that is half way)
 	held      chan struct{} // closed once a Run is waiting on hold
 	sql       []string
@@ -40,11 +41,17 @@ func (f *fakeExec) Run(ctx context.Context, sql string) (string, error) {
 		if f.cancel != nil {
 			f.cancel()
 		}
+		if strings.Contains(f.failError.Error(), "Unknown thread id") {
+			f.sessions = nil // it was gone before the KILL arrived
+		}
 		return "", f.failError
 	}
 	switch {
 	case strings.Contains(sql, "information_schema.processlist"):
 		return strings.Join(f.sessions, "\n"), nil
+	case strings.HasPrefix(sql, "KILL CONNECTION") && !f.stubborn:
+		f.sessions = nil // the connections go when they are killed
+		return "", nil
 	case strings.Contains(sql, "information_schema.schemata"):
 		return strings.Join(f.dbs, "\n"), nil
 	case strings.Contains(sql, "mysql.user"):
@@ -169,6 +176,9 @@ func TestSweepDropsOnlyOurLeftoversThatNoLiveJobOwns(t *testing.T) {
 	}
 	if !strings.Contains(sql, "KILL CONNECTION 77") {
 		t.Fatalf("a leftover user's open connections must be ended before it is dropped:\n%s", sql)
+	}
+	if k, d := strings.Index(sql, "KILL CONNECTION 77"), strings.Index(sql, "DROP DATABASE IF EXISTS `"+dead+"`"); k > d {
+		t.Fatalf("in a Sweep, the users' connections end before any database goes:\n%s", sql)
 	}
 	for _, keep := range []string{live, m.User("j_live"), "wwd_notours", "`mysql`", "appdb", "'root'"} {
 		if strings.Contains(sql, "DROP DATABASE IF EXISTS `"+keep+"`") || strings.Contains(sql, "DROP USER IF EXISTS '"+keep+"'") {
@@ -318,4 +328,27 @@ func TestASweepInProgressHoldsBackACreate(t *testing.T) {
 	close(f.hold)
 	<-sweepDone
 	<-created
+}
+
+func TestAKillThatFailsOrDoesNotWorkIsReported(t *testing.T) {
+	// a failure other than "the connection is already gone"
+	f := &fakeExec{sessions: []string{"5"}, failOn: "KILL CONNECTION", failError: errors.New("ERROR 1095: You are not owner of thread 5")}
+	if err := New(f, Config{}).Drop(context.Background(), "j"); err == nil || !strings.Contains(err.Error(), "KILL CONNECTION 5") {
+		t.Fatalf("err = %v", err)
+	}
+	// the connection is gone by itself: not an error
+	g := &fakeExec{sessions: []string{"5"}, failOn: "KILL CONNECTION", failError: errors.New("ERROR 1094: Unknown thread id: 5")}
+	g.stubborn = false
+	if err := New(g, Config{}).Drop(context.Background(), "j"); err != nil {
+		t.Fatalf("an already gone connection is not a failure: %v", err)
+	}
+	// KILL answered but the session is still listed
+	h := &fakeExec{sessions: []string{"5"}, stubborn: true}
+	if err := New(h, Config{}).Drop(context.Background(), "j"); err == nil || !strings.Contains(err.Error(), "still open") {
+		t.Fatalf("err = %v", err)
+	}
+	// every statement is still tried
+	if !strings.Contains(h.all(), "DROP DATABASE IF EXISTS") {
+		t.Fatalf("the rest of the clean-up must go on:\n%s", h.all())
+	}
 }

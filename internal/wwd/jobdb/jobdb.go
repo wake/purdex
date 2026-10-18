@@ -169,18 +169,46 @@ func (m *Manager) dropNames(ctx context.Context, db, user string) error {
 	return first
 }
 
-// killConnections ends the open connections of a user: DROP USER leaves them running with the rights they had.
+// killConnections ends the open connections of a user: DROP USER leaves them running with the rights they had. A connection that
+// is already gone ("Unknown thread id") is fine; any other failure is returned, and so is a connection that is still listed
+// afterwards.
 func (m *Manager) killConnections(ctx context.Context, user string) error {
-	out, err := m.ex.Run(ctx, fmt.Sprintf("SELECT id FROM information_schema.processlist WHERE user = '%s'", user))
-	if err != nil {
-		return fmt.Errorf("jobdb: list connections: %w", err)
+	list := func() ([]string, error) {
+		out, err := m.ex.Run(ctx, fmt.Sprintf("SELECT id FROM information_schema.processlist WHERE user = '%s'", user))
+		if err != nil {
+			return nil, fmt.Errorf("jobdb: list connections: %w", err)
+		}
+		var ids []string
+		for _, id := range lines(out) {
+			if idRe.MatchString(id) {
+				ids = append(ids, id)
+			}
+		}
+		return ids, nil
 	}
-	for _, id := range lines(out) {
-		if idRe.MatchString(id) {
-			_, _ = m.ex.Run(ctx, "KILL CONNECTION "+id) // one that ended by itself in between is not a failure
+	ids, err := list()
+	if err != nil {
+		return err
+	}
+	var first error
+	for _, id := range ids {
+		if _, err := m.ex.Run(ctx, "KILL CONNECTION "+id); err != nil && !strings.Contains(err.Error(), "Unknown thread id") && first == nil {
+			first = fmt.Errorf("jobdb: KILL CONNECTION %s: %w", id, err)
 		}
 	}
-	return nil
+	if len(ids) == 0 {
+		return nil
+	}
+	left, err := list()
+	switch {
+	case err != nil:
+		return err
+	case len(left) > 0 && first != nil:
+		return first // the failed KILL is the reason they are still there
+	case len(left) > 0:
+		return fmt.Errorf("jobdb: %d connection(s) of %s are still open after KILL", len(left), user)
+	}
+	return first
 }
 
 func (m *Manager) dropUserAt(ctx context.Context, user, host string) error {
@@ -223,6 +251,14 @@ func (m *Manager) Sweep(ctx context.Context, live []string) (dropped []string, e
 			first = e
 		}
 	}
+	// every user/host pair that is really there, whatever hosts the config named when it was made
+	for _, l := range lines(userOut) {
+		u, h, ok := strings.Cut(l, "\t")
+		if ok && userNameRe.MatchString(u) && hostRe.MatchString(h) && !keepUser[u] {
+			note(m.killConnections(ctx, u))
+			note(m.dropUserAt(ctx, u, h))
+		}
+	}
 	for _, db := range lines(dbOut) {
 		if dbNameRe.MatchString(db) && !keepDB[db] {
 			e := m.dropDB(ctx, db)
@@ -230,14 +266,6 @@ func (m *Manager) Sweep(ctx context.Context, live []string) (dropped []string, e
 			if e == nil {
 				dropped = append(dropped, db)
 			}
-		}
-	}
-	// every user/host pair that is really there, whatever hosts the config named when it was made
-	for _, l := range lines(userOut) {
-		u, h, ok := strings.Cut(l, "\t")
-		if ok && userNameRe.MatchString(u) && hostRe.MatchString(h) && !keepUser[u] {
-			note(m.killConnections(ctx, u))
-			note(m.dropUserAt(ctx, u, h))
 		}
 	}
 	sort.Strings(dropped)
