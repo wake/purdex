@@ -3,8 +3,11 @@ package store
 import (
 	"database/sql"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/wake/purdex/internal/wwd/wire"
 )
 
 // deployedV4 writes a wwd.db exactly as the deployed v4 schema leaves it (the DDL of v1 to v4), with a row in the tables a
@@ -131,6 +134,50 @@ func TestActiveAlertsReadsOnlyUnclearedRows(t *testing.T) {
 	}
 	if err := got[0].Validate(); err != nil {
 		t.Fatalf("a stored row is a valid wire.Alert: %v", err)
+	}
+}
+
+// The alert's one-line detail is a column of the v5 table (made with it, so 8a-1 needs no second step), empty by default, and a stored
+// text over the limit is cut on the way out instead of failing the whole list.
+func TestAlertsDetailColumn(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "wwd.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	since := time.Date(2026, 10, 19, 4, 0, 0, 0, time.UTC).UnixMilli()
+	long := strings.Repeat("剩", 100) + "x" // 301 bytes
+	for _, r := range []struct{ key, detail string }{{"a", "mlab 剩 11.2 GB"}, {"b", long}} {
+		if _, err := s.DB().Exec(`INSERT INTO alerts (key, kind, level, since_ms, last_ms, detail) VALUES (?, 'disk_low', 'push', ?, ?, ?)`, r.key, since, since, r.detail); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.DB().Exec(`INSERT INTO alerts (key, kind, level, since_ms, last_ms) VALUES ('c', 'orphans', 'digest', ?, ?)`, since, since); err != nil {
+		t.Fatalf("detail must default to empty: %v", err)
+	}
+	got, err := s.ActiveAlerts()
+	if err != nil || len(got) != 3 {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if got[0].Detail != "mlab 剩 11.2 GB" || got[2].Detail != "" {
+		t.Fatalf("%+v", got)
+	}
+	if len(got[1].Detail) > wire.MaxAlertDetailBytes || len(got[1].Detail) == 0 {
+		t.Fatalf("a long stored detail is cut, not dropped or refused: %d bytes", len(got[1].Detail))
+	}
+}
+
+// A deployed v4 file gets the column with its table (the table is new in v5, so there is no older shape to alter).
+func TestV4FileGetsAlertsWithDetail(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "wwd.db")
+	deployedV4(t, p)
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.DB().Exec(`INSERT INTO alerts (key, kind, level, since_ms, last_ms, detail) VALUES ('k', 'thrash', 'digest', 1, 1, 'x')`); err != nil {
+		t.Fatal(err)
 	}
 }
 

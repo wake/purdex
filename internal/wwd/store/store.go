@@ -41,7 +41,7 @@ const startsIndexDDL = `CREATE INDEX IF NOT EXISTS wwd_starts_started ON wwd_sta
 
 // alertsDDL (v5): a host's alerts (spec §13.3). The key is one alert across time; cleared_ms is NULL while it is active. This PR
 // makes the table and reads it (ActiveAlerts); the rules that write it come in 8a-1 and 8a-2.
-const alertsDDL = `CREATE TABLE IF NOT EXISTS alerts (key TEXT PRIMARY KEY, kind TEXT NOT NULL, level TEXT NOT NULL, since_ms INTEGER NOT NULL, last_ms INTEGER NOT NULL, cleared_ms INTEGER)`
+const alertsDDL = `CREATE TABLE IF NOT EXISTS alerts (key TEXT PRIMARY KEY, kind TEXT NOT NULL, level TEXT NOT NULL, since_ms INTEGER NOT NULL, last_ms INTEGER NOT NULL, cleared_ms INTEGER, detail TEXT NOT NULL DEFAULT '')`
 
 // Store is the open wwd.db.
 type Store struct{ db *sql.DB }
