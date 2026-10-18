@@ -113,7 +113,7 @@ type harnessVerdict struct {
 func (t *Tracker) isHarness(p ProcRec, c ProcContext) bool {
 	k := treeKey{p.PID, p.Name}
 	id, _ := t.ident(p.PID)
-	if v, ok := t.harness[k]; ok && v.ident == id { // an unknown identity matches only an unknown one: the verdict is not carried across a read that failed // an unknown identity matches only an unknown one: the verdict is not carried across a read that failed
+	if v, ok := t.harness[k]; ok && (id == "" || v.ident == id) { // a read that fails now keeps the verdict; one that works must match what it was made for (a verdict made without an identity matches none) // a read that fails now keeps the verdict; one that works must match what it was made for (a verdict made without an identity matches none) // an unknown identity matches only an unknown one: the verdict is not carried across a read that failed
 		return v.harness
 	}
 	h := strings.HasPrefix(strings.ToLower(path.Base(p.Name)), "codex") || kindOf(p, c) == "codex-broker"

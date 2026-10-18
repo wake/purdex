@@ -414,6 +414,27 @@ func TestTrackerDoesNotCarryAVerdictAcrossAnUnknownIdentity(t *testing.T) {
 	}
 }
 
+// The other way: a verdict made with an identity survives a sample whose identity read failed.
+func TestTrackerKeepsAVerdictWhenTheIdentityReadFailsOnce(t *testing.T) {
+	h, tr := newHost(), newTracker()
+	known := true
+	tr.ident = func(int) (string, bool) {
+		if !known {
+			return "", false
+		}
+		return "t1", true
+	}
+	h.add(200, 100, "node", []string{"node", "/usr/lib/node_modules/@openai/codex/bin/codex.js", "app-server"})
+	h.rec(200).FootprintBytes = mb(1500)
+	step(tr, h, 0)
+	known = false
+	h.args[200] = nil // the argument read fails in the same sample
+	step(tr, h, 1)
+	if len(tr.Live()) != 0 {
+		t.Fatalf("the codex wrapper became a command: %+v", tr.Live())
+	}
+}
+
 // A long gap between samples (the machine slept, wwd was stopped) is not charged as CPU.
 func TestTrackerCapsAGapBetweenSamples(t *testing.T) {
 	h := newHost()
