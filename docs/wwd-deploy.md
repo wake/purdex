@@ -173,8 +173,10 @@ ssh mserv 'sh /tmp/wwd-mysql-setup.sh --dry-run --sql /tmp/wwdctl.sql install'  
 ssh mserv 'sh /tmp/wwd-mysql-setup.sh --sql /tmp/wwdctl.sql install'
 ```
 
-It loads the routines (replacing the old ones, so it is also how a changed `wwdctl.sql` is deployed), makes the account only when
-the client file does not already work, writes the client file, calls one routine as the account, and prints the account's grants.
+It loads the routines (replacing the old ones, so it is also how a changed `wwdctl.sql` is deployed), keeps the account only when
+its client file works **and** its grants are exactly `USAGE ON *.*` and `EXECUTE ON wwdctl.*`; otherwise it drops the account and makes it
+again, with a new password and a new client file (so a run that finds drifted grants also rotates the credential, and anything that holds
+the old client file must take the new one). It then calls one routine as the account and prints the account's grants.
 Check later with `... status`.
 
 Remove (the account and the database `wwdctl`, hence every routine, and the client file; databases and users of jobs that are
@@ -193,7 +195,7 @@ wwd made (kept in `wwdctl`, written by the routines) would close it and is a fol
 By hand, if the script is not at hand: `DROP USER 'wwd_admin'@'localhost'; DROP DATABASE wwdctl;` as root on the dev socket
 (`sudo mysql -S /run/mysqld-dev/mysqld.sock`), and `rm ~/.config/wwd/mysql-admin.cnf`.
 
-Check what the account may and may not do (it makes one database and one user of the right shape and drops them again; 38 checks):
+Check what the account may and may not do (it makes one database and one user of the right shape and drops them again; 35 checks):
 
 ```sh
 scp scripts/wwd-mysql-probe.sh mserv:/tmp/ && ssh mserv 'sh /tmp/wwd-mysql-probe.sh'
