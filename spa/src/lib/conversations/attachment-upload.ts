@@ -3,8 +3,9 @@
 // chip memory whether or not an input is mounted; a remounted input reads what is still on its way from here. Only a release of the
 // pane (`forgetAttachmentsWhere`, via `pane-release`) aborts an upload, and an aborted one writes nothing back. Keyed like the draft.
 import { useCallback, useSyncExternalStore } from 'react'
-import { addAttachment, attachmentText, insertAttachmentText, isImageFile, makePreviewUrl, nextAttachmentSeq, reconcileAttachments, revokePreviewUrl, trackUpload } from './attachment-memory'
-import { imagePlaceholder, insertPlaceholderText } from './image-placeholder'
+import { addAttachment, attachmentText, isImageFile, makePreviewUrl, nextAttachmentSeq, reconcileAttachments, revokePreviewUrl, trackUpload } from './attachment-memory'
+import { imagePlaceholder } from './image-placeholder'
+import { closeAnchor, forgetAnchorsWhere, landAnchor, openAnchors } from './insertion-anchor'
 import { readDraft, writeDraft } from './draft-memory'
 import { discardCleared } from './draft-clear'
 import type { UploadFn } from './deck-adapter'
@@ -48,9 +49,15 @@ function setRunning(key: string, next: readonly Uploading[]): void {
   notify(key)
 }
 
-/** Starts saving `files`; each one's placeholder (an image) or path (any other file) goes into the draft and a chip when it lands. */
-export function startUploads(key: string, upload: UploadFn, files: readonly File[]): void {
-  for (const file of files) {
+/**
+ * Starts saving `files`; each one's placeholder (an image) or path (any other file) goes into the draft and a chip when it lands.
+ * `caret` is where the files came in (the input's caret, at the drop / paste): they land there, in the files' order, with the
+ * point following the edits made meanwhile (insertion-anchor). Without it they land at the end of the draft.
+ */
+export function startUploads(key: string, upload: UploadFn, files: readonly File[], caret?: number): void {
+  const anchorIds = caret === undefined ? [] : openAnchors(key, caret, files.length)
+  for (const [i, file] of files.entries()) {
+    const anchorId = anchorIds[i] ?? ''
     const id = `att-${++seq}`
     const ctl = new AbortController()
     const untrack = trackUpload(key, ctl)
@@ -60,6 +67,7 @@ export function startUploads(key: string, upload: UploadFn, files: readonly File
     setRunning(key, [...uploadsOf(key), { id, name: file.name, percent: 0, image, size: file.size, previewUrl }])
     const done = () => {
       untrack()
+      closeAnchor(key, anchorId)
       if (!handedOver) revokePreviewUrl(previewUrl)
       setRunning(key, uploadsOf(key).filter((x) => x.id !== id))
     }
@@ -75,7 +83,7 @@ export function startUploads(key: string, upload: UploadFn, files: readonly File
       const seq = image ? nextAttachmentSeq() : undefined
       const text = seq === undefined ? attachmentText(path, false) : imagePlaceholder(seq)
       discardCleared(key) // something new lands in the draft: an earlier clear can no longer be undone over it
-      writeDraft(key, seq === undefined ? insertAttachmentText(readDraft(key) ?? '', text) : insertPlaceholderText(readDraft(key) ?? '', text))
+      landAnchor(key, anchorId, readDraft(key) ?? '', text, seq === undefined ? 'line' : 'inline', (next) => writeDraft(key, next))
       handedOver = true
       addAttachment(key, { id, name: file.name, path, text, image, mime: file.type, size: file.size, previewUrl, seq })
       done() // notifies after the memories are written
@@ -90,6 +98,7 @@ export function startUploads(key: string, upload: UploadFn, files: readonly File
 
 /** A released pane / session: its unseen failures and running entries go (the uploads themselves are aborted by `forgetAttachmentsWhere`). */
 export function forgetUploadsWhere(match: (key: string) => boolean): void {
+  forgetAnchorsWhere(match)
   for (const key of [...unseen.keys()]) if (match(key)) unseen.delete(key)
   for (const key of [...running.keys()]) if (match(key)) { for (const u of running.get(key) ?? []) revokePreviewUrl(u.previewUrl); running.delete(key); notify(key) }
 }
