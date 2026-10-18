@@ -150,6 +150,46 @@ func TestJobsAfter_RefusesABadCursorAndAnAnswerWithoutOne(t *testing.T) {
 	}
 }
 
+const testEpoch = "0123456789abcdef0123456789abcdef"
+
+func TestJobsAfter_ReturnsTheEpochOfTheDatabase(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, wire.JobsListResponse{Cursor: "7", Epoch: testEpoch})
+	})
+	r, err := New(fakeWWD(t, mux)).JobsAfter(context.Background(), "0", 0)
+	if err != nil || r.Epoch != testEpoch {
+		t.Fatalf("answer %+v err %v", r, err)
+	}
+}
+
+func TestJobsAfter_ACursorAheadOfTheHeadIsATypedError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(wire.CursorAhead{Reason: wire.CursorAheadReason, Head: "3", Epoch: testEpoch})
+	})
+	_, err := New(fakeWWD(t, mux)).JobsAfter(context.Background(), "900", 0)
+	var ca *CursorAheadError
+	if !errors.As(err, &ca) || ca.Head != "3" || ca.Epoch != testEpoch {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestJobsAfter_AnotherConflictStaysAStatusError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"busy"}`, http.StatusConflict)
+	})
+	_, err := New(fakeWWD(t, mux)).JobsAfter(context.Background(), "0", 0)
+	var se *StatusError
+	var ca *CursorAheadError
+	if !errors.As(err, &se) || errors.As(err, &ca) || se.Code != http.StatusConflict {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestJobLogCancel_PathsAndEscaping(t *testing.T) {
 	var paths []string
 	var mu sync.Mutex

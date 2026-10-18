@@ -112,7 +112,8 @@ func (c *Client) Jobs(ctx context.Context, f JobsQuery) ([]wire.Job, error) {
 }
 
 // JobsAfter is GET /v1/jobs?after=<cursor>: the jobs that changed after the cursor (oldest change first, each once, in the state it is
-// in now) and the cursor to ask with next. The first cursor is "0". limit 0 leaves the server's default. An answer with no cursor is an
+// in now) and the cursor to ask with next, with the Epoch of the database the cursor belongs to (empty from a wwd that has none). A
+// cursor above wwd's head is a *CursorAheadError. The first cursor is "0". limit 0 leaves the server's default. An answer with no cursor is an
 // error: a server that does not know ?after= would list everything, and that must not be taken for "nothing new".
 func (c *Client) JobsAfter(ctx context.Context, after string, limit int) (wire.JobsListResponse, error) {
 	if !wire.ValidCursor(after) {
@@ -124,12 +125,26 @@ func (c *Client) JobsAfter(ctx context.Context, after string, limit int) (wire.J
 	}
 	r, err := call[wire.JobsListResponse](ctx, c, http.MethodGet, "/v1/jobs", q, nil)
 	if err != nil {
+		var se *StatusError
+		if errors.As(err, &se) && se.Code == http.StatusConflict {
+			if ca, derr := wire.Decode[wire.CursorAhead]([]byte(se.Body)); derr == nil {
+				return wire.JobsListResponse{}, &CursorAheadError{CursorAhead: ca}
+			}
+		}
 		return wire.JobsListResponse{}, err
 	}
 	if r.Cursor == "" {
 		return wire.JobsListResponse{}, errors.New("wwd answered without a cursor: it does not support ?after=")
 	}
 	return r, nil
+}
+
+// CursorAheadError is wwd's 409 to an ?after= above its head: the cursor was made by another database (this one was removed and made
+// again), so reading on from it would find nothing, forever. The caller starts over.
+type CursorAheadError struct{ wire.CursorAhead }
+
+func (e *CursorAheadError) Error() string {
+	return fmt.Sprintf("wwd: the cursor is ahead of its head %s (database %s)", e.Head, e.Epoch)
 }
 
 var jobIDRe = regexp.MustCompile(`^j_[0-9A-Za-z_-]{1,64}$`)
