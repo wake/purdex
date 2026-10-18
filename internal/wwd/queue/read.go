@@ -53,8 +53,26 @@ func getOn(ctx context.Context, rq rowQuerier, id string, forPeers bool) (wire.J
 
 // List returns the jobs that match f, oldest first.
 func (q *Queue) List(ctx context.Context, f Filter) ([]wire.Job, error) {
+	jobs, _, err := q.list(ctx, f, nil)
+	return jobs, err
+}
+
+// revScanner lets scanJob read a row that has the job's rev after the job's columns.
+type revScanner struct {
+	r   scanner
+	rev *int64
+}
+
+func (s revScanner) Scan(dest ...any) error { return s.r.Scan(append(dest, s.rev)...) }
+
+// list is List; with after set it is the cursor read (jobs whose rev is above it, oldest change first) and returns each job's rev.
+func (q *Queue) list(ctx context.Context, f Filter, after *int64) ([]wire.Job, []int64, error) {
 	var where []string
 	var args []any
+	if after != nil {
+		where = append(where, "rev > ?")
+		args = append(args, *after)
+	}
 	if len(f.States) > 0 {
 		marks := make([]string, len(f.States))
 		for i, s := range f.States {
@@ -70,29 +88,44 @@ func (q *Queue) List(ctx context.Context, f Filter) ([]wire.Job, error) {
 	if f.ForPeers {
 		where = append(where, "adhoc = 0", "local = 0")
 	}
-	query := `SELECT ` + jobColumns + ` FROM jobs`
+	query := `SELECT ` + jobColumns
+	order := ` ORDER BY seq`
+	if after != nil {
+		query += `, rev`
+		order = ` ORDER BY rev`
+	}
+	query += ` FROM jobs`
 	if len(where) > 0 {
 		query += ` WHERE ` + strings.Join(where, " AND ")
 	}
-	query += ` ORDER BY seq`
+	query += order
 	if f.Limit > 0 {
 		query += ` LIMIT ?`
 		args = append(args, f.Limit)
 	}
 	rows, err := q.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
 	out := []wire.Job{}
+	var revs []int64
 	for rows.Next() {
-		j, err := scanJob(rows)
+		var rev int64
+		var src scanner = rows
+		if after != nil {
+			src = revScanner{r: rows, rev: &rev}
+		}
+		j, err := scanJob(src)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		out = append(out, j)
+		if after != nil {
+			revs = append(revs, rev)
+		}
 	}
-	return out, rows.Err()
+	return out, revs, rows.Err()
 }
 
 type scanner interface{ Scan(dest ...any) error }
