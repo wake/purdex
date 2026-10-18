@@ -2,6 +2,7 @@ package wire
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -13,5 +14,5 @@ const MaxAliasBytes = 128
 // accepts is one the Purdex daemon's pool routes can name, and the other way round.
 func ValidAlias(s string) bool {
 	return s != "" && len(s) <= MaxAliasBytes && utf8.ValidString(s) &&
-		!strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f })
+		!strings.ContainsFunc(s, unicode.IsControl) // C0, DEL and C1 (U+0080-U+009F)
 }

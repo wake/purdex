@@ -13,7 +13,7 @@ func TestValidAlias(t *testing.T) {
 			t.Errorf("%q should be a valid alias", ok)
 		}
 	}
-	for _, bad := range []string{"", "a\nb", "a\x00b", "a\x7fb", "\xff\xfe", strings.Repeat("x", MaxAliasBytes+1)} {
+	for _, bad := range []string{"", "a\nb", "a\x00b", "a\x7fb", "a\u0085b", "a\u009fb", "\xff\xfe", strings.Repeat("x", MaxAliasBytes+1)} {
 		if ValidAlias(bad) {
 			t.Errorf("%q should not be a valid alias", bad)
 		}
