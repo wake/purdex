@@ -377,19 +377,37 @@ func TestActivePaneMetadataFormat_SubstitutesTabsInFreeTextFields(t *testing.T) 
 // both fenced ids (OSC 2 with raw TABs, the codex critic's input). Whether or
 // not this tmux lets the TABs into the title, the combined read must equal
 // the per-field read and carry the pane's real window and pane ids.
+// titleWait bounds how long the test polls for the pane title to change: it returns as soon as it has, so the bound only matters on a
+// loaded host (a 1 s wait made this test fail intermittently under load, #3330) or for a tmux that never changes the title.
+const titleWait = 10 * time.Second
+
 func TestRealExecutorActivePaneMetadata_RealTmuxForgedTitle(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux not installed")
 	}
+	// A tmux server of its own, never the developer's: TMUX_TMPDIR puts the default socket (the one RealExecutor talks to) into a
+	// temporary directory, TMUX is unset so no enclosing session is reached, and -f /dev/null keeps ~/.tmux.conf (which may say
+	// `exit-empty off`) out of it. The server is stopped through its explicit socket when the test ends. (#3330)
+	tmpDir, err := os.MkdirTemp("/tmp", "pdxft") // short: a unix socket path is capped at ~100 bytes
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmpDir) })
+	t.Setenv("TMUX_TMPDIR", tmpDir)
+	t.Setenv("TMUX", "")
+	os.Unsetenv("TMUX")
+	sock := filepath.Join(tmpDir, "tmux-"+strconv.Itoa(os.Getuid()), "default")
 	name := fmt.Sprintf("pdx1293-forged-title-%d", os.Getpid())
 	tm := func(args ...string) (string, error) {
-		out, err := exec.Command("tmux", args...).Output()
+		out, err := exec.Command("tmux", append([]string{"-f", "/dev/null"}, args...)...).Output()
 		return strings.TrimSuffix(string(out), "\n"), err
 	}
-	if _, err := tm("new-session", "-d", "-s", name, "-x", "80", "-y", "24", "/bin/sh"); err != nil {
+	// -n names the window, which also turns automatic-rename off for it: otherwise the window is renamed (sh → zsh → bash …) while the
+	// shell starts, and the combined read and the per-field read, made a moment apart, could see two different names.
+	if _, err := tm("new-session", "-d", "-s", name, "-n", "pdxwin", "-x", "80", "-y", "24", "/bin/sh"); err != nil {
 		t.Skipf("cannot start a tmux session: %v", err)
 	}
-	t.Cleanup(func() { _, _ = tm("kill-session", "-t", "="+name) })
+	t.Cleanup(func() { _ = exec.Command("tmux", "-S", sock, "kill-server").Run() })
 	target := "=" + name + ":"
 	title := func() string {
 		out, err := tm("display-message", "-p", "-t", target, "#{pane_title}")
@@ -415,14 +433,14 @@ func TestRealExecutorActivePaneMetadata_RealTmuxForgedTitle(t *testing.T) {
 	if _, err := tm("send-keys", "-t", target, `printf '\033]2;`+marker+`\033\\'`, "Enter"); err != nil {
 		t.Fatalf("send-keys: %v", err)
 	}
-	if got, ok := waitTitle(func(s string) bool { return s == marker }, 3*time.Second); !ok {
+	if got, ok := waitTitle(func(s string) bool { return s == marker }, titleWait); !ok {
 		t.Fatalf("OSC 2 did not set the pane title: %q", got)
 	}
 	// %% so printf emits a literal %9 rather than failing on a bad conversion.
 	if _, err := tm("send-keys", "-t", target, `printf '\033]2;x\t@9\ty\t%%9\033\\'`, "Enter"); err != nil {
 		t.Fatalf("send-keys: %v", err)
 	}
-	raw, _ := waitTitle(func(s string) bool { return s != marker }, time.Second)
+	raw, _ := waitTitle(func(s string) bool { return s != marker }, titleWait)
 	tabEntered := strings.Contains(raw, "\t")
 	if !tabEntered {
 		v, _ := tm("-V")
