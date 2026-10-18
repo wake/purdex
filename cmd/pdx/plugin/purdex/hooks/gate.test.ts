@@ -349,3 +349,161 @@ test('askWouldWaitAll: nothing to ask is no process', async ($, on) => {
   expect(await askWouldWaitAll($, { bin: 'pdx', config: '' }, [])).toEqual([])
   expect(r.calls).toEqual([])
 })
+
+// ---- the wwd entry (spec §8.2): behind the "entry" switch of pdx.json, off by default ----
+//
+// The rules are pdx's (`pdx entry match`); the hook only decides where the answer goes in the call.
+
+const ENTRY_ON = JSON.stringify({ entry: 'on' })
+const isEntry = (a: string[]) => a[1] === 'entry'
+const entryCalls = (r: Rig) => r.calls.filter(isEntry)
+// answers `pdx entry match` from a table keyed by the command's words (after the --), anything else as the gate would
+const entryAnswer = (table: Record<string, object>, rest: string = FREE) => (a: string[]) =>
+  isEntry(a) ? ok(JSON.stringify(table[a.slice(a.indexOf('--') + 1).join(' ')] ?? { action: 'none' })) : ok(rest)
+const REWRITE_FILE = { action: 'rewrite', task: 'spa-file', args: ['src/a.test.ts'] }
+
+for (const [name, pj] of [['no key', JSON.stringify({ pdx: 'pdx' })], ['an empty string', JSON.stringify({ entry: '' })], ['a number', JSON.stringify({ entry: 7 })],
+  ['null', JSON.stringify({ entry: null })], ['no pdx.json at all', undefined]] as const) {
+  test(`the switch off (${name}): pdx entry is never asked and the call goes the old way, whatever entry would say`, async ($, on) => {
+    const r = rig(on, entryAnswer({ 'go test ./...': { action: 'deny', hint: 'go-pkg' } }), () => BASH_OK, pj)
+    const out = await bash($, 'go test ./...')
+    expect(entryCalls(r)).toEqual([])
+    expect(r.ran.map((x) => x.command)).toEqual(['go test ./...'])
+    expect(out.deny).toBeUndefined()
+  })
+}
+
+test('a match is rewritten to pdx test, and the note names it', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'pnpm vitest run src/a.test.ts': REWRITE_FILE }), () => BASH_OK, ENTRY_ON)
+  const out = await bash($, 'pnpm vitest run src/a.test.ts')
+  expect(r.ran.map((x) => x.command)).toEqual(["'pdx' test spa-file src/a.test.ts"])
+  expect(out.context.join('\n')).toContain('spa-file')
+  expect(entryCalls(r)).toEqual([['pdx', 'entry', 'match', '--json', '--', 'pnpm', 'vitest', 'run', 'src/a.test.ts']])
+})
+
+test('only the matching command of a compound call is replaced, and cd tells pdx the directory', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'npx vitest run src/a.test.ts': REWRITE_FILE }), () => BASH_OK, ENTRY_ON)
+  await bash($, 'cd spa && FOO=1 npx vitest run src/a.test.ts 2>&1 | tail -5 && echo done')
+  expect(r.ran[0].command).toBe("cd spa && FOO=1 'pdx' test spa-file src/a.test.ts 2>&1 | tail -5 && echo done")
+  expect(entryCalls(r)[0]).toEqual(['pdx', 'entry', 'match', '--json', '--cwd', 'spa', '--', 'npx', 'vitest', 'run', 'src/a.test.ts'])
+})
+
+test('cd words add up to the directory pdx is told', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'make lint': { action: 'rewrite', task: 'lint' } }), () => BASH_OK, ENTRY_ON)
+  await bash($, 'cd /repo/x && cd sub && make lint')
+  expect(entryCalls(r)[0].slice(4, 6)).toEqual(['--cwd', '/repo/x/sub'])
+  expect(r.ran[0].command).toBe("cd /repo/x && cd sub && 'pdx' test lint")
+})
+
+test('arguments are quoted, and a dash first gets --', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'go test x': { action: 'rewrite', task: 'go-pkg', args: ['./a b/', '-x', "it's"] } }), () => BASH_OK, ENTRY_ON)
+  await bash($, 'go test x')
+  expect(r.ran[0].command).toBe("'pdx' test go-pkg -- './a b/' -x 'it'\\''s'")
+})
+
+test('a queued rewrite runs in the background', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'go test ./...': { action: 'rewrite', task: 'go-pkg', args: ['./...'], queued: true } }), () => BASH_OK, ENTRY_ON)
+  const out = await bash($, 'go test ./...')
+  expect(r.ran[0].bg).toBe(true)
+  expect(out.context.join('\n')).toContain('背景')
+})
+
+test('a local rewrite stays in the foreground, and the rewritten command is not asked about as a gate candidate', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'pnpm vitest run a.test.ts': { action: 'rewrite', task: 'spa-file', args: ['a.test.ts'] } }, FREE), () => BASH_OK, ENTRY_ON)
+  await bash($, 'pnpm vitest run a.test.ts')
+  expect(r.ran[0].bg).toBeUndefined()
+  expect(wouldWaits(r)).toEqual([])
+})
+
+test('a queued rewrite in the background already is not moved again', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'go test ./...': { action: 'rewrite', task: 'go-pkg', args: ['./...'], queued: true } }), () => BASH_OK, ENTRY_ON)
+  await bash($, 'go test ./...', { run_in_background: true })
+  expect(r.ran[0].bg).toBe(true)
+})
+
+test('advise: the call goes the old way (prefix, would-wait) and the note names the task to use', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'go test ./...': { action: 'advise', mode: 'advise', hint: 'go-pkg' } }, BUSY), () => BASH_OK, ENTRY_ON)
+  const out = await bash($, 'go test ./...')
+  expect(r.ran[0].command).toBe('go test ./...')
+  expect(r.ran[0].bg).toBe(true) // still held by the gate's queue: it would wait
+  expect(out.context.join('\n')).toContain('pdx test go-pkg')
+  expect(wouldWaits(r)).toHaveLength(1)
+})
+
+test('deny: the call is refused with the task to use, and nothing runs', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'go test ./...': { action: 'deny', mode: 'deny', hint: 'go-pkg' } }), () => BASH_OK, ENTRY_ON)
+  const out = await bash($, 'ls && go test ./...')
+  expect(out.deny).toContain('pdx test go-pkg')
+  expect(r.ran).toEqual([])
+})
+
+test('a deny anywhere in the call refuses all of it, also when another command in it matched', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'make lint': { action: 'rewrite', task: 'lint' }, 'go vet ./...': { action: 'deny', hint: 'go-pkg' } }), () => BASH_OK, ENTRY_ON)
+  const out = await bash($, 'make lint && go vet ./...')
+  expect(out.deny).toBeDefined()
+  expect(r.ran).toEqual([])
+})
+
+const BAD_ENTRY: [string, any][] = [['a failing exit', ok('', 20)], ['junk', ok('not json')], ['an unknown action', ok('{"action":"explode"}')], ['a spawn that fails', { deny: 'spawn failed' }],
+  ['a rewrite without a task', ok('{"action":"rewrite"}')], ['args that are not strings', ok('{"action":"rewrite","task":"t","args":[1]}')]]
+for (const [name, bad] of BAD_ENTRY) {
+  test(`pdx entry answers badly (${name}) → the call goes the old way`, async ($, on) => {
+    const r = rig(on, (a) => (isEntry(a) ? bad : ok(FREE)), () => BASH_OK, ENTRY_ON)
+    const out = await bash($, 'go test ./...')
+    expect(r.ran[0].command).toBe('go test ./...')
+    expect(out.deny).toBeUndefined()
+  })
+}
+
+test('a manifest that does not read is said, and the call goes on', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'go test ./...': { action: 'none', broken: true, reason: 'manifest x: bad' } }), () => BASH_OK, ENTRY_ON)
+  const out = await bash($, 'go test ./...')
+  expect(r.ran[0].command).toBe('go test ./...')
+  expect(out.context.join('\n')).toContain('manifest x: bad')
+})
+
+test('a command the entry leaves alone is not noted, and not-tool commands are not even asked', async ($, on) => {
+  const r = rig(on, entryAnswer({}), () => BASH_OK, ENTRY_ON)
+  const out = await bash($, 'git status && ls')
+  expect(entryCalls(r)).toEqual([])
+  expect(out.context).toBeUndefined()
+  await bash($, 'go version')
+  expect(entryCalls(r)).toHaveLength(1) // a TOOLS word is asked; pdx says none
+})
+
+for (const cmd of ['go test > out.txt ./...', '(cd x && go test ./...)', 'cd "$DIR" && go test ./...', 'cd $(pwd) && go test ./...', 'go test ./... &']) {
+  test(`what cannot be read for sure is not rewritten: ${JSON.stringify(cmd)}`, async ($, on) => {
+    const r = rig(on, entryAnswer({ 'go test ./...': REWRITE_FILE }), () => BASH_OK, ENTRY_ON)
+    await bash($, cmd)
+    expect(r.ran[0].command).toBe(cmd)
+  })
+}
+
+test('a rewrite that would change the permission verdict is not made', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'go test ./...': { action: 'rewrite', task: 'go-pkg', args: ['./...'] } }), () => BASH_OK, ENTRY_ON)
+  r.verdict = (command) => (command.includes('test go-pkg') ? 'ask' : 'allow')
+  const out = await bash($, 'go test ./...')
+  expect(r.ran[0].command).toBe('go test ./...')
+  expect(out.context ?? []).toEqual([])
+})
+
+test('pdx entry never answers → the call runs as it was, within the planning deadline', { timeoutMs: 15000 }, async ($, on) => {
+  const r = rig(on, () => ok(FREE), () => BASH_OK, ENTRY_ON, 'process.run')
+  const began = Date.now()
+  const out = await bash($, 'go test ./...')
+  expect(Date.now() - began).toBeLessThan(9000)
+  expect(out.result).toEqual(BASH_OK.result)
+  expect(r.ran).toHaveLength(1)
+})
+
+test('at most six commands are asked', async ($, on) => {
+  const r = rig(on, entryAnswer({}), () => BASH_OK, ENTRY_ON)
+  await bash($, 'go a; go b; go c; go d; go e; go f; go g; go h')
+  expect(entryCalls(r)).toHaveLength(6)
+})
+
+test('the same command in the same directory is asked once', async ($, on) => {
+  const r = rig(on, entryAnswer({}), () => BASH_OK, ENTRY_ON)
+  await bash($, 'go test ./... && go test ./...')
+  expect(entryCalls(r)).toHaveLength(1)
+})
