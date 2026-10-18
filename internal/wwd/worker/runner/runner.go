@@ -107,6 +107,9 @@ const (
 	KindLost Kind = "lost"
 	// KindShutdown: the worker's own context ended while the job was held; the job should be released (reason reclaim).
 	KindShutdown Kind = "shutdown"
+	// KindReclaimed: the worker's owner asked for the machine (Running.Stop); the command was ended. Finish gives the claim back (reason
+	// reclaim) while the lease is still alive, then Stop returns.
+	KindReclaimed Kind = "reclaimed"
 	// KindRejected: Prepare refused the job; nothing was started. Err is the *Rejected. The result to post is state failed with no
 	// exit, the reason in summary.tail.
 	KindRejected Kind = "rejected"
@@ -163,8 +166,10 @@ type Finish func(ctx context.Context, e Ended)
 // stop is why the run was ended from outside.
 type stop int
 
+// The reasons are ordered: a later one in this list overrides an earlier one (a lost lease beats a cancel, a cancel beats a reclaim).
 const (
 	stopNone stop = iota
+	stopReclaim
 	stopCancelled
 	stopLost
 )
@@ -174,11 +179,11 @@ type state struct {
 	s  stop
 }
 
-// set records why: a lost lease overrides a cancel (nothing can be posted any more); otherwise the first reason stays.
+// set records why; the highest reason stays (see the order above).
 func (st *state) set(s stop) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if st.s == stopNone || s == stopLost {
+	if s > st.s {
 		st.s = s
 	}
 }
@@ -197,6 +202,11 @@ func (c *Controller) deadlineFor(sent time.Time, leaseS int) time.Time {
 
 // Work claims the candidate's job and sees it through. finish may be nil.
 func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, finish Finish) Ended {
+	return c.work(ctx, origin, cand, finish, nil)
+}
+
+// work is Work; onClaim, when set, is called once the claim is taken, with the function that reclaims the job.
+func (c *Controller) work(ctx context.Context, origin Origin, cand pick.Scored, finish Finish, onClaim func(claimID string, reclaim func())) Ended {
 	job := cand.Job
 	ended := Ended{Source: cand.Source, Job: job}
 	owner := cand.Source + "/" + job.ID // a job id is only unique per origin; the table is host-wide
@@ -234,6 +244,12 @@ func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, 
 	defer endRenew()
 	runCtx, endRun := context.WithCancel(renewCtx) // the work: ends on cancel or loss
 	defer endRun()
+	if onClaim != nil {
+		onClaim(cr.ClaimID, func() {
+			st.set(stopReclaim)
+			endRun() // the lease goes on: the claim is still ours until it is given back
+		})
+	}
 	lease := &leaseClock{changed: make(chan struct{}, 1), deadline: c.deadlineFor(sent, cr.LeaseS), renewAt: sent.Add(time.Duration(cr.RenewS) * c.cfg.Unit)}
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -285,6 +301,8 @@ func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, 
 		ended.Kind = KindLost
 	case st.get() == stopCancelled:
 		ended.Kind = KindCancelled
+	case st.get() == stopReclaim:
+		ended.Kind = KindReclaimed
 	case ctx.Err() != nil:
 		ended.Kind = KindShutdown
 	case errors.As(runErr, &rej):
@@ -421,7 +439,7 @@ func (c *Controller) renew(ctx context.Context, origin Origin, id, claimID strin
 		if err == nil {
 			l.extend(c.deadlineFor(sent, resp.LeaseS), sent.Add(time.Duration(resp.RenewS)*c.cfg.Unit))
 			// cancel is applied before the lock is let go, so that a start waiting for it sees it
-			if resp.Cancel && st.get() == stopNone {
+			if resp.Cancel && st.get() < stopCancelled {
 				st.set(stopCancelled)
 				endRun() // the command ends; the lease goes on being renewed while the cancelled result is posted
 			}
@@ -444,4 +462,74 @@ func (c *Controller) renew(ctx context.Context, origin Origin, id, claimID strin
 			l.mu.Unlock()
 		}
 	}
+}
+
+// Running is a job that was claimed and is being run in the background (Start).
+type Running struct {
+	source, id string
+	claimID    string
+	reclaim    func()
+	claimed    chan struct{} // closed once the claim is taken
+	done       chan struct{} // closed when Work has returned
+	ended      Ended
+}
+
+// Start claims the candidate and, when the claim is taken, runs it in the background. It returns once the claim is decided (so that the
+// caller can go on to the next candidate when this one was not taken); Claimed says which. A job that was not claimed is already done,
+// and its Ended (KindSkipped, with the reason) is there. finish is called from the job's own goroutine.
+func (c *Controller) Start(ctx context.Context, origin Origin, cand pick.Scored, finish Finish) *Running {
+	r := &Running{source: cand.Source, id: cand.Job.ID, claimed: make(chan struct{}), done: make(chan struct{})}
+	go func() {
+		defer close(r.done)
+		r.ended = c.work(ctx, origin, cand, finish, func(claimID string, reclaim func()) {
+			r.claimID, r.reclaim = claimID, reclaim
+			close(r.claimed)
+		})
+	}()
+	select {
+	case <-r.claimed:
+	case <-r.done:
+	}
+	return r
+}
+
+// Claimed says whether the claim was taken.
+func (r *Running) Claimed() bool {
+	select {
+	case <-r.claimed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Done is closed when the job is over (after its Finish and the cleanup of its workspace); Ended is then its ending.
+func (r *Running) Done() <-chan struct{} { return r.done }
+func (r *Running) Ended() Ended          { <-r.done; return r.ended }
+
+// Source and ID name the job; ClaimID is the claim it runs under (empty when it was not claimed). These satisfy yield.Job together with Stop.
+func (r *Running) Source() string  { return r.source }
+func (r *Running) ID() string      { return r.id }
+func (r *Running) ClaimID() string { return r.claimID }
+
+// Stop ends the job's command at the owner's request and returns once the job is over. The lease is kept alive until Finish has returned:
+// Finish is what gives the claim back (KindReclaimed), so that no lease can lapse between the stop and the release. A job that cannot be
+// proven stopped (Quarantined) is an error: whatever Finish did, it must not be taken for stopped. Stopping a job that is already over is
+// not an error unless it was quarantined.
+func (r *Running) Stop(ctx context.Context) error {
+	if r.Claimed() && r.reclaim != nil {
+		r.reclaim()
+	}
+	select {
+	case <-r.done:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if r.ended.Quarantined {
+		return fmt.Errorf("runner: job %s could not be proven stopped", r.id)
+	}
+	if r.ended.Kind == KindLost {
+		return nil // the origin has it again already
+	}
+	return nil
 }
