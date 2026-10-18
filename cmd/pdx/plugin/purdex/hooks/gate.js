@@ -327,27 +327,33 @@ async function withDeadline($, work) {
 const word = (s) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(String(s)) ? String(s) : sq(s))
 
 // entryCandidates are the commands of a call that the entry is asked about, in order, with where each stands in the text and the
-// directory it runs in as far as `cd` words say (a relative one is pdx's to resolve from the session's directory; ok false when it
-// cannot be followed). At most MAX_ASKS, the same command in the same directory once.
+// directory it runs in as far as `cd` words say (a relative one is pdx's to resolve from the session's directory), and a key naming
+// the command and that directory. ok is false when the directory cannot be known: a cd the hook cannot read, or a command that is
+// not reached by `&&` from the cd before it (after `cd x ; go test` or `cd x || go test` the test runs in x only if the cd worked,
+// and the hook cannot tell). Every occurrence is a candidate; the ones with one key share an answer.
 export function entryCandidates(command) {
   if (command.includes('(')) return [] // a subshell or a substitution: where a cd applies is not something to guess
   const cmds = readCommand(command)
   if (!cmds) return []
   const out = []
-  const seen = new Set()
   let cwd = ''
   let ok = true
+  let cded = false // a cd has changed the directory: from here on only `&&` carries it
+  let prevEnd = -1
   for (const c of cmds) {
+    // between the two commands: `&&`, then at most the environment words and wrappers that headOf skips before the command word
+    if (cded && !/^\s*&&(\s|$)/.test(command.slice(prevEnd, c.at))) ok = false
+    prevEnd = c.end
     if (base(c.first) === 'cd') {
       const d = c.argv[1]
       if (c.argv.length !== 2 || !/^[A-Za-z0-9_@%+=:,./-]+$/.test(d) || d === '-') ok = false
-      else cwd = d.startsWith('/') ? d : cwd ? cwd.replace(/\/$/, '') + '/' + d : d
+      else { cwd = d.startsWith('/') ? d : cwd ? cwd.replace(/\/$/, '') + '/' + d : d; cded = true }
       continue
     }
     if (!TOOLS.has(base(c.first)) && !isGatedBin(c)) continue
-    out.push({ ...c, cwd, ok })
+    out.push({ ...c, cwd, ok, key: JSON.stringify([cwd, c.argv]) })
   }
-  return out.filter((c) => { const k = JSON.stringify([c.cwd, c.argv]); if (seen.has(k)) return false; seen.add(k); return true }).slice(0, MAX_ASKS)
+  return out
 }
 
 // askEntry is `pdx entry match`'s answer for one command, or null (no answer is "leave it").
@@ -376,7 +382,11 @@ const pdxTest = (cfg, a) => {
 async function planEntry($, e, cfg, wasBackground) {
   const cands = entryCandidates(e.command)
   if (cands.length === 0) return null
-  const answers = await Promise.all(cands.map((c) => askEntry($, cfg, c)))
+  // one question for each command in each directory, at most MAX_ASKS of them; its answer holds for every place it stands
+  const firsts = []
+  for (const c of cands) if (!firsts.some((f) => f.key === c.key)) firsts.push(c)
+  const byKey = new Map(await Promise.all(firsts.slice(0, MAX_ASKS).map(async (c) => [c.key, await askEntry($, cfg, c)])))
+  const answers = cands.map((c) => byKey.get(c.key) ?? null)
   const notes = []
   const rewrites = []
   let deny = null
@@ -393,6 +403,7 @@ async function planEntry($, e, cfg, wasBackground) {
       rewrites.push({ c: cands[i], a })
     }
   })
+  notes.splice(0, notes.length, ...new Set(notes)) // a command that stands twice says its piece once
   if (deny) return { deny }
   if (rewrites.length === 0) return notes.length ? { command: e.command, background: wasBackground, notes } : null
   let command = e.command

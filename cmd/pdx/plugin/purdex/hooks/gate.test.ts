@@ -528,8 +528,36 @@ test('at most six commands are asked', async ($, on) => {
   expect(entryCalls(r)).toHaveLength(6)
 })
 
-test('the same command in the same directory is asked once', async ($, on) => {
-  const r = rig(on, entryAnswer({}), () => BASH_OK, ENTRY_ON)
-  await bash($, 'go test ./... && go test ./...')
+test('the same command in the same directory is asked once, and its answer holds for every place it stands', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'go test ./...': { action: 'rewrite', task: 'go-all' } }), () => BASH_OK, ENTRY_ON)
+  await bash($, 'go test ./... && echo x && go test ./...')
   expect(entryCalls(r)).toHaveLength(1)
+  expect(r.ran[0].command).toBe("'pdx' test go-all && echo x && 'pdx' test go-all")
 })
+
+test('a deny holds for the repeats too, and an advise note is said once', async ($, on) => {
+  const r = rig(on, entryAnswer({ 'go test ./...': { action: 'advise', hint: 'go-pkg' } }), () => BASH_OK, ENTRY_ON)
+  const out = await bash($, 'go test ./... ; go test ./...')
+  expect(r.ran[0].command).toBe('go test ./... ; go test ./...')
+  expect(out.context.filter((x: string) => x.includes('pdx test go-pkg'))).toHaveLength(1)
+})
+
+// A cd carries to the commands after it only along `&&`: after `;`, `||`, a pipe or a newline the command runs wherever the shell
+// is when the cd did not happen, and the hook cannot tell which.
+const CD_UNSURE: [string, number][] = [
+  ['cd missing || go test ./...', 0],
+  ['cd spa ; go test ./...', 0],
+  ['cd spa\ngo test ./...', 0],
+  ['cd spa && make lint ; go test ./...', 1], // make lint is asked (reached by &&); go test is not
+  ['cd a && cd b || go test ./...', 0],
+  ['cd spa 2>/dev/null && go test ./...', 0],
+  ['ls ; cd spa && go test ./...', 1],
+  ['go test ./... ; cd spa && go vet ./...', 2], // the first runs where it is; the second in spa
+]
+for (const [cmd, asked] of CD_UNSURE) {
+  test(`cd and the commands after it: ${JSON.stringify(cmd)} asks ${asked}`, async ($, on) => {
+    const r = rig(on, entryAnswer({}), () => BASH_OK, ENTRY_ON)
+    await bash($, cmd)
+    expect(entryCalls(r)).toHaveLength(asked)
+  })
+}
