@@ -134,17 +134,19 @@ func personasOf(e Entry) (personas.Set, error) {
 	return s, nil
 }
 
-// personasAnswer is the collection as the GET and a 409 answer it: items, stamp, revision.
-func personasAnswer(e Entry) any {
+// personasAnswer is the collection as the GET and a 409 answer it: items, stamp, revision. A stored value that does not read
+// is an error, never an empty set: the codes in it are reserved for good, and a client shown an empty list would save over
+// them.
+func personasAnswer(e Entry) (any, error) {
 	s, err := personasOf(e)
 	if err != nil {
-		log.Printf("[hostconfig] personas: %v", err)
+		return nil, err
 	}
 	return struct {
 		Items    []personas.Persona `json:"items"`
 		Stamp    personas.Stamp     `json:"stamp"`
 		Revision int64              `json:"revision"`
-	}{s.Items, s.Stamp, e.Revision}
+	}{s.Items, s.Stamp, e.Revision}, nil
 }
 
 func (m *Module) handleGetPersonas(w http.ResponseWriter, _ *http.Request) {
@@ -154,7 +156,13 @@ func (m *Module) handleGetPersonas(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, http.StatusOK, personasAnswer(e))
+	answer, err := personasAnswer(e)
+	if err != nil {
+		log.Printf("[hostconfig] get %s: %v", KeyPersonas, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, answer)
 }
 
 func writePersonaError(w http.ResponseWriter, e *personaError) {
@@ -187,16 +195,20 @@ func (m *Module) handlePutPersonas(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "items and baseRevision (>= 0) are required", http.StatusBadRequest)
 		return
 	}
-	var marshalErr error
+	var internalErr error // not the caller's fault: the stored value does not read, or the set does not marshal
 	entry, stored, err := m.store.Put(KeyPersonas, *req.BaseRevision, func(cur Entry) (json.RawMessage, error) {
-		have, _ := personasOf(cur) // a stored value that does not read keeps no codes
+		have, err := personasOf(cur)
+		if err != nil {
+			internalErr = err // never overwrite what cannot be read: its codes are reserved
+			return nil, err
+		}
 		items, err := normalizePersonas(req.Items, have.Items)
 		if err != nil {
 			return nil, err
 		}
 		value, err := json.Marshal(personas.Set{Items: items, Stamp: personas.Stamp{At: m.personaClock(), Host: m.hostID()}})
 		if err != nil {
-			marshalErr = err
+			internalErr = err
 			return nil, err
 		}
 		return value, nil
@@ -204,10 +216,10 @@ func (m *Module) handlePutPersonas(w http.ResponseWriter, r *http.Request) {
 	var pe *personaError
 	var ve *ValidationError
 	switch {
-	case err != nil && marshalErr == nil && errors.As(err, &pe):
+	case err != nil && internalErr == nil && errors.As(err, &pe):
 		writePersonaError(w, pe)
 		return
-	case err != nil && marshalErr == nil && errors.As(err, &ve):
+	case err != nil && internalErr == nil && errors.As(err, &ve):
 		http.Error(w, ve.Error(), http.StatusBadRequest)
 		return
 	case err != nil:
@@ -215,7 +227,13 @@ func (m *Module) handlePutPersonas(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	case !stored:
-		writeJSON(w, http.StatusConflict, personasAnswer(entry))
+		answer, err := personasAnswer(entry)
+		if err != nil {
+			log.Printf("[hostconfig] put %s: %v", KeyPersonas, err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusConflict, answer)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int64{"revision": entry.Revision})
@@ -239,7 +257,10 @@ func (m *Module) hostID() string {
 	return m.core.Cfg.HostID
 }
 
-// personasChanged sends the event and tells the readers (the peers module rebuilds its pool).
+// personasChanged sends the event and tells the readers (the peers module rebuilds its pool). The readers run off the
+// request: the PUT is already stored and answered, so one that blocks must not hold it, and one that panics must not take the
+// daemon down or keep the others from hearing. A reader reads the set again when told, so the order of the calls does not
+// matter.
 func (m *Module) personasChanged(revision int64) {
 	if m.core != nil && m.core.Events != nil {
 		m.core.Events.BroadcastEvent(core.HostEvent{Type: personasEvent, Value: fmt.Sprintf(`{"revision":%d}`, revision)})
@@ -251,7 +272,14 @@ func (m *Module) personasChanged(revision int64) {
 	}
 	m.personaMu.Unlock()
 	for _, fn := range fns {
-		fn()
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[hostconfig] a personas reader panicked: %v", r)
+				}
+			}()
+			fn()
+		}()
 	}
 }
 

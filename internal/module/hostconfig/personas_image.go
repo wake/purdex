@@ -71,27 +71,42 @@ func decodeConfig(raw []byte) (int, int, error) {
 	return cfg.Width, cfg.Height, nil
 }
 
-// webpSize reads the canvas size from a WebP header: RIFF....WEBP and a first chunk of VP8 (lossy), VP8L (lossless) or VP8X
-// (extended).
+// webpSize reads the canvas size from a WebP: RIFF....WEBP whose RIFF size is the file's, and a first chunk of VP8 (lossy),
+// VP8L (lossless) or VP8X (extended) that fits in the file and is big enough for its header. An extended header must be
+// followed by a chunk that carries the picture (still VP8 or VP8L, alpha, or an animation). There is no WebP decoder in the
+// daemon, so the picture data itself is not read: this refuses the forged and the cut off, not every broken file.
 func webpSize(b []byte) (int, int, error) {
 	bad := errors.New("avatar_data is not a WebP picture")
-	if len(b) < 25 || string(b[0:4]) != "RIFF" || string(b[8:12]) != "WEBP" {
+	if len(b) < 20 || string(b[0:4]) != "RIFF" || string(b[8:12]) != "WEBP" || int(binary.LittleEndian.Uint32(b[4:8])) != len(b)-8 {
+		return 0, 0, bad
+	}
+	size := int(binary.LittleEndian.Uint32(b[16:20]))
+	end := 20 + size + size%2
+	if size < 0 || end > len(b) {
 		return 0, 0, bad
 	}
 	switch string(b[12:16]) {
 	case "VP8 ":
-		if len(b) < 30 || b[23] != 0x9d || b[24] != 0x01 || b[25] != 0x2a {
+		if size < 10 || b[23] != 0x9d || b[24] != 0x01 || b[25] != 0x2a {
 			return 0, 0, bad
 		}
 		return int(binary.LittleEndian.Uint16(b[26:28]) & 0x3fff), int(binary.LittleEndian.Uint16(b[28:30]) & 0x3fff), nil
 	case "VP8L":
-		if b[20] != 0x2f {
+		if size < 5 || b[20] != 0x2f {
 			return 0, 0, bad
 		}
 		bits := binary.LittleEndian.Uint32(b[21:25])
 		return int(bits&0x3fff) + 1, int((bits>>14)&0x3fff) + 1, nil
 	case "VP8X":
-		if len(b) < 30 {
+		if size < 10 || end+8 > len(b) {
+			return 0, 0, bad
+		}
+		switch string(b[end : end+4]) {
+		case "VP8 ", "VP8L", "ALPH", "ANIM":
+		default:
+			return 0, 0, bad
+		}
+		if next := int(binary.LittleEndian.Uint32(b[end+4 : end+8])); end+8+next > len(b) {
 			return 0, 0, bad
 		}
 		w := int(b[24]) | int(b[25])<<8 | int(b[26])<<16

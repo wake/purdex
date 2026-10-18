@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -48,27 +49,52 @@ func jpegBytes(t *testing.T, w, h int) []byte {
 	return buf.Bytes()
 }
 
-// webpLossless is the header of a lossless WebP of the given size (the daemon reads the header only).
-func webpLossless(w, h int) []byte {
-	b := []byte("RIFF\x00\x00\x00\x00WEBPVP8L\x05\x00\x00\x00\x2f\x00\x00\x00\x00")
-	bits := uint32(w-1) | uint32(h-1)<<14
-	binary.LittleEndian.PutUint32(b[21:25], bits)
+// webpChunk is one RIFF chunk: fourcc, size, payload, padded to an even length.
+func webpChunk(fourcc string, payload []byte) []byte {
+	b := append([]byte(fourcc), 0, 0, 0, 0)
+	binary.LittleEndian.PutUint32(b[4:8], uint32(len(payload)))
+	b = append(b, payload...)
+	if len(payload)%2 == 1 {
+		b = append(b, 0)
+	}
 	return b
 }
 
+// webpFile is a RIFF/WEBP container of the chunks, with the right RIFF size.
+func webpFile(chunks ...[]byte) []byte {
+	body := []byte("WEBP")
+	for _, c := range chunks {
+		body = append(body, c...)
+	}
+	b := append([]byte("RIFF"), 0, 0, 0, 0)
+	binary.LittleEndian.PutUint32(b[4:8], uint32(len(body)))
+	return append(b, body...)
+}
+
+// The WebP builders make the headers of the three layouts of the given size, well formed (sizes agree); the picture data is
+// not real, as the daemon reads the header only.
+func webpLosslessChunk(w, h int) []byte {
+	p := make([]byte, 10)
+	p[0] = 0x2f
+	binary.LittleEndian.PutUint32(p[1:5], uint32(w-1)|uint32(h-1)<<14)
+	return webpChunk("VP8L", p)
+}
+
+func webpLossless(w, h int) []byte { return webpFile(webpLosslessChunk(w, h)) }
+
 func webpExtended(w, h int) []byte {
-	b := []byte("RIFF\x00\x00\x00\x00WEBPVP8X\x0a\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")
-	put24 := func(at, v int) { b[at], b[at+1], b[at+2] = byte(v), byte(v>>8), byte(v>>16) }
-	put24(24, w-1)
-	put24(27, h-1)
-	return b
+	p := make([]byte, 10)
+	put24 := func(at, v int) { p[at], p[at+1], p[at+2] = byte(v), byte(v>>8), byte(v>>16) }
+	put24(4, w-1)
+	put24(7, h-1)
+	return webpFile(webpChunk("VP8X", p), webpLosslessChunk(w, h))
 }
 
 func webpLossy(w, h int) []byte {
-	b := []byte("RIFF\x00\x00\x00\x00WEBPVP8 \x0a\x00\x00\x00\x00\x00\x00\x9d\x01\x2a\x00\x00\x00\x00")
-	binary.LittleEndian.PutUint16(b[26:28], uint16(w))
-	binary.LittleEndian.PutUint16(b[28:30], uint16(h))
-	return b
+	p := []byte{0, 0, 0, 0x9d, 0x01, 0x2a, 0, 0, 0, 0}
+	binary.LittleEndian.PutUint16(p[6:8], uint16(w))
+	binary.LittleEndian.PutUint16(p[8:10], uint16(h))
+	return webpFile(webpChunk("VP8 ", p))
 }
 
 func persona(code string) map[string]any {
@@ -299,14 +325,38 @@ func TestPersonas_NotInTheFullRead(t *testing.T) {
 	assert.NotContains(t, rr.Body.String(), "hiro")
 }
 
+// heard is a reader callback that reports each call on a channel (the callbacks run off the request).
+func heard() (fn func(), calls chan struct{}) {
+	calls = make(chan struct{}, 16)
+	return func() { calls <- struct{}{} }, calls
+}
+
+func awaitCall(t *testing.T, calls chan struct{}) {
+	t.Helper()
+	select {
+	case <-calls:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the reader was not called")
+	}
+}
+
+func noCall(t *testing.T, calls chan struct{}, why string) {
+	t.Helper()
+	select {
+	case <-calls:
+		t.Fatal(why)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestPersonas_PutAnnouncesAnEventAndNotifiesReaders(t *testing.T) {
 	m := personasModule(t)
 	sub := m.core.Events.AddTestSubscriber()
 	defer m.core.Events.RemoveTestSubscriber(sub)
-	changed := 0
-	cancel := m.OnPersonasChange(func() { changed++ })
+	fn, calls := heard()
+	cancel := m.OnPersonasChange(fn)
 	require.Equal(t, http.StatusOK, putPersonas(m, []any{persona("hiro")}, 0).Code)
-	assert.Equal(t, 1, changed)
+	awaitCall(t, calls)
 
 	var ev core.HostEvent
 	select {
@@ -321,10 +371,86 @@ func TestPersonas_PutAnnouncesAnEventAndNotifiesReaders(t *testing.T) {
 	// a refused or stale PUT is not a change
 	require.Equal(t, http.StatusBadRequest, putPersonas(m, []any{persona("hi")}, 1).Code)
 	require.Equal(t, http.StatusConflict, putPersonas(m, []any{persona("anna")}, 0).Code)
-	assert.Equal(t, 1, changed)
+	noCall(t, calls, "a refused or stale PUT told the readers")
 	cancel()
 	require.Equal(t, http.StatusOK, putPersonas(m, []any{persona("hiro"), persona("anna")}, 1).Code)
-	assert.Equal(t, 1, changed, "a cancelled reader hears nothing")
+	noCall(t, calls, "a cancelled reader heard a change")
+}
+
+// The readers are told after the answer is decided and off the request: one that blocks does not hold the PUT, one that
+// panics does not take the daemon (or the other readers) down.
+// Mutation gate: call the readers inline -> the blocking reader hangs the PUT -> red; drop the recover -> red.
+func TestPersonas_AReaderThatBlocksOrPanicsDoesNotHurtThePut(t *testing.T) {
+	m := personasModule(t)
+	release := make(chan struct{})
+	m.OnPersonasChange(func() { <-release })
+	m.OnPersonasChange(func() { panic("a reader that fails") })
+	fn, calls := heard()
+	m.OnPersonasChange(fn)
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- putPersonas(m, []any{persona("hiro")}, 0) }()
+	select {
+	case rr := <-done:
+		require.Equal(t, http.StatusOK, rr.Code, rr.Body.String())
+	case <-time.After(2 * time.Second):
+		t.Fatal("the PUT waited for a reader")
+	}
+	awaitCall(t, calls) // the reader after the panicking one still heard it
+	close(release)
+}
+
+// A stored value that does not read is never taken for an empty set: the codes in it are reserved for good, so the GET, a
+// 409 and a PUT all refuse and the row is left as it is (NP-1a R2).
+// Mutation gate: let the PUT callback ignore the read error -> the PUT overwrites -> red.
+func TestPersonas_AnUnreadableStoredValueIsNeverTakenForEmpty(t *testing.T) {
+	m := personasModule(t)
+	_, ok, err := m.store.Put(KeyPersonas, 0, func(Entry) (json.RawMessage, error) { return json.RawMessage(`{"items":"not a list"}`), nil })
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	assert.Equal(t, http.StatusInternalServerError, serve(m, http.MethodGet, "/api/hostconfig/personas", "").Code)
+	assert.Equal(t, http.StatusInternalServerError, putPersonas(m, []any{persona("hiro")}, 1).Code, "a PUT on the current revision")
+	assert.Equal(t, http.StatusInternalServerError, putPersonas(m, []any{persona("hiro")}, 0).Code, "a stale PUT, whose 409 would show the value")
+	e, err := m.store.Get(KeyPersonas)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"items":"not a list"}`, string(e.Value))
+	assert.EqualValues(t, 1, e.Revision)
+}
+
+// A WebP is checked past its first bytes: the RIFF size, the first chunk's size and (for the extended layout) the picture
+// chunk after it must agree with the file.
+// Mutation gate: drop any one of these checks -> that picture is accepted -> red.
+func TestPersonas_ABrokenWebPIsRefused(t *testing.T) {
+	good := webpLossless(64, 64)
+	badRiff := append([]byte(nil), good...)
+	binary.LittleEndian.PutUint32(badRiff[4:8], uint32(len(good))) // one too many
+	bigChunk := webpFile(append([]byte("VP8L"), 0xff, 0xff, 0, 0, 0x2f, 0, 0, 0, 0))
+	noSignature := webpFile(webpChunk("VP8L", make([]byte, 10)))
+	extAlone := webpFile(webpChunk("VP8X", make([]byte, 10)))
+	extBadNext := webpFile(webpChunk("VP8X", make([]byte, 10)), webpChunk("JUNK", make([]byte, 10)))
+	smallLossy := webpFile(webpChunk("VP8 ", []byte{0, 0, 0, 0x9d, 0x01, 0x2a}))
+	cases := map[string][]byte{
+		"truncated":                              good[:len(good)-3],
+		"the RIFF size disagrees":                badRiff,
+		"a chunk bigger than a file":             bigChunk,
+		"no lossless signature":                  noSignature,
+		"an extended header alone":               extAlone,
+		"an extended header, no picture chunk":   extBadNext,
+		"a lossy chunk too small for its header": smallLossy,
+		"trailing bytes":                         append(append([]byte(nil), good...), 1, 2, 3, 4),
+		"not RIFF":                               append([]byte("RIFX"), good[4:]...),
+	}
+	for name, data := range cases {
+		t.Run(name, func(t *testing.T) {
+			m := personasModule(t)
+			p := persona("hiro")
+			p["avatar_data"] = uri("image/webp", data)
+			rr := putPersonas(m, []any{p}, 0)
+			require.Equal(t, http.StatusBadRequest, rr.Code, rr.Body.String())
+			assert.Contains(t, rr.Body.String(), "avatar_data")
+		})
+	}
 }
 
 // Mutation gate: refuse the Reader on the module -> the registry value does not satisfy personas.Reader -> red.
