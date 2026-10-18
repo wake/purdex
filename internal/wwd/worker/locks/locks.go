@@ -68,11 +68,18 @@ func normalize(keys []string) ([]string, error) {
 	return out, nil
 }
 
+// ValidateKeys says whether keys could be acquired as they are (each non-empty without NUL or newline, none repeated), so a caller
+// can tell a malformed request from a refusal.
+func ValidateKeys(keys []string) error {
+	_, err := normalize(keys)
+	return err
+}
+
 // Hold is one successful Acquire. Releasing it ends exactly that acquisition: a late Release from an older attempt of the same
 // owner (same job id, claimed again later) cannot free the keys of a newer one.
 type Hold struct {
 	t     *Table
-	owner string
+	owner string // guarded by t.mu: Rename changes it
 	gen   uint64
 }
 
@@ -150,6 +157,36 @@ func (t *Table) Acquire(owner string, keys []string, record func() error) (*Hold
 		return nil, err
 	}
 	return h, nil
+}
+
+// Rename makes newOwner the holder of this acquisition's keys. The fast-lane entry takes its keys before the queue has named the
+// job (the keys must be reserved while the job is recorded), under a provisional owner, and gives them the job's id once it has
+// one. It fails with ErrReleased when the acquisition is no longer the owner's current one, and with ErrAlreadyHeld when newOwner
+// holds keys of its own; the hold stays as it was.
+func (h *Hold) Rename(newOwner string) error {
+	if newOwner == "" {
+		return errors.New("locks: empty owner")
+	}
+	t := h.t
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	cur, ok := t.byHold[h.owner]
+	if !ok || cur.gen != h.gen {
+		return ErrReleased
+	}
+	if newOwner == h.owner {
+		return nil
+	}
+	if _, held := t.byHold[newOwner]; held {
+		return ErrAlreadyHeld
+	}
+	for _, k := range cur.keys {
+		t.byKey[k] = newOwner
+	}
+	delete(t.byHold, h.owner)
+	t.byHold[newOwner] = cur
+	h.owner = newOwner
+	return nil
 }
 
 // ErrReleased: the owner's keys were released while its Acquire was still recording the job. The caller must not start it.

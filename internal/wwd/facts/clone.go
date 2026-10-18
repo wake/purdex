@@ -24,6 +24,11 @@ func Clone(f wire.Facts) wire.Facts {
 		PHP: cloneSlice(f.Tools.PHP), Xcode: clonePtr(f.Tools.Xcode),
 	}
 	out.Owner = clonePtr(f.Owner)
+	if f.Stats != nil {
+		st := *f.Stats
+		st.GateWaitingMax = clonePtr(st.GateWaitingMax)
+		out.Stats = &st
+	}
 	out.Exception = make([]wire.FactExc, len(f.Exception))
 	for i, e := range f.Exception {
 		e.Until = clonePtr(e.Until)
