@@ -113,7 +113,7 @@ func poolServes(h *hostRow, peer *wire.Peer, now time.Time) bool {
 	if peer == nil || !peer.Reachable || peer.Facts == nil {
 		return false
 	}
-	if !peer.Facts.At.Equal(h.factsAt) || h.factsMoved.IsZero() {
+	if !peer.Facts.At.Equal(h.factsAt) {
 		h.factsAt, h.factsMoved = peer.Facts.At, now
 	}
 	return now.Sub(h.factsMoved) < poolStaleAfter
