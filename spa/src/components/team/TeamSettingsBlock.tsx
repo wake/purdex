@@ -43,7 +43,7 @@ export function TeamSettingsBlock({ hostId, teamId, name }: TeamSettingsTarget) 
         </div>
       )}
       {offer.quota && <QuotaLine hostId={hostId} team={team} name={name} />}
-      {offer.folders && <TeamFoldersLine hostId={hostId} team={team} />}
+      {offer.folders && <TeamFoldersLine key={`${hostId}\0${team.id}`} hostId={hostId} team={team} />} {/* its open flag and the editor's refusals are local: a switch to another team starts clean */}
     </div>
   )
 }

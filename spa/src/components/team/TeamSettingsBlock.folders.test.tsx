@@ -70,6 +70,16 @@ describe('the folders line', () => {
     expect(screen.queryByTestId('roots-editor')).toBeNull()
   })
 
+  it('switching the block to another team folds the editor away and starts clean', () => {
+    useTeamRosterStore.getState().apply(A, [team(), team({ id: 't-l2', lead: sess('l2'), roots: ['/other'] })])
+    const view = render(<TeamSettingsBlock hostId={A} teamId="t-l1" name="Team" />)
+    fireEvent.click(screen.getByTestId('team-folder-add'))
+    expect(screen.getByTestId('roots-editor')).toBeInTheDocument()
+    view.rerender(<TeamSettingsBlock hostId={A} teamId="t-l2" name="Team 2" />)
+    expect(screen.queryByTestId('roots-editor')).toBeNull()
+    expect(screen.getAllByTestId('team-folder-chip').map((c) => c.textContent)).toEqual(['/other'])
+  })
+
   it('a team with no roots yet shows just the + (the editor adds the first)', () => {
     useTeamRosterStore.getState().apply(A, [team({ roots: [] })])
     show()
