@@ -98,7 +98,10 @@ type Ended struct {
 	Run     run.Result // for KindRan, KindCancelled and KindLost, when the command started
 	Plan    Plan       // what Prepare made; zero when it failed or was not reached
 	Root    string     // the workspace root (ws.Dir); empty when no workspace was made
-	Err     error
+	// Quarantined: the command ended with Run.Err set (its process tree could not be proven gone). The workspace is left in place and the
+	// lock keys stay held, for as long as this worker runs; the reporter releases the job as infra whatever Kind says.
+	Quarantined bool
+	Err         error
 }
 
 // Config is the worker's identity and collaborators.
@@ -184,7 +187,12 @@ func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, 
 		ended.Kind, ended.Err = KindSkipped, err
 		return ended
 	}
-	defer hold.Release()
+	quarantined := false
+	defer func() {
+		if !quarantined {
+			hold.Release()
+		}
+	}()
 	job, ended.Job, ended.ClaimID = cr.Job, cr.Job, cr.ClaimID
 
 	st := &state{}
@@ -228,7 +236,12 @@ func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, 
 	if started && st.get() == stopNone {
 		res = c.cfg.Exec.Run(runCtx, job, ws, plan)
 	}
-	hold.Release() // the command is gone: its lock keys are free again while the result is delivered
+	// A run that could not prove its process tree (a sandbox unit) gone may still be writing the workspace: the workspace stays and so do
+	// the lock keys, so no next job reuses either. (A start that failed never ran anything and is no such case.)
+	quarantined = started && res.Err != nil && res.Outcome != run.StartFailed
+	if !quarantined {
+		hold.Release() // the command is gone: its lock keys are free again while the result is delivered
+	}
 
 	var rej *Rejected
 	switch {
@@ -245,14 +258,14 @@ func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, 
 	default:
 		ended.Kind = KindRan
 	}
-	ended.Run, ended.Plan, ended.Root = res, plan, ws.Dir
+	ended.Run, ended.Plan, ended.Root, ended.Quarantined = res, plan, ws.Dir, quarantined
 	if finish != nil {
 		finish(renewCtx, ended)
 	}
 	if st.get() == stopLost {
 		ended.Kind = KindLost // lost while the result was being delivered: it was not delivered, whatever Kind said when Finish began
 	}
-	if ws.Cleanup != nil {
+	if ws.Cleanup != nil && !quarantined {
 		_ = ws.Cleanup()
 	}
 	endRenew()
