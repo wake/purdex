@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/wake/purdex/internal/execstat"
 	"github.com/wake/purdex/internal/wwd/facts"
@@ -24,6 +25,9 @@ type RunFunc func(ctx context.Context, tag, name string, args ...string) ([]byte
 func defaultRun(ctx context.Context, tag, name string, args ...string) ([]byte, error) {
 	return execstat.CommandContext(ctx, tag, name, args...).CombinedOutput()
 }
+
+// bootoutTimeout bounds `launchctl bootout --wait`, which can block indefinitely.
+const bootoutTimeout = 15 * time.Second
 
 const systemUnitPath = "/etc/systemd/system/" + UnitName
 
@@ -353,12 +357,24 @@ func (i *Installer) Uninstall(ctx context.Context, purge bool) error {
 		target := i.domain() + "/" + Label
 		// a failed look-up is a failure, not "not loaded": only the launchctl
 		// answer that says the service is not there lets the removal go on
-		if out, perr := run(ctx, "wwd.uninstall.print", "launchctl", "print", target); perr == nil {
-			if out, err := run(ctx, "wwd.uninstall.bootout", "launchctl", "bootout", target); err != nil && !notThere(out) {
-				return fmt.Errorf("launchctl bootout %s: %w: %s", target, err, bytes.TrimSpace(out))
-			}
-		} else if !notThere(out) {
+		out, perr := run(ctx, "wwd.uninstall.print", "launchctl", "print", target)
+		if perr != nil && !notThere(out) {
 			return fmt.Errorf("launchctl print %s: %w: %s", target, perr, bytes.TrimSpace(out))
+		}
+		if perr == nil {
+			// bootout does not wait for the unload unless asked, and --wait may never
+			// return: bound it, then look again before any file goes
+			bctx, cancel := context.WithTimeout(ctx, bootoutTimeout)
+			bout, err := run(bctx, "wwd.uninstall.bootout", "launchctl", "bootout", "--wait", target)
+			cancel()
+			if err != nil && !notThere(bout) {
+				return fmt.Errorf("launchctl bootout --wait %s: %w: %s", target, err, bytes.TrimSpace(bout))
+			}
+			if out, perr := run(ctx, "wwd.uninstall.verify", "launchctl", "print", target); perr == nil {
+				return fmt.Errorf("launchctl: %s is still loaded after bootout, nothing was removed", target)
+			} else if !notThere(out) {
+				return fmt.Errorf("launchctl print %s: cannot confirm it unloaded: %w: %s", target, perr, bytes.TrimSpace(out))
+			}
 		}
 		if err := os.Remove(i.PlistPath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err

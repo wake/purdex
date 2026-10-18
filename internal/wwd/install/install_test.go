@@ -17,6 +17,9 @@ type fakeRun struct {
 	calls  []string
 	failOn map[string]bool   // a command line prefix that exits non-zero
 	says   map[string]string // what such a command prints before it fails
+
+	unloaded   bool // a launchctl bootout went through: print no longer finds the service
+	stayLoaded bool // ...except when the service ignores the bootout
 }
 
 func (f *fakeRun) run(ctx context.Context, tag, name string, args ...string) ([]byte, error) {
@@ -25,6 +28,18 @@ func (f *fakeRun) run(ctx context.Context, tag, name string, args ...string) ([]
 	for p, bad := range f.failOn {
 		if bad && strings.HasPrefix(line, p) {
 			return []byte(f.says[p]), os.ErrNotExist
+		}
+	}
+	if name == "launchctl" && len(args) > 0 {
+		switch args[0] {
+		case "bootout":
+			f.unloaded = !f.stayLoaded
+		case "bootstrap":
+			f.unloaded = false
+		case "print":
+			if f.unloaded {
+				return []byte(`Could not find service "gs.wake.wwd" in domain`), os.ErrNotExist
+			}
 		}
 	}
 	// the two sudo commands that touch the unit file act on it, as the real ones do
@@ -328,7 +343,7 @@ func TestUninstallDarwin(t *testing.T) {
 	if err := in.Uninstall(ctx, false); err != nil {
 		t.Fatal(err)
 	}
-	if !f.has("launchctl bootout gui/501/gs.wake.wwd") {
+	if !f.has("launchctl bootout --wait gui/501/gs.wake.wwd") {
 		t.Errorf("not unloaded: %v", f.calls)
 	}
 	if _, err := os.Stat(in.PlistPath()); err == nil {
@@ -561,5 +576,35 @@ func TestInstallRefusesAnUnreadableConfigOrToken(t *testing.T) {
 	}
 	if err := in.Install(context.Background()); err == nil {
 		t.Error("an unreadable config location was ignored")
+	}
+}
+
+func TestUninstallDarwinKeepsFilesWhileStillLoaded(t *testing.T) {
+	bin := writeBin(t, t.TempDir(), "x")
+	for name, setup := range map[string]func(f *fakeRun){
+		"bootout returns but the service is still found": func(f *fakeRun) { f.stayLoaded = true },
+		"bootout --wait times out": func(f *fakeRun) {
+			f.failOn["launchctl bootout"] = true
+			f.says = map[string]string{"launchctl bootout": "signal: killed"}
+		},
+	} {
+		in, f, _ := newInstaller(t, "darwin", "mlab", bin)
+		ctx := context.Background()
+		if err := in.Install(ctx); err != nil {
+			t.Fatal(err)
+		}
+		setup(f)
+		if err := in.Uninstall(ctx, false); err == nil {
+			t.Errorf("%s: reported success", name)
+		}
+		if _, err := os.Stat(in.BinPath()); err != nil {
+			t.Errorf("%s: the binary was deleted", name)
+		}
+		if _, err := os.Stat(in.PlistPath()); err != nil {
+			t.Errorf("%s: the plist was deleted", name)
+		}
+		if !f.has("launchctl bootout --wait") {
+			t.Errorf("%s: bootout did not wait: %v", name, f.calls)
+		}
 	}
 }
