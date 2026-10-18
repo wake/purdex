@@ -78,7 +78,7 @@ func TestUsageRecorderWritesTheRowOfAJobThatRanHere(t *testing.T) {
 	if err := u.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if u.JobID != "j_a" || u.Host != "mlab" || u.Repo != "purdex" || u.Task != "go-test" || u.Slot != wire.SlotHeavy ||
+	if u.JobID != "j_a" || u.Host != "mlab" || u.Repo != "purdex" || u.Task != "go-test" || u.SlotCharged != wire.SlotHeavy ||
 		u.Source != wire.UsageQueue || u.Result != wire.StateFailed || u.Reason != "oom" || u.Class != wire.ClassDev {
 		t.Fatalf("%+v", u)
 	}
@@ -183,7 +183,7 @@ func TestUsageRecorderFastLaneAndAdHocJobs(t *testing.T) {
 	j.Result.Host = "" // a fast-lane result has no worker host
 	r.OnJobEvent(wire.JobEvent{Job: j})
 	rows := drain(r, sink)
-	if len(rows) != 1 || rows[0].Source != wire.UsageFastLane || rows[0].Slot != wire.SlotHeavy {
+	if len(rows) != 1 || rows[0].Source != wire.UsageFastLane || rows[0].SlotCharged != wire.SlotHeavy {
 		t.Fatalf("%+v", rows)
 	}
 }
@@ -194,7 +194,7 @@ func TestUsageRecorderSlotIsWhatTheHostCharged(t *testing.T) {
 	j := finalJob(wire.StateSucceeded, ut0, ut0.Add(time.Second))
 	j.Local, j.Result.Host = true, ""
 	r.OnJobEvent(wire.JobEvent{Job: j})
-	if rows := drain(r, sink); len(rows) != 1 || rows[0].Slot != wire.SlotLight || rows[0].Source != wire.UsageFastLane {
+	if rows := drain(r, sink); len(rows) != 1 || rows[0].SlotCharged != wire.SlotLight || rows[0].Source != wire.UsageFastLane {
 		t.Fatalf("%+v", rows)
 	}
 }
