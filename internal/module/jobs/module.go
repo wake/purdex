@@ -8,9 +8,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/wake/purdex/internal/core"
 	ipeers "github.com/wake/purdex/internal/peers"
@@ -53,33 +55,80 @@ type Module struct {
 	cl       *client.Client
 	inflight chan struct{} // a semaphore of maxInFlight
 	logs     chan struct{} // a semaphore of maxLogInFlight, held by the /log route besides inflight
+
+	// jobs.changed (events.go)
+	core   *core.Core
+	logf   func(format string, args ...any)
+	retry  time.Duration        // the pause before the event stream is opened again
+	emit   func(core.HostEvent) // where jobs.changed goes; nil: the core's host events
+	src    eventSource          // the local wwd's event stream; nil: cl
+	cancel context.CancelFunc   // ends the stream loop
+	wg     sync.WaitGroup       // the stream loop
+}
+
+// eventSource is the part of the wwd client the stream loop reads; *client.Client is one.
+type eventSource interface {
+	Watch(ctx context.Context, ready chan<- struct{}, fn func(wire.Event) (done bool)) error
 }
 
 func New() *Module {
-	return &Module{inflight: make(chan struct{}, maxInFlight), logs: make(chan struct{}, maxLogInFlight)}
+	return &Module{inflight: make(chan struct{}, maxInFlight), logs: make(chan struct{}, maxLogInFlight), logf: log.Printf, retry: retryEvery}
+}
+
+func (m *Module) source() eventSource {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.src != nil {
+		return m.src
+	}
+	return m.cl
 }
 
 func (m *Module) Name() string           { return "jobs" }
 func (m *Module) Dependencies() []string { return nil }
 
 // Init never fails: wwd is a separate process that may start later than this daemon.
-func (m *Module) Init(*core.Core) error {
+func (m *Module) Init(c *core.Core) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.cl == nil {
 		m.cl = client.New(client.DefaultSocket())
 	}
+	m.core = c
 	m.ready = true
 	return nil
 }
 
-func (m *Module) Start(context.Context) error { return nil }
+// Start opens the local wwd's event stream in the background; wwd not running is retried and never fails the daemon.
+func (m *Module) Start(context.Context) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	m.mu.Lock()
+	m.cancel = cancel
+	m.mu.Unlock()
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		m.watch(ctx)
+	}()
+	return nil
+}
 
-func (m *Module) Stop(context.Context) error {
+func (m *Module) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	m.ready = false
+	cancel := m.cancel
 	m.mu.Unlock()
-	return nil
+	if cancel != nil {
+		cancel()
+	}
+	done := make(chan struct{})
+	go func() { m.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Status is what /api/info reads to announce jobs.v1 (the API exists; whether wwd is up is each call's answer).
