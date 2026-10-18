@@ -113,10 +113,18 @@ func poolServes(h *hostRow, peer *wire.Peer, now time.Time) bool {
 	if peer == nil || !peer.Reachable || peer.Facts == nil {
 		return false
 	}
-	if !peer.Facts.At.Equal(h.factsAt) {
-		h.factsAt, h.factsMoved = peer.Facts.At, now
+	first := h.factsAt.IsZero()
+	if first || !peer.Facts.At.Equal(h.factsAt) {
+		h.factsAt = peer.Facts.At
+		// A stamp seen to change counts from now. One seen for the first time counts only when it is young by this clock: facts
+		// wwd cached from a peer that has stopped answering are as old as they are, and only a later change shows life.
+		if !first || now.Sub(peer.Facts.At) < poolStaleAfter {
+			h.factsMoved = now
+		} else {
+			h.factsMoved = time.Time{}
+		}
 	}
-	return now.Sub(h.factsMoved) < poolStaleAfter
+	return !h.factsMoved.IsZero() && now.Sub(h.factsMoved) < poolStaleAfter
 }
 
 func peerOfAlias(p wire.Pool, alias string) *wire.Peer {

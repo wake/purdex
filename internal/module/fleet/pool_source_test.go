@@ -362,6 +362,7 @@ func TestPoolSource_FreshnessIsByWhenTheStampLastChanged(t *testing.T) {
 		r.fc.Advance(5 * time.Second)
 		fp.set(wire.Pool{Peers: []wire.Peer{self(), air()}}, nil)
 		r.tick()
+		r.tick() // the first change stops the ssh session that ran until then; the pool takes the row on the next tick
 		assert.True(t, r.m.hosts["peer"].poolOwned, "a behind clock does not stop the pool serving a host whose facts move")
 		assert.False(t, r.hasSession("peer"))
 	}
@@ -374,6 +375,28 @@ func TestPoolSource_FreshnessIsByWhenTheStampLastChanged(t *testing.T) {
 	r.tick()
 	assert.True(t, r.hasSession("peer"), "a stamp that has not changed for 20 s is stale, the stamp's own age aside")
 	assert.False(t, r.m.hosts["peer"].poolOwned)
+}
+
+// Facts seen for the first time that are already old by this clock (a cache wwd kept of a peer that stopped answering) do not make
+// the pool the host's source: only a stamp seen to change does. Young facts are served at once.
+func TestPoolSource_OldFactsSeenFirstAreNotServedUntilTheyMove(t *testing.T) {
+	r, fp := newPoolRig(t)
+	frozen := r.fc.Now().Add(-time.Hour)
+	self := func() wire.Peer { return peerOK("mlab", r.fc.Now(), 50, 1, wire.ZoneNormal) }
+	fp.set(wire.Pool{Peers: []wire.Peer{self(), peerOK("air26", frozen, 50, 1, wire.ZoneNormal)}}, nil)
+	r.start()
+	for i := 0; i < 3; i++ {
+		r.tick()
+		assert.True(t, r.hasSession("peer"), "an hour-old stamp, never seen to change: ssh stays")
+		assert.False(t, r.m.hosts["peer"].poolOwned)
+		r.fc.Advance(5 * time.Second)
+		fp.set(wire.Pool{Peers: []wire.Peer{self(), peerOK("air26", frozen, 50, 1, wire.ZoneNormal)}}, nil)
+	}
+	fp.set(wire.Pool{Peers: []wire.Peer{self(), peerOK("air26", frozen.Add(5*time.Second), 50, 1, wire.ZoneNormal)}}, nil) // it moves
+	r.tick()
+	r.tick()
+	assert.True(t, r.m.hosts["peer"].poolOwned, "the stamp changed: the pool serves it")
+	assert.False(t, r.hasSession("peer"))
 }
 
 // wwd says reachable but has no facts yet (a peer just reached): that is not a reading either.
