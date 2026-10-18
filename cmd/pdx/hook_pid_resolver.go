@@ -1,11 +1,14 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/wake/purdex/internal/agent"
 )
 
 type procInfo struct {
@@ -30,6 +33,10 @@ var knownShims = map[string]bool{
 var readResolverProcessInfo = readProcessInfo
 var readResolverProcessStartTime = readProcessStartTime
 var getParentPID = os.Getppid
+
+// quickProcessInfo is the parent and argument fields of a pid read by sysctl (darwin, no fork). It errors wherever ps has to decide
+// (another platform, an argument area ps escapes, an unreadable one), and readProcessInfo then asks ps as it always did.
+var quickProcessInfo = agent.ProcessPPIDArgs
 
 func resolveAgentPID(startPpid int) (pid int, uncertain bool) {
 	current := startPpid
@@ -61,6 +68,14 @@ func resolveHookProvenance() hookProvenance {
 }
 
 func readProcessInfo(pid int) (procInfo, error) {
+	qppid, qargv, qerr := quickProcessInfo(pid)
+	if qerr == nil && len(qargv) > 0 {
+		return procInfo{PID: pid, PPID: qppid, ExePath: qargv[0], Argv: qargv}, nil
+	}
+	if errors.Is(qerr, agent.ErrProcessChanged) {
+		// The pid was reused while it was read: ps would answer for the replacement. No answer makes the sender uncertain.
+		return procInfo{}, qerr
+	}
 	out, err := outputCounted(exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "ppid=", "-o", "args="))
 	if err != nil {
 		return procInfo{}, err
