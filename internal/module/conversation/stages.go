@@ -435,6 +435,9 @@ func (s *sessionStages) trimUsed() {
 			end--
 		}
 		cut--
+		if end == 0 { // the whole map is one millisecond: the hard bound wins, and that millisecond is shut
+			end, cut = over, all[over-1].at
+		}
 	}
 	for _, u := range all[:end] {
 		delete(s.used, u.id)

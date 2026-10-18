@@ -490,6 +490,14 @@ func TestStages_TrimInsideOneMillisecondKeepsTheFloorBelowIt(t *testing.T) {
 	_, oldKept := s.used["old"]
 	assert.False(t, oldKept, "the strictly older marker is what went")
 
+	one := &sessionStages{used: map[string]int64{}}
+	for i := 0; i < 3*maxStageUsed; i++ {
+		one.used[fmt.Sprintf("c%d", i)] = 70 // every marker in the same millisecond
+	}
+	one.trimUsed()
+	assert.LessOrEqual(t, len(one.used), maxStageUsed, "the hard bound holds even when the whole map is one millisecond")
+	assert.Equal(t, int64(70), one.usedFloor)
+
 	s2 := &sessionStages{used: map[string]int64{}}
 	for i := 0; i < maxStageUsed+2; i++ {
 		s2.used[fmt.Sprintf("b%d", i)] = int64(i + 1)
