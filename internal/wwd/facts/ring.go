@@ -71,7 +71,8 @@ func Rollup(recs []wire.Facts) wire.Facts {
 	var l1, l5, idle float64
 	out.Mem.AvailableMB = recs[0].Mem.AvailableMB
 	out.Mem.Pressure = 0
-	out.Mem.PageOutRate, out.Mem.SwapOutRate = nil, nil
+	out.Mem.PageOutRate, out.Mem.SwapOutRate, out.Mem.DecompressRate = nil, nil, nil
+	out.Queue = nil
 	out.Derived.Zone = wire.ZoneUnknown
 	out.Worker.Running = wire.Slots{}
 	for _, r := range recs {
@@ -84,6 +85,13 @@ func Rollup(recs []wire.Facts) wire.Facts {
 		out.Mem.Pressure = max(out.Mem.Pressure, r.Mem.Pressure)
 		out.Mem.PageOutRate = maxPtr(out.Mem.PageOutRate, r.Mem.PageOutRate)
 		out.Mem.SwapOutRate = maxPtr(out.Mem.SwapOutRate, r.Mem.SwapOutRate)
+		out.Mem.DecompressRate = maxPtr(out.Mem.DecompressRate, r.Mem.DecompressRate)
+		if r.Queue != nil { // the peak of the minute
+			if out.Queue == nil {
+				out.Queue = &wire.Queue{}
+			}
+			out.Queue.Queued = max(out.Queue.Queued, r.Queue.Queued)
+		}
 		if zoneRank(r.Derived.Zone) > zoneRank(out.Derived.Zone) {
 			out.Derived.Zone = r.Derived.Zone
 		}
