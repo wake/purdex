@@ -31,7 +31,8 @@ shift
 [ -z "${STUB_SPLIT_HOME:-}" ] || { HOME="$HOME/h-$STUB_HOST"; export HOME; }        # a host of its own: its files are under $HOME/h-<host>
 # STUB_SSH_DOWN=host: no connection to it (255, as a banner timeout); STUB_SSH_DOWN_ONCE=1: only the first call, then it is back
 # (it goes down once the first case has begun: the precheck wants every host)
-if [ "${STUB_SSH_DOWN:-}" = "$STUB_HOST" ] && grep -q '^== case' "$STUB_OUT" 2>/dev/null; then
+# STUB_SSH_DOWN_MATCH: only a command with this text in it (default: every command)
+if [ "${STUB_SSH_DOWN:-}" = "$STUB_HOST" ] && grep -q '^== case' "$STUB_OUT" 2>/dev/null && case "$*" in *"${STUB_SSH_DOWN_MATCH:-}"*) true ;; *) false ;; esac; then
   if [ -z "${STUB_SSH_DOWN_ONCE:-}" ] || [ ! -e "$STUB/down-once" ]; then [ -z "${STUB_SSH_DOWN_ONCE:-}" ] || : > "$STUB/down-once"; echo "ssh: Connection timed out during banner exchange" >&2; exit 255; fi
 fi
 [ -z "${STUB_SSH_FAIL:-}" ] || case "$*" in *"$STUB_SSH_FAIL"*) exit 255 ;; esac
@@ -361,8 +362,17 @@ has "-- cleaning up" "the clean-up after an ssh failure"
 [ -z "$(ls -A "$tmp" | grep wwd-c2 || true)" ] || fail "the scratch directory was left after an ssh failure"
 # one lost connection is tried again, and the case goes on as if nothing had happened
 rm -f "$stub"/*.log "$stub/down-once"
-HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OUT="$tmp/out" STUB_SSH_DOWN=air26 STUB_SSH_DOWN_ONCE=1 STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "one lost connection must be tried again"; }
+# (case 14 asks air19 for its worker settings, and a failed ask counts as "off": the lost connection is the only thing that could fail)
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OUT="$tmp/out" STUB_SSH_DOWN=air19 STUB_SSH_DOWN_MATCH=/v1/worker STUB_SSH_DOWN_ONCE=1 STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "one lost connection must be tried again"; }
 hasnt "FAIL ssh to" "one lost connection"
+has "PASS case 14" "one lost connection"
+# air19 for good: the only thing wrong in case 14 is the connection, and that alone FAILs the case
+rm -f "$stub"/*.log "$stub/down-once"
+rc=0
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OUT="$tmp/out" STUB_SSH_DOWN=air19 STUB_SSH_DOWN_MATCH=/v1/worker STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "a lost connection alone must fail the case"
+has "FAIL ssh to air19 failed twice" "air19 down"
+has "^FAIL case 14$" "air19 down"
 # case 8 puts its scratch repo into a directory of air26's own: not under mlab's TMPDIR (the stub's TMPDIR is $tmp)
 rm -f "$stub"/*.log
 HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_ZONE=1 STUB_STATE=succeeded STUB_START_MLAB=2026-10-18T10:00:01Z STUB_START_AIR26=2026-10-18T10:00:05Z C2_TIMEOUT_SCALE=0 sh "$matrix" --case 8 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 8"; }
