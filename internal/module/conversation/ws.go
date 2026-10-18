@@ -86,10 +86,10 @@ type wsConn struct {
 }
 
 // capsKey is the part of the capability table that moves while a conversation is open: whether a mod can take a prompt.
-type capsKey struct{ send, interrupt, answer string }
+type capsKey struct{ send, interrupt, answer, sendNow string }
 
 func capsKeyOf(c *convmodel.Capabilities) capsKey {
-	return capsKey{c.Send, c.Interrupt, c.AnswerQuestion}
+	return capsKey{c.Send, c.Interrupt, c.AnswerQuestion, c.SendNow}
 }
 
 // pushCaps queues a conversation.capabilities frame when the table changed since the snapshot or the last frame (a mod
