@@ -180,7 +180,7 @@ describe('a host that reports stages: confirmed by id or by read, never by text'
 })
 
 describe('a host that stops reporting stages (a downgraded daemon)', () => {
-  it('turning the mode off lets go of the stages the entries held, their covered rows and their read timers', async () => {
+  it('an entry the daemon already said was read is finished, not turned back into a pending one; its row stays covered until the header lets it go', async () => {
     const { calls, port } = fakePort()
     const q = new SendQueue(port)
     q.setStagesMode(true)
@@ -188,12 +188,24 @@ describe('a host that stops reporting stages (a downgraded daemon)', () => {
     q.setStages(byId(st(id, 'queued')))
     q.setHeaderQueue([{ text: 'hi', at: 1_002_000 }])
     q.setStages(byId(st(id, 'read')))
-    expect(q.coveredRows()).toHaveLength(1)
+    q.setStagesMode(false)
+    expect(q.entries()).toHaveLength(0)
+    expect(q.coveredRows()).toEqual([{ text: 'hi', at: 1_002_000 }])
+    await vi.advanceTimersByTimeAsync(READ_GRACE_MS) // and no timer is left to fire on it
+    q.setHeaderQueue([])
+    expect(q.coveredRows()).toEqual([])
+  })
+
+  it('an entry still on its way lets go of the stage it held and is left to today\'s matching', async () => {
+    const { calls, port } = fakePort()
+    const q = new SendQueue(port)
+    q.setStagesMode(true)
+    const id = await handedOne(q, calls)
+    q.setStages(byId(st(id, 'queued')))
     q.setStagesMode(false)
     expect(q.entries()[0].stage).toBeUndefined()
     expect(q.entries()[0].stagesHost).toBeUndefined()
-    await vi.advanceTimersByTimeAsync(READ_GRACE_MS) // the read timer is gone: the entry is left to today's matching
-    expect(q.entries()).toHaveLength(1)
-    expect(q.coveredRows()).toEqual([])
+    q.reconcile([user('u1', 'hi', 1_003_000)]) // the text settles it again
+    expect(q.entries()).toHaveLength(0)
   })
 })
