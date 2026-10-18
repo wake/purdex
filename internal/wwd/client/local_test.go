@@ -35,12 +35,16 @@ func TestRegisterLocal_ALockConflictCarriesTheKeys(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/local-runs", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusConflict)
-		writeJSON(w, wire.LocksBusy{Reason: wire.LocksBusyReason, Keys: []string{"tmux", "port:7860"}})
+		writeJSON(w, wire.LocksBusy{Reason: wire.LocksBusyReason, Keys: []string{"tmux", "port:7860"},
+			Holders: []wire.LockHolder{{Key: "tmux", Job: "j_01"}, {Key: "port:7860", Job: "j_02"}}})
 	})
 	_, err := New(fakeWWD(t, mux)).RegisterLocal(context.Background(), wire.LocalRunRequest{})
 	var lb *LocksBusyError
-	if !errors.As(err, &lb) || len(lb.Keys) != 2 || lb.Keys[1] != "port:7860" {
+	if !errors.As(err, &lb) || len(lb.Keys) != 2 || lb.Keys[1] != "port:7860" || len(lb.Holders) != 2 || lb.Holders[1].Job != "j_02" {
 		t.Fatalf("err = %v", err)
+	}
+	if got := lb.Held(); got != "tmux (held by j_01), port:7860 (held by j_02)" {
+		t.Fatalf("Held = %q", got)
 	}
 }
 

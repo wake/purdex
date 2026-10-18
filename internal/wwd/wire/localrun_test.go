@@ -84,13 +84,16 @@ func TestLocalRunRequestAndResponse(t *testing.T) {
 // A local run that finds its lock keys held gets a 409 whose body names the keys.
 func TestLocksBusyBody(t *testing.T) {
 	b := roundTrip[LocksBusy](t, "locks_busy.json")
-	if b.Reason != "locks_busy" || len(b.Keys) != 1 || b.Keys[0] != "mysql:purdex" {
+	if b.Reason != "locks_busy" || len(b.Keys) != 1 || b.Keys[0] != "mysql:purdex" || len(b.Holders) != 1 || b.Holders[0].Job != "j_01JC0000000000000000000001" {
 		t.Fatalf("unexpected %+v", b)
 	}
 	good := string(fixture(t, "locks_busy.json"))
 	for name, raw := range map[string]string{
-		"other reason": strings.Replace(good, `"locks_busy"`, `"busy"`, 1),
-		"no keys":      strings.Replace(good, `["mysql:purdex"]`, `[]`, 1),
+		"other reason":       strings.Replace(good, `"locks_busy"`, `"busy"`, 1),
+		"no keys":            strings.Replace(good, `["mysql:purdex"]`, `[]`, 1),
+		"no holders":         strings.Replace(good, `"holders": [{"key": "mysql:purdex", "job": "j_01JC0000000000000000000001"}]`, `"holders": []`, 1),
+		"holder of another":  strings.Replace(good, `"key": "mysql:purdex", "job"`, `"key": "other", "job"`, 1),
+		"holder without job": strings.Replace(good, `"j_01JC0000000000000000000001"`, `""`, 1),
 	} {
 		if raw == good {
 			t.Fatalf("%s: replacement changed nothing", name)

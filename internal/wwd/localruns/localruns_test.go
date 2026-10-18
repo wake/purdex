@@ -152,7 +152,8 @@ func TestAHeldKeyIsA409WithTheKeysAndTheQueueIsNotAsked(t *testing.T) {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body)
 	}
 	busy, err := wire.Decode[wire.LocksBusy](rec.Body.Bytes())
-	if err != nil || len(busy.Keys) != 2 || busy.Keys[0] != "db" || busy.Keys[1] != "tmux" {
+	if err != nil || len(busy.Keys) != 2 || busy.Keys[0] != "db" || busy.Keys[1] != "tmux" ||
+		len(busy.Holders) != 2 || busy.Holders[0] != (wire.LockHolder{Key: "db", Job: "j_remote"}) || busy.Holders[1] != (wire.LockHolder{Key: "tmux", Job: "j_remote"}) {
 		t.Fatalf("body %s err %v", rec.Body, err)
 	}
 	if len(q.calls) != 0 {

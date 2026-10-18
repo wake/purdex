@@ -84,10 +84,11 @@ func (s *Service) Handler() http.HandlerFunc {
 		switch {
 		case errors.As(err, &busy):
 			keys := make([]string, len(busy.Conflicts))
+			holders := make([]wire.LockHolder, len(busy.Conflicts))
 			for i, c := range busy.Conflicts {
-				keys[i] = c.Key
+				keys[i], holders[i] = c.Key, wire.LockHolder{Key: c.Key, Job: c.Holder}
 			}
-			writeJSON(w, http.StatusConflict, wire.LocksBusy{Reason: wire.LocksBusyReason, Keys: keys})
+			writeJSON(w, http.StatusConflict, wire.LocksBusy{Reason: wire.LocksBusyReason, Keys: keys, Holders: holders})
 		case err != nil:
 			writeJSON(w, status, map[string]string{"error": err.Error()})
 		default:
