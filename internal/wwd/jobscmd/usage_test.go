@@ -15,7 +15,7 @@ func ip(v int) *int         { return &v }
 func usageRec(id string, end time.Time) wire.JobUsage {
 	yes, no := true, false
 	return wire.JobUsage{
-		JobID: id, Host: "air26", Repo: "purdex", Task: "go-test", Slot: wire.SlotHeavy, Class: wire.ClassDev,
+		JobID: id, Host: "air26", Repo: "purdex", Task: "go-test", SlotCharged: wire.SlotHeavy, Class: wire.ClassDev,
 		Source: wire.UsageFastLane, Result: wire.StateSucceeded, StartedAt: end.Add(-90 * time.Second), EndedAt: end,
 		CPUSeconds: fp(270), CPUSource: wire.CPUSampled, PeakCores: fp(5.5), PeakCoresMeasure: wire.MeasureSampled,
 		MemPeakMB: ip(2100), MemPeakMeasure: wire.MeasureSampled, JobsAtStart: 1, JobsPeak: 3, ZoneAtStart: wire.ZoneNormal,

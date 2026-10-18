@@ -16,7 +16,7 @@ func ip(v int) *int         { return &v }
 func usageEnding(id string, end time.Time) wire.JobUsage {
 	no := false
 	return wire.JobUsage{
-		JobID: id, Host: "air26", Repo: "purdex", Task: "go-test", Slot: wire.SlotHeavy, Class: wire.ClassDev,
+		JobID: id, Host: "air26", Repo: "purdex", Task: "go-test", SlotCharged: wire.SlotHeavy, Class: wire.ClassDev,
 		Source: wire.UsageQueue, Result: wire.StateSucceeded,
 		StartedAt: end.Add(-time.Minute), EndedAt: end,
 		CPUSeconds: fp(120), CPUSource: wire.CPUFromRusage, PeakCores: fp(3), PeakCoresMeasure: wire.MeasureSampled,

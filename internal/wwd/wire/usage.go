@@ -49,14 +49,16 @@ const (
 
 // JobUsage is one finished job's usage and the host's state around it. One row per job; the host that ran it writes it.
 type JobUsage struct {
-	JobID  string      `json:"job_id"`
-	Host   string      `json:"host"`
-	Repo   string      `json:"repo"`
-	Task   string      `json:"task"`
-	Slot   Slot        `json:"slot"`
-	Class  JobClass    `json:"class"`
-	Source UsageSource `json:"source"`
-	Result JobState    `json:"result"` // a final state: succeeded, failed, cancelled, superseded or expired
+	JobID string `json:"job_id"`
+	Host  string `json:"host"`
+	Repo  string `json:"repo"`
+	Task  string `json:"task"`
+	// SlotCharged is the slot the host's admission charged the job, not a property of the job: a queue job the worker runs is heavy today,
+	// a fast-lane job has the one its request named.
+	SlotCharged Slot        `json:"slot_charged"`
+	Class       JobClass    `json:"class"`
+	Source      UsageSource `json:"source"`
+	Result      JobState    `json:"result"` // a final state: succeeded, failed, cancelled, superseded or expired
 	// Reason is the job's own failure reason ("timeout", "oom", "infra"...), empty when it has none.
 	Reason string `json:"reason"`
 
@@ -113,8 +115,8 @@ func (u JobUsage) Validate() error {
 	if u.JobID == "" || u.Host == "" || u.Repo == "" || u.Task == "" { // a job always has a repo and a task (Job.Validate)
 		return fmt.Errorf("usage: missing job_id, host, repo or task")
 	}
-	if u.Slot != SlotHeavy && u.Slot != SlotLight {
-		return fmt.Errorf("usage: invalid slot %q", u.Slot)
+	if u.SlotCharged != SlotHeavy && u.SlotCharged != SlotLight {
+		return fmt.Errorf("usage: invalid slot_charged %q", u.SlotCharged)
 	}
 	if !u.Class.Valid() {
 		return fmt.Errorf("usage: invalid class %q", u.Class)
