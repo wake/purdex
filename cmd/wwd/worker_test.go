@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -263,5 +264,31 @@ func TestPeerZoneIsUnknownForAnUnreachedPeer(t *testing.T) {
 	peers := func() []wire.Peer { return []wire.Peer{{Info: wire.Info{Alias: "air26"}}} }
 	if z := peerZone(peers, "air26"); z != "" {
 		t.Fatalf("zone %q for a peer with no facts", z)
+	}
+}
+
+// The markers are in <data_dir>/quarantine (not among the job directories, where the work root's own cleanups would find them), and the
+// store knows the work root: a human's Clear removes the job directory of an entry.
+func TestTheQuarantineStoreKeepsItsMarkersInTheDataDirAndKnowsTheWorkRoot(t *testing.T) {
+	in, tbl := inputs(t, nil, true)
+	dir := filepath.Join(in.WorkRoot, "h-j1")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tbl.Acquire("mlab/j1", []string{"k"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.Store.Add(quarantine.Entry{Owner: "mlab/j1", JobID: "j1", Dir: dir, Keys: []string{"k"}}); err != nil {
+		t.Fatal(err)
+	}
+	ents, err := os.ReadDir(filepath.Join(in.Cfg.DataDir, "quarantine"))
+	if err != nil || len(ents) != 1 {
+		t.Fatalf("markers in <data_dir>/quarantine: %v %v", ents, err)
+	}
+	if err := in.Store.Clear("j1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("the job directory stays after Clear (%v): the store was not given the work root", err)
 	}
 }
