@@ -1,0 +1,319 @@
+// Package runner takes one job from "chosen" to "command ended" (spec §4.2, §5): claim it under the host's lock table, keep the
+// lease alive while the workspace is made and the command runs, stop by its own monotonic deadline when the lease cannot be renewed,
+// and stop when the origin says cancel. It does not choose jobs (package pick) and does not deliver results (the Finish callback
+// does, while this package goes on renewing).
+package runner
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/wake/purdex/internal/wwd/run"
+	"github.com/wake/purdex/internal/wwd/snapshot"
+	"github.com/wake/purdex/internal/wwd/wire"
+	"github.com/wake/purdex/internal/wwd/worker/locks"
+	"github.com/wake/purdex/internal/wwd/worker/pick"
+)
+
+// Conflict is the origin's 409 {state}: the job is not in a state that allows the call. For a claim it also covers a held job
+// (state queued): the job is not ours to take this round.
+type Conflict struct{ State wire.JobState }
+
+func (e *Conflict) Error() string { return fmt.Sprintf("runner: conflict: the job is %s", e.State) }
+
+// ErrNotFound: the origin has no such job.
+var ErrNotFound = errors.New("runner: no such job")
+
+// Origin is one origin's worker protocol (in process for this host's own queue, over TCP for a peer). A refused transition is a
+// *Conflict, an unknown job is ErrNotFound; anything else is a failure to reach the origin.
+type Origin interface {
+	Claim(ctx context.Context, id string, req wire.ClaimRequest) (wire.ClaimResponse, error)
+	Start(ctx context.Context, id, claimID string) (wire.Lease, error)
+	Heartbeat(ctx context.Context, id, claimID string) (wire.HeartbeatResponse, error)
+}
+
+// Exec makes a workspace and runs the command in it. Run's ctx ending means: end the command (TERM, then KILL).
+type Exec interface {
+	Materialize(ctx context.Context, job wire.Job, claimID string) (snapshot.Workspace, error)
+	// Validate checks the task and its arguments against the workspace (the manifest in the snapshot) after it is made and before the
+	// job is started. A *Rejected means the job is not runnable as submitted; any other error is the host's trouble.
+	Validate(ctx context.Context, job wire.Job, ws snapshot.Workspace) error
+	Run(ctx context.Context, job wire.Job, ws snapshot.Workspace) run.Result
+}
+
+// Rejected is Validate's answer for a job that must not run: unknown task, arguments the manifest does not allow. The job fails, it is
+// not an infrastructure failure (nothing is retried and no host is held off).
+type Rejected struct{ Reason string }
+
+func (e *Rejected) Error() string { return "runner: rejected: " + e.Reason }
+
+// Kind says how a Work call ended.
+type Kind string
+
+const (
+	// KindSkipped: nothing was claimed (locks busy, 409, not found, origin unreachable). Err says why. A 409 on a claim, including the
+	// one a held job gets, is "skip this job this round": the caller goes on to the next candidate and does not retry this one now.
+	KindSkipped Kind = "skipped"
+	// KindRan: the command ended by itself or by its own timeout; Run holds how.
+	KindRan Kind = "ran"
+	// KindCancelled: the origin asked to stop (heartbeat cancel); the command was ended if it had started. The result to post is
+	// state cancelled; the origin turns it into superseded when a newer job did that.
+	KindCancelled Kind = "cancelled"
+	// KindLost: the lease is gone (409 from the origin, or no renewal before the worker's own deadline). The command was ended and
+	// the outcome must be discarded.
+	KindLost Kind = "lost"
+	// KindShutdown: the worker's own context ended while the job was held; the job should be released (reason reclaim).
+	KindShutdown Kind = "shutdown"
+	// KindRejected: Validate refused the job; nothing was started. Err is the *Rejected. The result to post is state failed with no
+	// exit, the reason in summary.tail.
+	KindRejected Kind = "rejected"
+	// KindInfra: the host could not run the job (workspace could not be made, start refused by a transport failure…). Err says why;
+	// the job should be released (reason infra).
+	KindInfra Kind = "infra"
+)
+
+// Ended is what Work reports.
+type Ended struct {
+	Kind    Kind
+	Source  string
+	Job     wire.Job
+	ClaimID string
+	Run     run.Result // for KindRan, KindCancelled and KindLost, when the command started
+	Err     error
+}
+
+// Config is the worker's identity and collaborators.
+type Config struct {
+	Worker      string
+	Labels      []string
+	Fingerprint map[string]string
+	Locks       *locks.Table
+	Exec        Exec
+	// Unit is what lease_s and renew_s are counted in (time.Second; a test makes it small).
+	Unit time.Duration
+	// Now is the monotonic clock (time.Now).
+	Now func() time.Time
+}
+
+// Controller runs jobs for one worker.
+type Controller struct{ cfg Config }
+
+func New(cfg Config) *Controller {
+	if cfg.Unit <= 0 {
+		cfg.Unit = time.Second
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	return &Controller{cfg: cfg}
+}
+
+// Finish is called once the command has ended (or the job was given up), with the workspace still there. It delivers the result; the
+// lease keeps being renewed until it returns, and its ctx ends if the lease is lost. The workspace is removed after it returns.
+type Finish func(ctx context.Context, e Ended)
+
+// stop is why the run was ended from outside.
+type stop int
+
+const (
+	stopNone stop = iota
+	stopCancelled
+	stopLost
+)
+
+type state struct {
+	mu sync.Mutex
+	s  stop
+}
+
+// set records why: a lost lease overrides a cancel (nothing can be posted any more); otherwise the first reason stays.
+func (st *state) set(s stop) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.s == stopNone || s == stopLost {
+		st.s = s
+	}
+}
+
+func (st *state) get() stop {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.s
+}
+
+// deadlineFor: the lease runs from before the request was sent. The origin's own deadline begins when it handles the request, which is
+// not earlier, so this one is never later than the origin's: the worker has stopped before the origin can give the job to someone else.
+func (c *Controller) deadlineFor(sent time.Time, leaseS int) time.Time {
+	return sent.Add(time.Duration(leaseS) * c.cfg.Unit)
+}
+
+// Work claims the candidate's job and sees it through. finish may be nil.
+func (c *Controller) Work(ctx context.Context, origin Origin, cand pick.Scored, finish Finish) Ended {
+	job := cand.Job
+	ended := Ended{Source: cand.Source, Job: job}
+	owner := cand.Source + "/" + job.ID // a job id is only unique per origin; the table is host-wide
+
+	var cr wire.ClaimResponse
+	var sent time.Time
+	hold, err := c.cfg.Locks.Acquire(owner, job.Locks, func() error {
+		sent = c.cfg.Now()
+		var e error
+		cr, e = origin.Claim(ctx, job.ID, wire.ClaimRequest{Worker: c.cfg.Worker, Labels: c.cfg.Labels, Fingerprint: c.cfg.Fingerprint})
+		return e
+	})
+	if err != nil {
+		ended.Kind, ended.Err = KindSkipped, err
+		return ended
+	}
+	defer hold.Release()
+	job, ended.Job, ended.ClaimID = cr.Job, cr.Job, cr.ClaimID
+
+	st := &state{}
+	renewCtx, endRenew := context.WithCancel(ctx) // the lease: lives until Finish returns
+	defer endRenew()
+	runCtx, endRun := context.WithCancel(renewCtx) // the work: ends on cancel or loss
+	defer endRun()
+	lease := &leaseClock{deadline: c.deadlineFor(sent, cr.LeaseS), renewAt: sent.Add(time.Duration(cr.RenewS) * c.cfg.Unit)}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		c.renew(renewCtx, origin, job.ID, cr.ClaimID, lease, st, endRun, endRenew)
+	}()
+
+	var ws snapshot.Workspace
+	var res run.Result
+	var runErr error
+	started := false
+	if ws, err = c.cfg.Exec.Materialize(runCtx, job, cr.ClaimID); err != nil {
+		runErr = err
+	} else if st.get() == stopNone && runCtx.Err() == nil {
+		if verr := c.cfg.Exec.Validate(runCtx, job, ws); verr != nil {
+			runErr = verr
+		} else {
+			startSent := c.cfg.Now()
+			l, serr := origin.Start(runCtx, job.ID, cr.ClaimID)
+			switch {
+			case serr == nil:
+				lease.extend(c.deadlineFor(startSent, l.LeaseS), startSent.Add(time.Duration(l.RenewS)*c.cfg.Unit))
+				started = true
+			case isConflict(serr):
+				st.set(stopLost)
+			default:
+				runErr = fmt.Errorf("start: %w", serr)
+			}
+		}
+	}
+	if started && st.get() == stopNone {
+		res = c.cfg.Exec.Run(runCtx, job, ws)
+	}
+	hold.Release() // the command is gone: its lock keys are free again while the result is delivered
+
+	var rej *Rejected
+	switch {
+	case st.get() == stopLost || errors.Is(runErr, snapshot.ErrStaleClaim):
+		ended.Kind = KindLost
+	case st.get() == stopCancelled:
+		ended.Kind = KindCancelled
+	case ctx.Err() != nil:
+		ended.Kind = KindShutdown
+	case errors.As(runErr, &rej):
+		ended.Kind, ended.Err = KindRejected, runErr
+	case runErr != nil:
+		ended.Kind, ended.Err = KindInfra, runErr
+	default:
+		ended.Kind = KindRan
+	}
+	ended.Run = res
+	if finish != nil {
+		finish(renewCtx, ended)
+	}
+	if ws.Cleanup != nil {
+		_ = ws.Cleanup()
+	}
+	endRenew()
+	wg.Wait()
+	return ended
+}
+
+func isConflict(err error) bool {
+	var c *Conflict
+	return errors.As(err, &c) || errors.Is(err, ErrNotFound)
+}
+
+// leaseClock is the worker's own view of its lease: when it must have been renewed by, and when to renew next.
+type leaseClock struct {
+	mu       sync.Mutex
+	deadline time.Time
+	renewAt  time.Time
+}
+
+func (l *leaseClock) extend(deadline, renewAt time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if deadline.After(l.deadline) {
+		l.deadline = deadline
+	}
+	l.renewAt = renewAt
+}
+
+func (l *leaseClock) get() (deadline, renewAt time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.deadline, l.renewAt
+}
+
+// renew heartbeats on the origin's schedule and ends the work when the lease is lost or cancel is answered. endRun ends the command;
+// endRenew also ends result delivery (nothing can be posted once the lease is gone).
+func (c *Controller) renew(ctx context.Context, origin Origin, id, claimID string, l *leaseClock, st *state, endRun, endRenew context.CancelFunc) {
+	for {
+		deadline, renewAt := l.get()
+		wake := renewAt
+		if deadline.Before(wake) {
+			wake = deadline
+		}
+		timer := time.NewTimer(wake.Sub(c.cfg.Now()))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		now := c.cfg.Now()
+		if !now.Before(deadline) {
+			st.set(stopLost)
+			endRun()
+			endRenew()
+			return
+		}
+		if now.Before(renewAt) {
+			continue
+		}
+		sent := c.cfg.Now()
+		resp, err := origin.Heartbeat(ctx, id, claimID)
+		switch {
+		case err == nil:
+			l.extend(c.deadlineFor(sent, resp.LeaseS), sent.Add(time.Duration(resp.RenewS)*c.cfg.Unit))
+			if resp.Cancel && st.get() == stopNone {
+				st.set(stopCancelled)
+				endRun() // the command ends; the lease goes on being renewed while the cancelled result is posted
+			}
+		case isConflict(err):
+			st.set(stopLost)
+			endRun()
+			endRenew()
+			return
+		case ctx.Err() != nil:
+			return
+		default:
+			// the origin could not be reached: try again soon, but never past the deadline
+			retry := time.Duration(1) * c.cfg.Unit / 4
+			l.mu.Lock()
+			l.renewAt = c.cfg.Now().Add(retry)
+			l.mu.Unlock()
+		}
+	}
+}
