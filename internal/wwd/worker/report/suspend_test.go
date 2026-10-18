@@ -45,7 +45,7 @@ func TestARunWhoseUnitWasNotProvenStoppedIsReleasedAsInfra(t *testing.T) {
 		require.Len(t, h.s.releases, 1, c.name)
 		assert.Equal(t, wire.ReleaseInfra, h.s.releases[0].Reason, c.name)
 		assert.Contains(t, h.s.releases[0].Detail, "not proven stopped", c.name)
-		assert.True(t, h.r.Suspended("purdex"), c.name+": the repo is held off")
+		assert.True(t, h.r.Suspended("mlab", "purdex"), c.name+": the repo is held off")
 	}
 }
 
@@ -54,7 +54,7 @@ func TestALostJobWithAnErrIsStillDropped(t *testing.T) {
 	h := newHarness(t, Config{})
 	h.fin(context.Background(), endedOf("purdex", runner.KindLost, run.Result{Outcome: run.Exited, Err: errors.New("x")}))
 	assert.Empty(t, h.s.calls)
-	assert.False(t, h.r.Suspended("purdex"))
+	assert.False(t, h.r.Suspended("mlab", "purdex"))
 }
 
 // Only the sandbox's unit says OOM (Linux). A KILL signal alone is not one: on macOS, where the reason is always empty, it is a plain
@@ -76,25 +76,41 @@ func TestOnlyTheUnitsWordIsAnOOM(t *testing.T) {
 // An infra release holds the repo off for SuspendFor from then, by the clock; nothing else does.
 func TestAnInfraReleaseSuspendsTheRepoForFiveMinutes(t *testing.T) {
 	h := newHarness(t, Config{})
-	assert.False(t, h.r.Suspended("purdex"))
+	assert.False(t, h.r.Suspended("mlab", "purdex"))
 	e := endedOf("purdex", runner.KindInfra, run.Result{})
 	e.Err = errors.New("no space")
 	h.fin(context.Background(), e)
-	assert.True(t, h.r.Suspended("purdex"))
-	assert.False(t, h.r.Suspended("aigora"), "another repo")
+	assert.True(t, h.r.Suspended("mlab", "purdex"))
+	assert.False(t, h.r.Suspended("mlab", "aigora"), "another repo")
 	h.now = h.now.Add(5*time.Minute - time.Second)
-	assert.True(t, h.r.Suspended("purdex"))
+	assert.True(t, h.r.Suspended("mlab", "purdex"))
 	h.now = h.now.Add(time.Second)
-	assert.False(t, h.r.Suspended("purdex"), "the hold ends after five minutes")
+	assert.False(t, h.r.Suspended("mlab", "purdex"), "the hold ends after five minutes")
 	assert.Empty(t, h.r.suspended, "an ended hold is forgotten")
+}
+
+// The hold is on an origin's repo: another origin's repo of the same name is not held off, and the origin that made it is not forgiven
+// by the name.
+func TestTheHoldIsPerOriginAndRepo(t *testing.T) {
+	h := newHarness(t, Config{})
+	e := endedOf("purdex", runner.KindInfra, run.Result{})
+	e.Source, e.Err = "evil", errors.New("bad snapshot")
+	h.fin(context.Background(), e)
+	assert.True(t, h.r.Suspended("evil", "purdex"))
+	assert.False(t, h.r.Suspended("mlab", "purdex"), "another origin's repo of the same name")
+	assert.False(t, h.r.Suspended("evil", "aigora"), "another repo of the same origin")
+	h.now = h.now.Add(4 * time.Minute)
+	h.fin(context.Background(), e) // again: the hold is renewed from now
+	h.now = h.now.Add(2 * time.Minute)
+	assert.True(t, h.r.Suspended("evil", "purdex"))
 }
 
 func TestSuspendForCanBeSet(t *testing.T) {
 	h := newHarness(t, Config{SuspendFor: time.Minute})
 	h.fin(context.Background(), endedOf("purdex", runner.KindRan, run.Result{Outcome: run.StartFailed, Err: errors.New("pnpm: not found")}))
-	assert.True(t, h.r.Suspended("purdex"))
+	assert.True(t, h.r.Suspended("mlab", "purdex"))
 	h.now = h.now.Add(time.Minute)
-	assert.False(t, h.r.Suspended("purdex"))
+	assert.False(t, h.r.Suspended("mlab", "purdex"))
 }
 
 // A release for a shutdown or a result of any kind does not hold a repo off; a release the origin will not take still does (this host
@@ -105,14 +121,14 @@ func TestOnlyAnInfraFailureSuspends(t *testing.T) {
 	h.fin(context.Background(), endedOf("purdex", runner.KindRan, run.Result{Outcome: run.Exited, ExitCode: 1}))
 	h.fin(context.Background(), endedOf("purdex", runner.KindCancelled, run.Result{}))
 	h.fin(context.Background(), endedOf("purdex", runner.KindRejected, run.Result{}))
-	assert.False(t, h.r.Suspended("purdex"))
+	assert.False(t, h.r.Suspended("mlab", "purdex"))
 
 	h = newHarness(t, Config{})
 	h.s.errs = []error{runner.ErrNotFound}
 	e := endedOf("purdex", runner.KindInfra, run.Result{})
 	e.Err = errors.New("x")
 	h.fin(context.Background(), e)
-	assert.True(t, h.r.Suspended("purdex"), "the origin did not take the release")
+	assert.True(t, h.r.Suspended("mlab", "purdex"), "the origin did not take the release")
 }
 
 // fakeJob is a job the worker holds.

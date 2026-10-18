@@ -28,8 +28,10 @@ type Env struct {
 	Locked      func(keys []string) bool
 	// Warm: the repo clone and the dependency cache are on this host. A missing clone is not a reason to skip a job: the workspace then
 	// comes from the origin's tar (spec 5 Workspace), so a clone only earns warm_bonus.
-	Warm      func(wire.Job) bool
-	Suspended func(repo string) bool
+	Warm func(wire.Job) bool
+	// Suspended: this host could not run a job of this repo from this origin a moment ago (an infrastructure failure), so its jobs are
+	// skipped for a while. The origin is part of the key: one origin cannot make the host skip another origin's repo of the same name.
+	Suspended func(source, repo string) bool
 }
 
 // Scored is a claimable job with its score.
@@ -113,7 +115,7 @@ func Rank(cands []Candidate, env Env) []Scored {
 		if env.Locked != nil && env.Locked(j.Locks) {
 			continue
 		}
-		if env.Suspended != nil && env.Suspended(j.Repo.Name) {
+		if env.Suspended != nil && env.Suspended(c.Source, j.Repo.Name) {
 			continue
 		}
 		if j.Manual == wire.PositionHold {

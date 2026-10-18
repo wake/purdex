@@ -55,12 +55,15 @@ type Config struct {
 	Logf    func(format string, args ...any)
 }
 
+// repoKey is a repo of an origin: the repo name is the same across hosts, so it alone would let one origin hold off another's.
+type repoKey struct{ source, repo string }
+
 // Reporter delivers the outcome of jobs.
 type Reporter struct {
 	cfg Config
 
 	mu        sync.Mutex
-	suspended map[string]time.Time // repo name -> when the hold ends
+	suspended map[repoKey]time.Time // an origin's repo -> when the hold ends
 }
 
 // New returns a Reporter.
@@ -89,7 +92,7 @@ func New(cfg Config) *Reporter {
 	if cfg.Logf == nil {
 		cfg.Logf = log.Printf
 	}
-	return &Reporter{cfg: cfg, suspended: map[string]time.Time{}}
+	return &Reporter{cfg: cfg, suspended: map[repoKey]time.Time{}}
 }
 
 func wait(ctx context.Context, d time.Duration) error {
@@ -277,7 +280,7 @@ func (r *Reporter) putLog(ctx context.Context, sink Sink, e runner.Ended, open f
 // release gives the claim back. why is told to the origin as the detail.
 func (r *Reporter) release(ctx context.Context, sink Sink, e runner.Ended, reason wire.ReleaseReason, why error) {
 	if reason == wire.ReleaseInfra {
-		r.suspend(e.Job.Repo.Name) // whether or not the origin takes the release: this host cannot run this repo now
+		r.suspend(e.Source, e.Job.Repo.Name) // whether or not the origin takes the release: this host cannot run this repo now
 	}
 	req := wire.ReleaseRequest{ClaimID: e.ClaimID, Reason: reason}
 	if why != nil {
@@ -337,27 +340,29 @@ func (r *Reporter) retryFor(ctx context.Context, e runner.Ended, what string, bo
 	}
 }
 
-// suspend holds a repo off for SuspendFor from now.
-func (r *Reporter) suspend(repo string) {
+// suspend holds a repo of an origin off for SuspendFor from now.
+func (r *Reporter) suspend(source, repo string) {
 	if repo == "" {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.suspended[repo] = r.cfg.Now().Add(r.cfg.SuspendFor)
+	r.suspended[repoKey{source, repo}] = r.cfg.Now().Add(r.cfg.SuspendFor)
 }
 
-// Suspended says whether the worker must not pick jobs of repo now: a job of it ended in an infrastructure failure less than
-// SuspendFor ago. It is pick.Env.Suspended.
-func (r *Reporter) Suspended(repo string) bool {
+// Suspended says whether the worker must not pick jobs of repo from source now: a job of it ended in an infrastructure failure less
+// than SuspendFor ago. It is pick.Env.Suspended. The origin is in the key, so an origin that makes jobs fail cannot hold off another
+// origin's repo of the same name; a host that really cannot run a repo fails once per origin before it stops trying them all.
+func (r *Reporter) Suspended(source, repo string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	until, ok := r.suspended[repo]
+	k := repoKey{source, repo}
+	until, ok := r.suspended[k]
 	if !ok {
 		return false
 	}
 	if !r.cfg.Now().Before(until) {
-		delete(r.suspended, repo)
+		delete(r.suspended, k)
 		return false
 	}
 	return true
