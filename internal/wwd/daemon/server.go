@@ -51,6 +51,8 @@ type Options struct {
 	RepoSource func() []string
 	// Observer is this host's observation records (spec 8.4); the observation routes serve from it. nil: they are not registered.
 	Observer *Observer
+	// Alerts is the store of this host's alerts (spec §13.3); GET /v1/alerts serves from it. nil: the route is not registered.
+	Alerts AlertStore
 	// Usage is the store of finished jobs' usage; GET /v1/usage serves from it on the local socket. nil: the route is not registered.
 	Usage UsageStore
 	// Now is the clock the observation and usage routes take their default periods from. nil: time.Now.
@@ -98,6 +100,7 @@ func (d *Daemon) routes(mux *http.ServeMux, peer bool) {
 	d.workerRoutes(mux, peer)
 	d.jobRoutes(mux, peer)
 	d.observeRoutes(mux, peer)
+	d.alertsRoutes(mux, peer)
 }
 
 // jobRoutes registers the job reads and cancel (spec 4.4) on both surfaces, from the process's one queue; a peer's view leaves out the

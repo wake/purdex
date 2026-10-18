@@ -392,6 +392,11 @@ func (m *Module) handleSend(w http.ResponseWriter, r *http.Request) {
 			LineageUnavailable:    local.LineageUnavailable,
 			ExecutionsUnavailable: local.ExecutionsUnavailable,
 		}
+		var aliasesOK bool
+		rsnap.Aliases, rsnap.AliasSessions, aliasesOK = m.aliasMap(r.Context())
+		if !aliasesOK { // without the alias table a miss proves nothing: not_ready, never a fallback to a tmux name
+			rsnap.Partial = true
+		}
 	} else {
 		remoteRefused := func(text string) {
 			writeWireError(w, http.StatusBadGateway, ipeers.APIError{

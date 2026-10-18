@@ -18,7 +18,7 @@ import { hostLabel, hostLookOf } from '../lib/host-look'
 import { shownValue, useRelayQuotaStore } from '../lib/team/relay-quota'
 import { setQuota } from '../lib/team/relay-quota-writer'
 import { setMaxMembers, teamKey, useMaxMembersStore } from '../lib/team/max-members'
-import { MAX_MEMBERS_MAX, MAX_MEMBERS_MIN, type RelayQuotaField, type SessionQuota } from '../lib/team/types'
+import { maxMembersMax, MAX_MEMBERS_MIN, type RelayQuotaField, type SessionQuota } from '../lib/team/types'
 import type { TeamRoster } from '../lib/team/roster'
 import { leadNameBySession, type LeadName } from '../lib/team/lead-name'
 import { addressName } from '../lib/names/seat'
@@ -106,6 +106,7 @@ function CapStepper({ hostId, team, label }: { hostId: string; team: TeamRoster;
   const value = team.max_members as number
   const inUse = team.in_use as number
   const write = (next: number) => { void setMaxMembers({ hostId, teamId: team.id, label }, next) }
+  const max = maxMembersMax(useUnattendedStore((s) => s.byHost[hostId]?.maxMembersV2Support === 'yes')) // 9 against team.max_members.v2, else 8
   // why − is off: the daemon will not take the cap below the members in use (409 max_below_in_use), nor below 1
   const floor = Math.max(MAX_MEMBERS_MIN, inUse)
   const minusReason = value <= inUse ? t('unattended.cap.minus_in_use', { n: String(inUse) }) : t('unattended.cap.minus_min', { n: String(MAX_MEMBERS_MIN) })
@@ -115,12 +116,12 @@ function CapStepper({ hostId, team, label }: { hostId: string; team: TeamRoster;
       <StepButton sign="−" label={t('unattended.cap.minus')} disabled={busy || value <= floor} reason={busy ? undefined : minusReason} onClick={() => write(value - 1)} />
       <NumberField
         testId="cap-value" ariaLabel={t('unattended.cap.label')} value={value} disabled={busy}
-        validate={(n) => (n < MAX_MEMBERS_MIN || n > MAX_MEMBERS_MAX
-          ? t('unattended.field.range', { min: String(MAX_MEMBERS_MIN), max: String(MAX_MEMBERS_MAX) })
+        validate={(n) => (n < MAX_MEMBERS_MIN || n > max
+          ? t('unattended.field.range', { min: String(MAX_MEMBERS_MIN), max: String(max) })
           : n < inUse ? t('unattended.cap.below', { n: String(inUse) }) : null)}
         onCommit={write}
       />
-      <StepButton sign="+" label={t('unattended.cap.plus')} disabled={busy || value >= MAX_MEMBERS_MAX} reason={busy ? undefined : t('unattended.cap.plus_max', { n: String(MAX_MEMBERS_MAX) })} onClick={() => write(value + 1)} />
+      <StepButton sign="+" label={t('unattended.cap.plus')} disabled={busy || value >= max} reason={busy ? undefined : t('unattended.cap.plus_max', { n: String(max) })} onClick={() => write(value + 1)} />
     </span>
   )
 }
@@ -174,7 +175,7 @@ export function UnattendedQuotaSection({ hosts, headings }: UnattendedQuotaSecti
                     {(() => {
                       // the lead's team directories, a full-width line under the row (only when the daemon reports `roots`)
                       const team = r.is_lead ? rosters[h.hostId]?.find((x) => x.lead.session_id === r.session_id) : undefined
-                      return team?.roots !== undefined && team.roots_rev !== undefined ? <TeamRootsEditor hostId={h.hostId} team={team} /> : null
+                      return team?.roots !== undefined && team.roots_rev !== undefined ? <div className="col-span-full mb-1 pl-3"><TeamRootsEditor hostId={h.hostId} team={team} /></div> : null
                     })()}
                   </li>
                 )})}

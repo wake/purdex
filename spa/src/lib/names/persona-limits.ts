@@ -7,6 +7,8 @@ export const PERSONA_LIMITS = {
   personality: 50,
   method: 50,
   interests: 10,
+  /** Each of nationality.code/zh/en and template.name/name_zh/field_zh/field_en, in runes. */
+  shortText: 200,
   /** `avatar_data` as a string. */
   avatarData: 32 * 1024,
   /** The avatar recipe serialised. */
@@ -60,6 +62,15 @@ export function validatePersona(p: Persona): PersonaIssue[] {
         out.push({ field: `${key}.${lang}`, message: `${key} (${lang}) is over ${PERSONA_LIMITS[key]}` })
       }
     }
+  }
+  // The daemon counts these seven texts in runes, 200 each (hostconfig/personas.go, maxPersonaShortText).
+  const shortTexts: [string, string][] = [
+    ['nationality.code', p.nationality.code], ['nationality.zh', p.nationality.zh], ['nationality.en', p.nationality.en],
+    ['template.name', p.template.name], ['template.name_zh', p.template.name_zh],
+    ['template.field_zh', p.template.field_zh], ['template.field_en', p.template.field_en],
+  ]
+  for (const [field, value] of shortTexts) {
+    if (Array.from(value).length > PERSONA_LIMITS.shortText) out.push({ field, message: `over ${PERSONA_LIMITS.shortText} characters` })
   }
   if (p.avatar_data !== '' && !avatarDataOk(p.avatar_data)) {
     out.push({ field: 'avatar_data', message: 'avatar image must be a webp/png/jpeg data URL of at most 32 KB' })

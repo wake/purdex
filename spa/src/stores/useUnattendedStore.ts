@@ -27,14 +27,16 @@ export interface UnattendedHostEntry {
   personSupport?: UnattendedSupport
   /** The host lists `conversations.stages.v1`: its daemon reports where each sent message is (the Deck's send queue reads that, not the text). */
   stagesSupport?: UnattendedSupport
+  /** The host lists `team.max_members.v2`: the cap may go to 9 (name pool v2 spec §5.1). */
+  maxMembersV2Support?: UnattendedSupport
   /** Absent until the daemon's snapshot arrived. */
   state?: UnattendedState
 }
 
 /** The host's capability flags: all of them follow one rule (unknown on disconnect / before a probe / after a failed probe). */
-const SUPPORT_FLAGS = ['support', 'quotaSupport', 'maxMembersSupport', 'editSupport', 'pauseSupport', 'unansweredSupport', 'personSupport', 'stagesSupport'] as const
+const SUPPORT_FLAGS = ['support', 'quotaSupport', 'maxMembersSupport', 'editSupport', 'pauseSupport', 'unansweredSupport', 'personSupport', 'stagesSupport', 'maxMembersV2Support'] as const
 /** Only the probe answers these; `support` is also proven by a `team.unattended` frame (unattended-ws.ts). */
-export const PROBE_ONLY_FLAGS = ['quotaSupport', 'maxMembersSupport', 'editSupport', 'pauseSupport', 'unansweredSupport', 'personSupport', 'stagesSupport'] as const
+export const PROBE_ONLY_FLAGS = ['quotaSupport', 'maxMembersSupport', 'editSupport', 'pauseSupport', 'unansweredSupport', 'personSupport', 'stagesSupport', 'maxMembersV2Support'] as const
 export type SupportFlag = (typeof SUPPORT_FLAGS)[number]
 
 interface UnattendedStoreState {
@@ -47,6 +49,7 @@ interface UnattendedStoreState {
   setUnansweredSupport: (hostId: string, support: UnattendedSupport) => void
   setPersonSupport: (hostId: string, support: UnattendedSupport) => void
   setStagesSupport: (hostId: string, support: UnattendedSupport) => void
+  setMaxMembersV2Support: (hostId: string, support: UnattendedSupport) => void
   /** Every capability flag of the host (unattended, relay quota, max members, edit) is unknown again: the connection they were
    *  learned on is gone, and a daemon that came back may have lost one (#2309). A no-op for a flag never learned. */
   invalidateSupport: (hostId: string, flags?: readonly SupportFlag[]) => void
@@ -95,6 +98,11 @@ export const useUnattendedStore = create<UnattendedStoreState>()((set) => ({
     const cur = s.byHost[hostId]
     if (cur?.unansweredSupport === unansweredSupport) return s
     return { byHost: { ...s.byHost, [hostId]: { ...cur, support: cur?.support ?? 'unknown', unansweredSupport } } }
+  }),
+  setMaxMembersV2Support: (hostId, maxMembersV2Support) => set((s) => {
+    const cur = s.byHost[hostId]
+    if (cur?.maxMembersV2Support === maxMembersV2Support) return s
+    return { byHost: { ...s.byHost, [hostId]: { ...cur, support: cur?.support ?? 'unknown', maxMembersV2Support } } }
   }),
   setStagesSupport: (hostId, stagesSupport) => set((s) => {
     const cur = s.byHost[hostId]

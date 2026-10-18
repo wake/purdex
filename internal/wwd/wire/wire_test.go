@@ -224,7 +224,7 @@ func TestDecodeRejectsBadEnums(t *testing.T) {
 	if _, err := Decode[Facts](replaceIn(t, "facts_darwin.json", `"kind": "job"`, `"kind": "bogus"`)); err == nil {
 		t.Fatal("bad owner kind")
 	}
-	if _, err := Decode[Facts](replaceIn(t, "facts_darwin.json", `"v": 1`, `"v": 2`)); err == nil {
+	if _, err := Decode[Facts](replaceIn(t, "facts_darwin.json", `"v": 1`, `"v": 3`)); err == nil {
 		t.Fatal("bad v")
 	}
 	if _, err := Decode[Job](replaceIn(t, "job_queued.json", `"class": "merge"`, `"class": "urgent"`)); err == nil {
@@ -310,7 +310,7 @@ func TestClaimID(t *testing.T) {
 }
 
 func TestConstants(t *testing.T) {
-	if Proto != 1 || LeaseS != 60 || RenewS != 15 || Port != 7871 {
+	if Proto != 2 || MinProto != 1 || LeaseS != 60 || RenewS != 15 || Port != 7871 {
 		t.Fatal("constants changed")
 	}
 }

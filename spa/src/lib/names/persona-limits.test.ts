@@ -42,6 +42,25 @@ describe('validatePersona', () => {
     expect(validatePersona(interests).map((i) => i.field)).toEqual(['interests.zh', 'interests.en'])
   })
 
+  it('checks each nationality and template text against 200 runes, as the daemon does', () => {
+    const at = (n: number) => '字'.repeat(n)
+    expect(validatePersona(makePersona('hiro', { nationality: { code: 'JP', zh: at(200), en: 'x'.repeat(200) } }))).toEqual([])
+    const over = makePersona('hiro', {
+      nationality: { code: at(201), zh: at(201), en: at(201) },
+      template: { name: at(201), name_zh: at(201), field_zh: at(201), field_en: at(201) },
+    })
+    expect(validatePersona(over).map((i) => i.field)).toEqual([
+      'nationality.code', 'nationality.zh', 'nationality.en',
+      'template.name', 'template.name_zh', 'template.field_zh', 'template.field_en',
+    ])
+  })
+
+  it('counts runes, not UTF-16 units, for those texts', () => {
+    const emoji = '😀'.repeat(200) // 400 UTF-16 units, 200 runes
+    expect(validatePersona(makePersona('hiro', { nationality: { code: '', zh: emoji, en: '' } }))).toEqual([])
+    expect(validatePersona(makePersona('hiro', { nationality: { code: '', zh: emoji + '😀', en: '' } })).map((i) => i.field)).toEqual(['nationality.zh'])
+  })
+
   it('checks the stored avatar: type, and 32 KB as a string', () => {
     expect(fields(makePersona('hiro', { avatar_data: 'http://x/y.png' }))).toContain('avatar_data')
     expect(fields(makePersona('hiro', { avatar_data: 'data:image/webp;base64,' + 'A'.repeat(PERSONA_LIMITS.avatarData) }))).toContain('avatar_data')

@@ -192,8 +192,10 @@ sync mechanisms. Nothing of NP-2 merged. The text below is kept only as a record
   - `ResolveSnapshot` gains `Aliases map[string]string` (full alias name → ref).
   - `Resolve` (`address.go:182`) checks it after tier 1 misses (`:321-333`) and goes on with that ref through
     `resolveRefHead`. The combined form's bracket check accepts a name found in the map for that ref.
-  - `send.go:451`, the only production caller, fills the map from `PeerNameStore.Aliases()`. The map is cached in the
-    module and dropped on every rename or alias change.
+  - `send.go:451`, the only production caller, fills the map from `PeerNameStore.Aliases()` for a local target, and
+    `AliasSessions` beside it (alias → session id, for the combined form). **Read on every local send, not cached**
+    (decided in NP-3a: at most a few hundred rows, a send is rare beside a rename, and a cache would need dropping on
+    every rename path). A read that fails sets `Partial`, so a miss is `not_ready`.
   - Tests at both levels: `Resolve` (a pure table test) and a send through `send.go` to an alias.
 - The rules (spec §6.2) live in `internal/module/peers/namerules.go` as pure functions over `(free, history, personas)`,
   with table tests. `assignPooled` uses rule 3.

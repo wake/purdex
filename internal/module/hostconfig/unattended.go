@@ -2,6 +2,7 @@ package hostconfig
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +27,68 @@ const UnattendedKey = "hostconfig.unattended"
 // unattendedRetries bounds SetUnattended's CAS: a write that lost the race
 // re-reads and tries again at most this many times, then errors.
 const unattendedRetries = 3
+
+// maxUnattendedEvents is how many on/off records are kept: the newest.
+const maxUnattendedEvents = 100
+
+// recordUnattendedEvent inserts the record of one change in the transaction of the switch's write and trims the table to the
+// newest maxUnattendedEvents. Only the client's kind and label are kept, not its address.
+func recordUnattendedEvent(q Execer, at int64, on bool, by team.Client) error {
+	byJSON, err := json.Marshal(team.Client{Kind: by.Kind, Label: by.Label})
+	if err != nil {
+		return err
+	}
+	onInt := 0
+	if on {
+		onInt = 1
+	}
+	ctx := context.Background()
+	if _, err := q.ExecContext(ctx, `INSERT INTO unattended_events (at, enabled, by_json) VALUES (?, ?, ?)`, at, onInt, string(byJSON)); err != nil {
+		return fmt.Errorf("record the unattended change: %w", err)
+	}
+	if _, err := q.ExecContext(ctx, `DELETE FROM unattended_events WHERE id NOT IN (SELECT id FROM unattended_events ORDER BY id DESC LIMIT ?)`, maxUnattendedEvents); err != nil {
+		return fmt.Errorf("trim the unattended record: %w", err)
+	}
+	return nil
+}
+
+// UnattendedEvents implements team.UnattendedEventLister: the newest limit records, newest first. A row whose client does not
+// read is left out (a hand edit; nothing writes one).
+func (m *Module) UnattendedEvents(limit int) ([]team.UnattendedToggle, error) {
+	if limit < 1 {
+		return nil, fmt.Errorf("limit %d is not positive", limit)
+	}
+	rows, err := m.store.db.Query(`SELECT id, at, enabled, by_json FROM unattended_events ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []team.UnattendedToggle{}
+	for rows.Next() {
+		var id int64
+		var t team.UnattendedToggle
+		var on int
+		var by string
+		if err := rows.Scan(&id, &t.At, &on, &by); err != nil {
+			return nil, err
+		}
+		t.On = on != 0
+		// A damaged row is left out, not allowed to take the list down (it is a display), and not left out silently either: the
+		// log names its id so it can be found and repaired. A client without a kind or a label is damaged too.
+		if err := json.Unmarshal([]byte(by), &t.By); err != nil {
+			log.Printf("[hostconfig] unattended event %d is damaged, left out of the list: %v", id, err)
+			continue
+		}
+		if blank(t.By.Kind) || blank(t.By.Label) {
+			log.Printf("[hostconfig] unattended event %d is damaged, left out of the list: the client has no kind or no label", id)
+			continue
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+var _ team.UnattendedEventLister = (*Module)(nil)
 
 // UnattendedStore is what the team module type-asserts on the registry value.
 type UnattendedStore interface {
@@ -137,7 +200,10 @@ func (m *Module) SetUnattended(on bool, by team.Client, now int64) (team.Unatten
 		if m.beforeUnattendedPut != nil {
 			m.beforeUnattendedPut() // test seam: another writer between the read and the CAS
 		}
-		stored, ok, err := m.store.Put(KeyUnattended, e.Revision, func(Entry) (json.RawMessage, error) { return value, nil })
+		// The record of the change commits with the change (name pool v2 spec §8): a record that cannot be written leaves the
+		// switch where it was, and a write that lost the race leaves no record.
+		stored, ok, err := m.store.PutWith(KeyUnattended, e.Revision, func(Entry) (json.RawMessage, error) { return value, nil },
+			func(q Execer) error { return recordUnattendedEvent(q, now, on, by) })
 		if err != nil {
 			return team.UnattendedState{}, false, err
 		}

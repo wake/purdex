@@ -8,6 +8,7 @@ import { useApprovalStore } from '../stores/useApprovalStore'
 import { useHostStore } from '../stores/useHostStore'
 import { useI18nStore } from '../stores/useI18nStore'
 import { useUndoToast } from '../stores/useUndoToast'
+import { useUnattendedStore } from '../stores/useUnattendedStore'
 import { decideApproval } from '../lib/team/approval-api'
 import { __resetClientDescriptorForTests } from '../lib/team/client-label'
 import type { Approval } from '../lib/team/types'
@@ -32,6 +33,7 @@ const note = () => screen.queryByTestId('approval-max-members-requested')
 beforeEach(() => {
   useI18nStore.getState().setLocale('zh-TW')
   useApprovalStore.getState().reset()
+  useUnattendedStore.getState().reset()
   useHostStore.setState({
     hosts: { [H]: { id: H, name: 'mlab', ip: '1.2.3.4', port: 7860, order: 0 } },
     hostOrder: [H],
@@ -123,3 +125,29 @@ describe('ApprovalDialogHost member limit (U25)', () => {
     expect(field()).not.toHaveAttribute('aria-describedby')
   })
 })
+
+describe('the ceiling follows the host (name pool v2 §5.1)', () => {
+  it('a v1 host: 8 at most — a request of 9 shows as 8, the field takes 8 and refuses 9, and the label says 1–8', () => {
+    render(<ApprovalDialogHost />)
+    open(lead({ max_members: 9 }))
+    expect(note()?.textContent).toBe('lead 申請 8 個')
+    expect(field().max).toBe('8')
+    fireEvent.change(field(), { target: { value: '9' } })
+    expect(screen.getByTestId('approval-max-members-error')).toHaveTextContent('1 到 8')
+    expect(screen.getByText('member 上限（1–8）')).toBeInTheDocument()
+  })
+
+  it('a host with team.max_members.v2: 9 — a request of 9 is shown as 9, the field takes 9 and refuses 10, and the label says 1–9', () => {
+    act(() => { useUnattendedStore.getState().setMaxMembersV2Support(H, 'yes') })
+    render(<ApprovalDialogHost />)
+    open(lead({ max_members: 9 }))
+    expect(note()?.textContent).toBe('lead 申請 9 個')
+    expect(field().max).toBe('9')
+    fireEvent.change(field(), { target: { value: '9' } })
+    expect(screen.queryByTestId('approval-max-members-error')).toBeNull()
+    fireEvent.change(field(), { target: { value: '10' } })
+    expect(screen.getByTestId('approval-max-members-error')).toHaveTextContent('1 到 9')
+    expect(screen.getByText('member 上限（1–9）')).toBeInTheDocument()
+  })
+})
+

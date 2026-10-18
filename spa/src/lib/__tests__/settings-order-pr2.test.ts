@@ -21,6 +21,7 @@ import { SETTINGS_ORDER } from '../settings-order'
 //   terminal(1)
 //   interface(2)
 //   profile(3)              — Profile Sync P3d-2: the last of the core band
+//   personas(4)             — name pool v2: the names and faces agents are shown with
 //   electron(5)             — always on since browser convergence batch 4a
 //   module-config(10)
 //   browser(11)
@@ -63,6 +64,7 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
       { id: 'terminal',            order: SETTINGS_ORDER.TERMINAL },                    // 1
       { id: 'interface',           order: SETTINGS_ORDER.INTERFACE },                   // 2
       { id: 'profile',             order: SETTINGS_ORDER.PROFILE },                     // 3
+      { id: 'personas',            order: SETTINGS_ORDER.PERSONAS },                    // 4
       { id: 'electron',            order: SETTINGS_ORDER.ELECTRON },                    // 5
       { id: 'module-config',       order: SETTINGS_ORDER.MODULE_CONFIG },               // 10
       { id: 'browser',             order: SETTINGS_ORDER.MODULE_BROWSER },              // 11
@@ -74,7 +76,7 @@ describe('PR-2 final sidebar order (spec §4.1.3)', () => {
     // Step 2: any entry not in the always-on list must be one of the
     // explicitly allowed gated ids — nothing else.
     const expectedAlwaysOnIds = new Set([
-      'appearance', 'terminal', 'interface', 'profile', 'electron', 'module-config',
+      'appearance', 'terminal', 'interface', 'profile', 'personas', 'electron', 'module-config',
       'browser', 'editor',
       'performance-monitor', 'worker',
     ])
