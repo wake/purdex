@@ -34,6 +34,7 @@ import (
 	hostconfigmod "github.com/wake/purdex/internal/module/hostconfig"
 	hosttransfermod "github.com/wake/purdex/internal/module/hosttransfer"
 	jobnotifymod "github.com/wake/purdex/internal/module/jobnotify"
+	jobsmod "github.com/wake/purdex/internal/module/jobs"
 	"github.com/wake/purdex/internal/module/logs"
 	modeventsmod "github.com/wake/purdex/internal/module/modevents"
 	"github.com/wake/purdex/internal/module/monitor"
@@ -478,6 +479,7 @@ func registerServeModules(c *core.Core, meta *store.MetaStore, agentEvents *stor
 	c.AddModule(watchmod.New())
 	c.AddModule(gatemod.New()) // the gate's decision history (A1)
 	c.AddModule(poolmod.New()) // the resource pool, read from the local wwd (WWD-2a)
+	c.AddModule(jobsmod.New()) // the pool's jobs, read from the local wwd (WWD-2e)
 	c.AddModule(assistmod.New())
 	c.AddModule(jobnotifymod.New()) // tells a job's submitter when it ends (WWD-3f)
 	c.AddModule(fleetmod.New())     // the fleet status: primary / standby roles (F-1b2)
