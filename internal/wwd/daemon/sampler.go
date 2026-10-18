@@ -288,11 +288,30 @@ func mergeMinutes(sources ...[]wire.Facts) []wire.Facts {
 	return out
 }
 
-// Latest is the newest record.
+// Latest is the newest record, in the shape the proto 2 gate allows now (see Shaped): the gate may have shut since the last tick.
 func (s *Sampler) Latest() (wire.Facts, bool) {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.ring.Last()
+	f, ok := s.ring.Last()
+	s.mu.RUnlock()
+	if !ok {
+		return f, false
+	}
+	return s.Shaped(f), true
+}
+
+// Shaped is f in the shape the gate allows now: while the gate is shut a record written while it was open (v 2, with the new fields)
+// is handed out as v1, on a copy, so the ring and the store keep what they were written as. Records already in v1 shape come back
+// unchanged without a copy.
+func (s *Sampler) Shaped(f wire.Facts) wire.Facts {
+	if s.opts.SignalsOpen != nil && s.opts.SignalsOpen() {
+		return f
+	}
+	if f.V == wire.WriteProto && f.Mem.DecompressRate == nil && f.Queue == nil {
+		return f
+	}
+	f = facts.Clone(f)
+	f.V, f.Mem.DecompressRate, f.Queue = wire.WriteProto, nil, nil
+	return f
 }
 
 // History returns the records at or after since: the 5 s ring (the last hour)
@@ -301,14 +320,8 @@ func (s *Sampler) Latest() (wire.Facts, bool) {
 // those read back from wwd.db after a restart: a proto 1 reader refuses the whole answer on one field it does not know.
 func (s *Sampler) History(since time.Time, step string) []wire.Facts {
 	recs := s.history(since, step)
-	if s.opts.SignalsOpen != nil && s.opts.SignalsOpen() {
-		return recs
-	}
 	for i := range recs {
-		if recs[i].V != wire.WriteProto || recs[i].Mem.DecompressRate != nil || recs[i].Queue != nil {
-			recs[i] = facts.Clone(recs[i]) // a copy: the ring and the store keep what they were written as
-			recs[i].V, recs[i].Mem.DecompressRate, recs[i].Queue = wire.WriteProto, nil, nil
-		}
+		recs[i] = s.Shaped(recs[i])
 	}
 	return recs
 }

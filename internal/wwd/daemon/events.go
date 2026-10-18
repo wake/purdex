@@ -34,6 +34,10 @@ type Broker struct {
 	mu     sync.Mutex
 	subs   map[*subscriber]struct{}
 	latest *wire.Event // the last facts event: a new subscriber starts with it
+	// latestFacts is the record behind latest, and shape (set by the daemon from the sampler) the gate's view of it: a stream that
+	// opens after the proto 2 gate shut must not start with the v 2 record cached before.
+	latestFacts wire.Facts
+	shape       func(wire.Facts) wire.Facts
 	// latestLabels is the last labels event, sent right after the facts: a stream
 	// that opens or reopens later still learns the current labels, which would
 	// otherwise reach it only with the next change.
@@ -41,6 +45,13 @@ type Broker struct {
 }
 
 func NewBroker() *Broker { return &Broker{subs: map[*subscriber]struct{}{}} }
+
+// SetShape sets the function a stream's first facts event goes through (Sampler.Shaped); nil: the cached record as published.
+func (b *Broker) SetShape(fn func(wire.Facts) wire.Facts) {
+	b.mu.Lock()
+	b.shape = fn
+	b.mu.Unlock()
+}
 
 // Subscribe returns the event channel and its cancel. peer marks a TCP reader.
 // The channel starts with the latest facts event (if any), taken under the same
@@ -65,7 +76,13 @@ func (b *Broker) subscribe(peer, capped bool) (<-chan wire.Event, func(), bool) 
 		return nil, nil, false
 	}
 	if b.latest != nil {
-		s.ch <- *b.latest
+		first := *b.latest
+		if b.shape != nil {
+			if e, ok := envelope(wire.EventFacts, b.shape(b.latestFacts)); ok {
+				first = e
+			}
+		}
+		s.ch <- first
 	}
 	if b.latestLabels != nil {
 		s.ch <- *b.latestLabels
@@ -117,7 +134,7 @@ func (b *Broker) PublishFacts(f wire.Facts) {
 	if e, ok := envelope(wire.EventFacts, f); ok {
 		b.mu.Lock() // remembering it and fanning it out are one step, or a subscriber could get it twice
 		defer b.mu.Unlock()
-		b.latest = &e
+		b.latest, b.latestFacts = &e, f
 		b.fanOutLocked(e, false)
 	}
 }
