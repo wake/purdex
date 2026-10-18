@@ -139,6 +139,14 @@ func (b *Broker) PublishFacts(f wire.Facts) {
 	}
 }
 
+// PublishAlert announces that host's alert list changed (spec §13.3). It is a hint: it is not cached for a later subscriber, who reads
+// the list when it starts, and it goes to every subscriber, peers included (an alert is not local-only like an ad-hoc job).
+func (b *Broker) PublishAlert(host string) {
+	if e, ok := envelope(wire.EventAlert, wire.AlertEvent{Host: host}); ok {
+		b.publish(e, false)
+	}
+}
+
 // PublishJob announces a job state change. It never blocks and must not call
 // back into the queue (the queue calls it while it holds its own locks).
 func (b *Broker) PublishJob(ev wire.JobEvent) {
