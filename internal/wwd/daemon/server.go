@@ -19,6 +19,7 @@ import (
 	"github.com/wake/purdex/internal/wwd/labels"
 	"github.com/wake/purdex/internal/wwd/localruns"
 	"github.com/wake/purdex/internal/wwd/queue"
+	"github.com/wake/purdex/internal/wwd/snapshot"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -100,6 +101,12 @@ func (d *Daemon) jobRoutes(mux *http.ServeMux, peer bool) {
 	mux.HandleFunc("GET /v1/jobs/{id}", d.viaHost(peer, a.Get(peer)))
 	mux.HandleFunc("GET /v1/jobs/{id}/log", d.viaHost(peer, a.Log(peer)))
 	mux.HandleFunc("POST /v1/jobs/{id}/cancel", d.viaHost(peer, a.Cancel(peer)))
+	if peer {
+		// What a worker on another host does with a job (spec 4.3), and the snapshot it fetches for a claim it holds. On the socket the
+		// worker routes are the caller's to register (Options.ClaimRoutes), since they open the fast lane too.
+		a.WorkerRoutes(mux, true)
+		mux.Handle("GET /v1/jobs/{id}/snapshot", snapshot.NewHandler(jobsapi.SnapshotSource{Q: d.opts.Queue}))
+	}
 }
 
 // TCPHandler serves the tailnet/loopback listeners: every request, including

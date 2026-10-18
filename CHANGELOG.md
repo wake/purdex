@@ -1,5 +1,42 @@
 # Changelog
 
+## [1.0.0-alpha.752] - 2026-10-18
+
+> daemon、`pdx` CLI、`wwd` 與 **mod**（`cmd/pdx/plugin/` 的 `gate.js`）有改，**兩台都要重跑 `pdx setup`**（寫入新的 mod；`pdx.json` 的 `entry` 開關會保留，預設關）。SPA 與 Electron 與 750 相同。Purdex 的資料庫沒有變，退回 751 不需要還原。**`wwd.db` 再往前遷移**（佇列 schema v4 加變更游標、觀察紀錄表），750／751 的 wwd 會拒絕開啟；部署腳本在升級 wwd 前已在每台留一份 `~/.local/share/wwd/wwd.db.pre-752`。
+
+### Changed：pool 模式下 daemon 不再自己量主機（C1 收尾）
+
+- **resources 的取樣迴圈只讀行程表**：`fleet.source = pool` 而且 pool 讀得到本機時，不再自己讀 sysctl、`vm_stat`、加總 `ps` 的 CPU；壓力區、換頁率、記憶體、load 改用 wwd 的數字；不再寫 `host_minutes`。行程表保留給守門員的偵測與 session 歸屬。閘門的 `pressure.json` 改由 wwd 的壓力等級與換頁率餵，閘門不必自己多跑 `vm_stat`；退回自家取樣時數字不會跳（#3294）。
+- **fleet 的本機讀取只在需要時才啟動**：本機由 pool 服務時停掉，pool 讀不到時才啟動；巡檢的磁碟可用空間改用 wwd 的數字（資料目錄與 home 在同一個裝置時才用，否則照舊自己讀）（#3300）。
+- 允許保留的例外寫在 plan 的 C1 驗收：守門員偵測用的行程樹、閘門持有者、閘門指令自己的壓力判斷（WWD-9a 才拆）、輔測送出前的遠端探測（WWD-9b）、「檢查連線」、monitor 的每個 session 的 `ps`，以及 pool 讀不到時的退路（#3289）。
+
+### Added：wwd 的佇列
+
+- **origin 變更游標**：`GET /v1/jobs?after=<cursor>` 回傳 `{jobs, cursor}`，每個 job 只出現一次、給最新狀態、依變更順序；只延長期限的 heartbeat 不推進游標（#3293，關 #3251）。
+- **工作的讀取、取消與提交路由**（`internal/wwd/jobsapi`）：本機 socket 可以提交，TCP 只能讀與取消、不能提交；log 轉發改成串流、有 2 分鐘總時限（#3301）。
+- **本機快車道登記、log 上傳與保留**：`RecordLocal`、`Ended`、`LiveClaim`、log 存 3 天（#3288）；`/v1/local-runs` 接進 wwd，wwd 只建一個佇列、每 5 秒清掃一次；這條路由要等 worker 協定的路由也掛上才會開放，目前不存在（#3292、#3281）。
+
+### Added：觀察紀錄（WWD-6c 的前兩段）
+
+- 被系統接手的 codex 常駐程序，用它環境變數裡的 Claude Code session ID 接回原本的 session（只在找不到 session 祖先時才讀，只留那一個值）（#3287）。
+- 觀察紀錄的格式、指令去敏（token、Bearer、`key=value` 等，含引號、跳脫、巢狀替換時整段遮蔽）、指令簽章、`wwd.db` 的紀錄表（保留 14 天）（#3290）；追蹤不屬於任何工作、CPU 超過 60 秒或記憶體峰值超過 1 GB 的指令樹（#3291）。還沒有 API，接上取樣與查詢在下一段。
+
+### Added：接替 `gate.js` 的 hook（預設關）
+
+- `gate.js` 多了 entry 路徑：開關打開時，測試／建置指令比對到 `.wwd/tasks.toml` 的 task 就改寫成 `pdx test`，比對不到依 `[entry].mode` 給建議或拒絕；`pdx entry match` 出錯一律退回舊行為。**開關預設關，關閉時行為與 751 逐位元組相同**（#3279）。
+
+### 文件
+
+- spec：變更游標與 `?after=` 的語意（#3295）；C1 的例外清單與 2d-2（#3289）。
+- C2 真機矩陣腳本（14 個案例，只寫還沒跑；#3246）。
+
+### 發版測試
+
+- 切點 `21dae1971`，air26：`go test -p 3 -timeout 30m ./...` 全過、`make lint` 通過（一格名額依序跑）。
+- mlab，mod 的 hook 測試（6a-2 改了 `gate.js`，照 748 的跑法）：relay 分四段、events 分三段全過；其餘檔案 269 條過、2 條紅——兩條都是 `ask.test.ts` 的「5 秒內回來」計時斷言（實測 5.04 秒、5.27 秒），這個檔這版沒有改，負載下偶發（748 也出現過）；單獨重跑 `ask.test.ts` 78 條全過。
+- mserv（Linux x86_64）：`internal/wwd/{facts,derived,labels,clones}` 交叉編譯後帶 `testdata` 執行，全過。
+- SPA 與 Electron 與 750 相同，沿用 750 的結果。
+
 ## [1.0.0-alpha.751] - 2026-10-18
 
 > daemon、`pdx` CLI 與 `wwd` 有改；SPA、mod（`hooks/`、`cmd/pdx/plugin/`）與 Electron 與 750 相同，**不需要重跑 `pdx setup`**。Purdex 的資料庫沒有變，退回 750 不需要還原。**`wwd.db` 的佇列 schema 升到 v3**（新增租約失效次數），只能往前遷移，750 的 wwd 會拒絕開啟；部署腳本在升級 wwd 前已在每台留一份 `~/.local/share/wwd/wwd.db.pre-751`，要退回 750 的 wwd 時用它還原。mserv 的 `wwd.service` 改進 `wwdd.slice`（重跑安裝會更新 unit）。

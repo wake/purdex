@@ -223,7 +223,7 @@ func TestAVersionThreeDatabaseGainsTheCursor(t *testing.T) {
 	require.NoError(t, Migrate(ctx, f.db))
 	var v int
 	require.NoError(t, f.db.QueryRow(`SELECT version FROM queue_schema`).Scan(&v))
-	assert.Equal(t, 4, v)
+	assert.Equal(t, schemaVersion, v)
 
 	js, cur := f.after(t, 0)
 	assert.Equal(t, []string{a, b}, ids(js), "in the order they were made")

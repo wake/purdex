@@ -246,9 +246,14 @@ func (r PoolHostsResponse) Validate() error {
 // JobsListResponse is the answer to GET /v1/jobs. Cursor is the origin's position after the last change the answer carries: sent back as
 // ?after=<cursor> it returns the jobs that changed since, each once, in the state it is in now. It is a decimal string made on the
 // origin (never a time of a worker's) that the client treats as opaque. It is empty only in an answer that is not a cursor read.
+//
+// Epoch names the database the cursor belongs to: it is made when the queue's tables are created and never changes after, so a wwd.db
+// that was removed and made again has another one. A client keeps it with its cursor, and a cursor kept under a different epoch means
+// nothing here: it starts again from "0". It is empty only from a server that predates it.
 type JobsListResponse struct {
 	Jobs   []Job  `json:"jobs"`
 	Cursor string `json:"cursor"`
+	Epoch  string `json:"epoch"`
 }
 
 var cursorRe = regexp.MustCompile(`^[0-9]{1,18}$`)
@@ -256,9 +261,41 @@ var cursorRe = regexp.MustCompile(`^[0-9]{1,18}$`)
 // ValidCursor reports whether s has the form of a cursor (what ?after= takes and JobsListResponse.Cursor carries).
 func ValidCursor(s string) bool { return cursorRe.MatchString(s) }
 
+var epochRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// ValidEpoch reports whether s has the form of a database epoch.
+func ValidEpoch(s string) bool { return epochRe.MatchString(s) }
+
+// CursorAheadReason is the only reason a CursorAhead carries.
+const CursorAheadReason = "cursor_ahead"
+
+// CursorAhead is the 409 body of GET /v1/jobs?after=<cursor> when the cursor is past the origin's last change: it was made by another
+// database (this one was removed and made again), so reading from it would find nothing, forever. Head and Epoch are this database's;
+// the client starts again from "0" under the new epoch.
+type CursorAhead struct {
+	Reason string `json:"reason"`
+	Head   string `json:"head"`
+	Epoch  string `json:"epoch"`
+}
+
+func (c CursorAhead) Validate() error {
+	switch {
+	case c.Reason != CursorAheadReason:
+		return fmt.Errorf("cursor ahead: unexpected reason %q", c.Reason)
+	case !ValidCursor(c.Head):
+		return fmt.Errorf("cursor ahead: invalid head %q", c.Head)
+	case !ValidEpoch(c.Epoch):
+		return fmt.Errorf("cursor ahead: invalid epoch %q", c.Epoch)
+	}
+	return nil
+}
+
 func (r JobsListResponse) Validate() error {
 	if r.Cursor != "" && !ValidCursor(r.Cursor) {
 		return fmt.Errorf("jobs list: invalid cursor %q", r.Cursor)
+	}
+	if r.Epoch != "" && !ValidEpoch(r.Epoch) {
+		return fmt.Errorf("jobs list: invalid epoch %q", r.Epoch)
 	}
 	for i, j := range r.Jobs {
 		if err := j.Validate(); err != nil {

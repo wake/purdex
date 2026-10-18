@@ -33,6 +33,49 @@ func TestJobsListResponseCarriesTheCursor(t *testing.T) {
 	}
 }
 
+// The answer names the database its cursor belongs to; a non-empty epoch must have the form, an empty one is a server that predates it.
+func TestJobsListResponseCarriesTheEpoch(t *testing.T) {
+	r := roundTrip[JobsListResponse](t, "jobs_list_cursor.json")
+	if r.Epoch != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("epoch lost: %+v", r)
+	}
+	good := string(fixture(t, "jobs_list_cursor.json"))
+	for name, ep := range map[string]string{"short": "abc", "upper": "0123456789ABCDEF0123456789ABCDEF", "long": strings.Repeat("a", 33), "text": strings.Repeat("g", 32)} {
+		raw := strings.Replace(good, `"epoch": "0123456789abcdef0123456789abcdef"`, `"epoch": "`+ep+`"`, 1)
+		if raw == good {
+			t.Fatalf("%s: replacement changed nothing", name)
+		}
+		if _, err := Decode[JobsListResponse]([]byte(raw)); err == nil {
+			t.Errorf("a %s epoch was accepted", name)
+		}
+	}
+	if _, err := Decode[JobsListResponse]([]byte(`{"jobs": [], "cursor": "0", "epoch": ""}`)); err != nil {
+		t.Errorf("an answer from a server with no epoch is refused: %v", err)
+	}
+}
+
+// A cursor past the origin's last change is a 409 that says where the origin is and which database it is.
+func TestCursorAhead(t *testing.T) {
+	c := roundTrip[CursorAhead](t, "cursor_ahead.json")
+	if c.Head != "17" || c.Reason != CursorAheadReason {
+		t.Fatalf("fields lost: %+v", c)
+	}
+	good := string(fixture(t, "cursor_ahead.json"))
+	for name, raw := range map[string]string{
+		"other reason": strings.Replace(good, `"cursor_ahead"`, `"locks_busy"`, 1),
+		"bad head":     strings.Replace(good, `"head": "17"`, `"head": "x"`, 1),
+		"no epoch":     strings.Replace(good, `"epoch": "0123456789abcdef0123456789abcdef"`, `"epoch": ""`, 1),
+		"unknown key":  strings.Replace(good, `"head"`, `"extra": 1, "head"`, 1),
+	} {
+		if raw == good {
+			t.Fatalf("%s: replacement changed nothing", name)
+		}
+		if _, err := Decode[CursorAhead]([]byte(raw)); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}
+
 func TestValidCursor(t *testing.T) {
 	for _, s := range []string{"0", "1", "42", "999999999999999999"} {
 		if !ValidCursor(s) {
