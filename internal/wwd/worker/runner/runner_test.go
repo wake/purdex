@@ -469,20 +469,18 @@ func TestLostAfterCancelStillMeansLost(t *testing.T) {
 	}
 }
 
-func TestCancelDuringStartDoesNotRunTheCommand(t *testing.T) {
-	ex := &fakeExec{}
-	o := &fakeOrigin{
-		heartbeat: func(int) (wire.HeartbeatResponse, error) {
-			return wire.HeartbeatResponse{LeaseS: 5, RenewS: 1, Cancel: true}, nil
-		},
-		start: func() (wire.Lease, error) {
-			time.Sleep(3 * unit) // the heartbeat's cancel arrives while start is in flight
-			return wire.Lease{LeaseS: 5, RenewS: 1}, nil
-		},
-	}
+func TestCancelDuringPrepareDoesNotStartOrRun(t *testing.T) {
+	ex := &fakeExec{prepare: func() (Plan, error) {
+		time.Sleep(4 * unit) // the heartbeat's cancel arrives while the plan is being made
+		return Plan{Argv: []string{"x"}}, nil
+	}}
+	o := &fakeOrigin{heartbeat: func(int) (wire.HeartbeatResponse, error) {
+		return wire.HeartbeatResponse{LeaseS: 5, RenewS: 1, Cancel: true}, nil
+	}}
 	c, _ := newCtl(ex)
-	if e := c.Work(context.Background(), o, scored(testJob("j")), nil); e.Kind != KindCancelled || ex.ran.Load() != 0 {
-		t.Fatalf("kind=%s ran=%d", e.Kind, ex.ran.Load())
+	e := c.Work(context.Background(), o, scored(testJob("j")), nil)
+	if _, st, _ := o.count(); e.Kind != KindCancelled || ex.ran.Load() != 0 || st != 0 {
+		t.Fatalf("kind=%s ran=%d starts=%d", e.Kind, ex.ran.Load(), st)
 	}
 }
 
@@ -513,5 +511,147 @@ func TestEndedCarriesPlanAndRootForTheReporter(t *testing.T) {
 	e = c2.Work(context.Background(), &fakeOrigin{}, scored(testJob("j")), nil)
 	if e.Kind != KindRejected || e.Plan.Summary != "" || e.Root != "/ws" {
 		t.Fatalf("rejected ended %+v", e)
+	}
+}
+
+func TestHungHeartbeatCannotOutliveTheDeadline(t *testing.T) {
+	ex := &fakeExec{run: blockUntilDone}
+	o := &fakeOrigin{}
+	o.heartbeat = func(int) (wire.HeartbeatResponse, error) {
+		return wire.HeartbeatResponse{}, errors.New("unreachable in this test")
+	}
+	o.claim = func(id string) (wire.ClaimResponse, error) {
+		return wire.ClaimResponse{Job: testJob(id), ClaimID: claimID, LeaseS: 6, RenewS: 1}, nil
+	}
+	hang := make(chan struct{})
+	h := &hangingHeartbeat{fakeOrigin: o, hang: hang}
+	c, _ := newCtl(ex)
+	done := make(chan Ended, 1)
+	go func() { done <- c.Work(context.Background(), h, scored(testJob("j")), nil) }()
+	select {
+	case e := <-done:
+		if e.Kind != KindLost {
+			t.Fatalf("kind=%s", e.Kind)
+		}
+	case <-time.After(30 * unit):
+		close(hang)
+		t.Fatal("a heartbeat that never answers kept the command alive past the lease deadline")
+	}
+}
+
+// hangingHeartbeat answers every heartbeat only when its ctx ends, as a half-open connection does.
+type hangingHeartbeat struct {
+	*fakeOrigin
+	hang chan struct{}
+}
+
+func (h *hangingHeartbeat) Heartbeat(ctx context.Context, _, _ string) (wire.HeartbeatResponse, error) {
+	select {
+	case <-ctx.Done():
+		return wire.HeartbeatResponse{}, ctx.Err()
+	case <-h.hang:
+		return wire.HeartbeatResponse{}, errors.New("released")
+	}
+}
+
+func TestShorterLeaseFromHeartbeatReplacesTheOlder(t *testing.T) {
+	ex := &fakeExec{run: blockUntilDone}
+	o := &fakeOrigin{}
+	o.heartbeat = func(int) (wire.HeartbeatResponse, error) { return wire.HeartbeatResponse{LeaseS: 2, RenewS: 50}, nil }
+	o.claim = func(id string) (wire.ClaimResponse, error) {
+		return wire.ClaimResponse{Job: testJob(id), ClaimID: claimID, LeaseS: 30, RenewS: 1}, nil
+	}
+	c, _ := newCtl(ex)
+	start := time.Now()
+	e := c.Work(context.Background(), o, scored(testJob("j")), nil)
+	if d := time.Since(start); e.Kind != KindLost || d > 8*unit {
+		t.Fatalf("kind=%s after %v: a lease the origin shortened must be obeyed (about %v)", e.Kind, d, 3*unit)
+	}
+}
+
+func TestSlowHeartbeatAnswerCannotOverwriteStartsShorterLease(t *testing.T) {
+	// a heartbeat is in flight (answered late, with a long lease) while start is called and answers with a short one: the calls are
+	// one at a time, so start's answer is applied last and the short lease rules.
+	ex := &fakeExec{run: blockUntilDone}
+	ex.prepare = func() (Plan, error) { time.Sleep(3 * unit); return Plan{Argv: []string{"x"}}, nil }
+	o := &fakeOrigin{
+		claim: func(id string) (wire.ClaimResponse, error) {
+			return wire.ClaimResponse{Job: testJob(id), ClaimID: claimID, LeaseS: 30, RenewS: 1}, nil
+		},
+		heartbeat: func(n int) (wire.HeartbeatResponse, error) {
+			time.Sleep(4 * unit)
+			return wire.HeartbeatResponse{LeaseS: 40, RenewS: 50}, nil
+		},
+		start: func() (wire.Lease, error) { return wire.Lease{LeaseS: 3, RenewS: 50}, nil },
+	}
+	c, _ := newCtl(ex)
+	start := time.Now()
+	e := c.Work(context.Background(), o, scored(testJob("j")), nil)
+	if d := time.Since(start); e.Kind != KindLost || d > 20*unit {
+		t.Fatalf("kind=%s after %v: start's shorter lease must rule (the long heartbeat answer came earlier)", e.Kind, d)
+	}
+}
+
+func TestLeaseLostWhileFinishRunsMakesTheResultLost(t *testing.T) {
+	ex := &fakeExec{}
+	o := &fakeOrigin{}
+	o.heartbeat = func(n int) (wire.HeartbeatResponse, error) {
+		if n >= 2 {
+			return wire.HeartbeatResponse{}, &Conflict{State: wire.StateQueued}
+		}
+		return wire.HeartbeatResponse{LeaseS: 5, RenewS: 1}, nil
+	}
+	c, _ := newCtl(ex)
+	e := c.Work(context.Background(), o, scored(testJob("j")), func(ctx context.Context, e Ended) {
+		if e.Kind != KindRan {
+			t.Errorf("Finish began with kind %s", e.Kind)
+		}
+		<-ctx.Done() // delivery blocks until the lease is gone
+	})
+	if e.Kind != KindLost {
+		t.Fatalf("kind=%s: a result that could not be delivered because the lease went is lost", e.Kind)
+	}
+}
+
+func TestStartThatHangsPastTheLeaseIsLostNotInfra(t *testing.T) {
+	// the origin may have taken the start and the claim's lease may have lapsed meanwhile: the job may already be somebody else's.
+	ex := &fakeExec{}
+	o := &startHangs{fakeOrigin: &fakeOrigin{claim: func(id string) (wire.ClaimResponse, error) {
+		return wire.ClaimResponse{Job: testJob(id), ClaimID: claimID, LeaseS: 4, RenewS: 50}, nil
+	}}}
+	c, _ := newCtl(ex)
+	done := make(chan Ended, 1)
+	go func() { done <- c.Work(context.Background(), o, scored(testJob("j")), nil) }()
+	select {
+	case e := <-done:
+		if e.Kind != KindLost || ex.ran.Load() != 0 {
+			t.Fatalf("kind=%s err=%v ran=%d", e.Kind, e.Err, ex.ran.Load())
+		}
+	case <-time.After(30 * unit):
+		t.Fatal("a start that never answers outlived the lease deadline")
+	}
+}
+
+type startHangs struct{ *fakeOrigin }
+
+func (s *startHangs) Start(ctx context.Context, _, _ string) (wire.Lease, error) {
+	<-ctx.Done()
+	return wire.Lease{}, ctx.Err()
+}
+
+func TestStartWaitingForTheLockSeesTheCancelTheHeartbeatAnswered(t *testing.T) {
+	// the heartbeat is in flight (and holds the call lock) when Prepare finishes, so Start waits; the heartbeat answers cancel.
+	ex := &fakeExec{prepare: func() (Plan, error) { time.Sleep(2 * unit); return Plan{Argv: []string{"x"}}, nil }}
+	o := &fakeOrigin{heartbeat: func(int) (wire.HeartbeatResponse, error) {
+		time.Sleep(5 * unit)
+		return wire.HeartbeatResponse{LeaseS: 30, RenewS: 50, Cancel: true}, nil
+	}}
+	o.claim = func(id string) (wire.ClaimResponse, error) {
+		return wire.ClaimResponse{Job: testJob(id), ClaimID: claimID, LeaseS: 30, RenewS: 1}, nil
+	}
+	c, _ := newCtl(ex)
+	e := c.Work(context.Background(), o, scored(testJob("j")), nil)
+	if _, st, _ := o.count(); e.Kind != KindCancelled || st != 0 || ex.ran.Load() != 0 {
+		t.Fatalf("kind=%s starts=%d ran=%d: a cancelled job must not be started", e.Kind, st, ex.ran.Load())
 	}
 }
