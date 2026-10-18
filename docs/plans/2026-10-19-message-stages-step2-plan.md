@@ -8,8 +8,8 @@
 
 | # | Decision | Why |
 |---|---|---|
-| L1 | A message is keyed by its **first** `client_msg_id` (`entry.ids[0]`, `spa/src/lib/conversations/send-queue.ts:51`). Busy retries keep minting new ids (`:359-361`, needed because refused fills are replayed by id, `internal/module/conversation/typed_answers.go:56-70`); the client folds every stage of any of its ids into the one bubble. | D2 without changing the retry rule |
-| L2 | Stages and order: `received` < `filled` < `entered` < `queued` < `read`; terminal: `read`, `failed`, `recalled`; `unknown` may still advance to `queued` / `read` by matching. A stage never moves back. | D1 |
+| L1 | (rev 2) A message's **bubble** is keyed by its first `client_msg_id` (`entry.ids[0]`, `spa/src/lib/conversations/send-queue.ts:51`). Its **stage** is the stage of its **newest id that has one**. Busy retries keep minting new ids (`:359-361`, needed because refused fills are replayed by id, `internal/module/conversation/typed_answers.go:56-70`). When a newer id gets its first stage, every earlier id's stage, including a terminal `failed/busy`, stops counting. | D2 without changing the retry rule; codex #1 |
+| L2 | Stages and order **per id**: `received` < `filled` < `entered` < `queued` < `read`. Terminal: `read`, `failed`, `recalled`. `unknown` may still advance to `queued` / `read` by matching. A given id's stage never moves back. A message's stage follows L1, so it can leave a busy `failed` for a retry's `received`. | D1 |
 | L3 | Send now is refused while the light is `waiting` (a dialog is open): the keys would act on the dialog. Reason `waiting` (same as `/submit`, `typed_submit.go:100-103`). | safety |
 | L4 | Send now is refused when nothing is queued (`nothing_queued`, as `/recall`). A draft alone is an ordinary send. | D7 spirit |
 | L5 | Mac **Up on the first line** of the Deck input takes back the queue when anything can be taken back (D8); otherwise Up keeps today's history stepping (#2666) and caret movement. Today's rule only fires on an empty box (`spa/src/lib/conversations/input-arrows.ts:84-86`). Taken-back text goes before the draft, one message per line (`draft-recall.ts:38`). | D8 |
@@ -23,20 +23,26 @@
 
 | Stage | Meaning | Daemon source |
 |---|---|---|
-| `received` | `/submit` accepted the id (validated, before the ledger replay) | `typed_submit.go:27-57` |
+| `received` | (rev 2) `/submit` resolved the session, passed the generation check and created the id's ledger row. A replayed answer for a known id adds no stage. The replay keeps running before session resolution, so an answer still comes back when the session is gone. | `typed_submit.go:57-86` (codex #5) |
 | `filled` | the mod filled Claude Code's input (fill mode) | promptq phase `filled` (`internal/promptq/typed_submit.go:13`), `Result.FilledAt` |
 | `entered` | Enter reached the pane (fill: `typed_fill.go:78-86`; keys: `typed_keys.go`) | `MarkEntered` / keys ledger |
 | `queued` | the text is in Claude Code's own queue | a `header.queued` entry (`internal/ccnorm/queue.go:131-145`) matched by text + time |
 | `read` | the text entered the transcript (user item, `source` user **or queued**) | `promptq.Match` (`echo.go:34-104`), extended to `SourceQueued` |
 | `failed` | refused; `reason` is the `/submit` reason | `typed_answers.go` refusals |
 | `unknown` | the outcome is not known; `reason` says why | `typed_fill.go:54`, `:111`; `typed_keys.go` |
-| `recalled` | taken back by `/recall` | `typed_recall.go:132-215` |
+| `recalled` | (rev 2) A successful `/recall` takes back Claude Code's **whole** queue (`typed_recall.go:98-113`), so every id of the session that is `queued` at that moment becomes `recalled`. The recall request's own `client_msg_id` is only its idempotency key and gets no stage. | `typed_recall.go:132-215` (codex #2) |
 
-Matching rules for `queued` and `read` follow `promptq.Match`: exact text (after the same normalisation), closest
-first, one to one. The `read` window grows from 30 s after completion (`echo.go:19`) to **30 minutes** for an id that
-reached `queued` (a busy session reads its queue late; the SPA already allows 10 min, `terminal-adapter.ts:21`).
-The keys ledger (`typed_keys_ledger.go`, today `{handed, sid, at}`) also keeps the text (bounded like promptq's, 16 KiB)
-so keys-mode messages can reach `queued` / `read`.
+**Matching (rev 2, codex #4).**
+- `entered` → `queued`: the session's stage ledger keeps an ordered **queue tracker** of the queue rows (`ccnorm` `queue-operation` enqueue / dequeue / remove / popAll, `internal/ccnorm/queue.go:129-160`).
+  - When an enqueue row appears, it is claimed by the oldest `entered` id with the same text, FIFO, as the SPA's header claim does today (`send-queue.ts:203-227`).
+- `queued` → `read`: a queued id is read when **its own row** leaves the queue and its `source=queued` item enters the transcript. That is queue order, never global time distance, so the same text sent twice cannot swap.
+- An id that never queued (idle session) is read through `promptq.Match` as today (`echo.go:34-104`, 30 s window).
+- `read` for queued ids has no fixed time window; the id is dropped when the ledger expires it (below).
+
+**Text and memory (rev 2, codex #6).**
+- The text needed for matching lives **once**, in the stage ledger, for in-flight ids only. The keys ledger stays text-free.
+- The text is dropped at `read`, `failed` or `recalled`, or 30 minutes after `entered`, whichever comes first.
+- Caps: 16 KiB per text and 2 MiB in total per daemon. Past the cap the oldest in-flight texts are dropped first, and those ids fall back to the clients' text-and-time matching.
 
 ### 1.2 Wire
 
@@ -44,6 +50,9 @@ so keys-mode messages can reach `queued` / `read`.
   - `Stage = {client_msg_id: string, stage: string, at: number /* unix ms */, reason?: string, mode?: "fill" | "keys"}`.
   - The frame carries only the stages that changed since the last frame of this connection.
   - It is pushed from `follow()` beside `pushCaps`, **before** the quiet gate (`internal/module/conversation/ws.go:349`, gate at `:356`), so a stage change shows without a transcript change.
+  - (rev 2, codex #7) The ledger numbers its changes with a per-session `seq`. Each connection keeps the seq it last sent; the snapshot sets that baseline.
+  - A tick sends a frame only when the ledger's seq is past the connection's, and the frame carries all of those changes at once. A quiet session sends nothing.
+  - The WS queue holds 64 frames and an overflow closes the connection (`ws.go:111-124`). The cursor keeps stage frames within one per tick and only when something changed.
 - `conversation.snapshot` gains `stages: Stage[]`: the latest stage of every id of this session still in the ledger. Ids drop 10 minutes after a terminal stage (promptq `LedgerTTL`). A reconnect therefore sees where its messages are.
 - Clients ignore unknown frame types (the SPA does, `useConversationStore.ts:156`). An old daemon simply sends no stages.
 - Host capability `conversations.stages.v1` (`internal/core/info_handler.go:49-71`; update the exact-list test `info_handler_test.go:419`). Add a real-module test: register the conversation module in a core and assert `/api/info` lists it.
@@ -62,6 +71,10 @@ so keys-mode messages can reach `queued` / `read`.
   5. light `waiting` → `waiting` (L3);
   6. `queuedOf` empty → `nothing_queued` (L4);
   7. the mod's `Read` of Claude Code's input not empty → `input_not_empty` (D7, text 「桌機輸入框有未送出的文字」).
+- **D7 race (rev 2, codex #3).** Reading the input and sending the keys are two steps, so someone typing **into the terminal** in between could have the draft sent too. The tmux guard cannot see Claude Code's input (`send_keys_mode.go:40-50`).
+  - **Preferred**: MS2-0 checks whether the mod runtime can trigger Claude Code's send-now itself (a `$.` action or command), so the read and the send happen in one place inside Claude Code. If it can, a new prompt job kind `send_now` does read-then-act in the mod.
+  - **Fallback**: the `Read` runs under the pane and session locks immediately before the keys, with no other work in between. The window that remains, between the mod's read and tmux's keys (milliseconds), is documented as a known limit. It needs a person typing into that terminal at that instant, while the person sending is on the Deck or the phone.
+  - Either way, a test asserts that nothing runs between the read and the keys (an injected hook sees them back to back).
 - **Keys**: `SendKeysIfInstanceAndMode` (`internal/tmux/send_keys_mode.go:57`) with the send-now bytes measured in MS2-0. The expected bytes are Ctrl+X Ctrl+S `\x18\x13`, the fallback is Ctrl+Enter. There are no new guards: generation, session and `pane_in_mode` are checked in the one `if-shell` (`:40-50`).
 - **Answer**: `200 {outcome: "sent_now"}`, or `refused` + reason, or `unknown`, in `/submit`'s shape (`typed_answers.go:14-23`). Messages already queued then advance to `read` through the normal matching; send now adds no stage.
 
@@ -100,7 +113,17 @@ Without `conversations.stages.v1` both Apps keep today's behaviour.
   - **Empty queue**: repeat with nothing queued.
   - **Ctrl+Enter**: the CSI-u bytes `\x1b[13;5u` and what tmux passes on.
   - **Ctrl+S**: whether Ctrl+S reaches Claude Code, or is eaten as XOFF.
+  - (rev 2) **Mod send-now**: whether the mod runtime offers a send-now action, either as a `$.` call or as a command `$.command.run` can invoke. This decides the D7 path in §1.3.
 - Output: a table in spec §4 (docs PR), plus the bytes chosen for §1.3.
+
+### MS2-1 tests, rev 2 additions (codex #1, #2, #4–#7)
+
+- **Busy retries**: ids[0] gets `failed/busy`, then ids[1] goes `received` → `entered` → `read`. The message reads `read` (M: fold terminal-first).
+- **Recall**: two ids `queued`, then `/recall` succeeds → both `recalled`; the recall's own id gets no stage (M: stage the request id).
+- **Same text twice**: the old message is `queued`, the same text is sent again, and the old row is read first → the old id is `read` and the new one stays `queued` (M: match by time distance).
+- **Replay**: a replayed `/submit` for a known id after the session is gone still answers, with no new stage (M: record `received` before replay).
+- **Memory**: the text cap (per text and total) evicts the oldest; a text is dropped at a terminal stage; the keys ledger has no text field (M: keep text after `read`).
+- **Frames**: 20 quiet ticks after a snapshot send zero `conversation.stages` frames (M: send every tick). Three changes in one tick go in one frame. A reconnect's snapshot baseline does not replay older deltas.
 
 ### MS2-1 tests (each with a mutation that turns it red)
 
@@ -110,6 +133,11 @@ Without `conversations.stages.v1` both Apps keep today's behaviour.
 - **Frame**: a stage change pushes `conversation.stages` with no transcript change (M: put it behind the quiet gate). Snapshot `stages` after a reconnect.
 - **Capability**: the exact-list test and the real-module `/api/info` test.
 - **Ledger expiry**: ids drop 10 min after a terminal stage.
+
+### MS2-2 tests, rev 2 addition
+
+- **D7 race**: the read and the keys run back to back under the locks. An injected hook between them fails the test (M: run another step between them).
+- **Mod path**: if the mod path exists (MS2-0), the `send_now` job runs read and act in the mod, and an old mod without it answers `unsupported_kind` → `no_owner`-like refusal `mod_too_old`.
 
 ### MS2-2 tests
 
@@ -131,6 +159,12 @@ Without `conversations.stages.v1` both Apps keep today's behaviour.
 - **Send now**: Ctrl+Enter calls send-now and not submit (M: let it fall into Enter). Ctrl+X then Ctrl+S within 1.5 s sends now, after 1.5 s it does not; Ctrl+X alone keeps its cut.
 - **Up on the first line**: with a queue it takes back before history (M: history first); with no queue, history as today.
 - **Refusals**: each refusal shows its text (`input_not_empty` → 「桌機輸入框有未送出的文字」).
+
+### MS2-5 (iOS), rev 2 addition (codex #8)
+
+- The detail sheet (D4) shows the daemon's stage timeline (`at`, `reason`), folded over the message's ids by L1, merged with the App's own client-side states.
+- The timeline is restored from the snapshot after a reconnect.
+- Tests: busy-retry folding, a reconnect that restores the timeline, and the reason text of a `failed` stage.
 
 ### MS2-5 (iOS)
 
