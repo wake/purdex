@@ -111,3 +111,29 @@ func TestRepoSourceLabels(t *testing.T) {
 		t.Fatalf("labels %v", got)
 	}
 }
+
+// Labels is what GET /v1/info says (the worker claims with it), and what it returns is the caller's to change.
+func TestLabelsIsWhatInfoSaysAndACopy(t *testing.T) {
+	d := New(Options{
+		HostID: "h1", Alias: "testhost", Version: "v0", Token: testToken,
+		RepoSource: func() []string { return []string{"purdex"} },
+	})
+	d.OnFacts(wire.Facts{Platform: "darwin", Arch: "arm64"})
+	got, fp := d.Labels()
+	if want := infoOf(t, d).Labels; !slices.Equal(got, want) {
+		t.Fatalf("labels %v, info says %v", got, want)
+	}
+	if len(got) == 0 {
+		t.Fatal("no labels")
+	}
+	got[0] = "changed"
+	if again, _ := d.Labels(); again[0] == "changed" {
+		t.Fatal("Labels handed out its own slice")
+	}
+	if fp != nil {
+		fp["x"] = "y"
+		if _, again := d.Labels(); again["x"] == "y" {
+			t.Fatal("Labels handed out its own map")
+		}
+	}
+}

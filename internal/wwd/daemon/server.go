@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -166,6 +167,13 @@ func (d *Daemon) requireToken(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// Labels is this host's labels and toolchain fingerprint now (what GET /v1/info says): the build's own arch and os before the first
+// facts record. The slices and the map are copies.
+func (d *Daemon) Labels() (labels []string, fingerprint map[string]string) {
+	i := d.info()
+	return append([]string(nil), i.Labels...), maps.Clone(i.Fingerprint)
 }
 
 func (d *Daemon) info() wire.Info {
