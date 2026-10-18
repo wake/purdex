@@ -46,6 +46,7 @@ func TestParseSessionDetails_Untrusted(t *testing.T) {
 	for name, out := range map[string]string{
 		"a locale that turned the separators into underscores": strings.ReplaceAll(good, detailSep, "_"),
 		"too few fields":                       detailLine("$0", "1", "1:1", "@1", "%1", "work"),
+		"one field short (no path)":            detailLine("$0", "1", "1:1", "@1", "%1", "work", "t", "zsh", "vim"),
 		"a free-text field held the separator": detailLine("$0", "1", "1:1", "@1", "%1", "work", "x"+detailSep+"y", "zsh", "vim", "/p"),
 		"the id is not an id":                  detailLine("x0", "1", "1:1", "@1", "%1", "work", "t", "zsh", "vim", "/p"),
 		"the instance is not an instance":      detailLine("$0", "1", "oops", "@1", "%1", "work", "t", "zsh", "vim", "/p"),
