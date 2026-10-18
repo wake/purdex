@@ -32,6 +32,10 @@ var ErrNotLocal = errors.New("fastlane: the task does not allow the local fast l
 // ErrLocksBusy: another job on this host holds a lock the task needs. The caller sends the task through the queue.
 var ErrLocksBusy = errors.New("fastlane: a lock of the task is held by another job on this host")
 
+// ErrUnrecorded is what a Recorder's Register returns when wwd has no way to record fast-lane runs (it does not know the route,
+// yet): the run goes on without a record, and holds no lock.
+var ErrUnrecorded = errors.New("fastlane: wwd cannot record fast-lane runs")
+
 // ArgError: the arguments do not fit the task (a file that is not there, a path that leaves the tree, a flag where a file is
 // expected). Nothing was run.
 type ArgError struct{ Err error }
@@ -138,12 +142,15 @@ func Run(ctx context.Context, req Request) (Result, error) {
 	var handle Handle
 	if req.Recorder != nil {
 		h, err := req.Recorder.Register(ctx, req.Body)
-		if err != nil {
+		switch {
+		case errors.Is(err, ErrUnrecorded): // runs on with no record, no job id and no mark
+		case err != nil:
 			return fail(err)
+		default:
+			handle = h
+			res.JobID = h.JobID()
+			env = withMark(env, h.JobID())
 		}
-		handle = h
-		res.JobID = h.JobID()
-		env = withMark(env, h.JobID())
 	}
 
 	cp, err := run.OpenCapture(filepath.Join(out, "log"), filepath.Join(out, "stdout"), 0)
@@ -346,6 +353,10 @@ func heartbeat(ctx context.Context, h Handle, cancelled, leaseLost *atomic.Bool,
 			return
 		case err == nil:
 			last = time.Now()
+		case errors.Is(err, ErrStale): // wwd no longer accepts the claim: no point waiting out the lease
+			leaseLost.Store(true)
+			stop()
+			return
 		case time.Since(last) > lease:
 			leaseLost.Store(true)
 			stop()

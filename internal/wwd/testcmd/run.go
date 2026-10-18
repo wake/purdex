@@ -177,7 +177,7 @@ func fastLane(ctx context.Context, o Options, sub wire.Submitter) (code int, too
 		e := res.Exit
 		r.Exit = &e
 	}
-	if o.Recorder == nil {
+	if res.JobID == "" {
 		r.Notes = append(r.Notes, "this run was not recorded: wwd has no fast-lane entry yet")
 	}
 	Print(o.Stdout, r, o.Args.JSON)
