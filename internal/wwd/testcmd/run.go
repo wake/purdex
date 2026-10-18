@@ -227,18 +227,12 @@ func runWhenFree(ctx context.Context, o Options, task *manifest.Task, req fastla
 		poll = o.LockPoll
 	}
 	deadline := time.Now().Add(limit)
-	told, final := false, false
+	told := false
 	for {
 		// one deadline for the lock and the slot together: the gate waits for what is left of it, not for a whole queue_timeout
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
-			if final {
-				return fastlane.Result{}, errWaitedOut
-			}
-			// The lock may have been freed just before the deadline: one last ask. Its slot wait is a second, not less: fastlane
-			// takes a refusal that came after the whole wait for the wait running out, and an instant refusal for another cause
-			// must not look like that.
-			final, remaining = true, time.Second
+			return fastlane.Result{}, errWaitedOut
 		}
 		t := *task
 		t.QueueTimeout = remaining
@@ -253,11 +247,8 @@ func runWhenFree(ctx context.Context, o Options, task *manifest.Task, req fastla
 			fmt.Fprintf(o.Stderr, "pdx test: 等待本機名額／lock：%v\n", err)
 		}
 		wait := min(poll, time.Until(deadline))
-		if wait <= 0 { // the deadline passed during the ask itself: the top of the loop makes the one last ask
-			if final {
-				return fastlane.Result{}, errWaitedOut
-			}
-			continue
+		if wait <= 0 {
+			return fastlane.Result{}, errWaitedOut
 		}
 		select {
 		case <-ctx.Done():
