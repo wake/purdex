@@ -19,6 +19,17 @@ import (
 )
 
 func runSetup(args []string) {
+	// wwd (the per-host watcher/worker daemon) is installed by its own flags and needs no agent or daemon
+	if wo, ok, err := parseSetupWWD(args); ok {
+		if err == nil {
+			err = setupWWDForUser(wo)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	var agentType string
 	remove := false
 	force := false
