@@ -21,6 +21,7 @@ import { setMaxMembers, teamKey, useMaxMembersStore } from '../lib/team/max-memb
 import { MAX_MEMBERS_MAX, MAX_MEMBERS_MIN, type RelayQuotaField, type SessionQuota } from '../lib/team/types'
 import type { TeamRoster } from '../lib/team/roster'
 import { leadNameBySession, type LeadName } from '../lib/team/lead-name'
+import { addressName } from '../lib/names/seat'
 import { TeamRootsEditor } from './team/TeamRootsEditor'
 import { NumberField } from './team/NumberField'
 
@@ -44,8 +45,7 @@ const MAX = 99
 /** The name a solo row shows: its title, else the name part of its address (`<alias>/<name>`). */
 function plainName(r: SessionQuota): string {
   if (r.title !== undefined && r.title !== '') return r.title
-  const slash = r.address.indexOf('/')
-  return slash >= 0 ? r.address.slice(slash + 1) : r.address
+  return addressName(r.address)
 }
 
 /** What a row is called: a lead by its team's name (U15, the lead's title after it), anyone else by `plainName`. */

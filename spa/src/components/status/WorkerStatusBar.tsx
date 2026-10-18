@@ -12,6 +12,7 @@ import { CopySegment, HostSegment, Separator, StatusBarLayout } from './StatusSe
 import { PaneModeButtons } from './PaneModeButtons'
 import { HostQuotaSegments } from './UsageSegments'
 import { useCopyFeedback } from './useCopyFeedback'
+import { addressName } from '../../lib/names/seat'
 
 export function WorkerStatusBar({ tabId, pane, onNavigateToHost }: {
   tabId: string
@@ -70,7 +71,7 @@ export function WorkerStatusBar({ tabId, pane, onNavigateToHost }: {
               <Separator className="max-[700px]:hidden" />
               <CopySegment
                 testId="status-seg-peer-id"
-                display={peerAddress.slice(peerAddress.indexOf('/') + 1)}
+                display={addressName(peerAddress)}
                 value={peerAddress}
                 what={t('peer.label.peer_id')}
                 title={t('peer.copy_hint')}
