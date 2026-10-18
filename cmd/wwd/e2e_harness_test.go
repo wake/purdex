@@ -12,6 +12,11 @@
 // A test run that is killed (go test -timeout, SIGKILL) cannot clean up after itself. Its directory then names the run
 // (owner.pid) and the processes (wwd.pid, sleeper.pid), and the next run reaps what it left, but only when the run that owns the
 // directory is gone and only the pids whose command line still proves they are ours.
+//
+// Accepted residue: that proof (`ps`) and the signal are two calls, as with pkill and every pid file. For a wrong process to be hit,
+// the recorded process would have to exit between them AND the system hand its pid to another process within those milliseconds;
+// macOS and Linux give pids out in sequence and wrap only after tens of thousands of new processes. Nothing here can make that
+// airtight without a supervisor that outlives a killed test run, which is the thing that cannot be had.
 package main
 
 import (
