@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -541,4 +542,66 @@ func TestSweep_LeavesWhatALockedKeyIsUsing(t *testing.T) {
 	c.sweep()
 	_, serr = os.Stat(tmp)
 	assert.True(t, os.IsNotExist(serr))
+}
+
+// The attack on a copy that is made by path: the workspace's directory is swapped for a link to outside when the copy starts and swapped
+// back when it is done, so that a check afterwards finds nothing. The copy is made between directories opened before, so it goes to and
+// comes from the inode that was opened, whatever the names did meanwhile. (clonefileat is macOS; elsewhere the copy is cp, by path.)
+func TestPrepare_ASwapAndSwapBackDuringTheCopyChangesNothing(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("the copy between open directories is clonefileat, macOS only")
+	}
+	t.Cleanup(func() { testHook = nil })
+	swapAway := func(ws, outside string) {
+		require.NoError(t, os.Rename(filepath.Join(ws, "spa"), filepath.Join(ws, "spa.orig")))
+		require.NoError(t, os.Symlink(outside, filepath.Join(ws, "spa")))
+	}
+	swapBack := func(ws string) {
+		require.NoError(t, os.Remove(filepath.Join(ws, "spa")))
+		require.NoError(t, os.Rename(filepath.Join(ws, "spa.orig"), filepath.Join(ws, "spa")))
+	}
+
+	t.Run("a copy out of the cache goes into the workspace's directory, not outside", func(t *testing.T) {
+		c := newCache(t, 2)
+		_, err := c.Prepare(context.Background(), spaWorkspace(t), spaSpec)
+		require.NoError(t, err)
+		outside, ws := t.TempDir(), spaWorkspace(t)
+		testHook = func(stage string) {
+			switch stage {
+			case "before-clone":
+				swapAway(ws, outside)
+			case "copied-out":
+				swapBack(ws)
+				testHook = nil
+			}
+		}
+		r, err := c.Prepare(context.Background(), ws, spaSpec)
+		require.NoError(t, err)
+		assert.True(t, r.Hit)
+		_, serr := os.Stat(filepath.Join(ws, "spa/node_modules/x/index.js"))
+		assert.NoError(t, serr, "it went where it was meant to")
+		des, _ := os.ReadDir(outside)
+		assert.Empty(t, des, "nothing was written outside")
+	})
+
+	t.Run("a copy into the cache is of the workspace's directory, not of what the link shows", func(t *testing.T) {
+		c, ws := newCache(t, 2), spaWorkspace(t)
+		outside := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(outside, "node_modules/poison"), 0o755))
+		testHook = func(stage string) {
+			switch stage {
+			case "before-clone":
+				swapAway(ws, outside)
+			case "copied-in":
+				swapBack(ws)
+				testHook = nil
+			}
+		}
+		r, err := c.Prepare(context.Background(), ws, spaSpec)
+		require.NoError(t, err)
+		_, serr := os.Stat(filepath.Join(c.Dir, r.Key, "spa/node_modules/x/index.js"))
+		assert.NoError(t, serr, "the entry holds what the install made")
+		_, serr = os.Stat(filepath.Join(c.Dir, r.Key, "spa/node_modules/poison"))
+		assert.True(t, os.IsNotExist(serr), "and nothing from outside")
+	})
 }

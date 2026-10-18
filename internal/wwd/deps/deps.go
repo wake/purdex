@@ -155,11 +155,16 @@ func (c *Cache) Prepare(ctx context.Context, ws string, spec Spec) (Result, erro
 		return Result{}, err
 	}
 	defer os.RemoveAll(tmp)
+	root, err := os.OpenRoot(ws)
+	if err != nil {
+		return Result{}, err
+	}
+	defer root.Close()
 	for _, d := range dirs {
 		if st, err := os.Lstat(filepath.Join(ws, d)); err != nil || !st.IsDir() {
 			return Result{}, fmt.Errorf("deps: the install did not make %s", d)
 		}
-		if err := clone(ctx, filepath.Join(ws, d), filepath.Join(tmp, d)); err != nil {
+		if err := cloneDir(ctx, root, ws, d, tmp, true); err != nil {
 			return Result{}, err
 		}
 		if testHook != nil {
@@ -208,7 +213,7 @@ func (c *Cache) cloneOut(ctx context.Context, key, entry, ws string, dirs []stri
 				return false, err
 			}
 		}
-		if err := clone(ctx, filepath.Join(entry, d), filepath.Join(ws, d)); err != nil {
+		if err := cloneDir(ctx, root, ws, d, entry, false); err != nil {
 			_ = root.RemoveAll(d)
 			return false, err
 		}
@@ -353,14 +358,52 @@ func (c *Cache) sweep() {
 	}
 }
 
-// clone copies the tree src to dst (which is not there) by copy-on-write where the file system can, keeping symlinks as links.
-func clone(ctx context.Context, src, dst string) error {
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+// errNoCloneAt says that clonefileat is not possible here.
+var errNoCloneAt = errors.New("deps: no clone between open directories")
+
+// cloneDir clones the dependency directory d (a path relative to both sides) between the workspace and the cache. The side that is the
+// workspace is reached through root and opened as a directory first, and so is the cache's side; the clone is then made between the
+// two open directories (clonefileat), so a workspace directory swapped for a link while it runs changes nothing: the descriptor names the
+// inode that was opened. toCache says which way: from the workspace into dir (the temp entry) or from dir (the entry) into the workspace.
+// Where clonefileat cannot be used the tree is copied with cp, by path: a swap while it runs is then only found by the caller's check
+// afterwards.
+func cloneDir(ctx context.Context, root *os.Root, ws, d, dir string, toCache bool) error {
+	parent, name := path.Dir(d), path.Base(d)
+	cacheParent := filepath.Join(dir, parent)
+	if toCache {
+		if err := os.MkdirAll(cacheParent, 0o755); err != nil {
+			return err
+		}
+	}
+	wsParent, err := root.OpenFile(parent, os.O_RDONLY, 0)
+	if err != nil {
 		return err
 	}
+	defer wsParent.Close()
+	cache, err := os.Open(cacheParent)
+	if err != nil {
+		return err
+	}
+	defer cache.Close()
+	src, dst := cache, wsParent
+	if toCache {
+		src, dst = wsParent, cache
+	}
+	if testHook != nil {
+		testHook("before-clone")
+	}
+	err = cloneAt(src, dst, name)
+	if !errors.Is(err, errNoCloneAt) {
+		return err
+	}
+	return cpClone(ctx, filepath.Join(src.Name(), name), filepath.Join(dst.Name(), name))
+}
+
+// cpClone copies the tree src to dst (which is not there) by copy-on-write where the file system can, keeping symlinks as links.
+func cpClone(ctx context.Context, src, dst string) error {
 	args := []string{"-a", "--reflink=auto", src, dst}
 	if runtime.GOOS == "darwin" {
-		args = []string{"-c", "-R", src, dst} // clonefile(2), a plain copy where it cannot
+		args = []string{"-c", "-R", src, dst} // clonefile(2) by path, a plain copy where it cannot
 	}
 	cmd := execstat.CommandContext(ctx, "wwd.deps-clone", "cp", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
