@@ -547,3 +547,50 @@ func TestStages_SeqSurvivesASweptSession(t *testing.T) {
 	_, same := l.since("s", seq+10, t0.Add(time.Hour))
 	assert.Equal(t, seq+10, same)
 }
+
+// The connections of a session share one look at each transcript revision (codex attack on #3421).
+func TestStages_SeenAlreadyUntilTheRevisionOrTheSessionMoves(t *testing.T) {
+	var l stageLedger
+	l.begin("s", "a", "x", t0)
+	assert.False(t, l.seenAlready("s", "e:1"), "nothing observed yet")
+	l.markSeen("s", "e:1", l.sessionSeq("s"))
+	assert.True(t, l.seenAlready("s", "e:1"))
+	assert.False(t, l.seenAlready("s", "e:2"), "a new transcript revision is worth a look")
+	l.begin("s", "b", "y", t0) // the session's ledger moved
+	assert.False(t, l.seenAlready("s", "e:1"))
+	assert.False(t, l.seenAlready("other", "e:1"))
+}
+
+// A change that lands while an observer works is not covered by its look (codex critic on #3421).
+func TestStages_AnIdThatEntersDuringALookIsStillLookedAt(t *testing.T) {
+	var l stageLedger
+	l.begin("s", "a", "x", t0)
+	seq := l.sessionSeq("s") // the observer starts here
+	l.begin("s", "late", "y", t0)
+	l.set("s", "late", "entered", "", "fill", t0)
+	l.markSeen("s", "e:1", seq) // and finishes without having seen "late"
+	assert.False(t, l.seenAlready("s", "e:1"))
+}
+
+// Another session's traffic does not spoil this session's shared look.
+func TestStages_AnotherSessionsChangesDoNotInvalidateTheLook(t *testing.T) {
+	var l stageLedger
+	l.begin("s", "a", "x", t0)
+	l.markSeen("s", "e:1", l.sessionSeq("s"))
+	l.begin("other", "z", "z", t0)
+	l.set("other", "z", "entered", "", "fill", t0)
+	assert.True(t, l.seenAlready("s", "e:1"))
+}
+
+func TestStages_WindowFromIsTheEarliestOpenWindow(t *testing.T) {
+	var l stageLedger
+	_, ok := l.windowFrom("s")
+	assert.False(t, ok)
+	l.begin("s", "a", "x", t0.Add(10*time.Second))
+	l.begin("s", "b", "y", t0.Add(5*time.Second))
+	l.begin("s", "done", "z", t0)
+	l.set("s", "done", "failed", "r", "", t0)
+	from, ok := l.windowFrom("s")
+	require.True(t, ok)
+	assert.Equal(t, ms(t0.Add(5*time.Second))-stageItemBefore.Milliseconds(), from, "finished ids do not hold the window open")
+}
