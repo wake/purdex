@@ -27,7 +27,8 @@ const (
 	// ActionRewrite runs the command as `pdx test <Task> <Args…>`.
 	ActionRewrite Action = "rewrite"
 	// ActionAdhoc runs the command as `pdx test --adhoc -- <argv…>`: the manifest's mode is rewrite and no task declares the command.
-	// Queued is true (an ad-hoc job takes a heavy slot and may wait for it).
+	// It is never queued (spec §8.3: the fast lane, on a heavy slot; the output streams as it runs), so the hook leaves the call in the
+	// foreground.
 	ActionAdhoc Action = "adhoc"
 	// ActionAdvise lets the command run as it is and says which task to use.
 	ActionAdvise Action = "advise"
@@ -92,7 +93,7 @@ func Match(cwd string, argv []string) Result {
 	case manifest.EntryRewrite:
 		// An undeclared command runs as an ad-hoc job (spec §8.3). Whether the call can be turned into one (a plain command with a
 		// known directory) is the hook's to see; where it cannot, it advises with the hint.
-		r.Action, r.Queued = ActionAdhoc, true
+		r.Action = ActionAdhoc
 	default:
 		r.Action = ActionAdvise
 	}

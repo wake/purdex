@@ -601,13 +601,13 @@ test('a deny holds for the repeats too, and an advise note is said once', async 
 
 // ---- ad-hoc (mode rewrite, no task declares the command): `pdx test --adhoc -- <argv…>` ----
 
-const ADHOC = { action: 'adhoc', mode: 'rewrite', hint: 'go-pkg', queued: true }
+const ADHOC = { action: 'adhoc', mode: 'rewrite', hint: 'go-pkg' } // never queued: the fast lane (spec 8.3)
 
-test('adhoc: a plain command becomes pdx test --adhoc -- argv, in the background, and the note says it is ad-hoc', async ($, on) => {
+test('adhoc: a plain command becomes pdx test --adhoc -- argv, stays in the foreground, and the note says it is ad-hoc', async ($, on) => {
   const r = rig(on, entryAnswer({ 'go vet ./...': ADHOC }), () => BASH_OK, ENTRY_ON)
   const out = await bash($, 'go vet ./...')
   expect(r.ran[0].command).toBe("'pdx' test --adhoc -- go vet ./...")
-  expect(r.ran[0].bg).toBe(true)
+  expect(r.ran[0].bg).toBeUndefined() // its output streams as it runs, and the caller gets the real exit status
   expect(out.context.join('\n')).toContain('[entry].mode = rewrite')
 })
 

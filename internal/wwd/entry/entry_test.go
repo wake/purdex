@@ -178,11 +178,9 @@ func TestMatch_NoMatchFallsToTheMode(t *testing.T) {
 			}
 			if mode == "rewrite" {
 				assert.Equal(t, "rewrite", r.Mode)
-				assert.True(t, r.Queued, "an ad-hoc job takes a heavy slot and may wait for it")
 				assert.Empty(t, r.Reason, "nothing is held back: the command runs as ad-hoc")
-			} else {
-				assert.False(t, r.Queued, "only the ad-hoc answer says it")
 			}
+			assert.False(t, r.Queued, "only a declared task goes through the queue; an ad-hoc job is never queued (spec 8.3)")
 		}
 	}
 }
