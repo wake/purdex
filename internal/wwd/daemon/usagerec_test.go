@@ -120,7 +120,6 @@ func TestUsageRecorderAJobNoSampleSawHasUnknownFigures(t *testing.T) {
 
 func TestUsageRecorderLeavesOutWhatDidNotRunHere(t *testing.T) {
 	r, sink := newRec(ut0.Add(-time.Hour))
-	sampleJob(r, 0, wire.ZoneNormal, nil)
 	running := finalJob(wire.StateRunning, ut0, ut0)
 	r.OnJobEvent(wire.JobEvent{Job: running}) // not final
 	elsewhere := finalJob(wire.StateSucceeded, ut0, ut0.Add(time.Second))
@@ -134,6 +133,45 @@ func TestUsageRecorderLeavesOutWhatDidNotRunHere(t *testing.T) {
 	r.OnJobEvent(wire.JobEvent{Job: cancelled})
 	if rows := drain(r, sink); len(rows) != 0 {
 		t.Fatalf("%+v", rows)
+	}
+}
+
+// A result with no time (a lease that ran out, a release) still gets a row when the samples saw the job: they say when it was there.
+func TestUsageRecorderAResultWithoutTimesUsesWhatTheSamplesSaw(t *testing.T) {
+	r, sink := newRec(ut0.Add(-time.Hour))
+	sampleJob(r, 0, wire.ZoneNormal, nil)
+	sampleJob(r, 1, wire.ZoneNormal, nil)
+	j := finalJob(wire.StateFailed, ut0, ut0)
+	j.Result = &wire.Result{Host: "mlab", Reason: "lease_lost"}
+	r.OnJobEvent(wire.JobEvent{Job: j})
+	rows := drain(r, sink)
+	if len(rows) != 1 || rows[0].Validate() != nil {
+		t.Fatalf("%+v", rows)
+	}
+	u := rows[0]
+	if !u.StartedAt.Equal(ut0) || !u.EndedAt.Equal(ut0.Add(5*time.Second)) || !u.Partial || u.CPUSeconds == nil {
+		t.Fatalf("%+v", u)
+	}
+}
+
+// A full writer queue drops rows, counts them, and Run says so: the caller logs nothing.
+func TestUsageRecorderCountsTheRowsItDropped(t *testing.T) {
+	r, sink := newRec(ut0.Add(-time.Hour))
+	var said []string
+	r.logf = func(f string, a ...any) { said = append(said, f) }
+	for i := 0; i < usageQueueLen+3; i++ {
+		j := finalJob(wire.StateSucceeded, ut0, ut0.Add(time.Second))
+		j.ID = "j_" + time.Duration(i).String()
+		r.OnJobEvent(wire.JobEvent{Job: j})
+	}
+	if len(said) != 0 {
+		t.Fatalf("the callback logged: %v", said)
+	}
+	if rows := drain(r, sink); len(rows) != usageQueueLen {
+		t.Fatalf("%d rows", len(rows))
+	}
+	if len(said) != 1 || r.dropped.Load() != 0 { // Run told once, and reset the count
+		t.Fatalf("dropped %d said %v", r.dropped.Load(), said)
 	}
 }
 

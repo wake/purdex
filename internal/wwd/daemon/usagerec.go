@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"log"
+	"sync/atomic"
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/facts"
@@ -29,6 +30,8 @@ type UsageRecorder struct {
 	sink UsageSaver
 	out  chan wire.JobUsage
 	logf func(format string, args ...any)
+	// dropped counts the rows a full writer queue turned away; Run reports it (the callback itself does no logging).
+	dropped atomic.Int64
 }
 
 // NewUsageRecorder records for host, from tr's samples, into sink.
@@ -53,7 +56,7 @@ func (r *UsageRecorder) OnJobEvent(ev wire.JobEvent) {
 	select {
 	case r.out <- u:
 	default:
-		r.logf("wwd: usage of %s dropped: the writer is behind", u.JobID)
+		r.dropped.Add(1)
 	}
 }
 
@@ -63,16 +66,24 @@ func (r *UsageRecorder) Run(ctx context.Context) {
 		select {
 		case u := <-r.out:
 			r.save(u)
+			r.reportDropped()
 		case <-ctx.Done():
 			for {
 				select {
 				case u := <-r.out:
 					r.save(u)
 				default:
+					r.reportDropped()
 					return
 				}
 			}
 		}
+	}
+}
+
+func (r *UsageRecorder) reportDropped() {
+	if n := r.dropped.Swap(0); n > 0 {
+		r.logf("wwd: %d usage rows dropped: the writer was behind", n)
 	}
 }
 
@@ -94,10 +105,28 @@ func (r *UsageRecorder) row(j wire.Job) (wire.JobUsage, bool) {
 		return wire.JobUsage{}, false
 	}
 	sm, seen := r.tr.Take(j.ID) // takes it out even for a job that is not recorded, so nothing is kept for it
-	if j.Result == nil || j.Result.StartedAt == nil || j.Result.FinishedAt == nil {
-		return wire.JobUsage{}, false // it never started: expired, superseded or cancelled in the queue
+	if j.Result == nil {
+		return wire.JobUsage{}, false
 	}
-	started, ended := *j.Result.StartedAt, *j.Result.FinishedAt
+	// A result can lack a time (a lease that ran out, a release): then the samples say when the job was there. With neither a time
+	// nor a sample there is no evidence the job ran, and no row.
+	started, ended, guessed := time.Time{}, time.Time{}, false
+	switch {
+	case j.Result.StartedAt != nil:
+		started = *j.Result.StartedAt
+	case seen:
+		started, guessed = sm.FirstSeen, true
+	default:
+		return wire.JobUsage{}, false
+	}
+	switch {
+	case j.Result.FinishedAt != nil:
+		ended = *j.Result.FinishedAt
+	case seen:
+		ended = sm.LastSeen
+	default:
+		return wire.JobUsage{}, false
+	}
 	if ended.Before(started) {
 		ended = started
 	}
@@ -123,7 +152,7 @@ func (r *UsageRecorder) row(j wire.Job) (wire.JobUsage, bool) {
 		u.OwnerAtStart, u.OwnerSeen = sm.OwnerAtStart, sm.OwnerSeen
 	}
 	// wwd was restarted while the job ran: the samples before the restart are gone, the sampled figures miss the beginning
-	u.Partial = started.Before(r.tr.StartedAt())
+	u.Partial = guessed || started.Before(r.tr.StartedAt()) // a start made up from the samples is not the job's own
 	return u, true
 }
 

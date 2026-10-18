@@ -175,7 +175,9 @@ func run(cfgPath string) error {
 		d.OnFacts(f)
 		usage.OnFacts(f)
 	})
-	go usage.Run(ctx)
+	usageDone := make(chan struct{})
+	go func() { usage.Run(ctx); close(usageDone) }()
+	defer func() { stop(); <-usageDone }() // runs before st.Close (it was deferred earlier): the queued rows are written first, also when run() failed
 	go sampler.Run(ctx)
 	go d.Pool().Run(ctx)
 	go sweepQueue(ctx, q) // lapsed leases, queue timeouts, retention
