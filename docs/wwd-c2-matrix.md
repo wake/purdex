@@ -160,8 +160,8 @@ sh scripts/wwd-c2-matrix.sh --all                  # 全部（約 58 分鐘）
 
 ### 案例 14：air19 不 claim
 
-- 查 wwd.db：`claim_worker='air19' and created_at >= <這次執行開始的毫秒>` 的工作數是 **0**；air19 的 worker 是關的。
-  **這個查詢按「工作建立時間」過濾，不是按 claim 時間**：矩陣開始前就排進佇列、之後才被 air19 claim 的工作不會被數到。預設要求佇列是空的（前置檢查），所以正常情況不會發生；用 `--force` 時要自己留意。若 wwd.db 有 claim 時間欄位，第一次執行後應改用它（見 §8）。
+- 查 wwd.db：`select count(*) from jobs where claim_worker='air19'` 現在的值減去**執行開始時**的值（前置檢查記下）是 **0**；air19 的 worker 是關的。
+  這樣不看工作是什麼時候建立的，所以矩陣開始前就排進佇列、之後才被 air19 claim 的工作（`--force`）也會被數到。假設：wwd.db 的 `claim_worker` 在 claim 後就記著那台（第一次執行要核對，見 §8 第 6 項）。
 
 ## 5. probe 任務
 
@@ -225,7 +225,7 @@ ssh <host> "curl -sS --unix-socket \$HOME/.local/share/wwd/wwd.sock -X PUT -H 'C
 3. `PUT /v1/worker` 收的 body 形狀就是 `GET /v1/worker` 給的。
 4. 缺 log 時 `GET /v1/jobs/{id}/log` 回 404。
 5. 案例 12：被拒絕的遠端 task 最終的 state／reason 字樣（4e 定義）。
-6. 案例 14 與每個案例結尾的 air19 檢查：wwd.db 有沒有 claim 時間（或事件版本）欄位，有的話改用它取代 `created_at`。
+6. 案例 14 與每個案例結尾的 air19 檢查：wwd.db 的 `jobs.claim_worker` 是否在 claim 後就記著 worker 名，以及 jobs 表是否會被清理（清理使數量變少，腳本把減少視為 0）。
 7. 案例 13：per-job 資料庫的環境變數名（暫用 `DB_DATABASE`／`DB_HOST`／`DB_PORT`／`DB_USERNAME`／`DB_PASSWORD`）、mserv 測試 MySQL 的資料庫命名與登入方式。
 8. air26 非互動 shell 的 PATH 找得到 `pdx`（案例 8）。
 

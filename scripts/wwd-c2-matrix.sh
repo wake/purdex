@@ -34,7 +34,7 @@ SOCK='$HOME/.local/share/wwd/wwd.sock'
 DB='$HOME/.local/share/wwd/wwd.db'
 RAN=/tmp/wwd-c2-ran.log          # the probe tasks append one line per run here, outside the workspace (darwin hosts)
 WORK="${TMPDIR:-/tmp}/wwd-c2.$$"
-STARTED_MS=0
+AIR19_BASE=0
 
 # ---- the cases (number, title, hosts, minutes, needs) --------------------------------------------------------
 catalog() {
@@ -172,6 +172,14 @@ jrelease() { printf '{"claim_id":"%s","reason":"reclaim"}' "$1"; }
 jworker() { printf '{"worker":"%s","labels":["os:darwin","arch:arm64"],"fingerprint":{}}' "$1"; }   # a real worker's labels: the job's must be a subset
 # db_q SQL: a read-only query of the origin's wwd.db (SQL with single quotes only)
 db_q() { if [ "$dry" -eq 1 ]; then say "? on mlab: sqlite3 -readonly: $1" >&2; echo 0; else q mlab "sqlite3 -readonly $DB \"$1\""; fi; }
+# air19_new: how many jobs air19 has claimed since the run began = the count of all jobs it ever claimed, minus the count at the start. This
+# does not depend on when a job was made, so a job queued before the run (--force) and claimed during it is counted too.
+AIR19_Q="select count(*) from jobs where claim_worker='air19'"
+air19_new() {
+  a_n=$(db_q "$AIR19_Q")
+  case "$a_n" in ''|*[!0-9]*) echo "?"; return 0 ;; esac
+  if [ "$a_n" -gt "$AIR19_BASE" ]; then echo $((a_n - AIR19_BASE)); else echo 0; fi
+}
 mserv_dbs() { q mserv "mysql -N -e 'show databases' 2>/dev/null | grep -c '^wwd_' || true"; }     # TODO(first-run): the database naming and the credentials of mserv's test MySQL
 # the jobs this run made are listed in a file: submit runs in a $( ) subshell, which could not hand a variable back
 track() { if [ "$dry" -eq 0 ]; then echo "${2:-mlab} $1" >> "$WORK/jobs"; fi; }     # track ID [ORIGIN]
@@ -228,7 +236,7 @@ precheck() {
     [ "$dry" -eq 1 ] || [ "$pc_q" = 0 ] || { say "FAIL: $pc_q jobs are queued already (the matrix wants a quiet pool; --force to go on)"; exit 1; }
   fi
   [ "$(sock air19 GET /v1/worker | jq -r .enabled 2>/dev/null || echo false)" = false ] || [ "$dry" -eq 1 ] || { say "FAIL: air19's worker is on"; exit 1; }
-  STARTED_MS=$(date +%s)000
+  AIR19_BASE=$(db_q "$AIR19_Q"); case "$AIR19_BASE" in ''|*[!0-9]*) say "FAIL: cannot read the claims of air19 from wwd.db"; exit 1 ;; esac
   x mkdir -p "$WORK/repo" "$WORK/saved"
   scratch_repo
 }
@@ -611,7 +619,7 @@ case_13() {
 }
 
 case_14() {
-  check "air19 claimed nothing since this run began" "$(db_q "select count(*) from jobs where claim_worker='air19' and created_at >= $STARTED_MS")" 0
+  check "air19 claimed nothing since this run began" "$(air19_new)" 0
   check "air19's worker is off" "$(sock air19 GET /v1/worker | jq -r .enabled 2>/dev/null || echo false)" false
 }
 
@@ -624,7 +632,7 @@ for run_case in $cases; do
   "case_$run_case"
   # the air19 rule holds in every case: it claimed nothing since the matrix began
   if [ "$run_case" != 14 ]; then
-    check "air19 claimed nothing during case $run_case" "$(db_q "select count(*) from jobs where claim_worker='air19' and created_at >= $STARTED_MS")" 0
+    check "air19 claimed nothing during case $run_case" "$(air19_new)" 0
   fi
   if [ -n "$CASE_SKIP" ]; then say "SKIP case $run_case: $CASE_SKIP"; SKIPPED="$SKIPPED $run_case"
   elif [ "$CASE_FAILS" -gt 0 ]; then say "FAIL case $run_case"; FAILED="$FAILED $run_case"

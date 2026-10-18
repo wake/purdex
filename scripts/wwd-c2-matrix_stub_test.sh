@@ -91,6 +91,8 @@ cat > "$bin/sqlite3" <<'EOF'
 echo "$*" >> "$STUB/sql.log"
 case "$*" in
   *"select attempts"*) echo 1 ;;
+  *"claim_worker='air19'"*)   # the first question is the count at the start; later ones give STUB_AIR19_LATER when it is set
+    if [ -e "$STUB/air19-asked" ] && [ -n "${STUB_AIR19_LATER:-}" ]; then echo "$STUB_AIR19_LATER"; else : > "$STUB/air19-asked"; echo 0; fi ;;
   *"select id"*) echo j_stub_exp ;;
   *) echo 0 ;;
 esac
@@ -130,7 +132,8 @@ hasnt "stub-token-value" "case 11 (the token must never be printed)"
 
 run succeeded 14 || { cat "$tmp/out" >&2; fail "case 14: exit code"; }
 has "PASS case 14" "case 14"
-grep -q "claim_worker='air19' and created_at >=" "$stub/sql.log" || fail "case 14 must count only the claims since this run began"
+grep -q "claim_worker='air19'" "$stub/sql.log" || fail "case 14 must count the claims of air19"
+! grep -q "created_at" "$stub/sql.log" || fail "the air19 count must not depend on when a job was made (a job queued before the run counts too)"
 
 # case 13 with --keep: the scratch repo stays, and the PHP probe really uses its database
 rm -f "$stub"/*.log
@@ -253,6 +256,13 @@ HOME="$home" PATH="$tmp/psbin:$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_PID="$
 kill -CONT "$fakewwd" 2>/dev/null || true; kill -KILL "$fakewwd" 2>/dev/null || true
 [ "$rc" -ne 0 ] || fail "a ps that fails must make the exit code non-zero"
 has "the clean-up could not put back:.*thaw:air26" "thaw with a ps that fails"
+
+# air19 claims a job after the run began (a job made before it, no matter): case 14 FAILs
+rm -f "$stub"/*.log "$stub/air19-asked"
+rc=0
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_AIR19_LATER=1 STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "a claim by air19 must make the exit code non-zero"
+has "FAIL air19 claimed nothing since this run began: got '1', expected '0'" "case 14 with a claim by air19"
 
 # ---- a case that fails -----------------------------------------------------------------------------------------------------
 rc=0
