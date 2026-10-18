@@ -151,6 +151,11 @@ func TestCommandSignatureNormalizesTempNames(t *testing.T) {
 	same(t, "node run-124", []string{"node", "scripts/run-124.js"})
 	same(t, "node run-123.js", []string{"node", "run-123.js"})
 	same(t, "python3 run-123", []string{"python3", "run-123"})
+	// a path that only starts with a temp directory but leads out of it is not in it
+	same(t, "node release-2026", []string{"node", "/tmp/../opt/jobs/release-2026.js"})
+	same(t, "node release-2027", []string{"node", "/tmp/../opt/jobs/release-2027.js"})
+	same(t, "node run-123", []string{"node", "/tmp2/run-123.js"})         // a different directory with the same start
+	same(t, "node run", []string{"node", "/opt/../tmp/./sub/run-123.js"}) // and one that leads in
 	// real names stay, in a temp directory too
 	same(t, "node vitest", []string{"node", "/x/node_modules/.bin/vitest"})
 	same(t, "node es2020", []string{"node", "/tmp/es2020"})

@@ -190,6 +190,7 @@ var (
 var tempDirs = []string{"/tmp/", "/private/tmp/", "/var/tmp/", "/var/folders/", "/private/var/folders/"}
 
 func tempPath(p string) bool {
+	p = path.Clean(p) // where it really is: "/tmp/../opt/x" is in /opt, "/opt/../tmp/x" in /tmp
 	for _, d := range tempDirs {
 		if strings.HasPrefix(p, d) {
 			return true
