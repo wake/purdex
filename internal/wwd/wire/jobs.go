@@ -95,6 +95,11 @@ type Job struct {
 	State     JobState  `json:"state"`
 	Claim     *Claim    `json:"claim"`
 	Result    *Result   `json:"result"`
+	// Manual and ManualSeq are the manual place of a queued job (spec §4.6): "" (the score decides), front, back or hold. Held jobs are
+	// not handed out; fronts go before every scored job and backs after, each by ManualSeq, smallest first (a later front has a smaller
+	// one than the fronts before it, a later back a larger one). ManualSeq is 0 when Manual is empty or hold.
+	Manual    Position `json:"manual"`
+	ManualSeq int64    `json:"manual_seq"`
 }
 
 // JobSubmission is the body of POST /v1/jobs (local socket only, spec §4.4): what the submitter fixes. The origin assigns the
@@ -221,6 +226,14 @@ func (j Job) Validate() error {
 	if j.Local && j.Cacheable {
 		return fmt.Errorf("job: a local job is never cacheable")
 	}
+	if !j.Manual.ValidOnJob() {
+		return fmt.Errorf("job: invalid manual place %q", j.Manual)
+	}
+	// the number fits the place: none and hold have none, a front is below zero and a back above it
+	if (j.Manual == "" || j.Manual == PositionHold) != (j.ManualSeq == 0) ||
+		(j.Manual == PositionFront && j.ManualSeq > 0) || (j.Manual == PositionBack && j.ManualSeq < 0) {
+		return fmt.Errorf("job: manual_seq %d does not fit the place %q", j.ManualSeq, j.Manual)
+	}
 	// the same payload checks as a submission: a job that cannot be indexed, fetched or run is refused at the boundary
 	return validatePayload(j.Task, j.Repo, j.Snapshot, j.TimeoutS, j.QueueTimeoutS)
 }
@@ -319,6 +332,18 @@ type ReleaseRequest struct {
 	ClaimID string        `json:"claim_id"`
 	Reason  ReleaseReason `json:"reason"`
 	Detail  string        `json:"detail"`
+}
+
+// PositionRequest is the body of POST /v1/jobs/{id}/position (local socket only, spec §4.6): the manual place to put a queued job in.
+type PositionRequest struct {
+	Position Position `json:"position"`
+}
+
+func (r PositionRequest) Validate() error {
+	if !r.Position.ValidRequest() {
+		return fmt.Errorf("position %q is not front, back, hold or normal", r.Position)
+	}
+	return nil
 }
 
 func (r ReleaseRequest) Validate() error {

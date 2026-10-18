@@ -23,6 +23,9 @@ type fakeAPI struct {
 	logErr    error
 	cancelErr error
 	cancelled []string
+	moved     []string
+	moveJob   wire.Job
+	moveErr   error
 	waitJob   wire.Job
 	info      wire.Info
 	pool      wire.Pool
@@ -56,6 +59,14 @@ func (f *fakeAPI) Log(context.Context, string) ([]byte, error) {
 func (f *fakeAPI) Cancel(_ context.Context, id string) error {
 	f.cancelled = append(f.cancelled, id)
 	return firstErr(f.cancelErr, f.err)
+}
+func (f *fakeAPI) SetPosition(_ context.Context, id string, p wire.Position) (wire.Job, error) {
+	f.moved = append(f.moved, id+" "+string(p))
+	j := f.moveJob
+	if p != wire.PositionNormal {
+		j.Manual = p
+	}
+	return j, firstErr(f.moveErr, f.err)
 }
 func (f *fakeAPI) WaitJob(context.Context, string, func(wire.Job)) (wire.Job, error) {
 	return f.waitJob, f.err
@@ -254,9 +265,35 @@ func TestCancel(t *testing.T) {
 	}
 }
 
+func TestMove(t *testing.T) {
+	f := &fakeAPI{}
+	for _, p := range []string{"front", "back", "hold", "normal"} {
+		code, out, _ := runJobs(f, "move", "j_1", p)
+		if code != 0 || !strings.Contains(out, "j_1: "+p) {
+			t.Errorf("move %s: code %d out %q", p, code, out)
+		}
+	}
+	if fmt.Sprint(f.moved) != "[j_1 front j_1 back j_1 hold j_1 normal]" {
+		t.Errorf("moved %v", f.moved)
+	}
+	f.moved = nil
+	for _, args := range [][]string{{"move"}, {"move", "j_1"}, {"move", "j_1", "sideways"}, {"move", "j_1", "front", "extra"}} {
+		if code, _, errOut := runJobs(f, args...); code != ExitUsage || errOut == "" {
+			t.Errorf("%v: code %d %q", args, code, errOut)
+		}
+	}
+	if len(f.moved) != 0 {
+		t.Errorf("a bad call reached wwd: %v", f.moved)
+	}
+	f.moveErr = &client.StatusError{Code: 409, Body: `{"state":"running"}`}
+	if code, _, errOut := runJobs(f, "move", "j_1", "front"); code != ExitFailed || errOut == "" {
+		t.Fatalf("a refusal: %d %q", code, errOut)
+	}
+}
+
 func TestUnreachableWWDIsExit3Everywhere(t *testing.T) {
 	f := &fakeAPI{err: fmt.Errorf("%w: dial", client.ErrUnavailable)}
-	for _, args := range [][]string{{"ls"}, {"show", "j_1"}, {"log", "j_1"}, {"cancel", "j_1"}} {
+	for _, args := range [][]string{{"ls"}, {"show", "j_1"}, {"log", "j_1"}, {"cancel", "j_1"}, {"move", "j_1", "front"}} {
 		if code, _, errOut := runJobs(f, args...); code != ExitNoWWD || !strings.Contains(errOut, "wwd is not running") {
 			t.Errorf("jobs %v: %d %q", args, code, errOut)
 		}
