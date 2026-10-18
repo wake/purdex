@@ -132,7 +132,7 @@ func TestControl_RefusesWhatWWDShouldNeverSee(t *testing.T) {
 		{"PUT", "/api/pool/hosts/air26/worker", strings.Repeat("x", 70000)},
 		{"POST", "/api/pool/hosts/air26/exceptions", `{}`},
 		{"PUT", "/api/pool/hosts/a%00b/worker", workerJSON},                            // a control character in the alias
-		{"PUT", "/api/pool/hosts/" + strings.Repeat("a", 129) + "/worker", workerJSON}, // an alias no config would hold
+		{"PUT", "/api/pool/hosts/" + strings.Repeat("a", 129) + "/worker", workerJSON}, // over the shared limit, which wwd's config refuses too
 		{"DELETE", "/api/pool/hosts/air26/exceptions/%0a", ""},
 	} {
 		rr := send(mux, c.method, c.path, c.body, asAdmin)

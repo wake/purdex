@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/wake/purdex/internal/devices"
 	"github.com/wake/purdex/internal/middleware"
@@ -19,18 +18,13 @@ const ErrWWDRejected = "wwd_rejected"
 // maxControlBody caps a change's body: a worker setting or an exception is a few hundred bytes.
 const maxControlBody = 64 << 10
 
-// plainText is a string that can be one value of a query or one path segment once escaped: not empty, bounded, valid UTF-8,
-// no control character. Nothing else is restricted: wwd accepts any non-empty alias in its peer config, so any alias the
-// pool lists must be changeable, and client.Mutate escapes the host (and the name) so it can add neither a parameter nor
-// a path.
-func plainText(s string) bool {
-	return s != "" && len(s) <= 128 && utf8.ValidString(s) && !strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || r == 0x7f })
-}
+// validAlias is the one rule for a host alias (wire.ValidAlias), the same one wwd's config applies to its peers: whatever
+// the config accepts, these routes can name. client.Mutate escapes the host and the exception name, so neither can add a
+// parameter or a path.
+func validAlias(s string) bool { return wire.ValidAlias(s) }
 
-func validAlias(s string) bool { return plainText(s) }
-
-// exceptionName adds to plainText that it is not a dot segment.
-func exceptionName(s string) bool { return plainText(s) && s != "." && s != ".." }
+// exceptionName is an exception name as one path segment: the alias rule, and not a dot segment.
+func exceptionName(s string) bool { return wire.ValidAlias(s) && s != "." && s != ".." }
 
 func (m *Module) registerControl(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/pool/hosts/{alias}/worker", m.handlePutWorker)
