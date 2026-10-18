@@ -77,6 +77,10 @@ type Releaser interface {
 	Release(ctx context.Context, jobID string) error
 }
 
+// releaseTimeout bounds one release: a call to an origin that does not answer must not hold the reclaim for ever. (A variable so that a
+// test can lower it.)
+var releaseTimeout = 15 * time.Second
+
 // ReclaimAll stops the jobs, all at the same time (the owner is waiting), and gives each one back after its processes are gone. A job
 // that cannot be stopped is still given back: its lease would run out otherwise, and the owner has to be left alone. Every error is
 // returned, and one job's failure never keeps another from being given back.
@@ -88,7 +92,11 @@ func ReclaimAll(ctx context.Context, jobs []Job, rel Releaser) error {
 		go func(i int, j Job) {
 			defer wg.Done()
 			stopErr := j.Stop(ctx)
-			relErr := rel.Release(ctx, j.ID())
+			// The release does not share the stop's context: the stop may have ended because that context did, and a release made with
+			// it would abort at once and leave the job to come back only when its lease runs out. It gets its own, with a bound.
+			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
+			relErr := rel.Release(rctx, j.ID())
+			cancel()
 			errs[i] = errors.Join(stopErr, relErr)
 		}(i, j)
 	}

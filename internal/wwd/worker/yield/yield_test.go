@@ -88,11 +88,16 @@ type fakeReleaser struct {
 	order *[]string
 	mu    *sync.Mutex
 	fail  map[string]error
+	// ctxErr, when set, gets the error of the context each Release was called with
+	ctxErr *[]error
 }
 
-func (r fakeReleaser) Release(_ context.Context, id string) error {
+func (r fakeReleaser) Release(ctx context.Context, id string) error {
 	r.mu.Lock()
 	*r.order = append(*r.order, "release:"+id)
+	if r.ctxErr != nil {
+		*r.ctxErr = append(*r.ctxErr, ctx.Err())
+	}
 	r.mu.Unlock()
 	return r.fail[id]
 }
@@ -146,4 +151,34 @@ func indexOf(s []string, v string) int {
 		}
 	}
 	return -1
+}
+
+// The stop ends because the context did (the owner cannot wait): the release is still made, with a context that is alive, or an HTTP
+// release would abort at once and the job would only come back when its lease ran out.
+func TestReclaimAll_TheReleaseOutlivesTheContextThatEndedTheStop(t *testing.T) {
+	order, mu := rig()
+	var ctxErrs []error
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	jobs := []Job{fakeJob{id: "a", order: order, mu: mu, stop: func(c context.Context) error { <-c.Done(); return c.Err() }}}
+	err := ReclaimAll(ctx, jobs, fakeReleaser{order: order, mu: mu, ctxErr: &ctxErrs})
+	require.ErrorIs(t, err, context.DeadlineExceeded, "the stop's error is reported")
+	require.Len(t, ctxErrs, 1, "the release was made")
+	assert.NoError(t, ctxErrs[0], "with a context that was alive")
+}
+
+type hangingReleaser struct{}
+
+func (hangingReleaser) Release(ctx context.Context, _ string) error { <-ctx.Done(); return ctx.Err() }
+
+// An origin that does not answer does not hold the reclaim for ever.
+func TestReclaimAll_AReleaseThatHangsIsCutOff(t *testing.T) {
+	old := releaseTimeout
+	releaseTimeout = 80 * time.Millisecond
+	t.Cleanup(func() { releaseTimeout = old })
+	order, mu := rig()
+	start := time.Now()
+	err := ReclaimAll(context.Background(), []Job{fakeJob{id: "a", order: order, mu: mu}}, hangingReleaser{})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), 2*time.Second)
 }
