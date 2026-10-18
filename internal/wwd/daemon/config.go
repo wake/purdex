@@ -20,6 +20,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/wake/purdex/internal/wwd/fault"
+	"github.com/wake/purdex/internal/wwd/jobdb"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -36,6 +37,7 @@ type Config struct {
 	Owner       OwnerRule    `toml:"owner"`
 	Peers       []PeerConfig `toml:"peers"`
 	Observe     ObserveRule  `toml:"observe"`
+	JobDB       JobDBConfig  `toml:"jobdb"`
 	Fault       fault.Config `toml:"fault"` // test hooks for the C2 matrix; all off unless enabled here
 	// Repos lists the prepared clones of this host: repo name = clone path
 	// (absolute, or ~/ for home). A path counts only once internal/wwd/clones has
@@ -61,6 +63,16 @@ func (w WorkerConfig) Slots() wire.Slots {
 		s.Light = max(*w.Light, 0)
 	}
 	return s
+}
+
+// JobDBConfig is the per-job MySQL database (internal/wwd/jobdb). Off unless Enabled; a host without it rejects a task that asks
+// for db "per-job". DefaultsFile is the administrator's mysql [client] file (the wwd_admin account, 600).
+type JobDBConfig struct {
+	Enabled      bool     `toml:"enabled"`
+	Host         string   `toml:"host"`
+	Port         int      `toml:"port"`
+	UserHosts    []string `toml:"user_hosts"`
+	DefaultsFile string   `toml:"defaults_file"`
 }
 
 // OwnerRule turns the "owner is active" rule on (air26 only).
@@ -109,6 +121,42 @@ func (c Config) validateWorker() error {
 	}
 	if c.Observe.MinMemMB < 0 {
 		return fmt.Errorf("observe.min_mem_mb is %d, it must be 0 (the default) or more", c.Observe.MinMemMB)
+	}
+	return nil
+}
+
+// validateJobDB checks the per-job database settings when they are on, and expands ~/ in the defaults file. The administrator's
+// credentials are never a default: without a defaults file the mysql client would take whatever account it finds.
+func (c *Config) validateJobDB(home string) error {
+	j := &c.JobDB
+	if !j.Enabled {
+		return nil
+	}
+	if j.Port < 0 || j.Port > 65535 {
+		return fmt.Errorf("jobdb.port is %d", j.Port)
+	}
+	if j.DefaultsFile == "" {
+		return fmt.Errorf("jobdb.defaults_file is empty; name the wwd_admin client file")
+	}
+	if j.DefaultsFile == "~" || strings.HasPrefix(j.DefaultsFile, "~/") {
+		j.DefaultsFile = filepath.Join(home, strings.TrimPrefix(j.DefaultsFile, "~"))
+	}
+	if !filepath.IsAbs(j.DefaultsFile) {
+		return fmt.Errorf("jobdb.defaults_file %q is not an absolute path", j.DefaultsFile)
+	}
+	// it holds the administrator's password: it must be there, be a plain file and be closed to group and others
+	fi, err := os.Stat(j.DefaultsFile)
+	if err != nil {
+		return fmt.Errorf("jobdb.defaults_file: %w", err)
+	}
+	if !fi.Mode().IsRegular() || fi.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("jobdb.defaults_file %s must be a regular file with mode 600 (it is %v)", j.DefaultsFile, fi.Mode())
+	}
+	// the same rule jobdb.New applies, so a bad host stops the start instead of the first job
+	for _, h := range j.UserHosts {
+		if !jobdb.ValidUserHost(h) {
+			return fmt.Errorf("jobdb.user_hosts: %q is not a plain host name or address", h)
+		}
 	}
 	return nil
 }
@@ -185,6 +233,9 @@ func LoadConfig(path, home string) (Config, error) {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	if err := c.validateRepos(home); err != nil {
+		return c, fmt.Errorf("config %s: %w", path, err)
+	}
+	if err := c.validateJobDB(home); err != nil {
 		return c, fmt.Errorf("config %s: %w", path, err)
 	}
 	if c.Port == 0 {

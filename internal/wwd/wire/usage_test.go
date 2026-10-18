@@ -15,7 +15,7 @@ func intp(v int) *int        { return &v }
 func goodUsage() JobUsage {
 	yes, no := true, false
 	return JobUsage{
-		JobID: "j_01JC", Host: "air26", Repo: "purdex", Task: "go-test", Slot: SlotHeavy, Class: ClassDev,
+		JobID: "j_01JC", Host: "air26", Repo: "purdex", Task: "go-test", SlotCharged: SlotHeavy, Class: ClassDev,
 		Source: UsageQueue, Result: StateSucceeded,
 		StartedAt: usageT0, EndedAt: usageT0.Add(90 * time.Second),
 		CPUSeconds: f64(270), CPUSource: CPUFromRusage,
@@ -50,7 +50,7 @@ func TestJobUsageRefusesWhatCannotBeRight(t *testing.T) {
 			yes, no := true, false
 			u.OwnerAtStart, u.OwnerSeen = &yes, &no
 		},
-		"an unknown slot":             func(u *JobUsage) { u.Slot = "medium" },
+		"an unknown slot":             func(u *JobUsage) { u.SlotCharged = "medium" },
 		"an unknown class":            func(u *JobUsage) { u.Class = "urgent" },
 		"an unknown source":           func(u *JobUsage) { u.Source = "cron" },
 		"a job still queued":          func(u *JobUsage) { u.Result = StateQueued },
@@ -148,6 +148,24 @@ func TestJobUsageRoundTripsAndDecodesStrictly(t *testing.T) {
 	_ = json.Unmarshal(b, &raw)
 	if string(raw["owner_at_start"]) != "null" || string(raw["owner_seen"]) != "null" {
 		t.Fatalf("%s %s", raw["owner_at_start"], raw["owner_seen"])
+	}
+}
+
+// The slot is named for what it is, the slot the host charged, and the old name is not accepted (strict decoding).
+func TestJobUsageSlotIsCalledSlotCharged(t *testing.T) {
+	b, err := json.Marshal(goodUsage())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m["slot_charged"]; !ok {
+		t.Fatalf("no slot_charged in %s", b)
+	}
+	if _, ok := m["slot"]; ok {
+		t.Fatalf("the old name is still there: %s", b)
 	}
 }
 

@@ -208,3 +208,6 @@ name or a host, a user for a database that is not its own, a password that is no
 database: the job's user works in its own database, sees no other, is refused everything else, a held connection is ended by
 `wwd_kill_user`, and nothing is left. The first install on mserv (2026-10-18) found that MySQL 8.4 refuses `BINARY expr REGEXP`; the
 routines use `REGEXP_LIKE(expr, pattern, 'c')`.
+
+`go test -c -tags mserv ./internal/wwd/jobdb/` makes the end-to-end test of the Go side (scenario J: Create over `100.64.0.6:3307`, a
+re-run starts empty, Drop ends a held connection, Sweep keeps what a live job owns); run it on mserv with `WWD_MSERV_E2E=1`.

@@ -19,7 +19,7 @@ func in(v int) *int         { return &v }
 func usageRow(id string, end time.Time) wire.JobUsage {
 	no := false
 	return wire.JobUsage{
-		JobID: id, Host: "air26", Repo: "purdex", Task: "go-test", Slot: wire.SlotHeavy, Class: wire.ClassDev,
+		JobID: id, Host: "air26", Repo: "purdex", Task: "go-test", SlotCharged: wire.SlotHeavy, Class: wire.ClassDev,
 		Source: wire.UsageQueue, Result: wire.StateSucceeded, StartedAt: end.Add(-time.Minute), EndedAt: end,
 		CPUSeconds: fl(120), CPUSource: wire.CPUFromRusage, PeakCores: fl(3), PeakCoresMeasure: wire.MeasureSampled,
 		MemPeakMB: in(900), MemPeakMeasure: wire.MeasureSampled, JobsPeak: 1, ZoneAtStart: wire.ZoneNormal, ZoneWorst: wire.ZoneNormal,
