@@ -205,6 +205,65 @@ func TestListWithTheCursor(t *testing.T) {
 	assert.Len(t, piece.Jobs, 1)
 }
 
+// Every list names the database it came from. A cursor past the origin's last change was made by another database (this one was removed
+// and made again), where reading from it would find nothing for ever: it is a 409 that says where this database is and which it is, and
+// the client starts again from "0" (#3303). A cursor at the head, or any below it, is an ordinary read.
+func TestListCarriesTheEpochAndRefusesACursorAheadOfTheHead(t *testing.T) {
+	r := newRig(t)
+	epoch, err := r.q.Epoch(context.Background())
+	require.NoError(t, err)
+	r.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "" })
+	r.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "" })
+
+	w := call(r.local, "GET", "/v1/jobs", nil)
+	require.Equal(t, 200, w.Code)
+	list := decode[wire.JobsListResponse](t, w)
+	assert.Equal(t, epoch, list.Epoch)
+	head, err := r.q.Head(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, queue.CursorString(head), list.Cursor)
+
+	for _, view := range []http.Handler{r.local, r.peer} {
+		w = call(view, "GET", "/v1/jobs?after="+queue.CursorString(head), nil)
+		require.Equal(t, 200, w.Code, "a cursor at the head is the ordinary \"nothing new\"")
+		assert.Equal(t, epoch, decode[wire.JobsListResponse](t, w).Epoch)
+
+		for _, ahead := range []string{queue.CursorString(head + 1), "999999999999999999"} {
+			w = call(view, "GET", "/v1/jobs?after="+ahead, nil)
+			require.Equal(t, 409, w.Code, ahead)
+			c := decode[wire.CursorAhead](t, w)
+			assert.Equal(t, queue.CursorString(head), c.Head)
+			assert.Equal(t, epoch, c.Epoch)
+		}
+	}
+	assert.Equal(t, 200, call(r.local, "GET", "/v1/jobs?after=0", nil).Code)
+}
+
+// The head is read before the list: a write that lands between the two cannot turn a cursor from another database into one that is
+// accepted (it would be answered with nothing and stored, and the changes below it skipped for ever). A cursor that was valid is not
+// refused either, since the head only grows (3b-4d R1).
+func TestACursorAheadIsRefusedEvenWhenAWriteLandsMeanwhile(t *testing.T) {
+	r := newRig(t)
+	r.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "" })
+	head, err := r.q.Head(context.Background())
+	require.NoError(t, err)
+
+	a := New(r.q)
+	a.afterHead = func() { r.submit(t, func(s *wire.JobSubmission) { s.SupersedeKey = "" }) } // the head reaches the cursor now
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/jobs", a.List(false))
+
+	w := call(mux, "GET", "/v1/jobs?after="+queue.CursorString(head+1), nil)
+	require.Equal(t, 409, w.Code, "refused on the head as it was when the request was read: %s", w.Body)
+
+	// a cursor that was the head when the request came in stays good, however many writes follow
+	next, err := r.q.Head(context.Background())
+	require.NoError(t, err)
+	w = call(mux, "GET", "/v1/jobs?after="+queue.CursorString(next), nil)
+	require.Equal(t, 200, w.Code)
+	assert.NotEmpty(t, decode[wire.JobsListResponse](t, w).Cursor)
+}
+
 func TestListRefusesBadParameters(t *testing.T) {
 	r := newRig(t)
 	for _, q := range []string{"after=abc", "after=-1", "after=1.5", "state=bogus", "limit=0", "limit=-3", "limit=x", "limit=99999999"} {
