@@ -124,7 +124,14 @@ func (p *Peer) do(ctx context.Context, method, path string, q url.Values, body i
 	case http.StatusOK:
 		return raw, nil
 	case http.StatusNotFound:
-		return nil, runner.ErrNotFound
+		// only wwd's own "no such job" is the origin's decision; an empty or HTML 404 is a proxy, a router or a version mismatch
+		var nf struct {
+			Error string `json:"error"`
+		}
+		if json.Unmarshal(raw, &nf) == nil && nf.Error == "no such job" {
+			return nil, runner.ErrNotFound
+		}
+		return nil, fmt.Errorf("origin: %s %s: HTTP 404 that is not wwd's", method, path)
 	case http.StatusConflict:
 		c, derr := wire.Decode[wire.Conflict409](raw)
 		if derr != nil {
@@ -156,7 +163,16 @@ func decodeAnswer[T any](raw []byte, err error) (T, error) {
 }
 
 func (p *Peer) Claim(ctx context.Context, id string, req wire.ClaimRequest) (wire.ClaimResponse, error) {
-	return decodeAnswer[wire.ClaimResponse](p.postJSON(ctx, id, "claim", req))
+	r, err := decodeAnswer[wire.ClaimResponse](p.postJSON(ctx, id, "claim", req))
+	if errors.Is(err, runner.ErrNotFound) {
+		// a peer answers a claim of an unknown, ad-hoc or fast-lane job with 409 {claimed} (spec 4.4), never 404
+		return r, fmt.Errorf("origin: POST claim of %s: unexpected 404 from a peer", id)
+	}
+	if err == nil && r.Job.ID != id {
+		// the job that comes back is the one whose locks were taken and whose snapshot is fetched: it must be the one asked for
+		return wire.ClaimResponse{}, fmt.Errorf("origin: claim of %s answered with job %q", id, r.Job.ID)
+	}
+	return r, err
 }
 
 func (p *Peer) Start(ctx context.Context, id, claimID string) (wire.Lease, error) {

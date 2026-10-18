@@ -3,6 +3,7 @@ package origin
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -230,4 +231,42 @@ func TestPeerRefusesAnAnswerOverTheLimitEvenWhenItsPrefixIsValid(t *testing.T) {
 	defer srv.Close()
 	_, err := NewPeer(srv.URL, token, nil).Heartbeat(context.Background(), "j_x", strings.Repeat("0", 32))
 	assert.Error(t, err)
+}
+
+func TestPeerClaimMustAnswerWithTheJobAskedFor(t *testing.T) {
+	r := newRig(t)
+	other := r.submit(t)
+	got, err := r.q.Claim(context.Background(), other, wire.ClaimRequest{Worker: "w"})
+	require.NoError(t, err)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		_ = json.NewEncoder(w).Encode(got) // a peer that hands back another job whatever it was asked
+	}))
+	defer srv.Close()
+	_, err = NewPeer(srv.URL, token, nil).Claim(context.Background(), "j_asked", wire.ClaimRequest{Worker: "w"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "answered with job")
+}
+
+func TestOnlyWwdsOwnNotFoundIsADecision(t *testing.T) {
+	for name, body := range map[string]string{"empty": "", "html": "<html>404</html>", "other json": `{"error":"route"}`} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(body))
+		}))
+		_, err := NewPeer(srv.URL, token, nil).Heartbeat(context.Background(), "j_x", strings.Repeat("0", 32))
+		assert.Error(t, err, name)
+		assert.False(t, errors.Is(err, runner.ErrNotFound), "%s: a 404 that is not wwd's must stay retryable", name)
+		srv.Close()
+	}
+}
+
+func TestPeerClaimNotFoundIsNeverADecision(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"no such job"}`))
+	}))
+	defer srv.Close()
+	_, err := NewPeer(srv.URL, token, nil).Claim(context.Background(), "j_x", wire.ClaimRequest{Worker: "w"})
+	require.Error(t, err)
+	assert.False(t, errors.Is(err, runner.ErrNotFound))
 }
