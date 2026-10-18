@@ -90,6 +90,20 @@ func TestStages_SendNowShapeReads(t *testing.T) {
 	assert.Equal(t, "read", stageOf(t, &l, "s", "b").Stage)
 }
 
+// A queue row without a timestamp must not let an older item with the same text read the id (codex R1 on #3409).
+func TestStages_OlderSameTextItemDoesNotReadAQueuedId(t *testing.T) {
+	var l stageLedger
+	l.begin("s", "a", "again", t0)
+	l.set("s", "a", "entered", "", "fill", t0.Add(time.Second))
+	l.observe("s", []ccnorm.Queued{{Text: "again", Source: ccnorm.QueuedUser}}, nil, t0.Add(2*time.Second))
+	require.Equal(t, "queued", stageOf(t, &l, "s", "a").Stage)
+	old := item("u0", "again", t0.Add(-time.Hour)) // typed an hour ago
+	l.observe("s", nil, []stageItem{old}, t0.Add(3*time.Second))
+	assert.Equal(t, "queued", stageOf(t, &l, "s", "a").Stage)
+	l.observe("s", nil, []stageItem{old, item("u1", "again", t0.Add(2500*time.Millisecond))}, t0.Add(4*time.Second))
+	assert.Equal(t, "read", stageOf(t, &l, "s", "a").Stage)
+}
+
 func TestStages_FailedCarriesReasonAndUnknownAdvancesByMatching(t *testing.T) {
 	var l stageLedger
 	l.begin("s", "f", "x", t0)

@@ -300,7 +300,11 @@ func (l *stageLedger) observe(sid string, queue []ccnorm.Queued, items []stageIt
 			if _, taken := s.used[it.ID]; taken || normText(it.Text) != r.claim.text {
 				continue
 			}
-			if r.claim.at > 0 && it.At < r.claim.at-stageItemBefore.Milliseconds() {
+			from := r.claim.at // a row with no timestamp falls back to the Enter: an older same-text item is never ours
+			if from <= 0 {
+				from = r.textFrom.UnixMilli()
+			}
+			if it.At < from-stageItemBefore.Milliseconds() {
 				continue
 			}
 			s.used[it.ID] = struct{}{}
