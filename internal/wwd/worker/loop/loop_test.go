@@ -16,6 +16,7 @@ import (
 	"github.com/wake/purdex/internal/wwd/run"
 	"github.com/wake/purdex/internal/wwd/snapshot"
 	"github.com/wake/purdex/internal/wwd/wire"
+	"github.com/wake/purdex/internal/wwd/worker/ident"
 	"github.com/wake/purdex/internal/wwd/worker/locks"
 	"github.com/wake/purdex/internal/wwd/worker/pick"
 	"github.com/wake/purdex/internal/wwd/worker/quarantine"
@@ -146,7 +147,7 @@ type fakeExec struct {
 	order       []string
 }
 
-func (e *fakeExec) Materialize(_ context.Context, job wire.Job, _ string) (snapshot.Workspace, error) {
+func (e *fakeExec) Materialize(_ context.Context, _ ident.Ref, job wire.Job, _ string) (snapshot.Workspace, error) {
 	if e.materialize != nil {
 		if err := e.materialize(job); err != nil {
 			return snapshot.Workspace{}, err
@@ -162,11 +163,11 @@ func (e *fakeExec) Materialize(_ context.Context, job wire.Job, _ string) (snaps
 	return snapshot.Workspace{Dir: "/ws"}, nil
 }
 
-func (e *fakeExec) Prepare(context.Context, wire.Job, snapshot.Workspace) (runner.Plan, error) {
+func (e *fakeExec) Prepare(context.Context, ident.Ref, wire.Job, snapshot.Workspace) (runner.Plan, error) {
 	return runner.Plan{Argv: []string{"true"}, Dir: "/ws", Timeout: time.Minute}, nil
 }
 
-func (e *fakeExec) Run(ctx context.Context, job wire.Job, _ snapshot.Workspace, _ runner.Plan) run.Result {
+func (e *fakeExec) Run(ctx context.Context, _ ident.Ref, job wire.Job, _ snapshot.Workspace, _ runner.Plan) run.Result {
 	e.ran.Add(1)
 	e.mu.Lock()
 	e.order = append(e.order, job.ID)
