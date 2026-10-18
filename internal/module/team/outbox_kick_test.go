@@ -78,11 +78,18 @@ func TestPump_AKickWhileADrainIsEndingIsNotLost(t *testing.T) {
 	hs.afterEmptyHead = func() {
 		f.enqueue(f.cmd("c2", CmdRelease, "hostM", "mk2")) // committed after the drain's last look
 		f.m.kickCommands()                                 // its pass finds the host running and skips it
-		// keep the drain alive until the pump's goroutine has taken the kick and made that pass (it only skips: a Hosts query)
-		for i := 0; i < 200 && kicked(f.m.cmdPump); i++ {
+		// keep the drain alive until the pump's goroutine has taken the kick and made that pass, which records the skip in `missed`
+		// (bounded: without the record the pass never shows, and the test then fails on its own assertion below)
+		p := f.m.cmdPump
+		for i := 0; i < 400; i++ {
+			p.mu.Lock()
+			seen := p.missed
+			p.mu.Unlock()
+			if seen {
+				return
+			}
 			time.Sleep(5 * time.Millisecond)
 		}
-		time.Sleep(150 * time.Millisecond)
 	}
 	f.m.cmdPump.store = hs
 	f.m.sweepWG.Add(1)
