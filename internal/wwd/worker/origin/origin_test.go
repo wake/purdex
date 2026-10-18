@@ -169,7 +169,10 @@ func TestLocalQueuedHasTwoViews(t *testing.T) {
 		}
 		return out
 	}
-	assert.ElementsMatch(t, []string{plain, adhoc}, ids(false))
+	taken := r.submit(t)
+	_, err := r.loc.Claim(context.Background(), taken, wire.ClaimRequest{Worker: "w"})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{plain, adhoc}, ids(false), "only queued jobs are listed")
 	assert.Equal(t, []string{plain}, ids(true))
 	var _ pick.QueueReader = r.loc
 }
@@ -207,4 +210,13 @@ func TestPeerUnreadableConflictBodyIsAnErrorNotAConflict(t *testing.T) {
 	var conf *runner.Conflict
 	require.Error(t, err)
 	assert.False(t, errors.As(err, &conf), "a 409 from something that is not wwd must not end a job")
+}
+
+func TestPeerAnswerIsDecodedStrictly(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"lease_s":60,"renew_s":15,"cancel":false,"surprise":1}`))
+	}))
+	defer srv.Close()
+	_, err := NewPeer(srv.URL, token, nil).Heartbeat(context.Background(), "j_x", strings.Repeat("0", 32))
+	assert.Error(t, err, "an answer with a field wire does not know is not wwd's")
 }
