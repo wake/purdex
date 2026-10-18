@@ -431,6 +431,7 @@ type fakeDB struct {
 	created   []string
 	dropped   []string
 	createErr error
+	dropErr   error
 }
 
 func (f *fakeDB) Create(_ context.Context, id string) (map[string]string, error) {
@@ -450,7 +451,7 @@ func (f *fakeDB) Drop(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.dropped = append(f.dropped, id)
-	return nil
+	return f.dropErr
 }
 
 func dbExec(t *testing.T, db PerJobDB) (*Exec, string, string) {
@@ -586,5 +587,27 @@ func TestThePerJobDatabaseValuesComeAfterTheTasksOwnEnvEntries(t *testing.T) {
 	}
 	if last != "DB_HOST=127.0.0.1" {
 		t.Fatalf("the last DB_HOST entry is %q in %v: the job's own database must win over the task's env list", last, plan.TaskEnv)
+	}
+}
+
+// A database that could not be dropped is reported by Cleanup (the loop's Sweeper takes it later), and the workspace goes all the same.
+func TestADropThatFailsIsReportedByCleanupAndTheWorkspaceStillGoes(t *testing.T) {
+	db := &fakeDB{dropErr: errors.New("mysql down")}
+	e, _, _ := dbExec(t, db)
+	ctx := context.Background()
+	ws, err := e.Materialize(ctx, job("dbtask"), claimID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Prepare(ctx, job("dbtask"), ws); err != nil {
+		t.Fatal(err)
+	}
+	dir := ws.Dir
+	err = ws.Cleanup()
+	if err == nil || !strings.Contains(err.Error(), "mysql down") {
+		t.Fatalf("Cleanup err = %v, want the drop's error", err)
+	}
+	if _, serr := os.Stat(filepath.Dir(dir)); !os.IsNotExist(serr) {
+		t.Fatalf("the workspace stays although only the drop failed: %v", serr)
 	}
 }
