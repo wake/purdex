@@ -236,6 +236,31 @@ func mustJob(t *testing.T, raw []byte) wire.Job {
 	return j
 }
 
+// A log bigger than the 8 MiB the other forwarded answers are held to still comes through whole: logs are streamed (the queue keeps up to
+// 64 MiB). Mutation gate: through the capped path this is a 502.
+func TestAForwardedLogBeyondTheAnswerCapComesThrough(t *testing.T) {
+	remote := newJobHost(t, "air26")
+	_, raw, _ := remote.socketDo(t, "POST", "/v1/jobs", submissionBody())
+	sub, err := wire.Decode[wire.JobSubmissionResponse](raw)
+	require.NoError(t, err)
+	c, err := remote.q.Claim(context.Background(), sub.ID, wire.ClaimRequest{Worker: "air26"})
+	require.NoError(t, err)
+	big := strings.Repeat("0123456789abcdef", (maxPeerBytes+(1<<20))/16) // 9 MiB
+	require.Greater(t, len(big), maxPeerBytes)
+	require.NoError(t, remote.q.PutLog(context.Background(), sub.ID, c.ClaimID, strings.NewReader(big)))
+
+	local := newJobHost(t, "mlab", PeerAddr{Alias: "air26", HostPort: remote.tcp})
+	code, got, hdr := local.socketDo(t, "GET", "/v1/jobs/"+sub.ID+"/log?host=air26", nil)
+	require.Equal(t, 200, code)
+	assert.Equal(t, len(big), len(got))
+	assert.True(t, bytes.Equal([]byte(big), got))
+	assert.Equal(t, "nosniff", hdr.Get("X-Content-Type-Options"))
+
+	// the other answers keep their cap, and a log that is not there is the peer's own 404
+	code, _, _ = local.socketDo(t, "GET", "/v1/jobs/j_nope/log?host=air26", nil)
+	assert.Equal(t, 404, code)
+}
+
 // A daemon built without a queue has no job routes: the TCP surface answers 404 behind the token, the socket keeps its 501 for a
 // submission.
 func TestNoQueueNoJobRoutes(t *testing.T) {

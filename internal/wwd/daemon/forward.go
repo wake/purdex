@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -82,6 +83,15 @@ func (d *Daemon) forward(w http.ResponseWriter, r *http.Request, peer PeerAddr, 
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK && isJobLog(r) {
+		// a job log may be far bigger than the answers this forwards (the queue keeps up to 64 MiB), and it is text to pass on as it
+		// comes, not something to hold: it is streamed, up to the most the queue could have stored
+		w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.Copy(w, io.LimitReader(resp.Body, maxForwardedLog))
+		return
+	}
 	answer, err := readCapped(resp.Body)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"host": peer.Alias, "reason": err.Error()})
@@ -90,11 +100,16 @@ func (d *Daemon) forward(w http.ResponseWriter, r *http.Request, peer PeerAddr, 
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
-	if nosniff := resp.Header.Get("X-Content-Type-Options"); nosniff != "" { // a forwarded job log is text that must stay text
-		w.Header().Set("X-Content-Type-Options", nosniff)
-	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(answer)
 }
 
 func (d *Daemon) client() *http.Client { return d.fwd }
+
+// maxForwardedLog is the most of a job log that is passed on: what the queue accepts as one log (queue's 64 MiB).
+const maxForwardedLog = 64 << 20
+
+// isJobLog reports whether r is GET /v1/jobs/{id}/log.
+func isJobLog(r *http.Request) bool {
+	return r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/jobs/") && strings.HasSuffix(r.URL.Path, "/log")
+}
