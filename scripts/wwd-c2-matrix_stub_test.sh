@@ -29,6 +29,11 @@ STUB_HOST=$1; export STUB_HOST
 shift
 [ -z "${STUB:-}" ] || printf '%s: %s\n' "$STUB_HOST" "$*" >> "$STUB/ssh.log"      # what was asked of each host, for the tests that count signals
 [ -z "${STUB_SPLIT_HOME:-}" ] || { HOME="$HOME/h-$STUB_HOST"; export HOME; }        # a host of its own: its files are under $HOME/h-<host>
+# STUB_SSH_DOWN=host: no connection to it (255, as a banner timeout); STUB_SSH_DOWN_ONCE=1: only the first call, then it is back
+# (it goes down once the first case has begun: the precheck wants every host)
+if [ "${STUB_SSH_DOWN:-}" = "$STUB_HOST" ] && grep -q '^== case' "$STUB_OUT" 2>/dev/null; then
+  if [ -z "${STUB_SSH_DOWN_ONCE:-}" ] || [ ! -e "$STUB/down-once" ]; then [ -z "${STUB_SSH_DOWN_ONCE:-}" ] || : > "$STUB/down-once"; echo "ssh: Connection timed out during banner exchange" >&2; exit 255; fi
+fi
 [ -z "${STUB_SSH_FAIL:-}" ] || case "$*" in *"$STUB_SSH_FAIL"*) exit 255 ;; esac
 if [ -n "${STUB_SSH_PS_ONCE:-}" ]; then case "$*" in *"ps -p"*) [ ! -e "$STUB/ps-asked" ] || exit 255; : > "$STUB/ps-asked" ;; esac; fi
 exec sh -c "$*"
@@ -63,7 +68,7 @@ if [ "$tcp" -eq 1 ]; then
     mkdir "$STUB/claimed-$cid" 2>/dev/null || { code=409; resp='{"error":"claimed"}'; } ;; esac; fi
 else
   case "$method $path" in
-    "GET /v1/info") resp='{"version":"v0-stub","proto":1,"worker":{"enabled":true}'${STUB_FAULT:+',"fault":{"owner_active_file":true}'}${STUB_ZONE:+',"fault":{"zone":true}'}'}' ;;
+    "GET /v1/info") resp='{"version":"v0-stub","proto":1,"worker":{"enabled":true}'${STUB_LOGFAIL:+',"fault":{"log_upload_fail":true}'}${STUB_FAULT:+',"fault":{"owner_active_file":true}'}${STUB_ZONE:+',"fault":{"zone":true}'}'}' ;;
     "GET /v1/worker") resp=$STUB_WORKER_JSON ;;
     "PUT /v1/worker") printf '%s\n' "$body" >> "$STUB/put.log" ;;
     "GET /v1/jobs?state=queued") resp='{"jobs":['${STUB_QUEUED:+'{"id":"j_other"}'}'],"cursor":"0","epoch":"e"}' ;;
@@ -342,6 +347,33 @@ for bad in '/tmp/a b' "/tmp/a'b" '/tmp/a&b' '/tmp/a|b'; do
   C2_RAN_LOG="$bad" HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || rc=$?
   [ "$rc" -eq 2 ] || fail "C2_RAN_LOG '$bad' must be refused with exit 2, got $rc"
 done
+# air26 cannot be reached (255 twice): the case FAILs for it, the run goes on to the clean-up and the summary, nothing is left frozen or on
+rm -f "$stub"/*.log
+rc=0
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OUT="$tmp/out" STUB_SSH_DOWN=air26 STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14,2 > "$tmp/out" 2>&1 || rc=$?
+cat "$tmp/out" > "$stub/down.out"
+[ "$rc" -ne 0 ] || fail "a host that cannot be reached must make the exit code non-zero"
+has "PASS case 14" "case 14 does not need air26"
+has "FAIL ssh to air26 failed twice" "case 2 with air26 down"
+has "failed: 2" "the summary after an ssh failure"
+has "-- cleaning up" "the clean-up after an ssh failure"
+[ -z "$(ls -A "$tmp" | grep wwd-c2 || true)" ] || fail "the scratch directory was left after an ssh failure"
+# one lost connection is tried again, and the case goes on as if nothing had happened
+rm -f "$stub"/*.log "$stub/down-once"
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OUT="$tmp/out" STUB_SSH_DOWN=air26 STUB_SSH_DOWN_ONCE=1 STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "one lost connection must be tried again"; }
+hasnt "FAIL ssh to" "one lost connection"
+# case 8 puts its scratch repo into a directory of air26's own: not under mlab's TMPDIR (the stub's TMPDIR is $tmp)
+rm -f "$stub"/*.log
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_ZONE=1 STUB_STATE=succeeded STUB_START_MLAB=2026-10-18T10:00:01Z STUB_START_AIR26=2026-10-18T10:00:05Z C2_TIMEOUT_SCALE=0 sh "$matrix" --case 8 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 8"; }
+grep -q "air26: mkdir -p /tmp/wwd-c2.r" "$stub/ssh.log" || fail "case 8 must make its directory on air26 under /tmp: $(grep mkdir "$stub/ssh.log")"
+! grep "air26: mkdir" "$stub/ssh.log" | grep -q "$tmp" || fail "case 8 must not use mlab's TMPDIR on air26"
+# fault.log_upload_fail on in mlab: only case 6 may be run with it
+rc=0
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_LOGFAIL=1 STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 14 > "$tmp/out" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || fail "log_upload_fail on must stop a run of case 14"
+has "FAIL: fault.log_upload_fail is on in mlab's config, and case 14" "precheck with log_upload_fail"
+HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_LOGFAIL=1 STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 6 > "$tmp/out" 2>&1 || true
+hasnt "fault.log_upload_fail is on" "case 6 alone with log_upload_fail"
 # case 11 sends tokens only: it does not wait for the owner
 rm -f "$stub"/*.log
 HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_OWNER_ACTIVE=1 STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 sh "$matrix" --case 11 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 11 must not wait for the owner"; }

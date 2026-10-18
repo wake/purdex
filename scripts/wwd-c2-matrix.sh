@@ -72,7 +72,17 @@ x() { if [ "$dry" -eq 1 ]; then say "+ $*"; else "$@"; fi; }
 on() {
   on_h=$1; shift
   if [ "$dry" -eq 1 ]; then say "+ on $on_h: $*"; return 0; fi
-  if [ "$on_h" = mlab ]; then sh -c "$*"; else ssh -o BatchMode=yes -o ConnectTimeout=5 "$on_h" "$*"; fi
+  if [ "$on_h" = mlab ]; then sh -c "$*"; return; fi
+  # ssh exits 255 when it could not connect (a banner timeout on a loaded host): once more after a pause. A second 255 is written down
+  # in $WORK/connfail (a $(...) cannot set a variable), and the case is FAILed for it after it ends (the go loop): a lost connection is
+  # not a result of the case, and the clean-up still runs.
+  on_n=0
+  while :; do
+    on_rc=0; ssh -o BatchMode=yes -o ConnectTimeout=20 "$on_h" "$*" || on_rc=$?
+    [ "$on_rc" -eq 255 ] || return "$on_rc"
+    if [ "$on_n" -ge 1 ]; then { echo "$on_h" >> "$WORK/connfail"; } 2>/dev/null || true; return 255; fi
+    on_n=$((on_n + 1)); sleep $((2 * ${C2_TIMEOUT_SCALE:-1}))
+  done
 }
 # q HOST CMD: a read; its output is the answer (dry run: a placeholder)
 q() {
@@ -232,6 +242,7 @@ wait_for() {   # wait_for ID JQEXPR WANT SECONDS
   if [ "$dry" -eq 1 ]; then say "~ wait up to $4 s until $1 $2 == $3"; return 0; fi
   wf_n=0; wf_max=$(($4 * ${C2_TIMEOUT_SCALE:-1}))     # C2_TIMEOUT_SCALE=0: look once (the stub test of this script)
   while :; do
+    [ ! -s "$WORK/connfail" ] || return 1          # a host could not be reached: waiting longer shows nothing
     [ "$(jf "$1" "$2")" = "$3" ] && return 0
     [ "$wf_n" -ge "$wf_max" ] && return 1
     sleep 2; wf_n=$((wf_n + 2))
@@ -271,6 +282,13 @@ precheck() {
     [ "$dry" -eq 1 ] || [ "$pc_q" = 0 ] || { say "FAIL: $pc_q jobs are queued already (the matrix wants a quiet pool; --force to go on)"; exit 1; }
   fi
   [ "$(sock air19 GET /v1/worker | jq -r .enabled 2>/dev/null || echo false)" = false ] || [ "$dry" -eq 1 ] || { say "FAIL: air19's worker is on"; exit 1; }
+  # H1 (fault.log_upload_fail on mlab) makes every log upload to mlab fail, and a worker holds its slot for the 2 minutes it retries
+  # (#3404): the next case then cannot be claimed within its wait. It is for case 6 alone.
+  if [ "$dry" -eq 0 ] && [ "$(sock mlab GET /v1/info | jq -r '.fault.log_upload_fail // false' 2>/dev/null)" = true ]; then
+    for pc_c in $cases; do
+      [ "$pc_c" = 6 ] || { say "FAIL: fault.log_upload_fail is on in mlab's config, and case $pc_c would wait behind the 2-minute log retries of the case before it; turn it off for every case but 6 (docs/wwd-c2-matrix.md, section 7.1; #3404)"; exit 1; }
+    done
+  fi
   # an empty owner_rule on air26 means [owner] is off (wwd.db may still hold hid<5m, which wwd only hides): the PUTs of this run store
   # the empty one, so the rule has to be put back by hand afterwards
   [ "$dry" -eq 1 ] || [ -n "$(sock air26 GET /v1/worker | jq -r '.owner_rule // empty' 2>/dev/null)" ] || say "WARN: air26's owner_rule is empty ([owner] off?): this run stores it empty; put it back by hand afterwards (docs/wwd-c2-matrix.md, section 7.1)"
@@ -605,7 +623,8 @@ case_8() {
   need_fault mlab zone || return 0
   say "-- one worker (mserv); two jobs queued at the same time from two origins; mlab's pressure is 2 (the hook)"
   only_workers
-  rdir="${TMPDIR:-/tmp}/wwd-c2.r.$$"; REMOTE_DIRS="$REMOTE_DIRS air26:$rdir"
+  rdir="/tmp/wwd-c2.r.$$"; REMOTE_DIRS="$REMOTE_DIRS air26:$rdir"
+  # (a path of air26's own: mlab's TMPDIR, /var/folders/..., cannot be made there)
   x sh -c "tar -C $WORK -cf - repo | ssh air26 'mkdir -p $rdir && tar -C $rdir -xf -'"        # the scratch repo on air26: a second origin
   ida=$(q air26 "cd $rdir/repo && $AIR26_PDX test --detach --json c2-any | grep -o '\"id\" *: *\"[^\"]*\"' | cut -d'\"' -f4")   # pdx on air26's non-interactive PATH is checked in precheck
   track "$ida" air26
@@ -750,7 +769,15 @@ for run_case in $cases; do
   if [ "$run_case" != 8 ] && [ "$run_case" != 11 ] && catalog | awk -F'|' -v c="$run_case" '$1==c && $3 ~ /air26/ {f=1} END {exit !f}' && ! owner_idle; then
     CASE_SKIP="air26's owner stayed active for 10 minutes ($(sock air26 GET /v1/facts | jq -c .owner 2>/dev/null)): its worker would not take the job"
   else
+    # a failing command does not end the run: its case ends with FAIL checks, and the clean-up is the trap's, whatever happens
+    set +e
     "case_$run_case"
+    set -e
+    if [ -s "$WORK/connfail" ]; then
+      CASE_FAILS=$((CASE_FAILS + 1))
+      say "  FAIL ssh to $(sort -u "$WORK/connfail" | tr '\n' ' ')failed twice (the connection, not a result of this case)"
+      rm -f "$WORK/connfail"
+    fi
   fi
   # the air19 rule holds in every case: it claimed nothing since the matrix began
   if [ "$run_case" != 14 ]; then
