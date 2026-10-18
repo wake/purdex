@@ -9,6 +9,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -17,8 +19,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/wake/purdex/internal/execstat"
 )
 
 // dirOf is the directory of installed dependencies that goes with a lockfile, next to it.
@@ -389,27 +389,144 @@ func cloneDir(ctx context.Context, root *os.Root, ws, d, dir string, toCache boo
 	if toCache {
 		src, dst = wsParent, cache
 	}
-	if testHook != nil {
-		testHook("before-clone")
+	err = errNoCloneAt
+	if !noCloneAt {
+		if testHook != nil {
+			testHook("before-clone")
+		}
+		err = cloneAt(src, dst, name)
 	}
-	err = cloneAt(src, dst, name)
 	if !errors.Is(err, errNoCloneAt) {
 		return err
 	}
-	return cpClone(ctx, filepath.Join(src.Name(), name), filepath.Join(dst.Name(), name))
+	return copyThroughRoots(ctx, root, d, dir, toCache)
 }
 
-// cpClone copies the tree src to dst (which is not there) by copy-on-write where the file system can, keeping symlinks as links.
-func cpClone(ctx context.Context, src, dst string) error {
-	args := []string{"-a", "--reflink=auto", src, dst}
-	if runtime.GOOS == "darwin" {
-		args = []string{"-c", "-R", src, dst} // clonefile(2) by path, a plain copy where it cannot
+// noCloneAt, when a test sets it, makes cloneDir take the fallback, as on a file system without clones.
+var noCloneAt bool
+
+// copyThroughRoots is the copy where clonefileat is not possible (another file system, two volumes, not macOS): the tree is copied one
+// entry at a time in this process, both sides through os.Root handles opened first, so no path is resolved while it runs that a swap could
+// redirect. Files are copied by content (no copy-on-write: it takes the disk space and the time), directories and symlinks are made as
+// they were, modes are set on the open file. Anything that is not a directory, a regular file or a symlink is an error.
+func copyThroughRoots(ctx context.Context, root *os.Root, d, dir string, toCache bool) error {
+	cacheD := filepath.Join(dir, filepath.FromSlash(d))
+	var src, dst *os.Root
+	var err error
+	if toCache {
+		if src, err = root.OpenRoot(d); err != nil {
+			return err
+		}
+		if err = os.MkdirAll(cacheD, 0o755); err != nil {
+			src.Close()
+			return err
+		}
+		dst, err = os.OpenRoot(cacheD)
+	} else {
+		if src, err = os.OpenRoot(cacheD); err != nil {
+			return err
+		}
+		if err = root.Mkdir(d, 0o755); err != nil {
+			src.Close()
+			return err
+		}
+		dst, err = root.OpenRoot(d)
 	}
-	cmd := execstat.CommandContext(ctx, "wwd.deps-clone", "cp", args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("deps: cp %s: %w: %s", src, err, strings.TrimSpace(string(out)))
+	if err != nil {
+		src.Close()
+		return err
+	}
+	defer src.Close()
+	defer dst.Close()
+	if testHook != nil {
+		testHook("before-copy") // the handles are open: what the names do from here on must not matter
+	}
+	type dirMode struct {
+		name string
+		mode fs.FileMode
+	}
+	var dirs []dirMode
+	err = fs.WalkDir(src.FS(), ".", func(p string, de fs.DirEntry, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if p == "." {
+			return nil
+		}
+		// de.Info() is an lstat by path; the type from the directory read is enough, and a mode is read from the open file
+		switch {
+		case de.IsDir():
+			if err := dst.Mkdir(p, 0o755); err != nil {
+				return err
+			}
+			df, err := src.Open(p)
+			if err != nil {
+				return err
+			}
+			st, err := df.Stat()
+			df.Close()
+			if err != nil {
+				return err
+			}
+			dirs = append(dirs, dirMode{p, st.Mode().Perm()})
+		case de.Type().IsRegular():
+			return copyFile(src, dst, p)
+		case de.Type()&fs.ModeSymlink != 0:
+			target, err := src.Readlink(p)
+			if err != nil {
+				return err
+			}
+			return dst.Symlink(target, p)
+		default:
+			return fmt.Errorf("deps: %s is not a directory, a file or a symlink", p)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("deps: copy %s: %w", d, err)
+	}
+	for i := len(dirs) - 1; i >= 0; i-- { // the modes of directories last, a directory that is not writable could not be filled
+		f, err := dst.OpenFile(dirs[i].name, os.O_RDONLY, 0)
+		if err != nil {
+			return err
+		}
+		err = f.Chmod(dirs[i].mode)
+		f.Close()
+		if err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// copyFile copies the file p from src to dst, with the mode of the source (read from its open file) set on the open copy.
+func copyFile(src, dst *os.Root, p string) error {
+	in, err := src.Open(p)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	st, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	mode := st.Mode().Perm()
+	out, err := dst.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Chmod(mode); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 // plainPath says that no part of rel (a path in the workspace ws) is a symlink: the manifest is the submitter's, and a lockfile or a

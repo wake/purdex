@@ -605,3 +605,74 @@ func TestPrepare_ASwapAndSwapBackDuringTheCopyChangesNothing(t *testing.T) {
 		assert.True(t, os.IsNotExist(serr), "and nothing from outside")
 	})
 }
+
+// The fallback (no clonefileat: another file system, two volumes, not macOS) is a copy made through root handles, not cp by path: the
+// same swap-and-swap-back during it changes nothing, on every platform, and the tree arrives as it was (modes, nested files, symlinks).
+func TestPrepare_TheCopyFallbackIsThroughHandlesToo(t *testing.T) {
+	noCloneAt = true
+	t.Cleanup(func() { noCloneAt = false; testHook = nil })
+
+	// the tree comes through whole
+	c, in := newCache(t, 2), &installer{}
+	ws1 := workspace(t, "fallback\n")
+	_, err := c.Prepare(context.Background(), ws1, spec(in))
+	require.NoError(t, err)
+	ws2 := workspace(t, "fallback\n")
+	r, err := c.Prepare(context.Background(), ws2, spec(in))
+	require.NoError(t, err)
+	assert.True(t, r.Hit)
+	checkInstalled(t, ws2) // content, the symlink as a symlink, the mode 0755
+
+	swapAway := func(ws, outside string) {
+		require.NoError(t, os.Rename(filepath.Join(ws, "spa"), filepath.Join(ws, "spa.orig")))
+		require.NoError(t, os.Symlink(outside, filepath.Join(ws, "spa")))
+	}
+	swapBack := func(ws string) {
+		require.NoError(t, os.Remove(filepath.Join(ws, "spa")))
+		require.NoError(t, os.Rename(filepath.Join(ws, "spa.orig"), filepath.Join(ws, "spa")))
+	}
+
+	t.Run("out of the cache", func(t *testing.T) {
+		c := newCache(t, 2)
+		_, err := c.Prepare(context.Background(), spaWorkspace(t), spaSpec)
+		require.NoError(t, err)
+		outside, ws := t.TempDir(), spaWorkspace(t)
+		testHook = func(stage string) {
+			switch stage {
+			case "before-copy":
+				swapAway(ws, outside)
+			case "copied-out":
+				swapBack(ws)
+				testHook = nil
+			}
+		}
+		r, err := c.Prepare(context.Background(), ws, spaSpec)
+		require.NoError(t, err)
+		assert.True(t, r.Hit)
+		_, serr := os.Stat(filepath.Join(ws, "spa/node_modules/x/index.js"))
+		assert.NoError(t, serr)
+		des, _ := os.ReadDir(outside)
+		assert.Empty(t, des, "nothing was written outside")
+	})
+
+	t.Run("into the cache", func(t *testing.T) {
+		c, ws := newCache(t, 2), spaWorkspace(t)
+		outside := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(outside, "node_modules/poison"), 0o755))
+		testHook = func(stage string) {
+			switch stage {
+			case "before-copy":
+				swapAway(ws, outside)
+			case "copied-in":
+				swapBack(ws)
+				testHook = nil
+			}
+		}
+		r, err := c.Prepare(context.Background(), ws, spaSpec)
+		require.NoError(t, err)
+		_, serr := os.Stat(filepath.Join(c.Dir, r.Key, "spa/node_modules/x/index.js"))
+		assert.NoError(t, serr)
+		_, serr = os.Stat(filepath.Join(c.Dir, r.Key, "spa/node_modules/poison"))
+		assert.True(t, os.IsNotExist(serr), "nothing from outside")
+	})
+}
