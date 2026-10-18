@@ -63,7 +63,7 @@ type Module struct {
 	emit   func(core.HostEvent) // where jobs.changed goes; nil: the core's host events
 	src    eventSource          // the local wwd's event stream; nil: cl
 	cancel context.CancelFunc   // ends the stream loop
-	wg     sync.WaitGroup       // the stream loop
+	done   chan struct{}        // closed when that loop has ended
 	// where the last catch-up read stopped (memory only: a restarted daemon has no App connection that missed anything)
 	cursor, epoch string
 	based         bool
@@ -104,29 +104,34 @@ func (m *Module) Init(c *core.Core) error {
 }
 
 // Start opens the local wwd's event stream in the background; wwd not running is retried and never fails the daemon.
+// A second Start while it runs does nothing; a Start after Stop runs it again.
 func (m *Module) Start(context.Context) error {
-	ctx, cancel := context.WithCancel(context.Background())
 	m.mu.Lock()
-	m.cancel = cancel
-	m.mu.Unlock()
-	m.wg.Add(1)
+	defer m.mu.Unlock()
+	if m.cancel != nil {
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	m.cancel, m.done, m.ready = cancel, done, true
 	go func() {
-		defer m.wg.Done()
+		defer close(done)
 		m.watch(ctx)
 	}()
 	return nil
 }
 
+// Stop ends the stream loop and waits for it as long as ctx allows. Stopping a module that is not running does nothing.
 func (m *Module) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	m.ready = false
-	cancel := m.cancel
+	cancel, done := m.cancel, m.done
+	m.cancel, m.done = nil, nil
 	m.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	if cancel == nil {
+		return nil
 	}
-	done := make(chan struct{})
-	go func() { m.wg.Wait(); close(done) }()
+	cancel()
 	select {
 	case <-done:
 		return nil

@@ -29,11 +29,22 @@ type streamSource struct {
 	log     []wire.Job // the changes, oldest first; a job that changes again is appended again
 	epoch   string     // the database's epoch in every list answer ("" as a wwd that predates epochs)
 	noEpoch bool       // answer lists without an epoch whatever epoch is set
+	active  int        // Watch calls under way now
+	peak    int        // the most there were at once
 }
 
 // Watch is wwd's stream: with a stream prepared it opens (ready), plays it and ends with ErrStreamEnded; with none, wwd is as good as
 // not running and Watch waits until one is prepared or ctx ends.
 func (s *streamSource) Watch(ctx context.Context, ready chan<- struct{}, fn func(wire.Event) bool) error {
+	s.mu.Lock()
+	s.active++
+	s.peak = max(s.peak, s.active)
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.active--
+		s.mu.Unlock()
+	}()
 	for {
 		s.mu.Lock()
 		s.calls++
@@ -206,6 +217,64 @@ func TestEvents_StopEndsTheLoop(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	require.NoError(t, m.Stop(ctx))
+}
+
+// A second Start while it runs starts nothing (the first loop could not be stopped otherwise), Stop twice is fine, and Start after
+// Stop runs the loop again, still announcing.
+func TestLifecycle_StartIsIdempotentAndRestartable(t *testing.T) {
+	src := &streamSource{}
+	m := New()
+	m.src, m.retry = src, time.Millisecond
+	out := make(chan core.HostEvent, 4)
+	m.emit = func(ev core.HostEvent) { out <- ev }
+	require.NoError(t, m.Start(context.Background()))
+	require.NoError(t, m.Start(context.Background())) // does nothing
+	time.Sleep(20 * time.Millisecond)
+	src.mu.Lock()
+	assert.Equal(t, 1, src.peak, "one loop, however many Starts")
+	src.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, m.Stop(ctx), "Stop after a double Start must end the one loop")
+	require.NoError(t, m.Stop(ctx), "Stop twice")
+	assert.Equal(t, map[string]any{"ready": false}, m.Status())
+
+	src.set(func(s *streamSource) { s.streams = [][]wire.Event{{jobEvent(t, "mlab", "j_again", wire.StateRunning)}} })
+	require.NoError(t, m.Start(context.Background()))
+	assert.Equal(t, map[string]any{"ready": true}, m.Status())
+	assert.Equal(t, "j_again", changedJob(t, next(t, out)))
+	require.NoError(t, m.Stop(ctx))
+}
+
+// A Stop whose ctx ends first says so and leaves the loop to end on its own.
+func TestLifecycle_StopGivesUpAtItsDeadline(t *testing.T) {
+	m := New()
+	release, entered := make(chan struct{}), make(chan struct{})
+	m.src = &blockedSource{release: release, entered: entered}
+	m.retry = time.Millisecond
+	require.NoError(t, m.Start(context.Background()))
+	<-entered // the loop is inside the stuck read
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, m.Stop(ctx), context.DeadlineExceeded)
+	close(release)
+}
+
+// blockedSource ignores the context until released (a stream read that is stuck).
+type blockedSource struct{ release, entered chan struct{} }
+
+func (b *blockedSource) Watch(context.Context, chan<- struct{}, func(wire.Event) bool) error {
+	select {
+	case <-b.entered:
+	default:
+		close(b.entered)
+	}
+	<-b.release
+	return errors.New("released")
+}
+
+func (b *blockedSource) JobsAfter(context.Context, string, int) (wire.JobsListResponse, error) {
+	return wire.JobsListResponse{}, errors.New("no")
 }
 
 // Through the real core: the frame reaches a host-events subscriber as {"type":"jobs.changed","value":"{...}"}.
