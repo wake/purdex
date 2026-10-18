@@ -384,6 +384,7 @@ func TestJobsWhoseLocksAreHeldAreNotClaimed(t *testing.T) {
 	if _, err := r.tbl.Acquire("fast-lane", []string{"tmux"}, nil); err != nil {
 		t.Fatal(err)
 	}
+	r.loop.cfg.MaxTries = 1 // the one try must go to a job that can run, so the locked one is left out before any try
 	r.round()
 	waitFor(t, "the result", func() bool { _, _, n := c.seen(); return n == 1 })
 	if claims, _, _ := c.seen(); len(claims) != 1 || claims[0] != "a" {
@@ -612,4 +613,17 @@ func TestSweepsRunOnTheirOwnPauseNotEveryRound(t *testing.T) {
 	if len(sw.calls) != 2 {
 		t.Fatalf("%d sweeps, want one more after the pause", len(sw.calls))
 	}
+}
+
+func TestRunSweepsOnItsOwnPause(t *testing.T) {
+	r := newRig(t, newConn("mlab"))
+	sw := &fakeSweeper{}
+	r.loop.cfg.Sweepers = []Sweeper{sw}
+	r.loop.cfg.SweepEvery = unit
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { r.loop.Run(ctx); close(done) }()
+	waitFor(t, "two sweeps", func() bool { sw.mu.Lock(); defer sw.mu.Unlock(); return len(sw.calls) >= 2 })
+	cancel()
+	<-done
 }
