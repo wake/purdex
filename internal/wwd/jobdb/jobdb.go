@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"regexp"
 	"sort"
 	"strconv"
@@ -85,7 +86,7 @@ type Info struct {
 // a job can use them depends on that file's guard, which today refuses every value but its own fixed ones; it is that repo's
 // decision to relax it.
 func (i Info) WPTestsEnv() []string {
-	return []string{"WP_TESTS_DB_NAME=" + i.Database, "WP_TESTS_DB_HOST=" + i.Host + ":" + strconv.Itoa(i.Port),
+	return []string{"WP_TESTS_DB_NAME=" + i.Database, "WP_TESTS_DB_HOST=" + net.JoinHostPort(i.Host, strconv.Itoa(i.Port)),
 		"WP_TESTS_DB_USER=" + i.User, "WP_TESTS_DB_PASSWORD=" + i.Password, "WP_PHPUNIT__TABLE_PREFIX=wptests_"}
 }
 

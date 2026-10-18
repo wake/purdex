@@ -28,14 +28,55 @@ type Sandbox struct {
 	ExtraProperties []string
 }
 
-// extraAllowed is every property ExtraProperties may name. Each only narrows what the job can do or see; none sets a user, a
-// group, a path that becomes writable or visible, an environment, a capability or a command, and none is one the sandbox sets.
-var extraAllowed = map[string]bool{
-	"ProtectSystem": true, "ProtectKernelTunables": true, "ProtectKernelModules": true, "ProtectKernelLogs": true,
-	"ProtectControlGroups": true, "ProtectProc": true, "ProcSubset": true, "ProtectClock": true, "ProtectHostname": true,
-	"PrivateDevices": true, "LockPersonality": true, "RestrictNamespaces": true, "RestrictSUIDSGID": true,
-	"RestrictRealtime": true, "MemoryDenyWriteExecute": true, "TasksMax": true, "CPUWeight": true, "IOWeight": true,
-	"ReadOnlyPaths": true, "LimitNOFILE": true, "LimitCORE": true,
+// extraAllowed is every property ExtraProperties may name, with the values that only take something away. A name alone is not
+// enough: PrivateDevices=no or TasksMax=infinity would loosen what the host does by default. None of them sets a user, a group, a
+// path that becomes writable or visible, an environment, a capability or a command, and none is one the sandbox sets.
+var extraAllowed = map[string]func(v string) bool{
+	"ProtectSystem":          oneOf("yes", "full", "strict"),
+	"ProtectKernelTunables":  oneOf("yes"),
+	"ProtectKernelModules":   oneOf("yes"),
+	"ProtectKernelLogs":      oneOf("yes"),
+	"ProtectControlGroups":   oneOf("yes"),
+	"ProtectClock":           oneOf("yes"),
+	"ProtectHostname":        oneOf("yes"),
+	"ProtectProc":            oneOf("invisible", "ptraceable"),
+	"ProcSubset":             oneOf("pid"),
+	"PrivateDevices":         oneOf("yes"),
+	"LockPersonality":        oneOf("yes"),
+	"RestrictNamespaces":     oneOf("yes"),
+	"RestrictSUIDSGID":       oneOf("yes"),
+	"RestrictRealtime":       oneOf("yes"),
+	"MemoryDenyWriteExecute": oneOf("yes"),
+	"LimitCORE":              oneOf("0"),
+	"TasksMax":               atMost(4096), // systemd's own default is 15% of the pid limit, about 4900 here
+	"CPUWeight":              atMost(100),  // 100 is the default weight: a lower one only gives way
+	"IOWeight":               atMost(100),
+	"ReadOnlyPaths":          absolutePath,
+}
+
+func oneOf(ok ...string) func(string) bool {
+	return func(v string) bool {
+		for _, o := range ok {
+			if v == o {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// atMost accepts a plain number from 1 to max (no "infinity", no suffix, no sign).
+func atMost(max int) func(string) bool {
+	return func(v string) bool {
+		n, err := strconv.Atoi(v)
+		return err == nil && n >= 1 && n <= max && strconv.Itoa(n) == v
+	}
+}
+
+// absolutePath accepts one absolute path, optionally with the "-" systemd reads as "if it exists".
+func absolutePath(v string) bool {
+	v = strings.TrimPrefix(v, "-")
+	return strings.HasPrefix(v, "/") && !strings.Contains(v, "..")
 }
 
 var (
@@ -84,8 +125,12 @@ func (s Sandbox) validate(spec Spec) error {
 		if !ok || !extraName.MatchString(name) || !extraValue.MatchString(value) {
 			return fmt.Errorf("run: the extra property %q is not Name=value", p)
 		}
-		if !extraAllowed[name] {
+		tightens, known := extraAllowed[name]
+		if !known {
 			return fmt.Errorf("run: the extra property %s is not one that may be added to the sandbox", name)
+		}
+		if !tightens(value) {
+			return fmt.Errorf("run: %s=%s would not take anything away: only a tightening value is accepted", name, value)
 		}
 	}
 	return nil

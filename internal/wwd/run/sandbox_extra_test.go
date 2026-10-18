@@ -10,7 +10,8 @@ import (
 // allow list of properties that only take rights away, so it cannot become a way to take the sandbox apart.
 
 func TestExtraPropertiesThatOnlyTightenAreAccepted(t *testing.T) {
-	for _, p := range []string{"ProtectSystem=strict", "ProtectKernelTunables=yes", "PrivateDevices=yes", "TasksMax=512", "ReadOnlyPaths=/etc", "LimitNOFILE=4096"} {
+	for _, p := range []string{"ProtectSystem=strict", "ProtectSystem=full", "ProtectKernelTunables=yes", "PrivateDevices=yes", "TasksMax=512", "ReadOnlyPaths=/etc",
+		"ReadOnlyPaths=-/srv/backups", "CPUWeight=50", "IOWeight=100", "LimitCORE=0", "ProtectProc=invisible"} {
 		sb := Sandbox{User: "wake", ExtraProperties: []string{p}}
 		if err := sb.validate(Spec{JobID: "j_1", Workspace: "/ws"}); err != nil {
 			t.Errorf("%s: %v", p, err)
@@ -59,5 +60,16 @@ func TestExtraPropertiesComeAfterTheFixedOnesAndBeforeTheCommand(t *testing.T) {
 	d := strings.Index(j, "InaccessiblePaths=")
 	if i < 0 || e < 0 || i < d || i > e {
 		t.Fatalf("argv = %s", j)
+	}
+}
+
+func TestExtraPropertiesWithAValueThatLoosensAreRefused(t *testing.T) {
+	for _, p := range []string{"PrivateDevices=no", "RestrictNamespaces=no", "ProtectSystem=no", "ProtectSystem=false", "TasksMax=infinity", "TasksMax=100000",
+		"TasksMax=0", "TasksMax=+5", "TasksMax=5K", "CPUWeight=10000", "IOWeight=1000", "LimitCORE=infinity", "LimitCORE=100", "ProtectProc=default",
+		"ReadOnlyPaths=etc", "ReadOnlyPaths=/a/../b", "ProcSubset=all", "LockPersonality=no"} {
+		sb := Sandbox{User: "wake", ExtraProperties: []string{p}}
+		if err := sb.validate(Spec{JobID: "j_1", Workspace: "/ws"}); err == nil {
+			t.Errorf("%s must be refused: it does not tighten", p)
+		}
 	}
 }

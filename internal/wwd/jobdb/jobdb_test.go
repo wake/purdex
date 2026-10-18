@@ -378,3 +378,10 @@ func TestAFailedKillStaysVisibleWhenTheSecondListingFailsToo(t *testing.T) {
 		t.Fatalf("both failures must be in the error: %v", err)
 	}
 }
+
+func TestWPTestsEnvBracketsAnIPv6Host(t *testing.T) {
+	got := strings.Join(Info{Host: "::1", Port: 3307}.WPTestsEnv(), "\n")
+	if !strings.Contains(got, "WP_TESTS_DB_HOST=[::1]:3307") {
+		t.Fatalf("env = %q", got)
+	}
+}
