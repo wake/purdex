@@ -29,11 +29,13 @@ func (m *Module) resumeSpawns() {
 	if m.tmux == nil {
 		return
 	}
+	m.settleAwaitingSpawns(false)                    // first: an op whose card was approved is running now and is in the list below
 	ops, err := m.store.ListRunningSpawnOps(m.now()) // also fails a corrupt running row, so it comes first
 	if err != nil {
 		m.logf("[team] boot: spawn ops: %v", err)
 		return
 	}
+	m.kickFacts()               // the listing may have failed a corrupt op of a remote lead, which queues a spawn_failed fact
 	m.reapOrphanSpawnSessions() // before any runner starts: a running op's session is then the runner's alone
 	for _, op := range ops {
 		if (op.Step == team.StepSessionCreated || op.Step == team.StepLaunched) && !m.sessions.SessionExists(op.TmuxName) {

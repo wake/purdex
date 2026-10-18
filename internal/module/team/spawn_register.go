@@ -12,7 +12,6 @@ import (
 	"github.com/wake/purdex/internal/core"
 	"github.com/wake/purdex/internal/module/agent"
 	ipeers "github.com/wake/purdex/internal/peers"
-	"github.com/wake/purdex/internal/resources"
 	"github.com/wake/purdex/internal/store"
 	"github.com/wake/purdex/internal/team"
 )
@@ -188,20 +187,16 @@ func (m *Module) startTimeoutDetail(op spawnRow) string {
 // sample is read, never taken here (no fork). The figures are the resources module's own (load average, memory in use, the
 // kernel's memory pressure level: 1 normal, 2 warning, 4 critical).
 func (m *Module) hostLoadNote() string {
-	hr := m.hostReader
-	if hr == nil && m.core != nil && m.core.Registry != nil { // looked up here: the resources module may Init after this one
-		if svc, ok := m.core.Registry.Get(resources.HostReaderKey); ok {
-			hr, _ = svc.(resources.HostReader)
-		}
-	}
-	if hr == nil {
-		return ""
-	}
-	h, ok := hr.LatestHost()
+	d, ok := m.hostDetail()
+	h := d.Host
 	if !ok || h.NCPU <= 0 {
 		return ""
 	}
-	note := fmt.Sprintf("load %.1f／%.1f／%.1f，%d 核；記憶體已用 %.0f%%", h.Load1, h.Load5, h.Load15, h.NCPU, h.Mem)
+	loads := fmt.Sprintf("%.1f／%.1f／%.1f", h.Load1, h.Load5, h.Load15)
+	if d.SessionsRoom != nil { // a reading from wwd, whose facts carry no 15-minute load: say the two it has
+		loads = fmt.Sprintf("%.1f／%.1f", h.Load1, h.Load5)
+	}
+	note := fmt.Sprintf("load %s，%d 核；記憶體已用 %.0f%%", loads, h.NCPU, h.Mem)
 	switch h.Pressure {
 	case 1:
 		note += "，壓力：正常"

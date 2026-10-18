@@ -1,0 +1,17 @@
+{
+  "v": 1, "host_id": "h-mlab", "alias": "mlab", "at": "2026-10-18T05:00:00+08:00",
+  "platform": "darwin", "arch": "arm64", "os_version": "26.6.2",
+  "cpu": {"ncpu": 10, "load1": 9.5, "load5": 8.0, "idle_pct": 20.0},
+  "mem": {"total_mb": 16384, "available_mb": 2048, "pressure": 2, "page_out_rate": 12.5, "swap_out_rate": null,
+          "swap_used_mb": 100, "compressor_mb": 900, "psi": null},
+  "disk": [],
+  "procs": [],
+  "residents": [],
+  "tools": {"go": null, "node": null, "pnpm": null, "php": [], "xcode": null},
+  "owner": null,
+  "exceptions": [],
+  "derived": {"zone": "warning", "headroom": {"heavy": 0, "light": 1}, "sessions_room": 2},
+  "worker": {"enabled": true, "slots": {"heavy": 1, "light": 2}, "running": {"heavy": 1, "light": 0}, "owner_rule": ""},
+  "stats": {"sampled_s": 60, "full_ticks": 7, "full_starts": 2, "full_longest_s": 25, "normal_s": 30, "warning_s": 25,
+            "danger_s": 5, "heavy_running_max": 1, "light_running_max": 2, "gate_waiting_max": null}
+}

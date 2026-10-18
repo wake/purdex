@@ -179,6 +179,26 @@ type fakeHostReader struct {
 
 func (r fakeHostReader) LatestHost() (resources.HostUse, bool) { return r.h, r.ok }
 
+// A reading from wwd has no 15-minute load: the note names the two it has, and a plain reading still names three.
+type fakeWWDHostReader struct{ fakeHostReader }
+
+func (r fakeWWDHostReader) LatestHostDetail() (resources.HostDetail, bool) {
+	room := 2
+	return resources.HostDetail{Host: r.h, SessionsRoom: &room}, r.ok
+}
+
+func TestHostLoadNote_AWWDReadingOmitsTheFifteenMinuteLoad(t *testing.T) {
+	h := resources.HostUse{Load1: 3, Load5: 2, NCPU: 4, Mem: 70, Pressure: 1}
+	m := &Module{hostReader: fakeWWDHostReader{fakeHostReader{h: h, ok: true}}}
+	if got, want := m.hostLoadNote(), "（load 3.0／2.0，4 核；記憶體已用 70%，壓力：正常）"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	m = &Module{hostReader: fakeHostReader{h: h, ok: true}}
+	if got, want := m.hostLoadNote(), "（load 3.0／2.0／0.0，4 核；記憶體已用 70%，壓力：正常）"; got != want {
+		t.Errorf("plain reading: got %q, want %q", got, want)
+	}
+}
+
 func TestSpawnView_StartTimeoutDetailSaysBusyOrNoHooks(t *testing.T) {
 	load := "（load 18.1／16.4／16.3，10 核；記憶體已用 84%，壓力：警告）"
 	waited := "（已等 60 秒；最後看到：pane 上還沒有 frame）" // the fixture's clock moves 250 ms a poll: the 60 s budget is spent to the poll

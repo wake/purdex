@@ -169,7 +169,11 @@ func gateMain(args []string, stdout, stderr io.Writer) int {
 	if *assistHost != "" { // a failure there puts the command back in the queue here
 		target = &gate.AssistTarget{Host: *assistHost, SSH: *assistSSH}
 	}
-	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Real: realBin, Class: c, ClassSource: *classSource, Foreground: *fg, WaitMax: time.Duration(*waitMax * float64(time.Second)), Stdout: stdout, Stderr: stderr, Assist: target})
+	var walk *gate.AssistWalk
+	if target == nil && *waitMax <= 0 { // a run sent here from another host (--wait-max) is not sent on
+		walk = gateAssistWalk(*cfgPath, cfg.Dir)
+	}
+	code, _ := g.Run(context.Background(), gate.Options{Argv: command, Real: realBin, Class: c, ClassSource: *classSource, Foreground: *fg, WaitMax: time.Duration(*waitMax * float64(time.Second)), Stdout: stdout, Stderr: stderr, Assist: target, Walk: walk})
 	return code
 }
 

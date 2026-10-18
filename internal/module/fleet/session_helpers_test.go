@@ -23,7 +23,10 @@ type fakeClock struct {
 	timers []*fakeTimer
 }
 
+// fakeTimer's state (stopped, fired) belongs to its clock's mutex: the session
+// stops a timer from its own goroutine while the test reads armed().
 type fakeTimer struct {
+	clk     *fakeClock
 	c       chan time.Time
 	at      time.Time
 	stopped bool
@@ -43,7 +46,7 @@ func (f *fakeClock) Now() time.Time {
 func (f *fakeClock) NewTimer(d time.Duration) timer {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	t := &fakeTimer{c: make(chan time.Time, 1), at: f.now.Add(d)}
+	t := &fakeTimer{clk: f, c: make(chan time.Time, 1), at: f.now.Add(d)}
 	f.timers = append(f.timers, t)
 	if d <= 0 {
 		t.fired = true
@@ -53,7 +56,13 @@ func (f *fakeClock) NewTimer(d time.Duration) timer {
 }
 
 func (t *fakeTimer) C() <-chan time.Time { return t.c }
-func (t *fakeTimer) Stop() bool          { was := !t.stopped && !t.fired; t.stopped = true; return was }
+func (t *fakeTimer) Stop() bool {
+	t.clk.mu.Lock()
+	defer t.clk.mu.Unlock()
+	was := !t.stopped && !t.fired
+	t.stopped = true
+	return was
+}
 
 // Advance moves time forward and fires every armed timer that falls due.
 func (f *fakeClock) Advance(d time.Duration) {

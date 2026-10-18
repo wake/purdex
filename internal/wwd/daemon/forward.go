@@ -1,0 +1,141 @@
+package daemon
+
+import (
+	"bytes"
+	"context"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const forwardTimeout = 10 * time.Second
+
+// rejectHostParam is the TCP guard of spec §10: forwarding to another host is
+// only for the local socket. A TCP request carrying `host` is refused whatever
+// it names, so there is no multi-hop and a token holder cannot relay through
+// this wwd.
+func rejectHostParam(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Has("host") {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "host is not accepted over TCP"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (d *Daemon) peerByAlias(alias string) (PeerAddr, bool) {
+	for _, p := range d.opts.Peers {
+		if p.Alias == alias {
+			return p, true
+		}
+	}
+	return PeerAddr{}, false
+}
+
+// forwardTarget says where a socket request for ?host= goes. local is true when
+// the request is about this host (no host, or this host's alias).
+func (d *Daemon) forwardTarget(r *http.Request) (peer PeerAddr, local bool, status int) {
+	host := r.URL.Query().Get("host")
+	if host == "" || host == d.opts.Alias {
+		return PeerAddr{}, true, 0
+	}
+	p, ok := d.peerByAlias(host)
+	if !ok {
+		return PeerAddr{}, false, http.StatusNotFound
+	}
+	return p, false, 0
+}
+
+// forwardGET forwards a body-less GET (see forward).
+func (d *Daemon) forwardGET(w http.ResponseWriter, r *http.Request, peer PeerAddr) {
+	d.forward(w, r, peer, nil)
+}
+
+// forward sends the socket request (same method, path and body) to the peer over
+// TCP with the pool token, without `host`, and returns the peer's answer as it
+// is: status, content type and body. A peer that cannot be reached is 502
+// {host, reason}.
+func (d *Daemon) forward(w http.ResponseWriter, r *http.Request, peer PeerAddr, body []byte) {
+	q := r.URL.Query()
+	q.Del("host")
+	u := url.URL{Scheme: "http", Host: peer.HostPort, Path: r.URL.Path, RawPath: r.URL.RawPath, RawQuery: q.Encode()}
+	// a job log is a long answer: it gets its own, longer time (the whole transfer, not a stall), on the request and on the client
+	timeout, client := forwardTimeout, d.client()
+	if isJobLog(r) {
+		timeout = logForwardTimeout
+		lc := *client
+		lc.Timeout = timeout
+		client = &lc
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+	var rd io.Reader
+	if body != nil {
+		rd = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, r.Method, u.String(), rd)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"host": peer.Alias, "reason": err.Error()})
+		return
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Authorization", "Bearer "+d.opts.Token)
+	resp, err := client.Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"host": peer.Alias, "reason": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK && isJobLog(r) {
+		d.streamLog(w, resp, peer)
+		return
+	}
+	answer, err := readCapped(resp.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"host": peer.Alias, "reason": err.Error()})
+		return
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	w.WriteHeader(resp.StatusCode)
+	_, _ = w.Write(answer)
+}
+
+func (d *Daemon) client() *http.Client { return d.fwd }
+
+// maxForwardedLog is the most of a job log that is passed on: what the queue accepts as one log (queue's 64 MiB).
+const maxForwardedLog = 64 << 20
+
+// logForwardTimeout is the time a whole job log may take to arrive from a peer (64 MiB at 0.5 MB/s). A var so a test can shorten it.
+var logForwardTimeout = 2 * time.Minute
+
+// streamLog passes a peer's job log on as it arrives, without holding it. The peer states the length (its handler always does), and so
+// does this answer: a log that stops short, or goes over, is not a log that looks whole. The status is already sent when that is found,
+// so the connection is aborted, and the caller sees a failed read rather than a shorter text with a 200. A peer that does not state a
+// length, or states one over the most a log can be, is a 502 before anything is sent.
+func (d *Daemon) streamLog(w http.ResponseWriter, resp *http.Response, peer PeerAddr) {
+	n := resp.ContentLength
+	if n < 0 || n > maxForwardedLog {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"host": peer.Alias, "reason": "the log has no usable length"})
+		return
+	}
+	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Content-Length", strconv.FormatInt(n, 10))
+	w.WriteHeader(http.StatusOK)
+	if got, err := io.Copy(w, resp.Body); err != nil || got != n {
+		panic(http.ErrAbortHandler) // the server closes the connection without a clean end; the caller's read fails
+	}
+}
+
+// isJobLog reports whether r is GET /v1/jobs/{id}/log.
+func isJobLog(r *http.Request) bool {
+	return r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/jobs/") && strings.HasSuffix(r.URL.Path, "/log")
+}

@@ -13,7 +13,7 @@ import (
 )
 
 func TestGate_WouldWaitAnswersNoWhenFreeAndYesWithAReasonWhenTaken(t *testing.T) {
-	cfg, _ := gateEnv(t, "")
+	cfg, _ := gateEnv(t, noAdmission)
 	var out, errb bytes.Buffer
 	assert.Equal(t, 0, gateMain([]string{"would-wait", "--config", cfg}, &out, &errb), errb.String())
 	assert.Equal(t, "no\n", out.String())
@@ -44,7 +44,7 @@ func TestGate_WouldWaitAnswersNoWhenFreeAndYesWithAReasonWhenTaken(t *testing.T)
 }
 
 func TestGate_WouldWaitUsage(t *testing.T) {
-	cfg, _ := gateEnv(t, "")
+	cfg, _ := gateEnv(t, noAdmission)
 	var out, errb bytes.Buffer
 	assert.Equal(t, 2, gateMain([]string{"would-wait", "--class", "none", "--config", cfg}, &out, &errb))
 	assert.Equal(t, 2, gateMain([]string{"would-wait", "extra", "--config", cfg}, &out, &errb))

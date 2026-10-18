@@ -1,0 +1,10 @@
+{
+  "repo": {"name": "purdex", "root": "abc123", "remote": "git@github.com:wake/purdex.git"},
+  "snapshot": {"commit": "c0ffee", "tree": "7ee", "base": "ba5e", "rel_cwd": "spa"},
+  "task": "spa-related", "args": ["src/a.ts"], "class": "merge",
+  "labels": ["os:darwin", "repo:purdex"], "locks": [], "cacheable": true, "timeout_s": 1800,
+  "supersede_key": "deadbeef:spa-related",
+  "interruptible": true, "queue_timeout_s": 3600, "adhoc": false,
+  "submitter": {"session": "s1", "ref": "_abc123", "team": "wwd", "host": "mlab"},
+  "git_dir": "/Users/wake/Workspace/wake/purdex/.git"
+}

@@ -1,0 +1,249 @@
+package jobscmd
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"strconv"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/wake/purdex/internal/wwd/testcmd"
+	"github.com/wake/purdex/internal/wwd/wire"
+)
+
+const WWDUsage = `usage: pdx wwd [status] [--json]
+       pdx wwd pool [--json]
+       pdx wwd worker on|off [--heavy N] [--light N]
+       pdx wwd exception start <name> (--until <30m|RFC3339> | --pid <pid>) [--holds heavy,light]
+       pdx wwd exception stop <name>
+       pdx wwd usage [--since <6h|7d|RFC3339> [--after <job id>]] [--limit N] [--json]
+  status    this host's wwd: version, labels, worker switch and slots
+  pool       every host the pool knows: reachable, pressure zone, free slots, worker
+  worker     switch this host's worker; --heavy / --light set the slot counts
+  exception  tell wwd a dev server or packaging run is using the host: its worker takes no new heavy work (and no light work if
+             --holds says light) until --until passes or --pid ends
+  usage      what this host's finished jobs used (CPU, cores, memory) and what the host was like around them; kept 30 days
+`
+
+// WWD is `pdx wwd`; it returns the exit code.
+func WWD(ctx context.Context, args []string, env Env) int {
+	sub := "status"
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		sub, args = args[0], args[1:]
+	}
+	switch sub {
+	case "status":
+		return wwdStatus(ctx, args, env)
+	case "pool":
+		return wwdPool(ctx, args, env)
+	case "worker":
+		return wwdWorker(ctx, args, env)
+	case "exception":
+		return wwdException(ctx, args, env)
+	case "usage":
+		return wwdUsage(ctx, args, env)
+	case "help":
+		io.WriteString(env.Stdout, WWDUsage)
+		return ExitOK
+	}
+	fmt.Fprintf(env.Stderr, "pdx wwd: unknown command %q\n\n%s", sub, WWDUsage)
+	return ExitUsage
+}
+
+func onOff(b bool) string {
+	if b {
+		return "on"
+	}
+	return "off"
+}
+
+func wwdStatus(ctx context.Context, args []string, env Env) int {
+	flags, pos, err := splitFlags(args, "json")
+	if err == nil {
+		err = only(flags, "json")
+	}
+	if err == nil && len(pos) > 0 {
+		err = fmt.Errorf("unexpected argument %q", pos[0])
+	}
+	if err != nil {
+		return usageErr(env, WWDUsage, err)
+	}
+	info, err := env.API.Info(ctx)
+	if err != nil {
+		return fail(env, "wwd status", err)
+	}
+	w, err := env.API.Worker(ctx)
+	if err != nil {
+		return fail(env, "wwd status", err)
+	}
+	if flags["json"] != "" {
+		writeJSON(env.Stdout, map[string]any{"info": info, "worker": w})
+		return ExitOK
+	}
+	fmt.Fprintf(env.Stdout, "wwd %s  %s  (%s/%s, proto %d)\n", testcmd.CleanLine(info.Alias), testcmd.CleanLine(info.Version), testcmd.CleanLine(info.Platform), testcmd.CleanLine(info.Arch), info.Proto)
+	rule := w.OwnerRule
+	if rule == "" {
+		rule = "none"
+	}
+	fmt.Fprintf(env.Stdout, "worker %s  slots heavy %d light %d  owner rule: %s\n", onOff(w.Enabled), w.Slots.Heavy, w.Slots.Light, testcmd.CleanLine(rule))
+	fmt.Fprintf(env.Stdout, "labels %s\n", testcmd.CleanLine(strings.Join(info.Labels, " ")))
+	return ExitOK
+}
+
+func wwdPool(ctx context.Context, args []string, env Env) int {
+	flags, pos, err := splitFlags(args, "json")
+	if err == nil {
+		err = only(flags, "json")
+	}
+	if err == nil && len(pos) > 0 {
+		err = fmt.Errorf("unexpected argument %q", pos[0])
+	}
+	if err != nil {
+		return usageErr(env, WWDUsage, err)
+	}
+	pool, err := env.API.Pool(ctx)
+	if err != nil {
+		return fail(env, "wwd pool", err)
+	}
+	if flags["json"] != "" {
+		writeJSON(env.Stdout, pool)
+		return ExitOK
+	}
+	tw := tabwriter.NewWriter(env.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(tw, "HOST\tREACHABLE\tZONE\tFREE heavy/light\tWORKER\tRUNNING heavy/light\tFACTS AGE")
+	for _, p := range pool.Peers {
+		zone, free, worker, running, factsAge := "-", "-", onOff(p.Info.Worker.Enabled), "-", "-"
+		if f := p.Facts; f != nil {
+			zone = string(f.Derived.Zone)
+			free = fmt.Sprintf("%d/%d", f.Derived.Headroom.Heavy, f.Derived.Headroom.Light)
+			worker = onOff(f.Worker.Enabled)
+			running = fmt.Sprintf("%d/%d", f.Worker.Running.Heavy, f.Worker.Running.Light)
+			factsAge = age(env.now(), f.At)
+		}
+		reach := "yes"
+		if !p.Reachable {
+			reach = "NO"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", testcmd.CleanLine(p.Info.Alias), reach, zone, free, worker, running, factsAge)
+	}
+	tw.Flush()
+	return ExitOK
+}
+
+func wwdWorker(ctx context.Context, args []string, env Env) int {
+	flags, pos, err := splitFlags(args)
+	if err == nil {
+		err = only(flags, "heavy", "light")
+	}
+	if err == nil && (len(pos) != 1 || (pos[0] != "on" && pos[0] != "off")) {
+		err = fmt.Errorf("worker takes on or off")
+	}
+	slots := map[string]int{}
+	for _, k := range []string{"heavy", "light"} {
+		if v, ok := flags[k]; ok && err == nil {
+			n, e := strconv.Atoi(v)
+			if e != nil || n < 0 {
+				err = fmt.Errorf("--%s must be a number of slots, 0 or more", k)
+			}
+			slots[k] = n
+		}
+	}
+	if err != nil {
+		return usageErr(env, WWDUsage, err)
+	}
+	cur, err := env.API.Worker(ctx)
+	if err != nil {
+		return fail(env, "wwd worker", err)
+	}
+	cur.Enabled = pos[0] == "on"
+	if n, ok := slots["heavy"]; ok {
+		cur.Slots.Heavy = n
+	}
+	if n, ok := slots["light"]; ok {
+		cur.Slots.Light = n
+	}
+	now, err := env.API.SetWorker(ctx, cur)
+	if err != nil {
+		return fail(env, "wwd worker", err)
+	}
+	fmt.Fprintf(env.Stdout, "worker %s  slots heavy %d light %d\n", onOff(now.Enabled), now.Slots.Heavy, now.Slots.Light)
+	return ExitOK
+}
+
+func wwdException(ctx context.Context, args []string, env Env) int {
+	if len(args) == 0 || (args[0] != "start" && args[0] != "stop") {
+		return usageErr(env, WWDUsage, fmt.Errorf("exception takes start or stop"))
+	}
+	action := args[0]
+	flags, pos, err := splitFlags(args[1:])
+	if err == nil && len(pos) != 1 {
+		err = fmt.Errorf("an exception name is needed")
+	}
+	if err != nil {
+		return usageErr(env, WWDUsage, err)
+	}
+	name := pos[0]
+	if action == "stop" {
+		if err := only(flags); err != nil {
+			return usageErr(env, WWDUsage, err)
+		}
+		if err := env.API.StopException(ctx, name); err != nil {
+			return fail(env, "wwd exception", err)
+		}
+		fmt.Fprintf(env.Stdout, "exception %s stopped\n", name)
+		return ExitOK
+	}
+	if err := only(flags, "until", "pid", "holds"); err != nil {
+		return usageErr(env, WWDUsage, err)
+	}
+	e := wire.Exception{Name: name}
+	if v := flags["until"]; v != "" {
+		t, err := parseUntil(v, env.now())
+		if err != nil {
+			return usageErr(env, WWDUsage, err)
+		}
+		e.Until = &t
+	}
+	if v := flags["pid"]; v != "" {
+		pid, err := strconv.Atoi(v)
+		if err != nil || pid <= 0 {
+			return usageErr(env, WWDUsage, fmt.Errorf("--pid must be a process id"))
+		}
+		e.PID = &pid
+	}
+	holds := flags["holds"]
+	if holds == "" {
+		holds = "heavy,light"
+	}
+	for _, h := range strings.Split(holds, ",") {
+		e.Holds = append(e.Holds, wire.Hold(strings.TrimSpace(h)))
+	}
+	if err := e.Validate(); err != nil {
+		return usageErr(env, WWDUsage, err)
+	}
+	if err := env.API.StartException(ctx, e); err != nil {
+		return fail(env, "wwd exception", err)
+	}
+	fmt.Fprintf(env.Stdout, "exception %s started\n", name)
+	return ExitOK
+}
+
+// parseUntil reads --until: a duration from now (30m, 2h) or an RFC 3339 time.
+func parseUntil(v string, now time.Time) (time.Time, error) {
+	if d, err := time.ParseDuration(v); err == nil {
+		if d <= 0 {
+			return time.Time{}, fmt.Errorf("--until %q is not in the future", v)
+		}
+		return now.Add(d).UTC(), nil
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("--until must be a duration like 30m or an RFC 3339 time, got %q", v)
+	}
+	if !t.After(now) {
+		return time.Time{}, fmt.Errorf("--until %q is not in the future", v)
+	}
+	return t.UTC(), nil
+}

@@ -3,7 +3,6 @@ package resourcesmod
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/wake/purdex/internal/execstat"
 	"github.com/wake/purdex/internal/resources"
@@ -14,7 +13,7 @@ import (
 func TestTickPublishesModeGauge(t *testing.T) {
 	execstat.ResetTags()
 	t.Cleanup(execstat.ResetTags)
-	f := newEventFix(t, 50*time.Millisecond)
+	f := newStoreFix(t)
 	f.m.sampler = &fakeSampler{fn: func(context.Context, int) (resources.HostRaw, []resources.Proc, error) {
 		return goodRaw(), nil, nil
 	}}

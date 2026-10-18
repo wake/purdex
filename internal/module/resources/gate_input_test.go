@@ -16,7 +16,7 @@ import (
 func TestSlotCounts_ReadsTheGateDirectory(t *testing.T) {
 	cfg := gate.Defaults()
 	cfg.Dir = t.TempDir()
-	m := newTestModule(idleSampler(), nil)
+	m := newTestModule(&fakeSampler{}, nil)
 	m.gateConfig = func() gate.Config { return cfg }
 
 	heavy, light, waiting, ok := m.slotCounts()
@@ -54,7 +54,7 @@ func TestSlotCounts_ReadsTheGateDirectory(t *testing.T) {
 
 // A module not wired to the host reads nothing (and never the home directory it runs in).
 func TestSlotCounts_UnwiredModuleReadsNothing(t *testing.T) {
-	m := newTestModule(idleSampler(), nil)
+	m := newTestModule(&fakeSampler{}, nil)
 	_, _, _, ok := m.slotCounts()
 	assert.False(t, ok)
 	assert.Equal(t, gate.Defaults().Slots, m.gateCfg().Slots)
