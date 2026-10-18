@@ -272,9 +272,9 @@ type leaseClock struct {
 func (l *leaseClock) extend(deadline, renewAt time.Time) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if deadline.After(l.deadline) {
-		l.deadline = deadline
-	}
+	// the newest answer wins even when it is shorter: each one is a fresh relative lease from the origin, and a shortened lease
+	// must not be outlived
+	l.deadline = deadline
 	l.renewAt = renewAt
 }
 
@@ -311,7 +311,10 @@ func (c *Controller) renew(ctx context.Context, origin Origin, id, claimID strin
 			continue
 		}
 		sent := c.cfg.Now()
-		resp, err := origin.Heartbeat(ctx, id, claimID)
+		// the call itself is bound by the lease deadline: a connection that hangs must not keep the command alive past it
+		hbCtx, endHB := context.WithDeadline(ctx, deadline)
+		resp, err := origin.Heartbeat(hbCtx, id, claimID)
+		endHB()
 		switch {
 		case err == nil:
 			l.extend(c.deadlineFor(sent, resp.LeaseS), sent.Add(time.Duration(resp.RenewS)*c.cfg.Unit))

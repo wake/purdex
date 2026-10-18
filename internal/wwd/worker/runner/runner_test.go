@@ -515,3 +515,58 @@ func TestEndedCarriesPlanAndRootForTheReporter(t *testing.T) {
 		t.Fatalf("rejected ended %+v", e)
 	}
 }
+
+func TestHungHeartbeatCannotOutliveTheDeadline(t *testing.T) {
+	ex := &fakeExec{run: blockUntilDone}
+	o := &fakeOrigin{}
+	o.heartbeat = func(int) (wire.HeartbeatResponse, error) {
+		return wire.HeartbeatResponse{}, errors.New("unreachable in this test")
+	}
+	o.claim = func(id string) (wire.ClaimResponse, error) {
+		return wire.ClaimResponse{Job: testJob(id), ClaimID: claimID, LeaseS: 6, RenewS: 1}, nil
+	}
+	hang := make(chan struct{})
+	h := &hangingHeartbeat{fakeOrigin: o, hang: hang}
+	c, _ := newCtl(ex)
+	done := make(chan Ended, 1)
+	go func() { done <- c.Work(context.Background(), h, scored(testJob("j")), nil) }()
+	select {
+	case e := <-done:
+		if e.Kind != KindLost {
+			t.Fatalf("kind=%s", e.Kind)
+		}
+	case <-time.After(30 * unit):
+		close(hang)
+		t.Fatal("a heartbeat that never answers kept the command alive past the lease deadline")
+	}
+}
+
+// hangingHeartbeat answers every heartbeat only when its ctx ends, as a half-open connection does.
+type hangingHeartbeat struct {
+	*fakeOrigin
+	hang chan struct{}
+}
+
+func (h *hangingHeartbeat) Heartbeat(ctx context.Context, _, _ string) (wire.HeartbeatResponse, error) {
+	select {
+	case <-ctx.Done():
+		return wire.HeartbeatResponse{}, ctx.Err()
+	case <-h.hang:
+		return wire.HeartbeatResponse{}, errors.New("released")
+	}
+}
+
+func TestShorterLeaseFromHeartbeatReplacesTheOlder(t *testing.T) {
+	ex := &fakeExec{run: blockUntilDone}
+	o := &fakeOrigin{}
+	o.heartbeat = func(int) (wire.HeartbeatResponse, error) { return wire.HeartbeatResponse{LeaseS: 2, RenewS: 50}, nil }
+	o.claim = func(id string) (wire.ClaimResponse, error) {
+		return wire.ClaimResponse{Job: testJob(id), ClaimID: claimID, LeaseS: 30, RenewS: 1}, nil
+	}
+	c, _ := newCtl(ex)
+	start := time.Now()
+	e := c.Work(context.Background(), o, scored(testJob("j")), nil)
+	if d := time.Since(start); e.Kind != KindLost || d > 8*unit {
+		t.Fatalf("kind=%s after %v: a lease the origin shortened must be obeyed (about %v)", e.Kind, d, 3*unit)
+	}
+}
