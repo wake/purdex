@@ -62,6 +62,18 @@ describe('FleetRowEditor', () => {
     expect(putFleetRow).toHaveBeenCalledWith(A, { order: ['mlab', 'air26'], peer_ssh_alias: 'a-other', enabled: false }, 5)
   })
 
+  it('keeps the row\'s source when it saves (the editor has no field for it, and a save must not drop it)', async () => {
+    copies[A].fleet.items = { ...copies[A].fleet.items, source: 'pool' }
+    render(<FleetRowEditor hostId={A} />)
+    const order = (await screen.findByTestId('fleet-row-order')) as HTMLInputElement
+    await waitFor(() => expect(order.value).toBe('air26, mlab'))
+    fireEvent.change(order, { target: { value: 'mlab, air26' } })
+    fireEvent.change(screen.getByTestId('fleet-row-peer'), { target: { value: 'a-other' } })
+    fireEvent.click(screen.getByTestId('fleet-row-save'))
+    await waitFor(() => expect(putFleetRow).toHaveBeenCalledTimes(1))
+    expect(putFleetRow).toHaveBeenCalledWith(A, { order: ['mlab', 'air26'], peer_ssh_alias: 'a-other', enabled: true, source: 'pool' }, 5)
+  })
+
   it('shows the 400 text and the conflict notice', async () => {
     render(<FleetRowEditor hostId={A} />)
     await screen.findByTestId('fleet-row-order')
