@@ -61,10 +61,16 @@ type UnitOpts struct {
 	User, Binary, Config, Path string
 }
 
-// Unit is the system service. wwd itself is small and sits in the default slice;
-// the jobs it will run belong to wwd.slice (spec §5) and are limited there. The
-// limits here only keep a misbehaving wwd from taking the production services
-// down with it.
+// UnitSlice is the slice wwd itself runs in. The jobs it runs belong to wwd.slice
+// (spec §5) and are limited there; the two are kept apart, and the name has no
+// hyphen on purpose: systemd would take wwd-xxx.slice for a child of wwd.slice and
+// put wwd's own process in with the jobs.
+const UnitSlice = "wwdd.slice"
+
+// Unit is the system service. Without a Slice= it would land in system.slice with
+// the production services (livekit, mysql, ...); it runs in UnitSlice instead.
+// The limits here only keep a misbehaving wwd from taking those services down
+// with it: at most one core, 512 MB and 256 tasks.
 func Unit(o UnitOpts) string {
 	return fmt.Sprintf(`[Unit]
 Description=wwd - the pool's watcher/worker daemon
@@ -78,6 +84,8 @@ ExecStart=%s -config %s
 Environment=PATH=%s
 Restart=always
 RestartSec=3
+Slice=%s
+CPUQuota=100%%
 MemoryMax=512M
 TasksMax=256
 NoNewPrivileges=yes
@@ -85,5 +93,5 @@ ProtectSystem=full
 
 [Install]
 WantedBy=multi-user.target
-`, o.User, o.Binary, o.Config, o.Path)
+`, o.User, o.Binary, o.Config, o.Path, UnitSlice)
 }

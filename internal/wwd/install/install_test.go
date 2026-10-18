@@ -173,10 +173,58 @@ func TestSystemdUnit(t *testing.T) {
 		"ExecStart=/home/wake/.local/share/wwd/bin/wwd -config /home/wake/.config/wwd/config.toml",
 		"Restart=always", "RestartSec=", "MemoryMax=", "TasksMax=", "NoNewPrivileges=yes", "[Install]", "WantedBy=multi-user.target",
 		"Environment=PATH=/usr/local/bin:/usr/bin",
+		"Slice=wwdd.slice", "CPUQuota=100%", "MemoryMax=512M", "TasksMax=256",
 	} {
 		if !strings.Contains(u, want) {
 			t.Errorf("unit lacks %q:\n%s", want, u)
 		}
+	}
+	// wwd itself is wwdd.slice; its jobs are wwd.slice (spec §5). A hyphenated name would make one the other's child, so the unit names
+	// exactly wwdd.slice and nothing else.
+	for _, line := range strings.Split(u, "\n") {
+		if v, ok := strings.CutPrefix(line, "Slice="); ok && v != "wwdd.slice" {
+			t.Errorf("the unit's slice is %q: want wwdd.slice", v)
+		}
+	}
+}
+
+// A unit installed before it named a slice (it sat in system.slice with the production services) is replaced on the next install,
+// the daemon is reloaded and wwd restarted into wwdd.slice; a further run changes nothing.
+func TestInstallMovesAnOlderUnitIntoItsSlice(t *testing.T) {
+	bin := writeBin(t, t.TempDir(), "x")
+	in, f, _ := newInstaller(t, "linux", "mserv", bin)
+	ctx := context.Background()
+	if err := in.Install(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cur, err := os.ReadFile(in.UnitPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := strings.NewReplacer("Slice=wwdd.slice\n", "", "CPUQuota=100%\n", "").Replace(string(cur))
+	if old == string(cur) {
+		t.Fatal("the unit has no Slice= or CPUQuota= line to take out")
+	}
+	if err := os.WriteFile(in.UnitPath, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.calls = nil
+	if err := in.Install(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !f.has("sudo install") || !f.has("sudo systemctl daemon-reload") || !f.has("sudo systemctl restart") {
+		t.Errorf("the older unit was not replaced and wwd restarted: %v", f.calls)
+	}
+	now, _ := os.ReadFile(in.UnitPath)
+	if !strings.Contains(string(now), "Slice=wwdd.slice") || !strings.Contains(string(now), "CPUQuota=100%") {
+		t.Errorf("the unit on disk still lacks the slice:\n%s", now)
+	}
+	f.calls = nil
+	if err := in.Install(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if f.has("sudo install") || f.has("sudo systemctl restart") || f.has("sudo systemctl daemon-reload") {
+		t.Errorf("a second run changed something: %v", f.calls)
 	}
 }
 

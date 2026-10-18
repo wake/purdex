@@ -72,8 +72,13 @@ What the install does, all of it idempotent (a second run changes nothing and re
 3. copies the token (above);
 4. writes the service definition — `~/Library/LaunchAgents/gs.wake.wwd.plist` (`KeepAlive`, `RunAtLoad`, log
    in `~/.local/share/wwd/wwd.log`, a PATH that finds go, node, pnpm and PHP) or, on mserv,
-   `/etc/systemd/system/wwd.service` through `sudo install` (`Restart=always`, `MemoryMax=512M`,
-   `TasksMax=256`, `NoNewPrivileges`; the worker's jobs run in `wwd.slice`, not in this unit);
+   `/etc/systemd/system/wwd.service` through `sudo install` (`Restart=always`, `Slice=wwdd.slice`,
+   `CPUQuota=100%` (at most one core), `MemoryMax=512M`, `TasksMax=256`, `NoNewPrivileges`). wwd itself runs in
+   **`wwdd.slice`**, so it does not sit in `system.slice` among the production services (livekit, mysql, …); the
+   worker's jobs run in `wwd.slice` (spec §5), a different slice. The name has no hyphen on purpose: systemd takes
+   `wwd-xxx.slice` for a child of `wwd.slice`, which would put wwd's own process in with the jobs. An install over a
+   unit made before this replaces it, reloads systemd and restarts wwd into the new slice; check with
+   `systemctl status wwd` (the CGroup line reads `wwdd.slice/wwd.service`);
 5. loads or restarts it: first install → `launchctl bootstrap` / `systemctl enable` + `restart`; a new
    binary → `launchctl kickstart -k` / `systemctl restart`; a changed plist → bootout + bootstrap; nothing
    changed and running → nothing. `--no-restart` does steps 1–4 only and prints the restart command.
