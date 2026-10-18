@@ -263,7 +263,8 @@ func TestAlertEvent(t *testing.T) {
 }
 
 func TestPoolAtLeast(t *testing.T) {
-	peer := func(proto int) Peer { return Peer{Info: Info{Proto: proto}} }
+	peer := func(proto int) Peer { return Peer{Info: Info{Proto: proto}, Reachable: true} }
+	gone := func(proto int) Peer { return Peer{Info: Info{Proto: proto}, Reachable: false} } // the last info it gave
 	for _, c := range []struct {
 		name  string
 		peers []Peer
@@ -272,6 +273,9 @@ func TestPoolAtLeast(t *testing.T) {
 		{"empty pool", nil, true},
 		{"all at 2", []Peer{peer(2), peer(2)}, true},
 		{"one at 1", []Peer{peer(2), peer(1)}, false},
+		// the last info said 2, but the host may have been rolled back and be coming up as proto 1 (R2)
+		{"unreachable, last info 2", []Peer{peer(2), gone(2)}, false},
+		{"unreachable, last info 1", []Peer{peer(2), gone(1)}, false},
 		{"a peer never reached carries the oldest proto", []Peer{peer(2), {Info: Info{Proto: MinProto}}}, false},
 		{"a rolled-back host shuts it again", []Peer{peer(2), peer(1), peer(2)}, false},
 	} {

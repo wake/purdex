@@ -162,7 +162,9 @@ minus the first is the CPU spent; measured on mlab: about 0.5 % and 18–22 MB).
     `v: 1` with none of the new fields, so a host still on the old build is never shown a field it would reject. A reader takes
     `404` on `/v1/alerts` as "no alerts yet" (an old host), and a facts record or info of a proto it does not know as an
     unreachable peer.
-  - *A later release* fills the new fields, and only while `wire.PoolAtLeast(peers, 2)` holds: every peer reports `proto >= 2`.
+  - *A later release* fills the new fields, and only while `wire.PoolAtLeast(peers, 2)` holds: every peer is reachable and reports
+    `proto >= 2` (a peer that is down holds the gate shut, whatever its last info said). Until then `POST /v1/exceptions` refuses
+    `allow` and `flags` with 400, so no writer can show them to a proto 1 reader.
     Check before relying on it: `curl --unix-socket ~/.local/share/wwd/wwd.sock http://wwd/v1/info` on each host shows
     `"proto":2`. A host rolled back below the contract shuts the gate again.
   - `wwd.db` host schema 4 → 5 adds `wwd_starts` and `alerts` (both `IF NOT EXISTS`, so a second start changes nothing). Take the

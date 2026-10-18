@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/wake/purdex/internal/wwd/wire"
@@ -69,6 +70,44 @@ func TestMixedPoolOfProto1AndProto2ReadsBoth(t *testing.T) {
 	}
 	if !wire.PoolAtLeast(peers[1:], 2) {
 		t.Fatal("a pool of proto 2 hosts opens the gate")
+	}
+}
+
+// A host that gave proto 2, went down and comes back rolled back to proto 1: the gate must be shut the moment it is unreachable
+// (its last info is old), and stay shut once it answers as proto 1.
+func TestARolledBackPeerShutsTheGate(t *testing.T) {
+	var proto atomic.Int32
+	var down atomic.Bool
+	proto.Store(2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if down.Load() {
+			http.Error(w, "down", http.StatusServiceUnavailable)
+			return
+		}
+		switch r.URL.Path {
+		case "/v1/info":
+			writeJSON(w, 200, wire.Info{HostID: "id-air26", Alias: "air26", Version: "v", Proto: int(proto.Load()), Platform: "linux", Arch: "amd64", Labels: []string{}})
+		case "/v1/facts":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(factsFor(wireFixture(t, "facts_darwin.json"), "air26")))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	p := NewPoolPoller([]PeerAddr{{"air26", addr(srv)}}, testToken, nil)
+	p.PollOnce(context.Background())
+	if !wire.PoolAtLeast(p.Peers(), 2) {
+		t.Fatalf("a reachable proto 2 pool opens the gate: %+v", p.Peers())
+	}
+	down.Store(true)
+	p.PollOnce(context.Background())
+	if got := p.Peers()[0]; got.Reachable || got.Info.Proto != 2 || wire.PoolAtLeast(p.Peers(), 2) {
+		t.Fatalf("unreachable keeps its last info but must shut the gate: %+v", got)
+	}
+	down.Store(false)
+	proto.Store(1)
+	p.PollOnce(context.Background())
+	if wire.PoolAtLeast(p.Peers(), 2) {
+		t.Fatalf("rolled back to proto 1: the gate stays shut: %+v", p.Peers()[0])
 	}
 }
 
