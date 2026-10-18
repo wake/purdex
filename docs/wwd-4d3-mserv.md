@@ -32,7 +32,7 @@
 A job's composer cache starts empty (HOME is in the workspace): 6–7 s for this project, not a visible cost.
 Not measured: at-inwin's own phpunit suite (it needs the repository and its database).
 
-Recommendation: add `ProtectSystem=strict` through `Sandbox.ExtraProperties` for mserv. It closes writes to every path outside the workspace (including `/srv/backups`) and cost nothing that was measured. The decision is the lead's.
+Decision (lead, 2026-10-18): `ProtectSystem=strict` is in the sandbox's base properties (A–L were run again on mserv with it as a base property: all pass, mserv left clean) (not `ExtraProperties`), and spec §5 lists it, on the strength of this measurement. It closes writes to every path outside the workspace (including `/srv/backups`) and cost nothing that was measured.
 
 ## What the real run found (both fixed in this PR; the fake `sudo`/`systemctl` of the unit tests had hidden them)
 

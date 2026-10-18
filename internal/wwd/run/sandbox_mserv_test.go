@@ -182,17 +182,17 @@ func TestMServ(t *testing.T) {
 			t.Error("/tmp is not private: the job's file is on the host")
 		}
 	})
-	t.Run("G_protectsystem_strict", func(t *testing.T) {
+	t.Run("G_protectsystem_strict_is_the_base", func(t *testing.T) {
 		// paths outside the home directory that this user can write on mserv (found with find -writable): /var/crash and
 		// /var/log/installer by group, /var/tmp by the sticky bit (PrivateTmp covers /var/tmp too: a write there is private, not
 		// denied). /opt and /usr/local hold nothing this user owns, and /srv/backups is real data: neither is probed.
 		script := "for p in /var/tmp/4d3-x /var/crash/4d3-x /var/log/installer/4d3-x; do if touch $p 2>/dev/null; then echo WROTE:$p; rm -f $p; else echo DENIED:$p; fi; done; php -v | head -1"
-		for _, extra := range [][]string{nil, {"ProtectSystem=strict"}} {
-			name := "G-" + map[bool]string{false: "without", true: "with"}[extra != nil]
-			r := runSB(t, name, Sandbox{ExtraProperties: extra}, 120*time.Second, bg, "sh", "-c", script)
-			t.Logf("%s: %s", name, r.out)
+		r := runSB(t, "G", Sandbox{}, 120*time.Second, bg, "sh", "-c", script)
+		for _, p := range []string{"DENIED:/var/crash/4d3-x", "DENIED:/var/log/installer/4d3-x", "WROTE:/var/tmp/4d3-x"} {
+			if !strings.Contains(r.out, p) {
+				t.Errorf("missing %s in %q", p, r.out)
+			}
 		}
-		// a small composer project: install time and a passing test, without and with the property
 		// composer is not installed on mserv: version 2.10.3 of its phar is fetched into the workspace and checked against the sha256 that
 		// getcomposer.org publishes for it (the cache then starts empty, as it will for a job)
 		proj := `s=$(date +%s)
@@ -209,12 +209,9 @@ EOF
 php ../composer.phar install --no-interaction --no-progress 2>&1 | tail -2
 echo INSTALL_SECONDS=$(( $(date +%s) - s ))
 vendor/bin/phpunit tests 2>&1 | tail -4`
-		for _, extra := range [][]string{nil, {"ProtectSystem=strict"}} {
-			name := "Gc-" + map[bool]string{false: "without", true: "with"}[extra != nil]
-			r := runSB(t, name, Sandbox{ExtraProperties: extra}, 300*time.Second, bg, "sh", "-c", proj)
-			if r.Outcome != Exited || r.ExitCode != 0 || !strings.Contains(r.out, "OK (1 test") {
-				t.Errorf("%s: composer/phpunit did not pass: %+v\n%s", name, r.Result, r.out)
-			}
+		rc := runSB(t, "Gc", Sandbox{}, 300*time.Second, bg, "sh", "-c", proj)
+		if rc.Outcome != Exited || rc.ExitCode != 0 || !strings.Contains(rc.out, "OK (1 test") {
+			t.Errorf("composer/phpunit did not pass under ProtectSystem=strict: %+v\n%s", rc.Result, rc.out)
 		}
 	})
 	t.Run("H_cancel_term_then_kill", func(t *testing.T) {

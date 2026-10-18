@@ -111,7 +111,7 @@ func TestSandboxArgvIsTheSpecCommand(t *testing.T) {
 	got := sandboxArgv(sb, "wwd-j_test1", "/ws", "/ws/sub", "/ws/.wwd-exit", 10*time.Minute, 10*time.Second, []string{"HOME=/ws/.home", "WWD_JOB=j_test1"}, "/usr/bin/go", []string{"test", "./..."})
 	want := []string{"systemd-run", "--wait", "--pipe", "--uid=wake", "--unit=wwd-j_test1", "--slice=wwd.slice",
 		"-p", "CPUQuota=200%", "-p", "MemoryMax=4G", "-p", "MemorySwapMax=0", "-p", "RuntimeMaxSec=660", "-p", "TimeoutStopSec=10",
-		"-p", "PrivateTmp=yes", "-p", "ProtectHome=read-only", "-p", "ReadWritePaths=/ws", "-p", "WorkingDirectory=/ws/sub",
+		"-p", "PrivateTmp=yes", "-p", "ProtectHome=read-only", "-p", "ProtectSystem=strict", "-p", "ReadWritePaths=/ws", "-p", "WorkingDirectory=/ws/sub",
 		"-p", "NoNewPrivileges=yes", "-p", "InaccessiblePaths=-/run/docker.sock",
 		"env", "-i", "HOME=/ws/.home", "WWD_JOB=j_test1", "nice", "-n", "10", "ionice", "-c3", "sh", "-c", exitWrapper, "/ws/.wwd-exit", "/usr/bin/go", "test", "./..."}
 	if !reflect.DeepEqual(got, want) {

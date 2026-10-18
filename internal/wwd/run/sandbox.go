@@ -23,7 +23,7 @@ type Sandbox struct {
 	SudoPath          string   // default "sudo"
 	SystemctlPath     string   // default "systemctl" (show needs no root)
 	// ExtraProperties are more systemd properties ("Name=value"), only from extraAllowed: properties that take rights away. It is
-	// how a measurement adds ProtectSystem=strict without a code change; it cannot change what the sandbox sets, add a path, a
+	// how a measurement adds a hardening property without a code change; it cannot change what the sandbox sets, add a path, a
 	// capability, a group or an environment.
 	ExtraProperties []string
 }
@@ -32,7 +32,6 @@ type Sandbox struct {
 // enough: PrivateDevices=no or TasksMax=infinity would loosen what the host does by default. None of them sets a user, a group, a
 // path that becomes writable or visible, an environment, a capability or a command, and none is one the sandbox sets.
 var extraAllowed = map[string]func(v string) bool{
-	"ProtectSystem":          oneOf("yes", "full", "strict"),
 	"ProtectKernelTunables":  oneOf("yes"),
 	"ProtectKernelModules":   oneOf("yes"),
 	"ProtectKernelLogs":      oneOf("yes"),
@@ -152,6 +151,9 @@ func sandboxArgv(sb Sandbox, unit, workspace, dir, exitFile string, timeout, kil
 	}
 	argv = append(argv, "-p", "TimeoutStopSec="+strconv.Itoa(ceilSeconds(killAfter)), // TERM, then KILL after this: as on macOS
 		"-p", "PrivateTmp=yes", "-p", "ProtectHome=read-only",
+		// the whole file system read-only but the workspace (ReadWritePaths) and the private /tmp and /var/tmp (WWD-4d-3: it closed
+		// writes to /srv/backups, /srv/stacks, /var/crash and the like at no cost that was measured)
+		"-p", "ProtectSystem=strict",
 		"-p", "ReadWritePaths="+strings.Join(append([]string{workspace}, sb.ReadWritePaths...), " "),
 		"-p", "WorkingDirectory="+dir, "-p", "NoNewPrivileges=yes",
 		"-p", "InaccessiblePaths="+strings.Join(sb.InaccessiblePaths, " "))
