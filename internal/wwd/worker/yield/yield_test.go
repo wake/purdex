@@ -14,7 +14,7 @@ import (
 )
 
 func TestObserve_AHostWithoutAnOwnerRuleNeverYields(t *testing.T) {
-	y := New(func() time.Time { return time.Unix(100, 0) })
+	y := New(func() time.Time { return time.Unix(100, 0) }, false)
 	d, changed := y.Observe(nil) // facts.owner is null off air26
 	assert.Equal(t, Decision{MayClaim: true}, d)
 	assert.False(t, changed)
@@ -24,7 +24,7 @@ func TestObserve_AHostWithoutAnOwnerRuleNeverYields(t *testing.T) {
 // claiming goes on. Reclaim is a level, not an edge: a job claimed in the instant before the reading is still given back at the next one.
 func TestObserve_YieldsWhileTheOwnerIsActiveAndResumesWhenAway(t *testing.T) {
 	now := time.Unix(1000, 0)
-	y := New(func() time.Time { return now })
+	y := New(func() time.Time { return now }, true)
 
 	d, changed := y.Observe(&wire.OwnerState{Active: false, IdleS: 900})
 	assert.Equal(t, Decision{MayClaim: true}, d)
@@ -56,8 +56,19 @@ func TestObserve_YieldsWhileTheOwnerIsActiveAndResumesWhenAway(t *testing.T) {
 }
 
 // A reading that goes missing (the facts have no owner for a moment: nil) while yielding is not "the owner left": yielding continues.
+func TestObserve_ARuleWithoutAReadingYetClaimsNothing(t *testing.T) {
+	y := New(time.Now, true)
+	d, changed := y.Observe(nil) // the owner source has not answered: the owner is not shown to be away
+	assert.Equal(t, Decision{MayClaim: false, Reason: "unknown"}, d, "fail closed, and nothing to reclaim that was not claimed")
+	assert.False(t, changed)
+	d, _ = y.Observe(&wire.OwnerState{Active: false, IdleS: 900})
+	assert.Equal(t, Decision{MayClaim: true}, d, "the first reading that says away opens it")
+	d, _ = y.Observe(nil)
+	assert.True(t, d.MayClaim, "and a missing one later keeps the state")
+}
+
 func TestObserve_ANilReadingDoesNotEndAYield(t *testing.T) {
-	y := New(time.Now)
+	y := New(time.Now, true)
 	y.Observe(&wire.OwnerState{Active: true, Reason: "hid"})
 	d, changed := y.Observe(nil)
 	assert.False(t, d.MayClaim)
@@ -67,12 +78,14 @@ func TestObserve_ANilReadingDoesNotEndAYield(t *testing.T) {
 
 type fakeJob struct {
 	id    string
+	claim string
 	stop  func(context.Context) error
 	order *[]string
 	mu    *sync.Mutex
 }
 
-func (j fakeJob) ID() string { return j.id }
+func (j fakeJob) ID() string      { return j.id }
+func (j fakeJob) ClaimID() string { return j.claim }
 func (j fakeJob) Stop(ctx context.Context) error {
 	err := error(nil)
 	if j.stop != nil {
@@ -90,11 +103,16 @@ type fakeReleaser struct {
 	fail  map[string]error
 	// ctxErr, when set, gets the error of the context each Release was called with
 	ctxErr *[]error
+	// claims, when set, gets "job/claim" of each Release
+	claims *[]string
 }
 
-func (r fakeReleaser) Release(ctx context.Context, id string) error {
+func (r fakeReleaser) Release(ctx context.Context, id, claim string) error {
 	r.mu.Lock()
 	*r.order = append(*r.order, "release:"+id)
+	if r.claims != nil {
+		*r.claims = append(*r.claims, id+"/"+claim)
+	}
 	if r.ctxErr != nil {
 		*r.ctxErr = append(*r.ctxErr, ctx.Err())
 	}
@@ -122,22 +140,36 @@ func TestReclaimAll_StopsThenReleasesEveryJobInParallel(t *testing.T) {
 	}
 }
 
-// A job that cannot be stopped is still given back (the lease would run out otherwise, and the owner is waiting); the errors are all
-// returned, and one job's failure does not keep the others from being given back.
-func TestReclaimAll_AFailureOfOneDoesNotStopTheOthers(t *testing.T) {
+// A job whose processes are not confirmed gone is NOT given back: the origin would let another worker start it while the first run may
+// still be going. It keeps its claim (the worker retries at the next reading, Reclaim being a level) and the error is returned; one job's
+// failure never keeps another from being stopped and given back, and a release that fails is reported too.
+func TestReclaimAll_AJobThatMayStillRunIsNotGivenBack(t *testing.T) {
 	order, mu := rig()
 	boom := errors.New("stuck")
 	nope := errors.New("origin down")
 	jobs := []Job{
-		fakeJob{id: "stuck", stop: func(context.Context) error { return boom }, order: order, mu: mu},
-		fakeJob{id: "fine", order: order, mu: mu},
+		fakeJob{id: "stuck", claim: "c1", stop: func(context.Context) error { return boom }, order: order, mu: mu},
+		fakeJob{id: "fine", claim: "c2", order: order, mu: mu},
 	}
 	err := ReclaimAll(context.Background(), jobs, fakeReleaser{order: order, mu: mu, fail: map[string]error{"fine": nope}})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, boom)
 	assert.ErrorIs(t, err, nope)
-	assert.GreaterOrEqual(t, indexOf(*order, "release:stuck"), 0, "released although its stop failed")
-	assert.GreaterOrEqual(t, indexOf(*order, "release:fine"), 0)
+	assert.Equal(t, -1, indexOf(*order, "release:stuck"), "not released: its processes may still run")
+	assert.GreaterOrEqual(t, indexOf(*order, "release:fine"), 0, "the other one is")
+}
+
+// The release names the claim it ends: with two jobs of the same id (a stale attempt and a new one) each is given back by its own claim.
+func TestReclaimAll_ReleasesByTheClaimOfEachJob(t *testing.T) {
+	order, mu := rig()
+	var claims []string
+	jobs := []Job{
+		fakeJob{id: "j_1", claim: "old", order: order, mu: mu},
+		fakeJob{id: "j_1", claim: "new", order: order, mu: mu},
+		fakeJob{id: "j_2", claim: "c9", order: order, mu: mu},
+	}
+	require.NoError(t, ReclaimAll(context.Background(), jobs, fakeReleaser{order: order, mu: mu, claims: &claims}))
+	assert.ElementsMatch(t, []string{"j_1/old", "j_1/new", "j_2/c9"}, claims)
 }
 
 func TestReclaimAll_NothingRunningIsNothing(t *testing.T) {
@@ -153,23 +185,36 @@ func indexOf(s []string, v string) int {
 	return -1
 }
 
-// The stop ends because the context did (the owner cannot wait): the release is still made, with a context that is alive, or an HTTP
-// release would abort at once and the job would only come back when its lease ran out.
-func TestReclaimAll_TheReleaseOutlivesTheContextThatEndedTheStop(t *testing.T) {
+// The stop succeeds just as the context ends (the deadline fell while the last process was going down): the release is still made, with a
+// context that is alive, or an HTTP release would abort at once and the job would only come back when its lease ran out.
+func TestReclaimAll_TheReleaseOutlivesTheContextThatEndedWithTheStop(t *testing.T) {
 	order, mu := rig()
 	var ctxErrs []error
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	jobs := []Job{fakeJob{id: "a", order: order, mu: mu, stop: func(c context.Context) error { <-c.Done(); return c.Err() }}}
-	err := ReclaimAll(ctx, jobs, fakeReleaser{order: order, mu: mu, ctxErr: &ctxErrs})
-	require.ErrorIs(t, err, context.DeadlineExceeded, "the stop's error is reported")
+	jobs := []Job{fakeJob{id: "a", order: order, mu: mu, stop: func(c context.Context) error { <-c.Done(); return nil }}}
+	require.NoError(t, ReclaimAll(ctx, jobs, fakeReleaser{order: order, mu: mu, ctxErr: &ctxErrs}))
 	require.Len(t, ctxErrs, 1, "the release was made")
 	assert.NoError(t, ctxErrs[0], "with a context that was alive")
 }
 
+// A stop that ends with the context's error is a stop that is not confirmed: no release.
+func TestReclaimAll_AStopThatEndedWithTheContextsErrorIsNotConfirmed(t *testing.T) {
+	order, mu := rig()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	jobs := []Job{fakeJob{id: "a", order: order, mu: mu, stop: func(c context.Context) error { <-c.Done(); return c.Err() }}}
+	err := ReclaimAll(ctx, jobs, fakeReleaser{order: order, mu: mu})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Equal(t, -1, indexOf(*order, "release:a"))
+}
+
 type hangingReleaser struct{}
 
-func (hangingReleaser) Release(ctx context.Context, _ string) error { <-ctx.Done(); return ctx.Err() }
+func (hangingReleaser) Release(ctx context.Context, _, _ string) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
 
 // An origin that does not answer does not hold the reclaim for ever.
 func TestReclaimAll_AReleaseThatHangsIsCutOff(t *testing.T) {

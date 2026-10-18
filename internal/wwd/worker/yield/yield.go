@@ -21,7 +21,9 @@ type Decision struct {
 
 // Yielder follows the owner readings. Safe for concurrent use.
 type Yielder struct {
-	now func() time.Time
+	now  func() time.Time
+	rule bool // this host has an owner rule (air26): a missing first reading is then "not known to be away"
+	seen bool // a reading has come
 
 	mu       sync.Mutex
 	yielding bool
@@ -29,8 +31,11 @@ type Yielder struct {
 	reason   string
 }
 
-// New is a Yielder; now is the clock.
-func New(now func() time.Time) *Yielder { return &Yielder{now: now} }
+// New is a Yielder; now is the clock. hasOwnerRule says whether this host has an owner rule at all (air26 does; the others have facts.owner
+// null for good): with a rule, a worker that has not had its first reading takes no job, since the owner is not yet shown to be away.
+func New(now func() time.Time, hasOwnerRule bool) *Yielder {
+	return &Yielder{now: now, rule: hasOwnerRule}
+}
 
 // Observe takes the latest facts.owner (nil: this host has no owner rule, or the reading is missing) and says what to do. changed is true
 // for the reading that starts a yield and for the one that ends it, so that the worker can log and count the two. Reclaim is a level:
@@ -39,8 +44,14 @@ func New(now func() time.Time) *Yielder { return &Yielder{now: now} }
 func (y *Yielder) Observe(o *wire.OwnerState) (d Decision, changed bool) {
 	y.mu.Lock()
 	defer y.mu.Unlock()
+	if o != nil {
+		y.seen = true
+	}
 	switch {
 	case o == nil:
+		if y.rule && !y.seen {
+			return Decision{MayClaim: false, Reason: "unknown"}, false
+		}
 		// no news: whatever was decided stands
 	case o.Active:
 		if !y.yielding {
@@ -68,22 +79,26 @@ func (y *Yielder) YieldedSince() (time.Time, bool) {
 // Job is a job the worker is running, as ReclaimAll needs it.
 type Job interface {
 	ID() string
+	// ClaimID is the claim of this attempt, fixed for the job's run: the release is made for it, so that a late release of an old
+	// attempt cannot end a new claim of the same job.
+	ClaimID() string
 	// Stop ends the job's processes (the whole group, then the marker sweep) and returns when none is left.
 	Stop(ctx context.Context) error
 }
 
-// Releaser gives a job back to its origin: release with reason "reclaim", so the job is queued again and no attempt is counted.
+// Releaser gives a job back to its origin: release {claim_id, reason: "reclaim"}, so the job is queued again and no attempt is counted.
 type Releaser interface {
-	Release(ctx context.Context, jobID string) error
+	Release(ctx context.Context, jobID, claimID string) error
 }
 
 // releaseTimeout bounds one release: a call to an origin that does not answer must not hold the reclaim for ever. (A variable so that a
 // test can lower it.)
 var releaseTimeout = 15 * time.Second
 
-// ReclaimAll stops the jobs, all at the same time (the owner is waiting), and gives each one back after its processes are gone. A job
-// that cannot be stopped is still given back: its lease would run out otherwise, and the owner has to be left alone. Every error is
-// returned, and one job's failure never keeps another from being given back.
+// ReclaimAll stops the jobs, all at the same time (the owner is waiting), and gives each one back once its processes are confirmed gone.
+// A job whose stop failed is NOT given back: the origin would queue it again and another worker could start it while the first run may
+// still be going. It keeps its claim, the error is returned, and the worker tries again at the next reading (Reclaim is a level). One
+// job's failure never keeps another from being stopped and given back; every error is returned.
 func ReclaimAll(ctx context.Context, jobs []Job, rel Releaser) error {
 	errs := make([]error, len(jobs))
 	var wg sync.WaitGroup
@@ -91,13 +106,15 @@ func ReclaimAll(ctx context.Context, jobs []Job, rel Releaser) error {
 		wg.Add(1)
 		go func(i int, j Job) {
 			defer wg.Done()
-			stopErr := j.Stop(ctx)
+			if err := j.Stop(ctx); err != nil {
+				errs[i] = err
+				return
+			}
 			// The release does not share the stop's context: the stop may have ended because that context did, and a release made with
 			// it would abort at once and leave the job to come back only when its lease runs out. It gets its own, with a bound.
 			rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), releaseTimeout)
-			relErr := rel.Release(rctx, j.ID())
+			errs[i] = rel.Release(rctx, j.ID(), j.ClaimID())
 			cancel()
-			errs[i] = errors.Join(stopErr, relErr)
 		}(i, j)
 	}
 	wg.Wait()
