@@ -9,15 +9,9 @@ import (
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
-// SourceEnv picks where the readings come from: "pool" = wwd's pool over its local socket (spec §9), anything else = the
-// SSH sessions and the LocalSource as they always were. It is the switch of the WWD-2b migration; the C1 acceptance flips it.
-const SourceEnv = "PDX_FLEET_SOURCE"
-
-// poolSource is the pool read from the local wwd socket, or nil when the switch is not "pool".
+// poolSource reads the pool from the local wwd socket. It is asked only while the fleet row's source is "pool" (hostconfig
+// fleet.source), a setting the Measure re-reads whenever the row changes, so flipping it needs no restart.
 func poolSource() func(context.Context) (wire.Pool, error) {
-	if os.Getenv(SourceEnv) != "pool" {
-		return nil
-	}
 	return client.New(client.DefaultSocket()).Pool
 }
 

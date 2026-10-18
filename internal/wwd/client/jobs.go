@@ -63,7 +63,7 @@ func (c *Client) send(ctx context.Context, method, path string, q url.Values, bo
 	if err != nil {
 		return nil, fmt.Errorf("%w: reading the answer: %v", ErrUnavailable, err)
 	}
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+	if resp.StatusCode < 200 || resp.StatusCode > 299 { // 200 and 201 carry a body; 204 is a successful delete or cancel
 		msg := string(raw)
 		if len(msg) > 200 {
 			msg = msg[:200]
