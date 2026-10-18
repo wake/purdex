@@ -93,6 +93,19 @@ func TestPoolHost_CachesForTheTTL(t *testing.T) {
 	assert.EqualValues(t, 2, calls.Load())
 }
 
+// A reading served from the cache is judged by its age now: facts that turn 20 s old inside the TTL stop being a reading.
+func TestPoolHost_ACachedReadingStillExpires(t *testing.T) {
+	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	p, clock := newPoolHostT(now, func(context.Context) (wire.Pool, error) {
+		return poolOf(factsAt(now.Add(-poolHostStale + 200*time.Millisecond))), nil // 19.8 s old when read
+	})
+	_, ok := p.detail()
+	require.True(t, ok)
+	*clock = now.Add(500 * time.Millisecond) // inside the TTL, but the facts are 20.3 s old
+	_, ok = p.detail()
+	assert.False(t, ok)
+}
+
 type fakeFleetRow struct {
 	cfg hostconfig.FleetConfig
 	rev int64

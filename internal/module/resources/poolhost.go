@@ -45,6 +45,10 @@ func (p *poolHost) detail() (resources.HostDetail, bool) {
 	defer p.mu.Unlock()
 	now := p.now()
 	if p.have && now.Sub(p.at) < poolHostTTL {
+		// The answer is served for a second, but a reading never outlives its 20 s: judge its age now, not when it was read.
+		if p.ok && now.Sub(time.UnixMilli(p.cache.SampledAt)) >= poolHostStale {
+			return resources.HostDetail{}, false
+		}
 		return p.cache, p.ok
 	}
 	pool, err := p.pool(context.Background())
