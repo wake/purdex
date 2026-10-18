@@ -22,6 +22,8 @@ const (
 	jobUsageStale = 2 * time.Hour
 	// jobUsageMaxJobs bounds the jobs kept; the ones seen longest ago go first.
 	jobUsageMaxJobs = 512
+	// jobUsageMaxTaken bounds the memory of jobs already taken (the oldest go first).
+	jobUsageMaxTaken = 4096
 	// jobUsageFaultPrefix starts the reason of an owner state a fault hook made up (kofi's C2 hooks): not the owner, so not recorded.
 	jobUsageFaultPrefix = "fault:"
 )
@@ -123,10 +125,16 @@ func (t *JobUsageTracker) Commit(f wire.Facts) {
 	t.hasPending = false
 	now := t.pendingAt
 	dt := t.interval
-	if !t.lastAt.IsZero() && now.After(t.lastAt) {
-		dt = min(now.Sub(t.lastAt), 3*t.interval) // a gap (sleep, wwd stopped) is not charged as CPU
+	if !t.lastAt.IsZero() {
+		if now.After(t.lastAt) {
+			dt = min(now.Sub(t.lastAt), 3*t.interval) // a gap (sleep, wwd stopped) is not charged as CPU
+			t.lastAt = now
+		} else {
+			dt = 0 // the clock went back: that stretch was charged already, and the base does not move back
+		}
+	} else {
+		t.lastAt = now
 	}
-	t.lastAt = now
 
 	zone := f.Derived.Zone // the real zone: a fault hook's override is in Derived.ZoneOverride
 	var ownerActive *bool
@@ -158,8 +166,14 @@ func (t *JobUsageTracker) Commit(f wire.Facts) {
 		acc.MemPeakBytes = max(acc.MemPeakBytes, cur.mem)
 		acc.JobsPeak = max(acc.JobsPeak, n)
 		acc.ZoneWorst = worseZone(acc.ZoneWorst, zone)
-		if ownerActive != nil && acc.OwnerSeen != nil && *ownerActive {
-			*acc.OwnerSeen = true
+		if ownerActive != nil {
+			if acc.OwnerSeen == nil { // the owner was unknown (or made up) at the start and is known now
+				seen := false
+				acc.OwnerSeen = &seen
+			}
+			if *ownerActive {
+				*acc.OwnerSeen = true
+			}
 		}
 	}
 	t.forget(now)
@@ -198,7 +212,17 @@ func (t *JobUsageTracker) Take(jobID string) (JobSample, bool) {
 	if at.IsZero() {
 		at = time.Now()
 	}
-	t.taken[jobID] = at // a job ends once: a sample of it made just before this Take is not its start
+	t.taken[jobID] = at                   // a job ends once: a sample of it made just before this Take is not its start
+	for len(t.taken) > jobUsageMaxTaken { // bounded even when no sample comes to forget them
+		var oldest string
+		var oat time.Time
+		for id, a := range t.taken {
+			if oldest == "" || a.Before(oat) {
+				oldest, oat = id, a
+			}
+		}
+		delete(t.taken, oldest)
+	}
 	acc := t.jobs[jobID]
 	if acc == nil {
 		return JobSample{}, false

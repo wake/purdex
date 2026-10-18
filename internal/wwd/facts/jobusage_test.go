@@ -248,3 +248,53 @@ func TestJobUsageConcurrentTakeAndSample(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// The owner unknown (no rule yet, or a fault hook) in the first sample does not hide what it shows later.
+func TestJobUsageOwnerKnownOnlyAfterTheStart(t *testing.T) {
+	here, away := &wire.OwnerState{Active: true, Reason: "hid"}, &wire.OwnerState{Active: false}
+	faked := &wire.OwnerState{Active: true, Reason: "fault: owner active"}
+	run := func(owners ...*wire.OwnerState) JobSample {
+		h, tr := jobHost(), newJU()
+		for n, o := range owners {
+			sample(tr, h, n, wire.ZoneNormal, o)
+		}
+		got, _ := tr.Take("j_a")
+		return got
+	}
+	for name, g := range map[string]JobSample{"nil then there": run(nil, here), "fault then there": run(faked, here, away)} {
+		if g.OwnerAtStart != nil || g.OwnerSeen == nil || !*g.OwnerSeen {
+			t.Errorf("%s: %+v %+v", name, g.OwnerAtStart, g.OwnerSeen)
+		}
+	}
+	if g := run(nil, away); g.OwnerAtStart != nil || g.OwnerSeen == nil || *g.OwnerSeen {
+		t.Errorf("nil then away: %+v %+v", g.OwnerAtStart, g.OwnerSeen)
+	}
+}
+
+// A clock that goes back is not charged twice.
+func TestJobUsageAClockGoingBackIsNotChargedTwice(t *testing.T) {
+	h, tr := jobHost(), newJU()
+	h.rec(300).CPUPct = 100
+	for _, n := range []int{0, 1, 2, 1, 3} {
+		sample(tr, h, n, wire.ZoneNormal, nil)
+	}
+	got, _ := tr.Take("j_a")
+	// at 0 s (the first, 5 s), 5 s (5 s), 10 s (5 s), back at 5 s (0 s), 15 s (5 s from 10 s) = 20 s of one core
+	if got.CPUSeconds < 19.9 || got.CPUSeconds > 20.1 {
+		t.Fatalf("cpu seconds %v", got.CPUSeconds)
+	}
+}
+
+// Jobs taken with no sample coming to forget them stay under a bound.
+func TestJobUsageRemembersOnlyABoundedNumberOfTakenJobs(t *testing.T) {
+	tr := newJU()
+	for i := 0; i < jobUsageMaxTaken+50; i++ {
+		tr.Take("j_" + time.Duration(i).String())
+	}
+	tr.mu.Lock()
+	n := len(tr.taken)
+	tr.mu.Unlock()
+	if n > jobUsageMaxTaken {
+		t.Fatalf("%d taken kept", n)
+	}
+}
