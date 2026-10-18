@@ -343,12 +343,26 @@ try {
 EOS
   cat > "$WORK/repo/scripts/sandbox_probe.sh" <<'EOS'
 #!/bin/sh
-# exits 0 only when the sandbox of spec section 5 holds: no docker socket, nothing writable outside the workspace, sudo blocked
+# exits 0 only when the sandbox of spec section 5 holds: no docker socket, nothing writable outside the workspace (ProtectSystem=strict),
+# a /tmp of its own, sudo blocked. Every refusal is paired with a control that must succeed, so a probe that cannot write at all fails.
 fail=0
-[ -S /run/docker.sock ] && { echo "docker.sock reachable"; fail=1; }
-touch "/home/wake/wwd-c2-outside.$$" 2>/dev/null && { echo "wrote outside the workspace"; rm -f "/home/wake/wwd-c2-outside.$$"; fail=1; }
-sudo -n true 2>/dev/null && { echo "sudo works"; fail=1; }
-touch /tmp/wwd-c2-private 2>/dev/null || { echo "no private /tmp"; fail=1; }
+note() { echo "$1"; fail=1; }
+# the workspace is the working directory: the one place that must be writable
+touch "./wwd-c2-inside.$$" 2>/dev/null && rm -f "./wwd-c2-inside.$$" || note "cannot write the workspace"
+# the docker socket: InaccessiblePaths leaves a stand-in at the path that is still a socket but has mode 000 (measured on mserv),
+# so the test is "can this user connect" (write permission), not "does it exist" or "is it a socket" (either path)
+for s in /run/docker.sock /var/run/docker.sock; do
+  [ -w "$s" ] && note "$s can be connected to"
+done
+# nothing outside the workspace is writable: the home, the system, and the usual places a job might drop a file
+for d in /home/wake /etc /usr/local /usr/bin /opt /srv /root /var/lib /var/log /run; do
+  [ -d "$d" ] || continue
+  touch "$d/wwd-c2-outside.$$" 2>/dev/null && { note "wrote $d"; rm -f "$d/wwd-c2-outside.$$"; }
+done
+sudo -n true 2>/dev/null && note "sudo works"
+# /tmp is the job's own: writable, and the host's sentinel (put there by the matrix) is not in it
+touch /tmp/wwd-c2-private 2>/dev/null || note "no writable /tmp"
+[ -e /tmp/wwd-c2-sentinel ] && note "the host's /tmp is visible"
 echo "sandbox probe done fail=$fail"
 exit "$fail"
 EOS
@@ -619,9 +633,13 @@ case_13() {
   wait_for "$id" .state succeeded 200 || true
   check "php job state" "$(jf "$id" .state)" succeeded
   check "its database is gone" "$(mserv_dbs)" 0
+  # the host's /tmp holds a sentinel the job must not see; what the job writes to its /tmp must not reach the host's
+  on mserv "touch /tmp/wwd-c2-sentinel; rm -f /tmp/wwd-c2-private"
   sb=$(submit c2-sandbox)
   wait_for "$sb" .state succeeded 120 || true
-  check "sandbox probe (no docker socket, nothing writable outside, no sudo)" "$(jf "$sb" .state)" succeeded
+  check "sandbox probe (no docker socket, nothing writable outside the workspace, own /tmp, no sudo)" "$(jf "$sb" .state)" succeeded
+  check "the job's /tmp write did not reach the host" "$(q mserv 'test -e /tmp/wwd-c2-private && echo reached || echo private')" private
+  on mserv "rm -f /tmp/wwd-c2-sentinel" || true
   check "no failed wwd unit is left" "$(q mserv "systemctl --failed --no-legend | grep -c 'wwd-' || true")" 0
 }
 
