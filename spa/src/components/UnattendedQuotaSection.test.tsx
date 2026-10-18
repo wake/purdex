@@ -329,6 +329,15 @@ describe('the team cap stepper', () => {
     expect(within(cap('l1')).getByTestId('cap-value')).toHaveTextContent('4')
   })
 
+  it('+ stops at 8 against a v1 daemon and goes to 9 against one that lists team.max_members.v2', () => {
+    supported()
+    useTeamRosterStore.getState().apply(A, [capTeam('l1', { max_members: 8 })])
+    show([{ hostId: A, rows: [q('l1', { is_lead: true })] }])
+    expect(within(cap('l1')).getByRole('button', { name: '調高上限' })).toBeDisabled()
+    act(() => { useUnattendedStore.getState().setMaxMembersV2Support(A, 'yes') })
+    expect(within(cap('l1')).getByRole('button', { name: '調高上限' })).toBeEnabled()
+  })
+
   it('names the members in use on hover', () => {
     supported()
     useTeamRosterStore.getState().apply(A, [capTeam('l1', { in_use: 2 })])

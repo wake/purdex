@@ -21,6 +21,8 @@ export function teamColor(index: number): string {
 export interface TeamSeatView {
   sessionId: string
   title: string
+  /** The peer address `<host>/<name>`: `seatOf` finds the seat's persona by the code its name ends in. */
+  address: string
   hostId: string
   /** tmux session code: the agent light is keyed by (hostId, code). Empty when the host's list does not carry the session. */
   sessionCode: string

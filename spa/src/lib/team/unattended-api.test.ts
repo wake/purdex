@@ -344,7 +344,7 @@ describe('unattended-api', () => {
     })
 
     it('an answer with an impossible cap is bad_response (outside 1-8, negative or above the cap in use)', async () => {
-      for (const bad of [{ max_members: 0, in_use: 0 }, { max_members: 9, in_use: 1 }, { max_members: -1, in_use: -1 }, { max_members: 2, in_use: 3 }, { max_members: 4, in_use: -1 }]) {
+      for (const bad of [{ max_members: 0, in_use: 0 }, { max_members: 10, in_use: 1 }, { max_members: -1, in_use: -1 }, { max_members: 2, in_use: 3 }, { max_members: 4, in_use: -1 }]) {
         testGlobal.fetch.mockResolvedValueOnce(json({ team_id: 't1', ...bad }))
         expect((await rejection(putMaxMembers(hostId, 't1', 4))).code).toBe('bad_response')
       }

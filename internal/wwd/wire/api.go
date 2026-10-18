@@ -38,7 +38,7 @@ type InfoWorker struct {
 }
 
 func (i Info) Validate() error {
-	if i.Proto != Proto {
+	if i.Proto < MinProto || i.Proto > Proto {
 		return fmt.Errorf("info: unsupported proto %d", i.Proto)
 	}
 	return nil
@@ -173,7 +173,7 @@ func (e Event) Validate() error {
 }
 
 // DecodeData strictly decodes Data into the type for e.Type (Facts, JobEvent,
-// LabelsEvent, ExceptionEvent or WorkerEvent, by value).
+// LabelsEvent, ExceptionEvent, WorkerEvent or AlertEvent, by value).
 func (e Event) DecodeData() (any, error) {
 	switch e.Type {
 	case EventFacts:
@@ -186,6 +186,8 @@ func (e Event) DecodeData() (any, error) {
 		return Decode[ExceptionEvent](e.Data)
 	case EventWorker:
 		return Decode[WorkerEvent](e.Data)
+	case EventAlert:
+		return Decode[AlertEvent](e.Data)
 	}
 	return nil, fmt.Errorf("event: invalid type %q", e.Type)
 }
@@ -204,6 +206,10 @@ type Exception struct {
 	Until *time.Time `json:"until"`
 	PID   *int       `json:"pid"`
 	Holds []Hold     `json:"holds"`
+	// Allow and Flags make an exception a hold (spec §13.4). Absent, the exception means what it always meant. Present,
+	// the worker admits a job only if its class or its repo is listed (both lists empty: none).
+	Allow *HoldAllow `json:"allow,omitempty"`
+	Flags []HoldFlag `json:"flags,omitempty"`
 }
 
 func (e Exception) Validate() error {
@@ -220,6 +226,9 @@ func (e Exception) Validate() error {
 		if !h.Valid() {
 			return fmt.Errorf("exception: invalid hold %q", h)
 		}
+	}
+	if err := validateHoldFields(e.Allow, e.Flags); err != nil {
+		return fmt.Errorf("exception: %w", err)
 	}
 	return nil
 }

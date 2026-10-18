@@ -17,6 +17,8 @@ import { useHeaderGestures, type HeaderHandlers } from './useHeaderGestures'
 import { keepFocus } from './panel-focus'
 import { EndedGroup } from './TeamEndedGroup'
 import { PanelRow } from './TeamPanelRow'
+import { TeamSettingsBlock } from './TeamSettingsBlock'
+import { offersAny, useTeamSettingsOffer } from './team-settings'
 import { useMemberFeed } from './member-lines'
 import { useIsJournalHost } from '../../lib/journal/use-journal-host'
 import { useI18nStore } from '../../stores/useI18nStore'
@@ -102,6 +104,11 @@ export function ToTitleBarButton({ onClick }: { onClick: () => void }) {
 function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, noDrill, hdr }: Props & { noDrill: boolean; hdr: HeaderHandlers }) {
   const t = useI18nStore((s) => s.t)
   const { teamKey, color, lead, members } = team
+  // The team's settings sit at the bottom of the panel, always shown, on the lead's own team only (the lead's tab is the one in view) and only where the host offers
+  // something to set (name pool v2 spec §9.5).
+  const [leadHost, leadTeam = ''] = teamKey.split('\u0000')
+  const settingsOffer = useTeamSettingsOffer(leadHost, leadTeam)
+  const showSettings = offersAny(settingsOffer) && lead.tabId !== null && lead.tabId === activeTabId
   const rosterKey = members.map((m) => m.sessionId).sort().join('\u0000') // the member set: a join, a leave or a relay to a new session
   const feed = useMemberFeed(lead.hostId, lead.sessionId, rosterKey, `team:${teamKey.split('\u0000')[1] ?? ''}`) // the team's journal unit key
   const order = members.map((m) => m.sessionId)
@@ -135,6 +142,7 @@ function FullPanel({ team, activeTabId, onSetMode, onOpen, onReorder, noDrill, h
         ))}
       </div>
       <EndedGroup teamKey={teamKey} noDrill={noDrill} />
+      {showSettings && <TeamSettingsBlock hostId={leadHost} teamId={leadTeam} name={team.name} />}
     </>
   )
 }
