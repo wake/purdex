@@ -412,3 +412,155 @@ func TestSummaryInputsThatAreNotRegularFilesAreNotRead(t *testing.T) {
 	s := h.s.results[0].Summary
 	assert.Zero(t, s.Passed+s.Failed, "the linked file was read")
 }
+
+// delivery builds the harness's Delivery: whether the origin took the result.
+func (h *harness) delivery() func(context.Context, runner.Ended) bool {
+	return h.r.Delivery(func(string) Sink { return h.s })
+}
+
+func TestDeliveryIsTrueOnlyForAResultTheOriginTook(t *testing.T) {
+	ranOK := func(t *testing.T) runner.Ended {
+		return ended(runner.KindRan, run.Result{Outcome: run.Exited, ExitCode: 0, LogPath: logFile(t, "ok\n")})
+	}
+	t.Run("a result taken", func(t *testing.T) {
+		h := newHarness(t, Config{})
+		assert.True(t, h.delivery()(context.Background(), ranOK(t)))
+	})
+	t.Run("cancelled and rejected results taken", func(t *testing.T) {
+		h := newHarness(t, Config{})
+		assert.True(t, h.delivery()(context.Background(), ended(runner.KindCancelled, run.Result{Outcome: run.Cancelled})))
+		rej := ended(runner.KindRejected, run.Result{})
+		rej.Err = &runner.Rejected{Reason: "no such task"}
+		assert.True(t, h.delivery()(context.Background(), rej))
+	})
+	t.Run("a result the origin refuses", func(t *testing.T) {
+		for name, refuse := range map[string]error{"409": &runner.Conflict{State: wire.StateQueued}, "404": runner.ErrNotFound} {
+			h := newHarness(t, Config{})
+			h.s.errs = []error{refuse}
+			assert.False(t, h.delivery()(context.Background(), ranOK(t)), name)
+		}
+	})
+	t.Run("a result given up on", func(t *testing.T) {
+		h := newHarness(t, Config{})
+		h.s.always = errors.New("connection refused")
+		assert.False(t, h.delivery()(context.Background(), ranOK(t)), "RetryFor passes with no answer")
+	})
+	t.Run("a result whose log is not taken is still a result", func(t *testing.T) {
+		h := newHarness(t, Config{})
+		h.s.errs = []error{nil, &runner.Conflict{State: wire.StateFailed}} // the result is taken, the log is refused
+		assert.True(t, h.delivery()(context.Background(), ranOK(t)))
+	})
+	t.Run("a context that ended before anything was sent", func(t *testing.T) {
+		h := newHarness(t, Config{})
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		h.s.always = errors.New("down")
+		assert.False(t, h.delivery()(ctx, ranOK(t)))
+	})
+	t.Run("no result at all is no delivery", func(t *testing.T) {
+		for _, e := range []runner.Ended{
+			ended(runner.KindLost, run.Result{Outcome: run.Exited}),
+			ended(runner.KindInfra, run.Result{}),
+			ended(runner.KindReclaimed, run.Result{Outcome: run.Cancelled}),
+			ended(runner.KindShutdown, run.Result{}),
+			ended(runner.KindRan, run.Result{Outcome: run.Exited, CaptureErr: errors.New("disk full")}),
+			ended(runner.KindRan, run.Result{Outcome: run.Exited, Err: errors.New("unit not proven stopped")}),
+			ended(runner.KindRan, run.Result{Outcome: run.StartFailed}),
+		} {
+			h := newHarness(t, Config{})
+			assert.False(t, h.delivery()(context.Background(), e), "%s", e.Kind)
+		}
+	})
+	t.Run("an origin with no sink", func(t *testing.T) {
+		h := newHarness(t, Config{})
+		assert.False(t, h.r.Delivery(func(string) Sink { return nil })(context.Background(), ranOK(t)))
+	})
+}
+
+// cancelOnFirst makes the first Result call end the lease's context and fail the way a cancelled request does, while the origin has in fact
+// taken the result (the answer was lost).
+type cancelOnFirst struct {
+	*sink
+	cancel context.CancelFunc
+	n      int
+	taken  bool
+}
+
+func (c *cancelOnFirst) Result(ctx context.Context, id string, req wire.ResultRequest) error {
+	c.mu.Lock()
+	c.n++
+	n := c.n
+	c.mu.Unlock()
+	if n == 1 {
+		c.cancel()
+		c.mu.Lock()
+		c.taken = true
+		c.mu.Unlock()
+		return context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return err // the confirming try must not run under the lease's ended context
+	}
+	return c.sink.Result(ctx, id, req) // a repeat: the origin answers with the first answer
+}
+
+func TestAResultTheOriginTookWhoseAnswerWasLostWithTheLeaseIsConfirmedOnce(t *testing.T) {
+	h := newHarness(t, Config{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cs := &cancelOnFirst{sink: h.s, cancel: cancel}
+	d := h.r.Delivery(func(string) Sink { return cs })
+	e := ended(runner.KindRan, run.Result{Outcome: run.Exited, ExitCode: 0, LogPath: logFile(t, "ok\n")})
+	if !d(ctx, e) {
+		t.Fatal("the origin took the result: it is the job's run")
+	}
+	if cs.n != 2 {
+		t.Fatalf("%d result calls, want the one that was lost and one confirming", cs.n)
+	}
+}
+
+func TestTheConfirmingTryOfALostLeaseIsRefusedWhenTheClaimIsReallyGone(t *testing.T) {
+	h := newHarness(t, Config{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cs := &cancelOnFirst{sink: h.s, cancel: cancel}
+	h.s.errs = []error{&runner.Conflict{State: wire.StateQueued}} // the repeat finds the claim gone
+	d := h.r.Delivery(func(string) Sink { return cs })
+	e := ended(runner.KindRan, run.Result{Outcome: run.Exited, ExitCode: 0, LogPath: logFile(t, "ok\n")})
+	if d(ctx, e) {
+		t.Fatal("a 409 on the confirming try: the origin did not take it")
+	}
+}
+
+func TestNoConfirmingTryWhenNothingWasTriedOrTheOriginAlreadyDecided(t *testing.T) {
+	h := newHarness(t, Config{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()                        // the lease's context had ended before the first try, but the first try still runs: it is the one that fails
+	h.s.always = errors.New("down") // a failure that is not the context's own: nothing to confirm
+	d := h.delivery()
+	e := ended(runner.KindRan, run.Result{Outcome: run.Exited, ExitCode: 0, LogPath: logFile(t, "ok\n")})
+	if d(ctx, e) {
+		t.Fatal("nothing took it")
+	}
+	h2 := newHarness(t, Config{})
+	h2.s.errs = []error{&runner.Conflict{State: wire.StateQueued}}
+	if h2.delivery()(context.Background(), e) {
+		t.Fatal("refused")
+	}
+	if n := len(h2.s.calls); n != 1 {
+		t.Fatalf("%d calls after a 409: the origin decided, nothing is sent again", n)
+	}
+}
+
+func TestTheConfirmationSurvivesATransientFailure(t *testing.T) {
+	h := newHarness(t, Config{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cs := &cancelOnFirst{sink: h.s, cancel: cancel}
+	h.s.errs = []error{errors.New("503")} // the first confirming try fails, the second is answered with the first answer
+	d := h.r.Delivery(func(string) Sink { return cs })
+	e := ended(runner.KindRan, run.Result{Outcome: run.Exited, ExitCode: 0, LogPath: logFile(t, "ok\n")})
+	if !d(ctx, e) {
+		t.Fatal("the origin took the result and a repeat answers with it: a transient failure of one confirming try must not lose the record")
+	}
+	if cs.n != 3 {
+		t.Fatalf("%d result calls, want the lost one and two confirming", cs.n)
+	}
+}

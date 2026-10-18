@@ -109,34 +109,43 @@ func wait(ctx context.Context, d time.Duration) error {
 // Finish is the runner's Finish: sinks gives the Sink of the origin a job came from (Ended.Source). A job whose origin has no sink is
 // logged and dropped (its lease will lapse there).
 func (r *Reporter) Finish(sinks func(source string) Sink) runner.Finish {
-	return func(ctx context.Context, e runner.Ended) {
+	d := r.Delivery(sinks)
+	return func(ctx context.Context, e runner.Ended) { d(ctx, e) }
+}
+
+// Delivery is Finish that also says whether the origin took the job's result. True only for a result that was accepted (a job that
+// succeeded, failed, was cancelled or was rejected); false for a release, a lost lease, a refusal (409/404) and a delivery that was given
+// up (the context ended, the retries ran out). What is recorded about a run belongs to the run whose result the origin took: a run it did
+// not take is run again, and that one is the run of the job.
+func (r *Reporter) Delivery(sinks func(source string) Sink) func(ctx context.Context, e runner.Ended) bool {
+	return func(ctx context.Context, e runner.Ended) bool {
 		sink := sinks(e.Source)
 		if sink == nil {
 			r.cfg.Logf("report: no sink for origin %q; the outcome of %s is dropped", e.Source, e.Job.ID)
-			return
+			return false
 		}
-		r.deliver(ctx, sink, e)
+		return r.deliver(ctx, sink, e)
 	}
 }
 
-// deliver does what the kind of ending calls for.
-func (r *Reporter) deliver(ctx context.Context, sink Sink, e runner.Ended) {
+// deliver does what the kind of ending calls for, and says whether the origin took a result.
+func (r *Reporter) deliver(ctx context.Context, sink Sink, e runner.Ended) bool {
 	// A sandboxed run of any outcome can carry an Err that says its unit was not proven stopped (run.Result.Err): what it did cannot
 	// be told, so it is not a result of the job whatever the outcome says, and the job goes back as an infrastructure failure. (The
 	// workspace is then not reused or removed: that is the runner's, which sees the same Err.) A lost job is dropped as always.
 	if e.Run.Err != nil && (e.Kind == runner.KindRan || e.Kind == runner.KindCancelled || e.Kind == runner.KindShutdown || e.Kind == runner.KindReclaimed) {
 		r.release(ctx, sink, e, wire.ReleaseInfra, fmt.Errorf("the command's unit was not proven stopped: %w", e.Run.Err))
-		return
+		return false
 	}
 	switch e.Kind {
 	case runner.KindLost:
 		// the lease is gone: the origin has the job again or has failed it as lost; whatever this worker saw is not its to report
 	case runner.KindCancelled:
-		r.postResult(ctx, sink, e, wire.ResultRequest{ClaimID: e.ClaimID, State: wire.StateCancelled, StartedAt: stamp(e.Run.StartedAt), FinishedAt: stamp(e.Run.FinishedAt)})
+		return r.postResult(ctx, sink, e, wire.ResultRequest{ClaimID: e.ClaimID, State: wire.StateCancelled, StartedAt: stamp(e.Run.StartedAt), FinishedAt: stamp(e.Run.FinishedAt)})
 	case runner.KindRejected:
-		r.rejected(ctx, sink, e)
+		return r.rejected(ctx, sink, e)
 	case runner.KindRan:
-		r.ran(ctx, sink, e)
+		return r.ran(ctx, sink, e)
 	case runner.KindInfra:
 		r.release(ctx, sink, e, wire.ReleaseInfra, e.Err)
 	case runner.KindReclaimed, runner.KindShutdown:
@@ -146,11 +155,12 @@ func (r *Reporter) deliver(ctx context.Context, sink Sink, e runner.Ended) {
 	default:
 		r.cfg.Logf("report: %s of %s is not something to report", e.Kind, e.Job.ID)
 	}
+	return false
 }
 
 // rejected: the job was not run as submitted. The result is failed with no exit and the reason as the only line of the summary's tail;
 // the log is the same line. No reason field: a rejection is not one of oom, timeout or infra, and the job is not given to anyone else.
-func (r *Reporter) rejected(ctx context.Context, sink Sink, e runner.Ended) {
+func (r *Reporter) rejected(ctx context.Context, sink Sink, e runner.Ended) bool {
 	reason := "rejected"
 	var rej *runner.Rejected
 	if errors.As(e.Err, &rej) {
@@ -160,18 +170,20 @@ func (r *Reporter) rejected(ctx context.Context, sink Sink, e runner.Ended) {
 		ClaimID: e.ClaimID, State: wire.StateFailed,
 		Summary: &wire.Summary{Failures: []wire.Failure{}, Tail: []string{reason}},
 	}
-	if r.postResult(ctx, sink, e, req) {
-		r.putLog(ctx, sink, e, func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(reason + "\n")), nil })
+	if !r.postResult(ctx, sink, e, req) {
+		return false
 	}
+	r.putLog(ctx, sink, e, func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(reason + "\n")), nil })
+	return true
 }
 
 // ran: the command started and ended by itself or by its own timeout.
-func (r *Reporter) ran(ctx context.Context, sink Sink, e runner.Ended) {
+func (r *Reporter) ran(ctx context.Context, sink Sink, e runner.Ended) bool {
 	run := e.Run
 	if run.CaptureErr != nil {
 		// the log or the summary is incomplete, which a result cannot be built on (spec §5.1): the job goes back
 		r.release(ctx, sink, e, wire.ReleaseInfra, fmt.Errorf("the log could not be kept: %w", run.CaptureErr))
-		return
+		return false
 	}
 	req := wire.ResultRequest{ClaimID: e.ClaimID, StartedAt: stamp(run.StartedAt), FinishedAt: stamp(run.FinishedAt)}
 	switch {
@@ -190,13 +202,17 @@ func (r *Reporter) ran(ctx context.Context, sink Sink, e runner.Ended) {
 		req.State = wire.StateFailed
 	default: // it never started, or an ending that is not this kind's: not a result of the job
 		r.release(ctx, sink, e, wire.ReleaseInfra, fmt.Errorf("the command did not run to an end here (%s): %v", run.Outcome, run.Err))
-		return
+		return false
 	}
 	s := r.summaryOf(e)
 	req.Summary = &s
-	if r.postResult(ctx, sink, e, req) && run.LogPath != "" {
+	if !r.postResult(ctx, sink, e, req) {
+		return false
+	}
+	if run.LogPath != "" {
 		r.putLog(ctx, sink, e, func() (io.ReadCloser, error) { return os.Open(run.LogPath) })
 	}
+	return true
 }
 
 func (r *Reporter) summaryOf(e runner.Ended) wire.Summary {
@@ -258,8 +274,25 @@ func readCapped(path string) []byte {
 // postResult sends the result until it is taken, refused for good, or given up on; true only when the origin took it. A refused result
 // (409, 404) means the claim is not live: the log is not sent either.
 func (r *Reporter) postResult(ctx context.Context, sink Sink, e runner.Ended, req wire.ResultRequest) bool {
-	return r.retry(ctx, e, "result", func(ctx context.Context) error { return sink.Result(ctx, e.Job.ID, req) }) == taken
+	var last error
+	out := r.retry(ctx, e, "result", func(ctx context.Context) error { last = sink.Result(ctx, e.Job.ID, req); return last })
+	if out == abandoned && ctx.Err() != nil && (errors.Is(last, context.Canceled) || errors.Is(last, context.DeadlineExceeded)) {
+		// A try was cut short by the lease's context ending: the origin may have taken the result and the answer been lost with the
+		// context (a heartbeat that met the finished job and ended the lease is how it happens). A result is idempotent per claim, so one
+		// try (retried for a few seconds), on a context of its own, settles it: the origin answers a repeat with the first answer, or, if the claim
+		// really is gone, with a 409.
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), confirmTimeout)
+		defer cancel()
+		if r.retryFor(cctx, e, "result confirmation", confirmTimeout, func(ctx context.Context) error { return sink.Result(ctx, e.Job.ID, req) }) == taken {
+			r.cfg.Logf("report: the result of %s was taken after all (confirmed once its lease had ended)", e.Job.ID)
+			return true
+		}
+	}
+	return out == taken
 }
+
+// confirmTimeout bounds the one try that settles a result whose answer was lost with the lease's context.
+const confirmTimeout = 5 * time.Second
 
 // putLog uploads the log with the claim of the run, re-opening it for every try. A log that is not there is not an error of the run.
 func (r *Reporter) putLog(ctx context.Context, sink Sink, e runner.Ended, open func() (io.ReadCloser, error)) {
