@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -236,6 +237,7 @@ type Running struct {
 	tcp   []string
 	sock  string
 	errCh chan error
+	once  sync.Once
 }
 
 // Listen validates every address, binds the TCP listeners and the socket, and
@@ -340,14 +342,18 @@ func (r *Running) TCPAddrs() []string { return r.tcp }
 // Err reports a serve failure.
 func (r *Running) Err() <-chan error { return r.errCh }
 
-// Close stops both surfaces and removes the socket file.
+// Close stops both surfaces and removes the socket file. It does this once: a second call (the shutdown that follows the context, and
+// the one main makes to be sure the servers are quiet) waits for the first to finish and does nothing more, so it cannot remove the
+// socket a new process has made since.
 func (r *Running) Close() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	for _, s := range r.srvs {
-		_ = s.Shutdown(ctx)
-	}
-	_ = os.Remove(r.sock)
+	r.once.Do(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		for _, s := range r.srvs {
+			_ = s.Shutdown(ctx)
+		}
+		_ = os.Remove(r.sock)
+	})
 	return nil
 }
 

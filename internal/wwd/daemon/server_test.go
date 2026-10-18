@@ -126,6 +126,33 @@ func TestListenBindsOnlyAllowedAddrs(t *testing.T) {
 	}
 }
 
+// Close is done once: the second call (main makes one next to the one that follows the context) does not remove a socket that a new
+// process has made at the path since the first.
+func TestRunningCloseRemovesTheSocketOnlyOnce(t *testing.T) {
+	d := newTestDaemon(t)
+	dir, err := os.MkdirTemp("", "w") // short: a unix socket path has a small limit
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "s")
+	run, err := d.Listen(context.Background(), ListenSpec{Addrs: []string{"127.0.0.1"}, Port: 0, SocketPath: sock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Close()
+	if _, err := os.Lstat(sock); err == nil {
+		t.Fatal("the first Close left the socket")
+	}
+	if err := os.WriteFile(sock, []byte("the next process's socket"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run.Close() // must not touch what is there now
+	if _, err := os.Lstat(sock); err != nil {
+		t.Fatalf("the second Close removed the new process's socket: %v", err)
+	}
+}
+
 func TestListenDoesNotDeleteRegularFile(t *testing.T) {
 	d := newTestDaemon(t)
 	p := filepath.Join(t.TempDir(), "precious")
