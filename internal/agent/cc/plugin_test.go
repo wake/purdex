@@ -537,6 +537,55 @@ func readPdxJSON(t *testing.T, dataDir string) map[string]string {
 	return pj
 }
 
+// The wwd entry switch ("entry" in pdx.json, read by the mod's gate hook) is the one key of the file the installer does not own: a
+// `pdx setup` rerun, a moved binary and a new version all keep it, and a file without it stays without it.
+func TestInstallHooks_PdxJSONKeepsTheEntrySwitch(t *testing.T) {
+	p, _, dataDir := pluginProvider(t, "1.0.0-alpha.600")
+	if err := p.InstallHooks("/usr/local/bin/pdx"); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := readPdxJSON(t, dataDir)["entry"]; has {
+		t.Fatal("a fresh install has no entry switch")
+	}
+	// someone turns it on by hand (or a later command does)
+	path := filepath.Join(PluginRoot(dataDir), "pdx.json")
+	pj := readPdxJSON(t, dataDir)
+	pj["entry"] = "advise"
+	b, _ := json.Marshal(pj)
+	if err := os.WriteFile(path, append(b, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, bin := range map[string]string{"same binary": "/usr/local/bin/pdx", "moved binary": "/opt/pdx/bin/pdx"} {
+		if err := p.InstallHooks(bin); err != nil {
+			t.Fatal(err)
+		}
+		got := readPdxJSON(t, dataDir)
+		if got["entry"] != "advise" || got["pdx"] != bin {
+			t.Fatalf("%s: pdx.json = %v, want entry kept and pdx %s", name, got, bin)
+		}
+	}
+	// a new version replaces the whole tree; the switch is still there
+	if _, _, err := ExtractPlugin(fakePlugin("b"), dataDir, "b", "/opt/pdx/bin/pdx", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := readPdxJSON(t, dataDir)["entry"]; got != "advise" {
+		t.Fatalf("new version: entry = %q", got)
+	}
+	// only a string is kept: anything else is not a switch value
+	pj = readPdxJSON(t, dataDir)
+	raw := map[string]any{"pdx": pj["pdx"], "data_dir": pj["data_dir"], "entry": map[string]string{"x": "y"}}
+	b, _ = json.Marshal(raw)
+	if err := os.WriteFile(path, append(b, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ExtractPlugin(fakePlugin("b"), dataDir, "b", "/opt/pdx/bin/pdx", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := readPdxJSON(t, dataDir)["entry"]; has {
+		t.Fatal("a non-string entry is dropped")
+	}
+}
+
 // Attacker high: the mod must reach the daemon that installed it, not
 // whatever the default config names — pdx.json carries that daemon's config
 // path (the provider's cfg.Path; the default config's without one).
