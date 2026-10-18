@@ -91,9 +91,10 @@ func (m *Module) handleReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if fromPool {
-		// A full run that goes on from the old rows into wwd's is one run: the pooled rows carry on from its length.
+		// A full run that goes on from the old rows into wwd's is one run: the pooled rows carry on from its length. Only an old minute
+		// that was full all through proves it (a single full tick at its start says nothing about its end).
 		carry := 0
-		if n := len(minutes); n > 0 && minutes[n-1].FullTicks > 0 && minutes[n-1].At == recs[0].At.UnixMilli()-time.Minute.Milliseconds() {
+		if n := len(minutes); n > 0 && minutes[n-1].FullTicks >= fullTicksPerMinute && minutes[n-1].At == recs[0].At.UnixMilli()-time.Minute.Milliseconds() {
 			carry = max(minutes[n-1].FullLongestS, 60)
 		}
 		minutes = append(minutes, reportMinutesOf(recs, carry)...)

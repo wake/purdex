@@ -173,9 +173,15 @@ func TestReport_ARunDoesNotCrossACalmMinuteOrAGap(t *testing.T) {
 	calm := func(i int) minuteRow {
 		return minuteRow{At: poolDay0.Add(time.Duration(i) * time.Minute).UnixMilli(), Load1: 1, NCPU: 4, Mem: 40}
 	}
+	brief := func(i int) minuteRow { // one 5 s tick full at the start of the minute, calm for the other 55 s
+		r := full(i)
+		r.FullTicks, r.FullLongestS, r.FullStarts = 1, 5, 0
+		return r
+	}
 	for name, old := range map[string][]minuteRow{
-		"a calm minute before": {full(0), calm(1)},
-		"a gap before":         {full(0)},
+		"a calm minute before":      {full(0), calm(1)},
+		"a gap before":              {full(0)},
+		"one full tick before only": {full(0), brief(1)},
 	} {
 		r := newReportRig(t)
 		for _, row := range old {
