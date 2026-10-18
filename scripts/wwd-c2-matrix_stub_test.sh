@@ -24,6 +24,7 @@ while [ "$1" = "-o" ]; do shift 2; done
 STUB_HOST=$1; export STUB_HOST
 shift
 [ -z "${STUB:-}" ] || printf '%s: %s\n' "$STUB_HOST" "$*" >> "$STUB/ssh.log"      # what was asked of each host, for the tests that count signals
+[ -z "${STUB_SPLIT_HOME:-}" ] || { HOME="$HOME/h-$STUB_HOST"; export HOME; }        # a host of its own: its files are under $HOME/h-<host>
 [ -z "${STUB_SSH_FAIL:-}" ] || case "$*" in *"$STUB_SSH_FAIL"*) exit 255 ;; esac
 if [ -n "${STUB_SSH_PS_ONCE:-}" ]; then case "$*" in *"ps -p"*) [ ! -e "$STUB/ps-asked" ] || exit 255; : > "$STUB/ps-asked" ;; esac; fi
 exec sh -c "$*"
@@ -59,7 +60,10 @@ else
     "PUT /v1/worker") printf '%s\n' "$body" >> "$STUB/put.log" ;;
     "GET /v1/jobs?state=queued") resp='{"jobs":['${STUB_QUEUED:+'{"id":"j_other"}'}'],"cursor":"0","epoch":"e"}' ;;
     "POST /v1/jobs") if [ -n "${STUB_POST_NOID:-}" ]; then resp='{"error":"nope"}'; else resp='{"id":"j_stub_post"}'; fi; printf '%s\n' "$body" >> "$STUB/post.log"
-      if [ -n "${STUB_WS_LINGER:-}" ]; then w="$HOME/.local/share/wwd/work/w$$"; mkdir -p "$w"; ( sleep "$STUB_WS_LINGER"; rm -rf "$w" ) >/dev/null 2>&1 & fi ;;
+      if [ -n "${STUB_WS_LINGER:-}" ]; then
+        wsh=$HOME; case "${STUB_WS_HOST:-mlab}" in mlab) ;; *) wsh="$HOME/h-$STUB_WS_HOST" ;; esac      # the host the worker ran on
+        w="$wsh/.local/share/wwd/work/w$$"; mkdir -p "$w"; ( sleep "$STUB_WS_LINGER"; rm -rf "$w" ) >/dev/null 2>&1 &
+      fi ;;
     "GET /v1/jobs/"*"/log") if [ -n "${STUB_NO_ROUNDTRIP:-}" ]; then resp='no database here'; else resp='db=wwd_0123456789abcdef0123456789abcdef read=round-trip'; fi ;;
     "GET /v1/jobs/"*)
       # a refused job says why in the one line of its summary tail: the first POST of case 12 is the undeclared task, the rest are bad arguments
@@ -163,6 +167,20 @@ HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=failed STUB
 [ "$rc" -ne 0 ] || fail "a workspace that stays must fail case 12"
 has "FAIL .* left no workspace behind" "case 12 with a workspace that stays"
 sleep 1; rm -rf "$home/.local/share/wwd/work"/*
+# the same on each host alone (air26 has a home of its own here): a workspace left on air26 or on mlab is told from the other
+mkdir -p "$home/h-air26/.local/share/wwd/work"
+for ws_host in air26 mlab; do
+  rm -f "$stub"/*.log
+  rc=0
+  HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_SPLIT_HOME=1 STUB_WS_HOST=$ws_host STUB_STATE=failed STUB_WS_LINGER=5 C2_TIMEOUT_SCALE=1 sh "$matrix" --case 12 > "$tmp/out" 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] || { cat "$tmp/out" >&2; fail "a workspace on $ws_host removed 5 s after the result must not fail case 12"; }
+  rm -f "$stub"/*.log
+  rc=0
+  HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_SPLIT_HOME=1 STUB_WS_HOST=$ws_host STUB_STATE=failed STUB_WS_LINGER=600 C2_TIMEOUT_SCALE=0 sh "$matrix" --case 12 > "$tmp/out" 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || fail "a workspace that stays on $ws_host must fail case 12"
+  has "FAIL $ws_host left no workspace behind" "case 12 with a workspace that stays on $ws_host"
+  sleep 1; rm -rf "$home/h-air26/.local/share/wwd/work"/* "$home/.local/share/wwd/work"/*
+done
 
 # precheck: the queue list is {"jobs":[...]}: a queued job makes the matrix refuse to start, an empty list does not
 rc=0
@@ -219,6 +237,7 @@ env HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeed
 has "FAIL its database is gone (within 45 s of the result): got '?', expected '0'" "case 13 with a mysql that cannot be asked"
 env HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 C2_DOCKER_SOCK="$tmp/docker.sock" C2_DOCKER_PING="echo OK" STUB_NO_ROUNDTRIP=1 sh "$matrix" --case 13 > "$tmp/out" 2>&1 || true
 has "FAIL the job really had a database" "case 13 control"
+has "FAIL its database is gone (within 45 s of the result): got '?', expected '0'" "case 13 with a log that names no database: it cannot ask, it does not say 0"
 
 # another job's database stays on the instance for ever: the case judges its own, which is gone
 rm -f "$stub"/*.log
