@@ -109,11 +109,24 @@ func (m *Module) Start(context.Context) error {
 	return nil
 }
 
-func (m *Module) Stop(context.Context) error {
+// Stop ends the loops and waits for them as long as ctx allows. The database is closed by Close, which the core calls after Stop, so
+// a loop that did not end in time never meets a closed database.
+func (m *Module) Stop(ctx context.Context) error {
 	if m.cancel != nil {
 		m.cancel()
 	}
-	m.wg.Wait()
+	ended := make(chan struct{})
+	go func() { m.wg.Wait(); close(ended) }()
+	select {
+	case <-ended:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Close closes the database.
+func (m *Module) Close() error {
 	if m.store != nil {
 		return m.store.close()
 	}
@@ -160,7 +173,7 @@ func (m *Module) onEvent(ctx context.Context, ev wire.Event) {
 	if err != nil {
 		return
 	}
-	if _, ok := m.enqueue(je.Job); ok {
+	if added, _ := m.enqueue(je.Job); added {
 		m.wake() // the stream's callback only queues: a slow send must not stop it reading
 	}
 }
@@ -196,7 +209,12 @@ func (m *Module) catchUp(ctx context.Context) {
 		}
 	}
 	for _, j := range ended {
-		m.enqueue(j)
+		if _, err := m.enqueue(j); err != nil {
+			// a job that is not in the outbox must stay inside the window of the next catch-up
+			m.logf("jobnotify: catch-up could not queue %s, window kept: %v", j.ID, err)
+			m.wake()
+			return
+		}
 	}
 	if err := m.store.setSince(began); err != nil {
 		m.logf("jobnotify: catch-up window: %v", err)
@@ -206,20 +224,20 @@ func (m *Module) catchUp(ctx context.Context) {
 
 // enqueue puts the notice of a job that ended into the outbox, once. A fast-lane job is its caller's own process: pdx test prints
 // the outcome (and Claude Code reports a backgrounded one), so only a lost run is told — its caller was killed and could not report.
-func (m *Module) enqueue(j wire.Job) (string, bool) {
+// added is true when the job got a new row; an error means the outbox could not be written.
+func (m *Module) enqueue(j wire.Job) (added bool, err error) {
 	if !j.State.Terminal() || j.Submitter.Session == "" || (j.Local && !lost(j)) {
-		return "", false
+		return false, nil
 	}
 	finished := m.now()
 	if j.Result != nil && j.Result.FinishedAt != nil {
 		finished = *j.Result.FinishedAt
 	}
-	added, err := m.store.enqueue(j.ID, j.Submitter.Session, Text(j), string(j.State), finished, m.now())
+	added, err = m.store.enqueue(j.ID, j.Submitter.Session, Text(j), string(j.State), finished, m.now())
 	if err != nil {
 		m.logf("jobnotify: queue %s: %v", j.ID, err)
-		return "", false
 	}
-	return j.ID, added
+	return added, err
 }
 
 // lost reports whether the job failed because its runner was lost (the lease ran out).

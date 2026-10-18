@@ -424,6 +424,48 @@ func (b *blockingJobs) Jobs(context.Context, client.JobsQuery) ([]wire.Job, erro
 	return nil, nil
 }
 
+type breakingSource struct {
+	fakeSource
+	m *Module
+}
+
+// Jobs lists a job and, as it does, makes the outbox unwritable.
+func (b *breakingSource) Jobs(ctx context.Context, q client.JobsQuery) ([]wire.Job, error) {
+	if q.State == wire.StateSucceeded {
+		b.m.store.db.Exec(`DROP TABLE notices`)
+	}
+	return b.fakeSource.Jobs(ctx, q)
+}
+
+func TestACatchUpThatCannotQueueAJobKeepsItsWindow(t *testing.T) {
+	src := &breakingSource{fakeSource: fakeSource{jobs: map[wire.JobState][]wire.Job{
+		wire.StateSucceeded: {job("j_a", wire.StateSucceeded, t0.Add(time.Minute))},
+	}}}
+	m := newMod(t, t.TempDir(), src, &sent{})
+	src.m = m
+	m.now = func() time.Time { return t0.Add(3 * time.Hour) }
+	m.catchUp(context.Background())
+	if since, _, _ := m.store.since(); !since.Equal(t0) {
+		t.Fatalf("the window moved to %v although a job was not queued", since)
+	}
+}
+
+func TestStopGivesUpAtItsDeadlineWhenAListIgnoresCancellation(t *testing.T) {
+	src := &blockingJobs{release: make(chan struct{}), entered: make(chan struct{})}
+	m := newMod(t, t.TempDir(), src, &sent{})
+	if err := m.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	<-src.entered
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if err := m.Stop(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Stop = %v", err)
+	}
+	close(src.release)
+	m.Stop(context.Background()) // now it ends
+}
+
 func TestTheStreamIsOpenedAgainAndTellsWhatArrives(t *testing.T) {
 	s := &sent{}
 	src := &fakeSource{events: []wire.Event{event(t, job("j_a", wire.StateSucceeded, t0.Add(time.Second)))}, opened: make(chan struct{})}
