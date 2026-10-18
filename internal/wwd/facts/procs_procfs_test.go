@@ -38,6 +38,17 @@ func TestParseNULList(t *testing.T) {
 	}
 }
 
+func TestParseStatusUID(t *testing.T) {
+	if u, ok := ParseStatusUID("Name:\tx\nUid:\t1000\t0\t0\t1000\n"); !ok || u != 0 {
+		t.Fatalf("effective is the second: %d %v", u, ok)
+	}
+	for _, bad := range []string{"", "Name:\tx\n", "Uid:\t1000\n", "Uid:\ta\tb\n"} {
+		if _, ok := ParseStatusUID(bad); ok {
+			t.Errorf("%q must not parse", bad)
+		}
+	}
+}
+
 func TestParseBtime(t *testing.T) {
 	if b, ok := ParseBtime("cpu  1 2 3\nbtime 1760000000\nprocesses 5\n"); !ok || b != 1760000000 {
 		t.Fatalf("%d %v", b, ok)
@@ -73,6 +84,8 @@ func (f *fakeProc) write(rel, content string) {
 // proc adds a process: cpu ticks (user+system), start in ticks since boot, rss in pages.
 func (f *fakeProc) proc(pid, ppid int, comm string, ticks, start, rssPages uint64, argv []string, env []string) {
 	f.write(fmt.Sprintf("%d/stat", pid), fmt.Sprintf("%d (%s) S %d %d 0 0 -1 0 0 0 0 0 %d 0 0 0 20 0 1 0 %d 0 %d 0\n", pid, comm, ppid, pid, ticks, start, rssPages))
+	// real uid 0, effective uid 4242: the effective one is the process's
+	f.write(fmt.Sprintf("%d/status", pid), fmt.Sprintf("Name:\t%s\nUid:\t0\t4242\t4242\t4242\nGid:\t0\t0\t0\t0\n", comm))
 	f.write(fmt.Sprintf("%d/cmdline", pid), strings.Join(argv, "\x00")+"\x00")
 	f.write(fmt.Sprintf("%d/environ", pid), strings.Join(env, "\x00")+"\x00")
 }
@@ -104,8 +117,12 @@ func TestProcfsReaderSnapshotSizesCPUAndAttribution(t *testing.T) {
 	if node.Name != "node" || node.PPID != 1 || node.FootprintBytes != 100<<20 || node.CPUPct != 0 {
 		t.Fatalf("first sight: %+v", node)
 	}
-	if node.UID != os.Getuid() {
-		t.Errorf("uid %d want %d (the owner of the proc dir)", node.UID, os.Getuid())
+	// the dir is owned by whoever runs the test: the uid must come from status, not from it
+	if node.UID != 4242 {
+		t.Errorf("uid %d want the effective uid 4242 of status", node.UID)
+	}
+	if o := Attribute(node, ProcContext{}); o != nil {
+		t.Errorf("a user process the directory owner might call root's is not the system's: %+v", o)
 	}
 	if kindOf(node, ctx) != "vite" {
 		t.Errorf("kind from cmdline")

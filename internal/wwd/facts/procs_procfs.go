@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -90,8 +89,7 @@ func ParseBtime(stat string) (int64, bool) {
 // real one): stat for the figures, cmdline and environ on demand. Nothing
 // forks. One value belongs to one goroutine.
 //
-// A pid names a process only while it lives. The uid comes from the owner of the
-// pid's directory, read between two reads of its stat; a row whose start time
+// A pid names a process only while it lives. The uid comes from its status file, read between two reads of its stat; a row whose start time
 // differs between them is dropped. Per-pid reads made later (cmdline, environ)
 // are dropped when the pid's start time no longer matches the table row.
 type ProcfsReader struct {
@@ -146,17 +144,31 @@ func (r *ProcfsReader) stat(pid int) (ProcStat, bool) {
 	return ParseProcStat(string(b))
 }
 
-// uidOf is the owner of the pid's directory (the process's effective uid).
+// uidOf is the effective uid from the pid's status file. (The owner of the
+// pid's directory is not it: the kernel shows a non-dumpable process, root's or
+// not, under root's ownership.)
 func (r *ProcfsReader) uidOf(pid int) (int, bool) {
-	fi, err := os.Lstat(filepath.Join(r.root, strconv.Itoa(pid)))
+	b, err := r.read(pid, "status")
 	if err != nil {
 		return 0, false
 	}
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !ok {
-		return 0, false
+	return ParseStatusUID(string(b))
+}
+
+// ParseStatusUID is the effective uid, the second number of the "Uid:" line of
+// /proc/<pid>/status (real, effective, saved, filesystem).
+func ParseStatusUID(status string) (int, bool) {
+	for _, l := range strings.Split(status, "\n") {
+		if v, ok := strings.CutPrefix(l, "Uid:"); ok {
+			f := strings.Fields(v)
+			if len(f) < 2 {
+				return 0, false
+			}
+			n, err := strconv.ParseUint(f[1], 10, 32)
+			return int(n), err == nil
+		}
 	}
-	return int(st.Uid), true
+	return 0, false
 }
 
 // Snapshot reads the table and each process's CPU share since the previous
