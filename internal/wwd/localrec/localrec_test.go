@@ -137,17 +137,31 @@ func TestFinishUploadsTheLogThenPostsTheResult(t *testing.T) {
 	}
 }
 
-func TestFinishMapsAStateTheRouteDoesNotTakeAndKeepsGoingWhenTheLogFails(t *testing.T) {
+func TestFinishMapsAStateTheRouteDoesNotTake(t *testing.T) {
 	api := newAPI()
-	api.logErr = errors.New("disk full")
 	h, _ := Recorder{API: api}.Register(context.Background(), body())
 	logPath := filepath.Join(t.TempDir(), "log")
 	os.WriteFile(logPath, []byte("x"), 0o600)
 	if err := h.Finish(context.Background(), fastlane.Outcome{State: wire.StateExpired, LogPath: logPath}); err != nil {
-		t.Fatalf("a log that cannot be stored must not hold the result back: %v", err)
+		t.Fatal(err)
 	}
 	if len(api.results) != 1 || api.results[0].State != wire.StateFailed || api.results[0].Exit != nil {
 		t.Fatalf("results = %+v", api.results)
+	}
+}
+
+func TestAnUnstoredLogIsAnErrorAndNoResultGoesBeforeIt(t *testing.T) {
+	api := newAPI()
+	api.logErr = errors.New("timeout")
+	h, _ := Recorder{API: api}.Register(context.Background(), body())
+	logPath := filepath.Join(t.TempDir(), "log")
+	os.WriteFile(logPath, []byte("x"), 0o600)
+	if err := h.Finish(context.Background(), fastlane.Outcome{State: wire.StateFailed, LogPath: logPath}); err == nil || len(api.results) != 0 {
+		t.Fatalf("err %v results %d", err, len(api.results))
+	}
+	api.logErr = nil // the retry
+	if err := h.Finish(context.Background(), fastlane.Outcome{State: wire.StateFailed, LogPath: logPath}); err != nil || len(api.results) != 1 {
+		t.Fatalf("err %v results %d", err, len(api.results))
 	}
 }
 

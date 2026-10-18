@@ -71,12 +71,15 @@ func (h *handle) Heartbeat(ctx context.Context) (bool, error) {
 }
 
 // Finish stores the log and posts the result. The log goes first, so that whoever sees the job end finds it; a log that cannot be
-// stored does not hold the result back (the result is the thing that must arrive). Both calls are idempotent for the claim, so
+// stored is an error, so the caller retries before the result closes the job. Both calls are idempotent for the claim, so
 // the caller may retry the whole of Finish.
 func (h *handle) Finish(ctx context.Context, o fastlane.Outcome) error {
 	if log := readLog(o.LogPath); log != nil {
-		if err := h.api.PutLog(ctx, h.resp.ID, h.resp.ClaimID, log); errors.Is(err, client.ErrClaimLost) {
-			return fastlane.ErrStale
+		if err := h.api.PutLog(ctx, h.resp.ID, h.resp.ClaimID, log); err != nil {
+			if errors.Is(err, client.ErrClaimLost) {
+				return fastlane.ErrStale
+			}
+			return err // the caller retries Finish: a result posted without its log would leave the job without it for good
 		}
 	}
 	state := o.State

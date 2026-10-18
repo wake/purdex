@@ -736,6 +736,34 @@ func TestAClaimWwdNoLongerAcceptsEndsTheCommandAtOnce(t *testing.T) {
 	}
 }
 
+func TestAStaleHeartbeatDoesNotCutShortTheDeliveryOfTheResult(t *testing.T) {
+	rec := newRec()
+	rec.h.every, rec.h.lease = 10*time.Millisecond, time.Hour
+	rec.h.heartbeat = func() (bool, error) { return false, ErrStale }
+	tries := 0
+	rec.h.finishFn = func() error { // the first reply is lost although the result was committed
+		if tries++; tries == 1 {
+			time.Sleep(50 * time.Millisecond) // a heartbeat meets the terminal job meanwhile
+			return errors.New("connection reset")
+		}
+		return nil
+	}
+	oldB, oldF := deliverBackoff, deliverFor
+	deliverBackoff, deliverFor = time.Millisecond, time.Minute
+	defer func() { deliverBackoff, deliverFor = oldB, oldF }()
+	g := &fakeGate{run: func(ctx context.Context, _ gate.Options) int { <-ctx.Done(); return 143 }}
+	tk := task(t, "one-file")
+	tk.Timeout = 10 * time.Second
+	res, err := Run(context.Background(), Request{Root: tree(t), Task: tk, Args: []string{"a.test.ts"}, Gate: g, Recorder: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Cleanup()
+	if res.Err != nil || tries != 2 {
+		t.Fatalf("err %v after %d tries", res.Err, tries)
+	}
+}
+
 func TestAFailedRecordOfTheResultIsReported(t *testing.T) {
 	rec := newRec()
 	oldB, oldF := deliverBackoff, deliverFor
