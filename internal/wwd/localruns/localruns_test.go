@@ -489,3 +489,20 @@ func TestRecoverDoesNotTakeTheKeysOfAJobThatEndedWhileItListed(t *testing.T) {
 		t.Fatal("the keys of a job that had ended were rebuilt")
 	}
 }
+
+func TestARepeatedRebuildThatFailsClosesTheLaneAgain(t *testing.T) {
+	q := &fakeQueue{}
+	s, tb := newService(q) // the lane is open
+	if _, err := tb.Acquire("j_worker", []string{"tmux"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	q.mu.Lock()
+	q.running = []wire.Job{{ID: "j_new", Local: true, State: wire.StateRunning, Locks: []string{"tmux"}}}
+	q.mu.Unlock()
+	if err := s.Recover(context.Background()); err == nil {
+		t.Fatal("a job that could not be accounted for was passed over")
+	}
+	if rec := post(s, request(t, "other")); rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("the lane stayed open: %d", rec.Code)
+	}
+}

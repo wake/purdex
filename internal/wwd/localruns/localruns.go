@@ -245,6 +245,9 @@ func (s *Service) Recover(ctx context.Context) error {
 	}()
 	jobs, err := s.Queue.Running(ctx)
 	if err != nil {
+		s.mu.Lock()
+		s.ready = false
+		s.mu.Unlock()
 		return err
 	}
 	var failed []string
@@ -275,6 +278,9 @@ func (s *Service) Recover(ctx context.Context) error {
 		s.mu.Unlock()
 	}
 	if len(failed) > 0 {
+		s.mu.Lock()
+		s.ready = false // also after an earlier success: a job that is unaccounted for closes the lane again
+		s.mu.Unlock()
 		return fmt.Errorf("the locks of %d running jobs could not be rebuilt (%v): the fast lane stays closed", len(failed), failed)
 	}
 	s.mu.Lock()
