@@ -103,6 +103,23 @@ func TestSendNow_Refusals(t *testing.T) {
 	}
 }
 
+// A dialog that opens while the queue and the input are being read would swallow the keys and the answer would say sent_now for
+// good: the light is read again right before the keys (codex attack on #3427).
+func TestSendNow_ADialogThatOpensDuringTheReadIsRefusedAndNotRecorded(t *testing.T) {
+	for _, second := range []string{"waiting", "!"} {
+		re := newRecallEnv(t, queueRow("enqueue", "a"))
+		re.light.seq = []string{"idle", second} // idle at the first check, a dialog (or no reading) at the second
+		reason := "waiting"
+		if second == "!" {
+			reason = "light_unavailable"
+		}
+		answer(t, re.sendNow("sn12"), 409, "refused", "", reason)
+		assert.Zero(t, re.sendNowKeys(), second)
+		re.light.seq = []string{"idle"}
+		sentNow(t, re.sendNow("sn12")) // the refusal was not recorded: a fresh try goes through
+	}
+}
+
 func TestSendNow_NothingQueuedIsRefusedWithoutKeys(t *testing.T) {
 	re := newRecallEnv(t) // an empty queue
 	answer(t, re.sendNow("sn3"), 409, "refused", "", "nothing_queued")

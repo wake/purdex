@@ -113,7 +113,16 @@ func (m *Module) handleSessionSendNow(w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusConflict, "input_not_empty") // the draft would be sent along
 		return
 	}
-	// Nothing between the read above and these keys.
+	// A dialog may have opened while the queue and the input were read: the light is read once more, which is a memory lookup, not
+	// a call to the mod or to tmux. Then nothing between it and the keys.
+	switch st, lightOK := m.freshLight(again); {
+	case !lightOK:
+		refuse(w, http.StatusConflict, "light_unavailable")
+		return
+	case st == "waiting":
+		refuse(w, http.StatusConflict, "waiting")
+		return
+	}
 	if err := td.keys.SendKeysIfInstanceAndMode(info.TmuxID, in.ExpectedTmuxInstance, again.TmuxPaneID, tmux.KeySendNow); err != nil {
 		if reason, ok := guardReason(err); ok {
 			refuse(w, http.StatusConflict, reason) // nothing was sent: a retry with this id is a fresh try
