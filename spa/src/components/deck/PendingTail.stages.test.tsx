@@ -92,6 +92,24 @@ describe('one bubble', () => {
   })
 })
 
+describe('one bubble, render by render', () => {
+  it('a header row that arrives before the queue has claimed it is not drawn beside the staged entry (no effect in between)', async () => {
+    const { q, id } = await handed()
+    act(() => q.setStages({ [id]: st(id, 'queued') })) // staged, and no setHeaderQueue yet: nothing is claimed
+    expect(q.coveredRows()).toEqual([])
+    render(tail(q, [{ ...ROW, source: 'user' }]))
+    expect(screen.getAllByTestId('queued-message')).toHaveLength(1)
+    expect(screen.queryByTestId('header-queued')).toBeNull()
+  })
+  it('two header rows with the same text and stamp, one of them the entry\'s: the other is still drawn', async () => {
+    const { q, id } = await handed()
+    act(() => { q.setStages({ [id]: st(id, 'queued') }); q.setHeaderQueue([ROW, ROW]) })
+    render(tail(q, [{ ...ROW, source: 'user' }, { ...ROW, source: 'user' }]))
+    expect(screen.getAllByTestId('queued-message')).toHaveLength(1)
+    expect(screen.getAllByTestId('header-queued')).toHaveLength(1)
+  })
+})
+
 describe('QueuedMessages alone', () => {
   it('a matched entry without a stage is still hidden', () => {
     const e = { id: 'a', ids: ['a'], text: 'hi', state: 'sent', mode: 'fill', matched: true, createdAt: 0, undoUntil: 0, startedAt: 0 } as QueueEntry

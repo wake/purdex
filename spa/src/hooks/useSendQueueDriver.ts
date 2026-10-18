@@ -27,9 +27,14 @@ export function useSendQueueDriver(paneKey: string, hostId: string, sessionId: s
   const linesSig = JSON.stringify(headerQueued.filter((q) => q.source === 'user').map((q) => ({ text: q.text, at: q.at })))
 
   // A host that lists conversations.stages.v1 (or one whose stages are already flowing) confirms a message by its id or its `read` stage, never by its text.
-  const stagesHost = useUnattendedStore((s) => s.byHost[hostId]?.stagesSupport === 'yes')
-  const stagesOn = stagesHost || Object.keys(stages).length > 0
-  useEffect(() => { queue?.setStagesMode(stagesOn) }, [queue, stagesOn])
+  // `unknown` (a reconnect's probe has not answered) is not a `no`: the mode stays as it was until the host says yes or no.
+  const stagesSupport = useUnattendedStore((s) => s.byHost[hostId]?.stagesSupport)
+  const stagesFlowing = Object.keys(stages).length > 0
+  useEffect(() => {
+    if (!queue) return
+    if (stagesSupport === 'yes' || stagesFlowing) queue.setStagesMode(true)
+    else if (stagesSupport === 'no') queue.setStagesMode(false)
+  }, [queue, stagesSupport, stagesFlowing])
   // Reported on mount and on change, and again whenever the queue itself changes (a message handed over may already be on the line).
   useEffect(() => {
     if (!queue) return

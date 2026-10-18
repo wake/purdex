@@ -238,7 +238,12 @@ export class SendQueue {
     const rest = rows.map((r) => ({ text: r.text.trimEnd(), at: r.at, used: false }))
     const handed = this.list.filter((e) => e.state === 'sent' && e.mode !== undefined)
     let changed = false
-    const stillListed = this.spent.filter((sp) => rest.some((r) => r.at === sp.at && r.text === sp.text))
+    const free = rest.map((r) => ({ text: r.text, at: r.at, free: true }))
+    const stillListed = this.spent.filter((sp) => { // one to one: a row listed once keeps one spent claim
+      const r = free.find((x) => x.free && x.at === sp.at && x.text === sp.text)
+      if (r) r.free = false
+      return r !== undefined
+    })
     if (stillListed.length !== this.spent.length) { this.spent = stillListed; changed = true }
     for (const e of this.list) if (!handed.includes(e) && e.matched) { e.matched = false; changed = true }
     // 1. a claim stands while its row is rendered
