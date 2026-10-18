@@ -183,6 +183,12 @@ func (s *Service) abandon(ctx context.Context, resp wire.LocalRunResponse, why s
 		s.Logf("localruns: ERROR the run %q was recorded but %s, and it cannot be ended (no usable claim); its lease will lapse as lost", resp.ID, why)
 		return
 	}
+	if s.idInUse(resp.ID) {
+		// The queue gave this run the id of one that holds keys here. Ending it would publish a final job event, and the event
+		// releases by id: the keys of the run that really has the id.
+		s.Logf("localruns: ERROR the run %s was recorded but %s, and its id is already in use here; it is not ended (that would release the keys of the run that has this id), its lease will lapse as lost", resp.ID, why)
+		return
+	}
 	// the caller's context may be the very reason for the failure: the end of the run gets its own short one
 	ectx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
@@ -191,6 +197,22 @@ func (s *Service) abandon(ctx context.Context, resp wire.LocalRunResponse, why s
 		return
 	}
 	s.Logf("localruns: the run %s was recorded but %s; ended as failed (infra)", resp.ID, why)
+}
+
+// idInUse says whether id is the owner of keys held here, or of a hold of this service.
+func (s *Service) idInUse(id string) bool {
+	s.mu.Lock()
+	_, ok := s.holds[id]
+	s.mu.Unlock()
+	if ok {
+		return true
+	}
+	for _, owner := range s.Locks.Held() {
+		if owner == id {
+			return true
+		}
+	}
+	return false
 }
 
 // OnJobEvent is the queue's Publish: when a fast-lane job reaches a final state its keys are released.

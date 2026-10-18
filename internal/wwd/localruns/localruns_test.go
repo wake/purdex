@@ -282,6 +282,61 @@ func TestARunWhoseLocksCannotBeNamedIsNotEndedAndLoggedAsAnError(t *testing.T) {
 	}
 }
 
+// endingQueue announces the end of a job the way the real queue does: the job event is published before Result returns.
+type endingQueue struct {
+	*fakeQueue
+	svc *Service
+}
+
+func (q *endingQueue) Result(ctx context.Context, id string, req wire.ResultRequest) (wire.Job, error) {
+	j, err := q.fakeQueue.Result(ctx, id, req)
+	q.svc.OnJobEvent(wire.JobEvent{Job: wire.Job{ID: id, Local: true, State: wire.StateFailed}})
+	return j, err
+}
+
+func TestAnAbandonedRunWithTheIdOfAnotherRunIsNotEndedAndLeavesItsKeys(t *testing.T) {
+	base := &fakeQueue{badLease: true}
+	q := &endingQueue{fakeQueue: base}
+	s, tb, logs := loggedService(q)
+	q.svc = s
+	// run 1 is a normal registration; the queue then gives the next run the same id with a lease it cannot use
+	base.badLease = false
+	if rec := post(s, request(t, "db")); rec.Code != http.StatusOK {
+		t.Fatalf("first run: %d", rec.Code)
+	}
+	base.mu.Lock()
+	base.n = 0 // the next id is j_local1 again
+	base.badLease = true
+	base.mu.Unlock()
+	post(s, request(t, "tmux"))
+	if len(base.results) != 0 {
+		t.Fatalf("the colliding run was ended, which releases the other run's keys: %+v", base.results)
+	}
+	if o, _ := tb.Holder("db"); o != "j_local1" {
+		t.Fatal("the keys of the run that has the id were released")
+	}
+	if _, ok := tb.Holder("tmux"); ok || !strings.Contains(logs(), "ERROR") || !strings.Contains(logs(), "already in use") {
+		t.Fatalf("log: %q", logs())
+	}
+}
+
+func TestEndingAnAbandonedRunThroughTheQueueLeavesNothingBehind(t *testing.T) {
+	base := &fakeQueue{badLease: true}
+	q := &endingQueue{fakeQueue: base}
+	s, tb, _ := loggedService(q)
+	q.svc = s
+	post(s, request(t, "tmux"))
+	if len(base.results) != 1 {
+		t.Fatalf("results %+v", base.results)
+	}
+	s.mu.Lock()
+	early, holds := len(s.early), len(s.holds)
+	s.mu.Unlock()
+	if _, ok := tb.Holder("tmux"); ok || early != 0 || holds != 0 {
+		t.Fatalf("left behind: holder %v, early %d, holds %d", ok, early, holds)
+	}
+}
+
 func TestAnAbandonedRunThatCannotBeEndedIsLoggedAsAnErrorWithItsJobId(t *testing.T) {
 	q := &fakeQueue{badLease: true, resultErr: errors.New("claim is stale")}
 	s, _, logs := loggedService(q)
