@@ -274,8 +274,25 @@ func readCapped(path string) []byte {
 // postResult sends the result until it is taken, refused for good, or given up on; true only when the origin took it. A refused result
 // (409, 404) means the claim is not live: the log is not sent either.
 func (r *Reporter) postResult(ctx context.Context, sink Sink, e runner.Ended, req wire.ResultRequest) bool {
-	return r.retry(ctx, e, "result", func(ctx context.Context) error { return sink.Result(ctx, e.Job.ID, req) }) == taken
+	var last error
+	out := r.retry(ctx, e, "result", func(ctx context.Context) error { last = sink.Result(ctx, e.Job.ID, req); return last })
+	if out == abandoned && ctx.Err() != nil && (errors.Is(last, context.Canceled) || errors.Is(last, context.DeadlineExceeded)) {
+		// A try was cut short by the lease's context ending: the origin may have taken the result and the answer been lost with the
+		// context (a heartbeat that met the finished job and ended the lease is how it happens). A result is idempotent per claim, so one
+		// more try, on a context of its own and short, settles it: the origin answers a repeat with the first answer, or, if the claim
+		// really is gone, with a 409.
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), confirmTimeout)
+		defer cancel()
+		if err := sink.Result(cctx, e.Job.ID, req); err == nil {
+			r.cfg.Logf("report: the result of %s was taken after all (confirmed once its lease had ended)", e.Job.ID)
+			return true
+		}
+	}
+	return out == taken
 }
+
+// confirmTimeout bounds the one try that settles a result whose answer was lost with the lease's context.
+const confirmTimeout = 5 * time.Second
 
 // putLog uploads the log with the claim of the run, re-opening it for every try. A log that is not there is not an error of the run.
 func (r *Reporter) putLog(ctx context.Context, sink Sink, e runner.Ended, open func() (io.ReadCloser, error)) {

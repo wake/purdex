@@ -476,3 +476,73 @@ func TestDeliveryIsTrueOnlyForAResultTheOriginTook(t *testing.T) {
 		assert.False(t, h.r.Delivery(func(string) Sink { return nil })(context.Background(), ranOK(t)))
 	})
 }
+
+// cancelOnFirst makes the first Result call end the lease's context and fail the way a cancelled request does, while the origin has in fact
+// taken the result (the answer was lost).
+type cancelOnFirst struct {
+	*sink
+	cancel context.CancelFunc
+	n      int
+	taken  bool
+}
+
+func (c *cancelOnFirst) Result(ctx context.Context, id string, req wire.ResultRequest) error {
+	c.mu.Lock()
+	c.n++
+	n := c.n
+	c.mu.Unlock()
+	if n == 1 {
+		c.cancel()
+		c.mu.Lock()
+		c.taken = true
+		c.mu.Unlock()
+		return context.Canceled
+	}
+	return c.sink.Result(ctx, id, req) // a repeat: the origin answers with the first answer
+}
+
+func TestAResultTheOriginTookWhoseAnswerWasLostWithTheLeaseIsConfirmedOnce(t *testing.T) {
+	h := newHarness(t, Config{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cs := &cancelOnFirst{sink: h.s, cancel: cancel}
+	d := h.r.Delivery(func(string) Sink { return cs })
+	e := ended(runner.KindRan, run.Result{Outcome: run.Exited, ExitCode: 0, LogPath: logFile(t, "ok\n")})
+	if !d(ctx, e) {
+		t.Fatal("the origin took the result: it is the job's run")
+	}
+	if cs.n != 2 {
+		t.Fatalf("%d result calls, want the one that was lost and one confirming", cs.n)
+	}
+}
+
+func TestTheConfirmingTryOfALostLeaseIsRefusedWhenTheClaimIsReallyGone(t *testing.T) {
+	h := newHarness(t, Config{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cs := &cancelOnFirst{sink: h.s, cancel: cancel}
+	h.s.errs = []error{&runner.Conflict{State: wire.StateQueued}} // the repeat finds the claim gone
+	d := h.r.Delivery(func(string) Sink { return cs })
+	e := ended(runner.KindRan, run.Result{Outcome: run.Exited, ExitCode: 0, LogPath: logFile(t, "ok\n")})
+	if d(ctx, e) {
+		t.Fatal("a 409 on the confirming try: the origin did not take it")
+	}
+}
+
+func TestNoConfirmingTryWhenNothingWasTriedOrTheOriginAlreadyDecided(t *testing.T) {
+	h := newHarness(t, Config{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()                        // the lease's context had ended before the first try, but the first try still runs: it is the one that fails
+	h.s.always = errors.New("down") // a failure that is not the context's own: nothing to confirm
+	d := h.delivery()
+	e := ended(runner.KindRan, run.Result{Outcome: run.Exited, ExitCode: 0, LogPath: logFile(t, "ok\n")})
+	if d(ctx, e) {
+		t.Fatal("nothing took it")
+	}
+	h2 := newHarness(t, Config{})
+	h2.s.errs = []error{&runner.Conflict{State: wire.StateQueued}}
+	if h2.delivery()(context.Background(), e) {
+		t.Fatal("refused")
+	}
+	if n := len(h2.s.calls); n != 1 {
+		t.Fatalf("%d calls after a 409: the origin decided, nothing is sent again", n)
+	}
+}
