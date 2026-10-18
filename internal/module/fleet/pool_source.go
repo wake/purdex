@@ -30,7 +30,7 @@ func (m *Measure) readPool(ctx context.Context, now time.Time) {
 		m.lastPoolOK = now
 		m.inPool = map[string]bool{}
 		for _, key := range m.order {
-			m.inPool[key] = peerOfAlias(pool, m.hosts[key].fleetAlias) != nil
+			m.inPool[key] = poolServes(peerOfAlias(pool, m.hosts[key].fleetAlias), now)
 		}
 	default:
 		m.d.Logf("[fleet] reading the pool: %v", err)
@@ -101,6 +101,13 @@ func (m *Measure) syncSessions(ctx context.Context) {
 	}
 	m.stopSessions(stop)
 	m.startSessions(ctx, start)
+}
+
+// poolServes says whether the pool can read a host now: the peer is listed, wwd reaches it, and its facts are fresh. A host the pool
+// lists but cannot read (wwd is not installed there yet, or it stopped answering) stays with the old sources, ssh for a remote
+// one, so its state does not depend on wwd being there; it goes to the pool when the pool can read it, and back when it cannot.
+func poolServes(peer *wire.Peer, now time.Time) bool {
+	return peer != nil && peer.Reachable && peer.Facts != nil && now.Sub(peer.Facts.At) < poolStaleAfter
 }
 
 func peerOfAlias(p wire.Pool, alias string) *wire.Peer {

@@ -122,7 +122,8 @@ func TestPoolSource_StaleFactsAndUnreachableWithOldFacts(t *testing.T) {
 	r.start()
 	r.tick()
 	assert.Equal(t, "ok", r.host("mlab:abc123").Status)
-	assert.Equal(t, "offline", r.host("air26:def456").Status, "an unreachable peer's facts are not used")
+	assert.True(t, r.hasSession("peer"), "an unreachable peer's facts are not used: the host is probed over ssh")
+	assert.False(t, r.m.hosts["peer"].poolOwned)
 
 	r.fc.Advance(10 * time.Second) // wwd's 5 s sampling plus its 5 s peer poll: facts this old are healthy
 	r.tick()
@@ -154,7 +155,7 @@ func TestPoolSource_AFutureStampDoesNotLockTheRow(t *testing.T) {
 	assert.Equal(t, "ok", r.host("mlab:abc123").Status, "and it stays ok")
 }
 
-// A peer wwd cannot reach, a missing peer and a failing wwd all read offline; a returning wwd brings the row back.
+// A peer wwd cannot reach is probed over ssh; a failing wwd hands every row back after its grace; a returning wwd brings the row back.
 func TestPoolSource_UnreachableAndWWDDown(t *testing.T) {
 	r, fp := newPoolRig(t)
 	now := r.fc.Now()
@@ -165,9 +166,8 @@ func TestPoolSource_UnreachableAndWWDDown(t *testing.T) {
 	r.start()
 	r.tick()
 	assert.Equal(t, "ok", r.host("mlab:abc123").Status)
-	p := r.host("air26:def456")
-	assert.Equal(t, "offline", p.Status)
-	assert.Nil(t, p.Fast)
+	assert.True(t, r.hasSession("peer"), "listed but unreachable (wwd is not installed there): ssh, never offline for want of wwd")
+	assert.False(t, r.m.hosts["peer"].poolOwned)
 
 	fp.set(wire.Pool{}, errors.New("wwd down"))
 	r.fc.Advance(poolStaleAfter + time.Second)
@@ -290,9 +290,8 @@ func TestPoolSource_TheRowFlipsTheSourceWithoutARestart(t *testing.T) {
 	assert.NotEqual(t, "ok", r.host("air26:def456").Status, "and it does not keep the pool's figures as ok")
 }
 
-// The old source's error (an ssh host-key refusal, say) does not outlive its session: a listed host the pool has nothing for
-// reads offline, not "error".
-func TestPoolSource_ListedWithoutFactsDropsAnOldSSHError(t *testing.T) {
+// A host the pool lists without usable facts stays with ssh: its session is not stopped, and its state is the session's.
+func TestPoolSource_ListedWithoutFactsStaysWithSSH(t *testing.T) {
 	r, fp := newPoolRig(t)
 	fp.set(wire.Pool{Peers: []wire.Peer{peerOK("mlab", r.fc.Now(), 50, 1, wire.ZoneNormal)}}, nil) // air26 not listed: ssh
 	r.start()
@@ -304,16 +303,52 @@ func TestPoolSource_ListedWithoutFactsDropsAnOldSSHError(t *testing.T) {
 
 	fp.set(wire.Pool{Peers: []wire.Peer{peerOK("mlab", r.fc.Now(), 50, 1, wire.ZoneNormal),
 		{Info: wire.Info{HostID: "air26-id", Alias: "air26"}, Facts: nil, Reachable: false}}}, nil)
-	r.tick() // the session is stopped
-	r.tick() // the pool owns the row
+	r.tick()
+	r.tick()
+	assert.True(t, r.hasSession("peer"), "the session goes on")
 	h := r.host("air26:def456")
-	assert.Equal(t, "offline", h.Status)
-	assert.Equal(t, "timeout", h.Error)
+	assert.Equal(t, "error", h.Status, "and the row is the session's, not the pool's offline")
+	assert.Equal(t, "host_key", h.Error)
 }
 
-// A host that was read by another source and is now listed by the pool without usable facts (unreachable) must not keep the old
-// source's ok.
-func TestPoolSource_ListedWithoutFactsIsOfflineNotTheOldOk(t *testing.T) {
+// Reachable with facts that are too old is the same as unreachable; fresh facts bring the host back to the pool, and at no moment
+// is a host both probed and read from the pool.
+func TestPoolSource_StaleFactsFallBackToSSHAndRecover(t *testing.T) {
+	r, fp := newPoolRig(t)
+	now := r.fc.Now()
+	air := func(at time.Time) wire.Peer { return peerOK("air26", at, 50, 1, wire.ZoneNormal) }
+	self := func() wire.Peer { return peerOK("mlab", r.fc.Now(), 50, 1, wire.ZoneNormal) }
+	exclusive := func(msg string) {
+		owned, probed := r.m.hosts["peer"].poolOwned, r.hasSession("peer")
+		assert.False(t, owned && probed, msg+": not both")
+	}
+	fp.set(wire.Pool{Peers: []wire.Peer{self(), air(now)}}, nil)
+	r.start()
+	r.tick()
+	r.tick()
+	assert.True(t, r.m.hosts["peer"].poolOwned)
+	assert.False(t, r.hasSession("peer"))
+	exclusive("fresh")
+
+	r.fc.Advance(poolStaleAfter + time.Second) // air26's facts stop moving; mlab's keep coming
+	fp.set(wire.Pool{Peers: []wire.Peer{self(), air(now)}}, nil)
+	r.tick()
+	assert.True(t, r.hasSession("peer"), "its facts are too old: ssh")
+	assert.False(t, r.m.hosts["peer"].poolOwned)
+	exclusive("stale")
+
+	fp.set(wire.Pool{Peers: []wire.Peer{self(), air(r.fc.Now())}}, nil) // wwd is back on air26
+	r.tick()
+	exclusive("recovering")
+	r.tick()
+	assert.False(t, r.hasSession("peer"), "fresh facts again: back to the pool")
+	assert.True(t, r.m.hosts["peer"].poolOwned)
+	assert.Equal(t, "ok", r.host("air26:def456").Status)
+	exclusive("recovered")
+}
+
+// The own host listed without usable facts is read by the local source as before, and does not go offline for it.
+func TestPoolSource_OwnHostListedWithoutFactsStaysLocal(t *testing.T) {
 	r, fp := newPoolRig(t)
 	fp.set(wire.Pool{}, nil) // the pool lists nobody: the own host is the local source's
 	r.start()
@@ -322,6 +357,10 @@ func TestPoolSource_ListedWithoutFactsIsOfflineNotTheOldOk(t *testing.T) {
 	require.Equal(t, "ok", r.host("mlab:abc123").Status)
 
 	fp.set(wire.Pool{Peers: []wire.Peer{{Info: wire.Info{HostID: "mlab-id", Alias: "mlab"}, Facts: nil, Reachable: false}}}, nil)
+	r.fc.Advance(time.Second)
+	r.setLocal(20, 1)
 	r.tick()
-	assert.Equal(t, "offline", r.host("mlab:abc123").Status)
+	h := r.host("mlab:abc123")
+	assert.Equal(t, "ok", h.Status)
+	assert.Equal(t, 20.0, h.Fast.CPU, "the local source's reading")
 }
