@@ -196,6 +196,18 @@ func TestSweepDropsOnlyOurLeftoversThatNoLiveJobOwns(t *testing.T) {
 	}
 }
 
+func TestWPTestsEnvUsesTheNamesAtInwinPluginReads(t *testing.T) {
+	// at-inwin-plugin/tests/phpunit/wp-tests-config.php reads these; the host carries the port. Whether a job can use them depends on
+	// that file's guard, which today accepts only its own fixed values.
+	info := Info{Host: "100.64.0.6", Port: 3307, Database: "wwd_x", User: "wwdu_u", Password: "secret"}
+	got := strings.Join(info.WPTestsEnv(), "\n")
+	for _, want := range []string{"WP_TESTS_DB_NAME=wwd_x", "WP_TESTS_DB_HOST=100.64.0.6:3307", "WP_TESTS_DB_USER=wwdu_u", "WP_TESTS_DB_PASSWORD=secret", "WP_PHPUNIT__TABLE_PREFIX=wptests_"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %q", want, got)
+		}
+	}
+}
+
 func TestEnvNamesTheDatabaseAndKeepsThePasswordOutOfTheName(t *testing.T) {
 	info := Info{Host: "127.0.0.1", Port: 3306, Database: "wwd_x", User: "wwd_u", Password: "secret"}
 	got := strings.Join(info.Env(), "\n")

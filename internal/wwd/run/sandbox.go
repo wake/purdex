@@ -22,7 +22,26 @@ type Sandbox struct {
 	InaccessiblePaths []string // hidden besides /run/docker.sock, which is always hidden when it exists
 	SudoPath          string   // default "sudo"
 	SystemctlPath     string   // default "systemctl" (show needs no root)
+	// ExtraProperties are more systemd properties ("Name=value"), only from extraAllowed: properties that take rights away. It is
+	// how a measurement adds ProtectSystem=strict without a code change; it cannot change what the sandbox sets, add a path, a
+	// capability, a group or an environment.
+	ExtraProperties []string
 }
+
+// extraAllowed is every property ExtraProperties may name. Each only narrows what the job can do or see; none sets a user, a
+// group, a path that becomes writable or visible, an environment, a capability or a command, and none is one the sandbox sets.
+var extraAllowed = map[string]bool{
+	"ProtectSystem": true, "ProtectKernelTunables": true, "ProtectKernelModules": true, "ProtectKernelLogs": true,
+	"ProtectControlGroups": true, "ProtectProc": true, "ProcSubset": true, "ProtectClock": true, "ProtectHostname": true,
+	"PrivateDevices": true, "LockPersonality": true, "RestrictNamespaces": true, "RestrictSUIDSGID": true,
+	"RestrictRealtime": true, "MemoryDenyWriteExecute": true, "TasksMax": true, "CPUWeight": true, "IOWeight": true,
+	"ReadOnlyPaths": true, "LimitNOFILE": true, "LimitCORE": true,
+}
+
+var (
+	extraName  = regexp.MustCompile(`^[A-Z][A-Za-z0-9]{1,63}$`)
+	extraValue = regexp.MustCompile(`^[A-Za-z0-9_./:=%+-]{1,200}$`) // one token: no white space, quote, semicolon or newline
+)
 
 // the "-" makes a missing path (a host with no docker) harmless: without it systemd refuses to set up the unit's namespace
 const dockerSocket = "-/run/docker.sock"
@@ -44,7 +63,7 @@ func (s Sandbox) withDefaults() Sandbox {
 }
 
 // unitSafe is what a job id may contain to become part of a unit name.
-var unitSafe = regexp.MustCompile(`^[A-Za-z0-9_.]{1,100}$`)
+var unitSafe = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,100}$`) // the same characters the job marker allows
 
 func (s Sandbox) validate(spec Spec) error {
 	if s.User == "" {
@@ -58,6 +77,15 @@ func (s Sandbox) validate(spec Spec) error {
 	for _, p := range append(append([]string{spec.Workspace}, s.ReadWritePaths...), s.InaccessiblePaths...) {
 		if strings.ContainsAny(p, " \t\r\n\"'\\") {
 			return fmt.Errorf("run: the path %q has white space or a quote: it cannot be a sandbox path", p)
+		}
+	}
+	for _, p := range s.ExtraProperties {
+		name, value, ok := strings.Cut(p, "=")
+		if !ok || !extraName.MatchString(name) || !extraValue.MatchString(value) {
+			return fmt.Errorf("run: the extra property %q is not Name=value", p)
+		}
+		if !extraAllowed[name] {
+			return fmt.Errorf("run: the extra property %s is not one that may be added to the sandbox", name)
 		}
 	}
 	return nil
@@ -79,6 +107,9 @@ func sandboxArgv(sb Sandbox, unit, workspace, dir string, timeout, killAfter tim
 		"-p", "ReadWritePaths="+strings.Join(append([]string{workspace}, sb.ReadWritePaths...), " "),
 		"-p", "WorkingDirectory="+dir, "-p", "NoNewPrivileges=yes",
 		"-p", "InaccessiblePaths="+strings.Join(sb.InaccessiblePaths, " "))
+	for _, p := range sb.ExtraProperties {
+		argv = append(argv, "-p", p)
+	}
 	argv = append(argv, "env", "-i")
 	argv = append(argv, env...)
 	argv = append(argv, "nice", "-n", "10", "ionice", "-c3", prog)

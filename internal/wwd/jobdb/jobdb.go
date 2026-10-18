@@ -80,6 +80,15 @@ type Info struct {
 	Password string
 }
 
+// WPTestsEnv is the same database under the names at-inwin-plugin's phpunit config reads (tests/phpunit/wp-tests-config.php:
+// WP_TESTS_DB_NAME, WP_TESTS_DB_HOST with the port, WP_TESTS_DB_USER, WP_TESTS_DB_PASSWORD; the table prefix stays wptests_). Whether
+// a job can use them depends on that file's guard, which today refuses every value but its own fixed ones; it is that repo's
+// decision to relax it.
+func (i Info) WPTestsEnv() []string {
+	return []string{"WP_TESTS_DB_NAME=" + i.Database, "WP_TESTS_DB_HOST=" + i.Host + ":" + strconv.Itoa(i.Port),
+		"WP_TESTS_DB_USER=" + i.User, "WP_TESTS_DB_PASSWORD=" + i.Password, "WP_PHPUNIT__TABLE_PREFIX=wptests_"}
+}
+
 // Env is the job's environment entries ("NAME=value", for the manifest runner's TaskEnv). TODO(first-run): the variable names are
 // the usual Laravel ones; the task that uses them decides.
 func (i Info) Env() []string {
