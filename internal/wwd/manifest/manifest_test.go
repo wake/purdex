@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -193,7 +194,7 @@ func TestPurdexManifest(t *testing.T) {
 	want := map[string]wire.JobClass{
 		"spa-file": wire.ClassDev, "go-pkg": wire.ClassDev,
 		"spa-related": wire.ClassMerge, "go-changed": wire.ClassMerge, "lint": wire.ClassMerge,
-		"execstat-guard": wire.ClassMerge, "tsc": wire.ClassMerge,
+		"execstat-guard": wire.ClassMerge, "tsc": wire.ClassMerge, "go-race": wire.ClassMerge, "mod-changed": wire.ClassMerge, "mod-hooks": wire.ClassMerge,
 		"go-all": wire.ClassRelease, "spa-full": wire.ClassRelease,
 		"tsc-force": wire.ClassRelease, "mod-all": wire.ClassRelease,
 	}
@@ -209,6 +210,20 @@ func TestPurdexManifest(t *testing.T) {
 	}
 	if g := m.Tasks["execstat-guard"]; g != nil && strings.Contains(g.Run, "-run") {
 		t.Error("execstat-guard must run without -run")
+	}
+	if r := m.Tasks["go-race"]; r != nil && !strings.Contains(r.Run, "-race") {
+		t.Error("go-race must run the race detector")
+	}
+	if c := m.Tasks["mod-changed"]; c != nil && !strings.HasSuffix(c.Run, "./cmd/pdx/...") {
+		t.Errorf("mod-changed must cover all of cmd/pdx, got %q", c.Run)
+	}
+	if h := m.Tasks["mod-hooks"]; h != nil && !strings.Contains(h.Run, "plugin test cmd/pdx/plugin/purdex") {
+		t.Errorf("mod-hooks must run the mod's own tests, got %q", h.Run)
+	}
+	for _, name := range []string{"go-changed", "go-race", "mod-changed", "mod-hooks"} {
+		if task := m.Tasks[name]; task != nil && !slices.Contains(task.Labels, "repo:purdex") {
+			t.Errorf("%s lacks the repo:purdex label", name)
+		}
 	}
 	for _, name := range []string{"spa-file", "go-pkg"} {
 		if task := m.Tasks[name]; task != nil && !task.Local.Permits(1) {
