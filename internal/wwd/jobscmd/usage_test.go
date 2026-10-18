@@ -53,6 +53,29 @@ func TestWWDUsagePrintsATableThatSaysWhatIsSampled(t *testing.T) {
 	}
 }
 
+// A row whose exact figures are a floor (the run left processes behind) says so, with partial or alone.
+func TestWWDUsageMarksALowerBound(t *testing.T) {
+	low := usageRec("j_low", t0.Add(-time.Hour))
+	low.LowerBound = true
+	both := usageRec("j_both", t0.Add(-30*time.Minute))
+	both.LowerBound, both.Partial = true, true
+	plain := usageRec("j_plain", t0.Add(-10*time.Minute))
+	f := &fakeAPI{usage: wire.UsageResponse{Host: "air26", Since: t0.Add(-24 * time.Hour), Records: []wire.JobUsage{low, both, plain}}}
+	code, out, _ := runWWD(f, "usage")
+	if code != 0 {
+		t.Fatal(code)
+	}
+	if l := lineWith(out, "j_low"); !strings.Contains(l, "lower-bound") || strings.Contains(l, "partial") {
+		t.Errorf("%q", l)
+	}
+	if l := lineWith(out, "j_both"); !strings.Contains(l, "partial,lower-bound") {
+		t.Errorf("%q", l)
+	}
+	if l := lineWith(out, "j_plain"); strings.Contains(l, "lower-bound") {
+		t.Errorf("%q", l)
+	}
+}
+
 func lineWith(out, s string) string {
 	for _, l := range strings.Split(out, "\n") {
 		if strings.Contains(l, s) {

@@ -90,6 +90,10 @@ type JobUsage struct {
 	// Partial says the sampled figures miss the beginning of the run: wwd was restarted while the job ran, so the part before is not in
 	// them. An exact figure (rusage, unit) is whole whatever Partial says.
 	Partial bool `json:"partial"`
+	// LowerBound says the run left processes behind when its command returned (a daemonized tmux, vite, playwright): what they used
+	// afterwards is in no figure, so the exact figures (rusage, unit) are a floor and the true use is higher. It is about the figures
+	// read at the end of the command; a sampled figure sees the leftovers while they run and is not what this flag is about.
+	LowerBound bool `json:"lower_bound"`
 }
 
 // Duration is how long the job ran, from its two times.
