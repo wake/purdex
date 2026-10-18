@@ -14,11 +14,12 @@ import (
 
 	"github.com/wake/purdex/internal/gate"
 	"github.com/wake/purdex/internal/team"
+	"github.com/wake/purdex/internal/wwd/testcmd"
 )
 
 func TestFiles_HasTheLayoutClaudeLoads(t *testing.T) {
 	f := Files()
-	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "hooks/events.js", "hooks/gate.js", "hooks/member.js", "hooks/prompts.js", "hooks/workbook.js", "skills/pdx-team/SKILL.md", "skills/pdx-gate/SKILL.md", "skills/pdx-watch/SKILL.md"} {
+	for _, rel := range []string{".claude-plugin/plugin.json", "hooks/hooks.json", "hooks/register.js", "hooks/ask.js", "hooks/events.js", "hooks/gate.js", "hooks/member.js", "hooks/prompts.js", "hooks/workbook.js", "skills/pdx-team/SKILL.md", "skills/pdx-gate/SKILL.md", "skills/pdx-test/SKILL.md", "skills/pdx-watch/SKILL.md"} {
 		if _, err := fs.Stat(f, rel); err != nil {
 			t.Errorf("%s: %v", rel, err)
 		}
@@ -608,6 +609,46 @@ func TestScanRegistrations_RetiredRegisterLeaseFailsClosed(t *testing.T) {
 	_, problems := scanRegistrations("a.js", "export function register(on) {\n  registerLease(on)\n}\n")
 	if len(problems) == 0 || !strings.Contains(strings.Join(problems, "\n"), "used other than") {
 		t.Errorf("a registerLease(on) must fail closed, problems = %q", problems)
+	}
+}
+
+// The pdx-test skill names the commands and exit codes pdx test really has, and keeps its two warnings: do not get around the wait,
+// and do not wrap pdx test in the gate.
+func TestSkill_TestSaysWhatAnAgentNeeds(t *testing.T) {
+	b, err := fs.ReadFile(Files(), "skills/pdx-test/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	for _, want := range []string{
+		"name: pdx-test", ".wwd/tasks.toml",
+		"pdx test --list", "pdx test --adhoc -- ", "不經 shell",
+		"pdx jobs show <id>", "pdx jobs log <id>", "pdx jobs cancel <id>",
+		"**不要重跑、不要自己加 `&`、`nohup`", // what to do with the mod's background note
+		"Ctrl-C 的意義看工作在哪",
+		"`pdx-gate`", "兩者並存", "不要把 `pdx test` 包在 `pdx gate -- …` 裡",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("SKILL.md of pdx-test lacks %q", want)
+		}
+	}
+	// every exit code pdx test has, with the value the command really returns
+	for _, c := range []struct {
+		code int
+		name string
+	}{
+		{testcmd.ExitOK, "ExitOK"}, {testcmd.ExitFailed, "ExitFailed"}, {testcmd.ExitNoWWD, "ExitNoWWD"}, {testcmd.ExitUsage, "ExitUsage"},
+		{testcmd.ExitNoHost, "ExitNoHost"}, {testcmd.ExitExpired, "ExitExpired"}, {testcmd.ExitTimeout, "ExitTimeout"}, {testcmd.ExitCancelled, "ExitCancelled"},
+	} {
+		if want := fmt.Sprintf("| %d |", c.code); !strings.Contains(s, want) {
+			t.Errorf("SKILL.md of pdx-test has no row for %s (%d)", c.name, c.code)
+		}
+	}
+	// the flags it tells an agent to use exist in the usage text
+	for _, flag := range []string{"--list", "--adhoc", "--detach", "--class", "--json"} {
+		if !strings.Contains(testcmd.Usage, flag) {
+			t.Errorf("pdx test no longer has %s, which the skill names", flag)
+		}
 	}
 }
 
