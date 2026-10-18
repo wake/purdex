@@ -25,7 +25,7 @@ func (m *Module) LightStatus(sessionID, frameID string) (status string, ok bool)
 	if m == nil || m.frames == nil || sessionID == "" || frameID == "" {
 		return "", false
 	}
-	frames, err := m.frames.ListRootsBySessionID(sessionID)
+	frames, err := m.frames.ListRootsBySessionIDCached(sessionID)
 	if err != nil {
 		return "", false
 	}

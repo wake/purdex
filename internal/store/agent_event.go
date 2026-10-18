@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	_ "modernc.org/sqlite"
 )
@@ -25,6 +26,8 @@ type AgentEventStore struct {
 	// the retention totals of the trace tables, shared by every TraceStore handle this store gives out (#2887)
 	traceTotalsOnce sync.Once
 	traceTotals     *traceTotals
+	// framesGen is the write generation of agent_frames, shared by every FramesStore this store gives out (frames_roots_cache.go)
+	framesGen atomic.Uint64
 }
 
 // OpenAgentEvent opens (or creates) an AgentEventStore DB at path, runs
@@ -176,7 +179,7 @@ func (s *AgentEventStore) Frames() (*FramesStore, error) {
 	if err := migrateFramesDB(s.db); err != nil {
 		return nil, err
 	}
-	frames := &FramesStore{db: s.db}
+	frames := &FramesStore{db: s.db, gen: &s.framesGen}
 	// The identity version counter continues from what is already on disk. A
 	// counter restarting at zero would hand every event after a reboot a
 	// version below the ones stored, and UpdateSessionIdentity would refuse
