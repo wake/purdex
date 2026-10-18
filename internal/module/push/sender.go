@@ -46,6 +46,9 @@ type Job struct {
 	// closed while the job was queued). An open set that cannot be read does not drop it: a missed request is not recoverable,
 	// a stale notification is cleaned by the close badge push.
 	DropIfClosed bool
+	// OnSent is called once, on the sender's goroutine, after the device loop, when APNs accepted the push on at least one device.
+	// A job that is skipped, refused or never processed does not call it. nil = none.
+	OnSent func()
 }
 
 // JobApproval is what an approval's Job carries to resolve its own tmux session, whether or not the approval is still open.
@@ -173,6 +176,12 @@ func (s *sender) process(ctx context.Context, j Job) {
 		log.Printf("[push] approval %s not pushed: dropped_at_send (its card closed while the push was queued)", shortID(j.Approval.ID))
 		return
 	}
+	accepted := false
+	defer func() {
+		if accepted && j.OnSent != nil {
+			j.OnSent()
+		}
+	}()
 	for _, id := range j.DeviceIDs {
 		if ctx.Err() != nil {
 			return
@@ -213,6 +222,9 @@ func (s *sender) process(ctx context.Context, j Job) {
 		}
 		res := s.sendWithRetry(ctx, d, h, payload)
 		s.finish(ctx, d, res)
+		if res.Class == apns.OK {
+			accepted = true
+		}
 		if syncs && res.Class == apns.OK {
 			s.reads.Sent(d.DeviceID, carried)
 		}

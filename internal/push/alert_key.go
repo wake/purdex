@@ -10,11 +10,15 @@ type AlertPush struct {
 	CollapseID string
 	Title      string // the alert's text, already in the person's language
 	Host       string
+	// Sent is the only proof of delivery. It is called at most once, on the sender's goroutine, after APNs accepted the push on at
+	// least one device. It is never called for a push that was skipped, refused, dropped on a full queue, or lost when the sender
+	// stopped with the job still queued — so a delivery ledger records on Sent, never on NotifyAlert's answer. nil = not wanted.
+	Sent func()
 }
 
 // AlertNotifier is how the alert delivery module asks for a phone push, in process. NotifyAlert says done when the push was queued or
 // deliberately not sent (a person at the computer needs no phone push; no device means nobody to tell), and false when the push
-// side is not up or its queue is full: the caller keeps the alert undelivered and tries again.
+// side is not up or its queue is full: the caller keeps the alert undelivered and tries again. "done" is not "delivered": see Sent.
 type AlertNotifier interface {
 	NotifyAlert(p AlertPush) bool
 }
