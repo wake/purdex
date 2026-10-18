@@ -19,14 +19,19 @@ export function isNewerStamp(a: PersonaStamp, b: PersonaStamp): boolean {
   return a.host > b.host
 }
 
-/** The whole collection with the highest stamp among the loaded hosts, or `null` when none has loaded one. */
-export function currentCollection(byHost: Record<string, PersonaEntry>): PersonaCollection | null {
-  let best: PersonaCollection | null = null
-  for (const entry of Object.values(byHost)) {
+/** The host holding the collection with the highest stamp, and that collection; `null` when none has loaded one. */
+export function currentSource(byHost: Record<string, PersonaEntry>): { hostId: string; collection: PersonaCollection } | null {
+  let best: { hostId: string; collection: PersonaCollection } | null = null
+  for (const [hostId, entry] of Object.entries(byHost)) {
     const c = entry.collection
-    if (c && (best === null || isNewerStamp(c.stamp, best.stamp))) best = c
+    if (c && (best === null || isNewerStamp(c.stamp, best.collection.stamp))) best = { hostId, collection: c }
   }
   return best
+}
+
+/** The whole collection with the highest stamp among the loaded hosts, or `null` when none has loaded one. */
+export function currentCollection(byHost: Record<string, PersonaEntry>): PersonaCollection | null {
+  return currentSource(byHost)?.collection ?? null
 }
 
 interface PersonaState {
