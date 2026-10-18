@@ -633,13 +633,22 @@ case_13() {
   wait_for "$id" .state succeeded 200 || true
   check "php job state" "$(jf "$id" .state)" succeeded
   check "its database is gone" "$(mserv_dbs)" 0
-  # the host's /tmp holds a sentinel the job must not see; what the job writes to its /tmp must not reach the host's
-  on mserv "touch /tmp/wwd-c2-sentinel; rm -f /tmp/wwd-c2-private"
+  # the host's /tmp holds a sentinel the job must not see; what the job writes to its /tmp must not reach the host's.
+  # Both files are the run's own to remove only if they were not there before (fault_on / FAULTS: finish() removes them, also
+  # when the run is interrupted); one that was already there is left as it is and the check that needs it is skipped.
+  fault_on mserv /tmp/wwd-c2-sentinel
+  priv_before=$(q mserv 'test -e /tmp/wwd-c2-private && echo yes || echo no')
+  [ "$priv_before" = no ] && FAULTS="$FAULTS mserv:/tmp/wwd-c2-private"
   sb=$(submit c2-sandbox)
   wait_for "$sb" .state succeeded 120 || true
   check "sandbox probe (no docker socket, nothing writable outside the workspace, own /tmp, no sudo)" "$(jf "$sb" .state)" succeeded
-  check "the job's /tmp write did not reach the host" "$(q mserv 'test -e /tmp/wwd-c2-private && echo reached || echo private')" private
-  on mserv "rm -f /tmp/wwd-c2-sentinel" || true
+  if [ "$priv_before" = no ]; then
+    check "the job's /tmp write did not reach the host" "$(q mserv 'test -e /tmp/wwd-c2-private && echo reached || echo private')" private
+  else
+    say "SKIP check: /tmp/wwd-c2-private was on mserv before this run"
+  fi
+  fault_off mserv /tmp/wwd-c2-sentinel || true
+  fault_off mserv /tmp/wwd-c2-private || true
   check "no failed wwd unit is left" "$(q mserv "systemctl --failed --no-legend | grep -c 'wwd-' || true")" 0
 }
 
