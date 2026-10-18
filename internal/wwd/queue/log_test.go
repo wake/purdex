@@ -210,6 +210,45 @@ func TestDeletingAJobDeletesItsLogAndLeftoversAreCleared(t *testing.T) {
 	assert.Empty(t, entries, "the log went with the job")
 }
 
+// A file a process died after putting in place, for a job whose row never learned of it, is removed with the job at its 7 days: the
+// file is found by the job's id, not by what the row says (3b-3b R2).
+func TestDeletingAJobRemovesALogFileItsRowDoesNotKnow(t *testing.T) {
+	f := newFixture(t)
+	id, c := f.running(t)
+	_, err := f.q.Result(bg, id, wire.ResultRequest{ClaimID: c.ClaimID, State: wire.StateSucceeded, Exit: ptr(0)})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(f.q.logPath(id), []byte("written, never recorded"), 0o600))
+
+	f.clk.Advance(7*24*time.Hour + time.Minute)
+	r, err := f.q.Sweep(bg)
+	require.NoError(t, err)
+	assert.Equal(t, 1, r.Deleted)
+	entries, err := os.ReadDir(f.q.opt.LogDir)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
+// The log of a job is deleted only after the change that forgets it has committed: when that change fails, the file is still there and
+// the job still points at it (3b-3b R2). The failure is made by taking away the column the change writes.
+func TestFailedForgetKeepsTheLogFile(t *testing.T) {
+	f := newFixture(t)
+	id, c := f.running(t)
+	require.NoError(t, f.putLog(t, id, c.ClaimID, "x"))
+	f.clk.Advance(3*24*time.Hour + time.Minute)
+	// the lease would lapse first; keep the job alive so only the log is due
+	_, err := f.q.Heartbeat(bg, id, c.ClaimID)
+	require.NoError(t, err)
+
+	_, err = f.db.Exec(`ALTER TABLE jobs RENAME COLUMN log_size TO log_size_gone`)
+	require.NoError(t, err)
+	_, err = f.q.Sweep(bg)
+	require.Error(t, err)
+	_, err = f.db.Exec(`ALTER TABLE jobs RENAME COLUMN log_size_gone TO log_size`)
+	require.NoError(t, err)
+
+	assert.Equal(t, "x", f.readLog(t, id), "the file and the pointer to it are both still there")
+}
+
 type spyReader struct{ read bool }
 
 func (r *spyReader) Read([]byte) (int, error) { r.read = true; return 0, io.EOF }

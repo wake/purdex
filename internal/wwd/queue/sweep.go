@@ -51,9 +51,6 @@ func (q *Queue) Sweep(ctx context.Context) (SweepResult, error) {
 			return err
 		}
 		res.Lapsed = n
-		if res.LogsRemoved, err = q.sweepLogs(ctx, c, now, changed); err != nil {
-			return err
-		}
 		rows, err := c.QueryContext(ctx, `SELECT id FROM jobs WHERE state = 'queued'
 			AND created_at + (CASE WHEN queue_timeout_s > 0 THEN queue_timeout_s * 1000 ELSE ? END) < ? ORDER BY seq`,
 			defaultQueueTimeout.Milliseconds(), now.UnixMilli())
@@ -85,16 +82,17 @@ func (q *Queue) Sweep(ctx context.Context) (SweepResult, error) {
 		errs = append(errs, err)
 	}
 
-	res.Unpinned, res.UnpinFailed = q.settlePins(ctx)
-
-	// retention: only ended jobs whose snapshot is released; one still marked waits for its unpin
-	q.removeLogsOfJobsBeingDeleted(ctx, now.Add(-retention).UnixMilli())
-	r, err := q.db.ExecContext(ctx, `DELETE FROM jobs WHERE state IN (`+terminalStates+`) AND pinned = 0
-		AND coalesce(finished_at, updated_at) < ?`, now.Add(-retention).UnixMilli())
+	res.LogsRemoved, err = q.sweepLogs(ctx, now)
 	if err != nil {
 		errs = append(errs, err)
-	} else if n, _ := r.RowsAffected(); n > 0 {
-		res.Deleted = int(n)
+	}
+
+	res.Unpinned, res.UnpinFailed = q.settlePins(ctx)
+
+	// retention: only ended jobs whose snapshot is released; one still marked waits for its unpin. Their log files go with them.
+	res.Deleted, err = q.deleteRetainedJobs(ctx, now.Add(-retention).UnixMilli())
+	if err != nil {
+		errs = append(errs, err)
 	}
 
 	orphans, failed, err := q.removeOrphanPins(ctx, now)

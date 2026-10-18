@@ -59,7 +59,10 @@ func (q *Queue) PutLog(ctx context.Context, id, claimID string, body io.Reader) 
 		q.beforeLogCommit()
 	}
 	// The new file replaces the old inside the transaction, with the old one kept beside it until the commit: a transaction that fails
-	// puts the old log back, so what is on disk is never a log the database does not know about.
+	// puts the old log back. A process that dies between the rename and the commit leaves the new file in place with the database still
+	// describing the old one (the log is the holder's latest upload either way; its size is read from the file, not the database); the
+	// job's deletion removes a file by id, so nothing is left for good. The old content is the one thing that is not kept, and it was
+	// being replaced.
 	final, backup := q.logPath(id), tmp.Name()+".prev"
 	var placed, hadOld bool
 	err = q.write(ctx, func(c *sql.Conn, changed *[]string) error {
@@ -171,25 +174,13 @@ func validLogID(id string) bool {
 // uploadLeftover: a temporary file (or backup) of an upload older than this is a crash's, not an upload in flight.
 const uploadLeftover = time.Hour
 
-// removeLogsOfJobsBeingDeleted deletes the log files of the jobs the retention is about to delete: a log uploaded late can be younger
-// than its 3 days when its job reaches its 7, and with the row gone nothing would ever find the file.
-func (q *Queue) removeLogsOfJobsBeingDeleted(ctx context.Context, cutoffMS int64) {
+// removeLogFiles deletes the log files of ids. It runs after the database change that made them unwanted has committed, never before:
+// a change that rolls back must not have taken the file with it. An id whose file cannot be removed is left for the job's own deletion,
+// which removes the file by id whether or not the job still says it has one.
+func (q *Queue) removeLogFiles(ids []string) {
 	if q.opt.LogDir == "" {
 		return
 	}
-	rows, err := q.db.QueryContext(ctx, `SELECT id FROM jobs WHERE state IN (`+terminalStates+`) AND pinned = 0
-		AND coalesce(finished_at, updated_at) < ? AND log_size IS NOT NULL`, cutoffMS)
-	if err != nil {
-		return
-	}
-	var ids []string
-	for rows.Next() {
-		var id string
-		if rows.Scan(&id) == nil {
-			ids = append(ids, id)
-		}
-	}
-	rows.Close()
 	for _, id := range ids {
 		if validLogID(id) {
 			_ = os.Remove(q.logPath(id))
@@ -197,19 +188,12 @@ func (q *Queue) removeLogsOfJobsBeingDeleted(ctx context.Context, cutoffMS int64
 	}
 }
 
-// sweepLogs deletes the logs kept longer than logRetention, forgets them on their jobs and takes the pointer out of the results. The file
-// goes first: a job that still points at a file that is gone is only a log that will not open, and the next sweep clears it. It also
-// clears the leftovers of uploads a crash cut short.
-func (q *Queue) sweepLogs(ctx context.Context, c *sql.Conn, now time.Time, changed *[]string) (int, error) {
-	if q.opt.LogDir != "" {
-		left, _ := filepath.Glob(filepath.Join(q.opt.LogDir, ".upload-*"))
-		for _, p := range left {
-			if st, err := os.Stat(p); err == nil && now.Sub(st.ModTime()) > uploadLeftover {
-				_ = os.Remove(p)
-			}
-		}
-	}
-	rows, err := c.QueryContext(ctx, `SELECT id FROM jobs WHERE log_at IS NOT NULL AND log_at < ? ORDER BY seq`, now.Add(-logRetention).UnixMilli())
+// deleteRetainedJobs deletes the ended jobs kept past the retention, in one statement, and then their log files by id. The order is the
+// point: a late upload (a result's claim may upload long after) either commits before the delete, and its file is removed after it, or
+// finds no job. A file for a job whose row says it has no log (an upload the process died in the middle of) goes too.
+func (q *Queue) deleteRetainedJobs(ctx context.Context, cutoffMS int64) (int, error) {
+	rows, err := q.db.QueryContext(ctx, `DELETE FROM jobs WHERE state IN (`+terminalStates+`) AND pinned = 0
+		AND coalesce(finished_at, updated_at) < ? RETURNING id`, cutoffMS)
 	if err != nil {
 		return 0, err
 	}
@@ -225,19 +209,53 @@ func (q *Queue) sweepLogs(ctx context.Context, c *sql.Conn, now time.Time, chang
 	if err := rows.Close(); err != nil {
 		return 0, err
 	}
-	removed := 0
-	for _, id := range ids {
-		if validLogID(id) && q.opt.LogDir != "" {
-			if err := os.Remove(q.logPath(id)); err != nil && !errors.Is(err, os.ErrNotExist) {
-				continue // the next sweep tries again
+	q.removeLogFiles(ids)
+	return len(ids), nil
+}
+
+// sweepLogs forgets the logs kept longer than logRetention (on their jobs, and in their results), in a transaction of its own that the
+// rest of the sweep cannot roll back, and deletes their files once that has committed: a job that points at a log that is gone is a log
+// that will not open, and a file nothing points at is found again by the job's deletion. It also clears the leftovers of uploads a crash
+// cut short.
+func (q *Queue) sweepLogs(ctx context.Context, now time.Time) (int, error) {
+	var ids []string
+	err := q.writeOnly(ctx, func(c *sql.Conn, changed *[]string) error {
+		ids = nil
+		rows, err := c.QueryContext(ctx, `SELECT id FROM jobs WHERE log_at IS NOT NULL AND log_at < ? ORDER BY seq`, now.Add(-logRetention).UnixMilli())
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return err
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if _, err := c.ExecContext(ctx, `UPDATE jobs SET log_size = NULL, log_at = NULL,
+				result = CASE WHEN result IS NULL THEN NULL ELSE json_set(result, '$.log', '') END WHERE id = ?`, id); err != nil {
+				return err
+			}
+			*changed = append(*changed, id)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	q.removeLogFiles(ids)
+	if q.opt.LogDir != "" {
+		left, _ := filepath.Glob(filepath.Join(q.opt.LogDir, ".upload-*"))
+		for _, p := range left {
+			if st, err := os.Stat(p); err == nil && now.Sub(st.ModTime()) > uploadLeftover {
+				_ = os.Remove(p)
 			}
 		}
-		if _, err := c.ExecContext(ctx, `UPDATE jobs SET log_size = NULL, log_at = NULL,
-			result = CASE WHEN result IS NULL THEN NULL ELSE json_set(result, '$.log', '') END WHERE id = ?`, id); err != nil {
-			return removed, err
-		}
-		*changed = append(*changed, id)
-		removed++
 	}
-	return removed, nil
+	return len(ids), nil
 }
