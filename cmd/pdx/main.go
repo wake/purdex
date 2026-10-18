@@ -105,6 +105,8 @@ func main() {
 		runGate(os.Args[2:])
 	case "test":
 		runTest(os.Args[2:])
+	case "entry":
+		runEntry(os.Args[2:])
 	case "jobs":
 		runJobs(os.Args[2:])
 	case "wwd":

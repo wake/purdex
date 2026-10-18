@@ -1,0 +1,221 @@
+package entry
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+const manifestSrc = `
+[entry]
+mode = "%MODE%"
+
+[tasks.spa-file]
+run  = "pnpm vitest run --reporter=json --outputFile={report} {files}"
+cwd  = "spa"
+args = "files"
+
+[tasks.spa-full]
+run  = "pnpm vitest run --reporter=json --outputFile={report}"
+cwd  = "spa"
+args = "none"
+
+[tasks.tsc-force]
+run  = "pnpm tsc -b --force"
+cwd  = "spa"
+args = "none"
+
+[tasks.go-pkg]
+run  = "go test -json -count=1 {packages}"
+args = "packages"
+
+[tasks.lint]
+run  = "make lint"
+args = "none"
+
+[tasks.phpunit]
+run  = "vendor/bin/phpunit {files}"
+args = "files"
+`
+
+// repo makes a repository root with the manifest (mode substituted) and the directories and files the tests refer to.
+func repo(t *testing.T, mode string) string {
+	t.Helper()
+	root := t.TempDir()
+	src := []byte(replaceMode(manifestSrc, mode))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".wwd"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".wwd", "tasks.toml"), src, 0o644))
+	for _, d := range []string{"spa/src/lib", "internal/foo", "tests"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, d), 0o755))
+	}
+	for _, f := range []string{"spa/src/a.test.ts", "spa/src/lib/b.test.ts", "tests/ExampleTest.php"} {
+		require.NoError(t, os.WriteFile(filepath.Join(root, f), []byte("x"), 0o644))
+	}
+	return root
+}
+
+func replaceMode(s, mode string) string {
+	if mode == "" { // no [entry] table at all
+		return strings.TrimPrefix(s, "\n[entry]\nmode = \"%MODE%\"\n")
+	}
+	return strings.ReplaceAll(s, "%MODE%", mode)
+}
+
+func TestNormalize(t *testing.T) {
+	for _, c := range []struct{ in, want []string }{
+		{[]string{"npx", "vitest", "run", "a"}, []string{"vitest", "run", "a"}},
+		{[]string{"npx", "-y", "vitest"}, []string{"vitest"}},
+		{[]string{"pnpm", "exec", "vitest", "run"}, []string{"vitest", "run"}},
+		{[]string{"pnpm", "vitest", "run"}, []string{"vitest", "run"}},
+		{[]string{"pnpm", "tsc", "-b"}, []string{"tsc", "-b"}},
+		{[]string{"yarn", "vitest"}, []string{"vitest"}},
+		{[]string{"bunx", "vitest"}, []string{"vitest"}},
+		{[]string{"./node_modules/.bin/vitest", "run"}, []string{"vitest", "run"}},
+		{[]string{"../node_modules/.bin/tsc", "-b"}, []string{"tsc", "-b"}},
+		{[]string{"vendor/bin/phpunit", "--filter", "X"}, []string{"phpunit", "--filter", "X"}},
+		{[]string{"/repo/vendor/bin/pest"}, []string{"pest"}},
+		{[]string{"pnpm", "run", "build"}, []string{"pnpm", "build"}},
+		{[]string{"npm", "run", "test"}, []string{"npm", "test"}},
+		{[]string{"pnpm", "test"}, []string{"pnpm", "test"}},
+		{[]string{"go", "test", "./..."}, []string{"go", "test", "./..."}},
+		{[]string{"ls", "-la"}, []string{"ls", "-la"}},
+		{nil, nil},
+	} {
+		assert.Equal(t, c.want, normalize(c.in), c.in)
+	}
+}
+
+func TestFamily(t *testing.T) {
+	yes := [][]string{
+		{"go", "test", "./..."}, {"go", "build", "./..."}, {"go", "vet", "./x"},
+		{"vitest", "run"}, {"jest"}, {"tsc", "-b"}, {"phpunit"}, {"pest", "--parallel"},
+		{"swift", "build"}, {"swift", "test"}, {"xcodebuild", "-scheme", "x"},
+		{"pnpm", "build"}, {"pnpm", "test"}, {"pnpm", "check"}, {"npm", "test"}, {"yarn", "build"}, {"bun", "test"},
+		{"make", "lint"}, {"make", "test"}, {"composer", "test"},
+	}
+	for _, c := range yes {
+		assert.True(t, isFamily(c), c)
+	}
+	no := [][]string{
+		{"go", "version"}, {"go", "mod", "tidy"}, {"swift", "package"}, {"pnpm", "install"}, {"pnpm", "dev"}, {"make", "clean"},
+		{"composer", "install"}, {"ls"}, {"git", "status"}, {"echo", "go", "test"}, nil,
+	}
+	for _, c := range no {
+		assert.False(t, isFamily(c), c)
+	}
+}
+
+func TestMatch_RewritesADeclaredShape(t *testing.T) {
+	root := repo(t, "advise")
+	spa := filepath.Join(root, "spa")
+	for name, c := range map[string]struct {
+		cwd  string
+		argv []string
+		task string
+		args []string
+	}{
+		"files, via pnpm":           {spa, []string{"pnpm", "vitest", "run", "src/a.test.ts"}, "spa-file", []string{"src/a.test.ts"}},
+		"files, via npx":            {spa, []string{"npx", "vitest", "run", "src/a.test.ts", "src/lib/b.test.ts"}, "spa-file", []string{"src/a.test.ts", "src/lib/b.test.ts"}},
+		"files, by path":            {spa, []string{"./node_modules/.bin/vitest", "run", "src/a.test.ts"}, "spa-file", []string{"src/a.test.ts"}},
+		"the task's own flag":       {spa, []string{"pnpm", "vitest", "run", "--reporter=json", "src/a.test.ts"}, "spa-file", []string{"src/a.test.ts"}},
+		"files from a deeper dir":   {filepath.Join(spa, "src"), []string{"pnpm", "vitest", "run", "lib/b.test.ts"}, "spa-file", []string{"src/lib/b.test.ts"}},
+		"no arguments":              {spa, []string{"pnpm", "vitest", "run"}, "spa-full", nil},
+		"tsc":                       {spa, []string{"npx", "tsc", "-b", "--force"}, "tsc-force", nil},
+		"go packages":               {root, []string{"go", "test", "./internal/foo/"}, "go-pkg", []string{"./internal/foo/"}},
+		"go all":                    {root, []string{"go", "test", "./..."}, "go-pkg", []string{"./..."}},
+		"go packages from a subdir": {filepath.Join(root, "internal"), []string{"go", "test", "./foo/"}, "go-pkg", []string{"./internal/foo/"}},
+		"make":                      {root, []string{"make", "lint"}, "lint", nil},
+		"phpunit by path":           {root, []string{"vendor/bin/phpunit", "tests/ExampleTest.php"}, "phpunit", []string{"tests/ExampleTest.php"}},
+	} {
+		r := Match(c.cwd, c.argv)
+		assert.Equal(t, ActionRewrite, r.Action, name)
+		assert.Equal(t, c.task, r.Task, name)
+		assert.Equal(t, c.args, r.Args, name)
+	}
+}
+
+// A shape that is not a task's — a flag the task does not have, files where it takes none, the wrong directory — is not rewritten:
+// it falls to the manifest's mode, with the task that is nearest to use instead.
+func TestMatch_NoMatchFallsToTheMode(t *testing.T) {
+	spa := func(root string) string { return filepath.Join(root, "spa") }
+	cases := map[string]struct {
+		cwd  func(string) string
+		argv []string
+		hint string
+	}{
+		"a flag the task lacks":     {spa, []string{"pnpm", "vitest", "run", "-t", "name", "src/a.test.ts"}, "spa-file"},
+		"files for a no-files task": {spa, []string{"pnpm", "tsc", "-b", "--force", "x"}, "tsc-force"},
+		"a flag no task has":        {spa, []string{"pnpm", "vitest", "run", "--watch"}, "spa-file"}, // two tasks are as near: the first name
+		"the wrong directory":       {func(r string) string { return r }, []string{"pnpm", "vitest", "run", "src/a.test.ts"}, "spa-file"},
+		"another go command":        {func(r string) string { return r }, []string{"go", "vet", "./..."}, "go-pkg"},
+		"a package script":          {func(r string) string { return r }, []string{"pnpm", "test"}, ""},
+	}
+	for name, c := range cases {
+		for _, mode := range []string{"advise", "deny", "rewrite", ""} {
+			root := repo(t, mode)
+			r := Match(c.cwd(root), c.argv)
+			wantAction := Action(mode)
+			if mode == "" || mode == "rewrite" {
+				wantAction = ActionAdvise // no ad-hoc entry yet: rewrite is advised; an absent [entry] is advise
+			}
+			assert.Equal(t, wantAction, r.Action, name+" / "+mode)
+			assert.Empty(t, r.Task, name)
+			assert.Equal(t, c.hint, r.Hint, name+" / "+mode)
+			if mode == "rewrite" {
+				assert.Equal(t, "rewrite", r.Mode)
+				assert.Contains(t, r.Reason, "ad-hoc", "rewrite says why it only advises")
+			}
+		}
+	}
+}
+
+// A call that is not a test or build command, no manifest, or a manifest that does not parse: left alone.
+func TestMatch_LeavesWhatIsNotItsOwn(t *testing.T) {
+	root := repo(t, "deny")
+	assert.Equal(t, ActionNone, Match(root, []string{"ls", "-la"}).Action)
+	assert.Equal(t, ActionNone, Match(root, []string{"go", "version"}).Action)
+	assert.Equal(t, ActionNone, Match(root, nil).Action)
+
+	bare := t.TempDir()
+	r := Match(bare, []string{"go", "test", "./..."})
+	assert.Equal(t, ActionNone, r.Action)
+	assert.Contains(t, r.Reason, "no manifest")
+
+	bad := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(bad, ".wwd"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(bad, ".wwd", "tasks.toml"), []byte("[tasks.x\n"), 0o644))
+	r = Match(bad, []string{"go", "test", "./..."})
+	assert.Equal(t, ActionNone, r.Action)
+	assert.Contains(t, r.Reason, "manifest")
+}
+
+// The manifest is found from a subdirectory.
+func TestMatch_FindsTheManifestAbove(t *testing.T) {
+	root := repo(t, "advise")
+	r := Match(filepath.Join(root, "internal", "foo"), []string{"make", "lint"})
+	assert.Equal(t, ActionRewrite, r.Action)
+	assert.Equal(t, "lint", r.Task)
+}
+
+// A file that is not there, or outside the task's directory, or that starts like an option, is not a match.
+func TestMatch_ArgumentsAreChecked(t *testing.T) {
+	root := repo(t, "deny")
+	spa := filepath.Join(root, "spa")
+	for name, argv := range map[string][]string{
+		"a missing file":    {"pnpm", "vitest", "run", "src/nope.test.ts"},
+		"outside the task":  {"pnpm", "vitest", "run", "../tests/ExampleTest.php"},
+		"an absolute path":  {"pnpm", "vitest", "run", filepath.Join(root, "tests", "ExampleTest.php")},
+		"an option as file": {"pnpm", "vitest", "run", "--", "src/a.test.ts"},
+	} {
+		r := Match(spa, argv)
+		assert.Equal(t, ActionDeny, r.Action, name)
+		assert.Empty(t, r.Task, name)
+	}
+	r := Match(spa, []string{"pnpm", "vitest", "run", filepath.Join(spa, "src", "a.test.ts")})
+	assert.Equal(t, ActionRewrite, r.Action, "an absolute path inside the task's directory is fine")
+	assert.Equal(t, []string{"src/a.test.ts"}, r.Args)
+}
