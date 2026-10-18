@@ -64,7 +64,7 @@ else
         wsh=$HOME; case "${STUB_WS_HOST:-mlab}" in mlab) ;; *) wsh="$HOME/h-$STUB_WS_HOST" ;; esac      # the host the worker ran on
         w="$wsh/.local/share/wwd/work/w$$"; mkdir -p "$w"; ( sleep "$STUB_WS_LINGER"; rm -rf "$w" ) >/dev/null 2>&1 &
       fi ;;
-    "GET /v1/jobs/"*"/log") if [ -n "${STUB_NO_ROUNDTRIP:-}" ]; then resp='no database here'; else resp='db=wwd_0123456789abcdef0123456789abcdef read=round-trip'; fi ;;
+    "GET /v1/jobs/"*"/log") : > "$STUB/log-asked"; code=404; resp='no log' ;;      # a mlab with fault.log_upload_fail on has no log of a remote job
     "GET /v1/jobs/"*)
       # a refused job says why in the one line of its summary tail: the first POST of case 12 is the undeclared task, the rest are bad arguments
       n=0; [ ! -f "$STUB/post.log" ] || n=$(wc -l < "$STUB/post.log" | tr -d ' '); if [ "$n" -le 1 ]; then word=task_unknown; else word=args_invalid; fi; word=${STUB_REFUSAL:-$word}
@@ -218,7 +218,7 @@ python3 -I -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.ar
 HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 C2_DOCKER_SOCK="$tmp/docker.sock" C2_DOCKER_PING="echo OK" sh "$matrix" --keep --case 13 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 13: exit code"; }
 has "PASS case 13" "case 13"
 grep -q 'defaults-extra-file=.*mysql-admin.cnf .*wwd_list_dbs' "$stub/mysql.log" || fail "case 13 must list the databases with the admin account through wwdctl: $(cat "$stub/mysql.log")"
-has "ok   the job really had a database" "case 13 control"
+[ ! -e "$stub/log-asked" ] || fail "case 13 must not read the job's log (with fault.log_upload_fail on mlab it is not there)"
 kept=$(sed -n 's/^kept //p' "$tmp/out")
 [ -d "$kept/repo" ] || fail "--keep must leave the scratch repo"
 grep -q 'new PDO' "$kept/repo/scripts/db_probe.php" || fail "the PHP probe must connect to the database"
@@ -228,16 +228,15 @@ grep -q 'db = "per-job"' "$kept/repo/.wwd/tasks.toml" || fail "the php task must
 rm -rf "$kept"
 
 # case 13 when the databases cannot be listed: ? is not 0, so the case FAILs instead of passing on nothing
-for var in STUB_MYSQL_FAIL=1 STUB_MYSQL_DBS=wwd_0123456789abcdef0123456789abcdef STUB_NO_ROUNDTRIP=1; do
+own_db=wwd_$(printf '%s' j_stub_c2-php-db | shasum -a 256 | cut -c1-32)      # jobdb's name for the job the stub's pdx hands out
+for var in STUB_MYSQL_FAIL=1 STUB_MYSQL_DBS=$own_db; do
   rc=0
   env HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 C2_DOCKER_SOCK="$tmp/docker.sock" C2_DOCKER_PING="echo OK" "$var" sh "$matrix" --case 13 > "$tmp/out" 2>&1 || rc=$?
   [ "$rc" -ne 0 ] || fail "case 13 with $var must FAIL"
 done
 env HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 C2_DOCKER_SOCK="$tmp/docker.sock" C2_DOCKER_PING="echo OK" STUB_MYSQL_FAIL=1 sh "$matrix" --case 13 > "$tmp/out" 2>&1 || true
 has "FAIL its database is gone (within 45 s of the result): got '?', expected '0'" "case 13 with a mysql that cannot be asked"
-env HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=0 C2_DOCKER_SOCK="$tmp/docker.sock" C2_DOCKER_PING="echo OK" STUB_NO_ROUNDTRIP=1 sh "$matrix" --case 13 > "$tmp/out" 2>&1 || true
-has "FAIL the job really had a database" "case 13 control"
-has "FAIL its database is gone (within 45 s of the result): got '?', expected '0'" "case 13 with a log that names no database: it cannot ask, it does not say 0"
+
 
 # another job's database stays on the instance for ever: the case judges its own, which is gone
 rm -f "$stub"/*.log
@@ -248,7 +247,7 @@ has "PASS case 13" "case 13 beside another job's database"
 # the database is removed after the result is posted: case 13 asks again until it is gone (here at the third question, 6 s)
 rm -f "$stub"/*.log
 env HOME="$home" PATH="$bin:$PATH" TMPDIR="$tmp" STUB="$stub" STUB_STATE=succeeded C2_TIMEOUT_SCALE=1 C2_DOCKER_SOCK="$tmp/docker.sock" C2_DOCKER_PING="echo OK" \
-  STUB_MYSQL_DBS=wwd_0123456789abcdef0123456789abcdef STUB_MYSQL_GONE_AFTER=2 sh "$matrix" --case 13 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 13 must wait for the drop"; }
+  STUB_MYSQL_DBS=$own_db STUB_MYSQL_GONE_AFTER=2 sh "$matrix" --case 13 > "$tmp/out" 2>&1 || { cat "$tmp/out" >&2; fail "case 13 must wait for the drop"; }
 has "PASS case 13" "case 13 with a late drop"
 [ "$(wc -l < "$stub/mysql.log" | tr -d ' ')" -ge 3 ] || fail "case 13 must ask again while the database is there: $(cat "$stub/mysql.log")"
 

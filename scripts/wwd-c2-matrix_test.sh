@@ -79,9 +79,9 @@ out=$(dry --case 12); has "$out" "c2-undeclared" "case 12"; has "$out" "--bad-op
 has "$out" "mlab left no workspace behind (within 30 s)" "case 12"; has "$out" "no marker file was made on air26" "case 12"
 has "$out" "undeclared: refusal code (expect: task_unknown)" "case 12"; has "$out" "bad option: refusal code (expect: args_invalid)" "case 12"
 has "$out" "shell metacharacters: refusal code (expect: args_invalid)" "case 12"
-out=$(dry --case 13); has "$out" "CALL wwdctl.wwd_list_dbs()" "case 13"; has "$out" "grep -c -x 'wwd_0123456789abcdef0123456789abcdef'" "case 13 asks about the case's own database by name"; has "$out" "mysql-admin.cnf" "case 13"; has "$out" "systemctl --failed" "case 13"; has "$out" "sandbox probe" "case 13"
+out=$(dry --case 13); has "$out" "CALL wwdctl.wwd_list_dbs()" "case 13"; has "$out" "grep -c -x 'wwd_[0-9a-f]\{32\}'" "case 13 asks about the case's own database by name"; has "$out" "mysql-admin.cnf" "case 13"; has "$out" "systemctl --failed" "case 13"; has "$out" "sandbox probe" "case 13"
 hasnt "$out" "show databases" "case 13 asks the dev instance's admin account, not the default one"
-has "$out" "its database is gone (within 45 s of the result) (expect: 0)" "case 13"; has "$out" "the job really had a database" "case 13"
+has "$out" "its database is gone (within 45 s of the result) (expect: 0)" "case 13";
 out=$(dry --case 14); has "$out" "air19 claimed nothing since this run began (expect: 0)" "case 14"; has "$out" "air19's worker is off" "case 14"
 
 # the counted attempts: 0 for a job that succeeded at once or was reclaimed, 1 after one lapse, 2 after two (then failed/lost)

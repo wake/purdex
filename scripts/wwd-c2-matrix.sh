@@ -178,6 +178,10 @@ air19_new() {
   case "$a_ran" in ''|*[!0-9]*) echo "?"; return 0 ;; esac
   echo $((a_new + a_ran))
 }
+# job_db_name ID: the name of the database of job ID, as jobdb makes it: wwd_ and the first 32 hex of the SHA-256 of the id
+# (internal/wwd/jobdb/jobdb.go Name). Worked out here, not read from the job's log: the log of a job on mserv reaches mlab only while
+# fault.log_upload_fail is off there, and the matrix runs with it on.
+job_db_name() { if command -v shasum >/dev/null 2>&1; then jd_h=$(printf '%s' "$1" | shasum -a 256); else jd_h=$(printf '%s' "$1" | sha256sum); fi; echo "wwd_$(echo "$jd_h" | cut -c1-32)"; }
 # mserv_db NAME: 1 if the job database NAME (wwd_ and 32 hex) is on mserv's test MySQL, 0 if not. The databases are on the dev instance and
 # only the wwd_admin account of jobdb's client file may list them (CALL wwdctl.wwd_list_dbs(), docs/wwd-deploy.md); the default ~/.my.cnf is
 # another instance and would answer 0 whatever is there. When it cannot ask it prints ?, never 0. It asks about the one database of the case:
@@ -665,14 +669,11 @@ case_13() {
   check "php job state" "$(jf "$id" .state)" succeeded
   # the result is posted first and the workspace and the database are removed after it (runner: finish, then Cleanup; the drop is bounded at
   # 30 s), so the answer is asked for until it is 0, at most 45 s
-  # the database's name is in the job's log (db_probe.php prints it with the round trip): that is the control that the job had one, and
-  # the one database to ask about
-  dbn=$(sock mlab GET "/v1/jobs/$id/log" | grep -o 'db=wwd_[0-9a-f]\{32\} read=round-trip' | head -1 | cut -d' ' -f1 | cut -d= -f2 || true)
-  [ "$dry" -eq 1 ] && dbn=wwd_0123456789abcdef0123456789abcdef
-  check "the job really had a database (control: its log names it with the round trip)" "$([ -n "$dbn" ] && echo named || echo none)" named
-  if [ -n "$dbn" ]; then left=$(mserv_db "$dbn"); else left="?"; fi
-  dn=0
-  if [ "$dry" -eq 0 ] && [ -n "$dbn" ]; then
+  # the case's own database, by name: another job's database on the instance is not this case's to judge. That the job had one is what
+  # its state says: db_probe.php exits 0 only after it connected to the database it was given, made a table, wrote and read it back.
+  dbn=$(job_db_name "$id")
+  left=$(mserv_db "$dbn"); dn=0
+  if [ "$dry" -eq 0 ]; then
     while [ "$left" != 0 ] && [ "$dn" -lt $((45 * ${C2_TIMEOUT_SCALE:-1})) ]; do sleep 3; dn=$((dn + 3)); left=$(mserv_db "$dbn"); done
   fi
   check "its database is gone (within 45 s of the result)" "$left" 0
