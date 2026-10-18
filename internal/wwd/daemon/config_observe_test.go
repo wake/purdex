@@ -28,8 +28,12 @@ func TestLoadConfigObserveRefusesNegativeThresholds(t *testing.T) {
 	home := t.TempDir()
 	p := filepath.Join(home, "c.toml")
 	for name, body := range map[string]string{
-		"cpu": "[observe]\nmin_cpu_seconds = -1\n",
-		"mem": "[observe]\nmin_mem_mb = -5\n",
+		"cpu":     "[observe]\nmin_cpu_seconds = -1\n",
+		"mem":     "[observe]\nmin_mem_mb = -5\n",
+		"nan":     "[observe]\nmin_cpu_seconds = nan\n", // TOML has nan and inf: either would switch the threshold off without a word
+		"inf":     "[observe]\nmin_cpu_seconds = inf\n",
+		"plusinf": "[observe]\nmin_cpu_seconds = +inf\n",
+		"neginf":  "[observe]\nmin_cpu_seconds = -inf\n",
 	} {
 		os.WriteFile(p, []byte(body), 0o600)
 		_, err := LoadConfig(p, home)

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -98,8 +99,8 @@ func (c Config) validateWorker() error {
 	if m := c.Owner.IdleMinutes; m < 0 || m > 9999 {
 		return fmt.Errorf("owner.idle_minutes is %d, it must be 0 (the default) or 1-9999", m)
 	}
-	if c.Observe.MinCPUSeconds < 0 {
-		return fmt.Errorf("observe.min_cpu_seconds is %g, it must be 0 (the default) or more", c.Observe.MinCPUSeconds)
+	if v := c.Observe.MinCPUSeconds; v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
+		return fmt.Errorf("observe.min_cpu_seconds is %g, it must be 0 (the default) or a finite number above it", v)
 	}
 	if c.Observe.MinMemMB < 0 {
 		return fmt.Errorf("observe.min_mem_mb is %d, it must be 0 (the default) or more", c.Observe.MinMemMB)

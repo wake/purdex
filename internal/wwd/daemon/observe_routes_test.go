@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/wake/purdex/internal/wwd/facts"
+	"github.com/wake/purdex/internal/wwd/store"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -158,6 +159,70 @@ func TestObservationRouteServesWhatTheRealTrackerRecorded(t *testing.T) {
 	}
 	if len(st.rows) != 1 || st.rows[0].EndedAt == nil {
 		t.Fatalf("the ended one is in the store: %+v", st.rows)
+	}
+}
+
+// feedMany stores n observations through the observer in batches (the observer keeps at most maxUnsavedObservations waiting).
+func feedMany(t *testing.T, o *Observer, tr *fakeTracker, n int, sig func(i int) string) {
+	t.Helper()
+	for i := 0; i < n; i += 100 {
+		var batch []wire.Observation
+		for j := i; j < min(i+100, n); j++ {
+			batch = append(batch, ended("o"+time.Duration(j).String(), sig(j), 7*24*time.Hour+time.Duration(j)*time.Second, 61))
+		}
+		tr.next = batch
+		o.Observe(obt0.Add(time.Duration(i)*time.Second), facts.ProcSnapshot{}, facts.ProcContext{})
+	}
+}
+
+func TestObservationsAnswerIsBoundedAndSaysSo(t *testing.T) {
+	tr, st := &fakeTracker{}, &memStore{}
+	o := newObserver(tr, st)
+	feedMany(t, o, tr, maxObservationsAnswer+50, func(int) string { return "make" })
+	d := New(Options{HostID: "id", Alias: "mlab", Version: "v0", Token: testToken, Observer: o, Now: func() time.Time { return obt0.Add(8 * 24 * time.Hour) }})
+
+	w := do(d.SocketHandler(), "GET", "/v1/observations", "")
+	r, err := wire.Decode[wire.ObservationsResponse](w.Body.Bytes())
+	if err != nil || len(r.Observations) != maxObservationsAnswer || !r.Truncated {
+		t.Fatalf("%d records, truncated %v (%v)", len(r.Observations), r.Truncated, err)
+	}
+	// the newest are kept, oldest first
+	last := r.Observations[len(r.Observations)-1]
+	if last.ID != "o"+time.Duration(maxObservationsAnswer+49).String() || !r.Observations[0].StartedAt.Before(last.StartedAt) {
+		t.Fatalf("first %s last %s", r.Observations[0].ID, last.ID)
+	}
+	// a smaller answer is not marked
+	d2 := obsDaemon(t, "mlab", testToken, obsItems()...)
+	r2, _ := wire.Decode[wire.ObservationsResponse](do(d2.SocketHandler(), "GET", "/v1/observations", "").Body.Bytes())
+	if r2.Truncated {
+		t.Fatal("a short answer is not truncated")
+	}
+}
+
+func TestUndeclaredAnswerIsBoundedAndSaysSo(t *testing.T) {
+	tr, st := &fakeTracker{}, &memStore{}
+	o := newObserver(tr, st)
+	feedMany(t, o, tr, maxUndeclaredGroups+40, func(i int) string { return "cmd" + time.Duration(i).String() })
+	d := New(Options{HostID: "id", Alias: "mlab", Version: "v0", Token: testToken, Observer: o, Now: func() time.Time { return obt0.Add(8 * 24 * time.Hour) }})
+	w := do(d.SocketHandler(), "GET", "/v1/observations/undeclared", "")
+	r, err := wire.Decode[wire.UndeclaredResponse](w.Body.Bytes())
+	if err != nil || len(r.Groups) != maxUndeclaredGroups || !r.Truncated {
+		t.Fatalf("%d groups, truncated %v (%v)", len(r.Groups), r.Truncated, err)
+	}
+}
+
+func TestSinceNeverReachesBackFartherThanTheRetention(t *testing.T) {
+	d := obsDaemon(t, "mlab", testToken, obsItems()...)
+	now := obt0.Add(8 * 24 * time.Hour)
+	q := url.Values{"since": {"1970-01-01T00:00:00Z"}}
+	r, err := wire.Decode[wire.ObservationsResponse](do(d.SocketHandler(), "GET", "/v1/observations?"+q.Encode(), "").Body.Bytes())
+	if err != nil || !r.Since.Equal(now.Add(-store.ObservationRetention)) {
+		t.Fatalf("since %v (%v)", r.Since, err)
+	}
+	// a start in the future is not an error: nothing has begun yet
+	q = url.Values{"since": {now.Add(time.Hour).Format(time.RFC3339)}}
+	if w := do(d.SocketHandler(), "GET", "/v1/observations?"+q.Encode(), ""); w.Code != 200 {
+		t.Fatalf("future since: %d", w.Code)
 	}
 }
 

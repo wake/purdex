@@ -12,6 +12,8 @@ type ObservationsResponse struct {
 	Host         string        `json:"host"`
 	Since        time.Time     `json:"since"`
 	Observations []Observation `json:"observations"`
+	// Truncated says the period held more than one answer carries: the newest are here, the oldest were left out.
+	Truncated bool `json:"truncated"`
 }
 
 func (r ObservationsResponse) Validate() error {
@@ -44,6 +46,8 @@ type UndeclaredResponse struct {
 	Host   string            `json:"host"`
 	Since  time.Time         `json:"since"`
 	Groups []UndeclaredGroup `json:"groups"`
+	// Truncated says there were more groups than one answer carries: the biggest by CPU are here.
+	Truncated bool `json:"truncated"`
 }
 
 func (r UndeclaredResponse) Validate() error {

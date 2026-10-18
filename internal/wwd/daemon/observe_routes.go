@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/wake/purdex/internal/wwd/store"
 	"github.com/wake/purdex/internal/wwd/wire"
 )
 
@@ -12,6 +13,14 @@ import (
 const (
 	observationsDefaultSince = 24 * time.Hour
 	undeclaredDefaultSince   = 7 * 24 * time.Hour
+)
+
+// One answer carries at most this much, so a busy host cannot make an answer the pool's forwarding refuses (8 MiB) or one that
+// costs the daemon the memory of a whole retention. The newest observations and the biggest groups are kept; the response says
+// when something was left out.
+const (
+	maxObservationsAnswer = 1000
+	maxUndeclaredGroups   = 500
 )
 
 func (d *Daemon) now() time.Time {
@@ -31,12 +40,25 @@ func (d *Daemon) observeRoutes(mux *http.ServeMux, peer bool) {
 	mux.HandleFunc("GET /v1/observations/undeclared", d.viaHost(peer, d.handleUndeclared))
 }
 
-// observeSince is the start of the period the request asks for: ?since=<RFC 3339>, else the default back from now.
+// observeSince is the start of the period the request asks for: ?since=<RFC 3339>, else the default back from now. It never
+// reaches back farther than the retention: nothing older is kept.
 func (d *Daemon) observeSince(r *http.Request, def time.Duration) (time.Time, error) {
+	since := d.now().Add(-def)
 	if s := r.URL.Query().Get("since"); s != "" {
-		return time.Parse(time.RFC3339, s)
+		t, err := time.Parse(time.RFC3339, s)
+		if err != nil {
+			return time.Time{}, err
+		}
+		since = t
 	}
-	return d.now().Add(-def), nil
+	return maxTime(since, d.now().Add(-store.ObservationRetention)), nil
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return b
+	}
+	return a
 }
 
 func (d *Daemon) handleObservations(w http.ResponseWriter, r *http.Request) {
@@ -50,7 +72,11 @@ func (d *Daemon) handleObservations(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, wire.ObservationsResponse{Host: d.opts.Alias, Since: since, Observations: obs})
+	truncated := len(obs) > maxObservationsAnswer
+	if truncated {
+		obs = obs[len(obs)-maxObservationsAnswer:] // oldest first: the newest are at the end
+	}
+	writeJSON(w, http.StatusOK, wire.ObservationsResponse{Host: d.opts.Alias, Since: since, Observations: obs, Truncated: truncated})
 }
 
 func (d *Daemon) handleUndeclared(w http.ResponseWriter, r *http.Request) {
@@ -64,5 +90,9 @@ func (d *Daemon) handleUndeclared(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, wire.UndeclaredResponse{Host: d.opts.Alias, Since: since, Groups: groups})
+	truncated := len(groups) > maxUndeclaredGroups
+	if truncated {
+		groups = groups[:maxUndeclaredGroups] // biggest total CPU first
+	}
+	writeJSON(w, http.StatusOK, wire.UndeclaredResponse{Host: d.opts.Alias, Since: since, Groups: groups, Truncated: truncated})
 }
