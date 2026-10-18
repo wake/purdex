@@ -154,6 +154,7 @@ func TestReport_PoolSourceJoinsTheOldTimelineAndWWDs(t *testing.T) {
 		r.history = append(r.history, minuteFacts(i, 1, 8000, 1, wire.ZoneNormal, 1, 0))
 	}
 	rep := r.get(t, "24h")
+	assert.Equal(t, resources.ReportApproxWWD, rep.Approx, "the report says part of it is wwd's rollups")
 	assert.Equal(t, 15, rep.Coverage.Minutes, "5 old + 10 from wwd")
 	assert.Equal(t, poolDay0.UnixMilli(), rep.Coverage.From)
 	assert.Equal(t, poolDay0.Add(14*time.Minute).UnixMilli(), rep.Coverage.To)
@@ -168,7 +169,7 @@ func TestReport_PoolSourceJoinsTheOldTimelineAndWWDs(t *testing.T) {
 // minute, or a gap, makes wwd's full minute a run of its own.
 func TestReport_ARunDoesNotCrossACalmMinuteOrAGap(t *testing.T) {
 	full := func(i int) minuteRow {
-		return minuteRow{At: poolDay0.Add(time.Duration(i) * time.Minute).UnixMilli(), Load1: 1, NCPU: 4, Mem: 40, Full: true, FullTicks: 12, FullLongestS: 60, FullStarts: 1}
+		return minuteRow{At: poolDay0.Add(time.Duration(i) * time.Minute).UnixMilli(), Load1: 1, NCPU: 4, Mem: 40, Full: true, FullTicks: 12, SampledS: 60, FullLongestS: 60, FullStarts: 1}
 	}
 	calm := func(i int) minuteRow {
 		return minuteRow{At: poolDay0.Add(time.Duration(i) * time.Minute).UnixMilli(), Load1: 1, NCPU: 4, Mem: 40}
@@ -183,11 +184,18 @@ func TestReport_ARunDoesNotCrossACalmMinuteOrAGap(t *testing.T) {
 		r.FullTicks, r.FullLongestS = fullTicksPerMinute-1, 55
 		return r
 	}
+	merged := func(i int) minuteRow { // the old sampler merges a restart inside one minute: 12 full ticks, then 12 calm ones
+		r := full(i)
+		r.FullStarts, r.FullTicks, r.FullLongestS = 0, fullTicksPerMinute, 60
+		r.SampledS = 120
+		return r
+	}
 	for name, old := range map[string][]minuteRow{
 		"a calm minute before":      {full(0), calm(1)},
 		"a gap before":              {full(0)},
 		"one full tick before only": {full(0), brief(1)},
 		"eleven of twelve ticks":    {full(0), almost(1)},
+		"merged with calm ticks":    {full(0), merged(1)},
 	} {
 		r := newReportRig(t)
 		for _, row := range old {
@@ -226,7 +234,7 @@ func TestReport_TheCurrentMinuteIsLeftOut(t *testing.T) {
 func TestReport_ARunAcrossTheJoinIsOneRun(t *testing.T) {
 	r := newReportRig(t)
 	for i := 0; i < 3; i++ { // old minutes 0..2, full, the way the old sampler wrote a run: the length so far on each row
-		row := minuteRow{At: poolDay0.Add(time.Duration(i) * time.Minute).UnixMilli(), Load1: 1, NCPU: 4, Mem: 40, Full: true, FullTicks: 12, FullLongestS: 60 * (i + 1)}
+		row := minuteRow{At: poolDay0.Add(time.Duration(i) * time.Minute).UnixMilli(), Load1: 1, NCPU: 4, Mem: 40, Full: true, FullTicks: 12, SampledS: 60, FullLongestS: 60 * (i + 1)}
 		if i == 0 {
 			row.FullStarts = 1
 		}
@@ -248,7 +256,12 @@ func TestReport_OldTimelineAloneWhenWWDIsNotTheSource(t *testing.T) {
 	r.history = []wire.Facts{minuteFacts(5, 1, 8000, 1, wire.ZoneNormal, 1, 0)}
 
 	r.row.cfg.Source, r.row.rev = hostconfig.FleetSourceSSH, 2
-	assert.Equal(t, 10, r.get(t, "24h").Coverage.Minutes, "ssh source")
+	rep := r.get(t, "24h")
+	assert.Equal(t, 10, rep.Coverage.Minutes, "ssh source")
+	assert.Empty(t, rep.Approx, "and nothing in the report says otherwise")
+	raw := httptest.NewRecorder()
+	r.m.handleReport(raw, httptest.NewRequest(http.MethodGet, resources.ReportPath+"?since=24h", nil))
+	assert.NotContains(t, raw.Body.String(), "approx", "the JSON of the default source has no new field")
 	assert.Empty(t, r.asked, "and wwd is not asked")
 
 	r.row.cfg.Source, r.row.rev = hostconfig.FleetSourcePool, 3

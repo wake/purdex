@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+
 	"github.com/wake/purdex/internal/resources"
 )
 
@@ -41,6 +43,18 @@ func TestReport_TextOfTheFixtureDayExactly(t *testing.T) {
 	if out.String() != string(want) {
 		t.Errorf("text differs:\n--- got\n%s\n--- want\n%s", out.String(), want)
 	}
+}
+
+// A report made partly from wwd's minute rollups says its full and zone shares are approximate; one that is not does not.
+func TestReport_TextNamesTheApproximation(t *testing.T) {
+	rep := resources.Report{Since: 0, Until: 3600000, Coverage: resources.ReportCoverage{From: 0, To: 60000, Minutes: 2}}
+	var plain, approx bytes.Buffer
+	formatReport(&plain, rep, time.UTC)
+	assert.NotContains(t, plain.String(), "approximate")
+	rep.Approx = resources.ReportApproxWWD
+	formatReport(&approx, rep, time.UTC)
+	assert.Contains(t, approx.String(), "approximate")
+	assert.Contains(t, approx.String(), "full")
 }
 
 // An empty report says so instead of printing zeros as if they were data.

@@ -28,7 +28,14 @@ type Report struct {
 	Gate ReportGate `json:"gate"`
 	// Zones is the share of time per zone.
 	Zones ReportZones `json:"zones"`
+	// Approx says how some of the figures are worked out when they are not exact: ReportApproxWWD while minutes of the period come
+	// from wwd's per-minute rollups (full and the zone shares are then approximations). Left out when every minute is a stored
+	// row of the daemon's own timeline, so that report is byte for byte what it always was.
+	Approx string `json:"approx,omitempty"`
 }
+
+// ReportApproxWWD is Report.Approx for a report that includes minutes from wwd's rollups.
+const ReportApproxWWD = "wwd_minute_rollups"
 
 // ReportZones is the share of sampled time in each zone, from the minute rows
 // that carry sampled_s. Minutes is how many rows counted: a row written before

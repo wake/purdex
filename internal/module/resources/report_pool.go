@@ -100,3 +100,11 @@ func (m *Module) poolReportRecords(ctx context.Context, since, now time.Time) ([
 	}
 	return done, len(done) > 0
 }
+
+// wholeMinuteFull says whether an old minute row was full at every sampled second, so that a run can be taken to go on into the
+// next minute: all the ticks of a whole minute, and no more sampled seconds than full ones (a row merged from two runs of the
+// sampler, a restart inside the minute, has calm ticks added to the full ones and proves nothing about its end).
+func wholeMinuteFull(m resources.ReportMinute) bool {
+	tick := int(resources.SampleInterval / time.Second)
+	return m.FullTicks >= fullTicksPerMinute && m.SampledS > 0 && m.FullTicks*tick >= m.SampledS
+}
